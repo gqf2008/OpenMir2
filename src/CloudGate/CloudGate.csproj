@@ -23,17 +23,14 @@
             <Choose>
                 <When Condition="$([MSBuild]::IsOSPlatform('Windows'))">
                     <PropertyGroup>
-                        <OutputPath>D:\MirServer\CloudGate</OutputPath>
                     </PropertyGroup>
                 </When>
                 <When Condition="$([MSBuild]::IsOSPlatform('OSX'))">
                     <PropertyGroup>
-                        <OutputPath>/Volumes/Data/Mirserver/CloudGate</OutputPath>
                     </PropertyGroup>
                 </When>
                 <When Condition="$([MSBuild]::IsOSPlatform('Linux'))">
                     <PropertyGroup>
-                        <OutputPath>/Volumes/opt/Mirserver/CloudGate</OutputPath>
                     </PropertyGroup>
                 </When>
             </Choose>

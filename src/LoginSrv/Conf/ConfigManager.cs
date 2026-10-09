@@ -185,6 +185,8 @@ namespace LoginSrv.Conf
                     Config.ServerNameList.Add(Config.GateRoute[i].ServerName);
                 }
             }
+            // [诊断] 服务器列表生成结果：为空则客户端选服界面没有任何可点项
+            LogService.Info($"[客服列表] RouteCount={Config.RouteCount} Count={Config.ServerNameList.Count} [{string.Join("|", Config.ServerNameList)}]");
         }
     }
 }

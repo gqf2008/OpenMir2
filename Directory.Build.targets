@@ -1,0 +1,20 @@
+<Project>
+
+  <!--
+    数据库存储插件（DBSrv.Storage.MySQL / MongoDB）是运行时按名字动态加载的，
+    因此编完顺手拷到 DBSrv 的输出目录，避免"插件编好了但服务起不来"。
+    目标被占用（例如 DBSrv 正在运行）时只告警，不打断构建。
+  -->
+  <Target Name="CopyStoragePluginToDbSrv"
+          AfterTargets="Build"
+          Condition="$(MSBuildProjectName.StartsWith('DBSvr.Storage.'))">
+    <ItemGroup>
+      <StoragePluginFile Include="$(OutputPath)$(AssemblyName).dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(StoragePluginFile)"
+          DestinationFolder="$(MSBuildThisFileDirectory)src\DBSrv\bin\$(Configuration)\"
+          SkipUnchangedFiles="true"
+          ContinueOnError="true" />
+  </Target>
+
+</Project>

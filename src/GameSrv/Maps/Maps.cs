@@ -345,10 +345,18 @@
                     
                     Console.Write("\r正在读取地图数据...[{0}/{1}]", i, loadList.Count);
                 }
-                Console.Write("\n"); // 完成后换行
-                Console.SetCursorPosition(0, Console.CursorTop - 1); // 将光标移动到上一行
-                Console.Write(new string(' ', Console.WindowWidth)); // 使用空格覆盖这一行
-                Console.SetCursorPosition(0, Console.CursorTop - 1); // 再次将光标移动到上一行
+                try
+                {
+                    Console.Write("\n"); // 完成后换行
+                    Console.SetCursorPosition(0, Console.CursorTop - 1); // 将光标移动到上一行
+                    Console.Write(new string(' ', Console.WindowWidth)); // 使用空格覆盖这一行
+                    Console.SetCursorPosition(0, Console.CursorTop - 1); // 再次将光标移动到上一行
+                }
+                catch (IOException)
+                {
+                    // 无控制台（输出被重定向/服务化启动）时 GetCursorPosition 会抛「句柄无效」，
+                    // 之前会冒泡到初始化外层导致整个游戏基础数据初始化失败、后续网络服务不初始化。
+                }
                 
                 // 加载地图连接点
                 for (int i = 0; i < loadList.Count; i++)

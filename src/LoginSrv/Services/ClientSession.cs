@@ -191,6 +191,7 @@ namespace LoginSrv.Services
             {
                 userInfo.Seconds = 0;
                 string sPassword = HUtil32.GetValidStr3(EDCode.DeCodeString(sData), ref sLoginId, '/');
+                LogService.Debug($"[登录] 帐号=[{sLoginId}] 密码长度={sPassword.Length}");
                 int nCode = 0;
                 bool boNeedUpdate = false;
                 int accountIndex = _accountStorage.Index(sLoginId);
@@ -230,8 +231,10 @@ namespace LoginSrv.Services
                 }
                 if (nCode == 1 && _sessionManager.IsLogin(sLoginId))
                 {
+                    // 顶号：先通知游戏/角色服关闭旧会话，再立即释放账号占用，
+                    // 否则旧会话会残留（客户端异常退出时登录网关不会清理），下次登录被拒 -3。
                     SessionKick(sLoginId);
-                    nCode = -3;
+                    _sessionManager.DeleteByAccount(sLoginId);
                 }
                 CommandMessage defMsg;
                 if (boNeedUpdate)
@@ -490,6 +493,7 @@ namespace LoginSrv.Services
             int nSelGatePort = 0;
             const string sSelServerMsg = "Server: {0}/{1}-{2}:{3}";
             string sServerName = EDCode.DeCodeString(sData);
+            LogService.Debug($"[选服] account=[{userInfo.Account}] server=[{sServerName}] gateIP=[{_configMgr.Config.sGateIPaddr}] selServer={userInfo.SelServer} isLogin={_sessionManager.IsLogin(userInfo.SessionID)} routeCount={_configMgr.Config.RouteCount}");
             if (!string.IsNullOrEmpty(userInfo.Account) && !string.IsNullOrEmpty(sServerName) && _sessionManager.IsLogin(userInfo.SessionID))
             {
                 GetSelGateInfo(sServerName, _configMgr.Config.sGateIPaddr, ref sSelGateIp, ref nSelGatePort);
@@ -499,7 +503,7 @@ namespace LoginSrv.Services
                     {
                         sSelGateIp = userInfo.GateIPaddr;
                     }
-                    LogService.Debug(string.Format(sSelServerMsg, sServerName, _configMgr.Config.sGateIPaddr, sSelGateIp, nSelGatePort));
+                    LogService.Info(string.Format(sSelServerMsg, sServerName, _configMgr.Config.sGateIPaddr, sSelGateIp, nSelGatePort));
                     userInfo.SelServer = true;
                     byte nPayMode = userInfo.PayMode;
                     if (_sessionService.IsNotUserFull(sServerName))
@@ -525,6 +529,14 @@ namespace LoginSrv.Services
                         SendGateMsg(userInfo.Socket, userInfo.SockIndex, EDCode.EncodeMessage(defMsg));
                     }
                 }
+                else
+                {
+                    LogService.Warn($"[选服失败] 未匹配到服务器网关路由: server=[{sServerName}] gateIP=[{_configMgr.Config.sGateIPaddr}]，请检查 AddrTable.txt 中该服务器的 ServerName/Public 字段是否与登录网关地址一致");
+                }
+            }
+            else
+            {
+                LogService.Warn($"[选服失败] 请求被忽略: account=[{userInfo.Account}] server=[{sServerName}] isLogin={_sessionManager.IsLogin(userInfo.SessionID)}");
             }
         }
 

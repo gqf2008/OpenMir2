@@ -168,7 +168,12 @@ namespace OpenMir2.NativeList.Utils
                 throw new ArgumentOutOfRangeException(nameof(index));
             }
 
-            for (int i = index; i < Count; i++)
+            // 修正越界读：原实现用 i < Count，最后一次循环会执行 GetAt(Count)，
+            // 而 Count == 缓冲区容量 是常见状态（Add 后即如此），于是读到分配区之外
+            // → AccessViolationException（.NET 抓不住，进程直接死）。
+            // 实测表现：怪物走动时 Envirnoment.MoveToMovingObject 调 RemoveAt 删掉
+            // 旧格子上最后一个对象，几十分钟内必崩。
+            for (int i = index; i < Count - 1; i++)
             {
                 SetAt(i, GetAt(i + 1));
             }

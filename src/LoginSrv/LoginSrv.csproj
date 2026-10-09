@@ -27,17 +27,14 @@
 			<Choose>
 				<When Condition="$([MSBuild]::IsOSPlatform('Windows'))">
 					<PropertyGroup>
-						<OutputPath>D:\Mirserver\LoginSrv</OutputPath>
 					</PropertyGroup>
 				</When>
 				<When Condition="$([MSBuild]::IsOSPlatform('OSX'))">
 					<PropertyGroup>
-						<OutputPath>/Volumes/Data/Mirserver/LoginSrv</OutputPath>
 					</PropertyGroup>
 				</When>
 				<When Condition="$([MSBuild]::IsOSPlatform('Linux'))">
 					<PropertyGroup>
-						<OutputPath>/Volumes/opt/Mirserver/LoginSrv</OutputPath>
 					</PropertyGroup>
 				</When>
 			</Choose>

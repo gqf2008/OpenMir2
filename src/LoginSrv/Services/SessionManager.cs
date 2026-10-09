@@ -34,6 +34,21 @@ namespace LoginSrv.Services
             return false;
         }
 
+        /// <summary>
+        /// 按账号移除会话（顶号时立即释放账号占用，避免旧会话残留导致"已登录"锁定）
+        /// </summary>
+        public void DeleteByAccount(string account)
+        {
+            if (sessionAccountMap.TryGetValue(account, out SessionConnInfo connInfo))
+            {
+                sessionAccountMap.Remove(account);
+                if (connInfo != null)
+                {
+                    sessionMap.Remove(connInfo.SessionID);
+                }
+            }
+        }
+
         public bool IsLogin(string sessionId)
         {
             if (sessionAccountMap.ContainsKey(sessionId))

@@ -455,21 +455,24 @@ namespace DBSrv.Services.Impl
                     for (int i = 0; i < chrList.Count; i++)
                     {
                         PlayQuick quickId = chrList[i];
-                        if (quickId.SelectID != userInfo.nSelGateID) // 如果选择ID不对,则跳过
-                        {
-                            continue;
-                        }
+                        // 注意：characters_indexes.SelectID 同时被当作"上次选择"标记使用（进游戏后会写成 1），
+                        // 因此不能再用它和网关ID比较来过滤，否则玩过的角色会从列表里消失。这里不过滤。
+                        LogService.Info($"[QueryChr] 候选 account={sAccount} i={i} name=[{quickId.ChrName}] quickIndex={quickId.Index}");
                         PlayerRecordData humRecord = _playRecordStorage.GetBy(quickId.Index, ref result);
+                        LogService.Info($"[QueryChr]   GetBy -> result={result}");
                         if (result && !humRecord.Deleted)
                         {
                             string sChrName = quickId.ChrName;
                             int nIndex = _playDataStorage.Index(sChrName);
+                            LogService.Info($"[QueryChr]   dataIndex={nIndex} nChrCount={nChrCount}");
                             if ((nIndex < 0) || (nChrCount >= 2))
                             {
                                 continue;
                             }
                             QueryChr chrRecord = null;
-                            if (_playDataStorage.GetQryChar(nIndex, ref chrRecord))
+                            bool got = _playDataStorage.GetQryChar(nIndex, ref chrRecord);
+                            LogService.Info($"[QueryChr]   GetQryChar -> {got}");
+                            if (got)
                             {
                                 if (humRecord.Selected == 1)
                                 {
@@ -616,7 +619,11 @@ namespace DBSrv.Services.Impl
                 {
                     nCode = 2;
                 }
-                if (_playRecordStorage.ChrCountOfAccount(sAccount) < 2)
+                else if (_playRecordStorage.ChrCountOfAccount(sAccount) >= 2)
+                {
+                    nCode = 3;
+                }
+                else
                 {
                     PlayerRecordData humRecord = new PlayerRecordData();
                     humRecord.sChrName = sChrName;
@@ -629,26 +636,15 @@ namespace DBSrv.Services.Impl
                     {
                         nCode = 2;
                     }
-                }
-                else
-                {
-                    nCode = 3;
-                }
-                if (nCode == -1)
-                {
-                    if (NewChrData(sAccount, sChrName, HUtil32.StrToInt(sSex, 0), HUtil32.StrToInt(sJob, 0), HUtil32.StrToInt(sHair, 0)))
+                    else if (NewChrData(sAccount, sChrName, HUtil32.StrToInt(sSex, 0), HUtil32.StrToInt(sJob, 0), HUtil32.StrToInt(sHair, 0)))
                     {
                         nCode = 1;
                     }
                     else
                     {
                         _playRecordStorage.Delete(sChrName); //创建角色数据失败，删除索引值
+                        nCode = 4;
                     }
-                }
-                else
-                {
-                    _playDataStorage.Delete(sChrName);//删除人物
-                    nCode = 4;
                 }
             }
             if (nCode == 1)
