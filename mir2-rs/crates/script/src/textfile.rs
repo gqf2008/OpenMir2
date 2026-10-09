@@ -14,7 +14,8 @@ pub fn decode_bytes(bytes: &[u8]) -> String {
         let (s, _, _) = encoding_rs::UTF_8.decode(&bytes[3..]);
         return s.into_owned();
     }
-    if bytes.starts_with(&[0xFF, 0xFE]) {
+    // C# GetEncoding：UTF-16LE BOM 分支带 `byte3 != 0xFF` 守卫（FF FE FF 会回落 gb2312）
+    if bytes.starts_with(&[0xFF, 0xFE]) && bytes.get(3) != Some(&0xFF) {
         let (s, _, _) = encoding_rs::UTF_16LE.decode(&bytes[2..]);
         return s.into_owned();
     }

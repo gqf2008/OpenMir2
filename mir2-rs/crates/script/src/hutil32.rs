@@ -188,45 +188,60 @@ pub fn get_valid_str_cap(s: &str, divs: &[char]) -> Result<(String, String), Cap
     }
 }
 
-/// `HUtil32.ArrestStringEx(source, searchAfter, arrestBefore, ref arrestStr)`：
-/// 返回 (arrestStr, rest)。单字符定界符（所有调用点均为单字符）。
+/// `ArrestStringEx` 对 `ref arrestStr` 的写回语义（三态，对应 C# 的三条路径）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ArrestWrite {
+    /// 写回该值（含“未找到定界符”时经 catch 写回空串）
+    Value(String),
+    /// 不改写（源为空；或已定位 span 但其中无闭合定界符）
+    Unchanged,
+}
+
+/// `HUtil32.ArrestStringEx(source, searchAfter, arrestBefore, ref arrestStr)` 的精确移植。
+/// 返回 (对 ref 参数的写回动作, 方法返回值)。单字符定界符（所有调用点均为单字符）。
 ///
-/// 实机探测语义：
-/// - 空源或 len<2 → ("", "")（arrestStr 不变，调用方传入什么就是什么；此处返回 ""）；
-/// - 以 after 开头或 after 出现在 n>0 → 取其后的 span；在 span 中找 before：
-///   找到 → arrestStr = before 之前内容，rest = before 之后内容；
-///   找不到 → arrestStr 不变（""），rest = after + span；
-/// - after 不在源中（或仅在 0 号位以外的判断失败）→ C# 循环 `sourceSpan[i-1]` 于 i=0 抛错，
-///   被 catch 吞掉 → ("", "")。
-pub fn arrest_string_ex(source: &str, after: char, before: char) -> (String, String) {
+/// C# 控制流（`HUtil32.cs:488-548`）：
+/// - 源为空 → 直接 return ""，**不改写** arrestStr；
+/// - `spanLen >= 2` 且能以 after 定位（首字符命中或 IndexOf 位置 n>0）→ findData=true；
+/// - findData 为真：在 span 中找 before，命中 → 写回 before 之前内容、返回其后内容；
+///   未命中 → **不改写**，返回 `after + span`；
+/// - findData 为假（含 `spanLen < 2` 与 after 不存在）：进入 `for` 循环后于 `i == 0`
+///   访问 `sourceSpan[-1]` 抛 `IndexOutOfRangeException`，被 catch 吞掉 →
+///   **写回空串**、返回 ""。
+pub fn arrest_string_ex_ref(source: &str, after: char, before: char) -> (ArrestWrite, String) {
     if source.is_empty() {
-        return (String::new(), String::new());
+        return (ArrestWrite::Unchanged, String::new());
     }
     let cs = chars(source);
-    if cs.len() < 2 {
-        return (String::new(), String::new());
-    }
-    // C# 用 OrdinalIgnoreCase 的 IndexOf；对定界符（[ ] " 等）等价于精确匹配。
-    let span_start = if cs[0] == after {
-        Some(1)
+    // C# 用 OrdinalIgnoreCase 的 IndexOf；对定界符（[ ] " ( ) 等）等价于精确匹配。
+    let span_start = if cs.len() >= 2 {
+        if cs[0] == after {
+            Some(1)
+        } else {
+            cs.iter()
+                .position(|&c| c == after)
+                .filter(|&n| n > 0)
+                .map(|n| n + 1)
+        }
     } else {
-        cs.iter()
-            .position(|&c| c == after)
-            .filter(|&n| n > 0)
-            .map(|n| n + 1)
+        None
     };
     match span_start {
         Some(s) => {
             let span = &cs[s..];
             match span.iter().position(|&c| c == before) {
-                Some(p) => (span[..p].iter().collect(), span[p + 1..].iter().collect()),
+                Some(p) => (
+                    ArrestWrite::Value(span[..p].iter().collect()),
+                    span[p + 1..].iter().collect(),
+                ),
                 None => (
-                    String::new(),
+                    ArrestWrite::Unchanged,
                     format!("{}{}", after, span.iter().collect::<String>()),
                 ),
             }
         }
-        None => (String::new(), String::new()),
+        // findData == false 分支：C# 抛异常被 catch → 写回空串、返回 ""
+        None => (ArrestWrite::Value(String::new()), String::new()),
     }
 }
 
@@ -333,49 +348,51 @@ mod tests {
 
     #[test]
     fn arrest_string_ex_probe_cases() {
+        // 期望值与 .NET 8 实机探测一致：探针里 `string ar = ""` 是调用前的初值，
+        // 故“未改写”在探测输出里表现为 ar 保持 ""（三态下是 Unchanged）。
+        let w = |src: &str, a: char, b: char| {
+            let (write, rest) = arrest_string_ex_ref(src, a, b);
+            let val = match write {
+                ArrestWrite::Value(v) => v,
+                ArrestWrite::Unchanged => String::new(), // 探针初值为 ""
+            };
+            (val, rest)
+        };
         assert_eq!(
-            arrest_string_ex("#CALL [\\游戏登陆\\QF.txt] @main", '[', ']'),
-            ("\\游戏登陆\\QF.txt".into(), " @main".into())
+            w(r"#CALL [\游戏登陆\QF.txt] @main", '[', ']'),
+            (r"\游戏登陆\QF.txt".into(), " @main".into())
+        );
+        assert_eq!(w("[main]", '[', ']'), ("main".into(), String::new()));
+        assert_eq!(w("[main] TRUE", '[', ']'), ("main".into(), " TRUE".into()));
+        assert_eq!(w("abc[de]fg", '[', ']'), ("de".into(), "fg".into()));
+        // 无定界符 → C# catch 路径写回空串
+        assert_eq!(
+            arrest_string_ex_ref("nobrackets", '[', ']'),
+            (ArrestWrite::Value(String::new()), String::new())
+        );
+        // 有开无闭 → 不改写，返回 after+span
+        assert_eq!(
+            arrest_string_ex_ref("[onlyopen", '[', ']'),
+            (ArrestWrite::Unchanged, "[onlyopen".into())
         );
         assert_eq!(
-            arrest_string_ex("[main]", '[', ']'),
-            ("main".into(), String::new())
+            arrest_string_ex_ref("\"祈福项链", '"', '"'),
+            (ArrestWrite::Unchanged, "\"祈福项链".into())
+        );
+        assert_eq!(w("\"abc\"", '"', '"'), ("abc".into(), String::new()));
+        // 空源 → 直接返回，不改写
+        assert_eq!(
+            arrest_string_ex_ref("", '[', ']'),
+            (ArrestWrite::Unchanged, String::new())
+        );
+        // len < 2 → findData 假 → catch 路径写回空串
+        assert_eq!(
+            arrest_string_ex_ref("x", '[', ']'),
+            (ArrestWrite::Value(String::new()), String::new())
         );
         assert_eq!(
-            arrest_string_ex("[main] TRUE", '[', ']'),
-            ("main".into(), " TRUE".into())
-        );
-        assert_eq!(
-            arrest_string_ex("abc[de]fg", '[', ']'),
-            ("de".into(), "fg".into())
-        );
-        assert_eq!(
-            arrest_string_ex("nobrackets", '[', ']'),
-            (String::new(), String::new())
-        );
-        assert_eq!(
-            arrest_string_ex("[onlyopen", '[', ']'),
-            (String::new(), "[onlyopen".into())
-        );
-        assert_eq!(
-            arrest_string_ex("\"祈福项链", '"', '"'),
-            (String::new(), "\"祈福项链".into())
-        );
-        assert_eq!(
-            arrest_string_ex("\"abc\"", '"', '"'),
-            ("abc".into(), String::new())
-        );
-        assert_eq!(
-            arrest_string_ex("", '[', ']'),
-            (String::new(), String::new())
-        );
-        assert_eq!(
-            arrest_string_ex("x", '[', ']'),
-            (String::new(), String::new())
-        );
-        assert_eq!(
-            arrest_string_ex("M2 999", '[', ']'),
-            (String::new(), String::new())
+            arrest_string_ex_ref("M2 999", '[', ']'),
+            (ArrestWrite::Value(String::new()), String::new())
         );
     }
 

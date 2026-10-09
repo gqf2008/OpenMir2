@@ -14,8 +14,8 @@ use std::path::{Path, PathBuf};
 
 use crate::codes::{CONDITION_CODES, EXECUTION_CODES};
 use crate::hutil32::{
-    arrest_string_ex, compare_lstr, get_valid_str3, get_valid_str_cap, is_string_number,
-    str_to_int, to_upper, CaptureStringPanic,
+    arrest_string_ex_ref, compare_lstr, get_valid_str3, get_valid_str_cap, is_string_number,
+    str_to_int, to_upper, ArrestWrite, CaptureStringPanic,
 };
 use crate::model::{
     Goods, MerchantFlags, QuestActionInfo, QuestConditionInfo, SayingProcedure, SayingRecord,
@@ -148,18 +148,9 @@ impl From<CaptureStringPanic> for LoadPanic {
     }
 }
 
-/// 命令名 → 字段序号 的对照表（`OrdinalIgnoreCase` 语义：ASCII 大小写不敏感）。
-fn build_code_map(defs: &'static [crate::codes::CodeDef]) -> HashMap<String, i32> {
-    defs.iter()
-        .map(|d| (to_upper(d.name), d.field_index))
-        .collect()
-}
-
-/// `ScriptParsers`：码表在构造时建立（C# 用反射，这里用生成表）。
-pub struct ScriptParsers {
-    condition_code_def_map: HashMap<String, i32>,
-    execution_code_def_map: HashMap<String, i32>,
-}
+/// `ScriptParsers`：命令查表在 C# 侧由反射建立（`Dictionary<string,int>`，OrdinalIgnoreCase，
+/// 重名保留第一个）；Rust 侧改为对生成表做 `def_of` 线性查找——同名字、同“保留第一个”语义。
+pub struct ScriptParsers;
 
 impl Default for ScriptParsers {
     fn default() -> Self {
@@ -169,10 +160,7 @@ impl Default for ScriptParsers {
 
 impl ScriptParsers {
     pub fn new() -> Self {
-        Self {
-            condition_code_def_map: build_code_map(CONDITION_CODES),
-            execution_code_def_map: build_code_map(EXECUTION_CODES),
-        }
+        Self
     }
 
     /// `LoadScript`：C# 入口包装——`sPatch` 为空时默认 `"Npc_def"`。
@@ -303,6 +291,8 @@ impl ScriptParsers {
         let mut quest_count: i32 = 0;
         let n_quest_idx = 0usize; // C# 死分支残留变量，保留
         let _ = n_quest_idx;
+        // C# 方法级局部变量：跨行复用的 label 名（见 label 分支注释）
+        let mut slab_name = String::new();
 
         let lines_snapshot = lines.clone();
         for (i, raw) in lines_snapshot.iter().enumerate() {
@@ -330,8 +320,12 @@ impl ScriptParsers {
                     continue;
                 }
                 if line.starts_with('(') {
-                    // NPC 可执行命令设置
-                    let (mut inner, _) = arrest_string_ex(&line, '(', ')');
+                    // NPC 可执行命令设置：C# 为 ArrestStringEx(line, "(", ")", ref line)
+                    // （返回值丢弃，只看 ref 写回；未命中定界符时按 C# 语义写回空串）
+                    let mut inner = match arrest_string_ex_ref(&line, '(', ')').0 {
+                        ArrestWrite::Value(v) => v,
+                        ArrestWrite::Unchanged => line.clone(),
+                    };
                     while !inner.is_empty() {
                         let (command, rest) = get_valid_str3(&inner, &[' ', ',', '\t']);
                         inner = rest;
@@ -363,10 +357,11 @@ impl ScriptParsers {
                     continue;
                 }
             }
-            // C# 死分支：scriptType 从不被赋 1，此分支不可达，保留结构对齐
+            // C# 死分支（ScriptParsers.cs:794）：scriptType 从不被赋 1，此分支不可达。
+            // 与 C# 等价地保持为空操作（不 panic，避免 Rust 侧整进程中断）。
             #[allow(clippy::absurd_extreme_comparisons)]
             if script_type == 1 && script_idx.is_some() && line.starts_with('#') {
-                unreachable!("C# 中 scriptType==1 不可达（ScriptParsers.cs:794）");
+                // 不可达：C# 中同样不执行任何语句
             }
             if line.starts_with('[') {
                 script_type = 10;
@@ -383,11 +378,17 @@ impl ScriptParsers {
                     outcome.goods_sections += 1;
                     continue;
                 }
-                let (slab, rest) = arrest_string_ex(&line, '[', ']');
+                // C#: line = ArrestStringEx(line, "[", "]", ref slabName)；
+                // slabName 在方法级声明、跨行复用（未命中定界符时保留上一行残值），此处照搬。
+                let (write, rest) = arrest_string_ex_ref(&line, '[', ']');
+                match write {
+                    ArrestWrite::Value(v) => slab_name = v,
+                    ArrestWrite::Unchanged => {}
+                }
                 let (token, _) = get_valid_str_cap(&rest, TEXT_SPLIT)?;
                 let bo_ext_jmp = token.eq_ignore_ascii_case("TRUE");
                 let script = &mut outcome.scripts[script_idx.unwrap()];
-                let mut label = slab.clone();
+                let mut label = slab_name.clone();
                 if script.contains_label(&label) {
                     // C#: sLabel += RandomNumber.GetRandomNumber(1, 200)
                     label = format!("{}{}", label, rename_rand(1, 200));
@@ -506,8 +507,12 @@ impl ScriptParsers {
                 if !s_item_name.is_empty() && !s_item_refill_time.is_empty() {
                     let mut item_name = s_item_name;
                     if item_name.starts_with('"') {
-                        let (ar, _) = arrest_string_ex(&item_name, '"', '"');
-                        item_name = ar;
+                        // C#: ArrestStringEx(sItemName, "\"", "\"", ref sItemName)
+                        let (write, _) = arrest_string_ex_ref(&item_name, '"', '"');
+                        match write {
+                            ArrestWrite::Value(v) => item_name = v,
+                            ArrestWrite::Unchanged => {}
+                        }
                     }
                     outcome.refill_goods.push(Goods {
                         item_name,
@@ -539,15 +544,24 @@ impl ScriptParsers {
             return Ok(true);
         }
         let mut call_list: SizedStringList = SizedStringList::new();
+        // C# 方法级局部变量：sLable 跨行复用（同 LoadCallScript，未命中定界符时保留残值）
+        let mut s_lable = String::new();
         #[allow(clippy::needless_range_loop)]
         for i in 0..lines.len() {
             let sline = lines[i].trim().to_string();
             if !sline.is_empty() && sline.starts_with('#') && compare_lstr(&sline, "#CALL") {
-                let (label, rest) = arrest_string_ex(&sline, '[', ']');
-                let call_script_file = get_call_script_path(label.trim());
+                // C#: sLine = ArrestStringEx(sLine, "[", "]", ref sLable)
+                let (write, rest) = arrest_string_ex_ref(&sline, '[', ']');
+                match write {
+                    ArrestWrite::Value(v) => s_lable = v,
+                    ArrestWrite::Unchanged => {}
+                }
+                let call_script_file = get_call_script_path(s_lable.trim());
                 let lab_name = rest.trim().to_string();
                 let file_name = get_envir_file_path(envir_root, "QuestDiary", &call_script_file);
-                if call_script_dict.contains_key(&path_key(&file_name)) {
+                // C# 字典为默认序数比较，键是原样路径字符串（大小写敏感、不归一分隔符）
+                let file_key = file_name.to_string_lossy().into_owned();
+                if call_script_dict.contains_key(&file_key) {
                     call_count -= 1;
                     // C#: callList[i] = "#ACT"（i >= Count 时抛 ArgumentOutOfRangeException）
                     call_list.set(i, "#ACT".to_string())?;
@@ -561,7 +575,7 @@ impl ScriptParsers {
                         outcome.stats.call_loads += 1;
                         // C# 缺陷：ContainsKey 查的是 sLabName，Add 用的键是 sFileName
                         if !call_script_dict.contains_key(&lab_name) {
-                            call_script_dict.insert(path_key(&file_name), lab_name.clone());
+                            call_script_dict.insert(file_key, lab_name.clone());
                         }
                     }
                     false => {
@@ -709,21 +723,24 @@ impl ScriptParsers {
         s_cmd = to_upper(&s_cmd);
 
         let mut n_cmd_code = 0i32;
-        if let Some(&code) = self.condition_code_def_map.get(&s_cmd) {
-            // C# 三个特判分支（CHECK / CHECKOPEN / CHECKUNIT）体相同：
-            // 不做 code-1，且对 sParam1 做 [...] 剥壳；IsStringNumber 恒 true，
-            // 其后的 nCMDCode 清零判断是死代码。
-            if code == field_index_of(CONDITION_CODES, "CHECK")
-                || code == field_index_of(CONDITION_CODES, "CHECKOPEN")
-                || code == field_index_of(CONDITION_CODES, "CHECKUNIT")
+        if let Some(def) = def_of(CONDITION_CODES, &s_cmd) {
+            // C# 三个特判分支（CHECK / CHECKOPEN / CHECKUNIT）体相同：不做 code-1，
+            // 且对 sParam1 做 [...] 剥壳；IsStringNumber 恒 true，其后的 nCMDCode 清零判断是死代码。
+            // C# 比的是**枚举值** `(int)ConditionCode.CHECK`，而 map 存的是字段序号——
+            // 这里按枚举值比较，杜绝枚举重编号后静默错判（当前两列相等，见 codegen_drift 锚点测试）。
+            if def.enum_value == enum_value_of(CONDITION_CODES, "CHECK")
+                || def.enum_value == enum_value_of(CONDITION_CODES, "CHECKOPEN")
+                || def.enum_value == enum_value_of(CONDITION_CODES, "CHECKUNIT")
             {
-                n_cmd_code = code;
-                let (ar, _) = arrest_string_ex(&params[0].clone(), '[', ']');
-                if arrest_found(&params[0], '[', ']') {
-                    params[0] = ar;
+                n_cmd_code = def.field_index;
+                // C#: ArrestStringEx(sParam1, "[", "]", ref sParam1)（写回三态照搬）
+                let (write, _) = arrest_string_ex_ref(&params[0], '[', ']');
+                match write {
+                    ArrestWrite::Value(v) => params[0] = v,
+                    ArrestWrite::Unchanged => {}
                 }
             } else {
-                n_cmd_code = code - 1;
+                n_cmd_code = def.field_index - 1;
             }
         }
 
@@ -731,10 +748,11 @@ impl ScriptParsers {
             info.cmd_code = n_cmd_code;
             for p in &mut params {
                 if p.starts_with('"') {
-                    // C#: ArrestStringEx(p, "\"", "\"", ref p) —— 找到闭合引号才改写
-                    let (ar, _) = arrest_string_ex(p, '"', '"');
-                    if arrest_found(p, '"', '"') {
-                        *p = ar;
+                    // C#: ArrestStringEx(p, "\"", "\"", ref p)
+                    let (write, _) = arrest_string_ex_ref(p, '"', '"');
+                    match write {
+                        ArrestWrite::Value(v) => *p = v,
+                        ArrestWrite::Unchanged => {}
                     }
                 }
             }
@@ -798,17 +816,20 @@ impl ScriptParsers {
         s_cmd = to_upper(&s_cmd);
 
         let mut n_cmd_code = 0i32;
-        if let Some(&code) = self.execution_code_def_map.get(&s_cmd) {
+        if let Some(def) = def_of(EXECUTION_CODES, &s_cmd) {
+            // C# 特判集合（Set/ReSet/SetOpen/SetUnit/ResetUnit）按**枚举值**比较
             let specials = ["Set", "ReSet", "SetOpen", "SetUnit", "ResetUnit"]
-                .map(|m| field_index_of(EXECUTION_CODES, m));
-            if specials.contains(&code) {
-                n_cmd_code = code;
-                let (ar, _) = arrest_string_ex(&params[0].clone(), '[', ']');
-                if arrest_found(&params[0], '[', ']') {
-                    params[0] = ar;
+                .map(|m| enum_value_of(EXECUTION_CODES, m));
+            if specials.contains(&def.enum_value) {
+                n_cmd_code = def.field_index;
+                // C#: ArrestStringEx(sParam1, "[", "]", ref sParam1)
+                let (write, _) = arrest_string_ex_ref(&params[0], '[', ']');
+                match write {
+                    ArrestWrite::Value(v) => params[0] = v,
+                    ArrestWrite::Unchanged => {}
                 }
             } else {
-                n_cmd_code = code - 1;
+                n_cmd_code = def.field_index - 1;
             }
         }
 
@@ -816,9 +837,11 @@ impl ScriptParsers {
             info.n_cmd_code = n_cmd_code;
             for p in &mut params {
                 if p.starts_with('"') {
-                    let (ar, _) = arrest_string_ex(p, '"', '"');
-                    if arrest_found(p, '"', '"') {
-                        *p = ar;
+                    // C#: ArrestStringEx(p, "\"", "\"", ref p)
+                    let (write, _) = arrest_string_ex_ref(p, '"', '"');
+                    match write {
+                        ArrestWrite::Value(v) => *p = v,
+                        ArrestWrite::Unchanged => {}
                     }
                 }
             }
@@ -853,32 +876,20 @@ impl ScriptParsers {
     }
 }
 
-/// 码表中某成员的 GetFields 字段序号。
-fn field_index_of(defs: &'static [crate::codes::CodeDef], member: &str) -> i32 {
-    defs.iter()
-        .find(|d| d.member == member)
-        .map(|d| d.field_index)
-        .unwrap_or(-1)
+/// 码表中按命令名（大小写不敏感，对应 C# OrdinalIgnoreCase 字典）取定义。
+fn def_of(
+    defs: &'static [crate::codes::CodeDef],
+    name: &str,
+) -> Option<&'static crate::codes::CodeDef> {
+    defs.iter().find(|d| d.name.eq_ignore_ascii_case(name))
 }
 
-/// C# `ArrestStringEx` 是否实际改写了 arrestStr（找到成对定界符）。
-fn arrest_found(s: &str, after: char, before: char) -> bool {
-    let cs: Vec<char> = s.chars().collect();
-    if cs.len() < 2 {
-        return false;
-    }
-    let start = if cs[0] == after {
-        Some(1)
-    } else {
-        cs.iter()
-            .position(|&c| c == after)
-            .filter(|&n| n > 0)
-            .map(|n| n + 1)
-    };
-    match start {
-        Some(s0) => cs[s0..].contains(&before),
-        None => false,
-    }
+/// 码表中某成员的枚举值。
+fn enum_value_of(defs: &'static [crate::codes::CodeDef], member: &str) -> i32 {
+    defs.iter()
+        .find(|d| d.member == member)
+        .map(|d| d.enum_value)
+        .unwrap_or(-1)
 }
 
 /// 大小写不敏感计数 needle 在 haystack 中的出现次数（ScriptHelper.GetScriptCallCount）。
@@ -918,12 +929,6 @@ fn find_from(hay: &str, needle: &str, from: usize) -> Option<usize> {
         i += 1;
     }
     None
-}
-
-/// 路径归一化键（C# 字典键是原始路径字符串，Windows 文件系统大小写不敏感；
-/// 这里统一小写 + 分隔符归一，等价于 OrdIanoreCase 的文件路径判重）。
-fn path_key(p: &Path) -> String {
-    p.to_string_lossy().replace('\\', "/").to_lowercase()
 }
 
 /// `IMerchant` 可执行命令标志设置（`(...)` 头行）。

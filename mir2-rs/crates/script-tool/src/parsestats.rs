@@ -25,6 +25,8 @@ struct Totals {
     unknown_conditions: BTreeMap<String, usize>,
     unknown_actions: BTreeMap<String, usize>,
     warnings: Vec<String>,
+    /// 逐文件结构摘要（F1 门禁）：relpath → (hash, 计数)
+    digests: BTreeMap<String, (String, mir2_script::StructureCounts)>,
 }
 
 #[allow(non_camel_case_types)]
@@ -33,6 +35,15 @@ struct serde_json_error {
     line_index: usize,
     kind: String,
     line: String,
+}
+
+/// Win32 通配 `*.txt` 的语义：扩展名恰为 3 个字符时，匹配**以 txt 开头**的更长扩展名
+/// （`Directory.GetFiles(root, "*.txt", AllDirectories)` 与 `x.txt2` 亦命中）。此处对齐。
+fn matches_win32_txt_pattern(p: &Path) -> bool {
+    let Some(ext) = p.extension().and_then(|e| e.to_str()) else {
+        return false;
+    };
+    ext.len() >= 3 && ext[..3].eq_ignore_ascii_case("txt")
 }
 
 fn walk_txt(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -45,7 +56,7 @@ fn walk_txt(dir: &Path, out: &mut Vec<PathBuf>) {
         let p = e.path();
         if p.is_dir() {
             walk_txt(&p, out);
-        } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("txt")) {
+        } else if matches_win32_txt_pattern(&p) {
             out.push(p);
         }
     }
@@ -128,6 +139,16 @@ fn stats_json(t: &Totals) -> String {
     };
     dump_map(&mut o, "unknown_conditions", &t.unknown_conditions, true);
     dump_map(&mut o, "unknown_actions", &t.unknown_actions, true);
+    let _ = writeln!(o, "  \"structure_digest\": {{");
+    for (i, (file, (hash, c))) in t.digests.iter().enumerate() {
+        let comma = if i + 1 == t.digests.len() { "" } else { "," };
+        let _ = writeln!(
+            o,
+            "    \"{}\": {{\"hash\": \"{}\", \"s\": {}, \"r\": {}, \"p\": {}, \"c\": {}, \"a\": {}, \"e\": {}}}{comma}",
+            json_escape(file), hash, c.scripts, c.records, c.procedures, c.conditions, c.actions, c.else_actions
+        );
+    }
+    let _ = writeln!(o, "  }},");
     let _ = writeln!(o, "  \"errors\": [");
     for (i, e) in t.errors.iter().enumerate() {
         let comma = if i + 1 == t.errors.len() { "" } else { "," };
@@ -207,6 +228,10 @@ pub fn run(envir: &Path, json_out: Option<PathBuf>) -> ExitCode {
         match result {
             Ok(Some(outcome)) => {
                 totals.loaded += 1;
+                let digest = mir2_script::structure_digest(&outcome.scripts);
+                totals
+                    .digests
+                    .insert(rel_name.clone(), (digest.hash, digest.counts));
                 let s = &outcome.stats;
                 let t = &mut totals.stats;
                 t.scripts += s.scripts;
@@ -251,9 +276,16 @@ pub fn run(envir: &Path, json_out: Option<PathBuf>) -> ExitCode {
             }
             Ok(None) => {
                 totals.missing += 1;
+                totals
+                    .digests
+                    .insert(rel_name.clone(), ("MISSING".into(), Default::default()));
             }
             Err(panic) => {
                 totals.panics += 1;
+                // 异常文本两侧不同（Rust LoadPanic vs C# 异常消息），故只标记类别
+                totals
+                    .digests
+                    .insert(rel_name.clone(), ("PANIC".into(), Default::default()));
                 totals.errors.push(serde_json_error {
                     file: rel_name,
                     line_index: 0,

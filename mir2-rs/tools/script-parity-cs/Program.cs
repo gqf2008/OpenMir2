@@ -68,6 +68,82 @@ class NpcProxy : DispatchProxy
     public T Get<T>(string key, T def) => Props.TryGetValue(key, out var v) ? (T)v : def;
 }
 
+
+// 与 Rust crates/script/src/digest.rs 逐字节一致的 FNV-1a 64 结构摘要。
+static class StructureDigest
+{
+    const ulong FnvOffset = 0xcbf29ce484222325UL;
+    const ulong FnvPrime = 0x00000100000001b3UL;
+
+    class Hasher
+    {
+        public ulong State = FnvOffset;
+        public void Bytes(byte[] b) { foreach (var x in b) { State ^= x; State *= FnvPrime; } }
+        public void Num(int n) => Bytes(Encoding.UTF8.GetBytes(n.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+        public void Str(string s) {
+            var bytes = Encoding.UTF8.GetBytes(s ?? "");
+            Bytes(Encoding.UTF8.GetBytes(bytes.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            Bytes(new byte[] { (byte)':' });
+            Bytes(bytes);
+        }
+        public void Sep() => Bytes(new byte[] { (byte)'|' });
+    }
+
+    public static (string Hash, long Scripts, long Records, long Procedures, long Conditions, long Actions, long ElseActions) Of(
+        System.Collections.Generic.IEnumerable<ScriptInfo> scripts)
+    {
+        var h = new Hasher();
+        long scriptCount = 0, records = 0, procedures = 0, conditions = 0, actions = 0, elseActions = 0;
+        foreach (var s in scripts)
+        {
+            scriptCount++;
+            h.Bytes(new byte[] { (byte)'S' }); h.Sep();
+            h.Num(s.QuestCount); h.Sep();
+            h.Num(s.IsQuest ? 1 : 0); h.Sep();
+            foreach (var rec in s.RecordList.Values)
+            {
+                h.Bytes(new byte[] { (byte)'R' }); h.Sep();
+                h.Str(rec.sLabel); h.Sep();
+                h.Num(rec.boExtJmp ? 1 : 0); h.Sep();
+                records++;
+                foreach (var proc in rec.ProcedureList)
+                {
+                    h.Bytes(new byte[] { (byte)'P' }); h.Sep();
+                    h.Str(proc.sSayMsg); h.Sep();
+                    h.Str(proc.sElseSayMsg); h.Sep();
+                    procedures++;
+                    foreach (var c in proc.ConditionList) { Condition(h, c); conditions++; }
+                    foreach (var a in proc.ActionList) { Action(h, a, false); actions++; }
+                    foreach (var a in proc.ElseActionList) { Action(h, a, true); elseActions++; }
+                }
+            }
+        }
+        return ($"{h.State:x16}", scriptCount, records, procedures, conditions, actions, elseActions);
+    }
+
+    static void Condition(Hasher h, QuestConditionInfo c)
+    {
+        h.Bytes(new byte[] { (byte)'C' }); h.Sep();
+        h.Num(c.CmdCode); h.Sep();
+        foreach (var p in new[] { c.sParam1, c.sParam2, c.sParam3, c.sParam4, c.sParam5, c.sParam6 }) { h.Str(p); h.Sep(); }
+        foreach (var n in new[] { c.nParam1, c.nParam2, c.nParam3, c.nParam4, c.nParam5, c.nParam6 }) { h.Num(n); h.Sep(); }
+        h.Str(c.sParam7); h.Sep();
+        h.Num(c.nParam7); h.Sep();
+        h.Str(c.sOpName); h.Sep();
+        h.Str(c.sOpHName); h.Sep();
+    }
+
+    static void Action(Hasher h, QuestActionInfo a, bool isElse)
+    {
+        h.Bytes(new byte[] { (byte)(isElse ? 'E' : 'A') }); h.Sep();
+        h.Num(a.nCmdCode); h.Sep();
+        foreach (var p in new[] { a.sParam1, a.sParam2, a.sParam3, a.sParam4, a.sParam5, a.sParam6 }) { h.Str(p); h.Sep(); }
+        foreach (var n in new[] { a.nParam1, a.nParam2, a.nParam3, a.nParam4, a.nParam5, a.nParam6 }) { h.Num(n); h.Sep(); }
+        h.Str(a.sOpName); h.Sep();
+        h.Str(a.sOpHName); h.Sep();
+    }
+}
+
 static class Program
 {
     static string Esc(string s)
@@ -115,6 +191,7 @@ static class Program
         long scripts = 0, records = 0, procedures = 0, conditions = 0, actions = 0, elseActions = 0;
         long goods = 0, itemTypeEntries = 0;
         var panicFiles = new List<(string File, string Message)>();
+        var digests = new SortedDictionary<string, (string Hash, long S, long R, long P, long C, long A, long E)>(StringComparer.Ordinal);
 
         foreach (var file in files)
         {
@@ -133,6 +210,7 @@ static class Program
             {
                 panics++;
                 panicFiles.Add((rel, ex.GetType().Name + ": " + ex.Message));
+                digests[rel] = ("PANIC", 0, 0, 0, 0, 0, 0);
                 continue; // 整文件计数丢弃（与 Rust 侧 Err 口径一致）
             }
             loaded++;
@@ -152,6 +230,8 @@ static class Program
                     }
                 }
             }
+            var d = StructureDigest.Of(npc.Scripts);
+            digests[rel] = (d.Hash, d.Scripts, d.Records, d.Procedures, d.Conditions, d.Actions, d.ElseActions);
             goods += npc.Get<System.Collections.IList>("RefillGoodsList", new List<object>()).Count;
             itemTypeEntries += npc.Get<System.Collections.IList>("ItemTypeList", new List<object>()).Count;
             _ = beforeErr;
@@ -165,6 +245,14 @@ static class Program
         jsonOut.AppendLine($"    \"conditions\": {conditions}, \"actions\": {actions}, \"else_actions\": {elseActions},");
         jsonOut.AppendLine($"    \"goods\": {goods}, \"item_type_entries\": {itemTypeEntries},");
         jsonOut.AppendLine($"    \"parse_errors\": {sink.ScriptErrors}, \"load_failures\": {sink.LoadFails}, \"file_not_found\": {sink.FileNotFound}, \"other_errors\": {sink.OtherErrors}");
+        jsonOut.AppendLine("  },");
+        jsonOut.AppendLine("  \"structure_digest\": {");
+        int di = 0;
+        foreach (var kv in digests)
+        {
+            var comma = ++di == digests.Count ? "" : ",";
+            jsonOut.AppendLine($"    \"{Esc(kv.Key)}\": {{\"hash\": \"{kv.Value.Hash}\", \"s\": {kv.Value.S}, \"r\": {kv.Value.R}, \"p\": {kv.Value.P}, \"c\": {kv.Value.C}, \"a\": {kv.Value.A}, \"e\": {kv.Value.E}}}{comma}");
+        }
         jsonOut.AppendLine("  },");
         jsonOut.AppendLine("  \"errors\": [");
         for (int i = 0; i < sink.ScriptErrorMessages.Count; i++)

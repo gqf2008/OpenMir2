@@ -51,7 +51,9 @@ Rust 侧 `FrameSplitter` 属传输层健壮性差异。
 | 编号 | 差异/豁免点 | 为什么无害 | 谁审的 |
 | --- | --- | --- | --- |
 | B-101 | Envir 全量解析的 427 条"脚本错误"（M4 验收①原文写"解析错误 = 0"） | 非两侧差异：C# 参照在同一份语料上产出同样的 427 条（逐行多重集差 0/0）。`TakeOn`/`GAMEGIRD`/`ReadRandomLine` 等命令在 C# 源码中不存在（LEGM2 等变体遗留），内容冻结下不可通过实现它们收敛。建议验收①口径修订为"双侧逐行一致" | B 线（待 owner 复核口径） |
-| B-102 | 重名 label 改名后缀：harness 反射播种 C# `Random(42)`，Rust 用复刻的 `System.Random(42)` | 后缀取值不进入任何验收计数；仅数据文件误喂解析器时影响崩溃时点（两侧同样整文件丢弃）。无参 Random 的固有不可复现性见 D-3 | B 线 |
+| B-102 | 重名 label 改名后缀：harness 反射播种 C# `Random(42)`，Rust 用复刻的 `System.Random(42)` | 两侧同种子同算法同消耗顺序（文件序一致），改名后的 label 已纳入**结构摘要**逐文件比对 ⇒ 后缀本身也在对拍范围内（639/639 指纹相同）。无参 Random 的固有不可复现性见 D-3 | B 线 |
+| B-103 | `ToUpper`/`OrdinalIgnoreCase` 用 Unicode 简单大写折叠 + `eq_ignore_ascii_case` 近似 .NET 语义（D-2 同族） | C# `string.ToUpper()` 走 CurrentCulture；生产为 zh-CN、语料为 GBK 中文 + ASCII，两种规则在该域内判定相同（639 文件逐文件指纹一致）。若引入 tr-TR 等特殊文化需重审 | B 线 |
+| B-104 | 文件集口径：Rust 侧按 Win32 通配语义枚举 `*.txt`（扩展名前 3 字符为 txt，含 `x.txt2`），与 C# `Directory.GetFiles(root,"*.txt",AllDirectories)` 对齐 | 两侧文件集**逐条**比对（结构摘要表以相对路径为键），当前 639 == 639；新增/缺失文件会使门禁变红。注：设计文档 §2/§5.2 写 652、M4 验收①写 634，实测 M2GameSvr\Envir 递归 = 639、Mir200\Envir = 634（见 B-101 口径提请） | B 线 |
 
 证据：`tests/parity/envir-2026-10-10/`（双侧 parse-stats JSON + diff.txt + handler-maps.txt + SHA256SUMS）。
 复现命令见 `crates/script/README.md`。

@@ -9,12 +9,14 @@
 #![forbid(unsafe_code)]
 
 pub mod codes;
+pub mod digest;
 pub mod hutil32;
 pub mod model;
 pub mod parser;
 pub mod random;
 pub mod textfile;
 
+pub use digest::{structure_digest, StructureCounts, StructureDigest};
 pub use model::{
     Goods, MerchantFlags, QuestActionInfo, QuestConditionInfo, SayingProcedure, SayingRecord,
     ScriptInfo, ScriptQuestInfo,

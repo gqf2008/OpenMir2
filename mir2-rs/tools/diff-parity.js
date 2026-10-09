@@ -50,4 +50,32 @@ console.log(`仅Rust: ${mdR.length} 仅C#: ${mdC.length} (集合差: ${onlyRust.
 for (const x of mdR.slice(0, 10)) console.log('  R>: ' + x);
 for (const x of mdC.slice(0, 10)) console.log('  C>: ' + x);
 if (mdR.length || mdC.length) diffs++;
+
+// 逐文件结构摘要对拍（F1）：哈希 + 计数必须逐文件相同；同时逐条比对文件集
+const rd = rust.structure_digest || {};
+const cd = cs.structure_digest || {};
+const rKeys = Object.keys(rd).sort();
+const cKeys = Object.keys(cd).sort();
+const onlyR = rKeys.filter(k => !(k in cd));
+const onlyC = cKeys.filter(k => !(k in rd));
+console.log(`结构摘要: rust=${rKeys.length} 文件, cs=${cKeys.length} 文件`);
+if (onlyR.length || onlyC.length) {
+  diffs++;
+  console.log(`DIFF 文件集: 仅Rust ${onlyR.length} (${onlyR.slice(0,5).join(', ')}), 仅C# ${onlyC.length} (${onlyC.slice(0,5).join(', ')})`);
+}
+let mismatch = [];
+for (const k of rKeys) {
+  if (!(k in cd)) continue;
+  if (rd[k].hash !== cd[k].hash) mismatch.push(k);
+}
+if (mismatch.length) {
+  diffs++;
+  console.log(`DIFF 结构摘要不一致: ${mismatch.length} 个文件`);
+  for (const k of mismatch.slice(0, 10)) {
+    console.log(`  ${k}: rust=${JSON.stringify(rd[k])} cs=${JSON.stringify(cd[k])}`);
+  }
+} else {
+  console.log(`OK   结构摘要逐文件一致（${rKeys.length} 个文件：label/cmd_code/参数/宏展开后内容全部相同）`);
+}
+
 console.log(diffs === 0 ? '== 全部一致 ==' : `== ${diffs} 项差异 ==`);

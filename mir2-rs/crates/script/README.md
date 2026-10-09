@@ -11,6 +11,7 @@ OpenMir2 经典脚本语言的 Rust 1:1 移植。硬约束：客户端冻结、�
 - 码表：`codes.rs` 由 `script-tool gen-codes` 从 C# 源码机械生成（条件 207 / 动作 352 / 全局变量 158 对），漂移门禁 `codegen_drift` 测试。
 - RNG：`random.rs` 复刻 `System.Random` 带种子构造（.NET 8 CompatPrng / Knuth 减算法），序列与 .NET 逐位一致。
 - 对拍：`script-tool parse-stats`（Rust）与 `tools/script-parity-cs`（C# harness，DispatchProxy 假 NPC，只读引用参照实现，不改动任何 C# 参照代码）。
+- 结构摘要门禁（`digest.rs`）：逐文件把 label（含重名改名后的后缀）、`cmd_code`、六个字符串参数、六个数值参数、opname、say 文本压成 FNV-1a 64 指纹，两侧逐文件比对——计数相同但内容不同的缺陷（如命令码位移、字段归属、改名随机序列）同样会变红。
 
 ## 已实证的 C# 怪行为（全部保留，改动即违规）
 
@@ -22,6 +23,7 @@ OpenMir2 经典脚本语言的 Rust 1:1 移植。硬约束：客户端冻结、�
 6. **常量替换**：仅 `#IF`/`#ACT`/`#ELSEACT` 之后的内容行参与；匹配位置必须在行首之后（`n24 <= 0` 退出）；每个 define 每行最多 10 次；`@HOME` 恒在替换表尾部。
 7. **`scriptType == 1` 是死分支**（从不赋值 1），quest flag 头解析在生产中不执行。
 8. **未知 `#` 指令行静默丢弃**；未知条件/动作命令记 `脚本错误` 并跳过该行。
+8b. **`ArrestStringEx` 的写回是三态的**：源为空 → 不改写；已定位 span 但无闭合定界符 → 不改写、返回 `after+span`；**未定位到定界符（含 `len<2`）→ 经 catch 写回空串**。相关局部变量（`slabName`/`sLable`）在 C# 里是方法级、跨行复用，未改写时保留上一行残值——已一并复刻。
 9. **重名 label** 追加 `RandomNumber.GetRandomNumber(1, 200)`（即 `Next(1, 201)`）后缀，仍冲突则 `Dictionary.Add` 抛 `ArgumentException`。
 10. **`string.Split(sep, 2, RemoveEmptyEntries)`（.NET 8）语义**：空段不计数——首个 token 为 dest，返回值为“第二个 token 起点至串尾”。与 .NET Framework 直觉不同，已实机钉死。
 
@@ -37,6 +39,7 @@ OpenMir2 经典脚本语言的 Rust 1:1 移植。硬约束：客户端冻结、�
 | 动作 / 否则动作 | 8869 / 953 | 8869 / 953 | ✓ |
 | 商品 goods | 574 | 574 | ✓ |
 | 解析错误（脚本错误行） | 427 | 427 | ✓（**逐行**一致，多重集差 0/0） |
+| 逐文件结构摘要（label/cmd_code/参数/opname/say 全文） | — | — | ✓ 639/639 指纹相同 |
 | 宏展开 | 0 | 0 | ✓（语料无 `#DEFINE`/`#INCLUDE`/`#SETHOME`，grep 佐证） |
 
 证据：`tests/parity/envir-2026-10-10/{parse-stats-cs.json,parse-stats-rust.json,diff.txt,handler-maps.txt}`。
@@ -61,9 +64,12 @@ cargo test -p mir2-script-tool --test codegen_drift
 1. 手改 `codes.rs` 任一字节 → `codegen_drift` 必红（已验证：FAILED → 恢复后绿）。
 2. 脚本中写入未知命令 → 两侧 `parse_errors` 同步 +1（夹具 `target/redcheck`，双侧输出一致）。
 3. 对拍 JSON 改一数 → `diff-parity.js` 必报 DIFF（已验证）。
+4. 脚本参数改 1 个数（计数不变）→ 结构摘要变红（已验证：`a.txt` 的 `give 金币 5→6`，计数四项全同、指纹不同）。
+5. 去掉解析器的 `字段序号-1` 位移 → 结构摘要 115 个文件变红（计数全不变）——证明该门禁确实能看见 B-8 一类缺陷（已验证，随后恢复并复绿）。
 
 ## 后续批次（不在本批范围）
 
 - 条件/动作求值与内建命令：`Processings/`（ConditionProcessingSys 4753 行 / ExecutionProcessingSys 5998 行 / GrobalVarProcessingSys 1827 行）+ `ScriptEngine.cs` 控制流，派发按上表位移语义 1:1。
 - `Robot_def` 的 `RobotObject.LoadScript` 是另一套解析格式，不属于本解析器口径。
+- 文件集口径：两侧同为 `Envir` 递归 `*.txt`；Rust 侧按 Win32 通配语义实现（扩展名前 3 字符为 txt 即命中，与 `Directory.GetFiles(root,"*.txt",AllDirectories)` 对齐），且摘要表以**文件相对路径为键**逐条比对，新增/缺失文件同样报差异。
 - NPC 渲染侧 `InitializeSayMsg`/`InitializeVariable`（`<$VAR>` 展开，码表已生成）。

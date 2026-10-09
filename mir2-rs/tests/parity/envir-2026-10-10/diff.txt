@@ -13,4 +13,6 @@ OK   stats.parse_errors: rust=427 cs=427
 OK   stats.load_failures: rust=0 cs=0
 错误条数: rust=427 cs=427
 仅Rust: 0 仅C#: 0 (集合差: 0/0)
+结构摘要: rust=639 文件, cs=639 文件
+OK   结构摘要逐文件一致（639 个文件：label/cmd_code/参数/宏展开后内容全部相同）
 == 全部一致 ==
