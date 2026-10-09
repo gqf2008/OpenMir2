@@ -1,0 +1,8 @@
+[package]
+name = "mir2-shared"
+version = "0.1.0"
+edition = "2021"
+description = "OpenMir2 公共工具：System.Random 复刻（rng）与 HUtil32 等价物"
+
+[lints]
+workspace = true

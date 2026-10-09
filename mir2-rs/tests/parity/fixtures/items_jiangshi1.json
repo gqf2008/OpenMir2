@@ -1,0 +1,260 @@
+[
+  {
+    "name": "金创药(中量)",
+    "std_mode": 0,
+    "shape": 0,
+    "dura_max": 1
+  },
+  {
+    "name": "魔法药(中量)",
+    "std_mode": 0,
+    "shape": 0,
+    "dura_max": 1
+  },
+  {
+    "name": "轻型盔甲(男)",
+    "std_mode": 10,
+    "shape": 2,
+    "dura_max": 8000
+  },
+  {
+    "name": "轻型盔甲(女)",
+    "std_mode": 11,
+    "shape": 2,
+    "dura_max": 8000
+  },
+  {
+    "name": "青铜头盔",
+    "std_mode": 15,
+    "shape": 0,
+    "dura_max": 8000
+  },
+  {
+    "name": "魔法头盔",
+    "std_mode": 15,
+    "shape": 0,
+    "dura_max": 8000
+  },
+  {
+    "name": "八荒",
+    "std_mode": 5,
+    "shape": 15,
+    "dura_max": 18000
+  },
+  {
+    "name": "凌风",
+    "std_mode": 5,
+    "shape": 5,
+    "dura_max": 18000
+  },
+  {
+    "name": "破魂",
+    "std_mode": 5,
+    "shape": 6,
+    "dura_max": 11000
+  },
+  {
+    "name": "半月",
+    "std_mode": 5,
+    "shape": 16,
+    "dura_max": 14000
+  },
+  {
+    "name": "海魂",
+    "std_mode": 6,
+    "shape": 8,
+    "dura_max": 12000
+  },
+  {
+    "name": "蓝色水晶戒指",
+    "std_mode": 22,
+    "shape": 0,
+    "dura_max": 10000
+  },
+  {
+    "name": "黑色水晶戒指",
+    "std_mode": 22,
+    "shape": 0,
+    "dura_max": 5000
+  },
+  {
+    "name": "黑檀项链",
+    "std_mode": 20,
+    "shape": 0,
+    "dura_max": 8000
+  },
+  {
+    "name": "灯笼项链",
+    "std_mode": 19,
+    "shape": 0,
+    "dura_max": 8000
+  },
+  {
+    "name": "琥珀项链",
+    "std_mode": 20,
+    "shape": 0,
+    "dura_max": 6000
+  },
+  {
+    "name": "魔鬼项链",
+    "std_mode": 20,
+    "shape": 0,
+    "dura_max": 8000
+  },
+  {
+    "name": "凤凰明珠",
+    "std_mode": 20,
+    "shape": 0,
+    "dura_max": 7000
+  },
+  {
+    "name": "大手镯",
+    "std_mode": 26,
+    "shape": 0,
+    "dura_max": 10000
+  },
+  {
+    "name": "钢手镯",
+    "std_mode": 26,
+    "shape": 0,
+    "dura_max": 5000
+  },
+  {
+    "name": "基本剑术",
+    "std_mode": 4,
+    "shape": 0,
+    "dura_max": 7
+  },
+  {
+    "name": "攻杀剑术",
+    "std_mode": 4,
+    "shape": 0,
+    "dura_max": 19
+  },
+  {
+    "name": "刺杀剑术",
+    "std_mode": 4,
+    "shape": 0,
+    "dura_max": 25
+  },
+  {
+    "name": "治愈术",
+    "std_mode": 4,
+    "shape": 2,
+    "dura_max": 7
+  },
+  {
+    "name": "精神力战法",
+    "std_mode": 4,
+    "shape": 2,
+    "dura_max": 9
+  },
+  {
+    "name": "施毒术",
+    "std_mode": 4,
+    "shape": 2,
+    "dura_max": 14
+  },
+  {
+    "name": "灵魂火符",
+    "std_mode": 4,
+    "shape": 2,
+    "dura_max": 18
+  },
+  {
+    "name": "召唤骷髅",
+    "std_mode": 4,
+    "shape": 2,
+    "dura_max": 19
+  },
+  {
+    "name": "隐身术",
+    "std_mode": 4,
+    "shape": 2,
+    "dura_max": 20
+  },
+  {
+    "name": "集体隐身术",
+    "std_mode": 4,
+    "shape": 2,
+    "dura_max": 21
+  },
+  {
+    "name": "幽灵盾",
+    "std_mode": 4,
+    "shape": 2,
+    "dura_max": 22
+  },
+  {
+    "name": "神圣战甲术",
+    "std_mode": 4,
+    "shape": 2,
+    "dura_max": 25
+  },
+  {
+    "name": "心灵启示",
+    "std_mode": 4,
+    "shape": 2,
+    "dura_max": 26
+  },
+  {
+    "name": "火球术",
+    "std_mode": 4,
+    "shape": 1,
+    "dura_max": 7
+  },
+  {
+    "name": "抗拒火环",
+    "std_mode": 4,
+    "shape": 1,
+    "dura_max": 12
+  },
+  {
+    "name": "诱惑之光",
+    "std_mode": 4,
+    "shape": 1,
+    "dura_max": 13
+  },
+  {
+    "name": "地狱火",
+    "std_mode": 4,
+    "shape": 1,
+    "dura_max": 16
+  },
+  {
+    "name": "雷电术",
+    "std_mode": 4,
+    "shape": 1,
+    "dura_max": 17
+  },
+  {
+    "name": "瞬息移动",
+    "std_mode": 4,
+    "shape": 1,
+    "dura_max": 19
+  },
+  {
+    "name": "大火球",
+    "std_mode": 4,
+    "shape": 1,
+    "dura_max": 19
+  },
+  {
+    "name": "爆裂火焰",
+    "std_mode": 4,
+    "shape": 1,
+    "dura_max": 22
+  },
+  {
+    "name": "火墙",
+    "std_mode": 4,
+    "shape": 1,
+    "dura_max": 24
+  },
+  {
+    "name": "疾光电影",
+    "std_mode": 4,
+    "shape": 1,
+    "dura_max": 26
+  }
+]

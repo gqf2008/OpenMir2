@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>ParityGolden</AssemblyName>
+    <RootNamespace>ParityGolden</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    金标准生成器（D 线对拍）。只读：不写 MySQL、不改任何现网文件。
+    链接真实源码文件：
+    - RandomNumber.cs：RNG 包装层的真实实现（种子经反射注入）
+    - ConfigFile.cs：ini 读取的真实实现（Exps.conf 解析）
+  -->
+  <ItemGroup>
+    <Compile Include="..\..\..\..\..\src\OpenMir2\RandomNumber.cs" Link="Linked\RandomNumber.cs" />
+    <Compile Include="..\..\..\..\..\src\OpenMir2\Common\ConfigFile.cs" Link="Linked\ConfigFile.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="System.Text.Encoding.CodePages" Version="10.0.12" />
+  </ItemGroup>
+
+</Project>

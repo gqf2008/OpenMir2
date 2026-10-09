@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/shared",
+    "crates/data",
+    "crates/formula",
+    "tests/parity",
+]
+
+# D 线范围：数据层 + 数值公式（见 docs/Rust重写设计文档.md §12.2）。
+# 协议 / 网关 / 世界引擎不在本 workspace。
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "deny"

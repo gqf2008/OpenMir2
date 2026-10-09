@@ -1,0 +1,104 @@
+[
+ {
+  "name": "木剑",
+  "std_mode": 5,
+  "shape": 0,
+  "dura_max": 4000
+ },
+ {
+  "name": "匕首",
+  "std_mode": 6,
+  "shape": 0,
+  "dura_max": 4000
+ },
+ {
+  "name": "布衣男S",
+  "std_mode": 10,
+  "shape": 0,
+  "dura_max": 3000
+ },
+ {
+  "name": "布衣女S",
+  "std_mode": 11,
+  "shape": 0,
+  "dura_max": 3000
+ },
+ {
+  "name": "青铜头盔S",
+  "std_mode": 15,
+  "shape": 0,
+  "dura_max": 5000
+ },
+ {
+  "name": "琥珀项链S",
+  "std_mode": 19,
+  "shape": 0,
+  "dura_max": 6000
+ },
+ {
+  "name": "魔鬼项链S",
+  "std_mode": 20,
+  "shape": 0,
+  "dura_max": 6000
+ },
+ {
+  "name": "记忆项链",
+  "std_mode": 21,
+  "shape": 0,
+  "dura_max": 6000
+ },
+ {
+  "name": "技巧项链",
+  "std_mode": 24,
+  "shape": 0,
+  "dura_max": 6000
+ },
+ {
+  "name": "钢手镯S",
+  "std_mode": 26,
+  "shape": 0,
+  "dura_max": 6000
+ },
+ {
+  "name": "蓝色水晶戒指S",
+  "std_mode": 22,
+  "shape": 0,
+  "dura_max": 5000
+ },
+ {
+  "name": "道德戒指",
+  "std_mode": 23,
+  "shape": 0,
+  "dura_max": 5000
+ },
+ {
+  "name": "神秘头盔",
+  "std_mode": 15,
+  "shape": 130,
+  "dura_max": 10000
+ },
+ {
+  "name": "神秘戒指",
+  "std_mode": 22,
+  "shape": 131,
+  "dura_max": 5000
+ },
+ {
+  "name": "神秘戒指P",
+  "std_mode": 23,
+  "shape": 132,
+  "dura_max": 5000
+ },
+ {
+  "name": "神秘手镯",
+  "std_mode": 24,
+  "shape": 130,
+  "dura_max": 6000
+ },
+ {
+  "name": "神秘手镯P",
+  "std_mode": 26,
+  "shape": 131,
+  "dura_max": 6000
+ }
+]

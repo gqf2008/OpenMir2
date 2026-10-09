@@ -1,0 +1,12 @@
+[package]
+name = "mir2-formula"
+version = "0.1.0"
+edition = "2021"
+description = "数值公式逐条移植：经验曲线、杀怪经验、等级基础属性/负重、怪物掉落"
+
+[dependencies]
+mir2-shared = { path = "../shared" }
+mir2-data = { path = "../data" }
+
+[lints]
+workspace = true
