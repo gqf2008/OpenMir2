@@ -26,7 +26,7 @@
 | B-5 | `goldsales` 列名 `DealChrName`/`BuyChrName` 与 DDL 不符（见 D-5） | `MySqlDB.cs:264-265` → `crates/data/src/loaders.rs` |
 | B-6 | `LoadMonsterDB` 移动/攻击速度下限判断写了两遍（`_MAX(200,..)` 后再 `if <200`） | `MySqlDB.cs:213-224` → `crates/data/src/loaders.rs` |
 | B-7 | `RandomSelect` 异常消息写反（"selectCount必需大于sourceList.Count"，实际条件相反） | `RandomNumber.cs:53` → `crates/shared/src/rng.rs` |
-| B-8 | 脚本命令码位移：解析器存 `GetFields() 字段序号-1`（特判 CHECK/CHECKOPEN/CHECKUNIT/Set/ReSet/SetOpen/SetUnit/ResetUnit 存原值），执行注册表以枚举值为键 ⇒ 脚本命令派发到前一个枚举成员的处理器（如 CHECKLEVEL→ConditionCheckUnit） | `ScriptParsers.cs:329/501` → `crates/script/src/parser.rs`（code-1）；派发表实证 `tests/parity/envir-2026-10-10/handler-maps.txt` |
+| B-8 | 脚本命令码位移：解析器存 `GetFields() 字段序号-1`（特判 CHECK/CHECKOPEN/CHECKUNIT/Set/ReSet/SetOpen/SetUnit/ResetUnit 存原值），执行注册表以枚举值为键 ⇒ 脚本命令派发到前一个枚举成员的处理器（如 CHECKLEVEL→ConditionCheckUnit；端到端实测 `take→ActionOfSet`、`break→ActionOfResetUnit`、`goto→switch 的 EndQuest 分支`） | `ScriptParsers.cs:329/501` → `crates/script/src/parser.rs`（code-1）；实证 `tests/parity/envir-2026-10-10/{handler-maps.txt,dispatch-shift-evidence.md}`。上游 2023-06-15 提交 8a8a02d1 引入；现网 ScriptSystem.dll（2026-10-09 构建）同此行为 |
 | B-9 | `IsStringNumber` 恒 true（`||` 缺陷 + 正则匹配空串） | `HUtil32.cs:477` → `crates/script/src/hutil32.rs` |
 | B-10 | `CaptureString` 从 c=1 起扫描（跳过 0 号引号）：dest 含开引号不含闭引号；无闭合/无空格抛 IndexOutOfRange | `HUtil32.cs:299-357` → `crates/script/src/hutil32.rs`（Err(CaptureStringPanic)） |
 | B-11 | `LoadScriptCallScript` 的 label 形同虚设：文件头到首个 `}` 之间的行全部并入 | `ScriptParsers.cs:80-111` → `crates/script/src/parser.rs` |
