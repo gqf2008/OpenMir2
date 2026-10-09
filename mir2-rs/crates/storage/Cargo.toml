@@ -1,0 +1,12 @@
+[package]
+name = "mir2-storage"
+version = "0.1.0"
+edition = "2021"
+description = "Storage traits for the mir2 rewrite (frozen interface mirroring src/Storeages/DBSrv.Storage; record fields land with M1/D-line)"
+license = "MIT"
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = "1"
