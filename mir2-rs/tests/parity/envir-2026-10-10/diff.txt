@@ -1,0 +1,16 @@
+OK   files: rust=639 cs=639
+OK   loaded: rust=639 cs=639
+OK   missing: rust=0 cs=0
+OK   panics: rust=0 cs=0
+OK   stats.scripts: rust=178 cs=178
+OK   stats.records: rust=2386 cs=2386
+OK   stats.procedures: rust=3563 cs=3563
+OK   stats.conditions: rust=2137 cs=2137
+OK   stats.actions: rust=8869 cs=8869
+OK   stats.else_actions: rust=953 cs=953
+OK   stats.goods: rust=574 cs=574
+OK   stats.parse_errors: rust=427 cs=427
+OK   stats.load_failures: rust=0 cs=0
+错误条数: rust=427 cs=427
+仅Rust: 0 仅C#: 0 (集合差: 0/0)
+== 全部一致 ==

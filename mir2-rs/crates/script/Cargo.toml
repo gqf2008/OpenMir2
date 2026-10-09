@@ -1,0 +1,12 @@
+[package]
+name = "mir2-script"
+version = "0.1.0"
+edition = "2021"
+description = "OpenMir2 Envir 脚本引擎的 Rust 1:1 移植（参照 src/Modules/ScriptEngine）"
+publish = false
+
+[dependencies]
+encoding_rs = "0.8"
+
+[lints]
+workspace = true

@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = ["crates/script", "crates/script-tool"]
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+# 1:1 移植 C# 参照实现时允许风格性 lint 告警，但 correctness/suspicious 一律 deny
+correctness = "deny"
+suspicious = "deny"
+
+[profile.release]
+debug = true

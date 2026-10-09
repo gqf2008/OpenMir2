@@ -1,0 +1,302 @@
+//! `parse-stats`：全量加载 Envir 脚本并输出对拍统计。
+//!
+//! 口径定义（C# 侧 harness 必须一致）：
+//! - 文件集：Envir 下递归全部 `.txt`，按相对路径（小写）排序；
+//! - 加载方式：逐文件走 `LoadScriptFile` 全流程；父目录相对 Envir 根作为 `sPatch`，
+//!   文件主名作为 `scriptName`；路径含 `Market_Def` 段时 `boFlag = true`；
+//! - 统计：`LoadStats` 全字段 + 文件级异常（对应 C# 未被捕获的越界/重复键异常）。
+
+use std::collections::BTreeMap;
+use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+
+use mir2_script::hutil32::{get_valid_str3, to_upper};
+use mir2_script::{LoadStats, ParseErrorKind, ScriptParsers};
+
+#[derive(Default)]
+struct Totals {
+    files: usize,
+    loaded: usize,
+    missing: usize,
+    panics: usize,
+    stats: LoadStats,
+    errors: Vec<serde_json_error>,
+    unknown_conditions: BTreeMap<String, usize>,
+    unknown_actions: BTreeMap<String, usize>,
+    warnings: Vec<String>,
+}
+
+#[allow(non_camel_case_types)]
+struct serde_json_error {
+    file: String,
+    line_index: usize,
+    kind: String,
+    line: String,
+}
+
+fn walk_txt(dir: &Path, out: &mut Vec<PathBuf>) {
+    let mut entries: Vec<_> = match std::fs::read_dir(dir) {
+        Ok(rd) => rd.filter_map(std::result::Result::ok).collect(),
+        Err(_) => return,
+    };
+    entries.sort_by_key(|e| e.file_name().to_string_lossy().to_lowercase());
+    for e in entries {
+        let p = e.path();
+        if p.is_dir() {
+            walk_txt(&p, out);
+        } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("txt")) {
+            out.push(p);
+        }
+    }
+}
+
+/// 从“脚本错误”行提取命令名（对齐解析器的 opname 拆分后大写）。
+fn command_name_of(line: &str) -> String {
+    let (first, _) = get_valid_str3(line, &[' ', '\t']);
+    let cmd = if first.contains('.') {
+        let (_, rest) = get_valid_str3(&first, &['.']);
+        rest
+    } else {
+        first
+    };
+    to_upper(&cmd)
+}
+
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 8);
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+fn stats_json(t: &Totals) -> String {
+    let mut o = String::new();
+    let s = &t.stats;
+    let _ = writeln!(o, "{{");
+    let _ = writeln!(
+        o,
+        "  \"files\": {}, \"loaded\": {}, \"missing\": {}, \"panics\": {},",
+        t.files, t.loaded, t.missing, t.panics
+    );
+    let _ = writeln!(o, "  \"stats\": {{");
+    let _ = writeln!(
+        o,
+        "    \"scripts\": {}, \"records\": {}, \"procedures\": {},",
+        s.scripts, s.records, s.procedures
+    );
+    let _ = writeln!(
+        o,
+        "    \"conditions\": {}, \"actions\": {}, \"else_actions\": {},",
+        s.conditions, s.actions, s.else_actions
+    );
+    let _ = writeln!(
+        o,
+        "    \"define_substitutions\": {}, \"call_loads\": {}, \"call_failures\": {},",
+        s.define_substitutions, s.call_loads, s.call_failures
+    );
+    let _ = writeln!(
+        o,
+        "    \"include_loads\": {}, \"goods\": {}, \"price_rate_lines\": {},",
+        s.include_loads, s.goods, s.price_rate_lines
+    );
+    let _ = writeln!(
+        o,
+        "    \"item_type_lines\": {}, \"merchant_cmd_lines\": {}, \"parse_errors\": {},",
+        s.item_type_lines, s.merchant_cmd_lines, s.parse_errors
+    );
+    let _ = writeln!(o, "    \"label_renames\": {}", s.label_renames);
+    let _ = writeln!(o, "  }},");
+    let dump_map = |o: &mut String, name: &str, m: &BTreeMap<String, usize>, trailing: bool| {
+        let _ = writeln!(o, "  \"{name}\": {{");
+        for (i, (k, v)) in m.iter().enumerate() {
+            let comma = if i + 1 == m.len() { "" } else { "," };
+            let _ = writeln!(o, "    \"{}\": {}{comma}", json_escape(k), v);
+        }
+        let _ = writeln!(o, "  }}{}", if trailing { "," } else { "" });
+    };
+    dump_map(&mut o, "unknown_conditions", &t.unknown_conditions, true);
+    dump_map(&mut o, "unknown_actions", &t.unknown_actions, true);
+    let _ = writeln!(o, "  \"errors\": [");
+    for (i, e) in t.errors.iter().enumerate() {
+        let comma = if i + 1 == t.errors.len() { "" } else { "," };
+        let _ = writeln!(
+            o,
+            "    {{\"file\": \"{}\", \"line_index\": {}, \"kind\": \"{}\", \"line\": \"{}\"}}{comma}",
+            json_escape(&e.file),
+            e.line_index,
+            e.kind,
+            json_escape(&e.line)
+        );
+    }
+    let _ = writeln!(o, "  ],");
+    let _ = writeln!(o, "  \"warnings\": [");
+    for (i, w) in t.warnings.iter().enumerate() {
+        let comma = if i + 1 == t.warnings.len() { "" } else { "," };
+        let _ = writeln!(o, "    \"{}\"{comma}", json_escape(w));
+    }
+    let _ = writeln!(o, "  ]");
+    let _ = writeln!(o, "}}");
+    o
+}
+
+pub fn run(envir: &Path, json_out: Option<PathBuf>) -> ExitCode {
+    if !envir.is_dir() {
+        eprintln!("Envir 目录不存在: {}", envir.display());
+        return ExitCode::FAILURE;
+    }
+    let mut files = Vec::new();
+    walk_txt(envir, &mut files);
+    files.sort_by_key(|p| {
+        p.strip_prefix(envir)
+            .unwrap_or(p)
+            .to_string_lossy()
+            .replace('\\', "/")
+            .to_lowercase()
+    });
+
+    let parsers = ScriptParsers::new();
+    let fs = mir2_script::LocalFs;
+    let mut totals = Totals {
+        files: files.len(),
+        ..Totals::default()
+    };
+    // 与 C# harness 同种子同算法（System.Random(42) 复刻），重名 label 改名序列逐位一致
+    let mut sys_rng = mir2_script::random::SystemRandom::new(42);
+    let mut rename_rand = move |min: i32, max: i32| sys_rng.get_random_number(min, max);
+
+    for file in &files {
+        let rel = file.strip_prefix(envir).unwrap_or(file);
+        let parent = rel
+            .parent()
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_default();
+        let stem = file
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let bo_flag = rel.components().any(|c| {
+            c.as_os_str()
+                .to_string_lossy()
+                .eq_ignore_ascii_case("Market_Def")
+        });
+        // 语料检查：非 BMP 字符会破坏 UTF-16 索引等价假设
+        let bytes = std::fs::read(file).unwrap_or_default();
+        let text = mir2_script::decode_bytes(&bytes);
+        if text.chars().any(|c| (c as u32) > 0xFFFF) {
+            totals.warnings.push(format!(
+                "{}: 含非 BMP 字符，UTF-16 索引等价假设不成立",
+                rel.display()
+            ));
+        }
+        let result =
+            parsers.load_script_file(&fs, envir, &parent, &stem, bo_flag, &mut rename_rand);
+        let rel_name = rel.to_string_lossy().replace('\\', "/");
+        match result {
+            Ok(Some(outcome)) => {
+                totals.loaded += 1;
+                let s = &outcome.stats;
+                let t = &mut totals.stats;
+                t.scripts += s.scripts;
+                t.records += s.records;
+                t.procedures += s.procedures;
+                t.conditions += s.conditions;
+                t.actions += s.actions;
+                t.else_actions += s.else_actions;
+                t.define_substitutions += s.define_substitutions;
+                t.call_loads += s.call_loads;
+                t.call_failures += s.call_failures;
+                t.include_loads += s.include_loads;
+                t.goods += s.goods;
+                t.price_rate_lines += s.price_rate_lines;
+                t.item_type_lines += s.item_type_lines;
+                t.merchant_cmd_lines += s.merchant_cmd_lines;
+                t.parse_errors += s.parse_errors;
+                t.label_renames += s.label_renames;
+                for e in &outcome.errors {
+                    if e.kind == ParseErrorKind::ScriptError {
+                        // 按行首指令归入条件/动作未知名单（粗分：含在 #IF 段失败为条件）
+                        let name = command_name_of(&e.line);
+                        // 无法从错误行直接区分条件/动作，两个表各查一次：
+                        let in_cond = mir2_script::codes::CONDITION_CODES
+                            .iter()
+                            .any(|d| d.name.eq_ignore_ascii_case(&name));
+                        let in_exec = mir2_script::codes::EXECUTION_CODES
+                            .iter()
+                            .any(|d| d.name.eq_ignore_ascii_case(&name));
+                        if !in_cond && !in_exec {
+                            *totals.unknown_conditions.entry(name.clone()).or_insert(0) += 1;
+                            *totals.unknown_actions.entry(name).or_insert(0) += 1;
+                        }
+                    }
+                    totals.errors.push(serde_json_error {
+                        file: rel_name.clone(),
+                        line_index: e.line_index,
+                        kind: format!("{:?}", e.kind),
+                        line: e.line.clone(),
+                    });
+                }
+            }
+            Ok(None) => {
+                totals.missing += 1;
+            }
+            Err(panic) => {
+                totals.panics += 1;
+                totals.errors.push(serde_json_error {
+                    file: rel_name,
+                    line_index: 0,
+                    kind: "LoadPanic".to_string(),
+                    line: panic.to_string(),
+                });
+            }
+        }
+    }
+
+    let json = stats_json(&totals);
+    if let Some(path) = json_out {
+        if let Err(e) = std::fs::write(&path, &json) {
+            eprintln!("写 JSON 失败: {e}");
+            return ExitCode::FAILURE;
+        }
+    }
+    let s = &totals.stats;
+    println!("Envir: {}", envir.display());
+    println!(
+        "文件: {} 加载: {} 缺失: {} 异常: {}",
+        totals.files, totals.loaded, totals.missing, totals.panics
+    );
+    println!(
+        "脚本 {} 标签 {} 过程 {} 条件 {} 动作 {} 否则动作 {}",
+        s.scripts, s.records, s.procedures, s.conditions, s.actions, s.else_actions
+    );
+    println!(
+        "宏展开 {} #CALL成功 {} #CALL失败 {} #INCLUDE {} 商品 {}",
+        s.define_substitutions, s.call_loads, s.call_failures, s.include_loads, s.goods
+    );
+    println!("解析错误: {}", s.parse_errors);
+    if !totals.errors.is_empty() {
+        println!("错误明细（前 20 条）:");
+        for e in totals.errors.iter().take(20) {
+            println!("  [{}] {} 行{}: {}", e.kind, e.file, e.line_index, e.line);
+        }
+    }
+    if !totals.warnings.is_empty() {
+        println!("警告:");
+        for w in &totals.warnings {
+            println!("  {w}");
+        }
+    }
+    ExitCode::SUCCESS
+}
