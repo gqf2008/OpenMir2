@@ -1,0 +1,22 @@
+[package]
+name = "mir2-protocol"
+version = "0.1.0"
+edition = "2021"
+description = "OpenMir2 wire protocol: message ids, frame codec, EDCode (frozen interface, see docs/Rust重写设计文档.md M0)"
+license = "MIT"
+
+# workspace 公共面（unsafe_code=forbid + clippy all=deny）+ A 线自加 pedantic。
+# 不继承 [lints] workspace=true：workspace 表不含 pedantic（避免约束其他线），
+# 这里内联全量以保持 A 线口径（门禁命令含 -D warnings，pedantic 警告即失败）。
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "deny"
+pedantic = "warn"
+
+[dependencies]
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"

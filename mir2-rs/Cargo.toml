@@ -1,17 +1,28 @@
 [workspace]
 resolver = "2"
 members = [
+    # A 线：协议（crates/protocol、crates/storage）+ 工具（tools/*）
+    "crates/protocol",
+    "crates/storage",
+    "tools/msgcodegen",
+    "tools/replay",
+    # D 线：数据层 + 数值公式
     "crates/shared",
     "crates/data",
     "crates/formula",
     "tests/parity",
 ]
 
-# D 线范围：数据层 + 数值公式（见 docs/Rust重写设计文档.md §12.2）。
-# 协议 / 网关 / 世界引擎不在本 workspace。
+# 多线共用 workspace：members 只按行追加自己的 crate，不改动别人的行（见设计文档 §12.4）。
+# 各线范围见 crates/*/Cargo.toml 的 description。
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
 [workspace.lints.clippy]
 all = "deny"
+# A 线 crate 额外启用 pedantic（在各 crate 的 Cargo.toml 内联声明；
+# 不放进 workspace 是因为会对其他线的既有代码施加未经其 owner 评审的约束）。
+
+[profile.release]
+debug = true

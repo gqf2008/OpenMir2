@@ -1,0 +1,20 @@
+[package]
+name = "msgcodegen"
+version = "0.1.0"
+edition = "2021"
+description = "Generates crates/protocol/src/messages.rs from src/OpenMir2/Messages.cs (+ selected Grobal2.cs constants). --check is the drift gate."
+license = "MIT"
+
+# workspace 公共面（unsafe_code=forbid + clippy all=deny）+ A 线自加 pedantic。
+# 不继承 [lints] workspace=true：workspace 表不含 pedantic（避免约束其他线），
+# 这里内联全量以保持 A 线口径（门禁命令含 -D warnings，pedantic 警告即失败）。
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "deny"
+pedantic = "warn"
+
+[dependencies]
+anyhow = "1"
+regex = "1"

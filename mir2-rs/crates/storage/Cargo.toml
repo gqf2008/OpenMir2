@@ -1,0 +1,19 @@
+[package]
+name = "mir2-storage"
+version = "0.1.0"
+edition = "2021"
+description = "Storage traits for the mir2 rewrite (frozen interface mirroring src/Storeages/DBSrv.Storage; record fields land with M1/D-line)"
+license = "MIT"
+
+# workspace 公共面（unsafe_code=forbid + clippy all=deny）+ A 线自加 pedantic。
+# 不继承 [lints] workspace=true：workspace 表不含 pedantic（避免约束其他线），
+# 这里内联全量以保持 A 线口径（门禁命令含 -D warnings，pedantic 警告即失败）。
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "deny"
+pedantic = "warn"
+
+[dependencies]
+thiserror = "1"

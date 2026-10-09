@@ -26,3 +26,15 @@
 | B-5 | `goldsales` 列名 `DealChrName`/`BuyChrName` 与 DDL 不符（见 D-5） | `MySqlDB.cs:264-265` → `crates/data/src/loaders.rs` |
 | B-6 | `LoadMonsterDB` 移动/攻击速度下限判断写了两遍（`_MAX(200,..)` 后再 `if <200`） | `MySqlDB.cs:213-224` → `crates/data/src/loaders.rs` |
 | B-7 | `RandomSelect` 异常消息写反（"selectCount必需大于sourceList.Count"，实际条件相反） | `RandomNumber.cs:53` → `crates/shared/src/rng.rs` |
+
+## A 线待观察项（C# 侧既有口径差——非对拍差异，M1/M2 移植网关时逐条处置）
+
+| 编号 | 口径差 | 触发条件 | 位置 |
+| --- | --- | --- | --- |
+| A-1 | `SM_EAT_FAIL` 限频分支按 `CommandFixedLength=16` 编码 12 字节头（C# 侧越界抛异常风险） | `IsEatInterval` 开启且超速吃粮 | `GameGate/Services/ClientSession.cs:634-638` |
+| A-2 | 聊天过滤命令分支 `EncryptUtil.Encode(..., dstOffset=0)` 覆盖帧首 `#` | `ChatCommandFilterMap` 命中 | `GameGate/Services/ClientSession.cs:529-535` |
+| A-3 | `LoginGate.SendDefMessage` 带 sMsg 时 `Array.Copy(sBuff, 0, tempBuf, 13, ...)` 超出 12+len 缓冲（必抛异常，说明该分支从未被真实触发） | 登录网关下行带文本消息 | `LoginGate/Services/ClientSession.cs:184-190` |
+
+协议事实（M0 已裁定并冻结，非差异）：EDCode 循环态 2→4→6→2；客户端帧 `#1...!` /
+服务端帧 `#...!`；头 12B 与体分别编码后拼接；C# 网关无显式分帧器（按 TCP 段直读），
+Rust 侧 `FrameSplitter` 属传输层健壮性差异。
