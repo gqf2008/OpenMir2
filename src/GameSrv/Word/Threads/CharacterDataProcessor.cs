@@ -105,8 +105,26 @@ namespace GameSrv.Word.Threads
                 }
                 if (!LoadCharacterData(loadDbInfo, ref boReTryLoadDb))
                 {
-                    M2Share.NetChannel.CloseUser(loadDbInfo.GateIdx, loadDbInfo.SocketId);
-                    LogService.Debug("读取用户数据失败，踢出用户.");
+                    if (boReTryLoadDb)
+                    {
+                        // 角色数据还在保存中（小退后立刻重进会走到这里）：
+                        // 重新排队等下一轮读取，不能把用户踢掉，否则客户端就卡在黑屏等待登录包。
+                        HUtil32.EnterCriticalSection(UserCriticalSection);
+                        try
+                        {
+                            M2Share.FrontEngine.AddToLoadRcdList(loadDbInfo);
+                        }
+                        finally
+                        {
+                            HUtil32.LeaveCriticalSection(UserCriticalSection);
+                        }
+                        LogService.Info($"角色数据保存中,稍后重新读取. Account:{loadDbInfo.Account} ChrName:{loadDbInfo.ChrName}");
+                    }
+                    else
+                    {
+                        M2Share.NetChannel.CloseUser(loadDbInfo.GateIdx, loadDbInfo.SocketId);
+                        LogService.Warn($"读取用户数据失败,踢出用户. Account:{loadDbInfo.Account} ChrName:{loadDbInfo.ChrName}");
+                    }
                 }
                 else
                 {

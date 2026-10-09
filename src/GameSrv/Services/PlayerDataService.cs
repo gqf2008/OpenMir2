@@ -123,7 +123,10 @@ namespace GameSrv.Services
                 {
                     if (nIdent == Messages.DBR_SAVEHUMANRCD && nRecog == 1)
                     {
-                        // M2Share.FrontEngine.RemoveSaveList(queryId);
+                        // 存档成功后必须把角色从"正在保存"列表里移除，
+                        // 否则该角色会永久留在列表里，之后每次进游戏都会被判定为
+                        // "数据正在保存" 而被踢下线（表现就是小退后再进游戏黑屏）。
+                        M2Share.FrontEngine.RemoveSaveList(queryId);
                     }
                     SaveProcessList.TryDequeue(out _);
                 }
