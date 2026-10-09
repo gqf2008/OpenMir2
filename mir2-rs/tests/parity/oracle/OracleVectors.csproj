@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>oracle-vectors</AssemblyName>
+    <!-- 与 OpenMir2 主工程一致 -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 直接引用真身：向量由线上同一份 EDCode/EncryptUtil/SerializerUtil 产出 -->
+    <ProjectReference Include="..\..\..\..\src\OpenMir2\OpenMir2.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/protocol",
+    "crates/storage",
+    "tools/msgcodegen",
+    "tools/replay",
+]
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"
+
+[profile.release]
+debug = true

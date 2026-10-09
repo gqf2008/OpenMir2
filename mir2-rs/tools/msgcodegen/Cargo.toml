@@ -1,0 +1,13 @@
+[package]
+name = "msgcodegen"
+version = "0.1.0"
+edition = "2021"
+description = "Generates crates/protocol/src/messages.rs from src/OpenMir2/Messages.cs (+ selected Grobal2.cs constants). --check is the drift gate."
+license = "MIT"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1"
+regex = "1"

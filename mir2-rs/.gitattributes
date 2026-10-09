@@ -1,0 +1,8 @@
+# Rust 工作区统一 LF：生成器/rustfmt 产物是 LF，CRLF 会让 msgcodegen --check 与 fmt 门禁漂移
+*.rs   text eol=lf
+*.toml text eol=lf
+*.md   text eol=lf
+*.jsonl text eol=lf
+*.log  text eol=lf
+*.cs   text eol=lf
+*.csproj text eol=lf
