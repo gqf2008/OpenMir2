@@ -1,0 +1,17 @@
+[package]
+name = "replay"
+version = "0.1.0"
+edition = "2021"
+description = "Golden-capture / oracle-vector replay gate: byte-exact decode-encode round-trip, field parity, stage coverage, sabotage red-checks"
+license = "MIT"
+
+[lints]
+workspace = true
+
+[dependencies]
+mir2-protocol = { path = "../../crates/protocol" }
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+hex = "0.4"
