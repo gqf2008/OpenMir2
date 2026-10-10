@@ -11,6 +11,7 @@
     3b. worldsample-selftest 世界态采样自测（确定性 + 改坐标必红）
     3c. segmented-check  Segmented 段边界自检（段回编=原字节；seg_len 改错必红）
     4. golden-verify     最新金标准完整性（tests/golden/LATEST 指向的会话）
+    4b. golden-fresh     入库金标准新鲜度+登记对账（重导==入库件；登记 sha 一致）
     5. flow-e2e          真实客户端全流程：阶段序列完整 + 截图非空 + 服务日志无新 ERR 暴涨
     6. bot-smoke         3 个假人登录冒烟（-SkipBots 跳过；完整 200 并发用 run_bots.ps1）
 
@@ -110,6 +111,15 @@ if (-not (Test-Path $gaExe)) {
 }
 python (Join-Path $RepoRoot "tools\capture\segmented_check.py")
 Add-Result "segmented-check" ($LASTEXITCODE -eq 0)
+
+# 入库金标准"新鲜度 + 登记"对账（C4 续）：每份入库件都必须等于**当前**导出器从来源裸 dump 的重导结果，
+# 且 README 登记行的 sha256 等于实际文件 —— "旧 artifact + 新下游"这类假红/假绿在这里自动暴露。
+python (Join-Path $RepoRoot "tools\capture\golden_fresh_check.py")
+Add-Result "golden-fresh" ($LASTEXITCODE -eq 0)
+
+# 同上的红检（改坏必红）：入库件与当前口径不符 / 只改登记行 / registry 缺项 —— 三类都必须在临时目录里判红
+python (Join-Path $RepoRoot "tools\capture\golden_fresh_check.py") --selftest
+Add-Result "golden-fresh-red" ($LASTEXITCODE -eq 0)
 
 # ---- 4. 金标准完整性 ----
 $latestFile = Join-Path $RepoRoot "tests\golden\LATEST"

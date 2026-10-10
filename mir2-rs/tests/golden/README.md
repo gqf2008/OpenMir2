@@ -93,6 +93,22 @@ cargo run -p replay -- tests/golden/<capture>.jsonl
 抓包必须来自真客户端+真服务端；**禁止**用 replay 自己编码的产物回填当判据
 （自造样本自证 = 恒绿假门禁）。每份抓包在下方登记：来源机器、客户端版本、时间、sha256。
 
+**流程（不是记性）：改了口径 = 重导全部入库件 + 复验 + 重登记。**
+只要导出器/协议口径变了（新增字段、改分段布局、改 act 帧口径…），就必须把**所有**入库金标准
+从保留的裸 dump 重导一遍并同批更新登记 —— **不是只重导本批关心的那份**。
+`"登记 hash 能对上"不能证明产物是新的`：本项目 2026-10-10 实测栽过（C4 改口径后只重导了 C3 与上批 16 帧，
+C2 那份还是旧 schema，用当前 replay 跑它给 act 假红 66 条 + ② 21 条，而 README 写着 ②=0，见下"C4 补记"）。
+这条靠机器守：
+
+```powershell
+python tools/capture/golden_fresh_check.py          # 全量：重导==入库件（逐字节）+ README 登记 sha 一致 + registry 双向对账
+python tools/capture/golden_fresh_check.py --selftest   # 改坏必红（临时目录里做，不动入库件）
+```
+
+判据三条：① `mir2-rs/tests/golden/*.jsonl` 与 [registry.json](registry.json) 双向一致（新增金标准必须登记来源会话目录）；
+② 每份入库件 = 当前导出器从登记来源裸 dump 的重导结果（逐字节）；③ README 登记行的 sha256 = 文件实际 sha256。
+已接进 `tools/e2e/run_e2e.ps1`（`golden-fresh` 项）。**真值始终是裸 dump**，金标准只是它的派生产物。
+
 | 文件 | 来源 | 时间 | sha256 |
 |---|---|---|---|
 | `c-line-baseline-20261010-092858.jsonl` | 本机真实客户端 `D:\MirClient-run`（冻结未改）+ 现网 C# 服务端 `E:\MirServer`（只读未改，网关为会话目录影子副本）；见 [C线-交付说明.md](C线-交付说明.md) （**C4 批按分段布局表重导**） | 2026-10-10 09:28:58 | `d1f02442ce96ff6029922c15d000eef5e01093936c3e903160c00e1c71d83009` |
@@ -139,7 +155,8 @@ A-8 待补表的其它多段形态）、② 字段 0 差异、未登记号 0、�
 - **C4 补记（同批发现并修）**：入库的 C2 金标准此前一直是 **C4 之前的旧 schema**
   （缺 `frame_form`/`layout`/`body_segments`），跑当前 `replay` 会给**假红**（act 帧口径不符 66 条 + `②` 21 条）；
   已用保留的裸 dump 按当前导出器重导覆盖：sha256 由 `bcb9e483…` → **`012a2aa5…`**，② 21→0、act 口径假红 66→0。
-  （教训：**改了导出器口径就要重导并重登记，不能只改登记行**——旧 artifact 会让下游对新口径产生假红/假绿。）
+  （教训：**改了导出器口径就要重导并重登记，不能只改登记行**——旧 artifact 会让下游对新口径产生假红/假绿。
+  已固化成流程 + 自动判据：见上面"防伪约定"的 `golden_fresh_check.py`，不再是靠记性。）
 - C4 判据实测：同 dump 两次导出 sha256 相同（`c26d48b9…`）✓；把 `struct_len` 故意改成 7 后
   **② 由 0 变 52**、结果 RED ✓（改错段边界必红）；③ 仍为 C3 八阶段全覆盖、C2 有 7 阶段、上批 5 阶段。
 - **第三种布局 `Segmented` 已按 A 线冻结契约实现**（`count_kind=fixed` / `header_series`，

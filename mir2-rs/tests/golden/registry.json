@@ -1,0 +1,23 @@
+{
+  "tool": "golden_registry",
+  "note": "入库金标准 → 来源裸 dump 会话目录的机器可读登记。README.md 的登记表是给人看的入口，本表是给 tools/capture/golden_fresh_check.py 用的来源指针。新增/删除金标准必须同步本表，否则自动对账会报 RED（'golden 目录里的 *.jsonl 未登记' / '登记项不存在'）。",
+  "process": "schema/口径变更后必须重导**全部**已登记入库件并复验（不是只重导本批关心的那份）：重导结果须与入库文件逐字节相同，且 README 登记行的 sha256 须等于实际文件。跑 `python tools/capture/golden_fresh_check.py` 自动对账（已接进 tools/e2e/run_e2e.ps1 的 golden-fresh 项）。",
+  "session_root": "tests/golden",
+  "goldens": [
+    {
+      "file": "c-line-baseline-20261010-092858.jsonl",
+      "session": "session-20261010-092858/proxy",
+      "note": "上批 16 帧 / 5 阶段（影子网关拓扑 + 代理占官方端口）"
+    },
+    {
+      "file": "c-line-baseline-c2-20261010.jsonl",
+      "session": "session-20261010-c2-hook/proxy",
+      "note": "C2 222 帧 / 7 阶段（客户端进程内 hook，直连真实 7000/7100/7200）"
+    },
+    {
+      "file": "c-line-baseline-c3-20261010.jsonl",
+      "session": "session-20261010-c3-hook/proxy",
+      "note": "C3 382 帧 / 8 阶段（同法；小退走客户端自带按钮）"
+    }
+  ]
+}
