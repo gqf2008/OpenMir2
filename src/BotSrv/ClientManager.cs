@@ -145,7 +145,14 @@ namespace BotSrv
                     {
                         _autoList[i].RunTick = HUtil32.GetTickCount();
                         // 压测：进图后挂机定时器会被停掉，这里确保它一直开着（否则假人静止、收不到 +GD）
-                        SafeRun(_clientList[i], ensureAutoPlay: true);
+                        // 修（C6 退回补做，2026-10-11）：原来错用 `_clientList[i]`——循环变量属于 `_autoList`，
+                        // 两个列表长度/顺序并不一致（增删各自独立），N 大时 `_clientList[i]` 越界 ⇒
+                        // `IndexOutOfRangeException`（1000 档实测 internal_errors 十万级），而且即便不越界也**打错了假人**。
+                        // 改为按本条目自己的 SessionId 取回对应假人。
+                        if (_clients.TryGetValue(_autoList[i].SessionId, out RobotPlayer autoRobot))
+                        {
+                            SafeRun(autoRobot, ensureAutoPlay: true);
+                        }
                     }
                 }
             }

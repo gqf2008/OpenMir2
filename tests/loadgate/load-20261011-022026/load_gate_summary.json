@@ -1,0 +1,125 @@
+﻿{
+    "out_dir":  "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\.claude\\worktrees\\c6\\tests\\loadgate\\load-20261011-022026",
+    "reports":  [
+                    {
+                        "samples":  0,
+                        "samples_total":  0,
+                        "max_ms":  0,
+                        "mean_ms":  null,
+                        "ramp_complete":  true,
+                        "steady_window_ms":  60094,
+                        "peak_login_ok":  1000,
+                        "login_success_pct":  100.0,
+                        "conn_refused":  0,
+                        "conn_lost":  0,
+                        "conn_lost_ramp":  0,
+                        "conn_lost_steady":  0,
+                        "hist_bucket_ms":  1,
+                        "world_ok":  0,
+                        "world_ok_pct":  0.0,
+                        "probe_sent":  0,
+                        "internal_errors":  0,
+                        "tick_p50_ms":  null,
+                        "tick_p90_ms":  null,
+                        "tick_p99_ms":  null,
+                        "ramp_ms":  25062,
+                        "clock_granularity_note":  "Environment.TickCount 在 Windows 上粒度约 15.6ms（单样本 ±16ms 量化，是测量下限，不是噪声消除）",
+                        "mem":  {
+                                    "DBSrv":  {
+                                                  "samples":  30,
+                                                  "ws_peak_mb":  87.6,
+                                                  "ws_mean_mb":  87.5,
+                                                  "ws_last_mb":  87.5,
+                                                  "priv_peak_mb":  46.6,
+                                                  "slope_tail_mb_per_s":  0.005,
+                                                  "tail_window_s":  59.9,
+                                                  "window_s":  59.9
+                                              },
+                                    "GameGate":  {
+                                                     "samples":  30,
+                                                     "ws_peak_mb":  248.2,
+                                                     "ws_mean_mb":  240.4,
+                                                     "ws_last_mb":  248.1,
+                                                     "priv_peak_mb":  235.6,
+                                                     "slope_tail_mb_per_s":  0.323,
+                                                     "tail_window_s":  59.9,
+                                                     "window_s":  59.9
+                                                 },
+                                    "GameSrv":  {
+                                                    "samples":  30,
+                                                    "ws_peak_mb":  332.3,
+                                                    "ws_mean_mb":  326.7,
+                                                    "ws_last_mb":  332.3,
+                                                    "priv_peak_mb":  289.6,
+                                                    "slope_tail_mb_per_s":  0.169,
+                                                    "tail_window_s":  59.9,
+                                                    "window_s":  59.9
+                                                },
+                                    "LoginGate":  {
+                                                      "samples":  30,
+                                                      "ws_peak_mb":  166.1,
+                                                      "ws_mean_mb":  165.7,
+                                                      "ws_last_mb":  165.7,
+                                                      "priv_peak_mb":  134.6,
+                                                      "slope_tail_mb_per_s":  -0.004,
+                                                      "tail_window_s":  59.9,
+                                                      "window_s":  59.9
+                                                  },
+                                    "LoginSrv":  {
+                                                     "samples":  30,
+                                                     "ws_peak_mb":  74.7,
+                                                     "ws_mean_mb":  74.6,
+                                                     "ws_last_mb":  74.6,
+                                                     "priv_peak_mb":  36.4,
+                                                     "slope_tail_mb_per_s":  0.006,
+                                                     "tail_window_s":  59.9,
+                                                     "window_s":  59.9
+                                                 },
+                                    "SelGate":  {
+                                                    "samples":  30,
+                                                    "ws_peak_mb":  132.9,
+                                                    "ws_mean_mb":  132.3,
+                                                    "ws_last_mb":  132.9,
+                                                    "priv_peak_mb":  102.0,
+                                                    "slope_tail_mb_per_s":  0.027,
+                                                    "tail_window_s":  59.9,
+                                                    "window_s":  59.9
+                                                },
+                                    "mysqld":  {
+                                                   "samples":  30,
+                                                   "ws_peak_mb":  161.4,
+                                                   "ws_mean_mb":  160.9,
+                                                   "ws_last_mb":  161.4,
+                                                   "priv_peak_mb":  469.7,
+                                                   "slope_tail_mb_per_s":  0.037,
+                                                   "tail_window_s":  59.9,
+                                                   "window_s":  59.9
+                                               }
+                                },
+                        "count":  1000,
+                        "stagger_ms":  20,
+                        "hold_sec":  60,
+                        "tick_missing":  true,
+                        "criteria":  [
+                                         "login",
+                                         "conn",
+                                         "tick"
+                                     ],
+                        "allow_missing_tick":  false,
+                        "verdict":  "RED",
+                        "fails":  [
+                                      "缺 tick 样本（tick_p99_ms = None）：默认判 RED；确实拿不到 tick 的场景也必须显式加 --allow-missing-tick"
+                                  ]
+                    }
+                ],
+    "action_probe":  true,
+    "criteria":  "login,conn,tick",
+    "allow_missing_tick":  false,
+    "tiers":  [
+                  1000
+              ],
+    "action_probe_ms":  1000,
+    "stagger_ms":  20,
+    "caliber":  "tick 服务时延 = BotSrv 收到 #+GD/\u003crtime\u003e! 的时刻 − rtime（Environment.TickCount，全机同域）；详见 tools/botload/load_report.py",
+    "hold_sec":  60
+}

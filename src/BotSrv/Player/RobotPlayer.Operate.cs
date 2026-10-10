@@ -84,6 +84,10 @@ namespace BotSrv.Player
                         {
                             case 0:
                                 MainOutMessage($"帐号 [{LoginId}] 已被其他的玩家使用了。请选择其它帐号名注册");
+                                // 幂等复跑（C6 退回补做，2026-10-11）：账号在库里已存在时不能卡死，
+                                // 否则第二次跑同一条冒烟必 RED（“一条命令可复跑”是 C6 的验收项之一）。
+                                // 密码与已有账号一致时就当作已注册，直接转入登录。
+                                LoginScene.ClientNewIdSuccess();
                                 break;
                             case -2:
                                 MainOutMessage("此帐号名被禁止使用！");
