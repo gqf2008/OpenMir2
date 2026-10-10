@@ -117,6 +117,7 @@ namespace Mir2Tools.Capture
             int decoded = 0, decodeErrors = 0, heartbeats = 0;
             using (var w = new StreamWriter(outFile, false, new UTF8Encoding(false)))
             {
+                w.NewLine = "\n";   // 契约 JSONL 一律 LF（CRLF 会让入库后 blob 与工作区 sha256 不一致）
                 int seq = 0;
                 foreach (var f in frames)
                 {

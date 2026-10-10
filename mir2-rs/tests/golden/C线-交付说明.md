@@ -4,7 +4,7 @@
 
 | 文件 | 内容 | sha256 |
 | --- | --- | --- |
-| `c-line-baseline-20261010-092858.jsonl` | 金标准抓包（契约 JSONL，replay 直接消费） | `2d1df14d025b3d80bf7099ee1f01914830886160d59a940a81ce446016fa303c` |
+| `c-line-baseline-20261010-092858.jsonl` | 金标准抓包（契约 JSONL，replay 直接消费） | `5d0ab4e66825dd133d5d7c3686db77986b465a4ed0d7179d215ede05afbcc64f` |
 | `c-line-baseline-20261010-092858.manifest.json` | 帧/流对账清单（N 帧、每帧 sha256、总 hash、复现命令） | — |
 | `c-line-baseline-20261010-092858.frames.ndjson` | 逐帧表（含原始线上帧的起始偏移，可对回裸 dump） | — |
 
