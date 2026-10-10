@@ -1,0 +1,22 @@
+{"event": "open", "conn": 1, "port": 7000, "peer": "127.0.0.1:64614", "upstream": "127.0.0.1:17000", "t_wall_ms": 1791595758772, "t_rel_us": 5120864}
+{"event": "data", "conn": 1, "port": 7000, "dir": "c2s", "off": 0, "n": 30, "sha256": "c076aef1dc20a1a9e764ccceeb553dffdf503acf5aba66565b6f69d8e1f92fb3", "t_wall_ms": 1791595758786, "t_rel_us": 5135081}
+{"event": "data", "conn": 1, "port": 7000, "dir": "c2s", "off": 30, "n": 42, "sha256": "b90ded2bf658e9d0786c93f433f04591e0cef9528ffbe4cd8cccb2aa4568c10c", "t_wall_ms": 1791595775562, "t_rel_us": 21910983}
+{"event": "data", "conn": 1, "port": 7000, "dir": "s2c", "off": 0, "n": 38, "sha256": "3e35c3601b7730173c0fb05bd5716ac2cbe3c656f1c617cf517688facb40ec92", "t_wall_ms": 1791595775588, "t_rel_us": 21936566}
+{"event": "data", "conn": 1, "port": 7000, "dir": "c2s", "off": 72, "n": 30, "sha256": "14b27920c2968577794b8f7cd654cd28925641dc47743798c668306c6b964c0f", "t_wall_ms": 1791595775594, "t_rel_us": 21942005}
+{"event": "data", "conn": 1, "port": 7000, "dir": "s2c", "off": 38, "n": 41, "sha256": "d8aee7b0a62077b78004f05271468e0f98d3fa8d065c0c59a0ba66e2551cefaf", "t_wall_ms": 1791595775596, "t_rel_us": 21944074}
+{"event": "close", "conn": 1, "port": 7000, "bytes_c2s": 102, "bytes_s2c": 79, "t_wall_ms": 1791595775609, "t_rel_us": 21957303}
+{"event": "open", "conn": 2, "port": 7100, "peer": "127.0.0.1:64658", "upstream": "127.0.0.1:17100", "t_wall_ms": 1791595775609, "t_rel_us": 21957498}
+{"event": "data", "conn": 2, "port": 7100, "dir": "c2s", "off": 0, "n": 33, "sha256": "127ee169109cdafd6642198308b4e85eb9d1649b25b3f371ae2486742af1f80a", "t_wall_ms": 1791595775925, "t_rel_us": 22273896}
+{"event": "data", "conn": 2, "port": 7100, "dir": "s2c", "off": 0, "n": 18, "sha256": "99543f5fc516c363f58534f85e31518ae39ce484f0e4aeeaecda7693f5ee4899", "t_wall_ms": 1791595775934, "t_rel_us": 22282201}
+{"event": "data", "conn": 2, "port": 7100, "dir": "c2s", "off": 33, "n": 50, "sha256": "7cd057095b17ec43750fc1aec0d5acd745f11f61fca3144f35e2408908e06c43", "t_wall_ms": 1791595788345, "t_rel_us": 34694048}
+{"event": "data", "conn": 2, "port": 7100, "dir": "s2c", "off": 18, "n": 18, "sha256": "66b65736031c6233a9a21eaacb6daf398847f573d924d6fb7a0a91af60c21cf4", "t_wall_ms": 1791595788503, "t_rel_us": 34851156}
+{"event": "data", "conn": 2, "port": 7100, "dir": "c2s", "off": 83, "n": 33, "sha256": "127ee169109cdafd6642198308b4e85eb9d1649b25b3f371ae2486742af1f80a", "t_wall_ms": 1791595788516, "t_rel_us": 34864878}
+{"event": "data", "conn": 2, "port": 7100, "dir": "s2c", "off": 36, "n": 41, "sha256": "060d1874182692471366bb00f31a6e541b192fef736912a413401a6eb6d795e9", "t_wall_ms": 1791595788519, "t_rel_us": 34867557}
+{"event": "data", "conn": 2, "port": 7100, "dir": "c2s", "off": 116, "n": 42, "sha256": "781999f0600f9a7e9f7a4b04219febdba96c412494fa2dc038b1a2bfc1c3f0ca", "t_wall_ms": 1791595796648, "t_rel_us": 42996615}
+{"event": "data", "conn": 2, "port": 7100, "dir": "s2c", "off": 77, "n": 37, "sha256": "ec9f8c9f801d65844fdc78115ecb0f36ea02738cfcd2ce7c630e1c661d67120f", "t_wall_ms": 1791595796655, "t_rel_us": 43003836}
+{"event": "close", "conn": 2, "port": 7100, "bytes_c2s": 158, "bytes_s2c": 114, "t_wall_ms": 1791595796662, "t_rel_us": 43010697}
+{"event": "open", "conn": 3, "port": 7200, "peer": "127.0.0.1:64678", "upstream": "127.0.0.1:17200", "t_wall_ms": 1791595796662, "t_rel_us": 43010886}
+{"event": "data", "conn": 3, "port": 7200, "dir": "c2s", "off": 0, "n": 117, "sha256": "799b6604203d4a6cb402cf39398e05ad02108e6df73d5307e0326d0f107bfb73", "t_wall_ms": 1791595797025, "t_rel_us": 43373228}
+{"event": "data", "conn": 3, "port": 7200, "dir": "s2c", "off": 0, "n": 445, "sha256": "1897e43b3c1c58a871c5d9b6c89ac97b0eb8af9cc4de1df9f107943a0de9b3d6", "t_wall_ms": 1791595798540, "t_rel_us": 44889052}
+{"event": "data", "conn": 3, "port": 7200, "dir": "c2s", "off": 117, "n": 19, "sha256": "939c4ca0dc24e55b20eb400381051879f5a91e751964175fccfc7e20fb81332c", "t_wall_ms": 1791595810547, "t_rel_us": 56895173}
+{"event": "close", "conn": 3, "port": 7200, "bytes_c2s": 136, "bytes_s2c": 445, "t_wall_ms": 1791595845319, "t_rel_us": 91667540}

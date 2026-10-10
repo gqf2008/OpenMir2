@@ -41,10 +41,16 @@
 | A-1 | `SM_EAT_FAIL` 限频分支按 `CommandFixedLength=16` 编码 12 字节头（C# 侧越界抛异常风险） | `IsEatInterval` 开启且超速吃粮 | `GameGate/Services/ClientSession.cs:634-638` |
 | A-2 | 聊天过滤命令分支 `EncryptUtil.Encode(..., dstOffset=0)` 覆盖帧首 `#` | `ChatCommandFilterMap` 命中 | `GameGate/Services/ClientSession.cs:529-535` |
 | A-3 | `LoginGate.SendDefMessage` 带 sMsg 时 `Array.Copy(sBuff, 0, tempBuf, 13, ...)` 超出 12+len 缓冲（必抛异常，说明该分支从未被真实触发） | 登录网关下行带文本消息 | `LoginGate/Services/ClientSession.cs:184-190` |
+| A-5 | 客户端独有号 `CM_QUERYDYNCODE = 3501`：冻结客户端在 `cnsIntro` 阶段发送（体 = `EncodeString(g_LoginKey)`，`g_LoginKey` 默认字面量 `"password"`），而服务端 `Messages.cs` 无此号 | 服务端行为＝**静默忽略、不回包**（C# `LoginSrv` 的 `ProcessUserMsg` switch 落到 default），Rust 侧同样忽略；号本身登记在 `crates/protocol::client_only`，使 M0③"未实现包号=0"可判。M0 金标准第 1 帧即此号 | 7000 跳 cnsIntro 阶段 | 客户端 `MirClient/Source/MirClient/ClMain.pas:16542`、`MShare.pas:1407` ↔ 服务端 `src/OpenMir2/Messages.cs`（无） |
+| A-4 | 同一跳（7000）存在两种 s2c 帧尾：LoginSrv 构造的帧是 `#…!$`（`ClientSession.cs:745`），LoginGate 自身产生的帧是 `#…!` ⇒ 回放/移植时**不能按端口假设帧尾**，须按帧的实际尾字节复现（`crates/protocol::ServerFrameTail`），抓包记录用 `hop`/`tail` 给出独立期望 | 7000 跳的下行帧 | `LoginSrv/Services/ClientSession.cs:745` ↔ `LoginGate/Services/ClientSession.cs:181/197` |
 
 协议事实（M0 已裁定并冻结，非差异）：EDCode 循环态 2→4→6→2；客户端帧 `#1...!` /
-服务端帧 `#...!`；头 12B 与体分别编码后拼接；C# 网关无显式分帧器（按 TCP 段直读），
-Rust 侧 `FrameSplitter` 属传输层健壮性差异。
+服务端帧 `#...!`（**登录跳 s2c 例外的帧尾 `!$`，见 A-4**）；头 12B 与体分别编码后拼接；
+C# 网关无显式分帧器（按 TCP 段直读），Rust 侧 `FrameSplitter` 属传输层健壮性差异。
+
+M0 金标准验收状态（2026-10-10）：① 逐字节回放 0 差异、② 字段对拍 0 差异（16 帧真实抓包）；
+③ 未实现包号 = 0，**阶段覆盖 5/8**（缺 移动/攻击/小退，属 C 线抓包拓扑缺口，解除判据见
+`tests/golden/C线-交付说明.md`）。详见 `evidence/M0/金标准验收报告.md`。
 
 ## B 线登记
 

@@ -112,7 +112,9 @@ namespace BotSrv.Scenes.Scene
                 MShare.g_nAPReLogonWaitTime = 5000 + RandomNumber.GetInstance().Random(10) * 1000;
             }
             ClearChrs();
-            string str = EDCode.DeCodeString(body);
+            // 新账号没有角色时服务端回空 body：DeCodeString("") 会抛 ArgumentNullException，
+            // 导致机器人卡在查询角色、走不到下面的「无角色则建角」分支（2026-10-10 C 线修复）
+            string str = string.IsNullOrEmpty(body) ? string.Empty : EDCode.DeCodeString(body);
             int select = 0;
             int nChrCount = 0;
             for (int i = 0; i < 1; i++)

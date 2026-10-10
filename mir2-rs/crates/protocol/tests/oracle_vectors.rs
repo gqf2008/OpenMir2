@@ -51,6 +51,12 @@ struct Record {
     session_index: Option<i32>,
     #[serde(default)]
     pack_length: Option<i32>,
+    /// 纯字符串帧（无 12 字节头）：只校验编解码往返 + body 长度/hash。
+    #[serde(default)]
+    string_frame: Option<bool>,
+    /// 该帧所属跳（`login`/`sel`/`game`）：s2c 用它给出独立的帧尾期望。
+    #[serde(default)]
+    hop: Option<String>,
 }
 
 fn vectors_path() -> PathBuf {
@@ -70,6 +76,9 @@ fn oracle_vectors_byte_exact() {
     let mut n_edcode = 0usize;
     let mut n_frame = 0usize;
     let mut n_header = 0usize;
+    let mut n_string_frame = 0usize;
+    let mut n_s2c_bang_dollar = 0usize;
+    let mut n_s2c_bang = 0usize;
     let mut mismatches: Vec<String> = Vec::new();
 
     for (lineno, line) in text.lines().enumerate() {
@@ -90,6 +99,32 @@ fn oracle_vectors_byte_exact() {
                 }
                 if edcode::decode(&encoded) != plain {
                     mismatches.push(format!("line {}: decode mismatch", lineno + 1));
+                }
+            }
+            "frame" if rec.string_frame.unwrap_or(false) => {
+                n_string_frame += 1;
+                let raw = hex::decode(rec.raw_hex.as_deref().unwrap()).unwrap();
+                let dir = rec.dir.as_deref().unwrap_or("c2s");
+                let offset = if dir == "s2c" { 1 } else { 2 };
+                assert_eq!(raw.first(), Some(&b'#'), "line {}", lineno + 1);
+                assert_eq!(*raw.last().unwrap(), b'!', "line {}", lineno + 1);
+                let body = edcode::decode(&raw[offset..raw.len() - 1]);
+                let mut reenc = Vec::with_capacity(body.len() + 4);
+                reenc.push(b'#');
+                if dir != "s2c" {
+                    reenc.push(b'1');
+                }
+                reenc.extend_from_slice(&edcode::encode(&body));
+                reenc.push(b'!');
+                if reenc != raw {
+                    mismatches.push(format!("line {}: string frame round-trip", lineno + 1));
+                }
+                if Some(body.len()) != rec.body_len {
+                    mismatches.push(format!("line {}: string frame body_len", lineno + 1));
+                }
+                let hash = hex::encode(Sha256::digest(&body));
+                if Some(&hash) != rec.body_sha256.as_ref() {
+                    mismatches.push(format!("line {}: string frame body sha256", lineno + 1));
                 }
             }
             "frame" => {
@@ -132,14 +167,43 @@ fn oracle_vectors_byte_exact() {
                 }
                 // ① decode→encode 与原字节一致
                 let reenc = match dir {
-                    "s2c" => frame::encode_server_frame(&msg.head, &edcode::encode(&msg.body)),
+                    // s2c 帧尾有两种形态（LoginSrv `!$` / 网关 `!`），按原样复现
+                    "s2c" => frame::encode_server_frame_tail(
+                        &msg.head,
+                        &edcode::encode(&msg.body),
+                        frame::decode_server_frame_ex(&raw).unwrap().1,
+                    ),
                     _ => frame::encode_client_frame(&msg.head, &msg.body),
                 };
                 if reenc != raw {
                     mismatches.push(format!("line {}: byte round-trip", lineno + 1));
                 }
-                // ③ 包号必须在消息号表内（"未实现 = 0"）
-                if messages::names_of(msg.head.ident).is_empty() {
+                // 帧尾独立判据：hop 声明的形态必须与线上字节一致
+                // （逐字节回放对帧尾自洽，改尾不会被 ① 发现）
+                if dir == "s2c" {
+                    let tail = frame::decode_server_frame_ex(&raw).unwrap().1;
+                    match tail {
+                        frame::ServerFrameTail::BangDollar => n_s2c_bang_dollar += 1,
+                        frame::ServerFrameTail::Bang => n_s2c_bang += 1,
+                    }
+                    let expect = match rec.hop.as_deref() {
+                        Some("login") => Some(frame::ServerFrameTail::BangDollar),
+                        Some("sel" | "game") => Some(frame::ServerFrameTail::Bang),
+                        _ => None,
+                    };
+                    if let Some(exp) = expect {
+                        if tail != exp {
+                            mismatches.push(format!(
+                                "line {}: s2c 帧尾 {tail:?} 与 hop 期望 {exp:?} 不符",
+                                lineno + 1
+                            ));
+                        }
+                    }
+                }
+                // ③ 包号必须在消息号表内（或属客户端独有号）
+                if messages::names_of(msg.head.ident).is_empty()
+                    && !mir2_protocol::client_only::is_client_only(msg.head.ident)
+                {
                     mismatches.push(format!(
                         "line {}: ident {} 不在消息号表",
                         lineno + 1,
@@ -175,13 +239,23 @@ fn oracle_vectors_byte_exact() {
     assert!(n_frame >= 46, "frame vectors too few: {n_frame}");
     assert_eq!(n_header, 1, "server-header vectors");
     assert!(
+        n_string_frame >= 3,
+        "string-frame vectors too few: {n_string_frame}"
+    );
+    // 两种帧尾都必须有向量（否则改尾无从判起）
+    assert!(
+        n_s2c_bang_dollar >= 1,
+        "缺少 `!$` 帧尾（LoginSrv 形态）向量"
+    );
+    assert!(n_s2c_bang >= 1, "缺少 `!` 帧尾（网关形态）向量");
+    assert!(
         mismatches.is_empty(),
         "{} mismatches:\n{}",
         mismatches.len(),
         mismatches[..mismatches.len().min(10)].join("\n")
     );
     println!(
-        "oracle vectors: {n_edcode} edcode + {n_frame} frame + {n_header} header, 0 mismatches"
+        "oracle vectors: {n_edcode} edcode + {n_frame} frame + {n_string_frame} string-frame + {n_header} header + s2c 帧尾 !$×{n_s2c_bang_dollar} / !×{n_s2c_bang}, 0 mismatches"
     );
 }
 
