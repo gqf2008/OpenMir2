@@ -746,7 +746,10 @@ impl ScriptParsers {
                     ArrestWrite::Unchanged => {}
                 }
             } else {
-                n_cmd_code = def.field_index - 1;
+                // 同批翻转（B2/M4，2026-10-11）：crates/script 曾按 T-4 默认"复刻旧位移"（字段序号减一）。
+                // S3 已在 C# 侧把 `code - 1` 改成 `code`（whitelist B-8 / T-4），继续复刻等于长期维护一个刻意偏差；
+                // 协调者已裁定 Rust 同批翻转 ⇒ 非特判分支同样直接取字段序号。
+                n_cmd_code = def.field_index;
             }
         }
 
@@ -835,7 +838,8 @@ impl ScriptParsers {
                     ArrestWrite::Unchanged => {}
                 }
             } else {
-                n_cmd_code = def.field_index - 1;
+                // 同批翻转（B2/M4）：与条件版一致，取字段序号而非减一（见上方说明）。
+                n_cmd_code = def.field_index;
             }
         }
 

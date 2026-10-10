@@ -68,7 +68,9 @@ if (-not $Quiet) { $out | ForEach-Object { Write-Output ("      " + $_) } }
 $rustFlipped = $null
 $rustParser = Join-Path $RepoRoot 'mir2-rs\crates\script\src\parser.rs'
 if (Test-Path $rustParser) {
-  $rustFlipped = -not (Select-String -LiteralPath $rustParser -Pattern 'field_index\s*-\s*1' -Quiet)
+  # 只扫**代码**，跳过整行/行内注释（2026-10-11 踩过：注释里写了『字段序号减一』的英文写法会被当成未翻转 ⇒ 假红）
+  $codeLines = Get-Content -LiteralPath $rustParser | ForEach-Object { ($_ -replace '//.*', '') }
+  $rustFlipped = -not ($codeLines | Select-String -Pattern 'field_index\s*-\s*1' -Quiet)
   if ($rustFlipped) {
     Write-Output "   [信息] Rust 已翻转（field_index）⇒ 请把本行改成硬判据（-RequireRustFlipped）并同步 T-4/README"
   } else {

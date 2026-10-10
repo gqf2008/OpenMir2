@@ -208,41 +208,37 @@ fn run(npc: &mut MockNpc, player: &mut MockPlayer, label: &str) -> Vec<EngineErr
 
 #[test]
 fn say_and_close_flow() {
-    let (mut npc, mut player) = setup("[@main]\n#SAY\n你好\\\n欢迎\n#ACT\nclose\n");
+    let (mut npc, mut player) = setup(
+        "[@main]
+#SAY
+你好\
+欢迎
+#ACT
+close
+",
+    );
     let errors = run(&mut npc, &mut player, "@main");
     assert!(npc.says.iter().any(|(s, p)| s.contains("你好") && !*p));
-    // B-8 位移：脚本 `close`（枚举 5）→ CmdCode 4 → 未注册 → switch 的 Takew 分支
-    // （GotoLableTakeWItem），故不会发 RM_MERCHANTDLGCLOSE；本批该分支显式报错
-    assert!(
-        errors.iter().any(|e| matches!(
-            e,
-            EngineError::NotImplemented {
-                handler: "GotoLableTakeWItem",
-                ..
-            }
-        )),
-        "{errors:?}"
-    );
-    assert!(player.msgs.is_empty());
+    // B2/M4 翻转后：脚本 `close`（枚举 5）→ CmdCode 5 → ActionOfClose（已实现）
+    // ⇒ 发 RM_MERCHANTDLGCLOSE，不再落到旧位移的 Takew 分支
+    assert!(errors.is_empty(), "{errors:?}");
+    assert!(!player.msgs.is_empty(), "close 应发出关闭对话消息");
 }
 
 #[test]
-fn script_command_lands_on_shifted_handler() {
-    // 位移落点（`cargo test --test dispatch_map` 可查，且与 C# 实测一致）：
-    // 脚本 `checkgold 50`（枚举 12）→ CmdCode 11 → 未注册 → 条件 switch 的 CHECKITEMW 分支，
-    // 即「按物品名查背包」——脚本里的 `checkgold` 实际是查名为 "50" 的物品。
-    let (mut npc, mut player) = setup(
-        "[@main]
+fn script_command_lands_on_correct_handler_after_flip() {
+    // B2/M4 翻转后：脚本 `checkgold 50`（枚举 12）→ CmdCode 12 → ConditionOfCheckGold（已实现）
+    // ⇒ 真比金币数（旧位移会落到 CHECKITEMW＝按物品名查背包）。
+    let src = "[@main]
 #IF
 checkgold 50
 #SAY
 够了
 #ELSESAY
 不够
-",
-    );
-
-    // 无该物品 → 条件为假 → #ELSESAY 分支
+";
+    let (mut npc, mut player) = setup(src);
+    player.gold = 10; // 10 < 50 ⇒ 不够
     let errors = run(&mut npc, &mut player, "@main");
     assert!(
         npc.says.iter().any(|(s, _)| s.contains("不够")),
@@ -251,18 +247,8 @@ checkgold 50
     );
     assert!(errors.is_empty(), "{errors:?}");
 
-    // 背包里有名为 "50" 的物品 1 件（nParam2 = 1）→ 条件为真 → #SAY 分支
-    let (mut npc2, mut player2) = setup(
-        "[@main]
-#IF
-checkgold 50
-#SAY
-够了
-#ELSESAY
-不够
-",
-    );
-    player2.items.push(("50".to_string(), 1));
+    let (mut npc2, mut player2) = setup(src);
+    player2.gold = 100; // 100 >= 50 ⇒ 够了
     let errors2 = run(&mut npc2, &mut player2, "@main");
     assert!(
         npc2.says.iter().any(|(s, _)| s.contains("够了")),
@@ -305,17 +291,24 @@ fn condition_handlers_registered_keys() {
 }
 
 #[test]
-fn shift_semantics_goto_hits_endquest() {
-    // B-8：脚本 `goto @别的`（枚举 55）→ CmdCode 54 → ScriptEngine 的 EndQuest 分支（Script = null）
-    let (mut npc, mut player) = setup("[@main]\n#ACT\ngoto @别的\nbreak\n");
+fn goto_executes_goto_not_endquest_after_flip() {
+    // B2/M4 翻转后：脚本 `goto @别的`（枚举 55）→ CmdCode 55 → Goto（已实现）
+    // ⇒ 真跳转（会累加 goto_count），不再落到旧位移的 EndQuest 清空脚本。
+    let (mut npc, mut player) = setup(
+        "[@main]
+#ACT
+goto @别的
+break
+",
+    );
     let _ = run(&mut npc, &mut player, "@main");
-    assert_eq!(player.script, None, "goto 落到 EndQuest：脚本绑定被清空");
+    assert_eq!(player.goto_count, 1, "goto 应命中 Goto 处理器（累加次数）");
 }
 
 #[test]
-fn shift_semantics_take_hits_set_handler() {
-    // B-8：脚本 `take 金币 1`（枚举 2）→ CmdCode 1 → ActionOfSet
-    // ⇒ SetQuestFlagStatus(StrToInt("金币")=0, 1)：写入任务标记 0 = 1（而不是扣钱）
+fn take_targets_goto_lable_take_item_not_yet_implemented() {
+    // B2/M4 翻转后：脚本 `take 金币 1`（枚举 2）→ CmdCode 2 → GotoLableTakeItem（尚未实现）
+    // ⇒ 显式 NotImplemented，不再误落到旧位移的 ActionOfSet 写标记。
     let (mut npc, mut player) = setup(
         "[@main]
 #ACT
@@ -323,12 +316,17 @@ take 金币 1
 ",
     );
     let errors = run(&mut npc, &mut player, "@main");
-    assert_eq!(
-        player.flags.get(&0),
-        Some(&1),
-        "take 落到 ActionOfSet 的写标记副作用"
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            EngineError::NotImplemented {
+                handler: "GotoLableTakeItem",
+                ..
+            }
+        )),
+        "{errors:?}"
     );
-    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(player.flags.get(&0), None, "不再误落 ActionOfSet 写标记");
 }
 
 #[test]
