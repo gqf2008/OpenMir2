@@ -43,6 +43,10 @@ pub enum DataError {
 }
 
 /// 读原始整数值；NULL 或列不存在 → None（对应 C# `IsDBNull` / `GetOrdinal = -1`）。
+///
+/// 类型口径（2026-10-10 实测，sqlx 0.8）：`Option<i64>` 能读 MySQL 的
+/// tinyint / smallint / int / bigint，**只有读成 `u8` 会 mismatched types 失败**
+/// （且这类失败容易被 `unwrap_or` 吞掉 —— 别用 u8 读这些列）。
 fn raw_i64(row: &MySqlRow, col: &'static str) -> Option<i64> {
     match row.try_get::<Option<i64>, _>(col) {
         Ok(v) => v,

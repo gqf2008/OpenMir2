@@ -30,10 +30,12 @@ python mir2-rs/tests/parity/m3/scoped_diff.py diff \
   <csharp会话>/scoped_after_norm.jsonl <rust会话>/scoped_after_norm.jsonl
 ```
 
-已产出的基线（实测，2026-10-10）：`sessions/csharp-20261010-135350/baseline.json`
-—— 13 表快照 hash 齐备，作用域内 4 行变更：
-`mir2_account.account +1`、`mir2_account.account_protection +1`、
+已产出的基线（实测，2026-10-10）：`sessions/csharp-20261010-140632/baseline.json`
+—— 13 表快照 hash 齐备，`runtime_procs`（产出该基线的进程表）齐备，
+作用域内 4 行变更：`mir2_account.account +1`、`mir2_account.account_protection +1`、
 `mir2_db.characters +1`、`mir2_db.characters_indexes +1`。
+**同一命令连跑两次，改动清单的形状完全一致**（同 4 表各 +1，仅行内容里的自增 Id/时间戳不同）
+——这是"夹具本身可复现"的证据。
 
 ## 为什么"同一初始状态"不靠破坏性还原
 
@@ -59,6 +61,22 @@ python mir2-rs/tests/parity/m3/scoped_diff.py diff \
   `account_protection` 行也由服务端一并写入，实测可直接登录；
 - `-ProvisionSql`（SQL 直开号，`tools/client/account_provision.ps1`）**必须重启 LoginSrv**
   后才可登录；只适合"开号 → 重启 → 跑操作序列"的编排。
+
+## 运行态 exe 归属（重启/改配置前必读）
+
+`baseline.json` 的 `runtime_procs` 会记录产出基线的进程表（实测，2026-10-10）：
+
+| 进程 | 实际 exe |
+| --- | --- |
+| mysqld | `D:\mysql\mariadb-10.11.19-winx64in\mysqld.exe` |
+| DBSrv | `src\DBSrvin\Release\DBSrv.exe`（**仓库构建输出**） |
+| LoginSrv | `src\LoginSrvin\Release\LoginSrv.exe`（**仓库构建输出**） |
+| GameSvr | `E:\MirServer\M2GameSvr\GameSrv.exe` |
+| LoginGate / SelGate / GameGate | `E:\MirServer\{LoginGate,SelGate,RunGate}\*.exe` |
+
+⇒ 需要"整栈重启"时**以这张表为准**（重启错那份等于没重启）；
+LoginSrv 读的配置是 `src/LoginSrv/bin/Release/logsrv.conf`
+（`LogSrv.ini` / `config.conf` 是遗留副本，不读）。
 
 ## 已知阻塞（影响操作序列能覆盖到哪一步）
 

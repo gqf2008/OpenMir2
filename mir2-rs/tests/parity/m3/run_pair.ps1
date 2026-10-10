@@ -99,6 +99,24 @@ if ($SkipBots) {
 $dbOk = Invoke-Mysql 'SELECT 1'
 if ($dbOk -notmatch '1') { throw 'DB 不可读' }
 
+# ---- 1.8 运行态记录（放进基线：基线必须写清是哪几个二进制产出的） ----
+# 实测（A2 勘察 + D2 复核）：运行的 LoginSrv/DBSrv 来自**仓库构建输出**
+# `src/*/bin/Release/`，而 LoginGate/SelGate/GameGate/GameSvr 来自 `E:\MirServer\*`。
+# 计划"整栈重启"时必须以这里的实际 exe 为准；LoginSrv 读的配置是
+# `src/LoginSrv/bin/Release/logsrv.conf`（LogSrv.ini/config.conf 是遗留副本，不读）。
+$runtimeProcs = @()
+foreach ($n in @('mysqld', 'DBSrv', 'LoginSrv', 'GameSrv', 'LoginGate', 'SelGate', 'GameGate')) {
+  $ps = Get-Process -Name $n -ErrorAction SilentlyContinue
+  foreach ($proc in $ps) {
+    $runtimeProcs += [pscustomobject]@{
+      name = $proc.ProcessName
+      path = $proc.Path
+      start = $proc.StartTime.ToString('o')
+    }
+  }
+}
+$runtimeProcs | ForEach-Object { Write-Output ("RUNTIME {0} <- {1}" -f $_.name, $_.path) }
+
 # ---- 1.9 账号名长度护栏（实测：超 10 字符被协议层截断，登录会报"帐号不存在"） ----
 $maxAcct = 10
 $longest = $Prefix.Length + ([string]($Bots - 1)).Length
@@ -231,6 +249,7 @@ $baseline = [pscustomobject]@{
     before = (Get-Content $scopedBefore | Measure-Object -Line).Lines
     after  = (Get-Content $scopedAfter | Measure-Object -Line).Lines
   }
+  runtime_procs = $runtimeProcs
   finished_at  = (Get-Date).ToString('o')
 }
 $baselinePath = Join-Path $SessionDir 'baseline.json'
