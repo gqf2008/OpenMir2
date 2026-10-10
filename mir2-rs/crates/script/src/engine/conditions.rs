@@ -21,6 +21,7 @@ impl Engine<'_, '_> {
             "ConditionOfLapge" => self.cond_var_cmp(info, result, std::cmp::Ordering::Greater),
             "ConditionOfSmall" => self.cond_var_cmp(info, result, std::cmp::Ordering::Less),
             "ConditionOfRandom" => self.cond_random(info, result),
+            "ConditionOfCheckSlaveListCount" => self.cond_slave_list_count(info, result),
             other => {
                 // 不应发生：dispatch 表判定为已实现却没有分支
                 self.errors.push(EngineError::NotImplemented {
@@ -88,6 +89,15 @@ impl Engine<'_, '_> {
             Some(v) => v.cmp(&rhs) == want,
             None => false,
         };
+    }
+
+    /// `ConditionOfCheckSlaveListCount`（C# 缺陷照搬）：
+    /// `success = false; if (SlaveList.Count < nParam1) success = false;` ——
+    /// 初始即 false 且**从不置 true** ⇒ 该条件恒为假（宝宝数量只被读取、不影响结果）。
+    fn cond_slave_list_count(&mut self, info: &QuestConditionInfo, result: &mut bool) {
+        let _ = self.player.slave_count();
+        *result = false;
+        let _ = info;
     }
 
     /// `ConditionOfRandom`：`RandomNumber.Random(nParam1) != 0 → false`。

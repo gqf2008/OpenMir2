@@ -51,6 +51,10 @@ pub trait ScriptPlayer {
     fn set_quest_unit_open_status(&mut self, index: i32, value: i32);
     /// 背包中该名字的物品件数（`CheckItemCount` 的 `ref nCount`）
     fn item_count(&self, name: &str) -> i32;
+    /// `playerActor.SlaveList.Count`（宝宝/随从数量）
+    fn slave_count(&self) -> i32;
+    /// `playerActor.ItemList.Count`（背包件数上限判定用）
+    fn bag_count(&self) -> i32;
     /// 是否佩戴着该位置的装备（`UseItems[...].Index > 0`）；位置名同 C#（"NECKLACE" 等）
     fn has_worn(&self, location: &str) -> bool;
     /// 把物品交给玩家（`SendAddItem`）

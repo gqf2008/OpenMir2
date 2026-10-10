@@ -100,6 +100,12 @@ impl ScriptPlayer for MockPlayer {
             .insert(flag as i16, if value == 0 { 0 } else { 1 });
     }
     fn set_quest_unit_open_status(&mut self, _index: i32, _value: i32) {}
+    fn slave_count(&self) -> i32 {
+        0
+    }
+    fn bag_count(&self) -> i32 {
+        self.items.iter().map(|(_, c)| *c).sum()
+    }
     fn item_count(&self, name: &str) -> i32 {
         self.items
             .iter()
