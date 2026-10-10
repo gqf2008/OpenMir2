@@ -234,6 +234,7 @@ $ProxyOut = Join-Path $Sess "proxy"
 New-Item -ItemType Directory -Force -Path $Sess | Out-Null
 
 $proxyProc = $null
+$flowCompleted = $false
 
 try {
   # ---------- 1. 全停 ----------
@@ -318,6 +319,7 @@ try {
     Tee-Object -FilePath (Join-Path $Sess "flow.out.log")
   if ($LASTEXITCODE -ne 0) { throw "客户端流程脚本失败（$LASTEXITCODE），见 flow.out.log" }
   Start-Sleep -Seconds 3   # 等收尾流量落盘
+  $flowCompleted = $true
 }
 finally {
   # ---------- 7. 恢复：停影子+核心，全量起正常栈 ----------
@@ -341,7 +343,11 @@ finally {
   if ($ok) { Write-Output "RESTORED: 完整栈已恢复" }
 }
 
-# ---------- 8. 切帧 + 校验 + 收日志 ----------
+# ---------- 8. 切帧 + 校验 + 收日志（仅当抓包流程确实跑完）----------
+if (-not $flowCompleted) {
+  Write-Output "ABORT: 抓包流程未跑完（见上面的错误），不做切帧/校验，也不更新 LATEST"
+  exit 1
+}
 python $SegmentPy --session $ProxyOut --out $Sess --note $Note `
   --reproduce "powershell -ExecutionPolicy Bypass -File tools/capture/capture_baseline.ps1"
 if ($LASTEXITCODE -ne 0) { throw "segment_frames 失败" }
