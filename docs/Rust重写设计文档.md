@@ -440,7 +440,10 @@ D（数据与公式）───────────────────�
 4. **合并**：B 线批次 2 已并入 master（`03ca1f90`）并复跑门禁。
 5. **登记未修（属产品决策）**：① GameGate 重连后 GameSvr 网关槽位置 null ⇒ 进世界 NRE 死循环直到重启；② `Mir200` 下 `GameSvr` 是 Mach-O，与源码版本漂移。
 
-### 13.5 下一批任务（4 线并行）
+### 13.5 下一批任务（已开进 walgit 看板，5 张卡片）
+
+> 卡片：openmir2-c2-golden-dump(worker-1) / openmir2-a2-m1-services(worker-2) / openmir2-b2-script-dispatch(worker-3) / openmir2-d2-m3-fixtures(worker-4) / openmir2-s1-oracle-defects(需要人)。
+> 每条线的判据与收尾要求都写在卡片正文里；协作与收尾流程见 §14。
 
 | 线 | 任务 | 判据（对应章节） | 前置 |
 | --- | --- | --- | --- |
@@ -450,3 +453,50 @@ D（数据与公式）───────────────────�
 | **D2** | ① 为 M3 准备"同库同脚本对拍"夹具（用 C 线 DB 快照 + 假人）；② RNG 同种子注入方案设计（解决 D-3 的 M3 缺口） | §6 M3（掉落/经验逐项相同）的准备项 | 无 |
 
 **并行前提照 §12.4**：接口只有 A 线能改（M1 期间 `crates/protocol`、`crates/storage` 的改动必须通知 B2/D2）；一线一判据；一模块一 owner。
+
+---
+
+## 14. walgit 协作流程与每批收尾清单
+
+本项目已挂到本机 walgit（`http://127.0.0.1:8081/gqf2008/OpenMir2.git`，`walgit remote` 名 = `walgit`）。
+**代码主源仍是 GitHub（`origin`）**，walgit 承载 D1 协作层（issue / status / patch / review / merge_result）。
+
+### 14.1 每条线开工前（照做即可）
+
+```bash
+git -C <checkout> remote add walgit http://127.0.0.1:8081/gqf2008/OpenMir2.git   # 没有才加
+walgit collab ls                                   # 看有哪些线程
+walgit collab board                               # 看看板（列定义 .walgit/board.toml）
+walgit collab thread <你要接的 thread-id>          # 读卡片全文（含判据与收尾要求）
+# 抢卡 = 追加一条签名 status（用你自己的 principal/key，不要共用）
+walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 principal> \
+  --parent <该线程最后一条 entry 的 oid> \
+  --body '{"status":"in-progress","owner":"<你的 principal>","worktree":"<worktree 名>","branch":"worktree-<worktree 名>","work":"<一句话>"}' \
+  --key ~/.walgit/keys/<你的 principal>.ed25519 --push walgit
+```
+
+> 当前 principal 池（coordinator 已注册，**一人一把钥匙，禁止共用**）：
+> `openmir2-coordinator`、`openmir2-worker-1..4`、`openmir2-reviewer-1..2`，钥匙在 `~/.walgit/keys/<principal>.ed25519`。
+
+### 14.2 一条线的标准流转
+
+`issue` → `status: in-progress` → 在 worktree 里干活 → `patch`（`--base/--head`）→ `status: needs-review`
+→ **另一 principal** 出 `review`（作者自审不算证据）→ coordinator 合并并推 `origin`+`walgit`
+→ `merge_result {"merged":true,"oid":…}` → `status: closed`。
+
+### 14.3 每批收尾清单（Cleanup DoD，缺一不算完）
+
+1. **worktree**：`git worktree remove <路径>`（脏树先确认内容已提交/已登记），`git worktree list` 只剩主检出 + 仍在进行中的线；
+2. **分支**：已合并的分支删除本地与远端（`git push origin --delete worktree-<名>`），未合并的必须写明原因与归宿；
+3. **看板**：线程收口为 `status: closed`，且 `walgit collab board` 里该卡片已在【已完成】列——**只写代码不收卡片 = 没收尾**；
+4. **进程**：本线起的客户端/服务端/假人/代理进程全部结束（`Get-Process | Where Path -like 'D:\MirClient-run\*'` 等要为空），`E:\MirServer` 十端口状态与开工前一致；
+5. **临时物**：本线产生的临时目录、临时库、抓包中间件、日志全部清掉或登记到报告（写清路径 + 为什么保留）；`E:\tmp` 下不留本线专属残留；
+6. **冻结基线**：`git status` 干净；`git diff --stat <基线> -- src/ sql/` 为空（例外只有登记过的 `T-*` 条目）；
+7. **报告**：patch 里带证据四件套（命令 + 输出 + 路径 + hash），并把"残留物清单"写在报告最后一段。
+
+### 14.4 协调者（coordinator）的检查项
+
+- 每次巡检跑 `E:\MirServer\port-status.ps1` + `walgit collab board` + `walgit collab report`；
+- 复核 patch 时**不采信自述**，自己重跑门禁；
+- 批准口径修订（如 M4 验收①、Envir 文件数）与白名单（`T-*`/`D-*`/`B-*`）；
+- 负责 merge 与 push，并在 `merge_result` 里写清 oid 与门禁结果。
