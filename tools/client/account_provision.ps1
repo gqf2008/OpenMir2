@@ -42,15 +42,22 @@ function Invoke-Mysql([string]$Sql) {
 }
 
 # ---- 批量模式：-Prefix + -Count（压测档位用）----
-# MariaDB 的 sequence 引擎（seq_1_to_N）一条 SQL 建 N 个账号；幂等（INSERT IGNORE + 补 protection 行）。
+# MariaDB 的 sequence 引擎（seq_1_to_N）一条 SQL 建 N 个账号。
+# **幂等必须用 WHERE NOT EXISTS，不能用 INSERT IGNORE**（2026-10-11 实测根因）：
+# `mir2_account.account.Account` 上**没有唯一索引**（只有按名建的非唯一索引 _WA_Sys_FLD_LOGINID），
+# 所以 `INSERT IGNORE` 不会去重——每跑一轮就再插 1000 行副本，loadbot0 累积到 6 行、
+# 全表 11354 行 / 7151 个不同名。LoginSrv 的 account⋈account_protection 在重复行上会产生歧义
+# ⇒ 反复跑压测时登录爬坡越来越差（tier-500 78%、tier-1000 38.6%）。
+# 内容冻结（§1 硬约束②）不允许给 oracle 表加唯一索引，所以幂等只能在开号 SQL 里做。
 # 注意：**账号必须在 LoginSrv 启动前建好**（它在启动时把账号读进内存，之后新建的看不到）。
 if ($Prefix -ne "" -and $Count -gt 0) {
   $now = [long]([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())
   # 序号从 0 起（与 BotSrv 的 LoginAccount 前缀+序号约定一致：loadbot0, loadbot1, ...）
-  Invoke-Mysql ("INSERT IGNORE INTO mir2_account.account " +
+  Invoke-Mysql ("INSERT INTO mir2_account.account " +
                 "(Account,PassWord,PayMode,Seconds,State,CreateTime,ModifyTime,LastLoginTime) " +
-                "SELECT CONCAT('$Prefix', seq-1), CONCAT('$Prefix', seq-1), 0,0,0,$now,$now,0 " +
-                "FROM mir2_account.seq_1_to_$Count") | Out-Null
+                "SELECT CONCAT('$Prefix', s.seq-1), CONCAT('$Prefix', s.seq-1), 0,0,0,$now,$now,0 " +
+                "FROM mir2_account.seq_1_to_$Count s " +
+                "WHERE NOT EXISTS (SELECT 1 FROM mir2_account.account a WHERE a.Account = CONCAT('$Prefix', s.seq-1))") | Out-Null
   # account_protection：UserName/Quiz1/2 非空（否则 LoginSrv 回 SM_NEEDUPDATE_ACCOUNT）
   Invoke-Mysql ("INSERT INTO mir2_account.account_protection " +
                 "(AccountId,UserName,Birthday,Quiz1,Answer1,Quiz2,Answer2) " +
