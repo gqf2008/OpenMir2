@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    S2 最小夹具复现：ConditionOfCheckRangeMonCount 的 String.get_Chars 越界。
+    刻意**不加入 OpenMir2.sln**（与 tools/oracle/gate-slot-probe、tools/capture/GoldenExport 同属工具侧）。
+    只引用 ScriptEngine 库：复现点（sParam5[1]）发生在任何世界依赖之前，
+    所以不需要起整栈、不需要 DB/客户端。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <RootNamespace>CondCrashProbe</RootNamespace>
+    <AssemblyName>CondCrashProbe</AssemblyName>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\Modules\ScriptEngine\ScriptSystem.csproj" />
+  </ItemGroup>
+
+</Project>

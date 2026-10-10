@@ -151,9 +151,11 @@ foreach ($name in $RepoBuiltFiles) {
 Write-Output ("   已铺 " + $RepoBuiltFiles.Count + " 个自有文件（+ 同名 .pdb）")
 
 # ---- 4. 起 GameSvr（工作目录/日志与 start-all.ps1 一致） ----
-Start-Process -FilePath $TargetExe -WorkingDirectory $Target `
-  -RedirectStandardOutput (Join-Path $LogDir 'GameSvr.out.log') `
-  -RedirectStandardError (Join-Path $LogDir 'GameSvr.err.log') -WindowStyle Hidden | Out-Null
+# 必须走 detached 帮手：PowerShell 级 -RedirectStandardOutput 会让长命的 GameSvr 占住本脚本的
+# stdout 管道，调用方读不到 EOF（症状：脚本跑完了却不回、会话不退）。见 detached.ps1 的实测三档。
+. (Join-Path $PSScriptRoot 'detached.ps1')
+Start-DetachedProcess -Exe $TargetExe -WorkDir $Target `
+  -OutLog (Join-Path $LogDir 'GameSvr.out.log') -ErrLog (Join-Path $LogDir 'GameSvr.err.log')
 
 $deadline = (Get-Date).AddSeconds($BootTimeoutSec)
 $listening = $false

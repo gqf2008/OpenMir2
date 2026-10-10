@@ -1,0 +1,29 @@
+# tools/oracle/deploy_gamesvr.ps1 —— 改后：整条输出走管道（tee），调用方必须立刻读到 EOF
+# 命令：powershell -NoProfile -ExecutionPolicy Bypass -File tools/oracle/deploy_gamesvr.ps1 | tee <本文件>
+
+== 先构建 E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\s1-oracle-fixes\src\GameSrv\GameSrv.csproj（-SkipBuild 可跳过）
+
+已成功生成。
+    0 个警告
+    0 个错误
+
+已用时间 00:00:00.94
+   新鲜度断言：构建输出都不比源码旧
+== deploy_gamesvr: E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\s1-oracle-fixes\src\GameSrv\bin\Release  ->  E:\MirServer\M2GameSvr
+   备份: C:\Users\gxh\AppData\Local\Temp\s1-deploy-backup-20261010-192112
+   停 GameSvr pid=27324
+   已铺 10 个自有文件（+ 同名 .pdb）
+   端口 5000 已监听（GameSvr 起来了）
+   铺后对账：
+     OK  GameSrv.exe                      src=5BC820B13B8AA1A7 dst=5BC820B13B8AA1A7
+     OK  GameSrv.dll                      src=35E0D12FAC2D77B9 dst=35E0D12FAC2D77B9
+     OK  GameSrv.deps.json                src=27BAAF7D6317609B dst=27BAAF7D6317609B
+     OK  GameSrv.runtimeconfig.json       src=CFFDF23BB209AA20 dst=CFFDF23BB209AA20
+     OK  M2Server.dll                     src=3D8E112E8DD04984 dst=3D8E112E8DD04984
+     OK  OpenMir2.dll                     src=2CE5020F37CDCAAC dst=2CE5020F37CDCAAC
+     OK  SystemModule.dll                 src=F1A922882F4F290D dst=F1A922882F4F290D
+     OK  ScriptSystem.dll                 src=F5F11F2F49DB9DBF dst=F5F11F2F49DB9DBF
+     OK  CommandSystem.dll                src=EF5C14B2EFC72F53 dst=EF5C14B2EFC72F53
+     OK  PlanesSystem.dll                 src=1D176443161980F7 dst=1D176443161980F7
+   部署来源登记: E:\MirServer\M2GameSvr\!deployed-from.json  (worktree-s1-oracle-fixes@a728dcebe382e8d646d3c946e608a21d0fb01002 dirty=True)
+deploy 用时 6925 ms（含构建/停机/起服）

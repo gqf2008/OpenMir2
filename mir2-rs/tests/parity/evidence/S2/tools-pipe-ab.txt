@@ -1,0 +1,24 @@
+# S2 工具健壮性：管道占用「改前/改后」对照测量（子进程故意活 12s）
+# 复跑：bash -c 'powershell -NoProfile -File E:/tmp/s2_pipe_ab.ps1 -Shape before|after | cat; echo PIPE_CLOSED'
+# 判读：PIPE_CLOSED 出现的时刻 = 调用方读到 EOF 的时刻。
+
+=== 形状=before ===
+形状=改前（Start-Process + PowerShell 级重定向；tools/oracle 两个脚本原写法）
+子进程已起（活 12s），父脚本现在返回
+PIPE_CLOSED 用时 11464 ms
+外层 rc=0
+
+=== 形状=after ===
+形状=改后（.NET ProcessStartInfo + UseShellExecute=true + cmd 内重定向；detached.ps1）
+子进程已起（活 12s），父脚本现在返回
+PIPE_CLOSED 用时 342 ms
+外层 rc=0
+
+=== 子进程确实都跑起来了（标记/日志） ===
+drwxr-xr-x 1 gxh 197121  0 Oct 10 19:20 ..
+-rw-r--r-- 1 gxh 197121  0 Oct 10 19:21 after.err
+-rw-r--r-- 1 gxh 197121 93 Oct 10 19:21 after.out
+-rw-r--r-- 1 gxh 197121  9 Oct 10 19:21 after.txt
+-rw-r--r-- 1 gxh 197121  0 Oct 10 19:20 before.err
+-rw-r--r-- 1 gxh 197121  0 Oct 10 19:20 before.out
+-rw-r--r-- 1 gxh 197121 10 Oct 10 19:20 before.txt

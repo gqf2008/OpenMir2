@@ -1,0 +1,24 @@
+[轴] CHECKRANGEMONCOUNT     字段序号=129  CmdCode=128  处理器=ConditionOfCheckContribution
+[轴] CHECKITEMADDVALUE      字段序号=130  CmdCode=129  处理器=ConditionOfCheckRangeMonCount
+[轴] CHECKINMAPRANGE        字段序号=131  CmdCode=130  处理器=ConditionOfCheckItemAddValue
+[轴] CHECKLEVEL             字段序号=7    CmdCode=6    处理器=ConditionCheckUnit
+
+== 全语料扫描（Envir 递归 *.txt）
+语料文件数            : 639
+条件命令行总数        : 1433
+派发被位移掉的行数    : 1433（B-8 位移面）
+落到 ConditionOfCheckRangeMonCount 的行数 : 120
+其中 sParam5 不足 2 字符（**必抛**）的行数 : 120
+    沙巴克铁匠-3.txt :: CheckItemAddValue 1 0 > 9
+    沙巴克铁匠-3.txt :: CheckItemAddValue 1 2 > 9
+    沙巴克铁匠-3.txt :: CheckItemAddValue 1 1 > 9
+    比奇国王-0122.txt :: CHECKITEMADDVALUE 3 10 = 1
+    勋章-0146.txt :: CHECKITEMADDVALUE 2 10 = 0
+    勋章-0146.txt :: CHECKITEMADDVALUE 2 10 = 1
+    勋章-0146.txt :: CHECKITEMADDVALUE 2 10 = 2
+    勋章-0146.txt :: CHECKITEMADDVALUE 2 10 = 3
+    勋章-0146.txt :: CHECKITEMADDVALUE 2 10 = 4
+    勋章-0146.txt :: CHECKITEMADDVALUE 2 10 = 5
+    勋章-0146.txt :: CHECKITEMADDVALUE 2 10 = 6
+    勋章-0146.txt :: CHECKITEMADDVALUE 2 10 = 7
+完整清单（120 行，制表符分隔：相对路径<TAB>脚本文本）已写入 : mir2-rs/tests/parity/evidence/S2/crash-corpus-120.txt
