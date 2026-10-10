@@ -106,3 +106,52 @@ fn redcheck_shuffled_calls_must_differ() {
         "红检失效：不同调用产出了相同首值（极小概率，换例重查）"
     );
 }
+
+/// 大区间分支（`range > i32::MAX`）对拍：`GetSampleForLargeRange()` 消耗两次采样。
+/// 调用脚本与 `Program.cs::RngLargeMode` 逐条一致。
+fn large_range_sequence() -> String {
+    let mut out = String::new();
+    for seed in [42, 7, 0] {
+        out.push_str(&format!("seed={seed}\n"));
+        let mut r1 = RandomNumber::with_seed(seed);
+        out.push_str(&format!(
+            "Next(min,max)={}\n",
+            r1.random_range(i32::MIN, i32::MAX)
+        ));
+        out.push_str(&format!(
+            "Next(min,max)={}\n",
+            r1.random_range(i32::MIN, i32::MAX)
+        ));
+        let mut r2 = RandomNumber::with_seed(seed);
+        out.push_str(&format!(
+            "Next(-2e9,2e9)={}\n",
+            r2.random_range(-2_000_000_000, 2_000_000_000)
+        ));
+        let mut r3 = RandomNumber::with_seed(seed);
+        out.push_str("mixed=");
+        for _ in 0..4 {
+            out.push_str(&format!(
+                "{}-{} ",
+                r3.random_range(1, 201),
+                r3.random_range(i32::MIN, i32::MAX)
+            ));
+        }
+        out.push('\n');
+        let mut r4 = RandomNumber::with_seed(seed);
+        let _ = r4.random_range(i32::MIN, i32::MAX);
+        out.push_str(&format!("after-large Next()={}\n", r4.random()));
+    }
+    out
+}
+
+#[test]
+fn rng_large_range_matches_csharp_golden() {
+    let golden = include_str!("../golden/rng_large_range.txt");
+    let mine = large_range_sequence();
+    assert_eq!(
+        mine,
+        golden,
+        "大区间分支与 C# 金标准不一致: {}",
+        first_diff(&mine, golden)
+    );
+}

@@ -31,6 +31,7 @@ FIX='E:/Users/gxh/Documents/GitHub/OpenMir2/mir2-rs/tests/parity/fixtures'
 GOLD='E:/Users/gxh/Documents/GitHub/OpenMir2/mir2-rs/tests/parity/golden'
 dotnet run -- rng 42 "$GOLD/rng_seed42.txt"
 dotnet run --no-build -- rng 20240229 "$GOLD/rng_seed20240229.txt"
+dotnet run --no-build -- rnglarge "$GOLD/rng_large_range.txt"
 dotnet run --no-build -- exp "$FIX/Exps.conf" "$GOLD/exp_table.txt"
 dotnet run --no-build -- levelabil "$GOLD/levelabil.txt"
 dotnet run --no-build -- drop "$FIX/MonItems/jiangshi1.txt" "$FIX/items_jiangshi1.json" 42 100 40 "$GOLD/drop_jiangshi1_100.txt"
@@ -53,7 +54,7 @@ cargo run -p mir2-parity-tests --bin dump_item_fixture -- \
 | 验收 | 测试 | 金标准 |
 | --- | --- | --- |
 | ① 表加载条数 = C# 启动日志 | `tests/table_counts.rs`（`--ignored`，连 MySQL） | C# 日志摘录（测试注释内） |
-| ② 固定种子 RNG 序列逐项相同 | `tests/rng_parity.rs`（种子 42 / 20240229） | 真实 `RandomNumber.cs` 输出 |
+| ② 固定种子 RNG 序列逐项相同 | `tests/rng_parity.rs`（种子 42 / 20240229；另含大区间分支 `rng_large_range.txt`，三种子 × 两次连续大区间调用 + 采样消耗数） | 真实 `RandomNumber.cs` 输出 |
 | ③ 经验曲线逐级 diff = 0（1→255，含英雄同表） | `tests/exp_parity.rs` | 真实 `ConfigFile.cs` 读 `Exps.conf` |
 | ④ 固定种子 100 次击杀掉落列表相同 | `tests/drop_parity.rs`（真实怪 1 例 + 合成 17 分支） | 原码逐字拷贝 + 真实 RNG |
 

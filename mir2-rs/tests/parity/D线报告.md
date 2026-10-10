@@ -80,6 +80,14 @@ cargo test --test rng_parity                          # Rust 对拍
 红检：换种子（43）→ 序列不同（自动）；金标准第 10 行改 0 → 测试红
 （`第 10 行: rust=815 csharp=0`，附录 A-2）。
 
+补充（合并后加固）：大区间分支（`range > i32::MAX`）也已钉住
+（`golden/rng_large_range.txt`，三种子）。定形过程：`Next(int.MinValue,int.MaxValue)`
+先加后转 / 先转后加两种写法各对一半，最终用反射取 .NET 内部采样序列 + 遍历公式变体
+才定案——语义是"乘积转 64 位、与 min 相加后再截断回 i32"
+（seed 42：`1434747709`、第二次 `-269548476`），且该调用消耗**两次**采样
+（调用后 `Next()` 直接跳到第 3 个样本）。B 线 `crates/script/src/random.rs` 的大区间
+分支经同一金标准核对为**正确**，Rust 侧原本的占位实现已按此修正。
+
 注：C# 生产路径无参 `new Random()` 在 .NET 6+ 为 xoshiro256**，与固定种子
 legacy 算法不同序列；无参无法对拍，登记 whitelist D-3。
 
