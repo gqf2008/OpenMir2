@@ -1,0 +1,13 @@
+[package]
+name = "mir2-world"
+version = "0.1.0"
+edition = "2021"
+description = "M2 世界模拟骨架：单线程 tick + 实体存储 + 地图/AOI（对齐 C# WorldServer/Envirnoment）"
+
+[dependencies]
+mir2-shared = { path = "../shared" }
+# ③ 禁止引入并行：本 crate **刻意不依赖任何线程/异步运行时**
+#（tokio/rayon/crossbeam/threadpool 一律不加；由 tests/no_parallel.rs 作为门禁钉住）。
+
+[lints]
+workspace = true

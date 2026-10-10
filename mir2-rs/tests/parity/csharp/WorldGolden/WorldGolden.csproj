@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>WorldGolden</AssemblyName>
+    <RootNamespace>WorldGolden</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    M2 世界/AOI 金标准生成器（D 线 worker-4）。
+    函数体从 oracle 源码**逐字拷贝**（见各函数上方的文件:行号），只把外壳桩化：
+      src/M2Server/Actor/BaseObject.ViewRange.cs  → Stubs.cs::ActorStub
+      src/M2Server/Maps/Envirnoment.cs            → Stubs.cs::EnvirnomentStub
+      src/Modules/SystemModule/Data/{MapCellInfo,CellObject,CellType}.cs → Stubs.cs
+    时钟：HUtil32.GetTickCount() 被桩成**虚拟时钟**（每 tick +200ms），
+    与 Rust 侧 crate::world 的虚拟时钟对齐——两侧都不读墙钟。
+  -->
+
+</Project>
