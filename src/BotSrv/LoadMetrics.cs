@@ -43,6 +43,8 @@ namespace BotSrv
         private static long _tickMaxMs;
         private static long _internalErrors;
         private static long _internalErrorsLogged;
+        private static long _probeSent;
+        private static long _inWorld;
 
         private static string _outDir;
         private static string _statsPath;
@@ -132,6 +134,26 @@ namespace BotSrv
             lock (Sync)
             {
                 _connRefused++;
+            }
+        }
+
+        /// <summary>动作探针真正把一条动作发出去了（进世界之后）。0 表示"探针没武装/没进世界"，
+        /// 与"发了但收不到 ack"（tick_samples = 0）是两种完全不同的故障，必须分开看得见。</summary>
+        public static void ProbeSent()
+        {
+            lock (Sync)
+            {
+                _probeSent++;
+            }
+        }
+
+        /// <summary>这个假人收到了服务端的 SM_LOGON（= 真的进了世界，而不是"本地切到 PlayScene"）。
+        /// 探针的武装条件就是它；它同时是 tick 样本覆盖率的分子（分母 = 档位人数）。</summary>
+        public static void InWorld()
+        {
+            lock (Sync)
+            {
+                _inWorld++;
             }
         }
 
@@ -264,6 +286,8 @@ namespace BotSrv
               .Append(",\"conn_refused\":").Append(_connRefused)
               .Append(",\"conn_lost\":").Append(_connLost)
               .Append(",\"internal_errors\":").Append(_internalErrors)
+              .Append(",\"in_world\":").Append(_inWorld)
+              .Append(",\"probe_sent\":").Append(_probeSent)
               .Append(",\"tick_samples\":").Append(_tickSamples)
               .Append(",\"tick_sum_ms\":").Append(_tickSumMs)
               .Append(",\"tick_max_ms\":").Append(_tickMaxMs)

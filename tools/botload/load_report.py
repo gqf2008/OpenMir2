@@ -101,6 +101,12 @@ def summarize_tick(stats, count):
         "conn_lost_ramp": base.get("conn_lost", 0),
         "conn_lost_steady": last.get("conn_lost", 0) - base.get("conn_lost", 0),
         "hist_bucket_ms": last.get("hist_bucket_ms", 1),
+        # tick 样本的**覆盖基数**：进世界（收到 SM_LOGON）的假人数与探针实际发出的动作数。
+        # tick 只可能来自进世界的假人 ⇒ 这两个数一起读才知道"样本是从多少人身上量的"。
+        "world_ok": last.get("in_world", 0),
+        "world_ok_pct": (round(100.0 * last.get("in_world", 0) / count, 2) if count else None),
+        "probe_sent": last.get("probe_sent", 0),
+        "internal_errors": last.get("internal_errors", 0),
     }
     for q, key in ((0.50, "tick_p50_ms"), (0.90, "tick_p90_ms"), (0.99, "tick_p99_ms")):
         v, _ = quantile_from_hist(hist, q, out["hist_bucket_ms"])
@@ -144,13 +150,17 @@ def summarize_mem(rows, tail_sec=60):
     return out
 
 
-def judge(tier, thresholds, criteria=("login", "conn", "tick")):
+def judge(tier, thresholds, criteria=("login", "conn", "tick"), allow_missing_tick=False):
     """按 §6 M5 的判据给单档结论（掉线只看稳态窗）。
 
-    `criteria` 可选：有些复用场景**天然拿不到 tick 样本**——例如 M1 ⑤ 只要求
-    「200 假人登录+选角成功率 100%」，假人只跑无状态登录链路、不产生动作 ⇒ 没有 `+GD` ack。
-    那种场景用 `--criteria login,conn` 判，**不要把"拿不到的指标"算成红**（红应当表示"测得的值不达标"）。
-    默认仍是 §6 M5 全三条（含 tick），C6 自己的口径不变。
+    `criteria` 只选"要比哪几条阈值"，**不能用它把"缺 tick 样本"变成绿灯**（2026-10-10 的教训：
+    同一份 0 样本产物在把判据做成可选之后从 RED 翻成 GREEN ⇒ 恒绿假门禁）。
+
+    所以"缺 tick 样本"由**独立开关** `allow_missing_tick` 管辖，且默认判 RED：
+      · 没有 tick 样本 + 没开关 ⇒ RED（不管 criteria 写了什么）；
+      · 没有 tick 样本 + 有开关 ⇒ 出基线，但报告里带 `tick_missing`/`tick_missing_acknowledged`/
+        `missing_tick_note`（"本次未采集 tick P99"）⇒ 下游一眼能看出这档不能当 M5 的 tick 基线引用。
+    确实天然拿不到 tick 的场景（例如 M1 ⑤ 只比登录+选角）也必须显式加开关，不许"顺手改成可选"。
     """
     fails = []
     if "login" in criteria and (tier.get("login_success_pct") is None
@@ -158,14 +168,20 @@ def judge(tier, thresholds, criteria=("login", "conn", "tick")):
         fails.append(f"登录成功率 {tier.get('login_success_pct')}% < {thresholds['login_success_pct']}%")
     if "conn" in criteria and tier.get("conn_lost_steady", 0) > thresholds["conn_lost_steady"]:
         fails.append(f"稳态掉线 {tier['conn_lost_steady']} > {thresholds['conn_lost_steady']}")
-    if "tick" in criteria:
-        if tier.get("tick_p99_ms") is None:
-            fails.append("tick P99 缺失（本档没有 tick 样本；若该场景不需要 tick 请用 --criteria login,conn）")
-        elif tier["tick_p99_ms"] > thresholds["tick_p99_ms"]:
-            fails.append(f"tick P99 {tier['tick_p99_ms']}ms > {thresholds['tick_p99_ms']}ms")
+    tick_missing = tier.get("tick_p99_ms") is None
+    if tick_missing:
+        tier["tick_missing"] = True
+        if allow_missing_tick:
+            tier["tick_missing_acknowledged"] = True
+            tier["missing_tick_note"] = "本次未采集 tick P99（--allow-missing-tick 显式放行；不得当作 M5 的 tick 基线）"
+        else:
+            fails.append("缺 tick 样本（tick_p99_ms = None）：默认判 RED；确实拿不到 tick 的场景也必须显式加 --allow-missing-tick")
+    elif "tick" in criteria and tier["tick_p99_ms"] > thresholds["tick_p99_ms"]:
+        fails.append(f"tick P99 {tier['tick_p99_ms']}ms > {thresholds['tick_p99_ms']}ms")
     if not tier.get("ramp_complete", False):
         fails.append("登录数未达目标（爬坡未完成）")
     tier["criteria"] = list(criteria)
+    tier["allow_missing_tick"] = bool(allow_missing_tick)
     tier["verdict"] = "GREEN" if not fails else "RED"
     tier["fails"] = fails
     return tier
@@ -180,7 +196,7 @@ def cmd_summarize(args):
     tier["stagger_ms"] = args.stagger_ms
     tier["hold_sec"] = args.hold_sec
     criteria = [c.strip() for c in args.criteria.split(",") if c.strip()]
-    judge(tier, DEFAULT_THRESHOLDS, criteria)
+    judge(tier, DEFAULT_THRESHOLDS, criteria, allow_missing_tick=args.allow_missing_tick)
     text = json.dumps(tier, ensure_ascii=False, indent=2)
     if args.out:
         with open(args.out, "w", encoding="utf-8", newline="\n") as f:
@@ -245,6 +261,26 @@ def cmd_selftest(_args):
     expect(abs(s_flat["slope_tail_mb_per_s"]) < 0.01,
            f"平坦曲线斜率应 ≈0，实得 {s_flat['slope_tail_mb_per_s']}")
     expect(s_up["ws_peak_mb"] == 200.0 and s_flat["ws_peak_mb"] == 100.0, "峰值归算错")
+
+    # 5) 「缺 tick 样本」默认判 RED，且 --criteria 不能把它变成绿灯（2026-10-10 的恒绿假门禁回归项）
+    stats5 = [{"t_ms": 1000, "login_ok": 100, "tick_samples": 0, "tick_sum_ms": 0, "tick_max_ms": 0,
+               "conn_lost": 0, "hist": [0] * 201},
+              {"t_ms": 2000, "login_ok": 100, "tick_samples": 0, "tick_sum_ms": 0, "tick_max_ms": 0,
+               "conn_lost": 0, "hist": [0] * 201}]
+    t5 = judge(summarize_tick(stats5, 100), DEFAULT_THRESHOLDS, ("login", "conn"))
+    expect(t5["verdict"] == "RED", "0 样本 + criteria=login,conn 必须仍判 RED（不许被可选判据绕开）")
+    expect(any("缺 tick 样本" in f for f in t5["fails"]), "0 样本应给出「缺 tick 样本」这条 fails")
+    expect(t5.get("tick_missing") is True, "0 样本应标注 tick_missing")
+    expect("missing_tick_note" not in t5, "没放行时不该写 missing_tick_note")
+    t6 = judge(summarize_tick(stats5, 100), DEFAULT_THRESHOLDS, ("login", "conn"), allow_missing_tick=True)
+    expect(not any("缺 tick 样本" in f for f in t6["fails"]), "显式 --allow-missing-tick 后不应再因缺样本判红")
+    expect(t6.get("tick_missing_acknowledged") is True and "本次未采集 tick P99" in t6.get("missing_tick_note", ""),
+           "放行后基线文件必须带「本次未采集 tick P99」标注")
+    # 有样本时开关无副作用：仍只按阈值判（P99=150 > 100 ⇒ RED，且不得出现 tick_missing 标注）
+    t7 = judge(summarize_tick(stats, 100), DEFAULT_THRESHOLDS, ("login", "conn", "tick"), allow_missing_tick=True)
+    expect(t7["tick_p99_ms"] == 150 and t7["verdict"] == "RED" and any("tick P99 150" in f for f in t7["fails"]),
+           "有样本时按阈值判（150ms > 100ms ⇒ RED），且开关不得改变这条判定")
+    expect("tick_missing" not in t7, "有样本时不得出现 tick_missing 标注")
 
     if not ok:
         print("RED: load_report selftest 有未通过项")
@@ -367,6 +403,9 @@ def main():
     s.add_argument("--out", default="")
     s.add_argument("--criteria", default="login,conn,tick",
                    help="判据子集（默认全三条）；M1 ⑤ 那种只比登录/连接的场景用 login,conn")
+    s.add_argument("--allow-missing-tick", action="store_true",
+                   help="显式放行「本次没有 tick 样本」（报告里会写入 missing_tick_note）；"
+                        "不加则缺样本一律判 RED，且 --criteria 不能替代本开关")
     a = sub.add_parser("aggregate")
     a.add_argument("--summary", required=True, help="load_gate_summary.json")
     a.add_argument("--out-dir", default="")

@@ -110,7 +110,11 @@ namespace BotSrv
             bool boProcessLimit = false;
             for (int i = g_nPosition; i < _clientList.Count; i++)
             {
-                _clientList[i].Run();
+                // **逐个假人**兜异常（不要把 try 包在整段循环外）：假人的挂机/移动层建立在跨假人共享的
+                // MShare.* 上，N 个假人会互相踩（实测 500 档 internal_errors 一路涨到 1248+）。
+                // 包在循环外时，一个假人抛异常就**中断整轮**——后面的假人永远轮不到（实测：500 档爬到
+                // 474/500 后再不动、tick 采样冻结、统计也不再落盘）。逐个兜住 ⇒ 一个坏假人不拖住其余。
+                SafeRun(_clientList[i]);
                 if (((HUtil32.GetTickCount() - dwRunTick) > 20))
                 {
                     g_nPosition = i;
@@ -141,9 +145,34 @@ namespace BotSrv
                     {
                         _autoList[i].RunTick = HUtil32.GetTickCount();
                         // 压测：进图后挂机定时器会被停掉，这里确保它一直开着（否则假人静止、收不到 +GD）
-                        _clientList[i].EnsureAutoPlay();
-                        _clientList[i].RunAutoPlay();
+                        SafeRun(_clientList[i], ensureAutoPlay: true);
                     }
+                }
+            }
+        }
+
+        /// <summary>跑一个假人的一轮（可带挂机重臂），异常就地兜住 + 计数 + 前若干条打日志。</summary>
+        private static void SafeRun(RobotPlayer robot, bool ensureAutoPlay = false)
+        {
+            try
+            {
+                if (ensureAutoPlay)
+                {
+                    robot.EnsureAutoPlay();
+                    robot.RunAutoPlay();
+                }
+                else
+                {
+                    robot.Run();
+                }
+            }
+            catch (Exception ex)
+            {
+                LoadMetrics.InternalError();
+                if (LoadMetrics.ShouldLogInternalError())
+                {
+                    LogService.Warn("假人[" + robot.LoginId + "]异常被兜住[" + LoadMetrics.InternalErrors + "]："
+                        + ex.GetType().Name + ": " + ex.Message);
                 }
             }
         }

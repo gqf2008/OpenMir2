@@ -279,6 +279,9 @@ namespace BotSrv.Player
                     MShare.LoadUserConfig(ChrName);
                     MShare.LoadItemFilter2();
                     //SendClientMessage(Messages.CM_HIDEDEATHBODY, MShare.g_MySelf.m_nRecogId, (int)MShare.g_gcGeneral[8], 0, 0);
+                    // SM_LOGON = 服务端确认进世界 ⇒ 武装动作探针（并计入 tick 覆盖率分子）；
+                    // x/y 取这条消息里的落点（PlayScene 的 SM_LOGON 分支用的就是 msg.Param/msg.Tag）。
+                    MarkInWorld(msg.Param, msg.Tag);
                     MainOutMessage("成功进入游戏");
                     MainOutMessage("-----------------------------------------------");
                     break;

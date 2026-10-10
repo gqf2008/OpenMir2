@@ -48,6 +48,8 @@ param(
   [switch]$SelfTestRed,
   [string]$Criteria = "login,conn,tick",  # 判据子集；M1 ⑤（只比登录+选角）用 "login,conn"
   [switch]$NoActionProbe,                # 关掉假人动作探针（默认开：否则采不到 #+GD ack ⇒ tick 无样本）
+  [switch]$AllowMissingTick,             # 显式放行"本档没有 tick 样本"（报告里会写 missing_tick_note）；
+                                         # 不加则缺样本一律判 RED——**--Criteria 不能替代本开关**
   [int]$ActionProbeMs = 1000             # 探针频率：每个假人每 N 毫秒发一个 CM_TURN
 )
 
@@ -109,16 +111,24 @@ function Wait-Port([int]$P, [int]$TimeoutSec) {
 function Restart-Stack {
     if (-not (Test-Path $StartAll)) { throw "找不到 $StartAll（-RestartStackPerTier 需要它）" }
     Write-Output "STACK restart: stop -> start"
-    & powershell -ExecutionPolicy Bypass -File $StartAll -Stop 2>&1 | Out-Null
-    & powershell -ExecutionPolicy Bypass -File $StartAll 2>&1 | Out-Null
-    if (-not (Wait-Port $Port 90)) { throw "整栈重启后端口 $Port 未就绪" }
+    # 坑（2026-10-11 实测）：**不要把 start-all.ps1 的输出接成管道再等它退出**——它用 Start-Process
+    # 起的七个服务进程会继承那个管道的写端，父进程退出后管道仍不关闭 ⇒ 调用方永久挂住
+    # （上一批的"多档连跑卡死/要杀任务树"就是它）。做法改成：
+    #   ① stop 重定向到文件；② start 用 Start-Process 起在独立进程 + 输出重定向到文件；
+    #   ③ 只等**端口就绪**（栈健康与否本来就看端口，不等子进程树）。
+    & powershell -ExecutionPolicy Bypass -File $StartAll -Stop *> (Join-Path $OutDir "stack-stop.log")
+    Start-Process -FilePath "powershell" `
+        -ArgumentList @('-ExecutionPolicy', 'Bypass', '-File', $StartAll) -WindowStyle Hidden `
+        -RedirectStandardOutput (Join-Path $OutDir "stack-start.out.log") `
+        -RedirectStandardError (Join-Path $OutDir "stack-start.err.log") | Out-Null
+    if (-not (Wait-Port $Port 150)) { throw "整栈重启后端口 $Port 未就绪（见 $OutDir\stack-start.*.log）" }
 }
 
 $tierReports = @()
-$firstTier = $true
 foreach ($n in $Tiers) {
-    if ($RestartStackPerTier -and -not $firstTier) { Restart-Stack }
-    $firstTier = $false
+    # 三档基线一律从**干净栈**开始（含第一档）：上一批的实测教训是"同一条栈连跑两档，
+    # 第二档假人能登录但进不了世界"。整栈重启 ~60s，比拿被污染的栈当基线便宜。
+    if ($RestartStackPerTier) { Restart-Stack }
 
     $tierDir = Join-Path $OutDir ("tier-" + $n)
     New-Item -ItemType Directory -Force -Path $tierDir | Out-Null
@@ -191,8 +201,10 @@ foreach ($n in $Tiers) {
 
     # ---- 归算 ----
     $reportPath = Join-Path $tierDir "report.json"
+    $criteriaArgs = @("--criteria", $Criteria)
+    if ($AllowMissingTick) { $criteriaArgs += "--allow-missing-tick" }
     python (Join-Path $RepoRoot "tools\botload\load_report.py") summarize --stats $statsPath --mem $memPath `
-        --count $n --stagger-ms $StaggerMs --hold-sec $HoldSec --criteria $Criteria --out $reportPath | Out-Null
+        --count $n --stagger-ms $StaggerMs --hold-sec $HoldSec @criteriaArgs --out $reportPath | Out-Null
     $tierRc = $LASTEXITCODE
     $tierJson = $null
     if (Test-Path $reportPath) { $tierJson = Get-Content $reportPath -Raw | ConvertFrom-Json }
@@ -200,7 +212,8 @@ foreach ($n in $Tiers) {
         Write-Output ("  RESULT tier=" + $n + " verdict=" + $tierJson.verdict +
                       " login=" + $tierJson.login_success_pct + "% conn_lost_steady=" + $tierJson.conn_lost_steady +
                       " tick_p50=" + $tierJson.tick_p50_ms + " p90=" + $tierJson.tick_p90_ms +
-                      " p99=" + $tierJson.tick_p99_ms + "ms samples=" + $tierJson.samples)
+                      " p99=" + $tierJson.tick_p99_ms + "ms samples=" + $tierJson.samples +
+                      " in_world=" + $tierJson.world_ok + " probe_sent=" + $tierJson.probe_sent)
         if ($tierJson.mem.PSObject.Properties.Name -contains "GameSrv") {
             $g = $tierJson.mem.GameSrv
             Write-Output ("  MEM GameSvr ws_peak=" + $g.ws_peak_mb + "MB mean=" + $g.ws_mean_mb +
@@ -222,6 +235,7 @@ $summaryPath = Join-Path $OutDir "load_gate_summary.json"
   hold_sec   = $HoldSec
   caliber    = "tick 服务时延 = BotSrv 收到 `#+GD/<rtime>! 的时刻 − rtime（Environment.TickCount，全机同域）；详见 tools/botload/load_report.py"
   criteria   = $Criteria
+  allow_missing_tick = [bool]$AllowMissingTick
   action_probe = (-not $NoActionProbe)
   action_probe_ms = $ActionProbeMs
   reports    = $tierReports

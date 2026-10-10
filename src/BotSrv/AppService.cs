@@ -41,6 +41,9 @@ namespace BotSrv
             LogService.Info("压测采集: 输出目录={0} 连接错峰={1}ms/个 统计={2}",
                 Environment.GetEnvironmentVariable("MIR2_BOT_OUT") ?? "(exe 同级/load_out.conf)",
                 _options.ConnectStaggerMs, LoadMetrics.StatsPath);
+            // 探针开关必须开机可见：否则"零样本"要先猜"是不是环境变量没传进去"（2026-10-11 踩过）
+            LogService.Info("动作探针: 启用={0} 间隔={1}ms（武装条件 = 收到 SM_LOGON 才发 CM_TURN；见 RobotPlayer.ProbeActionTick）",
+                RobotPlayer.ProbeEnabled, RobotPlayer.ProbeIntervalMs);
             runThread.Start();
             await BotShare.ClientMgr.Start(stoppingToken);
         }
