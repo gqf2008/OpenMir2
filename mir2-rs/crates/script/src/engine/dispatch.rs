@@ -33,6 +33,9 @@ pub static IMPLEMENTED_EXECUTIONS: &[&str] = &[
     "ActionOfMessageBox",
     "ActionOfMobFireBurn",
     "ActionOfResetUnit",
+    "ActionOfReSet",
+    "ActionOfSetOpen",
+    "ActionOfSetUnit",
 ];
 
 /// 已实现的**条件**处理器名。

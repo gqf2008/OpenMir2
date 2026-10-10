@@ -1,35 +1,35 @@
 
 ---
 
-## B2 进展（2026-10-10 第二轮）
+## B2 进展（2026-10-10 第三轮）
 
-### 两侧效果对拍已跑通
+### 用例结果：**2/4 逐行一致**
 
-- **Rust 侧 `flow-run`**（`crates/script-tool/src/flowrun.rs`）与 **C# 侧 `run`**（`tools/script-parity-cs/RunMode.cs`）
-  同参数、同日志格式；`tools/flow-diff.py` 逐例两侧跑并 diff（用例表 `tests/parity/flow-cases.json`）。
-- 命令：`python -I mir2-rs/tools/flow-diff.py mir2-rs/tests/parity/flow-cases.json`
+| 用例 | 结果 |
+| --- | --- |
+| 传送-幻境（金币不足/无物品） | ✅ 一致（含 `[脚本错误] …MobFireburn…` 原文） |
+| 传送-幻境（背包有名为 100000 的物品） | ✅ 一致（`flag 0 100000` + `#gold` + `#items`） |
+| 商店-比奇国王@main | ❌ C# 侧 `EX NullReferenceException`（栈顶：`ConditionOfCheckSlaveListCount` @ConditionProcessingSys.cs:224 —— 我的 mock 未提供从属列表）；Rust 侧该条件走显式 NotImplemented |
+| 商店-比奇国王@rw03 | ❌ C# 侧 `EX IndexOutOfRangeException`（S2 已接管的 `ConditionOfCheckRangeMonCount` 崩溃） |
 
-### 本轮实测结论
+### 本轮实现（Rust 侧）
 
-| 用例 | 结果 | 说明 |
-| --- | --- | --- |
-| 传送-幻境（金币不足/无物品） | ✅ **逐行一致** | 两侧均为：`err [脚本错误]  脚本命令:MobFireburn ... 参数1:幻境进入条件：10万金币 ...` + `#gold=200000` + `#items=` |
-| 传送-幻境（背包有名为 100000 的物品） | ❌ 差 1 行 | Rust 多一条 `NotImplemented ActionOfSet`（即该分支第一个动作 `take` 落到 ActionOfSet，尚未实现；C# 侧执行但无可观测副作用） |
-| 商店-比奇国王 @rw03 | ❌ | **C# 参照自身崩溃**：`EX IndexOutOfRangeException`（`ConditionProcessingSys.ConditionOfCheckRangeMonCount` 内 `String.get_Chars` 越界，由夹具数据触发）；Rust 侧报 NotImplemented 清单 |
+- **`ActionOfSet`**（语料第一高频动作；`take`/`SET` 的实际落点）：
+  `StrToInt(sParam1,0)` / `StrToInt(sParam2,0)` → `SetQuestFlagStatus(flag, value)`，与 C# 逐行等价；
+- 同族 `ActionOfReSet` / `ActionOfSetOpen` / `ActionOfSetUnit` 一并移植；
+- `ScriptPlayer` 增 `set_quest_flag_status` / `set_quest_unit_open_status`；两侧 mock 都实现
+  **C# `PlayObject.QuestFlag[]` 的位语义**（`flag-1 → byte_idx = idx/8, bit = 128 >> idx%8`，
+  value==0 清位、非 0 置位；flag<=0 直接返回），并输出规范日志行 `flag <flag> <value>`。
+- C# 侧 harness：崩溃时除 `EX <异常名>` 外打印**栈顶 4 帧到 stderr**（定位 mock 缺口用，
+  不参与 stdout diff）。
 
-### 本轮修出的语义缺陷（已修）
+### 下一步（按卡片的顺序）
 
-- **动作循环的"首个已注册动作后 return"**：C# `GotoLableQuestActionProcess` 里
-  `if (ExecutionProcessing.IsRegister(cmd)) { Execute(...); return result; }` ⇒ 动作列表在第一个已注册
-  动作后**整体停止**（后续动作不执行）。Rust 初版是 `continue`，导致 `messagebox` 之后还跑了 `break`
-  （多出一条 `unitstatus 0 0`）。已按 C# 修正并复跑验证（传送用例由 DIFF 转 OK）。
-- C# 侧 harness mock 补齐：`UseItems` 12 个空佩戴位（否则 `close`→TakeW 路径 NRE）、
-  `SetQuestUnitStatus` 纳入日志、字节转换 clamp、参照崩溃时输出已收集日志 + `EX <异常名>` 行。
-
-### 下一步（同前，按语料频次）
-
-1. `ActionOfSet`（语料第一高频：`take`/`SET` 等的实际落点）——需要变量写入层
-   （`SetMovDataValNameValue` 系）与两侧一致的 `setvar/flag` 日志行；
-2. `ActionOfExeaction`、`ActionOfMovData`、`GotoLableTakeItem/TakeWItem`、`ActionOfGiveItem`、
-   `ConditionOfCheckItem`、`ConditionOfCheckRangeMonCount`（含参照崩溃条件的复现/登记）等；
-3. 每补一批即跑 `flow-diff.py` 并更新本表；最终 93 个派发目标清零 + 六类用例全绿。
+1. **`ConditionOfCheckSlaveListCount`**（语料 354 次，当前 #1 条件；也是商店用例红的原因）：
+   需要在 `ScriptPlayer` 增从属列表接口（C# `playerActor.SlaveList`/等价物），两侧 mock 同步，
+   再按 C# 语义实现计数比较；实现后商店@main 用例应转绿。
+2. `ActionOfExeaction` / `ActionOfMovData` / `GotoLableTakeItem` / `GotoLableTakeWItem` /
+   `ActionOfGiveItem`（给物/扣物路径，需要物品层：名字→索引→背包变更 → 两侧 `additem/delitem` 日志）。
+3. `ConditionOfCheckItem`、`ConditionOfCheckRangeMonCount`（后者等 S2 的崩溃处置结论后再定：
+   按同条件复现崩溃，或登记白名单）。
+4. 六类流程用例补齐（修理/仓库/行会/任务各 ≥1），每批跑 `flow-diff.py` 并回写本文件。

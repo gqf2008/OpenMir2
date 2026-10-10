@@ -34,6 +34,8 @@ struct FlowPlayer {
     items: Vec<(String, i32)>,
     log: Vec<String>,
     unit_status: HashMap<i32, i32>,
+    /// 任务标记位图（对应 C# `PlayObject.QuestFlag[]`）
+    quest_flag: [u8; 512],
     last_npc: i32,
     script: Option<usize>,
     goto_count: i32,
@@ -93,6 +95,26 @@ impl ScriptPlayer for FlowPlayer {
     }
     fn ms_string(&self, _n: usize) -> String {
         String::new()
+    }
+    fn set_quest_flag_status(&mut self, flag: i32, value: i32) {
+        self.log.push(format!("flag {flag} {value}"));
+        let idx = flag - 1;
+        if idx < 0 {
+            return;
+        }
+        let byte_idx = (idx / 8) as usize;
+        if byte_idx >= self.quest_flag.len() {
+            return;
+        }
+        let bit = 128u8 >> (idx % 8);
+        self.quest_flag[byte_idx] = if value == 0 {
+            !bit & self.quest_flag[byte_idx]
+        } else {
+            bit | self.quest_flag[byte_idx]
+        };
+    }
+    fn set_quest_unit_open_status(&mut self, index: i32, value: i32) {
+        self.log.push(format!("unitopen {index} {value}"));
     }
     fn set_quest_unit_status(&mut self, index: i32, value: i32) {
         self.unit_status.insert(index, value);
@@ -258,6 +280,7 @@ pub fn run(args: &[String]) -> ExitCode {
         items: player_items,
         log: Vec::new(),
         unit_status: HashMap::new(),
+        quest_flag: [0; 512],
         last_npc: 0,
         script: None,
         goto_count: 0,

@@ -94,7 +94,8 @@ class RunPlayer : DispatchProxy
     public int Level = 10;
     public List<UserItem> Items = new();
     public Dictionary<ushort, string> ItemNames;
-    public Dictionary<short, byte> Flags = new();
+    /// 任务标记位图（对应 C# `PlayObject.QuestFlag[]`：flag-1 → 字节下标/位号）
+    public byte[] QuestFlag = new byte[512];
     public UserItem[] UseItemsStub = Enumerable.Range(0, 12).Select(_ => new UserItem()).ToArray();
 
     static short ToShort(object o) => (short)Math.Clamp(Convert.ToInt32(o), short.MinValue, short.MaxValue);
@@ -179,10 +180,28 @@ class RunPlayer : DispatchProxy
             case "IsEnoughBag":
                 return true;
             case "GetQuestFalgStatus":
-                return Flags.TryGetValue(Convert.ToInt16(args[0]), out var f) ? f : (byte)0;
+                {
+                    var idx = Convert.ToInt32(args[0]) - 1;
+                    if (idx < 0) return (byte)0;
+                    var byteIdx = idx / 8;
+                    if (byteIdx >= QuestFlag.Length) return (byte)0;
+                    return (byte)((QuestFlag[byteIdx] & (128 >> (idx % 8))) != 0 ? 1 : 0);
+                }
             case "SetQuestFlagStatus":
-                Flags[ToShort(args[0])] = (byte)Math.Clamp(Convert.ToInt32(args[1]), 0, 255);
-                return null;
+                {
+                    var flag = Convert.ToInt32(args[0]);
+                    var value = Convert.ToInt32(args[1]);
+                    Log.Add($"flag {flag} {value}");
+                    var idx = flag - 1;
+                    if (idx < 0) return null;
+                    var byteIdx = idx / 8;
+                    if (byteIdx - QuestFlag.Length >= 0) return null;
+                    var bit = 128 >> (idx % 8);
+                    QuestFlag[byteIdx] = value == 0
+                        ? (byte)(~bit & QuestFlag[byteIdx])
+                        : (byte)(bit | QuestFlag[byteIdx]);
+                    return null;
+                }
             case "CheckItemCount":
                 {
                     var it = FindItem((string)args[0]);
@@ -325,6 +344,12 @@ static class RunMode
             // 参照实现崩溃也是可观测结果：输出已收集日志 + EX 标记行（供两侧对拍）
             foreach (var line in player.Log) Console.WriteLine(line);
             Console.WriteLine($"EX {ex.GetType().Name}");
+            // 栈顶三帧（定位 mock 缺口用；走 stderr，不参与两侧 stdout diff）
+            var frames = (ex.StackTrace ?? "").Split('\n');
+            for (int fi = 0; fi < frames.Length && fi < 4; fi++)
+            {
+                Console.Error.WriteLine("    at " + frames[fi].Trim());
+            }
             return 0;
         }
 
