@@ -11,6 +11,9 @@ members = [
     "crates/data",
     "crates/formula",
     "tests/parity",
+    # B 线：脚本引擎（crates/script）+ 工具（crates/script-tool）
+    "crates/script",
+    "crates/script-tool",
 ]
 
 # 多线共用 workspace：members 只按行追加自己的 crate，不改动别人的行（见设计文档 §12.4）。

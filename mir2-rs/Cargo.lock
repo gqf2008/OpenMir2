@@ -773,6 +773,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "mir2-script"
+version = "0.1.0"
+dependencies = [
+ "encoding_rs",
+]
+
+[[package]]
+name = "mir2-script-tool"
+version = "0.1.0"
+dependencies = [
+ "encoding_rs",
+ "mir2-script",
+]
+
+[[package]]
 name = "mir2-shared"
 version = "0.1.0"
 

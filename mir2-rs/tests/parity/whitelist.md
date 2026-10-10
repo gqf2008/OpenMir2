@@ -26,6 +26,13 @@
 | B-5 | `goldsales` 列名 `DealChrName`/`BuyChrName` 与 DDL 不符（见 D-5） | `MySqlDB.cs:264-265` → `crates/data/src/loaders.rs` |
 | B-6 | `LoadMonsterDB` 移动/攻击速度下限判断写了两遍（`_MAX(200,..)` 后再 `if <200`） | `MySqlDB.cs:213-224` → `crates/data/src/loaders.rs` |
 | B-7 | `RandomSelect` 异常消息写反（"selectCount必需大于sourceList.Count"，实际条件相反） | `RandomNumber.cs:53` → `crates/shared/src/rng.rs` |
+| B-8 | 脚本命令码位移：解析器存 `GetFields() 字段序号-1`（特判 CHECK/CHECKOPEN/CHECKUNIT/Set/ReSet/SetOpen/SetUnit/ResetUnit 存原值），执行注册表以枚举值为键 ⇒ 脚本命令派发到前一个枚举成员的处理器（如 CHECKLEVEL→ConditionCheckUnit；端到端实测 `take→ActionOfSet`、`break→ActionOfResetUnit`、`goto→switch 的 EndQuest 分支`） | `ScriptParsers.cs:329/501` → `crates/script/src/parser.rs`（code-1）；实证 `tests/parity/envir-2026-10-10/{handler-maps.txt,dispatch-shift-evidence.md}`。上游 2023-06-15 提交 8a8a02d1 引入；现网 ScriptSystem.dll（2026-10-09 构建）同此行为 |
+| B-9 | `IsStringNumber` 恒 true（`||` 缺陷 + 正则匹配空串） | `HUtil32.cs:477` → `crates/script/src/hutil32.rs` |
+| B-10 | `CaptureString` 从 c=1 起扫描（跳过 0 号引号）：dest 含开引号不含闭引号；无闭合/无空格抛 IndexOutOfRange | `HUtil32.cs:299-357` → `crates/script/src/hutil32.rs`（Err(CaptureStringPanic)） |
+| B-11 | `LoadScriptCallScript` 的 label 形同虚设：文件头到首个 `}` 之间的行全部并入 | `ScriptParsers.cs:80-111` → `crates/script/src/parser.rs` |
+| B-12 | 重复 `#CALL` 路径 `callList[i]="#ACT"` 越界即抛 ArgumentOutOfRange | `ScriptParsers.cs:163` → `crates/script/src/parser.rs`（LoadPanic::CallListOutOfRange） |
+| B-13 | `scriptType == 1` 死分支（从不赋 1），quest flag 头解析不执行 | `ScriptParsers.cs:794` → `crates/script/src/parser.rs`（unreachable 标记） |
+| B-14 | 常量替换要求匹配位置 > 0（行首命中不替换），每 define 每行至多 10 次 | `ScriptParsers.cs:634-650` → `crates/script/src/parser.rs` |
 
 ## A 线待观察项（C# 侧既有口径差——非对拍差异，M1/M2 移植网关时逐条处置）
 
@@ -38,3 +45,18 @@
 协议事实（M0 已裁定并冻结，非差异）：EDCode 循环态 2→4→6→2；客户端帧 `#1...!` /
 服务端帧 `#...!`；头 12B 与体分别编码后拼接；C# 网关无显式分帧器（按 TCP 段直读），
 Rust 侧 `FrameSplitter` 属传输层健壮性差异。
+
+## B 线登记
+
+| 编号 | 差异/豁免点 | 为什么无害 | 谁审的 |
+| --- | --- | --- | --- |
+| B-101 | Envir 全量解析的 427 条"脚本错误"（M4 验收①原文写"解析错误 = 0"） | 非两侧差异：C# 参照在同一份语料上产出同样的 427 条（逐行多重集差 0/0）。`TakeOn`/`GAMEGIRD`/`ReadRandomLine` 等命令在 C# 源码中不存在（LEGM2 等变体遗留），内容冻结下不可通过实现它们收敛。建议验收①口径修订为"双侧逐行一致" | B 线（待 owner 复核口径） |
+| B-102 | 重名 label 改名后缀：harness 反射播种 C# `Random(42)`，Rust 用复刻的 `System.Random(42)` | 两侧同种子同算法同消耗顺序（文件序一致），改名后的 label 已纳入**结构摘要**逐文件比对 ⇒ 后缀本身也在对拍范围内（639/639 指纹相同）。无参 Random 的固有不可复现性见 D-3 | B 线 |
+| B-106 | 与 D 线 `crates/shared` 的功能重叠：本线 `random.rs`（System.Random 带种子复刻）与 `textfile.rs` 的 FNV/切行可能与 D 线 `rng.rs` 实现重复 | 两侧当前各自正确、无行为差异；合并后应按"单一实现 + 引用"收敛（保留 `crates/shared` 版本，B 线改为依赖）。**归宿：批次 2 开工前的第一件事（合并后用 A 线门禁验证不回归）** | B 线（待合并后收敛） |
+| B-105 | GB2312(cp936) 字符集：.NET `Encoding.GetEncoding("gb2312")` 是 cp936，比 WHATWG GBK 多定义若干字节对（多映射到 PUA），且单字节特例 `0x80`→U+20AC、`0xFF`→U+F8F5、非法字节回退 `?`（encoding_rs 用 U+FFFD）。**已用生成表精确复刻**：`gbk_overrides.rs`（7032 条，由 `script-tool gen-gbk-overrides` 从 .NET 探测表机械生成）+ `textfile.rs` 状态机；穷举门禁 `tests/gbk_decode.rs` 覆盖全部 32256 个双字节对与边界单字节。回退字符按分支区分（.NET 实测：UTF-8/UTF-16/UTF-32 分支保留 U+FFFD，只有 cp936 用 `?`）；BOM 模型按 `StringList`（`StreamReader`）实测重写：`EF BB BF`→UTF-8、`FF FE`→UTF-16LE（`FF FE 00 00` 亦然）、`FE FF`→UTF-16BE、`00 00 FE FF`→UTF-32BE，其余 gb2312。语料实测命中过（`GuildRankNameFilter.txt` 的 `A8BF`），修正后 639/639 原文摘要一致 | 无残余差异（原为差异，已消除）；三字节以上序列由单/双字节组合推得，若今后遇组合型差异需重审 | B 线（独立审查两轮：A 线 F-R1 + code-review 技能） |
+| B-103 | `ToUpper`/`OrdinalIgnoreCase` 用 Unicode 简单大写折叠 + `eq_ignore_ascii_case` 近似 .NET 语义（D-2 同族） | C# `string.ToUpper()` 走 CurrentCulture；生产为 zh-CN、语料为 GBK 中文 + ASCII，两种规则在该域内判定相同（639 文件逐文件指纹一致）。若引入 tr-TR 等特殊文化需重审 | B 线 |
+| B-104 | 文件集口径：Rust 侧按 Win32 通配语义枚举 `*.txt`（扩展名前 3 字符为 txt，含 `x.txt2`），与 C# `Directory.GetFiles(root,"*.txt",AllDirectories)` 对齐 | 两侧文件集**逐条**比对（结构摘要表以相对路径为键），当前 639 == 639；新增/缺失文件会使门禁变红。注：设计文档 §2/§5.2 写 652、M4 验收①写 634，实测 M2GameSvr\Envir 递归 = 639、Mir200\Envir = 634（见 B-101 口径提请） | B 线 |
+
+证据：`tests/parity/envir-2026-10-10/`（双侧 parse-stats JSON + diff.txt + handler-maps.txt + SHA256SUMS）。
+复现命令见 `crates/script/README.md`。
+

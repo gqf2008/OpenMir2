@@ -1,0 +1,13 @@
+[package]
+name = "mir2-script-tool"
+version = "0.1.0"
+edition = "2021"
+description = "B 线脚本引擎工具：码表生成 / Envir 全量解析对拍"
+publish = false
+
+[dependencies]
+mir2-script = { path = "../script" }
+encoding_rs = "0.8"
+
+[lints]
+workspace = true
