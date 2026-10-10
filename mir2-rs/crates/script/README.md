@@ -11,6 +11,7 @@ OpenMir2 经典脚本语言的 Rust 1:1 移植。硬约束：客户端冻结、�
 - 码表：`codes.rs` 由 `script-tool gen-codes` 从 C# 源码机械生成（条件 207 / 动作 352 / 全局变量 158 对），漂移门禁 `codegen_drift` 测试。
 - RNG：`random.rs` 复刻 `System.Random` 带种子构造（.NET 8 CompatPrng / Knuth 减算法），序列与 .NET 逐位一致。
 - 对拍：`script-tool parse-stats`（Rust）与 `tools/script-parity-cs`（C# harness，DispatchProxy 假 NPC，只读引用参照实现，不改动任何 C# 参照代码）。
+- 解码层判据：`tools/gbk-probe`（C#，只读引用参照实现）——`pairs` 导出全部 32256 个 cp936 字节对映射（入库为 `tests/data/cp936-pairs.txt`），`bom` 打印 BOM 与各分支回退字符实测值。
 - 解码层（`textfile.rs` + `gbk_overrides.rs`）：BOM 按 `StringList`（`StreamReader`）实测模型——`EF BB BF`→UTF-8、`FF FE`→UTF-16LE（含 `FF FE 00 00`）、`FE FF`→UTF-16BE、`00 00 FE FF`→UTF-32BE，其余 gb2312；GB2312 解码为 **cp936 精确实现**——`0x80`→U+20AC、`0xFF`→U+F8F5、双字节对差异表（7032 条，由 `script-tool gen-gbk-overrides` 从 .NET 探测表机械生成），并由 `tests/gbk_decode.rs` 对全部 32256 个字节对做穷举门禁。
 - 结构摘要门禁（`digest.rs`）：逐文件把 label（含重名改名后的后缀）、`cmd_code`、六个字符串参数、六个数值参数、opname、say 文本压成 FNV-1a 64 指纹，两侧逐文件比对——计数相同但内容不同的缺陷（如命令码位移、字段归属、改名随机序列）同样会变红。
 

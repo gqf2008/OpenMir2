@@ -10,10 +10,10 @@ use std::path::Path;
 use crate::parser::ScriptFs;
 
 pub fn decode_bytes(bytes: &[u8]) -> String {
-    let text = decode_bytes_raw(bytes);
-    // .NET 代码页解码器的默认回退字符是 '?'（cp936 实测：非法字节 → U+003F），
-    // encoding_rs 用 U+FFFD —— 统一成 '?' 以对齐参照实现（见 whitelist B-105）。
-    text.replace('\u{FFFD}', "?")
+    // 注意：U+FFFD → '?' 的归一**只适用于 cp936 分支**（在 decode_gb2312 内完成）。
+    // .NET 的 UTF-8/UTF-16/UTF-32 解码器保留 U+FFFD（实测：UTF-8 BOM+0xFF → U+FFFD U+0041；
+    // UTF-16 孤立高代理 → U+FFFD），因此这里不做全局替换。
+    decode_bytes_raw(bytes)
 }
 
 /// GB2312(cp936) 解码：逐字节状态机 + 差异覆盖表（`gbk_overrides.rs`）。
@@ -193,6 +193,29 @@ mod tests {
             decode_bytes(&[0x00, 0x00, 0xFE, 0xFF, 0x00, 0x00, 0x00, 0x41]),
             "A"
         );
+    }
+
+    #[test]
+    fn invalid_sequence_fallback_per_branch_matches_dotnet() {
+        // .NET 实测（StringList.LoadFromFile）：
+        // UTF-8 BOM + 0xFF → U+FFFD U+0041（不是 '?'）
+        assert_eq!(decode_bytes(&[0xEF, 0xBB, 0xBF, 0xFF, 0x41]), "\u{FFFD}A");
+        // UTF-8 编码的代理码位 → 逐字节 U+FFFD（三个）
+        assert_eq!(
+            decode_bytes(&[0xEF, 0xBB, 0xBF, 0xED, 0xA0, 0x80]),
+            "\u{FFFD}\u{FFFD}\u{FFFD}"
+        );
+        // UTF-16LE/BE 孤立高代理 → U+FFFD + 'A'
+        assert_eq!(
+            decode_bytes(&[0xFF, 0xFE, 0x00, 0xD8, 0x41, 0x00]),
+            "\u{FFFD}A"
+        );
+        assert_eq!(
+            decode_bytes(&[0xFE, 0xFF, 0xD8, 0x00, 0x00, 0x41]),
+            "\u{FFFD}A"
+        );
+        // gb2312 分支：非法字节对 → 单个 '?'（成对消耗）+ 'A'
+        assert_eq!(decode_bytes(&[0x81, 0x20, 0x41]), "?A");
     }
 
     #[test]

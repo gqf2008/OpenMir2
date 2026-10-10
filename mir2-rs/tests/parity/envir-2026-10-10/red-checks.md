@@ -89,3 +89,17 @@ Rust 初版丢弃 ⇒ `动作 2 vs 1`。修正为"记录坐标 (script, record) 
 `StreamReader` 的 BOM 检测**优先于** `GetEncoding` 的结果，`FF FE` 一律按 UTF-16LE
 （`FF FE 00 00` 亦然，实测首字符 U+0000），`00 00 FE FF` 才走 UTF-32BE。
 Rust 侧据此重写（此前按 `byte3 != 0xFF` 守卫理解，是错的），并加 `bom_detection_matches_dotnet` 用例。
+
+## 红检 10：回退字符按分支区分（F-R5）
+
+用真实 `StringList.LoadFromFile` 实测（探针 `tools/gbk-probe bom` 可复现）：
+
+```
+EF BB BF FF 41        → U+FFFD U+0041      （UTF-8 分支保留 U+FFFD）
+EF BB BF ED A0 80     → U+FFFD ×3
+FF FE 00 D8 41 00     → U+FFFD U+0041      （UTF-16LE 孤立高代理）
+81 20 41（gb2312）     → U+003F U+0041      （cp936 成对消耗 → '?'）
+```
+
+初版把 `U+FFFD → '?'` 做成全局替换，会在这三个 BOM 分支给出 '?'（与 C# 不符）。
+已把替换下沉到 `decode_gb2312` 内部，并由 `invalid_sequence_fallback_per_branch_matches_dotnet` 钉住。

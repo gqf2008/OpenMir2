@@ -1,5 +1,8 @@
 //! GB2312(cp936) 解码的穷举门禁：对探测表里全部 32256 个双字节对 + 边界单字节，
-//! 断言 `decode_bytes` 的结果与 .NET cp936 完全一致（探测表由 C# 探针生成，见 tools/gbk-probe）。
+//! 断言 `decode_bytes` 的结果与 .NET cp936 完全一致。
+//! 探测表由入库探针生成，可重跑复现：
+//!   dotnet run --project mir2-rs/tools/gbk-probe -- pairs <out.txt>
+//! （实测重跑产物与本目录 tests/data/cp936-pairs.txt 逐字节相同。）
 //!
 //! 红检方式：改动 `gbk_overrides.rs` 任一映射或 `textfile.rs` 的字节状态机 → 该测试必须红。
 

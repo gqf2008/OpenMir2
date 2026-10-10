@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>gbk-probe</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- 直接引用参照实现：BOM 探针走真实 StringList.LoadFromFile -->
+    <ProjectReference Include="..\..\..\src\OpenMir2\OpenMir2.csproj" />
+  </ItemGroup>
+</Project>
