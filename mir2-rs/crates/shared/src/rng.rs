@@ -251,6 +251,87 @@ impl RandomNumber {
     }
 }
 
+/// 随机源抽象：让数值公式既能吃"同种子实现"（[`RandomNumber`]），
+/// 也能吃"记录-回放实现"（`crate::replay::ReplayRandom`）。
+///
+/// 方法集与 C# `RandomNumber` 的取数入口一一对应，见 [`RandomNumber`] 的对照表。
+pub trait RandomSource {
+    /// C# `int Random()`。
+    fn random(&mut self) -> i32;
+    /// C# `int Random(int value)`：`[0, value)`。
+    fn random_below(&mut self, value: i32) -> i32;
+    /// C# `int Random(int min, int max)`：`[min, max)`。
+    fn random_range(&mut self, min_value: i32, max_value: i32) -> i32;
+    /// C# `double NextDouble()`（记录-回放需要）。
+    fn next_double(&mut self) -> f64;
+    /// C# `GetRandomNumber(min, max)`：`[min, max]`（**含上界**）。
+    fn get_random_number(&mut self, min_value: i32, max_value: i32) -> i32 {
+        self.random_range(min_value, max_value.wrapping_add(1))
+    }
+    /// C# `byte RandomByte(byte value)`。
+    fn random_byte(&mut self, value: u8) -> u8 {
+        assert!(value < u8::MAX, "错误的数值");
+        self.random_below(i32::from(value)) as u8
+    }
+    /// C# `string GenerateRandomNumber(int Length)`。
+    fn generate_random_number(&mut self, length: usize) -> String {
+        let mut out = String::with_capacity(length);
+        for _ in 0..length {
+            out.push(CONSTANT[self.random_below(62) as usize]);
+        }
+        out
+    }
+    /// C# `IList<int> RandomSelect(IList<int>, int)`：不放回抽取，`source` 原地修改。
+    fn random_select(&mut self, source: &mut Vec<i32>, select_count: usize) -> Vec<i32> {
+        assert!(
+            select_count <= source.len(),
+            "selectCount必需大于sourceList.Count"
+        );
+        let mut result = Vec::with_capacity(select_count);
+        for _ in 0..select_count {
+            let next_index = self.get_random_number(1, source.len() as i32);
+            result.push(source.remove((next_index - 1) as usize));
+        }
+        result
+    }
+}
+
+impl RandomSource for DotNetRandom {
+    fn random(&mut self) -> i32 {
+        self.next_value()
+    }
+
+    fn random_below(&mut self, value: i32) -> i32 {
+        self.next_max(value)
+    }
+
+    fn random_range(&mut self, min_value: i32, max_value: i32) -> i32 {
+        self.next_range(min_value, max_value)
+    }
+
+    fn next_double(&mut self) -> f64 {
+        DotNetRandom::next_double(self)
+    }
+}
+
+impl RandomSource for RandomNumber {
+    fn random(&mut self) -> i32 {
+        RandomNumber::random(self)
+    }
+
+    fn random_below(&mut self, value: i32) -> i32 {
+        RandomNumber::random_below(self, value)
+    }
+
+    fn random_range(&mut self, min_value: i32, max_value: i32) -> i32 {
+        RandomNumber::random_range(self, min_value, max_value)
+    }
+
+    fn next_double(&mut self) -> f64 {
+        self.rng.next_double()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

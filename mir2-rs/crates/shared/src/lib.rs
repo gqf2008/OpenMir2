@@ -7,4 +7,5 @@
 pub mod hutil;
 /// `src/OpenMir2/HUtil32.cs` 的 1:1 逐函数移植（含原实现缺陷，见各函数文档）。
 pub mod hutil32;
+pub mod replay;
 pub mod rng;

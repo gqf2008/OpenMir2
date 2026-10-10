@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>RngSeedHook</AssemblyName>
+    <RootNamespace>RngSeedHook</RootNamespace>
+    <!-- 启动钩子要求：程序集内必须存在 internal class StartupHook { public static void Initialize() } -->
+  </PropertyGroup>
+</Project>

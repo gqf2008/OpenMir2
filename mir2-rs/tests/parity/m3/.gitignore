@@ -1,0 +1,3 @@
+# 快照 TSV 体积大（活库全表导出，单次 ~36MB），只保留 manifest（hash 证据）
+sessions/**/snap_before/
+sessions/**/snap_after/

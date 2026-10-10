@@ -9,7 +9,7 @@
 
 use mir2_data::models::{MonsterDropItem, StdItem, STD_MODE_MAP};
 use mir2_shared::hutil;
-use mir2_shared::rng::RandomNumber;
+use mir2_shared::rng::RandomSource;
 
 /// `src/OpenMir2/Packets/ClientPackets/ClientUserItem.cs` 的 `UserItem` 子集
 /// （掉落公式会写到的字段；`color_r/g/b`、`prefix` 掉落路径不触碰，略）。
@@ -103,7 +103,7 @@ impl ItemCatalog for VecItemCatalog<'_> {
 
 /// C# `GameItemSystem.GetUpgrade`（`GameItemSystem.cs:142`）：
 /// 连续成功计数，失败即停。
-fn get_upgrade(rng: &mut RandomNumber, count: i32, ran: i32) -> i32 {
+fn get_upgrade(rng: &mut impl RandomSource, count: i32, ran: i32) -> i32 {
     let mut result = 0;
     for _ in 0..count {
         if rng.random_below(ran) == 0 {
@@ -116,7 +116,7 @@ fn get_upgrade(rng: &mut RandomNumber, count: i32, ran: i32) -> i32 {
 }
 
 /// C# `UpgradeRandomWeapon`（`GameItemSystem.cs:182`）。
-fn upgrade_random_weapon(pu: &mut UserItem, rng: &mut RandomNumber) {
+fn upgrade_random_weapon(pu: &mut UserItem, rng: &mut impl RandomSource) {
     let mut up = get_upgrade(rng, 12, 15);
     if rng.random_below(15) == 0 {
         pu.desc[0] = (1 + up) as u8; // DC
@@ -157,7 +157,7 @@ fn upgrade_random_weapon(pu: &mut UserItem, rng: &mut RandomNumber) {
 }
 
 /// C# `UpgradeRandomDress`（`GameItemSystem.cs:234`）。
-fn upgrade_random_dress(pu: &mut UserItem, rng: &mut RandomNumber) {
+fn upgrade_random_dress(pu: &mut UserItem, rng: &mut impl RandomSource) {
     let mut up = get_upgrade(rng, 6, 15);
     if rng.random_below(30) == 0 {
         pu.desc[0] = (1 + up) as u8; // AC
@@ -187,7 +187,7 @@ fn upgrade_random_dress(pu: &mut UserItem, rng: &mut RandomNumber) {
 }
 
 /// C# `UpgradeRandomNecklace`（`GameItemSystem.cs:270`）。
-fn upgrade_random_necklace(pu: &mut UserItem, rng: &mut RandomNumber) {
+fn upgrade_random_necklace(pu: &mut UserItem, rng: &mut impl RandomSource) {
     let mut up = get_upgrade(rng, 6, 30);
     if rng.random_below(60) == 0 {
         pu.desc[0] = (1 + up) as u8; // AC(HIT)
@@ -217,7 +217,7 @@ fn upgrade_random_necklace(pu: &mut UserItem, rng: &mut RandomNumber) {
 }
 
 /// C# `UpgradeRandomBarcelet`（`GameItemSystem.cs:306`，原文拼写如此）。
-fn upgrade_random_barcelet(pu: &mut UserItem, rng: &mut RandomNumber) {
+fn upgrade_random_barcelet(pu: &mut UserItem, rng: &mut impl RandomSource) {
     let mut up = get_upgrade(rng, 6, 20);
     if rng.random_below(20) == 0 {
         pu.desc[0] = (1 + up) as u8; // AC
@@ -247,7 +247,7 @@ fn upgrade_random_barcelet(pu: &mut UserItem, rng: &mut RandomNumber) {
 }
 
 /// C# `UpgradeRandomNecklace19`（`GameItemSystem.cs:342`）。
-fn upgrade_random_necklace19(pu: &mut UserItem, rng: &mut RandomNumber) {
+fn upgrade_random_necklace19(pu: &mut UserItem, rng: &mut impl RandomSource) {
     let mut up = get_upgrade(rng, 6, 20);
     if rng.random_below(40) == 0 {
         pu.desc[0] = (1 + up) as u8;
@@ -277,7 +277,7 @@ fn upgrade_random_necklace19(pu: &mut UserItem, rng: &mut RandomNumber) {
 }
 
 /// C# `UpgradeRandomRings`（`GameItemSystem.cs:378`）。
-fn upgrade_random_rings(pu: &mut UserItem, rng: &mut RandomNumber) {
+fn upgrade_random_rings(pu: &mut UserItem, rng: &mut impl RandomSource) {
     let mut up = get_upgrade(rng, 6, 20);
     if rng.random_below(30) == 0 {
         pu.desc[2] = (1 + up) as u8; // DC
@@ -299,7 +299,7 @@ fn upgrade_random_rings(pu: &mut UserItem, rng: &mut RandomNumber) {
 }
 
 /// C# `UpgradeRandomRings23`（`GameItemSystem.cs:404`）。
-fn upgrade_random_rings23(pu: &mut UserItem, rng: &mut RandomNumber) {
+fn upgrade_random_rings23(pu: &mut UserItem, rng: &mut impl RandomSource) {
     let mut up = get_upgrade(rng, 6, 20);
     if rng.random_below(40) == 0 {
         pu.desc[0] = (1 + up) as u8;
@@ -329,7 +329,7 @@ fn upgrade_random_rings23(pu: &mut UserItem, rng: &mut RandomNumber) {
 }
 
 /// C# `UpgradeRandomHelmet`（`GameItemSystem.cs:440`）。
-fn upgrade_random_helmet(pu: &mut UserItem, rng: &mut RandomNumber) {
+fn upgrade_random_helmet(pu: &mut UserItem, rng: &mut impl RandomSource) {
     let mut up = get_upgrade(rng, 6, 20);
     if rng.random_below(40) == 0 {
         pu.desc[0] = (1 + up) as u8; // AC
@@ -359,7 +359,7 @@ fn upgrade_random_helmet(pu: &mut UserItem, rng: &mut RandomNumber) {
 }
 
 /// C# `GameItemSystem.RandomUpgradeItem`（`GameItemSystem.cs:1184`）。
-pub fn random_upgrade_item(std_item: &StdItem, pu: &mut UserItem, rng: &mut RandomNumber) {
+pub fn random_upgrade_item(std_item: &StdItem, pu: &mut UserItem, rng: &mut impl RandomSource) {
     match std_item.std_mode {
         5 | 6 => upgrade_random_weapon(pu, rng),
         10 | 11 => upgrade_random_dress(pu, rng),
@@ -374,7 +374,7 @@ pub fn random_upgrade_item(std_item: &StdItem, pu: &mut UserItem, rng: &mut Rand
 }
 
 /// C# `RandomSetUnknownHelmet`（`GameItemSystem.cs:476`）。
-fn random_set_unknown_helmet(pu: &mut UserItem, rng: &mut RandomNumber) {
+fn random_set_unknown_helmet(pu: &mut UserItem, rng: &mut impl RandomSource) {
     let mut up = get_upgrade(rng, 4, 3) + get_upgrade(rng, 4, 8) + get_upgrade(rng, 4, 20);
     if up > 0 {
         pu.desc[0] = up as u8; // AC
@@ -436,7 +436,7 @@ fn random_set_unknown_helmet(pu: &mut UserItem, rng: &mut RandomNumber) {
 }
 
 /// C# `RandomSetUnknownRing`（`GameItemSystem.cs:550`）。
-fn random_set_unknown_ring(pu: &mut UserItem, rng: &mut RandomNumber) {
+fn random_set_unknown_ring(pu: &mut UserItem, rng: &mut impl RandomSource) {
     let mut up = get_upgrade(rng, 3, 4) + get_upgrade(rng, 3, 8) + get_upgrade(rng, 6, 20);
     if up > 0 {
         pu.desc[2] = up as u8; // DC
@@ -483,7 +483,7 @@ fn random_set_unknown_ring(pu: &mut UserItem, rng: &mut RandomNumber) {
 }
 
 /// C# `RandomSetUnknownBracelet`（`GameItemSystem.cs:606`）。
-fn random_set_unknown_bracelet(pu: &mut UserItem, rng: &mut RandomNumber) {
+fn random_set_unknown_bracelet(pu: &mut UserItem, rng: &mut impl RandomSource) {
     let mut up = get_upgrade(rng, 3, 5) + get_upgrade(rng, 5, 20);
     if up > 0 {
         pu.desc[0] = up as u8; // AC
@@ -545,7 +545,7 @@ fn random_set_unknown_bracelet(pu: &mut UserItem, rng: &mut RandomNumber) {
 }
 
 /// C# `GameItemSystem.RandomSetUnknownItem`（`GameItemSystem.cs:1222`）。
-pub fn random_set_unknown_item(std_item: &StdItem, pu: &mut UserItem, rng: &mut RandomNumber) {
+pub fn random_set_unknown_item(std_item: &StdItem, pu: &mut UserItem, rng: &mut impl RandomSource) {
     match std_item.std_mode {
         15 => random_set_unknown_helmet(pu, rng),
         22 | 23 => random_set_unknown_ring(pu, rng),
@@ -577,7 +577,7 @@ pub struct DropOutcome {
 pub fn mon_get_random_items<C: ItemCatalog>(
     item_list: &[MonsterDropItem],
     catalog: &C,
-    rng: &mut RandomNumber,
+    rng: &mut impl RandomSource,
     mon_random_add_value: i32,
     gold_name: &str,
     item_number: &mut ItemNumberCounter,
@@ -626,6 +626,7 @@ pub fn mon_get_random_items<C: ItemCatalog>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mir2_shared::rng::RandomNumber;
 
     fn catalog(items: &[StdItem]) -> VecItemCatalog<'_> {
         VecItemCatalog { items }

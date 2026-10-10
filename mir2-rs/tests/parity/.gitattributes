@@ -1,3 +1,4 @@
 # 夹具与金标准为冻结字节：禁止行尾转换（GBK 编码 + 全文本对拍）
 fixtures/** -text
 golden/** -text
+m3/fixtures/** -text
