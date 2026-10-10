@@ -9,6 +9,7 @@ members = [
     # D 线：数据层 + 数值公式
     "crates/shared",
     "crates/world",
+    "crates/world-bevy",
     "crates/data",
     "crates/formula",
     "tests/parity",

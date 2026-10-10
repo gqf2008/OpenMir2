@@ -1,0 +1,6 @@
+     Running `target\release\drop_bench.exe`
+# D3 试验田：掉落预算路径成本（32 只怪/次，2000 次）
+路径                              P50us    P99us    maxus
+bevy_ecs（含建 world）                 52      105      604
+bevy_ecs（常驻 world）                 21       48      281
+既有实现（直接调用）                         11       18       44

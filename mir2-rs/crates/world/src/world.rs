@@ -836,6 +836,31 @@ mod tests {
         assert!(hits.contains(&false));
     }
 
+    /// 掉线：离开世界、会话留在 `Left`（与"小退"的区别：不计数 softclose、语义上不可再进同一会话实例）。
+    #[test]
+    fn session_disconnect_leaves_world_without_softclose_count() {
+        let mut w = World::with_maps(vec![(16, 16)]);
+        w.open_session("hero");
+        let mut e = Entity::new(0, "hero", 3, 3);
+        e.race = ACTOR_RACE_PLAY;
+        let id = w.enter_map("hero", e, 0).unwrap();
+        assert_eq!(w.map(0).cell(3, 3).count(), 1);
+
+        w.disconnect("hero").unwrap();
+        assert!(w.entities.get(id).is_none(), "掉线后实体应从世界移除");
+        assert_eq!(w.map(0).cell(3, 3).count(), 0, "掉线必须清掉格子登记");
+        let sess = w.session("hero").unwrap();
+        assert_eq!(sess.stage, crate::session::WorldStage::Left);
+        assert_eq!(sess.actor_id, None);
+        assert_eq!(sess.soft_close_count, 0, "掉线不计入小退次数");
+
+        // 掉线后再掉线是非法转移（显式报错，不静默）
+        assert_eq!(
+            w.disconnect("hero").unwrap_err(),
+            crate::session::SessionError::NotInWorld
+        );
+    }
+
     /// 会话状态机：进图 → 切图 → 小退 → 再进（新的 actor_id），并且视野列表整体失效。
     #[test]
     fn session_state_machine_enter_switch_softclose_reenter() {
