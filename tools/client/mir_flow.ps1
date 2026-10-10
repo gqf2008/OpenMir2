@@ -116,7 +116,14 @@ Start-Sleep -Seconds 2
 if ($HookOut -ne "") { $env:MIR2_HOOK_OUT = $HookOut }   # 必须在 Start-Process 之前：子进程继承
 Start-Process -FilePath "$RunDir\run-release.cmd" -WorkingDirectory $RunDir
 Start-Sleep -Seconds 14
-$p = Get-Process MirClinet -ErrorAction SilentlyContinue | Select-Object -First 1
+# 客户端可能起得慢（机器忙时 14 秒不够）：轮询等进程出现，最多再等 50 秒
+$p = $null
+$deadlineW = (Get-Date).AddSeconds(50)
+while ((Get-Date) -lt $deadlineW) {
+  $p = Get-Process MirClinet -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($p) { break }
+  Start-Sleep -Milliseconds 500
+}
 if (-not $p) { throw "客户端进程 MirClinet 未起来" }
 $script:hwnd = $p.MainWindowHandle
 Write-Output "CLIENT_PID=$($p.Id)"
@@ -185,8 +192,16 @@ function Send-Bs([int]$times = 25) {
 }
 
 function Shot([string]$name) {
+  # 每次都重取主窗口句柄：客户端切场景/重建渲染设备后会换句柄，
+  # 用旧句柄 GetWindowRect 会给无效矩形 → Bitmap 构造抛 "Parameter is not valid"。
+  $pf = Get-Process MirClinet -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+  if ($pf) { $script:hwnd = $pf.MainWindowHandle }
   $r = New-Object MirFlow+RECT
   [void][MirFlow]::GetWindowRect($script:hwnd, [ref]$r)
+  if (($r.R - $r.L) -le 0 -or ($r.B - $r.T) -le 0) {
+    Write-Output ("SHOT_SKIP " + $name + "（窗口矩形无效，客户端可能已退出）")
+    return
+  }
   $bmp = New-Object System.Drawing.Bitmap(($r.R - $r.L), ($r.B - $r.T))
   $g = [System.Drawing.Graphics]::FromImage($bmp)
   $dc = $g.GetHdc()
@@ -360,6 +375,24 @@ if ($KickVia -ne "") {
   if ($kickProc -and -not $kickProc.HasExited) { Stop-Process -Id $kickProc.Id -Force -ErrorAction SilentlyContinue }
   Start-Sleep -Seconds 2
 }
+
+# ---- 小退首选路径：点底部条的「小退」按钮（客户端自带入口，鼠标 PostMessage）----
+# 依据：DBotLogoutClick → TfrmMain.AppLogout → 确认框 → CM_SOFTCLOSE(1009)。
+# 坐标由客户端布局代码算出：DBottom.Top = SCREENHEIGHT-251（FState.pas:2446），
+# 「小退」按钮 DBotLogout 相对条内 (754,104) ⇒ 绝对 (754,621)（「退出」DBotExit 是 784,621）。
+# 先悬停截图（悬停会弹提示「小退(ALT-X)」，FState.pas:16428），作为"点对位置"的证据。
+Stage "logout_button"
+$lb = "754,621".Split(",") | ForEach-Object { [int]$_ }
+[void][MirFlow]::SetForegroundWindow($script:hwnd)
+Start-Sleep -Milliseconds 300
+[void][MirFlow]::SetCursorPos(($pt.X + $lb[0]), ($pt.Y + $lb[1]))
+$lpBtn = [IntPtr](($lb[1] -shl 16) -bor ($lb[0] -band 0xFFFF))
+[void][MirFlow]::PostMessage($script:hwnd, 0x0200, [IntPtr]0, $lpBtn)
+Start-Sleep -Milliseconds 800
+Shot "07a_logout_btn_hover.png"
+Send-Click $lb[0] $lb[1] 1
+Start-Sleep -Seconds 2
+Shot "07b_logout_confirm_dlg.png"
 
 Stage "logout_alt_x"
 # 小退入口有两条，依次试（客户端 ClMain.pas 的 `Word('X')` 分支 vs FState.pas 的

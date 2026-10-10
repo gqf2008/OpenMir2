@@ -276,6 +276,100 @@ pub fn encode_server_frame(head: &CommandMessage, encoded_body: &[u8]) -> Vec<u8
     encode_server_frame_tail(head, encoded_body, ServerFrameTail::Bang)
 }
 
+/// 服务端→客户端帧的**体分段布局**。
+///
+/// 线上事实（C2 金标准 222 帧实测 + C# 源核对）：服务端某些消息的体**不是单段编码**，
+/// 而是把若干段**各自独立编码后拼接**（每段各自从编码器初态开始）。
+/// 单段编码的可产长度为 `n + ceil(n/3)`；实测不符帧的 payload 长度全为 `≡1 (mod 4)`，
+/// 而该长度**不可能**由任何单段编码产出 ⇒ 必然是多段拼接。例：
+/// - `SM_TURN` 家族（`6/7/9/10`）：`EncodePacket(CharDesc{int,int}=8B) + EncodeString($"{{Msg}}/{{color}}")`
+///   （`M2Server/Player/PlayObject.Message.cs:1541-1552`）；
+/// - `ident=811`（`SM_ADJUST_BONUS`）等其它多段形态待逐消息号补表（见 whitelist A-8）。
+///
+/// 判据仍是**真判据**：分段由本表决定（不是从字节里搜出来的），选错段长就编不出原字节。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BodyLayout {
+    /// 体是单段编码（默认）。
+    Single,
+    /// 体 = `编码(前 N 字节结构)` + `[编码(其余字节)]`（两段各自独立编码）。
+    StructThenRest {
+        /// 首段结构字节数（SM_TURN 家族为 `CharDesc` = 8）。
+        struct_len: usize,
+    },
+}
+
+/// 按消息号给出体分段布局（表驱动；未登记的消息号按 [`BodyLayout::Single`]）。
+#[must_use]
+pub fn body_layout(ident: u16) -> BodyLayout {
+    use crate::messages;
+    match ident {
+        // SM_RUSH(6) / SM_RUSHKUNG(7) / SM_BACKSTEP(9) / SM_TURN(10)：CharDesc + 可选文本
+        messages::SM_RUSH | messages::SM_RUSHKUNG | messages::SM_BACKSTEP | messages::SM_TURN => {
+            BodyLayout::StructThenRest { struct_len: 8 }
+        }
+        _ => BodyLayout::Single,
+    }
+}
+
+/// 按布局把线上 payload（已去掉 `#`/`!`）**分段解码**成 12B 头 + 明文体。
+///
+/// 为什么必须分段解：多段帧的段边界不在 4 字符编码周期上，整段解码会错位
+/// （C# 侧同样如此 —— 它先按 `DEFBLOCKSIZE=16` 取头，再按约定切体）。
+#[must_use]
+pub fn decode_server_payload(payload: &[u8]) -> Option<(CommandMessage, Vec<u8>)> {
+    const HEAD_BLOCK: usize = 16; // enc(12B) 恒为 16 字符
+    if payload.len() < HEAD_BLOCK {
+        return None;
+    }
+    let head = CommandMessage::from_bytes(&edcode::decode(&payload[..HEAD_BLOCK]))?;
+    let rest = &payload[HEAD_BLOCK..];
+    let body = match body_layout(head.ident) {
+        BodyLayout::Single => edcode::decode(rest),
+        BodyLayout::StructThenRest { struct_len } => {
+            let first = edcode::encoded_len(struct_len);
+            if rest.len() <= first {
+                edcode::decode(rest)
+            } else {
+                let mut out = edcode::decode(&rest[..first]);
+                out.extend_from_slice(&edcode::decode(&rest[first..]));
+                out
+            }
+        }
+    };
+    Some((head, body))
+}
+
+/// 按布局把**已解码的体字节**重新编码为线上体（各段独立编码后拼接）。
+#[must_use]
+pub fn encode_body(decoded_body: &[u8], layout: BodyLayout) -> Vec<u8> {
+    match layout {
+        BodyLayout::Single => edcode::encode(decoded_body),
+        BodyLayout::StructThenRest { struct_len } => {
+            if decoded_body.len() <= struct_len {
+                // 短于首段结构：无第二段（C# 侧 `EncodePacket` 之后不拼文本）
+                return edcode::encode(decoded_body);
+            }
+            let mut out = edcode::encode(&decoded_body[..struct_len]);
+            out.extend_from_slice(&edcode::encode(&decoded_body[struct_len..]));
+            out
+        }
+    }
+}
+
+/// 构造服务端→客户端帧，按消息号的体布局分段编码（推荐入口）。
+#[must_use]
+pub fn encode_server_frame_layout(
+    head: &CommandMessage,
+    decoded_body: &[u8],
+    tail: ServerFrameTail,
+) -> Vec<u8> {
+    encode_server_frame_tail(
+        head,
+        &encode_body(decoded_body, body_layout(head.ident)),
+        tail,
+    )
+}
+
 /// 构造服务端→客户端帧，显式指定帧尾形态（回放时按抓到的原样复现）。
 #[must_use]
 pub fn encode_server_frame_tail(

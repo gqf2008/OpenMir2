@@ -150,7 +150,11 @@ fn oracle_vectors_byte_exact() {
                 let raw = hex::decode(rec.raw_hex.as_deref().unwrap()).unwrap();
                 let dir = rec.dir.as_deref().unwrap_or("c2s");
                 let parsed = match dir {
-                    "s2c" => frame::decode_server_frame(&raw),
+                    "s2c" => frame::decode_server_payload(
+                        &raw[1..raw.len() - if raw.last() == Some(&b'$') { 2 } else { 1 }],
+                    )
+                    .map(|(head, body)| frame::ClientMessage { head, body })
+                    .ok_or(frame::FrameError::MissingTail),
                     _ => frame::decode_client_frame(&raw),
                 };
                 let msg = match parsed {
@@ -186,9 +190,9 @@ fn oracle_vectors_byte_exact() {
                 // ① decode→encode 与原字节一致
                 let reenc = match dir {
                     // s2c 帧尾有两种形态（LoginSrv `!$` / 网关 `!`），按原样复现
-                    "s2c" => frame::encode_server_frame_tail(
+                    "s2c" => frame::encode_server_frame_layout(
                         &msg.head,
-                        &edcode::encode(&msg.body),
+                        &msg.body,
                         frame::decode_server_frame_ex(&raw).unwrap().1,
                     ),
                     _ => frame::encode_client_frame(&msg.head, &msg.body),
