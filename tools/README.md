@@ -19,6 +19,7 @@ tools/botload/run_bots.ps1    假人压测驱动（BotSrv N 并发登录）     
 tools/logdiff/timeline.py     多源日志归一 + 时间线对拍                      selftest（2 项）
 tools/dbsnap/dbsnap.py        MySQL 快照/字段级比对                          selftest（2 项）
 tools/e2e/run_e2e.ps1         E2E 回归套件（工具自测+金标准+流程+冒烟）      -SelfTestRed
+tools/oracle/                 S1 线：oracle 部署件对账 / 铺部署 / 网关重连门禁（见 tools/oracle/README.md）  -SelfTestRed
 ```
 
 ## 0. 一次跑完全部自测（不需起服务端）

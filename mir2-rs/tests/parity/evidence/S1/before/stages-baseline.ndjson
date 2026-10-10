@@ -1,0 +1,8 @@
+﻿{"t_wall_ms":1791621899046,"stage":"start"}
+{"t_wall_ms":1791621915199,"stage":"login_id"}
+{"t_wall_ms":1791621917763,"stage":"login_pwd"}
+{"t_wall_ms":1791621920235,"stage":"login_submit"}
+{"t_wall_ms":1791621926107,"stage":"charsel"}
+{"t_wall_ms":1791621926146,"stage":"enter_game"}
+{"t_wall_ms":1791621927878,"stage":"notice_poll"}
+{"t_wall_ms":1791621948863,"stage":"ingame"}

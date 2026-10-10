@@ -1,0 +1,124 @@
+# M0/M1 本地门禁重跑（S1，2026-10-10）—— oracle 修复后按卡片要求复跑
+# 逐条退出码（脚本 /e/tmp 临时脚本已随本批清理，命令见下）；原始输出见本文件各节
+
+$ cd mir2-rs
+$ cargo fmt --all -- --check                                   # EXIT=0
+$ cargo clippy --workspace --all-targets -- -D warnings       # EXIT=0
+$ cargo test --workspace                                      # EXIT=0（114 passed / 0 failed）
+$ cargo run -p msgcodegen -- --check                          # EXIT=0（604 条常量与 C# 源一致）
+$ cargo run -p replay -- tests/parity/vectors/oracle_vectors.jsonl   # EXIT=0（跑两遍，两遍一致）
+$ cargo run -p replay -- tests/golden/c-line-baseline-c2-20261010.jsonl  # EXIT=1（A3 在册问题，见报告 §7）
+
+===== cargo test --workspace（汇总行） =====
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.44s
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+passed 合计 = 114   failed 合计 = 0
+
+===== msgcodegen -- --check =====
+     Running `target\debug\msgcodegen.exe --check`
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+
+===== replay: oracle_vectors.jsonl（第 1 遍） =====
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling serde_core v1.0.229
+   Compiling serde_json v1.0.151
+   Compiling serde v1.0.229
+   Compiling digest v0.10.7
+   Compiling sha2 v0.10.9
+   Compiling syn v3.0.7
+   Compiling serde_derive v1.0.229
+   Compiling mir2-protocol v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\s1-oracle-fixes\mir2-rs\crates\protocol)
+   Compiling replay v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\s1-oracle-fixes\mir2-rs\tools\replay)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.20s
+     Running `target\debug\replay.exe tests/parity/vectors/oracle_vectors.jsonl`
+== replay report: tests/parity/vectors/oracle_vectors.jsonl ==
+frames: 56 (其中纯字符串帧 3), edcode vectors: 1072
+内部帧（MemoryPack）: 15
+byte mismatches (①): 0
+field mismatches (②): 0
+distinct idents: 24
+unknown idents (未实现): 0
+stage coverage (③):
+  小退: 2 idents hit
+  建角: 2 idents hit
+  攻击: 3 idents hit
+  登录: 4 idents hit
+  移动: 3 idents hit
+  进世界: 4 idents hit
+  选服: 2 idents hit
+  选角: 2 idents hit
+RESULT: GREEN
+
+===== replay: oracle_vectors.jsonl（第 2 遍） =====
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running `target\debug\replay.exe tests/parity/vectors/oracle_vectors.jsonl`
+== replay report: tests/parity/vectors/oracle_vectors.jsonl ==
+frames: 56 (其中纯字符串帧 3), edcode vectors: 1072
+内部帧（MemoryPack）: 15
+byte mismatches (①): 0
+field mismatches (②): 0
+distinct idents: 24
+unknown idents (未实现): 0
+stage coverage (③):
+  小退: 2 idents hit
+  建角: 2 idents hit
+  攻击: 3 idents hit
+  登录: 4 idents hit
+  移动: 3 idents hit
+  进世界: 4 idents hit
+  选服: 2 idents hit
+  选角: 2 idents hit
+RESULT: GREEN
+
+===== replay: tests/golden/c-line-baseline-c2-20261010.jsonl =====
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running `target\debug\replay.exe tests/golden/c-line-baseline-c2-20261010.jsonl`
+== replay report: tests/golden/c-line-baseline-c2-20261010.jsonl ==
+frames: 222 (其中纯字符串帧 1), edcode vectors: 0
+内部帧（MemoryPack）: 0
+byte mismatches (①): 56
+field mismatches (②): 0
+distinct idents: 43
+unknown idents (未实现): 4
+  unknown ident: 84
+  unknown ident: 1200
+  unknown ident: 10431
+  unknown ident: 10433
+-- first diffs --
+line 28: byte round-trip mismatch (seq Some(28), ident 811)
+line 30: byte round-trip mismatch (seq Some(30), ident 10)
+line 32: byte round-trip mismatch (seq Some(32), ident 10)
+line 34: byte round-trip mismatch (seq Some(34), ident 10)
+line 36: byte round-trip mismatch (seq Some(36), ident 10)
+line 38: byte round-trip mismatch (seq Some(38), ident 10)
+line 40: byte round-trip mismatch (seq Some(40), ident 10)
+line 42: byte round-trip mismatch (seq Some(42), ident 10)
+line 44: byte round-trip mismatch (seq Some(44), ident 10)
+line 46: byte round-trip mismatch (seq Some(46), ident 10)
+stage coverage (③):
+  小退: 0 idents hit
+  建角: 2 idents hit
+  攻击: 2 idents hit
+  登录: 2 idents hit
+  移动: 4 idents hit
+  进世界: 6 idents hit
+  选服: 2 idents hit
+  选角: 2 idents hit
+RESULT: RED
+error: process didn't exit successfully: `target\debug\replay.exe tests/golden/c-line-baseline-c2-20261010.jsonl` (exit code: 1)

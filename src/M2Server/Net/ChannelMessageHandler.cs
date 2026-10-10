@@ -466,6 +466,12 @@ namespace M2Server.Net
         /// </summary>
         public void SetGateUserList(int nSocket, IPlayerActor playObject)
         {
+            // 与 CloseUser 同款前置守卫：网关槽位已释放时 UserList 为 null，
+            // 世界线程（WorldServer.ProcessHumans）每 tick 都会调到这里，不能靠调用方兜异常
+            if (GateInfo == null || GateInfo.UserList == null)
+            {
+                return;
+            }
             HUtil32.EnterCriticalSection(RunSocketSection);
             try
             {

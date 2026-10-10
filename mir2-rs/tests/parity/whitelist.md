@@ -72,3 +72,15 @@ M0 金标准验收状态（2026-10-10）：① 逐字节回放 0 差异、② �
 | 编号 | 差异/豁免点 | 为什么无害 | 谁审的 |
 | --- | --- | --- | --- |
 | T-1 | 改动 `src/BotSrv/**`：`LogService` 引用修正（`BotShare.LogService` → `OpenMir2.LogService`）、空角色列表解码守卫（`SelectChrScene.ClientGetReceiveChrs` 对空 body 不再抛 `ArgumentNullException`）、新增 `SocketShim.cs`（上游 `ScoketClient`/`DSCClient*` 被移除后按原 API 表面用 `System.Net.Sockets` 重写）、`AppServer` 的 Host 与 Serilog 装配（`LogService.Logger` 必须先赋值） | BotSrv **不在 oracle 七进程内**：不监听 oracle 端口、不被其它组件依赖，仅作压测/夹具客户端。改动前它无法编译（依赖的类型已在上游重构中删除）、编出来也起不来（`LogService.Logger` 未初始化）；改动后可编可跑，200 并发登录实测 200/200、0 失败。oracle 二进制与配置未被触碰（§13.1 时间戳复核可证：网关 2026-10-09 01:18、`M2Server.dll` 2026-10-10 00:10） | 协调者（§13.4-1 判为工具侧例外并接受） |
+
+## S1 登记（oracle 缺陷修复；owner 2026-10-10 决策"修"，见设计文档 §15）
+
+> 纪律（卡片 `openmir2-s1-oracle-defects`）：oracle 已修 ⇒ **Rust 侧默认复刻旧行为**做对拍，
+> 待 M3 之后再按需切到新行为；改前/改后行为各留记录；修后重跑 M0/M1 门禁。
+> 记录与证据：`evidence/S1/S1-报告.md`、`evidence/S1/before/`、`evidence/S1/after/`。
+
+| 编号 | 差异/豁免点 | 为什么无害 | 谁审的 |
+| --- | --- | --- | --- |
+| T-2 | 改动 `src/M2Server/Net/TCP/TCPNetChannel.cs` 与 `src/M2Server/Net/ChannelMessageHandler.cs`：GameSvr 的网关槽位不再按 TCP accept 序绑定（原 `int.Parse(SocketId) - 1`），改为「连接 SocketId → 槽位」映射；`CloseGate` 释放槽位并摘除映射；`Connecting` 按**最小空闲槽**重新分配；世界侧 `SetGateUserList`/`AddGateBuffer`/`CloseUser` 加越界与空槽守卫，收包线程取到空槽改为丢弃 | 这是**修 oracle 缺陷①**（§13.4-5 登记：旧网关断开把槽位 `UserList` 置 null ⇒ 之后进世界的玩家在 `SetGateUserList` 上 NRE 死循环、客户端黑屏且此后每次登录都失败，直到重启 GameSvr）。**正常路径行为逐项不变**（网关不抖动 / 单网关时槽位分配结果与改前一致），唯一可观测变化是「抖动后还能不能继续用」。残留边界：多网关配置下若各网关**不按声明编号顺序**重连，最小空闲槽仍可能错配（改前是同场景必错并 NRE）——本部署只配了一个 GameGate，故不构成实际差异，已在报告里记为 accepted risk。**Rust 侧默认复刻旧行为**（槽位按 accept 序、断开不释放），M3 之后再按需切换到本修复 | S1 登记（作者 `openmir2-svc-1`）→ 待独立 principal 复核 + coordinator 批准 |
+| T-3 | oracle 部署件版本对账：`E:\MirServer\M2GameSvr` 由「两批次混装」整体刷新为**同一份构建**（混装见 `evidence/S1/before/reconcile.md`：`M2Server.dll`/`GameSrv.dll`/`GameSrv.deps.json` 是 2026-10-10 00:10 的构建，而 `OpenMir2.dll`/`SystemModule.dll`/`ScriptSystem.dll`/`CommandSystem.dll`/`PlanesSystem.dll`/`GameSrv.exe` 还是 2026-10-09 01:18~21:53 的）；`E:\MirServer` 下 5 个未声明目录（`Mir200`/`CloudGate`/`DBServer`/`LoginSrv`/`MakePlay`）核定为**旧血统内容副本**（macOS 发布件、`.NETCoreApp,Version=v6.0`、程序集名 `GameSvr.dll`），不是 oracle，本机不可运行 | 刷新前的混装本身就是 §13.4-5 登记的缺陷②（"部署件与源码版本漂移"）；刷新后部署件 = 当前 master 的一次 Release 构建（含 T-2 修复），与 `crates/protocol` 消息号表所对的**同一份源码**同源，反而消除了"Rust 对着 A 版源码、oracle 跑 B 版二进制"的错位。日志、`Envir`/`Map`/`Castle` 内容目录、`*.conf`、三方件与 `IPLocal.dll` 插件均未触碰；`Mir200` 等旧目录仅登记不删（其 `Envir` 是设计文档 §2 引用的内容副本）。已录制的金标准是历史数据，不受影响；**此后任何新抓包/对拍都以刷新后的部署为准** | S1 登记（作者 `openmir2-svc-1`）→ 待独立 principal 复核 + coordinator 批准 |
+
