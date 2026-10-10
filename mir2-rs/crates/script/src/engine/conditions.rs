@@ -22,6 +22,7 @@ impl Engine<'_, '_> {
             "ConditionOfSmall" => self.cond_var_cmp(info, result, std::cmp::Ordering::Less),
             "ConditionOfRandom" => self.cond_random(info, result),
             "ConditionOfCheckSlaveListCount" => self.cond_slave_list_count(info, result),
+            "ConditionOfCheckItem" => self.cond_check_item(info, result),
             other => {
                 // 不应发生：dispatch 表判定为已实现却没有分支
                 self.errors.push(EngineError::NotImplemented {
@@ -89,6 +90,21 @@ impl Engine<'_, '_> {
             Some(v) => v.cmp(&rhs) == want,
             None => false,
         };
+    }
+
+    /// `ConditionOfCheckItem`：`success = true;` 变量替换后
+    /// `playerActor.QuestCheckItem(s01, ref n1C, ...)`，`n1C < nParam2 → false`。
+    ///
+    /// 待核对：C# `PlayObject.QuestCheckItem` 的计数范围（背包/佩戴位）与耐久统计——
+    /// 本实现按背包件数（`item_count`）计；若某些脚本依赖佩戴位计数，flow-diff 会暴露差异。
+    fn cond_check_item(&mut self, info: &QuestConditionInfo, result: &mut bool) {
+        *result = true;
+        // C#: GetVarValue(playerActor, sParam1, ref s01)（变量替换；无变量层时原样）
+        let name = &info.s_param1;
+        let count = self.player.item_count(name);
+        if count < info.n_param2 {
+            *result = false;
+        }
     }
 
     /// `ConditionOfCheckSlaveListCount`（C# 缺陷照搬）：

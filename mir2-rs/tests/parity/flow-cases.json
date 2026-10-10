@@ -34,7 +34,6 @@
       "flag 0 1",
       "err(rust) NotImplemented { kind: \"condition\", code: 129, handler: \"ConditionOfCheckRangeMonCount\" }",
       "err [脚本错误]  脚本命令:MobFireburn NPC名称:测试NPC 地图:0(100:200) 参数1:当前佩带的〈祈福项链〉已做过复原 参数2: 参数3: 参数4: 参数5: 参数6:",
-      "err(rust) NotImplemented { kind: \"condition\", code: 10, handler: \"ConditionOfCheckItem\" }",
       "#gold=100000",
       "#items=祈福项链,祝福油"
     ]
