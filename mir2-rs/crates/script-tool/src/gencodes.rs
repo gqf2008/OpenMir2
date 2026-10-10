@@ -276,7 +276,6 @@ pub static GROBAL_VAR_PAIRS: &[(&str, &str)] = &["
     out
 }
 
-
 /// 派发表（执行侧注册 + ScriptEngine switch 分支），供验收③「未实现命令清单」与求值器移植。
 #[derive(Debug, Default)]
 pub struct HandlerTables {
@@ -290,8 +289,10 @@ pub struct HandlerTables {
     pub engine_switch_executions: Vec<(i32, String)>,
 }
 
-fn enum_value_by_member<'a>(defs: &'a [CodeDef], member: &str) -> Option<i32> {
-    defs.iter().find(|d| d.member == member).map(|d| d.enum_value)
+fn enum_value_by_member(defs: &[CodeDef], member: &str) -> Option<i32> {
+    defs.iter()
+        .find(|d| d.member == member)
+        .map(|d| d.enum_value)
 }
 
 /// 解析 `_conditionMap[(int)ConditionCode.X] = Handler;` 形式（前缀可配）。
@@ -330,7 +331,11 @@ fn parse_registrations(
 }
 
 /// 解析 `ScriptEngine` 里的 `case ExecutionCode.X:` / `case (int)ConditionCode.X:`。
-fn parse_switch_cases(src: &str, enum_name: &str, defs: &[CodeDef]) -> Result<Vec<(i32, String)>, String> {
+fn parse_switch_cases(
+    src: &str,
+    enum_name: &str,
+    defs: &[CodeDef],
+) -> Result<Vec<(i32, String)>, String> {
     let mut out = Vec::new();
     for line in src.lines() {
         let line = line.trim();
@@ -363,7 +368,9 @@ pub fn generate_handlers(
     condition: &[CodeDef],
     execution: &[CodeDef],
 ) -> Result<HandlerTables, String> {
-    let read = |p: &Path| std::fs::read_to_string(p).map_err(|e| format!("读取 {} 失败: {e}", p.display()));
+    let read = |p: &Path| {
+        std::fs::read_to_string(p).map_err(|e| format!("读取 {} 失败: {e}", p.display()))
+    };
     let cond_src = read(&script_engine_dir.join("Processings/ConditionProcessingSys.cs"))?;
     let exec_src = read(&script_engine_dir.join("Processings/ExecutionProcessingSys.cs"))?;
     let engine_src = read(&script_engine_dir.join("ScriptEngine.cs"))?;
@@ -391,6 +398,7 @@ pub fn generate_handlers(
 }
 
 pub fn emit_handlers_rust(t: &HandlerTables) -> String {
+    // 收尾不留多余空行：rustfmt 会去掉文件末尾空行，保持"生成即可 fmt-check 通过"
     let mut out = String::new();
     let _ = writeln!(
         out,
@@ -405,7 +413,7 @@ pub fn emit_handlers_rust(t: &HandlerTables) -> String {
         out,
         "//! 注意：键是 **枚举值**（C# 注册用 `(int)XxxCode.Member`）；解析器产出的 CmdCode 对普通\n//! 命令是「字段序号-1」（= 枚举值-1），因此脚本命令命中的是**前一个**枚举成员的注册项。"
     );
-    let mut table = |out: &mut String, name: &str, rows: &[(i32, String)], doc: &str| {
+    let table = |out: &mut String, name: &str, rows: &[(i32, String)], doc: &str| {
         let _ = writeln!(out, "/// {doc}（{} 条）", rows.len());
         let _ = writeln!(out, "#[rustfmt::skip]");
         let _ = writeln!(out, "pub static {name}: &[(i32, &str)] = &[");
@@ -439,5 +447,12 @@ pub fn emit_handlers_rust(t: &HandlerTables) -> String {
         &t.engine_switch_executions,
         "ScriptEngine 动作 switch 的 case（键=枚举值）",
     );
+    while out.ends_with(
+        "
+
+",
+    ) {
+        out.pop();
+    }
     out
 }

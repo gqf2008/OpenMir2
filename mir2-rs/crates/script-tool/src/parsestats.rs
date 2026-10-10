@@ -315,7 +315,11 @@ pub fn run(envir: &Path, json_out: Option<PathBuf>) -> ExitCode {
                             for c in &proc_.condition_list {
                                 *totals.cond_usage.entry(c.cmd_code).or_insert(0) += 1;
                             }
-                            for a in proc_.action_list.iter().chain(proc_.else_action_list.iter()) {
+                            for a in proc_
+                                .action_list
+                                .iter()
+                                .chain(proc_.else_action_list.iter())
+                            {
                                 *totals.act_usage.entry(a.n_cmd_code).or_insert(0) += 1;
                             }
                         }

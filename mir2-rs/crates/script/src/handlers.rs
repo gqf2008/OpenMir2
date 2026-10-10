@@ -296,4 +296,3 @@ pub static ENGINE_SWITCH_EXECUTIONS: &[(i32, &str)] = &[
     (351, "GetDlgItemValue"),
     (352, "TakeDlgItem"),
 ];
-
