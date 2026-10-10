@@ -107,7 +107,19 @@ python tools/capture/golden_fresh_check.py --selftest   # 改坏必红（临时�
 
 判据三条：① `mir2-rs/tests/golden/*.jsonl` 与 [registry.json](registry.json) 双向一致（新增金标准必须登记来源会话目录）；
 ② 每份入库件 = 当前导出器从登记来源裸 dump 的重导结果（逐字节）；③ README 登记行的 sha256 = 文件实际 sha256。
-已接进 `tools/e2e/run_e2e.ps1`（`golden-fresh` 项）。**真值始终是裸 dump**，金标准只是它的派生产物。
+已接进 `tools/e2e/run_e2e.ps1`（`golden-fresh` + `golden-fresh-red` 项）。**真值始终是裸 dump**，金标准只是它的派生产物。
+
+**这条检查"预期会红"的情形（别当故障，更别去放宽判据）**：
+
+- **协议层布局表/口径变了、金标准还没重导**（例如 A4 落 `BodyLayout::Segmented` 表项）：
+  入库件立刻不再是"当前产物"⇒ `golden-fresh` 红。**这是设计意图**：表变了，产物就该重导。
+  唯一合法出口是「重导全部入库件 + 重登记」；要临时缩小范围用 `--only <子串>`，并在提交信息里写明原因。
+- 推论（协作约定）：**谁改了协议布局表，就等于让 C 线的入库件立刻过期**。改表的人不必自己重导，
+  但必须知道这件事并让 C 线知道（本仓做法：改表后在共享分支上喊一声，C 线重派生 + 三份全重导 + 重登记）。
+- 真故障红（要查）：来源会话目录缺失 / `registry.json` 缺项 / 导出器 rc≠0 / 裸 dump 对账（`verify_golden.py`）失败。
+- 派生侧形状约定（A 线冻结、C 线派生器按此抓）：`seg_len` 用 `usize` 字面量、`sep` 是 `b'/'`、
+  `count` 用 `SegCount::Fixed(3)` / `SegCount::HeaderSeries`；字段一改名派生器**报错而不是猜**
+  （已用 fixture 实测：`segmented_check.py` 步骤 0a/0b）。
 
 | 文件 | 来源 | 时间 | sha256 |
 |---|---|---|---|

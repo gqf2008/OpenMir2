@@ -39,12 +39,90 @@ FROZEN = {
 }
 EXPECT = {811: (60, [20, 20, 20]), 201: (496, [124, 124, 124, 124])}
 
+# A 线冻结的 Rust 形状（原样抄，供派生器形状自检：证明"表项落地后能派生出来"，而不是"我以为能"）
+FIXTURE_FRAME_RS = '''// 仅供派生器形状自检：与 A 线冻结契约同形（crates/protocol/src/frame.rs）
+pub enum SegCount { Fixed(usize), HeaderSeries }
+
+pub enum BodyLayout {
+    Single,
+    StructThenRest { struct_len: usize },
+    Segmented { seg_len: usize, sep: u8, trailing_sep: bool, count: SegCount },
+}
+
+pub const STATUS_GOOD_PREFIX: &[u8] = b"+GD/";
+
+const HEAD_BLOCK: usize = 16;
+
+pub fn body_layout(ident: u16) -> BodyLayout {
+    match ident {
+        messages::SM_RUSH | messages::SM_RUSHKUNG => { BodyLayout::StructThenRest { struct_len: 8 } }
+        messages::SM_ADJUST_BONUS => { BodyLayout::Segmented { seg_len: 20, sep: b'/', trailing_sep: false, count: SegCount::Fixed(3) } }
+        messages::SM_BAGITEMS => { BodyLayout::Segmented { seg_len: 124, sep: b'/', trailing_sep: true, count: SegCount::HeaderSeries } }
+        _ => BodyLayout::Single,
+    }
+}
+'''
+
+FIXTURE_MESSAGES_RS = '''pub const SM_RUSH: u16 = 6;
+pub const SM_RUSHKUNG: u16 = 7;
+pub const SM_ADJUST_BONUS: u16 = 811;
+pub const SM_BAGITEMS: u16 = 201;
+'''
+
 FAILS = []
 
 
 def fail(msg):
     FAILS.append(msg)
     print("RED: " + msg)
+
+
+def check_layout_derivation(tmp):
+    """步骤 0（派生侧形状自检）：拿 A 线冻结形状的 fixture 验 `dump_body_layout.py` 抓得对；
+    再把字段名改一处，验它**报错**而不是静默少一档（免得表项落地后导出一张缺项的错表）。"""
+    fx = os.path.join(tmp, "fixture")
+    os.makedirs(fx, exist_ok=True)
+    frame_rs = os.path.join(fx, "frame.rs")
+    msgs_rs = os.path.join(fx, "messages.rs")
+    open(frame_rs, "w", encoding="utf-8", newline="\n").write(FIXTURE_FRAME_RS)
+    open(msgs_rs, "w", encoding="utf-8", newline="\n").write(FIXTURE_MESSAGES_RS)
+    out = os.path.join(fx, "layout.json")
+
+    def run(frame_path):
+        return subprocess.run([sys.executable, os.path.join(HERE, "dump_body_layout.py"),
+                               "--frame-rs", frame_path, "--constants", msgs_rs, "--out", out],
+                              capture_output=True, text=True)
+
+    p = run(frame_rs)
+    if p.returncode != 0:
+        fail("派生器抓不住冻结形状的表项：" + (p.stdout + p.stderr).strip()[-300:])
+        return
+    got = json.load(open(out, encoding="utf-8"))["layouts"]
+    for ident, want in FROZEN.items():
+        entry = dict(want)
+        entry.setdefault("count_kind", "fixed")
+        actual = got.get(str(ident))
+        if not actual or actual.get("kind") != "segmented":
+            fail(f"派生器把 ident={ident} 抓成了 {actual}")
+            continue
+        for k in ("seg_len", "sep", "trailing_sep", "count_kind", "count"):
+            if k in entry and actual.get(k) != entry[k]:
+                fail(f"派生器 ident={ident} 的 {k} = {actual.get(k)}（应为 {entry[k]}）")
+    if all(got.get(str(i), {}).get("kind") == "segmented" for i in FROZEN):
+        print("  PASS 0a 派生器按冻结形状抓出 %s"
+              % ", ".join(f"{i}={got[str(i)]['seg_len']}B/{got[str(i)]['count_kind']}" for i in FROZEN))
+
+    # 改名必红：字段名一变，派生器必须报错（不许静默少一档）
+    bad_rs = os.path.join(fx, "frame_bad.rs")
+    open(bad_rs, "w", encoding="utf-8", newline="\n").write(
+        FIXTURE_FRAME_RS.replace("seg_len:", "segment_len:", 2))
+    p2 = run(bad_rs)
+    if p2.returncode == 0:
+        fail("字段改名后派生器仍然成功（静默少一档 = 会导出缺项的错表）")
+    elif "解析失败" not in (p2.stdout + p2.stderr):
+        fail("字段改名后派生器报错了但错误信息里没有「解析失败」：" + (p2.stdout + p2.stderr)[-200:])
+    else:
+        print("  PASS 0b 字段改名 ⇒ 派生器报错（不静默）")
 
 
 def derive_real_table(out_json):
@@ -100,6 +178,7 @@ def main():
         print("先构建导出器：dotnet build tools/capture/GoldenExport/GoldenExport.csproj")
         return 2
     tmp = tempfile.mkdtemp(prefix="segcheck-")
+    check_layout_derivation(tmp)          # 步骤 0：派生侧形状自检（表项还没落地也能先验）
     real_json = os.path.join(tmp, "layout_real.json")
     table = derive_real_table(real_json)
     if table is None:

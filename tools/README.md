@@ -98,6 +98,8 @@ python tools/capture/golden_fresh_check.py --selftest # 改坏必红：入库件
 它专门堵"**旧 artifact + 新下游**"这一族坑：改了导出器口径却漏重导某份入库件时，
 登记 hash 往往还是自洽的（对着旧件算），人工复核抓不到；本检查用**当前导出器重导**来对账，
 并强制"新增金标准必须写进 `registry.json`（来源会话目录）"。
+**协议层布局表一变，这条就会红（预期行为，不是故障）**：表变了 ⇒ 入库件不再是当前产物 ⇒
+处理办法是"重导 + 重登记"，不是放宽判据（详见 `mir2-rs/tests/golden/README.md` 的"防伪约定"）。
 
 字段口径见 `mir2-rs/tests/golden/README.md`。解码用的是**仓库自己的** `OpenMir2.EncryptUtil`
 （C# oracle），不是 Rust replay 的产物——满足抓包契约的防伪约定。帧界：
