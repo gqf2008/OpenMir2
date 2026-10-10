@@ -125,6 +125,26 @@ powershell -ExecutionPolicy Bypass -File tools/oracle/deploy_gamesvr.ps1        
 
 **禁忌**：① 不要把 DB / 文件 IO 放进 zone 线程（一次阻塞就掉 tick，落库走独立写线程 + 队列）；② 不要按实体切 actor；③ 不要在热循环里跨线程加锁；④ 换框架**不得改变 tick 顺序**——顺序一变，与 C# 的对拍基线就作废。
 
+### 4.2.2 备选：用 Bevy（0.20）承载世界模拟？——只取 `bevy_ecs`，且不推翻已通过 parity 的骨架
+
+**结论（协调者，2026-10-10）**：**网络 I/O 用 Actor 模型——同意，且这已是 §4.2 的既定设计**（会话/账号/DB/公会/交易用 actor，网关用 tokio 每连接任务；框架取舍见 §4.2.1）。
+**世界层换 Bevy——同意方向、不同意时机与粒度**：
+
+| 主张 | 我的判断 | 依据 |
+| --- | --- | --- |
+| 用 Bevy 的 ECS 承载实体/组件/系统 | **赞成，但只取 `bevy_ecs`（+ `bevy_app`/`bevy_time`），不要整个引擎** | 服务端不需要 render/winit/wgpu/asset；整引擎会把编译时间、依赖面与版本风险一起带进来 |
+| 现在就重写 `crates/world` | **反对** | 骨架刚通过 C# parity（14 实体×10 tick 位置/可见集逐行一致、session/drop 场景一致），并带着两条确定性守卫（`no_parallel.rs` 依赖白名单 + `World::tick` 线程断言）。此刻重写等于把已验证的确定性推翻重来，收益不明 |
+| 在 M3+ 的系统层引入 `bevy_ecs` | **赞成** | 战斗/技能/掉落/任务/状态机在 C# 里是深继承对象树（`MonsterObject`→…），ECS 的"组件组合 + 系统"比继续手搓 slotmap 更贴长期形态；而且你 Crystal 那边的 `Client-Bevy` 已有实践，客户端/服务端共享一套 ECS 心智是真实收益 |
+
+**若决定迁移（或新写系统层），四条硬约束（缺一条 parity 就会变 flaky）**：
+
+1. **单线程 executor**：不许用多线程执行器（`MultiThreadedExecutor`/`bevy_tasks` 并行），世界 tick 仍由我们自己的循环驱动；
+2. **遍历顺序显式化**：`bevy_ecs` 的 `Query` 迭代序**不是契约**（archetype/table 顺序，官方不保证）。AOI/实体处理顺序必须来自我们自己的有序索引（地图格子 → 实体 id），**不许**依赖 Query 迭代序；
+3. **确定性守卫升级**：`no_parallel.rs` 从"禁一切并行依赖"改成"**只允许 `bevy_ecs`/`bevy_app`，仍禁 `bevy_tasks` 并行/rayon/crossbeam**"，并保留 tick 线程断言；
+4. **迁移验收＝原判据不降级**：14 实体×10 tick 与 session/drop 场景的对拍必须仍 **diff = 0**，P99 基线不得劣化（对比 `tests/parity/world/p99-baseline*.txt`）；对拍若变成 flaky，回退。
+
+**另需摆上台面的代价**：Bevy 大约每 3 个月一次破坏性升级，而服务端要长期行为稳定（对拍基线就是合同）⇒ 锁版本、只在有明确收益时升级会是常态；`bevy_ecs` 的版本漂移要计入维护成本。
+
 ### 4.3 协议与编解码
 
 | 关注点 | C# 参照 | 要求 |
