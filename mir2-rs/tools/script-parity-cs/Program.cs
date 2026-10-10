@@ -20,12 +20,15 @@ class CountingSink : ILogEventSink
     public int FileNotFound;      // "Script file not found:"
     public int OtherErrors;
     public List<(string File, string Message)> ScriptErrorMessages = new();
+    /// 全部 Error 级消息（run 模式的对拍口径：两侧错误文本需逐条一致）
+    public List<string> AllErrors = new();
     public string CurrentFile = "";
 
     public void Emit(LogEvent logEvent)
     {
         if (logEvent.Level < LogEventLevel.Error) return;
         var msg = logEvent.RenderMessage();
+        AllErrors.Add(msg);
         if (msg.StartsWith("脚本错误")) { ScriptErrors++; ScriptErrorMessages.Add((CurrentFile, msg)); }
         else if (msg.StartsWith("script error, load fail:")) LoadFails++;
         else if (msg.StartsWith("Script file not found:")) FileNotFound++;
@@ -188,7 +191,13 @@ static class Program
 
     static int Main(string[] args)
     {
-        if (args.Length < 1) { Console.Error.WriteLine("usage: script-parity-cs <Envir目录> [out.json]"); return 2; }
+        if (args.Length < 1) { Console.Error.WriteLine("usage: script-parity-cs <Envir目录> [out.json] | run <脚本> <label> [参数]"); return 2; }
+        if (args[0] == "run")
+        {
+            var runSink = new CountingSink();
+            LogService.Logger = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(runSink).CreateLogger();
+            return ScriptParityCs.RunMode.Run(args, runSink);
+        }
         var envir = Path.GetFullPath(args[0]);
         var outJson = args.Length > 1 ? args[1] : null;
 

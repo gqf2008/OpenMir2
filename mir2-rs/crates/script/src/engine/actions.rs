@@ -30,6 +30,31 @@ impl Engine<'_, '_> {
                 self.player
                     .send_msg(RM_MENU_OK, actor_id, 0, 0, Some(&text));
             }
+            "ActionOfMobFireBurn" => {
+                // C#：参数不全时 ScriptActionError(ExecutionCode.MobFireburn) 后返回
+                let s_map = &info.s_param1;
+                let nx = mir2_shared::hutil32::str_to_int16(&info.s_param2, -1);
+                let ny = mir2_shared::hutil32::str_to_int16(&info.s_param3, -1);
+                let n_type = mir2_shared::hutil32::str_to_int(&info.s_param4, -1);
+                let n_time = mir2_shared::hutil32::str_to_int(&info.s_param5, -1);
+                let n_point = mir2_shared::hutil32::str_to_int(&info.s_param6, -1);
+                if s_map.is_empty() || nx < 0 || ny < 0 || n_type < 0 || n_time < 0 || n_point < 0 {
+                    self.script_action_error("MobFireburn", info);
+                    return;
+                }
+                // 参数完整时的地图效果依赖 MapMgr（批次 2 后续）
+                self.errors.push(EngineError::NotImplemented {
+                    kind: "action",
+                    code,
+                    handler: "ActionOfMobFireBurn(地图效果)",
+                });
+            }
+            "ActionOfResetUnit" => {
+                // C#: for (k = 0; k < nParam2; k++) SetQuestUnitStatus(nParam1 + k, 0)
+                for k in 0..info.n_param2 {
+                    self.player.set_quest_unit_status(info.n_param1 + k, 0);
+                }
+            }
             "ActionOfSet" => {
                 // TODO(批次 2 后续)：Set 变量写入（SetMovDataValNameValue 系）。
                 self.errors.push(EngineError::NotImplemented {
@@ -145,13 +170,51 @@ impl Engine<'_, '_> {
         let Some(case) = crate::engine::dispatch::engine_switch_condition(code) else {
             return true; // C# switch 未命中：无行为
         };
-        // 这些分支都依赖世界状态（最后击杀者/目标/安全区/背包），批次 2 后续移植
-        self.errors.push(EngineError::NotImplemented {
-            kind: "condition-switch",
-            code,
-            handler: case,
-        });
-        let _ = (info, result);
+        match case {
+            // CheckGotoLableItemW(playerActor, sParam1, nParam2)：先判佩戴位（前缀比较，
+            // 对应 C# `HUtil32.CompareLStr(sItemType, "[NECKLACE]", 4)`），否则查背包件数。
+            "CHECKITEMW" => {
+                let name = info.s_param1.as_str();
+                let worn = worn_location_of(name).map(|loc| self.player.has_worn(loc));
+                let found = match worn {
+                    // 佩戴位分支在 C# 里直接 return，不再做件数判断
+                    Some(v) => v,
+                    None => {
+                        let cnt = self.player.item_count(name);
+                        cnt > 0 && cnt >= info.n_param2
+                    }
+                };
+                if !found {
+                    *result = false;
+                }
+            }
+            // 其余分支依赖世界状态（最后击杀者/目标/安全区/背包细节），批次 2 后续移植
+            other => {
+                self.errors.push(EngineError::NotImplemented {
+                    kind: "condition-switch",
+                    code,
+                    handler: other,
+                });
+            }
+        }
         true
     }
+}
+
+/// 物品类型前缀 → 佩戴位名（C# 只比较前 4 个字符）。
+fn worn_location_of(item_type: &str) -> Option<&'static str> {
+    const LOCATIONS: [&str; 9] = [
+        "[NECKLACE]",
+        "[RING]",
+        "[ARMRING]",
+        "[WEAPON]",
+        "[HELMET]",
+        "[BUJUK]",
+        "[BELT]",
+        "[BOOTS]",
+        "[CHARM]",
+    ];
+    LOCATIONS
+        .into_iter()
+        .find(|loc| mir2_shared::hutil32::compare_lstr_prefix(item_type, loc, 4))
 }

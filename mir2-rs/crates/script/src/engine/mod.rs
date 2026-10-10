@@ -43,6 +43,16 @@ pub trait ScriptPlayer {
     fn mn_integer(&self, n: usize) -> i32;
     /// `playerActor.MSString[n]`
     fn ms_string(&self, n: usize) -> String;
+    /// `playerActor.SetQuestUnitStatus(index, value)`
+    fn set_quest_unit_status(&mut self, index: i32, value: i32);
+    /// 背包中该名字的物品件数（`CheckItemCount` 的 `ref nCount`）
+    fn item_count(&self, name: &str) -> i32;
+    /// 是否佩戴着该位置的装备（`UseItems[...].Index > 0`）；位置名同 C#（"NECKLACE" 等）
+    fn has_worn(&self, location: &str) -> bool;
+    /// 把物品交给玩家（`SendAddItem`）
+    fn give_item(&mut self, name: &str, count: i32);
+    /// 从背包移除物品（`SendDelItems`）；返回实际移除件数
+    fn remove_item(&mut self, name: &str, count: i32) -> i32;
     /// `normNpc.GetLineVariableText(playerActor, sMsg)` 的玩家侧部分；缺省实现原样返回
     fn line_variable_text(&mut self, msg: &str) -> String {
         msg.to_string()
@@ -82,6 +92,8 @@ pub enum EngineError {
     },
     /// 脚本变量层尚未覆盖的取值（`<$VAR>` 等）
     UnsupportedVariable { text: String },
+    /// C# `LogService.Error` 的脚本错误文本，两侧需逐字一致
+    ScriptError { text: String },
 }
 
 /// `GotoLabParams`（`ScriptEngine.cs` 同名结构）。
@@ -203,6 +215,25 @@ impl<'n, 'p> Engine<'n, 'p> {
             }
         }
         true
+    }
+
+    /// C# `ScriptActionError`：文本逐字符对齐（"[脚本错误] " 后为两空格）。
+    pub(crate) fn script_action_error(&mut self, cmd_member: &str, info: &QuestActionInfo) {
+        let msg = format!(
+            "[脚本错误]  脚本命令:{} NPC名称:{} 地图:{}({}:{}) 参数1:{} 参数2:{} 参数3:{} 参数4:{} 参数5:{} 参数6:{}",
+            cmd_member,
+            self.npc.chr_name(),
+            self.npc.map_name(),
+            self.npc.curr_x(),
+            self.npc.curr_y(),
+            info.s_param1,
+            info.s_param2,
+            info.s_param3,
+            info.s_param4,
+            info.s_param5,
+            info.s_param6
+        );
+        self.errors.push(EngineError::ScriptError { text: msg });
     }
 
     /// `GotoLableQuestCheckCondition`：条件全真才为真。
