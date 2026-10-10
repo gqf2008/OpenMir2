@@ -275,3 +275,184 @@ pub static GROBAL_VAR_PAIRS: &[(&str, &str)] = &["
     let _ = writeln!(out, "// GROBAL_VAR_PAIRS 条数（对账用）：{pairs}");
     out
 }
+
+/// 派发表（执行侧注册 + ScriptEngine switch 分支），供验收③「未实现命令清单」与求值器移植。
+#[derive(Debug, Default)]
+pub struct HandlerTables {
+    /// 条件处理器：键 = `(int)ConditionCode.X`（枚举值），值 = 处理器方法名
+    pub condition_handlers: Vec<(i32, String)>,
+    /// 动作处理器：键 = `(int)ExecutionCode.X`
+    pub execution_handlers: Vec<(i32, String)>,
+    /// `ScriptEngine` 条件 switch 的 case（键 = 枚举值，值 = case 标签）
+    pub engine_switch_conditions: Vec<(i32, String)>,
+    /// `ScriptEngine` 动作 switch 的 case
+    pub engine_switch_executions: Vec<(i32, String)>,
+}
+
+fn enum_value_by_member(defs: &[CodeDef], member: &str) -> Option<i32> {
+    defs.iter()
+        .find(|d| d.member == member)
+        .map(|d| d.enum_value)
+}
+
+/// 解析 `_conditionMap[(int)ConditionCode.X] = Handler;` 形式（前缀可配）。
+fn parse_registrations(
+    src: &str,
+    prefix: &str,
+    enum_name: &str,
+    defs: &[CodeDef],
+) -> Result<Vec<(i32, String)>, String> {
+    let mut out = Vec::new();
+    for line in src.lines() {
+        let line = line.trim();
+        let Some(rest) = line.strip_prefix(prefix) else {
+            continue;
+        };
+        let Some(end) = rest.find(']') else {
+            return Err(format!("{prefix} 行缺 ']': {line}"));
+        };
+        // prefix 已含 `XxxCode.`，此处只剩成员名
+        let member = rest[..end].trim();
+        if member.is_empty() {
+            return Err(format!("{prefix} 行成员名为空: {line}"));
+        }
+        let handler = rest[end + 1..]
+            .trim()
+            .strip_prefix('=')
+            .and_then(|h| h.trim().strip_suffix(';'))
+            .ok_or_else(|| format!("{prefix} 行缺赋值: {line}"))?
+            .trim()
+            .to_string();
+        let value = enum_value_by_member(defs, member)
+            .ok_or_else(|| format!("{enum_name} 无成员 {member}"))?;
+        out.push((value, handler));
+    }
+    Ok(out)
+}
+
+/// 解析 `ScriptEngine` 里的 `case ExecutionCode.X:` / `case (int)ConditionCode.X:`。
+fn parse_switch_cases(
+    src: &str,
+    enum_name: &str,
+    defs: &[CodeDef],
+) -> Result<Vec<(i32, String)>, String> {
+    let mut out = Vec::new();
+    for line in src.lines() {
+        let line = line.trim();
+        let Some(rest) = line.strip_prefix("case ") else {
+            continue;
+        };
+        let label = rest
+            .split(':')
+            .next()
+            .ok_or_else(|| format!("case 行无法解析: {line}"))?
+            .trim();
+        // 两种写法：`ExecutionCode.Goto` 与 `(int)ConditionCode.CHECKRANDOMNO`
+        let label = label.strip_prefix("(int)").unwrap_or(label);
+        let Some(member) = label
+            .strip_prefix(enum_name)
+            .and_then(|m| m.strip_prefix('.'))
+        else {
+            continue;
+        };
+        let value = enum_value_by_member(defs, member)
+            .ok_or_else(|| format!("{enum_name} 无成员 {member}"))?;
+        out.push((value, member.to_string()));
+    }
+    Ok(out)
+}
+
+/// 生成派发表（只读 C# 参照源码）。
+pub fn generate_handlers(
+    script_engine_dir: &Path,
+    condition: &[CodeDef],
+    execution: &[CodeDef],
+) -> Result<HandlerTables, String> {
+    let read = |p: &Path| {
+        std::fs::read_to_string(p).map_err(|e| format!("读取 {} 失败: {e}", p.display()))
+    };
+    let cond_src = read(&script_engine_dir.join("Processings/ConditionProcessingSys.cs"))?;
+    let exec_src = read(&script_engine_dir.join("Processings/ExecutionProcessingSys.cs"))?;
+    let engine_src = read(&script_engine_dir.join("ScriptEngine.cs"))?;
+    let mut t = HandlerTables {
+        condition_handlers: parse_registrations(
+            &cond_src,
+            "_conditionMap[(int)ConditionCode.",
+            "ConditionCode",
+            condition,
+        )?,
+        execution_handlers: parse_registrations(
+            &exec_src,
+            "ProcessExecutionMessage[(int)ExecutionCode.",
+            "ExecutionCode",
+            execution,
+        )?,
+        engine_switch_conditions: parse_switch_cases(&engine_src, "ConditionCode", condition)?,
+        engine_switch_executions: parse_switch_cases(&engine_src, "ExecutionCode", execution)?,
+    };
+    t.condition_handlers.sort();
+    t.execution_handlers.sort();
+    t.engine_switch_conditions.sort();
+    t.engine_switch_executions.sort();
+    Ok(t)
+}
+
+pub fn emit_handlers_rust(t: &HandlerTables) -> String {
+    // 收尾不留多余空行：rustfmt 会去掉文件末尾空行，保持"生成即可 fmt-check 通过"
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "//! 由 `script-tool gen-codes` 从 C# 参照源码机械生成，请勿手改。"
+    );
+    let _ = writeln!(
+        out,
+        "//! 数据源: src/Modules/ScriptEngine/{{Processings/ConditionProcessingSys.cs,Processings/ExecutionProcessingSys.cs,ScriptEngine.cs}}"
+    );
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "//! 注意：键是 **枚举值**（C# 注册用 `(int)XxxCode.Member`）；解析器产出的 CmdCode 对普通\n//! 命令是「字段序号-1」（= 枚举值-1），因此脚本命令命中的是**前一个**枚举成员的注册项。"
+    );
+    let table = |out: &mut String, name: &str, rows: &[(i32, String)], doc: &str| {
+        let _ = writeln!(out, "/// {doc}（{} 条）", rows.len());
+        let _ = writeln!(out, "#[rustfmt::skip]");
+        let _ = writeln!(out, "pub static {name}: &[(i32, &str)] = &[");
+        for (k, v) in rows {
+            let _ = writeln!(out, "    ({k}, \"{v}\"),");
+        }
+        let _ = writeln!(out, "];");
+        let _ = writeln!(out);
+    };
+    table(
+        &mut out,
+        "CONDITION_HANDLERS",
+        &t.condition_handlers,
+        "条件处理器（键=枚举值 → 处理器方法名）",
+    );
+    table(
+        &mut out,
+        "EXECUTION_HANDLERS",
+        &t.execution_handlers,
+        "动作处理器（键=枚举值 → 处理器方法名）",
+    );
+    table(
+        &mut out,
+        "ENGINE_SWITCH_CONDITIONS",
+        &t.engine_switch_conditions,
+        "ScriptEngine 条件 switch 的 case（键=枚举值）",
+    );
+    table(
+        &mut out,
+        "ENGINE_SWITCH_EXECUTIONS",
+        &t.engine_switch_executions,
+        "ScriptEngine 动作 switch 的 case（键=枚举值）",
+    );
+    while out.ends_with(
+        "
+
+",
+    ) {
+        out.pop();
+    }
+    out
+}

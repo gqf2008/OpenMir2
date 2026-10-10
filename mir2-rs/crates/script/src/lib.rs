@@ -10,12 +10,15 @@
 
 pub mod codes;
 pub mod digest;
+pub mod engine;
 pub mod gbk_overrides;
-pub mod hutil32;
+pub mod handlers;
 pub mod model;
 pub mod parser;
-pub mod random;
 pub mod textfile;
+
+/// `HUtil32` 原语：全 workspace 唯一实现在 `mir2-shared`（B-106 收敛）。
+pub use mir2_shared::hutil32;
 
 pub use digest::{
     structure_digest, structure_digest_full, MerchantDigestInput, StructureCounts, StructureDigest,

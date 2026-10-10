@@ -33,7 +33,7 @@ impl ScriptInfo {
 }
 
 /// `SayingRecord`
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SayingRecord {
     pub s_label: String,
     pub procedure_list: Vec<SayingProcedure>,
@@ -41,7 +41,7 @@ pub struct SayingRecord {
 }
 
 /// `SayingProcedure`
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct SayingProcedure {
     pub condition_list: Vec<QuestConditionInfo>,
     pub action_list: Vec<QuestActionInfo>,

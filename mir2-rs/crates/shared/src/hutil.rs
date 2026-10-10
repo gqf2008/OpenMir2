@@ -28,7 +28,8 @@ pub fn make_long_unsigned(low: u16, high: u16) -> i32 {
 ///
 /// `int.TryParse` 允许首尾空白与可选符号；Rust `from_str` 不允许空白，先 trim。
 pub fn str_to_int(s: &str, def: i32) -> i32 {
-    s.trim().parse::<i32>().unwrap_or(def)
+    // 统一实现：crate::hutil32（1:1 移植，含 .NET TryParse 的空白/符号语义）
+    crate::hutil32::str_to_int(s, def)
 }
 
 /// C# `HUtil32.GetValidStr3(string, ref string, char[])`：
@@ -38,18 +39,9 @@ pub fn str_to_int(s: &str, def: i32) -> i32 {
 /// 前导连续分隔符整体跳过（空段全部移除），`dest` 为第一个非空段，
 /// 返回值为该段之后、第一个分隔符之后的原始剩余串（不 trim）。
 pub fn get_valid_str3(source: &str, dividers: &[char]) -> (String, String) {
-    let is_div = |c: char| dividers.contains(&c);
-    // 跳过前导分隔符
-    let start = match source.char_indices().find(|(_, c)| !is_div(*c)) {
-        Some((i, _)) => i,
-        None => return (String::new(), String::new()),
-    };
-    let tail = &source[start..];
-    // 第一个 token 结束于下一个分隔符
-    match tail.char_indices().find(|(_, c)| is_div(*c)) {
-        Some((e, c)) => (tail[..e].to_string(), tail[e + c.len_utf8()..].to_string()),
-        None => (tail.to_string(), String::new()),
-    }
+    // 统一实现：crate::hutil32（按 .NET `Split(div, 2, RemoveEmptyEntries)` 实机语义：
+    // 前导分隔符跳过、返回值从第二个 token 起——连续分隔符不会留在返回值里）
+    crate::hutil32::get_valid_str3(source, dividers)
 }
 
 /// C# `HUtil32.ArrestStringEx(source, "\"", "\"", ref dest)` 在 MonItems 解析里的用法：

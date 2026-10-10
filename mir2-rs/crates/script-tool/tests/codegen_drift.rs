@@ -48,3 +48,25 @@ fn field_index_equals_enum_value_anchor() {
     let set = report.execution.iter().find(|d| d.member == "Set").unwrap();
     assert_eq!((set.field_index, set.enum_value), (1, 1));
 }
+
+/// 派发表漂移门禁：`handlers.rs` 必须与 C# 参照源码机械生成结果一致。
+/// 红检方式：改 `handlers.rs` 任一行或改 C# 侧注册/switch → 本测试必红。
+#[test]
+fn handlers_rs_matches_csharp_source() {
+    let tool_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = tool_dir.join("../../..");
+    let script_engine = repo_root.join("src/Modules/ScriptEngine");
+    let handlers_rs = tool_dir.join("../script/src/handlers.rs");
+    let report = gencodes::generate(&script_engine.join("Consts")).expect("生成码表失败");
+    let tables = gencodes::generate_handlers(&script_engine, &report.condition, &report.execution)
+        .expect("生成派发表失败");
+    let expected = gencodes::emit_handlers_rust(&tables);
+    let actual = std::fs::read_to_string(&handlers_rs).expect("读取 handlers.rs 失败");
+    assert!(
+        actual == expected,
+        "handlers.rs 与 C# 参照源码不一致；重跑: cargo run -p mir2-script-tool -- gen-codes"
+    );
+    // 规模锚定（与反射 dump 一致：conditionMap 111 / ProcessExecutionMessage 133）
+    assert_eq!(tables.condition_handlers.len(), 111);
+    assert_eq!(tables.execution_handlers.len(), 133);
+}

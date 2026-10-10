@@ -32,6 +32,9 @@ struct Totals {
     text_digests: BTreeMap<String, String>,
     /// 逐文件结构摘要（F1 门禁）：relpath → (hash, 计数)
     digests: BTreeMap<String, (String, mir2_script::StructureCounts)>,
+    /// 语料命令使用直方图：CmdCode → 次数（条件/动作分开）
+    cond_usage: BTreeMap<i32, usize>,
+    act_usage: BTreeMap<i32, usize>,
 }
 
 #[allow(non_camel_case_types)]
@@ -50,6 +53,50 @@ fn matches_win32_txt_pattern(p: &Path) -> bool {
     };
     // 用字节前缀比较：ext 以多字节字符开头时 `ext[..3]` 会 panic（非 char 边界）
     ext.len() >= 3 && ext.as_bytes()[..3].eq_ignore_ascii_case(b"txt")
+}
+
+/// 命令使用分类：已注册处理器 / ScriptEngine switch 分支 / 未注册（C# 静默忽略）
+fn classify(kind_handlers: &[(i32, &str)], kind_switch: &[(i32, &str)], code: i32) -> String {
+    if let Some((_, h)) = kind_handlers.iter().find(|(k, _)| *k == code) {
+        return format!("handler:{h}");
+    }
+    if let Some((_, c)) = kind_switch.iter().find(|(k, _)| *k == code) {
+        return format!("engine-switch:{c}");
+    }
+    // ScriptEngine 对未注册 code 走 switch，switch 未命中即静默忽略（结果保持默认）
+    "ignored".to_string()
+}
+
+fn report_usage(t: &Totals) {
+    use mir2_script::handlers::{
+        CONDITION_HANDLERS, ENGINE_SWITCH_CONDITIONS, ENGINE_SWITCH_EXECUTIONS, EXECUTION_HANDLERS,
+    };
+    let mut buckets: BTreeMap<String, (usize, Vec<i32>)> = BTreeMap::new();
+    for (code, n) in &t.cond_usage {
+        let c = classify(CONDITION_HANDLERS, ENGINE_SWITCH_CONDITIONS, *code);
+        let e = buckets.entry(format!("条件/{c}")).or_default();
+        e.0 += n;
+        e.1.push(*code);
+    }
+    for (code, n) in &t.act_usage {
+        let c = classify(EXECUTION_HANDLERS, ENGINE_SWITCH_EXECUTIONS, *code);
+        let e = buckets.entry(format!("动作/{c}")).or_default();
+        e.0 += n;
+        e.1.push(*code);
+    }
+    println!("命令派发分类（语料实测）：");
+    let mut ignored_total = 0usize;
+    for (label, (n, codes)) in &buckets {
+        if label.ends_with("/ignored") {
+            ignored_total += n;
+        }
+        println!("  {label}: {n} 次（{} 个 code）", codes.len());
+    }
+    println!(
+        "  未注册（C# 静默忽略）合计: {ignored_total} 次；条件 distinct code {} / 动作 distinct code {}",
+        t.cond_usage.len(),
+        t.act_usage.len()
+    );
 }
 
 fn walk_txt(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -210,7 +257,7 @@ pub fn run(envir: &Path, json_out: Option<PathBuf>) -> ExitCode {
         ..Totals::default()
     };
     // 与 C# harness 同种子同算法（System.Random(42) 复刻），重名 label 改名序列逐位一致
-    let mut sys_rng = mir2_script::random::SystemRandom::new(42);
+    let mut sys_rng = mir2_shared::rng::RandomNumber::with_seed(42);
     let mut rename_rand = move |min: i32, max: i32| sys_rng.get_random_number(min, max);
 
     for file in &files {
@@ -262,6 +309,22 @@ pub fn run(envir: &Path, json_out: Option<PathBuf>) -> ExitCode {
         match result {
             Ok(Some(outcome)) => {
                 totals.loaded += 1;
+                for sc in &outcome.scripts {
+                    for rec in &sc.record_list {
+                        for proc_ in &rec.procedure_list {
+                            for c in &proc_.condition_list {
+                                *totals.cond_usage.entry(c.cmd_code).or_insert(0) += 1;
+                            }
+                            for a in proc_
+                                .action_list
+                                .iter()
+                                .chain(proc_.else_action_list.iter())
+                            {
+                                *totals.act_usage.entry(a.n_cmd_code).or_insert(0) += 1;
+                            }
+                        }
+                    }
+                }
                 let merchant = mir2_script::MerchantDigestInput {
                     price_rate: outcome.price_rate.unwrap_or(0),
                     item_type_list: outcome.item_type_list.clone(),
@@ -362,6 +425,8 @@ pub fn run(envir: &Path, json_out: Option<PathBuf>) -> ExitCode {
         "解析错误: {}；解码异常文件: {}",
         s.parse_errors, totals.decode_anomalies
     );
+    report_usage(&totals);
+
     if !totals.errors.is_empty() {
         println!("错误明细（前 20 条）:");
         for e in totals.errors.iter().take(20) {
