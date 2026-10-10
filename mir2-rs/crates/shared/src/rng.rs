@@ -108,8 +108,9 @@ impl DotNetRandom {
     /// 对应 `public virtual int Next(int minValue, int maxValue)`（返回 `[minValue, maxValue)`）。
     ///
     /// `minValue > maxValue` 时 .NET 抛异常，此处 panic 对齐。
-    /// 大范围分支（`range > Int32.MaxValue`）按 .NET `CompatSeedImpl` 实现，
-    /// 但游戏内所有调用范围都 ≤ `i32::MAX`，对拍只覆盖小范围分支。
+    /// 大范围分支（`range > Int32.MaxValue`）按 .NET `GetSampleForLargeRange()` 实现：
+    /// **消耗两次采样**并带随机正负号（实测 new Random(42).Next(int.MinValue, int.MaxValue)
+    /// = 1434747709）。
     pub fn next_range(&mut self, min_value: i32, max_value: i32) -> i32 {
         assert!(
             min_value <= max_value,
@@ -119,8 +120,20 @@ impl DotNetRandom {
         if range <= i64::from(i32::MAX) {
             (self.sample() * range as f64) as i32 + min_value
         } else {
-            (i64::from(self.internal_sample()) % range + i64::from(min_value)) as i32
+            let sample = self.sample_for_large_range();
+            ((sample * (range as f64)) as i64 + i64::from(min_value)) as i32
         }
+    }
+
+    /// 对应 `private double GetSampleForLargeRange()`（两次 `InternalSample`）。
+    fn sample_for_large_range(&mut self) -> f64 {
+        let result = self.internal_sample();
+        let negative = self.internal_sample() % 2 == 0;
+        let signed = if negative { -result } else { result };
+        let mut d = f64::from(signed);
+        d += f64::from(i32::MAX - 1);
+        d /= 2.0 * f64::from(i32::MAX) - 1.0;
+        d
     }
 
     /// 对应 `public virtual double NextDouble()`。
@@ -235,6 +248,29 @@ impl RandomNumber {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 大区间分支（`range > Int32.MaxValue`）的 .NET 实测值：`GetSampleForLargeRange()`
+    /// 消耗**两次**采样并带随机正负号（B 线探针，2026-10-10）。
+    #[test]
+    fn large_range_matches_dotnet() {
+        assert_eq!(
+            DotNetRandom::new(42).next_range(i32::MIN, i32::MAX),
+            1_434_747_709
+        );
+        assert_eq!(
+            DotNetRandom::new(7).next_range(-2_000_000_000, 2_000_000_000),
+            766_440_938
+        );
+    }
+
+    /// 小/大区间不得互相串味：同一 seed 下先取小区间值再取大区间值，两者都要对。
+    #[test]
+    fn small_and_large_range_sequences() {
+        // 生产路径是 RandomNumber.GetRandomNumber(min, max) = Next(min, max + 1)
+        let mut r = RandomNumber::with_seed(42);
+        let seq: Vec<i32> = (0..10).map(|_| r.get_random_number(1, 200)).collect();
+        assert_eq!(seq, vec![134, 29, 26, 105, 34, 53, 145, 103, 35, 153]);
+    }
 
     /// .NET `new Random(42).Next()` 的实测值（C# golden 生成器同序列首项）。
     /// 完整序列对拍见 tests/parity（金标准由真实 `RandomNumber.cs` 产出）。

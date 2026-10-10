@@ -210,7 +210,7 @@ pub fn run(envir: &Path, json_out: Option<PathBuf>) -> ExitCode {
         ..Totals::default()
     };
     // 与 C# harness 同种子同算法（System.Random(42) 复刻），重名 label 改名序列逐位一致
-    let mut sys_rng = mir2_script::random::SystemRandom::new(42);
+    let mut sys_rng = mir2_shared::rng::RandomNumber::with_seed(42);
     let mut rename_rand = move |min: i32, max: i32| sys_rng.get_random_number(min, max);
 
     for file in &files {

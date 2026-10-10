@@ -37,7 +37,7 @@ fn envir() -> PathBuf {
 
 fn load(fs: &MemFs, patch: &str, name: &str, bo_flag: bool) -> mir2_script::LoadOutcome {
     let parsers = ScriptParsers::new();
-    let mut rand = mir2_script::random::SystemRandom::new(42);
+    let mut rand = mir2_shared::rng::RandomNumber::with_seed(42);
     let mut rename = move |min: i32, max: i32| rand.get_random_number(min, max);
     parsers
         .load_script_file(fs, &envir(), patch, name, bo_flag, &mut rename)

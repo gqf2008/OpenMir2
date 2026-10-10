@@ -1,5 +1,8 @@
 //! `HUtil32` 字符串原语的 1:1 移植（参照 `src/OpenMir2/HUtil32.cs`）。
 //!
+//! 本模块是全 workspace 的唯一实现（B 线脚本引擎、D 线数据层共用）；
+//! [`crate::hutil`] 中的同名便捷函数一律委托到这里。
+//!
 //! 行为等价优先：包括原实现中的缺陷（如 `IsStringNumber` 的 `||` 逻辑、
 //! `CaptureString` 的 1-based 遗留索引、无闭合引号时抛异常）都原样保留。
 //! 本文件中的预期值均来自对 .NET 8 实机探测（见 `tests/fixtures` 注释与各用例）。
