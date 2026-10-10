@@ -46,11 +46,37 @@ def run_cs(case):
     return r.stdout.strip().splitlines(), r.stderr.strip()
 
 
+def build_harness():
+    """门禁顺序要求：先构建 C# harness，再跑对拍（避免用到过期二进制）。"""
+    r = subprocess.run(
+        ["dotnet", "build", str(REPO / "tools/script-parity-cs/script-parity-cs.csproj"),
+         "-v", "q", "--nologo"],
+        cwd=REPO, capture_output=True, text=True, encoding="utf-8",
+    )
+    if r.returncode != 0:
+        print(r.stdout[-2000:])
+        raise SystemExit("C# harness 构建失败")
+
+
 def main():
+    build_harness()
     cases = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
     ok = bad = 0
+    exempt = 0
     for case in cases:
         rust, rust_err = run_rust(case)
+        if case.get("exempt"):
+            # 登记豁免（S2 接管的 C# 崩溃）：改与 rust_expect 对拍，作 B-8 落点回归语料
+            expect = case.get("rust_expect", [])
+            exempt += 1
+            if rust == expect:
+                print(f"EXEMPT-OK {case['name']}: Rust 落点与登记一致（{len(rust)} 行）")
+            else:
+                bad += 1
+                print(f"EXEMPT-DRIFT {case['name']}（Rust 落点与登记不一致）")
+                print(f"  expect: {expect}")
+                print(f"  got   : {rust}")
+            continue
         cs, cs_err = run_cs(case)
         if rust == cs:
             ok += 1

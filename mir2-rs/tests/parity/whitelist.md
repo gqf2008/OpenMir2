@@ -60,6 +60,8 @@ M0 金标准验收状态（2026-10-10）：① 逐字节回放 0 差异、② �
 
 ## B 线登记
 
+| B-107 | C# 参照在两处条件处理器上**自身崩溃**：`ConditionOfCheckRangeMonCount`（`String.get_Chars` 越界，`ConditionProcessingSys.cs:1112`）与（已随 mock 补全消除）`ConditionOfCheckSlaveListCount` 的从属列表读取。前者由 S2 接管处置，本线不修。 | 该崩溃由夹具数据触发、与脚本语义无关；本线按 S2 建议登记豁免，并把该用例改为 **B-8 落点回归语料**（`tests/parity/flow-cases.json` 的 `rust_expect`）：Rust 侧必须稳定产出登记的落点序列（`flag`/`NotImplemented` 清单/`[脚本错误]` 原文），落点漂移即 `EXEMPT-DRIFT` 变红 | B 线（S2 结论同步） |
+
 | 编号 | 差异/豁免点 | 为什么无害 | 谁审的 |
 | --- | --- | --- | --- |
 | B-101 | Envir 全量解析的 427 条"脚本错误"（M4 验收①原文写"解析错误 = 0"） | 非两侧差异：C# 参照在同一份语料上产出同样的 427 条（逐行多重集差 0/0）。`TakeOn`/`GAMEGIRD`/`ReadRandomLine` 等命令在 C# 源码中不存在（LEGM2 等变体遗留），内容冻结下不可通过实现它们收敛。建议验收①口径修订为"双侧逐行一致" | B 线（待 owner 复核口径） |

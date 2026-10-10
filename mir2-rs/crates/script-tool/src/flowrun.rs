@@ -120,6 +120,12 @@ impl ScriptPlayer for FlowPlayer {
         self.unit_status.insert(index, value);
         self.log.push(format!("unitstatus {index} {value}"));
     }
+    fn slave_count(&self) -> i32 {
+        0
+    }
+    fn bag_count(&self) -> i32 {
+        self.items.iter().map(|(_, c)| *c).sum()
+    }
     fn item_count(&self, name: &str) -> i32 {
         self.items
             .iter()
@@ -187,7 +193,7 @@ impl ScriptNpc for FlowNpc {
         let kind = if priority { "msgP" } else { "msg" };
         self.log
             .borrow_mut()
-            .push(format!("{kind} 10121 0 0 0 0 {text}"));
+            .push(format!("{kind} 11009 0 0 0 0 {text}")); // RM_MERCHANTSAY = 11009
     }
 
     fn script_goto_count_limit(&self) -> i32 {

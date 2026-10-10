@@ -162,6 +162,9 @@ class RunPlayer : DispatchProxy
                 return null;
             case "get_ItemList":
                 return Items;
+            case "get_SlaveList":
+                // IPlayerActor/IActor 的声明类型是 IList<IMonsterActor>
+                return new List<IMonsterActor>();
             case "get_UseItems":
                 // 10 个空佩戴位（Index=0）：C# 的 TakeWItem 会遍历并跳过
                 return UseItemsStub;
