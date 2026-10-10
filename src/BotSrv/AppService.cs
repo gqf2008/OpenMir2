@@ -85,7 +85,21 @@ namespace BotSrv
                         }
                     }
                 }
-                BotShare.ClientMgr.Run();
+                try
+                {
+                    BotShare.ClientMgr.Run();
+                }
+                catch (Exception ex)
+                {
+                    // 压测进程不许被单个假人的异常打死（2026-10-10 实测：自动挂机里 MShare 共享态竞态
+                    // 出 NullReference/IndexOutOfRange，整个 1000 假人进程直接退出 ⇒ 那一档数据全废）。
+                    // 兜住并计数（进 load_stats.ndjson 的 internal_errors），前若干条打日志便于定位。
+                    LoadMetrics.InternalError();
+                    if (LoadMetrics.ShouldLogInternalError())
+                    {
+                        LogService.Warn("压测兜住的异常[" + LoadMetrics.InternalErrors + "]：" + ex.GetType().Name + ": " + ex.Message);
+                    }
+                }
                 Thread.Sleep(TimeSpan.FromMilliseconds(50));
             }
         }

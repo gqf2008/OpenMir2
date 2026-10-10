@@ -340,6 +340,14 @@ namespace BotSrv.Maps
             {
                 return false;
             }
+            // 上界守卫：原实现只挡了负方向，自动挂机走到地图右/下边界外时
+            // m_MArr[cx, cy] 越界 ⇒ IndexOutOfRangeException 直接把 BotSrv 打崩（2026-10-10 压测实测，
+            // 200 假人快爬坡下 68 个登录后崩）。压测要求假人长时间在世界里走，这条必须挡。
+            var mapArr = robotClient.Map.m_MArr;
+            if (mapArr == null || cx >= mapArr.GetLength(0) || cy >= mapArr.GetLength(1))
+            {
+                return false;
+            }
             bool result = ((robotClient.Map.m_MArr[cx, cy].wBkImg & 0x8000) + (robotClient.Map.m_MArr[cx, cy].wFrImg & 0x8000)) == 0;
             if (result)
             {

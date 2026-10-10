@@ -41,6 +41,8 @@ namespace BotSrv
         private static long _tickSamples;
         private static long _tickSumMs;
         private static long _tickMaxMs;
+        private static long _internalErrors;
+        private static long _internalErrorsLogged;
 
         private static string _outDir;
         private static string _statsPath;
@@ -131,6 +133,34 @@ namespace BotSrv
             {
                 _connRefused++;
             }
+        }
+
+        /// <summary>一轮自动挂机里被兜住的异常（压测进程不许被单个假人打死；异常数进报告）。</summary>
+        public static void InternalError()
+        {
+            lock (Sync)
+            {
+                _internalErrors++;
+            }
+        }
+
+        /// <summary>是否需要打印这一条异常（前若干条打印，避免压测日志被刷爆）。返回 true 表示该打印。</summary>
+        public static bool ShouldLogInternalError(int maxLogged = 20)
+        {
+            lock (Sync)
+            {
+                if (_internalErrorsLogged >= maxLogged)
+                {
+                    return false;
+                }
+                _internalErrorsLogged++;
+                return true;
+            }
+        }
+
+        public static long InternalErrors
+        {
+            get { lock (Sync) { return _internalErrors; } }
         }
 
         /// <summary>登录之后连接被断开/超时 = 掉线（与"连不上"分开计）。</summary>
@@ -233,6 +263,7 @@ namespace BotSrv
               .Append(",\"login_ok\":").Append(_loginOk)
               .Append(",\"conn_refused\":").Append(_connRefused)
               .Append(",\"conn_lost\":").Append(_connLost)
+              .Append(",\"internal_errors\":").Append(_internalErrors)
               .Append(",\"tick_samples\":").Append(_tickSamples)
               .Append(",\"tick_sum_ms\":").Append(_tickSumMs)
               .Append(",\"tick_max_ms\":").Append(_tickMaxMs)

@@ -717,6 +717,24 @@ namespace BotSrv.Player
             }
         }
 
+        /// <summary>压测用：**确保**自动挂机开着（OpenAutoPlay 是 toggle，压测里不能盲调）。
+        /// 背景：进图时 PlayScene 的 SM_NEWMAP 分支会把 TimerAutoPlay 停掉（"地图跳转，停止自动挂机"），
+        /// 之后假人就一直站着不动 ⇒ 没有动作 ⇒ 收不到 `+GD` ack ⇒ tick 样本为 0（2026-10-10 实测）。
+        /// 负载门禁需要假人持续产生动作，所以每轮挂机循环前把它重新打开。</summary>
+        public void EnsureAutoPlay()
+        {
+            if (MShare.MySelf == null)
+            {
+                return;
+            }
+            MShare.g_gcAss[0] = true;
+            if (TimerAutoPlay == null)
+            {
+                TimerAutoPlay = new TimerAutoPlay();
+            }
+            TimerAutoPlay.Enabled = true;
+        }
+
         public void OpenAutoPlay()
         {
             if (MShare.MySelf == null)
@@ -1698,6 +1716,12 @@ namespace BotSrv.Player
         public bool AttackTarget(Actor target)
         {
             bool result = false;
+            // 守卫（2026-10-10 压测实测）：MShare.MySelf 是**跨假人共享**的全局态，地图切换/进图窗口里
+            // 会是 null；原来直接解引用 ⇒ NullReferenceException 把整个 BotSrv 打崩（200 假人档实测）。
+            if (MShare.MySelf == null || target == null)
+            {
+                return false;
+            }
             int nHitMsg = Messages.CM_HIT;
             if (MShare.UseItems[ItemLocation.Weapon] != null && MShare.UseItems[ItemLocation.Weapon].Item.StdMode == 6)
             {
