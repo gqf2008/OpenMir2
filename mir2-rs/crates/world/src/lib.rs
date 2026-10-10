@@ -12,11 +12,15 @@
 //! 3. **零并行依赖**：本 crate 不依赖任何线程/异步库（`tests/no_parallel.rs` 钉住）。
 
 pub mod aoi;
+pub mod combat;
 pub mod entity;
 pub mod map;
+pub mod session;
 pub mod world;
 
 pub use aoi::{search_view_range, search_view_range_death, update_visible_gay, visible_snapshot};
+pub use combat::{attack, AttackOutcome, CombatConfig};
 pub use entity::{Entity, EntityStore, VisibleFlag, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY};
 pub use map::{CellAttribute, CellObject, CellType, MapCellInfo, MapGrid};
-pub use world::{Command, TickRecord, World, TICK_INTERVAL_MS};
+pub use session::{Session, SessionError, WorldStage};
+pub use world::{Command, EntitySnapshot, TickRecord, World, TICK_INTERVAL_MS};

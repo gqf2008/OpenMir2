@@ -116,8 +116,8 @@ fn run_scenario(name: &str) -> String {
             "tick {} clock {}\n",
             world.tick_seq, world.clock_ms
         ));
-        for (id, x, y, vis) in world.snapshot_sorted() {
-            out.push_str(&format!("ent {id} {x} {y} vis"));
+        for (id, m, x, y, hp, lv, exp, vis) in world.snapshot_sorted() {
+            out.push_str(&format!("ent {id} {m} {x} {y} {hp} {lv} {exp} vis"));
             for (target, flag) in vis {
                 out.push_str(&format!(" {target}:{flag}"));
             }
@@ -169,8 +169,8 @@ fn redcheck_view_range_change_must_alter_visible_set() {
     let mine: Vec<String> = world
         .snapshot_sorted()
         .into_iter()
-        .map(|(id, x, y, vis)| {
-            let mut l = format!("ent {id} {x} {y} vis");
+        .map(|(id, _m, x, y, _hp, _lv, _exp, vis)| {
+            let mut l = format!("ent {id} {_m} {x} {y} {_hp} {_lv} {_exp} vis");
             for (t, f) in vis {
                 l.push_str(&format!(" {t}:{f}"));
             }
@@ -211,9 +211,9 @@ fn redcheck_position_change_must_differ() {
     let mine = world
         .snapshot_sorted()
         .into_iter()
-        .find(|(id, _, _, _)| *id == 1)
-        .map(|(id, x, y, vis)| {
-            let mut l = format!("ent {id} {x} {y} vis");
+        .find(|(id, _, _, _, _, _, _, _)| *id == 1)
+        .map(|(id, _m, x, y, _hp, _lv, _exp, vis)| {
+            let mut l = format!("ent {id} {_m} {x} {y} {_hp} {_lv} {_exp} vis");
             for (t, f) in vis {
                 l.push_str(&format!(" {t}:{f}"));
             }

@@ -6,6 +6,8 @@ description = "M2 世界模拟骨架：单线程 tick + 实体存储 + 地图/AO
 
 [dependencies]
 mir2-shared = { path = "../shared" }
+mir2-data = { path = "../data" }      # 掉落/经验表所需的数据模型（MonsterDropItem/StdItem）
+mir2-formula = { path = "../formula" } # 已与 C# 对拍的掉落/经验公式
 # ③ 禁止引入并行：本 crate **刻意不依赖任何线程/异步运行时**
 #（tokio/rayon/crossbeam/threadpool 一律不加；由 tests/no_parallel.rs 作为门禁钉住）。
 

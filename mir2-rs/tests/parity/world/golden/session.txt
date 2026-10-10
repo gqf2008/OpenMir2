@@ -1,0 +1,39 @@
+tick 1 clock 200
+ent 1 0 10 10 200 10 0 vis 1:2
+tick 2 clock 400
+ent 1 0 10 10 200 10 0 vis 1:1
+ent 2 0 12 10 3 1 0 vis 1:2
+tick 3 clock 600
+ent 1 0 11 10 200 10 0 vis 1:1
+ent 2 0 12 10 3 1 0 vis 1:1
+tick 4 clock 800
+ent 1 0 11 10 200 10 0 vis 1:1
+ent 2 0 12 10 3 1 0 vis 1:1
+tick 5 clock 1000
+ent 1 0 11 10 200 10 0 vis 1:1
+ent 2 0 12 10 3 1 0 vis 1:1
+tick 6 clock 1200
+ent 1 0 11 10 200 10 0 vis 1:1
+ent 2 0 12 10 0 1 0 vis
+death 2 2 192 -1 0
+floor 0 13 10 2
+floor 0 13 11 1
+tick 7 clock 1400
+ent 1 1 5 5 200 10 0 vis 1:2
+ent 2 0 12 10 0 1 0 vis
+floor 0 13 10 2
+floor 0 13 11 1
+tick 8 clock 1600
+ent 2 0 12 10 0 1 0 vis
+floor 0 13 10 2
+floor 0 13 11 1
+tick 9 clock 1800
+ent 2 0 12 10 0 1 0 vis
+ent 3 1 6 6 200 10 0 vis 3:2
+floor 0 13 10 2
+floor 0 13 11 1
+tick 10 clock 2000
+ent 2 0 12 10 0 1 0 vis
+ent 3 1 6 6 200 10 0 vis 3:1
+floor 0 13 10 2
+floor 0 13 11 1

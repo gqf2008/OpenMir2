@@ -57,11 +57,22 @@ fn deps_section(text: &str) -> Vec<String> {
 fn world_crate_has_no_threading_dependencies() {
     let text = cargo_toml("Cargo.toml");
     let deps = deps_section(&text);
-    assert_eq!(
-        deps,
-        vec!["mir2-shared".to_string()],
-        "crates/world 只允许依赖 mir2-shared（零并行/零异步）；实际: {deps:?}"
-    );
+    // 允许的内部依赖（都是本仓库的 path 依赖，不含线程/异步）：
+    // mir2-shared（RNG/工具）、mir2-data（掉落/经验表模型）、mir2-formula（已对拍公式）
+    let allowed = ["mir2-shared", "mir2-data", "mir2-formula"];
+    for d in &deps {
+        assert!(
+            allowed.contains(&d.as_str()),
+            "crates/world 只允许内部 path 依赖 {allowed:?}；实际多了 {d}"
+        );
+    }
+    // 且必须是 path 依赖（防止有人把内部名替换成同名 crates.io 包）
+    for line in text.lines() {
+        let t = line.trim();
+        if t.starts_with("mir2-") && t.contains('=') {
+            assert!(t.contains("path = "), "内部依赖必须是 path 依赖，实际: {t}");
+        }
+    }
     for d in &deps {
         for bad in FORBIDDEN {
             assert_ne!(d, bad, "crates/world 不允许依赖 {bad}（会引入并行/异步）");

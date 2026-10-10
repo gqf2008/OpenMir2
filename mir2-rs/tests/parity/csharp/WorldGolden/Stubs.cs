@@ -101,7 +101,7 @@ namespace WorldGolden
     /// <summary>
     /// BaseObject 的桩：字段名与 oracle 一致，函数体照抄。
     /// </summary>
-    public class ActorStub
+    public partial class ActorStub
     {
         public int ActorId;
         public string ChrName = "";
