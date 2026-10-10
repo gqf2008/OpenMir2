@@ -311,6 +311,43 @@ pub fn body_layout(ident: u16) -> BodyLayout {
     }
 }
 
+/// **明文动作帧**（`#+GD/<tick>!`）—— 第四种 s2c 帧形态：payload 是**明文、未编码**。
+///
+/// 依据（C2/C3 金标准 31 帧 + 冻结客户端）：
+/// - 客户端 `ClMain.pas::DecodeMessagePacket` 首行判 `datablock[1] = '+'`（Pascal 1-based）
+///   ⇒ 走 `ProcessActMsg(datablock)`；
+/// - `ProcessActMsg`（`ClMain.pas:16261`）判 `datablock[2..4] = 'G','D','/'`，取数字为 `rtime`
+///   （`Str_ToInt`）用于解锁动作/移动同步（`ActionLock/MoveBusy/g_MoveErr` 复位、`g_rtime` 去重）；
+/// - 发送侧模板：`src/Modules/SystemModule/MessageSettings.cs:6` `sSTATUS_GOOD = "+GD/{0}"`。
+///
+/// 正因为它**不是 EDCode 编码**，payload 长度（13 字符）才会落在"单段可产长度"集合之外 ——
+/// 这正是当初把它误判为"无头多段帧"的原因。
+pub const STATUS_GOOD_PREFIX: &[u8] = b"+GD/";
+
+/// 解析明文动作帧 payload（**不含** `#`/`!`），返回 `rtime`。
+///
+/// 判据是**文法**（由模型给出、非从字节反推）：`+GD/<十进制正整数>`。
+/// 文法不符即 `None` —— 这样它对"服务端改了形态"是真敏感的，而不是自洽往返。
+#[must_use]
+pub fn parse_act_frame(payload: &[u8]) -> Option<i64> {
+    let rest = payload.strip_prefix(STATUS_GOOD_PREFIX)?;
+    if rest.is_empty() || !rest.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    let text = std::str::from_utf8(rest).ok()?;
+    let v: i64 = text.parse().ok()?;
+    if v <= 0 {
+        return None; // 客户端侧 `if rtime <= 0 then Exit`
+    }
+    Some(v)
+}
+
+/// payload 是否为明文动作帧（`+` 开头）。
+#[must_use]
+pub fn is_act_payload(payload: &[u8]) -> bool {
+    payload.first() == Some(&b'+')
+}
+
 /// 按布局把线上 payload（已去掉 `#`/`!`）**分段解码**成 12B 头 + 明文体。
 ///
 /// 为什么必须分段解：多段帧的段边界不在 4 字符编码周期上，整段解码会错位

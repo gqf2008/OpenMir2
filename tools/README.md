@@ -12,6 +12,9 @@ tools/capture/mir2_proxy.py   客户端↔网关 TCP 透传 + 原始字节 dump 
 tools/capture/segment_frames.py  原始流按帧界切分 → frames.ndjson + manifest
 tools/capture/verify_golden.py   金标准完整性对账（流/帧/总 hash）
 tools/capture/GoldenExport/      帧 → 契约 JSONL（C# oracle 解码字段）      decode_error>0 即退出码 3
+tools/capture/dump_body_layout.py 从协议源码派生「体分段布局表」JSON      形状变了即报错
+tools/capture/segmented_check.py  Segmented 段边界自检（真实帧+冻结契约） seg_len 改错 ⇒ rc=4（改错必红）
+tools/capture/golden_fresh_check.py 入库金标准新鲜度+登记对账（重导==入库件） --selftest（三类坏各自红）
 tools/capture/capture_baseline.ps1  金标准抓包编排（影子网关+代理+真实客户端）
 tools/client/mir_flow.ps1     真实客户端流程驱动（登录/选角/建角/进游戏/挂机/小退/再进）
 tools/client/account_provision.ps1  测试账号开号（account + account_protection 两表）
@@ -20,6 +23,7 @@ tools/logdiff/timeline.py     多源日志归一 + 时间线对拍              
 tools/dbsnap/dbsnap.py        MySQL 快照/字段级比对                          selftest（2 项）
 tools/e2e/run_e2e.ps1         E2E 回归套件（工具自测+金标准+流程+冒烟）      -SelfTestRed
 tools/oracle/                 S1 线：oracle 部署件对账 / 铺部署 / 网关重连门禁（见 tools/oracle/README.md）  -SelfTestRed
+tools/worldsample/world_sampler.py  世界态采样/对拍（位置·AOI·背包·金币·tick）  selftest（确定性 + 改坏必红）
 ```
 
 ## 0. 一次跑完全部自测（不需起服务端）
@@ -62,6 +66,41 @@ powershell -ExecutionPolicy Bypass -File tools/capture/capture_baseline.ps1
 dotnet run --project tools/capture/GoldenExport -c Release -- `
   --session tests/golden/session-<时间戳>/proxy --out <capture>.jsonl
 ```
+
+**分段布局表（C4/A-9）**：体不是"整段编码"，得按消息号分段解。表**从协议源码派生**、不在导出器里
+再抄一份（口径分叉会静默出错）：
+
+```powershell
+# 1) 派生表（读 crates/protocol/src/frame.rs 的 body_layout()；形状变了直接报错）
+python tools/capture/dump_body_layout.py --frame-rs mir2-rs/crates/protocol/src/frame.rs `
+  --constants mir2-rs/crates/protocol/src/messages.rs --out E:/tmp/body_layout.json
+
+# 2) 按表导出（--verify-roundtrip：段再编码拼回去必须逐字节等于线上原体）
+dotnet run --project tools/capture/GoldenExport -c Release -- `
+  --session tests/golden/session-<时间戳>/proxy --out <capture>.jsonl `
+  --layout E:/tmp/body_layout.json --verify-roundtrip
+
+# 3) Segmented 段边界自检（真实帧 + A 线冻结契约；改错段边界必红）
+python tools/capture/segmented_check.py
+```
+
+三种体布局：`Single`（整段）、`StructThenRest{n}`（`enc(n 字节)` + `enc(其余)`）、
+`Segmented`（N 段各自编码、用线上字面量 `/` 连接；段长/段数/尾分隔符全由表给）。
+`Segmented` 的切法**按表算长度逐段取**，不按分隔符盲切（编码字表里也有 `/`）；
+对不上就标 `layout="segmented(mismatch:…)"` 并让导出器**退出码 4**——坏表不许静默出金标准。
+
+**入库件新鲜度**（改了口径必跑；判据见 `mir2-rs/tests/golden/README.md` 的"防伪约定"）：
+
+```powershell
+python tools/capture/golden_fresh_check.py            # 重导==入库件（逐字节）+ 登记 sha 一致 + registry 双向对账
+python tools/capture/golden_fresh_check.py --selftest # 改坏必红：入库件不符 / 只改登记行 / registry 缺项 三类各自红
+```
+
+它专门堵"**旧 artifact + 新下游**"这一族坑：改了导出器口径却漏重导某份入库件时，
+登记 hash 往往还是自洽的（对着旧件算），人工复核抓不到；本检查用**当前导出器重导**来对账，
+并强制"新增金标准必须写进 `registry.json`（来源会话目录）"。
+**协议层布局表一变，这条就会红（预期行为，不是故障）**：表变了 ⇒ 入库件不再是当前产物 ⇒
+处理办法是"重导 + 重登记"，不是放宽判据（详见 `mir2-rs/tests/golden/README.md` 的"防伪约定"）。
 
 字段口径见 `mir2-rs/tests/golden/README.md`。解码用的是**仓库自己的** `OpenMir2.EncryptUtil`
 （C# oracle），不是 Rust replay 的产物——满足抓包契约的防伪约定。帧界：
@@ -189,3 +228,13 @@ powershell -ExecutionPolicy Bypass -File tools/e2e/run_e2e.ps1 -SelfTestRed   # 
   200 个约 10 分钟放满；这是刻意保守，避免瞬间打爆 LoginSrv。
 - `tools/capture/GoldenExport/` 引用 `src/OpenMir2/OpenMir2.csproj`，仅用于**离线解码**，
   不参与服务端构建（`OpenMir2.sln` 未包含它）。
+
+## 6. 世界态采样 / 对拍（C5）
+
+```powershell
+python tools/worldsample/world_sampler.py sample --capture <capture.jsonl> --out world.ndjson
+python tools/worldsample/world_sampler.py compare baseline.ndjson candidate.ndjson   # M2 的"N tick 后位置/可见集相同"
+python tools/worldsample/world_sampler.py selftest
+```
+
+细节与两条实测协议事实（自己位置不回显、上行移动帧无坐标）见 `tools/worldsample/README.md`。

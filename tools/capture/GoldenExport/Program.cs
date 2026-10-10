@@ -46,16 +46,20 @@ namespace Mir2Tools.Capture
         {
             string session = null;
             string outFile = null;
+            string layoutPath = null;
             bool dumpPlain = false;
+            bool verifyRoundtrip = false;
             for (int i = 0; i < args.Length; i++)
             {
                 if (args[i] == "--session" && i + 1 < args.Length) session = args[++i];
                 else if (args[i] == "--out" && i + 1 < args.Length) outFile = args[++i];
+                else if (args[i] == "--layout" && i + 1 < args.Length) layoutPath = args[++i];  // 见 dump_body_layout.py
                 else if (args[i] == "--dump-plain") dumpPlain = true;   // 调试：打印每帧明文（latin1 逐字节）
+                else if (args[i] == "--verify-roundtrip") verifyRoundtrip = true;   // 段回编 == 线上原字节（见 segmented_check.py）
             }
             if (session == null || outFile == null)
             {
-                Console.Error.WriteLine("usage: GoldenExport --session <proxy dump dir> --out <capture.jsonl> [--dump-plain]");
+                Console.Error.WriteLine("usage: GoldenExport --session <proxy dump dir> --out <capture.jsonl> [--layout <body_layout.json>] [--dump-plain] [--verify-roundtrip]");
                 return 2;
             }
             Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);   // GB2312
@@ -111,10 +115,20 @@ namespace Mir2Tools.Capture
                 }
             }
 
+            var layout = BodyLayoutTable.Load(layoutPath);
+            if (layout != null)
+            {
+                Console.WriteLine($"LAYOUT head_block={layout.HeadBlock} act_prefix='{layout.ActPrefix}' struct_then_rest={layout.DescribeStructEntries()}");
+                if (!string.IsNullOrEmpty(layout.DescribeSegmentedEntries()))
+                {
+                    Console.WriteLine($"LAYOUT segmented={layout.DescribeSegmentedEntries()}");
+                }
+            }
+
             // 全局 seq：按时间戳（同帧按连接/偏移稳定排序）
             frames = frames.OrderBy(f => f.TsMs).ThenBy(f => f.Conn).ThenBy(f => f.Off).ToList();
 
-            int decoded = 0, decodeErrors = 0, heartbeats = 0;
+            int decoded = 0, decodeErrors = 0, heartbeats = 0, segMismatch = 0, roundtripFails = 0;
             using (var w = new StreamWriter(outFile, false, new UTF8Encoding(false)))
             {
                 w.NewLine = "\n";   // 契约 JSONL 一律 LF（CRLF 会让入库后 blob 与工作区 sha256 不一致）
@@ -161,40 +175,86 @@ namespace Mir2Tools.Capture
                     try
                     {
                         int decLen = 0;
-                        byte[] plain = EncryptUtil.Decode(blob, blob.Length, ref decLen);
+                        byte[] flat = EncryptUtil.Decode(blob, blob.Length, ref decLen);
                         if (dumpPlain)
                         {
-                            Console.WriteLine($"  seq={seq} {f.Dir} blob={Encoding.ASCII.GetString(blob)} plain({decLen})={BitConverter.ToString(plain, 0, decLen)}");
-                            Console.WriteLine($"         text={Encoding.GetEncoding("GB2312").GetString(plain, 0, decLen)}");
+                            Console.WriteLine($"  seq={seq} {f.Dir} blob={Encoding.ASCII.GetString(blob)} plain({decLen})={BitConverter.ToString(flat, 0, decLen)}");
+                            Console.WriteLine($"         text={Encoding.GetEncoding("GB2312").GetString(flat, 0, decLen)}");
                         }
-                        // 纯字符串帧：进 GameGate 的首个上行包是 "**账号/角色/..." 登录串
-                        // （C# 侧走 ClientLogin → DeCodeString，不当 12B 头解）
-                        bool isStringFrame = decLen >= 2 && plain[0] == (byte)'*' && plain[1] == (byte)'*';
+
+                        // (1) 纯字符串帧：进 GameGate 的首个上行包是 "**账号/角色/..." 登录串
+                        //     （C# 侧走 ClientLogin → DeCodeString，不当 12B 头解）
+                        bool isStringFrame = decLen >= 2 && flat[0] == (byte)'*' && flat[1] == (byte)'*';
                         if (isStringFrame)
                         {
                             row["string_frame"] = true;
-                            row["body_len"] = decLen;
-                            row["body_sha256"] = Convert.ToHexString(SHA256.HashData(plain.AsSpan(0, decLen))).ToLowerInvariant();
+                            SetBody(row, flat, new List<byte[]> { flat });
                             decoded++;
                         }
+                        // (2) 明文动作帧（`#+GD/<rtime>!`）：payload 首字符 = act 前缀，**不是 EDCode 编码**，
+                        //     也不按 12B 头解；A 线 replay 对它不做头字段对拍（frame_form:"act"）。
+                        else if (layout != null && blob.Length > 0 && blob[0] == (byte)layout.ActPrefix)
+                        {
+                            row["frame_form"] = "act";
+                            SetBody(row, blob, new List<byte[]> { blob });
+                            decoded++;
+                        }
+                        // (3) 普通帧：**头是固定 16 字符**（enc(12B)），体按布局表分段解（与 A 线
+                        //     crates/protocol/src/frame.rs::decode_server_payload 同一口径）
+                        else if (layout != null && blob.Length >= layout.HeadBlock)
+                        {
+                            int headLen = 0;
+                            byte[] head = EncryptUtil.Decode(blob[..layout.HeadBlock], layout.HeadBlock, ref headLen);
+                            if (headLen >= 12)
+                            {
+                                row["recog"] = BitConverter.ToInt32(head, 0);
+                                row["ident"] = BitConverter.ToUInt16(head, 4);
+                                row["param"] = BitConverter.ToUInt16(head, 6);
+                                row["tag"] = BitConverter.ToUInt16(head, 8);
+                                row["series"] = BitConverter.ToUInt16(head, 10);
+                                ushort ident = BitConverter.ToUInt16(head, 4);
+                                ushort series = BitConverter.ToUInt16(head, 10);
+                                byte[] rest = blob[layout.HeadBlock..];
+                                var (segs, kind) = BodyLayoutTable.SplitBody(rest, ident, series, layout);
+                                row["layout"] = kind;
+                                if (kind.StartsWith("segmented(mismatch", StringComparison.Ordinal))
+                                {
+                                    segMismatch++;      // 表与帧对不上：不许静默，末尾按非 0 退出
+                                }
+                                else if (verifyRoundtrip && kind == "segmented" &&
+                                         !BodyLayoutTable.VerifySegmentedRoundtrip(layout, ident, rest, segs, kind))
+                                {
+                                    row["roundtrip"] = "fail";      // 段拼不回原字节 ⇒ 段边界错
+                                    roundtripFails++;
+                                }
+                                var body = new List<byte>();
+                                foreach (var seg in segs) body.AddRange(seg);
+                                SetBody(row, body.ToArray(), segs);
+                                decoded++;
+                            }
+                            else
+                            {
+                                row["short_frame"] = true;
+                                SetBody(row, flat, new List<byte[]> { flat });
+                                decoded++;
+                            }
+                        }
+                        // (4) 未提供布局表（或帧短于头块）时的旧行为：整段解，头从明文前 12B 取
                         else if (decLen >= 12)
                         {
-                            row["recog"] = BitConverter.ToInt32(plain, 0);
-                            row["ident"] = BitConverter.ToUInt16(plain, 4);
-                            row["param"] = BitConverter.ToUInt16(plain, 6);
-                            row["tag"] = BitConverter.ToUInt16(plain, 8);
-                            row["series"] = BitConverter.ToUInt16(plain, 10);
-                            int bodyLen = decLen - 12;
-                            row["body_len"] = bodyLen;
-                            row["body_sha256"] = Convert.ToHexString(SHA256.HashData(plain.AsSpan(12, bodyLen))).ToLowerInvariant();
+                            row["recog"] = BitConverter.ToInt32(flat, 0);
+                            row["ident"] = BitConverter.ToUInt16(flat, 4);
+                            row["param"] = BitConverter.ToUInt16(flat, 6);
+                            row["tag"] = BitConverter.ToUInt16(flat, 8);
+                            row["series"] = BitConverter.ToUInt16(flat, 10);
+                            row["layout"] = "flat_legacy";
+                            SetBody(row, flat.AsSpan(12).ToArray(), new List<byte[]> { flat.AsSpan(12).ToArray() });
                             decoded++;
                         }
                         else
                         {
-                            // 短帧（如纯应答）：没有 12B 头，明文整体当 body
-                            row["body_len"] = decLen;
-                            row["body_sha256"] = Convert.ToHexString(SHA256.HashData(plain.AsSpan(0, decLen))).ToLowerInvariant();
                             row["short_frame"] = true;
+                            SetBody(row, flat, new List<byte[]> { flat });
                             decoded++;
                         }
                     }
@@ -208,9 +268,40 @@ namespace Mir2Tools.Capture
                 }
             }
 
-            Console.WriteLine($"FRAMES={frames.Count} decoded={decoded} heartbeat={heartbeats} decode_error={decodeErrors}");
+            Console.WriteLine($"FRAMES={frames.Count} decoded={decoded} heartbeat={heartbeats} decode_error={decodeErrors} seg_mismatch={segMismatch}" +
+                (verifyRoundtrip ? $" roundtrip_fail={roundtripFails}" : ""));
             Console.WriteLine($"OUT={outFile}");
+            if (roundtripFails > 0)
+            {
+                Console.Error.WriteLine($"RED: 有 {roundtripFails} 帧的段拼不回线上原字节（逐行看 roundtrip=fail）—— 段边界选错了");
+                return 5;
+            }
+            if (segMismatch > 0)
+            {
+                // 分段表与线上帧对不上（段长/分隔符/尾分隔/段数任一处错）⇒ 表坏了，退出码非 0 让上层必红
+                Console.Error.WriteLine($"RED: 分段表与 {segMismatch} 帧对不上（layout 里带 segmented(mismatch:…)）" +
+                    "—— 先核对 A 线的 body_layout()，别用这张表导出金标准");
+                return 4;
+            }
             return decodeErrors > 0 ? 3 : 0;   // 有解不开的帧必须可见，不许静默
+        }
+
+        /// <summary>写 body_len / body_sha256（= **各段解码后拼接**的明文体，与 A 线口径一致）
+        /// 与 body_segments（逐段；单段帧就是单元素数组）。</summary>
+        private static void SetBody(Dictionary<string, object> row, byte[] body, List<byte[]> segments)
+        {
+            row["body_len"] = body.Length;
+            row["body_sha256"] = Convert.ToHexString(SHA256.HashData(body)).ToLowerInvariant();
+            var segs = new List<Dictionary<string, object>>();
+            foreach (var s in segments)
+            {
+                segs.Add(new Dictionary<string, object>
+                {
+                    ["len"] = s.Length,
+                    ["sha256"] = Convert.ToHexString(SHA256.HashData(s)).ToLowerInvariant(),
+                });
+            }
+            row["body_segments"] = segs;
         }
 
         /// <summary>代理监听端口 → 跳名（A 线 replay 按 hop 给帧尾独立期望）。</summary>

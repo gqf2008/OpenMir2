@@ -125,6 +125,12 @@ struct Stats {
     string_frames: usize,
     /// 内部帧（MemoryPack）条数
     internal_msgs: usize,
+    /// 明文动作帧（`#+GD/<tick>!`）条数
+    act_frames: usize,
+    /// act 帧 body 口径不符数（导出器对这类帧的 body 口径，A-9；非行为差异）
+    act_body_skew: usize,
+    /// act 帧上一个 rtime（单调性判据）
+    last_act_rtime: Option<i64>,
     first_diffs: Vec<String>,
 }
 
@@ -479,6 +485,58 @@ fn check_s2c_tail_expectation(rec: &Record, lineno: usize, dir: &str, raw: &[u8]
     }
 }
 
+/// 明文动作帧（`#+GD/<tick>!`，第四种 s2c 形态）的判据：**文法 + rtime 单调 + 逐字节**。
+fn process_act_frame(rec: &Record, lineno: usize, raw_orig: &[u8], st: &mut Stats) {
+    let raw = raw_orig;
+    // payload 是明文未编码，不按 12B 头解；判据＝文法 + rtime 单调 + 逐字节
+    {
+        let payload = &raw[1..raw.len() - 1];
+        match frame::parse_act_frame(payload) {
+            None => {
+                st.byte_mismatch += 1;
+                st.diff(format!(
+                    "line {}: act 帧文法不符（应为 `+GD/<正整数>`）: {:?}",
+                    lineno + 1,
+                    String::from_utf8_lossy(payload)
+                ));
+            }
+            Some(rtime) => {
+                st.act_frames += 1;
+                if let Some(prev) = st.last_act_rtime {
+                    if rtime <= prev {
+                        st.field_mismatch += 1;
+                        st.diff(format!(
+                            "line {}: act 帧 rtime 非单调（{rtime} <= 上一个 {prev}）",
+                            lineno + 1
+                        ));
+                    }
+                }
+                st.last_act_rtime = Some(rtime);
+                // ① 逐字节：`#` + payload + `!`
+                let mut reenc = Vec::with_capacity(payload.len() + 2);
+                reenc.push(b'#');
+                reenc.extend_from_slice(payload);
+                reenc.push(b'!');
+                if reenc != raw_orig {
+                    st.byte_mismatch += 1;
+                    st.diff(format!("line {}: act 帧字节往返不符", lineno + 1));
+                }
+                // ② body 口径：模型认为 body = 明文字节（导出器修好后应一致）
+                if let Some(want_len) = rec.body_len {
+                    if payload.len() != want_len {
+                        st.act_body_skew += 1;
+                    }
+                }
+                if let Some(want_hash) = &rec.body_sha256 {
+                    if sha256_hex(payload) != *want_hash {
+                        st.act_body_skew += 1;
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn process_frame(rec: &Record, lineno: usize, sabotage: Sabotage, st: &mut Stats) -> Result<()> {
     if rec.string_frame.unwrap_or(false) {
         return process_string_frame(rec, lineno, sabotage, st);
@@ -501,6 +559,10 @@ fn process_frame(rec: &Record, lineno: usize, sabotage: Sabotage, st: &mut Stats
         None
     };
     check_s2c_tail_expectation(rec, lineno, dir, &raw, st);
+    if dir == "s2c" && raw.len() > 3 && frame::is_act_payload(&raw[1..]) {
+        process_act_frame(rec, lineno, &raw_orig, st);
+        return Ok(());
+    }
     let Some(mut msg) = parse_frame(&raw, dir, sabotage) else {
         st.byte_mismatch += 1;
         st.diff(format!(
@@ -589,6 +651,10 @@ fn report(path: &str, coverage: bool, sabotage: Sabotage, st: &Stats) -> bool {
         st.total_frames, st.string_frames, st.total_edcode
     );
     println!("内部帧（MemoryPack）: {}", st.internal_msgs);
+    println!(
+        "明文动作帧(#+…!): {}（其中 body 口径与导出器不符 {}，A-9）",
+        st.act_frames, st.act_body_skew
+    );
     println!("byte mismatches (①): {}", st.byte_mismatch);
     println!("field mismatches (②): {}", st.field_mismatch);
     println!("distinct idents: {}", st.seen_idents.len());
