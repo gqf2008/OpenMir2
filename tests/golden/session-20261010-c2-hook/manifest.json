@@ -1,0 +1,75 @@
+{
+  "tool": "segment_frames",
+  "note": "C2 客户端进程内 dump：登录→选服→选角→建角→进世界→移动→攻击",
+  "session": {},
+  "reproduce": "mir_flow.ps1 -Account loadbot1 -CreateChar -InjectDll Mir2ClientHook.dll -InjectExe Inject.exe -HookOut <dump>",
+  "total_frames": 222,
+  "by_direction": {
+    "c2s": 46,
+    "s2c": 176
+  },
+  "by_port": {
+    "7000": 4,
+    "7100": 8,
+    "7200": 210
+  },
+  "unclosed_tail_frames": 0,
+  "heartbeats": 0,
+  "frames_sha256": "bde28e9b05610c17c1682b0e55426fc31265b620ed106e76ccc88adda78c2fcc",
+  "streams": [
+    {
+      "conn": 1,
+      "dir": "c2s",
+      "port": 7000,
+      "peer": "127.0.0.1:7000",
+      "bytes": 72,
+      "sha256": "4c50dbb314d9479a22d630db07a98c5242e8546da2efb8780a7a671af19fc277",
+      "file": "proxy/conn-0001.c2s.bin"
+    },
+    {
+      "conn": 1,
+      "dir": "s2c",
+      "port": 7000,
+      "peer": "127.0.0.1:7000",
+      "bytes": 80,
+      "sha256": "e367ae1fbd8ceade8fa21dbe68e9484b56d8176ebc9f9b49d36e837a02ef724a",
+      "file": "proxy/conn-0001.s2c.bin"
+    },
+    {
+      "conn": 2,
+      "dir": "c2s",
+      "port": 7100,
+      "peer": "127.0.0.1:7100",
+      "bytes": 150,
+      "sha256": "6c597fe5ea303bd7ff29c11d3d5b84641e1c9fcc408361972680fefb6baf64ef",
+      "file": "proxy/conn-0002.c2s.bin"
+    },
+    {
+      "conn": 2,
+      "dir": "s2c",
+      "port": 7100,
+      "peer": "127.0.0.1:7100",
+      "bytes": 109,
+      "sha256": "4dda20beb72bcb5a72fc9ad2599d4957e557084743e4a1bc543317db60f6b870",
+      "file": "proxy/conn-0002.s2c.bin"
+    },
+    {
+      "conn": 3,
+      "dir": "c2s",
+      "port": 7200,
+      "peer": "127.0.0.1:7200",
+      "bytes": 854,
+      "sha256": "a0a9cfd64eec1800efe6ee1fc4b7b827613868dbed0217d19b3daf52db5dd227",
+      "file": "proxy/conn-0003.c2s.bin"
+    },
+    {
+      "conn": 3,
+      "dir": "s2c",
+      "port": 7200,
+      "peer": "127.0.0.1:7200",
+      "bytes": 5246,
+      "sha256": "7eeb4d8d97c5e45e4ce9fe9498a626077c8928516547d9e5615988735f4796a6",
+      "file": "proxy/conn-0003.s2c.bin"
+    }
+  ]
+}

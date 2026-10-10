@@ -40,7 +40,22 @@ param(
   [string]$ChrSexBtn  = "632,340", # 性别=男（image(635,369)）
   [string]$ChrOkBtn = "670,466",   # 「新加入」提交（实测 image(673,495)）
   # ---- 自动挂机（Ctrl+Alt+X）：走路 + 打怪，覆盖 移动/攻击 阶段 ----
-  [int]$AutoPlaySec = 0
+  [int]$AutoPlaySec = 0,
+  # ---- C2：客户端进程内 dump（不改客户端文件；见 tools/capture/clienthook/）----
+  [string]$InjectDll = "",   # Mir2ClientHook.dll 完整路径
+  [string]$InjectExe = "",   # Inject.exe 完整路径
+  [string]$HookOut   = "",   # dump 输出目录（作为环境变量给子进程，DLL 启动时读取）
+  [int]$AttackClicks = 0,    # 进世界后绕角色点 N 下（点到怪=CM_HIT，点到地=CM_WALK）
+  [string]$AttackRing = "",  # 覆盖默认点击环："dx,dy;dx,dy;..."（相对角色屏幕中心）
+  # ---- 会话拆除（「小退」阶段的一种真实形态）----
+  # 客户端自己的小退要走 AppLogout 的确认框（Alt+X → 确定 → CM_SOFTCLOSE 1009），
+  # 合成按键打不穿那个模态框（实测 keybd_event / SendInput 都不行）；
+  # 这里改用**同账号再登录**：本账号在别处登录会触发 LoginSrv 顶号 → 会话被踢 →
+  # 客户端收到 SM_OUTOFCONNECTION(528)。前提：账号名 = <BotPrefix><序号>，
+  # 这样 BotSrv（LoginId = 前缀+序号）才能用同一个账号登进来。
+  [string]$KickVia = "",     # BotSrv 前缀（账号名必须是 <前缀>0，即本客户端用的账号）
+  [int]$KickWaitSec = 30,
+  [string]$BotRunner = ""    # tools/botload/run_bots.ps1 路径（默认自动定位）
 )
 
 $ErrorActionPreference = "Stop"
@@ -60,6 +75,26 @@ public class MirFlow {
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll")] public static extern void mouse_event(uint flags, int dx, int dy, uint data, IntPtr extra);
   [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, IntPtr extra);
+
+  // SendInput：按扫描码注入真实键盘事件（Alt+X 这类组合键在部分 VCL 程序里
+  // 用 keybd_event 不生效；SendInput 走驱动层，最接近真人按键）
+  [StructLayout(LayoutKind.Sequential)] public struct KEYBDINPUT { public ushort wVk; public ushort wScan; public uint dwFlags; public uint time; public IntPtr dwExtraInfo; }
+  [StructLayout(LayoutKind.Sequential)] public struct INPUT { public uint type; public KEYBDINPUT ki; public int pad1; public int pad2; }
+  [DllImport("user32.dll", SetLastError = true)] public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+  public const uint INPUT_KEYBOARD = 1;
+  public const uint KEYEVENTF_KEYUP = 0x0002;
+  public const uint KEYEVENTF_SCANCODE = 0x0008;
+  public static void SendAltX() {
+    // 用虚拟键注入（wVk），不要只填 wScan 而不带 KEYEVENTF_SCANCODE：
+    // 那样 wVk=0 的事件是无效的，Alt 根本不会按下，客户端读到的 Shift 里没有 ssAlt，
+    // Alt+X 就落到"没按 Alt"的分支（实测：既不弹小退确认框，也不发 CM_SOFTCLOSE）。
+    INPUT[] seq = new INPUT[4];
+    seq[0].type = INPUT_KEYBOARD; seq[0].ki.wVk = 0x12;                                       // VK_MENU down
+    seq[1].type = INPUT_KEYBOARD; seq[1].ki.wVk = 0x58;                                       // VK_X down
+    seq[2].type = INPUT_KEYBOARD; seq[2].ki.wVk = 0x58; seq[2].ki.dwFlags = KEYEVENTF_KEYUP;  // X up
+    seq[3].type = INPUT_KEYBOARD; seq[3].ki.wVk = 0x12; seq[3].ki.dwFlags = KEYEVENTF_KEYUP;  // Alt up
+    SendInput(4, seq, Marshal.SizeOf(typeof(INPUT)));
+  }
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L,T,R,B; }
   [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X,Y; }
 }
@@ -78,12 +113,31 @@ function Stage([string]$name) {
 Stage "start"
 Get-Process MirClinet -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Seconds 2
+if ($HookOut -ne "") { $env:MIR2_HOOK_OUT = $HookOut }   # 必须在 Start-Process 之前：子进程继承
 Start-Process -FilePath "$RunDir\run-release.cmd" -WorkingDirectory $RunDir
 Start-Sleep -Seconds 14
 $p = Get-Process MirClinet -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $p) { throw "客户端进程 MirClinet 未起来" }
 $script:hwnd = $p.MainWindowHandle
 Write-Output "CLIENT_PID=$($p.Id)"
+
+if ($InjectDll -ne "") {
+  Stage "inject_hook"
+  if ($InjectExe -eq "") { $InjectExe = Join-Path (Split-Path $InjectDll -Parent) "Inject.exe" }
+  $injOut = & $InjectExe --pid $p.Id --dll $InjectDll 2>&1
+  Write-Output ("INJECT: " + ($injOut -join " "))
+  # 等 DLL 自己的就绪标记（不建连、不探测）：拿不到就明确失败，别让空 dump 混过去
+  $flag = Join-Path $HookOut "hook-ready.flag"
+  $deadline2 = (Get-Date).AddSeconds(10)
+  while (-not (Test-Path $flag) -and (Get-Date) -lt $deadline2) { Start-Sleep -Milliseconds 300 }
+  if (Test-Path $flag) { Write-Output "HOOK_READY" }
+  else {
+    if (Test-Path (Join-Path $HookOut "hook-failed.flag")) {
+      throw "hook 注入后未就绪（hook-failed.flag：导入表里没找齐 wsock32 的 send/recv/connect/closesocket）"
+    }
+    throw "hook 未就绪：$flag 未出现（注入失败？）"
+  }
+}
 
 $pt = New-Object MirFlow+POINT
 [void][MirFlow]::ClientToScreen($script:hwnd, [ref]$pt)
@@ -204,15 +258,23 @@ if ($CreateChar) {
 Stage "enter_game"
 Send-Click $CharSlotX 550
 Send-Click 517 552
-Start-Sleep -Seconds 13
+# 进图后服务端会推「公告」模态框（SM_SENDNOTICE 658），客户端点掉后回 CM_LOGINNOTICEOK(1018)，
+# 服务端才继续下发世界数据。**窗口只有 10 秒**：PlayObject.RunNotice 里
+# `(GetTickCount - WaitLoginNoticeOkTick) > 10*1000 ⇒ BoEmergencyClose`，
+# 超时角色会被踢、世界数据永远不来（症状=黑屏 + 只收到 445B 公告）。
+# 因此这里不能"等 13 秒再点一次"，要**从进图就开始高频点确定**，覆盖公告出现的时刻。
+Stage "notice_poll"
+$noticeClicked = $false
+for ($i = 0; $i -lt 12; $i++) {
+  Send-Click 522 525 1
+  Start-Sleep -Milliseconds 1200
+  if ($i -eq 2) { Shot "05_ingame.png" }
+  if ($i -ge 6 -and -not $noticeClicked) { $noticeClicked = $true; Shot "05b_after_notice.png" }
+}
+if (-not $noticeClicked) { Shot "05b_after_notice.png" }
 Stage "ingame"
-Shot "05_ingame.png"
-
-# ---- 进游戏后可能弹「公告」模态框（确定按钮居中），不点掉就不进世界 ----
-Stage "notice_dismiss"
-Send-Click 522 525 2
-Start-Sleep -Seconds 4
-Shot "05b_after_notice.png"
+Start-Sleep -Seconds 2
+Shot "05c_ingame_ready.png"
 
 # ---- 自动挂机：Ctrl+Alt+X 开，跑 N 秒（走路+打怪），再关 ----
 if ($AutoPlaySec -gt 0) {
@@ -246,6 +308,20 @@ if ($AutoPlaySec -gt 0) {
   Shot "05d_autoplay_off.png"
 }
 
+# ---- 攻击：在角色周围按环状点几下（比奇省刷怪区怪物密集，点到即出 CM_HIT）----
+if ($AttackClicks -gt 0) {
+  $ring = @("0,-40", "40,0", "0,40", "-40,0", "28,-28", "28,28", "-28,28", "-28,-28",
+            "70,0", "0,70", "-70,0", "0,-70")
+  if ($AttackRing -ne "") { $ring = $AttackRing.Split(";") }
+  for ($i = 0; $i -lt [Math]::Min($AttackClicks, $ring.Count); $i++) {
+    $d = $ring[$i].Split(",") | ForEach-Object { [int]$_ }
+    Stage ("attack_" + ($i + 1))
+    Send-Click (512 + $d[0]) (384 + $d[1]) 1
+    Start-Sleep -Milliseconds 900
+  }
+  Shot "06_attack.png"
+}
+
 # ---- 走路 ----
 for ($i = 1; $i -le $WalkClicks; $i++) {
   Stage ("walk_" + $i)
@@ -269,16 +345,66 @@ if ($WalkPath) {
 }
 
 # ---- 小退：Alt+X -> 确定 ----
+# ---- 会话拆除（顶号）：本账号在 BotSrv 侧再登录一次 ----
+if ($KickVia -ne "") {
+  Stage "kick_relogin"
+  if ($BotRunner -eq "") { $BotRunner = Join-Path (Split-Path $PSCommandPath -Parent) "..\botload\run_bots.ps1" }
+  $kickLog = Join-Path $OutDir "kick.out.log"
+  $kickProc = Start-Process -FilePath "powershell" -PassThru -WindowStyle Hidden `
+    -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $BotRunner,
+                    "-Count", "1", "-Prefix", $KickVia, "-SkipBuild", "-TimeoutSec", "60") `
+    -RedirectStandardOutput $kickLog -RedirectStandardError "$kickLog.err"
+  Start-Sleep -Seconds $KickWaitSec
+  Shot "06b_after_kick.png"
+  Get-Process BotSrv -ErrorAction SilentlyContinue | Stop-Process -Force
+  if ($kickProc -and -not $kickProc.HasExited) { Stop-Process -Id $kickProc.Id -Force -ErrorAction SilentlyContinue }
+  Start-Sleep -Seconds 2
+}
+
 Stage "logout_alt_x"
+# 小退入口有两条，依次试（客户端 ClMain.pas 的 `Word('X')` 分支 vs FState.pas 的
+# DBotLogout 按钮 → 两者最终都走 TfrmMain.AppLogout → 确认框 → CM_SOFTCLOSE(1009)）：
+#   ① Alt+X：必须用 keybd_event（PostMessage 不更新系统键盘状态，客户端读不到 ssAlt）
+#   ② F12 打开选项面板 → 点「小退」按钮（FState.pas:2522 算出 Left=754, Top=104）
 [void][MirFlow]::SetForegroundWindow($script:hwnd)
-Start-Sleep -Milliseconds 200
-[MirFlow]::keybd_event(18, 0, 0, [IntPtr]0)
-Start-Sleep -Milliseconds 100
-[MirFlow]::keybd_event(88, 0, 0, [IntPtr]0)
-Start-Sleep -Milliseconds 100
-[MirFlow]::keybd_event(88, 0, 2, [IntPtr]0)
-Start-Sleep -Milliseconds 100
-[MirFlow]::keybd_event(18, 0, 2, [IntPtr]0)
+Start-Sleep -Milliseconds 400
+for ($i = 0; $i -lt 3; $i++) {
+  [MirFlow]::keybd_event(0x1B, 0, 0, [IntPtr]0)
+  Start-Sleep -Milliseconds 80
+  [MirFlow]::keybd_event(0x1B, 0, 2, [IntPtr]0)
+  Start-Sleep -Milliseconds 250
+}
+# 关键：先把键盘焦点从聊天输入框拿回来——
+# 输入框有焦点时 X 会被当成字符吃掉（实测曾发出 CM_SAY 3030 而不是小退）。
+# 两手都上：① 点地图；② 回车键（聊天框开着=发送并收起；已收起再按=打开，
+# 所以成对按两次，最终状态必为"收起"）。
+Send-Click 512 200 1
+Start-Sleep -Milliseconds 500
+[MirFlow]::keybd_event(0x0D, 0, 0, [IntPtr]0)
+Start-Sleep -Milliseconds 120
+[MirFlow]::keybd_event(0x0D, 0, 2, [IntPtr]0)
+Start-Sleep -Milliseconds 400
+[MirFlow]::keybd_event(0x0D, 0, 0, [IntPtr]0)
+Start-Sleep -Milliseconds 120
+[MirFlow]::keybd_event(0x0D, 0, 2, [IntPtr]0)
+Start-Sleep -Milliseconds 600
+for ($k = 0; $k -lt 3; $k++) {
+  [void][MirFlow]::SetForegroundWindow($script:hwnd)
+  Start-Sleep -Milliseconds 300
+  [MirFlow]::SendAltX()
+  Start-Sleep -Seconds 2
+  Shot ("07_logout_altx" + $k + ".png")
+}
+# ② 选项面板路径：F12 → 小退按钮 → 确认
+Stage "logout_menu"
+[void][MirFlow]::SetForegroundWindow($script:hwnd)
+Start-Sleep -Milliseconds 250
+[MirFlow]::keybd_event(0x7B, 0, 0, [IntPtr]0)   # F12
+Start-Sleep -Milliseconds 120
+[MirFlow]::keybd_event(0x7B, 0, 2, [IntPtr]0)
+Start-Sleep -Seconds 2
+Shot "07_logout_menu_open.png"
+Send-Click 754 104 1
 Start-Sleep -Seconds 2
 Shot "07_logoutdlg.png"
 Stage "logout_confirm"

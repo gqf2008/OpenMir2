@@ -67,3 +67,8 @@ M0 金标准验收状态（2026-10-10）：① 逐字节回放 0 差异、② �
 证据：`tests/parity/envir-2026-10-10/`（双侧 parse-stats JSON + diff.txt + handler-maps.txt + SHA256SUMS）。
 复现命令见 `crates/script/README.md`。
 
+## C 线登记（工具侧例外）
+
+| 编号 | 差异/豁免点 | 为什么无害 | 谁审的 |
+| --- | --- | --- | --- |
+| T-1 | 改动 `src/BotSrv/**`：`LogService` 引用修正（`BotShare.LogService` → `OpenMir2.LogService`）、空角色列表解码守卫（`SelectChrScene.ClientGetReceiveChrs` 对空 body 不再抛 `ArgumentNullException`）、新增 `SocketShim.cs`（上游 `ScoketClient`/`DSCClient*` 被移除后按原 API 表面用 `System.Net.Sockets` 重写）、`AppServer` 的 Host 与 Serilog 装配（`LogService.Logger` 必须先赋值） | BotSrv **不在 oracle 七进程内**：不监听 oracle 端口、不被其它组件依赖，仅作压测/夹具客户端。改动前它无法编译（依赖的类型已在上游重构中删除）、编出来也起不来（`LogService.Logger` 未初始化）；改动后可编可跑，200 并发登录实测 200/200、0 失败。oracle 二进制与配置未被触碰（§13.1 时间戳复核可证：网关 2026-10-09 01:18、`M2Server.dll` 2026-10-10 00:10） | 协调者（§13.4-1 判为工具侧例外并接受） |
