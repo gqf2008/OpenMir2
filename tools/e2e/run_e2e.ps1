@@ -96,6 +96,9 @@ Add-Result "timeline-selftest" ($LASTEXITCODE -eq 0)
 python (Join-Path $RepoRoot "tools\dbsnap\dbsnap.py") selftest
 Add-Result "dbsnap-selftest" ($LASTEXITCODE -eq 0)
 
+python (Join-Path $RepoRoot "tools\worldsample\world_sampler.py") selftest
+Add-Result "worldsample-selftest" ($LASTEXITCODE -eq 0)
+
 # ---- 4. 金标准完整性 ----
 $latestFile = Join-Path $RepoRoot "tests\golden\LATEST"
 if (Test-Path $latestFile) {

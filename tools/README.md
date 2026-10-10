@@ -19,6 +19,7 @@ tools/botload/run_bots.ps1    假人压测驱动（BotSrv N 并发登录）     
 tools/logdiff/timeline.py     多源日志归一 + 时间线对拍                      selftest（2 项）
 tools/dbsnap/dbsnap.py        MySQL 快照/字段级比对                          selftest（2 项）
 tools/e2e/run_e2e.ps1         E2E 回归套件（工具自测+金标准+流程+冒烟）      -SelfTestRed
+tools/worldsample/world_sampler.py  世界态采样/对拍（位置·AOI·背包·金币·tick）  selftest（确定性 + 改坏必红）
 ```
 
 ## 0. 一次跑完全部自测（不需起服务端）
@@ -188,3 +189,13 @@ powershell -ExecutionPolicy Bypass -File tools/e2e/run_e2e.ps1 -SelfTestRed   # 
   200 个约 10 分钟放满；这是刻意保守，避免瞬间打爆 LoginSrv。
 - `tools/capture/GoldenExport/` 引用 `src/OpenMir2/OpenMir2.csproj`，仅用于**离线解码**，
   不参与服务端构建（`OpenMir2.sln` 未包含它）。
+
+## 6. 世界态采样 / 对拍（C5）
+
+```powershell
+python tools/worldsample/world_sampler.py sample --capture <capture.jsonl> --out world.ndjson
+python tools/worldsample/world_sampler.py compare baseline.ndjson candidate.ndjson   # M2 的"N tick 后位置/可见集相同"
+python tools/worldsample/world_sampler.py selftest
+```
+
+细节与两条实测协议事实（自己位置不回显、上行移动帧无坐标）见 `tools/worldsample/README.md`。
