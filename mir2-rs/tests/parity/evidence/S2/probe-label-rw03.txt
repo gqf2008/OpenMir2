@@ -1,0 +1,39 @@
+[轴] CHECKRANGEMONCOUNT     字段序号=129  CmdCode=128  处理器=ConditionOfCheckContribution
+[轴] CHECKITEMADDVALUE      字段序号=130  CmdCode=129  处理器=ConditionOfCheckRangeMonCount
+[轴] CHECKINMAPRANGE        字段序号=131  CmdCode=130  处理器=ConditionOfCheckItemAddValue
+[轴] CHECKLEVEL             字段序号=7    CmdCode=6    处理器=ConditionCheckUnit
+
+== label @rw03 @ E:/MirServer/M2GameSvr/Envir/Npc_Def/比奇国王-0122.txt
+--- 第 43 行（#IF 块内第 1 条）
+行           : CHECKITEMADDVALUE 3 10 = 1
+命令         : CHECKITEMADDVALUE（已注册 [ScriptDefName]）
+CmdCode      : 129（解析器存的就是这个值）
+派发目标     : ConditionOfCheckRangeMonCount   ← 与命令名不同：B-8 位移
+sParam5      : 长 0（该处理器要取 [1]）
+结果         : IndexOutOfRangeException: Index was outside the bounds of the array.
+抛出点       : at ScriptSystem.Processings.ConditionProcessingSys.ConditionOfCheckRangeMonCount(INormNpc normNpc, IPlayerActor baseObject, QuestConditionInfo questConditionInfo, Boolean& success) in E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\s1-oracle-fixes\src\Modules\ScriptEngine\Processings\ConditionProcessingSys.cs:line 1107
+               （Release 下行号归属会落到方法体首行附近；越界语句本身是方法里第 5 个参数那句 `sParam5[1]`）
+
+--- 第 49 行（#IF 块内第 1 条）
+行           : checkitemw 祈福项链 1
+命令         : CHECKITEMW（已注册 [ScriptDefName]）
+CmdCode      : 10（解析器存的就是这个值）
+派发目标     : ConditionOfCheckItem   ← 与命令名不同：B-8 位移
+sParam5      : 长 0（该处理器要取 [1]）
+结果         : NullReferenceException: Object reference not set to an instance of an object.
+抛出点       : at ScriptSystem.Processings.ConditionProcessingSys.ConditionOfCheckItem(INormNpc normNpc, IPlayerActor playerActor, QuestConditionInfo questConditionInfo, Boolean& success) in E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\s1-oracle-fixes\src\Modules\ScriptEngine\Processings\ConditionProcessingSys.cs:line 4051
+               （Release 下行号归属会落到方法体首行附近；越界语句本身是方法里第 5 个参数那句 `sParam5[1]`）
+               ⚠ 这是 NRE：很可能是本探针的空 stub 造成，**不可**据此判生产崩溃
+
+--- 第 50 行（#IF 块内第 2 条）
+行           : checkitem 祝福油 1
+命令         : CHECKITEM（已注册 [ScriptDefName]）
+CmdCode      : 9（解析器存的就是这个值）
+派发目标     : ConditionOfCheckSlaveListCount   ← 与命令名不同：B-8 位移
+sParam5      : 长 0（该处理器要取 [1]）
+结果         : NullReferenceException: Object reference not set to an instance of an object.
+抛出点       : at ScriptSystem.Processings.ConditionProcessingSys.ConditionOfCheckSlaveListCount(INormNpc normNpc, IPlayerActor playerActor, QuestConditionInfo questConditionInfo, Boolean& success) in E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\s1-oracle-fixes\src\Modules\ScriptEngine\Processings\ConditionProcessingSys.cs:line 224
+               （Release 下行号归属会落到方法体首行附近；越界语句本身是方法里第 5 个参数那句 `sParam5[1]`）
+               ⚠ 这是 NRE：很可能是本探针的空 stub 造成，**不可**据此判生产崩溃
+
+== 该 label 的 #IF 条件共 3 条，其中 3 条抛异常

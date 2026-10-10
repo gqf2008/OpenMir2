@@ -1,0 +1,16 @@
+# tools/oracle/verify_gate_reconnect.ps1 —— 改后：整条输出走管道（tee），调用方必须立刻读到 EOF
+# 命令：powershell -NoProfile -ExecutionPolicy Bypass -File tools/oracle/verify_gate_reconnect.ps1 -SkipBaseline | tee <本文件>
+
+== verify_gate_reconnect：前置通过（5000/7000/7100/7200 均在监听）
+== 步骤 2：重启 GameGate（不动 GameSvr/MySQL），制造一次网关重连
+      停 GameGate pid=35380
+GREEN  gate-reconnected  (已打开 1 -> 2)
+== 步骤 3：抖动后跑真实客户端进阶流程
+      （判据产物已齐/超时，结束流程进程）
+      画面非黑占比 98.92%
+GREEN  after-bounce-flow-stages  (stages=8)
+GREEN  after-bounce-flow-reached-world  (流程走到 ingame 且出了 05b_after_notice.png)
+GREEN  after-bounce-world-render  (05b_after_notice.png 非黑 >=1%)
+GREEN  no-setgateuserlist-nre  (SetGateUserList 出现次数 0 -> 0)
+==== verify_gate_reconnect: 5 GREEN / 0 RED；产物 E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\s1-oracle-fixes\tests\oracle\gate-reconnect-20261010-192123
+gate 用时 55093 ms

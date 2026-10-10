@@ -369,8 +369,10 @@ tests/botload/
 tests/e2e/
 tools/capture/clienthook/bin/
 
-# S1 oracle 维护线：实机门禁的会话产物（截图/阶段/日志）不入库，结论与摘录进
-# mir2-rs/tests/parity/evidence/S1/
+# S1/S2 oracle 维护线：实机门禁的会话产物（截图/阶段/日志）不入库，结论与摘录进
+# mir2-rs/tests/parity/evidence/S{1,2}/
 tests/oracle/
 tools/oracle/gate-slot-probe/bin/
 tools/oracle/gate-slot-probe/obj/
+tools/oracle/cond-crash-probe/bin/
+tools/oracle/cond-crash-probe/obj/

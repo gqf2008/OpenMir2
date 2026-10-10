@@ -55,6 +55,10 @@ $GameSvrLog = Join-Path $LogDir 'GameSvr.out.log'
 $GateDir = Join-Path $ServerRoot 'RunGate'
 $GateExe = Join-Path $GateDir 'GameGate.exe'
 
+# 起长命服务一律走 detached 帮手，别在 PowerShell 层重定向（否则子进程占住本脚本的 stdout 管道，
+# 调用方读不到 EOF：脚本跑完了却不回、会话不退）。见 detached.ps1 的实测三档。
+. (Join-Path $PSScriptRoot 'detached.ps1')
+
 $results = @()
 function Add-Result([string]$Name, [bool]$Ok, [string]$Detail = "") {
   $script:results += [pscustomobject]@{ check = $Name; ok = $Ok; detail = $Detail }
@@ -116,6 +120,9 @@ function Invoke-Flow([string]$Tag, [string[]]$RequiredStages) {
     $flowArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $RepoRoot 'tools\client\mir_flow.ps1'), '-OutDir', $flowOut) + $FlowExtraArgs
     $proc = Start-Process -FilePath 'powershell' -ArgumentList $flowArgs -PassThru -WindowStyle Hidden `
       -RedirectStandardOutput $stdoutFile -RedirectStandardError ($stdoutFile + '.err')
+    # 这里的 PowerShell 级重定向**可以留**：流程是短命进程，而且每次用完都会
+    # Stop-ProcessTree 连树收掉 ⇒ 它不会活过本脚本、也就不会一直占着本脚本的 stdout 管道。
+    # 反过来，长命服务（GameGate/GameSvr）绝不能这么起 —— 见 detached.ps1。
 
     $deadline = (Get-Date).AddSeconds($FlowTimeoutSec)
     $reached = $false
@@ -129,7 +136,7 @@ function Invoke-Flow([string]$Tag, [string[]]$RequiredStages) {
       Start-Sleep -Milliseconds 500
     }
     if (-not $proc.HasExited) {
-      try { Stop-Process -Id $proc.Id -Force } catch { }
+      try { Stop-ProcessTree -Id $proc.Id } catch { }   # 连子进程树一起收：留着的孩子也会占住句柄/管道
       Write-Host "      （判据产物已齐/超时，结束流程进程）"
     }
     Get-Process MirClinet -ErrorAction SilentlyContinue | Stop-Process -Force
@@ -199,9 +206,8 @@ if (-not $SkipGateBounce) {
   $gates = @(Get-Process GameGate -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $GateExe })
   foreach ($g in $gates) { Write-Output ("      停 GameGate pid=" + $g.Id); Stop-Process -Id $g.Id -Force }
   Start-Sleep -Seconds 2
-  Start-Process -FilePath $GateExe -WorkingDirectory $GateDir `
-    -RedirectStandardOutput (Join-Path $LogDir 'RunGate.out.log') `
-    -RedirectStandardError (Join-Path $LogDir 'RunGate.err.log') -WindowStyle Hidden | Out-Null
+  Start-DetachedProcess -Exe $GateExe -WorkDir $GateDir `
+    -OutLog (Join-Path $LogDir 'RunGate.out.log') -ErrLog (Join-Path $LogDir 'RunGate.err.log')
 
   $deadline = (Get-Date).AddSeconds($GateReadyTimeoutSec)
   $reconnected = $false
