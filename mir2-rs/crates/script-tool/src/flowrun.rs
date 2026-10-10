@@ -66,6 +66,11 @@ impl ScriptPlayer for FlowPlayer {
     fn gold(&self) -> i32 {
         self.gold
     }
+    fn dec_gold(&mut self, n: i32) {
+        // 对齐 C# flow 夹具 `DecGold`：`GoldValue -= v; Log.Add($"gold {-v}")`
+        self.gold -= n;
+        self.log.push(format!("gold {}", -n));
+    }
     fn actor_id(&self) -> i32 {
         4242
     }

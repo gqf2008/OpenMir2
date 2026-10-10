@@ -1,8 +1,8 @@
 //! 动作处理器（`ExecutionProcessingSys`）与 `ScriptEngine` 的动作 switch（1:1 移植）。
 //!
-//! 注意 C# 语义：注册表以**枚举值**为键，解析器产出的 CmdCode 对普通命令是枚举值-1，
-//! 因此脚本写的命令常落到「前一个」成员的实现上（whitelist B-8）。本模块按 CmdCode 直查，
-//! 保持同样的落点。
+//! 注意 C# 语义：注册表以**枚举值**为键。历史上解析器产出 `枚举值-1`（whitelist B-8/T-4），
+//! 脚本写的命令会落到「前一个」成员的实现上；**B2/M4 已同批翻转**（`parser.rs` 现取字段序号，
+//! 与 C# S3 修正后一致）⇒ 本模块按 CmdCode 直查即命中“这条命令自己的”处理器。
 
 use crate::engine::{Engine, EngineError};
 use crate::model::{QuestActionInfo, QuestConditionInfo};
@@ -10,6 +10,9 @@ use crate::model::{QuestActionInfo, QuestConditionInfo};
 /// C# `Messages` 常量（`src/OpenMir2/Messages.cs`）。
 pub const RM_MERCHANTDLGCLOSE: i32 = 10127;
 pub const RM_MENU_OK: i32 = 10309;
+
+/// C# `Grobal2.StringGoldName`（金币名）——`GotoLableTakeItem`/`GiveItem` 按它区分金币与物品。
+pub const GOLD_NAME: &str = "金币";
 
 impl Engine<'_, '_> {
     /// 已注册动作的派发。
@@ -54,6 +57,11 @@ impl Engine<'_, '_> {
                 for k in 0..info.n_param2 {
                     self.player.set_quest_unit_status(info.n_param1 + k, 0);
                 }
+            }
+            "ActionOfMapMove" => {
+                // C# `ActionOfMapMove`：SendRefMsg(RM_SPACEMOVE_FIRE, …) + SpaceMove(sParam1, nParam2, nParam3, 0)
+                self.player
+                    .space_move(&info.s_param1, info.n_param2 as i16, info.n_param3 as i16);
             }
             "ActionOfSet" => {
                 // C#: int n28 = StrToInt(sParam1, 0); int n2C = StrToInt(sParam2, 0);
@@ -151,15 +159,24 @@ impl Engine<'_, '_> {
                 }
                 self.goto_label(&info.s_param1, false);
             }
-            "Take" | "Takew" | "TakecheckItem" => {
-                // 物品移除路径（GotoLableTakeItem / GotoLableTakeWItem）——批次 2 后续
+            "Take" => {
+                // C# `GotoLableTakeItem(playerActor, sParam1, nParam2, ItemName)`：
+                // 金币名 → DecGold(nParam2)；否则按名从背包移除 nParam2 件。
+                if info.s_param1.eq_ignore_ascii_case(GOLD_NAME) {
+                    self.player.dec_gold(info.n_param2);
+                } else {
+                    self.player.remove_item(&info.s_param1, info.n_param2);
+                }
+            }
+            "Takew" | "TakecheckItem" => {
+                // GotoLableTakeWItem / GotoLableTakeCheckItem —— 批次 2 后续
                 self.errors.push(EngineError::NotImplemented {
                     kind: "action",
                     code,
-                    handler: match case {
-                        "Take" => "GotoLableTakeItem",
-                        "Takew" => "GotoLableTakeWItem",
-                        _ => "GotoLableTakeCheckItem",
+                    handler: if case == "Takew" {
+                        "GotoLableTakeWItem"
+                    } else {
+                        "GotoLableTakeCheckItem"
                     },
                 });
             }

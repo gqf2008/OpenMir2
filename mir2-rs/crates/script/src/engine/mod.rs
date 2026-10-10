@@ -25,6 +25,12 @@ pub trait ScriptPlayer {
     fn quest_flag_status(&self, flag: i16) -> u8;
     /// `playerActor.Gold`
     fn gold(&self) -> i32;
+    /// `IPlayerActor.DecGold`（`GotoLableTakeItem` 的金币分支）。
+    fn dec_gold(&mut self, n: i32);
+    /// `IPlayerActor.SpaceMove`（`ActionOfMapMove`）。
+    /// 默认空实现：flow 夹具的 C# 侧用 DispatchProxy，`SpaceMove`/`SendRefMsg` 不落日志，
+    /// 故默认不产生可观察副作用（与两侧对拍口径一致）；真世界适配层可覆写。
+    fn space_move(&mut self, _map: &str, _x: i16, _y: i16) {}
     fn actor_id(&self) -> i32;
     /// `playerActor.Abil.Level`
     fn level(&self) -> i32;

@@ -62,6 +62,9 @@ impl ScriptPlayer for MockPlayer {
     fn gold(&self) -> i32 {
         self.gold
     }
+    fn dec_gold(&mut self, n: i32) {
+        self.gold -= n;
+    }
     fn actor_id(&self) -> i32 {
         4242
     }
@@ -306,9 +309,8 @@ break
 }
 
 #[test]
-fn take_targets_goto_lable_take_item_not_yet_implemented() {
-    // B2/M4 翻转后：脚本 `take 金币 1`（枚举 2）→ CmdCode 2 → GotoLableTakeItem（尚未实现）
-    // ⇒ 显式 NotImplemented，不再误落到旧位移的 ActionOfSet 写标记。
+fn take_gold_hits_goto_lable_take_item_after_flip() {
+    // B2/M4 翻转后：脚本 `take 金币 1`（枚举 2）→ CmdCode 2 → GotoLableTakeItem（金币分支）⇒ 扣金币。
     let (mut npc, mut player) = setup(
         "[@main]
 #ACT
@@ -316,17 +318,11 @@ take 金币 1
 ",
     );
     let errors = run(&mut npc, &mut player, "@main");
-    assert!(
-        errors.iter().any(|e| matches!(
-            e,
-            EngineError::NotImplemented {
-                handler: "GotoLableTakeItem",
-                ..
-            }
-        )),
-        "{errors:?}"
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(
+        player.gold, 99,
+        "take 金币 1 应走 GotoLableTakeItem 金币分支：100 - 1"
     );
-    assert_eq!(player.flags.get(&0), None, "不再误落 ActionOfSet 写标记");
 }
 
 #[test]

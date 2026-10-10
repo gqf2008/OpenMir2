@@ -31,6 +31,7 @@ pub static IMPLEMENTED_EXECUTIONS: &[&str] = &[
     "ActionOfSet",
     "ActionOfClose",
     "ActionOfMessageBox",
+    "ActionOfMapMove",
     "ActionOfMobFireBurn",
     "ActionOfResetUnit",
     "ActionOfReSet",
