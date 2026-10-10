@@ -260,6 +260,48 @@ namespace BotSrv.Player
 
         #endregion
 
+        /// <summary>压测动作探针：见 ProbeActionTick()。</summary>
+        private static readonly bool _probeEnabled =
+            Environment.GetEnvironmentVariable("MIR2_BOT_ACTION_PROBE") == "1";
+        private static readonly int _probeIntervalMs = ProbeIntervalFromEnv();
+        private int _probeLastTick;
+        private int _probeDir;
+
+        private static int ProbeIntervalFromEnv()
+        {
+            string v = Environment.GetEnvironmentVariable("MIR2_BOT_ACTION_PROBE_MS");
+            if (!string.IsNullOrEmpty(v) && int.TryParse(v, out int ms) && ms > 0)
+            {
+                return ms;
+            }
+            return 1000;
+        }
+
+        /// <summary>压测用动作探针：进世界后每 ~1s 发一个 `CM_TURN`，用来拿服务端的 `#+GD/&lt;rtime&gt;!` ack
+        /// （tick 服务时延口径的样本来源）。
+        ///
+        /// **为什么这样写**：BotSrv 的挂机/移动层建立在**跨假人共享的全局态**上（`MShare.MySelf` 等），
+        /// N 个假人只有登录链路无状态 ⇒ 谁都动不了、tick 样本恒为 0（2026-10-10 实测）。
+        /// 本探针刻意**只依赖本假人自己的东西**：自己的 socket（`SendSocket`）与自己实例上的场景状态
+        /// （`DScreen.CurrentScene == PlayScene`），**不读不写 MShare 的世界态** ⇒ 每个假人各自产生动作。
+        /// 线上形状照 C3 金标准的实测（`CM_TURN`：`Recog`=递增时间戳样值、`Param`=0、`Tag`=方向样值、`Series`=0）。</summary>
+        private void ProbeActionTick()
+        {
+            if (!_probeEnabled || ClientSocket == null || DScreen.CurrentScene != PlayScene)
+            {
+                return;
+            }
+            int now = MShare.GetTickCount();
+            if (now - _probeLastTick < _probeIntervalMs)
+            {
+                return;
+            }
+            _probeLastTick = now;
+            _probeDir = (_probeDir + 1) & 7;
+            CommandMessage msg = Messages.MakeMessage(Messages.CM_TURN, now, 0, _probeDir, 0);
+            SendSocket(EDCode.EncodeMessage(msg));
+        }
+
         public void Run()
         {
             if (DScreen.CurrentScene == null)
@@ -273,6 +315,7 @@ namespace BotSrv.Player
                     LoginScene.Login();
                 }
                 DScreen.CurrentScene.DoNotifyEvent();
+                ProbeActionTick();
                 if (DScreen.CurrentScene == PlayScene)
                 {
                     ProcessActionMessages();

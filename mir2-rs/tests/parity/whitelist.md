@@ -78,6 +78,7 @@ M0 金标准验收状态（2026-10-10）：① 逐字节回放 0 差异、② �
 | 编号 | 差异/豁免点 | 为什么无害 | 谁审的 |
 | --- | --- | --- | --- |
 | T-1 | 改动 `src/BotSrv/**`：`LogService` 引用修正（`BotShare.LogService` → `OpenMir2.LogService`）、空角色列表解码守卫（`SelectChrScene.ClientGetReceiveChrs` 对空 body 不再抛 `ArgumentNullException`）、新增 `SocketShim.cs`（上游 `ScoketClient`/`DSCClient*` 被移除后按原 API 表面用 `System.Net.Sockets` 重写）、`AppServer` 的 Host 与 Serilog 装配（`LogService.Logger` 必须先赋值） | BotSrv **不在 oracle 七进程内**：不监听 oracle 端口、不被其它组件依赖，仅作压测/夹具客户端。改动前它无法编译（依赖的类型已在上游重构中删除）、编出来也起不来（`LogService.Logger` 未初始化）；改动后可编可跑，200 并发登录实测 200/200、0 失败。oracle 二进制与配置未被触碰（§13.1 时间戳复核可证：网关 2026-10-09 01:18、`M2Server.dll` 2026-10-10 00:10） | 协调者（§13.4-1 判为工具侧例外并接受） |
+<<<<<<< HEAD
 
 ## S1 登记（oracle 缺陷修复；owner 2026-10-10 决策"修"，见设计文档 §15）
 
@@ -100,3 +101,6 @@ M0 金标准验收状态（2026-10-10）：① 逐字节回放 0 差异、② �
 | 编号 | 差异/豁免点 | 为什么无害 | 谁审的 |
 | --- | --- | --- | --- |
 | T-4 | 改动 `src/Modules/ScriptEngine/ScriptParsers.cs`（**两处**：条件解析 `LoadScriptFileQuestCondition` 与动作解析的同构分支）：命令码由 `nCMDCode = code - 1` 改为 `nCMDCode = code`。`code` 是 `ConditionCodeDefMap` / `ExecutionCodeDefMap` 里存的 **`GetFields()` 字段序号**，而两张执行注册表（`_conditionMap` / `ProcessExecutionMessage`）是按**枚举值**建键的；`--axis-audit` 实测两个枚举**字段序号 == 枚举值，0 处不等**（条件 207 成员 / 动作 352 成员）⇒ 存 `code` 才命中「这条命令自己的」处理器，原 `code - 1` 恒派发到**前一个枚举成员**的处理器 | 这是**修 oracle 缺陷 B-8**（whitelist B-8 登记的上游 bug）。判决依据：该位移让脚本命令系统性执行错处理器，实机可复现（S2：`CHECKITEMADDVALUE` 4 参数行落到 `ConditionOfCheckRangeMonCount` 的 `sParam5[1]` ⇒ `IndexOutOfRangeException`，被 NPC 层 catch 吞掉、玩家侧「点了没反应」；真实语料同形状 **120 行**，已作 S3 回归集）。**影响面 7640 行**（条件 1401 + 动作 6239，占全部命令行的 99%；未变的 79 行是特判命令）——这不是"窄改动"，是整条脚本派的派发面被纠正。**Rust 侧默认复刻旧位移**（`crates/script/src/parser.rs` 的 `code-1` 保持不动），M3 之后再按需切新行为；因此**修后 B 线 flow-diff 会因两侧映射不同而全 DIFF（实测 0/3，改前 1/3）**，这是本条目**预期并登记**的差异，不是新缺陷。**若要让 flow-diff 恢复可比，需 B 线在同一批把 Rust 那一行一起翻转**（`code-1` → `code`），届时本条目收敛 | S3 登记（作者 `openmir2-svc-1`）→ 待独立 principal 复核 + coordinator 批准；**Rust 是否同批翻转需 coordinator 拍板**（涉及 B 线在飞的 93 个派发目标语义工作） |
+=======
+| T-2 | 改动 `src/BotSrv/**`（C6 压测批次）：① 新增 `LoadMetrics.cs` —— 压测采集（tick 服务时延直方图 1ms 桶 / 登录成功 / 连不上 / 掉线 / 内部异常计数），每 5s 落 `load_stats.ndjson`；② `RobotOptions.ConnectStaggerMs`（默认 3000 = 原行为）；③ `RobotPlayer.ProcessActMsg` 采样一行（放在 `g_rtime` 全局去重**之前**）；④ `RobotPlayer.SocketError` 按 kind 计数（拒绝链接 vs 掉线）；⑤ `LoginScene` 登录成功计数（放在 if/else 之外，避免漏计）；⑥ 崩溃守卫：`TMap.CanMove` 补数组上界、`RobotPlayer.AttackTarget` 补 `MShare.MySelf`/`target` 空守卫（跨假人共享态的竞态）、`AppService.Run` 每轮 try/catch 兜异常并计数；⑦ `RobotPlayer.EnsureAutoPlay()` + `ClientManager.RunAutoPlay` 重臂（进图后挂机定时器会被停掉）；⑧ `RobotPlayer.ProbeActionTick()` 动作探针（`MIR2_BOT_ACTION_PROBE=1`，进世界后每 N ms 发一个 `CM_TURN`，**只依赖本假人自己的 socket 与场景状态**，不碰 `MShare` 世界态） | BotSrv **不在 oracle 七进程内**（T-1 已登记：不监听 oracle 端口、不被其它组件依赖，仅作压测/夹具客户端）。本批改动全部是**采集与健壮性**：不改变上线字节语义（`+GD`、动作消息形状照 C3 金标准实测），不改 oracle、不改协议层；唯一的默认行为变化是崩溃不再打死整个压测进程（改为计数，`load_stats.ndjson.internal_errors` 可见） | 待协调者复核（C6 批次） |
+>>>>>>> worktree-c-tools
