@@ -19,9 +19,11 @@ README 却写着"② = 0"。⇒ 结论：**"登记能对上"不能证明产物�
      （提交后 `sha256(git show HEAD:<file>)` 亦同：本仓 `.gitattributes` 对 `*.jsonl` 固定 LF）。
 
 用法：
-  python tools/capture/golden_fresh_check.py                # 默认全量
+  python tools/capture/golden_fresh_check.py                # 默认全量对账
   python tools/capture/golden_fresh_check.py --only c2       # 只查文件名含 c2 的
   python tools/capture/golden_fresh_check.py --selftest      # 改坏必红（临时目录里做，不动入库件）
+  # 改了口径（导出器/协议布局表）之后的一条命令：重导全部入库件 + 更新登记行，再自动对账
+  python tools/capture/golden_fresh_check.py --regen --update-registry
 前置：`dotnet build tools/capture/GoldenExport/GoldenExport.csproj`（缺可执行体则退出码 2）。
 """
 import argparse
@@ -85,6 +87,23 @@ def derive_layout(out_json):
     return out_json
 
 
+def set_readme_sha(filename, new_sha, golden_dir):
+    """把 README 登记表里该文件那一行的 sha256 换掉（最后一格）。返回是否真的改了。"""
+    import re
+    readme = os.path.join(golden_dir, "README.md")
+    txt = open(readme, encoding="utf-8").read()
+    pat = re.compile(r"(?m)^(\|\s*`" + re.escape(filename) + r"`[^\n]*\| `)([0-9a-f]{64})(` \|)\s*$")
+    m = pat.search(txt)
+    if not m:
+        fail(f"README 里找不到 {filename} 的可更新登记行（新增金标准要手工加一行）")
+        return False
+    if m.group(2) == new_sha:
+        return False
+    open(readme, "w", encoding="utf-8", newline="\n").write(
+        txt[:m.start(2)] + new_sha + txt[m.end(2):])
+    return True
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--exe", default=os.path.join(HERE, "GoldenExport", "bin", "Debug", "net8.0",
@@ -92,6 +111,10 @@ def main():
     ap.add_argument("--only", default=None, help="只查文件名含该子串的项（调试用）")
     ap.add_argument("--golden-dir", default=DEFAULT_GOLDEN_DIR)
     ap.add_argument("--selftest", action="store_true", help="改坏必红（在临时目录里做，不动入库件）")
+    ap.add_argument("--regen", action="store_true",
+                    help="重导全部已登记入库件（改了口径后跑；先导到临时文件、成功才落盘）")
+    ap.add_argument("--update-registry", action="store_true",
+                    help="配合 --regen：把变化的文件的登记行 sha256 一并更新（会打印，便于 review diff）")
     args = ap.parse_args()
 
     if not os.path.exists(args.exe):
@@ -123,6 +146,32 @@ def main():
     layout = derive_layout(os.path.join(tmp, "layout.json"))
     if layout is None:
         return 1
+
+    # ---- 0) 可选：重导入库件（"改口径 = 重导全部 + 重登记"一条命令） ----
+    if args.regen:
+        for g in entries:
+            f = g["file"]
+            path = os.path.join(GOLDEN_DIR, f)
+            session = os.path.join(session_root, g["session"])
+            if not os.path.isdir(session):
+                fail(f"{f} 的来源会话目录不存在：{session}")
+                continue
+            old = sha256_file(path) if os.path.exists(path) else "(无)"
+            out = os.path.join(tmp, "regen_" + f)
+            p = subprocess.run([args.exe, "--session", session, "--out", out, "--layout", layout,
+                                "--verify-roundtrip"], capture_output=True, text=True)
+            if p.returncode != 0 or not os.path.exists(out):
+                # 失败**不落盘**：入库件保持原样（导到临时文件的意义就在这）
+                fail(f"{f} 重导失败（rc={p.returncode}），入库件未改动：" + (p.stdout + p.stderr).strip()[-300:])
+                continue
+            fresh = sha256_file(out)
+            if fresh == old:
+                print(f"  REGEN {f} 未变（{old[:16]}…）")
+                continue
+            shutil.copy2(out, path)
+            print(f"  REGEN {f} {old[:16]}… → {fresh[:16]}…（已落盘；重导命令与 --verify-roundtrip 均通过）")
+            if args.update_registry and set_readme_sha(f, fresh, GOLDEN_DIR):
+                print(f"        登记行已更新为 {fresh[:16]}…（请 review git diff 后提交）")
 
     # ---- 2) 新鲜度：当前口径重导 == 入库文件（逐字节） ----
     # ---- 3) 登记一致性：README 的 sha256 == 实际文件 sha256 ----

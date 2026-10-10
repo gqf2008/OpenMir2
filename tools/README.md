@@ -94,6 +94,10 @@ python tools/capture/segmented_check.py
 ```powershell
 python tools/capture/golden_fresh_check.py            # 重导==入库件（逐字节）+ 登记 sha 一致 + registry 双向对账
 python tools/capture/golden_fresh_check.py --selftest # 改坏必红：入库件不符 / 只改登记行 / registry 缺项 三类各自红
+
+# 改了口径（导出器 / 协议布局表，例如 A 线落了新的 BodyLayout）之后的一条命令：
+# 重派生 → 三份全部重导（先导临时文件、成功才落盘，带 --verify-roundtrip）→ 更新登记行 → 自动对账
+python tools/capture/golden_fresh_check.py --regen --update-registry
 ```
 
 它专门堵"**旧 artifact + 新下游**"这一族坑：改了导出器口径却漏重导某份入库件时，
