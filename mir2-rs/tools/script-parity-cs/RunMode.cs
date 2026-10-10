@@ -95,6 +95,9 @@ class RunPlayer : DispatchProxy
     public List<UserItem> Items = new();
     public Dictionary<ushort, string> ItemNames;
     public Dictionary<short, byte> Flags = new();
+    public UserItem[] UseItemsStub = Enumerable.Range(0, 12).Select(_ => new UserItem()).ToArray();
+
+    static short ToShort(object o) => (short)Math.Clamp(Convert.ToInt32(o), short.MinValue, short.MaxValue);
 
     public static string Esc(string s) => (s ?? "").Replace("\r", "\\r").Replace("\n", "\\n");
 
@@ -148,6 +151,9 @@ class RunPlayer : DispatchProxy
                     Log.Add($"delitem {ItemNames.GetValueOrDefault(it.Index, "?")} 1");
                     return null;
                 }
+            case "SetQuestUnitStatus":
+                Log.Add($"unitstatus {Convert.ToInt32(args[0])} {Convert.ToInt32(args[1])}");
+                return null;
             case "get_Gold":
                 return GoldValue;
             case "set_Gold":
@@ -155,6 +161,9 @@ class RunPlayer : DispatchProxy
                 return null;
             case "get_ItemList":
                 return Items;
+            case "get_UseItems":
+                // 10 个空佩戴位（Index=0）：C# 的 TakeWItem 会遍历并跳过
+                return UseItemsStub;
             case "get_Abil":
                 return new Ability { Level = (byte)Level };
             case "get_ActorId":
@@ -172,7 +181,7 @@ class RunPlayer : DispatchProxy
             case "GetQuestFalgStatus":
                 return Flags.TryGetValue(Convert.ToInt16(args[0]), out var f) ? f : (byte)0;
             case "SetQuestFlagStatus":
-                Flags[Convert.ToInt16(args[0])] = Convert.ToByte(args[1]);
+                Flags[ToShort(args[0])] = (byte)Math.Clamp(Convert.ToInt32(args[1]), 0, 255);
                 return null;
             case "CheckItemCount":
                 {
@@ -307,7 +316,17 @@ static class RunMode
         }
 
         var engine = new ScriptEngine();
-        engine.GotoLable((INormNpc)npc, (IPlayerActor)player, label, false);
+        try
+        {
+            engine.GotoLable((INormNpc)npc, (IPlayerActor)player, label, false);
+        }
+        catch (Exception ex)
+        {
+            // 参照实现崩溃也是可观测结果：输出已收集日志 + EX 标记行（供两侧对拍）
+            foreach (var line in player.Log) Console.WriteLine(line);
+            Console.WriteLine($"EX {ex.GetType().Name}");
+            return 0;
+        }
 
         foreach (var line in player.Log) Console.WriteLine(line);
         // C# 侧全部 Error 级消息也纳入日志：两侧错误文本需逐条一致

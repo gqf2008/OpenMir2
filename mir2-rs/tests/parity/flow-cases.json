@@ -1,0 +1,25 @@
+[
+  {
+    "name": "传送-幻境（金币不足/无物品）",
+    "script": "E:/MirServer/M2GameSvr/Envir/Market_Def/传送员/比奇省传送员-0.txt",
+    "label": "@gohj2",
+    "gold": 200000,
+    "items": "金币:1:1"
+  },
+  {
+    "name": "传送-幻境（背包有名为100000的物品）",
+    "script": "E:/MirServer/M2GameSvr/Envir/Market_Def/传送员/比奇省传送员-0.txt",
+    "label": "@gohj2",
+    "gold": 200000,
+    "items": "金币:1:1,100000:2:1",
+    "player_items": "100000:1"
+  },
+  {
+    "name": "商店-比奇国王-祈福项链",
+    "script": "E:/MirServer/M2GameSvr/Envir/Npc_Def/比奇国王-0122.txt",
+    "label": "@rw03",
+    "gold": 100000,
+    "items": "祈福项链:3:1,祝福油:4:1",
+    "player_items": "祈福项链:1,祝福油:1"
+  }
+]

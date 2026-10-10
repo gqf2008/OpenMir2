@@ -271,21 +271,21 @@ impl<'n, 'p> Engine<'n, 'p> {
         for info in list {
             let code = info.n_cmd_code;
             if crate::engine::dispatch::execution_implemented(code) {
+                // C# `GotoLableQuestActionProcess`：`if (IsRegister) { Execute(...); return result; }`
+                // —— 执行**第一个已注册动作**后立即返回（后续动作不再执行）
                 let mut ok = result;
                 self.run_action(code, info, &mut ok);
-                if !ok {
-                    return false;
-                }
-                continue;
+                return ok;
             }
             if crate::engine::dispatch::execution_registered(code) {
+                // C# 会执行该处理器；Rust 尚未实现 → 显式报错，并按 C# 的"执行后返回"语义停止
                 self.errors.push(EngineError::NotImplemented {
                     kind: "action",
                     code,
                     handler: crate::engine::dispatch::execution_handler(code)
                         .unwrap_or("(unregistered)"),
                 });
-                continue;
+                return result;
             }
             // 未注册 → C# 的 ScriptEngine switch（含位移语义：case 常量是枚举值）
             if !self.run_switch_action(code, info) {

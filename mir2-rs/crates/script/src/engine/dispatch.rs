@@ -27,8 +27,13 @@ pub fn engine_switch_condition(code: i32) -> Option<&'static str> {
 }
 
 /// 已实现的**动作**处理器名（随移植推进追加；名字与 C# 方法名一致）。
-pub static IMPLEMENTED_EXECUTIONS: &[&str] =
-    &["ActionOfSet", "ActionOfClose", "ActionOfMessageBox"];
+pub static IMPLEMENTED_EXECUTIONS: &[&str] = &[
+    "ActionOfSet",
+    "ActionOfClose",
+    "ActionOfMessageBox",
+    "ActionOfMobFireBurn",
+    "ActionOfResetUnit",
+];
 
 /// 已实现的**条件**处理器名。
 pub static IMPLEMENTED_CONDITIONS: &[&str] = &[
