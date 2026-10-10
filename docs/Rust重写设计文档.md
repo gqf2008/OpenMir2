@@ -220,7 +220,10 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "mysql", "chrono", "macro
 | 英雄 / 宠物 | 召唤 / 升级 / 阵亡 / 经验分配 / 上限判定一致 |
 | 邮件 / 拍卖 | 发送 / 到期 / 成交 / 退回，DB 落库字段级 diff = 0 |
 
-- 总验收：**上述十项全绿 + 300 假人长跑 24h 无 panic、无掉线**。
+- **门禁（owner 2026-10-10 决定：M3 夹具正式提升为门禁）**：`mir2-rs/tests/parity/m3/run_pair.ps1 -Side csharp|rust`
+  跑同一操作序列 → `scoped_diff.py` 作用域内**字段级 diff = 0**；两侧快照 hash 与 RNG 种子注入结果都要入库。
+  M1 边界服务能顶住 7000/7100/7200 之后，立即用 `-Side rust` 跑一次作为 M3 首次验收。
+- 总验收：**上述十项全绿 + M3 门禁 diff=0 + 300 假人长跑 24h 无 panic、无掉线**。
 - 证据：每系统一份"命令 + 输出 + 差异报告（可为 0）"，汇总成 `tests/parity/M3-report.md`。
 
 ### M4 —— 脚本引擎 + 内容兼容
@@ -500,3 +503,13 @@ walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 prin
 - 复核 patch 时**不采信自述**，自己重跑门禁；
 - 批准口径修订（如 M4 验收①、Envir 文件数）与白名单（`T-*`/`D-*`/`B-*`）；
 - 负责 merge 与 push，并在 `merge_result` 里写清 oid 与门禁结果。
+
+---
+
+## 15. owner 决策记录
+
+| 日期 | 决策 | 落地 |
+| --- | --- | --- |
+| 2026-10-10 | **C3 小退阶段：按"原工程一致"执行**——不加 GM 权限、不改客户端、不依赖 AutoLogin | 事实校正：`Envir/AutoLogin.txt` 在本工程**没有服务端实现**（全仓无读取点；客户端 `g_sAutoLogin` 常量也未被使用），故不采用。改走**客户端自带退出入口**：面板「小退」按钮（鼠标 PostMessage）或聊天框输入 `小退`，二者都走客户端自己的 `EatItemName('小退') → AppLogoutEx()`（`MirClient/Source/MirClient/ClMain.pas:3978`）。判据：抓包里出现 `CM_SOFTCLOSE(1009)`（或 528/802）+ 回选人界面截图，replay 八阶段 → GREEN |
+| 2026-10-10 | **S1：两条 oracle 缺陷修** | 必须记录改前/改后行为、登记 `whitelist T-*`（Rust 侧默认复刻旧行为做对拍，M3 之后按需切新行为）、修后重跑 M0/M1 门禁；缺陷②（`Mir200` 下 Mach-O 部署件）走同批做版本对账。owner = `openmir2-svc-1` |
+| 2026-10-10 | **D2：M3 夹具提升为正式门禁** | §6 M3 判据改为 `run_pair.ps1` + `scoped_diff.py`（作用域内字段级 diff = 0）；要求 C# 侧基线一条命令可复跑（含快照 hash 与 RNG 种子注入） |
