@@ -45,7 +45,8 @@ param(
   [switch]$NewAccount,
   [switch]$RestartStackPerTier,
   [switch]$SkipBuild,
-  [switch]$SelfTestRed
+  [switch]$SelfTestRed,
+  [string]$Criteria = "login,conn,tick"   # 判据子集；M1 ⑤（只比登录+选角）用 "login,conn"
 )
 
 $ErrorActionPreference = "Stop"
@@ -185,7 +186,7 @@ foreach ($n in $Tiers) {
     # ---- 归算 ----
     $reportPath = Join-Path $tierDir "report.json"
     python (Join-Path $RepoRoot "tools\botload\load_report.py") summarize --stats $statsPath --mem $memPath `
-        --count $n --stagger-ms $StaggerMs --hold-sec $HoldSec --out $reportPath | Out-Null
+        --count $n --stagger-ms $StaggerMs --hold-sec $HoldSec --criteria $Criteria --out $reportPath | Out-Null
     $tierRc = $LASTEXITCODE
     $tierJson = $null
     if (Test-Path $reportPath) { $tierJson = Get-Content $reportPath -Raw | ConvertFrom-Json }
@@ -214,6 +215,7 @@ $summaryPath = Join-Path $OutDir "load_gate_summary.json"
   stagger_ms = $StaggerMs
   hold_sec   = $HoldSec
   caliber    = "tick 服务时延 = BotSrv 收到 `#+GD/<rtime>! 的时刻 − rtime（Environment.TickCount，全机同域）；详见 tools/botload/load_report.py"
+  criteria   = $Criteria
   reports    = $tierReports
 } | ConvertTo-Json -Depth 6 | Set-Content -Path $summaryPath -Encoding utf8
 Write-Output ("SUMMARY " + $summaryPath)

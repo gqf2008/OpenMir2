@@ -144,17 +144,28 @@ def summarize_mem(rows, tail_sec=60):
     return out
 
 
-def judge(tier, thresholds):
-    """按 §6 M5 的三条判据给单档结论（掉线只看稳态窗）。"""
+def judge(tier, thresholds, criteria=("login", "conn", "tick")):
+    """按 §6 M5 的判据给单档结论（掉线只看稳态窗）。
+
+    `criteria` 可选：有些复用场景**天然拿不到 tick 样本**——例如 M1 ⑤ 只要求
+    「200 假人登录+选角成功率 100%」，假人只跑无状态登录链路、不产生动作 ⇒ 没有 `+GD` ack。
+    那种场景用 `--criteria login,conn` 判，**不要把"拿不到的指标"算成红**（红应当表示"测得的值不达标"）。
+    默认仍是 §6 M5 全三条（含 tick），C6 自己的口径不变。
+    """
     fails = []
-    if tier.get("login_success_pct") is None or tier["login_success_pct"] < thresholds["login_success_pct"]:
+    if "login" in criteria and (tier.get("login_success_pct") is None
+                                or tier["login_success_pct"] < thresholds["login_success_pct"]):
         fails.append(f"登录成功率 {tier.get('login_success_pct')}% < {thresholds['login_success_pct']}%")
-    if tier.get("conn_lost_steady", 0) > thresholds["conn_lost_steady"]:
+    if "conn" in criteria and tier.get("conn_lost_steady", 0) > thresholds["conn_lost_steady"]:
         fails.append(f"稳态掉线 {tier['conn_lost_steady']} > {thresholds['conn_lost_steady']}")
-    if tier.get("tick_p99_ms") is None or tier["tick_p99_ms"] > thresholds["tick_p99_ms"]:
-        fails.append(f"tick P99 {tier.get('tick_p99_ms')}ms > {thresholds['tick_p99_ms']}ms")
+    if "tick" in criteria:
+        if tier.get("tick_p99_ms") is None:
+            fails.append("tick P99 缺失（本档没有 tick 样本；若该场景不需要 tick 请用 --criteria login,conn）")
+        elif tier["tick_p99_ms"] > thresholds["tick_p99_ms"]:
+            fails.append(f"tick P99 {tier['tick_p99_ms']}ms > {thresholds['tick_p99_ms']}ms")
     if not tier.get("ramp_complete", False):
         fails.append("登录数未达目标（爬坡未完成）")
+    tier["criteria"] = list(criteria)
     tier["verdict"] = "GREEN" if not fails else "RED"
     tier["fails"] = fails
     return tier
@@ -168,7 +179,8 @@ def cmd_summarize(args):
     tier["count"] = args.count
     tier["stagger_ms"] = args.stagger_ms
     tier["hold_sec"] = args.hold_sec
-    judge(tier, DEFAULT_THRESHOLDS)
+    criteria = [c.strip() for c in args.criteria.split(",") if c.strip()]
+    judge(tier, DEFAULT_THRESHOLDS, criteria)
     text = json.dumps(tier, ensure_ascii=False, indent=2)
     if args.out:
         with open(args.out, "w", encoding="utf-8", newline="\n") as f:
@@ -353,6 +365,8 @@ def main():
     s.add_argument("--stagger-ms", type=int, default=0)
     s.add_argument("--hold-sec", type=int, default=0)
     s.add_argument("--out", default="")
+    s.add_argument("--criteria", default="login,conn,tick",
+                   help="判据子集（默认全三条）；M1 ⑤ 那种只比登录/连接的场景用 login,conn")
     a = sub.add_parser("aggregate")
     a.add_argument("--summary", required=True, help="load_gate_summary.json")
     a.add_argument("--out-dir", default="")

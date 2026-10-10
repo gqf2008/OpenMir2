@@ -90,12 +90,15 @@
     }
   },
   "count": 20,
-  "stagger_ms": 200,
-  "hold_sec": 60,
+  "stagger_ms": 0,
+  "hold_sec": 0,
+  "criteria": [
+    "login",
+    "conn"
+  ],
   "verdict": "RED",
   "fails": [
     "登录成功率 95.0% < 100.0%",
-    "tick P99 Nonems > 100.0ms",
     "登录数未达目标（爬坡未完成）"
   ]
 }

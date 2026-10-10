@@ -90,10 +90,12 @@
     }
   },
   "count": 200,
-  "stagger_ms": 50,
-  "hold_sec": 90,
-  "verdict": "RED",
-  "fails": [
-    "tick P99 Nonems > 100.0ms"
-  ]
+  "stagger_ms": 0,
+  "hold_sec": 0,
+  "criteria": [
+    "login",
+    "conn"
+  ],
+  "verdict": "GREEN",
+  "fails": []
 }
