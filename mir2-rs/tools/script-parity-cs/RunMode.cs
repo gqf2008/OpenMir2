@@ -162,6 +162,25 @@ class RunPlayer : DispatchProxy
                 return null;
             case "get_ItemList":
                 return Items;
+            case "QuestCheckItem":
+                {
+                    // C# `ConditionOfCheckItem` 靠 QuestCheckItem 填 n1C 再与 nParam2 比。
+                    // 夹具原先未实现本方法（DispatchProxy 回默认）⇒ n1C 恒 0 ⇒ `checkitem 祈福项链 1` 恒假，
+                    // @main 落到 #elsay——这是**夹具缺口**，不是 oracle/Rust 行为差异（Rust 按玩家背包正确判真）。
+                    var qciName = (string)args[0];
+                    var qciCnt = 0;
+                    foreach (var it in Items)
+                    {
+                        if (string.Equals(ItemNames.GetValueOrDefault(it.Index, ""), qciName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            qciCnt++;
+                        }
+                    }
+                    args[1] = qciCnt;   // ref int n1C
+                    args[2] = 0;        // ref int nMaxDura
+                    args[3] = 0;        // ref int nDura
+                    return null;
+                }
             case "get_SlaveList":
                 // IPlayerActor/IActor 的声明类型是 IList<IMonsterActor>
                 return new List<IMonsterActor>();
