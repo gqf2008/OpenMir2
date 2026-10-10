@@ -64,59 +64,62 @@ def parse_body_layout(frame_rs, consts):
         raise SystemExit("解析失败：找不到 body_layout() 函数体")
     body = m.group(1)
     layouts = {}
-    struct_re = re.compile(
-        r"((?:messages::[A-Z0-9_]+\s*\|\s*)*messages::[A-Z0-9_]+)\s*=>\s*\{\s*"
-        r"BodyLayout::StructThenRest\s*\{\s*struct_len:\s*(\d+)\s*\}", re.S)
-    for mm in struct_re.finditer(body):
-        names = re.findall(r"messages::([A-Z0-9_]+)", mm.group(1))
-        slen = int(mm.group(2))
+    # 臂语法**两种都认**（本仓两种都出现过；只认一种就会静默少一档，见下守卫）：
+    #   messages::X => { BodyLayout::Kind { f: v } }     // StructThenRest 家族（外层带大括号）
+    #   messages::X => BodyLayout::Kind { f: v },        // Segmented 家族（无外层大括号）
+    arm_re = re.compile(
+        r"((?:messages::[A-Z0-9_]+\s*\|\s*)*messages::[A-Z0-9_]+)\s*=>\s*\{?\s*"
+        r"BodyLayout::(StructThenRest|Segmented)\s*\{(.*?)\}\s*\}?", re.S)
+    seen_kinds = {"StructThenRest": 0, "Segmented": 0}
+
+    def _names_ok(names):
         for n in names:
             if n not in consts:
                 raise SystemExit(f"解析失败：常量 {n} 不在 messages.rs 里（拼写变了？）")
-            layouts[str(consts[n])] = {"kind": "struct_then_rest", "struct_len": slen,
-                                       "name": n}
-    # Segmented（A4 冻结契约）：BodyLayout::Segmented { seg_len: N, sep: b'/',
-    #   trailing_sep: true/false, count: SegCount::Fixed(3) | SegCount::HeaderSeries }
-    seg_re = re.compile(
-        r"((?:messages::[A-Z0-9_]+\s*\|\s*)*messages::[A-Z0-9_]+)\s*=>\s*\{\s*"
-        r"BodyLayout::Segmented\s*\{(.*?)\}\s*\}", re.S)
-    for mm in seg_re.finditer(body):
+
+    for mm in arm_re.finditer(body):
         names = re.findall(r"messages::([A-Z0-9_]+)", mm.group(1))
-        spec = mm.group(2)
-
-        def num(key):
-            m2 = re.search(key + r"\s*:\s*(\d+)", spec)
+        kind = mm.group(2)
+        spec = mm.group(3)
+        seen_kinds[kind] += 1
+        if kind == "StructThenRest":
+            m2 = re.search(r"struct_len\s*:\s*(\d+)", spec)
             if not m2:
-                raise SystemExit("解析失败：Segmented 缺 %s（%s）—— 形状变了，先人工核对" % (key, names))
-            return int(m2.group(1))
-
-        seg_len = num("seg_len")
-        m2 = re.search(r"sep\s*:\s*b?'(.)'", spec) or re.search(r'sep\s*:\s*b"(.)"', spec)
-        if not m2:
-            raise SystemExit("解析失败：Segmented 缺 sep（%s）" % (names,))
-        sep = ord(m2.group(1))
-        m2 = re.search(r"trailing_sep\s*:\s*(true|false)", spec)
-        if not m2:
-            raise SystemExit("解析失败：Segmented 缺 trailing_sep（%s）" % (names,))
-        trailing = m2.group(1) == "true"
-        m2 = re.search(r"count\s*:\s*SegCount::(Fixed\s*\(\s*(\d+)\s*\)|HeaderSeries)", spec)
-        if not m2:
-            raise SystemExit("解析失败：Segmented 缺 count/SegCount（%s）" % (names,))
-        entry = {"kind": "segmented", "seg_len": seg_len, "sep": sep, "trailing_sep": trailing}
-        if m2.group(2):
-            entry["count_kind"] = "fixed"
-            entry["count"] = int(m2.group(2))
+                raise SystemExit("解析失败：StructThenRest 缺 struct_len（%s）—— 形状变了，先人工核对" % (names,))
+            entry = {"kind": "struct_then_rest", "struct_len": int(m2.group(1))}
         else:
-            entry["count_kind"] = "header_series"
+            # Segmented（A4 冻结契约）：seg_len: N, sep: b'/', trailing_sep: bool, count: SegCount::…
+            m2 = re.search(r"(?<![\w])seg_len\s*:\s*(\d+)", spec)
+            if not m2:
+                raise SystemExit("解析失败：Segmented 缺 seg_len（%s）—— 形状变了，先人工核对" % (names,))
+            seg_len = int(m2.group(1))
+            m2 = (re.search(r"(?<![\w])sep\s*:\s*b?'(.)'", spec)
+                  or re.search(r'(?<![\w])sep\s*:\s*b"(.)"', spec))
+            if not m2:
+                raise SystemExit("解析失败：Segmented 缺 sep（%s）" % (names,))
+            sep = ord(m2.group(1))
+            m2 = re.search(r"trailing_sep\s*:\s*(true|false)", spec)
+            if not m2:
+                raise SystemExit("解析失败：Segmented 缺 trailing_sep（%s）" % (names,))
+            trailing = m2.group(1) == "true"
+            m2 = re.search(r"(?<![\w])count\s*:\s*SegCount::(Fixed\s*\(\s*(\d+)\s*\)|HeaderSeries)", spec)
+            if not m2:
+                raise SystemExit("解析失败：Segmented 缺 count/SegCount（%s）" % (names,))
+            entry = {"kind": "segmented", "seg_len": seg_len, "sep": sep, "trailing_sep": trailing}
+            if m2.group(2):
+                entry["count_kind"] = "fixed"
+                entry["count"] = int(m2.group(2))
+            else:
+                entry["count_kind"] = "header_series"
+        _names_ok(names)
         for n in names:
-            if n not in consts:
-                raise SystemExit("解析失败：常量 %s 不在 messages.rs 里" % n)
-            entry_with_name = dict(entry, name=n)
-            layouts[str(consts[n])] = entry_with_name
+            layouts[str(consts[n])] = dict(entry, name=n)
 
-    if "BodyLayout::Segmented" in body and not any(v["kind"] == "segmented" for v in layouts.values()):
-        raise SystemExit("解析失败：body_layout() 里出现 BodyLayout::Segmented 但本工具解析不出任何一项 "
-                         "—— 形状变了，报错而不是静默少一档（免得导出一张缺项的错表）")
+    # 见到某形态却一项都没解析出来 ⇒ 报错（不许静默少一档：那会导出一张"看着正常"的缺项错表）
+    for kind in ("StructThenRest", "Segmented"):
+        if f"BodyLayout::{kind}" in body and seen_kinds[kind] == 0:
+            raise SystemExit("解析失败：body_layout() 里出现 BodyLayout::%s 但本工具一项都解析不出 "
+                             "—— 形状变了（换行/字段名/类型），报错而不是静默少一档" % kind)
     if not layouts:
         raise SystemExit("解析失败：body_layout() 里没有任何 StructThenRest/Segmented 分支（表被清空或形状变了）")
     if "=> BodyLayout::Single" not in body.replace(" ", " ") and "_ => BodyLayout::Single" not in body:
