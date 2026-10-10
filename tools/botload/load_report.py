@@ -283,7 +283,8 @@ def svg_curve(series, width=560, height=180, title="", y_label="", x_label=""):
 
 def cmd_aggregate(args):
     """三档汇总 → SUMMARY.md（表 + 曲线）。输入 = load_gate_summary.json。"""
-    data = json.load(open(args.summary, encoding="utf-8"))
+    # PowerShell 5.1 的 Set-Content -Encoding utf8 会带 BOM ⇒ 用 utf-8-sig 读（两种都能吃）
+    data = json.load(open(args.summary, encoding="utf-8-sig"))
     reports = data.get("reports", [])
     outdir = args.out_dir or os.path.dirname(os.path.abspath(args.summary))
     lines = ["# 压测报告（C6 载荷门禁）", ""]
@@ -297,14 +298,14 @@ def cmd_aggregate(args):
         lines.append("| {count} | {lsp}% | {cls} | {cr} | {p50} | {p90} | {p99} | {mx} | {n} | {ramp} | {v} |".format(
             count=t.get("count"), lsp=t.get("login_success_pct"), cls=t.get("conn_lost_steady"),
             cr=t.get("conn_refused"), p50=t.get("tick_p50_ms"), p90=t.get("tick_p90_ms"),
-            p99=t.get("tick_p99_ms"), mx=t.get("tick_max_ms"), n=t.get("samples"),
+            p99=t.get("tick_p99_ms"), mx=t.get("max_ms"), n=t.get("samples"),
             ramp=((str(round(t["ramp_ms"] / 1000.0, 1)) + "s") if t.get("ramp_ms") is not None else "-"),
             v=t.get("verdict")))
     lines.append("")
     # 曲线 1：tick P99 / P50 / max vs 档位
     pts_p99 = [(t["count"], t["tick_p99_ms"] or 0) for t in sorted(reports, key=lambda r: r.get("count", 0))]
     pts_p50 = [(t["count"], t["tick_p50_ms"] or 0) for t in sorted(reports, key=lambda r: r.get("count", 0))]
-    pts_mx = [(t["count"], t["tick_max_ms"] or 0) for t in sorted(reports, key=lambda r: r.get("count", 0))]
+    pts_mx = [(t["count"], t.get("max_ms") or 0) for t in sorted(reports, key=lambda r: r.get("count", 0))]
     lines.append("## 曲线 1：tick 服务时延 vs 假人数（目标 P99 ≤ 100ms）")
     lines.append("")
     lines.append("```html")
