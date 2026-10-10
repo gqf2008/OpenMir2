@@ -11,7 +11,9 @@
 #![allow(clippy::too_many_lines)]
 #![allow(clippy::doc_markdown)]
 
-use mir2_protocol::{edcode, frame, messages, CommandMessage, ServerMessage};
+use mir2_protocol::{
+    edcode, frame, messages, CommandMessage, ServerDataMessage, ServerDataType, ServerMessage,
+};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -57,6 +59,21 @@ struct Record {
     /// 该帧所属跳（`login`/`sel`/`game`）：s2c 用它给出独立的帧尾期望。
     #[serde(default)]
     hop: Option<String>,
+    // ---- kind:"internal"（MemoryPack 内部帧）专有字段 ----
+    #[serde(default)]
+    msg: Option<String>,
+    #[serde(default, rename = "type")]
+    type_: Option<u8>,
+    #[serde(default)]
+    socket_id_utf16_hex: Option<String>,
+    #[serde(default)]
+    data_hex: Option<String>,
+    #[serde(default)]
+    body_hex: Option<String>,
+    #[serde(default)]
+    wire_hex: Option<String>,
+    #[serde(default)]
+    data_len_field: Option<i16>,
 }
 
 fn vectors_path() -> PathBuf {
@@ -77,6 +94,7 @@ fn oracle_vectors_byte_exact() {
     let mut n_frame = 0usize;
     let mut n_header = 0usize;
     let mut n_string_frame = 0usize;
+    let mut n_internal = 0usize;
     let mut n_s2c_bang_dollar = 0usize;
     let mut n_s2c_bang = 0usize;
     let mut mismatches: Vec<String> = Vec::new();
@@ -230,6 +248,53 @@ fn oracle_vectors_byte_exact() {
                     mismatches.push(format!("line {}: server header round-trip", lineno + 1));
                 }
             }
+            "internal" => {
+                n_internal += 1;
+                let units: Vec<u16> = hex::decode(rec.socket_id_utf16_hex.as_deref().unwrap())
+                    .unwrap()
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|c| u16::from_le_bytes(*c))
+                    .collect();
+                let socket_id = String::from_utf16(&units).unwrap();
+                let data = hex::decode(rec.data_hex.as_deref().unwrap_or("")).unwrap();
+                let kind = ServerDataType::from_u8(rec.type_.unwrap()).unwrap();
+                let data_len = rec
+                    .data_len_field
+                    .unwrap_or_else(|| i16::try_from(data.len()).expect("向量载荷长度适配 i16"));
+                let msg = ServerDataMessage {
+                    kind,
+                    socket_id,
+                    data_len,
+                    data,
+                };
+                let what = rec.msg.as_deref().unwrap_or("");
+                let (got_hex, want_hex) = match what {
+                    "ServerDataMessage" => (hex::encode(msg.to_bytes()), rec.body_hex.clone()),
+                    "ServerDataWire" => (hex::encode(msg.to_wire()), rec.wire_hex.clone()),
+                    other => panic!("line {}: unknown internal msg {other}", lineno + 1),
+                };
+                if Some(&got_hex) != want_hex.as_ref() {
+                    mismatches.push(format!(
+                        "line {}: internal {what} 编码不符: got {got_hex} want {want_hex:?}",
+                        lineno + 1
+                    ));
+                }
+                // 反向：解析真身字节，字段必须回来
+                let raw = hex::decode(want_hex.as_deref().unwrap()).unwrap();
+                let back = match what {
+                    "ServerDataMessage" => ServerDataMessage::from_bytes(&raw),
+                    _ => ServerDataMessage::from_wire(&raw),
+                };
+                match back {
+                    Ok(b) if b == msg => {}
+                    other => mismatches.push(format!(
+                        "line {}: internal {what} 解析往返不符: {other:?}",
+                        lineno + 1
+                    )),
+                }
+            }
             other => panic!("line {}: unknown kind {other}", lineno + 1),
         }
     }
@@ -248,6 +313,7 @@ fn oracle_vectors_byte_exact() {
         "缺少 `!$` 帧尾（LoginSrv 形态）向量"
     );
     assert!(n_s2c_bang >= 1, "缺少 `!` 帧尾（网关形态）向量");
+    assert!(n_internal >= 12, "internal 向量太少: {n_internal}");
     assert!(
         mismatches.is_empty(),
         "{} mismatches:\n{}",
@@ -255,7 +321,7 @@ fn oracle_vectors_byte_exact() {
         mismatches[..mismatches.len().min(10)].join("\n")
     );
     println!(
-        "oracle vectors: {n_edcode} edcode + {n_frame} frame + {n_string_frame} string-frame + {n_header} header + s2c 帧尾 !$×{n_s2c_bang_dollar} / !×{n_s2c_bang}, 0 mismatches"
+        "oracle vectors: {n_edcode} edcode + {n_frame} frame + {n_string_frame} string-frame + {n_header} header + s2c 帧尾 !$×{n_s2c_bang_dollar} / !×{n_s2c_bang} + internal {n_internal}, 0 mismatches"
     );
 }
 

@@ -84,6 +84,21 @@ struct Record {
     /// 显式帧尾期望，优先于 `hop` 推断（用于 LoginGate 自身产生的帧：同在 7000 但无 `$`）。
     #[serde(default)]
     tail: Option<String>,
+    // ---- kind:"internal"（网关↔服务内部帧，MemoryPack）专有字段 ----
+    #[serde(default)]
+    msg: Option<String>,
+    #[serde(default, rename = "type")]
+    type_: Option<u8>,
+    #[serde(default)]
+    socket_id_utf16_hex: Option<String>,
+    #[serde(default)]
+    data_hex: Option<String>,
+    #[serde(default)]
+    body_hex: Option<String>,
+    #[serde(default)]
+    wire_hex: Option<String>,
+    #[serde(default)]
+    data_len_field: Option<i16>,
 }
 
 /// 八阶段 → 覆盖该阶段的 ident 值集合（按 Messages.cs 语义枚举，值而非名，规避重名）。
@@ -108,6 +123,8 @@ struct Stats {
     seen_idents: BTreeSet<u16>,
     /// 纯字符串帧条数（只参与 ① 逐字节回放与 body 对拍，不参与包号覆盖）
     string_frames: usize,
+    /// 内部帧（MemoryPack）条数
+    internal_msgs: usize,
     first_diffs: Vec<String>,
 }
 
@@ -210,6 +227,63 @@ fn process_edcode(rec: &Record, lineno: usize, st: &mut Stats) -> Result<()> {
     if got_enc != expected_enc || got_dec != plain {
         st.byte_mismatch += 1;
         st.diff(format!("line {}: edcode vector mismatch", lineno + 1));
+    }
+    Ok(())
+}
+
+/// 内部帧（网关↔服务，MemoryPack）向量：编码必须与 C# 真身逐字节一致。
+///
+/// 内部帧不是客户端面帧，`--sabotage` 三种模式对它不适用（只对客户端帧生效）。
+fn process_internal(rec: &Record, lineno: usize, st: &mut Stats) -> Result<()> {
+    use mir2_protocol::{ServerDataMessage, ServerDataType};
+    st.internal_msgs += 1;
+    let units: Vec<u16> = hex::decode(rec.socket_id_utf16_hex.as_deref().unwrap_or(""))?
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| u16::from_le_bytes(*c))
+        .collect();
+    let socket_id = String::from_utf16(&units).context("socket_id 不是合法 UTF-16")?;
+    let data = hex::decode(rec.data_hex.as_deref().unwrap_or(""))?;
+    let Some(kind) = rec.type_.and_then(ServerDataType::from_u8) else {
+        st.byte_mismatch += 1;
+        st.diff(format!("line {}: internal 类型未知", lineno + 1));
+        return Ok(());
+    };
+    let msg = ServerDataMessage {
+        kind,
+        socket_id,
+        data_len: rec
+            .data_len_field
+            .unwrap_or_else(|| i16::try_from(data.len()).unwrap_or(i16::MAX)),
+        data,
+    };
+    let what = rec.msg.as_deref().unwrap_or("");
+    let (got, want) = match what {
+        "ServerDataMessage" => (hex::encode(msg.to_bytes()), rec.body_hex.clone()),
+        "ServerDataWire" => (hex::encode(msg.to_wire()), rec.wire_hex.clone()),
+        other => bail!("line {}: 未知 internal msg {other}", lineno + 1),
+    };
+    if Some(&got) != want.as_ref() {
+        st.byte_mismatch += 1;
+        st.diff(format!(
+            "line {}: internal {what} 编码不符: got {got} want {:?}",
+            lineno + 1,
+            want
+        ));
+    }
+    // 反向解析（真身字节 → 字段）
+    if let Some(hexstr) = want {
+        let raw = hex::decode(&hexstr)?;
+        let back = if what == "ServerDataMessage" {
+            ServerDataMessage::from_bytes(&raw)
+        } else {
+            ServerDataMessage::from_wire(&raw)
+        };
+        if back.as_ref() != Ok(&msg) {
+            st.byte_mismatch += 1;
+            st.diff(format!("line {}: internal {what} 解析往返不符", lineno + 1));
+        }
     }
     Ok(())
 }
@@ -507,6 +581,7 @@ fn report(path: &str, coverage: bool, sabotage: Sabotage, st: &Stats) -> bool {
         "frames: {} (其中纯字符串帧 {}), edcode vectors: {}",
         st.total_frames, st.string_frames, st.total_edcode
     );
+    println!("内部帧（MemoryPack）: {}", st.internal_msgs);
     println!("byte mismatches (①): {}", st.byte_mismatch);
     println!("field mismatches (②): {}", st.field_mismatch);
     println!("distinct idents: {}", st.seen_idents.len());
@@ -566,6 +641,7 @@ fn main() -> Result<()> {
             "edcode" => process_edcode(&rec, lineno, &mut st)?,
             "frame" => process_frame(&rec, lineno, sabotage, &mut st)?,
             "server-header" => process_server_header(&rec, lineno, &mut st)?,
+            "internal" => process_internal(&rec, lineno, &mut st)?,
             other => bail!("line {}: unknown kind {other}", lineno + 1),
         }
     }
