@@ -51,6 +51,9 @@ struct Record {
     session_index: Option<i32>,
     #[serde(default)]
     pack_length: Option<i32>,
+    /// 纯字符串帧（无 12 字节头）：只校验编解码往返 + body 长度/hash。
+    #[serde(default)]
+    string_frame: Option<bool>,
 }
 
 fn vectors_path() -> PathBuf {
@@ -70,6 +73,7 @@ fn oracle_vectors_byte_exact() {
     let mut n_edcode = 0usize;
     let mut n_frame = 0usize;
     let mut n_header = 0usize;
+    let mut n_string_frame = 0usize;
     let mut mismatches: Vec<String> = Vec::new();
 
     for (lineno, line) in text.lines().enumerate() {
@@ -90,6 +94,32 @@ fn oracle_vectors_byte_exact() {
                 }
                 if edcode::decode(&encoded) != plain {
                     mismatches.push(format!("line {}: decode mismatch", lineno + 1));
+                }
+            }
+            "frame" if rec.string_frame.unwrap_or(false) => {
+                n_string_frame += 1;
+                let raw = hex::decode(rec.raw_hex.as_deref().unwrap()).unwrap();
+                let dir = rec.dir.as_deref().unwrap_or("c2s");
+                let offset = if dir == "s2c" { 1 } else { 2 };
+                assert_eq!(raw.first(), Some(&b'#'), "line {}", lineno + 1);
+                assert_eq!(*raw.last().unwrap(), b'!', "line {}", lineno + 1);
+                let body = edcode::decode(&raw[offset..raw.len() - 1]);
+                let mut reenc = Vec::with_capacity(body.len() + 4);
+                reenc.push(b'#');
+                if dir != "s2c" {
+                    reenc.push(b'1');
+                }
+                reenc.extend_from_slice(&edcode::encode(&body));
+                reenc.push(b'!');
+                if reenc != raw {
+                    mismatches.push(format!("line {}: string frame round-trip", lineno + 1));
+                }
+                if Some(body.len()) != rec.body_len {
+                    mismatches.push(format!("line {}: string frame body_len", lineno + 1));
+                }
+                let hash = hex::encode(Sha256::digest(&body));
+                if Some(&hash) != rec.body_sha256.as_ref() {
+                    mismatches.push(format!("line {}: string frame body sha256", lineno + 1));
                 }
             }
             "frame" => {
@@ -175,13 +205,17 @@ fn oracle_vectors_byte_exact() {
     assert!(n_frame >= 46, "frame vectors too few: {n_frame}");
     assert_eq!(n_header, 1, "server-header vectors");
     assert!(
+        n_string_frame >= 3,
+        "string-frame vectors too few: {n_string_frame}"
+    );
+    assert!(
         mismatches.is_empty(),
         "{} mismatches:\n{}",
         mismatches.len(),
         mismatches[..mismatches.len().min(10)].join("\n")
     );
     println!(
-        "oracle vectors: {n_edcode} edcode + {n_frame} frame + {n_header} header, 0 mismatches"
+        "oracle vectors: {n_edcode} edcode + {n_frame} frame + {n_string_frame} string-frame + {n_header} header, 0 mismatches"
     );
 }
 

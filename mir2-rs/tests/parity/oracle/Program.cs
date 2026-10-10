@@ -143,6 +143,27 @@ public static class Program
                   $"\"packet_code\":{sm.PacketCode},\"socket\":{sm.Socket},\"session_id\":{sm.SessionId}," +
                   $"\"ident\":{sm.Ident},\"session_index\":{sm.SessionIndex},\"pack_length\":{sm.PackLength}}}");
 
+        // ---- 4. 纯字符串帧向量（无 12 字节头）----
+        // 参照路径：GameGate 首个上行走 EDCode.DeCodeString(destinationSpan[2..^1])，
+        // 载荷是编码后的登录串，窗口内没有 CommandMessage 头。
+        foreach (string payload in new[]
+                 {
+                     "**mir2test/aaa/20250901/abcdef/000000000000000000000000000000/0",
+                     "mir2test/mir2pass",
+                     "热血传奇/127.0.0.1/7100",
+                 })
+        {
+            byte[] body = Gb2312.GetBytes(payload);
+            byte[] encBody = Gb2312.GetBytes(EDCode.EncodeString(payload));
+            byte[] frame = new byte[2 + encBody.Length + 1];
+            frame[0] = (byte)'#';
+            frame[1] = (byte)'1';
+            Array.Copy(encBody, 0, frame, 2, encBody.Length);
+            frame[^1] = (byte)'!';
+            lines.Add($"{{\"kind\":\"frame\",\"dir\":\"c2s\",\"string_frame\":true,\"seq\":{seq++}," +
+                      $"\"raw_hex\":\"{Hex(frame)}\",\"body_len\":{body.Length},\"body_sha256\":\"{Sha256Hex(body)}\"}}");
+        }
+
         File.WriteAllLines(outPath, lines);
 
         // 证据：行数 + 文件 hash

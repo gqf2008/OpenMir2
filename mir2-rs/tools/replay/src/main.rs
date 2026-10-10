@@ -5,6 +5,9 @@
 //! - `{"kind":"frame","dir":"c2s"|"s2c","seq":N,"ts_ms":N,"raw_hex":"..",`
 //!   `"ident":N,"recog":N,"param":N,"tag":N,"series":N,"body_len":N,"body_sha256":".."}` —— 帧向量
 //!   （字段值是 C# 侧同一时刻观测值；raw_hex 是线上完整帧字节）
+//! - 纯字符串帧（无 12 字节头，如 GameGate 首个上行 `**账号/角色/...`）在同一行加
+//!   `"string_frame":true`：只校验 ① 逐字节回放与 body 长度/hash，不做头字段对拍、
+//!   不计入包号覆盖（`--sabotage ident` 对这类帧不适用，其余帧仍会检验它）。
 //!
 //! 判据（全部满足才绿，exit 0）：
 //! ① 每个 frame 记录 decode→encode 后与 raw_hex 100% 相同；
@@ -67,6 +70,9 @@ struct Record {
     session_index: Option<i32>,
     #[serde(default)]
     pack_length: Option<i32>,
+    /// 纯字符串帧（无 12 字节头；GameGate 首个上行 `**账号/角色/...` 一类）。
+    #[serde(default)]
+    string_frame: Option<bool>,
 }
 
 /// 八阶段 → 覆盖该阶段的 ident 值集合（按 Messages.cs 语义枚举，值而非名，规避重名）。
@@ -89,6 +95,8 @@ struct Stats {
     field_mismatch: usize,
     unknown_idents: BTreeSet<u16>,
     seen_idents: BTreeSet<u16>,
+    /// 纯字符串帧条数（只参与 ① 逐字节回放与 body 对拍，不参与包号覆盖）
+    string_frames: usize,
     first_diffs: Vec<String>,
 }
 
@@ -235,6 +243,24 @@ fn process_server_header(rec: &Record, lineno: usize, st: &mut Stats) -> Result<
     Ok(())
 }
 
+/// 纯字符串帧：解码出裸体（无 12 字节 `CommandMessage` 头）。
+///
+/// 参照路径：GameGate 收到首个上行时走
+/// `EDCode.DeCodeString(destinationSpan[2..packetLen-1])`，载荷是编码后的登录串，
+/// 窗口内没有头字段；LoginGate/SelGate 存在同类形态。
+fn decode_string_frame(raw: &[u8], dir: &str, sabotage: Sabotage) -> Option<Vec<u8>> {
+    let offset = if dir == "s2c" { 1 } else { 2 };
+    if raw.first() != Some(&b'#') || raw.last() != Some(&b'!') || raw.len() <= offset + 1 {
+        return None;
+    }
+    let payload = &raw[offset..raw.len() - 1];
+    Some(if sabotage == Sabotage::Key {
+        decode_with_seed(payload, edcode::SEED.wrapping_add(1))
+    } else {
+        edcode::decode(payload)
+    })
+}
+
 /// 按方向与红检模式解析一帧。返回 None 表示解析失败（本身计入 ① 差异）。
 fn parse_frame(raw: &[u8], dir: &str, sabotage: Sabotage) -> Option<frame::ClientMessage> {
     if sabotage == Sabotage::Key {
@@ -258,7 +284,75 @@ fn parse_frame(raw: &[u8], dir: &str, sabotage: Sabotage) -> Option<frame::Clien
     }
 }
 
+/// 纯字符串帧的校验：① 逐字节回放 + ② body 长度/hash（无头字段、不计包号覆盖）。
+fn process_string_frame(
+    rec: &Record,
+    lineno: usize,
+    sabotage: Sabotage,
+    st: &mut Stats,
+) -> Result<()> {
+    st.total_frames += 1;
+    let raw_orig = hex::decode(rec.raw_hex.as_deref().unwrap_or(""))?;
+    let mut raw = raw_orig.clone();
+    if sabotage == Sabotage::Truncate && raw.len() > 3 {
+        raw.remove(raw.len() - 2);
+    }
+    let dir = rec.dir.as_deref().unwrap_or("c2s");
+    let Some(body) = decode_string_frame(&raw, dir, sabotage) else {
+        st.byte_mismatch += 1;
+        st.diff(format!(
+            "line {}: string frame parse failed (seq {:?})",
+            lineno + 1,
+            rec.seq
+        ));
+        return Ok(());
+    };
+    // ① 逐字节回放：`#`/`#1` + 编码体 + `!`
+    let mut reenc = Vec::with_capacity(body.len() + 4);
+    reenc.push(b'#');
+    if dir != "s2c" {
+        reenc.push(b'1');
+    }
+    reenc.extend_from_slice(&edcode::encode(&body));
+    reenc.push(b'!');
+    if reenc != raw_orig {
+        st.byte_mismatch += 1;
+        st.diff(format!(
+            "line {}: string frame byte round-trip mismatch (seq {:?})",
+            lineno + 1,
+            rec.seq
+        ));
+    }
+    // ② 只对拍 body（无头字段可比）
+    if let Some(want_len) = rec.body_len {
+        if body.len() != want_len {
+            st.field_mismatch += 1;
+            st.diff(format!(
+                "line {}: string frame body_len mismatch (seq {:?}): got {} want {want_len}",
+                lineno + 1,
+                rec.seq,
+                body.len()
+            ));
+        }
+    }
+    if let Some(want_hash) = &rec.body_sha256 {
+        if sha256_hex(&body) != *want_hash {
+            st.field_mismatch += 1;
+            st.diff(format!(
+                "line {}: string frame body sha256 mismatch (seq {:?})",
+                lineno + 1,
+                rec.seq
+            ));
+        }
+    }
+    st.string_frames += 1;
+    Ok(())
+}
+
 fn process_frame(rec: &Record, lineno: usize, sabotage: Sabotage, st: &mut Stats) -> Result<()> {
+    if rec.string_frame.unwrap_or(false) {
+        return process_string_frame(rec, lineno, sabotage, st);
+    }
     st.total_frames += 1;
     let raw_orig = hex::decode(rec.raw_hex.as_deref().unwrap_or(""))?;
     let mut raw = raw_orig.clone();
@@ -270,7 +364,7 @@ fn process_frame(rec: &Record, lineno: usize, sabotage: Sabotage, st: &mut Stats
     let Some(mut msg) = parse_frame(&raw, dir, sabotage) else {
         st.byte_mismatch += 1;
         st.diff(format!(
-            "line {}: frame parse failed (seq {:?})",
+            "line {}: frame parse failed (seq {:?})（若载荷是裸字符串而非 12 字节头，请在记录里加 \"string_frame\":true）",
             lineno + 1,
             rec.seq
         ));
@@ -343,8 +437,8 @@ fn process_frame(rec: &Record, lineno: usize, sabotage: Sabotage, st: &mut Stats
 fn report(path: &str, coverage: bool, sabotage: Sabotage, st: &Stats) -> bool {
     println!("== replay report: {path} ==");
     println!(
-        "frames: {}, edcode vectors: {}",
-        st.total_frames, st.total_edcode
+        "frames: {} (其中纯字符串帧 {}), edcode vectors: {}",
+        st.total_frames, st.string_frames, st.total_edcode
     );
     println!("byte mismatches (①): {}", st.byte_mismatch);
     println!("field mismatches (②): {}", st.field_mismatch);
