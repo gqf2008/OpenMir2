@@ -756,6 +756,7 @@ dependencies = [
  "mir2-data",
  "mir2-formula",
  "mir2-shared",
+ "mir2-world",
  "serde",
  "serde_json",
  "sqlx",
@@ -800,6 +801,13 @@ dependencies = [
  "sqlx",
  "thiserror 1.0.69",
  "tokio",
+]
+
+[[package]]
+name = "mir2-world"
+version = "0.1.0"
+dependencies = [
+ "mir2-shared",
 ]
 
 [[package]]
