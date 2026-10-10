@@ -33,3 +33,39 @@
 3. `ConditionOfCheckItem`、`ConditionOfCheckRangeMonCount`（后者等 S2 的崩溃处置结论后再定：
    按同条件复现崩溃，或登记白名单）。
 4. 六类流程用例补齐（修理/仓库/行会/任务各 ≥1），每批跑 `flow-diff.py` 并回写本文件。
+
+---
+
+## B2 进展（2026-10-10 第五轮）
+
+### ① parser.rs 位移翻转：后果实测（未落地，等前置）
+
+指令要求"Rust 位移同批翻转（code-1→code）并期望 flow-diff 3 一致/0 不一致"。实测（临时翻转 → 量数 → 复原）：
+
+| 门禁 | 翻转后 | 复原后 |
+| --- | --- | --- |
+| 解析对拍（验收①） | DIFF 结构摘要不一致: 115 个文件（cmd_code 参与指纹） | == 全部一致 == |
+| flow-diff | 0 一致 / 4 不一致（含豁免用例 EXEMPT-DRIFT） | 3 一致 / 0 不一致 / 1 豁免 |
+
+根因：C# 参照 `src/Modules/ScriptEngine/ScriptParsers.cs:329/501` **仍是 `nCMDCode = code - 1`**（该文件无新提交）。只翻 Rust ⟹ 落点与 C# 全部错位，两条门禁同时变红。
+
+**前置条件**：该翻转必须与"oracle 侧同批修复"一起做（S1/S2 把 `-1` 修掉并登记 T-* 条目），届时本线执行：
+
+```powershell
+# crates/script/src/parser.rs 两处：
+#   n_cmd_code = def.field_index - 1;  →  n_cmd_code = def.field_index;
+# 并更新 whitelist B-8 口径（复刻 → 已按 oracle 修复对齐），重跑解析对拍 + flow-diff
+```
+
+在此之前保持"复刻位移"口径（上一张卡片"复刻 bug 沿用白名单口径"的要求），以维持验收① 与 flow-diff 全绿。
+
+### ② 本轮新增 handler
+
+- `ConditionOfCheckItem`（语料 36 次）：`QuestCheckItem` 计数 < `nParam2` → false；按背包件数实现，佩戴位/耐久统计范围待与 C# `PlayObject.QuestCheckItem` 核对（已写入代码注释，差异会由 flow-diff 暴露）。
+- 豁免用例 `rust_expect` 快照同步更新（落点少一行 NotImplemented）——快照机制按设计生效。
+
+### 当前门禁
+
+- 解析对拍：639/639 结构指纹 + 原文指纹一致；427 错误逐行多重集差 0/0；
+- flow-diff：3 一致 / 0 不一致 / 1 登记豁免；
+- workspace 114 测试全过、fmt ✓、clippy -D warnings 0。

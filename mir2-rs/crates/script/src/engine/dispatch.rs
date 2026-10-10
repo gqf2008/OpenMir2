@@ -48,6 +48,7 @@ pub static IMPLEMENTED_CONDITIONS: &[&str] = &[
     "ConditionOfSmall",
     "ConditionOfRandom",
     "ConditionOfCheckSlaveListCount",
+    "ConditionOfCheckItem",
 ];
 
 pub fn condition_handler(code: i32) -> Option<&'static str> {
