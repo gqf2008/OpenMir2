@@ -117,10 +117,23 @@ cargo run -p replay -- tests/golden/<capture>.jsonl
 
 | 文件 | 来源 | 时间 | sha256 |
 |---|---|---|---|
-| `c-line-baseline-c3-20261010.jsonl` | 同机真客户端（**二进制未改**）+ 现网 C# 服务端（未改）；进程内 hook dump，客户端直连真实 7000/7100/7200；小退走**客户端自带「小退」按钮**（底部条 (754,621)）→ 确认框 → `CM_SOFTCLOSE(1009)` | 2026-10-10 17:1x | `c8eff9f170c9fafa82df5e7e61d94e98db31ef8b9ed116a2169e6d8c9e9532d7` |
+| `c-line-baseline-c3-20261010.jsonl` | 同机真客户端（**二进制未改**）+ 现网 C# 服务端（未改）；进程内 hook dump，客户端直连真实 7000/7100/7200；小退走**客户端自带「小退」按钮**（底部条 (754,621)）→ 确认框 → `CM_SOFTCLOSE(1009)`。**C4 批按分段布局表重导（见下）** | 2026-10-10 17:1x | `c26d48b96f77c68b73fb5ad389d3602b1c97f182576eb1e641648bc36f9eff07` |
 
 该抓包 **382 帧**，**八阶段全覆盖**（`replay` 的 ③ 逐阶段命中：登录 2 / 选服 2 / 选角 2 / 建角 2 /
 进世界 6 / 移动 4 / 攻击 3 / **小退 1**）。配套证据：`07b_logout_confirm_dlg.png`（"确认退出到选择角色界面吗？"）
 与 `08_back_charsel.png`（回到选人界面、新角色 lb1a 在列）。
 本机 `replay`：③ **8/8 ✓**；① 33 条、② 21 条落在 s2c/game 跳的「体＝两段分别编码拼接」族（A 线已定案、S3 批修）；
 未登记包号 0（C2 报的 84/1200/10431/10433 已登记）。⇒ 仍 RED，但 **8/8 覆盖这一格已闭环**。
+
+**C4 批（2026-10-10）：导出器按分段布局表解码（A-9），两份金标准已用保留的裸 dump 重导。**
+
+- 布局表**由协议源码派生**（`tools/capture/dump_body_layout.py` 读 `crates/protocol/src/frame.rs` 的
+  `body_layout()`，形状变了就直接报错）⇒ 不在这里抄第二份表。当前导出：
+  `head_block=16`、`act_prefix='+'`、`struct_then_rest = 6/7/9/10(SM_RUSH/RUSHKUNG/BACKSTEP/TURN) struct_len=8`。
+- 新字段（按 A 线契约）：`body_segments:[{len,sha256}]`（单段即单元素）、
+  `frame_form:"act"`（仅 payload 首字符 `+` 的 s2c 明文动作帧，不参与头字段对拍）、
+  `layout`（`single` / `struct_then_rest` / `struct_then_rest(short)` / `flat_legacy`，便于排查）。
+- 重导后本机 replay：**C3 ① 33→2、② 21→0；C2 ① 0、② 0** ⇒ **M0 ② 归零**（A-9 销账）。
+  余下 ① 2 条 = `ident=811`(seq 28) 与 `ident=201`(seq 75)，属 A-8 待补表的其它多段形态。
+- C4 三条判据实测：同 dump 两次导出 sha256 相同（`c26d48b9…`）✓；把 `struct_len` 故意改成 7 后
+  **② 由 0 变 52**、结果 RED ✓（改错段边界必红）；③ 仍为 C3 八阶段全覆盖、C2 五阶段。
