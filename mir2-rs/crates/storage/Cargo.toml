@@ -17,3 +17,8 @@ pedantic = "warn"
 
 [dependencies]
 thiserror = "1"
+# 与设计文档 §5.1 一致：sqlx 0.8，runtime-tokio + mysql；不启用任何 tls-* feature（本机明文）
+sqlx = { version = "0.8", features = ["runtime-tokio", "mysql"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }

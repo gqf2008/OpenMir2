@@ -17,10 +17,14 @@
 // 逐个方法重复 `# Errors` 只增噪声。
 #![allow(clippy::missing_errors_doc)]
 
+mod account;
 mod error;
+mod legacy_dsn;
 mod traits;
 mod types;
 
+pub use account::{AccountQuick, AccountRecord, AccountStore};
 pub use error::StorageError;
+pub use legacy_dsn::LegacyDsn;
 pub use traits::{CacheStorage, MarketStorage, PlayDataStorage, PlayRecordStorage};
 pub use types::{CharacterDataInfo, MarketItem, PlayQuick, PlayerRecordData, QueryChr};
