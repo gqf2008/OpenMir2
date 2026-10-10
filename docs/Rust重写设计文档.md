@@ -32,7 +32,7 @@
 | 客户端编译脚本 | `E:\MirServer\build-client-104.ps1` | Delphi 10.4 + msbuild，输出 `Release\Client` |
 | 客户端源码 | `E:\Users\gxh\Documents\GitHub\MirClient` | 只读参照（协议、报文语义） |
 | 游戏内容（运行中） | `E:\MirServer\M2GameSvr\Envir` | 跑着的 GameSvr 读的是这一份：**递归 639 个 `.txt`**（B 线实测 2026-10-10）+ `data.db`、`Map\`、`Castle\` 等 |
-| 游戏内容（另一份副本） | `E:\MirServer\Mir200\Envir` | 同源副本（递归 634 个 `.txt`），**实现前先确认该读哪一份**，不要两处都改 |
+| 游戏内容（另一份副本） | `E:\MirServer\Mir200\Envir` | 同源副本（递归 634 个 `.txt`），**实现前先确认该读哪一份**，不要两处都改。**2026-10-10 血统核定（S1）**：`Mir200` 整个目录是**旧血统内容副本**（macOS 发布件、`.NETCoreApp,Version=v6.0`、程序集名还是 `GameSvr.dll`、引用已不存在的 `SystemModule.Sockets.AsyncSocketServer`），其 `GameSvr` 是 Mach-O ⇒ **本机不可运行、不是 oracle**，只当内容备份用；见 §2.1 |
 
 **进程 / 端口表（实测监听）**
 
@@ -48,6 +48,34 @@
 
 **测试账号**：`mir2test / mir2pass`；角色 `aaa`(战士) / `bbb`(道士)。
 **已跑通链路**：登录 → 选服 → 选人 → 建角 → 进游戏 → 战斗 → Alt+X 小退 → 再进。
+
+### 2.1 谁是 oracle：部署件契约与版本对账（S1，2026-10-10）
+
+「哪些目录里跑的是 oracle」此前只散落在 `E:\MirServer\start-all.ps1` 的 `$Components` 里，
+结果 `E:\MirServer` 下 5 个同名近似目录（`Mir200`/`CloudGate`/`DBServer`/`LoginSrv`/`MakePlay`）
+被反复当成"另一份部署"——它们其实是**旧血统内容副本**（macOS 发布件 + .NET 6，本机不可运行）。
+现在把契约写进文档，并给出一条可复跑的对账命令：
+
+| 组件 | 进程实际启动自 | 说明 |
+| --- | --- | --- |
+| DBSrv | `src/DBSrv/bin/Release/DBSvr.exe` | 直接从源码构建输出启动，无独立部署副本 |
+| LoginSrv | `src/LoginSrv/bin/Release/LoginSrv.exe` | 同上 |
+| GameSvr | `E:\MirServer\M2GameSvr\GameSrv.exe` | **唯一的独立部署副本**，部署件必须与源码构建输出逐字节一致 |
+| LoginGate / SelGate / RunGate | `E:\MirServer\{LoginGate,SelGate,RunGate}\*.exe` | 同上；各自目录里另有 macOS 发布残留的**无扩展名 apphost**，Windows 上不参与启动 |
+| `Mir200` 等 5 个旧目录 | —— | **不是部署件**，仅内容备份（其 `GameSvr` 等 apphost 是 Mach-O，本机跑不起来） |
+
+```powershell
+# 对账：组件级判 SINGLE-BUILD / MIXED / FOREIGN / SELF-HOSTED，逐产物判 MATCH / DRIFT / MISSING / EXTRA
+powershell -ExecutionPolicy Bypass -File tools/oracle/reconcile_deployment.ps1        # 红检 -SelfTestRed
+# 铺部署（同一份构建整体刷新 M2GameSvr，带备份、铺后逐文件复核、写部署来源登记）
+powershell -ExecutionPolicy Bypass -File tools/oracle/deploy_gamesvr.ps1             # 预览 -WhatIf
+```
+
+判据：对账脚本对契约组件给出 `SINGLE-BUILD`（受管产物全部与源码构建输出逐字节一致）才算过；
+`MIXED` = 部署件不是这份源码编出来的。2026-10-10 首次对账时 GameSvr 判 `MIXED`
+（`M2Server.dll`/`GameSrv.dll` 是 10-10 00:10 的构建，而 `OpenMir2.dll`/`SystemModule.dll`/
+`ScriptSystem.dll`/`CommandSystem.dll`/`PlanesSystem.dll`/`GameSrv.exe` 还是 10-09 的），
+已整体刷新为 SINGLE-BUILD（T-3，见 §16）。
 
 ---
 
@@ -513,3 +541,32 @@ walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 prin
 | 2026-10-10 | **C3 小退阶段：按"原工程一致"执行**——不加 GM 权限、不改客户端、不依赖 AutoLogin | 事实校正：`Envir/AutoLogin.txt` 在本工程**没有服务端实现**（全仓无读取点；客户端 `g_sAutoLogin` 常量也未被使用），故不采用。改走**客户端自带退出入口**：面板「小退」按钮（鼠标 PostMessage）或聊天框输入 `小退`，二者都走客户端自己的 `EatItemName('小退') → AppLogoutEx()`（`MirClient/Source/MirClient/ClMain.pas:3978`）。判据：抓包里出现 `CM_SOFTCLOSE(1009)`（或 528/802）+ 回选人界面截图，replay 八阶段 → GREEN |
 | 2026-10-10 | **S1：两条 oracle 缺陷修** | 必须记录改前/改后行为、登记 `whitelist T-*`（Rust 侧默认复刻旧行为做对拍，M3 之后按需切新行为）、修后重跑 M0/M1 门禁；缺陷②（`Mir200` 下 Mach-O 部署件）走同批做版本对账。owner = `openmir2-svc-1` |
 | 2026-10-10 | **D2：M3 夹具提升为正式门禁** | §6 M3 判据改为 `run_pair.ps1` + `scoped_diff.py`（作用域内字段级 diff = 0）；要求 C# 侧基线一条命令可复跑（含快照 hash 与 RNG 种子注入） |
+
+---
+
+## 16. S1：oracle 两条缺陷的处置（2026-10-10，owner = `openmir2-svc-1`）
+
+> 全文与证据：`mir2-rs/tests/parity/evidence/S1/S1-报告.md`；白名单条目：`whitelist.md` **T-2 / T-3**。
+
+**缺陷①（已修）游戏网关重连后进世界 NRE 死循环、客户端永久黑屏。**
+根因：GameSvr 的网关槽位按 **TCP accept 序**绑定（`int.Parse(SocketId)-1`），而世界侧按网关自报的
+`GateIdx`（= GameGate 的 `ServiceId`）寻址；网关重连换了 SocketId ⇒ 两者错位，且 `CloseGate`
+只把槽位里的 `UserList/Socket` 置 null、**不释放槽位** ⇒ 世界下发打到死槽位（静默丢弃 ⇒ 黑屏）、
+`SetGateUserList` 每 200ms 抛 NRE（`NewHumanList` 清不掉 ⇒ 玩家进不去，且**此后每次登录都失败**，
+直到重启 GameSvr；C 线的抓包脚本因此每次整栈重起）。
+修法：`TCPNetChannel` 改为「连接 → 槽位」映射 + 断开释放槽位 + 重连按最小空闲槽重分配，
+世界侧入口（`SetGateUserList`/`AddGateBuffer`/`CloseUser`）加越界与空槽守卫。
+对照：确定性探针 `1 GREEN/3 RED → 4 GREEN/0 RED`；实机门禁（真实客户端 + 只重启 GameGate）
+改前 `画面非黑 0% + NRE 0→156`、改后全绿。**Rust 侧默认复刻旧行为**（T-2）。
+
+**缺陷②（已处置）部署件与源码版本漂移。**
+`E:\MirServer` 是从一份 **macOS 发布包**铺出来的：各目录里无扩展名的同名文件是 osx-x64 的 apphost
+（Mach-O），Windows 上真正跑的是 `*.exe`；`Mir200` 恰好**只有** Mach-O apphost 且是 .NET 6 旧血统
+（程序集名 `GameSvr.dll`、依赖已不存在的 `SystemModule.Sockets.AsyncSocketServer`、调试路径
+`/Volumes/Project/...`）⇒ 不是部署件，只是内容副本。同时 `M2GameSvr` 被"只刷一部分"地更新过
+（自有程序集分属 2026-10-09 与 10-10 两批）⇒ 判 `MIXED`。
+处置：新增 `tools/oracle/reconcile_deployment.ps1`（对账 + `-SelfTestRed`）与 `deploy_gamesvr.ps1`
+（同构建整体铺 + 写 `!deployed-from.json` 来源登记），`M2GameSvr` 刷新为 **SINGLE-BUILD**；
+`Mir200` 等 5 个旧目录不删，只把血统写进 §2 / §2.1（T-3）。
+**注意**：.NET 把源码路径编进 MVID ⇒ "与源码逐字节一致"只对**产出它的那个检出**成立，
+对账前先读 `!deployed-from.json`。

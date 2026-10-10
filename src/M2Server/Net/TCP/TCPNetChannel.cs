@@ -3,6 +3,7 @@ using OpenMir2.Common;
 using OpenMir2.DataHandlingAdapters;
 using OpenMir2.Packets.ClientPackets;
 using OpenMir2.Packets.ServerPackets;
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading.Channels;
@@ -21,6 +22,14 @@ namespace M2Server.Net.TCP
         private readonly object RunSocketSection;
         private readonly Channel<ReceiveData> _receiveQueue;
         private readonly ChannelMessageHandler[] _gameGates;
+        /// <summary>
+        /// 网关连接 SocketId -> 网关槽位下标。
+        /// 槽位下标是**世界侧寻址用的**（`playObject.GateIdx` = 网关自己声明的 ServiceId，
+        /// 经客户端认证串带回），因此不能按 TCP accept 序绑定：网关断线重连会拿到新的
+        /// SocketId，accept 序一变，世界下发的数据就打到已断开的旧槽位上 —— 表现为
+        /// 客户端进世界黑屏（下发被静默丢弃）且 `SetGateUserList` 每 tick 抛 NRE。
+        /// </summary>
+        private readonly ConcurrentDictionary<string, int> _gateSlotByConnection = new ConcurrentDictionary<string, int>();
         /// <summary>
         /// 网关地址白名单
         /// </summary>
@@ -47,7 +56,11 @@ namespace M2Server.Net.TCP
                 return Task.CompletedTask;
             }
 
-            int gateId = int.Parse(socketClient.Id) - 1;
+            // 槽位按"连接"解析，不再用 int.Parse(SocketId) - 1（那是 accept 序，重连后会错位）
+            if (!_gateSlotByConnection.TryGetValue(socketClient.Id, out int gateId))
+            {
+                return Task.CompletedTask;
+            }
             _receiveQueue.Writer.TryWrite(new ReceiveData()
             {
                 Data = gateMessage.Message,
@@ -64,12 +77,6 @@ namespace M2Server.Net.TCP
             SocketClient clientSoc = (SocketClient)client;
             if (M2Share.StartReady)
             {
-                if (_gameGates.Length > 20)
-                {
-                    clientSoc.Close();
-                    LogService.Error("超过网关最大链接数量.关闭链接");
-                    return Task.CompletedTask;
-                }
                 if (Whitelist.Contains(HUtil32.IpToInt(clientSoc.ServiceIP)))
                 {
                     ChannelGate gateInfo = new ChannelGate();
@@ -86,7 +93,24 @@ namespace M2Server.Net.TCP
                     gateInfo.SendKeepAlive = false;
                     gateInfo.SendChecked = 0;
                     gateInfo.SendBlockCount = 0;
-                    _gameGates[int.Parse(clientSoc.Id) - 1] = new ChannelMessageHandler(gateInfo);
+                    int gateIdx;
+                    lock (RunSocketSection)
+                    {
+                        // 复用最小空闲槽位：槽位下标就是世界侧寻址用的网关编号，
+                        // 网关重连（含前一条连接刚 CloseGate 释放槽位）必须落回同一个编号。
+                        gateIdx = AllocGateSlot();
+                        if (gateIdx >= 0)
+                        {
+                            _gameGates[gateIdx] = new ChannelMessageHandler(gateInfo);
+                            _gateSlotByConnection[clientSoc.Id] = gateIdx;
+                        }
+                    }
+                    if (gateIdx < 0)
+                    {
+                        clientSoc.Close();
+                        LogService.Error("超过网关最大链接数量.关闭链接");
+                        return Task.CompletedTask;
+                    }
                     LogService.Info(string.Format(sGateOpen, clientSoc.MainSocket.RemoteEndPoint));
                 }
                 else
@@ -163,9 +187,40 @@ namespace M2Server.Net.TCP
             }
         }
 
+        /// <summary>
+        /// 分配一个空闲网关槽位；全满返回 -1（调用方负责拒绝连接）。
+        /// 调用方必须已持有 RunSocketSection。
+        /// </summary>
+        private int AllocGateSlot()
+        {
+            for (int i = 0; i < _gameGates.Length; i++)
+            {
+                if (_gameGates[i] == null)
+                {
+                    return i;
+                }
+            }
+            return -1;
+        }
+
+        /// <summary>
+        /// 世界侧按网关编号取处理器。
+        /// gateIdx 来自客户端认证串里网关自报的编号，可能越界（脏数据）或已被释放，
+        /// 这两种情况都必须安全丢弃 —— 世界线程（WorldServer.ProcessHumans 每 200ms 一轮）
+        /// 吃到异常会连带丢掉整轮回调。
+        /// </summary>
+        private ChannelMessageHandler GetGate(int gateIdx)
+        {
+            if (gateIdx < 0 || gateIdx >= _gameGates.Length)
+            {
+                return null;
+            }
+            return _gameGates[gateIdx];
+        }
+
         public void CloseUser(int gateIdx, int nSocket)
         {
-            _gameGates[gateIdx].CloseUser(nSocket);
+            GetGate(gateIdx)?.CloseUser(nSocket);
         }
 
         public void KickUser(string sAccount, int sessionId, int payMode)
@@ -237,7 +292,12 @@ namespace M2Server.Net.TCP
         {
             for (int i = 0; i < _gameGates.Length; i++)
             {
-                _gameGates[i].GateInfo.Socket.Close();
+                ChannelMessageHandler handler = _gameGates[i];
+                if (handler?.GateInfo?.Socket == null)
+                {
+                    continue;
+                }
+                handler.GateInfo.Socket.Close();
             }
         }
 
@@ -267,29 +327,35 @@ namespace M2Server.Net.TCP
                         if (gateInfo.Socket == null)
                         {
                             LogService.Error("Socket异常，无需关闭");
-                            return;
                         }
-                        for (int j = 0; j < gateInfo.UserList.Count; j++)
+                        else
                         {
-                            SessionUser gateUser = gateInfo.UserList[j];
-                            if (gateUser != null)
+                            for (int j = 0; j < gateInfo.UserList.Count; j++)
                             {
-                                if (gateUser.PlayObject != null)
+                                SessionUser gateUser = gateInfo.UserList[j];
+                                if (gateUser != null)
                                 {
-                                    gateUser.PlayObject.BoEmergencyClose = true;
-                                    if (!gateUser.PlayObject.BoReconnection)
+                                    if (gateUser.PlayObject != null)
                                     {
-                                        M2Share.Authentication.SendHumanLogOutMsg(gateUser.Account, gateUser.SessionID);
+                                        gateUser.PlayObject.BoEmergencyClose = true;
+                                        if (!gateUser.PlayObject.BoReconnection)
+                                        {
+                                            M2Share.Authentication.SendHumanLogOutMsg(gateUser.Account, gateUser.SessionID);
+                                        }
                                     }
+                                    gateInfo.UserList[j] = null;
                                 }
-                                gateInfo.UserList[j] = null;
                             }
+                            LogService.Error(string.Format(sGateClose, endPoint));
                         }
                         gateInfo.UserList = null;
                         gateInfo.BoUsed = false;
                         gateInfo.Socket = null;
                         _gameGates[i].Stop();
-                        LogService.Error(string.Format(sGateClose, endPoint));
+                        // 释放槽位：重连的网关按「最小空闲槽」重新分配，落回自己声明的编号，
+                        // 世界侧（playObject.GateIdx）才找得到这条活连接。
+                        _gameGates[i] = null;
+                        _gateSlotByConnection.TryRemove(connectionId, out _);
                         break;
                     }
                 }
@@ -340,7 +406,7 @@ namespace M2Server.Net.TCP
         /// </summary>
         public void SetGateUserList(int gateIdx, int nSocket, IPlayerActor playObject)
         {
-            _gameGates[gateIdx].SetGateUserList(nSocket, playObject);
+            GetGate(gateIdx)?.SetGateUserList(nSocket, playObject);
         }
 
         public void Run()
@@ -401,7 +467,7 @@ namespace M2Server.Net.TCP
         /// <returns></returns>
         public void AddGateBuffer(int gateIdx, byte[] senData)
         {
-            _gameGates[gateIdx].ProcessBufferSend(senData);
+            GetGate(gateIdx)?.ProcessBufferSend(senData);
         }
 
         public void Send(string connectId, byte[] buff)
@@ -433,7 +499,9 @@ namespace M2Server.Net.TCP
                 {
                     while (_receiveQueue.Reader.TryRead(out ReceiveData message))
                     {
-                        _gameGates[message.GateId].ProcessDataBuffer(message.Packet, message.Data);
+                        // 槽位可能在入队之后被 CloseGate 释放，空槽直接丢弃；
+                        // 这里抛异常会让整个收包线程退出（所有网关一起哑掉）
+                        GetGate(message.GateId)?.ProcessDataBuffer(message.Packet, message.Data);
                     }
                 }
             }, cancellationToken);

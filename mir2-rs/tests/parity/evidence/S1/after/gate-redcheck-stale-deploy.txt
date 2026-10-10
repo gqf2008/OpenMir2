@@ -1,0 +1,18 @@
+== verify_gate_reconnect：前置通过（5000/7000/7100/7200 均在监听）
+== 步骤 1：抖动前基线流程
+      缺阶段(或乱序): ingame
+RED  baseline-flow-stages  (stages=7)
+RED  baseline-flow-reached-world  (流程走到 ingame 且出了 05b_after_notice.png)
+RED  baseline-world-render  (05b_after_notice.png 非黑 >=1%)
+== 步骤 2：重启 GameGate（不动 GameSvr/MySQL），制造一次网关重连
+      停 GameGate pid=37164
+GREEN  gate-reconnected  (已打开 1 -> 2)
+== 步骤 3：抖动后跑真实客户端进阶流程
+      （判据产物已齐，提前结束流程进程）
+      画面非黑占比 0%
+GREEN  after-bounce-flow-stages  (stages=8)
+GREEN  after-bounce-flow-reached-world  (流程走到 ingame 且出了 05b_after_notice.png)
+RED  after-bounce-world-render  (05b_after_notice.png 非黑 >=1%)
+RED  no-setgateuserlist-nre  (SetGateUserList 出现次数 0 -> 94)
+==== verify_gate_reconnect: 3 GREEN / 5 RED；产物 E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\s1-oracle-fixes\tests\oracle\gate-reconnect-20261010-164745
+EXIT=1

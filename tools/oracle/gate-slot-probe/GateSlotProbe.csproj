@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    S1 缺陷① 守护探针（GameSvr 网关槽位在网关重连后失配）。
+    刻意**不加入 OpenMir2.sln**：与 tools/capture/GoldenExport 同属工具侧，
+    引用生产库 M2Server.csproj 是为了直接跑真类型 TCPNetChannel，而不是仿制品。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <RootNamespace>GateSlotProbe</RootNamespace>
+    <AssemblyName>GateSlotProbe</AssemblyName>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Serilog.Sinks.Console" Version="5.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\M2Server\M2Server.csproj" />
+  </ItemGroup>
+
+</Project>
