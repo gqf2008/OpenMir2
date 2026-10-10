@@ -13,6 +13,9 @@ struct MockPlayer {
     mn: [i32; 100],
     msgs: Vec<(i32, Option<String>)>,
     rng_value: i32,
+    unit_status: std::collections::HashMap<i32, i32>,
+    items: Vec<(String, i32)>,
+    effects: Vec<String>,
 }
 
 impl MockPlayer {
@@ -27,6 +30,9 @@ impl MockPlayer {
             mn: [0; 100],
             msgs: Vec::new(),
             rng_value: 0,
+            unit_status: std::collections::HashMap::new(),
+            items: Vec::new(),
+            effects: Vec::new(),
         }
     }
 }
@@ -85,6 +91,26 @@ impl ScriptPlayer for MockPlayer {
     }
     fn ms_string(&self, _n: usize) -> String {
         String::new()
+    }
+    fn set_quest_unit_status(&mut self, index: i32, value: i32) {
+        self.unit_status.insert(index, value);
+    }
+    fn item_count(&self, name: &str) -> i32 {
+        self.items
+            .iter()
+            .filter(|(n, _)| n == name)
+            .map(|(_, c)| *c)
+            .sum()
+    }
+    fn has_worn(&self, _location: &str) -> bool {
+        false
+    }
+    fn give_item(&mut self, name: &str, count: i32) {
+        self.effects.push(format!("additem {name} {count}"));
+    }
+    fn remove_item(&mut self, name: &str, count: i32) -> i32 {
+        self.effects.push(format!("delitem {name} {count}"));
+        count
     }
 }
 
@@ -191,29 +217,52 @@ fn say_and_close_flow() {
 
 #[test]
 fn script_command_lands_on_shifted_handler() {
-    // 位移落点（`cargo test --test dispatch_map` 可查）：
-    // 脚本 `checkgold`（枚举 12）→ CmdCode 11 → 未注册 → 条件 switch 的 CHECKITEMW 分支（显式报错，
-    // 结果保持默认 true ⇒ 走 #IF 分支）。这条用例把「位移 + 不静默」一起钉住。
-    let (mut npc, mut player) = setup("[@main]\n#IF\ncheckgold 50\n#SAY\n够了\n#ELSESAY\n不够\n");
-    player.gold = 10;
-    let errors = run(&mut npc, &mut player, "@main");
-    assert!(npc.says.iter().any(|(s, _)| s.contains("够了")));
-    assert!(
-        errors.iter().any(|e| matches!(
-            e,
-            EngineError::NotImplemented {
-                handler: "CHECKITEMW",
-                ..
-            }
-        )),
-        "{errors:?}"
+    // 位移落点（`cargo test --test dispatch_map` 可查，且与 C# 实测一致）：
+    // 脚本 `checkgold 50`（枚举 12）→ CmdCode 11 → 未注册 → 条件 switch 的 CHECKITEMW 分支，
+    // 即「按物品名查背包」——脚本里的 `checkgold` 实际是查名为 "50" 的物品。
+    let (mut npc, mut player) = setup(
+        "[@main]
+#IF
+checkgold 50
+#SAY
+够了
+#ELSESAY
+不够
+",
     );
+
+    // 无该物品 → 条件为假 → #ELSESAY 分支
+    let errors = run(&mut npc, &mut player, "@main");
+    assert!(
+        npc.says.iter().any(|(s, _)| s.contains("不够")),
+        "{:?}",
+        npc.says
+    );
+    assert!(errors.is_empty(), "{errors:?}");
+
+    // 背包里有名为 "50" 的物品 1 件（nParam2 = 1）→ 条件为真 → #SAY 分支
+    let (mut npc2, mut player2) = setup(
+        "[@main]
+#IF
+checkgold 50
+#SAY
+够了
+#ELSESAY
+不够
+",
+    );
+    player2.items.push(("50".to_string(), 1));
+    let errors2 = run(&mut npc2, &mut player2, "@main");
+    assert!(
+        npc2.says.iter().any(|(s, _)| s.contains("够了")),
+        "{:?}",
+        npc2.says
+    );
+    assert!(errors2.is_empty(), "{errors2:?}");
 }
 
-/// 处理器级用例：直接构造 `QuestConditionInfo`（CmdCode = C# 注册键），
-/// 绕开「脚本命令 → CmdCode」的位移，单测处理器语义本身。
+/// 处理器级用例辅助：构造 `QuestConditionInfo`（nParam 按解析器规则由 sParam 填充）。
 fn cond(code: i32, p1: &str, p2: &str, n1: i32) -> mir2_script::QuestConditionInfo {
-    // 与解析器一致：nParam 由对应 sParam 的 StrToInt 填充（IsStringNumber 恒 true）
     mir2_script::QuestConditionInfo {
         cmd_code: code,
         s_param1: p1.into(),
