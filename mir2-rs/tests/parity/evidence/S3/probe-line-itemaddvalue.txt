@@ -1,0 +1,15 @@
+[轴] CHECKRANGEMONCOUNT     字段序号=129  现行 CmdCode=129  → ConditionOfCheckRangeMonCount    旧位移 CmdCode=128  → ConditionOfCheckContribution
+[轴] CHECKITEMADDVALUE      字段序号=130  现行 CmdCode=130  → ConditionOfCheckItemAddValue     旧位移 CmdCode=129  → ConditionOfCheckRangeMonCount
+[轴] CHECKINMAPRANGE        字段序号=131  现行 CmdCode=131  → ConditionOfCheckInMapRange       旧位移 CmdCode=130  → ConditionOfCheckItemAddValue
+[轴] CHECKLEVEL             字段序号=7    现行 CmdCode=7    → ConditionOfCheckLevel            旧位移 CmdCode=6    → ConditionCheckUnit
+
+行           : CHECKITEMADDVALUE 3 10 = 1
+命令         : CHECKITEMADDVALUE（已注册 [ScriptDefName]）
+CmdCode      : 130（现行解析器口径：存字段序号）
+派发目标     : ConditionOfCheckItemAddValue
+sParam5      : 长 0（该处理器要取 [1]）
+旧位移口径   : CmdCode=129 ⇒ ConditionOfCheckRangeMonCount（S3 之前 / Rust 现行；whitelist T-4）
+结果         : NullReferenceException: Object reference not set to an instance of an object.
+抛出点       : at ScriptSystem.Processings.ConditionProcessingSys.ConditionOfCheckItemAddValue(INormNpc normNpc, IPlayerActor playerActor, QuestConditionInfo questConditionInfo, Boolean& success) in E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\s1-oracle-fixes\src\Modules\ScriptEngine\Processings\ConditionProcessingSys.cs:line 401
+               （Release 下行号归属会落到方法体首行附近；越界语句本身是方法里第 5 个参数那句 `sParam5[1]`）
+               ⚠ 这是 NRE：很可能是本探针的空 stub 造成，**不可**据此判生产崩溃

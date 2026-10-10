@@ -583,3 +583,29 @@ walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 prin
 | M3 系统对齐 | ⏳ 未开始 | 门禁已就绪且 C# 侧 GREEN（`run_m3_gate.ps1 -Side csharp -VerifyRepeat`）；等 M1 顶住端口后跑 `-Side rust`（`openmir2-m3-rust-firstrun`） |
 | M4 脚本引擎 | 🔄 进行中 | 解析层 1:1 + 求值骨架 + 效果对拍机制（flow-diff 我实跑 3 一致 / 0 不一致 + 1 登记豁免）；余量见 `openmir2-b2-script-dispatch` |
 | M5 收敛/压测/灰度 | ⏳ 未开始 | 前置 `openmir2-c6-e2e-loadgate`（整栈 E2E 一条命令 + 压测档位，进行中） |
+
+---
+
+## 18. S3：B-8 命令码位移修复（2026-10-10，oracle 行为变更）
+
+> 全文与证据：`mir2-rs/tests/parity/evidence/S3/S3-报告.md`；白名单条目：`whitelist.md` **T-4**（并给 B-8 行加了注记）。
+
+`src/Modules/ScriptEngine/ScriptParsers.cs` **两处**由 `nCMDCode = code - 1` 改为 `nCMDCode = code`
+（条件解析 + 动作解析）。`code` 是 `GetFields()` 的字段序号，而两张执行注册表按**枚举值**建键；
+实测两个枚举「字段序号 == 枚举值」**0 处不等** ⇒ 改解析器是唯一有效的落点
+（改执行器查表口径与现状**完全等价**；查表 +1 会弄坏本来就是对的特判命令）。
+此后每条脚本命令派发到**自己**的处理器，不再是前一个枚举成员的。
+
+**影响面 7640 行**（条件 1401/1433 + 动作 6239/6286；未变的 79 行是特判命令）——这是整条脚本派发面被纠正。
+改前/改后：S2 那 120 行回归集由「抛 `IndexOutOfRangeException`」→ **0**；B 线 flow-diff 用例 3
+由 `EX IndexOutOfRangeException` → 正常产出脚本效果行（C# 侧开始按脚本意图执行）。
+**Rust 侧默认复刻旧位移**（T-4），因此修后 flow-diff 全 DIFF（0/3）属**预期登记**的差异；
+是否让 Rust 同批翻转（`crates/script/src/parser.rs` 一行）由 coordinator 拍板——不翻转则 M4 的
+「两侧逐行一致」在派发面需要 shift-aware 对账。
+
+**协调者裁定（2026-10-10）：Rust 侧同批翻转**（`crates/script/src/parser.rs` 由 `code-1` 改 `code`），
+理由：oracle 已按 owner 决策修正，Rust 侧的目标是"追上并最终替换当前 oracle"；继续复刻旧位移等于
+长期维护一个刻意的偏差（还要为它养一套 shift-aware 对账器），收益为负。
+配套要求：① whitelist 的 B-8 条目改为"两侧同步翻转（原为复刻）"，保留历史说明；
+② 翻转后 B 线重跑 flow-diff，期望回到 **3 一致 / 0 不一致**（S2 报告里那 120 行语料当回归集）；
+③ 若翻转后出现新的不一致，按 §6.0 处理（要么修，要么进白名单并给"无害"论证）。

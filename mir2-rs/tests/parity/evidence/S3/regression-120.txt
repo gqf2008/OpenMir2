@@ -1,0 +1,25 @@
+[轴] CHECKRANGEMONCOUNT     字段序号=129  现行 CmdCode=129  → ConditionOfCheckRangeMonCount    旧位移 CmdCode=128  → ConditionOfCheckContribution
+[轴] CHECKITEMADDVALUE      字段序号=130  现行 CmdCode=130  → ConditionOfCheckItemAddValue     旧位移 CmdCode=129  → ConditionOfCheckRangeMonCount
+[轴] CHECKINMAPRANGE        字段序号=131  现行 CmdCode=131  → ConditionOfCheckInMapRange       旧位移 CmdCode=130  → ConditionOfCheckItemAddValue
+[轴] CHECKLEVEL             字段序号=7    现行 CmdCode=7    → ConditionOfCheckLevel            旧位移 CmdCode=6    → ConditionCheckUnit
+
+== 回归集 mir2-rs/tests/parity/evidence/S2/crash-corpus-120.txt（轴=条件）
+行数                          : 120
+两口径派发目标不同的行数      : 120
+旧位移口径下抛 IndexOutOfRange: 120   ← S3 修复前的症状 / Rust 现行
+现行口径下抛 IndexOutOfRange  : 0   ← **修复的验收线（应为 0）**
+现行口径下：正常返回 0 / 探针空 stub 致 NRE（不可判）120 / 其它 0
+
+前 12 行明细（相对路径 | 脚本行 | 旧位移派发(结果) | 现行派发(结果)）：
+    Market_Def\沙巴克铁匠-3.txt	CheckItemAddValue 1 0 > 9	旧位移:ConditionOfCheckRangeMonCount(OOR)	现行:ConditionOfCheckItemAddValue(NRE)
+    Market_Def\沙巴克铁匠-3.txt	CheckItemAddValue 1 2 > 9	旧位移:ConditionOfCheckRangeMonCount(OOR)	现行:ConditionOfCheckItemAddValue(NRE)
+    Market_Def\沙巴克铁匠-3.txt	CheckItemAddValue 1 1 > 9	旧位移:ConditionOfCheckRangeMonCount(OOR)	现行:ConditionOfCheckItemAddValue(NRE)
+    Npc_Def\比奇国王-0122.txt	CHECKITEMADDVALUE 3 10 = 1	旧位移:ConditionOfCheckRangeMonCount(OOR)	现行:ConditionOfCheckItemAddValue(NRE)
+    Market_Def\功能NPC\勋章-0146.txt	CHECKITEMADDVALUE 2 10 = 0	旧位移:ConditionOfCheckRangeMonCount(OOR)	现行:ConditionOfCheckItemAddValue(NRE)
+    Market_Def\功能NPC\勋章-0146.txt	CHECKITEMADDVALUE 2 10 = 1	旧位移:ConditionOfCheckRangeMonCount(OOR)	现行:ConditionOfCheckItemAddValue(NRE)
+    Market_Def\功能NPC\勋章-0146.txt	CHECKITEMADDVALUE 2 10 = 2	旧位移:ConditionOfCheckRangeMonCount(OOR)	现行:ConditionOfCheckItemAddValue(NRE)
+    Market_Def\功能NPC\勋章-0146.txt	CHECKITEMADDVALUE 2 10 = 3	旧位移:ConditionOfCheckRangeMonCount(OOR)	现行:ConditionOfCheckItemAddValue(NRE)
+    Market_Def\功能NPC\勋章-0146.txt	CHECKITEMADDVALUE 2 10 = 4	旧位移:ConditionOfCheckRangeMonCount(OOR)	现行:ConditionOfCheckItemAddValue(NRE)
+    Market_Def\功能NPC\勋章-0146.txt	CHECKITEMADDVALUE 2 10 = 5	旧位移:ConditionOfCheckRangeMonCount(OOR)	现行:ConditionOfCheckItemAddValue(NRE)
+    Market_Def\功能NPC\勋章-0146.txt	CHECKITEMADDVALUE 2 10 = 6	旧位移:ConditionOfCheckRangeMonCount(OOR)	现行:ConditionOfCheckItemAddValue(NRE)
+    Market_Def\功能NPC\勋章-0146.txt	CHECKITEMADDVALUE 2 10 = 7	旧位移:ConditionOfCheckRangeMonCount(OOR)	现行:ConditionOfCheckItemAddValue(NRE)
