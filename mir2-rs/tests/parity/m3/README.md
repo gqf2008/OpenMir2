@@ -14,6 +14,18 @@ powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_m3_gate.ps1
 powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_m3_gate.ps1 -Side rust -PeerSession csharp-20261010-164731
 ```
 
+### `-Side rust` 首验的两条前置（否则会把别人的问题读成 A2 的问题）
+
+1. **A2（M1 边界服务）的 Rust 服务真的顶住 7000/7100/7200**——门禁的入口护栏会拦"入口还是 C#"，
+   但拦不住"入口是 Rust 但链路半通"；
+2. **A3 的 s2c 多段体帧编码器修复合入 master**（2026-10-10 状态：`worktree-c-tools` @ `02ba88ef`，
+   needs-review）。未合入时经 Rust 链路的 `SM_TURN` 家族（`enc(CharDesc)+enc(文本)`）会跳帧，
+   产生**假差异**——那属于编码器口径，不是 A2 的服务行为差异。
+   相关口径差另见 whitelist **A-9**（C2 导出器对多段帧的 `body_len/body_sha256` 与分段解码不一致）：
+   跨侧 diff 若消费 C2 的 JSONL，这类字段是"生产端口径"，别当行为差异。
+
+两条都满足后再跑 ②，此时的 diff 才有仲裁力（否则结论要么恒绿、要么是他人缺陷的投影）。
+
 `run_m3_gate.ps1` 依次做四件事，最后落 `sessions/M3-gate-<side>-<时间>.json`（含各步骤退出码与失败项）：
 
 0. **入口实现识别护栏**（**快速失败**）：读 7000/7100/7200 的实际监听进程，
