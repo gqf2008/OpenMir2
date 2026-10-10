@@ -68,11 +68,11 @@ python mir2-rs/tests/parity/m3/scoped_diff.py diff \
 
 | 进程 | 实际 exe |
 | --- | --- |
-| mysqld | `D:\mysql\mariadb-10.11.19-winx64in\mysqld.exe` |
-| DBSrv | `src\DBSrvin\Release\DBSrv.exe`（**仓库构建输出**） |
-| LoginSrv | `src\LoginSrvin\Release\LoginSrv.exe`（**仓库构建输出**） |
-| GameSvr | `E:\MirServer\M2GameSvr\GameSrv.exe` |
-| LoginGate / SelGate / GameGate | `E:\MirServer\{LoginGate,SelGate,RunGate}\*.exe` |
+| mysqld | `D:/mysql/mariadb-10.11.19-winx64/bin/mysqld.exe` |
+| DBSrv | `src/DBSrv/bin/Release/DBSrv.exe`（**仓库构建输出**） |
+| LoginSrv | `src/LoginSrv/bin/Release/LoginSrv.exe`（**仓库构建输出**） |
+| GameSvr | `E:/MirServer/M2GameSvr/GameSrv.exe` |
+| LoginGate / SelGate / GameGate | `E:/MirServer/{LoginGate,SelGate,RunGate}/*.exe` |
 
 ⇒ 需要"整栈重启"时**以这张表为准**（重启错那份等于没重启）；
 LoginSrv 读的配置是 `src/LoginSrv/bin/Release/logsrv.conf`
