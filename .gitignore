@@ -376,3 +376,6 @@ tools/oracle/gate-slot-probe/bin/
 tools/oracle/gate-slot-probe/obj/
 tools/oracle/cond-crash-probe/bin/
 tools/oracle/cond-crash-probe/obj/
+# 压测（C6）：保留小体积指标（load_stats/mem/report/summary），只排除大日志
+tests/loadgate/**/*.log
+tests/loadgate/**/*.err.log

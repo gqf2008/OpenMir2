@@ -37,6 +37,10 @@ namespace BotSrv
         public async Task StartAsync(CancellationToken stoppingToken)
         {
             LogService.Info("机器人服务启动...");
+            LoadMetrics.Init(Environment.GetEnvironmentVariable("MIR2_BOT_OUT"));
+            LogService.Info("压测采集: 输出目录={0} 连接错峰={1}ms/个 统计={2}",
+                Environment.GetEnvironmentVariable("MIR2_BOT_OUT") ?? "(exe 同级/load_out.conf)",
+                _options.ConnectStaggerMs, LoadMetrics.StatsPath);
             runThread.Start();
             await BotShare.ClientMgr.Start(stoppingToken);
         }
@@ -44,6 +48,7 @@ namespace BotSrv
         public Task StopAsync(CancellationToken cancellationToken)
         {
             LogService.Info("机器人服务停止...");
+            LoadMetrics.Shutdown();     // 落最后一行统计（驱动 Stop-Process 时来不及，故这里是尽力而为）
             BotShare.ClientMgr.Stop(cancellationToken);
             return Task.CompletedTask;
         }
@@ -73,13 +78,28 @@ namespace BotSrv
                             playClient.LoginId = string.Concat(_options.LoginAccount, g_nLoginIndex);
                             playClient.LoginPasswd = playClient.LoginId;
                             playClient.ChrName = playClient.LoginId;
-                            playClient.ConnectTick = HUtil32.GetTickCount() + (i + 1) * 3000;
+                            playClient.ConnectTick = HUtil32.GetTickCount() + (i + 1) * _options.ConnectStaggerMs;
                             BotShare.ClientMgr.AddClient(playClient.SessionId, playClient);
+                            LoadMetrics.Spawned();
                             g_nLoginIndex++;
                         }
                     }
                 }
-                BotShare.ClientMgr.Run();
+                try
+                {
+                    BotShare.ClientMgr.Run();
+                }
+                catch (Exception ex)
+                {
+                    // 压测进程不许被单个假人的异常打死（2026-10-10 实测：自动挂机里 MShare 共享态竞态
+                    // 出 NullReference/IndexOutOfRange，整个 1000 假人进程直接退出 ⇒ 那一档数据全废）。
+                    // 兜住并计数（进 load_stats.ndjson 的 internal_errors），前若干条打日志便于定位。
+                    LoadMetrics.InternalError();
+                    if (LoadMetrics.ShouldLogInternalError())
+                    {
+                        LogService.Warn("压测兜住的异常[" + LoadMetrics.InternalErrors + "]：" + ex.GetType().Name + ": " + ex.Message);
+                    }
+                }
                 Thread.Sleep(TimeSpan.FromMilliseconds(50));
             }
         }

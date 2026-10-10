@@ -25,7 +25,8 @@
 param(
   [switch]$SkipFlow,
   [switch]$SkipBots,
-  [switch]$SelfTestRed
+  [switch]$SelfTestRed,
+  [switch]$FailOnSkip          # 严格模式：SKIP（前置不满足）也算失败
 )
 
 $ErrorActionPreference = "Stop"
@@ -34,14 +35,15 @@ $RepoRoot = (Resolve-Path (Join-Path $Here "..\..")).Path
 $CaptureDir = Join-Path $RepoRoot "tools\capture"
 $results = @()
 
-function Add-Result([string]$Name, [bool]$Ok, [string]$Detail = "") {
-  $script:results += [pscustomobject]@{ check = $Name; ok = $Ok; detail = $Detail }
+function Add-Result([string]$Name, [bool]$Ok, [string]$Detail = "", [string]$State = "") {
+  # State 可显式给 "SKIP"（前置不满足）；默认按 Ok 判 GREEN/RED。
+  # SKIP 在汇总里单独计数（不许静默当 GREEN），-FailOnSkip 时折算成 RED。
+  if ($State -eq "") { if ($Ok) { $State = "GREEN" } else { $State = "RED" } }
+  $script:results += [pscustomobject]@{ check = $Name; ok = $Ok; state = $State; detail = $Detail }
   # 注：Windows PowerShell 5.1 没有三元运算符，别用 `$cond ? a : b`
-  $tag = "RED"
-  if ($Ok) { $tag = "GREEN" }
   $suffix = ""
   if ($Detail) { $suffix = "  ($Detail)" }
-  Write-Output ($tag + "  " + $Name + $suffix)
+  Write-Output ($State + "  " + $Name + $suffix)
 }
 
 function Test-FlowStages([string]$StagesFile, [string[]]$Required) {
@@ -96,8 +98,17 @@ Add-Result "proxy-selftest" ($LASTEXITCODE -eq 0)
 python (Join-Path $RepoRoot "tools\logdiff\timeline.py") selftest
 Add-Result "timeline-selftest" ($LASTEXITCODE -eq 0)
 
-python (Join-Path $RepoRoot "tools\dbsnap\dbsnap.py") selftest
-Add-Result "dbsnap-selftest" ($LASTEXITCODE -eq 0)
+# dbsnap 自测要连实库：MySQL 没起时判 SKIP（前置不满足）而不是 RED ——
+# 免得"环境没起"被读成"代码坏了"；-FailOnSkip 严格模式下 SKIP 也算失败。
+$mysqlUp = [bool](Get-NetTCPConnection -State Listen -LocalPort 3306 -ErrorAction SilentlyContinue)
+if (-not $mysqlUp) {
+    Write-Host "SKIP dbsnap-selftest (前置: MySQL 3306 未监听)"
+    if ($FailOnSkip) { Add-Result "dbsnap-selftest" $false "MySQL 未起（-FailOnSkip 严格模式）" }
+    else { Add-Result "dbsnap-selftest" $true "MySQL 未起" "SKIP" }
+} else {
+    python (Join-Path $RepoRoot "tools\dbsnap\dbsnap.py") selftest
+    Add-Result "dbsnap-selftest" ($LASTEXITCODE -eq 0)
+}
 
 python (Join-Path $RepoRoot "tools\worldsample\world_sampler.py") selftest
 Add-Result "worldsample-selftest" ($LASTEXITCODE -eq 0)
@@ -169,8 +180,16 @@ if (-not $SkipBots) {
 }
 
 # ---- 汇总 ----
-$red = @($results | Where-Object { -not $_.ok }).Count
-Write-Output ("==== E2E: " + ($results.Count - $red) + " GREEN / " + $red + " RED ====")
+$redChecks = @($results | Where-Object { $_.state -eq "RED" })
+$skipChecks = @($results | Where-Object { $_.state -eq "SKIP" })
+if ($FailOnSkip -and $skipChecks.Count -gt 0) {
+  $redChecks = @($redChecks + $skipChecks)
+  $skipChecks = @()
+  Write-Output ("严格模式(-FailOnSkip)：把 " + $results.Count + " 项里的 SKIP 折算成 RED")
+}
+$red = $redChecks.Count
+Write-Output ("==== E2E: " + ($results.Count - $red - $skipChecks.Count) + " GREEN / " + $red +
+              " RED / " + $skipChecks.Count + " SKIP ====")
 if ($SelfTestRed) {
   # 红检模式：flow-e2e 必须红才算自测通过
   $flow = $results | Where-Object { $_.check -eq "flow-e2e" } | Select-Object -First 1

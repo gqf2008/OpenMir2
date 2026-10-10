@@ -140,6 +140,8 @@ namespace BotSrv
                     if ((AutoRunTick - _autoList[i].RunTick) > 800)
                     {
                         _autoList[i].RunTick = HUtil32.GetTickCount();
+                        // 压测：进图后挂机定时器会被停掉，这里确保它一直开着（否则假人静止、收不到 +GD）
+                        _clientList[i].EnsureAutoPlay();
                         _clientList[i].RunAutoPlay();
                     }
                 }

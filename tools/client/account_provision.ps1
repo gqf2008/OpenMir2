@@ -12,15 +12,22 @@
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File account_provision.ps1 -Account goldprobe
+
+.EXAMPLE
+  # 批量开号（压测档位用）：loadbot0 .. loadbot1999，幂等、一条 SQL 建完（比逐个调用快）
+  powershell -ExecutionPolicy Bypass -File account_provision.ps1 -Prefix loadbot -Count 1000
 #>
 param(
-  [Parameter(Mandatory = $true)][string]$Account,
+  [string]$Account = "",
   [string]$Password = "",
   [string]$Birthday = "1986/06/06",
-  [string]$Mysql = "D:\mysql\mariadb-10.11.19-winx64\bin\mysql.exe"
+  [string]$Mysql = "D:\mysql\mariadb-10.11.19-winx64\bin\mysql.exe",
+  [string]$Prefix = "",
+  [int]$Count = 0
 )
 $ErrorActionPreference = "Stop"
 if ($Password -eq "") { $Password = $Account }
+
 
 function Invoke-Mysql([string]$Sql) {
   # mysql.exe 会往 stderr 打横幅/分隔线；ErrorActionPreference=Stop 下会被当成终止错误
@@ -34,6 +41,29 @@ function Invoke-Mysql([string]$Sql) {
   } finally { $ErrorActionPreference = $prev }
 }
 
+# ---- 批量模式：-Prefix + -Count（压测档位用）----
+# MariaDB 的 sequence 引擎（seq_1_to_N）一条 SQL 建 N 个账号；幂等（INSERT IGNORE + 补 protection 行）。
+# 注意：**账号必须在 LoginSrv 启动前建好**（它在启动时把账号读进内存，之后新建的看不到）。
+if ($Prefix -ne "" -and $Count -gt 0) {
+  $now = [long]([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())
+  # 序号从 0 起（与 BotSrv 的 LoginAccount 前缀+序号约定一致：loadbot0, loadbot1, ...）
+  Invoke-Mysql ("INSERT IGNORE INTO mir2_account.account " +
+                "(Account,PassWord,PayMode,Seconds,State,CreateTime,ModifyTime,LastLoginTime) " +
+                "SELECT CONCAT('$Prefix', seq-1), CONCAT('$Prefix', seq-1), 0,0,0,$now,$now,0 " +
+                "FROM mir2_account.seq_1_to_$Count") | Out-Null
+  # account_protection：UserName/Quiz1/2 非空（否则 LoginSrv 回 SM_NEEDUPDATE_ACCOUNT）
+  Invoke-Mysql ("INSERT INTO mir2_account.account_protection " +
+                "(AccountId,UserName,Birthday,Quiz1,Answer1,Quiz2,Answer2) " +
+                "SELECT a.Id, a.Account, '$Birthday', 'q1','a1','q2','a2' FROM mir2_account.account a " +
+                "LEFT JOIN mir2_account.account_protection p ON p.AccountId = a.Id " +
+                "WHERE p.AccountId IS NULL AND a.Account LIKE '$Prefix%'") | Out-Null
+  $n = (Invoke-Mysql "SELECT COUNT(*) FROM mir2_account.account WHERE Account LIKE '$Prefix%'").Trim()
+  $np = (Invoke-Mysql ("SELECT COUNT(*) FROM mir2_account.account a JOIN mir2_account.account_protection p " +
+                       "ON p.AccountId=a.Id WHERE a.Account LIKE '$Prefix%'")).Trim()
+  Write-Output "BULK_OK prefix=$Prefix count=$Count -> account=$n protection=$np（幂等：已存在的不重复建）"
+  exit 0
+}
+if ($Account -eq "") { throw "要么给 -Account，要么给 -Prefix + -Count" }
 $exists = Invoke-Mysql "SELECT Id FROM mir2_account.account WHERE Account='$Account'"
 if ($exists) {
   Write-Output "EXISTS: $Account (Id=$exists) —— 补资料行（Quiz2 等不能为空，否则登录会被要求补填）"
