@@ -570,3 +570,22 @@ walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 prin
 `Mir200` 等 5 个旧目录不删，只把血统写进 §2 / §2.1（T-3）。
 **注意**：.NET 把源码路径编进 MVID ⇒ "与源码逐字节一致"只对**产出它的那个检出**成立，
 对账前先读 `!deployed-from.json`。
+
+---
+
+## 17. S3：B-8 命令码位移修复（2026-10-10，oracle 行为变更）
+
+> 全文与证据：`mir2-rs/tests/parity/evidence/S3/S3-报告.md`；白名单条目：`whitelist.md` **T-4**（并给 B-8 行加了注记）。
+
+`src/Modules/ScriptEngine/ScriptParsers.cs` **两处**由 `nCMDCode = code - 1` 改为 `nCMDCode = code`
+（条件解析 + 动作解析）。`code` 是 `GetFields()` 的字段序号，而两张执行注册表按**枚举值**建键；
+实测两个枚举「字段序号 == 枚举值」**0 处不等** ⇒ 改解析器是唯一有效的落点
+（改执行器查表口径与现状**完全等价**；查表 +1 会弄坏本来就是对的特判命令）。
+此后每条脚本命令派发到**自己**的处理器，不再是前一个枚举成员的。
+
+**影响面 7640 行**（条件 1401/1433 + 动作 6239/6286；未变的 79 行是特判命令）——这是整条脚本派发面被纠正。
+改前/改后：S2 那 120 行回归集由「抛 `IndexOutOfRangeException`」→ **0**；B 线 flow-diff 用例 3
+由 `EX IndexOutOfRangeException` → 正常产出脚本效果行（C# 侧开始按脚本意图执行）。
+**Rust 侧默认复刻旧位移**（T-4），因此修后 flow-diff 全 DIFF（0/3）属**预期登记**的差异；
+是否让 Rust 同批翻转（`crates/script/src/parser.rs` 一行）由 coordinator 拍板——不翻转则 M4 的
+「两侧逐行一致」在派发面需要 shift-aware 对账。

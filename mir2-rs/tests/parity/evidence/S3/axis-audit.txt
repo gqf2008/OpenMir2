@@ -1,0 +1,12 @@
+[条件] 成员 207；字段序号≠枚举值 0；两套键（字段序号 vs 枚举值）取值不同的成员 0；缺键 96
+        ⇒ 字段序号==枚举值 ⇒「把执行器查表改成按字段序号」与现状**完全等价**（键相同），改不动位移；
+          且特判命令已存的是字段序号 ⇒ 只有在解析器侧把 code-1 改成 code 才能同时修好普通命令与特判命令。
+[动作] 成员 352；字段序号≠枚举值 0；两套键（字段序号 vs 枚举值）取值不同的成员 0；缺键 219
+        ⇒ 字段序号==枚举值 ⇒「把执行器查表改成按字段序号」与现状**完全等价**（键相同），改不动位移；
+          且特判命令已存的是字段序号 ⇒ 只有在解析器侧把 code-1 改成 code 才能同时修好普通命令与特判命令。
+=== 现行口径下的命中检查（命令 → CmdCode → 处理器）
+    OK   CHECKITEMADDVALUE      CmdCode=130  命中=ConditionOfCheckItemAddValue       期望=ConditionOfCheckItemAddValue
+    OK   CHECKRANGEMONCOUNT     CmdCode=129  命中=ConditionOfCheckRangeMonCount      期望=ConditionOfCheckRangeMonCount
+    OK   CHECKLEVEL             CmdCode=7    命中=ConditionOfCheckLevel              期望=ConditionOfCheckLevel
+    OK   Give                   CmdCode=3    命中=ActionOfGiveItem                   期望=ActionOfGiveItem
+    OK   Set                    CmdCode=1    命中=ActionOfSet                        期望=ActionOfSet

@@ -326,7 +326,12 @@ namespace ScriptSystem
                 }
                 else
                 {
-                    nCMDCode = code - 1;
+                    // 存**字段序号**本身：注册表（条件 _conditionMap / 动作 ProcessExecutionMessage）
+                    // 是按枚举值建键的，而字段序号 == 枚举值（两个枚举都无显式跳号；
+                    // tools/oracle/cond-crash-probe --axis-audit 实测 0 处不等）⇒ 只有存 code 才能命中
+                    // 「这条命令自己的」处理器。原写作 code - 1 会把命令派发到**前一个枚举成员**的处理器
+                    // （whitelist B-8 / T-4）。上面几条特判分支本来就是直接存 code，与此一致。
+                    nCMDCode = code;
                 }
             }
 
@@ -498,7 +503,12 @@ namespace ScriptSystem
                 }
                 else
                 {
-                    nCMDCode = code - 1;
+                    // 存**字段序号**本身：注册表（条件 _conditionMap / 动作 ProcessExecutionMessage）
+                    // 是按枚举值建键的，而字段序号 == 枚举值（两个枚举都无显式跳号；
+                    // tools/oracle/cond-crash-probe --axis-audit 实测 0 处不等）⇒ 只有存 code 才能命中
+                    // 「这条命令自己的」处理器。原写作 code - 1 会把命令派发到**前一个枚举成员**的处理器
+                    // （whitelist B-8 / T-4）。上面几条特判分支本来就是直接存 code，与此一致。
+                    nCMDCode = code;
                 }
             }
 

@@ -1,0 +1,88 @@
+# S3 门禁重跑（卡片 ④）——oracle 脚本引擎改动后
+# 本批只改 C#（src/Modules/ScriptEngine/ScriptParsers.cs），Rust 与 crates 未改一行
+
+### fmt
+EXIT=0
+### clippy
+EXIT=0
+### test
+EXIT=0
+### msgcodegen
+EXIT=0
+### replay_vec
+EXIT=0
+### ALL DONE
+
+===== cargo test --workspace（汇总行） =====
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+passed 合计 = 114   failed 合计 = 0
+
+===== msgcodegen -- --check =====
+     Running `target\debug\msgcodegen.exe --check`
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+
+===== replay: oracle_vectors.jsonl =====
+   Compiling mir2-protocol v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\s1-oracle-fixes\mir2-rs\crates\protocol)
+   Compiling replay v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\s1-oracle-fixes\mir2-rs\tools\replay)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.15s
+     Running `target\debug\replay.exe tests/parity/vectors/oracle_vectors.jsonl`
+== replay report: tests/parity/vectors/oracle_vectors.jsonl ==
+frames: 60 (其中纯字符串帧 3), edcode vectors: 1072
+内部帧（MemoryPack）: 15
+byte mismatches (①): 0
+field mismatches (②): 0
+distinct idents: 25
+unknown idents (未实现): 0
+stage coverage (③):
+  小退: 2 idents hit
+  建角: 2 idents hit
+  攻击: 3 idents hit
+  登录: 4 idents hit
+  移动: 4 idents hit
+  进世界: 4 idents hit
+  选服: 2 idents hit
+  选角: 2 idents hit
+RESULT: GREEN
+
+===== flow-diff（B 线，3 用例）=====
+--- 改前 ---
+OK   传送-幻境（金币不足/无物品）: 3 行一致
+       err [脚本错误]  脚本命令:MobFireburn NPC名称:测试NPC 地图:0(100:200) 参数1:幻境进入条件：10万金币 参数2: 参数3: 参数4: 参数5: 参数6:
+       #gold=200000
+       #items=
+DIFF 传送-幻境（背包有名为100000的物品）
+  C#  (2 行): ['#gold=200000', '#items=100000']
+  Rust(3 行): ['err(rust) NotImplemented { kind: "action", code: 1, handler: "ActionOfSet" }', '#gold=200000', '#items=100000']
+DIFF 商店-比奇国王-祈福项链
+  C#  (1 行): ['EX IndexOutOfRangeException']
+  Rust(6 行): ['err(rust) NotImplemented { kind: "condition", code: 129, handler: "ConditionOfCheckRangeMonCount" }', 'err [脚本错误]  脚本命令:MobFireburn NPC名称:测试NPC 地图:0(100:200) 参数1:当前佩带的〈祈福项链〉已做过复原 参数2: 参数3: 参数4: 参数5: 参数6:', 'err(rust) NotImplemented { kind: "condition", code: 10, handler: "ConditionOfCheckItem" }', 'err(rust) NotImplemented { kind: "action", code: 1, handler: "ActionOfSet" }', '#gold=100000', '#items=祈福项链,祝福油']
+
+== 用例 3：一致 1 / 不一致 2 ==
+--- 改后 ---
+DIFF 传送-幻境（金币不足/无物品）
+  C#  (3 行): ['gold -100000', '#gold=100000', '#items=']
+  Rust(3 行): ['err [脚本错误]  脚本命令:MobFireburn NPC名称:测试NPC 地图:0(100:200) 参数1:幻境进入条件：10万金币 参数2: 参数3: 参数4: 参数5: 参数6:', '#gold=200000', '#items=']
+DIFF 传送-幻境（背包有名为100000的物品）
+  C#  (3 行): ['gold -100000', '#gold=100000', '#items=100000']
+  Rust(3 行): ['err(rust) NotImplemented { kind: "action", code: 1, handler: "ActionOfSet" }', '#gold=200000', '#items=100000']
+DIFF 商店-比奇国王-祈福项链
+  C#  (4 行): ['msg 10309 0 4242 0 0 需要佩带祈福项链+祝福油1瓶才可进行复原', 'err [脚本参数不正确] Cmd:CHECKITEMADDVALUE NPC名称:测试NPC 地图:0 座标:100:200 参数1:3 参数2:10 参数3:= 参数4:1 参数5:', '#gold=100000', '#items=祈福项链,祝福油']
+  Rust(6 行): ['err(rust) NotImplemented { kind: "condition", code: 129, handler: "ConditionOfCheckRangeMonCount" }', 'err [脚本错误]  脚本命令:MobFireburn NPC名称:测试NPC 地图:0(100:200) 参数1:当前佩带的〈祈福项链〉已做过复原 参数2: 参数3: 参数4: 参数5: 参数6:', 'err(rust) NotImplemented { kind: "condition", code: 10, handler: "ConditionOfCheckItem" }', 'err(rust) NotImplemented { kind: "action", code: 1, handler: "ActionOfSet" }', '#gold=100000', '#items=祈福项链,祝福油']
+
+== 用例 3：一致 0 / 不一致 3 ==

@@ -1,0 +1,19 @@
+# S3：把修好的脚本引擎铺到 oracle（ScriptSystem.dll 变了，其余不变）
+# 命令：powershell -NoProfile -ExecutionPolicy Bypass -File tools/oracle/deploy_gamesvr.ps1
+
+== deploy_gamesvr: E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\s1-oracle-fixes\src\GameSrv\bin\Release  ->  E:\MirServer\M2GameSvr
+   备份: C:\Users\gxh\AppData\Local\Temp\s1-deploy-backup-20261010-222117
+   已铺 10 个自有文件（+ 同名 .pdb）
+   [警告] 60s 内未见端口 5000 监听，查 logs\GameSvr.err.log
+   铺后对账：
+     OK  GameSrv.exe                      src=0938BDD19C378100 dst=0938BDD19C378100
+     OK  GameSrv.dll                      src=AE152136929F4992 dst=AE152136929F4992
+     OK  GameSrv.deps.json                src=27BAAF7D6317609B dst=27BAAF7D6317609B
+     OK  GameSrv.runtimeconfig.json       src=CFFDF23BB209AA20 dst=CFFDF23BB209AA20
+     OK  M2Server.dll                     src=BC760B4374A2E97B dst=BC760B4374A2E97B
+     OK  OpenMir2.dll                     src=A59AD657D5D532E9 dst=A59AD657D5D532E9
+     OK  SystemModule.dll                 src=31F30B8794DD35C7 dst=31F30B8794DD35C7
+     OK  ScriptSystem.dll                 src=0E6FEC1E0C391BF8 dst=0E6FEC1E0C391BF8
+     OK  CommandSystem.dll                src=E1EBB0B222FF49F4 dst=E1EBB0B222FF49F4
+     OK  PlanesSystem.dll                 src=23DE1113AFB7B429 dst=23DE1113AFB7B429
+   部署来源登记: E:\MirServer\M2GameSvr\!deployed-from.json  (worktree-s1-oracle-fixes@a63a41b225e3b836f630c71db0b2a8944342d63b dirty=True)
