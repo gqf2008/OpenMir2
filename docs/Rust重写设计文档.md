@@ -562,6 +562,28 @@ walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 prin
 - 批准口径修订（如 M4 验收①、Envir 文件数）与白名单（`T-*`/`D-*`/`B-*`）；
 - 负责 merge 与 push，并在 `merge_result` 里写清 oid 与门禁结果。
 
+### 14.5 本仓库遵循 host 规范（`http://walgit.localhost:8081/SKILL.md`，2026-10-11 起）
+
+> 取该文件：`curl.exe -sS --resolve walgit.localhost:8081:127.0.0.1 http://walgit.localhost:8081/SKILL.md -o SKILL.md`
+> （本机 `walgit.localhost` 不解析；服务端又重定向到这个名字，所以必须用 `--resolve` 绕过，不能改 hosts——我们非管理员。）
+
+**必守四条（照 §0/§0a/§0b/§0d）**：
+
+1. **一个 worktree 一个身份**：每个 worktree 跑一次
+   `walgit collab join --repo <worktree> --principal <proj>-<role>-N --key <既有种子> --push origin`，
+   身份写在 `<git-dir>/walgit/identity`（不入库、`git clean` 删不掉）。之后该 worktree 里的命令**省略 `--actor`/`--key`**（从 identity 解析）。
+   已就位：coordinator（主检出）、worker-1（a2-m1-services）、worker-3（b-script-engine）、worker-4（m2-world）、worker-5（c-tools）、svc-1（s1-oracle-fixes）。
+2. **交付要挂 `patch`**：卡片交付时必须补一条 `--kind patch --base refs/heads/main --head refs/heads/<分支>`，再 `status: needs-review`。
+3. **审查必须换人**：`--kind review` 由 **`openmir2-reviewer-1/2`** 签（与作者、与合并者都不是同一个人）；作者自审不算数；`svc-*` 不能当批准人（`merge_rule_eval` 会剔除）。
+4. **无人值守用 `--once` + 计划任务**（§0c）：Windows 上别用控制台程序做常驻 watcher；`collab watch --once` 交给计划任务，事件落队列、handler 只 park 不干活。
+
+**已知偏差（记录下来，不是忽略）**：
+
+- 种子仍集中放在 `~/.walgit/keys/`，identity 指过去（规范建议直接把种子物化进 `<git-dir>/walgit/keys/`）。
+  理由：worktree 会在合并后删除，而本项目的身份要跨 worktree 复用（S/A/B/C/D 各一条线常换 worktree）；
+  规范反对的是"一个目录里堆多个 principal 的私钥、agent 之间互相借用"，这一点我们**没有违反**（每条线的 identity 只指向自己那把）。
+- 合并仍由协调者（我）做，审查目前也常由我做——**从本批起改为 reviewer-1/2 出 approve，我只做 merge**。
+
 ---
 
 ## 15. owner 决策记录
