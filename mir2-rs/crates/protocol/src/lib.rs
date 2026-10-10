@@ -16,10 +16,12 @@
 // 文档中逐字引用 C# 标识符/文件名（Messages.cs、ClientSession 等），不加反引号改造名。
 #![allow(clippy::doc_markdown)]
 
+pub mod client_only;
 pub mod edcode;
 pub mod frame;
 pub mod messages;
 
+pub use client_only::CM_QUERYDYNCODE;
 pub use frame::{
     ClientMessage, CommandMessage, FrameError, FrameSplitter, ServerDataPacket, ServerFrameTail,
     ServerMessage, SplitOut,

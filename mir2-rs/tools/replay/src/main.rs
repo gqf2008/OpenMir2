@@ -435,7 +435,10 @@ fn process_frame(rec: &Record, lineno: usize, sabotage: Sabotage, st: &mut Stats
         msg.head.ident = msg.head.ident.wrapping_add(1);
     }
     st.seen_idents.insert(msg.head.ident);
-    if messages::names_of(msg.head.ident).is_empty() {
+    // "未实现包号" = 服务端消息号表与客户端独有号都不认识的号
+    if messages::names_of(msg.head.ident).is_empty()
+        && !mir2_protocol::client_only::is_client_only(msg.head.ident)
+    {
         st.unknown_idents.insert(msg.head.ident);
     }
     // ① 逐字节回放：重编码后与**原始记录**比对

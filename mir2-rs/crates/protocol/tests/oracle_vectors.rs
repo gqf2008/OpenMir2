@@ -200,8 +200,10 @@ fn oracle_vectors_byte_exact() {
                         }
                     }
                 }
-                // ③ 包号必须在消息号表内（"未实现 = 0"）
-                if messages::names_of(msg.head.ident).is_empty() {
+                // ③ 包号必须在消息号表内（或属客户端独有号）
+                if messages::names_of(msg.head.ident).is_empty()
+                    && !mir2_protocol::client_only::is_client_only(msg.head.ident)
+                {
                     mismatches.push(format!(
                         "line {}: ident {} 不在消息号表",
                         lineno + 1,
