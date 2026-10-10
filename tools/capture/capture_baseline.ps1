@@ -62,13 +62,23 @@ $CoreServers = @(
   @{ Name = 'LoginSrv'; Dir = "$Repo\src\LoginSrv\bin\Release"; Exe = 'LoginSrv.exe'; Ports = @(5500, 5600) },
   @{ Name = 'GameSvr';  Dir = "$ServerPack\M2GameSvr";          Exe = 'GameSrv.exe';  Ports = @(5000) }
 )
-# 网关定义：部署目录、exe、正式端口 -> 影子端口（+10000）
+# 网关定义：部署目录、exe、正式端口；影子的绑法见下方注释
 $Gates = @(
   @{ Name = "LoginGate"; Exe = "LoginGate.exe"; Ports = @(7000) },
   @{ Name = "SelGate";   Exe = "SelGate.exe";   Ports = @(7100) },
   @{ Name = "RunGate";   Exe = "GameGate.exe";  Ports = @(7200, 7201, 7202) }
 )
-$ProxyMap = @{ 7000 = 17000; 7100 = 17100; 7200 = 17200 }   # 客户端只会用到这三个（别用 [ordered]：OrderedDictionary 的 int 索引器是位置索引，会静默查空）
+# 影子网关的插桩方式（2026-10-10 实测定型）：
+#   LoginGate / RunGate —— **只改绑定地址到 127.0.0.2，端口保持原值**：
+#     客户端仍然拨 127.0.0.1:7000/7200（启动串与 AddrTable 都不用动），代理占住这两个端口，
+#     转发到 127.0.0.2 的同号端口。端口不变很关键：GameSvr 侧进世界的路由按网关端口对齐
+#     （!servertable.txt 给客户端的就是 7200），把网关挪到 17200 会让客户端连得上、
+#     收得到公告，但 LOGINNOTICEOK 之后世界数据再也下不来（实测 v8/v9 卡在 445B）。
+#   SelGate —— 端口是编译期常量且绑定 IPAddress.Any（0.0.0.0），没法用换地址的办法避开；
+#     只能改影子 DLL 的常量到 17100，代理 127.0.0.1:7100 → 127.0.0.1:17100。
+#     这一跳的数据走连接本身、与端口无关，实测登录/选角全程正常。
+$ShadowBindAddr = "127.0.0.2"
+$ProxyMap = @{ 7000 = "127.0.0.2:7000"; 7100 = "127.0.0.1:17100"; 7200 = "127.0.0.2:7200" }
 
 function Test-PortListen([int]$Port) {
   # 纯 .NET 查监听表：不开连接（TCP 连上去探活会在 GameGate 造幻影用户并触发
@@ -109,16 +119,19 @@ function Stop-ShadowGates {
     Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
   }
 }
-function Patch-GatePorts([string]$ConfPath) {
-  # config.conf 是 GBK：按字节读写，避免 PS 默认编码吃掉中文 Title
+function Patch-GateBindAddr([string]$ConfPath, [string]$KeyPrefix) {
+  # config.conf 是 GBK：按字节读写，避免 PS 默认编码吃掉中文 Title。
+  # KeyPrefix 只传**本网关自己的监听地址**那一组键：
+  #   LoginGate → GateAddr*；RunGate → GateAddress*（GameGate/Conf/ConfigManager.cs:
+  #   GateAddress 是自己的地址、ServerAddr 是它连 GameSvr 的上游地址——**绝不能改 ServerAddr**，
+  #   改错了的现象是影子网关一直"链接游戏引擎[127.0.0.2:5000]拒绝链接"，客户端 7200 连接零字节）。
   $gbk = [System.Text.Encoding]::GetEncoding(936)
   $text = [System.IO.File]::ReadAllText($ConfPath, $gbk)
-  $patched = [regex]::Replace($text, '(?m)^(GatePort\d*=)(\d+)\s*$', {
-    param($m)
-    $m.Groups[1].Value + ([int]$m.Groups[2].Value + 10000)
-  })
-  if ($patched -eq $text) { throw "config.conf 没找到 GatePort 行: $ConfPath" }
+  $pattern = '(?m)^(' + $KeyPrefix + '\d*=)\s*127\.0\.0\.1\s*$'
+  $patched = [regex]::Replace($text, $pattern, ('${1}' + $ShadowBindAddr))
+  if ($patched -eq $text) { throw "config.conf 没找到 $KeyPrefix<N> 监听地址行: $ConfPath" }
   [System.IO.File]::WriteAllText($ConfPath, $patched, $gbk)
+  Write-Output ("BIND_PATCH " + (Split-Path (Split-Path $ConfPath -Parent) -Leaf) + " $KeyPrefix* -> " + $ShadowBindAddr)
 }
 function Count-DllPortConst([string]$DllPath, [int]$Port) {
   $bytes = [System.IO.File]::ReadAllBytes($DllPath)
@@ -153,27 +166,32 @@ function Patch-DllPortConst([string]$DllPath, [int]$From, [int]$To, [int]$Expect
   [System.IO.File]::WriteAllBytes($DllPath, $bytes)
   Write-Output ("DLL_PATCH " + (Split-Path $DllPath -Leaf) + " port " + $From + "->" + $To + " (" + $count + " sites)")
 }
+function Invoke-StartAll([string[]]$ExtraArgs, [int]$TimeoutSec = 300) {
+  # start-all.ps1 内部用 Get-NetTCPConnection 轮询端口，WMI 偶发卡死会让它一直不退出；
+  # 这里给硬超时，超时就按端口实况继续（栈大概率已经起来了）。
+  $argList = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $StartAll) + $ExtraArgs
+  $tag = if ($ExtraArgs.Count -gt 0) { "stop" } else { "start" }
+  $p = Start-Process -FilePath "powershell" -ArgumentList $argList -PassThru -WindowStyle Hidden `
+    -RedirectStandardOutput (Join-Path $Sess ($tag + "all.out.log")) `
+    -RedirectStandardError  (Join-Path $Sess ($tag + "all.err.log"))
+  if (-not $p.WaitForExit($TimeoutSec * 1000)) {
+    Write-Output ("WARN: start-all（" + ($ExtraArgs -join ' ') + "）超过 " + $TimeoutSec + " 秒未退出，脚本自身卡住；按端口实况继续")
+    Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+  }
+}
 function Stop-EntireStack {
-  Start-Process -FilePath "powershell" `
-    -ArgumentList "-NoProfile","-ExecutionPolicy","Bypass","-File",$StartAll,"-Stop" `
-    -Wait -WindowStyle Hidden `
-    -RedirectStandardOutput (Join-Path $Sess "stopall.out.log") `
-    -RedirectStandardError  (Join-Path $Sess "stopall.err.log")
+  Invoke-StartAll @("-Stop") 180
   Start-Sleep -Seconds 3
 }
 function Start-EntireStack {
-  Start-Process -FilePath "powershell" `
-    -ArgumentList "-NoProfile","-ExecutionPolicy","Bypass","-File",$StartAll `
-    -Wait -WindowStyle Hidden `
-    -RedirectStandardOutput (Join-Path $Sess "startall.out.log") `
-    -RedirectStandardError  (Join-Path $Sess "startall.err.log")
+  Invoke-StartAll @() 300
 }
 
 # ---------- 预检 ----------
 foreach ($p in @(7000, 7100, 7200, 5500, 5600, 5100, 5000, 3306)) {
   if (-not (Test-PortListen $p)) { throw "预检失败：端口 $p 未监听（服务端没起全？先跑 E:\MirServer\start-all.cmd）" }
 }
-foreach ($p in @(17000, 17100, 17200)) {
+foreach ($p in @(17100)) {
   if (Test-PortListen $p) { throw "预检失败：影子端口 $p 已被占用（上次没恢复？先清理）" }
 }
 $selDll = Join-Path $ServerPack "SelGate\SelGate.dll"
@@ -223,7 +241,8 @@ try {
     New-Item -ItemType Directory -Force -Path $dst | Out-Null
     robocopy $src $dst /E /XF "*.log" /XD logs /NFL /NDL /NJH /NJS | Out-Null
     if ($LASTEXITCODE -gt 7) { throw "robocopy 失败 ($LASTEXITCODE): $src" }
-    Patch-GatePorts (Join-Path $dst "config.conf")
+    if ($g.Name -eq "LoginGate") { Patch-GateBindAddr (Join-Path $dst "config.conf") "GateAddr" }
+    elseif ($g.Name -eq "RunGate") { Patch-GateBindAddr (Join-Path $dst "config.conf") "GateAddress" }
     if ($g.Name -eq "SelGate") {
       Patch-DllPortConst (Join-Path $dst "SelGate.dll") 7100 17100 3
     }
@@ -232,15 +251,17 @@ try {
       -RedirectStandardError  (Join-Path $Sess ("shadow-" + $g.Name + ".err.log")) -WindowStyle Hidden | Out-Null
     Write-Output ("SHADOW " + $g.Name + " -> " + $dst)
   }
-  foreach ($p in @(17000, 17100, 17200)) {
-    if (-not (Wait-PortListen $p 60)) { throw "影子网关端口 $p 60 秒未起来（看 shadow-*.err.log）" }
+  # 影子绑定地址：LoginGate/RunGate 是 127.0.0.2 原端口，SelGate 是 127.0.0.1:17100
+  foreach ($probe in @("$ShadowBindAddr`:7000", "127.0.0.1:17100", "$ShadowBindAddr`:7200")) {
+    $port = [int]($probe.Split(":")[1])
+    if (-not (Wait-PortListen $port 60)) { throw "影子网关端口 $probe 60 秒未起来（看 shadow-*.err.log）" }
   }
   Write-Output "SHADOW_GATES_UP"
 
   # ---------- 4. 抓包代理 ----------
   New-Item -ItemType Directory -Force -Path $ProxyOut | Out-Null
   $mapArgs = @()
-  foreach ($k in $ProxyMap.Keys) { $mapArgs += @("--map", "$k=127.0.0.1:$($ProxyMap[$k])") }
+  foreach ($k in $ProxyMap.Keys) { $mapArgs += @("--map", "$k=$($ProxyMap[$k])") }
   $proxyProc = Start-Process -FilePath "python" -PassThru -WindowStyle Hidden `
     -ArgumentList (@($ProxyPy, "--out", $ProxyOut) + $mapArgs) `
     -RedirectStandardOutput (Join-Path $Sess "proxy.out.log") `
