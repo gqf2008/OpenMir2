@@ -12,6 +12,8 @@ members = [
     "crates/data",
     "crates/formula",
     "tests/parity",
+    # A2/M1：边界服务（Rust 版 LoginGate/SelGate/LoginSrv/DBSrv）
+    "bins/login-gate",
     # B 线：脚本引擎（crates/script）+ 工具（crates/script-tool）
     "crates/script",
     "crates/script-tool",
