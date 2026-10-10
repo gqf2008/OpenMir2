@@ -11,7 +11,7 @@
 //!
 //! 哈希：FNV-1a 64（非加密用途，仅用于漂移检测；两实现内联同一算法，无额外依赖）。
 
-use crate::model::{QuestActionInfo, QuestConditionInfo, ScriptInfo};
+use crate::model::{Goods, MerchantFlags, QuestActionInfo, QuestConditionInfo, ScriptInfo};
 
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
@@ -133,8 +133,65 @@ fn hash_action(h: &mut Hasher, a: &QuestActionInfo, counts: &mut StructureCounts
     }
 }
 
-/// 计算脚本列表的结构摘要。
-pub fn structure_digest(scripts: &[ScriptInfo]) -> StructureDigest {
+/// 商家脚本产物（`boFlag` 路径）——同样纳入摘要，避免「只比 count」的盲区。
+#[derive(Debug, Default, Clone)]
+pub struct MerchantDigestInput {
+    /// `%价格倍率` 行设置的售价倍率（未设置时 C# 属性保持 0）
+    pub price_rate: i32,
+    pub item_type_list: Vec<i32>,
+    pub flags: MerchantFlags,
+    pub refill_goods: Vec<Goods>,
+}
+
+fn hash_merchant(h: &mut Hasher, m: &MerchantDigestInput) {
+    h.bytes(b"M");
+    h.sep();
+    h.num(m.price_rate);
+    h.sep();
+    h.num(m.item_type_list.len() as i32);
+    h.sep();
+    for v in &m.item_type_list {
+        h.num(*v);
+        h.sep();
+    }
+    // 标志位图（顺序与 C# harness 读取顺序一致）
+    let flags = [
+        m.flags.is_buy,
+        m.flags.is_sell,
+        m.flags.is_make_drug,
+        m.flags.is_prices,
+        m.flags.is_storage,
+        m.flags.is_getback,
+        m.flags.is_upgradenow,
+        m.flags.is_get_backupgnow,
+        m.flags.is_repair,
+        m.flags.is_sup_repair,
+        m.flags.is_send_msg,
+        m.flags.is_use_item_name,
+        m.flags.is_offline_msg,
+        m.flags.is_yb_deal,
+    ];
+    for f in flags {
+        h.bytes(if f { b"1" } else { b"0" });
+    }
+    h.sep();
+    h.num(m.refill_goods.len() as i32);
+    h.sep();
+    for g in &m.refill_goods {
+        h.string(&g.item_name);
+        h.sep();
+        h.num(g.count);
+        h.sep();
+        h.num(g.refill_time);
+        h.sep();
+    }
+}
+
+/// 计算脚本列表 + 商家产物的结构摘要。
+pub fn structure_digest_full(
+    scripts: &[ScriptInfo],
+    merchant: &MerchantDigestInput,
+) -> StructureDigest {
     let mut h = Hasher::new();
     let mut counts = StructureCounts::default();
     for s in scripts {
@@ -173,10 +230,16 @@ pub fn structure_digest(scripts: &[ScriptInfo]) -> StructureDigest {
             }
         }
     }
+    hash_merchant(&mut h, merchant);
     StructureDigest {
         hash: format!("{:016x}", h.state),
         counts,
     }
+}
+
+/// 仅脚本部分（供不需要商家产物的调用点使用）。
+pub fn structure_digest(scripts: &[ScriptInfo]) -> StructureDigest {
+    structure_digest_full(scripts, &MerchantDigestInput::default())
 }
 
 #[cfg(test)]
@@ -228,5 +291,34 @@ mod tests {
         s2[0].record_list[0].procedure_list[0].s_say_msg = "a".into();
         s2[0].record_list[0].procedure_list[0].s_else_say_msg = "bc".into();
         assert_ne!(structure_digest(&s1).hash, structure_digest(&s2).hash);
+    }
+
+    #[test]
+    fn merchant_section_is_sensitive() {
+        let base = structure_digest(&sample());
+        let with_goods = structure_digest_full(
+            &sample(),
+            &MerchantDigestInput {
+                refill_goods: vec![Goods {
+                    item_name: "木剑".into(),
+                    count: 1,
+                    refill_time: 60,
+                }],
+                ..Default::default()
+            },
+        );
+        assert_ne!(base.hash, with_goods.hash);
+        let f = MerchantFlags {
+            is_repair: true,
+            ..Default::default()
+        };
+        let with_flag = structure_digest_full(
+            &sample(),
+            &MerchantDigestInput {
+                flags: f,
+                ..Default::default()
+            },
+        );
+        assert_ne!(base.hash, with_flag.hash);
     }
 }

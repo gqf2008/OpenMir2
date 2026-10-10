@@ -18,7 +18,7 @@ cmp('panics', rust.panics, cs.panics);
 for (const k of ['scripts', 'records', 'procedures', 'conditions', 'actions', 'else_actions', 'goods', 'parse_errors']) {
   cmp(`stats.${k}`, rust.stats[k], cs.stats[k]);
 }
-cmp('stats.load_failures', rust.stats.call_failures + rust.stats.include_loads * 0, cs.stats.load_failures);
+cmp('stats.load_failures', rust.stats.call_failures + rust.stats.include_failures, cs.stats.load_failures);
 
 // 错误逐条对拍：Rust {file, line} vs C# {file, message:"脚本错误: <line> 第:<i> 行: <path>"}
 const rustErrs = rust.errors
@@ -78,4 +78,19 @@ if (mismatch.length) {
   console.log(`OK   结构摘要逐文件一致（${rKeys.length} 个文件：label/cmd_code/参数/宏展开后内容全部相同）`);
 }
 
+// 逐文件原文摘要对拍（覆盖解码差异本身）
+const rt = rust.text_digest || {};
+const ct = cs.text_digest || {};
+const rtk = Object.keys(rt).sort();
+let tmis = [];
+for (const k of rtk) {
+  if (!(k in ct)) { tmis.push(`${k}(仅Rust)`); continue; }
+  if (rt[k] !== ct[k]) tmis.push(k);
+}
+for (const k of Object.keys(ct).sort()) if (!(k in rt)) tmis.push(`${k}(仅C#)`);
+if (tmis.length) { diffs++; console.log(`DIFF 原文摘要不一致: ${tmis.length} 个文件 -> ${tmis.slice(0,10).join(', ')}`); }
+else console.log(`OK   原文摘要逐文件一致（${rtk.length} 个文件：解码结果完全相同）`);
+
 console.log(diffs === 0 ? '== 全部一致 ==' : `== ${diffs} 项差异 ==`);
+// 退出码：有差异 → 非零（供 CI/脚本判断，勿只看文本）
+process.exitCode = diffs === 0 ? 0 : 1;

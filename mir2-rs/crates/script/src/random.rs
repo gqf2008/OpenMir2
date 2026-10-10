@@ -87,10 +87,21 @@ impl SystemRandom {
             let sample = (self.internal_sample() as f64) * (1.0 / (MBIG as f64));
             (sample * (range as f64)) as i32 + min_value
         } else {
-            // 大区间分支（语料不触发，按参考实现补齐）
-            let sample = (self.internal_sample() as f64) * (1.0 / (MBIG as f64));
+            // 大区间分支：.NET `GetSampleForLargeRange()` 消耗**两次**采样并带随机正负号
+            let sample = self.get_sample_for_large_range();
             ((sample * (range as f64)) as i64 + min_value as i64) as i32
         }
+    }
+
+    /// `Random.GetSampleForLargeRange()`（.NET 参考实现，两次 InternalSample）。
+    fn get_sample_for_large_range(&mut self) -> f64 {
+        let result = self.internal_sample();
+        let negative = self.internal_sample() % 2 == 0;
+        let signed = if negative { -result } else { result };
+        let mut d = signed as f64;
+        d += (i32::MAX - 1) as f64;
+        d /= 2.0 * (i32::MAX as f64) - 1.0;
+        d
     }
 }
 
@@ -120,6 +131,20 @@ mod tests {
         assert_eq!(
             seq,
             vec![1434747710, 302596119, 269548474, 1122627734, 361709742]
+        );
+    }
+
+    #[test]
+    fn large_range_matches_dotnet() {
+        // .NET 8 实机：new Random(42).Next(int.MinValue, int.MaxValue) = 1434747709
+        //（大区间分支消耗两次采样，与小区间分支不同）
+        assert_eq!(
+            SystemRandom::new(42).next_range(i32::MIN, i32::MAX),
+            1434747709
+        );
+        assert_eq!(
+            SystemRandom::new(7).next_range(-2_000_000_000, 2_000_000_000),
+            766440938
         );
     }
 

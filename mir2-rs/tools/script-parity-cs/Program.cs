@@ -89,9 +89,9 @@ static class StructureDigest
         public void Sep() => Bytes(new byte[] { (byte)'|' });
     }
 
-    public static (string Hash, long Scripts, long Records, long Procedures, long Conditions, long Actions, long ElseActions) Of(
-        System.Collections.Generic.IEnumerable<ScriptInfo> scripts)
+    public static (string Hash, long Scripts, long Records, long Procedures, long Conditions, long Actions, long ElseActions) Of(NpcProxy npc)
     {
+        var scripts = npc.Scripts;
         var h = new Hasher();
         long scriptCount = 0, records = 0, procedures = 0, conditions = 0, actions = 0, elseActions = 0;
         foreach (var s in scripts)
@@ -118,6 +118,25 @@ static class StructureDigest
                 }
             }
         }
+        // ── 商家段（与 Rust digest.rs 的 hash_merchant 逐字节一致） ──
+        h.Bytes(new byte[] { (byte)'M' }); h.Sep();
+        h.Num((int)npc.Get<object>("PriceRate", 0));
+        h.Sep();
+        var itemTypes = npc.Get<System.Collections.Generic.IList<int>>("ItemTypeList", new System.Collections.Generic.List<int>());
+        h.Num(itemTypes.Count); h.Sep();
+        foreach (var v in itemTypes) { h.Num(v); h.Sep(); }
+        bool[] flags = {
+            npc.Get<bool>("IsBuy", false), npc.Get<bool>("IsSell", false), npc.Get<bool>("IsMakeDrug", false),
+            npc.Get<bool>("IsPrices", false), npc.Get<bool>("IsStorage", false), npc.Get<bool>("IsGetback", false),
+            npc.Get<bool>("IsUpgradenow", false), npc.Get<bool>("IsGetBackupgnow", false), npc.Get<bool>("IsRepair", false),
+            npc.Get<bool>("IsSupRepair", false), npc.Get<bool>("IsSendMsg", false), npc.Get<bool>("IsUseItemName", false),
+            npc.Get<bool>("IsOffLineMsg", false), npc.Get<bool>("IsYbDeal", false),
+        };
+        foreach (var f in flags) h.Bytes(new byte[] { (byte)(f ? '1' : '0') });
+        h.Sep();
+        var goodsList = npc.Get<System.Collections.Generic.IList<SystemModule.Data.Goods>>("RefillGoodsList", new System.Collections.Generic.List<SystemModule.Data.Goods>());
+        h.Num(goodsList.Count); h.Sep();
+        foreach (var g in goodsList) { h.Str(g.ItemName); h.Sep(); h.Num(g.Count); h.Sep(); h.Num(g.RefillTime); h.Sep(); }
         return ($"{h.State:x16}", scriptCount, records, procedures, conditions, actions, elseActions);
     }
 
@@ -192,6 +211,7 @@ static class Program
         long goods = 0, itemTypeEntries = 0;
         var panicFiles = new List<(string File, string Message)>();
         var digests = new SortedDictionary<string, (string Hash, long S, long R, long P, long C, long A, long E)>(StringComparer.Ordinal);
+        var textDigests = new SortedDictionary<string, string>(StringComparer.Ordinal);
 
         foreach (var file in files)
         {
@@ -200,6 +220,14 @@ static class Program
             var stem = Path.GetFileNameWithoutExtension(file);
             var boFlag = rel.Split('/').Any(seg => seg.Equals("Market_Def", StringComparison.OrdinalIgnoreCase));
             sink.CurrentFile = rel;
+            // 逐文件原文摘要（StringList.Text 形态：LoadFromFile 的 ReadLine + AppendLine 复拼）
+            {
+                var tl = new OpenMir2.Common.StringList();
+                tl.LoadFromFile(file);
+                ulong th = 0xcbf29ce484222325UL;
+                foreach (var b in Encoding.UTF8.GetBytes(tl.Text ?? "")) { th ^= b; th *= 0x00000100000001b3UL; }
+                textDigests[rel] = $"{th:x16}";
+            }
             var npc = DispatchProxy.Create<IMerchant, NpcProxy>() as NpcProxy;
             long beforeErr = sink.ScriptErrors + sink.LoadFails + sink.FileNotFound + sink.OtherErrors;
             try
@@ -230,7 +258,7 @@ static class Program
                     }
                 }
             }
-            var d = StructureDigest.Of(npc.Scripts);
+            var d = StructureDigest.Of(npc);
             digests[rel] = (d.Hash, d.Scripts, d.Records, d.Procedures, d.Conditions, d.Actions, d.ElseActions);
             goods += npc.Get<System.Collections.IList>("RefillGoodsList", new List<object>()).Count;
             itemTypeEntries += npc.Get<System.Collections.IList>("ItemTypeList", new List<object>()).Count;
@@ -252,6 +280,14 @@ static class Program
         {
             var comma = ++di == digests.Count ? "" : ",";
             jsonOut.AppendLine($"    \"{Esc(kv.Key)}\": {{\"hash\": \"{kv.Value.Hash}\", \"s\": {kv.Value.S}, \"r\": {kv.Value.R}, \"p\": {kv.Value.P}, \"c\": {kv.Value.C}, \"a\": {kv.Value.A}, \"e\": {kv.Value.E}}}{comma}");
+        }
+        jsonOut.AppendLine("  },");
+        jsonOut.AppendLine("  \"text_digest\": {");
+        int ti = 0;
+        foreach (var kv in textDigests)
+        {
+            var comma = ++ti == textDigests.Count ? "" : ",";
+            jsonOut.AppendLine($"    \"{Esc(kv.Key)}\": \"{kv.Value}\"{comma}");
         }
         jsonOut.AppendLine("  },");
         jsonOut.AppendLine("  \"errors\": [");
@@ -278,6 +314,7 @@ static class Program
         Console.WriteLine($"商品 {goods} 物品类型项 {itemTypeEntries}");
         Console.WriteLine($"解析错误: {sink.ScriptErrors} 加载失败: {sink.LoadFails} 文件未找到: {sink.FileNotFound} 其他错误: {sink.OtherErrors}");
         foreach (var (f, m) in panicFiles) Console.WriteLine($"  [Panic] {f}: {m}");
-        return 0;
+        // 退出码：有解析异常（未被捕获的越界/重复键）→ 非零，便于 CI/脚本判断
+        return panics > 0 ? 1 : 0;
     }
 }

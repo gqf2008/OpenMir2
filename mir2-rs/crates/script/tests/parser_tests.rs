@@ -188,6 +188,39 @@ fn quest_creates_new_script_info() {
 }
 
 #[test]
+fn quest_block_keeps_writing_into_previous_record() {
+    // C# 的 SayingRecord 与 Script 相互独立：`{Quest` 只换 Script，
+    // 之后的动作行仍写入上一个记录（回归用例，对拍 C# 实测 脚本2/标签2/过程2/条件1/动作2）
+    let fs = MemFs::new().with(
+        "root/npc_def/t.txt",
+        "[@main]
+#IF
+checkgold 1
+#ACT
+give 金币 1
+{Quest 2}
+give 金币 2
+[@b]
+#SAY
+x
+",
+    );
+    let out = load(&fs, "Npc_def", "t", false);
+    assert_eq!(out.stats.scripts, 2);
+    assert_eq!(out.stats.records, 2);
+    assert_eq!(out.stats.conditions, 1);
+    assert_eq!(out.stats.actions, 2, "第二个 give 应写入上一个记录");
+    // 新脚本（quest_count=2）自身没有记录，记录仍在第一个脚本里
+    assert_eq!(out.scripts[1].record_list.len(), 1); // [@b]
+    assert_eq!(
+        out.scripts[0].record_list[0].procedure_list[0]
+            .action_list
+            .len(),
+        2
+    );
+}
+
+#[test]
 fn comment_and_empty_lines_skipped() {
     let fs = MemFs::new().with("root/npc_def/t.txt", ";注释\n/注释2\n\n[@main]\n#SAY\nx\n");
     let out = load(&fs, "Npc_def", "t", false);

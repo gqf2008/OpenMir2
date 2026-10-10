@@ -10,13 +10,16 @@
 
 pub mod codes;
 pub mod digest;
+pub mod gbk_overrides;
 pub mod hutil32;
 pub mod model;
 pub mod parser;
 pub mod random;
 pub mod textfile;
 
-pub use digest::{structure_digest, StructureCounts, StructureDigest};
+pub use digest::{
+    structure_digest, structure_digest_full, MerchantDigestInput, StructureCounts, StructureDigest,
+};
 pub use model::{
     Goods, MerchantFlags, QuestActionInfo, QuestConditionInfo, SayingProcedure, SayingRecord,
     ScriptInfo, ScriptQuestInfo,
@@ -24,4 +27,4 @@ pub use model::{
 pub use parser::{
     LoadOutcome, LoadPanic, LoadStats, ParseError, ParseErrorKind, ScriptFs, ScriptParsers,
 };
-pub use textfile::{decode_bytes, split_lines, LocalFs};
+pub use textfile::{decode_bytes, fnv1a64, split_lines, text_as_string_list_text, LocalFs};

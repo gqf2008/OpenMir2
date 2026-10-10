@@ -89,6 +89,8 @@ pub struct LoadStats {
     pub call_loads: usize,
     pub call_failures: usize,
     pub include_loads: usize,
+    /// #INCLUDE 目标缺失次数（与 #CALL 失败同记 LogService.Error，C# 文案相同）
+    pub include_failures: usize,
     pub goods: usize,
     pub price_rate_lines: usize,
     pub item_type_lines: usize,
@@ -287,7 +289,10 @@ impl ScriptParsers {
         // 主解析循环（scriptType 状态机）
         let mut script_type: i32 = 0;
         let mut script_idx: Option<usize> = None;
-        let mut record_idx: Option<usize> = None;
+        // C# 的 SayingRecord 变量与 Script 变量相互独立：`{Quest` 只换 Script，
+        // 不改 SayingRecord ⇒ 新脚本段落之前的内容行仍写入**上一个**记录（可能属于旧脚本）。
+        // 因此这里保存"记录所在位置"的完整坐标，而不是当前脚本内的下标。
+        let mut record_loc: Option<(usize, usize)> = None;
         let mut quest_count: i32 = 0;
         let n_quest_idx = 0usize; // C# 死分支残留变量，保留
         let _ = n_quest_idx;
@@ -348,7 +353,7 @@ impl ScriptParsers {
                     script.quest_info = [crate::model::ScriptQuestInfo::default(); 10];
                     outcome.scripts.push(script);
                     script_idx = Some(outcome.scripts.len() - 1);
-                    record_idx = None;
+                    // record_loc 不变（C# 语义，见上）
                     outcome.stats.scripts += 1;
                     quest_count = qc + 1;
                     let _ = quest_count;
@@ -403,12 +408,12 @@ impl ScriptParsers {
                     procedure_list: vec![SayingProcedure::default()],
                     bo_ext_jmp,
                 });
-                record_idx = Some(script.record_list.len() - 1);
+                record_loc = Some((script_idx.unwrap(), script.record_list.len() - 1));
                 outcome.stats.records += 1;
                 outcome.stats.procedures += 1;
                 continue;
             }
-            if let (Some(si), Some(ri)) = (script_idx, record_idx) {
+            if let Some((si, ri)) = record_loc {
                 if line.starts_with('#') && (10..20).contains(&script_type) {
                     if line.eq_ignore_ascii_case("#IF") {
                         let rec = &mut outcome.scripts[si].record_list[ri];
@@ -679,6 +684,7 @@ impl ScriptParsers {
                     );
                     outcome.stats.include_loads += 1;
                 } else {
+                    outcome.stats.include_failures += 1;
                     outcome.errors.push(ParseError {
                         line: defines_file,
                         line_index: i,

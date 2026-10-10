@@ -25,6 +25,11 @@ struct Totals {
     unknown_conditions: BTreeMap<String, usize>,
     unknown_actions: BTreeMap<String, usize>,
     warnings: Vec<String>,
+    /// 解码回退字符（U+FFFD）出现文件数——应恒为 0：cp936 的 '?' 回退与 PUA 映射
+    /// 已由 gbk_overrides 表精确复刻，出现 U+FFFD 说明解码器与参照不一致
+    decode_anomalies: usize,
+    /// 逐文件原文摘要（`StringList.Text` 形态的 FNV-1a 64），把解码差异本身纳入对拍
+    text_digests: BTreeMap<String, String>,
     /// 逐文件结构摘要（F1 门禁）：relpath → (hash, 计数)
     digests: BTreeMap<String, (String, mir2_script::StructureCounts)>,
 }
@@ -43,7 +48,8 @@ fn matches_win32_txt_pattern(p: &Path) -> bool {
     let Some(ext) = p.extension().and_then(|e| e.to_str()) else {
         return false;
     };
-    ext.len() >= 3 && ext[..3].eq_ignore_ascii_case("txt")
+    // 用字节前缀比较：ext 以多字节字符开头时 `ext[..3]` 会 panic（非 char 边界）
+    ext.len() >= 3 && ext.as_bytes()[..3].eq_ignore_ascii_case(b"txt")
 }
 
 fn walk_txt(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -119,8 +125,8 @@ fn stats_json(t: &Totals) -> String {
     );
     let _ = writeln!(
         o,
-        "    \"include_loads\": {}, \"goods\": {}, \"price_rate_lines\": {},",
-        s.include_loads, s.goods, s.price_rate_lines
+        "    \"include_loads\": {}, \"include_failures\": {}, \"goods\": {}, \"price_rate_lines\": {},",
+        s.include_loads, s.include_failures, s.goods, s.price_rate_lines
     );
     let _ = writeln!(
         o,
@@ -147,6 +153,16 @@ fn stats_json(t: &Totals) -> String {
             "    \"{}\": {{\"hash\": \"{}\", \"s\": {}, \"r\": {}, \"p\": {}, \"c\": {}, \"a\": {}, \"e\": {}}}{comma}",
             json_escape(file), hash, c.scripts, c.records, c.procedures, c.conditions, c.actions, c.else_actions
         );
+    }
+    let _ = writeln!(o, "  }},");
+    let _ = writeln!(o, "  \"text_digest\": {{");
+    for (i, (file, h)) in t.text_digests.iter().enumerate() {
+        let comma = if i + 1 == t.text_digests.len() {
+            ""
+        } else {
+            ","
+        };
+        let _ = writeln!(o, "    \"{}\": \"{}\"{comma}", json_escape(file), h);
     }
     let _ = writeln!(o, "  }},");
     let _ = writeln!(o, "  \"errors\": [");
@@ -216,6 +232,13 @@ pub fn run(envir: &Path, json_out: Option<PathBuf>) -> ExitCode {
         // 语料检查：非 BMP 字符会破坏 UTF-16 索引等价假设
         let bytes = std::fs::read(file).unwrap_or_default();
         let text = mir2_script::decode_bytes(&bytes);
+        if text.chars().any(|c| c == '\u{FFFD}') {
+            totals.decode_anomalies += 1;
+            totals.warnings.push(format!(
+                "{}: 解码出现 U+FFFD（与 cp936 不一致）",
+                rel.display()
+            ));
+        }
         if text.chars().any(|c| (c as u32) > 0xFFFF) {
             totals.warnings.push(format!(
                 "{}: 含非 BMP 字符，UTF-16 索引等价假设不成立",
@@ -225,10 +248,27 @@ pub fn run(envir: &Path, json_out: Option<PathBuf>) -> ExitCode {
         let result =
             parsers.load_script_file(&fs, envir, &parent, &stem, bo_flag, &mut rename_rand);
         let rel_name = rel.to_string_lossy().replace('\\', "/");
+        // 逐文件原文摘要（`StringList.Text` 形态），把解码差异本身纳入对拍
+        totals.text_digests.insert(
+            rel_name.clone(),
+            format!(
+                "{:016x}",
+                mir2_script::fnv1a64(
+                    mir2_script::text_as_string_list_text(&mir2_script::split_lines(&text))
+                        .as_bytes()
+                )
+            ),
+        );
         match result {
             Ok(Some(outcome)) => {
                 totals.loaded += 1;
-                let digest = mir2_script::structure_digest(&outcome.scripts);
+                let merchant = mir2_script::MerchantDigestInput {
+                    price_rate: outcome.price_rate.unwrap_or(0),
+                    item_type_list: outcome.item_type_list.clone(),
+                    flags: outcome.merchant_flags,
+                    refill_goods: outcome.refill_goods.clone(),
+                };
+                let digest = mir2_script::structure_digest_full(&outcome.scripts, &merchant);
                 totals
                     .digests
                     .insert(rel_name.clone(), (digest.hash, digest.counts));
@@ -244,6 +284,7 @@ pub fn run(envir: &Path, json_out: Option<PathBuf>) -> ExitCode {
                 t.call_loads += s.call_loads;
                 t.call_failures += s.call_failures;
                 t.include_loads += s.include_loads;
+                t.include_failures += s.include_failures;
                 t.goods += s.goods;
                 t.price_rate_lines += s.price_rate_lines;
                 t.item_type_lines += s.item_type_lines;
@@ -317,7 +358,10 @@ pub fn run(envir: &Path, json_out: Option<PathBuf>) -> ExitCode {
         "宏展开 {} #CALL成功 {} #CALL失败 {} #INCLUDE {} 商品 {}",
         s.define_substitutions, s.call_loads, s.call_failures, s.include_loads, s.goods
     );
-    println!("解析错误: {}", s.parse_errors);
+    println!(
+        "解析错误: {}；解码异常文件: {}",
+        s.parse_errors, totals.decode_anomalies
+    );
     if !totals.errors.is_empty() {
         println!("错误明细（前 20 条）:");
         for e in totals.errors.iter().take(20) {
@@ -330,5 +374,10 @@ pub fn run(envir: &Path, json_out: Option<PathBuf>) -> ExitCode {
             println!("  {w}");
         }
     }
-    ExitCode::SUCCESS
+    // 退出码：有解析异常（LoadPanic）→ 非零；解析错误行属语料事实，不影响退出码
+    if totals.panics > 0 {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
 }

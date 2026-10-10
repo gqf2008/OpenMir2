@@ -59,3 +59,33 @@ DIFF 结构摘要不一致: 115 个文件
 ```
 
 恢复备份后重跑：`== 全部一致 ==`。这条红检同时证明位移是**普遍存在**的（115/639 文件的可观测命令码受影响）。
+
+## 红检 6：结构摘要门禁上线即抓到真实内容差异
+
+对拍升级后第一次全量跑，原文摘要门禁报出 `GuildRankNameFilter.txt` 两侧不同：
+该文件含 GBK `A8 BF`，.NET cp936 映射为 U+E7C8，encoding_rs(WHATWG GBK) 解成 U+FFFD。
+该文件内容不进入脚本结构（不含 `[`/`#` 行），旧的计数门禁与结构摘要都看不见它。
+按 .NET 探测表生成 cp936 覆盖表后：`== 全部一致 ==`（639/639 原文指纹相同）。
+
+## 红检 7：GB2312 解码穷举门禁（32256 个字节对）
+
+```
+$ cargo test -p mir2-script --test gbk_decode
+test all_cp936_pairs_match_dotnet ... ok      # 0x81..=0xFE × 0x00..=0xFF 全覆盖（排除 FE FF BOM）
+test single_byte_edges_match_dotnet ... ok    # 0x80→U+20AC、0xFF→U+F8F5、孤立引导字节→'?'
+```
+改动 `gbk_overrides.rs` 任一映射或 `textfile.rs` 的状态机 → 必红。
+
+## 红检 8：`{Quest` 段落后的内容归属（对拍实测差异 → 修复）
+
+夹具 `{Quest 2}` 之后紧跟动作行：C# 把该行写入**上一个记录**（SayingRecord 与 Script 相互独立），
+Rust 初版丢弃 ⇒ `动作 2 vs 1`。修正为"记录坐标 (script, record) 与当前脚本解耦"后：
+`脚本 2 / 标签 2 / 过程 2 / 条件 1 / 动作 2` 两侧一致，并加回归用例
+`quest_block_keeps_writing_into_previous_record`。
+
+## 红检 9：BOM 模型（实测推翻直觉）
+
+用真实 `StringList.LoadFromFile` 实测：`FF FE FF 41` 得到 `U+41FF` ——
+`StreamReader` 的 BOM 检测**优先于** `GetEncoding` 的结果，`FF FE` 一律按 UTF-16LE
+（`FF FE 00 00` 亦然，实测首字符 U+0000），`00 00 FE FF` 才走 UTF-32BE。
+Rust 侧据此重写（此前按 `byte3 != 0xFF` 守卫理解，是错的），并加 `bom_detection_matches_dotnet` 用例。

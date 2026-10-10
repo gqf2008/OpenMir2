@@ -2,6 +2,7 @@
 //! - `gen-codes`：从 C# 参照源码生成 `crates/script/src/codes.rs`
 //! - `parse-stats <Envir目录>`：全量加载脚本，输出统计/错误/未实现命令清单（JSON + 摘要）
 
+use mir2_script_tool::gbkoverrides;
 use mir2_script_tool::gencodes;
 use mir2_script_tool::parsestats;
 
@@ -88,6 +89,34 @@ fn main() -> ExitCode {
                 }
                 Err(e) => {
                     eprintln!("写入 {} 失败: {e}", out.display());
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        "gen-gbk-overrides" => {
+            let probe = match args.iter().position(|a| a == "--probe") {
+                Some(i) => PathBuf::from(&args[i + 1]),
+                None => mir2rs_root.join("target/cp936-pairs.txt"),
+            };
+            let out = match args.iter().position(|a| a == "--out") {
+                Some(i) => PathBuf::from(&args[i + 1]),
+                None => mir2rs_root.join("crates/script/src/gbk_overrides.rs"),
+            };
+            let table = match gbkoverrides::parse_probe(&probe) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("gen-gbk-overrides 失败: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            let overrides = gbkoverrides::generate_overrides(&table);
+            match std::fs::write(&out, gbkoverrides::emit_rust(&overrides)) {
+                Ok(()) => {
+                    println!("生成 {}: {} 条覆盖", out.display(), overrides.len());
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("写入失败: {e}");
                     ExitCode::FAILURE
                 }
             }
