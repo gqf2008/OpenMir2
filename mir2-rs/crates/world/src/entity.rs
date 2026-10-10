@@ -7,8 +7,6 @@
 //! 遍历顺序 = 槽位顺序（= 插入顺序 + 回收槽复用），**全库唯一**：
 //! tick 的确定性（判据①）依赖"同一组操作产生同一槽位排布"。
 
-use crate::map::MapGrid;
-
 /// `src/OpenMir2/Enums/Race.cs`：`ActorRace.Play = 0`、`ActorRace.Monster = 80`。
 pub const ACTOR_RACE_PLAY: u8 = 0;
 pub const ACTOR_RACE_MONSTER: u8 = 80;
@@ -63,6 +61,39 @@ pub struct Entity {
     pub is_visible_active: bool,
     /// 本 tick 是否已被处理（tick 顺序判据用）
     pub processed_tick: u64,
+    /// 所在地图（多地图世界用；`World::new` 单图时为 0）
+    pub map_id: usize,
+    /// `WAbil.HP` / `WAbil.MaxHP`
+    pub hp: u16,
+    pub max_hp: u16,
+    /// `WAbil.DC`（低字节=下限、高字节=上限，与 C# 一致）
+    pub dc: i32,
+    /// `WAbil.AC`
+    pub ac: i32,
+    /// `HitPoint` / `SpeedPoint`（命中/敏捷，命中判定用）
+    pub hit_point: u8,
+    pub speed_point: u8,
+    /// `Job`（0 战 / 1 法 / 2 道）
+    pub job: u8,
+    /// `LifeAttrib`（1 = `LA_UNDEAD` 不死系）
+    pub life_attrib: u8,
+    /// `Abil.Level`
+    pub level: u8,
+    /// `MonsterInfo.Exp`（怪物经验，死亡时按 `CalcGetExp` 结算）
+    pub mon_exp: i32,
+    /// `Abil.Exp` / `Abil.MaxExp`
+    pub exp: i32,
+    pub max_exp: i32,
+    /// `AddAbil.UndeadPower`（攻击方对不死系的加成）
+    pub undead_power: i32,
+    /// `LastHiter`（最后一击者 `ActorId`）
+    pub last_hiter: Option<i32>,
+    /// 掉落预算里的金币（`mon.Gold`）
+    pub gold: i32,
+    /// 掉落预算里的物品（`mon.ItemList`，生成时算好、死亡时落地）
+    pub drop_items: Vec<crate::combat::DropItem>,
+    /// 死亡结算是否已做（避免重复发经验/重复掉落）
+    pub death_settled: bool,
 }
 
 impl Entity {
@@ -86,6 +117,26 @@ impl Entity {
             visible_actors: Vec::new(),
             is_visible_active: false,
             processed_tick: 0,
+            map_id: 0,
+            // 玩家默认满血（WAbil.HP 的默认值不能是 0：0 在语义上等于「已死」，
+            // 会让死亡结算把刚进图的玩家当成死者——实测踩过）
+            hp: 100,
+            max_hp: 100,
+            dc: 0,
+            ac: 0,
+            hit_point: 0,
+            speed_point: 0,
+            job: 0,
+            life_attrib: 0,
+            level: 1,
+            mon_exp: 0,
+            exp: 0,
+            max_exp: 0,
+            undead_power: 0,
+            last_hiter: None,
+            gold: 0,
+            drop_items: Vec::new(),
+            death_settled: false,
         }
     }
 }
@@ -196,50 +247,6 @@ impl EntityStore {
         v.sort_unstable();
         v
     }
-
-    /// 会话/实体进出世界：把实体放入地图格子（对应 `Envirnoment.AddMapObject` 的
-    /// `AddObject` + `cellInfo.Add` 组合）。
-    pub fn enter_world(&mut self, id: i32, map: &mut MapGrid, now: i64) -> bool {
-        let Some(e) = self.get(id) else {
-            return false;
-        };
-        let (x, y, cell_type) = (e.x, e.y, crate::map::CellType::Play);
-        let first = !e.add_to_mapped;
-        let ok = map.add_map_object(x, y, cell_type, id, now);
-        if ok {
-            if let Some(e) = self.get_mut(id) {
-                e.add_to_mapped = true;
-            }
-        }
-        let _ = first;
-        ok
-    }
-
-    /// 离开世界：从地图格子摘除（对应 `DeleteFromMap`）。
-    pub fn leave_world(&mut self, id: i32, map: &mut MapGrid) -> bool {
-        let Some(e) = self.get(id) else {
-            return false;
-        };
-        let (x, y) = (e.x, e.y);
-        let (cell, success) = map.get_cell_info_mut(x, y);
-        if !success {
-            return false;
-        }
-        let before = cell.count();
-        cell.obj_list
-            .retain(|o| !(o.actor_object && o.cell_obj_id == id));
-        if cell.count() == 0 {
-            cell.clear();
-        }
-        let removed = cell.count() != before;
-        if removed {
-            if let Some(e) = self.get_mut(id) {
-                e.add_to_mapped = false;
-                e.visible_actors.clear();
-            }
-        }
-        removed
-    }
 }
 
 #[cfg(test)]
@@ -265,19 +272,5 @@ mod tests {
             s.iter().map(|e| e.name.clone()).collect::<Vec<_>>(),
             vec!["c", "b"]
         );
-    }
-
-    #[test]
-    fn enter_and_leave_world_bookkeeping() {
-        let mut s = EntityStore::new();
-        let mut map = MapGrid::new(10, 10);
-        let id = s.alloc_id();
-        s.insert(Entity::new(id, "p", 4, 5));
-        assert!(s.enter_world(id, &mut map, 0));
-        assert_eq!(map.cell(4, 5).count(), 1);
-        assert!(s.get(id).unwrap().add_to_mapped);
-        assert!(s.leave_world(id, &mut map));
-        assert_eq!(map.cell(4, 5).count(), 0);
-        assert!(!s.get(id).unwrap().add_to_mapped);
     }
 }

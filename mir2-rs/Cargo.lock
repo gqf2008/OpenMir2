@@ -816,6 +816,8 @@ dependencies = [
 name = "mir2-world"
 version = "0.1.0"
 dependencies = [
+ "mir2-data",
+ "mir2-formula",
  "mir2-shared",
 ]
 

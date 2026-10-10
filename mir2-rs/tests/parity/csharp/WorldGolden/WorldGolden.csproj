@@ -19,4 +19,11 @@
     与 Rust 侧 crate::world 的虚拟时钟对齐——两侧都不读墙钟。
   -->
 
+  <!-- 复用 parity 侧的逐字拷贝（掉落生成）与真实 RandomNumber.cs（同一 RNG 实例） -->
+  <ItemGroup>
+    <Compile Include="..\ParityGolden\Stubs.cs" Link="Linked\ParityStubs.cs" />
+    <Compile Include="..\ParityGolden\VerbatimCopies.cs" Link="Linked\ParityVerbatim.cs" />
+    <Compile Include="..\..\..\..\..\src\OpenMir2\RandomNumber.cs" Link="Linked\RandomNumber.cs" />
+  </ItemGroup>
+
 </Project>
