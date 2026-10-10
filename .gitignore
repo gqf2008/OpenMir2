@@ -362,3 +362,8 @@ MigrationBackup/
 FodyWeavers.xsd
 # Claude Code 工作区（worktrees 与会话状态）
 .claude/
+
+# C 线抓包：影子网关副本（部署件二进制拷贝）+ 中间日志不入库
+tests/golden/*/shadow/
+tests/botload/
+tests/e2e/

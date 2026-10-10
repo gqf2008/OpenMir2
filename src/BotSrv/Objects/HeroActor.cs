@@ -952,7 +952,7 @@ namespace BotSrv.Objects
                         if (nAbsX <= BotConst.MagicRange && nAbsY <= BotConst.MagicRange)
                         {
                             result = true;
-                            BotShare.LogService.Info($"怪物目标：{MShare.AutoTagget.UserName} ({MShare.AutoTagget.CurrX},{MShare.AutoTagget.CurrY}) 正在使用魔法攻击");
+                            LogService.Info($"怪物目标：{MShare.AutoTagget.UserName} ({MShare.AutoTagget.CurrX},{MShare.AutoTagget.CurrY}) 正在使用魔法攻击");
                             if (_robotClient.CanNextAction() && _robotClient.ServerAcceptNextAction())
                             {
                                 if (CanNextSpell())
@@ -1318,7 +1318,7 @@ namespace BotSrv.Objects
                         if (nAbsX <= BotConst.MagicRange && nAbsY <= BotConst.MagicRange)
                         {
                             result = true;
-                            BotShare.LogService.Info($"怪物目标：{MShare.AutoTagget.UserName} ({MShare.AutoTagget.CurrX},{MShare.AutoTagget.CurrY}) 正在使用魔法攻击");
+                            LogService.Info($"怪物目标：{MShare.AutoTagget.UserName} ({MShare.AutoTagget.CurrX},{MShare.AutoTagget.CurrY}) 正在使用魔法攻击");
                             if (_robotClient.CanNextAction() && _robotClient.ServerAcceptNextAction())
                             {
                                 AttackTaggetEEE(ref result, magicKey);
