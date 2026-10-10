@@ -79,3 +79,20 @@ powershell -ExecutionPolicy Bypass -File tools/botload/load_gate.ps1 -SelfTestRe
 5. **采样点要放在全局去重之前**：`ProcessActMsg` 里 `MShare.g_rtime` 是**跨假人共享**的去重值，
    采样若放在它后面，同一毫秒内其它假人的样本会被吞掉（`LoadMetrics.Tick()` 放在其前）。
 6. **登录成功计数别抓日志行**：BotSrv 的「帐号登录成功！」只在"无无期限提示"分支打印 ⇒ 会漏计数。
+7. **同一栈上连跑两档会被网关抖动污染**（2026-10-10 实测）：第一档结束时成百上千假人同时断连，
+   第二档的假人**能登录但进不了世界**（日志里「成功进入游戏」= 0，`tick_samples` 恒为 0）。
+   与设计文档记的"网关抖动 → GameSvr 网关槽位 `UserList` 置空"同源。⇒ 档位之间必须整栈重启
+   （`-RestartStackPerTier`；`stack_e2e.ps1` 多档自动带上）。**看到"登录 100% 但 tick 样本 0"先查这个**。
+8. **假人进图后挂机定时器会被停掉**：PlayScene 的 `SM_NEWMAP` 分支执行
+   `TimerAutoPlay.Enabled = false`（"地图跳转，停止自动挂机"），此后假人静止 ⇒ 没有动作 ⇒ 收不到
+   `#+GD` ack ⇒ tick 样本恒为 0。已在 BotSrv 加 `EnsureAutoPlay()`（**不 toggle**；`OpenAutoPlay()` 是开关，
+   压测里盲调会来回切）并在 `ClientManager.RunAutoPlay` 每轮重臂。
+9. **假人工具自己会崩，而且崩一次废一档**：实测两处——`TMap.CanMove` 只挡负方向不挡上界（挂机走到
+   地图边界外越界）、`RobotPlayer.AttackTarget` 解引用共享全局态 `MShare.MySelf`（地图切换窗口为 null，
+   调用点守卫挡不住**竞态**）。两处已补守卫；另外 `AppService.Run` 每轮包 try/catch 并把异常计数写进
+   `load_stats.ndjson.internal_errors`（前 20 条打日志）——**压测进程不许被单个假人打死**。
+   读数时 `internal_errors > 0` 要一起看，别只看 P99。
+10. **别用"杀任务树"的方式停外层脚本**（2026-10-10 实测）：编排脚本是被后台任务启动的话，
+    停任务时可能连带把 mysqld / 网关一起带走 ⇒ 下一档假人全部"连上后被关闭连接"
+    （LoginSrv 日志里 `Unable to connect to any of the specified MySQL hosts`）。栈的生命周期要与
+    编排脚本的生命周期解耦（用 `start-all.ps1` 前台起完即退出，子进程独立存活）。
