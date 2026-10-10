@@ -143,7 +143,30 @@ public static class Program
                   $"\"packet_code\":{sm.PacketCode},\"socket\":{sm.Socket},\"session_id\":{sm.SessionId}," +
                   $"\"ident\":{sm.Ident},\"session_index\":{sm.SessionIndex},\"pack_length\":{sm.PackLength}}}");
 
-        // ---- 4. 纯字符串帧向量（无 12 字节头）----
+        // ---- 4. 服务端→客户端帧的两种帧尾（LoginSrv `!$` 与网关 `!`）----
+        // LoginSrv: packet.Data = HUtil32.GetBytes("#" + sMsg + "!$")（ClientSession.cs:745），
+        // LoginGate 原样转发 ⇒ 7000 跳的 s2c 帧尾是 `!$`；GameGate/SelGate 构造的帧尾是 `!`。
+        foreach (var (ident, recog, body) in new[]
+                 {
+                     (Messages.SM_PASSOK_SELECTSERVER, 0, "1/热血传奇/127.0.0.1/7100"),
+                     (Messages.SM_SELECTSERVER_OK, 0, "127.0.0.1/7200/7201/3"),
+                     (Messages.SM_ID_NOTFOUND, 0, ""),
+                 })
+        {
+            CommandMessage cmd = Messages.MakeMessage(ident, recog, 0, 0, 0);
+            byte[] bodyBytes = Gb2312.GetBytes(body);
+            string sMsg = EDCode.EncodeMessage(cmd) + (body.Length > 0 ? EDCode.EncodeString(body) : "");
+            byte[] dollar = Gb2312.GetBytes("#" + sMsg + "!$");
+            lines.Add($"{{\"kind\":\"frame\",\"dir\":\"s2c\",\"hop\":\"login\",\"seq\":{seq++},\"raw_hex\":\"{Hex(dollar)}\"," +
+                      $"\"ident\":{cmd.Ident},\"recog\":{cmd.Recog},\"param\":0,\"tag\":0,\"series\":0," +
+                      $"\"body_len\":{bodyBytes.Length},\"body_sha256\":\"{Sha256Hex(bodyBytes)}\"}}");
+            byte[] gate = Gb2312.GetBytes("#" + sMsg + "!");
+            lines.Add($"{{\"kind\":\"frame\",\"dir\":\"s2c\",\"hop\":\"game\",\"seq\":{seq++},\"raw_hex\":\"{Hex(gate)}\"," +
+                      $"\"ident\":{cmd.Ident},\"recog\":{cmd.Recog},\"param\":0,\"tag\":0,\"series\":0," +
+                      $"\"body_len\":{bodyBytes.Length},\"body_sha256\":\"{Sha256Hex(bodyBytes)}\"}}");
+        }
+
+        // ---- 5. 纯字符串帧向量（无 12 字节头）----
         // 参照路径：GameGate 首个上行走 EDCode.DeCodeString(destinationSpan[2..^1])，
         // 载荷是编码后的登录串，窗口内没有 CommandMessage 头。
         foreach (string payload in new[]

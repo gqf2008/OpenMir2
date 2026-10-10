@@ -5,6 +5,9 @@
 //! - `{"kind":"frame","dir":"c2s"|"s2c","seq":N,"ts_ms":N,"raw_hex":"..",`
 //!   `"ident":N,"recog":N,"param":N,"tag":N,"series":N,"body_len":N,"body_sha256":".."}` —— 帧向量
 //!   （字段值是 C# 侧同一时刻观测值；raw_hex 是线上完整帧字节）
+//! - s2c 帧建议带 `"hop"`（`login`/`sel`/`game`）：login 跳帧尾应为 `!$`（LoginSrv 构造），
+//!   其余跳为 `!`；同在 7000 但由 LoginGate 自身产生的帧用 `"tail":"!"` 显式覆盖。
+//!   缺这两个字段时帧尾不参与判据（仅自洽往返，改尾不可见）。
 //! - 纯字符串帧（无 12 字节头，如 GameGate 首个上行 `**账号/角色/...`）在同一行加
 //!   `"string_frame":true`：只校验 ① 逐字节回放与 body 长度/hash，不做头字段对拍、
 //!   不计入包号覆盖（`--sabotage ident` 对这类帧不适用，其余帧仍会检验它）。
@@ -73,6 +76,14 @@ struct Record {
     /// 纯字符串帧（无 12 字节头；GameGate 首个上行 `**账号/角色/...` 一类）。
     #[serde(default)]
     string_frame: Option<bool>,
+    /// 该帧所属跳：`login`(7000) / `sel`(7100) / `game`(7200)。
+    /// s2c 帧用它给出**独立的帧尾期望**（login ⇒ `!$`，sel/game ⇒ `!`），
+    /// 否则帧尾只有自洽往返、改尾不可见（该盲区由红检实测发现）。
+    #[serde(default)]
+    hop: Option<String>,
+    /// 显式帧尾期望，优先于 `hop` 推断（用于 LoginGate 自身产生的帧：同在 7000 但无 `$`）。
+    #[serde(default)]
+    tail: Option<String>,
 }
 
 /// 八阶段 → 覆盖该阶段的 ident 值集合（按 Messages.cs 语义枚举，值而非名，规避重名）。
@@ -279,7 +290,9 @@ fn parse_frame(raw: &[u8], dir: &str, sabotage: Sabotage) -> Option<frame::Clien
         });
     }
     match dir {
-        "s2c" => frame::decode_server_frame(raw).ok(),
+        // 登录跳（LoginSrv 构造、LoginGate 转发）帧尾是 `!$`，其余跳是 `!`
+        // —— 两种都要接受，帧尾形态在 process_frame 里按原样复现。
+        "s2c" => frame::decode_server_frame_ex(raw).ok().map(|(msg, _)| msg),
         _ => frame::decode_client_frame(raw).ok(),
     }
 }
@@ -349,6 +362,43 @@ fn process_string_frame(
     Ok(())
 }
 
+/// s2c 帧尾的**独立**期望校验：`hop`/`tail` 声明时比对实际帧尾。
+///
+/// 逐字节回放对帧尾是自洽的（解出尾、再原样编码回去），单独改尾 ① 看不见，
+/// 故帧尾必须由记录里的外部期望来判（该盲区由红检实测暴露，见 evidence/M0/redcheck4）。
+fn check_s2c_tail_expectation(rec: &Record, lineno: usize, dir: &str, raw: &[u8], st: &mut Stats) {
+    // ②事前：帧尾独立期望（`hop`/`tail` 声明时）。逐字节回放对帧尾是自洽的，
+    // 单独改尾不会被 ① 发现，因此这里必须有独立判据。
+    if dir == "s2c" {
+        let expect = match rec.tail.as_deref() {
+            Some("!") => Some(frame::ServerFrameTail::Bang),
+            Some("!$") => Some(frame::ServerFrameTail::BangDollar),
+            Some(other) => {
+                st.field_mismatch += 1;
+                st.diff(format!("line {}: bad tail field {other:?}", lineno + 1));
+                None
+            }
+            None => match rec.hop.as_deref() {
+                Some("login") => Some(frame::ServerFrameTail::BangDollar),
+                Some("sel" | "game") => Some(frame::ServerFrameTail::Bang),
+                _ => None,
+            },
+        };
+        let got = frame::ServerFrameTail::from_last_byte(*raw.last().unwrap_or(&0));
+        if let Some(exp) = expect {
+            if got != Some(exp) {
+                st.field_mismatch += 1;
+                st.diff(format!(
+                    "line {}: s2c 帧尾与 hop/tail 期望不符 (seq {:?}): got {:?} want {exp:?}",
+                    lineno + 1,
+                    rec.seq,
+                    got
+                ));
+            }
+        }
+    }
+}
+
 fn process_frame(rec: &Record, lineno: usize, sabotage: Sabotage, st: &mut Stats) -> Result<()> {
     if rec.string_frame.unwrap_or(false) {
         return process_string_frame(rec, lineno, sabotage, st);
@@ -361,6 +411,16 @@ fn process_frame(rec: &Record, lineno: usize, sabotage: Sabotage, st: &mut Stats
         raw.remove(raw.len() - 2);
     }
     let dir = rec.dir.as_deref().unwrap_or("c2s");
+    // s2c：帧尾形态必须原样复现（`!` 与 `!$` 在现网并存：LoginSrv 构造的帧带 `$`，
+    // 网关自身产生的帧不带）。帧尾只看末字节，与解码密钥无关，故红检模式下同样可取。
+    let s2c_tail = if dir == "s2c" {
+        frame::decode_server_frame_ex(&raw)
+            .ok()
+            .map(|(_, tail)| tail)
+    } else {
+        None
+    };
+    check_s2c_tail_expectation(rec, lineno, dir, &raw, st);
     let Some(mut msg) = parse_frame(&raw, dir, sabotage) else {
         st.byte_mismatch += 1;
         st.diff(format!(
@@ -380,7 +440,11 @@ fn process_frame(rec: &Record, lineno: usize, sabotage: Sabotage, st: &mut Stats
     }
     // ① 逐字节回放：重编码后与**原始记录**比对
     let reenc = match dir {
-        "s2c" => frame::encode_server_frame(&msg.head, &edcode::encode(&msg.body)),
+        "s2c" => frame::encode_server_frame_tail(
+            &msg.head,
+            &edcode::encode(&msg.body),
+            s2c_tail.unwrap_or(frame::ServerFrameTail::Bang),
+        ),
         _ => frame::encode_client_frame(&msg.head, &msg.body),
     };
     if reenc != raw_orig {

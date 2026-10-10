@@ -60,12 +60,23 @@ A 线的 replay 门禁即可对真实流量执行 M0 验收。
 C# oracle 已含 3 条此类向量（`tests/parity/vectors/oracle_vectors.jsonl`），
 `cargo test -p mir2-protocol` 与 `cargo run -p replay` 都会覆盖这条路径。
 
-### 帧尾定界的澄清要求
+### 帧尾有两种形态（现网并存，抓包必须原样记录）
 
-C# 真身所有客户端面帧写入点（GameGate/LoginGate/SelGate/CloudGate 共 9 处）都只写
-`'#' … '!'`，**没有任何 `$`(0x24) 写入点**。若抓包样本里出现 `!$` 结尾，请先确认
-`$` 是线上字节还是代理/日志的产物（replay 契约要求 `raw_hex` 末字节 = `!`）；
-确为线上字节时按「协议事实变更」处理：先同步 A 线复核 C# 源，再改 `crates/protocol`。
+C 线实测 + C# 源核对（2026-10-10）：
+
+| 跳 | 帧尾 | 来源 |
+|---|---|---|
+| 7000（LoginGate，**转发 LoginSrv 的帧**） | `!$` | `LoginSrv/Services/ClientSession.cs:745` 的 `"#" + sMsg + "!$"`，LoginGate 原样转发 |
+| 7000（**LoginGate 自身**产生的帧，如超时踢人 `SM_OUTOFCONNECTION`） | `!` | `LoginGate/Services/ClientSession.cs:181/197` |
+| 7100（SelGate）/ 7200（GameGate） | `!` | 各自网关构造 |
+
+⇒ `crates/protocol` 用 `ServerFrameTail`（`Bang` / `Bang$`）区分，回放按原样复现。
+
+**记录要求：s2c 帧请带 `"hop"`**（`login` / `sel` / `game`）。它是帧尾的**独立期望**：
+`login` ⇒ `!$`，`sel`/`game` ⇒ `!`。原因是逐字节回放对帧尾自洽（解码得尾、重编码还原尾），
+**单独改尾不会被 ① 发现** —— 该盲区由红检实测暴露（`evidence/M0/redcheck4-s2c-tail.log`），
+所以帧尾必须由 `hop`（或显式 `"tail":"!"` / `"tail":"!$"`，用于同跳两种形态的情形）给出外部期望。
+缺这两个字段时帧尾不参与判据（仅自洽往返）。
 
 无法对应到头字段的包（如 1 字节心跳 `2a`）可记 `{"kind":"heartbeat","dir":"s2c","seq":N,"ts_ms":N}`，
 replay 跳过非 frame 记录以外的校验（心跳不参与①②③计数）。

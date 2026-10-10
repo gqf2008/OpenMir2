@@ -41,6 +41,7 @@
 | A-1 | `SM_EAT_FAIL` 限频分支按 `CommandFixedLength=16` 编码 12 字节头（C# 侧越界抛异常风险） | `IsEatInterval` 开启且超速吃粮 | `GameGate/Services/ClientSession.cs:634-638` |
 | A-2 | 聊天过滤命令分支 `EncryptUtil.Encode(..., dstOffset=0)` 覆盖帧首 `#` | `ChatCommandFilterMap` 命中 | `GameGate/Services/ClientSession.cs:529-535` |
 | A-3 | `LoginGate.SendDefMessage` 带 sMsg 时 `Array.Copy(sBuff, 0, tempBuf, 13, ...)` 超出 12+len 缓冲（必抛异常，说明该分支从未被真实触发） | 登录网关下行带文本消息 | `LoginGate/Services/ClientSession.cs:184-190` |
+| A-4 | 同一跳（7000）存在两种 s2c 帧尾：LoginSrv 构造的帧是 `#…!$`（`ClientSession.cs:745`），LoginGate 自身产生的帧是 `#…!` ⇒ 回放/移植时**不能按端口假设帧尾**，须按帧的实际尾字节复现（`crates/protocol::ServerFrameTail`），抓包记录用 `hop`/`tail` 给出独立期望 | 7000 跳的下行帧 | `LoginSrv/Services/ClientSession.cs:745` ↔ `LoginGate/Services/ClientSession.cs:181/197` |
 
 协议事实（M0 已裁定并冻结，非差异）：EDCode 循环态 2→4→6→2；客户端帧 `#1...!` /
 服务端帧 `#...!`；头 12B 与体分别编码后拼接；C# 网关无显式分帧器（按 TCP 段直读），

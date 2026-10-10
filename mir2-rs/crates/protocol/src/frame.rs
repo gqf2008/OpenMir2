@@ -8,6 +8,10 @@
 //! - 服务端→客户端：`'#' <EDCode(头12B)> <已编码的体> '!'`（无 '1'；
 //!   体由 GameSvr 侧 `EDCode.EncodeString` 预先编码，网关只编码头后原样拼接，
 //!   见 `GameGate/Services/ClientSession.cs` `ProcessServerPacket`）。
+//!   **登录跳例外**：LoginSrv 构造的帧尾是 `'!$'`（`LoginSrv/Services/ClientSession.cs:745`
+//!   的 `"#" + sMsg + "!$"`），LoginGate 原样转发 ⇒ 客户端在 7000 端口收到的帧以 `!$` 结尾；
+//!   而 LoginGate 自己产生的帧（如超时 `SM_OUTOFCONNECTION`）仍是 `'!'`
+//!   ⇒ **同一跳两种帧尾并存**，用 [`ServerFrameTail`] 区分，回放必须原样复现。
 //! - 心跳：服务端下发单字节 `'*'`，客户端回单字节 `'*'`；网关收到 1 字节包直接忽略。
 //! - C# 网关侧**没有显式分帧器**，按 TCP 段直读（`ServerSocketClientRead` 整段即一帧）；
 //!   粘包时 C# 会解析出垃圾（既有行为）。Rust 侧提供 [`FrameSplitter`] 显式分帧，
@@ -168,25 +172,84 @@ pub fn decode_client_frame(frame: &[u8]) -> Result<ClientMessage, FrameError> {
     })
 }
 
-/// 解析一帧**服务端→客户端**报文（`#...!`，无 '1' 标签）。
+/// 服务端→客户端帧的帧尾形态。
+///
+/// 两种形态在现网并存，**不是同一件事的两种写法**：
+/// - [`ServerFrameTail::Bang`]：`'!'` —— GameGate / SelGate 构造的帧，以及 LoginGate 自身
+///   产生的那几帧（超时踢人等）；
+/// - [`ServerFrameTail::BangDollar`]：`'!''$'` —— LoginSrv 构造、经 LoginGate 原样转发的帧
+///   （`LoginSrv/Services/ClientSession.cs` 的 `"#" + sMsg + "!$"`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServerFrameTail {
+    /// 帧以 `!` 结尾。
+    Bang,
+    /// 帧以 `!$` 结尾（LoginSrv 形态）。
+    BangDollar,
+}
+
+impl ServerFrameTail {
+    /// 帧尾字节切片。
+    #[must_use]
+    pub fn bytes(self) -> &'static [u8] {
+        match self {
+            Self::Bang => b"!",
+            Self::BangDollar => b"!$",
+        }
+    }
+
+    /// 从帧尾字节反推形态（末字节 `!` → [`Self::Bang`]，`$` → [`Self::BangDollar`]）。
+    #[must_use]
+    pub fn from_last_byte(b: u8) -> Option<Self> {
+        match b {
+            b'!' => Some(Self::Bang),
+            b'$' => Some(Self::BangDollar),
+            _ => None,
+        }
+    }
+}
+
+/// 解析一帧**服务端→客户端**报文（`#...!` 或 `#...!$`），丢弃帧尾形态信息。
+///
+/// 需要原样复现字节（回放/对拍）时用 [`decode_server_frame_ex`]。
 ///
 /// # Errors
 /// 帧定界符缺失或解码后不足 12 字节头时返回 [`FrameError`]。
 pub fn decode_server_frame(frame: &[u8]) -> Result<ClientMessage, FrameError> {
+    decode_server_frame_ex(frame).map(|(msg, _)| msg)
+}
+
+/// 解析一帧**服务端→客户端**报文，并返回其帧尾形态。
+///
+/// # Errors
+/// 帧定界符缺失（含无法识别的帧尾）或解码后不足 12 字节头时返回 [`FrameError`]。
+pub fn decode_server_frame_ex(
+    frame: &[u8],
+) -> Result<(ClientMessage, ServerFrameTail), FrameError> {
     if frame.first() != Some(&b'#') {
         return Err(FrameError::MissingLead);
     }
-    if frame.last() != Some(&b'!') {
+    let Some(tail) = frame
+        .last()
+        .and_then(|b| ServerFrameTail::from_last_byte(*b))
+    else {
+        return Err(FrameError::MissingTail);
+    };
+    // 帧尾 `!$` 占 2 字节，`!` 占 1 字节
+    let payload_end = frame.len() - tail.bytes().len();
+    if payload_end < 2 {
         return Err(FrameError::MissingTail);
     }
-    let decoded = edcode::decode(&frame[1..frame.len() - 1]);
+    let decoded = edcode::decode(&frame[1..payload_end]);
     let head = CommandMessage::from_bytes(&decoded).ok_or(FrameError::ShortHeader {
         decoded_len: decoded.len(),
     })?;
-    Ok(ClientMessage {
-        head,
-        body: decoded[CommandMessage::SIZE..].to_vec(),
-    })
+    Ok((
+        ClientMessage {
+            head,
+            body: decoded[CommandMessage::SIZE..].to_vec(),
+        },
+        tail,
+    ))
 }
 
 /// 构造客户端→服务端帧：`'#' '1' EDCode(头) EDCode(体) '!'`（头体分别编码后拼接）。
@@ -210,12 +273,23 @@ pub fn encode_client_frame(head: &CommandMessage, plain_body: &[u8]) -> Vec<u8> 
 /// （镜像 GameSvr 侧 `EDCode.EncodeString` 预编码 + 网关只编码头部的链路）。
 #[must_use]
 pub fn encode_server_frame(head: &CommandMessage, encoded_body: &[u8]) -> Vec<u8> {
-    let mut out =
-        Vec::with_capacity(2 + edcode::encoded_len(CommandMessage::SIZE) + encoded_body.len());
+    encode_server_frame_tail(head, encoded_body, ServerFrameTail::Bang)
+}
+
+/// 构造服务端→客户端帧，显式指定帧尾形态（回放时按抓到的原样复现）。
+#[must_use]
+pub fn encode_server_frame_tail(
+    head: &CommandMessage,
+    encoded_body: &[u8],
+    tail: ServerFrameTail,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(
+        2 + edcode::encoded_len(CommandMessage::SIZE) + encoded_body.len() + tail.bytes().len(),
+    );
     out.push(b'#');
     out.extend_from_slice(&edcode::encode(&head.to_bytes()));
     out.extend_from_slice(encoded_body);
-    out.push(b'!');
+    out.extend_from_slice(tail.bytes());
     out
 }
 
@@ -403,6 +477,86 @@ mod tests {
         let got = decode_client_frame(&frame).unwrap();
         assert_eq!(got.head, head);
         assert_eq!(got.body, body);
+    }
+
+    #[test]
+    fn server_frame_accepts_both_tails() {
+        let head = CommandMessage::make(529, 0, 0, 0, 0);
+        let body = crate::edcode::encode("热血传奇".as_bytes());
+        for tail in [ServerFrameTail::Bang, ServerFrameTail::BangDollar] {
+            let f = encode_server_frame_tail(&head, &body, tail);
+            let (got, got_tail) = decode_server_frame_ex(&f).unwrap();
+            assert_eq!(got.head, head);
+            assert_eq!(got.body, "热血传奇".as_bytes());
+            assert_eq!(got_tail, tail);
+            // 旧入口（丢弃帧尾）对两种形态都可用
+            assert_eq!(decode_server_frame(&f).unwrap().head, head);
+        }
+        // 帧尾缺失 → 红
+        let f = encode_server_frame(&head, &body);
+        assert_eq!(
+            decode_server_frame_ex(&f[..f.len() - 1]),
+            Err(FrameError::MissingTail)
+        );
+    }
+
+    /// C# 生成的帧尾金标准（字面量取自 `tests/parity/vectors/oracle_vectors.jsonl`，
+    /// 由 oracle 生成器用真身 `"#" + EDCode.EncodeMessage(cmd) + "!$"/"!"` 产出）。
+    /// 逐字节回放对帧尾自洽，改尾不可见 ⇒ 必须用外部字面量钉住编码器。
+    #[test]
+    fn server_frame_tails_match_csharp_golden() {
+        let head = CommandMessage::make(502, 0, 0, 0, 0); // SM_ID_NOTFOUND，空体
+        assert_eq!(
+            hex::encode(encode_server_frame_tail(
+                &head,
+                b"",
+                ServerFrameTail::BangDollar
+            )),
+            "236464686b6452696a6464686b6464686b2124"
+        );
+        assert_eq!(
+            hex::encode(encode_server_frame(&head, b"")),
+            "236464686b6452696a6464686b6464686b21"
+        );
+        // 带体：SM_PASSOK_SELECTSERVER + "1/热血传奇/127.0.0.1/7100"（GB2312 字节！
+        // 线上文本一律 GBK：`"热血传奇"` 是 C8 C8 D1 AA B4 AB C6 E6，8 字节，
+        // 用 UTF-8 会得 12 字节且字节全错 —— 本用例正是被下面的金标准字面量逮住的）
+        let head = CommandMessage::make(529, 0, 0, 0, 0);
+        let mut body_bytes = b"1/".to_vec();
+        body_bytes.extend_from_slice(&[0xC8, 0xC8, 0xD1, 0xAA, 0xB4, 0xAB, 0xC6, 0xE6]);
+        body_bytes.extend_from_slice(b"/127.0.0.1/7100");
+        let body = crate::edcode::encode(&body_bytes);
+        assert_eq!(
+            hex::encode(encode_server_frame_tail(
+                &head,
+                &body,
+                ServerFrameTail::BangDollar
+            )),
+            "236464686b64696a6b6464686b6464686b615f605854594243403f66554e5f596462633e6a605e58685e613f5f63615867603f2124"
+        );
+        // 解码方向同样对齐（字面量 → 字段）
+        let raw = hex::decode("236464686b6452696a6464686b6464686b2124").unwrap();
+        let (msg, tail) = decode_server_frame_ex(&raw).unwrap();
+        assert_eq!(msg.head.ident, 502);
+        assert_eq!(tail, ServerFrameTail::BangDollar);
+    }
+
+    #[test]
+    fn loginsrv_tail_is_bang_dollar() {
+        // LoginSrv: "#" + sMsg + "!$"（ClientSession.cs:745）
+        let head = CommandMessage::make(2001, 0, 0, 0, 0);
+        let f = encode_server_frame_tail(&head, b"", ServerFrameTail::BangDollar);
+        assert_eq!(*f.last().unwrap(), b'$');
+        assert_eq!(f[f.len() - 2], b'!');
+        assert_eq!(
+            ServerFrameTail::from_last_byte(b'$'),
+            Some(ServerFrameTail::BangDollar)
+        );
+        assert_eq!(
+            ServerFrameTail::from_last_byte(b'!'),
+            Some(ServerFrameTail::Bang)
+        );
+        assert_eq!(ServerFrameTail::from_last_byte(b'#'), None);
     }
 
     #[test]

@@ -21,6 +21,6 @@ pub mod frame;
 pub mod messages;
 
 pub use frame::{
-    ClientMessage, CommandMessage, FrameError, FrameSplitter, ServerDataPacket, ServerMessage,
-    SplitOut,
+    ClientMessage, CommandMessage, FrameError, FrameSplitter, ServerDataPacket, ServerFrameTail,
+    ServerMessage, SplitOut,
 };
