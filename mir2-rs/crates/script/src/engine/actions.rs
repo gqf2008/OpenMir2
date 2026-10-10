@@ -56,12 +56,27 @@ impl Engine<'_, '_> {
                 }
             }
             "ActionOfSet" => {
-                // TODO(批次 2 后续)：Set 变量写入（SetMovDataValNameValue 系）。
-                self.errors.push(EngineError::NotImplemented {
-                    kind: "action",
-                    code,
-                    handler: "ActionOfSet",
-                });
+                // C#: int n28 = StrToInt(sParam1, 0); int n2C = StrToInt(sParam2, 0);
+                //     playerActor.SetQuestFlagStatus(n28, n2C);
+                let n28 = mir2_shared::hutil32::str_to_int(&info.s_param1, 0);
+                let n2c = mir2_shared::hutil32::str_to_int(&info.s_param2, 0);
+                self.player.set_quest_flag_status(n28, n2c);
+            }
+            "ActionOfReSet" => {
+                // C#: for (k = 0; k < nParam2; k++) SetQuestFlagStatus(nParam1 + k, 0)
+                for k in 0..info.n_param2 {
+                    self.player.set_quest_flag_status(info.n_param1 + k, 0);
+                }
+            }
+            "ActionOfSetOpen" => {
+                let n28 = mir2_shared::hutil32::str_to_int(&info.s_param1, 0);
+                let n2c = mir2_shared::hutil32::str_to_int(&info.s_param2, 0);
+                self.player.set_quest_unit_open_status(n28, n2c);
+            }
+            "ActionOfSetUnit" => {
+                let n28 = mir2_shared::hutil32::str_to_int(&info.s_param1, 0);
+                let n2c = mir2_shared::hutil32::str_to_int(&info.s_param2, 0);
+                self.player.set_quest_unit_status(n28, n2c);
             }
             other => {
                 self.errors.push(EngineError::NotImplemented {

@@ -15,7 +15,15 @@
     "player_items": "100000:1"
   },
   {
-    "name": "商店-比奇国王-祈福项链",
+    "name": "商店-比奇国王@main（行会入口页）",
+    "script": "E:/MirServer/M2GameSvr/Envir/Npc_Def/比奇国王-0122.txt",
+    "label": "@main",
+    "gold": 100000,
+    "items": "祈福项链:3:1,祝福油:4:1",
+    "player_items": "祈福项链:1"
+  },
+  {
+    "name": "商店-比奇国王@rw03（祈福项链复原）",
     "script": "E:/MirServer/M2GameSvr/Envir/Npc_Def/比奇国王-0122.txt",
     "label": "@rw03",
     "gold": 100000,

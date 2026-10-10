@@ -95,6 +95,11 @@ impl ScriptPlayer for MockPlayer {
     fn set_quest_unit_status(&mut self, index: i32, value: i32) {
         self.unit_status.insert(index, value);
     }
+    fn set_quest_flag_status(&mut self, flag: i32, value: i32) {
+        self.flags
+            .insert(flag as i16, if value == 0 { 0 } else { 1 });
+    }
+    fn set_quest_unit_open_status(&mut self, _index: i32, _value: i32) {}
     fn item_count(&self, name: &str) -> i32 {
         self.items
             .iter()
@@ -303,19 +308,21 @@ fn shift_semantics_goto_hits_endquest() {
 
 #[test]
 fn shift_semantics_take_hits_set_handler() {
-    // B-8：脚本 `take 金币 1`（枚举 2）→ CmdCode 1 → ActionOfSet（本批未实现 → 显式报错）
-    let (mut npc, mut player) = setup("[@main]\n#ACT\ntake 金币 1\n");
-    let errors = run(&mut npc, &mut player, "@main");
-    assert!(
-        errors.iter().any(|e| matches!(
-            e,
-            EngineError::NotImplemented {
-                handler: "ActionOfSet",
-                ..
-            }
-        )),
-        "{errors:?}"
+    // B-8：脚本 `take 金币 1`（枚举 2）→ CmdCode 1 → ActionOfSet
+    // ⇒ SetQuestFlagStatus(StrToInt("金币")=0, 1)：写入任务标记 0 = 1（而不是扣钱）
+    let (mut npc, mut player) = setup(
+        "[@main]
+#ACT
+take 金币 1
+",
     );
+    let errors = run(&mut npc, &mut player, "@main");
+    assert_eq!(
+        player.flags.get(&0),
+        Some(&1),
+        "take 落到 ActionOfSet 的写标记副作用"
+    );
+    assert!(errors.is_empty(), "{errors:?}");
 }
 
 #[test]

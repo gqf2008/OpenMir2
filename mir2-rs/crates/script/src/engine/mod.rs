@@ -45,6 +45,10 @@ pub trait ScriptPlayer {
     fn ms_string(&self, n: usize) -> String;
     /// `playerActor.SetQuestUnitStatus(index, value)`
     fn set_quest_unit_status(&mut self, index: i32, value: i32);
+    /// `playerActor.SetQuestFlagStatus(flag, value)`（位语义在实现侧，日志记原始实参）
+    fn set_quest_flag_status(&mut self, flag: i32, value: i32);
+    /// `playerActor.SetQuestUnitOpenStatus(index, value)`
+    fn set_quest_unit_open_status(&mut self, index: i32, value: i32);
     /// 背包中该名字的物品件数（`CheckItemCount` 的 `ref nCount`）
     fn item_count(&self, name: &str) -> i32;
     /// 是否佩戴着该位置的装备（`UseItems[...].Index > 0`）；位置名同 C#（"NECKLACE" 等）
