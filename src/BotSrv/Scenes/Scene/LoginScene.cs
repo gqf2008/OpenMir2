@@ -132,6 +132,9 @@ namespace BotSrv.Scenes.Scene
             {
                 LogService.Info("帐号登录成功！");
             }
+            // 压测计数：登录成功（**放在 if/else 之外**——上面那条日志只在"无期限提示"分支打印，
+            // 拿日志行计数会漏；这里三个分支都算登录成功）
+            LoadMetrics.LoginOk();
             string sServerName = string.Empty;
             string sText = EDCode.DeCodeString(sBody);
             HUtil32.GetValidStr3(sText, ref sServerName, "/");

@@ -221,12 +221,18 @@ namespace BotSrv.Player
             {
                 case System.Net.Sockets.SocketError.ConnectionRefused:
                     MainOutWarnMessage($"游戏服务器[{ClientSocket.RemoteEndPoint}]拒绝链接...");
+                    LoadMetrics.ConnRefused();
                     break;
                 case System.Net.Sockets.SocketError.ConnectionReset:
                     MainOutWarnMessage($"游戏服务器[{ClientSocket.RemoteEndPoint}]关闭连接...");
+                    LoadMetrics.ConnLost();      // 掉线（与"连不上"分开计）
                     break;
                 case System.Net.Sockets.SocketError.TimedOut:
                     MainOutWarnMessage($"游戏服务器[{ClientSocket.RemoteEndPoint}]链接超时...");
+                    LoadMetrics.ConnLost();
+                    break;
+                default:
+                    LoadMetrics.ConnLost();
                     break;
             }
             if (DScreen.CurrentScene == PlayScene)
@@ -4488,6 +4494,10 @@ namespace BotSrv.Player
                     {
                         return;
                     }
+                    // 压测采样（C6）：rtime = 服务端取时间戳时的 Environment.TickCount（开机毫秒，全机同域），
+                    // 这里同一时钟域取"收到时刻" ⇒ 差值就是 tick 服务时延。**必须在下面 g_rtime 去重之前采**
+                    // （去重是跨假人的全局去重，放在后面会把同一毫秒内其它假人的样本吞掉）。
+                    LoadMetrics.Tick(Environment.TickCount - rtime);
                     if (MShare.g_rtime == rtime)
                     {
                         return;

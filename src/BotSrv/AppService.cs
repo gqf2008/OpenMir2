@@ -37,6 +37,10 @@ namespace BotSrv
         public async Task StartAsync(CancellationToken stoppingToken)
         {
             LogService.Info("机器人服务启动...");
+            LoadMetrics.Init(Environment.GetEnvironmentVariable("MIR2_BOT_OUT"));
+            LogService.Info("压测采集: 输出目录={0} 连接错峰={1}ms/个 统计={2}",
+                Environment.GetEnvironmentVariable("MIR2_BOT_OUT") ?? "(exe 同级/load_out.conf)",
+                _options.ConnectStaggerMs, LoadMetrics.StatsPath);
             runThread.Start();
             await BotShare.ClientMgr.Start(stoppingToken);
         }
@@ -44,6 +48,7 @@ namespace BotSrv
         public Task StopAsync(CancellationToken cancellationToken)
         {
             LogService.Info("机器人服务停止...");
+            LoadMetrics.Shutdown();     // 落最后一行统计（驱动 Stop-Process 时来不及，故这里是尽力而为）
             BotShare.ClientMgr.Stop(cancellationToken);
             return Task.CompletedTask;
         }
@@ -73,8 +78,9 @@ namespace BotSrv
                             playClient.LoginId = string.Concat(_options.LoginAccount, g_nLoginIndex);
                             playClient.LoginPasswd = playClient.LoginId;
                             playClient.ChrName = playClient.LoginId;
-                            playClient.ConnectTick = HUtil32.GetTickCount() + (i + 1) * 3000;
+                            playClient.ConnectTick = HUtil32.GetTickCount() + (i + 1) * _options.ConnectStaggerMs;
                             BotShare.ClientMgr.AddClient(playClient.SessionId, playClient);
+                            LoadMetrics.Spawned();
                             g_nLoginIndex++;
                         }
                     }
