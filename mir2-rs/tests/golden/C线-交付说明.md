@@ -97,3 +97,36 @@ powershell -ExecutionPolicy Bypass -File tools/capture/capture_baseline.ps1 `
 2. **服务端必须整栈全新启动**：GameSvr 的网关表经不起网关连接抖动（旧网关断开把槽位 `UserList` 置 null，
    此后进世界的玩家在 `SetGateUserList` 上 NRE 死循环、客户端黑屏且**之后每次登录都失败**）。
    所以抓包脚本每次整栈重起；探活也一律被动查监听表，绝不用 TCP 连上去碰网关（一次 connect 就造幻影用户）。
+
+## M0 回放验收结果（A 线执行；已合入 master `0cd9f04c`）
+
+A 线用同一份 JSONL 跑 `cargo run -p replay`，结论原文如下（**不得读成全绿**）：
+
+```
+== replay report: mir2-rs/tests/golden/c-line-baseline-20261010-092858.jsonl ==
+frames: 16 (其中纯字符串帧 1)
+byte mismatches (①): 0          ← 逐字节回放全过
+field mismatches (②): 0         ← ident/recog/param/tag/series/body长/hash 全过
+distinct idents: 13   unknown idents (未实现): 0
+stage coverage (③): 登录2 选服2 选角2 建角2 进世界2 ｜ 移动0 攻击0 小退0
+RESULT: RED（exit 1）—— 仅因阶段覆盖 5/8，缺 移动/攻击/小退
+```
+
+- ①②（逐字节回放 + 字段对拍）**已验收闭环，差异数 0**；③ 未满足，按 RED 记录。
+- 抓包 sha256 复核：A 线用 `git show HEAD:<file> | sha256sum` 与本文登记的
+  `5d0ab4e6…c64f` 逐字节一致。
+- 帧尾 `hop/tail` 模型被真实数据自证：login 跳 s2c（529/530）实测尾字节 `21 24`=`!$`，
+  sel/game 跳（520/521/525/658）为 `21`=`!`；A 线另做了「去掉 login 帧的 `$`」红检
+  → 精确报帧尾与 hop/tail 期望不符、exit 1。
+- 覆盖断言顺带抓到一个真问题并已登记：第 1 帧 `ident=3501` 是**客户端独有**的
+  `CM_QUERYDYNCODE`（冻结客户端 `ClMain.pas:16542`，体 = `g_LoginKey`，默认字面量 `"password"`；
+  该帧 body 8 字节、sha256 `5e884898…` 正是 ASCII `password`）⇒ 服务端语义为静默忽略、不回包。
+  这条同时反证了抓包确为真客户端流量。
+- 完整报告与证据：`mir2-rs/tests/parity/evidence/M0/金标准验收报告.md`。
+
+### 补齐剩余阶段的最小动作
+
+按上文"解除判据"任一条修好后，用同一条 `capture_baseline.ps1` 复现命令重抓 + `GoldenExport`
+导出新 JSONL，A 线 `cargo run -p replay -- tests/golden/<新文件>.jsonl` 即出完整验收；
+新文件请按 `README.md` 的表登记来源/时间/sha256（含 `hop`；如出现"7000 跳但无 `$`"的
+LoginGate 自身帧，加 `"tail":"!"` 显式覆盖）。
