@@ -108,9 +108,12 @@ impl DotNetRandom {
     /// 对应 `public virtual int Next(int minValue, int maxValue)`（返回 `[minValue, maxValue)`）。
     ///
     /// `minValue > maxValue` 时 .NET 抛异常，此处 panic 对齐。
-    /// 大范围分支（`range > Int32.MaxValue`）按 .NET `GetSampleForLargeRange()` 实现：
-    /// **消耗两次采样**并带随机正负号（实测 new Random(42).Next(int.MinValue, int.MaxValue)
-    /// = 1434747709）。
+    ///
+    /// 大范围分支（`range > Int32.MaxValue`）走 `GetSampleForLargeRange()`：
+    /// **消耗两次采样**，第二次采样决定符号（.NET 参考实现）。
+    /// 乘积先转 64 位再与 `minValue` 相加、最后截断回 i32——该形态由
+    /// `golden/rng_large_range.txt`（.NET 实机 + 内部采样反射对拍）钉死：
+    /// 先加后转（double 表达式一次截断）与先转后加（32 位）两种写法都对不上真值。
     pub fn next_range(&mut self, min_value: i32, max_value: i32) -> i32 {
         assert!(
             min_value <= max_value,
@@ -120,13 +123,16 @@ impl DotNetRandom {
         if range <= i64::from(i32::MAX) {
             (self.sample() * range as f64) as i32 + min_value
         } else {
-            let sample = self.sample_for_large_range();
-            ((sample * (range as f64)) as i64 + i64::from(min_value)) as i32
+            let scaled = (self.get_sample_for_large_range() * range as f64) as i64;
+            scaled.wrapping_add(i64::from(min_value)) as i32
         }
     }
 
-    /// 对应 `private double GetSampleForLargeRange()`（两次 `InternalSample`）。
-    fn sample_for_large_range(&mut self) -> f64 {
+    /// 对应 .NET `private double GetSampleForLargeRange()`：
+    /// `result = InternalSample()`；`negative = InternalSample() % 2 == 0`；
+    /// `d = (negative ? -result : result) + (Int32.MaxValue - 1)`；
+    /// `d /= 2 * (uint)Int32.MaxValue - 1`。
+    fn get_sample_for_large_range(&mut self) -> f64 {
         let result = self.internal_sample();
         let negative = self.internal_sample() % 2 == 0;
         let signed = if negative { -result } else { result };

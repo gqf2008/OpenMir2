@@ -31,6 +31,8 @@ internal static class Program
         {
             case "rng":
                 return RngMode(int.Parse(args[1]), args[2]);
+            case "rnglarge":
+                return RngLargeMode(args[1]);
             case "exp":
                 return ExpMode(args[1], args[2]);
             case "drop":
@@ -82,6 +84,37 @@ internal static class Program
         }
         File.WriteAllText(outPath, sb.ToString());
         Console.WriteLine($"rng seed={seed} lines written -> {outPath}");
+        return 0;
+    }
+
+    /// <summary>
+    /// 大区间分支（`range > Int32.MaxValue`）真值：`GetSampleForLargeRange()` 消耗两次采样。
+    /// 调用脚本与 Rust 侧 tests/parity/tests/rng_parity.rs 的 `large_range_sequence` 逐条一致。
+    /// </summary>
+    private static int RngLargeMode(string outPath)
+    {
+        var sb = new StringBuilder();
+        foreach (int seed in new[] { 42, 7, 0 })
+        {
+            sb.Append("seed=").Append(seed).Append('\n');
+            var r1 = new Random(seed);
+            sb.Append("Next(min,max)=").Append(r1.Next(int.MinValue, int.MaxValue)).Append('\n');
+            sb.Append("Next(min,max)=").Append(r1.Next(int.MinValue, int.MaxValue)).Append('\n');
+            var r2 = new Random(seed);
+            sb.Append("Next(-2e9,2e9)=").Append(r2.Next(-2000000000, 2000000000)).Append('\n');
+            var r3 = new Random(seed);
+            sb.Append("mixed=");
+            for (int i = 0; i < 4; i++)
+            {
+                sb.Append(r3.Next(1, 201)).Append('-').Append(r3.Next(int.MinValue, int.MaxValue)).Append(' ');
+            }
+            sb.Append('\n');
+            var r4 = new Random(seed);
+            r4.Next(int.MinValue, int.MaxValue);
+            sb.Append("after-large Next()=").Append(r4.Next()).Append('\n');
+        }
+        File.WriteAllText(outPath, sb.ToString());
+        Console.WriteLine($"rnglarge -> {outPath}");
         return 0;
     }
 
