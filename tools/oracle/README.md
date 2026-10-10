@@ -36,6 +36,8 @@ tools/oracle/gate-slot-probe/bin/Release/GateSlotProbe.exe --port 15000    # 退
 
 ## 已知边界
 
+- `reconcile_deployment.ps1` 默认把报告写进 `mir2-rs/tests/parity/evidence/S1/`（那是**已入库的证据**，
+  默认覆盖是有意的：刷新对账结论）。只是**巡检**时请加 `-OutDir <临时目录>`，否则工作区会被悄悄改脏。
 - `verify_gate_reconnect.ps1` 会重启 GameGate 并占用整栈约 2~3 分钟：**别与其他线正在跑的服务端任务并行执行**
   （与 `tools/capture/capture_baseline.ps1` 同一条纪律）。
 - 它只等"进世界"这一段就提前结束流程（`mir_flow.ps1` 后面的小退段有十来次固定等待，与本门禁判据无关）。
