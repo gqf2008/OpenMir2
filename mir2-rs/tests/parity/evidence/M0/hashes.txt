@@ -1,2 +1,2 @@
-40298917cf3b2d4e1a2999a87d1c93811c770863b56050ce5e86825012fa58d0 *tests/parity/vectors/oracle_vectors.jsonl
+683e0570191894fdd7d2ab3b494165d795ef0dde8b5f3c2c11294d933ab721de *tests/parity/vectors/oracle_vectors.jsonl
 54a8fd81a9701b19cf7bd317559a67a545f5f96c82824fc77792c7b836b90531 *crates/protocol/src/messages.rs

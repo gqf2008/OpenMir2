@@ -12,7 +12,7 @@
 
 | 验收 | 结果 | 证据 |
 |---|---|---|
-| ① decode→encode 逐字节相同 | **0 差异**（N=1128：1072 编解码向量 + 46 帧 + 6 条 s2c 双帧尾 + 3 纯字符串帧 + 1 内部帧头） | `green.log` |
+| ① decode→encode 逐字节相同 | **0 差异**（N=1143：1072 编解码 + 46 帧 + 6 条 s2c 双帧尾 + 3 纯字符串帧 + 1 内部帧头 + **15 条内部帧 MemoryPack（M1 用）**） | `green.log` |
 | ② (ident,Recog,param,tag,series,body 长度,body hash) 字段对拍 | **0 差异**（SHA-256 跨语言对拍；纯字符串帧只对拍 body 长度/hash） | `green.log` |
 | ③ 八阶段覆盖 + 未实现包号=0 | 八阶段全覆盖（登录3/选服2/选角2/建角2/进世界4/移动3/攻击3/小退2），未实现=0 | `green.log` |
 | 红检① EDCode 密钥错 1 位 | **必红**（exit 1：字节与字段同时差异） | `redcheck1-key.log` |
@@ -41,7 +41,7 @@ cargo run -p replay -- tests/parity/vectors/oracle_vectors.jsonl --no-coverage -
 
 ## 产物哈希（hashes.txt）
 
-- `tests/parity/vectors/oracle_vectors.jsonl`：sha256 `40298917…58d0`（C# 生成器自报一致；含 3 条 `string_frame` 纯字符串帧、6 条 s2c 双帧尾向量）
+- `tests/parity/vectors/oracle_vectors.jsonl`：sha256 `683e0570…21de`（C# 生成器自报一致；含 3 条纯字符串帧、6 条 s2c 双帧尾、15 条内部帧 MemoryPack 向量）
 - `crates/protocol/src/messages.rs`：sha256 `54a8fd81…90531`（604 条常量 = Messages.cs 594 + Grobal2 白名单 10）
 
 ## 关键裁定（实现依据，均来自真源核实）

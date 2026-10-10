@@ -19,6 +19,7 @@
 pub mod client_only;
 pub mod edcode;
 pub mod frame;
+pub mod internal;
 pub mod messages;
 
 pub use client_only::CM_QUERYDYNCODE;
@@ -26,3 +27,4 @@ pub use frame::{
     ClientMessage, CommandMessage, FrameError, FrameSplitter, ServerDataPacket, ServerFrameTail,
     ServerMessage, SplitOut,
 };
+pub use internal::{ServerDataMessage, ServerDataType};

@@ -26,6 +26,7 @@ public static class Program
 
     private static string Hex(byte[] data) => Convert.ToHexString(data).ToLowerInvariant();
 
+
     private static string Sha256Hex(byte[] data) => Hex(SHA256.HashData(data));
 
     public static int Main(string[] args)
@@ -185,6 +186,53 @@ public static class Program
             frame[^1] = (byte)'!';
             lines.Add($"{{\"kind\":\"frame\",\"dir\":\"c2s\",\"string_frame\":true,\"seq\":{seq++}," +
                       $"\"raw_hex\":\"{Hex(frame)}\",\"body_len\":{body.Length},\"body_sha256\":\"{Sha256Hex(body)}\"}}");
+        }
+
+        // ---- 6. 内部链路帧（网关↔服务）MemoryPack 向量 ----
+        // 参照：LoginGate/ClientThread.SendMessage —— ServerDataPacket(6B) + MemoryPack(ServerDataMessage, Utf16)
+        // 这些结构跨 M1 链路（LoginGate↔LoginSrv 5500、SelGate↔DBSrv 5100 等），字节必须逐位对齐。
+        var sdmCases = new (ServerDataType type, string socketId, byte[] data)[]
+        {
+            (ServerDataType.KeepAlive, "", Array.Empty<byte>()),
+            (ServerDataType.Enter, "1234", Gb2312.GetBytes("127.0.0.1/127.0.0.1")),
+            (ServerDataType.Leave, "65535", Array.Empty<byte>()),
+            (ServerDataType.Data, "7", Gb2312.GetBytes("#1abcdefg!")),
+            (ServerDataType.Data, "中文会话号", Gb2312.GetBytes("**mir2test/aaa/1/2/3")),
+            (ServerDataType.Data, "", new byte[] { 0x00, 0xFF, 0x7F }),
+            // 非 BMP（emoji，UTF-16 代理对）：钉住"字符数按 UTF-16 码元计"的语义
+            (ServerDataType.Enter, "a😀b", Array.Empty<byte>()),
+        };
+        foreach (var (type, socketId, data) in sdmCases)
+        {
+            var sdm = new ServerDataMessage { Type = type, SocketId = socketId, DataLen = (short)data.Length, Data = data };
+            byte[] body = SerializerUtil.Serialize(sdm);
+            lines.Add($"{{\"kind\":\"internal\",\"msg\":\"ServerDataMessage\",\"seq\":{seq++}," +
+                      $"\"type\":{(int)type},\"socket_id_utf16_hex\":\"{Hex(Encoding.Unicode.GetBytes(socketId))}\",\"data_hex\":\"{Hex(data)}\"," +
+                      $"\"body_hex\":\"{Hex(body)}\"}}");
+            // 完整线上帧：ServerDataPacket 头 + 体
+            var hdr = new ServerDataPacket { PacketCode = Grobal2.PacketCode, PacketLen = (ushort)body.Length };
+            byte[] hdrBytes = SerializerUtil.Serialize(hdr);
+            if (hdrBytes.Length != ServerDataPacket.FixedHeaderLen)
+            {
+                Console.Error.WriteLine($"FATAL: ServerDataPacket 序列化长度 {hdrBytes.Length} != 6");
+                return 2;
+            }
+            byte[] wire = new byte[hdrBytes.Length + body.Length];
+            Array.Copy(hdrBytes, 0, wire, 0, hdrBytes.Length);
+            Array.Copy(body, 0, wire, hdrBytes.Length, body.Length);
+            lines.Add($"{{\"kind\":\"internal\",\"msg\":\"ServerDataWire\",\"seq\":{seq++}," +
+                      $"\"type\":{(int)type},\"socket_id_utf16_hex\":\"{Hex(Encoding.Unicode.GetBytes(socketId))}\",\"data_hex\":\"{Hex(data)}\"," +
+                      $"\"wire_hex\":\"{Hex(wire)}\"}}");
+        }
+
+        // DataLen 与 Data.Length 不一致时必须原样保留（字段独立）
+        {
+            byte[] data = Gb2312.GetBytes("#1x!");
+            var sdm = new ServerDataMessage { Type = ServerDataType.Data, SocketId = "9", DataLen = 99, Data = data };
+            byte[] body = SerializerUtil.Serialize(sdm);
+            lines.Add($"{{\"kind\":\"internal\",\"msg\":\"ServerDataMessage\",\"seq\":{seq++}," +
+                      $"\"type\":2,\"socket_id_utf16_hex\":\"{Hex(Encoding.Unicode.GetBytes("9"))}\"," +
+                      $"\"data_len_field\":99,\"data_hex\":\"{Hex(data)}\",\"body_hex\":\"{Hex(body)}\"}}");
         }
 
         File.WriteAllLines(outPath, lines);
