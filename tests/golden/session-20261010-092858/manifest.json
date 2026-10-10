@@ -1,0 +1,98 @@
+{
+  "tool": "segment_frames",
+  "note": "基线（含建角）：登录→选服→选角→建角→进世界（公告+确认）",
+  "session": {
+    "tool": "mir2_proxy",
+    "argv": [
+      "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\.claude\\worktrees\\c-tools\\tools\\capture\\mir2_proxy.py",
+      "--out",
+      "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\.claude\\worktrees\\c-tools\\tests\\golden\\session-20261010-092858\\proxy",
+      "--map",
+      "7200=127.0.0.1:17200",
+      "--map",
+      "7100=127.0.0.1:17100",
+      "--map",
+      "7000=127.0.0.1:17000"
+    ],
+    "start_wall_ms": 1791595753651,
+    "start_iso": "2026-10-10T09:29:13",
+    "bind": "127.0.0.1",
+    "map": {
+      "7000": "127.0.0.1:17000",
+      "7100": "127.0.0.1:17100",
+      "7200": "127.0.0.1:17200"
+    },
+    "spin_source_ip": false,
+    "pid": 14212
+  },
+  "reproduce": "powershell -ExecutionPolicy Bypass -File tools/capture/capture_baseline.ps1 -Account <scratch<=10字符> -Password <same> -CreateChar -CharName <name>",
+  "total_frames": 16,
+  "by_direction": {
+    "c2s": 9,
+    "s2c": 7
+  },
+  "by_port": {
+    "7000": 5,
+    "7100": 8,
+    "7200": 3
+  },
+  "unclosed_tail_frames": 0,
+  "heartbeats": 0,
+  "frames_sha256": "e0db5c9fe64a70b2454928e48ebbad5f646dd2aff74f970dec348ed9622e163a",
+  "streams": [
+    {
+      "conn": 1,
+      "dir": "c2s",
+      "port": 7000,
+      "peer": "127.0.0.1:64614",
+      "bytes": 102,
+      "sha256": "8c7643ae86d4aeb80b52f086ebfeca65101829f33ad975da09c8707ef6b54504",
+      "file": "proxy/conn-0001.c2s.bin"
+    },
+    {
+      "conn": 1,
+      "dir": "s2c",
+      "port": 7000,
+      "peer": "127.0.0.1:64614",
+      "bytes": 79,
+      "sha256": "69217d8c91443db6635bf47094a65bac0d3c70eb1c22aa09c3692b5d5ecebd3d",
+      "file": "proxy/conn-0001.s2c.bin"
+    },
+    {
+      "conn": 2,
+      "dir": "c2s",
+      "port": 7100,
+      "peer": "127.0.0.1:64658",
+      "bytes": 158,
+      "sha256": "0b46800dd385868a8345201c975de2a9fb0cc616f9b82c4391145cc3ec1f516a",
+      "file": "proxy/conn-0002.c2s.bin"
+    },
+    {
+      "conn": 2,
+      "dir": "s2c",
+      "port": 7100,
+      "peer": "127.0.0.1:64658",
+      "bytes": 114,
+      "sha256": "8b1680c94c53902e2a5d4b2fe1b7597ed56b32f558ce669a0f8f3667c56d622a",
+      "file": "proxy/conn-0002.s2c.bin"
+    },
+    {
+      "conn": 3,
+      "dir": "c2s",
+      "port": 7200,
+      "peer": "127.0.0.1:64678",
+      "bytes": 136,
+      "sha256": "f89959743b7478147b05f27939ef3a570a55e1034ade946409c24ce38891a3ac",
+      "file": "proxy/conn-0003.c2s.bin"
+    },
+    {
+      "conn": 3,
+      "dir": "s2c",
+      "port": 7200,
+      "peer": "127.0.0.1:64678",
+      "bytes": 445,
+      "sha256": "1897e43b3c1c58a871c5d9b6c89ac97b0eb8af9cc4de1df9f107943a0de9b3d6",
+      "file": "proxy/conn-0003.s2c.bin"
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "tool": "mir2_proxy",
+  "argv": [
+    "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\.claude\\worktrees\\c-tools\\tools\\capture\\mir2_proxy.py",
+    "--out",
+    "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\.claude\\worktrees\\c-tools\\tests\\golden\\session-20261010-092858\\proxy",
+    "--map",
+    "7200=127.0.0.1:17200",
+    "--map",
+    "7100=127.0.0.1:17100",
+    "--map",
+    "7000=127.0.0.1:17000"
+  ],
+  "start_wall_ms": 1791595753651,
+  "start_iso": "2026-10-10T09:29:13",
+  "bind": "127.0.0.1",
+  "map": {
+    "7000": "127.0.0.1:17000",
+    "7100": "127.0.0.1:17100",
+    "7200": "127.0.0.1:17200"
+  },
+  "spin_source_ip": false,
+  "pid": 14212
+}
