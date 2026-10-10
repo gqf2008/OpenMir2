@@ -570,3 +570,16 @@ walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 prin
 `Mir200` 等 5 个旧目录不删，只把血统写进 §2 / §2.1（T-3）。
 **注意**：.NET 把源码路径编进 MVID ⇒ "与源码逐字节一致"只对**产出它的那个检出**成立，
 对账前先读 `!deployed-from.json`。
+
+---
+
+## 17. 里程碑状态（协调者维护）
+
+| 里程碑 | 状态 | 证据（协调者复跑，非自述） |
+| --- | --- | --- |
+| **M0 协议层** | ✅ **GREEN（2026-10-10）** | `cargo run -p replay -- mir2-rs/tests/golden/c-line-baseline-c3-20261010.jsonl`：382 帧 → ① 逐字节 0 差异、② 字段 0 差异、unknown idents = 0、**八阶段全覆盖**（登录/选服/选角/建角/进世界/移动/攻击/小退）；红检三连（包号 +1 / 截断 1 字节 / 密钥错 1 位）全部 RED exit 1 ⇒ 判据可证伪。旧 16 帧金标准 ①② 仍 0（无回归）；oracle 向量 1072 条仍 GREEN |
+| M1 边界服务 | 🔄 进行中 | 卡片 `openmir2-a2-m1-services`（已改派 A 线；第一步＝Rust LoginGate+LoginSrv 顶住 7000、真实客户端能登录） |
+| M2 世界引擎 | 🔄 进行中 | 骨架已验收：tick 200ms、14 实体×10 tick 的 AOI 与 C# 逐行一致、P99 基线（500/1000/2000 实体 = 0.33%/0.82%/1.94% 预算）入库；下半程 `openmir2-m2b-world-session` |
+| M3 系统对齐 | ⏳ 未开始 | 门禁已就绪且 C# 侧 GREEN（`run_m3_gate.ps1 -Side csharp -VerifyRepeat`）；等 M1 顶住端口后跑 `-Side rust`（`openmir2-m3-rust-firstrun`） |
+| M4 脚本引擎 | 🔄 进行中 | 解析层 1:1 + 求值骨架 + 效果对拍机制（flow-diff 我实跑 3 一致 / 0 不一致 + 1 登记豁免）；余量见 `openmir2-b2-script-dispatch` |
+| M5 收敛/压测/灰度 | ⏳ 未开始 | 前置 `openmir2-c6-e2e-loadgate`（整栈 E2E 一条命令 + 压测档位，进行中） |
