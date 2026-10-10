@@ -1,0 +1,110 @@
+{
+  "samples": 5911,
+  "samples_total": 5911,
+  "max_ms": 16,
+  "mean_ms": 1.24,
+  "ramp_complete": false,
+  "steady_window_ms": 661109,
+  "peak_login_ok": 353,
+  "login_success_pct": 70.6,
+  "conn_refused": 1,
+  "conn_lost": 0,
+  "conn_lost_ramp": 0,
+  "conn_lost_steady": 0,
+  "hist_bucket_ms": 1,
+  "world_ok": 20,
+  "world_ok_pct": 4.0,
+  "probe_sent": 12540,
+  "internal_errors": 125,
+  "tick_p50_ms": 0,
+  "tick_p90_ms": 0,
+  "tick_p99_ms": 16,
+  "ramp_ms": null,
+  "clock_granularity_note": "Environment.TickCount 在 Windows 上粒度约 15.6ms（单样本 ±16ms 量化，是测量下限，不是噪声消除）",
+  "mem": {
+    "DBSrv": {
+      "samples": 30,
+      "ws_peak_mb": 89.7,
+      "ws_mean_mb": 88.0,
+      "ws_last_mb": 87.6,
+      "priv_peak_mb": 48.2,
+      "slope_tail_mb_per_s": -0.015,
+      "tail_window_s": 59.1,
+      "window_s": 59.1
+    },
+    "GameGate": {
+      "samples": 30,
+      "ws_peak_mb": 142.3,
+      "ws_mean_mb": 140.3,
+      "ws_last_mb": 142.3,
+      "priv_peak_mb": 129.5,
+      "slope_tail_mb_per_s": 0.069,
+      "tail_window_s": 59.1,
+      "window_s": 59.1
+    },
+    "GameSrv": {
+      "samples": 30,
+      "ws_peak_mb": 297.7,
+      "ws_mean_mb": 294.5,
+      "ws_last_mb": 295.8,
+      "priv_peak_mb": 253.0,
+      "slope_tail_mb_per_s": -0.031,
+      "tail_window_s": 59.1,
+      "window_s": 59.1
+    },
+    "LoginGate": {
+      "samples": 30,
+      "ws_peak_mb": 103.9,
+      "ws_mean_mb": 103.2,
+      "ws_last_mb": 103.1,
+      "priv_peak_mb": 69.9,
+      "slope_tail_mb_per_s": 0.003,
+      "tail_window_s": 59.1,
+      "window_s": 59.1
+    },
+    "LoginSrv": {
+      "samples": 30,
+      "ws_peak_mb": 74.0,
+      "ws_mean_mb": 73.6,
+      "ws_last_mb": 73.6,
+      "priv_peak_mb": 35.5,
+      "slope_tail_mb_per_s": -0.001,
+      "tail_window_s": 59.1,
+      "window_s": 59.1
+    },
+    "SelGate": {
+      "samples": 30,
+      "ws_peak_mb": 77.6,
+      "ws_mean_mb": 77.1,
+      "ws_last_mb": 77.6,
+      "priv_peak_mb": 43.6,
+      "slope_tail_mb_per_s": 0.025,
+      "tail_window_s": 59.1,
+      "window_s": 59.1
+    },
+    "mysqld": {
+      "samples": 30,
+      "ws_peak_mb": 152.5,
+      "ws_mean_mb": 152.5,
+      "ws_last_mb": 152.4,
+      "priv_peak_mb": 469,
+      "slope_tail_mb_per_s": -0.0,
+      "tail_window_s": 59.1,
+      "window_s": 59.1
+    }
+  },
+  "count": 500,
+  "stagger_ms": 20,
+  "hold_sec": 60,
+  "criteria": [
+    "login",
+    "conn",
+    "tick"
+  ],
+  "allow_missing_tick": false,
+  "verdict": "RED",
+  "fails": [
+    "登录成功率 70.6% < 100.0%",
+    "登录数未达目标（爬坡未完成）"
+  ]
+}

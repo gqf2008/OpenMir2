@@ -35,7 +35,11 @@ load-<时间戳>/
 2. 档位经 `powershell -File ... -Tiers 200,500,1000` 传递会被拼成单个整数 **2005001000**（假人数失控、整档 RED）；`stack_e2e` 现在用 `-Command "& '<load_gate.ps1>' ..."` 传。
 3. `src/BotSrv` 两处真 bug：① 账号已存在（重跑）时不再卡死，转入登录（复跑幂等，冒烟回到 3/3）；② `ClientManager.RunAutoPlay` 错用 `_clientList[i]`（循环变量属于 `_autoList`，两表长度不一致）⇒ 越界 `IndexOutOfRangeException`，1000 档 `internal_errors` 10 万+、登录卡在 555/1000；改按 `SessionId` 取回假人后 `internal_errors=0`、登录爬到满载。
 
-**遗留（已开新卡）**：tier-500/1000 在**跨轮重跑**时登录爬坡不达标（500→78% / 1000→38.6%），而同一套账号在**首次干净轮**能绿。根因指向“负载门禁跨轮不幂等”——持久库里的账号状态（锁定/已存在角色/开号计数递增 `2200→3200→4200→5200`）跨轮累积。**这是负载客户端的幂等问题，不是服务端/Rust 的能力上限**。给 M5 用的门禁需要能做到“同一命令重复跑得到同一结论”，因此单列后续卡处理；在此之前，引用本目录基线时只把 tier-200 当 GREEN 证据。
+**遗留（已开新卡 `openmir2-c6-loadgate-idempotent`）**：
+
+- 开号确实不幂等，且已修：`account.Account` 上**没有唯一索引**（只有非唯一的 `_WA_Sys_FLD_LOGINID`），所以旧的 `INSERT IGNORE` 每跑一轮就重复插 1000 行——loadbot0 累积到 6 行、全表 11354 行 / 7151 不同名（已去重回 7151）。**内容冻结不允许给 oracle 表加唯一索引，所以幂等只能在开号 SQL 里用 `WHERE NOT EXISTS` 做**（已改，现在跑一轮只报 `account=1000`，不再增长）。
+- 但**去重 + 开号幂等并没有把 tier-500/1000 拉绿**：在干净（无重复）库上重跑，tier-500 仍卡在 **~353/500（70.6%）**、tier-1000 更低，`internal_errors` 0~125、tick 本身健康（P99 16ms、样本充足）。说明除「账号重复」外，还有一个**负载客户端/服务端的并发登录上限（~350–390/500）**未被定位，因此**不能**把 RED 归结为已修项。
+- 结论：tier-200 可绿且可复跑（P99 16ms、登录 100%、`internal_errors=0`），可直接给 M5 当「同屏 small」基线；tier-500/1000 的登录爬坡上限是**独立的未解项**，需单独定位（建议下一步查 LoginSrv/LoginGate 的并发上限与 BotSrv 登录错峰/重试，而不是继续查开号）。
 
 每档固定四件：`load_stats.ndjson`（BotSrv 每 5s 累计快照）、`mem.ndjson`（各服务进程 WS/私有字节/CPU）、
 `report.json`（该档归算 + verdict + fails）、`load_gate_summary.json`（全档汇总，在目录根）。

@@ -1,0 +1,107 @@
+{
+  "samples": 912,
+  "samples_total": 921,
+  "max_ms": 16,
+  "mean_ms": 0.14,
+  "ramp_complete": true,
+  "steady_window_ms": 60063,
+  "peak_login_ok": 200,
+  "login_success_pct": 100.0,
+  "conn_refused": 1,
+  "conn_lost": 0,
+  "conn_lost_ramp": 0,
+  "conn_lost_steady": 0,
+  "hist_bucket_ms": 1,
+  "world_ok": 21,
+  "world_ok_pct": 10.5,
+  "probe_sent": 1177,
+  "internal_errors": 0,
+  "tick_p50_ms": 0,
+  "tick_p90_ms": 0,
+  "tick_p99_ms": 0,
+  "ramp_ms": 10015,
+  "clock_granularity_note": "Environment.TickCount 在 Windows 上粒度约 15.6ms（单样本 ±16ms 量化，是测量下限，不是噪声消除）",
+  "mem": {
+    "DBSrv": {
+      "samples": 30,
+      "ws_peak_mb": 86.9,
+      "ws_mean_mb": 86.6,
+      "ws_last_mb": 86.3,
+      "priv_peak_mb": 45.5,
+      "slope_tail_mb_per_s": -0.001,
+      "tail_window_s": 59.1,
+      "window_s": 59.1
+    },
+    "GameGate": {
+      "samples": 30,
+      "ws_peak_mb": 71.1,
+      "ws_mean_mb": 66.0,
+      "ws_last_mb": 71.1,
+      "priv_peak_mb": 57.9,
+      "slope_tail_mb_per_s": 0.122,
+      "tail_window_s": 59.1,
+      "window_s": 59.1
+    },
+    "GameSrv": {
+      "samples": 30,
+      "ws_peak_mb": 278.9,
+      "ws_mean_mb": 273.7,
+      "ws_last_mb": 276.2,
+      "priv_peak_mb": 234.6,
+      "slope_tail_mb_per_s": -0.047,
+      "tail_window_s": 59.1,
+      "window_s": 59.1
+    },
+    "LoginGate": {
+      "samples": 30,
+      "ws_peak_mb": 56.7,
+      "ws_mean_mb": 55.3,
+      "ws_last_mb": 56.7,
+      "priv_peak_mb": 22.3,
+      "slope_tail_mb_per_s": 0.025,
+      "tail_window_s": 59.1,
+      "window_s": 59.1
+    },
+    "LoginSrv": {
+      "samples": 30,
+      "ws_peak_mb": 68.4,
+      "ws_mean_mb": 65.2,
+      "ws_last_mb": 68.4,
+      "priv_peak_mb": 29.1,
+      "slope_tail_mb_per_s": 0.098,
+      "tail_window_s": 59.1,
+      "window_s": 59.1
+    },
+    "SelGate": {
+      "samples": 30,
+      "ws_peak_mb": 57.5,
+      "ws_mean_mb": 55.4,
+      "ws_last_mb": 55.5,
+      "priv_peak_mb": 24.0,
+      "slope_tail_mb_per_s": -0.033,
+      "tail_window_s": 59.1,
+      "window_s": 59.1
+    },
+    "mysqld": {
+      "samples": 30,
+      "ws_peak_mb": 152.2,
+      "ws_mean_mb": 152.2,
+      "ws_last_mb": 152.2,
+      "priv_peak_mb": 469.2,
+      "slope_tail_mb_per_s": 0.0,
+      "tail_window_s": 59.1,
+      "window_s": 59.1
+    }
+  },
+  "count": 200,
+  "stagger_ms": 20,
+  "hold_sec": 60,
+  "criteria": [
+    "login",
+    "conn",
+    "tick"
+  ],
+  "allow_missing_tick": false,
+  "verdict": "GREEN",
+  "fails": []
+}
