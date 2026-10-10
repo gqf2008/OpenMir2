@@ -296,6 +296,44 @@ pub enum BodyLayout {
         /// 首段结构字节数（SM_TURN 家族为 `CharDesc` = 8）。
         struct_len: usize,
     },
+    /// 体 = N 个**定长段**各自独立编码，段间用**字面量** `sep` 连接（分隔符不是编码体的一部分）。
+    ///
+    /// 两处来源（均按线上字节 + C# 发送点对上）：
+    /// - `SM_ADJUST_BONUS`(811)：`EncodeMessage(X) + '/' + EncodeMessage(Y) + '/' + EncodeMessage(Z)`
+    ///   （`M2Server/Player/PlayObject.Base.cs:1199-1209`，三段各 20B、无尾分隔符）；
+    /// - `SM_BAGITEMS`(201)：循环内 `sSendMsg += EncodeBuffer(clientItem) + '/'`
+    ///   （`M2Server/Player/PlayObject.Operate.cs:56-61`，每段 124B、**带尾分隔符**，
+    ///   段数 = 头字段 `series`；实测该帧 `series=4` 恰等于段数 ⇒ 切法被头字段独立印证）。
+    Segmented {
+        /// 每段明文字节数（811 = 20、201 = 124）。
+        seg_len: usize,
+        /// 段间/段尾的字面量分隔符（两条均为 `b'/'`）。
+        sep: u8,
+        /// 结尾是否也带分隔符（811 = false、201 = true）。
+        trailing_sep: bool,
+        /// 段数来源。
+        count: SegCount,
+    },
+}
+
+/// [`BodyLayout::Segmented`] 的段数来源。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SegCount {
+    /// 固定段数（811 = 3）。
+    Fixed(usize),
+    /// 取该帧 12B 头里的 `series`（201；实测 `series` = 物品件数）。
+    HeaderSeries,
+}
+
+impl SegCount {
+    /// 按头字段解析出实际段数。
+    #[must_use]
+    pub fn resolve(self, series: u16) -> usize {
+        match self {
+            Self::Fixed(n) => n,
+            Self::HeaderSeries => usize::from(series),
+        }
+    }
 }
 
 /// 按消息号给出体分段布局（表驱动；未登记的消息号按 [`BodyLayout::Single`]）。
@@ -307,6 +345,20 @@ pub fn body_layout(ident: u16) -> BodyLayout {
         messages::SM_RUSH | messages::SM_RUSHKUNG | messages::SM_BACKSTEP | messages::SM_TURN => {
             BodyLayout::StructThenRest { struct_len: 8 }
         }
+        // 三段能力值消息 + 字面量 '/' 连接（PlayObject.Base.cs:1199-1209）
+        messages::SM_ADJUST_BONUS => BodyLayout::Segmented {
+            seg_len: 20,
+            sep: b'/',
+            trailing_sep: false,
+            count: SegCount::Fixed(3),
+        },
+        // 每件物品一段 + 段尾 '/'，段数取头里 series（PlayObject.Operate.cs:56-61）
+        messages::SM_BAGITEMS => BodyLayout::Segmented {
+            seg_len: 124,
+            sep: b'/',
+            trailing_sep: true,
+            count: SegCount::HeaderSeries,
+        },
         _ => BodyLayout::Single,
     }
 }
@@ -372,13 +424,42 @@ pub fn decode_server_payload(payload: &[u8]) -> Option<(CommandMessage, Vec<u8>)
                 out
             }
         }
+        BodyLayout::Segmented {
+            seg_len,
+            sep,
+            trailing_sep,
+            count,
+        } => {
+            let n = count.resolve(head.series);
+            let block = edcode::encoded_len(seg_len);
+            let mut out = Vec::with_capacity(n * seg_len);
+            let mut pos = 0usize;
+            for i in 0..n {
+                let end = pos.checked_add(block)?;
+                if end > rest.len() {
+                    return None; // 段不够长 ⇒ 布局不符（严格，不静默）
+                }
+                out.extend_from_slice(&edcode::decode(&rest[pos..end]));
+                pos = end;
+                if i + 1 < n || trailing_sep {
+                    if rest.get(pos) != Some(&sep) {
+                        return None; // 分隔符不符 ⇒ 布局不符
+                    }
+                    pos += 1;
+                }
+            }
+            if pos != rest.len() {
+                return None; // 尾随多余字节 ⇒ 布局不符
+            }
+            out
+        }
     };
     Some((head, body))
 }
 
 /// 按布局把**已解码的体字节**重新编码为线上体（各段独立编码后拼接）。
 #[must_use]
-pub fn encode_body(decoded_body: &[u8], layout: BodyLayout) -> Vec<u8> {
+pub fn encode_body(decoded_body: &[u8], layout: BodyLayout, series: u16) -> Vec<u8> {
     match layout {
         BodyLayout::Single => edcode::encode(decoded_body),
         BodyLayout::StructThenRest { struct_len } => {
@@ -388,6 +469,27 @@ pub fn encode_body(decoded_body: &[u8], layout: BodyLayout) -> Vec<u8> {
             }
             let mut out = edcode::encode(&decoded_body[..struct_len]);
             out.extend_from_slice(&edcode::encode(&decoded_body[struct_len..]));
+            out
+        }
+        BodyLayout::Segmented {
+            seg_len,
+            sep,
+            trailing_sep,
+            count,
+        } => {
+            let n = count.resolve(series);
+            let mut out = Vec::with_capacity(decoded_body.len() * 2 + n);
+            for i in 0..n {
+                let start = i * seg_len;
+                if start >= decoded_body.len() {
+                    break;
+                }
+                let end = (start + seg_len).min(decoded_body.len());
+                out.extend_from_slice(&edcode::encode(&decoded_body[start..end]));
+                if i + 1 < n || trailing_sep {
+                    out.push(sep);
+                }
+            }
             out
         }
     }
@@ -402,7 +504,7 @@ pub fn encode_server_frame_layout(
 ) -> Vec<u8> {
     encode_server_frame_tail(
         head,
-        &encode_body(decoded_body, body_layout(head.ident)),
+        &encode_body(decoded_body, body_layout(head.ident), head.series),
         tail,
     )
 }
