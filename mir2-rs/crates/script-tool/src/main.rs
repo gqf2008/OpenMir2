@@ -56,8 +56,31 @@ fn main() -> ExitCode {
             for w in &report.warnings {
                 eprintln!("警告: {w}");
             }
+            let tables = match gencodes::generate_handlers(
+                &repo_root.join("src/Modules/ScriptEngine"),
+                &report.condition,
+                &report.execution,
+            ) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("gen-codes 失败（派发表）: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            let handlers_text = gencodes::emit_handlers_rust(&tables);
+            let handlers_out = mir2rs_root.join("crates/script/src/handlers.rs");
             let text = gencodes::emit_rust(&report);
             if check {
+                let handlers_ok = std::fs::read_to_string(&handlers_out)
+                    .map(|cur| cur == handlers_text)
+                    .unwrap_or(false);
+                if !handlers_ok {
+                    eprintln!(
+                        "gen-codes --check: handlers.rs 不一致，请重跑 gen-codes（{}）",
+                        handlers_out.display()
+                    );
+                    return ExitCode::FAILURE;
+                }
                 return match std::fs::read_to_string(&out) {
                     Ok(cur) if cur == text => {
                         println!("gen-codes --check: 一致（{}）", out.display());
@@ -72,8 +95,20 @@ fn main() -> ExitCode {
                     }
                 };
             }
+            if let Err(e) = std::fs::write(&handlers_out, &handlers_text) {
+                eprintln!("写入 {} 失败: {e}", handlers_out.display());
+                return ExitCode::FAILURE;
+            }
             match std::fs::write(&out, &text) {
                 Ok(()) => {
+                    println!(
+                        "生成派发表 {}: 条件处理器 {} / 动作处理器 {} / switch case {} + {}",
+                        handlers_out.display(),
+                        tables.condition_handlers.len(),
+                        tables.execution_handlers.len(),
+                        tables.engine_switch_conditions.len(),
+                        tables.engine_switch_executions.len()
+                    );
                     println!(
                         "生成 {}: 条件 {} 条 / 动作 {} 条 / 全局变量 {} 对",
                         out.display(),

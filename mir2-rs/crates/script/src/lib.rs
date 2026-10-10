@@ -11,6 +11,7 @@
 pub mod codes;
 pub mod digest;
 pub mod gbk_overrides;
+pub mod handlers;
 pub mod model;
 pub mod parser;
 pub mod textfile;
