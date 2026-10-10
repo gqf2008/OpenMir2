@@ -367,3 +367,4 @@ FodyWeavers.xsd
 tests/golden/*/shadow/
 tests/botload/
 tests/e2e/
+tools/capture/clienthook/bin/
