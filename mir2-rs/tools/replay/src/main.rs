@@ -364,9 +364,15 @@ fn parse_frame(raw: &[u8], dir: &str, sabotage: Sabotage) -> Option<frame::Clien
         });
     }
     match dir {
-        // 登录跳（LoginSrv 构造、LoginGate 转发）帧尾是 `!$`，其余跳是 `!`
-        // —— 两种都要接受，帧尾形态在 process_frame 里按原样复现。
-        "s2c" => frame::decode_server_frame_ex(raw).ok().map(|(msg, _)| msg),
+        // s2c 的体可能分段（见 body_layout），必须分段解码（段边界不在 4 字符周期上）
+        "s2c" => {
+            let tail_len = if raw.last() == Some(&b'$') { 2 } else { 1 };
+            if raw.len() <= 1 + tail_len {
+                return None;
+            }
+            frame::decode_server_payload(&raw[1..raw.len() - tail_len])
+                .map(|(head, body)| frame::ClientMessage { head, body })
+        }
         _ => frame::decode_client_frame(raw).ok(),
     }
 }
@@ -517,9 +523,10 @@ fn process_frame(rec: &Record, lineno: usize, sabotage: Sabotage, st: &mut Stats
     }
     // ① 逐字节回放：重编码后与**原始记录**比对
     let reenc = match dir {
-        "s2c" => frame::encode_server_frame_tail(
+        // 体可能分段（如 SM_TURN 家族 8B 结构 + 文本），按消息号布局编码
+        "s2c" => frame::encode_server_frame_layout(
             &msg.head,
-            &edcode::encode(&msg.body),
+            &msg.body,
             s2c_tail.unwrap_or(frame::ServerFrameTail::Bang),
         ),
         _ => frame::encode_client_frame(&msg.head, &msg.body),

@@ -29,6 +29,14 @@ public static class Program
 
     private static string Sha256Hex(byte[] data) => Hex(SHA256.HashData(data));
 
+    private static byte[] Concat(byte[] a, byte[] b)
+    {
+        byte[] r = new byte[a.Length + b.Length];
+        Array.Copy(a, 0, r, 0, a.Length);
+        Array.Copy(b, 0, r, a.Length, b.Length);
+        return r;
+    }
+
     public static int Main(string[] args)
     {
         // gb2312 需要 CodePages provider（与服务端进程启动时的注册一致）
@@ -233,6 +241,39 @@ public static class Program
             lines.Add($"{{\"kind\":\"internal\",\"msg\":\"ServerDataMessage\",\"seq\":{seq++}," +
                       $"\"type\":2,\"socket_id_utf16_hex\":\"{Hex(Encoding.Unicode.GetBytes("9"))}\"," +
                       $"\"data_len_field\":99,\"data_hex\":\"{Hex(data)}\",\"body_hex\":\"{Hex(body)}\"}}");
+        }
+
+        // ---- 7. s2c 多段体帧（SM_TURN 家族）----
+        // 参照 M2Server/Player/PlayObject.Message.cs:1541-1552：
+        //   sendActonMsg = EDCode.EncodePacket(CharDesc) [+ EDCode.EncodeString($"{Msg}/{color}")]
+        //   网关只编码头，体原样拼接 ⇒ 线上 = '#' + enc(头12B) + enc(8B) [+ enc(文本)] + '!'
+        foreach (var (feature, status, text, color) in new (int, int, string, int)[]
+                 {
+                     (0x00050032, 0, "官方举证制度", 255),
+                     (0x00050032, 0, "稻草人", 255),
+                     (0, 0, "", 0),
+                     (0x12345678, unchecked((int)0x9ABCDEF0), "很长的名字测试abcdefg", 7),
+                 })
+        {
+            var tcmd = Messages.MakeMessage(Messages.SM_TURN, 0x05276FD0, 0x0122, 0x0265, 0x0204);
+            var desc = new CharDesc { Feature = feature, Status = status };
+            string body = EDCode.EncodePacket(desc);
+            if (text.Length > 0)
+            {
+                body += EDCode.EncodeString($"{text}/{color}");
+            }
+            byte[] head = Gb2312.GetBytes(EDCode.EncodeMessage(tcmd));
+            byte[] bodyBytes = Gb2312.GetBytes(body);
+            byte[] wire = new byte[1 + head.Length + bodyBytes.Length + 1];
+            wire[0] = (byte)'#';
+            Array.Copy(head, 0, wire, 1, head.Length);
+            Array.Copy(bodyBytes, 0, wire, 1 + head.Length, bodyBytes.Length);
+            wire[^1] = (byte)'!';
+            lines.Add($"{{\"kind\":\"frame\",\"dir\":\"s2c\",\"hop\":\"game\",\"seq\":{seq++}," +
+                      $"\"raw_hex\":\"{Hex(wire)}\",\"ident\":{tcmd.Ident},\"recog\":{tcmd.Recog}," +
+                      $"\"param\":{tcmd.Param},\"tag\":{tcmd.Tag},\"series\":{tcmd.Series}," +
+                      $"\"body_len\":{desc switch { _ => 8 + (text.Length > 0 ? Gb2312.GetByteCount($"{text}/{color}") : 0) }}," +
+                      $"\"body_sha256\":\"{Sha256Hex(Concat(SerializerUtil.Serialize(desc), text.Length > 0 ? Gb2312.GetBytes($"{text}/{color}") : Array.Empty<byte>()))}\"}}");
         }
 
         File.WriteAllLines(outPath, lines);
