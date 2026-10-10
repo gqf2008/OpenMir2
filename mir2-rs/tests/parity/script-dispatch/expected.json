@@ -1,0 +1,34 @@
+{
+  "_comment": "S 线（oracle 维护）与 B 线共用的脚本派发回归门禁的期望值。改语料必须同步改这里，否则门禁判红（防误改/防悄悄放宽）。",
+  "corpus": "dispatch-regression-120.tsv",
+  "corpus_sha256": "c0d8b695bbdf3139b3b9b35a1966fa8c9b469fb92a4d35fac080e9f122d77c0d",
+  "corpus_lines": 120,
+  "rules": {
+    "legacy_cmd_code": "GetFields 字段序号 - 1（S3 之前的 C# 口径；协调者已裁定 Rust 侧同批翻转，翻转后两侧都不再用）",
+    "current_cmd_code": "GetFields 字段序号（S3 起 C# 口径；= 枚举值，执行注册表按枚举值建键）"
+  },
+  "cross_side_ruling": {
+    "date": "2026-10-10",
+    "by": "coordinator（设计文档 §17）",
+    "decision": "Rust 侧同批翻转：crates/script/src/parser.rs 的 field_index - 1 → field_index",
+    "after_flip_expectation": "B 线 flow-diff 回到 3 一致 / 0 不一致（翻转前实测 0/3 属过渡态）",
+    "note": "翻转完成后请把 run_dispatch_regression.ps1 里那行 Rust 口径信息改成硬判据（-RequireRustFlipped），并同步 whitelist T-4 与本 README"
+  },
+  "expectations": {
+    "index_out_of_range_under_current_rule": 0,
+    "index_out_of_range_under_legacy_rule": 120,
+    "lines_whose_dispatch_differs_between_rules": 120
+  },
+  "corpus_origin": {
+    "generated_by": "tools/oracle/cond-crash-probe --sweep <Envir> --dump <file>",
+    "swept_root": "E:/MirServer/M2GameSvr/Envir",
+    "swept_files": 639,
+    "selection": "旧位移口径下派发落到 ConditionOfCheckRangeMonCount、且 sParam5 短于 2 字符（该处理器取 sParam5[1] ⇒ 必抛 IndexOutOfRangeException）的行",
+    "first_captured": "2026-10-10（S2 卡片；原件 evidence/S2/crash-corpus-120.txt，与本文件同 sha256）"
+  },
+  "action_side": {
+    "shifted_lines": 6239,
+    "param_shape_crash_class": 0,
+    "note": "动作侧同样 100% 受位移影响，但抽样 400 行实测没有『参数形状必抛』这一类（旧口径 0 抛）——错位表现为静默执行错动作，属 T-4 的错位面，由效果级对拍（flow-diff）覆盖，不另设崩溃夹具"
+  }
+}

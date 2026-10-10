@@ -599,9 +599,17 @@ walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 prin
 **影响面 7640 行**（条件 1401/1433 + 动作 6239/6286；未变的 79 行是特判命令）——这是整条脚本派发面被纠正。
 改前/改后：S2 那 120 行回归集由「抛 `IndexOutOfRangeException`」→ **0**；B 线 flow-diff 用例 3
 由 `EX IndexOutOfRangeException` → 正常产出脚本效果行（C# 侧开始按脚本意图执行）。
-**Rust 侧默认复刻旧位移**（T-4），因此修后 flow-diff 全 DIFF（0/3）属**预期登记**的差异；
-是否让 Rust 同批翻转（`crates/script/src/parser.rs` 一行）由 coordinator 拍板——不翻转则 M4 的
-「两侧逐行一致」在派发面需要 shift-aware 对账。
+修后 flow-diff 由 1 一致/2 不一致 变 **0/3** —— 那是因为 Rust 侧当时仍按旧位移派发（T-4 初稿的口径）；
+协调者已裁定**两侧同批翻转**（见下方裁定），翻转后应回到 **3 一致 / 0 不一致**。
+
+**回归门禁（固化，一条命令）**：
+```powershell
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/script-dispatch/run_dispatch_regression.ps1
+# 阳性对照（必须判红）：同一命令加 -SelfTestRed
+```
+语料 `dispatch-regression-120.tsv`（旧位移口径下必抛的 120 行）+ `expected.json`（sha256 + 期望计数）
++ 运行器；判据 = 现行口径 0 行抛 / 旧位移口径仍 120 行抛（语料有牙齿）/ 轴前提（字段序号 == 枚举值）。
+细节与"谁负责哪一半"见该目录 README。
 
 **协调者裁定（2026-10-10）：Rust 侧同批翻转**（`crates/script/src/parser.rs` 由 `code-1` 改 `code`），
 理由：oracle 已按 owner 决策修正，Rust 侧的目标是"追上并最终替换当前 oracle"；继续复刻旧位移等于
