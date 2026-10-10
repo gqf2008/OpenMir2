@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    GoldenExport — 金标准导出器（C 线工具）。
+    把 mir2_proxy 抓到的原始字节流逐帧解码成 tests/golden 契约 JSONL。
+    解码用的是仓库自己的 OpenMir2.EncryptUtil（C# oracle 实现），
+    不是 Rust 侧产物——满足抓包契约的防伪约定。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>GoldenExport</AssemblyName>
+    <RootNamespace>Mir2Tools.Capture</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\OpenMir2\OpenMir2.csproj" />
+  </ItemGroup>
+
+</Project>

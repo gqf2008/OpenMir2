@@ -1,0 +1,333 @@
+#requires -Version 5
+<#
+.SYNOPSIS
+  capture_baseline.ps1 — 金标准抓包编排：影子网关 + 抓包代理 + 真实客户端流程。
+
+.DESCRIPTION
+  原则：E:\MirServer 与 D:\MirClient-run 只读不改（影子副本落在会话目录）。
+
+  已知坑（2026-10-10 实机确认）：GameSvr 的网关表经不起「只重启网关」——
+  旧网关断开会把槽位 UserList 置 null（M2Server/Net/TCP/TCPNetChannel.cs CloseGate），
+  之后进世界的玩家在 SetGateUserList 上 NRE 死循环（NewHumanList 永远清不掉），
+  客户端黑屏。因此本脚本必须做完整栈循环：
+    1) start-all.ps1 -Stop            全停（含 MySQL）
+    2) 起 MySQL → DBSrv → LoginSrv → GameSvr（与 start-all.ps1 同路径同顺序）
+    3) 影子网关（端口 +10000，SelGate 端口是 IL 常量需打影子 DLL）+ 抓包代理占官方端口
+    4) 真实客户端全流程（tools/client/mir_flow.ps1）
+    5) start-all.ps1 -Stop → start-all.ps1  全量恢复正常栈
+  无论成败都会执行第 5 步。
+
+  产物（session 目录，默认 tests/golden/session-<时间戳>/）：
+    proxy/            mir2_proxy 原始 dump（chunks.ndjson + conn-*.bin + session.json）
+    frames.ndjson     逐帧表（seq/方向/端口/偏移/长度/sha256/ascii）
+    manifest.json     金标准清单（N 帧、总 hash、复现命令）
+    shots/            流程截图 + stages.ndjson 阶段时间线
+    logs/             服务端日志切片 + 客户端 cl_trace 切片
+
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File capture_baseline.ps1
+#>
+param(
+  [string]$GoldenRoot = "",       # 默认 <repo>/tests/golden
+  [string]$Account    = "mir2test",
+  [string]$Password   = "mir2pass",
+  [string]$ServerPack = "E:\MirServer",
+  [string]$Repo       = "E:\Users\gxh\Documents\GitHub\OpenMir2",
+  [string]$Note       = "基线全程：登录→选人→进游戏→走路→小退→再进",
+  [int]$WalkClicks    = 2,
+  # 透传给 tools/client/mir_flow.ps1（建角 / 自动挂机覆盖阶段用）
+  [switch]$CreateChar,
+  [string]$CharName   = "",
+  [int]$AutoPlaySec   = 0,
+  [switch]$KeepShadow              # 保留影子网关副本（调试用；默认抓完删，副本含部署件二进制不入库）
+)
+
+$ErrorActionPreference = "Stop"
+$Here = Split-Path -Parent $MyInvocation.MyCommand.Path
+$RepoRoot = (Resolve-Path (Join-Path $Here "..\..")).Path
+if ($GoldenRoot -eq "") { $GoldenRoot = Join-Path $RepoRoot "tests\golden" }
+
+$ProxyPy    = Join-Path $Here "mir2_proxy.py"
+$SegmentPy  = Join-Path $Here "segment_frames.py"
+$VerifyPy   = Join-Path $Here "verify_golden.py"
+$FlowPs1    = Join-Path $RepoRoot "tools\client\mir_flow.ps1"
+$StartAll   = Join-Path $ServerPack "start-all.ps1"
+$MySqlHome  = 'D:\mysql\mariadb-10.11.19-winx64'
+$MySqlData  = 'D:\mysql\data'
+$LogDir     = Join-Path $ServerPack 'logs'
+
+# 核心服务（与 start-all.ps1 同路径同顺序；网关由影子逻辑接管）
+$CoreServers = @(
+  @{ Name = 'DBSrv';    Dir = "$Repo\src\DBSrv\bin\Release";    Exe = 'DBSrv.exe';    Ports = @(6000, 5100, 5700) },
+  @{ Name = 'LoginSrv'; Dir = "$Repo\src\LoginSrv\bin\Release"; Exe = 'LoginSrv.exe'; Ports = @(5500, 5600) },
+  @{ Name = 'GameSvr';  Dir = "$ServerPack\M2GameSvr";          Exe = 'GameSrv.exe';  Ports = @(5000) }
+)
+# 网关定义：部署目录、exe、正式端口 -> 影子端口（+10000）
+$Gates = @(
+  @{ Name = "LoginGate"; Exe = "LoginGate.exe"; Ports = @(7000) },
+  @{ Name = "SelGate";   Exe = "SelGate.exe";   Ports = @(7100) },
+  @{ Name = "RunGate";   Exe = "GameGate.exe";  Ports = @(7200, 7201, 7202) }
+)
+$ProxyMap = @{ 7000 = 17000; 7100 = 17100; 7200 = 17200 }   # 客户端只会用到这三个（别用 [ordered]：OrderedDictionary 的 int 索引器是位置索引，会静默查空）
+
+function Test-PortListen([int]$Port) {
+  # 纯 .NET 查监听表：不开连接（TCP 连上去探活会在 GameGate 造幻影用户并触发
+  # GameSvr 的 SetGateUserList NRE），不走 WMI（Get-NetTCPConnection 循环偶发挂死），
+  # 也不 spawn netstat（流水线实测在收尾阶段卡住过）。
+  try {
+    foreach ($ep in [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners()) {
+      if ($ep.Port -eq $Port) { return $true }
+    }
+  } catch { }
+  return $false
+}
+function Wait-PortListen([int]$Port, [int]$TimeoutSec = 60) {
+  $deadline = (Get-Date).AddSeconds($TimeoutSec)
+  while ((Get-Date) -lt $deadline) {
+    if (Test-PortListen $Port) { return $true }
+    Start-Sleep -Milliseconds 500
+  }
+  return $false
+}
+function Start-CoreServer($c) {
+  $out = Join-Path $LogDir ($c.Name + '.out.log')
+  $err = Join-Path $LogDir ($c.Name + '.err.log')
+  $exe = Join-Path $c.Dir $c.Exe
+  Start-Process -FilePath $exe -WorkingDirectory $c.Dir `
+    -RedirectStandardOutput $out -RedirectStandardError $err -WindowStyle Hidden | Out-Null
+  foreach ($port in $c.Ports) {
+    if (-not (Wait-PortListen $port 90)) { throw "$($c.Name) 端口 $port 90 秒未监听（看 $err）" }
+  }
+  Write-Output ("CORE_UP " + $c.Name)
+}
+function Stop-ShadowGates {
+  param([string]$ShadowRoot)
+  $procs = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+    Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($ShadowRoot, [StringComparison]::OrdinalIgnoreCase) }
+  foreach ($p in $procs) {
+    Write-Output ("STOP shadow " + $p.ExecutablePath + " pid=" + $p.ProcessId)
+    Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+  }
+}
+function Patch-GatePorts([string]$ConfPath) {
+  # config.conf 是 GBK：按字节读写，避免 PS 默认编码吃掉中文 Title
+  $gbk = [System.Text.Encoding]::GetEncoding(936)
+  $text = [System.IO.File]::ReadAllText($ConfPath, $gbk)
+  $patched = [regex]::Replace($text, '(?m)^(GatePort\d*=)(\d+)\s*$', {
+    param($m)
+    $m.Groups[1].Value + ([int]$m.Groups[2].Value + 10000)
+  })
+  if ($patched -eq $text) { throw "config.conf 没找到 GatePort 行: $ConfPath" }
+  [System.IO.File]::WriteAllText($ConfPath, $patched, $gbk)
+}
+function Count-DllPortConst([string]$DllPath, [int]$Port) {
+  $bytes = [System.IO.File]::ReadAllBytes($DllPath)
+  $pat = [byte[]]@(0x20) + [BitConverter]::GetBytes($Port)   # ldc.i4 <port>
+  $count = 0
+  for ($i = 0; $i -le $bytes.Length - 5; $i++) {
+    if ($bytes[$i] -eq $pat[0] -and $bytes[$i+1] -eq $pat[1] -and
+        $bytes[$i+2] -eq $pat[2] -and $bytes[$i+3] -eq $pat[3] -and
+        $bytes[$i+4] -eq $pat[4]) { $count++; $i += 4 }
+  }
+  return $count
+}
+function Patch-DllPortConst([string]$DllPath, [int]$From, [int]$To, [int]$ExpectedCount) {
+  # SelGate 的监听端口是编译期常量（GateShare.GatePort，src/SelGate/GateShare.cs:15），
+  # config.conf 的 GatePort0 是死配置。只能在影子副本的 DLL 里改 IL 常量。原部署文件不动。
+  $bytes = [System.IO.File]::ReadAllBytes($DllPath)
+  $fromBytes = [byte[]]@(0x20) + [BitConverter]::GetBytes($From)
+  $toBytes   = [byte[]]@(0x20) + [BitConverter]::GetBytes($To)
+  $count = 0
+  for ($i = 0; $i -le $bytes.Length - 5; $i++) {
+    if ($bytes[$i] -eq $fromBytes[0] -and $bytes[$i+1] -eq $fromBytes[1] -and
+        $bytes[$i+2] -eq $fromBytes[2] -and $bytes[$i+3] -eq $fromBytes[3] -and
+        $bytes[$i+4] -eq $fromBytes[4]) {
+      for ($j = 0; $j -lt 5; $j++) { $bytes[$i+$j] = $toBytes[$j] }
+      $count++
+      $i += 4
+    }
+  }
+  if ($count -ne $ExpectedCount) {
+    throw "DLL 端口常量替换数不符: $DllPath 期望 $ExpectedCount 处 $From，实际 $count 处（部署版本变了？先核对 IL）"
+  }
+  [System.IO.File]::WriteAllBytes($DllPath, $bytes)
+  Write-Output ("DLL_PATCH " + (Split-Path $DllPath -Leaf) + " port " + $From + "->" + $To + " (" + $count + " sites)")
+}
+function Stop-EntireStack {
+  Start-Process -FilePath "powershell" `
+    -ArgumentList "-NoProfile","-ExecutionPolicy","Bypass","-File",$StartAll,"-Stop" `
+    -Wait -WindowStyle Hidden `
+    -RedirectStandardOutput (Join-Path $Sess "stopall.out.log") `
+    -RedirectStandardError  (Join-Path $Sess "stopall.err.log")
+  Start-Sleep -Seconds 3
+}
+function Start-EntireStack {
+  Start-Process -FilePath "powershell" `
+    -ArgumentList "-NoProfile","-ExecutionPolicy","Bypass","-File",$StartAll `
+    -Wait -WindowStyle Hidden `
+    -RedirectStandardOutput (Join-Path $Sess "startall.out.log") `
+    -RedirectStandardError  (Join-Path $Sess "startall.err.log")
+}
+
+# ---------- 预检 ----------
+foreach ($p in @(7000, 7100, 7200, 5500, 5600, 5100, 5000, 3306)) {
+  if (-not (Test-PortListen $p)) { throw "预检失败：端口 $p 未监听（服务端没起全？先跑 E:\MirServer\start-all.cmd）" }
+}
+foreach ($p in @(17000, 17100, 17200)) {
+  if (Test-PortListen $p) { throw "预检失败：影子端口 $p 已被占用（上次没恢复？先清理）" }
+}
+$selDll = Join-Path $ServerPack "SelGate\SelGate.dll"
+$selHits = Count-DllPortConst $selDll 7100
+if ($selHits -ne 3) { throw "SelGate.dll 中 ldc.i4 7100 有 $selHits 处（预期 3）——部署版本变了，先人工核对再打影子" }
+
+$stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+$Sess = Join-Path $GoldenRoot "session-$stamp"
+$ShadowRoot = Join-Path $Sess "shadow"
+$ProxyOut = Join-Path $Sess "proxy"
+New-Item -ItemType Directory -Force -Path $Sess | Out-Null
+
+$proxyProc = $null
+
+try {
+  # ---------- 1. 全停 ----------
+  Write-Output "STOP_ALL"
+  Stop-EntireStack
+
+  # ---------- 2. 起核心服务 ----------
+  if (-not (Test-PortListen 3306)) {
+    Start-Process -FilePath (Join-Path $MySqlHome 'bin\mysqld.exe') `
+      -ArgumentList "--datadir=$MySqlData", '--port=3306', '--bind-address=127.0.0.1', '--console' `
+      -RedirectStandardOutput (Join-Path $LogDir 'MySQL.out.log') `
+      -RedirectStandardError  (Join-Path $LogDir 'MySQL.err.log') -WindowStyle Hidden | Out-Null
+    if (-not (Wait-PortListen 3306 60)) { throw "MySQL 60 秒未起来" }
+    Write-Output "CORE_UP MySQL"
+  }
+  # 建角用的 scratch 账号：必须在起 LoginSrv 之前建好——LoginSrv 只在启动时把账号读进内存，
+  # 后建的账号登录一律报「此帐号不存在，或出现未知错误」
+  if ($CreateChar) {
+    if ($Account.Length -gt 10) {
+      # 客户端登录框把账号截断到 10 字符（实测：15 字符的 scratch 账号被截成前 10 位 → 登录失败）
+      throw "账号 '$Account' 超过 10 字符：客户端会截断，请用 ≤10 字符的 scratch 账号"
+    }
+    $Provision = Join-Path $RepoRoot "tools\client\account_provision.ps1"
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $Provision -Account $Account -Password $Password |
+      Tee-Object -FilePath (Join-Path $Sess "provision.log")
+    if ($LASTEXITCODE -ne 0) { throw "scratch 账号开号失败" }
+  }
+  foreach ($c in $CoreServers) { Start-CoreServer $c }
+
+  # ---------- 3. 影子网关 ----------
+  foreach ($g in $Gates) {
+    $src = Join-Path $ServerPack $g.Name
+    $dst = Join-Path $ShadowRoot $g.Name
+    New-Item -ItemType Directory -Force -Path $dst | Out-Null
+    robocopy $src $dst /E /XF "*.log" /XD logs /NFL /NDL /NJH /NJS | Out-Null
+    if ($LASTEXITCODE -gt 7) { throw "robocopy 失败 ($LASTEXITCODE): $src" }
+    Patch-GatePorts (Join-Path $dst "config.conf")
+    if ($g.Name -eq "SelGate") {
+      Patch-DllPortConst (Join-Path $dst "SelGate.dll") 7100 17100 3
+    }
+    Start-Process -FilePath (Join-Path $dst $g.Exe) -WorkingDirectory $dst `
+      -RedirectStandardOutput (Join-Path $Sess ("shadow-" + $g.Name + ".out.log")) `
+      -RedirectStandardError  (Join-Path $Sess ("shadow-" + $g.Name + ".err.log")) -WindowStyle Hidden | Out-Null
+    Write-Output ("SHADOW " + $g.Name + " -> " + $dst)
+  }
+  foreach ($p in @(17000, 17100, 17200)) {
+    if (-not (Wait-PortListen $p 60)) { throw "影子网关端口 $p 60 秒未起来（看 shadow-*.err.log）" }
+  }
+  Write-Output "SHADOW_GATES_UP"
+
+  # ---------- 4. 抓包代理 ----------
+  New-Item -ItemType Directory -Force -Path $ProxyOut | Out-Null
+  $mapArgs = @()
+  foreach ($k in $ProxyMap.Keys) { $mapArgs += @("--map", "$k=127.0.0.1:$($ProxyMap[$k])") }
+  $proxyProc = Start-Process -FilePath "python" -PassThru -WindowStyle Hidden `
+    -ArgumentList (@($ProxyPy, "--out", $ProxyOut) + $mapArgs) `
+    -RedirectStandardOutput (Join-Path $Sess "proxy.out.log") `
+    -RedirectStandardError  (Join-Path $Sess "proxy.err.log")
+  $ready = Join-Path $ProxyOut "ready.flag"
+  $deadline = (Get-Date).AddSeconds(30)
+  while (-not (Test-Path $ready) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 300 }
+  if (-not (Test-Path $ready)) { throw "抓包代理 30 秒未就绪" }
+  Write-Output "PROXY_UP pid=$($proxyProc.Id)"
+
+  # ---------- 5. 记录日志切点 ----------
+  $logMarks = @{}
+  foreach ($f in (Get-ChildItem $LogDir -Filter *.out.log -ErrorAction SilentlyContinue)) {
+    $logMarks[$f.FullName] = $f.Length
+  }
+  $clTrace = "D:\MirClient-run\cl_trace.txt"
+  $clMark = 0
+  if (Test-Path $clTrace) { $clMark = (Get-Item $clTrace).Length }
+
+  # ---------- 6. 跑客户端流程 ----------
+  $flowOut = Join-Path $Sess "shots"
+  $flowArgs = @("-Account", $Account, "-Password", $Password, "-OutDir", $flowOut, "-WalkClicks", "$WalkClicks")
+  if ($CreateChar) { $flowArgs += @("-CreateChar", "-CharName", $CharName) }
+  if ($AutoPlaySec -gt 0) { $flowArgs += @("-AutoPlaySec", "$AutoPlaySec") }
+  & powershell -NoProfile -ExecutionPolicy Bypass -File $FlowPs1 @flowArgs |
+    Tee-Object -FilePath (Join-Path $Sess "flow.out.log")
+  if ($LASTEXITCODE -ne 0) { throw "客户端流程脚本失败（$LASTEXITCODE），见 flow.out.log" }
+  Start-Sleep -Seconds 3   # 等收尾流量落盘
+}
+finally {
+  # ---------- 7. 恢复：停影子+核心，全量起正常栈 ----------
+  if ($proxyProc -and -not $proxyProc.HasExited) {
+    Stop-Process -Id $proxyProc.Id -Force -ErrorAction SilentlyContinue
+  }
+  Stop-ShadowGates -ShadowRoot $ShadowRoot
+  Start-Sleep -Seconds 2
+  Stop-EntireStack
+  Write-Output "RESTORE: start-all"
+  Start-EntireStack
+  # 影子副本是部署件拷贝（含 E:\MirServer 的二进制），抓完即删；要留档加 -KeepShadow
+  if (-not $KeepShadow -and (Test-Path $ShadowRoot)) {
+    Remove-Item -Recurse -Force $ShadowRoot -ErrorAction SilentlyContinue
+    Write-Output "SHADOW_CLEANED"
+  }
+  $ok = $true
+  foreach ($p in @(3306, 5100, 5500, 5000, 7000, 7100, 7200)) {
+    if (-not (Wait-PortListen $p 90)) { $ok = $false; Write-Output "RESTORE_WARN: 端口 $p 未恢复" }
+  }
+  if ($ok) { Write-Output "RESTORED: 完整栈已恢复" }
+}
+
+# ---------- 8. 切帧 + 校验 + 收日志 ----------
+python $SegmentPy --session $ProxyOut --out $Sess --note $Note `
+  --reproduce "powershell -ExecutionPolicy Bypass -File tools/capture/capture_baseline.ps1"
+if ($LASTEXITCODE -ne 0) { throw "segment_frames 失败" }
+
+$logsOut = Join-Path $Sess "logs"
+New-Item -ItemType Directory -Force -Path $logsOut | Out-Null
+foreach ($src in $logMarks.Keys) {
+  if (-not (Test-Path $src)) { continue }
+  $len = (Get-Item $src).Length - $logMarks[$src]
+  if ($len -gt 0) {
+    $fs = [System.IO.File]::Open($src, 'Open', 'Read', 'ReadWrite')
+    try {
+      $fs.Seek($logMarks[$src], 'Begin') | Out-Null
+      $buf = New-Object byte[] $len
+      [void]$fs.Read($buf, 0, $len)
+      [System.IO.File]::WriteAllBytes((Join-Path $logsOut (Split-Path $src -Leaf)), $buf)
+    } finally { $fs.Close() }
+  }
+}
+if (Test-Path $clTrace) {
+  $len = (Get-Item $clTrace).Length - $clMark
+  if ($len -gt 0) {
+    $fs = [System.IO.File]::Open($clTrace, 'Open', 'Read', 'ReadWrite')
+    try {
+      $fs.Seek($clMark, 'Begin') | Out-Null
+      $buf = New-Object byte[] $len
+      [void]$fs.Read($buf, 0, $len)
+      [System.IO.File]::WriteAllBytes((Join-Path $logsOut "cl_trace.txt"), $buf)
+    } finally { $fs.Close() }
+  }
+}
+
+python $VerifyPy --golden $Sess
+if ($LASTEXITCODE -ne 0) { throw "金标准自检失败（见上 RED 行）" }
+
+# 指向最新会话
+Set-Content -Path (Join-Path $GoldenRoot "LATEST") -Value $Sess -Encoding ascii
+Write-Output ("GOLDEN_OK " + $Sess)

@@ -5042,17 +5042,17 @@ namespace BotSrv.Player
 
         private void MainOutMessage(string msg)
         {
-            BotShare.LogService.Info($"机器人:[{ChrName}] {msg}");
+            LogService.Info($"机器人:[{ChrName}] {msg}");
         }
 
         private void MainOutErrorMessage(string msg)
         {
-            BotShare.LogService.Error($"机器人:[{ChrName}] {msg}");
+            LogService.Error($"机器人:[{ChrName}] {msg}");
         }
 
         private void MainOutWarnMessage(string msg)
         {
-            BotShare.LogService.Warn($"机器人:[{ChrName}] {msg}");
+            LogService.Warn($"机器人:[{ChrName}] {msg}");
         }
     }
 }
