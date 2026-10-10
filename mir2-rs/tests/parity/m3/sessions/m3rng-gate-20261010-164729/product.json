@@ -1,0 +1,25 @@
+﻿{
+    "seed":  42,
+    "prefix_calls":  1500,
+    "calls_run1":  31686,
+    "prefix_sha256":  "b677fe32e0e8feaf01a7832d033aeb6e7d16bfaab2aa59025c91d99c7f2949d1",
+    "stream_sha256":  "eb1bf266c9a9c807644af3bf4090598426f37618690ab61cbb75b312350ad662",
+    "hook_sha256":  "0aa95eb353bf9c6c1fef21148bbce12513af0b97c772bceddf61a3936611a5f8",
+    "pack_fingerprint":  {
+                             "GameSrv.dll":  "9f599d94956b3b7ea62d22791f5dcaff68ee51d4b082965517ac588b6b166775",
+                             "Server.conf":  "ce5e3ce98b9bb71cbb18e6be1501e20e05642fd3eeaaffd9326caef8d9a4c0e2",
+                             "M2Server.dll":  "76b46663f9b2b78d0a1361fa4339a04c285fb9bba9d74f4c99a8a35026e7832e",
+                             "GameSrv.runtimeconfig.json":  "cffdf23bb209aa20cf97d99ffc85a9c09cde9056bb550111c0d92ab560562c3b",
+                             "OpenMir2.dll":  "505c9dc6c7d4ea509d941c389129de6fa03105d9a12f75347aadace4eccf8aa4"
+                         },
+    "stable":  true,
+    "calls_run2":  31656,
+    "prefix_sha256_run2":  "b677fe32e0e8feaf01a7832d033aeb6e7d16bfaab2aa59025c91d99c7f2949d1",
+    "stream_sha256_run2":  "dae0d654f98a0109d4d4f66475c4fc032c91ddee278bc9158750649f331b9d84",
+    "common_prefix_calls":  1830,
+    "drop_100kills_sha256":  "e40d78c0cd169acc318d40755c20a840963be1ddd6e78af1af1e3000827f1aec",
+    "exp_table_sha256":  "5c1c45ce949521ccac27dc8d80a7ea17ad25568da2344f6677b4e8af1e792bb7",
+    "pack_unchanged":  true,
+    "finished_at":  "2026-10-10T16:48:58.9026218+08:00",
+    "git_rev":  "bcfbffcf01a7b7b780eb28260eb63d2c0d79e787"
+}

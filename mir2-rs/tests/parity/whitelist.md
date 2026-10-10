@@ -14,6 +14,7 @@
 | D-4 | 掉落门禁对"只改概率数值"的篡改存在漏检窗口（N=100 采样踩不中翻转区间，实测 `10/100→10/101` 未变红） | 已如实记录；序列级错误（种子/顺序/次数）与内容级差异（物品、持久、属性）100% 可检出。提高 N 可缩小窗口，成本是运行时间 | D 线（待 owner 复核） |
 | D-5 | `goldsales`：C# 读错列名（`DealChrName`，DDL 实为 `DealCharName`）导致有数据时也会全部静默跳过——Rust **复刻同一错列名**而非修正 | 行为等价优先于修 bug（§8.1）。当前表 0 行，两侧均加载 0 行；表有数据时两侧同样都加载 0 行。修复应单开批次，并保留改前/改后行为记录 | D 线（待 owner 复核） |
 | D-6 | `GetLevelExp(nLevel>255)` 在 C# 是 `IndexOutOfRangeException`，Rust 复刻为越界 panic | 死代码分支（调用方传 byte 等级 0..=255）；崩溃语义一致。`level_exp_above_max_panics_like_csharp` 测试钉住 | D 线（待 owner 复核） |
+| D-7 | **C# 世界 RNG 流只有前 ≈1828 次取数跨运行确定**，之后因非 RNG 熵源（NPC 处理顺序/`GetTickCount` 门控）分岔：实测两次同种子运行的调用点从 `Merchant.Run` 变成 `GuildOfficial.Run`（消耗样本数相同故流位置自愈，缩放上限不同故数值不同） | M3 基线因此**只对前 1500 次取数取 hash**（`prefix_calls`，留余量），整条流 hash 不作判据；L3 端到端要逐次一致需先冻结时钟与遍历顺序（`RNG同种子与记录回放方案.md` 第四节给了三条路径）。该边界是 C# oracle 自身的性质，不是 Rust 侧差异 | D 线（待 owner 复核） |
 
 ## 复刻的 C# 已知 bug（不是差异，是刻意 1:1，供后续修复批次索引）
 

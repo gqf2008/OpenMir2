@@ -40,6 +40,7 @@ param(
   [int]$Port = 7000,
   [int]$TimeoutSec = 600,
   [switch]$SkipBots,
+  [switch]$KeepSnapshots,
   [switch]$ProvisionSql,
   [switch]$SelfTestRed
 )
@@ -254,6 +255,16 @@ $baseline = [pscustomobject]@{
 }
 $baselinePath = Join-Path $SessionDir 'baseline.json'
 $baseline | ConvertTo-Json -Depth 8 | Set-Content -Path $baselinePath -Encoding utf8
+
+# 快照 TSV 体积大（活库全表，单次 ~36MB）且可随时重生：默认只留 manifest（sha256 判据本体）。
+# 需要原始 TSV 做人工核查时加 -KeepSnapshots。
+if (-not $KeepSnapshots) {
+  foreach ($d in @($snapBefore, $snapAfter)) {
+    Copy-Item (Join-Path $d 'manifest.json') (Join-Path (Split-Path $d -Parent) ((Split-Path $d -Leaf) + '.manifest.json')) -Force
+    Remove-Item -Recurse -Force $d -ErrorAction SilentlyContinue
+  }
+  Write-Output 'SNAPSHOT_TRIMMED 已把 snap_before/snap_after 瘦身为 *.manifest.json（-KeepSnapshots 可保留原始 TSV）'
+}
 
 Write-Output ('BASELINE_OK ' + $baselinePath)
 Write-Output ('SNAPSHOT_HASHES_BEFORE tables={0}; AFTER tables={1}' -f $beforeHashes.Count, $afterHashes.Count)

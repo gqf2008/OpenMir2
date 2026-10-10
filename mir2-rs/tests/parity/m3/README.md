@@ -1,12 +1,45 @@
 # M3 对拍夹具（同库同脚本）
 
-D2 线交付（对应设计文档 §6 M3「同序列对拍」的准备项）。判据纪律照 §6.0：
-可测、可证伪、差异要么 0 要么进 `tests/parity/whitelist.md`、证据四件套。
+D2 线交付（对应设计文档 §6 M3「同序列对拍」）。owner 2026-10-10 决策：**本夹具即 M3 正式门禁**
+（判据 = `run_pair.ps1` + `scoped_diff.py`，作用域内字段级 diff = 0，且 C# 基线一条命令可复跑）。
+判据纪律照 §6.0：可测、可证伪、差异要么 0 要么进 `tests/parity/whitelist.md`、证据四件套。
+
+## M3 正式门禁：一条命令
+
+```powershell
+# ① C# 基线（含"两次运行的确定性前缀 hash 相同"这条稳定性判据）
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_m3_gate.ps1 -Side csharp -VerifyRepeat
+
+# ② M1 顶住 7000/7100/7200 之后的 Rust 侧首验（C# 会话作参照 ⇒ 跨侧 diff 必须 0）
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_m3_gate.ps1 -Side rust -PeerSession csharp-20261010-164731
+```
+
+`run_m3_gate.ps1` 依次做四件事，最后落 `sessions/M3-gate-<side>-<时间>.json`（含各步骤退出码与失败项）：
+
+0. **入口实现识别护栏**（**快速失败**）：读 7000/7100/7200 的实际监听进程，
+   `-Side rust` 时若入口仍是 `E:\MirServer` 的 C# 实现 ⇒ 立即 RED 退出
+   ——否则就是"拿 C# 跟自己比"，门禁会恒绿。**实测**（2026-10-10，M1 未顶住端口时）：
+   `RED: 入口护栏未通过，快速失败: rust_side_but_csharp_holds_entry`（退出码 1）。
+1. `run_pair.ps1`：快照 before/after（13 表 sha256）→ 操作序列 → 作用域抽取 → 基线 json。
+2. RNG 基线：`csharp` 侧跑 `rng-baseline.ps1`（种子注入 → 世界 RNG 流 + 掉落/经验序列落盘 + hash）；
+   `rust` 侧重放 C# 记录流（`cargo test -p mir2-parity-tests --test rng_replay_parity`）。
+3. 给了 `-PeerSession` 时做跨侧比对：`scoped_diff.py diff` **必须 0**。
+
+首次 GREEN 报告（2026-10-10，`-Side csharp -VerifyRepeat`）：
+
+```
+GREEN: M3 门禁通过
+  stable=True            prefix_sha256 == run2（两次运行取数 35139 / 36974 条，格式前缀 hash 相同）
+  common_prefix_calls=1842   prefix_calls=1500（hash 只覆盖保证稳定的前 1500 次，留余量）
+  drop_100kills_sha256=e40d78c0…  exp_table_sha256=5c1c45ce…（与 D 线入库 golden 逐位相同）
+  pack_unchanged=True（E:\MirServer 5 个关键文件 sha256 前后一致）
+```
 
 ## 一次「侧运行」是什么
 
 ```
 预检（入口在听 / DB 可读 / 账号名长度合规）
+  → 运行态记录（7 进程实际 exe 路径 + 启动时间 → baseline.json）
   → 全新前缀断言（该命名空间必须为空）
   → 快照 BEFORE（tools/dbsnap，13 张表逐表 sha256）
   → 操作序列（tools/botload 假人：注册 → 登录 → 建角 →（尽量）进世界）
@@ -16,19 +49,26 @@ D2 线交付（对应设计文档 §6 M3「同序列对拍」的准备项）。�
   → baseline.json（两侧快照 hash、作用域行数、改动清单、命令、git 提交）
 ```
 
-命令：
+单跑夹具（排查用；门禁请用 `run_m3_gate.ps1`）：
 
 ```powershell
-# C# 基线（当前可跑通的最小操作序列）
 powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_pair.ps1 -Side csharp -Bots 1
-
-# Rust 侧（把 7000/7100/7200 指向 Rust 实现后，同一条命令）
-powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_pair.ps1 -Side rust -Bots 1
-
-# M3 判据：作用域内字段级 diff 必须为 0
-python mir2-rs/tests/parity/m3/scoped_diff.py diff \
-  <csharp会话>/scoped_after_norm.jsonl <rust会话>/scoped_after_norm.jsonl
+python mir2-rs/tests/parity/m3/scoped_diff.py diff <csharp会话>/scoped_after_norm.jsonl <rust会话>/scoped_after_norm.jsonl
 ```
+
+## RNG 基线：一条命令（种子注入 → 序列落盘 + hash 稳定）
+
+```powershell
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/rng-baseline.ps1 -VerifyRepeat
+```
+
+- 影子副本建在**会话目录内**，改的是副本的 `runtimeconfig`/`Server.conf`；运行前后对比
+  `E:\MirServer\M2GameSvr` 5 个关键文件 sha256（`pack_unchanged`），证明冻结基线未被本线改动。
+- `-VerifyRepeat` 跑两次同种子运行并断言**确定性前缀 hash 相同**（当前 `b677fe32…`）。
+- **hash 语义（重要）**：只对前 `PrefixCalls`（默认 1500）次取数取 hash——实测跨运行确定性区段
+  ≈1828 次（见 `RNG同种子与记录回放方案.md` 的边界实测），留了余量。整条流的 hash 不可作判据
+  （公共前缀之后受 NPC 遍历顺序/时钟门控影响）。
+- 同一命令产出掉落/经验序列（`drop_100kills.txt` / `exp_table.txt`）及其 sha256。
 
 已产出的基线（实测，2026-10-10）：`sessions/csharp-20261010-140632/baseline.json`
 —— 13 表快照 hash 齐备，`runtime_procs`（产出该基线的进程表）齐备，
@@ -36,6 +76,8 @@ python mir2-rs/tests/parity/m3/scoped_diff.py diff \
 `mir2_db.characters +1`、`mir2_db.characters_indexes +1`。
 **同一命令连跑两次，改动清单的形状完全一致**（同 4 表各 +1，仅行内容里的自增 Id/时间戳不同）
 ——这是"夹具本身可复现"的证据。
+
+产物与临时物的位置/去向登记见 `ARTIFACTS.md`（§14.3 收尾清单要求）。
 
 ## 为什么"同一初始状态"不靠破坏性还原
 
