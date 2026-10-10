@@ -1,0 +1,18 @@
+[package]
+name = "mir2-world-bevy"
+version = "0.1.0"
+edition = "2021"
+description = "D3 试验田：用 bevy_ecs 承载「掉落」系统（纯函数式：输入快照 → 输出命令），不重写 crates/world"
+
+[dependencies]
+mir2-shared = { path = "../shared" }
+mir2-data = { path = "../data" }
+mir2-formula = { path = "../formula" }
+mir2-world = { path = "../world" }      # 适配层：读现有实体索引
+bevy_ecs = { version = "=0.19.1", default-features = false }
+# 说明（§4.2.2 四条硬约束）：只取 bevy_ecs（+ 可选 bevy_app），**不取整个引擎**；
+# bevy_tasks 会作为 bevy_ecs 的传递依赖出现，但本 crate 不引用其并行 API
+#（由 tests/no_parallel_bevy.rs 的源码扫描 + 直接依赖白名单双重钉住）。
+
+[lints]
+workspace = true
