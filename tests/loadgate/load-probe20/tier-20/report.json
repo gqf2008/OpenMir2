@@ -1,0 +1,104 @@
+{
+  "samples": 0,
+  "samples_total": 0,
+  "max_ms": 0,
+  "mean_ms": null,
+  "ramp_complete": true,
+  "steady_window_ms": 60125,
+  "peak_login_ok": 20,
+  "login_success_pct": 100.0,
+  "conn_refused": 0,
+  "conn_lost": 0,
+  "conn_lost_ramp": 0,
+  "conn_lost_steady": 0,
+  "hist_bucket_ms": 1,
+  "tick_p50_ms": null,
+  "tick_p90_ms": null,
+  "tick_p99_ms": null,
+  "ramp_ms": 5000,
+  "clock_granularity_note": "Environment.TickCount 在 Windows 上粒度约 15.6ms（单样本 ±16ms 量化，是测量下限，不是噪声消除）",
+  "mem": {
+    "DBSrv": {
+      "samples": 29,
+      "ws_peak_mb": 76.9,
+      "ws_mean_mb": 69.9,
+      "ws_last_mb": 68.8,
+      "priv_peak_mb": 40.1,
+      "slope_tail_mb_per_s": -0.139,
+      "tail_window_s": 57.9,
+      "window_s": 57.9
+    },
+    "GameGate": {
+      "samples": 29,
+      "ws_peak_mb": 54.8,
+      "ws_mean_mb": 52.8,
+      "ws_last_mb": 52.6,
+      "priv_peak_mb": 45.3,
+      "slope_tail_mb_per_s": -0.037,
+      "tail_window_s": 57.9,
+      "window_s": 57.9
+    },
+    "GameSrv": {
+      "samples": 29,
+      "ws_peak_mb": 264.1,
+      "ws_mean_mb": 263.2,
+      "ws_last_mb": 264.1,
+      "priv_peak_mb": 268,
+      "slope_tail_mb_per_s": 0.025,
+      "tail_window_s": 57.9,
+      "window_s": 57.9
+    },
+    "LoginGate": {
+      "samples": 29,
+      "ws_peak_mb": 49.2,
+      "ws_mean_mb": 46.1,
+      "ws_last_mb": 46.6,
+      "priv_peak_mb": 18.8,
+      "slope_tail_mb_per_s": -0.046,
+      "tail_window_s": 57.9,
+      "window_s": 57.9
+    },
+    "LoginSrv": {
+      "samples": 29,
+      "ws_peak_mb": 71.2,
+      "ws_mean_mb": 67.3,
+      "ws_last_mb": 67.5,
+      "priv_peak_mb": 36.6,
+      "slope_tail_mb_per_s": -0.063,
+      "tail_window_s": 57.9,
+      "window_s": 57.9
+    },
+    "SelGate": {
+      "samples": 29,
+      "ws_peak_mb": 53.9,
+      "ws_mean_mb": 51.4,
+      "ws_last_mb": 51.2,
+      "priv_peak_mb": 25.7,
+      "slope_tail_mb_per_s": -0.047,
+      "tail_window_s": 57.9,
+      "window_s": 57.9
+    },
+    "mysqld": {
+      "samples": 29,
+      "ws_peak_mb": 56.9,
+      "ws_mean_mb": 56.9,
+      "ws_last_mb": 56.9,
+      "priv_peak_mb": 468.8,
+      "slope_tail_mb_per_s": 0.0,
+      "tail_window_s": 57.9,
+      "window_s": 57.9
+    }
+  },
+  "count": 20,
+  "stagger_ms": 200,
+  "hold_sec": 60,
+  "criteria": [
+    "login",
+    "conn",
+    "tick"
+  ],
+  "verdict": "RED",
+  "fails": [
+    "tick P99 缺失（本档没有 tick 样本；若该场景不需要 tick 请用 --criteria login,conn）"
+  ]
+}

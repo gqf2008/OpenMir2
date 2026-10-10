@@ -46,7 +46,9 @@ param(
   [switch]$RestartStackPerTier,
   [switch]$SkipBuild,
   [switch]$SelfTestRed,
-  [string]$Criteria = "login,conn,tick"   # 判据子集；M1 ⑤（只比登录+选角）用 "login,conn"
+  [string]$Criteria = "login,conn,tick",  # 判据子集；M1 ⑤（只比登录+选角）用 "login,conn"
+  [switch]$NoActionProbe,                # 关掉假人动作探针（默认开：否则采不到 #+GD ack ⇒ tick 无样本）
+  [int]$ActionProbeMs = 1000             # 探针频率：每个假人每 N 毫秒发一个 CM_TURN
 )
 
 $ErrorActionPreference = "Stop"
@@ -139,6 +141,10 @@ foreach ($n in $Tiers) {
     # 输出目录：环境变量 + exe 同级 load_out.conf 双保险（经验：Env 在托管启动下不一定继承）
     [System.IO.File]::WriteAllText((Join-Path $BotBinDir "load_out.conf"), $tierDir, (New-Object System.Text.UTF8Encoding($false)))
     $env:MIR2_BOT_OUT = $tierDir
+    # 动作探针（tick 样本来源）：默认开。BotSrv 的挂机/移动层是跨假人共享全局态，N 假人动不了，
+    # 探针只依赖假人自己的 socket + 场景状态，进世界后每 $ActionProbeMs 发一个 CM_TURN ⇒ 服务端回 #+GD/<rtime>!
+    if ($NoActionProbe) { $env:MIR2_BOT_ACTION_PROBE = "0" } else { $env:MIR2_BOT_ACTION_PROBE = "1" }
+    $env:MIR2_BOT_ACTION_PROBE_MS = "$ActionProbeMs"
 
     $botLog = Join-Path $tierDir "bots.log"
     $proc = Start-Process -FilePath $BotExe -WorkingDirectory $BotBinDir -PassThru -WindowStyle Hidden `
@@ -216,6 +222,8 @@ $summaryPath = Join-Path $OutDir "load_gate_summary.json"
   hold_sec   = $HoldSec
   caliber    = "tick 服务时延 = BotSrv 收到 `#+GD/<rtime>! 的时刻 − rtime（Environment.TickCount，全机同域）；详见 tools/botload/load_report.py"
   criteria   = $Criteria
+  action_probe = (-not $NoActionProbe)
+  action_probe_ms = $ActionProbeMs
   reports    = $tierReports
 } | ConvertTo-Json -Depth 6 | Set-Content -Path $summaryPath -Encoding utf8
 Write-Output ("SUMMARY " + $summaryPath)
