@@ -48,16 +48,18 @@ namespace Mir2Tools.Capture
             string outFile = null;
             string layoutPath = null;
             bool dumpPlain = false;
+            bool verifyRoundtrip = false;
             for (int i = 0; i < args.Length; i++)
             {
                 if (args[i] == "--session" && i + 1 < args.Length) session = args[++i];
                 else if (args[i] == "--out" && i + 1 < args.Length) outFile = args[++i];
                 else if (args[i] == "--layout" && i + 1 < args.Length) layoutPath = args[++i];  // 见 dump_body_layout.py
                 else if (args[i] == "--dump-plain") dumpPlain = true;   // 调试：打印每帧明文（latin1 逐字节）
+                else if (args[i] == "--verify-roundtrip") verifyRoundtrip = true;   // 段回编 == 线上原字节（见 segmented_check.py）
             }
             if (session == null || outFile == null)
             {
-                Console.Error.WriteLine("usage: GoldenExport --session <proxy dump dir> --out <capture.jsonl> [--layout <body_layout.json>] [--dump-plain]");
+                Console.Error.WriteLine("usage: GoldenExport --session <proxy dump dir> --out <capture.jsonl> [--layout <body_layout.json>] [--dump-plain] [--verify-roundtrip]");
                 return 2;
             }
             Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);   // GB2312
@@ -117,12 +119,16 @@ namespace Mir2Tools.Capture
             if (layout != null)
             {
                 Console.WriteLine($"LAYOUT head_block={layout.HeadBlock} act_prefix='{layout.ActPrefix}' struct_then_rest={layout.DescribeStructEntries()}");
+                if (!string.IsNullOrEmpty(layout.DescribeSegmentedEntries()))
+                {
+                    Console.WriteLine($"LAYOUT segmented={layout.DescribeSegmentedEntries()}");
+                }
             }
 
             // 全局 seq：按时间戳（同帧按连接/偏移稳定排序）
             frames = frames.OrderBy(f => f.TsMs).ThenBy(f => f.Conn).ThenBy(f => f.Off).ToList();
 
-            int decoded = 0, decodeErrors = 0, heartbeats = 0;
+            int decoded = 0, decodeErrors = 0, heartbeats = 0, segMismatch = 0, roundtripFails = 0;
             using (var w = new StreamWriter(outFile, false, new UTF8Encoding(false)))
             {
                 w.NewLine = "\n";   // 契约 JSONL 一律 LF（CRLF 会让入库后 blob 与工作区 sha256 不一致）
@@ -207,9 +213,20 @@ namespace Mir2Tools.Capture
                                 row["tag"] = BitConverter.ToUInt16(head, 8);
                                 row["series"] = BitConverter.ToUInt16(head, 10);
                                 ushort ident = BitConverter.ToUInt16(head, 4);
+                                ushort series = BitConverter.ToUInt16(head, 10);
                                 byte[] rest = blob[layout.HeadBlock..];
-                                var (segs, kind) = BodyLayoutTable.SplitBody(rest, ident, layout);
+                                var (segs, kind) = BodyLayoutTable.SplitBody(rest, ident, series, layout);
                                 row["layout"] = kind;
+                                if (kind.StartsWith("segmented(mismatch", StringComparison.Ordinal))
+                                {
+                                    segMismatch++;      // 表与帧对不上：不许静默，末尾按非 0 退出
+                                }
+                                else if (verifyRoundtrip && kind == "segmented" &&
+                                         !BodyLayoutTable.VerifySegmentedRoundtrip(layout, ident, rest, segs, kind))
+                                {
+                                    row["roundtrip"] = "fail";      // 段拼不回原字节 ⇒ 段边界错
+                                    roundtripFails++;
+                                }
                                 var body = new List<byte>();
                                 foreach (var seg in segs) body.AddRange(seg);
                                 SetBody(row, body.ToArray(), segs);
@@ -251,8 +268,21 @@ namespace Mir2Tools.Capture
                 }
             }
 
-            Console.WriteLine($"FRAMES={frames.Count} decoded={decoded} heartbeat={heartbeats} decode_error={decodeErrors}");
+            Console.WriteLine($"FRAMES={frames.Count} decoded={decoded} heartbeat={heartbeats} decode_error={decodeErrors} seg_mismatch={segMismatch}" +
+                (verifyRoundtrip ? $" roundtrip_fail={roundtripFails}" : ""));
             Console.WriteLine($"OUT={outFile}");
+            if (roundtripFails > 0)
+            {
+                Console.Error.WriteLine($"RED: 有 {roundtripFails} 帧的段拼不回线上原字节（逐行看 roundtrip=fail）—— 段边界选错了");
+                return 5;
+            }
+            if (segMismatch > 0)
+            {
+                // 分段表与线上帧对不上（段长/分隔符/尾分隔/段数任一处错）⇒ 表坏了，退出码非 0 让上层必红
+                Console.Error.WriteLine($"RED: 分段表与 {segMismatch} 帧对不上（layout 里带 segmented(mismatch:…)）" +
+                    "—— 先核对 A 线的 body_layout()，别用这张表导出金标准");
+                return 4;
+            }
             return decodeErrors > 0 ? 3 : 0;   // 有解不开的帧必须可见，不许静默
         }
 

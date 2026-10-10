@@ -12,6 +12,8 @@ tools/capture/mir2_proxy.py   客户端↔网关 TCP 透传 + 原始字节 dump 
 tools/capture/segment_frames.py  原始流按帧界切分 → frames.ndjson + manifest
 tools/capture/verify_golden.py   金标准完整性对账（流/帧/总 hash）
 tools/capture/GoldenExport/      帧 → 契约 JSONL（C# oracle 解码字段）      decode_error>0 即退出码 3
+tools/capture/dump_body_layout.py 从协议源码派生「体分段布局表」JSON      形状变了即报错
+tools/capture/segmented_check.py  Segmented 段边界自检（真实帧+冻结契约） seg_len 改错 ⇒ rc=4（改错必红）
 tools/capture/capture_baseline.ps1  金标准抓包编排（影子网关+代理+真实客户端）
 tools/client/mir_flow.ps1     真实客户端流程驱动（登录/选角/建角/进游戏/挂机/小退/再进）
 tools/client/account_provision.ps1  测试账号开号（account + account_protection 两表）
@@ -62,6 +64,28 @@ powershell -ExecutionPolicy Bypass -File tools/capture/capture_baseline.ps1
 dotnet run --project tools/capture/GoldenExport -c Release -- `
   --session tests/golden/session-<时间戳>/proxy --out <capture>.jsonl
 ```
+
+**分段布局表（C4/A-9）**：体不是"整段编码"，得按消息号分段解。表**从协议源码派生**、不在导出器里
+再抄一份（口径分叉会静默出错）：
+
+```powershell
+# 1) 派生表（读 crates/protocol/src/frame.rs 的 body_layout()；形状变了直接报错）
+python tools/capture/dump_body_layout.py --frame-rs mir2-rs/crates/protocol/src/frame.rs `
+  --constants mir2-rs/crates/protocol/src/messages.rs --out E:/tmp/body_layout.json
+
+# 2) 按表导出（--verify-roundtrip：段再编码拼回去必须逐字节等于线上原体）
+dotnet run --project tools/capture/GoldenExport -c Release -- `
+  --session tests/golden/session-<时间戳>/proxy --out <capture>.jsonl `
+  --layout E:/tmp/body_layout.json --verify-roundtrip
+
+# 3) Segmented 段边界自检（真实帧 + A 线冻结契约；改错段边界必红）
+python tools/capture/segmented_check.py
+```
+
+三种体布局：`Single`（整段）、`StructThenRest{n}`（`enc(n 字节)` + `enc(其余)`）、
+`Segmented`（N 段各自编码、用线上字面量 `/` 连接；段长/段数/尾分隔符全由表给）。
+`Segmented` 的切法**按表算长度逐段取**，不按分隔符盲切（编码字表里也有 `/`）；
+对不上就标 `layout="segmented(mismatch:…)"` 并让导出器**退出码 4**——坏表不许静默出金标准。
 
 字段口径见 `mir2-rs/tests/golden/README.md`。解码用的是**仓库自己的** `OpenMir2.EncryptUtil`
 （C# oracle），不是 Rust replay 的产物——满足抓包契约的防伪约定。帧界：

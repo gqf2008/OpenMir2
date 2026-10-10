@@ -104,14 +104,14 @@ cargo run -p replay -- tests/golden/<capture>.jsonl
 
 | 文件 | 来源 | 时间 | sha256 |
 |---|---|---|---|
-| `c-line-baseline-c2-20261010.jsonl` | 同机真客户端 `D:\MirClient-run`（**二进制未改**，sha256 `c3cb8f73…c07996`）+ 现网 C# 服务端（未改）；dump 由注入客户端的 `tools/capture/clienthook` 在**进程内** hook `wsock32` 的 send/recv 落盘，客户端直连真实 7000/7100/7200 | 2026-10-10 15:0x | `bcb9e4832b2fad73b0cf3f2f32f367ce2d980a0d247c18a365063217568a0024` |
+| `c-line-baseline-c2-20261010.jsonl` | 同机真客户端 `D:\MirClient-run`（**二进制未改**，sha256 `c3cb8f73…c07996`）+ 现网 C# 服务端（未改）；dump 由注入客户端的 `tools/capture/clienthook` 在**进程内** hook `wsock32` 的 send/recv 落盘，客户端直连真实 7000/7100/7200。**C4 批按分段布局表重导（见下）** | 2026-10-10 15:0x | `012a2aa58a72e4d9ce3026d7699277bbfb05cefb940f7d04449f42992dc52117` |
 
 该抓包 **222 帧**，覆盖 **7/8 阶段**（缺 小退，三条路都被堵住：客户端确认框合成按键打不开、
 顶号只发系统提示不发 528、802 需 GM/多服触发 —— 详见 [C2-交付说明.md](C2-交付说明.md)）。
-本机跑 `replay` 的结果：① **56 条字节回放不符**（集中在 s2c/game 跳 `ident=10`、`ident=811`）、
-② 字段 0 差异、4 个未登记客户端侧号（84/1200/10431/10433）、③ 7/8 ⇒ **RED**。
-① 是本批新打出来的协议侧发现（上批该跳只有 445B 公告，覆盖不到），**不是抓包问题**：② 全过说明解码一致，
-差异在编码侧。
+本机跑 `replay`（**C4 重导后**）：① **2 条字节回放不符**（= C3 同源的 `ident=811` seq 28、`ident=201` seq 66，
+A-8 待补表的其它多段形态）、② 字段 0 差异、未登记号 0、③ 7/8 ⇒ **RED（仅剩覆盖缺口 + 那 2 条）**。
+（C4 之前的老导出文件是 ① 56、act 帧口径假红 66、② 0；**该文件曾是 C4 前的旧 schema**，
+已于本批重导覆盖 —— 见下「C4 补记」。）
 
 **C3 批（2026-10-10，同法补第 8 阶段「小退」）：**
 
@@ -125,7 +125,7 @@ cargo run -p replay -- tests/golden/<capture>.jsonl
 本机 `replay`：③ **8/8 ✓**；① 33 条、② 21 条落在 s2c/game 跳的「体＝两段分别编码拼接」族（A 线已定案、S3 批修）；
 未登记包号 0（C2 报的 84/1200/10431/10433 已登记）。⇒ 仍 RED，但 **8/8 覆盖这一格已闭环**。
 
-**C4 批（2026-10-10）：导出器按分段布局表解码（A-9），两份金标准已用保留的裸 dump 重导。**
+**C4 批（2026-10-10）：导出器按分段布局表解码（A-9），三份金标准都用保留的裸 dump 重导。**
 
 - 布局表**由协议源码派生**（`tools/capture/dump_body_layout.py` 读 `crates/protocol/src/frame.rs` 的
   `body_layout()`，形状变了就直接报错）⇒ 不在这里抄第二份表。当前导出：
@@ -133,7 +133,18 @@ cargo run -p replay -- tests/golden/<capture>.jsonl
 - 新字段（按 A 线契约）：`body_segments:[{len,sha256}]`（单段即单元素）、
   `frame_form:"act"`（仅 payload 首字符 `+` 的 s2c 明文动作帧，不参与头字段对拍）、
   `layout`（`single` / `struct_then_rest` / `struct_then_rest(short)` / `flat_legacy`，便于排查）。
-- 重导后本机 replay：**C3 ① 33→2、② 21→0；C2 ① 0、② 0** ⇒ **M0 ② 归零**（A-9 销账）。
-  余下 ① 2 条 = `ident=811`(seq 28) 与 `ident=201`(seq 75)，属 A-8 待补表的其它多段形态。
-- C4 三条判据实测：同 dump 两次导出 sha256 相同（`c26d48b9…`）✓；把 `struct_len` 故意改成 7 后
-  **② 由 0 变 52**、结果 RED ✓（改错段边界必红）；③ 仍为 C3 八阶段全覆盖、C2 五阶段。
+- 重导后本机 replay（三份都实测）：**C3 ① 33→2、② 21→0；C2 ① 2、② 0（act 口径假红 66→0）；上批 16 帧 ① 0、② 0**
+  ⇒ **M0 ② 归零**（A-9 销账）。余下 ① 2 条 = `ident=811`(C2 seq 28 / C3 seq 28) 与 `ident=201`(C2 seq 66 / C3 seq 75)，
+  属 A-8 待补表的其它多段形态（**C2 与 C3 同源**，不是两份不同的问题）。
+- **C4 补记（同批发现并修）**：入库的 C2 金标准此前一直是 **C4 之前的旧 schema**
+  （缺 `frame_form`/`layout`/`body_segments`），跑当前 `replay` 会给**假红**（act 帧口径不符 66 条 + `②` 21 条）；
+  已用保留的裸 dump 按当前导出器重导覆盖：sha256 由 `bcb9e483…` → **`012a2aa5…`**，② 21→0、act 口径假红 66→0。
+  （教训：**改了导出器口径就要重导并重登记，不能只改登记行**——旧 artifact 会让下游对新口径产生假红/假绿。）
+- C4 判据实测：同 dump 两次导出 sha256 相同（`c26d48b9…`）✓；把 `struct_len` 故意改成 7 后
+  **② 由 0 变 52**、结果 RED ✓（改错段边界必红）；③ 仍为 C3 八阶段全覆盖、C2 有 7 阶段、上批 5 阶段。
+- **第三种布局 `Segmented` 已按 A 线冻结契约实现**（`count_kind=fixed` / `header_series`，
+  段边界**按表算长度逐段取**、不按分隔符盲切）：`tools/capture/segmented_check.py` 用 C3 裸 dump 的真实帧实测
+  `811 → body_len 60 / [20,20,20]`、`201 → 496 / [124×4]`（= A 线给的值），
+  并在 `--verify-roundtrip` 下证明**各段重新编码拼回去逐字节等于线上原体**；
+  把 `seg_len` 改错一格 ⇒ `segmented(mismatch:…)` + 退出码 4（改错必红）。
+  等 A4 表项落地，重跑 `dump_body_layout.py` 即可（表是派生来的，导出器不用改）⇒ 预期的 ① 2→0。

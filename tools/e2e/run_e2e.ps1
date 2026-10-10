@@ -8,6 +8,8 @@
     1. proxy-selftest    抓包代理三项自测（透传保真/dump 复原/篡改必红）
     2. timeline-selftest 时间线对拍自测
     3. dbsnap-selftest   DB 快照/比对自测（含篡改红检）
+    3b. worldsample-selftest 世界态采样自测（确定性 + 改坐标必红）
+    3c. segmented-check  Segmented 段边界自检（段回编=原字节；seg_len 改错必红）
     4. golden-verify     最新金标准完整性（tests/golden/LATEST 指向的会话）
     5. flow-e2e          真实客户端全流程：阶段序列完整 + 截图非空 + 服务日志无新 ERR 暴涨
     6. bot-smoke         3 个假人登录冒烟（-SkipBots 跳过；完整 200 并发用 run_bots.ps1）
@@ -98,6 +100,16 @@ Add-Result "dbsnap-selftest" ($LASTEXITCODE -eq 0)
 
 python (Join-Path $RepoRoot "tools\worldsample\world_sampler.py") selftest
 Add-Result "worldsample-selftest" ($LASTEXITCODE -eq 0)
+
+# Segmented 段边界自检（C4）：用已入库的 C3 裸 dump 的真实帧 + A 线冻结契约。
+# 需要 GoldenExport 可执行体（缺则现构建）；改错 seg_len 必须 rc=4（改错必红）。
+$gaProj = Join-Path $RepoRoot "tools\capture\GoldenExport\GoldenExport.csproj"
+$gaExe  = Join-Path $RepoRoot "tools\capture\GoldenExport\bin\Debug\net8.0\GoldenExport.exe"
+if (-not (Test-Path $gaExe)) {
+  dotnet build $gaProj -v q --nologo 2>&1 | Out-Null
+}
+python (Join-Path $RepoRoot "tools\capture\segmented_check.py")
+Add-Result "segmented-check" ($LASTEXITCODE -eq 0)
 
 # ---- 4. 金标准完整性 ----
 $latestFile = Join-Path $RepoRoot "tests\golden\LATEST"

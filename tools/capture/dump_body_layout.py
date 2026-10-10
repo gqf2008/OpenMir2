@@ -13,8 +13,17 @@
   "head_block": 16,                 # enc(12B 头) 恒为 16 字符
   "act_prefix": "+",                 # 明文动作帧 payload 首字符（is_act_payload）
   "known_idents": {"SM_TURN": 10, ...},   # 从 mirrors 常量表抓到的名字→值（仅用于人读）
-  "layouts": {"10": {"kind": "struct_then_rest", "struct_len": 8}, ...}
+  "layouts": {"10": {"kind": "struct_then_rest", "struct_len": 8},
+              "201": {"kind": "segmented", "seg_len": 124, "sep": 47,
+                      "trailing_sep": true, "count_kind": "header_series"},
+              "811": {"kind": "segmented", "seg_len": 20, "sep": 47,
+                      "trailing_sep": false, "count_kind": "fixed", "count": 3}, ...}
 }
+
+第三种形态（A 线 A4 冻结的契约，见 `crates/protocol/src/frame.rs` 的 `BodyLayout::Segmented`）：
+体 = N 段各自编码、**用线上字面量分隔符连接**（811 固定 3 段无尾分隔；201 每件物品一段、有尾分隔、
+段数取头里的 series）。段长/段数/分隔符/尾分隔符**全部由表给出** ⇒ 选错任一项都编不出原字节，
+所以这是真判据而不是"搜出来的切法"。
 
 用法：python dump_body_layout.py --frame-rs <...>frame.rs --constants <...>messages.rs --out layout.json
 """
@@ -66,8 +75,50 @@ def parse_body_layout(frame_rs, consts):
                 raise SystemExit(f"解析失败：常量 {n} 不在 messages.rs 里（拼写变了？）")
             layouts[str(consts[n])] = {"kind": "struct_then_rest", "struct_len": slen,
                                        "name": n}
+    # Segmented（A4 冻结契约）：BodyLayout::Segmented { seg_len: N, sep: b'/',
+    #   trailing_sep: true/false, count: SegCount::Fixed(3) | SegCount::HeaderSeries }
+    seg_re = re.compile(
+        r"((?:messages::[A-Z0-9_]+\s*\|\s*)*messages::[A-Z0-9_]+)\s*=>\s*\{\s*"
+        r"BodyLayout::Segmented\s*\{(.*?)\}\s*\}", re.S)
+    for mm in seg_re.finditer(body):
+        names = re.findall(r"messages::([A-Z0-9_]+)", mm.group(1))
+        spec = mm.group(2)
+
+        def num(key):
+            m2 = re.search(key + r"\s*:\s*(\d+)", spec)
+            if not m2:
+                raise SystemExit("解析失败：Segmented 缺 %s（%s）—— 形状变了，先人工核对" % (key, names))
+            return int(m2.group(1))
+
+        seg_len = num("seg_len")
+        m2 = re.search(r"sep\s*:\s*b?'(.)'", spec) or re.search(r'sep\s*:\s*b"(.)"', spec)
+        if not m2:
+            raise SystemExit("解析失败：Segmented 缺 sep（%s）" % (names,))
+        sep = ord(m2.group(1))
+        m2 = re.search(r"trailing_sep\s*:\s*(true|false)", spec)
+        if not m2:
+            raise SystemExit("解析失败：Segmented 缺 trailing_sep（%s）" % (names,))
+        trailing = m2.group(1) == "true"
+        m2 = re.search(r"count\s*:\s*SegCount::(Fixed\s*\(\s*(\d+)\s*\)|HeaderSeries)", spec)
+        if not m2:
+            raise SystemExit("解析失败：Segmented 缺 count/SegCount（%s）" % (names,))
+        entry = {"kind": "segmented", "seg_len": seg_len, "sep": sep, "trailing_sep": trailing}
+        if m2.group(2):
+            entry["count_kind"] = "fixed"
+            entry["count"] = int(m2.group(2))
+        else:
+            entry["count_kind"] = "header_series"
+        for n in names:
+            if n not in consts:
+                raise SystemExit("解析失败：常量 %s 不在 messages.rs 里" % n)
+            entry_with_name = dict(entry, name=n)
+            layouts[str(consts[n])] = entry_with_name
+
+    if "BodyLayout::Segmented" in body and not any(v["kind"] == "segmented" for v in layouts.values()):
+        raise SystemExit("解析失败：body_layout() 里出现 BodyLayout::Segmented 但本工具解析不出任何一项 "
+                         "—— 形状变了，报错而不是静默少一档（免得导出一张缺项的错表）")
     if not layouts:
-        raise SystemExit("解析失败：body_layout() 里没有任何 StructThenRest 分支（表被清空或形状变了）")
+        raise SystemExit("解析失败：body_layout() 里没有任何 StructThenRest/Segmented 分支（表被清空或形状变了）")
     if "=> BodyLayout::Single" not in body.replace(" ", " ") and "_ => BodyLayout::Single" not in body:
         print("警告：body_layout() 里没看到 `_ => BodyLayout::Single` 兜底分支，请人工确认", file=sys.stderr)
     return {"head_block": head_block, "act_prefix": act_prefix, "layouts": layouts}
@@ -88,9 +139,12 @@ def main():
 
     with open(args.out, "w", encoding="utf-8", newline="\n") as f:
         json.dump(table, f, ensure_ascii=False, indent=2, sort_keys=True)
-    print("LAYOUT_OK head_block=%d act_prefix=%r struct_then_rest=%s -> %s" % (
-        table["head_block"], table["act_prefix"],
-        {k: v["struct_len"] for k, v in table["layouts"].items()}, args.out))
+    summary = {k: (v.get("struct_len") if v["kind"] == "struct_then_rest" else
+                   "seg(L=%s,sep=%s,trail=%s,%s)" % (v.get("seg_len"), v.get("sep"),
+                                                     v.get("trailing_sep"), v.get("count_kind")))
+               for k, v in table["layouts"].items()}
+    print("LAYOUT_OK head_block=%d act_prefix=%r layouts=%s -> %s" % (
+        table["head_block"], table["act_prefix"], summary, args.out))
 
 
 if __name__ == "__main__":
