@@ -33,6 +33,7 @@ tick 服务时延（`tick_ms_*`）
 """
 import argparse
 import json
+import os
 import sys
 
 DEFAULT_THRESHOLDS = {
@@ -240,6 +241,107 @@ def cmd_selftest(_args):
     return 0
 
 
+def svg_curve(series, width=560, height=180, title="", y_label="", x_label=""):
+    """零依赖 SVG 折线图（三档曲线要能入库，不引 matplotlib）。
+    series: [(label, [(x, y), ...]), ...]"""
+    if not series:
+        return ""
+    xs = [p[0] for _, pts in series for p in pts]
+    ys = [p[1] for _, pts in series for p in pts]
+    xmin, xmax = min(xs), max(xs)
+    ymin, ymax = 0.0, max(ys) if max(ys) > 0 else 1.0
+    pad_l, pad_r, pad_t, pad_b = 46, 12, 22, 28
+    w, h = width - pad_l - pad_r, height - pad_t - pad_b
+
+    def px(x):
+        return pad_l + (0 if xmax == xmin else (x - xmin) / (xmax - xmin) * w)
+
+    def py(y):
+        return pad_t + h - (y - ymin) / (ymax - ymin) * h
+
+    colors = ["#2563eb", "#dc2626", "#16a34a", "#9333ea", "#ea580c"]
+    out = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
+           f'viewBox="0 0 {width} {height}" font-family="sans-serif" font-size="11">',
+           f'<rect width="{width}" height="{height}" fill="#fff"/>',
+           f'<text x="{pad_l}" y="14" font-size="12" font-weight="bold">{title}</text>',
+           f'<line x1="{pad_l}" y1="{pad_t + h}" x2="{pad_l + w}" y2="{pad_t + h}" stroke="#94a3b8"/>',
+           f'<line x1="{pad_l}" y1="{pad_t}" x2="{pad_l}" y2="{pad_t + h}" stroke="#94a3b8"/>',
+           f'<text x="4" y="{pad_t + 8}">{ymax:.0f}</text>',
+           f'<text x="4" y="{pad_t + h}">0</text>',
+           f'<text x="{pad_l + w - 60}" y="{height - 6}">{x_label}</text>',
+           f'<text x="4" y="{pad_t - 8}">{y_label}</text>']
+    for i, (label, pts) in enumerate(series):
+        c = colors[i % len(colors)]
+        d = " ".join(("M" if j == 0 else "L") + f"{px(x):.1f},{py(y):.1f}" for j, (x, y) in enumerate(pts))
+        out.append(f'<path d="{d}" fill="none" stroke="{c}" stroke-width="1.8"/>')
+        for x, y in pts:
+            out.append(f'<circle cx="{px(x):.1f}" cy="{py(y):.1f}" r="2.4" fill="{c}"/>')
+        out.append(f'<text x="{pad_l + 6 + i * 92}" y="{pad_t + 12}" fill="{c}">{label}</text>')
+    out.append("</svg>")
+    return "\n".join(out)
+
+
+def cmd_aggregate(args):
+    """三档汇总 → SUMMARY.md（表 + 曲线）。输入 = load_gate_summary.json。"""
+    data = json.load(open(args.summary, encoding="utf-8"))
+    reports = data.get("reports", [])
+    outdir = args.out_dir or os.path.dirname(os.path.abspath(args.summary))
+    lines = ["# 压测报告（C6 载荷门禁）", ""]
+    lines.append(f"- 口径：{data.get('caliber', '见 tools/botload/load_report.py')}")
+    lines.append(f"- 档位：{data.get('tiers')}；连接错峰 {data.get('stagger_ms')}ms/个；稳态时长 {data.get('hold_sec')}s")
+    lines.append(f"- 判据（§6 M5）：登录成功率 100% / 稳态掉线 0 / tick P99 ≤ 100ms")
+    lines.append("")
+    lines.append("| 档位 | 登录成功率 | 稳态掉线 | 连不上 | tick P50 | P90 | P99 | max | 稳态样本 | 上线耗时 | 结论 |")
+    lines.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
+    for t in sorted(reports, key=lambda r: r.get("count", 0)):
+        lines.append("| {count} | {lsp}% | {cls} | {cr} | {p50} | {p90} | {p99} | {mx} | {n} | {ramp} | {v} |".format(
+            count=t.get("count"), lsp=t.get("login_success_pct"), cls=t.get("conn_lost_steady"),
+            cr=t.get("conn_refused"), p50=t.get("tick_p50_ms"), p90=t.get("tick_p90_ms"),
+            p99=t.get("tick_p99_ms"), mx=t.get("tick_max_ms"), n=t.get("samples"),
+            ramp=((str(round(t["ramp_ms"] / 1000.0, 1)) + "s") if t.get("ramp_ms") is not None else "-"),
+            v=t.get("verdict")))
+    lines.append("")
+    # 曲线 1：tick P99 / P50 / max vs 档位
+    pts_p99 = [(t["count"], t["tick_p99_ms"] or 0) for t in sorted(reports, key=lambda r: r.get("count", 0))]
+    pts_p50 = [(t["count"], t["tick_p50_ms"] or 0) for t in sorted(reports, key=lambda r: r.get("count", 0))]
+    pts_mx = [(t["count"], t["tick_max_ms"] or 0) for t in sorted(reports, key=lambda r: r.get("count", 0))]
+    lines.append("## 曲线 1：tick 服务时延 vs 假人数（目标 P99 ≤ 100ms）")
+    lines.append("")
+    lines.append("```html")
+    lines.append(svg_curve([("P99", pts_p99), ("P50", pts_p50), ("max", pts_mx)],
+                           title="tick latency vs bots", y_label="ms", x_label="bots"))
+    lines.append("```")
+    # 曲线 2：GameSvr 内存曲线（各档）
+    mem_series = []
+    for t in sorted(reports, key=lambda r: r.get("count", 0)):
+        g = (t.get("mem") or {}).get("GameSrv")
+        if g:
+            mem_series.append((f"{t['count']} bots", [(t["count"], g.get("ws_peak_mb", 0)),
+                                                      (t["count"], g.get("ws_mean_mb", 0))]))
+    lines.append("")
+    lines.append("## 曲线 2：GameSvr 内存（峰值/均值 vs 假人数）")
+    lines.append("")
+    lines.append("```html")
+    lines.append(svg_curve([(lbl, pts) for lbl, pts in mem_series],
+                           title="GameSvr WS vs bots", y_label="MB", x_label="bots"))
+    lines.append("```")
+    lines.append("")
+    lines.append("## 各进程内存（末档）")
+    lines.append("")
+    last = sorted(reports, key=lambda r: r.get("count", 0))[-1] if reports else None
+    if last and last.get("mem"):
+        lines.append("| 进程 | 峰值 WS | 均值 WS | 私有峰值 | 末段斜率 | 窗口 |")
+        lines.append("| --- | --- | --- | --- | --- | --- |")
+        for proc, m in sorted(last["mem"].items()):
+            lines.append(f"| {proc} | {m['ws_peak_mb']}MB | {m['ws_mean_mb']}MB | {m['priv_peak_mb']}MB | "
+                         f"{m['slope_tail_mb_per_s']}MB/s | {m['window_s']}s |")
+    md_path = os.path.join(outdir, "SUMMARY.md")
+    with open(md_path, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(lines) + "\n")
+    print(f"AGGREGATE_OUT {md_path}")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description="假人压测指标归算（C6）")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -250,10 +352,15 @@ def main():
     s.add_argument("--stagger-ms", type=int, default=0)
     s.add_argument("--hold-sec", type=int, default=0)
     s.add_argument("--out", default="")
+    a = sub.add_parser("aggregate")
+    a.add_argument("--summary", required=True, help="load_gate_summary.json")
+    a.add_argument("--out-dir", default="")
     sub.add_parser("selftest")
     args = ap.parse_args()
     if args.cmd == "summarize":
         return cmd_summarize(args)
+    if args.cmd == "aggregate":
+        return cmd_aggregate(args)
     return cmd_selftest(args)
 
 

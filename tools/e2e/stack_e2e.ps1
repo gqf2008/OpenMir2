@@ -43,6 +43,18 @@ $StartAll = "E:\MirServer\start-all.ps1"
 $GatePort = 7000
 $results = New-Object System.Collections.Generic.List[object]
 
+function Invoke-Child([string]$ScriptPath, [string[]]$ChildArgs) {
+    # 子进程的 stderr 在 $ErrorActionPreference="Stop" 下会变成父进程的终止错误
+    # （本轮实测：开号脚本报一句错就把整条 stack_e2e 链打断，表现为"卡住/无输出"）。
+    # 统一走这里：临时放宽为 Continue，只看退出码。
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $out = & powershell -ExecutionPolicy Bypass -File $ScriptPath @ChildArgs 2>&1
+        return [pscustomobject]@{ rc = $LASTEXITCODE; out = @($out) }
+    } finally { $ErrorActionPreference = $prev }
+}
+
 function Add-Result([string]$Name, [string]$State, [string]$Detail = "") {
     $results.Add([pscustomobject]@{ name = $Name; state = $State; detail = $Detail })
     Write-Output ("{0,-22} {1} {2}" -f $Name, $State, $Detail)
@@ -65,18 +77,27 @@ function Wait-Port([int]$Port, [int]$TimeoutSec) {
 if (-not $NoStartStack) {
     if (-not (Test-Path $StartAll)) { throw "找不到 $StartAll" }
     Write-Output "STACK stop (干净基线)..."
-    & powershell -ExecutionPolicy Bypass -File $StartAll -Stop 2>&1 | Out-Null
+    [void](Invoke-Child $StartAll @("-Stop"))
 
     if ($ProvisionAccounts) {
+        # 开号要先连库，而 start-all.ps1 -Stop 会把 MySQL 一起停掉 ⇒ 这里**只单独起 MySQL**
+        # （不能先起整栈：LoginSrv 启动时把账号读进内存，之后再建的账号它看不到）
+        if (-not (Test-Listen 3306)) {
+            Write-Output "PROVISION 前置：单独起 MySQL（先不起 LoginSrv）..."
+            Start-Process -FilePath "D:\mysql\mariadb-10.11.19-winx64\bin\mysqld.exe" `
+                -ArgumentList "--datadir=D:\mysql\data", "--port=3306", "--bind-address=127.0.0.1", "--console" `
+                -RedirectStandardOutput "E:\MirServer\logs\MySQL.out.log" `
+                -RedirectStandardError "E:\MirServer\logs\MySQL.err.log" -WindowStyle Hidden | Out-Null
+            if (-not (Wait-Port 3306 40)) { Add-Result "provision" "RED" "MySQL 起不来"; exit 1 }
+        }
         Write-Output ("PROVISION " + $ProvisionPrefix + " x " + $ProvisionCount + "（必须在起 LoginSrv 之前）...")
-        $out = & powershell -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "tools\client\account_provision.ps1") `
-            -Prefix $ProvisionPrefix -Count $ProvisionCount 2>&1
-        $out | ForEach-Object { Write-Output ("  " + $_) }
-        if ($LASTEXITCODE -ne 0) { Add-Result "provision" "RED" "开号失败" } else { Add-Result "provision" "GREEN" "$ProvisionCount 个" }
+        $r = Invoke-Child (Join-Path $RepoRoot "tools\client\account_provision.ps1") @("-Prefix", $ProvisionPrefix, "-Count", "$ProvisionCount")
+        $r.out | ForEach-Object { Write-Output ("  " + $_) }
+        if ($r.rc -ne 0) { Add-Result "provision" "RED" ("开号失败 rc=" + $r.rc) } else { Add-Result "provision" "GREEN" "$ProvisionCount 个" }
     }
 
     Write-Output "STACK start..."
-    & powershell -ExecutionPolicy Bypass -File $StartAll 2>&1 | Out-Null
+    [void](Invoke-Child $StartAll @())
     $portOk = Wait-Port $GatePort 120
     Add-Result "stack-up" ($(if ($portOk) { "GREEN" } else { "RED" })) ("LoginGate:$GatePort")
     if (-not $portOk) {
@@ -93,8 +114,9 @@ $e2eArgs = @()
 if ($SkipFlow) { $e2eArgs += "-SkipFlow" }
 if ($SkipBots) { $e2eArgs += "-SkipBots" }
 if ($SelfTestRed) { $e2eArgs += "-SelfTestRed" }
-& powershell -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "tools\e2e\run_e2e.ps1") @e2eArgs
-$e2eRc = $LASTEXITCODE
+$rE2e = Invoke-Child (Join-Path $RepoRoot "tools\e2e\run_e2e.ps1") $e2eArgs
+$rE2e.out | ForEach-Object { Write-Output $_ }
+$e2eRc = $rE2e.rc
 if ($SelfTestRed) {
     # 红检：run_e2e -SelfTestRed 要求一个不存在的阶段，必须 RED（rc != 0）；否则判据失效
     if ($e2eRc -ne 0) { Add-Result "run_e2e(red-check)" "GREEN" "按预期变红" }
@@ -106,15 +128,18 @@ if ($SelfTestRed) {
 # ---- 3. 压测档位（可选）----
 if ($LoadTiers.Count -gt 0) {
     $lgArgs = @("-Tiers", ($LoadTiers -join ","), "-HoldSec", "$HoldSec")
-    if ($RestartStackPerTier) { $lgArgs += "-RestartStackPerTier" }
-    & powershell -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "tools\botload\load_gate.ps1") @lgArgs
-    $lgRc = $LASTEXITCODE
+    # 多档连跑必须换干净栈：上一档结束时成百上千假人同时断连 = 网关抖动
+    # （本工程实测过 → GameSvr 网关槽位 UserList 置空 → SetGateUserList NRE），所以这里自动带上
+    if ($RestartStackPerTier -or $LoadTiers.Count -gt 1) { $lgArgs += "-RestartStackPerTier" }
+    $rLg = Invoke-Child (Join-Path $RepoRoot "tools\botload\load_gate.ps1") $lgArgs
+    $rLg.out | ForEach-Object { Write-Output $_ }
+    $lgRc = $rLg.rc
     Add-Result "load-gate" ($(if ($lgRc -eq 0) { "GREEN" } else { "RED" })) ($LoadTiers -join "/")
 }
 
 # ---- 4. 收尾 ----
 if ($StopStackAtEnd) {
-    & powershell -ExecutionPolicy Bypass -File $StartAll -Stop 2>&1 | Out-Null
+    [void](Invoke-Child $StartAll @("-Stop"))
     Add-Result "stack-stop" "GREEN" "-StopStackAtEnd"
 }
 

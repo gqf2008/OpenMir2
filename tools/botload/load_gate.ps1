@@ -20,7 +20,7 @@
       `tools/client/account_provision.ps1 -Prefix loadbot -Count 1000`
       （LoginSrv 启动时把账号读进内存，之后再建它看不到）
 
-  为什么默认 `-RestartStackPerTier`：本工程实测过"网关连接抖动会让 GameSvr 网关槽位 UserList 置空 →
+  为什么多档连跑要 `-RestartStackPerTier`（stack_e2e 的多档路径会自动带上）：本工程实测过"网关连接抖动会让 GameSvr 网关槽位 UserList 置空 →
   进世界玩家在 SetGateUserList 上 NRE 死循环"（§C1 交付说明）。一档结束时**成百上千个假人同时断连**
   正是这种抖动 ⇒ 不重启就测下一档，会拿被污染的栈做基线。重启一次约 40s，换口径干净。
 
@@ -65,7 +65,8 @@ if ($SelfTestRed) {
 }
 
 if ($OutDir -eq "") {
-    $OutDir = Join-Path $RepoRoot ("tests\botload\load-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
+    # 默认落在 tests/loadgate/（**可入库**：报告本身是交付物）；大日志在 .gitignore 里排除
+    $OutDir = Join-Path $RepoRoot ("tests\loadgate\load-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
 }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 

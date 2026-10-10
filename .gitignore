@@ -368,3 +368,7 @@ tests/golden/*/shadow/
 tests/botload/
 tests/e2e/
 tools/capture/clienthook/bin/
+
+# 压测（C6）：保留小体积指标（load_stats/mem/report/summary），只排除大日志
+tests/loadgate/**/*.log
+tests/loadgate/**/*.err.log

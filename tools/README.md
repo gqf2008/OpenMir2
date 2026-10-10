@@ -19,9 +19,12 @@ tools/capture/capture_baseline.ps1  金标准抓包编排（影子网关+代理+
 tools/client/mir_flow.ps1     真实客户端流程驱动（登录/选角/建角/进游戏/挂机/小退/再进）
 tools/client/account_provision.ps1  测试账号开号（account + account_protection 两表）
 tools/botload/run_bots.ps1    假人压测驱动（BotSrv N 并发登录）              -SelfTestRed
+tools/botload/load_gate.ps1   压测档位（200/500/1000：登录率/掉线/tick P99/内存） -SelfTestRed（无监听端口必红）
+tools/botload/load_report.py  档位指标归算（P50/P90/P99、内存斜率、§M5 判据）  selftest（含尾部敏感）
 tools/logdiff/timeline.py     多源日志归一 + 时间线对拍                      selftest（2 项）
 tools/dbsnap/dbsnap.py        MySQL 快照/字段级比对                          selftest（2 项）
-tools/e2e/run_e2e.ps1         E2E 回归套件（工具自测+金标准+流程+冒烟）      -SelfTestRed
+tools/e2e/run_e2e.ps1         E2E 回归套件（工具自测+金标准+流程+冒烟）      -SelfTestRed；-FailOnSkip 严格模式
+tools/e2e/stack_e2e.ps1       **整栈 E2E 一条命令**（停栈→开号→起栈→run_e2e→压测档→收尾） -SelfTestRed
 tools/worldsample/world_sampler.py  世界态采样/对拍（位置·AOI·背包·金币·tick）  selftest（确定性 + 改坏必红）
 ```
 
@@ -114,12 +117,17 @@ python tools/capture/golden_fresh_check.py --regen --update-registry
 ## 2. 假人压测
 
 ```powershell
-# 200 并发登录（账号 = 前缀+序号，密码 = 账号名；-NewAccount 先注册）
+# 200 并发登录冒烟（账号 = 前缀+序号，密码 = 账号名）
 powershell -ExecutionPolicy Bypass -File tools/botload/run_bots.ps1 -Count 200 -Prefix loadbot -NewAccount
+powershell -ExecutionPolicy Bypass -File tools/botload/run_bots.ps1 -SelfTestRed   # 红检：无监听端口必须判失败
 
-# 红检（指向无监听端口，必须判失败）
-powershell -ExecutionPolicy Bypass -File tools/botload/run_bots.ps1 -SelfTestRed
+# 压测档位（C6）：登录成功率 / 掉线 / tick P99 / 内存曲线，判据 = §6 M5
+powershell -ExecutionPolicy Bypass -File tools/botload/load_gate.ps1 -Tiers 200,500,1000 -RestartStackPerTier
 ```
+
+**压测口径**（tick 服务时延 = 假人收到 `#+GD/<rtime>!` 的时刻 − 帧里的 `rtime`，两侧共用；
+Rust 侧必须同样发 `+GD/<rtime>` 且用同一时钟语义，否则曲线不可比）——
+完整定义、量化下限、判据与踩坑见 [botload/README.md](botload/README.md)。
 
 底层是车间里的 `src/BotSrv`（headless 机器人，完整客户端协议栈）。BotSrv 上游被「调整项目
 结构」改坏过，无法编译，本项目补了 `src/BotSrv/SocketShim.cs`（`ScoketClient`/`DSCClient*`
@@ -154,6 +162,10 @@ python tools/dbsnap/dbsnap.py diff tests/dbsnap/before tests/dbsnap/after
 
 ## 5. E2E 回归套件
 
+```powershell
+# 整栈一条命令（C6）：停栈 →（可选）批量开号 → 起栈 → 工具自测+金标准+客户端流程+假人冒烟 →（可选）压测档位
+powershell -ExecutionPolicy Bypass -File tools/e2e/stack_e2e.ps1 -ProvisionAccounts -ProvisionCount 1000 -SkipFlow -LoadTiers 200
+```
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools/e2e/run_e2e.ps1            # 全量（含真实客户端流程 + 3 假人冒烟）
 powershell -ExecutionPolicy Bypass -File tools/e2e/run_e2e.ps1 -SelfTestRed   # 红检：断言一个不存在的阶段，必须 RED

@@ -28,7 +28,6 @@ param(
 $ErrorActionPreference = "Stop"
 if ($Password -eq "") { $Password = $Account }
 
-if ($Account -eq "") { throw "要么给 -Account，要么给 -Prefix + -Count" }
 
 function Invoke-Mysql([string]$Sql) {
   # mysql.exe 会往 stderr 打横幅/分隔线；ErrorActionPreference=Stop 下会被当成终止错误
@@ -51,7 +50,7 @@ if ($Prefix -ne "" -and $Count -gt 0) {
   Invoke-Mysql ("INSERT IGNORE INTO mir2_account.account " +
                 "(Account,PassWord,PayMode,Seconds,State,CreateTime,ModifyTime,LastLoginTime) " +
                 "SELECT CONCAT('$Prefix', seq-1), CONCAT('$Prefix', seq-1), 0,0,0,$now,$now,0 " +
-                "FROM seq_1_to_$Count") | Out-Null
+                "FROM mir2_account.seq_1_to_$Count") | Out-Null
   # account_protection：UserName/Quiz1/2 非空（否则 LoginSrv 回 SM_NEEDUPDATE_ACCOUNT）
   Invoke-Mysql ("INSERT INTO mir2_account.account_protection " +
                 "(AccountId,UserName,Birthday,Quiz1,Answer1,Quiz2,Answer2) " +
@@ -64,6 +63,7 @@ if ($Prefix -ne "" -and $Count -gt 0) {
   Write-Output "BULK_OK prefix=$Prefix count=$Count -> account=$n protection=$np（幂等：已存在的不重复建）"
   exit 0
 }
+if ($Account -eq "") { throw "要么给 -Account，要么给 -Prefix + -Count" }
 $exists = Invoke-Mysql "SELECT Id FROM mir2_account.account WHERE Account='$Account'"
 if ($exists) {
   Write-Output "EXISTS: $Account (Id=$exists) —— 补资料行（Quiz2 等不能为空，否则登录会被要求补填）"
