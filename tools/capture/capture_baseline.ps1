@@ -69,16 +69,20 @@ $Gates = @(
   @{ Name = "RunGate";   Exe = "GameGate.exe";  Ports = @(7200, 7201, 7202) }
 )
 # 影子网关的插桩方式（2026-10-10 实测定型）：
-#   LoginGate / RunGate —— **只改绑定地址到 127.0.0.2，端口保持原值**：
-#     客户端仍然拨 127.0.0.1:7000/7200（启动串与 AddrTable 都不用动），代理占住这两个端口，
-#     转发到 127.0.0.2 的同号端口。端口不变很关键：GameSvr 侧进世界的路由按网关端口对齐
-#     （!servertable.txt 给客户端的就是 7200），把网关挪到 17200 会让客户端连得上、
-#     收得到公告，但 LOGINNOTICEOK 之后世界数据再也下不来（实测 v8/v9 卡在 445B）。
-#   SelGate —— 端口是编译期常量且绑定 IPAddress.Any（0.0.0.0），没法用换地址的办法避开；
-#     只能改影子 DLL 的常量到 17100，代理 127.0.0.1:7100 → 127.0.0.1:17100。
-#     这一跳的数据走连接本身、与端口无关，实测登录/选角全程正常。
-$ShadowBindAddr = "127.0.0.2"
-$ProxyMap = @{ 7000 = "127.0.0.2:7000"; 7100 = "127.0.0.1:17100"; 7200 = "127.0.0.2:7200" }
+#   SelGate —— 监听端口是编译期常量（GateShare.GatePort）且绑 IPAddress.Any，
+#     config 里的 GatePort0 是死配置 ⇒ 只能改影子 DLL 的 IL 常量到 17100。
+#   LoginGate / RunGate —— 改影子 config 的**监听端口** +10000（绑定地址保持 127.0.0.1）。
+# 已知代价（写在这里免得后人重踩）：RunGate 挪到 17200 后，GameSvr 侧「进世界」的路由
+# 按网关端口对齐（!servertable.txt 发给客户端的端口就是 7200），客户端能连上、收得到公告，
+# 但回完 CM_LOGINNOTICEOK 之后世界数据再也下不来（抓包里 7200 跳 s2c 只有 445B 的公告）。
+# 因此本拓扑抓到的金标准覆盖到「进世界（公告确认）」为止。
+# 试过但**未走通**的替代拓扑（写在交付说明里，别人别再从头试）：把影子网关绑到 127.0.0.2、
+# 端口保持原值、代理占 127.0.0.1 原端口 —— 理论上端口语义不变、世界数据应能下来，
+# 实测卡在「影子 RunGate 仍占着 127.0.0.1:7200、代理绑不上」这一步
+# （GameGate 的 GateAddress* 只有一个键，另外两个 Gate 条目回落默认 127.0.0.1）。
+# ⇒ 要补齐 移动/攻击/小退 阶段，正路是让 oracle 自己就按可插桩的端口跑（见交付说明"解除判据"）。
+$ShadowBindAddr = "127.0.0.1"
+$ProxyMap = @{ 7000 = "127.0.0.1:17000"; 7100 = "127.0.0.1:17100"; 7200 = "127.0.0.1:17200" }
 
 function Test-PortListen([int]$Port) {
   # 纯 .NET 查监听表：不开连接（TCP 连上去探活会在 GameGate 造幻影用户并触发
@@ -119,19 +123,20 @@ function Stop-ShadowGates {
     Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
   }
 }
-function Patch-GateBindAddr([string]$ConfPath, [string]$KeyPrefix) {
+function Patch-GatePorts([string]$ConfPath) {
   # config.conf 是 GBK：按字节读写，避免 PS 默认编码吃掉中文 Title。
-  # KeyPrefix 只传**本网关自己的监听地址**那一组键：
-  #   LoginGate → GateAddr*；RunGate → GateAddress*（GameGate/Conf/ConfigManager.cs:
-  #   GateAddress 是自己的地址、ServerAddr 是它连 GameSvr 的上游地址——**绝不能改 ServerAddr**，
-  #   改错了的现象是影子网关一直"链接游戏引擎[127.0.0.2:5000]拒绝链接"，客户端 7200 连接零字节）。
+  # 只改**监听端口**（GatePort*）+10000；绑定地址与上游地址（ServerAddr*）一律不动——
+  # LoginGate/RunGate 的 ServerAddr* 是它们各自连后端（LoginSrv / GameSvr）的地址，
+  # 改了会把影子网关自己连丢（现象：影子网关刷"链接…拒绝链接"、客户端对应跳零字节）。
   $gbk = [System.Text.Encoding]::GetEncoding(936)
   $text = [System.IO.File]::ReadAllText($ConfPath, $gbk)
-  $pattern = '(?m)^(' + $KeyPrefix + '\d*=)\s*127\.0\.0\.1\s*$'
-  $patched = [regex]::Replace($text, $pattern, ('${1}' + $ShadowBindAddr))
-  if ($patched -eq $text) { throw "config.conf 没找到 $KeyPrefix<N> 监听地址行: $ConfPath" }
+  $patched = [regex]::Replace($text, '(?m)^(GatePort\d*=)(\d+)\s*$', {
+    param($m)
+    $m.Groups[1].Value + ([int]$m.Groups[2].Value + 10000)
+  })
+  if ($patched -eq $text) { throw "config.conf 没找到 GatePort 行: $ConfPath" }
   [System.IO.File]::WriteAllText($ConfPath, $patched, $gbk)
-  Write-Output ("BIND_PATCH " + (Split-Path (Split-Path $ConfPath -Parent) -Leaf) + " $KeyPrefix* -> " + $ShadowBindAddr)
+  Write-Output ("PORT_PATCH " + (Split-Path (Split-Path $ConfPath -Parent) -Leaf) + " GatePort* +10000")
 }
 function Count-DllPortConst([string]$DllPath, [int]$Port) {
   $bytes = [System.IO.File]::ReadAllBytes($DllPath)
@@ -179,8 +184,32 @@ function Invoke-StartAll([string[]]$ExtraArgs, [int]$TimeoutSec = 300) {
     Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
   }
 }
+function Stop-StackProcessesByPath {
+  # start-all -Stop 自己会因 WMI 轮询卡住（已被硬超时兜住），卡住时进程还活着。
+  # 这里按**绝对路径**兜底强杀本栈组件（只认本部署的 exe，不误伤别人起的同名进程）。
+  $exes = @((Join-Path $MySqlHome 'bin\mysqld.exe'))
+  foreach ($g in $Gates) { $exes += (Join-Path $ServerPack "$($g.Name)\$($g.Exe)") }
+  foreach ($c in $CoreServers) { $exes += (Join-Path $c.Dir $c.Exe) }
+  $procs = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+    Where-Object { $_.ExecutablePath -and ($exes -contains $_.ExecutablePath) }
+  foreach ($p in $procs) {
+    Write-Output ("FORCE_KILL " + $p.ExecutablePath + " pid=" + $p.ProcessId)
+    Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+  }
+  Start-Sleep -Seconds 2
+}
+function Assert-ProxyPortsFree([int[]]$Ports, [string]$Why) {
+  # 代理绑 127.0.0.1:<port>；影子网关在同一端口但绑 127.0.0.2，不算冲突。
+  # 因此这里只判定「127.0.0.1 或 0.0.0.0 上是否已有人占」。
+  $listen = [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners()
+  foreach ($p in $Ports) {
+    $busy = $listen | Where-Object { $_.Port -eq $p -and ($_.Address.ToString() -eq "127.0.0.1" -or $_.Address.ToString() -eq "0.0.0.0") }
+    if ($busy) { throw "$Why：127.0.0.1:$p 仍被占用（该被停掉的原网关还在？）" }
+  }
+}
 function Stop-EntireStack {
   Invoke-StartAll @("-Stop") 180
+  Stop-StackProcessesByPath
   Start-Sleep -Seconds 3
 }
 function Start-EntireStack {
@@ -191,7 +220,7 @@ function Start-EntireStack {
 foreach ($p in @(7000, 7100, 7200, 5500, 5600, 5100, 5000, 3306)) {
   if (-not (Test-PortListen $p)) { throw "预检失败：端口 $p 未监听（服务端没起全？先跑 E:\MirServer\start-all.cmd）" }
 }
-foreach ($p in @(17100)) {
+foreach ($p in @(17000, 17100, 17200)) {
   if (Test-PortListen $p) { throw "预检失败：影子端口 $p 已被占用（上次没恢复？先清理）" }
 }
 $selDll = Join-Path $ServerPack "SelGate\SelGate.dll"
@@ -241,8 +270,7 @@ try {
     New-Item -ItemType Directory -Force -Path $dst | Out-Null
     robocopy $src $dst /E /XF "*.log" /XD logs /NFL /NDL /NJH /NJS | Out-Null
     if ($LASTEXITCODE -gt 7) { throw "robocopy 失败 ($LASTEXITCODE): $src" }
-    if ($g.Name -eq "LoginGate") { Patch-GateBindAddr (Join-Path $dst "config.conf") "GateAddr" }
-    elseif ($g.Name -eq "RunGate") { Patch-GateBindAddr (Join-Path $dst "config.conf") "GateAddress" }
+    Patch-GatePorts (Join-Path $dst "config.conf")
     if ($g.Name -eq "SelGate") {
       Patch-DllPortConst (Join-Path $dst "SelGate.dll") 7100 17100 3
     }
@@ -251,14 +279,14 @@ try {
       -RedirectStandardError  (Join-Path $Sess ("shadow-" + $g.Name + ".err.log")) -WindowStyle Hidden | Out-Null
     Write-Output ("SHADOW " + $g.Name + " -> " + $dst)
   }
-  # 影子绑定地址：LoginGate/RunGate 是 127.0.0.2 原端口，SelGate 是 127.0.0.1:17100
-  foreach ($probe in @("$ShadowBindAddr`:7000", "127.0.0.1:17100", "$ShadowBindAddr`:7200")) {
-    $port = [int]($probe.Split(":")[1])
-    if (-not (Wait-PortListen $port 60)) { throw "影子网关端口 $probe 60 秒未起来（看 shadow-*.err.log）" }
+  foreach ($p in @(17000, 17100, 17200)) {
+    if (-not (Wait-PortListen $p 60)) { throw "影子网关端口 $p 60 秒未起来（看 shadow-*.err.log）" }
   }
   Write-Output "SHADOW_GATES_UP"
 
   # ---------- 4. 抓包代理 ----------
+  # 代理要占官方端口：此刻必须真的空着（原网关已停、影子在别的地址上）
+  Assert-ProxyPortsFree @(7000, 7100, 7200) "起代理前"
   New-Item -ItemType Directory -Force -Path $ProxyOut | Out-Null
   $mapArgs = @()
   foreach ($k in $ProxyMap.Keys) { $mapArgs += @("--map", "$k=$($ProxyMap[$k])") }

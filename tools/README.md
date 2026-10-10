@@ -154,23 +154,29 @@ powershell -ExecutionPolicy Bypass -File tools/e2e/run_e2e.ps1 -SelfTestRed   # 
   造出幻影用户（GameSvr 日志出现 `新用户链接`），并触发上面那条 NRE。
 - 假人压测（BotSrv 进程被杀）导致的连接抖动会踩同一条坑：**压测后要起真实客户端前，先重启栈**。
 
-### 部署二进制漂移（2026-10-10 发现，影响「进世界」阶段）
+### 抓包拓扑的代价：进世界数据在游戏跳拿不到（2026-10-10 定位）
 
-`E:\MirServer` 各组件的时间戳不是同一批：
+**先说结论**：同样的客户端 + 栈，**不经抓包插桩时进世界是成功的**
+（`run_e2e.ps1` 的 `flow-world-render` 判据：`05b_after_notice.png` 非黑像素 98.82%，
+角色站在比奇省、HUD 完整）。所以"金标准里进世界为空"是**抓包拓扑**的代价，不是服务端不能进。
 
-| 组件 | 文件时间 |
-| --- | --- |
-| 三个网关 | 2026-10-09 01:18 |
-| `M2GameSvr\OpenMir2.dll` | 2026-10-09 21:53 |
-| `M2GameSvr\M2Server.dll` | **2026-10-10 00:10**（与 `src/GameSvr/bin/Release` 构建产物同刻） |
-| `E:\MirServer\Mir200\`（另一份完整部署） | 2026-10-09 01:32，但 `GameSvr` 是 **Mach-O（macOS）二进制**，本机跑不了 |
+原因：抓包需要代理占住 7000/7100/7200，影子网关因此被挪到 17000/17100/17200；
+而 GameSvr 侧进世界的路由按网关端口对齐（`!servertable.txt` 发给客户端的端口就是 7200）
+⇒ 客户端能连、能收公告，`CM_LOGINNOTICEOK` 之后的世界数据到不了客户端。
+替代拓扑（影子绑 `127.0.0.2`、保原端口、代理占 `127.0.0.1` 原端口）试过但没走通：
+影子 RunGate 仍占着 `127.0.0.1:7200`，代理绑不上（GameGate 的 `GateAddress*` 只有一个键，
+另外两个 Gate 条目回落默认 `127.0.0.1`）。解除判据三条写在
+`mir2-rs/tests/golden/C线-交付说明.md`。
 
-现状：客户端能连到 GameGate、收到 `SM_SENDNOTICE`(658)、回 `CM_LOGINNOTICEOK`(1018)，
-之后服务端**不再发任何字节**（`在线数: 0`，角色在断线时仍被存档）。GameSvr 日志里能看到
-登录脚本 `QManage.txt` / `QFunction-0.txt` 报「脚本错误：CHANGEATTACKMODE / SendScrollMsg /
-WebBrowser / RecallHero」——这些命令在当前源码的 `src/Modules` 里查不到。
-因此「进世界/移动/攻击/小退」这些需要真进世界的阶段，当前栈抓不到；缺的证据与影响面
-见 `tests/golden/session-*/NOTES.md`。
+顺带两条**只登记、未擅改 oracle** 的观察：
+
+- 部署件不是同一批构建：网关 2026-10-09 01:18、`M2GameSvr\OpenMir2.dll` 2026-10-09 21:53、
+  `M2GameSvr\M2Server.dll` 2026-10-10 00:10（= `src/GameSvr/bin/Release`）；
+  `E:\MirServer\Mir200\` 那份完整部署的 `GameSvr` 是 Mach-O（macOS），本机跑不了。
+  GameSvr 日志里的登录脚本报错（`CHANGEATTACKMODE`/`SendScrollMsg`/`WebBrowser`/`RecallHero`
+  在当前源码 `src/Modules` 查不到）同属这一漂移面。
+- **残留的 BotSrv 会让真实客户端进不了世界**：压测被中断留下的旧 BotSrv 持有 GameGate 连接期间，
+  真实客户端一律黑屏（实测 08:09–09:52 如此，杀掉后立刻恢复）。压测后先确认没有残留 BotSrv。
 
 ## 已知边界（accepted risk）
 
