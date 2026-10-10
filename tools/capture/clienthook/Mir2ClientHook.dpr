@@ -21,7 +21,7 @@ library Mir2ClientHook;
 {$APPTYPE CONSOLE}
 
 uses
-  Windows, SysUtils, Winsock;
+  Windows, SysUtils, Classes, Winsock;
 
 const
   MAX_CONNS = 4096;
@@ -343,9 +343,39 @@ var
   orig: Pointer;
   fh: THandle;
   exeName: string;
+  marker: string;
+  markerText: AnsiString;
 begin
   InitializeCriticalSection(GLock);
+  // 无条件留一个加载标记（固定路径，不依赖环境变量）：用来分辨
+  // "DLL 根本没执行 Install" vs "Install 跑了但环境变量是空的"
+  marker := IncludeTrailingPathDelimiter(GetEnvironmentVariable('TEMP')) + 'mir2hook-loaded.txt';
+  fh := CreateFile(PChar(marker), GENERIC_WRITE, FILE_SHARE_READ, nil, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
+  if fh <> INVALID_HANDLE_VALUE then
+  begin
+    markerText := AnsiString('loaded ' + FormatDateTime('hh:nn:ss', Now) +
+      ' env=[' + GetEnvironmentVariable('MIR2_HOOK_OUT') + ']' + #10);
+    WriteAll(fh, PAnsiChar(markerText)^, Length(markerText));
+    CloseHandle(fh);
+  end;
+  // 输出目录两级来源：环境变量优先，其次 DLL 同目录的 hook.conf。
+  // 加 hook.conf 是因为实测"由脚本设 env 再 Start-Process"偶发继承不到（流程里见过 env=[]），
+  // 文件不依赖进程环境，稳得多。hook.conf 内容：第一行＝输出目录。
   GOutDir := GetEnvironmentVariable('MIR2_HOOK_OUT');
+  if GOutDir = '' then
+  begin
+    var confPath := IncludeTrailingPathDelimiter(ExtractFilePath(GetModuleName(HInstance))) + 'hook.conf';
+    if FileExists(confPath) then
+    begin
+      var lines := TStringList.Create;
+      try
+        lines.LoadFromFile(confPath);
+        if lines.Count > 0 then GOutDir := Trim(lines[0]);
+      finally
+        lines.Free;
+      end;
+    end;
+  end;
   if GOutDir = '' then Exit;
   ForceDirectories(GOutDir);
   GList := CreateFile(PChar(GOutDir + '\chunks.ndjson'), GENERIC_WRITE, FILE_SHARE_READ,
