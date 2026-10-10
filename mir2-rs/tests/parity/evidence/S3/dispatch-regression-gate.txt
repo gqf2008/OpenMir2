@@ -1,0 +1,31 @@
+# S3 后续：把 B-8 的 120 行语料固化成回归门禁（卡片关闭后的交办项）
+# 门禁：mir2-rs/tests/parity/script-dispatch/run_dispatch_regression.ps1
+
+===== ① 正跑（期望 GREEN / exit 0） =====
+== 脚本派发回归门禁（B-8 / T-4）
+   语料: E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\s1-oracle-fixes\mir2-rs\tests\parity\script-dispatch\dispatch-regression-120.tsv
+PASS  corpus-sha256  (c0d8b695bbdf3139，期望 c0d8b695bbdf3139)
+      PASS  axis-precondition  (条件 207 成员/动作 352 成员；字段序号≠枚举值 0；两套键不同 0)
+      PASS  corpus-nonempty  (120 行（E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\s1-oracle-fixes\mir2-rs\tests\parity\script-dispatch\dispatch-regression-120.tsv）)
+      PASS  no-index-out-of-range-under-current-rule  (现行口径：0/120 抛)
+      PASS  legacy-rule-still-throws  (旧位移口径：120 抛 / 期望 120)
+      PASS  all-lines-affected-by-shift  (两口径派发不同 120/120)
+      == gate: 5 PASS / 0 FAIL
+   [信息] Rust 仍是旧位移（field_index - 1）：协调者裁定要求同批翻转（设计文档 §17），**待 B 线执行**
+== gate GREEN（语料哈希一致 + 5 条判据全过）
+EXIT=0
+
+===== ② 阳性对照 -SelfTestRed（期望 SELFTEST_RED GREEN / exit 0） =====
+   [信息] Rust 仍是旧位移（field_index - 1）：协调者裁定要求同批翻转（设计文档 §17），**待 B 线执行**
+== SELFTEST_RED GREEN：--force-legacy 下门禁判红（阳性对照成立）
+EXIT=0
+
+===== ③ 篡改语料守卫（追加一行后，期望 hash FAIL → RED / exit 1） =====
+FAIL  corpus-sha256  (1086ae6a8d29937c，期望 c0d8b695bbdf3139)
+EXIT=1
+（还原后哈希：c0d8b695bbdf3139 —— 应等于 expected.json 里的 c0d8b695bbdf3139）
+
+===== ④ -RequireRustFlipped（裁定要求两侧同批翻转；Rust 尚未翻转 ⇒ 期望 RED / exit 1） =====
+   [信息] Rust 仍是旧位移（field_index - 1）：协调者裁定要求同批翻转（设计文档 §17），**待 B 线执行**
+== gate RED（hash_ok=True, gate_rc=0, rust_ok=False）
+EXIT=1

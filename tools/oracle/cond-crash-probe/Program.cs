@@ -39,7 +39,12 @@ internal static class Program
         string dump = null;
         string corpus = null;
         string axis = "C";
+        string dumpShifted = null;
+        int dumpLimit = 0;
+        string expectLegacyOor = null;
         bool audit = false;
+        bool forceLegacy = false;
+        bool gate = false;
         for (int i = 0; i < args.Length; i++)
         {
             switch (args[i])
@@ -52,9 +57,18 @@ internal static class Program
                 case "--verify-corpus": corpus = args[++i]; break;
                 case "--axis": axis = args[++i]; break;
                 case "--axis-audit": audit = true; break;
+                case "--dump-shifted-actions": dumpShifted = args[++i]; break;
+                case "--limit": dumpLimit = int.Parse(args[++i]); break;
+                case "--expect-legacy-oor": expectLegacyOor = args[++i]; break;
+                case "--force-legacy": forceLegacy = true; break;
+                case "--gate": gate = true; corpus = args[++i]; break;
             }
         }
 
+        if (gate)
+        {
+            return RunGate(corpus, axis, expectLegacyOor, forceLegacy);
+        }
         if (audit)
         {
             AxisAudit();
@@ -65,7 +79,8 @@ internal static class Program
         if (line == null && script == null && sweep == null && corpus == null)
         {
             Console.WriteLine("用法：--line <脚本文本> | --script <路径> [--label @xx] | --sweep <Envir 目录> [--dump f]");
-            Console.WriteLine("      | --verify-corpus <dump文件> [--axis C|A]（S3 回归集） | --axis-audit");
+            Console.WriteLine("      | --verify-corpus <dump文件> [--axis C|A] | --axis-audit");
+            Console.WriteLine("      | --gate <语料> [--axis C|A] [--expect-legacy-oor N] [--force-legacy]   ← 回归门禁");
             return 2;
         }
 
@@ -81,7 +96,7 @@ internal static class Program
         }
         if (sweep != null)
         {
-            Sweep(sweep, dump);
+            Sweep(sweep, dump, dumpShifted, dumpLimit);
             return 0;
         }
         if (corpus != null)
@@ -136,7 +151,15 @@ internal static class Program
     /// **现行解析器口径**（与 src/Modules/ScriptEngine/ScriptParsers.cs 同步；S3 起为「存字段序号」）。
     /// 探针复刻这条规则，所以它必须跟着解析器一起改 —— 否则"现状"一栏就失真了。
     /// </summary>
-    private static int ParserCmdCode(string axis, string cmd) => MapOf(axis).TryGetValue(cmd, out int c) ? c : 0;
+    /// <summary>`--force-legacy`：把「现行口径」当成 S3 之前的旧位移来评估 —— 用来做门禁的**阳性对照**
+    /// （不碰源码就能证明"退回旧规则 ⇒ 门禁必红"）。</summary>
+    private static bool _forceLegacy;
+
+    private static int ParserCmdCode(string axis, string cmd)
+    {
+        if (_forceLegacy) { return LegacyShiftedCmdCode(axis, cmd); }
+        return MapOf(axis).TryGetValue(cmd, out int c) ? c : 0;
+    }
 
     private static int ParserCmdCode(string cmd) => ParserCmdCode("C", cmd);
 
@@ -257,13 +280,23 @@ internal static class Program
         catch (Exception ex) { return "OTHER:" + ex.GetType().Name; }
     }
 
-    /// <summary>S3 回归集跑法：逐行对比「现状派发」与「修复口径派发」，并各自跑一遍</summary>
-    private static void VerifyCorpus(string file, string axis)
+    private sealed class CorpusStats
     {
-        if (!File.Exists(file)) { Console.WriteLine($"找不到语料文件: {file}"); return; }
-        int n = 0, curOor = 0, fixOor = 0, dispatchChanged = 0;
-        int fixOk = 0, fixNre = 0, fixOther = 0;
-        var rows = new List<string>();
+        public int Lines;
+        public int TwoRulesDiffer;
+        public int LegacyOor;
+        public int CurrentOor;
+        public int CurOk;
+        public int CurNre;
+        public int CurOther;
+        public readonly List<string> Rows = new List<string>();
+    }
+
+    /// <summary>逐行对比「旧位移口径」与「现行口径」，并各自跑一遍（返回统计，不打印）</summary>
+    private static CorpusStats WalkCorpus(string file, string axis)
+    {
+        var s = new CorpusStats();
+        if (!File.Exists(file)) { return s; }
         foreach (string raw in File.ReadAllLines(file))
         {
             string[] parts = raw.Split('\t');
@@ -271,26 +304,97 @@ internal static class Program
             string text = parts[1].Trim();
             string cmd = text.Split(TextSpitConst, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.ToUpperInvariant();
             if (cmd == null || !MapOf(axis).ContainsKey(cmd)) { continue; }
-            n++;
+            s.Lines++;
             int legacy = LegacyShiftedCmdCode(axis, cmd);   // S3 之前 / Rust 现行
-            int cur = ParserCmdCode(axis, cmd);              // 现行解析器口径
-            if (legacy != cur) { dispatchChanged++; }
+            int cur = ParserCmdCode(axis, cmd);              // 现行解析器口径（--force-legacy 时=旧位移）
+            if (legacy != cur) { s.TwoRulesDiffer++; }
             string legacyRes = RunAndClassify(text, legacy);
             string curRes = RunAndClassify(text, cur);
-            if (legacyRes == "OOR") { curOor++; }
-            if (curRes == "OOR") { fixOor++; }
-            if (curRes == "OK") { fixOk++; } else if (curRes == "NRE") { fixNre++; } else { fixOther++; }
-            rows.Add($"{parts[0]}\t{text}\t旧位移:{HandlerName(axis, legacy)}({legacyRes})\t现行:{HandlerName(axis, cur)}({curRes})");
+            if (legacyRes == "OOR") { s.LegacyOor++; }
+            if (curRes == "OOR") { s.CurrentOor++; }
+            if (curRes == "OK") { s.CurOk++; } else if (curRes == "NRE") { s.CurNre++; } else { s.CurOther++; }
+            s.Rows.Add($"{parts[0]}\t{text}\t旧位移:{HandlerName(axis, legacy)}({legacyRes})\t现行:{HandlerName(axis, cur)}({curRes})");
         }
+        return s;
+    }
+
+    /// <summary>S3 回归集跑法（人读模式）</summary>
+    private static void VerifyCorpus(string file, string axis)
+    {
+        if (!File.Exists(file)) { Console.WriteLine($"找不到语料文件: {file}"); return; }
+        CorpusStats s = WalkCorpus(file, axis);
         Console.WriteLine($"== 回归集 {file}（轴={(axis == "A" ? "动作" : "条件")}）");
-        Console.WriteLine($"行数                          : {n}");
-        Console.WriteLine($"两口径派发目标不同的行数      : {dispatchChanged}");
-        Console.WriteLine($"旧位移口径下抛 IndexOutOfRange: {curOor}   ← S3 修复前的症状 / Rust 现行");
-        Console.WriteLine($"现行口径下抛 IndexOutOfRange  : {fixOor}   ← **修复的验收线（应为 0）**");
-        Console.WriteLine($"现行口径下：正常返回 {fixOk} / 探针空 stub 致 NRE（不可判）{fixNre} / 其它 {fixOther}");
+        Console.WriteLine($"行数                          : {s.Lines}");
+        Console.WriteLine($"两口径派发目标不同的行数      : {s.TwoRulesDiffer}");
+        Console.WriteLine($"旧位移口径下抛 IndexOutOfRange: {s.LegacyOor}   ← S3 修复前的症状 / Rust 现行");
+        Console.WriteLine($"现行口径下抛 IndexOutOfRange  : {s.CurrentOor}   ← **修复的验收线（应为 0）**");
+        Console.WriteLine($"现行口径下：正常返回 {s.CurOk} / 探针空 stub 致 NRE（不可判）{s.CurNre} / 其它 {s.CurOther}");
         Console.WriteLine();
         Console.WriteLine("前 12 行明细（相对路径 | 脚本行 | 旧位移派发(结果) | 现行派发(结果)）：");
-        foreach (string r in rows.Take(12)) { Console.WriteLine("    " + r); }
+        foreach (string r in s.Rows.Take(12)) { Console.WriteLine("    " + r); }
+    }
+
+    // ---------- 回归门禁（可接进流水线）：每条判据都给 PASS/FAIL，退出码 0/1 ----------
+
+    private static int RunGate(string corpus, string axis, string expectLegacyOor, bool forceLegacy)
+    {
+        if (string.IsNullOrEmpty(corpus)) { Console.WriteLine("--gate 需要给语料文件：--gate <语料>"); return 2; }
+        _forceLegacy = forceLegacy;
+        var results = new List<(string name, bool ok, string detail)>();
+
+        // 判据 1：改法的前提仍成立 —— 两个枚举「字段序号 == 枚举值」，且两套键取值等价
+        int cMembers, cIdxNeVal, cKeyDiffer, aMembers, aIdxNeVal, aKeyDiffer;
+        AuditCounts(typeof(ConditionCode), "C", out cMembers, out cIdxNeVal, out cKeyDiffer);
+        AuditCounts(typeof(ExecutionCode), "A", out aMembers, out aIdxNeVal, out aKeyDiffer);
+        results.Add(("axis-precondition",
+            cIdxNeVal == 0 && cKeyDiffer == 0 && aIdxNeVal == 0 && aKeyDiffer == 0,
+            $"条件 {cMembers} 成员/动作 {aMembers} 成员；字段序号≠枚举值 {cIdxNeVal + aIdxNeVal}；两套键不同 {cKeyDiffer + aKeyDiffer}"));
+
+        // 判据 2：语料非空
+        CorpusStats s = WalkCorpus(corpus, axis);
+        results.Add(("corpus-nonempty", s.Lines > 0, $"{s.Lines} 行（{corpus}）"));
+
+        // 判据 3：现行口径下**一行都不许抛 IndexOutOfRange**（修复的验收线）
+        results.Add(("no-index-out-of-range-under-current-rule",
+            s.Lines > 0 && s.CurrentOor == 0,
+            forceLegacy ? $"现行口径被 --force-legacy 换成旧位移：{s.CurrentOor}/{s.Lines} 抛（阳性对照应如此）"
+                        : $"现行口径：{s.CurrentOor}/{s.Lines} 抛"));
+
+        // 判据 4：语料仍有牙齿 —— 旧位移口径下必须仍然抛（默认 = 全部），否则说明语料被清空/规则写错
+        int expect = s.Lines;
+        if (!string.IsNullOrEmpty(expectLegacyOor)) { int.TryParse(expectLegacyOor, out expect); }
+        results.Add(("legacy-rule-still-throws",
+            s.LegacyOor == expect,
+            $"旧位移口径：{s.LegacyOor} 抛 / 期望 {expect}"));
+
+        // 判据 5：语料每一行都真的受位移影响（两口径派发不同）
+        results.Add(("all-lines-affected-by-shift",
+            s.Lines > 0 && s.TwoRulesDiffer == s.Lines,
+            $"两口径派发不同 {s.TwoRulesDiffer}/{s.Lines}"));
+
+        foreach (var (name, ok, detail) in results)
+        {
+            Console.WriteLine($"{(ok ? "PASS" : "FAIL")}  {name}  ({detail})");
+        }
+        int bad = results.Count(r => !r.ok);
+        Console.WriteLine($"== gate: {results.Count - bad} PASS / {bad} FAIL" + (forceLegacy ? "（--force-legacy 阳性对照：判据 3 应当 FAIL）" : ""));
+        return bad == 0 ? 0 : 1;
+    }
+
+    private static void AuditCounts(Type enumType, string axis, out int members, out int idxNeVal, out int keyDiffer)
+    {
+        FieldInfo[] fields = enumType.GetFields();
+        System.Collections.IDictionary map = MapFor(axis);
+        members = 0; idxNeVal = 0; keyDiffer = 0;
+        foreach (FieldInfo f in fields)
+        {
+            if (f.GetCustomAttribute<ScriptDefName>() == null) { continue; }
+            members++;
+            int idx = Array.IndexOf(fields, f);
+            int val = Convert.ToInt32(f.GetRawConstantValue());
+            if (idx != val) { idxNeVal++; }
+            if (map.Contains(idx) && map.Contains(val) && !Equals(map[idx], map[val])) { keyDiffer++; }
+        }
     }
 
     /// <summary>S3：证明「改执行器查表口径」是无效改法，并给出修复的正确落点</summary>
@@ -408,7 +512,7 @@ internal static class Program
         return crashed == 0;
     }
 
-    private static void Sweep(string root, string dump)
+    private static void Sweep(string root, string dump, string dumpShifted, int dumpLimit)
     {
         string[] files = Directory.GetFiles(root, "*.txt", SearchOption.AllDirectories);
         int condLines = 0, actLines = 0;
@@ -416,6 +520,7 @@ internal static class Program
         int toCrashHandler = 0, exposed = 0;            // 旧位移口径下落到崩溃处理器、且参数形状必抛
         var samples = new List<string>();
         var all = new List<string>();
+        var shiftedActions = new List<string>();
         Encoding gbk = Encoding.GetEncoding("gb2312");
         foreach (string f in files)
         {
@@ -435,7 +540,19 @@ internal static class Program
                 // 不能拿处理器名去比命令名 —— 命名法不同，那种比法恒真（本探针早先就踩过，见报告 §5）
                 bool shifted = cur != legacy;
                 if (isCond) { condLines++; if (shifted) { condTwoRules++; } }
-                else { actLines++; if (shifted) { actTwoRules++; } }
+                else
+                {
+                    actLines++;
+                    if (shifted)
+                    {
+                        actTwoRules++;
+                        if (!string.IsNullOrEmpty(dumpShifted) && (dumpLimit <= 0 || shiftedActions.Count < dumpLimit))
+                        {
+                            string rel2 = f.Substring(root.Length).TrimStart('\\', '/');
+                            shiftedActions.Add($"{rel2}\t{t}");
+                        }
+                    }
+                }
                 if (axis == "C" && HandlerName("C", legacy) == "ConditionOfCheckRangeMonCount")
                 {
                     toCrashHandler++;
@@ -464,6 +581,11 @@ internal static class Program
         {
             File.WriteAllLines(dump, all, new UTF8Encoding(false));
             Console.WriteLine($"完整清单（{all.Count} 行，制表符分隔：相对路径<TAB>脚本文本）已写入 : {dump}");
+        }
+        if (!string.IsNullOrEmpty(dumpShifted))
+        {
+            File.WriteAllLines(dumpShifted, shiftedActions, new UTF8Encoding(false));
+            Console.WriteLine($"旧位移口径下动作侧错位行清单（{shiftedActions.Count} 行{(dumpLimit > 0 ? $"，已按 --limit {dumpLimit} 截断" : "")}）已写入 : {dumpShifted}");
         }
     }
 

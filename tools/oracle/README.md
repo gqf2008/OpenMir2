@@ -10,6 +10,10 @@
 | `deploy_gamesvr.ps1` | 把**同一份构建**的 GameSvr 组件集整体铺到 `E:\MirServer\M2GameSvr`（带备份、只铺本仓库自有文件、铺后逐文件复核哈希）；`-WhatIf` 只列将要替换的文件 | 铺后哈希复核（`OK`/`RED` 逐文件） |
 | `verify_gate_reconnect.ps1` | **实机门禁**：只重启 GameGate 制造一次网关重连，然后跑真实客户端进世界；断言 ① 流程走到 `ingame` 且截图画出画面 ② 抖动后没有新增 `SetGateUserList` NRE ③ GameSvr 日志出现第二条"网关已打开" | `-SelfTestRed`：断言一个不存在的阶段，必须判 RED |
 | `gate-slot-probe/` | 不起整栈、不碰 oracle 进程的**确定性探针**：直接跑生产类型 `TCPNetChannel`，用"连接#1 → 断开 → 连接#2"复现/守护"网关重连后槽位失配"。输出槽位表与四项判据 | 先跑未修版本必须 1 GREEN / 3 RED（见交付说明） |
+| `cond-crash-probe/` | 脚本派发/条件求值的**确定性探针**：`--line`/`--script --label`/`--sweep`（双口径统计 + 语料漂移）/`--verify-corpus`/`--axis-audit`（证明"只能改解析器"）/`--gate`（回归门禁，见下） | `--gate --force-legacy` 必须判红（把现行口径当成旧位移评估，不碰源码） |
+
+> **脚本派发回归门禁**（whitelist B-8 / T-4）的语料、期望值与运行器在
+> `mir2-rs/tests/parity/script-dispatch/`（S 线与 B 线共用；一条命令 + `-SelfTestRed`）。
 
 ## 常用命令
 
