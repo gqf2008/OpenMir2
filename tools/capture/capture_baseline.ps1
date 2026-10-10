@@ -328,6 +328,7 @@ if (Test-Path $clTrace) {
 python $VerifyPy --golden $Sess
 if ($LASTEXITCODE -ne 0) { throw "金标准自检失败（见上 RED 行）" }
 
-# 指向最新会话
-Set-Content -Path (Join-Path $GoldenRoot "LATEST") -Value $Sess -Encoding ascii
+# 指向最新会话（写仓库相对路径：绝对路径带工作树名，换机器/换 worktree 就失效）
+$relSess = (Resolve-Path -Relative $Sess) -replace '^\.\\', '' -replace '\\', '/'
+Set-Content -Path (Join-Path $GoldenRoot "LATEST") -Value $relSess -Encoding ascii
 Write-Output ("GOLDEN_OK " + $Sess)

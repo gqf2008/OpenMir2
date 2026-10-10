@@ -33,7 +33,12 @@ $results = @()
 
 function Add-Result([string]$Name, [bool]$Ok, [string]$Detail = "") {
   $script:results += [pscustomobject]@{ check = $Name; ok = $Ok; detail = $Detail }
-  Write-Output (($($ok ? "GREEN" : "RED")) + "  " + $Name + $(if ($Detail) { "  ($Detail)" } else { "" }))
+  # 注：Windows PowerShell 5.1 没有三元运算符，别用 `$cond ? a : b`
+  $tag = "RED"
+  if ($Ok) { $tag = "GREEN" }
+  $suffix = ""
+  if ($Detail) { $suffix = "  ($Detail)" }
+  Write-Output ($tag + "  " + $Name + $suffix)
 }
 
 function Test-FlowStages([string]$StagesFile, [string[]]$Required) {
@@ -49,12 +54,39 @@ function Test-FlowStages([string]$StagesFile, [string[]]$Required) {
     for ($i = $pos; $i -lt $stages.Count; $i++) {
       if ($stages[$i] -eq $req) { $found = $true; $pos = $i + 1; break }
     }
-    if (-not $found) { Write-Output "  缺阶段(或乱序): $req"; return $false }
+    if (-not $found) { Write-Host "  缺阶段(或乱序): $req"; return $false }   # Write-Host：别污染返回值
   }
   return $true
 }
 
-# ---- 1~3. 纯工具自测 ----
+function Test-NotBlackScreen([string]$PngPath, [double]$MinNonBlackRatio = 0.01) {
+  # 进世界成功必须"画出来了"：全黑画面 = 没进世界（本轮踩过的实际症状）。
+  # 抽样统计非黑像素占比，低于阈值即判黑屏——这条让 flow 门禁可证伪。
+  if (-not (Test-Path $PngPath)) { return $false }
+  Add-Type -AssemblyName System.Drawing -ErrorAction SilentlyContinue
+  try {
+    $bmp = New-Object System.Drawing.Bitmap($PngPath)
+    $w = $bmp.Width; $h = $bmp.Height
+    $nonBlack = 0; $total = 0
+    for ($y = 40; $y -lt $h; $y += 8) {
+      for ($x = 4; $x -lt $w; $x += 8) {
+        $c = $bmp.GetPixel($x, $y)
+        $total++
+        if (($c.R + $c.G + $c.B) -gt 30) { $nonBlack++ }
+      }
+    }
+    $bmp.Dispose()
+    if ($total -eq 0) { return $false }
+    $ratio = $nonBlack / $total
+    Write-Host ("  画面非黑占比 " + [math]::Round($ratio * 100, 2) + "% (" + $PngPath + ")")   # 必须 Write-Host：Write-Output 会混进返回值
+    return ($ratio -ge $MinNonBlackRatio)
+  } catch {
+    Write-Host ("  画面取样失败: " + $_.Exception.Message)
+    return $false
+  }
+}
+
+
 python (Join-Path $CaptureDir "selftest_proxy.py")
 Add-Result "proxy-selftest" ($LASTEXITCODE -eq 0)
 
@@ -68,6 +100,7 @@ Add-Result "dbsnap-selftest" ($LASTEXITCODE -eq 0)
 $latestFile = Join-Path $RepoRoot "tests\golden\LATEST"
 if (Test-Path $latestFile) {
   $latest = (Get-Content $latestFile -Raw).Trim()
+  if (-not [System.IO.Path]::IsPathRooted($latest)) { $latest = Join-Path $RepoRoot $latest }
   python (Join-Path $CaptureDir "verify_golden.py") --golden $latest
   Add-Result "golden-verify" ($LASTEXITCODE -eq 0) $latest
 } else {
@@ -98,6 +131,9 @@ if (-not $SkipFlow) {
   }
   $ok = $flowOk -and $stagesOk -and $shotsOk
   Add-Result "flow-e2e" $ok ("stages=$stagesOk shots=$($shots.Count) errlog+${errGrowth}B")
+  # 单独一条：进世界必须真画出画面（黑屏 = 没进世界，服务端侧问题）
+  $renderOk = Test-NotBlackScreen (Join-Path $flowOut "05b_after_notice.png")
+  Add-Result "flow-world-render" $renderOk "05b_after_notice.png 非黑占比 >=1%"
 }
 
 # ---- 6. 假人冒烟 ----
@@ -108,7 +144,7 @@ if (-not $SkipBots) {
 }
 
 # ---- 汇总 ----
-$red = ($results | Where-Object { -not $_.ok }).Count
+$red = @($results | Where-Object { -not $_.ok }).Count
 Write-Output ("==== E2E: " + ($results.Count - $red) + " GREEN / " + $red + " RED ====")
 if ($SelfTestRed) {
   # 红检模式：flow-e2e 必须红才算自测通过
