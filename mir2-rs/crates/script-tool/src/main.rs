@@ -2,6 +2,7 @@
 //! - `gen-codes`：从 C# 参照源码生成 `crates/script/src/codes.rs`
 //! - `parse-stats <Envir目录>`：全量加载脚本，输出统计/错误/未实现命令清单（JSON + 摘要）
 
+use mir2_script_tool::flowrun;
 use mir2_script_tool::gbkoverrides;
 use mir2_script_tool::gencodes;
 use mir2_script_tool::parsestats;
@@ -156,6 +157,7 @@ fn main() -> ExitCode {
                 }
             }
         }
+        "flow-run" => flowrun::run(&args),
         "parse-stats" => {
             if args.len() < 3 {
                 eprintln!("parse-stats 需要 Envir 目录");
