@@ -10,6 +10,7 @@
 
 pub mod codes;
 pub mod digest;
+pub mod engine;
 pub mod gbk_overrides;
 pub mod handlers;
 pub mod model;
