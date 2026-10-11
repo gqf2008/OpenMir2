@@ -333,8 +333,8 @@ cargo test -p game-svr --lib        # 回读夹具逐字段核对
 向量覆盖：装备/换装成功、按槽位/名称/等级/腕力的失败、已占槽三条不可卸守卫、`InDisableTakeOffList`、
 性别不符、卸下成功、空槽/`MakeIndex` 不符/名称不符/背包满(46)/交易中、`btWhere >= 13`。
 
-**未做（登记在卡，见 `tests/parity/whitelist.md` 的 T-13/T-15/T-16）**：`CM_PICKUP`/`CM_DROPITEM`/`CM_EAT`
-（需要 `crates/world` 的地面物品 + `Envir.Flag`）、接线（`main.rs`/`smframe.rs` 归 m2-svr）、双侧同序列驱动。
+**未做（登记在卡，见 `tests/parity/whitelist.md` 的 T-13/T-16）**：`CM_PICKUP`/`CM_DROPITEM`/`CM_EAT`
+已分别在 `ground.rs`/`useitem.rs` 落地（见下两节）；接线（`main.rs`/`smframe.rs` 归 m2-svr）、双侧同序列驱动未做。
 
 ## 使用药品 handler（`bins/game-svr/src/useitem.rs`，卡内第二片·第三格）
 
@@ -377,5 +377,55 @@ cargo test -p game-svr --lib        # 回读夹具逐字段核对
 模板缺失、`BoCanUseItem==false`、`Death`。
 
 **未做（登记在卡，见 `tests/parity/whitelist.md` 的 T-17）**：`Envir.Flag.boNODRUG`（地图禁药 + 文本 `RM_SYSMESSAGE`）、
-StdMode 1/2/3/4/31（`HungerStatus`+`RefMyStatus`/无效果/`ExtraAbil` buff+`GetExp`/`ReadBook`/解包）、
-`CM_PICKUP`/`CM_DROPITEM`（地面物品模型）、接线（`main.rs`/`smframe.rs` 归 m2-svr）、双侧同序列驱动。
+StdMode 1/2/3/4/31（`HungerStatus`+`RefMyStatus`/无效果/`ExtraAbil` buff+`GetExp`/`ReadBook`/解包）——
+注意这五类**不是**"与 oracle 一致地不吃"，而是**已证差异**（oracle 在这些 StdMode 上有成功路径：StdMode 1/2 与 StdMode 3 的 Shape 13 无条件吃掉并发 `SM_EAT_OK`，本接缝同输入落 `SM_EAT_FAIL`），
+只因 `use_item` 尚未接线而不可达；接线前必须补齐。夹具 `eat_fail_stdmode_other` 只覆盖 `StdMode=5`（`case` 名单外）。
+接线（`main.rs`/`smframe.rs` 归 m2-svr）、双侧同序列驱动仍未做。
+
+## 拾取/丢弃 handler（`bins/game-svr/src/ground.rs`，卡内第二片·第四格）
+
+`ground.rs` 把 `CM_PICKUP`(1001) / `CM_DROPITEM`(1000) 的**决策 + 状态迁移 + 回帧**做成无 I/O 的纯函数接缝
+`pick_up`/`drop_item`，并自带**最小地面物品模型** `GroundMap`（一格多物；`GetItem`/`DeleteFromMap`/
+`AddItemToMap`/`GetItemEx`/`CellMatch` 的等价物）。输入 = `ItemList`/`Gold`/`WAbil` + `GroundMap` + 守卫上下文；
+输出 = **即时帧**（`SM_ADDITEM=200` / `SM_DROPITEM_SUCCESS=600` / `SM_DROPITEM_FAIL=601`）+ **延时通知**（按
+`MsgQueue` 出队序）+ 迁移后的背包/金币/负重与地面格子。oracle 链 = `PlayObject.Message.cs:801/:811` →
+`ClientDropItem`（`PlayObject.Operate.cs:251`）/ `ClientPickUpItem`（`PlayObject.Base.cs:55`）→
+`BaseObject.DropItemDown/AddItemToBag/RecalcBagWeight` + `Envirnoment.GetItem/DeleteFromMap/AddItemToMap/GetItemEx`。
+
+**必须原样复刻**的口径：
+
+| 口径 | 说明 |
+| --- | --- |
+| **正常 `CM_DROPITEM` 恒失败** | 全仓无 `MapItem.ItemId = …` 赋值点（`MapItem.cs:41` 的赋值是注释）⇒ `AddItemToMap` 首行 `if (ItemId == 0) return false` 恒命中 ⇒ 普通丢弃恒 `SM_DROPITEM_FAIL`、背包不动（**照 bug 搬**，登记 T-19） |
+| 通知出队序 | `MsgQueue` 是 `PriorityQueue`，优先级 = `(byte)wIdent`（低值先出）⇒ `RM_WEIGHTCHANGED=10115`(131) **先于** `RM_ITEMHIDE=8085`(149)，与入队序相反 |
+| 金币拾取 | `IncGold` 超 `HumanMaxGold` ⇒ 放回地面、金币不变、无通知；成功只发自身 `RM_GOLDCHANGED=10136`（`SendRefMsg` 对自身不投递） |
+| `DealLastTick` 守卫 | `(now - DealLastTick) > 3000` 才扫描背包；不满足则整段跳过 ⇒ FAIL |
+| 拾取放回 | 背包满（`Count >= 46`）、超重（`IsAddWeightAvailable`）、模板缺失、金币溢出都走 `AddItemToMap` 放回 ⇒ 地面不动 |
+| 空槽/无主 | `Dealing` ⇒ 直接 return；`!IsSelf && !IsOfGroup` ⇒ `RM_SYSMESSAGE=11004`（CanotPickUpItem）；超时 ⇒ `OfBaseObject = 0` |
+
+### 复现 oracle 向量（真身探针，改坏必红）
+
+```powershell
+# 在**仓库根**运行（源锚点用相对路径）
+dotnet build mir2-rs/tests/parity/m3/ground-probe -c Release
+dotnet mir2-rs/tests/parity/m3/ground-probe/bin/Release/net8.0/ground-probe.dll `
+  mir2-rs/tests/parity/m3/fixtures/ground_vectors.json
+cargo test -p game-svr --lib        # 回读夹具逐字段核对
+```
+
+向量覆盖（6 模板 / 23 用例）：拾取成功（无主/自己/超时清主/同组）、`Dealing`/背包满/超重/模板缺失/
+空格子失败、金币成功与超上限、丢弃 `ItemId=0` 恒失败、`ControlDropItem` 便宜直丢、安全区/`NoThrowItem`/
+`IsCanDrop`/`DealLastTick` 守卫、名称带空格折分、`MakeIndex` 不命中、StdMode 40 耐久 u16 回绕
+（`DropItemDown` 的 `ushort idura = (ushort)(Dura-2000)`：2500⇒500、10⇒63546）。夹具记录的 tick
+（`now_tick`/`can_pick_up_tick`/`deal_last_tick`）都平移到固定基点 `1_200_000`（真实 tick 只驱动 oracle 判定）
+⇒ 探针产物**逐字节可复现**。
+
+红检（改坏 ⇒ 必红）：① `put_item` 的 `item_id == 0` 守卫改成 `== -1` ⇒ T-19 的 2 条用例红；
+② `is_add_weight_available` 恒真 ⇒ 超重用例红；③ `dequeue_order` 改成降序 ⇒ 出队序用例红；
+④ `DealLastTick` 守卫 `> 3000` 改成 `> 0` ⇒ 夹具用例红；
+⑤ `drop_item` 的 StdMode 40 耐久 `wrapping_sub(2000)` 改成 `saturating_sub(2000)`（clamp 到 0）⇒
+`stdmode40_drop_dura_wraps_like_oracle` 红（oracle 实测 underflow：Dura=10 ⇒ 63546，不是 0）。
+
+**未做（登记在卡，见 `tests/parity/whitelist.md` 的 T-15/T-19/T-20）**：地面物品模型只在 `bins/game-svr`
+侧的最小切片里（`crates/world` 尚无地图地面物品与地图 `Flag`）、`DropItemDown` 的 StdMode 45 随机外观、
+`SendRefMsg` 广播、接线（`main.rs`/`smframe.rs` 归 m2-svr）、双侧同序列驱动。

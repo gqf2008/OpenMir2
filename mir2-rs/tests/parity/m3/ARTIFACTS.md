@@ -112,3 +112,23 @@ Remove-Item -Recurse -Force mir2-rs/tests/parity/m3/sessions/*/shadow-run* -Erro
 - **未起栈、未占端口**（5000/7000/7100/7200 未使用）；`E:/MirServer` 十端口状态与开工前一致。
 - **冻结基线**：`src/**`（C# oracle）一行未改；表结构/脚本/数据文件格式未改；
   未动 `main.rs`/`smframe.rs`（接线归 m2-svr）、未动 `crates/world/**`/`crates/envir/**`/`crates/world-bevy/**`。
+
+## 十、本片（2026-10-11，worktree `m3bag`：拾取/丢弃 handler 核心）实际残留清单
+
+- **入库（证据，随 patch 提交）**：
+  - `m3/fixtures/ground_vectors.json`（oracle 真身探针产出的 `CM_PICKUP`/`CM_DROPITEM` 向量：6 模板 / 23 用例；
+    出帧 `SM_ADDITEM=200`/`SM_DROPITEM_SUCCESS=600`/`SM_DROPITEM_FAIL=601` + 延时通知（出队序）+
+    `ItemList`/`Gold`/`WAbil` + 地图格子前后/全图物品数，Rust 用例回读逐字段核对；tick 平移到固定基点
+    `1_200_000` ⇒ 探针产物逐字节可复现）
+  - `m3/ground-probe/`（探针源码 + csproj；反射调 `Operate(ProcessMessage)` 的完整 `CM_PICKUP`/`CM_DROPITEM`
+    分支 + 真身 `Envirnoment`（反射灌入 64×64 全 Walk 网格）+ 真身 `MapItem`/`UserItem`，替身 `INetChannel`
+    截即时帧 + 反射读 `MsgQueue` 取出队通知；不连 MySQL、不起服务、不写现网文件）
+  - `mir2-rs/bins/game-svr/src/ground.rs`（接缝实现 + 最小 `GroundMap` + 5 条单测/红检）
+  - `mir2-rs/tests/parity/whitelist.md`（更新 T-13/T-15；新增 T-19/T-20）
+- **未入库/临时物**：探针的 `bin/`、`obj/`（构建产物，已被 `mir2-rs/.gitignore` 的 `**/bin/`、`**/obj/` 忽略；
+  可用 README 的命令再生）；隔离构建目录 `E:/tmp/openmir2-m3bag-target` 与日志
+  `E:/tmp/openmir2-watch/m3bag5-*.log`（含 4 条红检，登记位置，可删）。
+- **未起栈、未占端口**（5000/7000/7100/7200 未使用）；`E:/MirServer` 十端口状态与开工前一致。
+- **冻结基线**：`src/**`（C# oracle）一行未改（探针只**引用** `src/M2Server` 编译，不改源）；
+  表结构/脚本/数据文件格式未改；未动 `main.rs`/`smframe.rs`（接线归 m2-svr）、
+  未动 `crates/world/**`/`crates/envir/**`/`crates/world-bevy/**`。
