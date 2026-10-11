@@ -50,7 +50,8 @@ const P99_DEGRADE_LIMIT_PCT: f64 = 30.0;
 /// 给了 `--baseline` 时每档跑几轮（取中位数，压机器噪声）。
 const BASELINE_ROUNDS: usize = 3;
 /// 高负载窗口判据：CPU 占用 ≥ 该值（%）⇒ 相对门禁降级为 `SKIP-UNDER-LOAD`。
-const LOAD_PCT_SKIP_THRESHOLD: u8 = 50;
+/// 取 40%（本机多 agent 并行时常驻 40%~70%）：宁可多 SKIP，也不让并行负载制造假 RED。
+const LOAD_PCT_SKIP_THRESHOLD: u8 = 40;
 /// 高负载窗口判据：`rustc`/`cargo`/`cargo-clippy`/`msbuild` 进程数 ≥ 该值 ⇒ `SKIP-UNDER-LOAD`。
 const HEAVY_PROC_SKIP_THRESHOLD: usize = 4;
 /// 高负载窗口下仍能判红的**数量级**劣化阈值（P50，%）。

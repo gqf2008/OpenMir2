@@ -151,7 +151,7 @@ cargo run -p mir2-world --release --bin tick_bench -- \
   或 `P99 中位数 > +30%` ⇒ `RED` / `exit 1`；
 - **绝对 P99 只在空载窗口有意义**（它是 M5 的验收目标，不是并行环境下的每次合并门禁）
   ⇒ `--baseline` 模式只把绝对 P99 打印为报告值；
-- **高负载 ⇒ `SKIP-UNDER-LOAD` 且 `exit 0`**（CPU ≥ 50% 或 `rustc`/`cargo`/`cargo-clippy`/`msbuild` ≥ 4 个）；
+- **高负载 ⇒ `SKIP-UNDER-LOAD` 且 `exit 0`**（CPU ≥ 40% 或 `rustc`/`cargo`/`cargo-clippy`/`msbuild` ≥ 4 个）；
   但数量级劣化（P50 > +150%）仍判 `RED`——不把负载导致的 RED 当作者的锅，也不让门禁在负载下失去牙齿；
 - 缺档 ⇒ `SKIP`（不静默当通过）；读基线文件失败 ⇒ `RED`。
 
