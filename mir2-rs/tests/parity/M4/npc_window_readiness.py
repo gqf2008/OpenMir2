@@ -84,10 +84,12 @@ def check_cs_harness_source(harness_dir):
     if not npc_ifaces:
         # 退路：只要出现 IMerchant 的 Create 也算（夹具可能重命名了代理类）
         npc_ifaces = [m.group(1) for m in re.finditer(r"DispatchProxy\.Create<(IMerchant)\b", text)]
+    # 用仓库相对路径（`_rel`），避免把 worktree 绝对路径写进入库证据（换检出/换机器重跑会改脏）。
+    rel = _rel(runmode)
     if "IMerchant" in npc_ifaces:
-        return True, f"{runmode}: NPC 代理 = IMerchant ⇒ 可构造商人"
+        return True, f"{rel}: NPC 代理 = IMerchant ⇒ 可构造商人"
     got = ",".join(npc_ifaces) if npc_ifaces else "(未见 NpcRunProxy 代理)"
-    return False, f"{runmode}: NPC 代理 = {got}（非 IMerchant）⇒ 商人脚本必抛 InvalidCastException"
+    return False, f"{rel}: NPC 代理 = {got}（非 IMerchant）⇒ 商人脚本必抛 InvalidCastException"
 
 
 def run_cs_harness(harness_dir, case):
@@ -184,7 +186,7 @@ def run_rust_engine(case):
 # --------------------------------------------------------------------------- #
 # 裁决
 # --------------------------------------------------------------------------- #
-def evaluate(cases, cs_harness, rust_server, run_cs, ports):
+def evaluate(cases, cs_harness, rust_server, run_cs):
     out = []
     out.append("# M4② 三条窗口用例的可跑性门（`npc_window_readiness.py`）")
     out.append("")
@@ -192,10 +194,11 @@ def evaluate(cases, cs_harness, rust_server, run_cs, ports):
     out.append(f"- C# 夹具：`{_rel(cs_harness)}`")
     out.append(f"- Rust GameSvr：`{_rel(rust_server)}`")
     out.append("")
-    out.append("## 0. 窗口端口实况（信息项）")
+    out.append("## 0. 窗口端口实况（易变信息项，不入 hash 清单）")
     out.append("")
-    for l in check_ports(ports):
-        out.append(f"- {l}")
+    out.append("- 本证据**不含**端口快照：端口会随窗口/别车道起栈而变，写进入库证据会让重跑改脏、"
+               "hash 清单误红。本次采样见命令 stdout 的 `port=…` 行与 "
+               "`mir2-rs/target/m4/npc-window-readiness-ports.txt`（`target/` 不入库）。")
     out.append("")
 
     verdicts = []
@@ -305,7 +308,7 @@ def cmd_selftest():
         for i, (h, rh, rc, want) in enumerate(cases, 1):
             root = make(h, rh, rc)
             overall, _ = evaluate(case, root / "tools" / "script-parity-cs",
-                                  root / "mir2-rs" / "bins" / "game-svr", False, ports=[])
+                                  root / "mir2-rs" / "bins" / "game-svr", False)
             ok = overall == want
             bad += 0 if ok else 1
             print(f"{'PASS' if ok else 'RED '} selftest {i}/{len(cases)} "
@@ -348,11 +351,21 @@ def main():
 
     ports = [int(p) for p in args.ports.split(",") if p.strip()]
     overall, text = evaluate(merchants, args.cs_harness, args.rust_server,
-                             run_cs=not args.no_run_cs, ports=ports)
+                             run_cs=not args.no_run_cs)
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(text, encoding="utf-8", newline="\n")
     print(text)
+    # 端口快照是易变信息项：回显到 stdout + 落到 target/（不入库、不入 hash 清单），
+    # 这样重跑本门不会把入库证据改脏 —— 评审按 reviewer_note 跑本门 + evidence_hashes.py 不会误红。
+    port_lines = check_ports(ports)
+    ports_out = MIR2RS / "target" / "m4" / "npc-window-readiness-ports.txt"
+    try:
+        ports_out.parent.mkdir(parents=True, exist_ok=True)
+        ports_out.write_text("\n".join(port_lines) + "\n", encoding="utf-8", newline="\n")
+    except OSError:
+        pass
+    print("PORT-SNAPSHOT " + " | ".join(port_lines))
     print(f"EVIDENCE {_rel(out_path)}")
     if overall == "READY":
         print("READY: C# 夹具路线① 就绪 ⇒ 三条商人用例可 port-free 跑"

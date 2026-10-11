@@ -65,6 +65,10 @@ python -I tests/parity/M4/npc_window_readiness.py selftest    # 牙齿：合成�
 - 裁决以 **C# 夹具（路线①）** 为准；「Rust 服务侧」行只登记为 **M3 承接**，不阻塞本卡。
 - 牙齿：合成的 5 种组合里，C# 代理 = `INormNpc` ⇒ `BLOCKED`，改成 `IMerchant` ⇒ `READY`
   （Rust 派发/依赖不再影响本卡裁决）⇒ 不能靠改一半蒙过去。
+- **证据幂等**（评审 N-1 同类）：重跑本门（含端口起落）得到的
+  `../evidence/M4/npc-window-readiness.txt` **逐字节相同** —— 端口快照是易变信息项，只回显到
+  stdout 并落到 `mir2-rs/target/m4/npc-window-readiness-ports.txt`（`target/` 不入库、不入 hash 清单）；
+  源码路径用仓库相对路径。否则评审按 `reviewer_note` 跑本门再跑 `evidence_hashes.py` 会误判为红。
 
 ## ③ 『双侧逐行多重集差 = 0』门禁
 
