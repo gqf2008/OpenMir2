@@ -183,6 +183,10 @@ Test-Impl "impl/mir2-rs target=rust"     "E:\repo\mir2-rs\target\debug\game-svr.
 Test-Impl "impl/隔离 target(m2svr)=rust" "E:\tmp\openmir2-m2svr-target\debug\game-svr.exe" "" "game-svr.exe" "rust"
 Test-Impl "impl/基名回落 rust"           "C:\dev\game-svr.exe"                        "" "game-svr.exe" "rust"
 Test-Impl "impl/未知基名=unknown"        "C:\dev\foo.exe"                             "" "foo.exe" "unknown"
+# 真机回归（本片新增）：Rust 入口正常用现网 `E:\MirServer\...\config.conf` 作参数，
+# 整条命令行里含 `E:\MirServer\`。旧分类器把整个命令行当探针 ⇒ 误判 csharp（验收①假红）。
+Test-Impl "impl/Rust 入口带现网配置参数仍=rust" "E:\tmp\openmir2-m2svr-target\debug\login-gate.exe" "E:\MirServer\LoginGate\config.conf" "login-gate.exe" "rust"
+Test-Impl "impl/C# 入口（Exe 在 MirServer）=csharp" "E:\MirServer\LoginGate.exe" "E:\MirServer\LoginGate\config.conf" "LoginGate.exe" "csharp"
 
 # ---------------------------------------------------------------- ① 端口表 -> 期望入口（第三层牙齿）
 Write-Output "① 端口表 -> 期望入口（端口归属：不只看是否 Rust，还要看是不是该端口的入口）"

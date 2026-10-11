@@ -23,7 +23,14 @@ function Get-M2PortImpl {
     [string]$Name = ""
   )
   $probe = ($Exe + " " + $CommandLine)
-  if ($Exe -like "$script:M2CsharpRoot\*" -or $probe -like "*$script:M2CsharpRoot\*") {
+  # C# 根只认**可执行体路径**（Exe 取不到时才回落命令行首 token）。
+  # 不要把整条命令行当探针：Rust 入口正常会拿现网 `E:\MirServer\...\config.conf` 作参数，
+  # 整条命令行里就含 `E:\MirServer\` ⇒ 真机实测会把 login-gate/sel-gate/game-gate 误判 csharp（验收①假红）。
+  $exeProbe = $Exe
+  if ([string]::IsNullOrEmpty($exeProbe) -and -not [string]::IsNullOrEmpty($CommandLine)) {
+    $exeProbe = ($CommandLine.Trim() -split '\s+')[0].Trim('"')
+  }
+  if ($exeProbe -like "$script:M2CsharpRoot\*") {
     return "csharp"
   }
   foreach ($p in $script:M2RustTargetPatterns) {
