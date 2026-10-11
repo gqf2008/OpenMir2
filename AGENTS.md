@@ -69,6 +69,11 @@ D3 试验田 ECS 路径代价 **+10µs / 32 只怪的掉落批次（≈1.8×）*
 （基线 `mir2-rs/tests/parity/world/d3-drop-bench-rebuild.txt`）；**注意不是每 tick 成本**——掉落预算在怪物生成时一次性预算。
 未做：战斗试验田、AOI/移动入 ECS 的收益评估。详见 `mir2-rs/tests/parity/world/D3试验田报告.md`。
 
+**迁移进展（2026-10-11）**：World→`bevy_ecs` 迁移的**第 1 批（S1 承载 + S2 调优）已合入 master `f5170a8e`**
+（approve reviewer-1 `e6d8de59`）：合并树四门禁全绿、三份 golden 逐字节不变、同会话交替 A/B 三档 **ΔP50/ΔP99 全负**、
+`no_parallel` 正向对照绿。**第 2 批（S3+）暂缓**——按 §6.0-5（M2/M3 是当前里程碑）且继续动 `crates/world` 会与 M2 验收 /
+M3 逐系统对齐争写集；**解冻条件 = M2 验收通过，或 owner 重新裁决**（卡 `openmir2-world-bevy-migration`，车道已 park）。
+
 ---
 
 核心原则一句话：**协作只在 `refs/collab/*` 的签名线程里发生。** agent 之间不私聊、不拿共享临时文件当事实源；
