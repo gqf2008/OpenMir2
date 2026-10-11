@@ -280,6 +280,9 @@ public static class Program
         // ---- 8. DBSrv 6000 DataService 面的 MemoryPack 向量 ----
         AddPlayerDataVectors(lines);
 
+        // ---- 9. DBSrv 5700 MarketService 面的 MemoryPack 向量 ----
+        AddMarketVectors(lines);
+
         File.WriteAllLines(outPath, lines);
 
         // 证据：行数 + 文件 hash
@@ -390,6 +393,36 @@ public static class Program
         Emit("serverrequestdata_null", new ServerRequestData { QueryId = -1 });
 
         Emit("serverrequestmessage", new ServerRequestMessage(0x1234, 5, 6, 7, 8));
+    }
+
+    /// <summary>
+    /// 5700 `MarketService` 面（DBSrv）用到的 MemoryPack 消息真身向量。
+    /// 声明序/字符串 UTF-16LE/对象头。Rust 侧 `bins/db-srv/src/market.rs` 单测逐条对拍。
+    /// 注意：`MarketSaveDataItem`/`MarketDataMessage` 含 `MarketItem`（未注册 MemoryPack）——
+    /// `Serialize`/`Deserialize` 均抛，**不产生向量**；该事实由 `market.rs` 单测以构造字节钉住。
+    /// </summary>
+    private static void AddMarketVectors(List<string> lines)
+    {
+        void Emit<T>(string name, T o)
+        {
+            lines.Add($"{{\"kind\":\"market\",\"name\":\"{name}\",\"hex\":\"{Hex(SerializerUtil.Serialize(o))}\"}}");
+        }
+
+        Emit("market_register_message", new MarketRegisterMessage
+        {
+            ServerIndex = 1, ServerName = "LegendOfMir2", GroupId = 2, Token = "tok",
+        });
+
+        Emit("market_search_message", new MarketSearchMessage
+        {
+            ServerIndex = 1, GroupId = 2, UserName = "u", MarketName = "Market", SearchWho = "w",
+            SearchItem = "i", ItemType = -1, ItemSet = 0, UserMode = 1, MarketNPC = 2,
+        });
+
+        Emit("marker_user_load_message", new MarkerUserLoadMessage
+        {
+            SellCount = 3, MarketNPC = 7, IsBusy = 0,
+        });
     }
 
     private static void AddFrame(List<string> lines, ref int seq, string dir, int ident, int recog, int param, int tag, int series, byte[] body)

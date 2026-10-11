@@ -1159,3 +1159,6 @@
 {"kind":"playerdatainfo","name":"serverrequestdata","hex":"0405000000030000000102030200000004050100000006"}
 {"kind":"playerdatainfo","name":"serverrequestdata_null","hex":"04ffffffffffffffffffffffffffffffff"}
 {"kind":"playerdatainfo","name":"serverrequestmessage","hex":"05050000003412060007000800"}
+{"kind":"market","name":"market_register_message","hex":"04010c0000004c006500670065006e0064004f0066004d00690072003200020300000074006f006b00"}
+{"kind":"market","name":"market_search_message","hex":"0a0102010000007500060000004d00610072006b0065007400010000007700010000006900ffff000100000002000000"}
+{"kind":"market","name":"marker_user_load_message","hex":"030000000700000000000000"}

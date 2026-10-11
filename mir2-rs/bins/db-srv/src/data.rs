@@ -45,12 +45,12 @@ const EDCODE_BUFFER_SIZE: usize = 10_000;
 const CHECK_XOR: i32 = 0xAA;
 
 /// 取 i32 的低 16 位（C# `(ushort)` 强制转换）。
-fn low16(v: i32) -> u16 {
+pub(crate) fn low16(v: i32) -> u16 {
     u16::try_from(v & 0xFFFF).unwrap_or(0)
 }
 
 /// 处理一条请求后对连接的动作。
-enum ConnAction {
+pub(crate) enum ConnAction {
     Continue,
     /// C# `client.Close()`（签名不匹配）。
     Close,
@@ -370,20 +370,20 @@ async fn save_human_rcd(
 // ==== 信封编解码（C# `SendRequest`/`SendRequest<T>`/`GetCheckCode`/`SendMessage`） ====
 
 /// C# `HUtil32.MakeLong(ushort, ushort)`。
-fn make_long(low: u16, high: u16) -> i32 {
+pub(crate) fn make_long(low: u16, high: u16) -> i32 {
     (u32::from(low) | (u32::from(high) << 16)).cast_signed()
 }
 
 /// C# `EDCode.EncodeBuffer(byte[])`：≥ 10000 字节返回空数组。
-fn encode_buffer(data: &[u8]) -> Vec<u8> {
+pub(crate) fn encode_buffer(data: &[u8]) -> Vec<u8> {
     if data.len() >= EDCODE_BUFFER_SIZE {
         return Vec::new();
     }
     edcode::encode(data)
 }
 
-/// C# `GetCheckCode`。
-fn get_check_code(query_id: i32, packet: &ServerRequestData) -> i32 {
+/// C# `GetCheckCode`（6000/5700 面共用；`SendRequest` 的校验码口径）。
+pub(crate) fn get_check_code(query_id: i32, packet: &ServerRequestData) -> i32 {
     let len = packet
         .message
         .as_ref()
@@ -397,7 +397,7 @@ fn get_check_code(query_id: i32, packet: &ServerRequestData) -> i32 {
 }
 
 /// C# `SendRequest`（无业务体）：设 QueryId → 补空 Packet → 算 Sign → 发。
-fn send_request_plain(
+pub(crate) fn send_request_plain(
     tx: &mpsc::UnboundedSender<Vec<u8>>,
     query_id: i32,
     message: ServerRequestMessage,
@@ -428,16 +428,26 @@ fn send_request_plain(
 }
 
 /// C# `SendRequest<T>`（带业务体）。
-fn send_request_with<T: MemPack>(
+pub(crate) fn send_request_with<T: MemPack>(
     tx: &mpsc::UnboundedSender<Vec<u8>>,
     query_id: i32,
     message: ServerRequestMessage,
     body: &T,
 ) {
+    send_request_bytes(tx, query_id, message, &body.to_bytes());
+}
+
+/// C# `SendRequest`（带**已序列化**业务体）：5700 面用它发送非 `mir2_storage` 的 MemoryPack 体。
+pub(crate) fn send_request_bytes(
+    tx: &mpsc::UnboundedSender<Vec<u8>>,
+    query_id: i32,
+    message: ServerRequestMessage,
+    body: &[u8],
+) {
     let mut resp = ServerRequestData {
         query_id,
         message: Some(encode_buffer(&message.to_bytes())),
-        packet: Some(encode_buffer(&body.to_bytes())),
+        packet: Some(encode_buffer(body)),
         sign: None,
     };
     let check = get_check_code(query_id, &resp);
@@ -446,7 +456,7 @@ fn send_request_with<T: MemPack>(
 }
 
 /// C# `SendMessage`：6B `ServerDataPacket` + 体。
-fn send_message(tx: &mpsc::UnboundedSender<Vec<u8>>, body: &[u8]) {
+pub(crate) fn send_message(tx: &mpsc::UnboundedSender<Vec<u8>>, body: &[u8]) {
     let header = ServerDataPacket {
         packet_code: PacketCode,
         packet_len: u16::try_from(body.len()).unwrap_or(u16::MAX),

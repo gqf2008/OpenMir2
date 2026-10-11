@@ -300,9 +300,10 @@ fn oracle_vectors_byte_exact() {
                 }
             }
             // 向量文件由多个 crate 共用：`playerdatainfo`（DBSrv 6000 面的 MemoryPack 结构）归
-            // `crates/storage/tests/playerdatainfo_vectors.rs`（含条数锚点）；本测试只校验协议层 kind，
+            // `crates/storage/tests/playerdatainfo_vectors.rs`，`market`（DBSrv 5700 面）归
+            // `bins/db-srv/src/market.rs` 单测（均含条数锚点）；本测试只校验协议层 kind，
             // 不认识的 kind 仍要 panic（拼错不会静默通过）。
-            "playerdatainfo" => {}
+            "playerdatainfo" | "market" => {}
             other => panic!("line {}: unknown kind {other}", lineno + 1),
         }
     }

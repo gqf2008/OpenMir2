@@ -1,0 +1,65 @@
+# 5700 MarketService MemoryPack 真身探针 —— 2026-10-11T17:17:57Z
+# 复现：把下面的 Program.cs / market-probe.csproj 放进空目录，dotnet build -c Release && dotnet run -c Release
+# 引用：工作树 src/OpenMir2/OpenMir2.csproj（真身 SerializerUtil → MemoryPackSerializerOptions.Utf16）
+
+## market-probe.csproj
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable><ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>market-probe</AssemblyName><AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="<repo>\src\OpenMir2\OpenMir2.csproj" />
+  </ItemGroup>
+</Project>
+
+## Program.cs
+// market-probe —— C# 真身行为探针：5700 MarketService 的 MemoryPack 可序列化性。
+// 引用工作树 src/OpenMir2/OpenMir2.csproj（同 oracle-vectors）。
+using System;
+using System.Text;
+using OpenMir2;
+using OpenMir2.Data;
+using OpenMir2.Packets.ClientPackets;
+using OpenMir2.Packets.ServerPackets;
+
+public static class Program
+{
+    static string Hex(byte[] d) => d == null ? "<null>" : Convert.ToHexString(d).ToLowerInvariant();
+    static void Try(string name, Func<byte[]> f)
+    {
+        try { var b = f(); Console.WriteLine($"{name}: len={b.Length} {Hex(b)}"); }
+        catch (Exception ex) { Console.WriteLine($"{name}: THROW {ex.GetType().Name}: {ex.Message}"); }
+    }
+    public static int Main(string[] args)
+    {
+        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+        Console.WriteLine("FixedHeaderLen=" + ServerDataPacket.FixedHeaderLen + " PacketCode=" + Grobal2.PacketCode);
+        Try("MarkerUserLoadMessage(3,7,0)", () => SerializerUtil.Serialize(new MarkerUserLoadMessage { SellCount = 3, MarketNPC = 7, IsBusy = 0 }));
+        Try("MarkerUserLoadMessage(0x01020304,0,0xAA)", () => SerializerUtil.Serialize(new MarkerUserLoadMessage { SellCount = 0x01020304, MarketNPC = 0, IsBusy = 0xAA }));
+        Try("MarketRegisterMessage", () => SerializerUtil.Serialize(new MarketRegisterMessage { ServerIndex = 1, ServerName = "LegendOfMir2", GroupId = 2, Token = "tok" }));
+        Try("MarketSearchMessage", () => SerializerUtil.Serialize(new MarketSearchMessage { ServerIndex = 1, GroupId = 2, UserName = "u", MarketName = "Market", SearchWho = "w", SearchItem = "i", ItemType = -1, ItemSet = 0, UserMode = 1, MarketNPC = 2 }));
+        var mi = new MarketItem { SellItem = new ClientItem { MakeIndex = 11, Dura = 22, DuraMax = 33 }, UpgCount = 4, Index = 5, SellPrice = 66, SellWho = "seller", SellDate = "0312311210", SellState = 1 };
+        Try("MarketItem", () => SerializerUtil.Serialize(mi));
+        Try("MarketSaveDataItem(Item=mi)", () => SerializerUtil.Serialize(new MarketSaveDataItem { Item = mi, ServerIndex = 1, ServerName = "sn", GroupId = 2 }));
+        Try("MarketDataMessage(List=[mi])", () => SerializerUtil.Serialize(new MarketDataMessage { List = new System.Collections.Generic.List<MarketItem> { mi }, TotalCount = 1 }));
+        Try("MarketDataMessage(List=[])", () => SerializerUtil.Serialize(new MarketDataMessage { List = new System.Collections.Generic.List<MarketItem>(), TotalCount = 0 }));
+        Try("Deserialize<MarketSaveDataItem>(0x00)", () => { var v = SerializerUtil.Deserialize<MarketSaveDataItem>(new byte[] { 0x00 }); return new byte[] { (byte)(v.Item == null ? 1 : 9), (byte)v.GroupId }; });
+        Try("Deserialize<MarketSaveDataItem>(04 FF 01 'sn' 02)", () => { var v = SerializerUtil.Deserialize<MarketSaveDataItem>(new byte[] { 0x04, 0xFF, 0x01, 0x02, 0x00, 0x00, 0x00, 0x73, 0x00, 0x6E, 0x00, 0x02 }); return new byte[] { (byte)(v.Item == null ? 1 : 9) }; });
+        return 0;
+    }
+}
+
+## 输出
+FixedHeaderLen=6 PacketCode=2862262938
+MarkerUserLoadMessage(3,7,0): len=12 030000000700000000000000
+MarkerUserLoadMessage(0x01020304,0,0xAA): len=12 0403020100000000aa000000
+MarketRegisterMessage: len=41 04010c0000004c006500670065006e0064004f0066004d00690072003200020300000074006f006b00
+MarketSearchMessage: len=48 0a0102010000007500060000004d00610072006b0065007400010000007700010000006900ffff000100000002000000
+MarketItem: THROW MemoryPackSerializationException: OpenMir2.Data.MarketItem is not registered in this provider.
+MarketSaveDataItem(Item=mi): THROW MemoryPackSerializationException: OpenMir2.Data.MarketItem is not registered in this provider.
+MarketDataMessage(List=[mi]): THROW MemoryPackSerializationException: OpenMir2.Data.MarketItem is not registered in this provider.
+MarketDataMessage(List=[]): len=9 020000000000000000
+Deserialize<MarketSaveDataItem>(0x00): len=2 0100
+Deserialize<MarketSaveDataItem>(04 FF 01 'sn' 02): THROW MemoryPackSerializationException: OpenMir2.Data.MarketItem is not registered in this provider.
