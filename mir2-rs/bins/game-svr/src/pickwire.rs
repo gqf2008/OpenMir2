@@ -38,7 +38,7 @@ use crate::ground::{
     RM_WEIGHTCHANGED, SM_ADDITEM, SM_DROPITEM_FAIL, SM_DROPITEM_SUCCESS,
 };
 use crate::smframe;
-use crate::useitem::QueuedNotice;
+use crate::useitem::{QueuedNotice, RM_HEALTHSPELLCHANGED};
 use mir2_world::{FloorItemKind, FloorItemView};
 
 /// 接线层在一次 pickup/drop 处理里需要读到的**会话态**（oracle `PlayObject` 上的当下值）。
@@ -78,6 +78,14 @@ pub fn notice_frame(n: &QueuedNotice, session: &WireSession) -> Option<Vec<u8>> 
             session.wabil.weight,
             session.wabil.wear_weight,
             session.wabil.hand_weight,
+        )),
+        // `CM_EAT` 的 `StdMode 0` 回帧（`BaseObject.IncHealthSpell` 尾部 `HealthSpellChanged()`，
+        // `BaseObject.cs:704` ⇒ `SendMsg(RM_HEALTHSPELLCHANGED)`，`PlayObject.Message.cs:1736-1739`）。
+        RM_HEALTHSPELLCHANGED => Some(smframe::sm_healthspellchanged(
+            session.actor_id,
+            session.wabil.hp,
+            session.wabil.mp,
+            session.wabil.max_hp,
         )),
         RM_GOLDCHANGED => Some(smframe::sm_goldchanged(session.gold, session.game_gold)),
         RM_SYSMESSAGE => session.sys_msg.as_deref().map(|msg| {

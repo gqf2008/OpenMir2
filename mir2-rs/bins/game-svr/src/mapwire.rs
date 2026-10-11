@@ -106,6 +106,31 @@ pub fn resolve_map_id(
     }
 }
 
+/// 进图地图解析 = oracle `WorldServer.cs:319-341` 的 `FindMap(MapName)==null ⇒ MapName = HomeMap`。
+///
+/// 先试 `primary`（空 `HomeMap` 时已由 `homemap` 算出的出生点/记录 `CurMap`）；失败且 `fallback`
+/// 非空且不同于 `primary`（记录的 `HomeMap`）再试一次。两者都找不到才 `Err`（调用方按
+/// oracle「切服」/fail-closed 处置，不静默退回 0 号图）。
+///
+/// # Errors
+/// `primary` 与 `fallback` 都不在注册表内 ⇒ 返回 `primary` 的 `EnvirError`。
+pub fn resolve_enter_map(
+    registry: Option<&MapRegistry>,
+    primary: &str,
+    fallback: &str,
+) -> Result<(String, usize), mir2_envir::EnvirError> {
+    match resolve_map_id(registry, primary) {
+        Ok(id) => Ok((primary.to_string(), id)),
+        Err(e) => {
+            if !fallback.is_empty() && fallback != primary {
+                resolve_map_id(registry, fallback).map(|id| (fallback.to_string(), id))
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
 /// 没有 Envir 注册表时的回退尺寸来源判定（owner `272582e1` 裁决；`WorldMaps` 可选化的
 /// **fail-closed 半边**）。
 ///
@@ -219,6 +244,34 @@ mod tests {
             resolve_map_id(Some(&reg), "0100").is_err(),
             "文件名不是逻辑名 ⇒ 也不能命中（MapManager 的键是逻辑名）"
         );
+    }
+
+    /// **issue `8d07694d` ①**：`resolve_enter_map` 先 `primary`，失败且有非空 `fallback` 时按
+    /// oracle `FindMap==null ⇒ MapName=HomeMap`（`WorldServer.cs:319-341`）回落。
+    /// 红检：去掉回落支（只 `resolve_map_id(primary)`）⇒ 本用例的 `("0", 0)` 与 `("0129",1)` 断言必红。
+    #[test]
+    fn enter_map_falls_back_to_home_map() {
+        let env = TempEnv::new("homefall");
+        let reg = registry(&env);
+        // primary 空（新角色 CurMap 空）⇒ 用 fallback（记录 HomeMap）。
+        assert_eq!(
+            resolve_enter_map(Some(&reg), "", "0").unwrap(),
+            ("0".to_string(), 0)
+        );
+        // primary 非法 ⇒ 也回落。
+        assert_eq!(
+            resolve_enter_map(Some(&reg), "不存在", "0129").unwrap(),
+            ("0129".to_string(), 1)
+        );
+        // primary 命中 ⇒ 用 primary（不走 fallback）。
+        assert_eq!(
+            resolve_enter_map(Some(&reg), "0129", "0").unwrap(),
+            ("0129".to_string(), 1)
+        );
+        // 两者都找不到 ⇒ Err（fail-closed，不静默退回 0 号图）。
+        assert!(resolve_enter_map(Some(&reg), "", "也不存在").is_err());
+        // fallback 为空 ⇒ 与单发 resolve_map_id 同（Err）。
+        assert!(resolve_enter_map(Some(&reg), "", "").is_err());
     }
 
     /// 无 Envir ⇒ `Placeholder`；`resolve_map_id` 走 S1 占位回退（`Ok(0)`，由调用方记 WRN）。

@@ -84,6 +84,9 @@
 use crate::ability::{recalc_abilitys, Ability, ItemCatalog, RecalcInputs};
 use crate::bag::{BagItem, Frame};
 
+/// `CM_EAT`（`src/OpenMir2/Messages.cs` 的 `CM_EAT = 1006`；
+/// `PlayObject.Message.cs:826` 的 `case CM_EAT: ClientUseItems(nParam1, Msg)`）。
+pub const CM_EAT: u16 = 1006;
 /// `SM_EAT_OK`（`src/OpenMir2/Messages.cs:297`）。
 pub const SM_EAT_OK: u16 = 635;
 /// `SM_EAT_FAIL`（`src/OpenMir2/Messages.cs:298`）。
