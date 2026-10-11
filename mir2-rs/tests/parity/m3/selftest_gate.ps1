@@ -15,7 +15,9 @@
        端口没听（impl=none）⇒ entry_ports_not_listening；同一 C# 端口集在 -Side csharp 下仍绿。
     ② Get-M3SessionDirFault：$null ⇒ 'session_dir_missing'；目录对象 ⇒ 无 fault。
     ③ Get-M3PeerScenarioGuard：场景一致 ⇒ 绿；不一致 ⇒ peer_scenario_mismatch；
-       缺 baseline.json ⇒ peer_baseline_missing；缺 fixed_new_chr ⇒ peer_fixed_new_chr_missing。
+       缺 baseline.json ⇒ peer_baseline_missing；缺 fixed_new_chr ⇒ peer_fixed_new_chr_missing；
+       baseline.json 坏/半写（截断、非法 JSON）⇒ peer_baseline_invalid（**结构化判红、不抛异常中断**，
+       P-1：reviewer-5 `3926cf99` / reviewer-3 `56f02a6e`）。
 
   「改坏必红 / 还原必绿」：把 `gate_guards.ps1` 对应护栏改回旧行为（放行）再跑本脚本，
   必须 exit 1；还原后必须 exit 0。原始输出落 `E:\tmp\openmir2-watch\`。
@@ -136,6 +138,29 @@ $pNoField = Join-Path $Work 'peer-nofield'
 New-Baseline $pNoField '' -OmitField
 $g = Get-M3PeerScenarioGuard -PeerDir $pNoField -LocalScenario '(off)'
 Test-Case 'peer/缺fixed_new_chr=红' (@($g.failed) -contains 'peer_fixed_new_chr_missing') ("failed=[{0}]" -f (@($g.failed) -join ','))
+
+# P-1（reviewer-5 `3926cf99` / reviewer-3 `56f02a6e`）：peer baseline.json 被写坏/半写（截断、非法 JSON）时，
+# 旧写法在 $ErrorActionPreference='Stop' 下抛异常，run_m3_gate.ps1 在落 RED 报告前中断（fail-open）。
+# 本用例断言：函数**不抛异常**、返回结构化 RED（failed 含 peer_baseline_invalid 且 message 含「解析失败」）。
+# 注意 try/catch 只用来让「函数抛异常」表现为**该用例 FAIL**（而不是整个自检崩掉），这样改坏必红落在这条用例上。
+$pBadJson = Join-Path $Work 'peer-badjson'
+New-Item -ItemType Directory -Force -Path $pBadJson | Out-Null
+Set-Content -Path (Join-Path $pBadJson 'baseline.json') -Encoding utf8 `
+  -Value '{ "session": "peer-badjson", "side": "csharp", "fixed_new_chr": "(off'
+$g = $null
+$badJsonThrew = $null
+try {
+  $g = Get-M3PeerScenarioGuard -PeerDir $pBadJson -LocalScenario '(off)'
+} catch {
+  $badJsonThrew = $_
+}
+$badJsonCodes = if ($g) { @($g.failed) } else { @() }
+$badJsonMessages = if ($g) { (@($g.messages) -join ' ') } else { '' }
+# PS5.1 的 if 是语句不是表达式 ⇒ 先算 detail，再传参（不要写成 (if …)）。
+$badJsonDetail = if ($badJsonThrew) { 'THREW: ' + $badJsonThrew.Exception.Message } else { "failed=[{0}]" -f ($badJsonCodes -join ',') }
+Test-Case 'peer/baseline.json坏JSON=红(不中断)' `
+  (($null -eq $badJsonThrew) -and ($badJsonCodes -contains 'peer_baseline_invalid') -and ($badJsonMessages -match '解析失败')) `
+  $badJsonDetail
 
 # ---------------------------------------------------------------- 汇总
 $report = [ordered]@{

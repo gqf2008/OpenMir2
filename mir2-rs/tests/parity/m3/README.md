@@ -62,7 +62,10 @@ python mir2-rs/tests/parity/m3/scoped_diff.py diff \
    - `Get-M3SessionDirFault`：本侧会话目录非空（run_pair 中途失败 ⇒ `$sessionDir=null`，
      旧实现会抛异常、连 RED 报告都不落 ⇒ fail-open），否则 `session_dir_missing`；
    - `Get-M3PeerScenarioGuard`：peer 的 `baseline.json.fixed_new_chr` 与本侧一致，否则
-     `peer_scenario_mismatch`（两侧不是同一输入序列，diff 无仲裁力）。
+     `peer_scenario_mismatch`（两侧不是同一输入序列，diff 无仲裁力）；peer 的 `baseline.json`
+     被写坏/半写（截断、非法 JSON）时 `peer_baseline_invalid`——**结构化判红并落报告**，
+     不得抛异常中断（P-1：旧写法 `Get-Content … | ConvertFrom-Json` 在 `$ErrorActionPreference='Stop'`
+     下中断于落 RED 报告前，属 fail-open）。
    两条都过才跑 `scoped_diff.py diff`，**必须 0**。
 
 ### 护栏自检（离线；卡 `openmir2-m3-gate-script-hardening`）
@@ -72,12 +75,13 @@ python mir2-rs/tests/parity/m3/scoped_diff.py diff \
 所以「改坏必红 / 还原必绿」作用在**真正跑的生产代码**上：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/selftest_gate.ps1   # 15/15 GREEN
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/selftest_gate.ps1   # 16/16 GREEN
 ```
 
 自检覆盖：已知 Rust 入口=绿 / C#=红 / **未知进程=红（旧护栏放行）** /
 **已知 Rust 接错端口=红（旧护栏放行）** / 端口没听=红 / sessionDir=null ⇒ `session_dir_missing` /
-peer 场景不一致 ⇒ `peer_scenario_mismatch` / 缺 `baseline.json` / 缺 `fixed_new_chr`。
+peer 场景不一致 ⇒ `peer_scenario_mismatch` / 缺 `baseline.json` / 缺 `fixed_new_chr` /
+**peer `baseline.json` 坏 JSON ⇒ `peer_baseline_invalid`（不抛异常中断，P-1）**。
 全程离线：不起栈、不占端口、不碰 DB。
 
 首次 GREEN 报告（2026-10-10，`-Side csharp -VerifyRepeat`）：

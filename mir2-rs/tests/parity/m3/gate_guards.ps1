@@ -7,6 +7,10 @@
 # 三条护栏（两轮独立审查 findings：reviewer-4 `55116105` finding 1/2、reviewer-3 `4bffcf99` M3R-2）：
 #   ① Get-M3PeerScenarioGuard：`-PeerSession` 的 baseline.json.fixed_new_chr 必须与本侧场景一致，
 #      否则两侧不是同一输入序列，跨侧 diff 无仲裁力 ⇒ RED（旧实现只靠人核）。
+#      P-1（reviewer-5 `3926cf99` / reviewer-3 `56f02a6e`）：peer 的 baseline.json 被写坏/半写时，
+#      旧写法 `Get-Content … | ConvertFrom-Json` 抛异常；`run_m3_gate.ps1` 设 `$ErrorActionPreference='Stop'`
+#      且调用点无 try/catch ⇒ 门禁**在落 RED 报告前中断**（同一 fail-open 家族）⇒ 解析失败必须是
+#      `peer_baseline_invalid` 结构化失败，让主流程继续到第 4 步落报告、退出码非 0。
 #   ② Get-M3SessionDirFault：本侧会话目录可能为 $null（run_pair 中途失败、目录已建但未写
 #      baseline.json）。旧实现 `Join-Path $sessionDir.FullName …` 在 $ErrorActionPreference='Stop'
 #      下抛异常中断、**连 RED 报告都不落**（fail-open）⇒ 进第 3 步前先判空。
@@ -109,7 +113,7 @@ function Get-M3SessionDirFault {
   return $null
 }
 
-# ③ 参照会话建角场景一致性（机判）
+# ③ 参照会话建角场景一致性（机判；含 peer baseline.json 解析失败防线，见 P-1）
 function Get-M3PeerScenarioGuard {
   param(
     [Parameter(Mandatory)][string]$PeerDir,
@@ -126,7 +130,23 @@ function Get-M3PeerScenarioGuard {
     return [pscustomobject]@{ failed = @($failed); messages = @($messages); peer_scenario = $peerScenario }
   }
 
-  $baseline = Get-Content -Path $baselinePath -Raw | ConvertFrom-Json
+  # P-1：peer baseline.json 被写坏/半写（截断、非法 JSON、空文件）时，旧写法在 Stop 下抛异常、
+  # 门禁不落 RED 报告（fail-open）。这里局部 -ErrorAction Stop + try/catch，解析失败 ⇒ 结构化 RED
+  # （peer_baseline_invalid），主流程继续到第 4 步。空/非对象（$null 结果）同样按解析失败处理。
+  $baseline = $null
+  $parseError = $null
+  try {
+    $baseline = Get-Content -Path $baselinePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+  } catch {
+    $parseError = $_.Exception.Message
+  }
+  if ($null -eq $baseline) {
+    if ([string]::IsNullOrWhiteSpace($parseError)) { $parseError = '内容为空或不是 JSON 对象（半写/截断）' }
+    $messages.Add(("RED: 参照会话 baseline.json 解析失败: {0} —— {1}" -f $baselinePath, $parseError))
+    $failed.Add('peer_baseline_invalid')
+    return [pscustomobject]@{ failed = @($failed); messages = @($messages); peer_scenario = $peerScenario }
+  }
+
   $peerScenario = [string]$baseline.fixed_new_chr
   if ([string]::IsNullOrEmpty($peerScenario)) {
     $messages.Add(("RED: 参照会话 baseline.json 缺 fixed_new_chr（旧产物/被裁剪）: {0}" -f $baselinePath))
