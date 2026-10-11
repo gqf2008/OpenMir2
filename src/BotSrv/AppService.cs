@@ -34,12 +34,21 @@ namespace BotSrv
             MShare.g_nNewChrJob = _options.NewChrJob;
             MShare.g_nNewChrHair = _options.NewChrHair;
             MShare.g_nNewChrSex = _options.NewChrSex;
+            // M3 T-14 夹具（白名单 T-22）：固定背包/装备序列；默认 false = 原行为
+            MShare.g_boBagEquipSequence = _options.BagEquipSequence;
+            MShare.g_nBagEquipStepMs = _options.BagEquipStepMs;
+            MShare.g_nBagEquipStartDelayMs = _options.BagEquipStartDelayMs;
             runThread = new Thread(Run) { IsBackground = true };
             LogService.Info("服务器名称:{0} 服务器IP:{1} 服务器端口:{2}", _options.ServerName, _options.Address, _options.Port);
             LogService.Info("初始化机器人数量:{0} 登录机器人总数量:{1}", _options.ChrCount, _options.TotalChrCount);
             if (_options.FixedNewChr)
             {
                 LogService.Info("建角参数固定: Job={0} Hair={1} Sex={2}", _options.NewChrJob, _options.NewChrHair, _options.NewChrSex);
+            }
+            if (_options.BagEquipSequence)
+            {
+                LogService.Info("固定背包/装备序列: 启用 起始等待={0}ms 步间隔={1}ms（拾取→装备→卸下→丢弃→用药；见 RobotPlayer.BagEquipSequenceTick）",
+                    _options.BagEquipStartDelayMs, _options.BagEquipStepMs);
             }
         }
 

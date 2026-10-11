@@ -358,6 +358,158 @@ namespace BotSrv.Player
             LoadMetrics.ProbeSent();
         }
 
+        #region M3 T-14 固定背包/装备序列（夹具专用，默认关；白名单 T-22）
+
+        /// <summary>下一步要发的背包/装备动作：-1=未武装；0..4=待发；5=已完成。</summary>
+        private int _bagSeqStep = -1;
+        /// <summary>下一步的到点时刻（MShare.GetTickCount），起步延迟与步间隔都用它。</summary>
+        private int _bagSeqNextTick;
+
+        /// <summary>收到本假人 SM_LOGON 后武装固定序列（`MShare.g_boBagEquipSequence` 关闭时是空操作）。
+        /// 武装后**不做**任何即时发送：第一步还要等 `g_nBagEquipStartDelayMs`（默认 3000ms），
+        /// 给服务端把物品列表推完、本假人视图装载完的时间。</summary>
+        private void ArmBagEquipSequence()
+        {
+            if (!MShare.g_boBagEquipSequence)
+            {
+                return;
+            }
+            _bagSeqStep = 0;
+            _bagSeqNextTick = MShare.GetTickCount() + MShare.g_nBagEquipStartDelayMs;
+            MainOutMessage($"M3BAGSEQ arm start_delay_ms={MShare.g_nBagEquipStartDelayMs} step_ms={MShare.g_nBagEquipStepMs}");
+        }
+
+        /// <summary>M3 T-14 固定序列（步进式，全靠本假人自己的视图）：
+        ///   0 CM_PICKUP     —— 拾取当前格子上的地面物品
+        ///   1 CM_TAKEONITEM —— 把背包里第一件可装备物品穿上（`BotHelper.GetTakeOnPosition` 定槽）
+        ///   2 CM_TAKEOFFITEM—— 卸下身上第一件已装备物品
+        ///   3 CM_DROPITEM   —— 丢弃背包里第一件物品
+        ///   4 CM_EAT        —— 吃掉背包里第一件药品（StdMode 0/1/2）
+        /// 参数一律从 `MShare.ItemArr`/`MShare.UseItems`（服务端推来的本假人视图）取；
+        /// 两侧服务端行为相同时，发出去的 CM_* 字节逐条相同。缺件时**只记 skip、不发送**
+        /// —— 两侧同缺即同 skip，不引入差异。默认关（`g_boBagEquipSequence=false`）时本方法空转。</summary>
+        private void BagEquipSequenceTick()
+        {
+            if (!MShare.g_boBagEquipSequence || _bagSeqStep < 0 || _bagSeqStep > 4)
+            {
+                return;
+            }
+            if (!_inWorld || ClientSocket == null || !ClientSocket.IsConnected)
+            {
+                return;
+            }
+            int now = MShare.GetTickCount();
+            if (now < _bagSeqNextTick)
+            {
+                return;
+            }
+            _bagSeqNextTick = now + MShare.g_nBagEquipStepMs;
+            int step = _bagSeqStep;
+            switch (step)
+            {
+                case 0:
+                    MainOutMessage($"M3BAGSEQ step=0 op=CM_PICKUP x={_probeX} y={_probeY}");
+                    SendPickup();
+                    break;
+                case 1:
+                    BagSeqTakeOn();
+                    break;
+                case 2:
+                    BagSeqTakeOff();
+                    break;
+                case 3:
+                    BagSeqDrop();
+                    break;
+                case 4:
+                    BagSeqEat();
+                    break;
+            }
+            _bagSeqStep = step + 1;
+            if (_bagSeqStep > 4)
+            {
+                MainOutMessage("M3BAGSEQ done");
+            }
+        }
+
+        /// <summary>步骤 1：背包里第一件可装备物品 → CM_TAKEONITEM(where, MakeIndex, name)。</summary>
+        private void BagSeqTakeOn()
+        {
+            for (int i = 6; i < BotConst.MaxBagItemcl; i++)
+            {
+                ClientItem it = MShare.ItemArr[i];
+                if (it == null || string.IsNullOrEmpty(it.Item.Name) || it.Item.NeedIdentify >= 4)
+                {
+                    continue;
+                }
+                int where = BotHelper.GetTakeOnPosition(it, MShare.UseItems, true);
+                if (where < 0)
+                {
+                    continue;
+                }
+                MainOutMessage($"M3BAGSEQ step=1 op=CM_TAKEONITEM bag={i} where={where} make={it.MakeIndex} name={it.Item.Name}");
+                SendTakeOnItem(where, it.MakeIndex, it.Item.Name);
+                return;
+            }
+            MainOutMessage("M3BAGSEQ step=1 op=CM_TAKEONITEM skip=no_equippable_bag_item");
+        }
+
+        /// <summary>步骤 2：身上第一件已装备物品 → CM_TAKEOFFITEM(where, MakeIndex, name)。</summary>
+        private void BagSeqTakeOff()
+        {
+            for (int w = 0; w < MShare.UseItems.Length; w++)
+            {
+                ClientItem eq = MShare.UseItems[w];
+                if (eq == null || string.IsNullOrEmpty(eq.Item.Name))
+                {
+                    continue;
+                }
+                MainOutMessage($"M3BAGSEQ step=2 op=CM_TAKEOFFITEM where={w} make={eq.MakeIndex} name={eq.Item.Name}");
+                SendTakeOffItem((byte)w, eq.MakeIndex, eq.Item.Name);
+                return;
+            }
+            MainOutMessage("M3BAGSEQ step=2 op=CM_TAKEOFFITEM skip=no_equipped_item");
+        }
+
+        /// <summary>步骤 3：背包里第一件物品 → CM_DROPITEM(MakeIndex, 1, name)。</summary>
+        private void BagSeqDrop()
+        {
+            for (int i = 6; i < BotConst.MaxBagItemcl; i++)
+            {
+                ClientItem it = MShare.ItemArr[i];
+                if (it == null || string.IsNullOrEmpty(it.Item.Name))
+                {
+                    continue;
+                }
+                MainOutMessage($"M3BAGSEQ step=3 op=CM_DROPITEM bag={i} make={it.MakeIndex} name={it.Item.Name}");
+                SendDropItem(it.Item.Name, it.MakeIndex, 1);
+                return;
+            }
+            MainOutMessage("M3BAGSEQ step=3 op=CM_DROPITEM skip=no_bag_item");
+        }
+
+        /// <summary>步骤 4：背包里第一件药品（StdMode 0/1/2）→ CM_EAT(MakeIndex, 0, 0, StdMode)。</summary>
+        private void BagSeqEat()
+        {
+            for (int i = 6; i < BotConst.MaxBagItemcl; i++)
+            {
+                ClientItem it = MShare.ItemArr[i];
+                if (it == null || string.IsNullOrEmpty(it.Item.Name))
+                {
+                    continue;
+                }
+                if (it.Item.StdMode != 0 && it.Item.StdMode != 1 && it.Item.StdMode != 2)
+                {
+                    continue;
+                }
+                MainOutMessage($"M3BAGSEQ step=4 op=CM_EAT bag={i} make={it.MakeIndex} stdmode={it.Item.StdMode} name={it.Item.Name}");
+                SendEat(it.MakeIndex, it.Item.Name, it.Item.StdMode);
+                return;
+            }
+            MainOutMessage("M3BAGSEQ step=4 op=CM_EAT skip=no_drug_in_bag");
+        }
+
+        #endregion
+
         /// <summary>收到 SM_LOGON = 服务端确认本假人已进世界（探针武装 + tick 覆盖率分子），幂等。
         /// `x`/`y` = 该消息里服务端给本假人的落点（PlayScene 的 SM_LOGON 分支就用它们 NewActor）。</summary>
         public void MarkInWorld(int x, int y)
@@ -370,6 +522,7 @@ namespace BotSrv.Player
             _probeX = x;
             _probeY = y;
             _inWorld = true;
+            ArmBagEquipSequence();
             if (LoadMetrics.ShouldSuppressInWorld(LoginId))
             {
                 // 牙齿钩子（T-12）：本假人照常进世界，但**不计** in_world（抹掉“进世界证据”）。
@@ -397,6 +550,7 @@ namespace BotSrv.Player
                 }
                 DScreen.CurrentScene.DoNotifyEvent();
                 ProbeActionTick();
+                BagEquipSequenceTick();
                 if (DScreen.CurrentScene == PlayScene)
                 {
                     ProcessActionMessages();
