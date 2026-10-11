@@ -1,0 +1,6 @@
+== M2 session-lifecycle fixture ==
+repo      = E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr
+outdir    = E:/tmp/m2acc-life/offline-recorded-roundA
+account   = fixt0
+OFFLINE old_received=KICKUSER_SYSTEM_MSG new_verdict=ADMITTED in_world=True
+GREEN(offline): 判定已采到

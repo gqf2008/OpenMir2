@@ -1,0 +1,82 @@
+{
+ "tool": "m2-acceptance/s2c_diff.py",
+ "golden": "mir2-rs/tests/golden/c-line-baseline-c3-20261010.jsonl",
+ "rust": "E:/tmp/m2acc/run5/rust/capture.jsonl",
+ "port": 7200,
+ "dir": "s2c",
+ "start_ident": 658,
+ "upto_ident": 46,
+ "normalization": {
+  "recog": "CommandMessage.Recog = oracle ActorId（ActorMgr.GetNextIdentity() 的会话相关随机正数）"
+ },
+ "golden_frames": 15,
+ "rust_frames": 15,
+ "golden_idents": [
+  658,
+  51,
+  50,
+  41,
+  213,
+  11029,
+  42,
+  766,
+  54,
+  5008,
+  1106,
+  52,
+  752,
+  811,
+  46
+ ],
+ "rust_idents": [
+  658,
+  51,
+  50,
+  41,
+  213,
+  11029,
+  42,
+  766,
+  54,
+  5008,
+  1106,
+  52,
+  752,
+  811,
+  46
+ ],
+ "diff_count": 4,
+ "whitelisted_count": 0,
+ "diffs": [
+  {
+   "ident": 52,
+   "field": "body_sha256",
+   "kind": "",
+   "golden": "a18adb5105b6a02c87b334be0eb338bd59a1e56694e179f2dc24f8fa4286728f",
+   "rust": "80ac78a12caa6d1b5cf321939413997e9639ff80d5ed5193be882ec6121471c7"
+  },
+  {
+   "ident": 52,
+   "field": "raw_hex",
+   "kind": "byte",
+   "golden": "236464686b6460686a646f686b6464686b6564686b6464686b6565686b6464686b67645f5f646b686b6764685f6464686b6464686b6466686964645e6b6462686b64676868643c21",
+   "rust": "236464686b6460686a646f686b6464686b6564686b6464686b6565686b6464686b6b645f6b646b686b6764685f6464686b6464686b646668696464686b6462686b64676868643c21"
+  },
+  {
+   "ident": 46,
+   "field": "param",
+   "kind": "",
+   "golden": "1",
+   "rust": "3"
+  },
+  {
+   "ident": 46,
+   "field": "raw_hex",
+   "kind": "byte",
+   "golden": "236464686b645e68686564686b6464686b21",
+   "rust": "236464686b645e68686764686b6464686b21"
+  }
+ ],
+ "whitelisted": [],
+ "pass": false
+}

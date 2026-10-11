@@ -1,0 +1,29 @@
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.88s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-3aa264152417c61e.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 57 filtered out; finished in 0.00s
+
+     Running unittests src\main.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-eb39968088e3f1ec.exe)
+
+running 1 test
+test tests::account_kick_targets_every_gateway_once ... FAILED
+
+failures:
+
+---- tests::account_kick_targets_every_gateway_once stdout ----
+20:23:38.936 [INF] 账号级顶号：向旧会话发 SM_SYSMESSAGE 并软关 ChrName:lb1a Account:acct1 SessionId:7 socket=901
+
+thread 'tests::account_kick_targets_every_gateway_once' (13512) panicked at bins\game-svr\src\main.rs:3840:37:
+lb1b 必须收到 SM_SYSMESSAGE（每网关各一个）
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::account_kick_targets_every_gateway_once
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 107 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`

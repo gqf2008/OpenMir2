@@ -88,6 +88,14 @@ pub struct GateConfig {
     /// `[Setup] DropItemRage`（oracle `GameSvrConf.cs:1754` 缺省 `3`，`byte`）——
     /// `ground::DropContext.drop_item_rage`（`PlayObject.Operate.cs:291` 的 `_MIN(...,3)` 散布半径）。
     pub drop_item_rage: u8,
+    /// `[Setup] SendRefMsgRange`（oracle `GameSvrConf.cs:499`，缺省 `12`，`byte`；
+    /// `ServerConf.cs:280` 的 `ReadWriteInteger("Setup", "SendRefMsgRange", …)`）。
+    ///
+    /// 用途：`BaseObject.SendRefMsg`（`BaseObject.Message.cs:399-402`）扫描周围
+    /// `CurrX/Y ± SendRefMsgRange` 的单元格，向其中的玩家广播 `RM_*`。
+    /// `openmir2-m2-gamesvr-host` 的装备/卸下 `FeatureChanged()`（`SM_FEATURECHANGED`）用它。
+    /// 缺键用 oracle 缺省 `12`（`GameSvrConf.cs:1503`）。
+    pub send_ref_msg_range: u8,
 }
 
 /// 默认配置文件：可执行文件同目录的 `Server.conf`（与 C# `AppContext.BaseDirectory` 一致）。
@@ -136,6 +144,7 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut in_safe_disable_drop: Option<bool> = None;
     let mut can_drop_price: Option<i32> = None;
     let mut drop_item_rage: Option<u8> = None;
+    let mut send_ref_msg_range: Option<u8> = None;
     let mut ids_addr: Option<String> = None;
     let mut ids_port: Option<u16> = None;
     let mut db_addr: Option<String> = None;
@@ -269,6 +278,13 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                             .with_context(|| format!("DropItemRage 不是合法字节：{v:?}"))?,
                     );
                 }
+                // `GameSvrConf.SendRefMsgRange` 是 `byte`（`GameSvrConf.cs:499`）；`Server.conf` 现网未写。
+                "SENDREFMSGRANGE" => {
+                    send_ref_msg_range = Some(
+                        v.parse()
+                            .with_context(|| format!("SendRefMsgRange 不是合法字节：{v:?}"))?,
+                    );
+                }
                 _ => {}
             },
             _ => {}
@@ -326,6 +342,8 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         in_safe_disable_drop: in_safe_disable_drop.unwrap_or(false),
         can_drop_price: can_drop_price.unwrap_or(500),
         drop_item_rage: drop_item_rage.unwrap_or(3),
+        // oracle 缺省值（`GameSvrConf.cs:1503`）：`[Setup]` 里没写不算错。
+        send_ref_msg_range: send_ref_msg_range.unwrap_or(12),
         ids_addr,
         ids_port,
         db_addr,
@@ -428,7 +446,7 @@ mod tests {
         let p = write(
             &dir,
             &format!(
-                "{base}[Setup]\nHumanMaxGold=10000000\nFloorItemCanPickUpTime=120000\nControlDropItem=1\nInSafeDisableDrop=0\nCanDropPrice=500\nDropItemRage=3\n"
+                "{base}[Setup]\nHumanMaxGold=10000000\nFloorItemCanPickUpTime=120000\nControlDropItem=1\nInSafeDisableDrop=0\nCanDropPrice=500\nDropItemRage=3\nSendRefMsgRange=15\n"
             ),
         );
         let c = load(&p).unwrap();
@@ -438,8 +456,9 @@ mod tests {
         assert!(!c.in_safe_disable_drop);
         assert_eq!(c.can_drop_price, 500);
         assert_eq!(c.drop_item_rage, 3);
+        assert_eq!(c.send_ref_msg_range, 15, "[Setup] SendRefMsgRange 实值");
 
-        // 缺键 ⇒ oracle 缺省。
+        // 缺键 ⇒ oracle 缺省（`SendRefMsgRange` 缺省 12，`GameSvrConf.cs:1503`）。
         let p2 = write(&dir, base);
         let c2 = load(&p2).unwrap();
         assert_eq!(c2.human_max_gold, 10_000_000);
@@ -448,10 +467,16 @@ mod tests {
         assert!(!c2.in_safe_disable_drop);
         assert_eq!(c2.can_drop_price, 500);
         assert_eq!(c2.drop_item_rage, 3);
+        assert_eq!(c2.send_ref_msg_range, 12, "缺键 ⇒ SendRefMsgRange 缺省 12");
 
         // 写了但非法 ⇒ 必须报错（不静默截断）。
         let p3 = write(&dir, &format!("{base}[Setup]\nDropItemRage=300\n"));
         assert!(load(&p3).is_err(), "DropItemRage=300 超出 byte ⇒ 必须报错");
+        let p5 = write(&dir, &format!("{base}[Setup]\nSendRefMsgRange=300\n"));
+        assert!(
+            load(&p5).is_err(),
+            "SendRefMsgRange=300 超出 byte ⇒ 必须报错"
+        );
         let p4 = write(&dir, &format!("{base}[Setup]\nControlDropItem=maybe\n"));
         assert!(load(&p4).is_err(), "ControlDropItem 非布尔 ⇒ 必须报错");
         std::fs::remove_dir_all(&dir).ok();
