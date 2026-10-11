@@ -973,6 +973,7 @@ name = "login-gate"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "encoding_rs",
  "mir2-protocol",
  "tokio",
 ]
@@ -1469,6 +1470,7 @@ name = "sel-gate"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "encoding_rs",
  "mir2-protocol",
  "tokio",
 ]
