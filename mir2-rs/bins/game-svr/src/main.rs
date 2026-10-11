@@ -29,6 +29,7 @@ mod hutil;
 mod ids;
 mod load;
 mod mapwire;
+mod notice;
 mod record;
 mod users;
 
@@ -211,9 +212,30 @@ async fn main() -> Result<()> {
             anyhow::bail!("Envir 地图配置损坏：{why}（拒绝以占位图启动）")
         }
     };
+    // 公告文本（658 `SM_SENDNOTICE` 的配置层输入）：`<base>/<NoticeDir>/Notice.txt`。
+    // 与 oracle `NoticeMgr.GetNoticeMsg("Notice")` 同源；读不到即不下发该帧并记 WRN。
+    let notice = notice::load_notice(&base, &cfg.notice_dir);
+    match &notice {
+        Some(text) => glog!(
+            "INF",
+            "公告已载入：{} 字节（base={} NoticeDir={}）",
+            text.len(),
+            base.display(),
+            cfg.notice_dir
+        ),
+        None => glog!(
+            "WRN",
+            "未找到公告文本（base={} NoticeDir={}）⇒ 658 SM_SENDNOTICE 不下发",
+            base.display(),
+            cfg.notice_dir
+        ),
+    }
     let _sim = std::thread::Builder::new()
         .name("m2-sim".to_string())
-        .spawn(move || sim_loop(maps, registry, ev_rx, Some(db)))
+        // 公告文本（oracle `NoticeMgr.GetNoticeMsg("Notice")`，帧 658 `SM_SENDNOTICE`）：
+        // 配置层输入，启动时读一次、进程内复用；读不到即不下发该帧（不报错，照 oracle
+        // `LoadFromFile` 的 `File.Exists` 早退）。
+        .spawn(move || sim_loop(maps, registry, notice, ev_rx, Some(db)))
         .context("起 sim 线程失败")?;
 
     // 登录服务器（IDS）链路：oracle 是 TcpClient 主动连它（`AuthenticationService.cs:22-34`），
@@ -349,6 +371,7 @@ fn route_to_gate<'a>(
 fn sim_loop(
     maps: Vec<(i32, i32)>,
     registry: Option<mir2_envir::MapRegistry>,
+    notice: Option<Vec<u8>>,
     ev_rx: std::sync::mpsc::Receiver<GateEvent>,
     mut db: Option<DbWiring>,
 ) {
@@ -553,6 +576,10 @@ fn sim_loop(
                                                     cur_x: u16::from_ne_bytes(head.cur_x.to_ne_bytes()),
                                                     cur_y: u16::from_ne_bytes(head.cur_y.to_ne_bytes()),
                                                     dir: head.dir,
+                                                    // 658 `SM_SENDNOTICE`：oracle `PlayObject.SendNotice`
+                                                    // 在 `SendLogon` **之前**下发（金标准 #1 在 #2 前），
+                                                    // `EnterWorldInputs::frames()` 的序已把它放第一位。
+                                                    notice: notice.clone(),
                                                     map_file_name: Some(
                                                         head.cur_map.as_bytes().to_vec(),
                                                     ),

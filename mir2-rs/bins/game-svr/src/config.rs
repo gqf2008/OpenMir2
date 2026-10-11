@@ -26,6 +26,9 @@ pub struct GateConfig {
     pub envir_dir: String,
     /// `[Share] MapDir`（oracle `SystemShare.Config.MapDir`，默认 `Map`）——`*.map` 所在目录。
     pub map_dir: String,
+    /// `[Share] NoticeDir`（oracle `SystemShare.Config.NoticeDir`，默认 `Notice`）——
+    /// `Notice.txt` 所在目录（`openmir2-m2-enter-world-frames` 的 658 `SM_SENDNOTICE` 用它）。
+    pub notice_dir: String,
     /// `[Server] IDSAddr`：登录服务器地址（oracle 是 TcpClient 主动连它，`AuthenticationService.cs:22-34`）。
     pub ids_addr: String,
     /// `[Server] IDSPort`（现网 5600）。
@@ -61,6 +64,7 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut maps: Option<Vec<(i32, i32)>> = None;
     let mut envir_dir: Option<String> = None;
     let mut map_dir: Option<String> = None;
+    let mut notice_dir: Option<String> = None;
     let mut ids_addr: Option<String> = None;
     let mut ids_port: Option<u16> = None;
     let mut db_addr: Option<String> = None;
@@ -118,6 +122,7 @@ pub fn load(path: &Path) -> Result<GateConfig> {
             "SHARE" => match k.as_str() {
                 "ENVIRDIR" => envir_dir = Some(v.to_string()),
                 "MAPDIR" => map_dir = Some(v.to_string()),
+                "NOTICEDIR" => notice_dir = Some(v.to_string()),
                 _ => {}
             },
             _ => {}
@@ -159,6 +164,7 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         // oracle 缺省值（`GameSvrConf.cs:1295-1296`）：缺 `[Share]` 键不算错。
         envir_dir: envir_dir.unwrap_or_else(|| "Envir".to_string()),
         map_dir: map_dir.unwrap_or_else(|| "Map".to_string()),
+        notice_dir: notice_dir.unwrap_or_else(|| "Notice".to_string()),
         ids_addr,
         ids_port,
         db_addr,
@@ -221,6 +227,10 @@ mod tests {
             "缺 [Share] EnvirDir 时用 oracle 缺省值"
         );
         assert_eq!(c.map_dir, "Map", "缺 [Share] MapDir 时用 oracle 缺省值");
+        assert_eq!(
+            c.notice_dir, "Notice",
+            "缺 [Share] NoticeDir 时用 oracle 缺省值（GameSvrConf.cs:1297）"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -237,6 +247,21 @@ mod tests {
         let c = load(&p).unwrap();
         assert_eq!(c.envir_dir, "Envir2");
         assert_eq!(c.map_dir, "Map2");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `[Share] NoticeDir` 照 oracle 的键读（`ServerConf.cs:77`），值要 trim。
+    #[test]
+    fn parses_share_notice_dir() {
+        let dir = std::env::temp_dir().join(format!("gs-notice-cfg-{}", std::process::id()));
+        let p = write(
+            &dir,
+            "[Server]\nGateAddr=127.0.0.1\nGatePort=5000\nCheckBlock=1\nWorldMaps=10x10\n\
+             IDSAddr=127.0.0.1\nIDSPort=5600\nDBAddr=127.0.0.1\nDBPort=6000\n\
+             [Share]\nNoticeDir= Notice2\n",
+        );
+        let c = load(&p).unwrap();
+        assert_eq!(c.notice_dir, "Notice2", "NoticeDir 值要 trim");
         std::fs::remove_dir_all(&dir).ok();
     }
 
