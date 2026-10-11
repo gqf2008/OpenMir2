@@ -444,5 +444,6 @@ powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/selftest.ps1
 
 - 真 `E:\MirServer\M2GameSvr\Server.conf` **没有** `WorldMaps` 键（Rust 侧 S1 占位键）⇒ `game-svr` 用真配置启动即报
   缺键；需补键（数据）、或改 Rust 为可选/从 Envir 注册表推导。本轮用 `-GameSvrConf` 指向补了键的副本。
-- master 的 `bins/game-gate` 用 `read_to_string`（严格 UTF-8）读 GBK 配置 ⇒ 起不来；修在
-  `openmir2-m2-gamegate` 卡（`bins/game-gate` 写集非本片），本轮用 `-GameGateExe` 指向该分支的构建件。
+- 本片起栈时分支头（`3ba17d11`）尚未包含 `openmir2-m2-gamegate` 的 GB2312 配置修复（`677678c2`，已在 master）
+  ⇒ 本轮用 `-GameGateExe` 指向该分支构建件。**合并 master 后 head `9f5b2dd1` 自带修复**，
+  `-GameGateExe` 已非必需（用 head 的 `game-gate.exe` + 真 GBK 配置实测能解析启动）。
