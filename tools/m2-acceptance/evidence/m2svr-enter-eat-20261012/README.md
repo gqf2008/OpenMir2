@@ -12,7 +12,7 @@
 | ② `CM_QUERYBAGITEMS(81)` → `SM_BAGITEMS(201)` | 回帧头 + 尾（`EncodeBuffer(ClientItem)+'/'`）；bot 侧 `bag_view>0` | **GREEN**：server `4 件（680 字节）`；m3bag 驱动 `SM_BAGITEMS body_len=668 bag_view=4`（**与 C# 基线 body_len=668 一致**，`bot-m3bag-markers.txt`） |
 | ③ `CM_EAT(1006)` 派发 | `main.rs` 收到 1006 → `useitem::use_item` → `SM_EAT_OK/FAIL` + 通知 | **GREEN**：`CM_EAT 结果 eaten=true immediate=1 notices=1` + `CM_EAT 已下发 2 帧`（`game-svr-server2-lines.txt`）；红检 `red-eat-makeindex.txt` |
 | ④ 新角色 4 件新手物品 | `ItemList` = 蜡烛→金创药(小量)→木剑→布衣(男/女) | **GREEN**：server `ItemList=4 件`；红检 `red-newbie-order.txt` |
-| ⑤ 四门禁 | fmt / clippy / test / msgcodegen | **GREEN**：540 passed / 0 failed / 16 ignored（71 suites）+ 604（`gates.txt`） |
+| ⑤ 四门禁 | fmt / clippy / test / msgcodegen | **GREEN**：分支树 541/0/16（71 suites）+ **合并树 549/0/16（72 suites）** + 604（`gates.txt` / `gates-merged.txt`） |
 | ⑥ 窗口纪律 | 起栈前四端口全空；收工 `-Stop` 只余 3306 | **GREEN**（`ports-before.txt` / `ports-after.txt` / `stop-stack.txt`） |
 
 **RNG 抽数账本（owner `784be562`/`020acba0`，本片已补）**：进图门走 oracle `WorldServer.cs:254-259` 的
@@ -146,8 +146,9 @@ CM_EAT 已下发 2 帧（socket=328 gate=0）
 
 ## 5. 四门禁原始输出（⑤）
 
-`gates.txt`：`cargo fmt --all -- --check` = `FMT_OK`；`cargo clippy --workspace --all-targets -- -D warnings` 干净；
-`cargo test --workspace --offline` = **540 passed / 0 failed / 16 ignored（71 suites）**；`msgcodegen --check` = `604 条常量`。
+`gates.txt`（分支树）：`cargo fmt --all -- --check` = `FMT_OK`；`cargo clippy --workspace --all-targets -- -D warnings` 干净；
+`cargo test --workspace --offline` = **541 passed / 0 failed / 16 ignored（71 suites）**；`msgcodegen --check` = `604 条常量`。
+`gates-merged.txt`（交付前把 master `459d2b37` 合入后的**合并树**）：**549 passed / 0 failed / 16 ignored（72 suites）** + `604`。
 隔离 target：`CARGO_TARGET_DIR=E:\tmp\openmir2-m2svr-target`。
 
 ## 6. 红检原始输出
@@ -172,5 +173,5 @@ CM_EAT 已下发 2 帧（socket=328 gate=0）
 | `load-stats-rust.ndjson` / `load-stats-csharp-baseline.ndjson` / `load-stats-rust2.ndjson` | 两侧 `ident_counts` 原始件 |
 | `db-rows.txt` | `characters` 表新角色 vs C# 基线行 |
 | `red-eat-makeindex.txt` / `red-bagitems-series.txt` / `red-newbie-order.txt` / `red-enter-fallback.txt` / `red-rng-draws.txt` | 五条红检原始输出 |
-| `gates.txt` | 四门禁原始输出 |
+| `gates.txt` / `gates-merged.txt` | 四门禁原始输出（分支树 / 合并 master `459d2b37` 后） |
 | `commands.txt` | 复现命令（含 hash 口径） |
