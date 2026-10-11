@@ -11,6 +11,8 @@
 | `green-after-fix.txt` | 绿检：帧逐字节 + 收件人集合（含自己） | `cargo test -p game-svr --offline say_broadcasts_hear_to_self_and_near_players_only` |
 | `redcheck-no-self.txt` | 红检①：`hear_targets` 去掉「含自己」⇒ **FAILED**（`socket=901 未收到 SM_HEAR`） | 同上（先改坏，后还原） |
 | `redcheck-series.txt` | 红检②：`sm_hear` 的 `Series` 1→0 ⇒ **FAILED**（`left:0/right:1`） | 同上（先改坏，后还原） |
+| `gates-test-{1,2,3}.txt` | 四门禁·`cargo test --workspace --offline` 3 连跑 | 68 suites / **483 passed** / 0 failed / 13 ignored |
+| `gates-msgcodegen.txt` | 四门禁·`msgcodegen --check` | rc=0（604） |
 
 ## `m2-03-talk.png`（真机截图）——**未采，如实登记 PREREQ**
 
@@ -26,3 +28,12 @@
 
   产物 `E:/tmp/m2acc/run1/m2-03-talk.png`；用 `check_screenshots.ps1 -ShotsDir E:/tmp/m2acc/run1` 校验清单。
 - **画面判据**：聊天框里出现 `aaa:m2 talk ok`（本角色自己发的文本）——这条正是服务端 `SM_HEAR` 的回声。
+
+## harness 自检（不碰栈/端口）
+
+| 命令 | 结果 |
+| --- | --- |
+| `powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/selftest.ps1` | **33/33 GREEN**，rc=0（`SUMMARY total=33 failed=0`） |
+| `powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/run_acceptance.ps1 -SelfCheckNoStack` | `SUMMARY green=1 red=0 prereq=5`，**rc=2**（无栈 ⇒ 前置缺失，**不静默通过**） |
+
+> 后者的 `PREREQ_MISSING`（截图/堆产未就位、三条退出路径无快照）就是本片“未跑真机 ③④”的**机判证据**，不是“绿”。

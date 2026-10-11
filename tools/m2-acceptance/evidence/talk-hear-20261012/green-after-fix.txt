@@ -1,4 +1,5 @@
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.31s
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.51s
      Running unittests src\lib.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-9edafd3360ac6080.exe)
 
 running 0 tests

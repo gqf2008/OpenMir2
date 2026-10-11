@@ -1,5 +1,5 @@
    Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.64s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.37s
      Running unittests src\lib.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-9edafd3360ac6080.exe)
 
 running 0 tests
@@ -14,9 +14,9 @@ test tests::say_broadcasts_hear_to_self_and_near_players_only ... FAILED
 failures:
 
 ---- tests::say_broadcasts_hear_to_self_and_near_players_only stdout ----
-16:21:28.994 [INF] 说话 ChrName:aaa ActorId:1 → 2 个收件人 tail="hi"
+16:23:15.062 [INF] 说话 ChrName:aaa ActorId:1 → 2 个收件人 tail="hi"
 
-thread 'tests::say_broadcasts_hear_to_self_and_near_players_only' (26900) panicked at bins\game-svr\src\main.rs:2383:21:
+thread 'tests::say_broadcasts_hear_to_self_and_near_players_only' (30936) panicked at bins\game-svr\src\main.rs:2394:21:
 assertion `left == right` failed: Series=1
   left: 0
  right: 1

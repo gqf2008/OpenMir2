@@ -508,8 +508,7 @@ fn handle_say(
     chr_name: &str,
     socket: i32,
     tail: Option<&str>,
-    f_color: u8,
-    b_color: u8,
+    colors: &MsgColors,
 ) {
     let Some(speaker) = online.iter().find(|e| e.chr_name == chr_name) else {
         glog!(
@@ -531,7 +530,7 @@ fn handle_say(
     }
     // `BaseObject.Base.cs:478` 的 `ChrName + ':' + sMsg`（GBK 字节；协议层不转 UTF-8）。
     let text = chat::hear_text(&gbk_encode(&speaker.chr_name), &gbk_encode(line));
-    let body = smframe::sm_hear(speaker.actor_id, f_color, b_color, &text);
+    let body = smframe::sm_hear(speaker.actor_id, colors.hear_f, colors.hear_b, &text);
     let mut delivered = 0usize;
     for target_id in chat::hear_targets(world, speaker.actor_id, chat::SEND_REF_MSG_RANGE) {
         let Some(t) = online.iter().find(|e| e.actor_id == target_id) else {
@@ -941,8 +940,7 @@ fn sim_loop(
                             &chr_name,
                             socket,
                             tail.as_deref(),
-                            colors.hear_f,
-                            colors.hear_b,
+                            &colors,
                         );
                     }
                 }
@@ -2357,7 +2355,20 @@ mod tests {
         online_set(&mut online, entry("b", "bbb", 2, 1, 902, b));
         online_set(&mut online, entry("c", "ccc", 3, 2, 903, c));
 
-        handle_say(&online, &world, &gates, "aaa", 901, Some("hi"), 0x00, 0xFF);
+        handle_say(
+            &online,
+            &world,
+            &gates,
+            "aaa",
+            901,
+            Some("hi"),
+            &MsgColors {
+                red_f: 0xFF,
+                red_b: 0x38,
+                hear_f: 0x00,
+                hear_b: 0xFF,
+            },
+        );
 
         let check =
             |rx: &mut mpsc::UnboundedReceiver<SimToGate>, want_sock: i32| match rx.try_recv() {
