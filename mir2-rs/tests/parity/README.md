@@ -49,6 +49,20 @@ cargo run -p mir2-parity-tests --bin dump_item_fixture -- \
   "tests/parity/fixtures/items_jiangshi1.json"
 ```
 
+**可复现性记录（2026-10-11）**：`dump_item_fixture` 的源文件曾被 `mir2-rs/.gitignore` 的
+`**/bin/` 规则静默吞掉（目录约定 `src/bin/` 与 C# 构建产出 `bin/` 相撞），⇒ 上面这条命令在
+干净检出上**跑不了**；本批已把工具入库（ignore 规则由 `worktree-m2b-p99` 同一根因修复）。
+入库后按上面命令重导出（本机 MySQL 3306 + 真实 `mir2_data`）：
+`stditems 全表 1000 行，掉落表 44 行，导出夹具 43 行`，产物与库内夹具
+**sha256 逐字节一致**：`items_jiangshi1.json` = `76CEFB9535F75AEC7DBE7AF117657CA39C5A5610E4344B3FFD94EEAEE1920FA9`
+（3942 字节 / 260 行）。
+
+⚠️ 已知缺口：`fixtures/items_synth.json`（17 行）的**生成输入未记录**——用
+`fixtures/MonItems/synth/*.txt` 做字节级拼接再重导，只得 7 行（缺 `布衣男S`/`神秘手镯P` 等 10 项），
+说明它不是"synth 目录并集"的产物（更像一份含跨文件条目的手工/临时清单）。
+该夹具本身被 `tests/drop_parity.rs` 实际消费、在 master 上全绿，故**不阻塞**；
+但若将来要重生成，需先补齐输入清单（跟踪：卡 `openmir2-verify-tools-bin-gitignore`）。
+
 ## 四条验收门禁 ↔ 测试对照
 
 | 验收 | 测试 | 金标准 |
