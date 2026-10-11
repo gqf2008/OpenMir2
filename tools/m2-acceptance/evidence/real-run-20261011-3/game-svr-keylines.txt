@@ -1,0 +1,9 @@
+11:50:45.548 [INF] 游戏服务启动：监听 127.0.0.1:5000（CheckBlock=12288，0 张地图占位，config=E:\MirServer\M2GameSvr\Server.conf）
+11:50:46.282 [INF] Envir 真地图注册表：322 张（base=E:\MirServer\M2GameSvr EnvirDir=Envir MapDir=Map，跳过 0 张）
+11:50:46.333 [INF] 物品模板表 stditems：1000 条（直连 MySQL，帧 50/41 的 Shape 输入）
+11:56:32.116 [INF] 进世界 ChrName:aaa CurMap:0 (291,666) Dir:4 entity=1
+11:56:32.120 [INF] 进世界帧下发：socket=332 共 13 条（输入齐备的）
+11:57:57.829 [INF] 断线清世界 ChrName:aaa socket=332 index=1（FrontEngine.DeleteHuman + WorldEngine 摘除）
+11:58:07.722 [INF] 进世界 ChrName:aaa CurMap:0 (291,666) Dir:4 entity=2
+11:58:07.723 [INF] 进世界帧下发：socket=336 共 13 条（输入齐备的）
+11:58:22.079 [INF] 断线清世界 ChrName:aaa socket=336 index=1（FrontEngine.DeleteHuman + WorldEngine 摘除）
