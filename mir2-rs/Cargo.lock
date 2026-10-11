@@ -1109,9 +1109,11 @@ dependencies = [
 name = "mir2-world"
 version = "0.1.0"
 dependencies = [
+ "bevy_ecs",
  "mir2-data",
  "mir2-formula",
  "mir2-shared",
+ "mir2-world-bevy",
 ]
 
 [[package]]
@@ -1122,7 +1124,6 @@ dependencies = [
  "mir2-data",
  "mir2-formula",
  "mir2-shared",
- "mir2-world",
 ]
 
 [[package]]

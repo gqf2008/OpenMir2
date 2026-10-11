@@ -177,3 +177,12 @@ cargo run -p mir2-world-bevy --release --bin drop_bench -- --redcheck    # 追�
 种子 42、`MonRandomAddValue 40`；改一处基线即不可比）。现行基线 = `d3-drop-bench-rebuild.txt`
 （历史 `d3-drop-bench.txt` 的生成器从未入库，仅作对照），对账与"派生结论更正"见 `D3成本复现报告.md`。
 注意口径：掉落预算在**怪物生成时**一次性预算，**不是每 tick** 一次。
+
+## S1 迁移（实体存储 + tick 骨架 → bevy_ecs）
+
+卡片 `openmir2-world-bevy-migration` 的 S1：`crates/world` 的 `EntityStore` 改为 **bevy_ecs
+内核（`crates/world-bevy/src/ecs.rs`）的薄适配层**，tick 的时钟推进/线程断言由单线程
+`TickRunner`（`Schedule` + `SingleThreadedExecutor`）承担；依赖方向为 `mir2-world` →
+`mir2-world-bevy`。三份 golden 对拍 **diff = 0**；**P99 已劣化并登记**（根因：bevy
+`World::get` 的 entity→location→row 间接层落在 AOI 热路径；绝对值 P99 ≤ 5ms，M5 ≤100ms 仍 GREEN）。
+细节、阳性对照与裁决项见 `S1迁移报告.md`。
