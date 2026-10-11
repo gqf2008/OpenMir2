@@ -1,13 +1,13 @@
 ﻿{
     "tool":  "m1-acceptance/check_boundary_ports.ps1",
-    "ts":  "2026-10-11T18:29:57.2059103+08:00",
+    "ts":  "2026-10-11T22:52:35.3852513+08:00",
     "repo":  "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\.claude\\worktrees\\m1load",
     "chain":  "7000 login-gate / 5500+5600 login-srv / 7100 sel-gate / 5100 db-srv (M1-边界服务移植计划.md §1)",
     "ports":  [
                   {
                       "port":  7000,
                       "listening":  true,
-                      "pid":  29796,
+                      "pid":  15412,
                       "name":  "login-gate.exe",
                       "path":  "E:\\tmp\\openmir2-m1load-target\\debug\\login-gate.exe",
                       "command_line":  "\"E:\\tmp\\openmir2-m1load-target\\debug\\login-gate.exe\" E:\\tmp\\openmir2-m1load\\stack\\login-gate\\config.conf ",
@@ -19,7 +19,7 @@
                   {
                       "port":  5500,
                       "listening":  true,
-                      "pid":  56028,
+                      "pid":  2060,
                       "name":  "login-srv.exe",
                       "path":  "E:\\tmp\\openmir2-m1load-target\\debug\\login-srv.exe",
                       "command_line":  "\"E:\\tmp\\openmir2-m1load-target\\debug\\login-srv.exe\" E:\\tmp\\openmir2-m1load\\stack\\login-srv\\logsrv.conf ",
@@ -31,7 +31,7 @@
                   {
                       "port":  7100,
                       "listening":  true,
-                      "pid":  54060,
+                      "pid":  27796,
                       "name":  "sel-gate.exe",
                       "path":  "E:\\tmp\\openmir2-m1load-target\\debug\\sel-gate.exe",
                       "command_line":  "\"E:\\tmp\\openmir2-m1load-target\\debug\\sel-gate.exe\" E:\\tmp\\openmir2-m1load\\stack\\sel-gate\\config.conf ",
@@ -43,7 +43,7 @@
                   {
                       "port":  5100,
                       "listening":  true,
-                      "pid":  46760,
+                      "pid":  19468,
                       "name":  "db-srv.exe",
                       "path":  "E:\\tmp\\openmir2-m1load-target\\debug\\db-srv.exe",
                       "command_line":  "\"E:\\tmp\\openmir2-m1load-target\\debug\\db-srv.exe\" E:\\tmp\\openmir2-m1load\\stack\\db-srv\\dbsvr.conf ",
@@ -55,7 +55,7 @@
                   {
                       "port":  5600,
                       "listening":  true,
-                      "pid":  56028,
+                      "pid":  2060,
                       "name":  "login-srv.exe",
                       "path":  "E:\\tmp\\openmir2-m1load-target\\debug\\login-srv.exe",
                       "command_line":  "\"E:\\tmp\\openmir2-m1load-target\\debug\\login-srv.exe\" E:\\tmp\\openmir2-m1load\\stack\\login-srv\\logsrv.conf ",

@@ -33,7 +33,7 @@
 用法::
 
   python tools/m1-acceptance/count_m1_logs.py \
-    --bots  mir2-rs/tests/parity/m1-boundary-load/evidence/22-botsrv-bots.txt \
+    --bots  mir2-rs/tests/parity/m1-boundary-load/evidence/20-botsrv-bots-200.txt \
     --login-srv mir2-rs/tests/parity/m1-boundary-load/evidence/12-rust-login-srv.out.txt \
     --db-srv    mir2-rs/tests/parity/m1-boundary-load/evidence/13-rust-db-srv.out.txt \
     --sel-gate  mir2-rs/tests/parity/m1-boundary-load/evidence/14-rust-sel-gate.out.txt \

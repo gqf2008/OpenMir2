@@ -1,0 +1,10 @@
+STOPPED login-gate pid=15412
+STOPPED sel-gate pid=27796
+STOPPED db-srv pid=19468
+STOPPED login-srv pid=2060
+=== M1 全 Rust 边界链 端口实况 ===
+  7000  DOWN
+  5500  DOWN
+  7100  DOWN
+  5100  DOWN
+  5600  DOWN

@@ -2,12 +2,12 @@
     "tier": 200,
     "hold_sec": 60,
     "criteria": "login,conn",
-    "load_gate_rc": null,
+    "load_gate_rc": 0,
     "bots": {
         "log": "mir2-rs/tests/parity/m1-boundary-load/evidence/20-botsrv-bots-200.txt",
         "query_chr": 200,
         "select_chr": 200,
-        "enter_game": 0,
+        "enter_game": 30,
         "enter_game_ok": 0
     },
     "rust_login_srv": {
@@ -19,7 +19,7 @@
         "log": "mir2-rs/tests/parity/m1-boundary-load/evidence/13-rust-db-srv.out.txt",
         "query_chr": 200,
         "query_chr_lines": 1000,
-        "start_play": 0
+        "start_play": 200
     },
     "rust_sel_gate": {
         "log": "mir2-rs/tests/parity/m1-boundary-load/evidence/14-rust-sel-gate.out.txt",

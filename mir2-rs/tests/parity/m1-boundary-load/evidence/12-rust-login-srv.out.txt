@@ -11,1023 +11,1037 @@
   |_____|  \___/   \__, | |_| |_| |_| |____/  |_|      \_/         
                    |___/                                           
 
-10:44:22.945 [INF] 正在启动服务器...
-10:44:22.946 [INF] [客服列表] RouteCount=2 Count=1 [热血传奇]
-10:44:22.949 [INF] 账号登陆服务[0.0.0.0:5500]已启动.
-10:44:22.951 [INF] 账号数据服务[127.0.0.1:5600]已启动.
-10:44:22.951 [INF] 正在连接SQL服务器...
-10:44:23.495 [INF] 连接SQL服务器成功...
-10:44:23.495 [INF] 账号数据读取成功...[7238]
-10:44:23.495 [INF] 服务已启动成功...
-10:44:23.495 [INF] 欢迎使用翎风系列游戏软件...
-10:44:23.495 [INF] 网站:http://www.gameofmir.com
-10:44:23.495 [INF] 论坛:http://bbs.gameofmir.com
-10:44:23.496 [INF] 登录网关[127.0.0.1:65142]已链接...
-10:44:23.591 [DBG] 127.0.0.1:65144链接成功.
-10:44:43.496 [DBG] LegendOfMir2/99/0/DBServer/Online:0/正常
-10:45:03.497 [DBG] LegendOfMir2/99/0/DBServer/Online:0/正常
-10:45:22.129 [DBG] Open: /127.0.0.1:65495
-10:45:22.129 [DBG] [登录] 帐号=[loadbot0] 密码长度=8
-10:45:22.143 [DBG] Open: /127.0.0.1:65497
-10:45:22.143 [DBG] [登录] 帐号=[loadbot1] 密码长度=8
-10:45:22.162 [DBG] Open: /127.0.0.1:65498
-10:45:22.163 [DBG] [登录] 帐号=[loadbot2] 密码长度=8
-10:45:22.184 [DBG] Open: /127.0.0.1:65499
-10:45:22.185 [DBG] [登录] 帐号=[loadbot3] 密码长度=8
-10:45:22.202 [DBG] Open: /127.0.0.1:65500
-10:45:22.203 [DBG] [登录] 帐号=[loadbot4] 密码长度=8
-10:45:22.223 [DBG] Open: /127.0.0.1:65501
-10:45:22.223 [DBG] [登录] 帐号=[loadbot5] 密码长度=8
-10:45:22.243 [DBG] Open: /127.0.0.1:65502
-10:45:22.243 [DBG] [登录] 帐号=[loadbot6] 密码长度=8
-10:45:22.262 [DBG] Open: /127.0.0.1:65503
-10:45:22.263 [DBG] [登录] 帐号=[loadbot7] 密码长度=8
-10:45:22.284 [DBG] Open: /127.0.0.1:65504
-10:45:22.285 [DBG] [登录] 帐号=[loadbot8] 密码长度=8
-10:45:22.305 [DBG] Open: /127.0.0.1:65505
-10:45:22.305 [DBG] [登录] 帐号=[loadbot9] 密码长度=8
-10:45:22.323 [DBG] Open: /127.0.0.1:65506
-10:45:22.323 [DBG] [登录] 帐号=[loadbot10] 密码长度=9
-10:45:22.342 [DBG] Open: /127.0.0.1:65507
-10:45:22.342 [DBG] [登录] 帐号=[loadbot11] 密码长度=9
-10:45:22.362 [DBG] Open: /127.0.0.1:65508
-10:45:22.362 [DBG] [登录] 帐号=[loadbot12] 密码长度=9
-10:45:22.382 [DBG] Open: /127.0.0.1:65509
-10:45:22.383 [DBG] [登录] 帐号=[loadbot13] 密码长度=9
-10:45:22.403 [DBG] Open: /127.0.0.1:65510
-10:45:22.403 [DBG] [登录] 帐号=[loadbot14] 密码长度=9
-10:45:22.423 [DBG] Open: /127.0.0.1:65511
-10:45:22.423 [DBG] [登录] 帐号=[loadbot15] 密码长度=9
-10:45:22.443 [DBG] Open: /127.0.0.1:65512
-10:45:22.443 [DBG] [登录] 帐号=[loadbot16] 密码长度=9
-10:45:22.463 [DBG] Open: /127.0.0.1:65513
-10:45:22.463 [DBG] [登录] 帐号=[loadbot17] 密码长度=9
-10:45:22.484 [DBG] Open: /127.0.0.1:65514
-10:45:22.484 [DBG] [登录] 帐号=[loadbot18] 密码长度=9
-10:45:22.503 [DBG] Open: /127.0.0.1:65515
-10:45:22.503 [DBG] [登录] 帐号=[loadbot19] 密码长度=9
-10:45:22.523 [DBG] Open: /127.0.0.1:65516
-10:45:22.523 [DBG] [登录] 帐号=[loadbot20] 密码长度=9
-10:45:22.543 [DBG] Open: /127.0.0.1:65517
-10:45:22.543 [DBG] [登录] 帐号=[loadbot21] 密码长度=9
-10:45:22.563 [DBG] Open: /127.0.0.1:65518
-10:45:22.563 [DBG] [登录] 帐号=[loadbot22] 密码长度=9
-10:45:22.583 [DBG] Open: /127.0.0.1:65519
-10:45:22.584 [DBG] [登录] 帐号=[loadbot23] 密码长度=9
-10:45:22.604 [DBG] Open: /127.0.0.1:65520
-10:45:22.605 [DBG] [登录] 帐号=[loadbot24] 密码长度=9
-10:45:22.624 [DBG] Open: /127.0.0.1:65521
-10:45:22.624 [DBG] [登录] 帐号=[loadbot25] 密码长度=9
-10:45:22.644 [DBG] Open: /127.0.0.1:65522
-10:45:22.644 [DBG] [登录] 帐号=[loadbot26] 密码长度=9
-10:45:22.664 [DBG] Open: /127.0.0.1:65523
-10:45:22.664 [DBG] [登录] 帐号=[loadbot27] 密码长度=9
-10:45:22.684 [DBG] Open: /127.0.0.1:65524
-10:45:22.684 [DBG] [登录] 帐号=[loadbot28] 密码长度=9
-10:45:22.704 [DBG] Open: /127.0.0.1:65525
-10:45:22.705 [DBG] [登录] 帐号=[loadbot29] 密码长度=9
-10:45:22.727 [DBG] Open: /127.0.0.1:65526
-10:45:22.727 [DBG] [登录] 帐号=[loadbot30] 密码长度=9
-10:45:22.747 [DBG] Open: /127.0.0.1:65527
-10:45:22.747 [DBG] [登录] 帐号=[loadbot31] 密码长度=9
-10:45:22.767 [DBG] Open: /127.0.0.1:65528
-10:45:22.768 [DBG] [登录] 帐号=[loadbot32] 密码长度=9
-10:45:22.787 [DBG] Open: /127.0.0.1:65529
-10:45:22.788 [DBG] [登录] 帐号=[loadbot33] 密码长度=9
-10:45:22.808 [DBG] Open: /127.0.0.1:65530
-10:45:22.808 [DBG] [登录] 帐号=[loadbot34] 密码长度=9
-10:45:22.828 [DBG] Open: /127.0.0.1:65531
-10:45:22.828 [DBG] [登录] 帐号=[loadbot35] 密码长度=9
-10:45:22.848 [DBG] Open: /127.0.0.1:65532
-10:45:22.848 [DBG] [登录] 帐号=[loadbot36] 密码长度=9
-10:45:22.868 [DBG] Open: /127.0.0.1:65533
-10:45:22.868 [DBG] [登录] 帐号=[loadbot37] 密码长度=9
-10:45:22.888 [DBG] Open: /127.0.0.1:65534
-10:45:22.888 [DBG] [登录] 帐号=[loadbot38] 密码长度=9
-10:45:22.909 [DBG] Open: /127.0.0.1:49152
-10:45:22.909 [DBG] [登录] 帐号=[loadbot39] 密码长度=9
-10:45:22.928 [DBG] Open: /127.0.0.1:49153
-10:45:22.928 [DBG] [登录] 帐号=[loadbot40] 密码长度=9
-10:45:22.948 [DBG] Open: /127.0.0.1:49154
-10:45:22.948 [DBG] [登录] 帐号=[loadbot41] 密码长度=9
-10:45:22.969 [DBG] Open: /127.0.0.1:49155
-10:45:22.969 [DBG] [登录] 帐号=[loadbot42] 密码长度=9
-10:45:22.989 [DBG] Open: /127.0.0.1:49156
-10:45:22.989 [DBG] [登录] 帐号=[loadbot43] 密码长度=9
-10:45:23.008 [DBG] Open: /127.0.0.1:49157
-10:45:23.009 [DBG] [登录] 帐号=[loadbot44] 密码长度=9
-10:45:23.029 [DBG] Open: /127.0.0.1:49158
-10:45:23.029 [DBG] [登录] 帐号=[loadbot45] 密码长度=9
-10:45:23.049 [DBG] Open: /127.0.0.1:49159
-10:45:23.049 [DBG] [登录] 帐号=[loadbot46] 密码长度=9
-10:45:23.069 [DBG] Open: /127.0.0.1:49160
-10:45:23.069 [DBG] [登录] 帐号=[loadbot47] 密码长度=9
-10:45:23.089 [DBG] Open: /127.0.0.1:49161
-10:45:23.089 [DBG] [登录] 帐号=[loadbot48] 密码长度=9
-10:45:23.109 [DBG] Open: /127.0.0.1:49162
-10:45:23.109 [DBG] [登录] 帐号=[loadbot49] 密码长度=9
-10:45:23.129 [DBG] Open: /127.0.0.1:49163
-10:45:23.130 [DBG] [登录] 帐号=[loadbot50] 密码长度=9
-10:45:23.149 [DBG] Open: /127.0.0.1:49164
-10:45:23.150 [DBG] [登录] 帐号=[loadbot51] 密码长度=9
-10:45:23.169 [DBG] Open: /127.0.0.1:49165
-10:45:23.169 [DBG] [登录] 帐号=[loadbot52] 密码长度=9
-10:45:23.189 [DBG] Open: /127.0.0.1:49166
-10:45:23.189 [DBG] [登录] 帐号=[loadbot53] 密码长度=9
-10:45:23.209 [DBG] Open: /127.0.0.1:49167
-10:45:23.209 [DBG] [登录] 帐号=[loadbot54] 密码长度=9
-10:45:23.230 [DBG] Open: /127.0.0.1:49168
-10:45:23.230 [DBG] [登录] 帐号=[loadbot55] 密码长度=9
-10:45:23.249 [DBG] Open: /127.0.0.1:49169
-10:45:23.250 [DBG] [登录] 帐号=[loadbot56] 密码长度=9
-10:45:23.270 [DBG] Open: /127.0.0.1:49170
-10:45:23.270 [DBG] [登录] 帐号=[loadbot57] 密码长度=9
-10:45:23.291 [DBG] Open: /127.0.0.1:49171
-10:45:23.292 [DBG] [登录] 帐号=[loadbot58] 密码长度=9
-10:45:23.310 [DBG] Open: /127.0.0.1:49172
-10:45:23.310 [DBG] [登录] 帐号=[loadbot59] 密码长度=9
-10:45:23.330 [DBG] Open: /127.0.0.1:49173
-10:45:23.331 [DBG] [登录] 帐号=[loadbot60] 密码长度=9
-10:45:23.350 [DBG] Open: /127.0.0.1:49174
-10:45:23.350 [DBG] [登录] 帐号=[loadbot61] 密码长度=9
-10:45:23.370 [DBG] Open: /127.0.0.1:49175
-10:45:23.370 [DBG] [登录] 帐号=[loadbot62] 密码长度=9
-10:45:23.391 [DBG] Open: /127.0.0.1:49176
-10:45:23.391 [DBG] [登录] 帐号=[loadbot63] 密码长度=9
-10:45:23.411 [DBG] Open: /127.0.0.1:49177
-10:45:23.411 [DBG] [登录] 帐号=[loadbot64] 密码长度=9
-10:45:23.431 [DBG] Open: /127.0.0.1:49178
-10:45:23.431 [DBG] [登录] 帐号=[loadbot65] 密码长度=9
-10:45:23.450 [DBG] Open: /127.0.0.1:49179
-10:45:23.451 [DBG] [登录] 帐号=[loadbot66] 密码长度=9
-10:45:23.470 [DBG] Open: /127.0.0.1:49180
-10:45:23.471 [DBG] [登录] 帐号=[loadbot67] 密码长度=9
-10:45:23.491 [DBG] Open: /127.0.0.1:49181
-10:45:23.491 [DBG] [登录] 帐号=[loadbot68] 密码长度=9
-10:45:23.506 [DBG] LegendOfMir2/99/0/DBServer/Online:0/正常
-10:45:23.511 [DBG] Open: /127.0.0.1:49182
-10:45:23.512 [DBG] [登录] 帐号=[loadbot69] 密码长度=9
-10:45:23.531 [DBG] Open: /127.0.0.1:49183
-10:45:23.532 [DBG] [登录] 帐号=[loadbot70] 密码长度=9
-10:45:23.551 [DBG] Open: /127.0.0.1:49184
-10:45:23.552 [DBG] [登录] 帐号=[loadbot71] 密码长度=9
-10:45:23.571 [DBG] Open: /127.0.0.1:49185
-10:45:23.572 [DBG] [登录] 帐号=[loadbot72] 密码长度=9
-10:45:23.592 [DBG] Open: /127.0.0.1:49189
-10:45:23.592 [DBG] [登录] 帐号=[loadbot73] 密码长度=9
-10:45:23.612 [DBG] Open: /127.0.0.1:49193
-10:45:23.612 [DBG] [登录] 帐号=[loadbot74] 密码长度=9
-10:45:23.632 [DBG] Open: /127.0.0.1:49197
-10:45:23.632 [DBG] [登录] 帐号=[loadbot75] 密码长度=9
-10:45:23.651 [DBG] Open: /127.0.0.1:49198
-10:45:23.651 [DBG] [登录] 帐号=[loadbot76] 密码长度=9
-10:45:23.672 [DBG] Open: /127.0.0.1:49199
-10:45:23.672 [DBG] [登录] 帐号=[loadbot77] 密码长度=9
-10:45:23.693 [DBG] Open: /127.0.0.1:49200
-10:45:23.693 [DBG] [登录] 帐号=[loadbot78] 密码长度=9
-10:45:23.713 [DBG] Open: /127.0.0.1:49201
-10:45:23.713 [DBG] [登录] 帐号=[loadbot79] 密码长度=9
-10:45:23.733 [DBG] Open: /127.0.0.1:49202
-10:45:23.733 [DBG] [登录] 帐号=[loadbot80] 密码长度=9
-10:45:23.753 [DBG] Open: /127.0.0.1:49203
-10:45:23.753 [DBG] [登录] 帐号=[loadbot81] 密码长度=9
-10:45:23.772 [DBG] Open: /127.0.0.1:49204
-10:45:23.772 [DBG] [登录] 帐号=[loadbot82] 密码长度=9
-10:45:23.792 [DBG] Open: /127.0.0.1:49205
-10:45:23.792 [DBG] [登录] 帐号=[loadbot83] 密码长度=9
-10:45:23.812 [DBG] Open: /127.0.0.1:49206
-10:45:23.812 [DBG] [登录] 帐号=[loadbot84] 密码长度=9
-10:45:23.833 [DBG] Open: /127.0.0.1:49207
-10:45:23.833 [DBG] [登录] 帐号=[loadbot85] 密码长度=9
-10:45:23.852 [DBG] Open: /127.0.0.1:49208
-10:45:23.852 [DBG] [登录] 帐号=[loadbot86] 密码长度=9
-10:45:23.873 [DBG] Open: /127.0.0.1:49209
-10:45:23.873 [DBG] [登录] 帐号=[loadbot87] 密码长度=9
-10:45:23.893 [DBG] Open: /127.0.0.1:49210
-10:45:23.893 [DBG] [登录] 帐号=[loadbot88] 密码长度=9
-10:45:23.913 [DBG] Open: /127.0.0.1:49211
-10:45:23.913 [DBG] [登录] 帐号=[loadbot89] 密码长度=9
-10:45:23.933 [DBG] Open: /127.0.0.1:49212
-10:45:23.933 [DBG] [登录] 帐号=[loadbot90] 密码长度=9
-10:45:23.953 [DBG] Open: /127.0.0.1:49213
-10:45:23.953 [DBG] [登录] 帐号=[loadbot91] 密码长度=9
-10:45:23.973 [DBG] Open: /127.0.0.1:49214
-10:45:23.973 [DBG] [登录] 帐号=[loadbot92] 密码长度=9
-10:45:23.993 [DBG] Open: /127.0.0.1:49215
-10:45:23.993 [DBG] [登录] 帐号=[loadbot93] 密码长度=9
-10:45:24.014 [DBG] Open: /127.0.0.1:49216
-10:45:24.014 [DBG] [登录] 帐号=[loadbot94] 密码长度=9
-10:45:24.034 [DBG] Open: /127.0.0.1:49217
-10:45:24.034 [DBG] [登录] 帐号=[loadbot95] 密码长度=9
-10:45:24.054 [DBG] Open: /127.0.0.1:49218
-10:45:24.054 [DBG] [登录] 帐号=[loadbot96] 密码长度=9
-10:45:24.074 [DBG] Open: /127.0.0.1:49219
-10:45:24.074 [DBG] [登录] 帐号=[loadbot97] 密码长度=9
-10:45:24.093 [DBG] Open: /127.0.0.1:49220
-10:45:24.094 [DBG] [登录] 帐号=[loadbot98] 密码长度=9
-10:45:24.114 [DBG] Open: /127.0.0.1:49221
-10:45:24.114 [DBG] [登录] 帐号=[loadbot99] 密码长度=9
-10:45:24.133 [DBG] Open: /127.0.0.1:49222
-10:45:24.134 [DBG] [登录] 帐号=[loadbot100] 密码长度=10
-10:45:24.154 [DBG] Open: /127.0.0.1:49223
-10:45:24.154 [DBG] [登录] 帐号=[loadbot101] 密码长度=10
-10:45:24.174 [DBG] Open: /127.0.0.1:49224
-10:45:24.175 [DBG] [登录] 帐号=[loadbot102] 密码长度=10
-10:45:24.194 [DBG] Open: /127.0.0.1:49225
-10:45:24.194 [DBG] [登录] 帐号=[loadbot103] 密码长度=10
-10:45:24.214 [DBG] Open: /127.0.0.1:49226
-10:45:24.214 [DBG] [登录] 帐号=[loadbot104] 密码长度=10
-10:45:24.234 [DBG] Open: /127.0.0.1:49227
-10:45:24.234 [DBG] [登录] 帐号=[loadbot105] 密码长度=10
-10:45:24.255 [DBG] Open: /127.0.0.1:49228
-10:45:24.255 [DBG] [登录] 帐号=[loadbot106] 密码长度=10
-10:45:24.274 [DBG] Open: /127.0.0.1:49229
-10:45:24.275 [DBG] [登录] 帐号=[loadbot107] 密码长度=10
-10:45:24.295 [DBG] Open: /127.0.0.1:49230
-10:45:24.295 [DBG] [登录] 帐号=[loadbot108] 密码长度=10
-10:45:24.315 [DBG] Open: /127.0.0.1:49231
-10:45:24.315 [DBG] [登录] 帐号=[loadbot109] 密码长度=10
-10:45:24.334 [DBG] Open: /127.0.0.1:49232
-10:45:24.335 [DBG] [登录] 帐号=[loadbot110] 密码长度=10
-10:45:24.355 [DBG] Open: /127.0.0.1:49233
-10:45:24.355 [DBG] [登录] 帐号=[loadbot111] 密码长度=10
-10:45:24.375 [DBG] Open: /127.0.0.1:49234
-10:45:24.375 [DBG] [登录] 帐号=[loadbot112] 密码长度=10
-10:45:24.395 [DBG] Open: /127.0.0.1:49235
-10:45:24.395 [DBG] [登录] 帐号=[loadbot113] 密码长度=10
-10:45:24.415 [DBG] Open: /127.0.0.1:49236
-10:45:24.415 [DBG] [登录] 帐号=[loadbot114] 密码长度=10
-10:45:24.436 [DBG] Open: /127.0.0.1:49237
-10:45:24.436 [DBG] [登录] 帐号=[loadbot115] 密码长度=10
-10:45:24.455 [DBG] Open: /127.0.0.1:49238
-10:45:24.455 [DBG] [登录] 帐号=[loadbot116] 密码长度=10
-10:45:24.475 [DBG] Open: /127.0.0.1:49239
-10:45:24.476 [DBG] [登录] 帐号=[loadbot117] 密码长度=10
-10:45:24.495 [DBG] Open: /127.0.0.1:49240
-10:45:24.495 [DBG] [登录] 帐号=[loadbot118] 密码长度=10
-10:45:24.515 [DBG] Open: /127.0.0.1:49241
-10:45:24.516 [DBG] [登录] 帐号=[loadbot119] 密码长度=10
-10:45:24.536 [DBG] Open: /127.0.0.1:49242
-10:45:24.536 [DBG] [登录] 帐号=[loadbot120] 密码长度=10
-10:45:24.556 [DBG] Open: /127.0.0.1:49243
-10:45:24.556 [DBG] [登录] 帐号=[loadbot121] 密码长度=10
-10:45:24.576 [DBG] Open: /127.0.0.1:49244
-10:45:24.576 [DBG] [登录] 帐号=[loadbot122] 密码长度=10
-10:45:24.596 [DBG] Open: /127.0.0.1:49245
-10:45:24.596 [DBG] [登录] 帐号=[loadbot123] 密码长度=10
-10:45:24.616 [DBG] Open: /127.0.0.1:49246
-10:45:24.616 [DBG] [登录] 帐号=[loadbot124] 密码长度=10
-10:45:24.636 [DBG] Open: /127.0.0.1:49247
-10:45:24.636 [DBG] [登录] 帐号=[loadbot125] 密码长度=10
-10:45:24.656 [DBG] Open: /127.0.0.1:49248
-10:45:24.656 [DBG] [登录] 帐号=[loadbot126] 密码长度=10
-10:45:24.676 [DBG] Open: /127.0.0.1:49249
-10:45:24.676 [DBG] [登录] 帐号=[loadbot127] 密码长度=10
-10:45:24.697 [DBG] Open: /127.0.0.1:49250
-10:45:24.697 [DBG] [登录] 帐号=[loadbot128] 密码长度=10
-10:45:24.717 [DBG] Open: /127.0.0.1:49251
-10:45:24.717 [DBG] [登录] 帐号=[loadbot129] 密码长度=10
-10:45:24.737 [DBG] Open: /127.0.0.1:49252
-10:45:24.737 [DBG] [登录] 帐号=[loadbot130] 密码长度=10
-10:45:24.757 [DBG] Open: /127.0.0.1:49253
-10:45:24.757 [DBG] [登录] 帐号=[loadbot131] 密码长度=10
-10:45:24.778 [DBG] Open: /127.0.0.1:49254
-10:45:24.778 [DBG] [登录] 帐号=[loadbot132] 密码长度=10
-10:45:24.798 [DBG] Open: /127.0.0.1:49255
-10:45:24.798 [DBG] [登录] 帐号=[loadbot133] 密码长度=10
-10:45:24.817 [DBG] Open: /127.0.0.1:49256
-10:45:24.817 [DBG] [登录] 帐号=[loadbot134] 密码长度=10
-10:45:24.838 [DBG] Open: /127.0.0.1:49257
-10:45:24.838 [DBG] [登录] 帐号=[loadbot135] 密码长度=10
-10:45:24.858 [DBG] Open: /127.0.0.1:49258
-10:45:24.858 [DBG] [登录] 帐号=[loadbot136] 密码长度=10
-10:45:24.878 [DBG] Open: /127.0.0.1:49259
-10:45:24.878 [DBG] [登录] 帐号=[loadbot137] 密码长度=10
-10:45:24.898 [DBG] Open: /127.0.0.1:49260
-10:45:24.898 [DBG] [登录] 帐号=[loadbot138] 密码长度=10
-10:45:24.918 [DBG] Open: /127.0.0.1:49261
-10:45:24.918 [DBG] [登录] 帐号=[loadbot139] 密码长度=10
-10:45:24.938 [DBG] Open: /127.0.0.1:49265
-10:45:24.939 [DBG] [登录] 帐号=[loadbot140] 密码长度=10
-10:45:24.958 [DBG] Open: /127.0.0.1:49266
-10:45:24.959 [DBG] [登录] 帐号=[loadbot141] 密码长度=10
-10:45:24.978 [DBG] Open: /127.0.0.1:49267
-10:45:24.978 [DBG] [登录] 帐号=[loadbot142] 密码长度=10
-10:45:24.998 [DBG] Open: /127.0.0.1:49268
-10:45:24.999 [DBG] [登录] 帐号=[loadbot143] 密码长度=10
-10:45:25.018 [DBG] Open: /127.0.0.1:49269
-10:45:25.018 [DBG] [登录] 帐号=[loadbot144] 密码长度=10
-10:45:25.038 [DBG] Open: /127.0.0.1:49270
-10:45:25.039 [DBG] [登录] 帐号=[loadbot145] 密码长度=10
-10:45:25.059 [DBG] Open: /127.0.0.1:49271
-10:45:25.059 [DBG] [登录] 帐号=[loadbot146] 密码长度=10
-10:45:25.079 [DBG] Open: /127.0.0.1:49272
-10:45:25.079 [DBG] [登录] 帐号=[loadbot147] 密码长度=10
-10:45:25.099 [DBG] Open: /127.0.0.1:49273
-10:45:25.099 [DBG] [登录] 帐号=[loadbot148] 密码长度=10
-10:45:25.119 [DBG] Open: /127.0.0.1:49274
-10:45:25.119 [DBG] [登录] 帐号=[loadbot149] 密码长度=10
-10:45:25.139 [DBG] Open: /127.0.0.1:49275
-10:45:25.139 [DBG] [登录] 帐号=[loadbot150] 密码长度=10
-10:45:25.159 [DBG] Open: /127.0.0.1:49276
-10:45:25.159 [DBG] [登录] 帐号=[loadbot151] 密码长度=10
-10:45:25.179 [DBG] Open: /127.0.0.1:49277
-10:45:25.180 [DBG] [登录] 帐号=[loadbot152] 密码长度=10
-10:45:25.199 [DBG] Open: /127.0.0.1:49278
-10:45:25.200 [DBG] [登录] 帐号=[loadbot153] 密码长度=10
-10:45:25.220 [DBG] Open: /127.0.0.1:49279
-10:45:25.220 [DBG] [登录] 帐号=[loadbot154] 密码长度=10
-10:45:25.240 [DBG] Open: /127.0.0.1:49280
-10:45:25.240 [DBG] [登录] 帐号=[loadbot155] 密码长度=10
-10:45:25.259 [DBG] Open: /127.0.0.1:49281
-10:45:25.260 [DBG] [登录] 帐号=[loadbot156] 密码长度=10
-10:45:25.279 [DBG] Open: /127.0.0.1:49282
-10:45:25.280 [DBG] [登录] 帐号=[loadbot157] 密码长度=10
-10:45:25.300 [DBG] Open: /127.0.0.1:49283
-10:45:25.300 [DBG] [登录] 帐号=[loadbot158] 密码长度=10
-10:45:25.320 [DBG] Open: /127.0.0.1:49284
-10:45:25.320 [DBG] [登录] 帐号=[loadbot159] 密码长度=10
-10:45:25.340 [DBG] Open: /127.0.0.1:49285
-10:45:25.341 [DBG] [登录] 帐号=[loadbot160] 密码长度=10
-10:45:25.360 [DBG] Open: /127.0.0.1:49286
-10:45:25.361 [DBG] [登录] 帐号=[loadbot161] 密码长度=10
-10:45:25.380 [DBG] Open: /127.0.0.1:49287
-10:45:25.381 [DBG] [登录] 帐号=[loadbot162] 密码长度=10
-10:45:25.400 [DBG] Open: /127.0.0.1:49288
-10:45:25.401 [DBG] [登录] 帐号=[loadbot163] 密码长度=10
-10:45:25.420 [DBG] Open: /127.0.0.1:49289
-10:45:25.421 [DBG] [登录] 帐号=[loadbot164] 密码长度=10
-10:45:25.440 [DBG] Open: /127.0.0.1:49290
-10:45:25.440 [DBG] [登录] 帐号=[loadbot165] 密码长度=10
-10:45:25.461 [DBG] Open: /127.0.0.1:49291
-10:45:25.461 [DBG] [登录] 帐号=[loadbot166] 密码长度=10
-10:45:25.481 [DBG] Open: /127.0.0.1:49292
-10:45:25.481 [DBG] [登录] 帐号=[loadbot167] 密码长度=10
-10:45:25.501 [DBG] Open: /127.0.0.1:49293
-10:45:25.501 [DBG] [登录] 帐号=[loadbot168] 密码长度=10
-10:45:25.521 [DBG] Open: /127.0.0.1:49294
-10:45:25.521 [DBG] [登录] 帐号=[loadbot169] 密码长度=10
-10:45:25.541 [DBG] Open: /127.0.0.1:49295
-10:45:25.541 [DBG] [登录] 帐号=[loadbot170] 密码长度=10
-10:45:25.561 [DBG] Open: /127.0.0.1:49296
-10:45:25.561 [DBG] [登录] 帐号=[loadbot171] 密码长度=10
-10:45:25.582 [DBG] Open: /127.0.0.1:49297
-10:45:25.582 [DBG] [登录] 帐号=[loadbot172] 密码长度=10
-10:45:25.602 [DBG] Open: /127.0.0.1:49298
-10:45:25.602 [DBG] [登录] 帐号=[loadbot173] 密码长度=10
-10:45:25.621 [DBG] Open: /127.0.0.1:49299
-10:45:25.621 [DBG] [登录] 帐号=[loadbot174] 密码长度=10
-10:45:25.641 [DBG] Open: /127.0.0.1:49300
-10:45:25.641 [DBG] [登录] 帐号=[loadbot175] 密码长度=10
-10:45:25.661 [DBG] Open: /127.0.0.1:49301
-10:45:25.662 [DBG] [登录] 帐号=[loadbot176] 密码长度=10
-10:45:25.682 [DBG] Open: /127.0.0.1:49302
-10:45:25.682 [DBG] [登录] 帐号=[loadbot177] 密码长度=10
-10:45:25.702 [DBG] Open: /127.0.0.1:49303
-10:45:25.702 [DBG] [登录] 帐号=[loadbot178] 密码长度=10
-10:45:25.722 [DBG] Open: /127.0.0.1:49304
-10:45:25.722 [DBG] [登录] 帐号=[loadbot179] 密码长度=10
-10:45:25.742 [DBG] Open: /127.0.0.1:49305
-10:45:25.742 [DBG] [登录] 帐号=[loadbot180] 密码长度=10
-10:45:25.762 [DBG] Open: /127.0.0.1:49306
-10:45:25.762 [DBG] [登录] 帐号=[loadbot181] 密码长度=10
-10:45:25.783 [DBG] Open: /127.0.0.1:49307
-10:45:25.783 [DBG] [登录] 帐号=[loadbot182] 密码长度=10
-10:45:25.802 [DBG] Open: /127.0.0.1:49308
-10:45:25.803 [DBG] [登录] 帐号=[loadbot183] 密码长度=10
-10:45:25.822 [DBG] Open: /127.0.0.1:49309
-10:45:25.822 [DBG] [登录] 帐号=[loadbot184] 密码长度=10
-10:45:25.842 [DBG] Open: /127.0.0.1:49310
-10:45:25.842 [DBG] [登录] 帐号=[loadbot185] 密码长度=10
-10:45:25.862 [DBG] Open: /127.0.0.1:49311
-10:45:25.862 [DBG] [登录] 帐号=[loadbot186] 密码长度=10
-10:45:25.882 [DBG] Open: /127.0.0.1:49312
-10:45:25.883 [DBG] [登录] 帐号=[loadbot187] 密码长度=10
-10:45:25.902 [DBG] Open: /127.0.0.1:49313
-10:45:25.903 [DBG] [登录] 帐号=[loadbot188] 密码长度=10
-10:45:25.923 [DBG] Open: /127.0.0.1:49314
-10:45:25.923 [DBG] [登录] 帐号=[loadbot189] 密码长度=10
-10:45:25.943 [DBG] Open: /127.0.0.1:49315
-10:45:25.943 [DBG] [登录] 帐号=[loadbot190] 密码长度=10
-10:45:25.963 [DBG] Open: /127.0.0.1:49316
-10:45:25.963 [DBG] [登录] 帐号=[loadbot191] 密码长度=10
-10:45:25.983 [DBG] Open: /127.0.0.1:49317
-10:45:25.983 [DBG] [登录] 帐号=[loadbot192] 密码长度=10
-10:45:26.003 [DBG] Open: /127.0.0.1:49319
-10:45:26.004 [DBG] [登录] 帐号=[loadbot193] 密码长度=10
-10:45:26.024 [DBG] Open: /127.0.0.1:49320
-10:45:26.024 [DBG] [登录] 帐号=[loadbot194] 密码长度=10
-10:45:26.044 [DBG] Open: /127.0.0.1:49321
-10:45:26.044 [DBG] [登录] 帐号=[loadbot195] 密码长度=10
-10:45:26.064 [DBG] Open: /127.0.0.1:49322
-10:45:26.064 [DBG] [登录] 帐号=[loadbot196] 密码长度=10
-10:45:26.084 [DBG] Open: /127.0.0.1:49325
-10:45:26.084 [DBG] [登录] 帐号=[loadbot197] 密码长度=10
-10:45:26.104 [DBG] Open: /127.0.0.1:49326
-10:45:26.104 [DBG] [登录] 帐号=[loadbot198] 密码长度=10
-10:45:26.124 [DBG] Open: /127.0.0.1:49329
-10:45:26.124 [DBG] [登录] 帐号=[loadbot199] 密码长度=10
-10:45:30.137 [DBG] [选服] account=[loadbot0] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.137 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.153 [DBG] [选服] account=[loadbot1] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.153 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.169 [DBG] [选服] account=[loadbot2] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.169 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.200 [DBG] [选服] account=[loadbot3] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.200 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.216 [DBG] [选服] account=[loadbot4] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.217 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.232 [DBG] [选服] account=[loadbot5] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.232 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.248 [DBG] [选服] account=[loadbot6] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.248 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.279 [DBG] [选服] account=[loadbot7] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.279 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.295 [DBG] [选服] account=[loadbot8] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.295 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.310 [DBG] [选服] account=[loadbot9] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.310 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.325 [DBG] [选服] account=[loadbot10] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.326 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.357 [DBG] [选服] account=[loadbot11] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.357 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.372 [DBG] [选服] account=[loadbot12] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.372 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.388 [DBG] [选服] account=[loadbot13] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.388 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.420 [DBG] [选服] account=[loadbot14] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.420 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.436 [DBG] [选服] account=[loadbot15] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.436 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.452 [DBG] [选服] account=[loadbot16] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.452 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.468 [DBG] [选服] account=[loadbot17] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.468 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.500 [DBG] [选服] account=[loadbot18] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.500 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.516 [DBG] [选服] account=[loadbot19] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.516 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.531 [DBG] [选服] account=[loadbot20] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.531 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.546 [DBG] [选服] account=[loadbot21] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.546 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.578 [DBG] [选服] account=[loadbot22] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.578 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.594 [DBG] [选服] account=[loadbot23] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.594 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.609 [DBG] [选服] account=[loadbot24] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.609 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.641 [DBG] [选服] account=[loadbot25] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.641 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.656 [DBG] [选服] account=[loadbot26] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.656 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.672 [DBG] [选服] account=[loadbot27] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.672 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.688 [DBG] [选服] account=[loadbot28] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.688 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.719 [DBG] [选服] account=[loadbot29] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.720 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.734 [DBG] [选服] account=[loadbot30] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.735 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.750 [DBG] [选服] account=[loadbot31] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.751 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.783 [DBG] [选服] account=[loadbot32] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.783 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.798 [DBG] [选服] account=[loadbot33] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.798 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.814 [DBG] [选服] account=[loadbot34] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.815 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.830 [DBG] [选服] account=[loadbot35] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.830 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.862 [DBG] [选服] account=[loadbot36] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.863 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.878 [DBG] [选服] account=[loadbot37] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.879 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.894 [DBG] [选服] account=[loadbot38] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.894 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.925 [DBG] [选服] account=[loadbot39] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.925 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.940 [DBG] [选服] account=[loadbot40] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.941 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.955 [DBG] [选服] account=[loadbot41] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.956 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:30.985 [DBG] [选服] account=[loadbot42] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:30.986 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.001 [DBG] [选服] account=[loadbot43] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.001 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.016 [DBG] [选服] account=[loadbot44] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.016 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.032 [DBG] [选服] account=[loadbot45] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.032 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.063 [DBG] [选服] account=[loadbot46] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.063 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.078 [DBG] [选服] account=[loadbot47] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.078 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.093 [DBG] [选服] account=[loadbot48] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.093 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.124 [DBG] [选服] account=[loadbot49] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.124 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.139 [DBG] [选服] account=[loadbot50] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.139 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.154 [DBG] [选服] account=[loadbot51] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.154 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.184 [DBG] [选服] account=[loadbot52] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.184 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.200 [DBG] [选服] account=[loadbot53] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.200 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.215 [DBG] [选服] account=[loadbot54] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.215 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.246 [DBG] [选服] account=[loadbot55] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.246 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.262 [DBG] [选服] account=[loadbot56] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.262 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.277 [DBG] [选服] account=[loadbot57] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.277 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.309 [DBG] [选服] account=[loadbot58] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.309 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.325 [DBG] [选服] account=[loadbot59] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.325 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.341 [DBG] [选服] account=[loadbot60] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.341 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.357 [DBG] [选服] account=[loadbot61] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.357 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.373 [DBG] [选服] account=[loadbot62] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.373 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.403 [DBG] [选服] account=[loadbot63] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.403 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.419 [DBG] [选服] account=[loadbot64] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.419 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.434 [DBG] [选服] account=[loadbot65] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.435 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.466 [DBG] [选服] account=[loadbot66] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.467 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.481 [DBG] [选服] account=[loadbot67] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.481 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.497 [DBG] [选服] account=[loadbot68] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.497 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.528 [DBG] [选服] account=[loadbot69] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.528 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.543 [DBG] [选服] account=[loadbot70] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.543 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.558 [DBG] [选服] account=[loadbot71] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.559 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.574 [DBG] [选服] account=[loadbot72] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.574 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.606 [DBG] [选服] account=[loadbot73] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.607 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.622 [DBG] [选服] account=[loadbot74] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.622 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.637 [DBG] [选服] account=[loadbot75] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.637 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.668 [DBG] [选服] account=[loadbot76] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.668 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.683 [DBG] [选服] account=[loadbot77] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.683 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.699 [DBG] [选服] account=[loadbot78] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.699 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.730 [DBG] [选服] account=[loadbot79] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.730 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.745 [DBG] [选服] account=[loadbot80] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.745 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.760 [DBG] [选服] account=[loadbot81] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.761 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.776 [DBG] [选服] account=[loadbot82] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.776 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.807 [DBG] [选服] account=[loadbot83] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.807 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.822 [DBG] [选服] account=[loadbot84] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.822 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.837 [DBG] [选服] account=[loadbot85] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.838 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.869 [DBG] [选服] account=[loadbot86] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.869 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.884 [DBG] [选服] account=[loadbot87] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.884 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.899 [DBG] [选服] account=[loadbot88] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.899 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.914 [DBG] [选服] account=[loadbot89] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.915 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.945 [DBG] [选服] account=[loadbot90] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.945 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.960 [DBG] [选服] account=[loadbot91] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.960 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:31.975 [DBG] [选服] account=[loadbot92] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:31.975 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.007 [DBG] [选服] account=[loadbot93] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.007 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.022 [DBG] [选服] account=[loadbot94] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.022 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.038 [DBG] [选服] account=[loadbot95] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.038 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.069 [DBG] [选服] account=[loadbot96] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.069 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.084 [DBG] [选服] account=[loadbot97] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.084 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.099 [DBG] [选服] account=[loadbot98] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.100 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.131 [DBG] [选服] account=[loadbot99] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.131 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.147 [DBG] [选服] account=[loadbot100] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.147 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.162 [DBG] [选服] account=[loadbot101] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.162 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.178 [DBG] [选服] account=[loadbot102] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.178 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.208 [DBG] [选服] account=[loadbot103] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.209 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.223 [DBG] [选服] account=[loadbot104] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.224 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.239 [DBG] [选服] account=[loadbot105] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.240 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.271 [DBG] [选服] account=[loadbot106] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.272 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.287 [DBG] [选服] account=[loadbot107] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.287 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.302 [DBG] [选服] account=[loadbot108] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.302 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.317 [DBG] [选服] account=[loadbot109] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.317 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.349 [DBG] [选服] account=[loadbot110] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.349 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.364 [DBG] [选服] account=[loadbot111] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.364 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.380 [DBG] [选服] account=[loadbot112] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.380 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.411 [DBG] [选服] account=[loadbot113] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.412 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.427 [DBG] [选服] account=[loadbot114] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.428 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.443 [DBG] [选服] account=[loadbot115] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.443 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.458 [DBG] [选服] account=[loadbot116] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.459 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.489 [DBG] [选服] account=[loadbot117] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.490 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.505 [DBG] [选服] account=[loadbot118] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.505 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.520 [DBG] [选服] account=[loadbot119] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.520 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.551 [DBG] [选服] account=[loadbot120] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.551 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.567 [DBG] [选服] account=[loadbot121] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.567 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.583 [DBG] [选服] account=[loadbot122] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.583 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.599 [DBG] [选服] account=[loadbot123] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.599 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.629 [DBG] [选服] account=[loadbot124] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.629 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.644 [DBG] [选服] account=[loadbot125] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.644 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.659 [DBG] [选服] account=[loadbot126] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.659 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.691 [DBG] [选服] account=[loadbot127] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.691 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.706 [DBG] [选服] account=[loadbot128] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.706 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.721 [DBG] [选服] account=[loadbot129] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.721 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.752 [DBG] [选服] account=[loadbot130] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.752 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.767 [DBG] [选服] account=[loadbot131] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.767 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.782 [DBG] [选服] account=[loadbot132] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.782 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.812 [DBG] [选服] account=[loadbot133] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.812 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.827 [DBG] [选服] account=[loadbot134] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.828 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.843 [DBG] [选服] account=[loadbot135] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.843 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.874 [DBG] [选服] account=[loadbot136] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.874 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.890 [DBG] [选服] account=[loadbot137] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.890 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.906 [DBG] [选服] account=[loadbot138] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.906 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.922 [DBG] [选服] account=[loadbot139] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.922 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.954 [DBG] [选服] account=[loadbot140] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.954 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.970 [DBG] [选服] account=[loadbot141] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.970 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:32.985 [DBG] [选服] account=[loadbot142] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:32.985 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.001 [DBG] [选服] account=[loadbot143] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.001 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.033 [DBG] [选服] account=[loadbot144] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.033 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.048 [DBG] [选服] account=[loadbot145] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.048 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.064 [DBG] [选服] account=[loadbot146] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.064 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.095 [DBG] [选服] account=[loadbot147] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.095 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.111 [DBG] [选服] account=[loadbot148] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.111 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.127 [DBG] [选服] account=[loadbot149] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.127 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.142 [DBG] [选服] account=[loadbot150] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.143 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.174 [DBG] [选服] account=[loadbot151] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.174 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.190 [DBG] [选服] account=[loadbot152] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.190 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.206 [DBG] [选服] account=[loadbot153] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.206 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.221 [DBG] [选服] account=[loadbot154] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.222 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.252 [DBG] [选服] account=[loadbot155] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.253 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.267 [DBG] [选服] account=[loadbot156] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.268 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.283 [DBG] [选服] account=[loadbot157] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.284 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.315 [DBG] [选服] account=[loadbot158] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.316 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.331 [DBG] [选服] account=[loadbot159] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.332 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.347 [DBG] [选服] account=[loadbot160] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.348 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.378 [DBG] [选服] account=[loadbot161] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.378 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.394 [DBG] [选服] account=[loadbot162] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.394 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.410 [DBG] [选服] account=[loadbot163] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.410 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.426 [DBG] [选服] account=[loadbot164] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.426 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.457 [DBG] [选服] account=[loadbot165] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.458 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.473 [DBG] [选服] account=[loadbot166] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.473 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.489 [DBG] [选服] account=[loadbot167] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.489 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.505 [DBG] [选服] account=[loadbot168] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.505 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.536 [DBG] [选服] account=[loadbot169] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.536 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.551 [DBG] [选服] account=[loadbot170] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.552 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.567 [DBG] [选服] account=[loadbot171] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.568 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.598 [DBG] [选服] account=[loadbot172] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.598 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.614 [DBG] [选服] account=[loadbot173] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.614 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.630 [DBG] [选服] account=[loadbot174] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.630 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.645 [DBG] [选服] account=[loadbot175] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.645 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.677 [DBG] [选服] account=[loadbot176] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.677 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.692 [DBG] [选服] account=[loadbot177] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.693 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.707 [DBG] [选服] account=[loadbot178] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.707 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.738 [DBG] [选服] account=[loadbot179] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.738 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.753 [DBG] [选服] account=[loadbot180] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.753 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.769 [DBG] [选服] account=[loadbot181] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.770 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.785 [DBG] [选服] account=[loadbot182] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.785 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.816 [DBG] [选服] account=[loadbot183] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.816 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.831 [DBG] [选服] account=[loadbot184] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.831 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.847 [DBG] [选服] account=[loadbot185] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.847 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.879 [DBG] [选服] account=[loadbot186] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.879 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.894 [DBG] [选服] account=[loadbot187] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.895 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.910 [DBG] [选服] account=[loadbot188] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.910 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.926 [DBG] [选服] account=[loadbot189] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.926 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.957 [DBG] [选服] account=[loadbot190] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.957 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.972 [DBG] [选服] account=[loadbot191] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.972 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:33.987 [DBG] [选服] account=[loadbot192] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:33.988 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:34.018 [DBG] [选服] account=[loadbot193] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:34.018 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:34.033 [DBG] [选服] account=[loadbot194] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:34.034 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:34.049 [DBG] [选服] account=[loadbot195] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:34.049 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:34.081 [DBG] [选服] account=[loadbot196] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:34.081 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:34.096 [DBG] [选服] account=[loadbot197] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:34.096 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:34.111 [DBG] [选服] account=[loadbot198] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:34.111 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:34.127 [DBG] [选服] account=[loadbot199] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
-10:45:34.127 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
-10:45:38.141 [DBG] Close: 
-10:45:38.156 [DBG] Close: 
-10:45:38.171 [DBG] Close: 
-10:45:38.203 [DBG] Close: 
-10:45:38.219 [DBG] Close: 
-10:45:38.235 [DBG] Close: 
-10:45:38.251 [DBG] Close: 
-10:45:38.282 [DBG] Close: 
-10:45:38.298 [DBG] Close: 
-10:45:38.314 [DBG] Close: 
-10:45:38.330 [DBG] Close: 
-10:45:38.361 [DBG] Close: 
-10:45:38.376 [DBG] Close: 
-10:45:38.392 [DBG] Close: 
-10:45:38.423 [DBG] Close: 
-10:45:38.439 [DBG] Close: 
-10:45:38.455 [DBG] Close: 
-10:45:38.471 [DBG] Close: 
-10:45:38.501 [DBG] Close: 
-10:45:38.517 [DBG] Close: 
-10:45:38.532 [DBG] Close: 
-10:45:38.548 [DBG] Close: 
-10:45:38.594 [DBG] Close: 
-10:45:38.609 [DBG] Close: 
-10:45:38.624 [DBG] Close: 
-10:45:38.655 [DBG] Close: 
-10:45:38.671 [DBG] Close: 
-10:45:38.687 [DBG] Close: 
-10:45:38.703 [DBG] Close: 
-10:45:38.735 [DBG] Close: 
-10:45:38.735 [DBG] Close: 
-10:45:38.765 [DBG] Close: 
-10:45:38.797 [DBG] Close: 
-10:45:38.812 [DBG] Close: 
-10:45:38.827 [DBG] Close: 
-10:45:38.842 [DBG] Close: 
-10:45:38.874 [DBG] Close: 
-10:45:38.890 [DBG] Close: 
-10:45:38.905 [DBG] Close: 
-10:45:38.937 [DBG] Close: 
-10:45:38.953 [DBG] Close: 
-10:45:38.968 [DBG] Close: 
-10:45:38.999 [DBG] Close: 
-10:45:39.015 [DBG] Close: 
-10:45:39.030 [DBG] Close: 
-10:45:39.046 [DBG] Close: 
-10:45:39.077 [DBG] Close: 
-10:45:39.093 [DBG] Close: 
-10:45:39.109 [DBG] Close: 
-10:45:39.124 [DBG] Close: 
-10:45:39.139 [DBG] Close: 
-10:45:39.155 [DBG] Close: 
-10:45:39.186 [DBG] Close: 
-10:45:39.202 [DBG] Close: 
-10:45:39.218 [DBG] Close: 
-10:45:39.249 [DBG] Close: 
-10:45:39.265 [DBG] Close: 
-10:45:39.281 [DBG] Close: 
-10:45:39.311 [DBG] Close: 
-10:45:39.327 [DBG] Close: 
-10:45:39.343 [DBG] Close: 
-10:45:39.359 [DBG] Close: 
-10:45:39.375 [DBG] Close: 
-10:45:39.406 [DBG] Close: 
-10:45:39.422 [DBG] Close: 
-10:45:39.438 [DBG] Close: 
-10:45:39.469 [DBG] Close: 
-10:45:39.485 [DBG] Close: 
-10:45:39.500 [DBG] Close: 
-10:45:39.531 [DBG] Close: 
-10:45:39.547 [DBG] Close: 
-10:45:39.563 [DBG] Close: 
-10:45:39.578 [DBG] Close: 
-10:45:39.610 [DBG] Close: 
-10:45:39.626 [DBG] Close: 
-10:45:39.642 [DBG] Close: 
-10:45:39.673 [DBG] Close: 
-10:45:39.688 [DBG] Close: 
-10:45:39.704 [DBG] Close: 
-10:45:39.735 [DBG] Close: 
-10:45:39.750 [DBG] Close: 
-10:45:39.766 [DBG] Close: 
-10:45:39.781 [DBG] Close: 
-10:45:39.811 [DBG] Close: 
-10:45:39.826 [DBG] Close: 
-10:45:39.841 [DBG] Close: 
-10:45:39.872 [DBG] Close: 
-10:45:39.888 [DBG] Close: 
-10:45:39.904 [DBG] Close: 
-10:45:39.920 [DBG] Close: 
-10:45:39.952 [DBG] Close: 
-10:45:39.968 [DBG] Close: 
-10:45:39.984 [DBG] Close: 
-10:45:40.016 [DBG] Close: 
-10:45:40.032 [DBG] Close: 
-10:45:40.048 [DBG] Close: 
-10:45:40.078 [DBG] Close: 
-10:45:40.093 [DBG] Close: 
-10:45:40.108 [DBG] Close: 
-10:45:40.139 [DBG] Close: 
-10:45:40.155 [DBG] Close: 
-10:45:40.171 [DBG] Close: 
-10:45:40.187 [DBG] Close: 
-10:45:40.219 [DBG] Close: 
-10:45:40.235 [DBG] Close: 
-10:45:40.251 [DBG] Close: 
-10:45:40.282 [DBG] Close: 
-10:45:40.297 [DBG] Close: 
-10:45:40.312 [DBG] Close: 
-10:45:40.328 [DBG] Close: 
-10:45:40.359 [DBG] Close: 
-10:45:40.374 [DBG] Close: 
-10:45:40.390 [DBG] Close: 
-10:45:40.422 [DBG] Close: 
-10:45:40.437 [DBG] Close: 
-10:45:40.452 [DBG] Close: 
-10:45:40.467 [DBG] Close: 
-10:45:40.499 [DBG] Close: 
-10:45:40.515 [DBG] Close: 
-10:45:40.530 [DBG] Close: 
-10:45:40.562 [DBG] Close: 
-10:45:40.577 [DBG] Close: 
-10:45:40.593 [DBG] Close: 
-10:45:40.608 [DBG] Close: 
-10:45:40.639 [DBG] Close: 
-10:45:40.654 [DBG] Close: 
-10:45:40.670 [DBG] Close: 
-10:45:40.701 [DBG] Close: 
-10:45:40.716 [DBG] Close: 
-10:45:40.731 [DBG] Close: 
-10:45:40.762 [DBG] Close: 
-10:45:40.778 [DBG] Close: 
-10:45:40.794 [DBG] Close: 
-10:45:40.826 [DBG] Close: 
-10:45:40.842 [DBG] Close: 
-10:45:40.858 [DBG] Close: 
-10:45:40.889 [DBG] Close: 
-10:45:40.905 [DBG] Close: 
-10:45:40.920 [DBG] Close: 
-10:45:40.935 [DBG] Close: 
-10:45:40.967 [DBG] Close: 
-10:45:40.982 [DBG] Close: 
-10:45:40.998 [DBG] Close: 
-10:45:41.014 [DBG] Close: 
-10:45:41.046 [DBG] Close: 
-10:45:41.061 [DBG] Close: 
-10:45:41.077 [DBG] Close: 
-10:45:41.109 [DBG] Close: 
-10:45:41.125 [DBG] Close: 
-10:45:41.141 [DBG] Close: 
-10:45:41.156 [DBG] Close: 
-10:45:41.187 [DBG] Close: 
-10:45:41.202 [DBG] Close: 
-10:45:41.218 [DBG] Close: 
-10:45:41.233 [DBG] Close: 
-10:45:41.263 [DBG] Close: 
-10:45:41.279 [DBG] Close: 
-10:45:41.295 [DBG] Close: 
-10:45:41.327 [DBG] Close: 
-10:45:41.343 [DBG] Close: 
-10:45:41.358 [DBG] Close: 
-10:45:41.390 [DBG] Close: 
-10:45:41.406 [DBG] Close: 
-10:45:41.421 [DBG] Close: 
-10:45:41.436 [DBG] Close: 
-10:45:41.467 [DBG] Close: 
-10:45:41.482 [DBG] Close: 
-10:45:41.498 [DBG] Close: 
-10:45:41.513 [DBG] Close: 
-10:45:41.545 [DBG] Close: 
-10:45:41.560 [DBG] Close: 
-10:45:41.576 [DBG] Close: 
-10:45:41.607 [DBG] Close: 
-10:45:41.622 [DBG] Close: 
-10:45:41.638 [DBG] Close: 
-10:45:41.654 [DBG] Close: 
-10:45:41.685 [DBG] Close: 
-10:45:41.701 [DBG] Close: 
-10:45:41.716 [DBG] Close: 
-10:45:41.747 [DBG] Close: 
-10:45:41.763 [DBG] Close: 
-10:45:41.778 [DBG] Close: 
-10:45:41.793 [DBG] Close: 
-10:45:41.824 [DBG] Close: 
-10:45:41.840 [DBG] Close: 
-10:45:41.856 [DBG] Close: 
-10:45:41.888 [DBG] Close: 
-10:45:41.903 [DBG] Close: 
-10:45:41.919 [DBG] Close: 
-10:45:41.935 [DBG] Close: 
-10:45:41.967 [DBG] Close: 
-10:45:41.983 [DBG] Close: 
-10:45:41.998 [DBG] Close: 
-10:45:42.029 [DBG] Close: 
-10:45:42.045 [DBG] Close: 
-10:45:42.061 [DBG] Close: 
-10:45:42.092 [DBG] Close: 
-10:45:42.107 [DBG] Close: 
-10:45:42.123 [DBG] Close: 
-10:45:42.139 [DBG] Close: 
-10:45:43.510 [DBG] LegendOfMir2/99/73/DBServer/Online:73/正常
-10:46:03.520 [DBG] LegendOfMir2/99/0/DBServer/Online:0/正常
-10:46:05.300 [WRN] 登录网关[127.0.0.1:65142]断开链接.
-10:46:05.379 [WRN] [LegendOfMir2]数据库服务器[127.0.0.1:65144]断开链接.
+14:45:54.326 [INF] 正在启动服务器...
+14:45:54.328 [INF] [客服列表] RouteCount=2 Count=1 [热血传奇]
+14:45:54.330 [INF] 账号登陆服务[0.0.0.0:5500]已启动.
+14:45:54.330 [INF] 账号数据服务[127.0.0.1:5600]已启动.
+14:45:54.330 [INF] 正在连接SQL服务器...
+14:45:54.372 [INF] 连接SQL服务器成功...
+14:45:54.373 [INF] 账号数据读取成功...[7238]
+14:45:54.373 [INF] 服务已启动成功...
+14:45:54.373 [INF] 欢迎使用翎风系列游戏软件...
+14:45:54.373 [INF] 网站:http://www.gameofmir.com
+14:45:54.373 [INF] 论坛:http://bbs.gameofmir.com
+14:45:54.460 [INF] 登录网关[127.0.0.1:51566]已链接...
+14:45:54.544 [DBG] 127.0.0.1:51568链接成功.
+14:46:15.092 [DBG] LegendOfMir2/99/0/DBServer/Online:0/正常
+14:46:34.392 [DBG] LegendOfMir2/99/0/DBServer/Online:0/正常
+14:46:54.399 [DBG] LegendOfMir2/99/0/DBServer/Online:0/正常
+14:47:14.406 [DBG] LegendOfMir2/99/0/DBServer/Online:0/正常
+14:47:34.416 [DBG] LegendOfMir2/99/0/DBServer/Online:0/正常
+14:47:54.417 [DBG] LegendOfMir2/99/0/DBServer/Online:0/正常
+14:48:14.426 [DBG] LegendOfMir2/99/0/DBServer/Online:0/正常
+14:48:34.439 [DBG] LegendOfMir2/99/0/DBServer/Online:0/正常
+14:48:54.445 [DBG] LegendOfMir2/99/0/DBServer/Online:0/正常
+14:49:14.448 [DBG] LegendOfMir2/99/0/DBServer/Online:0/正常
+14:49:34.460 [DBG] LegendOfMir2/99/0/DBServer/Online:0/正常
+14:49:54.461 [DBG] LegendOfMir2/99/0/DBServer/Online:0/正常
+14:50:14.477 [DBG] LegendOfMir2/99/0/DBServer/Online:0/正常
+14:50:34.484 [DBG] LegendOfMir2/99/0/DBServer/Online:0/正常
+14:50:54.494 [DBG] LegendOfMir2/99/0/DBServer/Online:0/正常
+14:51:14.498 [DBG] LegendOfMir2/99/0/DBServer/Online:0/正常
+14:51:34.512 [DBG] LegendOfMir2/99/0/DBServer/Online:0/正常
+14:51:54.513 [DBG] LegendOfMir2/99/0/DBServer/Online:0/正常
+14:52:14.528 [DBG] LegendOfMir2/99/0/DBServer/Online:0/正常
+14:52:34.533 [DBG] LegendOfMir2/99/0/DBServer/Online:0/正常
+14:52:35.641 [DBG] Open: /127.0.0.1:54505
+14:52:35.642 [DBG] [登录] 帐号=[loadbot0] 密码长度=8
+14:52:35.687 [DBG] Open: /127.0.0.1:54507
+14:52:35.689 [DBG] [登录] 帐号=[loadbot1] 密码长度=8
+14:52:35.691 [DBG] Open: /127.0.0.1:54508
+14:52:35.691 [DBG] [登录] 帐号=[loadbot2] 密码长度=8
+14:52:35.697 [DBG] Open: /127.0.0.1:54611
+14:52:35.697 [DBG] [登录] 帐号=[loadbot3] 密码长度=8
+14:52:35.717 [DBG] Open: /127.0.0.1:54612
+14:52:35.717 [DBG] [登录] 帐号=[loadbot4] 密码长度=8
+14:52:35.737 [DBG] Open: /127.0.0.1:54613
+14:52:35.737 [DBG] [登录] 帐号=[loadbot5] 密码长度=8
+14:52:35.781 [DBG] Open: /127.0.0.1:54614
+14:52:35.783 [DBG] [登录] 帐号=[loadbot6] 密码长度=8
+14:52:35.786 [DBG] Open: /127.0.0.1:54615
+14:52:35.786 [DBG] [登录] 帐号=[loadbot7] 密码长度=8
+14:52:35.799 [DBG] Open: /127.0.0.1:54628
+14:52:35.799 [DBG] [登录] 帐号=[loadbot8] 密码长度=8
+14:52:35.840 [DBG] Open: /127.0.0.1:54631
+14:52:35.840 [DBG] [登录] 帐号=[loadbot9] 密码长度=8
+14:52:35.843 [DBG] Open: /127.0.0.1:54635
+14:52:35.843 [DBG] [登录] 帐号=[loadbot10] 密码长度=9
+14:52:35.857 [DBG] Open: /127.0.0.1:54636
+14:52:35.857 [DBG] [登录] 帐号=[loadbot11] 密码长度=9
+14:52:35.876 [DBG] Open: /127.0.0.1:54639
+14:52:35.876 [DBG] [登录] 帐号=[loadbot12] 密码长度=9
+14:52:35.909 [DBG] Open: /127.0.0.1:54640
+14:52:35.909 [DBG] [登录] 帐号=[loadbot13] 密码长度=9
+14:52:35.917 [DBG] Open: /127.0.0.1:54641
+14:52:35.917 [DBG] [登录] 帐号=[loadbot14] 密码长度=9
+14:52:35.937 [DBG] Open: /127.0.0.1:54642
+14:52:35.937 [DBG] [登录] 帐号=[loadbot15] 密码长度=9
+14:52:35.974 [DBG] Open: /127.0.0.1:54643
+14:52:35.975 [DBG] [登录] 帐号=[loadbot16] 密码长度=9
+14:52:35.978 [DBG] Open: /127.0.0.1:54644
+14:52:35.978 [DBG] [登录] 帐号=[loadbot17] 密码长度=9
+14:52:35.998 [DBG] Open: /127.0.0.1:54645
+14:52:35.998 [DBG] [登录] 帐号=[loadbot18] 密码长度=9
+14:52:36.044 [DBG] Open: /127.0.0.1:54647
+14:52:36.044 [DBG] [登录] 帐号=[loadbot19] 密码长度=9
+14:52:36.046 [DBG] Open: /127.0.0.1:54648
+14:52:36.047 [DBG] [登录] 帐号=[loadbot20] 密码长度=9
+14:52:36.058 [DBG] Open: /127.0.0.1:54649
+14:52:36.058 [DBG] [登录] 帐号=[loadbot21] 密码长度=9
+14:52:36.078 [DBG] Open: /127.0.0.1:54650
+14:52:36.078 [DBG] [登录] 帐号=[loadbot22] 密码长度=9
+14:52:36.120 [DBG] Open: /127.0.0.1:54651
+14:52:36.120 [DBG] [登录] 帐号=[loadbot23] 密码长度=9
+14:52:36.122 [DBG] Open: /127.0.0.1:54652
+14:52:36.122 [DBG] [登录] 帐号=[loadbot24] 密码长度=9
+14:52:36.138 [DBG] Open: /127.0.0.1:54653
+14:52:36.138 [DBG] [登录] 帐号=[loadbot25] 密码长度=9
+14:52:36.159 [DBG] Open: /127.0.0.1:54654
+14:52:36.159 [DBG] [登录] 帐号=[loadbot26] 密码长度=9
+14:52:36.196 [DBG] Open: /127.0.0.1:54655
+14:52:36.197 [DBG] [登录] 帐号=[loadbot27] 密码长度=9
+14:52:36.200 [DBG] Open: /127.0.0.1:54656
+14:52:36.200 [DBG] [登录] 帐号=[loadbot28] 密码长度=9
+14:52:36.220 [DBG] Open: /127.0.0.1:54657
+14:52:36.220 [DBG] [登录] 帐号=[loadbot29] 密码长度=9
+14:52:36.240 [DBG] Open: /127.0.0.1:54658
+14:52:36.240 [DBG] [登录] 帐号=[loadbot30] 密码长度=9
+14:52:36.273 [DBG] Open: /127.0.0.1:54659
+14:52:36.273 [DBG] [登录] 帐号=[loadbot31] 密码长度=9
+14:52:36.280 [DBG] Open: /127.0.0.1:54660
+14:52:36.281 [DBG] [登录] 帐号=[loadbot32] 密码长度=9
+14:52:36.300 [DBG] Open: /127.0.0.1:54661
+14:52:36.300 [DBG] [登录] 帐号=[loadbot33] 密码长度=9
+14:52:36.320 [DBG] Open: /127.0.0.1:54662
+14:52:36.375 [DBG] [登录] 帐号=[loadbot34] 密码长度=9
+14:52:36.379 [DBG] Open: /127.0.0.1:54663
+14:52:36.379 [DBG] [登录] 帐号=[loadbot35] 密码长度=9
+14:52:36.381 [DBG] Open: /127.0.0.1:54664
+14:52:36.381 [DBG] [登录] 帐号=[loadbot36] 密码长度=9
+14:52:36.383 [DBG] Open: /127.0.0.1:54665
+14:52:36.383 [DBG] [登录] 帐号=[loadbot37] 密码长度=9
+14:52:36.401 [DBG] Open: /127.0.0.1:54666
+14:52:36.402 [DBG] [登录] 帐号=[loadbot38] 密码长度=9
+14:52:36.421 [DBG] Open: /127.0.0.1:54667
+14:52:36.422 [DBG] [登录] 帐号=[loadbot39] 密码长度=9
+14:52:36.454 [DBG] Open: /127.0.0.1:54668
+14:52:36.454 [DBG] [登录] 帐号=[loadbot40] 密码长度=9
+14:52:36.461 [DBG] Open: /127.0.0.1:54669
+14:52:36.462 [DBG] [登录] 帐号=[loadbot41] 密码长度=9
+14:52:36.481 [DBG] Open: /127.0.0.1:54670
+14:52:36.482 [DBG] [登录] 帐号=[loadbot42] 密码长度=9
+14:52:36.537 [DBG] Open: /127.0.0.1:54671
+14:52:36.537 [DBG] [登录] 帐号=[loadbot43] 密码长度=9
+14:52:36.539 [DBG] Open: /127.0.0.1:54672
+14:52:36.539 [DBG] [登录] 帐号=[loadbot44] 密码长度=9
+14:52:36.542 [DBG] Open: /127.0.0.1:54673
+14:52:36.542 [DBG] [登录] 帐号=[loadbot45] 密码长度=9
+14:52:36.562 [DBG] Open: /127.0.0.1:54674
+14:52:36.562 [DBG] [登录] 帐号=[loadbot46] 密码长度=9
+14:52:36.581 [DBG] Open: /127.0.0.1:54675
+14:52:36.593 [DBG] [登录] 帐号=[loadbot47] 密码长度=9
+14:52:36.606 [DBG] Open: /127.0.0.1:54676
+14:52:36.606 [DBG] [登录] 帐号=[loadbot48] 密码长度=9
+14:52:36.621 [DBG] Open: /127.0.0.1:54677
+14:52:36.621 [DBG] [登录] 帐号=[loadbot49] 密码长度=9
+14:52:36.641 [DBG] Open: /127.0.0.1:54678
+14:52:36.641 [DBG] [登录] 帐号=[loadbot50] 密码长度=9
+14:52:36.662 [DBG] Open: /127.0.0.1:54681
+14:52:36.662 [DBG] [登录] 帐号=[loadbot51] 密码长度=9
+14:52:36.696 [DBG] Open: /127.0.0.1:54682
+14:52:36.696 [DBG] [登录] 帐号=[loadbot52] 密码长度=9
+14:52:36.702 [DBG] Open: /127.0.0.1:54683
+14:52:36.702 [DBG] [登录] 帐号=[loadbot53] 密码长度=9
+14:52:36.722 [DBG] Open: /127.0.0.1:54684
+14:52:36.722 [DBG] [登录] 帐号=[loadbot54] 密码长度=9
+14:52:36.742 [DBG] Open: /127.0.0.1:54685
+14:52:36.742 [DBG] [登录] 帐号=[loadbot55] 密码长度=9
+14:52:36.781 [DBG] Open: /127.0.0.1:54686
+14:52:36.781 [DBG] [登录] 帐号=[loadbot56] 密码长度=9
+14:52:36.783 [DBG] Open: /127.0.0.1:54687
+14:52:36.783 [DBG] [登录] 帐号=[loadbot57] 密码长度=9
+14:52:36.803 [DBG] Open: /127.0.0.1:54688
+14:52:36.803 [DBG] [登录] 帐号=[loadbot58] 密码长度=9
+14:52:36.823 [DBG] Open: /127.0.0.1:54689
+14:52:36.823 [DBG] [登录] 帐号=[loadbot59] 密码长度=9
+14:52:36.847 [DBG] Open: /127.0.0.1:54690
+14:52:36.867 [DBG] [登录] 帐号=[loadbot60] 密码长度=9
+14:52:36.869 [DBG] Open: /127.0.0.1:54691
+14:52:36.869 [DBG] [登录] 帐号=[loadbot61] 密码长度=9
+14:52:36.883 [DBG] Open: /127.0.0.1:54692
+14:52:36.883 [DBG] [登录] 帐号=[loadbot62] 密码长度=9
+14:52:36.903 [DBG] Open: /127.0.0.1:54693
+14:52:36.903 [DBG] [登录] 帐号=[loadbot63] 密码长度=9
+14:52:36.923 [DBG] Open: /127.0.0.1:54694
+14:52:36.924 [DBG] [登录] 帐号=[loadbot64] 密码长度=9
+14:52:36.957 [DBG] Open: /127.0.0.1:54695
+14:52:36.957 [DBG] [登录] 帐号=[loadbot65] 密码长度=9
+14:52:36.963 [DBG] Open: /127.0.0.1:54696
+14:52:36.963 [DBG] [登录] 帐号=[loadbot66] 密码长度=9
+14:52:36.983 [DBG] Open: /127.0.0.1:54697
+14:52:36.983 [DBG] [登录] 帐号=[loadbot67] 密码长度=9
+14:52:37.003 [DBG] Open: /127.0.0.1:54698
+14:52:37.003 [DBG] [登录] 帐号=[loadbot68] 密码长度=9
+14:52:37.045 [DBG] Open: /127.0.0.1:54699
+14:52:37.045 [DBG] [登录] 帐号=[loadbot69] 密码长度=9
+14:52:37.047 [DBG] Open: /127.0.0.1:54700
+14:52:37.047 [DBG] [登录] 帐号=[loadbot70] 密码长度=9
+14:52:37.064 [DBG] Open: /127.0.0.1:54701
+14:52:37.064 [DBG] [登录] 帐号=[loadbot71] 密码长度=9
+14:52:37.084 [DBG] Open: /127.0.0.1:54702
+14:52:37.084 [DBG] [登录] 帐号=[loadbot72] 密码长度=9
+14:52:37.107 [DBG] Open: /127.0.0.1:54703
+14:52:37.108 [DBG] [登录] 帐号=[loadbot73] 密码长度=9
+14:52:37.124 [DBG] Open: /127.0.0.1:54704
+14:52:37.124 [DBG] [登录] 帐号=[loadbot74] 密码长度=9
+14:52:37.144 [DBG] Open: /127.0.0.1:54705
+14:52:37.145 [DBG] [登录] 帐号=[loadbot75] 密码长度=9
+14:52:37.173 [DBG] Open: /127.0.0.1:54706
+14:52:37.173 [DBG] [登录] 帐号=[loadbot76] 密码长度=9
+14:52:37.185 [DBG] Open: /127.0.0.1:54707
+14:52:37.185 [DBG] [登录] 帐号=[loadbot77] 密码长度=9
+14:52:37.204 [DBG] Open: /127.0.0.1:54708
+14:52:37.204 [DBG] [登录] 帐号=[loadbot78] 密码长度=9
+14:52:37.235 [DBG] Open: /127.0.0.1:54709
+14:52:37.235 [DBG] [登录] 帐号=[loadbot79] 密码长度=9
+14:52:37.245 [DBG] Open: /127.0.0.1:54710
+14:52:37.245 [DBG] [登录] 帐号=[loadbot80] 密码长度=9
+14:52:37.265 [DBG] Open: /127.0.0.1:54711
+14:52:37.265 [DBG] [登录] 帐号=[loadbot81] 密码长度=9
+14:52:37.297 [DBG] Open: /127.0.0.1:54712
+14:52:37.297 [DBG] [登录] 帐号=[loadbot82] 密码长度=9
+14:52:37.305 [DBG] Open: /127.0.0.1:54713
+14:52:37.305 [DBG] [登录] 帐号=[loadbot83] 密码长度=9
+14:52:37.325 [DBG] Open: /127.0.0.1:54714
+14:52:37.325 [DBG] [登录] 帐号=[loadbot84] 密码长度=9
+14:52:37.362 [DBG] Open: /127.0.0.1:54715
+14:52:37.362 [DBG] [登录] 帐号=[loadbot85] 密码长度=9
+14:52:37.365 [DBG] Open: /127.0.0.1:54716
+14:52:37.366 [DBG] [登录] 帐号=[loadbot86] 密码长度=9
+14:52:37.385 [DBG] Open: /127.0.0.1:54717
+14:52:37.386 [DBG] [登录] 帐号=[loadbot87] 密码长度=9
+14:52:37.425 [DBG] Open: /127.0.0.1:54718
+14:52:37.425 [DBG] [登录] 帐号=[loadbot88] 密码长度=9
+14:52:37.427 [DBG] Open: /127.0.0.1:54719
+14:52:37.427 [DBG] [登录] 帐号=[loadbot89] 密码长度=9
+14:52:37.446 [DBG] Open: /127.0.0.1:54720
+14:52:37.446 [DBG] [登录] 帐号=[loadbot90] 密码长度=9
+14:52:37.466 [DBG] Open: /127.0.0.1:54721
+14:52:37.466 [DBG] [登录] 帐号=[loadbot91] 密码长度=9
+14:52:37.492 [DBG] Open: /127.0.0.1:54722
+14:52:37.492 [DBG] [登录] 帐号=[loadbot92] 密码长度=9
+14:52:37.506 [DBG] Open: /127.0.0.1:54723
+14:52:37.506 [DBG] [登录] 帐号=[loadbot93] 密码长度=9
+14:52:37.526 [DBG] Open: /127.0.0.1:54724
+14:52:37.526 [DBG] [登录] 帐号=[loadbot94] 密码长度=9
+14:52:37.567 [DBG] Open: /127.0.0.1:54725
+14:52:37.567 [DBG] [登录] 帐号=[loadbot95] 密码长度=9
+14:52:37.569 [DBG] Open: /127.0.0.1:54726
+14:52:37.570 [DBG] [登录] 帐号=[loadbot96] 密码长度=9
+14:52:37.587 [DBG] Open: /127.0.0.1:54727
+14:52:37.587 [DBG] [登录] 帐号=[loadbot97] 密码长度=9
+14:52:37.606 [DBG] Open: /127.0.0.1:54728
+14:52:37.607 [DBG] [登录] 帐号=[loadbot98] 密码长度=9
+14:52:37.640 [DBG] Open: /127.0.0.1:54729
+14:52:37.641 [DBG] [登录] 帐号=[loadbot99] 密码长度=9
+14:52:37.646 [DBG] Open: /127.0.0.1:54730
+14:52:37.647 [DBG] [登录] 帐号=[loadbot100] 密码长度=10
+14:52:37.667 [DBG] Open: /127.0.0.1:54731
+14:52:37.667 [DBG] [登录] 帐号=[loadbot101] 密码长度=10
+14:52:37.716 [DBG] Open: /127.0.0.1:54732
+14:52:37.716 [DBG] [登录] 帐号=[loadbot102] 密码长度=10
+14:52:37.718 [DBG] Open: /127.0.0.1:54733
+14:52:37.719 [DBG] [登录] 帐号=[loadbot103] 密码长度=10
+14:52:37.727 [DBG] Open: /127.0.0.1:54734
+14:52:37.740 [DBG] [登录] 帐号=[loadbot104] 密码长度=10
+14:52:37.747 [DBG] Open: /127.0.0.1:54735
+14:52:37.747 [DBG] [登录] 帐号=[loadbot105] 密码长度=10
+14:52:37.782 [DBG] Open: /127.0.0.1:54736
+14:52:37.782 [DBG] [登录] 帐号=[loadbot106] 密码长度=10
+14:52:37.787 [DBG] Open: /127.0.0.1:54737
+14:52:37.787 [DBG] [登录] 帐号=[loadbot107] 密码长度=10
+14:52:37.807 [DBG] Open: /127.0.0.1:54738
+14:52:37.807 [DBG] [登录] 帐号=[loadbot108] 密码长度=10
+14:52:37.827 [DBG] Open: /127.0.0.1:54739
+14:52:37.827 [DBG] [登录] 帐号=[loadbot109] 密码长度=10
+14:52:37.875 [DBG] Open: /127.0.0.1:54740
+14:52:37.875 [DBG] [登录] 帐号=[loadbot110] 密码长度=10
+14:52:37.878 [DBG] Open: /127.0.0.1:54741
+14:52:37.878 [DBG] [登录] 帐号=[loadbot111] 密码长度=10
+14:52:37.888 [DBG] Open: /127.0.0.1:54742
+14:52:37.888 [DBG] [登录] 帐号=[loadbot112] 密码长度=10
+14:52:37.908 [DBG] Open: /127.0.0.1:54743
+14:52:37.908 [DBG] [登录] 帐号=[loadbot113] 密码长度=10
+14:52:37.928 [DBG] Open: /127.0.0.1:54744
+14:52:37.928 [DBG] [登录] 帐号=[loadbot114] 密码长度=10
+14:52:37.964 [DBG] Open: /127.0.0.1:54745
+14:52:37.965 [DBG] [登录] 帐号=[loadbot115] 密码长度=10
+14:52:37.968 [DBG] Open: /127.0.0.1:54746
+14:52:37.968 [DBG] [登录] 帐号=[loadbot116] 密码长度=10
+14:52:37.988 [DBG] Open: /127.0.0.1:54747
+14:52:37.988 [DBG] [登录] 帐号=[loadbot117] 密码长度=10
+14:52:38.009 [DBG] Open: /127.0.0.1:54748
+14:52:38.009 [DBG] [登录] 帐号=[loadbot118] 密码长度=10
+14:52:38.045 [DBG] Open: /127.0.0.1:54749
+14:52:38.045 [DBG] [登录] 帐号=[loadbot119] 密码长度=10
+14:52:38.049 [DBG] Open: /127.0.0.1:54750
+14:52:38.049 [DBG] [登录] 帐号=[loadbot120] 密码长度=10
+14:52:38.069 [DBG] Open: /127.0.0.1:54751
+14:52:38.069 [DBG] [登录] 帐号=[loadbot121] 密码长度=10
+14:52:38.089 [DBG] Open: /127.0.0.1:54752
+14:52:38.089 [DBG] [登录] 帐号=[loadbot122] 密码长度=10
+14:52:38.135 [DBG] Open: /127.0.0.1:54753
+14:52:38.136 [DBG] [登录] 帐号=[loadbot123] 密码长度=10
+14:52:38.138 [DBG] Open: /127.0.0.1:54754
+14:52:38.138 [DBG] [登录] 帐号=[loadbot124] 密码长度=10
+14:52:38.149 [DBG] Open: /127.0.0.1:54755
+14:52:38.149 [DBG] [登录] 帐号=[loadbot125] 密码长度=10
+14:52:38.170 [DBG] Open: /127.0.0.1:54756
+14:52:38.170 [DBG] [登录] 帐号=[loadbot126] 密码长度=10
+14:52:38.190 [DBG] Open: /127.0.0.1:54757
+14:52:38.190 [DBG] [登录] 帐号=[loadbot127] 密码长度=10
+14:52:38.227 [DBG] Open: /127.0.0.1:54758
+14:52:38.227 [DBG] [登录] 帐号=[loadbot128] 密码长度=10
+14:52:38.230 [DBG] Open: /127.0.0.1:54759
+14:52:38.231 [DBG] [登录] 帐号=[loadbot129] 密码长度=10
+14:52:38.251 [DBG] Open: /127.0.0.1:54762
+14:52:38.251 [DBG] [登录] 帐号=[loadbot130] 密码长度=10
+14:52:38.282 [DBG] Open: /127.0.0.1:54765
+14:52:38.295 [DBG] [登录] 帐号=[loadbot131] 密码长度=10
+14:52:38.297 [DBG] Open: /127.0.0.1:54766
+14:52:38.298 [DBG] [登录] 帐号=[loadbot132] 密码长度=10
+14:52:38.310 [DBG] Open: /127.0.0.1:54767
+14:52:38.310 [DBG] [登录] 帐号=[loadbot133] 密码长度=10
+14:52:38.330 [DBG] Open: /127.0.0.1:54768
+14:52:38.330 [DBG] [登录] 帐号=[loadbot134] 密码长度=10
+14:52:38.357 [DBG] Open: /127.0.0.1:54769
+14:52:38.357 [DBG] [登录] 帐号=[loadbot135] 密码长度=10
+14:52:38.370 [DBG] Open: /127.0.0.1:54770
+14:52:38.371 [DBG] [登录] 帐号=[loadbot136] 密码长度=10
+14:52:38.391 [DBG] Open: /127.0.0.1:54771
+14:52:38.391 [DBG] [登录] 帐号=[loadbot137] 密码长度=10
+14:52:38.418 [DBG] Open: /127.0.0.1:54772
+14:52:38.418 [DBG] [登录] 帐号=[loadbot138] 密码长度=10
+14:52:38.430 [DBG] Open: /127.0.0.1:54773
+14:52:38.431 [DBG] [登录] 帐号=[loadbot139] 密码长度=10
+14:52:38.451 [DBG] Open: /127.0.0.1:54774
+14:52:38.451 [DBG] [登录] 帐号=[loadbot140] 密码长度=10
+14:52:38.479 [DBG] Open: /127.0.0.1:54775
+14:52:38.480 [DBG] [登录] 帐号=[loadbot141] 密码长度=10
+14:52:38.491 [DBG] Open: /127.0.0.1:54876
+14:52:38.492 [DBG] [登录] 帐号=[loadbot142] 密码长度=10
+14:52:38.511 [DBG] Open: /127.0.0.1:54877
+14:52:38.511 [DBG] [登录] 帐号=[loadbot143] 密码长度=10
+14:52:38.544 [DBG] Open: /127.0.0.1:54879
+14:52:38.545 [DBG] [登录] 帐号=[loadbot144] 密码长度=10
+14:52:38.551 [DBG] Open: /127.0.0.1:54880
+14:52:38.551 [DBG] [登录] 帐号=[loadbot145] 密码长度=10
+14:52:38.571 [DBG] Open: /127.0.0.1:54881
+14:52:38.571 [DBG] [登录] 帐号=[loadbot146] 密码长度=10
+14:52:38.610 [DBG] Open: /127.0.0.1:54882
+14:52:38.610 [DBG] [登录] 帐号=[loadbot147] 密码长度=10
+14:52:38.612 [DBG] Open: /127.0.0.1:54883
+14:52:38.612 [DBG] [登录] 帐号=[loadbot148] 密码长度=10
+14:52:38.632 [DBG] Open: /127.0.0.1:54884
+14:52:38.632 [DBG] [登录] 帐号=[loadbot149] 密码长度=10
+14:52:38.652 [DBG] Open: /127.0.0.1:54885
+14:52:38.652 [DBG] [登录] 帐号=[loadbot150] 密码长度=10
+14:52:38.684 [DBG] Open: /127.0.0.1:54886
+14:52:38.685 [DBG] [登录] 帐号=[loadbot151] 密码长度=10
+14:52:38.692 [DBG] Open: /127.0.0.1:54887
+14:52:38.692 [DBG] [登录] 帐号=[loadbot152] 密码长度=10
+14:52:38.712 [DBG] Open: /127.0.0.1:54888
+14:52:38.712 [DBG] [登录] 帐号=[loadbot153] 密码长度=10
+14:52:38.760 [DBG] Open: /127.0.0.1:54889
+14:52:38.760 [DBG] [登录] 帐号=[loadbot154] 密码长度=10
+14:52:38.762 [DBG] Open: /127.0.0.1:54890
+14:52:38.762 [DBG] [登录] 帐号=[loadbot155] 密码长度=10
+14:52:38.773 [DBG] Open: /127.0.0.1:54891
+14:52:38.773 [DBG] [登录] 帐号=[loadbot156] 密码长度=10
+14:52:38.793 [DBG] Open: /127.0.0.1:54892
+14:52:38.793 [DBG] [登录] 帐号=[loadbot157] 密码长度=10
+14:52:38.830 [DBG] Open: /127.0.0.1:54893
+14:52:38.830 [DBG] [登录] 帐号=[loadbot158] 密码长度=10
+14:52:38.845 [DBG] Open: /127.0.0.1:54894
+14:52:38.845 [DBG] [登录] 帐号=[loadbot159] 密码长度=10
+14:52:38.853 [DBG] Open: /127.0.0.1:54898
+14:52:38.854 [DBG] [登录] 帐号=[loadbot160] 密码长度=10
+14:52:38.874 [DBG] Open: /127.0.0.1:54899
+14:52:38.874 [DBG] [登录] 帐号=[loadbot161] 密码长度=10
+14:52:38.916 [DBG] Open: /127.0.0.1:54900
+14:52:38.916 [DBG] [登录] 帐号=[loadbot162] 密码长度=10
+14:52:38.918 [DBG] Open: /127.0.0.1:54901
+14:52:38.919 [DBG] [登录] 帐号=[loadbot163] 密码长度=10
+14:52:38.934 [DBG] Open: /127.0.0.1:54905
+14:52:38.934 [DBG] [登录] 帐号=[loadbot164] 密码长度=10
+14:52:38.954 [DBG] Open: /127.0.0.1:54906
+14:52:38.954 [DBG] [登录] 帐号=[loadbot165] 密码长度=10
+14:52:38.985 [DBG] Open: /127.0.0.1:54907
+14:52:38.985 [DBG] [登录] 帐号=[loadbot166] 密码长度=10
+14:52:38.994 [DBG] Open: /127.0.0.1:54908
+14:52:38.994 [DBG] [登录] 帐号=[loadbot167] 密码长度=10
+14:52:39.014 [DBG] Open: /127.0.0.1:54909
+14:52:39.014 [DBG] [登录] 帐号=[loadbot168] 密码长度=10
+14:52:39.034 [DBG] Open: /127.0.0.1:54910
+14:52:39.034 [DBG] [登录] 帐号=[loadbot169] 密码长度=10
+14:52:39.077 [DBG] Open: /127.0.0.1:54911
+14:52:39.078 [DBG] [登录] 帐号=[loadbot170] 密码长度=10
+14:52:39.080 [DBG] Open: /127.0.0.1:54912
+14:52:39.080 [DBG] [登录] 帐号=[loadbot171] 密码长度=10
+14:52:39.094 [DBG] Open: /127.0.0.1:54913
+14:52:39.094 [DBG] [登录] 帐号=[loadbot172] 密码长度=10
+14:52:39.114 [DBG] Open: /127.0.0.1:54914
+14:52:39.115 [DBG] [登录] 帐号=[loadbot173] 密码长度=10
+14:52:39.134 [DBG] Open: /127.0.0.1:54915
+14:52:39.134 [DBG] [登录] 帐号=[loadbot174] 密码长度=10
+14:52:39.163 [DBG] Open: /127.0.0.1:54916
+14:52:39.163 [DBG] [登录] 帐号=[loadbot175] 密码长度=10
+14:52:39.175 [DBG] Open: /127.0.0.1:54917
+14:52:39.175 [DBG] [登录] 帐号=[loadbot176] 密码长度=10
+14:52:39.194 [DBG] Open: /127.0.0.1:54918
+14:52:39.195 [DBG] [登录] 帐号=[loadbot177] 密码长度=10
+14:52:39.215 [DBG] Open: /127.0.0.1:54919
+14:52:39.215 [DBG] [登录] 帐号=[loadbot178] 密码长度=10
+14:52:39.247 [DBG] Open: /127.0.0.1:54920
+14:52:39.248 [DBG] [登录] 帐号=[loadbot179] 密码长度=10
+14:52:39.255 [DBG] Open: /127.0.0.1:54921
+14:52:39.256 [DBG] [登录] 帐号=[loadbot180] 密码长度=10
+14:52:39.275 [DBG] Open: /127.0.0.1:54922
+14:52:39.275 [DBG] [登录] 帐号=[loadbot181] 密码长度=10
+14:52:39.295 [DBG] Open: /127.0.0.1:54924
+14:52:39.296 [DBG] [登录] 帐号=[loadbot182] 密码长度=10
+14:52:39.337 [DBG] Open: /127.0.0.1:54925
+14:52:39.338 [DBG] [登录] 帐号=[loadbot183] 密码长度=10
+14:52:39.340 [DBG] Open: /127.0.0.1:54926
+14:52:39.340 [DBG] [登录] 帐号=[loadbot184] 密码长度=10
+14:52:39.356 [DBG] Open: /127.0.0.1:54927
+14:52:39.356 [DBG] [登录] 帐号=[loadbot185] 密码长度=10
+14:52:39.376 [DBG] Open: /127.0.0.1:54928
+14:52:39.376 [DBG] [登录] 帐号=[loadbot186] 密码长度=10
+14:52:39.397 [DBG] Open: /127.0.0.1:54929
+14:52:39.397 [DBG] [登录] 帐号=[loadbot187] 密码长度=10
+14:52:39.422 [DBG] Open: /127.0.0.1:54930
+14:52:39.422 [DBG] [登录] 帐号=[loadbot188] 密码长度=10
+14:52:39.436 [DBG] Open: /127.0.0.1:54931
+14:52:39.436 [DBG] [登录] 帐号=[loadbot189] 密码长度=10
+14:52:39.457 [DBG] Open: /127.0.0.1:54932
+14:52:39.457 [DBG] [登录] 帐号=[loadbot190] 密码长度=10
+14:52:39.485 [DBG] Open: /127.0.0.1:54933
+14:52:39.485 [DBG] [登录] 帐号=[loadbot191] 密码长度=10
+14:52:39.497 [DBG] Open: /127.0.0.1:54934
+14:52:39.497 [DBG] [登录] 帐号=[loadbot192] 密码长度=10
+14:52:39.517 [DBG] Open: /127.0.0.1:54935
+14:52:39.517 [DBG] [登录] 帐号=[loadbot193] 密码长度=10
+14:52:39.552 [DBG] Open: /127.0.0.1:54936
+14:52:39.553 [DBG] [登录] 帐号=[loadbot194] 密码长度=10
+14:52:39.556 [DBG] Open: /127.0.0.1:54937
+14:52:39.557 [DBG] [登录] 帐号=[loadbot195] 密码长度=10
+14:52:39.577 [DBG] Open: /127.0.0.1:54938
+14:52:39.577 [DBG] [登录] 帐号=[loadbot196] 密码长度=10
+14:52:39.622 [DBG] Open: /127.0.0.1:54939
+14:52:39.622 [DBG] [登录] 帐号=[loadbot197] 密码长度=10
+14:52:39.624 [DBG] Open: /127.0.0.1:54940
+14:52:39.624 [DBG] [登录] 帐号=[loadbot198] 密码长度=10
+14:52:39.637 [DBG] Open: /127.0.0.1:54941
+14:52:39.637 [DBG] [登录] 帐号=[loadbot199] 密码长度=10
+14:52:43.663 [DBG] [选服] account=[loadbot0] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:43.664 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:43.694 [DBG] [选服] account=[loadbot1] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:43.694 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:43.695 [DBG] [选服] account=[loadbot2] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:43.709 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:43.709 [DBG] [选服] account=[loadbot3] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:43.710 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:43.725 [DBG] [选服] account=[loadbot4] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:43.725 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:43.740 [DBG] [选服] account=[loadbot5] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:43.740 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:43.788 [DBG] [选服] account=[loadbot7] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:43.789 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:43.789 [DBG] [选服] account=[loadbot6] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:43.789 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:43.804 [DBG] [选服] account=[loadbot8] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:43.804 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:43.852 [DBG] [选服] account=[loadbot9] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:43.852 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:43.852 [DBG] [选服] account=[loadbot10] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:43.852 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:43.867 [DBG] [选服] account=[loadbot11] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:43.868 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:43.883 [DBG] [选服] account=[loadbot12] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:43.884 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:43.914 [DBG] [选服] account=[loadbot13] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:43.931 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:43.931 [DBG] [选服] account=[loadbot14] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:43.931 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:43.945 [DBG] [选服] account=[loadbot15] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:43.945 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:43.977 [DBG] [选服] account=[loadbot16] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:43.977 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:43.992 [DBG] [选服] account=[loadbot17] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.016 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.017 [DBG] [选服] account=[loadbot18] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.017 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.055 [DBG] [选服] account=[loadbot19] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.055 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.056 [DBG] [选服] account=[loadbot20] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.056 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.070 [DBG] [选服] account=[loadbot21] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.070 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.086 [DBG] [选服] account=[loadbot22] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.102 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.134 [DBG] [选服] account=[loadbot23] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.135 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.135 [DBG] [选服] account=[loadbot24] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.135 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.150 [DBG] [选服] account=[loadbot25] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.150 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.166 [DBG] [选服] account=[loadbot26] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.196 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.213 [DBG] [选服] account=[loadbot28] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.214 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.214 [DBG] [选服] account=[loadbot27] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.214 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.229 [DBG] [选服] account=[loadbot29] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.229 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.245 [DBG] [选服] account=[loadbot30] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.245 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.276 [DBG] [选服] account=[loadbot31] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.287 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.292 [DBG] [选服] account=[loadbot32] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.292 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.308 [DBG] [选服] account=[loadbot33] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.308 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.386 [DBG] [选服] account=[loadbot34] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.386 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.387 [DBG] [选服] account=[loadbot35] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.387 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.387 [DBG] [选服] account=[loadbot36] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.387 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.401 [DBG] [选服] account=[loadbot37] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.423 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.423 [DBG] [选服] account=[loadbot38] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.423 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.433 [DBG] [选服] account=[loadbot39] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.433 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.464 [DBG] [选服] account=[loadbot40] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.487 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.488 [DBG] [选服] account=[loadbot41] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.488 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.496 [DBG] [选服] account=[loadbot42] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.497 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.544 [DBG] [选服] account=[loadbot44] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.552 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.553 [DBG] [选服] account=[loadbot43] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.553 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.558 [DBG] [选服] account=[loadbot45] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.559 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.575 [DBG] [选服] account=[loadbot46] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.575 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.622 [DBG] [选服] account=[loadbot47] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.627 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.627 [DBG] [选服] account=[loadbot48] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.627 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.638 [DBG] [选服] account=[loadbot49] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.638 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.653 [DBG] [选服] account=[loadbot50] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.654 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.669 [DBG] [选服] account=[loadbot51] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.698 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.700 [DBG] [选服] account=[loadbot52] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.700 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.716 [DBG] [选服] account=[loadbot53] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.716 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.731 [DBG] [选服] account=[loadbot54] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.731 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.747 [DBG] [选服] account=[loadbot55] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.777 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.794 [DBG] [选服] account=[loadbot57] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.794 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.795 [DBG] [选服] account=[loadbot56] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.795 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.810 [DBG] [选服] account=[loadbot58] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.810 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.826 [DBG] [选服] account=[loadbot59] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.859 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.873 [DBG] [选服] account=[loadbot60] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.873 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.873 [DBG] [选服] account=[loadbot61] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.874 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.888 [DBG] [选服] account=[loadbot62] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.888 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.920 [DBG] [选服] account=[loadbot63] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.938 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.939 [DBG] [选服] account=[loadbot64] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.939 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.966 [DBG] [选服] account=[loadbot66] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.966 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.966 [DBG] [选服] account=[loadbot65] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:44.967 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:44.998 [DBG] [选服] account=[loadbot67] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.021 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.022 [DBG] [选服] account=[loadbot68] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.022 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.061 [DBG] [选服] account=[loadbot70] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.061 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.061 [DBG] [选服] account=[loadbot69] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.061 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.077 [DBG] [选服] account=[loadbot71] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.105 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.105 [DBG] [选服] account=[loadbot72] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.105 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.125 [DBG] [选服] account=[loadbot73] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.125 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.141 [DBG] [选服] account=[loadbot74] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.141 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.157 [DBG] [选服] account=[loadbot75] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.157 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.188 [DBG] [选服] account=[loadbot76] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.199 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.200 [DBG] [选服] account=[loadbot77] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.200 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.220 [DBG] [选服] account=[loadbot78] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.220 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.250 [DBG] [选服] account=[loadbot79] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.251 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.251 [DBG] [选服] account=[loadbot80] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.252 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.282 [DBG] [选服] account=[loadbot81] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.294 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.314 [DBG] [选服] account=[loadbot82] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.314 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.315 [DBG] [选服] account=[loadbot83] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.315 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.330 [DBG] [选服] account=[loadbot84] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.330 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.378 [DBG] [选服] account=[loadbot85] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.380 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.380 [DBG] [选服] account=[loadbot86] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.380 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.394 [DBG] [选服] account=[loadbot87] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.394 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.440 [DBG] [选服] account=[loadbot89] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.440 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.441 [DBG] [选服] account=[loadbot88] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.441 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.455 [DBG] [选服] account=[loadbot90] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.480 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.480 [DBG] [选服] account=[loadbot91] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.480 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.501 [DBG] [选服] account=[loadbot92] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.502 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.517 [DBG] [选服] account=[loadbot93] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.517 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.533 [DBG] [选服] account=[loadbot94] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.533 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.581 [DBG] [选服] account=[loadbot95] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.581 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.582 [DBG] [选服] account=[loadbot96] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.582 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.596 [DBG] [选服] account=[loadbot97] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.596 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.611 [DBG] [选服] account=[loadbot98] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.611 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.659 [DBG] [选服] account=[loadbot99] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.659 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.659 [DBG] [选服] account=[loadbot100] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.659 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.673 [DBG] [选服] account=[loadbot101] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.674 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.721 [DBG] [选服] account=[loadbot102] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.721 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.735 [DBG] [选服] account=[loadbot103] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.735 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.750 [DBG] [选服] account=[loadbot104] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.750 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.751 [DBG] [选服] account=[loadbot105] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.751 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.799 [DBG] [选服] account=[loadbot106] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.799 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.800 [DBG] [选服] account=[loadbot107] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.800 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.813 [DBG] [选服] account=[loadbot108] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.813 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.829 [DBG] [选服] account=[loadbot109] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.855 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.894 [DBG] [选服] account=[loadbot112] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.894 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.894 [DBG] [选服] account=[loadbot111] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.894 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.895 [DBG] [选服] account=[loadbot110] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.895 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.924 [DBG] [选服] account=[loadbot113] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.925 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.940 [DBG] [选服] account=[loadbot114] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.941 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.972 [DBG] [选服] account=[loadbot116] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.988 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:45.989 [DBG] [选服] account=[loadbot115] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:45.989 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.003 [DBG] [选服] account=[loadbot117] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.003 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.018 [DBG] [选服] account=[loadbot118] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.019 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.050 [DBG] [选服] account=[loadbot119] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.057 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.065 [DBG] [选服] account=[loadbot120] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.066 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.081 [DBG] [选服] account=[loadbot121] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.081 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.097 [DBG] [选服] account=[loadbot122] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.098 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.145 [DBG] [选服] account=[loadbot124] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.145 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.146 [DBG] [选服] account=[loadbot123] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.146 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.160 [DBG] [选服] account=[loadbot125] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.160 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.176 [DBG] [选服] account=[loadbot126] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.205 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.208 [DBG] [选服] account=[loadbot127] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.208 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.240 [DBG] [选服] account=[loadbot129] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.240 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.241 [DBG] [选服] account=[loadbot128] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.241 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.256 [DBG] [选服] account=[loadbot130] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.287 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.304 [DBG] [选服] account=[loadbot131] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.304 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.304 [DBG] [选服] account=[loadbot132] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.305 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.320 [DBG] [选服] account=[loadbot133] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.320 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.336 [DBG] [选服] account=[loadbot134] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.361 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.368 [DBG] [选服] account=[loadbot135] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.368 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.383 [DBG] [选服] account=[loadbot136] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.383 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.398 [DBG] [选服] account=[loadbot137] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.399 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.429 [DBG] [选服] account=[loadbot138] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.430 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.460 [DBG] [选服] account=[loadbot139] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.461 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.461 [DBG] [选服] account=[loadbot140] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.461 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.491 [DBG] [选服] account=[loadbot141] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.492 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.508 [DBG] [选服] account=[loadbot142] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.509 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.524 [DBG] [选服] account=[loadbot143] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.552 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.555 [DBG] [选服] account=[loadbot144] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.555 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.555 [DBG] [选服] account=[loadbot145] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.555 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.586 [DBG] [选服] account=[loadbot146] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.586 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.617 [DBG] [选服] account=[loadbot147] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.635 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.636 [DBG] [选服] account=[loadbot148] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.636 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.649 [DBG] [选服] account=[loadbot149] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.649 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.697 [DBG] [选服] account=[loadbot152] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.697 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.698 [DBG] [选服] account=[loadbot150] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.698 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.712 [DBG] [选服] account=[loadbot151] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.740 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.741 [DBG] [选服] account=[loadbot153] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.741 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.774 [DBG] [选服] account=[loadbot155] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.774 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.774 [DBG] [选服] account=[loadbot154] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.775 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.789 [DBG] [选服] account=[loadbot156] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.789 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.805 [DBG] [选服] account=[loadbot157] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.831 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.837 [DBG] [选服] account=[loadbot158] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.837 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.853 [DBG] [选服] account=[loadbot159] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.853 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.869 [DBG] [选服] account=[loadbot160] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.869 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.885 [DBG] [选服] account=[loadbot161] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.902 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.933 [DBG] [选服] account=[loadbot163] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.933 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.933 [DBG] [选服] account=[loadbot162] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.934 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.948 [DBG] [选服] account=[loadbot164] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.975 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.975 [DBG] [选服] account=[loadbot165] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.976 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:46.996 [DBG] [选服] account=[loadbot166] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:46.996 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:47.011 [DBG] [选服] account=[loadbot167] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:47.011 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:47.027 [DBG] [选服] account=[loadbot168] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:47.048 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:47.049 [DBG] [选服] account=[loadbot169] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:47.049 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:47.090 [DBG] [选服] account=[loadbot170] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:47.120 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:47.121 [DBG] [选服] account=[loadbot171] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:47.121 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:47.121 [DBG] [选服] account=[loadbot172] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:47.121 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:47.122 [DBG] [选服] account=[loadbot173] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:47.138 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:47.138 [DBG] [选服] account=[loadbot174] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:47.138 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:47.169 [DBG] [选服] account=[loadbot175] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:47.195 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:47.195 [DBG] [选服] account=[loadbot176] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:47.196 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:47.200 [DBG] [选服] account=[loadbot177] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:47.200 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:47.231 [DBG] [选服] account=[loadbot178] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:47.232 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:47.262 [DBG] [选服] account=[loadbot180] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:47.269 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:47.269 [DBG] [选服] account=[loadbot179] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:47.269 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:47.294 [DBG] [选服] account=[loadbot181] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:47.294 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:47.310 [DBG] [选服] account=[loadbot182] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:47.310 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:47.342 [DBG] [选服] account=[loadbot183] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:47.342 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:47.343 [DBG] [选服] account=[loadbot184] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:47.343 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:47.358 [DBG] [选服] account=[loadbot185] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:47.358 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:47.389 [DBG] [选服] account=[loadbot186] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:47.415 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:47.416 [DBG] [选服] account=[loadbot187] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:47.416 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:47.437 [DBG] [选服] account=[loadbot188] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:47.438 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:47.452 [DBG] [选服] account=[loadbot189] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:47.452 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:47.468 [DBG] [选服] account=[loadbot190] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:47.493 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:47.500 [DBG] [选服] account=[loadbot192] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:47.500 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:47.500 [DBG] [选服] account=[loadbot191] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:47.500 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:47.532 [DBG] [选服] account=[loadbot193] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:47.532 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:47.563 [DBG] [选服] account=[loadbot194] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:47.580 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:47.581 [DBG] [选服] account=[loadbot195] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:47.593 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:47.594 [DBG] [选服] account=[loadbot196] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:47.594 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:47.626 [DBG] [选服] account=[loadbot197] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:47.626 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:47.641 [DBG] [选服] account=[loadbot198] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:47.657 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:47.657 [DBG] [选服] account=[loadbot199] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2
+14:52:47.657 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+14:52:51.668 [DBG] Close: 
+14:52:51.700 [DBG] Close: 
+14:52:51.716 [DBG] Close: 
+14:52:51.716 [DBG] Close: 
+14:52:51.732 [DBG] Close: 
+14:52:51.748 [DBG] Close: 
+14:52:51.796 [DBG] Close: 
+14:52:51.796 [DBG] Close: 
+14:52:51.812 [DBG] Close: 
+14:52:51.858 [DBG] Close: 
+14:52:51.874 [DBG] Close: 
+14:52:51.905 [DBG] Close: 
+14:52:51.936 [DBG] Close: 
+14:52:51.967 [DBG] Close: 
+14:52:51.967 [DBG] Close: 
+14:52:51.983 [DBG] Close: 
+14:52:51.999 [DBG] Close: 
+14:52:52.031 [DBG] Close: 
+14:52:52.042 [DBG] Close: 
+14:52:52.062 [DBG] Close: 
+14:52:52.062 [DBG] Close: 
+14:52:52.093 [DBG] Close: 
+14:52:52.124 [DBG] Close: 
+14:52:52.141 [DBG] Close: 
+14:52:52.156 [DBG] Close: 
+14:52:52.172 [DBG] Close: 
+14:52:52.221 [DBG] Close: 
+14:52:52.234 [DBG] Close: 
+14:52:52.250 [DBG] Close: 
+14:52:52.281 [DBG] Close: 
+14:52:52.316 [DBG] Close: 
+14:52:52.317 [DBG] Close: 
+14:52:52.317 [DBG] Close: 
+14:52:52.329 [DBG] Close: 
+14:52:52.392 [DBG] Close: 
+14:52:52.408 [DBG] Close: 
+14:52:52.408 [DBG] Close: 
+14:52:52.439 [DBG] Close: 
+14:52:52.455 [DBG] Close: 
+14:52:52.484 [DBG] Close: 
+14:52:52.503 [DBG] Close: 
+14:52:52.518 [DBG] Close: 
+14:52:52.533 [DBG] Close: 
+14:52:52.581 [DBG] Close: 
+14:52:52.613 [DBG] Close: 
+14:52:52.629 [DBG] Close: 
+14:52:52.645 [DBG] Close: 
+14:52:52.696 [DBG] Close: 
+14:52:52.709 [DBG] Close: 
+14:52:52.710 [DBG] Close: 
+14:52:52.725 [DBG] Close: 
+14:52:52.725 [DBG] Close: 
+14:52:52.740 [DBG] Close: 
+14:52:52.756 [DBG] Close: 
+14:52:52.772 [DBG] Close: 
+14:52:52.787 [DBG] Close: 
+14:52:52.815 [DBG] Close: 
+14:52:52.835 [DBG] Close: 
+14:52:52.851 [DBG] Close: 
+14:52:52.867 [DBG] Close: 
+14:52:52.898 [DBG] Close: 
+14:52:52.924 [DBG] Close: 
+14:52:52.946 [DBG] Close: 
+14:52:52.962 [DBG] Close: 
+14:52:52.978 [DBG] Close: 
+14:52:52.978 [DBG] Close: 
+14:52:52.978 [DBG] Close: 
+14:52:53.023 [DBG] Close: 
+14:52:53.054 [DBG] Close: 
+14:52:53.070 [DBG] Close: 
+14:52:53.118 [DBG] Close: 
+14:52:53.143 [DBG] Close: 
+14:52:53.182 [DBG] Close: 
+14:52:53.213 [DBG] Close: 
+14:52:53.270 [DBG] Close: 
+14:52:53.277 [DBG] Close: 
+14:52:53.277 [DBG] Close: 
+14:52:53.277 [DBG] Close: 
+14:52:53.309 [DBG] Close: 
+14:52:53.325 [DBG] Close: 
+14:52:53.340 [DBG] Close: 
+14:52:53.383 [DBG] Close: 
+14:52:53.404 [DBG] Close: 
+14:52:53.435 [DBG] Close: 
+14:52:53.475 [DBG] Close: 
+14:52:53.475 [DBG] Close: 
+14:52:53.498 [DBG] Close: 
+14:52:53.514 [DBG] Close: 
+14:52:53.530 [DBG] Close: 
+14:52:53.551 [DBG] Close: 
+14:52:53.562 [DBG] Close: 
+14:52:53.578 [DBG] Close: 
+14:52:53.578 [DBG] Close: 
+14:52:53.593 [DBG] Close: 
+14:52:53.609 [DBG] Close: 
+14:52:53.631 [DBG] Close: 
+14:52:53.657 [DBG] Close: 
+14:52:53.673 [DBG] Close: 
+14:52:53.714 [DBG] Close: 
+14:52:53.719 [DBG] Close: 
+14:52:53.720 [DBG] Close: 
+14:52:53.750 [DBG] Close: 
+14:52:53.782 [DBG] Close: 
+14:52:53.812 [DBG] Close: 
+14:52:53.828 [DBG] Close: 
+14:52:53.845 [DBG] Close: 
+14:52:53.870 [DBG] Close: 
+14:52:53.870 [DBG] Close: 
+14:52:53.892 [DBG] Close: 
+14:52:53.892 [DBG] Close: 
+14:52:53.908 [DBG] Close: 
+14:52:53.908 [DBG] Close: 
+14:52:53.939 [DBG] Close: 
+14:52:53.970 [DBG] Close: 
+14:52:53.986 [DBG] Close: 
+14:52:54.002 [DBG] Close: 
+14:52:54.018 [DBG] Close: 
+14:52:54.059 [DBG] Close: 
+14:52:54.060 [DBG] Close: 
+14:52:54.096 [DBG] Close: 
+14:52:54.128 [DBG] Close: 
+14:52:54.160 [DBG] Close: 
+14:52:54.176 [DBG] Close: 
+14:52:54.176 [DBG] Close: 
+14:52:54.191 [DBG] Close: 
+14:52:54.207 [DBG] Close: 
+14:52:54.255 [DBG] Close: 
+14:52:54.256 [DBG] Close: 
+14:52:54.269 [DBG] Close: 
+14:52:54.270 [DBG] Close: 
+14:52:54.301 [DBG] Close: 
+14:52:54.317 [DBG] Close: 
+14:52:54.318 [DBG] Close: 
+14:52:54.332 [DBG] Close: 
+14:52:54.364 [DBG] Close: 
+14:52:54.394 [DBG] Close: 
+14:52:54.412 [DBG] Close: 
+14:52:54.427 [DBG] Close: 
+14:52:54.474 [DBG] Close: 
+14:52:54.490 [DBG] Close: 
+14:52:54.507 [DBG] Close: 
+14:52:54.522 [DBG] Close: 
+14:52:54.538 [DBG] LegendOfMir2/99/0/DBServer/Online:0/正常
+14:52:54.538 [DBG] Close: 
+14:52:54.554 [DBG] Close: 
+14:52:54.599 [DBG] Close: 
+14:52:54.617 [DBG] Close: 
+14:52:54.633 [DBG] Close: 
+14:52:54.649 [DBG] Close: 
+14:52:54.650 [DBG] Close: 
+14:52:54.680 [DBG] Close: 
+14:52:54.711 [DBG] Close: 
+14:52:54.743 [DBG] Close: 
+14:52:54.759 [DBG] Close: 
+14:52:54.775 [DBG] Close: 
+14:52:54.805 [DBG] Close: 
+14:52:54.836 [DBG] Close: 
+14:52:54.851 [DBG] Close: 
+14:52:54.866 [DBG] Close: 
+14:52:54.910 [DBG] Close: 
+14:52:54.930 [DBG] Close: 
+14:52:54.946 [DBG] Close: 
+14:52:54.946 [DBG] Close: 
+14:52:54.960 [DBG] Close: 
+14:52:55.006 [DBG] Close: 
+14:52:55.024 [DBG] Close: 
+14:52:55.056 [DBG] Close: 
+14:52:55.102 [DBG] Close: 
+14:52:55.104 [DBG] Close: 
+14:52:55.135 [DBG] Close: 
+14:52:55.151 [DBG] Close: 
+14:52:55.198 [DBG] Close: 
+14:52:55.214 [DBG] Close: 
+14:52:55.230 [DBG] Close: 
+14:52:55.262 [DBG] Close: 
+14:52:55.294 [DBG] Close: 
+14:52:55.294 [DBG] Close: 
+14:52:55.309 [DBG] Close: 
+14:52:55.325 [DBG] Close: 
+14:52:55.325 [DBG] Close: 
+14:52:55.355 [DBG] Close: 
+14:52:55.382 [DBG] Close: 
+14:52:55.382 [DBG] Close: 
+14:52:55.382 [DBG] Close: 
+14:52:55.401 [DBG] Close: 
+14:52:55.417 [DBG] Close: 
+14:52:55.417 [DBG] Close: 
+14:52:55.449 [DBG] Close: 
+14:52:55.473 [DBG] Close: 
+14:52:55.512 [DBG] Close: 
+14:52:55.528 [DBG] Close: 
+14:52:55.574 [DBG] Close: 
+14:52:55.590 [DBG] Close: 
+14:52:55.606 [DBG] Close: 
+14:52:55.622 [DBG] Close: 
+14:52:55.669 [DBG] Close: 
+14:52:55.685 [DBG] Close: 
+14:52:55.701 [DBG] Close: 
+14:52:55.716 [DBG] Close: 
+14:52:55.763 [DBG] Close: 
+14:52:55.764 [DBG] Close: 

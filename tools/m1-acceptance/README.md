@@ -46,7 +46,7 @@
 | BotSrv | C# 参考栈 | 175/200（87.5%） | — |
 | BotSrv | 全 Rust 链 | **200/200** | — |
 | probe | C# 参考栈 | — | 200/200/200/**200** |
-| probe | 全 Rust 链 | — | 200/200/200/**0** ← Rust db-srv 缺陷（已修，等合入），见 §4 |
+| probe | 全 Rust 链 | — | **200/200/200/200**（db-srv 缺陷已修并合入，见 §4） |
 
 ⇒ 判「链本身」用协议探针（确定性、无共享态）；BotSrv 的两侧计数作为**载荷**证据并列给出。
 
@@ -70,7 +70,7 @@ powershell -File tools/m1-acceptance/redcheck_boundary.ps1 -Mode swap-csharp-sel
 # 5) 两侧证据计数（单一口径；也可只用入库件复算）
 #    run_m1_load.ps1 内部已调它；单独复算入库件即：
 #    python tools/m1-acceptance/count_m1_logs.py --selftest
-#    python tools/m1-acceptance/count_m1_logs.py --bots <22-botsrv-bots-200.txt> \
+#    python tools/m1-acceptance/count_m1_logs.py --bots <20-botsrv-bots-200.txt> \
 #      --login-srv <12-rust-login-srv.out.txt> --db-srv <13-rust-db-srv.out.txt> \
 #      --sel-gate <14-rust-sel-gate.out.txt> --login-gate <15-rust-login-gate.out.txt> --out <07-...json>
 
@@ -78,16 +78,16 @@ powershell -File tools/m1-acceptance/redcheck_boundary.ps1 -Mode swap-csharp-sel
 powershell -File tools/m1-acceptance/start_boundary_stack.ps1 -Stop
 ```
 
-## 4. 已知阻塞（本轮发现，另开卡）——修复已交付、**待合入**
+## 4. Rust db-srv selchr 缺陷——已修复、已合入、已复跑（原 F-3 收口）
 
 Rust `bins/db-srv` 的 `query_chr()` 成功后**没有**置 `u.chr_queryed = true`
 （C# oracle `src/DBSrv/Services/Impl/UserService.cs:359` 有这一行）⇒ `CM_SELCHR` 恒被拒
-（`[WRN] Double send SELCHR`），选角**完全不通**。缺陷卡：`openmir2-m1-dbsrv-selchr-queryed`。
+（`[WRN] Double send SELCHR`），选角**完全不通**。缺陷卡：`openmir2-m1-dbsrv-selchr-queryed`（issue `2e5d3b08`）。
 本目录不改 `bins/**`（写集红线）。
 
-**当前状态（2026-10-11 本片）**：缺陷卡分支 `worktree-m1-dbsrv-6000` 已交出修复
-（head `c95e14c8`：`CM_QUERYCHR` 成功即置 `u.chr_queryed = true`，并加进程级
-`QUERYCHR→SELCHR` 断言 `SM_STARTPLAY(525)`），但**尚未合入 `master`**
-（`git merge-base --is-ancestor c95e14c8 refs/heads/master` = false）⇒ 本卡 ② 的「选角」仍
-**BLOCKED**。合入后复跑：起栈 → `run_m1_load.ps1` → `probe_m1_chain.py`（期 `select_chr 200/200`），
-把新的原始件入库即可收 ②（本卡 `openmir2-m1-boundary-load-200` 的 F-3）。
+**当前状态（2026-10-11 F-3 返工片）**：修复 branch head `c95e14c8`（`CM_QUERYCHR` 成功即置
+`u.chr_queryed = true` + 进程级 `QUERYCHR→SELCHR` 断言 `SM_STARTPLAY(525)`）已由 `5db28d8d` 合入 `master`；
+复核 `git merge-base --is-ancestor c95e14c8 refs/heads/master` = **true**。
+本目录已在 rebase 到含该修复的 master 后**复跑**：起栈 → `run_m1_load.ps1` → `probe_m1_chain.py --count 200`
+⇒ **`select_chr 200/200`**、`ident_hist` 含 `525`、db-srv `玩家获取游戏网关信息`=200（证据见
+`mir2-rs/tests/parity/m1-boundary-load/evidence/05-probe-rust-200.json`、`07`、`13`）。
