@@ -33,12 +33,28 @@ owner 排期要求 M2 ②（补 `pickup`）与 ④（三路径 DB diff，两侧 
 `MapItem.cs` 以 `git HEAD` 字节还原后 **exit 0**（GREEN），`git status --short src/` 空。
 原始输出：`evidence/m2svr-pickup-unreachable-20261012/redcheck-{mutated,restored}.txt`。
 
-### 2.3 处置建议（**待 owner 签字，本片不擅自改判据**）
+### 2.3 owner 裁决（`073f0dac`，2026-10-12）= **branch A**（oracle 不可达）
 
-- ② 采 **6/7**（进图/走路/说话/看见别人/打怪/小退再进）+ 本证明；
-- 拾取的**行为**证据用 `m3bag` 的 `ground-probe` 夹具（反射调真身 `Operate(ProcessMessage)` 的
-  `CM_PICKUP`/`CM_DROPITEM`，`MapItem.ItemId` 由夹具显式给值，21 用例逐字段对拍）；
-- 备选：保留 7 张判据，给 `check_screenshots.ps1` 增 "oracle 不可达" 分类（签名后落地）。
+- **不批** `crates/world` 写分片（回写会让 Rust 删掉一件 oracle 从未落到地上的物，反而制造偏离）；
+- ② 第 7 格判据**改写为**「**无地面物**这一唯一可达形态下，两侧对 `CM_PICKUP` 的处理一致：
+  不产生任何下行帧、不进包、不崩、不改变会话态势」；
+- 登记 **T-25**（`mir2-rs/tests/parity/whitelist.md`）。
+
+落地实现：`check_screenshots.ps1` 默认**不要求** `m2-06-pickup`（新增 `-RequirePickup` 保留 legacy 7 张口径）；
+可达面两侧逐字段一致由 `m3bag` 的 `ground-probe`（23 用例，`ItemId` 由夹具显式给值）+
+`ground.rs::matches_oracle_ground_fixture` 钉住；harness 自检 38/38 GREEN（含 pickup 可选/legacy 两向）。
+
+### 2.4 部署 C# 参照栈上的实拍（owner `evidence_required`）
+
+- 起 `E:\MirServer\start-all.ps1`（C# 全套） + `tools/botload` 固定背包/装备序列（T-22）直跑 `BotSrv.exe`：
+  bot 在部署栈上真的发了一条 `CM_PICKUP x=281 y=617`（`M3BAGSEQ step=0`）——服务端处理后
+  **无任何地面物产生、无 `SM_ADDITEM`/`RM_ITEMSHOW`**，会话照常。
+- 如实登记限制：本次 bot 的背包视图为空（步 1/3/4 全 skip）⇒ **未在部署栈上实跑出 `CM_DROPITEM` 的
+  `SM_DROPITEM_FAIL`**；丢弃恒失败由真身 oracle 代码的 `ground-probe`（`drop_fail_item_id_zero`）钉住（T-19）。
+- 残余风险：部署 `GameSrv.exe` 与 `src/` 的二进制级 provenance 未校验（本仓以 `src/**` 为 oracle）。
+- 原始件：`evidence/m2svr-pickup-unreachable-20261012/deployed-csharp/**`。
+
+### 旧 2.3（已由 owner 裁决覆盖，保留作历史）
 
 ## 3. 结论二：④ 三路径 DB diff **真机双侧 GREEN**（11 张表逐行一致）
 

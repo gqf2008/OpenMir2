@@ -145,6 +145,11 @@ Test-Case "shots/0张=PREREQ" 2 (Run-Ps $ck @("-ShotsDir", $sEmpty, "-OutFile", 
 Test-Case "shots/缺1张=RED" 1 (Run-Ps $ck @("-ShotsDir", $s6, "-OutFile", (Join-Path $Work "shots-6.json"))) "RED: 截图不全" "6/7"
 Test-Case "shots/有<1KiB=RED" 1 (Run-Ps $ck @("-ShotsDir", $sTiny, "-OutFile", (Join-Path $Work "shots-tiny.json"))) "RED: 截图不全" "1 张 10B"
 Test-Case "shots/7张齐全=GREEN" 0 (Run-Ps $ck @("-ShotsDir", $s7, "-OutFile", (Join-Path $Work "shots-7.json"))) "GREEN: 7 张" "7/7 非空"
+# owner 裁决 `073f0dac`：`m2-06-pickup` oracle 不可达 ⇒ 默认不作为必需；`-RequirePickup` 保留 legacy。
+$s6np = Join-Path $Work "shots-6-nopickup"
+New-Shots $s6np @("m2-01-enter-map.png", "m2-02-walk.png", "m2-03-talk.png", "m2-04-see-others.png", "m2-05-attack.png", "m2-07-relogin.png") 2048 ""
+Test-Case "shots/6张无pickup=GREEN" 0 (Run-Ps $ck @("-ShotsDir", $s6np, "-OutFile", (Join-Path $Work "shots-6np.json"))) "GREEN: 6 张.*oracle 不可达" "pickup 不可达不计"
+Test-Case "shots/6张无pickup+RequirePickup=RED" 1 (Run-Ps $ck @("-ShotsDir", $s6np, "-OutFile", (Join-Path $Work "shots-6np-req.json"), "-RequirePickup")) "RED: 截图不全" "-RequirePickup 仍要求 7 张"
 
 # ---------------------------------------------------------------- ③b s2c 对账
 Write-Output "③b s2c_diff.py"
