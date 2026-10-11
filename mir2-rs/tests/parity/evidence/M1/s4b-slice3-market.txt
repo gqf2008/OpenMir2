@@ -1,0 +1,78 @@
+# M1 S4b 片 3（5700 MarketService）进程级/存储级证据 —— 2026-10-11T17:17:44Z
+# worktree=.claude/worktrees/dbsrv6k  CARGO_TARGET_DIR=E:\tmp\openmir2-dbsrv6k-target
+
+## 绿：marketdata 存储层（独立临时库，不动 mir2_db）
+$ cargo test -p db-srv --offline --bin db-srv -- --ignored marketdata:: --nocapture
+   Compiling db-srv v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\dbsrv6k\mir2-rs\bins\db-srv)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.43s
+     Running unittests src\main.rs (E:\tmp\openmir2-dbsrv6k-target\debug\deps\db_srv-57ddca38429a9240.exe)
+running 1 test
+[marketdata] scratch db dropped: mir2_dbsrv6k_mkt_30008_0 hex=6d6972325f6462737276366b5f6d6b745f33303030385f30
+test marketdata::tests::market_storage_matches_csharp_quirks ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 42 filtered out; finished in 0.04s
+
+## 绿：live_market 进程级（伪 LoginSrv + 伪 GameSvr + 真 db-srv，5700）
+$ cargo test -p db-srv --offline --test live_market -- --ignored --nocapture
+   Compiling db-srv v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\dbsrv6k\mir2-rs\bins\db-srv)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.73s
+     Running tests\live_market.rs (E:\tmp\openmir2-dbsrv6k-target\debug\deps\live_market-f3ea74bbffda1ec3.exe)
+
+running 1 test
+[fixture] Rust db-srv pid=12032 dir=C:\Users\gxh\AppData\Local\Temp\a2-dbsrv-5700-market-29408
+[search gid=0] ServerRequestMessage { recog: 0, ident: 104, param: 0, tag: 0, series: 0 }
+[search gid=2] ServerRequestMessage { recog: 0, ident: 104, param: 1, tag: 0, series: 0 }
+[user gid=2] ServerRequestMessage { recog: 99, ident: 110, param: 0, tag: 0, series: 0 }
+[load empty] ServerRequestMessage { recog: 0, ident: 106, param: 1, tag: 0, series: 0 }
+[no sign] ServerRequestMessage { recog: 0, ident: 2000, param: 0, tag: 0, series: 0 }
+[bad sign] connection closed
+[fixture] scratch db dropped: mir2_dbsrv6k_mktlive_29408
+test rust_dbsrv_5700_market_faces_csharp_behaviour ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.21s
+
+
+## 绿：replay（共用向量含 3 条 kind:market）
+$ cargo run -p replay --offline -- tests/parity/vectors/oracle_vectors.jsonl
+外部 kind 向量（storage 等）: 17
+明文动作帧(#+…!): 0（其中 body 口径与导出器不符 0，A-9）
+byte mismatches (①): 0
+field mismatches (②): 0
+distinct idents: 25
+unknown idents (未实现): 0
+stage coverage (③):
+  小退: 2 idents hit
+  建角: 2 idents hit
+  攻击: 3 idents hit
+  登录: 4 idents hit
+  移动: 4 idents hit
+  进世界: 4 idents hit
+  选服: 2 idents hit
+  选角: 2 idents hit
+RESULT: GREEN
+
+## 红检 A：把 MarkerUserLoadMessage 错误地补成员数对象头（naive 假设）
+$ cargo test -p db-srv --offline --bin db-srv marker_user_load   # 期望红
+thread 'market::tests::marker_user_load_true_bytes' (12436) panicked at bins\db-srv\src\market.rs:675:9:
+  left: [3, 3, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0]
+ right: [3, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0]
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 42 filtered out; finished in 0.00s
+$ cargo test -p db-srv --offline --test live_market -- --ignored   # 期望红
+thread 'rust_dbsrv_5700_market_faces_csharp_behaviour' (11252) panicked at bins\db-srv\tests\live_market.rs:434:5:
+assertion `left == right` failed: SellCount=0 MarketNPC=7 IsBusy=0
+  left: [3, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0]
+ right: [0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0]
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
+（已还原；下为还原后的绿）
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 42 filtered out; finished in 0.00s
+
+
+## 红检 B：QueryMarketItems 返回所有行（丢掉 C# if(dr.Read()) 只取第一行）
+$ cargo test -p db-srv --offline --bin db-srv -- --ignored marketdata::   # 期望红
+thread 'marketdata::tests::market_storage_matches_csharp_quirks' (32144) panicked at bins\db-srv\src\marketdata.rs:284:9:
+assertion `left == right` failed: C# `if (dr.Read())` ⇒ 只回第一行
+  left: 2
+ right: 1
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 42 filtered out; finished in 0.03s
+（已还原；下为还原后的绿）
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 42 filtered out; finished in 0.04s
+

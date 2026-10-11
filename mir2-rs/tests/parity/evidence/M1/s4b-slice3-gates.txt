@@ -1,0 +1,23 @@
+# M1 S4b 片 3（5700 MarketService）四门禁 —— 2026-10-11T17:13:51Z
+# worktree=.claude/worktrees/dbsrv6k  CARGO_TARGET_DIR=E:\tmp\openmir2-dbsrv6k-target  --offline
+
+## cargo fmt --all -- --check
+rc=0
+
+## cargo clippy --workspace --all-targets --offline -- -D warnings
+    Checking db-srv v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\dbsrv6k\mir2-rs\bins\db-srv)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.01s
+rc=0
+
+## cargo run -p msgcodegen --offline -- --check
+     Running `E:\tmp\openmir2-dbsrv6k-target\debug\msgcodegen.exe --check`
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+rc=0
+
+## cargo test --workspace --offline  ×3（每轮末尾汇总 + 聚合）
+--- run 1 ---
+suites=70 passed=506 failed=0 ignored=16
+--- run 2 ---
+suites=70 passed=506 failed=0 ignored=16
+--- run 3 ---
+suites=70 passed=506 failed=0 ignored=16
