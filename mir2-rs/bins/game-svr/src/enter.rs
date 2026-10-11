@@ -1100,6 +1100,71 @@ mod tests {
         );
     }
 
+    /// **F-3（reviewer-2 `8508d321`）**：生产形态直连金标准——裸男（无 `hum_items` / 空 `stditems`）
+    /// 经 `feature_shapes` 得 `(None, None)`，`apply()` 出的 50 body `Param1` 必须 = 金标准 seq17 的
+    /// `0x0002_0000`（`Hair=1`/gender=0 ⇒ `hair_byte=2`），41 的 `Param/Tag/Series = 0/2/0`、213 的 Recog=0。
+    #[test]
+    fn naked_man_logon_matches_golden_50_bytes() {
+        // 生产形态：无装备记录 + 空形状表 ⇒ 两段都计 0（oracle `GetStdItem == null` 分支）。
+        let (dress, weapon, warns) = feature_shapes(None, &[]);
+        assert_eq!((dress, weapon), (None, None));
+        assert!(warns.is_empty(), "无装备 ⇒ 无 WRN：{warns:?}");
+        let logon = LogonInputs {
+            feature: FeatureInputs {
+                dress_shape: dress,
+                weapon_shape: weapon,
+                gender: 0,
+                hair: 1,
+                on_horse: false,
+                horse_type: 0,
+                dress_eff_type: 0,
+            },
+            char_status: 0,
+            allow_group: false,
+            attack_mode: 0,
+        };
+        let mut base = EnterWorldInputs {
+            actor_id: 7,
+            cur_x: 291,
+            cur_y: 666,
+            dir: 4,
+            light: 1,
+            ..EnterWorldInputs::default()
+        };
+        let wx = WorldFrameInputs {
+            flag: None,
+            map_desc: None,
+            conf: None,
+            bonus_abil: None,
+            soft_version_date: 0,
+            game_gold: 0,
+            game_point: 0,
+            job: 0,
+            bonus_point: 0,
+            game_time: None,
+            strings: None,
+            show_name: None,
+            logon: Some(logon),
+        };
+        let _ = apply(&mut base, &wx);
+        // 金标准 seq17：`Param1=0x0002_0000`（`MakeHumanFeature(0,0,0,2)`）、其余 0。
+        assert_eq!(
+            base.logon_body_wl,
+            Some((0x0002_0000, 0, 0, 0)),
+            "裸男 50 body 必须 = 金标准 seq17"
+        );
+        assert_eq!(base.feature, Some((0x0002_0000, 0)));
+        let frames = base.frames();
+        // 658 恒发（R1-1：空尾也发 header-only），随后同组 50/41/213。
+        assert_eq!(idents(&frames), vec![658, 50, 41, 213]);
+        // 金标准 seq18：41 的 `Param/Tag/Series = Lo/HiWord(feature)/featureEx = 0/2/0`。
+        let cm41 = CommandMessage::from_bytes(&frames[2]).unwrap();
+        assert_eq!((cm41.param, cm41.tag, cm41.series), (0, 2, 0));
+        // 金标准 seq19：213 的 Recog=0。
+        let cm213 = CommandMessage::from_bytes(&frames[3]).unwrap();
+        assert_eq!(cm213.recog, 0);
+    }
+
     /// `feature_shapes`：`Index == 0`（未穿）/ 无记录 ⇒ `None` 且无 WRN；`Index > 0`（带装备）⇒
     /// 从 `stditems` 表查 `Shape`（1-based）；查不到（越界/空表）⇒ 计 0 + WRN（oracle `GetStdItem == null`）。
     #[test]
