@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::EnvirError;
 use crate::mapfile::{attach_points, load_map_file, MapFile};
-use crate::mapinfo::{connect_map_info_arg, parse_map_info_lines, MapInfoEntry};
+use crate::mapinfo::{connect_map_info_arg, parse_map_info_lines, MapInfoEntry, MapInfoFlag};
 use crate::paths::{envir_file_path, map_file_path, point_file_path};
 use crate::text::decode_text;
 
@@ -138,7 +138,8 @@ pub struct MapRegistry {
     loader: MapLoader,
     entries: Vec<MapInfoEntry>,
     maps: Vec<MapFile>,
-    names: Vec<String>,
+    /// 已入表 section（`map_id` 下标；承载逻辑名 + `Flag` + `MapDesc`，与 `maps` 平行）。
+    loaded: Vec<MapInfoEntry>,
     index: HashMap<String, usize>,
     skipped: Vec<SkippedMap>,
 }
@@ -151,7 +152,7 @@ impl MapRegistry {
             loader,
             entries,
             maps: Vec::new(),
-            names: Vec::new(),
+            loaded: Vec::new(),
             index: HashMap::new(),
             skipped: Vec::new(),
         };
@@ -174,7 +175,7 @@ impl MapRegistry {
                     map.map_name = e.map_name.clone();
                     let id = reg.maps.len();
                     reg.index.insert(key, id);
-                    reg.names.push(e.map_name);
+                    reg.loaded.push(e);
                     reg.maps.push(map);
                 }
                 Err(err) => reg.skipped.push(SkippedMap {
@@ -223,7 +224,19 @@ impl MapRegistry {
     /// `map_id` → 逻辑名。
     #[must_use]
     pub fn name_of(&self, map_id: usize) -> Option<&str> {
-        self.names.get(map_id).map(String::as_str)
+        self.loaded.get(map_id).map(|e| e.map_name.as_str())
+    }
+
+    /// `map_id` → `Envirnoment.Flag`（帧 766/54/46 的 `Envir.Flag` 输入）。
+    #[must_use]
+    pub fn flag_of(&self, map_id: usize) -> Option<&MapInfoFlag> {
+        self.loaded.get(map_id).map(|e| &e.flag)
+    }
+
+    /// `map_id` → `Envirnoment.MapDesc`（帧 54 的尾巴）。
+    #[must_use]
+    pub fn map_desc_of(&self, map_id: usize) -> Option<&str> {
+        self.loaded.get(map_id).map(|e| e.desc.as_str())
     }
 
     /// 逻辑名 → `map_id`（ASCII 大小写不敏感）。
