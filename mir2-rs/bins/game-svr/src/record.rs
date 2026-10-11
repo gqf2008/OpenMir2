@@ -1,29 +1,758 @@
-//! 角色记录（`LoadPlayerDataPacket{ChrName, HumDataInfo{Header, Data}}`）的**头部解析**。
+//! 角色记录（`LoadPlayerDataPacket{ChrName, HumDataInfo{Header, Data}}`）的**全字段解析与重编码**。
 //!
-//! 本切片只解析到世界入口要用的字段（`ChrName` / `CurMap` / `CurX` / `CurY` / `Dir`）；
-//! 后面的物品/技能/任务数组（`HumItems[13]`/`BagItems[46]`/`StorageItems[50]`/`Magic[20]`/`QuestUnit*[128]`）
-//! 属后续切片（登记）。
+//! - [`parse_player_data_head`]：S2b-3 的头部窗口（`ChrName`/`CurMap`/`CurX`/`CurY`/`Dir`），进世界路径在用。
+//! - [`parse_player_data`] / [`encode_player_data`]：`CharacterData` 全部 52 个成员（属性/点数/物品 13+46+50/
+//!   技能 20/任务数组 128）的双向读写。
 //!
-//! 布局**实测**（部署件 `OpenMir2.dll` 序列化一个样例，见 `tests/fixtures/player_data_oracle.txt`）：
-//! MemoryPack 对 class / 含 string 的 struct 先写**成员数字节**，标量按裸小端、`string` = `i32(字符数)` + UTF-16LE、
-//! `bool` = 1 字节、`f64` = 8 字节。逐段：
+//! 布局**实测**（部署件 `OpenMir2.dll` 序列化逐字段可区分的样例；基准入库到
+//! `tests/fixtures/player_data_full_oracle.txt`，生成器 `E:\tmp\openmir2-recf\dbgen\`）：
 //! ```text
-//! 02                      LoadPlayerDataPacket 成员数 2
-//! 04 000000 "lb1a"        ChrName
-//! 02                      CharacterDataInfo 成员数 2
-//! 07                      RecordHeader 成员数 7（sAccount, Name, SelectID, dCreateDate, Deleted, UpdateDate, CreateDate）
-//! … 七个字段 …
-//! 34                      CharacterData 成员数 **52**（0x34；与 PlayerDataInfo.cs:59-129 的字段数一致）
-//! 01                      ServerIndex
-//! 04 000000 "lb1a"        ChrName
-//! 01 000000 "0"           CurMap
-//! 6400                    CurX = 100
-//! c800                    CurY = 200
-//! 03                      Dir = 3
+//! class / 含 string 的 struct   先写 1 字节成员数；null 引用对象 = 单字节 0xFF
+//! 集合 null                     i32(-1)；元素 null 同样写 0xFF
+//! string                        i32(UTF-16 码元数) + UTF-16LE
+//! byte[] / char[]               i32(元素数) + 原始字节 / 每元素 2 字节
+//! 标量                          小端；bool = 1 字节；char = 1 个 UTF-16 码元 (u16)
 //! ```
+//! **注意**：C# `CharacterData` 末尾的 `[OnSerializing] Serialized()`（`System.Runtime.Serialization`）
+//! **不会被 MemoryPack 调用**——oracle 证明把数组置 null 后序列化，长度前缀就是 i32(-1)
+//! （`nulls` 样例），而不是被兜底成定长数组。本实现照抄实测行为（null 集合 = -1、null 元素 = 0xFF），
+//! 不实现那套兜底；对照见 `tests/fixtures/player_data_full_oracle.txt` 的说明与 `null_arrays_*` 单测。
+//!
+//! 逐组推进的 oracle 基准（stage1..stage6）与边界样例（nulls/nullitems/abilnull/nullitem）都在同一个 fixture 里。
 
-/// 角色记录里本切片用到的头部字段。
-#[derive(Debug, Clone, PartialEq, Eq)]
+// ===================== MemoryPack 通用读写 =====================
+
+/// 解析失败（字节耗尽、成员数/长度与 oracle 不符）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ParseError;
+
+type PResult<T> = Result<T, ParseError>;
+
+/// null 引用对象/数组元素在 MemoryPack 里的单字节标记。
+const NULL_OBJ: u8 = 0xFF;
+
+struct Reader<'a> {
+    b: &'a [u8],
+    i: usize,
+}
+
+impl<'a> Reader<'a> {
+    fn new(b: &'a [u8]) -> Self {
+        Self { b, i: 0 }
+    }
+
+    fn take(&mut self, n: usize) -> PResult<&'a [u8]> {
+        let end = self.i.checked_add(n).ok_or(ParseError)?;
+        let s = self.b.get(self.i..end).ok_or(ParseError)?;
+        self.i = end;
+        Ok(s)
+    }
+
+    fn u8(&mut self) -> PResult<u8> {
+        Ok(self.take(1)?[0])
+    }
+
+    fn u16(&mut self) -> PResult<u16> {
+        Ok(u16::from_le_bytes(
+            self.take(2)?.try_into().map_err(|_| ParseError)?,
+        ))
+    }
+
+    fn i16(&mut self) -> PResult<i16> {
+        Ok(i16::from_le_bytes(
+            self.take(2)?.try_into().map_err(|_| ParseError)?,
+        ))
+    }
+
+    fn i32(&mut self) -> PResult<i32> {
+        Ok(i32::from_le_bytes(
+            self.take(4)?.try_into().map_err(|_| ParseError)?,
+        ))
+    }
+
+    fn f64(&mut self) -> PResult<f64> {
+        Ok(f64::from_le_bytes(
+            self.take(8)?.try_into().map_err(|_| ParseError)?,
+        ))
+    }
+
+    fn boolean(&mut self) -> PResult<bool> {
+        Ok(self.u8()? != 0)
+    }
+
+    /// MemoryPack 的 `char`：1 个 UTF-16 码元。用 `u16` 存以保证逐字节可逆（代理区也保真）。
+    fn utf16_char(&mut self) -> PResult<u16> {
+        self.u16()
+    }
+
+    /// MemoryPack 的 `string`：`None` = null（长度 -1），`Some("")` = 空串。
+    fn string(&mut self) -> PResult<Option<String>> {
+        let n = self.i32()?;
+        if n < 0 {
+            return Ok(None);
+        }
+        let n = usize::try_from(n).map_err(|_| ParseError)?;
+        let bytes = self.take(n.checked_mul(2).ok_or(ParseError)?)?;
+        let mut units: Vec<u16> = Vec::with_capacity(n);
+        for c in bytes.as_chunks::<2>().0 {
+            units.push(u16::from_le_bytes(*c));
+        }
+        Ok(Some(String::from_utf16_lossy(&units)))
+    }
+
+    /// 集合长度前缀：`None` = null（-1）。
+    fn length(&mut self) -> PResult<Option<usize>> {
+        let n = self.i32()?;
+        if n < 0 {
+            return Ok(None);
+        }
+        Ok(Some(usize::try_from(n).map_err(|_| ParseError)?))
+    }
+
+    /// `byte[]`。
+    fn byte_array(&mut self) -> PResult<Option<Vec<u8>>> {
+        match self.length()? {
+            None => Ok(None),
+            Some(n) => Ok(Some(self.take(n)?.to_vec())),
+        }
+    }
+}
+
+/// 读对象头：`0xFF` ⇒ null（`Ok(false)`）；否则读成员数并要求等于 `expected`（`Ok(true)`）。
+fn obj_header(r: &mut Reader, expected: u8) -> PResult<bool> {
+    if r.b.get(r.i).copied() == Some(NULL_OBJ) {
+        r.i += 1;
+        return Ok(false);
+    }
+    if r.u8()? != expected {
+        return Err(ParseError);
+    }
+    Ok(true)
+}
+
+/// 要求成员数等于 `expected`（用于不可为 null 的 struct / 根对象）。
+fn expect_count(r: &mut Reader, expected: u8) -> PResult<()> {
+    if r.u8()? != expected {
+        return Err(ParseError);
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+struct Writer {
+    out: Vec<u8>,
+}
+
+impl Writer {
+    fn u8(&mut self, v: u8) {
+        self.out.push(v);
+    }
+
+    fn u16(&mut self, v: u16) {
+        self.out.extend_from_slice(&v.to_le_bytes());
+    }
+
+    fn i16(&mut self, v: i16) {
+        self.out.extend_from_slice(&v.to_le_bytes());
+    }
+
+    fn i32(&mut self, v: i32) {
+        self.out.extend_from_slice(&v.to_le_bytes());
+    }
+
+    fn f64(&mut self, v: f64) {
+        self.out.extend_from_slice(&v.to_le_bytes());
+    }
+
+    fn boolean(&mut self, v: bool) {
+        self.u8(u8::from(v));
+    }
+
+    fn utf16_char(&mut self, v: u16) {
+        self.u16(v);
+    }
+
+    fn string(&mut self, v: Option<&str>) {
+        match v {
+            None => self.i32(-1),
+            Some(s) => {
+                let units: Vec<u16> = s.encode_utf16().collect();
+                self.i32(i32::try_from(units.len()).unwrap_or(-1));
+                for u in units {
+                    self.u16(u);
+                }
+            }
+        }
+    }
+
+    fn byte_array(&mut self, v: Option<&[u8]>) {
+        match v {
+            None => self.i32(-1),
+            Some(b) => {
+                self.i32(i32::try_from(b.len()).unwrap_or(-1));
+                self.out.extend_from_slice(b);
+            }
+        }
+    }
+}
+
+// ===================== 嵌套类型 =====================
+
+/// `RecordHeader`（struct：固定 7 个成员，无 null 标记）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordHeader {
+    pub s_account: Option<String>,
+    pub name: Option<String>,
+    pub select_id: i32,
+    pub d_create_date: f64,
+    pub deleted: bool,
+    pub update_date: f64,
+    pub create_date: f64,
+}
+
+impl RecordHeader {
+    fn decode(r: &mut Reader) -> PResult<Self> {
+        expect_count(r, 7)?;
+        Ok(Self {
+            s_account: r.string()?,
+            name: r.string()?,
+            select_id: r.i32()?,
+            d_create_date: r.f64()?,
+            deleted: r.boolean()?,
+            update_date: r.f64()?,
+            create_date: r.f64()?,
+        })
+    }
+
+    fn encode(&self, w: &mut Writer) {
+        w.u8(7);
+        w.string(self.s_account.as_deref());
+        w.string(self.name.as_deref());
+        w.i32(self.select_id);
+        w.f64(self.d_create_date);
+        w.boolean(self.deleted);
+        w.f64(self.update_date);
+        w.f64(self.create_date);
+    }
+}
+
+/// `Ability`（class：22 个成员，成员顺序 = C# 声明顺序）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct Ability {
+    pub level: u8,
+    pub reserved1: u8,
+    pub ac: u16,
+    pub mac: u16,
+    pub dc: u16,
+    pub mc: u16,
+    pub sc: u16,
+    pub hp: u16,
+    pub mp: u16,
+    pub max_hp: u16,
+    pub max_mp: u16,
+    pub reserved2: i16,
+    pub exp_count: u8,
+    pub exp_max_count: u8,
+    pub exp: i32,
+    pub max_exp: i32,
+    pub weight: u16,
+    pub max_weight: u16,
+    pub wear_weight: u8,
+    pub max_wear_weight: u8,
+    pub hand_weight: u8,
+    pub max_hand_weight: u8,
+}
+
+impl Ability {
+    fn decode(r: &mut Reader) -> PResult<Option<Self>> {
+        if !obj_header(r, 22)? {
+            return Ok(None);
+        }
+        Ok(Some(Self {
+            level: r.u8()?,
+            reserved1: r.u8()?,
+            ac: r.u16()?,
+            mac: r.u16()?,
+            dc: r.u16()?,
+            mc: r.u16()?,
+            sc: r.u16()?,
+            hp: r.u16()?,
+            mp: r.u16()?,
+            max_hp: r.u16()?,
+            max_mp: r.u16()?,
+            reserved2: r.i16()?,
+            exp_count: r.u8()?,
+            exp_max_count: r.u8()?,
+            exp: r.i32()?,
+            max_exp: r.i32()?,
+            weight: r.u16()?,
+            max_weight: r.u16()?,
+            wear_weight: r.u8()?,
+            max_wear_weight: r.u8()?,
+            hand_weight: r.u8()?,
+            max_hand_weight: r.u8()?,
+        }))
+    }
+
+    fn encode(&self, w: &mut Writer) {
+        w.u8(22);
+        w.u8(self.level);
+        w.u8(self.reserved1);
+        w.u16(self.ac);
+        w.u16(self.mac);
+        w.u16(self.dc);
+        w.u16(self.mc);
+        w.u16(self.sc);
+        w.u16(self.hp);
+        w.u16(self.mp);
+        w.u16(self.max_hp);
+        w.u16(self.max_mp);
+        w.i16(self.reserved2);
+        w.u8(self.exp_count);
+        w.u8(self.exp_max_count);
+        w.i32(self.exp);
+        w.i32(self.max_exp);
+        w.u16(self.weight);
+        w.u16(self.max_weight);
+        w.u8(self.wear_weight);
+        w.u8(self.max_wear_weight);
+        w.u8(self.hand_weight);
+        w.u8(self.max_hand_weight);
+    }
+}
+
+/// `NakedAbility`（class：10 个成员）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct NakedAbility {
+    pub dc: u16,
+    pub mc: u16,
+    pub sc: u16,
+    pub ac: u16,
+    pub mac: u16,
+    pub hp: u16,
+    pub mp: u16,
+    pub hit: u8,
+    pub speed: i32,
+    pub reserved: u8,
+}
+
+impl NakedAbility {
+    fn decode(r: &mut Reader) -> PResult<Option<Self>> {
+        if !obj_header(r, 10)? {
+            return Ok(None);
+        }
+        Ok(Some(Self {
+            dc: r.u16()?,
+            mc: r.u16()?,
+            sc: r.u16()?,
+            ac: r.u16()?,
+            mac: r.u16()?,
+            hp: r.u16()?,
+            mp: r.u16()?,
+            hit: r.u8()?,
+            speed: r.i32()?,
+            reserved: r.u8()?,
+        }))
+    }
+
+    fn encode(&self, w: &mut Writer) {
+        w.u8(10);
+        w.u16(self.dc);
+        w.u16(self.mc);
+        w.u16(self.sc);
+        w.u16(self.ac);
+        w.u16(self.mac);
+        w.u16(self.hp);
+        w.u16(self.mp);
+        w.u8(self.hit);
+        w.i32(self.speed);
+        w.u8(self.reserved);
+    }
+}
+
+/// `ServerUserItem`（class：9 个成员）。`double`/`Prefix` 可为 null。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ServerUserItem {
+    pub make_index: i32,
+    pub index: u16,
+    pub dura: u16,
+    pub dura_max: u16,
+    pub desc: Option<Vec<u8>>,
+    pub color_r: u8,
+    pub color_g: u8,
+    pub color_b: u8,
+    /// C# `char[] Prefix`：每元素 1 个 UTF-16 码元。
+    pub prefix: Option<Vec<u16>>,
+}
+
+impl ServerUserItem {
+    fn decode(r: &mut Reader) -> PResult<Option<Self>> {
+        if !obj_header(r, 9)? {
+            return Ok(None);
+        }
+        let make_index = r.i32()?;
+        let index = r.u16()?;
+        let dura = r.u16()?;
+        let dura_max = r.u16()?;
+        let desc = r.byte_array()?;
+        let color_r = r.u8()?;
+        let color_g = r.u8()?;
+        let color_b = r.u8()?;
+        let prefix = match r.length()? {
+            None => None,
+            Some(n) => {
+                let mut v = Vec::with_capacity(n);
+                for _ in 0..n {
+                    v.push(r.utf16_char()?);
+                }
+                Some(v)
+            }
+        };
+        Ok(Some(Self {
+            make_index,
+            index,
+            dura,
+            dura_max,
+            desc,
+            color_r,
+            color_g,
+            color_b,
+            prefix,
+        }))
+    }
+
+    fn encode(&self, w: &mut Writer) {
+        w.u8(9);
+        w.i32(self.make_index);
+        w.u16(self.index);
+        w.u16(self.dura);
+        w.u16(self.dura_max);
+        w.byte_array(self.desc.as_deref());
+        w.u8(self.color_r);
+        w.u8(self.color_g);
+        w.u8(self.color_b);
+        match &self.prefix {
+            None => w.i32(-1),
+            Some(p) => {
+                w.i32(i32::try_from(p.len()).unwrap_or(-1));
+                for u in p {
+                    w.utf16_char(*u);
+                }
+            }
+        }
+    }
+}
+
+/// `MagicRcd`（class：4 个成员）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct MagicRcd {
+    pub mag_idx: u16,
+    pub level: u8,
+    /// C# `char MagicKey`：1 个 UTF-16 码元。
+    pub magic_key: u16,
+    pub tran_point: i32,
+}
+
+impl MagicRcd {
+    fn decode(r: &mut Reader) -> PResult<Option<Self>> {
+        if !obj_header(r, 4)? {
+            return Ok(None);
+        }
+        Ok(Some(Self {
+            mag_idx: r.u16()?,
+            level: r.u8()?,
+            magic_key: r.utf16_char()?,
+            tran_point: r.i32()?,
+        }))
+    }
+
+    fn encode(&self, w: &mut Writer) {
+        w.u8(4);
+        w.u16(self.mag_idx);
+        w.u8(self.level);
+        w.utf16_char(self.magic_key);
+        w.i32(self.tran_point);
+    }
+}
+
+// ===================== CharacterData（52 个成员） =====================
+
+/// `CharacterData`（class：52 个成员，顺序 = `PlayerDataInfo.cs` 声明顺序）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct CharacterData {
+    pub server_index: u8,
+    pub chr_name: Option<String>,
+    pub cur_map: Option<String>,
+    pub cur_x: i16,
+    pub cur_y: i16,
+    pub dir: u8,
+    pub hair: u8,
+    pub sex: u8,
+    pub job: u8,
+    pub gold: i32,
+    pub abil: Option<Ability>,
+    pub status_time_arr: Option<Vec<u16>>,
+    pub home_map: Option<String>,
+    pub home_x: i16,
+    pub home_y: i16,
+    pub bonus_abil: Option<NakedAbility>,
+    pub bonus_point: i32,
+    pub credit_point: u8,
+    pub re_level: u8,
+    pub master_name: Option<String>,
+    pub is_master: bool,
+    pub dear_name: Option<String>,
+    pub storage_pwd: Option<String>,
+    pub game_gold: i32,
+    pub game_point: i32,
+    pub pay_ment_point: i32,
+    pub pk_point: i32,
+    pub allow_group: u8,
+    pub bt_f9: u8,
+    pub attatck_mode: u8,
+    pub inc_health: u8,
+    pub inc_spell: u8,
+    pub inc_healing: u8,
+    pub fight_zone_die_count: u8,
+    pub bt_ee: u8,
+    pub bt_ef: u8,
+    pub account: Option<String>,
+    pub lock_logon: bool,
+    pub contribution: i16,
+    pub hunger_status: i32,
+    pub allow_guild_re_call: bool,
+    pub group_rcall_time: i16,
+    pub body_luck: f64,
+    pub allow_group_re_call: bool,
+    pub quest_unit_open: Option<Vec<u8>>,
+    pub quest_unit: Option<Vec<u8>>,
+    pub quest_flag: Option<Vec<u8>>,
+    pub marry_count: u8,
+    pub hum_items: Option<Vec<Option<ServerUserItem>>>,
+    pub bag_items: Option<Vec<Option<ServerUserItem>>>,
+    pub storage_items: Option<Vec<Option<ServerUserItem>>>,
+    pub magic: Option<Vec<Option<MagicRcd>>>,
+}
+
+fn decode_items(r: &mut Reader) -> PResult<Option<Vec<Option<ServerUserItem>>>> {
+    match r.length()? {
+        None => Ok(None),
+        Some(n) => {
+            let mut v = Vec::with_capacity(n);
+            for _ in 0..n {
+                v.push(ServerUserItem::decode(r)?);
+            }
+            Ok(Some(v))
+        }
+    }
+}
+
+fn decode_magics(r: &mut Reader) -> PResult<Option<Vec<Option<MagicRcd>>>> {
+    match r.length()? {
+        None => Ok(None),
+        Some(n) => {
+            let mut v = Vec::with_capacity(n);
+            for _ in 0..n {
+                v.push(MagicRcd::decode(r)?);
+            }
+            Ok(Some(v))
+        }
+    }
+}
+
+fn decode_u16_vec(r: &mut Reader) -> PResult<Option<Vec<u16>>> {
+    match r.length()? {
+        None => Ok(None),
+        Some(n) => {
+            let mut v = Vec::with_capacity(n);
+            for _ in 0..n {
+                v.push(r.u16()?);
+            }
+            Ok(Some(v))
+        }
+    }
+}
+
+fn decode_u8_vec(r: &mut Reader) -> PResult<Option<Vec<u8>>> {
+    r.byte_array()
+}
+
+impl CharacterData {
+    fn decode(r: &mut Reader) -> PResult<Self> {
+        expect_count(r, 52)?;
+        Ok(Self {
+            server_index: r.u8()?,
+            chr_name: r.string()?,
+            cur_map: r.string()?,
+            cur_x: r.i16()?,
+            cur_y: r.i16()?,
+            dir: r.u8()?,
+            hair: r.u8()?,
+            sex: r.u8()?,
+            job: r.u8()?,
+            gold: r.i32()?,
+            abil: Ability::decode(r)?,
+            status_time_arr: decode_u16_vec(r)?,
+            home_map: r.string()?,
+            home_x: r.i16()?,
+            home_y: r.i16()?,
+            bonus_abil: NakedAbility::decode(r)?,
+            bonus_point: r.i32()?,
+            credit_point: r.u8()?,
+            re_level: r.u8()?,
+            master_name: r.string()?,
+            is_master: r.boolean()?,
+            dear_name: r.string()?,
+            storage_pwd: r.string()?,
+            game_gold: r.i32()?,
+            game_point: r.i32()?,
+            pay_ment_point: r.i32()?,
+            pk_point: r.i32()?,
+            allow_group: r.u8()?,
+            bt_f9: r.u8()?,
+            attatck_mode: r.u8()?,
+            inc_health: r.u8()?,
+            inc_spell: r.u8()?,
+            inc_healing: r.u8()?,
+            fight_zone_die_count: r.u8()?,
+            bt_ee: r.u8()?,
+            bt_ef: r.u8()?,
+            account: r.string()?,
+            lock_logon: r.boolean()?,
+            contribution: r.i16()?,
+            hunger_status: r.i32()?,
+            allow_guild_re_call: r.boolean()?,
+            group_rcall_time: r.i16()?,
+            body_luck: r.f64()?,
+            allow_group_re_call: r.boolean()?,
+            quest_unit_open: decode_u8_vec(r)?,
+            quest_unit: decode_u8_vec(r)?,
+            quest_flag: decode_u8_vec(r)?,
+            marry_count: r.u8()?,
+            hum_items: decode_items(r)?,
+            bag_items: decode_items(r)?,
+            storage_items: decode_items(r)?,
+            magic: decode_magics(r)?,
+        })
+    }
+
+    fn encode(&self, w: &mut Writer) {
+        w.u8(52);
+        w.u8(self.server_index);
+        w.string(self.chr_name.as_deref());
+        w.string(self.cur_map.as_deref());
+        w.i16(self.cur_x);
+        w.i16(self.cur_y);
+        w.u8(self.dir);
+        w.u8(self.hair);
+        w.u8(self.sex);
+        w.u8(self.job);
+        w.i32(self.gold);
+        encode_opt_ability(w, self.abil.as_ref());
+        encode_u16_vec(w, self.status_time_arr.as_deref());
+        w.string(self.home_map.as_deref());
+        w.i16(self.home_x);
+        w.i16(self.home_y);
+        encode_opt_naked(w, self.bonus_abil.as_ref());
+        w.i32(self.bonus_point);
+        w.u8(self.credit_point);
+        w.u8(self.re_level);
+        w.string(self.master_name.as_deref());
+        w.boolean(self.is_master);
+        w.string(self.dear_name.as_deref());
+        w.string(self.storage_pwd.as_deref());
+        w.i32(self.game_gold);
+        w.i32(self.game_point);
+        w.i32(self.pay_ment_point);
+        w.i32(self.pk_point);
+        w.u8(self.allow_group);
+        w.u8(self.bt_f9);
+        w.u8(self.attatck_mode);
+        w.u8(self.inc_health);
+        w.u8(self.inc_spell);
+        w.u8(self.inc_healing);
+        w.u8(self.fight_zone_die_count);
+        w.u8(self.bt_ee);
+        w.u8(self.bt_ef);
+        w.string(self.account.as_deref());
+        w.boolean(self.lock_logon);
+        w.i16(self.contribution);
+        w.i32(self.hunger_status);
+        w.boolean(self.allow_guild_re_call);
+        w.i16(self.group_rcall_time);
+        w.f64(self.body_luck);
+        w.boolean(self.allow_group_re_call);
+        w.byte_array(self.quest_unit_open.as_deref());
+        w.byte_array(self.quest_unit.as_deref());
+        w.byte_array(self.quest_flag.as_deref());
+        w.u8(self.marry_count);
+        encode_items(w, self.hum_items.as_deref());
+        encode_items(w, self.bag_items.as_deref());
+        encode_items(w, self.storage_items.as_deref());
+        encode_magics(w, self.magic.as_deref());
+    }
+}
+
+fn encode_opt_ability(w: &mut Writer, v: Option<&Ability>) {
+    match v {
+        None => w.u8(NULL_OBJ),
+        Some(a) => a.encode(w),
+    }
+}
+
+fn encode_opt_naked(w: &mut Writer, v: Option<&NakedAbility>) {
+    match v {
+        None => w.u8(NULL_OBJ),
+        Some(n) => n.encode(w),
+    }
+}
+
+fn encode_u16_vec(w: &mut Writer, v: Option<&[u16]>) {
+    match v {
+        None => w.i32(-1),
+        Some(a) => {
+            w.i32(i32::try_from(a.len()).unwrap_or(-1));
+            for x in a {
+                w.u16(*x);
+            }
+        }
+    }
+}
+
+fn encode_items(w: &mut Writer, v: Option<&[Option<ServerUserItem>]>) {
+    match v {
+        None => w.i32(-1),
+        Some(a) => {
+            w.i32(i32::try_from(a.len()).unwrap_or(-1));
+            for it in a {
+                match it {
+                    None => w.u8(NULL_OBJ),
+                    Some(item) => item.encode(w),
+                }
+            }
+        }
+    }
+}
+
+fn encode_magics(w: &mut Writer, v: Option<&[Option<MagicRcd>]>) {
+    match v {
+        None => w.i32(-1),
+        Some(a) => {
+            w.i32(i32::try_from(a.len()).unwrap_or(-1));
+            for m in a {
+                match m {
+                    None => w.u8(NULL_OBJ),
+                    Some(magic) => magic.encode(w),
+                }
+            }
+        }
+    }
+}
+
+// ===================== 顶层：LoadPlayerDataPacket =====================
+
+/// 角色记录的头部窗口（`PlayerDataHead` 的完整版载体）。
+#[derive(Debug, Clone, PartialEq)]
 pub struct PlayerDataHead {
     pub chr_name: String,
     pub cur_map: String,
@@ -34,90 +763,38 @@ pub struct PlayerDataHead {
     pub account: String,
 }
 
-struct Cursor<'a> {
-    b: &'a [u8],
-    i: usize,
+/// 全字段角色记录：`LoadPlayerDataPacket{ChrName, HumDataInfo{Header, Data}}`。
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlayerRecord {
+    pub chr_name: Option<String>,
+    pub header: RecordHeader,
+    pub data: CharacterData,
 }
 
-impl<'a> Cursor<'a> {
-    fn new(b: &'a [u8]) -> Self {
-        Self { b, i: 0 }
-    }
-
-    fn take(&mut self, n: usize) -> Option<&'a [u8]> {
-        if self.i + n > self.b.len() {
-            return None;
-        }
-        let s = &self.b[self.i..self.i + n];
-        self.i += n;
-        Some(s)
-    }
-
-    fn u8(&mut self) -> Option<u8> {
-        Some(self.take(1)?[0])
-    }
-
-    fn i16(&mut self) -> Option<i16> {
-        Some(i16::from_le_bytes(self.take(2)?.try_into().ok()?))
-    }
-
-    fn i32(&mut self) -> Option<i32> {
-        Some(i32::from_le_bytes(self.take(4)?.try_into().ok()?))
-    }
-
-    fn f64(&mut self) -> Option<()> {
-        self.take(8)?;
-        Some(())
-    }
-
-    /// MemoryPack 的 `string`：`i32(字符数)` + UTF-16LE。
-    fn string(&mut self) -> Option<String> {
-        let n = usize::try_from(self.i32()?).ok()?;
-        let bytes = self.take(n.checked_mul(2)?)?;
-        let mut units: Vec<u16> = Vec::with_capacity(n);
-        for c in bytes.as_chunks::<2>().0 {
-            units.push(u16::from_le_bytes(*c));
-        }
-        Some(String::from_utf16_lossy(&units))
-    }
-}
-
-/// 解析 `LoadPlayerDataPacket` 的头部窗口（不足 ⇒ `None`）。
-#[must_use]
-pub fn parse_player_data_head(bytes: &[u8]) -> Option<PlayerDataHead> {
-    let mut c = Cursor::new(bytes);
-    if c.u8()? != 2 {
-        return None; // LoadPlayerDataPacket 成员数
-    }
-    let packet_chr_name = c.string()?;
-    if c.u8()? != 2 {
-        return None; // CharacterDataInfo 成员数
-    }
-    // RecordHeader（struct，含 string ⇒ 有成员数前缀）
-    if c.u8()? != 7 {
-        return None;
-    }
-    let account = c.string()?; // sAccount
-    let header_name = c.string()?; // Name
-    c.i32()?; // SelectID
-    c.f64()?; // dCreateDate
-    c.u8()?; // Deleted
-    c.f64()?; // UpdateDate
-    c.f64()?; // CreateDate
-              // CharacterData（class）：52 个成员
-    if c.u8()? != 52 {
-        return None;
-    }
-    c.u8()?; // ServerIndex
-    let data_chr_name = c.string()?; // Data.ChrName
-    let cur_map = c.string()?;
-    let cur_x = c.i16()?;
-    let cur_y = c.i16()?;
-    let dir = c.u8()?;
-    Some(PlayerDataHead {
+fn parse_head_inner(bytes: &[u8]) -> PResult<PlayerDataHead> {
+    let mut r = Reader::new(bytes);
+    expect_count(&mut r, 2)?; // LoadPlayerDataPacket 成员数
+    let packet_chr_name = r.string()?;
+    expect_count(&mut r, 2)?; // CharacterDataInfo 成员数
+    expect_count(&mut r, 7)?; // RecordHeader 成员数
+    let account = r.string()?.unwrap_or_default(); // sAccount
+    let header_name = r.string()?.unwrap_or_default(); // Name
+    r.i32()?; // SelectID
+    r.f64()?; // dCreateDate
+    r.u8()?; // Deleted
+    r.f64()?; // UpdateDate
+    r.f64()?; // CreateDate
+    expect_count(&mut r, 52)?; // CharacterData 成员数
+    r.u8()?; // ServerIndex
+    let data_chr_name = r.string()?.unwrap_or_default(); // Data.ChrName
+    let cur_map = r.string()?.unwrap_or_default();
+    let cur_x = r.i16()?;
+    let cur_y = r.i16()?;
+    let dir = r.u8()?;
+    Ok(PlayerDataHead {
         // `LoadPlayerDataPacket.ChrName` 与 `Data.ChrName` 都记了角色名；不一致时以 Data 为准并交给调用方判断
         chr_name: if data_chr_name.is_empty() {
-            packet_chr_name
+            packet_chr_name.unwrap_or_default()
         } else {
             data_chr_name
         },
@@ -131,6 +808,52 @@ pub fn parse_player_data_head(bytes: &[u8]) -> Option<PlayerDataHead> {
             account
         },
     })
+}
+
+/// 解析 `LoadPlayerDataPacket` 的头部窗口（不足 ⇒ `None`）。进世界路径在用（S2b-3）。
+#[must_use]
+pub fn parse_player_data_head(bytes: &[u8]) -> Option<PlayerDataHead> {
+    parse_head_inner(bytes).ok()
+}
+
+fn parse_player_data_inner(bytes: &[u8]) -> PResult<PlayerRecord> {
+    let mut r = Reader::new(bytes);
+    expect_count(&mut r, 2)?; // LoadPlayerDataPacket 成员数
+    let chr_name = r.string()?;
+    if !obj_header(&mut r, 2)? {
+        return Err(ParseError); // CharacterDataInfo 为 null：无角色数据
+    }
+    let header = RecordHeader::decode(&mut r)?;
+    let data = CharacterData::decode(&mut r)?;
+    Ok(PlayerRecord {
+        chr_name,
+        header,
+        data,
+    })
+}
+
+/// 解析 `LoadPlayerDataPacket` 的**全部 52 个 `CharacterData` 成员**（不足/成员数不符 ⇒ `None`）。
+///
+/// **接线点（留给 m2-svr 车道，本卡不动 `main.rs`）**：DB 回包解出后用本函数取全字段，
+/// 替代 `parse_player_data_head` 只取头部；`encode_player_data` 是其逆。生产路径尚未调用，
+/// 故 `allow(dead_code)`——本文件的单测已全量覆盖。
+#[must_use]
+#[allow(dead_code)]
+pub fn parse_player_data(bytes: &[u8]) -> Option<PlayerRecord> {
+    parse_player_data_inner(bytes).ok()
+}
+
+/// 把 [`PlayerRecord`] 重新编码回 MemoryPack 字节（与 C# `SerializerUtil.Serialize` 逐字节相同）。
+#[must_use]
+#[allow(dead_code)]
+pub fn encode_player_data(rec: &PlayerRecord) -> Vec<u8> {
+    let mut w = Writer::default();
+    w.u8(2); // LoadPlayerDataPacket 成员数
+    w.string(rec.chr_name.as_deref());
+    w.u8(2); // CharacterDataInfo 成员数
+    rec.header.encode(&mut w);
+    rec.data.encode(&mut w);
+    w.out
 }
 
 #[cfg(test)]
@@ -147,6 +870,33 @@ mod tests {
     /// oracle 实测头部窗口（部署件序列化的样例：ChrName=lb1a / sAccount=loadbot1 / CurMap="0" /
     /// CurX=100 / CurY=200 / Dir=3 / Gold=12345；见 `tests/fixtures/player_data_oracle.txt`）。
     const ORACLE_HEAD: &str = "02040000006c006200310061000207080000006c006f006100640062006f0074003100040000006c0062003100610005000000000000000000f83f0000000000000004400000000000000c403401040000006c006200310061000100000030006400c8000302010039300000160000000000000000000000";
+
+    /// 全字段 oracle（生成器 `E:\tmp\openmir2-recf\dbgen\`，生成命令与 sha256 见文件头注释）。
+    const FULL_ORACLE: &str = include_str!("../tests/fixtures/player_data_full_oracle.txt");
+
+    fn oracle(name: &str) -> Vec<u8> {
+        let prefix = format!("{name}=");
+        for line in FULL_ORACLE.lines() {
+            for tok in line.split_whitespace() {
+                if let Some(h) = tok.strip_prefix(&prefix) {
+                    return hex(h.trim());
+                }
+            }
+        }
+        panic!("fixture 里找不到样例 {name}");
+    }
+
+    /// 判据③：Rust 解出的值 → 重编码 == C# 字节（逐字节）。
+    fn assert_roundtrip(name: &str) -> PlayerRecord {
+        let bytes = oracle(name);
+        let rec = parse_player_data(&bytes).unwrap_or_else(|| panic!("{name} 必须能解析"));
+        assert_eq!(
+            encode_player_data(&rec),
+            bytes,
+            "{name} 重编码必须与 oracle 逐字节相同"
+        );
+        rec
+    }
 
     #[test]
     fn parses_oracle_head() {
@@ -170,5 +920,297 @@ mod tests {
         // CharacterData 的成员数（0x34=52）在**偏移 76**（逐段手算见 fixture 的说明；不是随便搜 0x34——那会命中字符串/日期里的字节）
         bad2[76] = 0x33;
         assert!(parse_player_data_head(&bad2).is_none());
+    }
+
+    // ----- 逐组推进（stage1..stage6）-----
+
+    #[test]
+    fn stage1_header_and_ability_group() {
+        let rec = assert_roundtrip("stage1");
+        let d = &rec.data;
+        assert_eq!(d.server_index, 3);
+        assert_eq!(d.chr_name.as_deref(), Some("recf-alpha"));
+        assert_eq!(d.cur_map.as_deref(), Some("map7"));
+        assert_eq!((d.cur_x, d.cur_y, d.dir), (-1234, 4321, 5));
+        assert_eq!((d.hair, d.sex, d.job), (6, 1, 3));
+        assert_eq!(d.gold, 0x0a0b_0c0d);
+        let ab = d.abil.as_ref().expect("Abil");
+        assert_eq!(ab.level, 0x11);
+        assert_eq!(ab.reserved1, 0x12);
+        assert_eq!(ab.ac, 0x1314);
+        assert_eq!(ab.mac, 0x1516);
+        assert_eq!(ab.dc, 0x1718);
+        assert_eq!(ab.mc, 0x191a);
+        assert_eq!(ab.sc, 0x1b1c);
+        assert_eq!(ab.hp, 0x1d1e);
+        assert_eq!(ab.mp, 0x1f20);
+        assert_eq!(ab.max_hp, 0x2122);
+        assert_eq!(ab.max_mp, 0x2324);
+        assert_eq!(ab.reserved2, 0x2526);
+        assert_eq!((ab.exp_count, ab.exp_max_count), (0x27, 0x28));
+        assert_eq!((ab.exp, ab.max_exp), (0x292a_2b2c, 0x2d2e_2f30));
+        assert_eq!((ab.weight, ab.max_weight), (0x3132, 0x3334));
+        assert_eq!(
+            (
+                ab.wear_weight,
+                ab.max_wear_weight,
+                ab.hand_weight,
+                ab.max_hand_weight
+            ),
+            (0x35, 0x36, 0x37, 0x38)
+        );
+        let na = d.bonus_abil.as_ref().expect("BonusAbil");
+        assert_eq!(
+            (
+                na.dc,
+                na.mc,
+                na.sc,
+                na.ac,
+                na.mac,
+                na.hp,
+                na.mp,
+                na.hit,
+                na.speed,
+                na.reserved
+            ),
+            (
+                0x1011,
+                0x1213,
+                0x1415,
+                0x1617,
+                0x1819,
+                0x1a1b,
+                0x1c1d,
+                0x1e,
+                0x1f20_2122,
+                0x23
+            )
+        );
+        // 本阶段未填充的组：其数组仍是"定长 + null 元素"（C# 构造器的默认）
+        assert_eq!(d.hum_items.as_deref().map(<[_]>::len), Some(13));
+        assert!(d.hum_items.as_ref().unwrap().iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn stage2_point_fields() {
+        let rec = assert_roundtrip("stage2");
+        let d = &rec.data;
+        assert_eq!(d.home_map.as_deref(), Some("home9"));
+        assert_eq!((d.home_x, d.home_y), (-55, -66));
+        assert_eq!(d.bonus_point, 0x2425_2627);
+        assert_eq!(d.credit_point, 0x28);
+        assert_eq!(d.re_level, 0x29);
+        assert_eq!(d.master_name.as_deref(), Some("master-x"));
+        assert!(d.is_master);
+        assert_eq!(d.dear_name.as_deref(), Some("dear-y"));
+        assert_eq!(d.storage_pwd.as_deref(), Some("pwd-z"));
+        assert_eq!(d.game_gold, 0x2a2b_2c2d);
+        assert_eq!(d.game_point, 0x2e2f_3031);
+        assert_eq!(d.pay_ment_point, 0x3233_3435);
+        assert_eq!(d.pk_point, 0x3637_3839);
+        assert_eq!(
+            (
+                d.allow_group,
+                d.bt_f9,
+                d.attatck_mode,
+                d.inc_health,
+                d.inc_spell,
+                d.inc_healing,
+                d.fight_zone_die_count,
+                d.bt_ee,
+                d.bt_ef
+            ),
+            (0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f, 0x40, 0x41, 0x42)
+        );
+        assert_eq!(d.account.as_deref(), Some("acct-42"));
+        assert!(d.lock_logon);
+        assert_eq!(d.contribution, 0x4344);
+        assert_eq!(d.hunger_status, 0x4546_4748);
+        assert!(d.allow_guild_re_call);
+        assert_eq!(d.group_rcall_time, 0x494a);
+        assert_eq!(d.body_luck.to_bits(), std::f64::consts::PI.to_bits());
+        assert!(!d.allow_group_re_call);
+        assert_eq!(d.marry_count, 0x77);
+    }
+
+    #[test]
+    fn stage3_status_time_arr() {
+        let rec = assert_roundtrip("stage3");
+        let arr = rec.data.status_time_arr.as_ref().expect("StatusTimeArr");
+        assert_eq!(arr.len(), 15);
+        assert_eq!(*arr, (1000u16..1015).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn stage4_items_13_46_50() {
+        let rec = assert_roundtrip("stage4");
+        let d = &rec.data;
+        let hum = d.hum_items.as_ref().expect("HumItems");
+        let bag = d.bag_items.as_ref().expect("BagItems");
+        let sto = d.storage_items.as_ref().expect("StorageItems");
+        assert_eq!((hum.len(), bag.len(), sto.len()), (13, 46, 50));
+        let h0 = hum[0].as_ref().expect("HumItems[0]");
+        assert_eq!(h0.make_index, 0x0102_0300);
+        assert_eq!((h0.index, h0.dura, h0.dura_max), (56, 1056, 1056));
+        assert_eq!((h0.color_r, h0.color_g, h0.color_b), (0x11, 0x22, 0x33));
+        assert_eq!(
+            h0.desc.as_deref(),
+            Some((0u8..=13).collect::<Vec<_>>().as_slice())
+        );
+        assert_eq!(
+            h0.prefix.as_deref(),
+            Some(('A'..='M').map(|c| c as u16).collect::<Vec<_>>().as_slice())
+        );
+        let last = hum[12].as_ref().expect("HumItems[12]");
+        assert_eq!(last.make_index, 0x0102_0300 + 12);
+        assert_eq!(last.index, 68);
+        assert_eq!(last.desc.as_ref().unwrap()[0], 12 * 14);
+        assert_eq!(last.desc.as_ref().unwrap()[13], 12 * 14 + 13);
+        let bag0 = bag[0].as_ref().unwrap();
+        assert_eq!(bag0.make_index, 0x1111_1100);
+        assert_eq!((bag0.index, bag0.dura, bag0.dura_max), (136, 1136, 2136));
+        assert_eq!(bag[45].as_ref().unwrap().index, 181);
+        let sto0 = sto[0].as_ref().unwrap();
+        assert_eq!(sto0.make_index, 0x2222_2200);
+        assert_eq!((sto0.index, sto0.dura, sto0.dura_max), (272, 272, 1272));
+        assert_eq!(sto[49].as_ref().unwrap().index, 321);
+        assert!(d.magic.as_ref().unwrap().iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn stage5_magic_20() {
+        let rec = assert_roundtrip("stage5");
+        let m = rec.data.magic.as_ref().expect("Magic");
+        assert_eq!(m.len(), 20);
+        let m0 = m[0].as_ref().expect("Magic[0]");
+        assert_eq!(m0.mag_idx, 3000);
+        assert_eq!(m0.level, 40);
+        assert_eq!(m0.magic_key, u16::from(b'm'));
+        assert_eq!(m0.tran_point, 0x3031_3200);
+        let m19 = m[19].as_ref().expect("Magic[19]");
+        assert_eq!(m19.mag_idx, 3019);
+        assert_eq!(m19.level, 59);
+        assert_eq!(m19.magic_key, 0x80); // 'm' + 19 = U+0080，仍逐字节保真
+        assert_eq!(m19.tran_point, 0x3031_3200 + 19);
+    }
+
+    #[test]
+    fn stage6_quest_arrays_128() {
+        let rec = assert_roundtrip("stage6");
+        let d = &rec.data;
+        let qo = d.quest_unit_open.as_ref().expect("QuestUnitOpen");
+        let qu = d.quest_unit.as_ref().expect("QuestUnit");
+        let qf = d.quest_flag.as_ref().expect("QuestFlag");
+        assert_eq!((qo.len(), qu.len(), qf.len()), (128, 128, 128));
+        assert_eq!(qo[0], 0x50);
+        assert_eq!(qo[127], 0x50 + 127);
+        assert_eq!(qu[0], 0x90);
+        assert_eq!(qf[0], 0xd0);
+        assert_eq!(qf[127], 0xd0u8.wrapping_add(127));
+        assert_eq!(oracle("stage6").len(), 7742, "全字段样例长度应固定为 7742");
+    }
+
+    // ----- 边界：null 集合 / null 元素 / null 子对象 / null string -----
+
+    #[test]
+    fn null_arrays_round_trip() {
+        let rec = assert_roundtrip("nulls");
+        let d = &rec.data;
+        // oracle 证明 [OnSerializing] 兜底未被 MemoryPack 调用：四个数组的长度前缀都是 -1。
+        assert!(d.hum_items.is_none(), "null HumItems 必须解成 None");
+        assert!(d.bag_items.is_none());
+        assert!(d.storage_items.is_none());
+        assert!(d.magic.is_none());
+        // null string 与空串可区分：MasterName/DearName/StoragePwd/HomeMap/Account 均为 None
+        assert!(d.master_name.is_none());
+        assert!(d.dear_name.is_none());
+        assert!(d.storage_pwd.is_none());
+        assert!(d.home_map.is_none());
+        assert!(d.account.is_none());
+        // 构造器默认的定长数组仍存在
+        assert_eq!(d.quest_unit_open.as_deref().map(<[_]>::len), Some(128));
+        assert_eq!(d.status_time_arr.as_deref().map(<[_]>::len), Some(15));
+        // 长度是 722（若实现了 [OnSerializing] 兜底，这里会远大于 722）
+        assert_eq!(oracle("nulls").len(), 722);
+    }
+
+    #[test]
+    fn null_array_elements_round_trip() {
+        let rec = assert_roundtrip("nullitems");
+        let d = &rec.data;
+        for (name, arr) in [
+            ("HumItems", &d.hum_items),
+            ("BagItems", &d.bag_items),
+            ("StorageItems", &d.storage_items),
+        ] {
+            let arr = arr.as_ref().unwrap_or_else(|| panic!("{name}"));
+            assert!(arr.iter().all(Option::is_none), "{name} 元素全为 null");
+        }
+        let m = d.magic.as_ref().expect("Magic");
+        assert!(m.iter().all(Option::is_none));
+        assert_eq!(
+            (
+                d.hum_items.as_ref().unwrap().len(),
+                d.bag_items.as_ref().unwrap().len(),
+                d.storage_items.as_ref().unwrap().len(),
+                m.len()
+            ),
+            (13, 46, 50, 20)
+        );
+        // 每个 null 元素 = 单字节 0xFF：nulls 的 4 个 -1 长度前缀（16B）换成 4 个长度 + 129 个 0xFF
+        assert_eq!(oracle("nullitems").len(), 722 - 16 + 16 + 129);
+    }
+
+    #[test]
+    fn null_subobjects_round_trip() {
+        let rec = assert_roundtrip("abilnull");
+        let d = &rec.data;
+        assert!(d.abil.is_none(), "null Abil = 单字节 0xFF");
+        assert!(d.bonus_abil.is_none());
+        assert!(d.status_time_arr.is_none());
+        // 同阶段的其它字段仍在
+        assert_eq!(d.cur_map.as_deref(), Some("map7"));
+        assert_eq!(d.home_map.as_deref(), Some("home9"));
+    }
+
+    #[test]
+    fn null_item_desc_prefix_round_trip() {
+        let bytes = oracle("nullitem");
+        let mut r = Reader::new(&bytes);
+        let item = ServerUserItem::decode(&mut r).unwrap().unwrap();
+        assert!(item.desc.is_none());
+        assert!(item.prefix.is_none());
+        assert_eq!(r.i, bytes.len(), "必须恰好消费完");
+        let mut w = Writer::default();
+        item.encode(&mut w);
+        assert_eq!(w.out, bytes, "nullitem 重编码必须与 oracle 相同");
+    }
+
+    #[test]
+    fn standalone_subtype_encodings_match() {
+        // abil / naked / item0 / magic0：子类型独立序列化（成员数 + 字段）逐字节对齐
+        let full = oracle("stage6");
+        let rec = parse_player_data(&full).unwrap();
+        let mut w = Writer::default();
+        rec.data.abil.as_ref().unwrap().encode(&mut w);
+        assert_eq!(w.out, oracle("abil"));
+
+        let mut w = Writer::default();
+        rec.data.bonus_abil.as_ref().unwrap().encode(&mut w);
+        assert_eq!(w.out, oracle("naked"));
+
+        let mut w = Writer::default();
+        rec.data.hum_items.as_ref().unwrap()[0]
+            .as_ref()
+            .unwrap()
+            .encode(&mut w);
+        assert_eq!(w.out, oracle("item0"));
+
+        let mut w = Writer::default();
+        rec.data.magic.as_ref().unwrap()[0]
+            .as_ref()
+            .unwrap()
+            .encode(&mut w);
+        assert_eq!(w.out, oracle("magic0"));
     }
 }
