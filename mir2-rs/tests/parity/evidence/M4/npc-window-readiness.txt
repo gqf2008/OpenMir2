@@ -1,0 +1,62 @@
+# M4② 三条窗口用例的可跑性门（`npc_window_readiness.py`）
+
+- 用例定义：`tests/parity/M4/npc-cases.json`
+- C# 夹具：`mir2-rs/tools/script-parity-cs`
+- Rust GameSvr：`mir2-rs/bins/game-svr`
+
+## 0. 窗口端口实况（信息项）
+
+- port=5000:DOWN
+- port=7000:DOWN
+- port=7100:DOWN
+- port=7200:DOWN
+
+## 商店：商店-货币兑换（@changeGold 足额金币→金条）
+- 脚本/label：`E:/MirServer/M2GameSvr/Envir/Market_Def/封魔谷/恶魔修理师-d2008.txt` `@changeGold`
+- C# port-free 夹具：BLOCKED — [实跑] EX InvalidCastException（INormNpc 夹具缺 IMerchant） @ at ScriptSystem.ScriptParsers.LoadScriptFile(INormNpc NPC, String sPatch, String sScritpName, Boolean boFlag) in E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m4cases\src\Modules\ScriptEngine\ScriptParsers.cs:line 713；[源码] E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m4cases\mir2-rs\tools\script-parity-cs\RunMode.cs: NPC 代理 = INormNpc（非 IMerchant）⇒ 商人脚本必抛 InvalidCastException
+- Rust 服务侧：BLOCKED — NPC 命令派发=无（game-svr 源码内无 CM_CLICKNPC/CM_MERCHANTDLGSELECT）；脚本引擎依赖(mir2-script)=无；main.rs 实派发 = CM_SAY/CM_PICKUP/CM_DROPITEM
+- Rust 脚本引擎（flow-run，证明引擎本身可跑）：
+```
+  gold -1002000
+  additem 金条 1
+  #gold=198000
+  #items=金条
+```
+- 裁决：**BLOCKED**
+
+## 修理：修理-RepairAll（@StdModeFunc26）
+- 脚本/label：`E:/MirServer/M2GameSvr/Envir/Market_Def/QFunction-0.txt` `@StdModeFunc26`
+- C# port-free 夹具：BLOCKED — [实跑] EX InvalidCastException（INormNpc 夹具缺 IMerchant） @ at ScriptSystem.ScriptParsers.LoadScriptFile(INormNpc NPC, String sPatch, String sScritpName, Boolean boFlag) in E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m4cases\src\Modules\ScriptEngine\ScriptParsers.cs:line 763；[源码] E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m4cases\mir2-rs\tools\script-parity-cs\RunMode.cs: NPC 代理 = INormNpc（非 IMerchant）⇒ 商人脚本必抛 InvalidCastException
+- Rust 服务侧：BLOCKED — NPC 命令派发=无（game-svr 源码内无 CM_CLICKNPC/CM_MERCHANTDLGSELECT）；脚本引擎依赖(mir2-script)=无；main.rs 实派发 = CM_SAY/CM_PICKUP/CM_DROPITEM
+- Rust 脚本引擎（flow-run，证明引擎本身可跑）：
+```
+  #gold=1000
+  #items=
+```
+- 裁决：**BLOCKED**
+
+## 仓库：仓库-捆绑卷轴（@zum_bind1 6×地牢逃脱卷）
+- 脚本/label：`E:/MirServer/M2GameSvr/Envir/Market_Def/盟重土城/仓库-0145.txt` `@zum_bind1`
+- C# port-free 夹具：BLOCKED — [实跑] EX InvalidCastException（INormNpc 夹具缺 IMerchant） @ at ScriptSystem.ScriptParsers.LoadScriptFile(INormNpc NPC, String sPatch, String sScritpName, Boolean boFlag) in E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m4cases\src\Modules\ScriptEngine\ScriptParsers.cs:line 733；[源码] E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m4cases\mir2-rs\tools\script-parity-cs\RunMode.cs: NPC 代理 = INormNpc（非 IMerchant）⇒ 商人脚本必抛 InvalidCastException
+- Rust 服务侧：BLOCKED — NPC 命令派发=无（game-svr 源码内无 CM_CLICKNPC/CM_MERCHANTDLGSELECT）；脚本引擎依赖(mir2-script)=无；main.rs 实派发 = CM_SAY/CM_PICKUP/CM_DROPITEM
+- Rust 脚本引擎（flow-run，证明引擎本身可跑）：
+```
+  gold -100
+  delitem 地牢逃脱卷 6
+  additem 地牢逃脱卷包 1
+  msg 11009 0 0 0 0 测试NPC/已经捆好了... 我的技术不错吧.. \以后还有要捆的，就来找我吧.. \ \<继续捆/@z_bind> \<离 开/@exit>
+  #gold=900
+  #items=地牢逃脱卷包
+```
+- 裁决：**BLOCKED**
+
+## 总裁决
+
+- 三条窗口用例：BLOCKED, BLOCKED, BLOCKED ⇒ **BLOCKED**
+
+前置未满足 ⇒ **这三条现在不可跑**（`npc-cases.txt` 里保持 PENDING WINDOW，不许标绿）。
+
+承接（两条路线各一条路）：
+1. **port-free 路线**：给 `mir2-rs/tools/script-parity-cs` 的 NPC 代理补 `IMerchant`（把 `DispatchProxy.Create<INormNpc, NpcRunProxy>` 改成按脚本头决定 `IMerchant`/`INormNpc`，并让 `IList<>` 型 `get_` 返回非空 List）——该路径在卡写集外，需 owner 授权或另开卡。
+2. **两侧真栈路线**：给 `mir2-rs/bins/game-svr` 接 NPC/商人脚本派发（`CM_CLICKNPC`/`CM_MERCHANTDLGSELECT` → 脚本 label → 效果 + DB），并在 `Cargo.toml` 引入 `mir2-script`——属 M2/M3 接线面，需另开卡。
+

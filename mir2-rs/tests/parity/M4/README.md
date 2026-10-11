@@ -36,11 +36,32 @@ python -I tests/parity/M4/run_npc_cases.py                                      
 - 用例定义：`npc-cases.json`（6 类：商店 / 传送 / 修理 / 仓库 / 行会 / 任务）。
 - 可跑（port-free）4 条：传送×2、行会、任务 —— 两侧 `script-parity-cs run` vs
   `script-tool flow-run`，同脚本 + 同 label + 同初始状态逐行 diff。
-- 等窗口 3 条：商店、修理、仓库 —— 脚本含商人头 `(@buy …)`，C# 参照在
-  `ScriptParsers.cs:713+` 把 NPC 转 `IMerchant`，port-free 夹具（`INormNpc`）不含 ⇒
-  `InvalidCastException`；且这三类的副作用/DB 变更本就需要整栈观测。本轮只登记判据
-  （行为逐行 + `scoped_diff.py diff --canonical` 作用域字段级 diff=0），**不计通过**。
-- 产出：`evidence/M4/npc-cases.txt`。
+- 等窗口 3 条：商店、修理、仓库 —— **当前两条路线都不可跑**（可跑性由
+  `npc_window_readiness.py` 机判，证据 `evidence/M4/npc-window-readiness.txt`）：
+  1. **port-free 路线被 C# 夹具挡住**：脚本首行含商人头 `(@buy …)`，C# 参照在
+     `ScriptParsers.cs:713+` 把 NPC 转 `IMerchant`，而 `tools/script-parity-cs` 的 NPC 代理是
+     `INormNpc` 的 DispatchProxy ⇒ 实跑必抛 `InvalidCastException`（门会复现）。
+  2. **两侧真栈路线被 Rust 服务侧挡住**：`mir2-rs/bins/game-svr` 没有 NPC/商人脚本派发
+     （源码内无 `CM_CLICKNPC`/`CM_MERCHANTDLGSELECT`，`Cargo.toml` 无 `mir2-script` 依赖，
+     `main.rs` 只派发 `CM_SAY`/`CM_PICKUP`/`CM_DROPITEM`）⇒ 同一输入在 Rust 栈上无脚本副作用。
+  两条前置都满足前，`npc-cases.txt` 里的这 3 条**保持 PENDING WINDOW，不许标绿**。
+- 产出：`evidence/M4/npc-cases.txt`（用例结果 + 等窗口判据 + 可跑性门结果）、
+  `evidence/M4/npc-window-readiness.txt`（3 条窗口用例的可跑性门原始输出）。
+
+### 窗口可跑性门（新增）
+
+窗口用例「跑没跑绿」不由人说了算，得看两条前置：
+
+```powershell
+python -I tests/parity/M4/npc_window_readiness.py            # 实跑（含 C# 夹具行为复现）→ 出证据
+python -I tests/parity/M4/npc_window_readiness.py --no-run-cs # 只做源码能力检查（快）
+python -I tests/parity/M4/npc_window_readiness.py selftest    # 牙齿：合成输入翻转能力 ⇒ 裁决翻转（5/5）
+```
+
+- 退出码：`0 = READY`（两前置齐备，可起两侧栈真跑）/ `3 = BLOCKED`（有前置未满足，登记在案）/
+  `2 = PREREQ`（缺 dotnet/源码/用例）。
+- 牙齿：合成的 5 种组合里，**任一路前置缺失都判 `BLOCKED`**，只有「C# 代理 = IMerchant」**且**
+  「Rust 有派发 + 有脚本引擎依赖」时才转 `READY` ⇒ 不能靠改一半蒙过去。
 
 ## ③ 『双侧逐行多重集差 = 0』门禁
 
@@ -97,13 +118,15 @@ python -I tests/parity/M4/evidence_hashes.py selftest   # 牙齿：改 hash / �
 | --- | --- |
 | `m4_parity.py` | ① + ③ 门禁（跑两侧 + 出表 + 多重集比对 + 宏边界 + 自检/红检） |
 | `evidence_hashes.py` | 证据 hash 口径复核器（LF 归一 = git blob；--write / verify / selftest） |
-| `run_npc_cases.py` | ② runner（可跑用例 vs 等窗口用例） |
+| `run_npc_cases.py` | ② runner（可跑用例 vs 等窗口用例 + 窗口可跑性门结果） |
+| `npc_window_readiness.py` | 3 条窗口用例的可跑性门（C# 夹具能力 + Rust 服务侧能力；含实跑/自检） |
 | `npc-cases.json` | ② 6 类用例定义（含判红判据） |
 | `fixtures/macroenvir/` | 宏展开边界语料（2 条 `#DEFINE`） |
 | `../evidence/M4/parsecount-both-sides.md` | ① 计数表 |
 | `../evidence/M4/multiset-gate.txt` | ③ 逐行多重集比对原始输出 |
 | `../evidence/M4/macro-parity.txt` | 宏边界语料两侧结构摘要 |
 | `../evidence/M4/npc-cases.txt` | ② 用例运行结果 + 等窗口判据 |
+| `../evidence/M4/npc-window-readiness.txt` | ② 3 条窗口用例的可跑性门原始输出（BLOCKED 证据） |
 | `../evidence/M4/parse-stats-{rust,cs}.json` | 两侧原始 JSON（证据四件套的原始件） |
 | `../evidence/M4/corpus-directives.txt` | 语料 `#DEFINE`/`#INCLUDE`/`#SETHOME` 事实计数 |
 | `../evidence/M4/evidence-hashes.json` | 证据 hash 清单（LF 归一口径；`evidence_hashes.py` 生成/复核） |

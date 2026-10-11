@@ -51,6 +51,8 @@ OK   任务-地图出矿提示（Q001@main）: 2 行一致
 
 ## 等窗口用例（本轮只登记，不计通过）
 
+> 三条窗口用例**当前不可跑**——可跑性由 `npc_window_readiness.py` 机判并登记在`evidence/M4/npc-window-readiness.txt`（两条路线的前置都未满足，见下）。
+
 ### 商店：商店-货币兑换（@changeGold 足额金币→金条）
 - 脚本/label：`E:/MirServer/M2GameSvr/Envir/Market_Def/封魔谷/恶魔修理师-d2008.txt` `@changeGold`
 - 初始状态：gold=1200000 items=金币:1:1,金条:2:1 player_items=
@@ -89,4 +91,9 @@ OK   任务-地图出矿提示（Q001@main）: 2 行一致
   3. 行为 diff：逐行比 take/give/messagebox 序列；DB 作用域：
      `python -I tests/parity/m3/scoped_diff.py diff <a.jsonl> <b.jsonl> --canonical`；
   4. 把两侧原始输出与 DB 快照 hash 写入 `evidence/M4/npc-cases-window.txt`。
+
+## 窗口可跑性门（`npc_window_readiness.py --no-run-cs`）
+
+- 结果：BLOCKED: 三条窗口用例当前不可跑（前置未满足，已在证据里登记）
+- 完整证据（含 C# 夹具行为复现）：`tests/parity/evidence/M4/npc-window-readiness.txt`
 
