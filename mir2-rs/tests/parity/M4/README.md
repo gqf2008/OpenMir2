@@ -130,6 +130,9 @@ python -I tests/parity/M4/evidence_hashes.py selftest   # 牙齿：改 hash / �
 | `../evidence/M4/macro-parity.txt` | 宏边界语料两侧结构摘要 |
 | `../evidence/M4/npc-cases.txt` | ② 7 条用例运行结果 + 可跑性门结果 |
 | `../evidence/M4/npc-window-readiness.txt` | ② 商人 3 条可跑性门原始输出（路线① READY） |
-| `../evidence/M4/parse-stats-{rust,cs}.json` | 两侧原始 JSON（证据四件套的原始件） |
+| `../evidence/M4/parse-stats-{rust,cs}.json` | **两侧原始件 JSON**（下游 ①③ 门禁与 `lines-*.jsonl` 都消费它；权威） |
+| `../evidence/M4/parse-stats-{rust,cs}.stdout.txt` | 两侧 harness **stdout 转录**（仅供人读；worktree/repo 绝对路径已归一为 `<mir2-rs>`/`<OpenMir2>`，故与 JSON 原始件不是同一物） |
+| `../evidence/M4/macro/parse-stats-{rust,cs}.json` | 宏边界语料的**两侧原始件 JSON** |
+| `../evidence/M4/macro/parse-stats-{rust,cs}.stdout.txt` | 宏边界语料的 **stdout 转录**（路径已归一） |
 | `../evidence/M4/corpus-directives.txt` | 语料 `#DEFINE`/`#INCLUDE`/`#SETHOME` 事实计数 |
 | `../evidence/M4/evidence-hashes.json` | 证据 hash 清单（LF 归一口径；`evidence_hashes.py` 生成/复核） |
