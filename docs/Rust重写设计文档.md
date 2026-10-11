@@ -736,6 +736,15 @@ walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 prin
 - **M1⑤ 实测抓到一条真缺陷（新卡）**：全 Rust 边界链上 **登录/选服/查角色 200/200，但选角 0/200**（无 `525`，Rust db-srv 200 条 `Double send SELCHR`）——
   根因 = `bins/db-srv` 的 `query_chr()` 成功时**没置 `u.chr_queryed = true`**（C# `src/DBSrv/Services/Impl/UserService.cs:359` 有），`CM_SELCHR` 恒走 else ⇒ 从不回 `SM_STARTPLAY`。
   已开卡 `openmir2-m1-dbsrv-selchr-queryed`（issue `2e5d3b0897576dcc4a31f26194dc3fa366805a63`），**不顺手改**（写集红线）；因与 `dbsrv6k` 的 S4b 同文件 ⇒ 由同一车道在该片之后接着做（已写进其 brief §4）。
+- **M2 真机第二轮：进图不再黑屏**（2026-10-11 19:19，`m2svr` 交付 head `2201b121` / patch `82b587ce` / status `df90c8b0`，**待审**）：
+  ① 帧 ③ 组接线（`100cf642`）——`50 SM_LOGON` / `41 SM_FEATURECHANGED` / `213 SM_ATTACKMODE` **同组**接入（生产路径 **10/16 → 13/16**，逐行照 `PlayObject.SendLogon()`/`PlayObject.cs:1128-1147`；
+  如实登记 `Dress/Weapon` 的 `StdItem.Shape` 需物品形状表（未开卡 ⇒ 带装备槽记 0 + WRN）、`CharStatus` 的 buff 未移植 ⇒ 会话初生恒 0；红检 = 对调 `human_feature` 的 dress/weapon ⇒ 用例 FAILED）。
+  ② 真机第二轮：**① 端口全 Rust GREEN；② 进图不黑屏**（比奇省 291,666 真图、`进世界帧下发：共 13 条`、小退再进不黑屏、`flow.log` 以 `FLOW_OK`+`CLIENT_STOPPED` 收尾），截图**如实 4/7**（talk/see-others/pickup 未采）；
+  **③ s2c diff / ④ 三路径 DB diff 未跑并如实报 PREREQ**（不伪造 GREEN）。报告 `docs/M2验收真机报告-20261011-2.md`、证据 `tools/m2-acceptance/evidence/real-run-20261011-2/`。
+  **新 finding（下一片第 1 条）**：世界 tick 之后的出帧带 `SessionIndex=1 socket=0` ⇒「用户不存在」被丢——大概率是"看见别人/后续出包"上不来的根因（判据 = 进程级 + 双客户端互相看见）。
+- **M1⑤ 的缺陷已修（待审）**：`dbsrv6k` 交 `openmir2-m1-dbsrv-selchr-queryed` 的修复（`c3fa48a2 → c95e14c8`）：`CM_QUERYCHR` 成功即置 `u.chr_queryed = true`（对齐 `UserService.cs:356-361`）+ 进程级 `QUERYCHR→SELCHR` 断言回 `SM_STARTPLAY(525)` 且体 `127.0.0.1/7200`；红检撤回该行 ⇒ FAILED。
+  同批还交了 **S4b 的第 1 片（S4a）**：`master f5170a8e → c3fa48a2`（`crates/storage` 记录字段全量 + C# oracle 向量，重生成 LF 归一化后**逐字节一致** `4e76d755…`；共享向量文件改成 `protocol`/`replay` 可消费，未知 kind 仍报错）。
+  **S4b 的 ② 6000 `DataService` 面 / ③ 跨实现互读 / ④ 5700·`TimedService` 仍未做**（卡上登记；②③ 需完整 `PlayDataStorage`/`CacheStorage` 移植 + 真 C# 对端，③ 等 M2 窗口）。
 - **M2 入图帧推进到 10/16 并待审**（2026-10-11 19:00）：新 head `56ac670f`（patch `c234ef9c` / status `7da05a24`）接通 **42 `SM_USERNAME`**（`GetShowName()` 1:1 + `strings.rs` 读 `String.conf [String]` + `[Setup] ShowRankLevelName`，金标准 seq21 线上字节锚定）与
   **46 `SM_DAYCHANGING`**（`Bright = M2Share.GameTime` 按**真实本地小时**算，`chrono::Local`，不是假时钟）；`52/752` 如实登记"需 `RecalcAbilitys()`（装备/buff 层未移植）"，**未假造**。
   作者还带源码证据**反驳了 reviewer-1 的 O-1**：`SendAdjustBonus` 用 2 参 `SendSocket(ClientMsg, "")`，空串**提前 return**（`PlayObject.Socket.cs:111-114`）⇒ oracle 在 `Job∉{0,1,2}` 时**什么都不发**，"跳过"本就 1:1（复审要点已写入 `brief-review.md`）。
