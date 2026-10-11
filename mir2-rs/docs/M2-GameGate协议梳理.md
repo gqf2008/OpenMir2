@@ -103,6 +103,33 @@
    以及 `GateInfo.ServiceId` 与 7200/7201/7202 的对应关系。
 5. `appsettings.json` 与 `config.conf` 的双份配置口径：Rust 侧以哪一份为准（现网部署用的是哪份）。
 
+## 7.5 第一次实机取证（2026-10-11，假 GameSvr + 真 C# GameGate）
+
+做法：`E:\tmp\openmir2-gamegate-capture\capture.py`——假 GameSvr 听 5000（记录每条 20B 帧 + 回一帧），
+假客户端连 7200；然后启真 `E:\MirServer\RunGate\GameGate.exe`。原始日志：
+`E:\tmp\openmir2-gamegate-capture\{capture.log,gate.out.log,gate.err.log}`。
+
+**已证实（oracle 事实，取代此前的推断）**
+
+| 事实 | 观测值 / 证据 |
+| --- | --- |
+| 客户端一连上 7200，网关立刻发 `GM_OPEN`（ident=1），体是**客户端 IP 字符串**（`b'127.0.0.1'`，9 字节 = `PackLength`） | capture.log 第一帧 |
+| `GM_OPEN.Socket` = **客户端 socket handle**（观测 1260，小整数）；`SessionIndex` = 0 | 同上 |
+| **线上 `SessionId` 是随机 4 位数字**（观测 8857），**不是数组下标** | `ClientThread.cs:128-160`：取 `connectionId` 哈希最低 8 位，与 4 个随机字节异或后逐字节 `%10`，拼成字符串再 `ushort.TryParse` ⇒ 取值 0..9999，**且没有唯一性检查（可碰撞）** |
+| 客户端断开后，网关发 `GM_CLOSE`（ident=2，Socket=该 handle） | capture.log 末两帧 |
+| 网关↔服务器之间还有 `GM_CHECKCLIENT`（ident=4）健康帧 | 同上 |
+| **客户端 face 的载荷是经典 `#1…!` EDCode 帧**，不是裸 body | `ClientSession.cs:166`：`destinationSpan[2..^1] //跳过#1....! 只保留消息内容`，随后 `:168 EncryptUtil.DecodeSpan` |
+| 解码后长度 **< 12** 或原包长 **< `GateShare.CommandFixedLength`** ⇒ **直接关会话**（"异常消息封包，关闭会话..."） | `ClientSession.cs:155-175`（本次实验里我发的 4 字节假 body 正是这样被关的——**负结果来自夹具不合法，不是网关语义**；这条本身是可钉的行为） |
+| 1 字节包 = 心跳，忽略 | `ClientSession.cs:157-160` |
+
+**对实现的影响（切片 1 改口径）**
+
+1. `SessionId` 随机 ⇒ **golden/差分不能按字节比 `SessionId`**；等价判据必须是"结构等价 + 同一会话前后一致（该 id 由网关生成并被两侧一致复用）"，或对齐时把该字段归一化。
+2. 切片 1 的假客户端**必须发真实形态的帧**（20B 头 + `#1<EDCode(ClientMessage)>!`），最省事的来源是 M0 金标准
+   `mir2-rs/tests/golden/c-line-baseline-c3-20261010.frames.ndjson` 的"进世界/移动"阶段帧——不要自己造 body。
+3. 差分口径：同一组金标准帧分别打到 **C# GameGate** 与 **Rust GameGate**（背后都接同一个假 GameSvr），
+   比对两侧发往 5000 的帧序列（`SessionId` 归一化后）；这比"能进图"强得多，也是 §6 切片 1 判据的前置。
+
 ## 8. 头号风险
 
 - **协议面是"两套"**：把 LoginGate 的 `ServerDataMessage` 套到 GameGate 上会全错（§5）。
