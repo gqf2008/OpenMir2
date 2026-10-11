@@ -138,13 +138,15 @@ async fn main() -> Result<()> {
     // DB 链路（GameSvr → DBSvr）：oracle 的 `DataQueryServer` 也是 TcpClient 主动连（`:25-33`）。
     // 本切片只**发**取角色请求；收/解析属 S2b-2b。
     let db_state = dbclient::DbLinkState::new();
+    let db_replies = std::sync::Arc::new(std::sync::Mutex::new(dbclient::DbReplies::new()));
     let (db_req_tx, db_req_rx) = mpsc::unbounded_channel::<Vec<u8>>();
     {
         let db_state = db_state.clone();
         let db_addr = cfg.db_addr.clone();
         let db_port = cfg.db_port;
+        let replies = std::sync::Arc::clone(&db_replies);
         tokio::spawn(async move {
-            dbclient::run_db_link(db_addr, db_port, db_state, db_req_rx).await;
+            dbclient::run_db_link(db_addr, db_port, db_state, db_req_rx, replies).await;
         });
     }
     // 查询号：`SystemShare.Config.DBQueryID++`（`PlayerDataService.GetQueryId` `:183-191`，从 1 起、溢出回 1）
@@ -152,6 +154,8 @@ async fn main() -> Result<()> {
         state: db_state,
         req_tx: db_req_tx,
         next_query_id: std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0)),
+        replies: db_replies,
+        outstanding: Vec::new(),
     };
 
     // sim 侧：一个专用线程独占 World（§4.2 第 1 条：不许并行 executor 驱动世界）
@@ -218,6 +222,10 @@ struct DbWiring {
     state: dbclient::DbLinkState,
     req_tx: mpsc::UnboundedSender<Vec<u8>>,
     next_query_id: std::sync::Arc<std::sync::atomic::AtomicI32>,
+    /// 收侧汇总（分帧 + 签名 + 查询表），由 DB 链路任务与 sim 线程共享。
+    replies: std::sync::Arc<std::sync::Mutex<dbclient::DbReplies>>,
+    /// 已发出、还没取走的 query_id（sim 每 tick 轮询）
+    outstanding: Vec<i32>,
 }
 
 impl DbWiring {
@@ -236,7 +244,7 @@ impl DbWiring {
 fn sim_loop(
     maps: Vec<(i32, i32)>,
     ev_rx: std::sync::mpsc::Receiver<GateEvent>,
-    db: Option<DbWiring>,
+    mut db: Option<DbWiring>,
 ) {
     let mut world = mir2_world::World::with_maps(maps);
     // 取角色的加载队列（`FrnEngn` 的双缓冲 + `CharacterDataProcessor` 的读档循环，见 `load.rs`）
@@ -308,7 +316,7 @@ fn sim_loop(
         // 走 `SendOutConnectMsg`（**oracle 里是"待实现"、不发帧**）+ `CloseUser` 的失败支）。
         // **收/解析**（`LoadPlayerDataPacket` → 取角色 → 进世界）属 S2b-2b 的第二半（已登记）。
         let mut query_fail = false;
-        let actions = match &db {
+        let actions = match &mut db {
             Some(w) => engine.drain_read_storage(|info| {
                 if !w.state.is_connected() {
                     return None; // `IsConnected`（`DataQueryServer.cs:60`）
@@ -322,7 +330,10 @@ fn sim_loop(
                     info.session_id,
                 );
                 match w.req_tx.send(frame) {
-                    Ok(()) => Some(qid),
+                    Ok(()) => {
+                        w.outstanding.push(qid);
+                        Some(qid)
+                    }
                     Err(_) => {
                         query_fail = true;
                         None
@@ -362,6 +373,26 @@ fn sim_loop(
                     }
                 }
             }
+        }
+        // 收侧轮询：已发出且应答已到的查询（`GetDataSrvMessage` `:32-48` 命中即移除）
+        if let Some(w) = &mut db {
+            let replies = std::sync::Arc::clone(&w.replies);
+            let mut r = replies.lock().expect("DB 应答表锁被毒化");
+            let mut still = Vec::new();
+            for qid in std::mem::take(&mut w.outstanding) {
+                match r.take(qid) {
+                    Some(reply) => {
+                        let (ident, recog) =
+                            dbclient::parse_reply_message(&reply.message).unwrap_or((0, 0));
+                        glog!(
+                            "INF",
+                            "收到角色数据 queryId={qid} Ident={ident} Recog={recog}（解析 LoadPlayerDataPacket/进世界属 S2b-2b 后半）"
+                        );
+                    }
+                    None => still.push(qid),
+                }
+            }
+            w.outstanding = still;
         }
         let rec = world.tick();
         ticks += 1;

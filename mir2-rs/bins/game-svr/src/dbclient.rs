@@ -55,8 +55,14 @@ fn mp_string(s: &str) -> Vec<u8> {
 /// 成员数 5 + Recog(i32) + Ident/Param/Tag/Series(各 u16)。
 #[must_use]
 pub fn server_request_message(ident: u16) -> Vec<u8> {
+    server_request_message_with(ident, 0)
+}
+
+/// 带 `Recog` 的版本（应答里 DBSvr 会把 `Recog` 置 1，`PlayerDataService.cs:150` 用 `nRecog == 1` 判定「取角色成功」）。
+#[must_use]
+pub fn server_request_message_with(ident: u16, recog: i32) -> Vec<u8> {
     let mut out = mp_prefix(5);
-    out.extend_from_slice(&0i32.to_le_bytes()); // Recog
+    out.extend_from_slice(&recog.to_le_bytes()); // Recog
     out.extend_from_slice(&ident.to_le_bytes());
     out.extend_from_slice(&0u16.to_le_bytes()); // Param
     out.extend_from_slice(&0u16.to_le_bytes()); // Tag
@@ -157,6 +163,192 @@ impl Default for DbLinkState {
     }
 }
 
+/// DBSvr → GameSvr 的一帧（与请求**同一个信封**：`ServerDataPacket` + `ServerRequestData`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reply {
+    pub query_id: i32,
+    /// `ServerRequestData.Message`（**编码态**：`EDCode(ServerRequestMessage)`）。
+    pub message: Vec<u8>,
+    /// `ServerRequestData.Packet`（**编码态**：`EDCode(LoadPlayerDataPacket)`）。
+    pub packet: Vec<u8>,
+    /// `ServerRequestData.Sign`（编码态）。
+    pub sign: Vec<u8>,
+}
+
+/// 收侧分帧（`DataQueryServer.ProcessServerPacket` `:132-186`）：
+/// 6B 头 + `ServerRequestData`；`PacketCode` 不对时 oracle 是**偏移 1 字节再试**（`:143-150`），这里照做。
+#[derive(Debug, Default)]
+pub struct ReplyParser {
+    buf: Vec<u8>,
+    /// `ServerDataPacket.PacketCode` 不匹配时累计的偏移（oracle 用 `srcOffset`；仅日志用）。
+    pub resync_bytes: u64,
+}
+
+impl ReplyParser {
+    /// 喂入原始字节（等价于 `DataSocketRead` `:104-130` 的累积）。
+    pub fn push(&mut self, bytes: &[u8]) {
+        self.buf.extend_from_slice(bytes);
+    }
+
+    /// 取下一帧；不足一帧时返回 `None`（剩下留在缓冲里，等价于 oracle 的 `BuffLen`）。
+    pub fn next(&mut self) -> Option<Reply> {
+        loop {
+            if self.buf.len() < SERVER_DATA_FIXED_HEADER_LEN {
+                return None;
+            }
+            let code = u32::from_le_bytes([self.buf[0], self.buf[1], self.buf[2], self.buf[3]]);
+            if code != PACKET_CODE {
+                // `:143-150`：偏移 1 字节继续找
+                self.buf.remove(0);
+                self.resync_bytes += 1;
+                continue;
+            }
+            let plen = u16::from_le_bytes([self.buf[4], self.buf[5]]);
+            let total = SERVER_DATA_FIXED_HEADER_LEN + usize::from(plen);
+            if self.buf.len() < total {
+                return None; // `:151-155`：不够就等下一批
+            }
+            let body = self.buf[SERVER_DATA_FIXED_HEADER_LEN..total].to_vec();
+            self.buf.drain(..total);
+            return parse_request_data(&body);
+        }
+    }
+}
+
+/// 解 `ServerRequestData`（MemoryPack：前缀 4 + QueryId + 3×(i32 长度 + 字节)）。
+fn parse_request_data(body: &[u8]) -> Option<Reply> {
+    let mut i = 0usize;
+    let mut take = |n: usize| -> Option<&[u8]> {
+        if i + n > body.len() {
+            return None;
+        }
+        let s = &body[i..i + n];
+        i += n;
+        Some(s)
+    };
+    if *take(1)?.first()? != 4 {
+        return None; // 成员数前缀（实测 0x04）
+    }
+    let query_id = i32::from_le_bytes(take(4)?.try_into().ok()?);
+    let mut parts: Vec<Vec<u8>> = Vec::with_capacity(3);
+    for _ in 0..3 {
+        let len = i32::from_le_bytes(take(4)?.try_into().ok()?);
+        let len = usize::try_from(len).ok()?;
+        parts.push(take(len)?.to_vec());
+    }
+    let mut it = parts.into_iter();
+    Some(Reply {
+        query_id,
+        message: it.next()?,
+        packet: it.next()?,
+        sign: it.next()?,
+    })
+}
+
+/// 签名的判定（`ProcessServerData` `:188-220`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplyVerdict {
+    /// 接受（`:213` → `PlayerDataService.Enqueue`）
+    Accept,
+    /// `Message.len + Packet.len + 6 < 12` 或 `queryId <= 0`（`:201-208`，只累 `LoadDBErrorCount`）
+    TooShort,
+    /// `Sign` 为空（`:204`）
+    EmptySign,
+    /// 签名对不上（`:215-218`）
+    BadSign,
+}
+
+/// **照抄 oracle 的两处怪癖**（别按"更安全"改）：
+/// 1. 期望值 `queryId = MakeLong((ushort)(qid ^ 170), (ushort)nLen)`，但比较只用 **低 16 位**
+///    （`BitConverter.ToInt16(...)`，`:211`）⇒ `nLen` 那半根本没被校验；
+/// 2. 校验失败只累 `SystemShare.Config.LoadDBErrorCount`、**不记日志**（本实现另加一条 WARN，登记为可观测性差异）。
+#[must_use]
+pub fn verify_sign(r: &Reply) -> ReplyVerdict {
+    let n_len = r.message.len() + r.packet.len() + SERVER_DATA_FIXED_HEADER_LEN;
+    if n_len < 12 {
+        return ReplyVerdict::TooShort; // `:201`
+    }
+    let expect = make_long(
+        u16::try_from(r.query_id ^ 170).unwrap_or(0),
+        u16::try_from(n_len).unwrap_or(u16::MAX),
+    );
+    if expect <= 0 || r.sign.is_empty() {
+        return ReplyVerdict::EmptySign; // `:204`
+    }
+    let got = edcode::decode(&r.sign);
+    if got.len() < 2 {
+        return ReplyVerdict::BadSign;
+    }
+    let want_lo = u16::from_le_bytes([expect.to_le_bytes()[0], expect.to_le_bytes()[1]]);
+    let got_lo = u16::from_le_bytes([got[0], got[1]]);
+    if want_lo == got_lo {
+        ReplyVerdict::Accept
+    } else {
+        ReplyVerdict::BadSign
+    }
+}
+
+/// 应答 `Message` 段解出 `(Ident, Recog)`（`GetDataSrvMessage` `:38-44`）。
+///
+/// `ServerRequestMessage` 的 MemoryPack 布局：前缀 5 + Recog(i32) + Ident/Param/Tag/Series(各 u16)。
+#[must_use]
+pub fn parse_reply_message(encoded: &[u8]) -> Option<(u16, i32)> {
+    let raw = edcode::decode(encoded);
+    if raw.first().copied()? != 5 || raw.len() < 13 {
+        return None;
+    }
+    let recog = i32::from_le_bytes([raw[1], raw[2], raw[3], raw[4]]);
+    let ident = u16::from_le_bytes([raw[5], raw[6]]);
+    Some((ident, recog))
+}
+
+/// 收侧汇总：分帧 + 签名判定 + 查询表（`PlayerDataService.QueryMap`）。
+#[derive(Debug, Default)]
+pub struct DbReplies {
+    pub parser: ReplyParser,
+    /// `queryId -> 应答`（oracle 的 `QueryMap`）
+    map: std::collections::HashMap<i32, Reply>,
+    /// `SystemShare.Config.LoadDBErrorCount` 的对应物（签名不行/太短的次数）
+    pub load_db_error_count: u64,
+}
+
+impl DbReplies {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 喂字节并处理所有完整帧；返回"被接受并入表"的 query_id 列表（调用方照 `Enqueue` 记日志）。
+    pub fn feed(&mut self, bytes: &[u8]) -> Vec<i32> {
+        self.parser.push(bytes);
+        let mut accepted = Vec::new();
+        while let Some(reply) = self.parser.next() {
+            match verify_sign(&reply) {
+                ReplyVerdict::Accept => {
+                    let qid = reply.query_id;
+                    self.map.insert(qid, reply);
+                    accepted.push(qid);
+                }
+                other => {
+                    self.load_db_error_count += 1;
+                    crate::glog!(
+                        "WRN",
+                        "DB 应答被拒（{other:?}）queryId={} —— 照 oracle 只累 LoadDBErrorCount（本条日志是本实现加的可观测性差异）",
+                        reply.query_id
+                    );
+                }
+            }
+        }
+        accepted
+    }
+
+    /// 取走某个 query 的应答（`GetDataSrvMessage` `:32-48`：命中即从表里移除）。
+    #[must_use]
+    pub fn take(&mut self, query_id: i32) -> Option<Reply> {
+        self.map.remove(&query_id)
+    }
+}
+
 /// 起 DB 链路（照 `DataQueryServer` 的 `Start` `:35-53`：连不上**只记日志、不退出**；
 /// 断线在 `DataSocketDisconnected`（`:92-96`）也只是记错误日志）。
 ///
@@ -166,6 +358,7 @@ pub async fn run_db_link(
     db_port: u16,
     state: DbLinkState,
     mut req_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+    replies: Arc<std::sync::Mutex<DbReplies>>,
 ) {
     loop {
         match tokio::net::TcpStream::connect((db_addr.as_str(), db_port)).await {
@@ -173,14 +366,22 @@ pub async fn run_db_link(
                 sock.set_nodelay(true).ok();
                 state.set(true);
                 crate::glog!("INF", "数据库服务器[{db_addr}:{db_port}]连接成功...");
-                // 收半边：本切片只把字节读掉（丢弃），避免对端写满；解析属 S2b-2b
+                // 收半边：分帧 + 签名判定 + 入查询表（`DataQueryServer.ProcessServerPacket/ProcessServerData`）
                 let (mut rd, mut wr) = sock.into_split();
+                let replies_for_task = Arc::clone(&replies);
                 let drain = tokio::spawn(async move {
                     use tokio::io::AsyncReadExt;
                     let mut buf = [0u8; 4096];
-                    while let Ok(n) = rd.read(&mut buf).await {
-                        if n == 0 {
-                            break;
+                    loop {
+                        match rd.read(&mut buf).await {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => {
+                                let mut r = replies_for_task.lock().expect("DB 应答表锁被毒化");
+                                for qid in r.feed(&buf[..n]) {
+                                    // 照 `PlayerDataService.Enqueue` `:20-24` 的调试日志
+                                    crate::glog!("DBG", "执行任务Id:{qid}成功");
+                                }
+                            }
                         }
                     }
                 });
@@ -207,6 +408,77 @@ pub async fn run_db_link(
 mod tests {
     use super::*;
     use mir2_protocol::messages::DB_LOADHUMANRCD;
+
+    /// 造一帧应答（与请求同信封；`bad_sign` 时把签名改成错的低 16 位）。
+    fn reply_frame(
+        query_id: i32,
+        ident: u16,
+        recog: i32,
+        packet: &[u8],
+        bad_sign: bool,
+    ) -> Vec<u8> {
+        let message = server_request_message_with(ident, recog);
+        let msg_enc = edcode::encode(&message);
+        let pkt_enc = edcode::encode(packet);
+        let n_len = msg_enc.len() + pkt_enc.len() + SERVER_DATA_FIXED_HEADER_LEN;
+        let sign_id = make_long(
+            u16::try_from(query_id ^ 170).unwrap_or(0) ^ if bad_sign { 1 } else { 0 },
+            u16::try_from(n_len).unwrap_or(u16::MAX),
+        );
+        let sign_enc = edcode::encode(&sign_id.to_le_bytes());
+        let mut body = mp_prefix(4);
+        body.extend_from_slice(&query_id.to_le_bytes());
+        for part in [&msg_enc, &pkt_enc, &sign_enc] {
+            body.extend_from_slice(&i32::try_from(part.len()).unwrap().to_le_bytes());
+            body.extend_from_slice(part);
+        }
+        let mut frame = PACKET_CODE.to_le_bytes().to_vec();
+        frame.extend_from_slice(&u16::try_from(body.len()).unwrap().to_le_bytes());
+        frame.extend_from_slice(&body);
+        frame
+    }
+
+    #[test]
+    fn reply_round_trip_and_sign_verdicts() {
+        let mut r = DbReplies::new();
+        let good = reply_frame(7, 101, 1, b"PAYLOAD", false);
+        let accepted = r.feed(&good);
+        assert_eq!(accepted, vec![7], "签名对 ⇒ 入表（Enqueue）");
+        let reply = r.take(7).expect("取走");
+        assert_eq!(reply.query_id, 7);
+        assert_eq!(reply.packet, edcode::encode(b"PAYLOAD"));
+        let (ident, recog) = parse_reply_message(&reply.message).unwrap();
+        assert_eq!((ident, recog), (101, 1), "应答 Message 解出 Ident/Recog");
+        // 取走后再取：None（`:48` 命中即移除）
+        assert!(r.take(7).is_none());
+
+        // 签名错 ⇒ 拒 + 错误计数 +1
+        let mut r2 = DbReplies::new();
+        assert!(r2.feed(&reply_frame(7, 101, 1, b"P", true)).is_empty());
+        assert_eq!(r2.load_db_error_count, 1);
+        assert!(r2.take(7).is_none());
+    }
+
+    #[test]
+    fn reply_parser_resyncs_on_bad_packet_code() {
+        let mut p = ReplyParser::default();
+        let mut junk = vec![0x00, 0x11];
+        junk.extend_from_slice(&reply_frame(3, 100, 1, b"X", false));
+        p.push(&junk);
+        let got = p.next().expect("偏移后应能解出帧");
+        assert_eq!(got.query_id, 3);
+        assert_eq!(p.resync_bytes, 2, "两个坏字节各偏移一次");
+    }
+
+    #[test]
+    fn reply_parser_waits_for_full_frame() {
+        let mut p = ReplyParser::default();
+        let frame = reply_frame(9, 100, 1, b"XY", false);
+        p.push(&frame[..frame.len() - 3]);
+        assert!(p.next().is_none(), "不足一帧 ⇒ 等下一批（BuffLen 语义）");
+        p.push(&frame[frame.len() - 3..]);
+        assert_eq!(p.next().unwrap().query_id, 9);
+    }
 
     fn hex(s: &str) -> Vec<u8> {
         (0..s.len())

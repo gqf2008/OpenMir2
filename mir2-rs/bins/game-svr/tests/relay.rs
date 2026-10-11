@@ -449,3 +449,99 @@ async fn db_load_request_is_sent_with_oracle_bytes() {
     );
     child.stop().await;
 }
+
+/// **判据（S2b-2b 后半的第一半）**：假 DBSvr 收到请求后**回一帧**（同信封 + 签名）——
+/// 好签名 ⇒ 必须被接受（`执行任务Id:1成功` + sim 侧 `收到角色数据 … Ident=101 Recog=1`）；
+/// 坏签名 ⇒ 必须被拒（`DB 应答被拒`，且**不**出现 `执行任务Id:1成功`）。
+///
+/// 应答字节在测试里独立合成（不调被测编码器）：`ServerRequestData` = 前缀 4 + QueryId + 3×(len+bytes)。
+#[tokio::test]
+async fn db_reply_accepted_with_good_sign_and_rejected_with_bad_sign() {
+    const ORACLE_LOGIN_BODY: &str = "23305e5e3c716f6d446f6e6f5478615f3c786e61497b5f623f5f6162586b6062586b61625a675f615a5f60605a6b60615a6a62603f6b6060586b6060586b6060586b6060586b6060586b6060586b6060586b6060586b6060586b6060586b5f603f21";
+
+    // 合成一帧应答：Message = EDCode(成员数 5 + Recog=1 + Ident=101(DBR_LOADHUMANRCD) + 三个 0)
+    fn reply_frame(query_id: i32, packet: &[u8], bad_sign: bool) -> Vec<u8> {
+        use mir2_protocol::edcode;
+        let mut msg = vec![5u8];
+        msg.extend_from_slice(&1i32.to_le_bytes()); // Recog = 1（`:150` 的判据）
+        msg.extend_from_slice(&101u16.to_le_bytes()); // DBR_LOADHUMANRCD
+        msg.extend_from_slice(&[0u8; 6]);
+        let m = edcode::encode(&msg);
+        let p = edcode::encode(packet);
+        let n_len = m.len() + p.len() + 6;
+        let lo = (u16::try_from(query_id ^ 170).unwrap()) ^ u16::from(bad_sign);
+        let sign_id = (u32::from(u16::try_from(n_len).unwrap()) << 16) | u32::from(lo);
+        let s = edcode::encode(&sign_id.to_le_bytes());
+        let mut body = vec![4u8];
+        body.extend_from_slice(&query_id.to_le_bytes());
+        for part in [&m, &p, &s] {
+            body.extend_from_slice(&i32::try_from(part.len()).unwrap().to_le_bytes());
+            body.extend_from_slice(part);
+        }
+        let mut frame = 0xAA9A_AA9Au32.to_le_bytes().to_vec();
+        frame.extend_from_slice(&u16::try_from(body.len()).unwrap().to_le_bytes());
+        frame.extend_from_slice(&body);
+        frame
+    }
+
+    for bad in [false, true] {
+        let dbsrv = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let db_port = dbsrv.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (mut s, _) = dbsrv.accept().await.unwrap();
+            let mut buf = vec![0u8; 512];
+            let _ = tokio::io::AsyncReadExt::read(&mut s, &mut buf).await;
+            let frame = reply_frame(1, b"CHAR-RECORD", bad);
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut s, &frame).await;
+            tokio::time::sleep(Duration::from_secs(4)).await;
+        });
+        let ids = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let ids_port = ids.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            if let Ok((mut s, _)) = ids.accept().await {
+                let _ = tokio::io::AsyncWriteExt::write_all(
+                    &mut s,
+                    b"(100/loadbot1/2/0/1/127.0.0.1/3600)",
+                )
+                .await;
+                tokio::time::sleep(Duration::from_secs(6)).await;
+            }
+        });
+        let port = free_port();
+        let child = Child::spawn(port, 12288, ids_port, db_port, "dbreply");
+        let mut gate = connect_with_retry(port).await;
+        gate.write_all(&frame(grobal2::GM_OPEN, 701, 99, 0, b"127.0.0.1"))
+            .await
+            .unwrap();
+        let (m, _) = recv_frame(&mut gate).await.unwrap();
+        assert_eq!(m.session_index, 1);
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        gate.write_all(&frame(
+            grobal2::GM_DATA,
+            701,
+            99,
+            1,
+            &hex(ORACLE_LOGIN_BODY),
+        ))
+        .await
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(900)).await;
+        let log = child.stdout();
+        if bad {
+            assert!(
+                log.contains("DB 应答被拒") && !log.contains("执行任务Id:1成功"),
+                "坏签名必须被拒且不入表；日志实得：{log}"
+            );
+        } else {
+            assert!(
+                log.contains("执行任务Id:1成功"),
+                "好签名必须被接受并入表；日志实得：{log}"
+            );
+            assert!(
+                log.contains("收到角色数据 queryId=1 Ident=101 Recog=1"),
+                "sim 必须取到该 query 的应答并解出 Ident/Recog；日志实得：{log}"
+            );
+        }
+        child.stop().await;
+    }
+}
