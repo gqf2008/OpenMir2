@@ -1,7 +1,7 @@
 {
   "generator": "mir2-rs/tests/parity/m3/ground-probe",
   "oracle_assembly": "M2Server.dll",
-  "oracle_assembly_sha256": "551fa8e3fd95950d1e8bc7b4325697ccff981e270216e074c77101c683e80888",
+  "oracle_assembly_sha256": "825e38ccd7b712dc774d1a5640d89b5663aa58c57eca5f4c3068a4967c37a886",
   "oracle_assembly_sha256_note": "\u751F\u6210\u65F6 M2Server.dll \u6784\u5EFA\u4EA7\u7269 hash\uFF08\u968F\u7F16\u8BD1\u5668/SDK/\u73AF\u5883\u53D8\u5316\uFF09\uFF1B\u4EC5\u4F5C\u6EAF\u6E90\uFF0C\u4E0D\u53C2\u4E0E\u5411\u91CF\u6821\u9A8C\u2014\u2014\u6821\u9A8C\u951A\u70B9\u662F oracle_source_sha256",
   "oracle_source_sha256": "cff86a3e71d3a4480880d0a4894446e3bc83fd2a7b0e4a0815c83ed24229a8f1",
   "oracle_source_sha256_files": [
@@ -20,7 +20,7 @@
     "src/M2Server/Player/PlayObject.Base.cs:55 (ClientPickUpItem)",
     "src/M2Server/Player/PlayObject.Operate.cs:251 (ClientDropItem)",
     "src/M2Server/Player/PlayObject.Base.cs:24/38/168/183/193/198 (IsSelf/IsOfGroup/IncGold/IsEnoughBag/IsAddWeightAvailable/SendAddItem)",
-    "src/M2Server/Actor/BaseObject.cs:529 (DropItemDown) / :470 (GetDropPosition) / :1241 (AddItemToBag) / :1356 (RecalcBagWeight) / :1771 (WeightChanged)",
+    "src/M2Server/Actor/BaseObject.cs:529 (DropItemDown; :541-548 StdMode 40 \u8010\u4E45 u16 \u56DE\u7ED5) / :470 (GetDropPosition) / :1241 (AddItemToBag) / :1356 (RecalcBagWeight) / :1771 (WeightChanged)",
     "src/M2Server/Maps/Envirnoment.cs:88 (AddItemToMap) / :635 (DeleteFromMap) / :705 (GetItem) / :723 (GetItemEx)",
     "src/Modules/SystemModule/Data/MapItem.cs (MapItem.ItemId \u4ECE\u65E0\u8D4B\u503C\u70B9 \u21D2 \u6052 0)"
   ],
@@ -32,6 +32,8 @@
     "\u0060pickup_ok_group_member\u0060 \u8986\u76D6 \u0060ClientPickUpItemIsOfGroup\u0060 \u653E\u884C\uFF1A\u63A2\u9488\u628A GroupOwner \u6CE8\u518C\u8FDB ActorMgr\uFF08ActorId \u5728\u6784\u9020\u540E\u624D\u8D4B\u503C\uFF0C\u9700\u8865 Add\uFF09\uFF0C\u5176 \u0060GroupMembers\u0060 \u542B\u76EE\u6807 OfBaseObject",
     "\u5939\u5177\u8BB0\u5F55\u7684\u6240\u6709 tick\uFF08now_tick/can_pick_up_tick/deal_last_tick\uFF09\u90FD\u5E73\u79FB\u5230\u56FA\u5B9A\u57FA\u70B9 \u00601_200_000\u0060\uFF1B\u771F\u5B9E tick \u53EA\u7528\u4E8E\u9A71\u52A8 oracle \u5224\u5B9A \u21D2 \u91CD\u8DD1\u63A2\u9488\u4EA7\u7269\u9010\u5B57\u8282\u76F8\u540C",
     "\u0060drop_fail_deal_tick_guard\u0060 \u7528 \u0060ControlDropItem \u002B \u4FBF\u5B9C\u7269 \u002B DealLastTick \u8DDD\u4ECA 1000ms\u0060\uFF1A\u5B88\u536B\u8DF3\u8FC7 \u21D2 FAIL\uFF1B\u82E5\u5B88\u536B\u88AB\u6539\u574F/\u5220\u6389 \u21D2 \u4F1A\u53D8\u6210 SUCCESS\uFF0C\u7528\u4F8B\u5FC5\u7EA2",
+    "**StdMode 40 \u7684\u8010\u4E45\u6263\u51CF\u662F u16 \u56DE\u7ED5**\uFF08\u0060BaseObject.cs:541-548\u0060\uFF1A\u0060ushort idura = (ushort)(Dura-2000)\u0060\uFF1B\u540E\u9762\u7684 \u0060if (idura \u003C= 0) idura = 0;\u0060 \u5BF9 ushort \u6052 false \u21D2 \u6B7B\u4EE3\u7801\uFF09\uFF1ADura=2500\u21D2500\uFF08\u0060drop_stdmode40_dura_normal\u0060\uFF09\uFF0CDura=10\u21D263546\uFF08\u0060drop_stdmode40_dura_underflow\u0060\uFF09\u3002\u8BE5\u53D8\u66F4\u5728\u4E22\u5F03\u5931\u8D25\u65F6\u4E5F\u7559\u5728 ItemList\uFF08\u0060ClientDropItem\u0060 \u4E0E \u0060DropItemDown\u0060 \u5171\u4EAB\u540C\u4E00 UserItem \u5F15\u7528\uFF09\u21D2 \u53EF\u7531\u5939\u5177\u89C2\u6D4B\uFF1B\u6539\u56DE \u0060max(0, Dura-2000)\u0060 \u21D2 underflow \u7528\u4F8B\u5FC5\u7EA2",
+    "\u0060DropItemDown\u0060 \u7684 \u0060itemOfCreat\u0060 \u4F20 0\uFF08\u0060PlayObject.Operate.cs:251\u0060\uFF1A\u0060DropItemDown(userItem, dropWide, false, 0, ActorId)\u0060\uFF09\u21D2 \u0060MapItem.OfBaseObject=0\u0060\u3001\u0060DropBaseObject=ActorId\u0060\uFF1B\u56E0 T-19\uFF08ItemId \u6052 0\u3001AddItemToMap \u6052 false\uFF09\u5F53\u524D\u4E0D\u53EF\u89C2\u6D4B",
     "\u672C\u7247\u672A\u8986\u76D6/\u672A\u5EFA\u6A21\uFF1A\u0060DropItemDown\u0060 \u7684 StdMode 45 \u968F\u673A\u5916\u89C2\uFF08\u0060GetRandomLook\u0060\uFF0CRust \u672A\u5EFA\u6A21\uFF09\u3001\u0060GetDropPosition\u0060 \u7684\u6563\u843D\u9009\u683C\u5728\u300C\u5730\u56FE\u683C\u5B50\u786E\u6709\u5360\u4F4D\u300D\u65F6\u7684\u771F\u5B9E\u5206\u5E03\uFF08\u672C\u7247\u5730\u56FE\u6052\u7A7A \u21D2 \u6052\u843D\u5F53\u524D\u683C\uFF09\u3001\u0060SendRefMsg(RM_ITEMSHOW/RM_ITEMHIDE)\u0060 \u5BF9\u9644\u8FD1\u73A9\u5BB6\u7684**\u5E7F\u64AD**\uFF08\u66FF\u8EAB net \u53EA\u770B\u81EA\u8EAB\u5373\u65F6\u5E27 \u002B \u81EA\u8EAB MsgQueue\uFF09\u2014\u2014\u627F\u63A5\u89C1 whitelist T-15/T-19",
     "\u6709\u6548\u7269\u54C1 = \u6A21\u677F\uFF08\u63A2\u9488 GetUpgradeStdItem \u662F\u6052\u7B49\u62F7\u8D1D\uFF1BDesc \u5347\u7EA7\u4E0D\u5728\u672C\u7247\u4F5C\u7528\u57DF\uFF09"
   ],
@@ -85,6 +87,16 @@
       "looks": 5004,
       "ani_count": 0,
       "dura_max": 0
+    },
+    "3007": {
+      "name": "durable_ring",
+      "std_mode": 40,
+      "shape": 0,
+      "weight": 3,
+      "price": 100,
+      "looks": 5005,
+      "ani_count": 0,
+      "dura_max": 3000
     }
   },
   "cases": [
@@ -5138,6 +5150,290 @@
             "index": 3001,
             "dura": 10,
             "dura_max": 20,
+            "desc": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          }
+        ],
+        "gold": 1000,
+        "wabil": {
+          "level": 1,
+          "reserved1": 0,
+          "ac": 0,
+          "mac": 0,
+          "dc": 0,
+          "mc": 0,
+          "sc": 0,
+          "hp": 50,
+          "mp": 40,
+          "max_hp": 100,
+          "max_mp": 80,
+          "reserved2": 0,
+          "exp_count": 0,
+          "exp_max_count": 0,
+          "exp": 0,
+          "max_exp": 10,
+          "weight": 0,
+          "max_weight": 50,
+          "wear_weight": 0,
+          "max_wear_weight": 15,
+          "hand_weight": 0,
+          "max_hand_weight": 12
+        },
+        "ground_after": null,
+        "map_item_count": 0
+      }
+    },
+    {
+      "name": "drop_stdmode40_dura_normal",
+      "action": "drop_item",
+      "ctx": {
+        "actor_id": 4660,
+        "curr_x": 32,
+        "curr_y": 32,
+        "group_owner": 0,
+        "group_member_actor_ids": [],
+        "dealing": false,
+        "is_can_drop": true,
+        "deal_last_tick": 200000,
+        "in_safe_disable_drop": false,
+        "safe_area": false,
+        "no_throw_item": false,
+        "control_drop_item": false,
+        "can_drop_price": 500,
+        "human_max_gold": 10000000,
+        "floor_item_can_pick_up_time": 120000,
+        "drop_item_rage": 3,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56
+      },
+      "now_tick": 1200000,
+      "ground_before": null,
+      "item_list_before": [
+        {
+          "make_index": 61,
+          "index": 3007,
+          "dura": 2500,
+          "dura_max": 3000,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "gold_before": 1000,
+      "wabil_before": {
+        "level": 1,
+        "reserved1": 0,
+        "ac": 0,
+        "mac": 0,
+        "dc": 0,
+        "mc": 0,
+        "sc": 0,
+        "hp": 50,
+        "mp": 40,
+        "max_hp": 100,
+        "max_mp": 80,
+        "reserved2": 0,
+        "exp_count": 0,
+        "exp_max_count": 0,
+        "exp": 0,
+        "max_exp": 10,
+        "weight": 0,
+        "max_weight": 50,
+        "wear_weight": 0,
+        "max_wear_weight": 15,
+        "hand_weight": 0,
+        "max_hand_weight": 12
+      },
+      "request": {
+        "make_index": 61,
+        "name": "durable_ring"
+      },
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 601,
+            "recog": 61,
+            "param": 0,
+            "tag": 0,
+            "series": 0
+          }
+        ],
+        "notices": [],
+        "item_list": [
+          {
+            "make_index": 61,
+            "index": 3007,
+            "dura": 500,
+            "dura_max": 3000,
+            "desc": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          }
+        ],
+        "gold": 1000,
+        "wabil": {
+          "level": 1,
+          "reserved1": 0,
+          "ac": 0,
+          "mac": 0,
+          "dc": 0,
+          "mc": 0,
+          "sc": 0,
+          "hp": 50,
+          "mp": 40,
+          "max_hp": 100,
+          "max_mp": 80,
+          "reserved2": 0,
+          "exp_count": 0,
+          "exp_max_count": 0,
+          "exp": 0,
+          "max_exp": 10,
+          "weight": 0,
+          "max_weight": 50,
+          "wear_weight": 0,
+          "max_wear_weight": 15,
+          "hand_weight": 0,
+          "max_hand_weight": 12
+        },
+        "ground_after": null,
+        "map_item_count": 0
+      }
+    },
+    {
+      "name": "drop_stdmode40_dura_underflow",
+      "action": "drop_item",
+      "ctx": {
+        "actor_id": 4660,
+        "curr_x": 32,
+        "curr_y": 32,
+        "group_owner": 0,
+        "group_member_actor_ids": [],
+        "dealing": false,
+        "is_can_drop": true,
+        "deal_last_tick": 200000,
+        "in_safe_disable_drop": false,
+        "safe_area": false,
+        "no_throw_item": false,
+        "control_drop_item": false,
+        "can_drop_price": 500,
+        "human_max_gold": 10000000,
+        "floor_item_can_pick_up_time": 120000,
+        "drop_item_rage": 3,
+        "red_msg_f_color": 255,
+        "red_msg_b_color": 56
+      },
+      "now_tick": 1200000,
+      "ground_before": null,
+      "item_list_before": [
+        {
+          "make_index": 62,
+          "index": 3007,
+          "dura": 10,
+          "dura_max": 3000,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "gold_before": 1000,
+      "wabil_before": {
+        "level": 1,
+        "reserved1": 0,
+        "ac": 0,
+        "mac": 0,
+        "dc": 0,
+        "mc": 0,
+        "sc": 0,
+        "hp": 50,
+        "mp": 40,
+        "max_hp": 100,
+        "max_mp": 80,
+        "reserved2": 0,
+        "exp_count": 0,
+        "exp_max_count": 0,
+        "exp": 0,
+        "max_exp": 10,
+        "weight": 0,
+        "max_weight": 50,
+        "wear_weight": 0,
+        "max_wear_weight": 15,
+        "hand_weight": 0,
+        "max_hand_weight": 12
+      },
+      "request": {
+        "make_index": 62,
+        "name": "durable_ring"
+      },
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 601,
+            "recog": 62,
+            "param": 0,
+            "tag": 0,
+            "series": 0
+          }
+        ],
+        "notices": [],
+        "item_list": [
+          {
+            "make_index": 62,
+            "index": 3007,
+            "dura": 63546,
+            "dura_max": 3000,
             "desc": [
               0,
               0,

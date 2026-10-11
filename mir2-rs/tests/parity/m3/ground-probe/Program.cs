@@ -579,6 +579,7 @@ internal static class Program
         table.Items[3003] = Tpl("expensive", 23, 0, 3, price: 900, looks: 5002);     // ControlDropItem 下不够便宜 ⇒ 仍走 DropItemDown
         table.Items[3004] = Tpl("cheap", 23, 0, 3, price: 10, looks: 5003);          // ControlDropItem 下便宜 ⇒ 直接移除
         table.Items[3006] = Tpl("very_heavy", 23, 0, 200, price: 100, looks: 5004);  // 超过 MaxWeight(50) ⇒ 拾取时负重不足
+        table.Items[3007] = Tpl("durable_ring", 40, 0, 3, duraMax: 3000, price: 100, looks: 5005); // StdMode 40 ⇒ DropItemDown 耐久 -2000（u16 回绕）
         // 3005 故意不注册 ⇒ 模板缺失分支
 
         var cases = new List<object>();
@@ -663,6 +664,14 @@ internal static class Program
         // 20) MakeIndex 不命中 ⇒ FAIL、背包不变
         cases.Add(RunCase(table, net, "drop_fail_makeindex_mismatch", "drop_item", new Ctx(),
             null, new List<Spec> { S(60, 3001) }, S(99, 0), "ring", 1000));
+        // 21) StdMode 40 且 Dura >= 2000 ⇒ `(ushort)(Dura-2000)` 正常扣减（2500 ⇒ 500）
+        cases.Add(RunCase(table, net, "drop_stdmode40_dura_normal", "drop_item", new Ctx(),
+            null, new List<Spec> { S(61, 3007, dura: 2500, duraMax: 3000) }, S(61, 0), "durable_ring", 1000));
+        // 22) StdMode 40 且 Dura < 2000 ⇒ `(ushort)(Dura-2000)` **按 u16 回绕**（10 ⇒ 63546），
+        //     不是 clamp 到 0：`idura <= 0` 对 ushort 恒 false（`BaseObject.cs:541-548` 的死代码）。
+        //     改回 `max(0, Dura-2000)` ⇒ 本用例必红。
+        cases.Add(RunCase(table, net, "drop_stdmode40_dura_underflow", "drop_item", new Ctx(),
+            null, new List<Spec> { S(62, 3007, dura: 10, duraMax: 3000) }, S(62, 0), "durable_ring", 1000));
 
         var templateDtos = new Dictionary<string, object>();
         foreach (var kv in table.Items)
@@ -711,7 +720,7 @@ internal static class Program
                 "src/M2Server/Player/PlayObject.Base.cs:55 (ClientPickUpItem)",
                 "src/M2Server/Player/PlayObject.Operate.cs:251 (ClientDropItem)",
                 "src/M2Server/Player/PlayObject.Base.cs:24/38/168/183/193/198 (IsSelf/IsOfGroup/IncGold/IsEnoughBag/IsAddWeightAvailable/SendAddItem)",
-                "src/M2Server/Actor/BaseObject.cs:529 (DropItemDown) / :470 (GetDropPosition) / :1241 (AddItemToBag) / :1356 (RecalcBagWeight) / :1771 (WeightChanged)",
+                "src/M2Server/Actor/BaseObject.cs:529 (DropItemDown; :541-548 StdMode 40 耐久 u16 回绕) / :470 (GetDropPosition) / :1241 (AddItemToBag) / :1356 (RecalcBagWeight) / :1771 (WeightChanged)",
                 "src/M2Server/Maps/Envirnoment.cs:88 (AddItemToMap) / :635 (DeleteFromMap) / :705 (GetItem) / :723 (GetItemEx)",
                 "src/Modules/SystemModule/Data/MapItem.cs (MapItem.ItemId 从无赋值点 ⇒ 恒 0)",
             },
@@ -724,6 +733,8 @@ internal static class Program
                 "`pickup_ok_group_member` 覆盖 `ClientPickUpItemIsOfGroup` 放行：探针把 GroupOwner 注册进 ActorMgr（ActorId 在构造后才赋值，需补 Add），其 `GroupMembers` 含目标 OfBaseObject",
                 "夹具记录的所有 tick（now_tick/can_pick_up_tick/deal_last_tick）都平移到固定基点 `1_200_000`；真实 tick 只用于驱动 oracle 判定 ⇒ 重跑探针产物逐字节相同",
                 "`drop_fail_deal_tick_guard` 用 `ControlDropItem + 便宜物 + DealLastTick 距今 1000ms`：守卫跳过 ⇒ FAIL；若守卫被改坏/删掉 ⇒ 会变成 SUCCESS，用例必红",
+                "**StdMode 40 的耐久扣减是 u16 回绕**（`BaseObject.cs:541-548`：`ushort idura = (ushort)(Dura-2000)`；后面的 `if (idura <= 0) idura = 0;` 对 ushort 恒 false ⇒ 死代码）：Dura=2500⇒500（`drop_stdmode40_dura_normal`），Dura=10⇒63546（`drop_stdmode40_dura_underflow`）。该变更在丢弃失败时也留在 ItemList（`ClientDropItem` 与 `DropItemDown` 共享同一 UserItem 引用）⇒ 可由夹具观测；改回 `max(0, Dura-2000)` ⇒ underflow 用例必红",
+                "`DropItemDown` 的 `itemOfCreat` 传 0（`PlayObject.Operate.cs:251`：`DropItemDown(userItem, dropWide, false, 0, ActorId)`）⇒ `MapItem.OfBaseObject=0`、`DropBaseObject=ActorId`；因 T-19（ItemId 恒 0、AddItemToMap 恒 false）当前不可观测",
                 "本片未覆盖/未建模：`DropItemDown` 的 StdMode 45 随机外观（`GetRandomLook`，Rust 未建模）、`GetDropPosition` 的散落选格在「地图格子确有占位」时的真实分布（本片地图恒空 ⇒ 恒落当前格）、`SendRefMsg(RM_ITEMSHOW/RM_ITEMHIDE)` 对附近玩家的**广播**（替身 net 只看自身即时帧 + 自身 MsgQueue）——承接见 whitelist T-15/T-19",
                 "有效物品 = 模板（探针 GetUpgradeStdItem 是恒等拷贝；Desc 升级不在本片作用域）",
             },

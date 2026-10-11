@@ -48,7 +48,10 @@
 //!   └─ return result（派发层据此回 SM_DROPITEM_SUCCESS/FAIL）
 //!
 //! DropItemDown(userItem, nScatterRange, …)            BaseObject.cs:529
-//!   ├─ StdMode==40 ⇒ Dura = max(0, Dura-2000)（**原地**改 UserItem，失败也留下）
+//!   ├─ StdMode==40 ⇒ `ushort idura = (ushort)(Dura-2000)`（**原地**改 UserItem，失败也留下）
+//!   │    ⚠️ `Dura`/`idura` 都是 `ushort` ⇒ Dura<2000 时**按 u16 回绕**（10 ⇒ 63546）；
+//!   │    后面的 `if (idura <= 0) idura = 0;` 对 `ushort` **恒 false**（死代码）⇒ 不是 `max(0, …)`。
+//!   │    Rust 用 `wrapping_sub(2000)` 1:1 复刻（`drop_stdmode40_dura_underflow` 用例钉住）。
 //!   ├─ new MapItem { UserItem=copy, Name=GetItemName, Looks=StdItem.Looks, …; Count=1;
 //!   │               OfBaseObject=itemOfCreat; CanPickUpTick=tick; DropBaseObject=dropCreat }
 //!   ├─ StdMode==45 ⇒ Looks = GetRandomLook(Looks, Shape)（**本片未建模**，见「未做清单」）
@@ -676,15 +679,18 @@ pub fn drop_item(
                             break;
                         }
                         // `DropItemDown` 的 StdMode 40 耐久扣减作用在 ItemList 的**同一引用**上
-                        //（失败也留下）。
+                        //（失败也留下）。`BaseObject.cs:541-548`：`ushort idura = (ushort)(Dura-2000)`
+                        // ⇒ **按 u16 回绕**（Dura<2000 ⇒ 大正数），后面的 `idura <= 0` 对 `ushort`
+                        // **恒 false**（死代码）⇒ 不是 `max(0, Dura-2000)`。
                         if tpl.std_mode == 40 {
-                            let d = i32::from(item.dura) - 2000;
-                            let nd = if d <= 0 { 0 } else { d as u16 };
+                            let nd = item.dura.wrapping_sub(2000);
                             item.dura = nd;
                             state.item_list[i].dura = nd;
                         }
                         let scatter = i32::from(ctx.drop_item_rage).min(3);
-                        if drop_item_down(ctx, map, &item, ctx.actor_id, ctx.actor_id, scatter) {
+                        // `PlayObject.Operate.cs:251`：`DropItemDown(userItem, dropWide, false, 0, ActorId)`
+                        // ⇒ itemOfCreat=0（`mapItem.OfBaseObject`），dropCreat=ActorId。
+                        if drop_item_down(ctx, map, &item, 0, ctx.actor_id, scatter) {
                             state.item_list.remove(i);
                             result = true;
                             break;
@@ -1035,6 +1041,60 @@ mod tests {
         let mut m2 = GroundMap::new(8, 8);
         assert!(!m2.put_item(1, 1, GroundItem::gold(0, 100, 0, 0)));
         assert!(m2.put_item(1, 1, GroundItem::gold(7, 100, 0, 0)));
+    }
+
+    /// **StdMode 40 的耐久语义钉住**（reviewer-6 `8060a856` 的 P-1）：oracle `BaseObject.cs:541-548`
+    /// 是 `ushort idura = (ushort)(Dura-2000)` ⇒ **u16 回绕**，后面的 `if (idura <= 0) idura = 0;`
+    /// 对 `ushort` 恒 false（死代码）。`drop_stdmode40_dura_underflow`（Dura=10 ⇒ 63546）与
+    /// `drop_stdmode40_dura_normal`（Dura=2500 ⇒ 500）取自 oracle 真身探针实测。
+    /// 把 `wrapping_sub` 改回 `max(0, Dura-2000)` ⇒ underflow 用例必红。
+    #[test]
+    fn stdmode40_drop_dura_wraps_like_oracle() {
+        let doc = fixture();
+        let cat = catalog(&doc);
+        let cases = doc["cases"].as_array().unwrap();
+        for (name, want) in [
+            ("drop_stdmode40_dura_normal", 500u16),
+            ("drop_stdmode40_dura_underflow", 63546u16),
+        ] {
+            let case = cases
+                .iter()
+                .find(|c| c["name"] == name)
+                .unwrap_or_else(|| panic!("夹具必须含 {name}"));
+            let c = &case["ctx"];
+            let mut map = build_map(case);
+            let mut state = GroundState {
+                item_list: bag_items(&case["item_list_before"]),
+                gold: i32v(&case["gold_before"]),
+                wabil: ability(&case["wabil_before"]),
+            };
+            let ctx = DropContext {
+                catalog: &cat,
+                actor_id: i32v(&c["actor_id"]),
+                curr_x: i32v(&c["curr_x"]),
+                curr_y: i32v(&c["curr_y"]),
+                now_tick: i32v(&case["now_tick"]),
+                deal_last_tick: i32v(&c["deal_last_tick"]),
+                make_index: i32v(&case["request"]["make_index"]),
+                in_safe_disable_drop: false,
+                in_safe_zone: false,
+                is_can_drop: true,
+                no_throw_item: false,
+                control_drop_item: false,
+                can_drop_price: 500,
+                drop_item_rage: 3,
+                item_name: case["request"]["name"].as_str().unwrap(),
+            };
+            let out = drop_item(&ctx, &mut map, &mut state);
+            // T-19：ItemId 恒 0 ⇒ 丢弃仍失败、物品留在背包（但 Dura 已被原地扣减）。
+            assert!(!out.success, "{name}: ItemId 恒 0 ⇒ 丢弃必失败");
+            assert_eq!(out.immediate_frames[0].ident, SM_DROPITEM_FAIL);
+            assert_eq!(state.item_list.len(), 1, "{name}: 物品应留在背包");
+            assert_eq!(
+                state.item_list[0].dura, want,
+                "{name}: StdMode 40 耐久须与 oracle u16 回绕一致"
+            );
+        }
     }
 
     /// 拾取的延时通知是**出队序**（优先级 = `(byte)wIdent`，低值先出），**不等于**代码顺序：
