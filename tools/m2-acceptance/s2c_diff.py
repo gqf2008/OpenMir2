@@ -23,7 +23,7 @@ GoldenExport 流水线产出，schema 与金标准逐字段同口径）与 **M0 
 
 用法：
   python s2c_diff.py --rust <rust capture.jsonl> [--golden <golden capture.jsonl>] \
-      [--port 7200] [--start-ident 658] [--upto-ident 10] [--whitelist whitelist.jsonl] \
+      [--port 7200] [--start-ident 658] [--upto-ident 46] [--whitelist whitelist.jsonl] \
       [--out report.json] [--max-diffs 20]
 
 退出码：0 = 0 差异（或全部落在白名单）；1 = 有未登记差异（红）；2 = 前置未满足（文件缺失/序列为空）。
@@ -156,7 +156,8 @@ def main():
     ap.add_argument("--port", type=int, default=7200)
     ap.add_argument("--dir", default="s2c")
     ap.add_argument("--start-ident", type=int, default=658)
-    ap.add_argument("--upto-ident", type=int, default=10)
+    # owner §22 裁定：入图序 = 658→46（15 条自帧）；10 SM_TURN 是 AOI 帧，不属入图序（单列判）。
+    ap.add_argument("--upto-ident", type=int, default=46)
     ap.add_argument("--whitelist", default="")
     ap.add_argument("--out", default="")
     ap.add_argument("--max-diffs", type=int, default=20)
