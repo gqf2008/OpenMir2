@@ -31,11 +31,67 @@ pub static IMPLEMENTED_EXECUTIONS: &[&str] = &[
     "ActionOfSet",
     "ActionOfClose",
     "ActionOfMessageBox",
+    "ActionOfMapMove",
+    "ActionOfGiveItem",
     "ActionOfMobFireBurn",
     "ActionOfResetUnit",
     "ActionOfReSet",
     "ActionOfSetOpen",
     "ActionOfSetUnit",
+    // ---- B2/M4 动作批次（2026-10-11）----
+    "ActionOfLineMsg",
+    "ActionOfGameGold",
+    "ActionOfGamePoint",
+    "ActionOfChangeCreditPoint",
+    "ActionOfChangeExp",
+    "ActionOfChangeLevel",
+    "ActionOfChangePkPoint",
+    "ActionOfChangeHairStyle",
+    "ActionOfHumanHp",
+    "ActionOfHumanMp",
+    "ActionOfKick",
+    "ActionOfKill",
+    "ActionOfMission",
+    "ActionOfMobPlace",
+    "ActionOfMap",
+    "ActionOfClearDelayGoto",
+    "ActionOfBreakTimereCall",
+    "ActionOfTimereCall",
+    "ActionOfDelayCall",
+    "ActionOfSetScriptFlag",
+    "ActionOfSetSendMsgFlag",
+    "ActionOfAutoGetExp",
+    "ActionOfOffLine",
+    "ActionOfGmExecute",
+    "ActionOfRepairAllItem",
+    "ActionOfRestReNewLevel",
+    "ActionOfReNewLevel",
+    "ActionOfChangeMode",
+    "ActionOfQueryValue",
+    "ActionOfQueryItemDlg",
+    "ActionOfUpgradeDlgItem",
+    "ActionOfPlayDice",
+    "ActionOfAddSkill",
+    "ActionOfAddNameList",
+    "ActionOfDelNameList",
+    "ActionOfDelUseDateList",
+    "ActionOfDelAccountList",
+    // ---- B2/M4 var 家族 / 剩余动作批次（2026-10-11）----
+    "ActionOfMovData",
+    "ActionOfMovrData",
+    "ActionOfIncInteger",
+    "ActionOfDecInteger",
+    "ActionOfMulData",
+    "ActionOfVar",
+    "ActionOfLoadVar",
+    "ActionOfSaveVar",
+    "ActionOfCalcVar",
+    "ActionOfUpgradeItemsEx",
+    "ActionOfMarry",
+    "ActionOfUnMarry",
+    "ActionOfAddUseDateList",
+    "ActionOfClearMapMon",
+    "ActionOfMonGenEx",
 ];
 
 /// 已实现的**条件**处理器名。
@@ -49,6 +105,42 @@ pub static IMPLEMENTED_CONDITIONS: &[&str] = &[
     "ConditionOfRandom",
     "ConditionOfCheckSlaveListCount",
     "ConditionOfCheckItem",
+    // ---- B2/M4 条件批次（2026-10-11）----
+    "ConditionOfCheckBagGage",
+    "ConditionOfCheckGameGold",
+    "ConditionOfCheckCreditPoint",
+    "ConditionOfCheckGamePoint",
+    "ConditionOfCheckLevelEx",
+    "ConditionOfCheckReNewLevel",
+    "ConditionOfCheckMemBerLevel",
+    "ConditionOfCheckBonusPoint",
+    "ConditionOfIssysop",
+    "ConditionOfIsAdmin",
+    "ConditionOfCheckMarry",
+    "ConditionOfCheckHaveGuild",
+    "ConditionOfCheckIsCastleaGuild",
+    "ConditionOfCheckIsCastleMaster",
+    "ConditionOfCheckIsGuildMaster",
+    "ConditionOfCheckSafeZone",
+    "ConditionOfCheckUseItem",
+    "ConditionOfCheckJob",
+    "ConditionOfGender",
+    "ConditionOfCheckItemAddValue",
+    "ConditionOfCheckBagSize",
+    "ConditionOfCheckHum",
+    "ConditionOfCheckOnLine",
+    "ConditionOfIsDupMode",
+    "ConditionOfCheckNameList",
+    "ConditionOfCheckAccountList",
+    "ConditionOfIosnMap",
+    "ConditionOfCheckPoseGender",
+    "ConditionOfCheckPoseDir",
+    "ConditionOfCheckPoseLevel",
+    "ConditionOfCheckPoseMarry",
+    "ConditionOfIsNewHuman",
+    // ---- B2/M4 var 家族条件批次（2026-10-11）----
+    "ConditionOfCheckVar",
+    "ConditionOfCheckNameDateList",
 ];
 
 pub fn condition_handler(code: i32) -> Option<&'static str> {
@@ -90,6 +182,82 @@ pub fn unimplemented_handlers() -> Vec<&'static str> {
     v.sort_unstable();
     v.dedup();
     v
+}
+
+/// Rust 已实现的 `ScriptEngine` **条件** switch 分支（`run_unregistered_condition` 的 case）。
+/// 这些 code 不在 `CONDITION_HANDLERS` 注册表里，由引擎控制流直接处理。
+pub static IMPLEMENTED_SWITCH_CONDITIONS: &[&str] = &[
+    "CHECKITEMW",
+    "CHECKDIEMON",
+    "CHECKKILLPLAYMON",
+    "CHECKRANDOMNO",
+    "CHECKDURAEVA",
+    "KILLBYHUM",
+    "KILLBYMON",
+    "CHECKINSAFEZONE",
+    "ISTAKEITEM",
+    "SCHECKDEATHPLAYMON",
+];
+
+/// Rust 已实现的 `ScriptEngine` **动作** switch 分支（`run_switch_action` 的 case）。
+pub static IMPLEMENTED_SWITCH_EXECUTIONS: &[&str] = &[
+    "Break",
+    "Param1",
+    "Param2",
+    "Param3",
+    "Param4",
+    "Map",
+    "MapMove",
+    "PlayDice",
+    "AddBatch",
+    "BatchDelay",
+    "BatchMove",
+    "CheckUserDate",
+    "GetDlgItemValue",
+    "TakeDlgItem",
+    "GoQuest",
+    "EndQuest",
+    "Goto",
+    "Take",
+    "Takew",
+];
+
+/// 条件 switch case 的实现三态：`Some(true)` 已实现 / `Some(false)` 未实现 / `None` 不是 switch case。
+pub fn switch_condition_status(code: i32) -> Option<bool> {
+    engine_switch_condition(code).map(|name| IMPLEMENTED_SWITCH_CONDITIONS.contains(&name))
+}
+
+/// 动作 switch case 的实现三态。
+pub fn switch_execution_status(code: i32) -> Option<bool> {
+    engine_switch_execution(code).map(|name| IMPLEMENTED_SWITCH_EXECUTIONS.contains(&name))
+}
+
+/// 语料派发目标的实现三态（覆盖报告用）：
+/// - `Some(true)` 已实现（注册处理器或已覆盖的 switch 分支）
+/// - `Some(false)` 有 C# 行为但 Rust 未实现
+/// - `None` C# 无注册、亦非 switch case ⇒ 静默忽略（无需实现）
+pub fn condition_target_status(code: i32) -> Option<bool> {
+    if let Some(v) = condition_status(code) {
+        return Some(v);
+    }
+    switch_condition_status(code)
+}
+
+/// 动作侧同 [`condition_target_status`]。
+pub fn execution_target_status(code: i32) -> Option<bool> {
+    if let Some(handler) = execution_handler(code) {
+        return Some(IMPLEMENTED_EXECUTIONS.contains(&handler));
+    }
+    switch_execution_status(code)
+}
+
+/// 派发目标名（错误清单/覆盖报告用）：注册处理器名优先，其次 switch case 名。
+pub fn condition_target_name(code: i32) -> Option<&'static str> {
+    condition_handler(code).or_else(|| engine_switch_condition(code))
+}
+
+pub fn execution_target_name(code: i32) -> Option<&'static str> {
+    execution_handler(code).or_else(|| engine_switch_execution(code))
 }
 
 #[cfg(test)]

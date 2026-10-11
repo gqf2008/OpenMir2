@@ -63,8 +63,8 @@ fn basic_if_act_say() {
     let proc_ = &rec.procedure_list[0];
     assert_eq!(proc_.s_say_msg, "你好");
     assert_eq!(proc_.s_else_say_msg, "没有");
-    // CHECKITEM 字段序号 10 → CmdCode 9（C# code-1 缺陷原样保留）
-    assert_eq!(proc_.condition_list[0].cmd_code, 9);
+    // CHECKITEM 字段序号 10 → CmdCode 10（B2/M4 已翻转，与 C# S3 一致；旧口径为 9）
+    assert_eq!(proc_.condition_list[0].cmd_code, 10);
     assert_eq!(proc_.condition_list[0].s_param1, "祈福项链");
     assert_eq!(proc_.condition_list[0].n_param2, 1);
 }
@@ -237,8 +237,8 @@ fn opname_dot_split() {
     let out = load(&fs, "Npc_def", "t", false);
     let cond = &out.scripts[0].record_list[0].procedure_list[0].condition_list[0];
     assert_eq!(cond.s_op_name, "玩家甲");
-    // CHECKLEVEL 字段序号 7 → CmdCode 6
-    assert_eq!(cond.cmd_code, 6);
+    // CHECKLEVEL 字段序号 7 → CmdCode 7（B2/M4 已翻转）
+    assert_eq!(cond.cmd_code, 7);
 }
 
 #[test]

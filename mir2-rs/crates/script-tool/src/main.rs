@@ -165,6 +165,7 @@ fn main() -> ExitCode {
             }
             let envir = PathBuf::from(&args[2]);
             let mut json_out: Option<PathBuf> = None;
+            let mut require_implemented = false;
             let mut i = 3;
             while i < args.len() {
                 match args[i].as_str() {
@@ -172,13 +173,17 @@ fn main() -> ExitCode {
                         json_out = Some(PathBuf::from(&args[i + 1]));
                         i += 2;
                     }
+                    "--require-implemented" => {
+                        require_implemented = true;
+                        i += 1;
+                    }
                     other => {
                         eprintln!("未知参数: {other}");
                         return ExitCode::from(2);
                     }
                 }
             }
-            parsestats::run(&envir, json_out)
+            parsestats::run(&envir, json_out, require_implemented)
         }
         other => {
             eprintln!("未知子命令: {other}");

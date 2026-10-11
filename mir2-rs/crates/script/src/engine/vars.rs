@@ -168,6 +168,49 @@ pub fn get_val_name_no(text: &str) -> i32 {
     -1
 }
 
+/// `DynamicVar` 的值（`VarType.Integer` / `VarType.String`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DynVar {
+    Integer(i32),
+    Str(String),
+}
+
+/// `ProcessingBase.GetMovDataValNameValue` / `GetMovDataDynamicVarValue` 的取值结果：
+/// 命中时区分数值型（`nDataType = 1`）与字符串型（`nDataType = 0`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VarVal {
+    Int(i32),
+    Str(String),
+}
+
+/// `ProcessingBase.GetDynamicVarMap` 解析出的存储种类（大小写前缀匹配）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DynVarKind {
+    Human,
+    Guild,
+    Global,
+    Account,
+}
+
+/// `GetDynamicVarMap(playerActor, sType, ref sName)` 的类型解析（不含 null 判定）。
+///
+/// C# 的匹配顺序为 `HUMAN` → `GUILD` → `GLOBAL` → `Account`，均用 `CompareLStr` 前缀比较。
+/// 未命中返回 `None`（对应 C# `GetDynamicVarMap` 返回 null）。
+pub fn dyn_var_kind_of(s_type: &str) -> Option<DynVarKind> {
+    use mir2_shared::hutil32::compare_lstr_prefix as p;
+    if p(s_type, "HUMAN", 5) {
+        Some(DynVarKind::Human)
+    } else if p(s_type, "GUILD", 5) {
+        Some(DynVarKind::Guild)
+    } else if p(s_type, "GLOBAL", 6) {
+        Some(DynVarKind::Global)
+    } else if p(s_type, "Account", 7) {
+        Some(DynVarKind::Account)
+    } else {
+        None
+    }
+}
+
 /// `CheckVarNameNo` 的取值结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VarLookup {

@@ -66,6 +66,16 @@ impl ScriptPlayer for FlowPlayer {
     fn gold(&self) -> i32 {
         self.gold
     }
+    fn dec_gold(&mut self, n: i32) {
+        // 对齐 C# flow 夹具 `DecGold`：`GoldValue -= v; Log.Add($"gold {-v}")`
+        self.gold -= n;
+        self.log.push(format!("gold {}", -n));
+    }
+    fn inc_gold(&mut self, n: i32) {
+        // 对齐 C# flow 夹具 `IncGold`：`GoldValue += v; Log.Add($"gold {v}")`
+        self.gold += n;
+        self.log.push(format!("gold {n}"));
+    }
     fn actor_id(&self) -> i32 {
         4242
     }
@@ -75,10 +85,20 @@ impl ScriptPlayer for FlowPlayer {
     fn random(&mut self, _value: i32) -> i32 {
         0
     }
-    fn send_msg(&mut self, ident: i32, param: i32, tag: i32, series: i32, msg: Option<&str>) {
+    fn send_msg(
+        &mut self,
+        ident: i32,
+        w_param: i32,
+        n_param1: i32,
+        n_param2: i32,
+        n_param3: i32,
+        msg: Option<&str>,
+    ) {
+        // 对齐 C# flow 夹具：打印 `IActor.SendMsg` 的全部五个数值参数
         let text = msg.unwrap_or("").replace('\r', "\\r").replace('\n', "\\n");
-        self.log
-            .push(format!("msg {ident} {param} {tag} {series} {text}"));
+        self.log.push(format!(
+            "msg {ident} {w_param} {n_param1} {n_param2} {n_param3} {text}"
+        ));
     }
     fn mn_val(&self, _n: usize) -> i32 {
         0
@@ -132,6 +152,10 @@ impl ScriptPlayer for FlowPlayer {
             .filter(|(n, _)| n.eq_ignore_ascii_case(name))
             .map(|(_, c)| *c)
             .sum()
+    }
+    /// 对齐 C# flow 夹具：`UseItemsStub` 为 12 个 `new UserItem()`（Index 均 0）。
+    fn use_items_len(&self) -> i32 {
+        12
     }
     fn has_worn(&self, _location: &str) -> bool {
         false
