@@ -342,9 +342,10 @@ cargo test -p game-svr --lib        # 回读夹具逐字段核对
 输入 = `ItemList`（背包）+ 守卫（`BoCanUseItem`/`Death`）+ `ActorId` + 目录；输出 = 是否吃掉、
 被吃下标、`WAbil`/`IncHealth`/`IncSpell`/`UserUnLockDurg` 的新值、**即时帧**与**延时通知**。
 oracle 链 = `PlayObject.Message.cs:826` → `ClientUseItems`（`PlayObject.Operate.cs:601`）→
-`EatItems`（`PlayObject.Base.cs:2047`）。**本片做 `boNODRUG` 守卫 + StdMode 0/2**：StdMode 0 的
+`EatItems`（`PlayObject.Base.cs:2047`）。**本片做 `boNODRUG` 守卫 + StdMode 0/1/2**：StdMode 0 的
 Shape 1（固定量）、Shape 2（解锁）、Shape 3（百分比）、default（进 `IncHealth`/`IncSpell` 池），
-以及 StdMode 2（`result=true`、无任何状态变更）；地图禁药（`Envir.Flag.boNODRUG`）时
+StdMode 1（食物：`HungerStatus += DuraMax/10`、夹 5000、跨档 `RefMyStatus()`），以及 StdMode 2
+（`result=true`、无任何状态变更）；地图禁药（`Envir.Flag.boNODRUG`）时
 `SysMsg(Red, Hint)` → `RM_SYSMESSAGE` 并拒绝（不吃、只落 `SM_EAT_FAIL`）。
 
 `ClientUseItems` 产出**两条通道**，接缝分开返回（别混成一条流）：
@@ -352,15 +353,17 @@ Shape 1（固定量）、Shape 2（解锁）、Shape 3（百分比）、default�
 | 通道 | 产生点 | 本片帧/通知 |
 | --- | --- | --- |
 | 即时帧 `immediate_frames` | `SendDefMessage` → `SendSocket` 直接写 gate buffer | `SM_EAT_OK=635` / `SM_EAT_FAIL=636`（恒 1 条） |
-| 延时通知 `notices` | `SendMsg` 入 `MsgQueue`（`PriorityQueue`，优先级 = `(byte)wIdent`） | `RM_HEALTHSPELLCHANGED=10052`（`IncHealthSpell` 尾部）、`RM_WEIGHTCHANGED=10115`（成功尾部，同时 `WAbil.Weight = RecalcBagWeight()`）、`RM_MENU_OK=10309`（`BoCanUseItem==false`，`nParam1=ActorId`）、`RM_SYSMESSAGE=11004`（`boNODRUG`，`nParam1/2 = RedMsgFColor/BColor`） |
+| 延时通知 `notices` | `SendMsg` 入 `MsgQueue`（`PriorityQueue`，优先级 = `(byte)wIdent`） | `RM_HEALTHSPELLCHANGED=10052`（`IncHealthSpell` 尾部）、`RM_WEIGHTCHANGED=10115`（成功尾部，同时 `WAbil.Weight = RecalcBagWeight()`）、`RM_MENU_OK=10309`（`BoCanUseItem==false`，`nParam1=ActorId`）、`RM_SYSMESSAGE=11004`（`boNODRUG`，`nParam1/2 = RedMsgFColor/BColor`）、`RM_CHARSTATUSCHANGED=10139`（StdMode 1 跨档 → `RefMyStatus` 里 `RecalcAbilitys` 尾部）、`RM_MYSTATUS=8102`（`RefMyStatus`） |
 
 **必须原样复刻**的口径：
 
 | 口径 | 说明 |
 | --- | --- |
 | 首个 `MakeIndex` 命中后**无条件 break** | `break` 在 `if (stdItem != null)` 块**之外** ⇒ 同 `MakeIndex` 重复项只动第一个 |
-| 模板缺失 / StdMode 非 0/2 | 什么都不吃（`SM_EAT_FAIL`、无通知、背包不变）；`sItemName` 形参 oracle **未使用** |
-| `boNODRUG` 守卫 | 仅 StdMode 0/1/2/3 进 `EatItems`（4/31 走 `ReadBook`/`UseStdModeFunItem`，不受约束）；恒 `SysMsg(Red)` 一条 + 拒绝（未禁药时 1/3 仍落 `SM_EAT_FAIL`，见 T-17） |
+| 模板缺失 / StdMode 非 0/1/2 | 什么都不吃（`SM_EAT_FAIL`、无通知、背包不变）；`sItemName` 形参 oracle **未使用** |
+| `boNODRUG` 守卫 | 仅 StdMode 0/1/2/3 进 `EatItems`（4/31 走 `ReadBook`/`UseStdModeFunItem`，不受约束）；恒 `SysMsg(Red)` 一条 + 拒绝（未禁药时 3/4/31 仍落 `SM_EAT_FAIL`，见 T-17） |
+| StdMode 1（食物） | `nOldStatus = GetMyStatus()`（`min(HungerStatus/1000,4)`）→ `HungerStatus += DuraMax/10`（整除）→ `_MIN(5000, ·)` → 跨档才 `RefMyStatus()`（`RecalcAbilitys`+`RM_MYSTATUS`）；`HungerStatus` 是 `int`、**不**回绕 |
+| `notices` 顺序 | oracle `MsgQueue` 是 `PriorityQueue<SendMessage,byte>`，优先级 = `(byte)wIdent` ⇒ 消息泵按**优先级升序**出队（跨档时 `RM_WEIGHTCHANGED`(131) 反而先于 `RM_CHARSTATUSCHANGED`(155)/`RM_MYSTATUS`(166)）；接缝据此排序 |
 | Shape 3 百分比 | `HUtil32.Round` = `Math.Round(..., AwayFromZero)`（半数**远离零**）；`max_hp=101/ac=5`→5、`max_mp=55/mac=10`→6 |
 | default Shape | `AC>0` 才 `IncHealth += AC`、`MAC>0` 才 `IncSpell += MAC`（`ushort` 回绕） |
 | `IncHealthSpell` | `nHp<0 || nMp<0` 直接 return（**不**发通知）；否则 `HP+nHp >= MaxHP` 夹 `MaxHP`，否则 `ushort` 回绕 |
@@ -377,13 +380,19 @@ cargo test -p game-svr --lib        # 回读夹具逐字段核对
 
 向量覆盖：Shape 1 固定量/溢出夹取、Shape 3 百分比（含 .5 进位）、Shape 2 解锁、default 进池/双零守卫、
 按移除后背包重算 `WAbil.Weight`、首个 `MakeIndex` 命中、`MakeIndex` 未找到、StdMode 非 0/2、
-模板缺失、`BoCanUseItem==false`、`Death`、**StdMode 2（无效果但吃）**、**`boNODRUG` 禁药（不消耗）**。
-红检：StdMode 2 改回「不吃」⇒ `stdmode2_eats_without_effect` 必红；`boNODRUG` 去掉守卫⇒ `nodrug_guard_does_not_consume` 必红、颜色 f/b 互换⇒该用例与夹具回读必红。
+模板缺失、`BoCanUseItem==false`、`Death`、**StdMode 2（无效果但吃）**、**`boNODRUG` 禁药（不消耗）**、
+**StdMode 1（不跨档 / 跨档 `RefMyStatus` / 夹档 / 禁药）**。
+红检：StdMode 2 改回「不吃」⇒ `stdmode2_eats_without_effect` 必红；`boNODRUG` 去掉守卫⇒ `nodrug_guard_does_not_consume` 必红、颜色 f/b 互换⇒该用例与夹具回读必红；
+StdMode 1 夹档改 `min(6000)` ⇒ `eat_ok_stdmode1_hunger_clamp` 必红（`5150 != 5000`）；去掉跨档 `RM_CHARSTATUSCHANGED` ⇒ `eat_ok_stdmode1_hunger_recalc` 通知序必红。
 
 **未做（登记在卡，见 `tests/parity/whitelist.md` 的 T-17）**：
-StdMode 1/3/4/31（`HungerStatus`+`RefMyStatus`/`ExtraAbil` buff+`GetExp`/`ReadBook`/解包）——
-注意这四类**不是**"与 oracle 一致地不吃"，而是**已证差异**（oracle 在这些 StdMode 上有成功路径：StdMode 1 与 StdMode 3 的 Shape 13 无条件吃掉并发 `SM_EAT_OK`，本接缝同输入落 `SM_EAT_FAIL`），
-只因 `use_item` 尚未接线而不可达；接线前必须补齐。夹具 `eat_fail_stdmode_other` 只覆盖 `StdMode=5`（`case` 名单外）。
+StdMode 3/4/31（`ExtraAbil` buff+`GetExp`/`ReadBook`/解包）——**不是**"与 oracle 一致地不吃"，而是**已证差异**
+（oracle 在这些 StdMode 上有成功路径：StdMode 3 的 Shape 13 无条件吃掉并发 `SM_EAT_OK`，本接缝同输入落 `SM_EAT_FAIL`），
+只因 `use_item` 尚未接线而不可达；接线前必须补齐。
+StdMode 1 已实现主体，但 `RefMyStatus()` 里的 `RecalcAbilitys()` 只用 `ability::recalc_abilitys` 的最小等价物
+（`ctx.recalc`）复算 `WAbil`，`PlayObject.RecalcAbilitys` 的套装/`ExtraAbil`/`GetCharStatus` 尾段未建模 ⇒ 差异收窄为
+**仅「有装备/buff 且跨档」**；无装备/buff 的跨档场景已逐字段相同（`eat_ok_stdmode1_hunger_recalc`）。
+夹具 `eat_fail_stdmode_other` 只覆盖 `StdMode=5`（`case` 名单外）。
 接线（`main.rs`/`smframe.rs` 归 m2-svr）、双侧同序列驱动仍未做。
 
 ## 拾取/丢弃 handler（`bins/game-svr/src/ground.rs`，卡内第二片·第四格）

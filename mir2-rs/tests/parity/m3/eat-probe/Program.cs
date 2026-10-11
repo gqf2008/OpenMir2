@@ -174,6 +174,7 @@ internal static class Program
         public bool dead = false;
         public int actorId = 0x1234;
         public bool noDrug = false;
+        public int hungerStatus = 0;
     }
 
     private static UserItem ToUser(Spec s)
@@ -217,6 +218,33 @@ internal static class Program
         max_wear_weight = a.MaxWearWeight,
         hand_weight = a.HandWeight,
         max_hand_weight = a.MaxHandWeight,
+    };
+
+    /// <summary>复制一份 `Ability`（`Abil` 与 `WAbil` 必须是不同对象：`RecalcAbilitys` 会 `WAbil = Abil.Clone()`）。</summary>
+    private static Ability CloneAbility(Ability a) => new Ability
+    {
+        Level = a.Level,
+        Reserved1 = a.Reserved1,
+        AC = a.AC,
+        MAC = a.MAC,
+        DC = a.DC,
+        MC = a.MC,
+        SC = a.SC,
+        HP = a.HP,
+        MP = a.MP,
+        MaxHP = a.MaxHP,
+        MaxMP = a.MaxMP,
+        Reserved2 = a.Reserved2,
+        ExpCount = a.ExpCount,
+        ExpMaxCount = a.ExpMaxCount,
+        Exp = a.Exp,
+        MaxExp = a.MaxExp,
+        Weight = a.Weight,
+        MaxWeight = a.MaxWeight,
+        WearWeight = a.WearWeight,
+        MaxWearWeight = a.MaxWearWeight,
+        HandWeight = a.HandWeight,
+        MaxHandWeight = a.MaxHandWeight,
     };
 
     private static Ability BaseAbil(ushort hp, ushort mp, ushort maxHp, ushort maxMp) => new Ability
@@ -299,11 +327,13 @@ internal static class Program
             IncHealth = (ushort)incHealthPre,
             IncSpell = (ushort)incSpellPre,
             UserUnLockDurg = userUnlockPre,
+            Abil = CloneAbility(wabilPre),
             UserAccount = "probe",
             LoginIpAddr = "127.0.0.1",
             IsRobot = false,
             OffLineFlag = false,
         };
+        po.HungerStatus = ctx.hungerStatus;
         foreach (var s in itemList)
         {
             po.ItemList.Add(ToUser(s));
@@ -338,6 +368,7 @@ internal static class Program
             inc_health_before = incHealthPre,
             inc_spell_before = incSpellPre,
             user_unlock_durg_before = userUnlockPre,
+            hunger_status_before = ctx.hungerStatus,
             item_list_before = beforeList,
             expect = new
             {
@@ -349,6 +380,7 @@ internal static class Program
                 inc_health = (int)po.IncHealth,
                 inc_spell = (int)po.IncSpell,
                 user_unlock_durg = po.UserUnLockDurg,
+                hunger_status = po.HungerStatus,
                 item_list = po.ItemList.Select(ItemDto).ToArray(),
             },
         };
@@ -394,6 +426,9 @@ internal static class Program
         table.Items[2007] = Tpl("other_mode", 5, 0, 8);                      // StdMode 5：非药品 ⇒ 不吃
         table.Items[2008] = Tpl("weighty", 0, 1, 9, ac: 1, mac: 1);          // 称重
         table.Items[2011] = Tpl("noop", 2, 0, 3);                             // StdMode 2：无效果（result=true）
+        table.Items[2012] = Tpl("food_small", 1, 0, 2, duraMax: 200);        // StdMode 1：不跨档（不触发 RefMyStatus）
+        table.Items[2013] = Tpl("food_recalc", 1, 0, 2, duraMax: 12000);     // StdMode 1：0→1200 跨档 ⇒ RefMyStatus
+        table.Items[2014] = Tpl("food_clamp", 1, 0, 2, duraMax: 2000);       // StdMode 1：夹到 5000（不跨档）
         // 2009 故意不注册 ⇒ 模板缺失分支
 
         var cases = new List<object>();
@@ -440,6 +475,18 @@ internal static class Program
         cases.Add(RunCase(table, net, "eat_ok_stdmode2_noop", new Ctx(),
             new List<Spec> { S(1, 2011) }, 1, "noop",
             BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+        cases.Add(RunCase(table, net, "eat_ok_stdmode1_hunger_no_recalc", new Ctx(),
+            new List<Spec> { S(1, 2012) }, 1, "food_small",
+            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+        cases.Add(RunCase(table, net, "eat_ok_stdmode1_hunger_recalc", new Ctx(),
+            new List<Spec> { S(1, 2013) }, 1, "food_recalc",
+            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+        cases.Add(RunCase(table, net, "eat_ok_stdmode1_hunger_clamp", new Ctx { hungerStatus = 4950 },
+            new List<Spec> { S(1, 2014) }, 1, "food_clamp",
+            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+        cases.Add(RunCase(table, net, "eat_fail_nodrug_stdmode1", new Ctx { noDrug = true },
+            new List<Spec> { S(1, 2013) }, 1, "food_recalc",
+            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
         cases.Add(RunCase(table, net, "eat_fail_nodrug_no_consume", new Ctx { noDrug = true },
             new List<Spec> { S(1, 2001) }, 1, "hp_mp_fixed",
             BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
@@ -485,7 +532,9 @@ internal static class Program
             {
                 "src/M2Server/Player/PlayObject.Message.cs:826 (CM_EAT -> ClientUseItems)",
                 "src/M2Server/Player/PlayObject.Operate.cs:601 (ClientUseItems)",
-                "src/M2Server/Player/PlayObject.Base.cs:2047 (EatItems; StdMode 0)",
+                "src/M2Server/Player/PlayObject.Base.cs:2047 (EatItems; StdMode 0/1/2)",
+                "src/M2Server/Player/PlayObject.Base.cs:288 (RefMyStatus = RecalcAbilitys + RM_MYSTATUS)",
+                "src/M2Server/Player/PlayObject.Base.cs:1183 (GetMyStatus = min(HungerStatus/1000, 4))",
                 "src/M2Server/Actor/BaseObject.cs:952 (IncHealthSpell)",
                 "src/M2Server/Actor/BaseObject.cs:700 (HealthSpellChanged)",
                 "src/M2Server/Actor/BaseObject.cs:1771 (WeightChanged) / :1356 (RecalcBagWeight)",

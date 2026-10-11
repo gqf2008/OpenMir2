@@ -15,7 +15,7 @@
 //!     ├─ if (eatSuccess) { WeightChanged(); SendDefMessage(SM_EAT_OK,0,0,0,0) }
 //!     └─ else            { SendDefMessage(SM_EAT_FAIL,0,0,0,0) }
 //!
-//! PlayObject.Base.cs:2047  EatItems(StdItem, UserItem) —— **本片做 boNODRUG 守卫 + StdMode 0/2**
+//! PlayObject.Base.cs:2047  EatItems(StdItem, UserItem) —— **本片做 boNODRUG 守卫 + StdMode 0/1/2**
 //!   ├─ if (Envir.Flag.boNODRUG) { SysMsg(CanotUseDrugOnThisMap, Red, Hint); return false }  // 仅 0/1/2/3 进这里
 //!   ├─ case 0: switch (stdItem.Shape)
 //!        1 ⇒ IncHealthSpell(AC, MAC)
@@ -23,6 +23,8 @@
 //!        3 ⇒ IncHealthSpell(Round(MaxHP/100.0*AC), Round(MaxMP/100.0*MAC))
 //!        _ ⇒ if (AC>0) IncHealth += AC; if (MAC>0) IncSpell += MAC
 //!        （四条分支最后都 result = true）
+//!   ├─ case 1: nOldStatus = GetMyStatus(); HungerStatus += DuraMax/10; HungerStatus = _MIN(5000, HungerStatus);
+//!   │          if (nOldStatus != GetMyStatus()) RefMyStatus();  result = true
 //!   └─ case 2 ⇒ result = true（无任何状态变更）
 //! ```
 //!
@@ -55,20 +57,22 @@
 //!
 //! # 未做清单（登记在卡 `openmir2-m3-bag-equip-alignment` 的 whitelist）
 //!
-//! - **StdMode 1/3/4/31**：食物（`HungerStatus` + `RefMyStatus`→`RecalcAbilitys`）、`ExtraAbil` buff /
-//!   `GetExp`、`ReadBook`（技能书）、解包（`UnbindList`）——均未实现；且 StdMode 3 的 `default` 还要走
-//!   `EatUseItems`（传送/祝福油等大地图副作用）。
-//!   ⚠️ oracle 对这些 StdMode 有**成功**路径（StdMode 1 与 StdMode 3 的 Shape 13 **无条件**返回 true；
-//!   其余为条件成功），成功时吃掉物品 + `SM_EAT_OK`，而本接缝只处理 `std_mode==0|2`
-//!   ⇒ 同一输入落 `SM_EAT_FAIL`，**这是已证的行为差异**（不是"一致地不吃"）；只因为本接缝**尚未
-//!   接进 `main.rs` 的 c2s 收包派发**（见下）而线上不可达。如实登记在 whitelist 的 **T-17**；
-//!   接线前必须先把这些分支补齐。`StdMode=5`（`case` 名单外）才是两侧一致地不吃。
+//! - **StdMode 3/4/31**：`ExtraAbil` buff / `GetExp`、`ReadBook`（技能书）、解包（`UnbindList`）——
+//!   未实现；且 StdMode 3 的 `default` 还要走 `EatUseItems`（传送/祝福油等大地图副作用）。
+//!   oracle 对这些 StdMode 有**成功**路径（StdMode 3 的 Shape 13 **无条件**返回 true；其余为条件成功），
+//!   成功时吃掉物品 + `SM_EAT_OK`，而本接缝只处理 `std_mode==0|1|2` ⇒ 同一输入落 `SM_EAT_FAIL`，
+//!   **这是已证的行为差异**（不是"一致地不吃"）。`StdMode=5`（`case` 名单外）才是两侧一致地不吃。
+//! - **StdMode 1 只补到 `HungerStatus` + `RefMyStatus` 的发帧**：oracle `RefMyStatus()` 里的
+//!   `RecalcAbilitys()` **整链**（由装备/buff 算 `WAbil`）只用 `ability::recalc_abilitys` 的最小等价物
+//!   顶上（`ctx.recalc`）；它**尚未**覆盖 `PlayObject.RecalcAbilitys` 的套装/`ExtraAbil`/`GetCharStatus`
+//!   等尾段 ⇒ 有装备/buff 的跨档场景仍可能与 oracle 不同。已登记在 whitelist 的 **T-17**。
+//!   接线前必须先把这些分支补齐。
 //!   （注：`boNODRUG` 开关对 0/1/2/3 都在 `EatItems` 首部生效，故本接缝对 1/3 也做该守卫，
 //!   但未禁药时 1/3 仍落 `SM_EAT_FAIL`。）
 //! - **`GetUpgradeStdItem` 的 Desc 升级差量**：同 `bag.rs`/`ability.rs`，传入的模板视为「有效物品」。
 //! - `ClientUseItems` 的 `sItemName` 形参在 oracle 里**未被使用**（只按 `MakeIndex` 找），已照搬。
 
-use crate::ability::{Ability, ItemCatalog};
+use crate::ability::{recalc_abilitys, Ability, ItemCatalog, RecalcInputs};
 use crate::bag::{BagItem, Frame};
 
 /// `SM_EAT_OK`（`src/OpenMir2/Messages.cs:297`）。
@@ -83,6 +87,13 @@ pub const RM_SYSMESSAGE: i32 = 11004;
 pub const RM_HEALTHSPELLCHANGED: i32 = 10052;
 /// `RM_WEIGHTCHANGED`（`src/OpenMir2/Messages.cs:579`）。
 pub const RM_WEIGHTCHANGED: i32 = 10115;
+/// `RM_CHARSTATUSCHANGED`（`src/OpenMir2/Messages.cs:599`）——`RecalcAbilitys` 尾部 `StatusChanged()` +
+/// `SendUpdateMsg(...)`（`PlayObject.cs:2875-2876`）。
+pub const RM_CHARSTATUSCHANGED: i32 = 10139;
+/// `RM_MYSTATUS`（`src/OpenMir2/Messages.cs:700`）——`RefMyStatus()` 在 `RecalcAbilitys()` 之后发（`PlayObject.Base.cs:288-292`）。
+pub const RM_MYSTATUS: i32 = 8102;
+/// `PlayObject.HungerStatus` 的上限（`HUtil32._MIN(5000, HungerStatus)`，`PlayObject.Base.cs:2088`）。
+pub const HUNGER_STATUS_MAX: i32 = 5000;
 
 /// `MsgQueue` 里的一条延时 `SendMessage`（`src/Modules/SystemModule/Data/SendMessage.cs`）。
 ///
@@ -152,6 +163,9 @@ pub struct UseItemContext<'a> {
     pub red_msg_fcolor: u16,
     /// `Config.RedMsgBColor`（禁药 `SysMsg(Red)` 的背景色）。
     pub red_msg_bcolor: u16,
+    /// `RefMyStatus()` 里 `RecalcAbilitys()` 的观测输入（`PlayObject.cs:2008`）。StdMode 1 跨档才用到；
+    /// `None` 时**不**复算 `WAbil`（只发 `RM_CHARSTATUSCHANGED`/`RM_MYSTATUS`）——见模块「未做清单」T-17。
+    pub recalc: Option<RecalcInputs<'a>>,
 }
 
 /// 本动作会原地改的**演员侧**状态（`PlayObject` 上分散的字段；接缝把它们打包传入传出）。
@@ -165,6 +179,8 @@ pub struct UseItemActorState {
     pub inc_spell: u16,
     /// `CharacterObject.UserUnLockDurg`（Shape 2 置 true）。
     pub user_unlock_durg: bool,
+    /// `PlayObject.HungerStatus`（`PlayObject.cs:225`，`int`；StdMode 1 食物加 `DuraMax/10`、上限 5000）。
+    pub hunger_status: i32,
 }
 
 impl Default for UseItemActorState {
@@ -198,6 +214,7 @@ impl Default for UseItemActorState {
             inc_health: 0,
             inc_spell: 0,
             user_unlock_durg: false,
+            hunger_status: 0,
         }
     }
 }
@@ -295,11 +312,31 @@ pub fn use_item(
                                 }
                                 eaten = true;
                             }
+                            // StdMode 1（`PlayObject.Base.cs:2085-2092`）：食物。
+                            //   nOldStatus = GetMyStatus();
+                            //   HungerStatus += DuraMax/10; HungerStatus = _MIN(5000, HungerStatus);
+                            //   if (nOldStatus != GetMyStatus()) RefMyStatus();  result = true;
+                            1 => {
+                                let old_status = my_status(state.hunger_status);
+                                state.hunger_status += i32::from(tpl.dura_max) / 10;
+                                state.hunger_status = state.hunger_status.min(HUNGER_STATUS_MAX);
+                                if old_status != my_status(state.hunger_status) {
+                                    // `RefMyStatus()`（`PlayObject.Base.cs:288-292`）= `RecalcAbilitys()` +
+                                    // `SendMsg(RM_MYSTATUS)`；`Race==Play` 的 `RecalcAbilitys` 尾部会先发
+                                    // `RM_CHARSTATUSCHANGED`（`PlayObject.cs:2875-2876`）。
+                                    if let Some(inputs) = &ctx.recalc {
+                                        state.wabil = recalc_abilitys(ctx.catalog, inputs).wabil;
+                                    }
+                                    notices.push(QueuedNotice::plain(RM_CHARSTATUSCHANGED));
+                                    notices.push(QueuedNotice::plain(RM_MYSTATUS));
+                                }
+                                eaten = true;
+                            }
                             // StdMode 2（`PlayObject.Base.cs:2095`）：`result = true`，无任何状态变更。
                             2 => {
                                 eaten = true;
                             }
-                            // StdMode 1/3/4/31（食物/ExtraAbil/GetExp、书、解包）未实现 ⇒ 与
+                            // StdMode 3/4/31（ExtraAbil/GetExp、书、解包）未实现 ⇒ 与
                             // oracle 在未禁药形态下的成功/条件成功路径**不同**，已证差异，登记在 T-17。
                             _ => {}
                         }
@@ -337,6 +374,11 @@ pub fn use_item(
         });
     }
 
+    // oracle `MsgQueue` 是 `PriorityQueue<SendMessage,byte>`（优先级 = `(byte)wIdent`）⇒ 消息泵按
+    // **优先级升序**下发；夹具的 `notices` 就是出队序。这里按同一键排序，保证跨档时
+    // （先入队的 `RM_CHARSTATUSCHANGED`/`RM_MYSTATUS` 反而晚于 `RM_WEIGHTCHANGED`）与 oracle 一致。
+    notices.sort_by_key(|n| n.ident as u8);
+
     UseItemOutcome {
         eaten,
         removed_index,
@@ -366,6 +408,16 @@ fn inc_health_spell(state: &mut UseItemActorState, n_hp: i32, n_mp: i32) -> bool
     true
 }
 
+/// `PlayObject.GetMyStatus()`（`PlayObject.Base.cs:1183-1191`）：`min(HungerStatus/1000, 4)`（整数除）。
+fn my_status(hunger_status: i32) -> i32 {
+    let result = hunger_status / 1000;
+    if result > 4 {
+        4
+    } else {
+        result
+    }
+}
+
 /// `HUtil32.Round(double)` = `(int)Math.Round(r, MidpointRounding.AwayFromZero)`（`HUtil32.cs:131`）。
 /// Rust `f64::round` 同为「半数远离零」，逐值相同。
 fn round_away(r: f64) -> i32 {
@@ -386,7 +438,7 @@ fn recalc_bag_weight(catalog: &dyn ItemCatalog, item_list: &[BagItem]) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ability::StdItemCatalog;
+    use crate::ability::{NakedAbility, StdItemCatalog, USE_ITEMS_LEN};
     use mir2_data::StdItem;
     use serde_json::Value;
 
@@ -504,6 +556,34 @@ mod tests {
         v.as_array().unwrap().iter().map(notice).collect()
     }
 
+    /// 构造一条与探针同口径的 `RecalcAbilitys` 输入：`Abil` = 用例的 `wabil_before`（探针里
+    /// `po.Abil = wabilPre`）、无装备、`bag` = 当前背包 `Index` 列表、无 buff。
+    fn recalc_inputs_default<'a>(abil: &'a Ability, bag: &'a [u16]) -> RecalcInputs<'a> {
+        const BONUS: NakedAbility = NakedAbility {
+            dc: 0,
+            mc: 0,
+            sc: 0,
+            ac: 0,
+            mac: 0,
+            hp: 0,
+            mp: 0,
+            hit: 0,
+            speed: 0,
+            reserved: 0,
+        };
+        RecalcInputs {
+            job: 0,
+            abil,
+            bonus_abil: &BONUS,
+            bonus_tick_hit: 1,
+            bonus_tick_speed: 1,
+            cur_hp: abil.hp,
+            cur_mp: abil.mp,
+            use_items: &[None; USE_ITEMS_LEN],
+            bag,
+        }
+    }
+
     /// 每条用例：即时帧、延时通知、`ItemList`、`WAbil`、`IncHealth`/`IncSpell`/`UserUnLockDurg`
     /// 都必须与 oracle 逐字段相同。
     #[test]
@@ -515,6 +595,10 @@ mod tests {
         for case in cases {
             let name = case["name"].as_str().unwrap();
             let c = &case["ctx"];
+            let mut item_list = bag_items(&case["item_list_before"]);
+            let abil = ability(&case["wabil_before"]);
+            let bag: Vec<u16> = item_list.iter().map(|it| it.index).collect();
+            let recalc = recalc_inputs_default(&abil, &bag);
             let ctx = UseItemContext {
                 catalog: &cat,
                 can_use_item: c["can_use_item"].as_bool().unwrap(),
@@ -524,14 +608,15 @@ mod tests {
                 no_drug: c["no_drug"].as_bool().unwrap(),
                 red_msg_fcolor: u16v(&c["red_msg_fcolor"]),
                 red_msg_bcolor: u16v(&c["red_msg_bcolor"]),
+                recalc: Some(recalc),
             };
             let mut state = UseItemActorState {
-                wabil: ability(&case["wabil_before"]),
+                wabil: abil.clone(),
                 inc_health: u16v(&case["inc_health_before"]),
                 inc_spell: u16v(&case["inc_spell_before"]),
                 user_unlock_durg: case["user_unlock_durg_before"].as_bool().unwrap(),
+                hunger_status: i32v(&case["hunger_status_before"]),
             };
-            let mut item_list = bag_items(&case["item_list_before"]);
 
             let out = use_item(&ctx, &mut state, &mut item_list);
             let expect = &case["expect"];
@@ -580,6 +665,11 @@ mod tests {
                 expect["user_unlock_durg"].as_bool().unwrap(),
                 "{name}: UserUnLockDurg"
             );
+            assert_eq!(
+                state.hunger_status,
+                i32v(&expect["hunger_status"]),
+                "{name}: HungerStatus"
+            );
         }
     }
 
@@ -600,6 +690,7 @@ mod tests {
             inc_health: 0,
             inc_spell: 0,
             user_unlock_durg: false,
+            hunger_status: 0,
         };
         let mut item_list = bag_items(&case["item_list_before"]);
         let ctx = UseItemContext {
@@ -611,6 +702,7 @@ mod tests {
             no_drug: false,
             red_msg_fcolor: 255,
             red_msg_bcolor: 56,
+            recalc: None,
         };
         let out = use_item(&ctx, &mut state, &mut item_list);
         assert!(out.eaten);
@@ -635,6 +727,7 @@ mod tests {
             inc_health: 0,
             inc_spell: 0,
             user_unlock_durg: false,
+            hunger_status: 0,
         };
         let mut item_list = bag_items(&case["item_list_before"]);
         let before = item_list.clone();
@@ -647,6 +740,7 @@ mod tests {
             no_drug: false,
             red_msg_fcolor: 255,
             red_msg_bcolor: 56,
+            recalc: None,
         };
         let out = use_item(&ctx, &mut state, &mut item_list);
         assert!(!out.eaten);
@@ -663,8 +757,8 @@ mod tests {
     /// `StdMode=5`（`ClientUseItems` 的 `case 0/1/2/3/4/31` 名单**外**）：两侧一致地不吃
     /// （落 `SM_EAT_FAIL`、无通知、背包不变）。
     ///
-    /// ⚠️ 本用例**只**锤定"switch 外"这一形态；`StdMode 1/2/3/4/31` 是**已证差异**
-    /// （oracle 在 StdMode 1/2 与 StdMode 3 Shape 13 上**无条件**吃掉 + `SM_EAT_OK`，本接缝 `SM_EAT_FAIL`），
+    /// ⚠️ 本用例**只**锤定"switch 外"这一形态；`StdMode 3/4/31` 是**已证差异**
+    /// （oracle 在 StdMode 3 Shape 13 上**无条件**吃掉 + `SM_EAT_OK`，本接缝 `SM_EAT_FAIL`），
     /// 登记在 whitelist 的 T-17。
     #[test]
     fn unimplemented_stdmode_does_not_eat() {
@@ -681,6 +775,7 @@ mod tests {
             inc_health: 0,
             inc_spell: 0,
             user_unlock_durg: false,
+            hunger_status: 0,
         };
         let mut item_list = bag_items(&case["item_list_before"]);
         let before = item_list.clone();
@@ -693,6 +788,7 @@ mod tests {
             no_drug: false,
             red_msg_fcolor: 255,
             red_msg_bcolor: 56,
+            recalc: None,
         };
         let out = use_item(&ctx, &mut state, &mut item_list);
         assert!(!out.eaten);
@@ -722,12 +818,14 @@ mod tests {
             no_drug: false,
             red_msg_fcolor: 255,
             red_msg_bcolor: 56,
+            recalc: None,
         };
         let mut state = UseItemActorState {
             wabil: ability(&case["wabil_before"]),
             inc_health: 3,
             inc_spell: 4,
             user_unlock_durg: true,
+            hunger_status: 0,
         };
         let mut item_list = bag_items(&case["item_list_before"]);
         let out = use_item(&ctx, &mut state, &mut item_list);
@@ -763,12 +861,14 @@ mod tests {
             no_drug: c["no_drug"].as_bool().unwrap(),
             red_msg_fcolor: u16v(&c["red_msg_fcolor"]),
             red_msg_bcolor: u16v(&c["red_msg_bcolor"]),
+            recalc: None,
         };
         let mut state = UseItemActorState {
             wabil: ability(&case["wabil_before"]),
             inc_health: 0,
             inc_spell: 0,
             user_unlock_durg: false,
+            hunger_status: 0,
         };
         let mut item_list = bag_items(&case["item_list_before"]);
         let before = item_list.clone();
