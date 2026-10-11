@@ -1,0 +1,221 @@
+#requires -Version 5
+<#
+.SYNOPSIS
+  start_rust_stack.ps1 — 把 M2 验收需要的**整栈**起来：MySQL + DBSrv + LoginSrv + Rust GameSvr(5000) + Rust 三网关(7000/7100/7200)。
+
+.DESCRIPTION
+  这是 `run_acceptance.ps1` 的**起栈前置**（`run_acceptance.ps1` 自己不起栈）。
+
+  进程构成（路径/顺序照 `E:\MirServer\start-all.ps1`，只把「入口四端口」换成 Rust 实现）：
+
+    MySQL      3306            （D:\mysql\mariadb-10.11.19-winx64）
+    DBSrv      6000/5100/5700  （**C#**：`<CsharpRepo>\src\DBSrv\bin\Release`）
+    LoginSrv   5500/5600       （**C#**：`<CsharpRepo>\src\LoginSrv\bin\Release`）
+    game-svr   5000            （**Rust**：`bins/game-svr`，配置 `E:\MirServer\M2GameSvr\Server.conf`）
+    login-gate 7000            （**Rust**：`bins/login-gate`，配置 `E:\MirServer\LoginGate\config.conf`）
+    sel-gate   7100            （**Rust**：`bins/sel-gate`，配置 `E:\MirServer\SelGate\config.conf`）
+    game-gate  7200/7201/7202  （**Rust**：`bins/game-gate`，配置 `E:\MirServer\RunGate\config.conf`）
+
+  **为什么 DBSrv/LoginSrv 仍是 C#**：Rust `bins/db-srv` 只实现了 5100 面（SelGate 取角色表），
+  **没有** GameSvr 取档用的 **6000 DataService** 面（`bins/db-srv/src/main.rs` 开头已登记），
+  而 Rust game-svr 进世界必须先经 6000 取 `CharacterData`。所以「全 Rust 链」在 6000 面补齐前
+  无法支撑真客户端进图；本脚本用 C# DBSrv/LoginSrv 作为 oracle 下盘（与 M3 首验同形，仅把 game-svr
+  与三网关换成 Rust）。判据侧：M2 验收①只对 5000/7000/7100/7200 四端口取所有权，不受此影响。
+
+  判据/退出码：
+    `-Stop`   按 pid 文件停掉本脚本起的进程；缺 pid 文件 ⇒ `NOTHING_TO_STOP`。
+    `-Status` 只按端口实况打印，不改状态。
+    起栈：任一步端口未就绪 ⇒ 打印 `RED` 并 exit 1；缺 exe/配置 ⇒ `PREREQ_MISSING` 并 exit 2；
+          启动前若目标端口已被监听 ⇒ exit 1（**不静默混实现**，先用 `-Stop` 或查清楚谁占着）。
+
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 `
+    -RustBinDir E:\tmp\openmir2-m2svr-target\debug
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 -Stop
+#>
+param(
+  [string]$CsharpRepo = 'E:\Users\gxh\Documents\GitHub\OpenMir2',
+  [string]$MirServer  = 'E:\MirServer',
+  [string]$RustBinDir = 'E:\tmp\openmir2-m2svr-target\debug',
+  [string]$LogDir     = 'E:\tmp\m2-acceptance\stack',
+  # 真机两个已知前置缺陷的**显式绕过**（默认空 ⇒ 用上面的标准路径）：
+  #   -GameSvrConf：真 `Server.conf` 没有 Rust 侧要求的 `WorldMaps` 键 ⇒ 用补了键的副本
+  #   -GameGateExe：master 的 game-gate 读不了 GBK 配置（修好的副本在 gamegate 分支）
+  [string]$GameSvrConf = '',
+  [string]$GameGateExe = '',
+  [int]$WaitSeconds   = 60,
+  [switch]$Stop,
+  [switch]$Status,
+  [switch]$Force
+)
+
+$ErrorActionPreference = 'Stop'
+New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+$PidFile = Join-Path $LogDir 'rust-stack.pid.json'
+
+function Test-Port([int]$Port) {
+  # 用 .NET 查监听表：不开连接、不走 WMI。`Get-NetTCPConnection` 在本机偶发挂死
+  # （m3/M2 两条线都踩过），轮询端口时不能用它。
+  foreach ($ep in [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners()) {
+    if ($ep.Port -eq $Port) { return $true }
+  }
+  return $false
+}
+
+function Get-ListenPids {
+  # netstat -ano 一次性取 端口->PID（只用于展示，不作判据）
+  $map = @{}
+  foreach ($line in (& netstat -ano 2>$null)) {
+    if ($line -match '^\s*TCP\s+\S+:(\d+)\s+\S+\s+LISTENING\s+(\d+)\s*$') {
+      $p = [int]$Matches[1]; $procId = [int]$Matches[2]
+      if (-not $map.ContainsKey($p)) { $map[$p] = $procId }
+    }
+  }
+  return $map
+}
+
+function Get-Owner([int]$Port) {
+  $map = Get-ListenPids
+  if (-not $map.ContainsKey($Port)) { return $null }
+  return (Get-CimInstance Win32_Process -Filter ("ProcessId=$($map[$Port])") -ErrorAction SilentlyContinue)
+}
+
+function Show-Status {
+  Write-Output '=== M2 验收栈 端口实况 ==='
+  foreach ($p in @(3306, 6000, 5100, 5700, 5500, 5600, 5000, 7000, 7100, 7200)) {
+    $o = Get-Owner $p
+    if ($o) { Write-Output ("  {0,-5} <- pid={1} {2}  {3}" -f $p, $o.ProcessId, $o.Name, $o.ExecutablePath) }
+    else    { Write-Output ("  {0,-5} DOWN" -f $p) }
+  }
+}
+
+if ($Stop) {
+  if (-not (Test-Path $PidFile)) { Write-Output 'NOTHING_TO_STOP (无 pid 文件)'; exit 0 }
+  $saved = Get-Content $PidFile -Raw | ConvertFrom-Json
+  $entries = @($saved)
+  if ($entries.Count -eq 1 -and ($entries[0].PSObject.Properties.Name -contains 'procs')) { $entries = @($entries[0].procs) }
+  # 逆启动序停：网关 → game-svr → LoginSrv → DBSrv → MySQL
+  foreach ($g in ($entries | Sort-Object { [int]$_.stop_order })) {
+    if (-not $g -or $null -eq $g.pid) { continue }
+    $p = Get-Process -Id $g.pid -ErrorAction SilentlyContinue
+    if ($p) { Stop-Process -Id $g.pid -Force; Write-Output ("STOPPED {0} pid={1}" -f $g.name, $g.pid) }
+    else { Write-Output ("ALREADY_GONE {0} pid={1}" -f $g.name, $g.pid) }
+  }
+  Start-Sleep -Seconds 2
+  Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
+  Show-Status
+  exit 0
+}
+
+if ($Status) { Show-Status; exit 0 }
+
+# ---- 0) 前置：exe / 配置 / 端口必须就位 ----
+$wanted = @(6000, 5100, 5700, 5500, 5600, 5000, 7000, 7100, 7200)
+if (-not $Force) {
+  $busy = @($wanted | Where-Object { Test-Port $_ })
+  if ($busy.Count -gt 0) {
+    Write-Output ("RED: 目标端口已被监听 {0} —— 先停掉现有栈（E:\MirServer\start-all.ps1 -Stop 或本脚本 -Stop）再起" -f ($busy -join ','))
+    Show-Status
+    exit 1
+  }
+}
+
+$mysqlExe  = 'D:\mysql\mariadb-10.11.19-winx64\bin\mysqld.exe'
+$mysqlData = 'D:\mysql\data'
+$dbsrvDir  = Join-Path $CsharpRepo 'src\DBSrv\bin\Release'
+$dbsrvExe  = Join-Path $dbsrvDir 'DBSrv.exe'
+$lsrvDir   = Join-Path $CsharpRepo 'src\LoginSrv\bin\Release'
+$lsrvExe   = Join-Path $lsrvDir 'LoginSrv.exe'
+$gsvrExe   = Join-Path $RustBinDir 'game-svr.exe'
+$lgExe     = Join-Path $RustBinDir 'login-gate.exe'
+$sgExe     = Join-Path $RustBinDir 'sel-gate.exe'
+$ggExe     = if ([string]::IsNullOrEmpty($GameGateExe)) { Join-Path $RustBinDir 'game-gate.exe' } else { $GameGateExe }
+$gsvrConf  = if ([string]::IsNullOrEmpty($GameSvrConf)) { Join-Path $MirServer 'M2GameSvr\Server.conf' } else { $GameSvrConf }
+$lgConf    = Join-Path $MirServer 'LoginGate\config.conf'
+$sgConf    = Join-Path $MirServer 'SelGate\config.conf'
+$ggConf    = Join-Path $MirServer 'RunGate\config.conf'
+
+$missing = @()
+foreach ($p in @($mysqlExe, $dbsrvExe, $lsrvExe, $gsvrExe, $lgExe, $sgExe, $ggExe, $gsvrConf, $lgConf, $sgConf, $ggConf)) {
+  if (-not (Test-Path $p)) { $missing += $p }
+}
+if ($missing.Count -gt 0) {
+  Write-Output 'PREREQ_MISSING: 缺以下 exe/配置：'
+  $missing | ForEach-Object { Write-Output ("  " + $_) }
+  exit 2
+}
+
+$started = @()
+function Start-One([string]$Name, [string]$Exe, [string[]]$ExeArgs, [string]$WorkDir, [int[]]$Ports, [int]$StopOrder) {
+  $out = Join-Path $LogDir ($Name + '.out.log')
+  $err = Join-Path $LogDir ($Name + '.err.log')
+  Remove-Item $out, $err -Force -ErrorAction SilentlyContinue
+  $sp = @{ FilePath = $Exe; WorkingDirectory = $WorkDir; WindowStyle = 'Hidden'; PassThru = $true
+          RedirectStandardOutput = $out; RedirectStandardError = $err }
+  if ($ExeArgs.Count -gt 0) { $sp.ArgumentList = $ExeArgs }
+  $p = Start-Process @sp
+  $script:started += [pscustomobject]@{ name = $Name; pid = $p.Id; ports = $Ports; stop_order = $StopOrder; exe = $Exe }
+  Write-Output ("START {0} pid={1} ports={2}" -f $Name, $p.Id, ($Ports -join ','))
+}
+
+# ---- 1) MySQL ----
+if (Test-Port 3306) { Write-Output 'MYSQL already up (3306)' }
+else {
+  Start-One -Name 'MySQL' -Exe $mysqlExe -ExeArgs @("--datadir=$mysqlData", '--port=3306', '--bind-address=127.0.0.1', '--console') -WorkDir 'D:\mysql\mariadb-10.11.19-winx64' -Ports @(3306) -StopOrder 9
+}
+
+function Wait-Ports([string]$Name, [int[]]$Ports) {
+  $deadline = (Get-Date).AddSeconds($WaitSeconds)
+  while ((Get-Date) -lt $deadline) {
+    if (@($Ports | Where-Object { Test-Port $_ }).Count -eq $Ports.Count) { return $true }
+    Start-Sleep -Milliseconds 500
+  }
+  return (@($Ports | Where-Object { Test-Port $_ }).Count -eq $Ports.Count)
+}
+
+# ---- 2) C# DBSrv / LoginSrv ----
+Start-One -Name 'DBSrv'    -Exe $dbsrvExe -ExeArgs @() -WorkDir $dbsrvDir -Ports @(6000, 5100, 5700) -StopOrder 7
+Start-One -Name 'LoginSrv' -Exe $lsrvExe  -ExeArgs @() -WorkDir $lsrvDir  -Ports @(5500, 5600)       -StopOrder 6
+
+# ---- 3) Rust game-svr（先于网关：网关注册需要 GameSvr 在） ----
+Start-One -Name 'game-svr'   -Exe $gsvrExe -ExeArgs @($gsvrConf) -WorkDir (Split-Path $gsvrConf -Parent) -Ports @(5000)           -StopOrder 5
+# ---- 4) Rust 三网关 ----
+Start-One -Name 'login-gate' -Exe $lgExe   -ExeArgs @($lgConf)   -WorkDir (Split-Path $lgConf  -Parent) -Ports @(7000)           -StopOrder 1
+Start-One -Name 'sel-gate'   -Exe $sgExe   -ExeArgs @($sgConf)   -WorkDir (Split-Path $sgConf  -Parent) -Ports @(7100)           -StopOrder 2
+Start-One -Name 'game-gate'  -Exe $ggExe   -ExeArgs @($ggConf)   -WorkDir (Split-Path $ggConf  -Parent) -Ports @(7200, 7201, 7202) -StopOrder 3
+
+$started | ConvertTo-Json -Depth 5 | Set-Content -Path $PidFile -Encoding utf8
+Write-Output ("PIDFILE " + $PidFile)
+
+# ---- 5) 等端口就绪（逐个逐个检查，缺一即 RED） ----
+Start-Sleep -Seconds 3
+$expect = @(
+  @{ name = 'MySQL'; ports = @(3306) }
+  @{ name = 'DBSrv'; ports = @(6000, 5100, 5700) }
+  @{ name = 'LoginSrv'; ports = @(5500, 5600) }
+  @{ name = 'game-svr'; ports = @(5000) }
+  @{ name = 'login-gate'; ports = @(7000) }
+  @{ name = 'sel-gate'; ports = @(7100) }
+  @{ name = 'game-gate'; ports = @(7200) }
+)
+$fail = @()
+foreach ($e in $expect) {
+  if (-not (Wait-Ports $e.name $e.ports)) {
+    $miss = @($e.ports | Where-Object { -not (Test-Port $_) })
+    $fail += ("{0} 缺 {1}" -f $e.name, ($miss -join ','))
+    $p = $script:started | Where-Object { $_.name -eq $e.name } | Select-Object -First 1
+    $err = if ($p) { Join-Path $LogDir ($e.name + '.err.log') } else { '' }
+    Write-Output ("RED: {0} 端口未就绪（{1}）看 {2}" -f $e.name, ($miss -join ','), $err)
+  } else {
+    Write-Output ("CORE_UP {0} ports={1}" -f $e.name, ($e.ports -join ','))
+  }
+}
+
+Show-Status
+if ($fail.Count -gt 0) {
+  Write-Output ("RED: 栈未就绪：" + ($fail -join '; '))
+  exit 1
+}
+Write-Output ('RUST_STACK_OK ' + $PidFile)
+exit 0

@@ -1,0 +1,36 @@
+STAGE start @ 1791704901352
+CLIENT_PID=32300
+SHOT E:\tmp\m2-acceptance\run-real\shots4\01_login.png
+STAGE login_id @ 1791704917565
+SHOT E:\tmp\m2-acceptance\run-real\shots4\02_id.png
+STAGE login_pwd @ 1791704920117
+SHOT E:\tmp\m2-acceptance\run-real\shots4\03_pwd.png
+STAGE login_submit @ 1791704922758
+STAGE charsel @ 1791704928647
+SHOT E:\tmp\m2-acceptance\run-real\shots4\04_charsel.png
+STAGE enter_game @ 1791704928682
+STAGE notice_poll @ 1791704930407
+SHOT E:\tmp\m2-acceptance\run-real\shots4\05_ingame.png
+SHOT E:\tmp\m2-acceptance\run-real\shots4\05b_after_notice.png
+STAGE ingame @ 1791704951392
+SHOT E:\tmp\m2-acceptance\run-real\shots4\05c_ingame_ready.png
+STAGE walk_1 @ 1791704953443
+STAGE walk_2 @ 1791704955981
+STAGE walk_3 @ 1791704958522
+SHOT E:\tmp\m2-acceptance\run-real\shots4\06_walk.png
+STAGE logout_button @ 1791704961101
+SHOT E:\tmp\m2-acceptance\run-real\shots4\07a_logout_btn_hover.png
+SHOT E:\tmp\m2-acceptance\run-real\shots4\07b_logout_confirm_dlg.png
+STAGE logout_alt_x @ 1791704964827
+SHOT E:\tmp\m2-acceptance\run-real\shots4\07_logout_altx0.png
+SHOT E:\tmp\m2-acceptance\run-real\shots4\07_logout_altx1.png
+SHOT E:\tmp\m2-acceptance\run-real\shots4\07_logout_altx2.png
+STAGE logout_menu @ 1791704975664
+SHOT E:\tmp\m2-acceptance\run-real\shots4\07_logout_menu_open.png
+SHOT E:\tmp\m2-acceptance\run-real\shots4\07_logoutdlg.png
+STAGE logout_confirm @ 1791704980656
+STAGE back_charsel @ 1791704989541
+SHOT E:\tmp\m2-acceptance\run-real\shots4\08_back_charsel.png
+STAGE done @ 1791704989572
+CLIENT_STOPPED
+FLOW_OK

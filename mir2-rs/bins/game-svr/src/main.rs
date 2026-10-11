@@ -100,6 +100,8 @@ enum GateEvent {
         service_id: u8,
         tx: mpsc::UnboundedSender<SimToGate>,
     },
+    /// 网关连接断开：注销它的线号通道（oracle `Disconnected` 释放槽位）。
+    UnregisterGate { service_id: u8 },
 }
 
 /// C# `CommandMessage`（12B 解码态布局，`:11-24`）。
@@ -239,20 +241,43 @@ async fn main() -> Result<()> {
     );
     // 网关（GameGate）以客户端身份连上来；同一进程可接待多条网关连接，但**各自独立的会话表**。
     // sim 线程随进程存活（`join` 不必要：世界只由它驱动，进程退出即结束）。
-    // 本进程只监听一个端点：线号取配置里的第一条（oracle 的 `GateInfo.ServiceId`/`GateIdx`）
-    let active_service_id: u8 = 0;
+    // 线号按 oracle `TCPNetChannel.Connecting` 的 `AllocGateSlot()` 分配：**每个连接占一个槽**，
+    // 断线释放后复用最小空闲槽（`TCPNetChannel.cs:74-92`）。**不能恒为 0**：三条网关连接都登记成
+    // 0 号线 ⇒ sim 的 `gates` 表只剩最后一条，进世界帧按 `gate_idx` 路由会打到别的连接上，
+    // `UserList` 找不到 socket ⇒ 静默丢弃顶包（真机症状＝客户端黑屏；`TCPNetChannel.cs:26-31`
+    // 的注释描述了同一坑："世界下发的数据就打到已断开的旧槽位上——表现为客户端进世界黑屏"）。
+    let slots: Arc<std::sync::Mutex<GateSlots>> =
+        Arc::new(std::sync::Mutex::new(GateSlots::default()));
     loop {
         let (sock, peer) = listener.accept().await.context("accept 失败")?;
         sock.set_nodelay(true).ok();
         glog!("INF", "游戏网关连接：{peer}");
+        let service_id = {
+            let mut g = slots.lock().expect("gate slots poisoned");
+            match g.alloc() {
+                Some(i) => i,
+                None => {
+                    glog!("ERR", "网关槽位已满（20），拒绝连接 {peer}");
+                    continue;
+                }
+            }
+        };
+        glog!("DBG", "sim: 网关连接 {peer} 分配线号 {service_id}");
         let ev_tx = ev_tx.clone();
         let check_block = cfg.check_block;
         let auth = Arc::clone(&auth);
-        let service_id = active_service_id;
+        let slots_done = Arc::clone(&slots);
         tokio::spawn(async move {
-            if let Err(e) = gate_conn(sock, ev_tx, check_block, auth, service_id).await {
+            if let Err(e) = gate_conn(sock, ev_tx.clone(), check_block, auth, service_id).await {
                 glog!("WRN", "网关连接结束：{e:#}");
             }
+            // 注销线号通道并释放槽位（重连时复用回同一个最小空闲号，与 oracle 同）。
+            let _ = ev_tx.send(GateEvent::UnregisterGate { service_id });
+            slots_done
+                .lock()
+                .expect("gate slots poisoned")
+                .free(service_id);
+            glog!("DBG", "sim: 网关线号 {service_id} 已释放");
         });
     }
 }
@@ -397,6 +422,11 @@ fn sim_loop(
                 GateEvent::RegisterGate { service_id, tx } => {
                     gates.insert(service_id, tx);
                     glog!("DBG", "sim: 登记网关线号 {service_id} 的命令通道");
+                }
+                GateEvent::UnregisterGate { service_id } => {
+                    if gates.remove(&service_id).is_some() {
+                        glog!("DBG", "sim: 注销网关线号 {service_id} 的命令通道");
+                    }
                 }
             }
         }
@@ -585,6 +615,41 @@ fn sim_loop(
         }
         if let Some(d) = next.checked_duration_since(std::time::Instant::now()) {
             std::thread::sleep(d);
+        }
+    }
+}
+
+/// `_gameGates = new ChannelMessageHandler[20]`（`TCPNetChannel.cs`）。
+const GATE_SLOT_CAPACITY: usize = 20;
+
+/// 网关连接的**线号分配器**（oracle `TCPNetChannel.AllocGateSlot`：复用最小空闲槽、
+/// 上限 20；断线释放）。
+///
+/// 线号就是世界侧寻址用的 `GateIdx`（`playObject.GateIdx` = 网关在客户端认证串里声明的 ServiceId），
+/// 因此同一时刻每个连接必须有**唯一**线号，否则进世界帧会路由错连接。
+#[derive(Default)]
+struct GateSlots {
+    used: Vec<bool>,
+}
+
+impl GateSlots {
+    /// 分配最小空闲槽（0..）。满 [`GATE_SLOT_CAPACITY`] ⇒ `None`（oracle `gateIdx < 0` 的拒绝支）。
+    fn alloc(&mut self) -> Option<u8> {
+        if let Some(i) = self.used.iter().position(|&u| !u) {
+            self.used[i] = true;
+            return u8::try_from(i).ok();
+        }
+        if self.used.len() >= GATE_SLOT_CAPACITY {
+            return None;
+        }
+        self.used.push(true);
+        u8::try_from(self.used.len() - 1).ok()
+    }
+
+    /// 断线释放（下标越界无操作）。
+    fn free(&mut self, idx: u8) {
+        if let Some(slot) = self.used.get_mut(usize::from(idx)) {
+            *slot = false;
         }
     }
 }
@@ -1168,5 +1233,31 @@ mod tests {
             !users0.find(1, 5).unwrap().in_world,
             "越界线号不得把 0 号线同号 socket 标成 in_world"
         );
+    }
+
+    /// **本片真机收口**：网关线号必须**按连接唯一分配**（oracle `AllocGateSlot`）。
+    ///
+    /// 真机症状：三条 GameGate 连接都拿到线号 0（旧实现 `let active_service_id = 0`）⇒ `gates`
+    /// 表只剩最后一条，进世界帧路由错连接、`UserList` 找不到 socket ⇒ 丢弃顶包、客户端黑屏。
+    /// 红检：把分配改回恒 0（`alloc()` 只返回 `Some(0)` / 直接 `let service_id = 0;`）⇒ 本用例
+    /// 第二条断言（两个连接线号不同）必红。
+    #[test]
+    fn gate_slots_are_unique_per_connection_and_reusable() {
+        let mut s = GateSlots::default();
+        assert_eq!(s.alloc(), Some(0));
+        assert_eq!(s.alloc(), Some(1));
+        assert_eq!(s.alloc(), Some(2));
+        assert_eq!(s.alloc(), Some(3));
+        // 释放中间一个 ⇒ 复用最小空闲
+        s.free(1);
+        assert_eq!(s.alloc(), Some(1));
+        // 释放不存在的槽不出错
+        s.free(200);
+        // 满 20 槽 ⇒ 拒绝
+        let mut full = GateSlots::default();
+        for i in 0..GATE_SLOT_CAPACITY {
+            assert_eq!(full.alloc(), Some(u8::try_from(i).unwrap()));
+        }
+        assert_eq!(full.alloc(), None, "满 20 槽后必须拒绝（oracle gateIdx<0）");
     }
 }

@@ -49,8 +49,29 @@ powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/run_acceptance.ps1 
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/selftest.ps1
-# 31 条口径全 OK ⇒ exit 0；任何一条不符 ⇒ exit 1（见 §8）
+# 33 条口径全 OK ⇒ exit 0；任何一条不符 ⇒ exit 1（见 §8）
 ```
+
+---
+
+## 0b. 起栈（`run_acceptance.ps1` 不自己起栈）—— `start_rust_stack.ps1`
+
+`run_acceptance.ps1` 只对「已跑着的栈 / 已采好的产物」取判据；把入口四端口交给 **Rust**
+（5000 `game-svr` / 7000 `login-gate` / 7100 `sel-gate` / 7200 `game-gate`）的起栈一条命令是：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 `
+  -RustBinDir E:\tmp\openmir2-m2svr-target\debug
+# 起：MySQL + C# DBSrv/LoginSrv（下盘 oracle）+ Rust game-svr + Rust 三网关；PID 落 E:\tmp\m2-acceptance\stack\rust-stack.pid.json
+powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 -Stop   # 收工停栈
+```
+
+**为什么 DBSrv/LoginSrv 仍是 C#**：Rust `bins/db-srv` 只实现了 5100 面，**没有** GameSvr 取档用的
+**6000 DataService** 面（`bins/db-srv/src/main.rs` 开头已登记），而 Rust `game-svr` 进世界必须先经 6000
+取 `CharacterData` ⇒「全 Rust 链」在 6000 面补齐前无法支撑真客户端进图。验收①只对 5000/7000/7100/7200
+四端口取所有权，不受此影响。
+
+起栈前若目标端口已被监听 ⇒ exit 1（**不静默混实现**）；缺 exe/配置 ⇒ `PREREQ_MISSING` exit 2。
 
 ---
 
@@ -307,8 +328,10 @@ cargo run -p msgcodegen -- --check
 | s2c 对账（同序） | `s2c_diff.py --rust <重导件>` | `GREEN`（16 条同序 + 逐字节 0，归一化仅 recog） | 同上 |
 | s2c 红检 | 改 recog ⇒ 仍 GREEN；改尾一字节 ⇒ RED | 归一化只吸 recog、字节差异必红 | 同日志 / `E:\tmp\rust-body-broken.jsonl` |
 | 三路径 DB diff 驱动 | `check_db_paths.ps1 -Mode diff` 合成夹具 | 同件 GREEN / 改一字段 RED（复用 `scoped_diff.py`） | 控制台（rc 0 / rc 1） |
-| **手册判红自检** | `selftest.ps1` | **31/31 OK**：②截图 4 例、③b s2c 4 例（尾字节改坏⇒RED、只改 recog⇒GREEN）、③c DB 3 例、①端口实况判属 1 例、①a 分类器 5 例（R2-1）、①b 端口表→期望入口 8 例、⓪ preflight 4 例、聚合器 2 例 | `E:\tmp\openmir2-watch\pi-m2svr-pf-selftest.log` |
-| **R3e-1 端口表补全（本片）** | `Test-Entry` 补 `7000=login-gate` / `7100=sel-gate`（原只断言 5000/7200） | 表漂移（`7000→login-srv`）⇒ 对应用例 **FAILED**（`expect=login-gate actual=login-srv`）；还原后 31/31 | `E:\tmp\openmir2-watch\pi-m2svr-pf-redcheck-porttable.log` |
+| **手册判红自检** | `selftest.ps1` | **33/33 OK**：②截图 4 例、③b s2c 4 例（尾字节改坏⇒RED、只改 recog⇒GREEN）、③c DB 3 例、①端口实况判属 1 例、①a 分类器 7 例（R2-1 + 本片真机回归 2 例）、①b 端口表→期望入口 8 例、⓪ preflight 4 例、聚合器 2 例 | `E:\tmp\openmir2-watch\pi-m2svr-real-selftest.log` |
+| **R3e-1 端口表补全** | `Test-Entry` 补 `7000=login-gate` / `7100=sel-gate`（原只断言 5000/7200） | 表漂移（`7000→login-srv`）⇒ 对应用例 **FAILED**（`expect=login-gate actual=login-srv`）；还原后全绿 | `E:\tmp\openmir2-watch\pi-m2svr-pf-redcheck-porttable.log` |
+| **真机回归·端口实现归属（本片）** | `portclassify.ps1`：C# 根只认**可执行体路径**（Rust 入口正常用 `E:\MirServer\...\config.conf` 参数，旧实现把整条命令行当探针 ⇒ 误判 csharp） | 改回 `$probe -like "*E:\MirServer\*"` ⇒ `impl/Rust 入口带现网配置参数仍=rust` **FAILED**（`expect=rust actual=csharp`）、`total=33 failed=1`；还原后 33/33 | `E:\tmp\openmir2-watch\pi-m2svr-real-redcheck-portclassify.log` |
+| **真机回归·网关线号（本片）** | `bins/game-svr` `GateSlots::alloc` 把「按连接唯一分配」改回恒 `Some(0)` | `gate_slots_are_unique_per_connection_and_reusable` **FAILED**（第二个连接拿到 0 而非 1）；还原后 58 单测全绿 | `E:\tmp\openmir2-watch\pi-m2svr-real-redcheck-gateslot.log` |
 | **⓪ 前置门（本片）** | `preflight.ps1`（工具/输入/金标准身份+schema） | 本机齐备 ⇒ `SUMMARY ok=18 missing=0 red=0`、exit 0；`-PythonCmd m2-no-such-python-xyz` ⇒ exit 2(`PREREQ_MISSING`)；`-SkipTools -ClientDir <不存在>` ⇒ exit 2；坏 schema 金标准（`-AllowGoldenDrift` 隔离）⇒ exit 1(`RED`) | `E:\tmp\openmir2-watch\pi-m2svr-pf-preflight.log` |
 | **⓪ 红检·schema** | 把 `golden:schema` 强制 `OK` | `preflight/金标准 schema 坏=RED` **FAILED**（`expect_rc=1 actual_rc=0`）⇒ `SUMMARY total=28 failed=1`；还原后 29/29 | `E:\tmp\openmir2-watch\pi-m2svr-pf-redcheck-schema.log` |
 | **⓪ 红检·工具** | 把 `Get-Command` 探针强制命中 | `preflight/缺工具=PREREQ` **FAILED**（`expect_rc=2 actual_rc=0`）⇒ `SUMMARY total=28 failed=1`；还原后 29/29 | `E:\tmp\openmir2-watch\pi-m2svr-pf-redcheck-tool.log` |
@@ -329,7 +352,7 @@ cargo run -p msgcodegen -- --check
 - `tools/m2-acceptance/portclassify.ps1`（R2-1 的共享分类器；本片加「端口表→期望入口」的第二层牙齿：`Get-M2ExpectedEntry`/`Get-M2EntryName`/`Get-M2EntryVerdict`）；
 - `tools/m2-acceptance/preflight.ps1`（**本片新增：⓪ 前置门**——工具/仓库输入/金标准身份+schema）；`run_acceptance.ps1`/`export_s2c.ps1`/`check_db_paths.ps1`（本片：接入 ⓪、缺 python 显式报 `PREREQ_MISSING`）；`selftest.ps1`（本片：+4 条 ⓪ 用例、实况判属改读同一次证据去竞态）；
 - `E:\tmp\m2-acceptance\`：无栈自检产生的 `ports-*.json`/`shots-*.json`/`run-*`/`s2c-selftest/` 等，保留作证据；
-- `E:\tmp\m2-acceptance\selftest-*\`：`selftest.ps1` 的 31 条构造夹具与 `selftest.json`（证据，保留）；
+- `E:\tmp\m2-acceptance\selftest-*\`：`selftest.ps1` 的 33 条构造夹具与 `selftest.json`（证据，保留）；
 - `E:\tmp\m2-acceptance\preflight-*.json`：本片 `preflight.ps1` 的齐备/缺工具/坏 schema 三组证据（保留）；
 - `E:\tmp\openmir2-watch\pi-m2svr-pf-*.log`：本片前置门、29 条自检、无栈自检、两条红检原始输出（证据，保留）；
 - `E:\tmp\openmir2-watch\pi-m2svr-*.log`：四门禁、红检、自检原始输出；
@@ -348,7 +371,7 @@ cargo run -p msgcodegen -- --check
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/selftest.ps1
-# 31 条全 OK ⇒ exit 0；任何一条不符 ⇒ exit 1（SELFTEST FAIL）
+# 33 条全 OK ⇒ exit 0；任何一条不符 ⇒ exit 1（SELFTEST FAIL）
 ```
 
 | # | 步骤 | 构造输入 | 期望 |
@@ -374,6 +397,8 @@ powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/selftest.ps1
 | 12c | ①a | 分类器：`E:\tmp\openmir2-m2svr-target\…\game-svr.exe` | `rust` |
 | 12d | ①a | 分类器：`C:\dev\game-svr.exe`（基名回落） | `rust`（**R2-1**：旧内联判据在此会算成非 Rust） |
 | 12e | ①a | 分类器：`C:\dev\foo.exe` | `unknown` |
+| 12k | ①a | **真机回归**：`E:\tmp\openmir2-m2svr-target\debug\login-gate.exe` + 参数 `E:\MirServer\LoginGate\config.conf` | `rust`（旧实现看整条命令行会误判 `csharp`） |
+| 12l | ①a | `E:\MirServer\LoginGate.exe`（Exe 在 C# 根） | `csharp` |
 | 12f | ①b | 端口表：`5000` / `7000` / `7100` / `7200`（4 例；**R3e-1** 补全 7000/7100） | `game-svr` / `login-gate` / `sel-gate` / `game-gate` |
 | 12g | ①b | 入口基名：`…\target\debug\game-svr.exe` | `game-svr`（去目录/去扩展名/小写） |
 | 12h | ①b | 归属：`5000` + `game-svr` | `ok` |
@@ -390,3 +415,35 @@ powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/selftest.ps1
 > 于是「相同件」也拿到 rc=1——**看起来像判红，其实是夹具崩了**（只看退出码就会假绿这条自检）。
 > 脚本内改用 `[System.IO.File]::WriteAllText(..., New-Object System.Text.UTF8Encoding($false))`，
 > 并同时断言输出关键字，正是为了区分「真判红」与「脚本崩」。
+
+---
+
+## 9. 真机首跑（2026-10-11）—— 结论与残留
+
+首次把入口四端口交给 Rust 跑真机验收（`start_rust_stack.ps1` + `check_ports.ps1` + 真客户端
+`mir_flow.ps1` + `mir2_proxy` 抓包 + `s2c_diff.py`）。完整报告：
+[`docs/M2验收真机首跑报告-20261011.md`](../../docs/M2验收真机首跑报告-20261011.md)；证据：
+`tools/m2-acceptance/evidence/real-run-20261011/`。
+
+| 验收项 | 结果 | 说明 |
+| --- | --- | --- |
+| ① 端口所有权 | **GREEN** | 5000/7000/7100/7200 的监听均为 Rust 且入口对得上（`ports.json`） |
+| ② 真客户端 7 图 | **RED** | 客户端能登录/选角/进世界（认证与取档经 C# DBSrv 6000 走通），但进世界后**黑屏**：生产路径只下发 **1/16** 条入图帧（`SM_NEWMAP` 一条），且断线未清世界（重登同一角色报 `AlreadyInWorld`） |
+| ③ 同序 s2c diff | **RED** | Rust 侧 s2c 只抓到 1 条（`ident=51 SM_NEWMAP`），金标准序列起点 `ident=658 SM_SENDNOTICE` 不存在 ⇒ `s2c_diff.py` 直接判红 |
+| ④ 三路径 DB diff | 未采 | 依赖②先成立，本轮登记 |
+
+真机顺带暴露并收口的两条缺陷（详见报告 §3）：
+
+1. **`bins/game-svr` 网关线号恒 0**（本片修）：三条 GameGate 连接都登记成 0 号线 ⇒ `gates` 表只剩最后一条，
+   入图帧按 `gate_idx` 路由打到别的连接、`UserList` 找不到 socket ⇒ **静默丢弃顶包（客户端黑屏）**。
+   照 oracle `TCPNetChannel.AllocGateSlot` 改为「按连接唯一分配 + 断线释放」。
+2. **`portclassify.ps1` 误判**（本片修）：旧实现把**整条命令行**当探针，Rust 入口用现网
+   `E:\MirServer\...\config.conf` 作参数时含 `E:\MirServer\` ⇒ 误判 csharp（验收①假红）。
+
+尚待 owner/其它卡解除的前置（本轮用显式绕过参数，未改冻结部署）：
+
+- 真 `E:\MirServer\M2GameSvr\Server.conf` **没有** `WorldMaps` 键（Rust 侧 S1 占位键）⇒ `game-svr` 用真配置启动即报
+  缺键；需补键（数据）、或改 Rust 为可选/从 Envir 注册表推导。本轮用 `-GameSvrConf` 指向补了键的副本。
+- 本片起栈时分支头（`3ba17d11`）尚未包含 `openmir2-m2-gamegate` 的 GB2312 配置修复（`677678c2`，已在 master）
+  ⇒ 本轮用 `-GameGateExe` 指向该分支构建件。**合并 master 后 head `9f5b2dd1` 自带修复**，
+  `-GameGateExe` 已非必需（用 head 的 `game-gate.exe` + 真 GBK 配置实测能解析启动）。
