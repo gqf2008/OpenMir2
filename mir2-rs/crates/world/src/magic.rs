@@ -11,6 +11,10 @@
 //! `AntiMagic` 判定 / 护身符消耗 / `MagPassThroughMagic` / 召唤与状态挂载——不在本片；
 //! 本片只把「前置 / MP / 威力公式 / 冷却」四件事做成可逐字段对拍。
 //!
+//! 第二批已实装技能（9/10/22/23/24/28/29/31/33/36/45/47/50）在同一口径下补入
+//! `power_fire_wall` / `power_show_hp_interval` / `power_shield` / `power_uenhancer`，
+//! 其余按 [`power_get_power_plus_mc`] / [`power_heal_get_power_plus_sc2`] / [`power_lightening`] 复用。
+//!
 //! RNG 纪律：所有取数走调用方注入的 [`RandomSource`]（同种子路径），
 //! **不用** Rust `rand` 默认算法（见 `docs/Rust重写设计文档.md` §6）。
 
@@ -18,7 +22,31 @@ use mir2_data::models::MagicInfo;
 use mir2_shared::hutil;
 use mir2_shared::rng::RandomSource;
 
-use crate::combat::{get_attack_power, hi_byte, lo_byte};
+use crate::combat::{get_attack_power, get_attack_power_player, hi_byte, lo_byte, AttackPowerMode};
+
+/// 攻方攻击力口径（`GetAttackPower`）：`DoSpell` 的施法者是 `PlayObject`，
+/// 走 `PlayObject.GetAttackPower` override（`PlayObject.cs:2909`）——**取数次数与 Base 版不同**
+/// （`Luck == 0` 时多一次 `Random(10)`），因此不能拿 [`AttackPowerMode::Base`] 代替，
+/// 否则当威力之后还有取数（如火墙的 `time`）时序列会错位。
+fn atk_power(rng: &mut impl RandomSource, base: i32, range: i32, atk: AttackPowerMode) -> i32 {
+    match atk {
+        AttackPowerMode::Base => get_attack_power(rng, base, range),
+        AttackPowerMode::Player {
+            luck,
+            power_rate,
+            bo_power_item,
+            power_item,
+        } => get_attack_power_player(
+            rng,
+            base,
+            range,
+            luck,
+            power_rate,
+            bo_power_item,
+            power_item,
+        ),
+    }
+}
 
 /// `MagicBase.MPow`：`Power + Random(MaxPower - Power)`。
 ///
@@ -89,14 +117,16 @@ pub fn power_get_power_plus_mc(
     magic: &MagicInfo,
     level: u8,
     mc: i32,
+    atk: AttackPowerMode,
 ) -> i32 {
     // C# `GetPower(userMagic, MPow(userMagic))`：先求 MPow（取数 1 次）再进 GetPower。
     let mp = mpow(rng, magic);
     let base = get_power(rng, magic, level, mp) + i32::from(lo_byte(mc));
-    get_attack_power(
+    atk_power(
         rng,
         base,
         i32::from(hi_byte(mc)) - i32::from(lo_byte(mc)) + 1,
+        atk,
     )
 }
 
@@ -106,13 +136,15 @@ pub fn power_get_power_plus_sc(
     magic: &MagicInfo,
     level: u8,
     sc: i32,
+    atk: AttackPowerMode,
 ) -> i32 {
     let mp = mpow(rng, magic);
     let base = get_power(rng, magic, level, mp) + i32::from(lo_byte(sc));
-    get_attack_power(
+    atk_power(
         rng,
         base,
         i32::from(hi_byte(sc)) - i32::from(lo_byte(sc)) + 1,
+        atk,
     )
 }
 
@@ -122,13 +154,15 @@ pub fn power_heal_get_power_plus_sc2(
     magic: &MagicInfo,
     level: u8,
     sc: i32,
+    atk: AttackPowerMode,
 ) -> i32 {
     let mp = mpow(rng, magic);
     let base = get_power(rng, magic, level, mp) + i32::from(lo_byte(sc)) * 2;
-    get_attack_power(
+    atk_power(
         rng,
         base,
         (i32::from(hi_byte(sc)) - i32::from(lo_byte(sc))) * 2 + 1,
+        atk,
     )
 }
 
@@ -138,8 +172,9 @@ pub fn power_lightening(
     magic: &MagicInfo,
     level: u8,
     mc: i32,
+    atk: AttackPowerMode,
 ) -> (i32, i32) {
-    let power = power_get_power_plus_mc(rng, magic, level, mc);
+    let power = power_get_power_plus_mc(rng, magic, level, mc, atk);
     (power, hutil::round(f64::from(power) * 1.5))
 }
 
@@ -162,12 +197,14 @@ pub fn power_defence_area(
     magic: &MagicInfo,
     level: u8,
     sc: i32,
+    atk: AttackPowerMode,
 ) -> i32 {
     let base = get_power13(rng, magic, level, 60) + i32::from(lo_byte(sc)) * 10;
-    get_attack_power(
+    atk_power(
         rng,
         base,
         i32::from(hi_byte(sc)) - i32::from(lo_byte(sc)) + 1,
+        atk,
     )
 }
 
@@ -189,6 +226,69 @@ pub fn power_transparent(
     sc: i32,
 ) -> i32 {
     get_power13(rng, magic, level, 30) + i32::from(get_rpow(rng, sc)) * 3
+}
+
+// ---- 第二批已实装技能：DoSpell 的**效果表达式**（只取纯数值部分，施加承接后续批次）----------
+//
+// 下列分支在 `MagicManager.DoSpell` 里对**已落地**的魔号求值；表达式本身只调 oracle 真身子函数
+// （`MPow`/`GetPower`/`GetPower13`/`GetRPow`/`GetAttackPower`），可直接产真身向量。
+// 其**施加**仍依赖地图/目标态（`MagPassThroughMagic` / `MagMakeFireCross` / `MagBigExplosion` /
+// `MagBubbleDefenceUp` 等），本片只对表达式取数，施加承接后续批次（报告『未实现』清单）。
+
+/// 火墙（`SKILL_EARTHFIRE = 22`）：`MagicManager.cs:426` 的 `MagMakeFireCross` 两个入参。
+///
+/// `power = GetAttackPower(GetPower(MPow) + Lo(MC), ΔMC + 1)`；
+/// `time  = GetPower(10) + (GetRPow(MC) >> 1)`。
+/// 取数顺序（C# 实参从左到右）：power（MPow → GetPower → GetAttackPower）→ GetPower(10) → GetRPow(MC)。
+pub fn power_fire_wall(
+    rng: &mut impl RandomSource,
+    magic: &MagicInfo,
+    level: u8,
+    mc: i32,
+    atk: AttackPowerMode,
+) -> (i32, i32) {
+    let power = power_get_power_plus_mc(rng, magic, level, mc, atk);
+    let time = get_power(rng, magic, level, 10) + (i32::from(get_rpow(rng, mc)) >> 1);
+    (power, time)
+}
+
+/// 心灵启示（`SKILL_SHOWHP = 28`）：`MagicManager.cs:441` 的 `ShowHpInterval`。
+///
+/// `interval = GetPower13(GetRPow(SC) * 2 + 30) * 1000`；取数顺序：`GetRPow(SC)` → `GetPower13`。
+pub fn power_show_hp_interval(
+    rng: &mut impl RandomSource,
+    magic: &MagicInfo,
+    level: u8,
+    sc: i32,
+) -> i32 {
+    let rp = get_rpow(rng, sc);
+    get_power13(rng, magic, level, i32::from(rp) * 2 + 30) * 1000
+}
+
+/// 魔法盾（`SKILL_SHIELD = 31`）：`MagicManager.cs:483` 的 `MagBubbleDefenceUp` 威力入参。
+///
+/// `power = GetPower(GetRPow(MC) + 15)`；取数顺序：`GetRPow(MC)` → `GetPower`。
+pub fn power_shield(rng: &mut impl RandomSource, magic: &MagicInfo, level: u8, mc: i32) -> i32 {
+    let rp = get_rpow(rng, mc);
+    get_power(rng, magic, level, i32::from(rp) + 15)
+}
+
+/// 无极真气分支（`SKILL_UENHANCER = 36`；数据行名为「火焰冰」——oracle 按魔号分派，本实现照搬）：
+/// `MagicManager.cs:645-646`。
+///
+/// `power = (ushort)(Level + 1 + Random(Level))`；
+/// `time  = GetAttackPower(GetPower13(60) + Lo(SC) * 10, ΔSC + 1)`（与 [`power_defence_area`] 同式）。
+/// 取数顺序：`Random(Level)` → time。
+pub fn power_uenhancer(
+    rng: &mut impl RandomSource,
+    magic: &MagicInfo,
+    level: u8,
+    sc: i32,
+    atk: AttackPowerMode,
+) -> (i32, i32) {
+    let power = i32::from(level) + 1 + rng.random_below(i32::from(level));
+    let time = power_defence_area(rng, magic, level, sc, atk);
+    (power, time)
 }
 
 // ---- 施法前置（DoSpell 顶层门 + 武器/护身符）--------------------------------------------------

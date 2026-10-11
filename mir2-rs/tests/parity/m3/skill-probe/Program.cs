@@ -225,14 +225,20 @@ internal static class Program
     /// <summary>每个已实装技能的"效果威力"表达式类别（与 `crates/world/src/magic.rs` 一一对应）。</summary>
     private static string EffectKind(ushort magIdx) => magIdx switch
     {
-        1 or 5 => "get_power_plus_mc",          // 火球术/大火球：GetAttackPower(GetPower(MPow)+Lo(MC), ΔMC+1)
-        2 => "heal_get_power_plus_sc2",          // 治愈术：GetAttackPower(GetPower(MPow)+Lo(SC)*2, ΔSC*2+1)
+        1 or 5 or 9 or 10 or 23 or 24 or 33 or 47 or 50 => "get_power_plus_mc",
+        // 火球术/大火球/地狱火/疾光电影/爆裂火焰/地狱雷光/冰咆哮/地狱烈焰/冰焰：
+        // GetAttackPower(GetPower(MPow)+Lo(MC), ΔMC+1)
+        2 or 29 => "heal_get_power_plus_sc2",     // 治愈术/群体治疗术：GetAttackPower(GetPower(MPow)+Lo(SC)*2, ΔSC*2+1)
         13 => "get_power_plus_sc",                 // 灵魂火符：GetAttackPower(GetPower(MPow)+Lo(SC), ΔSC+1)
-        11 => "lightening_get_power_plus_mc",    // 雷电术：同上 + 不死 ×1.5
+        11 or 45 => "lightening_get_power_plus_mc", // 雷电术/灭天火：同上 + 不死 ×1.5
+        22 => "fire_wall",                        // 火墙：power + time=GetPower(10)+GetRPow(MC)>>1
         6 => "amyounsul_power13_rpow",           // 施毒术：GetPower13(40|30)+GetRPow(SC)*2
         14 or 15 => "power13_60_sc10",           // 幽灵盾/神圣战甲术：GetAttackPower(GetPower13(60)+Lo(SC)*10, ΔSC+1)
         16 => "power13_40_rpow3",                // 困魔咒：GetPower13(40)+GetRPow(SC)*3
         18 or 19 => "power13_30_rpow3",          // 隐身术/集体隐身术：GetPower13(30)+GetRPow(SC)*3
+        28 => "show_hp",                          // 心灵启示：interval=GetPower13(GetRPow(SC)*2+30)*1000
+        31 => "shield",                           // 魔法盾：GetPower(GetRPow(MC)+15)
+        36 => "uenhancer",                        // 无极真气分支(数据行=火焰冰)：Level+1+Random(Level) / GetPower13(60)+Lo(SC)*10
         _ => "none",
     };
 
@@ -245,9 +251,11 @@ internal static class Program
         public int VsUndead = -1;
         public int Green = -1;
         public int Red = -1;
+        public int Time = -1;
+        public int Interval = -1;
 
-        /// <summary>TSV 伴生件的 5 列（kind + 4 个数值，缺项为 -1）。</summary>
-        public string Tsv => string.Join("\t", Kind, Power, VsUndead, Green, Red);
+        /// <summary>TSV 伴生件的 7 列（kind + 6 个数值，缺项为 -1）。</summary>
+        public string Tsv => string.Join("\t", Kind, Power, VsUndead, Green, Red, Time, Interval);
 
         public object Json => new
         {
@@ -256,6 +264,8 @@ internal static class Program
             vs_undead = VsUndead,
             power_green = Green,
             power_red = Red,
+            time = Time,
+            interval = Interval,
         };
     }
 
@@ -294,6 +304,36 @@ internal static class Program
                     HUtil32.HiByte(caster.WAbil.MC) - HUtil32.LoByte(caster.WAbil.MC) + 1);
                 int vsUndead = HUtil32.Round(power * 1.5);
                 return new EffectVal { Kind = "damage", Power = power, VsUndead = vsUndead };
+            }
+            case "fire_wall":
+            {
+                // MagicManager.cs:426 —— 实参从左到右：power（MPow→GetPower→GetAttackPower）→ GetPower(10) → GetRPow(MC)
+                int power = caster.GetAttackPower(
+                    MagicBase.GetPower(MagicBase.MPow(um), um) + HUtil32.LoByte(caster.WAbil.MC),
+                    HUtil32.HiByte(caster.WAbil.MC) - HUtil32.LoByte(caster.WAbil.MC) + 1);
+                int time = MagicBase.GetPower(10, um) + (MagicBase.GetRPow(caster.WAbil.MC) >> 1);
+                return new EffectVal { Kind = "fire_wall", Power = power, Time = time };
+            }
+            case "show_hp":
+            {
+                // MagicManager.cs:441 —— GetRPow(SC) 先于 GetPower13
+                int interval = MagicBase.GetPower13(MagicBase.GetRPow(caster.WAbil.SC) * 2 + 30, um) * 1000;
+                return new EffectVal { Kind = "show_hp", Interval = interval };
+            }
+            case "shield":
+            {
+                // MagicManager.cs:483 —— GetRPow(MC) 先于 GetPower
+                int power = MagicBase.GetPower(MagicBase.GetRPow(caster.WAbil.MC) + 15, um);
+                return new EffectVal { Kind = "shield", Power = power };
+            }
+            case "uenhancer":
+            {
+                // MagicManager.cs:645-646 —— Random(Level) 先于 time；time 式同 power13_60_sc10
+                int power = (ushort)(um.Level + 1 + M2Share.RandomNumber.Random(um.Level));
+                int time = caster.GetAttackPower(
+                    MagicBase.GetPower13(60, um) + HUtil32.LoByte(caster.WAbil.SC) * 10,
+                    HUtil32.HiByte(caster.WAbil.SC) - HUtil32.LoByte(caster.WAbil.SC) + 1);
+                return new EffectVal { Kind = "uenhancer", Power = power, Time = time };
             }
             case "amyounsul_power13_rpow":
             {
@@ -344,8 +384,16 @@ internal static class Program
             ?? throw new MissingMethodException("PlayObject.GetSpellPoint");
 
         var allRows = ParseMagics(sqlPath);
+        // DoSpell 的施法者是 PlayObject，其 GetAttackPower override 的取数次数取决于下列四项。
+        // 向量把这四项一并交给 Rust 侧，保证“威力 + 其后的取数”整体对齐（否则火墙的 time 会错位）。
+        var seedCaster = NewCaster(1);
 
-        var tsv = new List<string> { string.Join("\t", "seed", RngSeed, SystemShare.Config.MagicHitIntervalTime) };
+        var tsv = new List<string>
+        {
+            string.Join("\t", "seed", RngSeed, SystemShare.Config.MagicHitIntervalTime,
+                (int)seedCaster.Luck, seedCaster.PowerRate, seedCaster.BoPowerItem ? 1 : 0,
+                (int)seedCaster.PowerItem)
+        };
         var cases = new List<object>();
         var registry = new List<object>();
         foreach (MagicRow row in allRows)
@@ -450,6 +498,7 @@ internal static class Program
                 mp_cost_entry = "M2Server.Player.PlayObject.GetSpellPoint (protected static, 反射调用)",
                 prereq_entry = "M2Server.Player.PlayObject.IsTrainingSkill + ReadBook 口径（PlayObject.Base.cs:2170-2196）",
                 rng = "OpenMir2.RandomNumber.random 反射覆盖为 new Random(seed ^ magic_id)",
+                attack_power = "PlayObject.GetAttackPower override（PlayObject.cs:2909）；向量附 luck/power_rate/bo_power_item/power_item",
             },
             seed = RngSeed,
             magic_hit_interval_time = SystemShare.Config.MagicHitIntervalTime,
