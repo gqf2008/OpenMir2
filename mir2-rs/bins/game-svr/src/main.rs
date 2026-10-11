@@ -488,72 +488,76 @@ fn sim_loop(
                                             head.cur_map
                                         ),
                                         Ok(map_id) => {
-                                    // 进世界：`World::open_session` + `enter_map`
-                                    let _ = world.open_session(&head.chr_name);
-                                    let ent = mir2_world::Entity::new(
-                                        0,
-                                        head.chr_name.clone(),
-                                        i32::from(head.cur_x),
-                                        i32::from(head.cur_y),
-                                    );
-                                    match world.enter_map(&head.chr_name, ent, map_id) {
-                                        Ok(id) => {
-                                            glog!(
-                                                "INF",
-                                                "进世界 ChrName:{} CurMap:{} ({},{}) Dir:{} entity={id}",
-                                                head.chr_name,
-                                                head.cur_map,
-                                                head.cur_x,
-                                                head.cur_y,
-                                                head.dir
-                                            );
-                                            // S2b-4 续：进世界后按 oracle `PlayObject.Message.cs:1680-1692`
-                                            // 的 `RM_LOGON` 支出入图帧，经**该用户的网关线**下发。
-                                            // 输入齐备的现在只有 `SM_NEWMAP`（记录里的坐标 + 地图名）；
-                                            // 其余帧的输入依赖真地图（`openmir2-m2-map-loading`）/ 记录字段
-                                            // （`openmir2-m2-record-fields`）/ 配置层 ⇒ `EnterWorldInputs` 的
-                                            // `Option` 字段留空（登记在卡，绝不猜尾字节）。
-                                            // `day_bright` 暂占位 0（`Envir.DayBright()` 属地图层）。
-                                            let inputs = smframe::EnterWorldInputs {
-                                                actor_id: id,
-                                                cur_x: u16::from_ne_bytes(head.cur_x.to_ne_bytes()),
-                                                cur_y: u16::from_ne_bytes(head.cur_y.to_ne_bytes()),
-                                                dir: head.dir,
-                                                map_file_name: Some(
-                                                    head.cur_map.as_bytes().to_vec(),
-                                                ),
-                                                ..smframe::EnterWorldInputs::default()
-                                            };
-                                            // N1（reviewer-3）：按该用户的 gate_idx 路由回**它自己那条**网关线
-                                            // （与上面 KickNoData 的 `route_to_gate` 完全同构）；找不到线号记 WRN，
-                                            // 绝不 `gates.values().next()` 静默挑一个。
-                                            if let Some(tx) = route_to_gate(
-                                                &gates,
-                                                gate_idx,
-                                                socket,
-                                                "标记进世界/下发入图帧",
-                                            ) {
-                                                let bodies = inputs.frames();
+                                        // 进世界：`World::open_session` + `enter_map`
+                                        let _ = world.open_session(&head.chr_name);
+                                        let ent = mir2_world::Entity::new(
+                                            0,
+                                            head.chr_name.clone(),
+                                            i32::from(head.cur_x),
+                                            i32::from(head.cur_y),
+                                        );
+                                        match world.enter_map(&head.chr_name, ent, map_id) {
+                                            Ok(id) => {
                                                 glog!(
                                                     "INF",
-                                                    "进世界帧下发：socket={socket} 共 {} 条（输入齐备的）",
-                                                    bodies.len()
+                                                    concat!(
+                                                        "进世界 ChrName:{} CurMap:{} ({},{}) ",
+                                                        "Dir:{} entity={}"
+                                                    ),
+                                                    head.chr_name,
+                                                    head.cur_map,
+                                                    head.cur_x,
+                                                    head.cur_y,
+                                                    head.dir,
+                                                    id
                                                 );
-                                                for body in bodies {
-                                                    let _ = tx.send(SimToGate::SendFrame {
-                                                        socket,
-                                                        body,
-                                                    });
+                                                // S2b-4 续：进世界后按 oracle `PlayObject.Message.cs:1680-1692`
+                                                // 的 `RM_LOGON` 支出入图帧，经**该用户的网关线**下发。
+                                                // 输入齐备的现在只有 `SM_NEWMAP`（记录里的坐标 + 地图名）；
+                                                // 其余帧的输入依赖真地图（`openmir2-m2-map-loading`）/ 记录字段
+                                                // （`openmir2-m2-record-fields`）/ 配置层 ⇒ `EnterWorldInputs` 的
+                                                // `Option` 字段留空（登记在卡，绝不猜尾字节）。
+                                                // `day_bright` 暂占位 0（`Envir.DayBright()` 属地图层）。
+                                                let inputs = smframe::EnterWorldInputs {
+                                                    actor_id: id,
+                                                    cur_x: u16::from_ne_bytes(head.cur_x.to_ne_bytes()),
+                                                    cur_y: u16::from_ne_bytes(head.cur_y.to_ne_bytes()),
+                                                    dir: head.dir,
+                                                    map_file_name: Some(
+                                                        head.cur_map.as_bytes().to_vec(),
+                                                    ),
+                                                    ..smframe::EnterWorldInputs::default()
+                                                };
+                                                // N1（reviewer-3）：按该用户的 gate_idx 路由回**它自己那条**网关线
+                                                // （与上面 KickNoData 的 `route_to_gate` 完全同构）；找不到线号记 WRN，
+                                                // 绝不 `gates.values().next()` 静默挑一个。
+                                                if let Some(tx) = route_to_gate(
+                                                    &gates,
+                                                    gate_idx,
+                                                    socket,
+                                                    "标记进世界/下发入图帧",
+                                                ) {
+                                                    let bodies = inputs.frames();
+                                                    glog!(
+                                                        "INF",
+                                                        "进世界帧下发：socket={socket} 共 {} 条（输入齐备的）",
+                                                        bodies.len()
+                                                    );
+                                                    for body in bodies {
+                                                        let _ = tx.send(SimToGate::SendFrame {
+                                                            socket,
+                                                            body,
+                                                        });
+                                                    }
+                                                    let _ = tx.send(SimToGate::MarkInWorld { socket });
                                                 }
-                                                let _ = tx.send(SimToGate::MarkInWorld { socket });
                                             }
+                                            Err(e) => glog!(
+                                                "WRN",
+                                                "进世界失败 ChrName:{}：{e:?}",
+                                                head.chr_name
+                                            ),
                                         }
-                                        Err(e) => glog!(
-                                            "WRN",
-                                            "进世界失败 ChrName:{}：{e:?}",
-                                            head.chr_name
-                                        ),
-                                    }
                                         }
                                     }
                                 }

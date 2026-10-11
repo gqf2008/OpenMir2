@@ -71,39 +71,42 @@ pub fn load(path: &Path) -> Result<GateConfig> {
             continue;
         }
         if let Some(name) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-            section = name.trim().to_string();
+            // oracle `ConfigFile` 的 section 字典是 `StringComparer.OrdinalIgnoreCase`
+            // （`src/OpenMir2/Common/ConfigFile.cs:13`，R3-2）⇒ 段名按 ASCII 大小写不敏感归一。
+            section = name.trim().to_ascii_uppercase();
             continue;
         }
         let Some((k, v)) = line.split_once('=') else {
             continue;
         };
-        let (k, v) = (k.trim(), v.trim());
+        // 键字典同样 `OrdinalIgnoreCase`（`ConfigFile.cs:301`，R3-2）：键名也归一到 ASCII 大写。
+        let (k, v) = (k.trim().to_ascii_uppercase(), v.trim());
         match section.as_str() {
             // 网关链路真正需要的键（本切片读这些）。
-            "Server" => match k {
-                "GateAddr" => gate_addr = Some(v.to_string()),
-                "GatePort" => {
+            "SERVER" => match k.as_str() {
+                "GATEADDR" => gate_addr = Some(v.to_string()),
+                "GATEPORT" => {
                     gate_port = Some(
                         v.parse()
                             .with_context(|| format!("GatePort 不是合法端口：{v:?}"))?,
                     );
                 }
-                "CheckBlock" => {
+                "CHECKBLOCK" => {
                     check_block = Some(
                         v.parse()
                             .with_context(|| format!("CheckBlock 不是合法整数：{v:?}"))?,
                     );
                 }
-                "WorldMaps" => maps = Some(parse_maps(v)?),
-                "IDSAddr" => ids_addr = Some(v.to_string()),
-                "DBAddr" => db_addr = Some(v.to_string()),
-                "DBPort" => {
+                "WORLDMAPS" => maps = Some(parse_maps(v)?),
+                "IDSADDR" => ids_addr = Some(v.to_string()),
+                "DBADDR" => db_addr = Some(v.to_string()),
+                "DBPORT" => {
                     db_port = Some(
                         v.parse()
                             .with_context(|| format!("DBPort 不是合法端口：{v:?}"))?,
                     );
                 }
-                "IDSPort" => {
+                "IDSPORT" => {
                     ids_port = Some(
                         v.parse()
                             .with_context(|| format!("IDSPort 不是合法端口：{v:?}"))?,
@@ -112,9 +115,9 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                 _ => {}
             },
             // oracle 的取图目录（`ServerConf.cs:75-76` 从 `[Share]` 读，缺省 Envir/Map）。
-            "Share" => match k {
-                "EnvirDir" => envir_dir = Some(v.to_string()),
-                "MapDir" => map_dir = Some(v.to_string()),
+            "SHARE" => match k.as_str() {
+                "ENVIRDIR" => envir_dir = Some(v.to_string()),
+                "MAPDIR" => map_dir = Some(v.to_string()),
                 _ => {}
             },
             _ => {}
@@ -234,6 +237,24 @@ mod tests {
         let c = load(&p).unwrap();
         assert_eq!(c.envir_dir, "Envir2");
         assert_eq!(c.map_dir, "Map2");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **R3-2**：oracle `ConfigFile` 的 section/key 字典都是 `OrdinalIgnoreCase`（`ConfigFile.cs:13/301`）
+    /// ⇒ `[server]`/`gateaddr`/`[share]`/`envirdir` 都必须认，不能把 oracle 认的键当没写。
+    #[test]
+    fn section_and_key_matching_is_ascii_case_insensitive() {
+        let dir = std::env::temp_dir().join(format!("gs-case-{}", std::process::id()));
+        let p = write(
+            &dir,
+            "[server]\ngateaddr=127.0.0.1\ngateport=5000\ncheckblock=1\nworldmaps=10x10\n\
+             idsaddr=127.0.0.1\nidsport=5600\ndbaddr=127.0.0.1\ndbport=6000\n\
+             [share]\nenvirDir= Envir3\nMAPDIR=Map3\n",
+        );
+        let c = load(&p).unwrap();
+        assert_eq!(c.gate_port, 5000, "[server]/gateport 小写必须认");
+        assert_eq!(c.envir_dir, "Envir3", "[share]/envirDir 混合大小写必须认");
+        assert_eq!(c.map_dir, "Map3", "[share]/MAPDIR 大写必须认");
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -19,9 +19,18 @@ use mir2_envir::{MapLoader, MapRegistry};
 /// 生产下 `config::default_path()` 把 `Server.conf` 放在可执行体同目录，因此与 oracle 的
 /// `M2Share.BasePath = AppContext.BaseDirectory` 等价；测试/迁移场景可把 `Envir`/`Map`
 /// 与显式传入的 `Server.conf` 放在同一目录。
+///
+/// **相对 `--config`（R3-3）**：显式传 `Server.conf` 这种相对路径时 `Path::parent()` 给出的是
+/// **空目录**，`Envir`/`Map` 就会相对进程 cwd 解析；oracle 恒用 `AppContext.BaseDirectory`（exe 目录），
+/// 与 cwd 无关。这里先把相对路径规范化到**当前目录**再取 parent，消除该不对称。
 #[must_use]
 pub fn base_path(conf: &Path) -> PathBuf {
-    conf.parent()
+    let abs = if conf.is_relative() {
+        std::env::current_dir().map_or_else(|_| conf.to_path_buf(), |cwd| cwd.join(conf))
+    } else {
+        conf.to_path_buf()
+    };
+    abs.parent()
         .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
 }
 
@@ -29,7 +38,7 @@ pub fn base_path(conf: &Path) -> PathBuf {
 pub enum Maps {
     /// 已加载到非空注册表：用它的尺寸建世界 + `CurMap` 换 `map_id`。
     Envir(MapRegistry),
-    /// 没有 `Envir/MapInfo.txt`（开发/测试形态）：保留 S1 `WorldMaps` 占位，调用方记 WRN。
+    /// **没有** `Envir/MapInfo.txt`（开发/测试形态）：保留 S1 `WorldMaps` 占位，调用方记 WRN。
     Placeholder,
     /// `MapInfo.txt` 在、但读失败或**一张都没加载成功**：调用方必须拒绝启动（失败要响）。
     Broken(String),
@@ -37,13 +46,27 @@ pub enum Maps {
 
 /// 按 `base/<envir_dir>/MapInfo.txt` + `base/<map_dir>/*.map` 加载注册表。
 ///
-/// 判据（见 [`Maps`]）：`MapInfo.txt` 不存在 / 无 section ⇒ [`Maps::Placeholder`]；
-/// 有 section 但全加载失败或读失败 ⇒ [`Maps::Broken`]；否则 [`Maps::Envir`]。
+/// 判据（见 [`Maps`]）：`MapInfo.txt` **不存在** ⇒ [`Maps::Placeholder`]；文件在但 0 条有效 section、
+/// 有 section 但全加载失败、或读失败 ⇒ [`Maps::Broken`]；否则 [`Maps::Envir`]。
+///
+/// 三态口径照 oracle `Maps.LoadMapInfo`（`src/GameSrv/Maps/Maps.cs:20-31`）用 `File.Exists` 区分
+/// 「无文件」与「文件在」；**R3-1**：`Placeholder` 只留给「无文件」，别把「文件在但空表/全解析失败」
+/// 也吞成占位（那是坏配置，必须响）。
 #[must_use]
 pub fn load_registry(base: &Path, envir_dir: &str, map_dir: &str) -> Maps {
     let loader = MapLoader::new(base, map_dir, envir_dir);
     match loader.load_map_info_entries() {
-        Ok(entries) if entries.is_empty() => Maps::Placeholder,
+        Ok(entries) if entries.is_empty() => {
+            let info_path = loader.map_info_path();
+            if info_path.exists() {
+                Maps::Broken(format!(
+                    "{} 存在但 0 条有效 section（空表或全解析失败）",
+                    info_path.display()
+                ))
+            } else {
+                Maps::Placeholder
+            }
+        }
         Ok(entries) => {
             let reg = MapRegistry::from_entries(loader, entries);
             if reg.is_empty() {
@@ -173,6 +196,37 @@ mod tests {
             Maps::Placeholder
         ));
         assert_eq!(resolve_map_id(None, "随便").unwrap(), 0);
+    }
+
+    /// **R3-1**：`MapInfo.txt` **在**、但 0 条有效 section（空表/全注释）⇒ `Broken`，不是 `Placeholder`；
+    /// `Placeholder` 只留给 `MapInfo.txt` **不存在**。
+    #[test]
+    fn empty_map_info_file_is_broken_not_placeholder() {
+        let env = TempEnv::new("empty");
+        std::fs::write(
+            env.dir.join("Envir").join("MapInfo.txt"),
+            "; 只有注释，没有 section\n\n",
+        )
+        .unwrap();
+        match load_registry(&env.dir, "Envir", "Map") {
+            Maps::Broken(why) => assert!(why.contains("0 条有效 section"), "诊断：{why}"),
+            Maps::Placeholder => {
+                panic!("MapInfo.txt 在但空表 ⇒ 必须是 Broken，不许当 Placeholder 静默占位")
+            }
+            Maps::Envir(_) => panic!("空 MapInfo 却加载成功？"),
+        }
+    }
+
+    /// **R3-3**：显式相对 `--config`（`Server.conf`）时 base 必须规范到**当前目录**，不是空路径。
+    #[test]
+    fn relative_conf_base_is_normalized_to_cwd() {
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(
+            base_path(Path::new("Server.conf")),
+            cwd,
+            "裸相对置文件名 ⇒ base = cwd（不是 Some(\"\") 推出的空路径）"
+        );
+        assert_eq!(base_path(Path::new("sub/Server.conf")), cwd.join("sub"));
     }
 
     /// `MapInfo.txt` 在但一张都没加载成功 ⇒ `Broken`（**不是** `Placeholder`）——

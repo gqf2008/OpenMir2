@@ -238,6 +238,15 @@ powershell -File tools/m2-acceptance/check_db_paths.ps1 -Mode diff `
 **红检**：把 `resolve_map_id` 改成 `id_of(cur_map).unwrap_or(0)` ⇒ `unknown_cur_map_is_rejected` 必红
 （原始输出 `E:\tmp\openmir2-watch\pi-m2svr-wire-redcheck.log`）。
 
+**R3 收口（reviewer-3 对 308396cd 的 4 条 Minor，2026-10-11 后续片）**：
+
+| id | 问题 | 处置 | 判据（含红检） |
+| --- | --- | --- | --- |
+| R3-1 | `Placeholder` 同时吞掉「无 `MapInfo.txt`」与「文件在但 0 条有效 section」 | `load_registry` 用 `MapLoader::map_info_path().exists()` 区分：文件在但空表/全解析失败 ⇒ `Broken`（`main` 拒启），`Placeholder` 只留给**无文件** | `mapwire::tests::empty_map_info_file_is_broken_not_placeholder`；红检 `if info_path.exists()`→`if false` ⇒ 用例必红（`pi-m2svr-r3-redcheck-r31.log`） |
+| R3-2 | `[Share]`/`EnvirDir` 按 ASCII 精确匹配，oracle `ConfigFile` 是 `StringComparer.OrdinalIgnoreCase` | section 与键名统一 `to_ascii_uppercase()` 后再匹配（**值不动**） | `config::tests::section_and_key_matching_is_ascii_case_insensitive`；红检 `"SHARE"`→`"Share"` ⇒ 必红（`pi-m2svr-r3-redcheck-r32.log`） |
+| R3-3 | 显式相对 `--config`（`Server.conf`）⇒ `parent()=Some("")`，`Envir`/`Map` 相对 cwd | `base_path` 先把相对路径规范化到当前目录再取 parent（对齐 oracle `AppContext.BaseDirectory`） | `mapwire::tests::relative_conf_base_is_normalized_to_cwd`；红检回退 `conf.parent()` ⇒ 必红（`pi-m2svr-r3-redcheck-r33.log`） |
+| R3-4 | `main.rs` 进世界分支缩进浅 4 格（长 `glog!` 使 rustfmt 跳过该块） | 手工重排缩进 + 把长 `glog!` 消息拆成 `concat!` 两段 | `cargo fmt --all -- --check` exit 0（改前 rustfmt 对该块**无输出**=stable，改后仍 stable） |
+
 ### 5.3 顺序判据② 的「生产路径覆盖率」与触发组口径（本片登记）
 
 生产路径只下发**整个 oracle 触发组**输入都已齐备的帧；登记时容易漏掉「组」这一层：
@@ -284,6 +293,9 @@ cargo run -p msgcodegen -- --check
 | R4-1 红检 | 改回 `unwrap_or(0)` | `route_to_gate_rejects_out_of_range_gate_idx` FAILED；还原后 passed | `E:\tmp\openmir2-watch\pi-m2svr-r41-redcheck.log` |
 | **CurMap→map_id 接线单测** | `cargo test -p game-svr --offline mapwire` | 3/3 OK（逻辑名→id / 未知名必拒 / 无 Envir 回退） | 含在 `pi-m2svr-wire-test.log` |
 | **CurMap→map_id 红检** | 把 `resolve_map_id` 改成 `id_of(cur_map).unwrap_or(0)` | `unknown_cur_map_is_rejected` FAILED（rc=101）；还原后 3/3 OK | `E:\tmp\openmir2-watch\pi-m2svr-wire-redcheck.log` |
+| **R3-1/2/3 单测** | `cargo test -p game-svr --offline`（mapwire 6 / config 4） | 全 `ok`；新增 3 条（空 MapInfo ⇒ Broken / 大小写不敏感 / 相对 conf 规范化到 cwd） | `E:\tmp\openmir2-watch\pi-m2svr-r3-unittests.log` |
+| **R3-1/2/3 红检** | 分别注入 `if false` / `"SHARE"→"Share"` / 回退 `conf.parent()` | 三条新用例各自 **FAILED**（rc=101）；还原后全绿 | `pi-m2svr-r3-redcheck-r31/r32/r33.log` |
+| **R3-4 rustfmt** | `cargo fmt --all -- --check`（改前对进世界块无输出 ⇒ 只靠手工重排） | 改后 exit 0 | 门禁日志 |
 | 四门禁（接线后 head） | fmt / clippy `-D warnings` / `test --workspace --offline` / msgcodegen `--check` | fmt 0 / clippy 0 / **51 目标 355 passed 0 failed 11 ignored** 0 / msgcodegen 604 OK 0 | `pi-m2svr-wire-test.log`、`pi-m2svr-wire-gates.log` |
 
 残留物清单：
