@@ -15,14 +15,15 @@
 //!     ├─ if (eatSuccess) { WeightChanged(); SendDefMessage(SM_EAT_OK,0,0,0,0) }
 //!     └─ else            { SendDefMessage(SM_EAT_FAIL,0,0,0,0) }
 //!
-//! PlayObject.Base.cs:2047  EatItems(StdItem, UserItem) —— **本片只做 StdMode 0（药品）**
-//!   ├─ if (Envir.Flag.boNODRUG) { SysMsg(CanotUseDrugOnThisMap,…); return false }   // 本片未建模（见未做清单）
-//!   └─ case 0: switch (stdItem.Shape)
+//! PlayObject.Base.cs:2047  EatItems(StdItem, UserItem) —— **本片做 boNODRUG 守卫 + StdMode 0/2**
+//!   ├─ if (Envir.Flag.boNODRUG) { SysMsg(CanotUseDrugOnThisMap, Red, Hint); return false }  // 仅 0/1/2/3 进这里
+//!   ├─ case 0: switch (stdItem.Shape)
 //!        1 ⇒ IncHealthSpell(AC, MAC)
 //!        2 ⇒ UserUnLockDurg = true
 //!        3 ⇒ IncHealthSpell(Round(MaxHP/100.0*AC), Round(MaxMP/100.0*MAC))
 //!        _ ⇒ if (AC>0) IncHealth += AC; if (MAC>0) IncSpell += MAC
 //!        （四条分支最后都 result = true）
+//!   └─ case 2 ⇒ result = true（无任何状态变更）
 //! ```
 //!
 //! # 两类下行（本接缝把它们**分开**产出，别混成一条流）
@@ -54,15 +55,16 @@
 //!
 //! # 未做清单（登记在卡 `openmir2-m3-bag-equip-alignment` 的 whitelist）
 //!
-//! - **`Envir.Flag.boNODRUG`（地图禁药）分支**：oracle 会 `SysMsg` 一条文本 `RM_SYSMESSAGE` 并
-//!   返回 false；本片把「是否禁药」留给接线层（不建地图模型），接缝不建模该分支。
-//! - **StdMode 1/2/3/4/31**：食物（`HungerStatus` + `RefMyStatus`→`RecalcAbilitys`）、无效果、
-//!   `ExtraAbil` buff / `GetExp`、`ReadBook`（技能书）、解包（`UnbindList`）——均未实现。
-//!   ⚠️ oracle 对这些 StdMode 有**成功**路径（StdMode 1/2 与 StdMode 3 的 Shape 13 **无条件**返回 true；
-//!   其余为条件成功），成功时吃掉物品 + `SM_EAT_OK`，而本接缝只处理 `std_mode==0`
+//! - **StdMode 1/3/4/31**：食物（`HungerStatus` + `RefMyStatus`→`RecalcAbilitys`）、`ExtraAbil` buff /
+//!   `GetExp`、`ReadBook`（技能书）、解包（`UnbindList`）——均未实现；且 StdMode 3 的 `default` 还要走
+//!   `EatUseItems`（传送/祝福油等大地图副作用）。
+//!   ⚠️ oracle 对这些 StdMode 有**成功**路径（StdMode 1 与 StdMode 3 的 Shape 13 **无条件**返回 true；
+//!   其余为条件成功），成功时吃掉物品 + `SM_EAT_OK`，而本接缝只处理 `std_mode==0|2`
 //!   ⇒ 同一输入落 `SM_EAT_FAIL`，**这是已证的行为差异**（不是"一致地不吃"）；只因为本接缝**尚未
 //!   接进 `main.rs` 的 c2s 收包派发**（见下）而线上不可达。如实登记在 whitelist 的 **T-17**；
 //!   接线前必须先把这些分支补齐。`StdMode=5`（`case` 名单外）才是两侧一致地不吃。
+//!   （注：`boNODRUG` 开关对 0/1/2/3 都在 `EatItems` 首部生效，故本接缝对 1/3 也做该守卫，
+//!   但未禁药时 1/3 仍落 `SM_EAT_FAIL`。）
 //! - **`GetUpgradeStdItem` 的 Desc 升级差量**：同 `bag.rs`/`ability.rs`，传入的模板视为「有效物品」。
 //! - `ClientUseItems` 的 `sItemName` 形参在 oracle 里**未被使用**（只按 `MakeIndex` 找），已照搬。
 
@@ -75,6 +77,8 @@ pub const SM_EAT_OK: u16 = 635;
 pub const SM_EAT_FAIL: u16 = 636;
 /// `RM_MENU_OK`（`src/OpenMir2/Messages.cs:625`）。
 pub const RM_MENU_OK: i32 = 10309;
+/// `RM_SYSMESSAGE`（`src/OpenMir2/Messages.cs:646`）。
+pub const RM_SYSMESSAGE: i32 = 11004;
 /// `RM_HEALTHSPELLCHANGED`（`src/OpenMir2/Messages.cs:576`）。
 pub const RM_HEALTHSPELLCHANGED: i32 = 10052;
 /// `RM_WEIGHTCHANGED`（`src/OpenMir2/Messages.cs:579`）。
@@ -114,6 +118,19 @@ impl QueuedNotice {
             n_param3: 0,
         }
     }
+
+    /// `BaseObject.SysMsg(CanotUseDrugOnThisMap, MsgColor.Red, MsgType.Hint)`
+    /// （`BaseObject.cs:1656`）：`SendMsg(RM_SYSMESSAGE, 0, RedMsgFColor, RedMsgBColor, 0, msg)`。
+    /// 文本本身（`MessageSettings.CanotUseDrugOnThisMap`）不在本接缝的观测面内。
+    const fn sysmsg(fcolor: u16, bcolor: u16) -> Self {
+        Self {
+            ident: RM_SYSMESSAGE,
+            w_param: 0,
+            n_param1: fcolor as i32,
+            n_param2: bcolor as i32,
+            n_param3: 0,
+        }
+    }
 }
 
 /// [`use_item`] 的观测输入（`ClientUseItems` 读到的全部外部状态）。
@@ -129,6 +146,12 @@ pub struct UseItemContext<'a> {
     pub actor_id: i32,
     /// `CM_EAT` 的 `nParam1`（要吃的物品的 `MakeIndex`）。
     pub make_index: i32,
+    /// `PlayObject.Envir.Flag.boNODRUG`（地图禁药；`EatItems` 的首个守卫）。
+    pub no_drug: bool,
+    /// `Config.RedMsgFColor`（禁药 `SysMsg(Red)` 的前景色）。
+    pub red_msg_fcolor: u16,
+    /// `Config.RedMsgBColor`（禁药 `SysMsg(Red)` 的背景色）。
+    pub red_msg_bcolor: u16,
 }
 
 /// 本动作会原地改的**演员侧**状态（`PlayObject` 上分散的字段；接缝把它们打包传入传出）。
@@ -220,45 +243,71 @@ pub fn use_item(
                 let idx = item_list[i].index;
                 // 模板缺失 ⇒ oracle 的 `if (stdItem != null)` 不成立，什么都不做（落 SM_EAT_FAIL）。
                 if let Some(tpl) = ctx.catalog.get(idx) {
-                    if tpl.std_mode == 0 {
-                        match tpl.shape {
-                            1 => {
-                                // 固定量：IncHealthSpell(AC, MAC)
-                                if inc_health_spell(state, i32::from(tpl.ac), i32::from(tpl.mac)) {
-                                    notices.push(QueuedNotice::plain(RM_HEALTHSPELLCHANGED));
+                    // `EatItems` 的首个守卫（`PlayObject.Base.cs:2048-2053`）：地图禁药 ⇒ `SysMsg(Red)`
+                    // 入 `MsgQueue` 并 `return false`。仅 StdMode 0/1/2/3 会进 `EatItems`
+                    //（4/31 走 `ReadBook`/`UseStdModeFunItem`，不受 `boNODRUG` 约束）。
+                    if matches!(tpl.std_mode, 0..=3) && ctx.no_drug {
+                        notices.push(QueuedNotice::sysmsg(ctx.red_msg_fcolor, ctx.red_msg_bcolor));
+                    } else {
+                        match tpl.std_mode {
+                            0 => {
+                                match tpl.shape {
+                                    1 => {
+                                        // 固定量：IncHealthSpell(AC, MAC)
+                                        if inc_health_spell(
+                                            state,
+                                            i32::from(tpl.ac),
+                                            i32::from(tpl.mac),
+                                        ) {
+                                            notices
+                                                .push(QueuedNotice::plain(RM_HEALTHSPELLCHANGED));
+                                        }
+                                    }
+                                    2 => {
+                                        // 解锁药：只置 UserUnLockDurg，无即时帧/通知
+                                        state.user_unlock_durg = true;
+                                    }
+                                    3 => {
+                                        // 百分比：Round(MaxHP/100.0*AC) / Round(MaxMP/100.0*MAC)
+                                        let hp = round_away(
+                                            f64::from(state.wabil.max_hp) / 100.0
+                                                * f64::from(tpl.ac),
+                                        );
+                                        let mp = round_away(
+                                            f64::from(state.wabil.max_mp) / 100.0
+                                                * f64::from(tpl.mac),
+                                        );
+                                        if inc_health_spell(state, hp, mp) {
+                                            notices
+                                                .push(QueuedNotice::plain(RM_HEALTHSPELLCHANGED));
+                                        }
+                                    }
+                                    _ => {
+                                        // default：AC/MAC 各自 `> 0` 才叠加到 IncHealth/IncSpell（ushort 回绕）
+                                        if tpl.ac > 0 {
+                                            state.inc_health =
+                                                state.inc_health.wrapping_add(tpl.ac);
+                                        }
+                                        if tpl.mac > 0 {
+                                            state.inc_spell = state.inc_spell.wrapping_add(tpl.mac);
+                                        }
+                                    }
                                 }
+                                eaten = true;
                             }
+                            // StdMode 2（`PlayObject.Base.cs:2095`）：`result = true`，无任何状态变更。
                             2 => {
-                                // 解锁药：只置 UserUnLockDurg，无即时帧/通知
-                                state.user_unlock_durg = true;
+                                eaten = true;
                             }
-                            3 => {
-                                // 百分比：Round(MaxHP/100.0*AC) / Round(MaxMP/100.0*MAC)
-                                let hp = round_away(
-                                    f64::from(state.wabil.max_hp) / 100.0 * f64::from(tpl.ac),
-                                );
-                                let mp = round_away(
-                                    f64::from(state.wabil.max_mp) / 100.0 * f64::from(tpl.mac),
-                                );
-                                if inc_health_spell(state, hp, mp) {
-                                    notices.push(QueuedNotice::plain(RM_HEALTHSPELLCHANGED));
-                                }
-                            }
-                            _ => {
-                                // default：AC/MAC 各自 `> 0` 才叠加到 IncHealth/IncSpell（ushort 回绕）
-                                if tpl.ac > 0 {
-                                    state.inc_health = state.inc_health.wrapping_add(tpl.ac);
-                                }
-                                if tpl.mac > 0 {
-                                    state.inc_spell = state.inc_spell.wrapping_add(tpl.mac);
-                                }
-                            }
+                            // StdMode 1/3/4/31（食物/ExtraAbil/GetExp、书、解包）未实现 ⇒ 与
+                            // oracle 在未禁药形态下的成功/条件成功路径**不同**，已证差异，登记在 T-17。
+                            _ => {}
                         }
-                        eaten = true;
-                        item_list.remove(i);
-                        removed_index = Some(i);
+                        if eaten {
+                            item_list.remove(i);
+                            removed_index = Some(i);
+                        }
                     }
-                    // StdMode != 0（1/2/3/4/31）：未实现 ⇒ 与 oracle 一致地不吃。
                 }
             }
         }
@@ -472,6 +521,9 @@ mod tests {
                 dead: c["dead"].as_bool().unwrap(),
                 actor_id: i32v(&c["actor_id"]),
                 make_index: i32v(&case["request"]["make_index"]),
+                no_drug: c["no_drug"].as_bool().unwrap(),
+                red_msg_fcolor: u16v(&c["red_msg_fcolor"]),
+                red_msg_bcolor: u16v(&c["red_msg_bcolor"]),
             };
             let mut state = UseItemActorState {
                 wabil: ability(&case["wabil_before"]),
@@ -556,6 +608,9 @@ mod tests {
             dead: false,
             actor_id: 0,
             make_index: 1,
+            no_drug: false,
+            red_msg_fcolor: 255,
+            red_msg_bcolor: 56,
         };
         let out = use_item(&ctx, &mut state, &mut item_list);
         assert!(out.eaten);
@@ -589,6 +644,9 @@ mod tests {
             dead: false,
             actor_id: 0x1234,
             make_index: 1,
+            no_drug: false,
+            red_msg_fcolor: 255,
+            red_msg_bcolor: 56,
         };
         let out = use_item(&ctx, &mut state, &mut item_list);
         assert!(!out.eaten);
@@ -632,11 +690,95 @@ mod tests {
             dead: false,
             actor_id: 0,
             make_index: 1,
+            no_drug: false,
+            red_msg_fcolor: 255,
+            red_msg_bcolor: 56,
         };
         let out = use_item(&ctx, &mut state, &mut item_list);
         assert!(!out.eaten);
         assert_eq!(out.immediate_frames[0].ident, SM_EAT_FAIL);
         assert!(out.notices.is_empty());
         assert_eq!(item_list, before);
+    }
+
+    /// `StdMode 2`（`PlayObject.Base.cs:2095`）：oracle `result = true` ⇒ 吃掉物品 + `SM_EAT_OK` +
+    /// `RM_WEIGHTCHANGED`，**没有任何属性/用药状态变更**（改回「不吃」⇒ 必红）。
+    #[test]
+    fn stdmode2_eats_without_effect() {
+        let doc = fixture();
+        let cat = catalog(&doc);
+        let case = doc["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "eat_ok_stdmode2_noop")
+            .expect("夹具必须含 eat_ok_stdmode2_noop");
+        let ctx = UseItemContext {
+            catalog: &cat,
+            can_use_item: true,
+            dead: false,
+            actor_id: 0,
+            make_index: 1,
+            no_drug: false,
+            red_msg_fcolor: 255,
+            red_msg_bcolor: 56,
+        };
+        let mut state = UseItemActorState {
+            wabil: ability(&case["wabil_before"]),
+            inc_health: 3,
+            inc_spell: 4,
+            user_unlock_durg: true,
+        };
+        let mut item_list = bag_items(&case["item_list_before"]);
+        let out = use_item(&ctx, &mut state, &mut item_list);
+        assert!(out.eaten, "StdMode 2 必吃");
+        assert_eq!(out.immediate_frames[0].ident, SM_EAT_OK);
+        assert_eq!(out.notices, vec![QueuedNotice::plain(RM_WEIGHTCHANGED)]);
+        assert!(item_list.is_empty(), "StdMode 2 吃掉后背包为空");
+        assert_eq!(state.inc_health, 3, "StdMode 2 不许动 IncHealth");
+        assert_eq!(state.inc_spell, 4, "StdMode 2 不许动 IncSpell");
+        assert!(state.user_unlock_durg, "StdMode 2 不许动 UserUnLockDurg");
+    }
+
+    /// `Envir.Flag.boNODRUG == true`：`SysMsg(Red)` 入 MsgQueue（`RM_SYSMESSAGE`，颜色取自
+    /// `Config.RedMsgFColor/BColor`）、物品不消耗、无 `SM_EAT_OK`（只落 `SM_EAT_FAIL`）。
+    /// 改坏颜色对（f/b 互换）或去掉守卫（照吃）⇒ 必红。
+    #[test]
+    fn nodrug_guard_does_not_consume() {
+        let doc = fixture();
+        let cat = catalog(&doc);
+        let case = doc["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "eat_fail_nodrug_no_consume")
+            .expect("夹具必须含 eat_fail_nodrug_no_consume");
+        let c = &case["ctx"];
+        let ctx = UseItemContext {
+            catalog: &cat,
+            can_use_item: true,
+            dead: false,
+            actor_id: c["actor_id"].as_i64().unwrap() as i32,
+            make_index: 1,
+            no_drug: c["no_drug"].as_bool().unwrap(),
+            red_msg_fcolor: u16v(&c["red_msg_fcolor"]),
+            red_msg_bcolor: u16v(&c["red_msg_bcolor"]),
+        };
+        let mut state = UseItemActorState {
+            wabil: ability(&case["wabil_before"]),
+            inc_health: 0,
+            inc_spell: 0,
+            user_unlock_durg: false,
+        };
+        let mut item_list = bag_items(&case["item_list_before"]);
+        let before = item_list.clone();
+        let out = use_item(&ctx, &mut state, &mut item_list);
+        assert!(!out.eaten, "禁药地图不许吃");
+        assert_eq!(out.immediate_frames[0].ident, SM_EAT_FAIL);
+        assert_eq!(out.notices.len(), 1, "禁药只排一条 SysMsg");
+        assert_eq!(out.notices[0].ident, RM_SYSMESSAGE);
+        assert_eq!(out.notices[0].n_param1, 255, "前景色 = RedMsgFColor");
+        assert_eq!(out.notices[0].n_param2, 56, "背景色 = RedMsgBColor");
+        assert_eq!(item_list, before, "禁药不许消耗物品");
     }
 }
