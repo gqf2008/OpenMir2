@@ -4,3 +4,6 @@ sessions/**/snap_after/
 # 完整 RNG 记录流（每次 ~1.5MB×2，可被 rng-baseline.ps1 再生；product.json 里的 hash 是判据本体）
 sessions/**/rng-run*.tsv
 sessions/**/shadow-*.out.log*
+# 本机 PID/进程句柄（start_rust_gates.ps1 的临时物，无判据价值、换机即失效）
+sessions/rust-gates.pid.json
+sessions/rust-gates/

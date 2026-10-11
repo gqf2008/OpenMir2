@@ -122,8 +122,10 @@ if ($SkipBots) { $pairArgs += '-SkipBots' }
 if ($FixedNewChr) { $pairArgs += @('-FixedNewChr', '-NewChrJob', $NewChrJob, '-NewChrHair', $NewChrHair, '-NewChrSex', $NewChrSex) }
 & powershell -ExecutionPolicy Bypass -File (Join-Path $Here 'run_pair.ps1') @pairArgs | Tee-Object -FilePath (Join-Path $Here ("sessions\gate-{0}-{1}.pair.log" -f $Side, $Stamp))
 $pairExit = $LASTEXITCODE
-$sessionDir = (Get-ChildItem (Join-Path $Here 'sessions') -Directory -Filter ("{0}-*" -f $Side) |
-               Sort-Object LastWriteTime -Descending | Select-Object -First 1)
+$sideSessionDirs = @(Get-ChildItem (Join-Path $Here 'sessions') -Directory -Filter ("{0}-*" -f $Side) |
+                     Where-Object { Test-Path (Join-Path $_.FullName 'baseline.json') } |
+                     Sort-Object LastWriteTime -Descending)
+$sessionDir = if ($sideSessionDirs.Count -gt 0) { $sideSessionDirs[0] } else { $null }
 $report.steps.run_pair = [ordered]@{ exit = $pairExit; session = if ($sessionDir) { $sessionDir.Name } else { $null } }
 if ($pairExit -ne 0) {
   Write-Output 'RED: run_pair 未通过，M3 门禁不成立'
@@ -161,7 +163,9 @@ if ($SkipRngBaseline) {
 # ---- 3. 跨侧比对（有参照会话时） ----
 if ($PeerSession -ne '') {
   Write-Output '--- 3) 跨侧作用域 diff ---'
-  $mine = Join-Path $sessionDir 'scoped_after_norm.jsonl'
+  # 注意：`$sessionDir` 是 DirectoryInfo，`Join-Path` 会调 `ToString()`（只给目录名）⇒ 必须显式 FullName，
+  # 否则 `scoped_diff.py` 会拿到相对路径并 `FileNotFoundError`（首次跨侧跑实测踩到）。
+  $mine = Join-Path $sessionDir.FullName 'scoped_after_norm.jsonl'
   $peer = Join-Path (Join-Path $Here 'sessions') (Join-Path $PeerSession 'scoped_after_norm.jsonl')
   if (-not (Test-Path $peer)) {
     Write-Output ("RED: 参照会话缺 scoped_after_norm.jsonl: {0}" -f $peer)

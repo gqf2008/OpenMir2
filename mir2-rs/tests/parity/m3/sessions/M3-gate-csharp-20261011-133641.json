@@ -1,0 +1,35 @@
+﻿{
+    "side":  "csharp",
+    "bots":  1,
+    "seed":  42,
+    "started_at":  "2026-10-11T13:36:41.1485960+08:00",
+    "fixed_new_chr":  "(off)",
+    "steps":  {
+
+              },
+    "entry_holders":  [
+                          {
+                              "port":  7000,
+                              "process":  "(无监听)",
+                              "path":  "",
+                              "impl":  "none"
+                          },
+                          {
+                              "port":  7100,
+                              "process":  "(无监听)",
+                              "path":  "",
+                              "impl":  "none"
+                          },
+                          {
+                              "port":  7200,
+                              "process":  "(无监听)",
+                              "path":  "",
+                              "impl":  "none"
+                          }
+                      ],
+    "finished_at":  "2026-10-11T13:36:46.0223557+08:00",
+    "failed":  [
+                   "entry_ports_not_listening"
+               ],
+    "pass":  false
+}
