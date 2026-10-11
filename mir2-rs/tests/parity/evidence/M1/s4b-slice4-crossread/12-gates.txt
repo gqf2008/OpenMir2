@@ -1,0 +1,25 @@
+### M1 S4b ③ 跨实现互读片 — 四门禁（隔离 target E:\tmp\openmir2-dbsrv6k-target, --offline）
+base/head: refs/heads/master ce18a133 (ff) / worktree-m1-dbsrv-6000
+工作区: ce18a1338a8c0c834d36e7beecd98abaae6da867
+
+===== cargo fmt --all -- --check =====
+== cargofmt ==
+fmt exit=0
+
+===== cargo clippy --workspace --all-targets --offline -- -D warnings =====
+== clippy ==
+    Checking db-srv v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\dbsrv6k\mir2-rs\bins\db-srv)
+    Checking game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\dbsrv6k\mir2-rs\bins\game-svr)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.67s
+clippy exit=0
+
+===== cargo run -p msgcodegen --offline -- --check =====
+== msgcodegen ==
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running `E:\tmp\openmir2-dbsrv6k-target\debug\msgcodegen.exe --check`
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+msgcodegen exit=0
+
+===== cargo test --workspace --offline（本片无新 Rust 测试 ⇒ 1 连跑）=====
+汇总: 70 suites / 507 passed / 0 failed / 16 ignored（与 master 合并树 507 一致）
+70

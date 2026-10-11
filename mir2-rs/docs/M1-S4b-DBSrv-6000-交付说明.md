@@ -116,7 +116,7 @@
 | ② 6000 `DataService` | 取档/存档面 | 已合入 master `96d03db5` |
 | ④ `TimedService` | 缓存回写（5 分钟） | 已合入 master `96d03db5` |
 | ④ 5700 `MarketService` | 拍卖行面（监听 + 四个 ident + `IMarketStorage`） | **本片实现**（`market.rs`/`marketdata.rs` + 进程级用例）；C# 侧的不可达分支已逐条登记（whitelist `S4B-5`…`S4B-9`） |
-| ③ 跨实现互读 diff | 小退/掉线/服务关闭三路径，Rust↔C# 双向互读 | **未做**：需真 C# GameSvr/DBSrv 做对端（独占端口窗口）。按 owner `2026-10-11 18:55/23:55` ⇒ **等 M2 验收释放端口窗口**；本轮只做不占端口的实现 + 伪对端进程级用例。 |
+| ③ 跨实现互读 diff | 小退/掉线/服务关闭三路径，Rust↔C# 双向互读 | **部分完成（掉线路径）**："C# GameSvr 经 Rust DBSrv 6000 读档进图"已证；跨实现存档字段级 diff = **0**（`disconnect` 路径，两侧同 C# GameSvr、只换 DBSrv）；Rust↔C# 双向互读已证。`softclose`/`shutdown` 两路径未覆盖（登记）。证据 `tests/parity/evidence/M1/s4b-slice4-crossread/`（2026-10-12 M2 释放窗口后）。 |
 
 > ④ 的 `TimedService` 缓存回写已在片 2 完成（`data::cache_flush_task`，5 分钟周期 + 日志两条与 C# 一致；
 > 10s 重连 LoginSrv / 7s 上报由既有 `loginsrv` 承担）。缓存恒空是 C# 既有行为，已由单测钉住。
@@ -148,3 +148,22 @@
   临时库 `mir2_dbsrv6k_mkt*`（marketdata 单测 + live_market）在用例内 `DROP DATABASE`；`mir2_db` 未被写入（差异：片 2 的 live_data 夹具行已清）。
 - 未改：`E:/MirServer`、表结构、脚本语法、数据格式；未起任何 C# 服务进程；未占用现网端口
   （`live_data`/`live_market` 全部临时端口）。收工端口状态见 `E:\tmp\openmir2-watch\last-dbsrv6k.md`。
+
+---
+
+## 8. 片 4（③ 跨实现互读，2026-10-12）
+
+M2 lane 在卡上写 `comment c365f0af`「窗口已释放」（5000/5100/5500/5600/5700/6000/7000/7100/7200 全空）后，
+本片起真机栈做 ③，**无 Rust 代码改动**（纯证据；四门禁 70/507/0/16 + 604）。
+
+栈固定「**同一 C# GameSvr + 同一 C# LoginSrv/网关**，只换 DBSrv（C# ↔ Rust）」⇒ diff 唯一归因到 DBSrv。
+
+| 判据 | 结果 | 证据（`tests/parity/evidence/M1/s4b-slice4-crossread/`） |
+| --- | --- | --- |
+| C# GameSvr 经 Rust DBSrv **6000** 读档进图 | ✅ BotSrv `in_world=1/1`；Rust 日志 `获取玩家[loadbot0]数据成功` + `保存角色[loadbot0]数据成功` | `01-*`，`05-*` |
+| 存档字段级 diff = 0（`disconnect` 路径，跨实现） | ✅ `scoped_diff.py diff --canonical --fixed-newchr` ⇒ `GREEN: 作用域内 9 张表逐行一致`；两侧各 115 行 / 9 表分布逐表相等 | `02-*`、`03-*`、`04-*`、`09-*` |
+| C# 写 → Rust 读 | ✅ Rust 日志 `获取玩家[m1c0214020]数据成功` + `in_world=1/1` | `07-*` |
+| Rust 写 → C# 读 | ✅ C# DBSrv 栈 `in_world=1/1`（角色 `m1r0218390` 由 Rust 写入） | `05-*`、`08-*` |
+
+未覆盖（登记）：`softclose`（需 GUI 客户端 `Alt+X` 模态确认框）与 `shutdown`（需 bot 在世界同刻优雅停 GameSvr）
+两条退出路径的 DB diff —— 本片窗口内未做，见同目录 `README.md` §5。收工已停栈、端口回落。
