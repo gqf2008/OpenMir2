@@ -1,0 +1,12 @@
+=== POST-WORK port snapshot ===
+3306   LISTEN pid=17032 mysqld D:\mysql\mariadb-10.11.19-winx64\bin\mysqld.exe
+5000   DOWN
+5100   DOWN
+5500   DOWN
+5600   DOWN
+5700   DOWN
+6000   DOWN
+7000   DOWN
+7100   DOWN
+7200   DOWN
+16005  DOWN

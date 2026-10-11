@@ -755,6 +755,13 @@ walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 prin
 - **编排运行时修复**：巡检重拉用的常驻 watcher 两度静默死亡（管道 `Bad file descriptor` + 从会话起的进程随会话/作业对象被杀）⇒ 改为**计划任务** `OpenMir2-LaneTick`（每 10 分钟跑 `supervise.sh`，`schtasks /run` 可立即触发）；
   六条车道已恢复（m2svr / m1load / m3bag / rev / rev2 / rev3）。经验沉淀 `~/.agents/rules/LESSON_从agent会话起的常驻进程随会话结束被杀_长跑编排用计划任务.md`。
 - **下一批的待审**：`m2svr @52d99f0f`（**S3 路由修复**：根因在 game-gate 把 20B 头 `Socket` 写死 0，oracle 是 `_session.SckHandle`）/ `m1load @e587760d`（F-1/F-2 返工；F-3 选角复跑现在可做）/ `m3bag @f6650f05`（第三格 `CM_EAT`）。
+- **M1⑤ 已收口（2026-10-11 23:50，卡 `openmir2-m1-boundary-load-200` 已 `closed`）**：全 Rust 边界链上 **登录 200/200 + 选角 200/200**（`selchr` 修复后复跑；`05-probe` `ident_hist` 含 `525:200`、db-srv `start_play=200`、`Double send SELCHR=0`）、无 panic、端口所有权全 Rust、C# 对照齐、红检 GREEN→RED→GREEN、收工端口回落；reviewer-6 `cabcad50` 独立复现（`sha256sum -c` 26 OK、`git check-ignore` 干净、计数件逐字节一致）后由 owner 合入 `cc6518c6`。
+  ⇒ **M1 里程碑只差 S4b**：`openmir2-m1-dbsrv-6000-face` 的 ② 6000 `DataService` 面 + ④ 5700/`TimedService`（S4a 已合入；③ 跨实现互读等机窗口）——车道 `dbsrv6k` 已复出做这块。
+- **M2 真机 ② 的关键一格已实现**：S3 后半·AOI 同屏下行（`1e81591c`，approve reviewer-5 `8843af44`）⇒ `SM_TURN(10)`+`SM_FEATURECHANGED(41)` 按观察者 `[GateIdx,Socket]` 路由，合入 `db84f98d`（合并树 68/477/0/13 + 604）。⇒ `see-others` 从"上不来"变成"有实现、待真机实拍"；`pickup` 仍等 `m3bag` 第 4 格（P-1 返工中）。
+- **M2 真机验收：owner 独立跑出 ① GREEN + ② 4/7（2026-10-12 00:05–00:07，提交 `23920a93`）**：用 m2-svr 车道起好的整栈（Rust 四入口 + C# `DBSrv`/`LoginSrv` + MariaDB），
+  `check_ports.ps1` ⇒ 5000/7000/7100/7200 全 Rust 且入口对得上；`mir_flow.ps1 -Account mir2test -Password mir2pass … -WalkClicks 3 -AutoPlaySec 20` ⇒ `FLOW_OK`，
+  **进图不黑屏**（比奇省 291,666 + 城墙壁垒 + 完整 HUD，owner 目视核过）、走路、自动挂机攻击、**小退再进不黑屏**（画面里含 658 公告原文）；
+  证据入库 `tools/m2-acceptance/evidence/owner-run-20261012/`（含 README 逐项写清覆盖/未覆盖）。余下：`talk`（驱动缺聊天动作）、`see-others`（需第二角色；AOI 下行的真机判据）、`pickup`（等第 4 格）、③（`10` 口径先定死）、④ 三路径 DB。
 - **M2 入图帧推进到 10/16 并待审**（2026-10-11 19:00）：新 head `56ac670f`（patch `c234ef9c` / status `7da05a24`）接通 **42 `SM_USERNAME`**（`GetShowName()` 1:1 + `strings.rs` 读 `String.conf [String]` + `[Setup] ShowRankLevelName`，金标准 seq21 线上字节锚定）与
   **46 `SM_DAYCHANGING`**（`Bright = M2Share.GameTime` 按**真实本地小时**算，`chrono::Local`，不是假时钟）；`52/752` 如实登记"需 `RecalcAbilitys()`（装备/buff 层未移植）"，**未假造**。
   作者还带源码证据**反驳了 reviewer-1 的 O-1**：`SendAdjustBonus` 用 2 参 `SendSocket(ClientMsg, "")`，空串**提前 return**（`PlayObject.Socket.cs:111-114`）⇒ oracle 在 `Job∉{0,1,2}` 时**什么都不发**，"跳过"本就 1:1（复审要点已写入 `brief-review.md`）。

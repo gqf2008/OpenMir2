@@ -1,0 +1,82 @@
+﻿{
+    "tool":  "m1-acceptance/check_boundary_ports.ps1",
+    "ts":  "2026-10-11T18:36:15.3356683+08:00",
+    "repo":  "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\.claude\\worktrees\\m1load",
+    "chain":  "7000 login-gate / 5500+5600 login-srv / 7100 sel-gate / 5100 db-srv (M1-边界服务移植计划.md §1)",
+    "ports":  [
+                  {
+                      "port":  7000,
+                      "listening":  true,
+                      "pid":  44140,
+                      "name":  "LoginGate.exe",
+                      "path":  "E:\\MirServer\\LoginGate\\LoginGate.exe",
+                      "command_line":  "\"E:\\MirServer\\LoginGate\\LoginGate.exe\"",
+                      "impl":  "csharp",
+                      "entry":  "logingate",
+                      "expected_entry":  "login-gate",
+                      "entry_verdict":  "unknown"
+                  },
+                  {
+                      "port":  5500,
+                      "listening":  true,
+                      "pid":  20208,
+                      "name":  "LoginSrv.exe",
+                      "path":  "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\src\\LoginSrv\\bin\\Release\\LoginSrv.exe",
+                      "command_line":  "\"E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\src\\LoginSrv\\bin\\Release\\LoginSrv.exe\"",
+                      "impl":  "unknown",
+                      "entry":  "loginsrv",
+                      "expected_entry":  "login-srv",
+                      "entry_verdict":  "unknown"
+                  },
+                  {
+                      "port":  7100,
+                      "listening":  true,
+                      "pid":  37808,
+                      "name":  "SelGate.exe",
+                      "path":  "E:\\MirServer\\SelGate\\SelGate.exe",
+                      "command_line":  "\"E:\\MirServer\\SelGate\\SelGate.exe\"",
+                      "impl":  "csharp",
+                      "entry":  "selgate",
+                      "expected_entry":  "sel-gate",
+                      "entry_verdict":  "unknown"
+                  },
+                  {
+                      "port":  5100,
+                      "listening":  true,
+                      "pid":  54468,
+                      "name":  "DBSrv.exe",
+                      "path":  "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\src\\DBSrv\\bin\\Release\\DBSrv.exe",
+                      "command_line":  "\"E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\src\\DBSrv\\bin\\Release\\DBSrv.exe\"",
+                      "impl":  "unknown",
+                      "entry":  "dbsrv",
+                      "expected_entry":  "db-srv",
+                      "entry_verdict":  "unknown"
+                  },
+                  {
+                      "port":  5600,
+                      "listening":  true,
+                      "pid":  20208,
+                      "name":  "LoginSrv.exe",
+                      "path":  "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\src\\LoginSrv\\bin\\Release\\LoginSrv.exe",
+                      "command_line":  "\"E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\src\\LoginSrv\\bin\\Release\\LoginSrv.exe\"",
+                      "impl":  "unknown",
+                      "entry":  "loginsrv",
+                      "expected_entry":  "login-srv",
+                      "entry_verdict":  "unknown"
+                  }
+              ],
+    "not_listening":  [
+
+                      ],
+    "not_rust":  [
+                     7000,
+                     5500,
+                     7100,
+                     5100,
+                     5600
+                 ],
+    "cross_entry":  [
+
+                    ],
+    "pass":  false
+}

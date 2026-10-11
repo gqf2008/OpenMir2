@@ -1,0 +1,57 @@
+{
+    "tier": 200,
+    "hold_sec": 60,
+    "criteria": "login,conn",
+    "load_gate_rc": 0,
+    "bots": {
+        "log": "mir2-rs/tests/parity/m1-boundary-load/evidence/20-botsrv-bots-200.txt",
+        "query_chr": 200,
+        "select_chr": 200,
+        "enter_game": 30,
+        "enter_game_ok": 0
+    },
+    "rust_login_srv": {
+        "log": "mir2-rs/tests/parity/m1-boundary-load/evidence/12-rust-login-srv.out.txt",
+        "login_ok": 200,
+        "select_server": 200
+    },
+    "rust_db_srv": {
+        "log": "mir2-rs/tests/parity/m1-boundary-load/evidence/13-rust-db-srv.out.txt",
+        "query_chr": 200,
+        "query_chr_lines": 1000,
+        "start_play": 200
+    },
+    "rust_sel_gate": {
+        "log": "mir2-rs/tests/parity/m1-boundary-load/evidence/14-rust-sel-gate.out.txt",
+        "connects": 200
+    },
+    "rust_login_gate": {
+        "log": "mir2-rs/tests/parity/m1-boundary-load/evidence/15-rust-login-gate.out.txt",
+        "connects": 200
+    },
+    "panics": {
+        "login_gate": 0,
+        "login_srv": 0,
+        "sel_gate": 0,
+        "db_srv": 0
+    },
+    "patterns": {
+        "bots.query_chr": "查询角色\\.",
+        "bots.select_chr": "选择角色 ",
+        "bots.enter_game": "准备进入游戏",
+        "bots.enter_game_ok": "成功进入游戏",
+        "rust_login_srv.login_ok": "\\[登录\\] 帐号=",
+        "rust_login_srv.select_server": "\\[选服\\] account=",
+        "rust_db_srv.query_chr": "\\[QueryChr\\] 候选",
+        "rust_db_srv.query_chr_lines": "\\[QueryChr\\]",
+        "rust_db_srv.start_play": "玩家获取游戏网关信息",
+        "rust_sel_gate.connects": "开始连接:",
+        "rust_login_gate.connects": "开始连接:",
+        "panics.login_gate": "panicked",
+        "panics.login_srv": "panicked",
+        "panics.sel_gate": "panicked",
+        "panics.db_srv": "panicked"
+    },
+    "missing_logs": [],
+    "count_note": "query_chr=[QueryChr] 候选（每次查询 1 行）；query_chr_lines=[QueryChr] 全部日志行（每次查询共 5 行：候选/GetBy/dataIndex/GetQryChar/debug）"
+}

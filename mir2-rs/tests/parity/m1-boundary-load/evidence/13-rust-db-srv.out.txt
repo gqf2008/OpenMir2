@@ -1,0 +1,1809 @@
+22:45:54.404 [INF] 正在读取基础配置信息...
+22:45:54.421 [INF] 加载IP授权文件列表成功...[2]
+22:45:54.435 [INF] 读取网关配置信息成功.[1]
+22:45:54.537 [INF] [MySQL]数据存储初始化成功.
+22:45:54.538 [INF] 服务已启动成功...
+22:45:54.540 [INF] 欢迎使用翎风系列游戏软件...
+22:45:54.542 [INF] 玩家数据网关服务[0.0.0.0:5100]已启动.等待链接...
+22:45:54.544 [INF] 账号服务器[127.0.0.1:5600]链接成功.
+22:45:55.027 [INF] 角色网关[1](127.0.0.1:51567)已打开...
+22:52:43.664 [DBG] 同步账号服务[loadbot0]同步会话消息... (SessionID=2 ip=0)
+22:52:43.695 [DBG] 同步账号服务[loadbot1]同步会话消息... (SessionID=3 ip=0)
+22:52:43.709 [DBG] 同步账号服务[loadbot2]同步会话消息... (SessionID=4 ip=0)
+22:52:43.710 [DBG] 同步账号服务[loadbot3]同步会话消息... (SessionID=5 ip=0)
+22:52:43.725 [DBG] 同步账号服务[loadbot4]同步会话消息... (SessionID=6 ip=0)
+22:52:43.741 [DBG] 同步账号服务[loadbot5]同步会话消息... (SessionID=7 ip=0)
+22:52:43.789 [DBG] 同步账号服务[loadbot7]同步会话消息... (SessionID=9 ip=0)
+22:52:43.790 [DBG] 同步账号服务[loadbot6]同步会话消息... (SessionID=8 ip=0)
+22:52:43.805 [DBG] 同步账号服务[loadbot8]同步会话消息... (SessionID=10 ip=0)
+22:52:43.852 [DBG] 同步账号服务[loadbot9]同步会话消息... (SessionID=11 ip=0)
+22:52:43.853 [DBG] 同步账号服务[loadbot10]同步会话消息... (SessionID=12 ip=0)
+22:52:43.868 [DBG] 同步账号服务[loadbot11]同步会话消息... (SessionID=13 ip=0)
+22:52:43.884 [DBG] 同步账号服务[loadbot12]同步会话消息... (SessionID=14 ip=0)
+22:52:43.931 [DBG] 同步账号服务[loadbot13]同步会话消息... (SessionID=15 ip=0)
+22:52:43.932 [DBG] 同步账号服务[loadbot14]同步会话消息... (SessionID=16 ip=0)
+22:52:43.945 [DBG] 同步账号服务[loadbot15]同步会话消息... (SessionID=17 ip=0)
+22:52:43.977 [DBG] 同步账号服务[loadbot16]同步会话消息... (SessionID=18 ip=0)
+22:52:44.017 [DBG] 同步账号服务[loadbot17]同步会话消息... (SessionID=19 ip=0)
+22:52:44.017 [DBG] 同步账号服务[loadbot18]同步会话消息... (SessionID=20 ip=0)
+22:52:44.056 [DBG] 同步账号服务[loadbot19]同步会话消息... (SessionID=21 ip=0)
+22:52:44.056 [DBG] 同步账号服务[loadbot20]同步会话消息... (SessionID=22 ip=0)
+22:52:44.071 [DBG] 同步账号服务[loadbot21]同步会话消息... (SessionID=23 ip=0)
+22:52:44.102 [DBG] 同步账号服务[loadbot22]同步会话消息... (SessionID=24 ip=0)
+22:52:44.135 [DBG] 同步账号服务[loadbot23]同步会话消息... (SessionID=25 ip=0)
+22:52:44.135 [DBG] 同步账号服务[loadbot24]同步会话消息... (SessionID=26 ip=0)
+22:52:44.151 [DBG] 同步账号服务[loadbot25]同步会话消息... (SessionID=27 ip=0)
+22:52:44.197 [DBG] 同步账号服务[loadbot26]同步会话消息... (SessionID=28 ip=0)
+22:52:44.214 [DBG] 同步账号服务[loadbot28]同步会话消息... (SessionID=30 ip=0)
+22:52:44.229 [DBG] 同步账号服务[loadbot27]同步会话消息... (SessionID=29 ip=0)
+22:52:44.230 [DBG] 同步账号服务[loadbot29]同步会话消息... (SessionID=31 ip=0)
+22:52:44.245 [DBG] 同步账号服务[loadbot30]同步会话消息... (SessionID=32 ip=0)
+22:52:44.287 [DBG] 同步账号服务[loadbot31]同步会话消息... (SessionID=33 ip=0)
+22:52:44.292 [DBG] 同步账号服务[loadbot32]同步会话消息... (SessionID=34 ip=0)
+22:52:44.308 [DBG] 同步账号服务[loadbot33]同步会话消息... (SessionID=35 ip=0)
+22:52:44.387 [DBG] 同步账号服务[loadbot34]同步会话消息... (SessionID=36 ip=0)
+22:52:44.387 [DBG] 同步账号服务[loadbot35]同步会话消息... (SessionID=37 ip=0)
+22:52:44.423 [DBG] 同步账号服务[loadbot36]同步会话消息... (SessionID=38 ip=0)
+22:52:44.423 [DBG] 同步账号服务[loadbot37]同步会话消息... (SessionID=39 ip=0)
+22:52:44.423 [DBG] 同步账号服务[loadbot38]同步会话消息... (SessionID=40 ip=0)
+22:52:44.433 [DBG] 同步账号服务[loadbot39]同步会话消息... (SessionID=41 ip=0)
+22:52:44.488 [DBG] 同步账号服务[loadbot40]同步会话消息... (SessionID=42 ip=0)
+22:52:44.488 [DBG] 同步账号服务[loadbot41]同步会话消息... (SessionID=43 ip=0)
+22:52:44.497 [DBG] 同步账号服务[loadbot42]同步会话消息... (SessionID=44 ip=0)
+22:52:44.553 [DBG] 同步账号服务[loadbot44]同步会话消息... (SessionID=46 ip=0)
+22:52:44.553 [DBG] 同步账号服务[loadbot43]同步会话消息... (SessionID=45 ip=0)
+22:52:44.559 [DBG] 同步账号服务[loadbot45]同步会话消息... (SessionID=47 ip=0)
+22:52:44.576 [DBG] 同步账号服务[loadbot46]同步会话消息... (SessionID=48 ip=0)
+22:52:44.627 [DBG] 同步账号服务[loadbot47]同步会话消息... (SessionID=49 ip=0)
+22:52:44.628 [DBG] 同步账号服务[loadbot48]同步会话消息... (SessionID=50 ip=0)
+22:52:44.638 [DBG] 同步账号服务[loadbot49]同步会话消息... (SessionID=51 ip=0)
+22:52:44.654 [DBG] 同步账号服务[loadbot50]同步会话消息... (SessionID=52 ip=0)
+22:52:44.698 [DBG] 同步账号服务[loadbot51]同步会话消息... (SessionID=53 ip=0)
+22:52:44.701 [DBG] 同步账号服务[loadbot52]同步会话消息... (SessionID=54 ip=0)
+22:52:44.716 [DBG] 同步账号服务[loadbot53]同步会话消息... (SessionID=55 ip=0)
+22:52:44.732 [DBG] 同步账号服务[loadbot54]同步会话消息... (SessionID=56 ip=0)
+22:52:44.777 [DBG] 同步账号服务[loadbot55]同步会话消息... (SessionID=57 ip=0)
+22:52:44.795 [DBG] 同步账号服务[loadbot57]同步会话消息... (SessionID=59 ip=0)
+22:52:44.810 [DBG] 同步账号服务[loadbot56]同步会话消息... (SessionID=58 ip=0)
+22:52:44.859 [DBG] 同步账号服务[loadbot58]同步会话消息... (SessionID=60 ip=0)
+22:52:44.860 [DBG] 同步账号服务[loadbot59]同步会话消息... (SessionID=61 ip=0)
+22:52:44.873 [DBG] 同步账号服务[loadbot60]同步会话消息... (SessionID=62 ip=0)
+22:52:44.874 [DBG] 同步账号服务[loadbot61]同步会话消息... (SessionID=63 ip=0)
+22:52:44.889 [DBG] 同步账号服务[loadbot62]同步会话消息... (SessionID=64 ip=0)
+22:52:44.939 [DBG] 同步账号服务[loadbot63]同步会话消息... (SessionID=65 ip=0)
+22:52:44.939 [DBG] 同步账号服务[loadbot64]同步会话消息... (SessionID=66 ip=0)
+22:52:44.966 [DBG] 同步账号服务[loadbot66]同步会话消息... (SessionID=68 ip=0)
+22:52:44.967 [DBG] 同步账号服务[loadbot65]同步会话消息... (SessionID=67 ip=0)
+22:52:45.022 [DBG] 同步账号服务[loadbot67]同步会话消息... (SessionID=69 ip=0)
+22:52:45.045 [DBG] 同步账号服务[loadbot68]同步会话消息... (SessionID=70 ip=0)
+22:52:45.061 [DBG] 同步账号服务[loadbot70]同步会话消息... (SessionID=72 ip=0)
+22:52:45.077 [DBG] 同步账号服务[loadbot69]同步会话消息... (SessionID=71 ip=0)
+22:52:45.105 [DBG] 同步账号服务[loadbot71]同步会话消息... (SessionID=73 ip=0)
+22:52:45.106 [DBG] 同步账号服务[loadbot72]同步会话消息... (SessionID=74 ip=0)
+22:52:45.125 [DBG] 同步账号服务[loadbot73]同步会话消息... (SessionID=75 ip=0)
+22:52:45.141 [DBG] 同步账号服务[loadbot74]同步会话消息... (SessionID=76 ip=0)
+22:52:45.157 [DBG] 同步账号服务[loadbot75]同步会话消息... (SessionID=77 ip=0)
+22:52:45.200 [DBG] 同步账号服务[loadbot76]同步会话消息... (SessionID=78 ip=0)
+22:52:45.200 [DBG] 同步账号服务[loadbot77]同步会话消息... (SessionID=79 ip=0)
+22:52:45.221 [DBG] 同步账号服务[loadbot78]同步会话消息... (SessionID=80 ip=0)
+22:52:45.251 [DBG] 同步账号服务[loadbot79]同步会话消息... (SessionID=81 ip=0)
+22:52:45.252 [DBG] 同步账号服务[loadbot80]同步会话消息... (SessionID=82 ip=0)
+22:52:45.295 [DBG] 同步账号服务[loadbot81]同步会话消息... (SessionID=83 ip=0)
+22:52:45.315 [DBG] 同步账号服务[loadbot82]同步会话消息... (SessionID=84 ip=0)
+22:52:45.330 [DBG] 同步账号服务[loadbot83]同步会话消息... (SessionID=85 ip=0)
+22:52:45.346 [DBG] 同步账号服务[loadbot84]同步会话消息... (SessionID=86 ip=0)
+22:52:45.380 [DBG] 同步账号服务[loadbot85]同步会话消息... (SessionID=87 ip=0)
+22:52:45.394 [DBG] 同步账号服务[loadbot86]同步会话消息... (SessionID=88 ip=0)
+22:52:45.394 [DBG] 同步账号服务[loadbot87]同步会话消息... (SessionID=89 ip=0)
+22:52:45.441 [DBG] 同步账号服务[loadbot89]同步会话消息... (SessionID=91 ip=0)
+22:52:45.455 [DBG] 同步账号服务[loadbot88]同步会话消息... (SessionID=90 ip=0)
+22:52:45.481 [DBG] 同步账号服务[loadbot90]同步会话消息... (SessionID=92 ip=0)
+22:52:45.481 [DBG] 同步账号服务[loadbot91]同步会话消息... (SessionID=93 ip=0)
+22:52:45.502 [DBG] 同步账号服务[loadbot92]同步会话消息... (SessionID=94 ip=0)
+22:52:45.517 [DBG] 同步账号服务[loadbot93]同步会话消息... (SessionID=95 ip=0)
+22:52:45.533 [DBG] 同步账号服务[loadbot94]同步会话消息... (SessionID=96 ip=0)
+22:52:45.581 [DBG] 同步账号服务[loadbot95]同步会话消息... (SessionID=97 ip=0)
+22:52:45.582 [DBG] 同步账号服务[loadbot96]同步会话消息... (SessionID=98 ip=0)
+22:52:45.596 [DBG] 同步账号服务[loadbot97]同步会话消息... (SessionID=99 ip=0)
+22:52:45.612 [DBG] 同步账号服务[loadbot98]同步会话消息... (SessionID=100 ip=0)
+22:52:45.659 [DBG] 同步账号服务[loadbot99]同步会话消息... (SessionID=101 ip=0)
+22:52:45.673 [DBG] 同步账号服务[loadbot100]同步会话消息... (SessionID=102 ip=0)
+22:52:45.688 [DBG] 同步账号服务[loadbot101]同步会话消息... (SessionID=103 ip=0)
+22:52:45.721 [DBG] 同步账号服务[loadbot102]同步会话消息... (SessionID=104 ip=0)
+22:52:45.736 [DBG] 同步账号服务[loadbot103]同步会话消息... (SessionID=105 ip=0)
+22:52:45.751 [DBG] 同步账号服务[loadbot104]同步会话消息... (SessionID=106 ip=0)
+22:52:45.751 [DBG] 同步账号服务[loadbot105]同步会话消息... (SessionID=107 ip=0)
+22:52:45.800 [DBG] 同步账号服务[loadbot106]同步会话消息... (SessionID=108 ip=0)
+22:52:45.813 [DBG] 同步账号服务[loadbot107]同步会话消息... (SessionID=109 ip=0)
+22:52:45.814 [DBG] 同步账号服务[loadbot108]同步会话消息... (SessionID=110 ip=0)
+22:52:45.855 [DBG] 同步账号服务[loadbot109]同步会话消息... (SessionID=111 ip=0)
+22:52:45.894 [DBG] 同步账号服务[loadbot112]同步会话消息... (SessionID=114 ip=0)
+22:52:45.895 [DBG] 同步账号服务[loadbot111]同步会话消息... (SessionID=113 ip=0)
+22:52:45.895 [DBG] 同步账号服务[loadbot110]同步会话消息... (SessionID=112 ip=0)
+22:52:45.925 [DBG] 同步账号服务[loadbot113]同步会话消息... (SessionID=115 ip=0)
+22:52:45.941 [DBG] 同步账号服务[loadbot114]同步会话消息... (SessionID=116 ip=0)
+22:52:45.989 [DBG] 同步账号服务[loadbot116]同步会话消息... (SessionID=118 ip=0)
+22:52:46.003 [DBG] 同步账号服务[loadbot115]同步会话消息... (SessionID=117 ip=0)
+22:52:46.003 [DBG] 同步账号服务[loadbot117]同步会话消息... (SessionID=119 ip=0)
+22:52:46.019 [DBG] 同步账号服务[loadbot118]同步会话消息... (SessionID=120 ip=0)
+22:52:46.057 [DBG] 同步账号服务[loadbot119]同步会话消息... (SessionID=121 ip=0)
+22:52:46.066 [DBG] 同步账号服务[loadbot120]同步会话消息... (SessionID=122 ip=0)
+22:52:46.082 [DBG] 同步账号服务[loadbot121]同步会话消息... (SessionID=123 ip=0)
+22:52:46.098 [DBG] 同步账号服务[loadbot122]同步会话消息... (SessionID=124 ip=0)
+22:52:46.145 [DBG] 同步账号服务[loadbot124]同步会话消息... (SessionID=126 ip=0)
+22:52:46.146 [DBG] 同步账号服务[loadbot123]同步会话消息... (SessionID=125 ip=0)
+22:52:46.161 [DBG] 同步账号服务[loadbot125]同步会话消息... (SessionID=127 ip=0)
+22:52:46.206 [DBG] 同步账号服务[loadbot126]同步会话消息... (SessionID=128 ip=0)
+22:52:46.208 [DBG] 同步账号服务[loadbot127]同步会话消息... (SessionID=129 ip=0)
+22:52:46.241 [DBG] 同步账号服务[loadbot129]同步会话消息... (SessionID=131 ip=0)
+22:52:46.287 [DBG] 同步账号服务[loadbot128]同步会话消息... (SessionID=130 ip=0)
+22:52:46.287 [DBG] 同步账号服务[loadbot130]同步会话消息... (SessionID=132 ip=0)
+22:52:46.304 [DBG] 同步账号服务[loadbot131]同步会话消息... (SessionID=133 ip=0)
+22:52:46.305 [DBG] 同步账号服务[loadbot132]同步会话消息... (SessionID=134 ip=0)
+22:52:46.320 [DBG] 同步账号服务[loadbot133]同步会话消息... (SessionID=135 ip=0)
+22:52:46.362 [DBG] 同步账号服务[loadbot134]同步会话消息... (SessionID=136 ip=0)
+22:52:46.368 [DBG] 同步账号服务[loadbot135]同步会话消息... (SessionID=137 ip=0)
+22:52:46.384 [DBG] 同步账号服务[loadbot136]同步会话消息... (SessionID=138 ip=0)
+22:52:46.399 [DBG] 同步账号服务[loadbot137]同步会话消息... (SessionID=139 ip=0)
+22:52:46.460 [DBG] 同步账号服务[loadbot138]同步会话消息... (SessionID=140 ip=0)
+22:52:46.461 [DBG] 同步账号服务[loadbot139]同步会话消息... (SessionID=141 ip=0)
+22:52:46.461 [DBG] 同步账号服务[loadbot140]同步会话消息... (SessionID=142 ip=0)
+22:52:46.492 [DBG] 同步账号服务[loadbot141]同步会话消息... (SessionID=143 ip=0)
+22:52:46.509 [DBG] 同步账号服务[loadbot142]同步会话消息... (SessionID=144 ip=0)
+22:52:46.553 [DBG] 同步账号服务[loadbot143]同步会话消息... (SessionID=145 ip=0)
+22:52:46.555 [DBG] 同步账号服务[loadbot144]同步会话消息... (SessionID=146 ip=0)
+22:52:46.570 [DBG] 同步账号服务[loadbot145]同步会话消息... (SessionID=147 ip=0)
+22:52:46.587 [DBG] 同步账号服务[loadbot146]同步会话消息... (SessionID=148 ip=0)
+22:52:46.636 [DBG] 同步账号服务[loadbot147]同步会话消息... (SessionID=149 ip=0)
+22:52:46.636 [DBG] 同步账号服务[loadbot148]同步会话消息... (SessionID=150 ip=0)
+22:52:46.650 [DBG] 同步账号服务[loadbot149]同步会话消息... (SessionID=151 ip=0)
+22:52:46.698 [DBG] 同步账号服务[loadbot152]同步会话消息... (SessionID=154 ip=0)
+22:52:46.712 [DBG] 同步账号服务[loadbot150]同步会话消息... (SessionID=152 ip=0)
+22:52:46.741 [DBG] 同步账号服务[loadbot151]同步会话消息... (SessionID=153 ip=0)
+22:52:46.741 [DBG] 同步账号服务[loadbot153]同步会话消息... (SessionID=155 ip=0)
+22:52:46.774 [DBG] 同步账号服务[loadbot155]同步会话消息... (SessionID=157 ip=0)
+22:52:46.775 [DBG] 同步账号服务[loadbot154]同步会话消息... (SessionID=156 ip=0)
+22:52:46.790 [DBG] 同步账号服务[loadbot156]同步会话消息... (SessionID=158 ip=0)
+22:52:46.831 [DBG] 同步账号服务[loadbot157]同步会话消息... (SessionID=159 ip=0)
+22:52:46.837 [DBG] 同步账号服务[loadbot158]同步会话消息... (SessionID=160 ip=0)
+22:52:46.853 [DBG] 同步账号服务[loadbot159]同步会话消息... (SessionID=161 ip=0)
+22:52:46.870 [DBG] 同步账号服务[loadbot160]同步会话消息... (SessionID=162 ip=0)
+22:52:46.902 [DBG] 同步账号服务[loadbot161]同步会话消息... (SessionID=163 ip=0)
+22:52:46.934 [DBG] 同步账号服务[loadbot163]同步会话消息... (SessionID=165 ip=0)
+22:52:46.934 [DBG] 同步账号服务[loadbot162]同步会话消息... (SessionID=164 ip=0)
+22:52:46.975 [DBG] 同步账号服务[loadbot164]同步会话消息... (SessionID=166 ip=0)
+22:52:46.976 [DBG] 同步账号服务[loadbot165]同步会话消息... (SessionID=167 ip=0)
+22:52:46.996 [DBG] 同步账号服务[loadbot166]同步会话消息... (SessionID=168 ip=0)
+22:52:47.011 [DBG] 同步账号服务[loadbot167]同步会话消息... (SessionID=169 ip=0)
+22:52:47.049 [DBG] 同步账号服务[loadbot168]同步会话消息... (SessionID=170 ip=0)
+22:52:47.049 [DBG] 同步账号服务[loadbot169]同步会话消息... (SessionID=171 ip=0)
+22:52:47.121 [DBG] 同步账号服务[loadbot170]同步会话消息... (SessionID=172 ip=0)
+22:52:47.121 [DBG] 同步账号服务[loadbot171]同步会话消息... (SessionID=173 ip=0)
+22:52:47.122 [DBG] 同步账号服务[loadbot172]同步会话消息... (SessionID=174 ip=0)
+22:52:47.138 [DBG] 同步账号服务[loadbot173]同步会话消息... (SessionID=175 ip=0)
+22:52:47.154 [DBG] 同步账号服务[loadbot174]同步会话消息... (SessionID=176 ip=0)
+22:52:47.195 [DBG] 同步账号服务[loadbot175]同步会话消息... (SessionID=177 ip=0)
+22:52:47.196 [DBG] 同步账号服务[loadbot176]同步会话消息... (SessionID=178 ip=0)
+22:52:47.200 [DBG] 同步账号服务[loadbot177]同步会话消息... (SessionID=179 ip=0)
+22:52:47.232 [DBG] 同步账号服务[loadbot178]同步会话消息... (SessionID=180 ip=0)
+22:52:47.269 [DBG] 同步账号服务[loadbot180]同步会话消息... (SessionID=182 ip=0)
+22:52:47.294 [DBG] 同步账号服务[loadbot179]同步会话消息... (SessionID=181 ip=0)
+22:52:47.310 [DBG] 同步账号服务[loadbot181]同步会话消息... (SessionID=183 ip=0)
+22:52:47.310 [DBG] 同步账号服务[loadbot182]同步会话消息... (SessionID=184 ip=0)
+22:52:47.343 [DBG] 同步账号服务[loadbot183]同步会话消息... (SessionID=185 ip=0)
+22:52:47.343 [DBG] 同步账号服务[loadbot184]同步会话消息... (SessionID=186 ip=0)
+22:52:47.358 [DBG] 同步账号服务[loadbot185]同步会话消息... (SessionID=187 ip=0)
+22:52:47.416 [DBG] 同步账号服务[loadbot186]同步会话消息... (SessionID=188 ip=0)
+22:52:47.417 [DBG] 同步账号服务[loadbot187]同步会话消息... (SessionID=189 ip=0)
+22:52:47.438 [DBG] 同步账号服务[loadbot188]同步会话消息... (SessionID=190 ip=0)
+22:52:47.453 [DBG] 同步账号服务[loadbot189]同步会话消息... (SessionID=191 ip=0)
+22:52:47.493 [DBG] 同步账号服务[loadbot190]同步会话消息... (SessionID=192 ip=0)
+22:52:47.500 [DBG] 同步账号服务[loadbot192]同步会话消息... (SessionID=194 ip=0)
+22:52:47.516 [DBG] 同步账号服务[loadbot191]同步会话消息... (SessionID=193 ip=0)
+22:52:47.533 [DBG] 同步账号服务[loadbot193]同步会话消息... (SessionID=195 ip=0)
+22:52:47.581 [DBG] 同步账号服务[loadbot194]同步会话消息... (SessionID=196 ip=0)
+22:52:47.594 [DBG] 同步账号服务[loadbot195]同步会话消息... (SessionID=197 ip=0)
+22:52:47.594 [DBG] 同步账号服务[loadbot196]同步会话消息... (SessionID=198 ip=0)
+22:52:47.626 [DBG] 同步账号服务[loadbot197]同步会话消息... (SessionID=199 ip=0)
+22:52:47.657 [DBG] 同步账号服务[loadbot198]同步会话消息... (SessionID=200 ip=0)
+22:52:47.671 [DBG] 同步账号服务[loadbot199]同步会话消息... (SessionID=201 ip=0)
+22:52:51.683 [DBG] 新会话 socket_id=1 user_ip= gate_ip= gateId=0 tick=0
+22:52:51.683 [INF] [QueryChr] 候选 account=loadbot0 i=0 name=[loadbot0] quickIndex=12240
+22:52:51.685 [INF] [QueryChr]   GetBy -> result=True
+22:52:51.685 [INF] [QueryChr]   dataIndex=12237 nChrCount=0
+22:52:51.686 [INF] [QueryChr]   GetQryChar -> True
+22:52:51.686 [DBG] [QueryChr]:loadbot0 nChrCount=1
+22:52:51.702 [DBG] 新会话 socket_id=2 user_ip= gate_ip= gateId=0 tick=19
+22:52:51.702 [INF] [QueryChr] 候选 account=loadbot1 i=0 name=[lb1a] quickIndex=12238
+22:52:51.703 [INF] [QueryChr]   GetBy -> result=True
+22:52:51.703 [INF] [QueryChr]   dataIndex=12235 nChrCount=0
+22:52:51.703 [INF] [QueryChr]   GetQryChar -> True
+22:52:51.704 [DBG] [QueryChr]:loadbot1 nChrCount=1
+22:52:51.732 [DBG] 新会话 socket_id=3 user_ip= gate_ip= gateId=0 tick=48
+22:52:51.734 [INF] [QueryChr] 候选 account=loadbot3 i=0 name=[loadbot3] quickIndex=12242
+22:52:51.736 [DBG] 新会话 socket_id=4 user_ip= gate_ip= gateId=0 tick=53
+22:52:51.747 [DBG] 新会话 socket_id=5 user_ip= gate_ip= gateId=0 tick=64
+22:52:51.781 [INF] [QueryChr]   GetBy -> result=True
+22:52:51.795 [INF] [QueryChr]   dataIndex=12239 nChrCount=0
+22:52:51.796 [DBG] 新会话 socket_id=6 user_ip= gate_ip= gateId=0 tick=113
+22:52:51.796 [INF] [QueryChr]   GetQryChar -> True
+22:52:51.812 [DBG] [QueryChr]:loadbot3 nChrCount=1
+22:52:51.812 [DBG] 新会话 socket_id=7 user_ip= gate_ip= gateId=0 tick=128
+22:52:51.872 [DBG] 新会话 socket_id=8 user_ip= gate_ip= gateId=0 tick=189
+22:52:51.874 [INF] [QueryChr] 候选 account=loadbot2 i=0 name=[loadbot2] quickIndex=12241
+22:52:51.874 [DBG] 新会话 socket_id=9 user_ip= gate_ip= gateId=0 tick=191
+22:52:51.889 [INF] [QueryChr]   GetBy -> result=True
+22:52:51.905 [DBG] 新会话 socket_id=10 user_ip= gate_ip= gateId=0 tick=221
+22:52:51.921 [INF] [QueryChr]   dataIndex=12238 nChrCount=0
+22:52:51.967 [DBG] 新会话 socket_id=11 user_ip= gate_ip= gateId=0 tick=283
+22:52:51.967 [DBG] 新会话 socket_id=12 user_ip= gate_ip= gateId=0 tick=283
+22:52:51.967 [INF] [QueryChr]   GetQryChar -> True
+22:52:51.983 [DBG] [QueryChr]:loadbot2 nChrCount=1
+22:52:51.983 [DBG] 新会话 socket_id=13 user_ip= gate_ip= gateId=0 tick=299
+22:52:51.999 [DBG] 新会话 socket_id=14 user_ip= gate_ip= gateId=0 tick=315
+22:52:51.999 [DBG] 新会话 socket_id=15 user_ip= gate_ip= gateId=0 tick=315
+22:52:51.999 [DBG] 新会话 socket_id=16 user_ip= gate_ip= gateId=0 tick=316
+22:52:51.999 [INF] [QueryChr] 候选 account=loadbot4 i=0 name=[loadbot4] quickIndex=12243
+22:52:51.999 [DBG] 新会话 socket_id=17 user_ip= gate_ip= gateId=0 tick=316
+22:52:52.015 [INF] [QueryChr]   GetBy -> result=True
+22:52:52.046 [INF] [QueryChr]   dataIndex=12240 nChrCount=0
+22:52:52.046 [DBG] 新会话 socket_id=18 user_ip= gate_ip= gateId=0 tick=363
+22:52:52.062 [DBG] 新会话 socket_id=19 user_ip= gate_ip= gateId=0 tick=379
+22:52:52.063 [INF] [QueryChr]   GetQryChar -> True
+22:52:52.093 [DBG] [QueryChr]:loadbot4 nChrCount=1
+22:52:52.093 [DBG] 新会话 socket_id=20 user_ip= gate_ip= gateId=0 tick=410
+22:52:52.140 [DBG] 新会话 socket_id=21 user_ip= gate_ip= gateId=0 tick=457
+22:52:52.156 [DBG] 新会话 socket_id=22 user_ip= gate_ip= gateId=0 tick=473
+22:52:52.156 [INF] [QueryChr] 候选 account=loadbot5 i=0 name=[loadbot5] quickIndex=12244
+22:52:52.172 [DBG] 新会话 socket_id=23 user_ip= gate_ip= gateId=0 tick=488
+22:52:52.221 [DBG] 新会话 socket_id=24 user_ip= gate_ip= gateId=0 tick=537
+22:52:52.221 [DBG] 新会话 socket_id=25 user_ip= gate_ip= gateId=0 tick=538
+22:52:52.221 [DBG] 新会话 socket_id=26 user_ip= gate_ip= gateId=0 tick=538
+22:52:52.221 [INF] [QueryChr]   GetBy -> result=True
+22:52:52.234 [INF] [QueryChr]   dataIndex=12241 nChrCount=0
+22:52:52.234 [DBG] 新会话 socket_id=27 user_ip= gate_ip= gateId=0 tick=550
+22:52:52.235 [INF] [QueryChr]   GetQryChar -> True
+22:52:52.265 [DBG] 新会话 socket_id=28 user_ip= gate_ip= gateId=0 tick=581
+22:52:52.316 [DBG] 新会话 socket_id=29 user_ip= gate_ip= gateId=0 tick=633
+22:52:52.316 [DBG] [QueryChr]:loadbot5 nChrCount=1
+22:52:52.317 [DBG] 新会话 socket_id=30 user_ip= gate_ip= gateId=0 tick=633
+22:52:52.329 [DBG] 新会话 socket_id=31 user_ip= gate_ip= gateId=0 tick=645
+22:52:52.329 [DBG] 新会话 socket_id=32 user_ip= gate_ip= gateId=0 tick=645
+22:52:52.329 [INF] [QueryChr] 候选 account=loadbot7 i=0 name=[loadbot7] quickIndex=12246
+22:52:52.329 [DBG] 新会话 socket_id=33 user_ip= gate_ip= gateId=0 tick=646
+22:52:52.345 [DBG] 新会话 socket_id=34 user_ip= gate_ip= gateId=0 tick=661
+22:52:52.345 [INF] [QueryChr]   GetBy -> result=True
+22:52:52.345 [INF] [QueryChr]   dataIndex=12243 nChrCount=0
+22:52:52.346 [INF] [QueryChr]   GetQryChar -> True
+22:52:52.346 [DBG] [QueryChr]:loadbot7 nChrCount=1
+22:52:52.346 [INF] [QueryChr] 候选 account=loadbot6 i=0 name=[loadbot6] quickIndex=12245
+22:52:52.347 [INF] [QueryChr]   GetBy -> result=True
+22:52:52.347 [INF] [QueryChr]   dataIndex=12242 nChrCount=0
+22:52:52.347 [INF] [QueryChr]   GetQryChar -> True
+22:52:52.347 [DBG] [QueryChr]:loadbot6 nChrCount=1
+22:52:52.347 [INF] [QueryChr] 候选 account=loadbot8 i=0 name=[loadbot8] quickIndex=12247
+22:52:52.348 [INF] [QueryChr]   GetBy -> result=True
+22:52:52.348 [INF] [QueryChr]   dataIndex=12244 nChrCount=0
+22:52:52.348 [INF] [QueryChr]   GetQryChar -> True
+22:52:52.348 [DBG] [QueryChr]:loadbot8 nChrCount=1
+22:52:52.349 [INF] [QueryChr] 候选 account=loadbot10 i=0 name=[loadbot10] quickIndex=12249
+22:52:52.349 [INF] [QueryChr]   GetBy -> result=True
+22:52:52.349 [INF] [QueryChr]   dataIndex=12246 nChrCount=0
+22:52:52.349 [INF] [QueryChr]   GetQryChar -> True
+22:52:52.350 [DBG] [QueryChr]:loadbot10 nChrCount=1
+22:52:52.350 [INF] [QueryChr] 候选 account=loadbot9 i=0 name=[loadbot9] quickIndex=12248
+22:52:52.350 [INF] [QueryChr]   GetBy -> result=True
+22:52:52.350 [INF] [QueryChr]   dataIndex=12245 nChrCount=0
+22:52:52.351 [INF] [QueryChr]   GetQryChar -> True
+22:52:52.351 [DBG] [QueryChr]:loadbot9 nChrCount=1
+22:52:52.351 [INF] [QueryChr] 候选 account=loadbot11 i=0 name=[loadbot11] quickIndex=12250
+22:52:52.352 [INF] [QueryChr]   GetBy -> result=True
+22:52:52.352 [INF] [QueryChr]   dataIndex=12247 nChrCount=0
+22:52:52.352 [INF] [QueryChr]   GetQryChar -> True
+22:52:52.352 [DBG] [QueryChr]:loadbot11 nChrCount=1
+22:52:52.353 [INF] [QueryChr] 候选 account=loadbot12 i=0 name=[loadbot12] quickIndex=12251
+22:52:52.353 [INF] [QueryChr]   GetBy -> result=True
+22:52:52.353 [INF] [QueryChr]   dataIndex=12248 nChrCount=0
+22:52:52.353 [INF] [QueryChr]   GetQryChar -> True
+22:52:52.354 [DBG] [QueryChr]:loadbot12 nChrCount=1
+22:52:52.354 [INF] [QueryChr] 候选 account=loadbot13 i=0 name=[loadbot13] quickIndex=12252
+22:52:52.354 [INF] [QueryChr]   GetBy -> result=True
+22:52:52.354 [INF] [QueryChr]   dataIndex=12249 nChrCount=0
+22:52:52.355 [INF] [QueryChr]   GetQryChar -> True
+22:52:52.355 [DBG] [QueryChr]:loadbot13 nChrCount=1
+22:52:52.355 [INF] [QueryChr] 候选 account=loadbot14 i=0 name=[loadbot14] quickIndex=12253
+22:52:52.355 [INF] [QueryChr]   GetBy -> result=True
+22:52:52.355 [INF] [QueryChr]   dataIndex=12250 nChrCount=0
+22:52:52.356 [INF] [QueryChr]   GetQryChar -> True
+22:52:52.356 [DBG] [QueryChr]:loadbot14 nChrCount=1
+22:52:52.356 [INF] [QueryChr] 候选 account=loadbot15 i=0 name=[loadbot15] quickIndex=12254
+22:52:52.356 [INF] [QueryChr]   GetBy -> result=True
+22:52:52.357 [INF] [QueryChr]   dataIndex=12251 nChrCount=0
+22:52:52.357 [INF] [QueryChr]   GetQryChar -> True
+22:52:52.357 [DBG] [QueryChr]:loadbot15 nChrCount=1
+22:52:52.357 [INF] [QueryChr] 候选 account=loadbot16 i=0 name=[loadbot16] quickIndex=12255
+22:52:52.358 [INF] [QueryChr]   GetBy -> result=True
+22:52:52.358 [INF] [QueryChr]   dataIndex=12252 nChrCount=0
+22:52:52.358 [INF] [QueryChr]   GetQryChar -> True
+22:52:52.358 [DBG] [QueryChr]:loadbot16 nChrCount=1
+22:52:52.358 [INF] [QueryChr] 候选 account=loadbot18 i=0 name=[loadbot18] quickIndex=12257
+22:52:52.359 [INF] [QueryChr]   GetBy -> result=True
+22:52:52.359 [INF] [QueryChr]   dataIndex=12254 nChrCount=0
+22:52:52.359 [INF] [QueryChr]   GetQryChar -> True
+22:52:52.359 [DBG] [QueryChr]:loadbot18 nChrCount=1
+22:52:52.360 [INF] [QueryChr] 候选 account=loadbot17 i=0 name=[loadbot17] quickIndex=12256
+22:52:52.360 [INF] [QueryChr]   GetBy -> result=True
+22:52:52.360 [INF] [QueryChr]   dataIndex=12253 nChrCount=0
+22:52:52.360 [INF] [QueryChr]   GetQryChar -> True
+22:52:52.361 [DBG] [QueryChr]:loadbot17 nChrCount=1
+22:52:52.361 [INF] [QueryChr] 候选 account=loadbot19 i=0 name=[loadbot19] quickIndex=12258
+22:52:52.361 [INF] [QueryChr]   GetBy -> result=True
+22:52:52.361 [INF] [QueryChr]   dataIndex=12255 nChrCount=0
+22:52:52.389 [INF] [QueryChr]   GetQryChar -> True
+22:52:52.389 [DBG] [QueryChr]:loadbot19 nChrCount=1
+22:52:52.389 [INF] [QueryChr] 候选 account=loadbot20 i=0 name=[loadbot20] quickIndex=12259
+22:52:52.390 [INF] [QueryChr]   GetBy -> result=True
+22:52:52.390 [INF] [QueryChr]   dataIndex=12256 nChrCount=0
+22:52:52.391 [INF] [QueryChr]   GetQryChar -> True
+22:52:52.391 [DBG] [QueryChr]:loadbot20 nChrCount=1
+22:52:52.391 [INF] [QueryChr] 候选 account=loadbot21 i=0 name=[loadbot21] quickIndex=12260
+22:52:52.391 [INF] [QueryChr]   GetBy -> result=True
+22:52:52.391 [INF] [QueryChr]   dataIndex=12257 nChrCount=0
+22:52:52.392 [INF] [QueryChr]   GetQryChar -> True
+22:52:52.392 [DBG] [QueryChr]:loadbot21 nChrCount=1
+22:52:52.392 [INF] [QueryChr] 候选 account=loadbot22 i=0 name=[loadbot22] quickIndex=12261
+22:52:52.393 [DBG] 新会话 socket_id=35 user_ip= gate_ip= gateId=0 tick=709
+22:52:52.393 [INF] [QueryChr]   GetBy -> result=True
+22:52:52.393 [INF] [QueryChr]   dataIndex=12258 nChrCount=0
+22:52:52.393 [INF] [QueryChr]   GetQryChar -> True
+22:52:52.394 [DBG] [QueryChr]:loadbot22 nChrCount=1
+22:52:52.394 [INF] [QueryChr] 候选 account=loadbot24 i=0 name=[loadbot24] quickIndex=12263
+22:52:52.394 [INF] [QueryChr]   GetBy -> result=True
+22:52:52.394 [INF] [QueryChr]   dataIndex=12260 nChrCount=0
+22:52:52.395 [INF] [QueryChr]   GetQryChar -> True
+22:52:52.395 [DBG] [QueryChr]:loadbot24 nChrCount=1
+22:52:52.395 [INF] [QueryChr] 候选 account=loadbot23 i=0 name=[loadbot23] quickIndex=12262
+22:52:52.395 [INF] [QueryChr]   GetBy -> result=True
+22:52:52.395 [INF] [QueryChr]   dataIndex=12259 nChrCount=0
+22:52:52.396 [INF] [QueryChr]   GetQryChar -> True
+22:52:52.396 [DBG] [QueryChr]:loadbot23 nChrCount=1
+22:52:52.396 [INF] [QueryChr] 候选 account=loadbot25 i=0 name=[loadbot25] quickIndex=12264
+22:52:52.397 [INF] [QueryChr]   GetBy -> result=True
+22:52:52.397 [INF] [QueryChr]   dataIndex=12261 nChrCount=0
+22:52:52.397 [INF] [QueryChr]   GetQryChar -> True
+22:52:52.397 [DBG] [QueryChr]:loadbot25 nChrCount=1
+22:52:52.397 [INF] [QueryChr] 候选 account=loadbot26 i=0 name=[loadbot26] quickIndex=12265
+22:52:52.398 [INF] [QueryChr]   GetBy -> result=True
+22:52:52.398 [INF] [QueryChr]   dataIndex=12262 nChrCount=0
+22:52:52.398 [INF] [QueryChr]   GetQryChar -> True
+22:52:52.398 [DBG] [QueryChr]:loadbot26 nChrCount=1
+22:52:52.398 [INF] [QueryChr] 候选 account=loadbot28 i=0 name=[loadbot28] quickIndex=12267
+22:52:52.399 [INF] [QueryChr]   GetBy -> result=True
+22:52:52.399 [INF] [QueryChr]   dataIndex=12264 nChrCount=0
+22:52:52.399 [INF] [QueryChr]   GetQryChar -> True
+22:52:52.399 [DBG] [QueryChr]:loadbot28 nChrCount=1
+22:52:52.400 [INF] [QueryChr] 候选 account=loadbot27 i=0 name=[loadbot27] quickIndex=12266
+22:52:52.400 [INF] [QueryChr]   GetBy -> result=True
+22:52:52.400 [INF] [QueryChr]   dataIndex=12263 nChrCount=0
+22:52:52.400 [INF] [QueryChr]   GetQryChar -> True
+22:52:52.401 [DBG] [QueryChr]:loadbot27 nChrCount=1
+22:52:52.401 [INF] [QueryChr] 候选 account=loadbot29 i=0 name=[loadbot29] quickIndex=12268
+22:52:52.401 [INF] [QueryChr]   GetBy -> result=True
+22:52:52.401 [INF] [QueryChr]   dataIndex=12265 nChrCount=0
+22:52:52.402 [INF] [QueryChr]   GetQryChar -> True
+22:52:52.402 [DBG] [QueryChr]:loadbot29 nChrCount=1
+22:52:52.402 [INF] [QueryChr] 候选 account=loadbot30 i=0 name=[loadbot30] quickIndex=12269
+22:52:52.402 [INF] [QueryChr]   GetBy -> result=True
+22:52:52.402 [INF] [QueryChr]   dataIndex=12266 nChrCount=0
+22:52:52.403 [INF] [QueryChr]   GetQryChar -> True
+22:52:52.403 [DBG] [QueryChr]:loadbot30 nChrCount=1
+22:52:52.403 [INF] [QueryChr] 候选 account=loadbot31 i=0 name=[loadbot31] quickIndex=12270
+22:52:52.403 [INF] [QueryChr]   GetBy -> result=True
+22:52:52.404 [INF] [QueryChr]   dataIndex=12267 nChrCount=0
+22:52:52.404 [INF] [QueryChr]   GetQryChar -> True
+22:52:52.404 [DBG] [QueryChr]:loadbot31 nChrCount=1
+22:52:52.404 [INF] [QueryChr] 候选 account=loadbot32 i=0 name=[loadbot32] quickIndex=12271
+22:52:52.405 [INF] [QueryChr]   GetBy -> result=True
+22:52:52.405 [INF] [QueryChr]   dataIndex=12268 nChrCount=0
+22:52:52.405 [INF] [QueryChr]   GetQryChar -> True
+22:52:52.405 [DBG] [QueryChr]:loadbot32 nChrCount=1
+22:52:52.405 [INF] [QueryChr] 候选 account=loadbot33 i=0 name=[loadbot33] quickIndex=12272
+22:52:52.406 [INF] [QueryChr]   GetBy -> result=True
+22:52:52.406 [INF] [QueryChr]   dataIndex=12269 nChrCount=0
+22:52:52.406 [INF] [QueryChr]   GetQryChar -> True
+22:52:52.406 [DBG] [QueryChr]:loadbot33 nChrCount=1
+22:52:52.406 [INF] [QueryChr] 候选 account=loadbot34 i=0 name=[loadbot34] quickIndex=12273
+22:52:52.407 [INF] [QueryChr]   GetBy -> result=True
+22:52:52.407 [INF] [QueryChr]   dataIndex=12270 nChrCount=0
+22:52:52.407 [INF] [QueryChr]   GetQryChar -> True
+22:52:52.407 [DBG] [QueryChr]:loadbot34 nChrCount=1
+22:52:52.408 [DBG] 新会话 socket_id=36 user_ip= gate_ip= gateId=0 tick=725
+22:52:52.423 [INF] [QueryChr] 候选 account=loadbot36 i=0 name=[loadbot36] quickIndex=12275
+22:52:52.423 [DBG] 新会话 socket_id=37 user_ip= gate_ip= gateId=0 tick=740
+22:52:52.424 [INF] [QueryChr]   GetBy -> result=True
+22:52:52.424 [INF] [QueryChr]   dataIndex=12272 nChrCount=0
+22:52:52.424 [INF] [QueryChr]   GetQryChar -> True
+22:52:52.424 [DBG] [QueryChr]:loadbot36 nChrCount=1
+22:52:52.425 [INF] [QueryChr] 候选 account=loadbot35 i=0 name=[loadbot35] quickIndex=12274
+22:52:52.425 [INF] [QueryChr]   GetBy -> result=True
+22:52:52.425 [INF] [QueryChr]   dataIndex=12271 nChrCount=0
+22:52:52.426 [INF] [QueryChr]   GetQryChar -> True
+22:52:52.426 [DBG] [QueryChr]:loadbot35 nChrCount=1
+22:52:52.484 [DBG] 新会话 socket_id=38 user_ip= gate_ip= gateId=0 tick=800
+22:52:52.484 [DBG] 新会话 socket_id=39 user_ip= gate_ip= gateId=0 tick=800
+22:52:52.503 [DBG] 新会话 socket_id=40 user_ip= gate_ip= gateId=0 tick=819
+22:52:52.503 [INF] [QueryChr] 候选 account=loadbot39 i=0 name=[loadbot39] quickIndex=12278
+22:52:52.518 [DBG] 新会话 socket_id=41 user_ip= gate_ip= gateId=0 tick=834
+22:52:52.549 [DBG] 新会话 socket_id=42 user_ip= gate_ip= gateId=0 tick=865
+22:52:52.581 [DBG] 新会话 socket_id=43 user_ip= gate_ip= gateId=0 tick=898
+22:52:52.581 [INF] [QueryChr]   GetBy -> result=True
+22:52:52.597 [DBG] 新会话 socket_id=44 user_ip= gate_ip= gateId=0 tick=913
+22:52:52.613 [INF] [QueryChr]   dataIndex=12275 nChrCount=0
+22:52:52.613 [DBG] 新会话 socket_id=45 user_ip= gate_ip= gateId=0 tick=930
+22:52:52.629 [DBG] 新会话 socket_id=46 user_ip= gate_ip= gateId=0 tick=946
+22:52:52.614 [INF] [QueryChr]   GetQryChar -> True
+22:52:52.629 [DBG] 新会话 socket_id=47 user_ip= gate_ip= gateId=0 tick=946
+22:52:52.645 [DBG] [QueryChr]:loadbot39 nChrCount=1
+22:52:52.696 [DBG] 新会话 socket_id=48 user_ip= gate_ip= gateId=0 tick=1012
+22:52:52.709 [INF] [QueryChr] 候选 account=loadbot38 i=0 name=[loadbot38] quickIndex=12277
+22:52:52.709 [DBG] 新会话 socket_id=49 user_ip= gate_ip= gateId=0 tick=1026
+22:52:52.710 [INF] [QueryChr]   GetBy -> result=True
+22:52:52.725 [DBG] 新会话 socket_id=50 user_ip= gate_ip= gateId=0 tick=1041
+22:52:52.725 [INF] [QueryChr]   dataIndex=12274 nChrCount=0
+22:52:52.740 [DBG] 新会话 socket_id=51 user_ip= gate_ip= gateId=0 tick=1057
+22:52:52.741 [INF] [QueryChr]   GetQryChar -> True
+22:52:52.772 [DBG] 新会话 socket_id=52 user_ip= gate_ip= gateId=0 tick=1088
+22:52:52.772 [DBG] [QueryChr]:loadbot38 nChrCount=1
+22:52:52.787 [DBG] 新会话 socket_id=53 user_ip= gate_ip= gateId=0 tick=1104
+22:52:52.819 [DBG] 新会话 socket_id=54 user_ip= gate_ip= gateId=0 tick=1136
+22:52:52.835 [DBG] 新会话 socket_id=55 user_ip= gate_ip= gateId=0 tick=1151
+22:52:52.835 [INF] [QueryChr] 候选 account=loadbot37 i=0 name=[loadbot37] quickIndex=12276
+22:52:52.835 [DBG] 新会话 socket_id=56 user_ip= gate_ip= gateId=0 tick=1151
+22:52:52.851 [INF] [QueryChr]   GetBy -> result=True
+22:52:52.867 [DBG] 新会话 socket_id=57 user_ip= gate_ip= gateId=0 tick=1183
+22:52:52.883 [INF] [QueryChr]   dataIndex=12273 nChrCount=0
+22:52:52.924 [DBG] 新会话 socket_id=58 user_ip= gate_ip= gateId=0 tick=1240
+22:52:52.924 [DBG] 新会话 socket_id=59 user_ip= gate_ip= gateId=0 tick=1241
+22:52:52.925 [INF] [QueryChr]   GetQryChar -> True
+22:52:52.946 [DBG] 新会话 socket_id=60 user_ip= gate_ip= gateId=0 tick=1262
+22:52:52.962 [DBG] [QueryChr]:loadbot37 nChrCount=1
+22:52:52.962 [DBG] 新会话 socket_id=61 user_ip= gate_ip= gateId=0 tick=1278
+22:52:52.978 [DBG] 新会话 socket_id=62 user_ip= gate_ip= gateId=0 tick=1294
+22:52:52.978 [DBG] 新会话 socket_id=63 user_ip= gate_ip= gateId=0 tick=1295
+22:52:52.978 [INF] [QueryChr] 候选 account=loadbot40 i=0 name=[loadbot40] quickIndex=12279
+22:52:52.978 [DBG] 新会话 socket_id=64 user_ip= gate_ip= gateId=0 tick=1295
+22:52:52.979 [INF] [QueryChr]   GetBy -> result=True
+22:52:52.993 [DBG] 新会话 socket_id=65 user_ip= gate_ip= gateId=0 tick=1310
+22:52:53.035 [INF] [QueryChr]   dataIndex=12276 nChrCount=0
+22:52:53.039 [DBG] 新会话 socket_id=66 user_ip= gate_ip= gateId=0 tick=1355
+22:52:53.054 [DBG] 新会话 socket_id=67 user_ip= gate_ip= gateId=0 tick=1371
+22:52:53.055 [INF] [QueryChr]   GetQryChar -> True
+22:52:53.085 [DBG] [QueryChr]:loadbot40 nChrCount=1
+22:52:53.069 [DBG] 新会话 socket_id=68 user_ip= gate_ip= gateId=0 tick=1386
+22:52:53.142 [DBG] 新会话 socket_id=69 user_ip= gate_ip= gateId=0 tick=1459
+22:52:53.142 [DBG] 新会话 socket_id=70 user_ip= gate_ip= gateId=0 tick=1459
+22:52:53.142 [INF] [QueryChr] 候选 account=loadbot41 i=0 name=[loadbot41] quickIndex=12280
+22:52:53.166 [DBG] 新会话 socket_id=71 user_ip= gate_ip= gateId=0 tick=1482
+22:52:53.182 [INF] [QueryChr]   GetBy -> result=True
+22:52:53.197 [DBG] 新会话 socket_id=72 user_ip= gate_ip= gateId=0 tick=1514
+22:52:53.213 [INF] [QueryChr]   dataIndex=12277 nChrCount=0
+22:52:53.270 [DBG] 新会话 socket_id=73 user_ip= gate_ip= gateId=0 tick=1586
+22:52:53.277 [DBG] 新会话 socket_id=74 user_ip= gate_ip= gateId=0 tick=1593
+22:52:53.277 [DBG] 新会话 socket_id=75 user_ip= gate_ip= gateId=0 tick=1594
+22:52:53.277 [DBG] 新会话 socket_id=76 user_ip= gate_ip= gateId=0 tick=1594
+22:52:53.278 [INF] [QueryChr]   GetQryChar -> True
+22:52:53.292 [DBG] 新会话 socket_id=77 user_ip= gate_ip= gateId=0 tick=1609
+22:52:53.308 [DBG] [QueryChr]:loadbot41 nChrCount=1
+22:52:53.309 [DBG] 新会话 socket_id=78 user_ip= gate_ip= gateId=0 tick=1625
+22:52:53.340 [DBG] 新会话 socket_id=79 user_ip= gate_ip= gateId=0 tick=1657
+22:52:53.383 [INF] [QueryChr] 候选 account=loadbot42 i=0 name=[loadbot42] quickIndex=12281
+22:52:53.383 [DBG] 新会话 socket_id=80 user_ip= gate_ip= gateId=0 tick=1699
+22:52:53.405 [INF] [QueryChr]   GetBy -> result=True
+22:52:53.420 [DBG] 新会话 socket_id=81 user_ip= gate_ip= gateId=0 tick=1736
+22:52:53.451 [INF] [QueryChr]   dataIndex=12278 nChrCount=0
+22:52:53.475 [DBG] 新会话 socket_id=82 user_ip= gate_ip= gateId=0 tick=1792
+22:52:53.475 [DBG] 新会话 socket_id=83 user_ip= gate_ip= gateId=0 tick=1792
+22:52:53.476 [INF] [QueryChr]   GetQryChar -> True
+22:52:53.499 [DBG] 新会话 socket_id=84 user_ip= gate_ip= gateId=0 tick=1815
+22:52:53.514 [DBG] [QueryChr]:loadbot42 nChrCount=1
+22:52:53.514 [DBG] 新会话 socket_id=85 user_ip= gate_ip= gateId=0 tick=1830
+22:52:53.530 [DBG] 新会话 socket_id=86 user_ip= gate_ip= gateId=0 tick=1846
+22:52:53.562 [DBG] 新会话 socket_id=87 user_ip= gate_ip= gateId=0 tick=1878
+22:52:53.562 [INF] [QueryChr] 候选 account=loadbot45 i=0 name=[loadbot45] quickIndex=12284
+22:52:53.578 [DBG] 新会话 socket_id=88 user_ip= gate_ip= gateId=0 tick=1894
+22:52:53.579 [INF] [QueryChr]   GetBy -> result=True
+22:52:53.593 [DBG] 新会话 socket_id=89 user_ip= gate_ip= gateId=0 tick=1910
+22:52:53.593 [INF] [QueryChr]   dataIndex=12281 nChrCount=0
+22:52:53.593 [DBG] 新会话 socket_id=90 user_ip= gate_ip= gateId=0 tick=1910
+22:52:53.609 [INF] [QueryChr]   GetQryChar -> True
+22:52:53.641 [DBG] [QueryChr]:loadbot45 nChrCount=1
+22:52:53.631 [DBG] 新会话 socket_id=91 user_ip= gate_ip= gateId=0 tick=1948
+22:52:53.673 [DBG] 新会话 socket_id=92 user_ip= gate_ip= gateId=0 tick=1989
+22:52:53.714 [DBG] 新会话 socket_id=93 user_ip= gate_ip= gateId=0 tick=2031
+22:52:53.714 [INF] [QueryChr] 候选 account=loadbot43 i=0 name=[loadbot43] quickIndex=12282
+22:52:53.720 [DBG] 新会话 socket_id=94 user_ip= gate_ip= gateId=0 tick=2036
+22:52:53.720 [INF] [QueryChr]   GetBy -> result=True
+22:52:53.734 [DBG] 新会话 socket_id=95 user_ip= gate_ip= gateId=0 tick=2051
+22:52:53.750 [INF] [QueryChr]   dataIndex=12279 nChrCount=0
+22:52:53.750 [DBG] 新会话 socket_id=96 user_ip= gate_ip= gateId=0 tick=2066
+22:52:53.766 [INF] [QueryChr]   GetQryChar -> True
+22:52:53.803 [DBG] 新会话 socket_id=97 user_ip= gate_ip= gateId=0 tick=2120
+22:52:53.812 [DBG] [QueryChr]:loadbot43 nChrCount=1
+22:52:53.828 [DBG] 新会话 socket_id=98 user_ip= gate_ip= gateId=0 tick=2145
+22:52:53.848 [DBG] 新会话 socket_id=99 user_ip= gate_ip= gateId=0 tick=2164
+22:52:53.870 [DBG] 新会话 socket_id=100 user_ip= gate_ip= gateId=0 tick=2187
+22:52:53.870 [INF] [QueryChr] 候选 account=loadbot44 i=0 name=[loadbot44] quickIndex=12283
+22:52:53.870 [DBG] 新会话 socket_id=101 user_ip= gate_ip= gateId=0 tick=2187
+22:52:53.892 [DBG] 新会话 socket_id=102 user_ip= gate_ip= gateId=0 tick=2209
+22:52:53.893 [DBG] 新会话 socket_id=103 user_ip= gate_ip= gateId=0 tick=2209
+22:52:53.893 [INF] [QueryChr]   GetBy -> result=True
+22:52:53.908 [INF] [QueryChr]   dataIndex=12280 nChrCount=0
+22:52:53.907 [DBG] 新会话 socket_id=104 user_ip= gate_ip= gateId=0 tick=2224
+22:52:53.908 [INF] [QueryChr]   GetQryChar -> True
+22:52:53.923 [DBG] 新会话 socket_id=105 user_ip= gate_ip= gateId=0 tick=2240
+22:52:53.969 [DBG] [QueryChr]:loadbot44 nChrCount=1
+22:52:53.970 [DBG] 新会话 socket_id=106 user_ip= gate_ip= gateId=0 tick=2287
+22:52:54.018 [DBG] 新会话 socket_id=107 user_ip= gate_ip= gateId=0 tick=2335
+22:52:54.060 [DBG] 新会话 socket_id=108 user_ip= gate_ip= gateId=0 tick=2376
+22:52:54.060 [INF] [QueryChr] 候选 account=loadbot46 i=0 name=[loadbot46] quickIndex=12285
+22:52:54.080 [DBG] 新会话 socket_id=109 user_ip= gate_ip= gateId=0 tick=2397
+22:52:54.096 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.112 [DBG] 新会话 socket_id=110 user_ip= gate_ip= gateId=0 tick=2428
+22:52:54.156 [INF] [QueryChr]   dataIndex=12282 nChrCount=0
+22:52:54.160 [DBG] 新会话 socket_id=111 user_ip= gate_ip= gateId=0 tick=2476
+22:52:54.176 [DBG] 新会话 socket_id=112 user_ip= gate_ip= gateId=0 tick=2493
+22:52:54.177 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.207 [DBG] 新会话 socket_id=113 user_ip= gate_ip= gateId=0 tick=2524
+22:52:54.255 [DBG] [QueryChr]:loadbot46 nChrCount=1
+22:52:54.255 [DBG] 新会话 socket_id=114 user_ip= gate_ip= gateId=0 tick=2572
+22:52:54.269 [DBG] 新会话 socket_id=115 user_ip= gate_ip= gateId=0 tick=2586
+22:52:54.285 [DBG] 新会话 socket_id=116 user_ip= gate_ip= gateId=0 tick=2602
+22:52:54.285 [INF] [QueryChr] 候选 account=loadbot48 i=0 name=[loadbot48] quickIndex=12286
+22:52:54.301 [DBG] 新会话 socket_id=117 user_ip= gate_ip= gateId=0 tick=2618
+22:52:54.317 [DBG] 新会话 socket_id=118 user_ip= gate_ip= gateId=0 tick=2634
+22:52:54.317 [DBG] 新会话 socket_id=119 user_ip= gate_ip= gateId=0 tick=2634
+22:52:54.317 [DBG] 新会话 socket_id=120 user_ip= gate_ip= gateId=0 tick=2634
+22:52:54.302 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.318 [DBG] 新会话 socket_id=121 user_ip= gate_ip= gateId=0 tick=2634
+22:52:54.318 [INF] [QueryChr]   dataIndex=12283 nChrCount=0
+22:52:54.332 [DBG] 新会话 socket_id=122 user_ip= gate_ip= gateId=0 tick=2649
+22:52:54.333 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.364 [DBG] 新会话 socket_id=123 user_ip= gate_ip= gateId=0 tick=2681
+22:52:54.394 [DBG] [QueryChr]:loadbot48 nChrCount=1
+22:52:54.394 [DBG] 新会话 socket_id=124 user_ip= gate_ip= gateId=0 tick=2710
+22:52:54.412 [DBG] 新会话 socket_id=125 user_ip= gate_ip= gateId=0 tick=2728
+22:52:54.412 [DBG] 新会话 socket_id=126 user_ip= gate_ip= gateId=0 tick=2729
+22:52:54.412 [INF] [QueryChr] 候选 account=loadbot47 i=0 name=[loadbot47] quickIndex=12438
+22:52:54.427 [DBG] 新会话 socket_id=127 user_ip= gate_ip= gateId=0 tick=2743
+22:52:54.443 [DBG] 新会话 socket_id=128 user_ip= gate_ip= gateId=0 tick=2760
+22:52:54.443 [DBG] 新会话 socket_id=129 user_ip= gate_ip= gateId=0 tick=2760
+22:52:54.444 [DBG] 新会话 socket_id=130 user_ip= gate_ip= gateId=0 tick=2760
+22:52:54.444 [DBG] 新会话 socket_id=131 user_ip= gate_ip= gateId=0 tick=2760
+22:52:54.444 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.444 [DBG] 新会话 socket_id=132 user_ip= gate_ip= gateId=0 tick=2760
+22:52:54.444 [INF] [QueryChr]   dataIndex=12435 nChrCount=0
+22:52:54.444 [DBG] 新会话 socket_id=133 user_ip= gate_ip= gateId=0 tick=2761
+22:52:54.444 [DBG] 新会话 socket_id=134 user_ip= gate_ip= gateId=0 tick=2761
+22:52:54.445 [DBG] 新会话 socket_id=135 user_ip= gate_ip= gateId=0 tick=2761
+22:52:54.445 [DBG] 新会话 socket_id=136 user_ip= gate_ip= gateId=0 tick=2761
+22:52:54.445 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.445 [DBG] 新会话 socket_id=137 user_ip= gate_ip= gateId=0 tick=2761
+22:52:54.445 [DBG] [QueryChr]:loadbot47 nChrCount=1
+22:52:54.445 [DBG] 新会话 socket_id=138 user_ip= gate_ip= gateId=0 tick=2762
+22:52:54.445 [INF] [QueryChr] 候选 account=loadbot49 i=0 name=[loadbot49] quickIndex=12287
+22:52:54.446 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.446 [INF] [QueryChr]   dataIndex=12284 nChrCount=0
+22:52:54.446 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.447 [DBG] [QueryChr]:loadbot49 nChrCount=1
+22:52:54.447 [INF] [QueryChr] 候选 account=loadbot50 i=0 name=[loadbot50] quickIndex=12288
+22:52:54.447 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.447 [INF] [QueryChr]   dataIndex=12285 nChrCount=0
+22:52:54.448 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.448 [DBG] [QueryChr]:loadbot50 nChrCount=1
+22:52:54.448 [INF] [QueryChr] 候选 account=loadbot51 i=0 name=[loadbot51] quickIndex=12289
+22:52:54.448 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.448 [INF] [QueryChr]   dataIndex=12286 nChrCount=0
+22:52:54.449 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.449 [DBG] [QueryChr]:loadbot51 nChrCount=1
+22:52:54.449 [INF] [QueryChr] 候选 account=loadbot52 i=0 name=[loadbot52] quickIndex=12290
+22:52:54.449 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.450 [INF] [QueryChr]   dataIndex=12287 nChrCount=0
+22:52:54.450 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.450 [DBG] [QueryChr]:loadbot52 nChrCount=1
+22:52:54.450 [INF] [QueryChr] 候选 account=loadbot53 i=0 name=[loadbot53] quickIndex=12291
+22:52:54.451 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.451 [INF] [QueryChr]   dataIndex=12288 nChrCount=0
+22:52:54.452 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.452 [DBG] [QueryChr]:loadbot53 nChrCount=1
+22:52:54.452 [INF] [QueryChr] 候选 account=loadbot54 i=0 name=[loadbot54] quickIndex=12292
+22:52:54.452 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.452 [INF] [QueryChr]   dataIndex=12289 nChrCount=0
+22:52:54.453 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.453 [DBG] [QueryChr]:loadbot54 nChrCount=1
+22:52:54.453 [INF] [QueryChr] 候选 account=loadbot55 i=0 name=[loadbot55] quickIndex=12293
+22:52:54.454 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.454 [INF] [QueryChr]   dataIndex=12290 nChrCount=0
+22:52:54.454 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.454 [DBG] [QueryChr]:loadbot55 nChrCount=1
+22:52:54.454 [INF] [QueryChr] 候选 account=loadbot57 i=0 name=[loadbot57] quickIndex=12295
+22:52:54.455 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.455 [INF] [QueryChr]   dataIndex=12292 nChrCount=0
+22:52:54.455 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.455 [DBG] [QueryChr]:loadbot57 nChrCount=1
+22:52:54.456 [INF] [QueryChr] 候选 account=loadbot56 i=0 name=[loadbot56] quickIndex=12294
+22:52:54.456 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.456 [INF] [QueryChr]   dataIndex=12291 nChrCount=0
+22:52:54.456 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.457 [DBG] [QueryChr]:loadbot56 nChrCount=1
+22:52:54.457 [INF] [QueryChr] 候选 account=loadbot58 i=0 name=[loadbot58] quickIndex=12296
+22:52:54.457 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.457 [INF] [QueryChr]   dataIndex=12293 nChrCount=0
+22:52:54.458 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.458 [DBG] [QueryChr]:loadbot58 nChrCount=1
+22:52:54.458 [INF] [QueryChr] 候选 account=loadbot59 i=0 name=[loadbot59] quickIndex=12297
+22:52:54.458 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.458 [INF] [QueryChr]   dataIndex=12294 nChrCount=0
+22:52:54.459 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.489 [DBG] [QueryChr]:loadbot59 nChrCount=1
+22:52:54.490 [DBG] 新会话 socket_id=139 user_ip= gate_ip= gateId=0 tick=2806
+22:52:54.522 [DBG] 新会话 socket_id=140 user_ip= gate_ip= gateId=0 tick=2839
+22:52:54.522 [DBG] 新会话 socket_id=141 user_ip= gate_ip= gateId=0 tick=2839
+22:52:54.522 [INF] [QueryChr] 候选 account=loadbot60 i=0 name=[loadbot60] quickIndex=12298
+22:52:54.538 [DBG] 新会话 socket_id=142 user_ip= gate_ip= gateId=0 tick=2855
+22:52:54.539 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.554 [DBG] 新会话 socket_id=143 user_ip= gate_ip= gateId=0 tick=2871
+22:52:54.599 [INF] [QueryChr]   dataIndex=12295 nChrCount=0
+22:52:54.599 [DBG] 新会话 socket_id=144 user_ip= gate_ip= gateId=0 tick=2916
+22:52:54.599 [DBG] 新会话 socket_id=145 user_ip= gate_ip= gateId=0 tick=2916
+22:52:54.600 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.633 [DBG] 新会话 socket_id=146 user_ip= gate_ip= gateId=0 tick=2950
+22:52:54.649 [DBG] [QueryChr]:loadbot60 nChrCount=1
+22:52:54.649 [DBG] 新会话 socket_id=147 user_ip= gate_ip= gateId=0 tick=2966
+22:52:54.706 [DBG] 新会话 socket_id=148 user_ip= gate_ip= gateId=0 tick=3022
+22:52:54.706 [DBG] 新会话 socket_id=149 user_ip= gate_ip= gateId=0 tick=3022
+22:52:54.706 [INF] [QueryChr] 候选 account=loadbot61 i=0 name=[loadbot61] quickIndex=12299
+22:52:54.706 [DBG] 新会话 socket_id=150 user_ip= gate_ip= gateId=0 tick=3022
+22:52:54.707 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.707 [INF] [QueryChr]   dataIndex=12296 nChrCount=0
+22:52:54.707 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.708 [DBG] [QueryChr]:loadbot61 nChrCount=1
+22:52:54.708 [INF] [QueryChr] 候选 account=loadbot62 i=0 name=[loadbot62] quickIndex=12300
+22:52:54.708 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.709 [INF] [QueryChr]   dataIndex=12297 nChrCount=0
+22:52:54.709 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.709 [DBG] [QueryChr]:loadbot62 nChrCount=1
+22:52:54.710 [INF] [QueryChr] 候选 account=loadbot64 i=0 name=[loadbot64] quickIndex=12302
+22:52:54.710 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.710 [INF] [QueryChr]   dataIndex=12299 nChrCount=0
+22:52:54.711 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.711 [DBG] [QueryChr]:loadbot64 nChrCount=1
+22:52:54.711 [INF] [QueryChr] 候选 account=loadbot63 i=0 name=[loadbot63] quickIndex=12301
+22:52:54.712 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.712 [INF] [QueryChr]   dataIndex=12298 nChrCount=0
+22:52:54.712 [DBG] 新会话 socket_id=151 user_ip= gate_ip= gateId=0 tick=3029
+22:52:54.712 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.712 [DBG] [QueryChr]:loadbot63 nChrCount=1
+22:52:54.713 [INF] [QueryChr] 候选 account=loadbot66 i=0 name=[loadbot66] quickIndex=12304
+22:52:54.713 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.713 [INF] [QueryChr]   dataIndex=12301 nChrCount=0
+22:52:54.714 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.714 [DBG] [QueryChr]:loadbot66 nChrCount=1
+22:52:54.714 [INF] [QueryChr] 候选 account=loadbot65 i=0 name=[loadbot65] quickIndex=12303
+22:52:54.714 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.715 [INF] [QueryChr]   dataIndex=12300 nChrCount=0
+22:52:54.715 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.715 [DBG] [QueryChr]:loadbot65 nChrCount=1
+22:52:54.715 [INF] [QueryChr] 候选 account=loadbot67 i=0 name=[loadbot67] quickIndex=12305
+22:52:54.716 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.716 [INF] [QueryChr]   dataIndex=12302 nChrCount=0
+22:52:54.716 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.716 [DBG] [QueryChr]:loadbot67 nChrCount=1
+22:52:54.716 [INF] [QueryChr] 候选 account=loadbot68 i=0 name=[loadbot68] quickIndex=12306
+22:52:54.717 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.717 [INF] [QueryChr]   dataIndex=12303 nChrCount=0
+22:52:54.717 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.717 [DBG] [QueryChr]:loadbot68 nChrCount=1
+22:52:54.718 [INF] [QueryChr] 候选 account=loadbot70 i=0 name=[loadbot70] quickIndex=12308
+22:52:54.718 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.718 [INF] [QueryChr]   dataIndex=12305 nChrCount=0
+22:52:54.718 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.719 [DBG] [QueryChr]:loadbot70 nChrCount=1
+22:52:54.719 [INF] [QueryChr] 候选 account=loadbot72 i=0 name=[loadbot72] quickIndex=12310
+22:52:54.719 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.719 [INF] [QueryChr]   dataIndex=12307 nChrCount=0
+22:52:54.720 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.720 [DBG] [QueryChr]:loadbot72 nChrCount=1
+22:52:54.720 [INF] [QueryChr] 候选 account=loadbot69 i=0 name=[loadbot69] quickIndex=12307
+22:52:54.720 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.720 [INF] [QueryChr]   dataIndex=12304 nChrCount=0
+22:52:54.721 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.721 [DBG] [QueryChr]:loadbot69 nChrCount=1
+22:52:54.721 [INF] [QueryChr] 候选 account=loadbot71 i=0 name=[loadbot71] quickIndex=12309
+22:52:54.721 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.722 [INF] [QueryChr]   dataIndex=12306 nChrCount=0
+22:52:54.722 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.722 [DBG] [QueryChr]:loadbot71 nChrCount=1
+22:52:54.722 [INF] [QueryChr] 候选 account=loadbot73 i=0 name=[loadbot73] quickIndex=12311
+22:52:54.722 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.723 [INF] [QueryChr]   dataIndex=12308 nChrCount=0
+22:52:54.723 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.723 [DBG] [QueryChr]:loadbot73 nChrCount=1
+22:52:54.723 [INF] [QueryChr] 候选 account=loadbot74 i=0 name=[loadbot74] quickIndex=12312
+22:52:54.723 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.724 [INF] [QueryChr]   dataIndex=12309 nChrCount=0
+22:52:54.724 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.724 [DBG] [QueryChr]:loadbot74 nChrCount=1
+22:52:54.724 [INF] [QueryChr] 候选 account=loadbot75 i=0 name=[loadbot75] quickIndex=12313
+22:52:54.725 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.725 [INF] [QueryChr]   dataIndex=12310 nChrCount=0
+22:52:54.725 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.725 [DBG] [QueryChr]:loadbot75 nChrCount=1
+22:52:54.725 [INF] [QueryChr] 候选 account=loadbot76 i=0 name=[loadbot76] quickIndex=12314
+22:52:54.726 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.726 [INF] [QueryChr]   dataIndex=12311 nChrCount=0
+22:52:54.726 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.726 [DBG] [QueryChr]:loadbot76 nChrCount=1
+22:52:54.727 [INF] [QueryChr] 候选 account=loadbot77 i=0 name=[loadbot77] quickIndex=12315
+22:52:54.727 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.727 [INF] [QueryChr]   dataIndex=12312 nChrCount=0
+22:52:54.727 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.728 [DBG] [QueryChr]:loadbot77 nChrCount=1
+22:52:54.728 [INF] [QueryChr] 候选 account=loadbot78 i=0 name=[loadbot78] quickIndex=12316
+22:52:54.728 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.728 [INF] [QueryChr]   dataIndex=12313 nChrCount=0
+22:52:54.729 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.729 [DBG] [QueryChr]:loadbot78 nChrCount=1
+22:52:54.729 [INF] [QueryChr] 候选 account=loadbot79 i=0 name=[loadbot79] quickIndex=12317
+22:52:54.729 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.729 [INF] [QueryChr]   dataIndex=12314 nChrCount=0
+22:52:54.730 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.730 [DBG] [QueryChr]:loadbot79 nChrCount=1
+22:52:54.730 [INF] [QueryChr] 候选 account=loadbot80 i=0 name=[loadbot80] quickIndex=12318
+22:52:54.730 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.730 [INF] [QueryChr]   dataIndex=12315 nChrCount=0
+22:52:54.731 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.731 [DBG] [QueryChr]:loadbot80 nChrCount=1
+22:52:54.731 [INF] [QueryChr] 候选 account=loadbot81 i=0 name=[loadbot81] quickIndex=12319
+22:52:54.731 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.732 [INF] [QueryChr]   dataIndex=12316 nChrCount=0
+22:52:54.732 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.732 [DBG] [QueryChr]:loadbot81 nChrCount=1
+22:52:54.732 [INF] [QueryChr] 候选 account=loadbot82 i=0 name=[loadbot82] quickIndex=12320
+22:52:54.733 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.733 [INF] [QueryChr]   dataIndex=12317 nChrCount=0
+22:52:54.733 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.733 [DBG] [QueryChr]:loadbot82 nChrCount=1
+22:52:54.733 [INF] [QueryChr] 候选 account=loadbot84 i=0 name=[loadbot84] quickIndex=12322
+22:52:54.734 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.734 [INF] [QueryChr]   dataIndex=12319 nChrCount=0
+22:52:54.734 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.734 [DBG] [QueryChr]:loadbot84 nChrCount=1
+22:52:54.734 [INF] [QueryChr] 候选 account=loadbot83 i=0 name=[loadbot83] quickIndex=12321
+22:52:54.735 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.735 [INF] [QueryChr]   dataIndex=12318 nChrCount=0
+22:52:54.735 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.735 [DBG] [QueryChr]:loadbot83 nChrCount=1
+22:52:54.736 [INF] [QueryChr] 候选 account=loadbot85 i=0 name=[loadbot85] quickIndex=12323
+22:52:54.736 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.736 [INF] [QueryChr]   dataIndex=12320 nChrCount=0
+22:52:54.736 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.736 [DBG] [QueryChr]:loadbot85 nChrCount=1
+22:52:54.737 [INF] [QueryChr] 候选 account=loadbot86 i=0 name=[loadbot86] quickIndex=12324
+22:52:54.737 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.737 [INF] [QueryChr]   dataIndex=12321 nChrCount=0
+22:52:54.737 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.738 [DBG] [QueryChr]:loadbot86 nChrCount=1
+22:52:54.738 [INF] [QueryChr] 候选 account=loadbot87 i=0 name=[loadbot87] quickIndex=12325
+22:52:54.738 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.738 [INF] [QueryChr]   dataIndex=12322 nChrCount=0
+22:52:54.739 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.739 [DBG] [QueryChr]:loadbot87 nChrCount=1
+22:52:54.739 [INF] [QueryChr] 候选 account=loadbot89 i=0 name=[loadbot89] quickIndex=12327
+22:52:54.739 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.739 [INF] [QueryChr]   dataIndex=12324 nChrCount=0
+22:52:54.740 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.740 [DBG] [QueryChr]:loadbot89 nChrCount=1
+22:52:54.740 [INF] [QueryChr] 候选 account=loadbot88 i=0 name=[loadbot88] quickIndex=12326
+22:52:54.740 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.740 [INF] [QueryChr]   dataIndex=12323 nChrCount=0
+22:52:54.741 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.741 [DBG] [QueryChr]:loadbot88 nChrCount=1
+22:52:54.741 [INF] [QueryChr] 候选 account=loadbot90 i=0 name=[loadbot90] quickIndex=12328
+22:52:54.741 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.742 [INF] [QueryChr]   dataIndex=12325 nChrCount=0
+22:52:54.742 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.742 [DBG] [QueryChr]:loadbot90 nChrCount=1
+22:52:54.742 [INF] [QueryChr] 候选 account=loadbot91 i=0 name=[loadbot91] quickIndex=12329
+22:52:54.743 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.743 [INF] [QueryChr]   dataIndex=12326 nChrCount=0
+22:52:54.743 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.743 [DBG] [QueryChr]:loadbot91 nChrCount=1
+22:52:54.743 [INF] [QueryChr] 候选 account=loadbot92 i=0 name=[loadbot92] quickIndex=12330
+22:52:54.760 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.775 [INF] [QueryChr]   dataIndex=12327 nChrCount=0
+22:52:54.801 [DBG] 新会话 socket_id=152 user_ip= gate_ip= gateId=0 tick=3118
+22:52:54.801 [INF] [QueryChr]   GetQryChar -> True
+22:52:54.805 [DBG] 新会话 socket_id=153 user_ip= gate_ip= gateId=0 tick=3122
+22:52:54.805 [DBG] [QueryChr]:loadbot92 nChrCount=1
+22:52:54.820 [DBG] 新会话 socket_id=154 user_ip= gate_ip= gateId=0 tick=3137
+22:52:54.851 [DBG] 新会话 socket_id=155 user_ip= gate_ip= gateId=0 tick=3168
+22:52:54.866 [DBG] 新会话 socket_id=156 user_ip= gate_ip= gateId=0 tick=3183
+22:52:54.866 [INF] [QueryChr] 候选 account=loadbot93 i=0 name=[loadbot93] quickIndex=12331
+22:52:54.910 [DBG] 新会话 socket_id=157 user_ip= gate_ip= gateId=0 tick=3226
+22:52:54.930 [INF] [QueryChr]   GetBy -> result=True
+22:52:54.945 [DBG] 新会话 socket_id=158 user_ip= gate_ip= gateId=0 tick=3262
+22:52:54.946 [INF] [QueryChr]   dataIndex=12328 nChrCount=0
+22:52:54.960 [DBG] 新会话 socket_id=159 user_ip= gate_ip= gateId=0 tick=3277
+22:52:55.007 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.008 [DBG] 新会话 socket_id=160 user_ip= gate_ip= gateId=0 tick=3325
+22:52:55.024 [DBG] [QueryChr]:loadbot93 nChrCount=1
+22:52:55.040 [DBG] 新会话 socket_id=161 user_ip= gate_ip= gateId=0 tick=3357
+22:52:55.102 [DBG] 新会话 socket_id=162 user_ip= gate_ip= gateId=0 tick=3419
+22:52:55.104 [DBG] 新会话 socket_id=163 user_ip= gate_ip= gateId=0 tick=3421
+22:52:55.104 [INF] [QueryChr] 候选 account=loadbot94 i=0 name=[loadbot94] quickIndex=12332
+22:52:55.119 [DBG] 新会话 socket_id=164 user_ip= gate_ip= gateId=0 tick=3436
+22:52:55.135 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.151 [DBG] 新会话 socket_id=165 user_ip= gate_ip= gateId=0 tick=3467
+22:52:55.198 [INF] [QueryChr]   dataIndex=12329 nChrCount=0
+22:52:55.198 [DBG] 新会话 socket_id=166 user_ip= gate_ip= gateId=0 tick=3515
+22:52:55.215 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.246 [DBG] 新会话 socket_id=167 user_ip= gate_ip= gateId=0 tick=3562
+22:52:55.287 [DBG] [QueryChr]:loadbot94 nChrCount=1
+22:52:55.294 [DBG] 新会话 socket_id=168 user_ip= gate_ip= gateId=0 tick=3611
+22:52:55.309 [DBG] 新会话 socket_id=169 user_ip= gate_ip= gateId=0 tick=3626
+22:52:55.325 [DBG] 新会话 socket_id=170 user_ip= gate_ip= gateId=0 tick=3641
+22:52:55.325 [INF] [QueryChr] 候选 account=loadbot95 i=0 name=[loadbot95] quickIndex=12333
+22:52:55.355 [DBG] 新会话 socket_id=171 user_ip= gate_ip= gateId=0 tick=3672
+22:52:55.382 [DBG] 新会话 socket_id=172 user_ip= gate_ip= gateId=0 tick=3699
+22:52:55.382 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.401 [DBG] 新会话 socket_id=173 user_ip= gate_ip= gateId=0 tick=3718
+22:52:55.417 [INF] [QueryChr]   dataIndex=12330 nChrCount=0
+22:52:55.418 [DBG] 新会话 socket_id=174 user_ip= gate_ip= gateId=0 tick=3734
+22:52:55.450 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.473 [DBG] 新会话 socket_id=175 user_ip= gate_ip= gateId=0 tick=3790
+22:52:55.473 [DBG] [QueryChr]:loadbot95 nChrCount=1
+22:52:55.497 [DBG] 新会话 socket_id=176 user_ip= gate_ip= gateId=0 tick=3813
+22:52:55.512 [DBG] 新会话 socket_id=177 user_ip= gate_ip= gateId=0 tick=3829
+22:52:55.528 [DBG] 新会话 socket_id=178 user_ip= gate_ip= gateId=0 tick=3845
+22:52:55.528 [INF] [QueryChr] 候选 account=loadbot96 i=0 name=[loadbot96] quickIndex=12334
+22:52:55.574 [DBG] 新会话 socket_id=179 user_ip= gate_ip= gateId=0 tick=3890
+22:52:55.575 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.606 [INF] [QueryChr]   dataIndex=12331 nChrCount=0
+22:52:55.590 [DBG] 新会话 socket_id=180 user_ip= gate_ip= gateId=0 tick=3907
+22:52:55.607 [DBG] 新会话 socket_id=181 user_ip= gate_ip= gateId=0 tick=3923
+22:52:55.607 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.622 [DBG] 新会话 socket_id=182 user_ip= gate_ip= gateId=0 tick=3938
+22:52:55.669 [DBG] [QueryChr]:loadbot96 nChrCount=1
+22:52:55.685 [DBG] 新会话 socket_id=183 user_ip= gate_ip= gateId=0 tick=4002
+22:52:55.716 [DBG] 新会话 socket_id=184 user_ip= gate_ip= gateId=0 tick=4033
+22:52:55.764 [DBG] 新会话 socket_id=185 user_ip= gate_ip= gateId=0 tick=4080
+22:52:55.764 [INF] [QueryChr] 候选 account=loadbot97 i=0 name=[loadbot97] quickIndex=12335
+22:52:55.779 [DBG] 新会话 socket_id=186 user_ip= gate_ip= gateId=0 tick=4095
+22:52:55.779 [DBG] 新会话 socket_id=187 user_ip= gate_ip= gateId=0 tick=4096
+22:52:55.780 [DBG] 新会话 socket_id=188 user_ip= gate_ip= gateId=0 tick=4096
+22:52:55.780 [DBG] 新会话 socket_id=189 user_ip= gate_ip= gateId=0 tick=4096
+22:52:55.780 [DBG] 新会话 socket_id=190 user_ip= gate_ip= gateId=0 tick=4096
+22:52:55.780 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.780 [DBG] 新会话 socket_id=191 user_ip= gate_ip= gateId=0 tick=4097
+22:52:55.780 [INF] [QueryChr]   dataIndex=12332 nChrCount=0
+22:52:55.780 [DBG] 新会话 socket_id=192 user_ip= gate_ip= gateId=0 tick=4097
+22:52:55.781 [DBG] 新会话 socket_id=193 user_ip= gate_ip= gateId=0 tick=4097
+22:52:55.781 [DBG] 新会话 socket_id=194 user_ip= gate_ip= gateId=0 tick=4097
+22:52:55.781 [DBG] 新会话 socket_id=195 user_ip= gate_ip= gateId=0 tick=4097
+22:52:55.781 [DBG] 新会话 socket_id=196 user_ip= gate_ip= gateId=0 tick=4098
+22:52:55.781 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.781 [DBG] 新会话 socket_id=197 user_ip= gate_ip= gateId=0 tick=4098
+22:52:55.781 [DBG] [QueryChr]:loadbot97 nChrCount=1
+22:52:55.782 [DBG] 新会话 socket_id=199 user_ip= gate_ip= gateId=0 tick=4098
+22:52:55.782 [DBG] 新会话 socket_id=198 user_ip= gate_ip= gateId=0 tick=4098
+22:52:55.782 [DBG] 新会话 socket_id=200 user_ip= gate_ip= gateId=0 tick=4099
+22:52:55.782 [INF] [QueryChr] 候选 account=loadbot98 i=0 name=[loadbot98] quickIndex=12336
+22:52:55.783 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.783 [INF] [QueryChr]   dataIndex=12333 nChrCount=0
+22:52:55.783 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.784 [DBG] [QueryChr]:loadbot98 nChrCount=1
+22:52:55.784 [INF] [QueryChr] 候选 account=loadbot99 i=0 name=[loadbot99] quickIndex=12337
+22:52:55.784 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.784 [INF] [QueryChr]   dataIndex=12334 nChrCount=0
+22:52:55.785 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.785 [DBG] [QueryChr]:loadbot99 nChrCount=1
+22:52:55.785 [INF] [QueryChr] 候选 account=loadbot101 i=0 name=[loadbot101] quickIndex=12339
+22:52:55.785 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.786 [INF] [QueryChr]   dataIndex=12336 nChrCount=0
+22:52:55.786 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.786 [DBG] [QueryChr]:loadbot101 nChrCount=1
+22:52:55.786 [INF] [QueryChr] 候选 account=loadbot100 i=0 name=[loadbot100] quickIndex=12338
+22:52:55.787 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.787 [INF] [QueryChr]   dataIndex=12335 nChrCount=0
+22:52:55.787 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.787 [DBG] [QueryChr]:loadbot100 nChrCount=1
+22:52:55.787 [INF] [QueryChr] 候选 account=loadbot102 i=0 name=[loadbot102] quickIndex=12340
+22:52:55.788 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.788 [INF] [QueryChr]   dataIndex=12337 nChrCount=0
+22:52:55.788 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.788 [DBG] [QueryChr]:loadbot102 nChrCount=1
+22:52:55.789 [INF] [QueryChr] 候选 account=loadbot103 i=0 name=[loadbot103] quickIndex=12341
+22:52:55.789 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.789 [INF] [QueryChr]   dataIndex=12338 nChrCount=0
+22:52:55.790 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.790 [DBG] [QueryChr]:loadbot103 nChrCount=1
+22:52:55.790 [INF] [QueryChr] 候选 account=loadbot105 i=0 name=[loadbot105] quickIndex=12343
+22:52:55.790 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.790 [INF] [QueryChr]   dataIndex=12340 nChrCount=0
+22:52:55.791 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.791 [DBG] [QueryChr]:loadbot105 nChrCount=1
+22:52:55.791 [INF] [QueryChr] 候选 account=loadbot104 i=0 name=[loadbot104] quickIndex=12342
+22:52:55.791 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.792 [INF] [QueryChr]   dataIndex=12339 nChrCount=0
+22:52:55.792 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.792 [DBG] [QueryChr]:loadbot104 nChrCount=1
+22:52:55.792 [INF] [QueryChr] 候选 account=loadbot107 i=0 name=[loadbot107] quickIndex=12345
+22:52:55.793 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.793 [INF] [QueryChr]   dataIndex=12342 nChrCount=0
+22:52:55.793 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.793 [DBG] [QueryChr]:loadbot107 nChrCount=1
+22:52:55.793 [INF] [QueryChr] 候选 account=loadbot106 i=0 name=[loadbot106] quickIndex=12344
+22:52:55.794 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.794 [INF] [QueryChr]   dataIndex=12341 nChrCount=0
+22:52:55.794 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.794 [DBG] [QueryChr]:loadbot106 nChrCount=1
+22:52:55.795 [INF] [QueryChr] 候选 account=loadbot108 i=0 name=[loadbot108] quickIndex=12346
+22:52:55.795 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.795 [INF] [QueryChr]   dataIndex=12343 nChrCount=0
+22:52:55.796 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.796 [DBG] [QueryChr]:loadbot108 nChrCount=1
+22:52:55.796 [INF] [QueryChr] 候选 account=loadbot109 i=0 name=[loadbot109] quickIndex=12347
+22:52:55.796 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.796 [INF] [QueryChr]   dataIndex=12344 nChrCount=0
+22:52:55.797 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.797 [DBG] [QueryChr]:loadbot109 nChrCount=1
+22:52:55.797 [INF] [QueryChr] 候选 account=loadbot112 i=0 name=[loadbot112] quickIndex=12350
+22:52:55.797 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.798 [INF] [QueryChr]   dataIndex=12347 nChrCount=0
+22:52:55.798 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.798 [DBG] [QueryChr]:loadbot112 nChrCount=1
+22:52:55.798 [INF] [QueryChr] 候选 account=loadbot111 i=0 name=[loadbot111] quickIndex=12349
+22:52:55.799 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.799 [INF] [QueryChr]   dataIndex=12346 nChrCount=0
+22:52:55.799 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.799 [DBG] [QueryChr]:loadbot111 nChrCount=1
+22:52:55.799 [INF] [QueryChr] 候选 account=loadbot110 i=0 name=[loadbot110] quickIndex=12348
+22:52:55.800 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.800 [INF] [QueryChr]   dataIndex=12345 nChrCount=0
+22:52:55.801 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.801 [DBG] [QueryChr]:loadbot110 nChrCount=1
+22:52:55.801 [INF] [QueryChr] 候选 account=loadbot113 i=0 name=[loadbot113] quickIndex=12351
+22:52:55.801 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.801 [INF] [QueryChr]   dataIndex=12348 nChrCount=0
+22:52:55.802 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.802 [DBG] [QueryChr]:loadbot113 nChrCount=1
+22:52:55.802 [INF] [QueryChr] 候选 account=loadbot114 i=0 name=[loadbot114] quickIndex=12352
+22:52:55.802 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.803 [INF] [QueryChr]   dataIndex=12349 nChrCount=0
+22:52:55.803 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.803 [DBG] [QueryChr]:loadbot114 nChrCount=1
+22:52:55.803 [INF] [QueryChr] 候选 account=loadbot116 i=0 name=[loadbot116] quickIndex=12354
+22:52:55.804 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.804 [INF] [QueryChr]   dataIndex=12351 nChrCount=0
+22:52:55.804 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.804 [DBG] [QueryChr]:loadbot116 nChrCount=1
+22:52:55.804 [INF] [QueryChr] 候选 account=loadbot115 i=0 name=[loadbot115] quickIndex=12353
+22:52:55.805 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.805 [INF] [QueryChr]   dataIndex=12350 nChrCount=0
+22:52:55.805 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.805 [DBG] [QueryChr]:loadbot115 nChrCount=1
+22:52:55.805 [INF] [QueryChr] 候选 account=loadbot117 i=0 name=[loadbot117] quickIndex=12355
+22:52:55.806 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.806 [INF] [QueryChr]   dataIndex=12352 nChrCount=0
+22:52:55.806 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.807 [DBG] [QueryChr]:loadbot117 nChrCount=1
+22:52:55.807 [INF] [QueryChr] 候选 account=loadbot118 i=0 name=[loadbot118] quickIndex=12356
+22:52:55.807 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.807 [INF] [QueryChr]   dataIndex=12353 nChrCount=0
+22:52:55.808 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.808 [DBG] [QueryChr]:loadbot118 nChrCount=1
+22:52:55.808 [INF] [QueryChr] 候选 account=loadbot119 i=0 name=[loadbot119] quickIndex=12357
+22:52:55.808 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.808 [INF] [QueryChr]   dataIndex=12354 nChrCount=0
+22:52:55.809 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.809 [DBG] [QueryChr]:loadbot119 nChrCount=1
+22:52:55.809 [INF] [QueryChr] 候选 account=loadbot120 i=0 name=[loadbot120] quickIndex=12358
+22:52:55.809 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.810 [INF] [QueryChr]   dataIndex=12355 nChrCount=0
+22:52:55.810 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.810 [DBG] [QueryChr]:loadbot120 nChrCount=1
+22:52:55.810 [INF] [QueryChr] 候选 account=loadbot121 i=0 name=[loadbot121] quickIndex=12359
+22:52:55.811 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.811 [INF] [QueryChr]   dataIndex=12356 nChrCount=0
+22:52:55.811 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.811 [DBG] [QueryChr]:loadbot121 nChrCount=1
+22:52:55.812 [INF] [QueryChr] 候选 account=loadbot122 i=0 name=[loadbot122] quickIndex=12360
+22:52:55.812 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.812 [INF] [QueryChr]   dataIndex=12357 nChrCount=0
+22:52:55.812 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.813 [DBG] [QueryChr]:loadbot122 nChrCount=1
+22:52:55.813 [INF] [QueryChr] 候选 account=loadbot123 i=0 name=[loadbot123] quickIndex=12361
+22:52:55.813 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.813 [INF] [QueryChr]   dataIndex=12358 nChrCount=0
+22:52:55.814 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.814 [DBG] [QueryChr]:loadbot123 nChrCount=1
+22:52:55.814 [INF] [QueryChr] 候选 account=loadbot124 i=0 name=[loadbot124] quickIndex=12362
+22:52:55.814 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.815 [INF] [QueryChr]   dataIndex=12359 nChrCount=0
+22:52:55.815 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.815 [DBG] [QueryChr]:loadbot124 nChrCount=1
+22:52:55.815 [INF] [QueryChr] 候选 account=loadbot125 i=0 name=[loadbot125] quickIndex=12363
+22:52:55.816 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.816 [INF] [QueryChr]   dataIndex=12360 nChrCount=0
+22:52:55.816 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.816 [DBG] [QueryChr]:loadbot125 nChrCount=1
+22:52:55.817 [INF] [QueryChr] 候选 account=loadbot126 i=0 name=[loadbot126] quickIndex=12364
+22:52:55.817 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.817 [INF] [QueryChr]   dataIndex=12361 nChrCount=0
+22:52:55.817 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.818 [DBG] [QueryChr]:loadbot126 nChrCount=1
+22:52:55.818 [INF] [QueryChr] 候选 account=loadbot127 i=0 name=[loadbot127] quickIndex=12365
+22:52:55.818 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.839 [INF] [QueryChr]   dataIndex=12362 nChrCount=0
+22:52:55.852 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.853 [DBG] [QueryChr]:loadbot127 nChrCount=1
+22:52:55.853 [INF] [QueryChr] 候选 account=loadbot128 i=0 name=[loadbot128] quickIndex=12366
+22:52:55.853 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.854 [INF] [QueryChr]   dataIndex=12363 nChrCount=0
+22:52:55.854 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.854 [DBG] [QueryChr]:loadbot128 nChrCount=1
+22:52:55.855 [INF] [QueryChr] 候选 account=loadbot129 i=0 name=[loadbot129] quickIndex=12367
+22:52:55.855 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.855 [INF] [QueryChr]   dataIndex=12364 nChrCount=0
+22:52:55.856 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.856 [DBG] [QueryChr]:loadbot129 nChrCount=1
+22:52:55.856 [INF] [QueryChr] 候选 account=loadbot130 i=0 name=[loadbot130] quickIndex=12368
+22:52:55.857 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.857 [INF] [QueryChr]   dataIndex=12365 nChrCount=0
+22:52:55.857 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.857 [DBG] [QueryChr]:loadbot130 nChrCount=1
+22:52:55.858 [INF] [QueryChr] 候选 account=loadbot131 i=0 name=[loadbot131] quickIndex=12369
+22:52:55.858 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.858 [INF] [QueryChr]   dataIndex=12366 nChrCount=0
+22:52:55.859 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.859 [DBG] [QueryChr]:loadbot131 nChrCount=1
+22:52:55.859 [INF] [QueryChr] 候选 account=loadbot132 i=0 name=[loadbot132] quickIndex=12370
+22:52:55.860 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.860 [INF] [QueryChr]   dataIndex=12367 nChrCount=0
+22:52:55.860 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.860 [DBG] [QueryChr]:loadbot132 nChrCount=1
+22:52:55.861 [INF] [QueryChr] 候选 account=loadbot133 i=0 name=[loadbot133] quickIndex=12371
+22:52:55.861 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.861 [INF] [QueryChr]   dataIndex=12368 nChrCount=0
+22:52:55.862 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.862 [DBG] [QueryChr]:loadbot133 nChrCount=1
+22:52:55.862 [INF] [QueryChr] 候选 account=loadbot134 i=0 name=[loadbot134] quickIndex=12372
+22:52:55.862 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.862 [INF] [QueryChr]   dataIndex=12369 nChrCount=0
+22:52:55.863 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.863 [DBG] [QueryChr]:loadbot134 nChrCount=1
+22:52:55.863 [INF] [QueryChr] 候选 account=loadbot135 i=0 name=[loadbot135] quickIndex=12373
+22:52:55.864 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.864 [INF] [QueryChr]   dataIndex=12370 nChrCount=0
+22:52:55.864 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.864 [DBG] [QueryChr]:loadbot135 nChrCount=1
+22:52:55.864 [INF] [QueryChr] 候选 account=loadbot136 i=0 name=[loadbot136] quickIndex=12374
+22:52:55.865 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.865 [INF] [QueryChr]   dataIndex=12371 nChrCount=0
+22:52:55.865 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.865 [DBG] [QueryChr]:loadbot136 nChrCount=1
+22:52:55.866 [INF] [QueryChr] 候选 account=loadbot137 i=0 name=[loadbot137] quickIndex=12375
+22:52:55.866 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.866 [INF] [QueryChr]   dataIndex=12372 nChrCount=0
+22:52:55.867 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.867 [DBG] [QueryChr]:loadbot137 nChrCount=1
+22:52:55.867 [INF] [QueryChr] 候选 account=loadbot140 i=0 name=[loadbot140] quickIndex=12378
+22:52:55.867 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.867 [INF] [QueryChr]   dataIndex=12375 nChrCount=0
+22:52:55.868 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.868 [DBG] [QueryChr]:loadbot140 nChrCount=1
+22:52:55.868 [INF] [QueryChr] 候选 account=loadbot139 i=0 name=[loadbot139] quickIndex=12377
+22:52:55.869 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.869 [INF] [QueryChr]   dataIndex=12374 nChrCount=0
+22:52:55.869 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.869 [DBG] [QueryChr]:loadbot139 nChrCount=1
+22:52:55.869 [INF] [QueryChr] 候选 account=loadbot138 i=0 name=[loadbot138] quickIndex=12376
+22:52:55.870 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.870 [INF] [QueryChr]   dataIndex=12373 nChrCount=0
+22:52:55.870 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.871 [DBG] [QueryChr]:loadbot138 nChrCount=1
+22:52:55.871 [INF] [QueryChr] 候选 account=loadbot141 i=0 name=[loadbot141] quickIndex=12379
+22:52:55.871 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.871 [INF] [QueryChr]   dataIndex=12376 nChrCount=0
+22:52:55.872 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.872 [DBG] [QueryChr]:loadbot141 nChrCount=1
+22:52:55.872 [INF] [QueryChr] 候选 account=loadbot142 i=0 name=[loadbot142] quickIndex=12380
+22:52:55.872 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.872 [INF] [QueryChr]   dataIndex=12377 nChrCount=0
+22:52:55.873 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.873 [DBG] [QueryChr]:loadbot142 nChrCount=1
+22:52:55.873 [INF] [QueryChr] 候选 account=loadbot143 i=0 name=[loadbot143] quickIndex=12381
+22:52:55.874 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.874 [INF] [QueryChr]   dataIndex=12378 nChrCount=0
+22:52:55.874 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.874 [DBG] [QueryChr]:loadbot143 nChrCount=1
+22:52:55.875 [INF] [QueryChr] 候选 account=loadbot144 i=0 name=[loadbot144] quickIndex=12382
+22:52:55.875 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.875 [INF] [QueryChr]   dataIndex=12379 nChrCount=0
+22:52:55.876 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.876 [DBG] [QueryChr]:loadbot144 nChrCount=1
+22:52:55.876 [INF] [QueryChr] 候选 account=loadbot145 i=0 name=[loadbot145] quickIndex=12383
+22:52:55.876 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.876 [INF] [QueryChr]   dataIndex=12380 nChrCount=0
+22:52:55.877 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.877 [DBG] [QueryChr]:loadbot145 nChrCount=1
+22:52:55.877 [INF] [QueryChr] 候选 account=loadbot146 i=0 name=[loadbot146] quickIndex=12384
+22:52:55.878 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.878 [INF] [QueryChr]   dataIndex=12381 nChrCount=0
+22:52:55.878 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.878 [DBG] [QueryChr]:loadbot146 nChrCount=1
+22:52:55.878 [INF] [QueryChr] 候选 account=loadbot147 i=0 name=[loadbot147] quickIndex=12385
+22:52:55.879 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.879 [INF] [QueryChr]   dataIndex=12382 nChrCount=0
+22:52:55.879 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.879 [DBG] [QueryChr]:loadbot147 nChrCount=1
+22:52:55.880 [INF] [QueryChr] 候选 account=loadbot148 i=0 name=[loadbot148] quickIndex=12386
+22:52:55.880 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.880 [INF] [QueryChr]   dataIndex=12383 nChrCount=0
+22:52:55.881 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.881 [DBG] [QueryChr]:loadbot148 nChrCount=1
+22:52:55.881 [INF] [QueryChr] 候选 account=loadbot149 i=0 name=[loadbot149] quickIndex=12387
+22:52:55.881 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.881 [INF] [QueryChr]   dataIndex=12384 nChrCount=0
+22:52:55.882 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.882 [DBG] [QueryChr]:loadbot149 nChrCount=1
+22:52:55.882 [INF] [QueryChr] 候选 account=loadbot152 i=0 name=[loadbot152] quickIndex=12390
+22:52:55.882 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.883 [INF] [QueryChr]   dataIndex=12387 nChrCount=0
+22:52:55.883 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.883 [DBG] [QueryChr]:loadbot152 nChrCount=1
+22:52:55.883 [INF] [QueryChr] 候选 account=loadbot151 i=0 name=[loadbot151] quickIndex=12389
+22:52:55.884 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.884 [INF] [QueryChr]   dataIndex=12386 nChrCount=0
+22:52:55.884 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.884 [DBG] [QueryChr]:loadbot151 nChrCount=1
+22:52:55.885 [INF] [QueryChr] 候选 account=loadbot153 i=0 name=[loadbot153] quickIndex=12391
+22:52:55.885 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.885 [INF] [QueryChr]   dataIndex=12388 nChrCount=0
+22:52:55.886 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.886 [DBG] [QueryChr]:loadbot153 nChrCount=1
+22:52:55.886 [INF] [QueryChr] 候选 account=loadbot150 i=0 name=[loadbot150] quickIndex=12388
+22:52:55.886 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.886 [INF] [QueryChr]   dataIndex=12385 nChrCount=0
+22:52:55.887 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.887 [DBG] [QueryChr]:loadbot150 nChrCount=1
+22:52:55.887 [INF] [QueryChr] 候选 account=loadbot155 i=0 name=[loadbot155] quickIndex=12393
+22:52:55.888 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.888 [INF] [QueryChr]   dataIndex=12390 nChrCount=0
+22:52:55.888 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.888 [DBG] [QueryChr]:loadbot155 nChrCount=1
+22:52:55.888 [INF] [QueryChr] 候选 account=loadbot154 i=0 name=[loadbot154] quickIndex=12392
+22:52:55.889 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.889 [INF] [QueryChr]   dataIndex=12389 nChrCount=0
+22:52:55.890 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.890 [DBG] [QueryChr]:loadbot154 nChrCount=1
+22:52:55.890 [INF] [QueryChr] 候选 account=loadbot156 i=0 name=[loadbot156] quickIndex=12394
+22:52:55.890 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.891 [INF] [QueryChr]   dataIndex=12391 nChrCount=0
+22:52:55.891 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.891 [DBG] [QueryChr]:loadbot156 nChrCount=1
+22:52:55.891 [INF] [QueryChr] 候选 account=loadbot157 i=0 name=[loadbot157] quickIndex=12395
+22:52:55.892 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.892 [INF] [QueryChr]   dataIndex=12392 nChrCount=0
+22:52:55.892 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.892 [DBG] [QueryChr]:loadbot157 nChrCount=1
+22:52:55.892 [INF] [QueryChr] 候选 account=loadbot158 i=0 name=[loadbot158] quickIndex=12396
+22:52:55.893 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.893 [INF] [QueryChr]   dataIndex=12393 nChrCount=0
+22:52:55.893 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.894 [DBG] [QueryChr]:loadbot158 nChrCount=1
+22:52:55.894 [INF] [QueryChr] 候选 account=loadbot159 i=0 name=[loadbot159] quickIndex=12397
+22:52:55.894 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.894 [INF] [QueryChr]   dataIndex=12394 nChrCount=0
+22:52:55.895 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.895 [DBG] [QueryChr]:loadbot159 nChrCount=1
+22:52:55.895 [INF] [QueryChr] 候选 account=loadbot160 i=0 name=[loadbot160] quickIndex=12398
+22:52:55.895 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.895 [INF] [QueryChr]   dataIndex=12395 nChrCount=0
+22:52:55.896 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.896 [DBG] [QueryChr]:loadbot160 nChrCount=1
+22:52:55.896 [INF] [QueryChr] 候选 account=loadbot161 i=0 name=[loadbot161] quickIndex=12399
+22:52:55.897 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.897 [INF] [QueryChr]   dataIndex=12396 nChrCount=0
+22:52:55.897 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.897 [DBG] [QueryChr]:loadbot161 nChrCount=1
+22:52:55.898 [INF] [QueryChr] 候选 account=loadbot162 i=0 name=[loadbot162] quickIndex=12400
+22:52:55.898 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.898 [INF] [QueryChr]   dataIndex=12397 nChrCount=0
+22:52:55.899 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.899 [DBG] [QueryChr]:loadbot162 nChrCount=1
+22:52:55.899 [INF] [QueryChr] 候选 account=loadbot163 i=0 name=[loadbot163] quickIndex=12401
+22:52:55.899 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.899 [INF] [QueryChr]   dataIndex=12398 nChrCount=0
+22:52:55.900 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.951 [DBG] [QueryChr]:loadbot163 nChrCount=1
+22:52:55.951 [INF] [QueryChr] 候选 account=loadbot164 i=0 name=[loadbot164] quickIndex=12402
+22:52:55.952 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.952 [INF] [QueryChr]   dataIndex=12399 nChrCount=0
+22:52:55.953 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.953 [DBG] [QueryChr]:loadbot164 nChrCount=1
+22:52:55.953 [INF] [QueryChr] 候选 account=loadbot165 i=0 name=[loadbot165] quickIndex=12403
+22:52:55.954 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.954 [INF] [QueryChr]   dataIndex=12400 nChrCount=0
+22:52:55.955 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.955 [DBG] [QueryChr]:loadbot165 nChrCount=1
+22:52:55.955 [INF] [QueryChr] 候选 account=loadbot166 i=0 name=[loadbot166] quickIndex=12404
+22:52:55.955 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.956 [INF] [QueryChr]   dataIndex=12401 nChrCount=0
+22:52:55.956 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.956 [DBG] [QueryChr]:loadbot166 nChrCount=1
+22:52:55.956 [INF] [QueryChr] 候选 account=loadbot167 i=0 name=[loadbot167] quickIndex=12405
+22:52:55.957 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.957 [INF] [QueryChr]   dataIndex=12402 nChrCount=0
+22:52:55.958 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.958 [DBG] [QueryChr]:loadbot167 nChrCount=1
+22:52:55.958 [INF] [QueryChr] 候选 account=loadbot169 i=0 name=[loadbot169] quickIndex=12407
+22:52:55.958 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.959 [INF] [QueryChr]   dataIndex=12404 nChrCount=0
+22:52:55.959 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.959 [DBG] [QueryChr]:loadbot169 nChrCount=1
+22:52:55.959 [INF] [QueryChr] 候选 account=loadbot168 i=0 name=[loadbot168] quickIndex=12406
+22:52:55.960 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.960 [INF] [QueryChr]   dataIndex=12403 nChrCount=0
+22:52:55.960 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.961 [DBG] [QueryChr]:loadbot168 nChrCount=1
+22:52:55.961 [INF] [QueryChr] 候选 account=loadbot172 i=0 name=[loadbot172] quickIndex=12410
+22:52:55.961 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.961 [INF] [QueryChr]   dataIndex=12407 nChrCount=0
+22:52:55.962 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.962 [DBG] [QueryChr]:loadbot172 nChrCount=1
+22:52:55.962 [INF] [QueryChr] 候选 account=loadbot171 i=0 name=[loadbot171] quickIndex=12409
+22:52:55.962 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.963 [INF] [QueryChr]   dataIndex=12406 nChrCount=0
+22:52:55.963 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.963 [DBG] [QueryChr]:loadbot171 nChrCount=1
+22:52:55.963 [INF] [QueryChr] 候选 account=loadbot170 i=0 name=[loadbot170] quickIndex=12408
+22:52:55.964 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.964 [INF] [QueryChr]   dataIndex=12405 nChrCount=0
+22:52:55.964 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.964 [DBG] [QueryChr]:loadbot170 nChrCount=1
+22:52:55.964 [INF] [QueryChr] 候选 account=loadbot173 i=0 name=[loadbot173] quickIndex=12411
+22:52:55.965 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.965 [INF] [QueryChr]   dataIndex=12408 nChrCount=0
+22:52:55.965 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.965 [DBG] [QueryChr]:loadbot173 nChrCount=1
+22:52:55.966 [INF] [QueryChr] 候选 account=loadbot174 i=0 name=[loadbot174] quickIndex=12412
+22:52:55.966 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.966 [INF] [QueryChr]   dataIndex=12409 nChrCount=0
+22:52:55.966 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.967 [DBG] [QueryChr]:loadbot174 nChrCount=1
+22:52:55.967 [INF] [QueryChr] 候选 account=loadbot175 i=0 name=[loadbot175] quickIndex=12413
+22:52:55.967 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.967 [INF] [QueryChr]   dataIndex=12410 nChrCount=0
+22:52:55.968 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.968 [DBG] [QueryChr]:loadbot175 nChrCount=1
+22:52:55.968 [INF] [QueryChr] 候选 account=loadbot176 i=0 name=[loadbot176] quickIndex=12414
+22:52:55.969 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.969 [INF] [QueryChr]   dataIndex=12411 nChrCount=0
+22:52:55.969 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.969 [DBG] [QueryChr]:loadbot176 nChrCount=1
+22:52:55.970 [INF] [QueryChr] 候选 account=loadbot177 i=0 name=[loadbot177] quickIndex=12415
+22:52:55.970 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.970 [INF] [QueryChr]   dataIndex=12412 nChrCount=0
+22:52:55.970 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.971 [DBG] [QueryChr]:loadbot177 nChrCount=1
+22:52:55.971 [INF] [QueryChr] 候选 account=loadbot178 i=0 name=[loadbot178] quickIndex=12416
+22:52:55.971 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.971 [INF] [QueryChr]   dataIndex=12413 nChrCount=0
+22:52:55.972 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.972 [DBG] [QueryChr]:loadbot178 nChrCount=1
+22:52:55.972 [INF] [QueryChr] 候选 account=loadbot180 i=0 name=[loadbot180] quickIndex=12418
+22:52:55.973 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.973 [INF] [QueryChr]   dataIndex=12415 nChrCount=0
+22:52:55.973 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.973 [DBG] [QueryChr]:loadbot180 nChrCount=1
+22:52:55.973 [INF] [QueryChr] 候选 account=loadbot179 i=0 name=[loadbot179] quickIndex=12417
+22:52:55.974 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.974 [INF] [QueryChr]   dataIndex=12414 nChrCount=0
+22:52:55.974 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.975 [DBG] [QueryChr]:loadbot179 nChrCount=1
+22:52:55.975 [INF] [QueryChr] 候选 account=loadbot182 i=0 name=[loadbot182] quickIndex=12420
+22:52:55.975 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.975 [INF] [QueryChr]   dataIndex=12417 nChrCount=0
+22:52:55.976 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.976 [DBG] [QueryChr]:loadbot182 nChrCount=1
+22:52:55.976 [INF] [QueryChr] 候选 account=loadbot181 i=0 name=[loadbot181] quickIndex=12419
+22:52:55.976 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.976 [INF] [QueryChr]   dataIndex=12416 nChrCount=0
+22:52:55.977 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.977 [DBG] [QueryChr]:loadbot181 nChrCount=1
+22:52:55.977 [INF] [QueryChr] 候选 account=loadbot183 i=0 name=[loadbot183] quickIndex=12421
+22:52:55.977 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.978 [INF] [QueryChr]   dataIndex=12418 nChrCount=0
+22:52:55.978 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.978 [DBG] [QueryChr]:loadbot183 nChrCount=1
+22:52:55.978 [INF] [QueryChr] 候选 account=loadbot184 i=0 name=[loadbot184] quickIndex=12422
+22:52:55.979 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.979 [INF] [QueryChr]   dataIndex=12419 nChrCount=0
+22:52:55.979 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.979 [DBG] [QueryChr]:loadbot184 nChrCount=1
+22:52:55.979 [INF] [QueryChr] 候选 account=loadbot185 i=0 name=[loadbot185] quickIndex=12423
+22:52:55.980 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.980 [INF] [QueryChr]   dataIndex=12420 nChrCount=0
+22:52:55.980 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.980 [DBG] [QueryChr]:loadbot185 nChrCount=1
+22:52:55.981 [INF] [QueryChr] 候选 account=loadbot186 i=0 name=[loadbot186] quickIndex=12424
+22:52:55.981 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.981 [INF] [QueryChr]   dataIndex=12421 nChrCount=0
+22:52:55.981 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.982 [DBG] [QueryChr]:loadbot186 nChrCount=1
+22:52:55.982 [INF] [QueryChr] 候选 account=loadbot187 i=0 name=[loadbot187] quickIndex=12425
+22:52:55.982 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.982 [INF] [QueryChr]   dataIndex=12422 nChrCount=0
+22:52:55.983 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.983 [DBG] [QueryChr]:loadbot187 nChrCount=1
+22:52:55.983 [INF] [QueryChr] 候选 account=loadbot188 i=0 name=[loadbot188] quickIndex=12426
+22:52:55.983 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.983 [INF] [QueryChr]   dataIndex=12423 nChrCount=0
+22:52:55.984 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.984 [DBG] [QueryChr]:loadbot188 nChrCount=1
+22:52:55.984 [INF] [QueryChr] 候选 account=loadbot189 i=0 name=[loadbot189] quickIndex=12427
+22:52:55.985 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.985 [INF] [QueryChr]   dataIndex=12424 nChrCount=0
+22:52:55.985 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.985 [DBG] [QueryChr]:loadbot189 nChrCount=1
+22:52:55.985 [INF] [QueryChr] 候选 account=loadbot190 i=0 name=[loadbot190] quickIndex=12428
+22:52:55.986 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.986 [INF] [QueryChr]   dataIndex=12425 nChrCount=0
+22:52:55.986 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.986 [DBG] [QueryChr]:loadbot190 nChrCount=1
+22:52:55.986 [INF] [QueryChr] 候选 account=loadbot192 i=0 name=[loadbot192] quickIndex=12430
+22:52:55.987 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.987 [INF] [QueryChr]   dataIndex=12427 nChrCount=0
+22:52:55.987 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.988 [DBG] [QueryChr]:loadbot192 nChrCount=1
+22:52:55.988 [INF] [QueryChr] 候选 account=loadbot191 i=0 name=[loadbot191] quickIndex=12429
+22:52:55.988 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.988 [INF] [QueryChr]   dataIndex=12426 nChrCount=0
+22:52:55.989 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.989 [DBG] [QueryChr]:loadbot191 nChrCount=1
+22:52:55.989 [INF] [QueryChr] 候选 account=loadbot193 i=0 name=[loadbot193] quickIndex=12431
+22:52:55.989 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.990 [INF] [QueryChr]   dataIndex=12428 nChrCount=0
+22:52:55.990 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.990 [DBG] [QueryChr]:loadbot193 nChrCount=1
+22:52:55.990 [INF] [QueryChr] 候选 account=loadbot194 i=0 name=[loadbot194] quickIndex=12432
+22:52:55.991 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.991 [INF] [QueryChr]   dataIndex=12429 nChrCount=0
+22:52:55.991 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.991 [DBG] [QueryChr]:loadbot194 nChrCount=1
+22:52:55.991 [INF] [QueryChr] 候选 account=loadbot196 i=0 name=[loadbot196] quickIndex=12434
+22:52:55.992 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.992 [INF] [QueryChr]   dataIndex=12431 nChrCount=0
+22:52:55.992 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.992 [DBG] [QueryChr]:loadbot196 nChrCount=1
+22:52:55.993 [INF] [QueryChr] 候选 account=loadbot195 i=0 name=[loadbot195] quickIndex=12433
+22:52:55.993 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.993 [INF] [QueryChr]   dataIndex=12430 nChrCount=0
+22:52:55.994 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.994 [DBG] [QueryChr]:loadbot195 nChrCount=1
+22:52:55.994 [INF] [QueryChr] 候选 account=loadbot198 i=0 name=[loadbot198] quickIndex=12436
+22:52:55.994 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.994 [INF] [QueryChr]   dataIndex=12433 nChrCount=0
+22:52:55.995 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.995 [DBG] [QueryChr]:loadbot198 nChrCount=1
+22:52:55.995 [INF] [QueryChr] 候选 account=loadbot197 i=0 name=[loadbot197] quickIndex=12435
+22:52:55.995 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.996 [INF] [QueryChr]   dataIndex=12432 nChrCount=0
+22:52:55.996 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.996 [DBG] [QueryChr]:loadbot197 nChrCount=1
+22:52:55.996 [INF] [QueryChr] 候选 account=loadbot199 i=0 name=[loadbot199] quickIndex=12437
+22:52:55.997 [INF] [QueryChr]   GetBy -> result=True
+22:52:55.997 [INF] [QueryChr]   dataIndex=12434 nChrCount=0
+22:52:55.997 [INF] [QueryChr]   GetQryChar -> True
+22:52:55.997 [DBG] [QueryChr]:loadbot199 nChrCount=1
+22:52:59.702 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:52:59.716 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:52:59.843 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:52:59.997 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:00.134 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:00.331 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:00.360 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:00.362 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:00.364 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:00.366 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:00.367 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:00.369 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:00.371 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:00.373 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:00.375 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:00.406 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:00.408 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:00.410 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:00.412 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:00.414 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:00.416 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:00.418 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:00.420 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:00.422 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:00.423 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:00.425 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:00.427 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:00.428 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:00.430 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:00.432 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:00.434 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:00.436 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:00.438 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:00.439 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:00.441 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:00.443 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:00.444 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:00.725 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:00.829 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:00.982 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:01.117 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:01.328 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:01.526 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:01.661 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:01.857 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:01.995 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.282 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.417 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.462 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.464 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.466 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.468 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.469 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.471 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.473 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.475 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.477 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.479 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.480 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.523 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.673 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.717 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.719 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.721 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.723 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.731 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.733 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.735 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.737 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.738 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.740 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.742 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.743 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.745 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.747 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.748 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.750 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.752 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.754 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.756 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.757 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.759 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.761 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.762 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.764 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.793 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.795 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.797 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.799 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.800 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.802 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.804 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:02.851 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.065 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.308 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.519 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.717 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.792 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.794 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.796 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.798 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.804 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.807 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.833 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.835 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.837 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.838 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.840 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.842 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.844 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.845 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.847 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.849 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.850 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.852 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.854 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.855 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.857 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.859 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.860 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.862 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.864 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.865 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.867 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.869 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.870 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.872 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.874 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.875 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.877 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.879 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.880 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.882 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.883 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.885 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.887 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.888 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.890 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.892 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.894 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.896 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.898 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.900 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.901 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.929 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.931 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.933 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.935 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.936 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.938 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.941 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.942 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.944 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.946 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.947 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.949 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.951 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.952 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.954 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.956 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.958 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.960 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.961 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.963 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.969 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.971 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.973 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.975 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.976 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.978 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.980 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.981 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.984 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.986 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.988 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.989 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.991 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.993 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.994 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.996 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:03.999 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:04.000 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:04.002 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:04.029 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:04.031 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:04.033 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:04.036 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:04.037 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:04.039 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:04.041 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:04.043 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:04.045 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:04.047 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:04.049 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:04.050 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:04.052 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:04.057 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:04.059 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:04.060 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:04.062 [DBG] 玩家获取游戏网关信息 RunGame:127.0.0.1/7200 Port:7200
+22:53:07.704 [DBG] 会话关闭 socket_id=1 存活=16020ms
+22:53:07.719 [DBG] 会话关闭 socket_id=2 存活=16017ms
+22:53:07.877 [DBG] 会话关闭 socket_id=3 存活=16145ms
+22:53:08.001 [DBG] 会话关闭 socket_id=4 存活=16265ms
+22:53:08.173 [DBG] 会话关闭 socket_id=5 存活=16426ms
+22:53:08.344 [DBG] 会话关闭 socket_id=6 存活=16548ms
+22:53:08.375 [DBG] 会话关闭 socket_id=14 存活=16377ms
+22:53:08.376 [DBG] 会话关闭 socket_id=7 存活=16564ms
+22:53:08.376 [DBG] 会话关闭 socket_id=11 存活=16409ms
+22:53:08.391 [DBG] 会话关闭 socket_id=12 存活=16425ms
+22:53:08.433 [DBG] 会话关闭 socket_id=10 存活=16528ms
+22:53:08.433 [DBG] 会话关闭 socket_id=9 存活=16558ms
+22:53:08.433 [DBG] 会话关闭 socket_id=8 存活=16561ms
+22:53:08.433 [DBG] 会话关闭 socket_id=15 存活=16435ms
+22:53:08.433 [DBG] 会话关闭 socket_id=16 存活=16434ms
+22:53:08.454 [DBG] 会话关闭 socket_id=13 存活=16471ms
+22:53:08.469 [DBG] 会话关闭 socket_id=17 存活=16470ms
+22:53:08.470 [DBG] 会话关闭 socket_id=29 存活=16153ms
+22:53:08.470 [DBG] 会话关闭 socket_id=19 存活=16407ms
+22:53:08.470 [DBG] 会话关闭 socket_id=22 存活=16314ms
+22:53:08.485 [DBG] 会话关闭 socket_id=18 存活=16439ms
+22:53:08.514 [DBG] 会话关闭 socket_id=28 存活=16250ms
+22:53:08.533 [DBG] 会话关闭 socket_id=30 存活=16217ms
+22:53:08.533 [DBG] 会话关闭 socket_id=24 存活=16313ms
+22:53:08.533 [DBG] 会话关闭 socket_id=21 存活=16393ms
+22:53:08.534 [DBG] 会话关闭 socket_id=23 存活=16362ms
+22:53:08.534 [DBG] 会话关闭 socket_id=34 存活=16189ms
+22:53:08.534 [DBG] 会话关闭 socket_id=27 存活=16300ms
+22:53:08.534 [DBG] 会话关闭 socket_id=35 存活=16142ms
+22:53:08.534 [DBG] 会话关闭 socket_id=31 存活=16206ms
+22:53:08.534 [DBG] 会话关闭 socket_id=20 存活=16441ms
+22:53:08.535 [DBG] 会话关闭 socket_id=25 存活=16313ms
+22:53:08.535 [DBG] 会话关闭 socket_id=26 存活=16313ms
+22:53:08.535 [DBG] 会话关闭 socket_id=32 存活=16207ms
+22:53:08.535 [DBG] 会话关闭 socket_id=33 存活=16206ms
+22:53:08.549 [DBG] 会话关闭 socket_id=37 存活=16125ms
+22:53:08.549 [DBG] 会话关闭 socket_id=36 存活=16141ms
+22:53:08.737 [DBG] 会话关闭 socket_id=38 存活=16253ms
+22:53:08.863 [DBG] 会话关闭 socket_id=39 存活=16379ms
+22:53:09.019 [DBG] 会话关闭 socket_id=40 存活=16517ms
+22:53:09.130 [DBG] 会话关闭 socket_id=41 存活=16613ms
+22:53:09.351 [DBG] 会话关闭 socket_id=42 存活=16803ms
+22:53:09.556 [DBG] 会话关闭 socket_id=43 存活=16974ms
+22:53:09.696 [DBG] 会话关闭 socket_id=44 存活=17100ms
+22:53:09.868 [DBG] 会话关闭 socket_id=45 存活=17255ms
+22:53:10.010 [DBG] 会话关闭 socket_id=46 存活=17381ms
+22:53:10.296 [DBG] 会话关闭 socket_id=47 存活=17666ms
+22:53:10.437 [DBG] 会话关闭 socket_id=48 存活=17742ms
+22:53:10.469 [DBG] 会话关闭 socket_id=55 存活=17635ms
+22:53:10.484 [DBG] 会话关闭 socket_id=57 存活=17618ms
+22:53:10.484 [DBG] 会话关闭 socket_id=58 存活=17561ms
+22:53:10.485 [DBG] 会话关闭 socket_id=53 存活=17697ms
+22:53:10.500 [DBG] 会话关闭 socket_id=59 存活=17576ms
+22:53:10.500 [DBG] 会话关闭 socket_id=56 存活=17666ms
+22:53:10.501 [DBG] 会话关闭 socket_id=54 存活=17681ms
+22:53:10.515 [DBG] 会话关闭 socket_id=52 存活=17744ms
+22:53:10.531 [DBG] 会话关闭 socket_id=49 存活=17822ms
+22:53:10.568 [DBG] 会话关闭 socket_id=50 存活=17843ms
+22:53:10.568 [DBG] 会话关闭 socket_id=51 存活=17828ms
+22:53:10.568 [DBG] 会话关闭 socket_id=60 存活=17623ms
+22:53:10.706 [DBG] 会话关闭 socket_id=61 存活=17744ms
+22:53:10.721 [DBG] 会话关闭 socket_id=63 存活=17742ms
+22:53:10.737 [DBG] 会话关闭 socket_id=65 存活=17743ms
+22:53:10.737 [DBG] 会话关闭 socket_id=68 存活=17668ms
+22:53:10.737 [DBG] 会话关闭 socket_id=66 存活=17699ms
+22:53:10.737 [DBG] 会话关闭 socket_id=62 存活=17760ms
+22:53:10.738 [DBG] 会话关闭 socket_id=77 存活=17445ms
+22:53:10.738 [DBG] 会话关闭 socket_id=64 存活=17759ms
+22:53:10.752 [DBG] 会话关闭 socket_id=75 存活=17475ms
+22:53:10.777 [DBG] 会话关闭 socket_id=69 存活=17634ms
+22:53:10.777 [DBG] 会话关闭 socket_id=78 存活=17469ms
+22:53:10.799 [DBG] 会话关闭 socket_id=72 存活=17602ms
+22:53:10.814 [DBG] 会话关闭 socket_id=73 存活=17545ms
+22:53:10.845 [DBG] 会话关闭 socket_id=76 存活=17568ms
+22:53:10.846 [DBG] 会话关闭 socket_id=67 存活=17791ms
+22:53:10.861 [DBG] 会话关闭 socket_id=74 存活=17585ms
+22:53:10.861 [DBG] 会话关闭 socket_id=71 存活=17696ms
+22:53:10.861 [DBG] 会话关闭 socket_id=70 存活=17719ms
+22:53:10.862 [DBG] 会话关闭 socket_id=88 存活=17284ms
+22:53:10.877 [DBG] 会话关闭 socket_id=81 存活=17458ms
+22:53:10.877 [DBG] 会话关闭 socket_id=80 存活=17495ms
+22:53:10.878 [DBG] 会话关闭 socket_id=79 存活=17537ms
+22:53:10.878 [DBG] 会话关闭 socket_id=87 存活=17316ms
+22:53:10.878 [DBG] 会话关闭 socket_id=90 存活=17285ms
+22:53:10.878 [DBG] 会话关闭 socket_id=84 存活=17380ms
+22:53:10.892 [DBG] 会话关闭 socket_id=82 存活=17417ms
+22:53:10.924 [DBG] 会话关闭 socket_id=83 存活=17448ms
+22:53:10.924 [DBG] 会话关闭 socket_id=86 存活=17394ms
+22:53:10.924 [DBG] 会话关闭 socket_id=91 存活=17293ms
+22:53:10.924 [DBG] 会话关闭 socket_id=85 存活=17411ms
+22:53:10.925 [DBG] 会话关闭 socket_id=92 存活=17252ms
+22:53:10.939 [DBG] 会话关闭 socket_id=89 存活=17345ms
+22:53:10.954 [DBG] 会话关闭 socket_id=93 存活=17240ms
+22:53:11.080 [DBG] 会话关闭 socket_id=94 存活=17360ms
+22:53:11.315 [DBG] 会话关闭 socket_id=95 存活=17581ms
+22:53:11.534 [DBG] 会话关闭 socket_id=96 存活=17785ms
+22:53:11.724 [DBG] 会话关闭 socket_id=97 存活=17920ms
+22:53:11.803 [DBG] 会话关闭 socket_id=99 存活=17956ms
+22:53:11.803 [DBG] 会话关闭 socket_id=101 存活=17933ms
+22:53:11.804 [DBG] 会话关闭 socket_id=100 存活=17934ms
+22:53:11.804 [DBG] 会话关闭 socket_id=98 存活=17976ms
+22:53:11.819 [DBG] 会话关闭 socket_id=106 存活=17848ms
+22:53:11.835 [DBG] 会话关闭 socket_id=112 存活=17658ms
+22:53:11.835 [DBG] 会话关闭 socket_id=107 存活=17817ms
+22:53:11.850 [DBG] 会话关闭 socket_id=111 存活=17691ms
+22:53:11.851 [DBG] 会话关闭 socket_id=113 存活=17643ms
+22:53:11.865 [DBG] 会话关闭 socket_id=102 存活=17973ms
+22:53:11.895 [DBG] 会话关闭 socket_id=103 存活=18002ms
+22:53:11.895 [DBG] 会话关闭 socket_id=104 存活=17988ms
+22:53:11.895 [DBG] 会话关闭 socket_id=109 存活=17815ms
+22:53:11.895 [DBG] 会话关闭 socket_id=110 存活=17784ms
+22:53:11.896 [DBG] 会话关闭 socket_id=108 存活=17836ms
+22:53:11.913 [DBG] 会话关闭 socket_id=105 存活=17990ms
+22:53:11.929 [DBG] 会话关闭 socket_id=116 存活=17644ms
+22:53:11.929 [DBG] 会话关闭 socket_id=124 存活=17536ms
+22:53:11.929 [DBG] 会话关闭 socket_id=115 存活=17660ms
+22:53:11.930 [DBG] 会话关闭 socket_id=117 存活=17628ms
+22:53:11.944 [DBG] 会话关闭 socket_id=114 存活=17689ms
+22:53:11.971 [DBG] 会话关闭 socket_id=121 存活=17654ms
+22:53:11.971 [DBG] 会话关闭 socket_id=125 存活=17560ms
+22:53:11.971 [DBG] 会话关闭 socket_id=120 存活=17654ms
+22:53:11.972 [DBG] 会话关闭 socket_id=123 存活=17607ms
+22:53:11.992 [DBG] 会话关闭 socket_id=122 存活=17660ms
+22:53:11.992 [DBG] 会话关闭 socket_id=118 存活=17675ms
+22:53:11.993 [DBG] 会话关闭 socket_id=126 存活=17580ms
+22:53:11.993 [DBG] 会话关闭 socket_id=129 存活=17549ms
+22:53:12.008 [DBG] 会话关闭 socket_id=132 存活=17565ms
+22:53:12.024 [DBG] 会话关闭 socket_id=127 存活=17597ms
+22:53:12.051 [DBG] 会话关闭 socket_id=119 存活=17733ms
+22:53:12.051 [DBG] 会话关闭 socket_id=128 存活=17607ms
+22:53:12.071 [DBG] 会话关闭 socket_id=131 存活=17628ms
+22:53:12.086 [DBG] 会话关闭 socket_id=130 存活=17643ms
+22:53:12.102 [DBG] 会话关闭 socket_id=137 存活=17658ms
+22:53:12.157 [DBG] 会话关闭 socket_id=134 存活=17712ms
+22:53:12.157 [DBG] 会话关闭 socket_id=139 存活=17667ms
+22:53:12.157 [DBG] 会话关闭 socket_id=144 存活=17558ms
+22:53:12.157 [DBG] 会话关闭 socket_id=145 存活=17558ms
+22:53:12.157 [DBG] 会话关闭 socket_id=135 存活=17713ms
+22:53:12.158 [DBG] 会话关闭 socket_id=136 存活=17713ms
+22:53:12.158 [DBG] 会话关闭 socket_id=133 存活=17713ms
+22:53:12.178 [DBG] 会话关闭 socket_id=142 存活=17639ms
+22:53:12.178 [DBG] 会话关闭 socket_id=141 存活=17656ms
+22:53:12.178 [DBG] 会话关闭 socket_id=143 存活=17624ms
+22:53:12.194 [DBG] 会话关闭 socket_id=140 存活=17671ms
+22:53:12.194 [DBG] 会话关闭 socket_id=138 存活=17749ms
+22:53:12.194 [DBG] 会话关闭 socket_id=147 存活=17545ms
+22:53:12.194 [DBG] 会话关闭 socket_id=146 存活=17561ms
+22:53:12.195 [DBG] 会话关闭 socket_id=155 存活=17343ms
+22:53:12.195 [DBG] 会话关闭 socket_id=153 存活=17389ms
+22:53:12.195 [DBG] 会话关闭 socket_id=152 存活=17393ms
+22:53:12.195 [DBG] 会话关闭 socket_id=151 存活=17483ms
+22:53:12.210 [DBG] 会话关闭 socket_id=148 存活=17504ms
+22:53:12.235 [DBG] 会话关闭 socket_id=149 存活=17530ms
+22:53:12.236 [DBG] 会话关闭 socket_id=160 存活=17227ms
+22:53:12.236 [DBG] 会话关闭 socket_id=154 存活=17415ms
+22:53:12.258 [DBG] 会话关闭 socket_id=150 存活=17552ms
+22:53:12.258 [DBG] 会话关闭 socket_id=162 存活=17156ms
+22:53:12.258 [DBG] 会话关闭 socket_id=157 存活=17349ms
+22:53:12.258 [DBG] 会话关闭 socket_id=161 存活=17218ms
+22:53:12.259 [DBG] 会话关闭 socket_id=156 存活=17392ms
+22:53:12.259 [DBG] 会话关闭 socket_id=159 存活=17298ms
+22:53:12.259 [DBG] 会话关闭 socket_id=163 存活=17155ms
+22:53:12.274 [DBG] 会话关闭 socket_id=158 存活=17328ms
+22:53:12.274 [DBG] 会话关闭 socket_id=174 存活=16857ms
+22:53:12.289 [DBG] 会话关闭 socket_id=169 存活=16979ms
+22:53:12.314 [DBG] 会话关闭 socket_id=175 存活=16840ms
+22:53:12.314 [DBG] 会话关闭 socket_id=165 存活=17164ms
+22:53:12.314 [DBG] 会话关闭 socket_id=164 存活=17195ms
+22:53:12.315 [DBG] 会话关闭 socket_id=171 存活=16959ms
+22:53:12.315 [DBG] 会话关闭 socket_id=167 存活=17069ms
+22:53:12.336 [DBG] 会话关闭 socket_id=166 存活=17138ms
+22:53:12.337 [DBG] 会话关闭 socket_id=172 存活=16954ms
+22:53:12.337 [DBG] 会话关闭 socket_id=168 存活=17042ms
+22:53:12.352 [DBG] 会话关闭 socket_id=178 存活=16824ms
+22:53:12.368 [DBG] 会话关闭 socket_id=173 存活=16966ms
+22:53:12.411 [DBG] 会话关闭 socket_id=170 存活=17086ms
+22:53:12.430 [DBG] 会话关闭 socket_id=186 存活=16652ms
+22:53:12.431 [DBG] 会话关闭 socket_id=181 存活=16824ms
+22:53:12.431 [DBG] 会话关闭 socket_id=180 存活=16840ms
+22:53:12.431 [DBG] 会话关闭 socket_id=184 存活=16715ms
+22:53:12.446 [DBG] 会话关闭 socket_id=182 存活=16825ms
+22:53:12.447 [DBG] 会话关闭 socket_id=177 存活=16934ms
+22:53:12.462 [DBG] 会话关闭 socket_id=187 存活=16683ms
+22:53:12.490 [DBG] 会话关闭 socket_id=179 存活=16916ms
+22:53:12.490 [DBG] 会话关闭 socket_id=185 存活=16727ms
+22:53:12.490 [DBG] 会话关闭 socket_id=195 存活=16710ms
+22:53:12.509 [DBG] 会话关闭 socket_id=176 存活=17012ms
+22:53:12.509 [DBG] 会话关闭 socket_id=183 存活=16824ms
+22:53:12.510 [DBG] 会话关闭 socket_id=189 存活=16730ms
+22:53:12.510 [DBG] 会话关闭 socket_id=194 存活=16729ms
+22:53:12.510 [DBG] 会话关闭 socket_id=193 存活=16730ms
+22:53:12.510 [DBG] 会话关闭 socket_id=190 存活=16731ms
+22:53:12.510 [DBG] 会话关闭 socket_id=191 存活=16730ms
+22:53:12.511 [DBG] 会话关闭 socket_id=196 存活=16729ms
+22:53:12.524 [DBG] 会话关闭 socket_id=197 存活=16743ms
+22:53:12.524 [DBG] 会话关闭 socket_id=198 存活=16743ms
+22:53:12.540 [DBG] 会话关闭 socket_id=192 存活=16760ms
+22:53:12.564 [DBG] 会话关闭 socket_id=199 存活=16783ms
+22:53:12.565 [DBG] 会话关闭 socket_id=188 存活=16785ms
+22:53:12.565 [DBG] 会话关闭 socket_id=200 存活=16782ms
