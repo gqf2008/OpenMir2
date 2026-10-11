@@ -141,6 +141,10 @@ $deadline = (Get-Date).AddSeconds($TimeoutSec)
 $success = 0
 $spawned = 0
 $worldOk = 0
+# M3 T-14：-BagEquipSequence 开启时，等**整串** `M3BAGSEQ`（含逐个假人的 `M3BAGSEQ done`）落日志后再收工。
+# 否则 run_bots 会在 `login_ok == Count` 处立即 break + kill（登录早于进世界/序列），
+# 假人没跑完 拾取→装备→卸下→丢弃→用药 就被杀，run_pair 的 bag_equip_markers 判据必红（第九格从未在真栈跑过）。
+$bagDone = 0
 function Read-SharedText([string]$Path) {
   # BotSrv 的 StreamWriter 以 FileShare.ReadWrite 持有：读侧也必须放行写，否则打开即抛
   if (-not (Test-Path $Path)) { return "" }
@@ -170,8 +174,16 @@ while ((Get-Date) -lt $deadline) {
     $success = [int]$st.login_ok
     if ($st.PSObject.Properties.Name -contains "in_world") { $worldOk = [int]$st.in_world }
   }
-  Write-Output ("PROGRESS spawned=" + $spawned + " login_ok=" + $success + "/" + $Count + " in_world=" + $worldOk + "/" + $Count + " (src=load_stats.ndjson)")
-  if ($RequireWorld) {
+  if ($BagEquipSequence) {
+    # 序列标记由 BotSrv 打到自己的 stdout（= $LogFile），读取同 stats 一样放行写侧。
+    $bagDone = ([regex]::Matches((Read-SharedText $LogFile), 'M3BAGSEQ done')).Count
+  }
+  $bagNote = if ($BagEquipSequence) { " bag_seq_done=" + $bagDone + "/" + $Count } else { "" }
+  Write-Output ("PROGRESS spawned=" + $spawned + " login_ok=" + $success + "/" + $Count + " in_world=" + $worldOk + "/" + $Count + $bagNote + " (src=load_stats.ndjson)")
+  if ($BagEquipSequence) {
+    # T-14：序列跑完（每个假人一条 done）才算收工；否则继续等（超时上限仍是 TimeoutSec）。
+    if ($success -ge $Count -and $bagDone -ge $Count) { break }
+  } elseif ($RequireWorld) {
     # F4（T-12）：登录不等于进世界；等"本会话收到 SM_LOGON"的进世界证据到齐。
     if ($worldOk -ge $Count) { break }
   } elseif ($success -ge $Count) { break }
@@ -182,6 +194,7 @@ $rate = if ($Count -gt 0) { [math]::Round(100.0 * $success / $Count, 2) } else {
 $worldRate = if ($Count -gt 0) { [math]::Round(100.0 * $worldOk / $Count, 2) } else { 0 }
 $summary = [pscustomobject]@{
   count = $Count; spawned = $spawned; login_ok = $success; in_world = $worldOk
+  bag_seq_done = $bagDone; bag_equip_sequence = [bool]$BagEquipSequence
   success_rate_pct = $rate; world_rate_pct = $worldRate; require_world = [bool]$RequireWorld
   timeout_sec = $TimeoutSec; log = $LogFile; stats = $statsPath
 }
@@ -199,9 +212,13 @@ if ($SelfTestRed) {
   exit 1
 }
 
-if ($success -ge $Count -and (-not $RequireWorld -or $worldOk -ge $Count)) {
-  Write-Output ("GREEN: " + $success + "/" + $Count + " 登录成功 (100%)" + $(if ($RequireWorld) { "；in_world=" + $worldOk + "/" + $Count } else { "" }))
+if ($success -ge $Count -and (-not $RequireWorld -or $worldOk -ge $Count) -and (-not $BagEquipSequence -or $bagDone -ge $Count)) {
+  Write-Output ("GREEN: " + $success + "/" + $Count + " 登录成功 (100%)" + $(if ($RequireWorld) { "；in_world=" + $worldOk + "/" + $Count } else { "" }) + $(if ($BagEquipSequence) { "；bag_seq_done=" + $bagDone + "/" + $Count } else { "" }))
   exit 0
+}
+if ($BagEquipSequence -and $bagDone -lt $Count) {
+  Write-Output ("RED: " + $Count + " 个假人的背包/装备序列只跑完 " + $bagDone + "/" + $Count + "（缺 M3BAGSEQ done）——序列不完整，不能当『同一序列』")
+  exit 1
 }
 if ($RequireWorld -and $worldOk -lt $Count) {
   Write-Output ("RED: 进世界证据 in_world=" + $worldOk + "/" + $Count + "（" + $worldRate + "%）未达标（-RequireWorld：要求每个假人本会话都收到 SM_LOGON）")

@@ -8,7 +8,10 @@ namespace BotSrv
 {
     public static class BotHelper
     {
-        private static readonly IList<ClientItem> DropItems = null;
+        // M3 T-14（T-22 夹具例外）：原来是 `null`，而 `GetDropItem`/`DelDropItem` 直接 `DropItems.Count`
+        // 解引用 ⇒ 服务端回 `SM_DROPITEM_FAIL` 时 `ClientGetDropItemFail` 必 NRE（实测）。
+        // BotSrv 正常挂机不发 CM_DROPITEM，所以这个 latent NRE 从未被触发；T-14 丢弃步会触发。
+        private static readonly IList<ClientItem> DropItems = new List<ClientItem>();
 
         public static int GetCodeMsgSize(float len)
         {
@@ -116,6 +119,13 @@ namespace BotSrv
             }
             for (int i = 6; i < BotConst.MaxBagItemcl; i++)
             {
+                // M3 T-14（T-22 夹具例外）：空槽（ItemArr[i] == null）直接跳过。
+                // 原实现缺这个 null 守卫：cu==null 时前面的 `return` 遮蔽了它（假人视图恒空），
+                // 一旦真解码出物品（T-14 驱动）到这里就 NRE（实测 `bot.log` 的 AddItemBag 行 119）。
+                if (MShare.ItemArr[i] == null || MShare.ItemArr[i].Item.Name == "")
+                {
+                    continue;
+                }
                 if ((MShare.ItemArr[i].Item.Name == cu.Item.Name) && (MShare.ItemArr[i].MakeIndex == cu.MakeIndex))
                 {
                     MShare.ItemArr[i].Dura = (ushort)(MShare.ItemArr[i].Dura + cu.Dura);
@@ -127,7 +137,7 @@ namespace BotSrv
             {
                 for (int i = 6; i < BotConst.MaxBagItemcl; i++)
                 {
-                    if (string.IsNullOrEmpty(MShare.ItemArr[i].Item.Name))
+                    if (MShare.ItemArr[i] == null || string.IsNullOrEmpty(MShare.ItemArr[i].Item.Name))
                     {
                         MShare.ItemArr[i] = cu;
                         break;

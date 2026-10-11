@@ -365,6 +365,24 @@ namespace BotSrv.Player
         /// <summary>下一步的到点时刻（MShare.GetTickCount），起步延迟与步间隔都用它。</summary>
         private int _bagSeqNextTick;
 
+        // T-14 步骤参数**在 step=0 一次性快照**（见 SnapshotBagEquipSequence 的说明）：
+        // 序列一旦快照就不再依赖「服务端回应 → 假人视图演化」，因此两侧发出去的 CM_* 字节
+        // 只由「进入世界后的初始视图」决定 —— 这正是「同一序列」要的可复现性。
+        private bool _bagSeqSnapped;
+        private int _seqTakeOnSlot = -1;
+        private int _seqTakeOnMake;
+        private string _seqTakeOnName = "";
+        private int _seqTakeOffSlot = -1;
+        private int _seqTakeOffMake;
+        private string _seqTakeOffName = "";
+        private int _seqDropSlot = -1;
+        private int _seqDropMake;
+        private string _seqDropName = "";
+        private int _seqEatSlot = -1;
+        private int _seqEatMake;
+        private int _seqEatStdMode;
+        private string _seqEatName = "";
+
         /// <summary>收到本假人 SM_LOGON 后武装固定序列（`MShare.g_boBagEquipSequence` 关闭时是空操作）。
         /// 武装后**不做**任何即时发送：第一步还要等 `g_nBagEquipStartDelayMs`（默认 3000ms），
         /// 给服务端把物品列表推完、本假人视图装载完的时间。</summary>
@@ -375,19 +393,24 @@ namespace BotSrv.Player
                 return;
             }
             _bagSeqStep = 0;
+            _bagSeqSnapped = false;
             _bagSeqNextTick = MShare.GetTickCount() + MShare.g_nBagEquipStartDelayMs;
             MainOutMessage($"M3BAGSEQ arm start_delay_ms={MShare.g_nBagEquipStartDelayMs} step_ms={MShare.g_nBagEquipStepMs}");
         }
 
-        /// <summary>M3 T-14 固定序列（步进式，全靠本假人自己的视图）：
+        /// <summary>M3 T-14 固定序列（步进式）：
         ///   0 CM_PICKUP     —— 拾取当前格子上的地面物品
         ///   1 CM_TAKEONITEM —— 把背包里第一件可装备物品穿上（`BotHelper.GetTakeOnPosition` 定槽）
-        ///   2 CM_TAKEOFFITEM—— 卸下身上第一件已装备物品
-        ///   3 CM_DROPITEM   —— 丢弃背包里第一件物品
-        ///   4 CM_EAT        —— 吃掉背包里第一件药品（StdMode 0/1/2）
-        /// 参数一律从 `MShare.ItemArr`/`MShare.UseItems`（服务端推来的本假人视图）取；
-        /// 两侧服务端行为相同时，发出去的 CM_* 字节逐条相同。缺件时**只记 skip、不发送**
-        /// —— 两侧同缺即同 skip，不引入差异。默认关（`g_boBagEquipSequence=false`）时本方法空转。</summary>
+        ///   2 CM_TAKEOFFITEM—— 卸下**刚才穿上**的那件（Step 1 的落点；无 Step 1 才回落到初始视图的第一件已装备物）
+        ///   3 CM_DROPITEM   —— 丢弃背包里第一件物品（初始视图 6.. 起）
+        ///   4 CM_EAT        —— 吃掉初始视图里第一件药品（StdMode 0/1/2，**0..MaxBagItemcl 全槽**：
+        ///                        BotSrv 的 `AddItemBag` 把 StdMode<=3 的消耗品放 0..4，旧实现只扫 6.. 永远找不到）
+        ///
+        /// **参数在 step=0 快照一次**，之后不再读「已被服务端回应改过的视图」。理由（本片实测）：
+        /// 假人侧的 `g_WaitingUseItem`/`g_EatingItem` 与 `ClientItem` 解码在 T-14 之前从未被真实触发，
+        /// 回应处理器里有多处 latent NRE ⇒ 逐步骤读活视图会让「两侧同一序列」依赖于那些未实现路径。
+        /// 快照只依赖进入世界后服务端推来的初始背包视图（`SM_BAGITEMS`），这正是两侧应对齐的输入。
+        /// 缺件时**只记 skip、不发送** —— 两侧同缺即同 skip，不引入差异。默认关时本方法空转。</summary>
         private void BagEquipSequenceTick()
         {
             if (!MShare.g_boBagEquipSequence || _bagSeqStep < 0 || _bagSeqStep > 4)
@@ -405,6 +428,10 @@ namespace BotSrv.Player
             }
             _bagSeqNextTick = now + MShare.g_nBagEquipStepMs;
             int step = _bagSeqStep;
+            if (step == 0 && !_bagSeqSnapped)
+            {
+                SnapshotBagEquipSequence();
+            }
             switch (step)
             {
                 case 0:
@@ -431,9 +458,22 @@ namespace BotSrv.Player
             }
         }
 
-        /// <summary>步骤 1：背包里第一件可装备物品 → CM_TAKEONITEM(where, MakeIndex, name)。</summary>
-        private void BagSeqTakeOn()
+        /// <summary>step=0 时把五步要用的 <b>MakeIndex/槽位/名字</b> 一次性钉住：
+        /// 只读 `MShare.ItemArr`（服务端推来的初始背包视图）与 `MShare.UseItems`，
+        /// 之后各步不再回头看任何会随服务端回应变化的视图。</summary>
+        private void SnapshotBagEquipSequence()
         {
+            _bagSeqSnapped = true;
+            int bagView = 0;
+            for (int i = 0; i < BotConst.MaxBagItemcl; i++)
+            {
+                if (MShare.ItemArr[i] != null && !string.IsNullOrEmpty(MShare.ItemArr[i].Item.Name))
+                {
+                    bagView++;
+                }
+            }
+
+            // Step 1：背包里第一件可装备物品（6..）。
             for (int i = 6; i < BotConst.MaxBagItemcl; i++)
             {
                 ClientItem it = MShare.ItemArr[i];
@@ -446,33 +486,33 @@ namespace BotSrv.Player
                 {
                     continue;
                 }
-                MainOutMessage($"M3BAGSEQ step=1 op=CM_TAKEONITEM bag={i} where={where} make={it.MakeIndex} name={it.Item.Name}");
-                SendTakeOnItem(where, it.MakeIndex, it.Item.Name);
-                return;
+                _seqTakeOnSlot = i;
+                _seqTakeOnMake = it.MakeIndex;
+                _seqTakeOnName = it.Item.Name;
+                // Step 2 卸下的就是这一件（穿上后落在 where 槽）。
+                _seqTakeOffSlot = where;
+                _seqTakeOffMake = it.MakeIndex;
+                _seqTakeOffName = it.Item.Name;
+                break;
             }
-            MainOutMessage("M3BAGSEQ step=1 op=CM_TAKEONITEM skip=no_equippable_bag_item");
-        }
-
-        /// <summary>步骤 2：身上第一件已装备物品 → CM_TAKEOFFITEM(where, MakeIndex, name)。</summary>
-        private void BagSeqTakeOff()
-        {
-            for (int w = 0; w < MShare.UseItems.Length; w++)
+            if (_seqTakeOnSlot < 0)
             {
-                ClientItem eq = MShare.UseItems[w];
-                if (eq == null || string.IsNullOrEmpty(eq.Item.Name))
+                // 没有可穿的：才回落到初始视图里第一件已装备物（通常为空）。
+                for (int w = 0; w < MShare.UseItems.Length; w++)
                 {
-                    continue;
+                    ClientItem eq = MShare.UseItems[w];
+                    if (eq == null || string.IsNullOrEmpty(eq.Item.Name))
+                    {
+                        continue;
+                    }
+                    _seqTakeOffSlot = w;
+                    _seqTakeOffMake = eq.MakeIndex;
+                    _seqTakeOffName = eq.Item.Name;
+                    break;
                 }
-                MainOutMessage($"M3BAGSEQ step=2 op=CM_TAKEOFFITEM where={w} make={eq.MakeIndex} name={eq.Item.Name}");
-                SendTakeOffItem((byte)w, eq.MakeIndex, eq.Item.Name);
-                return;
             }
-            MainOutMessage("M3BAGSEQ step=2 op=CM_TAKEOFFITEM skip=no_equipped_item");
-        }
 
-        /// <summary>步骤 3：背包里第一件物品 → CM_DROPITEM(MakeIndex, 1, name)。</summary>
-        private void BagSeqDrop()
-        {
+            // Step 3：背包里第一件物品（6..）。
             for (int i = 6; i < BotConst.MaxBagItemcl; i++)
             {
                 ClientItem it = MShare.ItemArr[i];
@@ -480,17 +520,14 @@ namespace BotSrv.Player
                 {
                     continue;
                 }
-                MainOutMessage($"M3BAGSEQ step=3 op=CM_DROPITEM bag={i} make={it.MakeIndex} name={it.Item.Name}");
-                SendDropItem(it.Item.Name, it.MakeIndex, 1);
-                return;
+                _seqDropSlot = i;
+                _seqDropMake = it.MakeIndex;
+                _seqDropName = it.Item.Name;
+                break;
             }
-            MainOutMessage("M3BAGSEQ step=3 op=CM_DROPITEM skip=no_bag_item");
-        }
 
-        /// <summary>步骤 4：背包里第一件药品（StdMode 0/1/2）→ CM_EAT(MakeIndex, 0, 0, StdMode)。</summary>
-        private void BagSeqEat()
-        {
-            for (int i = 6; i < BotConst.MaxBagItemcl; i++)
+            // Step 4：第一件药品（StdMode 0/1/2，全槽 0..）。
+            for (int i = 0; i < BotConst.MaxBagItemcl; i++)
             {
                 ClientItem it = MShare.ItemArr[i];
                 if (it == null || string.IsNullOrEmpty(it.Item.Name))
@@ -501,11 +538,77 @@ namespace BotSrv.Player
                 {
                     continue;
                 }
-                MainOutMessage($"M3BAGSEQ step=4 op=CM_EAT bag={i} make={it.MakeIndex} stdmode={it.Item.StdMode} name={it.Item.Name}");
-                SendEat(it.MakeIndex, it.Item.Name, it.Item.StdMode);
+                _seqEatSlot = i;
+                _seqEatMake = it.MakeIndex;
+                _seqEatStdMode = it.Item.StdMode;
+                _seqEatName = it.Item.Name;
+                break;
+            }
+
+            MainOutMessage($"M3BAGSEQ snapshot bag_view={bagView} takeon={_seqTakeOnSlot} takeoff={_seqTakeOffSlot} drop={_seqDropSlot} eat={_seqEatSlot}");
+        }
+
+        /// <summary>步骤 1：背包里第一件可装备物品 → CM_TAKEONITEM(where, MakeIndex, name)。</summary>
+        private void BagSeqTakeOn()
+        {
+            if (_seqTakeOnSlot < 0)
+            {
+                MainOutMessage("M3BAGSEQ step=1 op=CM_TAKEONITEM skip=no_equippable_bag_item");
                 return;
             }
-            MainOutMessage("M3BAGSEQ step=4 op=CM_EAT skip=no_drug_in_bag");
+            // 让 SM_TAKEON_OK 处理器把该物品从背包挪到 UseItems[where]（同一对象引用）。
+            if (MShare.g_WaitingUseItem != null)
+            {
+                MShare.g_WaitingUseItem.Index = _seqTakeOffSlot;
+                MShare.g_WaitingUseItem.Item = MShare.ItemArr[_seqTakeOnSlot];
+            }
+            MainOutMessage($"M3BAGSEQ step=1 op=CM_TAKEONITEM bag={_seqTakeOnSlot} where={_seqTakeOffSlot} make={_seqTakeOnMake} name={_seqTakeOnName}");
+            SendTakeOnItem(_seqTakeOffSlot, _seqTakeOnMake, _seqTakeOnName);
+        }
+
+        /// <summary>步骤 2：卸下 Step 1 穿上那一件 → CM_TAKEOFFITEM(where, MakeIndex, name)。</summary>
+        private void BagSeqTakeOff()
+        {
+            if (_seqTakeOffSlot < 0)
+            {
+                MainOutMessage("M3BAGSEQ step=2 op=CM_TAKEOFFITEM skip=no_equipped_item");
+                return;
+            }
+            if (MShare.g_WaitingUseItem != null)
+            {
+                MShare.g_WaitingUseItem.Index = _seqTakeOffSlot;
+                MShare.g_WaitingUseItem.Item = _seqTakeOnSlot >= 0 ? MShare.ItemArr[_seqTakeOnSlot] : MShare.UseItems[_seqTakeOffSlot];
+            }
+            MainOutMessage($"M3BAGSEQ step=2 op=CM_TAKEOFFITEM where={_seqTakeOffSlot} make={_seqTakeOffMake} name={_seqTakeOffName}");
+            SendTakeOffItem((byte)_seqTakeOffSlot, _seqTakeOffMake, _seqTakeOffName);
+        }
+
+        /// <summary>步骤 3：丢弃背包里第一件物品 → CM_DROPITEM(MakeIndex, 1, name)。</summary>
+        private void BagSeqDrop()
+        {
+            if (_seqDropSlot < 0)
+            {
+                MainOutMessage("M3BAGSEQ step=3 op=CM_DROPITEM skip=no_bag_item");
+                return;
+            }
+            MainOutMessage($"M3BAGSEQ step=3 op=CM_DROPITEM bag={_seqDropSlot} make={_seqDropMake} name={_seqDropName}");
+            SendDropItem(_seqDropName, _seqDropMake, 1);
+        }
+
+        /// <summary>步骤 4：吃掉第一件药品（StdMode 0/1/2）→ CM_EAT(MakeIndex, 0, 0, StdMode)。</summary>
+        private void BagSeqEat()
+        {
+            if (_seqEatSlot < 0)
+            {
+                MainOutMessage("M3BAGSEQ step=4 op=CM_EAT skip=no_drug_in_bag");
+                return;
+            }
+            if (MShare.g_EatingItem != null)
+            {
+                MShare.g_EatingItem = MShare.ItemArr[_seqEatSlot];
+            }
+            MainOutMessage($"M3BAGSEQ step=4 op=CM_EAT bag={_seqEatSlot} make={_seqEatMake} stdmode={_seqEatStdMode} name={_seqEatName}");
+            SendEat(_seqEatMake, _seqEatName, _seqEatStdMode);
         }
 
         #endregion
@@ -3217,7 +3320,7 @@ namespace BotSrv.Player
         {
             if (!string.IsNullOrEmpty(body))
             {
-                ClientItem cu = EDCode.DecodeBuffer<ClientItem>(body);
+                ClientItem cu = MShare.g_boBagEquipSequence ? ClientItemCodec.Decode(body) : EDCode.DecodeBuffer<ClientItem>(body);
                 BotHelper.AddItemBag(cu);
                 if (hint != 0)
                 {
@@ -3230,7 +3333,7 @@ namespace BotSrv.Player
         {
             if (!string.IsNullOrEmpty(body))
             {
-                ClientItem cu = EDCode.DecodeBuffer<ClientItem>(body);
+                ClientItem cu = MShare.g_boBagEquipSequence ? ClientItemCodec.Decode(body) : EDCode.DecodeBuffer<ClientItem>(body);
                 BotHelper.UpdateItemBag(cu);
                 for (int i = 0; i < MShare.UseItems.Length; i++)
                 {
@@ -3269,7 +3372,7 @@ namespace BotSrv.Player
         {
             if (!string.IsNullOrEmpty(body))
             {
-                ClientItem cu = EDCode.DecodeBuffer<ClientItem>(body);
+                ClientItem cu = MShare.g_boBagEquipSequence ? ClientItemCodec.Decode(body) : EDCode.DecodeBuffer<ClientItem>(body);
                 BotHelper.DelItemBag(cu.Item.Name, cu.MakeIndex);
                 for (int i = 0; i < MShare.UseItems.Length; i++)
                 {
@@ -3407,6 +3510,9 @@ namespace BotSrv.Player
         private void ClientGetBagItmes(string body)
         {
             string Str = string.Empty;
+            // M3 T-14 诊断：-BagEquipSequence 时把收到的包体长度与装载后的背包视图规模落日志，
+            // 否则「序列全 skip」既可能是服务端没推物品、也可能是假人视图没装载，无法判红。
+            int bagBodyLen = string.IsNullOrEmpty(body) ? 0 : body.Length;
             //var ItemSaveArr = new ClientItem[BotConst.MaxBagItemcl];
             //FillChar(MShare.g_RefineItems, sizeof(TMovingItem) * 3, '\0');
             //FillChar(MShare.g_BuildAcuses, sizeof(MShare.g_BuildAcuses), '\0');
@@ -3428,8 +3534,15 @@ namespace BotSrv.Player
                     break;
                 }
                 body = HUtil32.GetValidStr3(body, ref Str, HUtil32.Backslash);
-                ClientItem cu = EDCode.DecodeClientBuffer<ClientItem>(Str);
-                BotHelper.AddItemBag(cu);
+                try
+                {
+                    ClientItem cu = MShare.g_boBagEquipSequence ? ClientItemCodec.Decode(Str) : EDCode.DecodeClientBuffer<ClientItem>(Str);
+                    BotHelper.AddItemBag(cu);
+                }
+                catch (Exception ex)
+                {
+                    MainOutMessage($"M3BAGSEQ bag item decode ERR: {ex}");
+                }
             }
             //ClFunc.Loadbagsdat(".\\Config\\" + MShare.g_sServerName + "." + m_sChrName + ".itm-plus", ItemSaveArr);
             //if (ClientGetBagItmes_CompareItemArr())
@@ -3438,6 +3551,18 @@ namespace BotSrv.Player
             //}
             BotHelper.ArrangeItembag();
             MShare.g_boBagLoaded = true;
+            if (MShare.g_boBagEquipSequence)
+            {
+                int nBagView = 0;
+                for (int vi = 0; vi < BotConst.MaxBagItemcl; vi++)
+                {
+                    if (MShare.ItemArr[vi] != null && !string.IsNullOrEmpty(MShare.ItemArr[vi].Item.Name))
+                    {
+                        nBagView++;
+                    }
+                }
+                MainOutMessage($"M3BAGSEQ SM_BAGITEMS body_len={bagBodyLen} bag_view={nBagView}");
+            }
             if (MShare.MySelf != null)
             {
                 if (!MShare.MySelf.StallMgr.OnSale)
