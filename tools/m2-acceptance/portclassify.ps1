@@ -33,3 +33,45 @@ function Get-M2PortImpl {
   if ($script:M2RustNames -contains $base) { return "rust" }
   return "unknown"
 }
+
+# ----------------------------------------------------------------------------
+# 验收① 的**第二层牙齿**（「证明是 Rust 入口在监听」）：端口 -> 期望入口。
+#
+# 第一层（`Get-M2PortImpl`）只证明「某个 Rust 进程」占着端口；它挡不住**接错线**——
+# 例如把 `game-svr` 起在 7200、把 `game-gate` 起在 5000，四端口仍全是 Rust、旧判据照样 GREEN，
+# 但验收①的语义（设计文档 §2 进程/端口表）已经不成立。这里按端口表判入口归属：
+#   ok      = 入口基名 == 该端口期望入口；
+#   cross   = 入口是**已知 Rust 入口**但挂在别的端口上（接错线，要判红）；
+#   unknown = 认不出的入口名（可能是改名/包装脚本）——只登记不判红，交给验收人。
+# 端口表来源：设计文档 §2「进程/端口表」+ 本目录 README §1（5000 GameSvr / 7000 LoginGate /
+# 7100 SelGate / 7200 GameGate）。
+$script:M2PortEntries = @{ 5000 = "game-svr"; 7000 = "login-gate"; 7100 = "sel-gate"; 7200 = "game-gate" }
+
+function Get-M2ExpectedEntry {
+  param([int]$Port)
+  if ($script:M2PortEntries.ContainsKey($Port)) { return $script:M2PortEntries[$Port] }
+  return ""
+}
+
+function Get-M2EntryName {
+  param(
+    [string]$Exe = "",
+    [string]$CommandLine = "",
+    [string]$Name = ""
+  )
+  $raw = ""
+  if (-not [string]::IsNullOrEmpty($Name)) { $raw = $Name }
+  elseif (-not [string]::IsNullOrEmpty($Exe)) { $raw = $Exe }
+  if ([string]::IsNullOrEmpty($raw)) { return "" }
+  return [System.IO.Path]::GetFileNameWithoutExtension($raw).ToLowerInvariant()
+}
+
+function Get-M2EntryVerdict {
+  param([int]$Port, [string]$EntryName = "")
+  if ([string]::IsNullOrEmpty($EntryName)) { return "unknown" }
+  $expected = Get-M2ExpectedEntry -Port $Port
+  if ([string]::IsNullOrEmpty($expected)) { return "unknown" }
+  if ($EntryName -eq $expected) { return "ok" }
+  if ($script:M2RustNames -contains $EntryName) { return "cross" }
+  return "unknown"
+}

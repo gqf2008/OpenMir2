@@ -41,7 +41,7 @@ powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/run_acceptance.ps1 
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/selftest.ps1
-# 19 条口径全 OK ⇒ exit 0；任何一条不符 ⇒ exit 1（见 §8）
+# 25 条口径全 OK ⇒ exit 0；任何一条不符 ⇒ exit 1（见 §8）
 ```
 
 ---
@@ -53,16 +53,23 @@ powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/check_ports.ps1
 ```
 
 判据：对 `5000/7000/7100/7200` 逐个 `Get-NetTCPConnection -State Listen` 拿 `OwningProcess`，
-再用 `Get-CimInstance Win32_Process` 取 **PID + 命令行**，判定实现归属：
+再用 `Get-CimInstance Win32_Process` 取 **PID + 命令行**，判定实现归属**与该端口期望的入口**：
 
-- GREEN：四端口都在听，且命令行/可执行体判定为 Rust（`*\mir2-rs\target\*` 或已知 Rust 二进制名）；
+- GREEN：四端口都在听，命令行/可执行体判定为 Rust（`*\mir2-rs\target\*` 或已知 Rust 二进制名），
+  **且入口基名对得上该端口**（`5000→game-svr` / `7000→login-gate` / `7100→sel-gate` / `7200→game-gate`）；
 - RED：在听但判为 `csharp`（`E:\MirServer\*`）或 `unknown` ⇒ 验收①不成立；
+  或四端口**都是 Rust 但入口接错线**（已知 Rust 入口挂在非期望端口，如 `game-svr` 起在 7200）⇒ 也判红
+  （可用 `-AllowCrossEntry` 显式放行，默认不放松）；
 - PREREQ：有端口不在听 ⇒ 退出码 2。
+
+> **两层牙齿**：第一层只证明“有个 Rust 进程占着端口”（R2-1 的分类器）；第二层证明
+> “是这个端口该的那个 Rust 入口”（`portclassify.ps1` 的 `Get-M2ExpectedEntry`/`Get-M2EntryVerdict`，端口表
+> 来自设计文档 §2 + 本节）。两端口都是 Rust 但接错线，旧判据会 GREEN，新判据会 RED。
 
 > 复用既有口径：`mir2-rs/tests/parity/m3/run_m3_gate.ps1` 的「实现识别护栏」同源；本脚本把 GameSvr 侧
 > `5000` 也纳入，并要求四个端口**全为** Rust（混着 C# 即红）。
 
-**失败怎么判红**：任意端口 `impl != rust` ⇒ exit 1；端口缺失 ⇒ exit 2。两者都不是 GREEN。
+**失败怎么判红**：任意端口 `impl != rust` 或 `entry_verdict = cross` ⇒ exit 1；端口缺失 ⇒ exit 2。两者都不是 GREEN。
 
 ---
 
@@ -288,7 +295,8 @@ cargo run -p msgcodegen -- --check
 | s2c 对账（同序） | `s2c_diff.py --rust <重导件>` | `GREEN`（16 条同序 + 逐字节 0，归一化仅 recog） | 同上 |
 | s2c 红检 | 改 recog ⇒ 仍 GREEN；改尾一字节 ⇒ RED | 归一化只吸 recog、字节差异必红 | 同日志 / `E:\tmp\rust-body-broken.jsonl` |
 | 三路径 DB diff 驱动 | `check_db_paths.ps1 -Mode diff` 合成夹具 | 同件 GREEN / 改一字段 RED（复用 `scoped_diff.py`） | 控制台（rc 0 / rc 1） |
-| **手册判红自检** | `selftest.ps1` | **19/19 OK**：②截图 4 例、③b s2c 4 例（尾字节改坏⇒RED、只改 recog⇒GREEN）、③c DB 3 例、①端口实况判属 1 例、①a 分类器 5 例（R2-1）、聚合器 2 例 | `E:\tmp\openmir2-watch\pi-m2svr-selftest.log` |
+| **手册判红自检** | `selftest.ps1` | **25/25 OK**：②截图 4 例、③b s2c 4 例（尾字节改坏⇒RED、只改 recog⇒GREEN）、③c DB 3 例、①端口实况判属 1 例、①a 分类器 5 例（R2-1）、**①b 端口表→期望入口 6 例（本片）**、聚合器 2 例 | `E:\tmp\openmir2-watch\pi-m2svr-portentry-selftest.log` |
+| **端口表→入口 红检（本片）** | 把 `Get-M2EntryVerdict` 的 `cross` 分支改回 `"ok"` | `entry/5000+login-gate=cross` 与 `entry/7200+game-svr=cross` 两条 **FAILED**（`SUMMARY total=25 failed=2`、`SELFTEST FAIL`）；还原后 25/25 | `E:\tmp\openmir2-watch\pi-m2svr-portentry-redcheck.log` |
 | 52 输入接缝 | `cargo test -p game-svr --offline encode_ability` | 1/1 OK（`encode_ability` 逐字节等于金标准 #12 的 `EncodeMessage(WAbil)` 体） | `E:\tmp\openmir2-watch\pi-m2svr-ability-test.log` |
 | R4-1 红检 | 改回 `unwrap_or(0)` | `route_to_gate_rejects_out_of_range_gate_idx` FAILED；还原后 passed | `E:\tmp\openmir2-watch\pi-m2svr-r41-redcheck.log` |
 | **CurMap→map_id 接线单测** | `cargo test -p game-svr --offline mapwire` | 3/3 OK（逻辑名→id / 未知名必拒 / 无 Envir 回退） | 含在 `pi-m2svr-wire-test.log` |
@@ -301,13 +309,14 @@ cargo run -p msgcodegen -- --check
 残留物清单：
 
 - `tools/m2-acceptance/selftest.ps1`、`tools/m2-acceptance/mutate_capture.py`（本片新增：判红/判绿自检 + s2c 红检夹具生成器）；
-- `tools/m2-acceptance/portclassify.ps1`（本片新增：R2-1 的共享分类器，供 `check_ports.ps1`/`selftest.ps1` 同一口径使用）；
+- `tools/m2-acceptance/portclassify.ps1`（R2-1 的共享分类器；本片加「端口表→期望入口」的第二层牙齿：`Get-M2ExpectedEntry`/`Get-M2EntryName`/`Get-M2EntryVerdict`）；
 - `E:\tmp\m2-acceptance\`：无栈自检产生的 `ports-*.json`/`shots-*.json`/`run-*`/`s2c-selftest/` 等，保留作证据；
-- `E:\tmp\m2-acceptance\selftest-*\`：`selftest.ps1` 的 19 条构造夹具与 `selftest.json`（证据，保留）；
+- `E:\tmp\m2-acceptance\selftest-*\`：`selftest.ps1` 的 25 条构造夹具与 `selftest.json`（证据，保留）；
 - `E:\tmp\openmir2-watch\pi-m2svr-*.log`：四门禁、红检、自检原始输出；
 - `E:\tmp\rust-recog-changed.jsonl` / `rust-body-broken.jsonl`：s2c 归一化红检输入（证据）；
 - `E:\tmp\openmir2-watch\pi-m2svr-wire-redcheck.log`：`CurMap→map_id` 接线红检原始输出（证据，保留）；
 - `E:\tmp\openmir2-watch\pi-m2svr-wire-test.log` / `pi-m2svr-wire-gates.log`：接线后四门禁原始输出（证据，保留）；
+- `E:\tmp\openmir2-watch\pi-m2svr-portentry-selftest.log` / `pi-m2svr-portentry-redcheck.log`：本片端口表→入口自检与红检原始输出（证据，保留）；
 - 未新增/未修改进程、端口、库内行（本片全程只读外部状态）。
 
 ---
@@ -319,7 +328,7 @@ cargo run -p msgcodegen -- --check
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/selftest.ps1
-# 19 条全 OK ⇒ exit 0；任何一条不符 ⇒ exit 1（SELFTEST FAIL）
+# 25 条全 OK ⇒ exit 0；任何一条不符 ⇒ exit 1（SELFTEST FAIL）
 ```
 
 | # | 步骤 | 构造输入 | 期望 |
@@ -341,6 +350,11 @@ powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/selftest.ps1
 | 12c | ①a | 分类器：`E:\tmp\openmir2-m2svr-target\…\game-svr.exe` | `rust` |
 | 12d | ①a | 分类器：`C:\dev\game-svr.exe`（基名回落） | `rust`（**R2-1**：旧内联判据在此会算成非 Rust） |
 | 12e | ①a | 分类器：`C:\dev\foo.exe` | `unknown` |
+| 12f | ①b | 端口表：`5000` / `7200`（2 例） | `game-svr` / `game-gate` |
+| 12g | ①b | 入口基名：`…\target\debug\game-svr.exe` | `game-svr`（去目录/去扩展名/小写） |
+| 12h | ①b | 归属：`5000` + `game-svr` | `ok` |
+| 12i | ①b | 归属：`5000` + `login-gate`（接错线） | `cross`（→ `check_ports.ps1` 判红） |
+| 12j | ①b | 归属：`7200` + `game-svr`（接错线） | `cross`（→ 判红） |
 | 13 | 聚合 | `run_acceptance.ps1 -SelfCheckNoStack` | `2` + `PREREQ_MISSING` |
 | 14 | 聚合 | `-SkipPorts -SkipS2c -SkipDb -ShotsDir <6/7>` | `1` + `RED: 有步骤判红`（**红不许被说成前置**） |
 
