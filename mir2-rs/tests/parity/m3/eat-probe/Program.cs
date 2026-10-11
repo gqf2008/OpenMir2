@@ -490,9 +490,13 @@ internal static class Program
         cases.Add(RunCase(table, net, "eat_ok_stdmode1_hunger_no_recalc", new Ctx(),
             new List<Spec> { S(1, 2012) }, 1, "food_small",
             BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+        // 跨档 ⇒ `RefMyStatus()` ⇒ `RecalcAbilitys()`。运行时 `Abil` 已是**登录时的等级派生值**
+        //（`PlayObject.cs:1308` 先跑 `RecalcLevelAbilitys()`）⇒ 这里用 level=1 战士的 19/15；
+        // 且 `HP/MP <= MaxHP/MaxMP`（oracle 登录路径的 Play 分类钳位保证），否则会触发
+        // `PlayObject.RecalcAbilitys` 尚未建模的 `WAbil.HP > MaxHP ⇒ HP=MaxHP` 尾钳。
         cases.Add(RunCase(table, net, "eat_ok_stdmode1_hunger_recalc", new Ctx(),
             new List<Spec> { S(1, 2013) }, 1, "food_recalc",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            BaseAbil(hp: 15, mp: 15, maxHp: 19, maxMp: 15), 0, 0, false));
         cases.Add(RunCase(table, net, "eat_ok_stdmode1_hunger_clamp", new Ctx { hungerStatus = 4950 },
             new List<Spec> { S(1, 2014) }, 1, "food_clamp",
             BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
