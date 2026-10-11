@@ -25,11 +25,34 @@ load-<时间戳>/
 
 | 目录 | 档位 | 说明 |
 | --- | --- | --- |
-| `load-20261011-022821/` | 200 / 500 / 1000 | 第 3 轮（修掉“一条命令”三处硬伤后的三档连跑）：**tier-200 GREEN；tier-500/1000 RED**——RED 卡在跨轮登录爬坡，当时未定位 |
+| `load-20261011-022821/` | 200 / 500 / 1000 | 第 3 轮（修掉“一条命令”三处硬伤后的三档连跑）：**tier-200 GREEN；tier-500/1000 RED**——RED 卡在跨轮登录爬坡，当时未定位。**告警：tier-1000 的 `load_stats.ndjson` 已被下一轮冒烟覆写（见「证据完整性告警」），该档结论只引 `report.json`** |
+| `load-20261011-030205/` | 200 / 500 / (1000) | 干净库重跑（诊断轮）：tier-200 GREEN（login 100% / samples=912）、tier-500 RED 70.6%（peak 353/500 / internal_errors=125）——用来证伪“开号重复=爬坡根因”。**部分产物**：tier-1000 只有 `load_stats.ndjson`（无 `report.json`/`mem.ndjson`），整目录无 `load_gate_summary.json`（该轮被中止）⇒ 仅 `load_stats.ndjson` 可用 |
 | `load-20261011-104822/` | 500 | 第 4 轮 **T-9 修前**诊断：`login_ok=179/500`，`ident_counts[529]=500`（服务端全回）vs `520=530=179`（假人侧只处理了 179）——把“服务端吞吐上限”证伪 |
-| `load-20261011-114831/` | 200 / 500 / 1000 | 第 4 轮 **T-10 修前**：三档 verdict GREEN 但 `internal_errors` 非零（500:159 / 1000:16，自动挂机越界——见图下根因） |
-| `load-20261011-121254/` | 200 / 500 / 1000 | 第 4 轮 **验收 A**（最终代码）：三档 GREEN、`login=100%`、`conn_lost_steady=0`、`internal_errors=0`、`samples>0`；同目录 `stack_e2e.out.txt` = 整条命令 stdout（含开号幂等行） |
-| `load-20261011-121953/` | 200 / 500 / 1000 | 第 4 轮 **验收 B**（同一命令第二次）：三档 verdict 与 A **完全一致**、`samples>0`、`internal_errors=0` |
+| `load-20261011-114831/` | 200 / 500 / 1000 | 第 4 轮 **T-10 修前**：三档 verdict GREEN 但 `internal_errors` 非零（500:159 / 1000:16，自动挂机越界——见图下根因）。**告警：tier-1000 的 `load_stats.ndjson` 已被下一轮冒烟覆写，`internal_errors=16` 见 `report.json`** |
+| `load-20261011-121254/` | 200 / 500 / 1000 | 第 4 轮 **验收 A**（最终代码）：三档 GREEN、`login=100%`、`conn_lost_steady=0`、`internal_errors=0`、`samples>0`；同目录 `stack_e2e.out.txt` = 整条命令 stdout（含开号幂等行）。**告警：tier-1000 的 `load_stats.ndjson` 已被下一轮冒烟覆写（该档结论引 `report.json` + `stack_e2e.out.txt`）；tier-200/500 的 ndjson 与 report 自洽** |
+| `load-20261011-121953/` | 200 / 500 / 1000 | 第 4 轮 **验收 B**（同一命令第二次）：三档 verdict 与 A **完全一致**、`samples>0`、`internal_errors=0`；三档 ndjson 与 report **自洽**（未被覆写） |
+
+## 证据完整性告警（2026-10-11 自查，C6 原卡回复轮）
+
+**现象**：`load-*/tier-1000/load_stats.ndjson`（每轮**最后一档**）被**下一次运行**的 bot-smoke（3 假人）覆写，与同目录 `report.json` 不同源。
+
+实锤（逐档对照 `report.json` / `stack_e2e.out.txt`）：
+
+| 目录 | 入库 `tier-1000/load_stats.ndjson` | 同目录 `report.json` | 判定 |
+| --- | --- | --- | --- |
+| `load-20261011-022821/` | 36 行，全程 `spawned=3`、`tick_samples=0` | login 38.6% / peak 386 / samples 6066 | **被覆写** |
+| `load-20261011-114831/` | 3 行，`spawned=3` | login 100% / peak 1000 / internal_errors 16 | **被覆写** |
+| `load-20261011-121254/`（A） | 3 行，`spawned=3`、`tick_samples=0` | login 100% / peak 1000 / samples 877 | **被覆写** |
+| `load-20261011-030205/` | 65 行，`spawned=1000`、internal_errors 3463 | （该档无 `report.json`） | 自洽 |
+| `load-20261011-121953/`（B） | 18 行，`spawned=1000` | login 100% / samples 765 | 自洽 |
+
+**根因**：`load_gate.ps1` 每档把 `src/BotSrv/bin/Release/load_out.conf` 写成该档目录（“Env 不继承”的双保险），跑完**不清除**；`run_bots.ps1` 原先不设 `MIR2_BOT_OUT`，BotSrv 的 `LoadMetrics.ResolveOutDir` 于是回落到该 conf（指向**上一轮**的最后一档）⇒ 3 假人冒烟的 `load_stats.ndjson` 以 `FileMode.Create` 覆写归档件。时序与 `load_out.conf` 现值（指向 `121953/tier-1000`）可复核。
+
+**已修**：`run_bots.ps1` 显式 `$env:MIR2_BOT_OUT = <本次运行统计目录>`（`tests/botload/bots-<时间戳>/`），不再读 `load_out.conf`——本轮 `-SelfTestRed` 实跑后 `load_out.conf` 与 `121953/tier-1000/load_stats.ndjson` 的 sha256 均未变。
+
+**影响与引法**：上表「被覆写」三档的 tier-1000 结论**不得引 `load_stats.ndjson`**，只引同目录 `report.json`（A 轮另有 `stack_e2e.out.txt`）；tier-200/500（非最后一档）不受影响。**B 轮三档自洽**，是“同一命令两连跑 verdict 一致”的首选证据。
+
+**为什么不再复算**：`report.json` 是运行当时由正确的 ndjson 归算的，数值可信但源件已被覆写；本轮端口被其它线占用，不起栈重跑。若后续要恢复可复算性，可重跑 A 轮并把 `tier-1000` 完整入库。
 
 ## 第 3 轮结论与遗留（2026-10-11）
 
@@ -44,6 +67,7 @@ load-<时间戳>/
 - 开号确实不幂等，且已修：`account.Account` 上**没有唯一索引**（只有非唯一的 `_WA_Sys_FLD_LOGINID`），所以旧的 `INSERT IGNORE` 每跑一轮就重复插 1000 行——loadbot0 累积到 6 行、全表 11354 行 / 7151 不同名（已去重回 7151）。**内容冻结不允许给 oracle 表加唯一索引，所以幂等只能在开号 SQL 里用 `WHERE NOT EXISTS` 做**（已改，现在跑一轮只报 `account=1000`，不再增长）。
 - 但**去重 + 开号幂等并没有把 tier-500/1000 拉绿**：在干净（无重复）库上重跑，tier-500 仍卡在 **~353/500（70.6%）**、tier-1000 更低，`internal_errors` 0~125、tick 本身健康（P99 16ms、样本充足）。说明除「账号重复」外，还有一个**负载客户端/服务端的并发登录上限（~350–390/500）**未被定位，因此**不能**把 RED 归结为已修项。
 - 结论：tier-200 可绿且可复跑（P99 16ms、登录 100%、`internal_errors=0`），可直接给 M5 当「同屏 small」基线；tier-500/1000 的登录爬坡上限是**独立的未解项**，需单独定位（建议下一步查 LoginSrv/LoginGate 的并发上限与 BotSrv 登录错峰/重试，而不是继续查开号）。
+- **历史结论更正（2026-10-11 第 4 轮后）**：commit `383eb916` 的根因判断——“开号重复是跨轮登录爬坡变差（500:78% / 1000:38.6%）的根因”——**已被 `030205` 干净库重跑推翻**：去重 + 开号幂等之后 tier-500 仍 RED 70.6%（peak 353/500）。真正的根因在假人侧（跨假人共享 `MShare.MySelf` 判据，T-9），不是开号重复。
 
 > **第 4 轮已把上述“遗留”定位并修掉**：登录上限的真因在**假人侧**（T-9），不是服务端吞吐。见下。
 
