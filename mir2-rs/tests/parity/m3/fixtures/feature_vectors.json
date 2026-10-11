@@ -1,0 +1,288 @@
+{
+  "generator": "mir2-rs/tests/parity/m3/feature-probe",
+  "oracle_assembly": "M2Server.dll",
+  "oracle_assembly_sha256": "b2530cd548adaed7ebe8f74665f607c54ee0b2824b5894432a7f3d90c9df2caa",
+  "oracle_assembly_sha256_note": "\u751F\u6210\u65F6 M2Server.dll \u6784\u5EFA\u4EA7\u7269 hash\uFF08\u968F\u7F16\u8BD1\u5668/SDK/\u73AF\u5883\u53D8\u5316\uFF09\uFF1B\u4EC5\u4F5C\u6EAF\u6E90\uFF0C\u4E0D\u53C2\u4E0E\u5411\u91CF\u6821\u9A8C\u2014\u2014\u6821\u9A8C\u951A\u70B9\u662F oracle_source_sha256",
+  "oracle_source_sha256": "6bbda9375ecde3059e18b8d55a63d05a5136daf5dad4d246619613f21e6ae335",
+  "oracle_source_sha256_files": [
+    "src/M2Server/Player/PlayObject.cs",
+    "src/M2Server/Player/CharacterObject.cs",
+    "src/M2Server/Actor/BaseObject.cs",
+    "src/M2Server/M2Share.cs",
+    "src/OpenMir2/HUtil32.cs"
+  ],
+  "oracle_source": [
+    "src/M2Server/Player/PlayObject.cs:3393 (GetFeature)",
+    "src/M2Server/Player/PlayObject.cs:1128-1147 (SendLogon/SM_LOGON/SM_FEATURECHANGED)",
+    "src/M2Server/M2Share.cs:1965 (MakeHumanFeature)",
+    "src/M2Server/Player/CharacterObject.cs:146 (GetFeatureEx)",
+    "src/M2Server/Actor/BaseObject.cs:1487 (GetFeatureToLong)"
+  ],
+  "notes": [
+    "feature \u4F4D\u5E03\u5C40\uFF08LSB\u2192MSB\uFF09= [raceImg:8][weapon:8][hair:8][dress:8]",
+    "featureEx \u4F4D\u5E03\u5C40\uFF08LSB\u2192MSB\uFF09= [horse:8][dressEff:8]",
+    "GetFeature \u53EA\u5728 UseItems[Dress/Weapon].Index\u003E0 \u4E14 GetStdItem \u975E null \u65F6\u8BA1\u5165 Shape\uFF1B(byte)(Shape*2) \u4E0E byte \u52A0\u6CD5\u5747\u6309 byte \u622A\u65AD"
+  ],
+  "cases": [
+    {
+      "name": "naked_man_hair1",
+      "gender": 0,
+      "hair": 1,
+      "dress_shape": null,
+      "weapon_shape": null,
+      "feature": 131072,
+      "feature_hex": "0x00020000"
+    },
+    {
+      "name": "naked_man_hair0",
+      "gender": 0,
+      "hair": 0,
+      "dress_shape": null,
+      "weapon_shape": null,
+      "feature": 0,
+      "feature_hex": "0x00000000"
+    },
+    {
+      "name": "naked_woman_hair1",
+      "gender": 1,
+      "hair": 1,
+      "dress_shape": null,
+      "weapon_shape": null,
+      "feature": 16974080,
+      "feature_hex": "0x01030100"
+    },
+    {
+      "name": "naked_woman_hair3",
+      "gender": 1,
+      "hair": 3,
+      "dress_shape": null,
+      "weapon_shape": null,
+      "feature": 17236224,
+      "feature_hex": "0x01070100"
+    },
+    {
+      "name": "dress_shape1_man",
+      "gender": 0,
+      "hair": 1,
+      "dress_shape": 1,
+      "weapon_shape": null,
+      "feature": 33685504,
+      "feature_hex": "0x02020000"
+    },
+    {
+      "name": "dress_shape2_woman",
+      "gender": 1,
+      "hair": 1,
+      "dress_shape": 2,
+      "weapon_shape": null,
+      "feature": 84082944,
+      "feature_hex": "0x05030100"
+    },
+    {
+      "name": "weapon_shape2_woman",
+      "gender": 1,
+      "hair": 1,
+      "dress_shape": null,
+      "weapon_shape": 2,
+      "feature": 16975104,
+      "feature_hex": "0x01030500"
+    },
+    {
+      "name": "weapon_shape5_man",
+      "gender": 0,
+      "hair": 1,
+      "dress_shape": null,
+      "weapon_shape": 5,
+      "feature": 133632,
+      "feature_hex": "0x00020A00"
+    },
+    {
+      "name": "dress1_weapon2_man",
+      "gender": 0,
+      "hair": 1,
+      "dress_shape": 1,
+      "weapon_shape": 2,
+      "feature": 33686528,
+      "feature_hex": "0x02020400"
+    },
+    {
+      "name": "dress2_weapon3_woman",
+      "gender": 1,
+      "hair": 1,
+      "dress_shape": 2,
+      "weapon_shape": 3,
+      "feature": 84084480,
+      "feature_hex": "0x05030700"
+    },
+    {
+      "name": "dress_shape200_man",
+      "gender": 0,
+      "hair": 1,
+      "dress_shape": 200,
+      "weapon_shape": null,
+      "feature": -1878917120,
+      "feature_hex": "0x90020000"
+    },
+    {
+      "name": "weapon_shape200_man",
+      "gender": 0,
+      "hair": 1,
+      "dress_shape": null,
+      "weapon_shape": 200,
+      "feature": 167936,
+      "feature_hex": "0x00029000"
+    },
+    {
+      "name": "hair128_woman",
+      "gender": 1,
+      "hair": 128,
+      "dress_shape": null,
+      "weapon_shape": null,
+      "feature": 16843008,
+      "feature_hex": "0x01010100"
+    },
+    {
+      "name": "hair255_man",
+      "gender": 0,
+      "hair": 255,
+      "dress_shape": null,
+      "weapon_shape": null,
+      "feature": 16646144,
+      "feature_hex": "0x00FE0000"
+    },
+    {
+      "name": "dress_shape127_man",
+      "gender": 0,
+      "hair": 1,
+      "dress_shape": 127,
+      "weapon_shape": null,
+      "feature": -33423360,
+      "feature_hex": "0xFE020000"
+    },
+    {
+      "name": "weapon_shape127_woman",
+      "gender": 1,
+      "hair": 0,
+      "dress_shape": null,
+      "weapon_shape": 127,
+      "feature": 16908032,
+      "feature_hex": "0x0101FF00"
+    }
+  ],
+  "packing": [
+    {
+      "race_img": 0,
+      "dress": 0,
+      "weapon": 0,
+      "hair": 0,
+      "value": 0,
+      "value_hex": "0x00000000"
+    },
+    {
+      "race_img": 0,
+      "dress": 2,
+      "weapon": 0,
+      "hair": 4,
+      "value": 33816576,
+      "value_hex": "0x02040000"
+    },
+    {
+      "race_img": 0,
+      "dress": 1,
+      "weapon": 1,
+      "hair": 1,
+      "value": 16843008,
+      "value_hex": "0x01010100"
+    },
+    {
+      "race_img": 0,
+      "dress": 5,
+      "weapon": 9,
+      "hair": 3,
+      "value": 84084992,
+      "value_hex": "0x05030900"
+    },
+    {
+      "race_img": 0,
+      "dress": 255,
+      "weapon": 255,
+      "hair": 255,
+      "value": -256,
+      "value_hex": "0xFFFFFF00"
+    },
+    {
+      "race_img": 0,
+      "dress": 128,
+      "weapon": 0,
+      "hair": 64,
+      "value": -2143289344,
+      "value_hex": "0x80400000"
+    },
+    {
+      "race_img": 0,
+      "dress": 0,
+      "weapon": 128,
+      "hair": 0,
+      "value": 32768,
+      "value_hex": "0x00008000"
+    },
+    {
+      "race_img": 7,
+      "dress": 6,
+      "weapon": 5,
+      "hair": 4,
+      "value": 100926727,
+      "value_hex": "0x06040507"
+    }
+  ],
+  "feature_ex": [
+    {
+      "name": "off_horse_dress_eff0",
+      "on_horse": false,
+      "horse_type": 0,
+      "dress_eff_type": 0,
+      "value": 0,
+      "value_hex": "0x0000"
+    },
+    {
+      "name": "off_horse_type7",
+      "on_horse": false,
+      "horse_type": 7,
+      "dress_eff_type": 0,
+      "value": 0,
+      "value_hex": "0x0000"
+    },
+    {
+      "name": "on_horse7_eff0",
+      "on_horse": true,
+      "horse_type": 7,
+      "dress_eff_type": 0,
+      "value": 7,
+      "value_hex": "0x0007"
+    },
+    {
+      "name": "on_horse7_eff3",
+      "on_horse": true,
+      "horse_type": 7,
+      "dress_eff_type": 3,
+      "value": 775,
+      "value_hex": "0x0307"
+    },
+    {
+      "name": "off_horse_eff9",
+      "on_horse": false,
+      "horse_type": 5,
+      "dress_eff_type": 9,
+      "value": 2304,
+      "value_hex": "0x0900"
+    },
+    {
+      "name": "on_horse255_eff255",
+      "on_horse": true,
+      "horse_type": 255,
+      "dress_eff_type": 255,
+      "value": 65535,
+      "value_hex": "0xFFFF"
+    }
+  ]
+}

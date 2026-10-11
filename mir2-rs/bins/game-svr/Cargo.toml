@@ -25,3 +25,4 @@ chrono = "0.4"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "time", "process"] }
+serde_json = "1"   # feature.rs 用例回读 oracle 实测向量（tests/parity/m3/fixtures/feature_vectors.json）

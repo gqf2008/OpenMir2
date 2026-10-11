@@ -714,6 +714,28 @@ walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 prin
 - **合并护栏**：两条 merge 都在合并树上重跑四门禁（`E:/tmp/openmir2-watch/merge-55fdde5e-*.log`），并逐条核"被审面未被合并改写"
   （botsrv：`git diff --name-only a236e607 7a878095 -- <被审路径>` = 空；life：`docs/Rust重写设计文档.md` 的 blob 与 master 侧版本逐字节相同）。
   **T-12 编号已被 botsrv 占用** ⇒ m3bag 需改号（已写入其 brief）。
+- **C6 残留 F9-1 已开卡**：`openmir2-c6-artifacts-hash-repro`（issue `b790d24ae7413dab3e461e4fc75ab5303390026b`）——`artifacts.sha256.json` 的
+  CRLF/LF 可复现性（全新检出 18/45 假 mismatch）；Minor、不是里程碑阻塞项，车道排在 `m3gs` 之后，**避免只留在散文里**。
+- **M2 入图帧 8/16 已合入**（2026-10-11 18:30）：`3dbb4707`（`enter.rs`：`766/54/11029/1106/5008/811`）经 reviewer-1 `16cb2cbf`
+  **独立 approve**（隔离 target 3 连跑 429/0/13 + 独立红检 3 条 + 六条帧逐条 oracle 行号锚定）后由 owner 合入 master `0106e9f4`（合并树四门禁 67/429/0/13 + 604）。
+  余 8 条：`50/41/10/213`（等 `m3bag` 的 `feature.rs` 接缝，该片因 F-1 返工中）、`42 SM_USERNAME`、`52/752`、`46`（世界时钟）。
+- **M2 会话生命周期"按实测对齐"片已交付待审**：`3b2e71f2` @ head `b4700ce5`（账号级 `SM_SYSMESSAGE` 顶号 + `ProcessHumansIsLogined` 竞态三支复刻，
+  `payMode≠0` 因 oracle 恒传 0 而只实现一支——如实登记）；已由 owner 路由给 reviewer 车道（审 `3dbb4707..3b2e71f2` 差量）。
+- **M2 验收夹具已"先验一步"**（2026-10-11 18:37）：`powershell -File tools/m2-acceptance/selftest.ps1` ⇒ **33/33 GREEN**（`SUMMARY total=33 failed=0`，
+  报告 `E:/tmp/m2-acceptance/selftest-20261011-183718/selftest.json`）——手册每一步"判红/判绿"的口径都经构造输入验证（含 `PREREQ_MISSING=2` 不静默通过、
+  有 RED 不许被说成前置、金标准 schema 坏必红）。⇒ 端口窗口一空就能直接跑真机验收，**不会因为夹具本身坏了白占窗口**。
+- **M3 背包/装备片的 F-1 返工已交付待审**：head `156ddba1`（base `85cac081`）——13 张真实 dbsnap 表全部登记（真快照 extract `RC=4→0`，115 行/111 族表行）、
+  selftest **13/13**（真实 13 表 manifest extract 必须 GREEN + 删任一登记必红）、族表跨侧 `--canonical --fixed-newchr` diff GREEN（5 表/111 行×2）、
+  新增 `oracle_source_sha256` 源码锚、`T-12/T-13`→`T-13/T-14`。**M2 帧 `50/41/10/213` 要的 `feature.rs` 就在这一片**（它不碰 `main.rs`/`smframe.rs`）。
+- **M4 剩余三项已开卡**：`openmir2-m4-parity-cases`（issue `03d6c58a63d889dfadc11e378bd0ea3460fc55c5`）—— parsecount 两侧对拍表 / 6 类关键 NPC 用例 /
+  "双侧逐行多重集差 = 0" 门禁落地；车道排在 `m3gs` 之后（先有卡，别只留在 §17 散文里）。
+- **M2 会话生命周期对齐片已合入**（2026-10-11 18:50）：`3b2e71f2` 经 reviewer-3 `5224ada8` 独立 approve（隔离 target 3 连跑每次 435/0/13；**3 条红检独立复现**；
+  oracle 逐行核对 `TCPNetChannel.cs:229/252/256/262/268-269`、`AuthenticationService.cs:299-319`、`PlayObject.Message.cs:1715`、`PlayObject.cs:1082-1090`、`WorldServer.cs:200-217/503/535/568-570`；
+  字节锚 = **M0 金标准 seq66（ident 100）逐字节重建** + `KICK_USER_MSG` 49B == GBK(oracle 字面量)）⇒ merge `4f77b897`，合并树四门禁 67/435/0/13 + 604。
+  **本卡仍不 close**：真机夹具复跑待端口窗口、`InSaveRcdList` 生产侧未接线（S2b-3，真机"保存中"窗口恒空 ⇒ 竞态窗口比 oracle 短，登记不臆造延时）、4 条非阻塞 Minor。
+- **M1⑤ 实测抓到一条真缺陷（新卡）**：全 Rust 边界链上 **登录/选服/查角色 200/200，但选角 0/200**（无 `525`，Rust db-srv 200 条 `Double send SELCHR`）——
+  根因 = `bins/db-srv` 的 `query_chr()` 成功时**没置 `u.chr_queryed = true`**（C# `src/DBSrv/Services/Impl/UserService.cs:359` 有），`CM_SELCHR` 恒走 else ⇒ 从不回 `SM_STARTPLAY`。
+  已开卡 `openmir2-m1-dbsrv-selchr-queryed`（issue `2e5d3b0897576dcc4a31f26194dc3fa366805a63`），**不顺手改**（写集红线）；因与 `dbsrv6k` 的 S4b 同文件 ⇒ 由同一车道在该片之后接着做（已写进其 brief §4）。
 
 ## 18. S3：B-8 命令码位移修复（2026-10-10，oracle 行为变更）
 
