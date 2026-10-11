@@ -28,6 +28,7 @@ mod hutil;
 mod ids;
 mod load;
 mod record;
+mod smframe;
 mod users;
 
 use std::sync::Arc;
