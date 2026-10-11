@@ -1,0 +1,13 @@
+17:36:04.980 [DBG] Open: 127.0.0.1/127.0.0.1
+17:36:17.539 [DBG] LegendOfMir2/99/0/DBServer/Online:0/正常热血传奇/0/0/GameServer/试玩/Online:0/正常
+17:36:20.919 [DBG] [登录] 帐号=[fixt0] 密码长度=5
+17:36:20.935 [DBG] [选服] account=[fixt0] server=[热血传奇] gateIP=[127.0.0.1] selServer=False isLogin=True routeCount=2
+17:36:20.947 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+17:36:20.962 [DBG] Close: 127.0.0.1
+17:36:37.556 [DBG] LegendOfMir2/99/0/DBServer/Online:0/正常热血传奇/0/1/GameServer/试玩/Online:1/正常
+17:36:55.182 [DBG] Open: 127.0.0.1/127.0.0.1
+17:36:55.193 [DBG] [登录] 帐号=[fixt0] 密码长度=5
+17:36:55.211 [DBG] [选服] account=[fixt0] server=[热血传奇] gateIP=[127.0.0.1] selServer=False isLogin=True routeCount=2
+17:36:55.211 [INF] Server: 热血传奇/127.0.0.1-127.0.0.1:7100
+17:36:57.013 [DBG] Close: 127.0.0.1
+17:36:57.584 [DBG] LegendOfMir2/99/0/DBServer/Online:0/正常热血传奇/0/1/GameServer/试玩/Online:1/正常
