@@ -613,6 +613,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-gate"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "mir2-protocol",
+ "tokio",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
