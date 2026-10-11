@@ -3,7 +3,7 @@
     "card": "openmir2-m4-parity-cases",
     "acceptance": "② 6 类关键 NPC 用例（商店买卖/回购、传送、修理、仓库、行会、任务）：每类一个可复跑用例；写清失败怎么判红；原始件入库。",
     "runner": "python -I tests/parity/M4/run_npc_cases.py",
-    "note": "runner == 'flow' 的用例现在就能跑（不需要两栈/端口）：两侧 harness = tools/script-parity-cs run（C# 参照）+ mir2-script-tool flow-run（Rust），同一脚本+同一 label+同一初始状态，逐行 diff。runner == 'window' 的用例需要 M2 真机验收窗口释放（5000/7000/7100/7200）+ 两侧栈 + DB 作用域比对；本轮登记『等窗口』，runner 只打印判据、不计通过。"
+    "note": "runner == 'flow' 的用例现在就能跑（不需要两栈/端口）：两侧 harness = tools/script-parity-cs run（C# 参照）+ mir2-script-tool flow-run（Rust），同一脚本+同一 label+同一初始状态，逐行 diff。2026-10-12 owner 裁定（e808ec99）：路线① 打通后 6 类全部走 port-free；原先 3 条 `runner == 'window'` 的商人用例（商店/修理/仓库）已因 C# 夹具补 `IMerchant` 代理 + `goto` 走 `ActorMgr` 而转为 flow。Rust 侧 NPC/商人**服务端派发**不属本卡（M3 NPC/商店对齐）；本卡 ② 以 port-free 为准。"
   },
   "cases": [
     {
@@ -56,7 +56,8 @@
     {
       "category": "商店",
       "name": "商店-货币兑换（@changeGold 足额金币→金条）",
-      "runner": "window",
+      "runner": "flow",
+      "resolved": "2026-10-12 路线①（owner 授权写集扩到 tools/script-parity-cs/**）：按脚本头选 IMerchant 代理后 port-free 跑通，两侧逐行差 0。原 window_reason 保留为历史。",
       "script": "E:/MirServer/M2GameSvr/Envir/Market_Def/封魔谷/恶魔修理师-d2008.txt",
       "label": "@changeGold",
       "gold": 1200000,
@@ -69,7 +70,8 @@
     {
       "category": "修理",
       "name": "修理-RepairAll（@StdModeFunc26）",
-      "runner": "window",
+      "runner": "flow",
+      "resolved": "2026-10-12 路线①：QFunction-0.txt 首行 `(@@sendmsg)` ⇒ IMerchant 代理；本 label 无副作用（mock 无佩戴位，RepairAll 两均无输出），两侧逐行差 0。",
       "script": "E:/MirServer/M2GameSvr/Envir/Market_Def/QFunction-0.txt",
       "label": "@StdModeFunc26",
       "gold": 1000,
@@ -82,7 +84,8 @@
     {
       "category": "仓库",
       "name": "仓库-捆绑卷轴（@zum_bind1 6×地牢逃脱卷）",
-      "runner": "window",
+      "runner": "flow",
+      "resolved": "2026-10-12 路线①：仓库-0145.txt 首行 `(@storage @getback …)` ⇒ IMerchant 代理；另修 `goto @zum_bind1_1` 需把 NPC 代理注册进 ActorMgr（JmpToLable 按 ActorId 取 NPC）。两侧逐行差 0。",
       "script": "E:/MirServer/M2GameSvr/Envir/Market_Def/盟重土城/仓库-0145.txt",
       "label": "@zum_bind1",
       "gold": 1000,

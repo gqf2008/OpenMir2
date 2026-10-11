@@ -162,7 +162,12 @@ impl ScriptPlayer for FlowPlayer {
     }
     fn give_item(&mut self, name: &str, count: i32) {
         self.items.push((name.to_string(), count));
-        self.log.push(format!("additem {name} {count}"));
+        // 与 C# oracle 同粒度：`GotoLableGiveItem`（ScriptEngine.cs:690+）对每件调一次
+        // `SendAddItem`，夹具按**每件一行**记（不是 `additem 名 件数` 一行），否则
+        // `give 名 N`（N>1）两侧行数不一致。见 tools/script-parity-cs 的 RunPlayer.SendAddItem。
+        for _ in 0..count.max(0) {
+            self.log.push(format!("additem {name} 1"));
+        }
     }
     fn remove_item(&mut self, name: &str, count: i32) -> i32 {
         let mut left = count;
@@ -174,7 +179,11 @@ impl ScriptPlayer for FlowPlayer {
                 let take = (*c).min(left);
                 *c -= take;
                 left -= take;
-                self.log.push(format!("delitem {n} {take}"));
+                // 同 `give_item`：oracle `GotoLableTakeItem`（ScriptEngine.cs:653+）对每件
+                // 调一次 `SendDelItems` ⇒ 每件一行。
+                for _ in 0..take {
+                    self.log.push(format!("delitem {n} 1"));
+                }
             }
         }
         self.items.retain(|(_, c)| *c > 0);

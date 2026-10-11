@@ -291,6 +291,24 @@ class NpcRunProxy : DispatchProxy
                     {
                         var rt = m.ReturnType;
                         if (rt == typeof(string)) return "";
+                        // 商人脚本（IMerchant，脚本头 `(@buy …)`）会读 IList<> 型属性：
+                        // 参照实现拿它当非 null 集合遍历；返回 null ⇒ NRE（夹具缺口，非 oracle 行为差异）。
+                        if (rt.IsArray) return Array.CreateInstance(rt.GetElementType(), 0);
+                        if (rt.IsGenericType)
+                        {
+                            var def = rt.GetGenericTypeDefinition();
+                            if (def == typeof(IList<>) || def == typeof(List<>) ||
+                                def == typeof(IEnumerable<>) || def == typeof(ICollection<>))
+                            {
+                                return Activator.CreateInstance(
+                                    typeof(List<>).MakeGenericType(rt.GetGenericArguments()[0]));
+                            }
+                            if (def == typeof(IDictionary<,>))
+                            {
+                                return Activator.CreateInstance(
+                                    typeof(Dictionary<,>).MakeGenericType(rt.GetGenericArguments()));
+                            }
+                        }
                         if (rt.IsValueType) return Activator.CreateInstance(rt);
                         return null;
                     }
@@ -302,6 +320,25 @@ class NpcRunProxy : DispatchProxy
 
 static class RunMode
 {
+    /// <summary>读出脚本文件第一条非空行的前导内容（用于判断商人脚本头 `(@buy …)`）。
+    /// 脚本内文本是 GBK，但商家头是纯 ASCII，用默认读取只取首字符足够。</summary>
+    static string FirstContentLine(string path)
+    {
+        try
+        {
+            foreach (var line in File.ReadLines(path))
+            {
+                var t = line.TrimStart('\uFEFF', ' ', '\t', '\r');
+                if (t.Length > 0) return t;
+            }
+        }
+        catch (IOException)
+        {
+            // 读不了就按非商人处理，让参照实现自己报错
+        }
+        return "";
+    }
+
     public static int Run(string[] args, CountingSink sink)
     {
         // run <脚本文件> <label> [--gold N] [--level N] [--items name:idx:weight,...] [--player-items name:count,...]
@@ -348,9 +385,27 @@ static class RunMode
         foreach (var (n, idx, w) in itemTable) itemSystem.Add(n, idx, w);
         SystemShare.ItemSystem = itemProxy;
 
-        var npc = DispatchProxy.Create<INormNpc, NpcRunProxy>() as NpcRunProxy;
+        // 商人脚本（脚本首行 `(@buy @sell …)`）在 `ScriptParsers.LoadScriptFile` 里会被强转 `IMerchant`
+        // （`ScriptParsers.cs:713+`）。夹具的 NPC 代理必须实现 `IMerchant`（它 : INormNpc），
+        // 否则 `((IMerchant)NPC)` 直接抛 `InvalidCastException` —— 这正是商店/修理/仓库三条
+        // 窗口用例原先无法 port-free 对拍的根因（本夹具缺口，非 oracle 行为差异）。
+        // 按 oracle 自己的触发条件（首行以 `(` 开头）决定代理面，减小对非商人用例的扰动：
+        bool merchantScript = FirstContentLine(scriptPath).StartsWith("(");
+        INormNpc npcNpc = merchantScript
+            ? (INormNpc)DispatchProxy.Create<IMerchant, NpcRunProxy>()
+            : DispatchProxy.Create<INormNpc, NpcRunProxy>();
+        // `goto @label` 走 `ScriptEngine.JmpToLable → GotoLable(playerActor, npc.ActorId, …)`，
+        // 后者从 `SystemShare.ActorMgr` 按 ActorId 取 NPC；不注册代理就静默不跳（夹具缺口，
+        // 不是 oracle 行为差异）——这正是 `@zum_bind1` 的 `goto @zum_bind1_1` 原先不生效的根因。
+        if (SystemShare.ActorMgr == null) SystemShare.ActorMgr = new ActorMgr();
+        SystemShare.ActorMgr.Add((IActor)npcNpc);
         var parsers = new ScriptParsers();
-        parsers.LoadScriptFile((INormNpc)npc, Path.GetDirectoryName(scriptPath) ?? "", Path.GetFileNameWithoutExtension(scriptPath), true);
+        parsers.LoadScriptFile(npcNpc, Path.GetDirectoryName(scriptPath) ?? "", Path.GetFileNameWithoutExtension(scriptPath), true);
+        // 只比「执行期」错误：C# 夹具原先把 LoadScriptFile 期间的 Error（脚本错误/`#CALL load fail`）
+        // 也打出来，而 Rust `flow-run` 只打 `Engine::goto_label` 的执行期错误 ⇒ 带解析错误的脚本
+        // （如 QFunction-0.txt）会出现单侧多出的 `err` 行。两类「加载错误」的逐条对齐已由 M4①
+        // （`m4_parity.py` 的 errors 多重集）负责，flow 夹具只对齐**执行**观测面。
+        sink.AllErrors.Clear();
 
         var player = DispatchProxy.Create<IPlayerActor, RunPlayer>() as RunPlayer;
         player.GoldValue = gold;
@@ -366,7 +421,7 @@ static class RunMode
         var engine = new ScriptEngine();
         try
         {
-            engine.GotoLable((INormNpc)npc, (IPlayerActor)player, label, false);
+            engine.GotoLable(npcNpc, (IPlayerActor)player, label, false);
         }
         catch (Exception ex)
         {
