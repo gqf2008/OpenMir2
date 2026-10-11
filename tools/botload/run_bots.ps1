@@ -36,6 +36,7 @@ param(
   [int]$NewChrJob = 0,            # 仅 -FixedNewChr 时生效（写进 AppSetting.json 的 BotPlay 段）
   [int]$NewChrHair = 0,           # 仅 -FixedNewChr 时生效
   [int]$NewChrSex = 0,            # 仅 -FixedNewChr 时生效
+  [switch]$RequireWorld,          # F4（T-12）：要求全部假人都有"本会话收到 SM_LOGON"的进世界证据（in_world == Count）才 GREEN
   [switch]$SelfTestRed
 )
 
@@ -112,6 +113,7 @@ Write-Output "BOTSRV_PID=$($proc.Id) LOG=$LogFile"
 $deadline = (Get-Date).AddSeconds($TimeoutSec)
 $success = 0
 $spawned = 0
+$worldOk = 0
 function Read-SharedText([string]$Path) {
   # BotSrv 的 StreamWriter 以 FileShare.ReadWrite 持有：读侧也必须放行写，否则打开即抛
   if (-not (Test-Path $Path)) { return "" }
@@ -139,16 +141,22 @@ while ((Get-Date) -lt $deadline) {
   if ($st -ne $null) {
     $spawned = [int]$st.spawned
     $success = [int]$st.login_ok
+    if ($st.PSObject.Properties.Name -contains "in_world") { $worldOk = [int]$st.in_world }
   }
-  Write-Output ("PROGRESS spawned=" + $spawned + " login_ok=" + $success + "/" + $Count + " (src=load_stats.ndjson)")
-  if ($success -ge $Count) { break }
+  Write-Output ("PROGRESS spawned=" + $spawned + " login_ok=" + $success + "/" + $Count + " in_world=" + $worldOk + "/" + $Count + " (src=load_stats.ndjson)")
+  if ($RequireWorld) {
+    # F4（T-12）：登录不等于进世界；等"本会话收到 SM_LOGON"的进世界证据到齐。
+    if ($worldOk -ge $Count) { break }
+  } elseif ($success -ge $Count) { break }
   if ($proc.HasExited) { Write-Output "WARN: BotSrv 进程提前退出 code=$($proc.ExitCode)"; break }
 }
 
 $rate = if ($Count -gt 0) { [math]::Round(100.0 * $success / $Count, 2) } else { 0 }
+$worldRate = if ($Count -gt 0) { [math]::Round(100.0 * $worldOk / $Count, 2) } else { 0 }
 $summary = [pscustomobject]@{
-  count = $Count; spawned = $spawned; login_ok = $success
-  success_rate_pct = $rate; timeout_sec = $TimeoutSec; log = $LogFile; stats = $statsPath
+  count = $Count; spawned = $spawned; login_ok = $success; in_world = $worldOk
+  success_rate_pct = $rate; world_rate_pct = $worldRate; require_world = [bool]$RequireWorld
+  timeout_sec = $TimeoutSec; log = $LogFile; stats = $statsPath
 }
 $summaryPath = [System.IO.Path]::ChangeExtension($LogFile, ".summary.json")
 $summary | ConvertTo-Json | Set-Content -Path $summaryPath -Encoding utf8
@@ -164,9 +172,13 @@ if ($SelfTestRed) {
   exit 1
 }
 
-if ($success -ge $Count) {
-  Write-Output ("GREEN: " + $success + "/" + $Count + " 登录成功 (100%)")
+if ($success -ge $Count -and (-not $RequireWorld -or $worldOk -ge $Count)) {
+  Write-Output ("GREEN: " + $success + "/" + $Count + " 登录成功 (100%)" + $(if ($RequireWorld) { "；in_world=" + $worldOk + "/" + $Count } else { "" }))
   exit 0
+}
+if ($RequireWorld -and $worldOk -lt $Count) {
+  Write-Output ("RED: 进世界证据 in_world=" + $worldOk + "/" + $Count + "（" + $worldRate + "%）未达标（-RequireWorld：要求每个假人本会话都收到 SM_LOGON）")
+  exit 1
 }
 Write-Output ("RED: 登录成功 " + $success + "/" + $Count + " (" + $rate + "%) 未达标")
 exit 1

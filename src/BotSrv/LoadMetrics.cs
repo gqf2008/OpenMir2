@@ -47,6 +47,28 @@ namespace BotSrv
         private static long _probeSent;
         private static long _inWorld;
 
+        // ==== 进世界后的挂机轮次（C6/M5 假人侧证据完整性 T-12）：F4 的"改前/改后"证据 ====
+        // F4（reviewer-3 `a4c8091be9`）：`RunAutoPlay` 对**尚未进世界**的假人也执行、且作用在**跨假人共享**的
+        // `MShare` 世界态上 ⇒ 按 bot 名记的挂机日志不能当作"该假人进世界"的证据。
+        //   · `_autoPlayInWorld`        = 本会话已进世界（收到自己的 SM_LOGON）的挂机轮次（修复后只有它）
+        //   · `_autoPlayPreWorld`       = 本会话**没有** SM_LOGON 却仍跑挂机的轮次（仅 `MIR2_BOT_LEGACY_SHARED_AUTOPLAY=1` 的对照组能产出）
+        //   · `_autoPlaySkippedPreWorld`= 修复后挂机循环**因本会话未进世界而跳过**的次数
+        // 判据：同一批假人，`legacy` 组 `autoPlayPreWorld>0`（共享态挂机日志与真实进世界数不符），修复组 `autoPlayPreWorld==0`。
+        private static long _autoPlayInWorld;
+        private static long _autoPlayPreWorld;
+        private static long _autoPlaySkippedPreWorld;
+
+        // ==== 牙齿测试钩子（T-12）：显式抹掉某个假人的"进世界证据" ====
+        // `MIR2_BOT_SUPPRESS_INWORLD=<0 基序号>`：LoginId 尾部数字命中该序号的假人**照常进世界**，但**不计**
+        // `in_world`（= 证据被抹掉）。用于证明"in_world/在线判据有牙齿"（抹掉一条 ⇒ 判据必红）。默认 -1=关。
+        private static long _inWorldSuppressed;
+
+        // ==== F3(a) 观测：CM_ADDNEWUSER 的"发出/没发出去" ====
+        // bot-smoke 第三条假人"`CM_ADDNEWUSER` 后无应答"需要一个可读数字：把"注册包写进 socket"与
+        // "socket 未连接而丢弃"分开；服务端回没回看既有的 `ident_counts[SM_NEWID_*]`。
+        private static long _registerSent;
+        private static long _registerSendClosed;
+
         // ==== 登录响应观测（C6 第 4 轮，T-8）：把「假人侧发了多少 / 收到哪些回包」变成可读数字 ====
         // 目的：tier-500/1000 登录卡在 ~350-390 时，先判「假人没发对包」还是「服务端没回/回错」，
         // 而不是靠 bots.log 里的中文行数反推（那条口径漏计了"发送时 socket 未连接"的假人）。
@@ -218,6 +240,84 @@ namespace BotSrv
             {
                 _inWorld++;
             }
+        }
+
+        // ==== F4：挂机轮次按"本会话是否进世界"分账（T-12）====
+
+        /// <summary>本会话已进世界的假人跑了一轮挂机（修复后的正常路径）。</summary>
+        public static void AutoPlayInWorld()
+        {
+            lock (Sync) { _autoPlayInWorld++; }
+        }
+
+        /// <summary>本会话**尚未**进世界的假人仍跑了一轮挂机（F4 缺陷的"改前"证据；仅 legacy 对照组）。</summary>
+        public static void AutoPlayPreWorld()
+        {
+            lock (Sync) { _autoPlayPreWorld++; }
+        }
+
+        /// <summary>挂机循环因"本会话未进世界"跳过了一个假人（修复后的行为）。</summary>
+        public static void AutoPlaySkippedPreWorld()
+        {
+            lock (Sync) { _autoPlaySkippedPreWorld++; }
+        }
+
+        /// <summary>牙齿钩子（T-12）：本假人的进世界证据被显式抑制，不计入 `in_world`。</summary>
+        public static void InWorldSuppressed()
+        {
+            lock (Sync) { _inWorldSuppressed++; }
+        }
+
+        // ==== F3(a)：注册包发出/丢弃观测（T-12）====
+
+        /// <summary>CM_ADDNEWUSER 真正写进了 socket（只有这样服务端才可能回 SM_NEWID_*）。</summary>
+        public static void RegisterSent()
+        {
+            lock (Sync) { _registerSent++; }
+        }
+
+        /// <summary>想发注册包但 socket 未连接（= 发送被丢弃，与"服务端没回"是两回事）。</summary>
+        public static void RegisterSendClosed()
+        {
+            lock (Sync) { _registerSendClosed++; }
+        }
+
+        // ==== F4：legacy 对照组开关 + 牙齿抑制序号（T-12；默认都关，正常门禁行为与 T-11 逐字节一致）====
+
+        /// <summary>`MIR2_BOT_LEGACY_SHARED_AUTOPLAY=1` 时恢复"只看共享 `MShare.MySelf`"的旧挂机门
+        /// （用于产出 F4 的"改前"对照数字）。默认 false。</summary>
+        private static readonly bool _legacySharedAutoPlay =
+            Environment.GetEnvironmentVariable("MIR2_BOT_LEGACY_SHARED_AUTOPLAY") == "1";
+
+        public static bool LegacySharedAutoPlay => _legacySharedAutoPlay;
+
+        /// <summary>`MIR2_BOT_SUPPRESS_INWORLD=<0 基序号>`：抹掉该假人的进世界证据；-1=关。</summary>
+        private static readonly int _suppressInWorldIndex = ResolveSuppressInWorldIndex();
+
+        private static int ResolveSuppressInWorldIndex()
+        {
+            string v = Environment.GetEnvironmentVariable("MIR2_BOT_SUPPRESS_INWORLD");
+            if (!string.IsNullOrEmpty(v) && int.TryParse(v, out int i) && i >= 0)
+            {
+                return i;
+            }
+            return -1;
+        }
+
+        /// <summary>本假人（LoginId 尾部数字 = 序号）的进世界证据是否被显式抑制。</summary>
+        public static bool ShouldSuppressInWorld(string loginId)
+        {
+            if (_suppressInWorldIndex < 0 || string.IsNullOrEmpty(loginId))
+            {
+                return false;
+            }
+            int end = loginId.Length;
+            int start = end;
+            while (start > 0 && loginId[start - 1] >= '0' && loginId[start - 1] <= '9')
+            {
+                start--;
+            }
+            return start < end && int.TryParse(loginId.Substring(start), out int idx) && idx == _suppressInWorldIndex;
         }
 
         /// <summary>一轮自动挂机里被兜住的异常（压测进程不许被单个假人打死；异常数进报告）。</summary>
@@ -667,6 +767,12 @@ namespace BotSrv
               .Append(",\"conn_lost\":").Append(_connLost)
               .Append(",\"internal_errors\":").Append(_internalErrors)
               .Append(",\"in_world\":").Append(_inWorld)
+              .Append(",\"in_world_suppressed\":").Append(_inWorldSuppressed)
+              .Append(",\"autoplay_in_world\":").Append(_autoPlayInWorld)
+              .Append(",\"autoplay_pre_world\":").Append(_autoPlayPreWorld)
+              .Append(",\"autoplay_skipped_pre_world\":").Append(_autoPlaySkippedPreWorld)
+              .Append(",\"register_sent\":").Append(_registerSent)
+              .Append(",\"register_send_closed\":").Append(_registerSendClosed)
               .Append(",\"probe_sent\":").Append(_probeSent)
               .Append(",\"login_begin\":").Append(_loginBegin)
               .Append(",\"login_sent\":").Append(_loginSent)

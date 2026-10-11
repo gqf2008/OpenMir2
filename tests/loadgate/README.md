@@ -213,7 +213,11 @@ conn/tick/internal 都 GREEN；否则该档 RED。
 - **§6 M5 的「tick P99 ≤ 100ms」目前在任何栈上都未验证通过**——C# 参考栈 1000 档实测 125/201ms
   （加载窗口内；E 轮 P99=16~62ms 亦非空载）⇒ 待 Rust 栈接管后（M5 灰度）复测。
 - `in_world` 实测只有 ~10%（tier-500/1000 稳态 17~27）⇒ **不得**用这三档宣称「M5 三档：1000 假人在线」；
-  「假人真正进世界」是 M5 收尾缺口（归宿：卡 `openmir2-botsrv-world-evidence`）。
+  「假人真正进世界」是 M5 收尾缺口。**2026-10-11 T-12（卡 `openmir2-botsrv-world-evidence`）已把这个判据
+  改成只认本会话自己的证据**：`in_world` = 该假人本连接收到 `SM_LOGON` 的计数，挂机也改成只对本会话已进世界的假人执行
+  （改前 `autoplay_pre_world>0` ⇒ 按 bot 名记的挂机日志不能当进世界证据；改后 `==0`）。原始件
+  `tests/loadgate/botsrv-world-evidence-20261011/`（含“抹掉某假人进世界证据 ⇒ `-RequireWorld` 必红”的牙齿）。
+  `in_world` 依旧低是因为三档里本来就只有少数假人走到世界，**不是**判据再依赖共享态。
 
 ### 红检（改坏必红、还原必绿）
 
@@ -286,7 +290,8 @@ conn/tick/internal 都 GREEN；否则该档 RED。
 
 | 字段 | 含义 | 为什么必须一起读 |
 | --- | --- | --- |
-| `in_world` / `world_ok_pct` | 收到 `SM_LOGON`（真进世界）的假人数与占比 | **它是 tick 样本的覆盖基数**：tick 只可能来自进世界的假人。本工具假人的世界态建立在跨假人共享的 `MShare.*` 上，实测 200 档只有 ~10% 能进世界 ⇒ tick 是"少数人身上量的"，样本量（不是分辨率）是它现在的短板 |
+| `in_world` / `world_ok_pct` | 收到 `SM_LOGON`（真进世界）的假人数与占比 | **它是 tick 样本的覆盖基数**：tick 只可能来自进世界的假人。**T-12 起它只认该假人自己那条连接的证据**（`RobotPlayer.MarkInWorld` 在收到本会话的 `SM_LOGON` 时计数），不再与跨假人共享的 `MShare` 世界态挂钩；挂机也只对本会话已进世界的假人执行（`autoplay_pre_world` 应为 0）。实测 200 档只有 ~10% 能进世界 ⇒ tick 是“少数人身上量的”，样本量（不是分辨率）是它现在的短板 |
+| `online_bots` / `online_base` | `report.json` 里的“在线假人数 / 样本基数” | `online_bots` = `in_world`（本会话收到 `SM_LOGON` 的假人数），`online_base` = 档位人数，`online_source` = 判据出处。想拿它当硬判据要在 `load_report.py summarize` 显式加 `--world-threshold`（默认不判，因为三档只有 ~10%）|
 | `probe_sent` | 探针实际发出的动作数 | 与 `samples` 对比才知道"发了没回 ack"（服务端不认）还是"根本没发"（没武装/没进世界）——这两种故障的修法完全不同 |
 | `internal_errors` | 假人侧被兜住的异常数 | >0 说明假人过程有异常，读 P99 时要一起看 |
 

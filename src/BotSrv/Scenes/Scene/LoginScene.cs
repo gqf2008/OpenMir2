@@ -105,7 +105,16 @@ namespace BotSrv.Scenes.Scene
             ua.Memo = "";
             ua.Memo2 = "";
             CommandMessage msg = Messages.MakeMessage(Messages.CM_ADDNEWUSER, 0, 0, 0, 0);
-            SendSocket(EDCode.EncodeMessage(msg) + EDCode.EncodeBuffer(ue) + EDCode.EncodeBuffer(ua));
+            // F3(a)（T-12）观测：注册包“发出/没发出去”分开计；服务端回没回看 `ident_counts[SM_NEWID_*]`。
+            bool sent = SendSocket(EDCode.EncodeMessage(msg) + EDCode.EncodeBuffer(ue) + EDCode.EncodeBuffer(ua));
+            if (sent)
+            {
+                LoadMetrics.RegisterSent();
+            }
+            else
+            {
+                LoadMetrics.RegisterSendClosed();
+            }
         }
 
         private void SendLogin(string uid, string passwd)

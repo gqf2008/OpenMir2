@@ -1,0 +1,12 @@
+﻿{
+    "count":  20,
+    "spawned":  20,
+    "login_ok":  12,
+    "in_world":  11,
+    "success_rate_pct":  60,
+    "world_rate_pct":  55,
+    "require_world":  true,
+    "timeout_sec":  220,
+    "log":  "E:/tmp/openmir2-watch/c6f/wbev-legacy20.log",
+    "stats":  "E:\\tmp\\openmir2-watch\\c6f\\wbev-legacy20\\load_stats.ndjson"
+}

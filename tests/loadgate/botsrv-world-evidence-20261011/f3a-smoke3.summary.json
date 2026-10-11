@@ -1,0 +1,12 @@
+﻿{
+    "count":  3,
+    "spawned":  3,
+    "login_ok":  3,
+    "in_world":  3,
+    "success_rate_pct":  100,
+    "world_rate_pct":  100,
+    "require_world":  true,
+    "timeout_sec":  240,
+    "log":  "E:/tmp/openmir2-watch/c6f/wbev-smoke-1.log",
+    "stats":  "E:\\tmp\\openmir2-watch\\c6f\\wbev-smoke-1\\load_stats.ndjson"
+}

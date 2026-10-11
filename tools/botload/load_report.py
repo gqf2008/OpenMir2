@@ -121,6 +121,13 @@ def summarize_tick(stats, count):
         # tick 只可能来自进世界的假人 ⇒ 这两个数一起读才知道"样本是从多少人身上量的"。
         "world_ok": last.get("in_world", 0),
         "world_ok_pct": (round(100.0 * last.get("in_world", 0) / count, 2) if count else None),
+        # T-12（F4/F3(a)）：挂机轮次按“本会话是否进世界”分账 + 注册包观测，展示“改前/改后”。
+        "in_world_suppressed": last.get("in_world_suppressed", 0),
+        "autoplay_in_world": last.get("autoplay_in_world", 0),
+        "autoplay_pre_world": last.get("autoplay_pre_world", 0),
+        "autoplay_skipped_pre_world": last.get("autoplay_skipped_pre_world", 0),
+        "register_sent": last.get("register_sent", 0),
+        "register_send_closed": last.get("register_send_closed", 0),
         "probe_sent": last.get("probe_sent", 0),
         "internal_errors": last.get("internal_errors", 0),
         # T-11 登录连接级观测（残余丢包方向定位）：发出登录包后没拿到 529 的连接数，
@@ -269,7 +276,7 @@ def summarize_hostload(rows):
 
 
 def judge(tier, thresholds, criteria=("login", "conn", "tick"), allow_missing_tick=False,
-          login_threshold=None):
+          login_threshold=None, world_threshold=None):
     """按 §6 M5 的判据给单档结论（掉线只看稳态窗）。
 
     `criteria` 只选"要比哪几条阈值"，**不能用它把"缺 tick 样本"变成绿灯**（2026-10-10 的教训：
@@ -292,6 +299,13 @@ def judge(tier, thresholds, criteria=("login", "conn", "tick"), allow_missing_ti
         fails.append(f"登录成功率 {tier.get('login_success_pct')}% < {login_thr}%")
     if "conn" in criteria and tier.get("conn_lost_steady", 0) > thresholds["conn_lost_steady"]:
         fails.append(f"稳态掉线 {tier['conn_lost_steady']} > {thresholds['conn_lost_steady']}")
+    # 在线（进世界）判据（T-12，可选）：默认 None=不判 —— M5 三档的 in_world 实测只有 ~10%，
+    # 不能当默认阈值。显式给出时必须 >= 阈值；`world_ok_pct` 缺失或不足都判红（不是恒绿）。
+    tier["world_threshold_pct"] = world_threshold
+    if world_threshold is not None:
+        wp = tier.get("world_ok_pct")
+        if wp is None or wp < world_threshold:
+            fails.append(f"在线（本会话收到 SM_LOGON 的假人数）{wp}% < {world_threshold}%")
     tick_missing = tier.get("tick_p99_ms") is None
     if tick_missing:
         tier["tick_missing"] = True
@@ -322,10 +336,16 @@ def cmd_summarize(args):
     tier["count"] = args.count
     tier["stagger_ms"] = args.stagger_ms
     tier["hold_sec"] = args.hold_sec
+    # 在线假人数 = 本会话收到 SM_LOGON 的假人数（T-12：只看该假人自己那条连接的证据，不看共享 MShare）
+    tier["online_bots"] = tier.get("world_ok", 0)
+    tier["online_base"] = args.count
+    tier["online_source"] = "per-session SM_LOGON（BotSrv RobotPlayer.MarkInWorld ⇒ LoadMetrics.InWorld）"
+    tier["autoplay_source"] = ("F4/T-12：挂机轮次只看本会话 InWorld（autoplay_pre_world 应为 0）；"
+                               ">0 只可能来自 MIR2_BOT_LEGACY_SHARED_AUTOPLAY=1 的“改前”对照组")
     criteria = [c.strip() for c in args.criteria.split(",") if c.strip()]
     login_thr = args.login_threshold if args.login_threshold is not None else default_login_threshold(args.count)
     judge(tier, DEFAULT_THRESHOLDS, criteria, allow_missing_tick=args.allow_missing_tick,
-          login_threshold=login_thr)
+          login_threshold=login_thr, world_threshold=args.world_threshold)
     text = json.dumps(tier, ensure_ascii=False, indent=2)
     if args.out:
         with open(args.out, "w", encoding="utf-8", newline="\n") as f:
@@ -379,6 +399,19 @@ def cmd_selftest(_args):
     expect(t_lo["verdict"] == "GREEN", "960/1000 在阈值 95 下必须 GREEN（判定随阈值变，不是恒绿）")
     expect(t_hi["login_threshold_pct"] == 100.0 and t_lo["login_threshold_pct"] == 95.0,
            "judge 必须把生效阈值写进报告")
+    # 2b') 在线（进世界）判据的牙齿（T-12，F4）：同一批产物，抹掉一个假人的进世界证据 ⇒ 必红；齐 ⇒ 绿；
+    #      不显式给阈值时不得因 in_world 少而判红（M5 三档的 in_world 只有 ~10%）。
+    statsW_bad = [dict(stats[0], login_ok=3, in_world=2),
+                  dict(stats[1], login_ok=3, in_world=2, hist=list(hist2), tick_max_ms=5)]
+    statsW_ok = [dict(stats[0], login_ok=3, in_world=3),
+                 dict(stats[1], login_ok=3, in_world=3, hist=list(hist2), tick_max_ms=5)]
+    j_bad = judge(summarize_tick(statsW_bad, 3), DEFAULT_THRESHOLDS, world_threshold=100.0)
+    j_ok = judge(summarize_tick(statsW_ok, 3), DEFAULT_THRESHOLDS, world_threshold=100.0)
+    expect(j_bad["verdict"] == "RED" and any("在线" in f for f in j_bad["fails"]),
+           "抹掉一个假人的进世界证据（in_world=2/3）在 world_threshold=100 下必须 RED（在线判据有牙齿）")
+    expect(j_ok["verdict"] == "GREEN", "进世界证据齐（in_world=3/3）在 world_threshold=100 下必须 GREEN")
+    expect(judge(summarize_tick(statsW_bad, 3), DEFAULT_THRESHOLDS)["verdict"] == "GREEN",
+           "不显式给 world_threshold 时不得因 in_world 少而判红（默认不判在线）")
     # 2c) T-11 残余丢包**方向**判据（owner 裁决 11dbde39 must_first）：rx_bytes==0 ⇒ 上游；
     #     rx_bytes>0 且无 529 ⇒ 假人侧。方向判据本身必须有牙齿（改坏必变）。
     up = [{"login_tick": 1000, "rx_bytes": 0, "saw_529": False, "resend_sends": 1},
@@ -451,7 +484,7 @@ def cmd_selftest(_args):
     if not ok:
         print("RED: load_report selftest 有未通过项")
         return 1
-    print("GREEN: load_report selftest 全过（分位数/尾部敏感/登录阈值牙齿/掉线分窗/内存斜率/残余丢包方向/本机负载窗）")
+    print("GREEN: load_report selftest 全过（分位数/尾部敏感/登录阈值牙齿/在线判据牙齿/掉线分窗/内存斜率/残余丢包方向/本机负载窗）")
     return 0
 
 
@@ -638,6 +671,9 @@ def main():
     s.add_argument("--allow-missing-tick", action="store_true",
                    help="显式放行「本次没有 tick 样本」（报告里会写入 missing_tick_note）；"
                         "不加则缺样本一律判 RED，且 --criteria 不能替代本开关")
+    s.add_argument("--world-threshold", type=float, default=None,
+                   help="在线（本会话收到 SM_LOGON 的假人数）占比阈值（%）；缺省不判（T-12）。"
+                        "bot-smoke -RequireWorld 用 100，用于证明「抹掉某假人的进世界证据 ⇒ 判据必红」")
     a = sub.add_parser("aggregate")
     a.add_argument("--summary", required=True, help="load_gate_summary.json")
     a.add_argument("--out-dir", default="")
