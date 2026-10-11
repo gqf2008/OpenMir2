@@ -53,6 +53,13 @@ pub struct GateConfig {
     pub db_addr: String,
     /// `[Server] DBPort`（现网 6000）。
     pub db_port: u16,
+    /// `[DataBase] ConnctionString`（**原拼写照抄**，`ServerConf.cs:15`）——GameSvr 直连 MySQL 读
+    /// `stditems` 用的连接串（oracle `MySqlDB.LoadItemsDB` 也是直连，不经过 DBSvr）。
+    ///
+    /// `None` = 配置里没这个键 ⇒ 兜底用 oracle 的源码缺省
+    /// （`GameSvrConf.cs:1921`：`server=127.0.0.1;uid=root;pwd=;database=mir2;`）；两者都解析失败
+    /// ⇒ 物品表为空（`GetStdItem` 恒 null ⇒ 帧 50/41 的装备形态计 0，与 oracle 空表分支等价）+ WRN。
+    pub db_conn_string: Option<String>,
     /// `[Setup] ShowRankLevelName`（oracle `GameSvrConf.cs:376/1464` 缺省 `false`）。
     ///
     /// 帧 42 `SM_USERNAME` 的展示名走 `GetShowName()`（`PlayObject.cs:3329`）：
@@ -94,6 +101,7 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut ids_port: Option<u16> = None;
     let mut db_addr: Option<String> = None;
     let mut db_port: Option<u16> = None;
+    let mut db_conn_string: Option<String> = None;
     for raw in text.lines() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
@@ -150,6 +158,13 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                 "NOTICEDIR" => notice_dir = Some(v.to_string()),
                 _ => {}
             },
+            // `MySqlDB` 直连用（`ServerConf.cs:15` 从 `[DataBase]` 读 `ConnctionString`；原拼写照抄）。
+            // 现网样件 `E:\MirServer\M2GameSvr\Server.conf` 在 `[DataBase]` 段（键 `ConnctionString`）。
+            "DATABASE" => {
+                if k.as_str() == "CONNCTIONSTRING" {
+                    db_conn_string = Some(v.to_string());
+                }
+            }
             // 消息颜色（`SystemShare.Config.RedMsgFColor/BColor`，`ServerConf.cs:333-334` 的 `ReadWriteByte`）。
             // 缺键不是错误（oracle 读不到就沿用 `GameSvrConf` 的缺省 0xFF/0x38）；写了但非法才报错。
             "SETUP" => match k.as_str() {
@@ -224,6 +239,7 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         ids_port,
         db_addr,
         db_port,
+        db_conn_string,
     })
 }
 
