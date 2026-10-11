@@ -1,0 +1,23 @@
+[package]
+name = "db-srv"
+version = "0.1.0"
+edition = "2021"
+description = "Rust 版 DBSrv（M1）：SelGate↔DBSrv 5100 内部链路 + 角色列表/建删选角经 sqlx 接 mir2_db"
+license = "MIT"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "deny"
+pedantic = "warn"
+
+[dependencies]
+mir2-protocol = { path = "../../crates/protocol" }
+mir2-storage = { path = "../../crates/storage" }
+sqlx = { version = "0.8", features = ["runtime-tokio", "mysql"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "macros", "signal", "time"] }
+anyhow = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "macros", "time", "process"] }
