@@ -4,11 +4,11 @@
 //! ## 四条硬约束怎么落实（§4.2.2）
 //!
 //! 1. **单线程 executor**：显式用 [`bevy_ecs::schedule::SingleThreadedExecutor`]，
-//!    绝不使用 `MultiThreadedExecutor`/`bevy_tasks` 并行（守卫：`tests/no_parallel_bevy.rs`）；
+//!    绝不使用 `MultiThreadedExecutor`/`bevy_tasks` 并行（守卫：`tests/bevy_drop_parity.rs::no_parallel_guard`）；
 //! 2. **遍历顺序显式化**：系统**不迭代任何 `Query`**——处理顺序来自我们自己的
 //!    [`OrderIndex`] 资源（实体 id 升序，由调用方给出）。`Query` 迭代序在 bevy 里不是契约
 //!    （archetype/table 顺序），本 crate 一处都不用；
-//! 3. **确定性守卫升级**：本 crate 自己的 `no_parallel_bevy.rs` 把白名单放宽为
+//! 3. **确定性守卫升级**：本 crate 自己的 `bevy_drop_parity.rs::no_parallel_guard` 把白名单放宽为
 //!    "只允许 `bevy_ecs`/`bevy_app`"（仍旧禁 rayon/crossbeam/bevy_tasks 并行 API），
 //!    并保留"tick 必须在同一线程"的运行期断言思路（见测试）；
 //! 4. **迁移验收＝原判据不降级**：试验田的对拍断言"同一输入下，本系统输出的命令与

@@ -174,7 +174,7 @@ powershell -ExecutionPolicy Bypass -File tools/oracle/deploy_gamesvr.ps1        
 2. **"分片天然、跨图走消息"——我们本来就是单进程单 World**：经典 Mir2 的 oracle 是**单 GameSvr 单区**（`!servertable.txt` 只指一个 7200 网关），跨图靠"会话进/出世界"（M2 的 session 切片），不存在无缝大地图或万人同服；所以 Bevy 的"分片优势"在我们这里用不上，也不需要。
 3. **同步层自研**：经典协议 + AOI 视距（我们 golden 里的 `vis` 列表就是它）必须逐字节复刻，Replicon/Lightyear 之类的现成复制方案带不来对拍价值。
 
-**规模实测（用以回答"Bevy 够不够"）**：同屏是**十几到几十个实体**（AOI 视距决定的 11×9 格窗口）；M2 骨架在 500/1000/2000 实体下 tick 占预算 0.33%/0.82%/1.94%；D3 试验田的 ECS 路径代价 +30µs/tick（0.015%）。⇒ 对我们这个"单区、同屏小、要求确定性"的目标，`bevy_ecs` **绰绰有余**，瓶颈从来不是 ECS 的吞吐。
+**规模实测（用以回答"Bevy 够不够"）**：同屏是**十几到几十个实体**（AOI 视距决定的 11×9 格窗口）；M2 骨架在 500/1000/2000 实体下 tick 占预算 0.33%/0.82%/1.94%；D3 试验田的 ECS 路径代价 **+10µs / 32 只怪的掉落批次**（常驻 world P50 21µs vs 直接调用 11µs，≈1.8×；命令 `cargo run -p mir2-world-bevy --release --bin drop_bench`，基线 `mir2-rs/tests/parity/world/d3-drop-bench-rebuild.txt`）——**口径**：掉落预算在**怪物生成时**一次性预算（C# `MonGetRandomItems`），不是每 tick 一次，故不按 tick 折算成百分比。⇒ 对我们这个"单区、同屏小、要求确定性"的目标，`bevy_ecs` **绰绰有余**，瓶颈从来不是 ECS 的吞吐。
 
 ### 4.3 协议与编解码
 

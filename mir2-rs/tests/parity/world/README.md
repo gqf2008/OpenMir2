@@ -133,3 +133,15 @@ cargo test -p mir2-parity-tests --test world_combat_parity
   ——**已接受的覆盖缺口**（accepted risk）：要覆盖它得先让 C# 夹具也按 `BaseObject.Base.cs:119-132`
   逐 tick 清 `ExpHitter`，再造"命中者先死"的场景；当前场景里命中者不会死，故不影响本批判据。
 - **不死系加成**（`LifeAttrib == LA_UNDEAD` 时加攻击方 `UndeadPower`）：场景尚未注入该字段。
+
+## D3 成本基线（`drop_bench`）
+
+```bash
+cargo run -p mir2-world-bevy --release --bin drop_bench                 # 三条路径 + 输出一致性自检
+cargo run -p mir2-world-bevy --release --bin drop_bench -- --redcheck    # 追加"每只怪建一次 world"红检路径
+```
+
+口径写死在 `crates/world-bevy/src/bin/drop_bench.rs` 头注释（32 只怪/次、2000 次、预热 100 次、
+种子 42、`MonRandomAddValue 40`；改一处基线即不可比）。现行基线 = `d3-drop-bench-rebuild.txt`
+（历史 `d3-drop-bench.txt` 的生成器从未入库，仅作对照），对账与"派生结论更正"见 `D3成本复现报告.md`。
+注意口径：掉落预算在**怪物生成时**一次性预算，**不是每 tick** 一次。
