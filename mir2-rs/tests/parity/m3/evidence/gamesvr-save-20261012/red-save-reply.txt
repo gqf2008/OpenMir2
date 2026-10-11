@@ -1,0 +1,22 @@
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.37s
+     Running unittests src\main.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-eb39968088e3f1ec.exe)
+
+running 1 test
+test tests::save_ledger_only_released_on_success_reply ... FAILED
+
+failures:
+
+---- tests::save_ledger_only_released_on_success_reply stdout ----
+
+thread 'tests::save_ledger_only_released_on_success_reply' (29360) panicked at bins\game-svr\src\main.rs:3876:9:
+DBR_LOADHUMANRCD(1100) 不得把角色移出 InSaveRcdList（oracle 连 bug 一起搬）
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::save_ledger_only_released_on_success_reply
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 124 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`

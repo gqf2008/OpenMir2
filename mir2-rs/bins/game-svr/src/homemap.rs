@@ -140,13 +140,28 @@ impl HomeFallback {
     /// oracle `WorldServer.cs:254-259` 的**整条新角色出生点路径**（**同序 3 抽**）：
     /// `GetHomeInfo`（`Count > StartPointSize` 时 1 抽）+ `GetRandHomeX`/`GetRandHomeY`（各 1×`Random(3)`）。
     /// 坐标为 `(short)(Random(3) + Home(X|Y) - 2)`（`WorldServer.cs:1409-1417`）。
+    /// 仅返回 `(map, CurrX, CurrY)` 的便捷包装（原生产路径）；存档要 `HomeX/HomeY`，生产改调
+    /// [`Self::new_human_spawn_with_home`]。本函数保留给单测（抽数账本）。
     #[must_use]
+    #[allow(dead_code)]
     pub fn new_human_spawn(&self, rng: &mut RandomNumber) -> (String, i16, i16) {
+        let (map, _hx, _hy, x, y) = self.new_human_spawn_with_home(rng);
+        (map, x, y)
+    }
+
+    /// 与 [`Self::new_human_spawn`] 同一条路径，但**同时返回出生点原坐标** `(map, HomeX, HomeY, CurrX, CurrY)`：
+    /// `MakeSaveRcd`（`WorldServer.cs:1256-1258`）要写 `HomeMap/HomeX/HomeY`，而不只是 `CurrX/CurrY`。
+    /// 抽数次序/次数与上面完全一致（只能调 `get_home_info` 一次）。
+    #[must_use]
+    pub fn new_human_spawn_with_home(
+        &self,
+        rng: &mut RandomNumber,
+    ) -> (String, i16, i16, i16, i16) {
         let (map, hx, hy) = self.get_home_info(rng);
         // 顺序只能先是 X 再是 Y（`GetRandHomeX` 在 `:258` / `GetRandHomeY` 在 `:259`）。
         let x = (i32::from(hx) - 2 + rng.random_below(3)) as i16;
         let y = (i32::from(hy) - 2 + rng.random_below(3)) as i16;
-        (map, x, y)
+        (map, hx, hy, x, y)
     }
 }
 
