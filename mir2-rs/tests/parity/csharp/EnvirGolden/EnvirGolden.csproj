@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>EnvirGolden</AssemblyName>
+    <RootNamespace>EnvirGolden</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    M2 入图帧 envir/配置层输入的 C# 金标准探针（卡 openmir2-m2-envir-inputs）。
+    只读：不写 MySQL、不改任何现网文件（Server.conf 传夹具副本）。
+    链接真实源码文件：
+    - StringList.cs：MapInfo.txt 的逐行读取 + 编码探测（真实实现）
+    - ConfigFile.cs：Server.conf 的 ini 读取（真实实现）
+    - MapInfoFlag.cs：MapInfo 行的 Flag 结构（真实实现，record class）
+    - ClientConf.cs / NakedAbility.cs：11029/811 的序列化输入（真实实现 + MemoryPack）
+    其余 HUtil32 静态方法用 VerbatimCopies.cs 里的**逐字拷贝**（避免拖入 HUtil32 的
+    UserItem/MagicRcd 等依赖）。
+  -->
+  <ItemGroup>
+    <Compile Include="..\..\..\..\..\src\OpenMir2\Common\StringList.cs" Link="Linked\StringList.cs" />
+    <Compile Include="..\..\..\..\..\src\OpenMir2\Common\ConfigFile.cs" Link="Linked\ConfigFile.cs" />
+    <Compile Include="..\..\..\..\..\src\OpenMir2\Data\MapInfoFlag.cs" Link="Linked\MapInfoFlag.cs" />
+    <Compile Include="..\..\..\..\..\src\OpenMir2\Packets\ClientPackets\ClientConf.cs" Link="Linked\ClientConf.cs" />
+    <Compile Include="..\..\..\..\..\src\OpenMir2\Packets\ClientPackets\NakedAbility.cs" Link="Linked\NakedAbility.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="MemoryPack" Version="1.10.0" />
+    <PackageReference Include="System.Text.Encoding.CodePages" Version="10.0.12" />
+  </ItemGroup>
+
+</Project>

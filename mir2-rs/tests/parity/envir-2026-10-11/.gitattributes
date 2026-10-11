@@ -1,0 +1,4 @@
+# 这两个是 **GBK 逐字节夹具**（C# 探针与 Rust 对拍的原样输入）：
+# 禁止 EOL 归一，否则 CRLF→LF 会改字节、与 SHA256SUMS.txt 的 hash 失配。
+MapInfo-synth.txt -text
+Server.conf-synth -text
