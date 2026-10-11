@@ -49,9 +49,6 @@ const COMMAND_FIXED_LENGTH: usize = 16;
 const COMMAND_MESSAGE_SIZE: usize = 12;
 /// C# `GateShare.MaxSession`（`GateShare.cs:14`）：每条网关→服务器连接的会话上限。
 const MAX_SESSION: usize = 10_000;
-/// C# `Config.NomClientPacketSize`（现网 `RunGate/config.conf` `[Integer] NomClientPacketSize=400`）：
-/// 登录后超过它的帧按 `ClientSession.cs:196-199` **只丢帧、不关会话**。
-const NOM_CLIENT_PACKET_SIZE: usize = 400;
 /// 单次 read 的缓冲：客户端帧的正常上界远小于它（`NomClientPacketSize=400`；登录帧 <254）。
 const MAX_READ: usize = 64 * 1024;
 
@@ -148,6 +145,7 @@ async fn main() -> Result<()> {
             indexes,
             down_tx,
             gate_rules,
+            nom_client_packet_size: cfg.nom_client_packet_size,
         };
         tasks.push(tokio::spawn(accept_loop(listener, gate_ctx)));
     }
@@ -176,6 +174,8 @@ struct GateCtx {
     down_tx: Arc<Mutex<OwnedWriteHalf>>,
     /// 本线生效的网关规则（速度/间隔）。
     gate_rules: rules::GateRules,
+    /// `[Integer] NomClientPacketSize`（登录后超限帧只丢不关；照 oracle 带默认读取）。
+    nom_client_packet_size: usize,
 }
 
 /// 一帧的处置结果（读循环据此决定下一步）。
@@ -307,7 +307,7 @@ async fn handle_frame(
     if !logged_in {
         // 登录前走 oracle 的 `:671-680` else 分支（直接 `EDCode.DeCodeString`），**没有**
         // 「1 字节 = 心跳」与「< 16 字节 = 异常封包」这两条（那两条在 `HandleLogin` 分支里 `:155-164`）。
-        // 1/2 字节会让 C# 的 `destinationSpan[2..(packetLen-1)]` 越界抛
+        // `packetLen <= 2`（含 0：`ushort` 下溢）会让 C# 的 `destinationSpan[2..(packetLen-1)]` 越界抛
         // ArgumentOutOfRangeException，被 `ServerManager.cs:238` 的 catch 吞掉（只记日志）
         // ⇒ 帧被丢、**会话存活**；这里照此丢弃（不是剔除）。
         if frame.len() < 3 {
@@ -335,7 +335,7 @@ async fn handle_frame(
             decoded.len()
         )));
     }
-    if frame.len() > NOM_CLIENT_PACKET_SIZE {
+    if frame.len() > ctx.nom_client_packet_size {
         // `:196-199`：超过 `NomClientPacketSize` **只记日志丢帧**（不是关会话）
         glog!(
             "INF",

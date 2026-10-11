@@ -18,6 +18,9 @@
 
 use std::path::{Path, PathBuf};
 
+/// `[Integer] NomClientPacketSize` 的缺省值（照 C# `ConfigManager.cs:99` 的 `ReadWriteInt` 带默认口径）。
+pub const DEFAULT_NOM_CLIENT_PACKET_SIZE: usize = 400;
+
 use anyhow::{bail, Context, Result};
 
 /// 一组"网关→GameSvr 连接 + 对客户端监听"的端点。
@@ -41,6 +44,10 @@ pub struct GateConfig {
     pub chat_interval_enabled: bool,
     /// `[Integer] ChatInterval`（C# `Config.ChatInterval`；现网 `=800`）。缺省 800。
     pub chat_interval_ms: i64,
+    /// `[Integer] NomClientPacketSize`（C# `ConfigManager.cs:99` 的 `ReadWriteInt(..., 默认)`；
+    /// 现网 `=400`）：登录后超过它的帧按 `ClientSession.cs:196-199` **只丢帧、不关会话**。
+    /// 缺省 400 —— 照 oracle 的"读配置带默认"口径，**不**硬编码。
+    pub nom_client_packet_size: usize,
 }
 
 /// 默认配置文件：可执行文件同目录的 `config.conf`（与 C# `AppContext.BaseDirectory` 一致）。
@@ -110,10 +117,15 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let chat_interval_ms = get_in(&integer, "ChatInterval")
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or(800);
+    // oracle 是 `ReadWriteInt("Integer","NomClientPacketSize", config.NomClientPacketSize)` ⇒ 缺键取默认
+    let nom_client_packet_size = get_in(&integer, "NomClientPacketSize")
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_NOM_CLIENT_PACKET_SIZE);
     Ok(GateConfig {
         endpoints,
         chat_interval_enabled,
         chat_interval_ms,
+        nom_client_packet_size,
     })
 }
 
@@ -190,5 +202,25 @@ mod tests {
             let p = write_conf(body);
             assert!(load(&p).is_err(), "应在该配置上报错：{body:?}");
         }
+    }
+
+    /// `NomClientPacketSize` 照 oracle 的"读配置带默认"口径（`ConfigManager.cs:99` 的 ReadWriteInt）：
+    /// 给了就用配置值，缺了取默认 400 —— **不许硬编码**（reviewer-3 在 f46f8b45 的 Minor #2）。
+    #[test]
+    fn nom_client_packet_size_comes_from_config_with_default() {
+        let with_key =
+            "[GameGate]\nCount=1\nServerAddr1=127.0.0.1\nServerPort1=5000\nGatePort1=7200\n\
+                        [Integer]\nNomClientPacketSize=512\n";
+        assert_eq!(
+            load(&write_conf(with_key)).unwrap().nom_client_packet_size,
+            512
+        );
+        let without =
+            "[GameGate]\nCount=1\nServerAddr1=127.0.0.1\nServerPort1=5000\nGatePort1=7201\n";
+        assert_eq!(
+            load(&write_conf(without)).unwrap().nom_client_packet_size,
+            DEFAULT_NOM_CLIENT_PACKET_SIZE,
+            "缺键取默认（oracle 的 ReadWriteInt 带默认），不是报错也不是 0"
+        );
     }
 }
