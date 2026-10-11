@@ -1,0 +1,58 @@
+   Compiling mir2-storage v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\dbsrv6k\mir2-rs\crates\storage)
+   Compiling db-srv v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\dbsrv6k\mir2-rs\bins\db-srv)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.95s
+     Running tests\live_querychr.rs (E:\tmp\openmir2-dbsrv6k-target\debug\deps\live_querychr-3c9f32b8a9a6507d.exe)
+
+running 1 test
+[fixture] Rust db-srv pid=48356 dir=C:\Users\gxh\AppData\Local\Temp\a2-dbsrv-rust-3344
+[querychr#1] head=CommandMessage { recog: 2, ident: 520, param: 0, tag: 1, series: 0 } body="*aaa/0/1/1/0/bbb/2/1/1/0/"
+  raw=236664686b64646a696464696b6464686b5e6d49736d5f58685f613f5f615f58685f6e4a6f6e5f5a685f613f5f615f58685f3c21
+[selchr] head=CommandMessage { recog: 0, ident: 525, param: 0, tag: 0, series: 0 } body="127.0.0.1/7200"
+  raw=236464686b64656a686464686b6464686b6162576b5e603e5f605e59685f635a5e60604b21
+[querychr#2] head=CommandMessage { recog: 2, ident: 520, param: 0, tag: 1, series: 0 } body="*aaa/0/1/1/0/bbb/2/1/1/0/"
+  raw=236664686b64646a696464696b6464686b5e6d49736d5f58685f613f5f615f58685f6e4a6f6e5f5a685f613f5f615f58685f3c21
+[newchr ab] head=CommandMessage { recog: 0, ident: 522, param: 0, tag: 0, series: 0 }
+[newchr aaa] head=CommandMessage { recog: 2, ident: 522, param: 0, tag: 0, series: 0 }
+[newchr zzz] head=CommandMessage { recog: 3, ident: 522, param: 0, tag: 0, series: 0 }
+[delchr gm01] head=CommandMessage { recog: 0, ident: 523, param: 0, tag: 0, series: 0 }
+[querychr-bad-session] head=CommandMessage { recog: 0, ident: 527, param: 0, tag: 1, series: 0 }
+---- [dbsrv] dbsrv.out.log（尾部 34 行） ----
+19:12:38.750 [INF] 正在读取基础配置信息...
+19:12:38.750 [INF] 加载IP授权文件列表成功...[2]
+19:12:38.750 [INF] 读取网关配置信息成功.[1]
+19:12:38.824 [INF] [MySQL]数据存储初始化成功.
+19:12:38.824 [INF] 服务已启动成功...
+19:12:38.824 [INF] 欢迎使用翎风系列游戏软件...
+19:12:38.824 [INF] 玩家数据网关服务[0.0.0.0:62060]已启动.等待链接...
+19:12:38.824 [INF] 账号服务器[127.0.0.1:62061]链接成功.
+19:12:39.249 [INF] 角色网关[1](127.0.0.1:62064)已打开...
+19:12:39.249 [INF] 角色网关[1](127.0.0.1)已关闭...
+19:12:39.465 [INF] 角色网关[2](127.0.0.1:62071)已打开...
+19:12:39.465 [INF] [QueryChr] 候选 account=mir2test i=0 name=[aaa] quickIndex=12218
+19:12:39.467 [INF] [QueryChr]   GetBy -> result=True
+19:12:39.467 [INF] [QueryChr]   dataIndex=12215 nChrCount=0
+19:12:39.468 [INF] [QueryChr]   GetQryChar -> True
+19:12:39.468 [INF] [QueryChr] 候选 account=mir2test i=1 name=[bbb] quickIndex=12219
+19:12:39.468 [INF] [QueryChr]   GetBy -> result=True
+19:12:39.468 [INF] [QueryChr]   dataIndex=12216 nChrCount=1
+19:12:39.469 [INF] [QueryChr]   GetQryChar -> True
+19:12:39.734 [INF] [QueryChr] 候选 account=mir2test i=0 name=[aaa] quickIndex=12218
+19:12:39.735 [INF] [QueryChr]   GetBy -> result=True
+19:12:39.735 [INF] [QueryChr]   dataIndex=12215 nChrCount=0
+19:12:39.735 [INF] [QueryChr]   GetQryChar -> True
+19:12:39.735 [INF] [QueryChr] 候选 account=mir2test i=1 name=[bbb] quickIndex=12219
+19:12:39.735 [INF] [QueryChr]   GetBy -> result=True
+19:12:39.735 [INF] [QueryChr]   dataIndex=12216 nChrCount=1
+19:12:39.735 [INF] [QueryChr]   GetQryChar -> True
+19:12:40.850 [INF] 创建角色:ab 结果:失败
+19:12:41.954 [INF] 创建角色:aaa 结果:失败
+19:12:43.067 [INF] 创建角色:zzz 结果:失败
+19:12:44.182 [INF] 删除角色[gm01] account=mir2test 结果:成功
+19:12:44.183 [INF] 角色网关[3](127.0.0.1:62105)已打开...
+19:12:44.183 [INF] 角色网关[3](127.0.0.1)已关闭...
+19:12:44.183 [INF] 角色网关[2](127.0.0.1)已关闭...
+---- [dbsrv] dbsrv.err.log（尾部 0 行） ----
+test rust_dbsrv_querychr_matches_csharp_golden ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 5.53s
+

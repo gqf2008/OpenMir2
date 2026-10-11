@@ -1,25 +1,7 @@
-//! 记录类型占位（字段未冻结，随 D 线/M1 落地；`#[non_exhaustive]` 保证加字段不破坏签名）。
+//! 轻量记录类型（字段口径以 `sql/mir2_db.sql` 的既有表结构为准，不改表）。
 //!
-//! 命名与 C# `DBSrv.Storage.Model` / `OpenMir2.Packets.ServerPackets` 对齐，
-//! 字段口径以 `sql/mir2_db.sql` 的既有表结构为准（不改表）。
-
-/// 角色记录（C# `PlayerRecordData`，角色索引表条目）。
-#[derive(Debug, Clone, Default)]
-#[non_exhaustive]
-pub struct PlayerRecordData {
-    /// 角色名（GB2312 字节）。
-    pub name: Vec<u8>,
-    /// 所属账号。
-    pub account: Vec<u8>,
-}
-
-/// 角色完整数据（C# `CharacterDataInfo`，含属性/物品/技能/状态等全部存档字段）。
-#[derive(Debug, Clone, Default)]
-#[non_exhaustive]
-pub struct CharacterDataInfo {
-    /// 角色名（GB2312 字节）。
-    pub name: Vec<u8>,
-}
+//! **角色完整存档**（C# `CharacterDataInfo`/`CharacterData`/`PlayerRecordData` 等）在
+//! [`crate::playerdata`]：那一组与 C# MemoryPack 逐字节兼容，是本 crate 里字段最多的记录类型。
 
 /// 选角列表条目（C# `PlayQuick`）。
 #[derive(Debug, Clone, Default)]
