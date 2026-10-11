@@ -1,0 +1,9 @@
+== pickup 不可达证明 @ 2026-10-12T02:42:28.3091401+08:00 ==
+repo=E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr
+-- A) 扫描 895 个 .cs 找未注释的 ItemId 赋值点
+  OK: 0 个未注释的 ItemId 赋值点（唯一一处是 MapItem.cs 注释）
+  OK: MapItem.cs 构造器里 ItemId 赋值仍是注释 -> // this.ItemId = M2Share.ActorMgr.GetNextIdentity();
+  OK: Envirnoment.AddItemToMap 首行 if (mapItem.ItemId == 0) return false; 在
+  OK: 全仓 4 个 new MapItem 构造点，均无 ItemId 赋值（A 已覆盖）
+GREEN: oracle 侧 MapItem.ItemId 恒 0 ⇒ AddItemToMap 恒 false ⇒ 地面无物 ⇒ CM_PICKUP 不可达。
+        ⇒ m2-06-pickup 在 C# 与 Rust 两侧都物理采不到（判据待 owner 裁决，见 README §2.2）。

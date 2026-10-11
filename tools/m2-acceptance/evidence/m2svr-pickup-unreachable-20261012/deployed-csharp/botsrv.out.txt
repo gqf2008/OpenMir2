@@ -1,0 +1,44 @@
+03:04:20.875 [DBG] Hosting starting
+03:04:20.933 [INF] 服务器名称:热血传奇 服务器IP:127.0.0.1 服务器端口:7000
+03:04:20.949 [INF] 初始化机器人数量:1 登录机器人总数量:1
+03:04:20.949 [INF] 固定背包/装备序列: 启用 起始等待=3000ms 步间隔=800ms（拾取→装备→卸下→丢弃→用药；见 RobotPlayer.BagEquipSequenceTick）
+03:04:20.953 [INF] 机器人服务启动...
+03:04:20.983 [INF] 压测采集: 输出目录=E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\tools\m2-acceptance\evidence\m2svr-pickup-unreachable-20261012\deployed-csharp 连接错峰=3000ms/个 统计=E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\tools\m2-acceptance\evidence\m2svr-pickup-unreachable-20261012\deployed-csharp\load_stats.ndjson
+03:04:20.983 [INF] 动作探针: 启用=False 间隔=1000ms（武装条件 = 收到 SM_LOGON 才发 CM_TURN；见 RobotPlayer.ProbeActionTick）
+03:04:20.984 [INF] 消息处理线程启动...
+03:04:20.984 [DBG] 工作线程开始执行...
+03:04:24.018 [INF] 开始登陆
+03:04:24.079 [INF] 帐号登录成功！
+03:04:24.181 [INF] 选择服务器：热血传奇
+03:04:24.443 [INF] 连接角色网关:[127.0.0.1:7100]
+03:04:25.481 [INF] 查询角色.
+03:04:25.714 [INF] 选择角色 loadbot0
+03:04:25.821 [INF] 准备进入游戏
+03:04:25.898 [INF] 机器人:[loadbot0] 进入游戏
+03:04:27.423 [INF] 机器人:[loadbot0] 确认游戏公告
+03:04:28.309 [INF] 机器人:[loadbot0] M3BAGSEQ arm start_delay_ms=3000 step_ms=800
+03:04:28.330 [INF] 机器人:[loadbot0] 成功进入游戏
+03:04:28.345 [INF] 机器人:[loadbot0] -----------------------------------------------
+03:04:28.370 [INF] 唯一客服QQ：79311185 唯一担保QQ：79311185
+03:04:28.370 [INF] 欢迎进入记忆传奇(月卡版)-官方网站：www.aresm2.com
+03:04:28.370 [INF] 禁止使用任何外挂、加速、辅助、脱机，一经发现，封号封IP
+03:04:28.370 [INF] [攻击模式: 全体攻击]
+03:04:28.518 [INF] 机器人:[loadbot0] 跑向目标怪物：稻草人 (283,608) 
+03:04:29.377 [INF] 机器人:[loadbot0] 跑向目标怪物：稻草人 (283,608) 
+03:04:30.191 [INF] 机器人:[loadbot0] 跑向目标怪物：稻草人 (283,608) 
+03:04:31.007 [INF] 机器人:[loadbot0] 跑向目标怪物：稻草人 (283,608) 
+03:04:31.318 [INF] 机器人:[loadbot0] M3BAGSEQ step=0 op=CM_PICKUP x=281 y=617
+03:04:31.811 [INF] 机器人:[loadbot0] 跑向目标怪物：稻草人 (283,608) 
+03:04:32.139 [INF] 机器人:[loadbot0] M3BAGSEQ step=1 op=CM_TAKEONITEM skip=no_equippable_bag_item
+03:04:32.652 [INF] 机器人:[loadbot0] 跑向目标怪物：稻草人 (283,608) 
+03:04:32.962 [INF] 机器人:[loadbot0] M3BAGSEQ step=2 op=CM_TAKEOFFITEM skip=no_equipped_item
+03:04:33.487 [INF] 机器人:[loadbot0] 跑向目标怪物：稻草人 (283,608) 
+03:04:33.764 [INF] 机器人:[loadbot0] M3BAGSEQ step=3 op=CM_DROPITEM skip=no_bag_item
+03:04:34.317 [INF] 机器人:[loadbot0] 跑向目标怪物：稻草人 (283,608) 
+03:04:34.627 [INF] 机器人:[loadbot0] M3BAGSEQ step=4 op=CM_EAT skip=no_drug_in_bag
+03:04:34.642 [INF] 机器人:[loadbot0] M3BAGSEQ done
+03:04:35.135 [INF] 机器人:[loadbot0] 跑向目标怪物：稻草人 (283,608) 
+03:04:35.934 [INF] 机器人:[loadbot0] 跑向目标怪物：稻草人 (283,608) 
+03:04:36.796 [INF] 机器人:[loadbot0] 跑向目标怪物：稻草人 (283,608) 
+03:04:37.613 [INF] 机器人:[loadbot0] 跑向目标怪物：稻草人 (283,608) 
+03:04:37.736 [INF] 机器人:[loadbot0] 啊,我死了,快救我

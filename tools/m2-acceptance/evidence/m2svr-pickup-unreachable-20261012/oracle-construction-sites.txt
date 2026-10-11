@@ -1,0 +1,21 @@
+### 4) 所有 new MapItem 构造点（无一处设 ItemId）
+src/M2Server\Actor\BaseObject.cs:551:                MapItem mapItem = new MapItem
+src/M2Server\Actor\BaseObject.cs:740:            MapItem mapItem = new MapItem
+src/Modules\ScriptEngine\Processings\ExecutionProcessingSys.cs:5694:                        mapItem = new MapItem();
+src/Modules\ScriptEngine\Processings\ExecutionProcessingSys.cs:5730:                                mapItem = new MapItem();
+
+### 5) 所有 AddItemToMap 调用点
+src/M2Server\Player\PlayObject.Base.cs:92:                        Envir.AddItemToMap(CurrX, CurrY, mapItem);
+src/M2Server\Player\PlayObject.Base.cs:123:                        Envir.AddItemToMap(CurrX, CurrY, mapItem);
+src/Modules\SystemModule\Maps\IEnvirnoment.cs:42:        bool AddItemToMap(int nX, int nY, MapItem mapItem);
+src/M2Server\Actor\BaseObject.cs:568:                if (Envir.AddItemToMap(dx, dy, mapItem))
+src/M2Server\Actor\BaseObject.cs:750:            if (Envir.AddItemToMap(nX, nY, mapItem))
+src/M2Server\Maps\Envirnoment.cs:88:        public bool AddItemToMap(int nX, int nY, MapItem mapItem)
+src/M2Server\Maps\Envirnoment.cs:98:            const string sExceptionMsg = "[Exception] Envirnoment::AddItemToMap";
+src/Modules\ScriptEngine\Processings\ExecutionProcessingSys.cs:5701:                        if (envir.AddItemToMap(dX, dY, mapItem))
+src/Modules\ScriptEngine\Processings\ExecutionProcessingSys.cs:5754:                                if (envir.AddItemToMap(dX, dY, mapItem))
+src/Modules\RobotSystem\Services\RobotPlayer.cs:508:                        Envir.AddItemToMap(nX, nY, mapItem);
+src/Modules\RobotSystem\Services\RobotPlayer.cs:513:                    Envir.AddItemToMap(nX, nY, mapItem);
+src/Modules\RobotSystem\Services\RobotPlayer.cs:547:                                Envir.AddItemToMap(nX, nY, mapItem);
+src/Modules\RobotSystem\Services\RobotPlayer.cs:553:                            Envir.AddItemToMap(nX, nY, mapItem);
+src/Modules\RobotSystem\Services\RobotPlayer.cs:559:                        Envir.AddItemToMap(nX, nY, mapItem);
