@@ -32,7 +32,11 @@
   powershell -ExecutionPolicy Bypass -File tools/botload/load_gate.ps1 -SelfTestRed   # 红检：指向无监听端口，必须判红
 #>
 param(
-  [int[]]$Tiers = @(200, 500, 1000),
+  # 档位。**故意用 string 收**（同 tools/e2e/stack_e2e.ps1）：`powershell -File` 下
+  # `-Tiers 200,500,1000` 会被当成带千分位的整数 2005001000（50 万假人）；string 拿到原样文本，
+  # `-File` ⇒ "200,500,1000"、`-Command "& … -Tiers 200,500,1000"` ⇒ "200 500 1000"，
+  # 都被下面的 `[,\s]+` 拆回数组。见 tests/loadgate/README.md。
+  [string]$Tiers = "200,500,1000",
   [int]$HoldSec = 60,
   [int]$RampTimeoutSec = 600,
   [string]$Prefix = "loadbot",
@@ -48,19 +52,52 @@ param(
   [switch]$SelfTestRed,
   [string]$Criteria = "login,conn,tick",  # 判据子集；M1 ⑤（只比登录+选角）用 "login,conn"
   [switch]$NoActionProbe,                # 关掉假人动作探针（默认开：否则采不到 #+GD ack ⇒ tick 无样本）
-  [int]$ActionProbeMs = 1000             # 探针频率：每个假人每 N 毫秒发一个 CM_TURN
+  [switch]$AllowMissingTick,             # 显式放行"本档没有 tick 样本"（报告里会写 missing_tick_note）；
+                                         # 不加则缺样本一律判 RED——**--Criteria 不能替代本开关**
+  [int]$ActionProbeMs = 1000,            # 探针频率：每个假人每 N 毫秒发一个 CM_TURN
+  [int]$LoginResendMs = 0,               # T-11 诊断对照：登录包发出后 N ms 内没应答就在同一连接重发一次
+                                         # （0=关；只在「残余丢包方向定位」那一轮开，正常门禁不开）
+  [int]$Repeat = 1,                      # 同一档位同命令连跑次数（owner 裁决 11dbde39 ①：3 连跑取最差）
+  [int]$LoginThresholdPct = 0            # 登录成功率阈值（%）；0 = 按档位取默认（tier>=1000→95，其余 100）
 )
 
 $ErrorActionPreference = "Stop"
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = (Resolve-Path (Join-Path $Here "..\..")).Path
+
+# 档位参数归一化 + 防线（2026-10-11 实测：`-File -Tiers 500,1000` 变 5001000，整档跑满 600s 才 RED）：
+#   ① 把 string 拆回 [int[]]：`,  空格 都算分隔符 ⇒ `-File`/`-Command` 两种传法都正确；
+#   ② 单档数值超出合理上限即**响亮失败**，不再静默把「逗号拼接」当 50 万人的档位跑掉。
+$MaxPlausibleTier = 5000
+$TierList = @()
+if ($Tiers.Trim() -ne "") {
+    $TierList = @($Tiers -split '[,\s]+' | Where-Object { $_ -ne "" } | ForEach-Object { [int]$_ })
+}
+if ($TierList.Count -eq 0) { throw "档位不能为空" }
+if ($TierList.Count -eq 1 -and $TierList[0] -gt $MaxPlausibleTier) {
+    throw ("档位 " + $TierList[0] + " 超出上限 " + $MaxPlausibleTier +
+           "：疑似经 -File 传递时被逗号拼接（200,500,1000 -> 2005001000）。" +
+           "请用 -Tiers '200,500,1000'（-File 下加引号）或 -Command ""& 'tools\botload\load_gate.ps1' -Tiers 200,500,1000""。")
+}
+if (@($TierList | Where-Object { $_ -le 0 }).Count -gt 0) { throw "档位必须为正整数" }
+if ($Repeat -lt 1) { throw "-Repeat 必须 >= 1" }
+
+# 登录判据：默认按档位取可复现下界（tier>=1000 为 95%，其余 100%）。
+# 为什么 tier-1000 是 95%：被测栈是 C# 部署栈，1000 并发登录下有 ~0-5% 的连接在发出 CM_IDPASSWORD 后
+# 服务端一个字节都不回（见 tests/loadgate/README.md《残余丢包方向》）；这是上游性质，不是 Rust 移植缺陷。
+function Get-LoginThreshold([int]$tier) {
+    if ($LoginThresholdPct -gt 0) { return [double]$LoginThresholdPct }
+    if ($tier -ge 1000) { return 95.0 }
+    return 100.0
+}
+
 $BotBinDir = Join-Path $RepoRoot "src\BotSrv\bin\Release"
 $BotExe = Join-Path $BotBinDir "BotSrv.exe"
 $StartAll = "E:\MirServer\start-all.ps1"
 $MemProcNames = @("GameSrv", "LoginSrv", "DBSrv", "LoginGate", "SelGate", "GameGate", "mysqld")
 
 if ($SelfTestRed) {
-    $Tiers = @(3)
+    $TierList = @(3)
     $Port = 17999
     $RampTimeoutSec = 30
     $HoldSec = 5
@@ -106,23 +143,46 @@ function Wait-Port([int]$P, [int]$TimeoutSec) {
     return [bool](Get-NetTCPConnection -State Listen -LocalPort $P -ErrorAction SilentlyContinue)
 }
 
+# 本机负载探针（owner 裁决 82f8e0c3 ④；口径照 tickbench 的 `probe_load_window`：
+# CPU 均值（%）+ 重型进程数 rustc/cargo/cargo-clippy/msbuild）。它只**标注**不判红：
+# tick P99 在共享机器上不可归属（C# 参考栈 vs 同机并发编译），需要空载窗口才能定。
+function Get-HostLoadLine([long]$ts) {
+    $cpu = -1
+    try { $cpu = [int]((Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average) } catch { $cpu = -1 }
+    $heavy = @(Get-Process -Name rustc,cargo,cargo-clippy,msbuild -ErrorAction SilentlyContinue)
+    $names = (@($heavy | ForEach-Object { $_.ProcessName }) | Sort-Object -Unique) -join ","
+    return ('{{"t_ms":{0},"cpu_pct":{1},"heavy_procs":{2},"heavy_names":"{3}"}}' -f $ts, $cpu, $heavy.Count, $names)
+}
+
 function Restart-Stack {
     if (-not (Test-Path $StartAll)) { throw "找不到 $StartAll（-RestartStackPerTier 需要它）" }
     Write-Output "STACK restart: stop -> start"
-    & powershell -ExecutionPolicy Bypass -File $StartAll -Stop 2>&1 | Out-Null
-    & powershell -ExecutionPolicy Bypass -File $StartAll 2>&1 | Out-Null
-    if (-not (Wait-Port $Port 90)) { throw "整栈重启后端口 $Port 未就绪" }
+    # 坑（2026-10-11 实测）：**不要把 start-all.ps1 的输出接成管道再等它退出**——它用 Start-Process
+    # 起的七个服务进程会继承那个管道的写端，父进程退出后管道仍不关闭 ⇒ 调用方永久挂住
+    # （上一批的"多档连跑卡死/要杀任务树"就是它）。做法改成：
+    #   ① stop 重定向到文件；② start 用 Start-Process 起在独立进程 + 输出重定向到文件；
+    #   ③ 只等**端口就绪**（栈健康与否本来就看端口，不等子进程树）。
+    & powershell -ExecutionPolicy Bypass -File $StartAll -Stop *> (Join-Path $OutDir "stack-stop.log")
+    Start-Process -FilePath "powershell" `
+        -ArgumentList @('-ExecutionPolicy', 'Bypass', '-File', $StartAll) -WindowStyle Hidden `
+        -RedirectStandardOutput (Join-Path $OutDir "stack-start.out.log") `
+        -RedirectStandardError (Join-Path $OutDir "stack-start.err.log") | Out-Null
+    if (-not (Wait-Port $Port 150)) { throw "整栈重启后端口 $Port 未就绪（见 $OutDir\stack-start.*.log）" }
 }
 
 $tierReports = @()
-$firstTier = $true
-foreach ($n in $Tiers) {
-    if ($RestartStackPerTier -and -not $firstTier) { Restart-Stack }
-    $firstTier = $false
+for ($run = 1; $run -le $Repeat; $run++) {
+if ($Repeat -gt 1) { Write-Output ("===== REPEAT " + $run + "/" + $Repeat + " =====") }
+foreach ($n in $TierList) {
+    # 三档基线一律从**干净栈**开始（含第一档）：上一批的实测教训是"同一条栈连跑两档，
+    # 第二档假人能登录但进不了世界"。整栈重启 ~60s，比拿被污染的栈当基线便宜。
+    if ($RestartStackPerTier) { Restart-Stack }
 
-    $tierDir = Join-Path $OutDir ("tier-" + $n)
+    $tierDir = if ($Repeat -gt 1) { Join-Path $OutDir ("run-" + $run + "\tier-" + $n) } else { Join-Path $OutDir ("tier-" + $n) }
     New-Item -ItemType Directory -Force -Path $tierDir | Out-Null
-    Write-Output ("==== TIER " + $n + " (stagger=" + $StaggerMs + "ms, hold=" + $HoldSec + "s) -> " + $tierDir)
+    $loginThr = Get-LoginThreshold $n
+    $rampTarget = [int][math]::Ceiling($n * $loginThr / 100.0)
+    Write-Output ("==== TIER " + $n + " (stagger=" + $StaggerMs + "ms, hold=" + $HoldSec + "s, login_threshold=" + $loginThr + "% => ramp_target=" + $rampTarget + "/" + $n + ") -> " + $tierDir)
 
     # ---- BotSrv 配置 ----
     $cfg = @{
@@ -145,6 +205,8 @@ foreach ($n in $Tiers) {
     # 探针只依赖假人自己的 socket + 场景状态，进世界后每 $ActionProbeMs 发一个 CM_TURN ⇒ 服务端回 #+GD/<rtime>!
     if ($NoActionProbe) { $env:MIR2_BOT_ACTION_PROBE = "0" } else { $env:MIR2_BOT_ACTION_PROBE = "1" }
     $env:MIR2_BOT_ACTION_PROBE_MS = "$ActionProbeMs"
+    # T-11 登录重发对照（默认 0=关，保持正常门禁行为不变）
+    $env:MIR2_BOT_LOGIN_RESEND_MS = "$LoginResendMs"
 
     $botLog = Join-Path $tierDir "bots.log"
     $proc = Start-Process -FilePath $BotExe -WorkingDirectory $BotBinDir -PassThru -WindowStyle Hidden `
@@ -153,18 +215,22 @@ foreach ($n in $Tiers) {
 
     # ---- 爬坡：等登录数到 N ----
     $statsPath = Join-Path $tierDir "load_stats.ndjson"
+    $hostLoadPath = Join-Path $tierDir "hostload.ndjson"
+    $hostLoadLines = New-Object System.Collections.Generic.List[string]
     $rampDeadline = (Get-Date).AddSeconds($RampTimeoutSec)
     $rampOk = $false
     while ((Get-Date) -lt $rampDeadline) {
         Start-Sleep -Seconds 2
+        $tsRamp = [long]([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
+        $hostLoadLines.Add((Get-HostLoadLine $tsRamp))
         $st = Get-LastStats $statsPath
         if ($st -ne $null) {
             Write-Output ("  RAMP login_ok=" + $st.login_ok + "/" + $n + " spawned=" + $st.spawned + " tick_samples=" + $st.tick_samples)
-            if ([int]$st.login_ok -ge $n) { $rampOk = $true; break }
+            if ([int]$st.login_ok -ge $rampTarget) { $rampOk = $true; break }
         }
         if ($proc.HasExited) { Write-Output ("  WARN BotSrv 退出 code=" + $proc.ExitCode); break }
     }
-    if (-not $rampOk) { Write-Output ("  RED 爬坡未完成（" + $RampTimeoutSec + "s 内未到 " + $n + "）") }
+    if (-not $rampOk) { Write-Output ("  RED 爬坡未达阈值（" + $RampTimeoutSec + "s 内未到 " + $rampTarget + "/" + $n + "）") }
 
     # ---- 稳态采样：内存曲线（tick 由 BotSrv 自己持续落盘）----
     $memPath = Join-Path $tierDir "mem.ndjson"
@@ -172,6 +238,7 @@ foreach ($n in $Tiers) {
     $holdDeadline = (Get-Date).AddSeconds($HoldSec)
     while ((Get-Date) -lt $holdDeadline) {
         $ts = [long]([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
+        $hostLoadLines.Add((Get-HostLoadLine $ts))
         foreach ($name in $MemProcNames) {
             $ps = Get-Process -Name $name -ErrorAction SilentlyContinue
             foreach ($p in $ps) {
@@ -184,6 +251,7 @@ foreach ($n in $Tiers) {
         Start-Sleep -Seconds $MemSampleSec
     }
     [System.IO.File]::WriteAllLines($memPath, $memLines)
+    [System.IO.File]::WriteAllLines($hostLoadPath, $hostLoadLines)
 
     # ---- 停 BotSrv（收尾前再读一次统计）----
     if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
@@ -191,16 +259,28 @@ foreach ($n in $Tiers) {
 
     # ---- 归算 ----
     $reportPath = Join-Path $tierDir "report.json"
+    $criteriaArgs = @("--criteria", $Criteria, "--login-threshold", "$loginThr")
+    $loginConnsPath = Join-Path $tierDir "login_conns.ndjson"
+    if (Test-Path $loginConnsPath) { $criteriaArgs += @("--login-conns", $loginConnsPath) }
+    if (Test-Path $hostLoadPath) { $criteriaArgs += @("--hostload", $hostLoadPath) }
+    if ($AllowMissingTick) { $criteriaArgs += "--allow-missing-tick" }
     python (Join-Path $RepoRoot "tools\botload\load_report.py") summarize --stats $statsPath --mem $memPath `
-        --count $n --stagger-ms $StaggerMs --hold-sec $HoldSec --criteria $Criteria --out $reportPath | Out-Null
+        --count $n --stagger-ms $StaggerMs --hold-sec $HoldSec @criteriaArgs --out $reportPath | Out-Null
     $tierRc = $LASTEXITCODE
     $tierJson = $null
     if (Test-Path $reportPath) { $tierJson = Get-Content $reportPath -Raw | ConvertFrom-Json }
     if ($tierJson -ne $null) {
+        $tierJson | Add-Member -NotePropertyName run -NotePropertyValue $run -Force
         Write-Output ("  RESULT tier=" + $n + " verdict=" + $tierJson.verdict +
                       " login=" + $tierJson.login_success_pct + "% conn_lost_steady=" + $tierJson.conn_lost_steady +
                       " tick_p50=" + $tierJson.tick_p50_ms + " p90=" + $tierJson.tick_p90_ms +
-                      " p99=" + $tierJson.tick_p99_ms + "ms samples=" + $tierJson.samples)
+                      " p99=" + $tierJson.tick_p99_ms + "ms samples=" + $tierJson.samples +
+                      " in_world=" + $tierJson.world_ok + " probe_sent=" + $tierJson.probe_sent)
+        if ($tierJson.host_load -ne $null) {
+            $hl = $tierJson.host_load
+            Write-Output ("  HOSTLOAD cpu_mean=" + $hl.cpu_mean_pct + "% cpu_peak=" + $hl.cpu_peak_pct +
+                          "% heavy_max=" + $hl.heavy_procs_max + " names=" + ($hl.heavy_names_seen -join ","))
+        }
         if ($tierJson.mem.PSObject.Properties.Name -contains "GameSrv") {
             $g = $tierJson.mem.GameSrv
             Write-Output ("  MEM GameSvr ws_peak=" + $g.ws_peak_mb + "MB mean=" + $g.ws_mean_mb +
@@ -212,24 +292,86 @@ foreach ($n in $Tiers) {
     }
     if ($tierRc -ne 0) { Write-Output ("  (tier rc=" + $tierRc + ")") }
 }
+}
 
 # ---- 汇总 ----
+# 同命令多连跑取最差（owner 裁决 11dbde39 ①）：按档位把 N 轮的登录率取 min，阈值不变。
+$worstByTier = [ordered]@{}
+foreach ($t in $tierReports) {
+    $key = [string][int]$t.count
+    if (-not $worstByTier.Contains($key)) {
+        $worstByTier[$key] = @{
+            count = [int]$t.count
+            threshold = (Get-LoginThreshold ([int]$t.count))
+            worst_login_pct = [double]$t.login_success_pct
+            runs = @()
+        }
+    }
+    $e = $worstByTier[$key]
+    $lp = [double]$t.login_success_pct
+    if ($lp -lt $e.worst_login_pct) { $e.worst_login_pct = $lp }
+    $e.runs += @{
+        run = $t.run
+        login_success_pct = $lp
+        verdict = $t.verdict
+        conn_lost_steady = $t.conn_lost_steady
+        internal_errors = $t.internal_errors
+        samples = $t.samples
+        tick_p99_ms = $t.tick_p99_ms
+        in_world = $t.world_ok
+        world_ok_pct = $t.world_ok_pct
+        host_cpu_peak_pct = $(if ($t.host_load) { $t.host_load.cpu_peak_pct } else { $null })
+        host_heavy_max = $(if ($t.host_load) { $t.host_load.heavy_procs_max } else { $null })
+    }
+}
+foreach ($key in @($worstByTier.Keys)) {
+    $e = $worstByTier[$key]
+    $ok = ($e.worst_login_pct -ge $e.threshold)
+    foreach ($r in $e.runs) { if ($r.verdict -ne "GREEN") { $ok = $false } }
+    $e.verdict = if ($ok) { "GREEN" } else { "RED" }
+}
+
+# F9（C6 原卡 reviewer-4）：产物 {file,sha256} 清单——供复核者核对引用件未被后续冒烟覆写。
+$artifactFiles = @()
+foreach ($pat in @("report.json", "load_stats.ndjson", "mem.ndjson", "hostload.ndjson", "login_conns.ndjson")) {
+    $artifactFiles += @(Get-ChildItem -Path $OutDir -Recurse -Filter $pat -ErrorAction SilentlyContinue)
+}
+$artifactManifest = @()
+foreach ($f in ($artifactFiles | Sort-Object FullName)) {
+    $rel = $f.FullName.Substring($OutDir.Length).TrimStart('\', '/')
+    $artifactManifest += @{ file = $rel; sha256 = (Get-FileHash -Algorithm SHA256 -Path $f.FullName).Hash.ToLower() }
+}
+@{ generated_ms = [long]([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()); files = $artifactManifest } |
+    ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $OutDir "artifacts.sha256.json") -Encoding utf8
+
 $summaryPath = Join-Path $OutDir "load_gate_summary.json"
 @{
   out_dir    = $OutDir
-  tiers      = $Tiers
+  tiers      = $TierList
+  repeat     = $Repeat
   stagger_ms = $StaggerMs
   hold_sec   = $HoldSec
   caliber    = "tick 服务时延 = BotSrv 收到 `#+GD/<rtime>! 的时刻 − rtime（Environment.TickCount，全机同域）；详见 tools/botload/load_report.py"
   criteria   = $Criteria
+  allow_missing_tick = [bool]$AllowMissingTick
   action_probe = (-not $NoActionProbe)
   action_probe_ms = $ActionProbeMs
+  login_resend_ms = $LoginResendMs
+  login_threshold_pct = $LoginThresholdPct
+  worst_of_runs_rule = "每档取 N 轮里最低的登录成功率与阈值比；且每一轮的 conn/tick/internal 判据都必须 GREEN"
+  host_load_caliber = "CPU=Win32_Processor.LoadPercentage 均值(%)；heavy=rustc/cargo/cargo-clippy/msbuild 进程数（叧 tickbench）；只标注不判红"
+  host_load_note = "tick P99 在共享机器上不可归属（C# 参考栈 vs 同机并发编译）；CPU 峰≥40% 或 heavy 峰≥4 ⇒ 该轮 P99 未归属，需空载窗口复测"
+  artifacts  = $artifactManifest
+  worst_by_tier = $worstByTier
   reports    = $tierReports
-} | ConvertTo-Json -Depth 6 | Set-Content -Path $summaryPath -Encoding utf8
+} | ConvertTo-Json -Depth 8 -WarningAction SilentlyContinue | Set-Content -Path $summaryPath -Encoding utf8
 Write-Output ("SUMMARY " + $summaryPath)
 
-$allGreen = $true
-foreach ($t in $tierReports) { if ($t.verdict -ne "GREEN") { $allGreen = $false } }
+$allGreen = $tierReports.Count -gt 0
+foreach ($key in @($worstByTier.Keys)) { if ($worstByTier[$key].verdict -ne "GREEN") { $allGreen = $false } }
+foreach ($e in @($worstByTier.Values)) {
+    Write-Output ("  WORST tier=" + $e.count + " runs=" + @($e.runs).Count + " worst_login=" + $e.worst_login_pct + "% threshold=" + $e.threshold + "% verdict=" + $e.verdict)
+}
 
 if ($SelfTestRed) {
     if (-not $allGreen) {
@@ -242,7 +384,7 @@ if ($SelfTestRed) {
 
 if ($tierReports.Count -eq 0) { Write-Output "RED: 一档都没跑成"; exit 1 }
 if ($allGreen) {
-    Write-Output ("GREEN: " + $tierReports.Count + " 档全过（登录 100% / 稳态无掉线 / tick P99 ≤ 100ms）")
+    Write-Output ("GREEN: " + $tierReports.Count + " 轮次全过（登录 ≥ 档位阈值 / 稳态无掉线 / tick P99 ≤ 100ms）")
     exit 0
 }
 Write-Output "RED: 有档位未达标（见各 tier 的 report.json）"

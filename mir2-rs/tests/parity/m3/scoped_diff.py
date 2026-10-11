@@ -61,7 +61,60 @@ TABLE_COLUMNS = {
     "mir2_db.characters_indexes": [
         "Id", "Account", "ChrName", "SelectID", "IsDeleted", "CreateDate", "ModifyDate",
     ],
+    # ---- 角色族表（PlayerId 外键，行里没有名字 ⇒ 归属判定见 FAMILY_TABLES）----
+    # 列序 = `SELECT *`（与 dbsnap 的 ORDER BY 全列序一致）。新增列会在这里 fail-closed。
+    "mir2_db.characters_ablity": [
+        "PlayerId", "Level", "Ac", "Mac", "Dc", "Mc", "Sc", "Hp", "Mp", "MaxHP",
+        "MAxMP", "Exp", "MaxExp", "Weight", "MaxWeight", "WearWeight", "MaxWearWeight",
+        "HandWeight", "MaxHandWeight", "ModifyTime",
+    ],
+    "mir2_db.characters_item": [
+        "Id", "PlayerId", "Position", "MakeIndex", "StdIndex", "Dura", "DuraMax",
+    ],
+    "mir2_db.characters_bagitem": [
+        "Id", "PlayerId", "Position", "MakeIndex", "StdIndex", "Dura", "DuraMax",
+    ],
+    "mir2_db.characters_storageitem": [
+        "Id", "PlayerId", "Position", "MakeIndex", "StdIndex", "Dura", "DuraMax",
+    ],
+    "mir2_db.characters_bonusability": [
+        "PLAYERID", "AC", "MAC", "DC", "MC", "SC", "HP", "MP", "HIT", "SPEED", "RESERVED",
+    ],
+    "mir2_db.characters_status": [
+        "PlayerId", "Status0", "Status1", "Status2", "Status3", "Status4", "Status5",
+        "Status6", "Status7", "Status8", "Status9", "Status10", "Status11", "Status12",
+        "Status13", "Status14", "Status15",
+    ],
+    # 这三张也属 dbsnap `DEFAULT_TABLES`（`tools/dbsnap/dbsnap.py:25-38`）导出的真实快照表。
+    # 列序 = `SELECT *`（CREATE TABLE 定义序，见 `sql/mir2_db.sql`）。
+    "mir2_db.characters_item_attr": [
+        "Id", "PlayerId", "MakeIndex", "Value0", "Value1", "Value2", "Value3",
+        "Value4", "Value5", "Value6", "Value7", "Value8", "Value9", "Value10",
+        "Value11", "Value12", "Value13",
+    ],
+    "mir2_db.characters_magic": [
+        "Id", "PlayerId", "MagicId", "Level", "UseKey", "CurrTrain",
+    ],
+    "mir2_db.characters_quest": [
+        "Id", "PLAYERID", "QUESTOPENINDEX", "QUESTFININDEX", "QUEST",
+    ],
 }
+
+# 角色族表：以 `PlayerId` 外键归属本次运行的角色。行里**没有名字**，所以 `extract` 不能靠
+# "行内出现 prefix" 命中（旧实现在这里就是静默缺口：物品行/Abil 行从来没进过作用域）。
+# 归属判定 = `PlayerId ∈ {本次运行建出的 characters.Id}`（由 characters 表的 prefix 匹配先解出）。
+FAMILY_TABLES = {
+    "mir2_db.characters_ablity": "PlayerId",
+    "mir2_db.characters_item": "PlayerId",
+    "mir2_db.characters_bagitem": "PlayerId",
+    "mir2_db.characters_storageitem": "PlayerId",
+    "mir2_db.characters_bonusability": "PLAYERID",
+    "mir2_db.characters_status": "PlayerId",
+    "mir2_db.characters_item_attr": "PlayerId",
+    "mir2_db.characters_magic": "PlayerId",
+    "mir2_db.characters_quest": "PLAYERID",
+}
+CHARACTER_TABLE = "mir2_db.characters"
 
 # 表 -> {列名: 为什么是易变列}。新增易变列必须同时给出理由（owner 裁决 A 的条件①）。
 VOLATILE_COLUMNS = {
@@ -94,6 +147,49 @@ VOLATILE_COLUMNS = {
         "Id": "自增 PK（每次运行必变）",
         "CreateDate": "墙钟 datetime（建角时刻）",
         "ModifyDate": "墙钟 datetime（建角时刻）",
+    },
+    # ---- 角色族表（PlayerId 外键）----
+    # 只把「自增 PK / 外键」与「墙钟」登记为易变；**行为列（Position/MakeIndex/StdIndex/
+    # Dura/DuraMax/Abil 各字段/Status*）一律逐字节比**，不拿白名单凑绿。
+    # 注意：`MakeIndex` 是物品实例号，**故意不登记为易变**——它是不是跨侧确定，属被比对行为，
+    # 由实现决定（若将来实测证明确属不可复现的熵源，须按 owner 裁决单独登记并写明理由）。
+    "mir2_db.characters_ablity": {
+        "PlayerId": "FK = characters.Id（自增，每次运行必变）",
+        "ModifyTime": "墙钟 datetime（每次保存刷新）",
+    },
+    "mir2_db.characters_item": {
+        "Id": "自增 PK（每次运行必变）",
+        "PlayerId": "FK = characters.Id（自增，每次运行必变）",
+    },
+    "mir2_db.characters_bagitem": {
+        "Id": "自增 PK（每次运行必变）",
+        "PlayerId": "FK = characters.Id（自增，每次运行必变）",
+    },
+    "mir2_db.characters_storageitem": {
+        "Id": "自增 PK（每次运行必变）",
+        "PlayerId": "FK = characters.Id（自增，每次运行必变）",
+    },
+    "mir2_db.characters_bonusability": {
+        "PLAYERID": "FK = characters.Id（自增，每次运行必变）",
+    },
+    "mir2_db.characters_status": {
+        "PlayerId": "FK = characters.Id（自增，每次运行必变）",
+    },
+    # item_attr：装备附加属性（Value0..13）与 MakeIndex 都是被比对行为；只登记自增 PK / 外键。
+    "mir2_db.characters_item_attr": {
+        "Id": "自增 PK（每次运行必变）",
+        "PlayerId": "FK = characters.Id（自增，每次运行必变）",
+    },
+    # magic：技能行（MagicId/Level/UseKey/CurrTrain）是被比对行为；只登记自增 PK / 外键。
+    "mir2_db.characters_magic": {
+        "Id": "自增 PK（每次运行必变）",
+        "PlayerId": "FK = characters.Id（自增，每次运行必变）",
+    },
+    # quest：任务标志（QUESTOPENINDEX/QUESTFININDEX/QUEST）是被比对行为；
+    # 外键列名 oracle 拼写为全大写 `PLAYERID`（且可空），只登记自增 PK / 外键。
+    "mir2_db.characters_quest": {
+        "Id": "自增 PK（每次运行必变）",
+        "PLAYERID": "FK = characters.Id（自增，每次运行必变；原表列名全大写、可空）",
     },
 }
 
@@ -143,24 +239,77 @@ def iter_tables(snapdir):
         yield t["table"], os.path.join(snapdir, t["file"])
 
 
+def _read_fields(path, ncols, table):
+    """逐行读 TSV，返回 (raw_line_bytes, fields_str_list)。列数不符即 fail-closed。"""
+    with open(path, "rb") as f:
+        for raw in f:
+            if not raw.strip():
+                continue
+            line = raw.rstrip(b"\r\n")
+            fields = line.decode("utf-8", "replace").split("\t")
+            if len(fields) != ncols:
+                print(f"RED: {table} 列数不符（快照 {len(fields)} vs 登记 {ncols}）"
+                      f"——表结构已变或登记过期", file=sys.stderr)
+                sys.exit(4)
+            yield raw, line, fields
+
+
+def player_ids_for_prefix(snapdir, prefix):
+    """第一遍：解出本次运行建出的角色 `Id` 集合（角色族表用 PlayerId 外键归属）。
+
+    角色族的行里没有名字，靠 `prefix in row` 命中不了（旧实现里 物品/Abil/Status 行
+    从来没进过作用域——这是"悄悄不比"的静默缺口）。这里先把 characters 表里
+    命中 prefix 的行收出来，再以 `Id` 归属族表。
+    """
+    cols = TABLE_COLUMNS[CHARACTER_TABLE]
+    id_idx = cols.index("Id")
+    ids = set()
+    path = None
+    for table, p in iter_tables(snapdir):
+        if table == CHARACTER_TABLE:
+            path = p
+            break
+    if path is None:
+        print(f"RED: 快照缺 {CHARACTER_TABLE}——无法归属 PlayerId 族表（物品/Abil 会成静默缺口）",
+              file=sys.stderr)
+        sys.exit(3)
+    for _raw, _line, fields in _read_fields(path, len(cols), CHARACTER_TABLE):
+        if prefix not in "\t".join(fields):
+            continue
+        ids.add(fields[id_idx])
+    return ids
+
+
 def cmd_extract(args):
     prefix = args.prefix.encode("utf-8", "replace")
+    run_player_ids = player_ids_for_prefix(args.snapdir, args.prefix)
     out_rows = 0
+    family_rows = 0
     with open(args.out, "w", encoding="utf-8", newline="\n") as fo:
         for table, path in iter_tables(args.snapdir):
-            with open(path, "rb") as f:
-                for raw in f:
-                    if prefix not in raw:
+            cols = TABLE_COLUMNS.get(table)
+            if cols is None:
+                print(f"RED: 快照里有未登记表 {table}——先在 scoped_diff.py 的 TABLE_COLUMNS/"
+                      f"VOLATILE_COLUMNS 里登记（含每列理由），不许悄悄不比", file=sys.stderr)
+                sys.exit(4)
+            player_key = FAMILY_TABLES.get(table)
+            key_idx = cols.index(player_key) if player_key is not None else None
+            for raw, line, fields in _read_fields(path, len(cols), table):
+                if key_idx is not None:
+                    if fields[key_idx] not in run_player_ids:
                         continue
-                    line = raw.rstrip(b"\r\n")
-                    text = line.decode("utf-8", "replace")
-                    if args.normalize:
-                        text = text.replace(args.prefix, DEFAULT_PREFIX_MASK)
-                    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
-                    fo.write(json.dumps({"table": table, "row_sha256": digest, "line": text},
-                                        ensure_ascii=False) + "\n")
-                    out_rows += 1
-    print(f"EXTRACT prefix={args.prefix} rows={out_rows} -> {args.out}")
+                    family_rows += 1
+                elif prefix not in raw:
+                    continue
+                text = line.decode("utf-8", "replace")
+                if args.normalize:
+                    text = text.replace(args.prefix, DEFAULT_PREFIX_MASK)
+                digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+                fo.write(json.dumps({"table": table, "row_sha256": digest, "line": text},
+                                    ensure_ascii=False) + "\n")
+                out_rows += 1
+    print(f"EXTRACT prefix={args.prefix} rows={out_rows} (family_by_playerid={family_rows} "
+          f"player_ids={len(run_player_ids)}) -> {args.out}")
     if out_rows == 0 and not args.allow_empty:
         print("RED: 该前缀在快照里 0 行——夹具没生效（或快照取错时机）", file=sys.stderr)
         sys.exit(3)
@@ -255,6 +404,14 @@ def _write_jsonl(path, rows):
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         for line in rows:
             f.write(json.dumps({"table": "mir2_db.characters", "row_sha256": "x", "line": line},
+                               ensure_ascii=False) + "\n")
+
+
+def _write_tbl(path, table, lines):
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        for line in lines:
+            digest = hashlib.sha256(line.encode("utf-8")).hexdigest()
+            f.write(json.dumps({"table": table, "row_sha256": digest, "line": line},
                                ensure_ascii=False) + "\n")
 
 
@@ -354,8 +511,121 @@ def cmd_selftest(args):
         f.write(dup_row + "\n")
     expect("9/9 重复行：A=[x,x] vs B=[x,x] 判绿", ns, 0)
 
-    print("GREEN: scoped_diff selftest 9/9（含规范化前后 + 固定建角不置占位 + 改坏必红 "
-          "+ 多重集重复行 + fail-closed）")
+    # ---- 10/12：族表归属（PlayerId 外键）——extract 必须把物品/Abil 行纳入作用域，
+    #      且只纳入本次运行角色的行（别的 PlayerId 不许混入）。
+    snap = os.path.join(tmp, "snap")
+    os.makedirs(snap, exist_ok=True)
+    item_cols = TABLE_COLUMNS["mir2_db.characters_item"]
+    abil_cols = TABLE_COLUMNS["mir2_db.characters_ablity"]
+
+    def _row(cols, **vals):
+        d = {c: "0" for c in cols}
+        d.update(vals)
+        return "\t".join(d[c] for c in cols)
+
+    snap_files = {
+        "mir2_db.characters": ("mir2_db.characters.tsv", [_chr_line(42, 1, 0)]),
+        "mir2_db.characters_item": ("mir2_db.characters_item.tsv", [
+            _row(item_cols, Id="1", PlayerId="42", Position="0", MakeIndex="7001",
+                 StdIndex="118", Dura="10", DuraMax="10"),
+            _row(item_cols, Id="2", PlayerId="99", Position="0", MakeIndex="7002",
+                 StdIndex="9", Dura="1", DuraMax="1"),
+        ]),
+        "mir2_db.characters_ablity": ("mir2_db.characters_ablity.tsv", [
+            _row(abil_cols, PlayerId="42", Level="1", Dc="1", MaxHP="15",
+                 ModifyTime="2026-10-11 00:00:00"),
+        ]),
+    }
+    manifest = {"tool": "dbsnap", "tables": []}
+    for t, (fn, rows) in snap_files.items():
+        with open(os.path.join(snap, fn), "w", encoding="utf-8", newline="\n") as f:
+            for r in rows:
+                f.write(r + "\n")
+        manifest["tables"].append({"table": t, "file": fn, "rows": len(rows)})
+    with open(os.path.join(snap, "manifest.json"), "w", encoding="utf-8") as f:
+        json.dump(manifest, f)
+    out = os.path.join(tmp, "extract.jsonl")
+    cmd_extract(argparse.Namespace(snapdir=snap, prefix="m3bot", out=out, normalize=False,
+                                   allow_empty=False))
+    extracted = [json.loads(single) for single in open(out, encoding="utf-8")]
+    got_tables = Counter(r["table"] for r in extracted)
+    if (got_tables.get("mir2_db.characters_item") != 1
+            or got_tables.get("mir2_db.characters_ablity") != 1):
+        print(f"RED: 10/12 族表未按 PlayerId 纳入作用域: {dict(got_tables)}", file=sys.stderr)
+        sys.exit(1)
+    if any("\t99\t" in r["line"] for r in extracted):
+        print("RED: 10/12 非本次运行的 PlayerId=99 行混入作用域", file=sys.stderr)
+        sys.exit(1)
+    print("PASS 10/12 族表（物品/Abil）按 PlayerId 归属纳入作用域，且不混入他人行")
+
+    # ---- 11/12：族表规范化——PlayerId/Id 是易变列（自增 PK/FK），其余列相同 ⇒ 判绿
+    _write_tbl(a, "mir2_db.characters_item", [
+        _row(item_cols, Id="1", PlayerId="42", Position="0", MakeIndex="7001",
+             StdIndex="118", Dura="10", DuraMax="10")])
+    _write_tbl(b, "mir2_db.characters_item", [
+        _row(item_cols, Id="7", PlayerId="51", Position="0", MakeIndex="7001",
+             StdIndex="118", Dura="10", DuraMax="10")])
+    expect("11/12 族表：仅 PlayerId/Id 易变 ⇒ 判绿", ns_c, 0)
+
+    # ---- 12/12（改坏必红）：族表被比对列（StdIndex）改坏 ⇒ 判红
+    _write_tbl(b, "mir2_db.characters_item", [
+        _row(item_cols, Id="7", PlayerId="51", Position="0", MakeIndex="7001",
+             StdIndex="119", Dura="10", DuraMax="10")])
+    expect("12/12 族表：被比对列（StdIndex）改坏即判红", ns_c, 1)
+
+    # ---- 13/13（F-1 的牙齿）：真实 13 表快照（dbsnap DEFAULT_TABLES）的 extract 必须 GREEN。
+    #   表清单/文件名直接读仓内**真实** manifest（sessions/csharp-20261011-142347/
+    #   snap_after.manifest.json）；任一表未在 TABLE_COLUMNS 登记（本片之前是
+    #   item_attr/magic/quest）⇒ 这里就 exit 4。
+    real_manifest_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "sessions", "csharp-20261011-142347", "snap_after.manifest.json")
+    if not os.path.exists(real_manifest_path):
+        print(f"RED: 13/13 缺仓内真实 manifest（F-1 覆盖锚点）: {real_manifest_path}", file=sys.stderr)
+        sys.exit(1)
+    with open(real_manifest_path, encoding="utf-8-sig") as f:
+        real_manifest = json.load(f)
+    snap13 = os.path.join(tmp, "snap13")
+    os.makedirs(snap13, exist_ok=True)
+    run_id = "42"
+    for t in real_manifest["tables"]:
+        table = t["table"]
+        cols = TABLE_COLUMNS.get(table)
+        if cols is None:
+            print(f"RED: 13/13 真实快照表未登记 {table}（F-1 未修复）", file=sys.stderr)
+            sys.exit(1)
+        vals = {c: "0" for c in cols}
+        if table == CHARACTER_TABLE:
+            vals.update({"Id": run_id, "LoginID": "m3bot0", "ChrName": "m3bot0"})
+        elif table == "mir2_account.account":
+            vals["Account"] = "m3bot0"
+        elif table == "mir2_account.account_protection":
+            pass  # 无名字列：本表靠 prefix 命中不了，0 行不算失败
+        else:
+            key = FAMILY_TABLES.get(table)
+            if key is not None:
+                vals[key] = run_id
+            elif "Id" in cols:
+                vals["Id"] = "1"
+        with open(os.path.join(snap13, t["file"]), "w", encoding="utf-8", newline="\n") as f:
+            f.write("\t".join(vals[c] for c in cols) + "\n")
+    with open(os.path.join(snap13, "manifest.json"), "w", encoding="utf-8") as f:
+        json.dump(real_manifest, f)
+    out13 = os.path.join(tmp, "extract13.jsonl")
+    cmd_extract(argparse.Namespace(snapdir=snap13, prefix="m3bot", out=out13,
+                                   normalize=False, allow_empty=False))
+    got13 = Counter(r["table"]
+                    for r in (json.loads(single) for single in open(out13, encoding="utf-8")))
+    for need in ("mir2_db.characters_item_attr", "mir2_db.characters_magic",
+                 "mir2_db.characters_quest"):
+        if got13.get(need) != 1:
+            print(f"RED: 13/13 真实快照表 {need} 未被 extract 纳入（F-1 未覆盖）: {dict(got13)}",
+                  file=sys.stderr)
+            sys.exit(1)
+    print("PASS 13/13 真实 13 表 manifest 的 extract GREEN（含 item_attr/magic/quest）")
+
+    print("GREEN: scoped_diff selftest 13/13（含规范化前后 + 固定建角不置占位 + 改坏必红 "
+          "+ 多重集重复行 + fail-closed + 族表 PlayerId 归属 + 真实 13 表快照）")
     sys.exit(0)
 
 

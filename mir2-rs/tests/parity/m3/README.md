@@ -103,13 +103,48 @@ GREEN: M3 门禁通过
   `Hair/Sex` 因 `Random(1)` 恒 0 而固定为 2/0，故在**默认场景**里这三列置占位；
   **固定建角场景**用 `--fixed-newchr` 让它们**不**置占位、逐字节比（见下节，卡
   `openmir2-m3-botsrv-fixed-newchr`）；
-- 红检：`python scoped_diff.py selftest` **9/9**，含「仅易变列不同必须判绿」「被比对列被改坏必须判红」
+- 红检：`python scoped_diff.py selftest` **13/13**，含「仅易变列不同必须判绿」「被比对列被改坏必须判红」
   「固定建角场景下 Job 被改坏必须判红（不被占位吃掉）」「重复行 `A=[x,x]` vs `B=[x]` 必须判红」
   「未登记表 fail-closed」。
 - **多重集/计数式比对（2026-10-11，卡 `openmir2-m3-scopeddiff-multiset`）**：`diff` 计 `problems`
   与 `delta` 计增删时，按 **(表, 行 key) 的出现次数** 做多重集差（`collections.Counter`），
   **不用 set 差集**。旧实现下 `A=[x,x]` vs `B=[x]` 的 `仅A=0 仅B=0` 会 **exit 0（假绿）**；
   现在「重复行数」本身是判据的一部分（多出一行计 1，判红）。同表两侧重复行数相同仍判绿。
+
+### 作用域覆盖角色族表（物品/Abil/Status；卡 `openmir2-m3-bag-equip-alignment`，2026-10-11）
+
+旧 `extract` 的归属规则是「行内出现 prefix」——它只能命中 `account*` / `characters` / `characters_indexes`
+（行里有账号名/角色名）。**物品行、Abil 行、Status 行、Bonus 行的键是 `PlayerId`（bigint 外键），
+行里没有名字** ⇒ 它们**从来没进过作用域**：背包/装备对齐就算真的跑起来，也会在这一层被静默漏比。
+
+现在改成两遍：先从 `mir2_db.characters` 里解出本次运行建出的 `Id` 集合，再以 `PlayerId ∈ 该集合`
+归属族表（`scoped_diff.py` 的 `FAMILY_TABLES`）。覆盖的表：
+
+```
+mir2_db.characters_item          # 身上装备行（Position/MakeIndex/StdIndex/Dura/DuraMax 逐字节比）
+mir2_db.characters_bagitem       # 背包行
+mir2_db.characters_storageitem   # 仓库行
+mir2_db.characters_item_attr     # 装备附加属性（MakeIndex + Value0..13 逐字节比）
+mir2_db.characters_ablity        # 角色 Abil（Level/Ac/Mac/Dc/Mc/Sc/Hp/Mp/Exp/Weight…）
+mir2_db.characters_bonusability  # Bonus 模板
+mir2_db.characters_status        # Status0..15
+mir2_db.characters_magic         # 技能行（MagicId/Level/UseKey/CurrTrain 逐字节比）
+mir2_db.characters_quest         # 任务标志（QUESTOPENINDEX/QUESTFININDEX/QUEST 逐字节比）
+```
+
+上面 9 张 + `account` / `account_protection` / `characters` / `characters_indexes` 正好是
+`tools/dbsnap/dbsnap.py` 的 `DEFAULT_TABLES` **13 张真实快照表**；`selftest` 的 13/13 直接读仓内
+真实 `sessions/csharp-20261011-142347/snap_after.manifest.json` 跑一次 `extract` —— 只要有一张表
+没登记就 exit 4（F-1 的牙齿）。
+
+口径纪律（不变）：易变列只有「自增 PK `Id` / 外键 `PlayerId`（`bonusability`/`quest` 是 `PLAYERID`）」
+与墙钟 `ModifyTime`，**逐列登记理由**；`Position`/`MakeIndex`/`StdIndex`/`Dura`/`DuraMax`/Abil 各字段
+一律**逐字节比**——其中 `MakeIndex` **故意不登记为易变**（它是否跨侧确定属被比对行为，
+要白名单必须另给实测理由）。未登记表仍 fail-closed（exit 4）。
+
+真实 13 表快照上的重抽证据（F-1/O-1）：`sessions/reextract-20261011-1828/`——C#/Rust 两前缀
+各 115 行（族表 111 行），族表子集跨侧 `--canonical --fixed-newchr` **GREEN（5 表）**；
+全量只剩 `characters` 的 `CX/CY` 一行差异（活库快照/落库时机，见该目录 README「已知观察」）。
 
 单侧基线不必带 `--canonical`（`extract`/`delta` 不变）；只在**跨侧比对**时用。
 
@@ -191,7 +226,7 @@ powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/rng-baseline.ps
 - 不需要还原快照（不碰既有角色，风险为 0）；
 - 比对只取本次命名空间内的行 ⇒ 并行线的干扰自动排除。
 
-`scoped_diff.py` 提供 `extract / delta / diff / selftest`（selftest 9/9，含"改坏必红"与"重复行多重集"）。
+`scoped_diff.py` 提供 `extract / delta / diff / selftest`（selftest 13/13，含"改坏必红"与"重复行多重集"）。
 `diff`/`delta` 的差异计数是**多重集/计数式**（同 `(表, row_sha256)` 的出现次数纳入判定）。
 `--normalize` 把前缀归一化为 `<RUN>`，使两次运行的前缀差异不影响比对。
 
@@ -239,7 +274,7 @@ LoginSrv 读的配置是 `src/LoginSrv/bin/Release/logsrv.conf`
 
 ```powershell
 powershell -File run_pair.ps1 -SelfTestRed      # 入口不通 → 判失败（实测 exit 0 = 红检成立）
-python scoped_diff.py selftest                 # 9/9 实测（含重复行多重集：A=[x,x] vs B=[x] 必红）
+python scoped_diff.py selftest                 # 13/13 实测（含重复行多重集：A=[x,x] vs B=[x] 必红；族表 PlayerId 归属；真实 13 表快照 extract）
 ```
 
 另外两条内置护栏本身就是门禁（实测触发过）：

@@ -174,9 +174,25 @@ if (-not $SkipFlow) {
 
 # ---- 6. 假人冒烟 ----
 if (-not $SkipBots) {
-  & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "tools\botload\run_bots.ps1") `
-    -Count 3 -Prefix "e2esmoke" -NewAccount -TimeoutSec 180
-  Add-Result "bot-smoke" ($LASTEXITCODE -eq 0)
+  # 就绪：整栈七进程里 LoginGate:7000 最早起，登录链路（LoginSrv 5500/SelGate 7100）可能还没跟上，
+  # 冷栈第一跑偶发 2/3（2026-10-11 实测）⇒ 先等所有 oracle 端口都 listen，再跑冒烟。
+  $readyPorts = @(3306,5000,5100,5500,5600,5700,6000,7000,7100,7200)
+  $deadline = (Get-Date).AddSeconds(120)
+  while ((Get-Date) -lt $deadline) {
+    $missing = @($readyPorts | Where-Object { -not (Get-NetTCPConnection -State Listen -LocalPort $_ -ErrorAction SilentlyContinue) })
+    if ($missing.Count -eq 0) { break }
+    Start-Sleep -Seconds 2
+  }
+  if ($missing.Count -gt 0) { Write-Output ("  等栈就绪：仍缺端口 " + ($missing -join ",")) }
+  # 冒烟是门禁不是正确性 oracle：冷栈/网关抖动会偶发个别假人没登上，允许重试一次（重试仍失败才算红）。
+  $smokeOk = $false
+  for ($attempt = 1; $attempt -le 2 -and -not $smokeOk; $attempt++) {
+    if ($attempt -gt 1) { Write-Output "  bot-smoke 重试（首次可能赶在栈完全就绪前）" }
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "tools\botload\run_bots.ps1") `
+      -Count 3 -Prefix "e2esmoke" -NewAccount -TimeoutSec 180
+    $smokeOk = ($LASTEXITCODE -eq 0)
+  }
+  Add-Result "bot-smoke" $smokeOk ($(if ($smokeOk) { "3/3" } else { "重试 2 次仍失败" }))
 }
 
 # ---- 汇总 ----

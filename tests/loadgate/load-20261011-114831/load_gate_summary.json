@@ -1,0 +1,344 @@
+﻿{
+    "out_dir":  "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\.claude\\worktrees\\c6\\tests\\loadgate\\load-20261011-114831",
+    "reports":  [
+                    {
+                        "samples":  953,
+                        "samples_total":  962,
+                        "max_ms":  32,
+                        "mean_ms":  1.82,
+                        "ramp_complete":  true,
+                        "steady_window_ms":  60125,
+                        "peak_login_ok":  200,
+                        "login_success_pct":  100.0,
+                        "conn_refused":  1,
+                        "conn_lost":  0,
+                        "conn_lost_ramp":  0,
+                        "conn_lost_steady":  0,
+                        "hist_bucket_ms":  1,
+                        "world_ok":  21,
+                        "world_ok_pct":  10.5,
+                        "probe_sent":  1186,
+                        "internal_errors":  0,
+                        "tick_p50_ms":  0,
+                        "tick_p90_ms":  0,
+                        "tick_p99_ms":  31,
+                        "ramp_ms":  10015,
+                        "clock_granularity_note":  "Environment.TickCount 在 Windows 上粒度约 15.6ms（单样本 ±16ms 量化，是测量下限，不是噪声消除）",
+                        "mem":  {
+                                    "DBSrv":  {
+                                                  "samples":  30,
+                                                  "ws_peak_mb":  86.9,
+                                                  "ws_mean_mb":  86.1,
+                                                  "ws_last_mb":  86.0,
+                                                  "priv_peak_mb":  45.0,
+                                                  "slope_tail_mb_per_s":  -0.003,
+                                                  "tail_window_s":  59.8,
+                                                  "window_s":  59.8
+                                              },
+                                    "GameGate":  {
+                                                     "samples":  30,
+                                                     "ws_peak_mb":  70.3,
+                                                     "ws_mean_mb":  65.8,
+                                                     "ws_last_mb":  70.3,
+                                                     "priv_peak_mb":  56.8,
+                                                     "slope_tail_mb_per_s":  0.108,
+                                                     "tail_window_s":  59.8,
+                                                     "window_s":  59.8
+                                                 },
+                                    "GameSrv":  {
+                                                    "samples":  30,
+                                                    "ws_peak_mb":  278.7,
+                                                    "ws_mean_mb":  273.4,
+                                                    "ws_last_mb":  275.9,
+                                                    "priv_peak_mb":  234.4,
+                                                    "slope_tail_mb_per_s":  -0.047,
+                                                    "tail_window_s":  59.8,
+                                                    "window_s":  59.8
+                                                },
+                                    "LoginGate":  {
+                                                      "samples":  30,
+                                                      "ws_peak_mb":  56.4,
+                                                      "ws_mean_mb":  55.4,
+                                                      "ws_last_mb":  56.4,
+                                                      "priv_peak_mb":  21.8,
+                                                      "slope_tail_mb_per_s":  0.017,
+                                                      "tail_window_s":  59.8,
+                                                      "window_s":  59.8
+                                                  },
+                                    "LoginSrv":  {
+                                                     "samples":  30,
+                                                     "ws_peak_mb":  68.4,
+                                                     "ws_mean_mb":  65.6,
+                                                     "ws_last_mb":  68.4,
+                                                     "priv_peak_mb":  29.5,
+                                                     "slope_tail_mb_per_s":  0.084,
+                                                     "tail_window_s":  59.8,
+                                                     "window_s":  59.8
+                                                 },
+                                    "SelGate":  {
+                                                    "samples":  30,
+                                                    "ws_peak_mb":  57.5,
+                                                    "ws_mean_mb":  55.4,
+                                                    "ws_last_mb":  55.6,
+                                                    "priv_peak_mb":  23.8,
+                                                    "slope_tail_mb_per_s":  -0.032,
+                                                    "tail_window_s":  59.8,
+                                                    "window_s":  59.8
+                                                },
+                                    "mysqld":  {
+                                                   "samples":  30,
+                                                   "ws_peak_mb":  154.3,
+                                                   "ws_mean_mb":  154.3,
+                                                   "ws_last_mb":  154.3,
+                                                   "priv_peak_mb":  469.1,
+                                                   "slope_tail_mb_per_s":  0.0,
+                                                   "tail_window_s":  59.8,
+                                                   "window_s":  59.8
+                                               }
+                                },
+                        "count":  200,
+                        "stagger_ms":  20,
+                        "hold_sec":  60,
+                        "criteria":  [
+                                         "login",
+                                         "conn",
+                                         "tick"
+                                     ],
+                        "allow_missing_tick":  false,
+                        "verdict":  "GREEN",
+                        "fails":  [
+
+                                  ]
+                    },
+                    {
+                        "samples":  803,
+                        "samples_total":  890,
+                        "max_ms":  32,
+                        "mean_ms":  4.64,
+                        "ramp_complete":  true,
+                        "steady_window_ms":  60093,
+                        "peak_login_ok":  500,
+                        "login_success_pct":  100.0,
+                        "conn_refused":  0,
+                        "conn_lost":  0,
+                        "conn_lost_ramp":  0,
+                        "conn_lost_steady":  0,
+                        "hist_bucket_ms":  1,
+                        "world_ok":  20,
+                        "world_ok_pct":  4.0,
+                        "probe_sent":  1259,
+                        "internal_errors":  159,
+                        "tick_p50_ms":  0,
+                        "tick_p90_ms":  16,
+                        "tick_p99_ms":  31,
+                        "ramp_ms":  15016,
+                        "clock_granularity_note":  "Environment.TickCount 在 Windows 上粒度约 15.6ms（单样本 ±16ms 量化，是测量下限，不是噪声消除）",
+                        "mem":  {
+                                    "DBSrv":  {
+                                                  "samples":  29,
+                                                  "ws_peak_mb":  88.4,
+                                                  "ws_mean_mb":  86.9,
+                                                  "ws_last_mb":  86.8,
+                                                  "priv_peak_mb":  46.5,
+                                                  "slope_tail_mb_per_s":  0.006,
+                                                  "tail_window_s":  58.3,
+                                                  "window_s":  58.3
+                                              },
+                                    "GameGate":  {
+                                                     "samples":  29,
+                                                     "ws_peak_mb":  123.3,
+                                                     "ws_mean_mb":  120.1,
+                                                     "ws_last_mb":  123.3,
+                                                     "priv_peak_mb":  111.3,
+                                                     "slope_tail_mb_per_s":  0.099,
+                                                     "tail_window_s":  58.3,
+                                                     "window_s":  58.3
+                                                 },
+                                    "GameSrv":  {
+                                                    "samples":  29,
+                                                    "ws_peak_mb":  277.3,
+                                                    "ws_mean_mb":  274.8,
+                                                    "ws_last_mb":  276.0,
+                                                    "priv_peak_mb":  233.0,
+                                                    "slope_tail_mb_per_s":  0.095,
+                                                    "tail_window_s":  58.3,
+                                                    "window_s":  58.3
+                                                },
+                                    "LoginGate":  {
+                                                      "samples":  29,
+                                                      "ws_peak_mb":  102.9,
+                                                      "ws_mean_mb":  101.8,
+                                                      "ws_last_mb":  102.9,
+                                                      "priv_peak_mb":  68.9,
+                                                      "slope_tail_mb_per_s":  0.02,
+                                                      "tail_window_s":  58.3,
+                                                      "window_s":  58.3
+                                                  },
+                                    "LoginSrv":  {
+                                                     "samples":  29,
+                                                     "ws_peak_mb":  72.8,
+                                                     "ws_mean_mb":  71.3,
+                                                     "ws_last_mb":  72.8,
+                                                     "priv_peak_mb":  34.4,
+                                                     "slope_tail_mb_per_s":  0.027,
+                                                     "tail_window_s":  58.3,
+                                                     "window_s":  58.3
+                                                 },
+                                    "SelGate":  {
+                                                    "samples":  29,
+                                                    "ws_peak_mb":  102.8,
+                                                    "ws_mean_mb":  102.3,
+                                                    "ws_last_mb":  102.8,
+                                                    "priv_peak_mb":  70.5,
+                                                    "slope_tail_mb_per_s":  0.009,
+                                                    "tail_window_s":  58.3,
+                                                    "window_s":  58.3
+                                                },
+                                    "mysqld":  {
+                                                   "samples":  29,
+                                                   "ws_peak_mb":  155.0,
+                                                   "ws_mean_mb":  154.8,
+                                                   "ws_last_mb":  155.0,
+                                                   "priv_peak_mb":  469.3,
+                                                   "slope_tail_mb_per_s":  0.004,
+                                                   "tail_window_s":  58.3,
+                                                   "window_s":  58.3
+                                               }
+                                },
+                        "count":  500,
+                        "stagger_ms":  20,
+                        "hold_sec":  60,
+                        "criteria":  [
+                                         "login",
+                                         "conn",
+                                         "tick"
+                                     ],
+                        "allow_missing_tick":  false,
+                        "verdict":  "GREEN",
+                        "fails":  [
+
+                                  ]
+                    },
+                    {
+                        "samples":  564,
+                        "samples_total":  787,
+                        "max_ms":  16,
+                        "mean_ms":  0.38,
+                        "ramp_complete":  true,
+                        "steady_window_ms":  60094,
+                        "peak_login_ok":  1000,
+                        "login_success_pct":  100.0,
+                        "conn_refused":  0,
+                        "conn_lost":  0,
+                        "conn_lost_ramp":  0,
+                        "conn_lost_steady":  0,
+                        "hist_bucket_ms":  1,
+                        "world_ok":  19,
+                        "world_ok_pct":  1.9,
+                        "probe_sent":  1361,
+                        "internal_errors":  16,
+                        "tick_p50_ms":  0,
+                        "tick_p90_ms":  0,
+                        "tick_p99_ms":  16,
+                        "ramp_ms":  25047,
+                        "clock_granularity_note":  "Environment.TickCount 在 Windows 上粒度约 15.6ms（单样本 ±16ms 量化，是测量下限，不是噪声消除）",
+                        "mem":  {
+                                    "DBSrv":  {
+                                                  "samples":  30,
+                                                  "ws_peak_mb":  85.0,
+                                                  "ws_mean_mb":  83.6,
+                                                  "ws_last_mb":  83.4,
+                                                  "priv_peak_mb":  43.5,
+                                                  "slope_tail_mb_per_s":  -0.008,
+                                                  "tail_window_s":  59.9,
+                                                  "window_s":  59.9
+                                              },
+                                    "GameGate":  {
+                                                     "samples":  30,
+                                                     "ws_peak_mb":  179.6,
+                                                     "ws_mean_mb":  176.0,
+                                                     "ws_last_mb":  179.6,
+                                                     "priv_peak_mb":  167.9,
+                                                     "slope_tail_mb_per_s":  0.121,
+                                                     "tail_window_s":  59.9,
+                                                     "window_s":  59.9
+                                                 },
+                                    "GameSrv":  {
+                                                    "samples":  30,
+                                                    "ws_peak_mb":  277.6,
+                                                    "ws_mean_mb":  276.6,
+                                                    "ws_last_mb":  277.3,
+                                                    "priv_peak_mb":  233.8,
+                                                    "slope_tail_mb_per_s":  0.071,
+                                                    "tail_window_s":  59.9,
+                                                    "window_s":  59.9
+                                                },
+                                    "LoginGate":  {
+                                                      "samples":  30,
+                                                      "ws_peak_mb":  117.5,
+                                                      "ws_mean_mb":  115.9,
+                                                      "ws_last_mb":  117.0,
+                                                      "priv_peak_mb":  83.6,
+                                                      "slope_tail_mb_per_s":  0.026,
+                                                      "tail_window_s":  59.9,
+                                                      "window_s":  59.9
+                                                  },
+                                    "LoginSrv":  {
+                                                     "samples":  30,
+                                                     "ws_peak_mb":  74.7,
+                                                     "ws_mean_mb":  73.0,
+                                                     "ws_last_mb":  72.8,
+                                                     "priv_peak_mb":  35.9,
+                                                     "slope_tail_mb_per_s":  -0.005,
+                                                     "tail_window_s":  59.9,
+                                                     "window_s":  59.9
+                                                 },
+                                    "SelGate":  {
+                                                    "samples":  30,
+                                                    "ws_peak_mb":  115.6,
+                                                    "ws_mean_mb":  115.3,
+                                                    "ws_last_mb":  115.6,
+                                                    "priv_peak_mb":  83.2,
+                                                    "slope_tail_mb_per_s":  0.007,
+                                                    "tail_window_s":  59.9,
+                                                    "window_s":  59.9
+                                                },
+                                    "mysqld":  {
+                                                   "samples":  30,
+                                                   "ws_peak_mb":  155.3,
+                                                   "ws_mean_mb":  155.1,
+                                                   "ws_last_mb":  155.3,
+                                                   "priv_peak_mb":  469.4,
+                                                   "slope_tail_mb_per_s":  0.005,
+                                                   "tail_window_s":  59.9,
+                                                   "window_s":  59.9
+                                               }
+                                },
+                        "count":  1000,
+                        "stagger_ms":  20,
+                        "hold_sec":  60,
+                        "criteria":  [
+                                         "login",
+                                         "conn",
+                                         "tick"
+                                     ],
+                        "allow_missing_tick":  false,
+                        "verdict":  "GREEN",
+                        "fails":  [
+
+                                  ]
+                    }
+                ],
+    "action_probe":  true,
+    "criteria":  "login,conn,tick",
+    "allow_missing_tick":  false,
+    "tiers":  [
+                  200,
+                  500,
+                  1000
+              ],
+    "action_probe_ms":  1000,
+    "stagger_ms":  20,
+    "caliber":  "tick 服务时延 = BotSrv 收到 #+GD/\u003crtime\u003e! 的时刻 − rtime（Environment.TickCount，全机同域）；详见 tools/botload/load_report.py",
+    "hold_sec":  60
+}

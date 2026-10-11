@@ -5,13 +5,15 @@
 
 .DESCRIPTION
   用车间里现成的 BotSrv（src/BotSrv，完整客户端协议栈的 headless 机器人）。
-  本脚本只做编排：构建 → 写 AppSetting.json → 起进程 → 按日志计数 → 给判据。
+  本脚本只做编排：构建 → 写 AppSetting.json → 起进程 → 读 BotSrv 的 load_stats.ndjson 计数 → 给判据。
 
   账号规则（BotSrv 内部约定）：账号名 = LoginAccount 前缀 + 递增序号，
   密码 = 账号名。-NewAccount 时机器人先走 CM_ADDNEWUSER 注册再登录。
 
   判据（默认全过才退出码 0）：
-    - 日志中「帐号登录成功！」计数 == -Count
+    - BotSrv 内部计数 load_stats.ndjson 的 login_ok == -Count（**不抓日志行**：
+      LoginScene.ClientGetPasswordOk 在「有剩余时长」的两个分支只打「个人帐户的期限」，
+      抓「帐号登录成功」会把这类账号误判成登录失败 ⇒ 假红）
     - 进程在统计窗口内无异常退出
   红检（-SelfTestRed）：故意指向未监听端口，必须报失败退出码 1。
 
@@ -34,6 +36,7 @@ param(
   [int]$NewChrJob = 0,            # 仅 -FixedNewChr 时生效（写进 AppSetting.json 的 BotPlay 段）
   [int]$NewChrHair = 0,           # 仅 -FixedNewChr 时生效
   [int]$NewChrSex = 0,            # 仅 -FixedNewChr 时生效
+  [switch]$RequireWorld,          # F4（T-12）：要求全部假人都有"本会话收到 SM_LOGON"的进世界证据（in_world == Count）才 GREEN
   [switch]$SelfTestRed
 )
 
@@ -57,6 +60,17 @@ if ($LogFile -eq "") {
     New-Item -ItemType Directory -Force -Path $outDir | Out-Null
     $LogFile = Join-Path $outDir ("bots-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".log")
 }
+
+# 统计目录：**必须显式给 BotSrv**，不要让它回落到 exe 同级的 load_out.conf。
+# 坑（C6 第 4 轮自查实测）：load_gate.ps1 会把 bin/Release/load_out.conf 写成「最后一档」目录且
+# 跑完不清除；run_bots 不设 MIR2_BOT_OUT 时，BotSrv 的 LoadMetrics.ResolveOutDir 会读该 conf ⇒
+# 3 假人冒烟用 FileMode.Create 覆写 tests/loadgate/load-*/tier-1000/load_stats.ndjson
+#（022821 / 114831 / 121254 三处已发生，见 tests/loadgate/README.md「证据完整性告警」）。
+# 设了 MIR2_BOT_OUT 后 AppService 把它当显式参数传给 LoadMetrics.Init，优先级压过 conf。
+$statsDir = Join-Path (Split-Path -Parent $LogFile) ([System.IO.Path]::GetFileNameWithoutExtension($LogFile))
+New-Item -ItemType Directory -Force -Path $statsDir | Out-Null
+$statsPath = Join-Path $statsDir "load_stats.ndjson"
+$env:MIR2_BOT_OUT = $statsDir
 
 # ---- 1. 构建 ----
 if (-not $SkipBuild -or -not (Test-Path $BotExe)) {
@@ -93,12 +107,15 @@ $proc = Start-Process -FilePath $BotExe -WorkingDirectory $BotBinDir -PassThru -
   -RedirectStandardOutput $LogFile -RedirectStandardError "$LogFile.err"
 Write-Output "BOTSRV_PID=$($proc.Id) LOG=$LogFile"
 
-# ---- 4. 按日志计数 ----
+# ---- 4. 读 BotSrv 内部计数（load_stats.ndjson）----
+# 判据来源 = BotSrv 自己的 LoadMetrics.LoginOk()（三个分支都计），与 load_gate 同源；
+# 不再抓「帐号登录成功」日志行（理由见文件头 .DESCRIPTION）。
 $deadline = (Get-Date).AddSeconds($TimeoutSec)
 $success = 0
 $spawned = 0
-function Read-LogShared([string]$Path) {
-  # BotSrv 的 stdout 被 Start-Process 重定向持有：必须以 ReadWrite 共享方式读，否则打开即抛
+$worldOk = 0
+function Read-SharedText([string]$Path) {
+  # BotSrv 的 StreamWriter 以 FileShare.ReadWrite 持有：读侧也必须放行写，否则打开即抛
   if (-not (Test-Path $Path)) { return "" }
   try {
     $fs = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
@@ -107,25 +124,39 @@ function Read-LogShared([string]$Path) {
       return $sr.ReadToEnd()
     } finally { $fs.Close() }
   } catch {
-    Write-Output ("WARN: 读日志失败: " + $_.Exception.Message)
+    Write-Output ("WARN: 读统计失败: " + $_.Exception.Message)
     return ""
   }
 }
+function Get-LastStats([string]$Path) {
+  $txt = Read-SharedText $Path
+  if ($txt -eq "") { return $null }
+  $lines = $txt -split "`n" | Where-Object { $_.Trim() -ne "" }
+  if ($lines.Count -eq 0) { return $null }
+  try { return ($lines[-1] | ConvertFrom-Json) } catch { return $null }
+}
 while ((Get-Date) -lt $deadline) {
   Start-Sleep -Seconds 5
-  $content = Read-LogShared $LogFile
-  $success = ([regex]::Matches($content, "帐号登录成功")).Count
-  $spawned = ([regex]::Matches($content, "开始登陆")).Count
-  $failed = ([regex]::Matches($content, "此帐号不存在|密码错误|登录失败")).Count
-  Write-Output ("PROGRESS spawned=" + $spawned + " login_ok=" + $success + "/" + $Count + " failed=" + $failed)
-  if ($success -ge $Count) { break }
+  $st = Get-LastStats $statsPath
+  if ($st -ne $null) {
+    $spawned = [int]$st.spawned
+    $success = [int]$st.login_ok
+    if ($st.PSObject.Properties.Name -contains "in_world") { $worldOk = [int]$st.in_world }
+  }
+  Write-Output ("PROGRESS spawned=" + $spawned + " login_ok=" + $success + "/" + $Count + " in_world=" + $worldOk + "/" + $Count + " (src=load_stats.ndjson)")
+  if ($RequireWorld) {
+    # F4（T-12）：登录不等于进世界；等"本会话收到 SM_LOGON"的进世界证据到齐。
+    if ($worldOk -ge $Count) { break }
+  } elseif ($success -ge $Count) { break }
   if ($proc.HasExited) { Write-Output "WARN: BotSrv 进程提前退出 code=$($proc.ExitCode)"; break }
 }
 
 $rate = if ($Count -gt 0) { [math]::Round(100.0 * $success / $Count, 2) } else { 0 }
+$worldRate = if ($Count -gt 0) { [math]::Round(100.0 * $worldOk / $Count, 2) } else { 0 }
 $summary = [pscustomobject]@{
-  count = $Count; spawned = $spawned; login_ok = $success
-  success_rate_pct = $rate; timeout_sec = $TimeoutSec; log = $LogFile
+  count = $Count; spawned = $spawned; login_ok = $success; in_world = $worldOk
+  success_rate_pct = $rate; world_rate_pct = $worldRate; require_world = [bool]$RequireWorld
+  timeout_sec = $TimeoutSec; log = $LogFile; stats = $statsPath
 }
 $summaryPath = [System.IO.Path]::ChangeExtension($LogFile, ".summary.json")
 $summary | ConvertTo-Json | Set-Content -Path $summaryPath -Encoding utf8
@@ -141,9 +172,13 @@ if ($SelfTestRed) {
   exit 1
 }
 
-if ($success -ge $Count) {
-  Write-Output ("GREEN: " + $success + "/" + $Count + " 登录成功 (100%)")
+if ($success -ge $Count -and (-not $RequireWorld -or $worldOk -ge $Count)) {
+  Write-Output ("GREEN: " + $success + "/" + $Count + " 登录成功 (100%)" + $(if ($RequireWorld) { "；in_world=" + $worldOk + "/" + $Count } else { "" }))
   exit 0
+}
+if ($RequireWorld -and $worldOk -lt $Count) {
+  Write-Output ("RED: 进世界证据 in_world=" + $worldOk + "/" + $Count + "（" + $worldRate + "%）未达标（-RequireWorld：要求每个假人本会话都收到 SM_LOGON）")
+  exit 1
 }
 Write-Output ("RED: 登录成功 " + $success + "/" + $Count + " (" + $rate + "%) 未达标")
 exit 1

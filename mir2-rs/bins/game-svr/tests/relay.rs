@@ -14,6 +14,7 @@
 
 use std::time::Duration;
 
+use mir2_envir::{CELL_BYTES, HEADER_BYTES};
 use mir2_protocol::frame::ServerMessage;
 use mir2_protocol::messages::grobal2;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -243,6 +244,101 @@ async fn missing_config_exits_nonzero() {
     let err =
         String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("缺键"), "错误信息应指明缺键，实得：{err}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// 合成一张全 `Walk` 的 `.map`（52B 头写 W/H，随后每格 12B）。
+fn synth_map(width: u16, height: u16) -> Vec<u8> {
+    let n = usize::from(width) * usize::from(height);
+    let mut buf = vec![0u8; HEADER_BYTES + n * CELL_BYTES];
+    buf[0..2].copy_from_slice(&width.to_le_bytes());
+    buf[2..4].copy_from_slice(&height.to_le_bytes());
+    buf
+}
+
+/// **WorldMaps 可选化 红检 ①**（owner `272582e1`）：真 `Server.conf` 形态（**无 `WorldMaps`**）+
+/// `Envir/MapInfo.txt` 可读 ⇒ 必须起得来并监听（不再因缺占位键拒绝启动）。
+#[tokio::test]
+async fn starts_without_worldmaps_when_envir_present() {
+    let dir = std::env::temp_dir().join(format!("gs-nowm-ok-{}", std::process::id()));
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::create_dir_all(dir.join("Envir")).unwrap();
+    std::fs::create_dir_all(dir.join("Map")).unwrap();
+    std::fs::write(dir.join("Envir").join("MapInfo.txt"), "[0 town]\n").unwrap();
+    std::fs::write(dir.join("Map").join("0.map"), synth_map(3, 3)).unwrap();
+    let port = free_port();
+    // 现网样件：`[Server]` 段没有 `WorldMaps`（唯一缺的键）。
+    std::fs::write(
+        dir.join("Server.conf"),
+        format!(
+            "[Server]\nCheckBlock=12288\nGateAddr= 127.0.0.1\nGatePort={port}\n\
+             IDSAddr= 127.0.0.1\nIDSPort={}\nDBAddr=127.0.0.1\nDBPort={}\n",
+            free_port(),
+            free_port()
+        ),
+    )
+    .unwrap();
+    let log = dir.join("server.out.log");
+    let out = std::fs::File::create(&log).unwrap();
+    let err = out.try_clone().unwrap();
+    let mut proc = tokio::process::Command::new(env!("CARGO_BIN_EXE_game-svr"))
+        .arg(dir.join("Server.conf"))
+        .stdout(out)
+        .stderr(err)
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    // 能连上 = 真起来了（缺 WorldMaps 不再致命）；连不上会 panic。
+    let mut gate = connect_with_retry(port).await;
+    gate.write_all(&frame(grobal2::GM_OPEN, 1001, 1, 0, b"127.0.0.1"))
+        .await
+        .unwrap();
+    let (m, _) = recv_frame(&mut gate).await.unwrap();
+    assert_eq!(m.session_index, 1);
+    let text = std::fs::read_to_string(&log).unwrap_or_default();
+    assert!(
+        text.contains("Envir 真地图注册表：1 张"),
+        "必须用真注册表建世界（不是占位）；日志实得：{text}"
+    );
+    proc.kill().await.ok();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// **WorldMaps 可选化 红检 ②**（fail-closed）：无 `Envir/MapInfo.txt` **且**无 `WorldMaps` ⇒
+/// 必须非零退出（不许静默起空世界 / 回落 0 号占位图）。
+#[tokio::test]
+async fn missing_worldmaps_and_envir_exits_nonzero() {
+    let dir = std::env::temp_dir().join(format!("gs-nowm-none-{}", std::process::id()));
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::create_dir_all(&dir).unwrap();
+    let port = free_port();
+    std::fs::write(
+        dir.join("Server.conf"),
+        format!(
+            "[Server]\nCheckBlock=12288\nGateAddr=127.0.0.1\nGatePort={port}\n\
+             IDSAddr=127.0.0.1\nIDSPort={}\nDBAddr=127.0.0.1\nDBPort={}\n",
+            free_port(),
+            free_port()
+        ),
+    )
+    .unwrap();
+    let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_game-svr"));
+    cmd.arg(dir.join("Server.conf")).kill_on_drop(true);
+    // 必须**自己退出**：静默放行会让进程起栈常驻 ⇒ 超时也判红（否则红检会挂死）。
+    let out = tokio::time::timeout(Duration::from_secs(10), cmd.output())
+        .await
+        .expect("10s 内必须退出；未退出＝静默放行（起栈常驻），判红")
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "无 Envir 且无 WorldMaps 必须非零退出（fail-closed）"
+    );
+    let err =
+        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("fail-closed"),
+        "错误信息应指明 fail-closed，实得：{err}"
+    );
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -836,6 +932,32 @@ async fn enter_world_emits_sm_newmap_byte_equal_to_golden() {
     .await
     .unwrap();
 
+    // **R1-1**：生产路径固定先发 658（`SM_SENDNOTICE`）。本用例的测试形态没有
+    // `Notice.txt`（`spawn_maps` 用临时 conf）⇒ 658 必须是 **header-only**（12B 命令头 + 无尾），
+    // 照 oracle 空公告分支（`SendDefMessage` 空尾 `else SendSocket(ClientMsg)`）。
+    let (nm, notice_body) = wait_gm_data(&mut gate).await;
+    assert_eq!(nm.socket, 901, "658 的 Socket 必须是该用户的 SocketId");
+    assert_eq!(
+        &notice_body[4..6],
+        &658u16.to_le_bytes(),
+        "首帧必须是 658 SM_SENDNOTICE"
+    );
+    assert_eq!(
+        i32::from_le_bytes([
+            notice_body[0],
+            notice_body[1],
+            notice_body[2],
+            notice_body[3]
+        ]),
+        2000,
+        "SendNotice 的 Recog 恒 2000"
+    );
+    assert_eq!(
+        notice_body.len(),
+        12,
+        "缺 Notice.txt ⇒ header-only 658（12B 命令头 + 无尾）"
+    );
+
     let (dm, body) = wait_gm_data(&mut gate).await;
     assert_eq!(dm.socket, 901, "GM_DATA 的 Socket 必须是该用户的 SocketId");
     assert_eq!(dm.session_id, 222, "SessionId 必须是该网关会话的");
@@ -866,6 +988,170 @@ async fn enter_world_emits_sm_newmap_byte_equal_to_golden() {
     assert!(
         log.contains("进世界帧下发：socket=901"),
         "必须走生产路径下发入图帧；日志实得：{log}"
+    );
+    child.stop().await;
+}
+
+/// **`openmir2-m2-session-lifecycle` ②**：客户端断开 ⇒ 世界里的会话/实体被清 ⇒ 同名角色可**立刻**
+/// 再次进世界（oracle `ChannelMessageHandler.CloseUser` `:363-...` 的 `FrontEngine.DeleteHuman` +
+/// 已进世界 PlayObject 的 `BoSoftClose` → `RunNotice` 的 `MakeGhost()`）。
+///
+/// 判据（进程级、真二进制 + 假网关 + 假 DBSvr）：
+/// ① 第一次进世界成功（日志 `进世界 ChrName:lb1a`）；
+/// ② `GM_CLOSE(socket)` 后日志出现 `断线清世界 ChrName:lb1a socket=801`；
+/// ③ 同一 socket 重新 `GM_OPEN + 认证 + 取档` ⇒ **第二次** `进世界 ChrName:lb1a`（且不出现
+///    `重复进世界`——说明旧会话确实被清掉了，而不是靠踢旧）——这正是 M2 验收「小退再进」的前提。
+///
+/// 红检：把 `GateEvent::Closed` 的 `world.disconnect` 去掉（改回只记日志）⇒ ③ 里
+/// `enter_map` 返回 `AlreadyInWorld`，日志出现 `重复进世界`、第二次进世界不发生 ⇒ 本用例红。
+#[tokio::test]
+async fn disconnect_clears_world_and_same_char_can_reenter() {
+    const ORACLE_LOGIN_BODY: &str = "23305e5e3c716f6d446f6e6f5478615f3c786e61497b5f623f5f6162586b6062586b61625a675f615a5f60605a6b60615a6a62603f6b6060586b6060586b6060586b6060586b6060586b6060586b6060586b6060586b6060586b6060586b5f603f21";
+
+    fn player_data_head() -> Vec<u8> {
+        fn s(v: &str) -> Vec<u8> {
+            let mut o = i32::try_from(v.chars().count())
+                .unwrap()
+                .to_le_bytes()
+                .to_vec();
+            for c in v.chars() {
+                let mut b = [0u16; 2];
+                for u in c.encode_utf16(&mut b) {
+                    o.extend_from_slice(&u.to_le_bytes());
+                }
+            }
+            o
+        }
+        let mut o = vec![2u8];
+        o.extend_from_slice(&s("lb1a"));
+        o.push(2);
+        o.push(7);
+        o.extend_from_slice(&s("loadbot1"));
+        o.extend_from_slice(&s("lb1a"));
+        o.extend_from_slice(&5i32.to_le_bytes());
+        o.extend_from_slice(&1.5f64.to_le_bytes());
+        o.push(0);
+        o.extend_from_slice(&2.5f64.to_le_bytes());
+        o.extend_from_slice(&3.5f64.to_le_bytes());
+        o.push(52);
+        o.push(1);
+        o.extend_from_slice(&s("lb1a"));
+        o.extend_from_slice(&s("0"));
+        o.extend_from_slice(&10i16.to_le_bytes());
+        o.extend_from_slice(&20i16.to_le_bytes());
+        o.push(3);
+        o
+    }
+
+    fn reply_frame(query_id: i32, packet: &[u8]) -> Vec<u8> {
+        use mir2_protocol::edcode;
+        let mut msg = vec![5u8];
+        msg.extend_from_slice(&1i32.to_le_bytes());
+        msg.extend_from_slice(&1100u16.to_le_bytes());
+        msg.extend_from_slice(&[0u8; 6]);
+        let m = edcode::encode(&msg);
+        let p = edcode::encode(packet);
+        let n_len = m.len() + p.len() + 6;
+        let sign_id = (u32::from(u16::try_from(n_len).unwrap()) << 16)
+            | u32::from(u16::try_from(query_id ^ 170).unwrap());
+        let sgn = edcode::encode(&sign_id.to_le_bytes());
+        let mut body = vec![4u8];
+        body.extend_from_slice(&query_id.to_le_bytes());
+        for part in [&m, &p, &sgn] {
+            body.extend_from_slice(&i32::try_from(part.len()).unwrap().to_le_bytes());
+            body.extend_from_slice(part);
+        }
+        let mut frame = 0xAA9A_AA9Au32.to_le_bytes().to_vec();
+        frame.extend_from_slice(&u16::try_from(body.len()).unwrap().to_le_bytes());
+        frame.extend_from_slice(&body);
+        frame
+    }
+
+    // 假 DBSvr：应答**两次**取档（queryId=1 第一次，=2 断线再进那次）。
+    let dbsrv = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let db_port = dbsrv.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let (mut s, _) = dbsrv.accept().await.unwrap();
+        for qid in [1i32, 2] {
+            let mut buf = vec![0u8; 512];
+            let _ = tokio::io::AsyncReadExt::read(&mut s, &mut buf).await;
+            let frame = reply_frame(qid, &player_data_head());
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut s, &frame).await;
+        }
+        tokio::time::sleep(Duration::from_secs(6)).await;
+    });
+    let ids = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let ids_port = ids.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        if let Ok((mut s, _)) = ids.accept().await {
+            let _ =
+                tokio::io::AsyncWriteExt::write_all(&mut s, b"(100/loadbot1/2/0/1/127.0.0.1/3600)")
+                    .await;
+            tokio::time::sleep(Duration::from_secs(8)).await;
+        }
+    });
+    let port = free_port();
+    let child = Child::spawn(port, 12288, ids_port, db_port, "lifecycle");
+    let mut gate = connect_with_retry(port).await;
+
+    // ① 第一次进世界
+    gate.write_all(&frame(grobal2::GM_OPEN, 801, 111, 0, b"127.0.0.1"))
+        .await
+        .unwrap();
+    let (m, _) = recv_frame(&mut gate).await.unwrap();
+    assert_eq!(m.session_index, 1);
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    gate.write_all(&frame(
+        grobal2::GM_DATA,
+        801,
+        111,
+        1,
+        &hex(ORACLE_LOGIN_BODY),
+    ))
+    .await
+    .unwrap();
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    let log = child.stdout();
+    assert!(
+        log.contains("进世界 ChrName:lb1a"),
+        "第一次必须进世界；日志实得：{log}"
+    );
+
+    // ② 断线 ⇒ 清世界
+    gate.write_all(&frame(grobal2::GM_CLOSE, 801, 111, 0, &[]))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    let log = child.stdout();
+    assert!(
+        log.contains("断线清世界 ChrName:lb1a socket=801"),
+        "GM_CLOSE 必须清世界（FrontEngine.DeleteHuman + MakeGhost）；日志实得：{log}"
+    );
+
+    // ③ 同名角色立刻再进（新会话句柄，复用同一 socket 槽）
+    gate.write_all(&frame(grobal2::GM_OPEN, 801, 222, 0, b"127.0.0.1"))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    gate.write_all(&frame(
+        grobal2::GM_DATA,
+        801,
+        222,
+        1,
+        &hex(ORACLE_LOGIN_BODY),
+    ))
+    .await
+    .unwrap();
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    let log = child.stdout();
+    let enters = log.matches("进世界 ChrName:lb1a").count();
+    assert_eq!(
+        enters, 2,
+        "断线后同名角色必须能再次进世界（进世界次数={enters}）；日志实得：{log}"
+    );
+    assert!(
+        !log.contains("重复进世界"),
+        "本场景是断线再进，不应走重复进世界（踢旧）分支；日志实得：{log}"
     );
     child.stop().await;
 }

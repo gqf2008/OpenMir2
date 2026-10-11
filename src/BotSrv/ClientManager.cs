@@ -110,7 +110,11 @@ namespace BotSrv
             bool boProcessLimit = false;
             for (int i = g_nPosition; i < _clientList.Count; i++)
             {
-                _clientList[i].Run();
+                // **逐个假人**兜异常（不要把 try 包在整段循环外）：假人的挂机/移动层建立在跨假人共享的
+                // MShare.* 上，N 个假人会互相踩（实测 500 档 internal_errors 一路涨到 1248+）。
+                // 包在循环外时，一个假人抛异常就**中断整轮**——后面的假人永远轮不到（实测：500 档爬到
+                // 474/500 后再不动、tick 采样冻结、统计也不再落盘）。逐个兜住 ⇒ 一个坏假人不拖住其余。
+                SafeRun(_clientList[i]);
                 if (((HUtil32.GetTickCount() - dwRunTick) > 20))
                 {
                     g_nPosition = i;
@@ -141,9 +145,53 @@ namespace BotSrv
                     {
                         _autoList[i].RunTick = HUtil32.GetTickCount();
                         // 压测：进图后挂机定时器会被停掉，这里确保它一直开着（否则假人静止、收不到 +GD）
-                        _clientList[i].EnsureAutoPlay();
-                        _clientList[i].RunAutoPlay();
+                        // 修（C6 退回补做，2026-10-11）：原来错用 `_clientList[i]`——循环变量属于 `_autoList`，
+                        // 两个列表长度/顺序并不一致（增删各自独立），N 大时 `_clientList[i]` 越界 ⇒
+                        // `IndexOutOfRangeException`（1000 档实测 internal_errors 十万级），而且即便不越界也**打错了假人**。
+                        // 改为按本条目自己的 SessionId 取回对应假人。
+                        if (_clients.TryGetValue(_autoList[i].SessionId, out RobotPlayer autoRobot))
+                        {
+                            // F4（T-12）：挂机只对**本会话自己那条连接**确认过进世界（SM_LOGON ⇒ `InWorld`）的
+                            // 假人执行。旧行为只看跨假人共享的 `MShare.MySelf` ⇒ 未进世界的假人也被挂机、
+                            // 日志写在共享态上，不能当作“该假人进世界”的证据（`MIR2_BOT_LEGACY_SHARED_AUTOPLAY=1` 保留旧行为做对照）。
+                            if (autoRobot.InWorld || LoadMetrics.LegacySharedAutoPlay)
+                            {
+                                SafeRun(autoRobot, ensureAutoPlay: true);
+                            }
+                            else
+                            {
+                                LoadMetrics.AutoPlaySkippedPreWorld();
+                            }
+                        }
                     }
+                }
+            }
+        }
+
+        /// <summary>跑一个假人的一轮（可带挂机重臂），异常就地兜住 + 计数 + 前若干条打日志。</summary>
+        private static void SafeRun(RobotPlayer robot, bool ensureAutoPlay = false)
+        {
+            try
+            {
+                if (ensureAutoPlay)
+                {
+                    robot.EnsureAutoPlay();
+                    robot.RunAutoPlay();
+                }
+                else
+                {
+                    robot.Run();
+                }
+            }
+            catch (Exception ex)
+            {
+                LoadMetrics.InternalError();
+                if (LoadMetrics.ShouldLogInternalError())
+                {
+                    // 打完整 ToString()（含堆栈）——只记 type+message 时定位不到越界点
+                    // （2026-10-11 第 4 轮实测：internal_errors 非零但不知道是哪一行）。
+                    LogService.Warn("假人[" + robot.LoginId + "]异常被兜住[" + LoadMetrics.InternalErrors + "]："
+                        + ex.ToString());
                 }
             }
         }

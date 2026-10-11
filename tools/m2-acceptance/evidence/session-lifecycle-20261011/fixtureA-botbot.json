@@ -1,0 +1,26 @@
+﻿{
+    "schema":  "m2-session-lifecycle-fixture/1",
+    "account":  "fixt0",
+    "botA_old":  {
+                     "in_world_at":  "17:32:35.057",
+                     "received":  "KICKUSER_SYSTEM_MSG",
+                     "evidence":  "botA.out.log：\u0027当前登录帐号正在其它位置登录，本机已被强行离线!!!\u0027 / \u0027服务器连接被强行中断\u0027 / \u0027关闭连接\u0027"
+                 },
+    "botB_new":  {
+                     "start_at":  "17:32:38.071",
+                     "verdict":  "ADMITTED",
+                     "entered_world":  true,
+                     "resolved_at":  "17:32:42.768"
+                 },
+    "timing":  {
+                   "a_in_world":  "17:32:35.057",
+                   "b_start":  "17:32:38.071",
+                   "b_resolved":  "17:32:42.768",
+                   "b_delta_sec":  7.71
+               },
+    "gamesvr_log":  "E:\\tmp\\m2acc-life\\run1\\gamesvr-window.log",
+    "notes":  [
+                  "BotSrv 是仓库自带 headless 客户端（src/BotSrv，完整客户端协议栈），两个进程都配 LoginAccount=fixt + ChrCount=1 ⇒ 同账号 fixt0、同角色。",
+                  "本脚本只观测、不断言分支；分支结论见 botA/botB 的 received/verdict 字段与 gamesvr-window.log。"
+              ]
+}

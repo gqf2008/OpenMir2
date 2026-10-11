@@ -150,6 +150,18 @@ pub fn sm_attackmode(mode: u8) -> Vec<u8> {
     gm_data_body(header, &[])
 }
 
+/// `SM_OUTOFCONNECTION`（`PlayObject.cs:1084-1086` 的 `RunNotice` 踢人支）：
+/// `SendDefMessage(SM_OUTOFCONNECTION, 0, 0, 0, 0)` ⇒ 12B 命令头 + **无尾**（header-only）。
+///
+/// 场景（`openmir2-m2-session-lifecycle` 的"踢旧"）：同一角色重复进世界时
+/// `WorldServer.KickOnlineUser`（`WorldServer.cs:1052-1064`）给**旧** PlayObject 置 `BoKickFlag`，
+/// 旧对象下一 tick 在 `RunNotice`（`PlayObject.cs:1082-1090`）里先收到本帧、再 `MakeGhost()`。
+#[must_use]
+pub fn sm_outofconnection() -> Vec<u8> {
+    let header = command_header(0, messages::SM_OUTOFCONNECTION, 0, 0, 0);
+    gm_data_body(header, &[])
+}
+
 /// `SM_VERSION_FAIL`（`PlayObject.Message.cs:1690-1692`）：
 /// `MakeMessage(SM_VERSION_FAIL, ClientFile1_CRC, LoWord(ClientFile2_CRC), HiWord(ClientFile2_CRC), 0)`
 /// + 尾 `"<<<<<<"`（**原样字面量**，不是 EDCode 编码——金标准里捕获工具把它解码成了垃圾，但这 6 字节在线缆上就是原样）。
@@ -172,10 +184,37 @@ pub fn sm_version_fail(client_file1_crc: i32, client_file2_crc: i32) -> Vec<u8> 
 /// `SendDefMessage(SM_SENDNOTICE, 2000, 0, 0, 0, sNoticeMsg)` ⇒ `Recog` **恒 2000**，
 /// 尾 = `EncodeString(公告文本)`（文本由 `M2Share.NoticeMgr.GetNoticeMsg` 读出，逐行以
 /// `\x20\x1B\x1B` 相连且**最后一行后也跟一个分隔符**；加载口径见 `notice.rs`）。
+///
+/// **R1-1**：`notice` 为空也**照发**——oracle 空 `sMsg` 走 `else SendSocket(ClientMsg)`，
+/// 仍写 12B 命令头（即 header-only 658）；空尾时本函数等价 `gm_data_body(header, &[])`。
 #[must_use]
 pub fn sm_sendnotice(notice: &[u8]) -> Vec<u8> {
     let header = command_header(2000, messages::SM_SENDNOTICE, 0, 0, 0);
     gm_data_body(header, &edcode::encode(notice))
+}
+
+/// `SM_SYSMESSAGE`（`BaseObject.SysMsg`，`BaseObject.cs:1588-1685`）：
+/// `SendMsg(RM_SYSMESSAGE, 0, fColor, bColor, 0, sMsg)` ⇒ `PlayObject.Message.cs:1715-1718`
+/// 把它们翻成 `MakeMessage(SM_SYSMESSAGE, ActorId, MakeWord(fColor, bColor), 0, 1)`
+/// + 尾 `EDCode.EncodeString(sMsg)`。
+///
+/// 参数口径：
+/// - `recog` = **说话对象的 ActorId**（`processMsg.ActorId`；账号级顶号时 = 旧 PlayObject 的 ActorId）；
+/// - `f_color`/`b_color` = oracle `SystemShare.Config.RedMsgFColor/RedMsgBColor`
+///   （`BaseObject.cs:1678` 的 `MsgColor.Red` 支），落在 `Param` = `make_word(f, b)`；
+/// - `series` 恒 1（`MakeMessage` 的末参，见 `PlayObject.Message.cs:1715`）。
+///
+/// 场景（`openmir2-m2-session-lifecycle`）：账号级顶号（`TCPNetChannel.KickUser`，`TCPNetChannel.cs:229/262`）。
+#[must_use]
+pub fn sm_sysmessage(recog: i32, f_color: u8, b_color: u8, msg: &[u8]) -> Vec<u8> {
+    let header = command_header(
+        recog,
+        messages::SM_SYSMESSAGE,
+        make_word(f_color, b_color),
+        0,
+        1,
+    );
+    gm_data_body(header, &edcode::encode(msg))
 }
 
 /// `SM_SERVERCONFIG`（`PlayObject.Base.cs:941-971` 的 `SendServerConfig`）：
@@ -347,8 +386,8 @@ pub struct EnterWorldInputs {
     pub dir: u8,
     pub light: u8,
     pub day_bright: u16,
-    /// 登录前公告（`NoticeMgr`，属配置层）。
-    pub notice: Option<Vec<u8>>,
+    /// 登录前公告（`NoticeMgr`，属配置层）。**R1-1**：空/缺公告 ⇒ 空字节，但仍发 header-only 658。
+    pub notice: Vec<u8>,
     /// `SM_NEWMAP` 的地图文件名（玩家记录 `CurMap`）。
     pub map_file_name: Option<Vec<u8>>,
     /// `SM_LOGON` 的 `MessageBodyWL` = `(Param1=GetFeatureToLong, Param2=CharStatus, Tag1, Tag2)`。
@@ -386,9 +425,10 @@ impl EnterWorldInputs {
     #[must_use]
     pub fn frames(&self) -> Vec<Vec<u8>> {
         let mut out = Vec::new();
-        if let Some(notice) = &self.notice {
-            out.push(sm_sendnotice(notice));
-        }
+        // **R1-1**：oracle `SendNotice` 无条件 `SendDefMessage(..., sNoticeMsg)`；即使
+        // `sNoticeMsg` 为空也照发 header-only 658（`SendDefMessage` 的 `if (!string.IsNullOrEmpty)`
+        // 只决定是否追加尾，空时走 `else SendSocket(ClientMsg)`）。故这里**不**用 `if let`。
+        out.push(sm_sendnotice(&self.notice));
         if let Some(name) = &self.map_file_name {
             out.push(sm_newmap(
                 self.actor_id,
@@ -525,6 +565,30 @@ mod tests {
         assert_eq!(client_frame(&body), hex(G_ATTACKMODE));
     }
 
+    /// `SM_OUTOFCONNECTION`（528）是 header-only：`Recog=0`、12B、无尾。
+    /// 字段序按 `MakeMessage(ident, recog, param, tag, series)` 钉死（`Recog` 在头里是小端 0）。
+    #[test]
+    fn sm_outofconnection_is_header_only_with_recog_zero() {
+        let body = sm_outofconnection();
+        assert_eq!(body.len(), 12, "无尾 ⇒ PackLength 恰好 12");
+        assert_eq!(
+            i32::from_le_bytes([body[0], body[1], body[2], body[3]]),
+            0,
+            "Recog"
+        );
+        assert_eq!(
+            u16::from_le_bytes([body[4], body[5]]),
+            messages::SM_OUTOFCONNECTION,
+            "ident 必须是 SM_OUTOFCONNECTION(528)"
+        );
+        assert_eq!(&body[6..12], &[0u8; 6], "Param/Tag/Series 全 0");
+        // 客户端线缆：`#` + Encode(头 12B) + 无尾 + `!`
+        let wire = client_frame(&body);
+        assert_eq!(wire.first(), Some(&b'#'));
+        assert_eq!(wire.last(), Some(&b'!'));
+        assert_eq!(wire.len(), 1 + edcode::encoded_len(12) + 1);
+    }
+
     /// `SM_VERSION_FAIL` 与金标准 #11 逐字节相等：尾是原样 `"<<<<<<"`（6B），不是 EDCode 编码。
     #[test]
     fn sm_version_fail_matches_golden_frame_11() {
@@ -602,6 +666,58 @@ mod tests {
         &s[i..j]
     }
 
+    /// 从 M0 金标准取**第一条** `port=7200 && dir=s2c && ident=<id>` 帧的原始线缆字节。
+    fn golden_s2c_ident(ident: u16) -> Vec<u8> {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../tests/golden/session-20261010-c3-hook/capture.jsonl"
+        );
+        let capture =
+            std::fs::read_to_string(path).unwrap_or_else(|e| panic!("金标准不存在：{path}（{e}）"));
+        let needle = format!("\"ident\":{ident},");
+        for line in capture.lines() {
+            if !line.contains("\"dir\":\"s2c\"")
+                || !line.contains("\"port\":7200")
+                || !line.contains(&needle)
+            {
+                continue;
+            }
+            return hex(between(line, "\"raw_hex\":\"", "\""));
+        }
+        panic!("金标准里没有 7200/s2c ident={ident} 的帧");
+    }
+
+    /// **`openmir2-m2-session-lifecycle` ①**：`sm_sysmessage` 必须逐字节重建金标准里的
+    /// `SM_SYSMESSAGE`（金标准 seq 66：`recog=0x7c303998`、`param=0xFFDB`、`series=1`、
+    /// 尾 = GBK 的 `唯一客服QQ：…`）。
+    ///
+    /// 注：金标准那条是 `MsgColor.Green`（`param` 低字节 0xDB = `GreenMsgFColor`）；本函数的
+    /// 账号级顶号用 `MsgColor.Red`（0xFF/0x38）——同一编码路径，字节布局由本用例钉住。
+    ///
+    /// 红检：把 `command_header` 的 `series` 改回 0，或把 `make_word(f, b)` 改成 `make_word(b, f)`
+    /// ⇒ 本用例必红。
+    #[test]
+    fn sm_sysmessage_rebuilds_golden_frame_byte_for_byte() {
+        let wire = golden_s2c_ident(messages::SM_SYSMESSAGE);
+        let (head, wire_tail) = split_wire(&wire);
+        assert_eq!(u16at(&head, 4), messages::SM_SYSMESSAGE);
+        assert_eq!(u16at(&head, 10), 1, "series 恒 1（MakeMessage 末参）");
+        let msg = edcode::decode(&wire_tail);
+        assert_eq!(
+            &*encoding_rs::GBK.decode(&msg).0,
+            "唯一客服QQ：79311185 唯一担保QQ：79311185",
+            "金标准尾文本"
+        );
+        // 从金标准头里取出 f/b（低字节/高字节），用它们重建：必须与金标准的 头+尾 逐字节相等。
+        let param = u16at(&head, 6);
+        let f = u8::try_from(param & 0xFF).unwrap();
+        let b = u8::try_from(param >> 8).unwrap();
+        let got = sm_sysmessage(recog(&head), f, b, &msg);
+        let mut want = head.to_vec();
+        want.extend_from_slice(&wire_tail);
+        assert_eq!(got, want, "SM_SYSMESSAGE 必须逐字节重建金标准帧");
+    }
+
     /// 拆一条客户端线缆帧：`'#' + Encode(头12B) + 尾 + '!'` ⇒ `(头解码态 12B, 线缆尾)`。
     fn split_wire(raw: &[u8]) -> ([u8; 12], Vec<u8>) {
         assert_eq!(raw[0], b'#', "帧首必须是 '#'");
@@ -656,7 +772,7 @@ mod tests {
             day_bright: u16at(&h1, 10),
             dir: u8::try_from(u16at(&h2, 10) & 0xFF).unwrap(),
             light: u8::try_from(u16at(&h2, 10) >> 8).unwrap(),
-            notice: Some(edcode::decode(&t0)),
+            notice: edcode::decode(&t0),
             map_file_name: Some(edcode::decode(&t1)),
             logon_body_wl: Some((
                 i32at(&logon, 0),
@@ -746,6 +862,40 @@ mod tests {
                 body.len()
             );
         }
+    }
+
+    /// **R1-1**：空/缺公告 ⇒ oracle **仍发一条 header-only 658**（`SendDefMessage` 的
+    /// `if (!string.IsNullOrEmpty(sMsg))` 只决定是否追加尾；空走 `else SendSocket(ClientMsg)`，
+    /// 照常写 12B 命令头）。这里把「空输入」钉死：帧仍在序列第 1 位、线缆恰为 12B 命令头 + 无尾。
+    ///
+    /// 红检：把 `frames()` 改回 `if !self.notice.is_empty()` 跳过 658 ⇒ 本用例必红。
+    #[test]
+    fn empty_notice_still_sends_header_only_658() {
+        let inputs = EnterWorldInputs {
+            notice: Vec::new(),
+            ..Default::default()
+        };
+        let built = inputs.frames();
+        assert_eq!(
+            built.len(),
+            1,
+            "空公告下其余输入仍缺（不发 51/50 等），但 658 必须在序列第 1 位"
+        );
+        assert_eq!(built[0], sm_sendnotice(&[]), "空尾 658 == 纯 12B 命令头");
+        let cm = mir2_protocol::frame::CommandMessage::from_bytes(&built[0]).unwrap();
+        assert_eq!(cm.ident, messages::SM_SENDNOTICE);
+        assert_eq!(cm.recog, 2000, "SendNotice 的 Recog 恒 2000");
+        assert_eq!(built[0].len(), 12, "header-only：12B 命令头 + 无尾");
+        // 线缆形态：`'#' + Encode(12B) + '!'`（无尾 ⇒ 头编码后直接收尾）。
+        let wire = client_frame(&built[0]);
+        assert_eq!(wire[0], b'#');
+        assert_eq!(wire[wire.len() - 1], b'!');
+        assert_eq!(&wire[1..wire.len() - 1], &edcode::encode(&built[0])[..]);
+        assert_eq!(
+            edcode::decode(&wire[1..wire.len() - 1]),
+            built[0],
+            "线缆解回头必须是同 12B"
+        );
     }
 
     /// 新增 11 条的**逐条**定位断言（失败时能直接看出是哪条）。

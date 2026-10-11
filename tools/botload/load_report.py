@@ -42,6 +42,22 @@ DEFAULT_THRESHOLDS = {
     "tick_p99_ms": 100.0,           # §6 M5：tick P99 ≤ 100ms
 }
 
+# C6 第 5 轮（owner 裁决 11dbde39 / 17aa4753）：tier-1000 的登记口径是「同命令 3 连跑取最差 ≥ 阈值」。
+# tier-1000 的登录在**上游 C# 部署栈**上有 ~0-5% 的残余丢包（48~52/1000 条连接发出 CM_IDPASSWORD 后
+# 服务端一个字节都没回，见 tests/loadgate/README.md 的方向证明），这不是 Rust 移植缺陷；
+# 把「100%」改成可复现的下界 95%（详见 tools/botload/README.md《阈值与理由》）。其他档位仍是 100%。
+LOGIN_THRESHOLD_BY_MIN_TIER = [
+    (1000, 95.0),   # tier >= 1000 用 95%
+]
+
+
+def default_login_threshold(count):
+    """按档位给默认登录阈值（可被 --login-threshold 覆盖）。"""
+    for min_tier, pct in sorted(LOGIN_THRESHOLD_BY_MIN_TIER, reverse=True):
+        if count is not None and count >= min_tier:
+            return pct
+    return DEFAULT_THRESHOLDS["login_success_pct"]
+
 
 def load_ndjson(path):
     rows = []
@@ -101,6 +117,27 @@ def summarize_tick(stats, count):
         "conn_lost_ramp": base.get("conn_lost", 0),
         "conn_lost_steady": last.get("conn_lost", 0) - base.get("conn_lost", 0),
         "hist_bucket_ms": last.get("hist_bucket_ms", 1),
+        # tick 样本的**覆盖基数**：进世界（收到 SM_LOGON）的假人数与探针实际发出的动作数。
+        # tick 只可能来自进世界的假人 ⇒ 这两个数一起读才知道"样本是从多少人身上量的"。
+        "world_ok": last.get("in_world", 0),
+        "world_ok_pct": (round(100.0 * last.get("in_world", 0) / count, 2) if count else None),
+        # T-12（F4/F3(a)）：挂机轮次按“本会话是否进世界”分账 + 注册包观测，展示“改前/改后”。
+        "in_world_suppressed": last.get("in_world_suppressed", 0),
+        "autoplay_in_world": last.get("autoplay_in_world", 0),
+        "autoplay_pre_world": last.get("autoplay_pre_world", 0),
+        "autoplay_skipped_pre_world": last.get("autoplay_skipped_pre_world", 0),
+        "register_sent": last.get("register_sent", 0),
+        "register_send_closed": last.get("register_send_closed", 0),
+        "probe_sent": last.get("probe_sent", 0),
+        "internal_errors": last.get("internal_errors", 0),
+        # T-11 登录连接级观测（残余丢包方向定位）：发出登录包后没拿到 529 的连接数，
+        # 以及其中 rx_bytes==0（服务端一个字节都没回）的数量；resend 是诊断对照（默认关）。
+        "login_conn_total": last.get("login_conn_total", 0),
+        "login_conn_no_resp": last.get("login_conn_no_resp", 0),
+        "login_conn_no_resp_rx0": last.get("login_conn_no_resp_rx0", 0),
+        "login_conn_resend": last.get("login_conn_resend", 0),
+        "login_conn_resend_ok": last.get("login_conn_resend_ok", 0),
+        "login_send_failed": last.get("login_send_failed", 0),
     }
     for q, key in ((0.50, "tick_p50_ms"), (0.90, "tick_p90_ms"), (0.99, "tick_p99_ms")):
         v, _ = quantile_from_hist(hist, q, out["hist_bucket_ms"])
@@ -144,28 +181,144 @@ def summarize_mem(rows, tail_sec=60):
     return out
 
 
-def judge(tier, thresholds, criteria=("login", "conn", "tick")):
+def summarize_login_conns(rows, bucket_ms=5000):
+    """T-11 残余丢包**方向**归算（owner 裁决 11dbde39 的 must_first）。
+
+    输入 = BotSrv 落的 `login_conns.ndjson`（每个假人的登录 socket 一行，见 `LoadMetrics.LoginConn`）。
+    只回答一个问题：发出 CM_IDPASSWORD 后没拿到 SM_PASSOK_SELECTSERVER（ident 529）的连接，
+    是「服务端一个字节都没回」还是「服务端回了、假人侧收包/解析丢了」：
+
+      · `rx_bytes == 0`（rx0）⇒ 服务端在这条 TCP 连接上没写过任何东西 ⇒ **方向 = 上游（C# 部署栈）**；
+      · `rx_bytes > 0` 且没解出 529 ⇒ 服务端回了、假人侧丢了 ⇒ **方向 = 假人（BotSrv，工具缺陷）**。
+
+    `resend` / `resend_ok` 是自证对照：对「窗口内无应答」的连接在同一条 TCP 连接上重发一次登录包
+    （`MIR2_BOT_LOGIN_RESEND_MS`），第二次仍拿不到应答 ⇒ 不是本机收包抖动。
+
+    返回：总数 / 无应答数 / 其中 rx0（上游）/ rx>0（假人侧）/ 按发出时刻分窗的分布 / 重发对照。
+    """
+    def gi(r, k, d=0):
+        v = r.get(k, d)
+        return d if v is None else v
+
+    total = len(rows)
+    no_resp = [r for r in rows if not r.get("saw_529")]
+    rx0 = [r for r in no_resp if gi(r, "rx_bytes") == 0]
+    rx_gt0 = [r for r in no_resp if gi(r, "rx_bytes") > 0]
+    resend = [r for r in no_resp if gi(r, "resend_sends") > 0]
+    resend_ok = [r for r in resend if r.get("saw_529")]
+
+    buckets = {}
+    for r in no_resp:
+        b = (gi(r, "login_tick") // bucket_ms) * bucket_ms
+        e = buckets.setdefault(b, {"t0": b, "count": 0, "rx0": 0, "rx_gt0": 0})
+        e["count"] += 1
+        if gi(r, "rx_bytes") == 0:
+            e["rx0"] += 1
+        else:
+            e["rx_gt0"] += 1
+
+    if not no_resp:
+        direction = "none"
+    elif not rx_gt0:
+        direction = "server-no-response"   # 全部 rx_bytes==0：服务端没回过任何字节
+    elif not rx0:
+        direction = "bot-client"              # 全部 rx_bytes>0：假人侧收包/解析丢了
+    else:
+        direction = "mixed"
+
+    ticks = sorted(gi(r, "login_tick") for r in no_resp)
+    return {
+        "total": total,
+        "no_resp": len(no_resp),
+        "no_resp_rx0": len(rx0),
+        "no_resp_rx_gt0": len(rx_gt0),
+        "direction": direction,
+        "direction_rule": ("rx_bytes==0 ⇒ 服务端在这条连接上没回过任何字节（方向=服务端未回；"
+                           "触发条件——C# 栈上限 vs 同机负载——未归属，待空载复测）；"
+                           "rx_bytes>0 且无 529 ⇒ 假人侧收包/解析丢失"),
+        "no_resp_first_tick": (ticks[0] if ticks else None),
+        "no_resp_last_tick": (ticks[-1] if ticks else None),
+        "no_resp_span_ms": ((ticks[-1] - ticks[0]) if ticks else 0),
+        "no_resp_resend": len(resend),
+        "no_resp_resend_ok": len(resend_ok),
+        "bucket_ms": bucket_ms,
+        "buckets": [buckets[k] for k in sorted(buckets)],
+    }
+
+
+def summarize_hostload(rows):
+    """本机负载探针归算（owner 裁决 `82f8e0c3` ④；口径照 tickbench `probe_load_window`）。
+
+    只**标注**不判红：tick P99 在共享机器上不可归属（C# 参考栈 vs 同机并发编译），
+    必须空载窗口才能定；本块给报告读者一个「这轮 P99 是在什么负载下量的」的可审阅字段。
+    """
+    cpu = [r.get("cpu_pct") for r in rows
+           if isinstance(r.get("cpu_pct"), (int, float)) and r.get("cpu_pct") >= 0]
+    heavy = [r.get("heavy_procs", 0) or 0 for r in rows]
+    names = set()
+    for r in rows:
+        for nm in (r.get("heavy_names") or "").split(","):
+            nm = nm.strip()
+            if nm:
+                names.add(nm)
+    out = {
+        "samples": len(rows),
+        "cpu_mean_pct": (round(sum(cpu) / len(cpu), 1) if cpu else None),
+        "cpu_peak_pct": (max(cpu) if cpu else None),
+        "heavy_procs_max": (max(heavy) if heavy else 0),
+        "heavy_names_seen": sorted(names),
+        "caliber": ("CPU = Win32_Processor.LoadPercentage 均值(%)；heavy = "
+                    "rustc/cargo/cargo-clippy/msbuild 进程数（照 tickbench probe_load_window）"),
+    }
+    out["loaded_window"] = bool((out["cpu_peak_pct"] is not None and out["cpu_peak_pct"] >= 40)
+                                or out["heavy_procs_max"] >= 4)
+    return out
+
+
+def judge(tier, thresholds, criteria=("login", "conn", "tick"), allow_missing_tick=False,
+          login_threshold=None, world_threshold=None):
     """按 §6 M5 的判据给单档结论（掉线只看稳态窗）。
 
-    `criteria` 可选：有些复用场景**天然拿不到 tick 样本**——例如 M1 ⑤ 只要求
-    「200 假人登录+选角成功率 100%」，假人只跑无状态登录链路、不产生动作 ⇒ 没有 `+GD` ack。
-    那种场景用 `--criteria login,conn` 判，**不要把"拿不到的指标"算成红**（红应当表示"测得的值不达标"）。
-    默认仍是 §6 M5 全三条（含 tick），C6 自己的口径不变。
+    `criteria` 只选"要比哪几条阈值"，**不能用它把"缺 tick 样本"变成绿灯**（2026-10-10 的教训：
+    同一份 0 样本产物在把判据做成可选之后从 RED 翻成 GREEN ⇒ 恒绿假门禁）。
+
+    所以"缺 tick 样本"由**独立开关** `allow_missing_tick` 管辖，且默认判 RED：
+      · 没有 tick 样本 + 没开关 ⇒ RED（不管 criteria 写了什么）；
+      · 没有 tick 样本 + 有开关 ⇒ 出基线，但报告里带 `tick_missing`/`tick_missing_acknowledged`/
+        `missing_tick_note`（"本次未采集 tick P99"）⇒ 下游一眼能看出这档不能当 M5 的 tick 基线引用。
+    确实天然拿不到 tick 的场景（例如 M1 ⑤ 只比登录+选角）也必须显式加开关，不许"顺手改成可选"。
     """
     fails = []
+    # 登录阈值：按档位的可复现下界（默认 tier>=1000 为 95%，其余 100%），可被 CLI 覆盖。
+    # 「爬坡未完成」不再是独立判据：它等于「峰值登录 < 档位人数」，已被这条阈值判据覆盖
+    # （tier-1000 的已知上游上限会让峰值停在 ~948/1000，用 100% 当判据就永远是 RED）。
+    login_thr = login_threshold if login_threshold is not None else thresholds["login_success_pct"]
+    tier["login_threshold_pct"] = login_thr
     if "login" in criteria and (tier.get("login_success_pct") is None
-                                or tier["login_success_pct"] < thresholds["login_success_pct"]):
-        fails.append(f"登录成功率 {tier.get('login_success_pct')}% < {thresholds['login_success_pct']}%")
+                                or tier["login_success_pct"] < login_thr):
+        fails.append(f"登录成功率 {tier.get('login_success_pct')}% < {login_thr}%")
     if "conn" in criteria and tier.get("conn_lost_steady", 0) > thresholds["conn_lost_steady"]:
         fails.append(f"稳态掉线 {tier['conn_lost_steady']} > {thresholds['conn_lost_steady']}")
-    if "tick" in criteria:
-        if tier.get("tick_p99_ms") is None:
-            fails.append("tick P99 缺失（本档没有 tick 样本；若该场景不需要 tick 请用 --criteria login,conn）")
-        elif tier["tick_p99_ms"] > thresholds["tick_p99_ms"]:
-            fails.append(f"tick P99 {tier['tick_p99_ms']}ms > {thresholds['tick_p99_ms']}ms")
-    if not tier.get("ramp_complete", False):
-        fails.append("登录数未达目标（爬坡未完成）")
+    # 在线（进世界）判据（T-12，可选）：默认 None=不判 —— M5 三档的 in_world 实测只有 ~10%，
+    # 不能当默认阈值。显式给出时必须 >= 阈值；`world_ok_pct` 缺失或不足都判红（不是恒绿）。
+    tier["world_threshold_pct"] = world_threshold
+    if world_threshold is not None:
+        wp = tier.get("world_ok_pct")
+        if wp is None or wp < world_threshold:
+            fails.append(f"在线（本会话收到 SM_LOGON 的假人数）{wp}% < {world_threshold}%")
+    tick_missing = tier.get("tick_p99_ms") is None
+    if tick_missing:
+        tier["tick_missing"] = True
+        if allow_missing_tick:
+            tier["tick_missing_acknowledged"] = True
+            tier["missing_tick_note"] = "本次未采集 tick P99（--allow-missing-tick 显式放行；不得当作 M5 的 tick 基线）"
+        else:
+            fails.append("缺 tick 样本（tick_p99_ms = None）：默认判 RED；确实拿不到 tick 的场景也必须显式加 --allow-missing-tick")
+    elif "tick" in criteria and tier["tick_p99_ms"] > thresholds["tick_p99_ms"]:
+        fails.append(f"tick P99 {tier['tick_p99_ms']}ms > {thresholds['tick_p99_ms']}ms")
+    tier["ramp_target"] = int(-(-tier.get("count", 0) * login_thr // 100))
     tier["criteria"] = list(criteria)
+    tier["allow_missing_tick"] = bool(allow_missing_tick)
     tier["verdict"] = "GREEN" if not fails else "RED"
     tier["fails"] = fails
     return tier
@@ -176,11 +329,23 @@ def cmd_summarize(args):
     tier = summarize_tick(stats, args.count)
     if args.mem:
         tier["mem"] = summarize_mem(load_ndjson(args.mem))
+    if args.login_conns and os.path.exists(args.login_conns):
+        tier["login_conn_diag"] = summarize_login_conns(load_ndjson(args.login_conns))
+    if args.hostload and os.path.exists(args.hostload):
+        tier["host_load"] = summarize_hostload(load_ndjson(args.hostload))
     tier["count"] = args.count
     tier["stagger_ms"] = args.stagger_ms
     tier["hold_sec"] = args.hold_sec
+    # 在线假人数 = 本会话收到 SM_LOGON 的假人数（T-12：只看该假人自己那条连接的证据，不看共享 MShare）
+    tier["online_bots"] = tier.get("world_ok", 0)
+    tier["online_base"] = args.count
+    tier["online_source"] = "per-session SM_LOGON（BotSrv RobotPlayer.MarkInWorld ⇒ LoadMetrics.InWorld）"
+    tier["autoplay_source"] = ("F4/T-12：挂机轮次只看本会话 InWorld（autoplay_pre_world 应为 0）；"
+                               ">0 只可能来自 MIR2_BOT_LEGACY_SHARED_AUTOPLAY=1 的“改前”对照组")
     criteria = [c.strip() for c in args.criteria.split(",") if c.strip()]
-    judge(tier, DEFAULT_THRESHOLDS, criteria)
+    login_thr = args.login_threshold if args.login_threshold is not None else default_login_threshold(args.count)
+    judge(tier, DEFAULT_THRESHOLDS, criteria, allow_missing_tick=args.allow_missing_tick,
+          login_threshold=login_thr, world_threshold=args.world_threshold)
     text = json.dumps(tier, ensure_ascii=False, indent=2)
     if args.out:
         with open(args.out, "w", encoding="utf-8", newline="\n") as f:
@@ -221,11 +386,61 @@ def cmd_selftest(_args):
     expect(t2["tick_p99_ms"] == 5, "挪走尾巴后 P99 应降到 5（尾部敏感）")
     expect(t["tick_p99_ms"] != t2["tick_p99_ms"], "改坏输入必须让 P99 变（不是恒绿）")
 
-    # 2) 爬坡未完成要被判红
+    # 2) 登录没到阈值要判红（2026-10-11 第 5 轮：判据从「爬坡必须到 100%」改成「登录率必须 ≥ 阈值」）
     stats3 = [dict(stats[0], login_ok=10), dict(stats[1], login_ok=10)]
     t3 = judge(summarize_tick(stats3, 100), DEFAULT_THRESHOLDS)
-    expect(t3["verdict"] == "RED" and any("爬坡未完成" in f for f in t3["fails"]),
-           "登录没达目标必须判红")
+    expect(t3["verdict"] == "RED" and any("登录成功率" in f for f in t3["fails"]),
+           "登录率 < 阈值必须判红")
+    # 2b) 阈值牙齿：同一份 960/1000 产物，阈值 100 ⇒ RED；阈值 95 ⇒ GREEN（判定必须随阈值变）
+    stats960 = [dict(stats[0], login_ok=960), dict(stats[1], login_ok=960, hist=list(hist2), tick_max_ms=5)]
+    t_hi = judge(summarize_tick(stats960, 1000), DEFAULT_THRESHOLDS, login_threshold=100.0)
+    t_lo = judge(summarize_tick(stats960, 1000), DEFAULT_THRESHOLDS, login_threshold=95.0)
+    expect(t_hi["verdict"] == "RED", "960/1000 在阈值 100 下必须 RED（阈值有牙齿）")
+    expect(t_lo["verdict"] == "GREEN", "960/1000 在阈值 95 下必须 GREEN（判定随阈值变，不是恒绿）")
+    expect(t_hi["login_threshold_pct"] == 100.0 and t_lo["login_threshold_pct"] == 95.0,
+           "judge 必须把生效阈值写进报告")
+    # 2b') 在线（进世界）判据的牙齿（T-12，F4）：同一批产物，抹掉一个假人的进世界证据 ⇒ 必红；齐 ⇒ 绿；
+    #      不显式给阈值时不得因 in_world 少而判红（M5 三档的 in_world 只有 ~10%）。
+    statsW_bad = [dict(stats[0], login_ok=3, in_world=2),
+                  dict(stats[1], login_ok=3, in_world=2, hist=list(hist2), tick_max_ms=5)]
+    statsW_ok = [dict(stats[0], login_ok=3, in_world=3),
+                 dict(stats[1], login_ok=3, in_world=3, hist=list(hist2), tick_max_ms=5)]
+    j_bad = judge(summarize_tick(statsW_bad, 3), DEFAULT_THRESHOLDS, world_threshold=100.0)
+    j_ok = judge(summarize_tick(statsW_ok, 3), DEFAULT_THRESHOLDS, world_threshold=100.0)
+    expect(j_bad["verdict"] == "RED" and any("在线" in f for f in j_bad["fails"]),
+           "抹掉一个假人的进世界证据（in_world=2/3）在 world_threshold=100 下必须 RED（在线判据有牙齿）")
+    expect(j_ok["verdict"] == "GREEN", "进世界证据齐（in_world=3/3）在 world_threshold=100 下必须 GREEN")
+    expect(judge(summarize_tick(statsW_bad, 3), DEFAULT_THRESHOLDS)["verdict"] == "GREEN",
+           "不显式给 world_threshold 时不得因 in_world 少而判红（默认不判在线）")
+    # 2c) T-11 残余丢包**方向**判据（owner 裁决 11dbde39 must_first）：rx_bytes==0 ⇒ 上游；
+    #     rx_bytes>0 且无 529 ⇒ 假人侧。方向判据本身必须有牙齿（改坏必变）。
+    up = [{"login_tick": 1000, "rx_bytes": 0, "saw_529": False, "resend_sends": 1},
+          {"login_tick": 2000, "rx_bytes": 0, "saw_529": False, "resend_sends": 1},
+          {"login_tick": 3000, "rx_bytes": 40, "saw_529": True, "resend_sends": 0}]
+    d_up = summarize_login_conns(up)
+    expect(d_up["direction"] == "server-no-response" and d_up["no_resp_rx0"] == 2,
+           "全 rx_bytes==0 应判「上游（C# 栈）」")
+    expect(d_up["no_resp_resend"] == 2 and d_up["no_resp_resend_ok"] == 0,
+           "重发对照应记「发 2 / 成功 0」")
+    expect(d_up["buckets"][0]["t0"] == 0 and d_up["buckets"][0]["rx0"] == 2, "应按 login_tick 分窗（默认 5s）")
+    bot = [{"login_tick": 1000, "rx_bytes": 128, "saw_529": False},
+           {"login_tick": 1500, "rx_bytes": 24, "saw_529": True}]
+    d_bot = summarize_login_conns(bot)
+    expect(d_bot["direction"] == "bot-client" and d_bot["no_resp_rx_gt0"] == 1,
+           "rx_bytes>0 且无 529 应判「假人侧」（方向判据的牙齿）")
+    expect(summarize_login_conns(up[:1] + bot[:1])["direction"] == "mixed", "两种都存在应判 mixed")
+    expect(summarize_login_conns([{"login_tick": 1, "rx_bytes": 8, "saw_529": True}])["direction"] == "none",
+           "无「无应答」连接应判 none")
+    # 2d) 本机负载探针（owner 裁决 82f8e0c3 ④）：CPU≥40 或 heavy≥4 ⇒ loaded_window
+    hl = summarize_hostload([{"cpu_pct": 10, "heavy_procs": 0},
+                             {"cpu_pct": 55, "heavy_procs": 2, "heavy_names": "cargo"}])
+    expect(hl["cpu_peak_pct"] == 55 and hl["cpu_mean_pct"] == 32.5 and hl["loaded_window"] is True,
+           "负载探针：CPU 峰值≥40 应判 loaded_window")
+    hl2 = summarize_hostload([{"cpu_pct": 5, "heavy_procs": 5, "heavy_names": "rustc,cargo"}])
+    expect(hl2["loaded_window"] is True and hl2["heavy_names_seen"] == ["cargo", "rustc"],
+           "负载探针：heavy≥4 应判 loaded_window，且应收取进程名")
+    expect(summarize_hostload([{"cpu_pct": 5, "heavy_procs": 0}])["loaded_window"] is False,
+           "低负载窗口不得判 loaded_window")
 
     # 3) 掉线：稳态掉线判红、爬坡期掉线不算稳态
     stats4 = [dict(stats[0], conn_lost=3), dict(stats[1], conn_lost=5)]
@@ -246,10 +461,30 @@ def cmd_selftest(_args):
            f"平坦曲线斜率应 ≈0，实得 {s_flat['slope_tail_mb_per_s']}")
     expect(s_up["ws_peak_mb"] == 200.0 and s_flat["ws_peak_mb"] == 100.0, "峰值归算错")
 
+    # 5) 「缺 tick 样本」默认判 RED，且 --criteria 不能把它变成绿灯（2026-10-10 的恒绿假门禁回归项）
+    stats5 = [{"t_ms": 1000, "login_ok": 100, "tick_samples": 0, "tick_sum_ms": 0, "tick_max_ms": 0,
+               "conn_lost": 0, "hist": [0] * 201},
+              {"t_ms": 2000, "login_ok": 100, "tick_samples": 0, "tick_sum_ms": 0, "tick_max_ms": 0,
+               "conn_lost": 0, "hist": [0] * 201}]
+    t5 = judge(summarize_tick(stats5, 100), DEFAULT_THRESHOLDS, ("login", "conn"))
+    expect(t5["verdict"] == "RED", "0 样本 + criteria=login,conn 必须仍判 RED（不许被可选判据绕开）")
+    expect(any("缺 tick 样本" in f for f in t5["fails"]), "0 样本应给出「缺 tick 样本」这条 fails")
+    expect(t5.get("tick_missing") is True, "0 样本应标注 tick_missing")
+    expect("missing_tick_note" not in t5, "没放行时不该写 missing_tick_note")
+    t6 = judge(summarize_tick(stats5, 100), DEFAULT_THRESHOLDS, ("login", "conn"), allow_missing_tick=True)
+    expect(not any("缺 tick 样本" in f for f in t6["fails"]), "显式 --allow-missing-tick 后不应再因缺样本判红")
+    expect(t6.get("tick_missing_acknowledged") is True and "本次未采集 tick P99" in t6.get("missing_tick_note", ""),
+           "放行后基线文件必须带「本次未采集 tick P99」标注")
+    # 有样本时开关无副作用：仍只按阈值判（P99=150 > 100 ⇒ RED，且不得出现 tick_missing 标注）
+    t7 = judge(summarize_tick(stats, 100), DEFAULT_THRESHOLDS, ("login", "conn", "tick"), allow_missing_tick=True)
+    expect(t7["tick_p99_ms"] == 150 and t7["verdict"] == "RED" and any("tick P99 150" in f for f in t7["fails"]),
+           "有样本时按阈值判（150ms > 100ms ⇒ RED），且开关不得改变这条判定")
+    expect("tick_missing" not in t7, "有样本时不得出现 tick_missing 标注")
+
     if not ok:
         print("RED: load_report selftest 有未通过项")
         return 1
-    print("GREEN: load_report selftest 全过（分位数/尾部敏感/爬坡判红/掉线分窗/内存斜率）")
+    print("GREEN: load_report selftest 全过（分位数/尾部敏感/登录阈值牙齿/在线判据牙齿/掉线分窗/内存斜率/残余丢包方向/本机负载窗）")
     return 0
 
 
@@ -302,17 +537,77 @@ def cmd_aggregate(args):
     lines = ["# 压测报告（C6 载荷门禁）", ""]
     lines.append(f"- 口径：{data.get('caliber', '见 tools/botload/load_report.py')}")
     lines.append(f"- 档位：{data.get('tiers')}；连接错峰 {data.get('stagger_ms')}ms/个；稳态时长 {data.get('hold_sec')}s")
-    lines.append(f"- 判据（§6 M5）：登录成功率 100% / 稳态掉线 0 / tick P99 ≤ 100ms")
+    lines.append(f"- 判据（§6 M5）：登录成功率 = 档位阈值（tier≥1000 为 95%，其余 100%，见 report.json 的 "
+                 f"login_threshold_pct）/ 稳态掉线 0 / tick P99 ≤ 100ms")
     lines.append("")
-    lines.append("| 档位 | 登录成功率 | 稳态掉线 | 连不上 | tick P50 | P90 | P99 | max | 稳态样本 | 上线耗时 | 结论 |")
-    lines.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
-    for t in sorted(reports, key=lambda r: r.get("count", 0)):
-        lines.append("| {count} | {lsp}% | {cls} | {cr} | {p50} | {p90} | {p99} | {mx} | {n} | {ramp} | {v} |".format(
-            count=t.get("count"), lsp=t.get("login_success_pct"), cls=t.get("conn_lost_steady"),
-            cr=t.get("conn_refused"), p50=t.get("tick_p50_ms"), p90=t.get("tick_p90_ms"),
-            p99=t.get("tick_p99_ms"), mx=t.get("max_ms"), n=t.get("samples"),
-            ramp=((str(round(t["ramp_ms"] / 1000.0, 1)) + "s") if t.get("ramp_ms") is not None else "-"),
-            v=t.get("verdict")))
+    has_run = any(t.get("run") for t in reports)
+
+    def _hl(t, key):
+        hl = t.get("host_load") or {}
+        v = hl.get(key)
+        return "-" if v is None else v
+
+    if has_run:
+        lines.append("| 轮次 | 档位 | 登录成功率 | 阈值 | 稳态掉线 | in_world | tick P50 | P90 | P99 | max | 稳态样本(上线) | CPU峰% | 重进程峰 | 结论 |")
+        lines.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
+    else:
+        lines.append("| 档位 | 登录成功率 | 阈值 | 稳态掉线 | in_world | tick P50 | P90 | P99 | max | 稳态样本(上线) | CPU峰% | 重进程峰 | 结论 |")
+        lines.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
+    for t in sorted(reports, key=lambda r: (r.get("run", 0), r.get("count", 0))):
+        ramp = ((str(round(t["ramp_ms"] / 1000.0, 1)) + "s") if t.get("ramp_ms") is not None else "-")
+        if has_run:
+            lines.append(
+                "| r{run} | {count} | {lsp}% | {thr}% | {cls} | {iw} | {p50} | {p90} | {p99} | {mx} | "
+                "{n} ({ramp}) | {cpu} | {hv} | {v} |".format(
+                    run=t.get("run"), count=t.get("count"), lsp=t.get("login_success_pct"),
+                    thr=t.get("login_threshold_pct"), cls=t.get("conn_lost_steady"),
+                    iw=t.get("world_ok"), p50=t.get("tick_p50_ms"), p90=t.get("tick_p90_ms"),
+                    p99=t.get("tick_p99_ms"), mx=t.get("max_ms"), n=t.get("samples"), ramp=ramp,
+                    cpu=_hl(t, "cpu_peak_pct"), hv=_hl(t, "heavy_procs_max"), v=t.get("verdict")))
+        else:
+            lines.append(
+                "| {count} | {lsp}% | {thr}% | {cls} | {iw} | {p50} | {p90} | {p99} | {mx} | "
+                "{n} ({ramp}) | {cpu} | {hv} | {v} |".format(
+                    count=t.get("count"), lsp=t.get("login_success_pct"), thr=t.get("login_threshold_pct"),
+                    cls=t.get("conn_lost_steady"), iw=t.get("world_ok"),
+                    p50=t.get("tick_p50_ms"), p90=t.get("tick_p90_ms"), p99=t.get("tick_p99_ms"),
+                    mx=t.get("max_ms"), n=t.get("samples"), ramp=ramp,
+                    cpu=_hl(t, "cpu_peak_pct"), hv=_hl(t, "heavy_procs_max"), v=t.get("verdict")))
+    # 3 连跑取最差：把 worst_by_tier 也写进 SUMMARY（若 gate 带 -Repeat > 1）
+    wbt = data.get("worst_by_tier") or {}
+    if wbt:
+        lines.append("")
+        lines.append("## 同命令多连跑取最差（owner 裁决 11dbde39 ①）")
+        lines.append("")
+        lines.append("| 档位 | 轮数 | 阈值 | 最差登录率 | 结论 |")
+        lines.append("| --- | --- | --- | --- | --- |")
+        for k in sorted(wbt.keys(), key=lambda x: int(x)):
+            e = wbt[k]
+            n_runs = len(e.get("runs", []))
+            lines.append(f"| {k} | {n_runs} | {e.get('threshold')}% | {e.get('worst_login_pct')}% | {e.get('verdict')} |")
+    lines.append("")
+    lines.append("## tick P99 离散度与本机负载（owner 裁决 82f8e0c3 ⑤）")
+    lines.append("")
+    lines.append("tick 口径 = 服务端 `rtime` → 客户端收帧耗时（含 BotSrv 收包/调度）；P99 只在稳态窗、")
+    lines.append("样本基数 = `in_world`（真进世界的假人数，见下）。**本机负载探针**（CPU=Win32_Processor.LoadPercentage ")
+    lines.append("均值；heavy=rustc/cargo/cargo-clippy/msbuild 进程数，叧 tickbench）只用于**归属**：")
+    lines.append("CPU 峰 ≥ 40% 或 heavy 峰 ≥ 4 时 P99 **不可归属**（C# 参考栈 vs 同机并发编译）。")
+    lines.append("")
+    lines.append("| 轮次 | 档位 | in_world | probe_sent | tick_samples | P99 | max | CPU均/峰% | heavy峰 | 负载窗? |")
+    lines.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
+    for t in sorted(reports, key=lambda r: (r.get("run", 0), r.get("count", 0))):
+        hl = t.get("host_load") or {}
+        lines.append(
+            "| r{run} | {count} | {iw} | {ps} | {tsamp} | {p99} | {mx} | {cm}/{cp} | {hv} | {lw} |".format(
+                run=t.get("run") or "-", count=t.get("count"), iw=t.get("world_ok"),
+                ps=t.get("probe_sent"), tsamp=t.get("samples"), p99=t.get("tick_p99_ms"),
+                mx=t.get("max_ms"), cm=hl.get("cpu_mean_pct", "-"), cp=hl.get("cpu_peak_pct", "-"),
+                hv=hl.get("heavy_procs_max", "-"), lw=hl.get("loaded_window", "-")))
+    lines.append("")
+    lines.append("> **M5 待办（写实）**：§6 的「tick P99 ≤ 100ms」**目前在任何栈上都未验证通过**——")
+    lines.append("> C# 参考栈 1000 档实测 125/201ms（在共享负载窗口内，归属待空载复测）；待 Rust 栈接管后（M5 灰度）复测。")
+    lines.append("> 另：`in_world` 实测只有 ~10%（tier-500/1000 稳态 15~26），**不得**用这三档宣称「M5 三档：1000 假人在线」；")
+    lines.append("> 「假人真正进世界」是 M5 收尾缺口（归宿：卡 `openmir2-botsrv-world-evidence`）。")
     lines.append("")
     # 曲线 1：tick P99 / P50 / max vs 档位
     pts_p99 = [(t["count"], t["tick_p99_ms"] or 0) for t in sorted(reports, key=lambda r: r.get("count", 0))]
@@ -365,8 +660,20 @@ def main():
     s.add_argument("--stagger-ms", type=int, default=0)
     s.add_argument("--hold-sec", type=int, default=0)
     s.add_argument("--out", default="")
+    s.add_argument("--login-conns", default="",
+                   help="BotSrv 落的 login_conns.ndjson（T-11 残余丢包方向归算；缺省不产出该块）")
+    s.add_argument("--hostload", default="",
+                   help="本机负载探针 hostload.ndjson（owner 裁决 82f8e0c3 ④；缺省不产出该块）")
     s.add_argument("--criteria", default="login,conn,tick",
                    help="判据子集（默认全三条）；M1 ⑤ 那种只比登录/连接的场景用 login,conn")
+    s.add_argument("--login-threshold", type=float, default=None,
+                   help="登录成功率阈值（%）；缺省按档位取（tier>=1000 为 95%，其余 100%）")
+    s.add_argument("--allow-missing-tick", action="store_true",
+                   help="显式放行「本次没有 tick 样本」（报告里会写入 missing_tick_note）；"
+                        "不加则缺样本一律判 RED，且 --criteria 不能替代本开关")
+    s.add_argument("--world-threshold", type=float, default=None,
+                   help="在线（本会话收到 SM_LOGON 的假人数）占比阈值（%）；缺省不判（T-12）。"
+                        "bot-smoke -RequireWorld 用 100，用于证明「抹掉某假人的进世界证据 ⇒ 判据必红」")
     a = sub.add_parser("aggregate")
     a.add_argument("--summary", required=True, help="load_gate_summary.json")
     a.add_argument("--out-dir", default="")

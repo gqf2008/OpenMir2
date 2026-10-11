@@ -16,6 +16,13 @@ namespace BotSrv.Player
             string data = string.Empty;
             if (!string.IsNullOrEmpty(str))
             {
+                // T-8 登录响应观测：组帧层的四个计数。旧行为对「一次读里的残帧」是**静默丢弃**
+                // （没有跨读缓存），服务端回了包而假人看不到时，只有这四个数能把它跟「服务端没回」分开。
+                LoadMetrics.RecvChunk(str.Length);
+                if (str.IndexOf("#", StringComparison.Ordinal) < 0)
+                {
+                    LoadMetrics.ChunkWithoutHash();
+                }
                 while (str.Length >= 2)
                 {
                     if (MShare.MapMovingWait)
@@ -24,6 +31,7 @@ namespace BotSrv.Player
                     }
                     if (str.IndexOf("!", StringComparison.OrdinalIgnoreCase) <= 0)
                     {
+                        LoadMetrics.PartialFrame(str.Length);
                         break;
                     }
                     str = HUtil32.ArrestStringEx(str, "#", "!", ref data);
@@ -33,6 +41,7 @@ namespace BotSrv.Player
                     }
                     else
                     {
+                        LoadMetrics.PartialFrame(str.Length);
                         break;
                     }
                 }
@@ -71,7 +80,22 @@ namespace BotSrv.Player
             {
                 return;
             }
-            if (MShare.MySelf == null)
+            // T-8 登录响应观测：解出帧 + 按 ident 计数（放在任何分支之前 ⇒ 无论后面走登录/进世界分支都记）。
+            LoadMetrics.FrameDecoded();
+            LoadMetrics.IdentSeen(msg.Ident);
+            // T-11：把帧归到**本假人的登录连接**上（rx_bytes 与是否解出 529 一起读，才能分方向）
+            LoadMetrics.LoginConnIdent(SessionId, msg.Ident);
+            // T-9 按会话隔离「未进世界」判据（C6 第 4 轮根因修复）：
+            // 原判据是**跨假人共享**的 `MShare.MySelf == null`——只要有**任意一个**假人进了世界（第一个 SM_LOGON
+            // 把 MySelf 置上），该标志就再也不为 null（本进程只在 RobotPlayer 构造时清一次），于是**其余所有**
+            // 假人的登录响应（SM_PASSOK_SELECTSERVER/SM_SELECTSERVER_OK/SM_QUERYCHR/SM_STARTPLAY…）都被这条
+            // 分支静默丢弃 ⇒ 登录数卡死在「第一个假人进世界之前已处理完的那批」。
+            // 证据（tier-500，观测口径）：`ident_counts[529]=500`（服务端对**全部** 500 假人回了 SM_PASSOK_SELECTSERVER）
+            // 而 `login_ok=179 = ident_counts[520]=ident_counts[530]`（只有 179 个走到处理）⇒ 丢包 100% 在假人侧，
+            // 不是服务端吞吐上限。`login_begin/login_sent/conn_ok` 各 500 也排除了「没发出去」。
+            // 改为本假人自己的 `_inWorld`（`MarkInWorld` 在收到 SM_LOGON 时置位，纯本会话态）：单假人行为逐字节不变
+            // （进世界前 = true、进世界后 = false，与原判据同序），多假人互不干扰。
+            if (!_inWorld)
             {
                 switch (msg.Ident)
                 {
@@ -84,6 +108,10 @@ namespace BotSrv.Player
                         {
                             case 0:
                                 MainOutMessage($"帐号 [{LoginId}] 已被其他的玩家使用了。请选择其它帐号名注册");
+                                // 幂等复跑（C6 退回补做，2026-10-11）：账号在库里已存在时不能卡死，
+                                // 否则第二次跑同一条冒烟必 RED（“一条命令可复跑”是 C6 的验收项之一）。
+                                // 密码与已有账号一致时就当作已注册，直接转入登录。
+                                LoginScene.ClientNewIdSuccess();
                                 break;
                             case -2:
                                 MainOutMessage("此帐号名被禁止使用！");
@@ -279,6 +307,9 @@ namespace BotSrv.Player
                     MShare.LoadUserConfig(ChrName);
                     MShare.LoadItemFilter2();
                     //SendClientMessage(Messages.CM_HIDEDEATHBODY, MShare.g_MySelf.m_nRecogId, (int)MShare.g_gcGeneral[8], 0, 0);
+                    // SM_LOGON = 服务端确认进世界 ⇒ 武装动作探针（并计入 tick 覆盖率分子）；
+                    // x/y 取这条消息里的落点（PlayScene 的 SM_LOGON 分支用的就是 msg.Param/msg.Tag）。
+                    MarkInWorld(msg.Param, msg.Tag);
                     MainOutMessage("成功进入游戏");
                     MainOutMessage("-----------------------------------------------");
                     break;
