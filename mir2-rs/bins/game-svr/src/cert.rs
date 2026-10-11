@@ -14,10 +14,10 @@
 //! 5. 再过准入表：`GetAdmission(account, ip, sessionId)` 且 `nPayMent > 0`（`:314-315`），否则
 //!    标 `*disable*` + `Certification=false` + `CloseUser`（`:340-353`）。
 
-use mir2_shared::hutil32::get_valid_str3;
+use mir2_shared::hutil32::{arrest_string_ex_ref, get_valid_str3, str_to_int, ArrestWrite};
 
 use crate::auth::AdmissionStore;
-use crate::hutil::{arrest_string_ex, tag_count};
+use crate::hutil::tag_count;
 
 /// 字段分隔符：`HUtil32.Backslash = '/'`（`HUtil32.cs:12`——名字叫 Backslash，值是斜杠）。
 const FIELD_DIVIDER: [char; 1] = ['/'];
@@ -76,9 +76,9 @@ pub fn get_certification(arrested: &str) -> CertParse {
     let (hwid, r) = get_valid_str3(&r, &FIELD_DIVIDER);
     let (gate_id_str, _) = get_valid_str3(&r, &FIELD_DIVIDER);
 
-    let session_id = crate::hutil::str_to_int(&code_str, 0);
+    let session_id = str_to_int(&code_str, 0);
     let flag = idx == "0";
-    let gate_id = crate::hutil::str_to_int(&gate_id_str, -1);
+    let gate_id = str_to_int(&gate_id_str, -1);
     let mut valid =
         !account.is_empty() && !chr_name.is_empty() && session_id >= 2 && !hwid.is_empty(); // `:269`
     if gate_id == -1 {
@@ -89,7 +89,7 @@ pub fn get_certification(arrested: &str) -> CertParse {
         chr_name,
         session_id,
         flag,
-        client_version: crate::hutil::str_to_int(&ver_str, 0),
+        client_version: str_to_int(&ver_str, 0),
         hwid_raw: hwid,
         gate_id,
         valid,
@@ -123,7 +123,14 @@ pub fn do_client_certification(body: &[u8], store: &AdmissionStore) -> CertOutco
     if tag_count(&s_msg, '!') == 0 {
         return CertOutcome::Ignored;
     }
-    let (_rest, arrested) = arrest_string_ex(&s_msg, "#", "!");
+    // `:311` 是 `ArrestStringEx(sMsg, "#", "!", ref sMsg)`——**源与目标是同一个变量**：
+    // 命中 ⇒ sMsg 被写成截出的内容；未命中（`Unchanged`：无闭合 `!` 等）⇒ sMsg **保持原文**
+    // （第三态不能 collapse：`Run()` 里那个"空则中断"的判据就是靠 `sData` 是否被写过来区分的）。
+    let (write, _rest) = arrest_string_ex_ref(&s_msg, '#', '!');
+    let arrested = match write {
+        ArrestWrite::Value(v) => v,
+        ArrestWrite::Unchanged => s_msg,
+    };
     let cert = get_certification(&arrested);
     if !cert.valid {
         return CertOutcome::Failed {
@@ -173,7 +180,11 @@ mod tests {
         let body = hex(ORACLE_LOGIN_BODY);
         let s_msg = crate::hutil::ascii_from_bytes(&body);
         assert_eq!(tag_count(&s_msg, '!'), 1);
-        let (_rest, arrested) = arrest_string_ex(&s_msg, "#", "!");
+        let (write, _rest) = arrest_string_ex_ref(&s_msg, '#', '!');
+        let arrested = match write {
+            ArrestWrite::Value(v) => v,
+            ArrestWrite::Unchanged => s_msg.clone(),
+        };
         let cert = get_certification(&arrested);
         assert!(cert.valid, "oracle 实测包必须解析通过");
         assert_eq!(cert.account, "loadbot1");

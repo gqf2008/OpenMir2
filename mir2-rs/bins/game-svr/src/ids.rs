@@ -38,10 +38,9 @@ macro_rules! glog_ids {
 use std::sync::{Arc, Mutex};
 
 use mir2_protocol::messages::{SS_CLOSESESSION, SS_OPENSESSION};
-use mir2_shared::hutil32::get_valid_str3;
+use mir2_shared::hutil32::{arrest_string_ex_ref, get_valid_str3, str_to_int, ArrestWrite};
 
 use crate::auth::AdmissionStore;
-use crate::hutil::{arrest_string_ex, str_to_int};
 
 /// 字段分隔符：`HUtil32.Backslash = '/'`（`HUtil32.cs:12`）。
 const DIV: [char; 1] = ['/'];
@@ -56,11 +55,18 @@ pub fn drain_messages(buf: &mut String, store: &mut AdmissionStore) -> usize {
     let mut text = std::mem::take(buf);
     let mut handled = 0usize;
     loop {
-        let (rest, arrested) = arrest_string_ex(&text, "(", ")");
-        if arrested.is_empty() {
-            text = rest;
-            break;
-        }
+        // 三态照抄 `:153-157`：`ArrestStringEx(sSocketText, "(", ")", ref sData)` ——
+        // `Value(空)`（找不到 `(` 的越界缺陷分支）与 `Unchanged`（无闭合 `)`）都让 `sData` 不是"新截出的非空内容"
+        // ⇒ 循环中断（注意 `sData` 是 `Run()` 的局部量、只在命中时被写：未命中时它保持上一次的值，
+        // 而紧随其后的 `IndexOf(')')` 检查会兜住这种情况，故这里等价地按"中断"处理）。
+        let (write, rest) = arrest_string_ex_ref(&text, '(', ')');
+        let arrested = match write {
+            ArrestWrite::Value(v) if !v.is_empty() => v,
+            _ => {
+                text = rest;
+                break;
+            }
+        };
         handled += usize::from(dispatch(&arrested, store));
         text = rest;
         if !text.contains(')') {

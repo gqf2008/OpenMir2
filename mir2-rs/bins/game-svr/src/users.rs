@@ -28,9 +28,12 @@ pub struct GateUser {
     pub chr_name: String,
     /// C# `SessionUser.SessionID`（认证链里的 `nSessionId`，与网关的 `session_id` 不是一回事）。
     pub game_session_id: i32,
+    /// 是否**已进世界**（C# `SessionUser.PlayObject != null && WorldEngine != null` 的对应物）。
+    /// 这是 `GM_DATA` 分支的**真正门**（`:201`）——不是 `Certification`（reviewer-2 的 F3）。
+    pub in_world: bool,
 }
 
-/// append-only 的槽表。
+/// 网关用户槽表（最小空闲槽复用；`open` 与 `OpenNewUser` 同构）。
 #[derive(Debug, Default)]
 pub struct UserList {
     slots: Vec<Option<GateUser>>,
@@ -55,6 +58,7 @@ impl UserList {
             account: String::new(),
             chr_name: String::new(),
             game_session_id: 0,
+            in_world: false,
         };
         let slot = self.slots.iter().position(Option::is_none);
         let idx = match slot {
@@ -77,7 +81,10 @@ impl UserList {
         i32::try_from(idx).unwrap_or(i32::MAX) + 1
     }
 
-    /// 认证通过后落字段（C# `DoClientCertification` `:317-322` 的四项：`Certification/Account/ChrName/SessionID`）。
+    /// 认证通过后落字段（C# `DoClientCertification` `:317-322` 的四项：`Certification/Account/ChrName/SessionID`；
+    /// `Account`/`ChrName` 照 `:318-319` 做 `Trim()`）。
+    ///
+    /// 进世界（`in_world`）由 S2b-3 在取到角色后置真。
     ///
     /// # Panics
     /// 不会 panic。
@@ -128,7 +135,7 @@ impl UserList {
         self.slots.iter().flatten().find(|u| u.socket == socket)
     }
 
-    /// 槽位总数（含已关闭的空槽——照 append-only 事实，日志口径用它）。
+    /// 槽位总数（含已关闭的空槽——下标只增不缩，对外索引=下标+1）。
     #[must_use]
     pub fn slots(&self) -> usize {
         self.slots.len()

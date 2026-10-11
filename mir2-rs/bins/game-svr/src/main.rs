@@ -9,11 +9,11 @@
 //!    I/O（tokio）侧**只发事件**、绝不碰 `World`（设计文档 §4.2 的四条确定性硬约束）。
 //!
 //! **本切片不做**（登记在卡内与报告，S2/S3/S4 承接）：
-//! - 登录合成包解析后的**认证语义**（C# `DoClientCertification`：建角/取角色/置 `Certification`）——S2；
+//! - 认证链（`DoClientCertification`）已落 `cert.rs`；**取角色/进世界**（`LoadDBInfo` → DBSrv → PlayObject）——S2b-3；
 //! - 会话**进世界**（`World::open_session`/`enter_map`）与命令到世界的映射——S2；
 //! - 世界 → 客户端的 **SM_* 出包**（`SendMsgQueue`/编码）——S3；
 //! - 真地图/Envir 加载（本片用配置里的占位尺寸建世界）——S2/S3；
-//! - 保活定时器（oracle 的 `SendKeepAlive` 消费者在网关侧，本片只维护标志）。
+//! - 保活定时器（消费者是 **M2Server 自己** 的 `TCPNetChannel.cs:435-439`，本片只维护标志）。
 //!
 //! **失败要响**：缺配置键、绑不上端口 —— 明确报错并非零退出。
 
@@ -68,7 +68,7 @@ enum GateEvent {
         cmd: CommandMessage,
         tail: Option<String>,
     },
-    /// 还**没进世界**的会话收到的第一帧（oracle 在这一支走 `DoClientCertification`，属 S2）。
+    /// 没通过认证的会话收到的帧：oracle 在这一支走 `DoClientCertification` 的空转（`Account` 为空才真认证）。
     CertificationPending { index: i32, ip: String },
     /// `GM_CLOSE`。
     Closed { index: i32 },
@@ -181,7 +181,7 @@ async fn main() -> Result<()> {
 
 /// sim 线程：建世界 → 按 `TICK_INTERVAL_MS` tick → 消费 I/O 侧事件。
 ///
-/// S1 只把事件**分类记录**（世界侧的会话/命令映射是 S2），但 tick 循环与"唯一所有者"这条纪律现在就走真路径。
+/// 目前把事件**分类记录**（世界侧的会话/命令映射、取角色进世界是 S2b-3），但 tick 循环与"唯一所有者"这条纪律走真路径。
 fn sim_loop(maps: Vec<(i32, i32)>, ev_rx: std::sync::mpsc::Receiver<GateEvent>) {
     let mut world = mir2_world::World::with_maps(maps);
     glog!(
@@ -201,13 +201,13 @@ fn sim_loop(maps: Vec<(i32, i32)>, ev_rx: std::sync::mpsc::Receiver<GateEvent>) 
                 GateEvent::Opened { index, ip } => {
                     glog!(
                         "DBG",
-                        "sim: 新用户登记 index={index} ip={ip}（S2 才 open_session）"
+                        "sim: 新用户登记 index={index} ip={ip}（open_session 属 S2b-3）"
                     );
                 }
                 GateEvent::Command { index, cmd, tail } => {
                     glog!(
                         "DBG",
-                        "sim: index={index} 命令 Recog={} Ident={} Param={} Tag={} Series={} tail={:?}（S2 才进世界）",
+                        "sim: index={index} 命令 Recog={} Ident={} Param={} Tag={} Series={} tail={:?}（进世界后才有意义，S2b-3）",
                         cmd.recog,
                         cmd.ident,
                         cmd.param,
@@ -219,11 +219,11 @@ fn sim_loop(maps: Vec<(i32, i32)>, ev_rx: std::sync::mpsc::Receiver<GateEvent>) 
                 GateEvent::CertificationPending { index, ip } => {
                     glog!(
                         "DBG",
-                        "sim: index={index} ip={ip} 收到认证前帧（oracle 走 DoClientCertification，属 S2）"
+                        "sim: index={index} ip={ip} 收到无 `!` 的帧 ⇒ 认证链返回 Ignored（oracle 的 `if` 不成立）"
                     );
                 }
                 GateEvent::Closed { index } => {
-                    glog!("DBG", "sim: index={index} 关闭（S2 才 disconnect）");
+                    glog!("DBG", "sim: index={index} 关闭（disconnect 属 S2b-3）");
                 }
                 GateEvent::LoadDbRequest {
                     index,
@@ -237,7 +237,7 @@ fn sim_loop(maps: Vec<(i32, i32)>, ev_rx: std::sync::mpsc::Receiver<GateEvent>) 
                         "INF",
                         "sim: 认证通过 ⇒ 应取角色进世界 Account:{account} ChrName:{chr_name} \
                          SessionId:{session_id} GateIdx:{gate_id} Ver:{client_version} index={index} \
-                         （LoadDBInfo/进世界属 S2b）"
+                         （LoadDBInfo/取角色/进世界属 S2b-3）"
                     );
                 }
             }
@@ -285,7 +285,12 @@ async fn gate_conn(
         if msg.packet_code != grobal2::PacketCode {
             continue; // `:122-125` 非本协议包直接丢
         }
-        let body_len = msg.body_len();
+        // F5（reviewer-2）：`:127-134` 只在 `PackLength > 0` 时当有载荷，否则按 `(null, 0)` 处理
+        let body_len = if msg.pack_length > 0 {
+            usize::try_from(msg.pack_length).unwrap_or(0)
+        } else {
+            0
+        };
         let mut body = vec![0u8; body_len];
         if body_len > 0 && rd.read_exact(&mut body).await.is_err() {
             glog!("ERR", "读取网关载荷失败。");
@@ -311,17 +316,64 @@ struct KeepAlive {
     send_keep_alive: bool,
     send_checked: i32,
     send_block_count: usize,
+    /// `SendCheckTick`：只有 `send_decision` 读它（本切片唯一出站载荷已按 F1 直发，故整套阻塞/确认逻辑
+    /// 要等 S3 的出包才在生产路径被使用；纯判定函数的判据见本文件 `#[cfg(test)] mod tests`）。
+    #[allow(dead_code)]
     send_check_tick: i64,
 }
 
-/// `M2Share.SocCheckTimeOut`（现网 2*1000，`ChannelMessageHandler.cs:60`）。
-const SOC_CHECK_TIMEOUT_MS: i64 = 2000;
+/// `M2Share.SocCheckTimeOut`（`ChannelMessageHandler.cs:60` 比较用的那个静态）。
+///
+/// **是字面量 50**：`src/M2Server/M2Share.cs:180` 的静态默认值就是 50，而且它**没有**被配置赋值
+/// （`ServerConf.cs:60` 只写 `SystemShare.SocCheckTimeOut`，那是另一个静态；现网 `Server.conf:48`
+/// `SocCheckTimeOut=50` 恰好也是 50，容易误以为是"从配置读 2000"——原注释抄了 `:60` 行尾那句过时的
+/// `// 2 * 1000`，reviewer-2 的 F2 已指出）。
+#[allow(dead_code)]
+const SOC_CHECK_TIMEOUT_MS: i64 = 50;
 
 /// 当前毫秒（C# 用 `HUtil32.GetTickCount`；这里只有"差值/超时"参与判定）。
+#[allow(dead_code)]
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+}
+
+/// 发送口的判定结果（`ProcessBufferSend` `:58-90` 的纯函数版，便于单测）。
+///
+/// S3 的出包接上后它就走生产路径（F1 的处置：唯一应答已改直发）。
+#[allow(dead_code)]
+#[derive(Debug, PartialEq, Eq)]
+enum SendDecision {
+    /// `SendChecked > 0`（等网关回 `GM_RECEIVE_OK`）：**包括刚超时清零的那一次也压住不发**（`:58-66` 的无条件 `return`）
+    Hold,
+    /// 累积到阈值 ⇒ 先发一条 `GM_RECEIVE_OK` 再发正文（`:74-83`）
+    CheckFirst,
+    /// 直接发（`:84-90`）
+    Send,
+    /// 单包就超阈值 ⇒ 丢弃（`:76-79`）
+    Drop,
+}
+
+/// 判定的纯函数（副作用只有超时清零，照 `:58-66`）。
+#[allow(dead_code)]
+fn send_decision(state: &mut KeepAlive, check_block: usize, len: usize, now: i64) -> SendDecision {
+    if state.send_checked > 0 {
+        if now - state.send_check_tick > SOC_CHECK_TIMEOUT_MS {
+            state.send_checked = 0;
+            state.send_block_count = 0;
+        }
+        // 注意：oracle 这里是**无条件 return**（`:65`）——刚清零的那一包也要丢
+        return SendDecision::Hold;
+    }
+    let threshold = check_block.saturating_mul(10);
+    if state.send_block_count + len >= threshold {
+        if state.send_block_count == 0 && threshold <= len {
+            return SendDecision::Drop; // `:76-79`
+        }
+        return SendDecision::CheckFirst;
+    }
+    SendDecision::Send
 }
 
 /// 网关发送口的 oracle 规则（`ChannelMessageHandler.cs:50-95` 的 `ProcessBufferSend`）：
@@ -329,25 +381,21 @@ fn now_ms() -> i64 {
 /// ② 累积 `SendBlockCount + len >= CheckBlock*10` ⇒ 先发一条 `GM_RECEIVE_OK` 并置 `SendChecked=1`（`:74-83`）；
 ///    若 `SendBlockCount == 0 && CheckBlock*10 <= len` ⇒ **直接丢**（`:76-79`）；
 /// ③ 发送后 `SendBlockCount += len`（`:89`）。
+#[allow(dead_code)]
 async fn send_gate_msg(
     tx: &Arc<Mutex<OwnedWriteHalf>>,
     state: &mut KeepAlive,
     check_block: usize,
     wire: &[u8],
 ) -> Result<()> {
-    if state.send_checked > 0 {
-        if now_ms() - state.send_check_tick > SOC_CHECK_TIMEOUT_MS {
-            state.send_checked = 0;
-            state.send_block_count = 0;
-        } else {
-            return Ok(()); // 网关还没回 GM_RECEIVE_OK，先压住
-        }
+    match send_decision(state, check_block, wire.len(), now_ms()) {
+        SendDecision::Hold | SendDecision::Drop => return Ok(()),
+        SendDecision::CheckFirst => {}
+        SendDecision::Send => {}
     }
-    let threshold = check_block.saturating_mul(10);
-    if state.send_checked == 0 && state.send_block_count + wire.len() >= threshold {
-        if state.send_block_count == 0 && threshold <= wire.len() {
-            return Ok(()); // 单包就超阈值：oracle 直接丢（`:76-79`）
-        }
+    if state.send_checked == 0
+        && state.send_block_count + wire.len() >= check_block.saturating_mul(10)
+    {
         let check = ServerMessage {
             packet_code: grobal2::PacketCode,
             socket: 0,
@@ -389,7 +437,10 @@ async fn dispatch(
                 session_index: index,
                 pack_length: 0,
             };
-            send_gate_msg(tx, state, check_block, reply.to_bytes().as_slice()).await?;
+            // F1（reviewer-2）：oracle 的 `SendNewUserMsg` 是**直发** `socket.Send(data)`（`:461`），
+            // 完全不经过 `:50-95` 的 `ProcessBufferSend` ⇒ 这里也必须直发（不计 SendBlockCount、不受 SendChecked 拦截）
+            send_raw(tx, reply.to_bytes().as_slice()).await?;
+            let _ = (state, check_block); // 本切片没有别的出站载荷；S3 的出包才会走 send_gate_msg
             glog!(
                 "INF",
                 "新用户链接... socket={} SessionId={} index={} ip={ip} 在线={} 槽={}",
@@ -415,9 +466,11 @@ async fn dispatch(
             }
         }
         grobal2::GM_CHECKCLIENT => {
-            // `:163-165`：只置标志（消费者是网关侧的定时器，属 S2 取证）
+            // `:163-165`：只置标志。**消费者在本进程**：`src/M2Server/Net/TCPNetChannel.cs:435-439`
+            // 见 `SendKeepAlive` 就发 `SendCheck(GM_CHECKSERVER)`；网关侧只是反向（`GameGate/Services/ClientThread.cs:444`
+            // 发 `GM_CHECKCLIENT`、`:268-271` 收 `GM_CHECKSERVER`）。本切片不做这个定时器（S2b-3 登记）。
             state.send_keep_alive = true;
-            glog!("DBG", "GM_CHECKCLIENT：置保活标志（S2 接定时器）");
+            glog!("DBG", "GM_CHECKCLIENT：置保活标志（消费者是 M2Server/Net/TCPNetChannel.cs:435-439，属 S2b-3）");
         }
         grobal2::GM_RECEIVE_OK => {
             // `:166-169`：清零阻塞计数
@@ -439,8 +492,19 @@ async fn dispatch(
             let ip = u.ip.clone();
             // `:201-225`：还没进世界的会话走 `DoClientCertification`（认证语义属 S2）；
             // 已进世界的才把 12B 命令头（+ EDCode 尾）当命令处理。
-            if !u.certification {
-                // `:201-225`：还没进世界的会话走 `DoClientCertification`（认证链在 `cert.rs`）
+            if !u.in_world {
+                // `:201-225` 的分支门是「**挂上 PlayObject/WorldEngine**」= 已进世界，**不是** `Certification`（F3）。
+                // 已认证但尚未进世界的窗口里，oracle 会进 `DoClientCertification`，而那里 `:307` 见 `Account` 非空
+                // **直接空转** ⇒ 这一帧被丢弃（不是当命令处理）。
+                if u.certification {
+                    glog!(
+                        "DBG",
+                        "index={index} 已认证未进世界 ⇒ 照 oracle 空转丢帧（{} 字节）",
+                        body.len()
+                    );
+                    return Ok(());
+                }
+                // 未认证 ⇒ 认证链（`cert.rs`）
                 let outcome = {
                     let store = auth.lock().expect("准入表锁被毒化");
                     cert::do_client_certification(body, &store)
@@ -521,4 +585,47 @@ async fn send_raw(tx: &Arc<Mutex<OwnedWriteHalf>>, wire: &[u8]) -> Result<()> {
     w.write_all(wire).await.context("写网关失败")?;
     w.flush().await.ok();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// F2（reviewer-2）的判据：`ProcessBufferSend` `:58-90` 的四条分支，**含"刚超时清零的那一包也要压住"**。
+    #[test]
+    fn send_decision_matches_process_buffer_send() {
+        let mut st = KeepAlive::default();
+        // ① 正常：未到阈值 ⇒ Send
+        assert_eq!(send_decision(&mut st, 12288, 20, 0), SendDecision::Send);
+        // ② 累积到阈值 ⇒ 先发 check
+        st.send_block_count = 122_880 - 10; // CheckBlock*10 = 122880
+        assert_eq!(
+            send_decision(&mut st, 12288, 20, 0),
+            SendDecision::CheckFirst
+        );
+        // ③ 单包就超阈值（且累计数为 0）⇒ 丢
+        let mut st2 = KeepAlive::default();
+        assert_eq!(send_decision(&mut st2, 1, 20, 0), SendDecision::Drop);
+        // ④ SendChecked>0 且未超时 ⇒ Hold（不发、不清）
+        let mut st3 = KeepAlive {
+            send_keep_alive: false,
+            send_checked: 1,
+            send_check_tick: 1000,
+            send_block_count: 7,
+        };
+        assert_eq!(send_decision(&mut st3, 12288, 20, 1040), SendDecision::Hold);
+        assert_eq!(st3.send_checked, 1, "未超时不清零");
+        // ⑤ SendChecked>0 且**已超时**：清零后仍 Hold（oracle `:58-66` 的无条件 return）
+        let mut st4 = KeepAlive {
+            send_keep_alive: false,
+            send_checked: 1,
+            send_check_tick: 1000,
+            send_block_count: 7,
+        };
+        assert_eq!(send_decision(&mut st4, 12288, 20, 1060), SendDecision::Hold);
+        assert_eq!(st4.send_checked, 0, "超时清零");
+        assert_eq!(st4.send_block_count, 0);
+        // 清零后的下一包才正常发
+        assert_eq!(send_decision(&mut st4, 12288, 20, 1061), SendDecision::Send);
+    }
 }

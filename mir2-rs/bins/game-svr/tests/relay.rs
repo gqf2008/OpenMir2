@@ -5,10 +5,12 @@
 //!
 //! 判据（口径都来自 `src/M2Server/Net/ChannelMessageHandler.cs`）：
 //! 1. `GM_OPEN` ⇒ 回 `GM_SERVERUSERINDEX`，`Socket`/`SessionId` 原样、**`SessionIndex` = 下标+1**（`:157/:447-462`）、`PackLength=0`；
-//! 2. 槽表 **append-only**：关掉再开，索引继续往后长（`:442-444`）；`GM_CLOSE` 按 **socket** 关（`:161`）；
+//! 2. 槽表**最小空闲槽复用**（`OpenNewUser` `:434-444`：先找第一个 `null` 槽，找不到才 `Add`）——**不是 append-only**；
+//!    `GM_CLOSE` 按 **socket** 关（`:161`）；
 //! 3. 发送口的阻塞/确认规则（`:50-95`）：累积量到 `CheckBlock*10` 时**先发 `GM_RECEIVE_OK`** 再发正文；
 //!    网关回 `GM_RECEIVE_OK` 后计数清零、恢复直接发送；
-//! 4. `GM_DATA` 在用户**还没认证**时走 `DoClientCertification` 分支（`:201-225`）⇒ S1 记录为"认证前帧"交给 sim 线程（认证语义属 S2）。
+//! 4. `GM_DATA` 的分支门是**已进世界**（`:201` 的 `PlayObject/WorldEngine`），不是 `Certification`：
+//!    未进世界 ⇒ 走 `DoClientCertification`（已认证的窗口里它 `:307` 空转 ⇒ 丢帧）；无 `!` ⇒ `Ignored`（记录给 sim 线程）。
 
 use std::time::Duration;
 
@@ -172,50 +174,13 @@ async fn close_frees_slot_for_reuse() {
     child.stop().await;
 }
 
-/// 判据 3：发送口阻塞/确认（`CheckBlock*10` 阈值 ⇒ 先发 `GM_RECEIVE_OK`；收到网关的 `GM_RECEIVE_OK` 后恢复）。
-///
-/// `CheckBlock=3` ⇒ 阈值 = 30 字节；每条 `GM_SERVERUSERINDEX` 是 20 字节 ⇒ 第二条起会先撞阈值。
-#[tokio::test]
-async fn blocked_send_sends_receive_ok_then_resumes() {
-    let port = free_port();
-    let child = Child::spawn(port, 3, free_port(), "block");
-    let mut gate = connect_with_retry(port).await;
-    // 第一条：0 + 20 < 30 ⇒ 直接回索引
-    gate.write_all(&frame(grobal2::GM_OPEN, 1, 1, 0, b"a"))
-        .await
-        .unwrap();
-    let (m1, _) = recv_frame(&mut gate).await.unwrap();
-    assert_eq!(m1.ident, u16::from(grobal2::GM_SERVERUSERINDEX));
-    assert_eq!(m1.session_index, 1);
-    // 第二条：20 + 20 >= 30 ⇒ 先 GM_RECEIVE_OK，再索引
-    gate.write_all(&frame(grobal2::GM_OPEN, 2, 2, 0, b"b"))
-        .await
-        .unwrap();
-    let (a1, _) = recv_frame(&mut gate).await.unwrap();
-    assert_eq!(
-        a1.ident,
-        u16::from(grobal2::GM_RECEIVE_OK),
-        "撞阈值必须先发 GM_RECEIVE_OK（:80）"
-    );
-    let (m2, _) = recv_frame(&mut gate).await.unwrap();
-    assert_eq!(m2.ident, u16::from(grobal2::GM_SERVERUSERINDEX));
-    assert_eq!(m2.session_index, 2);
-    // 网关确认（清零计数）后，第三条又能直接回
-    gate.write_all(&frame(grobal2::GM_RECEIVE_OK, 0, 0, 0, &[]))
-        .await
-        .unwrap();
-    tokio::time::sleep(Duration::from_millis(150)).await;
-    gate.write_all(&frame(grobal2::GM_OPEN, 3, 3, 0, b"c"))
-        .await
-        .unwrap();
-    let (m3, _) = recv_frame(&mut gate).await.unwrap();
-    assert_eq!(m3.ident, u16::from(grobal2::GM_SERVERUSERINDEX));
-    assert_eq!(m3.session_index, 3);
-    child.stop().await;
-}
+// 判据 3（发送口的阻塞/确认规则）**已改**：F1 之后本切片唯一的出站载荷（`GM_SERVERUSERINDEX`）按 oracle
+// 直发（不经 `ProcessBufferSend`），所以这条进程级用例失去前提、已删除；该规则的判据改为 `main.rs` 里
+// `send_decision_matches_process_buffer_send` 的**纯函数单测**（含"超时清零后那一包也压住"）。
+// S3 的出包接上后，这里要补一条"真正走 ProcessBufferSend 的载荷"的进程级用例（登记在卡上）。
 
-/// 判据 4：`GM_DATA` 在用户未认证时走"认证前"分支（oracle `:201-225` 的 `DoClientCertification`），
-/// 并把事件交给 sim 线程（S1 只记录；认证语义属 S2）。
+/// 判据 4：`GM_DATA` 在**未进世界**时走 `DoClientCertification`；这条帧连 `!` 都没有 ⇒ oracle 的 `if`
+/// 不成立（`Ignored`），事件交给 sim 线程记录。
 #[tokio::test]
 async fn gm_data_before_certification_goes_to_sim() {
     let port = free_port();
@@ -236,8 +201,8 @@ async fn gm_data_before_certification_goes_to_sim() {
     tokio::time::sleep(Duration::from_millis(400)).await;
     let log = child.stdout();
     assert!(
-        log.contains("认证前帧") && log.contains("index=1") && log.contains("ip=10.0.0.9"),
-        "未认证的 GM_DATA 必须走认证前分支并交给 sim 线程；日志实得：{log}"
+        log.contains("认证链返回 Ignored") && log.contains("index=1"),
+        "无 `!` 的帧 ⇒ 认证链返回 Ignored（oracle 的 `if` 不成立）并交给 sim 线程；日志实得：{log}"
     );
     child.stop().await;
 }
@@ -287,9 +252,10 @@ async fn login_packet_without_admission_fails_certification() {
     .unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await;
     let log = child.stdout();
+    // F7（reviewer-2）：断言要能区分"打对了字段"与"只是提到了 loadbot1"——锚到完整形态
     assert!(
-        log.contains("会话验证失败") && log.contains("loadbot1"),
-        "无准入记录 ⇒ 必须走认证失败支并打出账号；日志实得：{log}"
+        log.contains("会话验证失败.Account:loadbot1 SessionId:2"),
+        "无准入记录 ⇒ 必须走认证失败支并打出账号/会话号（完整形态）；日志实得：{log}"
     );
     // 槽位被清：同一会话再发命令帧 ⇒ "用户不存在"
     gate.write_all(&frame(grobal2::GM_DATA, 900, 42, 1, &[0u8; 16]))
