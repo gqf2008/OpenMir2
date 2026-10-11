@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""probe_m1_chain.py — M1⑤②③ 的**协议级**假人：N 个并发连接走完整「登录 → 选服 → 选角」链。
+r"""probe_m1_chain.py — M1⑤②③ 的**协议级**假人：N 个并发连接走完整「登录 → 选服 → 选角」链。
 
 为什么需要它（与 BotSrv 的分工）：
   BotSrv 的 `LoadMetrics.login_ok` 是本工程已知会**漏计数**的探针（C6 卡
