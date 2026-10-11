@@ -1,10 +1,10 @@
 #requires -Version 5
 <#
 .SYNOPSIS
-  selftest_gate.ps1 — M3 门禁（run_m3_gate.ps1）三条机判护栏的「判红/判绿」自检。
+  selftest_gate.ps1 — M3 门禁（run_m3_gate.ps1）五条机判护栏的「判红/判绿」自检。
 
 .DESCRIPTION
-  三条护栏的唯一口径在 `gate_guards.ps1`（主流程与自检共用同一批函数，照
+  五条护栏的唯一口径在 `gate_guards.ps1`（主流程与自检共用同一批函数，照
   `tools/m2-acceptance/selftest.ps1` + `portclassify.ps1` 的先例）。本脚本用**构造输入**
   把每条口径都跑一遍，断言「失败项代码」而不只看"有没有报错"——只看报错会把"脚本崩了"
   误当"判红"。**全部离线**：不起栈、不占端口、不碰 DB。
@@ -18,6 +18,13 @@
        缺 baseline.json ⇒ peer_baseline_missing；缺 fixed_new_chr ⇒ peer_fixed_new_chr_missing；
        baseline.json 坏/半写（截断、非法 JSON）⇒ peer_baseline_invalid（**结构化判红、不抛异常中断**，
        P-1：reviewer-5 `3926cf99` / reviewer-3 `56f02a6e`）。
+    ④ Get-M3PeerBagEquipScopeGuard（T-14 复跑口径）：两侧 baseline.json.bag_equip_sequence 必须
+       同一组开关（step_ms/start_delay_ms/disable_autoplay）。旧「开着挂机」产物（无 disable_autoplay
+       记录）⇒ peer_bag_equip_autoplay_on；step_ms 等不同 ⇒ peer_bag_equip_scope_mismatch；
+       本侧 on + peer 缺字段 ⇒ peer_bag_equip_scope_missing；两侧 off ⇒ 绿。
+    ⑤ Get-M3PeerStartPoseGuard（T-14 固定起点变体）：两侧 baseline.json.start_pose 必须逐字节相同；
+       不同 ⇒ peer_start_pose_mismatch；本侧 pin + peer 缺字段 ⇒ peer_start_pose_missing；
+       形态认不出 ⇒ peer_start_pose_invalid；两侧 none ⇒ 绿。
 
   「改坏必红 / 还原必绿」：把 `gate_guards.ps1` 对应护栏改回旧行为（放行）再跑本脚本，
   必须 exit 1；还原后必须 exit 0。原始输出落 `E:\tmp\openmir2-watch\`。
@@ -61,10 +68,12 @@ function Test-EntryGuard([string]$Desc, [object[]]$Holders, [string]$Side, [int]
   Test-Case ("entry/{0}" -f $Desc) $ok ("side={0} failed=[{1}]" -f $Side, ($codes -join ','))
 }
 
-function New-Baseline([string]$Dir, [string]$FixedNewChr, [switch]$OmitField) {
+function New-Baseline([string]$Dir, [string]$FixedNewChr, [switch]$OmitField, [string]$BagEquipSequence = '', [string]$StartPose = '') {
   New-Item -ItemType Directory -Force -Path $Dir | Out-Null
   $obj = [ordered]@{ session = (Split-Path $Dir -Leaf); side = 'csharp' }
   if (-not $OmitField) { $obj['fixed_new_chr'] = $FixedNewChr }
+  if (-not [string]::IsNullOrEmpty($BagEquipSequence)) { $obj['bag_equip_sequence'] = $BagEquipSequence }
+  if (-not [string]::IsNullOrEmpty($StartPose)) { $obj['start_pose'] = $StartPose }
   $obj | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $Dir 'baseline.json') -Encoding utf8
 }
 
@@ -162,6 +171,86 @@ Test-Case 'peer/baseline.json坏JSON=红(不中断)' `
   (($null -eq $badJsonThrew) -and ($badJsonCodes -contains 'peer_baseline_invalid') -and ($badJsonMessages -match '解析失败')) `
   $badJsonDetail
 
+# ---------------------------------------------------------------- ④ peer 背包/装备开关一致性
+Write-Output '④ Get-M3PeerBagEquipScopeGuard（参照会话背包/装备开关一致性；T-14 复跑口径）'
+$LocalOn = Format-M3BagEquipScope -BagEquipSequence $true -BagEquipStepMs 1000 -BagEquipStartDelayMs 3000 -DisableAutoPlay $true
+
+$bOn = Join-Path $Work 'bag-on'
+New-Baseline $bOn 'Job=1 Hair=2 Sex=0' -BagEquipSequence $LocalOn
+$g = Get-M3PeerBagEquipScopeGuard -PeerDir $bOn -LocalScope $LocalOn
+Test-Case 'bagscope/两侧同开关(关挂机)=绿' ((@($g.failed).Count -eq 0) -and ($g.peer_scope -eq $LocalOn)) `
+  ("failed=[{0}] peer='{1}'" -f (@($g.failed) -join ','), $g.peer_scope)
+
+# 旧产物：只有 `on step_ms=... start_delay_ms=...`，无 disable_autoplay 记录（= 开着挂机跑的）。
+# 这是本机入库的 csharp-20261012-054849 的形状 —— 不能当同口径 peer。
+$bLegacy = Join-Path $Work 'bag-legacy-autoplay'
+New-Baseline $bLegacy 'Job=1 Hair=2 Sex=0' -BagEquipSequence 'on step_ms=1000 start_delay_ms=3000'
+$g = Get-M3PeerBagEquipScopeGuard -PeerDir $bLegacy -LocalScope $LocalOn
+Test-Case 'bagscope/旧开挂机peer=红(autoplay_on)' (@($g.failed) -contains 'peer_bag_equip_autoplay_on') `
+  ("failed=[{0}] peer='{1}'" -f (@($g.failed) -join ','), $g.peer_scope)
+
+$bStep = Join-Path $Work 'bag-stepmismatch'
+New-Baseline $bStep 'Job=1 Hair=2 Sex=0' -BagEquipSequence 'on step_ms=500 start_delay_ms=3000 disable_autoplay=True'
+$g = Get-M3PeerBagEquipScopeGuard -PeerDir $bStep -LocalScope $LocalOn
+Test-Case 'bagscope/step_ms不同=红' (@($g.failed) -contains 'peer_bag_equip_scope_mismatch') `
+  ("failed=[{0}]" -f (@($g.failed) -join ','))
+
+$bOff = Join-Path $Work 'bag-off'
+New-Baseline $bOff '(off)' -BagEquipSequence '(off)'
+$g = Get-M3PeerBagEquipScopeGuard -PeerDir $bOff -LocalScope '(off)'
+Test-Case 'bagscope/两侧off=绿' (@($g.failed).Count -eq 0) ("failed=[{0}]" -f (@($g.failed) -join ','))
+
+$bNoBag = Join-Path $Work 'bag-nofield'
+New-Baseline $bNoBag '(off)'
+$g = Get-M3PeerBagEquipScopeGuard -PeerDir $bNoBag -LocalScope $LocalOn
+Test-Case 'bagscope/本侧on+peer缺字段=红' (@($g.failed) -contains 'peer_bag_equip_scope_missing') `
+  ("failed=[{0}]" -f (@($g.failed) -join ','))
+$g = Get-M3PeerBagEquipScopeGuard -PeerDir $bNoBag -LocalScope '(off)'
+Test-Case 'bagscope/本侧off+peer缺字段=绿(旧产物默认关)' (@($g.failed).Count -eq 0) `
+  ("failed=[{0}]" -f (@($g.failed) -join ','))
+
+# 坏 JSON：与 ③ 同类（peer_baseline_invalid，不抛异常中断）
+$bBadBag = Join-Path $Work 'bag-badjson'
+New-Item -ItemType Directory -Force -Path $bBadBag | Out-Null
+Set-Content -Path (Join-Path $bBadBag 'baseline.json') -Encoding utf8 `
+  -Value '{ "session": "bag-badjson", "side": "csharp", "bag_equip_sequence": "on step'
+$g = $null
+$badBagThrew = $null
+try { $g = Get-M3PeerBagEquipScopeGuard -PeerDir $bBadBag -LocalScope $LocalOn } catch { $badBagThrew = $_ }
+$badBagCodes = if ($g) { @($g.failed) } else { @() }
+$badBagDetail = if ($badBagThrew) { 'THREW: ' + $badBagThrew.Exception.Message } else { "failed=[{0}]" -f ($badBagCodes -join ',') }
+Test-Case 'bagscope/baseline.json坏JSON=红(不中断)' `
+  (($null -eq $badBagThrew) -and ($badBagCodes -contains 'peer_baseline_invalid')) `
+  $badBagDetail
+
+# ---------------------------------------------------------------- ⑤ peer 固定起点一致性
+Write-Output '⑤ Get-M3PeerStartPoseGuard（T-14 固定起点变体；owner 86478c55/d7798370）'
+Test-Case 'pose/口径形态=map=0 home=0,289,618 pos=289,618 level=1 dir=0 bag=48@0,97@1,207@2,3@3 abil=1' `
+  ((Format-M3StartPose -MapName '0' -HomeMap 0 -HomeX 289 -HomeY 618 -CX 289 -CY 618 -Level 1 -Dir 0) -eq 'map=0 home=0,289,618 pos=289,618 level=1 dir=0 bag=48@0,97@1,207@2,3@3 abil=1') ''
+$LocalPose = Format-M3StartPose -MapName '0' -HomeMap 0 -HomeX 289 -HomeY 618 -CX 289 -CY 618 -Level 1 -Dir 0
+$pPin = Join-Path $Work 'pose-pin'
+New-Baseline $pPin '(off)' -StartPose $LocalPose
+$g = Get-M3PeerStartPoseGuard -PeerDir $pPin -LocalPose $LocalPose
+Test-Case 'pose/两侧同 pin=绿' ((@($g.failed).Count -eq 0) -and ($g.peer_pose -eq $LocalPose)) `
+  ("failed=[{0}] peer='{1}'" -f (@($g.failed) -join ','), $g.peer_pose)
+$pPin2 = Join-Path $Work 'pose-pin2'
+New-Baseline $pPin2 '(off)' -StartPose (Format-M3StartPose -MapName '0' -HomeMap 0 -HomeX 289 -HomeY 618 -CX 650 -CY 618 -Level 1 -Dir 0)
+$g = Get-M3PeerStartPoseGuard -PeerDir $pPin2 -LocalPose $LocalPose
+Test-Case 'pose/peer pin 不同=红' (@($g.failed) -contains 'peer_start_pose_mismatch') `
+  ("failed=[{0}]" -f (@($g.failed) -join ','))
+$pNoPose = Join-Path $Work 'pose-nofield'
+New-Baseline $pNoPose '(off)'
+$g = Get-M3PeerStartPoseGuard -PeerDir $pNoPose -LocalPose $LocalPose
+Test-Case 'pose/本侧 pin+peer 缺字段=红' (@($g.failed) -contains 'peer_start_pose_missing') `
+  ("failed=[{0}]" -f (@($g.failed) -join ','))
+$g = Get-M3PeerStartPoseGuard -PeerDir $pNoPose -LocalPose 'none'
+Test-Case 'pose/两侧 none=绿' (@($g.failed).Count -eq 0) ("failed=[{0}]" -f (@($g.failed) -join ','))
+$pBadPose = Join-Path $Work 'pose-invalid'
+New-Baseline $pBadPose '(off)' -StartPose 'garbage'
+$g = Get-M3PeerStartPoseGuard -PeerDir $pBadPose -LocalPose $LocalPose
+Test-Case 'pose/形态认不出=红' (@($g.failed) -contains 'peer_start_pose_invalid') `
+  ("failed=[{0}]" -f (@($g.failed) -join ','))
+
 # ---------------------------------------------------------------- 汇总
 $report = [ordered]@{
   tool = 'mir2-rs/tests/parity/m3/selftest_gate.ps1'
@@ -177,7 +266,7 @@ $report | ConvertTo-Json -Depth 6 | Set-Content -Path $reportPath -Encoding utf8
 Write-Output ('SELFTEST_REPORT ' + $reportPath)
 Write-Output ('SUMMARY total={0} failed={1}' -f $script:Total, $script:Failed)
 if ($script:Failed -eq 0) {
-  Write-Output 'GREEN: 三条机判护栏的判红/判绿口径都经构造输入验证'
+  Write-Output 'GREEN: 五条机判护栏的判红/判绿口径都经构造输入验证'
   exit 0
 }
 Write-Output 'SELFTEST FAIL: 有护栏口径与实现不符（见上面 FAIL 行）'
