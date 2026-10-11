@@ -219,3 +219,41 @@ Remove-Item -Recurse -Force mir2-rs/tests/parity/m3/sessions/*/shadow-run* -Erro
   - 未动 `main.rs`/`smframe.rs`（接线归 m2-svr）、`crates/world/**`、`crates/envir/**`、`crates/world-bevy/**`；
     表结构/脚本/数据文件格式未改。
   - 未 merge、未签 review；未新增非 T-22 的 `T-*` 编号（落笔前核过 master 现有编号 T-13..T-22）。
+
+## 十五、本片（2026-10-12，worktree `m3bag`：T-14 复跑口径——关挂机 + 同口径 peer；纯夹具/口径，不占端口）
+
+- **入库（本片交付）**：
+  - `m3/run_pair.ps1`：`-BagEquipSequence` 分支**一并传 `-DisableAutoPlay`**（两侧同开关），并把它写进
+    `baseline.json.bag_equip_sequence`（`on step_ms=… start_delay_ms=… disable_autoplay=True`）；
+    新增 `-EmitOpsArgs`（只打印 run_bots 命令组成后退出，无副作用，供无栈自检核耦合）；
+    新增 `-PinStartPose`（固定起点 + 固定初始背包两相：预热建角 → SQL pin 角色初始态
+    ［图/坐标/Level + `characters_bagitem` 4 件 + `characters_item` 清空 + `characters_ablity` Level=1］
+    → BEFORE 快照 → 选角计分），baseline 增 `start_pose`。
+  - `tools/botload/run_bots.ps1`：新增 `-RequireCharCreated`（固定起点①预热：等 N 个「创建角色」再收工；
+    默认关 ⇒ 原路径不变；T-22 同族夹具开关）。
+  - `m3/gate_guards.ps1`：新增 `Format-M3BagEquipScope` / `ConvertTo-M3BagEquipScope` /
+    `Get-M3PeerBagEquipScopeGuard` / `Get-M3SessionBagEquipScope` —— 跨侧「同一组开关」的唯一口径。
+    另新增 `Format/ConvertTo-M3StartPose` + `Get-M3PeerStartPoseGuard` + `Get-M3SessionStartPose` +
+    `Format-M3StartPoseSql` —— 固定起点变体的唯一口径（两侧 `baseline.json.start_pose` 逐字节比）。
+  - `m3/run_m3_gate.ps1`：peer 比对前跑 `Get-M3PeerBagEquipScopeGuard` + `Get-M3PeerStartPoseGuard`
+    （场景护栏之后），不一致即跳过 diff；report 的 `bag_equip_sequence` 走同一 label，另记 `peer_start_pose`。
+  - `m3/run_bag_equip_pair.ps1`：`-DiffOnly` / `-Side rust -PeerSession` 走同一 peer 口径护栏（开关 + 起点）；
+    `-Side rust` 新增 **0.5 preflight**（whitelist **T-27**）：机判 `bins/game-svr` 是否已实现断线存档
+    （请求常量 `DB_SAVEHUMANRCD`），未实现 ⇒ PREREQ（exit 2，`-SkipSavePreflight` 仅调试）；
+    新增 `-PinStartPose` 透传；`-SelfCheckNoStack` 扩到 9+ 条（含 T-27 preflight 三态与固定起点两相）。
+    `-SelfCheckNoStack` 扩到 7 条（配置透传有/无两向 + run_pair 关挂机耦合两向 + 旧挂机 peer 必红 +
+    `scoped_diff.py selftest` 14/14 + 入口护栏/DiffOnly fail-closed）。
+    顺带修一处**潜伏 bug**：`exit (Invoke-CrossSideDiff …)` 会把函数的 `Write-Output` 全吃进子表达式
+    ⇒ 真会话的跨侧 diff 消息不打印、退出码恒 0；改为脚本作用域 `$script:CrossSideDiffRc`。
+  - `m3/selftest_gate.ps1`：新增 ④/⑤ 组 13 条构造用例（同开关绿 / 旧挂机 peer 红 autoplay_on / step_ms 不同红 /
+    两侧 off 绿 / 本侧 on+peer 缺字段红 / 本侧 off+peer 缺字段绿 / 坏 JSON 红不中断；起点同 pin 绿 /
+    pin 不同红 / 本侧 pin+peer 缺字段红 / 两侧 none 绿 / 形态认不出红）⇒ 29/29。
+  - `m3/scoped_diff.py`：新增 14/14 用例「仅 `characters.CX` 不同必红」，把「`MapName/CX/CY` 逐字节比」
+    钉成断言（这就是关挂机的原因）；`_chr_line` 增 `cx/cy`。
+  - `m3/README.md`：新增「T-14 复跑口径（关挂机 + 同口径 peer + T-27 断线存档 preflight + 固定起点变体）」小节；selftest 13/13 → 14/14。
+  - `m3/T14-复跑口径报告-20261012.md`（新）：本片报告（判据原始输出 + 残留清单）。
+  - `tests/parity/whitelist.md`：新增 **T-27**（Rust game-svr 断线/进世界存档缺失；承接卡 `openmir2-m3-gamesvr-save`）。
+- **未起栈、未占端口**：本片全程未新建 LISTENING；未用 5000/7000/7100/7200/3306。
+- **边界（逐条）**：oracle `src/**` / `sql/**` / 表结构 / 脚本语法 / 数据文件格式零改动；
+  未动 `bins/game-svr/**`（`main.rs`/`smframe.rs` 归 m2-svr）、`crates/**`、`MirClient`；
+  未 merge、未签 review。

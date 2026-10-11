@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>amulet-probe</AssemblyName>
+    <RootNamespace>AmuletProbe</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    M3 技能线（卡 openmir2-m3-combat-skills-align）第二片：oracle 实测向量生成器。
+    「施法前置」里可离线、可**真身调用**的两面：
+      - MagicManager.IsWarrSkill(int wMagIdx)                         （public static，MagicManager.cs:82-105）
+      - MagicBase.CheckAmulet(PlayObject, byte nCount, byte nType, ref short Idx)
+                                                                     （public static，MagicBase.cs:47-105）
+    附：oracle 配置常量 SystemShare.Config.MagicAttackRage / MagicHitIntervalTime
+        （供 Rust 侧 DoSpell 顶层门 spell_in_range 引用；门限语义见 MagicManager.cs:155）。
+
+    产出 = mir2-rs/tests/parity/m3/amulet-probe/vectors/amulet_vectors.{json,tsv}
+
+    只读：不连 MySQL、不写任何现网文件、不发起任何 socket。
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\..\src\M2Server\M2Server.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,928 @@
+{
+  "generated_by": "mir2-rs/tests/parity/m3/amulet-probe",
+  "oracle": {
+    "warr_skill_entry": "M2Server.Magic.MagicManager.IsWarrSkill(int)\uFF08public static\uFF0CMagicManager.cs:82-105\uFF09",
+    "check_amulet_entry": "M2Server.Magic.MagicBase.CheckAmulet(PlayObject, byte, byte, ref short)\uFF08public static\uFF0CMagicBase.cs:47-105\uFF09",
+    "items": "\u771F GameItemSystem\uFF08GetStdItem \u67E5\u8868\uFF09\u002B \u771F PlayObject.UseItems[ArmRingl=5 / Bujuk=9]",
+    "config": "SystemShare.Config.MagicAttackRage / MagicHitIntervalTime\uFF08oracle \u914D\u7F6E\u9ED8\u8BA4\u503C\uFF09",
+    "rng": "\u65E0\uFF08\u4E24\u5904\u5165\u53E3\u5747\u4E0D\u62BD\u968F\u673A\u6570\uFF09"
+  },
+  "magic_attack_rage": 8,
+  "magic_hit_interval_time": 800,
+  "warr_skill_sweep_max": 110,
+  "warr_skill_indices": [
+    3,
+    4,
+    7,
+    12,
+    25,
+    26,
+    27,
+    34,
+    38
+  ],
+  "warr_skill_sweep": [
+    {
+      "mag_idx": 0,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 1,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 2,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 3,
+      "is_warr_skill": true
+    },
+    {
+      "mag_idx": 4,
+      "is_warr_skill": true
+    },
+    {
+      "mag_idx": 5,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 6,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 7,
+      "is_warr_skill": true
+    },
+    {
+      "mag_idx": 8,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 9,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 10,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 11,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 12,
+      "is_warr_skill": true
+    },
+    {
+      "mag_idx": 13,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 14,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 15,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 16,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 17,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 18,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 19,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 20,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 21,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 22,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 23,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 24,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 25,
+      "is_warr_skill": true
+    },
+    {
+      "mag_idx": 26,
+      "is_warr_skill": true
+    },
+    {
+      "mag_idx": 27,
+      "is_warr_skill": true
+    },
+    {
+      "mag_idx": 28,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 29,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 30,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 31,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 32,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 33,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 34,
+      "is_warr_skill": true
+    },
+    {
+      "mag_idx": 35,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 36,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 37,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 38,
+      "is_warr_skill": true
+    },
+    {
+      "mag_idx": 39,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 40,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 41,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 42,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 43,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 44,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 45,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 46,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 47,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 48,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 49,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 50,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 51,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 52,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 53,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 54,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 55,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 56,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 57,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 58,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 59,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 60,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 61,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 62,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 63,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 64,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 65,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 66,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 67,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 68,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 69,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 70,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 71,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 72,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 73,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 74,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 75,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 76,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 77,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 78,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 79,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 80,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 81,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 82,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 83,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 84,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 85,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 86,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 87,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 88,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 89,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 90,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 91,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 92,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 93,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 94,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 95,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 96,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 97,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 98,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 99,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 100,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 101,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 102,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 103,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 104,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 105,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 106,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 107,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 108,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 109,
+      "is_warr_skill": false
+    },
+    {
+      "mag_idx": 110,
+      "is_warr_skill": false
+    }
+  ],
+  "amulet_cases": [
+    {
+      "id": "none_empty",
+      "count": 1,
+      "amulet_type": 1,
+      "armringl": {
+        "index": 0,
+        "std_mode": 0,
+        "shape": 0,
+        "dura": 0
+      },
+      "bujuk": {
+        "index": 0,
+        "std_mode": 0,
+        "shape": 0,
+        "dura": 0
+      },
+      "ok": false,
+      "result_idx": -1
+    },
+    {
+      "id": "none_null",
+      "count": 1,
+      "amulet_type": 1,
+      "armringl": {
+        "index": -1,
+        "std_mode": 0,
+        "shape": 0,
+        "dura": 0
+      },
+      "bujuk": {
+        "index": -1,
+        "std_mode": 0,
+        "shape": 0,
+        "dura": 0
+      },
+      "ok": false,
+      "result_idx": -1
+    },
+    {
+      "id": "t1_arm_ok",
+      "count": 1,
+      "amulet_type": 1,
+      "armringl": {
+        "index": 3,
+        "std_mode": 25,
+        "shape": 5,
+        "dura": 100
+      },
+      "bujuk": {
+        "index": 0,
+        "std_mode": 0,
+        "shape": 0,
+        "dura": 0
+      },
+      "ok": true,
+      "result_idx": 5
+    },
+    {
+      "id": "t1_arm_dura_half_rounds_up",
+      "count": 1,
+      "amulet_type": 1,
+      "armringl": {
+        "index": 3,
+        "std_mode": 25,
+        "shape": 5,
+        "dura": 50
+      },
+      "bujuk": {
+        "index": 0,
+        "std_mode": 0,
+        "shape": 0,
+        "dura": 0
+      },
+      "ok": true,
+      "result_idx": 5
+    },
+    {
+      "id": "t1_arm_dura_below",
+      "count": 1,
+      "amulet_type": 1,
+      "armringl": {
+        "index": 3,
+        "std_mode": 25,
+        "shape": 5,
+        "dura": 49
+      },
+      "bujuk": {
+        "index": 0,
+        "std_mode": 0,
+        "shape": 0,
+        "dura": 0
+      },
+      "ok": false,
+      "result_idx": -1
+    },
+    {
+      "id": "t1_arm_shape_miss",
+      "count": 1,
+      "amulet_type": 1,
+      "armringl": {
+        "index": 3,
+        "std_mode": 25,
+        "shape": 4,
+        "dura": 100
+      },
+      "bujuk": {
+        "index": 0,
+        "std_mode": 0,
+        "shape": 0,
+        "dura": 0
+      },
+      "ok": false,
+      "result_idx": -1
+    },
+    {
+      "id": "t1_arm_stdmode_miss",
+      "count": 1,
+      "amulet_type": 1,
+      "armringl": {
+        "index": 3,
+        "std_mode": 24,
+        "shape": 5,
+        "dura": 100
+      },
+      "bujuk": {
+        "index": 0,
+        "std_mode": 0,
+        "shape": 0,
+        "dura": 0
+      },
+      "ok": false,
+      "result_idx": -1
+    },
+    {
+      "id": "t1_arm_stdmode_other",
+      "count": 1,
+      "amulet_type": 1,
+      "armringl": {
+        "index": 3,
+        "std_mode": 0,
+        "shape": 5,
+        "dura": 100
+      },
+      "bujuk": {
+        "index": 0,
+        "std_mode": 0,
+        "shape": 0,
+        "dura": 0
+      },
+      "ok": false,
+      "result_idx": -1
+    },
+    {
+      "id": "t1_arm_c2_dura149_miss",
+      "count": 2,
+      "amulet_type": 1,
+      "armringl": {
+        "index": 3,
+        "std_mode": 25,
+        "shape": 5,
+        "dura": 149
+      },
+      "bujuk": {
+        "index": 0,
+        "std_mode": 0,
+        "shape": 0,
+        "dura": 0
+      },
+      "ok": false,
+      "result_idx": -1
+    },
+    {
+      "id": "t1_arm_c2_dura150_ok",
+      "count": 2,
+      "amulet_type": 1,
+      "armringl": {
+        "index": 3,
+        "std_mode": 25,
+        "shape": 5,
+        "dura": 150
+      },
+      "bujuk": {
+        "index": 0,
+        "std_mode": 0,
+        "shape": 0,
+        "dura": 0
+      },
+      "ok": true,
+      "result_idx": 5
+    },
+    {
+      "id": "t1_arm_c5_dura449_miss",
+      "count": 5,
+      "amulet_type": 1,
+      "armringl": {
+        "index": 3,
+        "std_mode": 25,
+        "shape": 5,
+        "dura": 449
+      },
+      "bujuk": {
+        "index": 0,
+        "std_mode": 0,
+        "shape": 0,
+        "dura": 0
+      },
+      "ok": false,
+      "result_idx": -1
+    },
+    {
+      "id": "t1_arm_c5_dura450_ok",
+      "count": 5,
+      "amulet_type": 1,
+      "armringl": {
+        "index": 3,
+        "std_mode": 25,
+        "shape": 5,
+        "dura": 450
+      },
+      "bujuk": {
+        "index": 0,
+        "std_mode": 0,
+        "shape": 0,
+        "dura": 0
+      },
+      "ok": true,
+      "result_idx": 5
+    },
+    {
+      "id": "t1_arm_c5_dura500_ok",
+      "count": 5,
+      "amulet_type": 1,
+      "armringl": {
+        "index": 3,
+        "std_mode": 25,
+        "shape": 5,
+        "dura": 500
+      },
+      "bujuk": {
+        "index": 0,
+        "std_mode": 0,
+        "shape": 0,
+        "dura": 0
+      },
+      "ok": true,
+      "result_idx": 5
+    },
+    {
+      "id": "t1_bujuk_fallback",
+      "count": 1,
+      "amulet_type": 1,
+      "armringl": {
+        "index": 3,
+        "std_mode": 25,
+        "shape": 4,
+        "dura": 100
+      },
+      "bujuk": {
+        "index": 4,
+        "std_mode": 25,
+        "shape": 5,
+        "dura": 100
+      },
+      "ok": true,
+      "result_idx": 9
+    },
+    {
+      "id": "t1_arm_priority_over_bujuk",
+      "count": 1,
+      "amulet_type": 1,
+      "armringl": {
+        "index": 3,
+        "std_mode": 25,
+        "shape": 5,
+        "dura": 100
+      },
+      "bujuk": {
+        "index": 4,
+        "std_mode": 25,
+        "shape": 5,
+        "dura": 100
+      },
+      "ok": true,
+      "result_idx": 5
+    },
+    {
+      "id": "t1_arm_null_bujuk_ok",
+      "count": 1,
+      "amulet_type": 1,
+      "armringl": {
+        "index": -1,
+        "std_mode": 0,
+        "shape": 0,
+        "dura": 0
+      },
+      "bujuk": {
+        "index": 4,
+        "std_mode": 25,
+        "shape": 5,
+        "dura": 100
+      },
+      "ok": true,
+      "result_idx": 9
+    },
+    {
+      "id": "t1_bujuk_stdmode_miss",
+      "count": 1,
+      "amulet_type": 1,
+      "armringl": {
+        "index": -1,
+        "std_mode": 0,
+        "shape": 0,
+        "dura": 0
+      },
+      "bujuk": {
+        "index": 4,
+        "std_mode": 24,
+        "shape": 5,
+        "dura": 100
+      },
+      "ok": false,
+      "result_idx": -1
+    },
+    {
+      "id": "t1_bujuk_index_zero",
+      "count": 1,
+      "amulet_type": 1,
+      "armringl": {
+        "index": -1,
+        "std_mode": 0,
+        "shape": 0,
+        "dura": 0
+      },
+      "bujuk": {
+        "index": 0,
+        "std_mode": 25,
+        "shape": 5,
+        "dura": 100
+      },
+      "ok": false,
+      "result_idx": -1
+    },
+    {
+      "id": "t2_arm_shape2_ok",
+      "count": 1,
+      "amulet_type": 2,
+      "armringl": {
+        "index": 3,
+        "std_mode": 25,
+        "shape": 2,
+        "dura": 100
+      },
+      "bujuk": {
+        "index": 0,
+        "std_mode": 0,
+        "shape": 0,
+        "dura": 0
+      },
+      "ok": true,
+      "result_idx": 5
+    },
+    {
+      "id": "t2_arm_shape0_ok",
+      "count": 1,
+      "amulet_type": 2,
+      "armringl": {
+        "index": 3,
+        "std_mode": 25,
+        "shape": 0,
+        "dura": 100
+      },
+      "bujuk": {
+        "index": 0,
+        "std_mode": 0,
+        "shape": 0,
+        "dura": 0
+      },
+      "ok": true,
+      "result_idx": 5
+    },
+    {
+      "id": "t2_arm_shape3_miss",
+      "count": 1,
+      "amulet_type": 2,
+      "armringl": {
+        "index": 3,
+        "std_mode": 25,
+        "shape": 3,
+        "dura": 100
+      },
+      "bujuk": {
+        "index": 0,
+        "std_mode": 0,
+        "shape": 0,
+        "dura": 0
+      },
+      "ok": false,
+      "result_idx": -1
+    },
+    {
+      "id": "t2_bujuk_ok",
+      "count": 1,
+      "amulet_type": 2,
+      "armringl": {
+        "index": -1,
+        "std_mode": 0,
+        "shape": 0,
+        "dura": 0
+      },
+      "bujuk": {
+        "index": 4,
+        "std_mode": 25,
+        "shape": 1,
+        "dura": 100
+      },
+      "ok": true,
+      "result_idx": 9
+    },
+    {
+      "id": "cross_type1_shape5_asked_type2_miss",
+      "count": 1,
+      "amulet_type": 2,
+      "armringl": {
+        "index": 3,
+        "std_mode": 25,
+        "shape": 5,
+        "dura": 100
+      },
+      "bujuk": {
+        "index": 0,
+        "std_mode": 0,
+        "shape": 0,
+        "dura": 0
+      },
+      "ok": false,
+      "result_idx": -1
+    },
+    {
+      "id": "unknown_type3_miss",
+      "count": 1,
+      "amulet_type": 3,
+      "armringl": {
+        "index": 3,
+        "std_mode": 25,
+        "shape": 5,
+        "dura": 100
+      },
+      "bujuk": {
+        "index": 0,
+        "std_mode": 0,
+        "shape": 0,
+        "dura": 0
+      },
+      "ok": false,
+      "result_idx": -1
+    }
+  ]
+}
