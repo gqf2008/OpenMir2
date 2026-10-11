@@ -9,7 +9,7 @@
     "instrument": "tests/parity/M4/evidence_hashes.py"
   },
   "hashes": {
-    "mir2-rs/tests/parity/evidence/M4/M4收口报告-20261012.md": "137a0ad1ba2fb5149b1dd5d53e05f5874d92e57214814b4e86bc9d50e8223932",
+    "mir2-rs/tests/parity/evidence/M4/M4收口报告-20261012.md": "0e782b71bb934c3537509cce0003041935f817ba6775f6a0e35e45aac677a4f8",
     "mir2-rs/tests/parity/evidence/M4/corpus-directives.txt": "7ca915b233025b2693465c8f6e621e8a4d709607b9992efb0958f9d7d9518ffb",
     "mir2-rs/tests/parity/evidence/M4/gates.txt": "843377b5b71e6ab91221b9826d7c2f76f097b14a1dd53729b357f3f90bde8abb",
     "mir2-rs/tests/parity/evidence/M4/lines-cs.jsonl": "9bec0a54425f8cdce32bf53d60639604008578ea2175ab10bfe01b4aa8e9ed27",
