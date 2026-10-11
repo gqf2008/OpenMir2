@@ -721,6 +721,14 @@ walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 prin
   余 8 条：`50/41/10/213`（等 `m3bag` 的 `feature.rs` 接缝，该片因 F-1 返工中）、`42 SM_USERNAME`、`52/752`、`46`（世界时钟）。
 - **M2 会话生命周期"按实测对齐"片已交付待审**：`3b2e71f2` @ head `b4700ce5`（账号级 `SM_SYSMESSAGE` 顶号 + `ProcessHumansIsLogined` 竞态三支复刻，
   `payMode≠0` 因 oracle 恒传 0 而只实现一支——如实登记）；已由 owner 路由给 reviewer 车道（审 `3dbb4707..3b2e71f2` 差量）。
+- **M2 验收夹具已"先验一步"**（2026-10-11 18:37）：`powershell -File tools/m2-acceptance/selftest.ps1` ⇒ **33/33 GREEN**（`SUMMARY total=33 failed=0`，
+  报告 `E:/tmp/m2-acceptance/selftest-20261011-183718/selftest.json`）——手册每一步"判红/判绿"的口径都经构造输入验证（含 `PREREQ_MISSING=2` 不静默通过、
+  有 RED 不许被说成前置、金标准 schema 坏必红）。⇒ 端口窗口一空就能直接跑真机验收，**不会因为夹具本身坏了白占窗口**。
+- **M3 背包/装备片的 F-1 返工已交付待审**：head `156ddba1`（base `85cac081`）——13 张真实 dbsnap 表全部登记（真快照 extract `RC=4→0`，115 行/111 族表行）、
+  selftest **13/13**（真实 13 表 manifest extract 必须 GREEN + 删任一登记必红）、族表跨侧 `--canonical --fixed-newchr` diff GREEN（5 表/111 行×2）、
+  新增 `oracle_source_sha256` 源码锚、`T-12/T-13`→`T-13/T-14`。**M2 帧 `50/41/10/213` 要的 `feature.rs` 就在这一片**（它不碰 `main.rs`/`smframe.rs`）。
+- **M4 剩余三项已开卡**：`openmir2-m4-parity-cases`（issue `03d6c58a63d889dfadc11e378bd0ea3460fc55c5`）—— parsecount 两侧对拍表 / 6 类关键 NPC 用例 /
+  "双侧逐行多重集差 = 0" 门禁落地；车道排在 `m3gs` 之后（先有卡，别只留在 §17 散文里）。
 
 ## 18. S3：B-8 命令码位移修复（2026-10-10，oracle 行为变更）
 
