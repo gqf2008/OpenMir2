@@ -1,0 +1,25 @@
+{
+  "files": 1, "loaded": 1, "missing": 0, "panics": 0,
+  "stats": {
+    "scripts": 1, "records": 1, "procedures": 1,
+    "conditions": 1, "actions": 2, "else_actions": 0,
+    "define_substitutions": 2, "call_loads": 0, "call_failures": 0,
+    "include_loads": 0, "include_failures": 0, "goods": 0, "price_rate_lines": 0,
+    "item_type_lines": 0, "merchant_cmd_lines": 0, "parse_errors": 0,
+    "label_renames": 0
+  },
+  "unknown_conditions": {
+  },
+  "unknown_actions": {
+  },
+  "structure_digest": {
+    "Npc_def/define.txt": {"hash": "1effd1782e851e85", "s": 1, "r": 1, "p": 1, "c": 1, "a": 2, "e": 0}
+  },
+  "text_digest": {
+    "Npc_def/define.txt": "f8e462e72bac4330"
+  },
+  "errors": [
+  ],
+  "warnings": [
+  ]
+}

@@ -1,0 +1,5 @@
+Envir: E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m4cases\mir2-rs\tests\parity\M4\fixtures\macroenvir
+文件: 1 加载: 1 缺失: 0 异常: 0
+脚本 1 标签 1 过程 1 条件 1 动作 2 否则动作 0
+商品 0 物品类型项 0
+解析错误: 0 加载失败: 0 文件未找到: 0 其他错误: 0

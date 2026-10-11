@@ -1,0 +1,137 @@
+Envir: E:\MirServer\M2GameSvr\Envir
+文件: 639 加载: 639 缺失: 0 异常: 0
+脚本 178 标签 2386 过程 3563 条件 2137 动作 8869 否则动作 953
+宏展开 0 #CALL成功 22 #CALL失败 0 #INCLUDE 0 商品 574
+解析错误: 427；解码异常文件: 0
+命令派发分类（语料实测）：
+  动作/engine-switch:BatchDelay: 252 次（1 个 code）
+  动作/engine-switch:BatchMove: 252 次（1 个 code）
+  动作/engine-switch:Break: 1425 次（1 个 code）
+  动作/engine-switch:Goto: 884 次（1 个 code）
+  动作/engine-switch:Param1: 3 次（1 个 code）
+  动作/engine-switch:Param2: 3 次（1 个 code）
+  动作/engine-switch:Param3: 3 次（1 个 code）
+  动作/engine-switch:Param4: 3 次（1 个 code）
+  动作/engine-switch:Take: 454 次（1 个 code）
+  动作/engine-switch:Takew: 71 次（1 个 code）
+  动作/handler:ActionOfAddNameList: 9 次（1 个 code）
+  动作/handler:ActionOfAddSkill: 205 次（1 个 code）
+  动作/handler:ActionOfAddUseDateList: 2 次（1 个 code）
+  动作/handler:ActionOfAutoGetExp: 1 次（1 个 code）
+  动作/handler:ActionOfBreakTimereCall: 1 次（1 个 code）
+  动作/handler:ActionOfCalcVar: 228 次（1 个 code）
+  动作/handler:ActionOfChangeCreditPoint: 40 次（1 个 code）
+  动作/handler:ActionOfChangeExp: 18 次（1 个 code）
+  动作/handler:ActionOfChangeHairStyle: 2 次（1 个 code）
+  动作/handler:ActionOfChangeLevel: 5 次（1 个 code）
+  动作/handler:ActionOfChangeMode: 6 次（1 个 code）
+  动作/handler:ActionOfChangePkPoint: 6 次（1 个 code）
+  动作/handler:ActionOfClearDelayGoto: 10 次（1 个 code）
+  动作/handler:ActionOfClearMapMon: 2 次（1 个 code）
+  动作/handler:ActionOfClose: 168 次（1 个 code）
+  动作/handler:ActionOfDecInteger: 9 次（1 个 code）
+  动作/handler:ActionOfDelAccountList: 606 次（1 个 code）
+  动作/handler:ActionOfDelNameList: 2 次（1 个 code）
+  动作/handler:ActionOfDelUseDateList: 2 次（1 个 code）
+  动作/handler:ActionOfDelayCall: 5 次（1 个 code）
+  动作/handler:ActionOfGameGold: 672 次（1 个 code）
+  动作/handler:ActionOfGamePoint: 82 次（1 个 code）
+  动作/handler:ActionOfGiveItem: 586 次（1 个 code）
+  动作/handler:ActionOfGmExecute: 166 次（1 个 code）
+  动作/handler:ActionOfHumanHp: 6 次（1 个 code）
+  动作/handler:ActionOfHumanMp: 6 次（1 个 code）
+  动作/handler:ActionOfIncInteger: 338 次（1 个 code）
+  动作/handler:ActionOfKick: 13 次（1 个 code）
+  动作/handler:ActionOfKill: 2 次（1 个 code）
+  动作/handler:ActionOfLineMsg: 1370 次（1 个 code）
+  动作/handler:ActionOfLoadVar: 102 次（1 个 code）
+  动作/handler:ActionOfMap: 25 次（1 个 code）
+  动作/handler:ActionOfMapMove: 139 次（1 个 code）
+  动作/handler:ActionOfMarry: 4 次（1 个 code）
+  动作/handler:ActionOfMessageBox: 585 次（1 个 code）
+  动作/handler:ActionOfMission: 3 次（1 个 code）
+  动作/handler:ActionOfMobPlace: 111 次（1 个 code）
+  动作/handler:ActionOfMonGenEx: 2 次（1 个 code）
+  动作/handler:ActionOfMovData: 105 次（1 个 code）
+  动作/handler:ActionOfMovrData: 85 次（1 个 code）
+  动作/handler:ActionOfMulData: 32 次（1 个 code）
+  动作/handler:ActionOfOffLine: 4 次（1 个 code）
+  动作/handler:ActionOfPlayDice: 42 次（1 个 code）
+  动作/handler:ActionOfQueryItemDlg: 5 次（1 个 code）
+  动作/handler:ActionOfQueryValue: 65 次（1 个 code）
+  动作/handler:ActionOfReNewLevel: 1 次（1 个 code）
+  动作/handler:ActionOfRepairAllItem: 12 次（1 个 code）
+  动作/handler:ActionOfRestReNewLevel: 1 次（1 个 code）
+  动作/handler:ActionOfSaveVar: 228 次（1 个 code）
+  动作/handler:ActionOfSet: 77 次（1 个 code）
+  动作/handler:ActionOfSetScriptFlag: 2 次（1 个 code）
+  动作/handler:ActionOfSetSendMsgFlag: 2 次（1 个 code）
+  动作/handler:ActionOfTimereCall: 1 次（1 个 code）
+  动作/handler:ActionOfUnMarry: 4 次（1 个 code）
+  动作/handler:ActionOfUpgradeDlgItem: 59 次（1 个 code）
+  动作/handler:ActionOfUpgradeItemsEx: 34 次（1 个 code）
+  动作/handler:ActionOfVar: 102 次（1 个 code）
+  动作/ignored: 72 次（1 个 code）
+  条件/engine-switch:CHECKDURAEVA: 7 次（1 个 code）
+  条件/engine-switch:CHECKITEMW: 36 次（1 个 code）
+  条件/engine-switch:KILLBYHUM: 1 次（1 个 code）
+  条件/handler:ConditionOfCheck: 62 次（1 个 code）
+  条件/handler:ConditionOfCheckAccountList: 606 次（1 个 code）
+  条件/handler:ConditionOfCheckBagSize: 1 次（1 个 code）
+  条件/handler:ConditionOfCheckCreditPoint: 28 次（1 个 code）
+  条件/handler:ConditionOfCheckGameGold: 47 次（1 个 code）
+  条件/handler:ConditionOfCheckGamePoint: 24 次（1 个 code）
+  条件/handler:ConditionOfCheckGold: 102 次（1 个 code）
+  条件/handler:ConditionOfCheckHaveGuild: 9 次（1 个 code）
+  条件/handler:ConditionOfCheckHum: 2 次（1 个 code）
+  条件/handler:ConditionOfCheckIsCastleaGuild: 1 次（1 个 code）
+  条件/handler:ConditionOfCheckItem: 354 次（1 个 code）
+  条件/handler:ConditionOfCheckItemAddValue: 120 次（1 个 code）
+  条件/handler:ConditionOfCheckJob: 31 次（1 个 code）
+  条件/handler:ConditionOfCheckLevel: 20 次（1 个 code）
+  条件/handler:ConditionOfCheckLevelEx: 99 次（1 个 code）
+  条件/handler:ConditionOfCheckMarry: 10 次（1 个 code）
+  条件/handler:ConditionOfCheckNameDateList: 2 次（1 个 code）
+  条件/handler:ConditionOfCheckNameList: 20 次（1 个 code）
+  条件/handler:ConditionOfCheckOnLine: 14 次（1 个 code）
+  条件/handler:ConditionOfCheckPoseDir: 1 次（1 个 code）
+  条件/handler:ConditionOfCheckPoseGender: 1 次（1 个 code）
+  条件/handler:ConditionOfCheckPoseLevel: 1 次（1 个 code）
+  条件/handler:ConditionOfCheckPoseMarry: 1 次（1 个 code）
+  条件/handler:ConditionOfCheckReNewLevel: 2 次（1 个 code）
+  条件/handler:ConditionOfCheckSafeZone: 1 次（1 个 code）
+  条件/handler:ConditionOfCheckUseItem: 5 次（1 个 code）
+  条件/handler:ConditionOfCheckVar: 41 次（1 个 code）
+  条件/handler:ConditionOfEqual: 296 次（1 个 code）
+  条件/handler:ConditionOfGender: 5 次（1 个 code）
+  条件/handler:ConditionOfIosnMap: 4 次（1 个 code）
+  条件/handler:ConditionOfIsAdmin: 8 次（1 个 code）
+  条件/handler:ConditionOfIsDupMode: 2 次（1 个 code）
+  条件/handler:ConditionOfIsNewHuman: 2 次（1 个 code）
+  条件/handler:ConditionOfLapge: 61 次（1 个 code）
+  条件/handler:ConditionOfRandom: 32 次（1 个 code）
+  条件/handler:ConditionOfSmall: 20 次（1 个 code）
+  条件/ignored: 58 次（2 个 code）
+  未注册（C# 静默忽略）合计: 130 次；条件 distinct code 41 / 动作 distinct code 68
+语料派发目标覆盖：已实现 106 个（11829 次调用）；未实现 0 个（按调用次数降序）：
+错误明细（前 20 条）:
+  [ScriptError] MapQuest_def/QManage - 副本.txt 行20: SETOFFLINEPLAY ON
+  [ScriptError] MapQuest_def/QManage - 副本.txt 行56: ADDLINELIST .\QuestDiary\游戏登陆\GM登陆记录.txt <$IPLOCAL>┃<$IPADDR>
+  [ScriptError] MapQuest_def/QManage.txt 行27: <color=clLime 设置每秒经验：><color=clOlive 注释：默认3000经验> <修改每秒经验/@修改每秒经验> | 当前值[ <$GLOBAL(每秒经验数)> ]\
+  [ScriptError] MapQuest_def/QManage.txt 行28: <color=clLime 假人回城血量：><color=clOlive 注释：默认值只 30  ><修改回城血量/@修改回城血量> | 当前值[ <$GLOBAL(假人回城血)> ]\
+  [ScriptError] MapQuest_def/QManage.txt 行29: <color=clLime 假人随机血量：><color=clOlive 注释：默认值只150  ><修改随机血量/@修改随机血量> | 当前值[ <$GLOBAL(假人随机血)> ]\
+  [ScriptError] MapQuest_def/QManage.txt 行30: <color=clLime 主号每秒回血：><color=clOlive 主号：每秒回血数量 ><修改主号回血/@修改主号回血> | 当前值[ <$GLOBAL(主号回血数)> ]\
+  [ScriptError] MapQuest_def/QManage.txt 行31: <color=clLime 英雄每秒回血：><color=clOlive 英雄：每秒回血数量 ><修改英雄回血/@修改英雄回血> | 当前值[ <$GLOBAL(英雄回血数)> ]\
+  [ScriptError] MapQuest_def/QManage.txt 行350: RecallHero
+  [ScriptError] MapQuest_def/QManage.txt 行351: CHANGEATTACKMODE 1
+  [ScriptError] Market_Def/LEGM2.CC假人NPC/假人上线NPC-jiaren.txt 行296: RecallHero
+  [ScriptError] Market_Def/LEGM2.CC假人NPC/假人上线NPC-jiaren.txt 行297: CHANGEATTACKMODE 1
+  [ScriptError] Market_Def/LEGM2.CC假人NPC/假人上线NPC-jiaren.txt 行303: RecallHero
+  [ScriptError] Market_Def/LEGM2.CC假人NPC/假人上线NPC-jiaren.txt 行304: CHANGEATTACKMODE 1
+  [ScriptError] Market_Def/LEGM2.CC假人NPC/假人上线NPC-jiaren.txt 行310: SetScTimer 9 1
+  [ScriptError] Market_Def/LEGM2.CC假人NPC/假人上线NPC-jiaren.txt 行312: OFFLINEPLAYEX <$GLOBAL(假人挂机时长)>
+  [ScriptError] Market_Def/LEGM2.CC假人NPC/假人上线NPC-jiaren.txt 行314: ReadRandomLine .\QuestDiary\LEGM2.CC假人系统\假人回收公式.txt S21
+  [ScriptError] Market_Def/LEGM2.CC假人NPC/假人上线NPC-jiaren.txt 行316: ReadRandomLine .\QuestDiary\LEGM2.CC假人系统\假人充值公式.txt S23
+  [ScriptError] Market_Def/LEGM2.CC假人NPC/假人上线NPC-jiaren.txt 行333: ReadRandomLine .\QuestDiary\LEGM2.CC假人系统\假人充值公式.txt S23
+  [ScriptError] Market_Def/LEGM2.CC假人NPC/假人上线NPC-jiaren.txt 行340: ReadRandomLine .\QuestDiary\LEGM2.CC假人系统\假人回收公式.txt S21
+  [ScriptError] Market_Def/LEGM2.CC假人NPC/假人上线NPC-jiaren.txt 行350: AbilityAdd 4 30 60
