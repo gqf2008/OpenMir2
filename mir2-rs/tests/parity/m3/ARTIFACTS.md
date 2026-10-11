@@ -99,7 +99,7 @@ Remove-Item -Recurse -Force mir2-rs/tests/parity/m3/sessions/*/shadow-run* -Erro
 
 ## 九、本片（2026-10-11，worktree `m3bag`：使用药品 handler 核心）实际残留清单
 
-> 该片当时 `eat_vectors.json` = 8 模板 / 13 用例；后续 slices 已增为 12 模板 / 19 用例（见 §十一/§十二）。
+> 该片当时 `eat_vectors.json` = 8 模板 / 13 用例；后续 slices 已增为 14 模板 / 22 用例（见 §十一/§十二/§十三）。
 
 - **入库（证据，随 patch 提交）**：
   - `m3/fixtures/eat_vectors.json`（oracle 真身探针产出的 `CM_EAT` 向量：8 模板 / 13 用例；
@@ -155,7 +155,6 @@ Remove-Item -Recurse -Force mir2-rs/tests/parity/m3/sessions/*/shadow-run* -Erro
   未动 `crates/world/**`/`crates/envir/**`/`crates/world-bevy/**`。
 
 ## 十二、本片（2026-10-12，worktree `m3bag`：`CM_EAT` 的 StdMode 1 食物）实际残留清单
-
 - **入库（证据，随 patch 提交）**：
   - `m3/fixtures/eat_vectors.json`（oracle 真身探针重生成：**12 模板 / 19 用例**；StdMode 1 四例
     `eat_ok_stdmode1_hunger_no_recalc`/`_recalc`/`_clamp`、`eat_fail_nodrug_stdmode1`；ctx/case 增
@@ -167,6 +166,28 @@ Remove-Item -Recurse -Force mir2-rs/tests/parity/m3/sessions/*/shadow-run* -Erro
     `hunger_status`；`RM_CHARSTATUSCHANGED=10139`/`RM_MYSTATUS=8102`/`HUNGER_STATUS_MAX=5000`；
     `my_status()`；StdMode 1 分支；`notices` 按 `(byte)ident` 升序 = `MsgQueue` 出队序）
   - `m3/README.md` / `m3/ARTIFACTS.md` / `tests/parity/whitelist.md`（口径同步：本片做 0/1/2 + boNODRUG）
+- **未入库/临时物**：探针 `bin/`、`obj/`（`mir2-rs/.gitignore` 覆盖）；隔离构建目录 `E:/tmp/openmir2-m3bag-target`；
+  红检打印留在本 lane 会话/报告（`E:/tmp/openmir2-watch/last-m3bag.md`）。
+- **未起栈、未占端口**（5000/7000/7100/7200 未使用）；`E:/MirServer` 十端口状态与开工前一致。
+- **冻结基线**：`src/**`（C# oracle）一行未改（探针只**引用** `src/M2Server` 编译，不改源）；
+  表结构/脚本/数据文件格式未改；未动 `main.rs`/`smframe.rs`（接线归 m2-svr）、
+  未动 `crates/world/**`/`crates/envir/**`/`crates/world-bevy/**`。
+
+## 十三、本片（2026-10-12，worktree `m3bag`：`CM_EAT` 的 StdMode 31 `UseStdModeFunItem`）实际残留清单
+
+- **入库（证据，随 patch 提交）**：
+  - `m3/fixtures/eat_vectors.json`（oracle 真身探针重生成：**14 模板 / 22 用例**；StdMode 31 三例
+    `eat_ok_stdmode31_funitem`/`eat_fail_stdmode31_no_functionnpc`/`eat_fail_stdmode31_unbind_bag_full`；
+    ctx 增 `function_npc_present`，模板 DTO 增 `ani_count`；源锚改为
+    `d6280417163829787318a8901b60c6c3b2042c7cfe3cd57d4285fe6cdd031c75`（anchor 文件列表增
+    `src/OpenMir2/Grobal2.cs`））
+  - `m3/eat-probe/Program.cs`（`NpcProxy.CreateMerchant()`；`Ctx` 增 `functionNpc`；`RunCase` 按
+    `ctx.functionNpc` 设/清 `SystemShare.FunctionNPC`；`Tpl` 增 `AniCount`；模板 `2015`（AniCount 5）/
+    `2016`（AniCount 0）；三条新用例（满包 42 件）；`oracle_source` 增 `UseStdModeFunItem`/`MaxBagItem` 行号）
+  - `mir2-rs/bins/game-svr/src/useitem.rs`（`UseItemContext` 增 `function_npc_present`；`use_item` 增
+    `31 =>` 分支（`ani_count != 0 && function_npc_present ⇒ eaten`）；`template()` 增 `ani_count`；新增
+    `stdmode31_funitem_eats_only_when_function_npc_present` 单测/红检）
+  - `m3/README.md` / `m3/ARTIFACTS.md` / `tests/parity/whitelist.md`（口径同步：T-17 收窄到 3/4 + 31 解包）
 - **未入库/临时物**：探针 `bin/`、`obj/`（`mir2-rs/.gitignore` 覆盖）；隔离构建目录 `E:/tmp/openmir2-m3bag-target`；
   红检打印留在本 lane 会话/报告（`E:/tmp/openmir2-watch/last-m3bag.md`）。
 - **未起栈、未占端口**（5000/7000/7100/7200 未使用）；`E:/MirServer` 十端口状态与开工前一致。

@@ -147,6 +147,10 @@ internal class NpcProxy : DispatchProxy
 {
     public static INormNpc Create() => DispatchProxy.Create<INormNpc, NpcProxy>();
 
+    /// <summary>`SystemShare.FunctionNPC` 的替身（`IMerchant`；`UseStdModeFunItem` 只判它非 null，
+    /// 再调 `GotoLable` 做脚本派发——派发本身不在本接缝的观测面内，替身吞掉即可）。</summary>
+    public static IMerchant CreateMerchant() => DispatchProxy.Create<IMerchant, NpcProxy>();
+
     protected override object Invoke(MethodInfo targetMethod, object[] args)
     {
         var rt = targetMethod.ReturnType;
@@ -175,6 +179,8 @@ internal static class Program
         public int actorId = 0x1234;
         public bool noDrug = false;
         public int hungerStatus = 0;
+        /// <summary>`SystemShare.FunctionNPC != null`（`UseStdModeFunItem` 的唯一判据，`PlayObject.Base.cs:1072`）。</summary>
+        public bool functionNpc = false;
     }
 
     private static UserItem ToUser(Spec s)
@@ -339,6 +345,7 @@ internal static class Program
             po.ItemList.Add(ToUser(s));
         }
         po.Envir.Flag.boNODRUG = ctx.noDrug;
+        SystemShare.FunctionNPC = ctx.functionNpc ? NpcProxy.CreateMerchant() : null;
 
         var mi = typeof(PlayObject).GetMethod("ClientUseItems", BindingFlags.Instance | BindingFlags.NonPublic)
             ?? throw new MissingMethodException("PlayObject.ClientUseItems");
@@ -347,6 +354,7 @@ internal static class Program
         // 输入快照必须在 invoke **之前**取。
         var wabilBeforeDto = AbilityDto(wabilPre);
         mi.Invoke(po, new object[] { requestMakeIndex, requestName });
+        SystemShare.FunctionNPC = null;
 
         var messages = Drain(GetMsgQueue(po));
         var immediate = net.Frames.ToList();
@@ -360,6 +368,7 @@ internal static class Program
                 dead = ctx.dead,
                 actor_id = ctx.actorId,
                 no_drug = ctx.noDrug,
+                function_npc_present = ctx.functionNpc,
                 red_msg_fcolor = (int)SystemShare.Config.RedMsgFColor,
                 red_msg_bcolor = (int)SystemShare.Config.RedMsgBColor,
             },
@@ -386,7 +395,7 @@ internal static class Program
         };
     }
 
-    private static StdItem Tpl(string name, byte stdMode, byte shape, byte weight, ushort ac = 0, ushort mac = 0, ushort duraMax = 0)
+    private static StdItem Tpl(string name, byte stdMode, byte shape, byte weight, ushort ac = 0, ushort mac = 0, ushort duraMax = 0, byte aniCount = 0)
         => new StdItem
         {
             Name = name,
@@ -396,6 +405,7 @@ internal static class Program
             AC = ac,
             MAC = mac,
             DuraMax = duraMax,
+            AniCount = aniCount,
         };
 
     private static Spec S(int makeIndex, ushort index, ushort dura = 10, ushort duraMax = 20)
@@ -429,6 +439,8 @@ internal static class Program
         table.Items[2012] = Tpl("food_small", 1, 0, 2, duraMax: 200);        // StdMode 1：不跨档（不触发 RefMyStatus）
         table.Items[2013] = Tpl("food_recalc", 1, 0, 2, duraMax: 12000);     // StdMode 1：0→1200 跨档 ⇒ RefMyStatus
         table.Items[2014] = Tpl("food_clamp", 1, 0, 2, duraMax: 2000);       // StdMode 1：夹到 5000（不跨档）
+        table.Items[2015] = Tpl("funitem_dispatch", 31, 1, 3, aniCount: 5);  // StdMode 31：AniCount!=0 ⇒ UseStdModeFunItem
+        table.Items[2016] = Tpl("unbind_full", 31, 1, 3, aniCount: 0);        // StdMode 31：AniCount==0 ⇒ 解包（容量不足时不吃）
         // 2009 故意不注册 ⇒ 模板缺失分支
 
         var cases = new List<object>();
@@ -490,6 +502,25 @@ internal static class Program
         cases.Add(RunCase(table, net, "eat_fail_nodrug_no_consume", new Ctx { noDrug = true },
             new List<Spec> { S(1, 2001) }, 1, "hp_mp_fixed",
             BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+        // StdMode 31：`UseStdModeFunItem`（`PlayObject.Base.cs:1072`）= `SystemShare.FunctionNPC != null`。
+        // 存在 ⇒ `GotoLable("@StdModeFunc" + AniCount)` 后返回 true ⇒ 吃 + SM_EAT_OK + RM_WEIGHTCHANGED。
+        cases.Add(RunCase(table, net, "eat_ok_stdmode31_funitem", new Ctx { functionNpc = true },
+            new List<Spec> { S(1, 2015) }, 1, "funitem_dispatch",
+            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+        // FunctionNPC 缺失 ⇒ `UseStdModeFunItem` 返回 false ⇒ 不吃。
+        cases.Add(RunCase(table, net, "eat_fail_stdmode31_no_functionnpc", new Ctx { functionNpc = false },
+            new List<Spec> { S(1, 2015) }, 1, "funitem_dispatch",
+            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+        // StdMode 31 / AniCount==0：解包需 `ItemList.Count + 6 - 1 <= Grobal2.MaxBagItem`（46）。
+        // 背包 42 件 ⇒ 42+5=47 > 46 ⇒ 容量守卫失败（未到 `ClientUseItemsGetUnBindItems`）⇒ 不吃。
+        var unbindFullBag = new List<Spec> { S(1, 2016) };
+        for (int i = 0; i < 41; i++)
+        {
+            unbindFullBag.Add(S(200 + i, 0));
+        }
+        cases.Add(RunCase(table, net, "eat_fail_stdmode31_unbind_bag_full", new Ctx(),
+            unbindFullBag, 1, "unbind_full",
+            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
 
         var templateDtos = new Dictionary<string, object>();
         foreach (var kv in table.Items)
@@ -504,6 +535,7 @@ internal static class Program
                 ac = t.AC,
                 mac = t.MAC,
                 dura_max = t.DuraMax,
+                ani_count = t.AniCount,
             };
         }
 
@@ -515,6 +547,7 @@ internal static class Program
             "src/M2Server/Actor/BaseObject.Message.cs",
             "src/M2Server/Player/PlayObject.Socket.cs",
             "src/Modules/SystemModule/Data/SendMessage.cs",
+            "src/OpenMir2/Grobal2.cs",
         };
         string sourceAnchor = SourceAnchorSha256(oracleSourceFiles);
         string asmPath = typeof(M2Share).Assembly.Location;
@@ -533,6 +566,8 @@ internal static class Program
                 "src/M2Server/Player/PlayObject.Message.cs:826 (CM_EAT -> ClientUseItems)",
                 "src/M2Server/Player/PlayObject.Operate.cs:601 (ClientUseItems)",
                 "src/M2Server/Player/PlayObject.Base.cs:2047 (EatItems; StdMode 0/1/2)",
+                "src/M2Server/Player/PlayObject.Base.cs:1072 (UseStdModeFunItem; StdMode 31 AniCount!=0)",
+                "src/OpenMir2/Grobal2.cs:62 (MaxBagItem = 46; StdMode 31 AniCount==0 容量守卫)",
                 "src/M2Server/Player/PlayObject.Base.cs:288 (RefMyStatus = RecalcAbilitys + RM_MYSTATUS)",
                 "src/M2Server/Player/PlayObject.Base.cs:1183 (GetMyStatus = min(HungerStatus/1000, 4))",
                 "src/M2Server/Actor/BaseObject.cs:952 (IncHealthSpell)",
@@ -545,7 +580,7 @@ internal static class Program
                 "有效物品 = 模板（探针 GetUpgradeStdItem 是恒等拷贝；Desc 升级/StdMode 变换不在本片作用域）",
                 "即时帧 = SendDefMessage/SendSocket 直接写 gate buffer（SM_EAT_OK=635 / SM_EAT_FAIL=636）",
                 "延时通知 = SendMsg 入 MsgQueue（PriorityQueue，优先级 = (byte)wIdent），探针按出队序读；真实协议上它晚于即时帧由消息泵下发",
-                "StdMode 2（无效果）已覆盖；StdMode 1/3/4/31（食物/HungerStatus、ExtraAbil buff/GetExp、书、解包）本片未实现，已登记（T-17）",
+                "StdMode 2（无效果）已覆盖；StdMode 31 的 `UseStdModeFunItem`（AniCount!=0，只看 `SystemShare.FunctionNPC` 是否存在）与 AniCount==0 的容量不足分支已覆盖；StdMode 3/4 与 StdMode 31 的解包分支（`UnbindList`，容量足够时解包出 6 件）本片未实现，已登记（T-17）",
                 "Envir.Flag.boNODRUG 分支（地图禁药）已覆盖：SysMsg(Red) 入 MsgQueue（RM_SYSMESSAGE=11004，颜色取自 Config.RedMsgFColor/RedMsgBColor），物品不消耗、背包不动、落 SM_EAT_FAIL",
             },
             templates = templateDtos,
