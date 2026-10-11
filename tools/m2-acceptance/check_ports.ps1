@@ -42,10 +42,9 @@ if ([string]::IsNullOrEmpty($OutFile)) {
   $OutFile = Join-Path "E:\tmp\m2-acceptance" ("ports-$stamp.json")
 }
 
-# 已知的 Rust 二进制名（cargo run / target 下的产物），用于命令行判定。
-$RustNames = @("login-gate", "sel-gate", "login-srv", "db-srv", "game-gate", "game-svr")
-# 现网 C# 服务端目录（端口被它占着 = 验收①失败）。
-$CsharpRoot = "E:\MirServer"
+# R2-1：实现归属分类器抽成共享文件，`check_ports.ps1` 与 `selftest.ps1` 用**同一口径**
+# （此前 selftest 第①条的内联判据比这里窄，本机实况的期望退出码会算错）。
+. (Join-Path $Here "portclassify.ps1")
 
 function Get-PortOwner([int]$Port) {
   $conn = Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue |
@@ -58,18 +57,7 @@ function Get-PortOwner([int]$Port) {
   $exe = if ($cim) { $cim.ExecutablePath } else { "" }
   $cmd = if ($cim) { $cim.CommandLine } else { "" }
 
-  $impl = "unknown"
-  $probe = ($exe + " " + $cmd)
-  if ($exe -like "$CsharpRoot\*" -or $probe -like "*$CsharpRoot\*") {
-    $impl = "csharp"
-  }
-  elseif ($exe -like "*\mir2-rs\target\*" -or $probe -like "*\mir2-rs\target\*") {
-    $impl = "rust"
-  }
-  else {
-    $base = [System.IO.Path]::GetFileNameWithoutExtension($name)
-    if ($RustNames -contains $base) { $impl = "rust" }
-  }
+  $impl = Get-M2PortImpl -Exe $exe -CommandLine $cmd -Name $name
   return [pscustomobject]@{
     port = $Port; listening = $true; pid = $conn.OwningProcess
     name = $name; path = $exe; command_line = $cmd; impl = $impl

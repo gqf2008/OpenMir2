@@ -12,6 +12,7 @@
     ③b s2c_diff.py            金标准自比⇒0(GREEN) / 尾字节改坏⇒1(RED) / 只改 recog⇒0 / 缺文件⇒2
     ③c check_db_paths.ps1     三路径字段级相同⇒0(GREEN) / 改一个被比对字段⇒1(RED) / 缺 after⇒2
     ①  check_ports.ps1        对**本机实况端口**取判：全 Rust⇒0 / 有非 Rust 在听⇒1 / 有端口没听⇒2
+   ①a portclassify.ps1       实现归属分类器（与 check_ports.ps1 共用）：C#根/target路径/基名回落/unknown 5 例
     ⇢  run_acceptance.ps1     全 PREREQ⇒2 / 有 RED⇒1（聚合口径，不许把红说成前置）
 
   全部是**只读/构造夹具**：不起栈、不起客户端、不占端口（①只 `Get-NetTCPConnection` 取实况）。
@@ -39,6 +40,8 @@ $ErrorActionPreference = "Stop"
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = (Resolve-Path (Join-Path $Here "..\..")).Path
 $Golden = Join-Path $RepoRoot "mir2-rs\tests\golden\c-line-baseline-c3-20261010.jsonl"
+# R2-1：①的实现归属分类器与 check_ports.ps1 共用同一文件（不再内联一套更窄的判据）。
+. (Join-Path $Here "portclassify.ps1")
 if ([string]::IsNullOrEmpty($OutDir)) {
   $OutDir = Join-Path "E:\tmp\m2-acceptance" ("selftest-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
 }
@@ -160,6 +163,26 @@ Test-Case "db/改一字段=RED" 1 (Run-Ps $dbPaths @("-Mode", "diff", "-CsharpDi
 Remove-Item -Force (Join-Path $rust "shutdown-after.jsonl")
 Test-Case "db/缺抽取件=PREREQ" 2 (Run-Ps $dbPaths @("-Mode", "diff", "-CsharpDir", $csharp, "-RustDir", $rust, "-OutFile", (Join-Path $Work "db-missing.json"))) "PREREQ_MISSING" "shutdown 缺 after"
 
+# ---------------------------------------------------------------- ① 分类器口径（R2-1：与 check_ports.ps1 同一函数）
+Write-Output "① portclassify.ps1（实现归属分类器：check_ports.ps1 与 selftest.ps1 共用同一口径）"
+function Test-Impl([string]$Desc, [string]$Exe, [string]$Cmd, [string]$Name, [string]$Expect) {
+  $script:Total++
+  $got = Get-M2PortImpl -Exe $Exe -CommandLine $Cmd -Name $Name
+  $ok = ($got -eq $Expect)
+  if (-not $ok) { $script:Failed++ }
+  $tag = if ($ok) { "OK  " } else { "FAIL" }
+  Write-Output ("  [{0}] {1,-40} expect={2} actual={3}" -f $tag, $Desc, $Expect, $got)
+  $script:Checks.Add([pscustomobject]@{
+      name = $Desc; expect_rc = $Expect; actual_rc = $got
+      expect_out = ""; ok = $ok; detail = "impl classifier"
+    })
+}
+Test-Impl "impl/C# 根目录=csharp"        "E:\MirServer\GameSvr.exe"                    "" "GameSvr.exe" "csharp"
+Test-Impl "impl/mir2-rs target=rust"     "E:\repo\mir2-rs\target\debug\game-svr.exe"  "" "game-svr.exe" "rust"
+Test-Impl "impl/隔离 target(m2svr)=rust" "E:\tmp\openmir2-m2svr-target\debug\game-svr.exe" "" "game-svr.exe" "rust"
+Test-Impl "impl/基名回落 rust"           "C:\dev\game-svr.exe"                        "" "game-svr.exe" "rust"
+Test-Impl "impl/未知基名=unknown"        "C:\dev\foo.exe"                             "" "foo.exe" "unknown"
+
 # ---------------------------------------------------------------- ① 端口实况（只读）
 if (-not $SkipLivePorts) {
   Write-Output ("① check_ports.ps1（只读实况端口 " + ($LivePorts -join "/") + "）")
@@ -171,9 +194,8 @@ if (-not $SkipLivePorts) {
     if (-not $conn) { $notListening += $p; continue }
     $listening += $p
     $cim = Get-CimInstance Win32_Process -Filter ("ProcessId=$($conn.OwningProcess)") -ErrorAction SilentlyContinue
-    $probe = ("{0} {1}" -f $cim.ExecutablePath, $cim.CommandLine)
-    $isRust = ($probe -like "*\mir2-rs\target\*") -or ($probe -like "*\m2svr-target\*")
-    if (-not $isRust) { $nonRust += $p }
+    $impl = Get-M2PortImpl -Exe $cim.ExecutablePath -CommandLine $cim.CommandLine -Name $cim.Name
+    if ($impl -ne "rust") { $nonRust += $p }
   }
   $expectPorts = if ($notListening.Count -gt 0) { 2 } elseif ($nonRust.Count -gt 0) { 1 } else { 0 }
   $expectPat = if ($expectPorts -eq 2) { "PREREQ_MISSING" } elseif ($expectPorts -eq 1) { "RED: 端口" } else { "GREEN: 四个端口" }

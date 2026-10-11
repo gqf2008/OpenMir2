@@ -41,7 +41,7 @@ powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/run_acceptance.ps1 
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/selftest.ps1
-# 14 条口径全 OK ⇒ exit 0；任何一条不符 ⇒ exit 1（见 §8）
+# 19 条口径全 OK ⇒ exit 0；任何一条不符 ⇒ exit 1（见 §8）
 ```
 
 ---
@@ -209,8 +209,8 @@ powershell -File tools/m2-acceptance/check_db_paths.ps1 -Mode diff `
 | 54 | `SM_MAPDESCRIPTION` | `Envir.MapDesc` + `nMusicid=Flag.Music?MusicId:-1` | `Env.Flag`（envir **未解析**） | `MapInfoEntry.desc` 只是原文，Flag/音乐 id 未解析 ⇒ 缺输入 |
 | 5008 | `SM_GAMEGOLDNAME` | `GameGold/GamePoint` ✅（记录）；元宝名/金币名 | 记录字段（已合）/ 配置层 | 只剩金币名配置（未开卡） |
 | 1106 | `SM_VERSION_FAIL` | `ClientFile1_CRC/ClientFile2_CRC` | 配置层（未开卡） | `Config.ClientFile*_CRC` 落地 |
-| 52 | `SM_ABILITY` | `Gold/Job/GameGold` ✅（记录）；`WAbil` 编码 | ✅ `record.rs`（字段）/ record 编码**未公开** | `record.rs` 只有私有 `encode_opt_ability`；`EncodeMessage(t:class)` 要「MemoryPack 序列化后**丢首字节**」⇒ 需补一个公开 `encode_ability` |
-| 752 | `SM_SUBABILITY` | `AntiMagic/HitPoint/SpeedPoint/…` | ✅ `record.rs`（`WAbil` 字段已全） | 同 52 的编码接缝 + 触发点（`RM_LEVELUP`/`RM_ABILITY` 支） |
+| 52 | `SM_ABILITY` | `Gold/Job/GameGold` ✅（记录）；`WAbil` 编码 | ✅ 记录字段（已合）+ 编码接缝（**本片补**） | **接缝已补**（`record::encode_ability`，序列化后丢成员数首字节，金标准 #12 锚定）；仍差**触发点接线**（`RM_ABILITY`/`RM_LEVELUP` 世界事件 → 下发） |
+| 752 | `SM_SUBABILITY` | `AntiMagic/HitPoint/SpeedPoint/AntiPoison/PoisonRecover/HealthRecover/SpellRecover` | ❌ 这些是 **world 侧 `PlayObject`/`BaseObject` 状态**（`BaseObject.cs:105-121`，由 `RecalcAbilitys` 算出），并不在 `CharacterData`；`WAbil` 编码接缝已补 | 同 52 的触发点，且这 7 个值需先建 world 侧 `RecalcAbilitys` 产出（未建）⇒ 仍缺输入 |
 | 811 | `SM_ADJUST_BONUS` | `BonusPoint` + A/B/C 模板 | ✅ `record.rs`（`bonus_point`/`bonus_abil`）+ 配置层 | A/B/C 取 `Config.BonusAbilofXxx/NakedAbilofXxx`（配置层未开卡） |
 | 46 | `SM_DAYCHANGING` | `Bright/DayBright` | `Env.Flag`（envir **未解析**） | 同 51 的 `DayBright()`；`Bright` 属全局 |
 | 10 | `SM_TURN` | `CharDesc(Feature+Status)` + `msg` | 物品层（未开卡）+ world | `Feature` 同 50 的 `GetFeatureToLong` ⇒ 需物品系统 |
@@ -218,6 +218,7 @@ powershell -File tools/m2-acceptance/check_db_paths.ps1 -Mode diff `
 > **本片新查明的两条精确阻塞**（比「哪张卡」更可操作）：
 > 1. `crates/envir` **只解析格属性/门/点位/尺寸/`map_id`**，**没有** `Envir.Flag`（`FightZone/SafeArea/DayLight/boDarkness/Music/MusicId`）与 `MapDesc` 的语义 —— 帧 `51/766/54/46` 卡在这里；要么给 envir 补 `MapInfo` Flag 解析（触及 `crates/envir/**`，本片禁改），要么新开卡。
 > 2. `record.rs` 全字段已入库，但**没有公开的 `Ability` 编码**（只有私有 `encode_opt_ability`）—— 帧 `52/752` 卡在这里（`EncodeMessage` 需「序列化后丢首字节」的半开区间口径）。
+>    **2026-10-11 后续**：本片已补上公开 `record::encode_ability`（金标准 #12 逐字节锚定）⇒ **52 的输入接缝已解除**；752 另需 world 侧 `RecalcAbilitys` 产出（见上表）。
 > 表中「配置层」（`658/11029/1106/5008/811`）尚无独立卡：需要在 M2 后续切片里开卡，或评估归并。
 
 ### 5.2 本片接线：`CurMap`（逻辑名）→ `map_id` + 真地图尺寸（集成点 ④）
@@ -237,6 +238,22 @@ powershell -File tools/m2-acceptance/check_db_paths.ps1 -Mode diff `
 **红检**：把 `resolve_map_id` 改成 `id_of(cur_map).unwrap_or(0)` ⇒ `unknown_cur_map_is_rejected` 必红
 （原始输出 `E:\tmp\openmir2-watch\pi-m2svr-wire-redcheck.log`）。
 
+### 5.3 顺序判据② 的「生产路径覆盖率」与触发组口径（本片登记）
+
+生产路径只下发**整个 oracle 触发组**输入都已齐备的帧；登记时容易漏掉「组」这一层：
+
+- `SM_LOGON(50)` / `SM_FEATURECHANGED(41)` / `SM_ATTACKMODE(213)` 在 oracle 里是**同一个** `PlayObject.SendLogon()`
+  （`PlayObject.cs:1127-1147`）里连发的三条；`213` 的输入（`AttatckMode`）虽已可从记录取到，
+  但 `50/41` 的 `GetFeatureToLong()` 仍需物品/装备系统 ⇒ **本片不单独下发 213**（否则会在客户端上
+  出现“有攻击模式、无登录帧”的半组，比不下发更坏），登记为**整组就绪后再发**。
+- `SM_ABILITY(52)`/`SM_SUBABILITY(752)` 在 oracle 由 `RM_ABILITY`/`RM_LEVELUP` 触发（`PlayObject.Message.cs:1673/1732`）；
+  52 的记录输入与编码接缝已齐，但触发点属 S3 世界事件接线；752 还缺 world 侧状态。
+- 因此本片**不改生产路径的下发集合**（仍只有 `SM_NEWMAP(51)`）；`EnterWorldInputs::frames()` 的 16 条
+  顺序判据是编码层判据，生产覆盖率按“组”推进。
+
+> 结论口径：**“已合入/已备输入”不是接口“已下发”**。以后每接一帧，都要先确认它所在的
+> oracle 触发组能产出的成员与顺序，再改生产集合，并同步 §5.1 与本表。
+
 ---
 
 ## 6. 门禁（改本目录后必须全绿）
@@ -248,7 +265,8 @@ cargo test --workspace --offline
 cargo run -p msgcodegen -- --check
 ```
 
-本目录是脚本/手册，不引入 Rust 代码；R4-1 单测在 `mir2-rs/bins/game-svr/src/main.rs`（game-svr 包）。
+本目录是脚本/手册，不引入 Rust 代码；R4-1 单测在 `mir2-rs/bins/game-svr/src/main.rs`（game-svr 包），
+52 输入接缝的单测在 `mir2-rs/bins/game-svr/src/record.rs`（`encode_ability_matches_golden_frame_12_tail`）。
 
 ## 7. 本片自检证据（无栈）与残留物清单
 
@@ -261,7 +279,8 @@ cargo run -p msgcodegen -- --check
 | s2c 对账（同序） | `s2c_diff.py --rust <重导件>` | `GREEN`（16 条同序 + 逐字节 0，归一化仅 recog） | 同上 |
 | s2c 红检 | 改 recog ⇒ 仍 GREEN；改尾一字节 ⇒ RED | 归一化只吸 recog、字节差异必红 | 同日志 / `E:\tmp\rust-body-broken.jsonl` |
 | 三路径 DB diff 驱动 | `check_db_paths.ps1 -Mode diff` 合成夹具 | 同件 GREEN / 改一字段 RED（复用 `scoped_diff.py`） | 控制台（rc 0 / rc 1） |
-| **手册判红自检** | `selftest.ps1`（本片新增） | **14/14 OK**：②截图 4 例、③b s2c 4 例（尾字节改坏⇒RED、只改 recog⇒GREEN）、③c DB 3 例、①端口实况判属、聚合器 2 例 | `E:\tmp\openmir2-watch\pi-m2svr-selftest.log` |
+| **手册判红自检** | `selftest.ps1` | **19/19 OK**：②截图 4 例、③b s2c 4 例（尾字节改坏⇒RED、只改 recog⇒GREEN）、③c DB 3 例、①端口实况判属 1 例、①a 分类器 5 例（R2-1）、聚合器 2 例 | `E:\tmp\openmir2-watch\pi-m2svr-selftest.log` |
+| 52 输入接缝 | `cargo test -p game-svr --offline encode_ability` | 1/1 OK（`encode_ability` 逐字节等于金标准 #12 的 `EncodeMessage(WAbil)` 体） | `E:\tmp\openmir2-watch\pi-m2svr-ability-test.log` |
 | R4-1 红检 | 改回 `unwrap_or(0)` | `route_to_gate_rejects_out_of_range_gate_idx` FAILED；还原后 passed | `E:\tmp\openmir2-watch\pi-m2svr-r41-redcheck.log` |
 | **CurMap→map_id 接线单测** | `cargo test -p game-svr --offline mapwire` | 3/3 OK（逻辑名→id / 未知名必拒 / 无 Envir 回退） | 含在 `pi-m2svr-wire-test.log` |
 | **CurMap→map_id 红检** | 把 `resolve_map_id` 改成 `id_of(cur_map).unwrap_or(0)` | `unknown_cur_map_is_rejected` FAILED（rc=101）；还原后 3/3 OK | `E:\tmp\openmir2-watch\pi-m2svr-wire-redcheck.log` |
@@ -270,8 +289,9 @@ cargo run -p msgcodegen -- --check
 残留物清单：
 
 - `tools/m2-acceptance/selftest.ps1`、`tools/m2-acceptance/mutate_capture.py`（本片新增：判红/判绿自检 + s2c 红检夹具生成器）；
+- `tools/m2-acceptance/portclassify.ps1`（本片新增：R2-1 的共享分类器，供 `check_ports.ps1`/`selftest.ps1` 同一口径使用）；
 - `E:\tmp\m2-acceptance\`：无栈自检产生的 `ports-*.json`/`shots-*.json`/`run-*`/`s2c-selftest/` 等，保留作证据；
-- `E:\tmp\m2-acceptance\selftest-*\`：`selftest.ps1` 的 14 条构造夹具与 `selftest.json`（证据，保留）；
+- `E:\tmp\m2-acceptance\selftest-*\`：`selftest.ps1` 的 19 条构造夹具与 `selftest.json`（证据，保留）；
 - `E:\tmp\openmir2-watch\pi-m2svr-*.log`：四门禁、红检、自检原始输出；
 - `E:\tmp\rust-recog-changed.jsonl` / `rust-body-broken.jsonl`：s2c 归一化红检输入（证据）；
 - `E:\tmp\openmir2-watch\pi-m2svr-wire-redcheck.log`：`CurMap→map_id` 接线红检原始输出（证据，保留）；
@@ -287,7 +307,7 @@ cargo run -p msgcodegen -- --check
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/selftest.ps1
-# 14 条全 OK ⇒ exit 0；任何一条不符 ⇒ exit 1（SELFTEST FAIL）
+# 19 条全 OK ⇒ exit 0；任何一条不符 ⇒ exit 1（SELFTEST FAIL）
 ```
 
 | # | 步骤 | 构造输入 | 期望 |
@@ -303,7 +323,12 @@ powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/selftest.ps1
 | 9 | ③c | 三路径字段级相同 | `0` + `GREEN: 小退/掉线…` |
 | 10 | ③c | `shutdown` 改一个被比对字段 | `1` + `RED: 路径 DB diff 未归零` |
 | 11 | ③c | 缺 `shutdown-after.jsonl` | `2` + `PREREQ_MISSING` |
-| 12 | ① | **本机实况** 5000/7000/7100/7200 | 全 Rust `0` / 有非 Rust 在听 `1` / 有端口没听 `2`（期望由同一判据现场算出，不写死） |
+| 12 | ① | **本机实况** 5000/7000/7100/7200 | 全 Rust `0` / 有非 Rust 在听 `1` / 有端口没听 `2`（期望由**共享分类器** `portclassify.ps1`——与 `check_ports.ps1` 同一函数——现场算出，不写死） |
+| 12a | ①a | 分类器：`E:\MirServer\GameSvr.exe` | `csharp` |
+| 12b | ①a | 分类器：`…\mir2-rs\target\…\game-svr.exe` | `rust` |
+| 12c | ①a | 分类器：`E:\tmp\openmir2-m2svr-target\…\game-svr.exe` | `rust` |
+| 12d | ①a | 分类器：`C:\dev\game-svr.exe`（基名回落） | `rust`（**R2-1**：旧内联判据在此会算成非 Rust） |
+| 12e | ①a | 分类器：`C:\dev\foo.exe` | `unknown` |
 | 13 | 聚合 | `run_acceptance.ps1 -SelfCheckNoStack` | `2` + `PREREQ_MISSING` |
 | 14 | 聚合 | `-SkipPorts -SkipS2c -SkipDb -ShotsDir <6/7>` | `1` + `RED: 有步骤判红`（**红不许被说成前置**） |
 
