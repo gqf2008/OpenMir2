@@ -38,6 +38,9 @@ namespace BotSrv
             MShare.g_boBagEquipSequence = _options.BagEquipSequence;
             MShare.g_nBagEquipStepMs = _options.BagEquipStepMs;
             MShare.g_nBagEquipStartDelayMs = _options.BagEquipStartDelayMs;
+            // M1③ 退出路径夹具（白名单 M1-EXIT）：进世界后发 CM_SOFTCLOSE；默认 0 = 原行为
+            MShare.g_nSoftCloseAfterWorldMs = _options.SoftCloseAfterWorldMs;
+            MShare.g_boDisableAutoPlay = _options.DisableAutoPlay;
             runThread = new Thread(Run) { IsBackground = true };
             LogService.Info("服务器名称:{0} 服务器IP:{1} 服务器端口:{2}", _options.ServerName, _options.Address, _options.Port);
             LogService.Info("初始化机器人数量:{0} 登录机器人总数量:{1}", _options.ChrCount, _options.TotalChrCount);
@@ -49,6 +52,15 @@ namespace BotSrv
             {
                 LogService.Info("固定背包/装备序列: 启用 起始等待={0}ms 步间隔={1}ms（拾取→装备→卸下→丢弃→用药；见 RobotPlayer.BagEquipSequenceTick）",
                     _options.BagEquipStartDelayMs, _options.BagEquipStepMs);
+            }
+            if (_options.SoftCloseAfterWorldMs > 0)
+            {
+                LogService.Info("退出路径夹具: 进世界后 {0}ms 发 CM_SOFTCLOSE(1009)（小退；见 RobotPlayer.SoftCloseTick）",
+                    _options.SoftCloseAfterWorldMs);
+            }
+            if (_options.DisableAutoPlay)
+            {
+                LogService.Info("退出路径夹具: 已关闭自动挂机（DisableAutoPlay；见 ClientManager.RunAutoPlay）");
             }
         }
 

@@ -1,0 +1,2 @@
+# 收工停栈后实测（netstat LISTEN）：十端口全 DOWN，仅共享 MySQL 3306 保留
+  TCP    127.0.0.1:3306         0.0.0.0:0              LISTENING       28712

@@ -1,0 +1,5 @@
+# 运行态归属（每侧一套栈；唯一变量 = DBSrv 实现）
+# 出栈时实测（netstat LISTEN）：
+#   C# DBSrv 侧: 5000=GameSrv / 5100+6000+5700=DBSrv.exe(C#) / 5500+5600=LoginSrv / 7000=LoginGate / 7100=SelGate / 7200=GameGate
+#   Rust DBSrv 侧: 5000=GameSrv(同一 C# exe) / 5100+6000+5700=db-srv.exe(Rust) / 其余同左
+# 每侧栈由 side_stack.ps1 -Dbsrv <csharp|rust> 起停；运行态归属逐进程见各 baseline.json 的 runtime_procs。

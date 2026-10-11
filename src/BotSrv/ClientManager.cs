@@ -136,6 +136,12 @@ namespace BotSrv
 
         private void RunAutoPlay()
         {
+            // M1③ 退出路径夹具（白名单 M1-EXIT）：关掉自动挂机（默认 false = 原行为）。
+            // 挂机走位是客户端无种子 RNG 驱动的随机游走 ⇒ 存档 CX/CY 不可复现，跨侧对拍会假红。
+            if (MShare.g_boDisableAutoPlay)
+            {
+                return;
+            }
             AutoRunTick = HUtil32.GetTickCount();
             if (_autoList.Count > 0)
             {
