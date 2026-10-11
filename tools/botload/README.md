@@ -5,9 +5,10 @@
 整栈一条命令见 `tools/e2e/stack_e2e.ps1`。
 
 ```powershell
-# 整栈一条命令：停栈 → 批量开号 → 起栈 → 工具自测+金标准 → 压测档位 200/500/1000 → 收尾
+# 整栈一条命令：停栈 → 批量开号 → 起栈 → 工具自测+金标准 → 压测档位 200/500/1000 → 收尾/停栈
+# （C6 第 4 轮的验收命令：同一命令连跑两次，三档 verdict 必须一致）
 powershell -ExecutionPolicy Bypass -File tools/e2e/stack_e2e.ps1 `
-  -ProvisionAccounts -ProvisionCount 1000 -SkipFlow -LoadTiers 200,500,1000
+  -ProvisionAccounts -LoadTiers 200,500,1000 -SkipFlow -StopStackAtEnd
 
 # 只跑单档（栈已在跑）
 powershell -ExecutionPolicy Bypass -File tools/botload/load_gate.ps1 -Tiers 200 -HoldSec 60
@@ -180,3 +181,42 @@ BotSrv 的挂机/移动层建立在**跨假人共享的全局态**上（`MShare.
   它**不能**把 `start-all.ps1` 的输出接成管道再等它退出——服务进程会继承管道写端，父进程退出后管道不关闭 ⇒
   调用方永久挂住（上一批"多档连跑要杀任务树"的真因）。现在的做法：stop 重定向到文件、start 用独立进程起、
   **只等端口就绪**。
+
+## 2026-10-11 第 4 轮：跨轮幂等 + 登录上限根因（T-9）+ 越界（T-10）+ `2>&1` 挂死
+
+`tools/e2e/stack_e2e.ps1 -ProvisionAccounts -LoadTiers 200,500,1000 -SkipFlow -StopStackAtEnd` 连跑两轮：
+
+| 轮 | 产物目录 | tier-200 | tier-500 | tier-1000 | 开号 |
+| --- | --- | --- | --- | --- | --- |
+| A | `tests/loadgate/load-20261011-121254/` | GREEN | GREEN | GREEN | `account=1000` |
+| B | `tests/loadgate/load-20261011-121953/` | GREEN | GREEN | GREEN | `account=1000`（未增长） |
+
+两轮三档全部 `login=100% / conn_lost_steady=0 / samples>0 / internal_errors=0`，verdict 完全一致。
+
+### 1. tier-500/1000 登录爬坡上限 = **假人侧丢弃**，不是服务端吞吐（已修，T-9）
+
+第 3 轮把上限归因为"服务端/客户端并发上限 ~350-390"，**错了**。第 4 轮把假人侧观测补全后，tier-500 的
+`load_stats.ndjson` 直接给出反证：`ident_counts[529]=500`（服务端对**全部** 500 个假人回了 `SM_PASSOK_SELECTSERVER`）
+而 `login_ok=179=ident_counts[520]=ident_counts[530]`（只有 179 个被假人处理）⇒ 丢包 100% 在假人侧：
+`RobotPlayer.Operate.DecodeMessagePacket` 的"登录期响应"闸门用的是**跨假人共享**的 `MShare.MySelf == null`，
+第一个假人 `SM_LOGON` 把它置上后再不为 null ⇒ 其余假人的登录响应全被静默丢弃。
+改成本会话的 `!_inWorld`（`MarkInWorld` 在收到本假人自己的 `SM_LOGON` 时置位）后，三档 100% 登录（T-9）。
+
+### 2. 开号跨轮幂等（第 3 轮已修，本轮复核）
+
+`account.Account` 无唯一索引 ⇒ 幂等只能在开号 SQL 里用 `WHERE NOT EXISTS`（内容冻结不许加唯一索引，见 T-7）。
+本轮两连跑日志均为 `BULK_OK ... account=1000 protection=1000`，**不再每轮 +1000**。
+
+### 3. 自动挂机越界 ⇒ `internal_errors` 非零（已修，T-10）
+
+T-6 只给 `TMap.CanMove` 补了上界守卫；`GetDoor`/`IsDoorOpen`/`CanFly`/`OpenDoor`/`CloseDoor` 仍会在
+地图右/下边界外越界。tier-1000 稳态每 tick 抛 `IndexOutOfRangeException`（`internal_errors` 线性增长到 1667）；
+加完整堆栈定位到 `TMap.GetDoor ← RobotPlayer.CheckDoorAction ← ProcessActionMessages` 后统一补 `InMapRange`（T-10）。
+
+### 4. `2>&1` 收集子进程输出 ⇒ 整条命令跑完却不退出（工具链第三处同源坑）
+
+`stack_e2e` 原来用 `$out = & powershell ... -Command ("& '<load_gate.ps1>' ...") 2>&1` 收集压测档位输出。
+`2>&1` 建的是**管道**；load_gate 用 `Start-Process` 起的**长驻服务**（GameSvr/网关/MySQL）会继承管道写端，
+于是父进程要等 EOF，而 EOF 要等所有服务死 ⇒ **summary 已落盘、栈还在跑、命令永不返回**（104822/105943 与上一轮遗留的
+`stack_e2e` 进程都是它）。改为直接继承 stdout（`& powershell -File ...`，不建管道）后，两轮命令都自行退出。
+**注意**：若在外部用管道包 `stack_e2e`（如 `... | tee log`），同样会因服务进程继承管道而挂住——请重定向到文件。

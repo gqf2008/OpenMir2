@@ -178,8 +178,10 @@ namespace BotSrv
                 LoadMetrics.InternalError();
                 if (LoadMetrics.ShouldLogInternalError())
                 {
+                    // 打完整 ToString()（含堆栈）——只记 type+message 时定位不到越界点
+                    // （2026-10-11 第 4 轮实测：internal_errors 非零但不知道是哪一行）。
                     LogService.Warn("假人[" + robot.LoginId + "]异常被兜住[" + LoadMetrics.InternalErrors + "]："
-                        + ex.GetType().Name + ": " + ex.Message);
+                        + ex.ToString());
                 }
             }
         }

@@ -32,7 +32,11 @@
   powershell -ExecutionPolicy Bypass -File tools/botload/load_gate.ps1 -SelfTestRed   # 红检：指向无监听端口，必须判红
 #>
 param(
-  [int[]]$Tiers = @(200, 500, 1000),
+  # 档位。**故意用 string 收**（同 tools/e2e/stack_e2e.ps1）：`powershell -File` 下
+  # `-Tiers 200,500,1000` 会被当成带千分位的整数 2005001000（50 万假人）；string 拿到原样文本，
+  # `-File` ⇒ "200,500,1000"、`-Command "& … -Tiers 200,500,1000"` ⇒ "200 500 1000"，
+  # 都被下面的 `[,\s]+` 拆回数组。见 tests/loadgate/README.md。
+  [string]$Tiers = "200,500,1000",
   [int]$HoldSec = 60,
   [int]$RampTimeoutSec = 600,
   [string]$Prefix = "loadbot",
@@ -56,13 +60,30 @@ param(
 $ErrorActionPreference = "Stop"
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = (Resolve-Path (Join-Path $Here "..\..")).Path
+
+# 档位参数归一化 + 防线（2026-10-11 实测：`-File -Tiers 500,1000` 变 5001000，整档跑满 600s 才 RED）：
+#   ① 把 string 拆回 [int[]]：`,  空格 都算分隔符 ⇒ `-File`/`-Command` 两种传法都正确；
+#   ② 单档数值超出合理上限即**响亮失败**，不再静默把「逗号拼接」当 50 万人的档位跑掉。
+$MaxPlausibleTier = 5000
+$TierList = @()
+if ($Tiers.Trim() -ne "") {
+    $TierList = @($Tiers -split '[,\s]+' | Where-Object { $_ -ne "" } | ForEach-Object { [int]$_ })
+}
+if ($TierList.Count -eq 0) { throw "档位不能为空" }
+if ($TierList.Count -eq 1 -and $TierList[0] -gt $MaxPlausibleTier) {
+    throw ("档位 " + $TierList[0] + " 超出上限 " + $MaxPlausibleTier +
+           "：疑似经 -File 传递时被逗号拼接（200,500,1000 -> 2005001000）。" +
+           "请用 -Tiers '200,500,1000'（-File 下加引号）或 -Command ""& 'tools\botload\load_gate.ps1' -Tiers 200,500,1000""。")
+}
+if (@($TierList | Where-Object { $_ -le 0 }).Count -gt 0) { throw "档位必须为正整数" }
+
 $BotBinDir = Join-Path $RepoRoot "src\BotSrv\bin\Release"
 $BotExe = Join-Path $BotBinDir "BotSrv.exe"
 $StartAll = "E:\MirServer\start-all.ps1"
 $MemProcNames = @("GameSrv", "LoginSrv", "DBSrv", "LoginGate", "SelGate", "GameGate", "mysqld")
 
 if ($SelfTestRed) {
-    $Tiers = @(3)
+    $TierList = @(3)
     $Port = 17999
     $RampTimeoutSec = 30
     $HoldSec = 5
@@ -125,7 +146,7 @@ function Restart-Stack {
 }
 
 $tierReports = @()
-foreach ($n in $Tiers) {
+foreach ($n in $TierList) {
     # 三档基线一律从**干净栈**开始（含第一档）：上一批的实测教训是"同一条栈连跑两档，
     # 第二档假人能登录但进不了世界"。整栈重启 ~60s，比拿被污染的栈当基线便宜。
     if ($RestartStackPerTier) { Restart-Stack }
@@ -230,7 +251,7 @@ foreach ($n in $Tiers) {
 $summaryPath = Join-Path $OutDir "load_gate_summary.json"
 @{
   out_dir    = $OutDir
-  tiers      = $Tiers
+  tiers      = $TierList
   stagger_ms = $StaggerMs
   hold_sec   = $HoldSec
   caliber    = "tick 服务时延 = BotSrv 收到 `#+GD/<rtime>! 的时刻 − rtime（Environment.TickCount，全机同域）；详见 tools/botload/load_report.py"

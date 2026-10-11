@@ -25,7 +25,11 @@ load-<时间戳>/
 
 | 目录 | 档位 | 说明 |
 | --- | --- | --- |
-| `load-20261011-022821/` | 200 / 500 / 1000 | C6 退回补做第 3 轮（修掉“一条命令”三处硬伤后的三档连跑）：**tier-200 GREEN；tier-500/1000 RED**——RED 只卡在跨轮登录爬坡，tick 本身健康（P99 16ms、`internal_errors=0`）。见下“第 3 轮结论与遗留” |
+| `load-20261011-022821/` | 200 / 500 / 1000 | 第 3 轮（修掉“一条命令”三处硬伤后的三档连跑）：**tier-200 GREEN；tier-500/1000 RED**——RED 卡在跨轮登录爬坡，当时未定位 |
+| `load-20261011-104822/` | 500 | 第 4 轮 **T-9 修前**诊断：`login_ok=179/500`，`ident_counts[529]=500`（服务端全回）vs `520=530=179`（假人侧只处理了 179）——把“服务端吞吐上限”证伪 |
+| `load-20261011-114831/` | 200 / 500 / 1000 | 第 4 轮 **T-10 修前**：三档 verdict GREEN 但 `internal_errors` 非零（500:159 / 1000:16，自动挂机越界——见图下根因） |
+| `load-20261011-121254/` | 200 / 500 / 1000 | 第 4 轮 **验收 A**（最终代码）：三档 GREEN、`login=100%`、`conn_lost_steady=0`、`internal_errors=0`、`samples>0`；同目录 `stack_e2e.out.txt` = 整条命令 stdout（含开号幂等行） |
+| `load-20261011-121953/` | 200 / 500 / 1000 | 第 4 轮 **验收 B**（同一命令第二次）：三档 verdict 与 A **完全一致**、`samples>0`、`internal_errors=0` |
 
 ## 第 3 轮结论与遗留（2026-10-11）
 
@@ -40,6 +44,52 @@ load-<时间戳>/
 - 开号确实不幂等，且已修：`account.Account` 上**没有唯一索引**（只有非唯一的 `_WA_Sys_FLD_LOGINID`），所以旧的 `INSERT IGNORE` 每跑一轮就重复插 1000 行——loadbot0 累积到 6 行、全表 11354 行 / 7151 不同名（已去重回 7151）。**内容冻结不允许给 oracle 表加唯一索引，所以幂等只能在开号 SQL 里用 `WHERE NOT EXISTS` 做**（已改，现在跑一轮只报 `account=1000`，不再增长）。
 - 但**去重 + 开号幂等并没有把 tier-500/1000 拉绿**：在干净（无重复）库上重跑，tier-500 仍卡在 **~353/500（70.6%）**、tier-1000 更低，`internal_errors` 0~125、tick 本身健康（P99 16ms、样本充足）。说明除「账号重复」外，还有一个**负载客户端/服务端的并发登录上限（~350–390/500）**未被定位，因此**不能**把 RED 归结为已修项。
 - 结论：tier-200 可绿且可复跑（P99 16ms、登录 100%、`internal_errors=0`），可直接给 M5 当「同屏 small」基线；tier-500/1000 的登录爬坡上限是**独立的未解项**，需单独定位（建议下一步查 LoginSrv/LoginGate 的并发上限与 BotSrv 登录错峰/重试，而不是继续查开号）。
+
+> **第 4 轮已把上述“遗留”定位并修掉**：登录上限的真因在**假人侧**（T-9），不是服务端吞吐。见下。
+
+## 第 4 轮结论（2026-10-11）：跨轮幂等 + 登录上限根因（T-9）+ 边界越界（T-10）
+
+验收命令（**同一命令连跑两次**，`-LoadTiers` 写成逗号串 —— 第 4 轮已把该参数改成 string 接收，
+`-File` 下不再被当千分位拼成 2005001000）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/e2e/stack_e2e.ps1 `
+  -ProvisionAccounts -LoadTiers 200,500,1000 -SkipFlow -StopStackAtEnd
+```
+
+两轮结果（`load-20261011-121254` = A、`load-20261011-121953` = B）：
+
+| 档位 | A verdict | B verdict | A/B `login` | A/B `conn_lost_steady` | A/B `internal_errors` | A/B `samples` |
+| --- | --- | --- | --- | --- | --- | --- |
+| 200 | GREEN | GREEN | 100% / 100% | 0 / 0 | 0 / 0 | 1033 / 940 |
+| 500 | GREEN | GREEN | 100% / 100% | 0 / 0 | 0 / 0 | 777 / 927 |
+| 1000 | GREEN | GREEN | 100% / 100% | 0 / 0 | 0 / 0 | 877 / 765 |
+
+开号也幂等：两轮日志均 `BULK_OK ... account=1000 protection=1000`（不再每轮 +1000）。
+
+**根因 1 — 登录上限 ~179/500 是假人侧丢弃（已修，T-9）**：`RobotPlayer.Operate.DecodeMessagePacket`
+的“登录期响应”闸门用了**跨假人共享**的 `MShare.MySelf == null`——第一个假人 `SM_LOGON` 把它置上后
+再不为 null，其余假人的登录响应全被静默丢弃。`104822/tier-500` 的观测直接证伪了“服务端上限”：
+`ident_counts[529]=500`（服务端对全部 500 个回了 `SM_PASSOK_SELECTSERVER`）而 `login_ok=179=ident_counts[520]=ident_counts[530]`。
+改成本会话的 `!_inWorld` 后三档 100% 登录（单假人行为逐字节不变）。
+
+**根因 2 — 自动挂机越界 ⇒ `internal_errors` 非零（已修，T-10）**：T-6 只给 `TMap.CanMove` 补了上界守卫，
+`GetDoor`/`IsDoorOpen`/`CanFly`/`OpenDoor`/`CloseDoor` 仍会在地图右/下边界外越界。tier-1000 稳态每 tick 抛
+`IndexOutOfRangeException`（`114831` 里 `internal_errors` 线性增长）；加完整堆栈后定位：
+
+```
+System.IndexOutOfRangeException: Index was outside the bounds of the array.
+   at BotSrv.Maps.TMap.GetDoor(Int32 mx, Int32 my) in src/BotSrv/Maps/TMap.cs:line 392
+   at BotSrv.Player.RobotPlayer.CheckDoorAction(Int32 dx, Int32 dy) in src/BotSrv/Player/RobotPlayer.cs:line 1934
+   at BotSrv.Player.RobotPlayer.ProcessActionMessages() in src/BotSrv/Player/RobotPlayer.cs:line 673
+```
+
+统一补 `TMap.InMapRange(cx, cy)` 后两轮三档 `internal_errors=0`。
+
+**工具链第三处同源坑 — 命令跑完却不退出（已修）**：`stack_e2e` 原来用 `& powershell ... 2>&1` 收集
+`load_gate` 输出；`2>&1` 是**管道**，load_gate 起的**长驻服务**（GameSvr/网关/MySQL）继承管道写端 ⇒ 父进程
+读到 EOF 之前一直挂着（表现：summary 已落盘、栈还在跑、命令永不返回）。改成直接继承 stdout（不建管道）后，
+两轮都自行退出。**外部也别用管道包 `stack_e2e`**（`... | tee log` 会复发；请重定向到文件）。
 
 每档固定四件：`load_stats.ndjson`（BotSrv 每 5s 累计快照）、`mem.ndjson`（各服务进程 WS/私有字节/CPU）、
 `report.json`（该档归算 + verdict + fails）、`load_gate_summary.json`（全档汇总，在目录根）。
@@ -70,6 +120,7 @@ powershell -ExecutionPolicy Bypass -Command "& 'tools\botload\load_gate.ps1' -Ti
 python tools/botload/load_report.py aggregate --summary tests/loadgate/load-<时间戳>/load_gate_summary.json
 ```
 
-**注意数组参数的传法**：`-Tiers 200,500,1000` 必须经 `-Command "& …"` 传（`powershell -File` 会把逗号列表
-拼成一个整数 ⇒ 档位变 `2005001000`、假人数失控，2026-10-11 实测踩过）。红检：
-`load_report.py selftest`（含"缺 tick 默认判 RED"回归项）与 `load_gate.ps1 -SelfTestRed`。
+**注意数组参数的传法**：`-Tiers` / `-LoadTiers` 自 C6 第 4 轮起都按 **string** 接收并自己拆
+（`[,\s]+`）⇒ `powershell -File ... -LoadTiers 200,500,1000` 与 `-Command "& … -LoadTiers 200,500,1000"`
+两种写法都正确（旧写法会被当千分位整数拼成 `2005001000`）；单档数值超过上限（>5000，疑似被拼接）会**响亮失败**
+而不是静默跑 50 万假人。红检：`load_report.py selftest`（含“缺 tick 默认判 RED”回归项）与 `load_gate.ps1 -SelfTestRed`。

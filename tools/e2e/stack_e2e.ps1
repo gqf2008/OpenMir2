@@ -23,7 +23,12 @@
   powershell -ExecutionPolicy Bypass -File tools/e2e/stack_e2e.ps1 -SelfTestRed -SkipFlow    # 红检：要求一个不存在的阶段，必须 RED
 #>
 param(
-  [int[]]$LoadTiers = @(),
+  # 档位。**故意用 string 收**：`powershell -File` 下 `-LoadTiers 200,500,1000` 会先按
+  # 「带千分位分隔符的整数」解析成 2005001000（逗号当分组符 ⇒ 50 万假人、整档 0% 并跑满 600s），
+  # 用 string 才能拿到原样文本（`-File` ⇒ "200,500,1000"；
+  # `-Command "& … -LoadTiers 200,500,1000"` ⇒ "200 500 1000"，两种都被下面的 `[,\s]+` 拆回数组）。
+  # 2026-10-11 实测第三处同源坑，见 tests/loadgate/README.md。
+  [string]$LoadTiers = "",
   [switch]$SkipFlow,
   [switch]$SkipBots,
   [switch]$ProvisionAccounts,
@@ -41,6 +46,23 @@ $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = (Resolve-Path (Join-Path $Here "..\..")).Path
 $StartAll = "E:\MirServer\start-all.ps1"
 $GatePort = 7000
+
+# 档位参数归一化 + 防线（与 tools/botload/load_gate.ps1 同源、同口径）：
+#   ① 把 string 拆回 [int[]]：`,  空格 都算分隔符 ⇒ `-File`/`-Command` 两种传法都正确；
+#   ② 单档数值超出合理上限即**响亮失败**——不再静默把「逗号拼接」当成一个 50 万人的档位跑掉。
+$MaxPlausibleTier = 5000
+$TierList = @()
+if ($LoadTiers.Trim() -ne "") {
+    $TierList = @($LoadTiers -split '[,\s]+' | Where-Object { $_ -ne "" } | ForEach-Object { [int]$_ })
+}
+if ($TierList.Count -eq 1 -and $TierList[0] -gt $MaxPlausibleTier) {
+    throw ("档位 " + $TierList[0] + " 超出上限 " + $MaxPlausibleTier +
+           "：疑似经 -File 传递时被逗号拼接（200,500,1000 -> 2005001000）。" +
+           "请用 -LoadTiers '200,500,1000'（-File 下加引号）或 -Command ""& 'tools\e2e\stack_e2e.ps1' -LoadTiers 200,500,1000""。" +
+           "见 tests/loadgate/README.md")
+}
+if (@($TierList | Where-Object { $_ -le 0 }).Count -gt 0) { throw "档位必须为正整数" }
+
 $results = New-Object System.Collections.Generic.List[object]
 
 function Invoke-Child([string]$ScriptPath, [string[]]$ChildArgs) {
@@ -144,22 +166,26 @@ if ($SelfTestRed) {
 }
 
 # ---- 3. 压测档位（可选）----
-if ($LoadTiers.Count -gt 0) {
-    # 坑（2026-10-11 实测，二连）：档位**不能**经 `-File` 传给子脚本——
-    # `powershell -File ... -Tiers 200,500,1000` 会把逗号列表拼成一个整数（档位变 2005001000，
-    # 假人数失控、登录 0%、整档 RED）。必须走 `-Command "& '<script>' ..."`。
-    $argLine = "-Tiers " + ($LoadTiers -join ",") + " -HoldSec $HoldSec"
-    # 多档连跑必须换干净栈：上一档结束时成百上千假人同时断连 = 网关抖动
-    # （本工程实测过 → GameSvr 网关槽位 UserList 置空 → SetGateUserList NRE），所以这里自动带上
-    if ($RestartStackPerTier -or $LoadTiers.Count -gt 1) { $argLine += " -RestartStackPerTier" }
+if ($TierList.Count -gt 0) {
+    # 档位只用 string 传：load_gate.ps1 的 `-Tiers` 是 string，`-File` 下 `-Tiers 200,500,1000`
+    # 才不会退化成整数 2005001000（`200,500,1000` 当千分位）。多档连跑必须换干净栈：
+    # 上一档结束时成百上千假人同时断连 = 网关抖动（实测过 → GameSvr 网关槽位 UserList 置空
+    # → SetGateUserList NRE），所以这里自动带上 -RestartStackPerTier。
+    $lgPath = Join-Path $RepoRoot "tools\botload\load_gate.ps1"
+    $lgArgs = @('-ExecutionPolicy', 'Bypass', '-File', $lgPath,
+                '-Tiers', ($TierList -join ","), '-HoldSec', "$HoldSec")
+    if ($RestartStackPerTier -or $TierList.Count -gt 1) { $lgArgs += '-RestartStackPerTier' }
+    # 坑（C6 第 4 轮实测，第三处同源）：**不要**用 `& powershell ... 2>&1` 去"收集"子进程输出。
+    # `2>&1` 建的是一个**管道**；load_gate 用 Start-Process 起的**长驻服务**（GameSvr/网关/MySQL）
+    # 会继承这个管道的写端 ⇒ 父进程读管道要等 EOF，而 EOF 要等所有服务死，于是
+    # **整条命令 summary 都已落盘、栈还在跑，却永远不退出**（104822/105943 与上一轮的 12496 都是它）。
+    # 改成直接继承 stdout（不建管道）：`& powershell -File` 只等直接子进程退出，长驻孙进程不再挂住父进程。
     $prev = $ErrorActionPreference; $ErrorActionPreference = "Continue"
     try {
-        $lgPath = Join-Path $RepoRoot "tools\botload\load_gate.ps1"
-        $out = & powershell -ExecutionPolicy Bypass -Command ("& '" + $lgPath + "' " + $argLine) 2>&1
+        & powershell @lgArgs
         $lgRc = $LASTEXITCODE
     } finally { $ErrorActionPreference = $prev }
-    $out | ForEach-Object { Write-Output $_ }
-    Add-Result "load-gate" ($(if ($lgRc -eq 0) { "GREEN" } else { "RED" })) ($LoadTiers -join "/")
+    Add-Result "load-gate" ($(if ($lgRc -eq 0) { "GREEN" } else { "RED" })) ($TierList -join "/")
 }
 
 # ---- 4. 收尾 ----

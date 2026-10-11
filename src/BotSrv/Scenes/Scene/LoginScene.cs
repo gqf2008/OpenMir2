@@ -35,6 +35,7 @@ namespace BotSrv.Scenes.Scene
                 if ((RobotClient.ConnectionStatus == ConnectionStatus.Failure) && (HUtil32.GetTickCount() > RobotClient.ConnectTick))
                 {
                     RobotClient.ConnectTick = HUtil32.GetTickCount();
+                    LoadMetrics.ConnectAttempt();
                     try
                     {
                         _clientSocket.Connect();
@@ -106,11 +107,21 @@ namespace BotSrv.Scenes.Scene
 
         private void SendLogin(string uid, string passwd)
         {
+            // T-8 登录响应观测：「开始登陆」这条日志**早于**真正写 socket（SendSocket 在未连接时只打一句
+            // 警告就返回），所以日志行数不等于发出的登录包数。这里把两件事分开计数。
+            LoadMetrics.LoginBegin();
             LogService.Info("开始登陆");
             RobotClient.LoginId = uid;
             RobotClient.LoginPasswd = passwd;
             CommandMessage msg = Messages.MakeMessage(Messages.CM_IDPASSWORD, 0, 0, 0, 0);
-            SendSocket(EDCode.EncodeMessage(msg) + EDCode.EncodeString(uid + "/" + passwd));
+            if (SendSocket(EDCode.EncodeMessage(msg) + EDCode.EncodeString(uid + "/" + passwd)))
+            {
+                LoadMetrics.LoginSent();
+            }
+            else
+            {
+                LoadMetrics.LoginSendClosed();
+            }
             MShare.SendLogin = true;
         }
 
@@ -173,16 +184,15 @@ namespace BotSrv.Scenes.Scene
             ConnectionStep = ConnectionStep.QueryChr;
         }
 
-        private void SendSocket(string sendstr)
+        private bool SendSocket(string sendstr)
         {
             if (_clientSocket.IsConnected)
             {
                 _clientSocket.SendText($"#1{sendstr}!");
+                return true;
             }
-            else
-            {
-                LogService.Warn($"Socket Close: {_clientSocket.RemoteEndPoint}");
-            }
+            LogService.Warn($"Socket Close: {_clientSocket.RemoteEndPoint}");
+            return false;
         }
 
         private void CloseSocket()
@@ -195,6 +205,7 @@ namespace BotSrv.Scenes.Scene
 
         private void CSocketConnect(object sender, DSCClientConnectedEventArgs e)
         {
+            LoadMetrics.ConnectOk();
             MShare.ServerConnected = true;
             if (ConnectionStep == ConnectionStep.Connect)
             {
@@ -228,6 +239,7 @@ namespace BotSrv.Scenes.Scene
 
         private void CSocketError(object sender, DSCClientErrorEventArgs e)
         {
+            LoadMetrics.ConnectError(e.ErrorCode);
             switch (e.ErrorCode)
             {
                 case System.Net.Sockets.SocketError.ConnectionRefused:

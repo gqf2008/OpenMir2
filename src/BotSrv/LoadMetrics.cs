@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text;
@@ -45,6 +46,28 @@ namespace BotSrv
         private static long _internalErrorsLogged;
         private static long _probeSent;
         private static long _inWorld;
+
+        // ==== 登录响应观测（C6 第 4 轮，T-8）：把「假人侧发了多少 / 收到哪些回包」变成可读数字 ====
+        // 目的：tier-500/1000 登录卡在 ~350-390 时，先判「假人没发对包」还是「服务端没回/回错」，
+        // 而不是靠 bots.log 里的中文行数反推（那条口径漏计了"发送时 socket 未连接"的假人）。
+        private static long _loginBegin;         // 走到 SendLogin（= 日志「开始登陆」）
+        private static long _loginSent;          // CM_IDPASSWORD 真正写进 socket 的次数
+        private static long _loginSendClosed;    // 因 socket 未连接而**没发出去**的次数
+        private static long _connAttempt;         // LoginScene 发起的 Connect 次数
+        private static long _connOk;              // LoginScene 的 OnConnected 次数
+        private static long _connErrRefused;
+        private static long _connErrReset;
+        private static long _connErrTimeout;
+        private static long _connErrOther;
+        private static long _recvChunks;          // 收到的原始字节块数（未组帧）
+        private static long _recvChunkBytes;
+        private static long _framesDecoded;       // 成功解出 CommandMessage 的帧数
+        private static long _chunksWithoutHash;   // 不带 '#' 的块（组帧错位/残帧尾）
+        private static long _partialFrames;       // 一次读里不是完整帧、被**静默丢弃**的残帧次数
+        private static long _partialFrameBytes;   // 上面丢弃的字节数
+        private static readonly Dictionary<int, long> IdentCounts = new Dictionary<int, long>();
+        private const int MaxIdentKeys = 48;      // 直方图键上限（防异常输入把直方图撑爆）
+        private static long _identOverflow;
 
         private static string _outDir;
         private static string _statsPath;
@@ -194,6 +217,105 @@ namespace BotSrv
             }
         }
 
+        // ==== T-8 登录响应观测：计数入口（全部只读语义，不改变假人行为）====
+
+        /// <summary>走到 SendLogin（日志「开始登陆」）——注意它**早于**真正写 socket。</summary>
+        public static void LoginBegin()
+        {
+            lock (Sync) { _loginBegin++; }
+        }
+
+        /// <summary>CM_IDPASSWORD 真正写进了 socket（只有这样服务端才可能回包）。</summary>
+        public static void LoginSent()
+        {
+            lock (Sync) { _loginSent++; }
+        }
+
+        /// <summary>想发登录包但 socket 未连接（= 发送被丢弃，与「服务端没回」是两回事）。</summary>
+        public static void LoginSendClosed()
+        {
+            lock (Sync) { _loginSendClosed++; }
+        }
+
+        public static void ConnectAttempt()
+        {
+            lock (Sync) { _connAttempt++; }
+        }
+
+        public static void ConnectOk()
+        {
+            lock (Sync) { _connOk++; }
+        }
+
+        public static void ConnectError(System.Net.Sockets.SocketError code)
+        {
+            lock (Sync)
+            {
+                switch (code)
+                {
+                    case System.Net.Sockets.SocketError.ConnectionRefused: _connErrRefused++; break;
+                    case System.Net.Sockets.SocketError.ConnectionReset: _connErrReset++; break;
+                    case System.Net.Sockets.SocketError.TimedOut: _connErrTimeout++; break;
+                    default: _connErrOther++; break;
+                }
+            }
+        }
+
+        /// <summary>一次 socket 读（未组帧的原始块）。</summary>
+        public static void RecvChunk(int bytes)
+        {
+            lock (Sync)
+            {
+                _recvChunks++;
+                _recvChunkBytes += bytes;
+            }
+        }
+
+        /// <summary>解出了一帧 CommandMessage（任何 ident）。</summary>
+        public static void FrameDecoded()
+        {
+            lock (Sync) { _framesDecoded++; }
+        }
+
+        /// <summary>收到的块里连 '#' 都没有（组帧错位或残帧尾）。</summary>
+        public static void ChunkWithoutHash()
+        {
+            lock (Sync) { _chunksWithoutHash++; }
+        }
+
+        /// <summary>
+        /// 残帧：这一读里的数据不是完整帧（没有 '!'）——旧行为是**静默丢弃**（没有跨读缓存）。
+        /// 帧被 TCP 切开时，前半截与后半截都会丢，服务端回了包但假人永远看不到。
+        /// </summary>
+        public static void PartialFrame(int bytes)
+        {
+            lock (Sync)
+            {
+                _partialFrames++;
+                _partialFrameBytes += bytes;
+            }
+        }
+
+        /// <summary>按 ident 计数（登录卡死时用来判「服务端回了别的包」还是「什么都没回」）。</summary>
+        public static void IdentSeen(int ident)
+        {
+            lock (Sync)
+            {
+                if (IdentCounts.TryGetValue(ident, out long n))
+                {
+                    IdentCounts[ident] = n + 1;
+                }
+                else if (IdentCounts.Count < MaxIdentKeys)
+                {
+                    IdentCounts[ident] = 1;
+                }
+                else
+                {
+                    _identOverflow++;
+                }
+            }
+        }
+
         /// <summary>一条 tick 服务时延样本（ms）。rtime 为空/非正时调用方不该调。</summary>
         public static void Tick(int latencyMs)
         {
@@ -275,6 +397,30 @@ namespace BotSrv
             w.Write('\n');
         }
 
+        /// <summary>ident 直方图（按次数降序，取前 24 个键）——判「服务端回了什么」用。调用方持锁。</summary>
+        private static string IdentCountsJson()
+        {
+            if (IdentCounts.Count == 0)
+            {
+                return "{}";
+            }
+            var top = new List<KeyValuePair<int, long>>(IdentCounts);
+            top.Sort((a, b) => b.Value.CompareTo(a.Value));
+            int take = top.Count > 24 ? 24 : top.Count;
+            var sb = new StringBuilder(256);
+            sb.Append('{');
+            for (int i = 0; i < take; i++)
+            {
+                if (i > 0)
+                {
+                    sb.Append(',');
+                }
+                sb.Append('"').Append(top[i].Key).Append("\":").Append(top[i].Value);
+            }
+            sb.Append('}');
+            return sb.ToString();
+        }
+
         /// <summary>累计快照（下游按相邻两行差分得到时间窗内的分布）。</summary>
         private static string StatsLine()
         {
@@ -288,6 +434,23 @@ namespace BotSrv
               .Append(",\"internal_errors\":").Append(_internalErrors)
               .Append(",\"in_world\":").Append(_inWorld)
               .Append(",\"probe_sent\":").Append(_probeSent)
+              .Append(",\"login_begin\":").Append(_loginBegin)
+              .Append(",\"login_sent\":").Append(_loginSent)
+              .Append(",\"login_send_closed\":").Append(_loginSendClosed)
+              .Append(",\"conn_attempt\":").Append(_connAttempt)
+              .Append(",\"conn_ok\":").Append(_connOk)
+              .Append(",\"conn_err_refused\":").Append(_connErrRefused)
+              .Append(",\"conn_err_reset\":").Append(_connErrReset)
+              .Append(",\"conn_err_timeout\":").Append(_connErrTimeout)
+              .Append(",\"conn_err_other\":").Append(_connErrOther)
+              .Append(",\"recv_chunks\":").Append(_recvChunks)
+              .Append(",\"recv_chunk_bytes\":").Append(_recvChunkBytes)
+              .Append(",\"frames_decoded\":").Append(_framesDecoded)
+              .Append(",\"chunks_without_hash\":").Append(_chunksWithoutHash)
+              .Append(",\"partial_frames\":").Append(_partialFrames)
+              .Append(",\"partial_frame_bytes\":").Append(_partialFrameBytes)
+              .Append(",\"ident_overflow\":").Append(_identOverflow)
+              .Append(",\"ident_counts\":").Append(IdentCountsJson())
               .Append(",\"tick_samples\":").Append(_tickSamples)
               .Append(",\"tick_sum_ms\":").Append(_tickSumMs)
               .Append(",\"tick_max_ms\":").Append(_tickMaxMs)

@@ -362,11 +362,21 @@ namespace BotSrv.Maps
             return result;
         }
 
+        /// <summary>坐标是否落在本地图数组内（负方向 + 上界都挡）。
+        /// C6 第 4 轮实测：`CanMove` 已补过守卫，但 `GetDoor`/`IsDoorOpen`/`CanFly`/`OpenDoor`/`CloseDoor`
+        /// 只挡了负方向（或什么都没挡）——自动挂机走到地图右/下边界外时 `m_MArr[cx, cy]` 越界，
+        /// tier-1000 稳态每个 tick 都在抛 `IndexOutOfRangeException`（`internal_errors` 线性增长）。</summary>
+        private bool InMapRange(int cx, int cy)
+        {
+            var mapArr = robotClient.Map.m_MArr;
+            return (mapArr != null) && cx >= 0 && cy >= 0 && cx < mapArr.GetLength(0) && cy < mapArr.GetLength(1);
+        }
+
         public bool CanFly(int mx, int my)
         {
             int cx = mx - m_nBlockLeft;
             int cy = my - m_nBlockTop;
-            if ((cx < 0) || (cy < 0))
+            if (!InMapRange(cx, cy))
             {
                 return false;
             }
@@ -389,6 +399,10 @@ namespace BotSrv.Maps
             int result = 0;
             int cx = mx - m_nBlockLeft;
             int cy = my - m_nBlockTop;
+            if (!InMapRange(cx, cy))
+            {
+                return 0;
+            }
             if ((robotClient.Map.m_MArr[cx, cy].btDoorIndex & 0x80) > 0)
             {
                 result = robotClient.Map.m_MArr[cx, cy].btDoorIndex & 0x7F;
@@ -401,6 +415,10 @@ namespace BotSrv.Maps
             bool result = false;
             int cx = mx - m_nBlockLeft;
             int cy = my - m_nBlockTop;
+            if (!InMapRange(cx, cy))
+            {
+                return false;
+            }
             if ((robotClient.Map.m_MArr[cx, cy].btDoorIndex & 0x80) > 0)
             {
                 result = (robotClient.Map.m_MArr[cx, cy].btDoorOffset & 0x80) != 0;
@@ -412,7 +430,7 @@ namespace BotSrv.Maps
         {
             int cx = mx - m_nBlockLeft;
             int cy = my - m_nBlockTop;
-            if ((cx < 0) || (cy < 0))
+            if (!InMapRange(cx, cy))
             {
                 return;
             }
@@ -423,7 +441,7 @@ namespace BotSrv.Maps
                 {
                     for (int j = cy - 10; j <= cy + 10; j++)
                     {
-                        if ((i > 0) && (j > 0))
+                        if (InMapRange(i, j))
                         {
                             if ((robotClient.Map.m_MArr[i, j].btDoorIndex & 0x7F) == idx)
                             {
@@ -439,7 +457,7 @@ namespace BotSrv.Maps
         {
             int cx = mx - m_nBlockLeft;
             int cy = my - m_nBlockTop;
-            if ((cx < 0) || (cy < 0))
+            if (!InMapRange(cx, cy))
             {
                 return;
             }
@@ -450,7 +468,7 @@ namespace BotSrv.Maps
                 {
                     for (int j = cy - 8; j <= cy + 10; j++)
                     {
-                        if ((robotClient.Map.m_MArr[i, j].btDoorIndex & 0x7F) == idx)
+                        if (InMapRange(i, j) && ((robotClient.Map.m_MArr[i, j].btDoorIndex & 0x7F) == idx))
                         {
                             robotClient.Map.m_MArr[i, j].btDoorOffset = (byte)(robotClient.Map.m_MArr[i, j].btDoorOffset & 0x7F);
                         }

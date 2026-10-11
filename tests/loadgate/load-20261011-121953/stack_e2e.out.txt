@@ -1,0 +1,162 @@
+STACK stop (干净基线)...
+PROVISION 前置：单独起 MySQL（先不起 LoginSrv）...
+PROVISION loadbot x 1000（必须在起 LoginSrv 之前）...
+  BULK_OK prefix=loadbot count=1000 -> account=1000 protection=1000（幂等：已存在的不重复建）
+provision              GREEN 1000 个
+STACK start...
+stack-up               GREEN LoginGate:7000
+mysql                  GREEN 3306
+PASS 1/3 透传逐字节保真
+PASS 2/3 dump 事件可无损重建字节流
+  RED: conn-0001.c2s.bin off=0 块 hash/长度不符
+PASS 3/3 篡改 .bin 后对账变红（改坏必红成立）
+GREEN: proxy selftest 3/3
+GREEN  proxy-selftest
+GREEN: 两条时间线事件序列一致（3 事件）
+PASS 1/2 一致时间线判绿
+DIFF @1/1 delete:
+  A[1] pkt conn=1 c2s n=30
+RED: 时间线序列存在 1 处分叉（A=3 事件, B=2 事件）
+PASS 2/2 抽掉事件后判红（改坏必红成立）
+GREEN: timeline selftest 2/2
+GREEN  timeline-selftest
+SNAP mir2_account.account: rows=7152 sha256=6cf5a85d9456dfcb…
+SNAP mir2_account.account_protection: rows=7040 sha256=14e81cd612e6c78a…
+SNAP mir2_db.characters: rows=7017 sha256=147634fdc3d7dd1d…
+SNAP mir2_db.characters_ablity: rows=7020 sha256=bcc608b55013239e…
+SNAP mir2_db.characters_bonusability: rows=0 sha256=e3b0c44298fc1c14…
+SNAP mir2_db.characters_item: rows=91260 sha256=f85e88ae64204c54…
+SNAP mir2_db.characters_item_attr: rows=0 sha256=e3b0c44298fc1c14…
+SNAP mir2_db.characters_magic: rows=7 sha256=8b77ec1c9cba5298…
+SNAP mir2_db.characters_bagitem: rows=322920 sha256=664e58937d624a28…
+SNAP mir2_db.characters_storageitem: rows=351000 sha256=2a9cea56629925d9…
+SNAP mir2_db.characters_status: rows=7019 sha256=612858df88c28ed6…
+SNAP mir2_db.characters_quest: rows=0 sha256=e3b0c44298fc1c14…
+SNAP mir2_db.characters_indexes: rows=7020 sha256=7cf581f1fa837f8e…
+SNAP_OK 13 表 -> C:\Users\gxh\AppData\Local\Temp\dbsnap-selftest-mv6dukvb\a
+SNAP mir2_account.account: rows=7152 sha256=6cf5a85d9456dfcb…
+SNAP mir2_account.account_protection: rows=7040 sha256=14e81cd612e6c78a…
+SNAP mir2_db.characters: rows=7017 sha256=147634fdc3d7dd1d…
+SNAP mir2_db.characters_ablity: rows=7020 sha256=bcc608b55013239e…
+SNAP mir2_db.characters_bonusability: rows=0 sha256=e3b0c44298fc1c14…
+SNAP mir2_db.characters_item: rows=91260 sha256=f85e88ae64204c54…
+SNAP mir2_db.characters_item_attr: rows=0 sha256=e3b0c44298fc1c14…
+SNAP mir2_db.characters_magic: rows=7 sha256=8b77ec1c9cba5298…
+SNAP mir2_db.characters_bagitem: rows=322920 sha256=664e58937d624a28…
+SNAP mir2_db.characters_storageitem: rows=351000 sha256=2a9cea56629925d9…
+SNAP mir2_db.characters_status: rows=7019 sha256=612858df88c28ed6…
+SNAP mir2_db.characters_quest: rows=0 sha256=e3b0c44298fc1c14…
+SNAP mir2_db.characters_indexes: rows=7020 sha256=7cf581f1fa837f8e…
+SNAP_OK 13 表 -> C:\Users\gxh\AppData\Local\Temp\dbsnap-selftest-mv6dukvb\b
+GREEN: 13 张表字段级一致
+PASS 1/2 连拍一致判绿
+TAMPER mir2_account.account: B 侧文件与自身 manifest 不符（快照被事后改动）
+DIFF mir2_account.account: 内容不一致（rows A=7152 B=7152）
+  首个差异行 #7153:
+    A: b'<missing>'
+    B: b'\ttampered'
+RED: 1 张表不一致
+PASS 2/2 篡改快照后判红（改坏必红成立）
+GREEN: dbsnap selftest 2/2
+GREEN  dbsnap-selftest
+SAMPLED events=5 snapshots=5 moves=2 aoi_max=2 ticks=(123, 123)
+  前 6 个位置事件 (t_ms,x,y,dir): [(200, 300, 570, 4), (300, 305, 572, 0)]
+SAMPLED events=5 snapshots=5 moves=2 aoi_max=2 ticks=(123, 123)
+  前 6 个位置事件 (t_ms,x,y,dir): [(200, 300, 570, 4), (300, 305, 572, 0)]
+PASS 1/3 同序列两次采样逐字节相同
+PASS 2/3 服务端权威自身位置取自 SM_LOGON 的 param/tag
+SAMPLED events=5 snapshots=5 moves=2 aoi_max=2 ticks=(123, 123)
+  前 6 个位置事件 (t_ms,x,y,dir): [(200, 300, 570, 4), (300, 305, 572, 0)]
+DIFF @snapshot 0 (t_ms A=100 B=100):
+   A: {"aoi": [], "bag": {"add": 0, "del": 0, "update": 0}, "gold": null, "hpmp": 0, "move_inputs": {"run": 0, "turn": 0, "walk": 0}, "self_srv": {"dir": 0, "x": 300, "y": 570}}
+   B: {"aoi": [], "bag": {"add": 0, "del": 0, "update": 0}, "gold": null, "hpmp": 0, "move_inputs": {"run": 0, "turn": 0, "walk": 0}, "self_srv": {"dir": 0, "x": 301, "y": 570}}
+DIFF @snapshot 1 (t_ms A=200 B=200):
+   A: {"aoi": [7], "bag": {"add": 0, "del": 0, "update": 0}, "gold": null, "hpmp": 0, "move_inputs": {"run": 0, "turn": 0, "walk": 0}, "self_srv": {"dir": 0, "x": 300, "y": 570}}
+   B: {"aoi": [7], "bag": {"add": 0, "del": 0, "update": 0}, "gold": null, "hpmp": 0, "move_inputs": {"run": 0, "turn": 0, "walk": 0}, "self_srv": {"dir": 0, "x": 301, "y": 570}}
+DIFF @snapshot 2 (t_ms A=300 B=300):
+   A: {"aoi": [7, 9], "bag": {"add": 0, "del": 0, "update": 0}, "gold": null, "hpmp": 0, "move_inputs": {"run": 0, "turn": 0, "walk": 0}, "self_srv": {"dir": 0, "x": 300, "y": 570}}
+   B: {"aoi": [7, 9], "bag": {"add": 0, "del": 0, "update": 0}, "gold": null, "hpmp": 0, "move_inputs": {"run": 0, "turn": 0, "walk": 0}, "self_srv": {"dir": 0, "x": 301, "y": 570}}
+RED: 世界态在 5 个采样点上不一致
+PASS 3/3 坐标改一格后对拍变红
+GREEN: world_sampler selftest 3/3
+GREEN  worldsample-selftest
+  PASS 0a 派生器按冻结形状抓出 811=20B/fixed, 201=124B/header_series
+  PASS 0b 字段改名 ⇒ 派生器报错（不静默）
+  [info] 811 真表已有 segmented 条目，用真表：{'count': 3, 'count_kind': 'fixed', 'kind': 'segmented', 'name': 'SM_ADJUST_BONUS', 'seg_len': 20, 'sep': 47, 'trailing_sep': False}
+  [info] 201 真表已有 segmented 条目，用真表：{'count_kind': 'header_series', 'kind': 'segmented', 'name': 'SM_BAGITEMS', 'seg_len': 124, 'sep': 47, 'trailing_sep': True}
+  导出(契约表) rc=0：["LAYOUT head_block=16 act_prefix='+' struct_then_rest=6(SM_RUSH)=8,7(SM_RUSHKUNG)=8,9(SM_BACKSTEP)=8,10(SM_TURN)=8", 'LAYOUT segmented=201(SM_BAGITEMS)=seg(seg_len=124,sep=/,trailing=True,header_series),811(SM_ADJUST_BONUS)=seg(seg_len=20,sep=/,trailing=False,fixed=3)', 'FRAMES=382 decoded=382 heartbeat=0 decode_error=0 seg_mismatch=0 roundtrip_fail=0']
+  PASS ident=811 layout=segmented body_len=60 segs=[20, 20, 20]
+  PASS ident=201 layout=segmented body_len=496 segs=[124, 124, 124, 124]
+  [info] 811 真表已有 segmented 条目，用真表：{'count': 3, 'count_kind': 'fixed', 'kind': 'segmented', 'name': 'SM_ADJUST_BONUS', 'seg_len': 20, 'sep': 47, 'trailing_sep': False}
+  [info] 201 真表已有 segmented 条目，用真表：{'count_kind': 'header_series', 'kind': 'segmented', 'name': 'SM_BAGITEMS', 'seg_len': 124, 'sep': 47, 'trailing_sep': True}
+  导出(错表 seg_len=19) rc=4
+  PASS 错表：rc=4，811 → segmented(mismatch:sep@0)
+  PASS 同一 dump 两次导出逐字节相同
+GREEN: segmented_check 全过（含改错必红、确定性）
+GREEN  segmented-check
+  PASS c-line-baseline-20261010-092858.jsonl 重导逐字节相同（sha256 d1f02442ce96ff60…）且登记一致
+  PASS c-line-baseline-c2-20261010.jsonl 重导逐字节相同（sha256 d3af8c99d9446c8b…）且登记一致
+  PASS c-line-baseline-c3-20261010.jsonl 重导逐字节相同（sha256 f34a6d1118929124…）且登记一致
+GREEN: golden_fresh_check 全过（3 份入库件 = 当前口径产物，且登记自洽）
+GREEN  golden-fresh
+  PASS 1/4 干净副本 → GREEN
+  PASS 2/4 入库件与当前口径不符 → RED（过期 + 登记不符都点到）
+  PASS 3/4 只改登记行（artifact 未动）→ RED
+  PASS 4/4 registry 缺一项 → RED
+GREEN: golden_fresh_check selftest 4/4（干净副本绿 + 三类坏各自红）
+GREEN  golden-fresh-red
+GREEN: 382 帧 / 8 流全部对账一致 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\c6\tests\golden\session-20261010-c3-hook)
+GREEN  golden-verify  (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\c6\tests\golden\session-20261010-c3-hook)
+BUILD BotSrv...
+CONFIG: 3 bots, prefix=e2esmoke, target=127.0.0.1:7000, NewAccount=True
+BOTSRV_PID=33652 LOG=E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\c6\tests\botload\bots-20261011-121936.log
+PROGRESS spawned=0 login_ok=0/3 failed=0
+PROGRESS spawned=2 login_ok=2/3 failed=0
+PROGRESS spawned=3 login_ok=3/3 failed=0
+GREEN: 3/3 登录成功 (100%)
+GREEN  bot-smoke  (3/3)
+==== E2E: 9 GREEN / 0 RED / 0 SKIP ====
+run_e2e                GREEN rc=0
+BUILD BotSrv...
+STACK restart: stop -> start
+==== TIER 200 (stagger=20ms, hold=60s) -> E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\c6\tests\loadgate\load-20261011-121953\tier-200
+BOTSRV_PID=50832
+  RAMP login_ok=114/200 spawned=200 tick_samples=0
+  RAMP login_ok=114/200 spawned=200 tick_samples=0
+  RAMP login_ok=114/200 spawned=200 tick_samples=0
+  RAMP login_ok=200/200 spawned=200 tick_samples=6
+  RESULT tier=200 verdict=GREEN login=100.0% conn_lost_steady=0 tick_p50=0 p90=0 p99=15ms samples=940 in_world=20 probe_sent=1121
+  MEM GameSvr ws_peak=278.9MB mean=272.8MB slope_tail=-0.103MB/s
+STACK restart: stop -> start
+==== TIER 500 (stagger=20ms, hold=60s) -> E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\c6\tests\loadgate\load-20261011-121953\tier-500
+BOTSRV_PID=48016
+  RAMP login_ok=187/500 spawned=500 tick_samples=0
+  RAMP login_ok=187/500 spawned=500 tick_samples=0
+  RAMP login_ok=187/500 spawned=500 tick_samples=0
+  RAMP login_ok=495/500 spawned=500 tick_samples=0
+  RAMP login_ok=495/500 spawned=500 tick_samples=0
+  RAMP login_ok=500/500 spawned=500 tick_samples=10
+  RESULT tier=500 verdict=GREEN login=100.0% conn_lost_steady=0 tick_p50=0 p90=0 p99=16ms samples=927 in_world=18 probe_sent=1026
+  MEM GameSvr ws_peak=278.9MB mean=275.9MB slope_tail=-0.046MB/s
+STACK restart: stop -> start
+==== TIER 1000 (stagger=20ms, hold=60s) -> E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\c6\tests\loadgate\load-20261011-121953\tier-1000
+BOTSRV_PID=43972
+  RAMP login_ok=141/1000 spawned=1000 tick_samples=0
+  RAMP login_ok=141/1000 spawned=1000 tick_samples=0
+  RAMP login_ok=141/1000 spawned=1000 tick_samples=0
+  RAMP login_ok=496/1000 spawned=1000 tick_samples=1
+  RAMP login_ok=496/1000 spawned=1000 tick_samples=1
+  RAMP login_ok=746/1000 spawned=1000 tick_samples=36
+  RAMP login_ok=746/1000 spawned=1000 tick_samples=36
+  RAMP login_ok=746/1000 spawned=1000 tick_samples=36
+  RAMP login_ok=994/1000 spawned=1000 tick_samples=96
+  RAMP login_ok=994/1000 spawned=1000 tick_samples=96
+  RAMP login_ok=1000/1000 spawned=1000 tick_samples=167
+  RESULT tier=1000 verdict=GREEN login=100.0% conn_lost_steady=0 tick_p50=0 p90=0 p99=0ms samples=765 in_world=17 probe_sent=1180
+  MEM GameSvr ws_peak=281.5MB mean=280.3MB slope_tail=0.054MB/s
+SUMMARY E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\c6\tests\loadgate\load-20261011-121953\load_gate_summary.json
+GREEN: 3 档全过（登录 100% / 稳态无掉线 / tick P99 ≤ 100ms）
+load-gate              GREEN 200/500/1000
+stack-stop             GREEN -StopStackAtEnd
+
+==== stack_e2e: 6 GREEN / 0 RED / 0 SKIP ====
