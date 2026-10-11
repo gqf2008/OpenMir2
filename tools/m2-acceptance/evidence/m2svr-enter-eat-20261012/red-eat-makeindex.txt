@@ -1,0 +1,30 @@
+warning: `game-svr` (bin "game-svr") generated 1 warning (run `cargo fix --bin "game-svr" -p game-svr` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.51s
+     Running unittests src\lib.rs (E:\tmp\openmir2-m2svr-target\debug\deps\game_svr-3aa264152417c61e.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 57 filtered out; finished in 0.00s
+
+     Running unittests src\main.rs (E:\tmp\openmir2-m2svr-target\debug\deps\game_svr-eb39968088e3f1ec.exe)
+
+running 1 test
+test tests::eat_drug_dispatches_and_updates_session ... FAILED
+
+failures:
+
+---- tests::eat_drug_dispatches_and_updates_session stdout ----
+
+thread 'tests::eat_drug_dispatches_and_updates_session' (32520) panicked at bins\game-svr\src\main.rs:4293:9:
+assertion `left == right` failed: 成功吃药：SM_EAT_OK + SM_HEALTHSPELLCHANGED + SM_WEIGHTCHANGED
+  left: [(0, 636)]
+ right: [(0, 635), (7, 53), (0, 622)]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::eat_drug_dispatches_and_updates_session
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 115 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`

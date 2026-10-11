@@ -1,0 +1,25 @@
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 57 filtered out; finished in 0.00s
+
+     Running unittests src\main.rs (E:\tmp\openmir2-m2svr-target\debug\deps\game_svr-eb39968088e3f1ec.exe)
+
+running 1 test
+test mapwire::tests::enter_map_falls_back_to_home_map ... FAILED
+
+failures:
+
+---- mapwire::tests::enter_map_falls_back_to_home_map stdout ----
+
+thread 'mapwire::tests::enter_map_falls_back_to_home_map' (15984) panicked at bins\game-svr\src\mapwire.rs:252:52:
+called `Result::unwrap()` on an `Err` value: MapNameNotFound("")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    mapwire::tests::enter_map_falls_back_to_home_map
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 115 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`

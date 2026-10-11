@@ -1,0 +1,7 @@
+2:22:24:42.116 [INF] Envir 真地图注册表：322 张（base=E:\MirServer\M2GameSvr EnvirDir=Envir MapDir=Map，跳过 0 张）
+5:22:24:42.128 [INF] 出生点回落已载入：StartPoint.txt 8 条，StartPointSize=2，选中=Some(0)，Config.HomeMap=3 (839,668)（空 HomeMap 的新角色用它）
+16:22:24:42.292 [INF] sim 线程就绪：tick=200ms，地图 322 张（Envir 真地图）
+29:22:25:08.413 [INF] 会话验证通过 Account:m3r06240 ChrName:m3r06240 SessionId:2 PayMent:1 index=1
+31:22:25:08.542 [INF] sim: 认证通过 ⇒ 取角色进世界 Account:m3r06240 ChrName:m3r06240 SessionId:2 GateIdx:0 （读档控制流在 load.rs；DB 请求属 S2b-2b）
+33:22:25:08.742 [INF] 收到角色数据 queryId=1 Ident=1100 Recog=1
+34:22:25:08.743 [INF] 进世界 ChrName:m3r06240 CurMap:0 (287,616) Dir:0 entity=1

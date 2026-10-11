@@ -1,0 +1,48 @@
+# 复现命令（卡 openmir2-m3-enter-eat-wiring / issue 8d07694d）
+
+工作目录：E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr
+隔离 target：CARGO_TARGET_DIR=E:\tmp\openmir2-m2svr-target
+
+## 0) 证据 hash 口径（本目录 SHA256SUMS.txt）
+# 按仓库字节（Git blob 内容；text 文件 = LF 归一），由 tools/evidence-hash 复核器生成/复核：
+python -I tools/evidence-hash/verify_sha256sums.py write  tools/m2-acceptance/evidence/m2svr-enter-eat-20261012
+python -I tools/evidence-hash/verify_sha256sums.py verify tools/m2-acceptance/evidence/m2svr-enter-eat-20261012
+
+## 1) 四门禁（在 mir2-rs/ 下）
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --offline -- -D warnings
+cargo test  --workspace --offline
+cargo run -p msgcodegen --offline -- --check
+
+## 2) 单元/进程级用例（③ 的验收，DoD ④）
+cargo test -p game-svr --offline eat_drug_dispatches_and_updates_session
+cargo test -p game-svr --offline enter_map_falls_back_to_home_map
+cargo test -p game-svr --offline homemap
+
+## 3) 真机 ①（需窗口；本片采集时刻 2026-10-12 06:19–06:27）
+# 3a) 起 Rust 栈（MySQL 已在听则复用；本片先手起 MySQL）
+powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 `
+  -RustBinDir 'E:\tmp\openmir2-m2svr-target\debug' `
+  -LogDir 'E:\tmp\openmir2-watch\m2svr-20261012\stack'
+# 3b) 假人：固定建角 + 固定背包序列 + 要求进世界
+powershell -ExecutionPolicy Bypass -File tools/botload/run_bots.ps1 `
+  -Count 1 -Prefix m3r0624 -NewAccount -Port 7000 `
+  -FixedNewChr -NewChrJob 0 -NewChrHair 2 -NewChrSex 0 `
+  -BagEquipSequence -BagEquipStepMs 1000 -BagEquipStartDelayMs 3000 `
+  -RequireWorld -TimeoutSec 240 `
+  -LogFile 'E:/tmp/openmir2-watch/m2svr-20261012/bot-rust.log'
+# 3c) 取两侧 ident_counts（各自 load_stats.ndjson 最后一行）
+#     ident_counts: 658/51/50/41/213/11029/42/766/54/5008/52/752/811/46（+10 单列）
+# 3d) 收工停栈（只应剩 3306）
+powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 -Stop `
+  -LogDir 'E:\tmp\openmir2-watch\m2svr-20261012\stack'
+
+## 4) DB 原值（判据②）
+D:\mysql\mariadb-10.11.19-winx64\bin\mysql.exe -u root --protocol=tcp -h 127.0.0.1 -P 3306 `
+  -e "SELECT Id,LoginID,ChrName,CONCAT('[',IFNULL(MapName,'<NULL>'),']') AS MapName,CX,CY,Level,HomeMap,HomeX,HomeY,CREATEDATE FROM mir2_db.characters WHERE ChrName IN ('m3r06240','m3b16010') ORDER BY Id DESC;"
+
+## 5) 红检（改坏后跑用例，期望 FAILED，再还原）
+# 5a) CM_EAT 字段错位：main.rs 的 `make_index: recog,` -> `make_index: 0,`
+#     cargo test -p game-svr --offline eat_drug_dispatches_and_updates_session   => FAILED
+# 5b) 进图回落摘除：mapwire.rs 的 resolve_enter_map Err 支只 `Err(e)`
+#     cargo test -p game-svr --offline enter_map_falls_back_to_home_map          => FAILED
