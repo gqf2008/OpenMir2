@@ -92,7 +92,16 @@ enum GateEvent {
     /// 没通过认证的会话收到的帧：oracle 在这一支走 `DoClientCertification` 的空转（`Account` 为空才真认证）。
     CertificationPending { index: i32, ip: String },
     /// `GM_CLOSE`。
-    Closed { index: i32 },
+    ///
+    /// `chr_name` = 关断时该槽已认证的角色名（未认证则为空）；`socket` = 该槽的客户端句柄。
+    /// 两者用于 `openmir2-m2-session-lifecycle` 的「断线清世界」：
+    /// oracle `ChannelMessageHandler.CloseUser`（`:363-...`）先 `FrontEngine.DeleteHuman(i, socket)`，
+    /// 已进世界的 PlayObject 再走 `BoSoftClose` ⇒ `RunNotice` 的 `MakeGhost()`。
+    Closed {
+        index: i32,
+        chr_name: String,
+        socket: i32,
+    },
     /// 认证通过 ⇒ 取角色（oracle `:323-338` 的 `LoadDBInfo` + `AddToLoadRcdList`）。
     /// 事件直接带 `LoadDbInfo`，交给 sim 线程的 `FrontEngine` 队列。
     LoadDbRequest(load::LoadDbInfo),
@@ -376,6 +385,96 @@ fn route_to_gate<'a>(
     }
 }
 
+/// 在线用户的世界侧网关坐标（`PlayObject.GateIdx`/`SocketId` 的对应物）。
+///
+/// 进世界成功时登记，断线/被踢时移除；重复进世界的"踢旧"靠它找回旧连接。
+/// 用 `Vec` 而不是 `HashMap`：顺序确定（本项目不让 `HashMap` 迭代序参与逻辑）。
+type OnlineRegistry = Vec<(String, i32, i32)>;
+
+fn online_set(online: &mut OnlineRegistry, chr: &str, gate_idx: i32, socket: i32) {
+    if let Some(e) = online.iter_mut().find(|e| e.0 == chr) {
+        e.1 = gate_idx;
+        e.2 = socket;
+        return;
+    }
+    online.push((chr.to_string(), gate_idx, socket));
+}
+
+fn online_take(online: &mut OnlineRegistry, chr: &str) -> Option<(i32, i32)> {
+    let pos = online.iter().position(|e| e.0 == chr)?;
+    let e = online.remove(pos);
+    Some((e.1, e.2))
+}
+
+/// 同一角色**重复进世界**的即时动作（oracle `WorldServer.cs:503/535/536-537/568-570`）。
+///
+/// 准入判据 `!IsFull && !ProcessHumansIsLogined(chr)`（`:503`）为假时：
+/// ① `:535` `KickOnlineUser(chr)`（`:1052-1064`）给**旧** PlayObject 置 `BoKickFlag`
+///    （下一 tick 在 `RunNotice` 里收 `SM_OUTOFCONNECTION` 后 `MakeGhost()`）；
+/// ② `:536-537` 记下**新**连接的 `(GateIdx, SocketId)`；
+/// ③ `:568-570` `NetChannel.CloseUser(新)` 把新连接关掉。
+///
+/// 本函数只做"置踢旧标志 + 关新连接"这两件即时动作；旧连接的落地（发 528 + 摘世界）交给下一次
+/// [`drain_kicks`]（与 oracle 的 tick 语义一致）。
+fn handle_duplicate_enter(
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    kick_pending: &mut Vec<String>,
+    chr_name: &str,
+    new_gate_idx: i32,
+    new_socket: i32,
+) {
+    glog!(
+        "WRN",
+        "重复进世界 ChrName:{chr_name}：旧会话在线 ⇒ 踢旧 + 关新（oracle WorldServer.cs:503/535/536-537/568-570）"
+    );
+    // ③ 关新连接（`:568-570`）
+    if let Some(tx) = route_to_gate(gates, new_gate_idx, new_socket, "关掉重复进世界的新连接")
+    {
+        let _ = tx.send(SimToGate::KickUser { socket: new_socket });
+    }
+    // ① 置旧会话的 BoKickFlag（下一 tick 由 `drain_kicks` 落地）
+    if !kick_pending.iter().any(|n| n == chr_name) {
+        kick_pending.push(chr_name.to_string());
+    }
+}
+
+/// 处理待踢名单（oracle `PlayObject.RunNotice` 的 `BoKickFlag` 支，`PlayObject.cs:1082-1090`）：
+/// 给**旧**连接发 `SM_OUTOFCONNECTION`（`SendDefMessage(SM_OUTOFCONNECTION, 0, 0, 0, 0)`），
+/// 再 `MakeGhost()` = 离开世界（摘格子 + 移除实体）并清掉旧槽。
+fn drain_kicks(
+    world: &mut mir2_world::World,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    online: &mut OnlineRegistry,
+    kick_pending: &mut Vec<String>,
+) {
+    for chr in std::mem::take(kick_pending) {
+        let Some((gate_idx, socket)) = online_take(online, &chr) else {
+            glog!(
+                "WRN",
+                "重复进世界踢旧：ChrName:{chr} 的在线网关坐标未知，无法踢旧（oracle 只置标志；本骨架须有坐标才能清槽）"
+            );
+            continue;
+        };
+        if let Some(tx) = route_to_gate(gates, gate_idx, socket, "踢掉旧会话") {
+            let _ = tx.send(SimToGate::SendFrame {
+                socket,
+                body: smframe::sm_outofconnection(),
+            });
+            let _ = tx.send(SimToGate::KickUser { socket });
+        }
+        match world.disconnect(&chr) {
+            Ok(()) => glog!(
+                "INF",
+                "重复进世界踢旧：旧会话已离开世界 ChrName:{chr} socket={socket}（MakeGhost）"
+            ),
+            Err(e) => glog!(
+                "WRN",
+                "重复进世界踢旧：旧会话离开世界失败 ChrName:{chr}：{e:?}"
+            ),
+        }
+    }
+}
+
 fn sim_loop(
     map_sizes: Vec<(i32, i32)>,
     registry: Option<mir2_envir::MapRegistry>,
@@ -388,6 +487,9 @@ fn sim_loop(
     let mut world = mir2_world::World::with_maps(map_sizes);
     // 取角色的加载队列（`FrnEngn` 的双缓冲 + `CharacterDataProcessor` 的读档循环，见 `load.rs`）
     let mut engine = load::FrontEngine::new();
+    // `openmir2-m2-session-lifecycle`：在线用户的世界侧网关坐标 + 待踢名单（重复进世界用）
+    let mut online: OnlineRegistry = Vec::new();
+    let mut kick_pending: Vec<String> = Vec::new();
     // `GateIdx -> 该网关连接的 sim→gate 通道`（`NetChannel` 按 gateIdx 选连接，`TCPNetChannel.cs:221-223`）
     let mut gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>> =
         std::collections::HashMap::new();
@@ -434,8 +536,38 @@ fn sim_loop(
                         "sim: index={index} ip={ip} 收到无 `!` 的帧 ⇒ 认证链返回 Ignored（oracle 的 `if` 不成立）"
                     );
                 }
-                GateEvent::Closed { index } => {
-                    glog!("DBG", "sim: index={index} 关闭（disconnect 属 S2b-3）");
+                GateEvent::Closed {
+                    index,
+                    chr_name,
+                    socket,
+                } => {
+                    // oracle `ChannelMessageHandler.CloseUser`（`:363-...`）：先
+                    // `FrontEngine.DeleteHuman(i, socket)` 摘掉未完成的读档项；已进世界的 PlayObject
+                    // 走 `BoSoftClose` ⇒ `RunNotice`（`PlayObject.cs:1082-1090`）的 `MakeGhost()`
+                    // 离开世界（摘格子 + 移除实体）。
+                    engine.delete_human(socket);
+                    if chr_name.is_empty() {
+                        glog!(
+                            "DBG",
+                            "sim: index={index} 关闭（未认证/无角色，无需清世界）"
+                        );
+                    } else {
+                        kick_pending.retain(|n| n != &chr_name);
+                        online_take(&mut online, &chr_name);
+                        match world.disconnect(&chr_name) {
+                            Ok(()) => glog!(
+                                "INF",
+                                "断线清世界 ChrName:{chr_name} socket={socket} index={index}（FrontEngine.DeleteHuman + WorldEngine 摘除）"
+                            ),
+                            Err(mir2_world::SessionError::NotInWorld) => glog!(
+                                "DBG",
+                                "sim: index={index} ChrName={chr_name} 关闭但未在世界（无需摘除）"
+                            ),
+                            Err(e) => {
+                                glog!("WRN", "断线清世界失败 ChrName:{chr_name}：{e:?}");
+                            }
+                        }
+                    }
                 }
                 GateEvent::LoadDbRequest(info) => {
                     glog!(
@@ -558,6 +690,14 @@ fn sim_loop(
                                         );
                                         match world.enter_map(&head.chr_name, ent, map_id) {
                                             Ok(id) => {
+                                                // 在线登记（`PlayObject.GateIdx`/`SocketId`）：断线与重复进世界
+                                                // （踢旧）都要靠它找回该角色当前的网关连接。
+                                                online_set(
+                                                    &mut online,
+                                                    &head.chr_name,
+                                                    gate_idx,
+                                                    socket,
+                                                );
                                                 glog!(
                                                     "INF",
                                                     concat!(
@@ -616,6 +756,19 @@ fn sim_loop(
                                                     let _ = tx.send(SimToGate::MarkInWorld { socket });
                                                 }
                                             }
+                                            // oracle `WorldServer.cs:503` 的准入判据：
+                                            // `!IsFull && !ProcessHumansIsLogined(chr)`；为假 ⇒ `:535`
+                                            // 踢旧 + `:536-537` 记新 + `:568-570` 关新（两边都不放行）。
+                                            // Rust 侧的等价准入门就是 `enter_map` 的 `AlreadyInWorld`。
+                                            Err(mir2_world::SessionError::AlreadyInWorld) => {
+                                                handle_duplicate_enter(
+                                                    &gates,
+                                                    &mut kick_pending,
+                                                    &head.chr_name,
+                                                    gate_idx,
+                                                    socket,
+                                                );
+                                            }
                                             Err(e) => glog!(
                                                 "WRN",
                                                 "进世界失败 ChrName:{}：{e:?}",
@@ -636,6 +789,9 @@ fn sim_loop(
             }
             w.outstanding = still;
         }
+        // 踢旧落地（oracle `RunNotice` 的 `BoKickFlag` 支）：在 tick 前处理，与 oracle 的
+        // "WorldServer 处理 LoadPlayList 置标志 → 下一 tick PlayObject.RunNotice 落地" 同序。
+        drain_kicks(&mut world, &gates, &mut online, &mut kick_pending);
         let rec = world.tick();
         ticks += 1;
         if ticks.is_multiple_of(50) {
@@ -968,7 +1124,8 @@ async fn dispatch(
             let _ = ev_tx.send(GateEvent::Opened { index, ip });
         }
         grobal2::GM_CLOSE => {
-            // `:160-162`：**按 socket** 关
+            // `:160-162`：**按 socket** 关。角色名要先读（`close_by_socket` 会把槽置空）。
+            let chr_name = users.chr_name_by_socket(msg.socket);
             if let Some(index) = users.close_by_socket(msg.socket) {
                 glog!(
                     "INF",
@@ -977,7 +1134,11 @@ async fn dispatch(
                     users.online(),
                     users.slots()
                 );
-                let _ = ev_tx.send(GateEvent::Closed { index });
+                let _ = ev_tx.send(GateEvent::Closed {
+                    index,
+                    chr_name,
+                    socket: msg.socket,
+                });
             }
         }
         grobal2::GM_CHECKCLIENT => {
@@ -1066,7 +1227,11 @@ async fn dispatch(
                             msg.session_id
                         );
                         users.close_by_socket(msg.socket);
-                        let _ = ev_tx.send(GateEvent::Closed { index });
+                        let _ = ev_tx.send(GateEvent::Closed {
+                            index,
+                            chr_name: String::new(),
+                            socket: msg.socket,
+                        });
                     }
                     cert::CertOutcome::Ignored => {
                         let _ = ev_tx.send(GateEvent::CertificationPending { index, ip });
@@ -1293,5 +1458,100 @@ mod tests {
             assert_eq!(full.alloc(), Some(u8::try_from(i).unwrap()));
         }
         assert_eq!(full.alloc(), None, "满 20 槽后必须拒绝（oracle gateIdx<0）");
+    }
+
+    /// **`openmir2-m2-session-lifecycle` ③**：同一角色重复进世界必须 **踢旧 + 关新**，
+    /// 照 oracle `WorldServer.cs:503/535/536-537/568-570`。
+    ///
+    /// 判据（全自动、无网络）：
+    /// - 新连接（gate=1/socket=902）收到 `KickUser`（`:568-570` `NetChannel.CloseUser(新)`）；
+    /// - 旧连接（gate=0/socket=901）下一 tick 先收 `SendFrame`（`SM_OUTOFCONNECTION`=528、header-only），
+    ///   再收 `KickUser`（`RunNotice` 的 `BoKickFlag` 支 + `MakeGhost`）；
+    /// - 旧会话离开世界、实体被摘。
+    ///
+    /// 红检：把 `enter_map` 的 `AlreadyInWorld` 分支改回只记 WRN（现状）⇒ 本用例第一条断言即红。
+    #[test]
+    fn duplicate_enter_kicks_old_and_closes_new() {
+        use std::collections::HashMap;
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let (tx1, mut rx1) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        gates.insert(1, tx1);
+
+        // 旧会话已在世界里
+        let mut world = mir2_world::World::with_maps(vec![(64, 64)]);
+        world.open_session("lb1a");
+        let ent = mir2_world::Entity::new(0, "lb1a".to_string(), 10, 20);
+        let actor = world.enter_map("lb1a", ent, 0).expect("旧会话应先在世界里");
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, "lb1a", 0, 901);
+
+        // 新连接（另一条网关线 1 / socket 902）重复进世界
+        let mut kick_pending: Vec<String> = Vec::new();
+        handle_duplicate_enter(&gates, &mut kick_pending, "lb1a", 1, 902);
+        match rx1.try_recv().expect("新连接必须收到 KickUser") {
+            SimToGate::KickUser { socket } => assert_eq!(socket, 902),
+            other => panic!("新连接第一件事必须是 KickUser，实得 {other:?}"),
+        }
+        // 旧连接此时还没被踢（oracle 是置标志、下一 tick 落地）
+        assert!(matches!(
+            rx0.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+
+        // 下一 tick：踢旧落地
+        drain_kicks(&mut world, &gates, &mut online, &mut kick_pending);
+        match rx0.try_recv().expect("旧连接必须收到 SM_OUTOFCONNECTION") {
+            SimToGate::SendFrame { socket, body } => {
+                assert_eq!(socket, 901);
+                assert_eq!(body.len(), 12, "528 是 header-only");
+                assert_eq!(
+                    u16::from_le_bytes([body[4], body[5]]),
+                    528,
+                    "SM_OUTOFCONNECTION"
+                );
+            }
+            other => panic!("旧连接第一帧必须是 SendFrame(528)，实得 {other:?}"),
+        }
+        match rx0.try_recv().expect("旧连接随后必须被清槽") {
+            SimToGate::KickUser { socket } => assert_eq!(socket, 901),
+            other => panic!("旧连接第二件事必须是 KickUser，实得 {other:?}"),
+        }
+        // 旧会话确实离开世界、实体被摘（MakeGhost）
+        assert_eq!(
+            world.session("lb1a").unwrap().stage,
+            mir2_world::WorldStage::Left
+        );
+        assert!(
+            world.entities.get(actor).is_none(),
+            "MakeGhost 必须摘掉旧实体"
+        );
+        assert!(online.is_empty(), "在线登记必须清空");
+    }
+
+    /// 踢旧善后必须**幂等**；没有在线坐标时只记 WRN（不 panic、不改世界、名单被消费）。
+    #[test]
+    fn drain_kicks_is_idempotent_and_safe_without_coords() {
+        use std::collections::HashMap;
+        let gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        let mut world = mir2_world::World::with_maps(vec![(64, 64)]);
+        let mut online: OnlineRegistry = Vec::new();
+        let mut kick_pending = vec!["ghost".to_string()];
+        drain_kicks(&mut world, &gates, &mut online, &mut kick_pending);
+        assert!(kick_pending.is_empty(), "待踢名单必须被消费掉（幂等）");
+        assert!(world.session("ghost").is_none());
+    }
+
+    /// 在线登记在**进世界成功**时落坐标，断线/踢旧时被 `online_take` 拿走（名字精确匹配）。
+    #[test]
+    fn online_registry_set_and_take() {
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, "lb1a", 0, 901);
+        online_set(&mut online, "lb1a", 2, 903); // 同名刷新（重进世界）只有一条
+        assert_eq!(online.len(), 1);
+        assert_eq!(online_take(&mut online, "lb1a"), Some((2, 903)));
+        assert!(online_take(&mut online, "lb1a").is_none());
+        assert!(online.is_empty());
     }
 }

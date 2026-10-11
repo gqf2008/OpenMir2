@@ -82,6 +82,19 @@ impl FrontEngine {
         self.load_list.push(info);
     }
 
+    /// `FrnEngn.DeleteHuman`（`FrnEngn.cs:208-226`）：按 `(GateIdx, SocketId)` 把**未完成的**读档项
+    /// 从 `m_LoadRcdList` 里摘掉（`CloseUser` 时调用）。这里按 `socket_id` 匹配就够——
+    /// 一个 socket 只属于一条网关连接，且本骨架的 load/temp 双缓冲在 [`Self::drain_read_storage`]
+    /// 里会把项搬去 `load_temp` ⇒ **两边都要清**，否则下一轮 `swap_load_lists` 又把它搬回来。
+    ///
+    /// 返回被摘掉的条数（=0 表示本来就没有待读项，不是错误）。
+    pub fn delete_human(&mut self, socket_id: i32) -> usize {
+        let before = self.load_list.len() + self.load_temp.len();
+        self.load_list.retain(|i| i.socket_id != socket_id);
+        self.load_temp.retain(|i| i.socket_id != socket_id);
+        before - (self.load_list.len() + self.load_temp.len())
+    }
+
     /// `InSaveRcdList`（`:156-176`）：**OrdinalIgnoreCase** 比较。
     #[must_use]
     pub fn in_save_rcd_list(&self, chr_name: &str) -> bool {
@@ -159,6 +172,26 @@ impl FrontEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `CloseUser` 的 `FrontEngine.DeleteHuman`：`delete_human` 必须把未读项从 **load 与 temp 两边**
+    /// 都摘掉（只清 load 侧、下一轮 `swap_load_lists` 会把 temp 里的搬回来 ⇒ 连接断了还会去 DBSvr 取档）。
+    #[test]
+    fn delete_human_removes_pending_load_on_both_buffers() {
+        let mut e = FrontEngine::new();
+        e.load_list.push(info("a", "hero_a", 5));
+        e.load_temp.push(info("b", "hero_b", 6));
+        assert_eq!(e.delete_human(4242), 2, "load 与 temp 两边各一条都要摘掉");
+        assert!(e.load_list.is_empty());
+        assert!(e.load_temp.is_empty());
+        assert_eq!(e.delete_human(4242), 0, "幂等：再删没有可删的");
+        // 只按 socket 匹配：别的 socket 不动
+        e.load_list.push(LoadDbInfo {
+            socket_id: 7,
+            ..info("c", "hero_c", 7)
+        });
+        assert_eq!(e.delete_human(4242), 0);
+        assert_eq!(e.load_list.len(), 1, "socket_id=7 的项不得被误删");
+    }
 
     fn info(account: &str, chr: &str, session_id: i32) -> LoadDbInfo {
         LoadDbInfo {

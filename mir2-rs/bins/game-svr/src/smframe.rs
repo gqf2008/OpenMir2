@@ -150,6 +150,18 @@ pub fn sm_attackmode(mode: u8) -> Vec<u8> {
     gm_data_body(header, &[])
 }
 
+/// `SM_OUTOFCONNECTION`（`PlayObject.cs:1084-1086` 的 `RunNotice` 踢人支）：
+/// `SendDefMessage(SM_OUTOFCONNECTION, 0, 0, 0, 0)` ⇒ 12B 命令头 + **无尾**（header-only）。
+///
+/// 场景（`openmir2-m2-session-lifecycle` 的"踢旧"）：同一角色重复进世界时
+/// `WorldServer.KickOnlineUser`（`WorldServer.cs:1052-1064`）给**旧** PlayObject 置 `BoKickFlag`，
+/// 旧对象下一 tick 在 `RunNotice`（`PlayObject.cs:1082-1090`）里先收到本帧、再 `MakeGhost()`。
+#[must_use]
+pub fn sm_outofconnection() -> Vec<u8> {
+    let header = command_header(0, messages::SM_OUTOFCONNECTION, 0, 0, 0);
+    gm_data_body(header, &[])
+}
+
 /// `SM_VERSION_FAIL`（`PlayObject.Message.cs:1690-1692`）：
 /// `MakeMessage(SM_VERSION_FAIL, ClientFile1_CRC, LoWord(ClientFile2_CRC), HiWord(ClientFile2_CRC), 0)`
 /// + 尾 `"<<<<<<"`（**原样字面量**，不是 EDCode 编码——金标准里捕获工具把它解码成了垃圾，但这 6 字节在线缆上就是原样）。
@@ -527,6 +539,30 @@ mod tests {
         let body = sm_attackmode(0);
         assert_eq!(body.len(), 12);
         assert_eq!(client_frame(&body), hex(G_ATTACKMODE));
+    }
+
+    /// `SM_OUTOFCONNECTION`（528）是 header-only：`Recog=0`、12B、无尾。
+    /// 字段序按 `MakeMessage(ident, recog, param, tag, series)` 钉死（`Recog` 在头里是小端 0）。
+    #[test]
+    fn sm_outofconnection_is_header_only_with_recog_zero() {
+        let body = sm_outofconnection();
+        assert_eq!(body.len(), 12, "无尾 ⇒ PackLength 恰好 12");
+        assert_eq!(
+            i32::from_le_bytes([body[0], body[1], body[2], body[3]]),
+            0,
+            "Recog"
+        );
+        assert_eq!(
+            u16::from_le_bytes([body[4], body[5]]),
+            messages::SM_OUTOFCONNECTION,
+            "ident 必须是 SM_OUTOFCONNECTION(528)"
+        );
+        assert_eq!(&body[6..12], &[0u8; 6], "Param/Tag/Series 全 0");
+        // 客户端线缆：`#` + Encode(头 12B) + 无尾 + `!`
+        let wire = client_frame(&body);
+        assert_eq!(wire.first(), Some(&b'#'));
+        assert_eq!(wire.last(), Some(&b'!'));
+        assert_eq!(wire.len(), 1 + edcode::encoded_len(12) + 1);
     }
 
     /// `SM_VERSION_FAIL` 与金标准 #11 逐字节相等：尾是原样 `"<<<<<<"`（6B），不是 EDCode 编码。
