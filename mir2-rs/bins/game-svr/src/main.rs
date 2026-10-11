@@ -360,6 +360,7 @@ async fn main() -> Result<()> {
                         can_drop_price: cfg.can_drop_price,
                         drop_item_rage: cfg.drop_item_rage,
                     },
+                    ref_msg_range: i32::from(cfg.send_ref_msg_range),
                 },
                 notice,
                 colors,
@@ -730,6 +731,9 @@ fn handle_bag_cmd(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     catalog: &dyn game_svr::ability::ItemCatalog,
+    world: &mir2_world::World,
+    displays: &mut downlink::DisplayTable,
+    ref_msg_range: i32,
 ) {
     let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
         glog!(
@@ -849,6 +853,91 @@ fn handle_bag_cmd(
             socket,
             body: game_svr::smframe::sm_subability(sb[0], sb[1], sb[2], sb[3], sb[4], sb[5], sb[6]),
         });
+    }
+    // oracle `FeatureChanged()`（`PlayObject.Operate.cs:459`/`:548` ⇒ `BaseObject.cs:1509`
+    // → `SendRefMsg(RM_FEATURECHANGED, GetFeatureEx(), GetFeatureToLong(), 0,0)`）：
+    // 成功换装后向**周围 `SendRefMsgRange` 格内同图**的玩家（**含自己**）广播 `SM_FEATURECHANGED`。
+    // `RM_FEATURECHANGED=10116` 的队列优先级 `(byte)10116=68` 排在 `RM_ABILITY(19)`/`RM_SUBABILITY(62)`
+    // 之后 ⇒ 线上顺序 = `SM_ADDITEM → OK/FAIL → 52 → 752 → 41`（与 oracle 消息泵一致）。
+    if out.recalc {
+        let use_inst: Vec<Option<game_svr::ability::ItemInstance>> = sg
+            .use_items
+            .iter()
+            .map(|c| {
+                c.as_ref().map(|it| game_svr::ability::ItemInstance {
+                    index: it.index,
+                    dura: it.dura,
+                })
+            })
+            .collect();
+        let feature =
+            game_svr::ability::equipped_feature(catalog, &use_inst, sg.equip.gender, sg.equip.hair);
+        let light_pairs: Vec<(u16, u16)> = sg
+            .use_items
+            .iter()
+            .take(downlink::USE_ITEM_SLOTS)
+            .map(|c| c.as_ref().map_or((0, 0), |it| (it.index, it.dura)))
+            .collect();
+        let light = downlink::my_light(sg.equip.abil.level, &light_pairs, catalog);
+        if let Some(mut d) = displays.get(sg.actor_id).cloned() {
+            d.feature = feature;
+            d.light = light;
+            displays.set(sg.actor_id, d);
+        }
+        broadcast_feature_changed(
+            world,
+            online,
+            gates,
+            sg.actor_id,
+            feature,
+            // `GetFeatureEx()` = `MakeWord(OnHorse?HorseType:0, DressEffType)`；本宿主两者未建模 ⇒ 0。
+            game_svr::feature::feature_ex(false, 0, 0),
+            ref_msg_range,
+        );
+    }
+}
+
+/// `FeatureChanged()`（oracle `BaseObject.cs:1509` → `SendRefMsg(RM_FEATURECHANGED, …)`）的下行：
+/// 向**同图、周围 `range` 格（含自身格）内**的所有在线玩家各发一条 `SM_FEATURECHANGED`
+/// （`PlayObject.Message.cs:1762-1764`：`recog = processMsg.ActorId`、`param/tag = LoWord/HiWord(feature)`、
+/// `series = GetFeatureEx()`）。
+///
+/// **登记（未建模，不静默）**：oracle `SendRefMsg` 的 `VisibleHumanList` 有 **500ms 重建缓存**
+/// （`BaseObject.Message.cs:395-397/455`）与 `ObMode/FixedHideMode` 的“只发自己”分支；
+/// 非玩家目标的 `WantRefMsg` 名单也不在
+/// 本实现内（本宿主只承载玩家）。这两项对所有 `RM_*` 广播同源，随具体 `SM_*` 再接。
+fn broadcast_feature_changed(
+    world: &mir2_world::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    actor_id: i32,
+    feature: i32,
+    feature_ex: u16,
+    range: i32,
+) {
+    let Some(src) = world.entities.get(actor_id) else {
+        glog!(
+            "WRN",
+            "FeatureChanged：actor_id={actor_id} 不在世界 ⇒ 不下发"
+        );
+        return;
+    };
+    let (sx, sy, smap) = (src.x, src.y, src.map_id);
+    let body = game_svr::smframe::sm_featurechanged(actor_id, feature, feature_ex);
+    for e in online {
+        let Some(t) = world.entities.get(e.actor_id) else {
+            continue;
+        };
+        if t.map_id != smap || (t.x - sx).abs() > range || (t.y - sy).abs() > range {
+            continue;
+        }
+        if let Some(tx) = route_to_gate(gates, e.gate_idx, e.socket, "装备 FeatureChanged 广播")
+        {
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: e.socket,
+                body: body.clone(),
+            });
+        }
     }
 }
 
@@ -1286,6 +1375,9 @@ struct EnterConfig {
     catalog: game_svr::ability::StdItemCatalog,
     /// `CM_PICKUP`/`CM_DROPITEM` 的 `[Setup]` 输入。
     ground: GroundCfg,
+    /// `[Setup] SendRefMsgRange`（oracle `GameSvrConf.cs:499`，缺省 12）：
+    /// 装备/卸下成功后的 `FeatureChanged()` 广播半径（`BaseObject.SendRefMsg` 的单元格扫描）。
+    ref_msg_range: i32,
 }
 
 fn sim_loop(
@@ -1403,6 +1495,9 @@ fn sim_loop(
                             &mut ground_sessions,
                             &gates,
                             &enter_cfg.catalog,
+                            &world,
+                            &mut displays,
+                            enter_cfg.ref_msg_range,
                         );
                     }
                 }
@@ -3016,6 +3111,10 @@ mod tests {
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
 
+        // actor 42 不在世界里 ⇒ `FeatureChanged()` 广播无收件人（本用例只断言 52/752 以前的出帧序）。
+        let world = mir2_world::World::new(8, 8);
+        let mut displays = downlink::DisplayTable::new();
+
         // `slot = tag = 0`、`make_index = param = 60001`、`name = 尾`（oracle Message.cs:823）。
         handle_bag_cmd(
             game_svr::bag::CM_TAKEOFFITEM,
@@ -3028,6 +3127,9 @@ mod tests {
             &mut sessions,
             &gates,
             &catalog,
+            &world,
+            &mut displays,
+            12,
         );
 
         // 出帧：SM_ADDITEM(200，换下回背包) → SM_TAKEOFF_OK(619) → SM_TAKEOFF_FAIL(620，oracle
@@ -3058,6 +3160,162 @@ mod tests {
             "重算必须传 prior（T-18）：prior.poison_recover=7 + add=0 ⇒ 7；\
              若误用 first_call() ⇒ 0 ⇒ 必红"
         );
+    }
+
+    /// **O-1（reviewer-6 对 N-1 片的 finding）**：装备/卸下成功后的 `FeatureChanged()` 必须向
+    /// 同图 `SendRefMsgRange`(缺省 12) 格内的玩家（**含自己**）广播 `SM_FEATURECHANGED(41)`。
+    ///
+    /// 造两个玩家 `hero`(10,10)/`watcher`(12,10) 同图，`hero` 卸下一件武器 ⇒ 成功分支
+    /// （`out.recalc`）后：`hero` 线上出帧序 `200 → 619 → 620 → 52 → 752 → 41`，
+    /// `watcher` 只收 `41`（`recog=hero`，`param/tag` = 卸下后的 `GetFeatureToLong()`）。
+    ///
+    /// 红检：注释掉 `broadcast_feature_changed(...)` ⇒ `watcher` 线收不到 `41` ⇒ 必红；
+    /// 把自己从收件人里过滤掉（`e.actor_id != actor_id`）⇒ `hero` 的末条不再为 `41` ⇒ 必红。
+    #[test]
+    fn bag_equip_broadcasts_feature_changed_to_nearby() {
+        use mir2_world::Entity;
+        use std::collections::HashMap;
+
+        let mut world = mir2_world::World::new(64, 64);
+        world.open_session("hero");
+        world.open_session("watcher");
+        let hero = world
+            .enter_map("hero", Entity::new(0, "hero", 10, 10), 0)
+            .expect("hero 进图");
+        let watcher = world
+            .enter_map("watcher", Entity::new(0, "watcher", 12, 10), 0)
+            .expect("watcher 进图");
+        world.tick();
+
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "木剑".into(),
+                std_mode: 5,
+                ..Default::default()
+            },
+        );
+
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut use_items: Vec<Option<game_svr::bag::BagItem>> =
+            vec![None; game_svr::ability::USE_ITEMS_LEN];
+        use_items[0] = Some(game_svr::bag::BagItem {
+            make_index: 60001,
+            index: 1,
+            dura: 10,
+            dura_max: 10,
+            desc: [0u8; 14],
+        });
+        sessions.insert(
+            "hero".into(),
+            SessionGround {
+                state: game_svr::ground::GroundState {
+                    item_list: Vec::new(),
+                    gold: 123,
+                    wabil: test_ability(),
+                },
+                actor_id: hero,
+                game_gold: 0,
+                sys_msg: None,
+                use_items,
+                sub: game_svr::ability::SubAbility::first_call(),
+                equip: test_equip_inputs(),
+            },
+        );
+
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hero,
+            },
+        );
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "uw".into(),
+                chr_name: "watcher".into(),
+                session_id: 2,
+                gate_idx: 1,
+                socket: 902,
+                actor_id: watcher,
+            },
+        );
+
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let (tx1, mut rx1) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        gates.insert(1, tx1);
+
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            hero,
+            downlink::ActorDisplay::new(0, 0, 111, 0, 0, 255, b"hero".to_vec()),
+        );
+
+        handle_bag_cmd(
+            game_svr::bag::CM_TAKEOFFITEM,
+            60001,
+            0,
+            Some("木剑"),
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            &world,
+            &mut displays,
+            12,
+        );
+
+        let collect = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| -> Vec<(i32, u16, u16, u16)> {
+            let mut out = Vec::new();
+            while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+                let cm =
+                    mir2_protocol::frame::CommandMessage::from_bytes(&body).expect("body >= 12B");
+                out.push((cm.recog, cm.ident, cm.param, cm.tag));
+            }
+            out
+        };
+        assert_eq!(
+            collect(&mut rx0).iter().map(|f| f.1).collect::<Vec<_>>(),
+            vec![
+                200,
+                619,
+                620,
+                mir2_protocol::messages::SM_ABILITY,
+                mir2_protocol::messages::SM_SUBABILITY,
+                mir2_protocol::messages::SM_FEATURECHANGED,
+            ],
+            "hero 线上出帧序：200 → 619 → 620 → 52 → 752 → 41"
+        );
+        let watcher_frames = collect(&mut rx1);
+        assert_eq!(
+            watcher_frames.len(),
+            1,
+            "watcher 只应收一条 SM_FEATURECHANGED"
+        );
+        assert_eq!(
+            watcher_frames[0].1,
+            mir2_protocol::messages::SM_FEATURECHANGED
+        );
+        assert_eq!(watcher_frames[0].0, hero, "41 的 Recog = 换装者 ActorId");
+        // `SM_FEATURECHANGED` 的 Param/Tag = LoWord/HiWord(GetFeatureToLong())（oracle Message.cs:1762-1764）。
+        let feature = i32::from(watcher_frames[0].2) | (i32::from(watcher_frames[0].3) << 16);
+        assert_eq!(
+            displays.get(hero).unwrap().feature,
+            feature,
+            "展示表必须用换装后的 GetFeatureToLong 更新"
+        );
+        assert_ne!(feature, 111, "卸下后 feature 必须变化（不是换装前的值）");
     }
 
     /// `bag_items_from`（`CharacterData.bag_items` ⇒ `GroundState.item_list`）：展平非空槽、

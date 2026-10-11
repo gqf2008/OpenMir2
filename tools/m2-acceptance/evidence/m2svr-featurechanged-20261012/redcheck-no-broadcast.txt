@@ -1,0 +1,31 @@
+cmd: cargo test -p game-svr --offline bag_equip_broadcasts_feature_changed_to_nearby
+mutation: 把 handle_bag_cmd 末尾的 broadcast_feature_changed(...) 调用用 if false 包住（等价于不广播）
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.30s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-3aa264152417c61e.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 57 filtered out; finished in 0.00s
+
+     Running unittests src\main.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-eb39968088e3f1ec.exe)
+
+running 1 test
+test tests::bag_equip_broadcasts_feature_changed_to_nearby ... FAILED
+
+failures:
+
+---- tests::bag_equip_broadcasts_feature_changed_to_nearby stdout ----
+
+thread 'tests::bag_equip_broadcasts_feature_changed_to_nearby' (28780) panicked at bins\game-svr\src\main.rs:3290:9:
+assertion `left == right` failed: hero 线上出帧序：200 → 619 → 620 → 52 → 752 → 41
+  left: [200, 619, 620, 52, 752]
+ right: [200, 619, 620, 52, 752, 41]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::bag_equip_broadcasts_feature_changed_to_nearby
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 105 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`
