@@ -49,7 +49,8 @@ def main():
     out.append(f"- 用例定义：`{CASES.relative_to(MIR2RS).as_posix()}`")
     out.append(f"- 语料：`E:/MirServer/M2GameSvr/Envir`（内容冻结）")
     out.append("- 可跑（port-free）用例：两侧 harness 同脚本 + 同 label + 同初始状态，逐行 diff。")
-    out.append("- 等窗口用例：需 M2 真机验收窗口 + 两侧栈 + DB 作用域比对，本轮登记判据、不计通过。")
+    out.append("- 等窗口用例：无——2026-10-12 owner 裁定 `e808ec99`（路线①）后，商人 3 条也走 port-free；"
+               "Rust 服务侧 NPC/商人派发属 M3，不在本卡 ②。")
     out.append("")
 
     bad = 0
@@ -83,30 +84,28 @@ def main():
             out.append(f"- 期望（登记）：{c.get('expected', [])}")
             out.append("")
 
-    out.append("## 等窗口用例（本轮只登记，不计通过）")
-    out.append("")
-    out.append("> 三条窗口用例**当前不可跑**——可跑性由 `npc_window_readiness.py` 机判并登记在"
-               "`evidence/M4/npc-window-readiness.txt`（两条路线的前置都未满足，见下）。")
-    out.append("")
-    for c in window:
-        out.append(f"### {c['category']}：{c['name']}")
-        out.append(f"- 脚本/label：`{c['script']}` `{c['label']}`")
-        out.append(f"- 初始状态：gold={c.get('gold')} items={c.get('items')} player_items={c.get('player_items')}")
-        out.append(f"- 期望副作用：{c.get('expected')}")
-        out.append(f"- 为什么等窗口：{c['window_reason']}")
-        out.append(f"- 失败怎么判红：{c['red_criteria']}")
-        out.append("- 窗口释放后怎么跑：")
-        out.append("  1. 见 `lane-status.log` + 端口，确认 5000/7000/7100/7200 空闲；")
-        out.append("  2. 起两侧栈（C# 参照 / Rust），用与上表同一脚本、同一 label、同一初始状态交互；")
-        out.append("  3. 行为 diff：逐行比 take/give/messagebox 序列；DB 作用域：")
-        out.append("     `python -I tests/parity/m3/scoped_diff.py diff <a.jsonl> <b.jsonl> --canonical`；")
-        out.append("  4. 把两侧原始输出与 DB 快照 hash 写入 `evidence/M4/npc-cases-window.txt`。")
+    if window:
+        out.append("## 等窗口用例（本轮只登记，不计通过）")
+        out.append("")
+        for c in window:
+            out.append(f"### {c['category']}：{c['name']}")
+            out.append(f"- 脚本/label：`{c['script']}` `{c['label']}`")
+            out.append(f"- 初始状态：gold={c.get('gold')} items={c.get('items')} player_items={c.get('player_items')}")
+            out.append(f"- 期望副作用：{c.get('expected')}")
+            out.append(f"- 为什么等窗口：{c.get('window_reason', '')}")
+            out.append(f"- 失败怎么判红：{c['red_criteria']}")
+            out.append("")
+    else:
+        out.append("## 等窗口用例")
+        out.append("")
+        out.append("无。全部 7 条（含商人 3 条）均走 port-free；Rust 服务侧 NPC/商人派发见下方「可跑性门」的"
+                   "`Rust 服务侧（M3 承接）` 行。")
         out.append("")
 
-    # 窗口可跑性门（源码能力检查，快）：把「为什么现在跑不了」机判出来并登记。
+    # 商人用例可跑性门（源码能力检查，快）：机判路线① 是否真打通，并登记 Rust 服务侧为 M3 承接。
     # 注意：这里用 **源码模式**（--no-run-cs）且输出到 target/（不覆盖全量证据
-    # `evidence/M4/npc-window-readiness.txt`，那份由显式全量跑生成、含 C# 夹具行为复现）。
-    out.append("## 窗口可跑性门（`npc_window_readiness.py --no-run-cs`）")
+    # `evidence/M4/npc-window-readiness.txt`，那份由显式全量跑生成、含 C# 夹具行为）。
+    out.append("## 商人用例可跑性门（`npc_window_readiness.py --no-run-cs`）")
     out.append("")
     gate_out = MIR2RS / "target" / "m4" / "npc-window-readiness-src.txt"
     if WINDOW_GATE.is_file():
@@ -135,7 +134,7 @@ def main():
     print(text)
 
     print(f"== M4② 结果：可跑用例 {len(flow)}（{'GREEN' if bad == 0 else 'RED'}）"
-          f" / 等窗口用例 {len(window)}（PENDING WINDOW）==")
+          f" / 等窗口用例 {len(window)} ==")
     return bad
 
 

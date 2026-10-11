@@ -1,35 +1,30 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""M4② 三条「窗口用例」的可跑性门（卡 `openmir2-m4-parity-cases`，2026-10-12）。
+"""M4② 三条商人用例（商店/修理/仓库）的可跑性门（卡 `openmir2-m4-parity-cases`）。
 
-## 为什么有这个文件
+## 定位（owner 2026-10-12 e808ec99 裁定后）
 
-卡内 ② 的 6 类关键 NPC 用例分两档：
-- `runner == "flow"`（传送×2 / 行会 / 任务）——两侧脚本 harness（C# `script-parity-cs run` vs
-  Rust `script-tool flow-run`）**现在就能跑**，`run_npc_cases.py` 判绿；
-- `runner == "window"`（商店 / 修理 / 仓库）——脚本首行含商人头 `(@buy …)`，**两条路线当前都跑不了**：
-  1. **port-free 路线**：C# 参照 `ScriptParsers.LoadScriptFile` 在 `ScriptParsers.cs:713+` 把 NPC
-     强转 `IMerchant`；而 `tools/script-parity-cs` 的 `NpcRunProxy` 是 `INormNpc` 的 DispatchProxy
-     ⇒ `InvalidCastException`（本门会实跑复现）。
-  2. **两侧真栈路线**：Rust GameSvr（`mir2-rs/bins/game-svr`）**没有** NPC/商人脚本派发——
-     无 `CM_MERCHANTDLGSELECT`/`CM_CLICKNPC` 处理、`Cargo.toml` 无 `mir2-script` 依赖、
-     `main.rs` 只认 `CM_SAY`/`CM_PICKUP`/`CM_DROPITEM` ⇒ 同一输入在 Rust 栈上**不产生任何脚本副作用**。
+owner 已把写集扩到 `mir2-rs/tools/script-parity-cs/**` 并指定**路线①**：给 C# 夹具的 NPC 代理
+按脚本头补 `IMerchant`（商人脚本头 `(@buy …)`），使三条商人用例可 **port-free** 对拍；
+**Rust 服务侧**的 NPC/商人派发（`bins/game-svr`）**不归本卡**——它属 §6 的 **M3「NPC/商店」
+系统对齐**。
 
-本门把这两条前置做成**可机器判、可证伪**的检查：任一前置未满足时，三条窗口用例**不许**被标成
-「已跑绿」；两条都满足（例如 C# 夹具补了 `IMerchant` **且** Rust 服务侧接了脚本派发）时，
-本门转 `READY`，才允许按 `npc-cases.txt`「窗口释放后怎么跑」真跑并落 `npc-cases-window.txt`。
+本门因此以 **C# 夹具路线①** 为裁决：
+- C# 夹具能构造商人（源码/实跑均无 `InvalidCastException`）⇒ `READY`（三条可 port-free 跑）；
+- 否则 `BLOCKED`（保持原 runner，不许标绿）。
+- Rust 服务侧能力（无 `CM_CLICKNPC`/`CM_MERCHANTDLGSELECT`、无 `mir2-script` 依赖）**只登记为
+  M3 承接**，不再阻塞本卡。
 
-> **本门不是把 PENDING 标绿**——恰恰相反：它是「窗口用例当前不可跑」这个事实的**机判锚点**。
-> 谁把窗口用例标成已通过，必须同时给出本门 `READY` 的输出，否则不可信。
+> 本门不是把 PENDING 标绿——它是「路线① 是否真打通」的机判锚点：谁把三条商人用例标成已通过，
+> 必须同时给出本门 `READY` 的输出。
 
 ## 命令（在 `mir2-rs/` 下）
 
-    python -I tests/parity/M4/npc_window_readiness.py            # 实跑（含 C# 夹具行为复现）+ 出证据
-    python -I tests/parity/M4/npc_window_readiness.py --no-run-cs # 只做源码能力检查（快，供 CI 用）
+    python -I tests/parity/M4/npc_window_readiness.py            # 实跑（含 C# 夹具行为）+ 出证据
+    python -I tests/parity/M4/npc_window_readiness.py --no-run-cs # 只做源码能力检查（快）
     python -I tests/parity/M4/npc_window_readiness.py selftest    # 牙齿：合成输入翻转能力 ⇒ 裁决翻转
 
-退出码：0 = READY（两条前置都满足，可跑窗口）；3 = BLOCKED（有前置未满足，登记在案）；
-       2 = 用法/环境错误（缺 dotnet / 缺源码 / 缺用例）。
+退出码：0 = READY（路线① 就绪，可 port-free）；3 = BLOCKED（夹具未修）；2 = PREREQ。
 """
 
 import argparse
@@ -69,6 +64,10 @@ PROTOCOL_MESSAGES = MIR2RS / "crates" / "protocol" / "src" / "messages.rs"
 #   ② GameSvr 依赖脚本引擎 crate（mir2-script）。
 RUST_NPC_CM_NAMES = ("CM_CLICKNPC", "CM_MERCHANTDLGSELECT")
 RUST_SCRIPT_CRATE = "mir2-script"
+
+# 三条商人用例（原 `runner == "window"`，2026-10-12 owner 裁定后转 port-free）：按 category 选，
+# 不依赖 runner 字段（转 flow 后 runner 不再是 window）。
+MERCHANT_CATEGORIES = ("商店", "修理", "仓库")
 
 
 # --------------------------------------------------------------------------- #
@@ -218,9 +217,9 @@ def evaluate(cases, cs_harness, rust_server, run_cs, ports):
 
         rust_ok, rust_detail = check_rust_gamesvr_source(rust_server)
         if rust_ok is None:
-            out.append(f"- Rust 服务侧：PREREQ — {rust_detail}")
+            out.append(f"- Rust 服务侧（M3 承接，不阻塞本卡）：PREREQ — {rust_detail}")
         else:
-            out.append(f"- Rust 服务侧：{'CAPABLE' if rust_ok else 'BLOCKED'} — {rust_detail}")
+            out.append(f"- Rust 服务侧（M3 承接，不阻塞本卡）：{'CAPABLE' if rust_ok else 'BLOCKED'} — {rust_detail}")
 
         rc, eng = run_rust_engine(case)
         if rc is not None:
@@ -230,14 +229,16 @@ def evaluate(cases, cs_harness, rust_server, run_cs, ports):
                 out.append("  " + line)
             out.append("```")
 
-        if cs_ok is None or rust_ok is None:
+        # 本卡 ② 判据（owner e808ec99 裁定）：以 port-free（路线①）为准；
+        # Rust 服务侧 NPC/商人派发属 M3，不阻塞本卡。
+        if cs_ok is None:
             verdict = "PREREQ"
-        elif cs_ok and rust_ok:
+        elif cs_ok:
             verdict = "READY"
         else:
             verdict = "BLOCKED"
         verdicts.append(verdict)
-        out.append(f"- 裁决：**{verdict}**")
+        out.append(f"- 裁决（本卡 ② port-free）：**{verdict}**")
         out.append("")
 
     if any(v == "PREREQ" for v in verdicts):
@@ -249,21 +250,19 @@ def evaluate(cases, cs_harness, rust_server, run_cs, ports):
 
     out.append("## 总裁决")
     out.append("")
-    out.append(f"- 三条窗口用例：{', '.join(verdicts)} ⇒ **{overall}**")
+    out.append(f"- 三条商人用例（本卡 ② port-free）：{', '.join(verdicts)} ⇒ **{overall}**")
     out.append("")
     if overall == "READY":
-        out.append("两条前置都满足 ⇒ 可按 `npc-cases.txt`「窗口释放后怎么跑」起两侧栈真跑，"
-                   "并把原始输出写进 `evidence/M4/npc-cases-window.txt`。")
+        out.append("路线①（C# 夹具补 `IMerchant` 代理）已就绪 ⇒ 三条可 port-free 跑，"
+                   "已转 `runner == flow`，由 `run_npc_cases.py` 对拍。"
+                   "**Rust 服务侧**的 NPC/商人派发不属本卡（§6 的 M3「NPC/商店」系统对齐）——"
+                   "上表 `Rust 服务侧` 行是它的承接登记。")
     else:
-        out.append("前置未满足 ⇒ **这三条现在不可跑**（`npc-cases.txt` 里保持 PENDING WINDOW，不许标绿）。")
+        out.append("路线① 未就绪 ⇒ **这三条仍不可 port-free 跑**（`npc-cases.json` 里保持原 runner，不许标绿）。")
         out.append("")
-        out.append("承接（两条路线各一条路）：")
-        out.append("1. **port-free 路线**：给 `mir2-rs/tools/script-parity-cs` 的 NPC 代理补 `IMerchant`"
-                   "（把 `DispatchProxy.Create<INormNpc, NpcRunProxy>` 改成按脚本头决定 `IMerchant`/`INormNpc`，"
-                   "并让 `IList<>` 型 `get_` 返回非空 List）——该路径在卡写集外，需 owner 授权或另开卡。")
-        out.append("2. **两侧真栈路线**：给 `mir2-rs/bins/game-svr` 接 NPC/商人脚本派发"
-                   "（`CM_CLICKNPC`/`CM_MERCHANTDLGSELECT` → 脚本 label → 效果 + DB），"
-                   "并在 `Cargo.toml` 引入 `mir2-script`——属 M2/M3 接线面，需另开卡。")
+        out.append("承接：给 `mir2-rs/tools/script-parity-cs` 的 NPC 代理按脚本头补 `IMerchant`"
+                   "（`DispatchProxy.Create<INormNpc|IMerchant, NpcRunProxy>`），"
+                   "并让 `IList<>` 型 `get_` 返回非空 List；`goto` 还需把代理注册进 `SystemShare.ActorMgr`。")
     out.append("")
     return overall, "\n".join(out) + "\n"
 
@@ -295,11 +294,12 @@ def cmd_selftest():
             return h
 
         cases = [
-            # (夹具, 服务派发, 引擎依赖, 期望整体裁决)
+            # (C# 夹具 IMerchant, Rust 派发, Rust 引擎依赖, 期望整体裁决)
+            # 本卡 ② 以 port-free（路线①）为准；Rust 服务侧不阻塞本卡。
             (False, False, False, "BLOCKED"),
-            (True, False, False, "BLOCKED"),   # 只修 C# 夹具仍不够
-            (False, True, True, "BLOCKED"),    # 只修 Rust 仍不够
-            (True, True, False, "BLOCKED"),    # 有派发但没引擎依赖
+            (False, True, True, "BLOCKED"),     # C# 夹具没修 ⇒ 仍不可 port-free
+            (True, False, False, "READY"),      # 路线① 修好 ⇒ 可 port-free（Rust 服务侧归 M3）
+            (True, True, False, "READY"),
             (True, True, True, "READY"),
         ]
         for i, (h, rh, rc, want) in enumerate(cases, 1):
@@ -314,7 +314,7 @@ def cmd_selftest():
             print(f"RED: npc_window_readiness selftest {bad} 项不过")
             return 2
         print("GREEN: npc_window_readiness selftest 5/5"
-              "（两路前置任一缺失都判 BLOCKED；都具备才 READY）")
+              "（C# 夹具路线① 未修 ⇒ BLOCKED；修好 ⇒ READY（Rust 服务侧归 M3，不阻塞本卡））")
         return 0
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -341,13 +341,13 @@ def main():
         print(f"PREREQ: 缺用例 {cases_path}")
         return 2
     data = json.loads(cases_path.read_text(encoding="utf-8"))
-    window = [c for c in data["cases"] if c.get("runner") == "window"]
-    if not window:
-        print("PREREQ: npc-cases.json 里没有 runner==window 用例")
+    merchants = [c for c in data["cases"] if c.get("category") in MERCHANT_CATEGORIES]
+    if not merchants:
+        print("PREREQ: npc-cases.json 里找不到商店/修理/仓库三条商人用例（category 匹配）")
         return 2
 
     ports = [int(p) for p in args.ports.split(",") if p.strip()]
-    overall, text = evaluate(window, args.cs_harness, args.rust_server,
+    overall, text = evaluate(merchants, args.cs_harness, args.rust_server,
                              run_cs=not args.no_run_cs, ports=ports)
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -355,12 +355,13 @@ def main():
     print(text)
     print(f"EVIDENCE {_rel(out_path)}")
     if overall == "READY":
-        print("READY: 三条窗口用例前置齐备，可起两侧栈真跑")
+        print("READY: C# 夹具路线① 就绪 ⇒ 三条商人用例可 port-free 跑"
+              "（Rust 服务侧 NPC 派发归 M3，见证据）")
         return 0
     if overall == "PREREQ":
         print("PREREQ_MISSING: 缺 dotnet/源码/用例，能力未定")
         return 2
-    print("BLOCKED: 三条窗口用例当前不可跑（前置未满足，已在证据里登记）")
+    print("BLOCKED: C# 夹具路线① 未就绪 ⇒ 三条商人用例仍不可 port-free 跑（已登记）")
     return 3
 
 

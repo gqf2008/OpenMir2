@@ -125,3 +125,43 @@ EXIT=0
 ## 17. evidence_hashes 复核（含新增证据）：python -I tests/parity/M4/evidence_hashes.py
 GREEN: 证据 hash 复核 19/19 项一致（口径 = LF 归一 sha256 == git blob hash）
 EXIT=0
+
+---
+
+# === slice4：② 商人 3 条路线① 打通（2026-10-12，owner 裁定 e808ec99）===
+
+写集 = crates/script-tool/** + tests/parity/** + mir2-rs/tools/script-parity-cs/**（owner 明文授权扩展）。
+改动：C# 夹具按脚本头选 IMerchant 代理 + IList<> 返非空 + 代理注册进 ActorMgr（goto）+ flow 只比执行期错误；
+Rust flowrun 的 give/take 改逐件一行（与 oracle SendAddItem/SendDelItems 同粒度）。
+
+## 18. 四门禁重跑（本片；Rust flowrun.rs 有改动）
+cargo fmt --all -- --check                              EXIT=0（clean）
+cargo clippy --workspace --all-targets --offline -- -D warnings  EXIT=0（clean）
+cargo test --workspace --offline                        EXIT=0（71 target / 522 passed / 0 failed / 16 ignored）
+cargo run -q -p msgcodegen --offline -- --check         EXIT=0（604 条）
+
+## 19. ② 关键 NPC 用例（7 条全 port-free）：python -I tests/parity/M4/run_npc_cases.py
+OK   传送-幻境（金币不足/无物品）: 3 行一致
+OK   传送-幻境（背包有名为100000的物品）: 3 行一致
+OK   行会-攻城申请缴金条（@requestcastlewar）: 4 行一致
+OK   任务-地图出矿提示（Q001@main）: 2 行一致
+OK   商店-货币兑换（@changeGold 足额金币→金条）: 4 行一致
+OK   修理-RepairAll（@StdModeFunc26）: 2 行一致
+OK   仓库-捆绑卷轴（@zum_bind1 6×地牢逃脱卷）: 11 行一致
+== M4② 结果：可跑用例 7（GREEN） / 等窗口用例 0 ==
+EXIT=0
+
+## 20. ② 商人可跑性门：python -I tests/parity/M4/npc_window_readiness.py
+三条商人用例（本卡 ② port-free）：READY, READY, READY ⇒ READY
+  Rust 服务侧行 = BLOCKED（无 CM_MERCHANTDLGSELECT/CM_CLICKNPC、无 mir2-script）⇒ 登记为 M3 承接，不阻塞本卡
+EXIT=0（0 = READY）
+
+## 21. 新门牙齿 3 连跑：python -I tests/parity/M4/npc_window_readiness.py selftest
+-- run 1/2/3: GREEN: npc_window_readiness selftest 5/5（C# 夹具路线①未修⇒BLOCKED；修好⇒READY）
+EXIT=0
+
+## 22. ① + ③ 重跑（Rust flowrun 改动不触解析层，保持绿）
+python -I tests/parity/M4/m4_parity.py --envir E:/MirServer/M2GameSvr/Envir
+  ① parsecount 两侧数表 : GREEN（639 文件 / 四类计数逐项差 0 / 解析错误 427）
+  ③ 双侧逐行多重集差 = 0 : GREEN（作用域内 640 张表逐行一致）
+EXIT=0
