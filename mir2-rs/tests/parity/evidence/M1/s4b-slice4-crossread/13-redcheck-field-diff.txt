@@ -1,0 +1,7 @@
+### 红检：把 Rust 侧 scoped_after_norm.jsonl 的 characters.Level 0→5（被比对列）⇒ scoped_diff 必须红
+$ python scoped_diff.py diff --canonical --fixed-newchr <csharp>/scoped_after_norm.jsonl <redcheck_rust_mutated.jsonl>
+DIFF mir2_db.characters: rows A=1 B=1 仅A=1 仅B=1
+    A: <VOLATILE>	0	<RUN>0	<RUN>0	NULL	0	0	0	0	2	0	1	0	0	NULL	0	0	0	0	0	0	0.000	0	0	0	0	0	0	0	0	0	0	0	0	0	0	NULL	NULL	NULL	0	<VOLATILE>	<VOLATILE>
+    B: <VOLATILE>	0	<RUN>0	<RUN>0	NULL	0	0	5	0	2	0	1	0	0	NULL	0	0	0	0	0	0	0.000	0	0	0	0	0	0	0	0	0	0	0	0	0	0	NULL	NULL	NULL	0	<VOLATILE>	<VOLATILE>
+RED: 作用域内 2 行不一致
+redcheck exit=1

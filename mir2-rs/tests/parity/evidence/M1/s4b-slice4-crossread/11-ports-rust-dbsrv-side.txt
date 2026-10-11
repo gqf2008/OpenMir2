@@ -1,0 +1,23 @@
+STOP LoginGate pid=12124
+STOP SelGate pid=10828
+STOP GameGate pid=13692
+STOP GameSrv pid=17292
+STOP LoginSrv pid=10492
+STOP DBSrv pid=31532
+START DBSrv(rust) pid=10608
+START LoginSrv pid=26236
+START GameSvr pid=28884
+START LoginGate pid=14968
+START SelGate pid=30588
+START GameGate pid=11908
+=== ports (rust side) ===
+  5000  pid=28884 GameSrv
+  5100  pid=10608 db-srv
+  5500  pid=26236 LoginSrv
+  5600  pid=26236 LoginSrv
+  5700  pid=10608 db-srv
+  6000  pid=10608 db-srv
+  7000  pid=14968 LoginGate
+  7100  pid=30588 SelGate
+  7200  pid=11908 GameGate
+SIDE_STACK_OK DBSrv=rust

@@ -1,0 +1,3 @@
+# 证据件为冻结字节：禁止行尾/编码转换（否则 sha256sum -c 在 CRLF 检出上漂移）
+# 因此 `sha256sum -c SHA256SUMS.txt` 在任何检出上都必须 51/51 OK。
+* -text
