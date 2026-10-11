@@ -28,6 +28,7 @@ mod dbclient;
 mod enter;
 mod hutil;
 mod ids;
+mod items;
 mod load;
 mod mapwire;
 mod notice;
@@ -297,6 +298,32 @@ async fn main() -> Result<()> {
         red_f: cfg.red_msg_f_color,
         red_b: cfg.red_msg_b_color,
     };
+    // 物品模板表（帧 50/41 的 `UseItems[Dress/Weapon].StdItem.Shape` 输入）：oracle 在 `GameApp.Initialize`
+    // 直连 MySQL 读 `stditems`（`MySqlDB.LoadItemsDB`，不经 DBSvr）；加载失败 ⇒ 空表
+    // （`GetStdItem` 恒 null ⇒ 形态计 0，与 oracle 空物品系统分支同形）。
+    let item_table = {
+        let conn = cfg
+            .db_conn_string
+            .as_deref()
+            .unwrap_or(items::DEFAULT_CONN_STRING);
+        match items::load_items(conn).await {
+            Ok(list) => {
+                glog!(
+                    "INF",
+                    "物品模板表 stditems：{} 条（直连 MySQL，帧 50/41 的 Shape 输入）",
+                    list.len()
+                );
+                list
+            }
+            Err(e) => {
+                glog!(
+                    "WRN",
+                    "读 stditems 失败（{e}）⇒ 装备形态按 `GetStdItem == null` 计 0（oracle 空物品系统分支）"
+                );
+                Vec::new()
+            }
+        }
+    };
     let _sim = std::thread::Builder::new()
         .name("m2-sim".to_string())
         // 公告文本（oracle `NoticeMgr.GetNoticeMsg("Notice")`，帧 658 `SM_SENDNOTICE`）：
@@ -310,6 +337,7 @@ async fn main() -> Result<()> {
                     game_conf,
                     string_conf,
                     show_rank_level_name,
+                    items: item_table,
                 },
                 notice,
                 colors,
@@ -691,6 +719,8 @@ struct EnterConfig {
     game_conf: Option<mir2_envir::GameSvrConf>,
     string_conf: crate::strings::StringConf,
     show_rank_level_name: bool,
+    /// `stditems` 物品模板表（**1-based** 查表，见 `crate::items`）；空表 = 未加载/无配置。
+    items: Vec<mir2_data::StdItem>,
 }
 
 fn sim_loop(
@@ -1039,11 +1069,13 @@ fn sim_loop(
                                                         .show_rank_level_name,
                                                 };
                                                 // 帧 50/41 的 `GetFeatureToLong()` 两段输入（Dress/Weapon 的
-                                                // `StdItem.Shape`）；物品形状表未移植时对带装备槽记 WRN 并计 0
+                                                // `StdItem.Shape`）：从启动时读入的 `stditems` 表 1-based 查
+                                                // （`GameItemSystem.GetStdItem`）；查不到（越界/空表）计 0
                                                 // （oracle `GetStdItem == null` 分支，见 `enter::feature_shapes`）。
                                                 let (dress_shape, weapon_shape, shape_warns) =
                                                     enter::feature_shapes(
                                                         data.and_then(|d| d.hum_items.as_deref()),
+                                                        &enter_cfg.items,
                                                     );
                                                 for w in shape_warns {
                                                     glog!("WRN", "入图帧输入：{w}");

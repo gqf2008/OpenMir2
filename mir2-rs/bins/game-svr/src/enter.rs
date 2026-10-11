@@ -21,10 +21,9 @@
 //! `game_svr::feature`）。
 //!
 //! **仍缺输入（本片登记，不接线）**：
-//! - `50/41` 的 `UseItems[Dress/Weapon].StdItem.Shape`：物品形状表（`GameItemSystem`）未移植
-//!   （需物品系统卡）⇒ 只有「无装备」形态（真机验收账号 `mir2test` 的 `aaa`/`bbb` 十三槽全
-//!   `StdIndex=0`）与 oracle 逐字节等价；带装备槽计 0 + WRN（[`feature_shapes`]，非 1:1 已登记）。
-//!   同时 `CharStatus` 的 buff 部分（`ActorBuffSystem`）未移植，会话初生恒 0（金标准 #3 印证）。
+//! - `50/41` 的 `UseItems[Dress/Weapon].StdItem.Shape` **已接线**（`crate::items`：直连 MySQL 读
+//!   `stditems`，查表口径逐行照 `GameItemSystem.GetStdItem`，1-based + 空名按缺）；仅 `CharStatus`
+//!   的 buff 部分（`ActorBuffSystem`）未移植，会话初生恒 0（金标准 #3 印证）。
 //! - `10 SM_TURN` 的 `CharDesc`（Feature+Status）依赖同一物品层（且发帧点在世界 tick）⇒ 未接；
 //! - `52 SM_ABILITY`/`752 SM_SUBABILITY`：发帧点 = `PlayObject.cs:1385-1386` 的登录后块
 //!   （`SendPriorityMsg(RM_ABILITY/RM_SUBABILITY)` → `Message.cs:1732-1735` / `:1935`），
@@ -34,6 +33,7 @@
 //! `GameTimeChanged()`（`PlayObject.Base.cs:824-830`，游戏时间变化时广播 `RM_DAYCHANGING`）的
 //! **触发点**属世界 tick 侧（未接，登记）；本片只实现登录时那一条 46。
 
+use mir2_data::StdItem;
 use mir2_envir::{GameSvrConf, MapInfoFlag, NakedAbility as ConfNakedAbility};
 
 use crate::record::{NakedAbility as RecNakedAbility, ServerUserItem};
@@ -351,16 +351,15 @@ pub const ITEM_LOCATION_WEAPON: usize = 1;
 ///
 /// 逐行对照 oracle 的分支：
 /// - 槽为 `null` / `.Index <= 0` ⇒ 该段计 0（`None`）；
-/// - `.Index > 0` 且 `GetStdItem(Index) != null` ⇒ 段 = `(byte)(Shape * 2)`；
-/// - `.Index > 0` 但 `GetStdItem(Index) == null` ⇒ 段 = 0。
+/// - `.Index > 0` 且 `GetStdItem(Index) != null` ⇒ 返回 `StdItem.Shape`（`Some(shape)`）；
+/// - `.Index > 0` 但 `GetStdItem(Index) == null`（越界/空表/空名）⇒ 计 0（`None`）+ WRN。
 ///
-/// **物品形状表（`StdItem`/`GameItemSystem`）尚未移植**（`openmir2-m2-enter-world-frames` 登记：
-/// 需物品系统卡）⇒ `.Index > 0` 时无法解析 `Shape`，本函数按 oracle 的 `GetStdItem == null` 分支
-/// 记 0 并产出一条 WRN（**不猜**：只有「无装备」形态与 oracle 逐字节等价；真机验收账号
-/// `mir2test` 的 `aaa`/`bbb` 十三槽全 `StdIndex=0`，正是这一形态）。
+/// `items` = 启动时从 `stditems` 读入的模板表（`crate::items::load_items`）；空表（加载失败/无配置）
+/// 与 oracle「物品系统为空」同形 ⇒ 所有装备槽计 0（`GetStdItem == null` 分支，**1:1**，非偏差）。
 #[must_use]
 pub fn feature_shapes(
     hum_items: Option<&[Option<ServerUserItem>]>,
+    items: &[StdItem],
 ) -> (Option<u8>, Option<u8>, Vec<String>) {
     let index_of = |slot: usize| -> u16 {
         hum_items
@@ -369,19 +368,25 @@ pub fn feature_shapes(
             .map_or(0, |item| item.index)
     };
     let mut warns = Vec::new();
-    for (slot, label) in [
-        (ITEM_LOCATION_DRESS, "Dress"),
-        (ITEM_LOCATION_WEAPON, "Weapon"),
-    ] {
-        if index_of(slot) > 0 {
-            warns.push(format!(
-                "帧 50/41 的 {label} 槽有装备（Index={}）但物品形状表未加载 ⇒ Shape 按 oracle 的 \
-                 `GetStdItem == null` 分支计 0（需物品系统卡；本形态非 1:1，已登记）",
-                index_of(slot)
-            ));
+    let mut resolve = |slot: usize, label: &str| -> Option<u8> {
+        let index = index_of(slot);
+        if index == 0 {
+            return None;
         }
-    }
-    (None, None, warns)
+        match crate::items::shape_of(items, index) {
+            Some(shape) => Some(shape),
+            None => {
+                warns.push(format!(
+                    "帧 50/41 的 {label} 槽有装备（Index={index}）但 stditems 无对应记录 ⇒ Shape 按 \
+                      oracle `GetStdItem == null` 分支计 0（1:1；空表 = 未加载/无配置）"
+                ));
+                None
+            }
+        }
+    };
+    let dress = resolve(ITEM_LOCATION_DRESS, "Dress");
+    let weapon = resolve(ITEM_LOCATION_WEAPON, "Weapon");
+    (dress, weapon, warns)
 }
 
 /// `SendAdjustBonus()`（`PlayObject.Base.cs:1193-1210`）的三段 `(A, B, C)`（各自 MemoryPack 原文，20B）。
@@ -1095,10 +1100,75 @@ mod tests {
         );
     }
 
-    /// `feature_shapes`：`Index == 0`（未穿）/ 无记录 ⇒ `None` 且无 WRN；`Index > 0`（带装备）⇒
-    /// 形状表未加载 ⇒ 计 0 + WRN（oracle `GetStdItem == null` 分支，登记非 1:1）。
+    /// **F-3（reviewer-2 `8508d321`）**：生产形态直连金标准——裸男（无 `hum_items` / 空 `stditems`）
+    /// 经 `feature_shapes` 得 `(None, None)`，`apply()` 出的 50 body `Param1` 必须 = 金标准 seq17 的
+    /// `0x0002_0000`（`Hair=1`/gender=0 ⇒ `hair_byte=2`），41 的 `Param/Tag/Series = 0/2/0`、213 的 Recog=0。
     #[test]
-    fn feature_shapes_reports_missing_item_table_for_equipped_slots() {
+    fn naked_man_logon_matches_golden_50_bytes() {
+        // 生产形态：无装备记录 + 空形状表 ⇒ 两段都计 0（oracle `GetStdItem == null` 分支）。
+        let (dress, weapon, warns) = feature_shapes(None, &[]);
+        assert_eq!((dress, weapon), (None, None));
+        assert!(warns.is_empty(), "无装备 ⇒ 无 WRN：{warns:?}");
+        let logon = LogonInputs {
+            feature: FeatureInputs {
+                dress_shape: dress,
+                weapon_shape: weapon,
+                gender: 0,
+                hair: 1,
+                on_horse: false,
+                horse_type: 0,
+                dress_eff_type: 0,
+            },
+            char_status: 0,
+            allow_group: false,
+            attack_mode: 0,
+        };
+        let mut base = EnterWorldInputs {
+            actor_id: 7,
+            cur_x: 291,
+            cur_y: 666,
+            dir: 4,
+            light: 1,
+            ..EnterWorldInputs::default()
+        };
+        let wx = WorldFrameInputs {
+            flag: None,
+            map_desc: None,
+            conf: None,
+            bonus_abil: None,
+            soft_version_date: 0,
+            game_gold: 0,
+            game_point: 0,
+            job: 0,
+            bonus_point: 0,
+            game_time: None,
+            strings: None,
+            show_name: None,
+            logon: Some(logon),
+        };
+        let _ = apply(&mut base, &wx);
+        // 金标准 seq17：`Param1=0x0002_0000`（`MakeHumanFeature(0,0,0,2)`）、其余 0。
+        assert_eq!(
+            base.logon_body_wl,
+            Some((0x0002_0000, 0, 0, 0)),
+            "裸男 50 body 必须 = 金标准 seq17"
+        );
+        assert_eq!(base.feature, Some((0x0002_0000, 0)));
+        let frames = base.frames();
+        // 658 恒发（R1-1：空尾也发 header-only），随后同组 50/41/213。
+        assert_eq!(idents(&frames), vec![658, 50, 41, 213]);
+        // 金标准 seq18：41 的 `Param/Tag/Series = Lo/HiWord(feature)/featureEx = 0/2/0`。
+        let cm41 = CommandMessage::from_bytes(&frames[2]).unwrap();
+        assert_eq!((cm41.param, cm41.tag, cm41.series), (0, 2, 0));
+        // 金标准 seq19：213 的 Recog=0。
+        let cm213 = CommandMessage::from_bytes(&frames[3]).unwrap();
+        assert_eq!(cm213.recog, 0);
+    }
+
+    /// `feature_shapes`：`Index == 0`（未穿）/ 无记录 ⇒ `None` 且无 WRN；`Index > 0`（带装备）⇒
+    /// 从 `stditems` 表查 `Shape`（1-based）；查不到（越界/空表）⇒ 计 0 + WRN（oracle `GetStdItem == null`）。
+    #[test]
+    fn feature_shapes_resolves_shape_from_item_table() {
         let empty = ServerUserItem {
             make_index: 0,
             index: 0,
@@ -1111,17 +1181,40 @@ mod tests {
             prefix: None,
         };
         let worn = ServerUserItem {
-            index: 223,
+            index: 2,
             ..empty.clone()
         };
+        // `Index=1` ⇒ items[0]（木剑 shape=5）；`Index=2` ⇒ items[1]（布衣 shape=3）。
+        let table = vec![
+            StdItem {
+                name: "木剑".into(),
+                shape: 5,
+                ..StdItem::default()
+            },
+            StdItem {
+                name: "布衣".into(),
+                shape: 3,
+                ..StdItem::default()
+            },
+        ];
+        // Dress 槽 Index=2（布衣 shape=3）、Weapon 槽空。
         let items = vec![Some(worn), Some(empty.clone())];
-        let (dress, weapon, warns) = feature_shapes(Some(&items));
-        assert_eq!((dress, weapon), (None, None), "形状表未加载 ⇒ 不猜");
+        let (dress, weapon, warns) = feature_shapes(Some(&items), &table);
+        assert_eq!(
+            (dress, weapon),
+            (Some(3), None),
+            "Dress 从 stditems 查得 Shape=3"
+        );
+        assert!(warns.is_empty(), "命中不 WRN：{warns:?}");
+        // 空表 ⇒ 越界 ⇒ 计 0 + WRN（oracle 空物品系统分支）。
+        let (dress, weapon, warns) = feature_shapes(Some(&items), &[]);
+        assert_eq!((dress, weapon), (None, None));
         assert_eq!(warns.len(), 1, "只有 Dress 槽带装备：{warns:?}");
-        assert!(warns[0].contains("Index=223"), "{warns:?}");
+        assert!(warns[0].contains("Index=2"), "{warns:?}");
+        // 空槽不 WRN。
         let all_empty = vec![None, Some(empty)];
-        let (_, _, warns) = feature_shapes(Some(&all_empty));
+        let (_, _, warns) = feature_shapes(Some(&all_empty), &table);
         assert!(warns.is_empty(), "空槽不 WRN：{warns:?}");
-        assert!(feature_shapes(None).2.is_empty());
+        assert!(feature_shapes(None, &table).2.is_empty());
     }
 }

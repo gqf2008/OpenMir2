@@ -53,6 +53,13 @@ pub struct GateConfig {
     pub db_addr: String,
     /// `[Server] DBPort`（现网 6000）。
     pub db_port: u16,
+    /// `[DataBase] ConnctionString`（**原拼写照抄**，`ServerConf.cs:15`）——GameSvr 直连 MySQL 读
+    /// `stditems` 用的连接串（oracle `MySqlDB.LoadItemsDB` 也是直连，不经过 DBSvr）。
+    ///
+    /// `None` = 配置里没这个键 ⇒ 兜底用 oracle 的源码缺省
+    /// （`GameSvrConf.cs:1921`：`server=127.0.0.1;uid=root;pwd=;database=mir2;`）；两者都解析失败
+    /// ⇒ 物品表为空（`GetStdItem` 恒 null ⇒ 帧 50/41 的装备形态计 0，与 oracle 空表分支等价）+ WRN。
+    pub db_conn_string: Option<String>,
     /// `[Setup] ShowRankLevelName`（oracle `GameSvrConf.cs:376/1464` 缺省 `false`）。
     ///
     /// 帧 42 `SM_USERNAME` 的展示名走 `GetShowName()`（`PlayObject.cs:3329`）：
@@ -77,8 +84,16 @@ pub fn default_path() -> PathBuf {
 /// 端口非法、`WorldMaps` **写了但非法** —— 都返回错误（调用方据此非零退出）。
 /// `WorldMaps` **没写**不算错（可选键，见模块头）；`WorldMaps=` 空值 ⇒ 空表。
 pub fn load(path: &Path) -> Result<GateConfig> {
-    let text = std::fs::read_to_string(path)
+    let raw = std::fs::read_to_string(path)
         .with_context(|| format!("读不到配置文件 {}", path.display()))?;
+    // **BOM 口径**（B-1，reviewer-2 `b49897e8`）：现网 `E:\MirServer\M2GameSvr\Server.conf`
+    // 首字节是 UTF-8 BOM（`ef bb bf`）。oracle 的 `ConfigFile.Load` 用
+    // `new StreamReader(path, GB2312)` 且**默认做 BOM 探测**（`ConfigFile.cs:263`）⇒ 首行的
+    // BOM 被吞掉，`[DataBase]` 段被正常识别。Rust 的 `read_to_string` 会把它留成 `U+FEFF`，
+    // 而 `str::trim` 不把 `U+FEFF` 当空白 ⇒ `[DataBase]` 头丢失 ⇒ `ConnctionString` 缺键
+    // ⇒ 回落到源码缺省的 `database=mir2`（现网不存在该库）⇒ `stditems` 恒空。
+    // 照 C# 语义：**只在文件首**剥一个 `U+FEFF`（不是每行、不是循环）。
+    let text = raw.strip_prefix('\u{feff}').unwrap_or(&raw);
     let mut section = String::new();
     let mut gate_addr: Option<String> = None;
     let mut gate_port: Option<u16> = None;
@@ -94,6 +109,7 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut ids_port: Option<u16> = None;
     let mut db_addr: Option<String> = None;
     let mut db_port: Option<u16> = None;
+    let mut db_conn_string: Option<String> = None;
     for raw in text.lines() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
@@ -150,6 +166,13 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                 "NOTICEDIR" => notice_dir = Some(v.to_string()),
                 _ => {}
             },
+            // `MySqlDB` 直连用（`ServerConf.cs:15` 从 `[DataBase]` 读 `ConnctionString`；原拼写照抄）。
+            // 现网样件 `E:\MirServer\M2GameSvr\Server.conf` 在 `[DataBase]` 段（键 `ConnctionString`）。
+            "DATABASE" => {
+                if k.as_str() == "CONNCTIONSTRING" {
+                    db_conn_string = Some(v.to_string());
+                }
+            }
             // 消息颜色（`SystemShare.Config.RedMsgFColor/BColor`，`ServerConf.cs:333-334` 的 `ReadWriteByte`）。
             // 缺键不是错误（oracle 读不到就沿用 `GameSvrConf` 的缺省 0xFF/0x38）；写了但非法才报错。
             "SETUP" => match k.as_str() {
@@ -224,6 +247,7 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         ids_port,
         db_addr,
         db_port,
+        db_conn_string,
     })
 }
 
@@ -290,6 +314,34 @@ mod tests {
             c.notice_dir, "Notice",
             "缺 [Share] NoticeDir 时用 oracle 缺省值（GameSvrConf.cs:1297）"
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **B-1**（reviewer-2 `b49897e8`）：现网 `Server.conf` 首字节是 UTF-8 BOM（`ef bb bf`）。
+    ///
+    /// oracle `ConfigFile.Load` 用 `new StreamReader(path, GB2312)` 且**默认做 BOM 探测**
+    /// （`ConfigFile.cs:263`）⇒ 首行 BOM 被吞掉，`[DataBase]` 段照常识别。Rust 若不剥 BOM，
+    /// `[DataBase]` 头丢失 ⇒ `ConnctionString` 缺键 ⇒ 回落 `database=mir2`（现网无此库）
+    /// ⇒ `stditems` 恒空 ⇒ **带装备角色的 50/41 与 oracle 偏离**（裸装夹具/真机号看不出来）。
+    /// 本用例把「带 BOM 的现网形态」钉住；把 `load` 里的 `strip_prefix('\u{feff}')` 改回去 ⇒ 本用例必红。
+    #[test]
+    fn deployed_conf_with_utf8_bom_reads_database_section() {
+        let dir = std::env::temp_dir().join(format!("gs-bom-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("Server.conf");
+        // 首 3 字节照现网事实（`head -c 32 E:/MirServer/M2GameSvr/Server.conf | xxd` = `ef bb bf`）。
+        let mut bytes = vec![0xEF, 0xBB, 0xBF];
+        bytes.extend_from_slice(
+            b"[DataBase]\nDBType=MySQL\nConnctionString=server=127.0.0.1;uid=root;pwd=;database=mir2_data;\n[Server]\nGateAddr=127.0.0.1\nGatePort=5000\nCheckBlock=1\nIDSAddr=127.0.0.1\nIDSPort=5600\nDBAddr=127.0.0.1\nDBPort=6000\n",
+        );
+        std::fs::write(&p, bytes).unwrap();
+        let c = load(&p).expect("带 BOM 的现网形态必须能解析（BOM 只在文件首剥一个）");
+        assert_eq!(
+            c.db_conn_string.as_deref(),
+            Some("server=127.0.0.1;uid=root;pwd=;database=mir2_data;"),
+            "BOM 被吞后 [DataBase] ConnctionString 必须读到（现网 database=mir2_data）"
+        );
+        assert_eq!(c.gate_port, 5000, "BOM 后的 [Server] 段也要正常解析");
         std::fs::remove_dir_all(&dir).ok();
     }
 

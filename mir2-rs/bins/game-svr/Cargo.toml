@@ -15,8 +15,10 @@ all = "deny"
 mir2-protocol = { path = "../../crates/protocol" }
 mir2-shared = { path = "../../crates/shared" }   # HUtil32.GetValidStr3 的既有 Rust 实现（别重复造）
 mir2-world = { path = "../../crates/world" }
-mir2-data = { path = "../../crates/data" }   # StdItems 模板（Index → StdItem，52/752 能力接缝；与 envir 同源）
+mir2-data = { path = "../../crates/data" }   # StdItem 模板（Index → StdItem）：帧 50/41 的 StdItem.Shape 输入 + 52/752 能力接缝（与 envir 同源）
 mir2-envir = { path = "../../crates/envir" }   # Envir *.map 真地图加载 + 逻辑名→map_id（集成点 ④）
+mir2-storage = { path = "../../crates/storage" } # `LegacyDsn`：`[DataBase] ConnctionString` → sqlx URL（勿再手写一份）
+sqlx = { version = "0.8", features = ["runtime-tokio", "mysql"] }   # 建池读 stditems（与 mir2-data 同源）
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "macros", "time"] }
 anyhow = "1"
 encoding_rs = "0.8"
