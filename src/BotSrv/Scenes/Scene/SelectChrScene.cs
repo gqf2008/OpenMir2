@@ -153,26 +153,40 @@ namespace BotSrv.Scenes.Scene
 
         private void SelectChrCreateNewChr(string sChrName)
         {
-            byte sHair = 0;
-            switch (RandomNumber.GetInstance().Random(1))
+            byte sHair;
+            byte sJob;
+            byte sSex;
+            if (MShare.g_boFixedNewChr)
             {
-                case 0:
-                    sHair = 2;
-                    break;
-                case 1:
-                    switch (new Random(1).Next())
-                    {
-                        case 0:
-                            sHair = 1;
-                            break;
-                        case 1:
-                            sHair = 3;
-                            break;
-                    }
-                    break;
+                // M3 跨侧对拍夹具确定性（T-6）：固定建角输入，使 C# 侧与 Rust 侧跑同一序列。
+                // 默认关闭时走下面的原随机路径（逐字节保持改动前行为）。
+                sHair = (byte)MShare.g_nNewChrHair;
+                sJob = (byte)MShare.g_nNewChrJob;
+                sSex = (byte)MShare.g_nNewChrSex;
             }
-            byte sJob = (byte)RandomNumber.GetInstance().Random(2);
-            byte sSex = (byte)RandomNumber.GetInstance().Random(1);
+            else
+            {
+                sHair = 0;
+                switch (RandomNumber.GetInstance().Random(1))
+                {
+                    case 0:
+                        sHair = 2;
+                        break;
+                    case 1:
+                        switch (new Random(1).Next())
+                        {
+                            case 0:
+                                sHair = 1;
+                                break;
+                            case 1:
+                                sHair = 3;
+                                break;
+                        }
+                        break;
+                }
+                sJob = (byte)RandomNumber.GetInstance().Random(2);
+                sSex = (byte)RandomNumber.GetInstance().Random(1);
+            }
             SendNewChr(RobotClient.LoginId, sChrName, sHair, sJob, sSex);
             LogService.Info($"创建角色 {sChrName}");
         }

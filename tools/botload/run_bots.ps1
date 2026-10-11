@@ -30,6 +30,10 @@ param(
   [int]$TimeoutSec = 900,
   [switch]$SkipBuild,
   [string]$LogFile = "",          # 默认 <repo>/tests/botload/bots-<时间戳>.log
+  [switch]$FixedNewChr,           # M3 夹具：固定建角 Job/Hair/Sex（默认不固定 = 原随机行为）
+  [int]$NewChrJob = 0,            # 仅 -FixedNewChr 时生效（写进 AppSetting.json 的 BotPlay 段）
+  [int]$NewChrHair = 0,           # 仅 -FixedNewChr 时生效
+  [int]$NewChrSex = 0,            # 仅 -FixedNewChr 时生效
   [switch]$SelfTestRed
 )
 
@@ -72,10 +76,17 @@ $cfg = @{
     TotalChrCount  = $Count
     NewAccount     = [bool]$NewAccount
     LoginAccount   = $Prefix
+    FixedNewChr    = [bool]$FixedNewChr
+    NewChrJob      = $NewChrJob
+    NewChrHair     = $NewChrHair
+    NewChrSex      = $NewChrSex
   }
 } | ConvertTo-Json -Depth 4
 [System.IO.File]::WriteAllText((Join-Path $BotBinDir "AppSetting.json"), $cfg, (New-Object System.Text.UTF8Encoding($false)))
-Write-Output "CONFIG: $Count bots, prefix=$Prefix, target=$Address`:$Port, NewAccount=$NewAccount"
+Write-Output "CONFIG: $Count bots, prefix=$Prefix, target=$Address`:$Port, NewAccount=$NewAccount, FixedNewChr=$FixedNewChr"
+if ($FixedNewChr) {
+    Write-Output "CONFIG_FIXED_NEWCHR Job=$NewChrJob Hair=$NewChrHair Sex=$NewChrSex"
+}
 
 # ---- 3. 起进程 ----
 $proc = Start-Process -FilePath $BotExe -WorkingDirectory $BotBinDir -PassThru -WindowStyle Hidden `

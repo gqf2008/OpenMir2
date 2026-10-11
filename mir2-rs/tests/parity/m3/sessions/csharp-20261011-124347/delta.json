@@ -1,0 +1,18 @@
+{
+  "mir2_account.account": {
+    "added": 1,
+    "removed": 0
+  },
+  "mir2_account.account_protection": {
+    "added": 1,
+    "removed": 0
+  },
+  "mir2_db.characters": {
+    "added": 1,
+    "removed": 0
+  },
+  "mir2_db.characters_indexes": {
+    "added": 1,
+    "removed": 0
+  }
+}

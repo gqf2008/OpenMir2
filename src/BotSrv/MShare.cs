@@ -15,6 +15,14 @@ namespace BotSrv
         public static string g_sGameIPaddr;
         public static int g_nGamePort;
         /// <summary>
+        /// 固定建角参数（M3 夹具确定性，来自 RobotOptions；默认 false = 原随机行为）。
+        /// 见 SelectChrScene.SelectChrCreateNewChr。
+        /// </summary>
+        public static bool g_boFixedNewChr = false;
+        public static int g_nNewChrJob = 0;
+        public static int g_nNewChrHair = 0;
+        public static int g_nNewChrSex = 0;
+        /// <summary>
         /// 是否自动捡取物品
         /// </summary>
         public static bool AutoPickUp = true;

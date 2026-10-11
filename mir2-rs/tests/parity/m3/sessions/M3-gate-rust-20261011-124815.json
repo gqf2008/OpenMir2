@@ -1,0 +1,36 @@
+﻿{
+    "side":  "rust",
+    "bots":  1,
+    "seed":  42,
+    "started_at":  "2026-10-11T12:48:15.5859983+08:00",
+    "fixed_new_chr":  "Job=1 Hair=2 Sex=0",
+    "steps":  {
+
+              },
+    "entry_holders":  [
+                          {
+                              "port":  7000,
+                              "process":  "LoginGate",
+                              "path":  "E:\\MirServer\\LoginGate\\LoginGate.exe",
+                              "impl":  "csharp"
+                          },
+                          {
+                              "port":  7100,
+                              "process":  "SelGate",
+                              "path":  "E:\\MirServer\\SelGate\\SelGate.exe",
+                              "impl":  "csharp"
+                          },
+                          {
+                              "port":  7200,
+                              "process":  "GameGate",
+                              "path":  "E:\\MirServer\\RunGate\\GameGate.exe",
+                              "impl":  "csharp"
+                          }
+                      ],
+    "entry_impl":  "csharp",
+    "finished_at":  "2026-10-11T12:48:17.7857056+08:00",
+    "failed":  [
+                   "rust_side_but_csharp_holds_entry"
+               ],
+    "pass":  false
+}
