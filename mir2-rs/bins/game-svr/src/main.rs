@@ -1495,9 +1495,17 @@ fn build_save_record(
     chr_name: &str,
     world: &mir2_world::World,
     sg: &SessionGround,
+    registry: Option<&mir2_envir::MapRegistry>,
 ) -> record::PlayerRecord {
     let mut rec = saved.record.clone();
-    rec.data.cur_map = Some(saved.enter_map.clone());
+    // oracle `MakeSaveRcd`（`:1243`）写的是 `playObject.MapName`（**当前**逻辑图名，不是进图时的）。
+    // 换图/传送接线前 `enter_map` == 当前图；这里优先用会话的 `map_id` 反查注册表
+    //（`MapRegistry::name_of`），拿不到注册表/会话时回落到 `enter_map`。
+    let cur_map = world
+        .session(chr_name)
+        .and_then(|s| registry.and_then(|r| r.name_of(s.map_id)))
+        .unwrap_or(saved.enter_map.as_str());
+    rec.data.cur_map = Some(cur_map.to_string());
     if let Some(e) = world
         .session(chr_name)
         .and_then(|s| s.actor_id)
@@ -1558,6 +1566,7 @@ fn save_human_rcd(
     chr_name: &str,
     world: &mir2_world::World,
     sg: &SessionGround,
+    registry: Option<&mir2_envir::MapRegistry>,
 ) -> Option<i32> {
     let w = db.as_mut()?;
     if !w.state.is_connected() {
@@ -1567,7 +1576,7 @@ fn save_human_rcd(
         );
         return None;
     }
-    let rec = build_save_record(saved, chr_name, world, sg);
+    let rec = build_save_record(saved, chr_name, world, sg, registry);
     let packet = record::encode_save_character_data(&saved.account, chr_name, &rec);
     let qid = w.next_query_id();
     let frame = dbclient::save_human_rcd_request(qid, &packet);
@@ -1770,6 +1779,7 @@ fn handle_duplicate_enter(
 /// 处理待踢名单（oracle `PlayObject.RunNotice` 的 `BoKickFlag` 支，`PlayObject.cs:1082-1090`）：
 /// 给**旧**连接发 `SM_OUTOFCONNECTION`（`SendDefMessage(SM_OUTOFCONNECTION, 0, 0, 0, 0)`），
 /// 再 `MakeGhost()` = 离开世界（摘格子 + 移除实体）并清掉旧槽。
+#[allow(clippy::too_many_arguments)]
 fn drain_kicks(
     world: &mut mir2_world::World,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -1778,6 +1788,7 @@ fn drain_kicks(
     db: &mut Option<DbWiring>,
     saves: &mut std::collections::HashMap<String, SavedHuman>,
     ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+    registry: Option<&mir2_envir::MapRegistry>,
 ) {
     for chr in std::mem::take(kick_pending) {
         let Some(e) = online_take(online, &chr) else {
@@ -1797,7 +1808,7 @@ fn drain_kicks(
         // 存档：oracle `MakeGhost()` 里的 `SaveHumanRcd`（`WorldServer.cs:1077/713`）——
         // 必须在退出世界前拿实时态（坐标/物品/Gold）。
         if let (Some(saved), Some(sg)) = (saves.get(&chr), ground_sessions.get(&chr)) {
-            save_human_rcd(db, saved, &chr, world, sg);
+            save_human_rcd(db, saved, &chr, world, sg, registry);
         }
         match world.disconnect(&chr) {
             Ok(()) => glog!(
@@ -1892,6 +1903,7 @@ fn handle_kick_account(
 /// 与 [`drain_kicks`] 的区别：这里**不再发帧**（`SM_SYSMESSAGE` 已在 [`GateEvent::KickAccount`]
 /// 处理时立即发出，照 oracle `KickUser` 里先 `SysMsg` 再置标志的次序）；而 `drain_kicks` 对应
 /// `BoKickFlag` 支、要先发 `SM_OUTOFCONNECTION`(528)。
+#[allow(clippy::too_many_arguments)]
 fn drain_soft_close(
     world: &mut mir2_world::World,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -1900,6 +1912,7 @@ fn drain_soft_close(
     db: &mut Option<DbWiring>,
     saves: &mut std::collections::HashMap<String, SavedHuman>,
     ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+    registry: Option<&mir2_envir::MapRegistry>,
 ) {
     for chr in std::mem::take(soft_close_pending) {
         let Some(e) = online_take(online, &chr) else {
@@ -1915,7 +1928,7 @@ fn drain_soft_close(
         }
         // 存档（同 [`drain_kicks`]：oracle `BoSoftClose` 支也会 `MakeGhost` ⇒ `SaveHumanRcd`）。
         if let (Some(saved), Some(sg)) = (saves.get(&chr), ground_sessions.get(&chr)) {
-            save_human_rcd(db, saved, &chr, world, sg);
+            save_human_rcd(db, saved, &chr, world, sg, registry);
         }
         match world.disconnect(&chr) {
             Ok(()) => glog!(
@@ -2223,7 +2236,14 @@ fn sim_loop(
                         if let (Some(saved), Some(sg)) =
                             (saves.get(&chr_name), ground_sessions.get(&chr_name))
                         {
-                            save_human_rcd(&mut db, saved, &chr_name, &world, sg);
+                            save_human_rcd(
+                                &mut db,
+                                saved,
+                                &chr_name,
+                                &world,
+                                sg,
+                                registry.as_ref(),
+                            );
                         }
                         saves.remove(&chr_name);
                         // 地面交互会话态随断线一并移除（否则重进后还带着旧 `ItemList`/`Gold`）。
@@ -2862,6 +2882,7 @@ fn sim_loop(
             &mut db,
             &mut saves,
             &mut ground_sessions,
+            registry.as_ref(),
         );
         // 账号级顶号落地（`BoSoftClose` 支）：提示帧已即时发出，这里只离开世界 + 清槽。
         // 同一 tick 后段落地（oracle ≥1 tick）——见 docs §4 的 O-1 登记。
@@ -2873,6 +2894,7 @@ fn sim_loop(
             &mut db,
             &mut saves,
             &mut ground_sessions,
+            registry.as_ref(),
         );
         let rec = world.tick();
         ticks += 1;
@@ -3745,7 +3767,7 @@ mod tests {
         world
             .enter_map("hero", mir2_world::Entity::new(0, "hero", 11, 22), 0)
             .expect("进世界");
-        let rec = build_save_record(&saved, "hero", &world, &sg);
+        let rec = build_save_record(&saved, "hero", &world, &sg, None);
         let parsed = mir2_storage::SaveCharacterData::from_bytes(
             &record::encode_save_character_data(&saved.account, "hero", &rec),
         )
@@ -4494,6 +4516,7 @@ mod tests {
             &mut None,
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
+            None,
         );
         match rx0.try_recv().expect("旧连接必须收到 SM_OUTOFCONNECTION") {
             SimToGate::SendFrame { socket, body } => {
@@ -4539,6 +4562,7 @@ mod tests {
             &mut None,
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
+            None,
         );
         assert!(kick_pending.is_empty(), "待踢名单必须被消费掉（幂等）");
         assert!(world.session("ghost").is_none());
@@ -4731,6 +4755,7 @@ mod tests {
             &mut None,
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
+            None,
         );
         assert_eq!(soft_close_pending.len(), 0, "待软关名单被消费");
         match rx0.try_recv().expect("随后必须清槽（CloseUser）") {
@@ -4819,6 +4844,7 @@ mod tests {
             &mut None,
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
+            None,
         );
         assert_eq!(
             world.session("lb1a").unwrap().stage,
@@ -4878,6 +4904,7 @@ mod tests {
             &mut None,
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
+            None,
         );
         let _ = rx0.try_recv(); // 528
         let _ = rx0.try_recv(); // KickUser

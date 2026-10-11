@@ -38,6 +38,11 @@ Rust 侧新增（写集 = `mir2-rs/bins/game-svr/**`）：
 2. `HumItems[Helmet] = UseItems[Necklace]`、`HumItems[Necklace] = UseItems[Helmet]`（`:1302-1303`）。
 3. 空槽不是 `null` 而是 `HUtil32.DelfautItem.ToServerItem()`（`Desc = new byte[14]`，Index/MakeIndex/Dura=0）。
 
+**owner-precheck `788c1a0a` 的处置（已改，不只登记）**：`MakeSaveRcd` 写的是 `playObject.MapName`
+（**当前**逻辑图名），而本片初稿取的是进图时的 `enter_map`。已改为优先用会话 `map_id` 反查
+注册表（`MapRegistry::name_of`，`crates/envir/src/registry.rs:226`），拿不到注册表/会话时回落到
+`enter_map`（`build_save_record` 的 `cur_map`）。换图/传送接线后本处自动正确，不用再改。
+
 ## 2. 用例与红检（DoD ③）
 
 - `record::tests::save_character_data_roundtrips_through_dbsrv_type`：`encode_save_character_data`
@@ -99,6 +104,7 @@ Rust 侧新增（写集 = `mir2-rs/bins/game-svr/**`）：
      本片只做 `MakeGhost`/断线那一条（DoD ① 的「至少」）。
   4. `FrontEngine.InSaveRcdList` 的「保存中」生命周期未建模（`begin_save/end_save` 仍是死代码）⇒
      保存期间的并发重登不会被 requeue（登记）。
+  5. `characters.MapName` 已按**当前** `map_id` 反查注册表（见 §1 owner-precheck），不再只是 `enter_map`。
 
 ## 5. 边界与残留物
 

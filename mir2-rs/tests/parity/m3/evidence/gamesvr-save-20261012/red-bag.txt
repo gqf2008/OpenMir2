@@ -9,7 +9,7 @@ warning: unused variable: `it`
 
 warning: `game-svr` (bin "game-svr" test) generated 1 warning (1 duplicate)
 warning: `game-svr` (bin "game-svr") generated 1 warning (run `cargo fix --bin "game-svr" -p game-svr` to apply 1 suggestion)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.19s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.93s
      Running unittests src\lib.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-3aa264152417c61e.exe)
 
 running 0 tests
@@ -25,7 +25,7 @@ failures:
 
 ---- tests::save_record_reflects_live_state_and_item_layout stdout ----
 
-thread 'tests::save_record_reflects_live_state_and_item_layout' (5656) panicked at bins\game-svr\src\main.rs:3767:9:
+thread 'tests::save_record_reflects_live_state_and_item_layout' (30400) panicked at bins\game-svr\src\main.rs:3789:9:
 assertion `left == right` failed
   left: 0
  right: 207

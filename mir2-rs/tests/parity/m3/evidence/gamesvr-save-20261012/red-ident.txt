@@ -1,5 +1,5 @@
    Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.73s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.65s
      Running unittests src\lib.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-3aa264152417c61e.exe)
 
 running 0 tests
@@ -15,7 +15,7 @@ failures:
 
 ---- dbclient::tests::save_request_carries_db_savehumanrcd_and_packet stdout ----
 
-thread 'dbclient::tests::save_request_carries_db_savehumanrcd_and_packet' (13204) panicked at bins\game-svr\src\dbclient.rs:591:9:
+thread 'dbclient::tests::save_request_carries_db_savehumanrcd_and_packet' (8676) panicked at bins\game-svr\src\dbclient.rs:591:9:
 assertion `left == right` failed: Message.Ident 必须是 DB_SAVEHUMANRCD(101)
   left: Some((100, 0))
  right: Some((101, 0))
