@@ -57,11 +57,19 @@ cargo run -p mir2-parity-tests --bin dump_item_fixture -- \
 **sha256 逐字节一致**：`items_jiangshi1.json` = `76CEFB9535F75AEC7DBE7AF117657CA39C5A5610E4344B3FFD94EEAEE1920FA9`
 （3942 字节 / 260 行）。
 
-⚠️ 已知缺口：`fixtures/items_synth.json`（17 行）的**生成输入未记录**——用
-`fixtures/MonItems/synth/*.txt` 做字节级拼接再重导，只得 7 行（缺 `布衣男S`/`神秘手镯P` 等 10 项），
-说明它不是"synth 目录并集"的产物（更像一份含跨文件条目的手工/临时清单）。
-该夹具本身被 `tests/drop_parity.rs` 实际消费、在 master 上全绿，故**不阻塞**；
-但若将来要重生成，需先补齐输入清单（跟踪：卡 `openmir2-verify-tools-bin-gitignore`）。
+⚠️ 已知缺口：`fixtures/items_synth.json`（17 行）**当前无法从这份库重生成**，但**输入清单并没有丢**——
+口径更正（2026-10-11，独立审查 reviewer-3 的探针证据，取代先前"输入未记录/手工清单"的错判）：
+
+- 17 条 fixture 与上面 bash 块里的 17 个 `MonItems/synth/*.txt` **一一对应**（名字就是各文件引用的名字，
+  且 fixture 的 `std_mode` 恰好等于文件名里的数字：`m5`→木剑(5)、`m6`→匕首(6)、`m10`→布衣男S(10)、
+  `u26`→神秘手镯P(26)…）；
+- 不可复现出在**库侧**：枚举当前 `mir2_data.stditems` 后按同名（大小写不敏感）比对，17 个名字里
+  **10 个不存在**（布衣男S/布衣女S/青铜头盔S/琥珀项链S/魔鬼项链S/钢手镯S/蓝色水晶戒指S/神秘戒指P/神秘手镯/神秘手镯P），
+  存在的 7 个里还有 4 个属性不符（匕首 DB `std=5/shape=6` vs fixture `6/0`；记忆项链 `19/123` vs `21/0`；
+  技巧项链 `20/120` vs `24/0`；神秘头盔 `shape 132` vs `130`；神秘戒指 `shape 130` vs `131`）
+  ⇒ **这份 fixture 是从另一个库快照导出的**，不是当前这份 `mir2_data`。
+- 影响：`tests/drop_parity.rs:137` 消费它、用例在 master 全绿 ⇒ **不阻塞**；要重生成得先拿到**与之匹配的库快照**
+  （或让 fixture 的数值改为以当前库为准，并同步重导 C# 侧 `drop_synth_*.txt` 金标准）。
 
 ## 四条验收门禁 ↔ 测试对照
 
