@@ -1,137 +1,138 @@
 seed	20261012	800	0	100	0	0
-reg	1	火球术	1	7	60	1	本片已实装：施法前置 + MP 消耗 + 威力公式 + 冷却（见 crates/world/src/magic.rs）
-skill	1	火球术	1	3	7	11	16	16	200	300	500	500	4	1	8	8	2	2	60	860	2	3	4	5	1	50	1	1	0	1	7700	10290	damage	32	-1	-1	-1	-1	-1
-reg	2	治愈术	2	7	40	1	本片已实装：施法前置 + MP 消耗 + 威力公式 + 冷却（见 crates/world/src/magic.rs）
-skill	2	治愈术	2	3	7	11	16	16	200	300	500	500	7	0	14	20	0	0	40	840	2	4	5	7	2	50	1	1	0	1	7700	10290	heal	108	-1	-1	-1	-1	-1
-reg	3	基本剑术	0	7	0	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	4	精神力战法	2	9	0	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	5	大火球	1	19	60	1	本片已实装：施法前置 + MP 消耗 + 威力公式 + 冷却（见 crates/world/src/magic.rs）
-skill	5	大火球	1	3	19	23	25	25	200	300	500	500	3	5	6	6	10	10	60	860	6	7	7	8	1	50	1	1	0	1	7700	10290	damage	41	-1	-1	-1	-1	-1
-reg	6	施毒术	2	14	40	1	本片已实装：施法前置 + MP 消耗 + 威力公式 + 冷却（见 crates/world/src/magic.rs）
-skill	6	施毒术	2	3	14	17	20	20	200	300	500	500	4	0	0	0	0	0	40	840	1	2	3	4	2	50	1	1	0	1	7700	10290	poison	-1	-1	127	120	-1	-1
-reg	7	攻杀剑术	0	19	0	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	8	抗拒火环	1	12	30	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	9	地狱火	1	16	60	1	本片已实装：施法前置 + MP 消耗 + 威力公式 + 冷却（见 crates/world/src/magic.rs）
-skill	9	地狱火	1	3	16	21	26	26	200	300	500	500	10	10	14	14	6	6	60	860	13	15	18	20	1	50	1	1	0	1	7700	10290	damage	34	-1	-1	-1	-1	-1
-reg	10	疾光电影	1	26	100	1	本片已实装：施法前置 + MP 消耗 + 威力公式 + 冷却（见 crates/world/src/magic.rs）
-skill	10	疾光电影	1	3	26	29	32	32	200	300	500	500	25	20	12	12	12	12	100	900	26	33	39	45	1	50	1	1	0	1	7700	10290	damage	47	-1	-1	-1	-1	-1
-reg	11	雷电术	1	17	100	1	本片已实装：施法前置 + MP 消耗 + 威力公式 + 冷却（见 crates/world/src/magic.rs）
-skill	11	雷电术	1	3	17	20	23	23	200	300	500	500	12	6	14	28	10	10	100	900	9	12	15	18	1	50	1	1	0	1	7700	10290	damage	43	65	-1	-1	-1	-1
-reg	12	刺杀剑术	0	25	0	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	13	灵魂火符	2	18	60	1	本片已实装：施法前置 + MP 消耗 + 威力公式 + 冷却（见 crates/world/src/magic.rs）
-skill	13	灵魂火符	2	3	18	21	24	24	200	300	500	500	5	2	15	28	10	10	60	860	3	5	6	7	2	50	1	1	0	1	7700	10290	damage	73	-1	-1	-1	-1	-1
-reg	14	幽灵盾	2	22	40	1	本片已实装：施法前置 + MP 消耗 + 威力公式 + 冷却（见 crates/world/src/magic.rs）
-skill	14	幽灵盾	2	3	22	24	26	26	200	300	500	500	15	0	0	0	0	0	40	840	4	8	11	15	2	50	1	1	0	1	7700	10290	buff_ac	540	-1	-1	-1	-1	-1
-reg	15	神圣战甲术	2	25	40	1	本片已实装：施法前置 + MP 消耗 + 威力公式 + 冷却（见 crates/world/src/magic.rs）
-skill	15	神圣战甲术	2	3	25	27	29	29	200	300	500	500	15	0	0	0	0	0	40	840	4	8	11	15	2	50	1	1	0	1	7700	10290	buff_ac	540	-1	-1	-1	-1	-1
-reg	16	困魔咒	2	28	50	1	本片已实装：施法前置 + MP 消耗 + 威力公式 + 冷却（见 crates/world/src/magic.rs）
-skill	16	困魔咒	2	3	28	30	32	32	200	300	500	500	10	5	0	0	0	0	50	850	8	10	13	15	2	50	1	1	0	1	7700	10290	buff_holy	177	-1	-1	-1	-1	-1
-reg	17	召唤骷髅	2	19	50	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	18	隐身术	2	20	50	1	本片已实装：施法前置 + MP 消耗 + 威力公式 + 冷却（见 crates/world/src/magic.rs）
-skill	18	隐身术	2	3	20	23	26	26	200	300	500	500	5	0	0	0	0	0	50	850	1	3	4	5	2	50	1	1	0	1	7700	10290	buff_transparent	170	-1	-1	-1	-1	-1
-reg	19	集体隐身术	2	21	50	1	本片已实装：施法前置 + MP 消耗 + 威力公式 + 冷却（见 crates/world/src/magic.rs）
-skill	19	集体隐身术	2	3	21	25	29	29	200	300	500	500	10	0	0	0	0	0	50	850	3	5	8	10	2	50	1	1	0	1	7700	10290	buff_transparent	170	-1	-1	-1	-1	-1
-reg	20	诱惑之光	1	13	60	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	21	瞬息移动	1	19	50	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	22	火墙	1	24	120	1	本片已实装：施法前置 + MP 消耗 + 威力公式 + 冷却（见 crates/world/src/magic.rs）
-skill	22	火墙	1	3	24	29	33	33	200	300	500	500	20	25	3	3	3	3	120	920	30	35	40	45	1	50	1	1	0	1	7700	10290	fire_wall	27	-1	-1	-1	22	-1
-reg	23	爆裂火焰	1	22	60	1	本片已实装：施法前置 + MP 消耗 + 威力公式 + 冷却（见 crates/world/src/magic.rs）
-skill	23	爆裂火焰	1	3	22	27	31	31	200	300	500	500	15	10	8	8	6	6	60	860	14	18	21	25	1	50	1	1	0	1	7700	10290	damage	41	-1	-1	-1	-1	-1
-reg	24	地狱雷光	1	30	60	1	本片已实装：施法前置 + MP 消耗 + 威力公式 + 冷却（见 crates/world/src/magic.rs）
-skill	24	地狱雷光	1	3	30	32	34	34	200	300	500	500	35	20	10	30	10	30	60	860	29	38	46	55	1	50	1	1	0	1	7700	10290	damage	50	-1	-1	-1	-1	-1
-reg	25	半月弯刀	0	28	0	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	26	烈火剑法	0	35	0	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	27	野蛮冲撞	0	30	0	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	28	心灵启示	2	26	40	1	本片已实装：施法前置 + MP 消耗 + 威力公式 + 冷却（见 crates/world/src/magic.rs）
-skill	28	心灵启示	2	3	26	30	35	35	200	300	500	500	16	0	0	0	0	0	40	840	4	8	12	16	2	50	1	1	0	1	7700	10290	show_hp	-1	-1	-1	-1	-1	87000
-reg	29	群体治疗术	2	33	40	1	本片已实装：施法前置 + MP 消耗 + 威力公式 + 冷却（见 crates/world/src/magic.rs）
-skill	29	群体治疗术	2	3	33	35	38	38	200	300	500	500	12	25	10	10	4	4	40	840	28	31	34	37	2	50	1	1	0	1	7700	10290	heal	109	-1	-1	-1	-1	-1
-reg	30	召唤神兽	2	35	120	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	31	魔法盾	1	31	0	1	本片已实装：施法前置 + MP 消耗 + 威力公式 + 冷却（见 crates/world/src/magic.rs）
-skill	31	魔法盾	1	3	31	34	38	38	200	300	500	500	20	30	0	0	0	0	0	800	35	40	45	50	1	50	1	1	0	1	7700	10290	shield	21	-1	-1	-1	-1	-1
-reg	32	圣言术	1	32	120	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	33	冰咆哮	1	35	60	1	本片已实装：施法前置 + MP 消耗 + 威力公式 + 冷却（见 crates/world/src/magic.rs）
-skill	33	冰咆哮	1	3	35	37	40	40	200	300	500	500	12	30	12	12	12	12	60	860	33	36	39	42	1	50	1	1	0	1	7700	10290	damage	48	-1	-1	-1	-1	-1
-reg	34	解毒术	2	48	40	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	36	火焰冰	1	48	60	1	本片已实装：施法前置 + MP 消耗 + 威力公式 + 冷却（见 crates/world/src/magic.rs）
-skill	36	火焰冰	1	3	48	50	52	52	200	300	500	500	14	10	12	24	6	6	60	860	14	17	21	24	1	50	1	1	0	1	7700	10290	uenhancer	2	-1	-1	-1	546	-1
-reg	37	雷神之怒	1	50	100	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	48	群体施毒术	2	48	40	1	本片已实装：施法前置 + MP 消耗 + 威力公式 + 冷却（见 crates/world/src/magic.rs）
-skill	48	群体施毒术	2	3	48	50	52	52	200	300	500	500	12	30	10	10	4	4	40	840	33	36	39	42	2	50	1	1	0	1	7700	10290	poison	-1	-1	131	124	-1	-1
-reg	39	乌龟跑步	99	50	20	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	40	十方斩	0	48	20	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	41	狮子吼	0	38	30	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	42	龙影剑法	0	38	0	1	本片已实装：施法前置 + MP 消耗 + 威力公式 + 冷却（见 crates/world/src/magic.rs）
-skill	42	龙影剑法	0	3	38	41	44	44	200	300	500	500	0	3	0	0	0	0	0	800	3	3	3	3	0	50	1	1	0	1	7700	10290	damage	22	33	-1	-1	-1	-1
-reg	43	开天斩	0	37	0	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	44	寒冰掌	1	36	60	1	本片已实装：施法前置 + MP 消耗 + 威力公式 + 冷却（见 crates/world/src/magic.rs）
-skill	44	寒冰掌	1	3	36	39	41	41	200	300	500	500	14	8	14	25	10	10	60	860	12	15	19	22	1	50	1	1	0	1	7700	10290	damage	38	-1	-1	-1	-1	-1
-reg	45	灭天火	1	38	60	1	本片已实装：施法前置 + MP 消耗 + 威力公式 + 冷却（见 crates/world/src/magic.rs）
-skill	45	灭天火	1	3	38	41	44	44	200	300	500	500	15	15	21	30	12	12	60	860	19	23	26	30	1	50	1	1	0	1	7700	10290	damage	53	80	-1	-1	-1	-1
-reg	46	分身术	99	50	50	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	47	地狱烈焰	1	46	120	1	本片已实装：施法前置 + MP 消耗 + 威力公式 + 冷却（见 crates/world/src/magic.rs）
-skill	47	地狱烈焰	1	3	46	48	50	50	200	300	500	500	32	16	10	30	10	30	120	920	24	32	40	48	1	50	1	1	0	1	7700	10290	damage	50	-1	-1	-1	-1	-1
-reg	48	气功波	2	36	30	1	本片已实装：施法前置 + MP 消耗 + 威力公式 + 冷却（见 crates/world/src/magic.rs）
-skill	48	气功波	2	3	36	39	41	41	200	300	500	500	8	0	1	1	0	0	30	830	2	4	6	8	2	50	1	1	0	1	7700	10290	poison	-1	-1	127	120	-1	-1
-reg	49	云寂术	2	48	40	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	50	无极真气	2	38	30	1	本片已实装：施法前置 + MP 消耗 + 威力公式 + 冷却（见 crates/world/src/magic.rs）
-skill	50	无极真气	2	3	38	41	44	44	200	300	500	500	8	4	1	1	0	0	30	830	6	8	10	12	2	50	1	1	0	1	7700	10290	damage	25	-1	-1	-1	-1	-1
-reg	51	月魂风暴	2	50	30	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	52	神之诅咒	2	48	30	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	53	嗜血魔咒(保留)	2	50	30	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	54	召妖降魔	2	18	30	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	55	吸星狂杀	0	50	40	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	56	异形换位	1	48	30	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	57	回生术	2	48	30	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	58	流星火雨	1	46	60	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	59	噬血术	2	46	60	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	66	四级魔法盾	1	40	0	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	66	白日门四级法盾	1	40	0	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	67	先天元力	99	50	0	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	68	酒气护体	99	50	0	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	69	倚天辟地	99	38	60	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	71	四级召唤神兽	2	50	120	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	71	四级英雄神兽	2	50	120	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	72	召唤月灵	2	45	60	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	74	逐日剑法	0	46	0	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	75	护体神盾	99	39	60	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	76	三绝杀	0	15	60	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	77	双龙破	1	15	60	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	78	虎啸诀	2	15	60	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	79	追心刺	0	33	60	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	80	凤舞祭	1	33	60	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	81	八卦掌	2	33	60	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	82	断岳斩	0	50	60	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	83	惊雷爆	1	50	60	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	84	三焰咒	2	50	60	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	85	横扫千军	0	53	60	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	86	冰天雪地	1	53	60	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	87	万剑归宗	2	53	60	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	88	四级基本剑术	0	50	0	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	88	四级英雄剑术	0	50	0	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	89	四级刺杀剑术	0	50	0	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	89	四级英雄刺杀	0	50	0	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	90	四级半月弯刀	0	50	0	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	90	四级英雄半月	0	50	0	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	91	四级雷电术	1	50	100	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	91	四级英雄雷电术	1	50	100	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	92	四级流星火雨	1	50	30	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	92	四级英雄火雨	1	50	30	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	93	四级施毒术	2	50	40	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	93	四级英雄施毒术	2	50	40	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	94	四级噬血术	2	50	60	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	94	四级英雄噬血术	2	50	60	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	95	斗转星移	99	0	0	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	96	血魄一击(战)	0	50	0	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	96	白日门血魄(战)	0	50	0	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	97	血魄一击(法)	1	50	30	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	97	白日门血魄(法)	1	50	30	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	98	血魄一击(道)	2	50	40	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	98	白日门血魄(道)	2	50	40	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	99	白日门强身术	99	50	0	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	100	神秘解读	99	28	0	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	101	神龙附体	99	50	0	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	102	唯我独尊	99	50	0	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	103	召唤巨魔	99	50	0	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	500	破血狂杀	0	50	0	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
-reg	501	迅影离魂	0	50	0	0	未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）
+reg	1	火球术	1	7	60	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
+skill	1	火球术	1	3	7	11	16	16	200	300	500	500	4	1	8	8	2	2	60	860	2	3	4	5	1	50	1	1	0	1	7700	10290	damage	32	-1	-1	-1	-1	-1	-1	7700	20	0	0	0
+reg	2	治愈术	2	7	40	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
+skill	2	治愈术	2	3	7	11	16	16	200	300	500	500	7	0	14	20	0	0	40	840	2	4	5	7	2	50	1	1	0	1	7700	10290	heal	108	-1	-1	-1	-1	-1	-1	7700	20	0	0	0
+reg	3	基本剑术	0	7	0	0	DoSpell 前置：IsWarrSkill(MagIdx) ⇒ return false（MagicManager.cs:82-105,151）；承接 = 战士技能走 ClientHit/Attack 路径（M3 攻击接线）	warr_reject
+reg	4	精神力战法	2	9	0	0	DoSpell 前置：IsWarrSkill(MagIdx) ⇒ return false（MagicManager.cs:82-105,151）；承接 = 战士技能走 ClientHit/Attack 路径（M3 攻击接线）	warr_reject
+reg	5	大火球	1	19	60	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
+skill	5	大火球	1	3	19	23	25	25	200	300	500	500	3	5	6	6	10	10	60	860	6	7	7	8	1	50	1	1	0	1	7700	10290	damage	41	-1	-1	-1	-1	-1	-1	7700	20	0	0	0
+reg	6	施毒术	2	14	40	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
+skill	6	施毒术	2	3	14	17	20	20	200	300	500	500	4	0	0	0	0	0	40	840	1	2	3	4	2	50	1	1	0	1	7700	10290	poison	-1	-1	127	120	-1	-1	-1	7700	20	0	0	0
+reg	7	攻杀剑术	0	19	0	0	DoSpell 前置：IsWarrSkill(MagIdx) ⇒ return false（MagicManager.cs:82-105,151）；承接 = 战士技能走 ClientHit/Attack 路径（M3 攻击接线）	warr_reject
+reg	8	抗拒火环	1	12	30	0	DoSpell 有 case，但效果需要地图/目标/可见集/召唤/状态等上下文（如 MagPushArround/MagSaceMove/MagTurnUndead/MagMakeSlave/MagGroupDeDing 的遍历与施加）；承接 = M3 攻击/魔法接线后的批次	context_required
+reg	9	地狱火	1	16	60	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
+skill	9	地狱火	1	3	16	21	26	26	200	300	500	500	10	10	14	14	6	6	60	860	13	15	18	20	1	50	1	1	0	1	7700	10290	damage	34	-1	-1	-1	-1	-1	-1	7700	20	0	0	0
+reg	10	疾光电影	1	26	100	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
+skill	10	疾光电影	1	3	26	29	32	32	200	300	500	500	25	20	12	12	12	12	100	900	26	33	39	45	1	50	1	1	0	1	7700	10290	damage	47	-1	-1	-1	-1	-1	-1	7700	20	0	0	0
+reg	11	雷电术	1	17	100	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
+skill	11	雷电术	1	3	17	20	23	23	200	300	500	500	12	6	14	28	10	10	100	900	9	12	15	18	1	50	1	1	0	1	7700	10290	damage	43	65	-1	-1	-1	-1	-1	7700	20	0	0	0
+reg	12	刺杀剑术	0	25	0	0	DoSpell 前置：IsWarrSkill(MagIdx) ⇒ return false（MagicManager.cs:82-105,151）；承接 = 战士技能走 ClientHit/Attack 路径（M3 攻击接线）	warr_reject
+reg	13	灵魂火符	2	18	60	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
+skill	13	灵魂火符	2	3	18	21	24	24	200	300	500	500	5	2	15	28	10	10	60	860	3	5	6	7	2	50	1	1	0	1	7700	10290	damage	73	-1	-1	-1	-1	-1	-1	7700	20	0	0	0
+reg	14	幽灵盾	2	22	40	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
+skill	14	幽灵盾	2	3	22	24	26	26	200	300	500	500	15	0	0	0	0	0	40	840	4	8	11	15	2	50	1	1	0	1	7700	10290	buff_ac	540	-1	-1	-1	-1	-1	-1	7700	20	0	0	0
+reg	15	神圣战甲术	2	25	40	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
+skill	15	神圣战甲术	2	3	25	27	29	29	200	300	500	500	15	0	0	0	0	0	40	840	4	8	11	15	2	50	1	1	0	1	7700	10290	buff_ac	540	-1	-1	-1	-1	-1	-1	7700	20	0	0	0
+reg	16	困魔咒	2	28	50	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
+skill	16	困魔咒	2	3	28	30	32	32	200	300	500	500	10	5	0	0	0	0	50	850	8	10	13	15	2	50	1	1	0	1	7700	10290	buff_holy	177	-1	-1	-1	-1	-1	-1	7700	20	0	0	0
+reg	17	召唤骷髅	2	19	50	0	DoSpell 有 case，但效果需要地图/目标/可见集/召唤/状态等上下文（如 MagPushArround/MagSaceMove/MagTurnUndead/MagMakeSlave/MagGroupDeDing 的遍历与施加）；承接 = M3 攻击/魔法接线后的批次	context_required
+reg	18	隐身术	2	20	50	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
+skill	18	隐身术	2	3	20	23	26	26	200	300	500	500	5	0	0	0	0	0	50	850	1	3	4	5	2	50	1	1	0	1	7700	10290	buff_transparent	170	-1	-1	-1	-1	-1	-1	7700	20	0	0	0
+reg	19	集体隐身术	2	21	50	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
+skill	19	集体隐身术	2	3	21	25	29	29	200	300	500	500	10	0	0	0	0	0	50	850	3	5	8	10	2	50	1	1	0	1	7700	10290	buff_transparent	170	-1	-1	-1	-1	-1	-1	7700	20	0	0	0
+reg	20	诱惑之光	1	13	60	0	DoSpell 有 case，但效果需要地图/目标/可见集/召唤/状态等上下文（如 MagPushArround/MagSaceMove/MagTurnUndead/MagMakeSlave/MagGroupDeDing 的遍历与施加）；承接 = M3 攻击/魔法接线后的批次	context_required
+reg	21	瞬息移动	1	19	50	0	DoSpell 有 case，但效果需要地图/目标/可见集/召唤/状态等上下文（如 MagPushArround/MagSaceMove/MagTurnUndead/MagMakeSlave/MagGroupDeDing 的遍历与施加）；承接 = M3 攻击/魔法接线后的批次	context_required
+reg	22	火墙	1	24	120	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
+skill	22	火墙	1	3	24	29	33	33	200	300	500	500	20	25	3	3	3	3	120	920	30	35	40	45	1	50	1	1	0	1	7700	10290	fire_wall	27	-1	-1	-1	22	-1	-1	7700	20	0	0	0
+reg	23	爆裂火焰	1	22	60	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
+skill	23	爆裂火焰	1	3	22	27	31	31	200	300	500	500	15	10	8	8	6	6	60	860	14	18	21	25	1	50	1	1	0	1	7700	10290	damage	41	-1	-1	-1	-1	-1	-1	7700	20	0	0	0
+reg	24	地狱雷光	1	30	60	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
+skill	24	地狱雷光	1	3	30	32	34	34	200	300	500	500	35	20	10	30	10	30	60	860	29	38	46	55	1	50	1	1	0	1	7700	10290	damage	50	-1	-1	-1	-1	-1	-1	7700	20	0	0	0
+reg	25	半月弯刀	0	28	0	0	DoSpell 前置：IsWarrSkill(MagIdx) ⇒ return false（MagicManager.cs:82-105,151）；承接 = 战士技能走 ClientHit/Attack 路径（M3 攻击接线）	warr_reject
+reg	26	烈火剑法	0	35	0	0	DoSpell 前置：IsWarrSkill(MagIdx) ⇒ return false（MagicManager.cs:82-105,151）；承接 = 战士技能走 ClientHit/Attack 路径（M3 攻击接线）	warr_reject
+reg	27	野蛮冲撞	0	30	0	0	DoSpell 前置：IsWarrSkill(MagIdx) ⇒ return false（MagicManager.cs:82-105,151）；承接 = 战士技能走 ClientHit/Attack 路径（M3 攻击接线）	warr_reject
+reg	28	心灵启示	2	26	40	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
+skill	28	心灵启示	2	3	26	30	35	35	200	300	500	500	16	0	0	0	0	0	40	840	4	8	12	16	2	50	1	1	0	1	7700	10290	show_hp	-1	-1	-1	-1	-1	87000	-1	7700	20	0	0	0
+reg	29	群体治疗术	2	33	40	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
+skill	29	群体治疗术	2	3	33	35	38	38	200	300	500	500	12	25	10	10	4	4	40	840	28	31	34	37	2	50	1	1	0	1	7700	10290	heal	109	-1	-1	-1	-1	-1	-1	7700	20	0	0	0
+reg	30	召唤神兽	2	35	120	0	DoSpell 有 case，但效果需要地图/目标/可见集/召唤/状态等上下文（如 MagPushArround/MagSaceMove/MagTurnUndead/MagMakeSlave/MagGroupDeDing 的遍历与施加）；承接 = M3 攻击/魔法接线后的批次	context_required
+reg	31	魔法盾	1	31	0	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
+skill	31	魔法盾	1	3	31	34	38	38	200	300	500	500	20	30	0	0	0	0	0	800	35	40	45	50	1	50	1	1	0	1	7700	10290	shield	21	-1	-1	-1	-1	-1	-1	7700	20	0	0	0
+reg	32	圣言术	1	32	120	0	DoSpell 有 case，但效果需要地图/目标/可见集/召唤/状态等上下文（如 MagPushArround/MagSaceMove/MagTurnUndead/MagMakeSlave/MagGroupDeDing 的遍历与施加）；承接 = M3 攻击/魔法接线后的批次	context_required
+reg	33	冰咆哮	1	35	60	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
+skill	33	冰咆哮	1	3	35	37	40	40	200	300	500	500	12	30	12	12	12	12	60	860	33	36	39	42	1	50	1	1	0	1	7700	10290	damage	48	-1	-1	-1	-1	-1	-1	7700	20	0	0	0
+reg	34	解毒术	2	48	40	0	DoSpell 前置：IsWarrSkill(MagIdx) ⇒ return false（MagicManager.cs:82-105,151）；承接 = 战士技能走 ClientHit/Attack 路径（M3 攻击接线）	warr_reject
+reg	36	火焰冰	1	48	60	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
+skill	36	火焰冰	1	3	48	50	52	52	200	300	500	500	14	10	12	24	6	6	60	860	14	17	21	24	1	50	1	1	0	1	7700	10290	uenhancer	2	-1	-1	-1	546	-1	-1	7700	20	0	0	0
+reg	37	雷神之怒	1	50	100	0	DoSpell 有 case，但效果需要地图/目标/可见集/召唤/状态等上下文（如 MagPushArround/MagSaceMove/MagTurnUndead/MagMakeSlave/MagGroupDeDing 的遍历与施加）；承接 = M3 攻击/魔法接线后的批次	context_required
+reg	48	群体施毒术	2	48	40	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
+skill	48	群体施毒术	2	3	48	50	52	52	200	300	500	500	12	30	10	10	4	4	40	840	33	36	39	42	2	50	1	1	0	1	7700	10290	poison	-1	-1	131	124	-1	-1	-1	7700	20	0	0	0
+reg	39	乌龟跑步	99	50	20	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
+skill	39	乌龟跑步	99	3	50	52	55	55	200	300	500	500	4	1	8	8	2	2	20	820	2	3	4	5	1	50	1	1	0	1	7700	10290	group_melee	20	-1	-1	-1	-1	-1	14	7700	20	40	2565	0
+reg	40	十方斩	0	48	20	0	DoSpell 有 case，但效果需要地图/目标/可见集/召唤/状态等上下文（如 MagPushArround/MagSaceMove/MagTurnUndead/MagMakeSlave/MagGroupDeDing 的遍历与施加）；承接 = M3 攻击/魔法接线后的批次	context_required
+reg	41	狮子吼	0	38	30	0	DoSpell 有 case，但效果需要地图/目标/可见集/召唤/状态等上下文（如 MagPushArround/MagSaceMove/MagTurnUndead/MagMakeSlave/MagGroupDeDing 的遍历与施加）；承接 = M3 攻击/魔法接线后的批次	context_required
+reg	42	龙影剑法	0	38	0	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
+skill	42	龙影剑法	0	3	38	41	44	44	200	300	500	500	0	3	0	0	0	0	0	800	3	3	3	3	0	50	1	1	0	1	7700	10290	damage	22	33	-1	-1	-1	-1	-1	7700	20	0	0	0
+reg	43	开天斩	0	37	0	0	DoSpell case 体无副作用（43 `break`；49/51/52/53/54 只置 boTrain）；承接 = 无行为可对拍	no_effect_case
+reg	44	寒冰掌	1	36	60	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
+skill	44	寒冰掌	1	3	36	39	41	41	200	300	500	500	14	8	14	25	10	10	60	860	12	15	19	22	1	50	1	1	0	1	7700	10290	damage	38	-1	-1	-1	-1	-1	-1	7700	20	0	0	0
+reg	45	灭天火	1	38	60	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
+skill	45	灭天火	1	3	38	41	44	44	200	300	500	500	15	15	21	30	12	12	60	860	19	23	26	30	1	50	1	1	0	1	7700	10290	damage	53	80	-1	-1	-1	-1	-1	7700	20	0	0	0
+reg	46	分身术	99	50	50	0	DoSpell 有 case，但效果需要地图/目标/可见集/召唤/状态等上下文（如 MagPushArround/MagSaceMove/MagTurnUndead/MagMakeSlave/MagGroupDeDing 的遍历与施加）；承接 = M3 攻击/魔法接线后的批次	context_required
+reg	47	地狱烈焰	1	46	120	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
+skill	47	地狱烈焰	1	3	46	48	50	50	200	300	500	500	32	16	10	30	10	30	120	920	24	32	40	48	1	50	1	1	0	1	7700	10290	damage	50	-1	-1	-1	-1	-1	-1	7700	20	0	0	0
+reg	48	气功波	2	36	30	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
+skill	48	气功波	2	3	36	39	41	41	200	300	500	500	8	0	1	1	0	0	30	830	2	4	6	8	2	50	1	1	0	1	7700	10290	poison	-1	-1	127	120	-1	-1	-1	7700	20	0	0	0
+reg	49	云寂术	2	48	40	0	DoSpell case 体无副作用（43 `break`；49/51/52/53/54 只置 boTrain）；承接 = 无行为可对拍	no_effect_case
+reg	50	无极真气	2	38	30	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
+skill	50	无极真气	2	3	38	41	44	44	200	300	500	500	8	4	1	1	0	0	30	830	6	8	10	12	2	50	1	1	0	1	7700	10290	damage	25	-1	-1	-1	-1	-1	-1	7700	20	0	0	0
+reg	51	月魂风暴	2	50	30	0	DoSpell case 体无副作用（43 `break`；49/51/52/53/54 只置 boTrain）；承接 = 无行为可对拍	no_effect_case
+reg	52	神之诅咒	2	48	30	0	DoSpell case 体无副作用（43 `break`；49/51/52/53/54 只置 boTrain）；承接 = 无行为可对拍	no_effect_case
+reg	53	嗜血魔咒(保留)	2	50	30	0	DoSpell case 体无副作用（43 `break`；49/51/52/53/54 只置 boTrain）；承接 = 无行为可对拍	no_effect_case
+reg	54	召妖降魔	2	18	30	0	DoSpell case 体无副作用（43 `break`；49/51/52/53/54 只置 boTrain）；承接 = 无行为可对拍	no_effect_case
+reg	55	吸星狂杀	0	50	40	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
+reg	56	异形换位	1	48	30	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
+reg	57	回生术	2	48	30	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
+reg	58	流星火雨	1	46	60	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
+reg	59	噬血术	2	46	60	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
+reg	66	四级魔法盾	1	40	0	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
+reg	66	白日门四级法盾	1	40	0	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
+reg	67	先天元力	99	50	0	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
+reg	68	酒气护体	99	50	0	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
+reg	69	倚天辟地	99	38	60	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
+reg	71	四级召唤神兽	2	50	120	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
+reg	71	四级英雄神兽	2	50	120	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
+reg	72	召唤月灵	2	45	60	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
+reg	74	逐日剑法	0	46	0	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
+reg	75	护体神盾	99	39	60	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
+reg	76	三绝杀	0	15	60	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
+reg	77	双龙破	1	15	60	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
+reg	78	虎啸诀	2	15	60	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
+reg	79	追心刺	0	33	60	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
+reg	80	凤舞祭	1	33	60	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
+reg	81	八卦掌	2	33	60	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
+reg	82	断岳斩	0	50	60	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
+reg	83	惊雷爆	1	50	60	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
+reg	84	三焰咒	2	50	60	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
+reg	85	横扫千军	0	53	60	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
+reg	86	冰天雪地	1	53	60	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
+reg	87	万剑归宗	2	53	60	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
+reg	88	四级基本剑术	0	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
+reg	88	四级英雄剑术	0	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
+reg	89	四级刺杀剑术	0	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
+reg	89	四级英雄刺杀	0	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
+reg	90	四级半月弯刀	0	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
+reg	90	四级英雄半月	0	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
+reg	91	四级雷电术	1	50	100	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
+reg	91	四级英雄雷电术	1	50	100	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
+reg	92	四级流星火雨	1	50	30	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
+reg	92	四级英雄火雨	1	50	30	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
+reg	93	四级施毒术	2	50	40	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
+reg	93	四级英雄施毒术	2	50	40	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
+reg	94	四级噬血术	2	50	60	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
+reg	94	四级英雄噬血术	2	50	60	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
+reg	95	斗转星移	99	0	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
+reg	96	血魄一击(战)	0	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
+reg	96	白日门血魄(战)	0	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
+reg	97	血魄一击(法)	1	50	30	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
+reg	97	白日门血魄(法)	1	50	30	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
+reg	98	血魄一击(道)	2	50	40	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
+reg	98	白日门血魄(道)	2	50	40	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
+reg	99	白日门强身术	99	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
+reg	100	神秘解读	99	28	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
+reg	101	神龙附体	99	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
+reg	102	唯我独尊	99	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
+reg	103	召唤巨魔	99	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
+reg	500	破血狂杀	0	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
+reg	501	迅影离魂	0	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject

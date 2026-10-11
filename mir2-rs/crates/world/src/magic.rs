@@ -22,7 +22,11 @@ use mir2_data::models::MagicInfo;
 use mir2_shared::hutil;
 use mir2_shared::rng::RandomSource;
 
-use crate::combat::{get_attack_power, get_attack_power_player, hi_byte, lo_byte, AttackPowerMode};
+use crate::combat::{
+    get_attack_power, get_attack_power_player, get_hit_struck_damage, hi_byte, lo_byte,
+    AttackPowerMode,
+};
+use crate::entity::Entity;
 
 /// 攻方攻击力口径（`GetAttackPower`）：`DoSpell` 的施法者是 `PlayObject`，
 /// 走 `PlayObject.GetAttackPower` override（`PlayObject.cs:2909`）——**取数次数与 Base 版不同**
@@ -289,6 +293,37 @@ pub fn power_uenhancer(
     let power = i32::from(level) + 1 + rng.random_below(i32::from(level));
     let time = power_defence_area(rng, magic, level, sc, atk);
     (power, time)
+}
+
+/// `MagicManager.MagGroupDeDing`（`MagicManager.cs:960-968`）的**单目标**结算（39 `SKILL_GROUPDEDING`）。
+///
+/// 逐字照抄循环体（取数顺序勿改）：
+/// 1. `nPower = playObject.GetAttackPower(LoByte(DC), HiByte(DC) - LoByte(DC))`
+///    —— 注意与普攻 `GetBaseAttackPoewr` 不同：这里第二参**不做 sbyte 强转、也不 +1**；
+/// 2. `if (Random(baseObject.SpeedPoint) >= playObject.HitPoint) nPower = 0;`
+///    —— **无条件**抽一次 `Random(SpeedPoint)`（在攻击力之后）；
+/// 3. `if (nPower > 0) nPower = baseObject.GetHitStruckDamage(playObject, nPower);`
+///
+/// 返回 `(闪避前的 power, 护甲减免后的 damage)`。
+/// 遍历可见集 / `StruckDamage` 倍率 / `RM_DELAYMAGIC` 回帧由调用方承接（需地图与目标态）。
+pub fn group_melee_damage(
+    rng: &mut impl RandomSource,
+    attacker: &Entity,
+    target: &Entity,
+    atk: AttackPowerMode,
+) -> (i32, u16) {
+    let dc_lo = i32::from(lo_byte(attacker.dc));
+    let dc_diff = i32::from(hi_byte(attacker.dc)) - dc_lo;
+    let mut power = atk_power(rng, dc_lo, dc_diff, atk);
+    if rng.random_below(i32::from(target.speed_point)) >= i32::from(attacker.hit_point) {
+        power = 0;
+    }
+    let damage = if power > 0 {
+        get_hit_struck_damage(rng, target, attacker, power)
+    } else {
+        0
+    };
+    (power, damage)
 }
 
 // ---- 第三批已实装技能：群体变体（逐目标表达式与单目标同式）----------------------------------
