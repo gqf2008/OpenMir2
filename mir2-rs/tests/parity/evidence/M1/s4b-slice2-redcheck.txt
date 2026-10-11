@@ -1,0 +1,49 @@
+/usr/bin/bash: line 12: save_characters: command not found
+### 红检：把  的 job 误绑一并放回（复原既有 bug）
+命令：python 在 playdata.rs 的 .bind(d.sex) 后插回 .bind(i16::from(d.job))；再跑 live_data
+
+   Compiling db-srv v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\dbsrv6k\mir2-rs\bins\db-srv)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.01s
+     Running tests\live_data.rs (E:\tmp\openmir2-dbsrv6k-target\debug\deps\live_data-c807b644fe914ed8.exe)
+
+running 1 test
+[fixture] characters.Id=13332 name=zz6k1896
+[fixture] Rust db-srv pid=29616 dir=C:\Users\gxh\AppData\Local\Temp\a2-dbsrv-6000-data-1896
+[load] reply=ServerRequestMessage { recog: 1, ident: 1100, param: 0, tag: 0, series: 1 }
+[load] packet sha256 prefix=020b00000072007200560061006f0061
+[save] reply=ServerRequestMessage { recog: 1, ident: 1102, param: 0, tag: 0, series: 0 }
+
+thread 'rust_dbsrv_6000_load_save_roundtrip' (27728) panicked at bins\db-srv\tests\live_data.rs:504:5:
+assertion `left == right` failed
+  left: 5555
+ right: 7777
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test rust_dbsrv_6000_load_save_roundtrip ... FAILED
+
+failures:
+
+failures:
+    rust_dbsrv_6000_load_save_roundtrip
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.21s
+
+error: test failed, to rerun pass `-p db-srv --test live_data`
+rc=101
+
+### 还原修复（去掉误绑的 job）；再跑同一用例
+
+   Compiling db-srv v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\dbsrv6k\mir2-rs\bins\db-srv)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.48s
+     Running tests\live_data.rs (E:\tmp\openmir2-dbsrv6k-target\debug\deps\live_data-c807b644fe914ed8.exe)
+
+running 1 test
+[fixture] characters.Id=13333 name=zz6k4352
+[fixture] Rust db-srv pid=6540 dir=C:\Users\gxh\AppData\Local\Temp\a2-dbsrv-6000-data-4352
+[load] reply=ServerRequestMessage { recog: 1, ident: 1100, param: 0, tag: 0, series: 1 }
+[load] packet sha256 prefix=020b00000072007200560061006f0060
+[save] reply=ServerRequestMessage { recog: 1, ident: 1102, param: 0, tag: 0, series: 0 }
+test rust_dbsrv_6000_load_save_roundtrip ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.38s
+
+rc=0

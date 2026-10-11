@@ -99,6 +99,8 @@ Remove-Item -Recurse -Force mir2-rs/tests/parity/m3/sessions/*/shadow-run* -Erro
 
 ## 九、本片（2026-10-11，worktree `m3bag`：使用药品 handler 核心）实际残留清单
 
+> 该片当时 `eat_vectors.json` = 8 模板 / 13 用例；后续 slices 已增为 9 模板 / 15 用例（见 §十一）。
+
 - **入库（证据，随 patch 提交）**：
   - `m3/fixtures/eat_vectors.json`（oracle 真身探针产出的 `CM_EAT` 向量：8 模板 / 13 用例；
     即时帧 `SM_EAT_OK/FAIL`(635/636) + 延时通知 `RM_HEALTHSPELLCHANGED`(10052)/`RM_WEIGHTCHANGED`(10115)/
@@ -128,6 +130,25 @@ Remove-Item -Recurse -Force mir2-rs/tests/parity/m3/sessions/*/shadow-run* -Erro
 - **未入库/临时物**：探针的 `bin/`、`obj/`（构建产物，已被 `mir2-rs/.gitignore` 的 `**/bin/`、`**/obj/` 忽略；
   可用 README 的命令再生）；隔离构建目录 `E:/tmp/openmir2-m3bag-target` 与日志
   `E:/tmp/openmir2-watch/m3bag5-*.log`（含 4 条红检，登记位置，可删）。
+- **未起栈、未占端口**（5000/7000/7100/7200 未使用）；`E:/MirServer` 十端口状态与开工前一致。
+- **冻结基线**：`src/**`（C# oracle）一行未改（探针只**引用** `src/M2Server` 编译，不改源）；
+  表结构/脚本/数据文件格式未改；未动 `main.rs`/`smframe.rs`（接线归 m2-svr）、
+  未动 `crates/world/**`/`crates/envir/**`/`crates/world-bevy/**`。
+
+## 十一、本片（2026-10-12，worktree `m3bag`：`CM_EAT` 的 `boNODRUG` 守卫 + StdMode 2）实际残留清单
+
+- **入库（证据，随 patch 提交）**：
+  - `m3/fixtures/eat_vectors.json`（oracle 真身探针重生成：**9 模板 / 15 用例**；新增
+    `eat_ok_stdmode2_noop`、`eat_fail_nodrug_no_consume`，ctx 增 `no_drug`/`red_msg_fcolor`/`red_msg_bcolor`；
+    源锚仍为 `8f668418…`（oracle 源未变））
+  - `m3/eat-probe/Program.cs`（Ctx 增 `noDrug`；`po.Envir.Flag.boNODRUG` 灌入；模板 `2011`（StdMode 2）；
+    两条新用例；notes 更新）
+  - `mir2-rs/bins/game-svr/src/useitem.rs`（`UseItemContext` 增 `no_drug`/`red_msg_fcolor`/`red_msg_bcolor`；
+    `RM_SYSMESSAGE=11004` + `QueuedNotice::sysmsg`；`EatItems` 首部禁药守卫（仅 0/1/2/3）+ StdMode 2 分支；
+    新增 `stdmode2_eats_without_effect`/`nodrug_guard_does_not_consume` 两条单测/红检，另两处红检已留档）
+  - `m3/README.md` / `m3/ARTIFACTS.md` / `tests/parity/whitelist.md`（口径同步：本片做 0/2 + boNODRUG）
+- **未入库/临时物**：探针 `bin/`、`obj/`（`mir2-rs/.gitignore` 覆盖）；隔离构建目录 `E:/tmp/openmir2-m3bag-target`；
+  红检打印留在本 lane 会话/报告（`E:/tmp/openmir2-watch/last-m3bag.md`）。
 - **未起栈、未占端口**（5000/7000/7100/7200 未使用）；`E:/MirServer` 十端口状态与开工前一致。
 - **冻结基线**：`src/**`（C# oracle）一行未改（探针只**引用** `src/M2Server` 编译，不改源）；
   表结构/脚本/数据文件格式未改；未动 `main.rs`/`smframe.rs`（接线归 m2-svr）、

@@ -1,15 +1,16 @@
-//! Rust 版 **DBSrv**（M1 的 5100 面）：SelGate ↔ DBSrv 内部链路 + 角色列表/建删选角经 sqlx 接 `mir2_db`。
+//! Rust 版 **DBSrv**（M1）：5100 面（SelGate ↔ DBSrv）+ 6000 面（GameSvr 取档/存档）经 sqlx 接 `mir2_db`。
 //!
 //! 与 C# `src/DBSrv/**` 一一对应：
 //! - `Conf/AppConfigManager` + `SettingsModel` → [`config`]（缺关键项/连不上库都明确报错退出）；
 //! - `DBShare` + `AppService.LoadServerInfo/LoadChrNameList` → [`route`]；
-//! - `Storeages/DBSvr.Storage.MySQL` 的 `PlayRecordStorage`/`PlayDataStorage` → [`db`]；
+//! - `Storeages/DBSvr.Storage.MySQL` 的 `PlayRecordStorage`/`PlayDataStorage` → [`db`]（5100 面）+ [`playdata`]（6000 面）；
 //! - `Services/Impl/UserService`（5100 监听、会话表、四个命令）→ [`server`] + [`handler`]；
+//! - `Services/Impl/DataService`（6000 监听、`LoadHumanRcd`/`SaveHumanRcd`/`SaveHumanRcdEx`）→ [`data`]；
+//! - `Storage/Impl/CacheStorageService`（内存缓存）+ `TimedService` 的缓存回写 → [`cache`] + [`data::cache_flush_task`]；
 //! - `Services/Impl/ClientSession`（主动连 LoginSrv 5600 同步会话）→ [`loginsrv`]。
 //!
-//! **不在本进程范围内**（M1 计划 §5 的 S4 只覆盖 `UserService` 面）：`DataService`（6000，
-//! GameSvr 取档/存档）、`MarketService`（5700）、`TimedService` 的缓存回写
-//! （`ICacheStorage` 只被 6000 面使用）。这几条留待下一片，见 `docs/M1-边界服务移植计划.md` §5。
+//! **不在本进程范围内**：`MarketService`（5700，拍卖行）。它按 M1 计划 §5 的 S4b 可拆子片，
+//! 尚未实现（C# 侧该面本身大半是空实现），已在 `docs/M1-S4b-DBSrv-6000-交付说明.md` 逐条登记。
 //!
 //! **失败要响**（M1 验收④）：缺配置 / 存储插件非 MySQL / 连不上 MySQL / 表缺列 / 端口占用
 //! —— 全部明确报错并以非零码退出。
@@ -17,12 +18,15 @@
 // 文档逐字引用 C# 标识符/文件名，不加反引号改造。
 #![allow(clippy::doc_markdown)]
 
+mod cache;
 mod config;
+mod data;
 mod db;
 mod gbk;
 mod handler;
 mod log;
 mod loginsrv;
+mod playdata;
 mod route;
 mod server;
 mod user;
@@ -66,9 +70,14 @@ async fn main() -> Result<()> {
     let mut db = db::Db::connect(&dsn).await?;
     db.load_quick_lists().await?;
     log::info(&format!("[{}]数据存储初始化成功.", cfg.storeage.text()));
+    let db = Arc::new(tokio::sync::Mutex::new(db));
+    let cache = Arc::new(tokio::sync::Mutex::new(cache::CacheStore::default()));
 
-    let (srv, rx) = server::Server::new(cfg, Arc::clone(&share));
+    let (srv, rx) = server::Server::new(cfg, Arc::clone(&share), Arc::clone(&cache));
     log::info("服务已启动成功...");
     log::info("欢迎使用翎风系列游戏软件...");
+    // 6000 `DataService`（GameSvr 取档/存档）+ TimedService 的 5 分钟缓存回写
+    tokio::spawn(data::run(Arc::clone(&srv), Arc::clone(&db)));
+    tokio::spawn(data::cache_flush_task(Arc::clone(&srv), Arc::clone(&db)));
     srv.run(rx, db).await
 }

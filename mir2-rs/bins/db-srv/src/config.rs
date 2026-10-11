@@ -49,10 +49,22 @@ pub struct DbConfig {
     pub server_name: RawStr,
     /// `[Setup] ShowDebug`（决定 `LogService.Debug` 是否输出，与 C# 同一开关）。
     pub show_debug: bool,
+    /// `[Setup] ServerAddr` —— 6000（DataService，GameSvr 取档/存档）绑定地址（现网 `0.0.0.0`）。
+    pub server_addr: String,
+    /// `[Setup] ServerPort` —— 6000。
+    pub server_port: u16,
     /// `[Setup] GateAddr` —— 5100 绑定地址（现网 `0.0.0.0`）。
     pub gate_addr: String,
     /// `[Setup] GatePort` —— 5100。
     pub gate_port: u16,
+    /// `[Server] MarketAddr` —— 5700（拍卖行）绑定地址（现网 `127.0.0.1`）。
+    ///
+    /// 5700 `MarketService` 属 S4b 的未做完子片（见交付说明），读写留待该片；此处仅按现网键名解析+校验。
+    #[allow(dead_code)]
+    pub market_addr: String,
+    /// `[Server] MarketPort` —— 5700。
+    #[allow(dead_code)]
+    pub market_port: u16,
     /// `[Setup] DELMaxLevel` —— 可删除角色的等级上限（C# 字段名 `DeleteMinLevel`）。
     pub delete_min_level: i32,
     /// `[Setup] DynamicIPMode`。
@@ -115,6 +127,16 @@ pub fn load(path: &Path) -> Result<DbConfig> {
         }
     };
 
+    let server_addr = s("Setup", "ServerAddr", "*").trimmed_text();
+    if server_addr.is_empty() || server_addr == "*" {
+        bail!(
+            "配置缺 [Setup] ServerAddr（C# 默认值 \"*\" 会让 IPAddress.Parse 抛异常 ⇒ 启动失败）：{server_addr:?}"
+        );
+    }
+    let server_port = i("Setup", "ServerPort", 6000);
+    if server_port <= 0 || server_port > i32::from(u16::MAX) {
+        bail!("配置 [Setup] ServerPort 非法：{server_port}");
+    }
     let gate_addr = s("Setup", "GateAddr", "*").trimmed_text();
     if gate_addr.is_empty() || gate_addr == "*" {
         bail!(
@@ -145,9 +167,17 @@ pub fn load(path: &Path) -> Result<DbConfig> {
     if ids_port <= 0 || ids_port > i32::from(u16::MAX) {
         bail!("配置 [Server] IDSPort 非法：{ids_port}");
     }
+    let market_port = i("Server", "MarketPort", 5700);
+    if market_port <= 0 || market_port > i32::from(u16::MAX) {
+        bail!("配置 [Server] MarketPort 非法：{market_port}");
+    }
     Ok(DbConfig {
         server_name: s("Setup", "ServerName", "热血传奇"),
         show_debug: b("Setup", "ShowDebug", false),
+        server_addr,
+        server_port: u16::try_from(server_port).unwrap_or(6000),
+        market_addr: s("Server", "MarketAddr", "127.0.0.1").trimmed_text(),
+        market_port: u16::try_from(market_port).unwrap_or(5700),
         gate_addr,
         gate_port: u16::try_from(gate_port).unwrap_or(5100),
         delete_min_level: i("Setup", "DELMaxLevel", 30),
@@ -293,6 +323,10 @@ mod tests {
         assert_eq!(cfg.gate_addr, "0.0.0.0");
         assert_eq!(cfg.gate_port, 5100);
         assert_eq!(cfg.server_name.text(), "LegendOfMir2");
+        assert_eq!(cfg.server_addr, "0.0.0.0");
+        assert_eq!(cfg.server_port, 6000);
+        assert_eq!(cfg.market_addr, "127.0.0.1");
+        assert_eq!(cfg.market_port, 5700);
         assert_eq!(cfg.delete_min_level, 30);
         assert_eq!(cfg.ids_addr, "127.0.0.1");
         assert_eq!(cfg.ids_port, 5600);
@@ -311,7 +345,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("dbsrv-cfg-semi-{}", std::process::id()));
         let p = write(
             &dir,
-            b"[DataBase]\nConnctionString=server=h;uid=u;database=d;  ;; trailing\n[Setup]\nGateAddr=0.0.0.0\nGatePort=5100\nServerName=LegendOfMir2\n",
+            b"[DataBase]\nConnctionString=server=h;uid=u;database=d;  ;; trailing\n[Setup]\nServerAddr=0.0.0.0\nServerPort=6000\nGateAddr=0.0.0.0\nGatePort=5100\nServerName=LegendOfMir2\n",
         );
         let cfg = load(&p).unwrap();
         assert_eq!(cfg.conn_string.text(), "server=h;uid=u;database=d;");
@@ -324,15 +358,21 @@ mod tests {
     fn fatal_on_missing_or_bad() {
         let dir = std::env::temp_dir().join(format!("dbsrv-cfg-bad-{}", std::process::id()));
         for (why, body) in [
-            ("缺 GateAddr", &b"[Setup]\nGatePort=5100\n"[..]),
-            ("GateAddr=*", &b"[Setup]\nGateAddr=*\nGatePort=5100\n"[..]),
+            ("缺 ServerAddr", &b"[Setup]\nServerPort=6000\nGateAddr=0.0.0.0\nGatePort=5100\n"[..]),
+            ("ServerAddr=*", &b"[Setup]\nServerAddr=*\nServerPort=6000\nGateAddr=0.0.0.0\nGatePort=5100\n"[..]),
+            (
+                "ServerPort=0",
+                &b"[Setup]\nServerAddr=0.0.0.0\nServerPort=0\nGateAddr=0.0.0.0\nGatePort=5100\n"[..],
+            ),
+            ("缺 GateAddr", &b"[Setup]\nServerAddr=0.0.0.0\nServerPort=6000\nGatePort=5100\n"[..]),
+            ("GateAddr=*", &b"[Setup]\nServerAddr=0.0.0.0\nServerPort=6000\nGateAddr=*\nGatePort=5100\n"[..]),
             (
                 "GatePort=0",
-                &b"[Setup]\nGateAddr=0.0.0.0\nGatePort=0\n"[..],
+                &b"[Setup]\nServerAddr=0.0.0.0\nServerPort=6000\nGateAddr=0.0.0.0\nGatePort=0\n"[..],
             ),
             (
                 "非 MySQL 存储",
-                &b"[Setup]\nGateAddr=0.0.0.0\nGatePort=5100\n[DataBase]\nStoreage=Sqlite\n"[..],
+                &b"[Setup]\nServerAddr=0.0.0.0\nServerPort=6000\nGateAddr=0.0.0.0\nGatePort=5100\n[DataBase]\nStoreage=Sqlite\n"[..],
             ),
         ] {
             let p = write(&dir, body);
@@ -349,7 +389,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("dbsrv-cfg-port-{}", std::process::id()));
         let p = write(
             &dir,
-            b"[Setup]\nGateAddr=0.0.0.0\nGatePort=abc\n[DataBase]\nStoreage=MySQL\n",
+            b"[Setup]\nServerAddr=0.0.0.0\nServerPort=6000\nGateAddr=0.0.0.0\nGatePort=abc\n[DataBase]\nStoreage=MySQL\n",
         );
         assert_eq!(load(&p).unwrap().gate_port, 5100);
         std::fs::remove_dir_all(&dir).ok();

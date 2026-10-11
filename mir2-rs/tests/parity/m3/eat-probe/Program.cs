@@ -173,6 +173,7 @@ internal static class Program
         public bool canUseItem = true;
         public bool dead = false;
         public int actorId = 0x1234;
+        public bool noDrug = false;
     }
 
     private static UserItem ToUser(Spec s)
@@ -307,6 +308,7 @@ internal static class Program
         {
             po.ItemList.Add(ToUser(s));
         }
+        po.Envir.Flag.boNODRUG = ctx.noDrug;
 
         var mi = typeof(PlayObject).GetMethod("ClientUseItems", BindingFlags.Instance | BindingFlags.NonPublic)
             ?? throw new MissingMethodException("PlayObject.ClientUseItems");
@@ -322,7 +324,15 @@ internal static class Program
         return new
         {
             name,
-            ctx = new { can_use_item = ctx.canUseItem, dead = ctx.dead, actor_id = ctx.actorId },
+            ctx = new
+            {
+                can_use_item = ctx.canUseItem,
+                dead = ctx.dead,
+                actor_id = ctx.actorId,
+                no_drug = ctx.noDrug,
+                red_msg_fcolor = (int)SystemShare.Config.RedMsgFColor,
+                red_msg_bcolor = (int)SystemShare.Config.RedMsgBColor,
+            },
             request = new { make_index = requestMakeIndex, name = requestName },
             wabil_before = wabilBeforeDto,
             inc_health_before = incHealthPre,
@@ -383,6 +393,7 @@ internal static class Program
         table.Items[2006] = Tpl("inc_zero", 0, 0, 5);                        // default：AC/MAC 都为 0（两条 >0 守卫）
         table.Items[2007] = Tpl("other_mode", 5, 0, 8);                      // StdMode 5：非药品 ⇒ 不吃
         table.Items[2008] = Tpl("weighty", 0, 1, 9, ac: 1, mac: 1);          // 称重
+        table.Items[2011] = Tpl("noop", 2, 0, 3);                             // StdMode 2：无效果（result=true）
         // 2009 故意不注册 ⇒ 模板缺失分支
 
         var cases = new List<object>();
@@ -424,6 +435,12 @@ internal static class Program
             new List<Spec> { S(1, 2001) }, 1, "hp_mp_fixed",
             BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
         cases.Add(RunCase(table, net, "eat_fail_dead", new Ctx { dead = true },
+            new List<Spec> { S(1, 2001) }, 1, "hp_mp_fixed",
+            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+        cases.Add(RunCase(table, net, "eat_ok_stdmode2_noop", new Ctx(),
+            new List<Spec> { S(1, 2011) }, 1, "noop",
+            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+        cases.Add(RunCase(table, net, "eat_fail_nodrug_no_consume", new Ctx { noDrug = true },
             new List<Spec> { S(1, 2001) }, 1, "hp_mp_fixed",
             BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
 
@@ -479,8 +496,8 @@ internal static class Program
                 "有效物品 = 模板（探针 GetUpgradeStdItem 是恒等拷贝；Desc 升级/StdMode 变换不在本片作用域）",
                 "即时帧 = SendDefMessage/SendSocket 直接写 gate buffer（SM_EAT_OK=635 / SM_EAT_FAIL=636）",
                 "延时通知 = SendMsg 入 MsgQueue（PriorityQueue，优先级 = (byte)wIdent），探针按出队序读；真实协议上它晚于即时帧由消息泵下发",
-                "StdMode 1/2/3/4/31（食物/HungerStatus、无效果、ExtraAbil buff、书、解包）本片未实现，已登记",
-                "Envir.Flag.boNODRUG 分支（地图禁药 + 文本 SysMsg）本片未建模，已登记",
+                "StdMode 2（无效果）已覆盖；StdMode 1/3/4/31（食物/HungerStatus、ExtraAbil buff/GetExp、书、解包）本片未实现，已登记（T-17）",
+                "Envir.Flag.boNODRUG 分支（地图禁药）已覆盖：SysMsg(Red) 入 MsgQueue（RM_SYSMESSAGE=11004，颜色取自 Config.RedMsgFColor/RedMsgBColor），物品不消耗、背包不动、落 SM_EAT_FAIL",
             },
             templates = templateDtos,
             cases,

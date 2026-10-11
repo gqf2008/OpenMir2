@@ -22,6 +22,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, Mutex};
 
+use crate::cache::CacheStore;
 use crate::config::DbConfig;
 use crate::gbk::{arrest, split2_nonempty};
 use crate::log;
@@ -92,13 +93,19 @@ pub struct Server {
     pub gates: Arc<Mutex<Vec<Option<Gate>>>>,
     /// 数据队列写端。
     pub queue_tx: mpsc::UnboundedSender<Queued>,
+    /// 玩家存档内存缓存（C# `ICacheStorage`，6000 面 + TimedService 共用）。
+    pub cache: Arc<Mutex<CacheStore>>,
     next_id: AtomicI32,
 }
 
 impl Server {
     /// 建状态 + 队列（队列读端交给 `run`）。
     #[must_use]
-    pub fn new(cfg: DbConfig, share: Arc<Share>) -> (Arc<Self>, mpsc::UnboundedReceiver<Queued>) {
+    pub fn new(
+        cfg: DbConfig,
+        share: Arc<Share>,
+        cache: Arc<Mutex<CacheStore>>,
+    ) -> (Arc<Self>, mpsc::UnboundedReceiver<Queued>) {
         let (tx, rx) = mpsc::unbounded_channel();
         let mut gates = Vec::with_capacity(MAX_GATES);
         for _ in 0..MAX_GATES {
@@ -110,6 +117,7 @@ impl Server {
             login: Arc::new(Mutex::new(LoginState::default())),
             gates: Arc::new(Mutex::new(gates)),
             queue_tx: tx,
+            cache,
             next_id: AtomicI32::new(1),
         });
         (server, rx)
@@ -132,7 +140,7 @@ impl Server {
     pub async fn run(
         self: Arc<Self>,
         rx: mpsc::UnboundedReceiver<Queued>,
-        db: crate::db::Db,
+        db: Arc<Mutex<crate::db::Db>>,
     ) -> Result<()> {
         let listener = TcpListener::bind((self.cfg.gate_addr.as_str(), self.cfg.gate_port))
             .await

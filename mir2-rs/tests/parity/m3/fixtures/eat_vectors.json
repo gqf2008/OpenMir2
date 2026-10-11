@@ -1,7 +1,7 @@
 {
   "generator": "mir2-rs/tests/parity/m3/eat-probe",
   "oracle_assembly": "M2Server.dll",
-  "oracle_assembly_sha256": "e21dac142fea1b032e3c6f804a2ddc1cc8d84fb46e31a1e8648029cceba8073d",
+  "oracle_assembly_sha256": "dec7ac26f8f29fa54b454a0034f1e36017a7d107d541abdbc4c86d80e9500860",
   "oracle_assembly_sha256_note": "\u751F\u6210\u65F6 M2Server.dll \u6784\u5EFA\u4EA7\u7269 hash\uFF08\u968F\u7F16\u8BD1\u5668/SDK/\u73AF\u5883\u53D8\u5316\uFF09\uFF1B\u4EC5\u4F5C\u6EAF\u6E90\uFF0C\u4E0D\u53C2\u4E0E\u5411\u91CF\u6821\u9A8C\u2014\u2014\u6821\u9A8C\u951A\u70B9\u662F oracle_source_sha256",
   "oracle_source_sha256": "8f6684188b24f0fe2802ba3160082673db17a5d47cf9796878123e07f1a64df8",
   "oracle_source_sha256_files": [
@@ -25,8 +25,8 @@
     "\u6709\u6548\u7269\u54C1 = \u6A21\u677F\uFF08\u63A2\u9488 GetUpgradeStdItem \u662F\u6052\u7B49\u62F7\u8D1D\uFF1BDesc \u5347\u7EA7/StdMode \u53D8\u6362\u4E0D\u5728\u672C\u7247\u4F5C\u7528\u57DF\uFF09",
     "\u5373\u65F6\u5E27 = SendDefMessage/SendSocket \u76F4\u63A5\u5199 gate buffer\uFF08SM_EAT_OK=635 / SM_EAT_FAIL=636\uFF09",
     "\u5EF6\u65F6\u901A\u77E5 = SendMsg \u5165 MsgQueue\uFF08PriorityQueue\uFF0C\u4F18\u5148\u7EA7 = (byte)wIdent\uFF09\uFF0C\u63A2\u9488\u6309\u51FA\u961F\u5E8F\u8BFB\uFF1B\u771F\u5B9E\u534F\u8BAE\u4E0A\u5B83\u665A\u4E8E\u5373\u65F6\u5E27\u7531\u6D88\u606F\u6CF5\u4E0B\u53D1",
-    "StdMode 1/2/3/4/31\uFF08\u98DF\u7269/HungerStatus\u3001\u65E0\u6548\u679C\u3001ExtraAbil buff\u3001\u4E66\u3001\u89E3\u5305\uFF09\u672C\u7247\u672A\u5B9E\u73B0\uFF0C\u5DF2\u767B\u8BB0",
-    "Envir.Flag.boNODRUG \u5206\u652F\uFF08\u5730\u56FE\u7981\u836F \u002B \u6587\u672C SysMsg\uFF09\u672C\u7247\u672A\u5EFA\u6A21\uFF0C\u5DF2\u767B\u8BB0"
+    "StdMode 2\uFF08\u65E0\u6548\u679C\uFF09\u5DF2\u8986\u76D6\uFF1BStdMode 1/3/4/31\uFF08\u98DF\u7269/HungerStatus\u3001ExtraAbil buff/GetExp\u3001\u4E66\u3001\u89E3\u5305\uFF09\u672C\u7247\u672A\u5B9E\u73B0\uFF0C\u5DF2\u767B\u8BB0\uFF08T-17\uFF09",
+    "Envir.Flag.boNODRUG \u5206\u652F\uFF08\u5730\u56FE\u7981\u836F\uFF09\u5DF2\u8986\u76D6\uFF1ASysMsg(Red) \u5165 MsgQueue\uFF08RM_SYSMESSAGE=11004\uFF0C\u989C\u8272\u53D6\u81EA Config.RedMsgFColor/RedMsgBColor\uFF09\uFF0C\u7269\u54C1\u4E0D\u6D88\u8017\u3001\u80CC\u5305\u4E0D\u52A8\u3001\u843D SM_EAT_FAIL"
   ],
   "templates": {
     "2001": {
@@ -100,6 +100,15 @@
       "ac": 1,
       "mac": 1,
       "dura_max": 0
+    },
+    "2011": {
+      "name": "noop",
+      "std_mode": 2,
+      "shape": 0,
+      "weight": 3,
+      "ac": 0,
+      "mac": 0,
+      "dura_max": 0
     }
   },
   "cases": [
@@ -108,7 +117,10 @@
       "ctx": {
         "can_use_item": true,
         "dead": false,
-        "actor_id": 4660
+        "actor_id": 4660,
+        "no_drug": false,
+        "red_msg_fcolor": 255,
+        "red_msg_bcolor": 56
       },
       "request": {
         "make_index": 1,
@@ -226,7 +238,10 @@
       "ctx": {
         "can_use_item": true,
         "dead": false,
-        "actor_id": 4660
+        "actor_id": 4660,
+        "no_drug": false,
+        "red_msg_fcolor": 255,
+        "red_msg_bcolor": 56
       },
       "request": {
         "make_index": 1,
@@ -344,7 +359,10 @@
       "ctx": {
         "can_use_item": true,
         "dead": false,
-        "actor_id": 4660
+        "actor_id": 4660,
+        "no_drug": false,
+        "red_msg_fcolor": 255,
+        "red_msg_bcolor": 56
       },
       "request": {
         "make_index": 1,
@@ -462,7 +480,10 @@
       "ctx": {
         "can_use_item": true,
         "dead": false,
-        "actor_id": 4660
+        "actor_id": 4660,
+        "no_drug": false,
+        "red_msg_fcolor": 255,
+        "red_msg_bcolor": 56
       },
       "request": {
         "make_index": 1,
@@ -573,7 +594,10 @@
       "ctx": {
         "can_use_item": true,
         "dead": false,
-        "actor_id": 4660
+        "actor_id": 4660,
+        "no_drug": false,
+        "red_msg_fcolor": 255,
+        "red_msg_bcolor": 56
       },
       "request": {
         "make_index": 1,
@@ -684,7 +708,10 @@
       "ctx": {
         "can_use_item": true,
         "dead": false,
-        "actor_id": 4660
+        "actor_id": 4660,
+        "no_drug": false,
+        "red_msg_fcolor": 255,
+        "red_msg_bcolor": 56
       },
       "request": {
         "make_index": 1,
@@ -795,7 +822,10 @@
       "ctx": {
         "can_use_item": true,
         "dead": false,
-        "actor_id": 4660
+        "actor_id": 4660,
+        "no_drug": false,
+        "red_msg_fcolor": 255,
+        "red_msg_bcolor": 56
       },
       "request": {
         "make_index": 1,
@@ -1002,7 +1032,10 @@
       "ctx": {
         "can_use_item": true,
         "dead": false,
-        "actor_id": 4660
+        "actor_id": 4660,
+        "no_drug": false,
+        "red_msg_fcolor": 255,
+        "red_msg_bcolor": 56
       },
       "request": {
         "make_index": 1,
@@ -1165,7 +1198,10 @@
       "ctx": {
         "can_use_item": true,
         "dead": false,
-        "actor_id": 4660
+        "actor_id": 4660,
+        "no_drug": false,
+        "red_msg_fcolor": 255,
+        "red_msg_bcolor": 56
       },
       "request": {
         "make_index": 99,
@@ -1291,7 +1327,10 @@
       "ctx": {
         "can_use_item": true,
         "dead": false,
-        "actor_id": 4660
+        "actor_id": 4660,
+        "no_drug": false,
+        "red_msg_fcolor": 255,
+        "red_msg_bcolor": 56
       },
       "request": {
         "make_index": 1,
@@ -1417,7 +1456,10 @@
       "ctx": {
         "can_use_item": true,
         "dead": false,
-        "actor_id": 4660
+        "actor_id": 4660,
+        "no_drug": false,
+        "red_msg_fcolor": 255,
+        "red_msg_bcolor": 56
       },
       "request": {
         "make_index": 1,
@@ -1543,7 +1585,10 @@
       "ctx": {
         "can_use_item": false,
         "dead": false,
-        "actor_id": 4660
+        "actor_id": 4660,
+        "no_drug": false,
+        "red_msg_fcolor": 255,
+        "red_msg_bcolor": 56
       },
       "request": {
         "make_index": 1,
@@ -1677,7 +1722,10 @@
       "ctx": {
         "can_use_item": true,
         "dead": true,
-        "actor_id": 4660
+        "actor_id": 4660,
+        "no_drug": false,
+        "red_msg_fcolor": 255,
+        "red_msg_bcolor": 56
       },
       "request": {
         "make_index": 1,
@@ -1745,6 +1793,257 @@
           }
         ],
         "notices": [],
+        "wabil": {
+          "level": 1,
+          "reserved1": 0,
+          "ac": 0,
+          "mac": 0,
+          "dc": 257,
+          "mc": 0,
+          "sc": 0,
+          "hp": 50,
+          "mp": 40,
+          "max_hp": 100,
+          "max_mp": 80,
+          "reserved2": 0,
+          "exp_count": 0,
+          "exp_max_count": 0,
+          "exp": 0,
+          "max_exp": 10,
+          "weight": 0,
+          "max_weight": 50,
+          "wear_weight": 0,
+          "max_wear_weight": 15,
+          "hand_weight": 0,
+          "max_hand_weight": 12
+        },
+        "inc_health": 0,
+        "inc_spell": 0,
+        "user_unlock_durg": false,
+        "item_list": [
+          {
+            "make_index": 1,
+            "index": 2001,
+            "dura": 10,
+            "dura_max": 20,
+            "desc": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "eat_ok_stdmode2_noop",
+      "ctx": {
+        "can_use_item": true,
+        "dead": false,
+        "actor_id": 4660,
+        "no_drug": false,
+        "red_msg_fcolor": 255,
+        "red_msg_bcolor": 56
+      },
+      "request": {
+        "make_index": 1,
+        "name": "noop"
+      },
+      "wabil_before": {
+        "level": 1,
+        "reserved1": 0,
+        "ac": 0,
+        "mac": 0,
+        "dc": 257,
+        "mc": 0,
+        "sc": 0,
+        "hp": 50,
+        "mp": 40,
+        "max_hp": 100,
+        "max_mp": 80,
+        "reserved2": 0,
+        "exp_count": 0,
+        "exp_max_count": 0,
+        "exp": 0,
+        "max_exp": 10,
+        "weight": 0,
+        "max_weight": 50,
+        "wear_weight": 0,
+        "max_wear_weight": 15,
+        "hand_weight": 0,
+        "max_hand_weight": 12
+      },
+      "inc_health_before": 0,
+      "inc_spell_before": 0,
+      "user_unlock_durg_before": false,
+      "item_list_before": [
+        {
+          "make_index": 1,
+          "index": 2011,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 635,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0
+          }
+        ],
+        "notices": [
+          {
+            "ident": 10115,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0
+          }
+        ],
+        "wabil": {
+          "level": 1,
+          "reserved1": 0,
+          "ac": 0,
+          "mac": 0,
+          "dc": 257,
+          "mc": 0,
+          "sc": 0,
+          "hp": 50,
+          "mp": 40,
+          "max_hp": 100,
+          "max_mp": 80,
+          "reserved2": 0,
+          "exp_count": 0,
+          "exp_max_count": 0,
+          "exp": 0,
+          "max_exp": 10,
+          "weight": 0,
+          "max_weight": 50,
+          "wear_weight": 0,
+          "max_wear_weight": 15,
+          "hand_weight": 0,
+          "max_hand_weight": 12
+        },
+        "inc_health": 0,
+        "inc_spell": 0,
+        "user_unlock_durg": false,
+        "item_list": []
+      }
+    },
+    {
+      "name": "eat_fail_nodrug_no_consume",
+      "ctx": {
+        "can_use_item": true,
+        "dead": false,
+        "actor_id": 4660,
+        "no_drug": true,
+        "red_msg_fcolor": 255,
+        "red_msg_bcolor": 56
+      },
+      "request": {
+        "make_index": 1,
+        "name": "hp_mp_fixed"
+      },
+      "wabil_before": {
+        "level": 1,
+        "reserved1": 0,
+        "ac": 0,
+        "mac": 0,
+        "dc": 257,
+        "mc": 0,
+        "sc": 0,
+        "hp": 50,
+        "mp": 40,
+        "max_hp": 100,
+        "max_mp": 80,
+        "reserved2": 0,
+        "exp_count": 0,
+        "exp_max_count": 0,
+        "exp": 0,
+        "max_exp": 10,
+        "weight": 0,
+        "max_weight": 50,
+        "wear_weight": 0,
+        "max_wear_weight": 15,
+        "hand_weight": 0,
+        "max_hand_weight": 12
+      },
+      "inc_health_before": 0,
+      "inc_spell_before": 0,
+      "user_unlock_durg_before": false,
+      "item_list_before": [
+        {
+          "make_index": 1,
+          "index": 2001,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 636,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0
+          }
+        ],
+        "notices": [
+          {
+            "ident": 11004,
+            "w_param": 0,
+            "n_param1": 255,
+            "n_param2": 56,
+            "n_param3": 0
+          }
+        ],
         "wabil": {
           "level": 1,
           "reserved1": 0,
