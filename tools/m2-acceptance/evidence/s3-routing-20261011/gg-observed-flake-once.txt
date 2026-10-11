@@ -1,0 +1,30 @@
+test login::tests::golden_client_login_text_parses_with_deployed_divider ... ok
+test login::tests::leading_separator_login_is_not_falsely_kicked ... ok
+test login::tests::deployed_shaped_login_passes ... ok
+test login::tests::get_valid_str3_semantics ... ok
+test gbk::tests::deployed_server_name_roundtrips ... ok
+test login::tests::length_rules_match_oracle ... ok
+test login::tests::missing_star_prefix_is_kicked_1 ... ok
+test login::tests::synthetic_login_body_matches_oracle_formula ... ok
+test rules::tests::at_prefixed_content_skips_interval_and_does_not_refresh_tick ... ok
+test rules::tests::say_interval_drops_the_second_message_too_soon ... ok
+test rules::tests::zero_interval_never_drops ... ok
+test config::tests::parses_deployed_gamegate_conf ... ok
+test config::tests::decodes_gbk_comments_and_values ... ok
+test config::tests::nom_client_packet_size_comes_from_config_with_default ... ok
+test config::tests::parses_deployed_gbk_conf_fixture ... ok
+test config::tests::missing_or_bad_keys_are_fatal ... ok
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test missing_config_exits_nonzero ... ok
+test oracle_golden_login_frame_yields_oracle_synthetic_packet ... ok
+test command_frame_with_tail_is_rebuilt ... ok
+test bad_login_is_kicked_and_nothing_is_forwarded ... ok
+test header_prefixed_login_is_kicked ... FAILED
+test login_success_sends_synthetic_login_packet ... ok
+test oversize_frame_is_dropped_without_kick ... FAILED
+test relays_open_data_heartbeat_and_close ... ok
+test downlink_frames_match_oracle_bytes ... ok
+test server_user_index_is_echoed_on_gm_data ... ok
+test say_interval_drops_the_second_chat_frame ... ok
+test result: FAILED. 9 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.04s
+error: test failed, to rerun pass `-p game-gate --test relay`

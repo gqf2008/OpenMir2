@@ -427,6 +427,13 @@ async fn relays_open_data_heartbeat_and_close() {
         "无尾部时 PackLength = CommandMessage.Size = 12"
     );
     assert_eq!(datas[0].0.session_id, sid, "GM_DATA 必须带同一 SessionId");
+    // S3 路由：命令帧的 Socket 必须是**客户端 handle**（= GM_OPEN 的 socketId），照
+    // `ClientSession.cs:65-70` 的 `SendMsg.Socket = _session.SckHandle`；送 0 会让 GameSvr 的
+    // `FindUser`（`ChannelMessageHandler.cs:170-198`）落进「用户不存在」、客户端命令全被丢。
+    assert_eq!(
+        datas[0].0.socket, open.socket,
+        "命令 GM_DATA 的 Socket 必须与 GM_OPEN 的 handle 一致（S3 路由）"
+    );
 
     // 判据 5：有 GM_CLOSE 且 socket=handle、session_id=0（实机取证）
     let closes: Vec<&(ServerMessage, Vec<u8>)> = got
