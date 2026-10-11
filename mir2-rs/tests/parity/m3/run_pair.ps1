@@ -46,6 +46,9 @@ param(
   [int]$NewChrJob = 0,             # 仅 -FixedNewChr 时生效
   [int]$NewChrHair = 2,            # 仅 -FixedNewChr 时生效（2 = 原 Random(1) 恒走的发型）
   [int]$NewChrSex = 0,             # 仅 -FixedNewChr 时生效
+  [switch]$BagEquipSequence,       # M3 T-14 夹具：BotSrv 进世界后按固定顺序发背包/装备动作（白名单 T-22）
+  [int]$BagEquipStepMs = 1000,     # 仅 -BagEquipSequence 时生效
+  [int]$BagEquipStartDelayMs = 3000, # 仅 -BagEquipSequence 时生效
   [switch]$SelfTestRed
 )
 
@@ -172,6 +175,7 @@ if ($SkipBots) {
 $opsLog = Join-Path $SessionDir 'ops.log'
 $opsRunner = 'none'
 $opsExit = 0
+$bagSeqMarkers = @()
 if (-not $SkipBots) {
   $opsRunner = "run_bots.ps1 -Count $Bots -Prefix $Prefix -NewAccount -Port $Port"
   $botArgs = @('-Count', $Bots, '-Prefix', $Prefix, '-Address', $Address, '-Port', $Port,
@@ -180,6 +184,11 @@ if (-not $SkipBots) {
     $opsRunner += " -FixedNewChr -NewChrJob $NewChrJob -NewChrHair $NewChrHair -NewChrSex $NewChrSex"
     $botArgs += @('-FixedNewChr', '-NewChrJob', $NewChrJob, '-NewChrHair', $NewChrHair, '-NewChrSex', $NewChrSex)
     Write-Output ("OPS_FIXED_NEWCHR Job={0} Hair={1} Sex={2}" -f $NewChrJob, $NewChrHair, $NewChrSex)
+  }
+  if ($BagEquipSequence) {
+    $opsRunner += " -BagEquipSequence -BagEquipStepMs $BagEquipStepMs -BagEquipStartDelayMs $BagEquipStartDelayMs"
+    $botArgs += @('-BagEquipSequence', '-BagEquipStepMs', $BagEquipStepMs, '-BagEquipStartDelayMs', $BagEquipStartDelayMs)
+    Write-Output ("OPS_BAGEQUIPSEQ step_ms={0} start_delay_ms={1}" -f $BagEquipStepMs, $BagEquipStartDelayMs)
   }
   Write-Output ("OPS " + $opsRunner)
   & powershell -ExecutionPolicy Bypass -File $Botload @botArgs 2>&1 |
@@ -201,6 +210,23 @@ if (-not $SkipBots) {
   $charc = ([regex]::Matches($botText, '创建角色')).Count
   $enter = ([regex]::Matches($botText, '成功进入游戏')).Count
   Write-Output ("OPS_MARKERS login_ok={0}/{1} char_created={2}/{1} enter_world={3}/{1} bot_log={4}" -f $login, $Bots, $charc, $enter, (Split-Path $botLog -Leaf))
+  # M3 T-14（T-22）：固定背包/装备序列的执行证据（每一步一条 `M3BAGSEQ` 标记，落 bot.log）。
+  # 判据：开了 -BagEquipSequence 就必须看到整串（含 `done`）——否则驱动没跑完，
+  # 两侧“同一序列”不成立，绝不能当 GREEN（否则拿一个空序列去 diff 会恒绿）。
+  $bagSeqMarkers = @([regex]::Matches($botText, 'M3BAGSEQ [^\r\n]*') | ForEach-Object { $_.Value })
+  Write-Output ("OPS_BAGSEQ_MARKERS count={0}" -f $bagSeqMarkers.Count)
+  foreach ($m in $bagSeqMarkers) { Write-Output ("BAGSEQ " + $m) }
+  if ($BagEquipSequence) {
+    $doneCount = ([regex]::Matches($botText, 'M3BAGSEQ done')).Count
+    if ($bagSeqMarkers.Count -eq 0) {
+      Write-Output 'RED: -BagEquipSequence 开了但 bot.log 里一条 M3BAGSEQ 标记都没有 —— 固定序列没跑（驱动未生效/假人未进世界）'
+      exit 1
+    }
+    if ($doneCount -lt $Bots) {
+      Write-Output ("RED: -BagEquipSequence 开了但只有 {0}/{1} 个假人跑完整串（缺 M3BAGSEQ done）——序列不完整，不能当同一序列" -f $doneCount, $Bots)
+      exit 1
+    }
+  }
   # 判据取"可靠段"：账号创建 + 登录成功 = N（实测稳定）。
   # 进世界之后的段位今日不可靠：BotSrv 会在 `TMap.CanMove` 崩溃并带走整个进程
   #（工具侧已知阻塞，见 m3/README.md「已知阻塞」），崩溃点与时序相关（有时停在"确认游戏公告"）。
@@ -254,6 +280,8 @@ $baseline = [pscustomobject]@{
   ops_runner   = $opsRunner
   ops_exit     = $opsExit
   fixed_new_chr = if ($FixedNewChr) { "Job=$NewChrJob Hair=$NewChrHair Sex=$NewChrSex" } else { "(off)" }
+  bag_equip_sequence = if ($BagEquipSequence) { "on step_ms=$BagEquipStepMs start_delay_ms=$BagEquipStartDelayMs" } else { "(off)" }
+  bag_equip_markers = $bagSeqMarkers
   git_rev      = (Git-Rev)
   dbsnap       = $beforeHashes
   dbsnap_after = $afterHashes

@@ -194,3 +194,28 @@ Remove-Item -Recurse -Force mir2-rs/tests/parity/m3/sessions/*/shadow-run* -Erro
 - **冻结基线**：`src/**`（C# oracle）一行未改（探针只**引用** `src/M2Server` 编译，不改源）；
   表结构/脚本/数据文件格式未改；未动 `main.rs`/`smframe.rs`（接线归 m2-svr）、
   未动 `crates/world/**`/`crates/envir/**`/`crates/world-bevy/**`。
+
+## 十四、本片（2026-10-12，worktree `m3bag`：T-14 双侧同序列驱动 + BotSrv 固定背包/装备序列）实际残留清单
+
+- **入库（本片交付）**：
+  - `m3/run_bag_equip_pair.ps1`（新）：T-14 的「一条命令」——入口实现识别护栏 + `-BagEquipSequence` 透传
+    + `M3BAGSEQ` 整串标记判据 + 跨侧 `scoped_diff.py diff --canonical --fixed-newchr`；
+    模式：`-Side csharp|rust` / `-DiffOnly` / `-SelfCheckNoStack`（无栈自检）。
+  - `m3/bag_equip_sequence.json`（新）：固定序列定义（每步 `CM_*` 编码、oracle 派发锚点、出包观测面、红检牙齿、已知缺件）。
+  - `m3/run_pair.ps1` / `m3/run_m3_gate.ps1`：透传 `-BagEquipSequence/-BagEquipStepMs/-BagEquipStartDelayMs`；
+    `run_pair.ps1` 把 `M3BAGSEQ` 标记写进 `baseline.json.bag_equip_markers`，**缺整串即 RED**。
+  - `tools/botload/run_bots.ps1`：`-BagEquipSequence/-BagEquipStepMs/-BagEquipStartDelayMs` 写进 `AppSetting.json` 的 `BotPlay` 段；
+   新增 `-WriteConfigOnly`（只写配置即退，供无栈自检/红检）。
+  - `src/BotSrv/{RobotOptions.cs,MShare.cs,AppService.cs,Player/RobotPlayer.cs}`（**T-22 登记的工具侧例外**，非 oracle）：
+   固定背包/装备序列（收到本假人 `SM_LOGON` 后拾取→装备→卸下→丢弃→用药各发一条，参数只取本假人视图；
+   每步落 `M3BAGSEQ` 标记）。**默认 `BagEquipSequence=false` ⇒ 不新增任何发送、原路径逐字节不变**。
+  - `m3/README.md` / `m3/ARTIFACTS.md` / `tests/parity/whitelist.md`（口径同步：T-14 更新 + 新增 T-22）。
+- **未入库/临时物**：无栈自检与红检日志 `E:/tmp/openmir2-watch/m3bag9/*.log`；
+  `src/BotSrv/bin|obj`（.NET 构建产物，`.gitignore` 覆盖）；本 lane 报告 `E:/tmp/openmir2-watch/last-m3bag*.md`。
+- **未起栈、未占端口**：本片全程未新建 LISTENING；未用 5000/7000/7100/7200（M2 真机验收窗口优先）。
+- **边界（逐条）**：
+  - **oracle 未改**：`git diff --stat <base> -- src/M2Server src/DBSrv src/LoginSrv src/GameSrv sql MirClient` = 空；
+    `src/BotSrv/**` 的改动是 **T-22 登记的工具侧例外**（BotSrv 不在 oracle 七进程内，默认关时逐字节不变）。
+  - 未动 `main.rs`/`smframe.rs`（接线归 m2-svr）、`crates/world/**`、`crates/envir/**`、`crates/world-bevy/**`；
+    表结构/脚本/数据文件格式未改。
+  - 未 merge、未签 review；未新增非 T-22 的 `T-*` 编号（落笔前核过 master 现有编号 T-13..T-22）。

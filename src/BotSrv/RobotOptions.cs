@@ -56,5 +56,26 @@ namespace BotSrv
         /// 固定建角性别（仅 FixedNewChr=true 时生效；对应 CM_NEWCHR 的 sSex 字节）。
         /// </summary>
         public int NewChrSex { get; set; }
+
+        /// <summary>
+        /// M3 跨侧对拍夹具（卡 openmir2-m3-bag-equip-alignment 的 T-14；白名单 T-22）。
+        /// 默认 false = 原行为（不新增任何发送）。
+        /// 置 true 时，本假人在收到自己的 SM_LOGON（服务端确认进世界）后，按**固定顺序**
+        /// 各发一条背包/装备动作：拾取(CM_PICKUP) → 装备(CM_TAKEONITEM) → 卸下(CM_TAKEOFFITEM)
+        /// → 丢弃(CM_DROPITEM) → 使用药品(CM_EAT)。参数从**本假人自己的客户端视图**取，
+        /// 两侧服务端行为相同时即产生**同一串 CM_* 字节**，这正是 M3「两侧同一序列」的前提。
+        /// 只作夹具驱动，不进 oracle 冻结面；默认关时 BotSrv 行为逐字节不变。
+        /// </summary>
+        public bool BagEquipSequence { get; set; }
+        /// <summary>
+        /// 固定背包/装备序列每步之间的间隔（ms），仅 BagEquipSequence=true 时生效。默认 1000。
+        /// 每步（含第 0 步）之间都等这么久，给服务端回包与本假人视图更新留时间。
+        /// </summary>
+        public int BagEquipStepMs { get; set; } = 1000;
+        /// <summary>
+        /// 进世界到第一步之间的额外等待（ms），仅 BagEquipSequence=true 时生效。默认 3000：
+        /// SM_LOGON 之后服务端还会推物品列表（SM_ADDITEM 等），要等本假人视图装载完再动。
+        /// </summary>
+        public int BagEquipStartDelayMs { get; set; } = 3000;
     }
 }

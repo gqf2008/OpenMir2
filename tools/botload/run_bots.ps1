@@ -36,6 +36,10 @@ param(
   [int]$NewChrJob = 0,            # 仅 -FixedNewChr 时生效（写进 AppSetting.json 的 BotPlay 段）
   [int]$NewChrHair = 0,           # 仅 -FixedNewChr 时生效
   [int]$NewChrSex = 0,            # 仅 -FixedNewChr 时生效
+  [switch]$BagEquipSequence,      # M3 T-14 夹具：进世界后按固定顺序发背包/装备动作（拾取→装备→卸下→丢弃→用药）
+  [int]$BagEquipStepMs = 1000,    # 仅 -BagEquipSequence 时生效：每步间隔
+  [int]$BagEquipStartDelayMs = 3000, # 仅 -BagEquipSequence 时生效：进世界到第一步的额外等待
+  [switch]$WriteConfigOnly,       # 只写 AppSetting.json 并退出（不构建/不起进程；供无栈自检与红检用）
   [switch]$RequireWorld,          # F4（T-12）：要求全部假人都有"本会话收到 SM_LOGON"的进世界证据（in_world == Count）才 GREEN
   [switch]$SelfTestRed
 )
@@ -94,12 +98,25 @@ $cfg = @{
     NewChrJob      = $NewChrJob
     NewChrHair     = $NewChrHair
     NewChrSex      = $NewChrSex
+    BagEquipSequence    = [bool]$BagEquipSequence
+    BagEquipStepMs      = $BagEquipStepMs
+    BagEquipStartDelayMs = $BagEquipStartDelayMs
   }
 } | ConvertTo-Json -Depth 4
+New-Item -ItemType Directory -Force -Path $BotBinDir | Out-Null
 [System.IO.File]::WriteAllText((Join-Path $BotBinDir "AppSetting.json"), $cfg, (New-Object System.Text.UTF8Encoding($false)))
 Write-Output "CONFIG: $Count bots, prefix=$Prefix, target=$Address`:$Port, NewAccount=$NewAccount, FixedNewChr=$FixedNewChr"
 if ($FixedNewChr) {
     Write-Output "CONFIG_FIXED_NEWCHR Job=$NewChrJob Hair=$NewChrHair Sex=$NewChrSex"
+}
+if ($BagEquipSequence) {
+    Write-Output "CONFIG_BAGEQUIPSEQ step_ms=$BagEquipStepMs start_delay_ms=$BagEquipStartDelayMs"
+}
+
+# 无栈自检/红检：只写配置即退（不构建、不起进程）。
+if ($WriteConfigOnly) {
+    Write-Output ("WRITE_CONFIG_ONLY " + (Join-Path $BotBinDir "AppSetting.json"))
+    exit 0
 }
 
 # ---- 3. 起进程 ----

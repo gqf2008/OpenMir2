@@ -151,6 +151,39 @@ mir2_db.characters_quest         # 任务标志（QUESTOPENINDEX/QUESTFININDEX/Q
    `--fixed-newchr` 只影响 `mir2_db.characters` 的 `Hair/Sex/Job` 三列（从易变白名单里摘掉）；
    自增 PK / 墙钟列照旧置占位。未登记列仍 fail-closed。
 
+### 背包/装备「两侧同一序列」（卡 `openmir2-m3-bag-equip-alignment`；T-14 + T-22）
+
+卡内 DoD ②：拾取 → 装备 → 卸下 → 丢弃 → 使用药品，**两侧同一序列、跨侧作用域字段级 diff = 0**。
+序列定义 = `bag_equip_sequence.json`（每步的 `CM_*` 编码、oracle 派发锚点、出包观测面）。
+
+驱动 = BotSrv 的固定背包/装备序列（`RobotOptions.BagEquipSequence`，默认 **false = 原行为**；
+白名单 T-22）：本假人收到自己的 `SM_LOGON` 后，按固定顺序各发一条 `CM_PICKUP/CM_TAKEONITEM/`
+`CM_TAKEOFFITEM/CM_DROPITEM/CM_EAT`，参数只从**本假人的客户端视图**取（两侧服务端行为相同时
+字节逐条相同）。每步落 `M3BAGSEQ step=N …`、收尾 `M3BAGSEQ done`，`run_pair.ps1` 写进
+`baseline.json.bag_equip_markers`——**缺整串即 RED**（空序列恒绿是禁止的）。
+
+一条命令（一条命令 = 一侧；两侧栈需要人工换栈，除 `-DiffOnly`/`-SelfCheckNoStack` 外会连真栈）：
+
+```powershell
+# ① C# 基线（C# 栈在听）
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_bag_equip_pair.ps1 -Side csharp -Bots 1
+# ② 换 Rust 栈后跑 Rust 侧 + 跨侧 diff（= 本卡正式判据）
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_bag_equip_pair.ps1 -Side rust -PeerSession <上面打的 SESSION_CSHARP 名>
+# ③ 只重比既有产物（不碰端口）
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_bag_equip_pair.ps1 -DiffOnly -CsharpSession <c#会话> -RustSession <rust会话>
+# ④ 无栈自检（所有路径必须 fail-closed；不连真栈）
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_bag_equip_pair.ps1 -SelfCheckNoStack
+```
+
+逐步判红口径（详见脚本头部注释）：
+0）入口护栏：`-Side rust` 而入口监听进程仍在 `E:\MirServer\*` ⇒ RED（拿 C# 比 C# 恒绿）；
+1）预检：入口端口不全在听 / MySQL 3306 不可达 / 前缀不清新 ⇒ **PREREQ（exit 2）**，不静默通过；
+2）同序列：`bot.log` 必须出现整串 `M3BAGSEQ`（含 `done`）⇒ 否则 RED；
+3）跨侧：`scoped_diff.py diff --canonical --fixed-newchr` ⇒ 非 0 即 RED。
+
+窗口纪律：起栈前看 `E:\MirServer\port-status.ps1`，与 M2 真机验收**严格串行**；
+本脚本不启动/不停止任何服务。
+
 ## 一次「侧运行」是什么
 
 
