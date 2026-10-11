@@ -12,6 +12,8 @@ namespace BotSrv.Scenes.Scene
     {
 
         private readonly ScoketClient _clientSocket;
+        private bool _loginSent;          // T-11：本连接上已发出登录包
+        private bool _loginResendDone;    // T-11：对照用的重发已用过一次
 
         public LoginScene(RobotPlayer robotClient) : base(SceneType.Login, robotClient)
         {
@@ -30,6 +32,7 @@ namespace BotSrv.Scenes.Scene
 
         public void Login()
         {
+            MaybeResendLogin();
             if (ConnectionStep == ConnectionStep.Connect)
             {
                 if ((RobotClient.ConnectionStatus == ConnectionStatus.Failure) && (HUtil32.GetTickCount() > RobotClient.ConnectTick))
@@ -113,16 +116,43 @@ namespace BotSrv.Scenes.Scene
             LogService.Info("开始登陆");
             RobotClient.LoginId = uid;
             RobotClient.LoginPasswd = passwd;
+            // T-11：按**本连接**记下发出时刻与发送结果（残余丢包方向定位的锚点）
+            LoadMetrics.LoginConnStart(RobotClient.SessionId, _clientSocket.ConnSeq);
             CommandMessage msg = Messages.MakeMessage(Messages.CM_IDPASSWORD, 0, 0, 0, 0);
-            if (SendSocket(EDCode.EncodeMessage(msg) + EDCode.EncodeString(uid + "/" + passwd)))
+            bool sent = SendSocket(EDCode.EncodeMessage(msg) + EDCode.EncodeString(uid + "/" + passwd));
+            LoadMetrics.LoginConnSent(RobotClient.SessionId, sent);
+            if (sent)
             {
                 LoadMetrics.LoginSent();
+                _loginSent = true;
             }
             else
             {
                 LoadMetrics.LoginSendClosed();
             }
             MShare.SendLogin = true;
+        }
+
+        /// <summary>
+        /// T-11 对照：登录包发出后 `MIR2_BOT_LOGIN_RESEND_MS` 窗口内没拿到任何应答时，在**同一条连接**上
+        /// 重发一次登录包。它只回答一个问题——「这条连接第二次请求能不能拿到应答」。
+        /// 窗口未配置（默认 0）时整段不执行，假人行为与 C6 第 4 轮逐字节一致。
+        /// </summary>
+        private void MaybeResendLogin()
+        {
+            if (!_loginSent || _loginResendDone)
+            {
+                return;
+            }
+            if (!LoadMetrics.LoginConnNeedsResend(RobotClient.SessionId, HUtil32.GetTickCount()))
+            {
+                return;
+            }
+            _loginResendDone = true;
+            CommandMessage msg = Messages.MakeMessage(Messages.CM_IDPASSWORD, 0, 0, 0, 0);
+            bool sent = SendSocket(EDCode.EncodeMessage(msg) + EDCode.EncodeString(RobotClient.LoginId + "/" + RobotClient.LoginPasswd));
+            LoadMetrics.LoginConnResend(RobotClient.SessionId);
+            LogService.Warn($"T-11 登录重发对照（{RobotClient.LoginId}）：sent={sent}");
         }
 
         public void ClientGetPasswordOk(CommandMessage msg, string sBody)
@@ -188,8 +218,7 @@ namespace BotSrv.Scenes.Scene
         {
             if (_clientSocket.IsConnected)
             {
-                _clientSocket.SendText($"#1{sendstr}!");
-                return true;
+                return _clientSocket.SendText($"#1{sendstr}!");
             }
             LogService.Warn($"Socket Close: {_clientSocket.RemoteEndPoint}");
             return false;
@@ -256,6 +285,8 @@ namespace BotSrv.Scenes.Scene
 
         private void CSocketRead(object sender, DSCClientDataInEventArgs e)
         {
+            // T-11：本连接收到多少原始字节（0 ⇒ 服务端没在这条 TCP 连接上回过任何东西）
+            LoadMetrics.LoginConnRecv(RobotClient.SessionId, e.BuffLen);
             string sData = HUtil32.GetString(e.Buff, 0, e.BuffLen);
             if (!string.IsNullOrEmpty(sData))
             {

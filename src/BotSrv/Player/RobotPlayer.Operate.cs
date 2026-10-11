@@ -83,6 +83,8 @@ namespace BotSrv.Player
             // T-8 登录响应观测：解出帧 + 按 ident 计数（放在任何分支之前 ⇒ 无论后面走登录/进世界分支都记）。
             LoadMetrics.FrameDecoded();
             LoadMetrics.IdentSeen(msg.Ident);
+            // T-11：把帧归到**本假人的登录连接**上（rx_bytes 与是否解出 529 一起读，才能分方向）
+            LoadMetrics.LoginConnIdent(SessionId, msg.Ident);
             // T-9 按会话隔离「未进世界」判据（C6 第 4 轮根因修复）：
             // 原判据是**跨假人共享**的 `MShare.MySelf == null`——只要有**任意一个**假人进了世界（第一个 SM_LOGON
             // 把 MySelf 置上），该标志就再也不为 null（本进程只在 RobotPlayer 构造时清一次），于是**其余所有**

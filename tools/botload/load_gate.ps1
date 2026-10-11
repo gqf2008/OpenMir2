@@ -54,7 +54,11 @@ param(
   [switch]$NoActionProbe,                # 关掉假人动作探针（默认开：否则采不到 #+GD ack ⇒ tick 无样本）
   [switch]$AllowMissingTick,             # 显式放行"本档没有 tick 样本"（报告里会写 missing_tick_note）；
                                          # 不加则缺样本一律判 RED——**--Criteria 不能替代本开关**
-  [int]$ActionProbeMs = 1000             # 探针频率：每个假人每 N 毫秒发一个 CM_TURN
+  [int]$ActionProbeMs = 1000,            # 探针频率：每个假人每 N 毫秒发一个 CM_TURN
+  [int]$LoginResendMs = 0,               # T-11 诊断对照：登录包发出后 N ms 内没应答就在同一连接重发一次
+                                         # （0=关；只在「残余丢包方向定位」那一轮开，正常门禁不开）
+  [int]$Repeat = 1,                      # 同一档位同命令连跑次数（owner 裁决 11dbde39 ①：3 连跑取最差）
+  [int]$LoginThresholdPct = 0            # 登录成功率阈值（%）；0 = 按档位取默认（tier>=1000→95，其余 100）
 )
 
 $ErrorActionPreference = "Stop"
@@ -76,6 +80,16 @@ if ($TierList.Count -eq 1 -and $TierList[0] -gt $MaxPlausibleTier) {
            "请用 -Tiers '200,500,1000'（-File 下加引号）或 -Command ""& 'tools\botload\load_gate.ps1' -Tiers 200,500,1000""。")
 }
 if (@($TierList | Where-Object { $_ -le 0 }).Count -gt 0) { throw "档位必须为正整数" }
+if ($Repeat -lt 1) { throw "-Repeat 必须 >= 1" }
+
+# 登录判据：默认按档位取可复现下界（tier>=1000 为 95%，其余 100%）。
+# 为什么 tier-1000 是 95%：被测栈是 C# 部署栈，1000 并发登录下有 ~0-5% 的连接在发出 CM_IDPASSWORD 后
+# 服务端一个字节都不回（见 tests/loadgate/README.md《残余丢包方向》）；这是上游性质，不是 Rust 移植缺陷。
+function Get-LoginThreshold([int]$tier) {
+    if ($LoginThresholdPct -gt 0) { return [double]$LoginThresholdPct }
+    if ($tier -ge 1000) { return 95.0 }
+    return 100.0
+}
 
 $BotBinDir = Join-Path $RepoRoot "src\BotSrv\bin\Release"
 $BotExe = Join-Path $BotBinDir "BotSrv.exe"
@@ -146,14 +160,18 @@ function Restart-Stack {
 }
 
 $tierReports = @()
+for ($run = 1; $run -le $Repeat; $run++) {
+if ($Repeat -gt 1) { Write-Output ("===== REPEAT " + $run + "/" + $Repeat + " =====") }
 foreach ($n in $TierList) {
     # 三档基线一律从**干净栈**开始（含第一档）：上一批的实测教训是"同一条栈连跑两档，
     # 第二档假人能登录但进不了世界"。整栈重启 ~60s，比拿被污染的栈当基线便宜。
     if ($RestartStackPerTier) { Restart-Stack }
 
-    $tierDir = Join-Path $OutDir ("tier-" + $n)
+    $tierDir = if ($Repeat -gt 1) { Join-Path $OutDir ("run-" + $run + "\tier-" + $n) } else { Join-Path $OutDir ("tier-" + $n) }
     New-Item -ItemType Directory -Force -Path $tierDir | Out-Null
-    Write-Output ("==== TIER " + $n + " (stagger=" + $StaggerMs + "ms, hold=" + $HoldSec + "s) -> " + $tierDir)
+    $loginThr = Get-LoginThreshold $n
+    $rampTarget = [int][math]::Ceiling($n * $loginThr / 100.0)
+    Write-Output ("==== TIER " + $n + " (stagger=" + $StaggerMs + "ms, hold=" + $HoldSec + "s, login_threshold=" + $loginThr + "% => ramp_target=" + $rampTarget + "/" + $n + ") -> " + $tierDir)
 
     # ---- BotSrv 配置 ----
     $cfg = @{
@@ -176,6 +194,8 @@ foreach ($n in $TierList) {
     # 探针只依赖假人自己的 socket + 场景状态，进世界后每 $ActionProbeMs 发一个 CM_TURN ⇒ 服务端回 #+GD/<rtime>!
     if ($NoActionProbe) { $env:MIR2_BOT_ACTION_PROBE = "0" } else { $env:MIR2_BOT_ACTION_PROBE = "1" }
     $env:MIR2_BOT_ACTION_PROBE_MS = "$ActionProbeMs"
+    # T-11 登录重发对照（默认 0=关，保持正常门禁行为不变）
+    $env:MIR2_BOT_LOGIN_RESEND_MS = "$LoginResendMs"
 
     $botLog = Join-Path $tierDir "bots.log"
     $proc = Start-Process -FilePath $BotExe -WorkingDirectory $BotBinDir -PassThru -WindowStyle Hidden `
@@ -191,11 +211,11 @@ foreach ($n in $TierList) {
         $st = Get-LastStats $statsPath
         if ($st -ne $null) {
             Write-Output ("  RAMP login_ok=" + $st.login_ok + "/" + $n + " spawned=" + $st.spawned + " tick_samples=" + $st.tick_samples)
-            if ([int]$st.login_ok -ge $n) { $rampOk = $true; break }
+            if ([int]$st.login_ok -ge $rampTarget) { $rampOk = $true; break }
         }
         if ($proc.HasExited) { Write-Output ("  WARN BotSrv 退出 code=" + $proc.ExitCode); break }
     }
-    if (-not $rampOk) { Write-Output ("  RED 爬坡未完成（" + $RampTimeoutSec + "s 内未到 " + $n + "）") }
+    if (-not $rampOk) { Write-Output ("  RED 爬坡未达阈值（" + $RampTimeoutSec + "s 内未到 " + $rampTarget + "/" + $n + "）") }
 
     # ---- 稳态采样：内存曲线（tick 由 BotSrv 自己持续落盘）----
     $memPath = Join-Path $tierDir "mem.ndjson"
@@ -222,7 +242,7 @@ foreach ($n in $TierList) {
 
     # ---- 归算 ----
     $reportPath = Join-Path $tierDir "report.json"
-    $criteriaArgs = @("--criteria", $Criteria)
+    $criteriaArgs = @("--criteria", $Criteria, "--login-threshold", "$loginThr")
     if ($AllowMissingTick) { $criteriaArgs += "--allow-missing-tick" }
     python (Join-Path $RepoRoot "tools\botload\load_report.py") summarize --stats $statsPath --mem $memPath `
         --count $n --stagger-ms $StaggerMs --hold-sec $HoldSec @criteriaArgs --out $reportPath | Out-Null
@@ -230,6 +250,7 @@ foreach ($n in $TierList) {
     $tierJson = $null
     if (Test-Path $reportPath) { $tierJson = Get-Content $reportPath -Raw | ConvertFrom-Json }
     if ($tierJson -ne $null) {
+        $tierJson | Add-Member -NotePropertyName run -NotePropertyValue $run -Force
         Write-Output ("  RESULT tier=" + $n + " verdict=" + $tierJson.verdict +
                       " login=" + $tierJson.login_success_pct + "% conn_lost_steady=" + $tierJson.conn_lost_steady +
                       " tick_p50=" + $tierJson.tick_p50_ms + " p90=" + $tierJson.tick_p90_ms +
@@ -246,12 +267,46 @@ foreach ($n in $TierList) {
     }
     if ($tierRc -ne 0) { Write-Output ("  (tier rc=" + $tierRc + ")") }
 }
+}
 
 # ---- 汇总 ----
+# 同命令多连跑取最差（owner 裁决 11dbde39 ①）：按档位把 N 轮的登录率取 min，阈值不变。
+$worstByTier = [ordered]@{}
+foreach ($t in $tierReports) {
+    $key = [string][int]$t.count
+    if (-not $worstByTier.Contains($key)) {
+        $worstByTier[$key] = @{
+            count = [int]$t.count
+            threshold = (Get-LoginThreshold ([int]$t.count))
+            worst_login_pct = [double]$t.login_success_pct
+            runs = @()
+        }
+    }
+    $e = $worstByTier[$key]
+    $lp = [double]$t.login_success_pct
+    if ($lp -lt $e.worst_login_pct) { $e.worst_login_pct = $lp }
+    $e.runs += @{
+        run = $t.run
+        login_success_pct = $lp
+        verdict = $t.verdict
+        conn_lost_steady = $t.conn_lost_steady
+        internal_errors = $t.internal_errors
+        samples = $t.samples
+        tick_p99_ms = $t.tick_p99_ms
+    }
+}
+foreach ($key in @($worstByTier.Keys)) {
+    $e = $worstByTier[$key]
+    $ok = ($e.worst_login_pct -ge $e.threshold)
+    foreach ($r in $e.runs) { if ($r.verdict -ne "GREEN") { $ok = $false } }
+    $e.verdict = if ($ok) { "GREEN" } else { "RED" }
+}
+
 $summaryPath = Join-Path $OutDir "load_gate_summary.json"
 @{
   out_dir    = $OutDir
   tiers      = $TierList
+  repeat     = $Repeat
   stagger_ms = $StaggerMs
   hold_sec   = $HoldSec
   caliber    = "tick 服务时延 = BotSrv 收到 `#+GD/<rtime>! 的时刻 − rtime（Environment.TickCount，全机同域）；详见 tools/botload/load_report.py"
@@ -259,12 +314,19 @@ $summaryPath = Join-Path $OutDir "load_gate_summary.json"
   allow_missing_tick = [bool]$AllowMissingTick
   action_probe = (-not $NoActionProbe)
   action_probe_ms = $ActionProbeMs
+  login_resend_ms = $LoginResendMs
+  login_threshold_pct = $LoginThresholdPct
+  worst_of_runs_rule = "每档取 N 轮里最低的登录成功率与阈值比；且每一轮的 conn/tick/internal 判据都必须 GREEN"
+  worst_by_tier = $worstByTier
   reports    = $tierReports
-} | ConvertTo-Json -Depth 6 | Set-Content -Path $summaryPath -Encoding utf8
+} | ConvertTo-Json -Depth 8 -WarningAction SilentlyContinue | Set-Content -Path $summaryPath -Encoding utf8
 Write-Output ("SUMMARY " + $summaryPath)
 
-$allGreen = $true
-foreach ($t in $tierReports) { if ($t.verdict -ne "GREEN") { $allGreen = $false } }
+$allGreen = $tierReports.Count -gt 0
+foreach ($key in @($worstByTier.Keys)) { if ($worstByTier[$key].verdict -ne "GREEN") { $allGreen = $false } }
+foreach ($e in @($worstByTier.Values)) {
+    Write-Output ("  WORST tier=" + $e.count + " runs=" + @($e.runs).Count + " worst_login=" + $e.worst_login_pct + "% threshold=" + $e.threshold + "% verdict=" + $e.verdict)
+}
 
 if ($SelfTestRed) {
     if (-not $allGreen) {
@@ -277,7 +339,7 @@ if ($SelfTestRed) {
 
 if ($tierReports.Count -eq 0) { Write-Output "RED: 一档都没跑成"; exit 1 }
 if ($allGreen) {
-    Write-Output ("GREEN: " + $tierReports.Count + " 档全过（登录 100% / 稳态无掉线 / tick P99 ≤ 100ms）")
+    Write-Output ("GREEN: " + $tierReports.Count + " 轮次全过（登录 ≥ 档位阈值 / 稳态无掉线 / tick P99 ≤ 100ms）")
     exit 0
 }
 Write-Output "RED: 有档位未达标（见各 tier 的 report.json）"

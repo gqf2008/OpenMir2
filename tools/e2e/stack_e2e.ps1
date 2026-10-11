@@ -38,6 +38,10 @@ param(
   [switch]$StopStackAtEnd,
   [switch]$RestartStackPerTier,
   [int]$HoldSec = 60,
+  [int]$RampTimeoutSec = 0,        # 0 = 用 load_gate 默认（600s）
+  [int]$Repeat = 1,                # 同一档位同命令连跑次数（owner 裁决 11dbde39 ①：3 连跑取最差）
+  [int]$LoginThresholdPct = 0,     # 0 = 按档位取默认（tier>=1000→95，其余 100）
+  [int]$LoginResendMs = 0,         # T-11 诊断对照（默认 0=关）
   [switch]$SelfTestRed
 )
 
@@ -173,8 +177,11 @@ if ($TierList.Count -gt 0) {
     # → SetGateUserList NRE），所以这里自动带上 -RestartStackPerTier。
     $lgPath = Join-Path $RepoRoot "tools\botload\load_gate.ps1"
     $lgArgs = @('-ExecutionPolicy', 'Bypass', '-File', $lgPath,
-                '-Tiers', ($TierList -join ","), '-HoldSec', "$HoldSec")
-    if ($RestartStackPerTier -or $TierList.Count -gt 1) { $lgArgs += '-RestartStackPerTier' }
+                '-Tiers', ($TierList -join ","), '-HoldSec', "$HoldSec",
+                '-Repeat', "$Repeat", '-LoginThresholdPct', "$LoginThresholdPct",
+                '-LoginResendMs', "$LoginResendMs")
+    if ($RampTimeoutSec -gt 0) { $lgArgs += @('-RampTimeoutSec', "$RampTimeoutSec") }
+    if ($RestartStackPerTier -or $TierList.Count -gt 1 -or $Repeat -gt 1) { $lgArgs += '-RestartStackPerTier' }
     # 坑（C6 第 4 轮实测，第三处同源）：**不要**用 `& powershell ... 2>&1` 去"收集"子进程输出。
     # `2>&1` 建的是一个**管道**；load_gate 用 Start-Process 起的**长驻服务**（GameSvr/网关/MySQL）
     # 会继承这个管道的写端 ⇒ 父进程读管道要等 EOF，而 EOF 要等所有服务死，于是

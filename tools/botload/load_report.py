@@ -42,6 +42,22 @@ DEFAULT_THRESHOLDS = {
     "tick_p99_ms": 100.0,           # §6 M5：tick P99 ≤ 100ms
 }
 
+# C6 第 5 轮（owner 裁决 11dbde39 / 17aa4753）：tier-1000 的登记口径是「同命令 3 连跑取最差 ≥ 阈值」。
+# tier-1000 的登录在**上游 C# 部署栈**上有 ~0-5% 的残余丢包（48~52/1000 条连接发出 CM_IDPASSWORD 后
+# 服务端一个字节都没回，见 tests/loadgate/README.md 的方向证明），这不是 Rust 移植缺陷；
+# 把「100%」改成可复现的下界 95%（详见 tools/botload/README.md《阈值与理由》）。其他档位仍是 100%。
+LOGIN_THRESHOLD_BY_MIN_TIER = [
+    (1000, 95.0),   # tier >= 1000 用 95%
+]
+
+
+def default_login_threshold(count):
+    """按档位给默认登录阈值（可被 --login-threshold 覆盖）。"""
+    for min_tier, pct in sorted(LOGIN_THRESHOLD_BY_MIN_TIER, reverse=True):
+        if count is not None and count >= min_tier:
+            return pct
+    return DEFAULT_THRESHOLDS["login_success_pct"]
+
 
 def load_ndjson(path):
     rows = []
@@ -107,6 +123,14 @@ def summarize_tick(stats, count):
         "world_ok_pct": (round(100.0 * last.get("in_world", 0) / count, 2) if count else None),
         "probe_sent": last.get("probe_sent", 0),
         "internal_errors": last.get("internal_errors", 0),
+        # T-11 登录连接级观测（残余丢包方向定位）：发出登录包后没拿到 529 的连接数，
+        # 以及其中 rx_bytes==0（服务端一个字节都没回）的数量；resend 是诊断对照（默认关）。
+        "login_conn_total": last.get("login_conn_total", 0),
+        "login_conn_no_resp": last.get("login_conn_no_resp", 0),
+        "login_conn_no_resp_rx0": last.get("login_conn_no_resp_rx0", 0),
+        "login_conn_resend": last.get("login_conn_resend", 0),
+        "login_conn_resend_ok": last.get("login_conn_resend_ok", 0),
+        "login_send_failed": last.get("login_send_failed", 0),
     }
     for q, key in ((0.50, "tick_p50_ms"), (0.90, "tick_p90_ms"), (0.99, "tick_p99_ms")):
         v, _ = quantile_from_hist(hist, q, out["hist_bucket_ms"])
@@ -150,7 +174,8 @@ def summarize_mem(rows, tail_sec=60):
     return out
 
 
-def judge(tier, thresholds, criteria=("login", "conn", "tick"), allow_missing_tick=False):
+def judge(tier, thresholds, criteria=("login", "conn", "tick"), allow_missing_tick=False,
+          login_threshold=None):
     """按 §6 M5 的判据给单档结论（掉线只看稳态窗）。
 
     `criteria` 只选"要比哪几条阈值"，**不能用它把"缺 tick 样本"变成绿灯**（2026-10-10 的教训：
@@ -163,9 +188,14 @@ def judge(tier, thresholds, criteria=("login", "conn", "tick"), allow_missing_ti
     确实天然拿不到 tick 的场景（例如 M1 ⑤ 只比登录+选角）也必须显式加开关，不许"顺手改成可选"。
     """
     fails = []
+    # 登录阈值：按档位的可复现下界（默认 tier>=1000 为 95%，其余 100%），可被 CLI 覆盖。
+    # 「爬坡未完成」不再是独立判据：它等于「峰值登录 < 档位人数」，已被这条阈值判据覆盖
+    # （tier-1000 的已知上游上限会让峰值停在 ~948/1000，用 100% 当判据就永远是 RED）。
+    login_thr = login_threshold if login_threshold is not None else thresholds["login_success_pct"]
+    tier["login_threshold_pct"] = login_thr
     if "login" in criteria and (tier.get("login_success_pct") is None
-                                or tier["login_success_pct"] < thresholds["login_success_pct"]):
-        fails.append(f"登录成功率 {tier.get('login_success_pct')}% < {thresholds['login_success_pct']}%")
+                                or tier["login_success_pct"] < login_thr):
+        fails.append(f"登录成功率 {tier.get('login_success_pct')}% < {login_thr}%")
     if "conn" in criteria and tier.get("conn_lost_steady", 0) > thresholds["conn_lost_steady"]:
         fails.append(f"稳态掉线 {tier['conn_lost_steady']} > {thresholds['conn_lost_steady']}")
     tick_missing = tier.get("tick_p99_ms") is None
@@ -178,8 +208,7 @@ def judge(tier, thresholds, criteria=("login", "conn", "tick"), allow_missing_ti
             fails.append("缺 tick 样本（tick_p99_ms = None）：默认判 RED；确实拿不到 tick 的场景也必须显式加 --allow-missing-tick")
     elif "tick" in criteria and tier["tick_p99_ms"] > thresholds["tick_p99_ms"]:
         fails.append(f"tick P99 {tier['tick_p99_ms']}ms > {thresholds['tick_p99_ms']}ms")
-    if not tier.get("ramp_complete", False):
-        fails.append("登录数未达目标（爬坡未完成）")
+    tier["ramp_target"] = int(-(-tier.get("count", 0) * login_thr // 100))
     tier["criteria"] = list(criteria)
     tier["allow_missing_tick"] = bool(allow_missing_tick)
     tier["verdict"] = "GREEN" if not fails else "RED"
@@ -196,7 +225,9 @@ def cmd_summarize(args):
     tier["stagger_ms"] = args.stagger_ms
     tier["hold_sec"] = args.hold_sec
     criteria = [c.strip() for c in args.criteria.split(",") if c.strip()]
-    judge(tier, DEFAULT_THRESHOLDS, criteria, allow_missing_tick=args.allow_missing_tick)
+    login_thr = args.login_threshold if args.login_threshold is not None else default_login_threshold(args.count)
+    judge(tier, DEFAULT_THRESHOLDS, criteria, allow_missing_tick=args.allow_missing_tick,
+          login_threshold=login_thr)
     text = json.dumps(tier, ensure_ascii=False, indent=2)
     if args.out:
         with open(args.out, "w", encoding="utf-8", newline="\n") as f:
@@ -237,11 +268,19 @@ def cmd_selftest(_args):
     expect(t2["tick_p99_ms"] == 5, "挪走尾巴后 P99 应降到 5（尾部敏感）")
     expect(t["tick_p99_ms"] != t2["tick_p99_ms"], "改坏输入必须让 P99 变（不是恒绿）")
 
-    # 2) 爬坡未完成要被判红
+    # 2) 登录没到阈值要判红（2026-10-11 第 5 轮：判据从「爬坡必须到 100%」改成「登录率必须 ≥ 阈值」）
     stats3 = [dict(stats[0], login_ok=10), dict(stats[1], login_ok=10)]
     t3 = judge(summarize_tick(stats3, 100), DEFAULT_THRESHOLDS)
-    expect(t3["verdict"] == "RED" and any("爬坡未完成" in f for f in t3["fails"]),
-           "登录没达目标必须判红")
+    expect(t3["verdict"] == "RED" and any("登录成功率" in f for f in t3["fails"]),
+           "登录率 < 阈值必须判红")
+    # 2b) 阈值牙齿：同一份 960/1000 产物，阈值 100 ⇒ RED；阈值 95 ⇒ GREEN（判定必须随阈值变）
+    stats960 = [dict(stats[0], login_ok=960), dict(stats[1], login_ok=960, hist=list(hist2), tick_max_ms=5)]
+    t_hi = judge(summarize_tick(stats960, 1000), DEFAULT_THRESHOLDS, login_threshold=100.0)
+    t_lo = judge(summarize_tick(stats960, 1000), DEFAULT_THRESHOLDS, login_threshold=95.0)
+    expect(t_hi["verdict"] == "RED", "960/1000 在阈值 100 下必须 RED（阈值有牙齿）")
+    expect(t_lo["verdict"] == "GREEN", "960/1000 在阈值 95 下必须 GREEN（判定随阈值变，不是恒绿）")
+    expect(t_hi["login_threshold_pct"] == 100.0 and t_lo["login_threshold_pct"] == 95.0,
+           "judge 必须把生效阈值写进报告")
 
     # 3) 掉线：稳态掉线判红、爬坡期掉线不算稳态
     stats4 = [dict(stats[0], conn_lost=3), dict(stats[1], conn_lost=5)]
@@ -338,17 +377,50 @@ def cmd_aggregate(args):
     lines = ["# 压测报告（C6 载荷门禁）", ""]
     lines.append(f"- 口径：{data.get('caliber', '见 tools/botload/load_report.py')}")
     lines.append(f"- 档位：{data.get('tiers')}；连接错峰 {data.get('stagger_ms')}ms/个；稳态时长 {data.get('hold_sec')}s")
-    lines.append(f"- 判据（§6 M5）：登录成功率 100% / 稳态掉线 0 / tick P99 ≤ 100ms")
+    lines.append(f"- 判据（§6 M5）：登录成功率 = 档位阈值（tier≥1000 为 95%，其余 100%，见 report.json 的 "
+                 f"login_threshold_pct）/ 稳态掉线 0 / tick P99 ≤ 100ms")
     lines.append("")
-    lines.append("| 档位 | 登录成功率 | 稳态掉线 | 连不上 | tick P50 | P90 | P99 | max | 稳态样本 | 上线耗时 | 结论 |")
-    lines.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
-    for t in sorted(reports, key=lambda r: r.get("count", 0)):
-        lines.append("| {count} | {lsp}% | {cls} | {cr} | {p50} | {p90} | {p99} | {mx} | {n} | {ramp} | {v} |".format(
-            count=t.get("count"), lsp=t.get("login_success_pct"), cls=t.get("conn_lost_steady"),
-            cr=t.get("conn_refused"), p50=t.get("tick_p50_ms"), p90=t.get("tick_p90_ms"),
-            p99=t.get("tick_p99_ms"), mx=t.get("max_ms"), n=t.get("samples"),
-            ramp=((str(round(t["ramp_ms"] / 1000.0, 1)) + "s") if t.get("ramp_ms") is not None else "-"),
-            v=t.get("verdict")))
+    has_run = any(t.get("run") for t in reports)
+    if has_run:
+        lines.append("| 轮次 | 档位 | 登录成功率 | 阈值 | 稳态掉线 | 连不上 | tick P50 | P90 | P99 | max | 稳态样本 | 上线耗时 | 结论 |")
+        lines.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
+    else:
+        lines.append("| 档位 | 登录成功率 | 阈值 | 稳态掉线 | 连不上 | tick P50 | P90 | P99 | max | 稳态样本 | 上线耗时 | 结论 |")
+        lines.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
+    for t in sorted(reports, key=lambda r: (r.get("run", 0), r.get("count", 0))):
+        cells = [t.get("login_success_pct"), t.get("login_threshold_pct"), t.get("conn_lost_steady"),
+                 t.get("conn_refused"), t.get("tick_p50_ms"), t.get("tick_p90_ms"),
+                 t.get("tick_p99_ms"), t.get("max_ms"), t.get("samples"),
+                 ((str(round(t["ramp_ms"] / 1000.0, 1)) + "s") if t.get("ramp_ms") is not None else "-"),
+                 t.get("verdict")]
+        if has_run:
+            lines.append("| r{run} | {count} | {lsp}% | {thr}% | {cls} | {cr} | {p50} | {p90} | {p99} | {mx} | {n} | {ramp} | {v} |".format(
+                run=t.get("run"), count=t.get("count"), lsp=t.get("login_success_pct"),
+                thr=t.get("login_threshold_pct"), cls=t.get("conn_lost_steady"), cr=t.get("conn_refused"),
+                p50=t.get("tick_p50_ms"), p90=t.get("tick_p90_ms"), p99=t.get("tick_p99_ms"),
+                mx=t.get("max_ms"), n=t.get("samples"),
+                ramp=((str(round(t["ramp_ms"] / 1000.0, 1)) + "s") if t.get("ramp_ms") is not None else "-"),
+                v=t.get("verdict")))
+        else:
+            lines.append("| {count} | {lsp}% | {thr}% | {cls} | {cr} | {p50} | {p90} | {p99} | {mx} | {n} | {ramp} | {v} |".format(
+                count=t.get("count"), lsp=t.get("login_success_pct"), thr=t.get("login_threshold_pct"),
+                cls=t.get("conn_lost_steady"), cr=t.get("conn_refused"),
+                p50=t.get("tick_p50_ms"), p90=t.get("tick_p90_ms"), p99=t.get("tick_p99_ms"),
+                mx=t.get("max_ms"), n=t.get("samples"),
+                ramp=((str(round(t["ramp_ms"] / 1000.0, 1)) + "s") if t.get("ramp_ms") is not None else "-"),
+                v=t.get("verdict")))
+    # 3 连跑取最差：把 worst_by_tier 也写进 SUMMARY（若 gate 带 -Repeat > 1）
+    wbt = data.get("worst_by_tier") or {}
+    if wbt:
+        lines.append("")
+        lines.append("## 同命令多连跑取最差（owner 裁决 11dbde39 ①）")
+        lines.append("")
+        lines.append("| 档位 | 轮数 | 阈值 | 最差登录率 | 结论 |")
+        lines.append("| --- | --- | --- | --- | --- |")
+        for k in sorted(wbt.keys(), key=lambda x: int(x)):
+            e = wbt[k]
+            n_runs = len(e.get("runs", []))
+            lines.append(f"| {k} | {n_runs} | {e.get('threshold')}% | {e.get('worst_login_pct')}% | {e.get('verdict')} |")
     lines.append("")
     # 曲线 1：tick P99 / P50 / max vs 档位
     pts_p99 = [(t["count"], t["tick_p99_ms"] or 0) for t in sorted(reports, key=lambda r: r.get("count", 0))]
@@ -403,6 +475,8 @@ def main():
     s.add_argument("--out", default="")
     s.add_argument("--criteria", default="login,conn,tick",
                    help="判据子集（默认全三条）；M1 ⑤ 那种只比登录/连接的场景用 login,conn")
+    s.add_argument("--login-threshold", type=float, default=None,
+                   help="登录成功率阈值（%）；缺省按档位取（tier>=1000 为 95%，其余 100%）")
     s.add_argument("--allow-missing-tick", action="store_true",
                    help="显式放行「本次没有 tick 样本」（报告里会写入 missing_tick_note）；"
                         "不加则缺样本一律判 RED，且 --criteria 不能替代本开关")
