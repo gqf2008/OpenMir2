@@ -1,0 +1,23 @@
+[package]
+name = "game-svr"
+version = "0.1.0"
+edition = "2021"
+description = "Rust 版 GameSvr 世界宿主（M2 主体）：网关 5000 侧 20B ServerMessage + GM_* 链路 + 单线程 World tick"
+license = "MIT"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "deny"
+
+[dependencies]
+mir2-protocol = { path = "../../crates/protocol" }
+mir2-shared = { path = "../../crates/shared" }   # HUtil32.GetValidStr3 的既有 Rust 实现（别重复造）
+mir2-world = { path = "../../crates/world" }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "macros", "time"] }
+anyhow = "1"
+encoding_rs = "0.8"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "time", "process"] }

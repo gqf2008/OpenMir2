@@ -1,0 +1,17 @@
+# oracle 字节基准：GameSvr → DBSvr 的 DB_LOADHUMANRCD 请求帧
+#
+# 来源：用**部署件本身**的序列化器跑出来的（不是照直觉推 MemoryPack 布局）
+#   生成器源码与工程：E:\tmp\openmir2-gamegate-imp\dbgen\{Program.cs,dbgen.csproj}
+#   （引用 E:\MirServer\M2GameSvr\OpenMir2.dll + MemoryPack.Core.dll；命令：dotnet build -c Release && .\bin\Release\net9.0\dbgen.exe）
+# 合成顺序照 src/GameSrv/Services/DataQueryServer.cs:62-90（SendRequest + SendMessage）
+#   与 PlayerDataService.cs:166-181（LoadRcd）
+# 输入：queryId=7 / ident=DB_LOADHUMANRCD(100) / account=loadbot1 / chrName=lb1a / userAddr=127.0.0.1 / SessionID=2
+#
+# 逐行含义见 bins/game-svr/src/dbclient.rs 的模块注释与 tests/relay.rs::db_load_request_is_sent_with_oracle_bytes。
+
+msg_len=13 msg=05000000006400000000000000
+packet_len=59 packet=04080000006c006f006100640062006f0074003100040000006c00620031006100090000003100320037002e0030002e0030002e00310002000000
+signId=6750381 sign_enc_len=6 sign_enc=3d64476f643f
+msg_enc_len=18 msg_enc=656468676464447b6464686b6464686b643f
+sendBuffer_len=120 sendBuffer=040700000012000000656468676464447b6464686b6464686b643f4f0000006464686564643c7b646f68686d64447b646e686b6f64546f6461686b64646867646c68686e64596b646d686b656468636461686b6264576b645e686860643e6b6460686b5e64595f6466686b64644b060000003d64476f643f
+framelen=126 frame=9aaa9aaa7800040700000012000000656468676464447b6464686b6464686b643f4f0000006464686564643c7b646f68686d64447b646e686b6f64546f6461686b64646867646c68686e64596b646d686b656468636461686b6264576b645e686860643e6b6460686b5e64595f6466686b64644b060000003d64476f643f
