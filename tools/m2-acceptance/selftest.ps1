@@ -12,6 +12,8 @@
     ③b s2c_diff.py            金标准自比⇒0(GREEN) / 尾字节改坏⇒1(RED) / 只改 recog⇒0 / 缺文件⇒2
     ③c check_db_paths.ps1     三路径字段级相同⇒0(GREEN) / 改一个被比对字段⇒1(RED) / 缺 after⇒2
     ⓪ preflight.ps1           在库前置齐备⇒0 / 缺工具或缺客户端入口⇒2(PREREQ) / 金标准身份或 schema 坏⇒1(RED)
+    ④ session_lifecycle_fixture.ps1 -OfflineLogA/-OfflineLogB：旧收到(kick/528/断开/无) + 新落定
+                              (ADMITTED/CLOSED/EXITED/TIMEOUT) 的判定口径（不占端口；真机 ① 的起栈前自检）
     ①  check_ports.ps1        对**本机实况端口**取判：全 Rust⇒0 / 有非 Rust 在听⇒1 / 有端口没听⇒2
    ①a portclassify.ps1       实现归属分类器（与 check_ports.ps1 共用）：C#根/target路径/基名回落/unknown 5 例
     ⇢  run_acceptance.ps1     全 PREREQ⇒2 / 有 RED⇒1（聚合口径，不许把红说成前置）
@@ -195,6 +197,44 @@ foreach ($p in @("softclose", "disconnect", "shutdown")) {
   New-IndexFixture (Join-Path $cr ("{0}-after.jsonl" -f $p)) "2" "9"   # SelectID 不同（行为列）
 }
 Test-Case "db/canonical 行为列不同=RED" 1 (Run-Ps $dbPaths @("-Mode", "diff", "-CsharpDir", $cc, "-RustDir", $cr, "-OutFile", (Join-Path $Work "db-canon-red.json"), "-Canonical")) "RED" "canonical 不得吃掉行为列"
+
+# ---------------------------------------------------------------- ④ 夹具：会话生命周期判定（DoD ①『夹具自检』）
+# 真机 ① 必须起 C# 栈（占端口）才跑得了；但**判定逻辑本身**是纯文本分类，可离线自检——
+# 这正是「夹具自检」要证的事：口径在起栈前就成立，起栈后不用猜输出。
+# 用构造日志把 `session_lifecycle_fixture.ps1 -OfflineLogA/-OfflineLogB` 的两条判据都跑一遍：
+# ① 旧连接收到什么（KICKUSER_SYSTEM_MSG / SM_OUTOFCONNECTION / CONNECTION_CLOSED / NONE_OBSERVED）；
+# ② 新连接落定（ADMITTED / CLOSED / PROCESS_EXITED / TIMEOUT，且『先放行后断开』不得误报 CLOSED）。
+Write-Output "④ session_lifecycle_fixture.ps1（offline 判定：旧收到什么 / 新连接去向）"
+$life = Join-Path $Here "session_lifecycle_fixture.ps1"
+$lifeWork = Join-Path $Work "life"; New-Item -ItemType Directory -Force -Path $lifeWork | Out-Null
+function Write-Log([string]$Name, [string]$Text) {
+  $p = Join-Path $lifeWork $Name
+  [System.IO.File]::WriteAllText($p, $Text, (New-Object System.Text.UTF8Encoding($false)))
+  return $p
+}
+function Run-Life([string]$LogA, [string]$LogB, [switch]$BExited) {
+  $a = @("-OfflineLogA", $LogA, "-OfflineLogB", $LogB, "-OutDir",
+         (Join-Path $lifeWork ("out-" + [System.IO.Path]::GetFileNameWithoutExtension($LogB))))
+  if ($BExited) { $a += "-OfflineBExited" }
+  return Run-Ps $life $a
+}
+$laKick   = Write-Log "old-kick.txt"   "17:32:38.967 [INF] 当前登录帐号正在其它位置登录，本机已被强行离线!!!"
+$laNone   = Write-Log "old-none.txt"   "17:32:38.000 [INF] 机器人:[fixt0] 成功进入游戏"
+$laForced = Write-Log "old-forced.txt" "17:33:00.000 [INF] 服务器连接被强行中断。连接时间可能超过限制"
+$laClosed = Write-Log "old-closed.txt" "17:34:22.106 [WRN] 游戏服务器[127.0.0.1:7000]关闭连接..."
+$lbAdmit  = Write-Log "new-admit.txt"  "17:32:42.383 [INF] 机器人:[fixt0] 成功进入游戏"
+$lbClosed = Write-Log "new-closed.txt" "17:36:56.281 [INF] 机器人:[fixt0] 进入游戏`r`n17:36:57.100 [WRN] 游戏服务器[127.0.0.1:7000]关闭连接..."
+$lbEmpty  = Write-Log "new-empty.txt"  "17:36:56.281 [INF] 机器人:[fixt0] 进入游戏"
+$lbAdmCl  = Write-Log "new-admit-then-closed.txt" "17:32:42.383 [INF] 机器人:[fixt0] 成功进入游戏`r`n17:40:00.000 [WRN] 游戏服务器[127.0.0.1:7000]关闭连接..."
+Test-Case "life/旧收账号级kick=KICKUSER" 0 (Run-Life $laKick $lbAdmit) "old_received=KICKUSER_SYSTEM_MSG" "TCPNetChannel.KickUser 文案"
+Test-Case "life/新进世界=ADMITTED" 0 (Run-Life $laKick $lbAdmit) "new_verdict=ADMITTED" "成功进入游戏 ⇒ 放行"
+Test-Case "life/新被关=CLOSED" 0 (Run-Life $laKick $lbClosed) "new_verdict=CLOSED" "进入游戏后未成功、连接被关"
+Test-Case "life/先放行后断开仍=ADMITTED" 0 (Run-Life $laKick $lbAdmCl) "new_verdict=ADMITTED" "成功进入游戏优先，不得误报 CLOSED"
+Test-Case "life/新无标记=判红" 1 (Run-Life $laKick $lbEmpty) "new_verdict=TIMEOUT" "无判定标记 ⇒ 非零退出"
+Test-Case "life/新进程退出=PROCESS_EXITED" 1 (Run-Life $laKick $lbEmpty -BExited) "new_verdict=PROCESS_EXITED" "进程已退 ⇒ 判红"
+Test-Case "life/旧无kick=NONE_OBSERVED" 0 (Run-Life $laNone $lbAdmit) "old_received=NONE_OBSERVED" "没有 kick 文案"
+Test-Case "life/旧收528=SM_OUTOFCONNECTION" 0 (Run-Life $laForced $lbClosed) "old_received=SM_OUTOFCONNECTION" "强行中断（区分于账号级 kick）"
+Test-Case "life/旧普通断开=CONNECTION_CLOSED" 0 (Run-Life $laClosed $lbClosed) "old_received=CONNECTION_CLOSED" "仅关闭连接"
 
 # ---------------------------------------------------------------- ① 分类器口径（R2-1：与 check_ports.ps1 同一函数）
 Write-Output "① portclassify.ps1（实现归属分类器：check_ports.ps1 与 selftest.ps1 共用同一口径）"

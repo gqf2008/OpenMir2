@@ -41,7 +41,12 @@ param(
   [int]$Stage2DelaySec = 3,           # Bot A 进世界后隔多久起 Bot B
   [int]$WaitInWorldSec = 90,
   [switch]$SkipBuild,
-  [string]$GameSvrLog = "E:\MirServer\logs\GameSvr.out.log"
+  [string]$GameSvrLog = "E:\MirServer\logs\GameSvr.out.log",
+  # offline 模式（不起栈/不占端口）：对**给定的两侧日志**跑与真机同一套判定逻辑，
+  # 供 selftest.ps1（夹具自检）与复盘用。设了任一个就跳过端口/BotSrv 前置、只做判定。
+  [string]$OfflineLogA = "",
+  [string]$OfflineLogB = "",
+  [switch]$OfflineBExited
 )
 
 $ErrorActionPreference = "Stop"
@@ -63,6 +68,56 @@ Write-Output ("repo      = " + $RepoRoot)
 Write-Output ("outdir    = " + $OutDir)
 Write-Output ("account   = " + ($Prefix + "0"))
 
+function Read-Shared([string]$Path) {
+  if (-not (Test-Path $Path)) { return "" }
+  try {
+    $fs = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+    try { $sr = New-Object System.IO.StreamReader($fs); return $sr.ReadToEnd() } finally { $fs.Close() }
+  } catch { return "" }
+}
+
+# 观测项 ①：旧连接收到什么（**单一真源**，offline 与真机共用；改坏 ⇒ selftest 必红）。
+# 判据顺序照实测/源码：账号级 `SM_SYSMESSAGE`（`TCPNetChannel.KickUser` 文案）优先于 528 与普通断开。
+function Get-KickObservation([string]$Text) {
+  if ($Text -match "当前登录帐号正在其它位置登录") { return "KICKUSER_SYSTEM_MSG" }
+  elseif ($Text -match "服务器连接被强行中断") { return "SM_OUTOFCONNECTION" }
+  elseif ($Text -match "关闭连接") { return "CONNECTION_CLOSED" }
+  else { return "NONE_OBSERVED" }
+}
+
+# 观测项 ②：新连接去向。**`成功进入游戏` 优先**——先放行、之后才断的会话仍算 ADMITTED（否则会把
+# 正常放行的连接误报成 CLOSED）。PROCESS_EXITED/TIMEOUT 只在无任何判定标记时才用。
+function Get-NewSessionVerdict([string]$Text, [bool]$ProcessExited) {
+  if ($Text -match "成功进入游戏") { return [pscustomobject]@{ verdict = "ADMITTED"; in_world = $true } }
+  if ($Text -match "强行中断|强行离线|关闭连接") { return [pscustomobject]@{ verdict = "CLOSED"; in_world = $false } }
+  if ($ProcessExited) { return [pscustomobject]@{ verdict = "PROCESS_EXITED"; in_world = $false } }
+  return [pscustomobject]@{ verdict = "TIMEOUT"; in_world = $false }
+}
+
+# ---- offline 模式（selftest / 复盘）：与真机同一判定逻辑，不碰端口 ----
+if ($OfflineLogA -ne "" -or $OfflineLogB -ne "") {
+  $txtOffA = Read-Shared $OfflineLogA
+  $txtOffB = Read-Shared $OfflineLogB
+  $oldOff = Get-KickObservation $txtOffA
+  $newOff = Get-NewSessionVerdict $txtOffB ([bool]$OfflineBExited)
+  $resultOff = [pscustomobject]@{
+    schema       = "m2-session-lifecycle-fixture/1-offline"
+    old_received = $oldOff
+    new_verdict  = $newOff.verdict
+    entered_world = $newOff.in_world
+    log_a        = $OfflineLogA
+    log_b        = $OfflineLogB
+  }
+  $resultOff | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $OutDir "offline-verdict.json") -Encoding utf8
+  Write-Output ("OFFLINE old_received=" + $oldOff + " new_verdict=" + $newOff.verdict + " in_world=" + $newOff.in_world)
+  if ($newOff.verdict -eq "TIMEOUT" -or $newOff.verdict -eq "PROCESS_EXITED") {
+    Write-Output ("RED: 新会话未落定（" + $newOff.verdict + "）")
+    exit 1
+  }
+  Write-Output "GREEN(offline): 判定已采到"
+  exit 0
+}
+
 # ---- 前置 1：真栈监听 ----
 $ports = @(5000, 7000, 7100, 7200)
 $missing = @()
@@ -83,14 +138,6 @@ if (-not $SkipBuild -or -not (Test-Path $BotExe0)) {
   if ($rc -ne 0) { Fail-Prereq "BotSrv 构建失败（rc=$rc）" }
 }
 if (-not (Test-Path $BotExe0)) { Fail-Prereq ("找不到 " + $BotExe0) }
-
-function Read-Shared([string]$Path) {
-  if (-not (Test-Path $Path)) { return "" }
-  try {
-    $fs = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
-    try { $sr = New-Object System.IO.StreamReader($fs); return $sr.ReadToEnd() } finally { $fs.Close() }
-  } catch { return "" }
-}
 
 function New-BotDir([string]$Name) {
   $d = Join-Path $OutDir $Name
@@ -157,9 +204,8 @@ $bInWorld = $false
 $deadline = (Get-Date).AddSeconds($WaitInWorldSec)
 while ((Get-Date) -lt $deadline) {
   $txt = Read-Shared $logB
-  if ($txt -match "成功进入游戏") { $bVerdict = "ADMITTED"; $bInWorld = $true; break }
-  if ($txt -match "强行中断|强行离线|关闭连接") { $bVerdict = "CLOSED"; break }
-  if ($procB.HasExited) { $bVerdict = "PROCESS_EXITED"; break }
+  $v = Get-NewSessionVerdict $txt ($procB.HasExited)
+  if ($v.verdict -ne "TIMEOUT") { $bVerdict = $v.verdict; $bInWorld = $v.in_world; break }
   Start-Sleep -Milliseconds 500
 }
 $tBResolved = Get-Date
@@ -168,11 +214,7 @@ $tBResolved = Get-Date
 Start-Sleep -Seconds 3
 $txtA = Read-Shared $logA
 $txtB = Read-Shared $logB
-$tKickMsg = $null
-if ($txtA -match "当前登录帐号正在其它位置登录") { $tKickMsg = "KICKUSER_SYSTEM_MSG" }
-elseif ($txtA -match "服务器连接被强行中断") { $tKickMsg = "SM_OUTOFCONNECTION" }
-elseif ($txtA -match "关闭连接") { $tKickMsg = "CONNECTION_CLOSED" }
-else { $tKickMsg = "NONE_OBSERVED" }
+$tKickMsg = Get-KickObservation $txtA
 
 # ---- 收 GameSvr 增量 ----
 $gsvrOut = Join-Path $OutDir "gamesvr-window.log"
