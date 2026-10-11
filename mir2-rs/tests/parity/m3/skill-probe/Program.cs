@@ -225,14 +225,15 @@ internal static class Program
     /// <summary>每个已实装技能的"效果威力"表达式类别（与 `crates/world/src/magic.rs` 一一对应）。</summary>
     private static string EffectKind(ushort magIdx) => magIdx switch
     {
-        1 or 5 or 9 or 10 or 23 or 24 or 33 or 47 or 50 => "get_power_plus_mc",
-        // 火球术/大火球/地狱火/疾光电影/爆裂火焰/地狱雷光/冰咆哮/地狱烈焰/冰焰：
+        1 or 5 or 9 or 10 or 23 or 24 or 33 or 44 or 47 or 50 => "get_power_plus_mc",
+        // 火球术/大火球/地狱火/疾光电影/爆裂火焰/地狱雷光/冰咆哮/地狱烈焰/冰焰
+        // +44（`SKILL_44` → `MagHbFireBall`，逐目标同式）：
         // GetAttackPower(GetPower(MPow)+Lo(MC), ΔMC+1)
         2 or 29 => "heal_get_power_plus_sc2",     // 治愈术/群体治疗术：GetAttackPower(GetPower(MPow)+Lo(SC)*2, ΔSC*2+1)
         13 => "get_power_plus_sc",                 // 灵魂火符：GetAttackPower(GetPower(MPow)+Lo(SC), ΔSC+1)
-        11 or 45 => "lightening_get_power_plus_mc", // 雷电术/灭天火：同上 + 不死 ×1.5
+        11 or 42 or 45 => "lightening_get_power_plus_mc", // 雷电术/灭天火/42（`SKILL_GROUPLIGHTENING`→`MagGroupLightening`）：同上 + 不死 ×1.5
         22 => "fire_wall",                        // 火墙：power + time=GetPower(10)+GetRPow(MC)>>1
-        6 => "amyounsul_power13_rpow",           // 施毒术：GetPower13(40|30)+GetRPow(SC)*2
+        6 or 48 => "amyounsul_power13_rpow",     // 施毒术/48（`SKILL_GROUPAMYOUNSUL`→`MagGroupAmyounsul`，逐目标同式）：GetPower13(40|30)+GetRPow(SC)*2
         14 or 15 => "power13_60_sc10",           // 幽灵盾/神圣战甲术：GetAttackPower(GetPower13(60)+Lo(SC)*10, ΔSC+1)
         16 => "power13_40_rpow3",                // 困魔咒：GetPower13(40)+GetRPow(SC)*3
         18 or 19 => "power13_30_rpow3",          // 隐身术/集体隐身术：GetPower13(30)+GetRPow(SC)*3
@@ -307,7 +308,7 @@ internal static class Program
             }
             case "fire_wall":
             {
-                // MagicManager.cs:426 —— 实参从左到右：power（MPow→GetPower→GetAttackPower）→ GetPower(10) → GetRPow(MC)
+                // MagicManager.cs:412-413（`SKILL_EARTHFIRE` case）—— 实参从左到右：power（MPow→GetPower→GetAttackPower）→ GetPower(10) → GetRPow(MC)
                 int power = caster.GetAttackPower(
                     MagicBase.GetPower(MagicBase.MPow(um), um) + HUtil32.LoByte(caster.WAbil.MC),
                     HUtil32.HiByte(caster.WAbil.MC) - HUtil32.LoByte(caster.WAbil.MC) + 1);
@@ -316,19 +317,19 @@ internal static class Program
             }
             case "show_hp":
             {
-                // MagicManager.cs:441 —— GetRPow(SC) 先于 GetPower13
+                // MagicManager.cs:437（`SKILL_SHOWHP` case）—— GetRPow(SC) 先于 GetPower13
                 int interval = MagicBase.GetPower13(MagicBase.GetRPow(caster.WAbil.SC) * 2 + 30, um) * 1000;
                 return new EffectVal { Kind = "show_hp", Interval = interval };
             }
             case "shield":
             {
-                // MagicManager.cs:483 —— GetRPow(MC) 先于 GetPower
+                // MagicManager.cs:475（`SKILL_SHIELD` case）—— GetRPow(MC) 先于 GetPower
                 int power = MagicBase.GetPower(MagicBase.GetRPow(caster.WAbil.MC) + 15, um);
                 return new EffectVal { Kind = "shield", Power = power };
             }
             case "uenhancer":
             {
-                // MagicManager.cs:645-646 —— Random(Level) 先于 time；time 式同 power13_60_sc10
+                // MagicManager.cs:625-626（`SKILL_UENHANCER` case）—— Random(Level) 先于 time；time 式同 power13_60_sc10
                 int power = (ushort)(um.Level + 1 + M2Share.RandomNumber.Random(um.Level));
                 int time = caster.GetAttackPower(
                     MagicBase.GetPower13(60, um) + HUtil32.LoByte(caster.WAbil.SC) * 10,

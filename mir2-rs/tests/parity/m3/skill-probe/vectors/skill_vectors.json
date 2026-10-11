@@ -1209,6 +1209,177 @@
       }
     },
     {
+      "magic_id": 48,
+      "name": "\u7FA4\u4F53\u65BD\u6BD2\u672F",
+      "job": 2,
+      "train_lv": 3,
+      "train_level": [
+        48,
+        50,
+        52,
+        52
+      ],
+      "max_train": [
+        200,
+        300,
+        500,
+        500
+      ],
+      "spell": 12,
+      "def_spell": 30,
+      "power": 10,
+      "max_power": 10,
+      "def_power": 4,
+      "def_max_power": 4,
+      "delay_time": 40,
+      "cooldown": {
+        "delay_time": 40,
+        "magic_hit_interval_time": 800,
+        "interval": 840
+      },
+      "mp_cost": {
+        "0": 33,
+        "1": 36,
+        "2": 39,
+        "3": 42
+      },
+      "prereq": {
+        "probe_job": 2,
+        "probe_level": 50,
+        "job_ok": true,
+        "level_ok": true,
+        "is_training_skill": false,
+        "can_read_book": true
+      },
+      "caster_abil": {
+        "mc": 7700,
+        "sc": 10290
+      },
+      "effect": {
+        "kind": "poison",
+        "power": -1,
+        "vs_undead": -1,
+        "power_green": 131,
+        "power_red": 124,
+        "time": -1,
+        "interval": -1
+      }
+    },
+    {
+      "magic_id": 42,
+      "name": "\u9F99\u5F71\u5251\u6CD5",
+      "job": 0,
+      "train_lv": 3,
+      "train_level": [
+        38,
+        41,
+        44,
+        44
+      ],
+      "max_train": [
+        200,
+        300,
+        500,
+        500
+      ],
+      "spell": 0,
+      "def_spell": 3,
+      "power": 0,
+      "max_power": 0,
+      "def_power": 0,
+      "def_max_power": 0,
+      "delay_time": 0,
+      "cooldown": {
+        "delay_time": 0,
+        "magic_hit_interval_time": 800,
+        "interval": 800
+      },
+      "mp_cost": {
+        "0": 3,
+        "1": 3,
+        "2": 3,
+        "3": 3
+      },
+      "prereq": {
+        "probe_job": 0,
+        "probe_level": 50,
+        "job_ok": true,
+        "level_ok": true,
+        "is_training_skill": false,
+        "can_read_book": true
+      },
+      "caster_abil": {
+        "mc": 7700,
+        "sc": 10290
+      },
+      "effect": {
+        "kind": "damage",
+        "power": 22,
+        "vs_undead": 33,
+        "power_green": -1,
+        "power_red": -1,
+        "time": -1,
+        "interval": -1
+      }
+    },
+    {
+      "magic_id": 44,
+      "name": "\u5BD2\u51B0\u638C",
+      "job": 1,
+      "train_lv": 3,
+      "train_level": [
+        36,
+        39,
+        41,
+        41
+      ],
+      "max_train": [
+        200,
+        300,
+        500,
+        500
+      ],
+      "spell": 14,
+      "def_spell": 8,
+      "power": 14,
+      "max_power": 25,
+      "def_power": 10,
+      "def_max_power": 10,
+      "delay_time": 60,
+      "cooldown": {
+        "delay_time": 60,
+        "magic_hit_interval_time": 800,
+        "interval": 860
+      },
+      "mp_cost": {
+        "0": 12,
+        "1": 15,
+        "2": 19,
+        "3": 22
+      },
+      "prereq": {
+        "probe_job": 1,
+        "probe_level": 50,
+        "job_ok": true,
+        "level_ok": true,
+        "is_training_skill": false,
+        "can_read_book": true
+      },
+      "caster_abil": {
+        "mc": 7700,
+        "sc": 10290
+      },
+      "effect": {
+        "kind": "damage",
+        "power": 38,
+        "vs_undead": -1,
+        "power_green": -1,
+        "power_red": -1,
+        "time": -1,
+        "interval": -1
+      }
+    },
+    {
       "magic_id": 45,
       "name": "\u706D\u5929\u706B",
       "job": 1,
@@ -1318,6 +1489,63 @@
         "vs_undead": -1,
         "power_green": -1,
         "power_red": -1,
+        "time": -1,
+        "interval": -1
+      }
+    },
+    {
+      "magic_id": 48,
+      "name": "\u6C14\u529F\u6CE2",
+      "job": 2,
+      "train_lv": 3,
+      "train_level": [
+        36,
+        39,
+        41,
+        41
+      ],
+      "max_train": [
+        200,
+        300,
+        500,
+        500
+      ],
+      "spell": 8,
+      "def_spell": 0,
+      "power": 1,
+      "max_power": 1,
+      "def_power": 0,
+      "def_max_power": 0,
+      "delay_time": 30,
+      "cooldown": {
+        "delay_time": 30,
+        "magic_hit_interval_time": 800,
+        "interval": 830
+      },
+      "mp_cost": {
+        "0": 2,
+        "1": 4,
+        "2": 6,
+        "3": 8
+      },
+      "prereq": {
+        "probe_job": 2,
+        "probe_level": 50,
+        "job_ok": true,
+        "level_ok": true,
+        "is_training_skill": false,
+        "can_read_book": true
+      },
+      "caster_abil": {
+        "mc": 7700,
+        "sc": 10290
+      },
+      "effect": {
+        "kind": "poison",
+        "power": -1,
+        "vs_undead": -1,
+        "power_green": 127,
+        "power_red": 120,
         "time": -1,
         "interval": -1
       }

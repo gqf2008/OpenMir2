@@ -235,7 +235,7 @@ pub fn power_transparent(
 // 其**施加**仍依赖地图/目标态（`MagPassThroughMagic` / `MagMakeFireCross` / `MagBigExplosion` /
 // `MagBubbleDefenceUp` 等），本片只对表达式取数，施加承接后续批次（报告『未实现』清单）。
 
-/// 火墙（`SKILL_EARTHFIRE = 22`）：`MagicManager.cs:426` 的 `MagMakeFireCross` 两个入参。
+/// 火墙（`SKILL_EARTHFIRE = 22`）：`MagicManager.cs:412-413` 的 `MagMakeFireCross` 两个入参。
 ///
 /// `power = GetAttackPower(GetPower(MPow) + Lo(MC), ΔMC + 1)`；
 /// `time  = GetPower(10) + (GetRPow(MC) >> 1)`。
@@ -252,7 +252,7 @@ pub fn power_fire_wall(
     (power, time)
 }
 
-/// 心灵启示（`SKILL_SHOWHP = 28`）：`MagicManager.cs:441` 的 `ShowHpInterval`。
+/// 心灵启示（`SKILL_SHOWHP = 28`）：`MagicManager.cs:437` 的 `ShowHpInterval`。
 ///
 /// `interval = GetPower13(GetRPow(SC) * 2 + 30) * 1000`；取数顺序：`GetRPow(SC)` → `GetPower13`。
 pub fn power_show_hp_interval(
@@ -265,7 +265,7 @@ pub fn power_show_hp_interval(
     get_power13(rng, magic, level, i32::from(rp) * 2 + 30) * 1000
 }
 
-/// 魔法盾（`SKILL_SHIELD = 31`）：`MagicManager.cs:483` 的 `MagBubbleDefenceUp` 威力入参。
+/// 魔法盾（`SKILL_SHIELD = 31`）：`MagicManager.cs:475` 的 `MagBubbleDefenceUp` 威力入参。
 ///
 /// `power = GetPower(GetRPow(MC) + 15)`；取数顺序：`GetRPow(MC)` → `GetPower`。
 pub fn power_shield(rng: &mut impl RandomSource, magic: &MagicInfo, level: u8, mc: i32) -> i32 {
@@ -274,7 +274,7 @@ pub fn power_shield(rng: &mut impl RandomSource, magic: &MagicInfo, level: u8, m
 }
 
 /// 无极真气分支（`SKILL_UENHANCER = 36`；数据行名为「火焰冰」——oracle 按魔号分派，本实现照搬）：
-/// `MagicManager.cs:645-646`。
+/// `MagicManager.cs:625-626`。
 ///
 /// `power = (ushort)(Level + 1 + Random(Level))`；
 /// `time  = GetAttackPower(GetPower13(60) + Lo(SC) * 10, ΔSC + 1)`（与 [`power_defence_area`] 同式）。
@@ -290,6 +290,18 @@ pub fn power_uenhancer(
     let time = power_defence_area(rng, magic, level, sc, atk);
     (power, time)
 }
+
+// ---- 第三批已实装技能：群体变体（逐目标表达式与单目标同式）----------------------------------
+//
+// - 42（`SKILL_GROUPLIGHTENING` → `MagGroupLightening`，`MagicManager.cs:981-1018`）：逐目标
+//   `GetAttackPower(GetPower(MPow)+Lo(MC), ΔMC+1)` + 不死 ×1.5 ⇒ 复用 [`power_lightening`]。
+//   注：数据行名为「龙影剑法」（job 0），但 oracle 按**魔号**分派到法师的群体雷电术，本实现照搬。
+// - 44（`SKILL_44` → `MagHbFireBall`，`MagicManager.cs:1020-1062`）：逐目标同
+//   [`power_get_power_plus_mc`]。
+// - 48（`SKILL_GROUPAMYOUNSUL` → `MagGroupAmyounsul`，`MagicManager.cs:893-940`）：逐目标同
+//   [`power_poison`]（绿毒 40 / 红毒 30）。
+// 三者的**遍历/施加**仍依赖地图可见集（`GetMapBaseObjects`）、目标态与 `AntiMagic` 骰，
+// 本批只对表达式取数；施加承接攻击/魔法接线后的批次（报告『未实现』清单）。
 
 // ---- 施法前置（DoSpell 顶层门 + 武器/护身符）--------------------------------------------------
 //

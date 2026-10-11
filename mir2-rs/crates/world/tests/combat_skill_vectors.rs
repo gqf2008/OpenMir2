@@ -15,7 +15,7 @@
 //! Rust 侧被测实现：`crates/world/src/combat.rs`（`attack_with` + `AttackPowerMode::Player`）
 //! 与 `crates/world/src/magic.rs`。
 //!
-//! 红检（自动）：三条 `redcheck_*` 把**同一比较函数**作用在被改坏一个数的向量副本上，
+//! 红检（自动）：七条 `redcheck_*` 把**同一比较函数**作用在被改坏一个数的向量副本上，
 //! 断言必出差异 —— 证明「逐字段一致」不是恒绿。
 
 use std::path::PathBuf;
@@ -402,12 +402,12 @@ fn skill_mismatches(
     match case.kind.as_str() {
         "damage" | "heal" => {
             let got = match magic_id {
-                1 | 5 | 9 | 10 | 23 | 24 | 33 | 47 | 50 => {
+                1 | 5 | 9 | 10 | 23 | 24 | 33 | 44 | 47 | 50 => {
                     power_get_power_plus_mc(&mut rng, magic, level, case.mc, atk)
                 }
                 13 => power_get_power_plus_sc(&mut rng, magic, level, case.sc, atk),
                 2 | 29 => power_heal_get_power_plus_sc2(&mut rng, magic, level, case.sc, atk),
-                11 | 45 => {
+                11 | 42 | 45 => {
                     let (p, undead) = power_lightening(&mut rng, magic, level, case.mc, atk);
                     if i64::from(undead) != i64::from(case.eff_vs_undead) {
                         problems.push(format!(
@@ -571,6 +571,13 @@ fn skills_match_csharp_per_skill() {
         assert!(
             cases.iter().any(|c| c.magic.magic_id == id),
             "第二批技能 {id} 缺少用例"
+        );
+    }
+    // 第三批（群体变体，复用同式表达式）：这些魔号必须有用例。
+    for id in [42u16, 44, 48] {
+        assert!(
+            cases.iter().any(|c| c.magic.magic_id == id),
+            "第三批技能 {id} 缺少用例"
         );
     }
     for case in &cases {
@@ -765,6 +772,50 @@ fn redcheck_corrupt_one_fire_wall_time_must_fail() {
     assert!(
         !skill_mismatches(&corrupt, seed, hit_interval, atk).is_empty(),
         "红检失效：把火墙时长 {old} 改成 {} 后仍判等",
+        old + 1
+    );
+}
+
+/// 红检⑥（技能·效果威力）：改坏 42（`SKILL_GROUPLIGHTENING`）的不死系倍率一个值 ⇒ 该技能用例必 RED。
+#[test]
+fn redcheck_corrupt_one_group_lightening_vs_undead_must_fail() {
+    let (seed, hit_interval, atk, cases, _) = load_skills();
+    let case = cases
+        .iter()
+        .find(|c| c.magic.magic_id == 42)
+        .expect("向量里应有 42（SKILL_GROUPLIGHTENING）用例");
+    assert!(
+        skill_mismatches(case, seed, hit_interval, atk).is_empty(),
+        "前提：未改坏前 42 必须全等"
+    );
+    let mut corrupt = case.clone();
+    let old = corrupt.eff_vs_undead;
+    corrupt.eff_vs_undead = old + 1;
+    assert!(
+        !skill_mismatches(&corrupt, seed, hit_interval, atk).is_empty(),
+        "红检失效：把 42 的不死系倍率 {old} 改成 {} 后仍判等",
+        old + 1
+    );
+}
+
+/// 红检⑦（技能·效果威力）：改坏 48（`SKILL_GROUPAMYOUNSUL`）的绿毒威力一个值 ⇒ 该技能用例必 RED。
+#[test]
+fn redcheck_corrupt_one_group_poison_green_must_fail() {
+    let (seed, hit_interval, atk, cases, _) = load_skills();
+    let case = cases
+        .iter()
+        .find(|c| c.magic.magic_id == 48)
+        .expect("向量里应有 48（SKILL_GROUPAMYOUNSUL）用例");
+    assert!(
+        skill_mismatches(case, seed, hit_interval, atk).is_empty(),
+        "前提：未改坏前 48 必须全等"
+    );
+    let mut corrupt = case.clone();
+    let old = corrupt.eff_green;
+    corrupt.eff_green = old + 1;
+    assert!(
+        !skill_mismatches(&corrupt, seed, hit_interval, atk).is_empty(),
+        "红检失效：把 48 的绿毒威力 {old} 改成 {} 后仍判等",
         old + 1
     );
 }
