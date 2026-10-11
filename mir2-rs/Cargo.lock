@@ -613,6 +613,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-svr"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "encoding_rs",
+ "mir2-protocol",
+ "mir2-world",
+ "tokio",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
