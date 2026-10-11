@@ -1,0 +1,4 @@
+# 取窗口前端口实拍（2026-10-12 05:21，netstat -ano | findstr LISTENING）
+# 结论：5000/5100/5500/5600/5700/6000/7000/7100/7200 全空，仅共享 MySQL 3306
+# （dbsrv6k 的 M1③ C# 栈已于 05:20:56 停；其 final2 证据齐：softclose/shutdown/redcheck）
+  TCP    127.0.0.1:3306         0.0.0.0:0              LISTENING       28712
