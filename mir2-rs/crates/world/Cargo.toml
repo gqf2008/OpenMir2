@@ -8,8 +8,13 @@ description = "M2 世界模拟骨架：单线程 tick + 实体存储 + 地图/AO
 mir2-shared = { path = "../shared" }
 mir2-data = { path = "../data" }      # 掉落/经验表所需的数据模型（MonsterDropItem/StdItem）
 mir2-formula = { path = "../formula" } # 已与 C# 对拍的掉落/经验公式
-# ③ 禁止引入并行：本 crate **刻意不依赖任何线程/异步运行时**
-#（tokio/rayon/crossbeam/threadpool 一律不加；由 tests/no_parallel.rs 作为门禁钉住）。
+# S1：ECS 内核（实体存储 + 单线程 tick 骨架）来自 world-bevy（依赖方向：world -> world-bevy）。
+mir2-world-bevy = { path = "../world-bevy" }
+# 直接依赖 bevy_ecs 仅为 `#[derive(Component)]`（实体 = 组件）；执行器只在 world-bevy 的
+# `TickRunner` 里显式用 SingleThreadedExecutor。
+bevy_ecs = { version = "=0.19.1", default-features = false }
+# ③ 禁止引入并行：除上面的 ECS 内核外，本 crate **不依赖任何线程/异步运行时**
+#（tokio/rayon/crossbeam/threadpool/bevy_tasks 一律不加；由 tests/no_parallel.rs 钉住）。
 
 [lints]
 workspace = true

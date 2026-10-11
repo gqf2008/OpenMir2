@@ -31,7 +31,10 @@ pub struct VisibleBaseObject {
 }
 
 /// `BaseObject` 中参与本骨架（tick / AOI / 移动）的字段子集。
-#[derive(Clone, Debug)]
+///
+/// S1 起 `Entity` 直接就是 bevy 的**组件**（每个实体一个组件），由
+/// `mir2_world_bevy::EcsStore`（bevy `World` + 显式槽位索引）承载。
+#[derive(Clone, Debug, bevy_ecs::prelude::Component)]
 pub struct Entity {
     /// C# `ActorId`
     pub id: i32,
@@ -157,111 +160,100 @@ impl Entity {
     }
 }
 
-/// 连续的实体槽。
-#[derive(Clone, Debug)]
-struct Slot {
-    generation: u32,
-    entity: Option<Entity>,
+/// 实体仓库（`ActorMgr` 等价物）——S1 起是 **bevy_ecs 内核的薄适配层**。
+///
+/// 存储与遍历顺序都在 [`mir2_world_bevy::EcsStore`]（bevy `World` + 显式槽位索引）：
+/// - 槽位顺序 = 插入顺序 + 空闲槽 LIFO 复用，`iter`/`iter_mut`/`ids_sorted`/`order_index` 全按它；
+/// - `get`/`get_mut` 仍是 O(1) 查表；代际号在内核里维护（对外不可见）。
+///
+/// **顺序契约**：本类型**不迭代 Query 求顺序**——`iter`/`iter_mut` 走内核的显式槽位索引，
+/// `Query`（内核里的 `world.query`）只用于「按句柄安全拿到互斥引用」，之后仍按槽位排序。
+#[derive(Debug)]
+pub struct EntityStore {
+    inner: mir2_world_bevy::EcsStore<Entity>,
 }
 
-/// 实体仓库（`ActorMgr` 等价物）。
-///
-/// **查表**：C# 的 `ActorMgr.Get(id)` 是字典级查找（O(1)）；本实现用 `index: HashMap<i32, usize>`
-/// 保持同样量级——否则 AOI 过滤器里的每次 `get` 都退化成线性扫，2000 实体时单 tick 会到几十毫秒
-/// （2026-10-10 实测：线性版 P99 80.2ms vs 索引版见 `tick_bench` 输出）。
-/// 该 HashMap **只用于查表、不参与遍历**，所以不影响 tick 的确定性顺序（遍历恒为槽位顺序）。
-#[derive(Clone, Debug, Default)]
-pub struct EntityStore {
-    slots: Vec<Slot>,
-    free: Vec<usize>,
-    index: std::collections::HashMap<i32, usize>,
-    /// 下一个分配的 `ActorId`（C# 单调递增）
-    next_id: i32,
+impl Default for EntityStore {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl EntityStore {
     pub fn new() -> Self {
-        EntityStore {
-            slots: Vec::new(),
-            free: Vec::new(),
-            index: std::collections::HashMap::new(),
-            next_id: 1,
-        }
+        let mut inner = mir2_world_bevy::EcsStore::new();
+        // 内核资源：显式处理顺序索引 + 本 tick 顺序（tick 骨架的系统按它们处理）。
+        inner
+            .world_mut()
+            .insert_resource(mir2_world_bevy::SlotOrder::default());
+        inner
+            .world_mut()
+            .insert_resource(mir2_world_bevy::TickOrder::default());
+        EntityStore { inner }
     }
 
     /// 分配一个 id（不插入实体；C# `ActorMgr` 先 `Add` 后填字段）。
     pub fn alloc_id(&mut self) -> i32 {
-        let id = self.next_id;
-        self.next_id += 1;
-        id
+        self.inner.alloc_id()
     }
 
     /// 插入实体，返回其 id（复用本实体的 `id`）。
     pub fn insert(&mut self, entity: Entity) -> i32 {
-        let id = entity.id;
-        let slot_idx = if let Some(idx) = self.free.pop() {
-            self.slots[idx].generation = self.slots[idx].generation.wrapping_add(1);
-            self.slots[idx].entity = Some(entity);
-            idx
-        } else {
-            self.slots.push(Slot {
-                generation: 0,
-                entity: Some(entity),
-            });
-            self.slots.len() - 1
-        };
-        self.index.insert(id, slot_idx);
-        if id >= self.next_id {
-            self.next_id = id + 1;
-        }
-        id
+        self.inner.insert(entity.id, entity)
     }
 
     pub fn remove(&mut self, id: i32) -> Option<Entity> {
-        let idx = self.index.remove(&id)?;
-        let taken = self.slots[idx].entity.take();
-        if taken.is_some() {
-            self.free.push(idx);
-        }
-        taken
+        self.inner.remove(id)
     }
 
     /// O(1) 查表（C# `ActorMgr.Get`）。
     pub fn get(&self, id: i32) -> Option<&Entity> {
-        self.index
-            .get(&id)
-            .and_then(|i| self.slots[*i].entity.as_ref())
+        self.inner.get(id)
     }
 
     pub fn get_mut(&mut self, id: i32) -> Option<&mut Entity> {
-        self.index
-            .get(&id)
-            .and_then(|i| self.slots.get_mut(*i))
-            .and_then(|s| s.entity.as_mut())
+        self.inner.get_mut(id)
     }
 
     /// 按槽位顺序遍历（tick 的确定性顺序）。
-    pub fn iter(&self) -> impl Iterator<Item = &Entity> {
-        self.slots.iter().filter_map(|s| s.entity.as_ref())
+    pub fn iter(&self) -> impl Iterator<Item = &Entity> + '_ {
+        self.inner.iter()
     }
 
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Entity> {
-        self.slots.iter_mut().filter_map(|s| s.entity.as_mut())
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Entity> + '_ {
+        self.inner.iter_mut()
     }
 
     pub fn len(&self) -> usize {
-        self.slots.iter().filter(|s| s.entity.is_some()).count()
+        self.inner.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.inner.is_empty()
     }
 
     /// 按 id 升序收集（用于输出/对拍的稳定顺序）。
     pub fn ids_sorted(&self) -> Vec<i32> {
-        let mut v: Vec<i32> = self.iter().map(|e| e.id).collect();
-        v.sort_unstable();
-        v
+        self.inner.ids_sorted()
+    }
+
+    /// **显式处理顺序索引**：槽位顺序的业务 id（`crates/world` 的处理顺序契约）。
+    pub fn order_index(&self) -> Vec<i32> {
+        self.inner.order_index()
+    }
+
+    /// 把当前槽位顺序写入 ECS 资源 [`mir2_world_bevy::SlotOrder`]（tick 骨架处理前调用）。
+    pub fn sync_slot_order(&mut self) {
+        self.inner.sync_slot_order();
+    }
+
+    /// 暴露内核的 bevy `World`（`TickRunner` 跑单线程 Schedule 用）。
+    pub fn world(&self) -> &bevy_ecs::world::World {
+        self.inner.world()
+    }
+
+    pub fn world_mut(&mut self) -> &mut bevy_ecs::world::World {
+        self.inner.world_mut()
     }
 }
 
