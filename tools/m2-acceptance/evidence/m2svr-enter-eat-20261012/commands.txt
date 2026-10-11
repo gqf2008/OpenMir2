@@ -46,3 +46,18 @@ D:\mysql\mariadb-10.11.19-winx64\bin\mysql.exe -u root --protocol=tcp -h 127.0.0
 #     cargo test -p game-svr --offline eat_drug_dispatches_and_updates_session   => FAILED
 # 5b) 进图回落摘除：mapwire.rs 的 resolve_enter_map Err 支只 `Err(e)`
 #     cargo test -p game-svr --offline enter_map_falls_back_to_home_map          => FAILED
+# 5c) SM_BAGITEMS series：itemwire.rs 的 `series = 0`
+#     cargo test -p game-svr --offline query_bagitems_replies_sm_bagitems_with_items => FAILED
+# 5d) 新手物品顺序：main.rs 的 add_newbie_items names 去掉 basic_drug
+#     cargo test -p game-svr --offline newbie_items_follow_oracle_order_and_slots => FAILED
+
+## 6) 真机 ②③④（需 m3bag 驱动的 ClientItemCodec；master BotSrv 不能解 SM_BAGITEMS）
+# 6a) 用 m3bag worktree 的 BotSrv（已含 ClientItemCodec）写配置：
+cd E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag
+powershell -ExecutionPolicy Bypass -File tools/botload/run_bots.ps1 `
+  -Count 1 -Prefix m3r0646 -NewAccount -Port 7000 -FixedNewChr -NewChrJob 0 -NewChrHair 2 -NewChrSex 0 `
+  -BagEquipSequence -BagEquipStepMs 1000 -BagEquipStartDelayMs 3000 -WriteConfigOnly -SkipBuild
+# 6b) 手动起 m3bag BotSrv.exe（设 MIR2_BOT_OUT；约 34s 后停）
+#     bot 侧期望：SM_BAGITEMS body_len=668 bag_view=4 + 五步不再 skip
+# 6c) server 侧期望：CM_QUERYBAGITEMS ItemList=4 / SM_BAGITEMS 下发 4 件（680 字节）/
+#     CM_EAT 结果 eaten=true immediate=1 notices=1 / CM_EAT 已下发 N 帧

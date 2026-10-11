@@ -1,0 +1,9 @@
+06:46:32.572 [INF] 机器人:[m3r06460] M3BAGSEQ arm start_delay_ms=3000 step_ms=1000
+06:46:32.758 [INF] 机器人:[m3r06460] M3BAGSEQ SM_BAGITEMS body_len=668 bag_view=4
+06:46:35.598 [INF] 机器人:[m3r06460] M3BAGSEQ snapshot bag_view=4 takeon=6 takeoff=1 drop=6 eat=1
+06:46:35.598 [INF] 机器人:[m3r06460] M3BAGSEQ step=0 op=CM_PICKUP x=287 y=616
+06:46:36.613 [INF] 机器人:[m3r06460] M3BAGSEQ step=1 op=CM_TAKEONITEM bag=6 where=1 make=406900 name=木剑
+06:46:37.624 [INF] 机器人:[m3r06460] M3BAGSEQ step=2 op=CM_TAKEOFFITEM where=1 make=406900 name=木剑
+06:46:38.637 [INF] 机器人:[m3r06460] M3BAGSEQ step=3 op=CM_DROPITEM bag=6 make=406900 name=木剑
+06:46:39.651 [INF] 机器人:[m3r06460] M3BAGSEQ step=4 op=CM_EAT bag=1 make=406899 stdmode=0 name=金创药(小量)
+06:46:39.651 [INF] 机器人:[m3r06460] M3BAGSEQ done

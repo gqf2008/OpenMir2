@@ -1,0 +1,5 @@
+32:22:46:32.557 [INF] IsNewHuman 判定 ChrName=m3r06460 home_empty=true abil_level=0 bag_items=46
+38:22:46:32.756 [INF] CM_QUERYBAGITEMS：ChrName=m3r06460 ItemList=4 件
+39:22:46:32.756 [INF] SM_BAGITEMS 下发：ChrName=m3r06460 socket=328 gate=0 4 件（680 字节）
+50:22:46:39.776 [INF] CM_EAT 结果：ChrName=m3r06460 make_index=406899 eaten=true immediate=1 notices=1
+51:22:46:39.776 [INF] CM_EAT 已下发 2 帧（socket=328 gate=0）
