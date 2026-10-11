@@ -371,6 +371,22 @@ pub fn sm_turn(
 /// `SM_ADJUST_BONUS`(811) 的三段能力模板 `(BonusPoint, A, B, C)`（各自 `EncodeMessage` 后用 `/` 拼）。
 pub type AdjustBonusParts = (i32, Vec<u8>, Vec<u8>, Vec<u8>);
 
+/// `SM_HEAR`(40)（`PlayObject.Message.cs:1705-1707` 的 `RM_HEAR` 支）：
+/// `MakeMessage(SM_HEAR, processMsg.ActorId /*= 说话者 ActorId，`BaseObject.Message.cs:154`*/, `
+/// `MakeWord((ushort)nParam1, (ushort)nParam2) /*= MakeWord(btHearMsgFColor, btHearMsgBColor)*/, 0, 1)`；
+/// 尾 = `EncodeString(ChrName + ':' + sMsg)`。
+#[must_use]
+pub fn sm_hear(actor_id: i32, f_color: u8, b_color: u8, msg: &[u8]) -> Vec<u8> {
+    let header = command_header(
+        actor_id,
+        messages::SM_HEAR,
+        make_word(f_color, b_color),
+        0,
+        1,
+    );
+    gm_data_body(header, &edcode::encode(msg))
+}
+
 /// `SM_TURN`(10) 的字段 `(ActorId, X, Y, Dir, Light, CharDesc 序列化原文, msg)`。
 pub type TurnFrame = (i32, u16, u16, u8, u8, Vec<u8>, Vec<u8>);
 

@@ -11,6 +11,7 @@
 
 pub mod ability;
 pub mod bag;
+pub mod chat;
 pub mod downlink;
 pub mod feature;
 pub mod smframe;
