@@ -1,0 +1,11 @@
+Envir: E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m4cases\mir2-rs\tests\parity\M4\fixtures\macroenvir
+文件: 1 加载: 1 缺失: 0 异常: 0
+脚本 1 标签 1 过程 1 条件 1 动作 2 否则动作 0
+宏展开 2 #CALL成功 0 #CALL失败 0 #INCLUDE 0 商品 0
+解析错误: 0；解码异常文件: 0
+命令派发分类（语料实测）：
+  动作/engine-switch:Break: 1 次（1 个 code）
+  动作/handler:ActionOfGiveItem: 1 次（1 个 code）
+  条件/handler:ConditionOfCheckGold: 1 次（1 个 code）
+  未注册（C# 静默忽略）合计: 0 次；条件 distinct code 1 / 动作 distinct code 2
+语料派发目标覆盖：已实现 3 个（3 次调用）；未实现 0 个（按调用次数降序）：

@@ -1,0 +1,96 @@
+{
+  "_meta": {
+    "card": "openmir2-m4-parity-cases",
+    "acceptance": "② 6 类关键 NPC 用例（商店买卖/回购、传送、修理、仓库、行会、任务）：每类一个可复跑用例；写清失败怎么判红；原始件入库。",
+    "runner": "python -I tests/parity/M4/run_npc_cases.py",
+    "note": "runner == 'flow' 的用例现在就能跑（不需要两栈/端口）：两侧 harness = tools/script-parity-cs run（C# 参照）+ mir2-script-tool flow-run（Rust），同一脚本+同一 label+同一初始状态，逐行 diff。runner == 'window' 的用例需要 M2 真机验收窗口释放（5000/7000/7100/7200）+ 两侧栈 + DB 作用域比对；本轮登记『等窗口』，runner 只打印判据、不计通过。"
+  },
+  "cases": [
+    {
+      "category": "传送",
+      "name": "传送-幻境（金币不足/无物品）",
+      "runner": "flow",
+      "script": "E:/MirServer/M2GameSvr/Envir/Market_Def/传送员/比奇省传送员-0.txt",
+      "label": "@gohj2",
+      "gold": 200000,
+      "items": "金币:1:1",
+      "expected": ["gold -100000", "#gold=100000", "#items="],
+      "red_criteria": "两侧任一不同（或 C# 崩溃出 EX 行、Rust 出 err(rust) 行）即判红。"
+    },
+    {
+      "category": "传送",
+      "name": "传送-幻境（背包有名为100000的物品）",
+      "runner": "flow",
+      "script": "E:/MirServer/M2GameSvr/Envir/Market_Def/传送员/比奇省传送员-0.txt",
+      "label": "@gohj2",
+      "gold": 200000,
+      "items": "金币:1:1,100000:2:1",
+      "player_items": "100000:1",
+      "expected": ["gold -100000", "#gold=100000", "#items=100000"],
+      "red_criteria": "两侧任一不同即判红。"
+    },
+    {
+      "category": "行会",
+      "name": "行会-攻城申请缴金条（@requestcastlewar）",
+      "runner": "flow",
+      "script": "E:/MirServer/M2GameSvr/Envir/Npc_Def/比奇国王-0122.txt",
+      "label": "@requestcastlewar",
+      "gold": 1000,
+      "items": "金条:2:1",
+      "player_items": "金条:1",
+      "expected": ["delitem 金条 1", "msg 11009 ...", "#gold=1000", "#items="],
+      "red_criteria": "金条未被扣（`delitem` 缺失）或说词不同即判红；C# 崩溃出 EX 行、Rust 出 err(rust) 行亦判红。"
+    },
+    {
+      "category": "任务",
+      "name": "任务-地图出矿提示（Q001@main）",
+      "runner": "flow",
+      "script": "E:/MirServer/M2GameSvr/Envir/MapQuest_def/Q001.txt",
+      "label": "@main",
+      "gold": 1000,
+      "items": "金币:1:1",
+      "player_items": "",
+      "expected": ["#gold=1000", "#items="],
+      "red_criteria": "两侧任一不同即判红（本脚本 `sendmsg 6 提示…` 在两侧 harness 都记为空效果，故只比 gold/items 恒定输出）。"
+    },
+    {
+      "category": "商店",
+      "name": "商店-货币兑换（@changeGold 足额金币→金条）",
+      "runner": "window",
+      "script": "E:/MirServer/M2GameSvr/Envir/Market_Def/封魔谷/恶魔修理师-d2008.txt",
+      "label": "@changeGold",
+      "gold": 1200000,
+      "items": "金币:1:1,金条:2:1",
+      "player_items": "",
+      "expected": ["take 金币 1002000", "give 金条 1", "MESSAGEBOX 金条已经为你换好了"],
+      "window_reason": "脚本首行是商人头 `(@buy @sell @repair @s_repair @storage @getback …)` ⇒ C# 参照 `ScriptParsers.LoadScriptFile` 在 `ScriptParsers.cs:713+` 把 NPC 转成 `IMerchant`；port-free 的 `tools/script-parity-cs run` 夹具（INormNpc）不含 IMerchant ⇒ 抛 InvalidCastException，无法做两侧行为对拍。",
+      "red_criteria": "① 行为：同一 label/输入下，C# 与 Rust 的 take/give/messagebox 序列逐行相同（差 0）；② DB 作用域：角色 `Gold` 与背包/仓库物品行按 `tests/parity/m3/scoped_diff.py diff --canonical` 比对，作用域内字段级 diff = 0。任一非 0 即判红。"
+    },
+    {
+      "category": "修理",
+      "name": "修理-RepairAll（@StdModeFunc26）",
+      "runner": "window",
+      "script": "E:/MirServer/M2GameSvr/Envir/Market_Def/QFunction-0.txt",
+      "label": "@StdModeFunc26",
+      "gold": 1000,
+      "items": "金币:1:1",
+      "player_items": "",
+      "expected": ["RepairAll（佩戴物持久恢复；本 mock 无佩戴位，故 port-free 无可观测差异）"],
+      "window_reason": "同商店：脚本含商人/物品功能头，C# `run` 夹具缺 IMerchant；且 RepairAll 的持久恢复只在带佩戴物品的真实会话里可观测。",
+      "red_criteria": "两侧同一佩戴物在 `@StdModeFunc26` 后的 `Dura` 值逐项相同（含耐久上限、特修分支）；DB `characters_item`/`characters_item_attr` 作用域内字段级 diff = 0。"
+    },
+    {
+      "category": "仓库",
+      "name": "仓库-捆绑卷轴（@zum_bind1 6×地牢逃脱卷）",
+      "runner": "window",
+      "script": "E:/MirServer/M2GameSvr/Envir/Market_Def/盟重土城/仓库-0145.txt",
+      "label": "@zum_bind1",
+      "gold": 1000,
+      "items": "金币:1:1,地牢逃脱卷:4:1,地牢逃脱卷包:5:1",
+      "player_items": "地牢逃脱卷:6",
+      "expected": ["take 金币 100", "take 地牢逃脱卷 6", "give 地牢逃脱卷包 1"],
+      "window_reason": "同商店：脚本首行 `(@storage @getback …)` 触发 IMerchant 转换；另保管/取回（@storage/@getback）的窗口与仓库表本就由服务端商人子系统处理，需整栈。",
+      "red_criteria": "① 行为：同一 label/输入下 take/give 序列逐行相同；② DB：`characters_storageitem` 与 `characters_bagitem` 作用域内字段级 diff = 0（`scoped_diff.py diff --canonical`）。任一非 0 即判红。"
+    }
+  ]
+}
