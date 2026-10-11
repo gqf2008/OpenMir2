@@ -676,8 +676,8 @@ walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 prin
 
 - **M3 总验收未做**（§6 M3 原文）：① 十项系统逐一对齐**全绿** + M3 门禁 `diff=0`；② **300 假人长跑 24h 无 panic、无掉线**；
   ③ 每系统的"命令 + 输出 + 差异报告"汇总成 `tests/parity/M3-report.md`。
-  现状：只到"逐系统对齐 ①（背包/装备）"；②③ **无卡**（按 §6.0-5 待对齐推进后再开，**别记成已完成**）。
-- **M5 另有四项无卡**：72h 长跑 / `mem-probe` 内存斜率 / 灰度-回滚演练 / 灰度前后 DB 快照（见 M5 行）。
+  现状：只到"逐系统对齐 ①（背包/装备）"；**②③ 已开卡** `openmir2-m3-final-acceptance`（issue `b0bb3003`，2026-10-12）——按 §6.0-5 排在逐系统对齐与 M4 收口之后，② 的 24h 长跑需**独占机器窗口**；**别记成已完成**。
+- **M5 四项已开卡**（2026-10-12）：`openmir2-m5-convergence-drills`（issue `5e54b611`）= 72h 长跑 / `mem-probe` 内存斜率 / 三档压测曲线（与 C6 口径衔接）/ 灰度-回滚演练 / 灰度前后 DB 快照；同样按 §6.0-5 排在 M1–M4 收口之后，且长跑与 P99 类判据必须在**无其它车道编译/压测的窗口**里采。
 - **P99 类判据需要"静默窗口"**（两条独立事实，别再各自解释）：
   1. tick_bench 的相对门禁带 `SKIP-UNDER-LOAD`（CPU≥40% 或 `rustc`/`cargo`/`cargo-clippy`/`msbuild`≥4 ⇒ SKIP、exit 0）。
      本机常态是多车道在跑（实测 CPU 常在 50–80%）⇒ 该门禁**持续 SKIP**（`last-tickbench.md` 5/5）⇒ **相对 P99 判据实际处于休眠**，
