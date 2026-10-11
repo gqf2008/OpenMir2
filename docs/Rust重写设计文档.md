@@ -736,6 +736,14 @@ walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 prin
 - **M1⑤ 实测抓到一条真缺陷（新卡）**：全 Rust 边界链上 **登录/选服/查角色 200/200，但选角 0/200**（无 `525`，Rust db-srv 200 条 `Double send SELCHR`）——
   根因 = `bins/db-srv` 的 `query_chr()` 成功时**没置 `u.chr_queryed = true`**（C# `src/DBSrv/Services/Impl/UserService.cs:359` 有），`CM_SELCHR` 恒走 else ⇒ 从不回 `SM_STARTPLAY`。
   已开卡 `openmir2-m1-dbsrv-selchr-queryed`（issue `2e5d3b0897576dcc4a31f26194dc3fa366805a63`），**不顺手改**（写集红线）；因与 `dbsrv6k` 的 S4b 同文件 ⇒ 由同一车道在该片之后接着做（已写进其 brief §4）。
+- **M2 入图帧推进到 10/16 并待审**（2026-10-11 19:00）：新 head `56ac670f`（patch `c234ef9c` / status `7da05a24`）接通 **42 `SM_USERNAME`**（`GetShowName()` 1:1 + `strings.rs` 读 `String.conf [String]` + `[Setup] ShowRankLevelName`，金标准 seq21 线上字节锚定）与
+  **46 `SM_DAYCHANGING`**（`Bright = M2Share.GameTime` 按**真实本地小时**算，`chrono::Local`，不是假时钟）；`52/752` 如实登记"需 `RecalcAbilitys()`（装备/buff 层未移植）"，**未假造**。
+  作者还带源码证据**反驳了 reviewer-1 的 O-1**：`SendAdjustBonus` 用 2 参 `SendSocket(ClientMsg, "")`，空串**提前 return**（`PlayObject.Socket.cs:111-114`）⇒ oracle 在 `Job∉{0,1,2}` 时**什么都不发**，"跳过"本就 1:1（复审要点已写入 `brief-review.md`）。
+  **`50/41/10/213`（第 ③ 组）前置已清**：`feature.rs` 随 `1df92efe` 进 master。
+- **M2 真机验收的前置门已点清（owner 实跑，只读、不占端口）**：`tools/m2-acceptance/preflight.ps1 -RequireMysql` ⇒ **GREEN（ok=18 / missing=0 / red=0）**——
+  工具（python/dotnet/cargo）、仓库输入（抓包/切帧/`dump_body_layout`/`GoldenExport`/`mir_flow.ps1`/`dbsnap`/`scoped_diff.py`/EDCode 复用/replay）、
+  **金标准身份**（`c-line-baseline-c3-20261010.jsonl` sha256 = `f34a6d11…`，与钉住值一致）、真客户端入口（`D:\MirClient-run\run-release.cmd`）、MySQL 3306 可连 —— 全部 OK；
+  证据 `E:/tmp/m2-acceptance/preflight-20261011-190522.json`。⇒ **端口窗口一空就能跑真机验收，不会因夹具/前置本身没准备好白占窗口。**
 
 ## 18. S3：B-8 命令码位移修复（2026-10-10，oracle 行为变更）
 
