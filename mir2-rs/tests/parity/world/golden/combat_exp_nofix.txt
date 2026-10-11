@@ -1,0 +1,13 @@
+tick 1 clock 200
+ent 1 0 10 10 300 25 0 vis 1:2
+tick 2 clock 400
+ent 1 0 10 10 300 25 0 vis 1:1
+ent 2 0 11 10 6 1 0 vis 1:2
+tick 3 clock 600
+ent 1 0 10 10 300 25 500 vis 1:1
+ent 2 0 11 10 0 1 0 vis
+atk 1 2 27 0
+death 2 0 0 1 500
+tick 4 clock 800
+ent 1 0 10 10 300 25 500 vis 1:1
+ent 2 0 11 10 0 1 0 vis

@@ -1,13 +1,14 @@
-// M2 下半程（最小切片）金标准驱动：**会话进世界 + 掉落系统**。
-// 对齐 Rust `crate::world`；战斗结算不在本切片（击杀用脚本化 kill 触发），
-// 因此随机流只由"掉落预算"消耗，两侧调用顺序一致。
+// M2 下半程金标准驱动：**会话进世界 + 掉落系统 +（本批新增）战斗结算**。
+// 对齐 Rust `crate::world`；场景 `session`（无战斗）与 `combat`（含 `attack`）共用本驱动。
 //
 // 顺序契约（两侧写死）：
 //   1. 每 tick：clock += 200 → 应用本 tick 的**会话操作**（enter/switch/softclose/reenter，立即生效）
-//      → 入队本 tick 的**世界命令**（spawn/walk/kill/leave，按场景顺序 FIFO）→ 处理队列
-//      → 死亡结算（掉落落地）→ 按插入顺序 AOI → 输出；
+//      → 入队本 tick 的**世界命令**（spawn/walk/kill/attack/leave，按场景顺序 FIFO）→ 处理队列
+//      → 死亡结算（掉落落地 + `KillFunc` 发经验）→ 按插入顺序 AOI → 输出；
 //   2. 怪物掉落在地图**生成时**预算（`WorldServer.MonGen.cs:440` 的时机）；
 //   3. 死亡时用 `GetDropPosition` 扫描序把物品落到空格子（金币也占一格）。
+//   4. `attack`：`GetBaseAttackPoewr()` → `_Attack` → 若 `target.Race > ActorRace.Play` 则
+//      `target.SetLastHiter(攻击方)`（折叠 `RM_STRUCK` 消息，见 `StubsCombat.cs::_Attack` 注释）。
 //
 // 随机源：`ParityGolden.M2Share.RandomNumber`（真实 RandomNumber.cs，反射注入种子）。
 
@@ -62,6 +63,9 @@ internal static class Program
         public int dc { get; set; } = 1;
         public int ac { get; set; }
         public int undead { get; set; }
+        // 命中判定两侧：缺省 = BaseObject 构造的 5 / 15（BaseObject.cs:386-387）
+        public int hit_point { get; set; } = 5;
+        public int speed_point { get; set; } = 15;
         public List<DropSpec> drop { get; set; } = new List<DropSpec>();
     }
 
@@ -120,6 +124,10 @@ internal static class Program
         public int ticks { get; set; }
         public bool extended { get; set; }
         public int mon_random_add_value { get; set; } = 40;
+        // `Config.HighLevelKillMonFixExp`（现网 Exps.conf = 1）；场景可覆写以钉住 `CalcGetExp` 的调用口径
+        public bool high_level_kill_mon_fix_exp { get; set; } = true;
+        // `Config.NeedExps`；不填时全 0（本场景不触发升级，故不索引）
+        public List<int> need_exps { get; set; }
         public List<ItemSpec> item_catalog { get; set; } = new List<ItemSpec>();
         public List<SessionSpec> sessions { get; set; } = new List<SessionSpec>();
         public List<MonsterSpec> monsters { get; set; } = new List<MonsterSpec>();
@@ -154,6 +162,10 @@ internal static class Program
 
         SeedRandomNumber(42);
         ParityGolden.SystemShare.Config.MonRandomAddValue = (byte)scenario.mon_random_add_value;
+        CombatConfigStub.HighLevelKillMonFixExp = scenario.high_level_kill_mon_fix_exp;
+        int[] needExps = scenario.need_exps != null
+            ? scenario.need_exps.ToArray()
+            : new int[1000];
         foreach (ItemSpec it in scenario.item_catalog)
         {
             ParityGolden.SystemShare.ItemSystem.StdItemList.Add(new ParityGolden.StdItem
@@ -241,6 +253,7 @@ internal static class Program
                         break;
                     case "walk":
                     case "kill":
+                    case "attack":
                     case "leave":
                         queue.Enqueue(new QueuedCommand { kind = c.kind, id = c.id, target = c.target, dx = c.dx, dy = c.dy });
                         break;
@@ -248,6 +261,7 @@ internal static class Program
             }
             // 2) 世界命令 FIFO
             var tickDeaths = new List<(int id, int placed, int gold, int killer, int exp)>();
+            var tickAttacks = new List<(int attacker, int target, int power, int hpAfter)>();
             while (queue.Count > 0)
             {
                 QueuedCommand cmd = queue.Dequeue();
@@ -272,12 +286,30 @@ internal static class Program
                             victim.WAbil.HP = 0;
                         }
                         break;
+                    case "attack":
+                        if (actors.TryGetValue(cmd.id, out ActorStub attackerObj)
+                            && actors.TryGetValue(cmd.target, out ActorStub attackVictim))
+                        {
+                            // C# `PlayObject.AttackDir`（`PlayObject.Attack.cs:73-75`）的子集：
+                            // 先 `GetBaseAttackPoewr()`（消耗攻击力 RNG），再 `_Attack(nPower, target)`
+                            // （消耗命中/护甲 RNG）。技能与 `GetAttackPowerHit` 不在此子集。
+                            int nPower = attackerObj.GetBaseAttackPoewr();
+                            attackerObj._Attack(nPower, attackVictim);
+                            // `BaseObject.Attack.cs:61-64` 的 `SendMsg(RM_STRUCK)` 条件：
+                            // `targetObject.Race > ActorRace.Play` ⇒ 目标下一次 Run 里 `SetLastHiter(攻击方)`
+                            if (attackVictim.Race > 0)
+                            {
+                                attackVictim.SetLastHiter(attackerObj);
+                            }
+                            tickAttacks.Add((cmd.id, cmd.target, nPower, attackVictim.WAbil.HP));
+                        }
+                        break;
                     case "leave":
                         LeaveWorld(envirs, envirOf, actors, order, cmd.id);
                         break;
                 }
             }
-            // 3) 死亡结算（掉落落地；本切片不结算经验——击杀者不设置）
+            // 3) 死亡结算（掉落落地 + `KillFunc` 发经验）
             foreach (int id in order.ToList())
             {
                 if (!actors.TryGetValue(id, out ActorStub a) || a.WAbil.HP != 0 || a.DeathSettled)
@@ -304,7 +336,19 @@ internal static class Program
                     envirs[mapId].AddMapObject(gx, gy, CellType.Item, id, a);
                     placed++;
                 }
-                tickDeaths.Add((id, placed, a.Gold, -1, 0));
+                // `BaseObject.cs:2429 KillFunc`：经验发给 `ExpHitter`（**第一个**命中者），不是 `LastHiter`；
+                // 子集只做「归属者是玩家本人」这一支（宝宝击杀走 `ExpHitter.Master`，不在本骨架）。
+                int killer = -1;
+                int gained = 0;
+                if (a.ExpHitter != null && a.ExpHitter.Race == 0)
+                {
+                    killer = a.ExpHitter.ActorId;
+                    // `KillTargetTrigger`（`PlayObject.cs:1632-1653`）：
+                    // `monsterExp = CalcGetExp(WAbil.Level /*玩家自己*/, fightExp)` → `GainExp(monsterExp)`
+                    int monsterExp = a.ExpHitter.CalcGetExp(a.ExpHitter.WAbil.Level, a.FightExp);
+                    gained = a.ExpHitter.GainExp(monsterExp, needExps);
+                }
+                tickDeaths.Add((id, placed, a.Gold, killer, gained));
             }
             // 4) AOI（按插入顺序）
             foreach (int id in order.ToList())
@@ -339,6 +383,11 @@ internal static class Program
             }
             if (scenario.extended)
             {
+                foreach (var (attacker, target, power, hpAfter) in tickAttacks)
+                {
+                    sb.Append("atk ").Append(attacker).Append(' ').Append(target).Append(' ')
+                        .Append(power).Append(' ').Append(hpAfter).Append('\n');
+                }
                 foreach (var d in tickDeaths)
                 {
                     sb.Append("death ").Append(d.id).Append(' ').Append(d.placed).Append(' ')
@@ -398,8 +447,9 @@ internal static class Program
         a.WAbil.DC = ms.dc;
         a.WAbil.AC = ms.ac;
         a.LifeAttrib = (byte)ms.undead;
-        // 怪物经验：本切片不结算经验（击杀者为空），仅记录
-        _ = ms.exp;
+        a.HitPoint = (byte)ms.hit_point;
+        a.SpeedPoint = (byte)ms.speed_point;
+        a.FightExp = ms.exp; // `WorldServer.MonGen.cs:893`: monsterActor.FightExp = monster.Exp
         RegisterActor(actors, envirOf, order, a, ms.map);
         envirs[ms.map].AddMapObject(ms.x, ms.y, CellType.Play, ms.id, a);
     }

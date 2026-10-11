@@ -6,9 +6,19 @@
 //! - `BaseObject.Base.cs:827` `StruckDamage`（职业对怪倍率、人物下属对人倍率）
 //! - `BaseObject.cs:775` `DamageHealth`（护盾分支保留结构）
 //! - `src/M2Server/Player/PlayObject.Base.cs:129/149` `WinExp` / `GetExp`（含单步升级）
-//! - `src/M2Server/Player/PlayObject.cs:1638` `KillTargetTrigger`（`CalcGetExp` → `GainExp`）
+//! - `src/M2Server/Actor/BaseObject.cs:2429` `KillFunc`（把击杀死讯发给 **`ExpHitter`**，不是 `LastHiter`）
+//! - `src/M2Server/Player/PlayObject.cs:1632` `KillTargetTrigger`（`CalcGetExp` → `GainExp`）
+//! - `src/M2Server/Actor/BaseObject.cs:1753` `SetLastHiter`（`LastHiter` 刷新、`ExpHitter` 粘第一个）
 //! - `src/GameSrv/Word/WorldServer.MonGen.cs:440` `MonGetRandomItems`（**掉落在地图生成怪物时预算**，
 //!   死亡时只是把预算好的物品散到地上）——由 `crates/formula::drop` 提供（D 线已对拍 == C#）
+//!
+//! **`LastHiter` 的写入点**（易错，本批修正）：`_Attack` 自己**不**写 `LastHiter`。
+//! 人打怪时由 `targetObject.SendMsg(targetObject, RM_STRUCK, …)`（`BaseObject.Attack.cs:61-64`，
+//! 条件是 `targetObject.Race > ActorRace.Play`）走消息队列，在怪物下一次 `Run()` 里
+//! `AnimalObject.Operate`（`AnimalObject.cs:118-124`）调用 `SetLastHiter(攻击方)`。
+//! ⇒ 同一次攻击里 `StruckDamage` 看到的仍是**上一次**的 `LastHiter`；本骨架把这一步
+//! 折叠为"`_Attack` 结算完成后再 `set_last_hiter`"（见 `world::World::attack_once`），
+//! 对"单/多攻击者逐次攻击"与 C# 同序（详见 `tests/parity/world/README.md` 的顺序契约）。
 //!
 //! 本批**不做**的（报告里写明）：技能（`MagicManager` 面太大）、狂暴/组队/任务条件、
 //! 护身符与毒/麻痹状态、地图 `CanWalk` 地形（骨架格子属性恒 Walk）。
@@ -109,35 +119,55 @@ pub fn get_hit_struck_damage(
         ac_lo
     };
     let mut damage = hutil::max_i32(0, n_damage - n_armor);
-    if damage > 0 && target.life_attrib == 1 && attacker.undead_power > 0 {
-        // LifeAttrib == LA_UNDEAD(1) 时加攻击方的 UndeadPower
+    if damage > 0 && target.life_attrib == 1 {
+        // `if ((LifeAttrib == Grobal2.LA_UNDEAD) && (target != null)) nDamage += target.AddAbil.UndeadPower;`
+        // 注意：oracle **无条件**相加（没有 `> 0` 守卫），UndeadPower 为负时也照加。
         damage += attacker.undead_power;
     }
     damage as u16
+}
+
+/// 目标实体当下存着的 `LastHiter` 子集（`StruckDamage` 的倍率只看它，不看本次攻击者）。
+///
+/// 为什么要有这个类型：`_Attack` **不写** `LastHiter`，命中者登记走 `RM_STRUCK` 消息、
+/// 由目标自己的 `Run()` 调 `SetLastHiter`（见 `attack()` 末尾与 `world::attack_once`）。
+/// ⇒ 本次攻击的 `StruckDamage` 看到的 `LastHiter` 是**上一次**的命中者——这是 oracle 的真实语义，
+/// 倍率必须按它取，不能按本次攻击者取。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LastHitter {
+    /// `LastHiter.Race`
+    pub race: u8,
+    /// `LastHiter.Job`
+    pub job: u8,
+    /// `LastHiter.Master != null`
+    pub has_master: bool,
 }
 
 /// `BaseObject.StruckDamage`（`BaseObject.Base.cs:827`）的职业/主从倍率部分。
 ///
 /// 配置项取 `GameSvrConf` 默认值（`WarrMon/WizardMon/TaosMon/MonHum` 都是 10 ⇒ 倍率 1.0，
 /// 与现网 Server.conf 未改动时一致；如需别的值由调用方传入）。
+///
+/// **取谁的 job**：oracle 用 `LastHiter`（`:833-846` 的 `LastHiter.Race == Play` + `((IPlayerActor)LastHiter).Job`），
+/// 不是本次攻击者；默认配置下两者都归到倍率 1.0，只有非默认倍率或同 tick 混职业时才有数值差异。
 pub fn struck_damage_multiplier(
     target: &Entity,
-    attacker: &Entity,
+    last_hitter: Option<LastHitter>,
     warr_mon: i32,
     wizard_mon: i32,
     taos_mon: i32,
     mon_hum: i32,
 ) -> i32 {
     // 返回"十分之几"的倍率（C# 里是 `伤害 * per10 / 10`）
-    if target.race >= 50 && attacker.race == ACTOR_RACE_PLAY {
-        // Race >= ActorRace.Animal(50) 且最后一击者是人
-        match attacker.job {
+    if let Some(hitter) = last_hitter.filter(|h| target.race >= 50 && h.race == ACTOR_RACE_PLAY) {
+        // `(Race >= ActorRace.Animal) && (LastHiter != null) && (LastHiter.Race == ActorRace.Play)`
+        match hitter.job {
             0 => warr_mon,   // Warrior
             1 => wizard_mon, // Wizard
             _ => taos_mon,   // Taoist
         }
-    } else if target.race == ACTOR_RACE_PLAY && attacker.master.is_some() {
-        // 人物下属怪物攻击人
+    } else if last_hitter.is_some_and(|h| target.race == ACTOR_RACE_PLAY && h.has_master) {
+        // `(Race == ActorRace.Play) && (LastHiter != null) && (LastHiter.Master != null)`
         mon_hum
     } else {
         10 // 无倍率
@@ -155,6 +185,8 @@ pub struct AttackOutcome {
     pub damage: u16,
     /// 目标 HP 是否降到 0（本 tick 触发死亡）
     pub killed: bool,
+    /// 结算后目标的 `WAbil.HP`（对拍逐行输出用）
+    pub target_hp_after: u16,
 }
 
 /// `_Attack`（`BaseObject.Attack.cs:30`）——一次攻击的完整结算。
@@ -167,6 +199,7 @@ pub fn attack(
     rng: &mut impl RandomSource,
     attacker: &mut Entity,
     target: &mut Entity,
+    last_hitter: Option<LastHitter>,
     config: &CombatConfig,
 ) -> AttackOutcome {
     let power = get_base_attack_power(rng, attacker.dc);
@@ -192,7 +225,7 @@ pub fn attack(
             // `StruckDamage`：职业对怪倍率 / 主从对人倍率，然后 `DamageHealth`
             let per10 = struck_damage_multiplier(
                 target,
-                attacker,
+                last_hitter,
                 config.warr_mon,
                 config.wizard_mon,
                 config.taos_mon,
@@ -206,17 +239,19 @@ pub fn attack(
             } else {
                 target.hp = 0;
             }
-            target.last_hiter = Some(attacker.id);
             if target.hp == 0 {
                 killed = true;
             }
         }
     }
+    // 注意：`_Attack` 里**没有** `LastHiter` 赋值（C# 原文如此）。命中者的登记走
+    // `RM_STRUCK` 消息路径，由调用方在攻击结算之后调用 `Entity::set_last_hiter`。
     AttackOutcome {
         power,
         hit,
         damage,
         killed,
+        target_hp_after: target.hp,
     }
 }
 
@@ -273,21 +308,26 @@ pub fn generate_drops<C: ItemCatalog>(
     (out.gold, out.items)
 }
 
-/// 死亡时的经验结算（`PlayObject.cs:1638 KillTargetTrigger` +
+/// 死亡时的经验结算（`BaseObject.cs:2429 KillFunc` → `PlayObject.cs:1632 KillTargetTrigger` +
 /// `PlayObject.Base.cs:129 WinExp` + `:149 GetExp` 的子集）。
+///
+/// **调用口径（注意复刻 oracle 的原样调用）**：`KillTargetTrigger` 里是
+/// `CalcGetExp(WAbil.Level /*玩家自己的等级*/, fightExp)`，而 `CalcGetExp` 内部又拿
+/// `WAbil.Level` 与入参 `nLevel` 比——入参就是自己等级 ⇒ `L < L + 10` 恒真 ⇒
+/// **击杀经验不按等级差衰减**（哪怕 `HighLevelKillMonFixExp = false`）。
+/// 所以这里 `n_level` 传的是**击杀者自己的等级**，不是怪物等级（照抄 oracle，包括这个无效分支）。
 ///
 /// 返回 `(获得经验, 是否升级, 升级后等级)`。
 pub fn award_kill_exp(
     killer: &mut Entity,
-    mon_level: i32,
     mon_exp: i32,
     need_exps: &[i32],
     config: &CombatConfig,
 ) -> (i32, bool, u8) {
-    // KillTargetTrigger: monsterExp = CalcGetExp(自己等级, 怪物经验)
+    // KillTargetTrigger: monsterExp = CalcGetExp(WAbil.Level, fightExp)
     let monster_exp = calc_get_exp(
         i32::from(killer.level),
-        mon_level,
+        i32::from(killer.level), // 入参即自己等级（oracle 原样）
         mon_exp,
         config.high_level_kill_mon_fix_exp,
     );
@@ -325,6 +365,10 @@ pub struct MonsterRow<'a> {
     pub dc: u16,
     pub ac: u16,
     pub undead: u8,
+    /// `HitPoint`（准确，命中判定的攻方一侧）——`BaseObject` 构造默认 5（`BaseObject.cs:386`）
+    pub hit_point: u8,
+    /// `SpeedPoint`（敏捷，命中判定的守方一侧）——`BaseObject` 构造默认 15（`BaseObject.cs:387`）
+    pub speed_point: u8,
 }
 
 /// 由行数据构造怪物实体（数值语义与 `GameSvr/DB/MySqlDB.cs::LoadMonsterDB` 的产物一致）。
@@ -338,6 +382,8 @@ pub fn monster_from_row(row: MonsterRow<'_>) -> Entity {
     e.dc = i32::from(row.dc);
     e.ac = i32::from(row.ac);
     e.life_attrib = row.undead;
+    e.hit_point = row.hit_point;
+    e.speed_point = row.speed_point;
     e
 }
 

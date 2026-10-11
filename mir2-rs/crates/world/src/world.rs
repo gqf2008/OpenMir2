@@ -35,7 +35,7 @@ pub enum Command {
     Leave { actor_id: i32 },
     /// 走一步（服务端做格子校验后更新坐标）
     Walk { actor_id: i32, dx: i32, dy: i32 },
-    /// 攻击（`_Attack` 一次结算）——本最小切片未在 golden 里使用（战斗留下轮）
+    /// 攻击（`_Attack` 一次结算 + 命中者登记）——`combat.json` 场景用它把 `_Attack` 的 RNG 面纳入 golden
     Attack { actor_id: i32, target_id: i32 },
     /// 脚本化击杀：直接把目标 HP 置 0（最小切片的击杀触发；战斗结算不在本切片）
     Kill { target_id: i32 },
@@ -52,6 +52,9 @@ pub enum Command {
         dc: u16,
         ac: u16,
         undead: u8,
+        /// `HitPoint` / `SpeedPoint`（命中判定用；缺省照 `BaseObject` 构造 = 5 / 15）
+        hit_point: u8,
+        speed_point: u8,
         drop_list: Vec<MonsterDropItem>,
     },
 }
@@ -67,7 +70,8 @@ pub struct TickRecord {
     pub aoi_order: Vec<i32>,
     /// 本 tick 的攻击结算（对拍用）
     pub attacks: Vec<(i32, i32, AttackOutcome)>,
-    /// 本 tick 的死亡结算：`(死者 id, 掉落物品数, 金币, 击杀者, 获得经验)`
+    /// 本 tick 的死亡结算：`(死者 id, 掉落物品数, 金币, 经验归属者, 获得经验)`
+    /// —— 归属者取 C# `ExpHitter`（不是 `LastHiter`），见 `Entity::exp_hitter`
     pub deaths: Vec<(i32, usize, i32, Option<i32>, i32)>,
 }
 
@@ -245,10 +249,25 @@ impl World {
                     dc,
                     ac,
                     undead,
+                    hit_point,
+                    speed_point,
                     drop_list,
                 } => {
                     let ok = self.spawn_monster_now(
-                        id, &name, x, y, map_id, level, exp, hp, dc, ac, undead, &drop_list,
+                        id,
+                        &name,
+                        x,
+                        y,
+                        map_id,
+                        level,
+                        exp,
+                        hp,
+                        dc,
+                        ac,
+                        undead,
+                        hit_point,
+                        speed_point,
+                        &drop_list,
                     );
                     record.processed.push((id, ok));
                 }
@@ -370,6 +389,8 @@ impl World {
         dc: u16,
         ac: u16,
         undead: u8,
+        hit_point: u8,
+        speed_point: u8,
         drop_list: &[MonsterDropItem],
     ) -> bool {
         if map_id >= self.maps.len() {
@@ -403,6 +424,8 @@ impl World {
             dc,
             ac,
             undead,
+            hit_point,
+            speed_point,
         });
         e.id = id;
         e.map_id = map_id;
@@ -424,15 +447,14 @@ impl World {
             let Some(e) = self.entities.get(id) else {
                 continue;
             };
-            let (x, y, map_id, gold, items, mon_exp, level, killer) = (
+            let (x, y, map_id, gold, items, mon_exp, exp_hitter) = (
                 e.x,
                 e.y,
                 e.map_id,
                 e.gold,
                 e.drop_items.clone(),
                 e.mon_exp,
-                e.level,
-                e.last_hiter,
+                e.exp_hitter,
             );
             // 死亡标记（C# `Die()` 的 `Death = true`）
             if let Some(e) = self.entities.get_mut(id) {
@@ -458,25 +480,29 @@ impl World {
                     placed += 1;
                 }
             }
-            // 经验：击杀者是玩家才发（C# `KillTargetTrigger` 由玩家侧调用）
+            // 经验：`KillFunc`（`BaseObject.cs:2429`）认的是 `ExpHitter`，不是 `LastHiter`
+            // —— `ExpHitter` 是**第一个**命中者（`SetLastHiter` 里 `if (ExpHitter == null)`），
+            // 且命中者**死亡/隐身后不再认领**（`BaseObject.Base.cs:119-132` 在命中者自己的 `Run()` 里
+            // 清 `ExpHitter`；本骨架在 tick 结算点做同一判定，语义等价——下面的 `!k.death` 即此）。
+            // 子集口径：只做"归属者是玩家本人"这一支；`ExpHitter.Master != null`（宝宝击杀）不在本骨架；
+            // 30s（`LastHiter`）/ 6s（`ExpHitter`）的**墙钟**过期也不做（本骨架不读墙钟）。
             let mut gained = 0;
-            if let Some(killer_id) = killer {
+            if let Some(hitter_id) = exp_hitter {
                 let is_player = self
                     .entities
-                    .get(killer_id)
+                    .get(hitter_id)
                     .is_some_and(|k| k.race == crate::entity::ACTOR_RACE_PLAY && !k.death);
                 if is_player {
                     let need_exps = std::mem::take(&mut self.need_exps);
                     let cfg = self.combat_config;
-                    if let Some(k) = self.entities.get_mut(killer_id) {
-                        let (g, _, _) =
-                            award_kill_exp(k, i32::from(level), mon_exp, &need_exps, &cfg);
+                    if let Some(k) = self.entities.get_mut(hitter_id) {
+                        let (g, _, _) = award_kill_exp(k, mon_exp, &need_exps, &cfg);
                         gained = g;
                     }
                     self.need_exps = need_exps;
                 }
             }
-            record.deaths.push((id, placed, gold, killer, gained));
+            record.deaths.push((id, placed, gold, exp_hitter, gained));
         }
     }
 
@@ -508,14 +534,28 @@ impl World {
         // 取出双方属性做结算（避免同时可变借用），再写回
         let mut attacker = self.entities.get(actor_id)?.clone();
         let mut target = self.entities.get(target_id)?.clone();
+        // `StruckDamage` 的倍率取目标**当下存着**的 `LastHiter`（= 上一次命中者：本次命中者要等
+        // 目标下一轮 `Run()` 处理 `RM_STRUCK` 才登记）。默认倍率 10 时数值不可分辨，非默认配置下
+        // 才有差异 ⇒ 必须照 oracle 取，别改成本次攻击者。
+        let last_hitter = target
+            .last_hiter
+            .and_then(|id| self.entities.get(id))
+            .map(|h| crate::combat::LastHitter {
+                race: h.race,
+                job: h.job,
+                has_master: h.master.is_some(),
+            });
         let cfg = self.combat_config;
-        let outcome = attack(&mut self.rng, &mut attacker, &mut target, &cfg);
-        if let Some(e) = self.entities.get_mut(actor_id) {
-            e.last_hiter = attacker.last_hiter;
-        }
+        let outcome = attack(&mut self.rng, &mut attacker, &mut target, last_hitter, &cfg);
         if let Some(e) = self.entities.get_mut(target_id) {
             e.hp = target.hp;
-            e.last_hiter = target.last_hiter;
+            // 命中者登记的**折叠**：C# 在 `_Attack` 里对 `Race > ActorRace.Play` 的目标
+            // `SendMsg(RM_STRUCK)`（`BaseObject.Attack.cs:61-64`），由目标在自己的 `Run()` 里
+            // `SetLastHiter(攻击方)`（`AnimalObject.cs:118-124`）。这里在结算之后立刻登记：
+            // 本次 `_Attack` 期间的 `StruckDamage` 仍看到旧的 `LastHiter`，与 C# 同序。
+            if target.race > crate::entity::ACTOR_RACE_PLAY {
+                e.set_last_hiter(actor_id);
+            }
         }
         Some(outcome)
     }
@@ -750,6 +790,8 @@ mod tests {
                 dc: 1,
                 ac: 0,
                 undead: 0,
+                hit_point: 5,
+                speed_point: 15,
                 drop_list: vec![],
             });
             w.tick();
@@ -789,6 +831,8 @@ mod tests {
             dc: 1,
             ac: 0,
             undead: 0,
+            hit_point: 5,
+            speed_point: 15,
             drop_list: vec![mir2_data::models::MonsterDropItem {
                 sel_point: 9,
                 max_point: 10,

@@ -88,6 +88,10 @@ pub struct Entity {
     pub undead_power: i32,
     /// `LastHiter`（最后一击者 `ActorId`）
     pub last_hiter: Option<i32>,
+    /// C# `ExpHitter`（经验归属者 `ActorId`）——由 `SetLastHiter` 设置：
+    /// **第一个**命中者粘住不放（`BaseObject.cs:1753` 的 `if (ExpHitter == null)`），
+    /// 死亡时 `KillFunc()`（`BaseObject.cs:2429`）把经验发给它，而不是 `LastHiter`。
+    pub exp_hitter: Option<i32>,
     /// 掉落预算里的金币（`mon.Gold`）
     pub gold: i32,
     /// 掉落预算里的物品（`mon.ItemList`，生成时算好、死亡时落地）
@@ -134,9 +138,21 @@ impl Entity {
             max_exp: 0,
             undead_power: 0,
             last_hiter: None,
+            exp_hitter: None,
             gold: 0,
             drop_items: Vec::new(),
             death_settled: false,
+        }
+    }
+
+    /// C# `BaseObject.SetLastHiter`（`BaseObject.cs:1753`）。
+    ///
+    /// `LastHiter` 每次都刷新；`ExpHitter` **只在为空时**才认领（第一个命中者粘住），
+    /// 之后只有同一个命中者再次命中才会续期（本骨架不做 6 秒过期，见 `world.rs` 说明）。
+    pub fn set_last_hiter(&mut self, hitter: i32) {
+        self.last_hiter = Some(hitter);
+        if self.exp_hitter.is_none() {
+            self.exp_hitter = Some(hitter);
         }
     }
 }
