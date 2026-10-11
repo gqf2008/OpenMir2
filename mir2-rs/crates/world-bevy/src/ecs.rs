@@ -9,7 +9,7 @@
 //! 两处均有隔离微基准与 A/B 证据（见 `tests/parity/world/S2调优报告.md`）。
 //!
 //! 形态：用 [`bevy_ecs::world::World`] 承载实体/组件，用本结构**自己的槽位索引**
-//! （`slots` / `slot_keys`）决定遍历与处理顺序。
+//! （`slots` / `free` / `index`）决定遍历与处理顺序。
 //!
 //! ## 四条硬约束怎么落实（设计文档 §4.2.2）
 //!
@@ -17,8 +17,9 @@
 //!    [`bevy_ecs::schedule::SingleThreadedExecutor`]）；
 //! 2. **遍历顺序显式化**：`EcsStore` **一次都不迭代 `Query` 求顺序**——`iter` / `iter_mut` /
 //!    `order_index` 全部走 `slots`（槽位顺序 = 插入顺序 + 空闲槽复用）。`Query`（或 `World::get`）
-//!    只用于「按显式句柄取组件」。这一点由 `tests/ecs_kernel.rs::order_follows_slots_not_query_order`
-//!    钉住（把 `order_index()` 改回迭代 `Query` 立刻红）。
+//!    只用于「按显式句柄取组件」。这一点由内核单测 `src/ecs.rs::tests::
+//!    order_follows_slots_not_query_order` 与 `crates/world/tests/ecs_migration.rs::
+//!    entity_order_follows_slots_not_query_order` 双重钉住（把顺序改回迭代 `Query` 立刻红）。
 //! 3. **守卫升级**：`crates/world/tests/no_parallel.rs` 的白名单放宽为
 //!    「内部 crate + `bevy_ecs`/`bevy_app`」，仍禁 rayon/crossbeam/`bevy_tasks` 并行/`thread::spawn`；
 //! 4. **原判据不降级**：内核对外只暴露与既有 `EntityStore` 同形的语义（槽位顺序、空闲槽复用、
@@ -40,8 +41,8 @@ use bevy_ecs::world::World;
 #[derive(Resource, Debug, Clone, Default, PartialEq, Eq)]
 pub struct SlotOrder(pub Vec<Entity>);
 
-/// **id → 槽位索引**（S2 调优）：把热路径上的 `id→槽位` 从 SipHash `HashMap`（实测
-/// ≈3.5ns/次）换成 O(1) 数组定位（实测 ≈0.5ns/次）。
+/// **id → 槽位索引**（S2 调优）：把热路径上的 `id→槽位` 从 SipHash `HashMap`（本机
+/// `ecs_microbench` 实测 ≈5.6ns/次）换成 O(1) 数组定位（同命令实测 ≈0.4–0.5ns/次）。
 ///
 /// 形态：`id ∈ [1, DENSE_CAP]` 走 `dense` 数组（`0` 表示空，否则存 `slot+1`）；范围外
 /// （含非正 id）走 `sparse` HashMap 兜底。内存上界 `DENSE_CAP * 4B`。
@@ -128,12 +129,17 @@ pub struct EcsStore<T: Component<Mutability = Mutable>> {
     /// 为什么不是 `World::get::<T>`：后者每次调用都要用 `TypeId` 去 `Components` 里
     /// 查 `ComponentId`（一次哈希）再走 `entity → archetype → table row`；`QueryState`
     /// 把 `ComponentId`/表列解析缓存在 `fetch_state` 里，`get_manual` 是纯 O(1) 指针定位。
-    /// 实测（`crates/world/tests/_probe.rs` 的临时探针）：`World::get::<Entity>` ≈ 5.7ns，
-    /// `QueryState::get_manual` ≈ 2.8ns；AOI 每 tick 要做约 10 万次 `get`，即此处是回归主因。
+    /// 可复现的隔离微基准：`cargo run -p mir2-world-bevy --release --bin ecs_microbench`
+    ///（本机 2026-10-11 release 三次：`World::get::<T>` ≈5.4–5.9ns vs `QueryState::get_manual`
+    /// ≈3.4–3.5ns）；AOI 每 tick 要做约 10 万次 `get`，即此处是 S1 回归的主因。
     read_state: QueryState<&'static T>,
     /// **缓存 `&mut T` 查询状态**：`get_mut` 走 [`QueryState::get_mut`]（同样省掉 `TypeId` 查表）。
     write_state: QueryState<&'static mut T>,
-    /// `iter_mut` 的「实体 → 槽位」序（`order_dirty` 时才重建，避免每次调用建表+排序）。
+    /// **缓存 `(Entity, &mut T)` 查询状态**（S2 调优）：`iter_mut` 不再每次调用 `world.query`。
+    /// `Query` 只用于「安全拿到全部互斥引用」，不决定顺序（顺序仍按 [`Self::order_map`] 排）。
+    pairs_state: QueryState<(Entity, &'static mut T)>,
+    /// `iter_mut` 的「实体 → 槽位」序：只在槽位表变动（`order_dirty`）时重建一次，
+    /// 不再每次调用都建 `HashMap`（每次调用仍需一次按槽位序的原地排序）。
     order_map: HashMap<Entity, usize>,
     order_dirty: bool,
     _marker: std::marker::PhantomData<fn() -> T>,
@@ -159,10 +165,11 @@ impl<T: Component<Mutability = Mutable>> std::fmt::Debug for EcsStore<T> {
 impl<T: Component<Mutability = Mutable>> EcsStore<T> {
     pub fn new() -> Self {
         let mut world = World::new();
-        // 两个查询状态各自缓存 `T` 的 `ComponentId`/表列；它们只在本结构里串行使用，
+        // 三个查询状态各自缓存 `T` 的 `ComponentId`/表列；它们只在本结构里串行使用，
         // 不同时跑，因此读写访问集不冲突（也绝不放进同一个 Schedule 并行）。
         let read_state = world.query::<&T>();
         let write_state = world.query::<&mut T>();
+        let pairs_state = world.query::<(Entity, &mut T)>();
         EcsStore {
             world,
             slots: Vec::new(),
@@ -171,8 +178,9 @@ impl<T: Component<Mutability = Mutable>> EcsStore<T> {
             next_id: 1,
             read_state,
             write_state,
+            pairs_state,
             order_map: HashMap::new(),
-            order_dirty: false,
+            order_dirty: true,
             _marker: std::marker::PhantomData,
         }
     }
@@ -213,6 +221,7 @@ impl<T: Component<Mutability = Mutable>> EcsStore<T> {
         // 插入时创建；之后同组件集的 spawn 复用同一 archetype）。`remove` 同理兜底。
         self.read_state.update_archetypes(&self.world);
         self.write_state.update_archetypes(&self.world);
+        self.pairs_state.update_archetypes(&self.world);
         self.order_dirty = true;
         id
     }
@@ -229,6 +238,7 @@ impl<T: Component<Mutability = Mutable>> EcsStore<T> {
         }
         self.read_state.update_archetypes(&self.world);
         self.write_state.update_archetypes(&self.world);
+        self.pairs_state.update_archetypes(&self.world);
         self.order_dirty = true;
         taken
     }
@@ -265,10 +275,10 @@ impl<T: Component<Mutability = Mutable>> EcsStore<T> {
             .filter_map(move |e| self.read_state.get_manual(&self.world, e).ok())
     }
 
-    /// 按槽位顺序可变遍历（同样**不**用 `Query` 定序：先取到互斥引用，再按槽位索引排序）。
+    /// 按槽位顺序可变遍历（顺序同样来自 `slots`；`Query` 只用于「安全拿到全部互斥引用」）。
     ///
-    /// 「实体 → 槽位」序只在槽位表变动后重建一次（`order_dirty`），不再每次调用都建
-    /// `HashMap` 并排序。
+    /// S2 调优：不再「每次调用都 `world.query` 建查询 + 建 HashMap + 排序」，而是复用缓存的
+    /// [`Self::pairs_state`] / [`Self::order_map`]；`order_map` 只在槽位表变动后重建一次。
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> + '_ {
         if self.order_dirty {
             self.order_map.clear();
@@ -282,13 +292,11 @@ impl<T: Component<Mutability = Mutable>> EcsStore<T> {
         }
         // 取到所有 (Entity, &mut T)（Query 只负责「安全拿到互斥引用」），
         // 再按我们的槽位索引排序后产出 —— 顺序仍来自 slots，不来自 Query。
-        let mut pairs: Vec<(Entity, &mut T)> = {
-            let mut state = self.world.query::<(Entity, &mut T)>();
-            state
-                .iter_mut(&mut self.world)
-                .map(|(e, m)| (e, m.into_inner()))
-                .collect()
-        };
+        let mut pairs: Vec<(Entity, &mut T)> = self
+            .pairs_state
+            .iter_mut(&mut self.world)
+            .map(|(e, m)| (e, m.into_inner()))
+            .collect();
         pairs.sort_by_key(|(e, _)| self.order_map.get(e).copied().unwrap_or(usize::MAX));
         pairs.into_iter().map(|(_, v)| v)
     }
