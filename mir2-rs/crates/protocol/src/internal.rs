@@ -16,6 +16,13 @@
 //! [data: i32 字节数][bytes]
 //! ```
 //!
+//! **null 字段（实测，2026-10-11）**：MemoryPack 对 `string`/`byte[]` 的 `null` 编码成长度
+//! `-1`（0 才是空）。C# `LoginGate.ClientManager.ProcessClientHeart` 发的 10s 心跳正是
+//! `SocketId = string.Empty` + **`Data = null`**，线上帧字节为
+//! `9aaa9aaa0c00 | 04 03 00000000 0000 ffffffff`（由真身实测抓取）；`LoginSrv` 的
+//! `SendKeepAlivePacket` 回帧则 `SocketId`/`Data` 全为 null。解析侧把 `-1` 视作空
+//! （`""` / `[]`）；重编码侧一律写 0（空），接收方只读 `Type`，行为等价。
+//!
 //! 线上帧 = [`frame::ServerDataPacket`]（`PacketCode` = [`crate::messages::grobal2::PacketCode`]、
 //! `PacketLen` = 体长度）+ 体。
 //!
@@ -147,7 +154,12 @@ impl ServerDataMessage {
         let kind =
             ServerDataType::from_u8(take(&mut cur, 1)?[0]).ok_or(InternalError::BadType(b[1]))?;
         let n_units = i32::from_le_bytes(take(&mut cur, 4)?.try_into().unwrap());
-        let n_units = usize::try_from(n_units).map_err(|_| InternalError::Truncated)?;
+        // -1 = MemoryPack null（C# 侧 `SocketId` 可为 null）⇒ 视作空串；其它负值仍报错
+        let n_units = if n_units == -1 {
+            0
+        } else {
+            usize::try_from(n_units).map_err(|_| InternalError::Truncated)?
+        };
         let raw = take(&mut cur, n_units * 2)?;
         let mut units = Vec::with_capacity(n_units);
         for chunk in raw.as_chunks::<2>().0 {
@@ -156,7 +168,12 @@ impl ServerDataMessage {
         let socket_id = String::from_utf16(&units).map_err(|_| InternalError::BadHeader)?;
         let data_len = i16::from_le_bytes(take(&mut cur, 2)?.try_into().unwrap());
         let n_data = i32::from_le_bytes(take(&mut cur, 4)?.try_into().unwrap());
-        let n_data = usize::try_from(n_data).map_err(|_| InternalError::Truncated)?;
+        // -1 = MemoryPack null（C# 侧 `Data` 可为 null：心跳帧就是这样）⇒ 视作空数组
+        let n_data = if n_data == -1 {
+            0
+        } else {
+            usize::try_from(n_data).map_err(|_| InternalError::Truncated)?
+        };
         let data = take(&mut cur, n_data)?.to_vec();
         Ok(Self {
             kind,
@@ -278,6 +295,55 @@ mod tests {
         assert_eq!(
             ServerDataMessage::from_wire(&[0x00; 6]),
             Err(InternalError::BadHeader)
+        );
+    }
+
+    /// **null 字段**：C# `LoginGate` 的 10s 心跳真身字节（2026-10-11 从运行中的
+    /// `E:\MirServer\LoginGate\LoginGate.exe` 直抓），`SocketId=""`、`Data=null`（`-1`）。
+    /// 修前该帧被当 `Truncated` 拒绝 ⇒ 网关 30s 后判"账号服务器长时间没有响应"并断开。
+    #[test]
+    fn parses_csharp_keepalive_with_null_data() {
+        let wire = hex::decode("9aaa9aaa0c000403000000000000ffffffff").unwrap();
+        let m = ServerDataMessage::from_wire(&wire).expect("C# 心跳帧必须能解析");
+        assert_eq!(m.kind, ServerDataType::KeepAlive);
+        assert_eq!(m.socket_id, "");
+        assert_eq!(m.data_len, 0);
+        assert!(m.data.is_empty());
+        // 回帧（Rust 侧一律写"空"而非 null）必须能被同一解析器读回，且 Type 为 KeepAlive
+        let reply = ServerDataMessage {
+            kind: ServerDataType::KeepAlive,
+            socket_id: String::new(),
+            data_len: 0,
+            data: Vec::new(),
+        };
+        let back = ServerDataMessage::from_wire(&reply.to_wire()).unwrap();
+        assert_eq!(back.kind, ServerDataType::KeepAlive);
+        assert!(back.data.is_empty());
+    }
+
+    /// 破坏者自检：把 `-1`（null）改成 `-2` 仍须报错（不把非法长度静默当空）。
+    #[test]
+    fn rejects_negative_other_than_null() {
+        let wire = hex::decode("9aaa9aaa0c000403000000000000feffffff").unwrap();
+        assert_eq!(
+            ServerDataMessage::from_wire(&wire),
+            Err(InternalError::Truncated)
+        );
+    }
+
+    /// 心跳回帧的线上形状（`SocketId=""`、`Data=[]`）：体 12 字节、总 18 字节。
+    #[test]
+    fn keepalive_reply_wire_shape() {
+        let m = ServerDataMessage {
+            kind: ServerDataType::KeepAlive,
+            socket_id: String::new(),
+            data_len: 0,
+            data: Vec::new(),
+        };
+        assert_eq!(m.to_bytes().len(), 12);
+        assert_eq!(
+            hex::encode(m.to_wire()),
+            "9aaa9aaa0c00040300000000000000000000"
         );
     }
 }

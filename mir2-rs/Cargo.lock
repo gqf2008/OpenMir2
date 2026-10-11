@@ -945,6 +945,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "login-srv"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "encoding_rs",
+ "mir2-protocol",
+ "mir2-shared",
+ "mir2-storage",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "md-5"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"

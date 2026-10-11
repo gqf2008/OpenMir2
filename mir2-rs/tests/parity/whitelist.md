@@ -50,6 +50,17 @@
 | A-5 | 客户端独有号 `CM_QUERYDYNCODE = 3501`：冻结客户端在 `cnsIntro` 阶段发送（体 = `EncodeString(g_LoginKey)`，`g_LoginKey` 默认字面量 `"password"`），而服务端 `Messages.cs` 无此号 | 服务端行为＝**静默忽略、不回包**（C# `LoginSrv` 的 `ProcessUserMsg` switch 落到 default），Rust 侧同样忽略；号本身登记在 `crates/protocol::client_only`，使 M0③"未实现包号=0"可判。M0 金标准第 1 帧即此号 | 7000 跳 cnsIntro 阶段 | 客户端 `MirClient/Source/MirClient/ClMain.pas:16542`、`MShare.pas:1407` ↔ 服务端 `src/OpenMir2/Messages.cs`（无） |
 | A-4 | 同一跳（7000）存在两种 s2c 帧尾：LoginSrv 构造的帧是 `#…!$`（`ClientSession.cs:745`），LoginGate 自身产生的帧是 `#…!` ⇒ 回放/移植时**不能按端口假设帧尾**，须按帧的实际尾字节复现（`crates/protocol::ServerFrameTail`），抓包记录用 `hop`/`tail` 给出独立期望 | 7000 跳的下行帧 | `LoginSrv/Services/ClientSession.cs:745` ↔ `LoginGate/Services/ClientSession.cs:181/197` |
 
+### A2/M1 边界服务（Rust LoginGate/SelGate/LoginSrv，2026-10-11）
+
+| 编号 | 差异/偏离 | 触发条件 | 处置与依据 |
+|---|---|---|---|
+| A-10 | **协议 crate 解析容错**：`crates/protocol::internal` 原把 MemoryPack 长度 `-1`（null）当 `Truncated` 拒绝；C# 10s 心跳真身是 `SocketId=""` + `Data=null`（`9aaa9aaa0c00 0403 00000000 0000 ffffffff`，**实测抓取**），而 `LoginSrv.SendKeepAlivePacket` 的回帧 `SocketId`/`Data` 全为 null | 网关每 10s 心跳 | **已修**：解析侧把 `-1` 视作空（`""`/`[]`），其它负值仍报错；重编码侧一律写 0（空）——接收方只读 `Type`，行为等价。修前症状：Rust LoginSrv 丢弃心跳 ⇒ C# LoginGate 30s 后判「账号服务器长时间没有响应，断开链接」（且**不重连**）⇒ 整跳死掉。回归锚：`internal.rs::{parses_csharp_keepalive_with_null_data,keepalive_reply_wire_shape}` + `bins/login-srv/tests/login.rs` 的进程级心跳断言。**接口未变（无签名改动），但属 `crates/protocol` 改动 ⇒ 需通知 bins/login-gate、bins/sel-gate**（两者只发不收，不受影响） |
+| A-11 | **授权偏离（M1④）**：缺 `AddrTable.txt` / `UserLimit.txt` ⇒ Rust **启动即报错退出** | 配置文件缺件 | C# 静默继续：缺 AddrTable ⇒ 选服分支永不匹配（客户端点不动）；缺 UserLimit ⇒ `IsNotUserFull`/`GetServerStatus` 在空槽上 NRE（前者直穿消息级 catch ⇒ **客户端无响应**，静默挂起）。依据＝M1 验收④「缺配置必须明确报错退出」。`ServerAddr.txt` 缺失**不**致命（C# 侧等价于白名单为空 ⇒ 拒绝所有 5600 上连，Rust 同） |
+| A-12 | `ServerAddr.txt` 行过滤按 `!line.StartsWith(';')` | 文件含 `;` 注释行 | C# 写的是 `sLineText[i] != ';'`（用**行号**当字符下标，笔误）。现网文件无注释行 ⇒ 判定相同；按笔误复刻会引入"下标越界即抛"的另一重风险，故取直读口径 |
+| A-13 | 畸形客户端帧（非 `!` 结尾 / `#…!` 内容为空 / 裁剪后不足 `DefBlockSize=16`）⇒ **只丢弃该条** | 客户端发坏帧 | C# 在这三处都是 `return`：它退出的不是"本条"而是**整个消费循环**（`ClientSession.ProcessUserMessage` 的 `while(TryRead)` 内 `return`），此后该进程**再也不处理任何客户端消息**（永久停摆）。属 liveness 缺陷，且与 M1④「不静默空转」冲突 ⇒ Rust 侧跳过该条。正常流量不可达（现网抓包 0 例） |
+| A-14 | 账号/口令/服务名的 gb2312 域用 `encoding_rs::GBK` 近似 .NET cp936 | 非 ASCII 账号或服务名 | 与 B-105 同族：PUA 少量字节对映射、非法字节回退字符（U+FFFD vs `?`）不同。现网语料＝ASCII 明文账号 + 常用 GBK 汉字（`热血传奇`）⇒ 两侧判定相同；`AddrTable.txt`/`UserLimit.txt` 的 GBK 往返已单测锚定 |
+| A-15 | 存储层字段面沿用既有占位：`crates/storage::AccountRecord` 只覆盖 C# `GetAccount` 的读集（Account/PassWord/UserName/Quiz2） | `CM_UPDATEUSER`、找回密码 | C# `GetAccount` 的读集就是这四列（`UserEntry.Quiz/Answer`、`UserEntryAdd.BirthDay/Answer2` 在 C# 侧恒为空串）⇒ 登录/改密/找回密码的**判定与文案**一致；`UpdateAccount` 事务里 C# 另写 IdCard/Birthday/Phone/ADDRESS/EMail/Quiz 等列，属 DBSrv/D2 批次字段面（A-7 已登记"字段未冻结"），本批不涉验收路径 |
+
 协议事实（M0 已裁定并冻结，非差异）：EDCode 循环态 2→4→6→2；客户端帧 `#1...!` /
 服务端帧 `#...!`（**登录跳 s2c 例外的帧尾 `!$`，见 A-4**）；头 12B 与体分别编码后拼接；
 C# 网关无显式分帧器（按 TCP 段直读），Rust 侧 `FrameSplitter` 属传输层健壮性差异。
