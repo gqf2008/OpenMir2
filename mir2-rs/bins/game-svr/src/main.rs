@@ -39,6 +39,7 @@ mod users;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use game_svr::downlink;
 use game_svr::smframe;
 use mir2_protocol::frame::ServerMessage;
 use mir2_protocol::messages::grobal2;
@@ -485,6 +486,71 @@ fn route_to_gate<'a>(
     }
 }
 
+/// **S3 后半段（第一格）**：把世界 tick 的 AOI 结果（观察者实体 `VisibleActors` 里
+/// `VisibleFlag::Show` 的对象）翻成 `SM_TURN` + `SM_FEATURECHANGED` 回帧，
+/// 按该观察者的 `[GateIdx, Socket]` 路由回**它自己那条**网关线。
+///
+/// 顺序 = 会话表顺序（`SessionRegistry` 是 `Vec`），内层 = `VisibleActors` 列表顺序
+///（oracle `PlayObject.Run` 的 `n18` 升序）⇒ 确定性。
+///
+/// 两处「不猜」：① 自身不入帧（oracle `if (baseObject != this)`，`PlayObject.cs:3238`）；
+/// ② 展示表缺项（怪物/未登记）⇒ 跳过并记 WRN，不编造 `Dir/Light/Feature`。
+fn drain_aoi_downlink(
+    world: &mir2_world::World,
+    displays: &downlink::DisplayTable,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+) {
+    for sess in world.sessions.iter() {
+        if sess.stage != mir2_world::WorldStage::InWorld {
+            continue;
+        }
+        let Some(observer_id) = sess.actor_id else {
+            continue;
+        };
+        let Some(observer) = world.entities.get(observer_id) else {
+            continue;
+        };
+        let Some(entry) = online.iter().find(|e| e.chr_name == sess.chr_name) else {
+            glog!(
+                "WRN",
+                "同屏下行：ChrName={} 已进世界但无在线网关坐标 ⇒ 不猜线、跳过",
+                sess.chr_name
+            );
+            continue;
+        };
+        for visible in &observer.visible_actors {
+            if visible.flag != mir2_world::VisibleFlag::Show || visible.target == observer_id {
+                continue;
+            }
+            let Some(target) = world.entities.get(visible.target) else {
+                continue;
+            };
+            let Some(display) = displays.get(visible.target) else {
+                glog!(
+                    "WRN",
+                    "同屏下行：actor={} 无展示表（怪物/未登记）⇒ 跳过（登记）",
+                    visible.target
+                );
+                continue;
+            };
+            let x = u16::from_ne_bytes(i16::try_from(target.x).unwrap_or(0).to_ne_bytes());
+            let y = u16::from_ne_bytes(i16::try_from(target.y).unwrap_or(0).to_ne_bytes());
+            let bodies = downlink::turn_pair(target.id, x, y, display);
+            let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "同屏下行")
+            else {
+                continue;
+            };
+            for body in bodies {
+                let _ = tx.send(SimToGate::SendFrame {
+                    socket: entry.socket,
+                    body,
+                });
+            }
+        }
+    }
+}
+
 /// 在线用户的世界侧网关坐标（`PlayObject.GateIdx`/`SocketId` 的对应物）。
 ///
 /// 进世界成功时登记，断线/被踢时移除；重复进世界的"踢旧"与账号级顶号靠它找回旧连接。
@@ -749,6 +815,9 @@ fn sim_loop(
     // `GateIdx -> 该网关连接的 sim→gate 通道`（`NetChannel` 按 gateIdx 选连接，`TCPNetChannel.cs:221-223`）
     let mut gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>> =
         std::collections::HashMap::new();
+    // S3 后半段（第一格）：同屏 AOI 下行要用的展示表（`ActorId -> Dir/Light/Feature/…`）。
+    // 展示字段来自角色记录 + 装备（属 bins/game-svr 的读档面），**不进 `crates/world`**。
+    let mut displays = downlink::DisplayTable::new();
     glog!(
         "INF",
         "sim 线程就绪：tick={}ms，地图 {} 张（{}）",
@@ -810,6 +879,10 @@ fn sim_loop(
                     } else {
                         kick_pending.retain(|n| n != &chr_name);
                         online_take(&mut online, &chr_name);
+                        // 同屏展示表随实体一并摘除（ActorId 槽位会被内核回收复用，避免旧展示值残留）。
+                        if let Some(aid) = world.session(&chr_name).and_then(|s| s.actor_id) {
+                            displays.remove(aid);
+                        }
                         match world.disconnect(&chr_name) {
                             Ok(()) => glog!(
                                 "INF",
@@ -1152,6 +1225,54 @@ fn sim_loop(
                                                 for w in enter::apply(&mut inputs, &wx) {
                                                     glog!("WRN", "入图帧输入：{w}");
                                                 }
+                                                // S3 后半段：把 oracle 在 `SendLogon` 同轮算出的
+                                                // **展示层**字段登记进同屏下行表（`GetFeatureToLong` /
+                                                // `GetCharStatus` / `GetMyLight` / `GetShowName`）。
+                                                // `Dir` 取记录值（`ClientChangeDir` 会改它——属移动接线，登记为下一格）。
+                                                let light_pairs: Vec<(u16, u16)> = data
+                                                    .and_then(|d| d.hum_items.as_deref())
+                                                    .unwrap_or(&[])
+                                                    .iter()
+                                                    .take(downlink::USE_ITEM_SLOTS)
+                                                    .map(|cell| {
+                                                        cell.as_ref().map_or((0, 0), |it| (it.index, it.dura))
+                                                    })
+                                                    .collect();
+                                                let light = downlink::my_light(
+                                                    data.and_then(|d| d.abil.as_ref())
+                                                        .map_or(0, |a| a.level),
+                                                    &light_pairs,
+                                                    &enter_cfg.catalog,
+                                                );
+                                                if let Some(wl) = inputs.logon_body_wl {
+                                                    let show_bytes = wx.show_name.as_ref().map_or_else(
+                                                        Vec::new,
+                                                        |sn| {
+                                                            enter::gbk(&enter::show_name(
+                                                                &enter_cfg.string_conf,
+                                                                sn,
+                                                            ))
+                                                        },
+                                                    );
+                                                    displays.set(
+                                                        id,
+                                                        downlink::ActorDisplay::new(
+                                                            inputs.dir,
+                                                            light,
+                                                            wl.0,
+                                                            inputs.feature.map_or(0, |(_, fe)| fe),
+                                                            wl.1,
+                                                            enter::PLAY_NAME_COLOR,
+                                                            show_bytes,
+                                                        ),
+                                                    );
+                                                    glog!(
+                                                        "DBG",
+                                                        "同屏展示表登记：actor={id} dir={} light={light} feature={}",
+                                                        inputs.dir,
+                                                        wl.0
+                                                    );
+                                                }
                                                 // N1（reviewer-3）：按该用户的 gate_idx 路由回**它自己那条**网关线
                                                 // （与上面 KickNoData 的 `route_to_gate` 完全同构）；找不到线号记 WRN，
                                                 // 绝不 `gates.values().next()` 静默挑一个。
@@ -1228,6 +1349,8 @@ fn sim_loop(
         drain_soft_close(&mut world, &gates, &mut online, &mut soft_close_pending);
         let rec = world.tick();
         ticks += 1;
+        // S3 后半段（第一格）：世界 tick 的 AOI 结果 → `SM_TURN` + `SM_FEATURECHANGED` 回帧。
+        drain_aoi_downlink(&world, &displays, &online, &gates);
         if ticks.is_multiple_of(50) {
             glog!(
                 "DBG",
@@ -1865,6 +1988,101 @@ mod tests {
         assert!(
             !users0.find(1, 5).unwrap().in_world,
             "越界线号不得把 0 号线同号 socket 标成 in_world"
+        );
+    }
+
+    /// **S3 后半段（第一格）**：世界 tick 的 AOI `Show` ⇒ 每个观察者收到“对方”的
+    /// `SM_TURN` + `SM_FEATURECHANGED`，且**按各自的 `[GateIdx, Socket]` 路由**到对应网关线。
+    ///
+    /// 造两个玩家（gate 0/socket 901 与 gate 1/socket 902，各自有展示表）在世界里相邻，
+    /// tick 一次让 AOI 互相标 `Show`，再 drain ⇒ 两条线各收到一对帧、且 `Recog` 是**对方**的
+    /// `ActorId`（自身不入帧）。
+    ///
+    /// 红检：把 `drain_aoi_downlink` 的 `visible.target == observer_id` 过滤去掉 ⇒ 自身帧
+    /// 挤到最前，第一条 `Recog` 不再是对方 ⇒ 必红；把 `route_to_gate(gates, entry.gate_idx, …)`
+    /// 改成 `gates.values().next()` ⇒ 两条线的帧落到同一条 ⇒ 另一条断言必红。
+    #[test]
+    fn aoi_show_emits_turn_pair_routed_by_gate() {
+        use std::collections::HashMap;
+
+        let mut world = mir2_world::World::new(100, 100);
+        world.open_session("a");
+        world.open_session("b");
+        let a = world
+            .enter_map("a", mir2_world::Entity::new(0, "a", 10, 10), 0)
+            .expect("a 进图");
+        let b = world
+            .enter_map("b", mir2_world::Entity::new(0, "b", 12, 10), 0)
+            .expect("b 进图");
+        // 一个 tick 让 AOI 把彼此标 `VisibleFlag::Show`（闸道世界 tick 每轮都刷新）。
+        world.tick();
+
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            a,
+            downlink::ActorDisplay::new(3, 0, 111, 0, 0, 255, b"a".to_vec()),
+        );
+        displays.set(
+            b,
+            downlink::ActorDisplay::new(4, 1, 222, 0, 0, 255, b"b".to_vec()),
+        );
+
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "a".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: a,
+            },
+        );
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ub".into(),
+                chr_name: "b".into(),
+                session_id: 2,
+                gate_idx: 1,
+                socket: 902,
+                actor_id: b,
+            },
+        );
+
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let (tx1, mut rx1) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        gates.insert(1, tx1);
+
+        drain_aoi_downlink(&world, &displays, &online, &gates);
+
+        let collect = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| -> Vec<(i32, u16)> {
+            let mut out = Vec::new();
+            while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+                let cm = mir2_protocol::frame::CommandMessage::from_bytes(&body)
+                    .expect("SM_* body 至少 12B");
+                out.push((cm.recog, cm.ident));
+            }
+            out
+        };
+        assert_eq!(
+            collect(&mut rx0),
+            vec![
+                (b, mir2_protocol::messages::SM_TURN),
+                (b, mir2_protocol::messages::SM_FEATURECHANGED),
+            ],
+            "gate0（a 的线）应只收到 b 的一对帧（自身不入帧）"
+        );
+        assert_eq!(
+            collect(&mut rx1),
+            vec![
+                (a, mir2_protocol::messages::SM_TURN),
+                (a, mir2_protocol::messages::SM_FEATURECHANGED),
+            ],
+            "gate1（b 的线）应只收到 a 的一对帧（按 GateIdx 路由）"
         );
     }
 
