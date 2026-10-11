@@ -32,13 +32,20 @@ fn free_port() -> u16 {
     l.local_addr().unwrap().port()
 }
 
-fn write_conf(dir: &std::path::Path, port: u16, check_block: usize, ids_port: u16, db_port: u16) {
+fn write_conf(
+    dir: &std::path::Path,
+    port: u16,
+    check_block: usize,
+    ids_port: u16,
+    db_port: u16,
+    world_maps: &str,
+) {
     std::fs::create_dir_all(dir).unwrap();
     std::fs::write(
         dir.join("Server.conf"),
         format!(
             "[Server]\nDBPort=6000\nCheckBlock={check_block}\nGateAddr= 127.0.0.1\n\
-             GatePort={port}\nIDSAddr= 127.0.0.1\nIDSPort={ids_port}\nDBAddr=127.0.0.1\nDBPort={db_port}\nWorldMaps=64x64\n"
+             GatePort={port}\nIDSAddr= 127.0.0.1\nIDSPort={ids_port}\nDBAddr=127.0.0.1\nDBPort={db_port}\nWorldMaps={world_maps}\n"
         ),
     )
     .unwrap();
@@ -91,8 +98,19 @@ struct Child {
 
 impl Child {
     fn spawn(port: u16, check_block: usize, ids_port: u16, db_port: u16, tag: &str) -> Self {
+        Self::spawn_maps(port, check_block, ids_port, db_port, tag, "64x64")
+    }
+
+    fn spawn_maps(
+        port: u16,
+        check_block: usize,
+        ids_port: u16,
+        db_port: u16,
+        tag: &str,
+        world_maps: &str,
+    ) -> Self {
         let dir = std::env::temp_dir().join(format!("gs-{tag}-{}-{port}", std::process::id()));
-        write_conf(&dir, port, check_block, ids_port, db_port);
+        write_conf(&dir, port, check_block, ids_port, db_port, world_maps);
         let log = dir.join("server.out.log");
         let out = std::fs::File::create(&log).unwrap();
         let err = out.try_clone().unwrap();
@@ -683,6 +701,171 @@ async fn db_reply_with_player_data_enters_world_and_unlocks_commands() {
     assert!(
         !log.contains("已认证未进世界"),
         "进世界后不得再走空转丢帧那条；日志实得：{log}"
+    );
+    child.stop().await;
+}
+
+/// **判据（S2b-4 续：进世界帧经网关下发，生产路径）**：假 DBSvr 回一份**坐标/地图与 M0 金标准一致**
+/// 的角色记录（`CurMap="0"` / `CurX=287` / `CurY=618`）⇒ 进世界后 GameSvr 经该用户的网关线
+/// 下发 `SM_NEWMAP`；假网关收到的 `GM_DATA` body 过**生产编码层** `game_svr::smframe::client_frame`
+/// （= oracle `ClientSession.cs:897-920` 的 `'#' + Encode(头12B) + 尾 + '!'`）后，
+/// 必须与金标准 #2 的原始线缆字节**逐字节相等**。
+///
+/// 唯一归一化：`Recog` = `ActorId`（oracle `ActorMgr.GetNextIdentity()` 的随机正数；
+/// 本仓世界实体 id 不可能等于金标准的 `0x7c303998`）。归一化只改这 4 字节，其余全字节对拍。
+async fn wait_gm_data(gate: &mut TcpStream) -> (ServerMessage, Vec<u8>) {
+    tokio::time::timeout(Duration::from_secs(6), async {
+        loop {
+            let (m, body) = recv_frame(gate).await.expect("连接不该断");
+            if m.ident == u16::from(grobal2::GM_DATA) {
+                return (m, body);
+            }
+        }
+    })
+    .await
+    .expect("6s 内应收到 GM_DATA（入图帧）")
+}
+
+#[tokio::test]
+async fn enter_world_emits_sm_newmap_byte_equal_to_golden() {
+    use game_svr::smframe;
+    const ORACLE_LOGIN_BODY: &str = "23305e5e3c716f6d446f6e6f5478615f3c786e61497b5f623f5f6162586b6062586b61625a675f615a5f60605a6b60615a6a62603f6b6060586b6060586b6060586b6060586b6060586b6060586b6060586b6060586b6060586b6060586b5f603f21";
+    // 金标准 `capture.jsonl`（7200/s2c）第 2 条的原始客户端线缆字节（含 `#`/`!`）。
+    const G_NEWMAP: &str = "23486158617063685f6b65426f6664686b603f21";
+    // 金标准会话的 `ActorId`（归一化目标）。
+    const G_ACTOR_ID: i32 = 0x7c30_3998;
+
+    // 角色记录头部：到 Dir 为止；坐标/地图取金标准的输入值。
+    fn player_data_head(cur_map: &str, x: i16, y: i16) -> Vec<u8> {
+        fn s(v: &str) -> Vec<u8> {
+            let mut o = i32::try_from(v.chars().count())
+                .unwrap()
+                .to_le_bytes()
+                .to_vec();
+            for c in v.chars() {
+                let mut b = [0u16; 2];
+                for u in c.encode_utf16(&mut b) {
+                    o.extend_from_slice(&u.to_le_bytes());
+                }
+            }
+            o
+        }
+        let mut o = vec![2u8];
+        o.extend_from_slice(&s("lb1a"));
+        o.push(2);
+        o.push(7);
+        o.extend_from_slice(&s("loadbot1"));
+        o.extend_from_slice(&s("lb1a"));
+        o.extend_from_slice(&5i32.to_le_bytes());
+        o.extend_from_slice(&1.5f64.to_le_bytes());
+        o.push(0);
+        o.extend_from_slice(&2.5f64.to_le_bytes());
+        o.extend_from_slice(&3.5f64.to_le_bytes());
+        o.push(52);
+        o.push(1);
+        o.extend_from_slice(&s("lb1a"));
+        o.extend_from_slice(&s(cur_map));
+        o.extend_from_slice(&x.to_le_bytes());
+        o.extend_from_slice(&y.to_le_bytes());
+        o.push(3);
+        o
+    }
+
+    fn reply_frame(query_id: i32, packet: &[u8]) -> Vec<u8> {
+        use mir2_protocol::edcode;
+        let mut msg = vec![5u8];
+        msg.extend_from_slice(&1i32.to_le_bytes());
+        msg.extend_from_slice(&1100u16.to_le_bytes());
+        msg.extend_from_slice(&[0u8; 6]);
+        let m = edcode::encode(&msg);
+        let p = edcode::encode(packet);
+        let n_len = m.len() + p.len() + 6;
+        let sign_id = (u32::from(u16::try_from(n_len).unwrap()) << 16)
+            | u32::from(u16::try_from(query_id ^ 170).unwrap());
+        let sgn = edcode::encode(&sign_id.to_le_bytes());
+        let mut body = vec![4u8];
+        body.extend_from_slice(&query_id.to_le_bytes());
+        for part in [&m, &p, &sgn] {
+            body.extend_from_slice(&i32::try_from(part.len()).unwrap().to_le_bytes());
+            body.extend_from_slice(part);
+        }
+        let mut frame = 0xAA9A_AA9Au32.to_le_bytes().to_vec();
+        frame.extend_from_slice(&u16::try_from(body.len()).unwrap().to_le_bytes());
+        frame.extend_from_slice(&body);
+        frame
+    }
+
+    let dbsrv = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let db_port = dbsrv.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let (mut s, _) = dbsrv.accept().await.unwrap();
+        let mut buf = vec![0u8; 512];
+        let _ = tokio::io::AsyncReadExt::read(&mut s, &mut buf).await;
+        // 金标准入图坐标：CurMap="0" / (287, 618) / Dir=3
+        let frame = reply_frame(1, &player_data_head("0", 287, 618));
+        let _ = tokio::io::AsyncWriteExt::write_all(&mut s, &frame).await;
+        tokio::time::sleep(Duration::from_secs(6)).await;
+    });
+    let ids = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let ids_port = ids.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        if let Ok((mut s, _)) = ids.accept().await {
+            let _ =
+                tokio::io::AsyncWriteExt::write_all(&mut s, b"(100/loadbot1/2/0/1/127.0.0.1/3600)")
+                    .await;
+            tokio::time::sleep(Duration::from_secs(8)).await;
+        }
+    });
+    let port = free_port();
+    // 金标准坐标 (287,618) 必须落在占位地图内（真地图属 `openmir2-m2-map-loading`）
+    let child = Child::spawn_maps(port, 12288, ids_port, db_port, "enterworld", "1024x1024");
+    let mut gate = connect_with_retry(port).await;
+    gate.write_all(&frame(grobal2::GM_OPEN, 901, 222, 0, b"127.0.0.1"))
+        .await
+        .unwrap();
+    let (m, _) = recv_frame(&mut gate).await.unwrap();
+    assert_eq!(m.session_index, 1);
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    gate.write_all(&frame(
+        grobal2::GM_DATA,
+        901,
+        222,
+        1,
+        &hex(ORACLE_LOGIN_BODY),
+    ))
+    .await
+    .unwrap();
+
+    let (dm, body) = wait_gm_data(&mut gate).await;
+    assert_eq!(dm.socket, 901, "GM_DATA 的 Socket 必须是该用户的 SocketId");
+    assert_eq!(dm.session_id, 222, "SessionId 必须是该网关会话的");
+    // body = 12B 命令头 + 尾
+    assert_eq!(
+        &body[4..6],
+        &51u16.to_le_bytes(),
+        "ident 必须是 SM_NEWMAP(51)"
+    );
+    assert_eq!(u16::from_le_bytes([body[6], body[7]]), 287, "CurrX");
+    assert_eq!(u16::from_le_bytes([body[8], body[9]]), 618, "CurrY");
+    assert_eq!(u16::from_le_bytes([body[10], body[11]]), 0, "DayBright");
+    assert_eq!(&body[12..], b"\x60\x3f", "尾 = EncodeString(\"0\")");
+
+    // 归一化 Recog=ActorId 后过生产编码层，与金标准逐字节比。
+    let mut normalized = body.clone();
+    normalized[0..4].copy_from_slice(&G_ACTOR_ID.to_le_bytes());
+    assert_eq!(
+        smframe::client_frame(&normalized),
+        hex(G_NEWMAP),
+        "进世界首帧（SM_NEWMAP）过网关变换后必须逐字节等于金标准 #2"
+    );
+    let log = child.stdout();
+    assert!(
+        log.contains("进世界 ChrName:lb1a CurMap:0 (287,618) Dir:3"),
+        "必须按金标准坐标进世界；日志实得：{log}"
+    );
+    assert!(
+        log.contains("进世界帧下发：socket=901"),
+        "必须走生产路径下发入图帧；日志实得：{log}"
     );
     child.stop().await;
 }
