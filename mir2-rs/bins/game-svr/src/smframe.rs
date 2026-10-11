@@ -27,9 +27,10 @@
 //! **仍缺的运行时输入**（编码层可判，生产路径还取不到；登记在卡，由对应车道补）：
 //! - 真地图：`54` 的 `Envir.MapDesc`、`51/46` 的 `DayBright()`、`766` 的地图 Flag（`openmir2-m2-map-loading`）；
 //! - 玩家记录字段：`52` 的 `WAbil`、`752` 的 HitPoint/AntiMagic…、`41/50` 的 `GetFeatureToLong`、`52` 的 Gold/GameGold（`openmir2-m2-record-fields`）；
-//! - 服务器配置：`11029` 的 `ClientConf`、`658` 的公告、`5008` 的元宝/金币名、`811` 的三段能力模板（配置层）。
+//! - 服务器配置：`11029` 的 `ClientConf`、`5008` 的元宝/金币名、`811` 的三段能力模板（配置层）。
+//!   （`658` 的公告已在本片接线，见 `notice.rs`；不再是缺输入项。）
 //!
-//! 生产路径当前只下发了输入齐备的 `SM_NEWMAP`（`enter_world_first_frames`，见 `main.rs`）；
+//! 生产路径当前下发 `658`（公告，见 `notice.rs`）+ 输入齐备的 `SM_NEWMAP`（见 `main.rs`）；
 //! 其余帧由 [`EnterWorldInputs::frames`] 在输入补齐后按同一顺序产出。
 
 use mir2_protocol::{edcode, messages};
@@ -169,8 +170,8 @@ pub fn sm_version_fail(client_file1_crc: i32, client_file2_crc: i32) -> Vec<u8> 
 
 /// `SM_SENDNOTICE`（`PlayObject.cs:1064-1076` 的 `SendNotice`）：
 /// `SendDefMessage(SM_SENDNOTICE, 2000, 0, 0, 0, sNoticeMsg)` ⇒ `Recog` **恒 2000**，
-/// 尾 = `EncodeString(公告文本)`（文本由 `M2Share.NoticeMgr.GetNoticeMsg` 读出，逐行以 `\x20\x1B` 相连；
-/// 这里收文本原文，来源属配置层，登记）。
+/// 尾 = `EncodeString(公告文本)`（文本由 `M2Share.NoticeMgr.GetNoticeMsg` 读出，逐行以
+/// `\x20\x1B\x1B` 相连且**最后一行后也跟一个分隔符**；加载口径见 `notice.rs`）。
 #[must_use]
 pub fn sm_sendnotice(notice: &[u8]) -> Vec<u8> {
     let header = command_header(2000, messages::SM_SENDNOTICE, 0, 0, 0);

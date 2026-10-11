@@ -227,8 +227,9 @@ MySQL 3306 不可达 / 缺快照抽取件 ⇒ exit 2；任一路径 diff != 0 �
 「ident 序相等 + 16 条 `client_frame` 逐字节相等」（长度自然相等）。
 `s2c_diff.py --upto-ident 10` 就是这条判据在**整栈验收**时的同一口径。
 
-**生产路径**目前只下发输入齐备的 `SM_NEWMAP`（`main.rs` 进世界后经 `gate_idx` 路由）；
-其余 15 条由 `EnterWorldInputs` 的 `Option` 字段留空 ⇒ 不产出（**登记，不猜字节**）。
+**生产路径**已下发 **658**（公告，本片新接）+ **51**（`SM_NEWMAP`）；其余 14 条由 `EnterWorldInputs`
+的 `Option` 字段留空 ⇒ 不产出（**登记，不猜字节**，逐条见 §5.1 与本片新增台账
+`docs/M2顺序判据②-对账台账.md`）。
 
 ### 5.1 其余入图帧「缺哪个输入 / 由哪张卡提供 / 还差哪一步」
 
@@ -238,7 +239,7 @@ MySQL 3306 不可达 / 缺快照抽取件 ⇒ exit 2；任一路径 diff != 0 �
 
 | ident | 帧 | 缺的运行时输入 | 由哪张卡提供 | 还差哪一步（2026-10-11 重判） |
 | --- | --- | --- | --- | --- |
-| 658 | `SM_SENDNOTICE` | 公告文本（`NoticeMgr.GetNoticeMsg`） | 配置层（未开卡） | 读 Envir/Notice 文本并接入公告管理器 |
+| 658 | `SM_SENDNOTICE` | 公告文本（`NoticeMgr.GetNoticeMsg`） | ✅ 配置层（本片接） | **已接线**：`notice.rs` 读 `<base>/<NoticeDir>/Notice.txt`、按 `ReadLine` 切行 + `\x20\x1B\x1B` 连接（金标准 #1 尾巴 320B 锚定）；`[Share] NoticeDir`（缺省 `Notice`）入 `config.rs`；`main.rs` 进世界时放入 `EnterWorldInputs.notice`。**红检**：分隔符改 2B ⇒ `notice_roundtrip_matches_golden_658_tail` 必红 |
 | 51 | `SM_NEWMAP` | ✅ 逻辑名+坐标（记录）；`map_id`/尺寸 ✅（envir）；**`DayBright()`** | `Env.Flag`（envir **未解析**） | envir 卡只给 cells/doors/points/尺寸/map_id，**没有 `Envir.Flag.DayLight/boDarkness`** ⇒ `DayBright()` 仍缺；占位 0 |
 | 50 | `SM_LOGON` | `MessageBodyWL=(GetFeatureToLong,CharStatus,Tag1,Tag2)` | 物品/装备层（未开卡）+ world | `GetFeatureToLong` 要 `UseItems[Dress/Weapon]` 的 `StdItem.Shape`（`PlayObject.cs:3395`）⇒ 需物品系统 |
 | 41 | `SM_FEATURECHANGED` | `GetFeatureToLong()` | 同上 | 同 50 |
@@ -259,7 +260,8 @@ MySQL 3306 不可达 / 缺快照抽取件 ⇒ exit 2；任一路径 diff != 0 �
 > 1. `crates/envir` **只解析格属性/门/点位/尺寸/`map_id`**，**没有** `Envir.Flag`（`FightZone/SafeArea/DayLight/boDarkness/Music/MusicId`）与 `MapDesc` 的语义 —— 帧 `51/766/54/46` 卡在这里；要么给 envir 补 `MapInfo` Flag 解析（触及 `crates/envir/**`，本片禁改），要么新开卡。
 > 2. `record.rs` 全字段已入库，但**没有公开的 `Ability` 编码**（只有私有 `encode_opt_ability`）—— 帧 `52/752` 卡在这里（`EncodeMessage` 需「序列化后丢首字节」的半开区间口径）。
 >    **2026-10-11 后续**：本片已补上公开 `record::encode_ability`（金标准 #12 逐字节锚定）⇒ **52 的输入接缝已解除**；752 另需 world 侧 `RecalcAbilitys` 产出（见上表）。
-> 表中「配置层」（`658/11029/1106/5008/811`）尚无独立卡：需要在 M2 后续切片里开卡，或评估归并。
+> 表中「配置层」（`11029/1106/5008/811`）尚无独立卡：需要在 M2 后续切片里开卡，或评估归并。
+> `658` 已在本片接线（`notice.rs` + `[Share] NoticeDir`），不再是阻塞项。
 
 ### 5.2 本片接线：`CurMap`（逻辑名）→ `map_id` + 真地图尺寸（集成点 ④）
 
@@ -297,7 +299,7 @@ MySQL 3306 不可达 / 缺快照抽取件 ⇒ exit 2；任一路径 diff != 0 �
   出现“有攻击模式、无登录帧”的半组，比不下发更坏），登记为**整组就绪后再发**。
 - `SM_ABILITY(52)`/`SM_SUBABILITY(752)` 在 oracle 由 `RM_ABILITY`/`RM_LEVELUP` 触发（`PlayObject.Message.cs:1673/1732`）；
   52 的记录输入与编码接缝已齐，但触发点属 S3 世界事件接线；752 还缺 world 侧状态。
-- 因此本片**不改生产路径的下发集合**（仍只有 `SM_NEWMAP(51)`）；`EnterWorldInputs::frames()` 的 16 条
+- 因此本片**只新增 658 一条**（公告，配置层输入已就绪）；`51` 早先已在生产集合内。`EnterWorldInputs::frames()` 的 16 条
   顺序判据是编码层判据，生产覆盖率按“组”推进。
 
 > 结论口径：**“已合入/已备输入”不是接口“已下发”**。以后每接一帧，都要先确认它所在的
