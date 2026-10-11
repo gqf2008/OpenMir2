@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>skill-probe</AssemblyName>
+    <RootNamespace>SkillProbe</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    M3 技能线（卡 openmir2-m3-combat-skills-align）第一片：oracle 实测向量生成器。
+    引用**真身**（同一份 src/M2Server），用**真魔表**（sql/mir2_data.sql 的 magics 行，
+    口径 = MySqlDB.LoadMagicDB）作输入，调用 oracle 的公开技能公式入口：
+      - MagicBase.MPow / GetPower / GetPower13 / GetRPow（`src/M2Server/Magic/MagicBase.cs`）
+      - PlayObject.GetSpellPoint（`src/M2Server/Player/PlayObject.Base.cs:1369`，protected static，反射调用）
+      - PlayObject.GetAttackPower（`src/M2Server/Actor/BaseObject.Base.cs:886`）
+      - PlayObject.IsTrainingSkill（`src/M2Server/Player/PlayObject.Attack.cs:340`）
+    产出 = mir2-rs/tests/parity/m3/skill-probe/vectors/skill_vectors.json
+          + mir2-rs/tests/parity/m3/skill-probe/vectors/skills_registry.json（未实装逐条登记）。
+
+    只读：不连 MySQL、不写任何现网文件、不发起任何 socket。
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\..\src\M2Server\M2Server.csproj" />
+  </ItemGroup>
+
+</Project>
