@@ -1,0 +1,6 @@
+NORMALIZATION {"recog": "CommandMessage.Recog = oracle ActorId（ActorMgr.GetNextIdentity() 的会话相关随机正数）"}
+GOLDEN idents(15): [658, 51, 50, 41, 213, 11029, 42, 766, 54, 5008, 1106, 52, 752, 811, 46]
+RUST   idents(15): [658, 51, 50, 41, 213, 11029, 42, 766, 54, 5008, 1106, 52, 752, 811, 46]
+WHITELISTED ident=46 field=param reviewer=openmir2-orchestrator(owner §25.3 裁决；待 owner 于卡上复核落签)
+WHITELISTED ident=46 field=raw_hex reviewer=openmir2-orchestrator(owner §25.3 裁决；待 owner 于卡上复核落签)
+GREEN: 同序列逐字节 diff = 0（归一化仅 recog）

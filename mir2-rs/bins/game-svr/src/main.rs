@@ -360,6 +360,7 @@ async fn main() -> Result<()> {
                         can_drop_price: cfg.can_drop_price,
                         drop_item_rage: cfg.drop_item_rage,
                     },
+                    ref_msg_range: i32::from(cfg.send_ref_msg_range),
                 },
                 notice,
                 colors,
@@ -698,6 +699,255 @@ fn handle_ground_cmd(
     }
 }
 
+/// `CM_TAKEONITEM`(1003) / `CM_TAKEOFFITEM`(1004) 的派发（owner `f4a1b02f` 的 **N-1 调用点接线**）。
+///
+/// 口径：纯判定/状态迁移在 `bag::take_on`/`bag::take_off`（m3bag 交付，逐字段对 oracle
+/// `bag_vectors.json`）；本函数只负责「找会话 → 装 `EquipState`/`TakeOnContext` → 调用 →
+/// 重算 → 按 `[GateIdx,Socket]` 回帧」。
+///
+/// **T-18 调用点接线（本片重点）**：oracle 的成功分支会再调 `RecalcAbilitys()`
+///（`PlayObject.Operate.cs:458`/`:547`），而 `RecalcAbilitys` **不重置**
+/// `PoisonRecover/HealthRecover/SpellRecover`（`BaseObject.Abil.cs:30-31`）、道士的 `HitPoint`
+/// 也不重置 ⇒ 重算必须传 **调用前的** `SubAbility`（`sg.sub`），不能用 `first_call()`，
+/// 否则线上行为等价于「首次调用」。
+///
+/// **收包字段口径**（`PlayObject.Message.cs:820-824`）：`ClientTakeOnItems((byte)processMsg.nParam2,
+/// processMsg.nParam1, processMsg.Msg)`（take-off 同形），而 12B 头里 `Recog`(b0-3) = `nParam1`、
+/// `Param`(b6-7) = `nParam2`、`Tag`(b8-9) = `nParam3`（`WorldServer.cs:820` 的
+/// `SendMsg(..., Recog, Param, Tag, ...)` + `BaseObject.Message.cs:98` 的形参序）⇒
+/// **`make_index` = `Recog`、`slot` = `Param` 的低 8 位**；`Tag` 未用（真客户端恒 0）。
+/// 佐证：冻结客户端 `ClMain.pas:7049` 的 `MakeDefaultMsg(CM_TAKEONITEM, itmindex, where, 0, 0)`。
+///
+/// **oracle 出帧顺序**：换下的旧物品 `SendAddItem`（`SM_ADDITEM`，`Operate.cs:455`/`:539`）→
+/// `SM_TAKEON_OK/FAIL`（`SM_TAKEOFF_OK/FAIL`）→ 成功重算后的 `SM_ABILITY/SM_SUBABILITY`
+/// （oracle 走普通优先级队列，下一轮 flush；本宿主在同一批直接下发，顺序一致）。
+/// 成功换装还会 `FeatureChanged()` ⇒ 向同图周围玩家（含自己）广播 `SM_FEATURECHANGED(41)`。
+#[allow(clippy::too_many_arguments)]
+fn handle_bag_cmd(
+    ident: u16,
+    recog: i32,
+    param: u16,
+    tag: u16,
+    tail: Option<&str>,
+    chr_name: &str,
+    socket: i32,
+    online: &OnlineRegistry,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    world: &mir2_world::World,
+    displays: &mut downlink::DisplayTable,
+    ref_msg_range: i32,
+) {
+    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
+        glog!(
+            "WRN",
+            "CM_TAKEON/TAKEOFF：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃"
+        );
+        return;
+    };
+    let gate_idx = entry.gate_idx;
+    let Some(sg) = sessions.get_mut(chr_name) else {
+        glog!(
+            "WRN",
+            "CM_TAKEON/TAKEOFF：ChrName={chr_name} 无会话态（未进世界/已断线）⇒ 丢弃"
+        );
+        return;
+    };
+    // C-1（reviewer-3 `5df38bad`）：`slot` 从 **`Param`**（b6-7）取，按 oracle 的 `(byte)` 低 8 位截断；
+    // `make_index` 从 **`Recog`**（b0-3）取；`Tag`（b8-9）未用。
+    let slot = (param & 0x00FF) as u8;
+    let make_index = recog;
+    let _ = tag; // oracle `nParam3` 未参与 `ClientTakeOnItems/ClientTakeOffItems`
+    let item_name = tail.unwrap_or("");
+
+    let mut state = game_svr::bag::EquipState {
+        use_items: sg.use_items.clone(),
+        item_list: sg.state.item_list.clone(),
+    };
+    // 本骨架未建模的 `TakeOnContext` 输入（无行会/城堡/交易/坐骑/自定义药品）⇒ 常量；
+    // `wabil` = **调用前**的 `WAbil`（`CheckTakeOnItems` 的腕力/负重门）。
+    let ctx = game_svr::bag::TakeOnContext {
+        catalog,
+        job: sg.equip.job,
+        gender: sg.equip.gender,
+        hair: sg.equip.hair,
+        abil_level: sg.equip.abil.level,
+        re_level: sg.equip.re_level,
+        credit_point: sg.equip.credit_point,
+        member_type: 0,
+        member_level: 0,
+        has_guild: false,
+        guild_rank_no: 0,
+        is_castle_member: false,
+        user_unlock_durg: false,
+        dealing: false,
+        disable_take_off_keys: &[],
+        on_horse: false,
+        horse_type: 0,
+        dress_eff_type: 0,
+        wabil: &sg.state.wabil,
+    };
+    let out = if ident == game_svr::bag::CM_TAKEONITEM {
+        game_svr::bag::take_on(&mut state, &ctx, slot, make_index, item_name)
+    } else {
+        game_svr::bag::take_off(&mut state, &ctx, slot, make_index, item_name)
+    };
+    // 状态迁移写回会话（`bag::*` 只在成功分支改集合；失败分支原样返回）。
+    sg.use_items = state.use_items;
+    sg.state.item_list = state.item_list;
+
+    if out.recalc {
+        let bag: Vec<u16> = sg.state.item_list.iter().map(|i| i.index).collect();
+        let mut use_inst: Vec<Option<game_svr::ability::ItemInstance>> =
+            vec![None; game_svr::ability::USE_ITEMS_LEN];
+        for (i, cell) in sg.use_items.iter().enumerate() {
+            if let Some(it) = cell {
+                use_inst[i] = Some(game_svr::ability::ItemInstance {
+                    index: it.index,
+                    dura: it.dura,
+                });
+            }
+        }
+        let inputs = game_svr::ability::RecalcInputs {
+            job: sg.equip.job,
+            abil: &sg.equip.abil,
+            bonus_abil: &sg.equip.bonus_abil,
+            bonus_tick_hit: sg.equip.bonus_tick_hit,
+            bonus_tick_speed: sg.equip.bonus_tick_speed,
+            cur_hp: sg.state.wabil.hp,
+            cur_mp: sg.state.wabil.mp,
+            use_items: &use_inst,
+            bag: &bag,
+        };
+        // T-18：传**调用前的** `SubAbility`（`sg.sub`），**不是** `SubAbility::first_call()`。
+        let recalc = game_svr::ability::recalc_abilitys_with_prior(catalog, &inputs, &sg.sub);
+        sg.state.wabil = recalc.wabil;
+        sg.sub = recalc.sub;
+    }
+
+    let Some(tx) = route_to_gate(gates, gate_idx, socket, "装备/卸下回帧") else {
+        return;
+    };
+    // oracle：换下的旧物品 `SendAddItem` 在 OK/FAIL 帧之前（`Operate.cs:455`/`:539`）。
+    if out.swapped_out.is_some() {
+        let _ = tx.send(SimToGate::SendFrame {
+            socket,
+            body: game_svr::smframe::sm_additem(sg.actor_id),
+        });
+    }
+    for f in &out.frames {
+        let body = game_svr::smframe::gm_data_body(
+            game_svr::smframe::command_header(f.recog, f.ident, f.param, f.tag, f.series),
+            &[],
+        );
+        let _ = tx.send(SimToGate::SendFrame { socket, body });
+    }
+    // 成功重算后的 52 `SM_ABILITY` / 752 `SM_SUBABILITY`
+    // （oracle `SendMsg(RM_ABILITY/RM_SUBABILITY)`，`Operate.cs:459-460`/`:548-549`）。
+    if out.recalc {
+        let _ = tx.send(SimToGate::SendFrame {
+            socket,
+            body: game_svr::smframe::sm_ability(
+                sg.state.gold,
+                sg.equip.job,
+                sg.game_gold,
+                &record::encode_ability(&sg.state.wabil),
+            ),
+        });
+        let sb = sg.sub.to_frame_bytes();
+        let _ = tx.send(SimToGate::SendFrame {
+            socket,
+            body: game_svr::smframe::sm_subability(sb[0], sb[1], sb[2], sb[3], sb[4], sb[5], sb[6]),
+        });
+    }
+    // oracle `FeatureChanged()`（`PlayObject.Operate.cs:459`/`:548` ⇒ `BaseObject.cs:1509`
+    // → `SendRefMsg(RM_FEATURECHANGED, GetFeatureEx(), GetFeatureToLong(), 0,0)`）：
+    // 成功换装后向**周围 `SendRefMsgRange` 格内同图**的玩家（**含自己**）广播 `SM_FEATURECHANGED`。
+    // `RM_FEATURECHANGED=10116` 的队列优先级 `(byte)10116=68` 排在 `RM_ABILITY(19)`/`RM_SUBABILITY(62)`
+    // 之后 ⇒ 线上顺序 = `SM_ADDITEM → OK/FAIL → 52 → 752 → 41`（与 oracle 消息泵一致）。
+    if out.recalc {
+        let use_inst: Vec<Option<game_svr::ability::ItemInstance>> = sg
+            .use_items
+            .iter()
+            .map(|c| {
+                c.as_ref().map(|it| game_svr::ability::ItemInstance {
+                    index: it.index,
+                    dura: it.dura,
+                })
+            })
+            .collect();
+        let feature =
+            game_svr::ability::equipped_feature(catalog, &use_inst, sg.equip.gender, sg.equip.hair);
+        let light_pairs: Vec<(u16, u16)> = sg
+            .use_items
+            .iter()
+            .take(downlink::USE_ITEM_SLOTS)
+            .map(|c| c.as_ref().map_or((0, 0), |it| (it.index, it.dura)))
+            .collect();
+        let light = downlink::my_light(sg.equip.abil.level, &light_pairs, catalog);
+        if let Some(mut d) = displays.get(sg.actor_id).cloned() {
+            d.feature = feature;
+            d.light = light;
+            displays.set(sg.actor_id, d);
+        }
+        broadcast_feature_changed(
+            world,
+            online,
+            gates,
+            sg.actor_id,
+            feature,
+            // `GetFeatureEx()` = `MakeWord(OnHorse?HorseType:0, DressEffType)`；本宿主两者未建模 ⇒ 0。
+            game_svr::feature::feature_ex(false, 0, 0),
+            ref_msg_range,
+        );
+    }
+}
+
+/// `FeatureChanged()`（oracle `BaseObject.cs:1509` → `SendRefMsg(RM_FEATURECHANGED, …)`）的下行：
+/// 向**同图、周围 `range` 格（含自身格）内**的所有在线玩家各发一条 `SM_FEATURECHANGED`
+/// （`PlayObject.Message.cs:1762-1764`：`recog = processMsg.ActorId`、`param/tag = LoWord/HiWord(feature)`、
+/// `series = GetFeatureEx()`）。
+///
+/// **登记（未建模，不静默）**：oracle `SendRefMsg` 的 `VisibleHumanList` 有 **500ms 重建缓存**
+/// （`BaseObject.Message.cs:395-397/455`）与 `ObMode/FixedHideMode` 的“只发自己”分支；
+/// 非玩家目标的 `WantRefMsg` 名单也不在
+/// 本实现内（本宿主只承载玩家）。这两项对所有 `RM_*` 广播同源，随具体 `SM_*` 再接。
+fn broadcast_feature_changed(
+    world: &mir2_world::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    actor_id: i32,
+    feature: i32,
+    feature_ex: u16,
+    range: i32,
+) {
+    let Some(src) = world.entities.get(actor_id) else {
+        glog!(
+            "WRN",
+            "FeatureChanged：actor_id={actor_id} 不在世界 ⇒ 不下发"
+        );
+        return;
+    };
+    let (sx, sy, smap) = (src.x, src.y, src.map_id);
+    let body = game_svr::smframe::sm_featurechanged(actor_id, feature, feature_ex);
+    for e in online {
+        let Some(t) = world.entities.get(e.actor_id) else {
+            continue;
+        };
+        if t.map_id != smap || (t.x - sx).abs() > range || (t.y - sy).abs() > range {
+            continue;
+        }
+        if let Some(tx) = route_to_gate(gates, e.gate_idx, e.socket, "装备 FeatureChanged 广播")
+        {
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: e.socket,
+                body: body.clone(),
+            });
+        }
+    }
+}
+
 /// `record::ServerUserItem` → `bag::BagItem`（`CharacterData.bag_items` ⇒ `GroundState.item_list`）。
 ///
 /// oracle `PlayObject.ItemList` 是**非空物品的列表**（`AddItemToBag` 追加 / 移除删除），记录里的
@@ -724,6 +974,39 @@ fn bag_items_from(items: Option<&[Option<record::ServerUserItem>]>) -> Vec<game_
             }
         })
         .collect()
+}
+
+/// `record::ServerUserItem` → `bag::BagItem`（单个物品；`desc` 截断/补零到定长 14B）。
+fn to_bag_item(it: &record::ServerUserItem) -> game_svr::bag::BagItem {
+    let mut desc = [0u8; 14];
+    if let Some(d) = it.desc.as_deref() {
+        let n = d.len().min(desc.len());
+        desc[..n].copy_from_slice(&d[..n]);
+    }
+    game_svr::bag::BagItem {
+        make_index: it.make_index,
+        index: it.index,
+        dura: it.dura,
+        dura_max: it.dura_max,
+        desc,
+    }
+}
+
+/// `record::CharacterData.hum_items` → `bag::EquipState.use_items`（**保位**：槽位下标 = `UseItems` 下标）。
+///
+/// 与 `bag_items_from`（背包 `ItemList`，展平）不同：`UseItems` 是定长 13 槽的数组，
+/// `None` 必须留在原位（oracle `UseItems[btWhere]` 按槽位下标读写）。
+fn use_items_from(
+    items: Option<&[Option<record::ServerUserItem>]>,
+) -> Vec<Option<game_svr::bag::BagItem>> {
+    let mut out: Vec<Option<game_svr::bag::BagItem>> = vec![None; game_svr::ability::USE_ITEMS_LEN];
+    for (i, cell) in items.unwrap_or(&[]).iter().enumerate() {
+        if i >= out.len() {
+            break;
+        }
+        out[i] = cell.as_ref().map(to_bag_item);
+    }
+    out
 }
 
 /// **S3 后半段（第一格）**：把世界 tick 的 AOI 结果（观察者实体 `VisibleActors` 里
@@ -1055,6 +1338,38 @@ struct SessionGround {
     game_gold: i32,
     /// `MessageSettings.CanotPickUpItem` 的 GBK 原文（缺则 `RM_SYSMESSAGE` 不产出）。
     sys_msg: Option<Vec<u8>>,
+    /// `PlayObject.UseItems`（13 槽；`CM_TAKEONITEM`/`CM_TAKEOFFITEM` 迁移用）。
+    use_items: Vec<Option<game_svr::bag::BagItem>>,
+    /// **调用前的** `SubAbility`（752 的 7 项）——`RecalcAbilitys` 的 `prior`（`T-18` 调用点接线）。
+    sub: game_svr::ability::SubAbility,
+    /// 装备/卸下重算的静态输入（进世界时从 `CharacterData` + `Server.conf` 建立）。
+    equip: EquipInputs,
+}
+
+/// 一次 `RecalcAbilitys()` 的静态输入（不含随动作变化的 `UseItems`/`ItemList`/`WAbil`）。
+///
+/// 与 `enter::AbilityInputs` 同源，但**拥有**借用的记录字段（`CharacterData` 在进世界后即丢），
+/// 供装备/卸下成功分支的重算（`ability::recalc_abilitys_with_prior`）复用。
+#[derive(Debug, Clone)]
+struct EquipInputs {
+    /// `PlayerJob`（0 战 / 1 法 / 2 道）。
+    job: u8,
+    /// `PlayerGender`（记录 `sex`：0 男 / 1 女）。
+    gender: u8,
+    /// `Hair`（`GetFeatureToLong` 用）。
+    hair: u8,
+    /// `ReLevel`。
+    re_level: u8,
+    /// `CreditPoint`。
+    credit_point: u16,
+    /// `BaseObject.Abil`（角色记录基础能力）。
+    abil: game_svr::ability::Ability,
+    /// `PlayObject.BonusAbil`。
+    bonus_abil: game_svr::ability::NakedAbility,
+    /// `Config.BonusAbilofXxx.Hit`。
+    bonus_tick_hit: u8,
+    /// `Config.BonusAbilofXxx.Speed`。
+    bonus_tick_speed: i32,
 }
 
 /// `sim_loop` 需要的入图帧配置层（`Server.conf` 的 `GameSvrConf` + `String.conf` + `[Setup] ShowRankLevelName`）。
@@ -1067,6 +1382,9 @@ struct EnterConfig {
     catalog: game_svr::ability::StdItemCatalog,
     /// `CM_PICKUP`/`CM_DROPITEM` 的 `[Setup]` 输入。
     ground: GroundCfg,
+    /// `[Setup] SendRefMsgRange`（oracle `GameSvrConf.cs:499`，缺省 12）：
+    /// 装备/卸下成功后的 `FeatureChanged()` 广播半径（`BaseObject.SendRefMsg` 的单元格扫描）。
+    ref_msg_range: i32,
 }
 
 fn sim_loop(
@@ -1169,6 +1487,25 @@ fn sim_loop(
                             &colors,
                             &enter_cfg.catalog,
                             registry.as_ref(),
+                        );
+                    } else if cmd.ident == game_svr::bag::CM_TAKEONITEM
+                        || cmd.ident == game_svr::bag::CM_TAKEOFFITEM
+                    {
+                        handle_bag_cmd(
+                            cmd.ident,
+                            cmd.recog,
+                            cmd.param,
+                            cmd.tag,
+                            tail.as_deref(),
+                            &chr_name,
+                            socket,
+                            &online,
+                            &mut ground_sessions,
+                            &gates,
+                            &enter_cfg.catalog,
+                            &world,
+                            &mut displays,
+                            enter_cfg.ref_msg_range,
                         );
                     }
                 }
@@ -1570,6 +1907,24 @@ fn sim_loop(
                                                             sys_msg: Some(enter::gbk(
                                                                 enter_cfg.string_conf.canot_pick_up_item(),
                                                             )),
+                                                            // `PlayObject.UseItems`（13 槽，保位）。
+                                                            use_items: use_items_from(
+                                                                d.hum_items.as_deref(),
+                                                            ),
+                                                            // `RecalcAbilitys` 的 **prior**：登录时首次重算的
+                                                            // `SubAbility`（后续装备/卸下重算在此之上累加，T-18）。
+                                                            sub: out.sub,
+                                                            equip: EquipInputs {
+                                                                job: d.job,
+                                                                gender: d.sex,
+                                                                hair: d.hair,
+                                                                re_level: d.re_level,
+                                                                credit_point: u16::from(d.credit_point),
+                                                                abil: a.abil.clone(),
+                                                                bonus_abil: a.bonus_abil.clone(),
+                                                                bonus_tick_hit: a.bonus_tick_hit,
+                                                                bonus_tick_speed: a.bonus_tick_speed,
+                                                            },
                                                         },
                                                     );
                                                 }
@@ -2476,6 +2831,32 @@ mod tests {
         }
     }
 
+    /// 测试用的 `EquipInputs`（`CM_TAKEONITEM`/`CM_TAKEOFFITEM` 的静态输入；不在本用例断言）。
+    fn test_equip_inputs() -> EquipInputs {
+        EquipInputs {
+            job: 0,
+            gender: 0,
+            hair: 0,
+            re_level: 0,
+            credit_point: 0,
+            abil: test_ability(),
+            bonus_abil: game_svr::ability::NakedAbility {
+                dc: 0,
+                mc: 0,
+                sc: 0,
+                ac: 0,
+                mac: 0,
+                hp: 0,
+                mp: 0,
+                hit: 0,
+                speed: 0,
+                reserved: 0,
+            },
+            bonus_tick_hit: 20,
+            bonus_tick_speed: 35,
+        }
+    }
+
     /// **owner §26（sim 循环对接）**：`CM_PICKUP` 派发到 `ground::pick_up` + `pickwire`，
     /// 经该角色的 `[GateIdx,Socket]` 回 `SM_GOLDCHANGED`，并把金币写进会话态 `GroundState`。
     ///
@@ -2559,6 +2940,9 @@ mod tests {
                 actor_id: p,
                 game_gold: 0,
                 sys_msg: None,
+                use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
+                sub: game_svr::ability::SubAbility::first_call(),
+                equip: test_equip_inputs(),
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -2658,6 +3042,391 @@ mod tests {
             matches!(rx0.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
             "一次拾取只应回一帧"
         );
+    }
+
+    /// **N-1（T-18 调用点接线）**：`CM_TAKEOFFITEM` 成功分支的重算必须传**调用前的** `SubAbility`
+    /// （`sg.sub`），**不是** `SubAbility::first_call()`——oracle `RecalcAbilitys` 不重置
+    /// `PoisonRecover/HealthRecover/SpellRecover`（`BaseObject.Abil.cs:30-31`）⇒ 重复调用累加。
+    ///
+    /// 造：会话里 `sub.poison_recover = 7`（登录时首次重算的遗留值），卸下一件无 recover 属性的物品
+    /// ⇒ `take_off` 成功（`SM_TAKEOFF_OK(619)` + oracle 既有形态的 `SM_TAKEOFF_FAIL(620)`）、
+    /// `recalc=true`；重算后的 `sub.poison_recover` 必须**还是 7**（prior 累加 + add=0）。
+    ///
+    /// 红检：把 `recalc_abilitys_with_prior(catalog, &inputs, &sg.sub)` 的 `&sg.sub` 换成
+    /// `&game_svr::ability::SubAbility::first_call()` ⇒ `sub.poison_recover` 断言必红。
+    #[test]
+    fn bag_takeoff_recalc_uses_prior_subability() {
+        use std::collections::HashMap;
+
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "木剑".into(),
+                std_mode: 5,
+                ..Default::default()
+            },
+        );
+
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut use_items: Vec<Option<game_svr::bag::BagItem>> =
+            vec![None; game_svr::ability::USE_ITEMS_LEN];
+        use_items[0] = Some(game_svr::bag::BagItem {
+            make_index: 60001,
+            index: 1,
+            dura: 10,
+            dura_max: 10,
+            desc: [0u8; 14],
+        });
+        sessions.insert(
+            "hero".into(),
+            SessionGround {
+                state: game_svr::ground::GroundState {
+                    item_list: Vec::new(),
+                    gold: 123,
+                    wabil: test_ability(),
+                },
+                actor_id: 42,
+                game_gold: 0,
+                sys_msg: None,
+                use_items,
+                // 登录时首次 `RecalcAbilitys` 留下的 recover（非 0 ⇒ 可实测「传 prior」）。
+                sub: game_svr::ability::SubAbility {
+                    anti_magic: 1,
+                    hit_point: 8,
+                    speed_point: 9,
+                    anti_poison: 0,
+                    poison_recover: 7,
+                    health_recover: 0,
+                    spell_recover: 0,
+                },
+                equip: test_equip_inputs(),
+            },
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: 42,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        // actor 42 不在世界里 ⇒ `FeatureChanged()` 广播无收件人（本用例只断言 52/752 以前的出帧序）。
+        let world = mir2_world::World::new(8, 8);
+        let mut displays = downlink::DisplayTable::new();
+
+        // `recog=60001`（物品 `MakeIndex`）、`param=0`（槽位）、`tag` 未用、`name` 尾（C-1）。
+        handle_bag_cmd(
+            game_svr::bag::CM_TAKEOFFITEM,
+            60001,
+            0,
+            0,
+            Some("木剑"),
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            &world,
+            &mut displays,
+            12,
+        );
+
+        // 出帧：SM_ADDITEM(200，换下回背包) → SM_TAKEOFF_OK(619) → SM_TAKEOFF_FAIL(620，oracle
+        // 既有形态) → SM_ABILITY(52) → SM_SUBABILITY(752)。
+        let mut idents = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            assert_eq!(socket, 901, "回帧必须发给该用户的 socket");
+            let cm = mir2_protocol::frame::CommandMessage::from_bytes(&body).expect("body >= 12B");
+            idents.push(cm.ident);
+        }
+        assert_eq!(
+            idents,
+            vec![
+                200,
+                619,
+                620,
+                mir2_protocol::messages::SM_ABILITY,
+                mir2_protocol::messages::SM_SUBABILITY
+            ],
+            "出帧序：SM_ADDITEM → SM_TAKEOFF_OK/FAIL → SM_ABILITY → SM_SUBABILITY"
+        );
+
+        let sg = sessions.get("hero").unwrap();
+        assert!(sg.use_items[0].is_none(), "卸下成功 ⇒ 槽位必须清空");
+        assert_eq!(sg.state.item_list.len(), 1, "物品回背包");
+        assert_eq!(
+            sg.sub.poison_recover, 7,
+            "重算必须传 prior（T-18）：prior.poison_recover=7 + add=0 ⇒ 7；\
+             若误用 first_call() ⇒ 0 ⇒ 必红"
+        );
+    }
+
+    /// **C-1（reviewer-3 `5df38bad`，owner 裁决 `54182d61`）**：`CM_TAKEONITEM`/`CM_TAKEOFFITEM` 的
+    /// 字段口径必须与 oracle 一致——`Recog`(b0-3) = 物品 `MakeIndex`、`Param`(b6-7) = 槽位（`(byte)` 低 8 位）、
+    /// `Tag`(b8-9) 未用。
+    ///
+    /// 造一件在 `UseItems[0]` 的物品（`MakeIndex=60001`），把请求的 `Tag` 设成**诱饵槽位** `7`：
+    /// 只有 oracle 口径（slot=param=0、make_index=recog=60001）才命中并卸下成功；若按旧/错位口径
+    /// （slot=tag=7 或 make_index=param=0）⇒ 槽位/物品对不上 ⇒ 走 FAIL ⇒ 本用例必红。
+    #[test]
+    fn bag_cmd_field_order_is_recog_makeindex_param_slot() {
+        use std::collections::HashMap;
+
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "木剑".into(),
+                std_mode: 5,
+                ..Default::default()
+            },
+        );
+
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut use_items: Vec<Option<game_svr::bag::BagItem>> =
+            vec![None; game_svr::ability::USE_ITEMS_LEN];
+        use_items[0] = Some(game_svr::bag::BagItem {
+            make_index: 60001,
+            index: 1,
+            dura: 10,
+            dura_max: 10,
+            desc: [0u8; 14],
+        });
+        sessions.insert(
+            "hero".into(),
+            SessionGround {
+                state: game_svr::ground::GroundState {
+                    item_list: Vec::new(),
+                    gold: 0,
+                    wabil: test_ability(),
+                },
+                actor_id: 42,
+                game_gold: 0,
+                sys_msg: None,
+                use_items,
+                sub: game_svr::ability::SubAbility::first_call(),
+                equip: test_equip_inputs(),
+            },
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: 42,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let world = mir2_world::World::new(8, 8);
+        let mut displays = downlink::DisplayTable::new();
+
+        // recog=60001（MakeIndex）、param=0（真槽位）、tag=7（诱饵，oracle 不读）。
+        handle_bag_cmd(
+            game_svr::bag::CM_TAKEOFFITEM,
+            60001,
+            0,
+            7,
+            Some("木剑"),
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            &world,
+            &mut displays,
+            12,
+        );
+
+        let sg = sessions.get("hero").unwrap();
+        assert!(
+            sg.use_items[0].is_none(),
+            "oracle 口径：slot=param=0、make_index=recog=60001 ⇒ 必须命中并卸下"
+        );
+        assert_eq!(sg.state.item_list.len(), 1, "卸下的物品进背包");
+        let mut idents = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
+            let cm = mir2_protocol::frame::CommandMessage::from_bytes(&body).expect(">=12B");
+            idents.push(cm.ident);
+        }
+        assert!(
+            idents.contains(&619),
+            "必须出现 SM_TAKEOFF_OK(619)（字段错位只会走 FAIL）：{idents:?}"
+        );
+    }
+
+    /// **O-1（reviewer-6 对 N-1 片的 finding）**：装备/卸下成功后的 `FeatureChanged()` 必须向
+    /// 同图 `SendRefMsgRange`(缺省 12) 格内的玩家（**含自己**）广播 `SM_FEATURECHANGED(41)`。
+    ///
+    /// 造两个玩家 `hero`(10,10)/`watcher`(12,10) 同图，`hero` 卸下一件武器 ⇒ 成功分支
+    /// （`out.recalc`）后：`hero` 线上出帧序 `200 → 619 → 620 → 52 → 752 → 41`，
+    /// `watcher` 只收 `41`（`recog=hero`，`param/tag` = 卸下后的 `GetFeatureToLong()`）。
+    ///
+    /// 红检：注释掉 `broadcast_feature_changed(...)` ⇒ `watcher` 线收不到 `41` ⇒ 必红；
+    /// 把自己从收件人里过滤掉（`e.actor_id != actor_id`）⇒ `hero` 的末条不再为 `41` ⇒ 必红。
+    #[test]
+    fn bag_equip_broadcasts_feature_changed_to_nearby() {
+        use mir2_world::Entity;
+        use std::collections::HashMap;
+
+        let mut world = mir2_world::World::new(64, 64);
+        world.open_session("hero");
+        world.open_session("watcher");
+        let hero = world
+            .enter_map("hero", Entity::new(0, "hero", 10, 10), 0)
+            .expect("hero 进图");
+        let watcher = world
+            .enter_map("watcher", Entity::new(0, "watcher", 12, 10), 0)
+            .expect("watcher 进图");
+        world.tick();
+
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "木剑".into(),
+                std_mode: 5,
+                ..Default::default()
+            },
+        );
+
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut use_items: Vec<Option<game_svr::bag::BagItem>> =
+            vec![None; game_svr::ability::USE_ITEMS_LEN];
+        use_items[0] = Some(game_svr::bag::BagItem {
+            make_index: 60001,
+            index: 1,
+            dura: 10,
+            dura_max: 10,
+            desc: [0u8; 14],
+        });
+        sessions.insert(
+            "hero".into(),
+            SessionGround {
+                state: game_svr::ground::GroundState {
+                    item_list: Vec::new(),
+                    gold: 123,
+                    wabil: test_ability(),
+                },
+                actor_id: hero,
+                game_gold: 0,
+                sys_msg: None,
+                use_items,
+                sub: game_svr::ability::SubAbility::first_call(),
+                equip: test_equip_inputs(),
+            },
+        );
+
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hero,
+            },
+        );
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "uw".into(),
+                chr_name: "watcher".into(),
+                session_id: 2,
+                gate_idx: 1,
+                socket: 902,
+                actor_id: watcher,
+            },
+        );
+
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let (tx1, mut rx1) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        gates.insert(1, tx1);
+
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            hero,
+            downlink::ActorDisplay::new(0, 0, 111, 0, 0, 255, b"hero".to_vec()),
+        );
+
+        // `recog=60001`（物品 `MakeIndex`）、`param=0`（槽位）、`tag` 未用（C-1）。
+        handle_bag_cmd(
+            game_svr::bag::CM_TAKEOFFITEM,
+            60001,
+            0,
+            0,
+            Some("木剑"),
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            &world,
+            &mut displays,
+            12,
+        );
+
+        let collect = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| -> Vec<(i32, u16, u16, u16)> {
+            let mut out = Vec::new();
+            while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+                let cm =
+                    mir2_protocol::frame::CommandMessage::from_bytes(&body).expect("body >= 12B");
+                out.push((cm.recog, cm.ident, cm.param, cm.tag));
+            }
+            out
+        };
+        assert_eq!(
+            collect(&mut rx0).iter().map(|f| f.1).collect::<Vec<_>>(),
+            vec![
+                200,
+                619,
+                620,
+                mir2_protocol::messages::SM_ABILITY,
+                mir2_protocol::messages::SM_SUBABILITY,
+                mir2_protocol::messages::SM_FEATURECHANGED,
+            ],
+            "hero 线上出帧序：200 → 619 → 620 → 52 → 752 → 41"
+        );
+        let watcher_frames = collect(&mut rx1);
+        assert_eq!(
+            watcher_frames.len(),
+            1,
+            "watcher 只应收一条 SM_FEATURECHANGED"
+        );
+        assert_eq!(
+            watcher_frames[0].1,
+            mir2_protocol::messages::SM_FEATURECHANGED
+        );
+        assert_eq!(watcher_frames[0].0, hero, "41 的 Recog = 换装者 ActorId");
+        // `SM_FEATURECHANGED` 的 Param/Tag = LoWord/HiWord(GetFeatureToLong())（oracle Message.cs:1762-1764）。
+        let feature = i32::from(watcher_frames[0].2) | (i32::from(watcher_frames[0].3) << 16);
+        assert_eq!(
+            displays.get(hero).unwrap().feature,
+            feature,
+            "展示表必须用换装后的 GetFeatureToLong 更新"
+        );
+        assert_ne!(feature, 111, "卸下后 feature 必须变化（不是换装前的值）");
     }
 
     /// `bag_items_from`（`CharacterData.bag_items` ⇒ `GroundState.item_list`）：展平非空槽、

@@ -1,0 +1,31 @@
+# 52 SM_ABILITY 尾 = record::encode_ability(WAbil)（40B）逐字段对照
+# 解码：capture.jsonl raw_hex -> ED.split_client_frame -> edcode_decode -> Ability 22 字段
+# （Sequential 声明序 = src/OpenMir2/Packets/ClientPackets/Ability.cs）
+#
+# A) 修复前（本片 base 旧采，01:28，aaa Hp=19/空背包）的 5 处差异：dc/hp/max_hp/max_mp/weight
+# B) 修复后（m3bag 3434f219/511d575b 随 master 合入）未对齐夹具：只剩 hp/weight（夹具记录差）
+# C) 对齐夹具（aaa Hp=15 + 背包 1 件模板重 14 的物品）：52 全 22 字段逐字段相同
+#
+field                  golden  pre-fix  post/unaligned  aligned
+level                       1        1               1        1
+reserved1                   0        0               0        0
+ac                          0        0               0        0
+mac                         0        0               0        0
+dc                        257        0             257      257
+mc                          0        0               0        0
+sc                          0        0               0        0
+hp                         15       19              19       15
+mp                         15       15              15       15
+max_hp                     19        0              19       19
+max_mp                     15        0              15       15
+reserved2                   0        0               0        0
+exp_count                   0        0               0        0
+exp_max_count               0        0               0        0
+exp                         0        0               0        0
+max_exp                    10       10              10       10
+weight                     14        0               0       14
+max_weight                 50       50              50       50
+wear_weight                 0        0               0        0
+max_wear_weight            15       15              15       15
+hand_weight                 0        0               0        0
+max_hand_weight            12       12              12       12

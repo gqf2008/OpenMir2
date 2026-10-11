@@ -109,6 +109,17 @@ const fn hi_byte_u16(v: u16) -> u8 {
     ((v >> 8) & 0x00FF) as u8
 }
 
+/// `Messages.CM_TAKEONITEM`（`src/OpenMir2/Messages.cs:47`）。
+///
+/// 收包接线：`PlayObject.Message.cs:820` 的 `ClientTakeOnItems((byte)processMsg.nParam2,
+/// processMsg.nParam1, processMsg.Msg)` ⇒ `slot = tag`（低字节）、`make_index = param`、
+/// `item_name = 尾`。
+pub const CM_TAKEONITEM: u16 = 1003;
+/// `Messages.CM_TAKEOFFITEM`（`src/OpenMir2/Messages.cs:48`）。
+///
+/// 同 `CM_TAKEONITEM` 的字段口径（`PlayObject.Message.cs:823`）。
+pub const CM_TAKEOFFITEM: u16 = 1004;
+
 /// `Messages.SM_TAKEON_OK`（`src/OpenMir2/Messages.cs:284`）。
 pub const SM_TAKEON_OK: u16 = 615;
 /// `Messages.SM_TAKEON_FAIL`（`:285`）。

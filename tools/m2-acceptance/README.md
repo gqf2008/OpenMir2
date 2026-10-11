@@ -249,6 +249,15 @@ python tools/m2-acceptance/s2c_diff.py `
   `Bright=1`，角色 `Dir=0`）/ Rust 侧 2026-10-12 **01:28**（夜间 `Bright=3`，观察者 `Dir=4`）。
   证据见 `evidence/m2svr-whitelist-20261012/**`。
 
+> **52 复查（owner `f963c1b3`，2026-10-12 03:xx）**：`m3bag` 的 `52 WAbil` 修复
+> （`3434f219`+`511d575b`）随 master 合入后重跑 ③ ⇒ **同序 + 等长 + 逐字节 diff = 0**，
+> 只剩 `46.param`/`46.raw_hex` 两条（夜间 `Bright=3`）。`52` 的 `max_hp/max_mp/dc` 已与金标准相同。
+> **夹具对齐**：`52` 的 `hp`（`BaseObject.Abil.cs:21-24` 保留记录 `Hp`）与 `weight`
+> （`BaseObject.cs:1356` `RecalcBagWeight()`）取自角色记录 ⇒ 金标准采集时该角色 `Hp=15`、背包有模板重 14 的物件，
+> 故重跑前把 `mir2test/aaa` 的 `CX/CY=287,618`、`Dir=0`、`Hp=15`、背包 1 件 `StdIndex=15`（重 14）对齐，
+> **收工已还原**。未对齐时的 RED 对照与逐字段表见
+> `evidence/m2svr-whitelist-rerun-20261012/**`（含 `s2c-diff-fixture-unaligned.*` 与 `field-diff-52.txt`）。
+
 **失败怎么判红**：缺 dump / 缺 dotnet ⇒ exit 2；切帧/导出/replay 失败 ⇒ exit 1；
 对账有**未登记**差异 ⇒ exit 1；0 差异或全部落在白名单 ⇒ exit 0。
 金标准的**身份**由 `preflight.ps1` 现场校验（不靠 README 抄 hash）：本步金标准是

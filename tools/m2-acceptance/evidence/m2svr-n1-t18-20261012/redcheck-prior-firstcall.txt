@@ -1,0 +1,24 @@
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.15s
+     Running unittests src\main.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-eb39968088e3f1ec.exe)
+
+running 1 test
+test tests::bag_takeoff_recalc_uses_prior_subability ... FAILED
+
+failures:
+
+---- tests::bag_takeoff_recalc_uses_prior_subability stdout ----
+
+thread 'tests::bag_takeoff_recalc_uses_prior_subability' (30792) panicked at bins\game-svr\src\main.rs:3060:9:
+assertion `left == right` failed: 重算必须传 prior（T-18）：prior.poison_recover=7 + add=0 ⇒ 7；若误用 first_call() ⇒ 0 ⇒ 必红
+  left: 0
+ right: 7
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::bag_takeoff_recalc_uses_prior_subability
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 104 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`
