@@ -1,0 +1,16 @@
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 60 filtered out; finished in 0.00s
+
+     Running unittests src\main.rs (E:\tmp\openmir2-m2svr-target\debug\deps\game_svr-eb39968088e3f1ec.exe)
+
+running 1 test
+test homemap::tests::new_human_spawn_consumes_three_draws_in_oracle_order ... FAILED
+
+--
+thread 'homemap::tests::new_human_spawn_consumes_three_draws_in_oracle_order' (28000) panicked at bins\game-svr\src\homemap.rs:292:9:
+assertion `left == right` failed: 必须恰好抽 3 次（少抽 ⇒ 后续 RNG 流偏移）
+  left: 140
+ right: 522
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+--

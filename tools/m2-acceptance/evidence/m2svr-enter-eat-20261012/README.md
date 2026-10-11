@@ -15,10 +15,11 @@
 | ⑤ 四门禁 | fmt / clippy / test / msgcodegen | **GREEN**：540 passed / 0 failed / 16 ignored（71 suites）+ 604（`gates.txt`） |
 | ⑥ 窗口纪律 | 起栈前四端口全空；收工 `-Stop` 只余 3306 | **GREEN**（`ports-before.txt` / `ports-after.txt` / `stop-stack.txt`） |
 
-**设计口径（确定性）**：M3 固定种子对拍要求「照抄抽取次数与次序」。本片进图门按 oracle 抽 **3 次**
-（`I=Random(2)` + `GetRandHomeX/Y = Random(3)+Home-2`），但**实现为 `I=0`、坐标 `Home-2`**
-（`homemap` 模块头有理由：真实 `StartPoint.txt` 前 `StartPointSize`(=2) 条 `MapName` 都是 `0`，
-进图地图与随机无关；坐标取下界与夹具实测一致）。若要逐抽数对拍，见 §5 的「未达成」。
+**RNG 抽数账本（owner `784be562`/`020acba0`，本片已补）**：进图门走 oracle `WorldServer.cs:254-259` 的
+**同序 3 抽**——`GetHomeInfo` 的 `1×Random(StartPointSize)`（`Count > StartPointSize` 时）+ `GetRandHomeX/Y`
+各 `1×Random(3)`；用宿主既有的 `crates/world::World.rng`（`mir2_shared::rng::RandomNumber`）。
+少抽会让**后续 RNG 流偏移 3 抽**（M3②③ 固定种子攻击序列对不上）。测例
+`new_human_spawn_consumes_three_draws_in_oracle_order` 钉住次数与次序；红检 `red-rng-draws.txt`。
 
 ## 1. 缺陷现场与根因（①）
 
@@ -122,9 +123,7 @@ CM_EAT 已下发 2 帧（socket=328 gate=0）
 
 ## 4. 未达成 / 登记（不静默）
 
-1. **进图门的 RNG 抽数**：oracle 抽 3 次（`Random(2)` + 2×`Random(3)`），本片取确定性 `I=0`/`Home-2`
-   （见模块头）。若 M3 固定种子对拍要求逐抽数一致，需补「同次序消费 `world.rng`」——**登记待 owner 裁决**。
-2. **新手 Abil 初始化**（`WorldServer.cs:262-277`：`Level==0 ⇒ AC/MAC=0、DC/MC/SC=MakeLong(1,2)、
+1. **新手 Abil 初始化**（`WorldServer.cs:262-277`：`Level==0 ⇒ AC/MAC=0、DC/MC/SC=MakeLong(1,2)、
    HP/MP/MaxHP/MaxMP=15、Exp=0、MaxExp=100、Weight=0、MaxWeight=30`）：**本片未接** ⇒ 新角色 `52/752`
    的字段值可能与 oracle 不同（本片判据只要求 ident 齐；跨侧字节对拍归 m3bag/T-14）。
 3. **`GetUpgradeStdItem` 的 desc 升级差量**（`GameItemSystem.cs:731-…` 的大 switch）：`itemwire` 只做
@@ -145,6 +144,7 @@ CM_EAT 已下发 2 帧（socket=328 gate=0）
 - `red-bagitems-series.txt`：`sm_bagitems` 的 `series` 改 0 ⇒ `query_bagitems_replies_sm_bagitems_with_items` FAILED（`left: 0, right: 4`）。
 - `red-newbie-order.txt`：`add_newbie_items` 去掉 `basic_drug` ⇒ `newbie_items_follow_oracle_order_and_slots` FAILED（`left: [1,3,4], right: [1,2,3,4]`）。
 - `red-enter-fallback.txt`：`resolve_enter_map` 去 fallback 支 ⇒ `enter_map_falls_back_to_home_map` FAILED（`MapNameNotFound("")`）。
+- `red-rng-draws.txt`：`new_human_spawn` 去掉 `X/Y` 的 `Random(3)`（回到坐标下界）⇒ `new_human_spawn_consumes_three_draws_in_oracle_order` FAILED（第 4 抽 `140 != 522`）。
 - `homemap::tests::load_start_points_decodes_gbk_real_file`：把 GBK 解码改回 `read_to_string` ⇒ 必红（真机第一次起栈即踩到）。
 
 ## 7. 文件清单
@@ -159,6 +159,6 @@ CM_EAT 已下发 2 帧（socket=328 gate=0）
 | `bot-m3bag.txt` / `bot-m3bag-markers.txt` | 第二轮假人日志（m3bag 驱动，含 `ClientItemCodec`） |
 | `load-stats-rust.ndjson` / `load-stats-csharp-baseline.ndjson` / `load-stats-rust2.ndjson` | 两侧 `ident_counts` 原始件 |
 | `db-rows.txt` | `characters` 表新角色 vs C# 基线行 |
-| `red-eat-makeindex.txt` / `red-bagitems-series.txt` / `red-newbie-order.txt` / `red-enter-fallback.txt` | 四条红检原始输出 |
+| `red-eat-makeindex.txt` / `red-bagitems-series.txt` / `red-newbie-order.txt` / `red-enter-fallback.txt` / `red-rng-draws.txt` | 五条红检原始输出 |
 | `gates.txt` | 四门禁原始输出 |
 | `commands.txt` | 复现命令（含 hash 口径） |
