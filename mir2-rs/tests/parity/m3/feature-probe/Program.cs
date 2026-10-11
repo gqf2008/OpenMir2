@@ -221,11 +221,27 @@ internal static class Program
         string asmName = Path.GetFileName(asmPath);
         string asmSha = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(asmPath))).ToLowerInvariant();
 
+        // O-2（reviewer-4 2026-10-11）：`oracle_assembly_sha256` 是**构建产物** hash，随编译器/
+        // SDK/环境变化，不能当可复现锚点。校验锚点改为**源码**锚点（下面是参与本向量语义的
+        // oracle 源文件清单；顺序即拼接序）。
+        var oracleSourceFiles = new[]
+        {
+            "src/M2Server/Player/PlayObject.cs",
+            "src/M2Server/Player/CharacterObject.cs",
+            "src/M2Server/Actor/BaseObject.cs",
+            "src/M2Server/M2Share.cs",
+            "src/OpenMir2/HUtil32.cs",
+        };
+        string sourceAnchor = SourceAnchorSha256(oracleSourceFiles);
+
         var doc = new
         {
             generator = "mir2-rs/tests/parity/m3/feature-probe",
             oracle_assembly = asmName,
             oracle_assembly_sha256 = asmSha,
+            oracle_assembly_sha256_note = "生成时 M2Server.dll 构建产物 hash（随编译器/SDK/环境变化）；仅作溯源，不参与向量校验——校验锚点是 oracle_source_sha256",
+            oracle_source_sha256 = sourceAnchor,
+            oracle_source_sha256_files = oracleSourceFiles,
             oracle_source = new[]
             {
                 "src/M2Server/Player/PlayObject.cs:3393 (GetFeature)",
@@ -250,7 +266,31 @@ internal static class Program
         Console.WriteLine($"WROTE {Path.GetFullPath(outPath)}");
         Console.WriteLine($"ORACLE_ASSEMBLY {asmPath}");
         Console.WriteLine($"ORACLE_ASSEMBLY_SHA256 {asmSha}");
+        Console.WriteLine($"ORACLE_SOURCE_SHA256 {sourceAnchor}");
         Console.WriteLine($"CASES {cases.Count} PACKING {packing.Count} FEATURE_EX {featureEx.Count}");
         return 0;
+    }
+
+    /// <summary>
+    /// oracle 源锚点：按清单顺序把「相对路径 + 文件字节」喂进 sha256（UTF-8，小写 hex）。
+    /// 为什么不用 M2Server.dll 的 hash：那是构建产物（随编译器/SDK/环境变化，不可复现），
+    /// 不能当可复现锚点；在「内容冻结」（设计文档 §1 硬约束②）下源码才是稳定锚点。
+    /// 需在仓库根运行（cwd = 仓库根），清单是相对路径。
+    /// </summary>
+    internal static string SourceAnchorSha256(IEnumerable<string> files)
+    {
+        using var sha = SHA256.Create();
+        using var ms = new MemoryStream();
+        foreach (var rel in files)
+        {
+            if (!File.Exists(rel))
+            {
+                throw new FileNotFoundException($"oracle 源锚点文件缺失（请在仓库根运行）：{rel}");
+            }
+            ms.Write(Encoding.UTF8.GetBytes(rel + "\n"));
+            ms.Write(File.ReadAllBytes(rel));
+            ms.WriteByte((byte)'\n');
+        }
+        return Convert.ToHexString(sha.ComputeHash(ms.ToArray())).ToLowerInvariant();
     }
 }

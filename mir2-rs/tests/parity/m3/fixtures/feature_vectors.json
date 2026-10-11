@@ -2,6 +2,15 @@
   "generator": "mir2-rs/tests/parity/m3/feature-probe",
   "oracle_assembly": "M2Server.dll",
   "oracle_assembly_sha256": "b2530cd548adaed7ebe8f74665f607c54ee0b2824b5894432a7f3d90c9df2caa",
+  "oracle_assembly_sha256_note": "\u751F\u6210\u65F6 M2Server.dll \u6784\u5EFA\u4EA7\u7269 hash\uFF08\u968F\u7F16\u8BD1\u5668/SDK/\u73AF\u5883\u53D8\u5316\uFF09\uFF1B\u4EC5\u4F5C\u6EAF\u6E90\uFF0C\u4E0D\u53C2\u4E0E\u5411\u91CF\u6821\u9A8C\u2014\u2014\u6821\u9A8C\u951A\u70B9\u662F oracle_source_sha256",
+  "oracle_source_sha256": "6bbda9375ecde3059e18b8d55a63d05a5136daf5dad4d246619613f21e6ae335",
+  "oracle_source_sha256_files": [
+    "src/M2Server/Player/PlayObject.cs",
+    "src/M2Server/Player/CharacterObject.cs",
+    "src/M2Server/Actor/BaseObject.cs",
+    "src/M2Server/M2Share.cs",
+    "src/OpenMir2/HUtil32.cs"
+  ],
   "oracle_source": [
     "src/M2Server/Player/PlayObject.cs:3393 (GetFeature)",
     "src/M2Server/Player/PlayObject.cs:1128-1147 (SendLogon/SM_LOGON/SM_FEATURECHANGED)",
