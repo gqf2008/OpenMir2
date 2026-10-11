@@ -255,13 +255,25 @@ impl DbWiring {
 ///
 /// 读档流程里的两条 sim→gate 命令（`KickUser`/`MarkInWorld`）**都**走这里 —— 每个 GameGate 连接的
 /// `UserList` 是独立的，socket 号在网关之间可重复，因此只能按 `gate_idx` 命中，找不到线号就记 WRN。
+///
+/// **R4-1**：`gate_idx` 来自客户端认证串第 7 段，除 `-1` 外还可能是 `-2`/`300` 一类越界或非法值。
+/// oracle `TCPNetChannel.cs:213-218` 的 `GetGate(gateIdx)` 对越界/非法线号返回 `null` ⇒ **直接丢弃**；
+/// 本函数与之同构：`u8::try_from` 失败即记 WRN + 返回 `None`，**绝不** `unwrap_or(0)` 把非法线号
+/// 静默折算成 0 号线（与 N1「不许静默挑线」同族）。
 fn route_to_gate<'a>(
     gates: &'a std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     gate_idx: i32,
     socket: i32,
     what: &str,
 ) -> Option<&'a mpsc::UnboundedSender<SimToGate>> {
-    match gates.get(&u8::try_from(gate_idx).unwrap_or(0)) {
+    let Some(idx) = u8::try_from(gate_idx).ok() else {
+        glog!(
+            "WRN",
+            "网关线号 {gate_idx} 越界/非法（不在 0..=255），无法{what} socket={socket}（照 oracle GetGate 丢弃）"
+        );
+        return None;
+    };
+    match gates.get(&idx) {
         Some(tx) => Some(tx),
         None => {
             glog!(
@@ -1057,5 +1069,43 @@ mod tests {
             rx2.try_recv(),
             Err(mpsc::error::TryRecvError::Empty)
         ));
+    }
+
+    /// **R4-1**（reviewer-4）：越界/非法线号（`-2`、`256`、`300`）必须与 oracle `TCPNetChannel.cs:213-218`
+    /// `GetGate` 的 `null` 同构 —— **直接丢弃**，不许用 `unwrap_or(0)` 静默折算到 0 号线。
+    ///
+    /// 判据两条：① `route_to_gate` 返回 `None`（不投递）；② 0/1 号线的同号槽**不得**被标 `in_world`。
+    /// 红检：把实现改回 `unwrap_or(0)` ⇒ `-2`/`256`/`300` 都会命中 0 号线，本用例第一条断言即红。
+    #[test]
+    fn route_to_gate_rejects_out_of_range_gate_idx() {
+        use std::collections::HashMap;
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let (tx1, mut rx1) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        gates.insert(1, tx1);
+
+        // 0 号线里有一个 socket=5 的槽：越界线号**不得**把它标上（R4-1 的错标场景）。
+        let mut users0 = UserList::new();
+        users0.open(5, 111, "a".into());
+
+        for bad in [-2i32, 256, 300] {
+            assert!(
+                route_to_gate(&gates, bad, 5, "标记进世界").is_none(),
+                "gate_idx={bad} 越界/非法 ⇒ 必须丢弃（oracle GetGate 返回 null），不许折算成 0 号线"
+            );
+        }
+        assert!(matches!(
+            rx0.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            rx1.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+        assert!(
+            !users0.find(1, 5).unwrap().in_world,
+            "越界线号不得把 0 号线同号 socket 标成 in_world"
+        );
     }
 }
