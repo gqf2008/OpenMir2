@@ -1,0 +1,1802 @@
+{
+  "generator": "mir2-rs/tests/parity/m3/eat-probe",
+  "oracle_assembly": "M2Server.dll",
+  "oracle_assembly_sha256": "e21dac142fea1b032e3c6f804a2ddc1cc8d84fb46e31a1e8648029cceba8073d",
+  "oracle_assembly_sha256_note": "\u751F\u6210\u65F6 M2Server.dll \u6784\u5EFA\u4EA7\u7269 hash\uFF08\u968F\u7F16\u8BD1\u5668/SDK/\u73AF\u5883\u53D8\u5316\uFF09\uFF1B\u4EC5\u4F5C\u6EAF\u6E90\uFF0C\u4E0D\u53C2\u4E0E\u5411\u91CF\u6821\u9A8C\u2014\u2014\u6821\u9A8C\u951A\u70B9\u662F oracle_source_sha256",
+  "oracle_source_sha256": "8f6684188b24f0fe2802ba3160082673db17a5d47cf9796878123e07f1a64df8",
+  "oracle_source_sha256_files": [
+    "src/M2Server/Player/PlayObject.Operate.cs",
+    "src/M2Server/Player/PlayObject.Base.cs",
+    "src/M2Server/Actor/BaseObject.cs",
+    "src/M2Server/Actor/BaseObject.Message.cs",
+    "src/M2Server/Player/PlayObject.Socket.cs",
+    "src/Modules/SystemModule/Data/SendMessage.cs"
+  ],
+  "oracle_source": [
+    "src/M2Server/Player/PlayObject.Message.cs:826 (CM_EAT -\u003E ClientUseItems)",
+    "src/M2Server/Player/PlayObject.Operate.cs:601 (ClientUseItems)",
+    "src/M2Server/Player/PlayObject.Base.cs:2047 (EatItems; StdMode 0)",
+    "src/M2Server/Actor/BaseObject.cs:952 (IncHealthSpell)",
+    "src/M2Server/Actor/BaseObject.cs:700 (HealthSpellChanged)",
+    "src/M2Server/Actor/BaseObject.cs:1771 (WeightChanged) / :1356 (RecalcBagWeight)",
+    "src/M2Server/Player/PlayObject.Socket.cs:17 (SendDefMessage)"
+  ],
+  "notes": [
+    "\u6709\u6548\u7269\u54C1 = \u6A21\u677F\uFF08\u63A2\u9488 GetUpgradeStdItem \u662F\u6052\u7B49\u62F7\u8D1D\uFF1BDesc \u5347\u7EA7/StdMode \u53D8\u6362\u4E0D\u5728\u672C\u7247\u4F5C\u7528\u57DF\uFF09",
+    "\u5373\u65F6\u5E27 = SendDefMessage/SendSocket \u76F4\u63A5\u5199 gate buffer\uFF08SM_EAT_OK=635 / SM_EAT_FAIL=636\uFF09",
+    "\u5EF6\u65F6\u901A\u77E5 = SendMsg \u5165 MsgQueue\uFF08PriorityQueue\uFF0C\u4F18\u5148\u7EA7 = (byte)wIdent\uFF09\uFF0C\u63A2\u9488\u6309\u51FA\u961F\u5E8F\u8BFB\uFF1B\u771F\u5B9E\u534F\u8BAE\u4E0A\u5B83\u665A\u4E8E\u5373\u65F6\u5E27\u7531\u6D88\u606F\u6CF5\u4E0B\u53D1",
+    "StdMode 1/2/3/4/31\uFF08\u98DF\u7269/HungerStatus\u3001\u65E0\u6548\u679C\u3001ExtraAbil buff\u3001\u4E66\u3001\u89E3\u5305\uFF09\u672C\u7247\u672A\u5B9E\u73B0\uFF0C\u5DF2\u767B\u8BB0",
+    "Envir.Flag.boNODRUG \u5206\u652F\uFF08\u5730\u56FE\u7981\u836F \u002B \u6587\u672C SysMsg\uFF09\u672C\u7247\u672A\u5EFA\u6A21\uFF0C\u5DF2\u767B\u8BB0"
+  ],
+  "templates": {
+    "2001": {
+      "name": "hp_mp_fixed",
+      "std_mode": 0,
+      "shape": 1,
+      "weight": 5,
+      "ac": 20,
+      "mac": 10,
+      "dura_max": 0
+    },
+    "2002": {
+      "name": "hp_mp_big",
+      "std_mode": 0,
+      "shape": 1,
+      "weight": 5,
+      "ac": 200,
+      "mac": 200,
+      "dura_max": 0
+    },
+    "2003": {
+      "name": "hp_mp_percent",
+      "std_mode": 0,
+      "shape": 3,
+      "weight": 5,
+      "ac": 5,
+      "mac": 10,
+      "dura_max": 0
+    },
+    "2004": {
+      "name": "unlock",
+      "std_mode": 0,
+      "shape": 2,
+      "weight": 5,
+      "ac": 0,
+      "mac": 0,
+      "dura_max": 0
+    },
+    "2005": {
+      "name": "inc_pool",
+      "std_mode": 0,
+      "shape": 0,
+      "weight": 5,
+      "ac": 15,
+      "mac": 7,
+      "dura_max": 0
+    },
+    "2006": {
+      "name": "inc_zero",
+      "std_mode": 0,
+      "shape": 0,
+      "weight": 5,
+      "ac": 0,
+      "mac": 0,
+      "dura_max": 0
+    },
+    "2007": {
+      "name": "other_mode",
+      "std_mode": 5,
+      "shape": 0,
+      "weight": 8,
+      "ac": 0,
+      "mac": 0,
+      "dura_max": 0
+    },
+    "2008": {
+      "name": "weighty",
+      "std_mode": 0,
+      "shape": 1,
+      "weight": 9,
+      "ac": 1,
+      "mac": 1,
+      "dura_max": 0
+    }
+  },
+  "cases": [
+    {
+      "name": "eat_ok_shape1_fixed",
+      "ctx": {
+        "can_use_item": true,
+        "dead": false,
+        "actor_id": 4660
+      },
+      "request": {
+        "make_index": 1,
+        "name": "hp_mp_fixed"
+      },
+      "wabil_before": {
+        "level": 1,
+        "reserved1": 0,
+        "ac": 0,
+        "mac": 0,
+        "dc": 257,
+        "mc": 0,
+        "sc": 0,
+        "hp": 50,
+        "mp": 40,
+        "max_hp": 100,
+        "max_mp": 80,
+        "reserved2": 0,
+        "exp_count": 0,
+        "exp_max_count": 0,
+        "exp": 0,
+        "max_exp": 10,
+        "weight": 0,
+        "max_weight": 50,
+        "wear_weight": 0,
+        "max_wear_weight": 15,
+        "hand_weight": 0,
+        "max_hand_weight": 12
+      },
+      "inc_health_before": 0,
+      "inc_spell_before": 0,
+      "user_unlock_durg_before": false,
+      "item_list_before": [
+        {
+          "make_index": 1,
+          "index": 2001,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 635,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0
+          }
+        ],
+        "notices": [
+          {
+            "ident": 10052,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0
+          },
+          {
+            "ident": 10115,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0
+          }
+        ],
+        "wabil": {
+          "level": 1,
+          "reserved1": 0,
+          "ac": 0,
+          "mac": 0,
+          "dc": 257,
+          "mc": 0,
+          "sc": 0,
+          "hp": 70,
+          "mp": 50,
+          "max_hp": 100,
+          "max_mp": 80,
+          "reserved2": 0,
+          "exp_count": 0,
+          "exp_max_count": 0,
+          "exp": 0,
+          "max_exp": 10,
+          "weight": 0,
+          "max_weight": 50,
+          "wear_weight": 0,
+          "max_wear_weight": 15,
+          "hand_weight": 0,
+          "max_hand_weight": 12
+        },
+        "inc_health": 0,
+        "inc_spell": 0,
+        "user_unlock_durg": false,
+        "item_list": []
+      }
+    },
+    {
+      "name": "eat_ok_shape1_clamp",
+      "ctx": {
+        "can_use_item": true,
+        "dead": false,
+        "actor_id": 4660
+      },
+      "request": {
+        "make_index": 1,
+        "name": "hp_mp_big"
+      },
+      "wabil_before": {
+        "level": 1,
+        "reserved1": 0,
+        "ac": 0,
+        "mac": 0,
+        "dc": 257,
+        "mc": 0,
+        "sc": 0,
+        "hp": 50,
+        "mp": 40,
+        "max_hp": 100,
+        "max_mp": 80,
+        "reserved2": 0,
+        "exp_count": 0,
+        "exp_max_count": 0,
+        "exp": 0,
+        "max_exp": 10,
+        "weight": 0,
+        "max_weight": 50,
+        "wear_weight": 0,
+        "max_wear_weight": 15,
+        "hand_weight": 0,
+        "max_hand_weight": 12
+      },
+      "inc_health_before": 0,
+      "inc_spell_before": 0,
+      "user_unlock_durg_before": false,
+      "item_list_before": [
+        {
+          "make_index": 1,
+          "index": 2002,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 635,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0
+          }
+        ],
+        "notices": [
+          {
+            "ident": 10052,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0
+          },
+          {
+            "ident": 10115,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0
+          }
+        ],
+        "wabil": {
+          "level": 1,
+          "reserved1": 0,
+          "ac": 0,
+          "mac": 0,
+          "dc": 257,
+          "mc": 0,
+          "sc": 0,
+          "hp": 100,
+          "mp": 80,
+          "max_hp": 100,
+          "max_mp": 80,
+          "reserved2": 0,
+          "exp_count": 0,
+          "exp_max_count": 0,
+          "exp": 0,
+          "max_exp": 10,
+          "weight": 0,
+          "max_weight": 50,
+          "wear_weight": 0,
+          "max_wear_weight": 15,
+          "hand_weight": 0,
+          "max_hand_weight": 12
+        },
+        "inc_health": 0,
+        "inc_spell": 0,
+        "user_unlock_durg": false,
+        "item_list": []
+      }
+    },
+    {
+      "name": "eat_ok_shape3_percent",
+      "ctx": {
+        "can_use_item": true,
+        "dead": false,
+        "actor_id": 4660
+      },
+      "request": {
+        "make_index": 1,
+        "name": "hp_mp_percent"
+      },
+      "wabil_before": {
+        "level": 1,
+        "reserved1": 0,
+        "ac": 0,
+        "mac": 0,
+        "dc": 257,
+        "mc": 0,
+        "sc": 0,
+        "hp": 50,
+        "mp": 40,
+        "max_hp": 101,
+        "max_mp": 55,
+        "reserved2": 0,
+        "exp_count": 0,
+        "exp_max_count": 0,
+        "exp": 0,
+        "max_exp": 10,
+        "weight": 0,
+        "max_weight": 50,
+        "wear_weight": 0,
+        "max_wear_weight": 15,
+        "hand_weight": 0,
+        "max_hand_weight": 12
+      },
+      "inc_health_before": 0,
+      "inc_spell_before": 0,
+      "user_unlock_durg_before": false,
+      "item_list_before": [
+        {
+          "make_index": 1,
+          "index": 2003,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 635,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0
+          }
+        ],
+        "notices": [
+          {
+            "ident": 10052,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0
+          },
+          {
+            "ident": 10115,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0
+          }
+        ],
+        "wabil": {
+          "level": 1,
+          "reserved1": 0,
+          "ac": 0,
+          "mac": 0,
+          "dc": 257,
+          "mc": 0,
+          "sc": 0,
+          "hp": 55,
+          "mp": 46,
+          "max_hp": 101,
+          "max_mp": 55,
+          "reserved2": 0,
+          "exp_count": 0,
+          "exp_max_count": 0,
+          "exp": 0,
+          "max_exp": 10,
+          "weight": 0,
+          "max_weight": 50,
+          "wear_weight": 0,
+          "max_wear_weight": 15,
+          "hand_weight": 0,
+          "max_hand_weight": 12
+        },
+        "inc_health": 0,
+        "inc_spell": 0,
+        "user_unlock_durg": false,
+        "item_list": []
+      }
+    },
+    {
+      "name": "eat_ok_shape2_unlock",
+      "ctx": {
+        "can_use_item": true,
+        "dead": false,
+        "actor_id": 4660
+      },
+      "request": {
+        "make_index": 1,
+        "name": "unlock"
+      },
+      "wabil_before": {
+        "level": 1,
+        "reserved1": 0,
+        "ac": 0,
+        "mac": 0,
+        "dc": 257,
+        "mc": 0,
+        "sc": 0,
+        "hp": 50,
+        "mp": 40,
+        "max_hp": 100,
+        "max_mp": 80,
+        "reserved2": 0,
+        "exp_count": 0,
+        "exp_max_count": 0,
+        "exp": 0,
+        "max_exp": 10,
+        "weight": 0,
+        "max_weight": 50,
+        "wear_weight": 0,
+        "max_wear_weight": 15,
+        "hand_weight": 0,
+        "max_hand_weight": 12
+      },
+      "inc_health_before": 0,
+      "inc_spell_before": 0,
+      "user_unlock_durg_before": false,
+      "item_list_before": [
+        {
+          "make_index": 1,
+          "index": 2004,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 635,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0
+          }
+        ],
+        "notices": [
+          {
+            "ident": 10115,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0
+          }
+        ],
+        "wabil": {
+          "level": 1,
+          "reserved1": 0,
+          "ac": 0,
+          "mac": 0,
+          "dc": 257,
+          "mc": 0,
+          "sc": 0,
+          "hp": 50,
+          "mp": 40,
+          "max_hp": 100,
+          "max_mp": 80,
+          "reserved2": 0,
+          "exp_count": 0,
+          "exp_max_count": 0,
+          "exp": 0,
+          "max_exp": 10,
+          "weight": 0,
+          "max_weight": 50,
+          "wear_weight": 0,
+          "max_wear_weight": 15,
+          "hand_weight": 0,
+          "max_hand_weight": 12
+        },
+        "inc_health": 0,
+        "inc_spell": 0,
+        "user_unlock_durg": true,
+        "item_list": []
+      }
+    },
+    {
+      "name": "eat_ok_shape0_inc_pool",
+      "ctx": {
+        "can_use_item": true,
+        "dead": false,
+        "actor_id": 4660
+      },
+      "request": {
+        "make_index": 1,
+        "name": "inc_pool"
+      },
+      "wabil_before": {
+        "level": 1,
+        "reserved1": 0,
+        "ac": 0,
+        "mac": 0,
+        "dc": 257,
+        "mc": 0,
+        "sc": 0,
+        "hp": 50,
+        "mp": 40,
+        "max_hp": 100,
+        "max_mp": 80,
+        "reserved2": 0,
+        "exp_count": 0,
+        "exp_max_count": 0,
+        "exp": 0,
+        "max_exp": 10,
+        "weight": 0,
+        "max_weight": 50,
+        "wear_weight": 0,
+        "max_wear_weight": 15,
+        "hand_weight": 0,
+        "max_hand_weight": 12
+      },
+      "inc_health_before": 3,
+      "inc_spell_before": 4,
+      "user_unlock_durg_before": false,
+      "item_list_before": [
+        {
+          "make_index": 1,
+          "index": 2005,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 635,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0
+          }
+        ],
+        "notices": [
+          {
+            "ident": 10115,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0
+          }
+        ],
+        "wabil": {
+          "level": 1,
+          "reserved1": 0,
+          "ac": 0,
+          "mac": 0,
+          "dc": 257,
+          "mc": 0,
+          "sc": 0,
+          "hp": 50,
+          "mp": 40,
+          "max_hp": 100,
+          "max_mp": 80,
+          "reserved2": 0,
+          "exp_count": 0,
+          "exp_max_count": 0,
+          "exp": 0,
+          "max_exp": 10,
+          "weight": 0,
+          "max_weight": 50,
+          "wear_weight": 0,
+          "max_wear_weight": 15,
+          "hand_weight": 0,
+          "max_hand_weight": 12
+        },
+        "inc_health": 18,
+        "inc_spell": 11,
+        "user_unlock_durg": false,
+        "item_list": []
+      }
+    },
+    {
+      "name": "eat_ok_shape0_inc_zero",
+      "ctx": {
+        "can_use_item": true,
+        "dead": false,
+        "actor_id": 4660
+      },
+      "request": {
+        "make_index": 1,
+        "name": "inc_zero"
+      },
+      "wabil_before": {
+        "level": 1,
+        "reserved1": 0,
+        "ac": 0,
+        "mac": 0,
+        "dc": 257,
+        "mc": 0,
+        "sc": 0,
+        "hp": 50,
+        "mp": 40,
+        "max_hp": 100,
+        "max_mp": 80,
+        "reserved2": 0,
+        "exp_count": 0,
+        "exp_max_count": 0,
+        "exp": 0,
+        "max_exp": 10,
+        "weight": 0,
+        "max_weight": 50,
+        "wear_weight": 0,
+        "max_wear_weight": 15,
+        "hand_weight": 0,
+        "max_hand_weight": 12
+      },
+      "inc_health_before": 3,
+      "inc_spell_before": 4,
+      "user_unlock_durg_before": false,
+      "item_list_before": [
+        {
+          "make_index": 1,
+          "index": 2006,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 635,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0
+          }
+        ],
+        "notices": [
+          {
+            "ident": 10115,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0
+          }
+        ],
+        "wabil": {
+          "level": 1,
+          "reserved1": 0,
+          "ac": 0,
+          "mac": 0,
+          "dc": 257,
+          "mc": 0,
+          "sc": 0,
+          "hp": 50,
+          "mp": 40,
+          "max_hp": 100,
+          "max_mp": 80,
+          "reserved2": 0,
+          "exp_count": 0,
+          "exp_max_count": 0,
+          "exp": 0,
+          "max_exp": 10,
+          "weight": 0,
+          "max_weight": 50,
+          "wear_weight": 0,
+          "max_wear_weight": 15,
+          "hand_weight": 0,
+          "max_hand_weight": 12
+        },
+        "inc_health": 3,
+        "inc_spell": 4,
+        "user_unlock_durg": false,
+        "item_list": []
+      }
+    },
+    {
+      "name": "eat_ok_weight_from_remaining_bag",
+      "ctx": {
+        "can_use_item": true,
+        "dead": false,
+        "actor_id": 4660
+      },
+      "request": {
+        "make_index": 1,
+        "name": "hp_mp_fixed"
+      },
+      "wabil_before": {
+        "level": 1,
+        "reserved1": 0,
+        "ac": 0,
+        "mac": 0,
+        "dc": 257,
+        "mc": 0,
+        "sc": 0,
+        "hp": 50,
+        "mp": 40,
+        "max_hp": 100,
+        "max_mp": 80,
+        "reserved2": 0,
+        "exp_count": 0,
+        "exp_max_count": 0,
+        "exp": 0,
+        "max_exp": 10,
+        "weight": 0,
+        "max_weight": 50,
+        "wear_weight": 0,
+        "max_wear_weight": 15,
+        "hand_weight": 0,
+        "max_hand_weight": 12
+      },
+      "inc_health_before": 0,
+      "inc_spell_before": 0,
+      "user_unlock_durg_before": false,
+      "item_list_before": [
+        {
+          "make_index": 7,
+          "index": 2008,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "make_index": 1,
+          "index": 2001,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "make_index": 8,
+          "index": 2007,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 635,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0
+          }
+        ],
+        "notices": [
+          {
+            "ident": 10052,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0
+          },
+          {
+            "ident": 10115,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0
+          }
+        ],
+        "wabil": {
+          "level": 1,
+          "reserved1": 0,
+          "ac": 0,
+          "mac": 0,
+          "dc": 257,
+          "mc": 0,
+          "sc": 0,
+          "hp": 70,
+          "mp": 50,
+          "max_hp": 100,
+          "max_mp": 80,
+          "reserved2": 0,
+          "exp_count": 0,
+          "exp_max_count": 0,
+          "exp": 0,
+          "max_exp": 10,
+          "weight": 17,
+          "max_weight": 50,
+          "wear_weight": 0,
+          "max_wear_weight": 15,
+          "hand_weight": 0,
+          "max_hand_weight": 12
+        },
+        "inc_health": 0,
+        "inc_spell": 0,
+        "user_unlock_durg": false,
+        "item_list": [
+          {
+            "make_index": 7,
+            "index": 2008,
+            "dura": 10,
+            "dura_max": 20,
+            "desc": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          {
+            "make_index": 8,
+            "index": 2007,
+            "dura": 10,
+            "dura_max": 20,
+            "desc": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "eat_ok_first_makeindex_wins",
+      "ctx": {
+        "can_use_item": true,
+        "dead": false,
+        "actor_id": 4660
+      },
+      "request": {
+        "make_index": 1,
+        "name": "hp_mp_fixed"
+      },
+      "wabil_before": {
+        "level": 1,
+        "reserved1": 0,
+        "ac": 0,
+        "mac": 0,
+        "dc": 257,
+        "mc": 0,
+        "sc": 0,
+        "hp": 50,
+        "mp": 40,
+        "max_hp": 100,
+        "max_mp": 80,
+        "reserved2": 0,
+        "exp_count": 0,
+        "exp_max_count": 0,
+        "exp": 0,
+        "max_exp": 10,
+        "weight": 0,
+        "max_weight": 50,
+        "wear_weight": 0,
+        "max_wear_weight": 15,
+        "hand_weight": 0,
+        "max_hand_weight": 12
+      },
+      "inc_health_before": 0,
+      "inc_spell_before": 0,
+      "user_unlock_durg_before": false,
+      "item_list_before": [
+        {
+          "make_index": 1,
+          "index": 2001,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "make_index": 1,
+          "index": 2003,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 635,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0
+          }
+        ],
+        "notices": [
+          {
+            "ident": 10052,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0
+          },
+          {
+            "ident": 10115,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0
+          }
+        ],
+        "wabil": {
+          "level": 1,
+          "reserved1": 0,
+          "ac": 0,
+          "mac": 0,
+          "dc": 257,
+          "mc": 0,
+          "sc": 0,
+          "hp": 70,
+          "mp": 50,
+          "max_hp": 100,
+          "max_mp": 80,
+          "reserved2": 0,
+          "exp_count": 0,
+          "exp_max_count": 0,
+          "exp": 0,
+          "max_exp": 10,
+          "weight": 5,
+          "max_weight": 50,
+          "wear_weight": 0,
+          "max_wear_weight": 15,
+          "hand_weight": 0,
+          "max_hand_weight": 12
+        },
+        "inc_health": 0,
+        "inc_spell": 0,
+        "user_unlock_durg": false,
+        "item_list": [
+          {
+            "make_index": 1,
+            "index": 2003,
+            "dura": 10,
+            "dura_max": 20,
+            "desc": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "eat_fail_not_found",
+      "ctx": {
+        "can_use_item": true,
+        "dead": false,
+        "actor_id": 4660
+      },
+      "request": {
+        "make_index": 99,
+        "name": "hp_mp_fixed"
+      },
+      "wabil_before": {
+        "level": 1,
+        "reserved1": 0,
+        "ac": 0,
+        "mac": 0,
+        "dc": 257,
+        "mc": 0,
+        "sc": 0,
+        "hp": 50,
+        "mp": 40,
+        "max_hp": 100,
+        "max_mp": 80,
+        "reserved2": 0,
+        "exp_count": 0,
+        "exp_max_count": 0,
+        "exp": 0,
+        "max_exp": 10,
+        "weight": 0,
+        "max_weight": 50,
+        "wear_weight": 0,
+        "max_wear_weight": 15,
+        "hand_weight": 0,
+        "max_hand_weight": 12
+      },
+      "inc_health_before": 0,
+      "inc_spell_before": 0,
+      "user_unlock_durg_before": false,
+      "item_list_before": [
+        {
+          "make_index": 1,
+          "index": 2001,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 636,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0
+          }
+        ],
+        "notices": [],
+        "wabil": {
+          "level": 1,
+          "reserved1": 0,
+          "ac": 0,
+          "mac": 0,
+          "dc": 257,
+          "mc": 0,
+          "sc": 0,
+          "hp": 50,
+          "mp": 40,
+          "max_hp": 100,
+          "max_mp": 80,
+          "reserved2": 0,
+          "exp_count": 0,
+          "exp_max_count": 0,
+          "exp": 0,
+          "max_exp": 10,
+          "weight": 0,
+          "max_weight": 50,
+          "wear_weight": 0,
+          "max_wear_weight": 15,
+          "hand_weight": 0,
+          "max_hand_weight": 12
+        },
+        "inc_health": 0,
+        "inc_spell": 0,
+        "user_unlock_durg": false,
+        "item_list": [
+          {
+            "make_index": 1,
+            "index": 2001,
+            "dura": 10,
+            "dura_max": 20,
+            "desc": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "eat_fail_stdmode_other",
+      "ctx": {
+        "can_use_item": true,
+        "dead": false,
+        "actor_id": 4660
+      },
+      "request": {
+        "make_index": 1,
+        "name": "other_mode"
+      },
+      "wabil_before": {
+        "level": 1,
+        "reserved1": 0,
+        "ac": 0,
+        "mac": 0,
+        "dc": 257,
+        "mc": 0,
+        "sc": 0,
+        "hp": 50,
+        "mp": 40,
+        "max_hp": 100,
+        "max_mp": 80,
+        "reserved2": 0,
+        "exp_count": 0,
+        "exp_max_count": 0,
+        "exp": 0,
+        "max_exp": 10,
+        "weight": 0,
+        "max_weight": 50,
+        "wear_weight": 0,
+        "max_wear_weight": 15,
+        "hand_weight": 0,
+        "max_hand_weight": 12
+      },
+      "inc_health_before": 0,
+      "inc_spell_before": 0,
+      "user_unlock_durg_before": false,
+      "item_list_before": [
+        {
+          "make_index": 1,
+          "index": 2007,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 636,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0
+          }
+        ],
+        "notices": [],
+        "wabil": {
+          "level": 1,
+          "reserved1": 0,
+          "ac": 0,
+          "mac": 0,
+          "dc": 257,
+          "mc": 0,
+          "sc": 0,
+          "hp": 50,
+          "mp": 40,
+          "max_hp": 100,
+          "max_mp": 80,
+          "reserved2": 0,
+          "exp_count": 0,
+          "exp_max_count": 0,
+          "exp": 0,
+          "max_exp": 10,
+          "weight": 0,
+          "max_weight": 50,
+          "wear_weight": 0,
+          "max_wear_weight": 15,
+          "hand_weight": 0,
+          "max_hand_weight": 12
+        },
+        "inc_health": 0,
+        "inc_spell": 0,
+        "user_unlock_durg": false,
+        "item_list": [
+          {
+            "make_index": 1,
+            "index": 2007,
+            "dura": 10,
+            "dura_max": 20,
+            "desc": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "eat_fail_template_missing",
+      "ctx": {
+        "can_use_item": true,
+        "dead": false,
+        "actor_id": 4660
+      },
+      "request": {
+        "make_index": 1,
+        "name": "missing"
+      },
+      "wabil_before": {
+        "level": 1,
+        "reserved1": 0,
+        "ac": 0,
+        "mac": 0,
+        "dc": 257,
+        "mc": 0,
+        "sc": 0,
+        "hp": 50,
+        "mp": 40,
+        "max_hp": 100,
+        "max_mp": 80,
+        "reserved2": 0,
+        "exp_count": 0,
+        "exp_max_count": 0,
+        "exp": 0,
+        "max_exp": 10,
+        "weight": 0,
+        "max_weight": 50,
+        "wear_weight": 0,
+        "max_wear_weight": 15,
+        "hand_weight": 0,
+        "max_hand_weight": 12
+      },
+      "inc_health_before": 0,
+      "inc_spell_before": 0,
+      "user_unlock_durg_before": false,
+      "item_list_before": [
+        {
+          "make_index": 1,
+          "index": 2009,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 636,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0
+          }
+        ],
+        "notices": [],
+        "wabil": {
+          "level": 1,
+          "reserved1": 0,
+          "ac": 0,
+          "mac": 0,
+          "dc": 257,
+          "mc": 0,
+          "sc": 0,
+          "hp": 50,
+          "mp": 40,
+          "max_hp": 100,
+          "max_mp": 80,
+          "reserved2": 0,
+          "exp_count": 0,
+          "exp_max_count": 0,
+          "exp": 0,
+          "max_exp": 10,
+          "weight": 0,
+          "max_weight": 50,
+          "wear_weight": 0,
+          "max_wear_weight": 15,
+          "hand_weight": 0,
+          "max_hand_weight": 12
+        },
+        "inc_health": 0,
+        "inc_spell": 0,
+        "user_unlock_durg": false,
+        "item_list": [
+          {
+            "make_index": 1,
+            "index": 2009,
+            "dura": 10,
+            "dura_max": 20,
+            "desc": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "eat_fail_can_use_item_false",
+      "ctx": {
+        "can_use_item": false,
+        "dead": false,
+        "actor_id": 4660
+      },
+      "request": {
+        "make_index": 1,
+        "name": "hp_mp_fixed"
+      },
+      "wabil_before": {
+        "level": 1,
+        "reserved1": 0,
+        "ac": 0,
+        "mac": 0,
+        "dc": 257,
+        "mc": 0,
+        "sc": 0,
+        "hp": 50,
+        "mp": 40,
+        "max_hp": 100,
+        "max_mp": 80,
+        "reserved2": 0,
+        "exp_count": 0,
+        "exp_max_count": 0,
+        "exp": 0,
+        "max_exp": 10,
+        "weight": 0,
+        "max_weight": 50,
+        "wear_weight": 0,
+        "max_wear_weight": 15,
+        "hand_weight": 0,
+        "max_hand_weight": 12
+      },
+      "inc_health_before": 0,
+      "inc_spell_before": 0,
+      "user_unlock_durg_before": false,
+      "item_list_before": [
+        {
+          "make_index": 1,
+          "index": 2001,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 636,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0
+          }
+        ],
+        "notices": [
+          {
+            "ident": 10309,
+            "w_param": 0,
+            "n_param1": 4660,
+            "n_param2": 0,
+            "n_param3": 0
+          }
+        ],
+        "wabil": {
+          "level": 1,
+          "reserved1": 0,
+          "ac": 0,
+          "mac": 0,
+          "dc": 257,
+          "mc": 0,
+          "sc": 0,
+          "hp": 50,
+          "mp": 40,
+          "max_hp": 100,
+          "max_mp": 80,
+          "reserved2": 0,
+          "exp_count": 0,
+          "exp_max_count": 0,
+          "exp": 0,
+          "max_exp": 10,
+          "weight": 0,
+          "max_weight": 50,
+          "wear_weight": 0,
+          "max_wear_weight": 15,
+          "hand_weight": 0,
+          "max_hand_weight": 12
+        },
+        "inc_health": 0,
+        "inc_spell": 0,
+        "user_unlock_durg": false,
+        "item_list": [
+          {
+            "make_index": 1,
+            "index": 2001,
+            "dura": 10,
+            "dura_max": 20,
+            "desc": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "eat_fail_dead",
+      "ctx": {
+        "can_use_item": true,
+        "dead": true,
+        "actor_id": 4660
+      },
+      "request": {
+        "make_index": 1,
+        "name": "hp_mp_fixed"
+      },
+      "wabil_before": {
+        "level": 1,
+        "reserved1": 0,
+        "ac": 0,
+        "mac": 0,
+        "dc": 257,
+        "mc": 0,
+        "sc": 0,
+        "hp": 50,
+        "mp": 40,
+        "max_hp": 100,
+        "max_mp": 80,
+        "reserved2": 0,
+        "exp_count": 0,
+        "exp_max_count": 0,
+        "exp": 0,
+        "max_exp": 10,
+        "weight": 0,
+        "max_weight": 50,
+        "wear_weight": 0,
+        "max_wear_weight": 15,
+        "hand_weight": 0,
+        "max_hand_weight": 12
+      },
+      "inc_health_before": 0,
+      "inc_spell_before": 0,
+      "user_unlock_durg_before": false,
+      "item_list_before": [
+        {
+          "make_index": 1,
+          "index": 2001,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 636,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0
+          }
+        ],
+        "notices": [],
+        "wabil": {
+          "level": 1,
+          "reserved1": 0,
+          "ac": 0,
+          "mac": 0,
+          "dc": 257,
+          "mc": 0,
+          "sc": 0,
+          "hp": 50,
+          "mp": 40,
+          "max_hp": 100,
+          "max_mp": 80,
+          "reserved2": 0,
+          "exp_count": 0,
+          "exp_max_count": 0,
+          "exp": 0,
+          "max_exp": 10,
+          "weight": 0,
+          "max_weight": 50,
+          "wear_weight": 0,
+          "max_wear_weight": 15,
+          "hand_weight": 0,
+          "max_hand_weight": 12
+        },
+        "inc_health": 0,
+        "inc_spell": 0,
+        "user_unlock_durg": false,
+        "item_list": [
+          {
+            "make_index": 1,
+            "index": 2001,
+            "dura": 10,
+            "dura_max": 20,
+            "desc": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -13,3 +13,4 @@ pub mod ability;
 pub mod bag;
 pub mod feature;
 pub mod smframe;
+pub mod useitem;
