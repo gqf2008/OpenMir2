@@ -1106,8 +1106,13 @@ fn online_take(online: &mut OnlineRegistry, chr: &str) -> Option<OnlineEntry> {
     Some(online.remove(pos))
 }
 
-/// 账号级顶号的目标查找（oracle `TCPNetChannel.KickUser` 的匹配条件，`TCPNetChannel.cs:249`）：
+/// 账号级顶号的目标查找（oracle `TCPNetChannel.KickUser` 的匹配条件，`TCPNetChannel.cs:252`）：
 /// `Account` **OrdinalIgnoreCase** 相等 **或** `SessionID` 相等。
+///
+/// **O-3 登记（差异待 owner 裁决，不静默）**：oracle 对每个网关 `_gameGates[i]` 的 `UserList` 线性扫，
+/// 命中第一个匹配项即 `break`（`TCPNetChannel.cs:252-274`）⇒ 语义是「**每个网关最多踢一个**」，
+/// 不是「全踢同名/同会话」；本函数取**全局首个**匹配。`online` 按 `chr_name` 唯一登记，实语料一账号
+/// 同时只有一个活动角色 ⇒ 二者在实语料上不可观测（差异口径与归属见 docs §4；owner 裁决前保持登记）。
 fn online_find_for_kick(
     online: &OnlineRegistry,
     account: &str,
@@ -1123,15 +1128,19 @@ fn online_find_for_kick(
 ///
 /// 准入判据 `!IsFull && !ProcessHumansIsLogined(chr)`（`:503`）为假时：
 /// ① `:535` `KickOnlineUser(chr)`（`:1052-1064`）给**旧** PlayObject 置 `BoKickFlag`
-///    （下一 tick 在 `RunNotice` 里收 `SM_OUTOFCONNECTION` 后 `MakeGhost()`）；
+///    （oracle 下一 tick 在 `RunNotice` 里收 `SM_OUTOFCONNECTION` 后 `MakeGhost()`；本骨架在同一
+///    tick 的后段 [`drain_kicks`] 落地 —— 帧序不变，见 docs `M2会话生命周期-对齐Rust-20261011.md` §4）；
 /// ② `:536-537` 记下**新**连接的 `(GateIdx, SocketId)`；
 /// ③ `:568-570` `NetChannel.CloseUser(新)` 把新连接关掉。
 ///
 /// `kick_old` = 旧会话**是否在 `PlayObjectList` 里**（实测口径：命中 `InSaveRcdList` 但旧已不在
 /// `PlayObjectList` 时，`KickOnlineUser` 扫不到旧 ⇒ **只关新、不置踢旧标志**，旧也就收不到 528）。
 ///
-/// 本函数只做"置踢旧标志 + 关新连接"这两件即时动作；旧连接的落地（发 528 + 摘世界）交给下一次
-/// [`drain_kicks`]（与 oracle 的 tick 语义一致）。
+/// **O-4 登记（等价，不静默）**：准入的 `!IsFull()` 一分句在本骨架**省略**——oracle `FrnEngn.IsFull()`
+/// 判据是 `m_SaveRcdList.Count >= int.MaxValue`（`FrnEngn.cs:120-135`），恒为 false ⇒ 省略等价。
+///
+/// 本函数只做"置踢旧标志 + 关新连接"这两件即时动作；旧连接的落地（发 528 + 摘世界）交给同一 tick 后段的
+/// [`drain_kicks`]。
 fn handle_duplicate_enter(
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     kick_pending: &mut Vec<String>,
@@ -1149,7 +1158,7 @@ fn handle_duplicate_enter(
     {
         let _ = tx.send(SimToGate::KickUser { socket: new_socket });
     }
-    // ① 置旧会话的 BoKickFlag（下一 tick 由 `drain_kicks` 落地）。
+    // ① 置旧会话的 BoKickFlag（同一 tick 的后段由 `drain_kicks` 落地）。
     // 仅当旧仍在 `PlayObjectList`（这里用 `online` 登记近似）时；旧若只剩"保存中"，
     // `KickOnlineUser` 本就扫不到，不得凭空给它发 528（口径以夹具实测为准）。
     if kick_old {
@@ -1229,8 +1238,9 @@ struct MsgColors {
 /// `SysMsg(sKickUserMsg, Red, Hint)`（= `SM_SYSMESSAGE`，**不是** `SM_OUTOFCONNECTION(528)`）⇒
 /// `BoEmergencyClose`/`BoSoftClose` 置真。
 ///
-/// 提示帧**立即**发（oracle 里 `KickUser` 当场 `SysMsg`）；离开世界/清槽隔一 tick 由
-/// [`drain_soft_close`] 落地（对应旧 PlayObject 下一 tick 的 `MakeGhost()`）。
+/// 提示帧**立即**发（oracle 里 `KickUser` 当场 `SysMsg`）；离开世界/清槽由同一 tick **后段**的
+/// [`drain_soft_close`] 落地（oracle 是旧 PlayObject **下一 tick** 的 `MakeGhost()`，本骨架早约 1 tick；
+/// 帧序不变，见 docs §4 的 O-1 登记）。
 fn handle_kick_account(
     engine: &mut load::FrontEngine,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -1273,8 +1283,9 @@ fn handle_kick_account(
     }
 }
 
-/// 账号级顶号的**隔一 tick 落地**部分（oracle `BoEmergencyClose`/`BoSoftClose` 支，
-/// `PlayObject.cs:1082-1090`）：旧 PlayObject 下一 tick `MakeGhost()` 离开世界 + `CloseUser(旧)`。
+/// 账号级顶号的**同一 tick 后段落地**部分（oracle `BoEmergencyClose`/`BoSoftClose` 支，
+/// `PlayObject.cs:1082-1090`）：oracle 是旧 PlayObject **下一 tick** `MakeGhost()` 离开世界 +
+/// `CloseUser(旧)`；本骨架在同一 tick 的后段落地（早约 1 tick，帧序不变，见 docs §4 的 O-1 登记）。
 ///
 /// 与 [`drain_kicks`] 的区别：这里**不再发帧**（`SM_SYSMESSAGE` 已在 [`GateEvent::KickAccount`]
 /// 处理时立即发出，照 oracle `KickUser` 里先 `SysMsg` 再置标志的次序）；而 `drain_kicks` 对应
@@ -2045,10 +2056,11 @@ fn sim_loop(
             }
             w.outstanding = still;
         }
-        // 踢旧落地（oracle `RunNotice` 的 `BoKickFlag` 支）：在 tick 前处理，与 oracle 的
-        // "WorldServer 处理 LoadPlayList 置标志 → 下一 tick PlayObject.RunNotice 落地" 同序。
+        // 踢旧落地（oracle `RunNotice` 的 `BoKickFlag` 支）：oracle 是"置标志 → 下一 tick 的
+        // RunNotice 落地"（≥1 tick）；本骨架在事件 drain 之后的**同一 tick 后段**落地，帧序不变。
         drain_kicks(&mut world, &gates, &mut online, &mut kick_pending);
         // 账号级顶号落地（`BoSoftClose` 支）：提示帧已即时发出，这里只离开世界 + 清槽。
+        // 同一 tick 后段落地（oracle ≥1 tick）——见 docs §4 的 O-1 登记。
         drain_soft_close(&mut world, &gates, &mut online, &mut soft_close_pending);
         let rec = world.tick();
         ticks += 1;
@@ -3684,8 +3696,9 @@ mod tests {
     /// - 旧连接**立即**收到 `SM_SYSMESSAGE`（ident 100，**不是** 528），`Recog` = 旧 ActorId，
     ///   `Param` = `make_word(RedMsgFColor, RedMsgBColor)`（oracle `BaseObject.cs:1678` 的 Red 支），
     ///   尾 = 账号级提示文案（GBK），`Series` = 1；
-    /// - 下一 tick（`drain_soft_close`）才 `KickUser` 清槽 + 离开世界（对应 `BoSoftClose` 的 `MakeGhost`）；
-    /// - 匹配允许"`Account` 相等（大小写不敏感）**或** `SessionID` 相等"（`TCPNetChannel.cs:249`）。
+    /// - 同一 tick 后段（`drain_soft_close`）才 `KickUser` 清槽 + 离开世界（oracle 是下一 tick；
+    ///   `BoSoftClose` 的 `MakeGhost`，见 docs §4 的 O-1 登记）；
+    /// - 匹配允许"`Account` 相等（大小写不敏感）**或** `SessionID` 相等"（`TCPNetChannel.cs:252`）。
     ///
     /// 红检：把 `sm_sysmessage` 改回发 528（或把 `ident` 改错、把 `param` 的高低字节反）⇒ 本用例必红。
     #[test]
