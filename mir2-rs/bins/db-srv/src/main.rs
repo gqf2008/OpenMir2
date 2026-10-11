@@ -6,11 +6,13 @@
 //! - `Storeages/DBSvr.Storage.MySQL` 的 `PlayRecordStorage`/`PlayDataStorage` → [`db`]（5100 面）+ [`playdata`]（6000 面）；
 //! - `Services/Impl/UserService`（5100 监听、会话表、四个命令）→ [`server`] + [`handler`]；
 //! - `Services/Impl/DataService`（6000 监听、`LoadHumanRcd`/`SaveHumanRcd`/`SaveHumanRcdEx`）→ [`data`]；
+//! - `Services/Impl/MarketService`（5700 监听、拍卖行四个 ident）→ [`market`] + [`marketdata`]；
 //! - `Storage/Impl/CacheStorageService`（内存缓存）+ `TimedService` 的缓存回写 → [`cache`] + [`data::cache_flush_task`]；
 //! - `Services/Impl/ClientSession`（主动连 LoginSrv 5600 同步会话）→ [`loginsrv`]。
 //!
-//! **不在本进程范围内**：`MarketService`（5700，拍卖行）。它按 M1 计划 §5 的 S4b 可拆子片，
-//! 尚未实现（C# 侧该面本身大半是空实现），已在 `docs/M1-S4b-DBSrv-6000-交付说明.md` 逐条登记。
+//! C# `MarketService`（5700 拍卖行）**大半是空桩且不可达**（`MarketItem` 未注册 MemoryPack ⇒
+//! 任何携带它的编解码都抛），逐条登记见 [`market`]/[`marketdata`] 模块头与
+//! `docs/M1-S4b-DBSrv-6000-交付说明.md`。
 //!
 //! **失败要响**（M1 验收④）：缺配置 / 存储插件非 MySQL / 连不上 MySQL / 表缺列 / 端口占用
 //! —— 全部明确报错并以非零码退出。
@@ -26,6 +28,8 @@ mod gbk;
 mod handler;
 mod log;
 mod loginsrv;
+mod market;
+mod marketdata;
 mod playdata;
 mod route;
 mod server;
@@ -79,5 +83,7 @@ async fn main() -> Result<()> {
     // 6000 `DataService`（GameSvr 取档/存档）+ TimedService 的 5 分钟缓存回写
     tokio::spawn(data::run(Arc::clone(&srv), Arc::clone(&db)));
     tokio::spawn(data::cache_flush_task(Arc::clone(&srv), Arc::clone(&db)));
+    // 5700 `MarketService`（拍卖行；C# 侧大半空桩，逐条见 `market.rs` 模块头）
+    tokio::spawn(market::run(Arc::clone(&srv), Arc::clone(&db)));
     srv.run(rx, db).await
 }

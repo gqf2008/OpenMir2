@@ -149,11 +149,11 @@ M0 金标准验收状态（2026-10-10）：① 逐字节回放 0 差异、② �
 | T-20 | **`ClientPickUpItem` 非金币物品在 `mapItem.UserItem == null` 时 oracle 会 NPE**（`PlayObject.Base.cs:101` 的 `userItem.Index` 无空守卫） | Rust 走"放回地面"分支（不 panic），与"模板缺失"同形（`ground.rs` `pick_up`）。**线上不可达**：非金币地面物品必带 `UserItem`（`DropItemDown` 造物即带；脚本路径同样带）⇒ 与 oracle 在可达形态上逐字段相同，差异只在人工构造的"无 UserItem 的地面非金币物"上可见。同 T-16 口径 | 作者登记（worker-4）；**待独立 principal 复核** |
 | T-21 | **`DropItemDown` 的 StdMode 45 随机外观与 `SendRefMsg` 广播未建模**：① `StdMode==45 ⇒ Looks = GetRandomLook(Looks, Shape)`（`BaseObject.DropItemDown`，`:529`）本片未实现（`ground.rs` 的 `drop_item_down` 直接取 `tpl.looks`）；② `DropItemDown` 成功分支的 `SendRefMsg(RM_ITEMSHOW,…)` 与拾取金币的 `SendRefMsg(RM_ITEMHIDE,…)` 都是**对附近玩家广播（不含自己）**，本接缝只产出自身的即时帧 + 自身 `MsgQueue` 通知。 | 未实现（不是差异）：这两条都被 T-19（正常丢弃恒失败、`ItemId==0`）与"探针只观测自身"所掩盖 —— Rust 与 oracle 在**可达的自身观测面**上逐字段相同（`ground_vectors.json` 的 `notes` 已写清）。随机外观还需随机源 + 非 0 `ItemId` 才能到达；广播需要 AOI 视距。承接：与 `crates/world` 地面物品 API 同批（T-15）。 | 作者登记（worker-4）；**待独立 principal 复核** |
 
-## M1 S4b 登记（DBSrv 6000 `DataService` 面 + `TimedService` 缓存回写，2026-10-12）
+## M1 S4b 登记（DBSrv 6000 `DataService` 面 + 5700 `MarketService` 面 + `TimedService` 缓存回写，2026-10-12）
 
 > 卡 `openmir2-m1-dbsrv-6000-face`；交付说明 `docs/M1-S4b-DBSrv-6000-交付说明.md`。
-> 下面登记的是「正常数据不可达的异常/畸形路径差异」与「未实现项」，**不是测出的对拍差异**
-> （正常路径由进程级用例 `bins/db-srv/tests/live_data.rs` 对真 `mir2_db` 逐字段钉住）。
+> 下面登记的是「正常数据不可达的异常/畸形路径差异」与「C# 既有怪行为/空桩的 1:1 复刻」——**不是测出的对拍差异**
+> （正常路径由进程级用例 `bins/db-srv/tests/live_data.rs`、`live_market.rs` 与存储用例钉住）。
 
 | 编号 | 差异/偏离 | 触发条件 | 处置与依据 |
 | --- | --- | --- | --- |
@@ -161,4 +161,9 @@ M0 金标准验收状态（2026-10-10）：① 逐字节回放 0 差异、② �
 | S4B-2 | **`QueryItemAttr` 空槽回写**：C# `userItems[nPosition].Desc[nPosition] = …` 对空槽直接 NRE（被 `Get*Record` 的 catch 吞掉，保留已填部分）；Rust 侧对空槽**静默跳过**该行 | 仅当 `characters_item_attr` 行与物品槽错位（脏数据）；正常存档不可达 | 同 S4B-1。作者登记（worker-17），**待独立 principal 复核** |
 | S4B-3 | **`Sign` 长度 < 2 的解码**：C# `BitConverter.ToInt16(signBuff)` 在 `signBuff.Length < 2` 时抛 `ArgumentException`（未捕获）；Rust 取不到 2 字节按 `0`（⇒ 签名不匹配 ⇒ 关连接） | 仅畸形对端帧 | 线上不可达（GameSvr 恒发 4 字节 checkCode 的 EDCode）。作者登记（worker-17），**待独立 principal 复核** |
 | S4B-4 | **缓存键大小写折叠**：C# `ConcurrentDictionary<string,…>(StringComparer.OrdinalIgnoreCase)`；Rust `CacheStore` 用 `gbk::fold_key`（ASCII 折叠 + GBK 键）近似 | 仅当角色名含 ASCII 大小写**且**缓存非空时；而 C# `CacheStorageService.Add` 只在键已存在时替换、无 `TryAdd` ⇒ **缓存恒空** ⇒ 不可观测（`cache.rs` 单测钉住「首次 Add 是 no-op」） | 保留 1:1 怪行为；键口径近似与 D-2/B-103 同族。作者登记（worker-17），**待独立 principal 复核** |
-| S4B-5 | **5700 `MarketService` 未实现**：Rust `bins/db-srv` 不监听 5700；`config.rs` 仅按现网键名解析 `MarketAddr`/`MarketPort`（默认 `127.0.0.1`/`5700`） | GameSvr 连 5700（拍卖行） | **未实现（不是差异）**：按卡内 ④「可拆子片、逐条登记」拆出，承接下一片（`IMarketStorage` MySQL 实现 + 5 个 handler）。现网 `E:/MirServer/DBServer/dbsvr.conf` 无 5700 键，C# 默认值与 Rust 解析一致。作者登记（worker-17），**待独立 principal 复核** |
+| S4B-5 | **5700 `MarketService` 已实现**（`bins/db-srv/src/{market,marketdata}.rs`）：监听 5700、四个 ident、`IMarketStorage` MySQL 实现。`config.rs` 按现网键名解析 `MarketAddr`/`MarketPort`（默认 `127.0.0.1`/`5700`）。 | GameSvr 连 5700（拍卖行） | **实现完成**；C# 侧的不可达/空桩/怪行为逐条登记为 S4B-6…S4B-10。进程级证据 `tests/parity/evidence/M1/s4b-slice3-market.txt`。作者登记（worker-17），**待独立 principal 复核** |
+| S4B-6 | **`MarketItem` 未注册 MemoryPack**：C# `OpenMir2.Data.MarketItem : ClientPacket` 无 `[MemoryPackable]`（仅 `MarketSaveDataItem.Item` 挂 `[MemoryPackAllowSerialize]`）⇒ `Serialize`/`Deserialize` 只要碰到它就抛 `MemoryPackSerializationException`。故 `DB_LOADMARKET` 查得非空时 C# 构造 `MarketDataMessage` 即抛 ⇒ 不回包；`DB_SAVEMARKET` 的 `Deserialize<MarketSaveDataItem>`（成员数 ≥ 1）即抛 ⇒ 不回包。Rust 1:1（`market.rs` 不实现 `MarketItem` 编解码；非空对象头按「C# 会抛」处理） | 任何含非空 `MarketItem` 的线缆帧；**真身探针已证**（`s4b-slice3-market-probe.txt`） | 保留 1:1（行为等价优先）：`marketdata.rs` 仍实现存储 SQL（由单测直接驱动），但线上不可达。作者登记（worker-17），**待独立 principal 复核** |
+| S4B-7 | **`QueryMarketItems` 只取第一行**：C# `if (dr.Read()) { … }` 只读首行（余行丢弃）⇒ 即使表里多条在售也只回 1 条（而该 1 条又因 S4B-6 不回包）；`Desc[i]=Value{i}` 只填 0..13（`Desc[13]` 不写）。Rust 1:1（`marketdata.rs::query_rows` 用 `rows.first()`） | 表里 ≥ 2 行在售 | 保留 1:1；`marketdata` 单测在独立临时库种 2 行、断言只回 1 行（红检：改成返回全部行必红）。作者登记（worker-17），**待独立 principal 复核** |
+| S4B-8 | **`SearchMarketItems` 四分支全是空桩**（`SearchMarketNameItems`/`SearchMarketItemNameItems`/`SearchMarketItemSetItems`/`SearchMarketItemTypeItems` 均 `return new List<>()`，不查库）⇒ `DB_SEARCHMARKET` 恒回 `DB_SRARCHMARKETFAIL(104)`。另有 C# 调用方**实参错位**（`SearchItem` 传到 `sellWho`、`SearchWho` 传到 `itemName`）。Rust 1:1 | 任意搜索请求 | 保留 1:1（`market.rs`/`marketdata.rs`）；因全空桩，错位不影响可观测结果。作者登记（worker-17），**待独立 principal 复核** |
+| S4B-9 | **`QueryMarketItemsCount` 恒 0**：C# 直接 `return 0`（不查库）⇒ `DB_LOADUSERMARKET`（`GroupId!=0`）恒回 `SellCount=0`。Rust 1:1 | 任意个人拍卖行查询 | 保留 1:1；`live_market` 断言 SellCount=0。作者登记（worker-17），**待独立 principal 复核** |
+| S4B-10 | **`SendSuccessMessage` 查询号恒为 1**（C# `SendRequest(connectionId, 1, …)`），而 `SendFailMessage` 回显请求 QueryId；`MarkerUserLoadMessage` 是**全非托管 struct**、MemoryPack 按原始内存布局序列化（**无成员数对象头**，12B 含 3B 尾部填充）。Rust 1:1（`market.rs::send_success` + `to_bytes`） | 所有成功应答 | 保留 1:1；`kind:market` 向量与 `live_market` 断言钉住（红检：补错对象头必红）。作者登记（worker-17），**待独立 principal 复核** |

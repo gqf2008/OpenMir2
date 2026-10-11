@@ -719,8 +719,9 @@ fn main() -> Result<()> {
             "frame" => process_frame(&rec, lineno, sabotage, &mut st)?,
             "server-header" => process_server_header(&rec, lineno, &mut st)?,
             "internal" => process_internal(&rec, lineno, &mut st)?,
-            // 归 `crates/storage/tests/playerdatainfo_vectors.rs`（DBSrv 6000 面）；仍不认识的 kind 必报错。
-            "playerdatainfo" => st.foreign_vectors += 1,
+            // 归 `crates/storage/tests/playerdatainfo_vectors.rs`（DBSrv 6000 面）与
+            // `bins/db-srv/src/market.rs` 单测（DBSrv 5700 面）；仍不认识的 kind 必报错。
+            "playerdatainfo" | "market" => st.foreign_vectors += 1,
             other => bail!("line {}: unknown kind {other}", lineno + 1),
         }
     }
