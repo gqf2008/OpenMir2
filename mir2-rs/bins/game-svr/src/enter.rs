@@ -14,20 +14,31 @@
 //! - `1106 SM_VERSION_FAIL` ← `RM_LOGON`（`Message.cs:1690-1692`）：**无门**，尾恒 `"<<<<<<"`，CRC 来自 `Config`（恒 0）；
 //! - `811 SM_ADJUST_BONUS` ← `SendAdjustBonus()`（`Base.cs:1193-1210`）：按 `Job` 取 `Config.BonusAbilofXxx` / 角色 `BonusAbil` / `Config.NakedAbilofXxx`。
 //!
-//! **仍缺输入（本片登记，不接线）**：
-//! - `50 SM_LOGON` / `41 SM_FEATURECHANGED` / `10 SM_TURN` 的 `GetFeatureToLong()`/`CharDesc`
-//!   （物品/装备层，`PlayObject.cs:3395`；等 `m3bag` 的 `feature.rs` 接缝）；
-//! - `213 SM_ATTACKMODE` 必须与 `50/41` **同组**下发（`SendLogon()` 一次产三条）⇒ 单发半组更坏；
-//! - `42 SM_USERNAME` 的 `GetShowName()`、`52 SM_ABILITY`/`752 SM_SUBABILITY` 的 `RecalcAbilitys()` 产出
-//!   （world 侧触发点）。
+//! **本片已接线**：`42 SM_USERNAME`（`GetShowName()` + `String.conf` 模板）、`46 SM_DAYCHANGING`
+//! （`Bright = M2Share.GameTime` 按**真实本地小时**算，`SystemProcessor.cs:98-134` 的 `GetGameTime` 1:1），
+//! 以及 `50 SM_LOGON` / `41 SM_FEATURECHANGED` / `213 SM_ATTACKMODE` **同组**三条
+//! （`SendLogon()`，`PlayObject.cs:1128-1147`；`GetFeatureToLong`/`GetFeatureEx` 复用已合入的
+//! `game_svr::feature`）。
 //!
-//! `Bright`（`M2Share.GameTime`）是**世界时钟**（`SystemProcessor.cs:98-120` 按真实小时取值），
-//! 本骨架还没实现 ⇒ `game_time = None`。`DayBright()` 只在「地图既无 `DAY` 又无 darkness」时才需要它；
-//! 现网 `[0 比奇省] DAY` ⇒ `Some(0)`，不受影响。
+//! **仍缺输入（本片登记，不接线）**：
+//! - `50/41` 的 `UseItems[Dress/Weapon].StdItem.Shape`：物品形状表（`GameItemSystem`）未移植
+//!   （需物品系统卡）⇒ 只有「无装备」形态（真机验收账号 `mir2test` 的 `aaa`/`bbb` 十三槽全
+//!   `StdIndex=0`）与 oracle 逐字节等价；带装备槽计 0 + WRN（[`feature_shapes`]，非 1:1 已登记）。
+//!   同时 `CharStatus` 的 buff 部分（`ActorBuffSystem`）未移植，会话初生恒 0（金标准 #3 印证）。
+//! - `10 SM_TURN` 的 `CharDesc`（Feature+Status）依赖同一物品层（且发帧点在世界 tick）⇒ 未接；
+//! - `52 SM_ABILITY`/`752 SM_SUBABILITY`：发帧点 = `PlayObject.cs:1385-1386` 的登录后块
+//!   （`SendPriorityMsg(RM_ABILITY/RM_SUBABILITY)` → `Message.cs:1732-1735` / `:1935`），
+//!   **输入由 `RecalcAbilitys()`（`BaseObject.Abil.cs` + `PlayObject.cs:2008`）产出**（`WAbil` 40B /
+//!   `AntiMagic`·`HitPoint`·`SpeedPoint`·…）——装备/姿态/套装/被动层尚未移植 ⇒ 本片不接线、登记。
+//!
+//! `GameTimeChanged()`（`PlayObject.Base.cs:824-830`，游戏时间变化时广播 `RM_DAYCHANGING`）的
+//! **触发点**属世界 tick 侧（未接，登记）；本片只实现登录时那一条 46。
 
 use mir2_envir::{GameSvrConf, MapInfoFlag, NakedAbility as ConfNakedAbility};
 
-use crate::record::NakedAbility as RecNakedAbility;
+use crate::record::{NakedAbility as RecNakedAbility, ServerUserItem};
+use crate::strings::StringConf;
+use game_svr::feature::{feature_ex, human_feature, make_long, make_word};
 use game_svr::smframe::EnterWorldInputs;
 
 /// 装配入图帧额外输入所需的世界/配置层数据（`None` = 该层未就绪，对应帧**跳过并登记**）。
@@ -54,6 +65,202 @@ pub struct WorldFrameInputs<'a> {
     pub bonus_point: i32,
     /// oracle `M2Share.GameTime`（世界时钟）。未实现 ⇒ `None`。
     pub game_time: Option<u8>,
+    /// `String.conf` 的展示名模板（帧 42 的 `GetShowName()`，见 [`show_name`]）。
+    pub strings: Option<&'a StringConf>,
+    /// 帧 42 的展示名输入（`None` ⇒ 帧 42 跳过并登记）。
+    pub show_name: Option<ShowNameInputs<'a>>,
+    /// 帧 50/41/213 的输入（`PlayObject.SendLogon()`，`PlayObject.cs:1128-1147` 同组连发三条）。
+    /// `None`（未解析出角色记录全字段）⇒ 三条同组跳过并登记，绝不单发半组。
+    pub logon: Option<LogonInputs>,
+}
+
+/// `PlayObject.SendLogon()`（`PlayObject.cs:1128-1147`）一次产三条帧所需的输入。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LogonInputs {
+    /// `GetFeatureToLong()` / `GetFeatureEx()` 的输入（帧 50 的 `Param1` + 帧 41 的 `nRecog`/`Series`）。
+    pub feature: FeatureInputs,
+    /// `PlayObject.CharStatus`（帧 50 的 `Param2`；`GetCharStatus()`）。
+    pub char_status: i32,
+    /// `PlayObject.AllowGroup`（帧 50 的 `Tag1` 门；`WorldServer.cs:1146` = 记录 `allow_group > 0`）。
+    pub allow_group: bool,
+    /// `PlayObject.AttatckMode`（帧 213 的 `Recog`；`WorldServer.cs:1147` = 记录 `attatck_mode`）。
+    pub attack_mode: u8,
+}
+
+/// `PlayObject.GetFeature(null)`（`PlayObject.cs:3393`）与 `CharacterObject.GetFeatureEx()`
+/// （`CharacterObject.cs:146`）的输入；纯函数实现复用已合入的 [`game_svr::feature`]。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FeatureInputs {
+    /// `UseItems[ItemLocation::Dress]` 的 `StdItem.Shape`（未穿 / `Index == 0` / `GetStdItem == null` ⇒ `None`）。
+    pub dress_shape: Option<u8>,
+    /// `UseItems[ItemLocation::Weapon]` 的 `StdItem.Shape`。
+    pub weapon_shape: Option<u8>,
+    /// `Gender`（记录 `sex`；`PlayerGender`：0 `Man` / 1 `WoMan`）。
+    pub gender: u8,
+    /// `Hair`（记录 `hair`）。
+    pub hair: u8,
+    /// `CharacterObject.OnHorse`。
+    pub on_horse: bool,
+    /// `CharacterObject.HorseType`。
+    pub horse_type: u8,
+    /// `CharacterObject.DressEffType`。
+    pub dress_eff_type: u8,
+}
+
+/// `PlayObject.GetShowName()`（`PlayObject.cs:3300-3388`）的输入。
+#[derive(Debug, Clone, Copy)]
+pub struct ShowNameInputs<'a> {
+    /// `ChrName`（记录 `chr_name`）。
+    pub chr_name: &'a str,
+    /// `ReLevel`（记录 `re_level`）。
+    pub re_level: u8,
+    /// `Job`（记录 `job`；`PlayerJob`：0 战士 / 1 法师 / 2 道士）。
+    pub job: u8,
+    /// `Gender`（记录 `sex`；`PlayerGender`：0 `Man` / 1 `WoMan`）。
+    pub sex: u8,
+    /// `DearName`（记录 `dear_name`）。
+    pub dear_name: &'a str,
+    /// `MasterName`（记录 `master_name`）。
+    pub master_name: &'a str,
+    /// `IsMaster`（记录 `is_master`）。
+    pub is_master: bool,
+    /// `SystemShare.Config.ShowRankLevelName`（`Server.conf [Setup]`）。
+    pub show_rank_level_name: bool,
+}
+
+/// `GetChrColor()`（`PlayObject.cs:3585-3656`）对**玩家**的返回值。
+///
+/// oracle 分支的输入（PK 红名 / 行会关系 / 城堡战区域）在本骨架都不触发：
+/// - `result = baseObject.NameColor`，而 `NameColor` **只在构造器赋过 255**
+///   （`BaseObject.cs:385`；全仓 grep `NameColor =` 仅此一处）⇒ 恒 `255`；
+/// - `PvpFlag`/`GetGuildRelation`/`Envir.Flag.Fight3Zone`/`CastleMgr.InCastleWarArea` 仅改 `result`，
+///   在「新号/无行会/无城堡」形态下全部落空（本骨架无 PK 红名/行会/城堡系统）。
+///
+/// 金标准 #7 的 `Param == 255` 印证。若今后接入红名/行会，需在此补 oracle 的分支。
+pub const PLAY_NAME_COLOR: u8 = 255;
+
+/// `DateTime.Now.Hour` → `M2Share.GameTime`（`SystemProcessor.cs:98-134` 的 `GetGameTime`，1:1）。
+///
+/// `1`=白天、`2`=日落、`0`=日出、`3`=夜晚；24 小时全覆盖（`_` 支兜住 0/1/2/3/12/13/14/22
+/// 以及非法入参 ≥24）。
+#[must_use]
+pub fn game_time_from_hour(hour: u32) -> u8 {
+    match hour {
+        5..=10 | 16..=19 | 21 => 1,
+        11 | 20 | 23 => 2,
+        4 | 15 => 0,
+        _ => 3,
+    }
+}
+
+/// 真实本地时钟的 `GameTime`。
+///
+/// oracle 的 `M2Share.GameTime` 由 `SystemProcessor` 每 50ms 用 `DateTime.Now.Hour` 刷新
+/// （`SystemProcessor.cs:48/98-134`），登录时读到的就是这个桶值 ⇒ 这里按同一口径读**真实本地时钟**
+/// （不是假时钟；`chrono::Local` 走系统时区）。每次登录算一次与 oracle 的 50ms 刷新在小时桶上等价。
+#[must_use]
+pub fn game_time_now() -> u8 {
+    let hour = chrono::Timelike::hour(&chrono::Local::now());
+    game_time_from_hour(hour)
+}
+
+/// `.NET` `string.Format`（单参数形态）的**最小 1:1**：处理 `{0}`、`{{`/`}}`；
+/// 其余复合格式（`{0,5}` 对齐 / `{0:X}` 格式说明符 / 尾随参数越界）在 oracle 侧会抛
+/// `FormatException`（`GetShowName` 的整个 `try` 被 catch ⇒ 返回空串）。
+///
+/// 现网 `String.conf` 的 `RankLevelName=%s\` 等值**不含花括号** ⇒ `string.Format` 原样返回
+/// （`%s` 不是占位符），本函数按同一结果返回。
+fn dotnet_format_1(fmt: &str, arg: &str) -> Option<String> {
+    let mut out = String::new();
+    let mut chars = fmt.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '{' => {
+                if chars.peek() == Some(&'{') {
+                    chars.next();
+                    out.push('{');
+                    continue;
+                }
+                let mut idx = String::new();
+                loop {
+                    match chars.next() {
+                        Some('}') => break,
+                        Some(d) if d.is_ascii_digit() => idx.push(d),
+                        _ => return None, // 对齐/格式说明符/未闭合 ⇒ 同 oracle 抛错
+                    }
+                }
+                if idx != "0" {
+                    return None; // 只有 0 号参数（尾随参数越界 ⇒ FormatException）
+                }
+                out.push_str(arg);
+            }
+            '}' => {
+                if chars.peek() == Some(&'}') {
+                    chars.next();
+                    out.push('}');
+                } else {
+                    return None;
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    Some(out)
+}
+
+/// `PlayObject.GetShowName()`（`PlayObject.cs:3300-3388`）的 1:1。
+///
+/// 本骨架无行会系统 ⇒ `MyGuild == null` ⇒ `sGuildName` 恒空（`ShowGuildName` 分支不可达，登记）。
+/// `Format` 抛错时 oracle 的 `catch` 让 `result` 保持空串 ⇒ 这里同样返回空串。
+#[must_use]
+pub fn show_name(cfg: &StringConf, input: &ShowNameInputs<'_>) -> String {
+    let s_chr_name = if input.show_rank_level_name {
+        match dotnet_format_1(cfg.rank_level_name(), input.chr_name) {
+            Some(s) => s,
+            None => return String::new(),
+        }
+    } else if input.re_level > 0 {
+        // `switch (Job)` 无 `default` ⇒ 不在 {0,1,2} 时 `sChrName` 保持初值空串。
+        match input.job {
+            0 => cfg.warr_re_new_name().replace("%chrname", input.chr_name),
+            1 => cfg.wizard_re_new_name().replace("%chrname", input.chr_name),
+            2 => cfg.taos_re_new_name().replace("%chrname", input.chr_name),
+            _ => String::new(),
+        }
+    } else {
+        input.chr_name.to_string()
+    };
+    let s_dear_name = if input.dear_name.is_empty() {
+        String::new()
+    } else {
+        let tpl = if input.sex == 0 {
+            cfg.man_dear_name()
+        } else {
+            cfg.wo_man_dear_name()
+        };
+        match dotnet_format_1(tpl, input.dear_name) {
+            Some(s) => s,
+            None => return String::new(),
+        }
+    };
+    let s_master_name = if input.master_name.is_empty() {
+        String::new()
+    } else {
+        let tpl = if input.is_master {
+            cfg.master_name()
+        } else {
+            cfg.no_master_name()
+        };
+        match dotnet_format_1(tpl, input.master_name) {
+            Some(s) => s,
+            None => return String::new(),
+        }
+    };
+    cfg.human_show_name()
+        .replace("%chrname", &s_chr_name)
+        .replace("%guildname", "")
+        .replace("%dearname", &s_dear_name)
+        .replace("%mastername", &s_master_name)
 }
 
 /// `PlayObject.DayBright()`（`PlayObject.Base.cs:244-269`）的 1:1。
@@ -134,11 +341,55 @@ pub fn conf_naked(n: &RecNakedAbility) -> ConfNakedAbility {
     }
 }
 
+/// 记录 `hum_items` 里的 `ItemLocation::Dress` / `ItemLocation::Weapon` 槽位下标
+/// （`src/OpenMir2/Enums/ItemLocation.cs`：`Dress = 0`、`Weapon = 1`）。
+pub const ITEM_LOCATION_DRESS: usize = 0;
+pub const ITEM_LOCATION_WEAPON: usize = 1;
+
+/// `UseItems[ItemLocation::Dress/Weapon]` 的 `StdItem.Shape`——`PlayObject.GetFeature()`
+/// （`PlayObject.cs:3393-3423`）的两段输入。
+///
+/// 逐行对照 oracle 的分支：
+/// - 槽为 `null` / `.Index <= 0` ⇒ 该段计 0（`None`）；
+/// - `.Index > 0` 且 `GetStdItem(Index) != null` ⇒ 段 = `(byte)(Shape * 2)`；
+/// - `.Index > 0` 但 `GetStdItem(Index) == null` ⇒ 段 = 0。
+///
+/// **物品形状表（`StdItem`/`GameItemSystem`）尚未移植**（`openmir2-m2-enter-world-frames` 登记：
+/// 需物品系统卡）⇒ `.Index > 0` 时无法解析 `Shape`，本函数按 oracle 的 `GetStdItem == null` 分支
+/// 记 0 并产出一条 WRN（**不猜**：只有「无装备」形态与 oracle 逐字节等价；真机验收账号
+/// `mir2test` 的 `aaa`/`bbb` 十三槽全 `StdIndex=0`，正是这一形态）。
+#[must_use]
+pub fn feature_shapes(
+    hum_items: Option<&[Option<ServerUserItem>]>,
+) -> (Option<u8>, Option<u8>, Vec<String>) {
+    let index_of = |slot: usize| -> u16 {
+        hum_items
+            .and_then(|items| items.get(slot))
+            .and_then(|item| item.as_ref())
+            .map_or(0, |item| item.index)
+    };
+    let mut warns = Vec::new();
+    for (slot, label) in [
+        (ITEM_LOCATION_DRESS, "Dress"),
+        (ITEM_LOCATION_WEAPON, "Weapon"),
+    ] {
+        if index_of(slot) > 0 {
+            warns.push(format!(
+                "帧 50/41 的 {label} 槽有装备（Index={}）但物品形状表未加载 ⇒ Shape 按 oracle 的 \
+                 `GetStdItem == null` 分支计 0（需物品系统卡；本形态非 1:1，已登记）",
+                index_of(slot)
+            ));
+        }
+    }
+    (None, None, warns)
+}
+
 /// `SendAdjustBonus()`（`PlayObject.Base.cs:1193-1210`）的三段 `(A, B, C)`（各自 MemoryPack 原文，20B）。
 ///
 /// - `A` = `Config.BonusAbilofXxx`；`B` = 角色 `BonusAbil`；`C` = `Config.NakedAbilofXxx`；
-/// - `Job` 不在 `{0,1,2}` 或 `BonusAbil` 缺失 ⇒ `None`（oracle 的 `switch` 无 `default`，此时 `sSendMsg` 为空；
-///   本骨架不许猜，跳过并登记）。
+/// - `Job` 不在 `{0,1,2}` 或 `BonusAbil` 缺失 ⇒ `None`。oracle 此时 `sSendMsg` 保持空串，
+///   `SendSocket(defMsg, "")` 在 `string.IsNullOrEmpty(sMsg)` 时**直接 return**（`PlayObject.Socket.cs:111-114`）
+///   ⇒ **一帧都不发**，故 `None`（跳过）是 1:1，不是偏差。
 #[must_use]
 pub fn adjust_bonus_parts(
     conf: &GameSvrConf,
@@ -166,7 +417,14 @@ pub fn apply(base: &mut EnterWorldInputs, wx: &WorldFrameInputs<'_>) -> Vec<Stri
     if let Some(flag) = wx.flag {
         // 帧 51 的 `Series` = `DayBright()`（`Message.cs:1681`）。
         match day_bright(flag, wx.game_time) {
-            Some(d) => base.day_bright = d,
+            Some(d) => {
+                base.day_bright = d;
+                // 帧 46 `SM_DAYCHANGING`（`Message.cs:1741`）：`Bright = M2Share.GameTime`、`DayBright()`。
+                // 两者都要求世界时钟（`Bright`），故 `game_time` 缺失时跳过并登记（不猜）。
+                if let Some(gt) = wx.game_time {
+                    base.day_changing = Some((u16::from(gt), d));
+                }
+            }
             None => warns.push(format!(
                 "当前地图的 DayBright 依赖 GameTime（世界时钟未实现）⇒ 帧 51 的 Series 沿用占位 {}（登记）",
                 base.day_bright
@@ -178,6 +436,45 @@ pub fn apply(base: &mut EnterWorldInputs, wx: &WorldFrameInputs<'_>) -> Vec<Stri
         if let Some(desc) = wx.map_desc {
             base.map_description = Some((music_id(flag), gbk(desc)));
         }
+    }
+
+    // 帧 42 `SM_USERNAME`（`Message.cs:1686` → `ClientQueryUserName(ActorId, CurrX, CurrY)`，
+    // `PlayObject.Operate.cs:18-34`）：目标就是自己 ⇒ `CretInNearXy` 命中，尾 = `EncodeString(GetShowName())`。
+    if let (Some(strings), Some(sn)) = (wx.strings, wx.show_name.as_ref()) {
+        base.username = Some((base.actor_id, PLAY_NAME_COLOR, gbk(&show_name(strings, sn))));
+    }
+
+    // 帧 50/41/213（`PlayObject.SendLogon()`，`PlayObject.cs:1128-1147`）：oracle 在 `RM_LOGON`
+    // 支里**同组连发三条**（`SM_LOGON` → `SM_FEATURECHANGED` → `SM_ATTACKMODE`）；`logon` 缺失时
+    // 三条一起跳过（单发半组比不发更坏）。
+    match wx.logon {
+        Some(l) => {
+            let feature = human_feature(
+                l.feature.dress_shape,
+                l.feature.weapon_shape,
+                l.feature.gender,
+                l.feature.hair,
+            );
+            let feature_ex = feature_ex(
+                l.feature.on_horse,
+                l.feature.horse_type,
+                l.feature.dress_eff_type,
+            );
+            // `if (AllowGroup) messageBodyWl.Tag1 = MakeLong(MakeWord(1, 0), GetFeatureEx()); else Tag1 = 0;`
+            let tag1 = if l.allow_group {
+                make_long(make_word(1, 0), feature_ex)
+            } else {
+                0
+            };
+            base.logon_body_wl = Some((feature, l.char_status, tag1, 0));
+            base.feature = Some((feature, feature_ex));
+            base.attack_mode = Some(l.attack_mode);
+        }
+        None => warns.push(
+            "帧 50/41/213 输入不足（未解析出角色记录全字段 GetFeatureToLong/CharStatus/AttatckMode）\
+             ⇒ 同组跳过（登记）"
+                .to_string(),
+        ),
     }
 
     match wx.conf {
@@ -192,10 +489,14 @@ pub fn apply(base: &mut EnterWorldInputs, wx: &WorldFrameInputs<'_>) -> Vec<Stri
             // 帧 811（`BonusPoint` 落在命令头 Recog，由 `sm_adjust_bonus` 取出）。
             match adjust_bonus_parts(conf, wx.job, wx.bonus_abil) {
                 Some((a, b, c)) => base.adjust_bonus = Some((wx.bonus_point, a, b, c)),
-                // oracle 的 `switch (Job)` 无 `default` ⇒ 此时 `sSendMsg` 为空（`SendSocket` 只发 12B 头）；
-                // 本骨架不发半帧，跳过并登记（真线上 `Job` 恒 ∈ {0,1,2}）。
+                // oracle 的 `switch (Job)` 无 `default` ⇒ `sSendMsg` 保持空串；`SendAdjustBonus` 调的是
+                // 2 参 `SendSocket(ClientMsg, sSendMsg)`，而该重载在 `string.IsNullOrEmpty(sMsg)` 时
+                // **直接 return**（`PlayObject.Socket.cs:111-114`）⇒ **oracle 此时一帧都不发**。
+                // 故这里的「跳过」就是 1:1（reviewer-1 的 O-1 口径「发 header-only 811」有误：那是
+                // `SendDefMessage` 的空尾分支 `:37-40`，不是 `SendAdjustBonus` 用的 2 参 `SendSocket`）。
+                // 真线上 `Job` 恒 ∈ {0,1,2}，实语料不可达（`openmir2-m2-enter-world-frames`）。
                 None => warns.push(format!(
-                    "帧 811 输入不足（Job={} 不在 {{0,1,2}} 或角色 BonusAbil 缺失）⇒ 跳过（登记）",
+                    "帧 811 输入不足（Job={} 不在 {{0,1,2}} 或角色 BonusAbil 缺失）⇒ 跳过（oracle 同样不发，1:1）",
                     wx.job
                 )),
             }
@@ -242,6 +543,13 @@ mod tests {
             .collect()
     }
 
+    fn hex(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
     /// 帧 766/54 的输入：`[0 比奇省] DAY` ⇒ `n8=0`、`nMusicid=-1`、尾 = `比奇省` 的 GBK 字节。
     #[test]
     fn area_state_and_map_description_follow_real_map0_flag() {
@@ -264,10 +572,17 @@ mod tests {
             job: 0,
             bonus_point: 0,
             game_time: None,
+            strings: None,
+            show_name: None,
+            logon: None,
         };
         let warns = apply(&mut base, &wx);
-        assert_eq!(warns.len(), 1, "只该有「未加载 conf」一条：{warns:?}");
-        assert!(warns[0].contains("Server.conf"), "{warns:?}");
+        assert_eq!(
+            warns.len(),
+            2,
+            "只该有「未加载 conf」+「50/41/213 无输入」两条：{warns:?}"
+        );
+        assert!(warns.iter().any(|w| w.contains("Server.conf")), "{warns:?}");
         assert_eq!(base.area_state, Some(0));
         assert_eq!(
             base.map_description,
@@ -329,13 +644,17 @@ mod tests {
             job: 0,
             bonus_point: 0,
             game_time: None,
+            strings: None,
+            show_name: None,
+            logon: None,
         };
         let mut base = EnterWorldInputs {
             actor_id: 7,
             ..EnterWorldInputs::default()
         };
         let warns = apply(&mut base, &wx);
-        assert!(warns.is_empty(), "conf 在、无 flag ⇒ 不该有 WRN：{warns:?}");
+        assert_eq!(warns.len(), 1, "只该有「50/41/213 无输入」一条：{warns:?}");
+        assert!(warns[0].contains("50/41/213"), "{warns:?}");
         assert!(base.client_conf.is_none(), "门关 ⇒ 11029 不发");
         assert!(base.game_gold_name.is_none(), "门关 ⇒ 5008 不发");
         assert_eq!(base.version_fail, Some((0, 0)), "1106 无门，CRC 恒 0");
@@ -351,9 +670,10 @@ mod tests {
             ..EnterWorldInputs::default()
         };
         let warns2 = apply(&mut base2, &wx_open);
-        assert!(
-            warns2.is_empty(),
-            "conf 在、无 flag ⇒ 不该有 WRN：{warns2:?}"
+        assert_eq!(
+            warns2.len(),
+            1,
+            "只该有「50/41/213 无输入」一条：{warns2:?}"
         );
         let frames = base2.frames();
         assert_eq!(
@@ -460,10 +780,13 @@ mod tests {
             job: rec.data.job,
             bonus_point: rec.data.bonus_point,
             game_time: None,
+            strings: None,
+            show_name: None,
+            logon: None,
         };
         let warns = apply(&mut base, &wx);
-        assert_eq!(warns.len(), 1, "只该有 811 跳过的一条：{warns:?}");
-        assert!(warns[0].contains("811"), "{warns:?}");
+        assert_eq!(warns.len(), 2, "811 跳过 + 50/41/213 无输入：{warns:?}");
+        assert!(warns.iter().any(|w| w.contains("811")), "{warns:?}");
         let frames = base.frames();
         assert_eq!(
             idents(&frames),
@@ -520,10 +843,285 @@ mod tests {
             job: 0,
             bonus_point: 0,
             game_time: None,
+            strings: None,
+            show_name: None,
+            logon: None,
         };
         let warns = apply(&mut base, &wx);
-        assert_eq!(warns.len(), 2, "DayBright + 未加载 conf 各一条：{warns:?}");
+        assert_eq!(
+            warns.len(),
+            3,
+            "DayBright + 未加载 conf + 50/41/213 无输入：{warns:?}"
+        );
         assert_eq!(base.day_bright, 7, "不猜 ⇒ 沿用调用方给的占位值");
         assert_eq!(base.area_state, Some(0));
+    }
+
+    /// `SystemProcessor.GetGameTime()`（`SystemProcessor.cs:98-134`）的小时→`GameTime` 映射逐值钉死。
+    ///
+    /// 红检：把 `11 | 20 | 23 => 2` 改成 `=> 1` ⇒ 本用例必红。
+    #[test]
+    fn game_time_from_hour_matches_oracle_switch() {
+        for h in [5u32, 6, 7, 8, 9, 10, 16, 17, 18, 19, 21] {
+            assert_eq!(game_time_from_hour(h), 1, "白天: {h}");
+        }
+        for h in [11u32, 20, 23] {
+            assert_eq!(game_time_from_hour(h), 2, "日落: {h}");
+        }
+        for h in [4u32, 15] {
+            assert_eq!(game_time_from_hour(h), 0, "日出: {h}");
+        }
+        for h in [0u32, 1, 2, 3, 12, 13, 14, 22] {
+            assert_eq!(game_time_from_hour(h), 3, "夜晚: {h}");
+        }
+        assert!(game_time_now() <= 3, "真实时钟必须落在 0..=3");
+    }
+
+    /// 现网 `String.conf`（`RankLevelName=%s\` / `HumanShowName=%chrname\%guildname\%dearname`）加上
+    /// `Server.conf ShowRankLevelName=1`：`GetShowName()` 的 `%s` **不是 .NET 占位符**（照搬 oracle
+    /// 的 `string.Format` 语义）⇒ 结果为字面量；与金标准 #7（seq 21）线缆逐字节相等。
+    ///
+    /// 红检：`PLAY_NAME_COLOR` 255→0、或 `show_name` 的替换串被改 ⇒ 本用例必红。
+    #[test]
+    fn show_name_matches_deployed_config_and_golden_42() {
+        let strings = crate::strings::parse(
+            b"[String]\nRankLevelName=%s\\\nHumanShowName=%chrname\\%guildname\\%dearname\n",
+        );
+        let sn = ShowNameInputs {
+            chr_name: "bot",
+            re_level: 0,
+            job: 0,
+            sex: 0,
+            dear_name: "",
+            master_name: "",
+            is_master: false,
+            show_rank_level_name: true,
+        };
+        let expected = r"%s\\\";
+        assert_eq!(show_name(&strings, &sn), expected);
+        assert_eq!(
+            PLAY_NAME_COLOR, 255,
+            "BaseObject.NameColor 默认值（BaseObject.cs:385）"
+        );
+        let body = game_svr::smframe::sm_username(
+            0x7C30_3998,
+            PLAY_NAME_COLOR,
+            &gbk(&show_name(&strings, &sn)),
+        );
+        assert_eq!(
+            game_svr::smframe::client_frame(&body),
+            hex("2348615861705e685d5364685f6464686b5d736c7778783c21"),
+            "金标准 #7 的 `42 SM_USERNAME`（seq 21）逐字节"
+        );
+    }
+
+    /// `.NET string.Format(fmt, arg)` 的两个形态：`{0}` 替换（源码缺省模板）与无花括号原样（现网）。
+    #[test]
+    fn rank_level_name_follows_dotnet_string_format() {
+        let c = crate::strings::parse(b"[String]\n");
+        let sn = ShowNameInputs {
+            chr_name: "英雄",
+            re_level: 0,
+            job: 0,
+            sex: 0,
+            dear_name: "",
+            master_name: "",
+            is_master: false,
+            show_rank_level_name: true,
+        };
+        // 缺省 `RankLevelName={0}\平民`、`HumanShowName=%chrname\%guildname\%dearname\%mastername`。
+        assert_eq!(show_name(&c, &sn), r"英雄\平民\\\");
+        // `ShowRankLevelName=false` 且未转生 ⇒ 直接用 `ChrName`。
+        let plain = ShowNameInputs {
+            show_rank_level_name: false,
+            ..sn
+        };
+        assert_eq!(show_name(&c, &plain), r"英雄\\\");
+    }
+
+    /// 帧 42/46 进生产路径：`game_time=Some(1)` + `[0 比奇省] DAY` ⇒ `day_changing=(1,0)`，
+    /// `username=(ActorId, 255, GBK(name))`；`frames()` 里 42 在 766 前、46 在 54 后（金标准相对序）。
+    #[test]
+    fn username_and_daychanging_are_wired_in_order() {
+        let (flag, desc) = flag_day();
+        let strings = crate::strings::StringConf::defaults();
+        let sn = ShowNameInputs {
+            chr_name: "bot",
+            re_level: 0,
+            job: 0,
+            sex: 0,
+            dear_name: "",
+            master_name: "",
+            is_master: false,
+            show_rank_level_name: false,
+        };
+        let mut base = EnterWorldInputs {
+            actor_id: 7,
+            ..EnterWorldInputs::default()
+        };
+        let wx = WorldFrameInputs {
+            flag: Some(&flag),
+            map_desc: Some(&desc),
+            conf: None,
+            bonus_abil: None,
+            soft_version_date: 0,
+            game_gold: 0,
+            game_point: 0,
+            job: 0,
+            bonus_point: 0,
+            game_time: Some(1),
+            strings: Some(&strings),
+            show_name: Some(sn),
+            logon: None,
+        };
+        let warns = apply(&mut base, &wx);
+        assert_eq!(
+            warns.len(),
+            2,
+            "只该有「未加载 conf」+「50/41/213 无输入」两条：{warns:?}"
+        );
+        assert_eq!(
+            base.day_changing,
+            Some((1, 0)),
+            "Bright=1；DAY ⇒ DayBright=0"
+        );
+        assert_eq!(base.username, Some((7, 255, gbk(r"bot\\\"))));
+        assert_eq!(
+            idents(&base.frames()),
+            vec![658, 42, 766, 54, 46],
+            "42 在 766 前、46 在 54 后（金标准相对序）"
+        );
+    }
+
+    /// **帧 50/41/213 同组接线**（`PlayObject.SendLogon()`，`PlayObject.cs:1128-1147`）：
+    /// `logon: Some(..)` ⇒ 三条按金标准相对序产出，且字段序/位序逐字节钉死。
+    ///
+    /// 红检：把 `human_feature(dress, weapon, gender, hair)` 的 `dress`/`weapon` 两参对调 ⇒
+    /// 本用例必红（`0x0705_0B00` → `0x030B_0500`）；把 `MakeWord(1, 0)` 改 `MakeWord(0, 1)`
+    /// ⇒ `Tag1` 处必红。
+    #[test]
+    fn logon_group_is_wired_in_order_and_byte_exact() {
+        let logon = LogonInputs {
+            feature: FeatureInputs {
+                dress_shape: Some(3),
+                weapon_shape: Some(5),
+                gender: 1,
+                hair: 2,
+                on_horse: true,
+                horse_type: 9,
+                dress_eff_type: 4,
+            },
+            char_status: 0x1122_3344,
+            allow_group: true,
+            attack_mode: 2,
+        };
+        // 逐值手算（oracle `GetFeature`/`GetFeatureEx`）：
+        //   nDress  = (byte)(3*2) + 1 = 7
+        //   nWeapon = 1 + (byte)(5*2) = 11
+        //   nHair   = (byte)(2*2 + 1) = 5
+        //   feature = MakeHumanFeature(0, 7, 11, 5) = MakeLong(MakeWord(0,11), MakeWord(5,7))
+        //           = 0x0B00 | (0x0705 << 16) = 0x0705_0B00
+        //   featureEx = MakeWord(9, 4) = 0x0409
+        //   Tag1   = MakeLong(MakeWord(1,0), featureEx) = 0x0001 | (0x0409 << 16) = 0x0409_0001
+        let mut base = EnterWorldInputs {
+            actor_id: 7,
+            cur_x: 10,
+            cur_y: 20,
+            dir: 2,
+            light: 1,
+            ..EnterWorldInputs::default()
+        };
+        let wx = WorldFrameInputs {
+            flag: None,
+            map_desc: None,
+            conf: None,
+            bonus_abil: None,
+            soft_version_date: 0,
+            game_gold: 0,
+            game_point: 0,
+            job: 0,
+            bonus_point: 0,
+            game_time: None,
+            strings: None,
+            show_name: None,
+            logon: Some(logon),
+        };
+        let warns = apply(&mut base, &wx);
+        assert_eq!(warns.len(), 1, "只该有「未加载 conf」一条：{warns:?}");
+        assert_eq!(
+            base.logon_body_wl,
+            Some((0x0705_0B00, 0x1122_3344, 0x0409_0001, 0))
+        );
+        assert_eq!(base.feature, Some((0x0705_0B00, 0x0409)));
+        assert_eq!(base.attack_mode, Some(2));
+
+        let frames = base.frames();
+        assert_eq!(idents(&frames), vec![658, 50, 41, 213], "同组三条 + 658");
+        // 帧 50 尾 = `EncodePacket(MessageBodyWL 16B)`。
+        let wl = edcode::decode(&frames[1][12..]);
+        assert_eq!(wl.len(), 16);
+        assert_eq!(&wl[0..4], &0x0705_0B00i32.to_le_bytes());
+        assert_eq!(&wl[4..8], &0x1122_3344i32.to_le_bytes());
+        assert_eq!(&wl[8..12], &0x0409_0001i32.to_le_bytes());
+        assert_eq!(&wl[12..16], &[0, 0, 0, 0]);
+        // 帧 41 的 Param/Tag = Lo/HiWord(feature)、Series = featureEx。
+        let cm41 = CommandMessage::from_bytes(&frames[2]).unwrap();
+        assert_eq!((cm41.ident, cm41.recog), (41, 7));
+        assert_eq!(
+            (cm41.param, cm41.tag, cm41.series),
+            (0x0B00, 0x0705, 0x0409)
+        );
+        // 帧 213 的模式在 Recog（`SendDefMessage` 的第 2 参）。
+        let cm213 = CommandMessage::from_bytes(&frames[3]).unwrap();
+        assert_eq!((cm213.ident, cm213.recog), (213, 2));
+
+        // `AllowGroup=false` ⇒ `Tag1 = 0`（oracle 的 `else` 支）。
+        let mut base2 = EnterWorldInputs {
+            actor_id: 7,
+            ..EnterWorldInputs::default()
+        };
+        let wx2 = WorldFrameInputs {
+            logon: Some(LogonInputs {
+                allow_group: false,
+                ..logon
+            }),
+            ..wx
+        };
+        let _ = apply(&mut base2, &wx2);
+        assert_eq!(
+            base2.logon_body_wl.map(|w| w.2),
+            Some(0),
+            "AllowGroup=false ⇒ Tag1=0"
+        );
+    }
+
+    /// `feature_shapes`：`Index == 0`（未穿）/ 无记录 ⇒ `None` 且无 WRN；`Index > 0`（带装备）⇒
+    /// 形状表未加载 ⇒ 计 0 + WRN（oracle `GetStdItem == null` 分支，登记非 1:1）。
+    #[test]
+    fn feature_shapes_reports_missing_item_table_for_equipped_slots() {
+        let empty = ServerUserItem {
+            make_index: 0,
+            index: 0,
+            dura: 0,
+            dura_max: 0,
+            desc: None,
+            color_r: 0,
+            color_g: 0,
+            color_b: 0,
+            prefix: None,
+        };
+        let worn = ServerUserItem {
+            index: 223,
+            ..empty.clone()
+        };
+        let items = vec![Some(worn), Some(empty.clone())];
+        let (dress, weapon, warns) = feature_shapes(Some(&items));
+        assert_eq!((dress, weapon), (None, None), "形状表未加载 ⇒ 不猜");
+        assert_eq!(warns.len(), 1, "只有 Dress 槽带装备：{warns:?}");
+        assert!(warns[0].contains("Index=223"), "{warns:?}");
+        let all_empty = vec![None, Some(empty)];
+        let (_, _, warns) = feature_shapes(Some(&all_empty));
+        assert!(warns.is_empty(), "空槽不 WRN：{warns:?}");
+        assert!(feature_shapes(None).2.is_empty());
     }
 }

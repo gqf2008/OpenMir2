@@ -53,6 +53,11 @@ pub struct GateConfig {
     pub db_addr: String,
     /// `[Server] DBPort`（现网 6000）。
     pub db_port: u16,
+    /// `[Setup] ShowRankLevelName`（oracle `GameSvrConf.cs:376/1464` 缺省 `false`）。
+    ///
+    /// 帧 42 `SM_USERNAME` 的展示名走 `GetShowName()`（`PlayObject.cs:3329`）：
+    /// `true` ⇒ `Format(RankLevelName, ChrName)`，`false` ⇒ 原名/转生名模板。现网 `=1`。
+    pub show_rank_level_name: bool,
 }
 
 /// 默认配置文件：可执行文件同目录的 `Server.conf`（与 C# `AppContext.BaseDirectory` 一致）。
@@ -84,6 +89,7 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut notice_dir: Option<String> = None;
     let mut red_msg_f_color: Option<u8> = None;
     let mut red_msg_b_color: Option<u8> = None;
+    let mut show_rank_level_name: Option<bool> = None;
     let mut ids_addr: Option<String> = None;
     let mut ids_port: Option<u16> = None;
     let mut db_addr: Option<String> = None;
@@ -159,6 +165,14 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                             .with_context(|| format!("RedMsgBColor 不是合法字节：{v:?}"))?,
                     );
                 }
+                // `ServerConf.cs:271` 的 `ReadWriteBool("Setup", ...)`：现网 `0/1`。
+                "SHOWRANKLEVELNAME" => {
+                    show_rank_level_name = Some(match v.trim() {
+                        "1" | "true" | "True" | "TRUE" => true,
+                        "0" | "false" | "False" | "FALSE" => false,
+                        other => bail!("ShowRankLevelName 不是布尔：{other:?}"),
+                    });
+                }
                 _ => {}
             },
             _ => {}
@@ -204,6 +218,8 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         // oracle 缺省值（`GameSvrConf.cs:1540-1541`）：`[Setup]` 里没写也照常起。
         red_msg_f_color: red_msg_f_color.unwrap_or(0xFF),
         red_msg_b_color: red_msg_b_color.unwrap_or(0x38),
+        // oracle 缺省值（`GameSvrConf.cs:1464`）：`[Setup]` 里没写不算错。
+        show_rank_level_name: show_rank_level_name.unwrap_or(false),
         ids_addr,
         ids_port,
         db_addr,
@@ -250,7 +266,7 @@ mod tests {
         let p = write(
             &dir,
             "[DataBase]\nDBPort=6000\n[Server]\nDBPort=6000\nCheckBlock=12288\nGateAddr= 127.0.0.1\n\
-             GatePort=5000\nIDSAddr= 127.0.0.1\nIDSPort=5600\nDBAddr=127.0.0.1\nDBPort=6000\nWorldMaps=1000x1000,200x200\n[Share]\nX=1\n",
+             GatePort=5000\nIDSAddr= 127.0.0.1\nIDSPort=5600\nDBAddr=127.0.0.1\nDBPort=6000\nWorldMaps=1000x1000,200x200\n[Share]\nX=1\n[Setup]\nShowRankLevelName=1\nShowGuildName=0\n",
         );
         let c = load(&p).unwrap();
         assert_eq!(c.gate_addr, "127.0.0.1", "值要 trim（现网带前导空格）");
@@ -261,6 +277,10 @@ mod tests {
         assert_eq!(c.ids_port, 5600);
         assert_eq!(c.db_addr, "127.0.0.1");
         assert_eq!(c.db_port, 6000);
+        assert!(
+            c.show_rank_level_name,
+            "[Setup] ShowRankLevelName=1（现网值）"
+        );
         assert_eq!(
             c.envir_dir, "Envir",
             "缺 [Share] EnvirDir 时用 oracle 缺省值"
@@ -288,6 +308,10 @@ mod tests {
              [Share]\nEnvirDir=Envir\nMapDir=Map\nNoticeDir=Notice\n",
         );
         let c = load(&p).expect("缺 WorldMaps 不许报错（可选键）");
+        assert!(
+            !c.show_rank_level_name,
+            "缺 [Setup] ShowRankLevelName ⇒ oracle 缺省 false"
+        );
         assert!(c.maps.is_empty(), "没写 WorldMaps ⇒ 空表");
         assert_eq!(c.gate_port, 5000);
         assert_eq!(c.envir_dir, "Envir");
