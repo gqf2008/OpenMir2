@@ -242,7 +242,31 @@ GameSvr 的 body；③ 超出部分**重新编码**（用与解码同一个 EDCo
 **仍未做**（登记）：速度规则/过滤器（`SessionSpeedRule`、`Filters/*`，只在非默认配置或异常客户端下可见）、
 OTP、`GM_CHECKCLIENT` 周期帧、`ClientTimeOutTime` 空闲回收。卡内验收 #1/#2 仍需整栈窗口。
 
+## 7.10 结构性发现：命令路径含**墙钟依赖的丢帧**，逐帧差分必须先给两侧上同一只虚拟钟
+
+登录通过后的命令处理里，一批分支用**真实时钟**算间隔、**超间隔就丢帧**（`return`，不转发）：
+`CM_WALK/CM_RUN` 看 `MoveInterval`（`ClientSession.cs:216-238`）、攻击/施法/拾取/吃东西同理
+（`IsMoveInterval`/`IsSpellInterval`/`IsAttackInterval`/`IsPickupInterval`/`IsEatInterval`，
+配置项见 `Conf/GateConfig.cs:99-172`）。而**现网部署是开着的**：`E:\MirServer\RunGate\config.conf`
+里 `MoveInterval=366`、`AttackInterval=500`、`PickupInterval=330`、`EatInterval=330`、`ChatInterval=800`
+等都写了值（另有 `PunishMoveInterval=150` 等惩罚项与 `MaxItemSpeed/MaxItemSpeedRate`）。
+
+⇒ 两条直接结论：
+
+1. **网关发出的帧 ≠ 客户端发出的帧**，即使不考虑 §7.9 的解码/重编码：太快的操作会被**丢掉**。
+   所以"M0 金标准里客户端发了 N 帧"不能推出"服务端收到 N 帧"，逐帧差分的**基线**必须是
+   **两侧各自往 5000 发的帧**（而不是拿客户端帧当期望值）。
+2. **差分必须给两侧同一只虚拟钟**：真时钟下同一串帧的回放时机不同、丢帧集合就会不同（flaky）。
+   本仓已有先例可照抄——世界对拍夹具把 `HUtil32.GetTickCount()` **桩成由驱动推进的时钟**
+   （`tests/parity/world/README.md` 的顺序契约第 6 条）。⇒ 网关差分需要一个同型的
+   **`GameGateGolden`**：从 `src/GameGate` 源码构建（而不是用 `E:\MirServer\RunGate` 的部署件）、
+   把时钟桩成虚拟时钟、由驱动按金标准的 `ts_ms` 推进，然后两侧（C# 桩 / Rust）比对发往 5000 的帧。
+
+⇒ 切片 3 的落地顺序据此调整为：**先给 Rust 侧的速度规则留出可注入时钟的接缝**（生产用真钟、
+测试用虚拟钟），再实现规则本体；否则规则既不能单测、也无法进差分。
+
 ## 8. 头号风险
+
 
 - **客户端 face 有登录门禁（§7.6）**：未通过登录帧校验的客户端会被**剔除**；切片 1 目前会照转 `GM_DATA`
   ⇒ 这是**登记在案的差异**（不是等价），必须在切片 2 补上登录帧解析 + 失败剔除。
@@ -258,5 +282,8 @@ OTP、`GM_CHECKCLIENT` 周期帧、`ClientTimeOutTime` 空闲回收。卡内验�
 - **已知不可比对的一格**（§7.9）：有尾部命令帧的最后 1 字节，oracle 是 `BytePool.Rent` 出来的**未初始化**内存
   （`ClientSession.cs:657-668` 只写 `12+tLen` 字节却按 `12+tLen+1` 发送）。Rust 侧固定送 `0`；
   逐帧差分要对这一格做**归一化**（或断言服务端不读它），否则会得到永远不等的假红。
+- **墙钟依赖的丢帧**（§7.10）：现网 `MoveInterval=366`/`AttackInterval=500` 等是**开着**的，超间隔的操作会被丢弃
+  ⇒ ① 差分基线只能是"两侧各自发往 5000 的帧"，不能拿客户端帧当期望；② 必须给两侧同一只**虚拟钟**
+  （照 `tests/parity/world` 桩 `HUtil32.GetTickCount()` 的做法做 `GameGateGolden`），否则回放时机不同、丢帧集合不同 ⇒ flaky。
 - 切片 1 若通过入口护栏，只能证明"**入口=Rust、世界=C#**"，不能当成 M3 的"游戏系统对齐"证据
   （与卡内 comment 的口径一致）。
