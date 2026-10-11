@@ -711,17 +711,21 @@ fn handle_ground_cmd(
 /// 也不重置 ⇒ 重算必须传 **调用前的** `SubAbility`（`sg.sub`），不能用 `first_call()`，
 /// 否则线上行为等价于「首次调用」。
 ///
-/// **收包字段口径**（`PlayObject.Message.cs:820/:823`）：`slot =
-/// (byte)processMsg.nParam2`（本宿主的 `tag`）、`make_index = processMsg.nParam1`（`param`）、
-/// `item_name = processMsg.Msg`（尾）。
+/// **收包字段口径**（`PlayObject.Message.cs:820-824`）：`ClientTakeOnItems((byte)processMsg.nParam2,
+/// processMsg.nParam1, processMsg.Msg)`（take-off 同形），而 12B 头里 `Recog`(b0-3) = `nParam1`、
+/// `Param`(b6-7) = `nParam2`、`Tag`(b8-9) = `nParam3`（`WorldServer.cs:820` 的
+/// `SendMsg(..., Recog, Param, Tag, ...)` + `BaseObject.Message.cs:98` 的形参序）⇒
+/// **`make_index` = `Recog`、`slot` = `Param` 的低 8 位**；`Tag` 未用（真客户端恒 0）。
+/// 佐证：冻结客户端 `ClMain.pas:7049` 的 `MakeDefaultMsg(CM_TAKEONITEM, itmindex, where, 0, 0)`。
 ///
 /// **oracle 出帧顺序**：换下的旧物品 `SendAddItem`（`SM_ADDITEM`，`Operate.cs:455`/`:539`）→
 /// `SM_TAKEON_OK/FAIL`（`SM_TAKEOFF_OK/FAIL`）→ 成功重算后的 `SM_ABILITY/SM_SUBABILITY`
 /// （oracle 走普通优先级队列，下一轮 flush；本宿主在同一批直接下发，顺序一致）。
-/// **登记（未接）**：`FeatureChanged()` 给附近玩家的 `SM_FEATURECHANGED(41)`（装备触发的 AOI 下行）。
+/// 成功换装还会 `FeatureChanged()` ⇒ 向同图周围玩家（含自己）广播 `SM_FEATURECHANGED(41)`。
 #[allow(clippy::too_many_arguments)]
 fn handle_bag_cmd(
     ident: u16,
+    recog: i32,
     param: u16,
     tag: u16,
     tail: Option<&str>,
@@ -750,8 +754,11 @@ fn handle_bag_cmd(
         );
         return;
     };
-    let slot = u8::try_from(tag).unwrap_or(u8::MAX);
-    let make_index = i32::from(param);
+    // C-1（reviewer-3 `5df38bad`）：`slot` 从 **`Param`**（b6-7）取，按 oracle 的 `(byte)` 低 8 位截断；
+    // `make_index` 从 **`Recog`**（b0-3）取；`Tag`（b8-9）未用。
+    let slot = (param & 0x00FF) as u8;
+    let make_index = recog;
+    let _ = tag; // oracle `nParam3` 未参与 `ClientTakeOnItems/ClientTakeOffItems`
     let item_name = tail.unwrap_or("");
 
     let mut state = game_svr::bag::EquipState {
@@ -1486,6 +1493,7 @@ fn sim_loop(
                     {
                         handle_bag_cmd(
                             cmd.ident,
+                            cmd.recog,
                             cmd.param,
                             cmd.tag,
                             tail.as_deref(),
@@ -3115,10 +3123,11 @@ mod tests {
         let world = mir2_world::World::new(8, 8);
         let mut displays = downlink::DisplayTable::new();
 
-        // `slot = tag = 0`、`make_index = param = 60001`、`name = 尾`（oracle Message.cs:823）。
+        // `recog=60001`（物品 `MakeIndex`）、`param=0`（槽位）、`tag` 未用、`name` 尾（C-1）。
         handle_bag_cmd(
             game_svr::bag::CM_TAKEOFFITEM,
             60001,
+            0,
             0,
             Some("木剑"),
             "hero",
@@ -3159,6 +3168,106 @@ mod tests {
             sg.sub.poison_recover, 7,
             "重算必须传 prior（T-18）：prior.poison_recover=7 + add=0 ⇒ 7；\
              若误用 first_call() ⇒ 0 ⇒ 必红"
+        );
+    }
+
+    /// **C-1（reviewer-3 `5df38bad`，owner 裁决 `54182d61`）**：`CM_TAKEONITEM`/`CM_TAKEOFFITEM` 的
+    /// 字段口径必须与 oracle 一致——`Recog`(b0-3) = 物品 `MakeIndex`、`Param`(b6-7) = 槽位（`(byte)` 低 8 位）、
+    /// `Tag`(b8-9) 未用。
+    ///
+    /// 造一件在 `UseItems[0]` 的物品（`MakeIndex=60001`），把请求的 `Tag` 设成**诱饵槽位** `7`：
+    /// 只有 oracle 口径（slot=param=0、make_index=recog=60001）才命中并卸下成功；若按旧/错位口径
+    /// （slot=tag=7 或 make_index=param=0）⇒ 槽位/物品对不上 ⇒ 走 FAIL ⇒ 本用例必红。
+    #[test]
+    fn bag_cmd_field_order_is_recog_makeindex_param_slot() {
+        use std::collections::HashMap;
+
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "木剑".into(),
+                std_mode: 5,
+                ..Default::default()
+            },
+        );
+
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut use_items: Vec<Option<game_svr::bag::BagItem>> =
+            vec![None; game_svr::ability::USE_ITEMS_LEN];
+        use_items[0] = Some(game_svr::bag::BagItem {
+            make_index: 60001,
+            index: 1,
+            dura: 10,
+            dura_max: 10,
+            desc: [0u8; 14],
+        });
+        sessions.insert(
+            "hero".into(),
+            SessionGround {
+                state: game_svr::ground::GroundState {
+                    item_list: Vec::new(),
+                    gold: 0,
+                    wabil: test_ability(),
+                },
+                actor_id: 42,
+                game_gold: 0,
+                sys_msg: None,
+                use_items,
+                sub: game_svr::ability::SubAbility::first_call(),
+                equip: test_equip_inputs(),
+            },
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: 42,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let world = mir2_world::World::new(8, 8);
+        let mut displays = downlink::DisplayTable::new();
+
+        // recog=60001（MakeIndex）、param=0（真槽位）、tag=7（诱饵，oracle 不读）。
+        handle_bag_cmd(
+            game_svr::bag::CM_TAKEOFFITEM,
+            60001,
+            0,
+            7,
+            Some("木剑"),
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            &world,
+            &mut displays,
+            12,
+        );
+
+        let sg = sessions.get("hero").unwrap();
+        assert!(
+            sg.use_items[0].is_none(),
+            "oracle 口径：slot=param=0、make_index=recog=60001 ⇒ 必须命中并卸下"
+        );
+        assert_eq!(sg.state.item_list.len(), 1, "卸下的物品进背包");
+        let mut idents = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
+            let cm = mir2_protocol::frame::CommandMessage::from_bytes(&body).expect(">=12B");
+            idents.push(cm.ident);
+        }
+        assert!(
+            idents.contains(&619),
+            "必须出现 SM_TAKEOFF_OK(619)（字段错位只会走 FAIL）：{idents:?}"
         );
     }
 
@@ -3260,9 +3369,11 @@ mod tests {
             downlink::ActorDisplay::new(0, 0, 111, 0, 0, 255, b"hero".to_vec()),
         );
 
+        // `recog=60001`（物品 `MakeIndex`）、`param=0`（槽位）、`tag` 未用（C-1）。
         handle_bag_cmd(
             game_svr::bag::CM_TAKEOFFITEM,
             60001,
+            0,
             0,
             Some("木剑"),
             "hero",
