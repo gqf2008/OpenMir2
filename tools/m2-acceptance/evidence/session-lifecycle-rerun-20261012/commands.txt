@@ -1,0 +1,21 @@
+# 命令 + 原始输出（证据四件套：命令 / 输出 / 路径 / hash 见 SHA256SUMS.txt）
+# 机时：2026-10-12 05:21–05:31（worker-11 / m2-svr 车道）
+
+# 0) 取窗口前
+netstat -ano | findstr LISTENING        # 5000/7000/7100/7200 全空，仅 3306（见 ports-before.txt）
+
+# 1) 起真 C# 栈（端口 5000/5100/5500/5600/5700/6000/7000/7100/7200）
+powershell -ExecutionPolicy Bypass -File E:/MirServer/start-all.ps1
+#   -> DBSrv(05:22:16) LoginSrv(05:22:21) GameSrv(05:22:24)
+#      LoginGate(05:22:28,7000) SelGate(05:22:31,7100) GameGate(05:22:33,7200) 全部监听
+#   （start-all.ps1 收尾的 Show-Status 因交互式 Format-Table 未返回，命令超时；栈已就绪，以端口实拍为准）
+
+# 2) 真机夹具复跑 ×2（账号 fixt0 已在 mir2_account；角色由 BotSrv SelectChrScene 无角色则建角）
+powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/session_lifecycle_fixture.ps1 -OutDir E:/tmp/m2acc-life/run2 -SkipBuild
+#   -> GREEN(fixture) 旧会话收到=KICKUSER_SYSTEM_MSG；新会话=ADMITTED（进世界=True）  exit=0
+powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/session_lifecycle_fixture.ps1 -OutDir E:/tmp/m2acc-life/run3 -SkipBuild
+#   -> GREEN(fixture) 旧会话收到=KICKUSER_SYSTEM_MSG；新会话=ADMITTED（进世界=True）  exit=0
+
+# 3) 停栈（只停 6 个 C# 组件，保留共享 MySQL 3306，与开工前一致）
+powershell -NoProfile -Command "Get-Process GameSrv,DBSrv,LoginSrv,LoginGate,SelGate,GameGate -EA SilentlyContinue | Stop-Process -Force"
+#   -> 停后实拍：仅 127.0.0.1:3306（见 ports-after.txt）
