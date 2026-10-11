@@ -1,0 +1,13 @@
+SELFTEST_NO_STACK: 无栈自检——所有路径都必须 fail-closed（缺失绝不静默 GREEN）
+SELFTEST ① 配置透传 on=true? BagEquipSequence=True DisableAutoPlay=True
+SELFTEST ② 默认关 off=false? BagEquipSequence=False DisableAutoPlay=False
+SELFTEST ③ 无栈入口护栏 rc=2（期望 2=PREREQ）
+SELFTEST ④ -DiffOnly 缺会话 rc=2（期望 2=PREREQ）
+SELFTEST ⑤a run_pair -BagEquipSequence 传 -DisableAutoPlay? True（scope=on step_ms=1000 start_delay_ms=3000 disable_autoplay=True）
+SELFTEST ⑤b 默认路径不带 -DisableAutoPlay? True（scope=(off)）
+SELFTEST ⑥ 旧挂机 peer 被判红? True（peer_bag_equip_autoplay_on）
+SELFTEST ⑦ scoped_diff selftest rc=0（含 MapName/CX/CY 逐字节比断言）
+SELFTEST ⑧ preflight(T-27)：空目录 false / DB_SAVEHUMANRCD true / DBR_ 回包不算
+SELFTEST ⑨ 固定起点两相：prewarm+RequireCharCreated=True；scoring 无 -FixedNewChr/-NewAccount=True；pin_sql_all=7 条（含初始背包 4 件 + Abil）
+SELFTEST ⑨b 旧 peer 无 start_pose + 本侧 pin 被判红? True
+SELFTEST_RED GREEN: 无栈自检全过（配置透传有/无两向 + run_pair 关挂机耦合两向 + 固定起点两相 + 旧挂机 peer/旧起点 peer 必红 + CX/CY 逐字节比断言 + 断线存档 preflight + 入口护栏/DiffOnly fail-closed）

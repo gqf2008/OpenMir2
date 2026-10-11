@@ -1,7 +1,8 @@
 # 卡 `openmir2-m3-gamesvr-save` 证据（Rust game-svr「进世界存档」缺失）
 
 **patch**：待挂（`patch --base refs/heads/master --head refs/heads/worktree-m2-gamesvr-host`）
-**base**：`refs/heads/master` = `459d2b37`
+**base**：`refs/heads/master`（交付时 = `0a59fa48`，本分支已 merge）
+**head 提交**：`ff0ff63c`（本片源码 + 证据）→ merge master `f982940a`
 **worktree**：`E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr`
 
 ## 1. 交付内容（DoD ①③）
@@ -49,7 +50,7 @@ Rust 侧新增（写集 = `mir2-rs/bins/game-svr/**`）：
   `GameGold=77`、`IncHealth/IncSpell/HungerStatus`、`BagItems` 46 槽补位、`HumItems` 13 槽 +
   Helmet/Necklace 交换。
 
-**红检（改坏 ⇒ 必红；原始输出见 `red-*.txt`）**：
+**红检（改坏 ⇒ 必红；原始件见 `red-*.txt`）**：
 
 | 红检 | 改法 | 结果 |
 | --- | --- | --- |
@@ -59,29 +60,40 @@ Rust 侧新增（写集 = `mir2-rs/bins/game-svr/**`）：
 
 三次改坏后均**还原**，`git status` 只剩本次三处源码 + 证据目录（无半路残留）。
 
-## 3. 门禁（DoD ⑤，隔离 `CARGO_TARGET_DIR=E:\tmp\openmir2-m2svr-target`，全 `--offline`）
+## 3. 门禁与 T-27 preflight（DoD ①⑤，隔离 `CARGO_TARGET_DIR=E:\tmp\openmir2-m2svr-target`，全 `--offline`）
+
+**合并 master `0a59fa48` 后的树**：
 
 | 门禁 | 命令 | 结果 |
 | --- | --- | --- |
 | fmt | `cargo fmt --all -- --check` | rc=0（`gates-fmt.txt`，空 = 无 diff） |
 | clippy | `cargo clippy --workspace --all-targets --offline -- -D warnings` | rc=0（`gates-clippy.txt`） |
-| test | `cargo test --workspace --offline` | **72 suites / 552 passed / 0 failed / 16 ignored**（`gates-test-workspace.txt`） |
+| test | `cargo test --workspace --offline` | **73 suites / 560 passed / 0 failed / 16 ignored**（`gates-test-workspace.txt`） |
 | msgcodegen | `cargo run -p msgcodegen --offline -- --check` | rc=0，604 条（`gates-msgcodegen.txt`） |
 
 新增/改动用例 **3 连跑**：`gamesvr-3run-1..3.txt`，每次 `123 passed / 0 failed`（unit）+
 `13 passed / 0 failed`（relay）。
 
-## 4. 真机（DoD ②）——**本片未跑，如实登记**
+**T-27 断线存档机判护栏**（`openmir2-m3-bag-equip-alignment` 第十三格，已随 master `0a59fa48` 合入）：
 
-- 未起栈。开工前后实拍端口：5000/5100/5500/5600/5700/6000/7000/7100/7200 **全空**（未占用窗口），
-  收工未 `-Stop`（无栈可停）。
-- **为什么未跑**：DoD ② 要「与 T-14 同一对拍」，而 T-14 的夹具口径片仍在 `m3bag` 车道在飞
-  （owner 2026-10-12 06:5x 的 `218b3694`：T-14 真机对拍剩余前置 = 本片 + T-14 夹具口径片 + 存档）。
-  夹具（固定起点 / 固定初始背包 / `-DisableAutoPlay`）未合入前，"同序列"不成立，跑了也不是判据。
+- 数据面：`rg -n DB_SAVEHUMANRCD mir2-rs/bins/game-svr` 现在**命中**（`dbclient.rs:145` 等；
+  改动前 0 命中）——见 `t27-grep.txt`。
+- 夹具自检（不占端口/不起栈）：`run_bag_equip_pair.ps1 -SelfCheckNoStack` rc=0，
+  9 条全绿，SELFTEST ⑧ 即 T-27 preflight 三态机判（空目录 false / `DB_SAVEHUMANRCD` true /
+  `DBR_` 回包不算）——见 `t27-selfcheck.txt`。
+
+## 4. 真机（DoD ②）——**本片未跑端到端，如实登记**
+
+- 未起栈。开工前后实拍端口：5000/5100/5500/5600/5700/6000/7000/7100/7200 **全空**（未占窗口）；
+  3306 = 共享 MySQL（pid 4540）——见 `ports-preflight.txt`。未 `/Stop`（无栈可停，**窗口已释放**）。
+- **为什么未跑端到端**：T-14 的夹具口径片已随 master `0a59fa48` 合入（关挂机 + 同口径 peer 护栏 +
+  两相 `-PinStartPose` + T-27 机判），**但 owner 明示「接线前不开 M3 真机窗口」**
+  （m3bag 卡 `f139fb75` / `af689dab`：端到端等 `openmir2-m3-gamesvr-save` 合入 + owner 发窗口）。
+  本片把该前置（存档）做出来了；端到端同序列对拍留给 owner 发窗口后的 T-14 复跑。
 - **跑起来会差在哪（预先如实列，不静默）**：
   1. `characters_ablity.Hp/MAxHP`：oracle 基线是 `19/19`，而本宿主 `RecalcAbilitys` 的 `cur_hp`
-     取记录 `Abil.HP`（新角色 init = 15）⇒ 若 oracle 的 19 来自本卡未复刻的某个写入点，
-     该列会差；**需要夹具跑一遍定案**（登记）。
+     取记录 `Abil.HP`（新角色 init = 15）⇒ 若 oracle 的 19 来自本卡未复刻的某个写入点，该列会差；
+     **需要夹具跑一遍定案**（登记）。
   2. `GetUpgradeStdItem` 的 Desc 升级差量、buff/技能对能力的加成都未移植（沿用既有登记）。
   3. 周期存档 `SaveHumanRcdTime`（`WorldServer.cs:698-702`，默认 10 分钟）**未做**（登记）；
      本片只做 `MakeGhost`/断线那一条（DoD ① 的「至少」）。
@@ -93,5 +105,6 @@ Rust 侧新增（写集 = `mir2-rs/bins/game-svr/**`）：
 - 未动 `src/**`（C# oracle）、`crates/**`、`MirClient`、表结构/脚本语法/数据格式；未动别人的卡状态。
 - 唯一跨出 `bins/game-svr` 的改动是**读** `crates/data`（`ExpsConfig`/`MAX_CHANGE_LEVEL`）与
   `mir2_formula`/`mir2_storage`（既有依赖），无 `crates/**` 文件改动。
-- 本片证据入库路径：`mir2-rs/tests/parity/m3/evidence/gamesvr-save-20261012/`（本卡写集含
-  `mir2-rs/tests/parity/m3/**`）。
+- 证据入库路径：`mir2-rs/tests/parity/m3/evidence/gamesvr-save-20261012/`（本卡写集含
+  `mir2-rs/tests/parity/m3/**`）；`SHA256SUMS.txt` 用仓库口径（LF 归一 = git blob），
+  `tools/evidence-hash/verify_sha256sums.py --check-extra` 复核 GREEN。
