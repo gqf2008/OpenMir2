@@ -1,7 +1,7 @@
 {
   "generator": "mir2-rs/tests/parity/m3/ability-probe",
   "oracle_assembly": "M2Server.dll",
-  "oracle_assembly_sha256": "a9eb4d322e3c0bc4fe8216a3ff51cc3350aa45e0e1610b23dbb9d5ed26b692ce",
+  "oracle_assembly_sha256": "b2530cd548adaed7ebe8f74665f607c54ee0b2824b5894432a7f3d90c9df2caa",
   "oracle_assembly_sha256_note": "\u751F\u6210\u65F6 M2Server.dll \u6784\u5EFA\u4EA7\u7269 hash\uFF08\u968F\u7F16\u8BD1\u5668/SDK/\u73AF\u5883\u53D8\u5316\uFF09\uFF1B\u4EC5\u4F5C\u6EAF\u6E90\uFF0C\u4E0D\u53C2\u4E0E\u5411\u91CF\u6821\u9A8C\u2014\u2014\u6821\u9A8C\u951A\u70B9\u662F oracle_source_sha256",
   "oracle_source_sha256": "ed5b5dfe4b22eee362b0e9133dd821abea1996ff3b1af8337b92d68ccae751b5",
   "oracle_source_sha256_files": [
@@ -68,7 +68,9 @@
     "hit_point = DEFHIT \u002B BonusAbil.Hit/tick.Hit \u002B AddAbil.HIT\uFF08Taoist \u5206\u652F\u4E0D\u91CD\u7F6E HitPoint\uFF09",
     "speed_point = DEFSPEED \u002B BonusAbil.Speed/tick.Speed (\u002B3 Taoist) \u002B AddAbil.SPEED",
     "WAbil.AC/MAC/DC/MC/SC = word \u76F8\u52A0\uFF08\u9AD8\u5B57\u8282 _MIN(255, \u2026)\uFF09\uFF1BWAbil.Weight = RecalcBagWeight()",
-    "\u672A\u8986\u76D6\uFF1A\u5957\u88C5 else-if \u5757 / buff / MagicList \u6280\u80FD\u52A0\u6210 / ApplyItemParametersByJob \u9F99\u88C5\u5206\u652F"
+    "hp_before/mp_before = \u8C03\u7528\u524D WAbil.HP/MP\uFF08oracle wOldHP/wOldMP\uFF0C\u771F\u673A = \u8BB0\u5F55 HP/MP\uFF09\uFF0C\u662F\u672C\u63A5\u7F1D\u7684**\u8F93\u5165**\uFF1Bcur_hp/cur_mp = \u8C03\u7528\u540E WAbil.HP/MP\uFF08**\u8F93\u51FA**\uFF0C\u53EF\u80FD\u88AB PlayObject.cs:2809-2816 \u94B3\u8FC7\uFF09",
+    "WAbil.HP \u5C3E\u94B3\uFF08PlayObject.cs:2809-2816\uFF09\uFF1ARace==Play \u4E14 HP\u003EMaxHP \u4E14 !mhNecklace\u0026\u0026!mhBracelet\u0026\u0026!mhRing \u21D2 HP=MaxHP\uFF1BMP \u540C\u7406\u4F46\u65E0 mh \u95E8",
+    "\u672A\u8986\u76D6\uFF1A\u5957\u88C5 else-if \u5757\u7684**\u5C5E\u6027**\uFF08MoXieSuite/MuscleRing \u7B49\uFF1B\u9B54\u8840\u4E09\u4EF6\u5957\u7684 Shape \u95E8 135/133/134 \u5DF2\u8986\u76D6\uFF0C\u4F46 AniCount\u22600 \u65F6\u7684 MaxHP/MaxMP \u6539\u5199\u672A\u5EFA\u6A21\uFF09/ buff / MagicList \u6280\u80FD\u52A0\u6210 / ApplyItemParametersByJob \u9F99\u88C5\u5206\u652F"
   ],
   "templates": {
     "1101": {
@@ -564,6 +566,35 @@
       "tox_avoid": 0,
       "light": 0
     },
+    "1351": {
+      "name": "t",
+      "std_mode": 19,
+      "shape": 135,
+      "weight": 0,
+      "ani_count": 0,
+      "special_pwr": 0,
+      "ac": 0,
+      "mac": 0,
+      "dc": 0,
+      "mc": 0,
+      "sc": 0,
+      "atk_spd": 0,
+      "agility": 0,
+      "accurate": 0,
+      "mg_avoid": 0,
+      "hp_add": 0,
+      "mp_add": 0,
+      "eff_type1": 0,
+      "eff_rate1": 0,
+      "eff_value1": 0,
+      "eff_type2": 0,
+      "eff_rate2": 0,
+      "eff_value2": 0,
+      "slowdown": 0,
+      "tox": 0,
+      "tox_avoid": 0,
+      "light": 0
+    },
     "1301": {
       "name": "t",
       "std_mode": 10,
@@ -682,6 +713,8 @@
         1201,
         1201
       ],
+      "hp_before": 15,
+      "mp_before": 15,
       "cur_hp": 15,
       "cur_mp": 15,
       "expect_wabil": {
@@ -762,6 +795,8 @@
       },
       "items": [],
       "bag": [],
+      "hp_before": 15,
+      "mp_before": 15,
       "cur_hp": 15,
       "cur_mp": 15,
       "expect_wabil": {
@@ -842,6 +877,8 @@
       },
       "items": [],
       "bag": [],
+      "hp_before": 15,
+      "mp_before": 15,
       "cur_hp": 15,
       "cur_mp": 13,
       "expect_wabil": {
@@ -922,6 +959,8 @@
       },
       "items": [],
       "bag": [],
+      "hp_before": 19,
+      "mp_before": 15,
       "cur_hp": 19,
       "cur_mp": 15,
       "expect_wabil": {
@@ -1002,6 +1041,8 @@
       },
       "items": [],
       "bag": [],
+      "hp_before": 19,
+      "mp_before": 15,
       "cur_hp": 16,
       "cur_mp": 15,
       "expect_wabil": {
@@ -1082,6 +1123,8 @@
       },
       "items": [],
       "bag": [],
+      "hp_before": 19,
+      "mp_before": 15,
       "cur_hp": 17,
       "cur_mp": 13,
       "expect_wabil": {
@@ -1112,6 +1155,176 @@
         "anti_magic": 1,
         "hit_point": 5,
         "speed_point": 18,
+        "anti_poison": 0,
+        "poison_recover": 0,
+        "health_recover": 0,
+        "spell_recover": 0
+      },
+      "expect_feature": 131072
+    },
+    {
+      "name": "clamp_hp_skipped_by_mh_necklace",
+      "job": 1,
+      "gender": 0,
+      "hair": 1,
+      "abil": {
+        "level": 1,
+        "reserved1": 0,
+        "ac": 0,
+        "mac": 0,
+        "dc": 0,
+        "mc": 0,
+        "sc": 0,
+        "hp": 19,
+        "mp": 15,
+        "max_hp": 0,
+        "max_mp": 0,
+        "reserved2": 0,
+        "exp_count": 0,
+        "exp_max_count": 0,
+        "exp": 0,
+        "max_exp": 10,
+        "weight": 0,
+        "max_weight": 0,
+        "wear_weight": 0,
+        "max_wear_weight": 0,
+        "hand_weight": 0,
+        "max_hand_weight": 0
+      },
+      "bonus_abil": {
+        "dc": 0,
+        "mc": 0,
+        "sc": 0,
+        "ac": 0,
+        "mac": 0,
+        "hp": 0,
+        "mp": 0,
+        "hit": 0,
+        "speed": 0,
+        "reserved": 0
+      },
+      "items": [
+        {
+          "slot": 3,
+          "index": 1351,
+          "dura": 10
+        }
+      ],
+      "bag": [],
+      "hp_before": 19,
+      "mp_before": 25,
+      "cur_hp": 19,
+      "cur_mp": 18,
+      "expect_wabil": {
+        "level": 1,
+        "reserved1": 0,
+        "ac": 0,
+        "mac": 0,
+        "dc": 256,
+        "mc": 256,
+        "sc": 0,
+        "hp": 19,
+        "mp": 18,
+        "max_hp": 16,
+        "max_mp": 18,
+        "reserved2": 0,
+        "exp_count": 0,
+        "exp_max_count": 0,
+        "exp": 0,
+        "max_exp": 10,
+        "weight": 0,
+        "max_weight": 50,
+        "wear_weight": 0,
+        "max_wear_weight": 15,
+        "hand_weight": 0,
+        "max_hand_weight": 12
+      },
+      "expect_sub": {
+        "anti_magic": 1,
+        "hit_point": 5,
+        "speed_point": 15,
+        "anti_poison": 0,
+        "poison_recover": 0,
+        "health_recover": 0,
+        "spell_recover": 0
+      },
+      "expect_feature": 131072
+    },
+    {
+      "name": "clamp_mp_above_max_naked",
+      "job": 1,
+      "gender": 0,
+      "hair": 1,
+      "abil": {
+        "level": 1,
+        "reserved1": 0,
+        "ac": 0,
+        "mac": 0,
+        "dc": 0,
+        "mc": 0,
+        "sc": 0,
+        "hp": 19,
+        "mp": 15,
+        "max_hp": 0,
+        "max_mp": 0,
+        "reserved2": 0,
+        "exp_count": 0,
+        "exp_max_count": 0,
+        "exp": 0,
+        "max_exp": 10,
+        "weight": 0,
+        "max_weight": 0,
+        "wear_weight": 0,
+        "max_wear_weight": 0,
+        "hand_weight": 0,
+        "max_hand_weight": 0
+      },
+      "bonus_abil": {
+        "dc": 0,
+        "mc": 0,
+        "sc": 0,
+        "ac": 0,
+        "mac": 0,
+        "hp": 0,
+        "mp": 0,
+        "hit": 0,
+        "speed": 0,
+        "reserved": 0
+      },
+      "items": [],
+      "bag": [],
+      "hp_before": 19,
+      "mp_before": 25,
+      "cur_hp": 16,
+      "cur_mp": 18,
+      "expect_wabil": {
+        "level": 1,
+        "reserved1": 0,
+        "ac": 0,
+        "mac": 0,
+        "dc": 256,
+        "mc": 256,
+        "sc": 0,
+        "hp": 16,
+        "mp": 18,
+        "max_hp": 16,
+        "max_mp": 18,
+        "reserved2": 0,
+        "exp_count": 0,
+        "exp_max_count": 0,
+        "exp": 0,
+        "max_exp": 10,
+        "weight": 0,
+        "max_weight": 50,
+        "wear_weight": 0,
+        "max_wear_weight": 15,
+        "hand_weight": 0,
+        "max_hand_weight": 12
+      },
+      "expect_sub": {
+        "anti_magic": 1,
+        "hit_point": 5,
+        "speed_point": 15,
         "anti_poison": 0,
         "poison_recover": 0,
         "health_recover": 0,
@@ -1162,6 +1375,8 @@
       },
       "items": [],
       "bag": [],
+      "hp_before": 15,
+      "mp_before": 15,
       "cur_hp": 15,
       "cur_mp": 15,
       "expect_wabil": {
@@ -1248,6 +1463,8 @@
         }
       ],
       "bag": [],
+      "hp_before": 15,
+      "mp_before": 15,
       "cur_hp": 15,
       "cur_mp": 15,
       "expect_wabil": {
@@ -1334,6 +1551,8 @@
         }
       ],
       "bag": [],
+      "hp_before": 15,
+      "mp_before": 15,
       "cur_hp": 15,
       "cur_mp": 15,
       "expect_wabil": {
@@ -1420,6 +1639,8 @@
         }
       ],
       "bag": [],
+      "hp_before": 15,
+      "mp_before": 15,
       "cur_hp": 15,
       "cur_mp": 15,
       "expect_wabil": {
@@ -1506,6 +1727,8 @@
         }
       ],
       "bag": [],
+      "hp_before": 15,
+      "mp_before": 15,
       "cur_hp": 15,
       "cur_mp": 15,
       "expect_wabil": {
@@ -1592,6 +1815,8 @@
         }
       ],
       "bag": [],
+      "hp_before": 15,
+      "mp_before": 15,
       "cur_hp": 15,
       "cur_mp": 15,
       "expect_wabil": {
@@ -1678,6 +1903,8 @@
         }
       ],
       "bag": [],
+      "hp_before": 15,
+      "mp_before": 15,
       "cur_hp": 15,
       "cur_mp": 15,
       "expect_wabil": {
@@ -1764,6 +1991,8 @@
         }
       ],
       "bag": [],
+      "hp_before": 15,
+      "mp_before": 15,
       "cur_hp": 15,
       "cur_mp": 15,
       "expect_wabil": {
@@ -1850,6 +2079,8 @@
         }
       ],
       "bag": [],
+      "hp_before": 15,
+      "mp_before": 15,
       "cur_hp": 15,
       "cur_mp": 15,
       "expect_wabil": {
@@ -1936,6 +2167,8 @@
         }
       ],
       "bag": [],
+      "hp_before": 15,
+      "mp_before": 15,
       "cur_hp": 15,
       "cur_mp": 15,
       "expect_wabil": {
@@ -2022,6 +2255,8 @@
         }
       ],
       "bag": [],
+      "hp_before": 15,
+      "mp_before": 15,
       "cur_hp": 15,
       "cur_mp": 15,
       "expect_wabil": {
@@ -2108,6 +2343,8 @@
         }
       ],
       "bag": [],
+      "hp_before": 15,
+      "mp_before": 15,
       "cur_hp": 15,
       "cur_mp": 15,
       "expect_wabil": {
@@ -2194,6 +2431,8 @@
         }
       ],
       "bag": [],
+      "hp_before": 15,
+      "mp_before": 15,
       "cur_hp": 15,
       "cur_mp": 15,
       "expect_wabil": {
@@ -2280,6 +2519,8 @@
         }
       ],
       "bag": [],
+      "hp_before": 15,
+      "mp_before": 15,
       "cur_hp": 15,
       "cur_mp": 15,
       "expect_wabil": {
@@ -2366,6 +2607,8 @@
         }
       ],
       "bag": [],
+      "hp_before": 15,
+      "mp_before": 15,
       "cur_hp": 15,
       "cur_mp": 15,
       "expect_wabil": {
@@ -2452,6 +2695,8 @@
         }
       ],
       "bag": [],
+      "hp_before": 15,
+      "mp_before": 15,
       "cur_hp": 15,
       "cur_mp": 15,
       "expect_wabil": {
@@ -2586,6 +2831,8 @@
         1201,
         1202
       ],
+      "hp_before": 15,
+      "mp_before": 15,
       "cur_hp": 15,
       "cur_mp": 15,
       "expect_wabil": {
@@ -2672,6 +2919,8 @@
         }
       ],
       "bag": [],
+      "hp_before": 15,
+      "mp_before": 15,
       "cur_hp": 15,
       "cur_mp": 15,
       "expect_wabil": {
@@ -2758,6 +3007,8 @@
         }
       ],
       "bag": [],
+      "hp_before": 15,
+      "mp_before": 15,
       "cur_hp": 15,
       "cur_mp": 15,
       "expect_wabil": {
@@ -2849,6 +3100,8 @@
         }
       ],
       "bag": [],
+      "hp_before": 15,
+      "mp_before": 15,
       "cur_hp": 15,
       "cur_mp": 15,
       "expect_wabil": {
