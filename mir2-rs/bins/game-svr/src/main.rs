@@ -352,6 +352,14 @@ async fn main() -> Result<()> {
                     string_conf,
                     show_rank_level_name,
                     catalog: item_catalog,
+                    ground: GroundCfg {
+                        human_max_gold: cfg.human_max_gold,
+                        floor_item_can_pick_up_time: cfg.floor_item_can_pick_up_time,
+                        control_drop_item: cfg.control_drop_item,
+                        in_safe_disable_drop: cfg.in_safe_disable_drop,
+                        can_drop_price: cfg.can_drop_price,
+                        drop_item_rage: cfg.drop_item_rage,
+                    },
                 },
                 notice,
                 colors,
@@ -553,6 +561,169 @@ fn handle_say(
         delivered,
         line
     );
+}
+
+/// `CM_PICKUP`(1001) / `CM_DROPITEM`(1000) 的派发（owner §26）。
+///
+/// 口径：纯判定在 `ground::pick_up`/`drop_item`（m3bag 交付，逐字段对 oracle 向量），
+/// `SM_*` 编码/下行序在 `pickwire::{outcome_frames, build_ground_map}`；本函数只负责
+/// 「找会话 → 用 world 只读视图装 `GroundMap` → 调用 → 按 `[GateIdx,Socket]` 回帧」。
+///
+/// **位置门在派发层**（`PlayObject.Message.cs:811-816`）：`CurrX==nParam2 && CurrY==nParam3`
+/// 才进 `ClientPickUpItem`（`CM_PICKUP` 的 `nParam2/nParam3` = 12B 头的 `param/tag`）。
+/// `CM_DROPITEM` 的尾 = 请求 `Msg`，`nParam1`（`param`）= 要丢的 `MakeIndex`。
+///
+/// **已知缺口（登记，不静默）**：拾取删格对 `crates/world` 的**写回**尚未开（owner §25.1 (A)
+/// 只批只读分片）⇒ 地面物品在 world 里不消失（客户端已由 `SM_ITEMHIDE` 隐藏）；成功 drop 的
+/// `Envir.AddItemToMap` 在本仓 oracle 下恒失败（`MapItem.ItemId == 0`，`ground.rs` 模块头 T-19）。
+#[allow(clippy::too_many_arguments)]
+fn handle_ground_cmd(
+    ident: u16,
+    param: u16,
+    tag: u16,
+    tail: Option<&str>,
+    chr_name: &str,
+    socket: i32,
+    world: &mir2_world::World,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    cfg: &GroundCfg,
+    colors: &MsgColors,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    registry: Option<&mir2_envir::MapRegistry>,
+) {
+    // 找会话（`online` 给出该角色当前的网关线号；`sessions` 给出地面交互态）。
+    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
+        glog!(
+            "WRN",
+            "CM_PICKUP/DROP：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃"
+        );
+        return;
+    };
+    let gate_idx = entry.gate_idx;
+    let Some(sg) = sessions.get_mut(chr_name) else {
+        glog!(
+            "WRN",
+            "CM_PICKUP/DROP：ChrName={chr_name} 无地面会话态（未进世界/已断线）⇒ 丢弃"
+        );
+        return;
+    };
+    let actor_id = sg.actor_id;
+    let Some(actor) = world.entities.get(actor_id) else {
+        glog!("WRN", "CM_PICKUP/DROP：actor_id={actor_id} 不在世界 ⇒ 丢弃");
+        return;
+    };
+    let (cx, cy, map_id) = (actor.x, actor.y, actor.map_id);
+    let Some(grid) = world.maps.get(map_id) else {
+        glog!("WRN", "CM_PICKUP/DROP：map_id={map_id} 越界 ⇒ 丢弃");
+        return;
+    };
+    // 地面视图 = world 的**只读分片**（`floor_items_view_sorted`，owner §25.1 (A)）。
+    let view = world.floor_items_view_sorted();
+    let mut map =
+        game_svr::pickwire::build_ground_map(&view, map_id, grid.width, grid.height, catalog);
+    let now_tick = world.clock_ms as i32;
+    let flag = registry.and_then(|r| r.flag_of(map_id));
+    // 先跑纯函数（会**原地改** `sg.state`），再按**改后**的会话态组 `WireSession`
+    // ——oracle 的 `GoldChanged()`/`WeightChanged()` 都在 `Gold +=`/`AddItemToBag` **之后**发
+    // （`PlayObject.Base.cs:79-84`），故 `SM_GOLDCHANGED`/`SM_WEIGHTCHANGED` 用新值。
+    let (immediate, notices, drop_msg) = if ident == game_svr::ground::CM_PICKUP {
+        // oracle 位置门：不满足 ⇒ 不进 `ClientPickUpItem`。
+        if !game_svr::pickwire::pickup_position_ok(cx, cy, i32::from(param), i32::from(tag)) {
+            glog!(
+                "DBG",
+                "CM_PICKUP：位置门不成立 ChrName={chr_name} Curr=({cx},{cy}) 请求=({param},{tag}) ⇒ 忽略"
+            );
+            return;
+        }
+        let ctx = game_svr::ground::PickUpContext {
+            catalog,
+            actor_id,
+            curr_x: cx,
+            curr_y: cy,
+            now_tick,
+            // `Dealing` 本接缝未建模（无交易系统）⇒ false（登记）。
+            dealing: false,
+            floor_item_can_pick_up_time: cfg.floor_item_can_pick_up_time,
+            human_max_gold: cfg.human_max_gold,
+            // `Race == ActorRace.Play`（`SendAddItem` 仅在玩家时发）⇒ 恒真（本宿主只收玩家）。
+            race_is_play: true,
+            // 组队系统未移植（`GroupOwner=0`）⇒ 群组分支恒 false（登记）。
+            group_owner: 0,
+            group_member_actor_ids: &[],
+            red_msg_f_color: u16::from(colors.red_f),
+            red_msg_b_color: u16::from(colors.red_b),
+        };
+        let out = game_svr::ground::pick_up(&ctx, &mut map, &mut sg.state);
+        (out.immediate_frames, out.notices, Vec::new())
+    } else {
+        // `CM_DROPITEM`：`Msg` = `processMsg.Msg`（EDCode 解码后的 GBK 文本）；
+        // `SendDefMessage(..., Msg)` 会 `EncodeString(Msg)` ⇒ 这里传**未编码的 GBK 字节**。
+        let item_name = tail.unwrap_or("");
+        let ctx = game_svr::ground::DropContext {
+            catalog,
+            actor_id,
+            curr_x: cx,
+            curr_y: cy,
+            now_tick,
+            // `DealLastTick` 未建模（无交易系统）⇒ 0（新会话即过 3000ms 门）。
+            deal_last_tick: 0,
+            make_index: i32::from(param),
+            item_name,
+            in_safe_disable_drop: cfg.in_safe_disable_drop,
+            in_safe_zone: flag.as_ref().is_some_and(|f| f.safe_area),
+            // `IsCanDrop` 在无 PK/摆摊等状态下恒真；未建模的状态（摆摊/交易）登记。
+            is_can_drop: true,
+            no_throw_item: flag.as_ref().is_some_and(|f| f.no_throw_item),
+            control_drop_item: cfg.control_drop_item,
+            can_drop_price: cfg.can_drop_price,
+            drop_item_rage: cfg.drop_item_rage,
+        };
+        let out = game_svr::ground::drop_item(&ctx, &mut map, &mut sg.state);
+        (out.immediate_frames, out.notices, enter::gbk(item_name))
+    };
+    let wire = game_svr::pickwire::WireSession {
+        actor_id,
+        gold: sg.state.gold,
+        game_gold: sg.game_gold,
+        wabil: sg.state.wabil.clone(),
+        sys_msg: sg.sys_msg.clone(),
+    };
+    let bodies = game_svr::pickwire::outcome_frames(&immediate, &notices, &wire, &drop_msg);
+    if let Some(tx) = route_to_gate(gates, gate_idx, socket, "拾取/丢弃回帧") {
+        for body in bodies {
+            let _ = tx.send(SimToGate::SendFrame { socket, body });
+        }
+    }
+}
+
+/// `record::ServerUserItem` → `bag::BagItem`（`CharacterData.bag_items` ⇒ `GroundState.item_list`）。
+///
+/// oracle `PlayObject.ItemList` 是**非空物品的列表**（`AddItemToBag` 追加 / 移除删除），记录里的
+/// `Option<Vec<Option<ServerUserItem>>>` 是定长槽位 ⇒ 展平后与 `ItemList` 同形。`desc` 在 oracle
+/// `UserItem` 是定长 14B（`bag::BagItem.desc: [u8;14]`），记录的 `Option<Vec<u8>>` 截断/补零
+/// （只用于显示，不参与 `pick_up`/`drop_item` 判定）。
+fn bag_items_from(items: Option<&[Option<record::ServerUserItem>]>) -> Vec<game_svr::bag::BagItem> {
+    items
+        .unwrap_or(&[])
+        .iter()
+        .flatten()
+        .map(|it| {
+            let mut desc = [0u8; 14];
+            if let Some(d) = it.desc.as_deref() {
+                let n = d.len().min(desc.len());
+                desc[..n].copy_from_slice(&d[..n]);
+            }
+            game_svr::bag::BagItem {
+                make_index: it.make_index,
+                index: it.index,
+                dura: it.dura,
+                dura_max: it.dura_max,
+                desc,
+            }
+        })
+        .collect()
 }
 
 /// **S3 后半段（第一格）**：把世界 tick 的 AOI 结果（观察者实体 `VisibleActors` 里
@@ -854,6 +1025,38 @@ fn drain_soft_close(
     }
 }
 
+/// `CM_PICKUP`/`CM_DROPITEM` 的配置层输入（`Server.conf [Setup]`，逐条 oracle 缺省见 `config.rs`）。
+#[derive(Debug, Clone, Copy)]
+struct GroundCfg {
+    /// `GameSvrConf.HumanMaxGold`（`PlayObject.Base.cs:171` 的 `IncGold` 上限）。
+    human_max_gold: i32,
+    /// `GameSvrConf.FloorItemCanPickUpTime`（`PlayObject.Base.cs:67`）。
+    floor_item_can_pick_up_time: i32,
+    /// `GameSvrConf.ControlDropItem`（`PlayObject.Operate.cs:284`）。
+    control_drop_item: bool,
+    /// `GameSvrConf.InSafeDisableDrop`（`PlayObject.Operate.cs:224/254`）。
+    in_safe_disable_drop: bool,
+    /// `GameSvrConf.CanDropPrice`（`PlayObject.Operate.cs:284`）。
+    can_drop_price: i32,
+    /// `GameSvrConf.DropItemRage`（`PlayObject.Operate.cs:291` 的 `_MIN(...,3)`）。
+    drop_item_rage: u8,
+}
+
+/// 一个在线角色的**地面交互会话态**（`CM_PICKUP`/`CM_DROPITEM` 用）。
+///
+/// 进世界时从 `CharacterData` 建立、断线/小退时移除（`CharacterData` 在其他路径上用完即弃，
+/// 本结构把 `ground::*` 要读写的字段留下来）。
+struct SessionGround {
+    /// `ground::GroundState`（`PlayObject.ItemList` + `Gold` + `WAbil`）。
+    state: game_svr::ground::GroundState,
+    /// `BaseObject.ActorId`（`SM_SYSMESSAGE` 的 `Recog`）。
+    actor_id: i32,
+    /// `BaseObject.GameGold`（`SM_GOLDCHANGED` 的 LoWord/HiWord）。
+    game_gold: i32,
+    /// `MessageSettings.CanotPickUpItem` 的 GBK 原文（缺则 `RM_SYSMESSAGE` 不产出）。
+    sys_msg: Option<Vec<u8>>,
+}
+
 /// `sim_loop` 需要的入图帧配置层（`Server.conf` 的 `GameSvrConf` + `String.conf` + `[Setup] ShowRankLevelName`）。
 struct EnterConfig {
     game_conf: Option<mir2_envir::GameSvrConf>,
@@ -862,6 +1065,8 @@ struct EnterConfig {
     /// `stditems` 物品目录（`game_svr::ability::StdItemCatalog`，**1-based** 查表，见 `crate::items`）；
     /// 空目录 = 未加载/无配置。帧 50/41 的 `StdItem.Shape` 与 52/752 的 `RecalcAbilitys` 共用。
     catalog: game_svr::ability::StdItemCatalog,
+    /// `CM_PICKUP`/`CM_DROPITEM` 的 `[Setup]` 输入。
+    ground: GroundCfg,
 }
 
 fn sim_loop(
@@ -889,6 +1094,10 @@ fn sim_loop(
     // S3 后半段（第一格）：同屏 AOI 下行要用的展示表（`ActorId -> Dir/Light/Feature/…`）。
     // 展示字段来自角色记录 + 装备（属 bins/game-svr 的读档面），**不进 `crates/world`**。
     let mut displays = downlink::DisplayTable::new();
+    // `CM_PICKUP`/`CM_DROPITEM` 的**地面交互会话态**（按 `ChrName` 键；进世界建立、断线/小退移除）。
+    // 进世界前解析出的 `CharacterData` 在其他路径上用完即弃，这里把 `ground::*` 要的字段留下来。
+    let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
+        std::collections::HashMap::new();
     glog!(
         "INF",
         "sim 线程就绪：tick={}ms，地图 {} 张（{}）",
@@ -942,6 +1151,25 @@ fn sim_loop(
                             tail.as_deref(),
                             &colors,
                         );
+                    } else if cmd.ident == game_svr::ground::CM_PICKUP
+                        || cmd.ident == game_svr::ground::CM_DROPITEM
+                    {
+                        handle_ground_cmd(
+                            cmd.ident,
+                            cmd.param,
+                            cmd.tag,
+                            tail.as_deref(),
+                            &chr_name,
+                            socket,
+                            &world,
+                            &mut ground_sessions,
+                            &online,
+                            &gates,
+                            &enter_cfg.ground,
+                            &colors,
+                            &enter_cfg.catalog,
+                            registry.as_ref(),
+                        );
                     }
                 }
                 GateEvent::CertificationPending { index, ip } => {
@@ -968,6 +1196,8 @@ fn sim_loop(
                     } else {
                         kick_pending.retain(|n| n != &chr_name);
                         online_take(&mut online, &chr_name);
+                        // 地面交互会话态随断线一并移除（否则重进后还带着旧 `ItemList`/`Gold`）。
+                        ground_sessions.remove(&chr_name);
                         // 同屏展示表随实体一并摘除（ActorId 槽位会被内核回收复用，避免旧展示值残留）。
                         if let Some(aid) = world.session(&chr_name).and_then(|s| s.actor_id) {
                             displays.remove(aid);
@@ -1270,6 +1500,27 @@ fn sim_loop(
                                                     // `WorldServer.cs:1147`：`AttatckMode = (AttackMode)记录 attatck_mode`。
                                                     attack_mode: d.attatck_mode,
                                                 });
+                                                // 帧 52/752 的输入（`AbilityInputs`）：`wx` 与下面登记的地面会话态
+                                                // 共用同一份（`AbilityInputs` 是 `Copy`），保证只有一份 `RecalcAbilitys`
+                                                // 实现（`enter::recalc_for_session`）。
+                                                let ability_inputs: Option<enter::AbilityInputs> =
+                                                    data.and_then(|d| {
+                                                        let conf = enter_cfg.game_conf.as_ref()?;
+                                                        let abil = d.abil.as_ref()?;
+                                                        let bonus_abil = d.bonus_abil.as_ref()?;
+                                                        let (hit, speed) =
+                                                            enter::bonus_tick(conf, d.job);
+                                                        Some(enter::AbilityInputs {
+                                                            catalog: &enter_cfg.catalog,
+                                                            abil,
+                                                            bonus_abil,
+                                                            bonus_tick_hit: hit,
+                                                            bonus_tick_speed: speed,
+                                                            use_items: d.hum_items.as_deref(),
+                                                            bag_items: d.bag_items.as_deref(),
+                                                            gold: d.gold,
+                                                        })
+                                                    });
                                                 let wx = enter::WorldFrameInputs {
                                                     flag: registry
                                                         .as_ref()
@@ -1292,27 +1543,35 @@ fn sim_loop(
                                                     show_name: Some(show_name),
                                                     logon,
                                                     // 帧 52/752：角色记录 `Abil`/`BonusAbil` + `stditems`
-                                                    // 目录 + 各职业 `Config.BonusAbilofXxx` 除数。
-                                                    ability: data.and_then(|d| {
-                                                        let conf = enter_cfg.game_conf.as_ref()?;
-                                                        let abil = d.abil.as_ref()?;
-                                                        let bonus_abil = d.bonus_abil.as_ref()?;
-                                                        let (hit, speed) =
-                                                            enter::bonus_tick(conf, d.job);
-                                                        Some(enter::AbilityInputs {
-                                                            catalog: &enter_cfg.catalog,
-                                                            abil,
-                                                            bonus_abil,
-                                                            bonus_tick_hit: hit,
-                                                            bonus_tick_speed: speed,
-                                                            use_items: d.hum_items.as_deref(),
-                                                            bag_items: d.bag_items.as_deref(),
-                                                            gold: d.gold,
-                                                        })
-                                                    }),
+                                                    // 目录 + 各职业 `Config.BonusAbilofXxx` 除数（见上面 hoist）。
+                                                    ability: ability_inputs,
                                                 };
                                                 for w in enter::apply(&mut inputs, &wx) {
                                                     glog!("WRN", "入图帧输入：{w}");
+                                                }
+                                                // 地面交互会话态（`CM_PICKUP`/`CM_DROPITEM`，owner §26）：进世界时
+                                                // 从同一份 `CharacterData` + `recalc_for_session`（**与帧 52/752
+                                                // 同一实现**）建立；`sys_msg` = `String.conf` 的 `CanotPickUpItem`
+                                                // GBK 原文（oracle `MessageSettings.CanotPickUpItem`）。
+                                                if let (Some(d), Some(a)) = (data, ability_inputs.as_ref()) {
+                                                    let out = enter::recalc_for_session(a, d.job);
+                                                    ground_sessions.insert(
+                                                        head.chr_name.clone(),
+                                                        SessionGround {
+                                                            state: game_svr::ground::GroundState {
+                                                                item_list: bag_items_from(
+                                                                    d.bag_items.as_deref(),
+                                                                ),
+                                                                gold: d.gold,
+                                                                wabil: out.wabil,
+                                                            },
+                                                            actor_id: id,
+                                                            game_gold: d.game_gold,
+                                                            sys_msg: Some(enter::gbk(
+                                                                enter_cfg.string_conf.canot_pick_up_item(),
+                                                            )),
+                                                        },
+                                                    );
                                                 }
                                                 // S3 后半段：把 oracle 在 `SendLogon` 同轮算出的
                                                 // **展示层**字段登记进同屏下行表（`GetFeatureToLong` /
@@ -2187,6 +2446,252 @@ mod tests {
             ],
             "gate1（b 的线）应只收到 a 的一对帧（按 GateIdx 路由）"
         );
+    }
+
+    /// 测试用的 `WAbil`（金币分支不使用 `wabil`；字段值不影响本例断言）。
+    fn test_ability() -> game_svr::ability::Ability {
+        game_svr::ability::Ability {
+            level: 1,
+            reserved1: 0,
+            ac: 0,
+            mac: 0,
+            dc: 0,
+            mc: 0,
+            sc: 0,
+            hp: 0,
+            mp: 0,
+            max_hp: 0,
+            max_mp: 0,
+            reserved2: 0,
+            exp_count: 0,
+            exp_max_count: 0,
+            exp: 0,
+            max_exp: 0,
+            weight: 100,
+            max_weight: 0,
+            wear_weight: 5,
+            max_wear_weight: 0,
+            hand_weight: 0,
+            max_hand_weight: 0,
+        }
+    }
+
+    /// **owner §26（sim 循环对接）**：`CM_PICKUP` 派发到 `ground::pick_up` + `pickwire`，
+    /// 经该角色的 `[GateIdx,Socket]` 回 `SM_GOLDCHANGED`，并把金币写进会话态 `GroundState`。
+    ///
+    /// 金币地面物由「怪物击杀掉落」产出（与 world 的只读分片同一口径），`of_base_object` = 击杀者
+    /// ⇒ `is_self` 成立、可拾。`SM_GOLDCHANGED` 必须用**改后**的 `Gold`（oracle `GoldChanged()`
+    /// 在 `Gold +=` 之后）。
+    ///
+    /// 红检：① 位置门 `pickup_position_ok` 反掉 ⇒ 第一条断言收不到帧；② 去掉
+    /// `RM_GOLDCHANGED → sm_goldchanged` 映射（或 `route_to_gate` 改回 `values().next()`）
+    /// ⇒ 同样收不到该帧；③ `SM_GOLDCHANGED` 用改前 `gold`（=0）⇒ `recog` 断言必红。
+    #[test]
+    fn pickup_gold_dispatches_and_updates_session() {
+        use mir2_world::Command;
+        use std::collections::HashMap;
+
+        let mut world = mir2_world::World::new(32, 32);
+        world.item_catalog = vec![mir2_data::StdItem {
+            name: "金币".into(),
+            ..Default::default()
+        }];
+        world.mon_random_add_value = 0;
+        let p = world.add_entity({
+            let mut e = mir2_world::Entity::new(1, "hero", 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e.hp = 200;
+            e.max_hp = 200;
+            e.dc = 0x0A_14; // LoByte=20, HiByte=10 ⇒ 攻击力足以一击击杀
+            e.hit_point = 10;
+            e.speed_point = 0;
+            e.max_exp = 1000;
+            e
+        });
+        world.spawn_monster(Command::SpawnMonster {
+            id: 2,
+            name: "僵尸".into(),
+            x: 11,
+            y: 10,
+            map_id: 0,
+            level: 1,
+            exp: 0,
+            hp: 3,
+            dc: 1,
+            ac: 0,
+            undead: 0,
+            hit_point: 5,
+            speed_point: 15,
+            drop_list: vec![mir2_data::MonsterDropItem {
+                sel_point: 10,
+                max_point: 10,
+                item_name: "金币".into(),
+                count: 300,
+            }],
+        });
+        world.tick(); // 生成
+        world.attack_cmd(p, 2);
+        let _ = world.tick(); // 死亡结算 + 掉落落地
+        let gold = world
+            .floor_items_view_sorted()
+            .into_iter()
+            .find(|v| v.kind == mir2_world::FloorItemKind::Gold)
+            .expect("必须有金币落地（掉落预算）");
+        let expected_count = gold.count;
+        assert!(expected_count > 0, "金币数应为正：{gold:?}");
+        // 把角色移到金币格（`CM_PICKUP` 的位置门 `CurrX==nParam2 && CurrY==nParam3` 与
+        // `map.get_item(CurrX,CurrY)` 都要对上；世界格未参与本接缝判定）。
+        {
+            let e = world.entities.get_mut(p).expect("player 必在实体表");
+            e.x = gold.x;
+            e.y = gold.y;
+        }
+
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert(
+            "hero".into(),
+            SessionGround {
+                state: game_svr::ground::GroundState {
+                    item_list: Vec::new(),
+                    gold: 0,
+                    wabil: test_ability(),
+                },
+                actor_id: p,
+                game_gold: 0,
+                sys_msg: None,
+            },
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: p,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let cfg = GroundCfg {
+            human_max_gold: 10_000_000,
+            floor_item_can_pick_up_time: 120_000,
+            control_drop_item: false,
+            in_safe_disable_drop: false,
+            can_drop_price: 500,
+            drop_item_rage: 3,
+        };
+        let colors = MsgColors {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+        };
+        let catalog = game_svr::ability::StdItemCatalog::new();
+
+        // 位置门不成立（X 差 1）⇒ 不投递。
+        handle_ground_cmd(
+            game_svr::ground::CM_PICKUP,
+            u16::try_from(gold.x + 1).unwrap(),
+            u16::try_from(gold.y).unwrap(),
+            None,
+            "hero",
+            901,
+            &world,
+            &mut sessions,
+            &online,
+            &gates,
+            &cfg,
+            &colors,
+            &catalog,
+            None,
+        );
+        assert!(
+            matches!(rx0.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
+            "位置门不成立 ⇒ 不得投递（oracle PlayObject.Message.cs:811-816）"
+        );
+        assert_eq!(
+            sessions.get("hero").unwrap().state.gold,
+            0,
+            "位置门不成立 ⇒ 金币不得变"
+        );
+
+        // 位置门成立 ⇒ 拾取成功，回 SM_GOLDCHANGED（用改后 Gold），且会话金币增加。
+        handle_ground_cmd(
+            game_svr::ground::CM_PICKUP,
+            u16::try_from(gold.x).unwrap(),
+            u16::try_from(gold.y).unwrap(),
+            None,
+            "hero",
+            901,
+            &world,
+            &mut sessions,
+            &online,
+            &gates,
+            &cfg,
+            &colors,
+            &catalog,
+            None,
+        );
+        let body = match rx0.try_recv() {
+            Ok(SimToGate::SendFrame { body, socket }) => {
+                assert_eq!(socket, 901, "回帧必须发给该用户的 socket");
+                body
+            }
+            other => panic!("应收到 SM_GOLDCHANGED，实收 {other:?}"),
+        };
+        let cm = mir2_protocol::frame::CommandMessage::from_bytes(&body).expect("body >= 12B");
+        assert_eq!(cm.ident, mir2_protocol::messages::SM_GOLDCHANGED);
+        assert_eq!(
+            cm.recog, expected_count,
+            "SM_GOLDCHANGED 的 Recog = 拾取后的 Gold（不是改前值）"
+        );
+        assert_eq!(
+            sessions.get("hero").unwrap().state.gold,
+            expected_count,
+            "金币必须写进会话态 GroundState"
+        );
+        assert!(
+            matches!(rx0.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
+            "一次拾取只应回一帧"
+        );
+    }
+
+    /// `bag_items_from`（`CharacterData.bag_items` ⇒ `GroundState.item_list`）：展平非空槽、
+    /// `desc` 截断/补零到定长 14B（oracle `UserItem.Desc`）。
+    #[test]
+    fn bag_items_from_flattens_and_pads_desc() {
+        let item = |make_index: i32, index: u16, desc: Option<Vec<u8>>| record::ServerUserItem {
+            make_index,
+            index,
+            dura: 11,
+            dura_max: 22,
+            desc,
+            color_r: 0,
+            color_g: 0,
+            color_b: 0,
+            prefix: None,
+        };
+        let items = vec![
+            None,
+            Some(item(70001, 3, Some(vec![1, 2, 3]))),
+            None,
+            Some(item(70002, 4, None)),
+        ];
+        let bags = bag_items_from(Some(&items));
+        assert_eq!(
+            bags.len(),
+            2,
+            "空槽必须被展平（oracle ItemList 是非空列表）"
+        );
+        assert_eq!(bags[0].make_index, 70001);
+        assert_eq!(bags[0].index, 3);
+        assert_eq!(&bags[0].desc[..3], &[1, 2, 3]);
+        assert!(bags[0].desc[3..].iter().all(|b| *b == 0), "desc 补齐到 14B");
+        assert_eq!(bags[1].desc, [0u8; 14], "无 desc ⇒ 全 0");
     }
 
     /// **本片真机收口**：网关线号必须**按连接唯一分配**（oracle `AllocGateSlot`）。

@@ -1,0 +1,31 @@
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.44s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-9edafd3360ac6080.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 54 filtered out; finished in 0.00s
+
+     Running unittests src\main.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-44fed7c172342fc7.exe)
+
+running 1 test
+test tests::pickup_gold_dispatches_and_updates_session ... FAILED
+
+failures:
+
+---- tests::pickup_gold_dispatches_and_updates_session stdout ----
+18:30:24.849 [DBG] CM_PICKUP：位置门不成立 ChrName=hero Curr=(12,11) 请求=(13,11) ⇒ 忽略
+
+thread 'tests::pickup_gold_dispatches_and_updates_session' (26352) panicked at bins\game-svr\src\main.rs:2648:9:
+assertion `left == right` failed: SM_GOLDCHANGED 的 Recog = 拾取后的 Gold（不是改前值）
+  left: 0
+ right: 192
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::pickup_gold_dispatches_and_updates_session
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 103 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`

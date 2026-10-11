@@ -1,0 +1,29 @@
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.68s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-9edafd3360ac6080.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 54 filtered out; finished in 0.00s
+
+     Running unittests src\main.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-44fed7c172342fc7.exe)
+
+running 3 tests
+test tests::bag_items_from_flattens_and_pads_desc ... ok
+test tests::pickup_gold_dispatches_and_updates_session ... ok
+test config::tests::setup_drop_pickup_keys_and_defaults ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 101 filtered out; finished in 0.00s
+
+     Running tests\relay.rs (E:/tmp/openmir2-m2svr-target\debug\deps\relay-ed97897326d88b18.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.00s
+
+   Doc-tests game_svr
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
