@@ -96,3 +96,19 @@ Remove-Item -Recurse -Force mir2-rs/tests/parity/m3/sessions/*/shadow-run* -Erro
 - **未起栈、未占端口**（5000/7000/7100/7200 未使用）；`E:/MirServer` 十端口状态与开工前一致。
 - **冻结基线**：`src/**`（C# oracle）一行未改；表结构/脚本/数据文件格式未改；
   未动 `main.rs`/`smframe.rs`（接线归 m2-svr）、未动 `crates/world/**`/`crates/envir/**`。
+
+## 九、本片（2026-10-11，worktree `m3bag`：使用药品 handler 核心）实际残留清单
+
+- **入库（证据，随 patch 提交）**：
+  - `m3/fixtures/eat_vectors.json`（oracle 真身探针产出的 `CM_EAT` 向量：8 模板 / 13 用例；
+    即时帧 `SM_EAT_OK/FAIL`(635/636) + 延时通知 `RM_HEALTHSPELLCHANGED`(10052)/`RM_WEIGHTCHANGED`(10115)/
+    `RM_MENU_OK`(10309) + `ItemList`/`WAbil`/`IncHealth`/`IncSpell`/`UserUnLockDurg`，Rust 用例回读逐字段核对）
+  - `m3/eat-probe/`（探针源码 + csproj；反射调私有 `ClientUseItems`，替身 `INetChannel` 截即时帧 +
+    反射读 `MsgQueue` 取出队通知；不连 MySQL、不起服务、不写现网文件）
+  - `mir2-rs/bins/game-svr/src/useitem.rs`（接缝实现 + 4 条单测/红检）
+- **未入库/临时物**：探针的 `bin/`、`obj/`（构建产物，已被 `mir2-rs/.gitignore` 的 `**/bin/`、`**/obj/` 忽略；
+  可用 README 的命令再生）；隔离构建目录 `E:/tmp/openmir2-m3bag-target` 与日志
+  `E:/tmp/openmir2-watch/m3bag4-*.log`（登记位置，可删）。
+- **未起栈、未占端口**（5000/7000/7100/7200 未使用）；`E:/MirServer` 十端口状态与开工前一致。
+- **冻结基线**：`src/**`（C# oracle）一行未改；表结构/脚本/数据文件格式未改；
+  未动 `main.rs`/`smframe.rs`（接线归 m2-svr）、未动 `crates/world/**`/`crates/envir/**`/`crates/world-bevy/**`。

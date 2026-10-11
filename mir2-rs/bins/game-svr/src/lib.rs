@@ -14,3 +14,4 @@ pub mod bag;
 pub mod downlink;
 pub mod feature;
 pub mod smframe;
+pub mod useitem;
