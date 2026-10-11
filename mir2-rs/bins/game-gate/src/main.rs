@@ -364,7 +364,7 @@ async fn handle_frame(
     }
     // 命令路径的出帧重建（照 `ClientSession.cs:646-669`，**不是搬字节**）：口径见 `rebuild_command_frame`。
     let session_index = *ctx.indexes.lock().await.get(&sid).unwrap_or(&0);
-    let wire = rebuild_command_frame(&decoded, payload, sid, session_index);
+    let wire = rebuild_command_frame(&decoded, payload, handle, sid, session_index);
     send_raw(&ctx.down_tx, &wire).await?;
     Ok(Step::Next)
 }
@@ -489,7 +489,21 @@ async fn send_raw(tx: &Arc<Mutex<OwnedWriteHalf>>, wire: &[u8]) -> Result<()> {
 /// - 有尾部：`PackLength = 12 + tLen + 1`（`tLen` = 尾部重编码后的长度），
 ///   body = 解码态 12B + **输入的编码态尾部**（`payload[16..]`）+ 1 字节；
 /// - 那 1 字节在 oracle 里是 `BytePool.Rent` 的**未初始化内存**，这里固定送 `0`（已知的不可比对差异）。
-fn rebuild_command_frame(decoded: &[u8], payload: &[u8], sid: u16, session_index: i32) -> Vec<u8> {
+///
+/// **S3 路由修复**：头里的 `Socket` 必须是**该客户端连接的 socket handle**——oracle 的
+/// `SendMsg` 在构造时就把 `Socket = _session.SckHandle`（`ClientSession.cs:65-70`），
+/// 与 `GM_OPEN` 的 `socketId`（`ClientThread.cs:378` 的 `UserEnter` 传 `userSession.SckHandle`）
+/// 是同一个值。GameSvr 侧收 `GM_DATA` 时**先按 `SessionIndex-1` 找槽、且要求 `Socket` 相同**，
+/// 否则线性扫 `Socket`（`ChannelMessageHandler.cs:170-198`）⇒ 送 0 会让每个已进世界的会话都
+/// 落进「用户不存在」分支、客户端命令（走路/攻击/说话）全被丢。真机症状：
+/// `[WRN] SessionIndex=1 socket=0 的用户不存在，丢弃 12/28/32/35 字节`。
+fn rebuild_command_frame(
+    decoded: &[u8],
+    payload: &[u8],
+    handle: i32,
+    sid: u16,
+    session_index: i32,
+) -> Vec<u8> {
     let mut wire: Vec<u8> = Vec::with_capacity(ServerMessage::SIZE + decoded.len() + 1);
     let (pack_length, tail): (i32, &[u8]) = if decoded.len() > COMMAND_MESSAGE_SIZE {
         let t_len = mir2_protocol::edcode::encode(&decoded[COMMAND_MESSAGE_SIZE..]).len();
@@ -505,7 +519,9 @@ fn rebuild_command_frame(decoded: &[u8], payload: &[u8], sid: u16, session_index
     };
     let head = ServerMessage {
         packet_code: grobal2::PacketCode,
-        socket: 0,
+        // 命令帧的 Socket = 客户端 handle（= GM_OPEN 的 socketId），照 `SendMsg.Socket = _session.SckHandle`
+        // （`ClientSession.cs:65-70`）；送 0 会让 GameSvr 的按 socket 查找全部落空（见函数文档）。
+        socket: handle,
         session_id: sid,
         ident: u16::from(grobal2::GM_DATA),
         session_index,

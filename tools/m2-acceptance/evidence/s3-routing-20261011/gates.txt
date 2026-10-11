@@ -1,0 +1,18 @@
+# 四门禁（隔离 CARGO_TARGET_DIR=E:\tmp\openmir2-m2svr-target，--offline）
+# head: 见 patch；命令逐条如下
+
+## cargo fmt --all -- --check
+rc=0
+
+## cargo clippy --workspace --all-targets --offline -- -D warnings
+rc=0（0 warn）
+
+## cargo test --workspace --offline ×5（要 5 连绿，照 W-1 教训）
+run1: rc=0  464 passed  FAILED=0
+run2: rc=0  464 passed  FAILED=0
+run3: rc=0  464 passed  FAILED=0
+run4: rc=0  464 passed  FAILED=0
+run5: rc=0  464 passed  FAILED=0
+
+## cargo run -p msgcodegen --offline -- --check
+rc=0（604 条常量：Messages.cs 594 + Grobal2 白名单 10）
