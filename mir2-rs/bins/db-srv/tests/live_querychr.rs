@@ -377,10 +377,12 @@ async fn rust_dbsrv_querychr_matches_csharp_golden() {
     let gate_port = free_port();
     let (ids_port, accepted) = fake_login_srv(ACCOUNT).await;
     write_conf(&dir, gate_port, ids_port);
-    let _dbsrv = start_rust_dbsrv(&dir);
+    let dbsrv = start_rust_dbsrv(&dir);
     wait_listen(gate_port).await;
     wait_session_link(&accepted).await;
     exercise_5100_face(gate_port).await;
+    // 先收子进程（否则它仍持有夹具目录里的日志文件句柄 ⇒ Windows 上删目录会失败留残）
+    drop(dbsrv);
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -402,10 +404,12 @@ async fn csharp_dbsrv_querychr_matches_csharp_golden() {
     let gate_port = free_port();
     let (ids_port, accepted) = fake_login_srv(ACCOUNT).await;
     write_conf(&dir, gate_port, ids_port);
-    let _dbsrv = start_csharp_dbsrv(&dir);
+    let dbsrv = start_csharp_dbsrv(&dir);
     wait_listen(gate_port).await;
     wait_session_link(&accepted).await;
     exercise_5100_face(gate_port).await;
+    // 先收子进程（否则它仍持有夹具目录里的日志文件句柄 ⇒ Windows 上删目录会失败留残）
+    drop(dbsrv);
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -440,7 +444,7 @@ async fn csharp_selgate_to_rust_dbsrv() {
     );
     let (ids_port, accepted) = fake_login_srv(ACCOUNT).await;
     write_conf(&dbsrv_dir, gate_port, ids_port);
-    let _dbsrv = start_rust_dbsrv(&dbsrv_dir);
+    let dbsrv = start_rust_dbsrv(&dbsrv_dir);
     wait_listen(gate_port).await;
     wait_session_link(&accepted).await;
 
@@ -454,7 +458,7 @@ async fn csharp_selgate_to_rust_dbsrv() {
         free_port()
     );
     std::fs::write(sel_dir.join("config.conf"), conf).expect("写 SelGate config.conf 失败");
-    let _selgate = start_csharp_selgate(&sel_dir);
+    let selgate = start_csharp_selgate(&sel_dir);
     wait_listen(gate_listen).await;
     tokio::time::sleep(Duration::from_millis(500)).await;
 
@@ -489,7 +493,9 @@ async fn csharp_selgate_to_rust_dbsrv() {
         "经 SelGate 的字节与金标准不等"
     );
 
+    drop(selgate);
     std::fs::remove_dir_all(&sel_dir).ok();
+    drop(dbsrv);
     std::fs::remove_dir_all(&dbsrv_dir).ok();
 }
 
