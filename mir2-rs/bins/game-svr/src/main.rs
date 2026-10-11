@@ -27,6 +27,7 @@ mod dbclient;
 mod hutil;
 mod ids;
 mod load;
+mod record;
 mod users;
 
 use std::sync::Arc;
@@ -65,6 +66,9 @@ macro_rules! glog {
 enum SimToGate {
     /// `NetChannel.CloseUser(gateIdx, socket)`（`TCPNetChannel.cs:221-224`）的对应物：清掉该 socket 的槽。
     KickUser { socket: i32 },
+    /// 进世界完成（`World::open_session` + `enter_map` 成功）⇒ 该槽的 `in_world` 置真
+    /// （oracle 里是 `gateUser.PlayObject`/`WorldEngine` 挂上，`:201` 的分支门就是它）。
+    MarkInWorld { socket: i32 },
 }
 
 /// I/O 侧 → sim 侧的事件（sim 线程是唯一碰 `World` 的地方）。
@@ -224,8 +228,8 @@ struct DbWiring {
     next_query_id: std::sync::Arc<std::sync::atomic::AtomicI32>,
     /// 收侧汇总（分帧 + 签名 + 查询表），由 DB 链路任务与 sim 线程共享。
     replies: std::sync::Arc<std::sync::Mutex<dbclient::DbReplies>>,
-    /// 已发出、还没取走的 query_id（sim 每 tick 轮询）
-    outstanding: Vec<i32>,
+    /// 已发出、还没取走的 (query_id, socket)——socket 用于回复到达后把该槽标进世界
+    outstanding: Vec<(i32, i32)>,
 }
 
 impl DbWiring {
@@ -331,7 +335,7 @@ fn sim_loop(
                 );
                 match w.req_tx.send(frame) {
                     Ok(()) => {
-                        w.outstanding.push(qid);
+                        w.outstanding.push((qid, info.socket_id));
                         Some(qid)
                     }
                     Err(_) => {
@@ -379,17 +383,58 @@ fn sim_loop(
             let replies = std::sync::Arc::clone(&w.replies);
             let mut r = replies.lock().expect("DB 应答表锁被毒化");
             let mut still = Vec::new();
-            for qid in std::mem::take(&mut w.outstanding) {
+            for (qid, socket) in std::mem::take(&mut w.outstanding) {
                 match r.take(qid) {
                     Some(reply) => {
                         let (ident, recog) =
                             dbclient::parse_reply_message(&reply.message).unwrap_or((0, 0));
                         glog!(
                             "INF",
-                            "收到角色数据 queryId={qid} Ident={ident} Recog={recog}（解析 LoadPlayerDataPacket/进世界属 S2b-2b 后半）"
+                            "收到角色数据 queryId={qid} Ident={ident} Recog={recog}"
                         );
+                        // `PlayerDataService.cs:150`：`nIdent == DBR_LOADHUMANRCD && nRecog == 1 && data.Length > 0`
+                        if ident == mir2_protocol::messages::DBR_LOADHUMANRCD && recog == 1 {
+                            let payload = mir2_protocol::edcode::decode(&reply.packet);
+                            match record::parse_player_data_head(&payload) {
+                                Some(head) => {
+                                    // 进世界：`World::open_session` + `enter_map`（S2b-3 的骨架；
+                                    // 地图名→id 的映射要等真地图加载，本片一律 0 号图并登记）
+                                    let _ = world.open_session(&head.chr_name);
+                                    let ent = mir2_world::Entity::new(
+                                        0,
+                                        head.chr_name.clone(),
+                                        i32::from(head.cur_x),
+                                        i32::from(head.cur_y),
+                                    );
+                                    match world.enter_map(&head.chr_name, ent, 0) {
+                                        Ok(id) => {
+                                            glog!(
+                                                "INF",
+                                                "进世界 ChrName:{} CurMap:{} ({},{}) Dir:{} entity={id}",
+                                                head.chr_name,
+                                                head.cur_map,
+                                                head.cur_x,
+                                                head.cur_y,
+                                                head.dir
+                                            );
+                                            if let Some(tx) = gates.values().next() {
+                                                let _ = tx.send(SimToGate::MarkInWorld { socket });
+                                            }
+                                        }
+                                        Err(e) => glog!(
+                                            "WRN",
+                                            "进世界失败 ChrName:{}：{e:?}",
+                                            head.chr_name
+                                        ),
+                                    }
+                                }
+                                None => {
+                                    glog!("WRN", "角色记录头部解析失败（{} 字节）", payload.len())
+                                }
+                            }
+                        }
                     }
-                    None => still.push(qid),
+                    None => still.push((qid, socket)),
                 }
             }
             w.outstanding = still;
@@ -485,6 +530,11 @@ async fn gate_conn(
 /// 施放一条 sim → gate 的命令（`NetChannel.CloseUser(gateIdx, socket)` 的落地）。
 fn apply_sim_cmd(cmd: SimToGate, users: &mut UserList) {
     match cmd {
+        SimToGate::MarkInWorld { socket } => {
+            if users.mark_in_world(socket) {
+                glog!("INF", "进世界标记：socket={socket}");
+            }
+        }
         SimToGate::KickUser { socket } => {
             if let Some(index) = users.close_by_socket(socket) {
                 glog!(

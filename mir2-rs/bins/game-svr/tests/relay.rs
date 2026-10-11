@@ -95,9 +95,11 @@ impl Child {
         write_conf(&dir, port, check_block, ids_port, db_port);
         let log = dir.join("server.out.log");
         let out = std::fs::File::create(&log).unwrap();
+        let err = out.try_clone().unwrap();
         let proc = tokio::process::Command::new(env!("CARGO_BIN_EXE_game-svr"))
             .arg(dir.join("Server.conf"))
             .stdout(out)
+            .stderr(err)
             .kill_on_drop(true)
             .spawn()
             .unwrap();
@@ -464,7 +466,7 @@ async fn db_reply_accepted_with_good_sign_and_rejected_with_bad_sign() {
         use mir2_protocol::edcode;
         let mut msg = vec![5u8];
         msg.extend_from_slice(&1i32.to_le_bytes()); // Recog = 1（`:150` 的判据）
-        msg.extend_from_slice(&101u16.to_le_bytes()); // DBR_LOADHUMANRCD
+        msg.extend_from_slice(&1100u16.to_le_bytes()); // DBR_LOADHUMANRCD（Messages 里是 1100，不是 101）
         msg.extend_from_slice(&[0u8; 6]);
         let m = edcode::encode(&msg);
         let p = edcode::encode(packet);
@@ -538,10 +540,149 @@ async fn db_reply_accepted_with_good_sign_and_rejected_with_bad_sign() {
                 "好签名必须被接受并入表；日志实得：{log}"
             );
             assert!(
-                log.contains("收到角色数据 queryId=1 Ident=101 Recog=1"),
+                log.contains("收到角色数据 queryId=1 Ident=1100 Recog=1"),
                 "sim 必须取到该 query 的应答并解出 Ident/Recog；日志实得：{log}"
             );
         }
         child.stop().await;
     }
+}
+
+/// **判据（S2b-3 骨架：进世界）**：假 DBSvr 回的载荷是一份**按实测布局合成**的角色记录头部
+/// （`LoadPlayerDataPacket` → `CharacterDataInfo` → `RecordHeader` → `CharacterData`，到 `Dir` 为止即可）——
+/// ⇒ 必须 parse 出 `ChrName=lb1a / CurMap=0 / (100,200) / Dir=3` 并**进世界**（`open_session` + `enter_map`），
+/// 且该槽被标 `in_world`（于是后面的命令帧按**命令**处理，而不是走 F3 那条"已认证未进世界 ⇒ 空转丢帧"）。
+///
+/// 布局依据：`bins/game-svr/tests/fixtures/player_data_oracle.txt`（部署件序列化样例的头部窗口）。
+#[tokio::test]
+async fn db_reply_with_player_data_enters_world_and_unlocks_commands() {
+    const ORACLE_LOGIN_BODY: &str = "23305e5e3c716f6d446f6e6f5478615f3c786e61497b5f623f5f6162586b6062586b61625a675f615a5f60605a6b60615a6a62603f6b6060586b6060586b6060586b6060586b6060586b6060586b6060586b6060586b6060586b6060586b5f603f21";
+
+    // 角色记录头部（到 Dir 为止）：前缀 2 + ChrName + 前缀 2 + 前缀 7 + 7 个 Header 字段 + 前缀 52 +
+    // ServerIndex + ChrName + CurMap + CurX(i16) + CurY(i16) + Dir(u8)
+    fn player_data_head() -> Vec<u8> {
+        fn s(v: &str) -> Vec<u8> {
+            let mut o = i32::try_from(v.chars().count())
+                .unwrap()
+                .to_le_bytes()
+                .to_vec();
+            for c in v.chars() {
+                let mut b = [0u16; 2];
+                for u in c.encode_utf16(&mut b) {
+                    o.extend_from_slice(&u.to_le_bytes());
+                }
+            }
+            o
+        }
+        let mut o = vec![2u8];
+        o.extend_from_slice(&s("lb1a")); // LoadPlayerDataPacket.ChrName
+        o.push(2); // CharacterDataInfo 成员数
+        o.push(7); // RecordHeader 成员数
+        o.extend_from_slice(&s("loadbot1")); // sAccount
+        o.extend_from_slice(&s("lb1a")); // Name
+        o.extend_from_slice(&5i32.to_le_bytes()); // SelectID
+        o.extend_from_slice(&1.5f64.to_le_bytes()); // dCreateDate
+        o.push(0); // Deleted
+        o.extend_from_slice(&2.5f64.to_le_bytes()); // UpdateDate
+        o.extend_from_slice(&3.5f64.to_le_bytes()); // CreateDate
+        o.push(52); // CharacterData 成员数（0x34）
+        o.push(1); // ServerIndex
+        o.extend_from_slice(&s("lb1a")); // Data.ChrName
+        o.extend_from_slice(&s("0")); // CurMap
+                                      // 入口坐标必须落在占位地图内（本用例的 `WorldMaps=64x64`；真地图加载后无此约束）
+        o.extend_from_slice(&10i16.to_le_bytes()); // CurX
+        o.extend_from_slice(&20i16.to_le_bytes()); // CurY
+        o.push(3); // Dir
+        o
+    }
+
+    fn reply_frame(query_id: i32, packet: &[u8]) -> Vec<u8> {
+        use mir2_protocol::edcode;
+        let mut msg = vec![5u8];
+        msg.extend_from_slice(&1i32.to_le_bytes()); // Recog = 1
+        msg.extend_from_slice(&1100u16.to_le_bytes()); // DBR_LOADHUMANRCD（Messages 里是 1100，不是 101）
+        msg.extend_from_slice(&[0u8; 6]);
+        let m = edcode::encode(&msg);
+        let p = edcode::encode(packet);
+        let n_len = m.len() + p.len() + 6;
+        let sign_id = (u32::from(u16::try_from(n_len).unwrap()) << 16)
+            | u32::from(u16::try_from(query_id ^ 170).unwrap());
+        let sgn = edcode::encode(&sign_id.to_le_bytes());
+        let mut body = vec![4u8];
+        body.extend_from_slice(&query_id.to_le_bytes());
+        for part in [&m, &p, &sgn] {
+            body.extend_from_slice(&i32::try_from(part.len()).unwrap().to_le_bytes());
+            body.extend_from_slice(part);
+        }
+        let mut frame = 0xAA9A_AA9Au32.to_le_bytes().to_vec();
+        frame.extend_from_slice(&u16::try_from(body.len()).unwrap().to_le_bytes());
+        frame.extend_from_slice(&body);
+        frame
+    }
+
+    let dbsrv = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let db_port = dbsrv.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let (mut s, _) = dbsrv.accept().await.unwrap();
+        let mut buf = vec![0u8; 512];
+        let _ = tokio::io::AsyncReadExt::read(&mut s, &mut buf).await;
+        let frame = reply_frame(1, &player_data_head());
+        let _ = tokio::io::AsyncWriteExt::write_all(&mut s, &frame).await;
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    });
+    let ids = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let ids_port = ids.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        if let Ok((mut s, _)) = ids.accept().await {
+            let _ =
+                tokio::io::AsyncWriteExt::write_all(&mut s, b"(100/loadbot1/2/0/1/127.0.0.1/3600)")
+                    .await;
+            tokio::time::sleep(Duration::from_secs(7)).await;
+        }
+    });
+    let port = free_port();
+    let child = Child::spawn(port, 12288, ids_port, db_port, "dbworld");
+    let mut gate = connect_with_retry(port).await;
+    gate.write_all(&frame(grobal2::GM_OPEN, 801, 111, 0, b"127.0.0.1"))
+        .await
+        .unwrap();
+    let (m, _) = recv_frame(&mut gate).await.unwrap();
+    assert_eq!(m.session_index, 1);
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    gate.write_all(&frame(
+        grobal2::GM_DATA,
+        801,
+        111,
+        1,
+        &hex(ORACLE_LOGIN_BODY),
+    ))
+    .await
+    .unwrap();
+    tokio::time::sleep(Duration::from_millis(900)).await;
+    let log = child.stdout();
+    assert!(
+        log.contains("进世界 ChrName:lb1a CurMap:0 (10,20) Dir:3"),
+        "必须按记录进世界；日志实得：{log}"
+    );
+    assert!(
+        log.contains("进世界标记：socket=801"),
+        "进世界后必须把该槽标 in_world；日志实得：{log}"
+    );
+    // 行为判据：进世界后一条 12B 命令帧必须按**命令**处理（而不是 F3 的"已认证未进世界 ⇒ 空转丢帧"）
+    let mut cmd = vec![0u8; 12];
+    cmd[4..6].copy_from_slice(&3030u16.to_le_bytes());
+    gate.write_all(&frame(grobal2::GM_DATA, 801, 111, 1, &cmd))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let log = child.stdout();
+    assert!(
+        log.contains("命令 Recog=0 Ident=3030"),
+        "进世界后命令帧必须被当命令处理；日志实得：{log}"
+    );
+    assert!(
+        !log.contains("已认证未进世界"),
+        "进世界后不得再走空转丢帧那条；日志实得：{log}"
+    );
+    child.stop().await;
 }

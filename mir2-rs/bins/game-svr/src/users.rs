@@ -135,6 +135,17 @@ impl UserList {
         self.slots.iter().flatten().find(|u| u.socket == socket)
     }
 
+    /// 进世界完成：把该 socket 的槽标成 `in_world`（oracle 的 `gateUser.PlayObject`/`WorldEngine` 挂上时）。
+    pub fn mark_in_world(&mut self, socket: i32) -> bool {
+        for u in self.slots.iter_mut().flatten() {
+            if u.socket == socket {
+                u.in_world = true;
+                return true;
+            }
+        }
+        false
+    }
+
     /// 槽位总数（含已关闭的空槽——下标只增不缩，对外索引=下标+1）。
     #[must_use]
     pub fn slots(&self) -> usize {

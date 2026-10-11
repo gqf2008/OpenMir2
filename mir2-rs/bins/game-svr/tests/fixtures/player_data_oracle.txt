@@ -1,0 +1,22 @@
+# oracle 字节基准：角色记录 LoadPlayerDataPacket 的**头部窗口**（到 CharacterData.Dir 为止）
+#
+# 来源：部署件 OpenMir2.dll 的 MemoryPack 序列化器（生成器：E:\tmp\openmir2-gamegate-imp\dbgen\，
+#   dotnet build -c Release && .\bin\Release\net9.0\dbgen.exe > db-baseline.txt）
+# 输入：ChrName=lb1a / Header{sAccount=loadbot1, Name=lb1a, SelectID=5, dCreateDate=1.5, Deleted=false,
+#   UpdateDate=2.5, CreateDate=3.5} / Data{ServerIndex=1, ChrName=lb1a, CurMap="0", CurX=100, CurY=200,
+#   Dir=3, Hair=2, Sex=1, Job=0, Gold=12345}
+# 逐段（MemoryPack：class/含 string 的 struct 先写成员数字节；string=i32(字符数)+UTF-16LE；标量小端）：
+#   02                       LoadPlayerDataPacket 成员数 2
+#   04 000000 "lb1a"         ChrName
+#   02                       CharacterDataInfo 成员数 2
+#   07                       RecordHeader 成员数 7
+#   …七个字段(sAccount/Name/SelectID/dCreateDate/Deleted/UpdateDate/CreateDate)…
+#   34(偏移 76)              CharacterData 成员数 52
+#   01                       ServerIndex
+#   04 000000 "lb1a"         Data.ChrName
+#   01 000000 "0"            CurMap
+#   6400 / c800 / 03         CurX=100 / CurY=200 / Dir=3
+#   02 01 00 39300000        Hair=2 / Sex=1 / Job=0 / Gold=12345（本切片解析到 Dir 即可）
+# 解析器与判据：mir2-rs/bins/game-svr/{src/record.rs,tests/relay.rs}
+
+playerdata_len=821 playerdata_head=02040000006c006200310061000207080000006c006f006100640062006f0074003100040000006c0062003100610005000000000000000000f83f0000000000000004400000000000000c403401040000006c006200310061000100000030006400c8000302010039300000160000000000000000000000
