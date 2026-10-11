@@ -1,0 +1,22 @@
+{
+ "tool": "m1-acceptance/probe_m1_chain.py",
+ "count": 200,
+ "stagger_ms": 20,
+ "port": 7000,
+ "elapsed_s": 36.4,
+ "steps": {
+  "login": 200,
+  "select_server": 200,
+  "query_chr": 200,
+  "select_chr": 200
+ },
+ "ident_hist": {
+  "529": 200,
+  "530": 200,
+  "520": 200,
+  "525": 200
+ },
+ "fails": [],
+ "errors": [],
+ "pass": true
+}

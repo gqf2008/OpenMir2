@@ -1,0 +1,18 @@
+﻿M1⑤① 全 Rust 边界链端口所有权实拍（repo=E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m1load）
+PORT 7000  <- pid=5416 [rust] E:\tmp\openmir2-m1load-target\debug\login-gate.exe
+            cmd: "E:\tmp\openmir2-m1load-target\debug\login-gate.exe" E:\tmp\openmir2-m1load\stack\login-gate\config.conf 
+            entry=login-gate expected=login-gate verdict=ok
+PORT 5500  <- pid=10556 [rust] E:\tmp\openmir2-m1load-target\debug\login-srv.exe
+            cmd: "E:\tmp\openmir2-m1load-target\debug\login-srv.exe" E:\tmp\openmir2-m1load\stack\login-srv\logsrv.conf 
+            entry=login-srv expected=login-srv verdict=ok
+PORT 7100  <- pid=26348 [rust] E:\tmp\openmir2-m1load-target\debug\sel-gate.exe
+            cmd: "E:\tmp\openmir2-m1load-target\debug\sel-gate.exe" E:\tmp\openmir2-m1load\stack\sel-gate\config.conf 
+            entry=sel-gate expected=sel-gate verdict=ok
+PORT 5100  <- pid=13300 [rust] E:\tmp\openmir2-m1load-target\debug\db-srv.exe
+            cmd: "E:\tmp\openmir2-m1load-target\debug\db-srv.exe" E:\tmp\openmir2-m1load\stack\db-srv\dbsvr.conf 
+            entry=db-srv expected=db-srv verdict=ok
+PORT 5600  <- pid=10556 [rust] E:\tmp\openmir2-m1load-target\debug\login-srv.exe
+            cmd: "E:\tmp\openmir2-m1load-target\debug\login-srv.exe" E:\tmp\openmir2-m1load\stack\login-srv\logsrv.conf 
+            entry=login-srv expected=login-srv verdict=ok
+EVIDENCE E:\tmp\openmir2-m1load\evidence\rerun-f3\redcheck\redcheck-0-green.json
+GREEN: 五端口（7000/5500/7100/5100/5600）的所有权均为期望的 Rust 入口（验收①可判）
