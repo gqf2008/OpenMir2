@@ -190,3 +190,113 @@ pub fn power_transparent(
 ) -> i32 {
     get_power13(rng, magic, level, 30) + i32::from(get_rpow(rng, sc)) * 3
 }
+
+// ---- 施法前置（DoSpell 顶层门 + 武器/护身符）--------------------------------------------------
+//
+// 本组把 DoD③「施法前置」里**可离线**的两面补齐：
+// - `is_warr_skill` / `check_amulet`：oracle 真有入口（public static），向量由 `amulet-probe` 反射/直调产出。
+// - `spell_in_range` / `spell_version_gate` / `amulet_requirement`：`DoSpell` 的**内联语句**或
+//   `switch` case 标签，未单独成方法、无法反射直调 ⇒ **source-cited**（注释给出行号）。
+
+/// `MagicManager.IsWarrSkill`（`src/M2Server/Magic/MagicManager.cs:82-105`）：9 个战士技能魔号。
+///
+/// `DoSpell` 开头 `if (IsWarrSkill(userMagic.MagIdx)) return false;`（同文件 :151）——
+/// 战士技能不走魔法施放流程。
+pub fn is_warr_skill(mag_idx: i32) -> bool {
+    matches!(mag_idx, 3 | 4 | 7 | 12 | 25 | 26 | 27 | 34 | 38)
+}
+
+/// `ItemLocation.ArmRingl` / `ItemLocation.Bujuk`（`src/OpenMir2/Enums/ItemLocation.cs:28,44`）。
+pub const ITEM_LOCATION_ARM_RINGL: u8 = 5;
+pub const ITEM_LOCATION_BUJUK: u8 = 9;
+
+/// 护身符槽位（oracle 侧 = `UserItem{Index,Dura}` + `StdItem{StdMode,Shape}` 两件套；
+/// `index == 0` 表示空槽，`None` 表示 `UseItems[..] == null`）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AmuletSlot {
+    pub index: i32,
+    pub std_mode: u8,
+    pub shape: u8,
+    pub dura: i32,
+}
+
+/// `MagicBase.CheckAmulet`（`src/M2Server/Magic/MagicBase.cs:47-105`）：先查 `ArmRingl`(5) 再查
+/// `Bujuk`(9)；命中返回被选中的 `ItemLocation` 值，否则 `None`。
+///
+/// 命中条件：`Index > 0`、`StdMode == 25`、`Round(Dura / 100.0) >= count`，且形状匹配
+/// `amulet_type`（1 ⇒ `Shape == 5`；2 ⇒ `Shape <= 2`；其余不匹配）。
+/// 注意：`ArmRingl` 不匹配时**继续查** `Bujuk`（oracle 无 early-return）。
+pub fn check_amulet(
+    armringl: Option<AmuletSlot>,
+    bujuk: Option<AmuletSlot>,
+    count: u8,
+    amulet_type: u8,
+) -> Option<u8> {
+    for (loc, slot) in [
+        (ITEM_LOCATION_ARM_RINGL, armringl),
+        (ITEM_LOCATION_BUJUK, bujuk),
+    ] {
+        let Some(s) = slot else { continue };
+        if s.index <= 0 || s.std_mode != 25 {
+            continue;
+        }
+        let shape_ok = match amulet_type {
+            1 => s.shape == 5,
+            2 => s.shape <= 2,
+            _ => false,
+        };
+        if shape_ok && hutil::round(f64::from(s.dura) / 100.0) >= i32::from(count) {
+            return Some(loc);
+        }
+    }
+    None
+}
+
+/// `DoSpell` 距离门（`src/M2Server/Magic/MagicManager.cs:155`）：
+/// `|CurrX - nTargetX| > MagicAttackRage || |CurrY - nTargetY| > MagicAttackRage` ⇒ 直接 `return false`。
+///
+/// 返回 `true` 表示**通过**该门（可继续施法）。`magic_attack_rage` 取 oracle 配置
+/// `SystemShare.Config.MagicAttackRage`（探针读出默认 `8`）。**source-cited**（内联语句）。
+pub fn spell_in_range(
+    cur_x: i16,
+    cur_y: i16,
+    target_x: i16,
+    target_y: i16,
+    magic_attack_rage: i32,
+) -> bool {
+    let dx = (i32::from(cur_x) - i32::from(target_x)).abs();
+    let dy = (i32::from(cur_y) - i32::from(target_y)).abs();
+    !(dx > magic_attack_rage || dy > magic_attack_rage)
+}
+
+/// `DoSpell` 版本/魔号门（`src/M2Server/Magic/MagicManager.cs:167`）：
+/// `SoftVersionDateEx == 0 && ClientTick == 0 || MagicId > 80` ⇒ 直接 `return false`。
+///
+/// 返回 `true` 表示**通过**该门。**source-cited**（内联语句）。
+/// `SoftVersionDateEx`/`ClientTick` 在 oracle 侧是 `int`/`short`。
+pub fn spell_version_gate(soft_version_date_ex: i32, client_tick: i16, magic_id: i32) -> bool {
+    !((soft_version_date_ex == 0 && client_tick == 0) || magic_id > 80)
+}
+
+/// `DoSpell` 里每个需要**护身符**的魔号：`(需求数量, 护身符类型)`。
+///
+/// 逐条来自 `MagicManager.cs` 的 `CheckAmulet` 调用点（各 `case` 的 `CheckAmulet(playObject, n, t, …)`）：
+/// - `:229` 施毒术(6)：`(1, 2)`
+/// - `:323` 灵魂火符/幽灵盾/神圣战甲术/困魔咒/召唤骷髅/隐身术/集体隐身术(13..=19)：`(1, 1)`
+/// - `:452` 召唤神兽(30)：`(5, 1)`
+/// - `:464` 天使(41)：`(2, 1)`
+/// - `:620` 无极真气(36)：`(1, 1)`
+/// - `:908` 群体施毒术(48)：`(1, 2)`
+///
+/// **source-cited**（`switch` case 标签，未单独成方法）。
+pub fn amulet_requirement(magic_id: i32) -> Option<(u8, u8)> {
+    match magic_id {
+        6 => Some((1, 2)),
+        13..=19 => Some((1, 1)),
+        30 => Some((5, 1)),
+        41 => Some((2, 1)),
+        36 => Some((1, 1)),
+        48 => Some((1, 2)),
+        _ => None,
+    }
+}
