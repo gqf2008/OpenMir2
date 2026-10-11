@@ -1555,6 +1555,20 @@ fn build_save_record(
     rec
 }
 
+/// 存档应答落地（oracle `PlayerDataService.cs:118-136` 的 `ProcessSaveQueue`）。
+///
+/// **仅** `DBR_SAVEHUMANRCD(1102) && recog==1` 才把角色移出保存名单（`RemoveSaveList` →
+/// `FrnEngn.cs:156` 的 `InSaveRcdList`）；失败应答 `DBR_LOADHUMANRCD(1100) recog=0`
+/// （`src/DBSrv/Services/Impl/DataService.cs:257-263`）只把该请求出队、**不**复位 in-save
+/// ⇒ oracle 会把角色永久留在保存名单（之后每次进世界都判「正在保存」而被踢）。
+/// 按红线「行为等价优先于修 bug：先 1:1 连 bug 一起搬」照抄该分支
+/// （卡 `openmir2-m3-gamesvr-save` F-1 reviewer-5 `962fdf81`，owner 裁决 `99c89a88` 选项 a）。
+fn apply_save_reply(engine: &mut load::FrontEngine, chr_name: &str, ident: u16, recog: i32) {
+    if ident == mir2_protocol::messages::DBR_SAVEHUMANRCD && recog == 1 {
+        engine.end_save(chr_name);
+    }
+}
+
 /// 发 `DB_SAVEHUMANRCD(101)`（`WorldServer.SaveHumanRcd` `:1077` → `PlayerDataService.SavePlayerRcd`）。
 ///
 /// **时机照 oracle**：在 `MakeGhost()`（退出世界）时调用（`RunNotice` 的 `BoSoftClose`/`BoKickFlag`
@@ -2863,8 +2877,8 @@ fn sim_loop(
                     )),
                 }
             }
-            // 存档应答（`DBR_SAVEHUMANRCD(1102)` / 失败的 `DBR_LOADHUMANRCD(1100)`）：取走并记日志
-            // （`FrontEngine.InSaveRcdList` 的「保存中」生命周期未建模，登记）。
+            // 存档应答（`DBR_SAVEHUMANRCD(1102)` / 失败的 `DBR_LOADHUMANRCD(1100)`）：取走并记日志。
+            // 只有成功应答才复位 in-save（`apply_save_reply`，照 oracle `ProcessSaveQueue`）。
             let mut still_saves = Vec::new();
             for (qid, chr) in std::mem::take(&mut w.save_outstanding) {
                 match r.take(qid) {
@@ -2875,8 +2889,9 @@ fn sim_loop(
                             "INF",
                             "存档应答 queryId={qid} ChrName={chr} Ident={ident} Recog={recog}"
                         );
-                        // oracle 在应答回来后从 save 名单移除（进世界守卫的 in-save 半边随之复位）。
-                        engine.end_save(&chr);
+                        // 仅 `1102 && recog==1` 才 `end_save`；`1100 recog=0`（存库失败）保持
+                        // in-save（oracle 会把角色永久留在保存名单——连 bug 一起搬）。
+                        apply_save_reply(&mut engine, &chr, ident, recog);
                     }
                     None => still_saves.push((qid, chr)),
                 }
@@ -3841,6 +3856,35 @@ mod tests {
         );
         engine.end_save("hero"); // DBR_SAVEHUMANRCD 应答回来时
         assert!(!engine.in_save_rcd_list("HERO"), "应答后复位");
+    }
+
+    /// **F-1（reviewer-5 `962fdf81` / owner 裁决 `99c89a88` 选项 a）**：存档应答的失败路径照
+    /// oracle `PlayerDataService.cs:118-136` 的 `ProcessSaveQueue`——**仅**
+    /// `DBR_SAVEHUMANRCD(1102) && recog==1` 才把角色移出 `InSaveRcdList`；
+    /// `DBR_LOADHUMANRCD(1100) recog=0`（存库失败）只出队、**不**复位
+    /// （oracle 的「卡在保存中」连 bug 一起搬）。
+    ///
+    /// 红检：把 `apply_save_reply` 改成无条件 `engine.end_save(chr_name)` ⇒ 第一条断言必红。
+    #[test]
+    fn save_ledger_only_released_on_success_reply() {
+        use mir2_protocol::messages::{DBR_LOADHUMANRCD, DBR_SAVEHUMANRCD};
+        let mut engine = load::FrontEngine::new();
+        engine.begin_save("Hero");
+        assert!(engine.in_save_rcd_list("Hero"));
+
+        // 失败应答：1100 recog=0 ⇒ 不移出保存名单（与 oracle 同）
+        apply_save_reply(&mut engine, "Hero", DBR_LOADHUMANRCD, 0);
+        assert!(
+            engine.in_save_rcd_list("hero"),
+            "DBR_LOADHUMANRCD(1100) 不得把角色移出 InSaveRcdList（oracle 连 bug 一起搬）"
+        );
+
+        // 成功应答：1102 recog=1 ⇒ 移出
+        apply_save_reply(&mut engine, "Hero", DBR_SAVEHUMANRCD, 1);
+        assert!(
+            !engine.in_save_rcd_list("HERO"),
+            "DBR_SAVEHUMANRCD(1102) 应答后必须复位"
+        );
     }
 
     /// **owner §26（sim 循环对接）**：`CM_PICKUP` 派发到 `ground::pick_up` + `pickwire`，

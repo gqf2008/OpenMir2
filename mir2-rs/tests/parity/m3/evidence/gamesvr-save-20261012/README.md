@@ -1,7 +1,7 @@
 # 卡 `openmir2-m3-gamesvr-save` 证据（Rust game-svr「进世界存档」缺失）
 
 **patch**：待挂（`patch --base refs/heads/master --head refs/heads/worktree-m2-gamesvr-host`）
-**base**：`refs/heads/master`（交付时 = `0a59fa48`，本分支已 merge）
+**base**：`refs/heads/master`（交付时已 merge master `1c85d554`）
 **head 提交**：`ff0ff63c`（本片源码 + 证据）→ merge master `f982940a`
 **worktree**：`E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr`
 
@@ -57,6 +57,11 @@ Rust 侧新增（写集 = `mir2-rs/bins/game-svr/**`）：
 - `tests::save_ledger_round_trips_between_begin_and_reply`（owner-precheck `a8836e1b` 的选项 a）：
   发 `DB_SAVEHUMANRCD` 时 `engine.begin_save` ⇒ 进世界守卫 `in_save_rcd_list` 为真（关新）；
   `DBR_SAVEHUMANRCD` 应答回来时 `engine.end_save` ⇒ 复位。
+- `tests::save_ledger_only_released_on_success_reply`（**F-1：reviewer-5 `962fdf81` / owner 裁决
+  `99c89a88` 选项 a**）：`DBR_LOADHUMANRCD(1100) recog=0`（存库失败）⇒ `in_save_rcd_list`
+  **保持 true**；`DBR_SAVEHUMANRCD(1102) recog=1` ⇒ 复位。收侧判定抽成 `apply_save_reply`，照 oracle
+  `src/GameSrv/Services/PlayerDataService.cs:118-136` 的 `ProcessSaveQueue`：**仅**
+  `nIdent==DBR_SAVEHUMANRCD && nRecog==1` 才 `RemoveSaveList`。
 
 **红检（改坏 ⇒ 必红；原始件见 `red-*.txt`）**：
 
@@ -65,21 +70,22 @@ Rust 侧新增（写集 = `mir2-rs/bins/game-svr/**`）：
 | `red-gold.txt` | `rec.data.gold = sg.state.gold` → `= 0`（漏写 Gold 列） | `save_record_...` FAILED（exit 101） |
 | `red-bag.txt` | `bag_items_for_save` 不写物品（全默认物品） | 同上 FAILED（exit 101） |
 | `red-ident.txt` | `save_human_rcd_request` 的 ident `101` → `100` | `save_request_...` FAILED（exit 101） |
+| `red-save-reply.txt` | `apply_save_reply` 改成无条件 `engine.end_save(chr_name)`（把 F-1 的失败路径改坏） | `save_ledger_only_released_on_success_reply` FAILED（exit 101：1100 应答后仍断言 in-save） |
 
-三次改坏后均**还原**，`git status` 只剩本次三处源码 + 证据目录（无半路残留）。
+四次改坏后均**还原**，`git status` 只剩本次源码 + 证据目录（无半路残留）。
 
 ## 3. 门禁与 T-27 preflight（DoD ①⑤，隔离 `CARGO_TARGET_DIR=E:\tmp\openmir2-m2svr-target`，全 `--offline`）
 
-**合并 master `0a59fa48` 后的树**：
+**合并 master `1c85d554` 后的树**：
 
 | 门禁 | 命令 | 结果 |
 | --- | --- | --- |
 | fmt | `cargo fmt --all -- --check` | rc=0（`gates-fmt.txt`，空 = 无 diff） |
 | clippy | `cargo clippy --workspace --all-targets --offline -- -D warnings` | rc=0（`gates-clippy.txt`） |
-| test | `cargo test --workspace --offline` | **73 suites / 560 passed / 0 failed / 16 ignored**（`gates-test-workspace.txt`） |
+| test | `cargo test --workspace --offline` | **73 suites / 564 passed / 0 failed / 16 ignored**（`gates-test-workspace.txt`） |
 | msgcodegen | `cargo run -p msgcodegen --offline -- --check` | rc=0，604 条（`gates-msgcodegen.txt`） |
 
-新增/改动用例 **3 连跑**：`gamesvr-3run-1..3.txt`，每次 `123 passed / 0 failed`（unit）+
+新增/改动用例 **3 连跑**：`gamesvr-3run-1..3.txt`，每次 `125 passed / 0 failed`（unit）+
 `13 passed / 0 failed`（relay）。
 
 **T-27 断线存档机判护栏**（`openmir2-m3-bag-equip-alignment` 第十三格，已随 master `0a59fa48` 合入）：
@@ -105,9 +111,13 @@ Rust 侧新增（写集 = `mir2-rs/bins/game-svr/**`）：
   2. `GetUpgradeStdItem` 的 Desc 升级差量、buff/技能对能力的加成都未移植（沿用既有登记）。
   3. 周期存档 `SaveHumanRcdTime`（`WorldServer.cs:698-702`，默认 10 分钟）**未做**（登记）；
      本片只做 `MakeGhost`/断线那一条（DoD ① 的「至少」）。
-  4. in-save 账本（`a8836e1b`）：**已接**——发请求时 `engine.begin_save(chr)`、应答回来时
-     `engine.end_save(chr)`（存 `save_outstanding: Vec<(qid, ChrName)>`）⇒ 存档窗口内重进会走
-     「关新」支（与 oracle `AddToSaveRcdList`/`InSaveRcdList` 配对，`WorldServer.cs:1091` ↔ `:203`）。
+  4. in-save 账本（`a8836e1b` + **F-1 修复 reviewer-5 `962fdf81` / owner 裁决 `99c89a88` 选项 a**）：
+     **已接**——发请求时 `engine.begin_save(chr)`；应答回来时**仅** `DBR_SAVEHUMANRCD(1102) && recog==1`
+     才 `engine.end_save(chr)`（`apply_save_reply`，照 oracle `PlayerDataService.cs:118-136` 的
+     `ProcessSaveQueue`）。`DBR_LOADHUMANRCD(1100) recog=0`（存库失败，`DBSrv/Services/Impl/
+     DataService.cs:257-263`）**不**复位 in-save——oracle 会把角色**永久**留在保存名单（之后每次
+     进世界都判「正在保存」被踢），按红线「行为等价优先于修 bug：先 1:1 连 bug 一起搬」照抄
+     （存 `save_outstanding: Vec<(qid, ChrName)>`）。
   5. `characters.MapName` 已按**当前** `map_id` 反查注册表（见 §1 owner-precheck），不再只是 `enter_map`。
 
 ## 5. 边界与残留物
