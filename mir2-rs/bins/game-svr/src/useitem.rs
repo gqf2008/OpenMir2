@@ -11,7 +11,9 @@
 //!     │           ├─ GetStdItem(userItem.Index) == null ⇒ 不处理，落 SM_EAT_FAIL
 //!     │           └─ switch (stdItem.StdMode)
 //!     │               case 0/1/2/3 ⇒ if (EatItems(stdItem, userItem)) { Dispose; RemoveAt(i); eatSuccess=true }
-//!     │               else          ⇒ 不处理
+//!     │               case 4      ⇒ ReadBook（技能书）——未实现（T-17）
+//!     │               case 31     ⇒ AniCount==0 ? 解包（UnbindList）: UseStdModeFunItem
+//!     │                             ——`AniCount != 0` 已做（看 FunctionNPC 是否存在），解包未做（T-17）
 //!     ├─ if (eatSuccess) { WeightChanged(); SendDefMessage(SM_EAT_OK,0,0,0,0) }
 //!     └─ else            { SendDefMessage(SM_EAT_FAIL,0,0,0,0) }
 //!
@@ -26,6 +28,10 @@
 //!   ├─ case 1: nOldStatus = GetMyStatus(); HungerStatus += DuraMax/10; HungerStatus = _MIN(5000, HungerStatus);
 //!   │          if (nOldStatus != GetMyStatus()) RefMyStatus();  result = true
 //!   └─ case 2 ⇒ result = true（无任何状态变更）
+//!
+//! PlayObject.Base.cs:1072  UseStdModeFunItem(StdItem) —— **StdMode 31 / AniCount != 0**
+//!   └─ if (SystemShare.FunctionNPC != null) { GotoLable("@StdModeFunc"+AniCount); return true }
+//!       （脚本派发本身不在本接缝作用域；**是否吃掉**只看 FunctionNPC 是否存在）
 //! ```
 //!
 //! # 两类下行（本接缝把它们**分开**产出，别混成一条流）
@@ -57,11 +63,14 @@
 //!
 //! # 未做清单（登记在卡 `openmir2-m3-bag-equip-alignment` 的 whitelist）
 //!
-//! - **StdMode 3/4/31**：`ExtraAbil` buff / `GetExp`、`ReadBook`（技能书）、解包（`UnbindList`）——
+//! - **StdMode 3/4**：`ExtraAbil` buff / `GetExp`（Shape 12/13）、`ReadBook`（技能书）——
 //!   未实现；且 StdMode 3 的 `default` 还要走 `EatUseItems`（传送/祝福油等大地图副作用）。
 //!   oracle 对这些 StdMode 有**成功**路径（StdMode 3 的 Shape 13 **无条件**返回 true；其余为条件成功），
-//!   成功时吃掉物品 + `SM_EAT_OK`，而本接缝只处理 `std_mode==0|1|2` ⇒ 同一输入落 `SM_EAT_FAIL`，
-//!   **这是已证的行为差异**（不是"一致地不吃"）。`StdMode=5`（`case` 名单外）才是两侧一致地不吃。
+//!   成功时吃掉物品 + `SM_EAT_OK`，而本接缝只处理 `std_mode==0|1|2` 与 **31 的 `AniCount != 0`**
+//!   ⇒ 同一输入落 `SM_EAT_FAIL`，**这是已证的行为差异**（不是"一致地不吃"）。
+//! - **StdMode 31 / AniCount == 0（解包）**：oracle 在 `ItemList.Count + 6 - 1 <= Grobal2.MaxBagItem`（46）时
+//!   解包出 6 件（`UnbindList`）；本接缝未实现 ⇒ 容量够时是已证差异（T-17），容量不足时两侧一致地不吃。
+//!   `StdMode=5`（`case` 名单外）才是两侧一致地不吃。
 //! - **StdMode 1 只补到 `HungerStatus` + `RefMyStatus` 的发帧**：oracle `RefMyStatus()` 里的
 //!   `RecalcAbilitys()` **整链**（由装备/buff 算 `WAbil`）只用 `ability::recalc_abilitys` 的最小等价物
 //!   顶上（`ctx.recalc`）；它**尚未**覆盖 `PlayObject.RecalcAbilitys` 的套装/`ExtraAbil`/`GetCharStatus`
@@ -159,6 +168,9 @@ pub struct UseItemContext<'a> {
     pub make_index: i32,
     /// `PlayObject.Envir.Flag.boNODRUG`（地图禁药；`EatItems` 的首个守卫）。
     pub no_drug: bool,
+    /// `SystemShare.FunctionNPC != null`（`PlayObject.Base.cs:1072` `UseStdModeFunItem` 的**唯一**判据）。
+    /// StdMode 31 的 `AniCount != 0` 分支用它；`AniCount == 0` 的解包分支未实现（T-17）。
+    pub function_npc_present: bool,
     /// `Config.RedMsgFColor`（禁药 `SysMsg(Red)` 的前景色）。
     pub red_msg_fcolor: u16,
     /// `Config.RedMsgBColor`（禁药 `SysMsg(Red)` 的背景色）。
@@ -336,8 +348,18 @@ pub fn use_item(
                             2 => {
                                 eaten = true;
                             }
-                            // StdMode 3/4/31（ExtraAbil/GetExp、书、解包）未实现 ⇒ 与
-                            // oracle 在未禁药形态下的成功/条件成功路径**不同**，已证差异，登记在 T-17。
+                            // StdMode 31（`PlayObject.Operate.cs:657-672`）：
+                            //   - `AniCount != 0` ⇒ `UseStdModeFunItem(stdItem)`（`PlayObject.Base.cs:1072`）:
+                            //     `if (SystemShare.FunctionNPC != null) { GotoLable("@StdModeFunc"+AniCount); return true; }`
+                            //     ——`GotoLable` 的脚本派发本身不在本接缝作用域（登记 T-17），但**是否吃掉**
+                            //     只取决于 `FunctionNPC` 是否存在，这条已 1:1。
+                            //   - `AniCount == 0` ⇒ 解包（`ClientUseItemsGetUnBindItems`，`UnbindList` 出 6 件）：
+                            //     未实现；容量不足时两侧一致地不吃，容量足够时是已证差异（T-17）。
+                            31 if tpl.ani_count != 0 && ctx.function_npc_present => {
+                                eaten = true;
+                            }
+                            // StdMode 3/4（ExtraAbil/GetExp、书）未实现 ⇒ 与 oracle 在未禁药形态下的
+                            // 成功/条件成功路径**不同**，已证差异，登记在 T-17。
                             _ => {}
                         }
                         if eaten {
@@ -471,6 +493,7 @@ mod tests {
             ac: u16v(&v["ac"]),
             mac: u16v(&v["mac"]),
             dura_max: u16v(&v["dura_max"]),
+            ani_count: u8v(&v["ani_count"]),
             ..StdItem::default()
         }
     }
@@ -606,6 +629,7 @@ mod tests {
                 actor_id: i32v(&c["actor_id"]),
                 make_index: i32v(&case["request"]["make_index"]),
                 no_drug: c["no_drug"].as_bool().unwrap(),
+                function_npc_present: c["function_npc_present"].as_bool().unwrap(),
                 red_msg_fcolor: u16v(&c["red_msg_fcolor"]),
                 red_msg_bcolor: u16v(&c["red_msg_bcolor"]),
                 recalc: Some(recalc),
@@ -700,6 +724,7 @@ mod tests {
             actor_id: 0,
             make_index: 1,
             no_drug: false,
+            function_npc_present: false,
             red_msg_fcolor: 255,
             red_msg_bcolor: 56,
             recalc: None,
@@ -738,6 +763,7 @@ mod tests {
             actor_id: 0x1234,
             make_index: 1,
             no_drug: false,
+            function_npc_present: false,
             red_msg_fcolor: 255,
             red_msg_bcolor: 56,
             recalc: None,
@@ -786,6 +812,7 @@ mod tests {
             actor_id: 0,
             make_index: 1,
             no_drug: false,
+            function_npc_present: false,
             red_msg_fcolor: 255,
             red_msg_bcolor: 56,
             recalc: None,
@@ -816,6 +843,7 @@ mod tests {
             actor_id: 0,
             make_index: 1,
             no_drug: false,
+            function_npc_present: false,
             red_msg_fcolor: 255,
             red_msg_bcolor: 56,
             recalc: None,
@@ -859,6 +887,7 @@ mod tests {
             actor_id: c["actor_id"].as_i64().unwrap() as i32,
             make_index: 1,
             no_drug: c["no_drug"].as_bool().unwrap(),
+            function_npc_present: false,
             red_msg_fcolor: u16v(&c["red_msg_fcolor"]),
             red_msg_bcolor: u16v(&c["red_msg_bcolor"]),
             recalc: None,
@@ -880,5 +909,69 @@ mod tests {
         assert_eq!(out.notices[0].n_param1, 255, "前景色 = RedMsgFColor");
         assert_eq!(out.notices[0].n_param2, 56, "背景色 = RedMsgBColor");
         assert_eq!(item_list, before, "禁药不许消耗物品");
+    }
+
+    /// `StdMode 31`（`PlayObject.Operate.cs:657-672`）：`AniCount != 0` 时是否吃掉**只**取决于
+    /// `SystemShare.FunctionNPC != null`（`UseStdModeFunItem`，`PlayObject.Base.cs:1072`）。
+    /// 同一用例构造两次：存在 ⇒ `SM_EAT_OK` + `RM_WEIGHTCHANGED` + 背包移除；缺失 ⇒ `SM_EAT_FAIL`
+    /// + 背包不动。把 `&& ctx.function_npc_present` 删掉（或无脑 `eaten = true`）⇒ 后半必红。
+    #[test]
+    fn stdmode31_funitem_eats_only_when_function_npc_present() {
+        let doc = fixture();
+        let cat = catalog(&doc);
+        let case = doc["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "eat_ok_stdmode31_funitem")
+            .expect("夹具必须含 eat_ok_stdmode31_funitem");
+        let abil = ability(&case["wabil_before"]);
+
+        // 存在 FunctionNPC ⇒ 吃。
+        let mut state = UseItemActorState {
+            wabil: abil.clone(),
+            inc_health: 0,
+            inc_spell: 0,
+            user_unlock_durg: false,
+            hunger_status: 0,
+        };
+        let mut item_list = bag_items(&case["item_list_before"]);
+        let ctx = UseItemContext {
+            catalog: &cat,
+            can_use_item: true,
+            dead: false,
+            actor_id: 0,
+            make_index: 1,
+            no_drug: false,
+            function_npc_present: true,
+            red_msg_fcolor: 255,
+            red_msg_bcolor: 56,
+            recalc: None,
+        };
+        let out = use_item(&ctx, &mut state, &mut item_list);
+        assert!(out.eaten, "FunctionNPC 存在 ⇒ StdMode 31/AniCount!=0 必吃");
+        assert_eq!(out.immediate_frames[0].ident, SM_EAT_OK);
+        assert_eq!(out.notices, vec![QueuedNotice::plain(RM_WEIGHTCHANGED)]);
+        assert!(item_list.is_empty(), "吃掉后背包为空");
+
+        // 缺失 FunctionNPC ⇒ 不吃（`UseStdModeFunItem` 返回 false）。
+        let mut state = UseItemActorState {
+            wabil: abil.clone(),
+            inc_health: 0,
+            inc_spell: 0,
+            user_unlock_durg: false,
+            hunger_status: 0,
+        };
+        let mut item_list = bag_items(&case["item_list_before"]);
+        let before = item_list.clone();
+        let ctx = UseItemContext {
+            function_npc_present: false,
+            ..ctx
+        };
+        let out = use_item(&ctx, &mut state, &mut item_list);
+        assert!(!out.eaten, "FunctionNPC 缺失 ⇒ 不吃");
+        assert_eq!(out.immediate_frames[0].ident, SM_EAT_FAIL);
+        assert!(out.notices.is_empty());
+        assert_eq!(item_list, before, "拒绝时不许动背包");
     }
 }
