@@ -29,6 +29,7 @@ pub const MSG_COLOR_RED: i32 = 0;
 pub const MSG_COLOR_GREEN: i32 = 1;
 pub const MSG_COLOR_BLUE: i32 = 2;
 /// `MsgType`（`src/Modules/SystemModule/Enums/MsgType.cs`）。
+pub const MSG_TYPE_SYSTEM: i32 = 0;
 pub const MSG_TYPE_HINT: i32 = 2;
 pub const MSG_TYPE_SAY: i32 = 3;
 
@@ -165,10 +166,17 @@ impl Engine<'_, '_> {
                 s_msg = s_msg.replace("%s", &chr_name);
                 s_msg = s_msg.replace("%d", &npc_name);
                 match info.n_param1 {
-                    0 => self.player.world_broadcast(&s_msg),
-                    1 => self.player.world_broadcast(&format!("(*) {s_msg}")),
-                    2 => self.player.world_broadcast(&format!("[{npc_name}]{s_msg}")),
-                    3 => self.player.world_broadcast(&format!("[{chr_name}]{s_msg}")),
+                    // C# `MsgType.System`（对比 5-7 的 `SysMsg(..., MsgType.Say)`）
+                    0 => self.player.world_broadcast(&s_msg, MSG_TYPE_SYSTEM),
+                    1 => self
+                        .player
+                        .world_broadcast(&format!("(*) {s_msg}"), MSG_TYPE_SYSTEM),
+                    2 => self
+                        .player
+                        .world_broadcast(&format!("[{npc_name}]{s_msg}"), MSG_TYPE_SYSTEM),
+                    3 => self
+                        .player
+                        .world_broadcast(&format!("[{chr_name}]{s_msg}"), MSG_TYPE_SYSTEM),
                     4 => self.npc.send_say_msg(&s_msg),
                     5 => self.player.sys_msg(&s_msg, MSG_COLOR_RED, MSG_TYPE_SAY),
                     6 => self.player.sys_msg(&s_msg, MSG_COLOR_GREEN, MSG_TYPE_SAY),
@@ -1930,12 +1938,12 @@ impl Engine<'_, '_> {
                             "[{}]: {} 与 {} 的婚礼现在开始...",
                             npc_name, me_name, pose_name
                         );
-                        self.player.world_broadcast(&msg);
+                        self.player.world_broadcast(&msg, MSG_TYPE_SAY);
                         let msg = format!(
                             "[{}]: {} 你愿意娶 {} 小姐为妻，并照顾她一生一世吗？",
                             npc_name, me_name, pose_name
                         );
-                        self.player.world_broadcast(&msg);
+                        self.player.world_broadcast(&msg, MSG_TYPE_SAY);
                     }
                     self.player.set_is_start_marry(true);
                     self.player.set_pose_is_start_marry(true);
@@ -1958,9 +1966,9 @@ impl Engine<'_, '_> {
             // C# 对 `{0}` 模板做 `%n/%s/%d` Replace（无命中）⇒ 原文广播
             let msg =
                 "[{0}]: 我愿意!!!，{1} 小姐我会尽我一生的时间来照顾您，让您过上快乐美满的日子的。";
-            self.player.world_broadcast(msg);
+            self.player.world_broadcast(msg, MSG_TYPE_SAY);
             let msg = "[{0}]: {1} 你愿意嫁给 {2} 先生为妻，并照顾他一生一世吗？";
-            self.player.world_broadcast(msg);
+            self.player.world_broadcast(msg, MSG_TYPE_SAY);
             self.goto_label("@WateMarry", false);
             self.player.pose_goto_label("@RevMarry");
         }
@@ -1974,12 +1982,12 @@ impl Engine<'_, '_> {
                         "[{}]: 我愿意!!!，{} 先生我愿意让你来照顾我，保护我。",
                         npc_name, pose_name
                     );
-                    self.player.world_broadcast(&msg);
+                    self.player.world_broadcast(&msg, MSG_TYPE_SAY);
                     let msg = format!(
                         "[{}]: 我宣布 {} 先生与 {} 小姐正式成为合法夫妻。",
                         npc_name, me_name, pose_name
                     );
-                    self.player.world_broadcast(&msg);
+                    self.player.world_broadcast(&msg, MSG_TYPE_SAY);
                     self.goto_label("@EndMarry", false);
                     self.player.pose_goto_label("@EndMarry");
                     self.player.set_is_start_marry(false);
@@ -1998,12 +2006,12 @@ impl Engine<'_, '_> {
                     "[{}]: {} 你这个好色之徒，谁会愿意嫁给你呀!!!，癞蛤蟆想吃天鹅肉。",
                     npc_name, me_name
                 );
-                self.player.world_broadcast(&msg);
+                self.player.world_broadcast(&msg, MSG_TYPE_SAY);
                 let msg = format!(
                     "[{}]: 真是可惜，二个人这个时候才翻脸，你们培养好感情后再来找我吧!!!",
                     npc_name
                 );
-                self.player.world_broadcast(&msg);
+                self.player.world_broadcast(&msg, MSG_TYPE_SAY);
             }
         }
     }
@@ -2046,7 +2054,7 @@ impl Engine<'_, '_> {
                             "[{}]: 我宣布{} 与{}  正式脱离夫妻关系。",
                             npc_name, pose_name, me_name
                         );
-                        self.player.world_broadcast(&msg);
+                        self.player.world_broadcast(&msg, MSG_TYPE_SAY);
                         self.player.set_dear_name("");
                         self.player.set_pose_dear_name("");
                         self.player.inc_marry_count();
@@ -2069,7 +2077,7 @@ impl Engine<'_, '_> {
                     "[{}]: 我宣布{} 与{}  已经正式脱离夫妻关系!!!",
                     npc_name, me_name, dear
                 );
-                self.player.world_broadcast(&msg);
+                self.player.world_broadcast(&msg, MSG_TYPE_SAY);
                 // C# `poseHuman = GetPlayObject(DearName)`：世界层未接入时按「对方不在线」
                 // 走 else 分支（仅写 UnMarry.txt，此处不落盘，原文已注释）
                 self.player.set_dear_name("");

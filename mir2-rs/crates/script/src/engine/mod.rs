@@ -334,8 +334,9 @@ pub trait ScriptPlayer {
     }
     /// `playerActor.SysMsg(msg, color, msgType)`（`MsgColor` / `MsgType` 取值见本模块常量）
     fn sys_msg(&mut self, _msg: &str, _color: i32, _msg_type: i32) {}
-    /// `SystemShare.WorldEngine.SendBroadCastMsg(msg, MsgType.System)`
-    fn world_broadcast(&mut self, _msg: &str) {}
+    /// `SystemShare.WorldEngine.SendBroadCastMsg(msg, msgType)`（`MsgType` 取值见本模块常量：
+    /// LINE MSG 0-3 为 `System`、其余广播为 `Say`；世界适配层据此选择广播类型）
+    fn world_broadcast(&mut self, _msg: &str, _msg_type: i32) {}
     /// `playerActor.SendGroupText(msg)`
     fn send_group_text(&mut self, _msg: &str) {}
     /// `playerActor.MyGuild.SendGuildMsg(msg)`（仅在 `MyGuild != null` 时调用）

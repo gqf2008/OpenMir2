@@ -565,8 +565,8 @@ impl ScriptPlayer for MockPlayer {
     fn sys_msg(&mut self, msg: &str, color: i32, msg_type: i32) {
         self.events.push(format!("sys {color} {msg_type} {msg}"));
     }
-    fn world_broadcast(&mut self, msg: &str) {
-        self.events.push(format!("broadcast {msg}"));
+    fn world_broadcast(&mut self, msg: &str, msg_type: i32) {
+        self.events.push(format!("broadcast {msg_type} {msg}"));
     }
     fn send_group_text(&mut self, msg: &str) {
         self.events.push(format!("grouptext {msg}"));
@@ -1397,14 +1397,14 @@ fn line_msg_modes_and_error() {
     // 0：世界广播原文；`%s`→玩家名、`%d`→NPC 名
     let e = run_act(&mut npc, &mut player, act(31, "0", "你好%s在%d", 0, 0));
     assert!(e.is_empty(), "{e:?}");
-    assert_eq!(player.events, vec!["broadcast 你好测试玩家在测试NPC"]);
+    assert_eq!(player.events, vec!["broadcast 0 你好测试玩家在测试NPC"]);
     // 2：NPC 名前缀；3：玩家名前缀
     player.events.clear();
     let _ = run_act(&mut npc, &mut player, act(31, "2", "正文", 2, 0));
-    assert_eq!(player.events, vec!["broadcast [测试NPC]正文"]);
+    assert_eq!(player.events, vec!["broadcast 0 [测试NPC]正文"]);
     player.events.clear();
     let _ = run_act(&mut npc, &mut player, act(31, "3", "正文", 3, 0));
-    assert_eq!(player.events, vec!["broadcast [测试玩家]正文"]);
+    assert_eq!(player.events, vec!["broadcast 0 [测试玩家]正文"]);
     // 5/6/7：SysMsg 的 Red/Green/Blue，MsgType.Say
     player.events.clear();
     let _ = run_act(&mut npc, &mut player, act(68, "5", "红", 5, 0));
@@ -1657,6 +1657,13 @@ fn auto_get_exp_and_offline() {
     let errors = run_act(&mut npc, &mut player, a);
     assert!(errors.is_empty(), "{errors:?}");
     assert_eq!(player.auto_get_exp, Some((true, None, 10_000, 20)));
+    // 空/单字符 sParam3：C# `sParam3[1]` 抛 IndexOutOfRangeException；Rust 落 false、不崩
+    // （刻意不复刻崩溃，登记见 tests/parity/whitelist.md B-108）
+    let mut e = act(236, "10", "20", 0, 0);
+    e.s_param4 = "0".into();
+    let errors = run_act(&mut npc, &mut player, e);
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(player.auto_get_exp, Some((false, None, 10_000, 20)));
     // 时间/点数非法 ⇒ 报错
     let mut b = act(236, "0", "20", 0, 0);
     b.s_param3 = "A1".into();
