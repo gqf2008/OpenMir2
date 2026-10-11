@@ -15,7 +15,7 @@
 | 轮 | 旧会话 | 新会话 | 结果 | 证据 |
 | --- | --- | --- | --- | --- |
 | A | BotSrv | 另一个 BotSrv（同账号 `fixt0`/同角色） | **新连接被放行**（进世界成功） | `fixtureA-*.log` / `fixtureA-botbot.json` |
-| B | **真 Delphi 客户端** | BotSrv（同账号 `fixt0`/同角色） | **新连接被关闭**（RunGate/SelGate 在 0.7s 后断，未进世界） | `fixtureB-*` / `fixtureB2-*` |
+| B | **真 Delphi 客户端** | BotSrv（同账号 `fixt0`/同角色） | **新连接被关闭**（RunGate/SelGate 在 0.7s 后断，未进世界） | `fixtureB-*` |
 
 两轮的旧连接收到的是**同一种**东西。⇒ 见 §2。**新连接放行/关闭取决于竞态**，见 §3。
 
@@ -26,7 +26,7 @@
   （`BaseObject.cs:1588+`）→ `RM_SYSMESSAGE` → `SM_SYSMESSAGE`（**不是** `SM_OUTOFCONNECTION(528)`）。
 - 证据：
   - BotSrv 侧：`fixtureA-botA-old.out.txt` `17:32:38.967 [INF] 当前登录帐号正在其它位置登录，本机已被强行离线!!!`
-  - 真客户端侧：`fixtureB-realclient-06b-after-kick.png` / `fixtureB2-realclient-06b-after-kick.png`
+  - 真客户端侧：`fixtureB-realclient-06b-after-kick.png`
     —— 截图里角色**仍在比奇省世界里**，聊天框最后一行是红字 `当前登录帐号正在其它位置登录，本机已被强行离线!!!`。
 - **旧连接不立即断开**：`fixtureA-closeobs-old.out.txt`（同账号再登录那轮）里旧会话在 kick 提示后仍持续动作，
   `17:34:22.106 [WRN] 游戏服务器[127.0.0.1:7000]关闭连接...` 才断（≈49s 后）。⇒ 不是「收到 528 即断」。
@@ -89,7 +89,6 @@
 | `fixtureA-gamesvr-1732.txt` | 轮 A GameSvr 窗口日志 |
 | `fixtureA-closeobs-old.out.txt` | 旧连接 kick 后不断开的补测（≈49s 才断） |
 | `fixtureB-realclient-06b-after-kick.png` | 真客户端在旧会话被 kick 后仍在世界 + 红字提示（第一轮） |
-| `fixtureB2-realclient-06b-after-kick.png` | 同上（第二轮，`KickWaitSec=45`） |
 | `fixtureB-realclient-bot.out.txt` | 轮 B 新会话（BotSrv）日志：止于 `进入游戏`，未 `成功进入游戏` |
 | `fixtureB-rungate-1736.txt` / `fixtureB-selgate-1736.txt` | 轮 B 网关侧：新连接 0.7s 后断开 |
 | `fixtureB-gamesvr-1736.txt` / `fixtureB-loginsrv-1736.txt` | 轮 B GameSvr / LoginSrv 窗口日志 |
