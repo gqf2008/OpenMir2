@@ -1,3 +1,5 @@
+# 【历史对照，非现行基线】本文件由**未入库**的旧 bench 产出，无生成器可复现；
+# 现行基线见 p99-baseline-tickbench.txt，场景与判定口径见 P99复测报告.md（2026-10-11）。
 # 每 tick 预算 = 200ms（C# WorldServer.ProcessHumans 节拍）
 实体数        tick数       P50us    P90us    P99us    maxus     P99/预算
 500        2000          421      527      662      918     0.331%
