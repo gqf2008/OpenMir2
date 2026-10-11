@@ -1,0 +1,76 @@
+{
+ "tool": "m2-acceptance/s2c_diff.py",
+ "golden": "mir2-rs/tests/golden/c-line-baseline-c3-20261010.jsonl",
+ "rust": "E:/tmp/m2acc/run5b/rust/capture.jsonl",
+ "port": 7200,
+ "dir": "s2c",
+ "start_ident": 658,
+ "upto_ident": 46,
+ "normalization": {
+  "recog": "CommandMessage.Recog = oracle ActorId（ActorMgr.GetNextIdentity() 的会话相关随机正数）"
+ },
+ "golden_frames": 15,
+ "rust_frames": 15,
+ "golden_idents": [
+  658,
+  51,
+  50,
+  41,
+  213,
+  11029,
+  42,
+  766,
+  54,
+  5008,
+  1106,
+  52,
+  752,
+  811,
+  46
+ ],
+ "rust_idents": [
+  658,
+  51,
+  50,
+  41,
+  213,
+  11029,
+  42,
+  766,
+  54,
+  5008,
+  1106,
+  52,
+  752,
+  811,
+  46
+ ],
+ "diff_count": 0,
+ "whitelisted_count": 2,
+ "diffs": [],
+ "whitelisted": [
+  {
+   "ident": 46,
+   "field": "param",
+   "kind": "",
+   "golden": "1",
+   "rust": "3",
+   "whitelist": {
+    "reason": "46 SM_DAYCHANGING 的 param = Bright = M2Share.GameTime，oracle 由 SystemProcessor 按**真实小时**刷新（SystemProcessor.cs:98-120）。金标准 09:28（白天=1）/ 本片 01:28（夜间=3）⇒ 取决于采集时刻，非 Rust 偏差。owner §25.3 裁决登记，不阻塞『同序 + 等长 + 其余字段逐字节』。",
+    "reviewer": "openmir2-orchestrator(owner §25.3 裁决；待 owner 于卡上复核落签)"
+   }
+  },
+  {
+   "ident": 46,
+   "field": "raw_hex",
+   "kind": "byte",
+   "golden": "236464686b645e68686564686b6464686b21",
+   "rust": "236464686b645e68686764686b6464686b21",
+   "whitelist": {
+    "reason": "同一差异的 byte 投影：46 的 raw_hex 差异**只**来自 12B 头 param 字节（值 1 vs 3），与上面 param 行同因同审；body/tail 逐字节相同。",
+    "reviewer": "openmir2-orchestrator(owner §25.3 裁决；待 owner 于卡上复核落签)"
+   }
+  }
+ ],
+ "pass": true
+}
