@@ -96,9 +96,21 @@ VOLATILE_COLUMNS = {
     },
 }
 
+# 固定建角场景（卡 openmir2-m3-botsrv-fixed-newchr）下，`characters` 的建角输入列
+# Hair/Sex/Job 不再是"夹具自身随机"——BotSrv 用配置固定了它们（RobotOptions.FixedNewChr
+# + NewChrJob/Hair/Sex），两侧输入同序列 ⇒ 这三列必须逐字节比（该场景判据要求
+# "Job 列不置占位、真的比到值"）。其余易变列（自增 PK / 墙钟 datetime）仍按白名单置占位。
+FIXED_NEWCHR_NOT_VOLATILE = {
+    "mir2_db.characters": {"Hair", "Sex", "Job"},
+}
 
-def canonicalize_line(table, line):
-    """把该表白名单列的列值替换为占位符，返回规范化后的整行（其余列逐字节不动）。"""
+
+def canonicalize_line(table, line, fixed_newchr=False):
+    """把该表白名单列的列值替换为占位符，返回规范化后的整行（其余列逐字节不动）。
+
+    fixed_newchr=True 时，固定建角场景的建角输入列（Hair/Sex/Job）从占位白名单里移除，
+    改为逐字节比较——这是本场景"真的比到值"的实现（见 scoped_diff `--fixed-newchr`）。
+    """
     cols = TABLE_COLUMNS.get(table)
     if cols is None:
         print(f"RED: --canonical 遇到未登记表 {table}——先在 scoped_diff.py 的 TABLE_COLUMNS/"
@@ -109,7 +121,10 @@ def canonicalize_line(table, line):
         print(f"RED: {table} 列数不符（快照 {len(fields)} vs 登记 {len(cols)}）——表结构已变或登记过期",
               file=sys.stderr)
         sys.exit(4)
-    volatile = VOLATILE_COLUMNS.get(table, {})
+    volatile = dict(VOLATILE_COLUMNS.get(table, {}))
+    if fixed_newchr:
+        for name in FIXED_NEWCHR_NOT_VOLATILE.get(table, set()):
+            volatile.pop(name, None)
     for i, name in enumerate(cols):
         if name in volatile:
             fields[i] = CANON_PLACEHOLDER
@@ -169,10 +184,11 @@ def cmd_diff(args):
     a = bucket(load_rows(args.a))
     b = bucket(load_rows(args.b))
     if getattr(args, "canonical", False):
+        fixed_newchr = getattr(args, "fixed_newchr", False)
         for rows in (a, b):
             for table, rs in rows.items():
                 for r in rs:
-                    r["line"] = canonicalize_line(table, r["line"])
+                    r["line"] = canonicalize_line(table, r["line"], fixed_newchr)
                     r["row_sha256"] = hashlib.sha256(r["line"].encode("utf-8")).hexdigest()
     problems = 0
     summary = {}
@@ -270,30 +286,45 @@ def cmd_selftest(args):
         for line in base:
             f.write(json.dumps({"table": "t", "row_sha256": hashlib.sha256(line.encode()).hexdigest(),
                                 "line": line}, ensure_ascii=False) + "\n")
-    ns = argparse.Namespace(a=a, b=b, max_diffs=5, summary_out=None, canonical=False)
-    expect("1/4 未规范化：相同作用域判绿", ns, 0)
+    ns = argparse.Namespace(a=a, b=b, max_diffs=5, summary_out=None, canonical=False,
+                            fixed_newchr=False)
+    expect("1/7 未规范化：相同作用域判绿", ns, 0)
     with open(b, "a", encoding="utf-8", newline="\n") as f:
         f.write(json.dumps({"table": "t", "row_sha256": "cc", "line": "m3bot3\t9"},
                            ensure_ascii=False) + "\n")
-    expect("2/4 未规范化：多一行即判红", ns, 1)
+    expect("2/7 未规范化：多一行即判红", ns, 1)
 
-    # —— 用例 3/4：--canonical 下，仅易变列（Id/Job/时间戳）不同 ⇒ 必须判绿
+    # —— 用例 3/7：--canonical 下，仅易变列（Id/Job/时间戳）不同 ⇒ 必须判绿
     _write_jsonl(a, [_chr_line(12234, 1, 0)])
     _write_jsonl(b, [_chr_line(13239, 0, 0)])
-    ns_c = argparse.Namespace(a=a, b=b, max_diffs=5, summary_out=None, canonical=True)
-    expect("3/4 规范化后：仅易变列不同判绿", ns_c, 0)
+    ns_c = argparse.Namespace(a=a, b=b, max_diffs=5, summary_out=None, canonical=True,
+                              fixed_newchr=False)
+    expect("3/7 规范化后：仅易变列不同判绿", ns_c, 0)
 
-    # —— 用例 4/4（改坏必红）：--canonical 下，改动**被比对列**（Gold）⇒ 必须判红
+    # —— 用例 4/7（改坏必红）：--canonical 下，改动**被比对列**（Gold）⇒ 必须判红
     _write_jsonl(b, [_chr_line(13239, 0, 999)])
-    expect("4/4 规范化后：被比对列被改坏即判红", ns_c, 1)
+    expect("4/7 规范化后：被比对列被改坏即判红", ns_c, 1)
 
-    # —— 用例 5/5：未登记表 fail-closed
+    # —— 用例 5/7：未登记表 fail-closed
     with open(b, "w", encoding="utf-8", newline="\n") as f:
         f.write(json.dumps({"table": "mir2_db.unknown", "row_sha256": "x", "line": "1\t2"},
                            ensure_ascii=False) + "\n")
-    expect("5/5 未登记表 fail-closed", ns_c, 4)
+    expect("5/7 未登记表 fail-closed", ns_c, 4)
 
-    print("GREEN: scoped_diff selftest 5/5（含规范化前后 + 改坏必红 + fail-closed）")
+    # —— 用例 6/7（固定建角场景）：--fixed-newchr 下 Job/Hair/Sex **不**置占位；
+    #    固定了参数 ⇒ Job 相同；仅自增 Id 变 ⇒ 必须判绿。
+    ns_fx = argparse.Namespace(a=a, b=b, max_diffs=5, summary_out=None, canonical=True,
+                               fixed_newchr=True)
+    _write_jsonl(a, [_chr_line(12234, 1, 0)])
+    _write_jsonl(b, [_chr_line(13239, 1, 0)])
+    expect("6/7 固定建角场景：Job 固定且不置占位，仅 Id 变判绿", ns_fx, 0)
+
+    # —— 用例 7/7（改坏必红）：固定建角场景下 Job 真的被比，改动即红色
+    #    （同数据在 --canonical 不带 --fixed-newchr 时会因 Job 占位而误判绿）。
+    _write_jsonl(b, [_chr_line(13239, 0, 0)])
+    expect("7/7 固定建角场景：Job 被改坏即判红", ns_fx, 1)
+
+    print("GREEN: scoped_diff selftest 7/7（含规范化前后 + 固定建角不置占位 + 改坏必红 + fail-closed）")
     sys.exit(0)
 
 
@@ -321,6 +352,9 @@ def main():
     f.add_argument("--summary-out")
     f.add_argument("--canonical", action="store_true",
                    help="按易变列白名单规范化后再比（M3 正式门禁用；见设计文档 §6）")
+    f.add_argument("--fixed-newchr", action="store_true",
+                   help="固定建角场景（卡 openmir2-m3-botsrv-fixed-newchr）：characters 的 "
+                        "Hair/Sex/Job 不置占位、逐字节比；须配合 --canonical")
 
     sub.add_parser("selftest")
     args = ap.parse_args()

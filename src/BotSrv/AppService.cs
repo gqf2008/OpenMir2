@@ -29,9 +29,18 @@ namespace BotSrv
             g_dwLogonTick = HUtil32.GetTickCount() - 1000 * _options.ChrCount;
             MShare.g_sGameIPaddr = _options.Address;
             MShare.g_nGamePort = _options.Port;
+            // M3 夹具确定性：固定建角参数（默认 false = 原随机行为，逐字节不变）
+            MShare.g_boFixedNewChr = _options.FixedNewChr;
+            MShare.g_nNewChrJob = _options.NewChrJob;
+            MShare.g_nNewChrHair = _options.NewChrHair;
+            MShare.g_nNewChrSex = _options.NewChrSex;
             runThread = new Thread(Run) { IsBackground = true };
             LogService.Info("服务器名称:{0} 服务器IP:{1} 服务器端口:{2}", _options.ServerName, _options.Address, _options.Port);
             LogService.Info("初始化机器人数量:{0} 登录机器人总数量:{1}", _options.ChrCount, _options.TotalChrCount);
+            if (_options.FixedNewChr)
+            {
+                LogService.Info("建角参数固定: Job={0} Hair={1} Sex={2}", _options.NewChrJob, _options.NewChrHair, _options.NewChrSex);
+            }
         }
 
         public async Task StartAsync(CancellationToken stoppingToken)

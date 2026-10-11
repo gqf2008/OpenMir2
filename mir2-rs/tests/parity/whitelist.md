@@ -91,6 +91,7 @@ M0 金标准验收状态（2026-10-10）：① 逐字节回放 0 差异、② �
 | 编号 | 差异/豁免点 | 为什么无害 | 谁审的 |
 | --- | --- | --- | --- |
 | T-1 | 改动 `src/BotSrv/**`：`LogService` 引用修正（`BotShare.LogService` → `OpenMir2.LogService`）、空角色列表解码守卫（`SelectChrScene.ClientGetReceiveChrs` 对空 body 不再抛 `ArgumentNullException`）、新增 `SocketShim.cs`（上游 `ScoketClient`/`DSCClient*` 被移除后按原 API 表面用 `System.Net.Sockets` 重写）、`AppServer` 的 Host 与 Serilog 装配（`LogService.Logger` 必须先赋值） | BotSrv **不在 oracle 七进程内**：不监听 oracle 端口、不被其它组件依赖，仅作压测/夹具客户端。改动前它无法编译（依赖的类型已在上游重构中删除）、编出来也起不来（`LogService.Logger` 未初始化）；改动后可编可跑，200 并发登录实测 200/200、0 失败。oracle 二进制与配置未被触碰（§13.1 时间戳复核可证：网关 2026-10-09 01:18、`M2Server.dll` 2026-10-10 00:10） | 协调者（§13.4-1 判为工具侧例外并接受） |
+| T-6 | 改动 `src/BotSrv/**`（M3 夹具确定性，卡 `openmir2-m3-botsrv-fixed-newchr`）：`RobotOptions` 新增 `FixedNewChr`/`NewChrJob`/`NewChrHair`/`NewChrSex`（绑定 `AppSetting.json` 的 `BotPlay` 段），`MShare` 新增对应静态位，`AppService` 装配时下发，`SelectChrScene.SelectChrCreateNewChr` 在 `FixedNewChr=true` 时用固定值、否则走原 `RandomNumber` 随机路径（逐字节不变）；`tools/botload/run_bots.ps1` 透传同名参数；M3 夹具 `run_pair.ps1`/`run_m3_gate.ps1` 加 `-FixedNewChr`，`scoped_diff.py` 加 `--fixed-newchr`（该场景 `characters.Hair/Sex/Job` **不**置占位、逐字节比） | BotSrv **不在 oracle 七进程内**（T-1 已登记）。默认 `FixedNewChr=false` ⇒ 建角仍走原随机路径，oracle/协议/默认行为零变化；固定值只在夹具显式打开时生效，纯为让「同序列」对拍成立 | 待独立 principal 复核（M3 线 worker-4） |
 
 ## S1 登记（oracle 缺陷修复；owner 2026-10-10 决策"修"，见设计文档 §15）
 
