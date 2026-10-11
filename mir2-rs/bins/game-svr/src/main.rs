@@ -177,11 +177,10 @@ async fn main() -> Result<()> {
     // 填充它的是登录链的通知（S2b 的传输），本切片只实现表语义与认证匹配。
     let auth: Arc<std::sync::Mutex<auth::AdmissionStore>> =
         Arc::new(std::sync::Mutex::new(auth::AdmissionStore::new()));
-    let maps = cfg.maps.clone();
     // 真地图注册表（`openmir2-m2-map-loading` 集成点 ④）：BasePath = `Server.conf` 所在目录
     // （生产下即 `config::default_path()` 的可执行体目录，等价 oracle `M2Share.BasePath`），
     // `EnvirDir`/`MapDir` 照 `[Share]`。拿不到 Envir 时保留 `WorldMaps` 占位并记 WRN
-    // （占位键待真机验收——那时 Envir 必在——之后删）。
+    // （占位键仅开发/测试用）。
     let base = mapwire::base_path(&conf);
     let registry = match mapwire::load_registry(&base, &cfg.envir_dir, &cfg.map_dir) {
         mapwire::Maps::Envir(reg) => {
@@ -212,30 +211,39 @@ async fn main() -> Result<()> {
             anyhow::bail!("Envir 地图配置损坏：{why}（拒绝以占位图启动）")
         }
     };
+    // `WorldMaps` 可选化的 **fail-closed 半边**（owner `272582e1`）：有真注册表就用它的尺寸；
+    // 无 Envir 但有 `WorldMaps` ⇒ 占位尺寸（上面已记 WRN）；**两者都没有 ⇒ 拒绝启动**
+    // （不许静默起空世界 / 回落 0 号占位图）。"缺某个键"与"键写了但坏"都在这里或 config 里响。
+    let map_sizes = match &registry {
+        Some(reg) => mapwire::sizes(reg),
+        None => mapwire::placeholder_sizes(&cfg.maps).map_err(anyhow::Error::msg)?,
+    };
     // 公告文本（658 `SM_SENDNOTICE` 的配置层输入）：`<base>/<NoticeDir>/Notice.txt`。
-    // 与 oracle `NoticeMgr.GetNoticeMsg("Notice")` 同源；读不到即不下发该帧并记 WRN。
+    // 与 oracle `NoticeMgr.GetNoticeMsg("Notice")` 同源；**R1-1**：读不到/为空时 oracle 仍发
+    // 一条 header-only 658（`SendDefMessage` 空尾走 `SendSocket(ClientMsg)`），故这里只记 WRN。
     let notice = notice::load_notice(&base, &cfg.notice_dir);
-    match &notice {
-        Some(text) => glog!(
+    if notice.is_empty() {
+        glog!(
+            "WRN",
+            "公告为空/缺失（base={} NoticeDir={}）⇒ 仍发 header-only 658（照 oracle）",
+            base.display(),
+            cfg.notice_dir
+        );
+    } else {
+        glog!(
             "INF",
             "公告已载入：{} 字节（base={} NoticeDir={}）",
-            text.len(),
+            notice.len(),
             base.display(),
             cfg.notice_dir
-        ),
-        None => glog!(
-            "WRN",
-            "未找到公告文本（base={} NoticeDir={}）⇒ 658 SM_SENDNOTICE 不下发",
-            base.display(),
-            cfg.notice_dir
-        ),
+        );
     }
     let _sim = std::thread::Builder::new()
         .name("m2-sim".to_string())
         // 公告文本（oracle `NoticeMgr.GetNoticeMsg("Notice")`，帧 658 `SM_SENDNOTICE`）：
-        // 配置层输入，启动时读一次、进程内复用；读不到即不下发该帧（不报错，照 oracle
-        // `LoadFromFile` 的 `File.Exists` 早退）。
-        .spawn(move || sim_loop(maps, registry, notice, ev_rx, Some(db)))
+        // 配置层输入，启动时读一次、进程内复用；**R1-1**：读不到时为空字节，但生产路径仍发
+        // header-only 658（照 oracle 空尾分支；`notice.rs` 模块头有源码定位）。
+        .spawn(move || sim_loop(map_sizes, registry, notice, ev_rx, Some(db)))
         .context("起 sim 线程失败")?;
 
     // 登录服务器（IDS）链路：oracle 是 TcpClient 主动连它（`AuthenticationService.cs:22-34`），
@@ -369,15 +377,14 @@ fn route_to_gate<'a>(
 }
 
 fn sim_loop(
-    maps: Vec<(i32, i32)>,
+    map_sizes: Vec<(i32, i32)>,
     registry: Option<mir2_envir::MapRegistry>,
-    notice: Option<Vec<u8>>,
+    notice: Vec<u8>,
     ev_rx: std::sync::mpsc::Receiver<GateEvent>,
     mut db: Option<DbWiring>,
 ) {
-    // 有真地图注册表就用它的尺寸建世界（`map_id` = 注册表下标，与 `resolve_map_id` 同源）；
-    // 否则用 `WorldMaps` 占位（启动时已记 WRN）。
-    let map_sizes = registry.as_ref().map_or(maps, mapwire::sizes);
+    // 尺寸表已由调用方按「注册表优先，无注册表则 WorldMaps 占位（且非空，已 fail-closed）」算好；
+    // `map_id` = 注册表下标，与 `resolve_map_id` 同源。
     let mut world = mir2_world::World::with_maps(map_sizes);
     // 取角色的加载队列（`FrnEngn` 的双缓冲 + `CharacterDataProcessor` 的读档循环，见 `load.rs`）
     let mut engine = load::FrontEngine::new();

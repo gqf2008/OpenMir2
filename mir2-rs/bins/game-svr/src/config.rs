@@ -5,7 +5,11 @@
 //! 所以两边都要 trim）、`CheckBlock`（发包阻塞阈值，`ChannelMessageHandler.cs:74` 用它决定何时回 `GM_RECEIVE_OK`）。
 //! 世界尺寸（S1 占位）用 `WorldMaps`：形如 `1000x1000` 或 `1000x1000,200x200`。
 //!
-//! **缺键即报错**（照 M1 验收④的"失败要响"口径），不许静默取默认值。
+//! **`WorldMaps` 是可选键**（owner 裁决，见 `openmir2-m2-gamesvr-host` 卡 comment `272582e1`）：
+//! 真 `E:\MirServer\M2GameSvr\Server.conf` 的 `[Server]` 段**没有这个键**（它是 S1 引入的占位），
+//! 真地图表在 `[Share] EnvirDir`（现网 `Envir`）下的 `MapInfo.txt`。`WorldMaps` 只在**没有 Envir**
+//! （开发/测试）时兜底；**两者都没有必须拒绝启动**（fail-closed），由 `mapwire::placeholder_sizes` 判。
+//! 其余键**缺键即报错**（照 M1 验收④的"失败要响"口径），不许静默取默认值。
 
 use std::path::{Path, PathBuf};
 
@@ -21,6 +25,10 @@ pub struct GateConfig {
     /// `[Server] CheckBlock`（现网 12288）：`ChannelMessageHandler.cs:74` 的阻塞阈值。
     pub check_block: usize,
     /// S1 占位：世界地图尺寸列表（有 Envir 真地图注册表时被其尺寸取代；无 Envir 时才用）。
+    ///
+    /// **可选键**：配置里没有 `WorldMaps` ⇒ 空表。空表**不是**错误，但"空表 + 没有 Envir"
+    /// 必须 fail-closed（见 `mapwire::placeholder_sizes`）——不要在这里提前拒绝，否则现网
+    /// 无 `WorldMaps` 的真配置起不来。
     pub maps: Vec<(i32, i32)>,
     /// `[Share] EnvirDir`（oracle `SystemShare.Config.EnvirDir`，默认 `Envir`）——`MapInfo.txt` 所在目录。
     pub envir_dir: String,
@@ -52,8 +60,9 @@ pub fn default_path() -> PathBuf {
 /// 读取并校验配置。
 ///
 /// # Errors
-/// 文件不存在、缺 `[Server]` 段、缺 `GateAddr`/`GatePort`/`CheckBlock`、端口非法、`WorldMaps` 非法
-/// —— 都返回错误（调用方据此非零退出）。
+/// 文件不存在、缺 `[Server]` 段、缺 `GateAddr`/`GatePort`/`CheckBlock`/`IDSAddr`/`IDSPort`/`DBAddr`/`DBPort`、
+/// 端口非法、`WorldMaps` **写了但非法** —— 都返回错误（调用方据此非零退出）。
+/// `WorldMaps` **没写**不算错（可选键，见模块头）；`WorldMaps=` 空值 ⇒ 空表。
 pub fn load(path: &Path) -> Result<GateConfig> {
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("读不到配置文件 {}", path.display()))?;
@@ -132,7 +141,6 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         Some(gate_addr),
         Some(gate_port),
         Some(check_block),
-        Some(maps),
         Some(ids_addr),
         Some(ids_port),
         Some(db_addr),
@@ -141,7 +149,6 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         gate_addr,
         gate_port,
         check_block,
-        maps,
         ids_addr,
         ids_port,
         db_addr,
@@ -149,12 +156,14 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     )
     else {
         bail!(
-            "[Server] 段缺键：需要 GateAddr/GatePort/CheckBlock/WorldMaps/IDSAddr/IDSPort/DBAddr/DBPort（现网样件见 \
-             E:\\MirServer\\M2GameSvr\\Server.conf）"
+            "[Server] 段缺键：需要 GateAddr/GatePort/CheckBlock/IDSAddr/IDSPort/DBAddr/DBPort（现网样件见 \
+             E:\\MirServer\\M2GameSvr\\Server.conf；`WorldMaps` 可选）"
         );
     };
-    if gate_port == 0 || maps.is_empty() {
-        bail!("GatePort 不能为 0、WorldMaps 不能为空");
+    // `WorldMaps` 可选：没写 ⇒ 空表（合法，是否 fail-closed 由 `mapwire::placeholder_sizes` 决定）。
+    let maps = maps.unwrap_or_default();
+    if gate_port == 0 {
+        bail!("GatePort 不能为 0");
     }
     Ok(GateConfig {
         gate_addr,
@@ -234,6 +243,46 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// **红检 ①**（owner 裁决）：真 `Server.conf` **没有** `WorldMaps` ⇒ 必须能解析（`maps` 为空表）。
+    ///
+    /// 现网样件的 `[Server]` 段唯一缺的键就是 `WorldMaps`（`272582e1` 逐行核过）；把它当必需键
+    /// 就等于"现网配置起不来"，所以它是可选键。"起得来"的另一半（有真 Envir ⇒ 用注册表）由
+    /// `mapwire::envir_registry_covers_missing_worldmaps` 覆盖。
+    #[test]
+    fn deployed_conf_without_worldmaps_parses() {
+        let dir = std::env::temp_dir().join(format!("gs-nowm-{}", std::process::id()));
+        let p = write(
+            &dir,
+            "[Server]\nCheckBlock=12288\nGateAddr= 127.0.0.1\nGatePort=5000\n\
+             IDSAddr= 127.0.0.1\nIDSPort=5600\nDBAddr=127.0.0.1\nDBPort=6000\n\
+             [Share]\nEnvirDir=Envir\nMapDir=Map\nNoticeDir=Notice\n",
+        );
+        let c = load(&p).expect("缺 WorldMaps 不许报错（可选键）");
+        assert!(c.maps.is_empty(), "没写 WorldMaps ⇒ 空表");
+        assert_eq!(c.gate_port, 5000);
+        assert_eq!(c.envir_dir, "Envir");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **红检 ③**：`WorldMaps` **写了但非法**（`10x0`）仍必须报错——可选≠不校验。
+    #[test]
+    fn bad_worldmaps_value_is_still_fatal() {
+        let dir = std::env::temp_dir().join(format!("gs-badwm-{}", std::process::id()));
+        let p = write(
+            &dir,
+            "[Server]\nGateAddr=127.0.0.1\nGatePort=5000\nCheckBlock=1\nWorldMaps=10x0\n\
+             IDSAddr=127.0.0.1\nIDSPort=5600\nDBAddr=127.0.0.1\nDBPort=6000\n",
+        );
+        assert!(load(&p).is_err(), "WorldMaps=10x0 必须报错");
+        let p2 = write(
+            &dir,
+            "[Server]\nGateAddr=127.0.0.1\nGatePort=5000\nCheckBlock=1\nWorldMaps=nope\n\
+             IDSAddr=127.0.0.1\nIDSPort=5600\nDBAddr=127.0.0.1\nDBPort=6000\n",
+        );
+        assert!(load(&p2).is_err(), "WorldMaps 非 WxH 必须报错");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// `[Share] EnvirDir/MapDir` 照 oracle 的键读（`ServerConf.cs:75-76`），值要 trim。
     #[test]
     fn parses_share_map_dirs() {
@@ -290,7 +339,7 @@ mod tests {
         let p = write(&dir, "[Server]\nGateAddr=127.0.0.1\n");
         assert!(
             load(&p).is_err(),
-            "缺 GatePort/CheckBlock/WorldMaps 必须报错"
+            "缺 GatePort/CheckBlock 必须报错（`WorldMaps` 已降为可选，不再计入缺键）"
         );
         let p2 = write(
             &dir,

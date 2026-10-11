@@ -172,6 +172,9 @@ pub fn sm_version_fail(client_file1_crc: i32, client_file2_crc: i32) -> Vec<u8> 
 /// `SendDefMessage(SM_SENDNOTICE, 2000, 0, 0, 0, sNoticeMsg)` ⇒ `Recog` **恒 2000**，
 /// 尾 = `EncodeString(公告文本)`（文本由 `M2Share.NoticeMgr.GetNoticeMsg` 读出，逐行以
 /// `\x20\x1B\x1B` 相连且**最后一行后也跟一个分隔符**；加载口径见 `notice.rs`）。
+///
+/// **R1-1**：`notice` 为空也**照发**——oracle 空 `sMsg` 走 `else SendSocket(ClientMsg)`，
+/// 仍写 12B 命令头（即 header-only 658）；空尾时本函数等价 `gm_data_body(header, &[])`。
 #[must_use]
 pub fn sm_sendnotice(notice: &[u8]) -> Vec<u8> {
     let header = command_header(2000, messages::SM_SENDNOTICE, 0, 0, 0);
@@ -347,8 +350,8 @@ pub struct EnterWorldInputs {
     pub dir: u8,
     pub light: u8,
     pub day_bright: u16,
-    /// 登录前公告（`NoticeMgr`，属配置层）。
-    pub notice: Option<Vec<u8>>,
+    /// 登录前公告（`NoticeMgr`，属配置层）。**R1-1**：空/缺公告 ⇒ 空字节，但仍发 header-only 658。
+    pub notice: Vec<u8>,
     /// `SM_NEWMAP` 的地图文件名（玩家记录 `CurMap`）。
     pub map_file_name: Option<Vec<u8>>,
     /// `SM_LOGON` 的 `MessageBodyWL` = `(Param1=GetFeatureToLong, Param2=CharStatus, Tag1, Tag2)`。
@@ -386,9 +389,10 @@ impl EnterWorldInputs {
     #[must_use]
     pub fn frames(&self) -> Vec<Vec<u8>> {
         let mut out = Vec::new();
-        if let Some(notice) = &self.notice {
-            out.push(sm_sendnotice(notice));
-        }
+        // **R1-1**：oracle `SendNotice` 无条件 `SendDefMessage(..., sNoticeMsg)`；即使
+        // `sNoticeMsg` 为空也照发 header-only 658（`SendDefMessage` 的 `if (!string.IsNullOrEmpty)`
+        // 只决定是否追加尾，空时走 `else SendSocket(ClientMsg)`）。故这里**不**用 `if let`。
+        out.push(sm_sendnotice(&self.notice));
         if let Some(name) = &self.map_file_name {
             out.push(sm_newmap(
                 self.actor_id,
@@ -656,7 +660,7 @@ mod tests {
             day_bright: u16at(&h1, 10),
             dir: u8::try_from(u16at(&h2, 10) & 0xFF).unwrap(),
             light: u8::try_from(u16at(&h2, 10) >> 8).unwrap(),
-            notice: Some(edcode::decode(&t0)),
+            notice: edcode::decode(&t0),
             map_file_name: Some(edcode::decode(&t1)),
             logon_body_wl: Some((
                 i32at(&logon, 0),
@@ -746,6 +750,40 @@ mod tests {
                 body.len()
             );
         }
+    }
+
+    /// **R1-1**：空/缺公告 ⇒ oracle **仍发一条 header-only 658**（`SendDefMessage` 的
+    /// `if (!string.IsNullOrEmpty(sMsg))` 只决定是否追加尾；空走 `else SendSocket(ClientMsg)`，
+    /// 照常写 12B 命令头）。这里把「空输入」钉死：帧仍在序列第 1 位、线缆恰为 12B 命令头 + 无尾。
+    ///
+    /// 红检：把 `frames()` 改回 `if !self.notice.is_empty()` 跳过 658 ⇒ 本用例必红。
+    #[test]
+    fn empty_notice_still_sends_header_only_658() {
+        let inputs = EnterWorldInputs {
+            notice: Vec::new(),
+            ..Default::default()
+        };
+        let built = inputs.frames();
+        assert_eq!(
+            built.len(),
+            1,
+            "空公告下其余输入仍缺（不发 51/50 等），但 658 必须在序列第 1 位"
+        );
+        assert_eq!(built[0], sm_sendnotice(&[]), "空尾 658 == 纯 12B 命令头");
+        let cm = mir2_protocol::frame::CommandMessage::from_bytes(&built[0]).unwrap();
+        assert_eq!(cm.ident, messages::SM_SENDNOTICE);
+        assert_eq!(cm.recog, 2000, "SendNotice 的 Recog 恒 2000");
+        assert_eq!(built[0].len(), 12, "header-only：12B 命令头 + 无尾");
+        // 线缆形态：`'#' + Encode(12B) + '!'`（无尾 ⇒ 头编码后直接收尾）。
+        let wire = client_frame(&built[0]);
+        assert_eq!(wire[0], b'#');
+        assert_eq!(wire[wire.len() - 1], b'!');
+        assert_eq!(&wire[1..wire.len() - 1], &edcode::encode(&built[0])[..]);
+        assert_eq!(
+            edcode::decode(&wire[1..wire.len() - 1]),
+            built[0],
+            "线缆解回头必须是同 12B"
+        );
     }
 
     /// 新增 11 条的**逐条**定位断言（失败时能直接看出是哪条）。

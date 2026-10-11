@@ -73,6 +73,16 @@ powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps
 
 起栈前若目标端口已被监听 ⇒ exit 1（**不静默混实现**）；缺 exe/配置 ⇒ `PREREQ_MISSING` exit 2。
 
+> **R1-3（`-GameSvrConf` 测试形态的 `NoticeDir` 坑）**：658 `SM_SENDNOTICE` 的公告文本按
+> `<base>/<NoticeDir>/Notice.txt` 读，`base` = **`Server.conf` 所在目录**（`mapwire::base_path`）；
+> oracle 用 `M2Share.BasePath = AppContext.BaseDirectory`（**exe 目录**）。生产形态（conf 与 exe 同目录、
+> `NoticeDir=Notice` 相对）两者等价；但**测试形态**（`-GameSvrConf` 指到别处 + 补键副本，例如
+> `E:\tmp\m2-acceptance\stack\gsvr\Server.conf`）若仍写相对 `NoticeDir`，base 下就没有
+> `Notice/Notice.txt`。**R1-1 之后**这不再表现为「658 不下发」，而是发一条 **header-only 658**
+> （空尾）⇒ ③ 对账在第 1 条就红（金标准 #1 尾是 320B 公告原文，空尾对不上，且后续帧序仍从 `51` 起）。
+> 要用真公告，必须把 `NoticeDir` 写成**绝对路径**（`NoticeDir=E:/MirServer/M2GameSvr/Notice`）。
+> `start_rust_stack.ps1` 不生成补键副本（副本由操作者准备）⇒ 手工起测试栈时自己保证这一点。
+
 ---
 
 ## 1. ① 端口所有权实拍 —— `check_ports.ps1`
@@ -239,7 +249,7 @@ MySQL 3306 不可达 / 缺快照抽取件 ⇒ exit 2；任一路径 diff != 0 �
 
 | ident | 帧 | 缺的运行时输入 | 由哪张卡提供 | 还差哪一步（2026-10-11 重判） |
 | --- | --- | --- | --- | --- |
-| 658 | `SM_SENDNOTICE` | 公告文本（`NoticeMgr.GetNoticeMsg`） | ✅ 配置层（本片接） | **已接线**：`notice.rs` 读 `<base>/<NoticeDir>/Notice.txt`、按 `ReadLine` 切行 + `\x20\x1B\x1B` 连接（金标准 #1 尾巴 320B 锚定）；`[Share] NoticeDir`（缺省 `Notice`）入 `config.rs`；`main.rs` 进世界时放入 `EnterWorldInputs.notice`。**红检**：分隔符改 2B ⇒ `notice_roundtrip_matches_golden_658_tail` 必红 |
+| 658 | `SM_SENDNOTICE` | 公告文本（`NoticeMgr.GetNoticeMsg`） | ✅ 配置层（已接） | **已接线**：`notice.rs` 读 `<base>/<NoticeDir>/Notice.txt`、按 `ReadLine` 切行 + `\x20\x1B\x1B` 连接（金标准 #1 尾巴 320B 锚定）；`[Share] NoticeDir`（缺省 `Notice`）入 `config.rs`；`main.rs` 进世界时放入 `EnterWorldInputs.notice`。**R1-1**：空/缺/读失败 ⇒ 仍发 **header-only 658**（照 oracle 空尾分支）；**R1-2**：1:1 搬 `Replace("/r/n/r/n ", "")`（字面量正斜杠，真实语料 no-op）。**红检**：分隔符改 2B ⇒ `notice_roundtrip_matches_golden_658_tail` 必红；空公告跳过 658 ⇒ `empty_notice_still_sends_header_only_658` + 进程级 `enter_world_emits_sm_newmap_byte_equal_to_golden` 必红；去掉 `apply_notice_replace` ⇒ `literal_slash_r_n_replace_is_carried_over` 必红 |
 | 51 | `SM_NEWMAP` | ✅ 逻辑名+坐标（记录）；`map_id`/尺寸 ✅（envir）；**`DayBright()`** | `Env.Flag`（envir **未解析**） | envir 卡只给 cells/doors/points/尺寸/map_id，**没有 `Envir.Flag.DayLight/boDarkness`** ⇒ `DayBright()` 仍缺；占位 0 |
 | 50 | `SM_LOGON` | `MessageBodyWL=(GetFeatureToLong,CharStatus,Tag1,Tag2)` | 物品/装备层（未开卡）+ world | `GetFeatureToLong` 要 `UseItems[Dress/Weapon]` 的 `StdItem.Shape`（`PlayObject.cs:3395`）⇒ 需物品系统 |
 | 41 | `SM_FEATURECHANGED` | `GetFeatureToLong()` | 同上 | 同 50 |
@@ -273,7 +283,7 @@ MySQL 3306 不可达 / 缺快照抽取件 ⇒ exit 2；任一路径 diff != 0 �
 - `config.rs`：新增 `[Share] EnvirDir`/`MapDir`（oracle `ServerConf.cs:75-76` 的键，缺省 `Envir`/`Map`，**不发明键名**）；
 - `main.rs`：启动时加载注册表（有 ⇒ 用其尺寸建世界并把 `CurMap` 换成 `map_id`；无 ⇒ 保留 S1 `WorldMaps` 占位并记 WRN）。
   **有注册表时找不到 `CurMap` ⇒ 拒绝进图并记 WRN**（照卡面④「不许静默占位」）；
-- `WorldMaps` 占位键**暂留**（无 Envir 时的回退，登记：真机验收——那时 Envir 必在——之后删）。
+- `WorldMaps` 占位键**降为可选键**（无 Envir 且写了它时的回退；两者都没有 ⇒ fail-closed，见 §5.2b）。
 
 判据（`mapwire::tests`，不需要栈）：合成 `Envir/MapInfo.txt` + 合成 `.map` ⇒ 两张入表、`map_id` 按 section 序、
 `[0129|0100]` 认**逻辑名** `0129`、未知名 ⇒ `Err`、无 Envir ⇒ `None`+`Ok(0)` 回退。
@@ -288,6 +298,28 @@ MySQL 3306 不可达 / 缺快照抽取件 ⇒ exit 2；任一路径 diff != 0 �
 | R3-2 | `[Share]`/`EnvirDir` 按 ASCII 精确匹配，oracle `ConfigFile` 是 `StringComparer.OrdinalIgnoreCase` | section 与键名统一 `to_ascii_uppercase()` 后再匹配（**值不动**） | `config::tests::section_and_key_matching_is_ascii_case_insensitive`；红检 `"SHARE"`→`"Share"` ⇒ 必红（`pi-m2svr-r3-redcheck-r32.log`） |
 | R3-3 | 显式相对 `--config`（`Server.conf`）⇒ `parent()=Some("")`，`Envir`/`Map` 相对 cwd | `base_path` 先把相对路径规范化到当前目录再取 parent（对齐 oracle `AppContext.BaseDirectory`） | `mapwire::tests::relative_conf_base_is_normalized_to_cwd`；红检回退 `conf.parent()` ⇒ 必红（`pi-m2svr-r3-redcheck-r33.log`） |
 | R3-4 | `main.rs` 进世界分支缩进浅 4 格（长 `glog!` 使 rustfmt 跳过该块） | 手工重排缩进 + 把长 `glog!` 消息拆成 `concat!` 两段 | `cargo fmt --all -- --check` exit 0（改前 rustfmt 对该块**无输出**=stable，改后仍 stable） |
+
+### 5.2b `WorldMaps` 可选化 + fail-closed（owner `272582e1` 裁决；本片）
+
+真 `E:\MirServer\M2GameSvr\Server.conf` 的 `[Server]` 段**没有** `WorldMaps`（owner 已逐行核过；
+`grep WorldMaps src/` 为空，它是 Rust S1 引入的占位），真地图表在 `[Share] EnvirDir`（现网 `Envir`）下。
+故 `WorldMaps` 从**必需键降为可选键**（不改现网配置——内容冻结），三态口径：
+
+1. `Envir/MapInfo.txt` 可读 ⇒ 用**真注册表**尺寸（已实现）；
+2. Envir 不可读**且**有 `WorldMaps` ⇒ 用占位尺寸并记 `WRN`（开发/测试形态）；
+3. **两者都没有 ⇒ 仍必须非零退出**（fail-closed：`mapwire::placeholder_sizes` 返回 `Err`，`main` 在起
+   sim 线程/绑端口前 `?` 掉），不许静默起空世界 / 回落 0 号占位图。
+
+代码面：`config.rs`（`WorldMaps` 缺失 ⇒ 空表；**写了但非法**如 `10x0` 仍报错）、`mapwire.rs`
+（新增 `placeholder_sizes`）、`main.rs`（把「注册表优先，否则占位且非空」算好再传给 sim）。
+
+判据 + 红检（三条都要"改回必红"；原始输出 `E:\tmp\openmir2-watch\pi-m2svr-wm-redcheck1|2|3.log`）：
+
+| 红检 | 用例 | 改回什么 ⇒ 必红 |
+| --- | --- | --- |
+| ① 真配置（无 `WorldMaps`）+ 真 Envir ⇒ 起得来 | `config::tests::deployed_conf_without_worldmaps_parses`、`mapwire::tests::envir_registry_covers_missing_worldmaps`、`relay.rs::starts_without_worldmaps_when_envir_present`（进程级，真起监听） | `WorldMaps` 降回必需键 ⇒ 三个全红（进程级实测 `未在预期时间内监听`） |
+| ② 无 Envir + 无 `WorldMaps` ⇒ 非零退出 | `mapwire::tests::no_envir_and_no_worldmaps_is_fail_closed`、`relay.rs::missing_worldmaps_and_envir_exits_nonzero`（10s 内必须自退，超时=静默放行也判红） | `placeholder_sizes` 静默放行 ⇒ 两个全红 |
+| ③ `WorldMaps` 值非法 ⇒ 仍报错 | `config::tests::bad_worldmaps_value_is_still_fatal` | 去掉 `w<=0||h<=0` 校验 ⇒ 必红 |
 
 ### 5.3 顺序判据② 的「生产路径覆盖率」与触发组口径（本片登记）
 
@@ -444,8 +476,8 @@ powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/selftest.ps1
 
 尚待 owner/其它卡解除的前置（本轮用显式绕过参数，未改冻结部署）：
 
-- 真 `E:\MirServer\M2GameSvr\Server.conf` **没有** `WorldMaps` 键（Rust 侧 S1 占位键）⇒ `game-svr` 用真配置启动即报
-  缺键；需补键（数据）、或改 Rust 为可选/从 Envir 注册表推导。本轮用 `-GameSvrConf` 指向补了键的副本。
+- ~~真 `E:\MirServer\M2GameSvr\Server.conf` **没有** `WorldMaps` 键~~ **已解除**（§5.2b：`WorldMaps` 降为可选键，
+  `Envir` 在就用真注册表）。`-GameSvrConf` 仍保留为显式覆盖，但**不再是起真配置的必需品**。
 - 本片起栈时分支头（`3ba17d11`）尚未包含 `openmir2-m2-gamegate` 的 GB2312 配置修复（`677678c2`，已在 master）
   ⇒ 本轮用 `-GameGateExe` 指向该分支构建件。**合并 master 后 head `9f5b2dd1` 自带修复**，
   `-GameGateExe` 已非必需（用 head 的 `game-gate.exe` + 真 GBK 配置实测能解析启动）。

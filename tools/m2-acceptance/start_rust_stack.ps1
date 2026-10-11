@@ -39,9 +39,10 @@ param(
   [string]$MirServer  = 'E:\MirServer',
   [string]$RustBinDir = 'E:\tmp\openmir2-m2svr-target\debug',
   [string]$LogDir     = 'E:\tmp\m2-acceptance\stack',
-  # 真机两个已知前置缺陷的**显式绕过**（默认空 ⇒ 用上面的标准路径）：
-  #   -GameSvrConf：真 `Server.conf` 没有 Rust 侧要求的 `WorldMaps` 键 ⇒ 用补了键的副本
-  #   -GameGateExe：master 的 game-gate 读不了 GBK 配置（修好的副本在 gamegate 分支）
+  # 历史绕过的显式覆盖（默认空 ⇒ 用上面的标准路径）：
+  #   -GameSvrConf：真 `Server.conf` 现已是合法输入（`WorldMaps` 已降为可选键 + fail-closed，见 README §5.2b）
+  #                 ⇒ 本参数仅作显式覆盖（指向补了 WorldMaps 的副本等），不再是起真配置的必需品
+  #   -GameGateExe：master 的 game-gate 已含 GB2312 配置修复（`677678c2`）⇒ 同样仅作显式覆盖
   [string]$GameSvrConf = '',
   [string]$GameGateExe = '',
   [int]$WaitSeconds   = 60,
