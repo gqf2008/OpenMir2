@@ -143,6 +143,17 @@ function Wait-Port([int]$P, [int]$TimeoutSec) {
     return [bool](Get-NetTCPConnection -State Listen -LocalPort $P -ErrorAction SilentlyContinue)
 }
 
+# 本机负载探针（owner 裁决 82f8e0c3 ④；口径照 tickbench 的 `probe_load_window`：
+# CPU 均值（%）+ 重型进程数 rustc/cargo/cargo-clippy/msbuild）。它只**标注**不判红：
+# tick P99 在共享机器上不可归属（C# 参考栈 vs 同机并发编译），需要空载窗口才能定。
+function Get-HostLoadLine([long]$ts) {
+    $cpu = -1
+    try { $cpu = [int]((Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average) } catch { $cpu = -1 }
+    $heavy = @(Get-Process -Name rustc,cargo,cargo-clippy,msbuild -ErrorAction SilentlyContinue)
+    $names = (@($heavy | ForEach-Object { $_.ProcessName }) | Sort-Object -Unique) -join ","
+    return ('{{"t_ms":{0},"cpu_pct":{1},"heavy_procs":{2},"heavy_names":"{3}"}}' -f $ts, $cpu, $heavy.Count, $names)
+}
+
 function Restart-Stack {
     if (-not (Test-Path $StartAll)) { throw "找不到 $StartAll（-RestartStackPerTier 需要它）" }
     Write-Output "STACK restart: stop -> start"
@@ -204,10 +215,14 @@ foreach ($n in $TierList) {
 
     # ---- 爬坡：等登录数到 N ----
     $statsPath = Join-Path $tierDir "load_stats.ndjson"
+    $hostLoadPath = Join-Path $tierDir "hostload.ndjson"
+    $hostLoadLines = New-Object System.Collections.Generic.List[string]
     $rampDeadline = (Get-Date).AddSeconds($RampTimeoutSec)
     $rampOk = $false
     while ((Get-Date) -lt $rampDeadline) {
         Start-Sleep -Seconds 2
+        $tsRamp = [long]([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
+        $hostLoadLines.Add((Get-HostLoadLine $tsRamp))
         $st = Get-LastStats $statsPath
         if ($st -ne $null) {
             Write-Output ("  RAMP login_ok=" + $st.login_ok + "/" + $n + " spawned=" + $st.spawned + " tick_samples=" + $st.tick_samples)
@@ -223,6 +238,7 @@ foreach ($n in $TierList) {
     $holdDeadline = (Get-Date).AddSeconds($HoldSec)
     while ((Get-Date) -lt $holdDeadline) {
         $ts = [long]([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
+        $hostLoadLines.Add((Get-HostLoadLine $ts))
         foreach ($name in $MemProcNames) {
             $ps = Get-Process -Name $name -ErrorAction SilentlyContinue
             foreach ($p in $ps) {
@@ -235,6 +251,7 @@ foreach ($n in $TierList) {
         Start-Sleep -Seconds $MemSampleSec
     }
     [System.IO.File]::WriteAllLines($memPath, $memLines)
+    [System.IO.File]::WriteAllLines($hostLoadPath, $hostLoadLines)
 
     # ---- 停 BotSrv（收尾前再读一次统计）----
     if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
@@ -245,6 +262,7 @@ foreach ($n in $TierList) {
     $criteriaArgs = @("--criteria", $Criteria, "--login-threshold", "$loginThr")
     $loginConnsPath = Join-Path $tierDir "login_conns.ndjson"
     if (Test-Path $loginConnsPath) { $criteriaArgs += @("--login-conns", $loginConnsPath) }
+    if (Test-Path $hostLoadPath) { $criteriaArgs += @("--hostload", $hostLoadPath) }
     if ($AllowMissingTick) { $criteriaArgs += "--allow-missing-tick" }
     python (Join-Path $RepoRoot "tools\botload\load_report.py") summarize --stats $statsPath --mem $memPath `
         --count $n --stagger-ms $StaggerMs --hold-sec $HoldSec @criteriaArgs --out $reportPath | Out-Null
@@ -258,6 +276,11 @@ foreach ($n in $TierList) {
                       " tick_p50=" + $tierJson.tick_p50_ms + " p90=" + $tierJson.tick_p90_ms +
                       " p99=" + $tierJson.tick_p99_ms + "ms samples=" + $tierJson.samples +
                       " in_world=" + $tierJson.world_ok + " probe_sent=" + $tierJson.probe_sent)
+        if ($tierJson.host_load -ne $null) {
+            $hl = $tierJson.host_load
+            Write-Output ("  HOSTLOAD cpu_mean=" + $hl.cpu_mean_pct + "% cpu_peak=" + $hl.cpu_peak_pct +
+                          "% heavy_max=" + $hl.heavy_procs_max + " names=" + ($hl.heavy_names_seen -join ","))
+        }
         if ($tierJson.mem.PSObject.Properties.Name -contains "GameSrv") {
             $g = $tierJson.mem.GameSrv
             Write-Output ("  MEM GameSvr ws_peak=" + $g.ws_peak_mb + "MB mean=" + $g.ws_mean_mb +
@@ -295,6 +318,10 @@ foreach ($t in $tierReports) {
         internal_errors = $t.internal_errors
         samples = $t.samples
         tick_p99_ms = $t.tick_p99_ms
+        in_world = $t.world_ok
+        world_ok_pct = $t.world_ok_pct
+        host_cpu_peak_pct = $(if ($t.host_load) { $t.host_load.cpu_peak_pct } else { $null })
+        host_heavy_max = $(if ($t.host_load) { $t.host_load.heavy_procs_max } else { $null })
     }
 }
 foreach ($key in @($worstByTier.Keys)) {
@@ -303,6 +330,19 @@ foreach ($key in @($worstByTier.Keys)) {
     foreach ($r in $e.runs) { if ($r.verdict -ne "GREEN") { $ok = $false } }
     $e.verdict = if ($ok) { "GREEN" } else { "RED" }
 }
+
+# F9（C6 原卡 reviewer-4）：产物 {file,sha256} 清单——供复核者核对引用件未被后续冒烟覆写。
+$artifactFiles = @()
+foreach ($pat in @("report.json", "load_stats.ndjson", "mem.ndjson", "hostload.ndjson", "login_conns.ndjson")) {
+    $artifactFiles += @(Get-ChildItem -Path $OutDir -Recurse -Filter $pat -ErrorAction SilentlyContinue)
+}
+$artifactManifest = @()
+foreach ($f in ($artifactFiles | Sort-Object FullName)) {
+    $rel = $f.FullName.Substring($OutDir.Length).TrimStart('\', '/')
+    $artifactManifest += @{ file = $rel; sha256 = (Get-FileHash -Algorithm SHA256 -Path $f.FullName).Hash.ToLower() }
+}
+@{ generated_ms = [long]([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()); files = $artifactManifest } |
+    ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $OutDir "artifacts.sha256.json") -Encoding utf8
 
 $summaryPath = Join-Path $OutDir "load_gate_summary.json"
 @{
@@ -319,6 +359,9 @@ $summaryPath = Join-Path $OutDir "load_gate_summary.json"
   login_resend_ms = $LoginResendMs
   login_threshold_pct = $LoginThresholdPct
   worst_of_runs_rule = "每档取 N 轮里最低的登录成功率与阈值比；且每一轮的 conn/tick/internal 判据都必须 GREEN"
+  host_load_caliber = "CPU=Win32_Processor.LoadPercentage 均值(%)；heavy=rustc/cargo/cargo-clippy/msbuild 进程数（叧 tickbench）；只标注不判红"
+  host_load_note = "tick P99 在共享机器上不可归属（C# 参考栈 vs 同机并发编译）；CPU 峰≥40% 或 heavy 峰≥4 ⇒ 该轮 P99 未归属，需空载窗口复测"
+  artifacts  = $artifactManifest
   worst_by_tier = $worstByTier
   reports    = $tierReports
 } | ConvertTo-Json -Depth 8 -WarningAction SilentlyContinue | Set-Content -Path $summaryPath -Encoding utf8

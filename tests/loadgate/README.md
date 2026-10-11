@@ -35,7 +35,8 @@ load-<时间戳>/
 | `load-20261011-132401/` | 1000 × 4 | 第 5 轮 **残余丢包方向诊断**（`-Repeat 4`）：r1..r3 全 GREEN；**r4 = 646/1000 无应答、`no_resp_rx0=646`、同连接重发 646 发 0 成功** ⇒ 方向 = 上游 C# 栈（见《残余丢包方向》） |
 | `load-20261011-133905/` | 1000 × 3 | 第 5 轮：r1/r2 GREEN，r3 **RED（tick P99=201ms）** ⇒ 登记 C6-3（tick flaky） |
 | `load-20261011-155529/` | 200/500/1000 × 3 | 第 5 轮 **验收 A**（`-Repeat 3`）：tier-200/500 全 GREEN；tier-1000 worst_login=100% 但 **RED（tick 125/201ms）**。与 m2svr/wbevy 车道 cargo 构建并行 |
-| `load-20261011-162213/` | 200/500/1000 × 3 | 第 5 轮 **验收 C**（`-Repeat 3`）：tier-200/500 全 GREEN；tier-1000 r1/r2 GREEN、**r3 RED（上游 LoginSrv 停摆：865/1000 无应答、`no_resp_rx0=865`）**。与 wbevy 车道 cargo 构建并行 |
+| `load-20261011-162213/` | 200/500/1000 × 3 | 第 5 轮 **验收 C**（`-Repeat 3`）：tier-200/500 全 GREEN；tier-1000 r1/r2 GREEN、**r3 RED（服务端停摆：865/1000 无应答、`no_resp_rx0=865`）**。与 wbevy 车道 cargo 构建并行 |
+| `load-20261011-165805/` | 200/500/1000 × 3 | 第 5 轮 **验收 E（首选件，带本机负载探针）**（`-Repeat 3`）：**9 轮全 GREEN**、worst_login 三档 100%、tick P99 0~62ms；`hostload.ndjson` 记录 CPU 峰 93~100%、heavy 峰 3~20（与 wbevy 并行）。`artifacts.sha256.json` 原生 |
 | `redcheck-c6f-20261011/` | — | 第 5 轮**红检原始输出**：`load_report.py selftest`（阈值 960/1000 牙齿 + 方向判据）、`load_gate.ps1 -SelfTestRed`、真实存档件重判 |
 
 ## 证据完整性告警（2026-10-11 自查，C6 原卡回复轮）
@@ -126,7 +127,7 @@ System.IndexOutOfRangeException: Index was outside the bounds of the array.
 `bots.log` / `bots.err.log` / `stack-*.log` 是过程日志，**不入库**（`.gitignore: tests/loadgate/**/*.log`）。
 三档曲线与判据表由 `load_report.py aggregate` 生成到 `SUMMARY.md`。
 
-## 第 5 轮结论（2026-10-11）：tier-1000 口径重新基准化（owner 裁决 `11dbde39`）
+## 第 5 轮结论（2026-10-11）：tier-1000 口径重新基准化 + 残余丢包方向（owner 裁决 `11dbde39` / `b61e9f20` / `82f8e0c3`）
 
 验收命令（`-Repeat 3` = 同一命令 3 连跑取最差；阈值 tier<1000=100%、tier≥1000=95%）：
 
@@ -135,56 +136,108 @@ powershell -ExecutionPolicy Bypass -File tools/e2e/stack_e2e.ps1 `
   -ProvisionAccounts -LoadTiers 200,500,1000 -SkipFlow -Repeat 3 -StopStackAtEnd
 ```
 
-### 3 连跑 verdict 表
+### 3 连跑 verdict 表（分列 login / conn / tick / samples / in_world / 本机负载）
 
-本轮两次独立整命令（均为 `-Repeat 3`）。两次都跑完、`provision account=1000`（幂等）、
-`tier-200/500` 三轮全 GREEN；`tier-1000` 的登录与 tick 各有独立波动（见下）。
+三次独立整命令，均 `-Repeat 3`。每次都能跑完、`provision account=1000`（幂等）。列义：
+`login%` / `conn_lost_steady` / `tick P99(ms)` / `samples` / `in_world` / `CPU峰%` / `重进程峰` / 该轮 verdict。
 
-| 命令 | tier | r1 | r2 | r3 | 最差登录 | 阈值 | 档位判定 |
+**E（`load-20261011-165805`，带本机负载探针；本轮首选验收件）——9 轮全 GREEN**
+
+| 轮 | 档 | login% | conn | P99 | samples | in_world | CPU峰 | heavy峰 | verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| r1 | 200 | 100 | 0 | 16 | 916 | 22 | 84 | 0 | GREEN |
+| r1 | 500 | 100 | 0 | 15 | 949 | 18 | 90 | 0 | GREEN |
+| r1 | 1000 | 100 | 0 | 16 | 704 | 17 | 96 | 0 | GREEN |
+| r2 | 200 | 100 | 0 | 0 | 905 | 22 | 93 | 3 | GREEN |
+| r2 | 500 | 100 | 0 | 31 | 1093 | 22 | 100 | 15 | GREEN |
+| r2 | 1000 | 100 | 0 | 31 | 811 | 19 | 100 | 20 | GREEN |
+| r3 | 200 | 100 | 0 | 62 | 1119 | 27 | 100 | 18 | GREEN |
+| r3 | 500 | 100 | 0 | 16 | 736 | 20 | 100 | 18 | GREEN |
+| r3 | 1000 | 100 | 0 | 16 | 688 | 20 | 93 | 3 | GREEN |
+
+`WORST tier=200/500/1000` 全 GREEN；`GREEN: 9 轮次全过`；`stack_e2e: 6 GREEN / 0 RED / 0 SKIP`。
+
+**A（`load-20261011-155529`，无负载探针；与 m2svr/wbevy 构建并行）——tier-1000 因 tick RED**
+
+| 轮 | 档 | login% | conn | P99 | samples | in_world | verdict |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| A `load-20261011-155529` | 200 | GREEN(100%, p99=31) | GREEN(100%, 16) | GREEN(100%, 47) | 100% | 100% | GREEN |
-| A | 500 | GREEN(100%, 16) | GREEN(100%, 16) | GREEN(100%, 16) | 100% | 100% | GREEN |
-| A | 1000 | RED(100%, **125**) | RED(100%, **201**) | GREEN(100%, 16) | 100% | 95% | **RED（tick）** |
-| C `load-20261011-162213` | 200 | GREEN(100%, 31) | GREEN(100%, 16) | GREEN(100%, 16) | 100% | 100% | GREEN |
-| C | 500 | GREEN(100%, 32) | GREEN(100%, 32) | GREEN(100%, 47) | 100% | 100% | GREEN |
-| C | 1000 | GREEN(100%, 16) | GREEN(100%, 16) | **RED(13.5%, –)** | 13.5% | 95% | **RED（上游停摆）** |
+| r1 | 200 | 100 | 0 | 31 | 569 | 19 | GREEN |
+| r1 | 500 | 100 | 0 | 16 | 884 | 21 | GREEN |
+| r1 | 1000 | 100 | 0 | **125** | 775 | 19 | **RED** |
+| r2 | 200 | 100 | 0 | 16 | 820 | 21 | GREEN |
+| r2 | 500 | 100 | 0 | 16 | 880 | ? | GREEN |
+| r2 | 1000 | 100 | 0 | **201** | 1102 | 26 | **RED** |
+| r3 | 200 | 100 | 0 | 47 | 1069 | 21 | GREEN |
+| r3 | 500 | 100 | 0 | 16 | 752 | ? | GREEN |
+| r3 | 1000 | 100 | 0 | 16 | 695 | 19 | GREEN |
+
+**C（`load-20261011-162213`，无负载探针；与 wbevy 构建并行）——tier-1000 r3 因服务端停摆 RED**
+
+| 轮 | 档 | login% | conn | P99 | samples | in_world | verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| r1 | 200 | 100 | 0 | 31 | 1004 | 21 | GREEN |
+| r1 | 500 | 100 | 0 | 32 | 1012 | 20 | GREEN |
+| r1 | 1000 | 100 | 0 | 16 | 709 | 15 | GREEN |
+| r2 | 200 | 100 | 0 | 16 | 864 | 21 | GREEN |
+| r2 | 500 | 100 | 0 | 32 | 1012 | 20 | GREEN |
+| r2 | 1000 | 100 | 0 | 16 | 587 | 16 | GREEN |
+| r3 | 200 | 100 | 0 | 16 | 906 | 21 | GREEN |
+| r3 | 500 | 100 | 0 | 47 | 847 | 20 | GREEN |
+| r3 | 1000 | **13.5** | 0 | – | 0 | 0 | **RED** |
 
 判定规则（写入 `load_gate_summary.json`）：每档取 N 轮里**最低登录率 ≥ 阈值**，且**每一轮**的
 conn/tick/internal 都 GREEN；否则该档 RED。
 
-**读法（必须一起读）**：
+**读法（owner 裁决 `b61e9f20` ④：别让行自相矛盾）**：
 
-- **登录判据本身已可复现**：A 的 tier-1000 三轮都是 100%（阈值 95% 有余量）；C 的 r1/r2 也是 100%。
-  本机安静/半安静窗口下没再出现 reviewer-3 的 94.8%。
-- **A 的 RED 来自 tick P99**（125/201 > 100ms），不是登录：A 的 tier-1000 tick 尾部在 3 轮里 2 轮越界
-  （单 5s 窗内 ~10–80 个样本落在 110–≥200ms）。这是**第二条独立波动源**，本裁决未授权改 tick 判据 ⇒
-  如实登记为待裁决项（见下《第 5 轮遗留》）。
-- **C 的 RED 来自上游停摆**：r3 的 1000 个假人全部连上并发登录包，**865 条连接服务端一个字节都没回**
-  （`login_conn_diag.no_resp_rx0=865`），`LoginSrv.out.log` 在 16:40:21 后**完全停写**（连接处理冻结、
-  不恢复），爬坡 600s 停在 135/1000。这是「上游在 1000 并发登录下的停摆」，与 reviewer-3 的 948 同源但更严重。
+- `worst_login=100% threshold=95% verdict=RED` 这种行已按上表**分列**：A 的 tier-1000 RED **不是登录**
+  （三轮 login=100%），而是 tick P99 越界；C 的 r3 RED 是登录（服务端停摆）。
+- **登录判据已可复现**：A（100/100/100）、C（100/100/13.5，r3 为服务端停摆）、E（100/100/100）；阈值 95% 有余量。
+- **tick P99 未归属（`82f8e0c3` ②）**：A 的 r1/r2 = 125/201ms，但 E 在 **CPU 峰 100% / heavy 峰 20**
+  下三轮 P99 仍 16/31/16ms ⇒ 尖峰**不是**单纯由同机负载解释，也**不能**据此断言是 C# 栈上限；
+  **待空载窗口复测**。本批不改 tick 判据（`82f8e0c3` ③）。
+- **C6-4（服务端停摆）**：C/r3 的 865/1000 无应答、`login_conn_diag.no_resp_rx0=865`，`LoginSrv.out.log`
+  16:40:21 后停写、爬坡 600s 停在 135/1000。方向 = 服务端在这条连接上没回（非假人侧收包/解析），
+  触发条件（C# 栈上限 vs 同机负载）**未归属**。
+
+### 本机负载探针与「独占窗口」（owner 裁决 `82f8e0c3` ④）
+
+`load_gate.ps1` 每档采 `hostload.ndjson`（CPU=`Win32_Processor.LoadPercentage` 均值 + 重型进程数
+`rustc/cargo/cargo-clippy/msbuild`，口径照 tickbench `probe_load_window`），`load_report.py` 归算成
+`report.json.host_load`（`cpu_mean/cpu_peak/heavy_procs_max/heavy_names_seen/loaded_window`）并写进
+`SUMMARY.md` 的 verdict 表。**只标注、不判红。** E 轮 CPU 峰 93~100%、heavy 峰 3~20，仍是 9 轮全 GREEN
+⇒ 该门禁**可以**在加载窗口跑绿；但 A 的 tick 尖峰无法归属 ⇒ 报告必须写明「待空载窗口复测」。
+
+### M5 现状（写实，owner 裁决 `b61e9f20` ③）
+
+- **§6 M5 的「tick P99 ≤ 100ms」目前在任何栈上都未验证通过**——C# 参考栈 1000 档实测 125/201ms
+  （加载窗口内；E 轮 P99=16~62ms 亦非空载）⇒ 待 Rust 栈接管后（M5 灰度）复测。
+- `in_world` 实测只有 ~10%（tier-500/1000 稳态 17~27）⇒ **不得**用这三档宣称「M5 三档：1000 假人在线」；
+  「假人真正进世界」是 M5 收尾缺口（归宿：卡 `openmir2-botsrv-world-evidence`）。
 
 ### 红检（改坏必红、还原必绿）
 
 原始输出入库：`tests/loadgate/redcheck-c6f-20261011/`。
 
 1. `load_report.py selftest`（含**阈值牙齿**）：同一份 960/1000 产物，阈值 100 ⇒ RED、阈值 95 ⇒ GREEN；
-   以及残余丢包方向判据（rx0⇒上游 / rx>0⇒假人侧 / mixed）。
+   残余丢包方向判据（rx0⇒服务端未回 / rx>0⇒假人侧 / mixed）；本机负载窗判据（CPU≥40 或 heavy≥4）。
 2. `load_gate.ps1 -SelfTestRed`：指向无监听端口 ⇒ `tier-3 verdict=RED`（脚本自身退出 0 = 红检通过）。
 3. 真实存档件重判：`104822/tier-500`（真实回归 login=35.8%）在 100%/95% 下都 RED；健康件在 95% 下 GREEN。
 
 ### 第 5 轮遗留（登记，待 owner/新卡）
 
-- **C6-3（Important，未授权改）tier-1000 的 tick P99 也 flaky**：A 的 r1/r2 = 125/201ms，
-  历史件 `133905/run-3` = 201ms、`132401/r1..r3` = 32/32/47、`132023` = 0。判据 `tick P99 ≤ 100ms`
-  在 tier-1000 上不可复现（~25% 轮次越界），与登录同一性质（上游 1000 并发性质 + 本机共享负载）。
-  owner 裁决明确「tick 不变」⇒ **本批不改**，请 owner 裁决是否按同法重基准化（例如 tier≥1000 用
-  实测下界，或把 tick 判据改成对单次瞬时尖峰鲁棒的口径）。
-- **C6-4（Important，上游）LoginSrv 在 1000 并发登录下会停摆且不恢复**：`162213/run-3/tier-1000`
-  （865/1000 无应答、rx_bytes=0）+ `132401/run-4`（646/1000）。BotSrv 侧观测只能定性到「服务端没回」；
-  若要定位（连接泄漏/线程池/MySQL 连接），需要 C# 侧**只读**计数（收到 CM_IDPASSWORD 数 / 回 SM_PASSOK 数 /
-  socket 数）⇒ 按 brief §1(i) 交 `openmir2-svc-1` + 人签字，别自己改 oracle。
-- **运行纪律**：本机是共享机器，另两车道（m2svr/wbevy）在跑 cargo 构建时，压测的 login 与 tick 都更差
-  （A、C 两轮都与编译并行）⇒ load gate 应尽量在**独占窗口**跑；并行跑时必须在证据里注明（本轮两轮都注明了）。
+- **C6-3（Important，未归属，判据不动）tier-1000 的 tick P99 flaky**：A 的 r1/r2 = 125/201ms，
+  历史件 `133905/run-3` = 201ms、`132401/r1..r3` = 32/32/47、`132023` = 0；E 在重载下却 16/31/16ms。
+  ⇒ 尖峰未归属，**待空载窗口复测**（登记为后续项）。不删判据、不调 `tick_p99_ms` 阈值（`82f8e0c3` ③）。
+- **C6-4（Important，服务端停摆）**：`162213/run-3/tier-1000`（865/1000、rx_bytes=0）+ `132401/run-4`
+  （646/1000）。BotSrv 侧观测只定性到「服务端没回」；要定位（连接泄漏/线程池/MySQL 连接）需 C# 侧
+  **只读**计数（收到 CM_IDPASSWORD 数 / 回 SM_PASSOK 数 / socket 数）⇒ 按 brief §1(i) 交
+  `openmir2-svc-1` + 人签字，别自己改 oracle。
+- **F5（探针落点偏置）**：已写入 `tools/botload/README.md》（探针样本缺口与落点偏置）。
+- **F9（产物 `{file,sha256}` 清单）**：已落地——`load_gate.ps1` 原生产出 `artifacts.sha256.json` 并写进
+  summary 的 `artifacts`（E 轮原生；A/C 早于 F9，用同逻辑回填，产物未变）。
+- **运行纪律**：本机是共享机器，load gate 应尽量在**独占窗口**跑；并行跑时必须在证据里注明
+  （A 与 m2svr/wbevy 并行、C 与 wbevy 并行、E 与 wbevy 并行——均已在 `hostload.ndjson`/本表标注负载）。
 
 ## 残余丢包方向（C6 第 5 轮，owner 裁决 `11dbde39` 的 must_first）
 
@@ -202,24 +255,28 @@ conn/tick/internal 都 GREEN；否则该档 RED。
 
   | 字段 | 含义 |
   | --- | --- |
-  | `no_resp_rx0` | 无应答连接里 `rx_bytes==0` 的条数 ⇒ **服务端在这条 TCP 连接上一个字节都没回** ⇒ 方向 = 上游（C# 部署栈） |
+  | `no_resp_rx0` | 无应答连接里 `rx_bytes==0` 的条数 ⇒ 服务端在这条 TCP 连接上一个字节都没回 ⇒ **方向 = 服务端未回** |
   | `no_resp_rx_gt0` | 无应答连接里 `rx_bytes>0` 的条数 ⇒ 服务端回了、假人侧收包/解析丢了 ⇒ 方向 = **假人（BotSrv，工具缺陷）** |
   | `no_resp_resend` / `no_resp_resend_ok` | 自证对照：重发了几条 / 其中几条成功 |
   | `buckets` | 无应答连接按 `login_tick` 的分窗分布（默认 5s/窗） |
-  | `direction` | `upstream-csharp-stack` / `bot-client` / `mixed` / `none` |
+  | `direction` | `server-no-response` / `bot-client` / `mixed` / `none` |
 
-**结论（方向 = 上游 C# 部署栈）**，证据：
+**结论（方向 = 服务端未回；触发条件未归属）**，证据：
 
 | 数据 | 发出登录包 | 无应答 | 其中 `rx_bytes==0` | 同连接重发 | 方向 |
 | --- | --- | --- | --- | --- | --- |
 | reviewer-3 B 轮（`cdea5e32`，只有汇总计数，无连接级观测） | `login_sent=1000`/`conn_ok=1000`/`conn_err_*=0` | 52（`ident_counts[529]=948`） | 未观测 | — | 未定 |
-| **`load-20261011-132401/run-4/tier-1000`**（T-11，带重发对照） | `login_sent=1000`/`conn_ok=1000`/`conn_err_*=0` | **646** | **646（全部）** | 646 发 / **0 成功** | **`upstream-csharp-stack`** |
-| `load-20261011-155529`（第 5 轮 A，安静窗口） | 1000 | 0（9 次三档全 0） | 0 | — | `none` |
+| **`load-20261011-132401/run-4/tier-1000`**（T-11，带重发对照） | `login_sent=1000`/`conn_ok=1000`/`conn_err_*=0` | **646** | **646（全部）** | 646 发 / **0 成功** | **`server-no-response`** |
+| **`load-20261011-162213/run-3/tier-1000`**（T-11） | `login_sent=1000`/`conn_ok=1000` | **865** | **865（全部）** | （未开重发） | **`server-no-response`** |
+| `load-20261011-155529`（A） | 1000 | 0（9 次三档全 0） | 0 | — | `none` |
+| `load-20261011-165805`（E） | 1000 | 0（9 次三档全 0） | 0 | — | `none` |
 
-`132401/run-4` 的形态：无应答连接的 `login_tick` 全部落在**同一时间点之后**（服务端从此不再应答新连接），
-已应答的 354 条延迟也很大（p50 ≈ 8.8s、max ≈ 14.3s，`no_resp_span_ms≈20s`）——这是**上游
-LoginSrv/LoginGate 在 1000 并发登录下的服务端性质**，不是假人侧收包/解析。**按 owner 红线：不改 oracle 行为**；
-也不需要给 C# 侧加只读计数（BotSrv 侧观测已能定性）。
+`132401/run-4`（646）与 `162213/run-3`（865）的形态：无应答连接的 `login_tick` 全部落在**同一时间点之后**
+（服务端从此不再应答新连接），已应答的连接延迟也很大（`run-4`：p50 ≈ 8.8s、max ≈ 14.3s，`no_resp_span_ms≈20s`）；
+`162213/run-3` 的 `LoginSrv.out.log` 在 16:40:21 后**完全停写**。⇒ 这**排除了「假人侧收包/解析丢弃」**，
+方向是**服务端在这条连接上没回**；但「服务端为什么没回」（C# 栈自身的 1000 并发上限 vs 同机并发编译造成的
+饥饿）**未归属，待空载窗口复测**。**按 owner 红线：不改 oracle 行为**；也不需要给 C# 侧加只读计数
+（BotSrv 侧观测已能定性方向）。
 
 **影响与引法**：这解释了 tier-1000 的「登录 < 100%」；`login_conn_diag` 随 `report.json` 入库
 （`--login-conns` 缺省时该块不产出）。本项**只做定性**，不改 oracle，也不改 login 阈值（阈值见

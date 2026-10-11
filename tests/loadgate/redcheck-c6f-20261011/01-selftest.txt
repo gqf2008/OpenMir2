@@ -1,3 +1,3 @@
-### load_report.py selftest (阈值牙齿 + 残余丢包方向判据)
-GREEN: load_report selftest 全过（分位数/尾部敏感/爬坡判红/掉线分窗/内存斜率）
+### load_report.py selftest (阈值牙齿 + 残余丢包方向判据 + 本机负载窗)
+GREEN: load_report selftest 全过（分位数/尾部敏感/登录阈值牙齿/掉线分窗/内存斜率/残余丢包方向/本机负载窗）
 rc=0

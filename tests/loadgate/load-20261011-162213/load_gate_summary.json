@@ -1,1364 +1,1455 @@
 ﻿{
-    "worst_of_runs_rule":  "每档取 N 轮里最低的登录成功率与阈值比；且每一轮的 conn/tick/internal 判据都必须 GREEN",
-    "worst_by_tier":  {
-                          "200":  {
-                                      "worst_login_pct":  100,
-                                      "verdict":  "GREEN",
-                                      "threshold":  100,
-                                      "runs":  [
-                                                   {
-                                                       "run":  1,
-                                                       "login_success_pct":  100,
-                                                       "verdict":  "GREEN",
-                                                       "conn_lost_steady":  0,
-                                                       "samples":  1004,
-                                                       "tick_p99_ms":  31,
-                                                       "internal_errors":  0
-                                                   },
-                                                   {
-                                                       "run":  2,
-                                                       "login_success_pct":  100,
-                                                       "verdict":  "GREEN",
-                                                       "conn_lost_steady":  0,
-                                                       "samples":  864,
-                                                       "tick_p99_ms":  16,
-                                                       "internal_errors":  0
-                                                   },
-                                                   {
-                                                       "run":  3,
-                                                       "login_success_pct":  100,
-                                                       "verdict":  "GREEN",
-                                                       "conn_lost_steady":  0,
-                                                       "samples":  906,
-                                                       "tick_p99_ms":  16,
-                                                       "internal_errors":  0
-                                                   }
-                                               ],
-                                      "count":  200
-                                  },
-                          "500":  {
-                                      "worst_login_pct":  100,
-                                      "verdict":  "GREEN",
-                                      "threshold":  100,
-                                      "runs":  [
-                                                   {
-                                                       "run":  1,
-                                                       "login_success_pct":  100,
-                                                       "verdict":  "GREEN",
-                                                       "conn_lost_steady":  0,
-                                                       "samples":  1012,
-                                                       "tick_p99_ms":  32,
-                                                       "internal_errors":  0
-                                                   },
-                                                   {
-                                                       "run":  2,
-                                                       "login_success_pct":  100,
-                                                       "verdict":  "GREEN",
-                                                       "conn_lost_steady":  0,
-                                                       "samples":  1012,
-                                                       "tick_p99_ms":  32,
-                                                       "internal_errors":  0
-                                                   },
-                                                   {
-                                                       "run":  3,
-                                                       "login_success_pct":  100,
-                                                       "verdict":  "GREEN",
-                                                       "conn_lost_steady":  0,
-                                                       "samples":  847,
-                                                       "tick_p99_ms":  47,
-                                                       "internal_errors":  0
-                                                   }
-                                               ],
-                                      "count":  500
-                                  },
-                          "1000":  {
-                                       "worst_login_pct":  13.5,
-                                       "verdict":  "RED",
-                                       "threshold":  95,
-                                       "runs":  [
-                                                    {
-                                                        "run":  1,
-                                                        "login_success_pct":  100,
-                                                        "verdict":  "GREEN",
-                                                        "conn_lost_steady":  0,
-                                                        "samples":  709,
-                                                        "tick_p99_ms":  16,
-                                                        "internal_errors":  0
-                                                    },
-                                                    {
-                                                        "run":  2,
-                                                        "login_success_pct":  100,
-                                                        "verdict":  "GREEN",
-                                                        "conn_lost_steady":  0,
-                                                        "samples":  587,
-                                                        "tick_p99_ms":  16,
-                                                        "internal_errors":  0
-                                                    },
-                                                    {
-                                                        "run":  3,
-                                                        "login_success_pct":  13.5,
-                                                        "verdict":  "RED",
-                                                        "conn_lost_steady":  0,
-                                                        "samples":  0,
-                                                        "tick_p99_ms":  null,
-                                                        "internal_errors":  0
-                                                    }
-                                                ],
-                                       "count":  1000
-                                   }
-                      },
-    "tiers":  [
-                  200,
-                  500,
-                  1000
-              ],
-    "stagger_ms":  20,
-    "repeat":  3,
-    "reports":  [
-                    {
-                        "samples":  1004,
-                        "samples_total":  1004,
-                        "max_ms":  32,
-                        "mean_ms":  1.23,
-                        "ramp_complete":  true,
-                        "steady_window_ms":  60110,
-                        "peak_login_ok":  200,
-                        "login_success_pct":  100.0,
-                        "conn_refused":  2,
-                        "conn_lost":  0,
-                        "conn_lost_ramp":  0,
-                        "conn_lost_steady":  0,
-                        "hist_bucket_ms":  1,
-                        "world_ok":  21,
-                        "world_ok_pct":  10.5,
-                        "probe_sent":  1108,
-                        "internal_errors":  0,
-                        "login_conn_total":  200,
-                        "login_conn_no_resp":  0,
-                        "login_conn_no_resp_rx0":  0,
-                        "login_conn_resend":  0,
-                        "login_conn_resend_ok":  0,
-                        "login_send_failed":  0,
-                        "tick_p50_ms":  0,
-                        "tick_p90_ms":  0,
-                        "tick_p99_ms":  31,
-                        "ramp_ms":  10015,
-                        "clock_granularity_note":  "Environment.TickCount 在 Windows 上粒度约 15.6ms（单样本 ±16ms 量化，是测量下限，不是噪声消除）",
-                        "mem":  {
-                                    "DBSrv":  {
-                                                  "samples":  29,
-                                                  "ws_peak_mb":  90.4,
-                                                  "ws_mean_mb":  88.6,
-                                                  "ws_last_mb":  90,
-                                                  "priv_peak_mb":  48.3,
-                                                  "slope_tail_mb_per_s":  0.132,
-                                                  "tail_window_s":  58.1,
-                                                  "window_s":  58.1
-                                              },
-                                    "GameGate":  {
-                                                     "samples":  29,
-                                                     "ws_peak_mb":  70.2,
-                                                     "ws_mean_mb":  65.0,
-                                                     "ws_last_mb":  70.2,
-                                                     "priv_peak_mb":  56.9,
-                                                     "slope_tail_mb_per_s":  0.151,
-                                                     "tail_window_s":  58.1,
-                                                     "window_s":  58.1
-                                                 },
-                                    "GameSrv":  {
-                                                    "samples":  29,
-                                                    "ws_peak_mb":  283.3,
-                                                    "ws_mean_mb":  281.3,
-                                                    "ws_last_mb":  282.1,
-                                                    "priv_peak_mb":  238.6,
-                                                    "slope_tail_mb_per_s":  0.058,
-                                                    "tail_window_s":  58.1,
-                                                    "window_s":  58.1
-                                                },
-                                    "LoginGate":  {
-                                                      "samples":  29,
-                                                      "ws_peak_mb":  56.5,
-                                                      "ws_mean_mb":  55.2,
-                                                      "ws_last_mb":  56.5,
-                                                      "priv_peak_mb":  21.9,
-                                                      "slope_tail_mb_per_s":  0.014,
-                                                      "tail_window_s":  58.1,
-                                                      "window_s":  58.1
-                                                  },
-                                    "LoginSrv":  {
-                                                     "samples":  29,
-                                                     "ws_peak_mb":  68.8,
-                                                     "ws_mean_mb":  65.6,
-                                                     "ws_last_mb":  68.8,
-                                                     "priv_peak_mb":  29.8,
-                                                     "slope_tail_mb_per_s":  0.115,
-                                                     "tail_window_s":  58.1,
-                                                     "window_s":  58.1
-                                                 },
-                                    "SelGate":  {
-                                                    "samples":  29,
-                                                    "ws_peak_mb":  56.8,
-                                                    "ws_mean_mb":  55.3,
-                                                    "ws_last_mb":  55.5,
-                                                    "priv_peak_mb":  23.3,
-                                                    "slope_tail_mb_per_s":  -0.021,
-                                                    "tail_window_s":  58.1,
-                                                    "window_s":  58.1
-                                                },
-                                    "mysqld":  {
-                                                   "samples":  29,
-                                                   "ws_peak_mb":  154.3,
-                                                   "ws_mean_mb":  154.3,
-                                                   "ws_last_mb":  154.3,
-                                                   "priv_peak_mb":  469.0,
-                                                   "slope_tail_mb_per_s":  0.0,
-                                                   "tail_window_s":  58.1,
-                                                   "window_s":  58.1
-                                               }
-                                },
-                        "login_conn_diag":  {
-                                                "total":  200,
-                                                "no_resp":  0,
-                                                "no_resp_rx0":  0,
-                                                "no_resp_rx_gt0":  0,
-                                                "direction":  "none",
-                                                "direction_rule":  "rx_bytes==0 ⇒ 上游（服务端没在这条连接上回过任何字节）；rx_bytes\u003e0 且无 529 ⇒ 假人侧收包/解析丢失",
-                                                "no_resp_first_tick":  null,
-                                                "no_resp_last_tick":  null,
-                                                "no_resp_span_ms":  0,
-                                                "no_resp_resend":  0,
-                                                "no_resp_resend_ok":  0,
-                                                "bucket_ms":  5000,
-                                                "buckets":  [
-
-                                                            ]
-                                            },
-                        "count":  200,
-                        "stagger_ms":  20,
-                        "hold_sec":  60,
-                        "login_threshold_pct":  100.0,
-                        "ramp_target":  200,
-                        "criteria":  [
-                                         "login",
-                                         "conn",
-                                         "tick"
-                                     ],
-                        "allow_missing_tick":  false,
-                        "verdict":  "GREEN",
-                        "fails":  [
-
-                                  ],
-                        "run":  1
-                    },
-                    {
-                        "samples":  1012,
-                        "samples_total":  1012,
-                        "max_ms":  47,
-                        "mean_ms":  3.19,
-                        "ramp_complete":  true,
-                        "steady_window_ms":  60140,
-                        "peak_login_ok":  500,
-                        "login_success_pct":  100.0,
-                        "conn_refused":  1,
-                        "conn_lost":  0,
-                        "conn_lost_ramp":  0,
-                        "conn_lost_steady":  0,
-                        "hist_bucket_ms":  1,
-                        "world_ok":  21,
-                        "world_ok_pct":  4.2,
-                        "probe_sent":  1048,
-                        "internal_errors":  0,
-                        "login_conn_total":  500,
-                        "login_conn_no_resp":  0,
-                        "login_conn_no_resp_rx0":  0,
-                        "login_conn_resend":  0,
-                        "login_conn_resend_ok":  0,
-                        "login_send_failed":  0,
-                        "tick_p50_ms":  0,
-                        "tick_p90_ms":  15,
-                        "tick_p99_ms":  32,
-                        "ramp_ms":  25094,
-                        "clock_granularity_note":  "Environment.TickCount 在 Windows 上粒度约 15.6ms（单样本 ±16ms 量化，是测量下限，不是噪声消除）",
-                        "mem":  {
-                                    "DBSrv":  {
-                                                  "samples":  29,
-                                                  "ws_peak_mb":  98.6,
-                                                  "ws_mean_mb":  91.5,
-                                                  "ws_last_mb":  92.5,
-                                                  "priv_peak_mb":  55.8,
-                                                  "slope_tail_mb_per_s":  0.16,
-                                                  "tail_window_s":  58.7,
-                                                  "window_s":  58.7
-                                              },
-                                    "GameGate":  {
-                                                     "samples":  28,
-                                                     "ws_peak_mb":  113.2,
-                                                     "ws_mean_mb":  109.5,
-                                                     "ws_last_mb":  113.2,
-                                                     "priv_peak_mb":  101.8,
-                                                     "slope_tail_mb_per_s":  0.181,
-                                                     "tail_window_s":  56.6,
-                                                     "window_s":  56.6
-                                                 },
-                                    "GameSrv":  {
-                                                    "samples":  29,
-                                                    "ws_peak_mb":  283.9,
-                                                    "ws_mean_mb":  281.5,
-                                                    "ws_last_mb":  283.6,
-                                                    "priv_peak_mb":  239.4,
-                                                    "slope_tail_mb_per_s":  0.245,
-                                                    "tail_window_s":  58.7,
-                                                    "window_s":  58.7
-                                                },
-                                    "LoginGate":  {
-                                                      "samples":  29,
-                                                      "ws_peak_mb":  102.9,
-                                                      "ws_mean_mb":  101.8,
-                                                      "ws_last_mb":  102.6,
-                                                      "priv_peak_mb":  68.8,
-                                                      "slope_tail_mb_per_s":  0.02,
-                                                      "tail_window_s":  58.7,
-                                                      "window_s":  58.7
-                                                  },
-                                    "LoginSrv":  {
-                                                     "samples":  29,
-                                                     "ws_peak_mb":  76.8,
-                                                     "ws_mean_mb":  73.4,
-                                                     "ws_last_mb":  76.8,
-                                                     "priv_peak_mb":  37.6,
-                                                     "slope_tail_mb_per_s":  0.092,
-                                                     "tail_window_s":  58.7,
-                                                     "window_s":  58.7
-                                                 },
-                                    "SelGate":  {
-                                                    "samples":  29,
-                                                    "ws_peak_mb":  103.8,
-                                                    "ws_mean_mb":  102.9,
-                                                    "ws_last_mb":  103.0,
-                                                    "priv_peak_mb":  70.6,
-                                                    "slope_tail_mb_per_s":  -0.014,
-                                                    "tail_window_s":  58.7,
-                                                    "window_s":  58.7
-                                                },
-                                    "mysqld":  {
-                                                   "samples":  29,
-                                                   "ws_peak_mb":  154.7,
-                                                   "ws_mean_mb":  153.0,
-                                                   "ws_last_mb":  154.7,
-                                                   "priv_peak_mb":  468.9,
-                                                   "slope_tail_mb_per_s":  0.744,
-                                                   "tail_window_s":  58.7,
-                                                   "window_s":  58.7
-                                               }
-                                },
-                        "login_conn_diag":  {
-                                                "total":  500,
-                                                "no_resp":  0,
-                                                "no_resp_rx0":  0,
-                                                "no_resp_rx_gt0":  0,
-                                                "direction":  "none",
-                                                "direction_rule":  "rx_bytes==0 ⇒ 上游（服务端没在这条连接上回过任何字节）；rx_bytes\u003e0 且无 529 ⇒ 假人侧收包/解析丢失",
-                                                "no_resp_first_tick":  null,
-                                                "no_resp_last_tick":  null,
-                                                "no_resp_span_ms":  0,
-                                                "no_resp_resend":  0,
-                                                "no_resp_resend_ok":  0,
-                                                "bucket_ms":  5000,
-                                                "buckets":  [
-
-                                                            ]
-                                            },
-                        "count":  500,
-                        "stagger_ms":  20,
-                        "hold_sec":  60,
-                        "login_threshold_pct":  100.0,
-                        "ramp_target":  500,
-                        "criteria":  [
-                                         "login",
-                                         "conn",
-                                         "tick"
-                                     ],
-                        "allow_missing_tick":  false,
-                        "verdict":  "GREEN",
-                        "fails":  [
-
-                                  ],
-                        "run":  1
-                    },
-                    {
-                        "samples":  709,
-                        "samples_total":  782,
-                        "max_ms":  62,
-                        "mean_ms":  0.71,
-                        "ramp_complete":  true,
-                        "steady_window_ms":  55140,
-                        "peak_login_ok":  1000,
-                        "login_success_pct":  100.0,
-                        "conn_refused":  3,
-                        "conn_lost":  0,
-                        "conn_lost_ramp":  0,
-                        "conn_lost_steady":  0,
-                        "hist_bucket_ms":  1,
-                        "world_ok":  15,
-                        "world_ok_pct":  1.5,
-                        "probe_sent":  871,
-                        "internal_errors":  0,
-                        "login_conn_total":  1000,
-                        "login_conn_no_resp":  0,
-                        "login_conn_no_resp_rx0":  0,
-                        "login_conn_resend":  0,
-                        "login_conn_resend_ok":  0,
-                        "login_send_failed":  0,
-                        "tick_p50_ms":  0,
-                        "tick_p90_ms":  0,
-                        "tick_p99_ms":  16,
-                        "ramp_ms":  25063,
-                        "clock_granularity_note":  "Environment.TickCount 在 Windows 上粒度约 15.6ms（单样本 ±16ms 量化，是测量下限，不是噪声消除）",
-                        "mem":  {
-                                    "DBSrv":  {
-                                                  "samples":  29,
-                                                  "ws_peak_mb":  90.4,
-                                                  "ws_mean_mb":  87.4,
-                                                  "ws_last_mb":  86.8,
-                                                  "priv_peak_mb":  49.2,
-                                                  "slope_tail_mb_per_s":  -0.06,
-                                                  "tail_window_s":  58.5,
-                                                  "window_s":  58.5
-                                              },
-                                    "GameGate":  {
-                                                     "samples":  29,
-                                                     "ws_peak_mb":  177.4,
-                                                     "ws_mean_mb":  173.9,
-                                                     "ws_last_mb":  176.7,
-                                                     "priv_peak_mb":  167.5,
-                                                     "slope_tail_mb_per_s":  0.05,
-                                                     "tail_window_s":  58.5,
-                                                     "window_s":  58.5
-                                                 },
-                                    "GameSrv":  {
-                                                    "samples":  29,
-                                                    "ws_peak_mb":  283.9,
-                                                    "ws_mean_mb":  282.9,
-                                                    "ws_last_mb":  282.7,
-                                                    "priv_peak_mb":  240.7,
-                                                    "slope_tail_mb_per_s":  0.016,
-                                                    "tail_window_s":  58.5,
-                                                    "window_s":  58.5
-                                                },
-                                    "LoginGate":  {
-                                                      "samples":  29,
-                                                      "ws_peak_mb":  118.0,
-                                                      "ws_mean_mb":  116.6,
-                                                      "ws_last_mb":  118.0,
-                                                      "priv_peak_mb":  84.3,
-                                                      "slope_tail_mb_per_s":  0.033,
-                                                      "tail_window_s":  58.5,
-                                                      "window_s":  58.5
-                                                  },
-                                    "LoginSrv":  {
-                                                     "samples":  29,
-                                                     "ws_peak_mb":  77.8,
-                                                     "ws_mean_mb":  77.1,
-                                                     "ws_last_mb":  77.1,
-                                                     "priv_peak_mb":  39.3,
-                                                     "slope_tail_mb_per_s":  0.001,
-                                                     "tail_window_s":  58.5,
-                                                     "window_s":  58.5
-                                                 },
-                                    "SelGate":  {
-                                                    "samples":  29,
-                                                    "ws_peak_mb":  116.3,
-                                                    "ws_mean_mb":  116.0,
-                                                    "ws_last_mb":  116.3,
-                                                    "priv_peak_mb":  84.0,
-                                                    "slope_tail_mb_per_s":  0.006,
-                                                    "tail_window_s":  58.5,
-                                                    "window_s":  58.5
-                                                },
-                                    "mysqld":  {
-                                                   "samples":  29,
-                                                   "ws_peak_mb":  155.5,
-                                                   "ws_mean_mb":  155.5,
-                                                   "ws_last_mb":  155.5,
-                                                   "priv_peak_mb":  469.3,
-                                                   "slope_tail_mb_per_s":  0.0,
-                                                   "tail_window_s":  58.5,
-                                                   "window_s":  58.5
-                                               }
-                                },
-                        "login_conn_diag":  {
-                                                "total":  1000,
-                                                "no_resp":  0,
-                                                "no_resp_rx0":  0,
-                                                "no_resp_rx_gt0":  0,
-                                                "direction":  "none",
-                                                "direction_rule":  "rx_bytes==0 ⇒ 上游（服务端没在这条连接上回过任何字节）；rx_bytes\u003e0 且无 529 ⇒ 假人侧收包/解析丢失",
-                                                "no_resp_first_tick":  null,
-                                                "no_resp_last_tick":  null,
-                                                "no_resp_span_ms":  0,
-                                                "no_resp_resend":  0,
-                                                "no_resp_resend_ok":  0,
-                                                "bucket_ms":  5000,
-                                                "buckets":  [
-
-                                                            ]
-                                            },
-                        "count":  1000,
-                        "stagger_ms":  20,
-                        "hold_sec":  60,
-                        "login_threshold_pct":  95.0,
-                        "ramp_target":  950,
-                        "criteria":  [
-                                         "login",
-                                         "conn",
-                                         "tick"
-                                     ],
-                        "allow_missing_tick":  false,
-                        "verdict":  "GREEN",
-                        "fails":  [
-
-                                  ],
-                        "run":  1
-                    },
-                    {
-                        "samples":  864,
-                        "samples_total":  865,
-                        "max_ms":  32,
-                        "mean_ms":  0.49,
-                        "ramp_complete":  true,
-                        "steady_window_ms":  60093,
-                        "peak_login_ok":  200,
-                        "login_success_pct":  100.0,
-                        "conn_refused":  1,
-                        "conn_lost":  0,
-                        "conn_lost_ramp":  0,
-                        "conn_lost_steady":  0,
-                        "hist_bucket_ms":  1,
-                        "world_ok":  19,
-                        "world_ok_pct":  9.5,
-                        "probe_sent":  1037,
-                        "internal_errors":  0,
-                        "login_conn_total":  200,
-                        "login_conn_no_resp":  0,
-                        "login_conn_no_resp_rx0":  0,
-                        "login_conn_resend":  0,
-                        "login_conn_resend_ok":  0,
-                        "login_send_failed":  0,
-                        "tick_p50_ms":  0,
-                        "tick_p90_ms":  0,
-                        "tick_p99_ms":  16,
-                        "ramp_ms":  10032,
-                        "clock_granularity_note":  "Environment.TickCount 在 Windows 上粒度约 15.6ms（单样本 ±16ms 量化，是测量下限，不是噪声消除）",
-                        "mem":  {
-                                    "DBSrv":  {
-                                                  "samples":  29,
-                                                  "ws_peak_mb":  88,
-                                                  "ws_mean_mb":  86.1,
-                                                  "ws_last_mb":  86.4,
-                                                  "priv_peak_mb":  46.8,
-                                                  "slope_tail_mb_per_s":  0.005,
-                                                  "tail_window_s":  57.9,
-                                                  "window_s":  57.9
-                                              },
-                                    "GameGate":  {
-                                                     "samples":  29,
-                                                     "ws_peak_mb":  67.7,
-                                                     "ws_mean_mb":  63.8,
-                                                     "ws_last_mb":  67.7,
-                                                     "priv_peak_mb":  54.5,
-                                                     "slope_tail_mb_per_s":  0.091,
-                                                     "tail_window_s":  57.9,
-                                                     "window_s":  57.9
-                                                 },
-                                    "GameSrv":  {
-                                                    "samples":  29,
-                                                    "ws_peak_mb":  283.5,
-                                                    "ws_mean_mb":  281.3,
-                                                    "ws_last_mb":  282.2,
-                                                    "priv_peak_mb":  238.9,
-                                                    "slope_tail_mb_per_s":  0.043,
-                                                    "tail_window_s":  57.9,
-                                                    "window_s":  57.9
-                                                },
-                                    "LoginGate":  {
-                                                      "samples":  29,
-                                                      "ws_peak_mb":  56.4,
-                                                      "ws_mean_mb":  55.3,
-                                                      "ws_last_mb":  56.4,
-                                                      "priv_peak_mb":  21.9,
-                                                      "slope_tail_mb_per_s":  0.018,
-                                                      "tail_window_s":  57.9,
-                                                      "window_s":  57.9
-                                                  },
-                                    "LoginSrv":  {
-                                                     "samples":  29,
-                                                     "ws_peak_mb":  68.7,
-                                                     "ws_mean_mb":  65.4,
-                                                     "ws_last_mb":  68.7,
-                                                     "priv_peak_mb":  29.7,
-                                                     "slope_tail_mb_per_s":  0.093,
-                                                     "tail_window_s":  57.9,
-                                                     "window_s":  57.9
-                                                 },
-                                    "SelGate":  {
-                                                    "samples":  29,
-                                                    "ws_peak_mb":  57.6,
-                                                    "ws_mean_mb":  55.5,
-                                                    "ws_last_mb":  55.6,
-                                                    "priv_peak_mb":  24.3,
-                                                    "slope_tail_mb_per_s":  -0.036,
-                                                    "tail_window_s":  57.9,
-                                                    "window_s":  57.9
-                                                },
-                                    "mysqld":  {
-                                                   "samples":  29,
-                                                   "ws_peak_mb":  154.6,
-                                                   "ws_mean_mb":  154.6,
-                                                   "ws_last_mb":  154.6,
-                                                   "priv_peak_mb":  469.1,
-                                                   "slope_tail_mb_per_s":  0.001,
-                                                   "tail_window_s":  57.9,
-                                                   "window_s":  57.9
-                                               }
-                                },
-                        "login_conn_diag":  {
-                                                "total":  200,
-                                                "no_resp":  0,
-                                                "no_resp_rx0":  0,
-                                                "no_resp_rx_gt0":  0,
-                                                "direction":  "none",
-                                                "direction_rule":  "rx_bytes==0 ⇒ 上游（服务端没在这条连接上回过任何字节）；rx_bytes\u003e0 且无 529 ⇒ 假人侧收包/解析丢失",
-                                                "no_resp_first_tick":  null,
-                                                "no_resp_last_tick":  null,
-                                                "no_resp_span_ms":  0,
-                                                "no_resp_resend":  0,
-                                                "no_resp_resend_ok":  0,
-                                                "bucket_ms":  5000,
-                                                "buckets":  [
-
-                                                            ]
-                                            },
-                        "count":  200,
-                        "stagger_ms":  20,
-                        "hold_sec":  60,
-                        "login_threshold_pct":  100.0,
-                        "ramp_target":  200,
-                        "criteria":  [
-                                         "login",
-                                         "conn",
-                                         "tick"
-                                     ],
-                        "allow_missing_tick":  false,
-                        "verdict":  "GREEN",
-                        "fails":  [
-
-                                  ],
-                        "run":  2
-                    },
-                    {
-                        "samples":  1012,
-                        "samples_total":  1018,
-                        "max_ms":  32,
-                        "mean_ms":  3.08,
-                        "ramp_complete":  true,
-                        "steady_window_ms":  60125,
-                        "peak_login_ok":  500,
-                        "login_success_pct":  100.0,
-                        "conn_refused":  2,
-                        "conn_lost":  0,
-                        "conn_lost_ramp":  0,
-                        "conn_lost_steady":  0,
-                        "hist_bucket_ms":  1,
-                        "world_ok":  20,
-                        "world_ok_pct":  4.0,
-                        "probe_sent":  1125,
-                        "internal_errors":  0,
-                        "login_conn_total":  500,
-                        "login_conn_no_resp":  0,
-                        "login_conn_no_resp_rx0":  0,
-                        "login_conn_resend":  0,
-                        "login_conn_resend_ok":  0,
-                        "login_send_failed":  0,
-                        "tick_p50_ms":  0,
-                        "tick_p90_ms":  16,
-                        "tick_p99_ms":  32,
-                        "ramp_ms":  15016,
-                        "clock_granularity_note":  "Environment.TickCount 在 Windows 上粒度约 15.6ms（单样本 ±16ms 量化，是测量下限，不是噪声消除）",
-                        "mem":  {
-                                    "DBSrv":  {
-                                                  "samples":  29,
-                                                  "ws_peak_mb":  99,
-                                                  "ws_mean_mb":  89.0,
-                                                  "ws_last_mb":  87.2,
-                                                  "priv_peak_mb":  57.2,
-                                                  "slope_tail_mb_per_s":  -0.2,
-                                                  "tail_window_s":  58.4,
-                                                  "window_s":  58.4
-                                              },
-                                    "GameGate":  {
-                                                     "samples":  29,
-                                                     "ws_peak_mb":  115.7,
-                                                     "ws_mean_mb":  111.3,
-                                                     "ws_last_mb":  115.7,
-                                                     "priv_peak_mb":  104,
-                                                     "slope_tail_mb_per_s":  0.099,
-                                                     "tail_window_s":  58.4,
-                                                     "window_s":  58.4
-                                                 },
-                                    "GameSrv":  {
-                                                    "samples":  29,
-                                                    "ws_peak_mb":  284.9,
-                                                    "ws_mean_mb":  282.2,
-                                                    "ws_last_mb":  282.4,
-                                                    "priv_peak_mb":  241.0,
-                                                    "slope_tail_mb_per_s":  -0.043,
-                                                    "tail_window_s":  58.4,
-                                                    "window_s":  58.4
-                                                },
-                                    "LoginGate":  {
-                                                      "samples":  29,
-                                                      "ws_peak_mb":  103.3,
-                                                      "ws_mean_mb":  101.8,
-                                                      "ws_last_mb":  102.9,
-                                                      "priv_peak_mb":  69.4,
-                                                      "slope_tail_mb_per_s":  0.021,
-                                                      "tail_window_s":  58.4,
-                                                      "window_s":  58.4
-                                                  },
-                                    "LoginSrv":  {
-                                                     "samples":  29,
-                                                     "ws_peak_mb":  76.9,
-                                                     "ws_mean_mb":  73.4,
-                                                     "ws_last_mb":  76.9,
-                                                     "priv_peak_mb":  37.8,
-                                                     "slope_tail_mb_per_s":  0.094,
-                                                     "tail_window_s":  58.4,
-                                                     "window_s":  58.4
-                                                 },
-                                    "SelGate":  {
-                                                    "samples":  29,
-                                                    "ws_peak_mb":  104.9,
-                                                    "ws_mean_mb":  102.9,
-                                                    "ws_last_mb":  103.1,
-                                                    "priv_peak_mb":  71.5,
-                                                    "slope_tail_mb_per_s":  -0.03,
-                                                    "tail_window_s":  58.4,
-                                                    "window_s":  58.4
-                                                },
-                                    "mysqld":  {
-                                                   "samples":  29,
-                                                   "ws_peak_mb":  154.8,
-                                                   "ws_mean_mb":  154.6,
-                                                   "ws_last_mb":  154.8,
-                                                   "priv_peak_mb":  469.1,
-                                                   "slope_tail_mb_per_s":  0.004,
-                                                   "tail_window_s":  58.4,
-                                                   "window_s":  58.4
-                                               }
-                                },
-                        "login_conn_diag":  {
-                                                "total":  500,
-                                                "no_resp":  0,
-                                                "no_resp_rx0":  0,
-                                                "no_resp_rx_gt0":  0,
-                                                "direction":  "none",
-                                                "direction_rule":  "rx_bytes==0 ⇒ 上游（服务端没在这条连接上回过任何字节）；rx_bytes\u003e0 且无 529 ⇒ 假人侧收包/解析丢失",
-                                                "no_resp_first_tick":  null,
-                                                "no_resp_last_tick":  null,
-                                                "no_resp_span_ms":  0,
-                                                "no_resp_resend":  0,
-                                                "no_resp_resend_ok":  0,
-                                                "bucket_ms":  5000,
-                                                "buckets":  [
-
-                                                            ]
-                                            },
-                        "count":  500,
-                        "stagger_ms":  20,
-                        "hold_sec":  60,
-                        "login_threshold_pct":  100.0,
-                        "ramp_target":  500,
-                        "criteria":  [
-                                         "login",
-                                         "conn",
-                                         "tick"
-                                     ],
-                        "allow_missing_tick":  false,
-                        "verdict":  "GREEN",
-                        "fails":  [
-
-                                  ],
-                        "run":  2
-                    },
-                    {
-                        "samples":  587,
-                        "samples_total":  683,
-                        "max_ms":  63,
-                        "mean_ms":  2.92,
-                        "ramp_complete":  true,
-                        "steady_window_ms":  55218,
-                        "peak_login_ok":  1000,
-                        "login_success_pct":  100.0,
-                        "conn_refused":  2,
-                        "conn_lost":  0,
-                        "conn_lost_ramp":  0,
-                        "conn_lost_steady":  0,
-                        "hist_bucket_ms":  1,
-                        "world_ok":  16,
-                        "world_ok_pct":  1.6,
-                        "probe_sent":  944,
-                        "internal_errors":  0,
-                        "login_conn_total":  1000,
-                        "login_conn_no_resp":  0,
-                        "login_conn_no_resp_rx0":  0,
-                        "login_conn_resend":  0,
-                        "login_conn_resend_ok":  0,
-                        "login_send_failed":  0,
-                        "tick_p50_ms":  0,
-                        "tick_p90_ms":  15,
-                        "tick_p99_ms":  16,
-                        "ramp_ms":  25063,
-                        "clock_granularity_note":  "Environment.TickCount 在 Windows 上粒度约 15.6ms（单样本 ±16ms 量化，是测量下限，不是噪声消除）",
-                        "mem":  {
-                                    "DBSrv":  {
-                                                  "samples":  29,
-                                                  "ws_peak_mb":  89.6,
-                                                  "ws_mean_mb":  86.5,
-                                                  "ws_last_mb":  86.2,
-                                                  "priv_peak_mb":  47.6,
-                                                  "slope_tail_mb_per_s":  -0.059,
-                                                  "tail_window_s":  58.6,
-                                                  "window_s":  58.6
-                                              },
-                                    "GameGate":  {
-                                                     "samples":  29,
-                                                     "ws_peak_mb":  176.2,
-                                                     "ws_mean_mb":  174.9,
-                                                     "ws_last_mb":  175.8,
-                                                     "priv_peak_mb":  165.9,
-                                                     "slope_tail_mb_per_s":  0.036,
-                                                     "tail_window_s":  58.6,
-                                                     "window_s":  58.6
-                                                 },
-                                    "GameSrv":  {
-                                                    "samples":  29,
-                                                    "ws_peak_mb":  284.7,
-                                                    "ws_mean_mb":  282.6,
-                                                    "ws_last_mb":  281.1,
-                                                    "priv_peak_mb":  241.3,
-                                                    "slope_tail_mb_per_s":  -0.017,
-                                                    "tail_window_s":  58.6,
-                                                    "window_s":  58.6
-                                                },
-                                    "LoginGate":  {
-                                                      "samples":  29,
-                                                      "ws_peak_mb":  121.6,
-                                                      "ws_mean_mb":  120.3,
-                                                      "ws_last_mb":  121.0,
-                                                      "priv_peak_mb":  88.2,
-                                                      "slope_tail_mb_per_s":  0.026,
-                                                      "tail_window_s":  58.6,
-                                                      "window_s":  58.6
-                                                  },
-                                    "LoginSrv":  {
-                                                     "samples":  29,
-                                                     "ws_peak_mb":  74.0,
-                                                     "ws_mean_mb":  72.6,
-                                                     "ws_last_mb":  72.5,
-                                                     "priv_peak_mb":  33.9,
-                                                     "slope_tail_mb_per_s":  -0.014,
-                                                     "tail_window_s":  58.6,
-                                                     "window_s":  58.6
-                                                 },
-                                    "SelGate":  {
-                                                    "samples":  29,
-                                                    "ws_peak_mb":  118.8,
-                                                    "ws_mean_mb":  118.1,
-                                                    "ws_last_mb":  118.8,
-                                                    "priv_peak_mb":  85.5,
-                                                    "slope_tail_mb_per_s":  0.034,
-                                                    "tail_window_s":  58.6,
-                                                    "window_s":  58.6
-                                                },
-                                    "mysqld":  {
-                                                   "samples":  29,
-                                                   "ws_peak_mb":  155.0,
-                                                   "ws_mean_mb":  155.0,
-                                                   "ws_last_mb":  155.0,
-                                                   "priv_peak_mb":  469.3,
-                                                   "slope_tail_mb_per_s":  0.0,
-                                                   "tail_window_s":  58.6,
-                                                   "window_s":  58.6
-                                               }
-                                },
-                        "login_conn_diag":  {
-                                                "total":  1000,
-                                                "no_resp":  0,
-                                                "no_resp_rx0":  0,
-                                                "no_resp_rx_gt0":  0,
-                                                "direction":  "none",
-                                                "direction_rule":  "rx_bytes==0 ⇒ 上游（服务端没在这条连接上回过任何字节）；rx_bytes\u003e0 且无 529 ⇒ 假人侧收包/解析丢失",
-                                                "no_resp_first_tick":  null,
-                                                "no_resp_last_tick":  null,
-                                                "no_resp_span_ms":  0,
-                                                "no_resp_resend":  0,
-                                                "no_resp_resend_ok":  0,
-                                                "bucket_ms":  5000,
-                                                "buckets":  [
-
-                                                            ]
-                                            },
-                        "count":  1000,
-                        "stagger_ms":  20,
-                        "hold_sec":  60,
-                        "login_threshold_pct":  95.0,
-                        "ramp_target":  950,
-                        "criteria":  [
-                                         "login",
-                                         "conn",
-                                         "tick"
-                                     ],
-                        "allow_missing_tick":  false,
-                        "verdict":  "GREEN",
-                        "fails":  [
-
-                                  ],
-                        "run":  2
-                    },
-                    {
-                        "samples":  906,
-                        "samples_total":  906,
-                        "max_ms":  78,
-                        "mean_ms":  0.58,
-                        "ramp_complete":  true,
-                        "steady_window_ms":  60110,
-                        "peak_login_ok":  200,
-                        "login_success_pct":  100.0,
-                        "conn_refused":  2,
-                        "conn_lost":  0,
-                        "conn_lost_ramp":  0,
-                        "conn_lost_steady":  0,
-                        "hist_bucket_ms":  1,
-                        "world_ok":  22,
-                        "world_ok_pct":  11.0,
-                        "probe_sent":  1176,
-                        "internal_errors":  0,
-                        "login_conn_total":  200,
-                        "login_conn_no_resp":  0,
-                        "login_conn_no_resp_rx0":  0,
-                        "login_conn_resend":  0,
-                        "login_conn_resend_ok":  0,
-                        "login_send_failed":  0,
-                        "tick_p50_ms":  0,
-                        "tick_p90_ms":  0,
-                        "tick_p99_ms":  16,
-                        "ramp_ms":  10031,
-                        "clock_granularity_note":  "Environment.TickCount 在 Windows 上粒度约 15.6ms（单样本 ±16ms 量化，是测量下限，不是噪声消除）",
-                        "mem":  {
-                                    "DBSrv":  {
-                                                  "samples":  30,
-                                                  "ws_peak_mb":  82.9,
-                                                  "ws_mean_mb":  76.8,
-                                                  "ws_last_mb":  75.6,
-                                                  "priv_peak_mb":  40.2,
-                                                  "slope_tail_mb_per_s":  -0.118,
-                                                  "tail_window_s":  59.9,
-                                                  "window_s":  59.9
-                                              },
-                                    "GameGate":  {
-                                                     "samples":  30,
-                                                     "ws_peak_mb":  63.5,
-                                                     "ws_mean_mb":  62.3,
-                                                     "ws_last_mb":  63.5,
-                                                     "priv_peak_mb":  52.9,
-                                                     "slope_tail_mb_per_s":  0.086,
-                                                     "tail_window_s":  59.9,
-                                                     "window_s":  59.9
-                                                 },
-                                    "GameSrv":  {
-                                                    "samples":  30,
-                                                    "ws_peak_mb":  284.6,
-                                                    "ws_mean_mb":  278.0,
-                                                    "ws_last_mb":  277.4,
-                                                    "priv_peak_mb":  240.2,
-                                                    "slope_tail_mb_per_s":  -0.119,
-                                                    "tail_window_s":  59.9,
-                                                    "window_s":  59.9
-                                                },
-                                    "LoginGate":  {
-                                                      "samples":  30,
-                                                      "ws_peak_mb":  59.0,
-                                                      "ws_mean_mb":  57.5,
-                                                      "ws_last_mb":  58.2,
-                                                      "priv_peak_mb":  23.5,
-                                                      "slope_tail_mb_per_s":  0.018,
-                                                      "tail_window_s":  59.9,
-                                                      "window_s":  59.9
-                                                  },
-                                    "LoginSrv":  {
-                                                     "samples":  30,
-                                                     "ws_peak_mb":  61.6,
-                                                     "ws_mean_mb":  61.2,
-                                                     "ws_last_mb":  61.3,
-                                                     "priv_peak_mb":  22,
-                                                     "slope_tail_mb_per_s":  0.003,
-                                                     "tail_window_s":  59.9,
-                                                     "window_s":  59.9
-                                                 },
-                                    "SelGate":  {
-                                                    "samples":  30,
-                                                    "ws_peak_mb":  60.1,
-                                                    "ws_mean_mb":  58.0,
-                                                    "ws_last_mb":  57.9,
-                                                    "priv_peak_mb":  25.6,
-                                                    "slope_tail_mb_per_s":  -0.036,
-                                                    "tail_window_s":  59.9,
-                                                    "window_s":  59.9
-                                                },
-                                    "mysqld":  {
-                                                   "samples":  30,
-                                                   "ws_peak_mb":  154.4,
-                                                   "ws_mean_mb":  154.4,
-                                                   "ws_last_mb":  154.4,
-                                                   "priv_peak_mb":  469.1,
-                                                   "slope_tail_mb_per_s":  0.0,
-                                                   "tail_window_s":  59.9,
-                                                   "window_s":  59.9
-                                               }
-                                },
-                        "login_conn_diag":  {
-                                                "total":  200,
-                                                "no_resp":  0,
-                                                "no_resp_rx0":  0,
-                                                "no_resp_rx_gt0":  0,
-                                                "direction":  "none",
-                                                "direction_rule":  "rx_bytes==0 ⇒ 上游（服务端没在这条连接上回过任何字节）；rx_bytes\u003e0 且无 529 ⇒ 假人侧收包/解析丢失",
-                                                "no_resp_first_tick":  null,
-                                                "no_resp_last_tick":  null,
-                                                "no_resp_span_ms":  0,
-                                                "no_resp_resend":  0,
-                                                "no_resp_resend_ok":  0,
-                                                "bucket_ms":  5000,
-                                                "buckets":  [
-
-                                                            ]
-                                            },
-                        "count":  200,
-                        "stagger_ms":  20,
-                        "hold_sec":  60,
-                        "login_threshold_pct":  100.0,
-                        "ramp_target":  200,
-                        "criteria":  [
-                                         "login",
-                                         "conn",
-                                         "tick"
-                                     ],
-                        "allow_missing_tick":  false,
-                        "verdict":  "GREEN",
-                        "fails":  [
-
-                                  ],
-                        "run":  3
-                    },
-                    {
-                        "samples":  847,
-                        "samples_total":  847,
-                        "max_ms":  63,
-                        "mean_ms":  9.01,
-                        "ramp_complete":  true,
-                        "steady_window_ms":  60344,
-                        "peak_login_ok":  500,
-                        "login_success_pct":  100.0,
-                        "conn_refused":  3,
-                        "conn_lost":  0,
-                        "conn_lost_ramp":  0,
-                        "conn_lost_steady":  0,
-                        "hist_bucket_ms":  1,
-                        "world_ok":  20,
-                        "world_ok_pct":  4.0,
-                        "probe_sent":  1083,
-                        "internal_errors":  0,
-                        "login_conn_total":  500,
-                        "login_conn_no_resp":  0,
-                        "login_conn_no_resp_rx0":  0,
-                        "login_conn_resend":  0,
-                        "login_conn_resend_ok":  0,
-                        "login_send_failed":  0,
-                        "tick_p50_ms":  0,
-                        "tick_p90_ms":  16,
-                        "tick_p99_ms":  47,
-                        "ramp_ms":  15015,
-                        "clock_granularity_note":  "Environment.TickCount 在 Windows 上粒度约 15.6ms（单样本 ±16ms 量化，是测量下限，不是噪声消除）",
-                        "mem":  {
-                                    "DBSrv":  {
-                                                  "samples":  29,
-                                                  "ws_peak_mb":  86.5,
-                                                  "ws_mean_mb":  79.1,
-                                                  "ws_last_mb":  77.9,
-                                                  "priv_peak_mb":  44.1,
-                                                  "slope_tail_mb_per_s":  -0.144,
-                                                  "tail_window_s":  58.7,
-                                                  "window_s":  58.7
-                                              },
-                                    "GameGate":  {
-                                                     "samples":  29,
-                                                     "ws_peak_mb":  110.3,
-                                                     "ws_mean_mb":  107.9,
-                                                     "ws_last_mb":  108.4,
-                                                     "priv_peak_mb":  100.1,
-                                                     "slope_tail_mb_per_s":  -0.009,
-                                                     "tail_window_s":  58.7,
-                                                     "window_s":  58.7
-                                                 },
-                                    "GameSrv":  {
-                                                    "samples":  29,
-                                                    "ws_peak_mb":  287.7,
-                                                    "ws_mean_mb":  277.2,
-                                                    "ws_last_mb":  272.2,
-                                                    "priv_peak_mb":  243.3,
-                                                    "slope_tail_mb_per_s":  -0.262,
-                                                    "tail_window_s":  58.7,
-                                                    "window_s":  58.7
-                                                },
-                                    "LoginGate":  {
-                                                      "samples":  29,
-                                                      "ws_peak_mb":  102.5,
-                                                      "ws_mean_mb":  101.4,
-                                                      "ws_last_mb":  102.4,
-                                                      "priv_peak_mb":  67.8,
-                                                      "slope_tail_mb_per_s":  0.021,
-                                                      "tail_window_s":  58.7,
-                                                      "window_s":  58.7
-                                                  },
-                                    "LoginSrv":  {
-                                                     "samples":  29,
-                                                     "ws_peak_mb":  62.1,
-                                                     "ws_mean_mb":  61.8,
-                                                     "ws_last_mb":  61.8,
-                                                     "priv_peak_mb":  23.1,
-                                                     "slope_tail_mb_per_s":  0.004,
-                                                     "tail_window_s":  58.7,
-                                                     "window_s":  58.7
-                                                 },
-                                    "SelGate":  {
-                                                    "samples":  29,
-                                                    "ws_peak_mb":  106.2,
-                                                    "ws_mean_mb":  103.8,
-                                                    "ws_last_mb":  103.8,
-                                                    "priv_peak_mb":  72.4,
-                                                    "slope_tail_mb_per_s":  -0.039,
-                                                    "tail_window_s":  58.7,
-                                                    "window_s":  58.7
-                                                },
-                                    "mysqld":  {
-                                                   "samples":  29,
-                                                   "ws_peak_mb":  155.2,
-                                                   "ws_mean_mb":  155.2,
-                                                   "ws_last_mb":  155.2,
-                                                   "priv_peak_mb":  469.1,
-                                                   "slope_tail_mb_per_s":  0.0,
-                                                   "tail_window_s":  58.7,
-                                                   "window_s":  58.7
-                                               }
-                                },
-                        "login_conn_diag":  {
-                                                "total":  500,
-                                                "no_resp":  0,
-                                                "no_resp_rx0":  0,
-                                                "no_resp_rx_gt0":  0,
-                                                "direction":  "none",
-                                                "direction_rule":  "rx_bytes==0 ⇒ 上游（服务端没在这条连接上回过任何字节）；rx_bytes\u003e0 且无 529 ⇒ 假人侧收包/解析丢失",
-                                                "no_resp_first_tick":  null,
-                                                "no_resp_last_tick":  null,
-                                                "no_resp_span_ms":  0,
-                                                "no_resp_resend":  0,
-                                                "no_resp_resend_ok":  0,
-                                                "bucket_ms":  5000,
-                                                "buckets":  [
-
-                                                            ]
-                                            },
-                        "count":  500,
-                        "stagger_ms":  20,
-                        "hold_sec":  60,
-                        "login_threshold_pct":  100.0,
-                        "ramp_target":  500,
-                        "criteria":  [
-                                         "login",
-                                         "conn",
-                                         "tick"
-                                     ],
-                        "allow_missing_tick":  false,
-                        "verdict":  "GREEN",
-                        "fails":  [
-
-                                  ],
-                        "run":  3
-                    },
-                    {
-                        "samples":  0,
-                        "samples_total":  0,
-                        "max_ms":  0,
-                        "mean_ms":  null,
-                        "ramp_complete":  false,
-                        "steady_window_ms":  658484,
-                        "peak_login_ok":  135,
-                        "login_success_pct":  13.5,
-                        "conn_refused":  2,
-                        "conn_lost":  0,
-                        "conn_lost_ramp":  0,
-                        "conn_lost_steady":  0,
-                        "hist_bucket_ms":  1,
-                        "world_ok":  0,
-                        "world_ok_pct":  0.0,
-                        "probe_sent":  0,
-                        "internal_errors":  0,
-                        "login_conn_total":  1000,
-                        "login_conn_no_resp":  865,
-                        "login_conn_no_resp_rx0":  865,
-                        "login_conn_resend":  0,
-                        "login_conn_resend_ok":  0,
-                        "login_send_failed":  0,
-                        "tick_p50_ms":  null,
-                        "tick_p90_ms":  null,
-                        "tick_p99_ms":  null,
-                        "ramp_ms":  null,
-                        "clock_granularity_note":  "Environment.TickCount 在 Windows 上粒度约 15.6ms（单样本 ±16ms 量化，是测量下限，不是噪声消除）",
-                        "mem":  {
-                                    "DBSrv":  {
-                                                  "samples":  30,
-                                                  "ws_peak_mb":  71.1,
-                                                  "ws_mean_mb":  71.0,
-                                                  "ws_last_mb":  71.0,
-                                                  "priv_peak_mb":  32.0,
-                                                  "slope_tail_mb_per_s":  0.001,
-                                                  "tail_window_s":  59.8,
-                                                  "window_s":  59.8
-                                              },
-                                    "GameGate":  {
-                                                     "samples":  30,
-                                                     "ws_peak_mb":  59.9,
-                                                     "ws_mean_mb":  58.7,
-                                                     "ws_last_mb":  58.4,
-                                                     "priv_peak_mb":  48.9,
-                                                     "slope_tail_mb_per_s":  -0.002,
-                                                     "tail_window_s":  59.8,
-                                                     "window_s":  59.8
-                                                 },
-                                    "GameSrv":  {
-                                                    "samples":  30,
-                                                    "ws_peak_mb":  286.7,
-                                                    "ws_mean_mb":  284.2,
-                                                    "ws_last_mb":  285,
-                                                    "priv_peak_mb":  242.1,
-                                                    "slope_tail_mb_per_s":  -0.029,
-                                                    "tail_window_s":  59.8,
-                                                    "window_s":  59.8
-                                                },
-                                    "LoginGate":  {
-                                                      "samples":  30,
-                                                      "ws_peak_mb":  140.3,
-                                                      "ws_mean_mb":  139.9,
-                                                      "ws_last_mb":  139.8,
-                                                      "priv_peak_mb":  104.6,
-                                                      "slope_tail_mb_per_s":  0.0,
-                                                      "tail_window_s":  59.8,
-                                                      "window_s":  59.8
-                                                  },
-                                    "SelGate":  {
-                                                    "samples":  30,
-                                                    "ws_peak_mb":  59.9,
-                                                    "ws_mean_mb":  59.3,
-                                                    "ws_last_mb":  59.6,
-                                                    "priv_peak_mb":  26.3,
-                                                    "slope_tail_mb_per_s":  0.011,
-                                                    "tail_window_s":  59.8,
-                                                    "window_s":  59.8
-                                                },
-                                    "mysqld":  {
-                                                   "samples":  30,
-                                                   "ws_peak_mb":  106.4,
-                                                   "ws_mean_mb":  106.4,
-                                                   "ws_last_mb":  106.4,
-                                                   "priv_peak_mb":  468.4,
-                                                   "slope_tail_mb_per_s":  0.0,
-                                                   "tail_window_s":  59.8,
-                                                   "window_s":  59.8
-                                               }
-                                },
-                        "login_conn_diag":  {
-                                                "total":  1000,
-                                                "no_resp":  865,
-                                                "no_resp_rx0":  865,
-                                                "no_resp_rx_gt0":  0,
-                                                "direction":  "upstream-csharp-stack",
-                                                "direction_rule":  "rx_bytes==0 ⇒ 上游（服务端没在这条连接上回过任何字节）；rx_bytes\u003e0 且无 529 ⇒ 假人侧收包/解析丢失",
-                                                "no_resp_first_tick":  674469515,
-                                                "no_resp_last_tick":  674486875,
-                                                "no_resp_span_ms":  17360,
-                                                "no_resp_resend":  0,
-                                                "no_resp_resend_ok":  0,
-                                                "bucket_ms":  5000,
-                                                "buckets":  [
-                                                                {
-                                                                    "t0":  674465000,
-                                                                    "count":  26,
-                                                                    "rx0":  26,
-                                                                    "rx_gt0":  0
-                                                                },
-                                                                {
-                                                                    "t0":  674470000,
-                                                                    "count":  249,
-                                                                    "rx0":  249,
-                                                                    "rx_gt0":  0
-                                                                },
-                                                                {
-                                                                    "t0":  674475000,
-                                                                    "count":  245,
-                                                                    "rx0":  245,
-                                                                    "rx_gt0":  0
-                                                                },
-                                                                {
-                                                                    "t0":  674480000,
-                                                                    "count":  252,
-                                                                    "rx0":  252,
-                                                                    "rx_gt0":  0
-                                                                },
-                                                                {
-                                                                    "t0":  674485000,
-                                                                    "count":  93,
-                                                                    "rx0":  93,
-                                                                    "rx_gt0":  0
-                                                                }
-                                                            ]
-                                            },
-                        "count":  1000,
-                        "stagger_ms":  20,
-                        "hold_sec":  60,
-                        "login_threshold_pct":  95.0,
-                        "tick_missing":  true,
-                        "ramp_target":  950,
-                        "criteria":  [
-                                         "login",
-                                         "conn",
-                                         "tick"
-                                     ],
-                        "allow_missing_tick":  false,
-                        "verdict":  "RED",
-                        "fails":  [
-                                      "登录成功率 13.5% \u003c 95.0%",
-                                      "缺 tick 样本（tick_p99_ms = None）：默认判 RED；确实拿不到 tick 的场景也必须显式加 --allow-missing-tick"
-                                  ],
-                        "run":  3
-                    }
-                ],
-    "caliber":  "tick 服务时延 = BotSrv 收到 #+GD/\u003crtime\u003e! 的时刻 − rtime（Environment.TickCount，全机同域）；详见 tools/botload/load_report.py",
-    "allow_missing_tick":  false,
-    "action_probe":  true,
-    "criteria":  "login,conn,tick",
-    "hold_sec":  60,
-    "login_resend_ms":  0,
-    "action_probe_ms":  1000,
-    "out_dir":  "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\.claude\\worktrees\\c6\\tests\\loadgate\\load-20261011-162213",
-    "login_threshold_pct":  0
+  "worst_of_runs_rule": "每档取 N 轮里最低的登录成功率与阈值比；且每一轮的 conn/tick/internal 判据都必须 GREEN",
+  "worst_by_tier": {
+    "200": {
+      "worst_login_pct": 100,
+      "verdict": "GREEN",
+      "threshold": 100,
+      "runs": [
+        {
+          "run": 1,
+          "login_success_pct": 100,
+          "verdict": "GREEN",
+          "conn_lost_steady": 0,
+          "samples": 1004,
+          "tick_p99_ms": 31,
+          "internal_errors": 0
+        },
+        {
+          "run": 2,
+          "login_success_pct": 100,
+          "verdict": "GREEN",
+          "conn_lost_steady": 0,
+          "samples": 864,
+          "tick_p99_ms": 16,
+          "internal_errors": 0
+        },
+        {
+          "run": 3,
+          "login_success_pct": 100,
+          "verdict": "GREEN",
+          "conn_lost_steady": 0,
+          "samples": 906,
+          "tick_p99_ms": 16,
+          "internal_errors": 0
+        }
+      ],
+      "count": 200
+    },
+    "500": {
+      "worst_login_pct": 100,
+      "verdict": "GREEN",
+      "threshold": 100,
+      "runs": [
+        {
+          "run": 1,
+          "login_success_pct": 100,
+          "verdict": "GREEN",
+          "conn_lost_steady": 0,
+          "samples": 1012,
+          "tick_p99_ms": 32,
+          "internal_errors": 0
+        },
+        {
+          "run": 2,
+          "login_success_pct": 100,
+          "verdict": "GREEN",
+          "conn_lost_steady": 0,
+          "samples": 1012,
+          "tick_p99_ms": 32,
+          "internal_errors": 0
+        },
+        {
+          "run": 3,
+          "login_success_pct": 100,
+          "verdict": "GREEN",
+          "conn_lost_steady": 0,
+          "samples": 847,
+          "tick_p99_ms": 47,
+          "internal_errors": 0
+        }
+      ],
+      "count": 500
+    },
+    "1000": {
+      "worst_login_pct": 13.5,
+      "verdict": "RED",
+      "threshold": 95,
+      "runs": [
+        {
+          "run": 1,
+          "login_success_pct": 100,
+          "verdict": "GREEN",
+          "conn_lost_steady": 0,
+          "samples": 709,
+          "tick_p99_ms": 16,
+          "internal_errors": 0
+        },
+        {
+          "run": 2,
+          "login_success_pct": 100,
+          "verdict": "GREEN",
+          "conn_lost_steady": 0,
+          "samples": 587,
+          "tick_p99_ms": 16,
+          "internal_errors": 0
+        },
+        {
+          "run": 3,
+          "login_success_pct": 13.5,
+          "verdict": "RED",
+          "conn_lost_steady": 0,
+          "samples": 0,
+          "tick_p99_ms": null,
+          "internal_errors": 0
+        }
+      ],
+      "count": 1000
+    }
+  },
+  "tiers": [
+    200,
+    500,
+    1000
+  ],
+  "stagger_ms": 20,
+  "repeat": 3,
+  "reports": [
+    {
+      "samples": 1004,
+      "samples_total": 1004,
+      "max_ms": 32,
+      "mean_ms": 1.23,
+      "ramp_complete": true,
+      "steady_window_ms": 60110,
+      "peak_login_ok": 200,
+      "login_success_pct": 100.0,
+      "conn_refused": 2,
+      "conn_lost": 0,
+      "conn_lost_ramp": 0,
+      "conn_lost_steady": 0,
+      "hist_bucket_ms": 1,
+      "world_ok": 21,
+      "world_ok_pct": 10.5,
+      "probe_sent": 1108,
+      "internal_errors": 0,
+      "login_conn_total": 200,
+      "login_conn_no_resp": 0,
+      "login_conn_no_resp_rx0": 0,
+      "login_conn_resend": 0,
+      "login_conn_resend_ok": 0,
+      "login_send_failed": 0,
+      "tick_p50_ms": 0,
+      "tick_p90_ms": 0,
+      "tick_p99_ms": 31,
+      "ramp_ms": 10015,
+      "clock_granularity_note": "Environment.TickCount 在 Windows 上粒度约 15.6ms（单样本 ±16ms 量化，是测量下限，不是噪声消除）",
+      "mem": {
+        "DBSrv": {
+          "samples": 29,
+          "ws_peak_mb": 90.4,
+          "ws_mean_mb": 88.6,
+          "ws_last_mb": 90,
+          "priv_peak_mb": 48.3,
+          "slope_tail_mb_per_s": 0.132,
+          "tail_window_s": 58.1,
+          "window_s": 58.1
+        },
+        "GameGate": {
+          "samples": 29,
+          "ws_peak_mb": 70.2,
+          "ws_mean_mb": 65.0,
+          "ws_last_mb": 70.2,
+          "priv_peak_mb": 56.9,
+          "slope_tail_mb_per_s": 0.151,
+          "tail_window_s": 58.1,
+          "window_s": 58.1
+        },
+        "GameSrv": {
+          "samples": 29,
+          "ws_peak_mb": 283.3,
+          "ws_mean_mb": 281.3,
+          "ws_last_mb": 282.1,
+          "priv_peak_mb": 238.6,
+          "slope_tail_mb_per_s": 0.058,
+          "tail_window_s": 58.1,
+          "window_s": 58.1
+        },
+        "LoginGate": {
+          "samples": 29,
+          "ws_peak_mb": 56.5,
+          "ws_mean_mb": 55.2,
+          "ws_last_mb": 56.5,
+          "priv_peak_mb": 21.9,
+          "slope_tail_mb_per_s": 0.014,
+          "tail_window_s": 58.1,
+          "window_s": 58.1
+        },
+        "LoginSrv": {
+          "samples": 29,
+          "ws_peak_mb": 68.8,
+          "ws_mean_mb": 65.6,
+          "ws_last_mb": 68.8,
+          "priv_peak_mb": 29.8,
+          "slope_tail_mb_per_s": 0.115,
+          "tail_window_s": 58.1,
+          "window_s": 58.1
+        },
+        "SelGate": {
+          "samples": 29,
+          "ws_peak_mb": 56.8,
+          "ws_mean_mb": 55.3,
+          "ws_last_mb": 55.5,
+          "priv_peak_mb": 23.3,
+          "slope_tail_mb_per_s": -0.021,
+          "tail_window_s": 58.1,
+          "window_s": 58.1
+        },
+        "mysqld": {
+          "samples": 29,
+          "ws_peak_mb": 154.3,
+          "ws_mean_mb": 154.3,
+          "ws_last_mb": 154.3,
+          "priv_peak_mb": 469.0,
+          "slope_tail_mb_per_s": 0.0,
+          "tail_window_s": 58.1,
+          "window_s": 58.1
+        }
+      },
+      "login_conn_diag": {
+        "total": 200,
+        "no_resp": 0,
+        "no_resp_rx0": 0,
+        "no_resp_rx_gt0": 0,
+        "direction": "none",
+        "direction_rule": "rx_bytes==0 ⇒ 服务端在这条连接上没回过任何字节（方向=服务端未回；触发条件——C# 栈上限 vs 同机负载——未归属，待空载复测）；rx_bytes>0 且无 529 ⇒ 假人侧收包/解析丢失",
+        "no_resp_first_tick": null,
+        "no_resp_last_tick": null,
+        "no_resp_span_ms": 0,
+        "no_resp_resend": 0,
+        "no_resp_resend_ok": 0,
+        "bucket_ms": 5000,
+        "buckets": []
+      },
+      "count": 200,
+      "stagger_ms": 20,
+      "hold_sec": 60,
+      "login_threshold_pct": 100.0,
+      "ramp_target": 200,
+      "criteria": [
+        "login",
+        "conn",
+        "tick"
+      ],
+      "allow_missing_tick": false,
+      "verdict": "GREEN",
+      "fails": [],
+      "run": 1
+    },
+    {
+      "samples": 1012,
+      "samples_total": 1012,
+      "max_ms": 47,
+      "mean_ms": 3.19,
+      "ramp_complete": true,
+      "steady_window_ms": 60140,
+      "peak_login_ok": 500,
+      "login_success_pct": 100.0,
+      "conn_refused": 1,
+      "conn_lost": 0,
+      "conn_lost_ramp": 0,
+      "conn_lost_steady": 0,
+      "hist_bucket_ms": 1,
+      "world_ok": 21,
+      "world_ok_pct": 4.2,
+      "probe_sent": 1048,
+      "internal_errors": 0,
+      "login_conn_total": 500,
+      "login_conn_no_resp": 0,
+      "login_conn_no_resp_rx0": 0,
+      "login_conn_resend": 0,
+      "login_conn_resend_ok": 0,
+      "login_send_failed": 0,
+      "tick_p50_ms": 0,
+      "tick_p90_ms": 15,
+      "tick_p99_ms": 32,
+      "ramp_ms": 25094,
+      "clock_granularity_note": "Environment.TickCount 在 Windows 上粒度约 15.6ms（单样本 ±16ms 量化，是测量下限，不是噪声消除）",
+      "mem": {
+        "DBSrv": {
+          "samples": 29,
+          "ws_peak_mb": 98.6,
+          "ws_mean_mb": 91.5,
+          "ws_last_mb": 92.5,
+          "priv_peak_mb": 55.8,
+          "slope_tail_mb_per_s": 0.16,
+          "tail_window_s": 58.7,
+          "window_s": 58.7
+        },
+        "GameGate": {
+          "samples": 28,
+          "ws_peak_mb": 113.2,
+          "ws_mean_mb": 109.5,
+          "ws_last_mb": 113.2,
+          "priv_peak_mb": 101.8,
+          "slope_tail_mb_per_s": 0.181,
+          "tail_window_s": 56.6,
+          "window_s": 56.6
+        },
+        "GameSrv": {
+          "samples": 29,
+          "ws_peak_mb": 283.9,
+          "ws_mean_mb": 281.5,
+          "ws_last_mb": 283.6,
+          "priv_peak_mb": 239.4,
+          "slope_tail_mb_per_s": 0.245,
+          "tail_window_s": 58.7,
+          "window_s": 58.7
+        },
+        "LoginGate": {
+          "samples": 29,
+          "ws_peak_mb": 102.9,
+          "ws_mean_mb": 101.8,
+          "ws_last_mb": 102.6,
+          "priv_peak_mb": 68.8,
+          "slope_tail_mb_per_s": 0.02,
+          "tail_window_s": 58.7,
+          "window_s": 58.7
+        },
+        "LoginSrv": {
+          "samples": 29,
+          "ws_peak_mb": 76.8,
+          "ws_mean_mb": 73.4,
+          "ws_last_mb": 76.8,
+          "priv_peak_mb": 37.6,
+          "slope_tail_mb_per_s": 0.092,
+          "tail_window_s": 58.7,
+          "window_s": 58.7
+        },
+        "SelGate": {
+          "samples": 29,
+          "ws_peak_mb": 103.8,
+          "ws_mean_mb": 102.9,
+          "ws_last_mb": 103.0,
+          "priv_peak_mb": 70.6,
+          "slope_tail_mb_per_s": -0.014,
+          "tail_window_s": 58.7,
+          "window_s": 58.7
+        },
+        "mysqld": {
+          "samples": 29,
+          "ws_peak_mb": 154.7,
+          "ws_mean_mb": 153.0,
+          "ws_last_mb": 154.7,
+          "priv_peak_mb": 468.9,
+          "slope_tail_mb_per_s": 0.744,
+          "tail_window_s": 58.7,
+          "window_s": 58.7
+        }
+      },
+      "login_conn_diag": {
+        "total": 500,
+        "no_resp": 0,
+        "no_resp_rx0": 0,
+        "no_resp_rx_gt0": 0,
+        "direction": "none",
+        "direction_rule": "rx_bytes==0 ⇒ 服务端在这条连接上没回过任何字节（方向=服务端未回；触发条件——C# 栈上限 vs 同机负载——未归属，待空载复测）；rx_bytes>0 且无 529 ⇒ 假人侧收包/解析丢失",
+        "no_resp_first_tick": null,
+        "no_resp_last_tick": null,
+        "no_resp_span_ms": 0,
+        "no_resp_resend": 0,
+        "no_resp_resend_ok": 0,
+        "bucket_ms": 5000,
+        "buckets": []
+      },
+      "count": 500,
+      "stagger_ms": 20,
+      "hold_sec": 60,
+      "login_threshold_pct": 100.0,
+      "ramp_target": 500,
+      "criteria": [
+        "login",
+        "conn",
+        "tick"
+      ],
+      "allow_missing_tick": false,
+      "verdict": "GREEN",
+      "fails": [],
+      "run": 1
+    },
+    {
+      "samples": 709,
+      "samples_total": 782,
+      "max_ms": 62,
+      "mean_ms": 0.71,
+      "ramp_complete": true,
+      "steady_window_ms": 55140,
+      "peak_login_ok": 1000,
+      "login_success_pct": 100.0,
+      "conn_refused": 3,
+      "conn_lost": 0,
+      "conn_lost_ramp": 0,
+      "conn_lost_steady": 0,
+      "hist_bucket_ms": 1,
+      "world_ok": 15,
+      "world_ok_pct": 1.5,
+      "probe_sent": 871,
+      "internal_errors": 0,
+      "login_conn_total": 1000,
+      "login_conn_no_resp": 0,
+      "login_conn_no_resp_rx0": 0,
+      "login_conn_resend": 0,
+      "login_conn_resend_ok": 0,
+      "login_send_failed": 0,
+      "tick_p50_ms": 0,
+      "tick_p90_ms": 0,
+      "tick_p99_ms": 16,
+      "ramp_ms": 25063,
+      "clock_granularity_note": "Environment.TickCount 在 Windows 上粒度约 15.6ms（单样本 ±16ms 量化，是测量下限，不是噪声消除）",
+      "mem": {
+        "DBSrv": {
+          "samples": 29,
+          "ws_peak_mb": 90.4,
+          "ws_mean_mb": 87.4,
+          "ws_last_mb": 86.8,
+          "priv_peak_mb": 49.2,
+          "slope_tail_mb_per_s": -0.06,
+          "tail_window_s": 58.5,
+          "window_s": 58.5
+        },
+        "GameGate": {
+          "samples": 29,
+          "ws_peak_mb": 177.4,
+          "ws_mean_mb": 173.9,
+          "ws_last_mb": 176.7,
+          "priv_peak_mb": 167.5,
+          "slope_tail_mb_per_s": 0.05,
+          "tail_window_s": 58.5,
+          "window_s": 58.5
+        },
+        "GameSrv": {
+          "samples": 29,
+          "ws_peak_mb": 283.9,
+          "ws_mean_mb": 282.9,
+          "ws_last_mb": 282.7,
+          "priv_peak_mb": 240.7,
+          "slope_tail_mb_per_s": 0.016,
+          "tail_window_s": 58.5,
+          "window_s": 58.5
+        },
+        "LoginGate": {
+          "samples": 29,
+          "ws_peak_mb": 118.0,
+          "ws_mean_mb": 116.6,
+          "ws_last_mb": 118.0,
+          "priv_peak_mb": 84.3,
+          "slope_tail_mb_per_s": 0.033,
+          "tail_window_s": 58.5,
+          "window_s": 58.5
+        },
+        "LoginSrv": {
+          "samples": 29,
+          "ws_peak_mb": 77.8,
+          "ws_mean_mb": 77.1,
+          "ws_last_mb": 77.1,
+          "priv_peak_mb": 39.3,
+          "slope_tail_mb_per_s": 0.001,
+          "tail_window_s": 58.5,
+          "window_s": 58.5
+        },
+        "SelGate": {
+          "samples": 29,
+          "ws_peak_mb": 116.3,
+          "ws_mean_mb": 116.0,
+          "ws_last_mb": 116.3,
+          "priv_peak_mb": 84.0,
+          "slope_tail_mb_per_s": 0.006,
+          "tail_window_s": 58.5,
+          "window_s": 58.5
+        },
+        "mysqld": {
+          "samples": 29,
+          "ws_peak_mb": 155.5,
+          "ws_mean_mb": 155.5,
+          "ws_last_mb": 155.5,
+          "priv_peak_mb": 469.3,
+          "slope_tail_mb_per_s": 0.0,
+          "tail_window_s": 58.5,
+          "window_s": 58.5
+        }
+      },
+      "login_conn_diag": {
+        "total": 1000,
+        "no_resp": 0,
+        "no_resp_rx0": 0,
+        "no_resp_rx_gt0": 0,
+        "direction": "none",
+        "direction_rule": "rx_bytes==0 ⇒ 服务端在这条连接上没回过任何字节（方向=服务端未回；触发条件——C# 栈上限 vs 同机负载——未归属，待空载复测）；rx_bytes>0 且无 529 ⇒ 假人侧收包/解析丢失",
+        "no_resp_first_tick": null,
+        "no_resp_last_tick": null,
+        "no_resp_span_ms": 0,
+        "no_resp_resend": 0,
+        "no_resp_resend_ok": 0,
+        "bucket_ms": 5000,
+        "buckets": []
+      },
+      "count": 1000,
+      "stagger_ms": 20,
+      "hold_sec": 60,
+      "login_threshold_pct": 95.0,
+      "ramp_target": 950,
+      "criteria": [
+        "login",
+        "conn",
+        "tick"
+      ],
+      "allow_missing_tick": false,
+      "verdict": "GREEN",
+      "fails": [],
+      "run": 1
+    },
+    {
+      "samples": 864,
+      "samples_total": 865,
+      "max_ms": 32,
+      "mean_ms": 0.49,
+      "ramp_complete": true,
+      "steady_window_ms": 60093,
+      "peak_login_ok": 200,
+      "login_success_pct": 100.0,
+      "conn_refused": 1,
+      "conn_lost": 0,
+      "conn_lost_ramp": 0,
+      "conn_lost_steady": 0,
+      "hist_bucket_ms": 1,
+      "world_ok": 19,
+      "world_ok_pct": 9.5,
+      "probe_sent": 1037,
+      "internal_errors": 0,
+      "login_conn_total": 200,
+      "login_conn_no_resp": 0,
+      "login_conn_no_resp_rx0": 0,
+      "login_conn_resend": 0,
+      "login_conn_resend_ok": 0,
+      "login_send_failed": 0,
+      "tick_p50_ms": 0,
+      "tick_p90_ms": 0,
+      "tick_p99_ms": 16,
+      "ramp_ms": 10032,
+      "clock_granularity_note": "Environment.TickCount 在 Windows 上粒度约 15.6ms（单样本 ±16ms 量化，是测量下限，不是噪声消除）",
+      "mem": {
+        "DBSrv": {
+          "samples": 29,
+          "ws_peak_mb": 88,
+          "ws_mean_mb": 86.1,
+          "ws_last_mb": 86.4,
+          "priv_peak_mb": 46.8,
+          "slope_tail_mb_per_s": 0.005,
+          "tail_window_s": 57.9,
+          "window_s": 57.9
+        },
+        "GameGate": {
+          "samples": 29,
+          "ws_peak_mb": 67.7,
+          "ws_mean_mb": 63.8,
+          "ws_last_mb": 67.7,
+          "priv_peak_mb": 54.5,
+          "slope_tail_mb_per_s": 0.091,
+          "tail_window_s": 57.9,
+          "window_s": 57.9
+        },
+        "GameSrv": {
+          "samples": 29,
+          "ws_peak_mb": 283.5,
+          "ws_mean_mb": 281.3,
+          "ws_last_mb": 282.2,
+          "priv_peak_mb": 238.9,
+          "slope_tail_mb_per_s": 0.043,
+          "tail_window_s": 57.9,
+          "window_s": 57.9
+        },
+        "LoginGate": {
+          "samples": 29,
+          "ws_peak_mb": 56.4,
+          "ws_mean_mb": 55.3,
+          "ws_last_mb": 56.4,
+          "priv_peak_mb": 21.9,
+          "slope_tail_mb_per_s": 0.018,
+          "tail_window_s": 57.9,
+          "window_s": 57.9
+        },
+        "LoginSrv": {
+          "samples": 29,
+          "ws_peak_mb": 68.7,
+          "ws_mean_mb": 65.4,
+          "ws_last_mb": 68.7,
+          "priv_peak_mb": 29.7,
+          "slope_tail_mb_per_s": 0.093,
+          "tail_window_s": 57.9,
+          "window_s": 57.9
+        },
+        "SelGate": {
+          "samples": 29,
+          "ws_peak_mb": 57.6,
+          "ws_mean_mb": 55.5,
+          "ws_last_mb": 55.6,
+          "priv_peak_mb": 24.3,
+          "slope_tail_mb_per_s": -0.036,
+          "tail_window_s": 57.9,
+          "window_s": 57.9
+        },
+        "mysqld": {
+          "samples": 29,
+          "ws_peak_mb": 154.6,
+          "ws_mean_mb": 154.6,
+          "ws_last_mb": 154.6,
+          "priv_peak_mb": 469.1,
+          "slope_tail_mb_per_s": 0.001,
+          "tail_window_s": 57.9,
+          "window_s": 57.9
+        }
+      },
+      "login_conn_diag": {
+        "total": 200,
+        "no_resp": 0,
+        "no_resp_rx0": 0,
+        "no_resp_rx_gt0": 0,
+        "direction": "none",
+        "direction_rule": "rx_bytes==0 ⇒ 服务端在这条连接上没回过任何字节（方向=服务端未回；触发条件——C# 栈上限 vs 同机负载——未归属，待空载复测）；rx_bytes>0 且无 529 ⇒ 假人侧收包/解析丢失",
+        "no_resp_first_tick": null,
+        "no_resp_last_tick": null,
+        "no_resp_span_ms": 0,
+        "no_resp_resend": 0,
+        "no_resp_resend_ok": 0,
+        "bucket_ms": 5000,
+        "buckets": []
+      },
+      "count": 200,
+      "stagger_ms": 20,
+      "hold_sec": 60,
+      "login_threshold_pct": 100.0,
+      "ramp_target": 200,
+      "criteria": [
+        "login",
+        "conn",
+        "tick"
+      ],
+      "allow_missing_tick": false,
+      "verdict": "GREEN",
+      "fails": [],
+      "run": 2
+    },
+    {
+      "samples": 1012,
+      "samples_total": 1018,
+      "max_ms": 32,
+      "mean_ms": 3.08,
+      "ramp_complete": true,
+      "steady_window_ms": 60125,
+      "peak_login_ok": 500,
+      "login_success_pct": 100.0,
+      "conn_refused": 2,
+      "conn_lost": 0,
+      "conn_lost_ramp": 0,
+      "conn_lost_steady": 0,
+      "hist_bucket_ms": 1,
+      "world_ok": 20,
+      "world_ok_pct": 4.0,
+      "probe_sent": 1125,
+      "internal_errors": 0,
+      "login_conn_total": 500,
+      "login_conn_no_resp": 0,
+      "login_conn_no_resp_rx0": 0,
+      "login_conn_resend": 0,
+      "login_conn_resend_ok": 0,
+      "login_send_failed": 0,
+      "tick_p50_ms": 0,
+      "tick_p90_ms": 16,
+      "tick_p99_ms": 32,
+      "ramp_ms": 15016,
+      "clock_granularity_note": "Environment.TickCount 在 Windows 上粒度约 15.6ms（单样本 ±16ms 量化，是测量下限，不是噪声消除）",
+      "mem": {
+        "DBSrv": {
+          "samples": 29,
+          "ws_peak_mb": 99,
+          "ws_mean_mb": 89.0,
+          "ws_last_mb": 87.2,
+          "priv_peak_mb": 57.2,
+          "slope_tail_mb_per_s": -0.2,
+          "tail_window_s": 58.4,
+          "window_s": 58.4
+        },
+        "GameGate": {
+          "samples": 29,
+          "ws_peak_mb": 115.7,
+          "ws_mean_mb": 111.3,
+          "ws_last_mb": 115.7,
+          "priv_peak_mb": 104,
+          "slope_tail_mb_per_s": 0.099,
+          "tail_window_s": 58.4,
+          "window_s": 58.4
+        },
+        "GameSrv": {
+          "samples": 29,
+          "ws_peak_mb": 284.9,
+          "ws_mean_mb": 282.2,
+          "ws_last_mb": 282.4,
+          "priv_peak_mb": 241.0,
+          "slope_tail_mb_per_s": -0.043,
+          "tail_window_s": 58.4,
+          "window_s": 58.4
+        },
+        "LoginGate": {
+          "samples": 29,
+          "ws_peak_mb": 103.3,
+          "ws_mean_mb": 101.8,
+          "ws_last_mb": 102.9,
+          "priv_peak_mb": 69.4,
+          "slope_tail_mb_per_s": 0.021,
+          "tail_window_s": 58.4,
+          "window_s": 58.4
+        },
+        "LoginSrv": {
+          "samples": 29,
+          "ws_peak_mb": 76.9,
+          "ws_mean_mb": 73.4,
+          "ws_last_mb": 76.9,
+          "priv_peak_mb": 37.8,
+          "slope_tail_mb_per_s": 0.094,
+          "tail_window_s": 58.4,
+          "window_s": 58.4
+        },
+        "SelGate": {
+          "samples": 29,
+          "ws_peak_mb": 104.9,
+          "ws_mean_mb": 102.9,
+          "ws_last_mb": 103.1,
+          "priv_peak_mb": 71.5,
+          "slope_tail_mb_per_s": -0.03,
+          "tail_window_s": 58.4,
+          "window_s": 58.4
+        },
+        "mysqld": {
+          "samples": 29,
+          "ws_peak_mb": 154.8,
+          "ws_mean_mb": 154.6,
+          "ws_last_mb": 154.8,
+          "priv_peak_mb": 469.1,
+          "slope_tail_mb_per_s": 0.004,
+          "tail_window_s": 58.4,
+          "window_s": 58.4
+        }
+      },
+      "login_conn_diag": {
+        "total": 500,
+        "no_resp": 0,
+        "no_resp_rx0": 0,
+        "no_resp_rx_gt0": 0,
+        "direction": "none",
+        "direction_rule": "rx_bytes==0 ⇒ 服务端在这条连接上没回过任何字节（方向=服务端未回；触发条件——C# 栈上限 vs 同机负载——未归属，待空载复测）；rx_bytes>0 且无 529 ⇒ 假人侧收包/解析丢失",
+        "no_resp_first_tick": null,
+        "no_resp_last_tick": null,
+        "no_resp_span_ms": 0,
+        "no_resp_resend": 0,
+        "no_resp_resend_ok": 0,
+        "bucket_ms": 5000,
+        "buckets": []
+      },
+      "count": 500,
+      "stagger_ms": 20,
+      "hold_sec": 60,
+      "login_threshold_pct": 100.0,
+      "ramp_target": 500,
+      "criteria": [
+        "login",
+        "conn",
+        "tick"
+      ],
+      "allow_missing_tick": false,
+      "verdict": "GREEN",
+      "fails": [],
+      "run": 2
+    },
+    {
+      "samples": 587,
+      "samples_total": 683,
+      "max_ms": 63,
+      "mean_ms": 2.92,
+      "ramp_complete": true,
+      "steady_window_ms": 55218,
+      "peak_login_ok": 1000,
+      "login_success_pct": 100.0,
+      "conn_refused": 2,
+      "conn_lost": 0,
+      "conn_lost_ramp": 0,
+      "conn_lost_steady": 0,
+      "hist_bucket_ms": 1,
+      "world_ok": 16,
+      "world_ok_pct": 1.6,
+      "probe_sent": 944,
+      "internal_errors": 0,
+      "login_conn_total": 1000,
+      "login_conn_no_resp": 0,
+      "login_conn_no_resp_rx0": 0,
+      "login_conn_resend": 0,
+      "login_conn_resend_ok": 0,
+      "login_send_failed": 0,
+      "tick_p50_ms": 0,
+      "tick_p90_ms": 15,
+      "tick_p99_ms": 16,
+      "ramp_ms": 25063,
+      "clock_granularity_note": "Environment.TickCount 在 Windows 上粒度约 15.6ms（单样本 ±16ms 量化，是测量下限，不是噪声消除）",
+      "mem": {
+        "DBSrv": {
+          "samples": 29,
+          "ws_peak_mb": 89.6,
+          "ws_mean_mb": 86.5,
+          "ws_last_mb": 86.2,
+          "priv_peak_mb": 47.6,
+          "slope_tail_mb_per_s": -0.059,
+          "tail_window_s": 58.6,
+          "window_s": 58.6
+        },
+        "GameGate": {
+          "samples": 29,
+          "ws_peak_mb": 176.2,
+          "ws_mean_mb": 174.9,
+          "ws_last_mb": 175.8,
+          "priv_peak_mb": 165.9,
+          "slope_tail_mb_per_s": 0.036,
+          "tail_window_s": 58.6,
+          "window_s": 58.6
+        },
+        "GameSrv": {
+          "samples": 29,
+          "ws_peak_mb": 284.7,
+          "ws_mean_mb": 282.6,
+          "ws_last_mb": 281.1,
+          "priv_peak_mb": 241.3,
+          "slope_tail_mb_per_s": -0.017,
+          "tail_window_s": 58.6,
+          "window_s": 58.6
+        },
+        "LoginGate": {
+          "samples": 29,
+          "ws_peak_mb": 121.6,
+          "ws_mean_mb": 120.3,
+          "ws_last_mb": 121.0,
+          "priv_peak_mb": 88.2,
+          "slope_tail_mb_per_s": 0.026,
+          "tail_window_s": 58.6,
+          "window_s": 58.6
+        },
+        "LoginSrv": {
+          "samples": 29,
+          "ws_peak_mb": 74.0,
+          "ws_mean_mb": 72.6,
+          "ws_last_mb": 72.5,
+          "priv_peak_mb": 33.9,
+          "slope_tail_mb_per_s": -0.014,
+          "tail_window_s": 58.6,
+          "window_s": 58.6
+        },
+        "SelGate": {
+          "samples": 29,
+          "ws_peak_mb": 118.8,
+          "ws_mean_mb": 118.1,
+          "ws_last_mb": 118.8,
+          "priv_peak_mb": 85.5,
+          "slope_tail_mb_per_s": 0.034,
+          "tail_window_s": 58.6,
+          "window_s": 58.6
+        },
+        "mysqld": {
+          "samples": 29,
+          "ws_peak_mb": 155.0,
+          "ws_mean_mb": 155.0,
+          "ws_last_mb": 155.0,
+          "priv_peak_mb": 469.3,
+          "slope_tail_mb_per_s": 0.0,
+          "tail_window_s": 58.6,
+          "window_s": 58.6
+        }
+      },
+      "login_conn_diag": {
+        "total": 1000,
+        "no_resp": 0,
+        "no_resp_rx0": 0,
+        "no_resp_rx_gt0": 0,
+        "direction": "none",
+        "direction_rule": "rx_bytes==0 ⇒ 服务端在这条连接上没回过任何字节（方向=服务端未回；触发条件——C# 栈上限 vs 同机负载——未归属，待空载复测）；rx_bytes>0 且无 529 ⇒ 假人侧收包/解析丢失",
+        "no_resp_first_tick": null,
+        "no_resp_last_tick": null,
+        "no_resp_span_ms": 0,
+        "no_resp_resend": 0,
+        "no_resp_resend_ok": 0,
+        "bucket_ms": 5000,
+        "buckets": []
+      },
+      "count": 1000,
+      "stagger_ms": 20,
+      "hold_sec": 60,
+      "login_threshold_pct": 95.0,
+      "ramp_target": 950,
+      "criteria": [
+        "login",
+        "conn",
+        "tick"
+      ],
+      "allow_missing_tick": false,
+      "verdict": "GREEN",
+      "fails": [],
+      "run": 2
+    },
+    {
+      "samples": 906,
+      "samples_total": 906,
+      "max_ms": 78,
+      "mean_ms": 0.58,
+      "ramp_complete": true,
+      "steady_window_ms": 60110,
+      "peak_login_ok": 200,
+      "login_success_pct": 100.0,
+      "conn_refused": 2,
+      "conn_lost": 0,
+      "conn_lost_ramp": 0,
+      "conn_lost_steady": 0,
+      "hist_bucket_ms": 1,
+      "world_ok": 22,
+      "world_ok_pct": 11.0,
+      "probe_sent": 1176,
+      "internal_errors": 0,
+      "login_conn_total": 200,
+      "login_conn_no_resp": 0,
+      "login_conn_no_resp_rx0": 0,
+      "login_conn_resend": 0,
+      "login_conn_resend_ok": 0,
+      "login_send_failed": 0,
+      "tick_p50_ms": 0,
+      "tick_p90_ms": 0,
+      "tick_p99_ms": 16,
+      "ramp_ms": 10031,
+      "clock_granularity_note": "Environment.TickCount 在 Windows 上粒度约 15.6ms（单样本 ±16ms 量化，是测量下限，不是噪声消除）",
+      "mem": {
+        "DBSrv": {
+          "samples": 30,
+          "ws_peak_mb": 82.9,
+          "ws_mean_mb": 76.8,
+          "ws_last_mb": 75.6,
+          "priv_peak_mb": 40.2,
+          "slope_tail_mb_per_s": -0.118,
+          "tail_window_s": 59.9,
+          "window_s": 59.9
+        },
+        "GameGate": {
+          "samples": 30,
+          "ws_peak_mb": 63.5,
+          "ws_mean_mb": 62.3,
+          "ws_last_mb": 63.5,
+          "priv_peak_mb": 52.9,
+          "slope_tail_mb_per_s": 0.086,
+          "tail_window_s": 59.9,
+          "window_s": 59.9
+        },
+        "GameSrv": {
+          "samples": 30,
+          "ws_peak_mb": 284.6,
+          "ws_mean_mb": 278.0,
+          "ws_last_mb": 277.4,
+          "priv_peak_mb": 240.2,
+          "slope_tail_mb_per_s": -0.119,
+          "tail_window_s": 59.9,
+          "window_s": 59.9
+        },
+        "LoginGate": {
+          "samples": 30,
+          "ws_peak_mb": 59.0,
+          "ws_mean_mb": 57.5,
+          "ws_last_mb": 58.2,
+          "priv_peak_mb": 23.5,
+          "slope_tail_mb_per_s": 0.018,
+          "tail_window_s": 59.9,
+          "window_s": 59.9
+        },
+        "LoginSrv": {
+          "samples": 30,
+          "ws_peak_mb": 61.6,
+          "ws_mean_mb": 61.2,
+          "ws_last_mb": 61.3,
+          "priv_peak_mb": 22,
+          "slope_tail_mb_per_s": 0.003,
+          "tail_window_s": 59.9,
+          "window_s": 59.9
+        },
+        "SelGate": {
+          "samples": 30,
+          "ws_peak_mb": 60.1,
+          "ws_mean_mb": 58.0,
+          "ws_last_mb": 57.9,
+          "priv_peak_mb": 25.6,
+          "slope_tail_mb_per_s": -0.036,
+          "tail_window_s": 59.9,
+          "window_s": 59.9
+        },
+        "mysqld": {
+          "samples": 30,
+          "ws_peak_mb": 154.4,
+          "ws_mean_mb": 154.4,
+          "ws_last_mb": 154.4,
+          "priv_peak_mb": 469.1,
+          "slope_tail_mb_per_s": 0.0,
+          "tail_window_s": 59.9,
+          "window_s": 59.9
+        }
+      },
+      "login_conn_diag": {
+        "total": 200,
+        "no_resp": 0,
+        "no_resp_rx0": 0,
+        "no_resp_rx_gt0": 0,
+        "direction": "none",
+        "direction_rule": "rx_bytes==0 ⇒ 服务端在这条连接上没回过任何字节（方向=服务端未回；触发条件——C# 栈上限 vs 同机负载——未归属，待空载复测）；rx_bytes>0 且无 529 ⇒ 假人侧收包/解析丢失",
+        "no_resp_first_tick": null,
+        "no_resp_last_tick": null,
+        "no_resp_span_ms": 0,
+        "no_resp_resend": 0,
+        "no_resp_resend_ok": 0,
+        "bucket_ms": 5000,
+        "buckets": []
+      },
+      "count": 200,
+      "stagger_ms": 20,
+      "hold_sec": 60,
+      "login_threshold_pct": 100.0,
+      "ramp_target": 200,
+      "criteria": [
+        "login",
+        "conn",
+        "tick"
+      ],
+      "allow_missing_tick": false,
+      "verdict": "GREEN",
+      "fails": [],
+      "run": 3
+    },
+    {
+      "samples": 847,
+      "samples_total": 847,
+      "max_ms": 63,
+      "mean_ms": 9.01,
+      "ramp_complete": true,
+      "steady_window_ms": 60344,
+      "peak_login_ok": 500,
+      "login_success_pct": 100.0,
+      "conn_refused": 3,
+      "conn_lost": 0,
+      "conn_lost_ramp": 0,
+      "conn_lost_steady": 0,
+      "hist_bucket_ms": 1,
+      "world_ok": 20,
+      "world_ok_pct": 4.0,
+      "probe_sent": 1083,
+      "internal_errors": 0,
+      "login_conn_total": 500,
+      "login_conn_no_resp": 0,
+      "login_conn_no_resp_rx0": 0,
+      "login_conn_resend": 0,
+      "login_conn_resend_ok": 0,
+      "login_send_failed": 0,
+      "tick_p50_ms": 0,
+      "tick_p90_ms": 16,
+      "tick_p99_ms": 47,
+      "ramp_ms": 15015,
+      "clock_granularity_note": "Environment.TickCount 在 Windows 上粒度约 15.6ms（单样本 ±16ms 量化，是测量下限，不是噪声消除）",
+      "mem": {
+        "DBSrv": {
+          "samples": 29,
+          "ws_peak_mb": 86.5,
+          "ws_mean_mb": 79.1,
+          "ws_last_mb": 77.9,
+          "priv_peak_mb": 44.1,
+          "slope_tail_mb_per_s": -0.144,
+          "tail_window_s": 58.7,
+          "window_s": 58.7
+        },
+        "GameGate": {
+          "samples": 29,
+          "ws_peak_mb": 110.3,
+          "ws_mean_mb": 107.9,
+          "ws_last_mb": 108.4,
+          "priv_peak_mb": 100.1,
+          "slope_tail_mb_per_s": -0.009,
+          "tail_window_s": 58.7,
+          "window_s": 58.7
+        },
+        "GameSrv": {
+          "samples": 29,
+          "ws_peak_mb": 287.7,
+          "ws_mean_mb": 277.2,
+          "ws_last_mb": 272.2,
+          "priv_peak_mb": 243.3,
+          "slope_tail_mb_per_s": -0.262,
+          "tail_window_s": 58.7,
+          "window_s": 58.7
+        },
+        "LoginGate": {
+          "samples": 29,
+          "ws_peak_mb": 102.5,
+          "ws_mean_mb": 101.4,
+          "ws_last_mb": 102.4,
+          "priv_peak_mb": 67.8,
+          "slope_tail_mb_per_s": 0.021,
+          "tail_window_s": 58.7,
+          "window_s": 58.7
+        },
+        "LoginSrv": {
+          "samples": 29,
+          "ws_peak_mb": 62.1,
+          "ws_mean_mb": 61.8,
+          "ws_last_mb": 61.8,
+          "priv_peak_mb": 23.1,
+          "slope_tail_mb_per_s": 0.004,
+          "tail_window_s": 58.7,
+          "window_s": 58.7
+        },
+        "SelGate": {
+          "samples": 29,
+          "ws_peak_mb": 106.2,
+          "ws_mean_mb": 103.8,
+          "ws_last_mb": 103.8,
+          "priv_peak_mb": 72.4,
+          "slope_tail_mb_per_s": -0.039,
+          "tail_window_s": 58.7,
+          "window_s": 58.7
+        },
+        "mysqld": {
+          "samples": 29,
+          "ws_peak_mb": 155.2,
+          "ws_mean_mb": 155.2,
+          "ws_last_mb": 155.2,
+          "priv_peak_mb": 469.1,
+          "slope_tail_mb_per_s": 0.0,
+          "tail_window_s": 58.7,
+          "window_s": 58.7
+        }
+      },
+      "login_conn_diag": {
+        "total": 500,
+        "no_resp": 0,
+        "no_resp_rx0": 0,
+        "no_resp_rx_gt0": 0,
+        "direction": "none",
+        "direction_rule": "rx_bytes==0 ⇒ 服务端在这条连接上没回过任何字节（方向=服务端未回；触发条件——C# 栈上限 vs 同机负载——未归属，待空载复测）；rx_bytes>0 且无 529 ⇒ 假人侧收包/解析丢失",
+        "no_resp_first_tick": null,
+        "no_resp_last_tick": null,
+        "no_resp_span_ms": 0,
+        "no_resp_resend": 0,
+        "no_resp_resend_ok": 0,
+        "bucket_ms": 5000,
+        "buckets": []
+      },
+      "count": 500,
+      "stagger_ms": 20,
+      "hold_sec": 60,
+      "login_threshold_pct": 100.0,
+      "ramp_target": 500,
+      "criteria": [
+        "login",
+        "conn",
+        "tick"
+      ],
+      "allow_missing_tick": false,
+      "verdict": "GREEN",
+      "fails": [],
+      "run": 3
+    },
+    {
+      "samples": 0,
+      "samples_total": 0,
+      "max_ms": 0,
+      "mean_ms": null,
+      "ramp_complete": false,
+      "steady_window_ms": 658484,
+      "peak_login_ok": 135,
+      "login_success_pct": 13.5,
+      "conn_refused": 2,
+      "conn_lost": 0,
+      "conn_lost_ramp": 0,
+      "conn_lost_steady": 0,
+      "hist_bucket_ms": 1,
+      "world_ok": 0,
+      "world_ok_pct": 0.0,
+      "probe_sent": 0,
+      "internal_errors": 0,
+      "login_conn_total": 1000,
+      "login_conn_no_resp": 865,
+      "login_conn_no_resp_rx0": 865,
+      "login_conn_resend": 0,
+      "login_conn_resend_ok": 0,
+      "login_send_failed": 0,
+      "tick_p50_ms": null,
+      "tick_p90_ms": null,
+      "tick_p99_ms": null,
+      "ramp_ms": null,
+      "clock_granularity_note": "Environment.TickCount 在 Windows 上粒度约 15.6ms（单样本 ±16ms 量化，是测量下限，不是噪声消除）",
+      "mem": {
+        "DBSrv": {
+          "samples": 30,
+          "ws_peak_mb": 71.1,
+          "ws_mean_mb": 71.0,
+          "ws_last_mb": 71.0,
+          "priv_peak_mb": 32.0,
+          "slope_tail_mb_per_s": 0.001,
+          "tail_window_s": 59.8,
+          "window_s": 59.8
+        },
+        "GameGate": {
+          "samples": 30,
+          "ws_peak_mb": 59.9,
+          "ws_mean_mb": 58.7,
+          "ws_last_mb": 58.4,
+          "priv_peak_mb": 48.9,
+          "slope_tail_mb_per_s": -0.002,
+          "tail_window_s": 59.8,
+          "window_s": 59.8
+        },
+        "GameSrv": {
+          "samples": 30,
+          "ws_peak_mb": 286.7,
+          "ws_mean_mb": 284.2,
+          "ws_last_mb": 285,
+          "priv_peak_mb": 242.1,
+          "slope_tail_mb_per_s": -0.029,
+          "tail_window_s": 59.8,
+          "window_s": 59.8
+        },
+        "LoginGate": {
+          "samples": 30,
+          "ws_peak_mb": 140.3,
+          "ws_mean_mb": 139.9,
+          "ws_last_mb": 139.8,
+          "priv_peak_mb": 104.6,
+          "slope_tail_mb_per_s": 0.0,
+          "tail_window_s": 59.8,
+          "window_s": 59.8
+        },
+        "SelGate": {
+          "samples": 30,
+          "ws_peak_mb": 59.9,
+          "ws_mean_mb": 59.3,
+          "ws_last_mb": 59.6,
+          "priv_peak_mb": 26.3,
+          "slope_tail_mb_per_s": 0.011,
+          "tail_window_s": 59.8,
+          "window_s": 59.8
+        },
+        "mysqld": {
+          "samples": 30,
+          "ws_peak_mb": 106.4,
+          "ws_mean_mb": 106.4,
+          "ws_last_mb": 106.4,
+          "priv_peak_mb": 468.4,
+          "slope_tail_mb_per_s": 0.0,
+          "tail_window_s": 59.8,
+          "window_s": 59.8
+        }
+      },
+      "login_conn_diag": {
+        "total": 1000,
+        "no_resp": 865,
+        "no_resp_rx0": 865,
+        "no_resp_rx_gt0": 0,
+        "direction": "server-no-response",
+        "direction_rule": "rx_bytes==0 ⇒ 服务端在这条连接上没回过任何字节（方向=服务端未回；触发条件——C# 栈上限 vs 同机负载——未归属，待空载复测）；rx_bytes>0 且无 529 ⇒ 假人侧收包/解析丢失",
+        "no_resp_first_tick": 674469515,
+        "no_resp_last_tick": 674486875,
+        "no_resp_span_ms": 17360,
+        "no_resp_resend": 0,
+        "no_resp_resend_ok": 0,
+        "bucket_ms": 5000,
+        "buckets": [
+          {
+            "t0": 674465000,
+            "count": 26,
+            "rx0": 26,
+            "rx_gt0": 0
+          },
+          {
+            "t0": 674470000,
+            "count": 249,
+            "rx0": 249,
+            "rx_gt0": 0
+          },
+          {
+            "t0": 674475000,
+            "count": 245,
+            "rx0": 245,
+            "rx_gt0": 0
+          },
+          {
+            "t0": 674480000,
+            "count": 252,
+            "rx0": 252,
+            "rx_gt0": 0
+          },
+          {
+            "t0": 674485000,
+            "count": 93,
+            "rx0": 93,
+            "rx_gt0": 0
+          }
+        ]
+      },
+      "count": 1000,
+      "stagger_ms": 20,
+      "hold_sec": 60,
+      "login_threshold_pct": 95.0,
+      "tick_missing": true,
+      "ramp_target": 950,
+      "criteria": [
+        "login",
+        "conn",
+        "tick"
+      ],
+      "allow_missing_tick": false,
+      "verdict": "RED",
+      "fails": [
+        "登录成功率 13.5% < 95.0%",
+        "缺 tick 样本（tick_p99_ms = None）：默认判 RED；确实拿不到 tick 的场景也必须显式加 --allow-missing-tick"
+      ],
+      "run": 3
+    }
+  ],
+  "caliber": "tick 服务时延 = BotSrv 收到 #+GD/<rtime>! 的时刻 − rtime（Environment.TickCount，全机同域）；详见 tools/botload/load_report.py",
+  "allow_missing_tick": false,
+  "action_probe": true,
+  "criteria": "login,conn,tick",
+  "hold_sec": 60,
+  "login_resend_ms": 0,
+  "action_probe_ms": 1000,
+  "out_dir": "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\.claude\\worktrees\\c6\\tests\\loadgate\\load-20261011-162213",
+  "login_threshold_pct": 0,
+  "artifacts": [
+    {
+      "file": "run-1/tier-1000/load_stats.ndjson",
+      "sha256": "5a663f1798d619c942b3214bc11fcb38b03488a936667095c66f4475d932e93b"
+    },
+    {
+      "file": "run-1/tier-1000/login_conns.ndjson",
+      "sha256": "0dac519bfdad9bd88256521e56b49e1cf51dba1568d7e3c88765a017472e4e4b"
+    },
+    {
+      "file": "run-1/tier-1000/mem.ndjson",
+      "sha256": "7ab27aa0b6f2a9f9a8230abc8f38d94fcc05bf9245796170a4820c50a2322d8c"
+    },
+    {
+      "file": "run-1/tier-1000/report.json",
+      "sha256": "e16d37b58789195a0be62a9b8a98a7aeb9a1353c1af7cee7709b5bd9c354f2ad"
+    },
+    {
+      "file": "run-1/tier-200/load_stats.ndjson",
+      "sha256": "d6e8758b528ae5202a810343987e54c630c53fc26f69c8e4ae0970ba382e8659"
+    },
+    {
+      "file": "run-1/tier-200/mem.ndjson",
+      "sha256": "c5339d0cabb64fb32efeec5665fe89a3138307bccb7b6e022d43344db550ffb1"
+    },
+    {
+      "file": "run-1/tier-200/report.json",
+      "sha256": "a3794f28575ca37a7d5b3aa02bcabe56b37e7a6fd5f34625c1d909c976966e63"
+    },
+    {
+      "file": "run-1/tier-500/load_stats.ndjson",
+      "sha256": "5ce8ed0a51770e29a73f535bc4164c80323a339e93abd03ee10b1dec6a472458"
+    },
+    {
+      "file": "run-1/tier-500/mem.ndjson",
+      "sha256": "8480577ed45427dab7168a51b3160d31d66e4cbe7f3ae22792f5a55489ac330e"
+    },
+    {
+      "file": "run-1/tier-500/report.json",
+      "sha256": "93e555f17df93e04568dc46b6fc3c3d1f220266964474b84c47c558aea83b2f4"
+    },
+    {
+      "file": "run-2/tier-1000/load_stats.ndjson",
+      "sha256": "3ee69f158e628507d1d232edcce36cb18f70cbde83ced7ecb0f9cabb18b0b495"
+    },
+    {
+      "file": "run-2/tier-1000/login_conns.ndjson",
+      "sha256": "d780c51c684dbbb1792e5a32e8e87a13744414e27b9b3ce1778c28c765947b53"
+    },
+    {
+      "file": "run-2/tier-1000/mem.ndjson",
+      "sha256": "cb42b79704d30af63ac2da141c40b2e1cfac8956e27c84d6766c776379dca2f6"
+    },
+    {
+      "file": "run-2/tier-1000/report.json",
+      "sha256": "3d80f7a6fed3d2d124fbb0b559a350760f4589b17a00ac2b6863af55708872c4"
+    },
+    {
+      "file": "run-2/tier-200/load_stats.ndjson",
+      "sha256": "6f8b6863f4dfc1192ceeea2aa701e8e8b5250242458cae78addb8b562d8d17ca"
+    },
+    {
+      "file": "run-2/tier-200/mem.ndjson",
+      "sha256": "9d1f20804df92108bd87d2517d2a632f24a08af3ff101bcf5ff0ccaed66fe99d"
+    },
+    {
+      "file": "run-2/tier-200/report.json",
+      "sha256": "ed0bac4bc107f8c5aed01fcd0ffad8b89781636e70d8b3772a7dc25801fd90c3"
+    },
+    {
+      "file": "run-2/tier-500/load_stats.ndjson",
+      "sha256": "37a6de55c5a7f63cf12912976d08b239d73cbb69fbc91865be7d6dfa7f5dbc28"
+    },
+    {
+      "file": "run-2/tier-500/mem.ndjson",
+      "sha256": "23e9143f8661fb5102743d56310fd3823fa37328f3479a999d5098bf70abd88c"
+    },
+    {
+      "file": "run-2/tier-500/report.json",
+      "sha256": "dc24a9351df5f306e8f075b46efb8bce52c203cb58c562a54533315c9245e4c2"
+    },
+    {
+      "file": "run-3/tier-1000/load_stats.ndjson",
+      "sha256": "cbdc3d3c32656b88f096382636fc8542b234cc02f4fb071b1e5dbbe95dc99b77"
+    },
+    {
+      "file": "run-3/tier-1000/login_conns.ndjson",
+      "sha256": "3d981f493c2ec5da04c937d2a4c280211743117b9fa03328953034a60386e56f"
+    },
+    {
+      "file": "run-3/tier-1000/mem.ndjson",
+      "sha256": "368a188bacb04e39bc5dddfdc9f8d49229150ce4e74a9d6e902edc3a138317e9"
+    },
+    {
+      "file": "run-3/tier-1000/report.json",
+      "sha256": "32fb8f291ba69629201d0d7c608503f4ef8d94a9b760055df1bc86312f79a874"
+    },
+    {
+      "file": "run-3/tier-200/load_stats.ndjson",
+      "sha256": "1033cf28425e8abd0599bcebc728300343ec70469a36f4d549d404ba164d2cef"
+    },
+    {
+      "file": "run-3/tier-200/mem.ndjson",
+      "sha256": "bf5fcc911f28312b8300dc0ef7d57055ad7cf7ba904e6c6d73a206925391d186"
+    },
+    {
+      "file": "run-3/tier-200/report.json",
+      "sha256": "0878a1b510b191d63f064aa896a10ffa36fa015859b0e42641a14ba87be90006"
+    },
+    {
+      "file": "run-3/tier-500/load_stats.ndjson",
+      "sha256": "b273593de1d4f3c5fd7cc8a9421a4449120d3166dd6dc1ac4154effd2ca9eba0"
+    },
+    {
+      "file": "run-3/tier-500/mem.ndjson",
+      "sha256": "5fb76eebffb31ff4b0591be9ec67b02f3f2a2d9b8323c8187dfe8853fd3c76d5"
+    },
+    {
+      "file": "run-3/tier-500/report.json",
+      "sha256": "9fcbee5ce1d053acc7325861b10bd1015f794e0beb3cc6fb9513e20b245cd26b"
+    }
+  ],
+  "artifacts_note": "F9 清单（file/sha256）：与 load_gate.ps1 的 artifacts 逻辑同构（E=load_gate 原生产出；A/C 早于 F9，用同逻辑回填，产物未变）"
 }

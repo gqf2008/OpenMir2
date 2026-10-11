@@ -67,26 +67,62 @@ powershell -ExecutionPolicy Bypass -File tools/botload/load_gate.ps1 -SelfTestRe
 
 为什么不是「100%」：
 
-- 被测栈是 **C# 部署栈**（`tools/e2e/stack_e2e.ps1` → `E:\MirServer\start-all.ps1`：DBSrv/LoginSrv 来自
-  `src/**` 构建，LoginGate/SelGate/M2GameSvr 来自部署包），**不是 Rust 侧** ⇒ tier-1000 的残余丢包是
-  「上游（oracle 栈）在 1000 并发登录下的性质」，不是 Rust 移植缺陷；改它等于改 oracle 行为（红线）。
+- 被测栈是 **C# 部署栈**（`tools/e2e/stack_e2e.ps1` → `E:\MirServer\start-all.ps1`），**不是 Rust 侧**；
+  改它等于改 oracle 行为（红线）。
 - 两轮独立实测已证否「100%」：reviewer-3 在自己检出上同命令两连跑，A 三档全 GREEN；B 的 tier-1000 =
-  **94.8%（948/1000）**、爬坡未完成 ⇒ RED（`cdea5e32` / `67af4cac`）。本轮 T-11 观测把方向证出来：
-  1000 个假人**全部连上并发出**登录包（`login_sent=1000`/`conn_ok=1000`/`conn_err_*=0`），少的那部分
-  连接服务端**一个字节都没回**（`rx_bytes=0`），同连接重发也拿不到应答（见
-  `tests/loadgate/README.md》残余丢包方向`）。
+  **94.8%（948/1000）**、爬坡未完成 ⇒ RED（`cdea5e32` / `67af4cac`）。第 5 轮三连跑 tier-1000 登录 =
+  100%/100%/100%（`load-20261011-155529`）⇒ 登录率**通常**是 100%，95% 是给「偶发丢包窗口」留的下界。
+- T-11 把丢包**方向**证出来（`tests/loadgate/README.md》残余丢包方向`）：无应答连接 `rx_bytes==0`、
+  同连接重发也不回 ⇒ **不是假人侧收包/解析丢失**，是服务端在这条连接上没回。但「服务端为什么没回」
+  （C# 栈自身的 1000 并发上限，还是同机并发编译造成的 CPU 饥饿）**未归属**，必须空载窗口复测才能定。
+  复现件：`load-20261011-162213/run-3`（865/1000）、`load-20261011-132401/run-4`（646/1000）。
 - 95% 是**可复现的下界**（3 连跑取最差），不是把已知失败当通过：它把「波动区间」与「回归」分开——
   真正的回归（如 T-9 那类系统性丢弃，tier-500 179/500 = 35.8%）会被 95% 稳稳抓住（见《红检》）。
 
 阈值与理由同时写在 `load_gate.ps1` 的 `Get-LoginThreshold` 与 `load_report.py` 的
 `LOGIN_THRESHOLD_BY_MIN_TIER`（注释），二者必须一致；`load_report.py selftest` 有断言。
 
-**实测（第 5 轮两次整命令，均 `-Repeat 3`）**：`load-20261011-155529`（与 m2svr/wbevy 构建并行）与
-`load-20261011-162213`（与 wbevy 构建并行）——tier-200/500 六轮全 GREEN；tier-1000 的**登录率**
-可复现（A：100%/100%/100%；C：100%/100%/13.5%），但仍有**两条独立波动源**：① `tick P99` 在 tier-1000
-上 2/3 轮越界（A：125/201ms，C6-3）；② 上游 LoginSrv 在 1000 并发登录下会停摆且不恢复
-（C r3：865/1000 无应答、`rx_bytes=0`，C6-4）。两条都不归因于登录阈值，均已登记在
+### 本机负载探针与「独占窗口」（owner 裁决 `82f8e0c3` ④）
+
+`load_gate.ps1` 每档采 `hostload.ndjson`（CPU=`Win32_Processor.LoadPercentage` 均值 + 重型进程数
+`rustc/cargo/cargo-clippy/msbuild`，口径照 tickbench `probe_load_window`），`load_report.py` 归算成
+`report.json.host_load`（`cpu_mean/cpu_peak/heavy_procs_max/heavy_names_seen/loaded_window`），并写进
+`SUMMARY.md` 的 verdict 表。**只标注、不判红。**
+
+该 gate **必须在没有其它车道编译/压测的窗口跑**：tick P99 = 「服务端 rtime → 客户端收帧耗时」，
+本机并发编译会让 P99 出现 125/201ms 这种离散度，且**目前无法归属**（C# 参考栈 vs 同机负载）。
+`host_load.loaded_window=true`（CPU 峰 ≥ 40% 或 heavy 峰 ≥ 4）⇒ 该轮 P99 **未归属**，报告里必须写明
+「待空载窗口复测」。`load-20261011-155529`（与 m2svr/wbevy 并行）、`load-20261011-162213`（与 wbevy 并行）
+两轮即属加载窗口；安静窗口的 P99 复测登记为后续项。
+
+### M5 tick 判据的现状（写实）
+
+**§6 M5 的「tick P99 ≤ 100ms」目前在任何栈上都未验证通过**——C# 参考栈 1000 档实测 125/201ms
+（加载窗口内，归属待空载复测）；待 Rust 栈接管后（M5 灰度）复测。另：`in_world` 实测只有 ~10%
+（tier-500/1000 稳态 15~26）⇒ **不得**用这三档宣称「M5 三档：1000 假人在线」；「假人真正进世界」
+是 M5 收尾缺口（归宿：卡 `openmir2-botsrv-world-evidence`）。
+
+**实测（第 5 轮三次整命令，均 `-Repeat 3`）**：`load-20261011-155529`（与 m2svr/wbevy 构建并行）、
+`load-20261011-162213`（与 wbevy 构建并行）、`load-20261011-165805`（带 host_load 探针；见
+`tests/loadgate/README.md》第 5 轮结论` 的 3 连跑表）——tier-200/500 各轮全 GREEN；tier-1000 的**登录率**
+通常 100%（A），但仍有**两条独立波动源**：① `tick P99` 在 tier-1000 上多轮越界（A：125/201ms）——加载窗口内
+**未归属**，待空载复测（C6-3）；② 服务端在 1000 并发登录下会停摆不恢复（C r3：865/1000 无应答、`rx_bytes=0`）——
+方向已证为服务端未回，触发条件未归属（C6-4）。两条都不归因于登录阈值，均已登记在
 `tests/loadgate/README.md》第 5 轮遗留`；判据未授权改的不动。
+
+### 探针样本缺口与落点偏置（F5，2026-10-11 第 5 轮登记）
+
+`probe_sent`（探针实际发出的 `CM_TURN` 数）与 `samples`（稳态窗 tick 样本数）之间的缺口：
+
+1. **落点偏置（主因）**：`RobotPlayer.ProbeActionTick` 的 `CM_TURN.Recog = MakeLong(_probeX,_probeY)`，
+   而 `_probeX/_probeY` 是 `MarkInWorld`（收到本假人 `SM_LOGON`）时记下的**入图落点**；服务端
+   `ClientChangeDir` 只在 `nX==CurrX && nY==CurrY` 时才回 `#+GD`。假人一旦移动（自动挂机/被推/切图），
+   落点就不等于服务端坐标 ⇒ 该假人的后续探针**全部被服务端判 false**（发了不回 ack）。
+2. **窗口边界**：稳态窗起点之前发出的探针不计入。
+
+实测缺口（`probe_sent / samples`）：`load-20261011-155529` tier-200 621/569、tier-1000 1086/775；
+`load-20261011-165805` tier-200 1206/916。⇒ tick P99 是「仍停在入图落点的那部分假人」的样本，
+**不是全体 1000 假人**；与 `in_world`（覆盖基数）一起读。修法（按本假人当前坐标刷新 Recog）登记为后续项。
 
 ### 「同一命令多连跑」的表述（owner 裁决 `11dbde39` ③）
 

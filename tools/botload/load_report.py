@@ -213,7 +213,7 @@ def summarize_login_conns(rows, bucket_ms=5000):
     if not no_resp:
         direction = "none"
     elif not rx_gt0:
-        direction = "upstream-csharp-stack"   # 全部 rx_bytes==0：服务端没回过任何字节
+        direction = "server-no-response"   # 全部 rx_bytes==0：服务端没回过任何字节
     elif not rx0:
         direction = "bot-client"              # 全部 rx_bytes>0：假人侧收包/解析丢了
     else:
@@ -226,7 +226,8 @@ def summarize_login_conns(rows, bucket_ms=5000):
         "no_resp_rx0": len(rx0),
         "no_resp_rx_gt0": len(rx_gt0),
         "direction": direction,
-        "direction_rule": ("rx_bytes==0 ⇒ 上游（服务端没在这条连接上回过任何字节）；"
+        "direction_rule": ("rx_bytes==0 ⇒ 服务端在这条连接上没回过任何字节（方向=服务端未回；"
+                           "触发条件——C# 栈上限 vs 同机负载——未归属，待空载复测）；"
                            "rx_bytes>0 且无 529 ⇒ 假人侧收包/解析丢失"),
         "no_resp_first_tick": (ticks[0] if ticks else None),
         "no_resp_last_tick": (ticks[-1] if ticks else None),
@@ -236,6 +237,35 @@ def summarize_login_conns(rows, bucket_ms=5000):
         "bucket_ms": bucket_ms,
         "buckets": [buckets[k] for k in sorted(buckets)],
     }
+
+
+def summarize_hostload(rows):
+    """本机负载探针归算（owner 裁决 `82f8e0c3` ④；口径照 tickbench `probe_load_window`）。
+
+    只**标注**不判红：tick P99 在共享机器上不可归属（C# 参考栈 vs 同机并发编译），
+    必须空载窗口才能定；本块给报告读者一个「这轮 P99 是在什么负载下量的」的可审阅字段。
+    """
+    cpu = [r.get("cpu_pct") for r in rows
+           if isinstance(r.get("cpu_pct"), (int, float)) and r.get("cpu_pct") >= 0]
+    heavy = [r.get("heavy_procs", 0) or 0 for r in rows]
+    names = set()
+    for r in rows:
+        for nm in (r.get("heavy_names") or "").split(","):
+            nm = nm.strip()
+            if nm:
+                names.add(nm)
+    out = {
+        "samples": len(rows),
+        "cpu_mean_pct": (round(sum(cpu) / len(cpu), 1) if cpu else None),
+        "cpu_peak_pct": (max(cpu) if cpu else None),
+        "heavy_procs_max": (max(heavy) if heavy else 0),
+        "heavy_names_seen": sorted(names),
+        "caliber": ("CPU = Win32_Processor.LoadPercentage 均值(%)；heavy = "
+                    "rustc/cargo/cargo-clippy/msbuild 进程数（照 tickbench probe_load_window）"),
+    }
+    out["loaded_window"] = bool((out["cpu_peak_pct"] is not None and out["cpu_peak_pct"] >= 40)
+                                or out["heavy_procs_max"] >= 4)
+    return out
 
 
 def judge(tier, thresholds, criteria=("login", "conn", "tick"), allow_missing_tick=False,
@@ -287,6 +317,8 @@ def cmd_summarize(args):
         tier["mem"] = summarize_mem(load_ndjson(args.mem))
     if args.login_conns and os.path.exists(args.login_conns):
         tier["login_conn_diag"] = summarize_login_conns(load_ndjson(args.login_conns))
+    if args.hostload and os.path.exists(args.hostload):
+        tier["host_load"] = summarize_hostload(load_ndjson(args.hostload))
     tier["count"] = args.count
     tier["stagger_ms"] = args.stagger_ms
     tier["hold_sec"] = args.hold_sec
@@ -353,7 +385,7 @@ def cmd_selftest(_args):
           {"login_tick": 2000, "rx_bytes": 0, "saw_529": False, "resend_sends": 1},
           {"login_tick": 3000, "rx_bytes": 40, "saw_529": True, "resend_sends": 0}]
     d_up = summarize_login_conns(up)
-    expect(d_up["direction"] == "upstream-csharp-stack" and d_up["no_resp_rx0"] == 2,
+    expect(d_up["direction"] == "server-no-response" and d_up["no_resp_rx0"] == 2,
            "全 rx_bytes==0 应判「上游（C# 栈）」")
     expect(d_up["no_resp_resend"] == 2 and d_up["no_resp_resend_ok"] == 0,
            "重发对照应记「发 2 / 成功 0」")
@@ -366,6 +398,16 @@ def cmd_selftest(_args):
     expect(summarize_login_conns(up[:1] + bot[:1])["direction"] == "mixed", "两种都存在应判 mixed")
     expect(summarize_login_conns([{"login_tick": 1, "rx_bytes": 8, "saw_529": True}])["direction"] == "none",
            "无「无应答」连接应判 none")
+    # 2d) 本机负载探针（owner 裁决 82f8e0c3 ④）：CPU≥40 或 heavy≥4 ⇒ loaded_window
+    hl = summarize_hostload([{"cpu_pct": 10, "heavy_procs": 0},
+                             {"cpu_pct": 55, "heavy_procs": 2, "heavy_names": "cargo"}])
+    expect(hl["cpu_peak_pct"] == 55 and hl["cpu_mean_pct"] == 32.5 and hl["loaded_window"] is True,
+           "负载探针：CPU 峰值≥40 应判 loaded_window")
+    hl2 = summarize_hostload([{"cpu_pct": 5, "heavy_procs": 5, "heavy_names": "rustc,cargo"}])
+    expect(hl2["loaded_window"] is True and hl2["heavy_names_seen"] == ["cargo", "rustc"],
+           "负载探针：heavy≥4 应判 loaded_window，且应收取进程名")
+    expect(summarize_hostload([{"cpu_pct": 5, "heavy_procs": 0}])["loaded_window"] is False,
+           "低负载窗口不得判 loaded_window")
 
     # 3) 掉线：稳态掉线判红、爬坡期掉线不算稳态
     stats4 = [dict(stats[0], conn_lost=3), dict(stats[1], conn_lost=5)]
@@ -409,7 +451,7 @@ def cmd_selftest(_args):
     if not ok:
         print("RED: load_report selftest 有未通过项")
         return 1
-    print("GREEN: load_report selftest 全过（分位数/尾部敏感/爬坡判红/掉线分窗/内存斜率）")
+    print("GREEN: load_report selftest 全过（分位数/尾部敏感/登录阈值牙齿/掉线分窗/内存斜率/残余丢包方向/本机负载窗）")
     return 0
 
 
@@ -466,34 +508,38 @@ def cmd_aggregate(args):
                  f"login_threshold_pct）/ 稳态掉线 0 / tick P99 ≤ 100ms")
     lines.append("")
     has_run = any(t.get("run") for t in reports)
+
+    def _hl(t, key):
+        hl = t.get("host_load") or {}
+        v = hl.get(key)
+        return "-" if v is None else v
+
     if has_run:
-        lines.append("| 轮次 | 档位 | 登录成功率 | 阈值 | 稳态掉线 | 连不上 | tick P50 | P90 | P99 | max | 稳态样本 | 上线耗时 | 结论 |")
-        lines.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
+        lines.append("| 轮次 | 档位 | 登录成功率 | 阈值 | 稳态掉线 | in_world | tick P50 | P90 | P99 | max | 稳态样本(上线) | CPU峰% | 重进程峰 | 结论 |")
+        lines.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
     else:
-        lines.append("| 档位 | 登录成功率 | 阈值 | 稳态掉线 | 连不上 | tick P50 | P90 | P99 | max | 稳态样本 | 上线耗时 | 结论 |")
+        lines.append("| 档位 | 登录成功率 | 阈值 | 稳态掉线 | in_world | tick P50 | P90 | P99 | max | 稳态样本(上线) | CPU峰% | 重进程峰 | 结论 |")
         lines.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
     for t in sorted(reports, key=lambda r: (r.get("run", 0), r.get("count", 0))):
-        cells = [t.get("login_success_pct"), t.get("login_threshold_pct"), t.get("conn_lost_steady"),
-                 t.get("conn_refused"), t.get("tick_p50_ms"), t.get("tick_p90_ms"),
-                 t.get("tick_p99_ms"), t.get("max_ms"), t.get("samples"),
-                 ((str(round(t["ramp_ms"] / 1000.0, 1)) + "s") if t.get("ramp_ms") is not None else "-"),
-                 t.get("verdict")]
+        ramp = ((str(round(t["ramp_ms"] / 1000.0, 1)) + "s") if t.get("ramp_ms") is not None else "-")
         if has_run:
-            lines.append("| r{run} | {count} | {lsp}% | {thr}% | {cls} | {cr} | {p50} | {p90} | {p99} | {mx} | {n} | {ramp} | {v} |".format(
-                run=t.get("run"), count=t.get("count"), lsp=t.get("login_success_pct"),
-                thr=t.get("login_threshold_pct"), cls=t.get("conn_lost_steady"), cr=t.get("conn_refused"),
-                p50=t.get("tick_p50_ms"), p90=t.get("tick_p90_ms"), p99=t.get("tick_p99_ms"),
-                mx=t.get("max_ms"), n=t.get("samples"),
-                ramp=((str(round(t["ramp_ms"] / 1000.0, 1)) + "s") if t.get("ramp_ms") is not None else "-"),
-                v=t.get("verdict")))
+            lines.append(
+                "| r{run} | {count} | {lsp}% | {thr}% | {cls} | {iw} | {p50} | {p90} | {p99} | {mx} | "
+                "{n} ({ramp}) | {cpu} | {hv} | {v} |".format(
+                    run=t.get("run"), count=t.get("count"), lsp=t.get("login_success_pct"),
+                    thr=t.get("login_threshold_pct"), cls=t.get("conn_lost_steady"),
+                    iw=t.get("world_ok"), p50=t.get("tick_p50_ms"), p90=t.get("tick_p90_ms"),
+                    p99=t.get("tick_p99_ms"), mx=t.get("max_ms"), n=t.get("samples"), ramp=ramp,
+                    cpu=_hl(t, "cpu_peak_pct"), hv=_hl(t, "heavy_procs_max"), v=t.get("verdict")))
         else:
-            lines.append("| {count} | {lsp}% | {thr}% | {cls} | {cr} | {p50} | {p90} | {p99} | {mx} | {n} | {ramp} | {v} |".format(
-                count=t.get("count"), lsp=t.get("login_success_pct"), thr=t.get("login_threshold_pct"),
-                cls=t.get("conn_lost_steady"), cr=t.get("conn_refused"),
-                p50=t.get("tick_p50_ms"), p90=t.get("tick_p90_ms"), p99=t.get("tick_p99_ms"),
-                mx=t.get("max_ms"), n=t.get("samples"),
-                ramp=((str(round(t["ramp_ms"] / 1000.0, 1)) + "s") if t.get("ramp_ms") is not None else "-"),
-                v=t.get("verdict")))
+            lines.append(
+                "| {count} | {lsp}% | {thr}% | {cls} | {iw} | {p50} | {p90} | {p99} | {mx} | "
+                "{n} ({ramp}) | {cpu} | {hv} | {v} |".format(
+                    count=t.get("count"), lsp=t.get("login_success_pct"), thr=t.get("login_threshold_pct"),
+                    cls=t.get("conn_lost_steady"), iw=t.get("world_ok"),
+                    p50=t.get("tick_p50_ms"), p90=t.get("tick_p90_ms"), p99=t.get("tick_p99_ms"),
+                    mx=t.get("max_ms"), n=t.get("samples"), ramp=ramp,
+                    cpu=_hl(t, "cpu_peak_pct"), hv=_hl(t, "heavy_procs_max"), v=t.get("verdict")))
     # 3 连跑取最差：把 worst_by_tier 也写进 SUMMARY（若 gate 带 -Repeat > 1）
     wbt = data.get("worst_by_tier") or {}
     if wbt:
@@ -506,6 +552,29 @@ def cmd_aggregate(args):
             e = wbt[k]
             n_runs = len(e.get("runs", []))
             lines.append(f"| {k} | {n_runs} | {e.get('threshold')}% | {e.get('worst_login_pct')}% | {e.get('verdict')} |")
+    lines.append("")
+    lines.append("## tick P99 离散度与本机负载（owner 裁决 82f8e0c3 ⑤）")
+    lines.append("")
+    lines.append("tick 口径 = 服务端 `rtime` → 客户端收帧耗时（含 BotSrv 收包/调度）；P99 只在稳态窗、")
+    lines.append("样本基数 = `in_world`（真进世界的假人数，见下）。**本机负载探针**（CPU=Win32_Processor.LoadPercentage ")
+    lines.append("均值；heavy=rustc/cargo/cargo-clippy/msbuild 进程数，叧 tickbench）只用于**归属**：")
+    lines.append("CPU 峰 ≥ 40% 或 heavy 峰 ≥ 4 时 P99 **不可归属**（C# 参考栈 vs 同机并发编译）。")
+    lines.append("")
+    lines.append("| 轮次 | 档位 | in_world | probe_sent | tick_samples | P99 | max | CPU均/峰% | heavy峰 | 负载窗? |")
+    lines.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
+    for t in sorted(reports, key=lambda r: (r.get("run", 0), r.get("count", 0))):
+        hl = t.get("host_load") or {}
+        lines.append(
+            "| r{run} | {count} | {iw} | {ps} | {tsamp} | {p99} | {mx} | {cm}/{cp} | {hv} | {lw} |".format(
+                run=t.get("run") or "-", count=t.get("count"), iw=t.get("world_ok"),
+                ps=t.get("probe_sent"), tsamp=t.get("samples"), p99=t.get("tick_p99_ms"),
+                mx=t.get("max_ms"), cm=hl.get("cpu_mean_pct", "-"), cp=hl.get("cpu_peak_pct", "-"),
+                hv=hl.get("heavy_procs_max", "-"), lw=hl.get("loaded_window", "-")))
+    lines.append("")
+    lines.append("> **M5 待办（写实）**：§6 的「tick P99 ≤ 100ms」**目前在任何栈上都未验证通过**——")
+    lines.append("> C# 参考栈 1000 档实测 125/201ms（在共享负载窗口内，归属待空载复测）；待 Rust 栈接管后（M5 灰度）复测。")
+    lines.append("> 另：`in_world` 实测只有 ~10%（tier-500/1000 稳态 15~26），**不得**用这三档宣称「M5 三档：1000 假人在线」；")
+    lines.append("> 「假人真正进世界」是 M5 收尾缺口（归宿：卡 `openmir2-botsrv-world-evidence`）。")
     lines.append("")
     # 曲线 1：tick P99 / P50 / max vs 档位
     pts_p99 = [(t["count"], t["tick_p99_ms"] or 0) for t in sorted(reports, key=lambda r: r.get("count", 0))]
@@ -560,6 +629,8 @@ def main():
     s.add_argument("--out", default="")
     s.add_argument("--login-conns", default="",
                    help="BotSrv 落的 login_conns.ndjson（T-11 残余丢包方向归算；缺省不产出该块）")
+    s.add_argument("--hostload", default="",
+                   help="本机负载探针 hostload.ndjson（owner 裁决 82f8e0c3 ④；缺省不产出该块）")
     s.add_argument("--criteria", default="login,conn,tick",
                    help="判据子集（默认全三条）；M1 ⑤ 那种只比登录/连接的场景用 login,conn")
     s.add_argument("--login-threshold", type=float, default=None,

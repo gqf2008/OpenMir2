@@ -89,9 +89,55 @@
       "window_s": 19.4
     }
   },
+  "login_conn_diag": {
+    "total": 1000,
+    "no_resp": 646,
+    "no_resp_rx0": 646,
+    "no_resp_rx_gt0": 0,
+    "direction": "server-no-response",
+    "direction_rule": "rx_bytes==0 ⇒ 服务端在这条连接上没回过任何字节（方向=服务端未回；触发条件——C# 栈上限 vs 同机负载——未归属，待空载复测）；rx_bytes>0 且无 529 ⇒ 假人侧收包/解析丢失",
+    "no_resp_first_tick": 663164640,
+    "no_resp_last_tick": 663184609,
+    "no_resp_span_ms": 19969,
+    "no_resp_resend": 646,
+    "no_resp_resend_ok": 0,
+    "bucket_ms": 5000,
+    "buckets": [
+      {
+        "t0": 663160000,
+        "count": 3,
+        "rx0": 3,
+        "rx_gt0": 0
+      },
+      {
+        "t0": 663165000,
+        "count": 54,
+        "rx0": 54,
+        "rx_gt0": 0
+      },
+      {
+        "t0": 663170000,
+        "count": 94,
+        "rx0": 94,
+        "rx_gt0": 0
+      },
+      {
+        "t0": 663175000,
+        "count": 146,
+        "rx0": 146,
+        "rx_gt0": 0
+      },
+      {
+        "t0": 663180000,
+        "count": 349,
+        "rx0": 349,
+        "rx_gt0": 0
+      }
+    ]
+  },
   "count": 1000,
-  "stagger_ms": 20,
-  "hold_sec": 20,
+  "stagger_ms": 0,
+  "hold_sec": 0,
   "login_threshold_pct": 95.0,
   "tick_missing": true,
   "ramp_target": 950,
@@ -105,5 +151,6 @@
   "fails": [
     "登录成功率 35.4% < 95.0%",
     "缺 tick 样本（tick_p99_ms = None）：默认判 RED；确实拿不到 tick 的场景也必须显式加 --allow-missing-tick"
-  ]
+  ],
+  "run": 4
 }

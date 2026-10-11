@@ -1,0 +1,186 @@
+{
+  "generated_ms": null,
+  "files": [
+    {
+      "file": "run-1/tier-1000/hostload.ndjson",
+      "sha256": "5ba29d5ced45bb338bf651c5e5e63058b2b598e4637a2a81f1f62ee73f54fcd5"
+    },
+    {
+      "file": "run-1/tier-1000/load_stats.ndjson",
+      "sha256": "27f9bfcdb925f20691ddd98dd500dffd48f80cd4242bad25e2529102c70c4bb4"
+    },
+    {
+      "file": "run-1/tier-1000/login_conns.ndjson",
+      "sha256": "0f3e09d1b71b5ba0f9c7128174bcb8ba4d7ccf759478ba875e52d15ea6773361"
+    },
+    {
+      "file": "run-1/tier-1000/mem.ndjson",
+      "sha256": "ee2b46d82e4eaf076eae2b27b3cfd7b0c2eda9bb38c500042e0d14210dca04b8"
+    },
+    {
+      "file": "run-1/tier-1000/report.json",
+      "sha256": "454ce82883bf4398cb8c2821165ecb3ab8a82a6f10eedb0e68d3b00d690cf97f"
+    },
+    {
+      "file": "run-1/tier-200/hostload.ndjson",
+      "sha256": "203282c42d8374e6bb455fe3a326cb64cdf711e171779fa96b8c0f417fbc5dfa"
+    },
+    {
+      "file": "run-1/tier-200/load_stats.ndjson",
+      "sha256": "c2bea825f0147827ad61d226356ec52421ea81fec10bfebdf6e5e5869bfca460"
+    },
+    {
+      "file": "run-1/tier-200/login_conns.ndjson",
+      "sha256": "62084e1bb9ff2805d73baeb91860d3e53f0c3c76810bee71179d7fbb68ab9ea1"
+    },
+    {
+      "file": "run-1/tier-200/mem.ndjson",
+      "sha256": "c3ffb55d1ac87c3c0c8c80b9ad8a358725d7dc3917bd813e42c1e6b182f48729"
+    },
+    {
+      "file": "run-1/tier-200/report.json",
+      "sha256": "eaf6ff602d9e53a2f42083c7ed96b96d5066796f4362730dbef01c2501a02268"
+    },
+    {
+      "file": "run-1/tier-500/hostload.ndjson",
+      "sha256": "9486fd2adc1f65eb54936b765f8d5077f6b5d5bbbba9b797f70eb3b744d20036"
+    },
+    {
+      "file": "run-1/tier-500/load_stats.ndjson",
+      "sha256": "39ce2f306b551189464144c1240f08e00922691b90f3e323bfc17acf4cef02e0"
+    },
+    {
+      "file": "run-1/tier-500/login_conns.ndjson",
+      "sha256": "3e2e43eea804ff131e8cfe204b8d44144e09573a8b147a50aa1ea3b2e0868ebe"
+    },
+    {
+      "file": "run-1/tier-500/mem.ndjson",
+      "sha256": "cac16e458e252fc8e23d065bde9322cb9b0c3e7f868e58a48bdbd25ab5fff915"
+    },
+    {
+      "file": "run-1/tier-500/report.json",
+      "sha256": "8b8692139c6657522171671642635ac7f326ba45d2ecceba700d95229c04cbcb"
+    },
+    {
+      "file": "run-2/tier-1000/hostload.ndjson",
+      "sha256": "068ddb405261df3631cd45fcfa796b997e480204a53a34aacb4034c44936d9a9"
+    },
+    {
+      "file": "run-2/tier-1000/load_stats.ndjson",
+      "sha256": "b8a692cc732077e881562875d61377474ce91b5c2efdc0e205c9a1a5cd51bfd7"
+    },
+    {
+      "file": "run-2/tier-1000/login_conns.ndjson",
+      "sha256": "55546bb4934b6b6a875a42bbf305527af25ad6944022630cc0957d34285a08e4"
+    },
+    {
+      "file": "run-2/tier-1000/mem.ndjson",
+      "sha256": "d683d45863d203ee41100ccdec8823f6b88ed1077d693280ffe920083ce313dc"
+    },
+    {
+      "file": "run-2/tier-1000/report.json",
+      "sha256": "74001774478a741648ba010882a511da0e5f15cfc578553ae69e971e4076b619"
+    },
+    {
+      "file": "run-2/tier-200/hostload.ndjson",
+      "sha256": "4f7e4aa7dfa5abb87fc21f5e8c15e6c0b19771dec24bf92de158bce0bb49ca66"
+    },
+    {
+      "file": "run-2/tier-200/load_stats.ndjson",
+      "sha256": "aca985e1ff0409938271d82d5d1df2d0b0a7243f8f00d600a9b3d9e718ea1a64"
+    },
+    {
+      "file": "run-2/tier-200/login_conns.ndjson",
+      "sha256": "ab8e391be6051f96176a5fed7722d398063f22b65add4c97b853d451986c5cb9"
+    },
+    {
+      "file": "run-2/tier-200/mem.ndjson",
+      "sha256": "eb80ffa668150249fee88d653a69e78036541908bc030ffa7d462b931ee809b3"
+    },
+    {
+      "file": "run-2/tier-200/report.json",
+      "sha256": "8027e50a15d9deed1630414b439070e3016ad6e2da4001a000a7af1489f90651"
+    },
+    {
+      "file": "run-2/tier-500/hostload.ndjson",
+      "sha256": "bb081b381362e7d837ed0e600276b087f530328dddc506ebd01480bd2fa8ff48"
+    },
+    {
+      "file": "run-2/tier-500/load_stats.ndjson",
+      "sha256": "8b1f29bdb36785ff51379acd47ce1fa6b4e007d339130fd4e628038a12816b6a"
+    },
+    {
+      "file": "run-2/tier-500/login_conns.ndjson",
+      "sha256": "648d8d64226c12f65ebbc87673209f82a5fd947733946bf5e096613dbc002c6b"
+    },
+    {
+      "file": "run-2/tier-500/mem.ndjson",
+      "sha256": "83f35faa1802b0013957bf0b9f1e82a23b8b21465adbabef47ce8ef0035449c1"
+    },
+    {
+      "file": "run-2/tier-500/report.json",
+      "sha256": "ddc82976c614252651fc5250e8504f6750c15dd3fd1439c0beabdef8f1208edb"
+    },
+    {
+      "file": "run-3/tier-1000/hostload.ndjson",
+      "sha256": "1e4840d81b47db533c6f0209ed2e46e4072da540444defff4ed01288f60f1db2"
+    },
+    {
+      "file": "run-3/tier-1000/load_stats.ndjson",
+      "sha256": "83cc9372ca6ec70f20db4d341f58f4c4ad61231e0f75fc520f774102435e446e"
+    },
+    {
+      "file": "run-3/tier-1000/login_conns.ndjson",
+      "sha256": "ba3a97c4aa2a9fd68dd381598ab691b9b8d3b49b59a4b052aa6e220a7387631a"
+    },
+    {
+      "file": "run-3/tier-1000/mem.ndjson",
+      "sha256": "d03104b541af29d6a848f609a12cc92c2bad7b20c3a6558162db556477c2cf34"
+    },
+    {
+      "file": "run-3/tier-1000/report.json",
+      "sha256": "b2c0449ee3b97afaa890d90171eaffee909a52aa2279d81ab75e05ceeaec9037"
+    },
+    {
+      "file": "run-3/tier-200/hostload.ndjson",
+      "sha256": "98aaa5cb7272faf2bc4dae0d0f7ac288af555f5070cbf81ed056a0d5f05735c1"
+    },
+    {
+      "file": "run-3/tier-200/load_stats.ndjson",
+      "sha256": "5a5e10cfa3e017374a0ed2c5584455907c8f1eb1837bfdf31b1a42de89581cdf"
+    },
+    {
+      "file": "run-3/tier-200/login_conns.ndjson",
+      "sha256": "663390529cce5c15681f31e1b635ba0b371bbf84e61085527bef84bda11355f3"
+    },
+    {
+      "file": "run-3/tier-200/mem.ndjson",
+      "sha256": "6cbfbd39151734f5d1cfe139724f03511a9ec7c652b8a354c5f57b215a405492"
+    },
+    {
+      "file": "run-3/tier-200/report.json",
+      "sha256": "9ec5535f41f2cdba8ac08aaac3702f1e577e38352edb1e9027f49f38718bbe31"
+    },
+    {
+      "file": "run-3/tier-500/hostload.ndjson",
+      "sha256": "a259a2139bc3f1d9413202953bdb996d3c6a32deac9b836578f242702b2abce4"
+    },
+    {
+      "file": "run-3/tier-500/load_stats.ndjson",
+      "sha256": "1dd7a5b0e206f6310513c6c545c1456946c5b2062e61eee622810dc6cbf0bbcc"
+    },
+    {
+      "file": "run-3/tier-500/login_conns.ndjson",
+      "sha256": "a819ad56ba94a98fe7fb216c9355720fa0d27587b76f532dbb5cd433b1f67e9e"
+    },
+    {
+      "file": "run-3/tier-500/mem.ndjson",
+      "sha256": "8ad616799b594e233908be024abe66d6095347601bb2b96ae44e18237517f06d"
+    },
+    {
+      "file": "run-3/tier-500/report.json",
+      "sha256": "c3520b2790b1c54291f0266f99da16916f0a481908b951506c13b2fd01b554a7"
+    }
+  ],
+  "note": "F9 清单（file/sha256）：与 load_gate.ps1 的 artifacts 逻辑同构（E=load_gate 原生产出；A/C 早于 F9，用同逻辑回填，产物未变）"
+}
