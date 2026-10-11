@@ -60,6 +60,7 @@ Start-Process src\BotSrv\bin\Release\BotSrv.exe -WorkingDirectory src\BotSrv\bin
 ## 文件
 
 - `m3bagseq.txt`：bot `M3BAGSEQ` 序列原始行。
-- `botsrv.out.log` / `botsrv.err.log`：BotSrv 原始 stdout/stderr。
-- `load_stats.ndjson`：BotSrv 内部计数（登录/进世界/错误）。
+- `botsrv.out.txt` / `botsrv.err.txt`：BotSrv 原始 stdout/stderr（原名 `.log` 被 `.gitignore` 吞，入库用 `.txt`；
+  工作树原作 `botsrv.out.log`）。
+- `load_stats.ndjson` / `login_conns.ndjson`：BotSrv 内部计数（登录/进世界/错误）。
 - `../logs-csharp-gamesvr.txt`：同栈 `E:\MirServer\logs\GameSvr.out.log` 摘录（该栈不逐条记拾取）。
