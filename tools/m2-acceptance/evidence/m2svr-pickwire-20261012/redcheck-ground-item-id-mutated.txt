@@ -1,0 +1,22 @@
+     Running unittests src\lib.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-9edafd3360ac6080.exe)
+
+running 1 test
+test pickwire::tests::build_ground_map_matches_view ... FAILED
+
+failures:
+
+---- pickwire::tests::build_ground_map_matches_view stdout ----
+
+thread 'pickwire::tests::build_ground_map_matches_view' (30304) panicked at bins\game-svr\src\pickwire.rs:452:9:
+assertion `left == right` failed
+  left: 70002
+ right: 70001
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    pickwire::tests::build_ground_map_matches_view
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 53 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --lib`

@@ -34,6 +34,9 @@ pub const DEFAULT_WO_MAN_DEAR_NAME: &str = "{0}的妻子";
 pub const DEFAULT_MASTER_NAME: &str = "{0}的师傅";
 /// oracle `MessageSettings.NoMasterName`（`MessageSettings.cs:237`）。
 pub const DEFAULT_NO_MASTER_NAME: &str = "{0}的徒弟";
+/// oracle `MessageSettings.CanotPickUpItem`（`MessageSettings.cs:221`）——`ClientPickUpItem` 里
+/// “别人（或未过保护期）掉落物不可拾”的提示文本（`PlayObject.Base.cs:73`）。
+pub const DEFAULT_CANOT_PICK_UP_ITEM: &str = "在一定时间以内无法捡起此物品!!!";
 
 /// `[String]` 段里帧 42 用到的键（键名照 `StringConf.cs`，**不发明**）。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -47,6 +50,7 @@ pub struct StringConf {
     wo_man_dear_name: Option<String>,
     master_name: Option<String>,
     no_master_name: Option<String>,
+    canot_pick_up_item: Option<String>,
 }
 
 impl StringConf {
@@ -125,6 +129,14 @@ impl StringConf {
             .as_deref()
             .unwrap_or(DEFAULT_NO_MASTER_NAME)
     }
+
+    /// `[String] CanotPickUpItem`（“无法捡起此物品”提示）。
+    #[must_use]
+    pub fn canot_pick_up_item(&self) -> &str {
+        self.canot_pick_up_item
+            .as_deref()
+            .unwrap_or(DEFAULT_CANOT_PICK_UP_ITEM)
+    }
 }
 
 /// 读 `String.conf` 并解析 `[String]` 段。
@@ -194,6 +206,7 @@ pub fn parse(bytes: &[u8]) -> StringConf {
             "WOMANDEARNAME" => &mut conf.wo_man_dear_name,
             "MASTERNAME" => &mut conf.master_name,
             "NOMASTERNAME" => &mut conf.no_master_name,
+            "CANOTPICKUPITEM" => &mut conf.canot_pick_up_item,
             _ => continue,
         };
         if slot.is_none() {

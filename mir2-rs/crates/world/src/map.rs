@@ -45,6 +45,33 @@ impl Default for CellAttribute {
     }
 }
 
+/// 地面物品的类别（world 侧只读分片，owner §25.1 裁决 (A)）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FloorItemKind {
+    /// 普通物品（`CellObject.cell_obj_id` = `StdItem` 序号）
+    Item,
+    /// 金币（`CellObject.cell_obj_id` = 落主 `ActorId`）
+    Gold,
+}
+
+/// 地面物品的**最小身份**（不掉落"完整 `MapItem`"：只记接线层无法可靠反推的字段）。
+///
+/// 记账点在掉落落地时（`World::place_floor_item`），字段来源见 `owner §25.1`：
+/// `kind/index/count` 供 `ground::GroundItem` 装配，`item_id` 是删除格子的唯一键，
+/// `of_base_object` = oracle `RM_DIEDROPITEM` 的 `wParam`（`BaseObject.cs:2437/2442`）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FloorItemMeta {
+    pub kind: FloorItemKind,
+    /// `StdItem` 序号（1-based）；金币 = 0。
+    pub index: u16,
+    /// 金币数 / 物品数（物品恒 1）。
+    pub count: i32,
+    /// 唯一 id（物品 = `UserItem.MakeIndex`；金币 = 落主 `ActorId`）。
+    pub item_id: i32,
+    /// 掉落归属者（0 = 任何人可拾）。
+    pub of_base_object: i32,
+}
+
 /// `src/Modules/SystemModule/Data/CellObject.cs`（结构体，按值存放）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CellObject {
@@ -56,6 +83,8 @@ pub struct CellObject {
     pub actor_object: bool,
     /// 添加时间（虚拟时钟，见 `crate::clock`）
     pub add_time: i64,
+    /// 地面物品的最小身份（只读分片记账；非物品对象为 `None`）。
+    pub item: Option<FloorItemMeta>,
 }
 
 /// `src/Modules/SystemModule/Data/MapCellInfo.cs`。
@@ -215,6 +244,31 @@ impl MapGrid {
         cell_obj_id: i32,
         add_time: i64,
     ) -> bool {
+        self.add_cell_object(x, y, cell_type, cell_obj_id, None, add_time)
+    }
+
+    /// 地面物品落格（`CellType::Item`）——与 `add_map_object` 同一格子语义，额外记账
+    /// [`FloorItemMeta`]（world 侧只读分片，owner §25.1 (A)）。
+    pub fn add_floor_item(
+        &mut self,
+        x: i32,
+        y: i32,
+        obj_id: i32,
+        meta: FloorItemMeta,
+        add_time: i64,
+    ) -> bool {
+        self.add_cell_object(x, y, CellType::Item, obj_id, Some(meta), add_time)
+    }
+
+    fn add_cell_object(
+        &mut self,
+        x: i32,
+        y: i32,
+        cell_type: CellType,
+        cell_obj_id: i32,
+        item: Option<FloorItemMeta>,
+        add_time: i64,
+    ) -> bool {
         if !self.cell_match(x, y) {
             return false;
         }
@@ -225,6 +279,7 @@ impl MapGrid {
                 cell_type,
                 actor_object: true,
                 add_time,
+                item,
             });
             return true;
         }
@@ -324,6 +379,7 @@ mod tests {
             cell_type: CellType::Play,
             actor_object: true,
             add_time: 0,
+            item: None,
         });
         let (cell, success) = g.get_cell_info(99, 99);
         assert!(!success);

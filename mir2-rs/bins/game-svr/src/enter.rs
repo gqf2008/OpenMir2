@@ -139,6 +139,30 @@ pub struct FeatureInputs {
     pub dress_eff_type: u8,
 }
 
+/// `PlayObject.RecalcAbilitys()` 的一次求值（`ability::recalc_abilitys` 的接线，**不复制第二份实现**）：
+/// 把 [`AbilityInputs`] 转成 [`ability::RecalcOutput`]。`apply` 与本模块外的会话态
+/// （如 `CM_PICKUP`/`CM_DROPITEM` 的 `GroundState.wabil`）共用本函数。
+#[must_use]
+pub fn recalc_for_session(a: &AbilityInputs<'_>, job: u8) -> ability::RecalcOutput {
+    let use_items = to_instances(a.use_items);
+    let bag = bag_indices(a.bag_items);
+    ability::recalc_abilitys(
+        a.catalog,
+        &RecalcInputs {
+            job,
+            abil: a.abil,
+            bonus_abil: a.bonus_abil,
+            bonus_tick_hit: a.bonus_tick_hit,
+            bonus_tick_speed: a.bonus_tick_speed,
+            // `WAbil.HP/MP` 是**调用前**的当前值，被 `RecalcAbilitys` 保留（`BaseObject.Abil.cs:21-24`）。
+            cur_hp: a.abil.hp,
+            cur_mp: a.abil.mp,
+            use_items: &use_items,
+            bag: &bag,
+        },
+    )
+}
+
 /// `PlayObject.GetShowName()`（`PlayObject.cs:3300-3388`）的输入。
 #[derive(Debug, Clone, Copy)]
 pub struct ShowNameInputs<'a> {
@@ -589,23 +613,7 @@ pub fn apply(base: &mut EnterWorldInputs, wx: &WorldFrameInputs<'_>) -> Vec<Stri
     // 目录 + `BonusAbil` 产出；本层只负责接线（禁止复制第二份实现）。
     match wx.ability {
         Some(a) => {
-            let use_items = to_instances(a.use_items);
-            let bag = bag_indices(a.bag_items);
-            let out = ability::recalc_abilitys(
-                a.catalog,
-                &RecalcInputs {
-                    job: wx.job,
-                    abil: a.abil,
-                    bonus_abil: a.bonus_abil,
-                    bonus_tick_hit: a.bonus_tick_hit,
-                    bonus_tick_speed: a.bonus_tick_speed,
-                    // `WAbil.HP/MP` 是**调用前**的当前值，被 `RecalcAbilitys` 保留（`BaseObject.Abil.cs:21-24`）。
-                    cur_hp: a.abil.hp,
-                    cur_mp: a.abil.mp,
-                    use_items: &use_items,
-                    bag: &bag,
-                },
-            );
+            let out = recalc_for_session(&a, wx.job);
             // 52：`MakeMessage(SM_ABILITY, Gold, MakeWord((byte)Job, 99), LoWord(GameGold), HiWord(GameGold))`
             // 尾 = `EncodeMessage(WAbil)`（`Message.cs:1732-1734`）。`Job` 在原头的高字节、99 在低字节。
             base.ability = Some((

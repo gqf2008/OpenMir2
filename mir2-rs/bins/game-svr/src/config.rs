@@ -70,6 +70,24 @@ pub struct GateConfig {
     /// 帧 42 `SM_USERNAME` 的展示名走 `GetShowName()`（`PlayObject.cs:3329`）：
     /// `true` ⇒ `Format(RankLevelName, ChrName)`，`false` ⇒ 原名/转生名模板。现网 `=1`。
     pub show_rank_level_name: bool,
+    /// `[Setup] HumanMaxGold`（oracle `GameSvrConf.cs:1451` 缺省 `10000000`）——
+    /// `ground::PickUpContext.human_max_gold`（`PlayObject.Base.cs:171` 的 `IncGold` 上限）。
+    pub human_max_gold: i32,
+    /// `[Setup] FloorItemCanPickUpTime`（oracle `GameSvrConf.cs:1488` 缺省 `2*60*1000`）——
+    /// `ground::PickUpContext.floor_item_can_pick_up_time`（`PlayObject.Base.cs:67`）。
+    pub floor_item_can_pick_up_time: i32,
+    /// `[Setup] ControlDropItem`（oracle `GameSvrConf.cs:1703` 缺省 `false`）——
+    /// `ground::DropContext.control_drop_item`（`PlayObject.Operate.cs:284`）。
+    pub control_drop_item: bool,
+    /// `[Setup] InSafeDisableDrop`（oracle `GameSvrConf.cs:1704` 缺省 `false`）——
+    /// `ground::DropContext.in_safe_disable_drop`（`PlayObject.Operate.cs:224/254`）。
+    pub in_safe_disable_drop: bool,
+    /// `[Setup] CanDropPrice`（oracle `GameSvrConf.cs:1706` 缺省 `500`）——
+    /// `ground::DropContext.can_drop_price`（`PlayObject.Operate.cs:284` 的 `stdItem.Price <` 门）。
+    pub can_drop_price: i32,
+    /// `[Setup] DropItemRage`（oracle `GameSvrConf.cs:1754` 缺省 `3`，`byte`）——
+    /// `ground::DropContext.drop_item_rage`（`PlayObject.Operate.cs:291` 的 `_MIN(...,3)` 散布半径）。
+    pub drop_item_rage: u8,
 }
 
 /// 默认配置文件：可执行文件同目录的 `Server.conf`（与 C# `AppContext.BaseDirectory` 一致）。
@@ -112,6 +130,12 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut hear_msg_f_color: Option<u8> = None;
     let mut hear_msg_b_color: Option<u8> = None;
     let mut show_rank_level_name: Option<bool> = None;
+    let mut human_max_gold: Option<i32> = None;
+    let mut floor_item_can_pick_up_time: Option<i32> = None;
+    let mut control_drop_item: Option<bool> = None;
+    let mut in_safe_disable_drop: Option<bool> = None;
+    let mut can_drop_price: Option<i32> = None;
+    let mut drop_item_rage: Option<u8> = None;
     let mut ids_addr: Option<String> = None;
     let mut ids_port: Option<u16> = None;
     let mut db_addr: Option<String> = None;
@@ -209,11 +233,41 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                 }
                 // `ServerConf.cs:271` 的 `ReadWriteBool("Setup", ...)`：现网 `0/1`。
                 "SHOWRANKLEVELNAME" => {
-                    show_rank_level_name = Some(match v.trim() {
-                        "1" | "true" | "True" | "TRUE" => true,
-                        "0" | "false" | "False" | "FALSE" => false,
-                        other => bail!("ShowRankLevelName 不是布尔：{other:?}"),
-                    });
+                    show_rank_level_name = Some(parse_bool(v, "ShowRankLevelName")?);
+                }
+                // `ServerConf.cs:264` 的 `ReadWriteInteger("Setup", "HumanMaxGold", ...)`。
+                "HUMANMAXGOLD" => {
+                    human_max_gold = Some(
+                        v.parse()
+                            .with_context(|| format!("HumanMaxGold 不是合法整数：{v:?}"))?,
+                    );
+                }
+                // `ServerConf.cs:439` 的 `ReadWriteInteger("Setup", "FloorItemCanPickUpTime", ...)`。
+                "FLOORITEMCANPICKUPTIME" => {
+                    floor_item_can_pick_up_time =
+                        Some(v.parse().with_context(|| {
+                            format!("FloorItemCanPickUpTime 不是合法整数：{v:?}")
+                        })?);
+                }
+                // `ServerConf.cs:481-482/484` 的三条 `ReadWriteBool/Integer("Setup", ...)`。
+                "CONTROLDROPITEM" => {
+                    control_drop_item = Some(parse_bool(v, "ControlDropItem")?);
+                }
+                "INSAFEDISABLEDROP" => {
+                    in_safe_disable_drop = Some(parse_bool(v, "InSafeDisableDrop")?);
+                }
+                "CANDROPPRICE" => {
+                    can_drop_price = Some(
+                        v.parse()
+                            .with_context(|| format!("CanDropPrice 不是合法整数：{v:?}"))?,
+                    );
+                }
+                // `GameSvrConf.DropItemRage` 是 `byte`（`GameSvrConf.cs:878`）；`Server.conf` 现网未写。
+                "DROPITEMRAGE" => {
+                    drop_item_rage = Some(
+                        v.parse()
+                            .with_context(|| format!("DropItemRage 不是合法字节：{v:?}"))?,
+                    );
                 }
                 _ => {}
             },
@@ -265,12 +319,28 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         hear_msg_b_color: hear_msg_b_color.unwrap_or(0xFF),
         // oracle 缺省值（`GameSvrConf.cs:1464`）：`[Setup]` 里没写不算错。
         show_rank_level_name: show_rank_level_name.unwrap_or(false),
+        // oracle 缺省值（`GameSvrConf.cs:1451/1488/1703/1704/1706/1754`）：`[Setup]` 里没写不算错。
+        human_max_gold: human_max_gold.unwrap_or(10_000_000),
+        floor_item_can_pick_up_time: floor_item_can_pick_up_time.unwrap_or(2 * 60 * 1000),
+        control_drop_item: control_drop_item.unwrap_or(false),
+        in_safe_disable_drop: in_safe_disable_drop.unwrap_or(false),
+        can_drop_price: can_drop_price.unwrap_or(500),
+        drop_item_rage: drop_item_rage.unwrap_or(3),
         ids_addr,
         ids_port,
         db_addr,
         db_port,
         db_conn_string,
     })
+}
+
+/// `ReadWriteBool` 口径（`ConfigFile.cs` 的布尔读法）：`0/1` + `true/false`（大小写不敏感），其余报错。
+fn parse_bool(v: &str, key: &str) -> Result<bool> {
+    match v.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" => Ok(true),
+        "0" | "false" => Ok(false),
+        other => bail!("{key} 不是布尔：{other:?}"),
+    }
 }
 
 /// `WorldMaps=1000x1000[,200x200...]`。
@@ -344,6 +414,46 @@ mod tests {
             c.notice_dir, "Notice",
             "缺 [Share] NoticeDir 时用 oracle 缺省值（GameSvrConf.cs:1297）"
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `openmir2-m2-gamesvr-host`（sim 循环对接片）：`CM_PICKUP`/`CM_DROPITEM` 的 `ground::*` 输入
+    /// 键（`GameSvrConf.HumanMaxGold` 等 6 个）。两条口径：
+    /// ① 缺键 ⇒ 用 oracle 源码缺省（`GameSvrConf.cs:1451/1488/1703/1704/1706/1754`），不算错；
+    /// ② 写了但非法（如 `DropItemRage=300` 超出 `byte`）⇒ 报错。
+    #[test]
+    fn setup_drop_pickup_keys_and_defaults() {
+        let dir = std::env::temp_dir().join(format!("gs-conf-drop-{}", std::process::id()));
+        let base = "[Server]\nGateAddr=127.0.0.1\nGatePort=5000\nCheckBlock=12288\nIDSAddr=127.0.0.1\nIDSPort=5600\nDBAddr=127.0.0.1\nDBPort=6000\n";
+        let p = write(
+            &dir,
+            &format!(
+                "{base}[Setup]\nHumanMaxGold=10000000\nFloorItemCanPickUpTime=120000\nControlDropItem=1\nInSafeDisableDrop=0\nCanDropPrice=500\nDropItemRage=3\n"
+            ),
+        );
+        let c = load(&p).unwrap();
+        assert_eq!(c.human_max_gold, 10_000_000);
+        assert_eq!(c.floor_item_can_pick_up_time, 120_000);
+        assert!(c.control_drop_item);
+        assert!(!c.in_safe_disable_drop);
+        assert_eq!(c.can_drop_price, 500);
+        assert_eq!(c.drop_item_rage, 3);
+
+        // 缺键 ⇒ oracle 缺省。
+        let p2 = write(&dir, base);
+        let c2 = load(&p2).unwrap();
+        assert_eq!(c2.human_max_gold, 10_000_000);
+        assert_eq!(c2.floor_item_can_pick_up_time, 120_000);
+        assert!(!c2.control_drop_item);
+        assert!(!c2.in_safe_disable_drop);
+        assert_eq!(c2.can_drop_price, 500);
+        assert_eq!(c2.drop_item_rage, 3);
+
+        // 写了但非法 ⇒ 必须报错（不静默截断）。
+        let p3 = write(&dir, &format!("{base}[Setup]\nDropItemRage=300\n"));
+        assert!(load(&p3).is_err(), "DropItemRage=300 超出 byte ⇒ 必须报错");
+        let p4 = write(&dir, &format!("{base}[Setup]\nControlDropItem=maybe\n"));
+        assert!(load(&p4).is_err(), "ControlDropItem 非布尔 ⇒ 必须报错");
         std::fs::remove_dir_all(&dir).ok();
     }
 

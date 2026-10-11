@@ -21,7 +21,7 @@ use crate::combat::{
     attack, award_kill_exp, drop_position, generate_drops, AttackOutcome, CombatConfig,
 };
 use crate::entity::{Entity, EntityStore};
-use crate::map::{CellType, MapGrid};
+use crate::map::{CellType, FloorItemKind, FloorItemMeta, MapGrid};
 use crate::session::SessionRegistry;
 
 /// C# `ProcessHumans` 的节拍（毫秒）。
@@ -516,22 +516,37 @@ impl World {
                 e.death = true;
                 e.death_settled = true;
             }
-            // 掉落落地：逐件找空格子（`GetDropPosition` 的扫描顺序）
+            // 掉落落地：逐件找空格子（`GetDropPosition` 的扫描顺序）。
+            // 归属者（`mapItem.OfBaseObject`）= oracle `RM_DIEDROPITEM` 的 `wParam`：
+            // `ExpHitter.Master?.ActorId ?? ExpHitter.ActorId`（`BaseObject.cs:2437/2442`）——
+            // 由 world 在落地时记账，不留给接线层去派生（owner §25.1）。
+            let drop_owner = exp_hitter
+                .and_then(|h| self.entities.get(h).map(|k| k.master.unwrap_or(h)))
+                .unwrap_or(0);
             let mut placed = 0usize;
             for item in &items {
-                let _shape = self
-                    .item_catalog
-                    .get(usize::from(item.index.saturating_sub(1)))
-                    .map(|s| s.looks)
-                    .unwrap_or(0);
-                if self.place_floor_item(map_id, x, y, item.index as i32) {
+                let meta = FloorItemMeta {
+                    kind: FloorItemKind::Item,
+                    index: item.index,
+                    count: 1,
+                    item_id: item.make_index,
+                    of_base_object: drop_owner,
+                };
+                if self.place_floor_item(map_id, x, y, item.index as i32, meta) {
                     placed += 1;
                 }
             }
-            // 金币落地（`DropGoldDown`：`GetDropPosition(CurrX, CurrY, 3, ...)`）
+            // 金币落地（`DropGoldDown`：`GetDropPosition(CurrX, CurrY, 3, ...)`）。`item_id` 取落主
+            // `ActorId`（各金币堆落不同格 ⇒ 同格删除键仍唯一；金币无 `UserItem.MakeIndex`）。
             if gold > 0 {
-                let _shape = crate::combat::get_gold_shape(gold);
-                if self.place_floor_item(map_id, x, y, id) {
+                let meta = FloorItemMeta {
+                    kind: FloorItemKind::Gold,
+                    index: 0,
+                    count: gold,
+                    item_id: id,
+                    of_base_object: drop_owner,
+                };
+                if self.place_floor_item(map_id, x, y, id, meta) {
                     placed += 1;
                 }
             }
@@ -562,7 +577,14 @@ impl World {
     }
 
     /// 把一个地面物品放到 (ox, oy) 附近第一个空格子。
-    fn place_floor_item(&mut self, map_id: usize, ox: i32, oy: i32, obj_id: i32) -> bool {
+    fn place_floor_item(
+        &mut self,
+        map_id: usize,
+        ox: i32,
+        oy: i32,
+        obj_id: i32,
+        meta: FloorItemMeta,
+    ) -> bool {
         let Some(map) = self.maps.get_mut(map_id) else {
             return false;
         };
@@ -578,7 +600,7 @@ impl World {
         let Some((px, py)) = pos else {
             return false;
         };
-        map.add_map_object(px, py, CellType::Item, obj_id, self.clock_ms)
+        map.add_floor_item(px, py, obj_id, meta, self.clock_ms)
     }
 
     /// 一次攻击结算（`_Attack`）。
@@ -690,6 +712,48 @@ impl World {
         out
     }
 
+    /// 地面物品的**最小身份视图**（world 侧只读分片，owner §25.1 裁决 (A)）：
+    /// 每个 `CellType::Item` 格子对象一条，按 `(map, x, y, obj_id, item_id)` 升序。
+    ///
+    /// 字段全部来自 world 在**掉落落地时**的记账（`FloorItemMeta`），不派生、不改模拟语义；
+    /// 接线层拿它 + item_catalog 装配 `ground::GroundItem`，不需要反推金币 `count` 或归属。
+    /// `can_pick_up_tick` = 落地时间（`CellObject.add_time` 的虚拟时钟转 `i32`）。
+    pub fn floor_items_view_sorted(&self) -> Vec<FloorItemView> {
+        let mut out = Vec::new();
+        for (map_id, map) in self.maps.iter().enumerate() {
+            for x in 0..map.width {
+                for y in 0..map.height {
+                    let (cell, ok) = map.get_cell_info(x, y);
+                    if !ok {
+                        continue;
+                    }
+                    for o in &cell.obj_list {
+                        if o.cell_type != CellType::Item {
+                            continue;
+                        }
+                        let Some(meta) = o.item else {
+                            continue;
+                        };
+                        out.push(FloorItemView {
+                            map_id,
+                            x,
+                            y,
+                            obj_id: o.cell_obj_id,
+                            kind: meta.kind,
+                            index: meta.index,
+                            count: meta.count,
+                            item_id: meta.item_id,
+                            of_base_object: meta.of_base_object,
+                            can_pick_up_tick: o.add_time as i32,
+                        });
+                    }
+                }
+            }
+        }
+        out.sort_unstable_by_key(|v| (v.map_id, v.x, v.y, v.obj_id, v.item_id));
+        out
+    }
+
     /// 对拍用快照：全部实体的 `(id, map, x, y, hp, level, exp, 视野列表)`，**按 id 升序**。
     pub fn snapshot_sorted(&self) -> Vec<EntitySnapshot> {
         let mut ids = self.entities.ids_sorted();
@@ -715,6 +779,29 @@ impl World {
 
 /// 对拍/输出用的实体快照：`(id, map_id, x, y, hp, level, exp, 视野列表[(目标 id, 标志)])`。
 pub type EntitySnapshot = (i32, usize, i32, i32, u16, u8, i32, Vec<(i32, u8)>);
+
+/// 地面物品的最小身份视图（[`World::floor_items_view_sorted`] 的元素）。
+///
+/// `obj_id` = `CellObject.cell_obj_id`（**与 `floor_items_sorted` 同口径**，不变）；
+/// `item_id` 是拾取/删除格子的**唯一键**（物品 = `UserItem.MakeIndex`，金币 = 落主 `ActorId`）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FloorItemView {
+    pub map_id: usize,
+    pub x: i32,
+    pub y: i32,
+    pub obj_id: i32,
+    pub kind: FloorItemKind,
+    /// `StdItem` 序号（1-based）；金币 = 0。
+    pub index: u16,
+    /// 金币数 / 物品数（物品恒 1）。
+    pub count: i32,
+    /// 唯一 id。
+    pub item_id: i32,
+    /// 掉落归属者（0 = 任何人可拾）。
+    pub of_base_object: i32,
+    /// 可拾起时刻（落地时的虚拟时钟）。
+    pub can_pick_up_tick: i32,
+}
 
 #[cfg(test)]
 mod tests {
@@ -897,6 +984,92 @@ mod tests {
         // 再 tick 不重复结算
         let rec2 = w.tick();
         assert!(rec2.deaths.is_empty(), "死亡只能结算一次: {rec2:?}");
+    }
+
+    /// 只读分片（owner §25.1 裁决 (A)）：掉落落地后 `floor_items_view_sorted` 的
+    /// `(kind, index, count, item_id, of_base_object)` 必须与 world 状态/oracle 语义一致。
+    /// **红检**：改坏任一映射（kind/index/count/归属/item_id）⇒ 本用例必红。
+    #[test]
+    fn monster_death_floor_item_view_matches_world_state() {
+        let mut w = World::new(32, 32);
+        // 1-based 查表：下标 0 → `index = 1`（与 `combat.json` 的 `金创药(小量)` 同口径）
+        w.item_catalog = vec![StdItem {
+            name: "金创药(小量)".into(),
+            dura_max: 1,
+            ..Default::default()
+        }];
+        w.mon_random_add_value = 1; // 必出极品（消耗 RNG 的分支也覆盖）
+        let p = w.add_entity(player(1, "hero", 10, 10, 10));
+        w.spawn_monster(Command::SpawnMonster {
+            id: 2,
+            name: "僵尸".into(),
+            x: 11,
+            y: 10,
+            map_id: 0,
+            level: 1,
+            exp: 500,
+            hp: 3,
+            dc: 1,
+            ac: 0,
+            undead: 0,
+            hit_point: 5,
+            speed_point: 15,
+            // 金币 + 普通物品双掉落（与 `world/scenarios/combat.json` 的 `僵尸` 同形）
+            drop_list: vec![
+                MonsterDropItem {
+                    sel_point: 9,
+                    max_point: 10,
+                    item_name: "金币".into(),
+                    count: 300,
+                },
+                MonsterDropItem {
+                    sel_point: 9,
+                    max_point: 10,
+                    item_name: "金创药(小量)".into(),
+                    count: 1,
+                },
+            ],
+        });
+        w.tick(); // 生成（掉落预算在这里消耗 RNG）
+        w.attack_cmd(p, 2);
+        let rec = w.tick(); // 攻击 → 死亡结算 + 掉落落地
+        assert_eq!(rec.deaths.len(), 1, "应有 1 次死亡结算: {rec:?}");
+        let rec_gold = rec.deaths[0].2;
+        assert!(rec_gold > 0, "本用例需金币掉落: {rec:?}");
+
+        let view = w.floor_items_view_sorted();
+        // 与既有对拍口径一致：`floor_items_sorted` 的 `(map,x,y,obj_id)` 必须与视图逐项相同
+        let legacy: Vec<(usize, i32, i32, i32)> = view
+            .iter()
+            .map(|v| (v.map_id, v.x, v.y, v.obj_id))
+            .collect();
+        assert_eq!(
+            legacy,
+            w.floor_items_sorted(),
+            "视图的 obj_id 口径必须与 floor_items_sorted 相同"
+        );
+
+        // 金币：index=0、count=预算金币、item_id=落主 ActorId、归属=击杀者（无 Master）
+        let gold = view
+            .iter()
+            .find(|v| v.kind == FloorItemKind::Gold)
+            .expect("应有金币地面物");
+        assert_eq!(
+            (gold.index, gold.count, gold.of_base_object),
+            (0, rec_gold, p)
+        );
+        assert_eq!(gold.item_id, 2, "金币 item_id = 落主 ActorId");
+
+        // 普通物品：index=StdItem 序号、count=1、item_id=UserItem.MakeIndex(>0)、归属=击杀者
+        let item = view
+            .iter()
+            .find(|v| v.kind == FloorItemKind::Item)
+            .expect("应有普通物品地面物");
+        assert_eq!((item.index, item.count, item.of_base_object), (1, 1, p));
+        assert!(item.item_id > 0, "物品 item_id = MakeIndex 应为正");
+        assert_ne!(item.item_id, gold.item_id, "物品/金币的 item_id 不应相等");
+        // 可拾起时刻 = 落地时的虚拟时钟（非 None/占位 0 的构造口径）
+        assert!(view.iter().all(|v| v.can_pick_up_tick >= 0));
     }
 
     /// 攻击目标判定子集：不打自己/自己宝宝/已死者。
