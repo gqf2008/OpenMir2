@@ -13,3 +13,12 @@
 - 判据（逐字节）：downlink::tests::turn_pair_rebuilds_golden_sm_turn_and_featurechanged（金标准 seq 30/31）
 - 判据（进程级）：tests::aoi_show_emits_turn_pair_routed_by_gate
 - 红检：去掉自身过滤 ⇒ FAILED；见 redcheck-self-filter.txt；还原 ⇒ green-after-restore.txt
+
+## 交付 head = merge walgit/master `60095f65`（含 m3bag 第三格 `useitem.rs`）后复跑
+
+| 门禁 | 结果 | 日志 |
+| --- | --- | --- |
+| fmt | rc=0 | merge-fmt.txt |
+| clippy | rc=0（0 warn） | merge-clippy.txt |
+| test ×3 | 3/3：68 suites / 477 passed / 0 failed / 13 ignored | merge-test-{1,2,3}.txt |
+| msgcodegen | rc=0（604） | merge-msgcodegen.txt |
