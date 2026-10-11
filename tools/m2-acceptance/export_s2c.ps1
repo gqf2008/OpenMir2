@@ -45,6 +45,11 @@ if (-not (Test-Path (Join-Path $ProxyDir "chunks.ndjson"))) {
   Write-Output ("PREREQ_MISSING: {0}\chunks.ndjson 不存在——先在验收运行里用 mir2_proxy.py 抓到 Rust 链路 dump" -f $ProxyDir)
   exit 2
 }
+# 切帧/布局导出都是 python（此前缺 python 会在这里抛终止错误、被聚合器误当 RED；preflight 也先行拦一道）。
+if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
+  Write-Output "PREREQ_MISSING: 找不到 python（segment_frames/dump_body_layout 需要；见 preflight.ps1）"
+  exit 2
+}
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $Capture = Join-Path $OutDir "capture.jsonl"

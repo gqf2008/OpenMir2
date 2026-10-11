@@ -4,9 +4,10 @@
   run_acceptance.ps1 — M2 验收①②③ 的**一条命令**运行手册（harness）。
 
 .DESCRIPTION
-  把「最终验收」从一次人工探险变成一条命令：依次跑四项机判，汇总 GREEN/RED/PREREQ，
+  把「最终验收」从一次人工探险变成一条命令：先跑**前置门**（preflight），再依次跑四项机判，汇总 GREEN/RED/PREREQ，
   任一 PREREQ 或 RED ⇒ 非零退出（**没有栈时明确报「前置未满足」，绝不静默通过**）。
 
+    ⓪ 前置门                  preflight.ps1          （python/dotnet/cargo + 仓库输入 + 金标准身份/schema；缺 ⇒ PREREQ，坏 ⇒ RED）
     ① 端口所有权实拍        check_ports.ps1        （5000/7000/7100/7200 的 PID + 命令行均须为 Rust）
     ③a 同序列出包 diff 导出   export_s2c.ps1        （mir2_proxy dump → segment_frames → GoldenExport → replay）
     ③b 同序列出包 diff 对账   s2c_diff.py           （Rust capture.jsonl vs M0 金标准）
@@ -33,6 +34,7 @@ param(
   [string]$Golden = "",
   [int[]]$Ports = @(5000, 7000, 7100, 7200),
   [switch]$SkipPorts, [switch]$SkipS2c, [switch]$SkipShots, [switch]$SkipDb,
+  [switch]$SkipPreflight,
   [switch]$SelfCheckNoStack
 )
 
@@ -78,6 +80,10 @@ function Invoke-Step([string]$Name, [string]$ScriptPath, [string[]]$ChildArgs) {
 }
 
 Write-Output ("M2 验收运行手册  evidence=" + $EvidenceDir)
+
+if (-not $SkipPreflight) {
+  Invoke-Step "preflight(⓪)" (Join-Path $Here "preflight.ps1") @("-GoldenPath", $Golden, "-OutFile", (Join-Path $EvidenceDir "preflight.json"))
+}
 
 if (-not $SkipPorts) {
   Invoke-Step "ports(①)" (Join-Path $Here "check_ports.ps1") @("-OutFile", (Join-Path $EvidenceDir "ports.json"), "-PortsCsv", ($Ports -join ","))

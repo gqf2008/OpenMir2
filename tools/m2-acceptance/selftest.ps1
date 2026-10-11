@@ -11,6 +11,7 @@
     ② check_screenshots.ps1   0 张⇒2 / 缺 1 张⇒1 / 有 <1KiB⇒1 / 7 张齐全⇒0
     ③b s2c_diff.py            金标准自比⇒0(GREEN) / 尾字节改坏⇒1(RED) / 只改 recog⇒0 / 缺文件⇒2
     ③c check_db_paths.ps1     三路径字段级相同⇒0(GREEN) / 改一个被比对字段⇒1(RED) / 缺 after⇒2
+    ⓪ preflight.ps1           在库前置齐备⇒0 / 缺工具或缺客户端入口⇒2(PREREQ) / 金标准身份或 schema 坏⇒1(RED)
     ①  check_ports.ps1        对**本机实况端口**取判：全 Rust⇒0 / 有非 Rust 在听⇒1 / 有端口没听⇒2
    ①a portclassify.ps1       实现归属分类器（与 check_ports.ps1 共用）：C#根/target路径/基名回落/unknown 5 例
     ⇢  run_acceptance.ps1     全 PREREQ⇒2 / 有 RED⇒1（聚合口径，不许把红说成前置）
@@ -207,23 +208,32 @@ Test-Entry "entry/7200+game-svr=cross"  (Get-M2EntryVerdict -Port 7200 -EntryNam
 if (-not $SkipLivePorts) {
   Write-Output ("① check_ports.ps1（只读实况端口 " + ($LivePorts -join "/") + "）")
   $portsScript = Join-Path $Here "check_ports.ps1"
-  # 先用同一判据算出"本机此刻应有的结论"，再和脚本退出码比（避免把实况写死）
-  $listening = @(); $nonRust = @(); $notListening = @(); $crossed = @()
-  foreach ($p in $LivePorts) {
-    $conn = Get-NetTCPConnection -State Listen -LocalPort $p -ErrorAction SilentlyContinue | Select-Object -First 1
-    if (-not $conn) { $notListening += $p; continue }
-    $listening += $p
-    $cim = Get-CimInstance Win32_Process -Filter ("ProcessId=$($conn.OwningProcess)") -ErrorAction SilentlyContinue
-    $impl = Get-M2PortImpl -Exe $cim.ExecutablePath -CommandLine $cim.CommandLine -Name $cim.Name
-    if ($impl -ne "rust") { $nonRust += $p }
-    $entry = Get-M2EntryName -Exe $cim.ExecutablePath -CommandLine $cim.CommandLine -Name $cim.Name
-    if ((Get-M2EntryVerdict -Port $p -EntryName $entry) -eq "cross") { $crossed += $p }
+  $portsOut = Join-Path $Work "ports-live.json"
+  # 先跑一次并落证据，再从**这一次**的证据反推期望退出码。
+  # 不在跑之前另起一次 Get-NetTCPConnection：端口会变（别的车道正在起/停栈），两次探测会假 FAIL。
+  $portsRun = Run-Ps $portsScript @("-OutFile", $portsOut, "-PortsCsv", ($LivePorts -join ","))
+  $expectPorts = 2; $expectPat = "PREREQ_MISSING"; $note = "缺证据文件（脚本未落盘）"
+  if (Test-Path $portsOut) {
+    $ev = Get-Content -Raw -Path $portsOut | ConvertFrom-Json
+    $notListening = @($ev.not_listening); $nonRust = @($ev.not_rust); $crossed = @($ev.cross_entry)
+    if ($notListening.Count -gt 0) { $expectPorts = 2; $expectPat = "PREREQ_MISSING" }
+    elseif ($nonRust.Count -gt 0 -or $crossed.Count -gt 0) { $expectPorts = 1; $expectPat = "RED: 端口" }
+    else { $expectPorts = 0; $expectPat = "GREEN: 四个端口" }
+    $note = "notListening={0} nonRust={1} crossed={2}" -f ($notListening -join "/"), ($nonRust -join "/"), ($crossed -join "/")
   }
-  $expectPorts = if ($notListening.Count -gt 0) { 2 } elseif ($nonRust.Count -gt 0 -or $crossed.Count -gt 0) { 1 } else { 0 }
-  $expectPat = if ($expectPorts -eq 2) { "PREREQ_MISSING" } elseif ($expectPorts -eq 1) { "RED: 端口" } else { "GREEN: 四个端口" }
-  $note = "listening={0} nonRust={1} crossed={2} notListening={3}" -f ($listening -join "/"), ($nonRust -join "/"), ($crossed -join "/"), ($notListening -join "/")
-  Test-Case "ports/实况判属（Rust绿/C#红/缺前置）" $expectPorts (Run-Ps $portsScript @("-OutFile", (Join-Path $Work "ports-live.json"), "-PortsCsv", ($LivePorts -join ","))) $expectPat $note
+  Test-Case "ports/实况判属（Rust绿/C#红/缺前置）" $expectPorts $portsRun $expectPat $note
 }
+
+# ---------------------------------------------------------------- ⓪ 前置门
+# 注意：全部用 `-SkipTools`/`-SkipClient` 或注入不存在的路径/命令，保持**机器无关**（真机工具版本不在判据内）。
+Write-Output "⓪ preflight.ps1（外部工具/仓库输入/金标准身份+schema）"
+$pf = Join-Path $Here "preflight.ps1"
+Test-Case "preflight/在库前置齐备=GREEN" 0 (Run-Ps $pf @("-SkipTools", "-SkipClient", "-OutFile", (Join-Path $Work "preflight-ok.json"))) "GREEN: 前置齐备" "仓库输入 + 金标准 schema/身份"
+Test-Case "preflight/缺工具=PREREQ" 2 (Run-Ps $pf @("-PythonCmd", "m2-no-such-python-xyz", "-SkipClient", "-OutFile", (Join-Path $Work "preflight-badtool.json"))) "PREREQ_MISSING" "注入不存在的 python"
+Test-Case "preflight/缺客户端入口=PREREQ" 2 (Run-Ps $pf @("-SkipTools", "-ClientDir", (Join-Path $Work "no-client"), "-OutFile", (Join-Path $Work "preflight-noclient.json"))) "PREREQ_MISSING" "客户端入口路径不存在"
+$badGolden = Join-Path $Work "golden-bad-schema.jsonl"
+Write-Jsonl $badGolden @([pscustomobject]@{ kind = "frame"; dir = "s2c"; seq = 1 })
+Test-Case "preflight/金标准 schema 坏=RED" 1 (Run-Ps $pf @("-SkipTools", "-SkipClient", "-AllowGoldenDrift", "-GoldenPath", $badGolden, "-OutFile", (Join-Path $Work "preflight-badgolden.json"))) "RED: 前置在但已损坏" "缺 8 个必需字段（-AllowGoldenDrift 隔离出 schema 独立牙齿）"
 
 # ---------------------------------------------------------------- 聚合器
 Write-Output "run_acceptance.ps1（聚合口径）"

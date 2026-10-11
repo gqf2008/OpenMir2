@@ -18,8 +18,15 @@ powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/run_acceptance.ps1 
   -RustDbDir   E:\tmp\m2acc\rust
 ```
 
-`run_acceptance.ps1` **不启动任何服务**（不占端口、不起客户端）——只对「已跑着的栈 / 已采好的产物」取判据。
-每一步的退出码口径统一：
+**先跑前置门**（工具/输入/金标准；不碰栈与端口）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/preflight.ps1
+# 0=前置齐备 / 2=PREREQ_MISSING（缺 python·dotnet·cargo·客户端入口·金标准）/ 1=RED（金标准身份或 schema 被改坏）
+```
+
+`run_acceptance.ps1` **不启动任何服务**（不占端口、不起客户端）——它把 ⓪ 前置门 + 四项机判合成一条命令，
+只对「已跑着的栈 / 已采好的产物」取判据。每一步的退出码口径统一：
 
 | 退出码 | 含义 | 整体判定 |
 | --- | --- | --- |
@@ -31,7 +38,8 @@ powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/run_acceptance.ps1 
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/run_acceptance.ps1 -SelfCheckNoStack
-# 预期：ports(①)=PREREQ、s2c-export(③a)=PREREQ、shots(②)=PREREQ、db-paths(③c)=PREREQ，整体 exit 2
+# 预期：preflight(⓪)=GREEN（工具/输入/金标准齐备）、ports(①)=PREREQ、s2c-export(③a)=PREREQ、
+#       s2c-diff(③b)=PREREQ、shots(②)=PREREQ、db-paths(③c)=PREREQ，SUMMARY green=1 red=0 prereq=5，整体 exit 2
 ```
 
 证据落在 `E:\tmp\m2-acceptance\run-<ts>\`：`ports.json` / `s2c/capture.jsonl` / `s2c-diff.json` /
@@ -41,7 +49,7 @@ powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/run_acceptance.ps1 
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/selftest.ps1
-# 25 条口径全 OK ⇒ exit 0；任何一条不符 ⇒ exit 1（见 §8）
+# 29 条口径全 OK ⇒ exit 0；任何一条不符 ⇒ exit 1（见 §8）
 ```
 
 ---
@@ -142,7 +150,10 @@ python tools/m2-acceptance/s2c_diff.py `
   且每条必须带 `reason` + `reviewer`（§6.0-3：差异要么 0，要么逐条登记"差异点/为什么无害/谁审的"）。
 
 **失败怎么判红**：缺 dump / 缺 dotnet ⇒ exit 2；切帧/导出/replay 失败 ⇒ exit 1；
-对账有**未登记**差异 ⇒ exit 1；0 差异或全部落在白名单 ⇒ exit 0（金标准文件 `sha256=3052C778…`）。
+对账有**未登记**差异 ⇒ exit 1；0 差异或全部落在白名单 ⇒ exit 0。
+金标准的**身份**由 `preflight.ps1` 现场校验（不靠 README 抄 hash）：本步金标准是
+`c-line-baseline-c3-20261010.jsonl`（`sha256=f34a6d11…`）；`session-20261010-c3-hook/capture.jsonl` 的
+`3052C778…` 是 A-9 旧口径，**不是**本步金标准（拿它会在 811 出假红）。
 
 ---
 
@@ -181,7 +192,8 @@ powershell -File tools/m2-acceptance/check_db_paths.ps1 -Mode diff `
 **期望**：三条路径的 `scoped_diff.py diff` 全部 **exit 0（字段级 diff = 0）**；任何差异要么修到 0，
 要么按 §6.0-3 登记 `mir2-rs/tests/parity/whitelist.md`。
 
-**失败怎么判红**：MySQL 3306 不可达 / 缺快照抽取件 ⇒ exit 2；任一路径 diff != 0 ⇒ exit 1。
+**失败怎么判红**：缺 python（`PREREQ_MISSING`，由本脚本开头 + `preflight.ps1` 先行拦）/
+MySQL 3306 不可达 / 缺快照抽取件 ⇒ exit 2；任一路径 diff != 0 ⇒ exit 1。
 
 ---
 
@@ -295,8 +307,12 @@ cargo run -p msgcodegen -- --check
 | s2c 对账（同序） | `s2c_diff.py --rust <重导件>` | `GREEN`（16 条同序 + 逐字节 0，归一化仅 recog） | 同上 |
 | s2c 红检 | 改 recog ⇒ 仍 GREEN；改尾一字节 ⇒ RED | 归一化只吸 recog、字节差异必红 | 同日志 / `E:\tmp\rust-body-broken.jsonl` |
 | 三路径 DB diff 驱动 | `check_db_paths.ps1 -Mode diff` 合成夹具 | 同件 GREEN / 改一字段 RED（复用 `scoped_diff.py`） | 控制台（rc 0 / rc 1） |
-| **手册判红自检** | `selftest.ps1` | **25/25 OK**：②截图 4 例、③b s2c 4 例（尾字节改坏⇒RED、只改 recog⇒GREEN）、③c DB 3 例、①端口实况判属 1 例、①a 分类器 5 例（R2-1）、**①b 端口表→期望入口 6 例（本片）**、聚合器 2 例 | `E:\tmp\openmir2-watch\pi-m2svr-portentry-selftest.log` |
-| **端口表→入口 红检（本片）** | 把 `Get-M2EntryVerdict` 的 `cross` 分支改回 `"ok"` | `entry/5000+login-gate=cross` 与 `entry/7200+game-svr=cross` 两条 **FAILED**（`SUMMARY total=25 failed=2`、`SELFTEST FAIL`）；还原后 25/25 | `E:\tmp\openmir2-watch\pi-m2svr-portentry-redcheck.log` |
+| **手册判红自检** | `selftest.ps1` | **29/29 OK**：②截图 4 例、③b s2c 4 例（尾字节改坏⇒RED、只改 recog⇒GREEN）、③c DB 3 例、①端口实况判属 1 例、①a 分类器 5 例（R2-1）、①b 端口表→期望入口 6 例、**⓪ preflight 4 例（本片）**、聚合器 2 例 | `E:\tmp\openmir2-watch\pi-m2svr-pf-selftest.log` |
+| **⓪ 前置门（本片）** | `preflight.ps1`（工具/输入/金标准身份+schema） | 本机齐备 ⇒ `SUMMARY ok=18 missing=0 red=0`、exit 0；`-PythonCmd m2-no-such-python-xyz` ⇒ exit 2(`PREREQ_MISSING`)；`-SkipTools -ClientDir <不存在>` ⇒ exit 2；坏 schema 金标准（`-AllowGoldenDrift` 隔离）⇒ exit 1(`RED`) | `E:\tmp\openmir2-watch\pi-m2svr-pf-preflight.log` |
+| **⓪ 红检·schema** | 把 `golden:schema` 强制 `OK` | `preflight/金标准 schema 坏=RED` **FAILED**（`expect_rc=1 actual_rc=0`）⇒ `SUMMARY total=28 failed=1`；还原后 29/29 | `E:\tmp\openmir2-watch\pi-m2svr-pf-redcheck-schema.log` |
+| **⓪ 红检·工具** | 把 `Get-Command` 探针强制命中 | `preflight/缺工具=PREREQ` **FAILED**（`expect_rc=2 actual_rc=0`）⇒ `SUMMARY total=28 failed=1`；还原后 29/29 | `E:\tmp\openmir2-watch\pi-m2svr-pf-redcheck-tool.log` |
+| **①实况判属去竞态（本片）** | `selftest.ps1` 的实况用例改为「先跑 `check_ports.ps1` 并读**这一次**的证据 JSON 反推期望」 | 不再另起一次 `Get-NetTCPConnection`；别的车道正在起/停栈时不再假 FAIL（本次实测四端口被 C# 占：`nonRust=5000/7000/7100/7200`、exit 1，判据仍自洽） | `E:\tmp\openmir2-watch\pi-m2svr-pf-selftest.log` |
+| **端口表→入口 红检（前一片）** | 把 `Get-M2EntryVerdict` 的 `cross` 分支改回 `"ok"` | `entry/5000+login-gate=cross` 与 `entry/7200+game-svr=cross` 两条 **FAILED**（`SUMMARY total=25 failed=2`、`SELFTEST FAIL`）；还原后 25/25 | `E:\tmp\openmir2-watch\pi-m2svr-portentry-redcheck.log` |
 | 52 输入接缝 | `cargo test -p game-svr --offline encode_ability` | 1/1 OK（`encode_ability` 逐字节等于金标准 #12 的 `EncodeMessage(WAbil)` 体） | `E:\tmp\openmir2-watch\pi-m2svr-ability-test.log` |
 | R4-1 红检 | 改回 `unwrap_or(0)` | `route_to_gate_rejects_out_of_range_gate_idx` FAILED；还原后 passed | `E:\tmp\openmir2-watch\pi-m2svr-r41-redcheck.log` |
 | **CurMap→map_id 接线单测** | `cargo test -p game-svr --offline mapwire` | 3/3 OK（逻辑名→id / 未知名必拒 / 无 Envir 回退） | 含在 `pi-m2svr-wire-test.log` |
@@ -310,8 +326,11 @@ cargo run -p msgcodegen -- --check
 
 - `tools/m2-acceptance/selftest.ps1`、`tools/m2-acceptance/mutate_capture.py`（本片新增：判红/判绿自检 + s2c 红检夹具生成器）；
 - `tools/m2-acceptance/portclassify.ps1`（R2-1 的共享分类器；本片加「端口表→期望入口」的第二层牙齿：`Get-M2ExpectedEntry`/`Get-M2EntryName`/`Get-M2EntryVerdict`）；
+- `tools/m2-acceptance/preflight.ps1`（**本片新增：⓪ 前置门**——工具/仓库输入/金标准身份+schema）；`run_acceptance.ps1`/`export_s2c.ps1`/`check_db_paths.ps1`（本片：接入 ⓪、缺 python 显式报 `PREREQ_MISSING`）；`selftest.ps1`（本片：+4 条 ⓪ 用例、实况判属改读同一次证据去竞态）；
 - `E:\tmp\m2-acceptance\`：无栈自检产生的 `ports-*.json`/`shots-*.json`/`run-*`/`s2c-selftest/` 等，保留作证据；
-- `E:\tmp\m2-acceptance\selftest-*\`：`selftest.ps1` 的 25 条构造夹具与 `selftest.json`（证据，保留）；
+- `E:\tmp\m2-acceptance\selftest-*\`：`selftest.ps1` 的 29 条构造夹具与 `selftest.json`（证据，保留）；
+- `E:\tmp\m2-acceptance\preflight-*.json`：本片 `preflight.ps1` 的齐备/缺工具/坏 schema 三组证据（保留）；
+- `E:\tmp\openmir2-watch\pi-m2svr-pf-*.log`：本片前置门、29 条自检、无栈自检、两条红检原始输出（证据，保留）；
 - `E:\tmp\openmir2-watch\pi-m2svr-*.log`：四门禁、红检、自检原始输出；
 - `E:\tmp\rust-recog-changed.jsonl` / `rust-body-broken.jsonl`：s2c 归一化红检输入（证据）；
 - `E:\tmp\openmir2-watch\pi-m2svr-wire-redcheck.log`：`CurMap→map_id` 接线红检原始输出（证据，保留）；
@@ -323,16 +342,20 @@ cargo run -p msgcodegen -- --check
 
 ## 8. 每一步都验过会红：`selftest.ps1`
 
-`run_acceptance.ps1` 的四步各有「失败怎么判红」的书面口径。本脚本用**构造输入**把每条口径都跑一遍，
+`run_acceptance.ps1` 的 ⓪ 前置门 + 四步各有「失败怎么判红」的书面口径。本脚本用**构造输入**把每条口径都跑一遍，
 断言「退出码 **和** 输出关键字」两者都对——**只看退出码会把“脚本崩了”误当“判红”**：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/selftest.ps1
-# 25 条全 OK ⇒ exit 0；任何一条不符 ⇒ exit 1（SELFTEST FAIL）
+# 29 条全 OK ⇒ exit 0；任何一条不符 ⇒ exit 1（SELFTEST FAIL）
 ```
 
 | # | 步骤 | 构造输入 | 期望 |
 | --- | --- | --- | --- |
+| 0a | ⓪ | `preflight.ps1 -SkipTools -SkipClient`（在库前置） | `0` + `GREEN: 前置齐备` |
+| 0b | ⓪ | `-PythonCmd m2-no-such-python-xyz`（缺工具） | `2` + `PREREQ_MISSING` |
+| 0c | ⓪ | `-SkipTools -ClientDir <不存在>`（缺客户端入口） | `2` + `PREREQ_MISSING` |
+| 0d | ⓪ | 坏 schema 金标准 + `-AllowGoldenDrift`（隔离 schema） | `1` + `RED: 前置在但已损坏` |
 | 1 | ② | 空截图目录 | `2` + `PREREQ_MISSING` |
 | 2 | ② | 只有 6/7 张 | `1` + `RED: 截图不全` |
 | 3 | ② | 7 张但有一张 <1KiB | `1` + `RED: 截图不全` |
@@ -344,7 +367,7 @@ powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/selftest.ps1
 | 9 | ③c | 三路径字段级相同 | `0` + `GREEN: 小退/掉线…` |
 | 10 | ③c | `shutdown` 改一个被比对字段 | `1` + `RED: 路径 DB diff 未归零` |
 | 11 | ③c | 缺 `shutdown-after.jsonl` | `2` + `PREREQ_MISSING` |
-| 12 | ① | **本机实况** 5000/7000/7100/7200 | 全 Rust `0` / 有非 Rust 在听 `1` / 有端口没听 `2`（期望由**共享分类器** `portclassify.ps1`——与 `check_ports.ps1` 同一函数——现场算出，不写死） |
+| 12 | ① | **本机实况** 5000/7000/7100/7200 | 全 Rust `0` / 有非 Rust 在听 `1` / 有端口没听 `2`（期望由**同一次运行** `ports.json` 证据里的 `not_listening/not_rust/cross_entry` 反推，不两次探测、不写死，避开别的车道起/停栈的竞态） |
 | 12a | ①a | 分类器：`E:\MirServer\GameSvr.exe` | `csharp` |
 | 12b | ①a | 分类器：`…\mir2-rs\target\…\game-svr.exe` | `rust` |
 | 12c | ①a | 分类器：`E:\tmp\openmir2-m2svr-target\…\game-svr.exe` | `rust` |
