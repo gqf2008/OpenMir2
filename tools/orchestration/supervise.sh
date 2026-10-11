@@ -21,15 +21,16 @@ snap="$watch/lane-status.log"
   echo "  alive: $na / $nall"
 } >> "$snap"
 # ---- ② worker 重拉 ----
-workers=0
-for tag in $(grep '|worker|' "$watch/lanes.conf" | cut -d'|' -f1); do alive "$tag" && workers=$((workers+1)); done
+# owner 2026-10-11 改：槽位计数**每次启动前重算**（count_workers）。原版在 start-lane.sh 失败（如 worktree 不存在）时
+# 仍 workers+1 ⇒ 后面的排队车道整轮拿不到槽、队列永不前进（实测踩过：五条车道全卡）。
+count_workers() { local n=0 t; for t in $(grep '|worker|' "$watch/lanes.conf" | cut -d'|' -f1); do alive "$t" && n=$((n+1)); done; echo "$n"; }
 for tag in $(grep '|worker|' "$watch/lanes.conf" | cut -d'|' -f1); do
-  if ! alive "$tag" && [ "$workers" -lt "$maxworker" ]; then
-    echo "$(date '+%H:%M:%S') relaunch worker $tag"; bash "$watch/start-lane.sh" "$tag"; workers=$((workers+1))
-  fi
+  alive "$tag" && continue
+  [ "$(count_workers)" -lt "$maxworker" ] || break
+  echo "$(date '+%H:%M:%S') relaunch worker $tag"; bash "$watch/start-lane.sh" "$tag"
 done
 # ---- ③ reviewer 重拉 ----
 for tag in $(grep '|reviewer|' "$watch/lanes.conf" | cut -d'|' -f1); do
   if ! alive "$tag"; then echo "$(date '+%H:%M:%S') relaunch reviewer $tag"; bash "$watch/start-lane.sh" "$tag"; fi
 done
-echo "$(date '+%H:%M:%S') tick done workers=$workers"
+echo "$(date '+%H:%M:%S') tick done workers=$(count_workers)"
