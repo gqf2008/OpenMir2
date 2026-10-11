@@ -1,0 +1,78 @@
+﻿{
+    "tool":  "m1-acceptance/check_boundary_ports.ps1",
+    "ts":  "2026-10-11T18:35:09.7646206+08:00",
+    "repo":  "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\.claude\\worktrees\\m1load",
+    "chain":  "7000 login-gate / 5500+5600 login-srv / 7100 sel-gate / 5100 db-srv (M1-边界服务移植计划.md §1)",
+    "ports":  [
+                  {
+                      "port":  7000,
+                      "listening":  true,
+                      "pid":  37000,
+                      "name":  "login-gate.exe",
+                      "path":  "E:\\tmp\\openmir2-m1load-target\\debug\\login-gate.exe",
+                      "command_line":  "\"E:\\tmp\\openmir2-m1load-target\\debug\\login-gate.exe\" E:\\tmp\\openmir2-m1load\\stack\\login-gate\\config.conf ",
+                      "impl":  "rust",
+                      "entry":  "login-gate",
+                      "expected_entry":  "login-gate",
+                      "entry_verdict":  "ok"
+                  },
+                  {
+                      "port":  5500,
+                      "listening":  true,
+                      "pid":  46668,
+                      "name":  "login-srv.exe",
+                      "path":  "E:\\tmp\\openmir2-m1load-target\\debug\\login-srv.exe",
+                      "command_line":  "\"E:\\tmp\\openmir2-m1load-target\\debug\\login-srv.exe\" E:\\tmp\\openmir2-m1load\\stack\\login-srv\\logsrv.conf ",
+                      "impl":  "rust",
+                      "entry":  "login-srv",
+                      "expected_entry":  "login-srv",
+                      "entry_verdict":  "ok"
+                  },
+                  {
+                      "port":  7100,
+                      "listening":  true,
+                      "pid":  31416,
+                      "name":  "sel-gate.exe",
+                      "path":  "E:\\tmp\\openmir2-m1load-target\\debug\\sel-gate.exe",
+                      "command_line":  "\"E:\\tmp\\openmir2-m1load-target\\debug\\sel-gate.exe\" E:\\tmp\\openmir2-m1load\\stack\\sel-gate\\config.conf ",
+                      "impl":  "rust",
+                      "entry":  "sel-gate",
+                      "expected_entry":  "sel-gate",
+                      "entry_verdict":  "ok"
+                  },
+                  {
+                      "port":  5100,
+                      "listening":  true,
+                      "pid":  20072,
+                      "name":  "db-srv.exe",
+                      "path":  "E:\\tmp\\openmir2-m1load-target\\debug\\db-srv.exe",
+                      "command_line":  "\"E:\\tmp\\openmir2-m1load-target\\debug\\db-srv.exe\" E:\\tmp\\openmir2-m1load\\stack\\db-srv\\dbsvr.conf ",
+                      "impl":  "rust",
+                      "entry":  "db-srv",
+                      "expected_entry":  "db-srv",
+                      "entry_verdict":  "ok"
+                  },
+                  {
+                      "port":  5600,
+                      "listening":  true,
+                      "pid":  46668,
+                      "name":  "login-srv.exe",
+                      "path":  "E:\\tmp\\openmir2-m1load-target\\debug\\login-srv.exe",
+                      "command_line":  "\"E:\\tmp\\openmir2-m1load-target\\debug\\login-srv.exe\" E:\\tmp\\openmir2-m1load\\stack\\login-srv\\logsrv.conf ",
+                      "impl":  "rust",
+                      "entry":  "login-srv",
+                      "expected_entry":  "login-srv",
+                      "entry_verdict":  "ok"
+                  }
+              ],
+    "not_listening":  [
+
+                      ],
+    "not_rust":  [
+
+                 ],
+    "cross_entry":  [
+
+                    ],
+    "pass":  true
+}
