@@ -13,6 +13,7 @@
 //! - 角色记录 `CurMap` ⇒ `registry.require_id(cur_map)?`（找不到即报错，禁止静默 0 号占位图）。
 #![allow(clippy::doc_markdown)]
 
+pub mod conf;
 pub mod error;
 pub mod mapfile;
 pub mod mapinfo;
@@ -21,12 +22,16 @@ pub mod points;
 pub mod registry;
 pub mod text;
 
+pub use conf::{ClientConf, GameSvrConf, NakedAbility};
 pub use error::EnvirError;
 pub use mapfile::{
     attach_points, load_map_file, parse_map_bytes, DoorStatus, MapCell, MapDoor, MapFile,
     CELL_BYTES, DOOR_BIT, DOOR_MERGE_RANGE, DOOR_POINT_MASK, HEADER_BYTES, WALL_BIT,
 };
-pub use mapinfo::{parse_map_info_lines, parse_section_line, MapInfoEntry};
+pub use mapinfo::{
+    parse_flag_commands, parse_map_info_lines, parse_section_line, parse_section_line_with_state,
+    MapInfoEntry, MapInfoFlag, MapInfoParseState,
+};
 pub use paths::{
     envir_file_path, map_file_path, path_combine, point_file_path, DEFAULT_ENVIR_DIR,
     DEFAULT_MAP_DIR, POINT_DIR,

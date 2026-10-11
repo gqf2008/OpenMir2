@@ -8,10 +8,12 @@ publish = false
 [dependencies]
 mir2-shared = { path = "../shared" }
 mir2-world = { path = "../world" }
+mir2-data = { path = "../data" }
 encoding_rs = "0.8"
 thiserror = "1"
 
 [dev-dependencies]
+serde_json = "1"
 
 [lints]
 workspace = true
