@@ -70,8 +70,21 @@ pub trait ScriptPlayer {
     fn level(&self) -> i32;
     /// `RandomNumber.Random(value)`（`value <= 0` 时 C# 走 `Next()`）
     fn random(&mut self, value: i32) -> i32;
-    /// `playerActor.SendMsg(...)`（ident 取 `Messages` 常量）
-    fn send_msg(&mut self, ident: i32, param: i32, tag: i32, series: i32, msg: Option<&str>);
+    /// `playerActor.SendMsg([baseObject,] wIdent, wParam, nParam1, nParam2, nParam3[, sMsg])`
+    /// （`IActor.SendMsg` 重载；ident 取 `Messages` 常量）。
+    ///
+    /// 五个数值参数一个都不能少：flow 夹具按实参位次逐个打印
+    /// （`msg <wIdent> <wParam> <nParam1> <nParam2> <nParam3> <sMsg>`），
+    /// 少一位就会把 `nParam3` 与文本挤到错误的列上。
+    fn send_msg(
+        &mut self,
+        ident: i32,
+        w_param: i32,
+        n_param1: i32,
+        n_param2: i32,
+        n_param3: i32,
+        msg: Option<&str>,
+    );
     /// `playerActor.MNVal[n]`（0..99）
     fn mn_val(&self, n: usize) -> i32;
     fn set_mn_val(&mut self, n: usize, v: i32);
@@ -271,6 +284,225 @@ pub trait ScriptPlayer {
     fn server_str_val(&self, _n: usize) -> String {
         String::new()
     }
+
+    // ---- B2/M4 动作批次（2026-10-11）：非 var 家族动作处理器所需的世界面 ----
+    // 说明：默认实现一律取「世界缺省」（0 / 空 / false / 空实现），与 C# flow 夹具
+    // （DispatchProxy 未实现的方法回默认值且不落日志）一致；真世界适配层随之接上后覆写。
+
+    /// `HUtil32.GetTickCount()`（世界时钟，毫秒）
+    fn tick_count(&self) -> i32 {
+        0
+    }
+    /// `playerActor.SysMsg(msg, color, msgType)`（`MsgColor` / `MsgType` 取值见本模块常量）
+    fn sys_msg(&mut self, _msg: &str, _color: i32, _msg_type: i32) {}
+    /// `SystemShare.WorldEngine.SendBroadCastMsg(msg, MsgType.System)`
+    fn world_broadcast(&mut self, _msg: &str) {}
+    /// `playerActor.SendGroupText(msg)`
+    fn send_group_text(&mut self, _msg: &str) {}
+    /// `playerActor.MyGuild.SendGuildMsg(msg)`（仅在 `MyGuild != null` 时调用）
+    fn guild_send_msg(&mut self, _msg: &str) {}
+    /// `playerActor.SendDefMessage(ident, param, tag1, tag2, series[, msg])`
+    fn send_def_message(
+        &mut self,
+        _ident: i32,
+        _param: i32,
+        _tag1: i32,
+        _tag2: i32,
+        _series: i32,
+        _msg: &str,
+    ) {
+    }
+    /// `playerActor.SendRefMsg(ident, p1, p2, p3, p4, msg)`
+    fn send_ref_msg(&mut self, _ident: i32, _p1: i32, _p2: i32, _p3: i32, _p4: i32, _msg: &str) {}
+    /// `playerActor.MapRandomMove(map, range)`
+    fn map_random_move(&mut self, _map: &str, _range: i32) {}
+
+    /// `playerActor.GameGold = v`
+    fn set_game_gold(&mut self, _v: i32) {}
+    /// `playerActor.GameGoldChanged()`（`GameGold` 与 `GamePoint` 变更后共用）
+    fn game_gold_changed(&mut self) {}
+    /// `playerActor.GamePoint = v`
+    fn set_game_point(&mut self, _v: i32) {}
+    /// `playerActor.CreditPoint = v`（C# 字段类型 `byte`）
+    fn set_credit_point(&mut self, _v: i32) {}
+    /// `playerActor.Abil.Exp`
+    fn abil_exp(&self) -> i32 {
+        0
+    }
+    fn set_abil_exp(&mut self, _v: i32) {}
+    /// `playerActor.Abil.Level = v`
+    fn set_abil_level(&mut self, _v: i32) {}
+    /// `playerActor.HasLevelUp(oldLevel)`
+    fn has_level_up(&mut self, _old_level: i32) {}
+    /// `playerActor.Abil.HP`（C# 字段类型 `ushort`，取值 0..=65535）
+    fn abil_hp(&self) -> i32 {
+        0
+    }
+    fn set_abil_hp(&mut self, _v: i32) {}
+    /// `playerActor.Abil.MP`（C# 字段类型 `ushort`）
+    fn abil_mp(&self) -> i32 {
+        0
+    }
+    fn set_abil_mp(&mut self, _v: i32) {}
+    /// `playerActor.WAbil.HP`
+    fn wabil_hp(&self) -> i32 {
+        0
+    }
+    /// `playerActor.WAbil.MaxHP`
+    fn wabil_max_hp(&self) -> i32 {
+        0
+    }
+    /// `playerActor.WAbil.MP`
+    fn wabil_mp(&self) -> i32 {
+        0
+    }
+    /// `playerActor.WAbil.MaxMP`
+    fn wabil_max_mp(&self) -> i32 {
+        0
+    }
+    /// `playerActor.PkPoint`
+    fn pk_point(&self) -> i32 {
+        0
+    }
+    fn set_pk_point(&mut self, _v: i32) {}
+    /// `playerActor.PvpLevel()`（C# 返回 `byte`）
+    fn pvp_level(&self) -> i32 {
+        0
+    }
+    /// `playerActor.RefNameColor()`
+    fn ref_name_color(&mut self) {}
+    /// `playerActor.RefShowName()`
+    fn ref_show_name(&mut self) {}
+    /// `playerActor.Hair = v`（C# 字段类型 `byte`）
+    fn set_hair(&mut self, _v: u8) {}
+    /// `playerActor.FeatureChanged()`
+    fn feature_changed(&mut self) {}
+    /// `playerActor.BonusPoint`
+    fn bonus_point(&self) -> i32 {
+        0
+    }
+    fn set_bonus_point(&mut self, _v: i32) {}
+    /// `playerActor.ReLevel = v`（C# 字段类型 `byte`）
+    fn set_re_level(&mut self, _v: i32) {}
+    /// `SystemShare.Config.ShowScriptActionMsg`
+    fn config_show_script_action_msg(&self) -> bool {
+        false
+    }
+    /// `SystemShare.Config.ReNewLevelClearExp`（C# 分支体已注释，仅读配置）
+    fn config_renewlevel_clear_exp(&self) -> bool {
+        false
+    }
+
+    /// `playerActor.AdminMode`
+    fn admin_mode(&self) -> bool {
+        false
+    }
+    fn set_admin_mode(&mut self, _v: bool) {}
+    /// `playerActor.SuperMan`
+    fn super_man(&self) -> bool {
+        false
+    }
+    fn set_super_man(&mut self, _v: bool) {}
+    /// `playerActor.ObMode`
+    fn ob_mode(&self) -> bool {
+        false
+    }
+    fn set_ob_mode(&mut self, _v: bool) {}
+    /// `playerActor.BoSendMsgFlag = v`
+    fn set_bo_send_msg_flag(&mut self, _v: bool) {}
+    /// `playerActor.BoChangeItemNameFlag = v`
+    fn set_bo_change_item_name_flag(&mut self, _v: bool) {}
+    /// `playerActor.BoKickFlag = BoReconnection = BoSoftClose = true`
+    fn set_kick_flags(&mut self) {}
+    /// `playerActor.Permission = v`（C# 字段类型 `byte`）
+    fn set_permission(&mut self, _v: i32) {}
+    /// `playerActor.ProcessUserLineMsg(line)`
+    fn process_user_line_msg(&mut self, _line: &str) {}
+    /// `playerActor.NoItem = v`
+    fn set_no_item(&mut self, _v: bool) {}
+    /// `playerActor.Die()`
+    fn die(&mut self) {}
+    /// `playerActor.SetLastHiter(normNpc)`
+    fn set_last_hiter_npc(&mut self) {}
+    /// `SystemShare.MissionMap / MissionX / MissionY`（全局任务坐标）
+    fn set_mission(&mut self, _map: &str, _x: i32, _y: i32) {}
+
+    /// `IsTimeGoto = false; TimeGotoLable = ""; TimeGotoNpc = null`
+    fn clear_delay_goto(&mut self) {}
+    /// `playerActor.IsTimeRecall = v`
+    fn set_is_time_recall(&mut self, _v: bool) {}
+    /// `IsTimeRecall = true; TimeRecallMoveMap/X/Y = 当前位置; TimeRecallTick = tick`
+    fn set_time_recall(&mut self, _map: &str, _x: i32, _y: i32, _tick: i32) {}
+    /// `ActionOfDelayCall`：`DelayCall / DelayCallLabel / DelayCallTick / IsDelayCall /
+    /// DelayCallNpc` + `IsTimeGoto = true; TimeGotoTick; TimeGotoLable; TimeGotoNpc = normNpc`
+    fn set_delay_call(&mut self, _delay: i32, _label: &str, _npc_id: i32, _goto_tick: i32) {}
+
+    /// `ValLabel / ValType / GotoNpcLabel / ValNpcType`（`ActionOfQueryValue`）
+    fn set_val_query(
+        &mut self,
+        _val_label: u8,
+        _val_type: u8,
+        _goto_npc_label: &str,
+        _val_npc_type: i32,
+    ) {
+    }
+    /// `TakeDlgItem / GotoNpcLabel`（`ActionOfQueryItemDlg`）
+    fn set_dlg_query(&mut self, _take_dlg_item: bool, _goto_npc_label: &str) {}
+    /// `playerActor.PlayDiceLabel = v`
+    fn set_play_dice_label(&mut self, _label: &str) {}
+
+    /// `AutoGetExpInSafeZone / AutoGetExpEnvir / AutoGetExpTime / AutoGetExpPoint`
+    fn set_auto_get_exp(
+        &mut self,
+        _safe_zone: bool,
+        _envir_map: Option<&str>,
+        _time_ms: i32,
+        _point: i32,
+    ) {
+    }
+    /// `AutoGetExp*`（挂机口径）+ `OffLineFlag = true` + `KickOffLineTick`
+    fn set_offline(
+        &mut self,
+        _envir_map: Option<&str>,
+        _time_ms: i32,
+        _point: i32,
+        _kick_tick: i32,
+    ) {
+    }
+
+    /// `SystemShare.WorldEngine.FindMagic(name)` → `(MagicId, MagicName)`
+    fn find_magic(&self, _name: &str) -> Option<(i32, String)> {
+        None
+    }
+    /// `playerActor.IsTrainingSkill(magicId)`
+    fn is_training_skill(&self, _magic_id: i32) -> bool {
+        false
+    }
+    /// `MagicList.Add(userMagic) + SendAddMagic(userMagic) + RecalcAbilitys()`
+    /// （`UserMagic.Level = (byte)nLevel`，由实现侧按 `u8` 取用）
+    fn learn_magic(&mut self, _magic_id: i32, _magic_name: &str, _level: u8) {}
+
+    /// `playerActor.UseItems.Length`
+    fn use_items_len(&self) -> i32 {
+        0
+    }
+    /// `playerActor.UseItems[i].Index = v`
+    fn set_use_item_index(&mut self, _i: i32, _v: i32) {}
+    /// `SystemShare.ItemSystem.GetStdItemName(UseItems[i].Index)`
+    fn use_item_std_name(&self, _i: i32) -> String {
+        String::new()
+    }
+    /// `playerActor.SendDelItems(UseItems[i])`
+    fn send_del_use_item(&mut self, _i: i32) {}
+    /// `playerActor.UseItems[i].Dura`
+    fn use_item_dura(&self, _i: i32) -> i32 {
+        0
+    }
+    fn set_use_item_dura(&mut self, _i: i32, _v: i32) {}
+    /// `playerActor.UseItems[i].DuraMax`
+    fn use_item_dura_max(&self, _i: i32) -> i32 {
+        0
+    }
 }
 
 /// NPC 侧。
@@ -293,6 +525,8 @@ pub trait ScriptNpc {
     fn envir_root(&self) -> Option<String> {
         None
     }
+    /// `normNpc.SendSayMsg(msg)`（`ActionOfLineMsg` 的 nParam1=4 分支）
+    fn send_say_msg(&mut self, _msg: &str) {}
 }
 
 /// 运行时错误/显式报告项。

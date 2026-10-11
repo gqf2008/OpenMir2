@@ -85,10 +85,20 @@ impl ScriptPlayer for FlowPlayer {
     fn random(&mut self, _value: i32) -> i32 {
         0
     }
-    fn send_msg(&mut self, ident: i32, param: i32, tag: i32, series: i32, msg: Option<&str>) {
+    fn send_msg(
+        &mut self,
+        ident: i32,
+        w_param: i32,
+        n_param1: i32,
+        n_param2: i32,
+        n_param3: i32,
+        msg: Option<&str>,
+    ) {
+        // 对齐 C# flow 夹具：打印 `IActor.SendMsg` 的全部五个数值参数
         let text = msg.unwrap_or("").replace('\r', "\\r").replace('\n', "\\n");
-        self.log
-            .push(format!("msg {ident} {param} {tag} {series} {text}"));
+        self.log.push(format!(
+            "msg {ident} {w_param} {n_param1} {n_param2} {n_param3} {text}"
+        ));
     }
     fn mn_val(&self, _n: usize) -> i32 {
         0
