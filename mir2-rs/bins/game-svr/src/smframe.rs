@@ -150,6 +150,79 @@ pub fn sm_attackmode(mode: u8) -> Vec<u8> {
     gm_data_body(header, &[])
 }
 
+/// **S3 后半段（第二格）**：`CM_PICKUP`/`CM_DROPITEM` 的回帧与地面/背包延时通知的 `SM_*` 编码。
+///
+/// 逐条口径（oracle 行号见 `## pickup/drop 接线` 的作者 comment `d552d2a2`）：
+/// - `SM_ADDITEM`（`PlayObject.Base.cs:226`）：`MakeMessage(SM_ADDITEM, ActorId, 0, 0, 1)`，**无尾**。
+/// - `SM_ITEMHIDE`（`PlayObject.Message.cs:1748`）：`SendDefMessage(SM_ITEMHIDE, nParam1, nParam2, nParam3, 0)`
+///   ⇒ `Recog=nParam1`(=物品 `ItemId`)、`Param=nParam2`(=x)、`Tag=nParam3`(=y)、`Series=0`。
+/// - `SM_WEIGHTCHANGED`（`:1760`）：`SendDefMessage(SM_WEIGHTCHANGED, WAbil.Weight, WAbil.WearWeight, WAbil.HandWeight, chk)`
+///   ⇒ `Recog=Weight`、`Param=WearWeight`、`Tag=HandWeight`、`Series=((W+A+H)^0x3A5F)^0x1F35^0xaa21`
+///   （**用当下 `WAbil`**，不是 `RM_WEIGHTCHANGED` 的字段）。
+/// - `SM_GOLDCHANGED`（`:1834`）：`SendDefMessage(SM_GOLDCHANGED, Gold, LoWord(GameGold), HiWord(GameGold), 0)`。
+/// - `SM_MENU_OK`（`:1953`）：`SendDefMessage(SM_MENU_OK, processMsg.nParam1, 0, 0, 0, processMsg.Msg)`。
+/// - `SM_DROPITEM_SUCCESS/FAIL`（`PlayObject.Message.cs:801-810`）：
+///   `SendDefMessage(ident, nParam1, 0, 0, 0, processMsg.Msg)` ⇒ 尾 = `EncodeString(请求的 Msg)`。
+#[must_use]
+pub fn sm_additem(actor_id: i32) -> Vec<u8> {
+    let header = command_header(actor_id, messages::SM_ADDITEM, 0, 0, 1);
+    gm_data_body(header, &[])
+}
+
+/// 见 [`sm_additem`] 段的口径表。
+#[must_use]
+pub fn sm_itemhide(item_id: i32, x: i32, y: i32) -> Vec<u8> {
+    let header = command_header(item_id, messages::SM_ITEMHIDE, x as u16, y as u16, 0);
+    gm_data_body(header, &[])
+}
+
+/// 见 [`sm_additem`] 段的口径表。按 oracle 逐字：`((W+A+H) ^ 0x3A5F) ^ 0x1F35 ^ 0xaa21`（`u16` 回写）。
+#[must_use]
+pub fn sm_weightchanged(weight: u16, wear_weight: u8, hand_weight: u8) -> Vec<u8> {
+    let sum = i32::from(weight) + i32::from(wear_weight) + i32::from(hand_weight);
+    let chk = ((sum ^ 0x3A5F) ^ 0x1F35) ^ 0xaa21;
+    let header = command_header(
+        i32::from(weight),
+        messages::SM_WEIGHTCHANGED,
+        u16::from(wear_weight),
+        u16::from(hand_weight),
+        chk as u16,
+    );
+    gm_data_body(header, &[])
+}
+
+/// 见 [`sm_additem`] 段的口径表。
+#[must_use]
+pub fn sm_goldchanged(gold: i32, game_gold: i32) -> Vec<u8> {
+    let header = command_header(
+        gold,
+        messages::SM_GOLDCHANGED,
+        lo_word(game_gold),
+        hi_word(game_gold),
+        0,
+    );
+    gm_data_body(header, &[])
+}
+
+/// 见 [`sm_additem`] 段的口径表。`msg` 是 oracle `processMsg.Msg` 的原文（本接缝多数为空）。
+#[must_use]
+pub fn sm_menu_ok(recog: i32, msg: &[u8]) -> Vec<u8> {
+    let header = command_header(recog, messages::SM_MENU_OK, 0, 0, 0);
+    gm_data_body(header, &edcode::encode(msg))
+}
+
+/// 见 [`sm_additem`] 段的口径表。`msg` = 请求里带回的物品名（`CM_DROPITEM` 的尾，原样传入后 `EncodeString`）。
+#[must_use]
+pub fn sm_dropitem_reply(success: bool, make_index: i32, msg: &[u8]) -> Vec<u8> {
+    let ident = if success {
+        messages::SM_DROPITEM_SUCCESS
+    } else {
+        messages::SM_DROPITEM_FAIL
+    };
+    let header = command_header(make_index, ident, 0, 0, 0);
+    gm_data_body(header, &edcode::encode(msg))
+}
+
 /// `SM_OUTOFCONNECTION`（`PlayObject.cs:1084-1086` 的 `RunNotice` 踢人支）：
 /// `SendDefMessage(SM_OUTOFCONNECTION, 0, 0, 0, 0)` ⇒ 12B 命令头 + **无尾**（header-only）。
 ///

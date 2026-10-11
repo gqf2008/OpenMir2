@@ -1,0 +1,27 @@
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\world)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.31s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m2svr-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 1 test
+test world::tests::monster_death_floor_item_view_matches_world_state ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.00s
+
+     Running unittests src\bin\tick_bench.rs (E:/tmp/openmir2-m2svr-target\debug\deps\tick_bench-f8728004976df0a3.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+
+     Running tests\ecs_migration.rs (E:/tmp/openmir2-m2svr-target\debug\deps\ecs_migration-c3182b6d5da1eda7.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests\no_parallel.rs (E:/tmp/openmir2-m2svr-target\debug\deps\no_parallel-dc7638e0b62671af.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+

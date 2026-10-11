@@ -1,0 +1,24 @@
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\world)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.74s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m2svr-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 1 test
+test world::tests::monster_death_floor_item_view_matches_world_state ... FAILED
+
+failures:
+
+---- world::tests::monster_death_floor_item_view_matches_world_state stdout ----
+
+thread 'world::tests::monster_death_floor_item_view_matches_world_state' (5464) panicked at crates\world\src\world.rs:1061:9:
+assertion `left == right` failed: 金币 item_id = 落主 ActorId
+  left: 3
+ right: 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    world::tests::monster_death_floor_item_view_matches_world_state
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-world --lib`

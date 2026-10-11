@@ -28,10 +28,10 @@ CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test -p mir2-world --offline
 ```
 
 - **改坏**：把 `floor_items_view_sorted` 的 `item_id: meta.item_id` 改成 `meta.item_id + 1`
-  → `redcheck-mutated.log`：`panicked ... 金币 item_id = 落主 ActorId: left: 3 right: 2`，`FAILED`，exit 101。
-- **恢复**：`redcheck-restored.log`：`test ... ok`，1 passed，exit 0。
+  → `redcheck-mutated.txt`：`panicked ... 金币 item_id = 落主 ActorId: left: 3 right: 2`，`FAILED`，exit 101。
+- **恢复**：`redcheck-restored.txt`：`test ... ok`，1 passed，exit 0。
 
 ## 3. 残留物清单
 
-- 本目录：`redcheck-mutated.log` / `redcheck-restored.log`（raw 输出，入库）。
+- 本目录：`redcheck-mutated.txt` / `redcheck-restored.txt`（raw 输出，入库）。
 - 无仓库外残留物；未起栈、未占端口、未改现网配置。
