@@ -619,6 +619,7 @@ dependencies = [
  "anyhow",
  "encoding_rs",
  "mir2-protocol",
+ "mir2-shared",
  "mir2-world",
  "tokio",
 ]

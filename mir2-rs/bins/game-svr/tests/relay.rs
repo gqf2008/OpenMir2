@@ -17,6 +17,14 @@ use mir2_protocol::messages::grobal2;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
+/// 十六进制串 → 字节（把**oracle 实测字节**原样钉进用例）。
+fn hex(s: &str) -> Vec<u8> {
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+        .collect()
+}
+
 fn free_port() -> u16 {
     let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     l.local_addr().unwrap().port()
@@ -126,9 +134,9 @@ async fn gm_open_gets_server_user_index_one_based() {
     child.stop().await;
 }
 
-/// 判据 2：索引 append-only（关了也不回收）；`GM_CLOSE` 按 socket 关。
+/// 判据 2：`GM_CLOSE` 按 socket 关；关掉的槽**被复用**（`OpenNewUser` 先找最小空闲槽，`:434-444`）。
 #[tokio::test]
-async fn index_is_append_only_and_close_is_by_socket() {
+async fn close_frees_slot_for_reuse() {
     let port = free_port();
     let child = Child::spawn(port, 12288, "close");
     let mut gate = connect_with_retry(port).await;
@@ -147,14 +155,14 @@ async fn index_is_append_only_and_close_is_by_socket() {
         .await
         .unwrap();
     tokio::time::sleep(Duration::from_millis(150)).await;
-    // 再开一个：索引必须是 3（不回收下标）
+    // 再开一个：**复用最小空闲槽**（下标 0）⇒ 索引回到 1（oracle :434-441）
     gate.write_all(&frame(grobal2::GM_OPEN, 1003, 3, 0, b"1.1.1.3"))
         .await
         .unwrap();
     let (m3, _) = recv_frame(&mut gate).await.unwrap();
     assert_eq!(
-        m3.session_index, 3,
-        "槽表 append-only（oracle :442-444 的 userList.Add），关了也不回收"
+        m3.session_index, 1,
+        "关掉 1 号后，新用户在最小空闲槽（下标 0）⇒ 索引 1（不是 append-only）"
     );
     let log = child.stdout();
     assert!(
@@ -251,4 +259,46 @@ async fn missing_config_exits_nonzero() {
         String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("缺键"), "错误信息应指明缺键，实得：{err}");
     std::fs::remove_dir_all(&dir).ok();
+}
+
+/// 判据（认证失败路径）：把**真 C# GameGate 实测的那条合成登录包**当 `GM_DATA` 发进来，
+/// 准入表里没有对应会话 ⇒ 必须走 oracle 的失败支（`会话验证失败` + `CloseUser`，`ChannelMessageHandler.cs:340-353`），
+/// 且槽位被清（后续同会话的 `GM_DATA` 落到"用户不存在"）。
+#[tokio::test]
+async fn login_packet_without_admission_fails_certification() {
+    // 真 C# GameGate 发出的合成登录包（98B；见 E:\tmp\openmir2-gamegate-imp\oracle-login-cap\out-csharp-raw.json）
+    const ORACLE_LOGIN_BODY: &str = "23305e5e3c716f6d446f6e6f5478615f3c786e61497b5f623f5f6162586b6062586b61625a675f615a5f60605a6b60615a6a62603f6b6060586b6060586b6060586b6060586b6060586b6060586b6060586b6060586b6060586b6060586b5f603f21";
+    let port = free_port();
+    let child = Child::spawn(port, 12288, "cert");
+    let mut gate = connect_with_retry(port).await;
+    gate.write_all(&frame(grobal2::GM_OPEN, 900, 42, 0, b"10.0.0.5"))
+        .await
+        .unwrap();
+    let (m, _) = recv_frame(&mut gate).await.unwrap();
+    assert_eq!(m.session_index, 1);
+    gate.write_all(&frame(
+        grobal2::GM_DATA,
+        900,
+        42,
+        1,
+        &hex(ORACLE_LOGIN_BODY),
+    ))
+    .await
+    .unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let log = child.stdout();
+    assert!(
+        log.contains("会话验证失败") && log.contains("loadbot1"),
+        "无准入记录 ⇒ 必须走认证失败支并打出账号；日志实得：{log}"
+    );
+    // 槽位被清：同一会话再发命令帧 ⇒ "用户不存在"
+    gate.write_all(&frame(grobal2::GM_DATA, 900, 42, 1, &[0u8; 16]))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        child.stdout().contains("用户不存在"),
+        "CloseUser 后同 socket/session 的 GM_DATA 必须落到「用户不存在」"
+    );
+    child.stop().await;
 }

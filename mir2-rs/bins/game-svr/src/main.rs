@@ -20,7 +20,10 @@
 // 文档逐字引用 C# 标识符/文件名，不加反引号改造。
 #![allow(clippy::doc_markdown)]
 
+mod auth;
+mod cert;
 mod config;
+mod hutil;
 mod users;
 
 use std::sync::Arc;
@@ -68,6 +71,16 @@ enum GateEvent {
     CertificationPending { index: i32, ip: String },
     /// `GM_CLOSE`。
     Closed { index: i32 },
+    /// 认证通过 ⇒ 该去取角色并进世界（oracle `:323-338` 的 `LoadDBInfo` + `AddToLoadRcdList`）。
+    /// **S2b** 的活：本切片只把事件交到 sim 线程并记录。
+    LoadDbRequest {
+        index: i32,
+        account: String,
+        chr_name: String,
+        session_id: i32,
+        gate_id: i32,
+        client_version: i32,
+    },
 }
 
 /// C# `CommandMessage`（12B 解码态布局，`:11-24`）。
@@ -115,6 +128,10 @@ async fn main() -> Result<()> {
 
     // sim 侧：一个专用线程独占 World（§4.2 第 1 条：不许并行 executor 驱动世界）
     let (ev_tx, ev_rx) = std::sync::mpsc::channel::<GateEvent>();
+    // 准入会话表（C# `AuthenticationService._sessionList`）：跨网关连接共享；
+    // 填充它的是登录链的通知（S2b 的传输），本切片只实现表语义与认证匹配。
+    let auth: Arc<std::sync::Mutex<auth::AdmissionStore>> =
+        Arc::new(std::sync::Mutex::new(auth::AdmissionStore::new()));
     let maps = cfg.maps.clone();
     let _sim = std::thread::Builder::new()
         .name("m2-sim".to_string())
@@ -143,8 +160,9 @@ async fn main() -> Result<()> {
         glog!("INF", "游戏网关连接：{peer}");
         let ev_tx = ev_tx.clone();
         let check_block = cfg.check_block;
+        let auth = Arc::clone(&auth);
         tokio::spawn(async move {
-            if let Err(e) = gate_conn(sock, ev_tx, check_block).await {
+            if let Err(e) = gate_conn(sock, ev_tx, check_block, auth).await {
                 glog!("WRN", "网关连接结束：{e:#}");
             }
         });
@@ -197,6 +215,21 @@ fn sim_loop(maps: Vec<(i32, i32)>, ev_rx: std::sync::mpsc::Receiver<GateEvent>) 
                 GateEvent::Closed { index } => {
                     glog!("DBG", "sim: index={index} 关闭（S2 才 disconnect）");
                 }
+                GateEvent::LoadDbRequest {
+                    index,
+                    account,
+                    chr_name,
+                    session_id,
+                    gate_id,
+                    client_version,
+                } => {
+                    glog!(
+                        "INF",
+                        "sim: 认证通过 ⇒ 应取角色进世界 Account:{account} ChrName:{chr_name} \
+                         SessionId:{session_id} GateIdx:{gate_id} Ver:{client_version} index={index} \
+                         （LoadDBInfo/进世界属 S2b）"
+                    );
+                }
             }
         }
         let rec = world.tick();
@@ -221,6 +254,7 @@ async fn gate_conn(
     sock: TcpStream,
     ev_tx: std::sync::mpsc::Sender<GateEvent>,
     check_block: usize,
+    auth: Arc<std::sync::Mutex<auth::AdmissionStore>>,
 ) -> Result<()> {
     let (mut rd, wr) = sock.into_split();
     let tx = Arc::new(Mutex::new(wr));
@@ -255,6 +289,7 @@ async fn gate_conn(
             &tx,
             &ev_tx,
             check_block,
+            &auth,
         )
         .await?;
     }
@@ -329,6 +364,7 @@ async fn dispatch(
     tx: &Arc<Mutex<OwnedWriteHalf>>,
     ev_tx: &std::sync::mpsc::Sender<GateEvent>,
     check_block: usize,
+    auth: &Arc<std::sync::Mutex<auth::AdmissionStore>>,
 ) -> Result<()> {
     match u8::try_from(msg.ident).unwrap_or(0) {
         grobal2::GM_OPEN => {
@@ -394,7 +430,52 @@ async fn dispatch(
             // `:201-225`：还没进世界的会话走 `DoClientCertification`（认证语义属 S2）；
             // 已进世界的才把 12B 命令头（+ EDCode 尾）当命令处理。
             if !u.certification {
-                let _ = ev_tx.send(GateEvent::CertificationPending { index, ip });
+                // `:201-225`：还没进世界的会话走 `DoClientCertification`（认证链在 `cert.rs`）
+                let outcome = {
+                    let store = auth.lock().expect("准入表锁被毒化");
+                    cert::do_client_certification(body, &store)
+                };
+                match outcome {
+                    cert::CertOutcome::Ok {
+                        cert,
+                        session_id,
+                        pay_ment,
+                    } => {
+                        users.certify(msg.socket, &cert.account, &cert.chr_name, session_id);
+                        glog!(
+                            "INF",
+                            "会话验证通过 Account:{} ChrName:{} SessionId:{} PayMent:{} index={index}",
+                            cert.account,
+                            cert.chr_name,
+                            session_id,
+                            pay_ment
+                        );
+                        let _ = ev_tx.send(GateEvent::LoadDbRequest {
+                            index,
+                            account: cert.account,
+                            chr_name: cert.chr_name,
+                            session_id,
+                            gate_id: cert.gate_id,
+                            client_version: cert.client_version,
+                        });
+                    }
+                    cert::CertOutcome::Failed {
+                        account,
+                        game_session_id: game_sid,
+                    } => {
+                        // `:348-353` / `:340-346`：标 *disable* + 关用户（槽位置空；客户端由网关侧后续处理）
+                        glog!(
+                            "WRN",
+                            "会话验证失败.Account:{account} SessionId:{game_sid} SessionId(gate)={} Address:{ip}",
+                            msg.session_id
+                        );
+                        users.close_by_socket(msg.socket);
+                        let _ = ev_tx.send(GateEvent::Closed { index });
+                    }
+                    cert::CertOutcome::Ignored => {
+                        let _ = ev_tx.send(GateEvent::CertificationPending { index, ip });
+                    }
+                }
                 return Ok(());
             }
             let Some(cmd) = CommandMessage::from_bytes(body) else {
