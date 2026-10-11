@@ -316,5 +316,22 @@ async fn ids_notification_enables_login_certification() {
         log.contains("Account:loadbot1") && log.contains("ChrName:lb1a"),
         "认证通过的日志里必须有账号/角色名；日志实得：{log}"
     );
+    // S2b-2：认证通过 ⇒ 进加载队列；**没有 DB 链路** ⇒ 照 oracle 的 `QueryCharacterData` 失败支
+    // （`SendOutConnectMsg` 在 oracle 里是"待实现"、不发帧）⇒ 清槽 + 日志
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    let log = child.stdout();
+    assert!(
+        log.contains("读取用户数据失败,踢出用户. Account:loadbot1 ChrName:lb1a"),
+        "无 DB 链路 ⇒ 必须走读档失败支并打出账号/角色名；日志实得：{log}"
+    );
+    // 槽位被清：同 socket/session 再发一帧 ⇒ "用户不存在"
+    gate.write_all(&frame(grobal2::GM_DATA, 501, 77, 1, &[0u8; 16]))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    assert!(
+        child.stdout().contains("用户不存在"),
+        "读档失败清槽后，同 socket/session 的 GM_DATA 必须落到「用户不存在」"
+    );
     child.stop().await;
 }

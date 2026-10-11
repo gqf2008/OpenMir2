@@ -25,6 +25,7 @@ mod cert;
 mod config;
 mod hutil;
 mod ids;
+mod load;
 mod users;
 
 use std::sync::Arc;
@@ -35,7 +36,7 @@ use mir2_protocol::messages::grobal2;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 
 use users::UserList;
 
@@ -57,8 +58,15 @@ macro_rules! glog {
     }};
 }
 
-/// I/O 侧 → sim 侧的事件（sim 线程是唯一碰 `World` 的地方）。
+/// sim 侧 → I/O 侧的命令（世界/读档流程要动网关连接持有的槽表时用）。
 #[derive(Debug, Clone, PartialEq, Eq)]
+enum SimToGate {
+    /// `NetChannel.CloseUser(gateIdx, socket)`（`TCPNetChannel.cs:221-224`）的对应物：清掉该 socket 的槽。
+    KickUser { socket: i32 },
+}
+
+/// I/O 侧 → sim 侧的事件（sim 线程是唯一碰 `World` 的地方）。
+#[derive(Debug)]
 enum GateEvent {
     /// 新用户登记（`GM_OPEN`）。
     Opened { index: i32, ip: String },
@@ -72,15 +80,13 @@ enum GateEvent {
     CertificationPending { index: i32, ip: String },
     /// `GM_CLOSE`。
     Closed { index: i32 },
-    /// 认证通过 ⇒ 该去取角色并进世界（oracle `:323-338` 的 `LoadDBInfo` + `AddToLoadRcdList`）。
-    /// **S2b** 的活：本切片只把事件交到 sim 线程并记录。
-    LoadDbRequest {
-        index: i32,
-        account: String,
-        chr_name: String,
-        session_id: i32,
-        gate_id: i32,
-        client_version: i32,
+    /// 认证通过 ⇒ 取角色（oracle `:323-338` 的 `LoadDBInfo` + `AddToLoadRcdList`）。
+    /// 事件直接带 `LoadDbInfo`，交给 sim 线程的 `FrontEngine` 队列。
+    LoadDbRequest(load::LoadDbInfo),
+    /// 网关连接建好：登记它的 `sim → gate` 命令通道（`service_id` = 该连接的线号 = oracle 的 `GateIdx`）。
+    RegisterGate {
+        service_id: u8,
+        tx: mpsc::UnboundedSender<SimToGate>,
     },
 }
 
@@ -164,6 +170,8 @@ async fn main() -> Result<()> {
     );
     // 网关（GameGate）以客户端身份连上来；同一进程可接待多条网关连接，但**各自独立的会话表**。
     // sim 线程随进程存活（`join` 不必要：世界只由它驱动，进程退出即结束）。
+    // 本进程只监听一个端点：线号取配置里的第一条（oracle 的 `GateInfo.ServiceId`/`GateIdx`）
+    let active_service_id: u8 = 0;
     loop {
         let (sock, peer) = listener.accept().await.context("accept 失败")?;
         sock.set_nodelay(true).ok();
@@ -171,8 +179,9 @@ async fn main() -> Result<()> {
         let ev_tx = ev_tx.clone();
         let check_block = cfg.check_block;
         let auth = Arc::clone(&auth);
+        let service_id = active_service_id;
         tokio::spawn(async move {
-            if let Err(e) = gate_conn(sock, ev_tx, check_block, auth).await {
+            if let Err(e) = gate_conn(sock, ev_tx, check_block, auth, service_id).await {
                 glog!("WRN", "网关连接结束：{e:#}");
             }
         });
@@ -184,6 +193,11 @@ async fn main() -> Result<()> {
 /// 目前把事件**分类记录**（世界侧的会话/命令映射、取角色进世界是 S2b-3），但 tick 循环与"唯一所有者"这条纪律走真路径。
 fn sim_loop(maps: Vec<(i32, i32)>, ev_rx: std::sync::mpsc::Receiver<GateEvent>) {
     let mut world = mir2_world::World::with_maps(maps);
+    // 取角色的加载队列（`FrnEngn` 的双缓冲 + `CharacterDataProcessor` 的读档循环，见 `load.rs`）
+    let mut engine = load::FrontEngine::new();
+    // `GateIdx -> 该网关连接的 sim→gate 通道`（`NetChannel` 按 gateIdx 选连接，`TCPNetChannel.cs:221-223`）
+    let mut gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>> =
+        std::collections::HashMap::new();
     glog!(
         "INF",
         "sim 线程就绪：tick={}ms，地图 {} 张",
@@ -225,20 +239,54 @@ fn sim_loop(maps: Vec<(i32, i32)>, ev_rx: std::sync::mpsc::Receiver<GateEvent>) 
                 GateEvent::Closed { index } => {
                     glog!("DBG", "sim: index={index} 关闭（disconnect 属 S2b-3）");
                 }
-                GateEvent::LoadDbRequest {
-                    index,
-                    account,
-                    chr_name,
-                    session_id,
-                    gate_id,
-                    client_version,
-                } => {
+                GateEvent::LoadDbRequest(info) => {
                     glog!(
                         "INF",
-                        "sim: 认证通过 ⇒ 应取角色进世界 Account:{account} ChrName:{chr_name} \
-                         SessionId:{session_id} GateIdx:{gate_id} Ver:{client_version} index={index} \
-                         （LoadDBInfo/取角色/进世界属 S2b-3）"
+                        "sim: 认证通过 ⇒ 取角色进世界 Account:{} ChrName:{} SessionId:{} GateIdx:{} \
+                         （读档控制流在 load.rs；DB 请求属 S2b-2b）",
+                        info.account,
+                        info.chr_name,
+                        info.session_id,
+                        info.gate_idx
                     );
+                    engine.add_to_load_rcd_list(info);
+                }
+                GateEvent::RegisterGate { service_id, tx } => {
+                    gates.insert(service_id, tx);
+                    glog!("DBG", "sim: 登记网关线号 {service_id} 的命令通道");
+                }
+            }
+        }
+        // 一轮读档：`query` 恒 None = 现在就等价于"DBSvr 未连接"（oracle 的 `QueryCharacterData` 返回 false
+        // ⇒ `SendOutConnectMsg`（**待实现、不发帧**）+ `CloseUser` + 日志），DB 请求接上后换成真查询（S2b-2b）
+        for action in engine.drain_read_storage(|_| None) {
+            match action {
+                load::LoadAction::RequeueSaving { account, chr_name } => {
+                    glog!(
+                        "INF",
+                        "角色数据保存中,稍后重新读取. Account:{account} ChrName:{chr_name}"
+                    );
+                }
+                load::LoadAction::StartQuery { .. } => {}
+                load::LoadAction::KickNoData {
+                    gate_idx,
+                    socket_id,
+                    account,
+                    chr_name,
+                } => {
+                    glog!(
+                        "WRN",
+                        "读取用户数据失败,踢出用户. Account:{account} ChrName:{chr_name}"
+                    );
+                    match gates.get(&u8::try_from(gate_idx).unwrap_or(0)) {
+                        Some(tx) => {
+                            let _ = tx.send(SimToGate::KickUser { socket: socket_id });
+                        }
+                        None => glog!(
+                            "WRN",
+                            "找不到网关线号 {gate_idx}，无法踢 socket={socket_id}"
+                        ),
+                    }
                 }
             }
         }
@@ -265,9 +313,16 @@ async fn gate_conn(
     ev_tx: std::sync::mpsc::Sender<GateEvent>,
     check_block: usize,
     auth: Arc<std::sync::Mutex<auth::AdmissionStore>>,
+    service_id: u8,
 ) -> Result<()> {
     let (mut rd, wr) = sock.into_split();
     let tx = Arc::new(Mutex::new(wr));
+    // sim → gate：世界/读档流程要清某个用户的槽时走这条（`NetChannel.CloseUser(gateIdx, socket)`）
+    let (sim_tx, mut sim_rx) = mpsc::unbounded_channel::<SimToGate>();
+    let _ = ev_tx.send(GateEvent::RegisterGate {
+        service_id,
+        tx: sim_tx,
+    });
     let mut users = UserList::new();
     let mut state = KeepAlive {
         send_keep_alive: false,
@@ -275,7 +330,16 @@ async fn gate_conn(
     };
     loop {
         let mut head = [0u8; ServerMessage::SIZE];
-        if rd.read_exact(&mut head).await.is_err() {
+        // sim 侧的命令（清槽等）**不能等下一次入站帧**才处理：oracle 的 `CloseUser` 是调用线程直接清
+        // ⇒ 这里用 `select!` 让"下一帧的头"与"sim 命令"任意一个就绪都能推进。
+        let head_res = tokio::select! {
+            r = rd.read_exact(&mut head) => r,
+            Some(cmd) = sim_rx.recv() => {
+                apply_sim_cmd(cmd, &mut users);
+                continue;
+            }
+        };
+        if head_res.is_err() {
             glog!("ERR", "网关连接断开。");
             return Ok(());
         }
@@ -307,6 +371,26 @@ async fn gate_conn(
             &auth,
         )
         .await?;
+        // 处理与本帧同批到达的 sim 命令（清槽等）
+        while let Ok(cmd) = sim_rx.try_recv() {
+            apply_sim_cmd(cmd, &mut users);
+        }
+    }
+}
+
+/// 施放一条 sim → gate 的命令（`NetChannel.CloseUser(gateIdx, socket)` 的落地）。
+fn apply_sim_cmd(cmd: SimToGate, users: &mut UserList) {
+    match cmd {
+        SimToGate::KickUser { socket } => {
+            if let Some(index) = users.close_by_socket(socket) {
+                glog!(
+                    "WRN",
+                    "按世界侧要求清槽：socket={socket} index={index} 在线={} 槽={}",
+                    users.online(),
+                    users.slots()
+                );
+            }
+        }
     }
 }
 
@@ -524,14 +608,21 @@ async fn dispatch(
                             session_id,
                             pay_ment
                         );
-                        let _ = ev_tx.send(GateEvent::LoadDbRequest {
-                            index,
-                            account: cert.account,
-                            chr_name: cert.chr_name,
+                        // `:323-337` 的 `LoadDBInfo`（字段逐个对应；`SocketId` = 客户端句柄、`GSocketIdx` = 网关 SessionId）
+                        let _ = ev_tx.send(GateEvent::LoadDbRequest(load::LoadDbInfo {
+                            account: cert.account.clone(),
+                            chr_name: cert.chr_name.clone(),
+                            ipaddr: ip.clone(),
                             session_id,
-                            gate_id: cert.gate_id,
-                            client_version: cert.client_version,
-                        });
+                            soft_version_date: cert.client_version,
+                            pay_ment,
+                            pay_mode: 0,
+                            socket_id: msg.socket,
+                            gate_socket_idx: msg.session_id,
+                            gate_idx: cert.gate_id,
+                            new_user_tick: now_ms(),
+                            play_time: 0,
+                        }));
                     }
                     cert::CertOutcome::Failed {
                         account,
