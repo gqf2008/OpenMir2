@@ -23,6 +23,7 @@
 mod auth;
 mod cert;
 mod config;
+mod dbclient;
 mod hutil;
 mod ids;
 mod load;
@@ -44,6 +45,7 @@ use users::UserList;
 const COMMAND_MESSAGE_SIZE: usize = 12;
 
 /// Serilog 同形日志前缀（便于与两侧日志对时间线）。
+#[macro_export]
 macro_rules! glog {
     ($lvl:expr, $($arg:tt)*) => {{
         let now = ::std::time::SystemTime::now()
@@ -133,6 +135,25 @@ async fn main() -> Result<()> {
         conf.display()
     );
 
+    // DB 链路（GameSvr → DBSvr）：oracle 的 `DataQueryServer` 也是 TcpClient 主动连（`:25-33`）。
+    // 本切片只**发**取角色请求；收/解析属 S2b-2b。
+    let db_state = dbclient::DbLinkState::new();
+    let (db_req_tx, db_req_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    {
+        let db_state = db_state.clone();
+        let db_addr = cfg.db_addr.clone();
+        let db_port = cfg.db_port;
+        tokio::spawn(async move {
+            dbclient::run_db_link(db_addr, db_port, db_state, db_req_rx).await;
+        });
+    }
+    // 查询号：`SystemShare.Config.DBQueryID++`（`PlayerDataService.GetQueryId` `:183-191`，从 1 起、溢出回 1）
+    let db = DbWiring {
+        state: db_state,
+        req_tx: db_req_tx,
+        next_query_id: std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0)),
+    };
+
     // sim 侧：一个专用线程独占 World（§4.2 第 1 条：不许并行 executor 驱动世界）
     let (ev_tx, ev_rx) = std::sync::mpsc::channel::<GateEvent>();
     // 准入会话表（C# `AuthenticationService._sessionList`）：跨网关连接共享；
@@ -142,7 +163,7 @@ async fn main() -> Result<()> {
     let maps = cfg.maps.clone();
     let _sim = std::thread::Builder::new()
         .name("m2-sim".to_string())
-        .spawn(move || sim_loop(maps, ev_rx))
+        .spawn(move || sim_loop(maps, ev_rx, Some(db)))
         .context("起 sim 线程失败")?;
 
     // 登录服务器（IDS）链路：oracle 是 TcpClient 主动连它（`AuthenticationService.cs:22-34`），
@@ -191,7 +212,32 @@ async fn main() -> Result<()> {
 /// sim 线程：建世界 → 按 `TICK_INTERVAL_MS` tick → 消费 I/O 侧事件。
 ///
 /// 目前把事件**分类记录**（世界侧的会话/命令映射、取角色进世界是 S2b-3），但 tick 循环与"唯一所有者"这条纪律走真路径。
-fn sim_loop(maps: Vec<(i32, i32)>, ev_rx: std::sync::mpsc::Receiver<GateEvent>) {
+/// sim 侧用到的 DB 接线（没配 DB 时传 `None` ⇒ 读档恒走"取数失败"支）。
+#[derive(Debug)]
+struct DbWiring {
+    state: dbclient::DbLinkState,
+    req_tx: mpsc::UnboundedSender<Vec<u8>>,
+    next_query_id: std::sync::Arc<std::sync::atomic::AtomicI32>,
+}
+
+impl DbWiring {
+    /// `GetQueryId()`（`PlayerDataService.cs:183-191`）：先自增，再从 1 起、溢出回 1。
+    fn next_query_id(&self) -> i32 {
+        use std::sync::atomic::Ordering;
+        let q = self.next_query_id.fetch_add(1, Ordering::SeqCst) + 1;
+        if q > i32::MAX - 1 {
+            self.next_query_id.store(1, Ordering::SeqCst);
+            return 1;
+        }
+        q
+    }
+}
+
+fn sim_loop(
+    maps: Vec<(i32, i32)>,
+    ev_rx: std::sync::mpsc::Receiver<GateEvent>,
+    db: Option<DbWiring>,
+) {
     let mut world = mir2_world::World::with_maps(maps);
     // 取角色的加载队列（`FrnEngn` 的双缓冲 + `CharacterDataProcessor` 的读档循环，见 `load.rs`）
     let mut engine = load::FrontEngine::new();
@@ -257,9 +303,36 @@ fn sim_loop(maps: Vec<(i32, i32)>, ev_rx: std::sync::mpsc::Receiver<GateEvent>) 
                 }
             }
         }
-        // 一轮读档：`query` 恒 None = 现在就等价于"DBSvr 未连接"（oracle 的 `QueryCharacterData` 返回 false
-        // ⇒ `SendOutConnectMsg`（**待实现、不发帧**）+ `CloseUser` + 日志），DB 请求接上后换成真查询（S2b-2b）
-        for action in engine.drain_read_storage(|_| None) {
+        // 一轮读档：`query` = oracle 的 `QueryCharacterData`（`CharacterDataProcessor.cs:165`）——
+        // 已连上 DBSvr ⇒ 发 `DB_LOADHUMANRCD` 请求并返回 query_id；未连上 ⇒ None（照 `IsConnected`，
+        // 走 `SendOutConnectMsg`（**oracle 里是"待实现"、不发帧**）+ `CloseUser` 的失败支）。
+        // **收/解析**（`LoadPlayerDataPacket` → 取角色 → 进世界）属 S2b-2b 的第二半（已登记）。
+        let mut query_fail = false;
+        let actions = match &db {
+            Some(w) => engine.drain_read_storage(|info| {
+                if !w.state.is_connected() {
+                    return None; // `IsConnected`（`DataQueryServer.cs:60`）
+                }
+                let qid = w.next_query_id();
+                let frame = dbclient::load_human_rcd_request(
+                    qid,
+                    &info.account,
+                    &info.chr_name,
+                    &info.ipaddr,
+                    info.session_id,
+                );
+                match w.req_tx.send(frame) {
+                    Ok(()) => Some(qid),
+                    Err(_) => {
+                        query_fail = true;
+                        None
+                    }
+                }
+            }),
+            None => engine.drain_read_storage(|_| None),
+        };
+        let _ = query_fail;
+        for action in actions {
             match action {
                 load::LoadAction::RequeueSaving { account, chr_name } => {
                     glog!(

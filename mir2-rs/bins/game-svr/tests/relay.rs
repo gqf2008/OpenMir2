@@ -32,13 +32,13 @@ fn free_port() -> u16 {
     l.local_addr().unwrap().port()
 }
 
-fn write_conf(dir: &std::path::Path, port: u16, check_block: usize, ids_port: u16) {
+fn write_conf(dir: &std::path::Path, port: u16, check_block: usize, ids_port: u16, db_port: u16) {
     std::fs::create_dir_all(dir).unwrap();
     std::fs::write(
         dir.join("Server.conf"),
         format!(
             "[Server]\nDBPort=6000\nCheckBlock={check_block}\nGateAddr= 127.0.0.1\n\
-             GatePort={port}\nIDSAddr= 127.0.0.1\nIDSPort={ids_port}\nWorldMaps=64x64\n"
+             GatePort={port}\nIDSAddr= 127.0.0.1\nIDSPort={ids_port}\nDBAddr=127.0.0.1\nDBPort={db_port}\nWorldMaps=64x64\n"
         ),
     )
     .unwrap();
@@ -90,9 +90,9 @@ struct Child {
 }
 
 impl Child {
-    fn spawn(port: u16, check_block: usize, ids_port: u16, tag: &str) -> Self {
+    fn spawn(port: u16, check_block: usize, ids_port: u16, db_port: u16, tag: &str) -> Self {
         let dir = std::env::temp_dir().join(format!("gs-{tag}-{}-{port}", std::process::id()));
-        write_conf(&dir, port, check_block, ids_port);
+        write_conf(&dir, port, check_block, ids_port, db_port);
         let log = dir.join("server.out.log");
         let out = std::fs::File::create(&log).unwrap();
         let proc = tokio::process::Command::new(env!("CARGO_BIN_EXE_game-svr"))
@@ -118,7 +118,7 @@ impl Child {
 #[tokio::test]
 async fn gm_open_gets_server_user_index_one_based() {
     let port = free_port();
-    let child = Child::spawn(port, 12288, free_port(), "open");
+    let child = Child::spawn(port, 12288, free_port(), free_port(), "open");
     let mut gate = connect_with_retry(port).await;
     gate.write_all(&frame(grobal2::GM_OPEN, 1001, 4242, 0, b"192.168.1.7"))
         .await
@@ -140,7 +140,7 @@ async fn gm_open_gets_server_user_index_one_based() {
 #[tokio::test]
 async fn close_frees_slot_for_reuse() {
     let port = free_port();
-    let child = Child::spawn(port, 12288, free_port(), "close");
+    let child = Child::spawn(port, 12288, free_port(), free_port(), "close");
     let mut gate = connect_with_retry(port).await;
     gate.write_all(&frame(grobal2::GM_OPEN, 1001, 1, 0, b"1.1.1.1"))
         .await
@@ -184,7 +184,7 @@ async fn close_frees_slot_for_reuse() {
 #[tokio::test]
 async fn gm_data_before_certification_goes_to_sim() {
     let port = free_port();
-    let child = Child::spawn(port, 12288, free_port(), "data");
+    let child = Child::spawn(port, 12288, free_port(), free_port(), "data");
     let mut gate = connect_with_retry(port).await;
     gate.write_all(&frame(grobal2::GM_OPEN, 777, 555, 0, b"10.0.0.9"))
         .await
@@ -234,7 +234,7 @@ async fn login_packet_without_admission_fails_certification() {
     // 真 C# GameGate 发出的合成登录包（98B；见 E:\tmp\openmir2-gamegate-imp\oracle-login-cap\out-csharp-raw.json）
     const ORACLE_LOGIN_BODY: &str = "23305e5e3c716f6d446f6e6f5478615f3c786e61497b5f623f5f6162586b6062586b61625a675f615a5f60605a6b60615a6a62603f6b6060586b6060586b6060586b6060586b6060586b6060586b6060586b6060586b6060586b6060586b5f603f21";
     let port = free_port();
-    let child = Child::spawn(port, 12288, free_port(), "cert");
+    let child = Child::spawn(port, 12288, free_port(), free_port(), "cert");
     let mut gate = connect_with_retry(port).await;
     gate.write_all(&frame(grobal2::GM_OPEN, 900, 42, 0, b"10.0.0.5"))
         .await
@@ -289,7 +289,7 @@ async fn ids_notification_enables_login_certification() {
         }
     });
     let port = free_port();
-    let child = Child::spawn(port, 12288, ids_port, "ids");
+    let child = Child::spawn(port, 12288, ids_port, free_port(), "ids");
     let mut gate = connect_with_retry(port).await;
     gate.write_all(&frame(grobal2::GM_OPEN, 501, 77, 0, b"127.0.0.1"))
         .await
@@ -332,6 +332,120 @@ async fn ids_notification_enables_login_certification() {
     assert!(
         child.stdout().contains("用户不存在"),
         "读档失败清槽后，同 socket/session 的 GM_DATA 必须落到「用户不存在」"
+    );
+    child.stop().await;
+}
+
+/// **判据（S2b-2b 的第一半）**：DB 链路连上时，读档那一步必须把 `DB_LOADHUMANRCD` 请求**按 oracle 的字节**发出去。
+///
+/// oracle 的字节由部署件序列化器产出（`E:\tmp\openmir2-gamegate-imp\dbgen\db-request-baseline.txt`），
+/// 本用例断言"假 DBSvr 收到的帧"等于 `dbclient` 编码器的输出（后者已由 3 条 oracle 字节单测钉住），
+/// 并顺带断言：DB 在线 ⇒ **不**走"读取用户数据失败"（与 `ids_notification_...` 那条形成对照）。
+#[tokio::test]
+async fn db_load_request_is_sent_with_oracle_bytes() {
+    const ORACLE_LOGIN_BODY: &str = "23305e5e3c716f6d446f6e6f5478615f3c786e61497b5f623f5f6162586b6062586b61625a675f615a5f60605a6b60615a6a62603f6b6060586b6060586b6060586b6060586b6060586b6060586b6060586b6060586b6060586b6060586b5f603f21";
+    // 假 DBSvr：收一帧就返回
+    let dbsrv = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let db_port = dbsrv.local_addr().unwrap().port();
+    let dbsrv_task = tokio::spawn(async move {
+        let (mut s, _) = dbsrv.accept().await.unwrap();
+        let mut buf = vec![0u8; 512];
+        let n = tokio::io::AsyncReadExt::read(&mut s, &mut buf)
+            .await
+            .unwrap_or(0);
+        buf.truncate(n);
+        buf
+    });
+    // 假 IDS：灌一条准入
+    let ids = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let ids_port = ids.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        if let Ok((mut s, _)) = ids.accept().await {
+            let msg = b"(100/loadbot1/2/0/1/127.0.0.1/3600)";
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut s, msg).await;
+            tokio::time::sleep(Duration::from_secs(6)).await;
+        }
+    });
+    let port = free_port();
+    let child = Child::spawn(port, 12288, ids_port, db_port, "dbreq");
+    let mut gate = connect_with_retry(port).await;
+    gate.write_all(&frame(grobal2::GM_OPEN, 601, 88, 0, b"127.0.0.1"))
+        .await
+        .unwrap();
+    let (m, _) = recv_frame(&mut gate).await.unwrap();
+    assert_eq!(m.session_index, 1);
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    gate.write_all(&frame(
+        grobal2::GM_DATA,
+        601,
+        88,
+        1,
+        &hex(ORACLE_LOGIN_BODY),
+    ))
+    .await
+    .unwrap();
+    let got = tokio::time::timeout(Duration::from_secs(6), dbsrv_task)
+        .await
+        .expect("假 DBSvr 未在 6s 内收到请求")
+        .unwrap();
+    // 逐段核对（结构与内容都对着 oracle 实测件：msg 13B / packet 59B / 帧 126B）
+    assert_eq!(got.len(), 126, "oracle 实测帧长 126（6 头 + 120 体）");
+    assert_eq!(&got[..4], &0xAA9A_AA9Au32.to_le_bytes(), "帧头 PacketCode");
+    assert_eq!(
+        u16::from_le_bytes([got[4], got[5]]),
+        120,
+        "PacketLen = 体长"
+    );
+    assert_eq!(got[6], 0x04, "ServerRequestData 的成员数前缀");
+    assert_eq!(
+        i32::from_le_bytes([got[7], got[8], got[9], got[10]]),
+        1,
+        "QueryId 从 1 起（`GetQueryId`）"
+    );
+    // Message 段：长度 18 + EDCode(13B 的 ServerRequestMessage)，解出来必须等于 oracle 的 13 字节
+    let msg_len = i32::from_le_bytes([got[11], got[12], got[13], got[14]]);
+    assert_eq!(msg_len, 18, "EDCode(13) 实测 18 字节");
+    let msg = mir2_protocol::edcode::decode(&got[15..15 + 18]);
+    assert_eq!(
+        msg,
+        vec![0x05, 0, 0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0],
+        "ServerRequestMessage（成员数 5 + Recog=0 + Ident=100(DB_LOADHUMANRCD) + 三个 0）"
+    );
+    // Packet 段：长度 79 + EDCode(59B 的 LoadCharacterData)，解出来等于 oracle 的 59 字节
+    let pkt_off = 15 + 18;
+    let pkt_len = i32::from_le_bytes([
+        got[pkt_off],
+        got[pkt_off + 1],
+        got[pkt_off + 2],
+        got[pkt_off + 3],
+    ]);
+    assert_eq!(pkt_len, 79, "EDCode(59) 实测 79 字节");
+    let oracle_packet = hex("04080000006c006f006100640062006f0074003100040000006c00620031006100090000003100320037002e0030002e0030002e00310002000000");
+    assert_eq!(
+        mir2_protocol::edcode::decode(&got[pkt_off + 4..pkt_off + 4 + 79]),
+        oracle_packet,
+        "LoadCharacterData 必须是 oracle 的 59 字节（account=loadbot1 / chr=lb1a / addr=127.0.0.1 / session=2）"
+    );
+    // Sign 段：长度 6（EDCode(4B)），内容 = EDCode(LE32(MakeLong(queryId^170, msglen+pktlen+6)))
+    let sign_off = pkt_off + 4 + 79;
+    let sign_len = i32::from_le_bytes([
+        got[sign_off],
+        got[sign_off + 1],
+        got[sign_off + 2],
+        got[sign_off + 3],
+    ]);
+    assert_eq!(sign_len, 6, "EDCode(4) 实测 6 字节");
+    let sign_id: u32 = (103u32 << 16) | u32::from(1u16 ^ 170);
+    assert_eq!(
+        mir2_protocol::edcode::decode(&got[sign_off + 4..sign_off + 4 + 6]),
+        sign_id.to_le_bytes().to_vec(),
+        "Sign = MakeLong(queryId^170, msg+pkt+6)（hi<<16|lo）"
+    );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let log = child.stdout();
+    assert!(
+        !log.contains("读取用户数据失败"),
+        "DB 在线 ⇒ 不得走失败支；日志实得：{log}"
     );
     child.stop().await;
 }
