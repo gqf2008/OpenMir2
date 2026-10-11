@@ -5,7 +5,10 @@
 
 .DESCRIPTION
   设计文档 §6 M3 判据（owner 2026-10-10 决策：夹具提升为正式门禁）：
-    - DB 侧：作用域内字段级 diff = 0（`scoped_diff.py diff`）
+    - DB 侧：作用域内字段级 diff = 0（`scoped_diff.py diff --canonical`；
+      只对"每次运行必变"的列（自增 PK/FK、墙钟 datetime/unix 秒）与夹具随机输入的
+      建角列（Hair/Sex/Job）置占位，其余列逐字节比；未登记表 fail-closed。
+      易变列白名单与理由见 `scoped_diff.py` 的 TABLE_COLUMNS/VOLATILE_COLUMNS）
     - 基线侧：C# 基线一条命令可复跑且 hash 稳定（`rng-baseline.ps1`）
     - 两侧实现必须真的是"两侧"（见下方实现识别护栏）
 
@@ -157,7 +160,7 @@ if ($PeerSession -ne '') {
     Write-Output ("RED: 参照会话缺 scoped_after_norm.jsonl: {0}" -f $peer)
     $failed += 'peer_session_missing'
   } else {
-    & python (Join-Path $Here 'scoped_diff.py') diff $peer $mine
+    & python (Join-Path $Here 'scoped_diff.py') diff $peer $mine --canonical
     $diffExit = $LASTEXITCODE
     $report.steps.cross_side_diff = [ordered]@{ peer = $PeerSession; exit = $diffExit }
     if ($diffExit -ne 0) { $failed += 'cross_side_diff_nonzero' }

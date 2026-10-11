@@ -1,7 +1,7 @@
 # M3 对拍夹具（同库同脚本）
 
 D2 线交付（对应设计文档 §6 M3「同序列对拍」）。owner 2026-10-10 决策：**本夹具即 M3 正式门禁**
-（判据 = `run_pair.ps1` + `scoped_diff.py`，作用域内字段级 diff = 0，且 C# 基线一条命令可复跑）。
+（判据 = `run_pair.ps1` + `scoped_diff.py diff --canonical`，作用域内字段级 diff = 0，且 C# 基线一条命令可复跑）。
 判据纪律照 §6.0：可测、可证伪、差异要么 0 要么进 `tests/parity/whitelist.md`、证据四件套。
 
 ## M3 正式门禁：一条命令
@@ -47,7 +47,25 @@ GREEN: M3 门禁通过
   pack_unchanged=True（E:\MirServer 5 个关键文件 sha256 前后一致）
 ```
 
+### 规范化口径（2026-10-11，owner 裁决 A；本判据的组成部分）
+
+`row_sha256` 覆盖 `SELECT *` 全列，其中一部分列**每次运行必变**（自增 PK/FK、墙钟
+`datetime`/unix 秒），另有一列是**夹具自身随机**（`src/BotSrv/Scenes/Scene/SelectChrScene.cs:174`
+`sJob = Random(2)`，`RandomNumber` 无种子）。不排除这些列，**两次都 GREEN 的 C# 会话互 diff
+也判 RED**（实测 8 行），判据无仲裁力。因此正式判据改为 `diff --canonical`：
+
+- 只对 `scoped_diff.py` 里**逐列登记（含每列理由）**的易变列置 `<VOLATILE>`，其余列逐字节比；
+- **不做整表 ignore**；遇到未登记的表 fail-closed（exit 4），不许悄悄不比；
+- `characters.Hair/Sex/Job` 是夹具建角输入（当前 `Random(2)` 使 `Job` 在 0/1 间随机，
+  `Hair/Sex` 因 `Random(1)` 恒 0 而固定为 2/0）⇒ 这三列置占位，其行为覆盖已迁至
+  **卡 `openmir2-m3-botsrv-fixed-newchr`**（固定 Job/Hair/Sex 的确定性场景，判据：该场景
+  `Job` **不**置占位且规范化后 diff = 0）；
+- 红检：`python scoped_diff.py selftest` 5/5，含「仅易变列不同必须判绿」「被比对列被改坏必须判红」「未登记表 fail-closed」。
+
+单侧基线不必带 `--canonical`（`extract`/`delta` 不变）；只在**跨侧比对**时用。
+
 ## 一次「侧运行」是什么
+
 
 ```
 预检（入口在听 / DB 可读 / 账号名长度合规）
@@ -65,7 +83,7 @@ GREEN: M3 门禁通过
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_pair.ps1 -Side csharp -Bots 1
-python mir2-rs/tests/parity/m3/scoped_diff.py diff <csharp会话>/scoped_after_norm.jsonl <rust会话>/scoped_after_norm.jsonl
+python mir2-rs/tests/parity/m3/scoped_diff.py diff <csharp会话>/scoped_after_norm.jsonl <rust会话>/scoped_after_norm.jsonl --canonical
 ```
 
 ## RNG 基线：一条命令（种子注入 → 序列落盘 + hash 稳定）
