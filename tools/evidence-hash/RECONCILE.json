@@ -49,6 +49,22 @@
     "why": "仓库字节 == 盘上字节（两种口径一致）"
   },
   {
+    "manifest": "mir2-rs/tests/parity/evidence/M1/s4b-slice5-exitpaths/SHA256SUMS.txt",
+    "dir": "mir2-rs/tests/parity/evidence/M1/s4b-slice5-exitpaths",
+    "listed": 25,
+    "repo_ok": 25,
+    "disk_ok": 25,
+    "missing": 0,
+    "extra": [
+      ".gitattributes"
+    ],
+    "external": [],
+    "gitattributes": true,
+    "freeze_all": true,
+    "verdict": "GREEN",
+    "why": "仓库字节 == 盘上字节（两种口径一致）"
+  },
+  {
     "manifest": "mir2-rs/tests/parity/m1-boundary-load/evidence/SHA256SUMS.txt",
     "dir": "mir2-rs/tests/parity/m1-boundary-load/evidence",
     "listed": 26,

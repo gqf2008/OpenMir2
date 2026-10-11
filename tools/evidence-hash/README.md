@@ -18,23 +18,26 @@
 
 ## ③ 存量对账与逐条处置（2026-10-12）
 
-全仓 `git ls-files` 命中的 `SHA256SUMS.txt` = **7 个目录**。修正前 `reconcile` = `4/7 GREEN；RED 3`
-（原文：`evidence/2026-10-12/02-reconcile-before.txt`）；修正后 **7/7 GREEN**（`04-reconcile-after.txt`）。
-表格（路径 / 件数 / 两种口径命中 / 缺件 / 结论）见 [`RECONCILE.md`](RECONCILE.md)（由 `reconcile --md` 生成，
-不要手改；本节的处置登记为手工维护）。
+全仓 `git ls-files` 命中的 `SHA256SUMS.txt` 现有 **8 个目录**（含合入 master `71bdb040` 后新增的
+`M1/s4b-slice5-exitpaths`）。本片开工时是 **7 个**，修正前 `reconcile` = `4/7 GREEN；RED 3`
+（原文：`evidence/2026-10-12/02-reconcile-before.txt`）；修正 + 合入 master 后 **8/8 GREEN**
+（`04-reconcile-after.txt`）。表格（路径 / 件数 / 两种口径命中 / 缺件 / 结论）见 [`RECONCILE.md`](RECONCILE.md)
+（由 `reconcile --md` 生成，不要手改；本节的处置登记为手工维护）。
 
 | 目录 | 件数 | 修正前 | 处置 | 修正后 |
 | --- | --- | --- | --- | --- |
 | `mir2-rs/tests/parity/envir-2026-10-10` | 6 | 5/6（仓库与盘上都 5/6） | ① **改成 LF 归一**：`parse-stats-cs.json` 记的是 CRLF 值 `efc3671c…`，该文件 `*.json text eol=lf` ⇒ 仓库字节 `fa587e5c…`（`write` 改 1 行） | 6/6 |
 | `mir2-rs/tests/parity/envir-2026-10-11` | 11 | 11/11 | 无需改：已按仓库字节（`MapInfo-synth.txt`/`Server.conf-synth` 由本目录 `.gitattributes` `-text` 冻结；`E:/MirServer/**` 为仓外输入，按盘上字节） | 11/11 |
 | `mir2-rs/tests/parity/evidence/M1/s4b-slice4-crossread` | 51 | 51/51 | 无需改：整目录 `* -text` 冻结字节，`sha256sum -c` 亦可用 | 51/51 |
+| `mir2-rs/tests/parity/evidence/M1/s4b-slice5-exitpaths` | 25 | 25/25 | 无需改：随 master `71bdb040` 合入，整目录 `* -text` 冻结字节 | 25/25 |
 | `mir2-rs/tests/parity/m1-boundary-load/evidence` | 26 | 26/26 | 无需改：整目录 `* -text` 冻结字节 | 26/26 |
 | `tools/m2-acceptance/evidence/m2svr-o3-pergateway-kick-20261012` | 4 | 4/4 | 无需改 | 4/4 |
 | `tools/m2-acceptance/evidence/session-lifecycle-rerun-20261012` | 11 | 3/11（N-1） | ① **改成 LF 归一**：未加 `* -text`——原始捕获无需冻结字节，改清单比改 8 个 blob 改动更小；README §4 已同步口径（`write` 改 8 行） | 11/11 |
 | `tools/m2-acceptance/evidence/session-lifecycle-selftest-20261012` | 6 | 1/6（N-1 同族） | ① **改成 LF 归一**（`write` 改 5 行） | 6/6 |
 
 “未列入清单”的观察（信息列，**不作判据**）：`envir-2026-10-11` / `s4b-slice4-crossread` /
-`m1-boundary-load/evidence` 的 `.gitattributes`（元数据）、`session-lifecycle-rerun-20261012` 的 `README.md`。
+`s4b-slice5-exitpaths` / `m1-boundary-load/evidence` 的 `.gitattributes`（元数据）、
+`session-lifecycle-rerun-20261012` 的 `README.md`。
 若要严格的多件检查：`--check-extra --exclude .gitattributes --exclude 'README*'`。
 
 ## 口径（唯一权威定义）
