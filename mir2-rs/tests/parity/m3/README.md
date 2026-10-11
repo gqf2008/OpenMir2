@@ -48,14 +48,41 @@ python mir2-rs/tests/parity/m3/scoped_diff.py diff \
 
 `run_m3_gate.ps1` 依次做四件事，最后落 `sessions/M3-gate-<side>-<时间>.json`（含各步骤退出码与失败项）：
 
-0. **入口实现识别护栏**（**快速失败**）：读 7000/7100/7200 的实际监听进程，
-   `-Side rust` 时若入口仍是 `E:\MirServer` 的 C# 实现 ⇒ 立即 RED 退出
-   ——否则就是"拿 C# 跟自己比"，门禁会恒绿。**实测**（2026-10-10，M1 未顶住端口时）：
-   `RED: 入口护栏未通过，快速失败: rust_side_but_csharp_holds_entry`（退出码 1）。
+0. **入口实现识别护栏**（**快速失败**）：读 7000/7100/7200 的实际监听进程，口径复用
+   `tools/m2-acceptance/portclassify.ps1`（与 M2 验收① 同一分类器）。`-Side rust` 时必须三个端口
+   都是**已知 Rust 入口**且挂在本端口期望入口上（`login-gate`/`sel-gate`/`game-gate`）——
+   **不再只判「不是 C#」**，否则「未知进程」或「已知 Rust 入口接错线」都能蒙过去；
+   `-Side csharp` 时必须是 `E:\MirServer` 的 C# 实现。不过即 RED 退出。
+   失败项：`entry_ports_not_listening` / `rust_side_entry_not_known_rust` /
+   `csharp_side_but_entry_is_not_csharp` / `mixed_implementations_on_entries`。
 1. `run_pair.ps1`：快照 before/after（13 表 sha256）→ 操作序列 → 作用域抽取 → 基线 json。
 2. RNG 基线：`csharp` 侧跑 `rng-baseline.ps1`（种子注入 → 世界 RNG 流 + 掉落/经验序列落盘 + hash）；
    `rust` 侧重放 C# 记录流（`cargo test -p mir2-parity-tests --test rng_replay_parity`）。
-3. 给了 `-PeerSession` 时做跨侧比对：`scoped_diff.py diff` **必须 0**。
+3. 给了 `-PeerSession` 时做跨侧比对。**先机判两条前置**：
+   - `Get-M3SessionDirFault`：本侧会话目录非空（run_pair 中途失败 ⇒ `$sessionDir=null`，
+     旧实现会抛异常、连 RED 报告都不落 ⇒ fail-open），否则 `session_dir_missing`；
+   - `Get-M3PeerScenarioGuard`：peer 的 `baseline.json.fixed_new_chr` 与本侧一致，否则
+     `peer_scenario_mismatch`（两侧不是同一输入序列，diff 无仲裁力）；peer 的 `baseline.json`
+     被写坏/半写（截断、非法 JSON）时 `peer_baseline_invalid`——**结构化判红并落报告**，
+     不得抛异常中断（P-1：旧写法 `Get-Content … | ConvertFrom-Json` 在 `$ErrorActionPreference='Stop'`
+     下中断于落 RED 报告前，属 fail-open）。
+   两条都过才跑 `scoped_diff.py diff`，**必须 0**。
+
+### 护栏自检（离线；卡 `openmir2-m3-gate-script-hardening`）
+
+三条机判护栏（①入口 / ②sessionDir / ③peer 场景）的唯一口径在 `gate_guards.ps1`，
+`run_m3_gate.ps1` 与 `selftest_gate.ps1` 共用同一批函数（照 `portclassify.ps1` 先例），
+所以「改坏必红 / 还原必绿」作用在**真正跑的生产代码**上：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/selftest_gate.ps1   # 16/16 GREEN
+```
+
+自检覆盖：已知 Rust 入口=绿 / C#=红 / **未知进程=红（旧护栏放行）** /
+**已知 Rust 接错端口=红（旧护栏放行）** / 端口没听=红 / sessionDir=null ⇒ `session_dir_missing` /
+peer 场景不一致 ⇒ `peer_scenario_mismatch` / 缺 `baseline.json` / 缺 `fixed_new_chr` /
+**peer `baseline.json` 坏 JSON ⇒ `peer_baseline_invalid`（不抛异常中断，P-1）**。
+全程离线：不起栈、不占端口、不碰 DB。
 
 首次 GREEN 报告（2026-10-10，`-Side csharp -VerifyRepeat`）：
 

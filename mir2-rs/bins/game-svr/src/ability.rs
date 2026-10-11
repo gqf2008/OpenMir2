@@ -43,6 +43,12 @@
 //! 6. `RecalcAdjusBonus()`（`PlayObject.Base.cs:1104`）在尾部合成**之前**改的是 `WAbil` 的
 //!    DC/MC/SC/AC/MAC/MaxHP/MaxMP——随后被尾部合成**逐项覆盖** ⇒ 对最终 `WAbil` **无可观测影响**
 //!    （本模块据此不实现它；这是 oracle 的既有形态，不是省事）。
+//! 7. **重复调用**：oracle 只把 `AntiPoison` 置 0、`AntiMagic` 置 1（`BaseObject.Abil.cs:30-31`），
+//!    **不重置** `PoisonRecover/HealthRecover/SpellRecover`（`PlayObject.cs:2893-2895` 是 `+=`），
+//!    道士的 `RecalcHitSpeed` 也**不重置** `HitPoint`（`PlayObject.cs:3678` 只设 `SpeedPoint`）
+//!    ⇒ 在同一对象上**再调一次** `RecalcAbilitys()`（装备/卸下的成功分支）这四项会累加。
+//!    [`recalc_abilitys`] = 首次调用语义；重复调用用 [`recalc_abilitys_with_prior`] 显式传调用前的
+//!    `SubAbility`（卡内登记的 `T-18` 由此收敛）。
 //!
 //! # 与 oracle 逐字段相同怎么保证
 //!
@@ -294,6 +300,23 @@ pub struct SubAbility {
 }
 
 impl SubAbility {
+    /// **首次** `RecalcAbilitys()` 之前的 `SubAbility` 初值（`BaseObject` 构造：`HitPoint = DEFHIT`、
+    /// `SpeedPoint = DEFSPEED`；`AntiPoison`/三项 recover 为 0，`AntiMagic` 由 `RecalcAbilitys` 置 1）。
+    ///
+    /// 用于把 [`recalc_abilitys`] 保持成「首次调用」语义；重复调用见 [`recalc_abilitys_with_prior`]。
+    #[must_use]
+    pub const fn first_call() -> Self {
+        Self {
+            anti_magic: 1,
+            hit_point: DEF_HIT as u8,
+            speed_point: DEF_SPEED as u8,
+            anti_poison: 0,
+            poison_recover: 0,
+            health_recover: 0,
+            spell_recover: 0,
+        }
+    }
+
     /// 线上 7 个单字节通道（`smframe::sm_subability` 的入参；
     /// `MakeWord(x, 0)` 只取低字节 ⇒ ushort 项按低字节截断）。
     #[must_use]
@@ -384,9 +407,27 @@ fn level_ability_base(abil: &Ability, job: u8) -> Ability {
     }
 }
 
-/// `PlayObject.RecalcAbilitys()` 的纯函数等价物（本片作用域，见模块文档「未做清单」）。
+/// `PlayObject.RecalcAbilitys()` 的**首次调用**纯函数等价物（本片作用域，见模块文档「未做清单」）。
+///
+/// 等价于 `recalc_abilitys_with_prior(catalog, inputs, &SubAbility::first_call())`。
 #[must_use]
 pub fn recalc_abilitys(catalog: &dyn ItemCatalog, inputs: &RecalcInputs<'_>) -> RecalcOutput {
+    recalc_abilitys_with_prior(catalog, inputs, &SubAbility::first_call())
+}
+
+/// `PlayObject.RecalcAbilitys()` 的**重复调用**等价物（oracle 在装备/卸下成功分支会再调一次）。
+///
+/// `prior` = 调用前的 `SubAbility`（首次调用传 [`SubAbility::first_call`]）。oracle 只把
+/// `AntiPoison` 置 0、`AntiMagic` 置 1（`BaseObject.Abil.cs:30-31`），**不重置**
+/// `PoisonRecover/HealthRecover/SpellRecover`；道士的 `RecalcHitSpeed` 也**不重置** `HitPoint`
+/// ⇒ 这四项在重复调用时累加（`PlayObject.cs:2890-2895`）。本函数把这层状态显式化，
+/// 关掉卡内登记的 `T-18`（原 `recalc_abilitys` 只有首次调用语义）。
+#[must_use]
+pub fn recalc_abilitys_with_prior(
+    catalog: &dyn ItemCatalog,
+    inputs: &RecalcInputs<'_>,
+    prior: &SubAbility,
+) -> RecalcOutput {
     let mut add = AddAbility::default();
 
     // 登录/升级时 oracle 先跑 `RecalcLevelAbilitys()` 再 `RecalcAbilitys()`（`PlayObject.cs:1308`）。
@@ -458,14 +499,24 @@ pub fn recalc_abilitys(catalog: &dyn ItemCatalog, inputs: &RecalcInputs<'_>) -> 
     };
 
     let (base_hit, base_speed) = hit_speed_base(inputs);
+    // `RecalcHitSpeed`（`PlayObject.cs:3647`）按 `Job` 的赋值面：
+    //   战士/法师：`HitPoint`、`SpeedPoint` **都被赋值**（不累加）；
+    //   道士：只赋值 `SpeedPoint` ⇒ `HitPoint` 取调用前的值（累加）；
+    //   其余 Job：`switch` 无分支 ⇒ 两项都取调用前的值。
+    let (hit_base, speed_base) = match inputs.job {
+        0 | 1 => (base_hit, base_speed),
+        2 => (prior.hit_point, base_speed),
+        _ => (prior.hit_point, prior.speed_point),
+    };
     let sub = SubAbility {
         anti_magic: 1u16.wrapping_add(add.anti_magic),
-        hit_point: base_hit.wrapping_add(add.hit as u8),
-        speed_point: base_speed.wrapping_add(add.speed as u8),
+        hit_point: hit_base.wrapping_add(add.hit as u8),
+        speed_point: speed_base.wrapping_add(add.speed as u8),
         anti_poison: add.anti_poison as u8,
-        poison_recover: add.poison_recover,
-        health_recover: add.health_recover,
-        spell_recover: add.spell_recover,
+        // 这三项 oracle 不重置（`PlayObject.cs:2893-2895` 是 `+=`）⇒ 在 `prior` 上累加（T-18）。
+        poison_recover: prior.poison_recover.wrapping_add(add.poison_recover),
+        health_recover: prior.health_recover.wrapping_add(add.health_recover),
+        spell_recover: prior.spell_recover.wrapping_add(add.spell_recover),
     };
 
     let wabil = Ability {
@@ -914,6 +965,45 @@ mod tests {
                 "{name}: SpellRecover"
             );
 
+            // 重复调用（装备/卸下成功分支）：oracle 不重置三项 recover 与道士 HitPoint ⇒ 累加（T-18）。
+            let repeat = recalc_abilitys_with_prior(&cat, &inputs, &got.sub);
+            let esr = &case["expect_sub_repeat"];
+            assert_eq!(
+                repeat.sub.anti_magic,
+                u16v(&esr["anti_magic"]),
+                "{name}: 重复调用 AntiMagic"
+            );
+            assert_eq!(
+                repeat.sub.hit_point,
+                u8v(&esr["hit_point"]),
+                "{name}: 重复调用 HitPoint"
+            );
+            assert_eq!(
+                repeat.sub.speed_point,
+                u8v(&esr["speed_point"]),
+                "{name}: 重复调用 SpeedPoint"
+            );
+            assert_eq!(
+                repeat.sub.anti_poison,
+                u8v(&esr["anti_poison"]),
+                "{name}: 重复调用 AntiPoison"
+            );
+            assert_eq!(
+                repeat.sub.poison_recover,
+                u16v(&esr["poison_recover"]),
+                "{name}: 重复调用 PoisonRecover"
+            );
+            assert_eq!(
+                repeat.sub.health_recover,
+                u16v(&esr["health_recover"]),
+                "{name}: 重复调用 HealthRecover"
+            );
+            assert_eq!(
+                repeat.sub.spell_recover,
+                u16v(&esr["spell_recover"]),
+                "{name}: 重复调用 SpellRecover"
+            );
+
             let feature =
                 equipped_feature(&cat, &use_items, u8v(&case["gender"]), u8v(&case["hair"]));
             assert_eq!(
@@ -1176,5 +1266,93 @@ mod tests {
                 "{name}: WAbil 与 oracle 不符"
             );
         }
+    }
+
+    /// G. `T-18` 的**重复调用**必须有牙齿：夹具里至少 2 条用例的三项 recover 非 0，且
+    /// `recalc_abilitys_with_prior(prior = 首次输出)` 必须**比 `prior` 多出** `AddAbil` 那一份（累加），
+    /// 并与探针在同一对象上再调一次实测的 `expect_sub_repeat` 逐字段相同。
+    ///
+    /// 红检：把 [`recalc_abilitys_with_prior`] 的 `prior.*_recover` 改回 0（= 首次调用语义）
+    /// ⇒ `charm_mode21`/`bracelet_mode23`/`dress_mode10`/`full_plain_set` 等用例必红。
+    #[test]
+    fn repeat_call_accumulation_has_teeth() {
+        let doc = fixture();
+        let cat = catalog(&doc);
+        let mut seen = 0usize;
+        for case in doc["cases"].as_array().unwrap() {
+            let es = &case["expect_sub"];
+            let recover = u16v(&es["poison_recover"])
+                + u16v(&es["health_recover"])
+                + u16v(&es["spell_recover"]);
+            if recover == 0 {
+                continue;
+            }
+            let name = case["name"].as_str().unwrap();
+            let job = u8v(&case["job"]);
+            let abil = ability(&case["abil"]);
+            let ba = &case["bonus_abil"];
+            let bonus = NakedAbility {
+                dc: u16v(&ba["dc"]),
+                mc: u16v(&ba["mc"]),
+                sc: u16v(&ba["sc"]),
+                ac: u16v(&ba["ac"]),
+                mac: u16v(&ba["mac"]),
+                hp: u16v(&ba["hp"]),
+                mp: u16v(&ba["mp"]),
+                hit: u8v(&ba["hit"]),
+                speed: i32v(&ba["speed"]),
+                reserved: u8v(&ba["reserved"]),
+            };
+            let (tick_hit, tick_speed) = bonus_tick(&doc, job);
+            let mut use_items = vec![None; USE_ITEMS_LEN];
+            for it in case["items"].as_array().unwrap() {
+                let slot = it["slot"].as_u64().unwrap() as usize;
+                use_items[slot] = Some(ItemInstance {
+                    index: u16v(&it["index"]),
+                    dura: u16v(&it["dura"]),
+                });
+            }
+            let bag: Vec<u16> = case["bag"].as_array().unwrap().iter().map(u16v).collect();
+            let inputs = RecalcInputs {
+                job,
+                abil: &abil,
+                bonus_abil: &bonus,
+                bonus_tick_hit: tick_hit,
+                bonus_tick_speed: tick_speed,
+                cur_hp: u16v(&case["hp_before"]),
+                cur_mp: u16v(&case["mp_before"]),
+                use_items: &use_items,
+                bag: &bag,
+            };
+            let first = recalc_abilitys(&cat, &inputs);
+            let repeat = recalc_abilitys_with_prior(&cat, &inputs, &first.sub);
+            let esr = &case["expect_sub_repeat"];
+            assert_eq!(
+                repeat.sub,
+                {
+                    SubAbility {
+                        anti_magic: u16v(&esr["anti_magic"]),
+                        hit_point: u8v(&esr["hit_point"]),
+                        speed_point: u8v(&esr["speed_point"]),
+                        anti_poison: u8v(&esr["anti_poison"]),
+                        poison_recover: u16v(&esr["poison_recover"]),
+                        health_recover: u16v(&esr["health_recover"]),
+                        spell_recover: u16v(&esr["spell_recover"]),
+                    }
+                },
+                "{name}: 重复调用 SubAbility 与 oracle 不符"
+            );
+            assert!(
+                repeat.sub.poison_recover > first.sub.poison_recover
+                    || repeat.sub.health_recover > first.sub.health_recover
+                    || repeat.sub.spell_recover > first.sub.spell_recover,
+                "{name}: 第二次调用必须比第一次多（累加），否则本用例不构成 T-18 的牙齿"
+            );
+            seen += 1;
+        }
+        assert!(
+            seen >= 2,
+            "夹具必须含 ≥ 2 条 recover 非 0 的用例（实得 {seen}）——否则 T-18 是白测"
+        );
     }
 }

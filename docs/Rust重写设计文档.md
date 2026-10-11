@@ -787,6 +787,19 @@ walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 prin
   **金标准身份**（`c-line-baseline-c3-20261010.jsonl` sha256 = `f34a6d11…`，与钉住值一致）、真客户端入口（`D:\MirClient-run\run-release.cmd`）、MySQL 3306 可连 —— 全部 OK；
   证据 `E:/tmp/m2-acceptance/preflight-20261011-190522.json`。⇒ **端口窗口一空就能跑真机验收，不会因夹具/前置本身没准备好白占窗口。**
 
+### 17.3 里程碑进展补记（owner 2026-10-12 03:25，含本轮合并/收卡）
+
+> 目的：把上表几行**已经过期**的措辞改到与现场一致（尤其 M2 不再是"卡在出图/黑屏"）。每条都给了 master 上的 oid，便于独立复核。
+
+- **M1（网关 / LoginSrv / DBSrv）**：S4a（`crates/storage` 记录字段 + `protocol` 向量）`1ba53292` → ② 6000 `DataService` + ④ `TimedService` 缓存回写 `96d03db5` → ④ 5700 `MarketService` `ca11a1a8` → **③ 跨实现互读证据片** `83471539`（approve reviewer-3 `3a2778d0`）已入 master **`8708ac49`**：07/08 双向 `in_world=1`、两侧 baseline 与归一化 scoped 数据 + 09 运行时实现归属 + 13 红检；证据目录加 `.gitattributes`（`* -text`）冻结字节 ⇒ 全新检出 `sha256sum -c` = 51/51 OK（对照父提交 50/51，牙齿成立）。
+  **剩**：③ 的 **softclose（小退）/ shutdown（服务关闭）** 两条退出路径 DB diff（要 5000/7000/7100/7200 窗口；runbook 见该卡 comment `77c30175`）+ Rust 6000 侧对角色取档日志 `not_verified`（README §5）。
+- **M2（Rust 世界宿主 + 真机验收）**：**不再是"卡在出图/黑屏"**——② 真机 **6/7**（进图 / 走路 / 说话 / 攻击 / 小退再进 / **看到别人**；缺 `pickup`）、③ `658→46` 同序 + 等长 **GREEN**（4 条环境相关白名单：`46.param`/`50.series` 及各自 `raw_hex`，owner §25.3 裁决，两条独立 approve `3d38ce2e`/`c7b85a5e` 覆盖）、④ **三路径 DB diff（softclose / disconnect / shutdown）GREEN**（`E:\tmp\m2acc\rust4\db-paths.json`：三条 `state=GREEN`、`failed=[]`；两侧 `csharp4`/`rust4` + dbsnap）。
+  `52` 的 `WAbil.max_hp/max_mp=0` 真缺陷已由 m3bag 修（`3434f219` + `511d575b` → master `15cec558`）。**`pickup` 的判据正在被重新裁定**：oracle 里**地面物不可达**（`MapItem.cs:41` 是全仓唯一 `ItemId` 赋值点且被注释；`Envirnoment.cs:88-93` 的 `AddItemToMap` 在 `ItemId==0` 时直接 `return false`；`DeleteFromMap` 的匹配夹在 `CellObjId>0` 内）⇒ owner 预先裁两支：确认不可达 ⇒ **不批**世界写分片、第 7 格判据改为"无地面物形态两侧一致"、登记 T-25；若 C# 栈上确能落地 ⇒ 批**最小**写分片（含"重进世界不再下发" + 红检）。
+- **M3（逐系统对齐 ①）**：**门禁脚本加固卡已 closed**（master `3bd90763`，approve reviewer-6 `f7c8550a`）= peer 场景机判 + sessionDir 空值防线 + `-Side rust` 已知 Rust 入口护栏 + **P-1**（坏/半写/空 peer `baseline.json` 落 `peer_baseline_invalid` 结构化 RED、主流程仍落 RED 报告、退出码非 0）；自检 16/16 GREEN。合并时 `run_m3_gate.ps1` 与 T-14 的改动**真冲突**，owner 按"**取两侧各自已被独立 approve 的内容**"并集解析（`fixed_new_chr = $LocalScenario` + 保留 `bag_equip_sequence`），解析后自检 16/16 + 四门禁 519/0/16 + 604。
+  背包/装备①：第九格（T-14 双侧驱动做成一条命令，`44b13fa1`）→ 第十格（`511d575b`）→ 第十一格（关 T-18 重复调用累加语义，`d85650eb` → master `9d4eb7b0`）。**剩**：**T-14 真机两侧同序列驱动**（要窗口）+ **N-1** 调用点接线（`1003/1004` 装备/卸下成功分支要传 prior SubAbility，归 m2-svr）。
+- **M4（脚本引擎）**：**车道已在跑**（`m4cases`，2026-10-12 03:04 起；卡 `openmir2-m4-parity-cases`）。①②③ 的入口都已探明，**不用再造**：Rust `cargo run -p script-tool -- parse-stats <Envir> [--json out]`、C# `tools/script-parity-cs <Envir> [out.json]`（其文件头明写"口径与 parse-stats 完全一致"）、先例输出 `tests/parity/evidence/B2/coverage-var-after.txt`；③ 复用 `tests/parity/m3/scoped_diff.py` 的多重集先例；② 6 类关键 NPC 用例要真栈（先落判据、登记等窗口）。
+- **M5（收敛 / 压测 / 灰度）**：C6 载荷门禁两卡已 closed（`6f2856da`）；**残余 F9-1**（`load_gate` 的 `artifacts.sha256.json` 在全新检出上假 mismatch）已开卡 + 车道（`c6h`）。§17.1 里"无卡"的 M5 四项（72h 长跑 / `mem-probe` / 灰度-回滚演练 / 灰度前后 DB 快照）仍未开卡，**别记成已完成**。
+
 ## 18. S3：B-8 命令码位移修复（2026-10-10，oracle 行为变更）
 
 > 全文与证据：`mir2-rs/tests/parity/evidence/S3/S3-报告.md`；白名单条目：`whitelist.md` **T-4**（并给 B-8 行加了注记）。
