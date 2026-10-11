@@ -14,6 +14,26 @@ powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_m3_gate.ps1
 powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_m3_gate.ps1 -Side rust -PeerSession csharp-20261010-164731
 ```
 
+### 用修好的比较器重比既有产物（不必重跑整栈）
+
+门禁第 3 步（跨侧作用域 diff）不依赖活服务——只要有已落地的会话目录，就能单独重跑比较。
+`run_m3_gate.ps1 -PeerSession` 走的就是下面这条命令（`-FixedNewChr` 时再加 `--fixed-newchr`）：
+
+```powershell
+python mir2-rs/tests/parity/m3/scoped_diff.py diff \
+  mir2-rs/tests/parity/m3/sessions/<peer会话>/scoped_after_norm.jsonl \
+  mir2-rs/tests/parity/m3/sessions/<本侧会话>/scoped_after_norm.jsonl --canonical
+```
+
+例：用同一对 C# 会话验证比较器本身（旧产物直接重比，不碰 5000/7000/7100/7200）：
+
+```powershell
+python mir2-rs/tests/parity/m3/scoped_diff.py diff \
+  mir2-rs/tests/parity/m3/sessions/csharp-20261010-164731/scoped_after_norm.jsonl \
+  mir2-rs/tests/parity/m3/sessions/csharp-20261011-110827/scoped_after_norm.jsonl
+# 未 canonical ⇒ RED 8 行（exit 1）；加 --canonical ⇒ GREEN（exit 0）
+```
+
 ### `-Side rust` 首验的两条前置（否则会把别人的问题读成 A2 的问题）
 
 1. **A2（M1 边界服务）的 Rust 服务真的顶住 7000/7100/7200**——门禁的入口护栏会拦"入口还是 C#"，
@@ -60,8 +80,13 @@ GREEN: M3 门禁通过
   `Hair/Sex` 因 `Random(1)` 恒 0 而固定为 2/0，故在**默认场景**里这三列置占位；
   **固定建角场景**用 `--fixed-newchr` 让它们**不**置占位、逐字节比（见下节，卡
   `openmir2-m3-botsrv-fixed-newchr`）；
-- 红检：`python scoped_diff.py selftest` **7/7**，含「仅易变列不同必须判绿」「被比对列被改坏必须判红」
-  「固定建角场景下 Job 被改坏必须判红（不被占位吃掉）」「未登记表 fail-closed」。
+- 红检：`python scoped_diff.py selftest` **9/9**，含「仅易变列不同必须判绿」「被比对列被改坏必须判红」
+  「固定建角场景下 Job 被改坏必须判红（不被占位吃掉）」「重复行 `A=[x,x]` vs `B=[x]` 必须判红」
+  「未登记表 fail-closed」。
+- **多重集/计数式比对（2026-10-11，卡 `openmir2-m3-scopeddiff-multiset`）**：`diff` 计 `problems`
+  与 `delta` 计增删时，按 **(表, 行 key) 的出现次数** 做多重集差（`collections.Counter`），
+  **不用 set 差集**。旧实现下 `A=[x,x]` vs `B=[x]` 的 `仅A=0 仅B=0` 会 **exit 0（假绿）**；
+  现在「重复行数」本身是判据的一部分（多出一行计 1，判红）。同表两侧重复行数相同仍判绿。
 
 单侧基线不必带 `--canonical`（`extract`/`delta` 不变）；只在**跨侧比对**时用。
 
@@ -143,7 +168,8 @@ powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/rng-baseline.ps
 - 不需要还原快照（不碰既有角色，风险为 0）；
 - 比对只取本次命名空间内的行 ⇒ 并行线的干扰自动排除。
 
-`scoped_diff.py` 提供 `extract / delta / diff / selftest`（selftest 含"改坏必红"两项）。
+`scoped_diff.py` 提供 `extract / delta / diff / selftest`（selftest 9/9，含"改坏必红"与"重复行多重集"）。
+`diff`/`delta` 的差异计数是**多重集/计数式**（同 `(表, row_sha256)` 的出现次数纳入判定）。
 `--normalize` 把前缀归一化为 `<RUN>`，使两次运行的前缀差异不影响比对。
 
 ## 账号名 10 字符上限（踩过，务必先读）
@@ -190,7 +216,7 @@ LoginSrv 读的配置是 `src/LoginSrv/bin/Release/logsrv.conf`
 
 ```powershell
 powershell -File run_pair.ps1 -SelfTestRed      # 入口不通 → 判失败（实测 exit 0 = 红检成立）
-python scoped_diff.py selftest                 # 相同→绿、多一行→红（2/2 实测）
+python scoped_diff.py selftest                 # 9/9 实测（含重复行多重集：A=[x,x] vs B=[x] 必红）
 ```
 
 另外两条内置护栏本身就是门禁（实测触发过）：

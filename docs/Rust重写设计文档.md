@@ -306,7 +306,10 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "mysql", "chrono", "macro
   夹具**建角输入随机**（`src/BotSrv/Scenes/Scene/SelectChrScene.cs:154-176`，`RandomNumber` 无种子）。
   不排除这些列，**两次都 GREEN 的 C# 会话互 diff 也判红**（实测 8 行），判据无仲裁力。故 `--canonical`
   按**逐列登记（含每列理由）**的易变列白名单置 `<VOLATILE>`，其余列逐字节比，**不许整表 ignore**，
-  未登记表 fail-closed；并含「改坏必红」自检（`scoped_diff.py selftest`）。`Hair/Sex/Job` 的行为覆盖
+  未登记表 fail-closed；并含「改坏必红」自检（`scoped_diff.py selftest`）。
+  **差异计数是多重集/计数式（2026-10-11，卡 `openmir2-m3-scopeddiff-multiset`）**：`diff`/`delta` 按
+  `(表, 行 key)` 的**出现次数**比对，不用 set 差集——否则重复行 `A=[x,x]` vs `B=[x]` 会 `仅A=仅B=0`
+  而 **exit 0（假绿）**；「重复行数」本身是判据的一部分（多出一行计 1，判红）。`Hair/Sex/Job` 的行为覆盖
   迁至固定参数的确定性场景，见卡 `openmir2-m3-botsrv-fixed-newchr`。
   **前置更正（2026-10-11）**：7200 的游戏侧入口是 RunGate/GameGate，M1 不实现；首验的真实前置是
   M2 的 Rust GameGate 合入 master（卡 `openmir2-m2-gamegate`），而非 M1 顶住端口。
