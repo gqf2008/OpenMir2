@@ -16,6 +16,8 @@ pedantic = "warn"
 mir2-protocol = { path = "../../crates/protocol" }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "macros", "signal", "time"] }
 anyhow = "1"
+# gb2312(cp936) 域名：客户端登录串里的账号/角色名是 GBK 字节；差异登记同 login-srv（whitelist A-14）。
+encoding_rs = "0.8"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "time", "process"] }

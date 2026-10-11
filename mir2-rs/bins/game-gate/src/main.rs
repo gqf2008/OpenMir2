@@ -13,6 +13,9 @@
 //! - **`SessionId` 是随机 4 位数字（0..=9999）**，照 `ClientThread.cs:128-160` 的口径生成，
 //!   ⇒ 差分/golden 不能按字节比这个字段（协议梳理 §7.5）。
 //! - 空转/异常：body 长度 < `GateShare.CommandFixedLength`(=16) ⇒ 关会话（`ClientSession.cs:155-162`）；
+//! - **第一帧必须是 `ClientLogin`**（`ClientSession.cs:655-680` / `:1058-`）：网关用 EDCode 解出内层文本
+//!   并校验（`login::parse_client_login` 覆盖其 ①②③④ 步），**失败即剔除**；通过后（oracle 的
+//!   `HandleLogin = true`，`:1228`）后续帧才按命令转成 `GM_DATA`。登录帧本身**不转发**。
 //!   1 字节 body = 心跳 ⇒ 不转发（`ClientSession.cs:157-160`）。
 //!
 //! **本切片不做**（登记在协议梳理 §6，切片 2/3）：EDCode 解码/重编码与速度规则、`Filters/*`、
@@ -24,6 +27,8 @@
 #![allow(clippy::doc_markdown)]
 
 mod config;
+mod gbk;
+mod login;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -196,6 +201,7 @@ async fn client_loop(
     send_internal(&down_tx, open, &ip_bytes).await?;
 
     // 读循环：20B 定长头 + body
+    let mut logged_in = false;
     let mut closed = Ok(());
     loop {
         let mut head = [0u8; ServerMessage::SIZE];
@@ -224,6 +230,31 @@ async fn client_loop(
         let mut body = vec![0u8; body_len];
         if rd.read_exact(&mut body).await.is_err() {
             break;
+        }
+        if !logged_in {
+            // 登录帧（切片 2）：照 ClientSession.cs:166（跳过 `#1` 与尾 `!`）→ :673 EDCode 解码 →
+            // :674 ClientLogin 校验；失败即剔除（:677-678），通过则等价于 oracle 的 `HandleLogin = true`（:1228）。
+            if body.len() < 3 {
+                glog!(
+                    "WRN",
+                    "登录帧过短（{} 字节），剔除会话 SessionId={sid}",
+                    body.len()
+                );
+                break;
+            }
+            let payload = &body[2..body.len() - 1];
+            let text = gbk::decode(&mir2_protocol::edcode::decode(payload));
+            match login::parse_client_login(&text, body.len()) {
+                Ok(()) => {
+                    logged_in = true;
+                    glog!("INF", "客户端登录通过: {peer} (SessionId={sid})");
+                }
+                Err(reason) => {
+                    glog!("INF", "客户端登陆消息处理失败，剔除链接: {reason}");
+                    break;
+                }
+            }
+            continue; // 登录帧不转发给 GameSvr（oracle 的 else 分支也不发）
         }
         // 转发给 GameSvr：TODO(差分) socket/session_index/PackLength 符号按 C# 精确对齐
         let data = ServerMessage {

@@ -82,6 +82,66 @@ async fn connect_with_retry(port: u16) -> TcpStream {
     panic!("网关未在预期时间内监听 {port}");
 }
 
+/// 造一个客户端 face 的**登录帧**：body = `#1` + EDCode(GBK(文本)) + `!`（照 `ClientSession.cs:166/673`）。
+/// 用例里的文本全 ASCII ⇒ GBK 与字节串一致，不必再过编码器。
+fn login_frame(text: &str) -> Vec<u8> {
+    let mut body = b"#1".to_vec();
+    body.extend_from_slice(&mir2_protocol::edcode::encode(text.as_bytes()));
+    body.push(b'!');
+    frame(0, 0, &body)
+}
+
+/// 现网形态（账号 8 / 角色名 4 / 版本号 9 / code 10 位）的登录文本。
+const GOOD_LOGIN: &str = "**loadbot1\\lb1a\\1\\120020522\\1200205220\\AABB";
+
+/// 判据 6：登录校验失败 ⇒ 剔除（客户端被断开），且 5000 侧除 `GM_OPEN`/`GM_CLOSE` 外没有别的帧。
+#[tokio::test]
+async fn bad_login_is_kicked_and_nothing_is_forwarded() {
+    let (srv_port, srv_task) = fake_game_svr().await;
+    let gate_port = free_port();
+    let dir = std::env::temp_dir().join(format!("gg-kick-{}-{}", std::process::id(), gate_port));
+    write_conf(&dir, srv_port, gate_port);
+    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_game-gate"))
+        .arg(dir.join("config.conf"))
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut client = connect_with_retry(gate_port).await;
+
+    // 前两位不是 `**` ⇒ 照 oracle 的 Kicked 1（本次实机取证里真网关就是这条）
+    client
+        .write_all(&login_frame(
+            "XXloadbot1\\lb1a\\1\\120020522\\1200205220\\AABB",
+        ))
+        .await
+        .unwrap();
+    // 紧接着发一帧"数据"：登录没过，它**不该**被转发
+    client.write_all(&frame(11, 0, &[0u8; 32])).await.unwrap();
+    client.flush().await.unwrap();
+
+    // 网关应主动断开
+    let mut buf = [0u8; 1];
+    let n = tokio::time::timeout(Duration::from_secs(5), client.read(&mut buf))
+        .await
+        .expect("5s 内网关应剔除该连接")
+        .expect("读应成功（EOF=0 也算）");
+    assert_eq!(n, 0, "网关必须剔除（读到 EOF）");
+    child.kill().await.ok();
+    drop(client);
+
+    let got = tokio::time::timeout(Duration::from_secs(5), srv_task)
+        .await
+        .expect("假 GameSvr 未结束")
+        .unwrap();
+    let idents: Vec<u16> = got.iter().map(|(m, _)| m.ident).collect();
+    assert_eq!(
+        idents,
+        vec![u16::from(grobal2::GM_OPEN), u16::from(grobal2::GM_CLOSE)],
+        "登录失败时除 GM_OPEN/GM_CLOSE 外不得有别的帧（尤其不能有 GM_DATA）"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 #[tokio::test]
 async fn relays_open_data_heartbeat_and_close() {
     let (srv_port, srv_task) = fake_game_svr().await;
@@ -97,8 +157,12 @@ async fn relays_open_data_heartbeat_and_close() {
 
     let mut client = connect_with_retry(gate_port).await;
 
-    // 判据 2/3：先发心跳（1 字节 body，不得转发），再发一帧真数据（≥16 字节，必须原样转发）
+    // 判据 4：心跳（1 字节 body）不得转发
     client.write_all(&frame(11, 0, b"*")).await.unwrap();
+    // 判据 2：先过登录（登录帧本身也不得被转发）
+    client.write_all(&login_frame(GOOD_LOGIN)).await.unwrap();
+    client.flush().await.unwrap();
+    // 判据 3：登录后的数据帧必须原样转发
     let payload: Vec<u8> = (0..=31u8).collect();
     client.write_all(&frame(11, 0, &payload)).await.unwrap();
     client.flush().await.unwrap();
