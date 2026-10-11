@@ -816,7 +816,7 @@ walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 prin
 - **M4 脚本引擎 → ✅ 达成并收卡（合并 `c87d4d16`）**
   - ① `parsecount` 两侧对拍数表（逐项差 0；判据是逐项对齐而非「错误=0」）①′ 逐文件摘要逐字节 ② **7/7 关键 NPC 用例 port-free GREEN / 等窗口 0** ③ 「双侧逐行多重集差=0」门禁（复用 M3 的 `scoped_diff.py` 计数式，640 表逐行一致）④ 四门禁 ⑤ 边界；证据 hash 口径可机器复核（`ecf7b3a1`）+ 写盘显式化（`ef02a96e`）。
   - Rust 真栈上「点 NPC」属 M3 的 **NPC/商店** 系统对齐（那 3 条商人用例的真栈版另开）。
-- **仍🔄的**：M3（逐系统对齐 ① 进行中：T-14 双侧同序列；②–⑩ 见 §6 顺序与卡 `openmir2-m3-final-acceptance`）、M5（四项已开卡 `openmir2-m5-convergence-drills`，需独占/长跑窗口）。
+- **仍🔄的**：M3（逐系统对齐 ① 进行中：T-14 双侧同序列；②–⑩ 见 §6 顺序（**②③ 战斗/技能已开卡 `openmir2-m3-combat-skills-align`（issue `a2ef74aa`，2026-10-12）**；M3 总验收项见卡 `openmir2-m3-final-acceptance`））、M5（四项已开卡 `openmir2-m5-convergence-drills`，需独占/长跑窗口）。
 
 ## 18. S3：B-8 命令码位移修复（2026-10-10，oracle 行为变更）
 
