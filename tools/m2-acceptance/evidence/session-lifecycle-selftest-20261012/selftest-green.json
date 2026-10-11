@@ -1,0 +1,392 @@
+﻿{
+    "tool":  "m2-acceptance/selftest.ps1",
+    "ts":  "2026-10-12T04:20:33.9695784+08:00",
+    "golden":  "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\.claude\\worktrees\\m2-svr\\mir2-rs\\tests\\golden\\c-line-baseline-c3-20261010.jsonl",
+    "live_ports":  [
+                       5000,
+                       7000,
+                       7100,
+                       7200
+                   ],
+    "total":  47,
+    "failed":  0,
+    "checks":  [
+                   {
+                       "name":  "shots/0张=PREREQ",
+                       "expect_rc":  2,
+                       "actual_rc":  2,
+                       "expect_out":  "PREREQ_MISSING",
+                       "ok":  true,
+                       "detail":  "空目录"
+                   },
+                   {
+                       "name":  "shots/缺1张=RED",
+                       "expect_rc":  1,
+                       "actual_rc":  1,
+                       "expect_out":  "RED: 截图不全",
+                       "ok":  true,
+                       "detail":  "6/7"
+                   },
+                   {
+                       "name":  "shots/有\u003c1KiB=RED",
+                       "expect_rc":  1,
+                       "actual_rc":  1,
+                       "expect_out":  "RED: 截图不全",
+                       "ok":  true,
+                       "detail":  "1 张 10B"
+                   },
+                   {
+                       "name":  "shots/7张齐全=GREEN",
+                       "expect_rc":  0,
+                       "actual_rc":  0,
+                       "expect_out":  "GREEN: 7 张",
+                       "ok":  true,
+                       "detail":  "7/7 非空"
+                   },
+                   {
+                       "name":  "shots/6张无pickup=GREEN",
+                       "expect_rc":  0,
+                       "actual_rc":  0,
+                       "expect_out":  "GREEN: 6 张.*oracle 不可达",
+                       "ok":  true,
+                       "detail":  "pickup 不可达不计"
+                   },
+                   {
+                       "name":  "shots/6张无pickup+RequirePickup=RED",
+                       "expect_rc":  1,
+                       "actual_rc":  1,
+                       "expect_out":  "RED: 截图不全",
+                       "ok":  true,
+                       "detail":  "-RequirePickup 仍要求 7 张"
+                   },
+                   {
+                       "name":  "s2c/金标准自比=GREEN",
+                       "expect_rc":  0,
+                       "actual_rc":  0,
+                       "expect_out":  "GREEN: 同序列",
+                       "ok":  true,
+                       "detail":  "ident 658..10"
+                   },
+                   {
+                       "name":  "s2c/尾字节改坏=RED",
+                       "expect_rc":  1,
+                       "actual_rc":  1,
+                       "expect_out":  "RED: .*未登记差异",
+                       "ok":  true,
+                       "detail":  "非 recog 字节必红"
+                   },
+                   {
+                       "name":  "s2c/只改recog=GREEN",
+                       "expect_rc":  0,
+                       "actual_rc":  0,
+                       "expect_out":  "GREEN: 同序列",
+                       "ok":  true,
+                       "detail":  "归一化清单只 recog"
+                   },
+                   {
+                       "name":  "s2c/缺输入=PREREQ",
+                       "expect_rc":  2,
+                       "actual_rc":  2,
+                       "expect_out":  "PREREQ_MISSING",
+                       "ok":  true,
+                       "detail":  "文件不存在"
+                   },
+                   {
+                       "name":  "db/三路径相同=GREEN",
+                       "expect_rc":  0,
+                       "actual_rc":  0,
+                       "expect_out":  "GREEN: 小退/掉线",
+                       "ok":  true,
+                       "detail":  "字段级 diff=0"
+                   },
+                   {
+                       "name":  "db/改一字段=RED",
+                       "expect_rc":  1,
+                       "actual_rc":  1,
+                       "expect_out":  "RED: 路径 DB diff 未归零",
+                       "ok":  true,
+                       "detail":  "shutdown 差异"
+                   },
+                   {
+                       "name":  "db/缺抽取件=PREREQ",
+                       "expect_rc":  2,
+                       "actual_rc":  2,
+                       "expect_out":  "PREREQ_MISSING",
+                       "ok":  true,
+                       "detail":  "shutdown 缺 after"
+                   },
+                   {
+                       "name":  "db/不 canonical 仅易变列=RED",
+                       "expect_rc":  1,
+                       "actual_rc":  1,
+                       "expect_out":  "RED",
+                       "ok":  true,
+                       "detail":  "不 canonical ⇒ 仅易变列也不同必红（这正是不是假绿的牙齿）"
+                   },
+                   {
+                       "name":  "db/canonical 仅易变列=GREEN",
+                       "expect_rc":  0,
+                       "actual_rc":  0,
+                       "expect_out":  "GREEN",
+                       "ok":  true,
+                       "detail":  "Id/时间戳不同但 --canonical 置占位后同行为"
+                   },
+                   {
+                       "name":  "db/canonical 行为列不同=RED",
+                       "expect_rc":  1,
+                       "actual_rc":  1,
+                       "expect_out":  "RED",
+                       "ok":  true,
+                       "detail":  "canonical 不得吃掉行为列"
+                   },
+                   {
+                       "name":  "life/旧收账号级kick=KICKUSER",
+                       "expect_rc":  0,
+                       "actual_rc":  0,
+                       "expect_out":  "old_received=KICKUSER_SYSTEM_MSG",
+                       "ok":  true,
+                       "detail":  "TCPNetChannel.KickUser 文案"
+                   },
+                   {
+                       "name":  "life/新进世界=ADMITTED",
+                       "expect_rc":  0,
+                       "actual_rc":  0,
+                       "expect_out":  "new_verdict=ADMITTED",
+                       "ok":  true,
+                       "detail":  "成功进入游戏 ⇒ 放行"
+                   },
+                   {
+                       "name":  "life/新被关=CLOSED",
+                       "expect_rc":  0,
+                       "actual_rc":  0,
+                       "expect_out":  "new_verdict=CLOSED",
+                       "ok":  true,
+                       "detail":  "进入游戏后未成功、连接被关"
+                   },
+                   {
+                       "name":  "life/先放行后断开仍=ADMITTED",
+                       "expect_rc":  0,
+                       "actual_rc":  0,
+                       "expect_out":  "new_verdict=ADMITTED",
+                       "ok":  true,
+                       "detail":  "成功进入游戏优先，不得误报 CLOSED"
+                   },
+                   {
+                       "name":  "life/新无标记=判红",
+                       "expect_rc":  1,
+                       "actual_rc":  1,
+                       "expect_out":  "new_verdict=TIMEOUT",
+                       "ok":  true,
+                       "detail":  "无判定标记 ⇒ 非零退出"
+                   },
+                   {
+                       "name":  "life/新进程退出=PROCESS_EXITED",
+                       "expect_rc":  1,
+                       "actual_rc":  1,
+                       "expect_out":  "new_verdict=PROCESS_EXITED",
+                       "ok":  true,
+                       "detail":  "进程已退 ⇒ 判红"
+                   },
+                   {
+                       "name":  "life/旧无kick=NONE_OBSERVED",
+                       "expect_rc":  0,
+                       "actual_rc":  0,
+                       "expect_out":  "old_received=NONE_OBSERVED",
+                       "ok":  true,
+                       "detail":  "没有 kick 文案"
+                   },
+                   {
+                       "name":  "life/旧收528=SM_OUTOFCONNECTION",
+                       "expect_rc":  0,
+                       "actual_rc":  0,
+                       "expect_out":  "old_received=SM_OUTOFCONNECTION",
+                       "ok":  true,
+                       "detail":  "强行中断（区分于账号级 kick）"
+                   },
+                   {
+                       "name":  "life/旧普通断开=CONNECTION_CLOSED",
+                       "expect_rc":  0,
+                       "actual_rc":  0,
+                       "expect_out":  "old_received=CONNECTION_CLOSED",
+                       "ok":  true,
+                       "detail":  "仅关闭连接"
+                   },
+                   {
+                       "name":  "impl/C# 根目录=csharp",
+                       "expect_rc":  "csharp",
+                       "actual_rc":  "csharp",
+                       "expect_out":  "",
+                       "ok":  true,
+                       "detail":  "impl classifier"
+                   },
+                   {
+                       "name":  "impl/mir2-rs target=rust",
+                       "expect_rc":  "rust",
+                       "actual_rc":  "rust",
+                       "expect_out":  "",
+                       "ok":  true,
+                       "detail":  "impl classifier"
+                   },
+                   {
+                       "name":  "impl/隔离 target(m2svr)=rust",
+                       "expect_rc":  "rust",
+                       "actual_rc":  "rust",
+                       "expect_out":  "",
+                       "ok":  true,
+                       "detail":  "impl classifier"
+                   },
+                   {
+                       "name":  "impl/基名回落 rust",
+                       "expect_rc":  "rust",
+                       "actual_rc":  "rust",
+                       "expect_out":  "",
+                       "ok":  true,
+                       "detail":  "impl classifier"
+                   },
+                   {
+                       "name":  "impl/未知基名=unknown",
+                       "expect_rc":  "unknown",
+                       "actual_rc":  "unknown",
+                       "expect_out":  "",
+                       "ok":  true,
+                       "detail":  "impl classifier"
+                   },
+                   {
+                       "name":  "impl/Rust 入口带现网配置参数仍=rust",
+                       "expect_rc":  "rust",
+                       "actual_rc":  "rust",
+                       "expect_out":  "",
+                       "ok":  true,
+                       "detail":  "impl classifier"
+                   },
+                   {
+                       "name":  "impl/C# 入口（Exe 在 MirServer）=csharp",
+                       "expect_rc":  "csharp",
+                       "actual_rc":  "csharp",
+                       "expect_out":  "",
+                       "ok":  true,
+                       "detail":  "impl classifier"
+                   },
+                   {
+                       "name":  "entry/表 5000=game-svr",
+                       "expect_rc":  "game-svr",
+                       "actual_rc":  "game-svr",
+                       "expect_out":  "",
+                       "ok":  true,
+                       "detail":  "port entry table"
+                   },
+                   {
+                       "name":  "entry/表 7000=login-gate",
+                       "expect_rc":  "login-gate",
+                       "actual_rc":  "login-gate",
+                       "expect_out":  "",
+                       "ok":  true,
+                       "detail":  "port entry table"
+                   },
+                   {
+                       "name":  "entry/表 7100=sel-gate",
+                       "expect_rc":  "sel-gate",
+                       "actual_rc":  "sel-gate",
+                       "expect_out":  "",
+                       "ok":  true,
+                       "detail":  "port entry table"
+                   },
+                   {
+                       "name":  "entry/表 7200=game-gate",
+                       "expect_rc":  "game-gate",
+                       "actual_rc":  "game-gate",
+                       "expect_out":  "",
+                       "ok":  true,
+                       "detail":  "port entry table"
+                   },
+                   {
+                       "name":  "entry/基名取 game-svr.exe",
+                       "expect_rc":  "game-svr",
+                       "actual_rc":  "game-svr",
+                       "expect_out":  "",
+                       "ok":  true,
+                       "detail":  "port entry table"
+                   },
+                   {
+                       "name":  "entry/5000+game-svr=ok",
+                       "expect_rc":  "ok",
+                       "actual_rc":  "ok",
+                       "expect_out":  "",
+                       "ok":  true,
+                       "detail":  "port entry table"
+                   },
+                   {
+                       "name":  "entry/5000+login-gate=cross",
+                       "expect_rc":  "cross",
+                       "actual_rc":  "cross",
+                       "expect_out":  "",
+                       "ok":  true,
+                       "detail":  "port entry table"
+                   },
+                   {
+                       "name":  "entry/7200+game-svr=cross",
+                       "expect_rc":  "cross",
+                       "actual_rc":  "cross",
+                       "expect_out":  "",
+                       "ok":  true,
+                       "detail":  "port entry table"
+                   },
+                   {
+                       "name":  "ports/实况判属（Rust绿/C#红/缺前置）",
+                       "expect_rc":  2,
+                       "actual_rc":  2,
+                       "expect_out":  "PREREQ_MISSING",
+                       "ok":  true,
+                       "detail":  "notListening=5000/7000/7100/7200 nonRust= crossed="
+                   },
+                   {
+                       "name":  "preflight/在库前置齐备=GREEN",
+                       "expect_rc":  0,
+                       "actual_rc":  0,
+                       "expect_out":  "GREEN: 前置齐备",
+                       "ok":  true,
+                       "detail":  "仓库输入 + 金标准 schema/身份"
+                   },
+                   {
+                       "name":  "preflight/缺工具=PREREQ",
+                       "expect_rc":  2,
+                       "actual_rc":  2,
+                       "expect_out":  "PREREQ_MISSING",
+                       "ok":  true,
+                       "detail":  "注入不存在的 python"
+                   },
+                   {
+                       "name":  "preflight/缺客户端入口=PREREQ",
+                       "expect_rc":  2,
+                       "actual_rc":  2,
+                       "expect_out":  "PREREQ_MISSING",
+                       "ok":  true,
+                       "detail":  "客户端入口路径不存在"
+                   },
+                   {
+                       "name":  "preflight/金标准 schema 坏=RED",
+                       "expect_rc":  1,
+                       "actual_rc":  1,
+                       "expect_out":  "RED: 前置在但已损坏",
+                       "ok":  true,
+                       "detail":  "缺 8 个必需字段（-AllowGoldenDrift 隔离出 schema 独立牙齿）"
+                   },
+                   {
+                       "name":  "agg/全PREREQ=2（不静默通过）",
+                       "expect_rc":  2,
+                       "actual_rc":  2,
+                       "expect_out":  "PREREQ_MISSING",
+                       "ok":  true,
+                       "detail":  "无栈自检"
+                   },
+                   {
+                       "name":  "agg/有RED=1（红不许被说成前置）",
+                       "expect_rc":  1,
+                       "actual_rc":  1,
+                       "expect_out":  "RED: 有步骤判红",
+                       "ok":  true,
+                       "detail":  "shots 6/7 判红"
+                   }
+               ],
+    "pass":  true
+}

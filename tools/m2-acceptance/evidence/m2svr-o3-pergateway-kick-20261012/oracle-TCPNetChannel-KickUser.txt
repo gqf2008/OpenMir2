@@ -1,0 +1,60 @@
+# oracle src/M2Server/Net/TCP/TCPNetChannel.cs:226-284 (KickUser) — O-3 口径来源
+        public void KickUser(string sAccount, int sessionId, int payMode)
+        {
+            const string sExceptionMsg = "[Exception] TRunSocket::KickUser";
+            const string sKickUserMsg = "当前登录帐号正在其它位置登录，本机已被强行离线!!!";
+            const string accountExpiredMsg = "账号付费时间已到,本机已被强行离线,请充值后再继续进行游戏!";
+            try
+            {
+                for (int i = 0; i < _gameGates.Length; i++)
+                {
+                    if (_gameGates[i] == null)
+                    {
+                        continue;
+                    }
+                    ChannelGate gateInfo = _gameGates[i].GateInfo;
+                    if (gateInfo.BoUsed && gateInfo.Socket != null && gateInfo.UserList != null)
+                    {
+                        HUtil32.EnterCriticalSection(RunSocketSection);
+                        try
+                        {
+                            for (int j = 0; j < gateInfo.UserList.Count; j++)
+                            {
+                                SessionUser gateUserInfo = gateInfo.UserList[j];
+                                if (gateUserInfo == null)
+                                {
+                                    continue;
+                                }
+                                if (string.Compare(gateUserInfo.Account, sAccount, StringComparison.OrdinalIgnoreCase) == 0 || (gateUserInfo.SessionID == sessionId))
+                                {
+                                    if (gateUserInfo.FrontEngine != null)
+                                    {
+                                        gateUserInfo.FrontEngine.DeleteHuman(i, gateUserInfo.Socket);
+                                    }
+                                    if (gateUserInfo.PlayObject != null)
+                                    {
+                                        if (payMode == 0)
+                                        {
+                                            gateUserInfo.PlayObject.SysMsg(sKickUserMsg, MsgColor.Red, MsgType.Hint);
+                                        }
+                                        else
+                                        {
+                                            gateUserInfo.PlayObject.SysMsg(accountExpiredMsg, MsgColor.Red, MsgType.Hint);
+                                        }
+                                        gateUserInfo.PlayObject.BoEmergencyClose = true;
+                                        gateUserInfo.PlayObject.BoSoftClose = true;
+                                    }
+                                    gateInfo.UserList[j] = null;
+                                    gateInfo.UserCount -= 1;
+                                    break;
+                                }
+                            }
+                        }
+                        finally
+                        {
+                            HUtil32.LeaveCriticalSection(RunSocketSection);
+                        }
+                    }
+                }
+            }
+            catch (Exception e)

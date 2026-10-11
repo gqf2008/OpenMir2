@@ -49,7 +49,7 @@ powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/run_acceptance.ps1 
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/selftest.ps1
-# 33 条口径全 OK ⇒ exit 0；任何一条不符 ⇒ exit 1（见 §8）
+# 47 条口径全 OK ⇒ exit 0；任何一条不符 ⇒ exit 1（见 §8）
 ```
 
 ---
@@ -501,7 +501,7 @@ cargo run -p msgcodegen -- --check
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/selftest.ps1
-# 33 条全 OK ⇒ exit 0；任何一条不符 ⇒ exit 1（SELFTEST FAIL）
+# 47 条全 OK ⇒ exit 0；任何一条不符 ⇒ exit 1（SELFTEST FAIL）
 ```
 
 | # | 步骤 | 构造输入 | 期望 |
@@ -534,11 +534,30 @@ powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/selftest.ps1
 | 12h | ①b | 归属：`5000` + `game-svr` | `ok` |
 | 12i | ①b | 归属：`5000` + `login-gate`（接错线） | `cross`（→ `check_ports.ps1` 判红） |
 | 12j | ①b | 归属：`7200` + `game-svr`（接错线） | `cross`（→ 判红） |
+| 12m | ④ | 夹具 offline：旧日志含账号级 kick 文案 | `0` + `old_received=KICKUSER_SYSTEM_MSG` |
+| 12n | ④ | 夹具 offline：新日志含 `成功进入游戏` | `0` + `new_verdict=ADMITTED` |
+| 12o | ④ | 夹具 offline：新日志「进入游戏」后 `关闭连接` | `0` + `new_verdict=CLOSED` |
+| 12p | ④ | 夹具 offline：先 `成功进入游戏`、之后再 `关闭连接` | `0` + `new_verdict=ADMITTED`（成功优先，不误报 CLOSED） |
+| 12q | ④ | 夹具 offline：新日志无任何判定标记 | `1` + `new_verdict=TIMEOUT`（不静默通过） |
+| 12r | ④ | 夹具 offline：新进程已退出 | `1` + `new_verdict=PROCESS_EXITED` |
+| 12s | ④ | 夹具 offline：旧日志无 kick 文案 | `0` + `old_received=NONE_OBSERVED` |
+| 12t | ④ | 夹具 offline：旧日志 `服务器连接被强行中断` | `0` + `old_received=SM_OUTOFCONNECTION` |
+| 12u | ④ | 夹具 offline：旧日志仅 `关闭连接` | `0` + `old_received=CONNECTION_CLOSED` |
 | 13 | 聚合 | `run_acceptance.ps1 -SelfCheckNoStack` | `2` + `PREREQ_MISSING` |
 | 14 | 聚合 | `-SkipPorts -SkipS2c -SkipDb -ShotsDir <6/7>` | `1` + `RED: 有步骤判红`（**红不许被说成前置**） |
 
 全部是**只读/构造夹具**：不起栈、不起客户端、不占端口（①只 `Get-NetTCPConnection` 取实况）。
 证据：`E:\tmp\m2-acceptance\selftest-*\selftest.json`（逐条 name/expected/actual）。
+
+**④ 会话生命周期判定（DoD ① 的『夹具自检』）**：`session_lifecycle_fixture.ps1` 的观测逻辑
+（`Get-KickObservation` / `Get-NewSessionVerdict`）是纯文本分类，**offline 与真机共用同一实现**；
+上面 12m–12u 九条不另写口径，而是直接调它的 offline 模式（`-OfflineLogA <旧日志> -OfflineLogB <新日志>`，
+不起栈、不占端口）。真机 ①（需 5000/7000/7100/7200）跑之前，这九条就是它的「判据在起栈前已成立」的牙齿；
+起栈后可直接 `-OfflineLogA/-OfflineLogB` 对已采日志复判。
+
+**红检（夹具自检本身会红）**：把 `Get-NewSessionVerdict` 里的 `"成功进入游戏"` 匹配串改坏 ⇒
+`life/新进世界=ADMITTED` 等 4 条必 `FAIL`、`SUMMARY total=47 failed=4`、exit 1（还原后 47/47）。
+原始输出：`tools/m2-acceptance/evidence/session-lifecycle-selftest-20261012/`。
 
 > **踩过的坑（写进脚本防复发）**：夹具 `.jsonl` 必须**无 BOM** 写。PS 5.1 的
 > `Set-Content -Encoding utf8` 会写 UTF-8 BOM，python `json.loads` 直接 `Unexpected UTF-8 BOM` 抛错，

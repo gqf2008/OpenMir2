@@ -1106,22 +1106,34 @@ fn online_take(online: &mut OnlineRegistry, chr: &str) -> Option<OnlineEntry> {
     Some(online.remove(pos))
 }
 
-/// 账号级顶号的目标查找（oracle `TCPNetChannel.KickUser` 的匹配条件，`TCPNetChannel.cs:252`）：
-/// `Account` **OrdinalIgnoreCase** 相等 **或** `SessionID` 相等。
+/// 账号级顶号的目标查找（oracle `TCPNetChannel.KickUser`，`TCPNetChannel.cs:246-274`）：
+/// 对**每个网关** `_gameGates[i]` 的 `UserList` 线性扫，命中**第一个**匹配项即 `break`
+/// ⇒ 语义是「**每个网关最多踢一个**」（不是「全踢同名/同会话」，也不是「全局首个」）。
+/// 本函数按 `gate_idx` 分桶，每桶取登记序里的首个匹配（顺序确定，不依赖 `HashMap` 迭代序）。
 ///
-/// **O-3 登记（差异待 owner 裁决，不静默）**：oracle 对每个网关 `_gameGates[i]` 的 `UserList` 线性扫，
-/// 命中第一个匹配项即 `break`（`TCPNetChannel.cs:252-274`）⇒ 语义是「**每个网关最多踢一个**」，
-/// 不是「全踢同名/同会话」；本函数取**全局首个**匹配。`online` 按 `chr_name` 唯一登记，实语料一账号
-/// 同时只有一个活动角色 ⇒ 二者在实语料上不可观测（差异口径与归属见 docs §4；owner 裁决前保持登记）。
+/// 匹配条件（`:252`）：`Account` **OrdinalIgnoreCase** 相等 **或** `SessionID` 相等。
+///
+/// **O-3 裁决（owner `cb0c70fd`，2026-10-12）**：本项目硬约束是「行为等价优先于修 bug」，oracle 的
+/// 「每网关各扫各 break」在「同一账号经两个网关各有一条会话」时与「全局首个」**必然可见差异**
+/// （`tools/botload` 可构造）⇒ **按 oracle 1:1 修**，不再按「实语料不可观测」登记偏差；
+/// 可判红用例见 `account_kick_targets_every_gateway_once`。
 fn online_find_for_kick(
     online: &OnlineRegistry,
     account: &str,
     session_id: i32,
-) -> Option<OnlineEntry> {
-    online
-        .iter()
-        .find(|e| e.account.eq_ignore_ascii_case(account) || e.session_id == session_id)
-        .cloned()
+) -> Vec<OnlineEntry> {
+    let matched =
+        |e: &OnlineEntry| e.account.eq_ignore_ascii_case(account) || e.session_id == session_id;
+    let mut targets: Vec<OnlineEntry> = Vec::new();
+    let mut seen_gate: Vec<i32> = Vec::new();
+    for e in online.iter().filter(|e| matched(e)) {
+        if seen_gate.contains(&e.gate_idx) {
+            continue; // 该网关已命中第一个 ⇒ oracle 的 `break`
+        }
+        seen_gate.push(e.gate_idx);
+        targets.push(e.clone());
+    }
+    targets
 }
 
 /// 同一角色**重复进世界**的即时动作（oracle `WorldServer.cs:503/535/536-537/568-570`）。
@@ -1250,36 +1262,34 @@ fn handle_kick_account(
     account: &str,
     session_id: i32,
 ) {
-    match online_find_for_kick(online, account, session_id) {
-        Some(e) => {
-            engine.delete_human(e.socket);
-            if let Some(tx) = route_to_gate(gates, e.gate_idx, e.socket, "账号级顶号提示") {
-                let _ = tx.send(SimToGate::SendFrame {
-                    socket: e.socket,
-                    body: smframe::sm_sysmessage(
-                        e.actor_id,
-                        colors.red_f,
-                        colors.red_b,
-                        KICK_USER_MSG,
-                    ),
-                });
-            }
-            if !soft_close_pending.iter().any(|n| n == &e.chr_name) {
-                soft_close_pending.push(e.chr_name.clone());
-            }
-            glog!(
-                "INF",
-                "账号级顶号：向旧会话发 SM_SYSMESSAGE 并软关 ChrName:{} Account:{} SessionId:{} socket={}",
-                e.chr_name,
-                e.account,
-                e.session_id,
-                e.socket
-            );
-        }
-        None => glog!(
+    let targets = online_find_for_kick(online, account, session_id);
+    if targets.is_empty() {
+        glog!(
             "DBG",
             "账号级顶号：Account:{account} SessionId:{session_id} 无在线会话（无需踢）"
-        ),
+        );
+        return;
+    }
+    // 每个网关各一个（oracle `KickUser` 的每网关 `break`）⇒ 逐条处置。
+    for e in targets {
+        engine.delete_human(e.socket);
+        if let Some(tx) = route_to_gate(gates, e.gate_idx, e.socket, "账号级顶号提示") {
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: e.socket,
+                body: smframe::sm_sysmessage(e.actor_id, colors.red_f, colors.red_b, KICK_USER_MSG),
+            });
+        }
+        if !soft_close_pending.iter().any(|n| n == &e.chr_name) {
+            soft_close_pending.push(e.chr_name.clone());
+        }
+        glog!(
+            "INF",
+            "账号级顶号：向旧会话发 SM_SYSMESSAGE 并软关 ChrName:{} Account:{} SessionId:{} socket={}",
+            e.chr_name,
+            e.account,
+            e.session_id,
+            e.socket
+        );
     }
 }
 
@@ -3775,6 +3785,84 @@ mod tests {
             "MakeGhost：离开世界"
         );
         assert!(online.is_empty(), "在线登记被摘");
+    }
+
+    /// **`openmir2-m2-session-lifecycle` O-3（owner `cb0c70fd`）**：账号级顶号按 oracle
+    /// `TCPNetChannel.KickUser`「**每个网关各扫、各 `break`**」（`TCPNetChannel.cs:246-274`）——
+    /// 同一账号经两个网关各有一条会话时，**两个都被顶（每网关各一个）**，不是只踢全局首个。
+    ///
+    /// 构造：同账号 `acct1` 在网关 0（`lb1a`/socket 901）与网关 1（`lb1b`/socket 902）各一条会话。
+    /// 断言：两条都收到 `SM_SYSMESSAGE`、两条都在软关名单；`drain_soft_close` 后两条都离开世界、登记清空。
+    ///
+    /// 红检：把 `online_find_for_kick` 改回「全局首个」（如 `targets.truncate(1)`）⇒ 网关 1 的会话
+    /// 收不到 `SM_SYSMESSAGE` ⇒ 本用例必 FAILED。
+    #[test]
+    fn account_kick_targets_every_gateway_once() {
+        use std::collections::HashMap;
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let (tx1, mut rx1) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        gates.insert(1, tx1);
+
+        let mut world = mir2_world::World::with_maps(vec![(64, 64)]);
+        let mut online: OnlineRegistry = Vec::new();
+        for (chr, gate, sock) in [("lb1a", 0_i32, 901_i32), ("lb1b", 1, 902)] {
+            world.open_session(chr);
+            let ent = mir2_world::Entity::new(0, chr.to_string(), 10, 20);
+            let actor = world.enter_map(chr, ent, 0).expect("会话进世界");
+            online_set(&mut online, entry("acct1", chr, 7, gate, sock, actor));
+        }
+        assert_eq!(online.len(), 2, "两台网关各一条会话");
+
+        let mut engine = load::FrontEngine::new();
+        let mut soft_close_pending: Vec<String> = Vec::new();
+        // 同账号命中两条（`Account` OrdinalIgnoreCase）；`session_id` 故意传不存在的值。
+        handle_kick_account(
+            &mut engine,
+            &gates,
+            &online,
+            &mut soft_close_pending,
+            MsgColors {
+                red_f: 0xFF,
+                red_b: 0x38,
+                hear_f: 0x00,
+                hear_b: 0xFF,
+            },
+            "acct1",
+            0,
+        );
+
+        for (rx, sock, who) in [(&mut rx0, 901, "lb1a"), (&mut rx1, 902, "lb1b")] {
+            match rx
+                .try_recv()
+                .unwrap_or_else(|_| panic!("{who} 必须收到 SM_SYSMESSAGE（每网关各一个）"))
+            {
+                SimToGate::SendFrame { socket, body } => {
+                    assert_eq!(socket, sock, "{who} 的提示必须发给自己的 socket");
+                    assert_eq!(
+                        u16::from_le_bytes([body[4], body[5]]),
+                        mir2_protocol::messages::SM_SYSMESSAGE
+                    );
+                }
+                other => panic!("{who} 第一帧必须是 SM_SYSMESSAGE，实得 {other:?}"),
+            }
+        }
+        assert_eq!(
+            soft_close_pending.len(),
+            2,
+            "两条会话都要软关（每网关各一个）"
+        );
+        drain_soft_close(&mut world, &gates, &mut online, &mut soft_close_pending);
+        assert_eq!(
+            world.session("lb1a").unwrap().stage,
+            mir2_world::WorldStage::Left
+        );
+        assert_eq!(
+            world.session("lb1b").unwrap().stage,
+            mir2_world::WorldStage::Left
+        );
+        assert!(online.is_empty(), "两条会话都被摘");
     }
 
     /// `KICK_USER_MSG` 必须就是 oracle 文案的 GB2312 字节（防手抄错）。
