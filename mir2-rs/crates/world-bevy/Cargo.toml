@@ -11,7 +11,8 @@ mir2-formula = { path = "../formula" }
 bevy_ecs = { version = "=0.19.1", default-features = false }
 # 说明（§4.2.2 四条硬约束）：只取 bevy_ecs（+ 可选 bevy_app），**不取整个引擎**；
 # bevy_tasks 会作为 bevy_ecs 的传递依赖出现，但本 crate 不引用其并行 API
-#（由 tests/no_parallel_bevy.rs 的源码扫描 + 直接依赖白名单双重钉住）。
+#（由本 crate 的 tests/bevy_drop_parity.rs::no_parallel_guard 源码扫描 +
+#  crates/world/tests/no_parallel.rs 的直接依赖白名单双重钉住）。
 
 [lints]
 workspace = true
