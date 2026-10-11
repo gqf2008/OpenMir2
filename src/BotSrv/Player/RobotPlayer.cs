@@ -217,6 +217,19 @@ namespace BotSrv.Player
 
         private void SocketError(object sender, DSCClientErrorEventArgs e)
         {
+            // 防重入（2026-10-11 实测的爆栈根因）：`ScoketClient.SendText` 在已坏的 socket 上抛
+            // SocketException 时会**同步**回调 OnError，而下面这条错误分支会去调 LoginOut() →
+            // SendClientMessage() → SendSocket() → SendText() —— 于是在同一个调用栈里无限递归：
+            //   SendText → SocketError → LoginOut → SendSocket → SendText → …
+            // 实测 134 层后 stack overflow，**整个 BotSrv 进程直接死**（一档数据全废）。
+            // 这里用重入闸门把它变成"一次错误、一条记录、bot 退场"。
+            if (_sockErrorHandling)
+            {
+                return;
+            }
+            _sockErrorHandling = true;
+            try
+            {
             switch (e.ErrorCode)
             {
                 case System.Net.Sockets.SocketError.ConnectionRefused:
@@ -235,10 +248,25 @@ namespace BotSrv.Player
                     LoadMetrics.ConnLost();
                     break;
             }
+            // refused/reset 都是"这条连接已经不可用"：先摘掉 IsConnected，避免 LoginOut/探针继续往
+            // 死 socket 上写（每写一次就再抛一次 SocketException，压测里就是噪声与无谓开销）。
+            if ((e.ErrorCode == System.Net.Sockets.SocketError.ConnectionRefused) ||
+                (e.ErrorCode == System.Net.Sockets.SocketError.ConnectionReset))
+            {
+                if (ClientSocket != null)
+                {
+                    ClientSocket.IsConnected = false;
+                }
+            }
             if (DScreen.CurrentScene == PlayScene)
             {
                 LoginOut();
                 BotShare.ClientMgr.DelClient(SessionId);
+            }
+            }
+            finally
+            {
+                _sockErrorHandling = false;
             }
         }
 
@@ -266,6 +294,18 @@ namespace BotSrv.Player
         private static readonly int _probeIntervalMs = ProbeIntervalFromEnv();
         private int _probeLastTick;
         private int _probeDir;
+        /// <summary>服务端确认进世界（收到 SM_LOGON）——探针的武装条件。</summary>
+        private volatile bool _inWorld;
+        private bool _inWorldCounted;
+        /// <summary>本假人自己的世界坐标（SM_LOGON 里服务端给的落点）。</summary>
+        private int _probeX;
+        private int _probeY;
+        /// <summary>防 SocketError 重入（SendText 失败会**同步**回调 OnError，见 ScoketClient.SendText）。</summary>
+        private bool _sockErrorHandling;
+
+        public static bool ProbeEnabled => _probeEnabled;
+
+        public static int ProbeIntervalMs => _probeIntervalMs;
 
         private static int ProbeIntervalFromEnv()
         {
@@ -287,7 +327,14 @@ namespace BotSrv.Player
         /// 线上形状照 C3 金标准的实测（`CM_TURN`：`Recog`=递增时间戳样值、`Param`=0、`Tag`=方向样值、`Series`=0）。</summary>
         private void ProbeActionTick()
         {
-            if (!_probeEnabled || ClientSocket == null || DScreen.CurrentScene != PlayScene)
+            // 武装条件 = **服务端确认进世界**（SM_LOGON ⇒ `_inWorld`）+ 本假人自己的 socket 活着。
+            //
+            // 不能用 `DScreen.CurrentScene == PlayScene` 做条件（2026-10-10/11 实测的零样本根因）：
+            // 该标志在收到 SM_STARTPLAY 时就置上了，**早于网关登录握手**（`**account/chr/...`），
+            // 于是探针的 `CM_TURN` 会抢在登录串之前写进同一条 socket，网关按"首包"解析它 ⇒
+            // 解不出登录串 ⇒ `ClientLogin` 失败 ⇒ `Kick(1)` 重置连接（src/GameGate/Services/ClientSession.cs
+            // "客户端登陆消息处理失败，剔除链接"）⇒ 既进不了世界，又触发 SocketError 递归（见下）。
+            if (!_probeEnabled || !_inWorld || ClientSocket == null || !ClientSocket.IsConnected)
             {
                 return;
             }
@@ -298,8 +345,32 @@ namespace BotSrv.Player
             }
             _probeLastTick = now;
             _probeDir = (_probeDir + 1) & 7;
-            CommandMessage msg = Messages.MakeMessage(Messages.CM_TURN, now, 0, _probeDir, 0);
+            // Recog 必须是 **MakeLong(X, Y)**，不是时间戳：服务端 WorldServer 对 CM_TURN
+            // 走 `SendMsg(Ident, Tag, LoWord(Recog), HiWord(Recog), 0)`，于是
+            //   nParam1 = X = LoWord(Recog)、nParam2 = Y = HiWord(Recog)、wParam = 方向 = Tag，
+            // 而 PlayObject.ClientChangeDir 只有在 `nX == CurrX && nY == CurrY` 时才回
+            // `#+GD/<rtime>!`（PlayObject.Operate.cs:310）。原先塞的是时间戳 ⇒ X/Y 恒不等于自身坐标
+            // ⇒ 服务端每个探针动作都判 false ⇒ tick 样本恒为 0（2026-10-11 实测根因，两处：
+            // 见本方法开头的握手竞态，及此处）。C3 金标准里 CM_WALK 的 Recog=0x026B011F 就是 X=287/Y=619 的坐标，不是时间戳。
+            CommandMessage msg = Messages.MakeMessage(Messages.CM_TURN,
+                HUtil32.MakeLong((short)_probeX, (short)_probeY), 0, _probeDir, 0);
             SendSocket(EDCode.EncodeMessage(msg));
+            LoadMetrics.ProbeSent();
+        }
+
+        /// <summary>收到 SM_LOGON = 服务端确认本假人已进世界（探针武装 + tick 覆盖率分子），幂等。
+        /// `x`/`y` = 该消息里服务端给本假人的落点（PlayScene 的 SM_LOGON 分支就用它们 NewActor）。</summary>
+        public void MarkInWorld(int x, int y)
+        {
+            if (_inWorldCounted)
+            {
+                return;
+            }
+            _inWorldCounted = true;
+            _probeX = x;
+            _probeY = y;
+            _inWorld = true;
+            LoadMetrics.InWorld();
         }
 
         public void Run()

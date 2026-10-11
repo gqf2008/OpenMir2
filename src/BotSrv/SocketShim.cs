@@ -36,6 +36,10 @@ namespace BotSrv
         private Socket _socket;
         private Thread _recvThread;
         private volatile bool _connected;
+        private static int _connSeqSeed;
+
+        /// <summary>T-11：本进程内第几条登录连接（单调递增）——用来把「同一条 TCP 连接」的观测归到一起。</summary>
+        public int ConnSeq { get; private set; }
 
         public IPEndPoint RemoteEndPoint { get; set; }
         public bool IsConnected { get => _connected; set => _connected = value; }
@@ -64,6 +68,7 @@ namespace BotSrv
                 OnError?.Invoke(this, new DSCClientErrorEventArgs(ex.SocketErrorCode));
                 return;
             }
+            ConnSeq = Interlocked.Increment(ref _connSeqSeed);
             _connected = true;
             _recvThread = new Thread(RecvLoop) { IsBackground = true, Name = "ScoketClient-recv" };
             _recvThread.Start();
@@ -93,12 +98,17 @@ namespace BotSrv
             OnDisconnected?.Invoke(this, DSCClientConnectedEventArgs.Instance);
         }
 
-        public void SendText(string text)
+        /// <summary>返回 true = socket.Send 未抛异常（小包在已连接 TCP 上写成功 ⇒ 已交给本机内核 / 对端可靠可达）。</summary>
+        public bool SendText(string text)
         {
-            if (!_connected) return;
+            if (!_connected) return false;
             byte[] data = HUtil32.GetBytes(text);
-            try { _socket.Send(data); }
-            catch (SocketException ex) { OnError?.Invoke(this, new DSCClientErrorEventArgs(ex.SocketErrorCode)); }
+            try { _socket.Send(data); return true; }
+            catch (SocketException ex)
+            {
+                OnError?.Invoke(this, new DSCClientErrorEventArgs(ex.SocketErrorCode));
+                return false;
+            }
         }
 
         public void SendBuffer(byte[] data)

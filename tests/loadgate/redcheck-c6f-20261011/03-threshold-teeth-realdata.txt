@@ -1,0 +1,10 @@
+### 阈值牙齿（真实存档件重判）：104822/tier-500 是真实回归（login=35.8%）
+
+--- 默认阈值（tier<1000 => 100%）:
+verdict=RED threshold=100.0 login=35.8 fails=['登录成功率 35.8% < 100.0%']
+
+--- 新阈值（95%，只对 tier>=1000 生效；本件显式传 95 演示机制）:
+verdict=RED threshold=95.0 login=35.8 fails=['登录成功率 35.8% < 95.0%']
+
+--- 健康件（C6 第5轮 run-3 tier-1000，login=100%）在同样 95% 阈值下:
+verdict=GREEN threshold=95.0 login=100.0 p99=16 fails=[]
