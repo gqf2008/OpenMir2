@@ -65,6 +65,9 @@ impl ScriptPlayer for MockPlayer {
     fn dec_gold(&mut self, n: i32) {
         self.gold -= n;
     }
+    fn inc_gold(&mut self, n: i32) {
+        self.gold += n;
+    }
     fn actor_id(&self) -> i32 {
         4242
     }
@@ -343,4 +346,16 @@ fn break_stops_action_list() {
     let (mut npc, mut player) = setup("[@main]\n#ACT\nbreak\nclose\n");
     let errors = run(&mut npc, &mut player, "@main");
     assert!(errors.is_empty() || !player.msgs.iter().any(|m| m.0 == 10127));
+}
+
+#[test]
+fn give_gold_hits_goto_lable_give_item_after_flip() {
+    // B2/M4 翻转后：脚本 `give 金币 500`（枚举 3）→ CmdCode 3 → ActionOfGiveItem 金币分支 ⇒ 加金币。
+    let (mut npc, mut player) = setup("[@main]\n#ACT\ngive 金币 500\n");
+    let errors = run(&mut npc, &mut player, "@main");
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(
+        player.gold, 600,
+        "give 金币 500 应走 GotoLableGiveItem：100 + 500"
+    );
 }

@@ -63,6 +63,19 @@ impl Engine<'_, '_> {
                 self.player
                     .space_move(&info.s_param1, info.n_param2 as i16, info.n_param3 as i16);
             }
+            "ActionOfGiveItem" => {
+                // C# `GotoLableGiveItem(sParam1, nParam2)`：金币名 → IncGold(nParam2)；
+                // 否则 nParam2 夹到 1..=50 后逐件入包（此处用 give_item 一次性交付，夹具日志口径同为 additem）。
+                if info.s_param1.eq_ignore_ascii_case(GOLD_NAME) {
+                    self.player.inc_gold(info.n_param2);
+                } else {
+                    let mut n = info.n_param2;
+                    if !(1..=50).contains(&n) {
+                        n = 1;
+                    }
+                    self.player.give_item(&info.s_param1, n);
+                }
+            }
             "ActionOfSet" => {
                 // C#: int n28 = StrToInt(sParam1, 0); int n2C = StrToInt(sParam2, 0);
                 //     playerActor.SetQuestFlagStatus(n28, n2C);

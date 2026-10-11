@@ -27,6 +27,8 @@ pub trait ScriptPlayer {
     fn gold(&self) -> i32;
     /// `IPlayerActor.DecGold`（`GotoLableTakeItem` 的金币分支）。
     fn dec_gold(&mut self, n: i32);
+    /// `IPlayerActor.IncGold`（`GotoLableGiveItem` 的金币分支）。
+    fn inc_gold(&mut self, n: i32);
     /// `IPlayerActor.SpaceMove`（`ActionOfMapMove`）。
     /// 默认空实现：flow 夹具的 C# 侧用 DispatchProxy，`SpaceMove`/`SendRefMsg` 不落日志，
     /// 故默认不产生可观察副作用（与两侧对拍口径一致）；真世界适配层可覆写。
