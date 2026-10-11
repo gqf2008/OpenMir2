@@ -59,6 +59,7 @@ python -I tests/parity/M4/run_npc_cases.py                                      
 ```powershell
 python -I tests/parity/M4/m4_parity.py selftest   # 多重集门禁自检 5/5：插行/删行/重复行必红
 python -I tests/parity/M4/m4_parity.py redcheck   # 篡改副本：计数+1、错误行改 1 字符 → 真实门禁必红
+python -I tests/parity/M4/evidence_hashes.py selftest  # 证据 hash 复核器自检 4/4（改 hash/多文件/少文件必红）
 ```
 
 `m4_parity.py selftest` 的 5 个用例（不需要语料/端口）：
@@ -71,11 +72,31 @@ python -I tests/parity/M4/m4_parity.py redcheck   # 篡改副本：计数+1、�
 | `A=[x,x]` vs `B=[x]`（重复行） | exit 1（红；旧 set 差集会假绿） |
 | `A=[x,x]` vs `B=[x,x]` | exit 0（绿；防止「见重复即红」的过度收紧） |
 
+## 证据 hash 口径（评审 N-1）
+
+本仓库 `core.autocrlf=true`：工作树是 CRLF，Git blob 是 LF。卡/报告/清单里的证据 hash
+**统一口径**为 `SHA-256(文件字节，先把 CRLF 归一为 LF)`，它等于
+`git show <commit>:<path> | sha256sum`（git blob 内容 hash），**不等于**对工作树直接跑
+`sha256sum` 得到的 CRLF 值。评审 N-1 就是这个口径差。
+
+```powershell
+python -I tests/parity/M4/evidence_hashes.py            # 复核：逐项比对 + 缺失/多余检查
+python -I tests/parity/M4/evidence_hashes.py --write    # 改动证据后显式重生成清单
+python -I tests/parity/M4/evidence_hashes.py selftest   # 牙齿：改 hash / 多文件 / 少文件必红
+```
+
+清单 `../evidence/M4/evidence-hashes.json` 是「被审计证据」的锚点，**不**在 `m4_parity.py`
+里自动改写（自动改写会把它退化成恒绿）；`--write` 是显式动作。
+
+两侧 harness 的 stdout 转录会先把本 worktree/repo 的绝对路径归一为 `<mir2-rs>`/`<OpenMir2>`，
+故证据字节跨 worktree 可复现（同 N-1 类问题）。
+
 ## 产物与复现
 
 | 文件 | 说明 |
 | --- | --- |
 | `m4_parity.py` | ① + ③ 门禁（跑两侧 + 出表 + 多重集比对 + 宏边界 + 自检/红检） |
+| `evidence_hashes.py` | 证据 hash 口径复核器（LF 归一 = git blob；--write / verify / selftest） |
 | `run_npc_cases.py` | ② runner（可跑用例 vs 等窗口用例） |
 | `npc-cases.json` | ② 6 类用例定义（含判红判据） |
 | `fixtures/macroenvir/` | 宏展开边界语料（2 条 `#DEFINE`） |
@@ -85,3 +106,4 @@ python -I tests/parity/M4/m4_parity.py redcheck   # 篡改副本：计数+1、�
 | `../evidence/M4/npc-cases.txt` | ② 用例运行结果 + 等窗口判据 |
 | `../evidence/M4/parse-stats-{rust,cs}.json` | 两侧原始 JSON（证据四件套的原始件） |
 | `../evidence/M4/corpus-directives.txt` | 语料 `#DEFINE`/`#INCLUDE`/`#SETHOME` 事实计数 |
+| `../evidence/M4/evidence-hashes.json` | 证据 hash 清单（LF 归一口径；`evidence_hashes.py` 生成/复核） |
