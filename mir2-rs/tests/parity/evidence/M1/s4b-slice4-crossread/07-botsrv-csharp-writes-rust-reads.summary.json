@@ -1,0 +1,12 @@
+﻿{
+    "count":  1,
+    "spawned":  1,
+    "login_ok":  1,
+    "in_world":  1,
+    "success_rate_pct":  100,
+    "world_rate_pct":  100,
+    "require_world":  true,
+    "timeout_sec":  150,
+    "log":  "E:/tmp/openmir2-dbsrv6k/stack/bots/cross-rust-reads-csharp.log",
+    "stats":  "E:\\tmp\\openmir2-dbsrv6k\\stack\\bots\\cross-rust-reads-csharp\\load_stats.ndjson"
+}

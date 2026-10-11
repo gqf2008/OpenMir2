@@ -33,8 +33,11 @@
 ## 2. 判据①：「C# GameSvr 经 Rust DBSrv 6000 读档进图」
 
 - 命令：`run_bots.ps1 -Count 1 -Prefix loadbot -RequireWorld`（账号/角色 = `loadbot0`，已存在）
-- BotSrv 侧：`PROGRESS … in_world=1/1` / `GREEN: 1/1 登录成功 (100%)；in_world=1/1`
-  （`01-botsrv-loadbot0.txt`）——**真进世界**（收到自己的 `SM_LOGON`），不是本地切场景。
+- BotSrv 侧（`run_bots.ps1` 的结构化汇总原始件 `01-botsrv-loadbot0.summary.json`）：
+  `{"count":1,"spawned":1,"login_ok":1,"in_world":1,"success_rate_pct":100,"world_rate_pct":100,"require_world":true}`
+  ⇒ **真进世界**（本会话收到自己的 `SM_LOGON`，`in_world == count == 1`），不是本地切场景。
+  注：`run_bots.ps1` 控制台打印的 `PROGRESS … in_world=1/1` / `GREEN: 1/1 登录成功 (100%)；in_world=1/1`
+  **未落文件**；随片的 `01-botsrv-loadbot0.txt` 是 BotSrv 进程日志（止于进图后的打怪行），不含该汇总行。
 - Rust db-srv 侧（`01-rust-dbsrv-6000-loadbot0-load-save.txt`）：
   ```
   服务器连接: 127.0.0.1                         # C# GameSvr 接入 6000
@@ -77,11 +80,21 @@ python mir2-rs/tests/parity/m3/scoped_diff.py diff --canonical --fixed-newchr `
 
 | 方向 | 写入方 | 读取方 | 证据 |
 | --- | --- | --- | --- |
-| **C# 写 → Rust 读** | C# DBSrv（`m1c0214020`） | Rust db-srv 6000 | `07-botsrv-csharp-writes-rust-reads.txt` + Rust 日志 `获取玩家[m1c0214020]数据成功`；`GREEN … in_world=1/1` |
-| **Rust 写 → C# 读** | Rust db-srv（`m1r0218390`） | C# DBSrv 6000 | `08-botsrv-rust-writes-csharp-reads.txt`（C# 栈在听，`GREEN … in_world=1/1`）；Rust 侧写入原始件见 `05-rust-dbsrv-6000-m1r-load-save.txt` |
+| **C# 写 → Rust 读** | C# DBSrv（`m1c0214020`） | Rust db-srv 6000 | BotSrv 结构化汇总 `07-botsrv-csharp-writes-rust-reads.summary.json`（`in_world=1`）+ `07-botsrv-csharp-writes-rust-reads.txt`；端口归属推断见下注 |
+| **Rust 写 → C# 读** | Rust db-srv（`m1r0218390`） | C# DBSrv 6000 | BotSrv 结构化汇总 `08-botsrv-rust-writes-csharp-reads.summary.json`（`in_world=1`）+ `08-botsrv-rust-writes-csharp-reads.txt`；C# DBSrv 侧原始件 `06-csharp-dbsrv-stdout.txt`（02:20:06 读到 `m1r0218390`）；Rust 侧写入原始件 `05-rust-dbsrv-6000-m1r-load-save.txt` |
 
 ⇒ 一侧 DBSrv 写下的角色资料（`characters*` 及 8 张附属表）能被**另一实现**的 DBSrv 读回并支撑
 C# GameSvr 把角色**放进世界**（收到 `SM_LOGON`）——即「跨实现互读」双向成立。
+
+> **F-1 处置（reviewer-3 `39d41840`，request_changes）**：本片此前为 07（C# 写 → Rust 读）引用的
+> 「Rust 日志 `获取玩家[m1c0214020]数据成功`」**未随片、且原日志已不可复得**：服务该次读取的 Rust db-srv
+> 进程（`10-ports-csharp-dbsrv-side.txt` 中被 `STOP db-srv pid=25948` 的那一个）其 live 输出就是
+> `side_stack.ps1` 的 `DBSrv.out.log`，在 02:19:34 C# 栈启动时被 `-RedirectStandardOutput` **截断**
+> （现存 `05-*` 副本止于 02:19:03，不含 02:19:11–02:19:26）。故 07 方向改为两条**随片可核**的依据：
+> ① BotSrv 结构化汇总 `in_world=1`（该读取端到端成立）；② **端口归属推断**——`06-csharp-dbsrv-stdout.txt`
+> 显示 C# DBSrv 于 **02:19:34** 才启动（晚于 07 的 02:19:11–02:19:26），而 `10-ports-csharp-dbsrv-side.txt`
+> 显示同一交接点被停掉的是 Rust `db-srv pid=25948` ⇒ 6000 上服务该次读取的是 **Rust 实现**。
+> 「Rust 6000 侧对 `m1c0214020` 的取档日志未随片」已登记为 `not_verified`（见 §5）。
 
 ## 5. 未覆盖 / 登记
 
@@ -89,6 +102,7 @@ C# GameSvr 把角色**放进世界**（收到 `SM_LOGON`）——即「跨实现
 | --- | --- | --- |
 | `softclose`（小退）路径 DB diff | **未覆盖** | 需 GUI 客户端走 `Alt+X` 的模态确认框（`run_pair`/`BotSrv` 无该动作）；本轮窗口内不冒险合成。 |
 | `shutdown`（服务关闭）路径 DB diff | **未覆盖** | 需 bot 在世界的同刻优雅停 GameSvr（`Stop-Process -Force` 不触发保存）；编排未做，登记。 |
+| Rust 6000 侧对 `m1c0214020` 的取档日志（02:19:11–02:19:26） | **not_verified（未随片）** | 该 Rust 进程 live 输出被 02:19:34 的 C# 栈启动截断；方向归属改由 BotSrv 汇总 `in_world=1` + 端口归属推断（§4 注 F-1）。 |
 | `TimedService` 5 分钟缓存回写对拍 | 已由片 2 单测钉住 | 缓存恒空是 C# 既有行为（`cache.rs` 模块头）。 |
 | 5700 `MarketService` 真机对拍 | 已由片 3 伪对端/真身探针钉住 | C# 5700 大半不可达（`MarketItem` 未注册 MemoryPack），登记 `whitelist S4B-5..10`。 |
 

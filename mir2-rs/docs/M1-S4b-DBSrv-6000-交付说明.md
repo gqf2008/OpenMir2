@@ -160,10 +160,17 @@ M2 lane 在卡上写 `comment c365f0af`「窗口已释放」（5000/5100/5500/56
 
 | 判据 | 结果 | 证据（`tests/parity/evidence/M1/s4b-slice4-crossread/`） |
 | --- | --- | --- |
-| C# GameSvr 经 Rust DBSrv **6000** 读档进图 | ✅ BotSrv `in_world=1/1`；Rust 日志 `获取玩家[loadbot0]数据成功` + `保存角色[loadbot0]数据成功` | `01-*`，`05-*` |
+| C# GameSvr 经 Rust DBSrv **6000** 读档进图 | ✅ BotSrv 结构化汇总 `in_world=1`；Rust 日志 `获取玩家[loadbot0]数据成功` + `保存角色[loadbot0]数据成功` | `01-botsrv-loadbot0.summary.json`、`01-rust-dbsrv-6000-loadbot0-load-save.txt` |
 | 存档字段级 diff = 0（`disconnect` 路径，跨实现） | ✅ `scoped_diff.py diff --canonical --fixed-newchr` ⇒ `GREEN: 作用域内 9 张表逐行一致`；两侧各 115 行 / 9 表分布逐表相等 | `02-*`、`03-*`、`04-*`、`09-*` |
-| C# 写 → Rust 读 | ✅ Rust 日志 `获取玩家[m1c0214020]数据成功` + `in_world=1/1` | `07-*` |
-| Rust 写 → C# 读 | ✅ C# DBSrv 栈 `in_world=1/1`（角色 `m1r0218390` 由 Rust 写入） | `05-*`、`08-*` |
+| C# 写 → Rust 读 | ✅ BotSrv 结构化汇总 `in_world=1`（`m1c0214020`）；6000 归属 = Rust db-srv（端口归属推断，见下注） | `07-botsrv-csharp-writes-rust-reads.summary.json`、`07-*.txt`、`06-*`、`10-*` |
+| Rust 写 → C# 读 | ✅ BotSrv 结构化汇总 `in_world=1`（`m1r0218390`）；C# DBSrv 侧原始件 02:20:06 读到 `m1r0218390` | `08-botsrv-rust-writes-csharp-reads.summary.json`、`08-*.txt`、`06-csharp-dbsrv-stdout.txt`、`05-*` |
+
+> **F-1（reviewer-3 `39d41840`，request_changes）已处置**：07 方向此前引用的「Rust 日志 `获取玩家[m1c0214020]数据成功`」
+> **未随片且不可复得**（服务该次读取的 Rust db-srv 的 live 日志 `DBSrv.out.log` 在 02:19:34 C# 栈启动时被截断）。
+> 已补入三份 `run_bots.ps1` **结构化汇总原始件**（`01/07/08-*.summary.json`，均 `in_world=1`），
+> 并把 07 方向改为「BotSrv 汇总 `in_world=1` + 端口归属推断（`06-*` 显示 C# DBSrv 02:19:34 才启动，
+> 晚于 07 的 02:19:11–02:19:26；`10-*` 显示交接点停掉的是 Rust `db-srv pid=25948`）」；
+> 「Rust 6000 侧对 `m1c0214020` 的取档日志未随片」登记 `not_verified`（见同目录 `README.md` §5）。
 
 未覆盖（登记）：`softclose`（需 GUI 客户端 `Alt+X` 模态确认框）与 `shutdown`（需 bot 在世界同刻优雅停 GameSvr）
 两条退出路径的 DB diff —— 本片窗口内未做，见同目录 `README.md` §5。收工已停栈、端口回落。
