@@ -65,11 +65,19 @@ pub fn gm_data_body(header: [u8; 12], tail: &[u8]) -> Vec<u8> {
 /// 网关把 `GM_DATA` body 变成客户端线缆字节（`GameGate/Services/ClientSession.cs:897-920`）：
 /// `'#' ++ Encode(头 12B) ++ 尾(原样) ++ '!'`。
 ///
+/// **范围（R4-4）**：只覆盖 oracle `ProcessServerPacket` 的 **`bufferLen >= 0` 支**（即 body 含
+/// 12B 命令头的 `SM_*` 帧，本模块产出的全是这类）。`bufferLen < 0` 的**短包支**（`'#'+原样+'!'`、
+/// 不 Encode 头）属 game-gate 的发送路径，**不在本模块实现**（另一张卡）；本函数对 <12B 直接
+/// panic，拒绝被当作短包支误用。
+///
 /// # Panics
-/// body 不足 12B 时 panic（调用方是自家构造器，恒 >= 12）。
+/// body 不足 12B 时 panic（本模块的自家构造器恒 >= 12）。
 #[must_use]
 pub fn client_frame(gm_data: &[u8]) -> Vec<u8> {
-    assert!(gm_data.len() >= 12, "GM_DATA body 必须含 12B 命令头");
+    assert!(
+        gm_data.len() >= 12,
+        "GM_DATA body 必须含 12B 命令头（短包支属 game-gate）"
+    );
     let mut out = Vec::with_capacity(gm_data.len() + 6);
     out.push(b'#');
     out.extend_from_slice(&edcode::encode(&gm_data[..12]));
@@ -144,13 +152,16 @@ pub fn sm_attackmode(mode: u8) -> Vec<u8> {
 /// `SM_VERSION_FAIL`（`PlayObject.Message.cs:1690-1692`）：
 /// `MakeMessage(SM_VERSION_FAIL, ClientFile1_CRC, LoWord(ClientFile2_CRC), HiWord(ClientFile2_CRC), 0)`
 /// + 尾 `"<<<<<<"`（**原样字面量**，不是 EDCode 编码——金标准里捕获工具把它解码成了垃圾，但这 6 字节在线缆上就是原样）。
+///
+/// **R4-3**：第 1 参是 oracle 的 `ClientFile1_CRC`（落在 `Recog`），**不是** `ActorId`；
+/// 接线时按 `Config.ClientFile1_CRC` 传，勿传 `ActorId`（金标准 #11 两值都 0，测试看不出）。
 #[must_use]
-pub fn sm_version_fail(recog: i32, crc2: i32) -> Vec<u8> {
+pub fn sm_version_fail(client_file1_crc: i32, client_file2_crc: i32) -> Vec<u8> {
     let header = command_header(
-        recog,
+        client_file1_crc,
         messages::SM_VERSION_FAIL,
-        lo_word(crc2),
-        hi_word(crc2),
+        lo_word(client_file2_crc),
+        hi_word(client_file2_crc),
         0,
     );
     gm_data_body(header, b"<<<<<<")
@@ -774,6 +785,19 @@ mod tests {
         assert_eq!(cm.ident, messages::SM_ATTACKMODE);
         assert_eq!(cm.param, 0);
         assert_eq!(cm.tag, 0);
+        assert_eq!(cm.series, 0);
+    }
+
+    /// **R4-3**：`SM_VERSION_FAIL` 的第 1 参是 `ClientFile1_CRC`（在 `Recog`），第 2 参按 Lo/Hi 拆进
+    /// `Param`/`Tag`；金标准 #11 全 0，这里用非 0 值钉死字段位。
+    #[test]
+    fn version_fail_field_layout() {
+        use mir2_protocol::frame::CommandMessage;
+        let body = sm_version_fail(0x1122_3344, 0x5566_7788);
+        let cm = CommandMessage::from_bytes(&body).unwrap();
+        assert_eq!(cm.recog, 0x1122_3344, "ClientFile1_CRC 必须在 Recog");
+        assert_eq!(cm.param, 0x7788, "LoWord(ClientFile2_CRC)");
+        assert_eq!(cm.tag, 0x5566, "HiWord(ClientFile2_CRC)");
         assert_eq!(cm.series, 0);
     }
 }
