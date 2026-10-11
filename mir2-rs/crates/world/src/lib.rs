@@ -25,6 +25,8 @@ pub use aoi::{search_view_range, search_view_range_death, update_visible_gay, vi
 pub use bevy_bridge::{collect_tick_order_system, snapshot_from_world};
 pub use combat::{attack, AttackOutcome, CombatConfig};
 pub use entity::{Entity, EntityStore, VisibleFlag, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY};
-pub use map::{CellAttribute, CellObject, CellType, MapCellInfo, MapGrid};
+pub use map::{
+    CellAttribute, CellObject, CellType, FloorItemKind, FloorItemMeta, MapCellInfo, MapGrid,
+};
 pub use session::{Session, SessionError, WorldStage};
-pub use world::{Command, EntitySnapshot, TickRecord, World, TICK_INTERVAL_MS};
+pub use world::{Command, EntitySnapshot, FloorItemView, TickRecord, World, TICK_INTERVAL_MS};
