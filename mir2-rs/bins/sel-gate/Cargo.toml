@@ -1,0 +1,21 @@
+[package]
+name = "sel-gate"
+version = "0.1.0"
+edition = "2021"
+description = "Rust 版 SelGate（M1）：客户端 7100 ↔ C#/Rust DBSrv 的内部 MemoryPack 链路（→DBSrv 5100）"
+license = "MIT"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "deny"
+pedantic = "warn"
+
+[dependencies]
+mir2-protocol = { path = "../../crates/protocol" }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "macros", "signal", "time"] }
+anyhow = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "time", "process"] }

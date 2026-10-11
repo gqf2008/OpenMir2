@@ -1,0 +1,198 @@
+{
+  "account": "loadbot1",
+  "cases": {
+    "login_bad_password": [
+      {
+        "call": "cm_idpassword_bad",
+        "frames": [
+          {
+            "body_enc": "",
+            "body_plain_gbk": "",
+            "body_plain_hex": "",
+            "body_segments": [
+              "flat"
+            ],
+            "ident": 503,
+            "param": 0,
+            "raw_hex": "2353534f4c5353695e6464686b6464686b2124",
+            "recog": -1,
+            "request": "cm_idpassword_bad",
+            "sdm_data_len": 19,
+            "sdm_socket_id": "4",
+            "sdm_type": 2,
+            "series": 0,
+            "tag": 0,
+            "tail": "!$"
+          }
+        ],
+        "leftover_hex": ""
+      }
+    ],
+    "login_needupdate": [
+      {
+        "call": "cm_idpassword_mir2test",
+        "frames": [
+          {
+            "body_enc": "TTyQ>@CBVN?f`_H",
+            "body_plain_gbk": "热血传奇/0/",
+            "body_plain_hex": "c8c8d1aab4abc6e62f302f",
+            "body_segments": [
+              "flat"
+            ],
+            "ident": 529,
+            "param": 0,
+            "raw_hex": "236464686b64696a6b6464686b6465686b545479513e404342564e3f66605f482124",
+            "recog": 0,
+            "request": "cm_idpassword_mir2test",
+            "sdm_data_len": 34,
+            "sdm_socket_id": "6",
+            "sdm_type": 2,
+            "series": 1,
+            "tag": 0,
+            "tail": "!$"
+          }
+        ],
+        "leftover_hex": ""
+      }
+    ],
+    "login_ok": [
+      {
+        "call": "cm_idpassword",
+        "frames": [
+          {
+            "body_enc": "TTyQ>@CBVN?f`_H",
+            "body_plain_gbk": "热血传奇/0/",
+            "body_plain_hex": "c8c8d1aab4abc6e62f302f",
+            "body_segments": [
+              "flat"
+            ],
+            "ident": 529,
+            "param": 0,
+            "raw_hex": "236464686b64696a6b6464686b6465686b545479513e404342564e3f66605f482124",
+            "recog": 0,
+            "request": "cm_idpassword",
+            "sdm_data_len": 34,
+            "sdm_socket_id": "2",
+            "sdm_type": 2,
+            "series": 1,
+            "tag": 0,
+            "tail": "!$"
+          }
+        ],
+        "leftover_hex": ""
+      }
+    ],
+    "login_unknown_account": [
+      {
+        "call": "cm_idpassword_unknown",
+        "frames": [
+          {
+            "body_enc": "",
+            "body_plain_gbk": "",
+            "body_plain_hex": "",
+            "body_segments": [
+              "flat"
+            ],
+            "ident": 503,
+            "param": 0,
+            "raw_hex": "236464686b6453696a6464686b6464686b2124",
+            "recog": 0,
+            "request": "cm_idpassword_unknown",
+            "sdm_data_len": 19,
+            "sdm_socket_id": "5",
+            "sdm_type": 2,
+            "series": 0,
+            "tag": 0,
+            "tail": "!$"
+          }
+        ],
+        "leftover_hex": ""
+      }
+    ],
+    "protocol": [
+      {
+        "call": "cm_protocol",
+        "frames": [
+          {
+            "body_enc": "",
+            "body_plain_gbk": "",
+            "body_plain_hex": "",
+            "body_segments": [
+              "flat"
+            ],
+            "ident": 500,
+            "param": 0,
+            "raw_hex": "236464686b6450696a6464686b6464686b2124",
+            "recog": 0,
+            "request": "cm_protocol",
+            "sdm_data_len": 19,
+            "sdm_socket_id": "1",
+            "sdm_type": 2,
+            "series": 0,
+            "tag": 0,
+            "tail": "!$"
+          }
+        ],
+        "leftover_hex": ""
+      }
+    ],
+    "select_server": [
+      {
+        "call": "cm_idpassword",
+        "frames": [
+          {
+            "body_enc": "TTyQ>@CBVN?f`_H",
+            "body_plain_gbk": "热血传奇/0/",
+            "body_plain_hex": "c8c8d1aab4abc6e62f302f",
+            "body_segments": [
+              "flat"
+            ],
+            "ident": 529,
+            "param": 0,
+            "raw_hex": "236464686b64696a6b6464686b6465686b545479513e404342564e3f66605f482124",
+            "recog": 0,
+            "request": "cm_idpassword",
+            "sdm_data_len": 34,
+            "sdm_socket_id": "3",
+            "sdm_type": 2,
+            "series": 1,
+            "tag": 0,
+            "tail": "!$"
+          }
+        ],
+        "leftover_hex": ""
+      },
+      {
+        "call": "cm_selectserver",
+        "frames": [
+          {
+            "body_enc": "abWk^`>_`^Yh_cY^``?kc?",
+            "body_plain_gbk": "127.0.0.1/7100/3",
+            "body_plain_hex": "3132372e302e302e312f373130302f33",
+            "body_segments": [
+              "flat"
+            ],
+            "ident": 530,
+            "param": 0,
+            "raw_hex": "236764686b646a6a6b6464686b6464686b6162576b5e603e5f605e59685f63595e60603f6b633f2124",
+            "recog": 3,
+            "request": "cm_selectserver",
+            "sdm_data_len": 41,
+            "sdm_socket_id": "3",
+            "sdm_type": 2,
+            "series": 0,
+            "tag": 0,
+            "tail": "!$"
+          }
+        ],
+        "leftover_hex": ""
+      }
+    ]
+  },
+  "gate_port": 5599,
+  "note": "C# LoginSrv (src/LoginSrv/**) 真实响应字节；供 bins/login-srv 字面量断言",
+  "rich_account": "mir2test",
+  "server_name": "热血传奇",
+  "srv_port": 5699,
+  "tool": "oracle_capture.py"
+}
