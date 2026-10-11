@@ -1,0 +1,36 @@
+# 卡 openmir2-m3-gamesvr-save —— 本片跑过的确切命令（证据四件套之「命令」）
+# 主机 shell = git-bash（Windows）；cargo 隔离 target = E:\tmp\openmir2-m2svr-target；全部 --offline
+# 工作区 = E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs
+
+# --- 0) 前置：端口实拍（未占窗口）---
+powershell -NoProfile -Command 'foreach ($p in 5000,5100,5500,5600,5700,6000,7000,7100,7200,3306) { ... }'
+# 输出：5000..7200 全 free；3306 LISTEN pid=4540 mysqld（共享 MySQL）   -> ports-preflight.txt
+
+# --- 1) 编译/门禁 ---
+export CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target
+cargo fmt --all -- --check                                              # rc=0  -> gates-fmt.txt
+cargo clippy --workspace --all-targets --offline -- -D warnings         # rc=0  -> gates-clippy.txt
+cargo test --workspace --offline                                        # rc=0；73 suites / 564 passed / 0 failed / 16 ignored  -> gates-test-workspace.txt
+cargo run -p msgcodegen --offline -- --check                            # rc=0；604 条  -> gates-msgcodegen.txt
+
+# --- 2) 新增/改动用例 3 连跑 ---
+for i in 1 2 3; do cargo test -p game-svr --offline > gamesvr-3run-$i.txt 2>&1; done
+# 每次：125 passed / 0 failed（unit）+ 13 passed / 0 failed（relay）
+
+# --- 3) 红检（改坏 ⇒ 必红；每步跑完立即还原）---
+# A) 漏写 Gold 列：main.rs 的 `rec.data.gold = sg.state.gold;` -> `= 0;`
+cargo test -p game-svr --offline save_record_reflects_live_state_and_item_layout   # exit 101（assertion failed）-> red-gold.txt
+# B) BagItems 不写物品：`out[i] = Some(server_item_from_bag(it));` -> `Some(default_server_item())`
+cargo test -p game-svr --offline save_record_reflects_live_state_and_item_layout   # exit 101 -> red-bag.txt
+# C) 存档 ident 101 -> 100：dbclient.rs 的 save_human_rcd_request 用 DB_SAVEHUMANRCD -> DB_LOADHUMANRCD
+cargo test -p game-svr --offline save_request_carries_db_savehumanrcd_and_packet   # exit 101（Ident 必须是 101）-> red-ident.txt
+# D) F-1（reviewer-5 962fdf81）：apply_save_reply 改成无条件 engine.end_save（把失败路径改坏）
+cargo test -p game-svr --offline --bin game-svr save_ledger_only_released_on_success_reply  # exit 101 -> red-save-reply.txt
+
+# --- 4) 真机（DoD ②）本片未跑 ---
+# 需要 T-14 夹具口径片（m3bag 在飞）+ 固定起点/固定初始背包；详见 README §4。
+# 未起栈 ⇒ 无 -Stop；收工端口仍为上面的 preflight（5000..7200 free / 3306 mysqld）。
+
+# --- 5) 证据 hash（LF 归一 = git blob 口径）---
+python mir2-rs/tests/parity/M4/evidence_hashes.py write --evidence mir2-rs/tests/parity/m3/evidence/gamesvr-save-20261012
+python mir2-rs/tests/parity/M4/evidence_hashes.py verify --evidence mir2-rs/tests/parity/m3/evidence/gamesvr-save-20261012

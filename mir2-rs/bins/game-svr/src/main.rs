@@ -197,6 +197,7 @@ async fn main() -> Result<()> {
         next_query_id: std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0)),
         replies: db_replies,
         outstanding: Vec::new(),
+        save_outstanding: Vec::new(),
     };
 
     // sim 侧：一个专用线程独占 World（§4.2 第 1 条：不许并行 executor 驱动世界）
@@ -358,6 +359,25 @@ async fn main() -> Result<()> {
     // 查表口径只有一份：装成 `game_svr::ability::StdItemCatalog`（1-based + 空名按缺），
     // 供帧 50/41 的 `StdItem.Shape` 与 52/752 的 `RecalcAbilitys` 共用。
     let item_catalog = items::catalog_from(&item_table);
+    // 经验表（`Exps.conf` 的 `NeedExps`，`BaseObject.GetLevelExp` 的数据源）：存档 `MaxExp`
+    // （`PlayObject.cs:1310`）与击杀经验都用它。读不到 ⇒ 全 0（oracle `Config.NeedExps` 未载入同形；登记）。
+    let need_exps = match mir2_data::exps::ExpsConfig::from_file(&base.join("Exps.conf")) {
+        Ok(c) => {
+            glog!(
+                "INF",
+                "经验表 Exps.conf 已载入：NeedExps[1..] 非零 {} 项",
+                c.need_exps.iter().filter(|v| **v != 0).count()
+            );
+            c.need_exps.to_vec()
+        }
+        Err(e) => {
+            glog!(
+                "WRN",
+                "读取 Exps.conf 失败（{e}）⇒ NeedExps 全 0（存档 MaxExp / 击杀经验登记）"
+            );
+            vec![0; mir2_data::models::MAX_CHANGE_LEVEL]
+        }
+    };
     let _sim = std::thread::Builder::new()
         .name("m2-sim".to_string())
         // 公告文本（oracle `NoticeMgr.GetNoticeMsg("Notice")`，帧 658 `SM_SENDNOTICE`）：
@@ -390,6 +410,7 @@ async fn main() -> Result<()> {
                         cloths_woman: cfg.cloths_woman.clone(),
                         item_number: cfg.item_number,
                     },
+                    need_exps,
                 },
                 notice,
                 colors,
@@ -485,6 +506,10 @@ struct DbWiring {
     /// `session_id`/`account` 同样是取档请求的字段（不在 `PlayerDataHead` 里），用于进世界时登记
     /// 在线表（账号级顶号 `KickUser` 按 `Account`/`SessionID` 匹配）。
     outstanding: Vec<(i32, i32, i32, i32, i32, String)>,
+    /// 已发出、还没取走的**存档**应答 `(query_id, ChrName)`（`DBR_SAVEHUMANRCD(1102)` 或失败时的
+    /// `DBR_LOADHUMANRCD(1100)`）——取走时同步 `FrontEngine.end_save`（oracle `RemoveSaveList`
+    /// 的时机就是「应答回来」，`WorldServer.cs:1091` ↔ 进世界守卫 `:203`）。
+    save_outstanding: Vec<(i32, String)>,
 }
 
 impl DbWiring {
@@ -1333,7 +1358,264 @@ fn use_items_from(
         }
         out[i] = cell.as_ref().map(to_bag_item);
     }
+    // 照 oracle `WorldServer.GetHumData`（`:1163-1176`）：记录的 `HumItems[Helmet]/[Necklace]`
+    // 与 `UseItems` 的两槽是**交换**映射（`UseItems[Helmet] = humItems[Necklace]`、反之亦然）。
+    // 存档侧 `MakeSaveRcd`（`:1302-1303`）再交换一次 ⇒ 记录↔UseItems 往返不变。
+    out.swap(
+        game_svr::ability::SLOT_NECKLACE,
+        game_svr::ability::SLOT_HELMET,
+    );
     out
+}
+
+/// 登入时留下的「原始记录 + 进图逻辑名」——存档（`WorldServer.SaveHumanRcd` → `MakeSaveRcd`）
+/// 在它之上叠加会话实时增量（坐标/Gold/Abil/物品族表）。
+struct SavedHuman {
+    /// `playObject.UserAccount`（`MakeSaveRcd` 的 `SaveCharacterData.Account`）。
+    account: String,
+    /// 取档时的整条记录——未在 `SessionGround` 里建模的字段（magic/storage/quest/bonus…）原样保留。
+    record: record::PlayerRecord,
+    /// `playObject.MapName`（进图时 `resolve_enter_map` 定的逻辑名）。
+    enter_map: String,
+}
+
+/// `HUtil32.DelfautItem.ToServerItem()`（`HUtil32.cs:14`）：空槽用的**非 null** 默认物品
+/// （`UserItem.Desc = new byte[14]`，MakeIndex/Index/Dura/DuraMax = 0）。
+fn default_server_item() -> record::ServerUserItem {
+    record::ServerUserItem {
+        make_index: 0,
+        index: 0,
+        dura: 0,
+        dura_max: 0,
+        desc: Some(vec![0u8; 14]),
+        color_r: 0,
+        color_g: 0,
+        color_b: 0,
+        prefix: None,
+    }
+}
+
+/// `UserItem.ToServerItem()`（`ClientUserItem.cs:75-88`）：把本宿主的 `BagItem` 子集回写为记录字段。
+/// `Desc` 存 14 字节（`BagItem.desc` 就是 14B），颜色/Prefix 取默认（oracle 新建物品同形）。
+fn server_item_from_bag(it: &game_svr::bag::BagItem) -> record::ServerUserItem {
+    record::ServerUserItem {
+        make_index: it.make_index,
+        index: it.index,
+        dura: it.dura,
+        dura_max: it.dura_max,
+        desc: Some(it.desc.to_vec()),
+        color_r: 0,
+        color_g: 0,
+        color_b: 0,
+        prefix: None,
+    }
+}
+
+/// `MakeSaveRcd` 的 `HumItems`（13 槽，`WorldServer.cs:1294-1311`）：每槽 = `UseItems[槽].ToServerItem()`
+/// 或默认物品；**照 oracle 的 Slot3/Slot4（Necklace/Helmet）交换**（`:1302-1303`，与 `use_items_from`
+/// 的 load 交换互逆）。
+fn human_items_for_save(
+    use_items: &[Option<game_svr::bag::BagItem>],
+) -> Vec<Option<record::ServerUserItem>> {
+    let mut out = vec![Some(default_server_item()); game_svr::ability::USE_ITEMS_LEN];
+    for (i, slot) in out.iter_mut().enumerate() {
+        let src = if i == game_svr::ability::SLOT_HELMET {
+            game_svr::ability::SLOT_NECKLACE
+        } else if i == game_svr::ability::SLOT_NECKLACE {
+            game_svr::ability::SLOT_HELMET
+        } else {
+            i
+        };
+        *slot = Some(
+            use_items
+                .get(src)
+                .and_then(Option::as_ref)
+                .map_or_else(default_server_item, server_item_from_bag),
+        );
+    }
+    out
+}
+
+/// `MakeSaveRcd` 的 `BagItems`（46 槽，`WorldServer.cs:1312-1329`）：`ItemList[i]` → 槽 i，
+/// 其余槽 = 默认物品（**不是** `None`；DBSvr `ComparerUserItem` 要求槽位非 null）。
+fn bag_items_for_save(item_list: &[game_svr::bag::BagItem]) -> Vec<Option<record::ServerUserItem>> {
+    let mut out = vec![Some(default_server_item()); game_svr::bag::MAX_BAG_ITEM];
+    for (i, it) in item_list
+        .iter()
+        .take(game_svr::bag::MAX_BAG_ITEM)
+        .enumerate()
+    {
+        out[i] = Some(server_item_from_bag(it));
+    }
+    out
+}
+
+/// `WorldServer.cs:262-275` 的新角色 `Abil` 初始化（**逐字段照抄**）：
+/// `Level=1`、`AC=MAC=0`、`DC=MC=SC=(ushort)MakeLong(1,2)=1`、`HP=MP=MaxHP=MaxMP=15`、
+/// `Exp=0`、`MaxExp=100`、`Weight=0`、`MaxWeight=30`。
+///
+/// 随后的 `RecalcLevelAbilitys()/RecalcAbilitys()`（`PlayObject.cs:1308-1310`）会按 `Job` 覆盖
+/// 等级派生字段（`MaxHP/MaxMP/MaxWeight/DC/MC/SC…`）——本宿主在 `enter::recalc_for_session` 里做。
+fn new_human_ability() -> record::Ability {
+    record::Ability {
+        level: 1,
+        reserved1: 0,
+        ac: 0,
+        mac: 0,
+        // `(ushort)MakeLong(1, 2)`：`MakeLong=(hi<<16)|lo` ⇒ 低 16 位 = 1（oracle 原样）。
+        dc: 1,
+        mc: 1,
+        sc: 1,
+        hp: 15,
+        mp: 15,
+        max_hp: 15,
+        max_mp: 15,
+        reserved2: 0,
+        exp_count: 0,
+        exp_max_count: 0,
+        exp: 0,
+        max_exp: 100,
+        weight: 0,
+        max_weight: 30,
+        wear_weight: 0,
+        max_wear_weight: 0,
+        hand_weight: 0,
+        max_hand_weight: 0,
+    }
+}
+
+/// `WorldServer.MakeSaveRcd`（`:1231-1360`）的 `CharacterData`：原始记录 + 会话实时增量。
+///
+/// 实时值取自 `SessionGround`（Gold/Abil/物品族表）与 `World` 的实体坐标；其余字段（magic/
+/// storage/quest/BonusAbil/HomeMap 老角色…）保留记录原值。
+/// `Abil` 照 `:1239-1275` 从**新建** `Ability` 开始只拷这批字段（`AC/MAC/DC/MC/SC` 留 0——oracle 同）；
+/// `Exp/MaxExp` 取 `Abil`（`OnLogin` 里 `MaxExp = GetLevelExp(Level)`，`PlayObject.cs:1310`）。
+fn build_save_record(
+    saved: &SavedHuman,
+    chr_name: &str,
+    world: &mir2_world::World,
+    sg: &SessionGround,
+    registry: Option<&mir2_envir::MapRegistry>,
+) -> record::PlayerRecord {
+    let mut rec = saved.record.clone();
+    // oracle `MakeSaveRcd`（`:1243`）写的是 `playObject.MapName`（**当前**逻辑图名，不是进图时的）。
+    // 换图/传送接线前 `enter_map` == 当前图；这里优先用会话的 `map_id` 反查注册表
+    //（`MapRegistry::name_of`），拿不到注册表/会话时回落到 `enter_map`。
+    let cur_map = world
+        .session(chr_name)
+        .and_then(|s| registry.and_then(|r| r.name_of(s.map_id)))
+        .unwrap_or(saved.enter_map.as_str());
+    rec.data.cur_map = Some(cur_map.to_string());
+    if let Some(e) = world
+        .session(chr_name)
+        .and_then(|s| s.actor_id)
+        .and_then(|id| world.entities.get(id))
+    {
+        rec.data.cur_x = i16::try_from(e.x).unwrap_or(rec.data.cur_x);
+        rec.data.cur_y = i16::try_from(e.y).unwrap_or(rec.data.cur_y);
+    }
+    rec.data.gold = sg.state.gold;
+    rec.data.game_gold = sg.game_gold;
+    rec.data.inc_health = u8::try_from(sg.inc_health & 0x00FF).unwrap_or(0);
+    rec.data.inc_spell = u8::try_from(sg.inc_spell & 0x00FF).unwrap_or(0);
+    rec.data.hunger_status = sg.hunger_status;
+    let base = &sg.equip.abil;
+    let w = &sg.state.wabil;
+    rec.data.abil = Some(record::Ability {
+        level: base.level,
+        reserved1: 0,
+        ac: 0,
+        mac: 0,
+        dc: 0,
+        mc: 0,
+        sc: 0,
+        hp: w.hp,
+        mp: w.mp,
+        max_hp: w.max_hp,
+        max_mp: w.max_mp,
+        reserved2: 0,
+        exp_count: 0,
+        exp_max_count: 0,
+        exp: base.exp,
+        // `PlayObject.cs:1310`：登录后 `Abil.MaxExp = GetLevelExp(Abil.Level)`。
+        max_exp: mir2_formula::exp::get_level_exp(
+            &world.need_exps,
+            mir2_data::models::MAX_LEVEL,
+            i32::from(base.level),
+        ),
+        weight: w.weight,
+        max_weight: w.max_weight,
+        wear_weight: w.wear_weight,
+        max_wear_weight: w.max_wear_weight,
+        hand_weight: w.hand_weight,
+        max_hand_weight: w.max_hand_weight,
+    });
+    rec.data.hum_items = Some(human_items_for_save(&sg.use_items));
+    rec.data.bag_items = Some(bag_items_for_save(&sg.state.item_list));
+    rec
+}
+
+/// 存档应答落地（oracle `PlayerDataService.cs:118-136` 的 `ProcessSaveQueue`）。
+///
+/// **仅** `DBR_SAVEHUMANRCD(1102) && recog==1` 才把角色移出保存名单（`RemoveSaveList` →
+/// `FrnEngn.cs:156` 的 `InSaveRcdList`）；失败应答 `DBR_LOADHUMANRCD(1100) recog=0`
+/// （`src/DBSrv/Services/Impl/DataService.cs:257-263`）只把该请求出队、**不**复位 in-save
+/// ⇒ oracle 会把角色永久留在保存名单（之后每次进世界都判「正在保存」而被踢）。
+/// 按红线「行为等价优先于修 bug：先 1:1 连 bug 一起搬」照抄该分支
+/// （卡 `openmir2-m3-gamesvr-save` F-1 reviewer-5 `962fdf81`，owner 裁决 `99c89a88` 选项 a）。
+fn apply_save_reply(engine: &mut load::FrontEngine, chr_name: &str, ident: u16, recog: i32) {
+    if ident == mir2_protocol::messages::DBR_SAVEHUMANRCD && recog == 1 {
+        engine.end_save(chr_name);
+    }
+}
+
+/// 发 `DB_SAVEHUMANRCD(101)`（`WorldServer.SaveHumanRcd` `:1077` → `PlayerDataService.SavePlayerRcd`）。
+///
+/// **时机照 oracle**：在 `MakeGhost()`（退出世界）时调用（`RunNotice` 的 `BoSoftClose`/`BoKickFlag`
+/// 支与 `CloseUser` 断线支都会走到），所以调用点必须在 `world.disconnect` **之前**。
+/// 周期存档（`SaveHumanRcdTime` 默认 10 分钟，`WorldServer.cs:698-702`）本轮**未做**（登记）。
+fn save_human_rcd(
+    db: &mut Option<DbWiring>,
+    engine: &mut load::FrontEngine,
+    saved: &SavedHuman,
+    chr_name: &str,
+    world: &mir2_world::World,
+    sg: &SessionGround,
+    registry: Option<&mir2_envir::MapRegistry>,
+) -> Option<i32> {
+    let w = db.as_mut()?;
+    if !w.state.is_connected() {
+        glog!(
+            "WRN",
+            "存档：DB 链路未连接 ⇒ 跳过 ChrName:{chr_name}（照 oracle IsConnected 支；未落库）"
+        );
+        return None;
+    }
+    let rec = build_save_record(saved, chr_name, world, sg, registry);
+    let packet = record::encode_save_character_data(&saved.account, chr_name, &rec);
+    let qid = w.next_query_id();
+    let frame = dbclient::save_human_rcd_request(qid, &packet);
+    match w.req_tx.send(frame) {
+        Ok(()) => {
+            // oracle `SaveHumanRcd` 先 `AddToSaveRcdList`（`WorldServer.cs:1091`）；进世界守卫读
+            // `InSaveRcdList`（`:203`），命中则走「关新」支。应答回来时 `end_save`（见收侧轮询）。
+            engine.begin_save(chr_name);
+            w.save_outstanding.push((qid, chr_name.to_string()));
+            glog!(
+                "INF",
+                "存档请求已发（DB_SAVEHUMANRCD）ChrName:{chr_name} queryId={qid} 记录 {} 字节",
+                packet.len()
+            );
+            Some(qid)
+        }
+        Err(_) => {
+            glog!(
+                "WRN",
+                "存档请求发送失败（DB 链路断开？）ChrName:{chr_name}（未落库）"
+            );
+            None
+        }
+    }
 }
 
 /// **S3 后半段（第一格）**：把世界 tick 的 AOI 结果（观察者实体 `VisibleActors` 里
@@ -1515,11 +1797,17 @@ fn handle_duplicate_enter(
 /// 处理待踢名单（oracle `PlayObject.RunNotice` 的 `BoKickFlag` 支，`PlayObject.cs:1082-1090`）：
 /// 给**旧**连接发 `SM_OUTOFCONNECTION`（`SendDefMessage(SM_OUTOFCONNECTION, 0, 0, 0, 0)`），
 /// 再 `MakeGhost()` = 离开世界（摘格子 + 移除实体）并清掉旧槽。
+#[allow(clippy::too_many_arguments)]
 fn drain_kicks(
     world: &mut mir2_world::World,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     online: &mut OnlineRegistry,
     kick_pending: &mut Vec<String>,
+    db: &mut Option<DbWiring>,
+    engine: &mut load::FrontEngine,
+    saves: &mut std::collections::HashMap<String, SavedHuman>,
+    ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+    registry: Option<&mir2_envir::MapRegistry>,
 ) {
     for chr in std::mem::take(kick_pending) {
         let Some(e) = online_take(online, &chr) else {
@@ -1536,6 +1824,11 @@ fn drain_kicks(
             });
             let _ = tx.send(SimToGate::KickUser { socket: e.socket });
         }
+        // 存档：oracle `MakeGhost()` 里的 `SaveHumanRcd`（`WorldServer.cs:1077/713`）——
+        // 必须在退出世界前拿实时态（坐标/物品/Gold）。
+        if let (Some(saved), Some(sg)) = (saves.get(&chr), ground_sessions.get(&chr)) {
+            save_human_rcd(db, engine, saved, &chr, world, sg, registry);
+        }
         match world.disconnect(&chr) {
             Ok(()) => glog!(
                 "INF",
@@ -1547,6 +1840,8 @@ fn drain_kicks(
                 "重复进世界踢旧：旧会话离开世界失败 ChrName:{chr}：{e:?}"
             ),
         }
+        saves.remove(&chr);
+        ground_sessions.remove(&chr);
     }
 }
 
@@ -1627,11 +1922,17 @@ fn handle_kick_account(
 /// 与 [`drain_kicks`] 的区别：这里**不再发帧**（`SM_SYSMESSAGE` 已在 [`GateEvent::KickAccount`]
 /// 处理时立即发出，照 oracle `KickUser` 里先 `SysMsg` 再置标志的次序）；而 `drain_kicks` 对应
 /// `BoKickFlag` 支、要先发 `SM_OUTOFCONNECTION`(528)。
+#[allow(clippy::too_many_arguments)]
 fn drain_soft_close(
     world: &mut mir2_world::World,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     online: &mut OnlineRegistry,
     soft_close_pending: &mut Vec<String>,
+    db: &mut Option<DbWiring>,
+    engine: &mut load::FrontEngine,
+    saves: &mut std::collections::HashMap<String, SavedHuman>,
+    ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+    registry: Option<&mir2_envir::MapRegistry>,
 ) {
     for chr in std::mem::take(soft_close_pending) {
         let Some(e) = online_take(online, &chr) else {
@@ -1645,6 +1946,10 @@ fn drain_soft_close(
         {
             let _ = tx.send(SimToGate::KickUser { socket: e.socket });
         }
+        // 存档（同 [`drain_kicks`]：oracle `BoSoftClose` 支也会 `MakeGhost` ⇒ `SaveHumanRcd`）。
+        if let (Some(saved), Some(sg)) = (saves.get(&chr), ground_sessions.get(&chr)) {
+            save_human_rcd(db, engine, saved, &chr, world, sg, registry);
+        }
         match world.disconnect(&chr) {
             Ok(()) => glog!(
                 "INF",
@@ -1653,6 +1958,8 @@ fn drain_soft_close(
             ),
             Err(e) => glog!("WRN", "账号级顶号：旧会话离开世界失败 ChrName:{chr}：{e:?}"),
         }
+        saves.remove(&chr);
+        ground_sessions.remove(&chr);
     }
 }
 
@@ -1758,6 +2065,9 @@ struct EnterConfig {
     home: homemap::HomeFallback,
     /// `IsNewHuman` 的新手物品输入。
     newbie: NewbieItems,
+    /// `Exps.conf` 的 `NeedExps` 表（`BaseObject.GetLevelExp` 的数据源，`crates/data::exps`）。
+    /// 存档 `MaxExp`（`PlayObject.cs:1310`）与击杀经验都用它；读不到时为全 0（登记）。
+    need_exps: Vec<i32>,
 }
 
 fn sim_loop(
@@ -1772,6 +2082,8 @@ fn sim_loop(
     // 尺寸表已由调用方按「注册表优先，无注册表则 WorldMaps 占位（且非空，已 fail-closed）」算好；
     // `map_id` = 注册表下标，与 `resolve_map_id` 同源。
     let mut world = mir2_world::World::with_maps(map_sizes);
+    // `Exps.conf` 的 NeedExps（`BaseObject.GetLevelExp` 的数据源；存档 `MaxExp` 也用它）。
+    world.need_exps = enter_cfg.need_exps.clone();
     // 取角色的加载队列（`FrnEngn` 的双缓冲 + `CharacterDataProcessor` 的读档循环，见 `load.rs`）
     let mut engine = load::FrontEngine::new();
     // `openmir2-m2-session-lifecycle`：在线用户的世界侧网关坐标 + 待踢名单（重复进世界用）
@@ -1792,6 +2104,8 @@ fn sim_loop(
     // 进世界前解析出的 `CharacterData` 在其他路径上用完即弃，这里把 `ground::*` 要的字段留下来。
     let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
         std::collections::HashMap::new();
+    // 存档用：登入时留下的原始记录 + 进图逻辑名（断线/`MakeGhost` 时合成存档请求）。
+    let mut saves: std::collections::HashMap<String, SavedHuman> = std::collections::HashMap::new();
     glog!(
         "INF",
         "sim 线程就绪：tick={}ms，地图 {} 张（{}）",
@@ -1937,6 +2251,22 @@ fn sim_loop(
                     } else {
                         kick_pending.retain(|n| n != &chr_name);
                         online_take(&mut online, &chr_name);
+                        // 存档：oracle `CloseUser` 后的 `MakeGhost()` 里调 `SaveHumanRcd`
+                        //（`WorldServer.cs:1077`）——必须在摘世界/移除会话态前拿实时态。
+                        if let (Some(saved), Some(sg)) =
+                            (saves.get(&chr_name), ground_sessions.get(&chr_name))
+                        {
+                            save_human_rcd(
+                                &mut db,
+                                &mut engine,
+                                saved,
+                                &chr_name,
+                                &world,
+                                sg,
+                                registry.as_ref(),
+                            );
+                        }
+                        saves.remove(&chr_name);
                         // 地面交互会话态随断线一并移除（否则重进后还带着旧 `ItemList`/`Gold`）。
                         ground_sessions.remove(&chr_name);
                         // 同屏展示表随实体一并摘除（ActorId 槽位会被内核回收复用，避免旧展示值残留）。
@@ -2083,7 +2413,7 @@ fn sim_loop(
                             // （`parse_player_data`，`openmir2-m2-record-fields`）额外供给入图帧的
                             // 世界/配置层输入（`job`/`game_gold`/`bonus_abil` 等）。两者都解不出才算失败。
                             let head_only = record::parse_player_data_head(&payload);
-                            let full = record::parse_player_data(&payload);
+                            let mut full = record::parse_player_data(&payload);
                             match head_only {
                                 Some(head) => {
                                     if full.is_none() {
@@ -2105,14 +2435,25 @@ fn sim_loop(
                                     let home_empty = full.as_ref().is_some_and(|r| {
                                         r.data.home_map.as_deref().unwrap_or("").is_empty()
                                     });
-                                    let (enter_map_name, enter_x, enter_y) = if home_empty {
-                                        // oracle `WorldServer.cs:254-259` 的**同序 3 抽**
-                                        //（1×`Random(StartPointSize)` + `GetRandHomeX/Y` 各 1×`Random(3)`）：
-                                        // 见 `homemap` 模块头的 RNG 抽数账本。
-                                        enter_cfg.home.new_human_spawn(&mut world.rng)
-                                    } else {
-                                        (head.cur_map.clone(), head.cur_x, head.cur_y)
-                                    };
+                                    let (enter_map_name, home_x, home_y, enter_x, enter_y) =
+                                        if home_empty {
+                                            // oracle `WorldServer.cs:254-259` 的**同序 3 抽**
+                                            //（1×`Random(StartPointSize)` + `GetRandHomeX/Y` 各 1×`Random(3)`）：
+                                            // 见 `homemap` 模块头的 RNG 抽数账本。同时取出生点**原坐标**
+                                            //（`MakeSaveRcd` 要写 `HomeX/HomeY`，`:1257-1258`）。
+                                            enter_cfg.home.new_human_spawn_with_home(&mut world.rng)
+                                        } else {
+                                            let hx = full.as_ref().map_or(0, |r| r.data.home_x);
+                                            let hy = full.as_ref().map_or(0, |r| r.data.home_y);
+                                            (head.cur_map.clone(), hx, hy, head.cur_x, head.cur_y)
+                                        };
+                                    // `is_new_human` 是本轮新角色分支的**唯一判据**（oracle `WorldServer.cs:258`
+                                    // 的 `if (playObject.Abil.Level == 0)`）；不能拿重算后的 Abil 当门。
+                                    let abil_level = full
+                                        .as_ref()
+                                        .and_then(|r| r.data.abil.as_ref())
+                                        .map_or(0, |a| a.level);
+                                    let is_new_human = home_empty && abil_level == 0;
                                     // 集成点 ④：`CurMap`（逻辑名）→ `map_id`。有真地图注册表时必须命中；
                                     // 找不到且有非空记录 `HomeMap` 时按 oracle `FindMap==null ⇒ MapName=HomeMap`
                                     // 回落（`WorldServer.cs:319-341`）；仍找不到即拒绝进图并记 WRN
@@ -2213,6 +2554,23 @@ fn sim_loop(
                                                     ),
                                                     ..smframe::EnterWorldInputs::default()
                                                 };
+                                                // oracle `WorldServer.cs:262-275` 的新角色 `Abil` 初始化 +
+                                                // `HomeMap/HomeX/HomeY/MapName/CurrX/CurrY` 落记录：
+                                                // 随后的 `RecalcLevelAbilitys()/RecalcAbilitys()`（本宿主在
+                                                // `enter::recalc_for_session` 里）按 `Job` 覆盖等级派生字段。
+                                                if is_new_human {
+                                                    if let Some(r) = full.as_mut() {
+                                                        r.data.home_map =
+                                                            Some(enter_map_name.clone());
+                                                        r.data.home_x = home_x;
+                                                        r.data.home_y = home_y;
+                                                        r.data.cur_map =
+                                                            Some(final_map_name.clone());
+                                                        r.data.cur_x = enter_x;
+                                                        r.data.cur_y = enter_y;
+                                                        r.data.abil = Some(new_human_ability());
+                                                    }
+                                                }
                                                 let data = full.as_ref().map(|r| &r.data);
                                                 // 帧 42 的展示名输入（`GetShowName()`）：成员/师徒/婚姻/转生/职业
                                                 // 全取角色记录；行会在本骨架恒空（`MyGuild == null`，见 `enter::show_name`）。
@@ -2364,17 +2722,28 @@ fn sim_loop(
                                                             query_bag_items_tick: None,
                                                         },
                                                     );
+                                                    // 存档用：留下原始记录 + 进图逻辑名（断线/`MakeGhost` 时用它合成）。
+                                                    // 新角色的 `Abil/HomeMap/坐标` 已在上面按 oracle 落进 `full`。
+                                                    if let Some(r) = full.as_ref() {
+                                                        saves.insert(
+                                                            head.chr_name.clone(),
+                                                            SavedHuman {
+                                                                account: account.clone(),
+                                                                record: r.clone(),
+                                                                enter_map: final_map_name.clone(),
+                                                            },
+                                                        );
+                                                    }
                                                     // oracle `PlayObject.cs:1205-1245` 的 `IsNewHuman` 四件新手物品
                                                     // （`IsNewHuman` 由 `WorldServer.cs:258-277` 在 `HomeMap` 空且
                                                     // `Abil.Level==0` 时置位）。
                                                     glog!(
                                                         "INF",
-                                                        "IsNewHuman 判定 ChrName={} home_empty={home_empty} abil_level={} bag_items={}",
+                                                        "IsNewHuman 判定 ChrName={} home_empty={home_empty} 记录 Abil.Level={abil_level} is_new_human={is_new_human} bag_items={}",
                                                         head.chr_name,
-                                                        a.abil.level,
                                                         d.bag_items.as_ref().map_or(0, Vec::len)
                                                     );
-                                                    if home_empty && a.abil.level == 0 {
+                                                    if is_new_human {
                                                         if let Some(sg) =
                                                             ground_sessions.get_mut(&head.chr_name)
                                                         {
@@ -2508,14 +2877,54 @@ fn sim_loop(
                     )),
                 }
             }
+            // 存档应答（`DBR_SAVEHUMANRCD(1102)` / 失败的 `DBR_LOADHUMANRCD(1100)`）：取走并记日志。
+            // 只有成功应答才复位 in-save（`apply_save_reply`，照 oracle `ProcessSaveQueue`）。
+            let mut still_saves = Vec::new();
+            for (qid, chr) in std::mem::take(&mut w.save_outstanding) {
+                match r.take(qid) {
+                    Some(reply) => {
+                        let (ident, recog) =
+                            dbclient::parse_reply_message(&reply.message).unwrap_or((0, 0));
+                        glog!(
+                            "INF",
+                            "存档应答 queryId={qid} ChrName={chr} Ident={ident} Recog={recog}"
+                        );
+                        // 仅 `1102 && recog==1` 才 `end_save`；`1100 recog=0`（存库失败）保持
+                        // in-save（oracle 会把角色永久留在保存名单——连 bug 一起搬）。
+                        apply_save_reply(&mut engine, &chr, ident, recog);
+                    }
+                    None => still_saves.push((qid, chr)),
+                }
+            }
+            w.save_outstanding = still_saves;
             w.outstanding = still;
         }
         // 踢旧落地（oracle `RunNotice` 的 `BoKickFlag` 支）：oracle 是"置标志 → 下一 tick 的
         // RunNotice 落地"（≥1 tick）；本骨架在事件 drain 之后的**同一 tick 后段**落地，帧序不变。
-        drain_kicks(&mut world, &gates, &mut online, &mut kick_pending);
+        drain_kicks(
+            &mut world,
+            &gates,
+            &mut online,
+            &mut kick_pending,
+            &mut db,
+            &mut engine,
+            &mut saves,
+            &mut ground_sessions,
+            registry.as_ref(),
+        );
         // 账号级顶号落地（`BoSoftClose` 支）：提示帧已即时发出，这里只离开世界 + 清槽。
         // 同一 tick 后段落地（oracle ≥1 tick）——见 docs §4 的 O-1 登记。
-        drain_soft_close(&mut world, &gates, &mut online, &mut soft_close_pending);
+        drain_soft_close(
+            &mut world,
+            &gates,
+            &mut online,
+            &mut soft_close_pending,
+            &mut db,
+            &mut engine,
+            &mut saves,
+            &mut ground_sessions,
+            registry.as_ref(),
+        );
         let rec = world.tick();
         ticks += 1;
         // S3 后半段（第一格）：世界 tick 的 AOI 结果 → `SM_TURN` + `SM_FEATURECHANGED` 回帧。
@@ -3323,6 +3732,161 @@ mod tests {
         }
     }
 
+    /// oracle 全字段角色记录（`stage6` 向量，`tests/fixtures/player_data_full_oracle.txt`）——存档用例的底稿。
+    fn stage6_record() -> record::PlayerRecord {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/player_data_full_oracle.txt"
+        );
+        let text = std::fs::read_to_string(path).expect("player_data_full_oracle.txt");
+        let hexs = text
+            .split_whitespace()
+            .find_map(|t| t.strip_prefix("stage6="))
+            .expect("fixture 里必须有 stage6 向量");
+        let bytes: Vec<u8> = (0..hexs.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hexs[i..i + 2], 16).unwrap())
+            .collect();
+        record::parse_player_data(&bytes).expect("stage6 必须可解为全字段记录")
+    }
+
+    /// 存档记录 = 原始记录 + 会话实时增量（`MakeSaveRcd` 口径）。用 **DBSvr 侧类型**解回断言，
+    /// 覆盖实时坐标/Gold/物品与 Helmet/Necklace 交换 + 46 槽补位。
+    #[test]
+    fn save_record_reflects_live_state_and_item_layout() {
+        use mir2_storage::MemPack;
+        let saved = SavedHuman {
+            account: "acct".into(),
+            record: stage6_record(),
+            enter_map: "0".into(),
+        };
+        let weapon = game_svr::bag::BagItem {
+            make_index: 9001,
+            index: 207,
+            dura: 4000,
+            dura_max: 4000,
+            desc: [0; 14],
+        };
+        let necklace = game_svr::bag::BagItem::new(9002, 88);
+        let helmet = game_svr::bag::BagItem::new(9003, 99);
+        let mut use_items = vec![None; game_svr::ability::USE_ITEMS_LEN];
+        use_items[game_svr::ability::SLOT_WEAPON] = Some(weapon.clone());
+        use_items[game_svr::ability::SLOT_NECKLACE] = Some(necklace);
+        use_items[game_svr::ability::SLOT_HELMET] = Some(helmet);
+        let sg = SessionGround {
+            state: game_svr::ground::GroundState {
+                item_list: vec![weapon],
+                gold: 649,
+                wabil: test_ability(),
+            },
+            actor_id: 1,
+            game_gold: 77,
+            sys_msg: None,
+            use_items,
+            sub: game_svr::ability::SubAbility::first_call(),
+            equip: test_equip_inputs(),
+            inc_health: 3,
+            inc_spell: 4,
+            user_unlock_durg: false,
+            hunger_status: 55,
+            query_bag_items_tick: None,
+        };
+        let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
+        world.open_session("hero");
+        world
+            .enter_map("hero", mir2_world::Entity::new(0, "hero", 11, 22), 0)
+            .expect("进世界");
+        let rec = build_save_record(&saved, "hero", &world, &sg, None);
+        let parsed = mir2_storage::SaveCharacterData::from_bytes(
+            &record::encode_save_character_data(&saved.account, "hero", &rec),
+        )
+        .expect("DBSvr 侧必须能解存档体");
+        let d = parsed.character_data.unwrap().data.unwrap();
+        assert_eq!(d.cur_map.as_deref(), Some("0"));
+        assert_eq!((d.cur_x, d.cur_y), (11, 22), "实时坐标来自世界实体");
+        assert_eq!(d.gold, 649);
+        assert_eq!(d.game_gold, 77);
+        assert_eq!(d.inc_health, 3);
+        assert_eq!(d.inc_spell, 4);
+        assert_eq!(d.hunger_status, 55);
+        assert!(
+            d.abil.as_ref().unwrap().hp == 0,
+            "保存的 Abil 取自会话 WAbil（test_ability hp=0）"
+        );
+        let bag = d.bag_items.as_ref().expect("bag_items 非 null");
+        assert_eq!(bag.len(), 46, "BagItems 是 46 槽定长");
+        assert_eq!(bag[0].as_ref().unwrap().index, 207);
+        assert_eq!(
+            bag[1].as_ref().unwrap().index,
+            0,
+            "空槽 = 默认物品（Index 0）"
+        );
+        let hum = d.hum_items.as_ref().expect("hum_items 非 null");
+        assert_eq!(hum.len(), 13, "HumItems 是 13 槽定长");
+        assert_eq!(
+            hum[game_svr::ability::SLOT_WEAPON].as_ref().unwrap().index,
+            207
+        );
+        assert_eq!(
+            hum[game_svr::ability::SLOT_HELMET].as_ref().unwrap().index,
+            88,
+            "HumItems[Helmet] = UseItems[Necklace]（oracle 交换）"
+        );
+        assert_eq!(
+            hum[game_svr::ability::SLOT_NECKLACE]
+                .as_ref()
+                .unwrap()
+                .index,
+            99,
+            "HumItems[Necklace] = UseItems[Helmet]（oracle 交换）"
+        );
+    }
+
+    /// owner-precheck `a8836e1b`：存档 ↔ 进世界守卫的 in-save 账本配对。生产路径发
+    /// `DB_SAVEHUMANRCD` 时 `begin_save`、应答回来（`DBR_SAVEHUMANRCD(1102)`）时 `end_save`；
+    /// 进世界守卫读 `in_save_rcd_list`（`ProcessHumansIsLogined` 的 in-save 半边）。
+    #[test]
+    fn save_ledger_round_trips_between_begin_and_reply() {
+        let mut engine = load::FrontEngine::new();
+        assert!(!engine.in_save_rcd_list("Hero"));
+        engine.begin_save("Hero"); // 发 DB_SAVEHUMANRCD 时
+        assert!(
+            engine.in_save_rcd_list("hero"),
+            "存档窗口内守卫必须命中（⇒ 关新，与 oracle 同）"
+        );
+        engine.end_save("hero"); // DBR_SAVEHUMANRCD 应答回来时
+        assert!(!engine.in_save_rcd_list("HERO"), "应答后复位");
+    }
+
+    /// **F-1（reviewer-5 `962fdf81` / owner 裁决 `99c89a88` 选项 a）**：存档应答的失败路径照
+    /// oracle `PlayerDataService.cs:118-136` 的 `ProcessSaveQueue`——**仅**
+    /// `DBR_SAVEHUMANRCD(1102) && recog==1` 才把角色移出 `InSaveRcdList`；
+    /// `DBR_LOADHUMANRCD(1100) recog=0`（存库失败）只出队、**不**复位
+    /// （oracle 的「卡在保存中」连 bug 一起搬）。
+    ///
+    /// 红检：把 `apply_save_reply` 改成无条件 `engine.end_save(chr_name)` ⇒ 第一条断言必红。
+    #[test]
+    fn save_ledger_only_released_on_success_reply() {
+        use mir2_protocol::messages::{DBR_LOADHUMANRCD, DBR_SAVEHUMANRCD};
+        let mut engine = load::FrontEngine::new();
+        engine.begin_save("Hero");
+        assert!(engine.in_save_rcd_list("Hero"));
+
+        // 失败应答：1100 recog=0 ⇒ 不移出保存名单（与 oracle 同）
+        apply_save_reply(&mut engine, "Hero", DBR_LOADHUMANRCD, 0);
+        assert!(
+            engine.in_save_rcd_list("hero"),
+            "DBR_LOADHUMANRCD(1100) 不得把角色移出 InSaveRcdList（oracle 连 bug 一起搬）"
+        );
+
+        // 成功应答：1102 recog=1 ⇒ 移出
+        apply_save_reply(&mut engine, "Hero", DBR_SAVEHUMANRCD, 1);
+        assert!(
+            !engine.in_save_rcd_list("HERO"),
+            "DBR_SAVEHUMANRCD(1102) 应答后必须复位"
+        );
+    }
+
     /// **owner §26（sim 循环对接）**：`CM_PICKUP` 派发到 `ground::pick_up` + `pickwire`，
     /// 经该角色的 `[GateIdx,Socket]` 回 `SM_GOLDCHANGED`，并把金币写进会话态 `GroundState`。
     ///
@@ -4018,7 +4582,17 @@ mod tests {
         ));
 
         // 下一 tick：踢旧落地
-        drain_kicks(&mut world, &gates, &mut online, &mut kick_pending);
+        drain_kicks(
+            &mut world,
+            &gates,
+            &mut online,
+            &mut kick_pending,
+            &mut None,
+            &mut load::FrontEngine::new(),
+            &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
+            None,
+        );
         match rx0.try_recv().expect("旧连接必须收到 SM_OUTOFCONNECTION") {
             SimToGate::SendFrame { socket, body } => {
                 assert_eq!(socket, 901);
@@ -4055,7 +4629,17 @@ mod tests {
         let mut world = mir2_world::World::with_maps(vec![(64, 64)]);
         let mut online: OnlineRegistry = Vec::new();
         let mut kick_pending = vec!["ghost".to_string()];
-        drain_kicks(&mut world, &gates, &mut online, &mut kick_pending);
+        drain_kicks(
+            &mut world,
+            &gates,
+            &mut online,
+            &mut kick_pending,
+            &mut None,
+            &mut load::FrontEngine::new(),
+            &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
+            None,
+        );
         assert!(kick_pending.is_empty(), "待踢名单必须被消费掉（幂等）");
         assert!(world.session("ghost").is_none());
     }
@@ -4239,7 +4823,17 @@ mod tests {
             mir2_world::WorldStage::InWorld
         );
         // 下一 tick 落地
-        drain_soft_close(&mut world, &gates, &mut online, &mut soft_close_pending);
+        drain_soft_close(
+            &mut world,
+            &gates,
+            &mut online,
+            &mut soft_close_pending,
+            &mut None,
+            &mut load::FrontEngine::new(),
+            &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
+            None,
+        );
         assert_eq!(soft_close_pending.len(), 0, "待软关名单被消费");
         match rx0.try_recv().expect("随后必须清槽（CloseUser）") {
             SimToGate::KickUser { socket } => assert_eq!(socket, 901),
@@ -4319,7 +4913,17 @@ mod tests {
             2,
             "两条会话都要软关（每网关各一个）"
         );
-        drain_soft_close(&mut world, &gates, &mut online, &mut soft_close_pending);
+        drain_soft_close(
+            &mut world,
+            &gates,
+            &mut online,
+            &mut soft_close_pending,
+            &mut None,
+            &mut load::FrontEngine::new(),
+            &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
+            None,
+        );
         assert_eq!(
             world.session("lb1a").unwrap().stage,
             mir2_world::WorldStage::Left
@@ -4370,7 +4974,17 @@ mod tests {
             SimToGate::KickUser { socket } => assert_eq!(socket, 902),
             other => panic!("轮 B 新连接必须被 KickUser，实得 {other:?}"),
         }
-        drain_kicks(&mut world, &gates, &mut online, &mut kick_pending);
+        drain_kicks(
+            &mut world,
+            &gates,
+            &mut online,
+            &mut kick_pending,
+            &mut None,
+            &mut load::FrontEngine::new(),
+            &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
+            None,
+        );
         let _ = rx0.try_recv(); // 528
         let _ = rx0.try_recv(); // KickUser
         assert_eq!(

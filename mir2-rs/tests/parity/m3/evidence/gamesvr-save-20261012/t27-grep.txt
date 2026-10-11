@@ -1,0 +1,9 @@
+# T-27 preflight 的数据面：GameSvr 侧必须出现 DB_SAVEHUMANRCD（m3bag 第十三格的机判护栏）
+$ rg -n 'DB_SAVEHUMANRCD' mir2-rs/bins/game-svr
+mir2-rs/bins/game-svr\src\dbclient.rs:138:/// `DB_SAVEHUMANRCD` 请求（`WorldServer.SaveHumanRcd` → `PlayerDataService.SavePlayerRcd`）：
+mir2-rs/bins/game-svr\src\dbclient.rs:145:    let msg = server_request_message(mir2_protocol::messages::DB_SAVEHUMANRCD);
+mir2-rs/bins/game-svr\src\dbclient.rs:582:    /// 存档请求：与取档同信封，`Message` 的 `Ident = DB_SAVEHUMANRCD(101)`、`Packet` = 传入的
+mir2-rs/bins/game-svr\src\dbclient.rs:593:            Some((mir2_protocol::messages::DB_SAVEHUMANRCD, 0)),
+mir2-rs/bins/game-svr\src\dbclient.rs:594:            "Message.Ident 必须是 DB_SAVEHUMANRCD(101)"
+mir2-rs/bins/game-svr\src\main.rs:1550:/// 发 `DB_SAVEHUMANRCD(101)`（`WorldServer.SaveHumanRcd` `:1077` → `PlayerDataService.SavePlayerRcd`）。
+mir2-rs/bins/game-svr\src\main.rs:1579:                "存档请求已发（DB_SAVEHUMANRCD）ChrName:{chr_name} queryId={qid} 记录 {} 字节",

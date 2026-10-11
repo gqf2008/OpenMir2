@@ -135,6 +135,17 @@ pub fn load_human_rcd_request(
     encode_request(query_id, &msg, &pkt)
 }
 
+/// `DB_SAVEHUMANRCD` 请求（`WorldServer.SaveHumanRcd` → `PlayerDataService.SavePlayerRcd`）：
+/// 与取档同一个信封，`Packet` = `record::encode_save_character_data(account, chr_name, rec)`。
+///
+/// `packet` 是**已序列化的 `SaveCharacterData`**（GameSvr 侧用 `record::Writer` 编，DBSvr 侧用
+/// `crates/storage::SaveCharacterData` 解；两侧同 MemoryPack 布局）。
+#[must_use]
+pub fn save_human_rcd_request(query_id: i32, packet: &[u8]) -> Vec<u8> {
+    let msg = server_request_message(mir2_protocol::messages::DB_SAVEHUMANRCD);
+    encode_request(query_id, &msg, packet)
+}
+
 /// DB 链路的"已连接"标志（C# `DataQueryServer.IsConnected`，`:60`）—— sim 侧据此选
 /// `QueryCharacterData` 的真/假分支（`CharacterDataProcessor.cs:165`）。
 #[derive(Debug, Clone)]
@@ -566,5 +577,27 @@ mod tests {
             6_750_381,
             "queryId=7 时 oracle 的 signId"
         );
+    }
+
+    /// 存档请求：与取档同信封，`Message` 的 `Ident = DB_SAVEHUMANRCD(101)`、`Packet` = 传入的
+    /// `SaveCharacterData` 编码。用**收侧解析器**解回（不按公式重推）。
+    #[test]
+    fn save_request_carries_db_savehumanrcd_and_packet() {
+        let req = save_human_rcd_request(9, b"SAVEBODY");
+        let mut p = ReplyParser::default();
+        p.push(&req);
+        let r = p.next().expect("存档请求帧应可被同信封解析器解出");
+        assert_eq!(r.query_id, 9);
+        assert_eq!(
+            parse_reply_message(&r.message),
+            Some((mir2_protocol::messages::DB_SAVEHUMANRCD, 0)),
+            "Message.Ident 必须是 DB_SAVEHUMANRCD(101)"
+        );
+        assert_eq!(
+            r.packet,
+            edcode::encode(b"SAVEBODY"),
+            "Packet 原样携带 SaveCharacterData 编码"
+        );
+        assert!(p.next().is_none());
     }
 }
