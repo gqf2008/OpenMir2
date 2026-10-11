@@ -1003,9 +1003,9 @@ fn sim_loop(
                                                 );
                                                 // S2b-4 续：进世界后按 oracle `PlayObject.Message.cs:1680-1692`
                                                 // 的 `RM_LOGON` 支出入图帧，经**该用户的网关线**下发。
-                                                // `enter::apply` 装配本片有输入的几条（766/54/11029/1106/
-                                                // 5008/811）；仍缺输入的（50/41/10/213 = m3bag 装备层接缝、
-                                                // 42/52/752 = world 触发点、46 = 世界时钟）保持 `None` 并登记。
+                                                // `enter::apply` 装配世界/配置/记录层有输入的帧（51/766/54/11029/1106/
+                                                // 5008/811/42/46/50/41/213）；仍缺输入的（52/752 = `RecalcAbilitys`
+                                                // 未移植、10 = 世界 tick）保持 `None` 并登记。
                                                 let mut inputs = smframe::EnterWorldInputs {
                                                     actor_id: id,
                                                     cur_x: u16::from_ne_bytes(head.cur_x.to_ne_bytes()),
@@ -1038,6 +1038,40 @@ fn sim_loop(
                                                     show_rank_level_name: enter_cfg
                                                         .show_rank_level_name,
                                                 };
+                                                // 帧 50/41 的 `GetFeatureToLong()` 两段输入（Dress/Weapon 的
+                                                // `StdItem.Shape`）；物品形状表未移植时对带装备槽记 WRN 并计 0
+                                                // （oracle `GetStdItem == null` 分支，见 `enter::feature_shapes`）。
+                                                let (dress_shape, weapon_shape, shape_warns) =
+                                                    enter::feature_shapes(
+                                                        data.and_then(|d| d.hum_items.as_deref()),
+                                                    );
+                                                for w in shape_warns {
+                                                    glog!("WRN", "入图帧输入：{w}");
+                                                }
+                                                // 帧 50/41/213 的输入（`PlayObject.SendLogon()`，
+                                                // `PlayObject.cs:1128-1147`）：同组连发三条，缺则三条一起跳过。
+                                                let logon = data.map(|d| enter::LogonInputs {
+                                                    feature: enter::FeatureInputs {
+                                                        dress_shape,
+                                                        weapon_shape,
+                                                        gender: d.sex,
+                                                        hair: d.hair,
+                                                        // `CharacterObject.DressEffType`/`HorseType` 在 oracle
+                                                        // 全仓无赋值点（`feature.rs` 模块文档已记）⇒ 0。
+                                                        on_horse: false,
+                                                        horse_type: 0,
+                                                        dress_eff_type: 0,
+                                                    },
+                                                    // `GetCharStatus()` = `ActorBuffSystem.GetBuffStatus()
+                                                    // | (CharStatusEx & 0xFFFF)`；会话初生无 buff、`CharStatusEx=0`
+                                                    // （`BaseObject.cs:393`）⇒ 0。buff 系统未移植 ⇒ 记 0 并登记
+                                                    // （金标准 #3 的 `CharStatus == 0` 印证）。
+                                                    char_status: 0,
+                                                    // `WorldServer.cs:1146`：`AllowGroup = 记录 allow_group > 0`。
+                                                    allow_group: d.allow_group > 0,
+                                                    // `WorldServer.cs:1147`：`AttatckMode = (AttackMode)记录 attatck_mode`。
+                                                    attack_mode: d.attatck_mode,
+                                                });
                                                 let wx = enter::WorldFrameInputs {
                                                     flag: registry
                                                         .as_ref()
@@ -1058,6 +1092,7 @@ fn sim_loop(
                                                     game_time: Some(enter::game_time_now()),
                                                     strings: Some(&enter_cfg.string_conf),
                                                     show_name: Some(show_name),
+                                                    logon,
                                                 };
                                                 for w in enter::apply(&mut inputs, &wx) {
                                                     glog!("WRN", "入图帧输入：{w}");
