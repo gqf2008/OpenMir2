@@ -771,6 +771,11 @@ walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 prin
 - **M1 的 S4b 代码面全部落地**（2026-10-12 01:25）：④ **5700 `MarketService` 面**（`bins/db-srv/src/market.rs` + `live_market.rs`）经**三条独立非作者 approve**（reviewer-2 `a1072b0d` / reviewer-6 `ebe682aa` / reviewer-5 `2faeb06e`）合入 master `ca11a1a8`（合并树 **70 suites / 506 passed / 0 failed / 16 ignored** + 604）。
   ⇒ 加上此前的 S4a（记录字段/向量）与 ② 6000 `DataService` + ④ `TimedService`，**M1 只剩 ③ 跨实现互读**（判据 =「C# GameSvr 经 Rust DBSrv 6000 能读档进图」+ 双向字段级 diff=0）。
 - **窗口排期（owner 裁定，三条线共用同一批端口必须串行）**：① M2 真机 ②③④（`m2-svr`，当前里程碑）→ ② M1 ③ 跨实现互读（`dbsrv6k`）→ ③ M3① 双侧同序列驱动 T-14（`m3bag`）。起栈前看端口、收工停栈、做完在卡上写「窗口已释放」。
+- **M2 ② 到 6/7：`see-others` 真机达成**（2026-10-12 01:32，证据 `tools/m2-acceptance/evidence/m2svr-run-20261012-2/m2-04-see-others.png`，**owner 目视核过画面里确有两个角色**）——观察者 `mir2test/bbb`(289,618) + 假人 `loadbot0`(287,620) 同屏 ⇒ 这同时是 **AOI 下行 `db84f98d` 的真机判据**（另一个 actor 的 `SM_TURN(10)`+`SM_FEATURECHANGED(41)` 真到了客户端）。② 只缺 `pickup`（等接线）。
+- **M2 ③ 的骨架 GREEN + 三条差异裁决**（2026-10-12 01:45）：`658→46`（15 条自帧）**同序 + 等长全对**；字节级 6 条未登记差异，owner 裁决——
+  ① **`52 WAbil` 的 `max_hp/max_mp=0`（DB 19/15）= 真缺陷 ⇒ 由 `m3bag` 修**（`ability.rs` 的 `RecalcAbilitys` 输入/计算面 + 向量用例 + 红检），**不许白名单**；
+  ② `50.series`（取决于采集时角色朝向）与 `46.param`（`Bright` 按真实小时）＝ **环境/状态相关字段，登记白名单**（报告写明两侧采集小时与 Dir），**不改判据**；
+  ③ **pickup/drop 接线采「`crates/world` 最小只读分片」**（每格 `(obj_id,kind,index,count)` 或等价 `MapItem` 最小字段 + 唯一 `item_id`；先声明分片再动代码；**不许**用 main.rs 侧派生镜像——金币 `count`/归属不可靠）。
 - **M2 入图帧推进到 10/16 并待审**（2026-10-11 19:00）：新 head `56ac670f`（patch `c234ef9c` / status `7da05a24`）接通 **42 `SM_USERNAME`**（`GetShowName()` 1:1 + `strings.rs` 读 `String.conf [String]` + `[Setup] ShowRankLevelName`，金标准 seq21 线上字节锚定）与
   **46 `SM_DAYCHANGING`**（`Bright = M2Share.GameTime` 按**真实本地小时**算，`chrono::Local`，不是假时钟）；`52/752` 如实登记"需 `RecalcAbilitys()`（装备/buff 层未移植）"，**未假造**。
   作者还带源码证据**反驳了 reviewer-1 的 O-1**：`SendAdjustBonus` 用 2 参 `SendSocket(ClientMsg, "")`，空串**提前 return**（`PlayObject.Socket.cs:111-114`）⇒ oracle 在 `Job∉{0,1,2}` 时**什么都不发**，"跳过"本就 1:1（复审要点已写入 `brief-review.md`）。
