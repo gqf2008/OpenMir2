@@ -229,6 +229,23 @@ impl StdItemCatalog {
     pub fn insert(&mut self, index: u16, item: StdItem) {
         self.items.insert(index, item);
     }
+
+    /// `GameItemSystem.CopyToUserItemFromName` 的名字查找（`src/M2Server/Items/GameItemSystem.cs:113-140`）：
+    /// 在 `StdItemList` 里取**首个** `Name` 相等（`OrdinalIgnoreCase`）的模板，返回其 `Index`（1-based）。
+    ///
+    /// `OrdinalIgnoreCase` 对非 ASCII（中文物品名）等价于精确匹配；`eq_ignore_ascii_case` 同效。
+    /// 目录以 `Index` 为键、无表内顺序，故取**最小命中 Index**，等价 oracle 的“表内首条”。
+    #[must_use]
+    pub fn find_by_name(&self, name: &str) -> Option<u16> {
+        if name.is_empty() {
+            return None;
+        }
+        self.items
+            .iter()
+            .filter(|(_, it)| it.name.eq_ignore_ascii_case(name))
+            .map(|(idx, _)| *idx)
+            .min()
+    }
 }
 
 impl ItemCatalog for StdItemCatalog {

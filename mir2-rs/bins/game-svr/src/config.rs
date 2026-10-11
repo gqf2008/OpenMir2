@@ -107,6 +107,18 @@ pub struct GateConfig {
     pub home_x: i16,
     /// `[Setup] HomeY`（oracle `GameSvrConf.cs:1376`，缺省 `618`）。
     pub home_y: i16,
+    /// `[Setup] Candle`（oracle `GameSvrConf.cs:1304`，缺省 `"蜡烛"`）——新角色`IsNewHuman` 首件（`PlayObject.cs:1207`）。
+    pub candle: String,
+    /// `[Setup] BasicDrug`（`GameSvrConf.cs:1305`，缺省 `"金创药(小量)"`）。
+    pub basic_drug: String,
+    /// `[Setup] WoodenSword`（`GameSvrConf.cs:1303`，缺省 `"木剑"`）。
+    pub wooden_sword: String,
+    /// `[Setup] ClothsMan`（`GameSvrConf.cs:1301`，缺省 `"布衣(男)"`）。
+    pub cloths_man: String,
+    /// `[Setup] ClothsWoman`（`GameSvrConf.cs:1302`，缺省 `"布衣(女)"`）。
+    pub cloths_woman: String,
+    /// `[Setup] ItemNumber`（oracle `GameSvrConf.cs:1699`，缺省 `0`）——`M2Share.GetItemNumber()` 的计数器初值。
+    pub item_number: i32,
 }
 
 /// 默认配置文件：可执行文件同目录的 `Server.conf`（与 C# `AppContext.BaseDirectory` 一致）。
@@ -160,6 +172,12 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut home_map: Option<String> = None;
     let mut home_x: Option<i16> = None;
     let mut home_y: Option<i16> = None;
+    let mut candle: Option<String> = None;
+    let mut basic_drug: Option<String> = None;
+    let mut wooden_sword: Option<String> = None;
+    let mut cloths_man: Option<String> = None;
+    let mut cloths_woman: Option<String> = None;
+    let mut item_number: Option<i32> = None;
     let mut ids_addr: Option<String> = None;
     let mut ids_port: Option<u16> = None;
     let mut db_addr: Option<String> = None;
@@ -321,6 +339,18 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                             .with_context(|| format!("HomeY 不是合法整数：{v:?}"))?,
                     );
                 }
+                // 新角色 `IsNewHuman` 的 4 件新手物品（`PlayObject.cs:1205-1245`）+ `GetItemNumber` 初值。
+                "CANDLE" => candle = Some(v.to_string()),
+                "BASICDRUG" => basic_drug = Some(v.to_string()),
+                "WOODENSWORD" => wooden_sword = Some(v.to_string()),
+                "CLOTHSMAN" => cloths_man = Some(v.to_string()),
+                "CLOTHSWOMAN" => cloths_woman = Some(v.to_string()),
+                "ITEMNUMBER" => {
+                    item_number = Some(
+                        v.parse()
+                            .with_context(|| format!("ItemNumber 不是合法整数：{v:?}"))?,
+                    );
+                }
                 _ => {}
             },
             _ => {}
@@ -385,6 +415,13 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         home_map: home_map.unwrap_or_else(|| "0".to_string()),
         home_x: home_x.unwrap_or(289),
         home_y: home_y.unwrap_or(618),
+        // oracle 缺省值（`GameSvrConf.cs:1301-1305/1699`）。
+        candle: candle.unwrap_or_else(|| "蜡烛".to_string()),
+        basic_drug: basic_drug.unwrap_or_else(|| "金创药(小量)".to_string()),
+        wooden_sword: wooden_sword.unwrap_or_else(|| "木剑".to_string()),
+        cloths_man: cloths_man.unwrap_or_else(|| "布衣(男)".to_string()),
+        cloths_woman: cloths_woman.unwrap_or_else(|| "布衣(女)".to_string()),
+        item_number: item_number.unwrap_or(0),
         ids_addr,
         ids_port,
         db_addr,
