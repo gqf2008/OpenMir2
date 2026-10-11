@@ -4,9 +4,10 @@
 //! 真 C# GameGate 的逐帧观测）。本文件按已证实的部分实现，**未证实的字段一律用 `TODO(差分)` 标出**，
 //! 不假装等价：
 //!
-//! - 客户端 face：TCP 7200，帧是 **20B `ServerMessage` 头 + body**（`crates/protocol::frame::ServerMessage`
-//!   已字节级对齐 C#）。body 里是经典 `#1…!` EDCode 帧——**本切片原样透传，不解码**（C# 会解码/重编码，
-//!   见协议梳理 §2 的 ⚠️，差分确认前不算等价）。
+//! - 客户端 face：TCP 7200，**没有定长头**——oracle 的客户端 face 是裸 socket（`ServerService.Initialize()`
+//!   的 `TcpService` 没挂任何 `DataHandlingAdapter`）⇒ **一次 read = 一帧**，帧本身是经典 `#…!`
+//!   （登录帧 `#1…!`）。**别再按 20B 头去读**：实测（真网关）加头会被当成帧内垃圾前缀 ⇒ `Kicked 1`
+//!   （协议梳理 §7.12 / `E:\tmp\openmir2-gamegate-imp\oracle-login-cap\FINDINGS.md`）。
 //! - 网关↔GameSvr：同样的 20B 头 + `Grobal2.GM_*` 管理号（GM_OPEN/GM_CLOSE/GM_DATA/...）。
 //! - **已由实机取证钉住的字段**：`GM_OPEN{session_id=<随机 4 位>, socket=客户端 handle, session_index=0,
 //!   pack_length=IP 串长度} + body=IP 字符串`；客户端断开发 `GM_CLOSE{session_id=0, socket=handle}`。
@@ -48,6 +49,11 @@ const COMMAND_FIXED_LENGTH: usize = 16;
 const COMMAND_MESSAGE_SIZE: usize = 12;
 /// C# `GateShare.MaxSession`（`GateShare.cs:14`）：每条网关→服务器连接的会话上限。
 const MAX_SESSION: usize = 10_000;
+/// C# `Config.NomClientPacketSize`（现网 `RunGate/config.conf` `[Integer] NomClientPacketSize=400`）：
+/// 登录后超过它的帧按 `ClientSession.cs:196-199` **只丢帧、不关会话**。
+const NOM_CLIENT_PACKET_SIZE: usize = 400;
+/// 单次 read 的缓冲：客户端帧的正常上界远小于它（`NomClientPacketSize=400`；登录帧 <254）。
+const MAX_READ: usize = 64 * 1024;
 
 /// C# Serilog 的输出模板同形前缀（便于与两侧日志对时间线）。
 #[macro_export]
@@ -221,7 +227,7 @@ async fn client_loop(
     // 每会话的间隔计时（C# `ClientSession` 里的 `gameSpeed`）
     let mut chat = rules::ChatThrottle::default();
 
-    // 回写任务：把 GameSvr 发来的 body 原样写给客户端（TODO(差分)：C# 会重新编码，见协议梳理 §2 ⚠️）
+    // 回写任务：把 `server_loop` 已经拼好的**客户端帧**（`#…!`，见 `client_frame`）原样写给客户端
     let writer = tokio::spawn(async move {
         while let Some(buf) = rx.recv().await {
             if wr.write_all(&buf).await.is_err() {
@@ -244,23 +250,18 @@ async fn client_loop(
     };
     send_internal(&ctx.down_tx, open, &ip_bytes).await?;
 
-    // 读循环：20B 定长头 + body
+    // 读循环：**客户端 face 无定长头**，一次 read 就是**一帧**（`#…!`）——照 oracle
+    // （`ServerService.Initialize()` 的 TcpService 不挂 DataHandlingAdapter ⇒ `ProcessSessionPacket`
+    // 直接吃一次 read 的字节）。帧被 TCP 拆开/合并时的后果与 oracle 一致（都会被剔除）。
+    let mut buf = vec![0u8; MAX_READ];
     let mut logged_in = false;
     let mut closed = Ok(());
     loop {
-        let mut head = [0u8; ServerMessage::SIZE];
-        if rd.read_exact(&mut head).await.is_err() {
-            break;
-        }
-        let Some(msg) = ServerMessage::from_bytes(&head) else {
-            continue;
+        let n = match rd.read(&mut buf).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => n,
         };
-        let body_len = msg.body_len();
-        let mut body = vec![0u8; body_len];
-        if body_len > 0 && rd.read_exact(&mut body).await.is_err() {
-            break;
-        }
-        match handle_frame(&body, logged_in, &mut chat, &ctx, sid, handle).await {
+        match handle_frame(&buf[..n], logged_in, &mut chat, &ctx, sid, handle).await {
             Ok(Step::Next | Step::Drop) => {}
             Ok(Step::LoggedIn) => {
                 logged_in = true;
@@ -296,7 +297,7 @@ async fn client_loop(
 
 /// 处置一帧（分支顺序照 `ClientSession.cs:98-` 的 `ProcessSessionPacket`：先判 `HandleLogin`，再看长度）。
 async fn handle_frame(
-    body: &[u8],
+    frame: &[u8],
     logged_in: bool,
     chat: &mut rules::ChatThrottle,
     ctx: &GateCtx,
@@ -309,23 +310,23 @@ async fn handle_frame(
         // 1/2 字节会让 C# 的 `destinationSpan[2..(packetLen-1)]` 越界抛
         // ArgumentOutOfRangeException，被 `ServerManager.cs:238` 的 catch 吞掉（只记日志）
         // ⇒ 帧被丢、**会话存活**；这里照此丢弃（不是剔除）。
-        if body.len() < 3 {
+        if frame.len() < 3 {
             return Ok(Step::Next);
         }
-        return handle_login(body, ctx, sid, handle).await;
+        return handle_login(frame, ctx, sid, handle).await;
     }
-    if body.len() == 1 {
+    if frame.len() == 1 {
         // 心跳：`ClientSession.cs:157-160` 直接 `return`（不转发）
         return Ok(Step::Next);
     }
-    if body.len() < COMMAND_FIXED_LENGTH {
+    if frame.len() < COMMAND_FIXED_LENGTH {
         // 异常消息封包（`:155-162`）：关会话
         return Ok(Step::Close(format!(
             "异常消息封包（{} 字节），关闭会话...",
-            body.len()
+            frame.len()
         )));
     }
-    let payload = &body[2..body.len() - 1]; // = C# 的 `tempBuff`（去掉 `#1` 与尾 `!`）
+    let payload = &frame[2..frame.len() - 1]; // = C# 的 `tempBuff`（去掉 `#1` 与尾 `!`）
     let decoded = mir2_protocol::edcode::decode(payload);
     if decoded.len() < COMMAND_MESSAGE_SIZE {
         // `:170-175`：解码后不足 12 字节 ⇒ 关会话（reviewer-1 的 Minor #3）
@@ -333,6 +334,15 @@ async fn handle_frame(
             "解析数据包小于12...解析后长度:{}",
             decoded.len()
         )));
+    }
+    if frame.len() > NOM_CLIENT_PACKET_SIZE {
+        // `:196-199`：超过 `NomClientPacketSize` **只记日志丢帧**（不是关会话）
+        glog!(
+            "INF",
+            "Kick off user,over nom client packet size: {}",
+            frame.len()
+        );
+        return Ok(Step::Next);
     }
     // `CM_SAY` 的间隔门（`:485-497`）：太快的聊天帧**直接丢**（`return`，不转发）。
     // 内容 = 解码后的 `decodeBuff[12..]`；`@` 开头的内容不判间隔；开关与阈值照现网
@@ -409,10 +419,10 @@ async fn server_loop(
         }
         match u8::try_from(msg.ident).unwrap_or(0) {
             grobal2::GM_DATA => {
+                let wire = client_frame(msg.pack_length, &body);
                 let guard = sessions.lock().await;
                 if let Some(tx) = guard.get(&msg.session_id) {
-                    // TODO(差分)：C# 在此会重新编码（§2 ⚠️）；本切片原样写 body
-                    let _ = tx.send(body);
+                    let _ = tx.send(wire);
                 } else {
                     glog!(
                         "WRN",
@@ -510,6 +520,35 @@ fn rebuild_command_frame(decoded: &[u8], payload: &[u8], sid: u16, session_index
         wire.extend_from_slice(decoded);
     }
     wire
+}
+
+/// 网关 → 客户端的出帧（照 `ClientSession.cs:891-924` 的 `ProcessServerPacket`）：
+///
+/// - `PackLength < 0`（"小包"：走路/攻击等）⇒ `#` + body **原样** + `!`（**不编码**）；
+/// - 否则 ⇒ `#` + `Encode(body[..12])` + `body[12..]` **原样** + `!`。
+///
+/// 实测（真 C# 网关 + 真客户端夹具，`oracle-login-cap/FINDINGS.md`）：`PackLength=+16` 时客户端收到
+/// `23` + `68697a6b6b68756a6a6b7066696a7361` + `1c1d1e1f` + `21`（= `#`+Encode(12B)+余下+`!`）；
+/// `PackLength=-4` 时收到 `23 deadbeef 21`。
+///
+/// 已知不可等价的角落：`0 <= len < 12` 的正数包——oracle `:917` 固定编码 **12** 字节（读越界），
+/// 这里按实际长度编码；真实服务端不会发这种包，`:926-928` 的 `bufferLen > 8` 分支还会在
+/// `Deserialize<CommandMessage>` 时抛异常被 `ClientThread` 吞掉（实测客户端收不到任何东西）。
+fn client_frame(pack_length: i32, body: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(body.len() + 8);
+    out.push(b'#');
+    if pack_length < 0 {
+        out.extend_from_slice(body);
+    } else if body.len() >= COMMAND_MESSAGE_SIZE {
+        out.extend_from_slice(&mir2_protocol::edcode::encode(
+            &body[..COMMAND_MESSAGE_SIZE],
+        ));
+        out.extend_from_slice(&body[COMMAND_MESSAGE_SIZE..]);
+    } else {
+        out.extend_from_slice(&mir2_protocol::edcode::encode(body));
+    }
+    out.push(b'!');
+    out
 }
 
 /// 客户端 socket 句柄（C# 用 `Socket.Handle.ToInt32()`；Windows 下取 raw socket 低 32 位，

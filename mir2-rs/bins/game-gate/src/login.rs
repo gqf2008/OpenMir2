@@ -9,6 +9,16 @@
 /// 登录帧的最大长度（`ClientLogin` 里的 `firstPakcetMaxLen`，`ClientSession.cs:1060`）。
 const FIRST_PACKET_MAX_LEN: usize = 254;
 
+/// 登录文本的字段分隔符。**照 oracle 的事实值，不照名字**：`src/OpenMir2/HUtil32.cs:12` 是
+/// `public const char Backslash = '/';` —— 名字叫 Backslash，值是**斜杠**；`ClientLogin` 用
+/// `HUtil32.GetValidStr3(..., HUtil32.Backslash)` 切 `account/charName/cert/clientVerNo/code/hardwareId`。
+///
+/// 实机实测（真 C# 网关 + 真 Delphi 客户端的金标准帧）：`**loadbot1/lb1a/2/120020522/1200205220/46F78C…`
+/// 被切成 account=`loadbot1`(8)/char=`lb1a`(4)/cert=`2`/ver=`120020522`(9)/code=`1200205220`(10) 并**通过**登录；
+/// 若按 `'\\'` 切，account 会等于整段（长度 >12）⇒ 必然被剔除。证据：
+/// `E:\tmp\openmir2-gamegate-imp\oracle-login-cap\FINDINGS.md`。
+pub const FIELD_DIVIDER: char = '/';
+
 /// C# `HUtil32.GetValidStr3(string source, ref string dest, char divider)`（`HUtil32.cs:384-389`）：
 /// `source.Split(divider, 2, RemoveEmptyEntries)` ⇒ `dest = ary[0]`、返回 `ary[1]`（不足补空串）。
 ///
@@ -63,7 +73,9 @@ pub struct ClientLoginFields {
 /// - 文本 = `**{account}/{charName}/{cert}/{clientVer}/{code}/{hardware}/{ServiceId}`
 ///   —— 注意分隔符是 `/`，与客户端 face 的 `\` **不同**（`:1203` 的插值串）；
 /// - `hardware`：现网 `E:\MirServer\RunGate\config.conf` 的 `[Switch] ProcClientCount=0`
-///   ⇒ `Config.IsProcClientHardwareID=false` ⇒ **32 个 `0`**（`:1202` 三元表达式的 false 分支）；
+///   ⇒ `Config.IsProcClientHardwareID=false` ⇒ **30 个 `0`**（`:1202` 三元表达式的 false 分支；
+///   字面量就是 `"000000000000000000000000000000"`，**数一下再写**：我先前凭目测写成 32，
+///   是 oracle 字节回归用例（`oracle_golden_login_frame_yields_oracle_synthetic_packet`）把它抓出来的）；
 /// - `ServiceId`：该端点线号（`Conf\ConfigManager.cs:18`：`GateList[i].ServiceId = (byte)i`）；
 /// - body = `#0` + `EncryptUtil.Encode(GBK(文本))` + `!`，`PackLength = encodeLen + 3`（`:1204-1218`）。
 #[must_use]
@@ -87,7 +99,8 @@ pub fn synthetic_login_body(f: &ClientLoginFields, service_id: u8) -> Vec<u8> {
 /// 覆盖 `ClientLogin` 的 ①②③④ 步（`ClientSession.cs:1060-1101`）：
 /// - `packet_len`（外层 `PackLength`）必须落在 `(15, 254)`；
 /// - 文本前两位必须是 `**`；
-/// - 反斜杠切 `account \ charName \ cert \ clientVerNo \ code \ hardwareId`；
+/// - 用 `FIELD_DIVIDER`（= `/`，见该常量的注释）切
+///   `account / charName / cert / clientVerNo / code / hardwareId`；
 /// - `4 ≤ len(account) ≤ 12`、`2 < len(charName) < 15`；
 /// - `0 < len(cert) ≤ 8`、`len(clientVerNo) ≥ 8`、`len(code) == 10`。
 ///
@@ -109,9 +122,9 @@ pub fn parse_client_login(text: &str, packet_len: usize) -> Result<ClientLoginFi
         return Err(format!("Kicked 1: 前两位不是 **（实得 {head:?}）"));
     }
     let mut rest = text[2..].to_string();
-    let (account, r) = get_valid_str3(&rest, '\\');
+    let (account, r) = get_valid_str3(&rest, FIELD_DIVIDER);
     rest = r;
-    let (char_name, r) = get_valid_str3(&rest, '\\');
+    let (char_name, r) = get_valid_str3(&rest, FIELD_DIVIDER);
     rest = r;
     let n_account = account.chars().count();
     let n_char = char_name.chars().count();
@@ -120,11 +133,11 @@ pub fn parse_client_login(text: &str, packet_len: usize) -> Result<ClientLoginFi
             "账号/角色名长度不符：account={n_account} char={n_char}"
         ));
     }
-    let (cert, r) = get_valid_str3(&rest, '\\');
+    let (cert, r) = get_valid_str3(&rest, FIELD_DIVIDER);
     rest = r;
-    let (client_ver, r) = get_valid_str3(&rest, '\\');
+    let (client_ver, r) = get_valid_str3(&rest, FIELD_DIVIDER);
     rest = r;
-    let (code, _hwid) = get_valid_str3(&rest, '\\');
+    let (code, _hwid) = get_valid_str3(&rest, FIELD_DIVIDER);
     let n_cert = cert.chars().count();
     if n_cert == 0 || n_cert > 8 {
         return Err(format!("cert 长度不符（{n_cert}）"));
@@ -148,14 +161,36 @@ pub fn parse_client_login(text: &str, packet_len: usize) -> Result<ClientLoginFi
 mod tests {
     use super::*;
 
-    /// 按 oracle 的长度规则造一条**应通过**的登录串（网关日志里现网账号/角色名形态：
-    /// `loadbot1`/`lb1a`/9 位版本号/10 位 code）。
+    /// 按 oracle 的长度规则造一条**应通过**的登录串（现网账号/角色名形态：
+    /// `loadbot1`/`lb1a`/9 位版本号/10 位 code）。分隔符必须是 `/`（见 `FIELD_DIVIDER`）。
     #[test]
     fn deployed_shaped_login_passes() {
-        let text = "**loadbot1\\lb1a\\1\\120020522\\1200205220\\AABB";
+        let text = "**loadbot1/lb1a/1/120020522/1200205220/AABB";
         assert!(
             parse_client_login(text, 60).is_ok(),
             "现网形态应通过：{text}"
+        );
+    }
+
+    /// **金标准里那条真客户端登录文本**必须通过、且字段切对。出处：
+    /// `tests/golden/session-20261010-c3-hook/capture.jsonl` seq 13（真 Delphi 客户端发的 7200 第一帧，
+    /// 111 字节）→ EDCode 解出 `**loadbot1/lb1a/2/120020522/1200205220/46F78C6C…`；真 C# 网关实测**接受**它
+    /// 并据此发出合成登录包（`E:\tmp\openmir2-gamegate-imp\oracle-login-cap\FINDINGS.md`）。
+    /// 这条用例的作用：**谁把分隔符改回 `\`，它就变红**（那是"真客户端全被剔除"的形态）。
+    #[test]
+    fn golden_client_login_text_parses_with_deployed_divider() {
+        let text =
+            "**loadbot1/lb1a/2/120020522/1200205220/46F78C6CF966659119B8DC81EF975AD168F6E79C53";
+        let f = parse_client_login(text, 111).expect("oracle 实测接受这条，Rust 必须也接受");
+        assert_eq!(f.account, "loadbot1");
+        assert_eq!(f.char_name, "lb1a");
+        assert_eq!(f.cert, "2");
+        assert_eq!(f.client_ver, "120020522");
+        assert_eq!(f.code, "1200205220");
+        // 反证：同一个文本若按 `\` 切（旧实现的假设）必然失败 —— 这就是"全被剔除"的机理
+        assert!(
+            parse_client_login("**loadbot1\\lb1a\\2\\120020522\\1200205220\\46F78C", 111).is_err(),
+            "用 `\\` 形态的串应当失败（account 会等于整段、长度超限）"
         );
     }
 
@@ -171,29 +206,29 @@ mod tests {
     #[test]
     fn length_rules_match_oracle() {
         assert!(
-            parse_client_login("**abc\\lb1a\\1\\120020522\\1200205220\\AA", 60).is_err(),
+            parse_client_login("**abc/lb1a/1/120020522/1200205220/AA", 60).is_err(),
             "账号 3 位应失败"
         );
         assert!(
-            parse_client_login("**loadbot1\\ab\\1\\120020522\\1200205220\\AA", 60).is_err(),
+            parse_client_login("**loadbot1/ab/1/120020522/1200205220/AA", 60).is_err(),
             "角色名 2 位应失败"
         );
         assert!(
-            parse_client_login("**loadbot1\\lb1a\\1\\12002\\1200205220\\AA", 60)
+            parse_client_login("**loadbot1/lb1a/1/12002/1200205220/AA", 60)
                 .unwrap_err()
                 .contains("Kicked 2"),
             "版本号 <8 应报 Kicked 2"
         );
         assert!(
-            parse_client_login("**loadbot1\\lb1a\\1\\120020522\\12002052\\AA", 60).is_err(),
+            parse_client_login("**loadbot1/lb1a/1/120020522/12002052/AA", 60).is_err(),
             "code 非 10 位应失败"
         );
         assert!(
-            parse_client_login("**loadbot1\\lb1a\\\\120020522\\1200205220\\AA", 60).is_err(),
+            parse_client_login("**loadbot1/lb1a//120020522/1200205220/AA", 60).is_err(),
             "cert 空应失败"
         );
         assert!(
-            parse_client_login("**loadbot1\\lb1a\\1\\120020522\\1200205220\\AA", 300).is_err(),
+            parse_client_login("**loadbot1/lb1a/1/120020522/1200205220/AA", 300).is_err(),
             "packetLen≥254 应失败"
         );
     }
@@ -247,12 +282,12 @@ mod tests {
         }
     }
 
-    /// 前导分隔符不能把账号吃掉：`\loadbot1\lb1a\...` 在 C# 里仍然解析出账号 `loadbot1`
-    /// （旧实现会给 `loadbot1\lb1a\...` ⇒ 账号长度 >12 ⇒ 假踢）。
+    /// 前导分隔符不能把账号吃掉：`/loadbot1/lb1a/...` 在 C# 里仍然解析出账号 `loadbot1`
+    /// （旧实现会给 `loadbot1/lb1a/...` ⇒ 账号长度 >12 ⇒ 假踢）。
     #[test]
     fn leading_separator_login_is_not_falsely_kicked() {
-        // 外层 `**` 之后紧跟一个多余的分隔符（truth table 第 13 行 `\acc\name\...` 的同形）
-        let text = r"**\loadbot1\lb1a\1\120020522\1200205220\AABB";
+        // 外层 `**` 之后紧跟一个多余的分隔符（truth table 第 13 行的同形）
+        let text = "**/loadbot1/lb1a/1/120020522/1200205220/AABB";
         let f = parse_client_login(text, 60).expect("C# 接受这串，Rust 也必须接受");
         assert_eq!(f.account, "loadbot1");
         assert_eq!(f.char_name, "lb1a");
@@ -280,7 +315,7 @@ mod tests {
                     "**loadbot1/lb1a/1/120020522/1200205220/\
                      000000000000000000000000000000/{service_id}"
                 ),
-                "文本必须逐字等于 :1203 的插值串（含 32 个 0 的 hardware 与末尾 ServiceId）"
+                "文本必须逐字等于 :1203 的插值串（含 30 个 0 的 hardware 与末尾 ServiceId）"
             );
             let encode_len = mir2_protocol::edcode::encode(&crate::gbk::encode(&text)).len();
             assert_eq!(

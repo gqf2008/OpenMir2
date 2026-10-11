@@ -15,11 +15,48 @@
 
 ## 2. 客户端面帧（7200 上，客户端 ↔ 网关）
 
-- C# 用固定头适配器：`PacketFixedHeaderDataHandlingAdapter`，其 `HeaderLength => 20`，头类型是
-  `ServerMessage`，body 长度由头里的 `BodyLength` 给出。
-  证据：`src/OpenMir2/DataHandlingAdapters/DataMessageFixedHeaderRequestInfo.cs:7`（适配器）、`:12`（`HeaderLength => 20`）、
-  `:32`（`private ServerMessage _header`）、`:31`（`BodyLength`）。
-- ⇒ **客户端面不是"原始 EDCode 字节流"**，而是 `20 字节 ServerMessage 头 + body`。
+- ⚠️ **本节 2026-10-11 修正（原来的说法是错的，不要再照抄）**：代码库里**确实有**
+  `PacketFixedHeaderDataHandlingAdapter`（`HeaderLength => 20`，头是 `ServerMessage`；
+  `src/OpenMir2/DataHandlingAdapters/DataMessageFixedHeaderRequestInfo.cs:7/:12/:31/:32`），
+  **但 GameGate 的客户端 face 并没有挂它**：`ServerService.Initialize()`（`:38-50`）的
+  `_serverSocket.Setup(new TouchSocketConfig().SetListenIPHosts(...))` 里**没有** `SetDataHandlingAdapter`
+  ⇒ TouchSocket 按"一次 read 一帧"把原始字节交给 `ProcessSessionPacket`（`ClientSession.cs:98-`）。
+- **实测**（真 C# GameGate，副本跑 5010/7210；输入 = M0 金标准里真 Delphi 客户端发的 7200 第一帧）：
+  - 加 20B `ServerMessage` 头 ⇒ 网关日志 `[ClientLogin] Kicked 1: ?h讣h浖…**loadbot1/lb1a/…`** ⇒ 剔除
+    （头被当成帧内垃圾前缀；`forensic.py` 用 `EncryptUtil.Decode` 的 Python 逐行转写复现了这段乱码）；
+  - **不加头（纯 `#1…!`）⇒ 登录通过**，网关在 5000 侧发出合成登录包（98B）。
+  ⇒ **客户端 face = 裸 `#…!` 帧**（登录帧 `#1…!`），一次 send/read 就是一帧。
+  证据：`E:\tmp\openmir2-gamegate-imp\oracle-login-cap\`（`harness.py` / `out-csharp-raw.json` / `FINDINGS.md`）。
+- 顺带解开一个旧谜：§7.6 那次"裸网关重放被剔除"的**真实原因是我们自己按假设加了 20B 头**，不是"必须带整栈"。
+- 关于"一次 read 一帧"的边界：把两帧写进**一次 send** 时，oracle 会把它们当**一帧**（实测：合成
+  `GM_DATA` 的 `PackLength=40`、body 里能看到 `!`/`#1` 混在一起），**不拆帧**。⇒ Rust 侧照此
+  （`bins/game-gate` 的读循环）也就是"一次 read 一帧"；真实客户端每帧一次 send，故一致。
+
+## 7.12 客户端面三处口径的实机复测（2026-10-11，推翻 §2 的旧说法）
+
+夹具：`E:\tmp\openmir2-gamegate-imp\oracle-login-cap\`（`harness.py` 把 `E:\MirServer\RunGate` 整目录副本的
+`config.conf` 只改到 `ServerPort1=5010 / GatePort1=7210`，**不占现网 5000/7200**；假 GameSvr 在 5010，
+假客户端在 7210；输入是 M0 金标准 7200 的第一条 c2s 帧）。
+
+| 面 | 实测（真 C# 网关） | 本切片改前 | 改后 |
+| --- | --- | --- | --- |
+| 客户端→网关 framing | 裸 `#1…!`（**无头**；加 20B 头 ⇒ `Kicked 1`） | 读 20B 头（**真客户端必被剔除**） | 一次 read 一帧 |
+| 登录字段分隔符 | **`/`**（`HUtil32.Backslash='/';`，`HUtil32.cs:12`） | `'\\'`（**account 会超长 ⇒ 必被剔除**） | `FIELD_DIVIDER='/'` |
+| 网关→客户端（`PackLength>0`） | `#` + `Encode(body[..12])` + `body[12..]` **原样** + `!` | 原样写 body | 同 oracle |
+| 网关→客户端（`PackLength<0`，"小包"） | `#` + body **原样** + `!` | 原样写 body（缺 `#`/`!`） | 同 oracle |
+| 合成登录包 | `#0` + `Encode(GBK(text))` + `!`，`PackLength=encodeLen+3`；`hardware` = **30 个 `0`** | 同（但 `hardware` 曾误写 32 个） | 由 oracle 字节钉住 |
+| 超过 `NomClientPacketSize=400` 的帧 | 记日志**丢帧、不关会话**（`:196-199`） | 未实现 | 已实现 |
+
+**判据（可复跑，不需要整栈窗口）**：`cargo test -p game-gate` 里的
+`oracle_golden_login_frame_yields_oracle_synthetic_packet`（**真客户端帧 ⇒ 必须逐字节等于真网关吐出的那条**）、
+`header_prefixed_login_is_kicked`（framing 红检）、`downlink_frames_match_oracle_bytes`（下行两种形态，
+期望值就是本节实测的字节）、`oversize_frame_is_dropped_without_kick`。
+
+**教益（写进手记的理由）**：这三处里有两处是"照源码推断"必然踩的坑——① 代码库里有 20B 头的适配器
+≠ 这条链路挂了它；② 常量名叫 `Backslash` 但值是 `'/'`。**凡是"端到端会不会通"的问题，判据必须是
+把真字节喂进真实现**，公式对照与语义单测都会漏。
+- ~~20 字节头的确切布局（客户端 face）~~ ——该布局只适用于**网关↔GameSvr（§3）**与**网关→客户端**的帧；
+  客户端→网关方向没有头。表留作 §3 参考：
 - **20 字节头的确切布局**（`[StructLayout(LayoutKind.Sequential, Pack = 1)]`，`PacketSize = 20`）：
 
   | 偏移 | 类型 | 字段 | 含义 |
@@ -320,7 +357,7 @@ if (!msgContent.StartsWith(_commandFlagSpan)) {          // 非 @命令
 
 | 条目 | 处置 | 证据 |
 | --- | --- | --- |
-| **Important #1**：登录通过后**没有**向 GameSvr 发合成登录包（oracle `ClientSession.cs:1199-1224`）⇒ GameSvr 永远等不到登录 | **已实现**：登录帧通过后立刻发一条 `GM_DATA`：body = `#0` + `Encode(GBK("**account/charName/cert/clientVer/code/{hardware}/{ServiceId}"))` + `!`，`PackLength = encodeLen + 3`。`hardware` = **32 个 `0`**（依据**现网配置**：`E:\MirServer\RunGate\config.conf` 的 `[Switch] ProcClientCount=0` ⇒ `Config.IsProcClientHardwareID=false`，走 `:1202` 的 false 分支）；`ServiceId` = 端点线号（`Conf\ConfigManager.cs:18`：`GateList[i].ServiceId = (byte)i`） | 进程级测试 `login_success_sends_synthetic_login_packet`（逐字节断言 body + 把 body **解回明文**复核文本公式 + 断言 `Socket`/`SessionId`/`SessionIndex`/`PackLength`）；单测 `synthetic_login_body_matches_oracle_formula` |
+| **Important #1**：登录通过后**没有**向 GameSvr 发合成登录包（oracle `ClientSession.cs:1199-1224`）⇒ GameSvr 永远等不到登录 | **已实现**：登录帧通过后立刻发一条 `GM_DATA`：body = `#0` + `Encode(GBK("**account/charName/cert/clientVer/code/{hardware}/{ServiceId}"))` + `!`，`PackLength = encodeLen + 3`。`hardware` = **30 个 `0`**（`:1202` 的字面量 `"0"×30` 就是 30 个；依据**现网配置** `[Switch] ProcClientCount=0` ⇒ `Config.IsProcClientHardwareID=false`，走该三元表达式的 false 分支。「30」是 §7.12 用 oracle 字节回归用例校正过的，先前写「32」是目测错的）；`ServiceId` = 端点线号（`Conf\ConfigManager.cs:18`：`GateList[i].ServiceId = (byte)i`） | 进程级测试 `login_success_sends_synthetic_login_packet` + **oracle 字节用例** `oracle_golden_login_frame_yields_oracle_synthetic_packet`（真客户端帧 ⇒ 逐字节等于真网关的输出）；单测 `synthetic_login_body_matches_oracle_formula` |
 | **Important #2**：`get_valid_str3` 与 `HUtil32.GetValidStr3` 不等价（C# `Split(divider,2,RemoveEmptyEntries)` 的语义 ≠ `split_once + retain`）⇒ 含前导/连续分隔符时字段错位 ⇒ **假踢** | **已实现**：按实测语义重写——「**连续分隔符并作一个、首尾分隔符吃掉**」：先跳过开头所有分隔符 ⇒ `dest` = 第一个非空片段 ⇒ 再跳过紧随其后的分隔符 ⇒ 其余原样返回 | 真 .NET 9 逐例实测表 `E:\tmp\openmir2-watch\splittest\`（`Program.cs` 复刻 `GetValidStr3`，输出 `split-truth-table.txt`，21 例）⇒ 单测 `get_valid_str3_semantics` 把整张表钉进 Rust；`leading_separator_login_is_not_falsely_kicked` 钉"不再假踢"（reviewer-1 举的 `\acc\name\cert\ver\code` 正是表内第 13 例） |
 | Minor #3：命令路径缺 `deCodeLen < 12` 判定 | **已实现**（`:170-175` ⇒ 关会话），且放在聊天间隔判定**之前**（oracle 的顺序） | `handle_frame`；`tests/relay.rs` 覆盖 |
 | Minor #2：`relay.rs` 把心跳放在登录前、并断言"恰好 1 条 `GM_DATA`" | **已改**：心跳**登录前后各发一条**（两条 oracle 路径不同，见下），断言改为"命令帧恰好 1 条 + 合成登录包恰好 1 条（且 `PackLength` = body 长）" | `relays_open_data_heartbeat_and_close` |
@@ -343,8 +380,10 @@ if (!msgContent.StartsWith(_commandFlagSpan)) {          // 非 @命令
   ——**追记**：切片 2 已做「解析 + 失败剔除 + 登录帧不转发」；本轮又补上「登录通过后向 GameSvr 发**合成登录包**」
   （§7.11 的 Important #1）。缺这条时客户端侧"能进图"、GameSvr 侧却永远等不到登录——属于**不看 5000 侧就看不见**的假绿。
 - **协议面是"两套"**：把 LoginGate 的 `ServerDataMessage` 套到 GameGate 上会全错（§5）。
-- **客户端面是 20B 头而不是裸 EDCode 流**（§2）⇒ `bins/login-gate` 的 `FrameSplitter`（按 `#`…`!` 拆帧）
-  **不能**照搬做客户端面；需要按 `ServerMessage` 头做定长头拆分。
+- ~~**客户端面是 20B 头而不是裸 EDCode 流**（§2）⇒ `bins/login-gate` 的 `FrameSplitter` 不能照搬~~
+  ——**已推翻（§7.12 实测）**：GameGate 客户端 face **没有**挂固定头适配器，就是裸 `#…!` 流；
+  `bins/login-gate` 那套按 `#`…`!` 的思路**可以**借鉴（但注意 oracle 是"一次 read 一帧"、
+  不跨 read 拼接，见 §7.12 的边界实测）。
 - **最高风险：网关是"解码→处理→重编码"的加工点，不是中继**（§2 的 ⚠️）。
   ⇒ 切片 1 的判据必须先补一条"re-encode 字节恒等性"的实验（§7.2），否则"能进图"也可能是
   "改了字节但两端都容忍"的假等价。
