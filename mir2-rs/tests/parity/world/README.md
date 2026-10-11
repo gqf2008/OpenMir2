@@ -142,6 +142,30 @@ cargo test -p mir2-parity-tests --test world_combat_parity
   ② 命中者**死亡**（非 ghost）时的同两分支——夹具支持 `ghost` 命令但还没有 `kill <actor>` 造死亡命中者的场景。
 - **不死系加成**（`LifeAttrib == LA_UNDEAD` 时加攻击方 `UndeadPower`）：场景尚未注入该字段。
 
+## M2 ④ tick P99 门禁（`tick_bench`）
+
+```bash
+# 绝对门禁（历史行为）：任一档 P99 > 100ms ⇒ RED / exit 1
+cargo run -p mir2-world --release --bin tick_bench -- 500 2000 1000 2000 2000 1000
+# 相对门禁（推荐给合并门禁）：只判相对量，绝对 P99 降级为报告值
+cargo run -p mir2-world --release --bin tick_bench -- \
+  --baseline tests/parity/world/p99-baseline-tickbench.txt 500 2000 1000 2000 2000 1000
+```
+
+场景/百分位/基线口径写死在 `crates/world/src/bin/tick_bench.rs` 头注释与 `P99复测报告.md` §2/§5
+（200×200 地图、实体间隔 2 格、每 tick 1/4 实体走一步、种子 42；改一处基线即不可比）。
+
+- `--baseline` 模式只判**相对量**：每档 3 轮**跨档交错**、取 P50/P99 中位数，`P50 > +10%`
+  或 `P99 中位数 > +30%` ⇒ `RED` / `exit 1`；
+- **绝对 P99 只在空载窗口有意义**（它是 M5 的验收目标，不是并行环境下的每次合并门禁）
+  ⇒ `--baseline` 模式只把绝对 P99 打印为报告值；
+- **高负载 ⇒ `SKIP-UNDER-LOAD` 且 `exit 0`**（CPU ≥ 40% 或 `rustc`/`cargo`/`cargo-clippy`/`msbuild` ≥ 4 个）；
+  但数量级劣化（P50 > +150% **且** P99 中位数 > +400%，**两侧同时越线**）仍判 `RED`——单侧越线
+  （如 P99 +632% 而 P50 +65%）按负载噪声 SKIP；不把负载导致的 RED 当作者的锅，也不让门禁失去牙齿；
+- 缺档 ⇒ `SKIP`（不静默当通过）；读基线文件失败 ⇒ `RED`。
+
+阳性/阴性对照与逐条口径见 `P99复测报告.md` §5（含为什么不是"同进程 A/B"的结构性理由）。
+
 ## D3 成本基线（`drop_bench`）
 
 ```bash
