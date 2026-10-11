@@ -78,6 +78,18 @@ Id     ChrName    MapName    CX  CY  Level HomeMap HomeX HomeY CREATEDATE
 `in_world` 两侧均 1；`10 SM_TURN` 是 AOI 帧（单客户端不出现，owner §22 裁决）。
 原始件：`load-stats-csharp-baseline.ndjson`（C# 基线，m3bag 第十二格 `csharp-20261012-054849`）、`load-stats-rust.ndjson`（本片）。
 
+### 2b. 帧面差额逐条归属（owner `c40f7460` 要求；C# 40 帧 vs Rust 本片 23 帧）
+
+| 缺的 ident | 名称 | 归属 |
+| --- | --- | --- |
+| `201` | `SM_BAGITEMS` | **本片已闭**（②）：第二轮 Rust 已收 `201`×1（`load-stats-rust2.ndjson`） |
+| `657`×3 | `SM_CHARSTATUSCHANGED` | **未实现**：oracle `RecalcAbilitys` 尾部 `StatusChanged()`（`PlayObject.cs:2875-2876`）与 buff/状态变化触发；Rust 的 `CharStatus` buff 部分未移植（会话初生恒 0，`enter.rs` 已登记） |
+| `100`×4 | `SM_SYSMESSAGE` | **路径差异/未实现**：oracle 在背包与吃药步骤向客户端发了几条提示（`SysMsg`）；Rust 的 `SysMsg` 只在顶号/禁药等路径发，M3BAGSEQ 各步无对应提示 |
+| `10`×2 | `SM_TURN` | **AOI/同屏帧**：oracle 单客户端进图时发 2 条是「看见另一个 actor」（同屏 NPC/怪），属世界侧 AOI 展示路径（owner §22 已裁） |
+| `654` | `SM_CHANGELIGHT` | **未实现**：oracle 由 `RM_CHANGELIGHT`（光环/装备发光变化，`PlayObject.Message.cs:1838`）发；Rust 未接发光变化触发 |
+
+（这四条各自都是与①无关的帧面缺口，逐条登记，不静默。）
+
 ## 3. ② ④ ③ 真机证据（owner `f7ff82c8` 的 02/04 复核）
 
 ### ② `CM_QUERYBAGITEMS` → `SM_BAGITEMS`
