@@ -1,0 +1,17 @@
+[package]
+name = "mir2-envir"
+version = "0.1.0"
+edition = "2021"
+description = "M2 地图层：Envir *.map 加载器（格式定案见 openmir2-m2-map-loading 卡 862396f8）+ Point 点位表 + 地图名→map_id"
+publish = false
+
+[dependencies]
+mir2-shared = { path = "../shared" }
+mir2-world = { path = "../world" }
+encoding_rs = "0.8"
+thiserror = "1"
+
+[dev-dependencies]
+
+[lints]
+workspace = true

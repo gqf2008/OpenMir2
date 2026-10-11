@@ -1022,6 +1022,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mir2-envir"
+version = "0.1.0"
+dependencies = [
+ "encoding_rs",
+ "mir2-shared",
+ "mir2-world",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "mir2-formula"
 version = "0.1.0"
 dependencies = [
