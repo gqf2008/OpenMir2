@@ -18,6 +18,8 @@ members = [
     "bins/login-srv",
     "bins/sel-gate",
     "bins/db-srv",
+    # M2 主体：世界宿主（GameSvr）
+    "bins/game-svr",
     # B 线：脚本引擎（crates/script）+ 工具（crates/script-tool）
     "crates/script",
     "crates/script-tool",

@@ -1,0 +1,173 @@
+//! GameSvr 的遗留 INI 读取（现网样件 `E:\MirServer\M2GameSvr\Server.conf`）。
+//!
+//! 本切片只读**网关链路**真正需要的那几个键，键名照现网事实（**不发明**）：
+//! `[Server] GateAddr / GatePort`（网关连上来的监听端点；现网 `GateAddr= 127.0.0.1` **值带前导空格**，
+//! 所以两边都要 trim）、`CheckBlock`（发包阻塞阈值，`ChannelMessageHandler.cs:74` 用它决定何时回 `GM_RECEIVE_OK`）。
+//! 世界尺寸（S1 占位）用 `WorldMaps`：形如 `1000x1000` 或 `1000x1000,200x200`。
+//!
+//! **缺键即报错**（照 M1 验收④的"失败要响"口径），不许静默取默认值。
+
+use std::path::{Path, PathBuf};
+
+use anyhow::{bail, Context, Result};
+
+/// 监听端点 + S1 需要的少量参数。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GateConfig {
+    /// `[Server] GateAddr`（现网带前导空格，解析时 trim）。
+    pub gate_addr: String,
+    /// `[Server] GatePort`（现网 5000）。
+    pub gate_port: u16,
+    /// `[Server] CheckBlock`（现网 12288）：`ChannelMessageHandler.cs:74` 的阻塞阈值。
+    pub check_block: usize,
+    /// S1 占位：世界地图尺寸列表（真地图加载属 S2/S3——从 Envir 读，不在本切片）。
+    pub maps: Vec<(i32, i32)>,
+}
+
+/// 默认配置文件：可执行文件同目录的 `Server.conf`（与 C# `AppContext.BaseDirectory` 一致）。
+#[must_use]
+pub fn default_path() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("Server.conf")
+}
+
+/// 读取并校验配置。
+///
+/// # Errors
+/// 文件不存在、缺 `[Server]` 段、缺 `GateAddr`/`GatePort`/`CheckBlock`、端口非法、`WorldMaps` 非法
+/// —— 都返回错误（调用方据此非零退出）。
+pub fn load(path: &Path) -> Result<GateConfig> {
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("读不到配置文件 {}", path.display()))?;
+    let mut section = String::new();
+    let mut gate_addr: Option<String> = None;
+    let mut gate_port: Option<u16> = None;
+    let mut check_block: Option<usize> = None;
+    let mut maps: Option<Vec<(i32, i32)>> = None;
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
+            continue;
+        }
+        if let Some(name) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            section = name.trim().to_string();
+            continue;
+        }
+        let Some((k, v)) = line.split_once('=') else {
+            continue;
+        };
+        if section != "Server" {
+            continue;
+        }
+        let (k, v) = (k.trim(), v.trim());
+        match k {
+            "GateAddr" => gate_addr = Some(v.to_string()),
+            "GatePort" => {
+                gate_port = Some(
+                    v.parse()
+                        .with_context(|| format!("GatePort 不是合法端口：{v:?}"))?,
+                );
+            }
+            "CheckBlock" => {
+                check_block = Some(
+                    v.parse()
+                        .with_context(|| format!("CheckBlock 不是合法整数：{v:?}"))?,
+                );
+            }
+            "WorldMaps" => maps = Some(parse_maps(v)?),
+            _ => {}
+        }
+    }
+    let (Some(gate_addr), Some(gate_port), Some(check_block), Some(maps)) =
+        (gate_addr, gate_port, check_block, maps)
+    else {
+        bail!(
+            "[Server] 段缺键：需要 GateAddr/GatePort/CheckBlock/WorldMaps（现网样件见 \
+             E:\\MirServer\\M2GameSvr\\Server.conf）"
+        );
+    };
+    if gate_port == 0 || maps.is_empty() {
+        bail!("GatePort 不能为 0、WorldMaps 不能为空");
+    }
+    Ok(GateConfig {
+        gate_addr,
+        gate_port,
+        check_block,
+        maps,
+    })
+}
+
+/// `WorldMaps=1000x1000[,200x200...]`。
+fn parse_maps(v: &str) -> Result<Vec<(i32, i32)>> {
+    let mut out = Vec::new();
+    for part in v.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let Some((w, h)) = part.split_once(['x', 'X']) else {
+            bail!("WorldMaps 里 {part:?} 不是 WxH 形式");
+        };
+        let w: i32 = w.trim().parse().with_context(|| format!("宽非法：{w:?}"))?;
+        let h: i32 = h.trim().parse().with_context(|| format!("高非法：{h:?}"))?;
+        if w <= 0 || h <= 0 {
+            bail!("地图尺寸必须为正：{part:?}");
+        }
+        out.push((w, h));
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write(dir: &Path, body: &str) -> PathBuf {
+        std::fs::create_dir_all(dir).unwrap();
+        let p = dir.join("Server.conf");
+        std::fs::write(&p, body).unwrap();
+        p
+    }
+
+    /// 现网样件形态（注意 `GateAddr` 值前的空格——照 `Server.conf` 事实）。
+    #[test]
+    fn parses_deployed_shape() {
+        let dir = std::env::temp_dir().join(format!("gs-conf-{}", std::process::id()));
+        let p = write(
+            &dir,
+            "[DataBase]\nDBPort=6000\n[Server]\nDBPort=6000\nCheckBlock=12288\nGateAddr= 127.0.0.1\n\
+             GatePort=5000\nWorldMaps=1000x1000,200x200\n[Share]\nX=1\n",
+        );
+        let c = load(&p).unwrap();
+        assert_eq!(c.gate_addr, "127.0.0.1", "值要 trim（现网带前导空格）");
+        assert_eq!(c.gate_port, 5000);
+        assert_eq!(c.check_block, 12288);
+        assert_eq!(c.maps, vec![(1000, 1000), (200, 200)]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 缺键/非法值必须报错（M1④"失败要响"）。
+    #[test]
+    fn missing_or_bad_keys_are_fatal() {
+        let dir = std::env::temp_dir().join(format!("gs-bad-{}", std::process::id()));
+        let p = write(&dir, "[Server]\nGateAddr=127.0.0.1\n");
+        assert!(
+            load(&p).is_err(),
+            "缺 GatePort/CheckBlock/WorldMaps 必须报错"
+        );
+        let p2 = write(
+            &dir,
+            "[Server]\nGateAddr=127.0.0.1\nGatePort=abc\nCheckBlock=1\nWorldMaps=10x10\n",
+        );
+        assert!(load(&p2).is_err(), "GatePort 非数字必须报错");
+        let p3 = write(
+            &dir,
+            "[Server]\nGateAddr=127.0.0.1\nGatePort=5000\nCheckBlock=1\nWorldMaps=10x0\n",
+        );
+        assert!(load(&p3).is_err(), "地图尺寸非正必须报错");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}
