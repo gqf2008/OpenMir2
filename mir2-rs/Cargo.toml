@@ -17,6 +17,7 @@ members = [
     "bins/login-gate",
     "bins/login-srv",
     "bins/sel-gate",
+    "bins/db-srv",
     # B 线：脚本引擎（crates/script）+ 工具（crates/script-tool）
     "crates/script",
     "crates/script-tool",
