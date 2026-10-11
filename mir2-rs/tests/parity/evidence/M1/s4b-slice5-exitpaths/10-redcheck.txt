@@ -1,0 +1,16 @@
+# 红检（牙齿）：把 Rust 侧 after 的某个被比对列改坏，同一 diff 必须 RED
+# 生成时间: 2026-10-12T05:19:30+08:00
+
+=== 改 mir2_db.characters.Level 1->5 ===
+DIFF mir2_db.characters: rows A=1 B=1 仅A=1 仅B=1
+    A: <VOLATILE>	0	<RUN>0	<RUN>0	0	291	666	1	0	1	0	1	0	0	0	289	618	0	0	0	0	0.000	0	0	0	0	0	0	0	0	0	0	0	0	0	0	NULL	NULL	NULL	0	<VOLATILE>	<VOLATILE>
+    B: <VOLATILE>	0	<RUN>0	<RUN>0	0	291	666	5	0	1	0	1	0	0	0	289	618	0	0	0	0	0.000	0	0	0	0	0	0	0	0	0	0	0	0	0	0	NULL	NULL	NULL	0	<VOLATILE>	<VOLATILE>
+RED: 作用域内 2 行不一致
+rc=1
+
+=== 改 mir2_db.characters_ablity.Hp 16->9 ===
+DIFF mir2_db.characters_ablity: rows A=1 B=1 仅A=1 仅B=1
+    A: <VOLATILE>	1	1	0	0	0	0	16	18	16	18	0	10	14	50	0	15	0	12	<VOLATILE>
+    B: <VOLATILE>	1	1	0	0	0	0	9	18	16	18	0	10	14	50	0	15	0	12	<VOLATILE>
+RED: 作用域内 2 行不一致
+rc=1

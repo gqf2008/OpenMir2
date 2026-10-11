@@ -1,0 +1,32 @@
+# 存档发生/未发生的证据：characters.LASTUPDATE 与 characters_ablity.ModifyTime（墙钟列，仅用于“有没有写”判定）
+# 列序：Id ServerIndex LoginID ChrName MapName CX CY Level ... CREATEDATE LASTUPDATE
+
+== softclose-csharp-1/softclose
+  before characters: 13346	0	<RUN>0	<RUN>0	0	291	666	1	0	1	0	1	0	0	0	289	618	0	0	0	0	0.000	0	0	0	0	0	0	0	0	0	0	0	0	0	0	NULL	NULL	NULL	0	2026-10-12 05:06:20	2026-10-12 05:06:32
+  after  characters: 13346	0	<RUN>0	<RUN>0	0	291	666	1	0	1	0	1	0	0	0	289	618	0	0	0	0	0.000	0	0	0	0	0	0	0	0	0	0	0	0	0	0	NULL	NULL	NULL	0	2026-10-12 05:06:20	2026-10-12 05:07:01
+  changed=True
+
+== softclose-rust/softclose
+  before characters: 13346	0	<RUN>0	<RUN>0	0	291	666	1	0	1	0	1	0	0	0	289	618	0	0	0	0	0.000	0	0	0	0	0	0	0	0	0	0	0	0	0	0	NULL	NULL	NULL	0	2026-10-12 05:06:20	2026-10-12 05:07:01
+  after  characters: 13346	0	<RUN>0	<RUN>0	0	291	666	1	0	1	0	1	0	0	0	289	618	0	0	0	0	0.000	0	0	0	0	0	0	0	0	0	0	0	0	0	0	NULL	NULL	NULL	0	2026-10-12 05:06:20	2026-10-11 21:11:07
+  changed=True
+
+== softclose-csharp-2/softclose
+  before characters: 13346	0	<RUN>0	<RUN>0	0	291	666	1	0	1	0	1	0	0	0	289	618	0	0	0	0	0.000	0	0	0	0	0	0	0	0	0	0	0	0	0	0	NULL	NULL	NULL	0	2026-10-12 05:06:20	2026-10-11 21:11:07
+  after  characters: 13346	0	<RUN>0	<RUN>0	0	291	666	1	0	1	0	1	0	0	0	289	618	0	0	0	0	0.000	0	0	0	0	0	0	0	0	0	0	0	0	0	0	NULL	NULL	NULL	0	2026-10-12 05:06:20	2026-10-12 05:14:32
+  changed=True
+
+== shutdown-csharp-1/shutdown
+  before characters: 13346	0	<RUN>0	<RUN>0	0	291	666	1	0	1	0	1	0	0	0	289	618	0	0	0	0	0.000	0	0	0	0	0	0	0	0	0	0	0	0	0	0	NULL	NULL	NULL	0	2026-10-12 05:06:20	2026-10-12 05:07:01
+  after  characters: 13346	0	<RUN>0	<RUN>0	0	291	666	1	0	1	0	1	0	0	0	289	618	0	0	0	0	0.000	0	0	0	0	0	0	0	0	0	0	0	0	0	0	NULL	NULL	NULL	0	2026-10-12 05:06:20	2026-10-12 05:07:01
+  changed=False
+
+== shutdown-rust/shutdown
+  before characters: 13346	0	<RUN>0	<RUN>0	0	291	666	1	0	1	0	1	0	0	0	289	618	0	0	0	0	0.000	0	0	0	0	0	0	0	0	0	0	0	0	0	0	NULL	NULL	NULL	0	2026-10-12 05:06:20	2026-10-11 21:11:07
+  after  characters: 13346	0	<RUN>0	<RUN>0	0	291	666	1	0	1	0	1	0	0	0	289	618	0	0	0	0	0.000	0	0	0	0	0	0	0	0	0	0	0	0	0	0	NULL	NULL	NULL	0	2026-10-12 05:06:20	2026-10-11 21:11:07
+  changed=False
+
+== shutdown-csharp-2/shutdown
+  before characters: 13346	0	<RUN>0	<RUN>0	0	291	666	1	0	1	0	1	0	0	0	289	618	0	0	0	0	0.000	0	0	0	0	0	0	0	0	0	0	0	0	0	0	NULL	NULL	NULL	0	2026-10-12 05:06:20	2026-10-12 05:14:32
+  after  characters: 13346	0	<RUN>0	<RUN>0	0	291	666	1	0	1	0	1	0	0	0	289	618	0	0	0	0	0.000	0	0	0	0	0	0	0	0	0	0	0	0	0	0	NULL	NULL	NULL	0	2026-10-12 05:06:20	2026-10-12 05:14:32
+  changed=False
