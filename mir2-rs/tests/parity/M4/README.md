@@ -17,6 +17,21 @@ python -I tests/parity/M4/run_npc_cases.py                                      
 `run_npc_cases.py` 的全部 7 条用例都只跑两侧脚本 harness）。2026-10-12 owner 裁定
 `e808ec99`（路线①）后，**商人 3 条也走 port-free**，`npc-cases.json` 里已无 `runner == "window"`。
 
+## 写盘 vs 只回显（M4 收尾，卡 `openmir2-m4-readiness-write-mode`）
+
+| 命令 | 写盘 | 说明 |
+| --- | --- | --- |
+| `npc_window_readiness.py`（默认参数） | **否** | 只把门结果回显到 stdout |
+| `npc_window_readiness.py --no-run-cs` | **否** | 只做源码能力检查，仍只回显 |
+| `npc_window_readiness.py --write-evidence [--out …]` | **是** | 唯一写 `--out`（默认 `evidence/M4/npc-window-readiness.txt`）的开关 |
+| `npc_window_readiness.py selftest` / `selftest-write` | **否** | 只回显；`selftest-write` 就地合成回归副本、跑完删除 |
+| `run_npc_cases.py` | **是** | 默认写 `evidence/M4/npc-cases.txt`（确定性，重跑字节不变） |
+| `m4_parity.py --envir …` | **是** | 默认写 `evidence/M4/*`（①③ 证据；确定性） |
+| `evidence_hashes.py` | **否** | 复核；重生成清单走显式 `--write` |
+
+任何**默认只读**命令跑完，`git status --porcelain -- mir2-rs/tests/parity/evidence/M4` 必须为空
+（`npc_window_readiness.py selftest-write` 机判这一点）。
+
 ## ① parsecount 两侧对拍数表
 
 - 口径：**同一份语料**（`E:\MirServer\M2GameSvr\Envir`，639 个 `.txt`）上分别跑
@@ -55,9 +70,11 @@ python -I tests/parity/M4/run_npc_cases.py                                      
 Rust 服务侧能力只登记为 M3 承接）：
 
 ```powershell
-python -I tests/parity/M4/npc_window_readiness.py            # 实跑（含 C# 夹具行为复现）→ 出证据
-python -I tests/parity/M4/npc_window_readiness.py --no-run-cs # 只做源码能力检查（快）
-python -I tests/parity/M4/npc_window_readiness.py selftest    # 牙齿：合成输入翻转能力 ⇒ 裁决翻转（5/5）
+python -I tests/parity/M4/npc_window_readiness.py                    # 只回显 stdout（默认不写盘）
+python -I tests/parity/M4/npc_window_readiness.py --no-run-cs        # 只做源码能力检查（快；仍不写盘）
+python -I tests/parity/M4/npc_window_readiness.py --write-evidence  # 显式写 evidence/M4/npc-window-readiness.txt
+python -I tests/parity/M4/npc_window_readiness.py selftest          # 牙齿（裁决逻辑）5/5
+python -I tests/parity/M4/npc_window_readiness.py selftest-write    # 牙齿（写盘模式）3/3：默认不写盘 + 回归必 RED
 ```
 
 - 退出码：`0 = READY`（路线① 就绪，商人 3 条可 port-free）/ `3 = BLOCKED`（夹具未修）/ 
@@ -65,6 +82,14 @@ python -I tests/parity/M4/npc_window_readiness.py selftest    # 牙齿：合成�
 - 裁决以 **C# 夹具（路线①）** 为准；「Rust 服务侧」行只登记为 **M3 承接**，不阻塞本卡。
 - 牙齿：合成的 5 种组合里，C# 代理 = `INormNpc` ⇒ `BLOCKED`，改成 `IMerchant` ⇒ `READY`
   （Rust 派发/依赖不再影响本卡裁决）⇒ 不能靠改一半蒙过去。
+- **写盘必须显式**（卡 `openmir2-m4-readiness-write-mode`，R-1 残留）：默认**只回显 stdout**，
+  `--no-run-cs` 与普通运行都不写盘；只有 `--write-evidence` 才写 `--out`。
+  `selftest-write` 机判这一点，并把「改回默认写盘」的合成回归跑成 RED 原始输出
+  （留档于 `../evidence/M4/M4收口报告-20261012.md` §26）。
+- **证据幂等**（评审 N-1 同类）：显式 `--write-evidence` 重跑（含端口起落）得到的
+  `../evidence/M4/npc-window-readiness.txt` **逐字节相同** —— 端口快照是易变信息项，只回显到
+  stdout 并落到 `mir2-rs/target/m4/npc-window-readiness-ports.txt`（`target/` 不入库、不入 hash 清单）；
+  源码路径用仓库相对路径。否则评审按 `reviewer_note` 跑本门再跑 `evidence_hashes.py` 会误判为红。
 
 ## ③ 『双侧逐行多重集差 = 0』门禁
 
@@ -122,7 +147,7 @@ python -I tests/parity/M4/evidence_hashes.py selftest   # 牙齿：改 hash / �
 | `m4_parity.py` | ① + ③ 门禁（跑两侧 + 出表 + 多重集比对 + 宏边界 + 自检/红检） |
 | `evidence_hashes.py` | 证据 hash 口径复核器（LF 归一 = git blob；--write / verify / selftest） |
 | `run_npc_cases.py` | ② runner（7 条 port-free 用例 + 商人可跑性门结果） |
-| `npc_window_readiness.py` | 商人 3 条可跑性门（C# 夹具路线①裁决 + Rust 服务侧 M3 承接登记） |
+| `npc_window_readiness.py` | 商人 3 条可跑性门（C# 夹具路线①裁决 + Rust 服务侧 M3 承接登记；写盘显式 `--write-evidence`） |
 | `npc-cases.json` | ② 6 类用例定义（含判红判据） |
 | `fixtures/macroenvir/` | 宏展开边界语料（2 条 `#DEFINE`） |
 | `../evidence/M4/parsecount-both-sides.md` | ① 计数表 |
