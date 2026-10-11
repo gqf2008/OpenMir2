@@ -25,6 +25,7 @@ mod auth;
 mod cert;
 mod config;
 mod dbclient;
+mod enter;
 mod hutil;
 mod ids;
 mod load;
@@ -227,6 +228,27 @@ async fn main() -> Result<()> {
         Some(reg) => mapwire::sizes(reg),
         None => mapwire::placeholder_sizes(&cfg.maps).map_err(anyhow::Error::msg)?,
     };
+    // 配置层输入（帧 11029/1106/5008/811；`openmir2-m2-envir-inputs`）：与地图注册表同源，
+    // 都读 `Server.conf`。读不到 ⇒ 记 WRN 并跳过依赖它的帧（不猜；见 `enter::apply`）。
+    let game_conf = match mir2_envir::GameSvrConf::load(&conf) {
+        Ok(c) => {
+            glog!(
+                "INF",
+                "配置层已载入：[Names] GameGold={} GamePoint={}（帧 5008）/ [Setup] BonusAbilofWarr/NakedAbilofWarr 等（帧 811）",
+                c.game_gold_name,
+                c.game_point_name
+            );
+            Some(c)
+        }
+        Err(e) => {
+            glog!(
+                "WRN",
+                "读取配置层失败（{}）：{e} ⇒ 帧 11029/1106/5008/811 跳过（登记）",
+                conf.display()
+            );
+            None
+        }
+    };
     // 公告文本（658 `SM_SENDNOTICE` 的配置层输入）：`<base>/<NoticeDir>/Notice.txt`。
     // 与 oracle `NoticeMgr.GetNoticeMsg("Notice")` 同源；**R1-1**：读不到/为空时 oracle 仍发
     // 一条 header-only 658（`SendDefMessage` 空尾走 `SendSocket(ClientMsg)`），故这里只记 WRN。
@@ -252,7 +274,7 @@ async fn main() -> Result<()> {
         // 公告文本（oracle `NoticeMgr.GetNoticeMsg("Notice")`，帧 658 `SM_SENDNOTICE`）：
         // 配置层输入，启动时读一次、进程内复用；**R1-1**：读不到时为空字节，但生产路径仍发
         // header-only 658（照 oracle 空尾分支；`notice.rs` 模块头有源码定位）。
-        .spawn(move || sim_loop(map_sizes, registry, notice, ev_rx, Some(db)))
+        .spawn(move || sim_loop(map_sizes, registry, game_conf, notice, ev_rx, Some(db)))
         .context("起 sim 线程失败")?;
 
     // 登录服务器（IDS）链路：oracle 是 TcpClient 主动连它（`AuthenticationService.cs:22-34`），
@@ -332,10 +354,12 @@ struct DbWiring {
     next_query_id: std::sync::Arc<std::sync::atomic::AtomicI32>,
     /// 收侧汇总（分帧 + 签名 + 查询表），由 DB 链路任务与 sim 线程共享。
     replies: std::sync::Arc<std::sync::Mutex<dbclient::DbReplies>>,
-    /// 已发出、还没取走的 `(query_id, socket, gate_idx)`——socket 用于回复到达后把该槽标进世界，
+    /// 已发出、还没取走的 `(query_id, socket, gate_idx, soft_version_date)`——socket 用于回复到达后把该槽标进世界，
     /// `gate_idx` 用于把标记/踢人**路由回该用户的网关线**（oracle 每个 GameGate 连接一套 `SessionUser` 表，
     /// `ChannelMessageHandler.cs:318-322` 的 `gateUser` 属该连接；各网关的 socket 号可重复 ⇒ 不能「随便挑一个」）。
-    outstanding: Vec<(i32, i32, i32)>,
+    /// `soft_version_date` = `LoadDBInfo.SoftVersionDate`（oracle `PlayObject.SoftVersionDateEx` 的来源，
+    /// `WorldServer.cs:469`）——它是**取档请求**的字段、不在角色记录里，须随查询带过来做帧 11029/5008 的门。
+    outstanding: Vec<(i32, i32, i32, i32)>,
 }
 
 impl DbWiring {
@@ -478,6 +502,7 @@ fn drain_kicks(
 fn sim_loop(
     map_sizes: Vec<(i32, i32)>,
     registry: Option<mir2_envir::MapRegistry>,
+    game_conf: Option<mir2_envir::GameSvrConf>,
     notice: Vec<u8>,
     ev_rx: std::sync::mpsc::Receiver<GateEvent>,
     mut db: Option<DbWiring>,
@@ -613,7 +638,12 @@ fn sim_loop(
                 );
                 match w.req_tx.send(frame) {
                     Ok(()) => {
-                        w.outstanding.push((qid, info.socket_id, info.gate_idx));
+                        w.outstanding.push((
+                            qid,
+                            info.socket_id,
+                            info.gate_idx,
+                            info.soft_version_date,
+                        ));
                         Some(qid)
                     }
                     Err(_) => {
@@ -655,7 +685,7 @@ fn sim_loop(
             let replies = std::sync::Arc::clone(&w.replies);
             let mut r = replies.lock().expect("DB 应答表锁被毒化");
             let mut still = Vec::new();
-            for (qid, socket, gate_idx) in std::mem::take(&mut w.outstanding) {
+            for (qid, socket, gate_idx, soft_version_date) in std::mem::take(&mut w.outstanding) {
                 match r.take(qid) {
                     Some(reply) => {
                         let (ident, recog) =
@@ -667,8 +697,20 @@ fn sim_loop(
                         // `PlayerDataService.cs:150`：`nIdent == DBR_LOADHUMANRCD && nRecog == 1 && data.Length > 0`
                         if ident == mir2_protocol::messages::DBR_LOADHUMANRCD && recog == 1 {
                             let payload = mir2_protocol::edcode::decode(&reply.packet);
-                            match record::parse_player_data_head(&payload) {
+                            // 头部窗口维持既有控制流（`parse_player_data_head`）；**全字段**
+                            // （`parse_player_data`，`openmir2-m2-record-fields`）额外供给入图帧的
+                            // 世界/配置层输入（`job`/`game_gold`/`bonus_abil` 等）。两者都解不出才算失败。
+                            let head_only = record::parse_player_data_head(&payload);
+                            let full = record::parse_player_data(&payload);
+                            match head_only {
                                 Some(head) => {
+                                    if full.is_none() {
+                                        glog!(
+                                            "WRN",
+                                            "角色记录全字段解析失败（{} 字节），仅头部窗口可解 ⇒ 入图帧只发有输入的（合成/诊断载荷；真线上 DB 回包恒为全字段）",
+                                            payload.len()
+                                        );
+                                    }
                                     // 集成点 ④：`CurMap`（逻辑名）→ `map_id`。有真地图注册表时必须命中；
                                     // 找不到即拒绝进图并记 WRN（`MapRegistry::require_id`），不许静默退回
                                     // 0 号占位图。无注册表（S1 `WorldMaps` 占位，启动时已记 WRN）时保留 0 号图。
@@ -713,12 +755,10 @@ fn sim_loop(
                                                 );
                                                 // S2b-4 续：进世界后按 oracle `PlayObject.Message.cs:1680-1692`
                                                 // 的 `RM_LOGON` 支出入图帧，经**该用户的网关线**下发。
-                                                // 输入齐备的现在只有 `SM_NEWMAP`（记录里的坐标 + 地图名）；
-                                                // 其余帧的输入依赖真地图（`openmir2-m2-map-loading`）/ 记录字段
-                                                // （`openmir2-m2-record-fields`）/ 配置层 ⇒ `EnterWorldInputs` 的
-                                                // `Option` 字段留空（登记在卡，绝不猜尾字节）。
-                                                // `day_bright` 暂占位 0（`Envir.DayBright()` 属地图层）。
-                                                let inputs = smframe::EnterWorldInputs {
+                                                // `enter::apply` 装配本片有输入的几条（766/54/11029/1106/
+                                                // 5008/811）；仍缺输入的（50/41/10/213 = m3bag 装备层接缝、
+                                                // 42/52/752 = world 触发点、46 = 世界时钟）保持 `None` 并登记。
+                                                let mut inputs = smframe::EnterWorldInputs {
                                                     actor_id: id,
                                                     cur_x: u16::from_ne_bytes(head.cur_x.to_ne_bytes()),
                                                     cur_y: u16::from_ne_bytes(head.cur_y.to_ne_bytes()),
@@ -732,6 +772,27 @@ fn sim_loop(
                                                     ),
                                                     ..smframe::EnterWorldInputs::default()
                                                 };
+                                                let data = full.as_ref().map(|r| &r.data);
+                                                let wx = enter::WorldFrameInputs {
+                                                    flag: registry
+                                                        .as_ref()
+                                                        .and_then(|r| r.flag_of(map_id)),
+                                                    map_desc: registry
+                                                        .as_ref()
+                                                        .and_then(|r| r.map_desc_of(map_id)),
+                                                    conf: game_conf.as_ref(),
+                                                    bonus_abil: data
+                                                        .and_then(|d| d.bonus_abil.as_ref()),
+                                                    soft_version_date,
+                                                    game_gold: data.map_or(0, |d| d.game_gold),
+                                                    game_point: data.map_or(0, |d| d.game_point),
+                                                    job: data.map_or(0, |d| d.job),
+                                                    bonus_point: data.map_or(0, |d| d.bonus_point),
+                                                    game_time: None,
+                                                };
+                                                for w in enter::apply(&mut inputs, &wx) {
+                                                    glog!("WRN", "入图帧输入：{w}");
+                                                }
                                                 // N1（reviewer-3）：按该用户的 gate_idx 路由回**它自己那条**网关线
                                                 // （与上面 KickNoData 的 `route_to_gate` 完全同构）；找不到线号记 WRN，
                                                 // 绝不 `gates.values().next()` 静默挑一个。
@@ -779,12 +840,16 @@ fn sim_loop(
                                     }
                                 }
                                 None => {
-                                    glog!("WRN", "角色记录头部解析失败（{} 字节）", payload.len())
+                                    glog!(
+                                        "WRN",
+                                        "角色记录头部窗口解析失败（{} 字节；`LoadPlayerDataPacket`）",
+                                        payload.len()
+                                    )
                                 }
                             }
                         }
                     }
-                    None => still.push((qid, socket, gate_idx)),
+                    None => still.push((qid, socket, gate_idx, soft_version_date)),
                 }
             }
             w.outstanding = still;
