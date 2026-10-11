@@ -51,7 +51,15 @@ $Gates = @(
 if ($Stop) {
   if (-not (Test-Path $PidFile)) { Write-Output 'NOTHING_TO_STOP (无 pid 文件)'; return }
   $saved = Get-Content $PidFile -Raw | ConvertFrom-Json
-  foreach ($g in $saved.gates) {
+  # 本脚本写出的 pid 文件是**顶层数组**（`$started | ConvertTo-Json`），不是 `{gates:[…]}`；
+  # 原实现取 `$saved.gates` 恒为 $null，`-Stop` 停不掉任何进程（收工停栈实测踩到）。
+  # 两种形态都兼容：数组直接用；对象带 `gates` 则取其下的数组。
+  $entries = @($saved)
+  if ($entries.Count -eq 1 -and ($entries[0].PSObject.Properties.Name -contains 'gates')) {
+    $entries = @($entries[0].gates)
+  }
+  foreach ($g in $entries) {
+    if (-not $g -or $null -eq $g.pid) { continue }
     $p = Get-Process -Id $g.pid -ErrorAction SilentlyContinue
     if ($p) { Stop-Process -Id $g.pid -Force; Write-Output ("STOPPED {0} pid={1}" -f $g.name, $g.pid) }
     else { Write-Output ("ALREADY_GONE {0} pid={1}" -f $g.name, $g.pid) }
