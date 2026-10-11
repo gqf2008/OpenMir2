@@ -1,0 +1,12 @@
+SELFTEST_RED: 指向 127.0.0.1:17999（无监听），预期失败
+CONFIG: 3 bots, prefix=loadbot, target=127.0.0.1:17999, NewAccount=False, FixedNewChr=False
+BOTSRV_PID=30208 LOG=E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\c6\tests\botload\bots-20261011-174415.log
+PROGRESS spawned=0 login_ok=0/3 in_world=0/3 (src=load_stats.ndjson)
+PROGRESS spawned=3 login_ok=0/3 in_world=0/3 (src=load_stats.ndjson)
+PROGRESS spawned=3 login_ok=0/3 in_world=0/3 (src=load_stats.ndjson)
+PROGRESS spawned=3 login_ok=0/3 in_world=0/3 (src=load_stats.ndjson)
+PROGRESS spawned=3 login_ok=0/3 in_world=0/3 (src=load_stats.ndjson)
+PROGRESS spawned=3 login_ok=0/3 in_world=0/3 (src=load_stats.ndjson)
+PROGRESS spawned=3 login_ok=0/3 in_world=0/3 (src=load_stats.ndjson)
+PROGRESS spawned=3 login_ok=0/3 in_world=0/3 (src=load_stats.ndjson)
+SELFTEST_RED GREEN: 连不通 => 判失败成立（login_ok=0/3）

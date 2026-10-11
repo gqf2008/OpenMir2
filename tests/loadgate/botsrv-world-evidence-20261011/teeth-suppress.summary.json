@@ -1,0 +1,12 @@
+﻿{
+    "count":  3,
+    "spawned":  3,
+    "login_ok":  3,
+    "in_world":  2,
+    "success_rate_pct":  100,
+    "world_rate_pct":  66.67,
+    "require_world":  true,
+    "timeout_sec":  150,
+    "log":  "E:/tmp/openmir2-watch/c6f/wbev-teeth-suppress.log",
+    "stats":  "E:\\tmp\\openmir2-watch\\c6f\\wbev-teeth-suppress\\load_stats.ndjson"
+}

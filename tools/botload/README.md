@@ -296,3 +296,42 @@ T-6 只给 `TMap.CanMove` 补了上界守卫；`GetDoor`/`IsDoorOpen`/`CanFly`/`
 于是父进程要等 EOF，而 EOF 要等所有服务死 ⇒ **summary 已落盘、栈还在跑、命令永不返回**（104822/105943 与上一轮遗留的
 `stack_e2e` 进程都是它）。改为直接继承 stdout（`& powershell -File ...`，不建管道）后，两轮命令都自行退出。
 **注意**：若在外部用管道包 `stack_e2e`（如 `... | tee log`），同样会因服务进程继承管道而挂住——请重定向到文件。
+
+## 2026-10-11 第 6 轮（卡 `openmir2-botsrv-world-evidence`，T-12）：进世界证据只认本连接 + F3(a)/F4 收口
+
+原始件全在 `tests/loadgate/botsrv-world-evidence-20261011/`（含 README + ndjson + report.json + BotSrv 日志）。
+
+### 1. F4：挂机只对本会话已进世界的假人执行（`autoplay_pre_world` / `autoplay_skipped_pre_world`）
+
+`RunAutoPlay` 原来只看跨假人共享的 `MShare.MySelf != null`：任意一个假人进世界后，其余**未**进世界的假人也被挂机，
+脚本写在共享态上 ⇒ **按 bot 名记的挂机日志不能当作「该假人进世界」的证据**。T-12 把门换成**本会话** `RobotPlayer.InWorld`
+（`SM_LOGON` 时置位），并在 `load_stats.ndjson` 分账：
+
+- `autoplay_in_world`：本会话已进世界的挂机轮次（修复后只有它执行）；
+- `autoplay_pre_world`：本会话未进世界却仍跑挂机的轮次 —— **修复后必须为 0**；>0 只可能来自
+  `MIR2_BOT_LEGACY_SHARED_AUTOPLAY=1` 的「改前」对照组；
+- `autoplay_skipped_pre_world`：修复后未进世界被跳过的次数。
+
+同一批 20 假人：改后 `in_world=20/20, autoplay_pre_world=0, skipped=939`；改前对照组
+`in_world=11/20, autoplay_pre_world=529`（§见证据 README 的 §1/§4；20 而非 200 的原因=当时端口被 m2svr 真机夹具占用）。
+
+### 2. F3(a)：第三条假人 `CM_ADDNEWUSER` 后无应答 = T-9 的同一根因（已修）
+
+`CM_ADDNEWUSER` 的应答（`SM_NEWID_SUCCESS/FAIL`）与登录应答走**同一个** `DecodeMessagePacket` 分支；
+T-9 之前该分支的判据是跨假人共享的 `MShare.MySelf == null`，前一个假人进世界后就不再处理后续假人的应答
+⇒ 02:59 冒烟里第三条的注册应答被静默丢弃。换成**本会话** `!_inWorld` 后消失。观测（T-12）：`register_sent` /
+`register_send_closed`（注册包发出/丢弃）落 `load_stats.ndjson`，服务端回没回看既有 `ident_counts[504/505]`。
+证据：3 假人冒烟 `register_sent=3`、`ident_counts[504]=3`（`505=0`）、`in_world=3`。
+
+### 3. 牙齿（改坏必红）
+
+`run_bots.ps1` 新增 `-RequireWorld`：要求 `in_world == Count` 才 GREEN（默认关；M5 三档只有 ~10% 不能当默认阈值）。
+BotSrv 新增测试钩子 `MIR2_BOT_SUPPRESS_INWORLD=<0 基序号>`：命中的假人照常进世界，但**不计** `in_world`
+（`in_world_suppressed` 可见）。抹掉 3 假人里第 3 个的证据 ⇒ `in_world=2/3` ⇒ `-RequireWorld` **RED**；
+不抑制 ⇒ **GREEN**。`load_report.py summarize --world-threshold PCT` 提供同一判据（`selftest` 里也有它的牙齿项）。
+
+### 4. report.json 的在线/基数语义
+
+`online_bots`（= `in_world`）/ `online_base`（档位人数）/ `online_source`；另落
+`in_world_suppressed`、`autoplay_*`、`register_*`。**`in_world` 的语义 = 该假人本连接收到 `SM_LOGON`**（不是
+「本地切到 PlayScene」、也不是共享 `MShare`）。默认不按它判红，除非显式 `-RequireWorld` / `--world-threshold`。

@@ -370,8 +370,18 @@ namespace BotSrv.Player
             _probeX = x;
             _probeY = y;
             _inWorld = true;
+            if (LoadMetrics.ShouldSuppressInWorld(LoginId))
+            {
+                // 牙齿钩子（T-12）：本假人照常进世界，但**不计** in_world（抹掉“进世界证据”）。
+                LoadMetrics.InWorldSuppressed();
+                return;
+            }
             LoadMetrics.InWorld();
         }
+
+        /// <summary>本会话是否已收到服务端对本连接的 `SM_LOGON`（= 真的进了世界）。
+        /// F4（T-12）后，挂机/在线判据只看它，不看跨假人共享的 `MShare` 世界态。</summary>
+        public bool InWorld => _inWorld;
 
         public void Run()
         {
@@ -838,6 +848,14 @@ namespace BotSrv.Player
         public void EnsureAutoPlay()
         {
             if (MShare.MySelf == null)
+            {
+                return;
+            }
+            // F4（T-12）：只对**本会话已收到 SM_LOGON**（`_inWorld`）的假人重臂挂机。
+            // 旧行为只看跨假人共享的 `MShare.MySelf`：只要任意一个假人进了世界，其余未进世界的假人
+            // 也会被臂上挂机并写在共享态上 ⇒ 按 bot 名记的挂机日志不能当作“该假人进世界”的证据。
+            // `MIR2_BOT_LEGACY_SHARED_AUTOPLAY=1` 时保留旧行为，仅用于产出“改前”对照数字。
+            if (!_inWorld && !LoadMetrics.LegacySharedAutoPlay)
             {
                 return;
             }
@@ -4413,6 +4431,20 @@ namespace BotSrv.Player
             if (MShare.MySelf == null)
             {
                 return;
+            }
+            // F4（T-12）：本会话未进世界 ⇒ 不跑挂机（挂机层建立在跨假人共享的 `MShare` 上，跑出来的日志
+            // 不能当作“该假人进世界”的证据）。`MIR2_BOT_LEGACY_SHARED_AUTOPLAY=1` 保留旧行为做“改前”对照。
+            if (!_inWorld)
+            {
+                LoadMetrics.AutoPlayPreWorld();
+                if (!LoadMetrics.LegacySharedAutoPlay)
+                {
+                    return;
+                }
+            }
+            else
+            {
+                LoadMetrics.AutoPlayInWorld();
             }
             if (!MShare.OpenAutoPlay)
             {
