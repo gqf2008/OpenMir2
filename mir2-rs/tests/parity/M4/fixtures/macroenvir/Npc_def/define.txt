@@ -1,0 +1,8 @@
+#DEFINE QQQ ½ð±Ò
+#DEFINE PPP 5
+[@main]
+#IF
+checkgold 100
+#ACT
+give QQQ PPP
+break

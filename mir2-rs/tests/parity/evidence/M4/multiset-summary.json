@@ -1,0 +1,3845 @@
+{
+  "summary": {
+    "AllowBindNameList.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "AllowInheritItemList.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "AllowInheritTIItemList.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "AutoLogin.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "BotAutoWearEquipments.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "BotNoAttackList.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "BoxItem.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "CheckItemList.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "CustomItemNameColors.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "CustomMonNameColors.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "DenyAccountList.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "DenyChrNameList.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "DenyIPAddrList.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "DigItemList.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "DisTIList.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "DisableMakeItem.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "DisableMoveMap.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "DisableSellOffItem.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "DisableSendMsgList.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "DisableTakeOffList.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "EnableMakeItem.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "GameLogItemNameList.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "GuardList.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "GuildRankNameFilter.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "HintItemList.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "ItemBindAccount.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "ItemBindChrName.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "ItemBindIPaddr.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "ItemNameList.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MakeItem.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MapEvent.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MapInfo.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MapQuest.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MapQuest_def/Q001.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MapQuest_def/Q002.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MapQuest_def/Q003.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MapQuest_def/Q004.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MapQuest_def/Q005.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MapQuest_def/Q006.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MapQuest_def/Q007.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MapQuest_def/Q008.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MapQuest_def/Q009.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MapQuest_def/Q010.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MapQuest_def/QManage - 副本.txt": {
+      "rows_a": 4,
+      "rows_b": 4,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MapQuest_def/QManage.txt": {
+      "rows_a": 9,
+      "rows_b": 9,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/LEGM2.CC假人NPC/假人上线NPC-jiaren.txt": {
+      "rows_a": 240,
+      "rows_b": 240,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/LEGM2.CC假人NPC/假人开始点我-jiaren.txt": {
+      "rows_a": 12,
+      "rows_b": 12,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/QChatMission-0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/QFunction-0 - 副本.txt": {
+      "rows_a": 4,
+      "rows_b": 4,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/QFunction-0.txt": {
+      "rows_a": 8,
+      "rows_b": 8,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/QMapEvent-0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/QMission-0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/举证-0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/举证-3.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/举证-GA0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/任务NPC/任务-3.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/任务NPC/商店-Q016.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/任务NPC/客栈-0148.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/任务NPC/打铁-0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/任务NPC/武士-0114.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/任务NPC/牢头-B346.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/任务NPC/老人-1.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/任务NPC/衣服-2.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/任务NPC/迷宫-Q011.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/任务NPC/铁匠-0120.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/传送员/出封魔-4.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/传送员/出白日门-11.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/传送员/封魔谷传送员-4.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/传送员/庄园-GA0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/传送员/来客-D701.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/传送员/比奇省传送员-0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/传送员/白日门传送员-11.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/传送员/盟重省传送员-3.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/传送员/苍月岛传送员-5.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/传送员/进封魔-1.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/传送员/进白日门-1.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/传送员◆幻境/出封魔-4.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/传送员◆幻境/出白日门-11.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/传送员◆幻境/封魔谷传送员-4.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/传送员◆幻境/庄园-GA0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/传送员◆幻境/来客-D701.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/传送员◆幻境/比奇省传送员-0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/传送员◆幻境/白日门传送员-11.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/传送员◆幻境/盟重省传送员-3.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/传送员◆幻境/苍月岛传送员-5.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/传送员◆幻境/进封魔-1.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/传送员◆幻境/进白日门-1.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/元宝充值-0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/元宝充值-3.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/功能NPC/争霸-ZM6.txt": {
+      "rows_a": 3,
+      "rows_b": 3,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/功能NPC/会战-3.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/功能NPC/勋章-0146.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/功能NPC/回收-3.txt": {
+      "rows_a": 44,
+      "rows_b": 44,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/功能NPC/属性-H106.TXT": {
+      "rows_a": 32,
+      "rows_b": 32,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/功能NPC/担保-DB.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/功能NPC/桃源-N109.txt": {
+      "rows_a": 3,
+      "rows_b": 3,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/功能NPC/比武-GA2.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/功能NPC/监狱-0147.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/功能NPC/真爱-G002.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/功能NPC/真爱666-G002.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/功能NPC/空白-3.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/功能NPC/老人-E603.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/功能NPC/赤血-R001.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/功能NPC/铸造-B351.txt": {
+      "rows_a": 38,
+      "rows_b": 38,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/封魔谷/恶魔保管员-b347.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/封魔谷/恶魔修理师-d2008.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/封魔谷/恶魔布衣-B345.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/封魔谷/恶魔杂货匠-4.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/封魔谷/恶魔武器-4.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/封魔谷/恶魔药剂师-b343.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/封魔谷/恶魔首饰-B344.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/封魔谷/月老-M101.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/幻境-影之道/幻境_仓库管理员-H003.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/幻境-影之道/幻境_仓库管理员-H007.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/幻境-影之道/幻境_幻境向导-H003.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/幻境-影之道/幻境_幻境小贩-H003.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/幻境-影之道/幻境_幻境小贩-H007.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/幻境-影之道/影之道_仓库保管员-H203.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/幻境-影之道/影之道_幻境小贩-H203.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/幻境-影之道/影传送-h001.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/新手接待员-0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/比奇城/万能-0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/比奇城/不法-DM001.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/比奇城/不法-DM011.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/比奇城/书店-0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/比奇城/卫家店-0103.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/比奇城/夏家-0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/比奇城/安家布衣-0106.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/比奇城/小书-0132.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/比奇城/小药-0119.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/比奇城/戒指店-0105.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/比奇城/手镯店-0105.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/比奇城/杂货-0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/比奇城/肉店-0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/比奇城/蛇仓-2.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/比奇城/蛇杂-2.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/比奇城/项链店-0105.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/比奇城/麦家铺子-0125.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/沙巴克/仓库-0152.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/沙巴克/小贩-3.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/沙巴克/布衣店-0155.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/沙巴克/戒指店-0154.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/沙巴克/手镯店-0154.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/沙巴克/武器铺-0151.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/沙巴克/药店-0153.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/沙巴克/项链店-0154.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/沙巴克铁匠-3.txt": {
+      "rows_a": 8,
+      "rows_b": 8,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/白日门/万能-12.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/白日门/万能-D1004.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/白日门/书店-1004.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/白日门/仓库-11.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/白日门/服装-1003.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/白日门/杂货-1007.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/白日门/武器-1001.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/白日门/药店-1006.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/白日门/首饰-1005.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/盟重土城/书店-0161.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/盟重土城/仓库-0145.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/盟重土城/头盔店-0149.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/盟重土城/张家布衣-0149.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/盟重土城/彩票-3.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/盟重土城/悦来客栈-3.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/盟重土城/戒指店-0158.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/盟重土城/手套店-0149.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/盟重土城/手镯店-0158.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/盟重土城/流浪汉-3.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/盟重土城/石墓阵-D71650.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/盟重土城/石墓阵-D71651.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/盟重土城/石墓阵-D71652.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/盟重土城/石墓阵-D71653.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/盟重土城/祖玛阁-D5063.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/盟重土城/罗家铺子-0160.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/盟重土城/肉店-3.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/盟重土城/药店-3.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/盟重土城/裁判-G003.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/盟重土城/足球-3.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/盟重土城/铁匠铺-0159.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/盟重土城/项链店-0158.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/苍月岛/书店-5.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/苍月岛/仓库-5.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/苍月岛/布料店-5.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/苍月岛/杂货店-5.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/苍月岛/武器店-5.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/苍月岛/药店-5.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/苍月岛/首饰店-5.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/赌博NPC/赌场-B013.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Market_Def/赌博NPC/赌庄-3.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MerChant.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MiniMap.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Missions.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonAttackTrigger.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonDropLimitList.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonGen.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/B/暗之牛魔王.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/B/牛魔王.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/B/白野猪.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/B/白野猪0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/B/祖玛卫士3.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/B/祖玛弓箭手3.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/B/祖玛教主.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/B/祖玛雕像3.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/B/血僵尸.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/B/血僵尸0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/B/邪恶毒蛇.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/B/黄泉教主.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/僵尸1.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/僵尸10.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/僵尸2.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/僵尸20.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/僵尸3.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/僵尸30.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/僵尸4.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/僵尸40.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/僵尸5.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/僵尸50.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/千年树妖.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/半兽人.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/半兽勇士.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/半兽勇士0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/半兽勇士1.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/半兽战士.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/半兽统领.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/双头血魔.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/双头金刚.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/命运教主.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/地狱犬.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/地藏魔王.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/多钩猫.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/多钩猫王.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/大老鼠.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/大老鼠0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/天狼蜘蛛.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/天狼蜘蛛0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/宝箱.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/宝箱0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/尸王.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/尸王1.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/尸王2.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/山洞蝙蝠.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/山洞蝙蝠0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/巨型多角虫.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/巨型蠕虫.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/巨型蠕虫0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/幻影蜘蛛.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/恶灵僵尸.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/恶灵僵尸0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/恶灵尸王.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/恶灵尸王0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/掷斧骷髅.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/掷斧骷髅0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/暗之双头血魔.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/暗之双头金刚.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/暗之沃玛教主.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/暗之牛魔王.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/暗之虹魔教主.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/暗之触龙神.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/暗之骷髅精灵.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/暗之黄泉教主.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/暗黑战士.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/暗黑战士0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/暴牙蜘蛛.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/暴牙蜘蛛0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/月魔蜘蛛.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/森林雪人.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/楔蛾.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/楔蛾王.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/毒蜘蛛.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/沃玛勇士.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/沃玛勇士0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/沃玛卫士.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/沃玛卫士1.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/沃玛战士.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/沃玛战士0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/沃玛战将.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/沃玛战将0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/沃玛教主.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/沃玛教主1.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/洞蛆.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/火焰沃玛.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/火焰沃玛0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/牛头魔.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/牛头魔0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/牛魔侍卫.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/牛魔侍卫0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/牛魔将军.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/牛魔战士.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/牛魔战士0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/牛魔斗士.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/牛魔斗士0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/牛魔法师.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/牛魔法师0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/牛魔王.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/牛魔祭司.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/牛魔祭司0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/狼.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/猎鹰.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/电僵王.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/白野猪.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/白野猪0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/白野猪1.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/白野猪9.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/盔甲虫.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/石墓尸王.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/祖玛卫士.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/祖玛卫士0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/祖玛卫士00.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/祖玛卫士3.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/祖玛卫士9.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/祖玛弓箭手.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/祖玛弓箭手0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/祖玛弓箭手3.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/祖玛弓箭手9.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/祖玛教主.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/祖玛雕像.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/祖玛雕像0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/祖玛雕像3.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/祖玛雕像9.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/神鹰.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/稻草人.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/稻草人1.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/稻草人9.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/粪虫.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/红蛇.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/红蛇王.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/红野猪.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/红野猪0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/红野猪3.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/羊.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/花吻蜘蛛.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/花吻蜘蛛0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/虎蛇.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/虎蛇王.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/虹魔教主.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/虹魔教主0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/虹魔猪卫.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/虹魔猪卫0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/虹魔蝎卫.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/虹魔蝎卫0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/蜈蚣.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/蜈蚣0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/蜈蚣王.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/蝎子.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/蝎子王.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/蝎蛇.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/蝎蛇0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/蝎蛇3.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/蝙蝠.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/血僵尸.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/血僵尸0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/血僵尸9.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/血巨人.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/血巨人0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/触龙神.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/赤月恶魔.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/跳跳蜂.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/跳跳蜂0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/邪恶毒蛇.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/邪恶毒蛇1.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/邪恶蜈蚣1.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/邪恶蜈蚣2.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/邪恶钳虫.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/邪恶钳虫1.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/重装使者.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/钉耙猫.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/钉耙猫王.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/钢牙蜘蛛.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/钳虫.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/钳虫0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/雪人王.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/食人花.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/骷髅.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/骷髅0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/骷髅刀斧手.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/骷髅刀斧手0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/骷髅弓箭手.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/骷髅弓箭手0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/骷髅战士.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/骷髅战士0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/骷髅战将.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/骷髅战将0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/骷髅王.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/骷髅精灵.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/骷髅精灵1.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/骷髅锤兵.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/骷髅锤兵0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/骷髅长枪兵.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/骷髅长枪兵0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/魔龙刀兵.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/魔龙射手.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/魔龙教主2.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/魔龙破甲兵.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/鸡.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/鸡1.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/鹿.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/鹿1.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/黄泉教主.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/黑色恶蛆.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/黑色恶蛆0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/黑野猪.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/黑野猪0.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/黑野猪3.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonItems/黑锷蜘蛛.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "MonSpAbilList.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "NoClearMonList.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "NoHptoExpMonList.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Npc_Def/比奇国王-0122.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Npc_Def/沙巴克城堡管理-0150.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Npc_Def/老人-3.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Npcs.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "OprateOnDiskCmd.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "PetPickItem.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "PickItemRule.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/LEGM2.CC假人系统/假人个人变量.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/LEGM2.CC假人系统/假人充值公式.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/LEGM2.CC假人系统/假人充值抽签.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/LEGM2.CC假人系统/假人充值金额.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/LEGM2.CC假人系统/假人全局变量.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/LEGM2.CC假人系统/假人初始化设置.txt": {
+      "rows_a": 3,
+      "rows_b": 3,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/LEGM2.CC假人系统/假人名单列表 - 副本.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/LEGM2.CC假人系统/假人名单列表.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/LEGM2.CC假人系统/假人回收公式.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/LEGM2.CC假人系统/假人回盟重省.txt": {
+      "rows_a": 3,
+      "rows_b": 3,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/LEGM2.CC假人系统/假人登录脚本.txt": {
+      "rows_a": 30,
+      "rows_b": 30,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/LEGM2.CC假人系统/假人随机充值.txt": {
+      "rows_a": 4,
+      "rows_b": 4,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/LEGM2.CC假人系统/假人随机回收.txt": {
+      "rows_a": 6,
+      "rows_b": 6,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/LEGM2.CC假人系统/假人随机地图.txt": {
+      "rows_a": 6,
+      "rows_b": 6,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/LEGM2.CC假人系统/回收装备数量.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/01.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/02.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/03.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/04.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/05.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/06.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/07.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/08.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/09.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/1.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/10.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/100.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/1000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/10000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/2.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/20.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/200.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/2000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/3.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/30.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/300.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/3000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/4.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/40.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/400.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/4000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/5.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/50.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/500.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/5000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/6.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/60.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/600.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/6000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/7.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/70.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/700.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/7000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/8.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/80.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/800.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/8000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/9.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/90.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/900.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/9000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/freenet/元宝.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/临时名单/压注单双.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/临时名单/压注大小.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/临时名单/压注点数.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/临时名单/限制下注.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/代练系统/代练.txt": {
+      "rows_a": 3,
+      "rows_b": 3,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/代练系统/代练数据.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay01.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay02.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay03.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay04.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay05.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay06.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay07.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay08.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay085.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay09.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay1.5.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay1.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay10.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay100.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay1000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay10000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay2.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay20.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay200.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay2000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay20000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay3.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay30.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay300.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay3000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay30000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay4.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay40.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay400.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay4000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay40000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay5.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay50.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay500.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay5000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay50000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay6.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay60.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay600.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay6000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay60000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay7.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay70.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay700.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay7000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay70000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay8.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay80.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay800.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay8000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay80000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay9.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay90.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay900.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay9000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/pay90000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/冲值元宝/元宝.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/命运之刃名单.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/圣诞名单.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/数据文件/BOSS.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/数据文件/二级密码名单.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/数据文件/二级密码数据.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/数据文件/天下第一奖励.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/数据文件/寻宝Save.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/数据文件/巨人.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/数据文件/开封几率Save.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/数据文件/恶灵.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/数据文件/教主.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/数据文件/新手.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/数据文件/杀人次数Save.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/数据文件/死亡次数Save.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/数据文件/沃玛.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/数据文件/牛魔.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/数据文件/祖玛.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/数据文件/经验次数Save.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/数据文件/蜈蚣.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/数据文件/赤月.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/数据文件/野猪.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/月卡/月卡名单.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/月卡/月卡系统.txt": {
+      "rows_a": 3,
+      "rows_b": 3,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/月卡/月卡记录.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/游戏登陆/GM登陆记录.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/游戏登陆/登陆脚本.txt": {
+      "rows_a": 3,
+      "rows_b": 3,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/游戏触发/一筹码.txt": {
+      "rows_a": 3,
+      "rows_b": 3,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/游戏触发/五筹码.txt": {
+      "rows_a": 3,
+      "rows_b": 3,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/游戏触发/十筹码.txt": {
+      "rows_a": 3,
+      "rows_b": 3,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/神秘洞口名单.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/红包系统/个人变量.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/红包系统/固定变量.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/红包系统/行会变量.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/藏宝阁名单.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/01.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/02.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/03.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/04.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/05.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/06.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/07.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/08.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/09.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/1.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/10.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/100.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/1000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/10000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/100000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/2.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/20.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/200.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/2000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/20000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/3.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/30.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/300.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/3000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/30000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/4.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/40.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/400.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/4000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/40000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/5.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/50.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/500.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/5000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/50000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/6.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/60.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/600.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/6000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/60000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/7.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/70.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/700.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/7000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/70000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/8.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/80.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/800.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/8000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/80000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/9.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/90.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/900.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/9000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/90000.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/锋锐充值/freenet.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "QuestDiary/黑铁手套名单.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "RefineItem.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "Robot.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "SaleItemList.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "ShopItemList.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "StartPoint.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "UnForceMaster.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "UnMarry.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "UnMaster.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "UnbindList.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "UserCmd.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "__stats__": {
+      "rows_a": 14,
+      "rows_b": 14,
+      "only_a": 0,
+      "only_b": 0
+    },
+    "adminlist.txt": {
+      "rows_a": 2,
+      "rows_b": 2,
+      "only_a": 0,
+      "only_b": 0
+    }
+  },
+  "mismatch_hashes": 0
+}

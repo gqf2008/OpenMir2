@@ -1,0 +1,17 @@
+$ python tools/botload/verify_artifacts.py tests/loadgate/load-20261011-155529/artifacts.sha256.json tests/loadgate/load-20261011-162213/artifacts.sha256.json tests/loadgate/load-20261011-165805/artifacts.sha256.json
+[OK] tests/loadgate/load-20261011-155529/artifacts.sha256.json  30/30 匹配
+[OK] tests/loadgate/load-20261011-162213/artifacts.sha256.json  30/30 匹配
+[OK] tests/loadgate/load-20261011-165805/artifacts.sha256.json  45/45 匹配
+verify_artifacts: OK 3/3 清单, 105/105 文件 0 mismatch 期望
+rc=0
+
+$ git status --short
+ M tests/loadgate/load-20261011-155529/artifacts.sha256.json
+ M tests/loadgate/load-20261011-162213/artifacts.sha256.json
+ M tests/loadgate/load-20261011-165805/artifacts.sha256.json
+?? tests/loadgate/.gitattributes
+?? tests/loadgate/artifacts-hash-repro-20261012/
+?? tools/botload/verify_artifacts.py
+
+$ git ls-files --eol tests/loadgate | awk 汇总
+    222 i/lf w/lf attr/-text

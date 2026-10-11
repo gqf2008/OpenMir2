@@ -1,0 +1,2 @@
+$ python -I tests/parity/m3/scoped_diff.py diff lines-rust.jsonl lines-cs.jsonl
+GREEN: 作用域内 640 张表逐行一致

@@ -1,0 +1,24 @@
+== 红检：改掉被引用件的一个字节 ==
+$ target = tests/loadgate/load-20261011-165805/run-1/tier-200/report.json
+flipped byte[1808]: 0x61 -> 0x60; new sha256=90be6b9b0aac5535a99b270ddf85a805079e570873272ed196addd0a5b94e1a7
+
+$ python tools/botload/verify_artifacts.py <E manifest>
+[MISMATCH] run-1/tier-200/report.json
+           期望 eaf6ff602d9e53a2f42083c7ed96b96d5066796f4362730dbef01c2501a02268
+           实际 90be6b9b0aac5535a99b270ddf85a805079e570873272ed196addd0a5b94e1a7
+[FAIL] tests/loadgate/load-20261011-165805/artifacts.sha256.json  44/45 匹配
+verify_artifacts: FAIL 0/1 清单, 44/45 文件 0 mismatch 期望
+rc=1
+
+$ git status --short (应显示该件被改)
+ M tests/loadgate/load-20261011-165805/run-1/tier-200/report.json
+
+$ git checkout -- tests/loadgate/load-20261011-165805/run-1/tier-200/report.json   # 还原
+$ git status --short (还原后应为空)
+
+$ python tools/botload/verify_artifacts.py 三个清单（还原后必须 0 mismatch）
+[OK] tests/loadgate/load-20261011-155529/artifacts.sha256.json  30/30 匹配
+[OK] tests/loadgate/load-20261011-162213/artifacts.sha256.json  30/30 匹配
+[OK] tests/loadgate/load-20261011-165805/artifacts.sha256.json  45/45 匹配
+verify_artifacts: OK 3/3 清单, 105/105 文件 0 mismatch 期望
+rc=0

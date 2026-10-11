@@ -240,8 +240,35 @@ conn/tick/internal 都 GREEN；否则该档 RED。
 - **F5（探针落点偏置）**：已写入 `tools/botload/README.md》（探针样本缺口与落点偏置）。
 - **F9（产物 `{file,sha256}` 清单）**：已落地——`load_gate.ps1` 原生产出 `artifacts.sha256.json` 并写进
   summary 的 `artifacts`（E 轮原生；A/C 早于 F9，用同逻辑回填，产物未变）。
+- **F9-1（清单在全新检出上假 mismatch）**：**已修**——`tests/loadgate/.gitattributes` 的 `* -text` 冻结字节，
+  三个清单按**提交字节**重算，并新增复核器 `tools/botload/verify_artifacts.py`；口径与复核命令见下节
+  《产物清单哈希口径与复核》。
 - **运行纪律**：本机是共享机器，load gate 应尽量在**独占窗口**跑；并行跑时必须在证据里注明
   （A 与 m2svr/wbevy 并行、C 与 wbevy 并行、E 与 wbevy 并行——均已在 `hostload.ndjson`/本表标注负载）。
+
+### 产物清单哈希口径与复核（F9-1 修复，2026-10-12）
+
+**口径（单一真源）**：`artifacts.sha256.json` 里每个 `sha256` = 该文件**原始字节**的 SHA256，
+**不做任何 EOL / 编码归一化**。
+
+为让该口径在**任何检出上可复现**，`tests/loadgate/.gitattributes` 用 `* -text` **冻结字节**
+（git 原样存、原样检出，不受 `core.autocrlf` 影响）。修复前：清单按生成当时的**工作树字节**计算，
+而 `hostload.ndjson` / `mem.ndjson` 等工作树是 CRLF、git 却按 LF 存/检出 ⇒ 全新检出上重算得到
+**18/45 假 mismatch**（E 轮；A/C 各 9/30）。三个清单已按**提交字节**重算（只改 `sha256` 值，
+被引用的产物字节一个没动）。
+
+**复核命令（任意检出，第三方可独立跑）**：
+
+```sh
+python tools/botload/verify_artifacts.py tests/loadgate/load-*/artifacts.sha256.json
+# 期望：OK 3/3 清单, 105/105 文件，0 mismatch，rc=0
+```
+
+牙齿（改坏必红）：改掉任一被引用件的一个字节 ⇒ 该条必须 `[MISMATCH]`；
+`git checkout -- <件>` 还原后回到 0。原始输出：`tests/loadgate/artifacts-hash-repro-20261012/`。
+
+> **注意**：`load_gate_summary.json` 内嵌的 `artifacts` 数组是**修复前**口径（工作树字节）的历史快照，
+> **不要**拿它做检出核对；权威清单 = 同目录 `artifacts.sha256.json`（按提交字节 + `-text` 冻结）。
 
 ## 残余丢包方向（C6 第 5 轮，owner 裁决 `11dbde39` 的 must_first）
 
