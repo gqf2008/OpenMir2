@@ -8,7 +8,9 @@
 //!
 //! 本切片做（认证闭环需要的那两条）：
 //! 1. `SS_OPENSESSION`(100) → `GetPasswdSuccess`（`:241-265`）→ **填准入表**（`NewSession`）；
-//! 2. `SS_CLOSESESSION`(101) → `GetCancelAdmission`（`:267-281`）→ **删准入**（`DelSession`）。
+//! 2. `SS_CLOSESESSION`(101) → `GetCancelAdmission`（`:267-281`）→ **删准入**（`DelSession`），
+//!    并把被删的 `Account/SessionID` 作为 [`KickRequest`] 交给 sim 线程去**账号级顶号**
+//!    （oracle `DelSession` 的下一句 `NetChannel.KickUser`，`AuthenticationService.cs:319`）。
 //!
 //! 断线：`DataSocketDisconnect`（`:427-436`）会 **`ClearSession()`（清空整张表）** 并记错误日志——照抄。
 //!
@@ -41,6 +43,18 @@ use mir2_protocol::messages::{SS_CLOSESESSION, SS_OPENSESSION};
 use mir2_shared::hutil32::{arrest_string_ex_ref, get_valid_str3, str_to_int, ArrestWrite};
 
 use crate::auth::AdmissionStore;
+use crate::GateEvent;
+
+/// 一条**账号级顶号**请求（`SS_CLOSESESSION` 删掉的会话）。
+///
+/// oracle `DelSession`（`AuthenticationService.cs:299-327`）删掉 `AccountSession` 后调
+/// `M2Share.NetChannel.KickUser(sAccount, sessionId, sessInfo?.PayMode ?? 0)`；
+/// 注意 `sessInfo` 在 `RemoveAt` 后已被置 `null` ⇒ `payMode` **恒为 0**（永远发 `sKickUserMsg`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KickRequest {
+    pub account: String,
+    pub session_id: i32,
+}
 
 /// 字段分隔符：`HUtil32.Backslash = '/'`（`HUtil32.cs:12`）。
 const DIV: [char; 1] = ['/'];
@@ -50,10 +64,18 @@ const DIV: [char; 1] = ['/'];
 /// 逐字照 `Run()`（`:149-199`）的循环：取 `(`…`)` 之间那一段；取不到就停；
 /// 处理完再看剩余里还有没有 `)`，没有就停；最后把**剩余**放回缓冲（`:190-197`）。
 /// 注意 `ArrestStringEx` 的怪癖：闭合标记之后的内容才是"返回的剩余"（见 `hutil` 的注释）。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct IdsDrain {
+    /// 本次处理的会话通知条数（`SS_OPENSESSION`/`SS_CLOSESESSION` 命中数）。
+    pub handled: usize,
+    /// 账号级顶号请求（`SS_CLOSESESSION` 删到会话时一条）。
+    pub kicks: Vec<KickRequest>,
+}
+
 #[must_use]
-pub fn drain_messages(buf: &mut String, store: &mut AdmissionStore) -> usize {
+pub fn drain_messages(buf: &mut String, store: &mut AdmissionStore) -> IdsDrain {
     let mut text = std::mem::take(buf);
-    let mut handled = 0usize;
+    let mut out = IdsDrain::default();
     loop {
         // 三态照抄 `:153-157`：`ArrestStringEx(sSocketText, "(", ")", ref sData)` ——
         // `Value(空)`（找不到 `(` 的越界缺陷分支）与 `Unchanged`（无闭合 `)`）都让 `sData` 不是"新截出的非空内容"
@@ -67,18 +89,18 @@ pub fn drain_messages(buf: &mut String, store: &mut AdmissionStore) -> usize {
                 break;
             }
         };
-        handled += usize::from(dispatch(&arrested, store));
+        out.handled += usize::from(dispatch(&arrested, store, &mut out.kicks));
         text = rest;
         if !text.contains(')') {
             break;
         }
     }
     *buf = text;
-    handled
+    out
 }
 
 /// 单条消息的分派（`:158-184` 的 switch）。返回是否被本切片处理。
-fn dispatch(arrested: &str, store: &mut AdmissionStore) -> bool {
+fn dispatch(arrested: &str, store: &mut AdmissionStore, kicks: &mut Vec<KickRequest>) -> bool {
     let (code_str, body) = get_valid_str3(arrested, &DIV);
     match u16::try_from(str_to_int(&code_str, 0)).unwrap_or(u16::MAX) {
         SS_OPENSESSION => {
@@ -86,7 +108,7 @@ fn dispatch(arrested: &str, store: &mut AdmissionStore) -> bool {
             true
         }
         SS_CLOSESESSION => {
-            get_cancel_admission(&body, store);
+            get_cancel_admission(&body, store, kicks);
             true
         }
         other => {
@@ -124,7 +146,10 @@ fn get_passwd_success(body: &str, store: &mut AdmissionStore) {
 
 /// `GetCancelAdmission`（`:267-281`）：体是 `account/sessionId`，而 C# 取的是 `GetValidStr3` 的**返回值**
 /// （= 第二段）当 sessionId（首段给 `sC` 后丢弃）。
-fn get_cancel_admission(body: &str, store: &mut AdmissionStore) {
+///
+/// 删到会话后还要接**账号级顶号**（`DelSession` 的下一句 `NetChannel.KickUser`，`:319`）：
+/// 把被删的账号/会话号交给 sim 线程去发 `SM_SYSMESSAGE` + 软关旧会话（见 `main.rs::handle_kick_account`）。
+fn get_cancel_admission(body: &str, store: &mut AdmissionStore, kicks: &mut Vec<KickRequest>) {
     let (_account, session_id_str) = get_valid_str3(body, &DIV);
     let session_id = str_to_int(&session_id_str, 0);
     let removed = store.del_session(session_id);
@@ -137,16 +162,30 @@ fn get_cancel_admission(body: &str, store: &mut AdmissionStore) {
             "不在表里"
         }
     );
+    if let Some(sess) = removed {
+        kicks.push(KickRequest {
+            account: sess.account,
+            session_id: sess.session_id,
+        });
+    }
 }
 
 /// 起 IDS 链路（照 `Start()` `:36-54`：连不上**只记日志、不退出进程**）。
-pub async fn run_ids_link(ids_addr: String, ids_port: u16, store: Arc<Mutex<AdmissionStore>>) {
+///
+/// `ev_tx`：把账号级顶号请求（`SS_CLOSESESSION` 删到会话）交给 sim 线程
+/// （`GateEvent::KickAccount` ⇒ `handle_kick_account`）。
+pub async fn run_ids_link(
+    ids_addr: String,
+    ids_port: u16,
+    store: Arc<Mutex<AdmissionStore>>,
+    ev_tx: std::sync::mpsc::Sender<GateEvent>,
+) {
     loop {
         match tokio::net::TcpStream::connect((ids_addr.as_str(), ids_port)).await {
             Ok(sock) => {
                 sock.set_nodelay(true).ok();
                 glog_ids!("INF", "登录服务器[{ids_addr}:{ids_port}]连接成功...");
-                if let Err(e) = read_loop(sock, &store).await {
+                if let Err(e) = read_loop(sock, &store, &ev_tx).await {
                     glog_ids!("ERR", "登录服务器链路结束：{e:#}");
                 }
                 // `DataSocketDisconnect`（`:427-436`）：**清空整张准入表** + 记错误
@@ -165,6 +204,7 @@ pub async fn run_ids_link(ids_addr: String, ids_port: u16, store: Arc<Mutex<Admi
 async fn read_loop(
     mut sock: tokio::net::TcpStream,
     store: &Arc<Mutex<AdmissionStore>>,
+    ev_tx: &std::sync::mpsc::Sender<GateEvent>,
 ) -> anyhow::Result<()> {
     use tokio::io::AsyncReadExt;
     let mut buf = Vec::with_capacity(4096);
@@ -178,9 +218,21 @@ async fn read_loop(
         // `DataSocketRead`（`:56-68`）：`HUtil32.GetString(buffer, 0, len)` = GBK 解码
         let (chunk, _, _) = encoding_rs::GBK.decode(&buf[..n]);
         text.push_str(&chunk);
-        let handled = drain_messages(&mut text, &mut store.lock().expect("准入表锁被毒化"));
-        if handled > 0 {
-            glog_ids!("DBG", "IDS: 处理 {handled} 条会话通知");
+        let drained = drain_messages(&mut text, &mut store.lock().expect("准入表锁被毒化"));
+        if drained.handled > 0 {
+            glog_ids!("DBG", "IDS: 处理 {} 条会话通知", drained.handled);
+        }
+        for k in drained.kicks {
+            // 送达 sim 线程；sends 不会阻塞（`std::sync::mpsc::channel` 无界）。
+            if ev_tx
+                .send(GateEvent::KickAccount {
+                    account: k.account,
+                    session_id: k.session_id,
+                })
+                .is_err()
+            {
+                glog_ids!("WRN", "IDS: sim 事件通道已关闭，顶号请求丢弃");
+            }
         }
     }
 }
@@ -193,7 +245,7 @@ mod tests {
     fn open_session_message_fills_admission() {
         let mut store = AdmissionStore::new();
         let mut buf = "(100/loadbot1/2/0/1/127.0.0.1/3600)".to_string();
-        assert_eq!(drain_messages(&mut buf, &mut store), 1);
+        assert_eq!(drain_messages(&mut buf, &mut store).handled, 1);
         assert!(buf.is_empty(), "整条被消费 ⇒ 缓冲清空");
         let a = store.get_admission("loadbot1", 2).expect("应已登记");
         assert_eq!(a.session.ipaddr, "127.0.0.1");
@@ -204,27 +256,45 @@ mod tests {
         assert_eq!(a.session.pay_mode, 1);
     }
 
+    /// `SS_CLOSESESSION` 除了删准入，还要产出**账号级顶号请求**（`DelSession` ⇒ `KickUser`）。
     #[test]
-    fn close_session_message_removes_admission() {
+    fn close_session_message_removes_admission_and_emits_kick() {
         let mut store = AdmissionStore::new();
         let mut buf = "(100/loadbot1/2/0/1/ip/0)(101/loadbot1/2)".to_string();
-        assert_eq!(drain_messages(&mut buf, &mut store), 2, "两条一起处理");
-        assert!(buf.is_empty());
+        let d = drain_messages(&mut buf, &mut store);
+        assert_eq!(d.handled, 2, "两条一起处理（100 无 kick、101 有 kick）");
         assert!(
             store.get_admission("loadbot1", 2).is_none(),
             "101 应删掉登记"
         );
+        // 顶号请求带上被删会话的 account/session_id（顺序：账号/会话号，与 `DelSession` 一致）。
+        assert_eq!(
+            d.kicks,
+            vec![KickRequest {
+                account: "loadbot1".to_string(),
+                session_id: 2
+            }]
+        );
+        assert!(buf.is_empty());
+    }
+
+    /// 未命中的 `SS_CLOSESESSION`（表里没有该 sessionId）不得产出顶号请求。
+    #[test]
+    fn close_session_miss_emits_no_kick() {
+        let mut store = AdmissionStore::new();
+        let mut buf = "(101/nobody/99)".to_string();
+        assert!(drain_messages(&mut buf, &mut store).kicks.is_empty());
     }
 
     #[test]
     fn partial_frame_stays_in_buffer() {
         let mut store = AdmissionStore::new();
         let mut buf = "(100/loadbot1/2/0/1/ip/0)(100/loadbo".to_string();
-        assert_eq!(drain_messages(&mut buf, &mut store), 1);
+        assert_eq!(drain_messages(&mut buf, &mut store).handled, 1);
         assert_eq!(buf, "(100/loadbo", "未闭合的那段必须留在缓冲里");
         // 补齐后能被处理
         buf.push_str("t2/3/1/0/ip2/60)");
-        assert_eq!(drain_messages(&mut buf, &mut store), 1);
+        assert_eq!(drain_messages(&mut buf, &mut store).handled, 1);
         assert!(store.get_admission("loadbot2", 3).is_some());
         assert!(
             store.get_admission("loadbot2", 3).unwrap().is_admitted(),
@@ -238,14 +308,14 @@ mod tests {
         let mut store = AdmissionStore::new();
         let mut buf = "(104/whatever)(1/2/3)".to_string();
         assert_eq!(
-            drain_messages(&mut buf, &mut store),
+            drain_messages(&mut buf, &mut store).handled,
             0,
             "未登记的消息号不计入"
         );
         assert!(buf.is_empty());
         // 不含 `(` 的垃圾：照 oracle 的越界分支 ⇒ 整段被丢（`:527-545` 的 catch 语义）
         let mut garbage = "abc".to_string();
-        assert_eq!(drain_messages(&mut garbage, &mut store), 0);
+        assert_eq!(drain_messages(&mut garbage, &mut store).handled, 0);
         assert!(garbage.is_empty(), "照 oracle 会丢干净");
     }
 }
