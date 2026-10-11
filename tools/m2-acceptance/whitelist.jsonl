@@ -1,0 +1,21 @@
+# M2 验收③「同序列出包 diff」白名单（s2c_diff.py --whitelist）
+# 语义：差集必须为 0，或逐条落在这里（§6.0-3：差异点 / 为什么无害 / 谁审的）。
+# 每条必须带 reason + reviewer（`load_whitelist` 缺任一即脚本直接 exit 1）。
+#
+# owner §25.3 裁决原文只点了**两条根因**：`ident=46 field=param`、`ident=50 field=series`。
+# 但 `s2c_diff.py` 对**头部字段**的差异会同时产出一条逐字段行（param/series）**和**
+# 一条同一字节的 `raw_hex` 行（raw_hex 是整帧编码后的投影；头部字段的差异必然在 raw_hex 里
+# 再出现一次）。为了**不靠改判据/不外扩白名单字段**把 ③ 判绿，这里把同一根因对应的两条
+# 工具输出都显式登记（raw_hex 行与根因行同因、同审），共 4 行。
+#
+# 采集口径（两侧，供复核）：金标准 `c-line-baseline-c3-20261010.jsonl` 采于 **2026-10-10 09:28**
+# （白天，`Bright=1`），角色记录 `Dir=0`；本片 Rust 侧采于 **2026-10-12 01:28**（夜间，`Bright=3`），
+# 观察者角色记录 `Dir=4`。两条差异都取决于**采集时刻/采集对象的即时状态**，不是 Rust 实现偏差。
+
+{"ident": 46, "field": "param", "reason": "46 SM_DAYCHANGING 的 param = Bright = M2Share.GameTime，oracle 由 SystemProcessor 按**真实小时**刷新（SystemProcessor.cs:98-120）。金标准 09:28（白天=1）/ 本片 01:28（夜间=3）⇒ 取决于采集时刻，非 Rust 偏差。owner §25.3 裁决登记，不阻塞『同序 + 等长 + 其余字段逐字节』。", "reviewer": "openmir2-orchestrator(owner §25.3 裁决；待 owner 于卡上复核落签)"}
+
+{"ident": 46, "field": "raw_hex", "reason": "同一差异的 byte 投影：46 的 raw_hex 差异**只**来自 12B 头 param 字节（值 1 vs 3），与上面 param 行同因同审；body/tail 逐字节相同。", "reviewer": "openmir2-orchestrator(owner §25.3 裁决；待 owner 于卡上复核落签)"}
+
+{"ident": 50, "field": "series", "reason": "50 SM_LOGON 的 series = MakeWord(Dir, Light)，取决于**采集时角色朝向**（Dir）与光照。金标准角色 Dir=0（series=0）/ 本片观察者记录 Dir=4（series=4）⇒ 取决于采集对象即时状态，非 Rust 偏差。owner §25.3 裁决登记，不阻塞『同序 + 等长 + 其余字段逐字节』。", "reviewer": "openmir2-orchestrator(owner §25.3 裁决；待 owner 于卡上复核落签)"}
+
+{"ident": 50, "field": "raw_hex", "reason": "同一差异的 byte 投影：50 的 raw_hex 差异**只**来自 12B 头 series 字节（值 0 vs 4），与上面 series 行同因同审；body/tail 逐字节相同。", "reviewer": "openmir2-orchestrator(owner §25.3 裁决；待 owner 于卡上复核落签)"}
