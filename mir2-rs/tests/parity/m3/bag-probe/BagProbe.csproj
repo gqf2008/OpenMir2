@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>bag-probe</AssemblyName>
+    <RootNamespace>BagProbe</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    M3 背包/装备线（卡 openmir2-m3-bag-equip-alignment）第二片·装备/卸下切片：oracle 实测向量生成器。
+    引用**真身**（同一份 src/M2Server），用反射调**私有** handler：
+      - PlayObject.ClientTakeOnItems（`src/M2Server/Player/PlayObject.Operate.cs:377`）
+      - PlayObject.ClientTakeOffItems（`:499`）
+      - M2Share.CheckUserItems（`src/M2Server/M2Share.cs:376`）、PlayObject.CheckTakeOnItems（`:1730`）
+      - UserUnLockDurg / Desc[7] / ItemDesc&2 / ItemDesc&4 / InDisableTakeOffList 四条守卫
+    并用替身 `INetChannel` 截获真实出帧（SM_TAKEON_OK/FAIL、SM_TAKEOFF_OK/FAIL、SM_ADDITEM/SM_UPDATEITEM）。
+    产物 = mir2-rs/tests/parity/m3/fixtures/bag_vectors.json（Rust 侧用例据此逐字段核对）。
+
+    只读：不连 MySQL、不写任何现网文件（SystemShare.ItemSystem 换成内存表）、不发起任何 socket。
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\..\src\M2Server\M2Server.csproj" />
+  </ItemGroup>
+
+</Project>

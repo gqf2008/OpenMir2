@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>ability-probe</AssemblyName>
+    <RootNamespace>AbilityProbe</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    M3 背包/装备线（卡 openmir2-m3-bag-equip-alignment）第一格：oracle 实测向量生成器。
+    引用**真身**（同一份 src/M2Server）而不是抄公式：
+      - PlayObject.RecalcAbilitys（`src/M2Server/Player/PlayObject.cs:2008`）
+      - PlayObject.RecalcHitSpeed（`:3647`）、BaseObject.RecalcAbilitys（`Actor/BaseObject.Abil.cs:15`）
+      - BaseObject.RecalcBagWeight（`Actor/BaseObject.cs:1356`）
+      - PlayObject.GetFeature（`:3393`）
+    产物 = mir2-rs/tests/parity/m3/fixtures/ability_vectors.json（Rust 侧用例据此逐字段核对）。
+
+    作用域（本片把"有效物品"定义为模板本身）：
+      - `SystemShare.ItemSystem` 的 `GetUpgradeStdItem` 是**恒等拷贝**（只做 CopyItemToClientItem 的字段搬运），
+        即 Desc 升级差量与各 StdMode 的 `GetUpgradeStdItem` 变换**不在本片作用域**（登记为未做）。
+        Rust 侧 `ability::apply_item_parameters` 的输入同样是"有效物品"，故两侧同域。
+      - 不连 MySQL、不写任何现网文件、不发起任何 socket。
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\..\src\M2Server\M2Server.csproj" />
+  </ItemGroup>
+
+</Project>

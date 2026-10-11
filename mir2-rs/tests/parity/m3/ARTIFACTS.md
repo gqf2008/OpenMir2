@@ -69,3 +69,30 @@ Remove-Item -Recurse -Force mir2-rs/tests/parity/m3/sessions/*/shadow-run* -Erro
 - **测试账号/角色**：本轮新增 `m3142347 / m3143315 / m3143423 / m3143447` 四个命名空间各 4 行
   （account / account_protection / characters / characters_indexes），清理 SQL 见 `README.md` 末尾（不自动执行）。
 
+
+## 七、本片（2026-10-11，worktree `m3bag`：装备/能力接缝）实际残留清单
+
+- **入库（证据，随 patch 提交）**：
+  - `m3/fixtures/ability_vectors.json`（oracle 真身探针产出的 `WAbil`/`SubAbility`/feature 向量，
+    ~19 模板 / 23 用例；Rust 用例回读逐字段核对）
+  - `m3/ability-probe/`（探针源码 + csproj；不连 MySQL、不起服务、不写现网文件）
+- **未入库/临时物**：探针的 `bin/`、`obj/`（构建产物，已由 `m3/.gitignore` 忽略；可用上面的命令再生）；
+  隔离构建目录 `E:/tmp/openmir2-m3bag-target`（登记位置，可删）。
+- **未起栈、未占端口**（5000/7000/7100/7200 未使用）；`E:/MirServer` 十端口状态与开工前一致。
+- **冻结基线**：`src/**`（C# oracle）一行未改；表结构/脚本/数据文件格式未改。
+
+## 八、本片（2026-10-11，worktree `m3bag`：装备/卸下 handler 核心）实际残留清单
+
+- **入库（证据，随 patch 提交）**：
+  - `m3/fixtures/bag_vectors.json`（oracle 真身探针产出的装备/卸下向量：10 模板 / 21 用例；
+    状态 `UseItems`/`ItemList` + 出帧 615/616/619/620 + `SM_ADDITEM` 存在性 + 成功分支重算 `WAbil`，
+    Rust 用例回读逐字段核对）
+  - `m3/bag-probe/`（探针源码 + csproj；反射调私有 `ClientTakeOnItems`/`ClientTakeOffItems`，
+    替身 `INetChannel` 截获真实出帧；不连 MySQL、不起服务、不写现网文件）
+  - `mir2-rs/bins/game-svr/src/bag.rs`（接缝实现 + 3 条单测/红检）
+- **未入库/临时物**：探针的 `bin/`、`obj/`（构建产物，已被 `mir2-rs/.gitignore` 的 `**/bin/`、`**/obj/` 忽略；
+  可用 README 的命令再生）；隔离构建目录 `E:/tmp/openmir2-m3bag-target` 与日志
+  `E:/tmp/openmir2-watch/m3bag3-*.log`（登记位置，可删）。
+- **未起栈、未占端口**（5000/7000/7100/7200 未使用）；`E:/MirServer` 十端口状态与开工前一致。
+- **冻结基线**：`src/**`（C# oracle）一行未改；表结构/脚本/数据文件格式未改；
+  未动 `main.rs`/`smframe.rs`（接线归 m2-svr）、未动 `crates/world/**`/`crates/envir/**`。

@@ -745,6 +745,16 @@ walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 prin
 - **M1⑤ 的缺陷已修（待审）**：`dbsrv6k` 交 `openmir2-m1-dbsrv-selchr-queryed` 的修复（`c3fa48a2 → c95e14c8`）：`CM_QUERYCHR` 成功即置 `u.chr_queryed = true`（对齐 `UserService.cs:356-361`）+ 进程级 `QUERYCHR→SELCHR` 断言回 `SM_STARTPLAY(525)` 且体 `127.0.0.1/7200`；红检撤回该行 ⇒ FAILED。
   同批还交了 **S4b 的第 1 片（S4a）**：`master f5170a8e → c3fa48a2`（`crates/storage` 记录字段全量 + C# oracle 向量，重生成 LF 归一化后**逐字节一致** `4e76d755…`；共享向量文件改成 `protocol`/`replay` 可消费，未知 kind 仍报错）。
   **S4b 的 ② 6000 `DataService` 面 / ③ 跨实现互读 / ④ 5700·`TimedService` 仍未做**（卡上登记；②③ 需完整 `PlayDataStorage`/`CacheStorage` 移植 + 真 C# 对端，③ 等 M2 窗口）。
+- **同批三片合入 master `bea34684`**（2026-10-11 22:00，均经 reviewer-2 独立 approve）：
+  ① **装备⇒能力接缝** `090add78`（`bins/game-svr/src/ability.rs`：`StdItemCatalog`/`equipped_feature`/`recalc_abilitys`（`WAbil` 22 + `SubAbility` 7 + `AddAbil`）/`SubAbility::to_frame_bytes`）；
+  ② **装备/卸下 handler 核心** `7b139963`（`bins/game-svr/src/bag.rs`：`check_user_items`/`check_take_on_items`/`take_on`/`take_off` + oracle 真身探针 10 模板/21 用例）；⇒ **`52/752/10` 的输入接缝 + 装备族 handler 已具备**，m2-svr 下一片接线。
+  ③ **B-1 修复** `d5a44341`（真 `Server.conf` 的 UTF-8 BOM 只在文件首剥一个 `U+FEFF`；真机第三轮 `stditems：1000 条`，修前 WRN+0 条）。
+  合并树门禁 68 suites / 471 passed / 0 failed / 13 ignored + 604。
+- **⚠ 合并事故（已修复，方法论级）**：三片合并时 `cargo metadata` 报 **`duplicate key: mir2-data`**——m2-svr 与 m3bag **各自**往 `bins/game-svr/Cargo.toml` 加了同一条依赖（两片各自绿、合起来红）
+  ⇒ owner 在合并提交里去掉重复行（保留一行、合并注释）；随后把"`items.rs` 的查表/feature 收敛到 `ability`"写进 m2-svr 的 brief §18。**"合并树 ≠ 被审树，门禁必须重跑"再次被实测印证。**
+- **编排运行时修复**：巡检重拉用的常驻 watcher 两度静默死亡（管道 `Bad file descriptor` + 从会话起的进程随会话/作业对象被杀）⇒ 改为**计划任务** `OpenMir2-LaneTick`（每 10 分钟跑 `supervise.sh`，`schtasks /run` 可立即触发）；
+  六条车道已恢复（m2svr / m1load / m3bag / rev / rev2 / rev3）。经验沉淀 `~/.agents/rules/LESSON_从agent会话起的常驻进程随会话结束被杀_长跑编排用计划任务.md`。
+- **下一批的待审**：`m2svr @52d99f0f`（**S3 路由修复**：根因在 game-gate 把 20B 头 `Socket` 写死 0，oracle 是 `_session.SckHandle`）/ `m1load @e587760d`（F-1/F-2 返工；F-3 选角复跑现在可做）/ `m3bag @f6650f05`（第三格 `CM_EAT`）。
 - **M2 入图帧推进到 10/16 并待审**（2026-10-11 19:00）：新 head `56ac670f`（patch `c234ef9c` / status `7da05a24`）接通 **42 `SM_USERNAME`**（`GetShowName()` 1:1 + `strings.rs` 读 `String.conf [String]` + `[Setup] ShowRankLevelName`，金标准 seq21 线上字节锚定）与
   **46 `SM_DAYCHANGING`**（`Bright = M2Share.GameTime` 按**真实本地小时**算，`chrono::Local`，不是假时钟）；`52/752` 如实登记"需 `RecalcAbilitys()`（装备/buff 层未移植）"，**未假造**。
   作者还带源码证据**反驳了 reviewer-1 的 O-1**：`SendAdjustBonus` 用 2 参 `SendSocket(ClientMsg, "")`，空串**提前 return**（`PlayObject.Socket.cs:111-114`）⇒ oracle 在 `Job∉{0,1,2}` 时**什么都不发**，"跳过"本就 1:1（复审要点已写入 `brief-review.md`）。

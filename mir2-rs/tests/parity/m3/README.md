@@ -268,3 +268,70 @@ DELETE p FROM mir2_account.account_protection p JOIN mir2_account.account a ON p
   WHERE a.Account LIKE 'm3%';
 DELETE FROM mir2_account.account WHERE Account LIKE 'm3%';
 ```
+
+## 装备/能力接缝（`bins/game-svr/src/ability.rs`，**M2 车道接线点**）
+
+M3 第一片（`feature.rs`）+ 本片（`ability.rs`）把"**装备物品集 ⇒ `50/41/10/213` 帧的 feature、
+`52 SM_ABILITY` 的 `WAbil`、`752 SM_SUBABILITY` 的 7 字段**"做成无 I/O 的纯函数接缝。
+`openmir2-m2-enter-world-frames` 的入图帧序里有 `52/752`，接线直接用这两个模块即可，**不要复制第二份实现**。
+
+| 接缝 | 位置 | 输入 → 输出 |
+| --- | --- | --- |
+| 外形 feature | `feature.rs`（已合入 `1df92efe`） | `StdItem.Shape`(Dress/Weapon) + Gender + Hair → `i32` |
+| 模板查表 | `ability::ItemCatalog` / `StdItemCatalog` | 物品 `Index` → `&StdItem`（`StdItems` 模板） |
+| 装备集取值 | `ability::equipped_feature` | `UseItems[13]` + 目录 → feature `i32` |
+| 派生能力 | `ability::recalc_abilitys` | `Abil`+`BonusAbil`+装备+背包 → `WAbil`(22 字段) + `SubAbility`(7) |
+
+设备/状态的**源**：`Abil`/`BonusAbil` 来自 `record.rs`（角色记录，已全字段解析）；
+`UseItems`/背包 Index 来自角色记录 `hum_items` / `bag_items`。
+
+**未做（登记在卡，不阻塞接线）**：有效物品的 Desc 升级差量（`GetUpgradeStdItem`）、
+套装/特殊 Shape 的巨型 else-if 块、buff、`MagicList` 对 HitPoint 的加成、`ApplyItemParametersByJob` 龙装分支。
+⇒ 本片直接收"**已升级的有效 `StdItem`**"；普通（非套装/非龙装/无升级）物品与 oracle 逐字段相同。
+
+### 复现 oracle 向量（真身探针，改坏必红）
+
+```powershell
+# 在**仓库根**运行（源锚点用相对路径）
+dotnet build mir2-rs/tests/parity/m3/ability-probe -c Release
+dotnet mir2-rs/tests/parity/m3/ability-probe/bin/Release/net8.0/ability-probe.dll `
+  mir2-rs/tests/parity/m3/fixtures/ability_vectors.json
+cargo test -p game-svr --lib        # 回读夹具逐字段核对
+```
+
+向量覆盖：裸装（复现 M0 金标准 52/752）、`BonusAbil` 非 0、`ApplyItemParameters` 的每个
+`StdMode` 分支（5/6、10/11、15、19、20、21、22、23、24、26、52/54、53、default）、`Dura==0` 只称重、
+满装多槽、`Index==0`/缺模板忽略、Dress/Weapon 的 feature。
+
+## 装备/卸下 handler 核心（`bins/game-svr/src/bag.rs`，卡内第二片）
+
+`bag.rs` 把 `CM_TAKEONITEM`(1003) / `CM_TAKEOFFITEM`(1004) 的**决策 + 状态迁移**做成无 I/O 的纯函数接缝
+（`take_on`/`take_off` + `CheckUserItems`/`CheckTakeOnItems`/三条不可卸守卫 + `GetFeatureToLong` 回帧）：
+输入 = `ItemList`（背包）+ `UseItems[13]`（身上）+ 守卫上下文；输出 = 错误码（`n18`/`n10`）、
+`SM_TAKEON_OK/FAIL`(615/616) / `SM_TAKEOFF_OK/FAIL`(619/620) 的**帧规格**、换下物品（接线层据此发 `SM_ADDITEM`）。
+
+oracle 链与**必须原样复刻**的口径（`PlayObject.Operate.cs:377`/`:499`）：
+
+| 口径 | 说明 |
+| --- | --- |
+| `InDisableTakeOffList` 分支 | oracle `goto FailExit` 前**不设**错误码 ⇒ `SM_TAKEON_FAIL` 的 `Recog = 0`（不是 `-4`） |
+| take-off **成功** | oracle 成功分支**没有** `n10 = 1` ⇒ 先发 `SM_TAKEOFF_OK` 再落回 `FailExit` 发一条 `SM_TAKEOFF_FAIL(Recog=0)`（既有形态，**照 bug 搬**） |
+| `NeedLevel` 是 `byte` | `HUtil32.HiByte(byte)` 经 int 隐式转换后恒 0 ⇒ `Need` 10-13/40-44/81/82 的 Hi 比较恒真 |
+| `MaxBagItem = 46` | `AddItemToBag` 的满包判定是 `Count >= 46`（take-on 忽略返回值；take-off 走 `n10 = -3` 且不清槽） |
+| take-on 成功 | 若 `StdMode ∈ {15,19,20,21,22,23,24,26}` 则 `userItem.Desc[8] = 0` |
+
+### 复现 oracle 向量（真身探针，改坏必红）
+
+```powershell
+# 在**仓库根**运行（源锚点用相对路径）
+dotnet build mir2-rs/tests/parity/m3/bag-probe -c Release
+dotnet mir2-rs/tests/parity/m3/bag-probe/bin/Release/net8.0/bag-probe.dll `
+  mir2-rs/tests/parity/m3/fixtures/bag_vectors.json
+cargo test -p game-svr --lib        # 回读夹具逐字段核对
+```
+
+向量覆盖：装备/换装成功、按槽位/名称/等级/腕力的失败、已占槽三条不可卸守卫、`InDisableTakeOffList`、
+性别不符、卸下成功、空槽/`MakeIndex` 不符/名称不符/背包满(46)/交易中、`btWhere >= 13`。
+
+**未做（登记在卡，见 `tests/parity/whitelist.md` 的 T-13/T-15/T-16）**：`CM_PICKUP`/`CM_DROPITEM`/`CM_EAT`
+（需要 `crates/world` 的地面物品 + `Envir.Flag`）、接线（`main.rs`/`smframe.rs` 归 m2-svr）、双侧同序列驱动。
