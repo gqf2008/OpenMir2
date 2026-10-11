@@ -23,6 +23,13 @@ namespace BotSrv
         public static int g_nNewChrHair = 0;
         public static int g_nNewChrSex = 0;
         /// <summary>
+        /// M3 T-14 夹具：进世界后按固定顺序发背包/装备动作（白名单 T-22）。
+        /// 默认 false = 原行为（不新增任何发送）。见 RobotPlayer.BagEquipSequenceTick。
+        /// </summary>
+        public static bool g_boBagEquipSequence = false;
+        public static int g_nBagEquipStepMs = 1000;
+        public static int g_nBagEquipStartDelayMs = 3000;
+        /// <summary>
         /// 是否自动捡取物品
         /// </summary>
         public static bool AutoPickUp = true;

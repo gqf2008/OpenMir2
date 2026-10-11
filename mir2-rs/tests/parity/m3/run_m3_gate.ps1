@@ -44,7 +44,10 @@ param(
                                  # 跨侧 diff 带 --fixed-newchr ⇒ Job/Hair/Sex 不置占位
   [int]$NewChrJob = 0,
   [int]$NewChrHair = 2,
-  [int]$NewChrSex = 0
+  [int]$NewChrSex = 0,
+  [switch]$BagEquipSequence,     # M3 T-14（T-22）：固定背包/装备序列（拾取→装备→卸下→丢弃→用药）
+  [int]$BagEquipStepMs = 1000,
+  [int]$BagEquipStartDelayMs = 3000
 )
 
 $ErrorActionPreference = 'Stop'
@@ -55,6 +58,7 @@ $ReportPath = Join-Path $Here ("sessions\M3-gate-{0}-{1}.json" -f $Side, $Stamp)
 $report = [ordered]@{
   side = $Side; bots = $Bots; seed = $Seed; started_at = (Get-Date).ToString('o')
   fixed_new_chr = if ($FixedNewChr) { "Job=$NewChrJob Hair=$NewChrHair Sex=$NewChrSex" } else { "(off)" }
+  bag_equip_sequence = if ($BagEquipSequence) { "on step_ms=$BagEquipStepMs start_delay_ms=$BagEquipStartDelayMs" } else { "(off)" }
   steps = [ordered]@{}
 }
 $failed = @()
@@ -120,6 +124,7 @@ $pairArgs = @('-Side', $Side, '-Bots', $Bots)
 if ($Prefix -ne '') { $pairArgs += @('-Prefix', $Prefix) }
 if ($SkipBots) { $pairArgs += '-SkipBots' }
 if ($FixedNewChr) { $pairArgs += @('-FixedNewChr', '-NewChrJob', $NewChrJob, '-NewChrHair', $NewChrHair, '-NewChrSex', $NewChrSex) }
+if ($BagEquipSequence) { $pairArgs += @('-BagEquipSequence', '-BagEquipStepMs', $BagEquipStepMs, '-BagEquipStartDelayMs', $BagEquipStartDelayMs) }
 & powershell -ExecutionPolicy Bypass -File (Join-Path $Here 'run_pair.ps1') @pairArgs | Tee-Object -FilePath (Join-Path $Here ("sessions\gate-{0}-{1}.pair.log" -f $Side, $Stamp))
 $pairExit = $LASTEXITCODE
 $sideSessionDirs = @(Get-ChildItem (Join-Path $Here 'sessions') -Directory -Filter ("{0}-*" -f $Side) |
