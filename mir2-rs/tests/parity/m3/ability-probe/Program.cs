@@ -316,6 +316,8 @@ internal static class Program
         po.RecalcLevelAbilitys();
         po.RecalcAbilitys();
 
+        // 首次调用的输出（与旧夹具逐字段相同；必须在重复调用**之前**取样）。
+        var expectWabil = AbilityDto(po.WAbil);
         var sub = new
         {
             anti_magic = po.AntiMagic,
@@ -332,6 +334,23 @@ internal static class Program
             throw new InvalidOperationException($"{name}: GetFeatureToLong() != GetFeature(null)");
         }
 
+        // 在同一对象上**再调一次** `RecalcAbilitys()`（装备/卸下的成功分支就是这么做的）：
+        // oracle 只重置 `AntiPoison=0`/`AntiMagic=1`（`BaseObject.Abil.cs:30-31`），不重置
+        // `PoisonRecover/HealthRecover/SpellRecover`（`PlayObject.cs:2893-2895` 是 `+=`）；
+        // 道士的 `RecalcHitSpeed` 也不重置 `HitPoint`（`PlayObject.cs:3678`）⇒ 这四项累加。
+        // 这条向量是 Rust `recalc_abilitys_with_prior` 的 oracle 真身锚点（关 T-18）。
+        po.RecalcAbilitys();
+        var subRepeat = new
+        {
+            anti_magic = po.AntiMagic,
+            hit_point = po.HitPoint,
+            speed_point = po.SpeedPoint,
+            anti_poison = po.AntiPoison,
+            poison_recover = ProtectedRecover(po, "PoisonRecover"),
+            health_recover = ProtectedRecover(po, "HealthRecover"),
+            spell_recover = ProtectedRecover(po, "SpellRecover"),
+        };
+
         return new
         {
             name,
@@ -346,8 +365,9 @@ internal static class Program
             mp_before = mpBefore,
             cur_hp = po.WAbil.HP,
             cur_mp = po.WAbil.MP,
-            expect_wabil = AbilityDto(po.WAbil),
+            expect_wabil = expectWabil,
             expect_sub = sub,
+            expect_sub_repeat = subRepeat,
             expect_feature = feature,
         };
     }
@@ -470,11 +490,19 @@ internal static class Program
         // F. feature 接缝（Dress/Weapon Index → Shape → feature）与 getfeature 同域
         table.Items[1301] = Tpl(stdMode: 10, shape: 5, weight: 10);   // 衣服 Shape=5
         table.Items[1302] = Tpl(stdMode: 5, shape: 7, weight: 10);    // 武器 Shape=7
+        // 武器：Hi(AC) → `AddAbil.HIT`（`std_mode 5|6`）⇒ 道士的 `HitPoint` 重复调用会累加（T-18）。
+        table.Items[1303] = Tpl(stdMode: 5, shape: 0, weight: 10, ac: 0x0300);
         Case("feature_dress5_weapon7", PlayerJob.Warrior, BaseAbil(), ZeroBonus(), new[]
         {
             new EquipSpec(ItemLocation.Dress, 1301, 10),
             new EquipSpec(ItemLocation.Weapon, 1302, 10),
         }, Array.Empty<ushort>(), gender: 1, hair: 3);
+
+        // G. 重复调用（T-18）：道士的 `RecalcHitSpeed` **不重置** `HitPoint`（`PlayObject.cs:3678`），
+        //    所以第二次 `RecalcAbilitys()` 会把 `AddAbil.HIT`（武器 `Hi(AC)`）再加一遍。
+        //    recover 三项的累加由 dress/charm/bracelet/belt 等普通装备用例覆盖。
+        Case("repeat_taos_hit_accumulates", PlayerJob.Taoist, BaseAbil(), ZeroBonus(),
+            new[] { new EquipSpec(ItemLocation.Weapon, 1303, 10) }, Array.Empty<ushort>());
 
         // 模板表落盘（cases 只引用 index）
         var templateDtos = new Dictionary<string, object>();
@@ -563,6 +591,7 @@ internal static class Program
                 "hp_before/mp_before = 调用前 WAbil.HP/MP（oracle wOldHP/wOldMP，真机 = 记录 HP/MP），是本接缝的**输入**；cur_hp/cur_mp = 调用后 WAbil.HP/MP（**输出**，可能被 PlayObject.cs:2809-2816 钳过）",
                 "WAbil.HP 尾钳（PlayObject.cs:2809-2816）：Race==Play 且 HP>MaxHP 且 !mhNecklace&&!mhBracelet&&!mhRing ⇒ HP=MaxHP；MP 同理但无 mh 门",
                 "未覆盖：套装 else-if 块的**属性**（MoXieSuite/MuscleRing 等；魔血三件套的 Shape 门 135/133/134 已覆盖，但 AniCount≠0 时的 MaxHP/MaxMP 改写未建模）/ buff / MagicList 技能加成 / ApplyItemParametersByJob 龙装分支",
+                "expect_sub_repeat = 在同一对象上**再调一次** RecalcAbilitys() 的 SubAbility：AntiPoison/AntiMagic 被重置，而 PoisonRecover/HealthRecover/SpellRecover 与道士的 HitPoint 不重置 ⇒ 累加（T-18；PlayObject.cs:2890-2895 / BaseObject.Abil.cs:30-31）",
             },
             templates = templateDtos,
             cases,
