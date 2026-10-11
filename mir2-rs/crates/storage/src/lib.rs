@@ -4,8 +4,9 @@
 //! `IPlayDataStorage` / `ICacheStorage` / `IMarketStorage`），供 DBSrv 与 GameSvr 侧使用。
 //!
 //! **冻结范围（Day-1）**：trait 集合与方法签名。记录类型（[`CharacterDataInfo`] 等）
-//! 的字段随 D 线/M1 数据建模落地，当前以 `#[non_exhaustive]` 占位——**字段未冻结**，
-//! 但「加字段不改签名」是兼容演进；改方法签名仍须评审。
+//! 的字段已随 M1 S4a 落地（[`playerdata`]），并由 C# oracle 字节向量逐字节钉住
+//! （`tests/playerdatainfo_vectors.rs`）——**字段现在也是冻结面**，改动须同时更新向量。
+//! 改 trait 方法签名仍须评审。
 //!
 //! 实现侧（M1）：`sqlx` + MySQL，库表边界见设计文档 §5.1（表结构一字不改）。
 
@@ -20,11 +21,17 @@
 mod account;
 mod error;
 mod legacy_dsn;
+pub mod playerdata;
 mod traits;
 mod types;
 
 pub use account::{AccountQuick, AccountRecord, AccountStore};
 pub use error::StorageError;
 pub use legacy_dsn::LegacyDsn;
+pub use playerdata::{
+    Ability, CharacterData, CharacterDataInfo, LoadCharacterData, LoadPlayerDataPacket, MagicRcd,
+    MemPack, NakedAbility, PlayerRecordData, RecordHeader, SaveCharacterData, ServerRequestData,
+    ServerRequestMessage, ServerUserItem,
+};
 pub use traits::{CacheStorage, MarketStorage, PlayDataStorage, PlayRecordStorage};
-pub use types::{CharacterDataInfo, MarketItem, PlayQuick, PlayerRecordData, QueryChr};
+pub use types::{MarketItem, PlayQuick, QueryChr};
