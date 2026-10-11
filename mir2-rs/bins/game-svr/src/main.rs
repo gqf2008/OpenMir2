@@ -314,10 +314,9 @@ async fn main() -> Result<()> {
     };
     glog!(
         "INF",
-        "出生点回落已载入：StartPoint.txt {} 条，StartPointSize={}，选中={:?}，Config.HomeMap={} ({},{})（空 HomeMap 的新角色用它）",
+        "出生点回落已载入：StartPoint.txt {} 条，StartPointSize={}，Config.HomeMap={} ({},{})（空 HomeMap 的新角色用它；RNG 抽数照 oracle）",
         home_fallback.start_points.len(),
         home_fallback.start_point_size,
-        home_fallback.home_index(),
         home_fallback.home_map,
         home_fallback.home_x,
         home_fallback.home_y
@@ -2107,10 +2106,10 @@ fn sim_loop(
                                         r.data.home_map.as_deref().unwrap_or("").is_empty()
                                     });
                                     let (enter_map_name, enter_x, enter_y) = if home_empty {
-                                        let (hm, hx, hy) = enter_cfg.home.get_home_info();
-                                        // `GetRandHomeX/Y`（`WorldServer.cs:1414-1421`）= `HomeX - 2 + Random(3)`；
-                                        // 本宿主取下界（`Random=0`），见 `homemap` 模块头。
-                                        (hm, hx.saturating_sub(2), hy.saturating_sub(2))
+                                        // oracle `WorldServer.cs:254-259` 的**同序 3 抽**
+                                        //（1×`Random(StartPointSize)` + `GetRandHomeX/Y` 各 1×`Random(3)`）：
+                                        // 见 `homemap` 模块头的 RNG 抽数账本。
+                                        enter_cfg.home.new_human_spawn(&mut world.rng)
                                     } else {
                                         (head.cur_map.clone(), head.cur_x, head.cur_y)
                                     };

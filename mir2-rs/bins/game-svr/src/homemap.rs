@@ -37,17 +37,20 @@
 //! else { result = Config.HomeMap; nX = Config.HomeX; nY = Config.HomeY; }  // 注意 oracle 这里把 nY 写成 nX（笔误）；本片按 X/Y 各自取
 //! ```
 //!
-//! # 确定性口径（本宿主对 `Random` 的处置）
+//! # RNG 抽数账本（M3 固定种子两侧同序列的前提）
 //!
-//! oracle 在 `StartPointList.Count > StartPointSize` 时取 `Random(StartPointSize)`；本宿主取 **`I = 0`**
-//! （确定性，避免跨侧对拍 flaky）。理由：真实 `E:/MirServer/M2GameSvr/Envir/StartPoint.txt` 里
-//! 前 `StartPointSize`(=2) 条的 `MapName` **都是 `0`** ⇒ **进图地图与随机取值无关**，只有出生坐标
-//! 在前 `StartPointSize` 条之间漂移。取 0 与夹具实测一致（C# 侧新角色落库 `HomeMap=0 HomeX=289 HomeY=618`
-//! = `StartPoint.txt` 第 0 条）。坐标的 `-2 + Random(3)` 同样按 oracle 下界取 `-2`（等价 `Random`=0）。
+//! oracle 在这条路径上**同序消费 3 抽**（owner `784be562` / `020acba0`）：
+//! `GetHomeInfo` 在 `StartPointList.Count > StartPointSize` 时抽 **1×`Random(StartPointSize)`**
+//! （否则 0 抽），随后 `GetRandHomeX`/`GetRandHomeY`（`WorldServer.cs:1409-1417`）各抽 **1×`Random(3)`**。
+//! 本宿主用 `crates/world::World.rng`（`mir2_shared::rng::RandomNumber`，D2 的同种子注入口）
+//! **按同序同次抽**——少抽会让**后续 RNG 流偏移 3 抽**（M3②③ 的固定种子攻击序列会对不上）。
+//! 真实 `E:/MirServer/M2GameSvr/Envir/StartPoint.txt` 前 `StartPointSize`(=2) 条的 `MapName` 都是 `0`
+//! ⇒ 进图地图与随机值无关，仅坐标在 `(289,618)`/`(650,631)` 两条间漂移。
 
 use std::path::Path;
 
 use mir2_shared::hutil32::get_valid_str3;
+use mir2_shared::rng::RandomNumber;
 
 /// 分词器：`LocalDB.TextSplitConst = { ' ', '\t' }`（`src/GameSrv/DB/LocalDB.cs:12`）。
 const TEXT_SPLIT: [char; 2] = [' ', '\t'];
@@ -109,28 +112,41 @@ pub struct HomeFallback {
 }
 
 impl HomeFallback {
-    /// `WorldServer.GetHomeInfo(job, ref x, ref y)`（`:1384-1410`）。
+    /// `WorldServer.GetHomeInfo(job, ref x, ref y)`（`:1384-1410`）——**同序消费 RNG**。
     ///
-    /// `StartPointList` 非空 ⇒ `StartPointList[0]`（见模块头「确定性口径」）；
-    /// 空 ⇒ `Config.HomeMap/HomeX/HomeY`。
+    /// `StartPointList` 非空且 `Count > StartPointSize` ⇒ 抽 1×`Random(StartPointSize)` 定索引；
+    /// 非空但 `Count <= StartPointSize` ⇒ `I = 0`（**0 抽**）；空 ⇒ `Config.HomeMap/HomeX/HomeY`（0 抽）。
+    ///
+    /// 注意 oracle 形参 `Job` **完全未被使用**（不是按职业取）；`nY = Config.HomeY` 的笔误这里按 X/Y 各自取。
     #[must_use]
-    pub fn get_home_info(&self) -> (String, i16, i16) {
-        if let Some(sp) = self.start_points.first() {
-            (sp.map_name.clone(), sp.x, sp.y)
-        } else {
-            (self.home_map.clone(), self.home_x, self.home_y)
+    pub fn get_home_info(&self, rng: &mut RandomNumber) -> (String, i16, i16) {
+        if self.start_points.is_empty() {
+            return (self.home_map.clone(), self.home_x, self.home_y);
         }
+        let count = self.start_points.len();
+        let idx = if count > usize::from(self.start_point_size) {
+            // C# `Random(Config.StartPointSize)`：`I ∈ [0, size)`。`size==0` 时 C# `Next(0)` 回 0（仍抽 1 次）。
+            let n = i32::from(self.start_point_size).max(1);
+            usize::try_from(rng.random_below(n))
+                .unwrap_or(0)
+                .min(count - 1)
+        } else {
+            0
+        };
+        let sp = &self.start_points[idx];
+        (sp.map_name.clone(), sp.x, sp.y)
     }
 
-    /// 解析后**到底会选哪一条**（用于启动日志与证据；与 [`Self::get_home_info`] 同源）。
+    /// oracle `WorldServer.cs:254-259` 的**整条新角色出生点路径**（**同序 3 抽**）：
+    /// `GetHomeInfo`（`Count > StartPointSize` 时 1 抽）+ `GetRandHomeX`/`GetRandHomeY`（各 1×`Random(3)`）。
+    /// 坐标为 `(short)(Random(3) + Home(X|Y) - 2)`（`WorldServer.cs:1409-1417`）。
     #[must_use]
-    pub fn home_index(&self) -> Option<usize> {
-        if self.start_points.is_empty() {
-            None
-        } else {
-            // `get_home_info` 取第 0 条；oracle 在 `Count > StartPointSize` 时随机 —— 见模块头。
-            Some(0)
-        }
+    pub fn new_human_spawn(&self, rng: &mut RandomNumber) -> (String, i16, i16) {
+        let (map, hx, hy) = self.get_home_info(rng);
+        // 顺序只能先是 X 再是 Y（`GetRandHomeX` 在 `:258` / `GetRandHomeY` 在 `:259`）。
+        let x = (i32::from(hx) - 2 + rng.random_below(3)) as i16;
+        let y = (i32::from(hy) - 2 + rng.random_below(3)) as i16;
+        (map, x, y)
     }
 }
 
@@ -219,7 +235,7 @@ mod tests {
     }
 
     #[test]
-    fn get_home_info_prefers_first_start_point() {
+    fn get_home_info_consumes_one_draw_when_count_exceeds_size() {
         let fb = HomeFallback {
             start_points: parse_start_points(REAL_HEAD),
             start_point_size: 2,
@@ -227,8 +243,17 @@ mod tests {
             home_x: 839,
             home_y: 668,
         };
-        assert_eq!(fb.get_home_info(), ("0".to_string(), 289, 618));
-        assert_eq!(fb.home_index(), Some(0));
+        let mut rng = RandomNumber::with_seed(42);
+        let (map, x, y) = fb.get_home_info(&mut rng);
+        // 同种子独立重放：第 1 抽（`Random(2)`）就是索引。
+        let idx = usize::try_from(RandomNumber::with_seed(42).random_below(2)).unwrap();
+        assert_eq!(map, "0", "前两条 MapName 都是 0");
+        assert_eq!((x, y), (fb.start_points[idx].x, fb.start_points[idx].y));
+        // 后续抽与「只抽 1 次」的同种子重放一致 ⇒ 确实只消费 1 抽。
+        let next = rng.random_below(1000);
+        let mut replay = RandomNumber::with_seed(42);
+        replay.random_below(2);
+        assert_eq!(next, replay.random_below(1000));
     }
 
     #[test]
@@ -240,8 +265,50 @@ mod tests {
             home_x: 839,
             home_y: 668,
         };
-        assert_eq!(fb.get_home_info(), ("3".to_string(), 839, 668));
-        assert_eq!(fb.home_index(), None);
+        let mut rng = RandomNumber::with_seed(42);
+        assert_eq!(fb.get_home_info(&mut rng), ("3".to_string(), 839, 668));
+        // 空表 ⇒ **0 抽**：下一抽与同种子首抽一致。
+        assert_eq!(
+            rng.random_below(1000),
+            RandomNumber::with_seed(42).random_below(1000)
+        );
+    }
+
+    /// **owner `784be562`/`020acba0` 的抽数账本**：`new_human_spawn` 必须按 oracle 同序抽 **3 次**
+    /// （`Random(StartPointSize)` → `Random(3)`(X) → `Random(3)`(Y)）。
+    /// 红检：去掉任一抽（回到 `I=0`/坐标下界）⇒ 第 4 抽与手放的同种子重放不一致 ⇒ 必红。
+    #[test]
+    fn new_human_spawn_consumes_three_draws_in_oracle_order() {
+        let fb = HomeFallback {
+            start_points: parse_start_points(REAL_HEAD),
+            start_point_size: 2,
+            home_map: "3".into(),
+            home_x: 839,
+            home_y: 668,
+        };
+        let mut a = RandomNumber::with_seed(42);
+        let (map, x, y) = fb.new_human_spawn(&mut a);
+        let after = a.random_below(1000);
+
+        let mut b = RandomNumber::with_seed(42);
+        let i = usize::try_from(b.random_below(2)).unwrap();
+        let rx = b.random_below(3);
+        let ry = b.random_below(3);
+        assert_eq!(
+            after,
+            b.random_below(1000),
+            "必须恰好抽 3 次（少抽 ⇒ 后续 RNG 流偏移）"
+        );
+        let sp = &fb.start_points[i];
+        assert_eq!(map, sp.map_name);
+        assert_eq!(
+            (x, y),
+            (
+                (i32::from(sp.x) - 2 + rx) as i16,
+                (i32::from(sp.y) - 2 + ry) as i16
+            ),
+            "坐标为 Random(3) + Home(X|Y) - 2，且 X 先于 Y"
+        );
     }
 
     /// 现网 `StartPoint.txt` 是 **GBK**（首行 `;安全区/出生点`）——`load_start_points` 必须解码成
