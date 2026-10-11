@@ -126,6 +126,20 @@ impl UserList {
         None
     }
 
+    /// 关断前读该 socket 已认证的角色名（未认证/不存在 ⇒ 空串）。
+    ///
+    /// `GM_CLOSE` 分支里 `close_by_socket` 会把槽置空，所以角色名必须在关断**之前**读；
+    /// 这个名字是 `openmir2-m2-session-lifecycle`「断线清世界」的输入。
+    #[must_use]
+    pub fn chr_name_by_socket(&self, socket: i32) -> String {
+        self.slots
+            .iter()
+            .flatten()
+            .find(|u| u.socket == socket)
+            .map(|u| u.chr_name.clone())
+            .unwrap_or_default()
+    }
+
     /// `GM_DATA` 的收件人查找：先 `SessionIndex-1`（且 socket 必须一致），否则线性扫 socket。
     #[must_use]
     pub fn find(&self, session_index: i32, socket: i32) -> Option<&GateUser> {
