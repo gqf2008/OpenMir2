@@ -5,9 +5,10 @@
 整栈一条命令见 `tools/e2e/stack_e2e.ps1`。
 
 ```powershell
-# 整栈一条命令：停栈 → 批量开号 → 起栈 → 工具自测+金标准 → 压测档位 200/500/1000 → 收尾
+# 整栈一条命令：停栈 → 批量开号 → 起栈 → 工具自测+金标准 → 压测档位 200/500/1000 → 收尾/停栈
+# （C6 第 5 轮的验收命令：同一命令 3 连跑取最差；tier<1000 登录 100%、tier≥1000 ≥ 95%，见下《阈值与理由》）
 powershell -ExecutionPolicy Bypass -File tools/e2e/stack_e2e.ps1 `
-  -ProvisionAccounts -ProvisionCount 1000 -SkipFlow -LoadTiers 200,500,1000
+  -ProvisionAccounts -LoadTiers 200,500,1000 -SkipFlow -Repeat 3 -StopStackAtEnd
 
 # 只跑单档（栈已在跑）
 powershell -ExecutionPolicy Bypass -File tools/botload/load_gate.ps1 -Tiers 200 -HoldSec 60
@@ -51,18 +52,94 @@ powershell -ExecutionPolicy Bypass -File tools/botload/load_gate.ps1 -SelfTestRe
 
 | 判据 | 阈值 | 出处 |
 | --- | --- | --- |
-| 登录成功率 | **100%** | §6 M5-3 |
+| 登录成功率 | **tier ≥ 1000：≥ 95%（可复现下界）；tier < 1000：100%** | §6 M5-3 + owner 裁决 `11dbde39`（见下《阈值与理由》） |
 | 稳态掉线 | **0** | §6 M5-3 |
 | tick P99 | **≤ 100ms** | §6 M5-3 |
 | 内存末段斜率 | ≈ 0（M5 长跑另判：峰值-均值 < 5%） | §6 M5-2 |
 
-`load_gate.ps1` 逐档判 GREEN/RED，任一档 RED ⇒ 退出码 1；三档全绿才 `GREEN`。
+`load_gate.ps1 -Repeat N` 逐档逐轮判 GREEN/RED，再**按档位取 N 轮里最差**：`worst_login_pct ≥ 阈值`
+**且每一轮的 conn/tick/internal 都 GREEN** 才算该档 GREEN；任一档 RED ⇒ 退出码 1。
+
+## 阈值与理由（2026-10-11 第 5 轮；owner 裁决 `11dbde39` ①）
+
+**tier-1000 登录判据 = 同命令 3 连跑取最差 ≥ 95%**（`load_gate.ps1 -Repeat 3`，或 `stack_e2e.ps1 -Repeat 3`）；
+其余档位仍是 100%。
+
+为什么不是「100%」：
+
+- 被测栈是 **C# 部署栈**（`tools/e2e/stack_e2e.ps1` → `E:\MirServer\start-all.ps1`），**不是 Rust 侧**；
+  改它等于改 oracle 行为（红线）。
+- 两轮独立实测已证否「100%」：reviewer-3 在自己检出上同命令两连跑，A 三档全 GREEN；B 的 tier-1000 =
+  **94.8%（948/1000）**、爬坡未完成 ⇒ RED（`cdea5e32` / `67af4cac`）。第 5 轮三连跑 tier-1000 登录 =
+  100%/100%/100%（`load-20261011-155529`）⇒ 登录率**通常**是 100%，95% 是给「偶发丢包窗口」留的下界。
+- T-11 把丢包**方向**证出来（`tests/loadgate/README.md》残余丢包方向`）：无应答连接 `rx_bytes==0`、
+  同连接重发也不回 ⇒ **不是假人侧收包/解析丢失**，是服务端在这条连接上没回。但「服务端为什么没回」
+  （C# 栈自身的 1000 并发上限，还是同机并发编译造成的 CPU 饥饿）**未归属**，必须空载窗口复测才能定。
+  复现件：`load-20261011-162213/run-3`（865/1000）、`load-20261011-132401/run-4`（646/1000）。
+- 95% 是**可复现的下界**（3 连跑取最差），不是把已知失败当通过：它把「波动区间」与「回归」分开——
+  真正的回归（如 T-9 那类系统性丢弃，tier-500 179/500 = 35.8%）会被 95% 稳稳抓住（见《红检》）。
+
+阈值与理由同时写在 `load_gate.ps1` 的 `Get-LoginThreshold` 与 `load_report.py` 的
+`LOGIN_THRESHOLD_BY_MIN_TIER`（注释），二者必须一致；`load_report.py selftest` 有断言。
+
+### 本机负载探针与「独占窗口」（owner 裁决 `82f8e0c3` ④）
+
+`load_gate.ps1` 每档采 `hostload.ndjson`（CPU=`Win32_Processor.LoadPercentage` 均值 + 重型进程数
+`rustc/cargo/cargo-clippy/msbuild`，口径照 tickbench `probe_load_window`），`load_report.py` 归算成
+`report.json.host_load`（`cpu_mean/cpu_peak/heavy_procs_max/heavy_names_seen/loaded_window`），并写进
+`SUMMARY.md` 的 verdict 表。**只标注、不判红。**
+
+该 gate **必须在没有其它车道编译/压测的窗口跑**：tick P99 = 「服务端 rtime → 客户端收帧耗时」，
+本机并发编译会让 P99 出现 125/201ms 这种离散度，且**目前无法归属**（C# 参考栈 vs 同机负载）。
+`host_load.loaded_window=true`（CPU 峰 ≥ 40% 或 heavy 峰 ≥ 4）⇒ 该轮 P99 **未归属**，报告里必须写明
+「待空载窗口复测」。`load-20261011-155529`（与 m2svr/wbevy 并行）、`load-20261011-162213`（与 wbevy 并行）
+两轮即属加载窗口；安静窗口的 P99 复测登记为后续项。
+
+### M5 tick 判据的现状（写实）
+
+**§6 M5 的「tick P99 ≤ 100ms」目前在任何栈上都未验证通过**——C# 参考栈 1000 档实测 125/201ms
+（加载窗口内，归属待空载复测）；待 Rust 栈接管后（M5 灰度）复测。另：`in_world` 实测只有 ~10%
+（tier-500/1000 稳态 15~26）⇒ **不得**用这三档宣称「M5 三档：1000 假人在线」；「假人真正进世界」
+是 M5 收尾缺口（归宿：卡 `openmir2-botsrv-world-evidence`）。
+
+**实测（第 5 轮三次整命令，均 `-Repeat 3`）**：`load-20261011-155529`（与 m2svr/wbevy 构建并行）、
+`load-20261011-162213`（与 wbevy 构建并行）、`load-20261011-165805`（带 host_load 探针；见
+`tests/loadgate/README.md》第 5 轮结论` 的 3 连跑表）——tier-200/500 各轮全 GREEN；tier-1000 的**登录率**
+通常 100%（A），但仍有**两条独立波动源**：① `tick P99` 在 tier-1000 上多轮越界（A：125/201ms）——加载窗口内
+**未归属**，待空载复测（C6-3）；② 服务端在 1000 并发登录下会停摆不恢复（C r3：865/1000 无应答、`rx_bytes=0`）——
+方向已证为服务端未回，触发条件未归属（C6-4）。两条都不归因于登录阈值，均已登记在
+`tests/loadgate/README.md》第 5 轮遗留`；判据未授权改的不动。
+
+### 探针样本缺口与落点偏置（F5，2026-10-11 第 5 轮登记）
+
+`probe_sent`（探针实际发出的 `CM_TURN` 数）与 `samples`（稳态窗 tick 样本数）之间的缺口：
+
+1. **落点偏置（主因）**：`RobotPlayer.ProbeActionTick` 的 `CM_TURN.Recog = MakeLong(_probeX,_probeY)`，
+   而 `_probeX/_probeY` 是 `MarkInWorld`（收到本假人 `SM_LOGON`）时记下的**入图落点**；服务端
+   `ClientChangeDir` 只在 `nX==CurrX && nY==CurrY` 时才回 `#+GD`。假人一旦移动（自动挂机/被推/切图），
+   落点就不等于服务端坐标 ⇒ 该假人的后续探针**全部被服务端判 false**（发了不回 ack）。
+2. **窗口边界**：稳态窗起点之前发出的探针不计入。
+
+实测缺口（`probe_sent / samples`）：`load-20261011-155529` tier-200 621/569、tier-1000 1086/775；
+`load-20261011-165805` tier-200 1206/916。⇒ tick P99 是「仍停在入图落点的那部分假人」的样本，
+**不是全体 1000 假人**；与 `in_world`（覆盖基数）一起读。修法（按本假人当前坐标刷新 Recog）登记为后续项。
+
+### 「同一命令多连跑」的表述（owner 裁决 `11dbde39` ③）
+
+「两连跑 verdict 一致」的说法**作废**，改为「两连跑的**判定规则**一致（重跑不产生 GREEN/RED 翻转）」；
+门禁按 `-Repeat N` 一次跑 N 轮并取最差。第 5 轮的 3 连跑 verdict 表见
+`tests/loadgate/README.md》第 5 轮结论`。
 
 ## 红检（改坏必红）
 
 - `load_gate.ps1 -SelfTestRed`：指向无监听端口 ⇒ 爬坡不可能完成 ⇒ 必须 `verdict=RED`（脚本自身退出 0 = 红检通过）。
-- `load_report.py selftest`：分位数正确 / **尾部敏感**（挪走 20 个慢样本 P99 必须 150→5）/ 爬坡未完成判红 /
-  掉线分爬坡与稳态 / 内存斜率（线性 1MB/s vs 平坦 0）。
+- `load_report.py selftest`：分位数正确 / **尾部敏感**（挪走 20 个慢样本 P99 必须 150→5）/ 登录没达阈值判红 /
+  掉线分爬坡与稳态 / 内存斜率（线性 1MB/s vs 平坦 0）/ **阈值牙齿**（同一份 960/1000 产物：阈值 100 ⇒ RED、
+  阈值 95 ⇒ GREEN，判定必须随阈值变）/ **残余丢包方向判据**（`rx_bytes==0` ⇒ 上游；`rx_bytes>0` 且无 `529` ⇒ 假人侧；
+  分窗与重发对照计数）。
+- 阈值本身的真实红检（原始输出见 `tests/loadgate/README.md》第 5 轮·红检`）：把 tier-1000 阈值**临时改回
+  100%**（`load_gate.ps1 ... -LoginThresholdPct 100`，或对 `<100%` 的入库 ndjson 用 `load_report.py summarize
+  --login-threshold 100` 重判）⇒ 该档必须 RED；阈值还原（95%）后同一份数据回到 GREEN。
 
 ## 实机踩过的坑（都已修，写下来免得重踩）
 
@@ -97,7 +174,10 @@ powershell -ExecutionPolicy Bypass -File tools/botload/load_gate.ps1 -SelfTestRe
     （LoginSrv 日志里 `Unable to connect to any of the specified MySQL hosts`）。栈的生命周期要与
     编排脚本的生命周期解耦（用 `start-all.ps1` 前台起完即退出，子进程独立存活）。
 
-## 已知限制与下一步（2026-10-10 实测结论，**读报告前必看**）
+## 已知限制与下一步（2026-10-10 首轮结论）
+
+> ⚠️ **本节是 2026-10-10 首轮的观察与推测，多处判断已被下一节《2026-10-11 复跑结论》推翻/取代**——
+> 优先读那一节：零样本的根因已经定位到三处（并已修复、已复跑复现阳性样本），不再需要"探针+负载分离"那条规避路线。
 
 **能测的**：登录成功率、连接/掉线、各服务进程内存曲线（这三项在 20 与 200 档都真实取到）。
 
@@ -128,3 +208,91 @@ BotSrv 的挂机/移动层建立在**跨假人共享的全局态**上（`MShare.
    代价：探针需要 GUI 客户端在跑，且**每档要换干净栈**（见坑位 7）。
 
 数据完整性提醒：`load_stats.ndjson` 里 `internal_errors > 0` 时说明假人侧有异常被兜住，要连同 P99 一起看。
+
+## 2026-10-11 复跑结论：零样本的**三处根因**（已修，附证据）
+
+上一节的推测（"进不了世界需要干净栈 / 走真实客户端 + hook 的负载分离路线"）**不是根因**。用 A/B 实跑定性如下，
+三处都在**假人工具侧**（`src/BotSrv/**`，走 `whitelist T-6` 登记），oracle 一行未改：
+
+1. **探针抢在网关登录握手之前发包 ⇒ 网关按坏首包 `Kick(1)`（决定性证据）**
+   探针原来的武装条件是 `DScreen.CurrentScene == PlayScene`，而该标志在收到 `SM_STARTPLAY` 时就置上了，
+   **早于** `SendRunLogin()`（往 7200 写的 `**account/chr/...` 登录串）。于是同一秒内 `CM_TURN` 可能先落线，
+   网关把这条当首包去解登录串 ⇒ 失败 ⇒ `src/GameGate/Services/ClientSession.cs` 的
+   `ClientLogin(...); if (!success) { LogService.Info("客户端登陆消息处理失败，剔除链接"); Kick(1); }` 重置连接。
+   **A/B 证据（同一栈、20 假人）**：探针开 ⇒ `成功进入游戏 = 0/20`、连接被重置、进程随后爆栈（见 2）；
+   探针关 ⇒ `成功进入游戏 = 8/20`、`0` 次断连、无崩溃。
+   **修法**：探针改为**收到 `SM_LOGON`（服务端确认进世界）才武装**，且发送前确认本连接仍连着。
+
+2. **错误路径重入 ⇒ 栈溢出打死整个 BotSrv 进程（一份数据全废）**
+   `ScoketClient.SendText` 在已坏的 socket 上抛 `SocketException` 时会**同步**回调 `OnError`，而
+   `RobotPlayer.SocketError` 的 ConnectionReset 分支会去 `LoginOut() → SendClientMessage() → SendSocket() → SendText()`，
+   于是同一个调用栈里递归：`SendText → SocketError → LoginOut → SendSocket → SendText → …`。
+   **证据**：`tier-20/bots.err.log` 开头 `Stack overflow. Repeat 134 times: … at ScoketClient.SendText / RobotPlayer.SendSocket /
+   SendClientMessage / LoginOut / SocketError`，`bots.log` 里 `退出游戏`＋`关闭连接` 各 **1742** 次（= 递归次数），
+   进程退出 ⇒ 那一档 `load_stats.ndjson` 只剩 Init 一行。
+   **修法**：`SocketError` 加重入闸门（一次错误 = 一条记录 + 该假人退场），并对 refused/reset 先摘 `IsConnected`。
+
+3. **探针把 Recog 当时间戳用 ⇒ 服务端每个动作都判 false，回不了 `+GD`**
+   修好 1、2 之后仍是 0 样本，但 `probe_sent=360` 已发出 ⇒ 问题在服务端不认这条动作：
+   `WorldServer.ProcessUserMessage` 对 `CM_TURN` 走 `SendMsg(Ident, Tag, LoWord(Recog), HiWord(Recog), 0)`，
+   于是 `X = LoWord(Recog)`、`Y = HiWord(Recog)`、方向 = `Tag`；而 `PlayObject.ClientChangeDir`
+   只有在 `nX == CurrX && nY == CurrY` 时才 `SendSocket(M2Share.GetGoodTick)`。探针原来塞的是
+   `MakeMessage(CM_TURN, now, 0, dir, 0)`（Recog = 时间戳）⇒ 永不相等 ⇒ 无 ack。
+   **证据**：修前 `probe_sent=360 / tick_samples=0`；改成 `MakeMessage(CM_TURN, MakeLong(X, Y), 0, dir, 0)`
+   （X/Y 取 `SM_LOGON` 里服务端给本假人的落点）后 ⇒ `samples=326`、`P99=0ms`。
+   C3 金标准里那条 `CM_WALK` 的 `Recog=0x026B011F` 就是坐标 `X=287,Y=619`，不是时间戳（早先注释读错了）。
+
+### 复跑后的口径补充（读报告时一起看）
+
+- `load_stats.ndjson` / `report.json` 新增三个字段：`in_world`（收到 `SM_LOGON` 的假人数 = **tick 样本的覆盖基数**）、
+  `probe_sent`（探针实际发出的动作数）、`internal_errors`。`in_world / 档位人数` 就是 `world_ok_pct`。
+  **为什么必须一起看**：tick 样本只可能来自进世界的假人；本工具的假人世界态建立在**跨假人共享**的 `MShare.*` 上，
+  实测 200 档只有 ~10%（21/200）的假人能真正进世界 ⇒ tick 样本是"少数人身上量的"，样本量而不是分辨率是它现在的短板。
+- **缺 tick 样本默认判 RED**，与 `--criteria` 解耦：`load_report.py` 的"缺样本"由独立开关
+  `--allow-missing-tick`（`load_gate.ps1 -AllowMissingTick`）管辖；放行时报告里会写
+  `tick_missing: true` / `tick_missing_acknowledged: true` / `missing_tick_note: 本次未采集 tick P99`。
+  没有这个开关，`--criteria login,conn` **不再**能把 0 样本产物变成 GREEN（`load_report.py selftest` 有回归断言，
+  把判定改回旧写法立刻红）。
+- **多档连跑必须 `-RestartStackPerTier`（含第一档）**：本脚本用的是 `Restart-Stack`，
+  它**不能**把 `start-all.ps1` 的输出接成管道再等它退出——服务进程会继承管道写端，父进程退出后管道不关闭 ⇒
+  调用方永久挂住（上一批"多档连跑要杀任务树"的真因）。现在的做法：stop 重定向到文件、start 用独立进程起、
+  **只等端口就绪**。
+
+## 2026-10-11 第 4 轮：跨轮幂等 + 登录上限根因（T-9）+ 越界（T-10）+ `2>&1` 挂死
+
+`tools/e2e/stack_e2e.ps1 -ProvisionAccounts -LoadTiers 200,500,1000 -SkipFlow -StopStackAtEnd` 连跑两轮：
+
+| 轮 | 产物目录 | tier-200 | tier-500 | tier-1000 | 开号 |
+| --- | --- | --- | --- | --- | --- |
+| A | `tests/loadgate/load-20261011-121254/` | GREEN | GREEN | GREEN | `account=1000` |
+| B | `tests/loadgate/load-20261011-121953/` | GREEN | GREEN | GREEN | `account=1000`（未增长） |
+
+两轮三档全部 `login=100% / conn_lost_steady=0 / samples>0 / internal_errors=0`，verdict 完全一致。
+
+### 1. tier-500/1000 登录爬坡上限 = **假人侧丢弃**，不是服务端吞吐（已修，T-9）
+
+第 3 轮把上限归因为"服务端/客户端并发上限 ~350-390"，**错了**。第 4 轮把假人侧观测补全后，tier-500 的
+`load_stats.ndjson` 直接给出反证：`ident_counts[529]=500`（服务端对**全部** 500 个假人回了 `SM_PASSOK_SELECTSERVER`）
+而 `login_ok=179=ident_counts[520]=ident_counts[530]`（只有 179 个被假人处理）⇒ 丢包 100% 在假人侧：
+`RobotPlayer.Operate.DecodeMessagePacket` 的"登录期响应"闸门用的是**跨假人共享**的 `MShare.MySelf == null`，
+第一个假人 `SM_LOGON` 把它置上后再不为 null ⇒ 其余假人的登录响应全被静默丢弃。
+改成本会话的 `!_inWorld`（`MarkInWorld` 在收到本假人自己的 `SM_LOGON` 时置位）后，三档 100% 登录（T-9）。
+
+### 2. 开号跨轮幂等（第 3 轮已修，本轮复核）
+
+`account.Account` 无唯一索引 ⇒ 幂等只能在开号 SQL 里用 `WHERE NOT EXISTS`（内容冻结不许加唯一索引，见 T-7）。
+本轮两连跑日志均为 `BULK_OK ... account=1000 protection=1000`，**不再每轮 +1000**。
+
+### 3. 自动挂机越界 ⇒ `internal_errors` 非零（已修，T-10）
+
+T-6 只给 `TMap.CanMove` 补了上界守卫；`GetDoor`/`IsDoorOpen`/`CanFly`/`OpenDoor`/`CloseDoor` 仍会在
+地图右/下边界外越界。tier-1000 稳态每 tick 抛 `IndexOutOfRangeException`（`internal_errors` 线性增长到 1667）；
+加完整堆栈定位到 `TMap.GetDoor ← RobotPlayer.CheckDoorAction ← ProcessActionMessages` 后统一补 `InMapRange`（T-10）。
+
+### 4. `2>&1` 收集子进程输出 ⇒ 整条命令跑完却不退出（工具链第三处同源坑）
+
+`stack_e2e` 原来用 `$out = & powershell ... -Command ("& '<load_gate.ps1>' ...") 2>&1` 收集压测档位输出。
+`2>&1` 建的是**管道**；load_gate 用 `Start-Process` 起的**长驻服务**（GameSvr/网关/MySQL）会继承管道写端，
+于是父进程要等 EOF，而 EOF 要等所有服务死 ⇒ **summary 已落盘、栈还在跑、命令永不返回**（104822/105943 与上一轮遗留的
+`stack_e2e` 进程都是它）。改为直接继承 stdout（`& powershell -File ...`，不建管道）后，两轮命令都自行退出。
+**注意**：若在外部用管道包 `stack_e2e`（如 `... | tee log`），同样会因服务进程继承管道而挂住——请重定向到文件。

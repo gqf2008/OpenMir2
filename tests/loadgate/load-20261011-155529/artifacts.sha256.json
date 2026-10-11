@@ -1,0 +1,126 @@
+{
+  "generated_ms": null,
+  "files": [
+    {
+      "file": "run-1/tier-1000/load_stats.ndjson",
+      "sha256": "e2f5268745429b9d8bdae707844c05c33d3a0ccdc807b00da89d753988fd537d"
+    },
+    {
+      "file": "run-1/tier-1000/login_conns.ndjson",
+      "sha256": "ca1d25136c7a1d2e474129d31591f434e5bf502d8f24678de10cafb93348e81f"
+    },
+    {
+      "file": "run-1/tier-1000/mem.ndjson",
+      "sha256": "567443f062b5b393eb7ad05733ecd88940ab9d3f1272bd2975b1a24d646bab64"
+    },
+    {
+      "file": "run-1/tier-1000/report.json",
+      "sha256": "adeec1ef8ecd24abfee6512c51c6f3e1621ffc29fdb3f7c10e0cefc557adf04b"
+    },
+    {
+      "file": "run-1/tier-200/load_stats.ndjson",
+      "sha256": "fe231a8203d4b96e4815e4256cbef94c7ec36aefd6ce8c06cab63388fdde5b5a"
+    },
+    {
+      "file": "run-1/tier-200/mem.ndjson",
+      "sha256": "e7754794956e6e61acdb29f13fc5a1724eb5f09286232ac8f028c9cd82eeae76"
+    },
+    {
+      "file": "run-1/tier-200/report.json",
+      "sha256": "981640bd3a40790eb5c1c61fe3f14925e26279e89a6821a5d5504310106a689e"
+    },
+    {
+      "file": "run-1/tier-500/load_stats.ndjson",
+      "sha256": "92de668b7362f74f0df64173d6aa75ee21430be9b5a9604b16ff1d16b4344a9c"
+    },
+    {
+      "file": "run-1/tier-500/mem.ndjson",
+      "sha256": "e59c4c2c165d058f462ac8f794395af96ffada4b8dbd99acb92e1d25941c728c"
+    },
+    {
+      "file": "run-1/tier-500/report.json",
+      "sha256": "4b9bad292dbbffca00076152e903fdd674f639e053d80d319dd80974f7087ee1"
+    },
+    {
+      "file": "run-2/tier-1000/load_stats.ndjson",
+      "sha256": "42a41466b85dce41511fefa71d7f9e8973316eaaee8b10e9c11676d41e4f3f0d"
+    },
+    {
+      "file": "run-2/tier-1000/login_conns.ndjson",
+      "sha256": "67251c36a11adba6be728847216e1425fb1912ef5f27bcbebbbf5d63e263b9f5"
+    },
+    {
+      "file": "run-2/tier-1000/mem.ndjson",
+      "sha256": "a478aa957b2ac6ff497422e9aa62b12f48c6ad07045041a3bb3ee5265924fff2"
+    },
+    {
+      "file": "run-2/tier-1000/report.json",
+      "sha256": "7a311f1d3e6c6548057657111b371c5a23dbf2be75fd4142a2f6bacbcbc06723"
+    },
+    {
+      "file": "run-2/tier-200/load_stats.ndjson",
+      "sha256": "29990d58a1cfecf32eecb8b80f7146886fb466ec43e27dc6dd854e0aaf6d2c4a"
+    },
+    {
+      "file": "run-2/tier-200/mem.ndjson",
+      "sha256": "b75cec09a75abd3eb0f5fce84b6c6988bffc8682eb0e2ff69f3040022b95a96b"
+    },
+    {
+      "file": "run-2/tier-200/report.json",
+      "sha256": "23338f4446416549e57d6f859c6b2dfe1bbe9ea1f31246c52b3c02505ce087a8"
+    },
+    {
+      "file": "run-2/tier-500/load_stats.ndjson",
+      "sha256": "5a953744e0077e095b53e667f63c445c90da99157404a02f665e2928c789a342"
+    },
+    {
+      "file": "run-2/tier-500/mem.ndjson",
+      "sha256": "27a1fef44c3686a6a1c372cbf1b8da5016e3a1f22ce9644193c8a36a89ba494e"
+    },
+    {
+      "file": "run-2/tier-500/report.json",
+      "sha256": "2e9ce4520df8b7f8692038a866953827e48ddc634525b51c2074fda582522374"
+    },
+    {
+      "file": "run-3/tier-1000/load_stats.ndjson",
+      "sha256": "f3a8db4e77cd2e4f1d7f6e02d51c322b48b05a0287bf4c6adcac43548abf414b"
+    },
+    {
+      "file": "run-3/tier-1000/login_conns.ndjson",
+      "sha256": "745ea845fa7d61cc7e0ee3ae6f41c0288b6aa90a046130d3c4e9ee2db6588638"
+    },
+    {
+      "file": "run-3/tier-1000/mem.ndjson",
+      "sha256": "ae52161516a38416ece9a7e5d665fd588aed08c3790c0011a5abe01f724547c2"
+    },
+    {
+      "file": "run-3/tier-1000/report.json",
+      "sha256": "d72645f4a67dd63bc0307e6ffd4e804edd865c5355cb6853bc51c66d182e5658"
+    },
+    {
+      "file": "run-3/tier-200/load_stats.ndjson",
+      "sha256": "4a186c8a21b03dc626909b17746b1e504da48489063d3ba04be3d00180988095"
+    },
+    {
+      "file": "run-3/tier-200/mem.ndjson",
+      "sha256": "7dcfd9ce0b26f3b55d8ccedcc2e573edc5114569a3eb87402bf8fa72a48d072b"
+    },
+    {
+      "file": "run-3/tier-200/report.json",
+      "sha256": "88020f0828a9b1d8e97a7e167c86faebafead480e0f9070d7c1462ad4ad8305b"
+    },
+    {
+      "file": "run-3/tier-500/load_stats.ndjson",
+      "sha256": "583d6ec0257dbe84faf582ba6ba44b59e35ab96423dce53f67790240785bebbd"
+    },
+    {
+      "file": "run-3/tier-500/mem.ndjson",
+      "sha256": "f9e11ffe3063b4a8c829231a3c6034e1d72225672fbd09f774e7055d23da5165"
+    },
+    {
+      "file": "run-3/tier-500/report.json",
+      "sha256": "3017b409241fcd717f74f104e6075b1d1f4a491daf0257df777166526321fb7d"
+    }
+  ],
+  "note": "F9 清单（file/sha256）：与 load_gate.ps1 的 artifacts 逻辑同构（E=load_gate 原生产出；A/C 早于 F9，用同逻辑回填，产物未变）"
+}
