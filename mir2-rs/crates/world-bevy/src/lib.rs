@@ -1,5 +1,9 @@
-//! D3 试验田：**用 `bevy_ecs` 承载「掉落」系统**，形态是"纯函数式系统：输入快照 → 输出命令"，
-//! 经薄适配层与现有实体索引（`crates/world`）对接。**不重写** `crates/world`。
+//! **S1 迁移内核 + D3 试验田**：`bevy_ecs` 承载「实体存储 + tick 骨架」（[`ecs`] / [`tick`]），
+//! 以及 D3 的「掉落」系统（纯函数式：输入快照 → 输出命令）。
+//!
+//! 依赖方向（S1 起）：`crates/world` → `crates/world-bevy`（本 crate）。本 crate **不再**依赖
+//! `crates/world`；原 `snapshot_from_world` 适配层已迁到 `crates/world`（见
+//! `crates/world/src/bevy_bridge.rs`），以保证无环。
 //!
 //! ## 四条硬约束怎么落实（§4.2.2）
 //!
@@ -11,8 +15,9 @@
 //! 3. **确定性守卫升级**：本 crate 自己的 `bevy_drop_parity.rs::no_parallel_guard` 把白名单放宽为
 //!    "只允许 `bevy_ecs`/`bevy_app`"（仍旧禁 rayon/crossbeam/bevy_tasks 并行 API），
 //!    并保留"tick 必须在同一线程"的运行期断言思路（见测试）；
-//! 4. **迁移验收＝原判据不降级**：试验田的对拍断言"同一输入下，本系统输出的命令与
-//!    既有实现逐项相同"，且 `crates/world` 的两个 golden（basic/session）不回归。
+//! 4. **迁移验收＝原判据不降级**：S1 的实体存储/tick 骨架与原 `EntityStore`/`World::tick` 语义
+//!    逐条一致（槽位顺序、空闲槽复用、代际号、时钟/线程断言），三个 golden（basic/session/combat）
+//!    逐行不变；D3 的对拍断言「同一输入下，本系统输出的命令与既有实现逐项相同」也保持。
 //!
 //! ## 为什么第 2 条不是形式主义
 //!
@@ -25,6 +30,16 @@ use bevy_ecs::schedule::SingleThreadedExecutor;
 use mir2_data::models::{MonsterDropItem, StdItem, STRING_GOLD_NAME};
 use mir2_formula::drop::{mon_get_random_items, ItemNumberCounter, UserItem, VecItemCatalog};
 use mir2_shared::rng::RandomNumber;
+
+// ============================ S1 迁移内核（实体存储 + tick 骨架） ============================
+//
+// 卡片 `openmir2-world-bevy-migration` 的 S1：`crates/world` 的**实体存储**与**tick 骨架**
+// 迁到 `bevy_ecs`。内核与 D3 的掉落系统同 crate、同约束：单线程 executor + 自有序索引。
+pub mod ecs;
+pub mod tick;
+
+pub use ecs::{EcsStore, SlotOrder};
+pub use tick::{advance_clock_system, TickClock, TickOrder, TickOwnerThread, TickRunner};
 
 // ============================ 组件 / 资源 ============================
 
@@ -324,29 +339,6 @@ pub fn plan_floor_placement(snapshot: &PlaceSnapshot) -> Vec<FloorPlaceOut> {
     out
 }
 
-/// 薄适配层：从既有世界（`crates/world`）读"要预算掉落的东西"，拼成快照。
-///
-/// 只读、不改；顺序按实体 id 升序（= 既有世界的槽位顺序口径）。
-pub fn snapshot_from_world(world: &mir2_world::World, seed: i32) -> DropSnapshot {
-    let mut monsters: Vec<MonsterSnap> = Vec::new();
-    let mut ids: Vec<i32> = world.entities.ids_sorted();
-    ids.sort_unstable();
-    for id in ids {
-        let Some(e) = world.entities.get(id) else {
-            continue;
-        };
-        monsters.push(MonsterSnap {
-            id: e.id,
-            map_id: e.map_id,
-            x: e.x,
-            y: e.y,
-            drop_table: Vec::new(), // 掉落表由调用方补齐（世界在生成时已消费它）
-        });
-    }
-    DropSnapshot {
-        seed,
-        mon_random_add_value: world.mon_random_add_value,
-        catalog: world.item_catalog.clone(),
-        monsters,
-    }
-}
+// 注：D3 里的 `snapshot_from_world(&mir2_world::World, seed)` 适配层需要 `mir2-world`，
+// 而 S1 起依赖方向翻转为 `mir2-world -> mir2-world-bevy`（避免环）。该函数已迁到
+// `crates/world/src/bevy_bridge.rs::snapshot_from_world`（行为不变，仅换 crate）。

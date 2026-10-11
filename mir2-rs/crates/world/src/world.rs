@@ -14,6 +14,7 @@ use std::thread::ThreadId;
 use mir2_data::models::{MonsterDropItem, StdItem, STRING_GOLD_NAME};
 use mir2_formula::drop::{ItemNumberCounter, VecItemCatalog};
 use mir2_shared::rng::RandomNumber;
+use mir2_world_bevy::{advance_clock_system, TickClock, TickOwnerThread, TickRunner};
 
 use crate::aoi::{search_view_range, search_view_range_death};
 use crate::combat::{
@@ -98,6 +99,8 @@ pub struct World {
     pending: VecDeque<Command>,
     /// 判据③：tick 必须始终跑在同一个线程上
     owner_thread: Option<ThreadId>,
+    /// S1 tick 骨架：时钟推进 + 线程断言（单线程 `Schedule`）。
+    clock_runner: TickRunner,
     /// 掉落物品的 `MakeIndex` 计数器（`M2Share.GetItemNumber`）
     item_number: ItemNumberCounter,
     /// 最近一次 tick 的记录
@@ -115,9 +118,19 @@ impl World {
     /// 多地图世界（切图用）；`map_id` = 下标。
     pub fn with_maps(sizes: Vec<(i32, i32)>) -> Self {
         let maps = sizes.into_iter().map(|(w, h)| MapGrid::new(w, h)).collect();
+        // S1：实体存储是 bevy_ecs 内核；时钟/线程断言/顺序收集都走它的单线程骨架。
+        let mut entities = EntityStore::new();
+        entities
+            .world_mut()
+            .insert_resource(TickClock::new(TICK_INTERVAL_MS));
+        entities
+            .world_mut()
+            .insert_resource(TickOwnerThread::default());
+        let mut clock_runner = TickRunner::new();
+        clock_runner.add_systems(advance_clock_system);
         World {
             maps,
-            entities: EntityStore::new(),
+            entities,
             sessions: SessionRegistry::new(),
             clock_ms: 0,
             tick_seq: 0,
@@ -129,6 +142,7 @@ impl World {
             clear_drop_on_floor_item_time: 5 * 60 * 1000,
             pending: VecDeque::new(),
             owner_thread: None,
+            clock_runner,
             item_number: ItemNumberCounter::default(),
             last_tick: TickRecord::default(),
             by_map_scratch: Vec::new(),
@@ -188,8 +202,20 @@ impl World {
             ),
         }
 
-        self.clock_ms += TICK_INTERVAL_MS;
-        self.tick_seq += 1;
+        // S1 tick 骨架：时钟推进（+ 线程断言）在单线程 Schedule 里跑。
+        // facade 仍是事实源（`clock_ms`/`tick_seq` 是对外 pub 字段）：先把值写进资源，
+        // 跑完读回；数值语义与原 `clock_ms += 200; tick_seq += 1` 逐 tick 相同。
+        {
+            let mut clock = self.entities.world_mut().resource_mut::<TickClock>();
+            clock.clock_ms = self.clock_ms;
+            clock.tick_seq = self.tick_seq;
+        }
+        self.clock_runner.run(self.entities.world_mut());
+        {
+            let clock = self.entities.world().resource::<TickClock>();
+            self.clock_ms = clock.clock_ms;
+            self.tick_seq = clock.tick_seq;
+        }
         let mut record = TickRecord {
             tick_seq: self.tick_seq,
             clock_ms: self.clock_ms,
@@ -278,7 +304,8 @@ impl World {
         // 这里同一 tick 内先跑命令、再统一结算死亡，语义等价且顺序确定）
         self.settle_deaths(&mut record);
 
-        // AOI 刷新：按地图、地图内按槽位顺序
+        // AOI 刷新：按地图、地图内按槽位顺序（顺序来自 ECS 内核的**显式槽位索引**，
+        // `EcsStore::iter` 不迭代 `Query` 求顺序）；AOI 的扫描/过滤语义仍归 S2。
         let ids: Vec<(i32, usize)> = self.entities.iter().map(|e| (e.id, e.map_id)).collect();
         // 复用缓冲（每 tick 不重新分配 —— 之前每次 vec![Vec::new(); maps] 让 P99 涨了约 15~35%）
         self.by_map_scratch.clear();
@@ -728,20 +755,6 @@ mod tests {
             order,
             vec![1, 10, 11],
             "扫描顺序：自己先入列（无自排除），随后 X 升序外层、Y 升序内层"
-        );
-    }
-
-    #[test]
-    fn tick_refuses_to_run_on_another_thread() {
-        let mut w = World::new(8, 8);
-        w.tick();
-        let handle = std::thread::spawn(move || {
-            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| w.tick()));
-            r.is_err()
-        });
-        assert!(
-            handle.join().unwrap(),
-            "tick 在别的线程上必须 panic（世界只能单线程串行）"
         );
     }
 

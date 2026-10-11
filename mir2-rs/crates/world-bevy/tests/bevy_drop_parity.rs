@@ -183,18 +183,18 @@ fn output_does_not_depend_on_query_order() {
     assert_eq!(forward[0].id, 2, "输出顺序 = 实体 id 升序");
 }
 
-/// 断言 4：禁并行守卫（直接依赖白名单 + 源码扫描）。
+/// 断言 4：禁并行守卫（直接依赖白名单 + 源码扫描，扫代码不扫注释/字符串）。
 #[test]
 fn no_parallel_guard() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let cargo = fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    // S1 起依赖方向翻转：本 crate 不再依赖 mir2-world（world -> world-bevy）。
     let allowed = [
         "bevy_ecs",
         "bevy_app",
         "mir2-shared",
         "mir2-data",
         "mir2-formula",
-        "mir2-world",
     ];
     let mut in_deps = false;
     for line in cargo.lines() {
@@ -208,7 +208,7 @@ fn no_parallel_guard() {
                 let name = name.trim();
                 assert!(
                     allowed.contains(&name),
-                    "试验田只允许 {allowed:?}；实际出现 {name}"
+                    "ECS 内核只允许 {allowed:?}；实际出现 {name}"
                 );
             }
         }
@@ -216,35 +216,91 @@ fn no_parallel_guard() {
     for bad in ["rayon", "crossbeam", "bevy_tasks"] {
         assert!(
             !cargo.contains(&format!("{bad} =")),
-            "试验田不得直接依赖 {bad}"
+            "本 crate 不得直接依赖 {bad}"
         );
     }
 
-    // 源码扫描（只看代码，跳过注释 —— 文档里出现"禁止某 API"的字样是正常的）
-    let lib_raw = fs::read_to_string(root.join("src/lib.rs")).unwrap();
-    let lib: String = lib_raw
-        .lines()
-        .filter(|l| {
-            let t = l.trim_start();
-            !t.starts_with("//") && !t.starts_with("/*") && !t.starts_with('*')
-        })
-        .collect::<Vec<_>>()
-        .join(
-            "
-",
-        );
-    for bad in [
-        "MultiThreadedExecutor",
-        "bevy_tasks",
-        "rayon::",
-        "crossbeam",
-        "thread::spawn",
-    ] {
-        assert!(!lib.contains(bad), "试验田源码不得出现并行 API：{bad}");
+    // 源码扫描（src 全部 .rs；只看代码，跳过注释/字符串 —— 文档里出现"禁止某 API"是正常的）
+    let mut paths = vec![
+        root.join("src/lib.rs"),
+        root.join("src/ecs.rs"),
+        root.join("src/tick.rs"),
+    ];
+    if let Ok(bins) = fs::read_dir(root.join("src/bin")) {
+        for e in bins.flatten() {
+            let p = e.path();
+            if p.extension().is_some_and(|x| x == "rs") {
+                paths.push(p);
+            }
+        }
+    }
+    let mut joined = String::new();
+    for p in &paths {
+        let code = strip_comments_and_strings(&fs::read_to_string(p).unwrap());
+        for bad in [
+            "MultiThreadedExecutor",
+            "bevy_tasks",
+            "rayon",
+            "crossbeam",
+            "thread::spawn",
+        ] {
+            assert!(
+                !code.contains(bad),
+                "{} 不得出现并行 API：{bad}",
+                p.display()
+            );
+        }
+        joined.push_str(&code);
+        joined.push('\n');
     }
     // 正面断言：显式使用单线程执行器
     assert!(
-        lib.contains("SingleThreadedExecutor"),
-        "试验田必须显式用 SingleThreadedExecutor（§4.2.2 硬约束①）"
+        joined.contains("SingleThreadedExecutor"),
+        "ECS 内核必须显式用 SingleThreadedExecutor（§4.2.2 硬约束①）"
     );
+}
+
+/// 只保留代码：去掉行/块注释与字符串字面量（与 `crates/world/tests/no_parallel.rs` 同口径）。
+fn strip_comments_and_strings(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut chars = src.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '"' {
+            out.push(' ');
+            let mut escaped = false;
+            for sc in chars.by_ref() {
+                if escaped {
+                    escaped = false;
+                } else if sc == '\\' {
+                    escaped = true;
+                } else if sc == '"' {
+                    break;
+                } else if sc == '\n' {
+                    out.push('\n');
+                }
+            }
+        } else if c == '/' && chars.peek() == Some(&'/') {
+            for sc in chars.by_ref() {
+                if sc == '\n' {
+                    out.push('\n');
+                    break;
+                }
+            }
+        } else if c == '/' && chars.peek() == Some(&'*') {
+            chars.next();
+            let mut prev = '\0';
+            for sc in chars.by_ref() {
+                if sc == '\n' {
+                    out.push('\n');
+                }
+                if prev == '*' && sc == '/' {
+                    break;
+                }
+                prev = sc;
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
