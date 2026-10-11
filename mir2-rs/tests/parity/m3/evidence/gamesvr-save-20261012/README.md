@@ -54,6 +54,9 @@ Rust 侧新增（写集 = `mir2-rs/bins/game-svr/**`）：
   （`tests/fixtures/player_data_full_oracle.txt`）；断言实时坐标（世界实体 11/22）、`Gold=649`、
   `GameGold=77`、`IncHealth/IncSpell/HungerStatus`、`BagItems` 46 槽补位、`HumItems` 13 槽 +
   Helmet/Necklace 交换。
+- `tests::save_ledger_round_trips_between_begin_and_reply`（owner-precheck `a8836e1b` 的选项 a）：
+  发 `DB_SAVEHUMANRCD` 时 `engine.begin_save` ⇒ 进世界守卫 `in_save_rcd_list` 为真（关新）；
+  `DBR_SAVEHUMANRCD` 应答回来时 `engine.end_save` ⇒ 复位。
 
 **红检（改坏 ⇒ 必红；原始件见 `red-*.txt`）**：
 
@@ -102,8 +105,9 @@ Rust 侧新增（写集 = `mir2-rs/bins/game-svr/**`）：
   2. `GetUpgradeStdItem` 的 Desc 升级差量、buff/技能对能力的加成都未移植（沿用既有登记）。
   3. 周期存档 `SaveHumanRcdTime`（`WorldServer.cs:698-702`，默认 10 分钟）**未做**（登记）；
      本片只做 `MakeGhost`/断线那一条（DoD ① 的「至少」）。
-  4. `FrontEngine.InSaveRcdList` 的「保存中」生命周期未建模（`begin_save/end_save` 仍是死代码）⇒
-     保存期间的并发重登不会被 requeue（登记）。
+  4. in-save 账本（`a8836e1b`）：**已接**——发请求时 `engine.begin_save(chr)`、应答回来时
+     `engine.end_save(chr)`（存 `save_outstanding: Vec<(qid, ChrName)>`）⇒ 存档窗口内重进会走
+     「关新」支（与 oracle `AddToSaveRcdList`/`InSaveRcdList` 配对，`WorldServer.cs:1091` ↔ `:203`）。
   5. `characters.MapName` 已按**当前** `map_id` 反查注册表（见 §1 owner-precheck），不再只是 `enter_map`。
 
 ## 5. 边界与残留物

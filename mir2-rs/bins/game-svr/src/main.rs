@@ -506,10 +506,10 @@ struct DbWiring {
     /// `session_id`/`account` 同样是取档请求的字段（不在 `PlayerDataHead` 里），用于进世界时登记
     /// 在线表（账号级顶号 `KickUser` 按 `Account`/`SessionID` 匹配）。
     outstanding: Vec<(i32, i32, i32, i32, i32, String)>,
-    /// 已发出、还没取走的**存档**应答 `query_id`（`DBR_SAVEHUMANRCD(1102)` 或失败时的
-    /// `DBR_LOADHUMANRCD(1100)`）——只为把应答从 `DbReplies` 的表里取走并记日志，避免泄漏
-    /// （oracle 的 `PlayerDataService.Enqueue` 也会把它们取走）。
-    save_outstanding: Vec<i32>,
+    /// 已发出、还没取走的**存档**应答 `(query_id, ChrName)`（`DBR_SAVEHUMANRCD(1102)` 或失败时的
+    /// `DBR_LOADHUMANRCD(1100)`）——取走时同步 `FrontEngine.end_save`（oracle `RemoveSaveList`
+    /// 的时机就是「应答回来」，`WorldServer.cs:1091` ↔ 进世界守卫 `:203`）。
+    save_outstanding: Vec<(i32, String)>,
 }
 
 impl DbWiring {
@@ -1562,6 +1562,7 @@ fn build_save_record(
 /// 周期存档（`SaveHumanRcdTime` 默认 10 分钟，`WorldServer.cs:698-702`）本轮**未做**（登记）。
 fn save_human_rcd(
     db: &mut Option<DbWiring>,
+    engine: &mut load::FrontEngine,
     saved: &SavedHuman,
     chr_name: &str,
     world: &mir2_world::World,
@@ -1582,7 +1583,10 @@ fn save_human_rcd(
     let frame = dbclient::save_human_rcd_request(qid, &packet);
     match w.req_tx.send(frame) {
         Ok(()) => {
-            w.save_outstanding.push(qid);
+            // oracle `SaveHumanRcd` 先 `AddToSaveRcdList`（`WorldServer.cs:1091`）；进世界守卫读
+            // `InSaveRcdList`（`:203`），命中则走「关新」支。应答回来时 `end_save`（见收侧轮询）。
+            engine.begin_save(chr_name);
+            w.save_outstanding.push((qid, chr_name.to_string()));
             glog!(
                 "INF",
                 "存档请求已发（DB_SAVEHUMANRCD）ChrName:{chr_name} queryId={qid} 记录 {} 字节",
@@ -1786,6 +1790,7 @@ fn drain_kicks(
     online: &mut OnlineRegistry,
     kick_pending: &mut Vec<String>,
     db: &mut Option<DbWiring>,
+    engine: &mut load::FrontEngine,
     saves: &mut std::collections::HashMap<String, SavedHuman>,
     ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
     registry: Option<&mir2_envir::MapRegistry>,
@@ -1808,7 +1813,7 @@ fn drain_kicks(
         // 存档：oracle `MakeGhost()` 里的 `SaveHumanRcd`（`WorldServer.cs:1077/713`）——
         // 必须在退出世界前拿实时态（坐标/物品/Gold）。
         if let (Some(saved), Some(sg)) = (saves.get(&chr), ground_sessions.get(&chr)) {
-            save_human_rcd(db, saved, &chr, world, sg, registry);
+            save_human_rcd(db, engine, saved, &chr, world, sg, registry);
         }
         match world.disconnect(&chr) {
             Ok(()) => glog!(
@@ -1910,6 +1915,7 @@ fn drain_soft_close(
     online: &mut OnlineRegistry,
     soft_close_pending: &mut Vec<String>,
     db: &mut Option<DbWiring>,
+    engine: &mut load::FrontEngine,
     saves: &mut std::collections::HashMap<String, SavedHuman>,
     ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
     registry: Option<&mir2_envir::MapRegistry>,
@@ -1928,7 +1934,7 @@ fn drain_soft_close(
         }
         // 存档（同 [`drain_kicks`]：oracle `BoSoftClose` 支也会 `MakeGhost` ⇒ `SaveHumanRcd`）。
         if let (Some(saved), Some(sg)) = (saves.get(&chr), ground_sessions.get(&chr)) {
-            save_human_rcd(db, saved, &chr, world, sg, registry);
+            save_human_rcd(db, engine, saved, &chr, world, sg, registry);
         }
         match world.disconnect(&chr) {
             Ok(()) => glog!(
@@ -2238,6 +2244,7 @@ fn sim_loop(
                         {
                             save_human_rcd(
                                 &mut db,
+                                &mut engine,
                                 saved,
                                 &chr_name,
                                 &world,
@@ -2859,14 +2866,19 @@ fn sim_loop(
             // 存档应答（`DBR_SAVEHUMANRCD(1102)` / 失败的 `DBR_LOADHUMANRCD(1100)`）：取走并记日志
             // （`FrontEngine.InSaveRcdList` 的「保存中」生命周期未建模，登记）。
             let mut still_saves = Vec::new();
-            for qid in std::mem::take(&mut w.save_outstanding) {
+            for (qid, chr) in std::mem::take(&mut w.save_outstanding) {
                 match r.take(qid) {
                     Some(reply) => {
                         let (ident, recog) =
                             dbclient::parse_reply_message(&reply.message).unwrap_or((0, 0));
-                        glog!("INF", "存档应答 queryId={qid} Ident={ident} Recog={recog}");
+                        glog!(
+                            "INF",
+                            "存档应答 queryId={qid} ChrName={chr} Ident={ident} Recog={recog}"
+                        );
+                        // oracle 在应答回来后从 save 名单移除（进世界守卫的 in-save 半边随之复位）。
+                        engine.end_save(&chr);
                     }
-                    None => still_saves.push(qid),
+                    None => still_saves.push((qid, chr)),
                 }
             }
             w.save_outstanding = still_saves;
@@ -2880,6 +2892,7 @@ fn sim_loop(
             &mut online,
             &mut kick_pending,
             &mut db,
+            &mut engine,
             &mut saves,
             &mut ground_sessions,
             registry.as_ref(),
@@ -2892,6 +2905,7 @@ fn sim_loop(
             &mut online,
             &mut soft_close_pending,
             &mut db,
+            &mut engine,
             &mut saves,
             &mut ground_sessions,
             registry.as_ref(),
@@ -3813,6 +3827,22 @@ mod tests {
         );
     }
 
+    /// owner-precheck `a8836e1b`：存档 ↔ 进世界守卫的 in-save 账本配对。生产路径发
+    /// `DB_SAVEHUMANRCD` 时 `begin_save`、应答回来（`DBR_SAVEHUMANRCD(1102)`）时 `end_save`；
+    /// 进世界守卫读 `in_save_rcd_list`（`ProcessHumansIsLogined` 的 in-save 半边）。
+    #[test]
+    fn save_ledger_round_trips_between_begin_and_reply() {
+        let mut engine = load::FrontEngine::new();
+        assert!(!engine.in_save_rcd_list("Hero"));
+        engine.begin_save("Hero"); // 发 DB_SAVEHUMANRCD 时
+        assert!(
+            engine.in_save_rcd_list("hero"),
+            "存档窗口内守卫必须命中（⇒ 关新，与 oracle 同）"
+        );
+        engine.end_save("hero"); // DBR_SAVEHUMANRCD 应答回来时
+        assert!(!engine.in_save_rcd_list("HERO"), "应答后复位");
+    }
+
     /// **owner §26（sim 循环对接）**：`CM_PICKUP` 派发到 `ground::pick_up` + `pickwire`，
     /// 经该角色的 `[GateIdx,Socket]` 回 `SM_GOLDCHANGED`，并把金币写进会话态 `GroundState`。
     ///
@@ -4514,6 +4544,7 @@ mod tests {
             &mut online,
             &mut kick_pending,
             &mut None,
+            &mut load::FrontEngine::new(),
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             None,
@@ -4560,6 +4591,7 @@ mod tests {
             &mut online,
             &mut kick_pending,
             &mut None,
+            &mut load::FrontEngine::new(),
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             None,
@@ -4753,6 +4785,7 @@ mod tests {
             &mut online,
             &mut soft_close_pending,
             &mut None,
+            &mut load::FrontEngine::new(),
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             None,
@@ -4842,6 +4875,7 @@ mod tests {
             &mut online,
             &mut soft_close_pending,
             &mut None,
+            &mut load::FrontEngine::new(),
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             None,
@@ -4902,6 +4936,7 @@ mod tests {
             &mut online,
             &mut kick_pending,
             &mut None,
+            &mut load::FrontEngine::new(),
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             None,
