@@ -57,8 +57,12 @@
 //! - **`Envir.Flag.boNODRUG`（地图禁药）分支**：oracle 会 `SysMsg` 一条文本 `RM_SYSMESSAGE` 并
 //!   返回 false；本片把「是否禁药」留给接线层（不建地图模型），接缝不建模该分支。
 //! - **StdMode 1/2/3/4/31**：食物（`HungerStatus` + `RefMyStatus`→`RecalcAbilitys`）、无效果、
-//!   `ExtraAbil` buff / `GetExp`、`ReadBook`（技能书）、解包（`UnbindList`）——均未实现；
-//!   命中这些 StdMode 时本接缝与 oracle 一致地**什么也不吃**（走 `SM_EAT_FAIL`）。
+//!   `ExtraAbil` buff / `GetExp`、`ReadBook`（技能书）、解包（`UnbindList`）——均未实现。
+//!   ⚠️ oracle 对这些 StdMode 有**成功**路径（StdMode 1/2 与 StdMode 3 的 Shape 13 **无条件**返回 true；
+//!   其余为条件成功），成功时吃掉物品 + `SM_EAT_OK`，而本接缝只处理 `std_mode==0`
+//!   ⇒ 同一输入落 `SM_EAT_FAIL`，**这是已证的行为差异**（不是"一致地不吃"）；只因为本接缝**尚未
+//!   接进 `main.rs` 的 c2s 收包派发**（见下）而线上不可达。如实登记在 whitelist 的 **T-17**；
+//!   接线前必须先把这些分支补齐。`StdMode=5`（`case` 名单外）才是两侧一致地不吃。
 //! - **`GetUpgradeStdItem` 的 Desc 升级差量**：同 `bag.rs`/`ability.rs`，传入的模板视为「有效物品」。
 //! - `ClientUseItems` 的 `sItemName` 形参在 oracle 里**未被使用**（只按 `MakeIndex` 找），已照搬。
 
@@ -598,7 +602,12 @@ mod tests {
         assert_eq!(item_list, before, "guard 拒绝时不许动背包");
     }
 
-    /// `StdMode != 0` 未实现：与 oracle 一致地不吃（落 `SM_EAT_FAIL`、无通知、背包不变）。
+    /// `StdMode=5`（`ClientUseItems` 的 `case 0/1/2/3/4/31` 名单**外**）：两侧一致地不吃
+    /// （落 `SM_EAT_FAIL`、无通知、背包不变）。
+    ///
+    /// ⚠️ 本用例**只**锤定"switch 外"这一形态；`StdMode 1/2/3/4/31` 是**已证差异**
+    /// （oracle 在 StdMode 1/2 与 StdMode 3 Shape 13 上**无条件**吃掉 + `SM_EAT_OK`，本接缝 `SM_EAT_FAIL`），
+    /// 登记在 whitelist 的 T-17。
     #[test]
     fn unimplemented_stdmode_does_not_eat() {
         let doc = fixture();

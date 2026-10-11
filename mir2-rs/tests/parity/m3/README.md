@@ -377,8 +377,10 @@ cargo test -p game-svr --lib        # 回读夹具逐字段核对
 模板缺失、`BoCanUseItem==false`、`Death`。
 
 **未做（登记在卡，见 `tests/parity/whitelist.md` 的 T-17）**：`Envir.Flag.boNODRUG`（地图禁药 + 文本 `RM_SYSMESSAGE`）、
-StdMode 1/2/3/4/31（`HungerStatus`+`RefMyStatus`/无效果/`ExtraAbil` buff+`GetExp`/`ReadBook`/解包）、
-接线（`main.rs`/`smframe.rs` 归 m2-svr）、双侧同序列驱动。
+StdMode 1/2/3/4/31（`HungerStatus`+`RefMyStatus`/无效果/`ExtraAbil` buff+`GetExp`/`ReadBook`/解包）——
+注意这五类**不是**"与 oracle 一致地不吃"，而是**已证差异**（oracle 在这些 StdMode 上有成功路径：StdMode 1/2 与 StdMode 3 的 Shape 13 无条件吃掉并发 `SM_EAT_OK`，本接缝同输入落 `SM_EAT_FAIL`），
+只因 `use_item` 尚未接线而不可达；接线前必须补齐。夹具 `eat_fail_stdmode_other` 只覆盖 `StdMode=5`（`case` 名单外）。
+接线（`main.rs`/`smframe.rs` 归 m2-svr）、双侧同序列驱动仍未做。
 
 ## 拾取/丢弃 handler（`bins/game-svr/src/ground.rs`，卡内第二片·第四格）
 
