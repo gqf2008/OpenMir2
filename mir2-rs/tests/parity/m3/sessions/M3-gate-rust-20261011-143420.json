@@ -1,0 +1,47 @@
+﻿{
+    "side":  "rust",
+    "bots":  1,
+    "seed":  42,
+    "started_at":  "2026-10-11T14:34:20.2409464+08:00",
+    "fixed_new_chr":  "Job=1 Hair=2 Sex=0",
+    "steps":  {
+                  "run_pair":  {
+                                   "exit":  0,
+                                   "session":  "rust-20261011-143423"
+                               },
+                  "rng_replay":  {
+                                     "exit":  0
+                                 },
+                  "cross_side_diff":  {
+                                          "peer":  "csharp-20261011-142347",
+                                          "exit":  0,
+                                          "fixed_new_chr":  true
+                                      }
+              },
+    "entry_holders":  [
+                          {
+                              "port":  7000,
+                              "process":  "login-gate",
+                              "path":  "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\.claude\\worktrees\\m3\\mir2-rs\\target\\debug\\login-gate.exe",
+                              "impl":  "rust-or-other"
+                          },
+                          {
+                              "port":  7100,
+                              "process":  "sel-gate",
+                              "path":  "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\.claude\\worktrees\\m3\\mir2-rs\\target\\debug\\sel-gate.exe",
+                              "impl":  "rust-or-other"
+                          },
+                          {
+                              "port":  7200,
+                              "process":  "game-gate",
+                              "path":  "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\.claude\\worktrees\\m3\\mir2-rs\\target\\debug\\game-gate.exe",
+                              "impl":  "rust-or-other"
+                          }
+                      ],
+    "entry_impl":  "rust-or-other",
+    "finished_at":  "2026-10-11T14:34:42.1091207+08:00",
+    "failed":  [
+
+               ],
+    "pass":  true
+}

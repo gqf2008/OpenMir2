@@ -41,12 +41,15 @@ pub fn default_path() -> PathBuf {
 /// # Errors
 /// 文件不存在、缺 `[SelGate]` 段、缺任一必需键、端口非法 —— 都返回错误（调用方据此非零退出）。
 pub fn load(path: &Path) -> Result<GateConfig> {
-    let text = std::fs::read_to_string(path).with_context(|| {
+    // 照 oracle（`ConfigFile.cs:263`）读原始字节 + **GB2312** 解码：现网 `SelGate\config.conf`
+    // 含中文（如 `Title=热血传奇`），严格 UTF-8 会在这种配置上失败。
+    let bytes = std::fs::read(path).with_context(|| {
         format!(
             "读取配置文件失败：{}（M1④：缺配置必须明确报错退出）",
             path.display()
         )
     })?;
+    let text = crate::gbk::decode(&bytes);
     let section = parse_section(&text, "SelGate");
     let get = |key: &str| -> Result<String> {
         section
@@ -143,6 +146,27 @@ mod tests {
         }
         std::fs::write(&p, "").unwrap();
         assert!(load(&p).is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 含中文的 GBK 配置必须按 GB2312 解码（oracle `ConfigFile.cs:263`）；严格 UTF-8 会读失败。
+    #[test]
+    fn parses_gbk_chinese_conf() {
+        let dir = std::env::temp_dir().join(format!("sg-gbk-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("config.conf");
+        let body = crate::gbk::encode(
+            "[SelGate]\nTitle=热血传奇\n; 中文注释\nServerAddr0=127.0.0.1\nServerPort0=5500\n\
+             GatePort0=7100\n",
+        );
+        assert!(
+            std::str::from_utf8(&body).is_err(),
+            "GBK 中文配置不应是合法 UTF-8"
+        );
+        std::fs::write(&p, &body).unwrap();
+        let cfg = load(&p).unwrap();
+        assert_eq!(cfg.srv_port, 5500);
+        assert_eq!(cfg.gate_port, 7100);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

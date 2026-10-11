@@ -50,3 +50,22 @@ Remove-Item -Recurse -Force mir2-rs/tests/parity/m3/sessions/*/snap_before, mir2
 Remove-Item -Recurse -Force mir2-rs/tests/parity/m3/sessions/*/shadow-run* -ErrorAction SilentlyContinue
 # 测试账号/角色（见 README 的清理 SQL，需先人工确认命中范围）
 ```
+
+## 六、本轮（2026-10-11，M3-Rust 首验）实际残留清单
+
+- **入库（证据，随 patch 提交）**：
+  - `m3/sessions/M3-gate-csharp-20261011-142345.json`（C# 基线 GREEN，含 RNG `-VerifyRepeat`）
+  - `m3/sessions/M3-gate-rust-20261011-143420.json`（Rust 固定建角 GREEN）、
+    `m3/sessions/M3-gate-rust-20261011-143444.json`（Rust 默认 GREEN）
+  - `m3/sessions/M3-gate-rust-20261011-143312.json`（缺陷 2 的红报告，作修复前后对照）
+  - `m3/sessions/csharp-20261011-142347/`（C# 基线会话，~53KB）、
+    `m3/sessions/rust-20261011-143315|143423|143447/`（Rust 三个会话，各 ~50KB）
+  - `m3/sessions/m3rng-gate-20261011-142345/`（`product.json` + `drop_100kills.txt` + `exp_table.txt`）
+- **不入库（已登记，`m3/.gitignore`）**：`sessions/m3rng-gate-*/rng-run{1,2}.tsv`（~2.2MB×2，可由
+  `rng-baseline.ps1` 再生）、`sessions/rust-gates/`（Rust 三网关日志）、`sessions/rust-gates.pid.json`（本机 PID）。
+- **无影子副本残留**：`rng-baseline.ps1 -VerifyRepeat` 的 `shadow-run*` 已自动清理。
+- **冻结基线**：`pack_unchanged=true`（`E:\MirServer\M2GameSvr` 5 个关键文件 sha256 前后一致）；
+  `src/**` 一行未改。收工停栈：`start_rust_gates.ps1 -Stop` + `E:\MirServer\start-all.ps1 -Stop`。
+- **测试账号/角色**：本轮新增 `m3142347 / m3143315 / m3143423 / m3143447` 四个命名空间各 4 行
+  （account / account_protection / characters / characters_indexes），清理 SQL 见 `README.md` 末尾（不自动执行）。
+

@@ -15,6 +15,7 @@
 #![allow(clippy::doc_markdown)]
 
 mod config;
+mod gbk;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU16, Ordering};

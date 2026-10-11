@@ -22,6 +22,7 @@ import hashlib
 import json
 import os
 import sys
+from collections import Counter
 
 DEFAULT_PREFIX_MASK = "<RUN>"
 CANON_PLACEHOLDER = "<VOLATILE>"
@@ -180,6 +181,19 @@ def bucket(rows):
     return by_table
 
 
+def multiset_delta(ra, rb):
+    """按 **(表内行 key) 的出现次数** 做多重集差，返回 (仅A多出的计数, 仅B多出的计数)。
+
+    为什么不是 set 差集：`row_sha256` 相同即同一行，**重复行数本身是行为的一部分**。
+    用 set 差集时 `A=[x,x]` vs `B=[x]` 的 `ha != hb` 成立但 `only_a`/`only_b` 都为空
+    ⇒ problems 累加 0、exit 0（**假绿**）。计数式比对把「多出一行」计成 1，判据恢复仲裁力。
+    返回 Counter（键=row_sha256，值=该侧多出的次数），调用方用 sum(values()) 得行数。
+    """
+    ca = Counter(r["row_sha256"] for r in ra)
+    cb = Counter(r["row_sha256"] for r in rb)
+    return ca - cb, cb - ca
+
+
 def cmd_diff(args):
     a = bucket(load_rows(args.a))
     b = bucket(load_rows(args.b))
@@ -194,15 +208,13 @@ def cmd_diff(args):
     summary = {}
     for table in sorted(set(a) | set(b)):
         ra, rb = a.get(table, []), b.get(table, [])
-        ha = sorted(r["row_sha256"] for r in ra)
-        hb = sorted(r["row_sha256"] for r in rb)
-        only_a = [h for h in ha if h not in set(hb)]
-        only_b = [h for h in hb if h not in set(ha)]
+        only_a, only_b = multiset_delta(ra, rb)
+        n_only_a, n_only_b = sum(only_a.values()), sum(only_b.values())
         summary[table] = {"rows_a": len(ra), "rows_b": len(rb),
-                          "only_a": len(only_a), "only_b": len(only_b)}
-        if ha != hb:
-            problems += len(only_a) + len(only_b)
-            print(f"DIFF {table}: rows A={len(ra)} B={len(rb)} 仅A={len(only_a)} 仅B={len(only_b)}")
+                          "only_a": n_only_a, "only_b": n_only_b}
+        if n_only_a or n_only_b:
+            problems += n_only_a + n_only_b
+            print(f"DIFF {table}: rows A={len(ra)} B={len(rb)} 仅A={n_only_a} 仅B={n_only_b}")
             if problems <= args.max_diffs:
                 # 给一行具体差异（便于定位）
                 la = next((r["line"] for r in ra if r["row_sha256"] in only_a), "<none>")
@@ -226,12 +238,10 @@ def cmd_delta(args):
     b = bucket(load_rows(args.after))
     delta = {}
     for table in sorted(set(a) | set(b)):
-        ha = sorted(r["row_sha256"] for r in a.get(table, []))
-        hb = sorted(r["row_sha256"] for r in b.get(table, []))
-        added = [h for h in hb if h not in set(ha)]
-        removed = [h for h in ha if h not in set(hb)]
+        removed_c, added_c = multiset_delta(a.get(table, []), b.get(table, []))
+        added, removed = sum(added_c.values()), sum(removed_c.values())
         if added or removed:
-            delta[table] = {"added": len(added), "removed": len(removed)}
+            delta[table] = {"added": added, "removed": removed}
     with open(args.out, "w", encoding="utf-8", newline="\n") as f:
         json.dump(delta, f, ensure_ascii=False, indent=2, sort_keys=True)
     total = sum(v["added"] + v["removed"] for v in delta.values())
@@ -277,7 +287,7 @@ def cmd_selftest(args):
         print(f"PASS {name}（exit {code}）")
 
     base = ["m3bot1\t1", "m3bot2\t2"]
-    # —— 用例 1/4：非规范化路径，原行为不变（相同→绿、多一行→红）
+    # —— 用例 1/9：非规范化路径，原行为不变（相同→绿、多一行→红）
     with open(a, "w", encoding="utf-8", newline="\n") as f:
         for line in base:
             f.write(json.dumps({"table": "t", "row_sha256": hashlib.sha256(line.encode()).hexdigest(),
@@ -288,43 +298,64 @@ def cmd_selftest(args):
                                 "line": line}, ensure_ascii=False) + "\n")
     ns = argparse.Namespace(a=a, b=b, max_diffs=5, summary_out=None, canonical=False,
                             fixed_newchr=False)
-    expect("1/7 未规范化：相同作用域判绿", ns, 0)
+    expect("1/9 未规范化：相同作用域判绿", ns, 0)
     with open(b, "a", encoding="utf-8", newline="\n") as f:
         f.write(json.dumps({"table": "t", "row_sha256": "cc", "line": "m3bot3\t9"},
                            ensure_ascii=False) + "\n")
-    expect("2/7 未规范化：多一行即判红", ns, 1)
+    expect("2/9 未规范化：多一行即判红", ns, 1)
 
-    # —— 用例 3/7：--canonical 下，仅易变列（Id/Job/时间戳）不同 ⇒ 必须判绿
+    # —— 用例 3/9：--canonical 下，仅易变列（Id/Job/时间戳）不同 ⇒ 必须判绿
     _write_jsonl(a, [_chr_line(12234, 1, 0)])
     _write_jsonl(b, [_chr_line(13239, 0, 0)])
     ns_c = argparse.Namespace(a=a, b=b, max_diffs=5, summary_out=None, canonical=True,
                               fixed_newchr=False)
-    expect("3/7 规范化后：仅易变列不同判绿", ns_c, 0)
+    expect("3/9 规范化后：仅易变列不同判绿", ns_c, 0)
 
-    # —— 用例 4/7（改坏必红）：--canonical 下，改动**被比对列**（Gold）⇒ 必须判红
+    # —— 用例 4/9（改坏必红）：--canonical 下，改动**被比对列**（Gold）⇒ 必须判红
     _write_jsonl(b, [_chr_line(13239, 0, 999)])
-    expect("4/7 规范化后：被比对列被改坏即判红", ns_c, 1)
+    expect("4/9 规范化后：被比对列被改坏即判红", ns_c, 1)
 
-    # —— 用例 5/7：未登记表 fail-closed
+    # —— 用例 5/9：未登记表 fail-closed
     with open(b, "w", encoding="utf-8", newline="\n") as f:
         f.write(json.dumps({"table": "mir2_db.unknown", "row_sha256": "x", "line": "1\t2"},
                            ensure_ascii=False) + "\n")
-    expect("5/7 未登记表 fail-closed", ns_c, 4)
+    expect("5/9 未登记表 fail-closed", ns_c, 4)
 
-    # —— 用例 6/7（固定建角场景）：--fixed-newchr 下 Job/Hair/Sex **不**置占位；
+    # —— 用例 6/9（固定建角场景）：--fixed-newchr 下 Job/Hair/Sex **不**置占位；
     #    固定了参数 ⇒ Job 相同；仅自增 Id 变 ⇒ 必须判绿。
     ns_fx = argparse.Namespace(a=a, b=b, max_diffs=5, summary_out=None, canonical=True,
                                fixed_newchr=True)
     _write_jsonl(a, [_chr_line(12234, 1, 0)])
     _write_jsonl(b, [_chr_line(13239, 1, 0)])
-    expect("6/7 固定建角场景：Job 固定且不置占位，仅 Id 变判绿", ns_fx, 0)
+    expect("6/9 固定建角场景：Job 固定且不置占位，仅 Id 变判绿", ns_fx, 0)
 
-    # —— 用例 7/7（改坏必红）：固定建角场景下 Job 真的被比，改动即红色
+    # —— 用例 7/9（改坏必红）：固定建角场景下 Job 真的被比，改动即红色
     #    （同数据在 --canonical 不带 --fixed-newchr 时会因 Job 占位而误判绿）。
     _write_jsonl(b, [_chr_line(13239, 0, 0)])
-    expect("7/7 固定建角场景：Job 被改坏即判红", ns_fx, 1)
+    expect("7/9 固定建角场景：Job 被改坏即判红", ns_fx, 1)
 
-    print("GREEN: scoped_diff selftest 7/7（含规范化前后 + 固定建角不置占位 + 改坏必红 + fail-closed）")
+    # —— 用例 8/9（多重集/计数式，卡 openmir2-m3-scopeddiff-multiset）：
+    #    重复行 A=[x,x] vs B=[x] 必须判红——旧实现用 set 差集，仅A/仅B 都是 0 ⇒ 假绿。
+    #    注：这里 write 用默认 hash 路径（不规范化），确保核的是 cmd_diff 的计数语义本身。
+    dup = "m3bot1\t1"
+    dup_row = json.dumps({"table": "t",
+                          "row_sha256": hashlib.sha256(dup.encode()).hexdigest(),
+                          "line": dup}, ensure_ascii=False)
+    with open(a, "w", encoding="utf-8", newline="\n") as f:
+        f.write(dup_row + "\n")
+        f.write(dup_row + "\n")
+    with open(b, "w", encoding="utf-8", newline="\n") as f:
+        f.write(dup_row + "\n")
+    expect("8/9 重复行：A=[x,x] vs B=[x] 判红（旧实现假绿）", ns, 1)
+
+    # —— 用例 9/9：重复行两侧相同 ⇒ 必须判绿（避免「见重复即红」的过度收紧）。
+    with open(b, "w", encoding="utf-8", newline="\n") as f:
+        f.write(dup_row + "\n")
+        f.write(dup_row + "\n")
+    expect("9/9 重复行：A=[x,x] vs B=[x,x] 判绿", ns, 0)
+
+    print("GREEN: scoped_diff selftest 9/9（含规范化前后 + 固定建角不置占位 + 改坏必红 "
+          "+ 多重集重复行 + fail-closed）")
     sys.exit(0)
 
 
