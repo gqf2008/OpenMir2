@@ -67,3 +67,15 @@ floor <map> <x> <y> <obj_id>                          # 仅 extended 场景
 对齐过程中修掉的一处真差异：**切图后"再进"必须用会话当前地图**——Rust 测试驱动最初用会话
 初始地图（map 0），而 C# 把当前地图记在会话上（切图时更新）⇒ 首个差异就是 `ent 3 0 …` vs `ent 3 1 …`。
 两侧驱动统一为"会话当前地图"后逐行一致（`session.txt`）。
+
+## D3 成本基线（`drop_bench`）
+
+```bash
+cargo run -p mir2-world-bevy --release --bin drop_bench                 # 三条路径 + 输出一致性自检
+cargo run -p mir2-world-bevy --release --bin drop_bench -- --redcheck    # 追加"每只怪建一次 world"红检路径
+```
+
+口径写死在 `crates/world-bevy/src/bin/drop_bench.rs` 头注释（32 只怪/次、2000 次、预热 100 次、
+种子 42、`MonRandomAddValue 40`；改一处基线即不可比）。现行基线 = `d3-drop-bench-rebuild.txt`
+（历史 `d3-drop-bench.txt` 的生成器从未入库，仅作对照），对账与"派生结论更正"见 `D3成本复现报告.md`。
+注意口径：掉落预算在**怪物生成时**一次性预算，**不是每 tick** 一次。

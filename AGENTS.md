@@ -63,7 +63,9 @@ M2 骨架在 500/1000/2000 实体下 tick 占 200ms 预算 **0.33%/0.82%/1.94%**
 D3 试验田 ECS 路径代价 **+30µs/tick（0.015%）**。⇒ 本项目「单区、同屏小、要确定性」的目标下 `bevy_ecs` **绰绰有余**，瓶颈不是 ECS 吞吐。
 
 **当前状态**：D3 试验田（用 `bevy_ecs` 承载掉落，`crates/world-bevy`，不重写 `crates/world`）已证「方案与 parity 不冲突」，
-但 DoD ④「P99 不劣化」**字面未达标**（常驻 world ≈2.4× 直接调用），**待 owner 裁决**（接受 / 仅用 ECS 编排 / 回退）。
+但 DoD ④「P99 不劣化」**字面未达标**（常驻 world ≈1.8× 直接调用 = **+10µs / 32 只怪的掉落批次**），
+**owner 已裁决接受**（§4.2.3）。成本口径可复现：`cargo run -p mir2-world-bevy --release --bin drop_bench`
+（基线 `mir2-rs/tests/parity/world/d3-drop-bench-rebuild.txt`）；**注意不是每 tick 成本**——掉落预算在怪物生成时一次性预算。
 未做：战斗试验田、AOI/移动入 ECS 的收益评估。详见 `mir2-rs/tests/parity/world/D3试验田报告.md`。
 
 ---
