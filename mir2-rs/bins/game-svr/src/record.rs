@@ -236,89 +236,65 @@ impl RecordHeader {
     }
 }
 
-/// `Ability`（class：22 个成员，成员顺序 = C# 声明顺序）。
-#[derive(Debug, Clone, PartialEq)]
-pub struct Ability {
-    pub level: u8,
-    pub reserved1: u8,
-    pub ac: u16,
-    pub mac: u16,
-    pub dc: u16,
-    pub mc: u16,
-    pub sc: u16,
-    pub hp: u16,
-    pub mp: u16,
-    pub max_hp: u16,
-    pub max_mp: u16,
-    pub reserved2: i16,
-    pub exp_count: u8,
-    pub exp_max_count: u8,
-    pub exp: i32,
-    pub max_exp: i32,
-    pub weight: u16,
-    pub max_weight: u16,
-    pub wear_weight: u8,
-    pub max_wear_weight: u8,
-    pub hand_weight: u8,
-    pub max_hand_weight: u8,
+// `Ability` / `NakedAbility` 的定义在 lib 侧（`game_svr::ability`）：`ability.rs` 要产出/消费它们，
+// 而本模块是 bin 模块（主 bin 通过 `game_svr::` 访问 lib）。线缆编解码仍留在本文件，因为它依赖这里的
+// `Reader`/`Writer`（lib 侧不重复造一遍）。`pub use` 保证既有 `crate::record::{Ability, NakedAbility}` 路径不变。
+pub use game_svr::ability::{Ability, NakedAbility};
+
+fn decode_ability(r: &mut Reader) -> PResult<Option<Ability>> {
+    if !obj_header(r, 22)? {
+        return Ok(None);
+    }
+    Ok(Some(Ability {
+        level: r.u8()?,
+        reserved1: r.u8()?,
+        ac: r.u16()?,
+        mac: r.u16()?,
+        dc: r.u16()?,
+        mc: r.u16()?,
+        sc: r.u16()?,
+        hp: r.u16()?,
+        mp: r.u16()?,
+        max_hp: r.u16()?,
+        max_mp: r.u16()?,
+        reserved2: r.i16()?,
+        exp_count: r.u8()?,
+        exp_max_count: r.u8()?,
+        exp: r.i32()?,
+        max_exp: r.i32()?,
+        weight: r.u16()?,
+        max_weight: r.u16()?,
+        wear_weight: r.u8()?,
+        max_wear_weight: r.u8()?,
+        hand_weight: r.u8()?,
+        max_hand_weight: r.u8()?,
+    }))
 }
 
-impl Ability {
-    fn decode(r: &mut Reader) -> PResult<Option<Self>> {
-        if !obj_header(r, 22)? {
-            return Ok(None);
-        }
-        Ok(Some(Self {
-            level: r.u8()?,
-            reserved1: r.u8()?,
-            ac: r.u16()?,
-            mac: r.u16()?,
-            dc: r.u16()?,
-            mc: r.u16()?,
-            sc: r.u16()?,
-            hp: r.u16()?,
-            mp: r.u16()?,
-            max_hp: r.u16()?,
-            max_mp: r.u16()?,
-            reserved2: r.i16()?,
-            exp_count: r.u8()?,
-            exp_max_count: r.u8()?,
-            exp: r.i32()?,
-            max_exp: r.i32()?,
-            weight: r.u16()?,
-            max_weight: r.u16()?,
-            wear_weight: r.u8()?,
-            max_wear_weight: r.u8()?,
-            hand_weight: r.u8()?,
-            max_hand_weight: r.u8()?,
-        }))
-    }
-
-    fn encode(&self, w: &mut Writer) {
-        w.u8(22);
-        w.u8(self.level);
-        w.u8(self.reserved1);
-        w.u16(self.ac);
-        w.u16(self.mac);
-        w.u16(self.dc);
-        w.u16(self.mc);
-        w.u16(self.sc);
-        w.u16(self.hp);
-        w.u16(self.mp);
-        w.u16(self.max_hp);
-        w.u16(self.max_mp);
-        w.i16(self.reserved2);
-        w.u8(self.exp_count);
-        w.u8(self.exp_max_count);
-        w.i32(self.exp);
-        w.i32(self.max_exp);
-        w.u16(self.weight);
-        w.u16(self.max_weight);
-        w.u8(self.wear_weight);
-        w.u8(self.max_wear_weight);
-        w.u8(self.hand_weight);
-        w.u8(self.max_hand_weight);
-    }
+fn encode_ability_into(abil: &Ability, w: &mut Writer) {
+    w.u8(22);
+    w.u8(abil.level);
+    w.u8(abil.reserved1);
+    w.u16(abil.ac);
+    w.u16(abil.mac);
+    w.u16(abil.dc);
+    w.u16(abil.mc);
+    w.u16(abil.sc);
+    w.u16(abil.hp);
+    w.u16(abil.mp);
+    w.u16(abil.max_hp);
+    w.u16(abil.max_mp);
+    w.i16(abil.reserved2);
+    w.u8(abil.exp_count);
+    w.u8(abil.exp_max_count);
+    w.i32(abil.exp);
+    w.i32(abil.max_exp);
+    w.u16(abil.weight);
+    w.u16(abil.max_weight);
+    w.u8(abil.wear_weight);
+    w.u8(abil.max_wear_weight);
+    w.u8(abil.hand_weight);
+    w.u8(abil.max_hand_weight);
 }
 
 /// `Ability`（= oracle `WAbil`）的 **`EDCode.EncodeMessage` 体**：MemoryPack 序列化后**丢掉成员数首字节**。
@@ -338,58 +314,41 @@ impl Ability {
 #[allow(dead_code)]
 pub fn encode_ability(abil: &Ability) -> Vec<u8> {
     let mut w = Writer::default();
-    abil.encode(&mut w);
+    encode_ability_into(abil, &mut w);
     // 丢首字节（`Ability` 的成员数 22）——`EncodeMessage` 的口径
     w.out[1..].to_vec()
 }
 
-/// `NakedAbility`（class：10 个成员）。
-#[derive(Debug, Clone, PartialEq)]
-pub struct NakedAbility {
-    pub dc: u16,
-    pub mc: u16,
-    pub sc: u16,
-    pub ac: u16,
-    pub mac: u16,
-    pub hp: u16,
-    pub mp: u16,
-    pub hit: u8,
-    pub speed: i32,
-    pub reserved: u8,
+fn decode_naked(r: &mut Reader) -> PResult<Option<NakedAbility>> {
+    if !obj_header(r, 10)? {
+        return Ok(None);
+    }
+    Ok(Some(NakedAbility {
+        dc: r.u16()?,
+        mc: r.u16()?,
+        sc: r.u16()?,
+        ac: r.u16()?,
+        mac: r.u16()?,
+        hp: r.u16()?,
+        mp: r.u16()?,
+        hit: r.u8()?,
+        speed: r.i32()?,
+        reserved: r.u8()?,
+    }))
 }
 
-impl NakedAbility {
-    fn decode(r: &mut Reader) -> PResult<Option<Self>> {
-        if !obj_header(r, 10)? {
-            return Ok(None);
-        }
-        Ok(Some(Self {
-            dc: r.u16()?,
-            mc: r.u16()?,
-            sc: r.u16()?,
-            ac: r.u16()?,
-            mac: r.u16()?,
-            hp: r.u16()?,
-            mp: r.u16()?,
-            hit: r.u8()?,
-            speed: r.i32()?,
-            reserved: r.u8()?,
-        }))
-    }
-
-    fn encode(&self, w: &mut Writer) {
-        w.u8(10);
-        w.u16(self.dc);
-        w.u16(self.mc);
-        w.u16(self.sc);
-        w.u16(self.ac);
-        w.u16(self.mac);
-        w.u16(self.hp);
-        w.u16(self.mp);
-        w.u8(self.hit);
-        w.i32(self.speed);
-        w.u8(self.reserved);
-    }
+fn encode_naked(n: &NakedAbility, w: &mut Writer) {
+    w.u8(10);
+    w.u16(n.dc);
+    w.u16(n.mc);
+    w.u16(n.sc);
+    w.u16(n.ac);
+    w.u16(n.mac);
+    w.u16(n.hp);
+    w.u16(n.mp);
+    w.u8(n.hit);
+    w.i32(n.speed);
+    w.u8(n.reserved);
 }
 
 /// `ServerUserItem`（class：9 个成员）。`double`/`Prefix` 可为 null。
@@ -613,12 +572,12 @@ impl CharacterData {
             sex: r.u8()?,
             job: r.u8()?,
             gold: r.i32()?,
-            abil: Ability::decode(r)?,
+            abil: decode_ability(r)?,
             status_time_arr: decode_u16_vec(r)?,
             home_map: r.string()?,
             home_x: r.i16()?,
             home_y: r.i16()?,
-            bonus_abil: NakedAbility::decode(r)?,
+            bonus_abil: decode_naked(r)?,
             bonus_point: r.i32()?,
             credit_point: r.u8()?,
             re_level: r.u8()?,
@@ -718,14 +677,14 @@ impl CharacterData {
 fn encode_opt_ability(w: &mut Writer, v: Option<&Ability>) {
     match v {
         None => w.u8(NULL_OBJ),
-        Some(a) => a.encode(w),
+        Some(a) => encode_ability_into(a, w),
     }
 }
 
 fn encode_opt_naked(w: &mut Writer, v: Option<&NakedAbility>) {
     match v {
         None => w.u8(NULL_OBJ),
-        Some(n) => n.encode(w),
+        Some(n) => encode_naked(n, w),
     }
 }
 
@@ -934,7 +893,7 @@ mod tests {
     /// 52/752 的输入接缝：`encode_ability` 必须逐字节等于 oracle `EncodeMessage(WAbil)` 的体。
     ///
     /// 用 M0 金标准 #12（`SM_ABILITY`，7200/s2c）的真字节锚定：线缆 54B ⇒ `edcode::decode` 得 40B；
-    /// 补回被丢掉的成员数首字节（22）后按 [`Ability::decode`] 解出 WAbil，再 [`encode_ability`]
+    /// 补回被丢掉的成员数首字节（22）后按 [`decode_ability`] 解出 WAbil，再 [`encode_ability`]
     /// 必须回到那 40B（防“按直觉另写一个 40B”）。
     #[test]
     fn encode_ability_matches_golden_frame_12_tail() {
@@ -974,7 +933,7 @@ mod tests {
         with_count.push(22u8); // 补回被 EncodeMessage 丢掉的成员数首字节
         with_count.extend_from_slice(&tail);
         let mut r = Reader::new(&with_count);
-        let abil = Ability::decode(&mut r)
+        let abil = decode_ability(&mut r)
             .expect("40B 体补首字节后必须能按 Ability 解码")
             .expect("WAbil 非 null");
         assert_eq!(abil.level, 1, "金标准 #12 解出的 level");
@@ -1268,11 +1227,11 @@ mod tests {
         let full = oracle("stage6");
         let rec = parse_player_data(&full).unwrap();
         let mut w = Writer::default();
-        rec.data.abil.as_ref().unwrap().encode(&mut w);
+        encode_ability_into(rec.data.abil.as_ref().unwrap(), &mut w);
         assert_eq!(w.out, oracle("abil"));
 
         let mut w = Writer::default();
-        rec.data.bonus_abil.as_ref().unwrap().encode(&mut w);
+        encode_naked(rec.data.bonus_abil.as_ref().unwrap(), &mut w);
         assert_eq!(w.out, oracle("naked"));
 
         let mut w = Writer::default();

@@ -268,3 +268,37 @@ DELETE p FROM mir2_account.account_protection p JOIN mir2_account.account a ON p
   WHERE a.Account LIKE 'm3%';
 DELETE FROM mir2_account.account WHERE Account LIKE 'm3%';
 ```
+
+## 装备/能力接缝（`bins/game-svr/src/ability.rs`，**M2 车道接线点**）
+
+M3 第一片（`feature.rs`）+ 本片（`ability.rs`）把"**装备物品集 ⇒ `50/41/10/213` 帧的 feature、
+`52 SM_ABILITY` 的 `WAbil`、`752 SM_SUBABILITY` 的 7 字段**"做成无 I/O 的纯函数接缝。
+`openmir2-m2-enter-world-frames` 的入图帧序里有 `52/752`，接线直接用这两个模块即可，**不要复制第二份实现**。
+
+| 接缝 | 位置 | 输入 → 输出 |
+| --- | --- | --- |
+| 外形 feature | `feature.rs`（已合入 `1df92efe`） | `StdItem.Shape`(Dress/Weapon) + Gender + Hair → `i32` |
+| 模板查表 | `ability::ItemCatalog` / `StdItemCatalog` | 物品 `Index` → `&StdItem`（`StdItems` 模板） |
+| 装备集取值 | `ability::equipped_feature` | `UseItems[13]` + 目录 → feature `i32` |
+| 派生能力 | `ability::recalc_abilitys` | `Abil`+`BonusAbil`+装备+背包 → `WAbil`(22 字段) + `SubAbility`(7) |
+
+设备/状态的**源**：`Abil`/`BonusAbil` 来自 `record.rs`（角色记录，已全字段解析）；
+`UseItems`/背包 Index 来自角色记录 `hum_items` / `bag_items`。
+
+**未做（登记在卡，不阻塞接线）**：有效物品的 Desc 升级差量（`GetUpgradeStdItem`）、
+套装/特殊 Shape 的巨型 else-if 块、buff、`MagicList` 对 HitPoint 的加成、`ApplyItemParametersByJob` 龙装分支。
+⇒ 本片直接收"**已升级的有效 `StdItem`**"；普通（非套装/非龙装/无升级）物品与 oracle 逐字段相同。
+
+### 复现 oracle 向量（真身探针，改坏必红）
+
+```powershell
+# 在**仓库根**运行（源锚点用相对路径）
+dotnet build mir2-rs/tests/parity/m3/ability-probe -c Release
+dotnet mir2-rs/tests/parity/m3/ability-probe/bin/Release/net8.0/ability-probe.dll `
+  mir2-rs/tests/parity/m3/fixtures/ability_vectors.json
+cargo test -p game-svr --lib        # 回读夹具逐字段核对
+```
+
+向量覆盖：裸装（复现 M0 金标准 52/752）、`BonusAbil` 非 0、`ApplyItemParameters` 的每个
+`StdMode` 分支（5/6、10/11、15、19、20、21、22、23、24、26、52/54、53、default）、`Dura==0` 只称重、
+满装多槽、`Index==0`/缺模板忽略、Dress/Weapon 的 feature。

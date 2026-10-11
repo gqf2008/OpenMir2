@@ -9,5 +9,6 @@
 //! 所以把这一层提成 lib（见 `openmir2-m2-enter-world-frames` 的判据②/红检）。
 #![allow(clippy::doc_markdown)]
 
+pub mod ability;
 pub mod feature;
 pub mod smframe;

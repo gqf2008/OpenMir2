@@ -629,6 +629,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "encoding_rs",
+ "mir2-data",
  "mir2-envir",
  "mir2-protocol",
  "mir2-shared",
