@@ -73,6 +73,16 @@ powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps
 
 起栈前若目标端口已被监听 ⇒ exit 1（**不静默混实现**）；缺 exe/配置 ⇒ `PREREQ_MISSING` exit 2。
 
+> **R1-3（`-GameSvrConf` 测试形态的 `NoticeDir` 坑）**：658 `SM_SENDNOTICE` 的公告文本按
+> `<base>/<NoticeDir>/Notice.txt` 读，`base` = **`Server.conf` 所在目录**（`mapwire::base_path`）；
+> oracle 用 `M2Share.BasePath = AppContext.BaseDirectory`（**exe 目录**）。生产形态（conf 与 exe 同目录、
+> `NoticeDir=Notice` 相对）两者等价；但**测试形态**（`-GameSvrConf` 指到别处 + 补键副本，例如
+> `E:\tmp\m2-acceptance\stack\gsvr\Server.conf`）若仍写相对 `NoticeDir`，base 下就没有
+> `Notice/Notice.txt`。**R1-1 之后**这不再表现为「658 不下发」，而是发一条 **header-only 658**
+> （空尾）⇒ ③ 对账在第 1 条就红（金标准 #1 尾是 320B 公告原文，空尾对不上，且后续帧序仍从 `51` 起）。
+> 要用真公告，必须把 `NoticeDir` 写成**绝对路径**（`NoticeDir=E:/MirServer/M2GameSvr/Notice`）。
+> `start_rust_stack.ps1` 不生成补键副本（副本由操作者准备）⇒ 手工起测试栈时自己保证这一点。
+
 ---
 
 ## 1. ① 端口所有权实拍 —— `check_ports.ps1`
@@ -239,7 +249,7 @@ MySQL 3306 不可达 / 缺快照抽取件 ⇒ exit 2；任一路径 diff != 0 �
 
 | ident | 帧 | 缺的运行时输入 | 由哪张卡提供 | 还差哪一步（2026-10-11 重判） |
 | --- | --- | --- | --- | --- |
-| 658 | `SM_SENDNOTICE` | 公告文本（`NoticeMgr.GetNoticeMsg`） | ✅ 配置层（本片接） | **已接线**：`notice.rs` 读 `<base>/<NoticeDir>/Notice.txt`、按 `ReadLine` 切行 + `\x20\x1B\x1B` 连接（金标准 #1 尾巴 320B 锚定）；`[Share] NoticeDir`（缺省 `Notice`）入 `config.rs`；`main.rs` 进世界时放入 `EnterWorldInputs.notice`。**红检**：分隔符改 2B ⇒ `notice_roundtrip_matches_golden_658_tail` 必红 |
+| 658 | `SM_SENDNOTICE` | 公告文本（`NoticeMgr.GetNoticeMsg`） | ✅ 配置层（已接） | **已接线**：`notice.rs` 读 `<base>/<NoticeDir>/Notice.txt`、按 `ReadLine` 切行 + `\x20\x1B\x1B` 连接（金标准 #1 尾巴 320B 锚定）；`[Share] NoticeDir`（缺省 `Notice`）入 `config.rs`；`main.rs` 进世界时放入 `EnterWorldInputs.notice`。**R1-1**：空/缺/读失败 ⇒ 仍发 **header-only 658**（照 oracle 空尾分支）；**R1-2**：1:1 搬 `Replace("/r/n/r/n ", "")`（字面量正斜杠，真实语料 no-op）。**红检**：分隔符改 2B ⇒ `notice_roundtrip_matches_golden_658_tail` 必红；空公告跳过 658 ⇒ `empty_notice_still_sends_header_only_658` + 进程级 `enter_world_emits_sm_newmap_byte_equal_to_golden` 必红；去掉 `apply_notice_replace` ⇒ `literal_slash_r_n_replace_is_carried_over` 必红 |
 | 51 | `SM_NEWMAP` | ✅ 逻辑名+坐标（记录）；`map_id`/尺寸 ✅（envir）；**`DayBright()`** | `Env.Flag`（envir **未解析**） | envir 卡只给 cells/doors/points/尺寸/map_id，**没有 `Envir.Flag.DayLight/boDarkness`** ⇒ `DayBright()` 仍缺；占位 0 |
 | 50 | `SM_LOGON` | `MessageBodyWL=(GetFeatureToLong,CharStatus,Tag1,Tag2)` | 物品/装备层（未开卡）+ world | `GetFeatureToLong` 要 `UseItems[Dress/Weapon]` 的 `StdItem.Shape`（`PlayObject.cs:3395`）⇒ 需物品系统 |
 | 41 | `SM_FEATURECHANGED` | `GetFeatureToLong()` | 同上 | 同 50 |

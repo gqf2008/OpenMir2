@@ -932,6 +932,32 @@ async fn enter_world_emits_sm_newmap_byte_equal_to_golden() {
     .await
     .unwrap();
 
+    // **R1-1**：生产路径固定先发 658（`SM_SENDNOTICE`）。本用例的测试形态没有
+    // `Notice.txt`（`spawn_maps` 用临时 conf）⇒ 658 必须是 **header-only**（12B 命令头 + 无尾），
+    // 照 oracle 空公告分支（`SendDefMessage` 空尾 `else SendSocket(ClientMsg)`）。
+    let (nm, notice_body) = wait_gm_data(&mut gate).await;
+    assert_eq!(nm.socket, 901, "658 的 Socket 必须是该用户的 SocketId");
+    assert_eq!(
+        &notice_body[4..6],
+        &658u16.to_le_bytes(),
+        "首帧必须是 658 SM_SENDNOTICE"
+    );
+    assert_eq!(
+        i32::from_le_bytes([
+            notice_body[0],
+            notice_body[1],
+            notice_body[2],
+            notice_body[3]
+        ]),
+        2000,
+        "SendNotice 的 Recog 恒 2000"
+    );
+    assert_eq!(
+        notice_body.len(),
+        12,
+        "缺 Notice.txt ⇒ header-only 658（12B 命令头 + 无尾）"
+    );
+
     let (dm, body) = wait_gm_data(&mut gate).await;
     assert_eq!(dm.socket, 901, "GM_DATA 的 Socket 必须是该用户的 SocketId");
     assert_eq!(dm.session_id, 222, "SessionId 必须是该网关会话的");

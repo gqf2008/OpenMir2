@@ -219,28 +219,30 @@ async fn main() -> Result<()> {
         None => mapwire::placeholder_sizes(&cfg.maps).map_err(anyhow::Error::msg)?,
     };
     // 公告文本（658 `SM_SENDNOTICE` 的配置层输入）：`<base>/<NoticeDir>/Notice.txt`。
-    // 与 oracle `NoticeMgr.GetNoticeMsg("Notice")` 同源；读不到即不下发该帧并记 WRN。
+    // 与 oracle `NoticeMgr.GetNoticeMsg("Notice")` 同源；**R1-1**：读不到/为空时 oracle 仍发
+    // 一条 header-only 658（`SendDefMessage` 空尾走 `SendSocket(ClientMsg)`），故这里只记 WRN。
     let notice = notice::load_notice(&base, &cfg.notice_dir);
-    match &notice {
-        Some(text) => glog!(
+    if notice.is_empty() {
+        glog!(
+            "WRN",
+            "公告为空/缺失（base={} NoticeDir={}）⇒ 仍发 header-only 658（照 oracle）",
+            base.display(),
+            cfg.notice_dir
+        );
+    } else {
+        glog!(
             "INF",
             "公告已载入：{} 字节（base={} NoticeDir={}）",
-            text.len(),
+            notice.len(),
             base.display(),
             cfg.notice_dir
-        ),
-        None => glog!(
-            "WRN",
-            "未找到公告文本（base={} NoticeDir={}）⇒ 658 SM_SENDNOTICE 不下发",
-            base.display(),
-            cfg.notice_dir
-        ),
+        );
     }
     let _sim = std::thread::Builder::new()
         .name("m2-sim".to_string())
         // 公告文本（oracle `NoticeMgr.GetNoticeMsg("Notice")`，帧 658 `SM_SENDNOTICE`）：
-        // 配置层输入，启动时读一次、进程内复用；读不到即不下发该帧（不报错，照 oracle
-        // `LoadFromFile` 的 `File.Exists` 早退）。
+        // 配置层输入，启动时读一次、进程内复用；**R1-1**：读不到时为空字节，但生产路径仍发
+        // header-only 658（照 oracle 空尾分支；`notice.rs` 模块头有源码定位）。
         .spawn(move || sim_loop(map_sizes, registry, notice, ev_rx, Some(db)))
         .context("起 sim 线程失败")?;
 
@@ -377,7 +379,7 @@ fn route_to_gate<'a>(
 fn sim_loop(
     map_sizes: Vec<(i32, i32)>,
     registry: Option<mir2_envir::MapRegistry>,
-    notice: Option<Vec<u8>>,
+    notice: Vec<u8>,
     ev_rx: std::sync::mpsc::Receiver<GateEvent>,
     mut db: Option<DbWiring>,
 ) {

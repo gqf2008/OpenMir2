@@ -15,13 +15,26 @@
 //!    源码里一个**裸 ESC**（该行字节实为 `"\x20\x1B\x1B"`）⇒ 分隔符三字节
 //!    [`NOTICE_SEP`]，且**最后一行后也跟一个分隔符**。
 //!
-//! 文件不存在、或读到的文本为空 ⇒ 返回 `None`（oracle `SendDefMessage` 对空 `sMsg`
-//! **不下发**，见 `PlayObject.Socket.cs:27-36` 的 `if (!string.IsNullOrEmpty(sMsg))`）。
+//! **R1-1（oracle 口径修正）**：文件不存在、或读到的文本为空 ⇒ 返回**空字节**（不是 `None`）。
+//! oracle `SendDefMessage(..., sMsg)` 的 `if (!string.IsNullOrEmpty(sMsg))` **只决定是否追加尾**：
+//! `sMsg` 为空时走 `else SendSocket(ClientMsg)`（`PlayObject.Socket.cs:38-41`），
+//! 而 `SendSocket(CommandMessage)` 照常写 12B 命令头（`:69-88`）⇒ **仍下发一条 header-only 的 658**。
+//! 原先「空 ⇒ 不下发帧」把「不追加尾」误读成了「不发帧」，是口径误述（reviewer-1 `4f5005f3`）。
+//!
+//! **R1-2（1:1 搬 oracle 笔误）**：`SendNotice` 末尾是
+//! `sNoticeMsg.Replace("/r/n/r/n ", "")`——**字面量正斜杠**（oracle 的笔误，本意应是 `\r\n\r\n `）。
+//! 真实 `Notice.txt` 无该子串 ⇒ 逐字节不变；仍按「连 bug 一起搬」补上，见 [`NOTICE_REPLACE_FROM`]。
 
 use std::path::Path;
 
 /// `PlayObject.SendNotice` 的行分隔符：源码字面量 `"\x20\x1B"` + 裸 ESC = 3 字节。
 pub const NOTICE_SEP: [u8; 3] = [0x20, 0x1B, 0x1B];
+
+/// oracle `sNoticeMsg.Replace("/r/n/r/n ", "")` 的**字面量**（正斜杠，非 `\r\n`）。
+///
+/// `PlayObject.cs:1076` 原文如此，属 oracle 的笔误；本层 1:1 搬入（行为等价优先）。
+/// 真实 `E:/MirServer/M2GameSvr/Notice/Notice.txt` 与金标准 #1 尾巴都**不含**该子串 ⇒ 该替换为 no-op。
+pub const NOTICE_REPLACE_FROM: &[u8] = b"/r/n/r/n ";
 
 /// 公告文件名（`NoticeMgr.GetNoticeMsg` 里恒为 `sStr + ".txt"`，调用点是 `"Notice"`）。
 pub const NOTICE_FILE: &str = "Notice.txt";
@@ -74,28 +87,41 @@ pub fn join_notice(lines: &[Vec<u8>]) -> Vec<u8> {
     out
 }
 
-/// 原始 `Notice.txt` 字节 → 公告原文；空 ⇒ `None`（不下发）。
+/// 1:1 复刻 oracle `sNoticeMsg.Replace(NOTICE_REPLACE_FROM, "")`（字面量正斜杠；左到右、不重叠）。
 #[must_use]
-pub fn notice_from_bytes(text: &[u8]) -> Option<Vec<u8>> {
-    let joined = join_notice(&split_read_lines(text));
-    if joined.is_empty() {
-        None
-    } else {
-        Some(joined)
+pub fn apply_notice_replace(text: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(text.len());
+    let mut i = 0;
+    while i < text.len() {
+        if text[i..].starts_with(NOTICE_REPLACE_FROM) {
+            i += NOTICE_REPLACE_FROM.len();
+        } else {
+            out.push(text[i]);
+            i += 1;
+        }
     }
+    out
 }
 
-/// 读 `<base>/<notice_dir>/Notice.txt` 并产出公告原文。
+/// 原始 `Notice.txt` 字节 → 公告原文；空/缺 ⇒ **空字节**（oracle 仍发 header-only 658，见模块头 R1-1）。
+#[must_use]
+pub fn notice_from_bytes(text: &[u8]) -> Vec<u8> {
+    apply_notice_replace(&join_notice(&split_read_lines(text)))
+}
+
+/// 读 `<base>/<notice_dir>/Notice.txt` 并产出公告原文；文件不存在/读失败 ⇒ 空字节。
 ///
 /// `base` 等价 oracle `M2Share.BasePath`（生产下是 `Server.conf` 所在目录，
 /// 见 `mapwire::base_path`）；`notice_dir` 是 `[Share] NoticeDir`（oracle 缺省 `Notice`）。
-/// 文件不存在（或读失败）⇒ `None`——这与 oracle `LoadFromFile` 里 `if (!File.Exists) return;`
-/// 同构：读不到就当没有公告，而不是报错。
+/// 读不到 ⇒ 空字节——与 oracle `LoadFromFile` 里 `if (!File.Exists) return;` 同构：
+/// 读不到就当没有公告文本，而不是报错；但**帧仍要发**（空尾）。
 #[must_use]
-pub fn load_notice(base: &Path, notice_dir: &str) -> Option<Vec<u8>> {
+pub fn load_notice(base: &Path, notice_dir: &str) -> Vec<u8> {
     let path = base.join(notice_dir).join(NOTICE_FILE);
-    let text = std::fs::read(&path).ok()?;
-    notice_from_bytes(&text)
+    match std::fs::read(&path) {
+        Ok(text) => notice_from_bytes(&text),
+        Err(_) => Vec::new(),
+    }
 }
 
 #[cfg(test)]
@@ -163,7 +189,7 @@ mod tests {
             file.extend_from_slice(b"\r\n");
         }
 
-        let got = notice_from_bytes(&file).expect("有内容必须产出公告");
+        let got = notice_from_bytes(&file);
         assert_eq!(
             got, plain,
             "Notice.txt 原文 → 公告原文 必须与金标准 658 尾巴逐字节相等"
@@ -191,25 +217,53 @@ mod tests {
         assert_eq!(split_read_lines(b"a\n\n"), vec![b"a".to_vec(), Vec::new()]);
     }
 
-    /// 空文本不下发（oracle `SendDefMessage` 对空 `sMsg` 直接返回）。
+    /// **R1-1**：空文本产出**空字节**（不是 `None`）——上层据此仍发 header-only 658。
     #[test]
-    fn empty_notice_is_not_sent() {
-        assert_eq!(notice_from_bytes(b""), None);
+    fn empty_notice_is_empty_bytes() {
+        assert_eq!(notice_from_bytes(b""), Vec::<u8>::new());
         assert_eq!(join_notice(&[]), Vec::<u8>::new());
-        assert!(notice_from_bytes(b"\r\n").is_some(), "非空行仍要下发");
+        assert_eq!(
+            notice_from_bytes(b"\r\n"),
+            b"\x20\x1b\x1b".to_vec(),
+            "非空行仍要下发"
+        );
     }
 
-    /// 缺 `Notice.txt` ⇒ 不报错、返回 `None`（照 oracle `LoadFromFile` 的 `File.Exists` 早退）。
+    /// **R1-2**：1:1 搬 oracle 的 `.Replace("/r/n/r/n ", "")`（**字面量正斜杠**，非 `\r\n`）。
+    ///
+    /// 真实 `Notice.txt` 无该子串 ⇒ 该用例是**唯一**能证明「搬了 bug」的判据：
+    /// 去掉 [`apply_notice_replace`] ⇒ 本用例必红（红检见 `pi-m2svr-r1-*.log`）。
     #[test]
-    fn missing_notice_file_is_none() {
+    fn literal_slash_r_n_replace_is_carried_over() {
+        // `join_notice` 先按行 + `\x20\x1B\x1B` 拼，再整体 Replace。
+        assert_eq!(
+            notice_from_bytes(b"aa/r/n/r/n bb\r\n"),
+            b"aabb\x20\x1b\x1b".to_vec(),
+            "字面量 `/r/n/r/n `（带尾空格）必须被删掉"
+        );
+        // 只删「带尾空格的 9 字节」；无尾空格的字面量 `\r\n\r\n `（真实 CRLF）不动。
+        // 注意：行尾分隔符首字节就是 0x20，所以「line 恰为 `/r/n/r/n`」会与分隔符拼成
+        // `/r/n/r/n ` 而被删除——oracle 在同一拼接串上做 Replace，行为相同。
+        assert_eq!(
+            notice_from_bytes(b"/r/n/r/n\r\n"),
+            b"\x1b\x1b".to_vec(),
+            "分隔符首字节 0x20 被字面量吃掉 ⇒ 剩下裸 ESC\nESC（与 oracle 同）"
+        );
+        assert_eq!(
+            apply_notice_replace(b"\r\n\r\n x"),
+            b"\r\n\r\n x".to_vec(),
+            "真实 CRLF 序列不在删除集中"
+        );
+    }
+
+    /// 缺 `Notice.txt` ⇒ 不报错、返回**空字节**（oracle `File.Exists` 早退，但帧仍发）。
+    #[test]
+    fn missing_notice_file_is_empty() {
         let dir = std::env::temp_dir().join(format!("gs-notice-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("Notice")).unwrap();
-        assert_eq!(load_notice(&dir, "Notice"), None);
+        assert_eq!(load_notice(&dir, "Notice"), Vec::<u8>::new());
         std::fs::write(dir.join("Notice").join("Notice.txt"), b"hello\r\n").unwrap();
-        assert_eq!(
-            load_notice(&dir, "Notice"),
-            Some(b"hello\x20\x1b\x1b".to_vec())
-        );
+        assert_eq!(load_notice(&dir, "Notice"), b"hello\x20\x1b\x1b".to_vec());
         std::fs::remove_dir_all(&dir).ok();
     }
 }
