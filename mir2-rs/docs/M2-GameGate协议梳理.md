@@ -265,6 +265,27 @@ OTP、`GM_CHECKCLIENT` 周期帧、`ClientTimeOutTime` 空闲回收。卡内验�
 ⇒ 切片 3 的落地顺序据此调整为：**先给 Rust 侧的速度规则留出可注入时钟的接缝**（生产用真钟、
 测试用虚拟钟），再实现规则本体；否则规则既不能单测、也无法进差分。
 
+### 7.10.1 **自我修正（同轮复核源码得出）**：在现网这套配置下，超速帧**不会被丢**
+
+上面那段结论只看了"用墙钟算间隔"，没看**惩罚分支怎么处理**。补读之后要改口径：
+
+| 事实 | 证据 |
+| --- | --- |
+| 规则**确实全开** | 现网 `config.conf` 的 `[Switch]` 段：`MoveInterval=1`、`SpellInterval=1`、`AttackInterval=1`、`PickupInterval=1`、`EatInterval=1`、`TurnInterval=1`、`ChatInterval=1`…（`GateConfig.cs:259-261` 的默认值也全 `true`） |
+| 惩罚方式是 **DelaySend** | `[Method] OverSpeedPunishMethod=3`（= `PunishMethod.DelaySend`，与 `GateConfig.cs:286` 默认一致）；`[Float] PunishIntervalRate=1`、`[Integer] PunishBaseInterval=20` |
+| **DelaySend 下超速帧照转**（不丢） | `ClientSession.cs:240-261`：`delayMsgCount == 0` 时只把 `MoveTick = currentTick + dwDelay`（预算后推），**没有 `return`**，函数继续走到 `:262 break` ⇒ 该帧仍被转发；只有 `delayMsgCount != 0` 那条才会 `return`（并可能在 `>= 2` 时踢人） |
+| 另一条会丢/踢的是别的开关 | `[Switch] KickOverSpeed=0`（关）、`DoMotaeboSpeedCheck=1`（`SpeedHackWarnMethod` 相关）、`DenyPresend=0`（关）、`KickOverPacketSize=1`（只对超大包，`:196-201`） |
+
+⇒ **口径修正**：在现网配置（DelaySend + 延迟队列为空）下，**正常客户端流量的"网关→5000 帧集合"与客户端帧集合一致**
+⇒ **字节级差分不需要虚拟钟也能做**；墙钟只影响三处：① 预算后推（不改变当帧）；② 持续超速触发 `SendKickMsg`/踢人；
+③ 延迟队列/motaebo/CC 这些**异常**路径。⇒ 文档 §7.10 的原结论（"必须上虚拟钟"）**降级**为：
+**差分优先做"正常流量 + DelaySend"；异常/惩罚路径单开场景**（那里才需要虚拟钟或专门的 pacing 驱动）。
+这个修正也把切片 3 的优先级摆正：**先补"预算/踢人"这些会影响会话的规则**（它们能改变**帧集合**），
+再补只影响时机的部分。
+
+`PunishMethod` 枚举已核：`TurnPack=0, DropPack=1, NullPack=2, DelaySend=3`（`GateShare.cs:198-216`）
+⇒ 现网 `OverSpeedPunishMethod=3` **就是 DelaySend**，"超速照转、只后推预算"的结论成立。
+
 ## 8. 头号风险
 
 
@@ -282,8 +303,11 @@ OTP、`GM_CHECKCLIENT` 周期帧、`ClientTimeOutTime` 空闲回收。卡内验�
 - **已知不可比对的一格**（§7.9）：有尾部命令帧的最后 1 字节，oracle 是 `BytePool.Rent` 出来的**未初始化**内存
   （`ClientSession.cs:657-668` 只写 `12+tLen` 字节却按 `12+tLen+1` 发送）。Rust 侧固定送 `0`；
   逐帧差分要对这一格做**归一化**（或断言服务端不读它），否则会得到永远不等的假红。
-- **墙钟依赖的丢帧**（§7.10）：现网 `MoveInterval=366`/`AttackInterval=500` 等是**开着**的，超间隔的操作会被丢弃
-  ⇒ ① 差分基线只能是"两侧各自发往 5000 的帧"，不能拿客户端帧当期望；② 必须给两侧同一只**虚拟钟**
-  （照 `tests/parity/world` 桩 `HUtil32.GetTickCount()` 的做法做 `GameGateGolden`），否则回放时机不同、丢帧集合不同 ⇒ flaky。
+- **墙钟依赖的规则**（§7.10 + 7.10.1 的修正）：现网 `[Switch] MoveInterval=1` 等**全开**，但惩罚方式是
+  **DelaySend**（`OverSpeedPunishMethod=3`，`GateShare.cs:198-216`）⇒ 超速操作**照转**（只把预算后推、
+  不丢帧）⇒ **正常流量下"网关→5000 的帧集合"与客户端帧集合一致，字节级差分不需要虚拟钟**。
+  墙钟只影响：① 预算后推（当帧不变）；② 持续超速触发踢人；③ 延迟队列/motaebo/CC 等**异常**路径
+  ⇒ 差分优先做"正常流量 + DelaySend"，**异常/惩罚路径单开场景**（那里才需要虚拟钟或专门 pacing 驱动，
+  照 `tests/parity/world` 桩 `HUtil32.GetTickCount()` 的做法）。
 - 切片 1 若通过入口护栏，只能证明"**入口=Rust、世界=C#**"，不能当成 M3 的"游戏系统对齐"证据
   （与卡内 comment 的口径一致）。
