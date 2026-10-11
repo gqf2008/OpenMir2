@@ -1,0 +1,47 @@
+STAGE start @ 1791738095499
+CLIENT_PID=32608
+SHOT E:\tmp\m2acc\m2svr-run1\01_login.png
+STAGE login_id @ 1791738111732
+SHOT E:\tmp\m2acc\m2svr-run1\02_id.png
+STAGE login_pwd @ 1791738114427
+SHOT E:\tmp\m2acc\m2svr-run1\03_pwd.png
+STAGE login_submit @ 1791738117092
+STAGE charsel @ 1791738122970
+SHOT E:\tmp\m2acc\m2svr-run1\04_charsel.png
+STAGE enter_game @ 1791738123030
+STAGE notice_poll @ 1791738124748
+SHOT E:\tmp\m2acc\m2svr-run1\05_ingame.png
+SHOT E:\tmp\m2acc\m2svr-run1\05b_after_notice.png
+STAGE ingame @ 1791738145859
+SHOT E:\tmp\m2acc\m2svr-run1\05c_ingame_ready.png
+STAGE talk @ 1791738147925
+STAGE talk_sent @ 1791738152924
+SHOT E:\tmp\m2acc\m2svr-run1\m2-03-talk.png
+STAGE autoplay_on @ 1791738152991
+SHOT E:\tmp\m2acc\m2svr-run1\05c_autoplay_0s.png
+SHOT E:\tmp\m2acc\m2svr-run1\05c_autoplay_10s.png
+STAGE autoplay_off @ 1791738173805
+SHOT E:\tmp\m2acc\m2svr-run1\05d_autoplay_off.png
+STAGE walk_1 @ 1791738175270
+STAGE walk_2 @ 1791738177809
+STAGE walk_3 @ 1791738180363
+SHOT E:\tmp\m2acc\m2svr-run1\06_walk.png
+STAGE logout_button @ 1791738182991
+SHOT E:\tmp\m2acc\m2svr-run1\07a_logout_btn_hover.png
+SHOT E:\tmp\m2acc\m2svr-run1\07b_logout_confirm_dlg.png
+STAGE logout_alt_x @ 1791738186768
+SHOT E:\tmp\m2acc\m2svr-run1\07_logout_altx0.png
+SHOT E:\tmp\m2acc\m2svr-run1\07_logout_altx1.png
+SHOT E:\tmp\m2acc\m2svr-run1\07_logout_altx2.png
+STAGE logout_menu @ 1791738197657
+SHOT E:\tmp\m2acc\m2svr-run1\07_logout_menu_open.png
+SHOT E:\tmp\m2acc\m2svr-run1\07_logoutdlg.png
+STAGE logout_confirm @ 1791738202712
+STAGE back_charsel @ 1791738211589
+SHOT E:\tmp\m2acc\m2svr-run1\08_back_charsel.png
+STAGE reenter @ 1791738211672
+STAGE reentered @ 1791738227401
+SHOT E:\tmp\m2acc\m2svr-run1\09_reenter.png
+STAGE done @ 1791738227502
+CLIENT_STOPPED
+FLOW_OK
