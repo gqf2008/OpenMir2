@@ -12,22 +12,74 @@ const FIRST_PACKET_MAX_LEN: usize = 254;
 /// C# `HUtil32.GetValidStr3(string source, ref string dest, char divider)`（`HUtil32.cs:384-389`）：
 /// `source.Split(divider, 2, RemoveEmptyEntries)` ⇒ `dest = ary[0]`、返回 `ary[1]`（不足补空串）。
 ///
-/// 注意两处容易照错的语义：① **只切一次**（`count = 2`）；② `RemoveEmptyEntries`
-/// ⇒ 以分隔符开头的串会让 `ary[0]` 丢掉，`dest` 变成剩余部分。
+/// 逐字语义（**实机实测**得出，不是按文档直觉推断）：`count = 2` + `RemoveEmptyEntries` 合起来等于
+/// 「**连续分隔符并作一个、首尾分隔符吃掉**」：
+///
+/// 1. 先跳过**开头**的所有分隔符；
+/// 2. `dest` = 从那里起的第一个非空片段（整串都是分隔符 ⇒ `dest` 为空）；
+/// 3. 再跳过**紧随其后**的所有分隔符，**其余原样**（含其中的分隔符）作为返回值。
+///
+/// 证据：`E:\tmp\openmir2-watch\splittest\`——真 .NET 9 跑 `String.Split(char,2,RemoveEmptyEntries)`
+/// 与本实现逐例对比（`split-truth-table.txt`，21 例全 OK）。**旧实现**（`split_once` + `retain`）
+/// 只在「无连续/前导分隔符」时相等，其余形态会把首段吞并：例如 `\acc\name\cert\ver\code`
+/// C# 给 (`acc`,`name\cert\ver\code`)、旧实现给 (`acc\name\cert\ver\code`,``)⇒ 字段错位 ⇒ **假踢**。
+/// 这正是 reviewer-1 在 `openmir2-m2-gamegate` 上的 Important #2。
 #[must_use]
 pub fn get_valid_str3(source: &str, divider: char) -> (String, String) {
-    let mut parts: Vec<&str> = Vec::with_capacity(2);
-    match source.split_once(divider) {
-        Some((head, tail)) => {
-            parts.push(head);
-            parts.push(tail);
-        }
-        None => parts.push(source),
+    let head = source.trim_start_matches(divider);
+    if head.is_empty() {
+        return (String::new(), String::new());
     }
-    parts.retain(|p| !p.is_empty());
-    let dest = parts.first().copied().unwrap_or("").to_string();
-    let rest = parts.get(1).copied().unwrap_or("").to_string();
-    (dest, rest)
+    match head.split_once(divider) {
+        None => (head.to_string(), String::new()),
+        Some((dest, tail)) => (
+            dest.to_string(),
+            tail.trim_start_matches(divider).to_string(),
+        ),
+    }
+}
+
+/// `ClientLogin` 校验通过后的字段（`ClientSession.cs:1077-1085` 的解析顺序与变量名）——
+/// 合成登录包（`synthetic_login_body`）要用它们，所以校验函数必须把值带出来。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientLoginFields {
+    /// `sAccount`（账号）。
+    pub account: String,
+    /// `sHumName`（角色名）。
+    pub char_name: String,
+    /// `szCert`。
+    pub cert: String,
+    /// `szClientVerNo`（客户端版本号）。
+    pub client_ver: String,
+    /// `szCode`。
+    pub code: String,
+}
+
+/// 登录通过后**必须**发给 GameSvr 的合成登录包（`ClientSession.cs:1199-1224`）。
+///
+/// 这是服务端认识该会话的唯一凭据：漏发则 GameSvr 永远等不到登录（reviewer-1 在
+/// `openmir2-m2-gamegate` 上的 Important #1）。逐字复刻：
+///
+/// - 文本 = `**{account}/{charName}/{cert}/{clientVer}/{code}/{hardware}/{ServiceId}`
+///   —— 注意分隔符是 `/`，与客户端 face 的 `\` **不同**（`:1203` 的插值串）；
+/// - `hardware`：现网 `E:\MirServer\RunGate\config.conf` 的 `[Switch] ProcClientCount=0`
+///   ⇒ `Config.IsProcClientHardwareID=false` ⇒ **32 个 `0`**（`:1202` 三元表达式的 false 分支）；
+/// - `ServiceId`：该端点线号（`Conf\ConfigManager.cs:18`：`GateList[i].ServiceId = (byte)i`）；
+/// - body = `#0` + `EncryptUtil.Encode(GBK(文本))` + `!`，`PackLength = encodeLen + 3`（`:1204-1218`）。
+#[must_use]
+pub fn synthetic_login_body(f: &ClientLoginFields, service_id: u8) -> Vec<u8> {
+    /// `ClientSession.cs:1202` 里 `IsProcClientHardwareID == false` 时的常量。
+    const HARDWARE_DISABLED: &str = "000000000000000000000000000000";
+    let text = format!(
+        "**{}/{}/{}/{}/{}/{HARDWARE_DISABLED}/{service_id}",
+        f.account, f.char_name, f.cert, f.client_ver, f.code
+    );
+    let encoded = mir2_protocol::edcode::encode(&crate::gbk::encode(&text));
+    let mut body = Vec::with_capacity(encoded.len() + 3);
+    body.extend_from_slice(b"#0");
+    body.extend_from_slice(&encoded);
+    body.push(b'!');
+    body
 }
 
 /// 解析并校验登录文本；`Ok(())` = 通过（调用方据此把该会话标记为已登录）。
@@ -47,7 +99,7 @@ pub fn get_valid_str3(source: &str, divider: char) -> (String, String) {
 ///
 /// # Errors
 /// 返回人类可读的失败原因（照 oracle 的 `Kicked N` 措辞），调用方据此关会话。
-pub fn parse_client_login(text: &str, packet_len: usize) -> Result<(), String> {
+pub fn parse_client_login(text: &str, packet_len: usize) -> Result<ClientLoginFields, String> {
     if packet_len >= FIRST_PACKET_MAX_LEN || packet_len <= 15 {
         return Err(format!("packetLen={packet_len} 不在 (15,254)"));
     }
@@ -83,7 +135,13 @@ pub fn parse_client_login(text: &str, packet_len: usize) -> Result<(), String> {
     if code.chars().count() != 10 {
         return Err(format!("code 长度必须 10（实得 {}）", code.chars().count()));
     }
-    Ok(())
+    Ok(ClientLoginFields {
+        account,
+        char_name,
+        cert,
+        client_ver,
+        code,
+    })
 }
 
 #[cfg(test)]
@@ -140,22 +198,96 @@ mod tests {
         );
     }
 
-    /// `GetValidStr3` 的两个易错语义：只切一次 + RemoveEmptyEntries。
+    /// `GetValidStr3` 的逐字语义，**逐例对齐真 .NET 实测表**（`E:\tmp\openmir2-watch\splittest\
+    /// split-truth-table.txt`，21 例）。这里把整张表钉进单测：连续分隔符并作一个、首尾分隔符被吃掉。
     #[test]
     fn get_valid_str3_semantics() {
-        assert_eq!(
-            get_valid_str3("a\\b\\c", '\\'),
-            ("a".to_string(), "b\\c".to_string()),
-            "只切一次，其余留给下一次"
-        );
-        assert_eq!(
-            get_valid_str3("\\tail", '\\'),
-            ("tail".to_string(), String::new()),
-            "RemoveEmptyEntries：以分隔符开头时 dest 变成剩余部分"
-        );
-        assert_eq!(
-            get_valid_str3("nosep", '\\'),
-            ("nosep".to_string(), String::new())
-        );
+        let cases: &[(&str, &str, &str)] = &[
+            (r"a\b\c", "a", r"b\c"),
+            (r"\tail", "tail", ""),
+            ("nosep", "nosep", ""),
+            (r"a\\b", "a", "b"),
+            (r"\\a", "a", ""),
+            (r"\\\a", "a", ""),
+            (r"\a\b", "a", "b"),
+            (r"a\", "a", ""),
+            (r"\", "", ""),
+            ("", "", ""),
+            (r"acc\name\\ver\code\hwid", "acc", r"name\\ver\code\hwid"),
+            (r"acc\name\cert\\code\hwid", "acc", r"name\cert\\code\hwid"),
+            // reviewer-1 的 Important #2 用例：旧实现会把它整段当首段 ⇒ 字段错位 ⇒ 假踢
+            (r"\acc\name\cert\ver\code", "acc", r"name\cert\ver\code"),
+            (
+                r"acc\\name\cert\ver\code\hwid",
+                "acc",
+                r"name\cert\ver\code\hwid",
+            ),
+            (
+                r"acc\name\\\cert\ver\code\hwid",
+                "acc",
+                r"name\\\cert\ver\code\hwid",
+            ),
+            (r"a\\\b\c", "a", r"b\c"),
+            (r"a\\", "a", ""),
+            (r"\\a\\", "a", ""),
+            (r"a\b\\c", "a", r"b\\c"),
+            (r"\\\\", "", ""),
+            (
+                r"acc\name\cert\ver\code\hwid",
+                "acc",
+                r"name\cert\ver\code\hwid",
+            ),
+        ];
+        for (src, dest, rest) in cases {
+            assert_eq!(
+                get_valid_str3(src, '\\'),
+                ((*dest).to_string(), (*rest).to_string()),
+                "src={src:?}（口径见 split-truth-table.txt）"
+            );
+        }
+    }
+
+    /// 前导分隔符不能把账号吃掉：`\loadbot1\lb1a\...` 在 C# 里仍然解析出账号 `loadbot1`
+    /// （旧实现会给 `loadbot1\lb1a\...` ⇒ 账号长度 >12 ⇒ 假踢）。
+    #[test]
+    fn leading_separator_login_is_not_falsely_kicked() {
+        // 外层 `**` 之后紧跟一个多余的分隔符（truth table 第 13 行 `\acc\name\...` 的同形）
+        let text = r"**\loadbot1\lb1a\1\120020522\1200205220\AABB";
+        let f = parse_client_login(text, 60).expect("C# 接受这串，Rust 也必须接受");
+        assert_eq!(f.account, "loadbot1");
+        assert_eq!(f.char_name, "lb1a");
+    }
+
+    /// 合成登录包的**文本公式**独立复核：把产出的 body 解回明文再比
+    /// （不是用同一个 `format!` 自证），并钉住 `#0…!` 外形与 `PackLength = encodeLen + 3`。
+    #[test]
+    fn synthetic_login_body_matches_oracle_formula() {
+        let f = ClientLoginFields {
+            account: "loadbot1".to_string(),
+            char_name: "lb1a".to_string(),
+            cert: "1".to_string(),
+            client_ver: "120020522".to_string(),
+            code: "1200205220".to_string(),
+        };
+        for service_id in [0u8, 2] {
+            let body = synthetic_login_body(&f, service_id);
+            assert_eq!(&body[..2], b"#0", "合成登录包以 `#0` 开头（:1207-1208）");
+            assert_eq!(*body.last().unwrap(), b'!', "尾是 `!`（:1209）");
+            let text = crate::gbk::decode(&mir2_protocol::edcode::decode(&body[2..body.len() - 1]));
+            assert_eq!(
+                text,
+                format!(
+                    "**loadbot1/lb1a/1/120020522/1200205220/\
+                     000000000000000000000000000000/{service_id}"
+                ),
+                "文本必须逐字等于 :1203 的插值串（含 32 个 0 的 hardware 与末尾 ServiceId）"
+            );
+            let encode_len = mir2_protocol::edcode::encode(&crate::gbk::encode(&text)).len();
+            assert_eq!(
+                body.len(),
+                encode_len + 3,
+                "PackLength = encodeLen + 3（:1218）"
+            );
+        }
     }
 }

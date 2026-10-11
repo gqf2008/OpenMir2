@@ -239,8 +239,11 @@ GameSvr 的 body；③ 超出部分**重新编码**（用与解码同一个 EDCo
 - 有尾部：`PackLength = 12 + tLen + 1`（`tLen` = 尾部**重编码**后的长度），body = 解码态 12B + **输入的编码态尾部**（`payload[16..]`）+ 固定的 `0`；
 - 两条都有进程级测试钉住（`relays_open_data_heartbeat_and_close` 的无尾部断言、`command_frame_with_tail_is_rebuilt` 的尾部布局断言）。
 
-**仍未做**（登记）：速度规则/过滤器（`SessionSpeedRule`、`Filters/*`，只在非默认配置或异常客户端下可见）、
-OTP、`GM_CHECKCLIENT` 周期帧、`ClientTimeOutTime` 空闲回收。卡内验收 #1/#2 仍需整栈窗口。
+**仍未做**（登记，**清单以 §7.11 结尾的"仍未做"为准**）：速度规则的**非聊天部分**
+（`SessionSpeedRule` 的 move/attack/spell 预算——现网 `OverSpeedPunishMethod=3`（DelaySend）下它们照转，
+只在异常/持续超速时才可见，见 §7.10.1）、`Filters/*`、OTP（oracle 侧相关代码整段被注释掉）、
+`GM_CHECKCLIENT` 周期帧、`ClientTimeOutTime` 空闲回收、`MaxClientPacketCount` 等上限计数。
+卡内验收 #1/#2 仍需整栈窗口。
 
 ## 7.10 结构性发现：命令路径含**墙钟依赖的丢帧**，逐帧差分必须先给两侧上同一只虚拟钟
 
@@ -310,11 +313,35 @@ if (!msgContent.StartsWith(_commandFlagSpan)) {          // 非 @命令
 ③ 聊天帧**被转发时**的字节形态仍走 §7.9 的通用重建（`pszChatBuffer` 那套只在命中命令过滤器时用），
 所以切片 3 核心对它依旧适用。
 
+## 7.11 本轮收口：reviewer-1 的 2 Important + 3 Minor（2026-10-11）
+
+独立审查者 `openmir2-reviewer-1` 对 `ad40cbbe`（切片 1+2）出了 `request_changes`，逐条处置如下
+（判据都在 `bins/game-gate` 的测试里，可复跑）：
+
+| 条目 | 处置 | 证据 |
+| --- | --- | --- |
+| **Important #1**：登录通过后**没有**向 GameSvr 发合成登录包（oracle `ClientSession.cs:1199-1224`）⇒ GameSvr 永远等不到登录 | **已实现**：登录帧通过后立刻发一条 `GM_DATA`：body = `#0` + `Encode(GBK("**account/charName/cert/clientVer/code/{hardware}/{ServiceId}"))` + `!`，`PackLength = encodeLen + 3`。`hardware` = **32 个 `0`**（依据**现网配置**：`E:\MirServer\RunGate\config.conf` 的 `[Switch] ProcClientCount=0` ⇒ `Config.IsProcClientHardwareID=false`，走 `:1202` 的 false 分支）；`ServiceId` = 端点线号（`Conf\ConfigManager.cs:18`：`GateList[i].ServiceId = (byte)i`） | 进程级测试 `login_success_sends_synthetic_login_packet`（逐字节断言 body + 把 body **解回明文**复核文本公式 + 断言 `Socket`/`SessionId`/`SessionIndex`/`PackLength`）；单测 `synthetic_login_body_matches_oracle_formula` |
+| **Important #2**：`get_valid_str3` 与 `HUtil32.GetValidStr3` 不等价（C# `Split(divider,2,RemoveEmptyEntries)` 的语义 ≠ `split_once + retain`）⇒ 含前导/连续分隔符时字段错位 ⇒ **假踢** | **已实现**：按实测语义重写——「**连续分隔符并作一个、首尾分隔符吃掉**」：先跳过开头所有分隔符 ⇒ `dest` = 第一个非空片段 ⇒ 再跳过紧随其后的分隔符 ⇒ 其余原样返回 | 真 .NET 9 逐例实测表 `E:\tmp\openmir2-watch\splittest\`（`Program.cs` 复刻 `GetValidStr3`，输出 `split-truth-table.txt`，21 例）⇒ 单测 `get_valid_str3_semantics` 把整张表钉进 Rust；`leading_separator_login_is_not_falsely_kicked` 钉"不再假踢"（reviewer-1 举的 `\acc\name\cert\ver\code` 正是表内第 13 例） |
+| Minor #3：命令路径缺 `deCodeLen < 12` 判定 | **已实现**（`:170-175` ⇒ 关会话），且放在聊天间隔判定**之前**（oracle 的顺序） | `handle_frame`；`tests/relay.rs` 覆盖 |
+| Minor #2：`relay.rs` 把心跳放在登录前、并断言"恰好 1 条 `GM_DATA`" | **已改**：心跳**登录前后各发一条**（两条 oracle 路径不同，见下），断言改为"命令帧恰好 1 条 + 合成登录包恰好 1 条（且 `PackLength` = body 长）" | `relays_open_data_heartbeat_and_close` |
+| Minor #1："未登录时 1 字节帧被忽略（oracle 会踢）" | **就地核对后判为口径误判**（代码不变）：oracle 登录前对 1 字节帧走 `:673` 的 `destinationSpan[2..(packetLen-1)]` = `[2..0]` ⇒ 抛 `ArgumentOutOfRangeException`，被 `ServerManager.cs:234-241` 的 catch **只记日志**（`LogService.Error(e.Message)`）⇒ **帧被丢、会话存活**，`Kick`（= `Socket.Close()`）不会被调用。Rust 侧（丢弃 + 保持会话）与之一致，差异只在日志文本 | `ClientSession.cs:673`、`ServerManager.cs:234-241`（代码注释里逐条写明） |
+
+**同批落的 §7.10.2 聊天间隔**：`bins/game-gate/src/rules.rs` 的 `ChatThrottle`（纯函数 + 显式时间戳）+
+`[Switch] ChatInterval` / `[Integer] ChatInterval` 配置读取；未到间隔的 `CM_SAY` 帧**直接丢**、
+`@` 开头不判间隔、被丢的帧**不刷新** `SayMsgTick`。判据：`rules.rs` 3 条单测 +
+进程级 `say_interval_drops_the_second_chat_frame`（hello / hello-again / `@move` ⇒ 只有 2 条命令帧到 5000）。
+
+**仍未做**（本轮的完整登记）：`SessionSpeedRule` 的非聊天预算（DelaySend 下照转，异常路径才可见）、
+`Filters/*`、OTP、`GM_CHECKCLIENT` 周期帧、`ClientTimeOutTime`、`MaxClientPacketCount`/`NomClientPacketSize`
+等上限计数（`:196-`）、`SendKickMsg` 的下行回踢文案。
+
 ## 8. 头号风险
 
 
 - **客户端 face 有登录门禁（§7.6）**：未通过登录帧校验的客户端会被**剔除**；切片 1 目前会照转 `GM_DATA`
   ⇒ 这是**登记在案的差异**（不是等价），必须在切片 2 补上登录帧解析 + 失败剔除。
+  ——**追记**：切片 2 已做「解析 + 失败剔除 + 登录帧不转发」；本轮又补上「登录通过后向 GameSvr 发**合成登录包**」
+  （§7.11 的 Important #1）。缺这条时客户端侧"能进图"、GameSvr 侧却永远等不到登录——属于**不看 5000 侧就看不见**的假绿。
 - **协议面是"两套"**：把 LoginGate 的 `ServerDataMessage` 套到 GameGate 上会全错（§5）。
 - **客户端面是 20B 头而不是裸 EDCode 流**（§2）⇒ `bins/login-gate` 的 `FrameSplitter`（按 `#`…`!` 拆帧）
   **不能**照搬做客户端面；需要按 `ServerMessage` 头做定长头拆分。

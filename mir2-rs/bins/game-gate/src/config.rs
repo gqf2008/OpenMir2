@@ -37,6 +37,10 @@ pub struct Endpoint {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GateConfig {
     pub endpoints: Vec<Endpoint>,
+    /// `[Switch] ChatInterval`（C# `Config.IsChatInterval`；现网 `=1` ⇒ 开）。缺省按现网/默认 `true`。
+    pub chat_interval_enabled: bool,
+    /// `[Integer] ChatInterval`（C# `Config.ChatInterval`；现网 `=800`）。缺省 800。
+    pub chat_interval_ms: i64,
 }
 
 /// 默认配置文件：可执行文件同目录的 `config.conf`（与 C# `AppContext.BaseDirectory` 一致）。
@@ -94,7 +98,23 @@ pub fn load(path: &Path) -> Result<GateConfig> {
             gate_port: port(format!("GatePort{n}"))?,
         });
     }
-    Ok(GateConfig { endpoints })
+    // `[Switch]` / `[Integer]`：键名照 `ConfigManager.cs:140` 与 `:118` 的读法（同一把键名出现在两个段里）。
+    let switch = parse_section(&text, "Switch");
+    let integer = parse_section(&text, "Integer");
+    let get_in = |sec: &[(String, String)], key: &str| -> Option<String> {
+        sec.iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| v.clone())
+    };
+    let chat_interval_enabled = get_in(&switch, "ChatInterval").is_none_or(|v| v != "0");
+    let chat_interval_ms = get_in(&integer, "ChatInterval")
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(800);
+    Ok(GateConfig {
+        endpoints,
+        chat_interval_enabled,
+        chat_interval_ms,
+    })
 }
 
 /// 取 `[section]` 下的键值对（大小写不敏感；`;`/`#` 起头为注释；去掉行尾注释）。

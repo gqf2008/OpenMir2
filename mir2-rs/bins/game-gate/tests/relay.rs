@@ -6,10 +6,11 @@
 //! 判据（对齐协议梳理 §7.5 的实机取证，不是自洽往返）：
 //! 1. 客户端一连上，网关发 `GM_OPEN`，体 = 客户端 IP 字符串（`PackLength` 为其长度）、
 //!    `Socket` = 客户端 handle、`SessionIndex` = 0，且 `SessionId ∈ 0..=9999`（随机）；
-//! 2. 客户端发 ≥16 字节 body 的帧 ⇒ 网关以 `GM_DATA` 转发，**body 逐字节不变**，`SessionId` 与 GM_OPEN 一致；
-//! 3. 20B 头 + 1 字节 body（心跳）**不得**被转发；
-//! 4. body < 16 字节 ⇒ 网关关会话（"异常消息封包"）并补发 `GM_CLOSE`（`session_id=0, socket=handle`）；
-//! 5. 缺配置时进程**非零退出**（M1 验收④）。
+//! 2. 登录通过 ⇒ 网关**先补发一条合成登录包**（`#0…!`，`ClientSession.cs:1199-1224`）；
+//! 3. 客户端发 ≥16 字节 body 的命令帧 ⇒ 网关以 `GM_DATA` 转发（**重建后**的 body），`SessionId` 与 GM_OPEN 一致；
+//! 4. 20B 头 + 1 字节 body（心跳）**不得**被转发——登录前后各一条（两条 oracle 路径不同，见 `handle_frame`）；
+//! 5. body < 16 字节（登录后）⇒ 网关关会话（"异常消息封包"）并补发 `GM_CLOSE`（`session_id=0, socket=handle`）；
+//! 6. 缺配置时进程**非零退出**（M1 验收④）。
 
 use std::time::Duration;
 
@@ -72,6 +73,39 @@ fn frame(ident: u16, session_id: u16, body: &[u8]) -> Vec<u8> {
     v
 }
 
+/// 合成登录包（`ClientSession.cs:1207-1209`）以 `#0` 开头；命令路径重建的 body 以**解码态 12B** 开头。
+/// 断言"只数命令帧"时要把它排除掉。
+fn is_login_packet(body: &[u8]) -> bool {
+    body.starts_with(b"#0")
+}
+
+/// 读一帧（20B 头 + body）；连接断开返回 `None`。
+async fn read_frame(sock: &mut TcpStream) -> Option<(ServerMessage, Vec<u8>)> {
+    let mut head = [0u8; ServerMessage::SIZE];
+    if sock.read_exact(&mut head).await.is_err() {
+        return None;
+    }
+    let msg = ServerMessage::from_bytes(&head)?;
+    let mut body = vec![0u8; msg.body_len()];
+    if !body.is_empty() && sock.read_exact(&mut body).await.is_err() {
+        return None;
+    }
+    Some((msg, body))
+}
+
+/// 一直读到满足 `pred` 的帧（断开返回 `None`）。
+async fn read_until(
+    sock: &mut TcpStream,
+    pred: impl Fn(&ServerMessage, &[u8]) -> bool,
+) -> Option<(ServerMessage, Vec<u8>)> {
+    while let Some((m, b)) = read_frame(sock).await {
+        if pred(&m, &b) {
+            return Some((m, b));
+        }
+    }
+    None
+}
+
 async fn connect_with_retry(port: u16) -> TcpStream {
     for _ in 0..100 {
         if let Ok(c) = TcpStream::connect(("127.0.0.1", port)).await {
@@ -93,6 +127,68 @@ fn login_frame(text: &str) -> Vec<u8> {
 
 /// 现网形态（账号 8 / 角色名 4 / 版本号 9 / code 10 位）的登录文本。
 const GOOD_LOGIN: &str = "**loadbot1\\lb1a\\1\\120020522\\1200205220\\AABB";
+
+/// 造一个 `CM_SAY` 命令帧（解码态 = 12B 固定头，`Ident = CM_SAY` = 3030，后面跟聊天内容）。
+fn say_frame(content: &str) -> Vec<u8> {
+    let mut decoded = vec![0u8; 12];
+    decoded[4..6].copy_from_slice(&mir2_protocol::messages::CM_SAY.to_le_bytes());
+    decoded.extend_from_slice(content.as_bytes());
+    command_frame(&decoded)
+}
+
+/// 判据 9：`CM_SAY` 的间隔门（`ClientSession.cs:485-497`，现网 `ChatInterval=800`）——
+/// 800ms 内的第二条聊天**必须被丢**（不转发）；`@` 开头的内容不判间隔。
+#[tokio::test]
+async fn say_interval_drops_the_second_chat_frame() {
+    let (srv_port, srv_task) = fake_game_svr().await;
+    let gate_port = free_port();
+    let dir = std::env::temp_dir().join(format!("gg-say-{}-{}", std::process::id(), gate_port));
+    write_conf(&dir, srv_port, gate_port);
+    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_game-gate"))
+        .arg(dir.join("config.conf"))
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut client = connect_with_retry(gate_port).await;
+    client.write_all(&login_frame(GOOD_LOGIN)).await.unwrap();
+    client.flush().await.unwrap();
+    // 紧挨着两条聊天：第二条必须被丢
+    client.write_all(&say_frame("hello")).await.unwrap();
+    client.flush().await.unwrap();
+    client.write_all(&say_frame("hello again")).await.unwrap();
+    client.flush().await.unwrap();
+    // `@` 开头的内容不判间隔 ⇒ 这条必须通过
+    client.write_all(&say_frame("@move 1 2")).await.unwrap();
+    client.flush().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    child.kill().await.ok();
+    drop(client);
+
+    let got = tokio::time::timeout(Duration::from_secs(5), srv_task)
+        .await
+        .expect("假 GameSvr 未按时结束")
+        .unwrap();
+    let datas: Vec<&(ServerMessage, Vec<u8>)> = got
+        .iter()
+        .filter(|(m, b)| m.ident == u16::from(grobal2::GM_DATA) && !is_login_packet(b))
+        .collect();
+    assert_eq!(
+        datas.len(),
+        2,
+        "800ms 内的第二条普通聊天必须被丢；`@` 开头的第三条必须通过（实得 {} 条命令帧；\
+         合成登录包不计入）",
+        datas.len()
+    );
+    // 两条能到 5000 的body 必须**不同**（分别是 hello 与 @move 那条）。
+    // 注意：body 里**不是明文**——按 §7.9 的出帧构造，尾部抄的是**输入的编码态**字节，
+    // 所以这里不做 `ends_with(b"hello")` 这类明文断言（那属于 `command_frame_with_tail_is_rebuilt`
+    // 的职责：它按 `payload[16..]` 的编码态比对）。
+    assert_ne!(
+        datas[0].1, datas[1].1,
+        "两条通过的聊天帧 body 必须不同（hello vs @move）"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
 
 /// 造一个客户端 face 的**命令帧**：body = `#1` + EDCode(解码态载荷) + `!`。
 /// 登录通过后网关按 `ClientSession.cs:646-669` 重建出帧，所以测试要按这个形态发。
@@ -151,10 +247,15 @@ async fn bad_login_is_kicked_and_nothing_is_forwarded() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// 判据 7：服务端下发 `GM_SERVERUSERINDEX` 后，该会话后续 `GM_DATA` 必须带上同一个 `SessionIndex`。
+/// 判据：合成登录包**在 `GM_SERVERUSERINDEX` 之前**发出（`SessionIndex` 还是 0），
+/// 而服务端下发索引后的命令帧必须带上它。
 ///
 /// 依据：`ClientThread.cs:272-275`（把 `SessionIndex` 记到会话的 `SvrListIdx`）+
-/// `ClientSession.cs:649`（`SendMsg.SessionIndex = SvrListIdx`）。
+/// `ClientSession.cs:649`（`SendMsg.SessionIndex = SvrListIdx`）+
+/// `ClientSession.cs:1217`（登录包的 `SessionIndex` 用会话当时的 `SvrListIdx`）。
+///
+/// 时序是**确定**的：假 GameSvr 只在**收到合成登录包之后**才下发索引，所以登录包必然带 0、
+/// 之后的命令帧必然带 42——不依赖睡眠竞速。
 #[tokio::test]
 async fn server_user_index_is_echoed_on_gm_data() {
     let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -162,37 +263,33 @@ async fn server_user_index_is_echoed_on_gm_data() {
     let srv_task = tokio::spawn(async move {
         let (mut sock, _) = l.accept().await.unwrap();
         // 先收 GM_OPEN，拿到网关生成的 SessionId
-        let mut head = [0u8; ServerMessage::SIZE];
-        sock.read_exact(&mut head).await.unwrap();
-        let open = ServerMessage::from_bytes(&head).unwrap();
-        let mut open_body = vec![0u8; open.body_len()];
-        sock.read_exact(&mut open_body).await.unwrap();
-        assert_eq!(open.ident, u16::from(grobal2::GM_OPEN));
-        // 下发 SvrListIdx=42
+        let open = read_frame(&mut sock).await.expect("GM_OPEN");
+        assert_eq!(open.0.ident, u16::from(grobal2::GM_OPEN));
+        let sid = open.0.session_id;
+        // 等合成登录包（登录通过才会来），记下它的 SessionIndex，然后才下发 SvrListIdx=42
+        let login = read_until(&mut sock, |m, b| {
+            m.ident == u16::from(grobal2::GM_DATA) && is_login_packet(b)
+        })
+        .await
+        .expect("合成登录包");
+        assert_eq!(login.0.session_index, 0, "索引下发前登录包必须是 0");
         let idx = ServerMessage {
             packet_code: grobal2::PacketCode,
             socket: 0,
-            session_id: open.session_id,
+            session_id: sid,
             ident: u16::from(grobal2::GM_SERVERUSERINDEX),
             session_index: 42,
             pack_length: 0,
         };
         sock.write_all(&idx.to_bytes()).await.unwrap();
         sock.flush().await.unwrap();
-        // 再收数据帧，看它带没带 42
-        loop {
-            if sock.read_exact(&mut head).await.is_err() {
-                return None;
-            }
-            let m = ServerMessage::from_bytes(&head).unwrap();
-            let mut body = vec![0u8; m.body_len()];
-            if !body.is_empty() && sock.read_exact(&mut body).await.is_err() {
-                return None;
-            }
-            if m.ident == u16::from(grobal2::GM_DATA) {
-                return Some(m.session_index);
-            }
-        }
+        // 再收命令帧，看它带没带 42
+        let cmd = read_until(&mut sock, |m, b| {
+            m.ident == u16::from(grobal2::GM_DATA) && !is_login_packet(b)
+        })
+        .await
+        .expect("命令帧");
+        Some(cmd.0.session_index)
     });
 
     let gate_port = free_port();
@@ -206,7 +303,7 @@ async fn server_user_index_is_echoed_on_gm_data() {
     let mut client = connect_with_retry(gate_port).await;
     client.write_all(&login_frame(GOOD_LOGIN)).await.unwrap();
     client.flush().await.unwrap();
-    tokio::time::sleep(Duration::from_millis(200)).await; // 等服务端下发索引
+    tokio::time::sleep(Duration::from_millis(300)).await; // 等服务端下发索引
     client.write_all(&frame(11, 0, &[7u8; 32])).await.unwrap();
     client.flush().await.unwrap();
 
@@ -234,18 +331,21 @@ async fn relays_open_data_heartbeat_and_close() {
 
     let mut client = connect_with_retry(gate_port).await;
 
-    // 判据 4：心跳（1 字节 body）不得转发
+    // 判据 4（登录前）：1 字节 body——oracle 走 `:671-680` 的 else 分支、`destinationSpan[2..0]`
+    // 越界抛异常被 `ServerManager.cs:238` 吞掉 ⇒ 丢帧、会话存活。**不得**被转发。
     client.write_all(&frame(11, 0, b"*")).await.unwrap();
-    // 判据 2：先过登录（登录帧本身也不得被转发）
+    // 判据 2：先过登录（登录帧本身不得被转发，但要补发一条合成登录包）
     client.write_all(&login_frame(GOOD_LOGIN)).await.unwrap();
     client.flush().await.unwrap();
-    // 判据 3：登录后的数据帧必须原样转发
+    // 判据 4（登录后）：心跳走 `:157-160` 的 `return`，同样不得转发
+    client.write_all(&frame(11, 0, b"*")).await.unwrap();
+    // 判据 3：登录后的命令帧必须按 §7.9 重建后转发。
     // 无尾部命令帧（解码后恰好 12B）：出帧的 body 必须是**解码态**的 12 字节、PackLength=12
     let decoded: Vec<u8> = (0..12u8).collect();
     client.write_all(&command_frame(&decoded)).await.unwrap();
     client.flush().await.unwrap();
 
-    // 判据 4：body < 16 ⇒ 网关关会话（并补发 GM_CLOSE）
+    // 判据 5：body < 16 ⇒ 网关关会话（并补发 GM_CLOSE）
     client
         .write_all(&frame(11, 0, b"\x01\x02\x03"))
         .await
@@ -276,15 +376,37 @@ async fn relays_open_data_heartbeat_and_close() {
     );
     let sid = open.session_id;
 
-    // 判据 2/3：恰好一条 GM_DATA（心跳没被转发），body 逐字节不变，SessionId 一致
+    // 判据 2：登录通过时必须补发**恰好一条**合成登录包（reviewer-1 的 Important #1）
+    let logins: Vec<&(ServerMessage, Vec<u8>)> = got
+        .iter()
+        .filter(|(m, b)| m.ident == u16::from(grobal2::GM_DATA) && is_login_packet(b))
+        .collect();
+    assert_eq!(
+        logins.len(),
+        1,
+        "登录通过必须补发一条合成登录包（实得 {} 条）",
+        logins.len()
+    );
+    assert_eq!(
+        logins[0].0.socket, open.socket,
+        "合成登录包的 Socket 必须是客户端 handle（ClientSession.cs:1215）"
+    );
+    assert_eq!(logins[0].0.session_id, sid);
+    assert_eq!(
+        usize::try_from(logins[0].0.pack_length).unwrap(),
+        logins[0].1.len(),
+        "PackLength = encodeLen + 3 = body 长度（:1218）"
+    );
+
+    // 判据 3：恰好一条**命令** GM_DATA（两条心跳都没被转发），body = 解码态 12B，SessionId 一致
     let datas: Vec<&(ServerMessage, Vec<u8>)> = got
         .iter()
-        .filter(|(m, _)| m.ident == u16::from(grobal2::GM_DATA))
+        .filter(|(m, b)| m.ident == u16::from(grobal2::GM_DATA) && !is_login_packet(b))
         .collect();
     assert_eq!(
         datas.len(),
         1,
-        "心跳不得被转发：期望恰好 1 条 GM_DATA，实得 {}",
+        "心跳不得被转发：期望恰好 1 条命令 GM_DATA，实得 {}",
         datas.len()
     );
     assert_eq!(
@@ -297,7 +419,7 @@ async fn relays_open_data_heartbeat_and_close() {
     );
     assert_eq!(datas[0].0.session_id, sid, "GM_DATA 必须带同一 SessionId");
 
-    // 判据 4：有 GM_CLOSE 且 socket=handle、session_id=0（实机取证）
+    // 判据 5：有 GM_CLOSE 且 socket=handle、session_id=0（实机取证）
     let closes: Vec<&(ServerMessage, Vec<u8>)> = got
         .iter()
         .filter(|(m, _)| m.ident == u16::from(grobal2::GM_CLOSE))
@@ -351,7 +473,7 @@ async fn command_frame_with_tail_is_rebuilt() {
             if !body.is_empty() && sock.read_exact(&mut body).await.is_err() {
                 return None;
             }
-            if m.ident == u16::from(grobal2::GM_DATA) {
+            if m.ident == u16::from(grobal2::GM_DATA) && !is_login_packet(&body) {
                 return Some((m.pack_length, body));
             }
         }
@@ -399,6 +521,72 @@ async fn command_frame_with_tail_is_rebuilt() {
         0,
         "oracle 的声明长度比实际内容多 1 字节（池内存未初始化）；Rust 侧固定送 0 —— 已登记差异"
     );
+    child.kill().await.ok();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// 判据 2（reviewer-1 的 Important #1）：登录通过后**必须**按 `ClientSession.cs:1203-1218` 补发
+/// 合成登录包——文本 `**account/charName/cert/clientVer/code/{32 个 0}/{ServiceId}`、`#0…!` 外形、
+/// `PackLength = encodeLen + 3`。缺了这条，GameSvr 永远等不到该会话的登录。
+///
+/// 这里**独立**按 oracle 公式重算期望字节（不复用被测函数），并把 body 解回明文复核文本。
+#[tokio::test]
+async fn login_success_sends_synthetic_login_packet() {
+    let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let srv_port = l.local_addr().unwrap().port();
+    let srv_task = tokio::spawn(async move {
+        let (mut sock, _) = l.accept().await.unwrap();
+        let open = read_frame(&mut sock).await.expect("GM_OPEN");
+        let login = read_until(&mut sock, |m, b| {
+            m.ident == u16::from(grobal2::GM_DATA) && is_login_packet(b)
+        })
+        .await
+        .expect("合成登录包");
+        (open.0, login.0, login.1)
+    });
+
+    let gate_port = free_port();
+    let dir = std::env::temp_dir().join(format!("gg-login-{}-{}", std::process::id(), gate_port));
+    write_conf(&dir, srv_port, gate_port);
+    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_game-gate"))
+        .arg(dir.join("config.conf"))
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut client = connect_with_retry(gate_port).await;
+    client.write_all(&login_frame(GOOD_LOGIN)).await.unwrap();
+    client.flush().await.unwrap();
+
+    let (open, msg, body) = tokio::time::timeout(Duration::from_secs(5), srv_task)
+        .await
+        .expect("假 GameSvr 未按时结束")
+        .unwrap();
+
+    // oracle 公式：`**loadbot1/lb1a/1/120020522/1200205220/{32 个 0}/0`
+    //（ServiceId = 第 1 组端点 = 0；hardware 因现网 ProcClientCount=0 全 0）
+    let text = "**loadbot1/lb1a/1/120020522/1200205220/\
+                000000000000000000000000000000/0";
+    let mut expect = b"#0".to_vec();
+    expect.extend_from_slice(&mir2_protocol::edcode::encode(text.as_bytes()));
+    expect.push(b'!');
+    assert_eq!(body, expect, "合成登录包必须逐字节等于 oracle 公式");
+    assert_eq!(
+        usize::try_from(msg.pack_length).unwrap(),
+        body.len(),
+        "PackLength = encodeLen + 3"
+    );
+    assert_eq!(msg.session_id, open.session_id, "必须带同一 SessionId");
+    assert_eq!(
+        msg.socket, open.socket,
+        "Socket 必须是客户端 handle（:1215）"
+    );
+    assert_eq!(
+        msg.session_index, 0,
+        "登录阶段 SessionIndex 还是 0（:1217）"
+    );
+    // 解回明文复核（不是用同一个 format! 自证）
+    let back = String::from_utf8(mir2_protocol::edcode::decode(&body[2..body.len() - 1])).unwrap();
+    assert_eq!(back, text);
     child.kill().await.ok();
     std::fs::remove_dir_all(&dir).ok();
 }

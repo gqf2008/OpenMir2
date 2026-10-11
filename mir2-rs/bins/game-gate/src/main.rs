@@ -29,6 +29,7 @@
 mod config;
 mod gbk;
 mod login;
+mod rules;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -78,6 +79,10 @@ async fn main() -> Result<()> {
         .nth(1)
         .map_or_else(config::default_path, std::path::PathBuf::from);
     let cfg = config::load(&conf)?;
+    let gate_rules = rules::GateRules {
+        chat_interval_enabled: cfg.chat_interval_enabled,
+        chat_interval_ms: cfg.chat_interval_ms,
+    };
     glog!(
         "INF",
         "游戏网关启动：{} 组端点（config={}）",
@@ -86,7 +91,7 @@ async fn main() -> Result<()> {
     );
 
     let mut tasks = Vec::new();
-    for ep in cfg.endpoints {
+    for (i, ep) in cfg.endpoints.into_iter().enumerate() {
         let sessions: Sessions = Arc::new(Mutex::new(HashMap::new()));
         // 会话→引擎侧索引（`SvrListIdx`；由 `GM_SERVERUSERINDEX` 下发）
         let indexes: SessionIndexes = Arc::new(Mutex::new(HashMap::new()));
@@ -127,15 +132,18 @@ async fn main() -> Result<()> {
             ep.gate_addr,
             ep.gate_port
         );
-        let gate_addr = ep.gate_addr.clone();
-        tasks.push(tokio::spawn(accept_loop(
-            listener,
-            gate_addr,
-            ep.gate_port,
+        let gate_ctx = GateCtx {
+            gate_addr: ep.gate_addr.clone(),
+            gate_port: ep.gate_port,
+            // `Conf\ConfigManager.cs:18`：`GateList[i].ServiceId = (byte)i`
+            // ⇒ 第 i 组端点的线号就是 i（合成登录包的第 7 段用它）。
+            service_id: u8::try_from(i).unwrap_or(0),
             sessions,
             indexes,
             down_tx,
-        )));
+            gate_rules,
+        };
+        tasks.push(tokio::spawn(accept_loop(listener, gate_ctx)));
     }
     for t in tasks {
         let _ = t.await;
@@ -143,15 +151,41 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// 客户端 face：接受连接并为每个会话分配 `SessionId`。
-async fn accept_loop(
-    listener: TcpListener,
+/// 一条端点线的共享上下文：把「监听标识 + 下游发送端 + 会话表 + 规则」打包，
+/// 免得每个函数都排一长串参数（clippy `too_many_arguments`）。
+#[derive(Clone)]
+struct GateCtx {
+    /// 监听地址（只用于日志与 `SessionId` 播种，见 `gen_session_id`）。
     gate_addr: String,
+    /// 监听端口（同上）。
     gate_port: u16,
+    /// 该端点的线号（`Conf\ConfigManager.cs:18`：`GateList[i].ServiceId = (byte)i`）——
+    /// 合成登录包的第 7 段（`ClientSession.cs:1203`）。
+    service_id: u8,
+    /// 本线会话表：`SessionId → 该客户端连接的发送端`。
     sessions: Sessions,
+    /// 本线会话→引擎侧索引（`SvrListIdx`）。
     indexes: SessionIndexes,
+    /// 本线到 GameSvr 的发送端。
     down_tx: Arc<Mutex<OwnedWriteHalf>>,
-) -> Result<()> {
+    /// 本线生效的网关规则（速度/间隔）。
+    gate_rules: rules::GateRules,
+}
+
+/// 一帧的处置结果（读循环据此决定下一步）。
+enum Step {
+    /// 处理完毕（含已转发），继续读下一帧。
+    Next,
+    /// 登录帧通过——已按 `ClientSession.cs:1199-1224` 补发合成登录包。
+    LoggedIn,
+    /// 按 oracle 剔除/关闭该会话（附日志原因）。
+    Close(String),
+    /// 静默丢弃（不转发）：聊天间隔未到（`ClientSession.cs:492-495` 的 `return`）。
+    Drop,
+}
+
+/// 客户端 face：接受连接并为每个会话分配 `SessionId`。
+async fn accept_loop(listener: TcpListener, ctx: GateCtx) -> Result<()> {
     let mut used: std::collections::HashSet<u16> = std::collections::HashSet::new();
     loop {
         let (sock, peer) = listener.accept().await.context("accept 失败")?;
@@ -161,43 +195,31 @@ async fn accept_loop(
             continue;
         }
         let handle = raw_socket_i32(&sock);
-        let sid = gen_session_id(&format!("{peer}|{gate_addr}|{gate_port}"));
+        let sid = gen_session_id(&format!("{peer}|{}|{}", ctx.gate_addr, ctx.gate_port));
         used.insert(sid);
         glog!("INF", "开始连接: {peer} (SessionId={sid} socket={handle})");
-        let sessions = Arc::clone(&sessions);
-        let indexes = Arc::clone(&indexes);
-        let down_tx = Arc::clone(&down_tx);
+        let ctx = ctx.clone();
         tokio::spawn(async move {
-            if let Err(e) = client_loop(
-                sock,
-                sid,
-                handle,
-                peer.to_string(),
-                sessions,
-                indexes,
-                down_tx,
-            )
-            .await
-            {
+            if let Err(e) = client_loop(sock, sid, handle, peer.to_string(), ctx).await {
                 glog!("WRN", "客户端[{peer}]会话结束: {e:#}");
             }
         });
     }
 }
 
-/// 单客户端会话：登记会话表 → 发 `GM_OPEN` → 逐帧搬进 `GM_DATA` → 断开发 `GM_CLOSE`。
+/// 单客户端会话：登记会话表 → 发 `GM_OPEN` → 逐帧处置 → 断开发 `GM_CLOSE`。
 async fn client_loop(
     sock: TcpStream,
     sid: u16,
     handle: i32,
     peer: String,
-    sessions: Sessions,
-    indexes: SessionIndexes,
-    down_tx: Arc<Mutex<OwnedWriteHalf>>,
+    ctx: GateCtx,
 ) -> Result<()> {
     let (mut rd, mut wr) = sock.into_split();
     let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
-    sessions.lock().await.insert(sid, tx);
+    ctx.sessions.lock().await.insert(sid, tx);
+    // 每会话的间隔计时（C# `ClientSession` 里的 `gameSpeed`）
+    let mut chat = rules::ChatThrottle::default();
 
     // 回写任务：把 GameSvr 发来的 body 原样写给客户端（TODO(差分)：C# 会重新编码，见协议梳理 §2 ⚠️）
     let writer = tokio::spawn(async move {
@@ -220,7 +242,7 @@ async fn client_loop(
         session_index: 0,
         pack_length: i32::try_from(ip_bytes.len()).unwrap_or(i32::MAX),
     };
-    send_internal(&down_tx, open, &ip_bytes).await?;
+    send_internal(&ctx.down_tx, open, &ip_bytes).await?;
 
     // 读循环：20B 定长头 + body
     let mut logged_in = false;
@@ -234,65 +256,30 @@ async fn client_loop(
             continue;
         };
         let body_len = msg.body_len();
-        if body_len == 1 {
-            // 心跳：C# 侧收到 1 字节包直接忽略（ClientSession.cs:157-160）
-            let mut hb = [0u8; 1];
-            let _ = rd.read_exact(&mut hb).await;
-            continue;
-        }
-        if body_len < COMMAND_FIXED_LENGTH {
-            // 异常消息封包，关闭会话（ClientSession.cs:155-162）
-            glog!(
-                "WRN",
-                "异常消息封包（{body_len} 字节），关闭会话... SessionId={sid}"
-            );
-            closed = Ok(());
-            break;
-        }
         let mut body = vec![0u8; body_len];
-        if rd.read_exact(&mut body).await.is_err() {
+        if body_len > 0 && rd.read_exact(&mut body).await.is_err() {
             break;
         }
-        if !logged_in {
-            // 登录帧（切片 2）：照 ClientSession.cs:166（跳过 `#1` 与尾 `!`）→ :673 EDCode 解码 →
-            // :674 ClientLogin 校验；失败即剔除（:677-678），通过则等价于 oracle 的 `HandleLogin = true`（:1228）。
-            if body.len() < 3 {
-                glog!(
-                    "WRN",
-                    "登录帧过短（{} 字节），剔除会话 SessionId={sid}",
-                    body.len()
-                );
+        match handle_frame(&body, logged_in, &mut chat, &ctx, sid, handle).await {
+            Ok(Step::Next | Step::Drop) => {}
+            Ok(Step::LoggedIn) => {
+                logged_in = true;
+                glog!("INF", "客户端登录通过: {peer} (SessionId={sid})");
+            }
+            Ok(Step::Close(reason)) => {
+                glog!("WRN", "{reason} SessionId={sid}");
                 break;
             }
-            let payload = &body[2..body.len() - 1];
-            let text = gbk::decode(&mir2_protocol::edcode::decode(payload));
-            match login::parse_client_login(&text, body.len()) {
-                Ok(()) => {
-                    logged_in = true;
-                    glog!("INF", "客户端登录通过: {peer} (SessionId={sid})");
-                }
-                Err(reason) => {
-                    glog!("INF", "客户端登陆消息处理失败，剔除链接: {reason}");
-                    break;
-                }
+            Err(e) => {
+                closed = Err(e);
+                break;
             }
-            continue; // 登录帧不转发给 GameSvr（oracle 的 else 分支也不发）
         }
-        // 命令路径的出帧重建（照 `ClientSession.cs:646-669`，**不是搬字节**）：
-        // - 固定头 12B（`CommandMessage.Size`）用**解码态**字节；
-        // - 有尾部时：`PackLength = 12 + tLen + 1`，尾部字节直接抄**输入的编码态**（oracle 里
-        //   `sendBuffer` 算了却没用，抄的是 `tempBuff[16..]`）；
-        // - 末尾那 1 字节 oracle 是**未初始化的池内存**（`bodyBuffer` 来自 `BytePool.Rent`），
-        //   这里送 0 —— **已知的不可比对差异**，见协议梳理 §7.9。
-        // - `SessionIndex` 取本会话的 `SvrListIdx`（`:649`）。
-        let session_index = *indexes.lock().await.get(&sid).unwrap_or(&0);
-        let wire = rebuild_command_frame(&body, sid, session_index);
-        send_raw(&down_tx, &wire).await?;
     }
 
     // 离开：GM_CLOSE(session_id=0, socket=handle)（实机取证确认）
-    sessions.lock().await.remove(&sid);
-    indexes.lock().await.remove(&sid);
+    ctx.sessions.lock().await.remove(&sid);
+    ctx.indexes.lock().await.remove(&sid);
     let leave = ServerMessage {
         packet_code: grobal2::PacketCode,
         socket: handle,
@@ -301,10 +288,100 @@ async fn client_loop(
         session_index: 0,
         pack_length: 0,
     };
-    let _ = send_internal(&down_tx, leave, &[]).await;
+    let _ = send_internal(&ctx.down_tx, leave, &[]).await;
     writer.abort();
     glog!("INF", "断开链接: {peer} (SessionId={sid})");
     closed
+}
+
+/// 处置一帧（分支顺序照 `ClientSession.cs:98-` 的 `ProcessSessionPacket`：先判 `HandleLogin`，再看长度）。
+async fn handle_frame(
+    body: &[u8],
+    logged_in: bool,
+    chat: &mut rules::ChatThrottle,
+    ctx: &GateCtx,
+    sid: u16,
+    handle: i32,
+) -> Result<Step> {
+    if !logged_in {
+        // 登录前走 oracle 的 `:671-680` else 分支（直接 `EDCode.DeCodeString`），**没有**
+        // 「1 字节 = 心跳」与「< 16 字节 = 异常封包」这两条（那两条在 `HandleLogin` 分支里 `:155-164`）。
+        // 1/2 字节会让 C# 的 `destinationSpan[2..(packetLen-1)]` 越界抛
+        // ArgumentOutOfRangeException，被 `ServerManager.cs:238` 的 catch 吞掉（只记日志）
+        // ⇒ 帧被丢、**会话存活**；这里照此丢弃（不是剔除）。
+        if body.len() < 3 {
+            return Ok(Step::Next);
+        }
+        return handle_login(body, ctx, sid, handle).await;
+    }
+    if body.len() == 1 {
+        // 心跳：`ClientSession.cs:157-160` 直接 `return`（不转发）
+        return Ok(Step::Next);
+    }
+    if body.len() < COMMAND_FIXED_LENGTH {
+        // 异常消息封包（`:155-162`）：关会话
+        return Ok(Step::Close(format!(
+            "异常消息封包（{} 字节），关闭会话...",
+            body.len()
+        )));
+    }
+    let payload = &body[2..body.len() - 1]; // = C# 的 `tempBuff`（去掉 `#1` 与尾 `!`）
+    let decoded = mir2_protocol::edcode::decode(payload);
+    if decoded.len() < COMMAND_MESSAGE_SIZE {
+        // `:170-175`：解码后不足 12 字节 ⇒ 关会话（reviewer-1 的 Minor #3）
+        return Ok(Step::Close(format!(
+            "解析数据包小于12...解析后长度:{}",
+            decoded.len()
+        )));
+    }
+    // `CM_SAY` 的间隔门（`:485-497`）：太快的聊天帧**直接丢**（`return`，不转发）。
+    // 内容 = 解码后的 `decodeBuff[12..]`；`@` 开头的内容不判间隔；开关与阈值照现网
+    // `[Switch] ChatInterval=1` / `[Integer] ChatInterval=800`。
+    if ctx.gate_rules.chat_interval_enabled
+        && u16::from_le_bytes([decoded[4], decoded[5]]) == mir2_protocol::messages::CM_SAY
+        && !chat.allows(
+            now_ms(),
+            &decoded[COMMAND_MESSAGE_SIZE..],
+            ctx.gate_rules.chat_interval_ms,
+        )
+    {
+        glog!(
+            "DBG",
+            "聊天间隔未到（{}ms），丢弃该帧（SessionId={sid}）",
+            ctx.gate_rules.chat_interval_ms
+        );
+        return Ok(Step::Drop);
+    }
+    // 命令路径的出帧重建（照 `ClientSession.cs:646-669`，**不是搬字节**）：口径见 `rebuild_command_frame`。
+    let session_index = *ctx.indexes.lock().await.get(&sid).unwrap_or(&0);
+    let wire = rebuild_command_frame(&decoded, payload, sid, session_index);
+    send_raw(&ctx.down_tx, &wire).await?;
+    Ok(Step::Next)
+}
+
+/// 登录帧（`:673-679` → `ClientLogin`）：校验通过 ⇒ **补发合成登录包**（`:1199-1224`）并置“已登录”；
+/// 失败 ⇒ 剔除（`:677-678` 的 `Kick(1)`）。登录帧本身**不转发**。
+async fn handle_login(body: &[u8], ctx: &GateCtx, sid: u16, handle: i32) -> Result<Step> {
+    let text = gbk::decode(&mir2_protocol::edcode::decode(&body[2..body.len() - 1]));
+    match login::parse_client_login(&text, body.len()) {
+        Err(reason) => Ok(Step::Close(format!(
+            "客户端登陆消息处理失败，剔除链接: {reason}"
+        ))),
+        Ok(fields) => {
+            let login_body = login::synthetic_login_body(&fields, ctx.service_id);
+            let head = ServerMessage {
+                packet_code: grobal2::PacketCode,
+                socket: handle,
+                session_id: sid,
+                ident: u16::from(grobal2::GM_DATA),
+                // `:1217` 用会话当时的 `SessionIndex`（`SvrListIdx`；登录阶段通常还是 0）
+                session_index: *ctx.indexes.lock().await.get(&sid).unwrap_or(&0),
+                pack_length: i32::try_from(login_body.len()).unwrap_or(i32::MAX),
+            };
+            send_internal(&ctx.down_tx, head, &login_body).await?;
+            Ok(Step::LoggedIn)
+        }
+    }
 }
 
 /// 网关 ↔ GameSvr：收管理帧并分派（`GM_*`，`ClientThread.cs:265-300` 的同构实现）。
@@ -402,9 +479,7 @@ async fn send_raw(tx: &Arc<Mutex<OwnedWriteHalf>>, wire: &[u8]) -> Result<()> {
 /// - 有尾部：`PackLength = 12 + tLen + 1`（`tLen` = 尾部重编码后的长度），
 ///   body = 解码态 12B + **输入的编码态尾部**（`payload[16..]`）+ 1 字节；
 /// - 那 1 字节在 oracle 里是 `BytePool.Rent` 的**未初始化内存**，这里固定送 `0`（已知的不可比对差异）。
-fn rebuild_command_frame(body: &[u8], sid: u16, session_index: i32) -> Vec<u8> {
-    let payload = &body[2..body.len() - 1]; // = C# 的 `tempBuff`（去掉 `#1` 与尾 `!`）
-    let decoded = mir2_protocol::edcode::decode(payload);
+fn rebuild_command_frame(decoded: &[u8], payload: &[u8], sid: u16, session_index: i32) -> Vec<u8> {
     let mut wire: Vec<u8> = Vec::with_capacity(ServerMessage::SIZE + decoded.len() + 1);
     let (pack_length, tail): (i32, &[u8]) = if decoded.len() > COMMAND_MESSAGE_SIZE {
         let t_len = mir2_protocol::edcode::encode(&decoded[COMMAND_MESSAGE_SIZE..]).len();
@@ -432,7 +507,7 @@ fn rebuild_command_frame(body: &[u8], sid: u16, session_index: i32) -> Vec<u8> {
         wire.extend_from_slice(tail);
         wire.push(0); // oracle 的未初始化字节（我们送 0）
     } else {
-        wire.extend_from_slice(&decoded);
+        wire.extend_from_slice(decoded);
     }
     wire
 }
@@ -456,6 +531,14 @@ fn raw_socket_i32(_sock: &TcpStream) -> i32 {
 fn ip_bytes(peer: &str) -> Vec<u8> {
     let ip = peer.rsplit_once(':').map_or(peer, |(h, _)| h);
     ip.as_bytes().to_vec()
+}
+
+/// 当前毫秒时间。C# 侧是 `HUtil32.GetTickCount()`（开机以来毫秒）；这里用 epoch 毫秒，
+/// **只有差值与间隔比较参与判定**，基准不同不影响语义（协议梳理 §7.10.2 已说明差分需要喂虚拟时间）。
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
 /// C# `ClientThread.GetSessionId`（`ClientThread.cs:128-160`）的等价实现：
