@@ -66,12 +66,20 @@ pub fn default_path() -> PathBuf {
 /// 文件不存在、缺 `[GameGate]` 段、`Count` 非法/为 0、缺任一 `ServerAddrN`/`ServerPortN`/`GatePortN`、
 /// 端口非法 —— 都返回错误（调用方据此非零退出）。
 pub fn load(path: &Path) -> Result<GateConfig> {
-    let text = std::fs::read_to_string(path).with_context(|| {
+    // 按字节读再 **GB2312 解码**，照 oracle `ConfigFile.Load()`
+    //（`src/OpenMir2/Common/ConfigFile.cs:258` 的 `Encoding.GetEncoding("GB2312")`）。
+    // 现网 `E:\MirServer\RunGate\config.conf` 经 C# `ConfigFile.Save()`（同样 GB2312 回写）后
+    // **不是合法 UTF-8**：`[Strings]` 段混有跨编码字节（例：`Title=游戏网关` 是 UTF-8 字节，
+    // 而 `HWIDBlockedMsg=...` 是 GBK 字节），`read_to_string` 会直接失败 ⇒ `-Side rust`
+    // 连 7200 都起不来。本文件实际只消费 `[GameGate]/[Switch]/[Integer]`（纯 ASCII，
+    // GB2312 与 UTF-8 判定相同），但解码必须与 oracle 同口径，否则连读都读不进来。
+    let bytes = std::fs::read(path).with_context(|| {
         format!(
             "读取配置文件失败：{}（M1④：缺配置必须明确报错退出）",
             path.display()
         )
     })?;
+    let text = crate::gbk::decode(&bytes);
     let section = parse_section(&text, "GameGate");
     let get = |key: &str| -> Option<String> {
         section
@@ -202,6 +210,31 @@ mod tests {
             let p = write_conf(body);
             assert!(load(&p).is_err(), "应在该配置上报错：{body:?}");
         }
+    }
+
+    /// 现网 `RunGate/config.conf` 经 C# `Save()` 回写后**不是合法 UTF-8**（`[Strings]` 段混编码），
+    /// 必须按 GB2312 读进来；用 `read_to_string` 会 `stream did not contain valid UTF-8` 直接起不来。
+    /// 这里造一个含非法 UTF-8 字节（0xB0 0xA1 = GBK「啊」）的现网同形文件，断言仍能解析。
+    #[test]
+    fn loads_non_utf8_deployed_conf() {
+        let dir = std::env::temp_dir().join(format!("gg-cfg-nonutf8-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("config.conf");
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(
+            b"[GameGate]\nCount=3\nServerAddr1=127.0.0.1\nServerPort1=5000\nGatePort1=7200\n\
+              ServerAddr2=127.0.0.1\nServerPort2=5000\nGatePort2=7201\n\
+              ServerAddr3=127.0.0.1\nServerPort3=5000\nGatePort3=7202\nGateAddress1=127.0.0.1\n",
+        );
+        bytes.extend_from_slice(b"[Strings]\nHWIDBlockedMsg=");
+        bytes.extend_from_slice(&[0xB0, 0xA1]); // GBK「啊」——不是合法 UTF-8
+        bytes.push(b'\n');
+        bytes.extend_from_slice(b"[Integer]\nNomClientPacketSize=512\n");
+        std::fs::write(&p, &bytes).unwrap();
+        let cfg = load(&p).expect("含 GBK 字节的现网同形配置必须能读");
+        assert_eq!(cfg.endpoints.len(), 3);
+        assert_eq!(cfg.endpoints[2].gate_port, 7202);
+        assert_eq!(cfg.nom_client_packet_size, 512);
     }
 
     /// `NomClientPacketSize` 照 oracle 的"读配置带默认"口径（`ConfigManager.cs:99` 的 ReadWriteInt）：

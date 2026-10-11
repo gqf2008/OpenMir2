@@ -1,0 +1,164 @@
+﻿{
+    "session":  "rust-20261011-143315",
+    "side":  "rust",
+    "prefix":  "m3143315",
+    "bots":  1,
+    "entry":  "127.0.0.1:7000",
+    "ops_runner":  "run_bots.ps1 -Count 1 -Prefix m3143315 -NewAccount -Port 7000 -FixedNewChr -NewChrJob 1 -NewChrHair 2 -NewChrSex 0",
+    "ops_exit":  0,
+    "fixed_new_chr":  "Job=1 Hair=2 Sex=0",
+    "git_rev":  "e56cb6c6f3e89b5cda33c4b81efb680d1f9b1b05",
+    "dbsnap":  {
+                   "mir2_account.account_protection":  {
+                                                           "rows":  7043,
+                                                           "sha256":  "af4ae68fe7b0a5bced6e9eaa4d3849f2fc2d50e65e11d86bd9404af34b22d419"
+                                                       },
+                   "mir2_db.characters_ablity":  {
+                                                     "rows":  7023,
+                                                     "sha256":  "299b60aacb26a44eeb314253d65d576286e064b4274793fbe6957ab8d4d5f077"
+                                                 },
+                   "mir2_db.characters_bonusability":  {
+                                                           "rows":  0,
+                                                           "sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                                                       },
+                   "mir2_db.characters_status":  {
+                                                     "rows":  7022,
+                                                     "sha256":  "003908c61510ef04a17e9245a9673f09134e7cbc71a8b25a6a1141feb1aea4a8"
+                                                 },
+                   "mir2_db.characters_item_attr":  {
+                                                        "rows":  0,
+                                                        "sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                                                    },
+                   "mir2_db.characters_quest":  {
+                                                    "rows":  0,
+                                                    "sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                                                },
+                   "mir2_account.account":  {
+                                                "rows":  7155,
+                                                "sha256":  "c30540d8f2391ed8076d37df7f9f9b7dd63611b6277338b5490e7f736be37d6e"
+                                            },
+                   "mir2_db.characters":  {
+                                              "rows":  7020,
+                                              "sha256":  "3fec564f9db4dae4f0fd6aed63277c126f05b8aac4a4ff574af30c27af458671"
+                                          },
+                   "mir2_db.characters_bagitem":  {
+                                                      "rows":  323058,
+                                                      "sha256":  "99ceaf63d372dea60adc043dd7a2b3d41f181a8da72821f36c8b9bdb52f150b7"
+                                                  },
+                   "mir2_db.characters_indexes":  {
+                                                      "rows":  7023,
+                                                      "sha256":  "a12aa05fabe7702f826bc5f640d09b60da0365d3b138158c748c901991722acf"
+                                                  },
+                   "mir2_db.characters_item":  {
+                                                   "rows":  91299,
+                                                   "sha256":  "6bf35dcbb7f2b3153611df4aece8ac9920c7ac9089101fa500448d957f57e3f8"
+                                               },
+                   "mir2_db.characters_storageitem":  {
+                                                          "rows":  351150,
+                                                          "sha256":  "ebdc409db42edf73ada1befa7126043ad2826c3aeaad4ec1bb6f04cda52b86f4"
+                                                      },
+                   "mir2_db.characters_magic":  {
+                                                    "rows":  7,
+                                                    "sha256":  "8b77ec1c9cba52989feb60bdc59d0a5c90c2a65a77339c72f77622c1b2e6d6c5"
+                                                }
+               },
+    "dbsnap_after":  {
+                         "mir2_account.account_protection":  {
+                                                                 "rows":  7044,
+                                                                 "sha256":  "e3136164efa64f1c7c8b9e0f126e056a44530e7b074779c09392c1a88cf68a97"
+                                                             },
+                         "mir2_db.characters_ablity":  {
+                                                           "rows":  7024,
+                                                           "sha256":  "f7e89b897a52ade3cc09f5dd57f69370a0950cb2ee81ab410706983b3967b452"
+                                                       },
+                         "mir2_db.characters_bonusability":  {
+                                                                 "rows":  0,
+                                                                 "sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                                                             },
+                         "mir2_db.characters_status":  {
+                                                           "rows":  7023,
+                                                           "sha256":  "91874b8bcedb57e0e0533a95be40b3f9712e5517efa2872d65e7eb6c99a4f996"
+                                                       },
+                         "mir2_db.characters_item_attr":  {
+                                                              "rows":  0,
+                                                              "sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                                                          },
+                         "mir2_db.characters_quest":  {
+                                                          "rows":  0,
+                                                          "sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                                                      },
+                         "mir2_account.account":  {
+                                                      "rows":  7156,
+                                                      "sha256":  "b57dda38eb61764ad3559af1903dac4cda480afd00aaec267e601ffdd026beba"
+                                                  },
+                         "mir2_db.characters":  {
+                                                    "rows":  7021,
+                                                    "sha256":  "05b866e725f4eb86d0f976120f9f2ad1a9865ffca59830e940122ddef4a3ec78"
+                                                },
+                         "mir2_db.characters_bagitem":  {
+                                                            "rows":  323104,
+                                                            "sha256":  "237a51e8bd2dfc35463cd7eb27e71f840bfa0c4e3a947dc36c078d648efd3def"
+                                                        },
+                         "mir2_db.characters_indexes":  {
+                                                            "rows":  7024,
+                                                            "sha256":  "7e56eaf8079dc26b88feb60408da32773366bad2c58e5de070ce7420b87667da"
+                                                        },
+                         "mir2_db.characters_item":  {
+                                                         "rows":  91312,
+                                                         "sha256":  "197976d4049772d4681d743b467b836b7b6b7b4154672e6cf0a7969b0f3ce4b5"
+                                                     },
+                         "mir2_db.characters_storageitem":  {
+                                                                "rows":  351200,
+                                                                "sha256":  "c6b19fc890440cad0f7ea20c633198e2803be7afaf7b24cb58714e815334b0b0"
+                                                            },
+                         "mir2_db.characters_magic":  {
+                                                          "rows":  7,
+                                                          "sha256":  "8b77ec1c9cba52989feb60bdc59d0a5c90c2a65a77339c72f77622c1b2e6d6c5"
+                                                      }
+                     },
+    "delta":  {
+                  "mir2_account.account":  {
+                                               "added":  1,
+                                               "removed":  0
+                                           },
+                  "mir2_account.account_protection":  {
+                                                          "added":  1,
+                                                          "removed":  0
+                                                      },
+                  "mir2_db.characters":  {
+                                             "added":  1,
+                                             "removed":  0
+                                         },
+                  "mir2_db.characters_indexes":  {
+                                                     "added":  1,
+                                                     "removed":  0
+                                                 }
+              },
+    "scoped_rows":  {
+                        "before":  0,
+                        "after":  4
+                    },
+    "runtime_procs":  [
+                          {
+                              "name":  "mysqld",
+                              "path":  "D:\\mysql\\mariadb-10.11.19-winx64\\bin\\mysqld.exe",
+                              "start":  "2026-10-11T14:18:26.8416167+08:00"
+                          },
+                          {
+                              "name":  "DBSrv",
+                              "path":  "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\src\\DBSrv\\bin\\Release\\DBSrv.exe",
+                              "start":  "2026-10-11T14:18:30.1897633+08:00"
+                          },
+                          {
+                              "name":  "LoginSrv",
+                              "path":  "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\src\\LoginSrv\\bin\\Release\\LoginSrv.exe",
+                              "start":  "2026-10-11T14:18:37.5663999+08:00"
+                          },
+                          {
+                              "name":  "GameSrv",
+                              "path":  "E:\\MirServer\\M2GameSvr\\GameSrv.exe",
+                              "start":  "2026-10-11T14:18:42.7644756+08:00"
+                          }
+                      ],
+    "finished_at":  "2026-10-11T14:33:35.5985554+08:00"
+}
