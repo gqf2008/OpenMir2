@@ -1,0 +1,18 @@
+### M1 S4b 片2：进程级 live_data 用例（伪 LoginSrv + 伪 GameSrv + 真 MySQL mir2_db；端口临时分配）
+命令：cargo test -p db-srv --test live_data --offline -- --ignored --nocapture
+时间：2026-10-11T16:27:02Z
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running tests\live_data.rs (E:\tmp\openmir2-dbsrv6k-target\debug\deps\live_data-c807b644fe914ed8.exe)
+
+running 1 test
+[fixture] characters.Id=13335 name=zz6k4352
+[fixture] Rust db-srv pid=25076 dir=C:\Users\gxh\AppData\Local\Temp\a2-dbsrv-6000-data-4352
+[load] reply=ServerRequestMessage { recog: 1, ident: 1100, param: 0, tag: 0, series: 1 }
+[load] packet sha256 prefix=020b00000072007200560061006f0060
+[save] reply=ServerRequestMessage { recog: 1, ident: 1102, param: 0, tag: 0, series: 0 }
+test rust_dbsrv_6000_load_save_roundtrip ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.37s
+
+rc=0

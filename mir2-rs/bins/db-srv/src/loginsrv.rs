@@ -35,10 +35,15 @@ pub struct SessionInfo {
     pub session_id: i32,
     /// 是否已进入游戏（LoginSrv 侧 `StartPlay`）。
     pub start_play: bool,
+    /// 本会话是否已取过存档（C# `GlobaSessionInfo.LoadRcd`）。
+    ///
+    /// 由 6000 面的 `CheckSessionLoadRcd`（取档成功一次后置真）/ `SetSessionSaveRcd`（存档后置假）读写，
+    /// 5100 面不读它。
+    pub load_rcd: bool,
 }
 
-// 注：C# `GlobaSessionInfo.IPaddr`/`LoadRcd` 不被 5100 面读取（`CheckSession` 只比账号+会话号；
-// `LoadRcd` 只被 6000 面的 `CheckSessionLoadRcd`/`SetSessionSaveRcd` 使用）⇒ 镜像不保留这两个字段。
+// 注：C# `GlobaSessionInfo.IPaddr` 不被 5100/6000 面读取（`CheckSession`/`CheckSessionLoadRcd`
+// 只比账号+会话号，入参 IP 被忽略）⇒ 镜像不保留该字段。
 
 /// 会话表 + 与 LoginSrv 的发送端。
 #[derive(Default)]
@@ -107,7 +112,39 @@ impl LoginState {
             account,
             session_id,
             start_play: false,
+            load_rcd: false,
         });
+    }
+
+    /// C# `CheckSessionLoadRcd`：命中会话即 `found=true`；仅当该会话 `LoadRcd` 还是 false 时
+    /// 置真并返回 `1`，否则返回 `-1`。`sIPaddr` 入参在 C# 里被忽略，这里同样忽略。
+    #[must_use]
+    pub fn check_session_load_rcd(&mut self, account: &[u8], session_id: i32) -> (bool, i32) {
+        let mut found = false;
+        let mut code = -1;
+        for s in &mut self.sessions {
+            if s.account == account && s.session_id == session_id {
+                found = true;
+                if !s.load_rcd {
+                    s.load_rcd = true;
+                    code = 1;
+                }
+                break;
+            }
+        }
+        (found, code)
+    }
+
+    /// C# `SetSessionSaveRcd`：把该账号名下所有会话的 `LoadRcd` 置假（存档后允许再次取档）。
+    pub fn set_session_save_rcd(&mut self, account: &[u8]) -> bool {
+        let mut result = false;
+        for s in &mut self.sessions {
+            if s.account == account {
+                s.load_rcd = false;
+                result = true;
+            }
+        }
+        result
     }
 
     /// C# `ProcessDelSession`。

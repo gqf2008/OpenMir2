@@ -43,8 +43,13 @@ pub fn now_ms() -> u64 {
 static PICK_SEED: AtomicU64 = AtomicU64::new(0);
 
 /// 单消费者队列：C# `Channel<UserGateMessage>` + `StartMessageThread`。
-pub async fn queue_loop(server: Arc<Server>, mut rx: UnboundedReceiver<Queued>, mut db: Db) {
+pub async fn queue_loop(
+    server: Arc<Server>,
+    mut rx: UnboundedReceiver<Queued>,
+    db: Arc<tokio::sync::Mutex<Db>>,
+) {
     while let Some(q) = rx.recv().await {
+        let mut db = db.lock().await;
         if let Err(e) = process_data(&server, &mut db, q).await {
             // C# 在消息线程里 catch 并 `LogService.Error(e)`：该条命令**不回包**、不影响后续
             log::error(&format!("处理角色网关数据失败: {e:#}"));
