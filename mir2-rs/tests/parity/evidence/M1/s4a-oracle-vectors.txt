@@ -1,0 +1,43 @@
+S4a 证据：`CharacterDataInfo` 等 DBSrv 6000 面 MemoryPack 结构的 C# oracle 字节向量（可复现）
+============================================================================================
+
+改动
+----
+- tests/parity/oracle/Program.cs：新增 `AddPlayerDataVectors`（14 条 `kind:"playerdatainfo"`）。
+- tests/parity/vectors/oracle_vectors.jsonl：新增 14 行（文件 1147 -> 1161 行）。
+- crates/storage/src/playerdata.rs（新）：逐字节兼容实现 + 内联金标准单测。
+- crates/storage/tests/playerdatainfo_vectors.rs（新）：读 jsonl 逐条重建并逐字节对拍 + 往返 + 破坏者自检 + 条数锚点。
+- crates/protocol/tests/oracle_vectors.rs / tools/replay/src/main.rs：向量文件由多 crate 共用，
+  遇 `playerdatainfo` 跳过（仍不认识的 kind 会 panic；条数锚点在 storage 侧）。
+
+复现命令（C# 真身生成；本机 Windows）
+--------------------------------------
+    cd mir2-rs/tests/parity/oracle
+    dotnet build -c Release
+    dotnet run -c Release --no-build -- /tmp/oracle_regen.jsonl
+    # 产物行数 1161；Windows 写出 CRLF，仓库入库为 LF
+
+原始输出（尾部）
+----------------
+    vectors: 1161 lines -> C:/Users/gxh/AppData/Local/Temp/oracle_regen.jsonl
+    sha256: 22d5af9129aad7ce3b1ee9ba97fe2c5628dbd58bbd2015d4bcc89489cbe9c3b3   (CRLF 原始)
+
+逐字节核对（LF 归一后）
+------------------------
+    tr -d '\r' < /tmp/oracle_regen.jsonl > /tmp/oracle_regen_lf.jsonl
+    diff -q /tmp/oracle_regen_lf.jsonl mir2-rs/tests/parity/vectors/oracle_vectors.jsonl
+    => IDENTICAL
+
+    sha256(/tmp/oracle_regen_lf.jsonl)                         = 4e76d755889c26e6fcff4671d5fbf050da0fa873a8f233d16f97b8f797545b5f
+    sha256(mir2-rs/tests/parity/vectors/oracle_vectors.jsonl)  = 4e76d755889c26e6fcff4671d5fbf050da0fa873a8f233d16f97b8f797545b5f
+
+Rust 侧对拍（同一向量文件）
+----------------------------
+    cargo test -p mir2-storage --offline --test playerdatainfo_vectors
+    => playerdatainfo_vectors_byte_exact ... ok
+       playerdatainfo_vector_scale_anchor ... ok   (14 条)
+       mutation_changes_bytes ... ok
+    cargo test -p mir2-protocol --offline --test oracle_vectors
+    => oracle_vectors_byte_exact ... ok（跳过 playerdatainfo 14 条，其余 0 mismatch）
+    cargo run -p replay --offline -- tests/parity/vectors/oracle_vectors.jsonl
+    => RESULT: GREEN（外部 kind 向量（storage 等）: 14）

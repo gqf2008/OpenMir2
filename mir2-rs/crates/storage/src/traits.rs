@@ -7,7 +7,8 @@
 //! - C# 接口是同步的（DBSrv 内存缓存 + 周期落库）；Rust 实现侧若用 sqlx 异步，
 //!   由实现方在 DBSrv 边界做同步包装，**trait 本身保持同步语义**（与 C# 调用约定对齐）。
 
-use crate::types::{CharacterDataInfo, MarketItem, PlayQuick, PlayerRecordData, QueryChr};
+use crate::playerdata::{CharacterDataInfo, PlayerRecordData};
+use crate::types::{MarketItem, PlayQuick, QueryChr};
 use crate::StorageError;
 
 /// 角色记录存储（C# `IPlayRecordStorage`：角色索引表，DBSrv 内存索引 + 落库）。

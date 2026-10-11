@@ -15,6 +15,7 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using OpenMir2;
+using OpenMir2.Data;
 using OpenMir2.Packets.ClientPackets;
 using OpenMir2.Packets.ServerPackets;
 
@@ -276,6 +277,9 @@ public static class Program
                       $"\"body_sha256\":\"{Sha256Hex(Concat(SerializerUtil.Serialize(desc), text.Length > 0 ? Gb2312.GetBytes($"{text}/{color}") : Array.Empty<byte>()))}\"}}");
         }
 
+        // ---- 8. DBSrv 6000 DataService 面的 MemoryPack 向量 ----
+        AddPlayerDataVectors(lines);
+
         File.WriteAllLines(outPath, lines);
 
         // 证据：行数 + 文件 hash
@@ -298,6 +302,94 @@ public static class Program
             throw new InvalidOperationException("C# 侧 EDCode 往返不一致——oracle 自身破裂，中止");
         }
         lines.Add($"{{\"kind\":\"edcode\",\"plain_hex\":\"{Hex(plain)}\",\"encoded_hex\":\"{Hex(encoded)}\"}}");
+    }
+
+    /// <summary>
+    /// DBSrv 6000 面（DataService）的 MemoryPack 向量：记录结构 + 信封，钉住对象头/null 编码/
+    /// 声明序/集合。Rust 侧 `crates/storage/tests/playerdatainfo_vectors.rs` 逐条重建并逐字节比对。
+    /// 只在内存里构造（不写 MySQL、不碰现网）。
+    /// </summary>
+    private static void AddPlayerDataVectors(List<string> lines)
+    {
+        void Emit<T>(string name, T o)
+        {
+            lines.Add($"{{\"kind\":\"playerdatainfo\",\"name\":\"{name}\",\"hex\":\"{Hex(SerializerUtil.Serialize(o))}\"}}");
+        }
+
+        Ability ability = new Ability
+        {
+            Level = 3, Reserved1 = 0, AC = 1, MAC = 2, DC = 3, MC = 4, SC = 5, HP = 6, MP = 7,
+            MaxHP = 8, MaxMP = 9, Reserved2 = -2, ExpCount = 1, ExpMaxCount = 2, Exp = 100,
+            MaxExp = 200, Weight = 10, MaxWeight = 11, WearWeight = 12, MaxWearWeight = 13,
+            HandWeight = 14, MaxHandWeight = 15,
+        };
+        Emit("ability", ability);
+
+        NakedAbility naked = new NakedAbility
+        {
+            DC = 1, MC = 2, SC = 3, AC = 4, MAC = 5, HP = 6, MP = 7, Hit = 8, Speed = 9, Reserved = 10,
+        };
+        Emit("nakedability", naked);
+
+        MagicRcd magic = new MagicRcd { MagIdx = 0x1234, Level = 5, MagicKey = 'x', TranPoint = 999 };
+        Emit("magicrcd", magic);
+
+        ServerUserItem item = new ServerUserItem
+        {
+            MakeIndex = 0x01020304, Index = 0x0506, Dura = 0x0708, DuraMax = 0x090A,
+            ColorR = 1, ColorG = 2, ColorB = 3,
+        };
+        item.Desc[0] = 0xAA; item.Desc[13] = 0xBB; item.Prefix[0] = 'p'; item.Prefix[12] = 'q';
+        Emit("serveruseritem", item);
+
+        RecordHeader header = new RecordHeader
+        {
+            sAccount = "acct", Name = "aaa", SelectID = 7, dCreateDate = 1.5, Deleted = false,
+            UpdateDate = 2.5, CreateDate = 3.5,
+        };
+        Emit("recordheader", header);
+
+        CharacterData cd = new CharacterData();
+        cd.ServerIndex = 2; cd.ChrName = "aaa"; cd.CurMap = "0"; cd.CurX = 300; cd.CurY = 301;
+        cd.Dir = 2; cd.Hair = 1; cd.Sex = 0; cd.Job = 1; cd.Gold = 12345;
+        cd.Abil = ability; cd.StatusTimeArr[0] = 11; cd.StatusTimeArr[14] = 22;
+        cd.HomeMap = "1"; cd.HomeX = 5; cd.HomeY = 6; cd.BonusAbil = naked;
+        cd.BonusPoint = 7; cd.CreditPoint = 8; cd.ReLevel = 9; cd.MasterName = "m"; cd.IsMaster = true;
+        cd.DearName = "d"; cd.StoragePwd = "p"; cd.GameGold = 10; cd.GamePoint = 11; cd.PayMentPoint = 12;
+        cd.PKPoint = 13; cd.AllowGroup = 1; cd.btF9 = 2; cd.AttatckMode = 3; cd.IncHealth = 4;
+        cd.IncSpell = 5; cd.IncHealing = 6; cd.FightZoneDieCount = 7; cd.btEE = 8; cd.btEF = 9;
+        cd.Account = "acct"; cd.LockLogon = true; cd.Contribution = 14; cd.HungerStatus = 15;
+        cd.AllowGuildReCall = true; cd.GroupRcallTime = 16; cd.BodyLuck = 2.5; cd.AllowGroupReCall = true;
+        cd.QuestUnitOpen[0] = 1; cd.QuestUnit[0] = 2; cd.QuestFlag[0] = 3; cd.MarryCount = 4;
+        cd.HumItems[0] = item; cd.HumItems[1] = new ServerUserItem();
+        cd.BagItems[3] = item;
+        cd.StorageItems[5] = item;
+        cd.Magic[0] = magic;
+        Emit("characterdata_full", cd);
+
+        CharacterDataInfo cdEmpty = new CharacterDataInfo();
+        Emit("characterdatainfo_empty", cdEmpty);
+
+        CharacterDataInfo cdi = new CharacterDataInfo { Header = header, Data = cd };
+        Emit("characterdatainfo_full", cdi);
+
+        Emit("savecharacterdata", new SaveCharacterData("acct", "aaa", cdi));
+
+        Emit("loadcharacterdata", new LoadCharacterData
+        {
+            Account = "acct", ChrName = "aaa", UserAddr = "127.0.0.1", SessionID = 42,
+        });
+
+        Emit("loadplayerdatapacket", new LoadPlayerDataPacket { ChrName = "aaa", HumDataInfo = cdi });
+
+        Emit("serverrequestdata", new ServerRequestData
+        {
+            QueryId = 5, Message = new byte[] { 1, 2, 3 }, Packet = new byte[] { 4, 5 }, Sign = new byte[] { 6 },
+        });
+
+        Emit("serverrequestdata_null", new ServerRequestData { QueryId = -1 });
+
+        Emit("serverrequestmessage", new ServerRequestMessage(0x1234, 5, 6, 7, 8));
     }
 
     private static void AddFrame(List<string> lines, ref int seq, string dir, int ident, int recog, int param, int tag, int series, byte[] body)

@@ -131,6 +131,9 @@ struct Stats {
     act_body_skew: usize,
     /// act 帧上一个 rtime（单调性判据）
     last_act_rtime: Option<i64>,
+    /// 非协议层 kind（如 `playerdatainfo`：DBSrv 6000 面的 MemoryPack 结构，归 `crates/storage`）。
+    /// 向量文件由多个 crate 共用，这里只跳过、不参与 8 阶段覆盖。
+    foreign_vectors: usize,
     first_diffs: Vec<String>,
 }
 
@@ -651,6 +654,7 @@ fn report(path: &str, coverage: bool, sabotage: Sabotage, st: &Stats) -> bool {
         st.total_frames, st.string_frames, st.total_edcode
     );
     println!("内部帧（MemoryPack）: {}", st.internal_msgs);
+    println!("外部 kind 向量（storage 等）: {}", st.foreign_vectors);
     println!(
         "明文动作帧(#+…!): {}（其中 body 口径与导出器不符 {}，A-9）",
         st.act_frames, st.act_body_skew
@@ -715,6 +719,8 @@ fn main() -> Result<()> {
             "frame" => process_frame(&rec, lineno, sabotage, &mut st)?,
             "server-header" => process_server_header(&rec, lineno, &mut st)?,
             "internal" => process_internal(&rec, lineno, &mut st)?,
+            // 归 `crates/storage/tests/playerdatainfo_vectors.rs`（DBSrv 6000 面）；仍不认识的 kind 必报错。
+            "playerdatainfo" => st.foreign_vectors += 1,
             other => bail!("line {}: unknown kind {other}", lineno + 1),
         }
     }

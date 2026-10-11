@@ -1,0 +1,31 @@
+S4b 片 1（S4a）门禁 —— 本片树（不含缺陷卡改动）
+worktree=dbsrv6k  branch=worktree-m1-dbsrv-6000  base=f5170a8e
+隔离 target：CARGO_TARGET_DIR=E:\tmp\openmir2-dbsrv6k-target
+生成时间=2026-10-11T19:13:29+08:00
+
+$ cargo fmt --all -- --check
+exit=0
+
+$ cargo clippy --workspace --all-targets --offline -- -D warnings
+    Checking db-srv v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\dbsrv6k\mir2-rs\bins\db-srv)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.09s
+exit=0
+
+$ cargo test --workspace --offline   # 3 连跑
+run 1: exit=0 suites=67 passed=398 failed=0 ignored=11
+run 2: exit=0 suites=67 passed=398 failed=0 ignored=11
+run 3: exit=0 suites=67 passed=398 failed=0 ignored=11
+
+$ cargo run -p msgcodegen --offline -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+
+$ cargo run -p replay --offline -- tests/parity/vectors/oracle_vectors.jsonl
+  进世界: 4 idents hit
+  选服: 2 idents hit
+  选角: 2 idents hit
+RESULT: GREEN
+
+=== 基线复核（对照 f5170a8e）===
+$ git worktree add -f <tmp> f5170a8e && cd <tmp>/mir2-rs && CARGO_TARGET_DIR=E:\tmp\openmir2-dbsrv6k-base-target cargo test --workspace --offline
+run: exit=0 suites=66 passed=392 failed=0 ignored=11
+（本片 +1 suite / +6 用例 = 67 suites / 398 passed；基线 worktree 与 base target 复核后已删除）
