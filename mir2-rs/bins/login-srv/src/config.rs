@@ -121,12 +121,15 @@ pub fn default_path() -> PathBuf {
 /// 配置文件/伴随文件不存在、缺 `ConnctionString`、端口非法 —— 返回错误，调用方非零退出。
 pub fn load(path: &Path) -> Result<Config> {
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
-    let text = std::fs::read_to_string(path).with_context(|| {
+    // 照 oracle（`ConfigFile.cs:263`）读原始字节 + **GB2312** 解码：现网 `logsrv.conf` 可含中文，
+    // 严格 UTF-8 会在这种配置上失败（`from_utf8_lossy` 也不是 oracle 语义）。
+    let bytes = std::fs::read(path).with_context(|| {
         format!(
             "读取配置失败：{}（M1④：缺配置必须明确报错退出）",
             path.display()
         )
     })?;
+    let text = gbk::decode(&bytes);
     let ini = Ini::parse(&text);
     let mut cfg = Config::default();
     // 与 C# `ConfigManager.LoadConfig` 同序、同名（大小写不敏感）。
@@ -543,5 +546,36 @@ mod tests {
         let ini2 = Ini::parse("[Server]\nGatePort=0\n");
         assert_eq!(ini2.integer("Server", "GatePort", 5500).unwrap(), 0);
         assert!(ini2.boolean("Server", "TestServer", true));
+    }
+
+    /// 含中文的 GBK `logsrv.conf` 必须按 GB2312 解码（oracle `ConfigFile.cs:263`）；
+    /// 旧的严格 UTF-8 读法会在此失败。
+    #[test]
+    fn parses_gbk_chinese_conf() {
+        let d = tmp("gbk-conf");
+        std::fs::create_dir_all(&d).unwrap();
+        let body = gbk::encode(
+            "[Server]\n; 中文注释\nGateAddr=0.0.0.0\nGatePort=5500\nServerAddr=127.0.0.1\n\
+             ServerPort=5600\n[DataBase]\n\
+             ConnctionString=server=127.0.0.1;uid=root;pwd=;database=mir2_account;\n",
+        );
+        assert!(
+            std::str::from_utf8(&body).is_err(),
+            "GBK 中文配置不应是合法 UTF-8"
+        );
+        let conf = d.join("logsrv.conf");
+        std::fs::write(&conf, &body).unwrap();
+        std::fs::write(
+            d.join("AddrTable.txt"),
+            gbk::encode("热血传奇 T1 127.0.0.1 127.0.0.1 127.0.0.1:7100\n"),
+        )
+        .unwrap();
+        std::fs::write(d.join("ServerAddr.txt"), "127.0.0.1\n").unwrap();
+        std::fs::write(d.join("UserLimit.txt"), gbk::encode("热血传奇 g1 3000\n")).unwrap();
+        let cfg = load(&conf).unwrap();
+        assert_eq!(cfg.gate_port, 5500);
+        assert_eq!(cfg.server_port, 5600);
+        assert_eq!(cfg.routes.len(), 1);
+        std::fs::remove_dir_all(&d).ok();
     }
 }
