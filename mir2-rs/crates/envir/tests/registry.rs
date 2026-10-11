@@ -207,3 +207,43 @@ fn registry_reads_point_file_next_to_map() {
     assert_eq!((m.points[0].x, m.points[0].y), (3, 4));
     assert!(m.point_file.is_some());
 }
+
+/// 注册表暴露 `map_id` → `Envirnoment.Flag`/`MapDesc`（帧 766/54/46 的输入），
+/// 且按 MapInfo.txt 的 section 序与加载成功序对齐。
+#[test]
+fn registry_exposes_flag_and_map_desc() {
+    let base = temp_dir("registry-flag");
+    let map_dir = base.join("Map");
+    let envir_dir = base.join("Envir");
+    fs::create_dir_all(&map_dir).unwrap();
+    fs::create_dir_all(&envir_dir).unwrap();
+    fs::write(map_dir.join("fa.map"), synth_walk(3, 3)).unwrap();
+    fs::write(map_dir.join("fb.map"), synth_walk(3, 3)).unwrap();
+    write_gbk(
+        &envir_dir.join("MapInfo.txt"),
+        concat!(
+            "[MapA|fa 比奇省] DAY\n",
+            "[MapB|fb 战地] FIGHT SAFE MUSIC(13)\n",
+            "[MapC|missing 缺失]\n", // 文件缺失 ⇒ 不进表
+            "[MapD|fb 夜地] DARK\n",
+        ),
+    );
+
+    let reg = MapLoader::new(&base, "Map", "Envir")
+        .load_registry()
+        .expect("加载注册表");
+    assert_eq!(reg.len(), 3);
+    assert_eq!(reg.map_desc_of(0), Some("比奇省"));
+    assert_eq!(reg.map_desc_of(1), Some("战地"));
+    assert_eq!(reg.map_desc_of(2), Some("夜地"));
+    assert!(reg.flag_of(0).unwrap().day_light);
+    assert!(!reg.flag_of(0).unwrap().music);
+    assert_eq!(reg.flag_of(0).unwrap().music_id, -1, "非 MUSIC 图");
+    let b = reg.flag_of(1).unwrap();
+    assert!(b.fight_zone && b.safe_area && b.music);
+    assert_eq!(b.music_id, 13);
+    assert!(reg.flag_of(2).unwrap().bo_darkness);
+    assert!(reg.flag_of(3).is_none());
+    // `MapC` 加载失败，`MapD` 拿到 `map_id=2`。
+    assert_eq!(reg.name_of(2), Some("MapD"));
+}
