@@ -151,7 +151,17 @@ namespace BotSrv
                         // 改为按本条目自己的 SessionId 取回对应假人。
                         if (_clients.TryGetValue(_autoList[i].SessionId, out RobotPlayer autoRobot))
                         {
-                            SafeRun(autoRobot, ensureAutoPlay: true);
+                            // F4（T-12）：挂机只对**本会话自己那条连接**确认过进世界（SM_LOGON ⇒ `InWorld`）的
+                            // 假人执行。旧行为只看跨假人共享的 `MShare.MySelf` ⇒ 未进世界的假人也被挂机、
+                            // 日志写在共享态上，不能当作“该假人进世界”的证据（`MIR2_BOT_LEGACY_SHARED_AUTOPLAY=1` 保留旧行为做对照）。
+                            if (autoRobot.InWorld || LoadMetrics.LegacySharedAutoPlay)
+                            {
+                                SafeRun(autoRobot, ensureAutoPlay: true);
+                            }
+                            else
+                            {
+                                LoadMetrics.AutoPlaySkippedPreWorld();
+                            }
                         }
                     }
                 }
