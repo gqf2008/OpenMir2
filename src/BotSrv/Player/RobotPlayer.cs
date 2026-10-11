@@ -510,6 +510,48 @@ namespace BotSrv.Player
 
         #endregion
 
+        #region M1③ 退出路径夹具：进世界后发 CM_SOFTCLOSE（小退；默认关；白名单 M1-EXIT）
+
+        /// <summary>发送时刻（MShare.GetTickCount），-1=未武装。</summary>
+        private int _softCloseAtTick = -1;
+        /// <summary>是否已发出（只发一次）。</summary>
+        private bool _softCloseSent;
+
+        /// <summary>收到本假人 SM_LOGON 后武装（`MShare.g_nSoftCloseAfterWorldMs` &lt;= 0 时是空操作）。</summary>
+        private void ArmSoftClose()
+        {
+            if (MShare.g_nSoftCloseAfterWorldMs <= 0)
+            {
+                return;
+            }
+            _softCloseAtTick = MShare.GetTickCount() + MShare.g_nSoftCloseAfterWorldMs;
+            MainOutMessage($"M1SOFTCLOSE arm after_ms={MShare.g_nSoftCloseAfterWorldMs}");
+        }
+
+        /// <summary>到点后发一条 CM_SOFTCLOSE(1009)——线上形状照 C# 客户端 `AppLogout()` 的
+        /// `SendClientMessage(CM_SOFTCLOSE, 0, 0, 0, 0)`；只写本假人自己的 socket，
+        /// 不读不写跨假人共享世界态（同 T-22 纪律）。默认关时空转。</summary>
+        private void SoftCloseTick()
+        {
+            if (MShare.g_nSoftCloseAfterWorldMs <= 0 || _softCloseSent || _softCloseAtTick < 0)
+            {
+                return;
+            }
+            if (!_inWorld || ClientSocket == null || !ClientSocket.IsConnected)
+            {
+                return;
+            }
+            if (MShare.GetTickCount() < _softCloseAtTick)
+            {
+                return;
+            }
+            _softCloseSent = true;
+            SendClientMessage(Messages.CM_SOFTCLOSE, 0, 0, 0, 0);
+            MainOutMessage("M1SOFTCLOSE sent ident=1009");
+        }
+
+        #endregion
+
         /// <summary>收到 SM_LOGON = 服务端确认本假人已进世界（探针武装 + tick 覆盖率分子），幂等。
         /// `x`/`y` = 该消息里服务端给本假人的落点（PlayScene 的 SM_LOGON 分支就用它们 NewActor）。</summary>
         public void MarkInWorld(int x, int y)
@@ -523,6 +565,7 @@ namespace BotSrv.Player
             _probeY = y;
             _inWorld = true;
             ArmBagEquipSequence();
+            ArmSoftClose();
             if (LoadMetrics.ShouldSuppressInWorld(LoginId))
             {
                 // 牙齿钩子（T-12）：本假人照常进世界，但**不计** in_world（抹掉“进世界证据”）。
@@ -551,6 +594,7 @@ namespace BotSrv.Player
                 DScreen.CurrentScene.DoNotifyEvent();
                 ProbeActionTick();
                 BagEquipSequenceTick();
+                SoftCloseTick();
                 if (DScreen.CurrentScene == PlayScene)
                 {
                     ProcessActionMessages();

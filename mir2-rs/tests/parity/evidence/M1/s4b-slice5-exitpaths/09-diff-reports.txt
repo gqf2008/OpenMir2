@@ -1,0 +1,19 @@
+# M1③ 退出路径跨实现 DB 字段级 diff（scoped_diff.py diff --canonical --fixed-newchr）
+# 生成时间: 2026-10-12T05:19:26+08:00
+
+=== [softclose] Csharp-write_to_Rust-read : softclose-csharp-1 vs softclose-rust ===
+GREEN: 作用域内 9 张表逐行一致
+rc=0
+
+=== [softclose] Rust-write_to_Csharp-read : softclose-rust vs softclose-csharp-2 ===
+GREEN: 作用域内 9 张表逐行一致
+rc=0
+
+=== [shutdown] Csharp-write_to_Rust-read : shutdown-csharp-1 vs shutdown-rust ===
+GREEN: 作用域内 9 张表逐行一致
+rc=0
+
+=== [shutdown] Rust-write_to_Csharp-read : shutdown-rust vs shutdown-csharp-2 ===
+GREEN: 作用域内 9 张表逐行一致
+rc=0
+

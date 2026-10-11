@@ -30,6 +30,19 @@ namespace BotSrv
         public static int g_nBagEquipStepMs = 1000;
         public static int g_nBagEquipStartDelayMs = 3000;
         /// <summary>
+        /// M1③ 退出路径夹具（卡 openmir2-m1-dbsrv-6000-face；白名单 M1-EXIT）：
+        /// 收到本假人 SM_LOGON 后等这么久，按客户端 AppLogout 的线上形状发一条
+        /// CM_SOFTCLOSE(1009)（= “小退”）。默认 0 = 关（不新增任何发送）。
+        /// 见 RobotPlayer.SoftCloseTick。
+        /// </summary>
+        public static int g_nSoftCloseAfterWorldMs = 0;
+        /// <summary>
+        /// M1③ 退出路径夹具：关掉自动挂机（默认 false = 原行为）。
+        /// 挂机会让假人随机游走（未种子的客户端 RNG）⇒ 存档位置不可复现；跨侧对拍需要“静止”。
+        /// 见 ClientManager.RunAutoPlay。
+        /// </summary>
+        public static bool g_boDisableAutoPlay = false;
+        /// <summary>
         /// 是否自动捡取物品
         /// </summary>
         public static bool AutoPickUp = true;

@@ -77,5 +77,21 @@ namespace BotSrv
         /// SM_LOGON 之后服务端还会推物品列表（SM_ADDITEM 等），要等本假人视图装载完再动。
         /// </summary>
         public int BagEquipStartDelayMs { get; set; } = 3000;
+
+        /// <summary>
+        /// M1③ 退出路径夹具（卡 openmir2-m1-dbsrv-6000-face；白名单 M1-EXIT）：默认 0 = 关
+        /// （不新增任何发送）。&gt;0 时，本假人收到自己的 SM_LOGON（真进世界）后等这么久，
+        /// 按 C# 客户端 AppLogout 的线上形状发一条 CM_SOFTCLOSE(1009)（= “小退”，服务端据此
+        /// 走 PlayObject.BoSoftClose → MakeGhost → SaveHumanRcd 的存档路径）。只写本假人自己的
+        /// socket，不读不写跨假人共享世界态（同 T-22 纪律）。见 RobotPlayer.SoftCloseTick。
+        /// </summary>
+        public int SoftCloseAfterWorldMs { get; set; }
+
+        /// <summary>
+        /// M1③ 退出路径夹具（白名单 M1-EXIT）：默认 false = 原行为（假人进世界后自动挂机游走）。
+        /// true 时关掉自动挂机——挂机走位由客户端无种子 RNG 驱动，跨侧对拍不可复现；
+        /// 退出路径的存档判据只关心“进世界 + 不动的初始状态”。见 ClientManager.RunAutoPlay。
+        /// </summary>
+        public bool DisableAutoPlay { get; set; }
     }
 }
