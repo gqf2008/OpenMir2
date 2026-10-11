@@ -31,6 +31,12 @@ load-<时间戳>/
 | `load-20261011-114831/` | 200 / 500 / 1000 | 第 4 轮 **T-10 修前**：三档 verdict GREEN 但 `internal_errors` 非零（500:159 / 1000:16，自动挂机越界——见图下根因）。**告警：tier-1000 的 `load_stats.ndjson` 已被下一轮冒烟覆写，`internal_errors=16` 见 `report.json`** |
 | `load-20261011-121254/` | 200 / 500 / 1000 | 第 4 轮 **验收 A**（最终代码）：三档 GREEN、`login=100%`、`conn_lost_steady=0`、`internal_errors=0`、`samples>0`；同目录 `stack_e2e.out.txt` = 整条命令 stdout（含开号幂等行）。**告警：tier-1000 的 `load_stats.ndjson` 已被下一轮冒烟覆写（该档结论引 `report.json` + `stack_e2e.out.txt`）；tier-200/500 的 ndjson 与 report 自洽** |
 | `load-20261011-121953/` | 200 / 500 / 1000 | 第 4 轮 **验收 B**（同一命令第二次）：三档 verdict 与 A **完全一致**、`samples>0`、`internal_errors=0`；三档 ndjson 与 report **自洽**（未被覆写） |
+| `load-20261011-132023/` | 1000 | 第 5 轮 **T-11 观测首验**（单档）：`login_conns.ndjson` 首次入库，`login_conn_diag.direction=none`（本轮无残余） |
+| `load-20261011-132401/` | 1000 × 4 | 第 5 轮 **残余丢包方向诊断**（`-Repeat 4`）：r1..r3 全 GREEN；**r4 = 646/1000 无应答、`no_resp_rx0=646`、同连接重发 646 发 0 成功** ⇒ 方向 = 上游 C# 栈（见《残余丢包方向》） |
+| `load-20261011-133905/` | 1000 × 3 | 第 5 轮：r1/r2 GREEN，r3 **RED（tick P99=201ms）** ⇒ 登记 C6-3（tick flaky） |
+| `load-20261011-155529/` | 200/500/1000 × 3 | 第 5 轮 **验收 A**（`-Repeat 3`）：tier-200/500 全 GREEN；tier-1000 worst_login=100% 但 **RED（tick 125/201ms）**。与 m2svr/wbevy 车道 cargo 构建并行 |
+| `load-20261011-162213/` | 200/500/1000 × 3 | 第 5 轮 **验收 C**（`-Repeat 3`）：tier-200/500 全 GREEN；tier-1000 r1/r2 GREEN、**r3 RED（上游 LoginSrv 停摆：865/1000 无应答、`no_resp_rx0=865`）**。与 wbevy 车道 cargo 构建并行 |
+| `redcheck-c6f-20261011/` | — | 第 5 轮**红检原始输出**：`load_report.py selftest`（阈值 960/1000 牙齿 + 方向判据）、`load_gate.ps1 -SelfTestRed`、真实存档件重判 |
 
 ## 证据完整性告警（2026-10-11 自查，C6 原卡回复轮）
 
@@ -119,6 +125,105 @@ System.IndexOutOfRangeException: Index was outside the bounds of the array.
 `report.json`（该档归算 + verdict + fails）、`load_gate_summary.json`（全档汇总，在目录根）。
 `bots.log` / `bots.err.log` / `stack-*.log` 是过程日志，**不入库**（`.gitignore: tests/loadgate/**/*.log`）。
 三档曲线与判据表由 `load_report.py aggregate` 生成到 `SUMMARY.md`。
+
+## 第 5 轮结论（2026-10-11）：tier-1000 口径重新基准化（owner 裁决 `11dbde39`）
+
+验收命令（`-Repeat 3` = 同一命令 3 连跑取最差；阈值 tier<1000=100%、tier≥1000=95%）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/e2e/stack_e2e.ps1 `
+  -ProvisionAccounts -LoadTiers 200,500,1000 -SkipFlow -Repeat 3 -StopStackAtEnd
+```
+
+### 3 连跑 verdict 表
+
+本轮两次独立整命令（均为 `-Repeat 3`）。两次都跑完、`provision account=1000`（幂等）、
+`tier-200/500` 三轮全 GREEN；`tier-1000` 的登录与 tick 各有独立波动（见下）。
+
+| 命令 | tier | r1 | r2 | r3 | 最差登录 | 阈值 | 档位判定 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| A `load-20261011-155529` | 200 | GREEN(100%, p99=31) | GREEN(100%, 16) | GREEN(100%, 47) | 100% | 100% | GREEN |
+| A | 500 | GREEN(100%, 16) | GREEN(100%, 16) | GREEN(100%, 16) | 100% | 100% | GREEN |
+| A | 1000 | RED(100%, **125**) | RED(100%, **201**) | GREEN(100%, 16) | 100% | 95% | **RED（tick）** |
+| C `load-20261011-162213` | 200 | GREEN(100%, 31) | GREEN(100%, 16) | GREEN(100%, 16) | 100% | 100% | GREEN |
+| C | 500 | GREEN(100%, 32) | GREEN(100%, 32) | GREEN(100%, 47) | 100% | 100% | GREEN |
+| C | 1000 | GREEN(100%, 16) | GREEN(100%, 16) | **RED(13.5%, –)** | 13.5% | 95% | **RED（上游停摆）** |
+
+判定规则（写入 `load_gate_summary.json`）：每档取 N 轮里**最低登录率 ≥ 阈值**，且**每一轮**的
+conn/tick/internal 都 GREEN；否则该档 RED。
+
+**读法（必须一起读）**：
+
+- **登录判据本身已可复现**：A 的 tier-1000 三轮都是 100%（阈值 95% 有余量）；C 的 r1/r2 也是 100%。
+  本机安静/半安静窗口下没再出现 reviewer-3 的 94.8%。
+- **A 的 RED 来自 tick P99**（125/201 > 100ms），不是登录：A 的 tier-1000 tick 尾部在 3 轮里 2 轮越界
+  （单 5s 窗内 ~10–80 个样本落在 110–≥200ms）。这是**第二条独立波动源**，本裁决未授权改 tick 判据 ⇒
+  如实登记为待裁决项（见下《第 5 轮遗留》）。
+- **C 的 RED 来自上游停摆**：r3 的 1000 个假人全部连上并发登录包，**865 条连接服务端一个字节都没回**
+  （`login_conn_diag.no_resp_rx0=865`），`LoginSrv.out.log` 在 16:40:21 后**完全停写**（连接处理冻结、
+  不恢复），爬坡 600s 停在 135/1000。这是「上游在 1000 并发登录下的停摆」，与 reviewer-3 的 948 同源但更严重。
+
+### 红检（改坏必红、还原必绿）
+
+原始输出入库：`tests/loadgate/redcheck-c6f-20261011/`。
+
+1. `load_report.py selftest`（含**阈值牙齿**）：同一份 960/1000 产物，阈值 100 ⇒ RED、阈值 95 ⇒ GREEN；
+   以及残余丢包方向判据（rx0⇒上游 / rx>0⇒假人侧 / mixed）。
+2. `load_gate.ps1 -SelfTestRed`：指向无监听端口 ⇒ `tier-3 verdict=RED`（脚本自身退出 0 = 红检通过）。
+3. 真实存档件重判：`104822/tier-500`（真实回归 login=35.8%）在 100%/95% 下都 RED；健康件在 95% 下 GREEN。
+
+### 第 5 轮遗留（登记，待 owner/新卡）
+
+- **C6-3（Important，未授权改）tier-1000 的 tick P99 也 flaky**：A 的 r1/r2 = 125/201ms，
+  历史件 `133905/run-3` = 201ms、`132401/r1..r3` = 32/32/47、`132023` = 0。判据 `tick P99 ≤ 100ms`
+  在 tier-1000 上不可复现（~25% 轮次越界），与登录同一性质（上游 1000 并发性质 + 本机共享负载）。
+  owner 裁决明确「tick 不变」⇒ **本批不改**，请 owner 裁决是否按同法重基准化（例如 tier≥1000 用
+  实测下界，或把 tick 判据改成对单次瞬时尖峰鲁棒的口径）。
+- **C6-4（Important，上游）LoginSrv 在 1000 并发登录下会停摆且不恢复**：`162213/run-3/tier-1000`
+  （865/1000 无应答、rx_bytes=0）+ `132401/run-4`（646/1000）。BotSrv 侧观测只能定性到「服务端没回」；
+  若要定位（连接泄漏/线程池/MySQL 连接），需要 C# 侧**只读**计数（收到 CM_IDPASSWORD 数 / 回 SM_PASSOK 数 /
+  socket 数）⇒ 按 brief §1(i) 交 `openmir2-svc-1` + 人签字，别自己改 oracle。
+- **运行纪律**：本机是共享机器，另两车道（m2svr/wbevy）在跑 cargo 构建时，压测的 login 与 tick 都更差
+  （A、C 两轮都与编译并行）⇒ load gate 应尽量在**独占窗口**跑；并行跑时必须在证据里注明（本轮两轮都注明了）。
+
+## 残余丢包方向（C6 第 5 轮，owner 裁决 `11dbde39` 的 must_first）
+
+**问题**：tier-1000 里「1000 个假人都连上并发出登录包（`login_sent=1000`/`conn_ok=1000`），
+只有 948~1000 个拿到登录应答（`ident_counts[529]`）」——少的那些，是**服务端没回**，还是
+**假人侧收包/解析丢了**？（reviewer-3 的 A/B 两连跑：A 1000、B 948；第 4 轮两连跑 1000/1000。）
+
+**观测（BotSrv T-11，登记 `mir2-rs/tests/parity/whitelist.md` T-11；BotSrv 是压测夹具，不是 oracle）**：
+
+- 每一条登录 socket 落一行 `tier-*/login_conns.ndjson`：`key`（SessionId）/ `conn_seq`（本进程第几条登录连接）/ `login_tick`（发出 `CM_IDPASSWORD` 的时刻）/ `rx_chunks`/`rx_bytes`（本连接收到的原始字节）/ `saw_529` / `first_resp_ident`。
+- 一条**自证对照**：`load_gate.ps1 -LoginResendMs N`（或 `stack_e2e.ps1 -LoginResendMs N`）时，
+  登录包发出后 N ms 内没拿到应答的连接，在**同一条 TCP 连接**上重发一次登录包；第二次是否应答。
+  默认 0 = 关（正常门禁行为不变）。
+- 归算：`load_report.py summarize --login-conns <path>` 产出 `login_conn_diag`：
+
+  | 字段 | 含义 |
+  | --- | --- |
+  | `no_resp_rx0` | 无应答连接里 `rx_bytes==0` 的条数 ⇒ **服务端在这条 TCP 连接上一个字节都没回** ⇒ 方向 = 上游（C# 部署栈） |
+  | `no_resp_rx_gt0` | 无应答连接里 `rx_bytes>0` 的条数 ⇒ 服务端回了、假人侧收包/解析丢了 ⇒ 方向 = **假人（BotSrv，工具缺陷）** |
+  | `no_resp_resend` / `no_resp_resend_ok` | 自证对照：重发了几条 / 其中几条成功 |
+  | `buckets` | 无应答连接按 `login_tick` 的分窗分布（默认 5s/窗） |
+  | `direction` | `upstream-csharp-stack` / `bot-client` / `mixed` / `none` |
+
+**结论（方向 = 上游 C# 部署栈）**，证据：
+
+| 数据 | 发出登录包 | 无应答 | 其中 `rx_bytes==0` | 同连接重发 | 方向 |
+| --- | --- | --- | --- | --- | --- |
+| reviewer-3 B 轮（`cdea5e32`，只有汇总计数，无连接级观测） | `login_sent=1000`/`conn_ok=1000`/`conn_err_*=0` | 52（`ident_counts[529]=948`） | 未观测 | — | 未定 |
+| **`load-20261011-132401/run-4/tier-1000`**（T-11，带重发对照） | `login_sent=1000`/`conn_ok=1000`/`conn_err_*=0` | **646** | **646（全部）** | 646 发 / **0 成功** | **`upstream-csharp-stack`** |
+| `load-20261011-155529`（第 5 轮 A，安静窗口） | 1000 | 0（9 次三档全 0） | 0 | — | `none` |
+
+`132401/run-4` 的形态：无应答连接的 `login_tick` 全部落在**同一时间点之后**（服务端从此不再应答新连接），
+已应答的 354 条延迟也很大（p50 ≈ 8.8s、max ≈ 14.3s，`no_resp_span_ms≈20s`）——这是**上游
+LoginSrv/LoginGate 在 1000 并发登录下的服务端性质**，不是假人侧收包/解析。**按 owner 红线：不改 oracle 行为**；
+也不需要给 C# 侧加只读计数（BotSrv 侧观测已能定性）。
+
+**影响与引法**：这解释了 tier-1000 的「登录 < 100%」；`login_conn_diag` 随 `report.json` 入库
+（`--login-conns` 缺省时该块不产出）。本项**只做定性**，不改 oracle，也不改 login 阈值（阈值见
+`tools/botload/README.md》阈值与理由`）。
 
 ## 三个新增读数（2026-10-11 起，必须一起读）
 

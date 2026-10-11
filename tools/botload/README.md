@@ -6,9 +6,9 @@
 
 ```powershell
 # 整栈一条命令：停栈 → 批量开号 → 起栈 → 工具自测+金标准 → 压测档位 200/500/1000 → 收尾/停栈
-# （C6 第 4 轮的验收命令：同一命令连跑两次，三档 verdict 必须一致）
+# （C6 第 5 轮的验收命令：同一命令 3 连跑取最差；tier<1000 登录 100%、tier≥1000 ≥ 95%，见下《阈值与理由》）
 powershell -ExecutionPolicy Bypass -File tools/e2e/stack_e2e.ps1 `
-  -ProvisionAccounts -LoadTiers 200,500,1000 -SkipFlow -StopStackAtEnd
+  -ProvisionAccounts -LoadTiers 200,500,1000 -SkipFlow -Repeat 3 -StopStackAtEnd
 
 # 只跑单档（栈已在跑）
 powershell -ExecutionPolicy Bypass -File tools/botload/load_gate.ps1 -Tiers 200 -HoldSec 60
@@ -52,18 +52,58 @@ powershell -ExecutionPolicy Bypass -File tools/botload/load_gate.ps1 -SelfTestRe
 
 | 判据 | 阈值 | 出处 |
 | --- | --- | --- |
-| 登录成功率 | **100%** | §6 M5-3 |
+| 登录成功率 | **tier ≥ 1000：≥ 95%（可复现下界）；tier < 1000：100%** | §6 M5-3 + owner 裁决 `11dbde39`（见下《阈值与理由》） |
 | 稳态掉线 | **0** | §6 M5-3 |
 | tick P99 | **≤ 100ms** | §6 M5-3 |
 | 内存末段斜率 | ≈ 0（M5 长跑另判：峰值-均值 < 5%） | §6 M5-2 |
 
-`load_gate.ps1` 逐档判 GREEN/RED，任一档 RED ⇒ 退出码 1；三档全绿才 `GREEN`。
+`load_gate.ps1 -Repeat N` 逐档逐轮判 GREEN/RED，再**按档位取 N 轮里最差**：`worst_login_pct ≥ 阈值`
+**且每一轮的 conn/tick/internal 都 GREEN** 才算该档 GREEN；任一档 RED ⇒ 退出码 1。
+
+## 阈值与理由（2026-10-11 第 5 轮；owner 裁决 `11dbde39` ①）
+
+**tier-1000 登录判据 = 同命令 3 连跑取最差 ≥ 95%**（`load_gate.ps1 -Repeat 3`，或 `stack_e2e.ps1 -Repeat 3`）；
+其余档位仍是 100%。
+
+为什么不是「100%」：
+
+- 被测栈是 **C# 部署栈**（`tools/e2e/stack_e2e.ps1` → `E:\MirServer\start-all.ps1`：DBSrv/LoginSrv 来自
+  `src/**` 构建，LoginGate/SelGate/M2GameSvr 来自部署包），**不是 Rust 侧** ⇒ tier-1000 的残余丢包是
+  「上游（oracle 栈）在 1000 并发登录下的性质」，不是 Rust 移植缺陷；改它等于改 oracle 行为（红线）。
+- 两轮独立实测已证否「100%」：reviewer-3 在自己检出上同命令两连跑，A 三档全 GREEN；B 的 tier-1000 =
+  **94.8%（948/1000）**、爬坡未完成 ⇒ RED（`cdea5e32` / `67af4cac`）。本轮 T-11 观测把方向证出来：
+  1000 个假人**全部连上并发出**登录包（`login_sent=1000`/`conn_ok=1000`/`conn_err_*=0`），少的那部分
+  连接服务端**一个字节都没回**（`rx_bytes=0`），同连接重发也拿不到应答（见
+  `tests/loadgate/README.md》残余丢包方向`）。
+- 95% 是**可复现的下界**（3 连跑取最差），不是把已知失败当通过：它把「波动区间」与「回归」分开——
+  真正的回归（如 T-9 那类系统性丢弃，tier-500 179/500 = 35.8%）会被 95% 稳稳抓住（见《红检》）。
+
+阈值与理由同时写在 `load_gate.ps1` 的 `Get-LoginThreshold` 与 `load_report.py` 的
+`LOGIN_THRESHOLD_BY_MIN_TIER`（注释），二者必须一致；`load_report.py selftest` 有断言。
+
+**实测（第 5 轮两次整命令，均 `-Repeat 3`）**：`load-20261011-155529`（与 m2svr/wbevy 构建并行）与
+`load-20261011-162213`（与 wbevy 构建并行）——tier-200/500 六轮全 GREEN；tier-1000 的**登录率**
+可复现（A：100%/100%/100%；C：100%/100%/13.5%），但仍有**两条独立波动源**：① `tick P99` 在 tier-1000
+上 2/3 轮越界（A：125/201ms，C6-3）；② 上游 LoginSrv 在 1000 并发登录下会停摆且不恢复
+（C r3：865/1000 无应答、`rx_bytes=0`，C6-4）。两条都不归因于登录阈值，均已登记在
+`tests/loadgate/README.md》第 5 轮遗留`；判据未授权改的不动。
+
+### 「同一命令多连跑」的表述（owner 裁决 `11dbde39` ③）
+
+「两连跑 verdict 一致」的说法**作废**，改为「两连跑的**判定规则**一致（重跑不产生 GREEN/RED 翻转）」；
+门禁按 `-Repeat N` 一次跑 N 轮并取最差。第 5 轮的 3 连跑 verdict 表见
+`tests/loadgate/README.md》第 5 轮结论`。
 
 ## 红检（改坏必红）
 
 - `load_gate.ps1 -SelfTestRed`：指向无监听端口 ⇒ 爬坡不可能完成 ⇒ 必须 `verdict=RED`（脚本自身退出 0 = 红检通过）。
-- `load_report.py selftest`：分位数正确 / **尾部敏感**（挪走 20 个慢样本 P99 必须 150→5）/ 爬坡未完成判红 /
-  掉线分爬坡与稳态 / 内存斜率（线性 1MB/s vs 平坦 0）。
+- `load_report.py selftest`：分位数正确 / **尾部敏感**（挪走 20 个慢样本 P99 必须 150→5）/ 登录没达阈值判红 /
+  掉线分爬坡与稳态 / 内存斜率（线性 1MB/s vs 平坦 0）/ **阈值牙齿**（同一份 960/1000 产物：阈值 100 ⇒ RED、
+  阈值 95 ⇒ GREEN，判定必须随阈值变）/ **残余丢包方向判据**（`rx_bytes==0` ⇒ 上游；`rx_bytes>0` 且无 `529` ⇒ 假人侧；
+  分窗与重发对照计数）。
+- 阈值本身的真实红检（原始输出见 `tests/loadgate/README.md》第 5 轮·红检`）：把 tier-1000 阈值**临时改回
+  100%**（`load_gate.ps1 ... -LoginThresholdPct 100`，或对 `<100%` 的入库 ndjson 用 `load_report.py summarize
+  --login-threshold 100` 重判）⇒ 该档必须 RED；阈值还原（95%）后同一份数据回到 GREEN。
 
 ## 实机踩过的坑（都已修，写下来免得重踩）
 
