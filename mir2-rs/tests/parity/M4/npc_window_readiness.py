@@ -20,11 +20,21 @@ owner 已把写集扩到 `mir2-rs/tools/script-parity-cs/**` 并指定**路线�
 
 ## 命令（在 `mir2-rs/` 下）
 
-    python -I tests/parity/M4/npc_window_readiness.py            # 实跑（含 C# 夹具行为）+ 出证据
-    python -I tests/parity/M4/npc_window_readiness.py --no-run-cs # 只做源码能力检查（快）
-    python -I tests/parity/M4/npc_window_readiness.py selftest    # 牙齿：合成输入翻转能力 ⇒ 裁决翻转
+    python -I tests/parity/M4/npc_window_readiness.py                    # 只回显 stdout（默认不写盘）
+    python -I tests/parity/M4/npc_window_readiness.py --no-run-cs        # 只做源码能力检查（快；仍不写盘）
+    python -I tests/parity/M4/npc_window_readiness.py --write-evidence  # 显式写 --out（默认 evidence/M4/npc-window-readiness.txt）
+    python -I tests/parity/M4/npc_window_readiness.py selftest          # 牙齿：合成输入翻转能力 ⇒ 裁决翻转
+    python -I tests/parity/M4/npc_window_readiness.py selftest-write    # 牙齿：默认不写盘；改回默认写盘 ⇒ 本自检 RED
 
 退出码：0 = READY（路线① 就绪，可 port-free）；3 = BLOCKED（夹具未修）；2 = PREREQ。
+
+## 写盘口径（卡 `openmir2-m4-readiness-write-mode`，R-1 残留）
+
+**默认只回显 stdout，绝不写盘**（`--no-run-cs` 与普通运行都一样）；只有显式 `--write-evidence`
+才写 `--out`。原因：`--no-run-cs` 与普通运行的输出不同，若默认写盘，任何人按 README 复核一次
+就会把入库证据 `evidence/M4/npc-window-readiness.txt` 改脏、让 `evidence_hashes.py` 假红。
+端口快照永远只回显 stdout + 落到 `mir2-rs/target/m4/npc-window-readiness-ports.txt`
+（`target/` 不入库、不入 hash 清单）。
 """
 
 import argparse
@@ -324,6 +334,125 @@ def cmd_selftest():
 
 
 # --------------------------------------------------------------------------- #
+# 写盘模式牙齿（卡 openmir2-m4-readiness-write-mode）
+# --------------------------------------------------------------------------- #
+EVIDENCE_REL = "mir2-rs/tests/parity/evidence/M4"
+
+
+def _git_status_evidence():
+    """真仓库 `tests/parity/evidence/M4` 的 git 状态（strip 后；空 = 干净）。"""
+    try:
+        r = subprocess.run(["git", "status", "--porcelain", "--", EVIDENCE_REL],
+                           cwd=str(REPO), capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=60)
+    except Exception as e:  # noqa: BLE001
+        return f"(git status 失败: {e})"
+    return (r.stdout or "").strip()
+
+
+def _run_self(script, extra):
+    """用隔离解释器跑本脚本（或其回归副本），返回 CompletedProcess。"""
+    cmd = [sys.executable, "-I", str(script)] + list(extra)
+    return subprocess.run(cmd, cwd=str(MIR2RS), capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", timeout=600)
+
+
+def cmd_selftest_write():
+    """写盘模式牙齿：默认参数不得写盘；把默认写盘改回去 ⇒ 本自检必须 RED。
+
+    ① 默认参数（无 --write-evidence）不得写显式 --out（tmp）；
+    ② 默认 --out（真仓库证据）跑一次，`git status` 的 before/after 必须相同（干净树里 = 空）；
+    ③ 合成「默认写盘」回归副本（把写盘门换成 `if True:`）跑本自检 ⇒ 必须 RED，并把其原始输出回显留档。
+    """
+    script = Path(__file__).resolve()
+    tmp = Path(tempfile.mkdtemp(prefix="m4-npcwin-write-selftest-"))
+    base = ["--no-run-cs", "--cases", str(CASES), "--cs-harness", str(CS_HARNESS),
+            "--rust-server", str(RUST_GAMESVR)]
+    bad = 0
+    try:
+        print("== 写盘模式自检（npc_window_readiness.py；卡 openmir2-m4-readiness-write-mode）==")
+        before = _git_status_evidence()
+        print(f"-- 运行前 git status --porcelain -- {EVIDENCE_REL}: "
+              f"{'(空)' if not before else before}")
+
+        # ① 默认参数（无 --write-evidence）不得写显式 --out。
+        out_ok = tmp / "default-out.txt"
+        r1 = _run_self(script, base + ["--out", str(out_ok)])
+        ok1 = not out_ok.exists()
+        bad += 0 if ok1 else 1
+        print(f"{'PASS' if ok1 else 'RED '} 1/3 默认参数（无 --write-evidence）不写 --out")
+        if not ok1:
+            tail = (r1.stdout or "").strip().splitlines()
+            print(f"     RED: 默认运行写了 {out_ok.name}；stdout 末行 = {tail[-1] if tail else '(空)'}")
+
+        # ② 默认 --out（真仓库证据）跑完，本次运行不得新增任何改动（after == before）。
+        #    在干净树里 before 为空 ⇒ 等价于 `git status --porcelain` 为空（卡③口径）。
+        default_out = EVIDENCE / "npc-window-readiness.txt"
+        orig = default_out.read_bytes() if default_out.exists() else None
+        _run_self(script, base)
+        after = _git_status_evidence()
+        changed = (default_out.exists() and orig is not None
+                   and default_out.read_bytes() != orig)
+        ok2 = (after == before)
+        bad += 0 if ok2 else 1
+        print(f"{'PASS' if ok2 else 'RED '} 2/3 默认运行未改动证据目录（git status before == after）")
+        if before != "":
+            print(f"     （提示：运行前已有未提交证据改动；卡③的权威判据是在干净树里 before 为空）")
+        if not ok2:
+            print(f"     RED: 运行前 = {before or '(空)'}；运行后 = {after or '(空)'}")
+        if changed and orig is not None:
+            # 非破坏性：检出回归后把证据字节恢复，避免自检本身留下脏树。
+            default_out.write_bytes(orig)
+            print("     （已恢复默认运行被改写的证据字节）")
+
+        # ③ 牙齿：合成「默认写盘」回归副本（就地生成，路径解析与本体一致）⇒ 其自检必须 RED。
+        reg_path = None
+        needle = "if args." + "write_evidence:"  # 拼接写，避免本自检源码自身成为匹配目标
+        text = script.read_text(encoding="utf-8")
+        n = text.count(needle)
+        if n != 1:
+            bad += 1
+            print(f"RED  3/3 牙齿锚点 {needle!r} 出现 {n} 次（期望 1）⇒ 自检失效（写盘门被改）")
+        else:
+            # 回归副本必须放本脚本同目录：常量 HERE/CASES/EVIDENCE/REPO 都由 __file__ 推出，
+            # 放 tmp 会让嵌套运行因「缺 npc-cases.json」提前 PREREQ ⇒ 牙齿假红。
+            with tempfile.NamedTemporaryFile(
+                    "w", encoding="utf-8", newline="\n", suffix=".py",
+                    prefix=".regressed_npc_window_readiness-", dir=str(HERE),
+                    delete=False) as fh:
+                reg_path = Path(fh.name)
+                fh.write(text.replace(needle, "if True:  # 合成回归：默认写盘"))
+            r3 = _run_self(reg_path, ["selftest-write"])
+            after3 = _git_status_evidence()
+            # 真牙齿：回归副本的自检必须（a）非 0；（b）在 1/3 就判 RED（默认运行写了 --out）；
+            # （c）跑完仓库证据仍干净（回归副本自己会恢复被改证据）。
+            genuine_red = "RED  1/3" in (r3.stdout or "")
+            teeth_ok = (r3.returncode != 0 and "RED" in (r3.stdout or "")
+                        and genuine_red and after3 == before)
+            bad += 0 if teeth_ok else 1
+            print(f"{'PASS' if teeth_ok else 'RED '} 3/3 牙齿：合成「默认写盘」回归 ⇒ 自检 RED"
+                  f"（回归副本 exit={r3.returncode}；证据目录 "
+                  f"{'干净' if after3 == before else '被改脏'}）")
+            if teeth_ok:
+                print("     —— 回归副本的原始输出（RED 情景留档）——")
+                for line in (r3.stdout or "").splitlines()[:14]:
+                    print("     | " + line)
+        if bad:
+            print(f"RED: npc_window_readiness 写盘模式自检 {bad} 项不过")
+            return 2
+        print("GREEN: npc_window_readiness 写盘模式自检 3/3"
+              "（默认不写盘 + 本次运行未改动证据 + 改回默认写盘必 RED）")
+        return 0
+    finally:
+        if reg_path is not None:
+            try:
+                reg_path.unlink()
+            except OSError:
+                pass
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+# --------------------------------------------------------------------------- #
 def main():
     ap = argparse.ArgumentParser(description="M4② 三条窗口用例的可跑性门")
     ap.add_argument("--cases", default=str(CASES))
@@ -332,12 +461,17 @@ def main():
     ap.add_argument("--out", default=str(EVIDENCE / "npc-window-readiness.txt"))
     ap.add_argument("--no-run-cs", action="store_true",
                     help="只做源码能力检查（不实跑 dotnet；快）")
+    ap.add_argument("--write-evidence", action="store_true",
+                    help="显式写 --out；默认只回显 stdout，不动入库证据")
     ap.add_argument("--ports", default="5000,7000,7100,7200")
-    ap.add_argument("cmd", nargs="?", default="check", choices=["check", "selftest"])
+    ap.add_argument("cmd", nargs="?", default="check",
+                    choices=["check", "selftest", "selftest-write"])
     args = ap.parse_args()
 
     if args.cmd == "selftest":
         return cmd_selftest()
+    if args.cmd == "selftest-write":
+        return cmd_selftest_write()
 
     cases_path = Path(args.cases)
     if not cases_path.is_file():
@@ -352,10 +486,15 @@ def main():
     ports = [int(p) for p in args.ports.split(",") if p.strip()]
     overall, text = evaluate(merchants, args.cs_harness, args.rust_server,
                              run_cs=not args.no_run_cs)
-    out_path = Path(args.out)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(text, encoding="utf-8", newline="\n")
     print(text)
+    # 写盘必须显式（卡 openmir2-m4-readiness-write-mode）：默认只 stdout，绝不改入库证据。
+    out_path = Path(args.out)
+    if args.write_evidence:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(text, encoding="utf-8", newline="\n")
+        print(f"EVIDENCE {_rel(out_path)}（--write-evidence 显式写盘）")
+    else:
+        print(f"EVIDENCE-SKIP 默认只回显 stdout（要写 {_rel(out_path)} 需显式 --write-evidence）")
     # 端口快照是易变信息项：回显到 stdout + 落到 target/（不入库、不入 hash 清单），
     # 这样重跑本门不会把入库证据改脏 —— 评审按 reviewer_note 跑本门 + evidence_hashes.py 不会误红。
     port_lines = check_ports(ports)
@@ -366,7 +505,6 @@ def main():
     except OSError:
         pass
     print("PORT-SNAPSHOT " + " | ".join(port_lines))
-    print(f"EVIDENCE {_rel(out_path)}")
     if overall == "READY":
         print("READY: C# 夹具路线① 就绪 ⇒ 三条商人用例可 port-free 跑"
               "（Rust 服务侧 NPC 派发归 M3，见证据）")

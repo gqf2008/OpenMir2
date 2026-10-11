@@ -112,7 +112,8 @@ def main():
         gate_out.parent.mkdir(parents=True, exist_ok=True)
         try:
             rg = subprocess.run(
-                [sys.executable, "-I", str(WINDOW_GATE), "--no-run-cs", "--out", str(gate_out)],
+                [sys.executable, "-I", str(WINDOW_GATE), "--no-run-cs", "--write-evidence",
+                 "--out", str(gate_out)],
                 cwd=MIR2RS, capture_output=True, text=True, encoding="utf-8", errors="replace",
                 timeout=300)
             gtext = (rg.stdout or "").rstrip()
