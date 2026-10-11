@@ -4,16 +4,13 @@
 - C# 夹具：`mir2-rs/tools/script-parity-cs`
 - Rust GameSvr：`mir2-rs/bins/game-svr`
 
-## 0. 窗口端口实况（信息项）
+## 0. 窗口端口实况（易变信息项，不入 hash 清单）
 
-- port=5000:DOWN
-- port=7000:DOWN
-- port=7100:DOWN
-- port=7200:DOWN
+- 本证据**不含**端口快照：端口会随窗口/别车道起栈而变，写进入库证据会让重跑改脏、hash 清单误红。本次采样见命令 stdout 的 `port=…` 行与 `mir2-rs/target/m4/npc-window-readiness-ports.txt`（`target/` 不入库）。
 
 ## 商店：商店-货币兑换（@changeGold 足额金币→金条）
 - 脚本/label：`E:/MirServer/M2GameSvr/Envir/Market_Def/封魔谷/恶魔修理师-d2008.txt` `@changeGold`
-- C# port-free 夹具：CAPABLE — [实跑] 产出效果行：gold -1002000 | additem 金条 1；[源码] E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m4cases\mir2-rs\tools\script-parity-cs\RunMode.cs: NPC 代理 = IMerchant ⇒ 可构造商人
+- C# port-free 夹具：CAPABLE — [实跑] 产出效果行：gold -1002000 | additem 金条 1；[源码] mir2-rs/tools/script-parity-cs/RunMode.cs: NPC 代理 = IMerchant ⇒ 可构造商人
 - Rust 服务侧（M3 承接，不阻塞本卡）：BLOCKED — NPC 命令派发=无（game-svr 源码内无 CM_CLICKNPC/CM_MERCHANTDLGSELECT）；脚本引擎依赖(mir2-script)=无；main.rs 实派发 = CM_SAY/CM_PICKUP/CM_DROPITEM
 - Rust 脚本引擎（flow-run，证明引擎本身可跑）：
 ```
@@ -26,7 +23,7 @@
 
 ## 修理：修理-RepairAll（@StdModeFunc26）
 - 脚本/label：`E:/MirServer/M2GameSvr/Envir/Market_Def/QFunction-0.txt` `@StdModeFunc26`
-- C# port-free 夹具：CAPABLE — [实跑] 无 IMerchant 异常（无效果行，按能力计）: #items=；[源码] E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m4cases\mir2-rs\tools\script-parity-cs\RunMode.cs: NPC 代理 = IMerchant ⇒ 可构造商人
+- C# port-free 夹具：CAPABLE — [实跑] 无 IMerchant 异常（无效果行，按能力计）: #items=；[源码] mir2-rs/tools/script-parity-cs/RunMode.cs: NPC 代理 = IMerchant ⇒ 可构造商人
 - Rust 服务侧（M3 承接，不阻塞本卡）：BLOCKED — NPC 命令派发=无（game-svr 源码内无 CM_CLICKNPC/CM_MERCHANTDLGSELECT）；脚本引擎依赖(mir2-script)=无；main.rs 实派发 = CM_SAY/CM_PICKUP/CM_DROPITEM
 - Rust 脚本引擎（flow-run，证明引擎本身可跑）：
 ```
@@ -37,7 +34,7 @@
 
 ## 仓库：仓库-捆绑卷轴（@zum_bind1 6×地牢逃脱卷）
 - 脚本/label：`E:/MirServer/M2GameSvr/Envir/Market_Def/盟重土城/仓库-0145.txt` `@zum_bind1`
-- C# port-free 夹具：CAPABLE — [实跑] 产出效果行：gold -100 | delitem 地牢逃脱卷 1 | delitem 地牢逃脱卷 1 | delitem 地牢逃脱卷 1；[源码] E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m4cases\mir2-rs\tools\script-parity-cs\RunMode.cs: NPC 代理 = IMerchant ⇒ 可构造商人
+- C# port-free 夹具：CAPABLE — [实跑] 产出效果行：gold -100 | delitem 地牢逃脱卷 1 | delitem 地牢逃脱卷 1 | delitem 地牢逃脱卷 1；[源码] mir2-rs/tools/script-parity-cs/RunMode.cs: NPC 代理 = IMerchant ⇒ 可构造商人
 - Rust 服务侧（M3 承接，不阻塞本卡）：BLOCKED — NPC 命令派发=无（game-svr 源码内无 CM_CLICKNPC/CM_MERCHANTDLGSELECT）；脚本引擎依赖(mir2-script)=无；main.rs 实派发 = CM_SAY/CM_PICKUP/CM_DROPITEM
 - Rust 脚本引擎（flow-run，证明引擎本身可跑）：
 ```

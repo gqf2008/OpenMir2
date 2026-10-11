@@ -9,9 +9,9 @@
     "instrument": "tests/parity/M4/evidence_hashes.py"
   },
   "hashes": {
-    "mir2-rs/tests/parity/evidence/M4/M4收口报告-20261012.md": "ee0def4c53abe2f6080097816d20e37021376cabfc9ea3c4fb7441a47d0f14c1",
+    "mir2-rs/tests/parity/evidence/M4/M4收口报告-20261012.md": "0e782b71bb934c3537509cce0003041935f817ba6775f6a0e35e45aac677a4f8",
     "mir2-rs/tests/parity/evidence/M4/corpus-directives.txt": "7ca915b233025b2693465c8f6e621e8a4d709607b9992efb0958f9d7d9518ffb",
-    "mir2-rs/tests/parity/evidence/M4/gates.txt": "08a496c54e058a4fb9be8080362ce82d279f9edab21e883fd948757480b05006",
+    "mir2-rs/tests/parity/evidence/M4/gates.txt": "843377b5b71e6ab91221b9826d7c2f76f097b14a1dd53729b357f3f90bde8abb",
     "mir2-rs/tests/parity/evidence/M4/lines-cs.jsonl": "9bec0a54425f8cdce32bf53d60639604008578ea2175ab10bfe01b4aa8e9ed27",
     "mir2-rs/tests/parity/evidence/M4/lines-rust.jsonl": "9bec0a54425f8cdce32bf53d60639604008578ea2175ab10bfe01b4aa8e9ed27",
     "mir2-rs/tests/parity/evidence/M4/macro-parity.txt": "161d89e67ad94f985cf803e650629cfdbd2fe3bbdd70ea51e8ca95f4c08b9dc6",
@@ -22,7 +22,7 @@
     "mir2-rs/tests/parity/evidence/M4/multiset-gate.txt": "114aea7a3cc2dd68a3bb8fb0c807c6a914de33899cfa49d342f60ec04c8696b7",
     "mir2-rs/tests/parity/evidence/M4/multiset-summary.json": "8a0e6046ab46d2f75c8d354eb08f5784518c3d7f35f9c3c30addcbfff467acd6",
     "mir2-rs/tests/parity/evidence/M4/npc-cases.txt": "873acf4b1d980437e8c237efc502aff565b060818739687dd3ff42896adf30aa",
-    "mir2-rs/tests/parity/evidence/M4/npc-window-readiness.txt": "8b39cc150e276ded0d1d73c1c6b9951d59f540334fb3bb927c3633aee817e6f7",
+    "mir2-rs/tests/parity/evidence/M4/npc-window-readiness.txt": "ddded635899646754eadfc5e151a3c8feed2f2826636d5756bcdb359cd0a2b7b",
     "mir2-rs/tests/parity/evidence/M4/parse-stats-cs.json": "a6276e6f618ea21f12e22efb5b4f9fb6cae496c74f1ae9bc1806326c2be5e229",
     "mir2-rs/tests/parity/evidence/M4/parse-stats-cs.stdout.txt": "9b2a323e61700fc12e51a15f5e8743542e253354f90fe66d7b9c5ea3719303ae",
     "mir2-rs/tests/parity/evidence/M4/parse-stats-rust.json": "df5ce10f93b5857140e724118496e702c040d3cf4fe0d2a5133413619a210ad6",
