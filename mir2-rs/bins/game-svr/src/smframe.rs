@@ -193,6 +193,30 @@ pub fn sm_sendnotice(notice: &[u8]) -> Vec<u8> {
     gm_data_body(header, &edcode::encode(notice))
 }
 
+/// `SM_SYSMESSAGE`（`BaseObject.SysMsg`，`BaseObject.cs:1588-1685`）：
+/// `SendMsg(RM_SYSMESSAGE, 0, fColor, bColor, 0, sMsg)` ⇒ `PlayObject.Message.cs:1715-1718`
+/// 把它们翻成 `MakeMessage(SM_SYSMESSAGE, ActorId, MakeWord(fColor, bColor), 0, 1)`
+/// + 尾 `EDCode.EncodeString(sMsg)`。
+///
+/// 参数口径：
+/// - `recog` = **说话对象的 ActorId**（`processMsg.ActorId`；账号级顶号时 = 旧 PlayObject 的 ActorId）；
+/// - `f_color`/`b_color` = oracle `SystemShare.Config.RedMsgFColor/RedMsgBColor`
+///   （`BaseObject.cs:1678` 的 `MsgColor.Red` 支），落在 `Param` = `make_word(f, b)`；
+/// - `series` 恒 1（`MakeMessage` 的末参，见 `PlayObject.Message.cs:1715`）。
+///
+/// 场景（`openmir2-m2-session-lifecycle`）：账号级顶号（`TCPNetChannel.KickUser`，`TCPNetChannel.cs:229/262`）。
+#[must_use]
+pub fn sm_sysmessage(recog: i32, f_color: u8, b_color: u8, msg: &[u8]) -> Vec<u8> {
+    let header = command_header(
+        recog,
+        messages::SM_SYSMESSAGE,
+        make_word(f_color, b_color),
+        0,
+        1,
+    );
+    gm_data_body(header, &edcode::encode(msg))
+}
+
 /// `SM_SERVERCONFIG`（`PlayObject.Base.cs:941-971` 的 `SendServerConfig`）：
 /// `sMsg = EDCode.EncodeMessage(SystemShare.Config.ClientConf)`，再 `SendDefMessage(SM_SERVERCONFIG, 0, 0, 0, 0, sMsg)`
 /// ⇒ 尾 = `EncodeString(EncodeMessage(ClientConf))`（**双重编码**；金标准 #6：线缆 31B ⇒ 单解 23B ⇒ 双解 17B）。
@@ -640,6 +664,58 @@ mod tests {
         let i = s.find(a).expect("缺少左标记") + a.len();
         let j = s[i..].find(b).expect("缺少右标记") + i;
         &s[i..j]
+    }
+
+    /// 从 M0 金标准取**第一条** `port=7200 && dir=s2c && ident=<id>` 帧的原始线缆字节。
+    fn golden_s2c_ident(ident: u16) -> Vec<u8> {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../tests/golden/session-20261010-c3-hook/capture.jsonl"
+        );
+        let capture =
+            std::fs::read_to_string(path).unwrap_or_else(|e| panic!("金标准不存在：{path}（{e}）"));
+        let needle = format!("\"ident\":{ident},");
+        for line in capture.lines() {
+            if !line.contains("\"dir\":\"s2c\"")
+                || !line.contains("\"port\":7200")
+                || !line.contains(&needle)
+            {
+                continue;
+            }
+            return hex(between(line, "\"raw_hex\":\"", "\""));
+        }
+        panic!("金标准里没有 7200/s2c ident={ident} 的帧");
+    }
+
+    /// **`openmir2-m2-session-lifecycle` ①**：`sm_sysmessage` 必须逐字节重建金标准里的
+    /// `SM_SYSMESSAGE`（金标准 seq 66：`recog=0x7c303998`、`param=0xFFDB`、`series=1`、
+    /// 尾 = GBK 的 `唯一客服QQ：…`）。
+    ///
+    /// 注：金标准那条是 `MsgColor.Green`（`param` 低字节 0xDB = `GreenMsgFColor`）；本函数的
+    /// 账号级顶号用 `MsgColor.Red`（0xFF/0x38）——同一编码路径，字节布局由本用例钉住。
+    ///
+    /// 红检：把 `command_header` 的 `series` 改回 0，或把 `make_word(f, b)` 改成 `make_word(b, f)`
+    /// ⇒ 本用例必红。
+    #[test]
+    fn sm_sysmessage_rebuilds_golden_frame_byte_for_byte() {
+        let wire = golden_s2c_ident(messages::SM_SYSMESSAGE);
+        let (head, wire_tail) = split_wire(&wire);
+        assert_eq!(u16at(&head, 4), messages::SM_SYSMESSAGE);
+        assert_eq!(u16at(&head, 10), 1, "series 恒 1（MakeMessage 末参）");
+        let msg = edcode::decode(&wire_tail);
+        assert_eq!(
+            &*encoding_rs::GBK.decode(&msg).0,
+            "唯一客服QQ：79311185 唯一担保QQ：79311185",
+            "金标准尾文本"
+        );
+        // 从金标准头里取出 f/b（低字节/高字节），用它们重建：必须与金标准的 头+尾 逐字节相等。
+        let param = u16at(&head, 6);
+        let f = u8::try_from(param & 0xFF).unwrap();
+        let b = u8::try_from(param >> 8).unwrap();
+        let got = sm_sysmessage(recog(&head), f, b, &msg);
+        let mut want = head.to_vec();
+        want.extend_from_slice(&wire_tail);
+        assert_eq!(got, want, "SM_SYSMESSAGE 必须逐字节重建金标准帧");
     }
 
     /// 拆一条客户端线缆帧：`'#' + Encode(头12B) + 尾 + '!'` ⇒ `(头解码态 12B, 线缆尾)`。

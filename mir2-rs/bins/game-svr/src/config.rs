@@ -37,6 +37,14 @@ pub struct GateConfig {
     /// `[Share] NoticeDir`（oracle `SystemShare.Config.NoticeDir`，默认 `Notice`）——
     /// `Notice.txt` 所在目录（`openmir2-m2-enter-world-frames` 的 658 `SM_SENDNOTICE` 用它）。
     pub notice_dir: String,
+    /// `[Setup] RedMsgFColor`（oracle `GameSvrConf.cs:1540` 缺省 `0xFF`）——`SysMsg(..., Red, ...)`
+    /// 的前景色，落在 `SM_SYSMESSAGE` 的 `Param` 低字节。
+    ///
+    /// 用途：`openmir2-m2-session-lifecycle` 的账号级顶号提示（`TCPNetChannel.KickUser`，
+    /// `TCPNetChannel.cs:229/262`）。缺键用 oracle 缺省值（`ServerConf.cs:333` 的 `ReadWriteByte` 口径）。
+    pub red_msg_f_color: u8,
+    /// `[Setup] RedMsgBColor`（oracle `GameSvrConf.cs:1541` 缺省 `0x38`）——同上，高字节。
+    pub red_msg_b_color: u8,
     /// `[Server] IDSAddr`：登录服务器地址（oracle 是 TcpClient 主动连它，`AuthenticationService.cs:22-34`）。
     pub ids_addr: String,
     /// `[Server] IDSPort`（现网 5600）。
@@ -74,6 +82,8 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut envir_dir: Option<String> = None;
     let mut map_dir: Option<String> = None;
     let mut notice_dir: Option<String> = None;
+    let mut red_msg_f_color: Option<u8> = None;
+    let mut red_msg_b_color: Option<u8> = None;
     let mut ids_addr: Option<String> = None;
     let mut ids_port: Option<u16> = None;
     let mut db_addr: Option<String> = None;
@@ -134,6 +144,23 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                 "NOTICEDIR" => notice_dir = Some(v.to_string()),
                 _ => {}
             },
+            // 消息颜色（`SystemShare.Config.RedMsgFColor/BColor`，`ServerConf.cs:333-334` 的 `ReadWriteByte`）。
+            // 缺键不是错误（oracle 读不到就沿用 `GameSvrConf` 的缺省 0xFF/0x38）；写了但非法才报错。
+            "SETUP" => match k.as_str() {
+                "REDMSGFCOLOR" => {
+                    red_msg_f_color = Some(
+                        v.parse()
+                            .with_context(|| format!("RedMsgFColor 不是合法字节：{v:?}"))?,
+                    );
+                }
+                "REDMSGBCOLOR" => {
+                    red_msg_b_color = Some(
+                        v.parse()
+                            .with_context(|| format!("RedMsgBColor 不是合法字节：{v:?}"))?,
+                    );
+                }
+                _ => {}
+            },
             _ => {}
         }
     }
@@ -174,6 +201,9 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         envir_dir: envir_dir.unwrap_or_else(|| "Envir".to_string()),
         map_dir: map_dir.unwrap_or_else(|| "Map".to_string()),
         notice_dir: notice_dir.unwrap_or_else(|| "Notice".to_string()),
+        // oracle 缺省值（`GameSvrConf.cs:1540-1541`）：`[Setup]` 里没写也照常起。
+        red_msg_f_color: red_msg_f_color.unwrap_or(0xFF),
+        red_msg_b_color: red_msg_b_color.unwrap_or(0x38),
         ids_addr,
         ids_port,
         db_addr,
@@ -311,6 +341,32 @@ mod tests {
         );
         let c = load(&p).unwrap();
         assert_eq!(c.notice_dir, "Notice2", "NoticeDir 值要 trim");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **`openmir2-m2-session-lifecycle`**：`[Setup] RedMsgFColor/RedMsgBColor` 照
+    /// `ServerConf.cs:333-334` 的 `ReadWriteByte` 读；**缺键用 oracle 缺省**（0xFF/0x38）不自造。
+    #[test]
+    fn parses_setup_red_msg_colors_with_oracle_defaults() {
+        let dir = std::env::temp_dir().join(format!("gs-setup-colors-{}", std::process::id()));
+        let base = "[Server]\nGateAddr=127.0.0.1\nGatePort=5000\nCheckBlock=1\n\
+                    IDSAddr=127.0.0.1\nIDSPort=5600\nDBAddr=127.0.0.1\nDBPort=6000\n";
+        // 不写 [Setup] ⇒ 缺省（现网 Server.conf: RedMsgFColor=255 / RedMsgBColor=56）。
+        let p = write(&dir, base);
+        let c = load(&p).unwrap();
+        assert_eq!(c.red_msg_f_color, 0xFF, "GameSvrConf.cs:1540 缺省");
+        assert_eq!(c.red_msg_b_color, 0x38, "GameSvrConf.cs:1541 缺省");
+        // 写了就照写读，值带前导空格也要 trim。
+        let p2 = write(
+            &dir,
+            &format!("{base}[Setup]\nRedMsgFColor= 255\nRedMsgBColor=56\n"),
+        );
+        let c2 = load(&p2).unwrap();
+        assert_eq!(c2.red_msg_f_color, 255);
+        assert_eq!(c2.red_msg_b_color, 56);
+        // 写了但越界（300 > u8::MAX）⇒ 错误（不是静默取默认）。
+        let p3 = write(&dir, &format!("{base}[Setup]\nRedMsgBColor=300\n"));
+        assert!(load(&p3).is_err(), "RedMsgBColor=300 超出 u8 ⇒ 必须报错");
         std::fs::remove_dir_all(&dir).ok();
     }
 
