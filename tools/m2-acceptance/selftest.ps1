@@ -1,0 +1,210 @@
+#requires -Version 5
+<#
+.SYNOPSIS
+  selftest.ps1 — M2 验收手册的「判红/判绿」自检：证明每一步**真的会红**，而不是只有一句口径。
+
+.DESCRIPTION
+  `run_acceptance.ps1` 的四步（①端口所有权 / ②真客户端截图 / ③同序列出包 diff / ③三路径 DB diff）
+  各自都有「失败怎么判红」的书面口径。本脚本用**构造输入**把每条口径都跑一遍，断言
+  「退出码 + 输出关键字」两者都对（**只看退出码会把"脚本崩了"误当"判红"**）：
+
+    ② check_screenshots.ps1   0 张⇒2 / 缺 1 张⇒1 / 有 <1KiB⇒1 / 7 张齐全⇒0
+    ③b s2c_diff.py            金标准自比⇒0(GREEN) / 尾字节改坏⇒1(RED) / 只改 recog⇒0 / 缺文件⇒2
+    ③c check_db_paths.ps1     三路径字段级相同⇒0(GREEN) / 改一个被比对字段⇒1(RED) / 缺 after⇒2
+    ①  check_ports.ps1        对**本机实况端口**取判：全 Rust⇒0 / 有非 Rust 在听⇒1 / 有端口没听⇒2
+    ⇢  run_acceptance.ps1     全 PREREQ⇒2 / 有 RED⇒1（聚合口径，不许把红说成前置）
+
+  全部是**只读/构造夹具**：不起栈、不起客户端、不占端口（①只 `Get-NetTCPConnection` 取实况）。
+  任何一条与期望不符 ⇒ 本脚本判红（exit 1）并打印 `SELFTEST FAIL`。
+
+.PARAMETER OutDir
+  证据/夹具目录（默认 `E:\tmp\m2-acceptance\selftest-<时间戳>`）。
+
+.PARAMETER LivePorts
+  ①实况端口，默认 5000/7000/7100/7200。
+
+.PARAMETER SkipLivePorts
+  跳过①实况（例如端口正被别的车道占用、只想跑构造夹具时）。
+
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/selftest.ps1
+#>
+param(
+  [string]$OutDir = "",
+  [int[]]$LivePorts = @(5000, 7000, 7100, 7200),
+  [switch]$SkipLivePorts
+)
+
+$ErrorActionPreference = "Stop"
+$Here = Split-Path -Parent $MyInvocation.MyCommand.Path
+$RepoRoot = (Resolve-Path (Join-Path $Here "..\..")).Path
+$Golden = Join-Path $RepoRoot "mir2-rs\tests\golden\c-line-baseline-c3-20261010.jsonl"
+if ([string]::IsNullOrEmpty($OutDir)) {
+  $OutDir = Join-Path "E:\tmp\m2-acceptance" ("selftest-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
+}
+$Work = Join-Path $OutDir "work"
+New-Item -ItemType Directory -Force -Path $Work | Out-Null
+
+$script:Total = 0
+$script:Failed = 0
+$script:Checks = New-Object System.Collections.Generic.List[object]
+
+function Test-Case([string]$Name, [int]$Expected, [psobject]$Run, [string]$Pattern, [string]$Detail) {
+  $script:Total++
+  $rcOk = ($Expected -eq $Run.rc)
+  $outOk = [string]::IsNullOrEmpty($Pattern) -or ($Run.out -match $Pattern)
+  $ok = ($rcOk -and $outOk)
+  if (-not $ok) { $script:Failed++ }
+  $tag = if ($ok) { "OK  " } else { "FAIL" }
+  $why = if (-not $rcOk) { "rc" } elseif (-not $outOk) { "out" } else { "" }
+  Write-Output ("  [{0}] {1,-40} expect_rc={2} actual_rc={3} out~/{4}/ {5}  {6}" -f $tag, $Name, $Expected, $Run.rc, $Pattern, $why, $Detail)
+  $script:Checks.Add([pscustomobject]@{
+      name = $Name; expect_rc = $Expected; actual_rc = $Run.rc
+      expect_out = $Pattern; ok = $ok; detail = $Detail
+    })
+}
+
+function Run-Ps([string]$ScriptPath, [string[]]$ChildArgs) {
+  $prev = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+  try {
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $ScriptPath @ChildArgs 2>&1 | Out-String
+    return [pscustomobject]@{ rc = $LASTEXITCODE; out = $out }
+  } finally { $ErrorActionPreference = $prev }
+}
+
+function Run-Py([string[]]$PyArgs) {
+  $prev = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+  try {
+    $out = & python @PyArgs 2>&1 | Out-String
+    return [pscustomobject]@{ rc = $LASTEXITCODE; out = $out }
+  } finally { $ErrorActionPreference = $prev }
+}
+
+function New-Shots([string]$Dir, [string[]]$Names, [int]$Bytes, [string]$TinyName) {
+  New-Item -ItemType Directory -Force -Path $Dir | Out-Null
+  $blob = New-Object byte[] ($Bytes + 4)
+  [byte[]]$png = 0x89, 0x50, 0x4E, 0x47
+  [Array]::Copy($png, 0, $blob, 0, 4)
+  foreach ($n in $Names) {
+    if ($n -eq $TinyName) {
+      [System.IO.File]::WriteAllBytes((Join-Path $Dir $n), (New-Object byte[] 10))
+    } else {
+      [System.IO.File]::WriteAllBytes((Join-Path $Dir $n), $blob)
+    }
+  }
+}
+
+function Write-Jsonl([string]$Path, [object[]]$Rows) {
+  $lines = $Rows | ForEach-Object { $_ | ConvertTo-Json -Compress }
+  $text = (($lines -join "`r`n") + "`r`n")
+  # 注意：PS 5.1 的 Set-Content -Encoding utf8 会写 BOM，python json 会拒收 ⇒ 用无 BOM 的 .NET 写。
+  [System.IO.File]::WriteAllText($Path, $text, (New-Object System.Text.UTF8Encoding($false)))
+}
+
+function New-DbFixture([string]$Path, [bool]$Changed) {
+  $lines = @("m2acc1`t1`tA", "m2acc2`t2`tB")
+  if ($Changed) { $lines[1] = "m2acc2`t2`tCHANGED" }
+  $rows = foreach ($l in $lines) {
+    $sha = [System.BitConverter]::ToString(
+      [System.Security.Cryptography.SHA256]::Create().ComputeHash(
+        [System.Text.Encoding]::UTF8.GetBytes($l))).Replace("-", "").ToLower()
+    [pscustomobject]@{ table = "mir2_db.characters"; row_sha256 = $sha; line = $l }
+  }
+  Write-Jsonl $Path $rows
+}
+
+$ShotsAll = @(
+  "m2-01-enter-map.png", "m2-02-walk.png", "m2-03-talk.png", "m2-04-see-others.png",
+  "m2-05-attack.png", "m2-06-pickup.png", "m2-07-relogin.png"
+)
+
+Write-Output ("M2 验收手册自检  evidence=" + $OutDir)
+
+# ---------------------------------------------------------------- ② 截图清单
+Write-Output "② check_screenshots.ps1"
+$sEmpty = Join-Path $Work "shots-empty"; New-Item -ItemType Directory -Force -Path $sEmpty | Out-Null
+$s6 = Join-Path $Work "shots-6of7"; New-Shots $s6 $ShotsAll[0..5] 2048 ""
+$sTiny = Join-Path $Work "shots-tiny"; New-Shots $sTiny $ShotsAll 2048 "m2-07-relogin.png"
+$s7 = Join-Path $Work "shots-7ok"; New-Shots $s7 $ShotsAll 2048 ""
+$ck = Join-Path $Here "check_screenshots.ps1"
+Test-Case "shots/0张=PREREQ" 2 (Run-Ps $ck @("-ShotsDir", $sEmpty, "-OutFile", (Join-Path $Work "shots-empty.json"))) "PREREQ_MISSING" "空目录"
+Test-Case "shots/缺1张=RED" 1 (Run-Ps $ck @("-ShotsDir", $s6, "-OutFile", (Join-Path $Work "shots-6.json"))) "RED: 截图不全" "6/7"
+Test-Case "shots/有<1KiB=RED" 1 (Run-Ps $ck @("-ShotsDir", $sTiny, "-OutFile", (Join-Path $Work "shots-tiny.json"))) "RED: 截图不全" "1 张 10B"
+Test-Case "shots/7张齐全=GREEN" 0 (Run-Ps $ck @("-ShotsDir", $s7, "-OutFile", (Join-Path $Work "shots-7.json"))) "GREEN: 7 张" "7/7 非空"
+
+# ---------------------------------------------------------------- ③b s2c 对账
+Write-Output "③b s2c_diff.py"
+$diff = Join-Path $Here "s2c_diff.py"
+$mut = Join-Path $Here "mutate_capture.py"
+Test-Case "s2c/金标准自比=GREEN" 0 (Run-Py @($diff, "--rust", $Golden, "--out", (Join-Path $Work "s2c-self.json"))) "GREEN: 同序列" "ident 658..10"
+$tail = Join-Path $Work "capture-tail.jsonl"
+Run-Py @($mut, "--in", $Golden, "--out", $tail, "--ident", "51", "--mutate", "tail") | Out-Null
+Test-Case "s2c/尾字节改坏=RED" 1 (Run-Py @($diff, "--rust", $tail, "--out", (Join-Path $Work "s2c-tail.json"))) "RED: .*未登记差异" "非 recog 字节必红"
+$recog = Join-Path $Work "capture-recog.jsonl"
+Run-Py @($mut, "--in", $Golden, "--out", $recog, "--ident", "51", "--mutate", "recog") | Out-Null
+Test-Case "s2c/只改recog=GREEN" 0 (Run-Py @($diff, "--rust", $recog, "--out", (Join-Path $Work "s2c-recog.json"))) "GREEN: 同序列" "归一化清单只 recog"
+Test-Case "s2c/缺输入=PREREQ" 2 (Run-Py @($diff, "--rust", (Join-Path $Work "nope.jsonl"))) "PREREQ_MISSING" "文件不存在"
+
+# ---------------------------------------------------------------- ③c 三路径 DB
+Write-Output "③c check_db_paths.ps1 -Mode diff"
+$csharp = Join-Path $Work "db-csharp"; $rust = Join-Path $Work "db-rust"
+New-Item -ItemType Directory -Force -Path $csharp, $rust | Out-Null
+foreach ($p in @("softclose", "disconnect", "shutdown")) {
+  New-DbFixture (Join-Path $csharp ("{0}-after.jsonl" -f $p)) $false
+  New-DbFixture (Join-Path $rust ("{0}-after.jsonl" -f $p)) $false
+}
+$dbPaths = Join-Path $Here "check_db_paths.ps1"
+Test-Case "db/三路径相同=GREEN" 0 (Run-Ps $dbPaths @("-Mode", "diff", "-CsharpDir", $csharp, "-RustDir", $rust, "-OutFile", (Join-Path $Work "db-same.json"))) "GREEN: 小退/掉线" "字段级 diff=0"
+New-DbFixture (Join-Path $rust "shutdown-after.jsonl") $true
+Test-Case "db/改一字段=RED" 1 (Run-Ps $dbPaths @("-Mode", "diff", "-CsharpDir", $csharp, "-RustDir", $rust, "-OutFile", (Join-Path $Work "db-changed.json"))) "RED: 路径 DB diff 未归零" "shutdown 差异"
+Remove-Item -Force (Join-Path $rust "shutdown-after.jsonl")
+Test-Case "db/缺抽取件=PREREQ" 2 (Run-Ps $dbPaths @("-Mode", "diff", "-CsharpDir", $csharp, "-RustDir", $rust, "-OutFile", (Join-Path $Work "db-missing.json"))) "PREREQ_MISSING" "shutdown 缺 after"
+
+# ---------------------------------------------------------------- ① 端口实况（只读）
+if (-not $SkipLivePorts) {
+  Write-Output ("① check_ports.ps1（只读实况端口 " + ($LivePorts -join "/") + "）")
+  $portsScript = Join-Path $Here "check_ports.ps1"
+  # 先用同一判据算出"本机此刻应有的结论"，再和脚本退出码比（避免把实况写死）
+  $listening = @(); $nonRust = @(); $notListening = @()
+  foreach ($p in $LivePorts) {
+    $conn = Get-NetTCPConnection -State Listen -LocalPort $p -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $conn) { $notListening += $p; continue }
+    $listening += $p
+    $cim = Get-CimInstance Win32_Process -Filter ("ProcessId=$($conn.OwningProcess)") -ErrorAction SilentlyContinue
+    $probe = ("{0} {1}" -f $cim.ExecutablePath, $cim.CommandLine)
+    $isRust = ($probe -like "*\mir2-rs\target\*") -or ($probe -like "*\m2svr-target\*")
+    if (-not $isRust) { $nonRust += $p }
+  }
+  $expectPorts = if ($notListening.Count -gt 0) { 2 } elseif ($nonRust.Count -gt 0) { 1 } else { 0 }
+  $expectPat = if ($expectPorts -eq 2) { "PREREQ_MISSING" } elseif ($expectPorts -eq 1) { "RED: 端口" } else { "GREEN: 四个端口" }
+  $note = "listening={0} nonRust={1} notListening={2}" -f ($listening -join "/"), ($nonRust -join "/"), ($notListening -join "/")
+  Test-Case "ports/实况判属（Rust绿/C#红/缺前置）" $expectPorts (Run-Ps $portsScript @("-OutFile", (Join-Path $Work "ports-live.json"), "-PortsCsv", ($LivePorts -join ","))) $expectPat $note
+}
+
+# ---------------------------------------------------------------- 聚合器
+Write-Output "run_acceptance.ps1（聚合口径）"
+$run = Join-Path $Here "run_acceptance.ps1"
+Test-Case "agg/全PREREQ=2（不静默通过）" 2 (Run-Ps $run @("-SelfCheckNoStack")) "PREREQ_MISSING" "无栈自检"
+Test-Case "agg/有RED=1（红不许被说成前置）" 1 (Run-Ps $run @("-SkipPorts", "-SkipS2c", "-SkipDb", "-ShotsDir", $s6)) "RED: 有步骤判红" "shots 6/7 判红"
+
+# ---------------------------------------------------------------- 汇总
+$report = [ordered]@{
+  tool = "m2-acceptance/selftest.ps1"
+  ts = (Get-Date).ToString("o")
+  golden = $Golden
+  live_ports = $LivePorts
+  total = $script:Total
+  failed = $script:Failed
+  checks = $script:Checks
+  pass = ($script:Failed -eq 0)
+}
+$reportPath = Join-Path $OutDir "selftest.json"
+$report | ConvertTo-Json -Depth 6 | Set-Content -Path $reportPath -Encoding utf8
+Write-Output ("SELFTEST_REPORT " + $reportPath)
+Write-Output ("SUMMARY total={0} failed={1}" -f $script:Total, $script:Failed)
+if ($script:Failed -eq 0) {
+  Write-Output "GREEN: 手册每一步的判红/判绿口径都经构造输入验证（不含真栈验收本身）"
+  exit 0
+}
+Write-Output "SELFTEST FAIL: 有判据口径与实现不符（见上面 FAIL 行）"
+exit 1

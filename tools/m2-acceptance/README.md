@@ -37,6 +37,13 @@ powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/run_acceptance.ps1 
 证据落在 `E:\tmp\m2-acceptance\run-<ts>\`：`ports.json` / `s2c/capture.jsonl` / `s2c-diff.json` /
 `shots.json` / `db-paths.json` / `acceptance.json`。
 
+**先验证「每一步真的会红」**（构造夹具，不起栈/不占端口）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/selftest.ps1
+# 14 条口径全 OK ⇒ exit 0；任何一条不符 ⇒ exit 1（见 §8）
+```
+
 ---
 
 ## 1. ① 端口所有权实拍 —— `check_ports.ps1`
@@ -231,11 +238,52 @@ cargo run -p msgcodegen -- --check
 | s2c 对账（同序） | `s2c_diff.py --rust <重导件>` | `GREEN`（16 条同序 + 逐字节 0，归一化仅 recog） | 同上 |
 | s2c 红检 | 改 recog ⇒ 仍 GREEN；改尾一字节 ⇒ RED | 归一化只吸 recog、字节差异必红 | 同日志 / `E:\tmp\rust-body-broken.jsonl` |
 | 三路径 DB diff 驱动 | `check_db_paths.ps1 -Mode diff` 合成夹具 | 同件 GREEN / 改一字段 RED（复用 `scoped_diff.py`） | 控制台（rc 0 / rc 1） |
+| **手册判红自检** | `selftest.ps1`（本片新增） | **14/14 OK**：②截图 4 例、③b s2c 4 例（尾字节改坏⇒RED、只改 recog⇒GREEN）、③c DB 3 例、①端口实况判属、聚合器 2 例 | `E:\tmp\openmir2-watch\pi-m2svr-selftest.log` |
 | R4-1 红检 | 改回 `unwrap_or(0)` | `route_to_gate_rejects_out_of_range_gate_idx` FAILED；还原后 passed | `E:\tmp\openmir2-watch\pi-m2svr-r41-redcheck.log` |
 
 残留物清单：
 
+- `tools/m2-acceptance/selftest.ps1`、`tools/m2-acceptance/mutate_capture.py`（本片新增：判红/判绿自检 + s2c 红检夹具生成器）；
 - `E:\tmp\m2-acceptance\`：无栈自检产生的 `ports-*.json`/`shots-*.json`/`run-*`/`s2c-selftest/` 等，保留作证据；
+- `E:\tmp\m2-acceptance\selftest-*\`：`selftest.ps1` 的 14 条构造夹具与 `selftest.json`（证据，保留）；
 - `E:\tmp\openmir2-watch\pi-m2svr-*.log`：四门禁、红检、自检原始输出；
 - `E:\tmp\rust-recog-changed.jsonl` / `rust-body-broken.jsonl`：s2c 归一化红检输入（证据）；
 - 未新增/未修改进程、端口、库内行（本片全程只读外部状态）。
+
+---
+
+## 8. 每一步都验过会红：`selftest.ps1`
+
+`run_acceptance.ps1` 的四步各有「失败怎么判红」的书面口径。本脚本用**构造输入**把每条口径都跑一遍，
+断言「退出码 **和** 输出关键字」两者都对——**只看退出码会把“脚本崩了”误当“判红”**：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/selftest.ps1
+# 14 条全 OK ⇒ exit 0；任何一条不符 ⇒ exit 1（SELFTEST FAIL）
+```
+
+| # | 步骤 | 构造输入 | 期望 |
+| --- | --- | --- | --- |
+| 1 | ② | 空截图目录 | `2` + `PREREQ_MISSING` |
+| 2 | ② | 只有 6/7 张 | `1` + `RED: 截图不全` |
+| 3 | ② | 7 张但有一张 <1KiB | `1` + `RED: 截图不全` |
+| 4 | ② | 7 张齐全非空 | `0` + `GREEN: 7 张` |
+| 5 | ③b | 当前口径金标准自比 | `0` + `GREEN: 同序列` |
+| 6 | ③b | `SM_NEWMAP(51)` 尾翻 1 字节（非 recog） | `1` + `RED: …未登记差异` |
+| 7 | ③b | 只改 `Recog`（归一化清单唯一字段） | `0` + `GREEN: 同序列` |
+| 8 | ③b | `--rust` 指向不存在的文件 | `2` + `PREREQ_MISSING` |
+| 9 | ③c | 三路径字段级相同 | `0` + `GREEN: 小退/掉线…` |
+| 10 | ③c | `shutdown` 改一个被比对字段 | `1` + `RED: 路径 DB diff 未归零` |
+| 11 | ③c | 缺 `shutdown-after.jsonl` | `2` + `PREREQ_MISSING` |
+| 12 | ① | **本机实况** 5000/7000/7100/7200 | 全 Rust `0` / 有非 Rust 在听 `1` / 有端口没听 `2`（期望由同一判据现场算出，不写死） |
+| 13 | 聚合 | `run_acceptance.ps1 -SelfCheckNoStack` | `2` + `PREREQ_MISSING` |
+| 14 | 聚合 | `-SkipPorts -SkipS2c -SkipDb -ShotsDir <6/7>` | `1` + `RED: 有步骤判红`（**红不许被说成前置**） |
+
+全部是**只读/构造夹具**：不起栈、不起客户端、不占端口（①只 `Get-NetTCPConnection` 取实况）。
+证据：`E:\tmp\m2-acceptance\selftest-*\selftest.json`（逐条 name/expected/actual）。
+
+> **踩过的坑（写进脚本防复发）**：夹具 `.jsonl` 必须**无 BOM** 写。PS 5.1 的
+> `Set-Content -Encoding utf8` 会写 UTF-8 BOM，python `json.loads` 直接 `Unexpected UTF-8 BOM` 抛错，
+> 于是「相同件」也拿到 rc=1——**看起来像判红，其实是夹具崩了**（只看退出码就会假绿这条自检）。
+> 脚本内改用 `[System.IO.File]::WriteAllText(..., New-Object System.Text.UTF8Encoding($false))`，
+> 并同时断言输出关键字，正是为了区分「真判红」与「脚本崩」。
