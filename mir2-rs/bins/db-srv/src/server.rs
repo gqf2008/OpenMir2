@@ -218,8 +218,15 @@ async fn gate_conn(server: Arc<Server>, sock: TcpStream, peer: String) -> Result
         if rd.read_exact(&mut body).await.is_err() {
             break;
         }
-        let Ok(msg) = ServerDataMessage::from_bytes(&body) else {
-            log::debug("解析角色网关封包出现异常...");
+        let Ok(msg) = ServerDataMessage::from_bytes(&normalize_memorypack_nulls(body.clone()))
+        else {
+            // C# 侧这里会抛异常并被 `ProcessGateData` 的 catch 记 `LogService.Error(ex)`；
+            // 把原始体打出来（十六进制）便于判断是"垃圾数据"还是"MemoryPack null 字段"。
+            log::error(&format!(
+                "解析角色网关封包出现异常... body({}B)={}",
+                body.len(),
+                hex(&body)
+            ));
             continue;
         };
         match msg.kind {
@@ -256,6 +263,46 @@ async fn gate_conn(server: Arc<Server>, sock: TcpStream, peer: String) -> Result
     }
     writer.abort();
     Ok(())
+}
+
+/// 十六进制（日志用）。
+fn hex(b: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut s = String::with_capacity(b.len() * 2);
+    for x in b {
+        let _ = write!(s, "{x:02x}");
+    }
+    s
+}
+
+/// 把 MemoryPack 的 **null 长度字段（-1）** 就地归一化成 0（空）。
+///
+/// 依据（实测，2026-10-11）：C# `SelGate.ClientThread.SendKeepAlive` 发的是
+/// `new ServerDataMessage { Type = KeepAlive }` —— `SocketId`/`Data` 均为 **null**，
+/// 真身字节为 `04 03 ffffffff 0000 ffffffff`（`evidence\mixed-selgate-keepalive.log` 里由本实现
+/// 原样打出的 12 字节）。C# 的 MemoryPack 反序列化把 `-1` 解成 null；而本分支的
+/// `crates/protocol::internal`（M0 冻结口径）把 `-1` 当非法长度、整帧丢弃 ⇒ **心跳得不到应答**。
+/// （同一条修复 worker-1 已在 `crates/protocol/src/internal.rs` 里提出，同卡 patch 67577a7f；
+/// 为不动冻结接口、避免两线改动同一文件冲突，这里在 db-srv 侧就地归一化：只把整字段 `0xFFFFFFFF`
+/// 写成 0，其余字节原样，解析仍交给协议 crate。）
+#[must_use]
+pub fn normalize_memorypack_nulls(mut body: Vec<u8>) -> Vec<u8> {
+    if body.len() < 6 {
+        return body;
+    }
+    // [0x04][kind:1][socket_id 长度 i32][socket_id 2n][DataLen i16][data 长度 i32][data]
+    if body[2..6] == [0xFF; 4] {
+        body[2..6].copy_from_slice(&0_i32.to_le_bytes());
+    }
+    let n_units = i32::from_le_bytes([body[2], body[3], body[4], body[5]]);
+    let Ok(n_units) = usize::try_from(n_units) else {
+        return body; // 其它负值：不猜，交回解析器报错
+    };
+    let off = 6 + n_units * 2 + 2; // 跳过 i16 DataLen
+    if body.len() >= off + 4 && body[off..off + 4] == [0xFF; 4] {
+        body[off..off + 4].copy_from_slice(&0_i32.to_le_bytes());
+    }
+    body
 }
 
 /// 把一帧内部报文写到指定槽位（槽位不在即丢弃，同 C# `SendPacket` 的存在性检查）。
@@ -319,4 +366,63 @@ async fn close_user(server: &Arc<Server>, slot: usize, socket_id: &str) {
         login.close_session(&u.account, u.session_no);
     }
     g.users.remove(idx);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unhex(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    /// C# SelGate 心跳真身字节（本轮实测抓到）：`SocketId`/`Data` 均为 MemoryPack null。
+    #[test]
+    fn normalizes_csharp_keepalive_nulls() {
+        let raw = unhex("0403ffffffff0000ffffffff");
+        let fixed = normalize_memorypack_nulls(raw);
+        // 两个 null 字段都归一化成 0（socket_id 长度 -1 → 0 后，data 长度字段落在 8..12）
+        assert_eq!(fixed, unhex("040300000000000000000000"));
+        // 与 C# LoginGate 心跳（`SocketId=""`、`Data=null`）归一化后的形状一致
+        assert_eq!(
+            normalize_memorypack_nulls(unhex("0403000000000000ffffffff")),
+            fixed
+        );
+        let msg = ServerDataMessage::from_bytes(&fixed).expect("归一化后必须能解析");
+        assert_eq!(msg.kind, ServerDataType::KeepAlive);
+        assert_eq!(msg.socket_id, "");
+        assert!(msg.data.is_empty());
+    }
+
+    /// C# LoginGate 心跳（worker-1 抓的形态）：`SocketId=""`、`Data=null`。
+    #[test]
+    fn normalizes_login_gate_keepalive_null_data() {
+        let msg = ServerDataMessage::from_bytes(&normalize_memorypack_nulls(unhex(
+            "0403000000000000ffffffff",
+        )))
+        .expect("归一化后必须能解析");
+        assert_eq!(msg.kind, ServerDataType::KeepAlive);
+        assert!(msg.data.is_empty());
+    }
+
+    /// 正常帧一个字节都不许动（Data 帧字面量取自 `crates/protocol` 的金标准单测）。
+    #[test]
+    fn leaves_valid_frames_untouched() {
+        let raw = unhex("04020100000037000a000a00000023316162636465666721");
+        assert_eq!(normalize_memorypack_nulls(raw.clone()), raw);
+        let msg = ServerDataMessage::from_bytes(&normalize_memorypack_nulls(raw)).unwrap();
+        assert_eq!(msg.kind, ServerDataType::Data);
+        assert_eq!(msg.socket_id, "7");
+    }
+
+    /// 其它负值（不是 null）不许被"顺手修好"。
+    #[test]
+    fn does_not_touch_other_negatives() {
+        let raw = unhex("0403feffffff0000ffffffff");
+        assert_eq!(normalize_memorypack_nulls(raw.clone()), raw);
+        assert!(ServerDataMessage::from_bytes(&normalize_memorypack_nulls(raw)).is_err());
+    }
 }

@@ -115,6 +115,16 @@ cargo test -p db-srv --test live_querychr --offline -- --ignored --nocapture csh
 **附带证据：两侧 `[QueryChr]` 日志排序后逐行相同**（各 9 行，`evidence\logdiff-{csharp,rust}-querychr.txt`）——
 说明不只是回包字节一致，逐角色的读库决策序列也一致。
 
+**长连接面（心跳）**：C# SelGate 每 10s 往上游发一次 `SendKeepAlive`，其帧是
+`new ServerDataMessage { Type = KeepAlive }`（`SocketId`/`Data` **均为 null**），线上字节实测为
+`04 03 ffffffff 0000 ffffffff`（`evidence\mixed-selgate-keepalive.log` 里由本实现原样打出）。
+MemoryPack 把 null 编码成长度 `-1`，而本分支的 `crates/protocol::internal`（M0 冻结口径）把 `-1`
+当非法长度 ⇒ 该帧被丢弃、**心跳无人应答**（C# DBSrv 会应答）。修法：
+`server::normalize_memorypack_nulls` 在解析前只把整字段 `0xFFFFFFFF` 写成 0（其余字节原样，
+不动冻结接口；worker-1 已就同一问题在 `crates/protocol/src/internal.rs` 提出修复（同卡 patch 67577a7f），
+两处可共存、互不冲突）。用例随后等到过一个心跳周期（+12s）再查一次角色列表，并断言 db-srv 日志
+出现 `响应角色网关心跳...`、不出现 `解析角色网关封包出现异常`（`evidence\mixed-selgate-keepalive3.log`）。
+
 ### 2.6 判据覆盖边界（如实记录）
 
 - **建角成功路径**（`NEWCHR` → 写 `characters` + 5 张附属表）**没有被真机判据覆盖**：
@@ -157,6 +167,9 @@ cargo test -p db-srv --test live_querychr --offline -- --ignored --nocapture csh
 11. **GBK 处理**：写库/回包一律用服务端转换 `CAST(CONVERT(ChrName USING gbk) AS BINARY)`
     （等价 .NET `GetEncoding("gb2312").GetBytes`），不在 Rust 内置码表；字符边界/切分见 `gbk.rs`
     （`Split(…, 2, RemoveEmptyEntries)` 的语义用 .NET 直调实测后复现）。
+12. **心跳**：收 `KeepAlive` 就回一条空的 `KeepAlive`（C# `SendKeepAlivePacket`，报文与 oracle 向量
+    `kind:"internal"` seq 56/57 逐字节一致）；对端发来的 null 字段（MemoryPack `-1`）在解析前就地
+    归一化（见 §2.5 长连接面）。
 
 ## 4. 已知偏离（登记在案）
 
@@ -194,7 +207,7 @@ E:\...\mir2-rs\target\debug\db-srv.exe E:\tmp\a2-dbsrv\fail-loud\dbsvr-baddb.con
 
 | 路径 | 是什么 | 处置 |
 | --- | --- | --- |
-| `E:\tmp\a2-dbsrv\evidence\*.log`、`logdiff-*.txt` | 本轮全部判据日志（门禁 ①②③④ / 失败用例 / 两侧日志行集） | **保留**（报告引用的证据；定稿文件＝`gate.log`、`oracle-csharp-run7.log`、`rust-dbsrv-run7.log`、`mixed-selgate-run5.log`、`fail-*.log`、`logdiff-*.txt`） |
+| `E:\tmp\a2-dbsrv\evidence\*.log`、`logdiff-*.txt` | 本轮全部判据日志（门禁 ①②③④ / 失败用例 / 两侧日志行集 / 心跳抓帧） | **保留**（报告引用的证据；定稿＝`gate.log`、`oracle-csharp-run8.log`、`rust-dbsrv-run8.log`、`mixed-selgate-keepalive3.log`、`mixed-selgate-keepalive.log`（心跳 null 帧抓帧）、`fail-*.log`、`logdiff-*.txt`） |
 | `E:\tmp\a2-dbsrv\evidence\{oracle-csharp,rust-dbsrv,mixed-selgate}-run1..6.log` | 同一判据的过程重跑（迭代期留下的中间件） | 保留；以 `run7`/`run5` 为定稿 |
 | `E:\tmp\a2-dbsrv\oracle-dbsrv`、`oracle-selgate` | C# DBSrv / SelGate 构建产物**副本**（影子拓扑用；原目录未动） | 保留（① 复跑需要） |
 | `E:\tmp\a2-dbsrv\fail-loud\*.conf` | ③ 的四个故意坏配置 | 保留（报告引用） |

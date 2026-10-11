@@ -96,15 +96,18 @@ fn copy_dir(src: &Path, dst: &Path) {
 }
 
 /// 写 DBSrv 配置（`dbsvr.conf`；`GatePort` 是本测试要连的 5100 面，`IDSPort` 指向伪 LoginSrv）。
-fn write_conf(dir: &Path, gate_port: u16, ids_port: u16) {
+///
+/// `show_debug`：② 的两个场景用 `false`（与现网 bin 版 conf 一致 —— C# 侧 `LogService.Debug` 还会被
+/// `appsettings.json` 的 Serilog `MinimumLevel=Information` 滤掉，关掉才能让两侧日志行集逐行对齐）；
+/// ① 的场景用 `true`，以便断言"心跳被应答"（`响应角色网关心跳...` 是 Debug 级，与 C# 同源同文本）。
+fn write_conf(dir: &Path, gate_port: u16, ids_port: u16, show_debug: bool) {
     let body = format!(
-        // `ShowDebug=0` 与现网 bin 版 conf 一致：C# 侧 `LogService.Debug` 被 appsettings.json 的
-        // Serilog `MinimumLevel=Information` 滤掉，本实现由同一开关控制 ⇒ 两侧日志行集才能逐行对齐。
-        "[Setup]\nShowDebug=0\nServerAddr=127.0.0.1\nServerPort={}\nGateAddr=0.0.0.0\nGatePort={gate_port}\n\
+        "[Setup]\nShowDebug={}\nServerAddr=127.0.0.1\nServerPort={}\nGateAddr=0.0.0.0\nGatePort={gate_port}\n\
          ServerName=LegendOfMir2\nDenyChrName=1\nDELMaxLevel=30\nDynamicIPMode=0\n\n\
          [Server]\nIDSAddr=127.0.0.1\nIDSPort={ids_port}\nMarketAddr=127.0.0.1\nMarketPort={}\n\n\
          [DataBase]\nStoreage=MySQL\nConnctionString=server=127.0.0.1;uid=root;pwd=;database=mir2_db;\n\n\
          [DBClear]\nInterval=3000\n",
+        u8::from(show_debug),
         free_port(),
         free_port()
     );
@@ -398,7 +401,7 @@ async fn rust_dbsrv_querychr_matches_csharp_golden() {
     let dir = fixture_dir("rust");
     let gate_port = free_port();
     let (ids_port, accepted) = fake_login_srv(ACCOUNT).await;
-    write_conf(&dir, gate_port, ids_port);
+    write_conf(&dir, gate_port, ids_port, false);
     let dbsrv = start_rust_dbsrv(&dir);
     wait_listen(gate_port).await;
     wait_session_link(&accepted).await;
@@ -426,7 +429,7 @@ async fn csharp_dbsrv_querychr_matches_csharp_golden() {
     copy_dir(&oracle_dir, &dir);
     let gate_port = free_port();
     let (ids_port, accepted) = fake_login_srv(ACCOUNT).await;
-    write_conf(&dir, gate_port, ids_port);
+    write_conf(&dir, gate_port, ids_port, false);
     let dbsrv = start_csharp_dbsrv(&dir);
     wait_listen(gate_port).await;
     wait_session_link(&accepted).await;
@@ -467,7 +470,7 @@ async fn csharp_selgate_to_rust_dbsrv() {
         "端口 {gate_listen} 已被占用（并行 agent 的 C# SelGate？）：本用例要求独占 7100，稍后重跑"
     );
     let (ids_port, accepted) = fake_login_srv(ACCOUNT).await;
-    write_conf(&dbsrv_dir, gate_port, ids_port);
+    write_conf(&dbsrv_dir, gate_port, ids_port, true);
     let dbsrv = start_rust_dbsrv(&dbsrv_dir);
     wait_listen(gate_port).await;
     wait_session_link(&accepted).await;
@@ -517,12 +520,49 @@ async fn csharp_selgate_to_rust_dbsrv() {
         "经 SelGate 的字节与金标准不等"
     );
 
+    after_keepalive_roundtrip(&mut s, &dbsrv_dir).await;
+
     dump_child_logs(&sel_dir, "selgate");
     dump_child_logs(&dbsrv_dir, "dbsrv");
     drop(selgate);
     std::fs::remove_dir_all(&sel_dir).ok();
     drop(dbsrv);
     std::fs::remove_dir_all(&dbsrv_dir).ok();
+}
+
+/// 长连接面：C# SelGate 每 10s 往上游发一次 KeepAlive（`TimedService.CheckSessionStatus → SendKeepAlive`），
+/// 等过一个心跳周期后再查一次角色列表 —— 既证明链路不被心跳打断，也把心跳帧的解析暴露到日志里。
+///
+/// 心跳帧是 **MemoryPack null**（`SocketId`/`Data` 均 null ⇒ `04 03 ffffffff 0000 ffffffff`），
+/// 必须被解析并应答（`响应角色网关心跳...`）；修前那一版这里会出现"解析角色网关封包出现异常..."且不应答。
+async fn after_keepalive_roundtrip(s: &mut TcpStream, dbsrv_dir: &Path) {
+    tokio::time::sleep(Duration::from_secs(12)).await;
+    s.write_all(&client_frame(
+        CM_QUERYCHR,
+        format!("{ACCOUNT}/{SESSION}").as_bytes(),
+    ))
+    .await
+    .expect("二次发客户端帧失败");
+    s.flush().await.ok();
+    let (head, chr_list, frame) = read_one_client_frame(s).await;
+    println!(
+        "[csharp-selgate→rust-dbsrv][+12s] head={head:?} body={:?}",
+        String::from_utf8_lossy(&chr_list)
+    );
+    assert_eq!(head.ident, SM_QUERYCHR, "心跳周期后链路失效");
+    assert_eq!(chr_list, EXPECT_CHR_LIST.to_vec());
+    assert_eq!(hex(&frame), GOLDEN_QUERYCHR_FRAME_HEX);
+    let log = std::fs::read_to_string(dbsrv_dir.join("dbsrv.out.log")).unwrap_or_default();
+    assert!(
+        log.contains("响应角色网关心跳..."),
+        "DBSrv 没有应答 SelGate 心跳（证据目录：{}）",
+        dbsrv_dir.display()
+    );
+    assert!(
+        !log.contains("解析角色网关封包出现异常"),
+        "心跳帧仍被当成坏帧丢弃（证据目录：{}）",
+        dbsrv_dir.display()
+    );
 }
 
 /// 端口是否空闲（试着绑一次再放开）。
