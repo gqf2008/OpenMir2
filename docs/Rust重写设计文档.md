@@ -688,6 +688,11 @@ walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 prin
   （`lane-status.log` + 进程实况 + 本机负载探针，三点齐才算窗口干净）。
 - **M1⑤ 的"假覆盖"已更正**（见 M1 行 + 卡 `openmir2-m1-boundary-load-200`）：**判据要落到"哪个进程收的字节"**，
   别把"别处的成绩"当成自己的证据（C6 tier-200 是 C# 栈的成绩，没覆盖 Rust 边界服务）。
+- **门禁必须"同一命令重复得同一结论"（flaky = Important）**：2026-10-11 reviewer-1 在 WorldMaps 片上抓到一条**实测 flaky**——两条新用例共用
+  `%TEMP%/gs-mapwire-nowm-<pid>`（同 test binary、同 pid ⇒ 并行时 `remove_dir_all` 与 `std::fs::write` 相撞），`cargo test --workspace` **7 次里红 2 次**。
+  ⇒ 规则：① **新增/改动的测试，临时目录必须唯一到"用例级"**（`pid + 原子计数` 或 `tempfile`；**只用 pid 不够**——已有教训
+  `~/.agents/rules/LESSON_并行测试临时路径须pid加原子计数构造_时钟粒度不足.md`）；② **交付含新测试的，作者自己给 ≥3 次连续 `cargo test --workspace --offline` 全绿**
+  （reviewer 可要求到 5 次）；③ reviewer 抓到 flaky 一律按 **Important** 处理（它直接破坏"门禁即合同"）。
 
 ## 18. S3：B-8 命令码位移修复（2026-10-10，oracle 行为变更）
 
