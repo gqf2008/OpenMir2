@@ -21,6 +21,11 @@
 //!   └─ 尾部合成：SubAbility 7 项 + WAbil MaxHP/MaxMP/AC/MAC/DC/MC/SC
 //! ```
 //!
+//! **等级基础值（`RecalcLevelAbilitys()`，`PlayObject.cs:5254`）在登录/升级时先于上表执行**：
+//! `WorldServer.cs:351`（`AbilCopyToWAbil`）→ `PlayObject.cs:1308`（`RecalcLevelAbilitys()` → `RecalcAbilitys()`）。
+//! `recalc_abilitys` 内部按该序先用 [`level_ability_base`] 重算 `Abil` 的等级派生字段——
+//! `C# DBSrv.GetAbilGetRecord`（`PlayDataStorage.Query.cs:268-309`）从不读 `MaxHP/MAxMP` ⇒ 记录里它们是 0。
+//!
 //! 尾部合成的口径（都会改变结果，别"顺手简化"）：
 //!
 //! 1. `AntiMagic = 1 + AddAbil.AntiMagic`，其余 6 项基线为 0（`BaseObject.Abil.cs:30-31`）。
@@ -63,6 +68,7 @@
 use std::collections::HashMap;
 
 use mir2_data::StdItem;
+use mir2_formula::level_ability::{recalc_level_abilitys, LevelValueConfig, PlayerJob};
 
 use crate::feature;
 
@@ -324,14 +330,58 @@ pub struct RecalcOutput {
     pub add: AddAbility,
 }
 
+/// `PlayObject.RecalcLevelAbilitys()`（`PlayObject.cs:5254-5317`）的落库等价物：按 `Job` + `Abil.Level`
+/// 重算等级派生字段（`MaxHP/MaxMP/MaxWeight/MaxWearWeight/MaxHandWeight/DC/MC/SC/AC/MAC`）。
+///
+/// 公式本体复用已合入的 `mir2_formula::level_ability::recalc_level_abilitys`（含道士 `MaxHandWeight`
+/// 的 BUG-REPLICA）；`Job ∉ {0,1,2}` 时 oracle 的 `switch` 无 `default` ⇒ **不改** `Abil`，原样返回。
+///
+/// # 为什么要在 `recalc_abilitys` 里跑它（owner brief §14）
+///
+/// 登录时 oracle 的顺序是 `AbilCopyToWAbil()` → `RecalcLevelAbilitys()` → `RecalcAbilitys()`
+/// （`WorldServer.cs:351` / `PlayObject.cs:1308`）。`C# DBSrv.GetAbilGetRecord`（`PlayDataStorage.Query.cs:268-309`）
+/// **不读** `characters_ablity.MaxHP/MAxMP` ⇒ 记录里的 `Abil.MaxHP/MaxMP` 恒为 0，
+/// 必须由 `RecalcLevelAbilitys()` 补上；同理 `DC/AC/MAC/MaxWeight/...` 也以等级派生值为准。
+/// `recalc_abilitys` 内部按该序先算等级基础值；对于登录之后的状态
+///（`Abil` 已是等级派生值）它是幂等的。
+#[must_use]
+fn level_ability_base(abil: &Ability, job: u8) -> Ability {
+    let job = match job {
+        0 => PlayerJob::Warrior,
+        1 => PlayerJob::Wizard,
+        2 => PlayerJob::Taoist,
+        _ => return abil.clone(),
+    };
+    // `SystemShare.Config.nLevelValueOf*`：当前部署 `Server.conf:864-870` 与
+    // `GameSvrConf.cs:1888-1894` 的默认值逐字段相同（`Server.conf` 覆盖值未接，登记 `T-23`）。
+    let lv = recalc_level_abilitys(job, abil.level, &LevelValueConfig::default());
+    Ability {
+        max_hp: lv.max_hp,
+        max_mp: lv.max_mp,
+        max_weight: lv.max_weight,
+        max_wear_weight: lv.max_wear_weight,
+        max_hand_weight: lv.max_hand_weight,
+        dc: lv.dc,
+        mc: lv.mc,
+        sc: lv.sc,
+        ac: lv.ac,
+        mac: lv.mac,
+        ..abil.clone()
+    }
+}
+
 /// `PlayObject.RecalcAbilitys()` 的纯函数等价物（本片作用域，见模块文档「未做清单」）。
 #[must_use]
 pub fn recalc_abilitys(catalog: &dyn ItemCatalog, inputs: &RecalcInputs<'_>) -> RecalcOutput {
     let mut add = AddAbility::default();
+
+    // 登录/升级时 oracle 先跑 `RecalcLevelAbilitys()` 再 `RecalcAbilitys()`（`PlayObject.cs:1308`）。
+    let base = level_ability_base(inputs.abil, inputs.job);
+
     // `WAbil = Abil.Clone()` + 三个重量清零（`BaseObject.Abil.cs:19-27`）。
-    let mut max_weight = inputs.abil.max_weight;
-    let mut max_wear_weight = inputs.abil.max_wear_weight;
-    let mut max_hand_weight = inputs.abil.max_hand_weight;
+    let mut max_weight = base.max_weight;
+    let mut max_wear_weight = base.max_wear_weight;
+    let mut max_hand_weight = base.max_hand_weight;
     let mut wear_weight: u8 = 0;
     let mut hand_weight: u8 = 0;
 
@@ -370,28 +420,22 @@ pub fn recalc_abilitys(catalog: &dyn ItemCatalog, inputs: &RecalcInputs<'_>) -> 
     };
 
     let wabil = Ability {
-        level: inputs.abil.level,
-        reserved1: inputs.abil.reserved1,
-        ac: word_add(add.ac, inputs.abil.ac),
-        mac: word_add(add.mac, inputs.abil.mac),
-        dc: word_add(add.dc, inputs.abil.dc),
-        mc: word_add(add.mc, inputs.abil.mc),
-        sc: word_add(add.sc, inputs.abil.sc),
+        ac: word_add(add.ac, base.ac),
+        mac: word_add(add.mac, base.mac),
+        dc: word_add(add.dc, base.dc),
+        mc: word_add(add.mc, base.mc),
+        sc: word_add(add.sc, base.sc),
         hp: inputs.cur_hp,
         mp: inputs.cur_mp,
-        max_hp: inputs.abil.max_hp.wrapping_add(add.hp),
-        max_mp: inputs.abil.max_mp.wrapping_add(add.mp),
-        reserved2: inputs.abil.reserved2,
-        exp_count: inputs.abil.exp_count,
-        exp_max_count: inputs.abil.exp_max_count,
-        exp: inputs.abil.exp,
-        max_exp: inputs.abil.max_exp,
+        max_hp: base.max_hp.wrapping_add(add.hp),
+        max_mp: base.max_mp.wrapping_add(add.mp),
         weight: bag_weight(catalog, inputs.bag),
         max_weight,
         wear_weight,
         max_wear_weight,
         hand_weight,
         max_hand_weight,
+        ..base
     };
 
     RecalcOutput { wabil, sub, add }
@@ -941,5 +985,70 @@ mod tests {
             bag: &[],
         };
         assert_eq!(recalc_abilitys(&cat, &inputs).sub.anti_magic, 1);
+    }
+
+    /// E. owner brief §14：登录时的**原始记录** `Abil`（`C# DBSrv.GetAbilGetRecord`，
+    /// `PlayDataStorage.Query.cs:268-309` 不读 `characters_ablity.MaxHP/MAxMP` ⇒ 记录里它们是 0）
+    /// 必须由等级公式（`RecalcLevelAbilitys()`）补出非 0 的 `MaxHP/MaxMP` 与等级 `DC`
+    /// —— 这就是真机 ③ 的 `52 max_hp/max_mp=0` 缺陷。
+    /// 红检：把 [`level_ability_base`] 改成不改写 `Abil`（等价于等级输入为 0）⇒ 本用例必红。
+    #[test]
+    fn login_record_derives_max_hp_and_mp_from_level() {
+        let doc = fixture();
+        let cat = catalog(&doc);
+        for (name, exp_max_hp, exp_max_mp, exp_dc) in [
+            ("login_record_warr", 19u16, 15u16, 257u16),
+            ("login_record_wizard", 16, 18, 256),
+            ("login_record_taos", 17, 13, 256),
+        ] {
+            let case = doc["cases"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["name"] == name)
+                .unwrap_or_else(|| panic!("夹具必须含 {name}"));
+            let abil = ability(&case["abil"]);
+            assert_eq!(
+                (abil.max_hp, abil.max_mp, abil.dc),
+                (0, 0, 0),
+                "{name}: 夹具输入的原始记录必须是 MaxHP/MaxMP/DC=0（DBSrv 不读 MaxHP/MAxMP）"
+            );
+            let bonus = NakedAbility {
+                dc: 0,
+                mc: 0,
+                sc: 0,
+                ac: 0,
+                mac: 0,
+                hp: 0,
+                mp: 0,
+                hit: 0,
+                speed: 0,
+                reserved: 0,
+            };
+            let use_items = vec![None; USE_ITEMS_LEN];
+            let inputs = RecalcInputs {
+                job: u8v(&case["job"]),
+                abil: &abil,
+                bonus_abil: &bonus,
+                bonus_tick_hit: 20,
+                bonus_tick_speed: 35,
+                cur_hp: u16v(&case["cur_hp"]),
+                cur_mp: u16v(&case["cur_mp"]),
+                use_items: &use_items,
+                bag: &[],
+            };
+            let got = recalc_abilitys(&cat, &inputs);
+            assert_eq!(got.wabil.max_hp, exp_max_hp, "{name}: MaxHP 须由等级派生");
+            assert_eq!(got.wabil.max_mp, exp_max_mp, "{name}: MaxMP 须由等级派生");
+            assert_eq!(got.wabil.dc, exp_dc, "{name}: DC 须由等级派生");
+            assert_ne!(got.wabil.max_hp, 0, "{name}: MaxHP 不许为 0");
+            assert_ne!(got.wabil.max_mp, 0, "{name}: MaxMP 不许为 0");
+            // 与探针实测的整字段一致（不只这 3 项）。
+            assert_eq!(
+                got.wabil,
+                ability(&case["expect_wabil"]),
+                "{name}: WAbil 与 oracle 不符"
+            );
+        }
     }
 }

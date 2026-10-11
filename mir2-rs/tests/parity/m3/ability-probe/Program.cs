@@ -203,6 +203,39 @@ internal static class Program
 
     private static NakedAbility ZeroBonus() => new() { DC = 0, MC = 0, SC = 0, AC = 0, MAC = 0, HP = 0, MP = 0, Hit = 0, Speed = 0, Reserved = 0 };
 
+    /// <summary>
+    /// `C# DBSrv.GetAbilGetRecord`（`PlayDataStorage.Query.cs:268-309`）产出的**原始记录 Abil**：
+    /// 它读 `Level/HP/MP/DC/MC/SC/Exp/MaxExp/Weight/MaxWeight/WearWeight/MaxWearWeight/HandWeight/MaxHandWeight`，
+    /// 但**不读** `characters_ablity.MaxHP/MAxMP` ⇒ 未登录前 `MaxHP=MaxMP=0`；
+    /// 且 `HP`/`MP` 列的高 16 位被塞进 `AC`/`MAC`（`HUtil32.HiWord`）。
+    /// 登录时 `RecalcLevelAbilitys()` 会用等级公式覆盖这些派生字段。
+    /// </summary>
+    private static Ability RawRecordAbil() => new()
+    {
+        Level = 1,
+        Reserved1 = 0,
+        AC = 0,
+        MAC = 0,
+        DC = 0,
+        MC = 0,
+        SC = 0,
+        HP = 19,
+        MP = 15,
+        MaxHP = 0,
+        MaxMP = 0,
+        Reserved2 = 0,
+        ExpCount = 0,
+        ExpMaxCount = 0,
+        Exp = 0,
+        MaxExp = 10,
+        Weight = 0,
+        MaxWeight = 0,
+        WearWeight = 0,
+        MaxWearWeight = 0,
+        HandWeight = 0,
+        MaxHandWeight = 0,
+    };
+
     private static object AbilityDto(Ability a) => new
     {
         level = a.Level,
@@ -249,7 +282,9 @@ internal static class Program
         var po = new PlayObject
         {
             Job = job,
-            Abil = abil,
+            // `RecalcLevelAbilitys()` 会直接改写 `Abil`（`Abil` 是 class）⇒ 探针存进 `po` 的必须是
+            // 副本，夹具里的 `abil` 保持**原始记录输入**（否则 `login_record_*` 的 `MaxHP=0` 会被抹掉）。
+            Abil = abil.Clone(),
             BonusAbil = bonus,
             UseItems = new UserItem[13],
             ItemList = new List<UserItem>(),
@@ -270,6 +305,11 @@ internal static class Program
         po.WAbil.HP = curHp ?? abil.HP;
         po.WAbil.MP = curMp ?? abil.MP;
 
+        // 登录/升级时 oracle 的调用序（`WorldServer.cs:351` → `PlayObject.cs:1308`）：
+        // `AbilCopyToWAbil()` → `RecalcLevelAbilitys()` → `RecalcAbilitys()`。
+        // `C# DBSrv.GetAbilGetRecord`（`PlayDataStorage.Query.cs:268-309`）不读 `MaxHP/MAxMP`
+        // ⇒ 记录里它们是 0，必须由 `RecalcLevelAbilitys()` 按等级公式补（owner brief §14）。
+        po.RecalcLevelAbilitys();
         po.RecalcAbilitys();
 
         var sub = new
@@ -356,6 +396,13 @@ internal static class Program
             curHp: 15, curMp: 15);
         Case("naked_wizard", PlayerJob.Wizard, BaseAbil(), ZeroBonus(), Array.Empty<EquipSpec>(), Array.Empty<ushort>());
         Case("naked_taos", PlayerJob.Taoist, BaseAbil(), ZeroBonus(), Array.Empty<EquipSpec>(), Array.Empty<ushort>());
+
+        // A2. 登录原始记录（`DBSrv.GetAbilGetRecord` 不读 `MaxHP/MAxMP` ⇒ 记录里为 0）：
+        // `RecalcLevelAbilitys()` 必须按等级公式补出 `MaxHP/MaxMP/DC/MaxWeight/...`（owner brief §14；
+        // 真机 ③ 发现 `52` 的 `max_hp/max_mp=0`）。三职业各一条 ⇒ 覆盖等级派生公式的三个分支。
+        Case("login_record_warr", PlayerJob.Warrior, RawRecordAbil(), ZeroBonus(), Array.Empty<EquipSpec>(), Array.Empty<ushort>());
+        Case("login_record_wizard", PlayerJob.Wizard, RawRecordAbil(), ZeroBonus(), Array.Empty<EquipSpec>(), Array.Empty<ushort>());
+        Case("login_record_taos", PlayerJob.Taoist, RawRecordAbil(), ZeroBonus(), Array.Empty<EquipSpec>(), Array.Empty<ushort>());
         // 带 BonusAbil（非 0）⇒ HitPoint/SpeedPoint 走 `DEFHIT + Hit/tick.Hit`
         var bonusWarr = ZeroBonus();
         bonusWarr.Hit = 40;
@@ -470,6 +517,7 @@ internal static class Program
             oracle_source = new[]
             {
                 "src/M2Server/Player/PlayObject.cs:2008 (RecalcAbilitys)",
+                "src/M2Server/Player/PlayObject.cs:5254 (RecalcLevelAbilitys)",
                 "src/M2Server/Player/PlayObject.cs:3647 (RecalcHitSpeed)",
                 "src/M2Server/Actor/BaseObject.Abil.cs:15 (BaseObject.RecalcAbilitys)",
                 "src/M2Server/Actor/BaseObject.cs:1356 (RecalcBagWeight)",
