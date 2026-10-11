@@ -415,12 +415,13 @@ def _write_tbl(path, table, lines):
                                ensure_ascii=False) + "\n")
 
 
-def _chr_line(idv, job, hp):
+def _chr_line(idv, job, hp, cx=0, cy=0):
     # 只填白名单关心的列，其余 39 列用占位常量；列序与 TABLE_COLUMNS 一致。
     cols = TABLE_COLUMNS["mir2_db.characters"]
     vals = {c: "0" for c in cols}
     vals.update({"Id": str(idv), "LoginID": "m3bot0", "ChrName": "m3bot0",
-                 "MapName": "0", "Hair": "2", "Sex": "0", "Job": str(job),
+                 "MapName": "0", "CX": str(cx), "CY": str(cy),
+                 "Hair": "2", "Sex": "0", "Job": str(job),
                  "Gold": str(hp), "CREATEDATE": "2026-10-11 00:00:00",
                  "LASTUPDATE": "2026-10-11 00:00:00"})
     return "\t".join(vals[c] for c in cols)
@@ -624,8 +625,24 @@ def cmd_selftest(args):
             sys.exit(1)
     print("PASS 13/13 真实 13 表 manifest 的 extract GREEN（含 item_attr/magic/quest）")
 
-    print("GREEN: scoped_diff selftest 13/13（含规范化前后 + 固定建角不置占位 + 改坏必红 "
-          "+ 多重集重复行 + fail-closed + 族表 PlayerId 归属 + 真实 13 表快照）")
+    # ---- 14/14（T-14 复跑可判性的断言，owner 2026-10-12 06:36）：
+    #    `characters.MapName/CX/CY` 是**逐字节比**列（不在易变白名单）。背包/装备序列若不关客户端
+    #    挂机（`DisableAutoPlay`），假人随机走位 ⇒ 两侧坐标必然不同 ⇒ 跨侧 diff 必红（且不是实现差异）。
+    #    本例：两侧只差 CX（其余易变列 Id 已因 --canonical 占位）⇒ 必须判红。
+    for col in ("MapName", "CX", "CY"):
+        if col not in TABLE_COLUMNS["mir2_db.characters"]:
+            print(f"RED: 14/14 characters 缺列 {col}", file=sys.stderr)
+            sys.exit(1)
+        if col in VOLATILE_COLUMNS["mir2_db.characters"]:
+            print(f"RED: 14/14 characters.{col} 被登记为易变列（坐标必须逐字节比）", file=sys.stderr)
+            sys.exit(1)
+    _write_jsonl(a, [_chr_line(1, 1, 0, cx=649, cy=631)])
+    _write_jsonl(b, [_chr_line(2, 1, 0, cx=650, cy=631)])
+    expect("14/14 仅 CX 不同（坐标逐字节比）即判红", ns_c, 1)
+    print("PASS 14/14 characters.MapName/CX/CY 逐字节比（改坏 CX 必红）")
+
+    print("GREEN: scoped_diff selftest 14/14（含规范化前后 + 固定建角不置占位 + 改坏必红 "
+          "+ 多重集重复行 + fail-closed + 族表 PlayerId 归属 + 真实 13 表快照 + 坐标逐字节比）")
     sys.exit(0)
 
 

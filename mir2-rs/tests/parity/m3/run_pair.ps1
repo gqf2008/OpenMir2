@@ -49,6 +49,16 @@ param(
   [switch]$BagEquipSequence,       # M3 T-14 夹具：BotSrv 进世界后按固定顺序发背包/装备动作（白名单 T-22）
   [int]$BagEquipStepMs = 1000,     # 仅 -BagEquipSequence 时生效
   [int]$BagEquipStartDelayMs = 3000, # 仅 -BagEquipSequence 时生效
+  [switch]$EmitOpsArgs,            # 只打印 run_bots 命令组成（含 -DisableAutoPlay 耦合）后退出；无副作用，供无栈自检
+  [switch]$PinStartPose,           # T-14 固定起点变体（owner 86478c55/d7798370）：预热建角 → SQL pin → BEFORE 快照 → 计分跑（选角；不带 -FixedNewChr/-NewAccount）
+  [string]$PinMapName = '0',
+  [int]$PinHomeMap = 0,
+  [int]$PinHomeX = 289,
+  [int]$PinHomeY = 618,
+  [int]$PinCX = 289,
+  [int]$PinCY = 618,
+  [int]$PinLevel = 1,
+  [int]$PinDir = 0,
   [switch]$SelfTestRed
 )
 
@@ -59,6 +69,47 @@ $Dbsnap = Join-Path $RepoRoot 'tools\dbsnap\dbsnap.py'
 $Botload = Join-Path $RepoRoot 'tools\botload\run_bots.ps1'
 $MysqlExe = 'D:\mysql\mariadb-10.11.19-winx64\bin\mysql.exe'
 $Scoped = Join-Path $Here 'scoped_diff.py'
+# 背包/装备序列口径（T-14 复跑：两侧同一组开关）的唯一形态在 gate_guards.ps1（与 run_m3_gate/selftest 共用）。
+. (Join-Path $Here 'gate_guards.ps1')
+
+function Get-M3BotOpPlan {
+  param([switch]$ForPrewarm)  # 固定起点变体的①预热相：强制 -FixedNewChr + -NewAccount
+  # run_bots 命令组成的**唯一口径**：真实运行与 -EmitOpsArgs 自检共用（避免自检与实际漂移）。
+  # 固定起点变体的**计分跑**走「选角」路径（角色已由预热相建出）⇒ 不带 -FixedNewChr/-NewAccount。
+  $newAccount = if ($PinStartPose -and -not $ForPrewarm) { $false } else { $true }
+  $fixed = if ($ForPrewarm) { $true } elseif ($PinStartPose) { $false } else { [bool]$FixedNewChr }
+  $planArgs = @('-Count', $Bots, '-Prefix', $Prefix, '-Address', $Address, '-Port', $Port, '-TimeoutSec', $TimeoutSec)
+  # runner 串保持与改动前逐字节一致的形态（-Prefix 后紧跟 -NewAccount 再 -Port），避免基线记录漂移。
+  $runner = "run_bots.ps1 -Count $Bots -Prefix $Prefix"
+  if ($newAccount) {
+    $planArgs += '-NewAccount'
+    $runner += ' -NewAccount'
+  }
+  $runner += " -Port $Port"
+  if ($ForPrewarm) {
+    # 预热相只需建号：等「创建角色」标记再收工（否则 run_bots 在 login_ok 就到、char 未建）。
+    $planArgs += '-RequireCharCreated'
+    $runner += ' -RequireCharCreated'
+  }
+  if ($fixed) {
+    $runner += " -FixedNewChr -NewChrJob $NewChrJob -NewChrHair $NewChrHair -NewChrSex $NewChrSex"
+    $planArgs += @('-FixedNewChr', '-NewChrJob', $NewChrJob, '-NewChrHair', $NewChrHair, '-NewChrSex', $NewChrSex)
+  }
+  if ($BagEquipSequence -and -not $ForPrewarm) {
+    # T-14 复跑口径（owner 2026-10-12 06:36）：背包/装备序列**必须**一并关掉客户端挂机。
+    # 挂机 = 无种子 RNG 的随机走位（ClientManager.RunAutoPlay）⇒ 两侧各走各的，
+    # characters.MapName/CX/CY 逐字节比**必然**出 diff（且不是实现差异）。两侧同开关 ⇒ 序列才可比。
+    $runner += " -BagEquipSequence -BagEquipStepMs $BagEquipStepMs -BagEquipStartDelayMs $BagEquipStartDelayMs -DisableAutoPlay"
+    $planArgs += @('-BagEquipSequence', '-BagEquipStepMs', $BagEquipStepMs, '-BagEquipStartDelayMs', $BagEquipStartDelayMs, '-DisableAutoPlay')
+  }
+  return [pscustomobject]@{ runner = $runner; botArgs = $planArgs }
+}
+
+function Get-M3StartPoseLabel {
+  if (-not $PinStartPose) { return 'none' }
+  return (Format-M3StartPose -MapName $PinMapName -HomeMap $PinHomeMap -HomeX $PinHomeX -HomeY $PinHomeY `
+    -CX $PinCX -CY $PinCY -Level $PinLevel -Dir $PinDir)
+}
 
 if ($SelfTestRed) {
   $Port = 17998
@@ -69,6 +120,31 @@ if ($SelfTestRed) {
 if ([string]::IsNullOrEmpty($Prefix)) {
   # 账号名上限 10 字符（协议字段）：前缀 + 序号位数必须 <= 10
   $Prefix = 'm3' + (Get-Date -Format 'HHmmss')
+}
+if ($PinStartPose -and -not $FixedNewChr) {
+  throw '-PinStartPose 必须与 -FixedNewChr 同用（预热建角用固定输入；计分跑仍标为固定建角场景以便 --fixed-newchr 比 Job/Hair/Sex）'
+}
+
+# -EmitOpsArgs：只把 run_bots 的命令组成打印成 JSON 供无栈自检核（-DisableAutoPlay 是否随
+# -BagEquipSequence 一并传下去；固定起点变体的预热/计分两相），**不建会话目录/不预检/不取快照**。
+if ($EmitOpsArgs) {
+  $plan = Get-M3BotOpPlan
+  $obj = [ordered]@{
+    ops_runner        = $plan.runner
+    bot_args          = $plan.botArgs
+    bag_equip_scope   = Format-M3BagEquipScope -BagEquipSequence ([bool]$BagEquipSequence) -BagEquipStepMs $BagEquipStepMs -BagEquipStartDelayMs $BagEquipStartDelayMs -DisableAutoPlay ([bool]$BagEquipSequence)
+    start_pose        = (Get-M3StartPoseLabel)
+  }
+  if ($PinStartPose) {
+    $pre = Get-M3BotOpPlan -ForPrewarm
+    $obj['prewarm_runner'] = $pre.runner
+    $obj['prewarm_bot_args'] = $pre.botArgs
+    $obj['pin_sql'] = Format-M3StartPoseSql -ChrName "${Prefix}0" -MapName $PinMapName -HomeMap $PinHomeMap -HomeX $PinHomeX -HomeY $PinHomeY `
+      -CX $PinCX -CY $PinCY -Level $PinLevel -Dir $PinDir
+    $obj['pin_sql_all'] = @(Get-M3StartPosePinSql -ChrName "${Prefix}0")
+  }
+  [pscustomobject]$obj | ConvertTo-Json -Depth 4
+  exit 0
 }
 
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
@@ -144,6 +220,37 @@ if ([int]$accHits -ne 0 -or [int]$chrHits -ne 0) {
   exit 1
 }
 
+# ---- 2.5 固定起点变体（T-14，owner 86478c55/d7798370）：预热建角 → SQL pin → 再取 BEFORE 快照 ----
+#   注：本机的 ORACLE C# 侧是冻结部署件（不能注入种子）⇒ 只关挂机仍不够；这一相把角色的
+#   MapName/HomeMap/HomeX/Y/CX/CY 钉成固定值，使两侧走「记录里有图有坐标」的路径。
+if ($PinStartPose) {
+  Write-Output '--- 2.5) 固定起点：预热建角 + SQL pin ---'
+  if ($SkipBots) { throw '-PinStartPose 不能与 -SkipBots 同用' }
+  $prePlan = Get-M3BotOpPlan -ForPrewarm
+  Write-Output ('PREWARM ' + $prePlan.runner)
+  & powershell -ExecutionPolicy Bypass -File $Botload @($prePlan.botArgs) 2>&1 |
+    Tee-Object -FilePath (Join-Path $SessionDir 'prewarm.log')
+  if ($LASTEXITCODE -ne 0) { throw '预热建角失败（run_bots -RequireCharCreated 非 0）' }
+  $chrCnt = Invoke-Mysql ("SELECT COUNT(*) FROM mir2_db.characters WHERE ChrName LIKE '{0}%'" -f $Prefix)
+  if ([int]$chrCnt -ne $Bots) { throw ("预热后 characters 行数={0}，期望 {1}——预热建角没成功，pin 无目标" -f $chrCnt, $Bots) }
+  for ($i = 0; $i -lt $Bots; $i++) {
+    $pinChar = Format-M3StartPoseSql -ChrName "${Prefix}$i" -MapName $PinMapName -HomeMap $PinHomeMap -HomeX $PinHomeX -HomeY $PinHomeY `
+      -CX $PinCX -CY $PinCY -Level $PinLevel -Dir $PinDir
+    Invoke-Mysql $pinChar | Out-Null
+    # 连「初始背包 + Abil」一起 provision（owner 643459a7）：否则五步无对象可操作。
+    foreach ($st in (Get-M3StartPosePinSql -ChrName "${Prefix}$i")) { Invoke-Mysql $st | Out-Null }
+    Write-Output ('PIN_CHAR ' + $pinChar)
+  }
+  # pin 后校验：图/坐标/Level + 4 件初始物品 + Abil Level（三项都到位才算 pin 生效）。
+  $pinned = Invoke-Mysql ("SELECT COUNT(*) FROM mir2_db.characters WHERE ChrName LIKE '{0}%' AND MapName='{1}' AND CX={2} AND CY={3} AND Level={4}" -f $Prefix, $PinMapName, $PinCX, $PinCY, $PinLevel)
+  if ([int]$pinned -ne $Bots) { throw ("pin 后校验失败：命中 {0}/{1} 行（MapName/CX/CY/Level 不符）——pin 未生效" -f $pinned, $Bots) }
+  $bagPinned = Invoke-Mysql ("SELECT COUNT(*) FROM mir2_db.characters_bagitem b JOIN mir2_db.characters c ON b.PlayerId=c.Id WHERE c.ChrName LIKE '{0}%' AND b.StdIndex<>0" -f $Prefix)
+  if ([int]$bagPinned -ne (4 * $Bots)) { throw ("pin 后初始背包校验失败：StdIndex<>0 行={0}，期望 {1}（4 件×假人数）" -f $bagPinned, (4 * $Bots)) }
+  $abilPinned = Invoke-Mysql ("SELECT COUNT(*) FROM mir2_db.characters_ablity a JOIN mir2_db.characters c ON a.PlayerId=c.Id WHERE c.ChrName LIKE '{0}%' AND a.Level={1}" -f $Prefix, $M3PinAbilLevel)
+  if ([int]$abilPinned -ne $Bots) { throw ("pin 后 Abil 校验失败：Level={0} 行={1}，期望 {2}" -f $M3PinAbilLevel, $abilPinned, $Bots) }
+  Write-Output ('PIN_START_POSE ' + (Get-M3StartPoseLabel))
+}
+
 # ---- 3. 快照 BEFORE ----
 $snapBefore = Join-Path $SessionDir 'snap_before'
 python $Dbsnap snap --out $snapBefore | Tee-Object -FilePath (Join-Path $SessionDir 'dbsnap_before.log')
@@ -177,18 +284,14 @@ $opsRunner = 'none'
 $opsExit = 0
 $bagSeqMarkers = @()
 if (-not $SkipBots) {
-  $opsRunner = "run_bots.ps1 -Count $Bots -Prefix $Prefix -NewAccount -Port $Port"
-  $botArgs = @('-Count', $Bots, '-Prefix', $Prefix, '-Address', $Address, '-Port', $Port,
-               '-NewAccount', '-TimeoutSec', $TimeoutSec)
+  $plan = Get-M3BotOpPlan
+  $opsRunner = $plan.runner
+  $botArgs = $plan.botArgs
   if ($FixedNewChr) {
-    $opsRunner += " -FixedNewChr -NewChrJob $NewChrJob -NewChrHair $NewChrHair -NewChrSex $NewChrSex"
-    $botArgs += @('-FixedNewChr', '-NewChrJob', $NewChrJob, '-NewChrHair', $NewChrHair, '-NewChrSex', $NewChrSex)
     Write-Output ("OPS_FIXED_NEWCHR Job={0} Hair={1} Sex={2}" -f $NewChrJob, $NewChrHair, $NewChrSex)
   }
   if ($BagEquipSequence) {
-    $opsRunner += " -BagEquipSequence -BagEquipStepMs $BagEquipStepMs -BagEquipStartDelayMs $BagEquipStartDelayMs"
-    $botArgs += @('-BagEquipSequence', '-BagEquipStepMs', $BagEquipStepMs, '-BagEquipStartDelayMs', $BagEquipStartDelayMs)
-    Write-Output ("OPS_BAGEQUIPSEQ step_ms={0} start_delay_ms={1}" -f $BagEquipStepMs, $BagEquipStartDelayMs)
+    Write-Output ("OPS_BAGEQUIPSEQ step_ms={0} start_delay_ms={1} disable_autoplay=True" -f $BagEquipStepMs, $BagEquipStartDelayMs)
   }
   Write-Output ("OPS " + $opsRunner)
   & powershell -ExecutionPolicy Bypass -File $Botload @botArgs 2>&1 |
@@ -287,7 +390,8 @@ $baseline = [pscustomobject]@{
   ops_runner   = $opsRunner
   ops_exit     = $opsExit
   fixed_new_chr = if ($FixedNewChr) { "Job=$NewChrJob Hair=$NewChrHair Sex=$NewChrSex" } else { "(off)" }
-  bag_equip_sequence = if ($BagEquipSequence) { "on step_ms=$BagEquipStepMs start_delay_ms=$BagEquipStartDelayMs" } else { "(off)" }
+  start_pose = (Get-M3StartPoseLabel)
+  bag_equip_sequence = (Format-M3BagEquipScope -BagEquipSequence ([bool]$BagEquipSequence) -BagEquipStepMs $BagEquipStepMs -BagEquipStartDelayMs $BagEquipStartDelayMs -DisableAutoPlay ([bool]$BagEquipSequence))
   bag_equip_markers = $bagSeqMarkers
   git_rev      = (Git-Rev)
   dbsnap       = $beforeHashes

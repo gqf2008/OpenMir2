@@ -107,9 +107,9 @@ GREEN: M3 门禁通过
   `Hair/Sex` 因 `Random(1)` 恒 0 而固定为 2/0，故在**默认场景**里这三列置占位；
   **固定建角场景**用 `--fixed-newchr` 让它们**不**置占位、逐字节比（见下节，卡
   `openmir2-m3-botsrv-fixed-newchr`）；
-- 红检：`python scoped_diff.py selftest` **13/13**，含「仅易变列不同必须判绿」「被比对列被改坏必须判红」
+- 红检：`python scoped_diff.py selftest` **14/14**，含「仅易变列不同必须判绿」「被比对列被改坏必须判红」
   「固定建角场景下 Job 被改坏必须判红（不被占位吃掉）」「重复行 `A=[x,x]` vs `B=[x]` 必须判红」
-  「未登记表 fail-closed」。
+  「未登记表 fail-closed」「`characters.MapName/CX/CY` 逐字节比（仅 CX 不同必红）」。
 - **多重集/计数式比对（2026-10-11，卡 `openmir2-m3-scopeddiff-multiset`）**：`diff` 计 `problems`
   与 `delta` 计增删时，按 **(表, 行 key) 的出现次数** 做多重集差（`collections.Counter`），
   **不用 set 差集**。旧实现下 `A=[x,x]` vs `B=[x]` 的 `仅A=0 仅B=0` 会 **exit 0（假绿）**；
@@ -137,7 +137,7 @@ mir2_db.characters_quest         # 任务标志（QUESTOPENINDEX/QUESTFININDEX/Q
 ```
 
 上面 9 张 + `account` / `account_protection` / `characters` / `characters_indexes` 正好是
-`tools/dbsnap/dbsnap.py` 的 `DEFAULT_TABLES` **13 张真实快照表**；`selftest` 的 13/13 直接读仓内
+`tools/dbsnap/dbsnap.py` 的 `DEFAULT_TABLES` **13 张真实快照表**；`selftest` 的 14/14 直接读仓内
 真实 `sessions/csharp-20261011-142347/snap_after.manifest.json` 跑一次 `extract` —— 只要有一张表
 没登记就 exit 4（F-1 的牙齿）。
 
@@ -211,6 +211,47 @@ powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_bag_equip_p
 窗口纪律：起栈前看 `E:\MirServer\port-status.ps1`，与 M2 真机验收**严格串行**；
 本脚本不启动/不停止任何服务。
 
+### T-14 复跑口径（关挂机 + 同口径 peer；owner 2026-10-12 06:36）
+
+背包/装备序列要**两侧同一组开关**才可比。`run_pair.ps1` 的 `-BagEquipSequence` 分支会**自动**附带
+`-DisableAutoPlay`（并写进 `baseline.json.bag_equip_sequence`，形如
+`on step_ms=1000 start_delay_ms=3000 disable_autoplay=True`）：
+
+- **为什么要关挂机**：挂机 = 客户端无种子 RNG 随机走位（`ClientManager.RunAutoPlay`）。
+  `scoped_diff.py` 的 `characters.MapName/CX/CY` 是**逐字节比**列（不在易变白名单；selftest 14/14 有一条
+  「仅 CX 不同必红」钉住）。开着挂机 ⇒ 两侧各走各的，`CX/CY` **必然**出 diff——**这不是实现 bug**；
+  关掉后坐标才只由服务端行为决定。
+- **peer 口径护栏**：跨侧 diff 前 `gate_guards.ps1::Get-M3PeerBagEquipScopeGuard` 机判两侧
+  `bag_equip_sequence` 同开关（`run_m3_gate.ps1 -PeerSession` 与 `run_bag_equip_pair.ps1`
+  共用）。入库的 `csharp-20261012-054849` 是**开着挂机**跑的旧产物（只有
+  `on step_ms=1000 start_delay_ms=3000`、无 `disable_autoplay`）⇒ 被判 `peer_bag_equip_autoplay_on`
+  （PREREQ exit 2），**不能当同口径 peer** ⇒ C# 基线必须按新开关重跑一次。
+- **默认关两向自检**：`run_pair.ps1 -EmitOpsArgs`（无副作用）证明「带 `-BagEquipSequence` ⇒ 传
+  `-DisableAutoPlay`」「不带 ⇒ 不传」；`run_bag_equip_pair.ps1 -SelfCheckNoStack` 还断言 run_bots
+  配置透传有/无两向、旧挂机 peer 必红、以及 `scoped_diff.py selftest` 14/14。
+- **preflight（T-27，owner 2026-10-12 06:40）**：跑 `-Side rust` 前先确认 Rust game-svr 是否已实现
+  断线/进世界存档（承接卡 `openmir2-m3-gamesvr-save`，issue `f6893ea2`）：`bins/game-svr` 目前 **0 处**
+  请求常量 `DB_SAVEHUMANRCD(101)`（`dbclient.rs` 只有 load 构造器）⇒ 断线后 after 快照恒为建角状态、
+  跨侧 diff **必非 0**（与 T-26 三条正交）。`run_bag_equip_pair.ps1 -Side rust` 已内置该机判
+  （未实现 ⇒ PREREQ exit 2，`-SkipSavePreflight` 仅调试用）。
+- **RNG 抽数账本仍是前置**：`openmir2-m3-enter-eat-wiring` 的 `homemap.rs` 少抽 3 次（owner 裁决
+  `784be562`）未落地前，出生点 `Random(3)+Home-2` 两侧仍可能不同——那属 RNG 接线，与挂机无关。
+- **固定起点 + 固定初始背包变体（T-14；owner 86478c55/d7798370/643459a7）**：只关挂机**不够**——
+  `HomeMap` 空时 oracle 走出生点分支（`WorldServer.cs:249` + `Random(3)+Home-2`，`RandomNumber.cs:20`
+  无种子）⇒ 两侧起点天然不同。**不许**把 `CX/CY` 挪进易变白名单（14/14 自检钉住）；改用**两相夹具**
+  把角色初始态整体交给 fixture：① 预热建角（`run_bots -RequireCharCreated`，只建号）→ ② SQL pin
+  角色的 `MapName/HomeMap/HomeX/Y/CX/CY/Level/Dir` **+ `characters_bagitem` 初始 4 件**（蜡烛/布衣/木剑/
+  金创药(小量)）+ `characters_item` 清空 + `characters_ablity`（Level=1）→ ③ pin 后再取 BEFORE 快照 →
+  ④ 计分跑走「选角」（不带 `-FixedNewChr/-NewAccount`，仍带 `-BagEquipSequence -DisableAutoPlay`）。
+  `run_pair.ps1 -PinStartPose`（与 `-FixedNewChr -BagEquipSequence` 同用）已实现两相；两侧
+  `baseline.json.start_pose` 必须逐字节相同（`gate_guards.ps1::Get-M3PeerStartPoseGuard`；标签含
+  `bag=48@0,97@1,207@2,3@3 abil=1`）。pin 默认值 `MapName=0, HomeMap=0, HomeX/Y=289/618, CX/CY=289/618,
+  Level=1, Dir=0`（`HomeMap` 非空 ⇒ oracle 跳过新角色分支，也就不会发新手 4 件、不走无种子出生点）。
+  **分工**：真·新角色路径（空 `HomeMap`）由 `openmir2-m3-enter-eat-wiring` 的真机证据覆盖（进图 `(287,616)`、
+  `bag_view=4`、4 件齐）；T-14 变体覆盖「序列对拍」。
+  ⚠ **本片未在真机验证** pin 是否真被进图路径采用（无窗口；只验了 8 条 SQL 在活库 schema 上 `rc=0`）——
+  见报告 §7 的最小实验；`-BagEquipSequence`（关挂机）仍必须保留。
+
 ## 一次「侧运行」是什么
 
 
@@ -263,7 +304,7 @@ powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/rng-baseline.ps
 - 不需要还原快照（不碰既有角色，风险为 0）；
 - 比对只取本次命名空间内的行 ⇒ 并行线的干扰自动排除。
 
-`scoped_diff.py` 提供 `extract / delta / diff / selftest`（selftest 13/13，含"改坏必红"与"重复行多重集"）。
+`scoped_diff.py` 提供 `extract / delta / diff / selftest`（selftest 14/14，含"改坏必红"与"重复行多重集"）。
 `diff`/`delta` 的差异计数是**多重集/计数式**（同 `(表, row_sha256)` 的出现次数纳入判定）。
 `--normalize` 把前缀归一化为 `<RUN>`，使两次运行的前缀差异不影响比对。
 
@@ -311,7 +352,7 @@ LoginSrv 读的配置是 `src/LoginSrv/bin/Release/logsrv.conf`
 
 ```powershell
 powershell -File run_pair.ps1 -SelfTestRed      # 入口不通 → 判失败（实测 exit 0 = 红检成立）
-python scoped_diff.py selftest                 # 13/13 实测（含重复行多重集：A=[x,x] vs B=[x] 必红；族表 PlayerId 归属；真实 13 表快照 extract）
+python scoped_diff.py selftest                 # 14/14 实测（含重复行多重集：A=[x,x] vs B=[x] 必红；族表 PlayerId 归属；真实 13 表快照 extract；MapName/CX/CY 逐字节比）
 ```
 
 另外两条内置护栏本身就是门禁（实测触发过）：
