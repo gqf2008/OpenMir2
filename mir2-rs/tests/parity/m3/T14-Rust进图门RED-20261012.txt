@@ -1,0 +1,67 @@
+M3① T-14 双侧同序列驱动 —— Rust 侧进图门 RED 原始件（第十二格，2026-10-12）
+卡：openmir2-m3-bag-equip-alignment；后续修复卡：openmir2-m3-enter-eat-wiring（owner 派给 m2-svr；根因线索见该卡 comment ae4bbadb）
+本文件用途：whitelist T-26 的原始证据（.txt 入库，避免被 .gitignore 的 *.log 规则吞）。
+
+= 1) 命令与退出码 =
+  # 起 Rust 栈（C# DBSrv/LoginSrv + Rust game-svr/gates；隔离 target）：
+  tools/m2-acceptance/start_rust_stack.ps1 -RustBinDir E:/tmp/openmir2-m3bag-target/debug
+  # 同一命令换 Rust 栈 + C# 侧作 PeerSession：
+  powershell -File mir2-rs/tests/parity/m3/run_bag_equip_pair.ps1 -Side rust -Bots 1 -Prefix m3r1601 -PeerSession csharp-20261012-054849
+  rc=1
+
+= 2) rust-run1.log 的两行机判（E:/tmp/openmir2-watch/m3bag-t14/rust-run1.log）=
+  OPS_MARKERS login_ok=1/1 char_created=1/1 enter_world=0/1 bot_log=bots-20261012-055515.log
+  OPS_BAGSEQ_MARKERS count=0
+  RED: 1 个假人的背包/装备序列只跑完 0/1（缺 M3BAGSEQ done）——序列不完整，不能当『同一序列』
+  RED: -BagEquipSequence 开了但 bot.log 里一条 M3BAGSEQ 标记都没有 —— 固定序列没跑（驱动未生效/假人未进世界）
+  RED: run_pair（rust 侧）未通过（rc=1）——同序列/快照/抽取未成立
+
+= 3) Rust game-svr 进图门（E:/tmp/openmir2-watch/m3bag-t14/rust-stack/game-svr.out.log）=
+  21:50:00.551 [INF] Envir 真地图注册表：322 张（base=E:\MirServer\M2GameSvr EnvirDir=Envir MapDir=Map，跳过 0 张）
+  21:50:00.712 [INF] sim 线程就绪：tick=200ms，地图 322 张（Envir 真地图）
+  21:55:22.989 [INF] 会话准入登记 Account:m3r16010 SessionId:2 PayCost:0 PayMode:0 IP:127.0.0.1:64456
+  21:55:25.194 [INF] 会话验证通过 Account:m3r16010 ChrName:m3r16010 SessionId:2 PayMent:1 index=1
+  21:55:25.421 [WRN] 拒绝进图 ChrName:m3r16010 CurMap:：地图名未找到: （真地图注册表里没有这张图）
+  ⇒ 注册表非空（322 张）；被拒的是**空 CurMap**（-FixedNewChr 建号的新角色）。
+
+= 4) Rust game-gate（E:/tmp/openmir2-watch/m3bag-t14/rust-stack/game-gate.out.log）=
+  21:50:00.872 [INF] 游戏服务器[127.0.0.1:5000]链接成功.
+  21:50:00.875 [INF] 游戏网关[127.0.0.1:7200]已启动...
+  21:55:25.175 [INF] 开始连接: 127.0.0.1:64476 (SessionId=1562 socket=356)
+  21:55:25.179 [INF] 客户端登录通过: 127.0.0.1:64476 (SessionId=1562)
+  21:55:25.193 [DBG] 服务端分配会话索引：SessionId=1562 index=1
+  22:05:18.156 [INF] 断开链接: 127.0.0.1:64476 (SessionId=1562)
+  ⇒ 会话成立、卡在 game-svr 进图门。
+
+= 5) 两侧 load_stats 逐项对照（同一 -FixedNewChr 序列、同一份 C# DBSrv）=
+  | 项 | C# 基线 csharp-20261012-054849（prefix m3b1601） | Rust rust-20261012-055515（prefix m3r1601） |
+  |---|---|---|
+  | frames_decoded | 40 | 7 |
+  | in_world | 1 | 0 |
+  | ident_counts | 含 658(SM_LOGON)/50/41/42/46/51/52/752/213/11029/1106/5008/766/201… | 只有 520/504/529/530/521/525（无 658） |
+  | bot 是否 MarkInWorld / M3BAGSEQ arm | 是 | 否（无 658 ⇒ 永不 arm） |
+  C# ident_counts 原文：{'100': 4, '41': 4, '657': 3, '520': 2, '10': 2, '752': 2, '52': 2, '42': 2, '504': 1, '654': 1, '46': 1, '811': 1, '1106': 1, '5008': 1, '766': 1, '201': 1, '11029': 1, '213': 1, '50': 1, '51': 1, '658': 1, '525': 1, '521': 1, '530': 1}
+  Rust ident_counts 原文：{'520': 2, '504': 1, '529': 1, '530': 1, '521': 1, '525': 1}
+
+= 6) DB 建角记录原值（mysql -h 127.0.0.1 -P 3306 -u root --password= --batch）=
+  Id     ChrName    MapName  CX   CY   HomeMap  HomeX  HomeY
+  13354  m3b16010   0        649  620  0        289    618     -- C# 建角
+  13355  m3r16010   NULL     0    0    NULL     0      0       -- Rust 建角
+  ⇒ 同一 C# DBSrv；差异来自**两侧建角写入的原值**（Rust 侧未写 Map/HomeMap/CX/CY）。
+
+= 7) 归因候选（交 m2-svr 定；owner 侧 comment ae4bbadb 也列了）=
+  - oracle 对新角色空 CurMap 走哪条路：src/M2Server/Player/PlayObject.Base.cs:708-717（StartPointList[i].MapName 出生点）/
+    src/M2Server/Player/PlayObject.cs:875（HomeMap 初始 0）/ DBSrv 建号时写入的 Map 值。
+  - 「Rust 取档把 Map 读成空」与「oracle 有空值默认图」是两种不同修法 ⇒ 先取 DB 原值（本文件 §6）再下结论。
+
+= 8) 窗口/端口（收工实拍；2026-10-12 06:11，本片 -Stop 后）=
+  3306 在听（pid 4540，非本片所起；其它车道在用）
+  5000/5100/5500/5600/5700/6000/7000/7100/7200 全部 DOWN
+  ⇒ m3bag 的 T-14 窗口已释放；（3306 的当前持有者与 m3bag 无关）。
+
+= 9) 默认关两向自检（夹具开关逐字节不变）=
+  tools/botload/run_bots.ps1 -BagEquipSequence -WriteConfigOnly -SkipBuild ⇒ AppSetting.json.BotPlay.BagEquipSequence=true
+  tools/botload/run_bots.ps1 -WriteConfigOnly -SkipBuild               ⇒ AppSetting.json.BotPlay.BagEquipSequence=false
+  两份 JSON 逐字 diff：**只有 `BagEquipSequence` 一个布尔位**（其余键完全相同）。
+  mir2-rs/tests/parity/m3/run_bag_equip_pair.ps1 -SelfCheckNoStack ⇒ rc=0，4/4 GREEN
+    （① 配置透传 on=true ② 默认关 off=false ③ 无栈入口护栏 rc=2 ④ -DiffOnly 缺会话 rc=2）。
