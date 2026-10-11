@@ -12,6 +12,8 @@ members = [
     "crates/world-bevy",
     "crates/data",
     "crates/formula",
+    # M2 地图：Envir *.map 加载器 + Point 点位表 + 地图名→map_id（openmir2-m2-map-loading）
+    "crates/envir",
     "tests/parity",
     # A2/M1：边界服务（Rust 版 LoginGate/SelGate/LoginSrv/DBSrv）
     "bins/login-gate",
