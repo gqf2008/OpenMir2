@@ -153,6 +153,42 @@
 3. 差分夹具本身还有价值（`GM_OPEN`/`GM_CLOSE` 的形状比对已可做，且它是整栈 E2E 的前置脚手架），
    但"逐帧差分"要等整栈窗口 + 切片 2 的登录门禁落地。
 
+## 7.7 客户端登录帧（切片 2 的规格，已从 oracle 源码钉住）
+
+§7.6 的"裸网关被剔除"暴露了客户端 face 的**第一步**：第一帧不是普通命令帧，而是 **`ClientLogin`**。
+`ClientSession.ProcessSessionPacket` 的分派（`ClientSession.cs:655-680`）：
+
+```
+if (/* 内层是 CommandMessage 形态 */) { …正常命令：解码→（速度规则）→ 拼 ServerMessage 头 + GM_DATA… }
+else {                                  // :671-680
+    string tempStr = EDCode.DeCodeString(destinationSpan[2..(packetLen - 1)]);   // :673
+    ClientLogin(tempStr, packetLen, "", ref success);                            // :674
+    if (!success) { LogService.Info("客户端登陆消息处理失败，剔除链接"); Kick(1); }   // :677-678
+}
+```
+
+`ClientLogin` 的校验链（`ClientSession.cs:1058-…`）——**这是切片 2 必须照抄的部分**：
+
+| 步骤 | 规则 | 失败动作 |
+| --- | --- | --- |
+| 0 | `nLen`（外层 PackLength）必须 `> 15 && < 254` | 落进 `else` 之外的路径（不处理） |
+| 1 | 解码后的文本**前两位必须是 `**`**（`loginData[0]=='*' && [1]=='*'`） | `Kicked 1` → `success=false` → :677 `Kick(1)` |
+| 2 | 用**反斜杠**切成 `account \ charName \ cert \ clientVerNo \ code \ hardwareId`（`HUtil32.GetValidStr3`） | — |
+| 3 | `4 ≤ len(account) ≤ 12` 且 `2 < len(charName) < 15` | `success=false`（无日志） |
+| 4 | `0 < len(cert) ≤ 8`；`len(clientVerNo) ≥ 8`；`len(code) == 10` | 无日志 / `Kicked 2` / 无日志 |
+| 5 | `Config.IsProcClientHardwareID` 为真时校验 `hardwareId`（长度/奇偶 + `ProClientHardwareKey` 变换） | `Kicked 3` → `SendKickMsg(4)` |
+| 6 | 之后还有 `Kicked 4..7`（账号/角色的进一步核对、封禁名单等） | 各自 `SendKickMsg` |
+
+⇒ **切片 2 的最小可判实现**：① 识别第一帧为登录帧（内层不是 CommandMessage）→ `EDCode.DeCodeString`
+（Rust 侧用 `crates/protocol` 的 EDCode，M0 已钉住与 C# 逐字节一致）；② 实现步骤 1/3/4 的判定与
+"失败即 `Kick(1)`"；③ 只在登录通过后才允许把后续帧转成 `GM_DATA`（否则与原实现一样剔除）。
+步骤 5/6 属切片 3（配置相关与账号核对），登记不静默跳过。
+
+**顺带发现的一个实验坑（留给差分夹具）**：把金标准里 7200 的帧从**中间**某帧开始当作"某会话的第一帧"重放，
+解出来会是**乱码前缀**（本次实测 `?h讣h讣h讣煾窴**loadbot1/lb1a/…`）——EDCode 是**按连接推进**的，
+重放必须从该连接的**第一帧**开始、且两侧状态同步。这条直接决定差分夹具怎么写（否则会得到"客户端登陆
+消息处理失败"的假红）。
+
 ## 8. 头号风险
 
 - **客户端 face 有登录门禁（§7.6）**：未通过登录帧校验的客户端会被**剔除**；切片 1 目前会照转 `GM_DATA`
