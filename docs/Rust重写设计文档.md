@@ -729,6 +729,13 @@ walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 prin
   新增 `oracle_source_sha256` 源码锚、`T-12/T-13`→`T-13/T-14`。**M2 帧 `50/41/10/213` 要的 `feature.rs` 就在这一片**（它不碰 `main.rs`/`smframe.rs`）。
 - **M4 剩余三项已开卡**：`openmir2-m4-parity-cases`（issue `03d6c58a63d889dfadc11e378bd0ea3460fc55c5`）—— parsecount 两侧对拍表 / 6 类关键 NPC 用例 /
   "双侧逐行多重集差 = 0" 门禁落地；车道排在 `m3gs` 之后（先有卡，别只留在 §17 散文里）。
+- **M2 会话生命周期对齐片已合入**（2026-10-11 18:50）：`3b2e71f2` 经 reviewer-3 `5224ada8` 独立 approve（隔离 target 3 连跑每次 435/0/13；**3 条红检独立复现**；
+  oracle 逐行核对 `TCPNetChannel.cs:229/252/256/262/268-269`、`AuthenticationService.cs:299-319`、`PlayObject.Message.cs:1715`、`PlayObject.cs:1082-1090`、`WorldServer.cs:200-217/503/535/568-570`；
+  字节锚 = **M0 金标准 seq66（ident 100）逐字节重建** + `KICK_USER_MSG` 49B == GBK(oracle 字面量)）⇒ merge `4f77b897`，合并树四门禁 67/435/0/13 + 604。
+  **本卡仍不 close**：真机夹具复跑待端口窗口、`InSaveRcdList` 生产侧未接线（S2b-3，真机"保存中"窗口恒空 ⇒ 竞态窗口比 oracle 短，登记不臆造延时）、4 条非阻塞 Minor。
+- **M1⑤ 实测抓到一条真缺陷（新卡）**：全 Rust 边界链上 **登录/选服/查角色 200/200，但选角 0/200**（无 `525`，Rust db-srv 200 条 `Double send SELCHR`）——
+  根因 = `bins/db-srv` 的 `query_chr()` 成功时**没置 `u.chr_queryed = true`**（C# `src/DBSrv/Services/Impl/UserService.cs:359` 有），`CM_SELCHR` 恒走 else ⇒ 从不回 `SM_STARTPLAY`。
+  已开卡 `openmir2-m1-dbsrv-selchr-queryed`（issue `2e5d3b0897576dcc4a31f26194dc3fa366805a63`），**不顺手改**（写集红线）；因与 `dbsrv6k` 的 S4b 同文件 ⇒ 由同一车道在该片之后接着做（已写进其 brief §4）。
 
 ## 18. S3：B-8 命令码位移修复（2026-10-10，oracle 行为变更）
 
