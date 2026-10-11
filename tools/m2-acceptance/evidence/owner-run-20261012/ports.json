@@ -1,0 +1,65 @@
+﻿{
+    "tool":  "m2-acceptance/check_ports.ps1",
+    "ts":  "2026-10-12T00:05:01.7190635+08:00",
+    "repo":  "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2",
+    "ports":  [
+                  {
+                      "port":  5000,
+                      "listening":  true,
+                      "pid":  11544,
+                      "name":  "game-svr.exe",
+                      "path":  "E:\\tmp\\openmir2-m2svr-target\\debug\\game-svr.exe",
+                      "command_line":  "\"E:\\tmp\\openmir2-m2svr-target\\debug\\game-svr.exe\" E:\\MirServer\\M2GameSvr\\Server.conf ",
+                      "impl":  "rust",
+                      "entry":  "game-svr",
+                      "expected_entry":  "game-svr",
+                      "entry_verdict":  "ok"
+                  },
+                  {
+                      "port":  7000,
+                      "listening":  true,
+                      "pid":  30500,
+                      "name":  "login-gate.exe",
+                      "path":  "E:\\tmp\\openmir2-m2svr-target\\debug\\login-gate.exe",
+                      "command_line":  "\"E:\\tmp\\openmir2-m2svr-target\\debug\\login-gate.exe\" E:\\MirServer\\LoginGate\\config.conf ",
+                      "impl":  "rust",
+                      "entry":  "login-gate",
+                      "expected_entry":  "login-gate",
+                      "entry_verdict":  "ok"
+                  },
+                  {
+                      "port":  7100,
+                      "listening":  true,
+                      "pid":  30356,
+                      "name":  "sel-gate.exe",
+                      "path":  "E:\\tmp\\openmir2-m2svr-target\\debug\\sel-gate.exe",
+                      "command_line":  "\"E:\\tmp\\openmir2-m2svr-target\\debug\\sel-gate.exe\" E:\\MirServer\\SelGate\\config.conf ",
+                      "impl":  "rust",
+                      "entry":  "sel-gate",
+                      "expected_entry":  "sel-gate",
+                      "entry_verdict":  "ok"
+                  },
+                  {
+                      "port":  7200,
+                      "listening":  true,
+                      "pid":  30120,
+                      "name":  "game-gate.exe",
+                      "path":  "E:\\tmp\\openmir2-m2svr-target\\debug\\game-gate.exe",
+                      "command_line":  "\"E:\\tmp\\openmir2-m2svr-target\\debug\\game-gate.exe\" E:\\MirServer\\RunGate\\config.conf ",
+                      "impl":  "rust",
+                      "entry":  "game-gate",
+                      "expected_entry":  "game-gate",
+                      "entry_verdict":  "ok"
+                  }
+              ],
+    "not_listening":  [
+
+                      ],
+    "not_rust":  [
+
+                 ],
+    "cross_entry":  [
+
+                    ],
+    "pass":  true
+}
