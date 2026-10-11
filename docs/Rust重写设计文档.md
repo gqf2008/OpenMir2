@@ -300,7 +300,16 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "mysql", "chrono", "macro
 | 邮件 / 拍卖 | 发送 / 到期 / 成交 / 退回，DB 落库字段级 diff = 0 |
 
 - **门禁（owner 2026-10-10 决定：M3 夹具正式提升为门禁）**：`mir2-rs/tests/parity/m3/run_pair.ps1 -Side csharp|rust`
-  跑同一操作序列 → `scoped_diff.py` 作用域内**字段级 diff = 0**；两侧快照 hash 与 RNG 种子注入结果都要入库。
+  跑同一操作序列 → `scoped_diff.py diff --canonical` 作用域内**字段级 diff = 0**；两侧快照 hash 与 RNG 种子注入结果都要入库。
+  **规范化是判据的组成部分（2026-10-11，owner 裁决 A）**：`row_sha256` 覆盖 `SELECT *` 全列，而
+  (a) 自增 PK/FK、墙钟 `datetime`/unix 秒**每次运行必变**，(b) `characters.Hair/Sex/Job` 是
+  夹具**建角输入随机**（`src/BotSrv/Scenes/Scene/SelectChrScene.cs:154-176`，`RandomNumber` 无种子）。
+  不排除这些列，**两次都 GREEN 的 C# 会话互 diff 也判红**（实测 8 行），判据无仲裁力。故 `--canonical`
+  按**逐列登记（含每列理由）**的易变列白名单置 `<VOLATILE>`，其余列逐字节比，**不许整表 ignore**，
+  未登记表 fail-closed；并含「改坏必红」自检（`scoped_diff.py selftest`）。`Hair/Sex/Job` 的行为覆盖
+  迁至固定参数的确定性场景，见卡 `openmir2-m3-botsrv-fixed-newchr`。
+  **前置更正（2026-10-11）**：7200 的游戏侧入口是 RunGate/GameGate，M1 不实现；首验的真实前置是
+  M2 的 Rust GameGate 合入 master（卡 `openmir2-m2-gamegate`），而非 M1 顶住端口。
   M1 边界服务能顶住 7000/7100/7200 之后，立即用 `-Side rust` 跑一次作为 M3 首次验收。
 - 总验收：**上述十项全绿 + M3 门禁 diff=0 + 300 假人长跑 24h 无 panic、无掉线**。
 - 证据：每系统一份"命令 + 输出 + 差异报告（可为 0）"，汇总成 `tests/parity/M3-report.md`。
@@ -614,6 +623,7 @@ walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 prin
 | 2026-10-10 | **C3 小退阶段：按"原工程一致"执行**——不加 GM 权限、不改客户端、不依赖 AutoLogin | 事实校正：`Envir/AutoLogin.txt` 在本工程**没有服务端实现**（全仓无读取点；客户端 `g_sAutoLogin` 常量也未被使用），故不采用。改走**客户端自带退出入口**：面板「小退」按钮（鼠标 PostMessage）或聊天框输入 `小退`，二者都走客户端自己的 `EatItemName('小退') → AppLogoutEx()`（`MirClient/Source/MirClient/ClMain.pas:3978`）。判据：抓包里出现 `CM_SOFTCLOSE(1009)`（或 528/802）+ 回选人界面截图，replay 八阶段 → GREEN |
 | 2026-10-10 | **S1：两条 oracle 缺陷修** | 必须记录改前/改后行为、登记 `whitelist T-*`（Rust 侧默认复刻旧行为做对拍，M3 之后按需切新行为）、修后重跑 M0/M1 门禁；缺陷②（`Mir200` 下 Mach-O 部署件）走同批做版本对账。owner = `openmir2-svc-1` |
 | 2026-10-10 | **D2：M3 夹具提升为正式门禁** | §6 M3 判据改为 `run_pair.ps1` + `scoped_diff.py`（作用域内字段级 diff = 0）；要求 C# 侧基线一条命令可复跑（含快照 hash 与 RNG 种子注入） |
+| 2026-10-11 | **M3 判据去噪（裁决 A）：`scoped_diff.py diff` 加易变列规范化** | §6 M3 门禁判据改为 `diff --canonical`（逐列白名单 + 每列理由、未登记表 fail-closed、含「改坏必红」自检）；`characters.Hair/Sex/Job` 的行为覆盖迁至卡 `openmir2-m3-botsrv-fixed-newchr`（B，另开）。同条更正首验真实前置 = M2 Rust GameGate 合入 master（非 M1）。证据：`mir2-rs/tests/parity/m3/M3首验报告-20261011.md` §2.5 |
 
 ---
 
