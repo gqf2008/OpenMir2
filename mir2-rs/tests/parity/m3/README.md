@@ -413,15 +413,18 @@ dotnet mir2-rs/tests/parity/m3/ground-probe/bin/Release/net8.0/ground-probe.dll 
 cargo test -p game-svr --lib        # 回读夹具逐字段核对
 ```
 
-向量覆盖（5 模板 / 21 用例）：拾取成功（无主/自己/超时清主/同组）、`Dealing`/背包满/超重/模板缺失/
+向量覆盖（6 模板 / 23 用例）：拾取成功（无主/自己/超时清主/同组）、`Dealing`/背包满/超重/模板缺失/
 空格子失败、金币成功与超上限、丢弃 `ItemId=0` 恒失败、`ControlDropItem` 便宜直丢、安全区/`NoThrowItem`/
-`IsCanDrop`/`DealLastTick` 守卫、名称带空格折分、`MakeIndex` 不命中。夹具记录的 tick
+`IsCanDrop`/`DealLastTick` 守卫、名称带空格折分、`MakeIndex` 不命中、StdMode 40 耐久 u16 回绕
+（`DropItemDown` 的 `ushort idura = (ushort)(Dura-2000)`：2500⇒500、10⇒63546）。夹具记录的 tick
 （`now_tick`/`can_pick_up_tick`/`deal_last_tick`）都平移到固定基点 `1_200_000`（真实 tick 只驱动 oracle 判定）
 ⇒ 探针产物**逐字节可复现**。
 
 红检（改坏 ⇒ 必红）：① `put_item` 的 `item_id == 0` 守卫改成 `== -1` ⇒ T-19 的 2 条用例红；
 ② `is_add_weight_available` 恒真 ⇒ 超重用例红；③ `dequeue_order` 改成降序 ⇒ 出队序用例红；
-④ `DealLastTick` 守卫 `> 3000` 改成 `> 0` ⇒ 夹具用例红。
+④ `DealLastTick` 守卫 `> 3000` 改成 `> 0` ⇒ 夹具用例红；
+⑤ `drop_item` 的 StdMode 40 耐久 `wrapping_sub(2000)` 改成 `saturating_sub(2000)`（clamp 到 0）⇒
+`stdmode40_drop_dura_wraps_like_oracle` 红（oracle 实测 underflow：Dura=10 ⇒ 63546，不是 0）。
 
 **未做（登记在卡，见 `tests/parity/whitelist.md` 的 T-15/T-19/T-20）**：地面物品模型只在 `bins/game-svr`
 侧的最小切片里（`crates/world` 尚无地图地面物品与地图 `Flag`）、`DropItemDown` 的 StdMode 45 随机外观、

@@ -116,7 +116,7 @@ Remove-Item -Recurse -Force mir2-rs/tests/parity/m3/sessions/*/shadow-run* -Erro
 ## 十、本片（2026-10-11，worktree `m3bag`：拾取/丢弃 handler 核心）实际残留清单
 
 - **入库（证据，随 patch 提交）**：
-  - `m3/fixtures/ground_vectors.json`（oracle 真身探针产出的 `CM_PICKUP`/`CM_DROPITEM` 向量：5 模板 / 21 用例；
+  - `m3/fixtures/ground_vectors.json`（oracle 真身探针产出的 `CM_PICKUP`/`CM_DROPITEM` 向量：6 模板 / 23 用例；
     出帧 `SM_ADDITEM=200`/`SM_DROPITEM_SUCCESS=600`/`SM_DROPITEM_FAIL=601` + 延时通知（出队序）+
     `ItemList`/`Gold`/`WAbil` + 地图格子前后/全图物品数，Rust 用例回读逐字段核对；tick 平移到固定基点
     `1_200_000` ⇒ 探针产物逐字节可复现）
