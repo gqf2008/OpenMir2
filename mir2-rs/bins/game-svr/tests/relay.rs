@@ -33,6 +33,63 @@ fn free_port() -> u16 {
     l.local_addr().unwrap().port()
 }
 
+/// 进程级用例的临时目录必须**用例级唯一**：只用 `pid` 在「同一 test binary、并行跑」时会撞
+/// （LESSON：`LESSON_并行测试临时路径须pid加原子计数构造_时钟粒度不足.md`）⇒ `pid + 原子计数`。
+static TEMP_DIR_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn unique_temp_dir(tag: &str) -> std::path::PathBuf {
+    let seq = TEMP_DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    std::env::temp_dir().join(format!("gs-{tag}-{}-{seq}", std::process::id()))
+}
+
+/// RAII 清理：无论用例正常结束还是**断言 panic**（展开）都清掉临时目录
+/// （开放卡 `openmir2-m2-flaky-relay-nowm` acceptance ③：「失败路径也要删」）。
+struct TempDirGuard(std::path::PathBuf);
+impl Drop for TempDirGuard {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.0).ok();
+    }
+}
+
+/// 有超时地轮询日志直到出现 `needle`，返回**最后一次**读到的全文。
+///
+/// 子进程 stdout 重定向到文件后，`println!` 与测试的 `read_to_string` 之间存在可见性延迟
+/// ⇒ 绝不能用「连接成功后立刻读一次再断言」；超时后把全文交给调用方打进断言消息。
+async fn wait_log_contains(log: &std::path::Path, needle: &str, timeout: Duration) -> String {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let text = std::fs::read_to_string(log).unwrap_or_default();
+        if text.contains(needle) || tokio::time::Instant::now() >= deadline {
+            return text;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// 等子进程日志出现就绪标记 `marker`；若子进程在此之前**退出**（bind 失败/配置错）则提前返回当时的日志。
+/// 返回全文里**是否含 marker** 即就绪与否的判据（调用方据此决定连接还是换端口重试）。
+async fn wait_child_ready(
+    proc: &mut tokio::process::Child,
+    log: &std::path::Path,
+    marker: &str,
+    timeout: Duration,
+) -> String {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let text = std::fs::read_to_string(log).unwrap_or_default();
+        if text.contains(marker) {
+            return text;
+        }
+        if matches!(proc.try_wait(), Ok(Some(_))) {
+            return text;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return text;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 fn write_conf(
     dir: &std::path::Path,
     port: u16,
@@ -258,36 +315,62 @@ fn synth_map(width: u16, height: u16) -> Vec<u8> {
 
 /// **WorldMaps 可选化 红检 ①**（owner `272582e1`）：真 `Server.conf` 形态（**无 `WorldMaps`**）+
 /// `Envir/MapInfo.txt` 可读 ⇒ 必须起得来并监听（不再因缺占位键拒绝启动）。
+///
+/// 抗 flaky（owner 卡 `openmir2-m2-flaky-relay-nowm`）：
+/// - `free_port()` 是「探测即释放」；并行用例/繁忙机器上端口可能被抢 ⇒ 子进程 bind 失败，若直接
+///   `connect` 会连到**别人**的监听上（读到本用例的空日志）。故改为：**先等本子进程 bind 成功后打印的
+///   `[{addr}:{port}]已启动` 行**才算就绪；没等到（子进程已退出）⇒ 换端口重试。
+/// - 子进程 stdout 落盘可见性滞后 ⇒ 断言前用**有超时的轮询**，不做一次性 `read_to_string`。
 #[tokio::test]
 async fn starts_without_worldmaps_when_envir_present() {
-    let dir = std::env::temp_dir().join(format!("gs-nowm-ok-{}", std::process::id()));
-    std::fs::remove_dir_all(&dir).ok();
-    std::fs::create_dir_all(dir.join("Envir")).unwrap();
-    std::fs::create_dir_all(dir.join("Map")).unwrap();
-    std::fs::write(dir.join("Envir").join("MapInfo.txt"), "[0 town]\n").unwrap();
-    std::fs::write(dir.join("Map").join("0.map"), synth_map(3, 3)).unwrap();
-    let port = free_port();
-    // 现网样件：`[Server]` 段没有 `WorldMaps`（唯一缺的键）。
-    std::fs::write(
-        dir.join("Server.conf"),
-        format!(
-            "[Server]\nCheckBlock=12288\nGateAddr= 127.0.0.1\nGatePort={port}\n\
-             IDSAddr= 127.0.0.1\nIDSPort={}\nDBAddr=127.0.0.1\nDBPort={}\n",
-            free_port(),
-            free_port()
-        ),
-    )
-    .unwrap();
-    let log = dir.join("server.out.log");
-    let out = std::fs::File::create(&log).unwrap();
-    let err = out.try_clone().unwrap();
-    let mut proc = tokio::process::Command::new(env!("CARGO_BIN_EXE_game-svr"))
-        .arg(dir.join("Server.conf"))
-        .stdout(out)
-        .stderr(err)
-        .kill_on_drop(true)
-        .spawn()
+    let mut last_log = String::new();
+    let mut ready = None;
+    for _ in 0..5 {
+        let dir = unique_temp_dir("nowm-ok");
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(dir.join("Envir")).unwrap();
+        std::fs::create_dir_all(dir.join("Map")).unwrap();
+        std::fs::write(dir.join("Envir").join("MapInfo.txt"), "[0 town]\n").unwrap();
+        std::fs::write(dir.join("Map").join("0.map"), synth_map(3, 3)).unwrap();
+        let port = free_port();
+        // 现网样件：`[Server]` 段没有 `WorldMaps`（唯一缺的键）。
+        std::fs::write(
+            dir.join("Server.conf"),
+            format!(
+                "[Server]\nCheckBlock=12288\nGateAddr= 127.0.0.1\nGatePort={port}\n\
+                 IDSAddr= 127.0.0.1\nIDSPort={}\nDBAddr=127.0.0.1\nDBPort={}\n",
+                free_port(),
+                free_port()
+            ),
+        )
         .unwrap();
+        let log = dir.join("server.out.log");
+        let out = std::fs::File::create(&log).unwrap();
+        let err = out.try_clone().unwrap();
+        let mut proc = tokio::process::Command::new(env!("CARGO_BIN_EXE_game-svr"))
+            .arg(dir.join("Server.conf"))
+            .stdout(out)
+            .stderr(err)
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        // `main.rs:383/391`：bind 成功后打印 `游戏服务[{addr}:{port}]已启动` ⇒ 用它当就绪信号。
+        let marker = format!(":{port}]已启动");
+        let text = wait_child_ready(&mut proc, &log, &marker, Duration::from_secs(10)).await;
+        if text.contains(&marker) {
+            ready = Some((proc, dir, log, port));
+            break;
+        }
+        // 没等到就绪标记 = bind 失败/配置错（多半端口被抢）⇒ 换端口重试，并把本文打进诊断。
+        last_log = text;
+        proc.kill().await.ok();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+    let Some((mut proc, dir, log, port)) = ready else {
+        panic!("game-svr 连试 5 次都没能 bind 成功（端口被并行用例/繁忙机器抢走？）；最后一次日志：{last_log}");
+    };
+    // 断言失败时也要清目录（RAII；retry 失败路径已在循环里删）。
+    let _dir_guard = TempDirGuard(dir.clone());
     // 能连上 = 真起来了（缺 WorldMaps 不再致命）；连不上会 panic。
     let mut gate = connect_with_retry(port).await;
     gate.write_all(&frame(grobal2::GM_OPEN, 1001, 1, 0, b"127.0.0.1"))
@@ -295,7 +378,8 @@ async fn starts_without_worldmaps_when_envir_present() {
         .unwrap();
     let (m, _) = recv_frame(&mut gate).await.unwrap();
     assert_eq!(m.session_index, 1);
-    let text = std::fs::read_to_string(&log).unwrap_or_default();
+    // 真注册表那行在 `bind` 之前打印，落盘可见性可能滞后 ⇒ 有超时轮询，不做一次性读。
+    let text = wait_log_contains(&log, "Envir 真地图注册表：1 张", Duration::from_secs(5)).await;
     assert!(
         text.contains("Envir 真地图注册表：1 张"),
         "必须用真注册表建世界（不是占位）；日志实得：{text}"
@@ -308,7 +392,8 @@ async fn starts_without_worldmaps_when_envir_present() {
 /// 必须非零退出（不许静默起空世界 / 回落 0 号占位图）。
 #[tokio::test]
 async fn missing_worldmaps_and_envir_exits_nonzero() {
-    let dir = std::env::temp_dir().join(format!("gs-nowm-none-{}", std::process::id()));
+    let dir = unique_temp_dir("nowm-none");
+    let _dir_guard = TempDirGuard(dir.clone());
     std::fs::remove_dir_all(&dir).ok();
     std::fs::create_dir_all(&dir).unwrap();
     let port = free_port();
