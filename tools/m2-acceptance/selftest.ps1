@@ -183,12 +183,32 @@ Test-Impl "impl/隔离 target(m2svr)=rust" "E:\tmp\openmir2-m2svr-target\debug\g
 Test-Impl "impl/基名回落 rust"           "C:\dev\game-svr.exe"                        "" "game-svr.exe" "rust"
 Test-Impl "impl/未知基名=unknown"        "C:\dev\foo.exe"                             "" "foo.exe" "unknown"
 
+# ---------------------------------------------------------------- ① 端口表 -> 期望入口（第三层牙齿）
+Write-Output "① 端口表 -> 期望入口（端口归属：不只看是否 Rust，还要看是不是该端口的入口）"
+function Test-Entry([string]$Desc, [string]$Got, [string]$Expect) {
+  $script:Total++
+  $ok = ($Got -eq $Expect)
+  if (-not $ok) { $script:Failed++ }
+  $tag = if ($ok) { "OK  " } else { "FAIL" }
+  Write-Output ("  [{0}] {1,-40} expect={2} actual={3}" -f $tag, $Desc, $Expect, $Got)
+  $script:Checks.Add([pscustomobject]@{
+      name = $Desc; expect_rc = $Expect; actual_rc = $Got
+      expect_out = ""; ok = $ok; detail = "port entry table"
+    })
+}
+Test-Entry "entry/表 5000=game-svr"     (Get-M2ExpectedEntry -Port 5000) "game-svr"
+Test-Entry "entry/表 7200=game-gate"    (Get-M2ExpectedEntry -Port 7200) "game-gate"
+Test-Entry "entry/基名取 game-svr.exe"  (Get-M2EntryName -Exe "E:\x\target\debug\game-svr.exe" -Name "game-svr.exe") "game-svr"
+Test-Entry "entry/5000+game-svr=ok"     (Get-M2EntryVerdict -Port 5000 -EntryName "game-svr") "ok"
+Test-Entry "entry/5000+login-gate=cross" (Get-M2EntryVerdict -Port 5000 -EntryName "login-gate") "cross"
+Test-Entry "entry/7200+game-svr=cross"  (Get-M2EntryVerdict -Port 7200 -EntryName "game-svr") "cross"
+
 # ---------------------------------------------------------------- ① 端口实况（只读）
 if (-not $SkipLivePorts) {
   Write-Output ("① check_ports.ps1（只读实况端口 " + ($LivePorts -join "/") + "）")
   $portsScript = Join-Path $Here "check_ports.ps1"
   # 先用同一判据算出"本机此刻应有的结论"，再和脚本退出码比（避免把实况写死）
-  $listening = @(); $nonRust = @(); $notListening = @()
+  $listening = @(); $nonRust = @(); $notListening = @(); $crossed = @()
   foreach ($p in $LivePorts) {
     $conn = Get-NetTCPConnection -State Listen -LocalPort $p -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $conn) { $notListening += $p; continue }
@@ -196,10 +216,12 @@ if (-not $SkipLivePorts) {
     $cim = Get-CimInstance Win32_Process -Filter ("ProcessId=$($conn.OwningProcess)") -ErrorAction SilentlyContinue
     $impl = Get-M2PortImpl -Exe $cim.ExecutablePath -CommandLine $cim.CommandLine -Name $cim.Name
     if ($impl -ne "rust") { $nonRust += $p }
+    $entry = Get-M2EntryName -Exe $cim.ExecutablePath -CommandLine $cim.CommandLine -Name $cim.Name
+    if ((Get-M2EntryVerdict -Port $p -EntryName $entry) -eq "cross") { $crossed += $p }
   }
-  $expectPorts = if ($notListening.Count -gt 0) { 2 } elseif ($nonRust.Count -gt 0) { 1 } else { 0 }
+  $expectPorts = if ($notListening.Count -gt 0) { 2 } elseif ($nonRust.Count -gt 0 -or $crossed.Count -gt 0) { 1 } else { 0 }
   $expectPat = if ($expectPorts -eq 2) { "PREREQ_MISSING" } elseif ($expectPorts -eq 1) { "RED: 端口" } else { "GREEN: 四个端口" }
-  $note = "listening={0} nonRust={1} notListening={2}" -f ($listening -join "/"), ($nonRust -join "/"), ($notListening -join "/")
+  $note = "listening={0} nonRust={1} crossed={2} notListening={3}" -f ($listening -join "/"), ($nonRust -join "/"), ($crossed -join "/"), ($notListening -join "/")
   Test-Case "ports/实况判属（Rust绿/C#红/缺前置）" $expectPorts (Run-Ps $portsScript @("-OutFile", (Join-Path $Work "ports-live.json"), "-PortsCsv", ($LivePorts -join ","))) $expectPat $note
 }
 

@@ -15,9 +15,13 @@
     7200  GameGate   （Rust `bins/game-gate`）
 
   红/绿：
-    GREEN  = 四个端口都在听，且 OwningProcess 都判为 Rust；
+    GREEN  = 四个端口都在听，且 OwningProcess 都判为 Rust，**且各自都是该端口期望的那个 Rust 入口**
+             （5000=game-svr / 7000=login-gate / 7100=sel-gate / 7200=game-gate，见 `portclassify.ps1`）；
     RED    = 端口在听但监听者判为 C#(`E:\MirServer\*`) 或未知 ⇒ 验收①不成立（退出码 1）；
+             或四个都是 Rust 但**入口接错线**（已知 Rust 入口挂在非期望端口）⇒ 退出码 1（`-AllowCrossEntry` 可放行）；
     PREREQ = 有端口不在听 ⇒ 前置未满足（退出码 2，不静默通过）。
+
+  两层牙齿：①“是不是 Rust”；②“是不是这个端口该的那个 Rust 入口”（防跨端口接错线）。
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/check_ports.ps1
@@ -28,7 +32,8 @@ param(
   [int[]]$Ports = @(5000, 7000, 7100, 7200),
   [string]$PortsCsv = "",
   [string]$OutFile = "",
-  [switch]$AllowUnknownImpl   # 只要求"端口在听"，实现归属交给人判（默认不放松）
+  [switch]$AllowUnknownImpl,  # 只要求"端口在听"，实现归属交给人判（默认不放松）
+  [switch]$AllowCrossEntry    # 允许已识别的 Rust 入口挂在非期望端口上（默认不放松）
 )
 
 $ErrorActionPreference = "Stop"
@@ -50,7 +55,7 @@ function Get-PortOwner([int]$Port) {
   $conn = Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue |
     Select-Object -First 1
   if (-not $conn) {
-    return [pscustomobject]@{ port = $Port; listening = $false; pid = $null; name = ""; path = ""; command_line = ""; impl = "none" }
+    return [pscustomobject]@{ port = $Port; listening = $false; pid = $null; name = ""; path = ""; command_line = ""; impl = "none"; entry = ""; expected_entry = (Get-M2ExpectedEntry -Port $Port); entry_verdict = "unknown" }
   }
   $cim = Get-CimInstance Win32_Process -Filter ("ProcessId=$($conn.OwningProcess)") -ErrorAction SilentlyContinue
   $name = if ($cim) { $cim.Name } else { "" }
@@ -58,9 +63,13 @@ function Get-PortOwner([int]$Port) {
   $cmd = if ($cim) { $cim.CommandLine } else { "" }
 
   $impl = Get-M2PortImpl -Exe $exe -CommandLine $cmd -Name $name
+  # 验收①第二层：不只看"是不是 Rust"，还看"是不是这个端口该的那个 Rust 入口"。
+  $entry = Get-M2EntryName -Exe $exe -CommandLine $cmd -Name $name
+  $entryVerdict = Get-M2EntryVerdict -Port $Port -EntryName $entry
   return [pscustomobject]@{
     port = $Port; listening = $true; pid = $conn.OwningProcess
     name = $name; path = $exe; command_line = $cmd; impl = $impl
+    entry = $entry; expected_entry = (Get-M2ExpectedEntry -Port $Port); entry_verdict = $entryVerdict
   }
 }
 
@@ -70,16 +79,18 @@ foreach ($p in $Ports) {
   $h = Get-PortOwner $p
   $holders += $h
   if (-not $h.listening) {
-    Write-Output ("PORT {0,-5} (无监听)  impl=none" -f $h.port)
+    Write-Output ("PORT {0,-5} (无监听)  impl=none  expected={1}" -f $h.port, $h.expected_entry)
   }
   else {
     Write-Output ("PORT {0,-5} <- pid={1} [{2}] {3}" -f $h.port, $h.pid, $h.impl, $h.path)
     Write-Output ("            cmd: {0}" -f $h.command_line)
+    Write-Output ("            entry={0} expected={1} verdict={2}" -f $h.entry, $h.expected_entry, $h.entry_verdict)
   }
 }
 
 $notListening = @($holders | Where-Object { -not $_.listening })
 $notRust = @($holders | Where-Object { $_.listening -and $_.impl -ne "rust" })
+$crossed = @($holders | Where-Object { $_.listening -and $_.entry_verdict -eq "cross" })
 
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $OutFile) | Out-Null
 $evidence = [ordered]@{
@@ -89,6 +100,7 @@ $evidence = [ordered]@{
   ports = $holders
   not_listening = @($notListening | ForEach-Object { $_.port })
   not_rust = @($notRust | ForEach-Object { $_.port })
+  cross_entry = @($crossed | ForEach-Object { $_.port })
   pass = $false
 }
 try {
@@ -106,6 +118,13 @@ if ($notRust.Count -gt 0 -and -not $AllowUnknownImpl) {
     Write-Output ("RED: 端口 {0} 的监听者不是 Rust（impl={1}）: {2}" -f $h.port, $h.impl, $h.command_line)
   }
   Write-Output "RED: 验收①不成立——有端口被非 Rust 实现占着（很可能是 E:\MirServer 的 C# 栈）"
+  exit 1
+}
+if ($crossed.Count -gt 0 -and -not $AllowCrossEntry) {
+  foreach ($h in $crossed) {
+    Write-Output ("RED: 端口 {0} 期望入口 {1}，实际是 {2}（已知 Rust 入口，但接错线）" -f $h.port, $h.expected_entry, $h.entry)
+  }
+  Write-Output "RED: 验收①不成立——四端口虽均为 Rust，但有 Rust 入口挂在了非期望端口上（可能起错入口/端口表漂移）"
   exit 1
 }
 
