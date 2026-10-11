@@ -1,7 +1,7 @@
 {
   "generated_by": "mir2-rs/tests/parity/m3/skill-probe",
   "total_magic_rows": 108,
-  "implemented": 11,
+  "implemented": 24,
   "skills": [
     {
       "magic_id": 1,
@@ -81,8 +81,8 @@
       "job": 1,
       "train_level0": 16,
       "delay_time": 60,
-      "implemented": false,
-      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+      "implemented": true,
+      "reason": "\u672C\u7247\u5DF2\u5B9E\u88C5\uFF1A\u65BD\u6CD5\u524D\u7F6E \u002B MP \u6D88\u8017 \u002B \u5A01\u529B\u516C\u5F0F \u002B \u51B7\u5374\uFF08\u89C1 crates/world/src/magic.rs\uFF09"
     },
     {
       "magic_id": 10,
@@ -90,8 +90,8 @@
       "job": 1,
       "train_level0": 26,
       "delay_time": 100,
-      "implemented": false,
-      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+      "implemented": true,
+      "reason": "\u672C\u7247\u5DF2\u5B9E\u88C5\uFF1A\u65BD\u6CD5\u524D\u7F6E \u002B MP \u6D88\u8017 \u002B \u5A01\u529B\u516C\u5F0F \u002B \u51B7\u5374\uFF08\u89C1 crates/world/src/magic.rs\uFF09"
     },
     {
       "magic_id": 11,
@@ -198,8 +198,8 @@
       "job": 1,
       "train_level0": 24,
       "delay_time": 120,
-      "implemented": false,
-      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+      "implemented": true,
+      "reason": "\u672C\u7247\u5DF2\u5B9E\u88C5\uFF1A\u65BD\u6CD5\u524D\u7F6E \u002B MP \u6D88\u8017 \u002B \u5A01\u529B\u516C\u5F0F \u002B \u51B7\u5374\uFF08\u89C1 crates/world/src/magic.rs\uFF09"
     },
     {
       "magic_id": 23,
@@ -207,8 +207,8 @@
       "job": 1,
       "train_level0": 22,
       "delay_time": 60,
-      "implemented": false,
-      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+      "implemented": true,
+      "reason": "\u672C\u7247\u5DF2\u5B9E\u88C5\uFF1A\u65BD\u6CD5\u524D\u7F6E \u002B MP \u6D88\u8017 \u002B \u5A01\u529B\u516C\u5F0F \u002B \u51B7\u5374\uFF08\u89C1 crates/world/src/magic.rs\uFF09"
     },
     {
       "magic_id": 24,
@@ -216,8 +216,8 @@
       "job": 1,
       "train_level0": 30,
       "delay_time": 60,
-      "implemented": false,
-      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+      "implemented": true,
+      "reason": "\u672C\u7247\u5DF2\u5B9E\u88C5\uFF1A\u65BD\u6CD5\u524D\u7F6E \u002B MP \u6D88\u8017 \u002B \u5A01\u529B\u516C\u5F0F \u002B \u51B7\u5374\uFF08\u89C1 crates/world/src/magic.rs\uFF09"
     },
     {
       "magic_id": 25,
@@ -252,8 +252,8 @@
       "job": 2,
       "train_level0": 26,
       "delay_time": 40,
-      "implemented": false,
-      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+      "implemented": true,
+      "reason": "\u672C\u7247\u5DF2\u5B9E\u88C5\uFF1A\u65BD\u6CD5\u524D\u7F6E \u002B MP \u6D88\u8017 \u002B \u5A01\u529B\u516C\u5F0F \u002B \u51B7\u5374\uFF08\u89C1 crates/world/src/magic.rs\uFF09"
     },
     {
       "magic_id": 29,
@@ -261,8 +261,8 @@
       "job": 2,
       "train_level0": 33,
       "delay_time": 40,
-      "implemented": false,
-      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+      "implemented": true,
+      "reason": "\u672C\u7247\u5DF2\u5B9E\u88C5\uFF1A\u65BD\u6CD5\u524D\u7F6E \u002B MP \u6D88\u8017 \u002B \u5A01\u529B\u516C\u5F0F \u002B \u51B7\u5374\uFF08\u89C1 crates/world/src/magic.rs\uFF09"
     },
     {
       "magic_id": 30,
@@ -279,8 +279,8 @@
       "job": 1,
       "train_level0": 31,
       "delay_time": 0,
-      "implemented": false,
-      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+      "implemented": true,
+      "reason": "\u672C\u7247\u5DF2\u5B9E\u88C5\uFF1A\u65BD\u6CD5\u524D\u7F6E \u002B MP \u6D88\u8017 \u002B \u5A01\u529B\u516C\u5F0F \u002B \u51B7\u5374\uFF08\u89C1 crates/world/src/magic.rs\uFF09"
     },
     {
       "magic_id": 32,
@@ -297,8 +297,8 @@
       "job": 1,
       "train_level0": 35,
       "delay_time": 60,
-      "implemented": false,
-      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+      "implemented": true,
+      "reason": "\u672C\u7247\u5DF2\u5B9E\u88C5\uFF1A\u65BD\u6CD5\u524D\u7F6E \u002B MP \u6D88\u8017 \u002B \u5A01\u529B\u516C\u5F0F \u002B \u51B7\u5374\uFF08\u89C1 crates/world/src/magic.rs\uFF09"
     },
     {
       "magic_id": 34,
@@ -315,8 +315,8 @@
       "job": 1,
       "train_level0": 48,
       "delay_time": 60,
-      "implemented": false,
-      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+      "implemented": true,
+      "reason": "\u672C\u7247\u5DF2\u5B9E\u88C5\uFF1A\u65BD\u6CD5\u524D\u7F6E \u002B MP \u6D88\u8017 \u002B \u5A01\u529B\u516C\u5F0F \u002B \u51B7\u5374\uFF08\u89C1 crates/world/src/magic.rs\uFF09"
     },
     {
       "magic_id": 37,
@@ -396,8 +396,8 @@
       "job": 1,
       "train_level0": 38,
       "delay_time": 60,
-      "implemented": false,
-      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+      "implemented": true,
+      "reason": "\u672C\u7247\u5DF2\u5B9E\u88C5\uFF1A\u65BD\u6CD5\u524D\u7F6E \u002B MP \u6D88\u8017 \u002B \u5A01\u529B\u516C\u5F0F \u002B \u51B7\u5374\uFF08\u89C1 crates/world/src/magic.rs\uFF09"
     },
     {
       "magic_id": 46,
@@ -414,8 +414,8 @@
       "job": 1,
       "train_level0": 46,
       "delay_time": 120,
-      "implemented": false,
-      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+      "implemented": true,
+      "reason": "\u672C\u7247\u5DF2\u5B9E\u88C5\uFF1A\u65BD\u6CD5\u524D\u7F6E \u002B MP \u6D88\u8017 \u002B \u5A01\u529B\u516C\u5F0F \u002B \u51B7\u5374\uFF08\u89C1 crates/world/src/magic.rs\uFF09"
     },
     {
       "magic_id": 48,
@@ -441,8 +441,8 @@
       "job": 2,
       "train_level0": 38,
       "delay_time": 30,
-      "implemented": false,
-      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+      "implemented": true,
+      "reason": "\u672C\u7247\u5DF2\u5B9E\u88C5\uFF1A\u65BD\u6CD5\u524D\u7F6E \u002B MP \u6D88\u8017 \u002B \u5A01\u529B\u516C\u5F0F \u002B \u51B7\u5374\uFF08\u89C1 crates/world/src/magic.rs\uFF09"
     },
     {
       "magic_id": 51,

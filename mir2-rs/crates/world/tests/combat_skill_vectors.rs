@@ -23,9 +23,10 @@ use std::path::PathBuf;
 use mir2_data::models::MagicInfo;
 use mir2_shared::rng::RandomNumber;
 use mir2_world::magic::{
-    can_read_book, get_spell_point, magic_attack_interval, power_defence_area,
+    can_read_book, get_spell_point, magic_attack_interval, power_defence_area, power_fire_wall,
     power_get_power_plus_mc, power_get_power_plus_sc, power_heal_get_power_plus_sc2,
-    power_holy_shield, power_lightening, power_poison, power_transparent,
+    power_holy_shield, power_lightening, power_poison, power_shield, power_show_hp_interval,
+    power_transparent, power_uenhancer,
 };
 use mir2_world::{
     attack_with, AttackPowerMode, CombatConfig, Entity, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY,
@@ -258,6 +259,8 @@ struct SkillCase {
     eff_vs_undead: i32,
     eff_green: i32,
     eff_red: i32,
+    eff_time: i32,
+    eff_interval: i32,
 }
 
 struct RegRow {
@@ -266,10 +269,17 @@ struct RegRow {
     reason: String,
 }
 
-fn load_skills() -> (i32, i32, Vec<SkillCase>, Vec<RegRow>) {
+fn load_skills() -> (i32, i32, AttackPowerMode, Vec<SkillCase>, Vec<RegRow>) {
     let lines = read_lines("skill-probe/vectors/skill_vectors.tsv");
     let mut seed = 0i32;
     let mut hit_interval = 0i32;
+    // `DoSpell` 的施法者是 PlayObject ⇒ 效果威力走 Player override；向量在 seed 行附这四项。
+    let mut atk = AttackPowerMode::Player {
+        luck: 0,
+        power_rate: 100,
+        bo_power_item: false,
+        power_item: 0,
+    };
     let mut cases = Vec::new();
     let mut registry = Vec::new();
     for (n, fields) in lines.iter().enumerate() {
@@ -277,6 +287,12 @@ fn load_skills() -> (i32, i32, Vec<SkillCase>, Vec<RegRow>) {
             "seed" => {
                 seed = i(fields, 1) as i32;
                 hit_interval = i(fields, 2) as i32;
+                atk = AttackPowerMode::Player {
+                    luck: i(fields, 3) as i32,
+                    power_rate: i(fields, 4) as i32,
+                    bo_power_item: i(fields, 5) != 0,
+                    power_item: i(fields, 6) as u8,
+                };
             }
             "reg" => registry.push(RegRow {
                 magic_id: i(fields, 1) as u16,
@@ -328,16 +344,23 @@ fn load_skills() -> (i32, i32, Vec<SkillCase>, Vec<RegRow>) {
                     eff_vs_undead: i(fields, 35) as i32,
                     eff_green: i(fields, 36) as i32,
                     eff_red: i(fields, 37) as i32,
+                    eff_time: i(fields, 38) as i32,
+                    eff_interval: i(fields, 39) as i32,
                 });
             }
             other => panic!("第 {n} 行未知前缀 {other}"),
         }
     }
-    (seed, hit_interval, cases, registry)
+    (seed, hit_interval, atk, cases, registry)
 }
 
 /// 技能向量核对：返回**逐字段差异清单**（空 = 全等）。红检共用。
-fn skill_mismatches(case: &SkillCase, seed: i32, hit_interval: i32) -> Vec<String> {
+fn skill_mismatches(
+    case: &SkillCase,
+    seed: i32,
+    hit_interval: i32,
+    atk: AttackPowerMode,
+) -> Vec<String> {
     let mut problems = Vec::new();
     let magic = &case.magic;
     let magic_id = i64::from(magic.magic_id);
@@ -379,11 +402,13 @@ fn skill_mismatches(case: &SkillCase, seed: i32, hit_interval: i32) -> Vec<Strin
     match case.kind.as_str() {
         "damage" | "heal" => {
             let got = match magic_id {
-                1 | 5 => power_get_power_plus_mc(&mut rng, magic, level, case.mc),
-                13 => power_get_power_plus_sc(&mut rng, magic, level, case.sc),
-                2 => power_heal_get_power_plus_sc2(&mut rng, magic, level, case.sc),
-                11 => {
-                    let (p, undead) = power_lightening(&mut rng, magic, level, case.mc);
+                1 | 5 | 9 | 10 | 23 | 24 | 33 | 47 | 50 => {
+                    power_get_power_plus_mc(&mut rng, magic, level, case.mc, atk)
+                }
+                13 => power_get_power_plus_sc(&mut rng, magic, level, case.sc, atk),
+                2 | 29 => power_heal_get_power_plus_sc2(&mut rng, magic, level, case.sc, atk),
+                11 | 45 => {
+                    let (p, undead) = power_lightening(&mut rng, magic, level, case.mc, atk);
                     if i64::from(undead) != i64::from(case.eff_vs_undead) {
                         problems.push(format!(
                             "vs_undead rust={undead} csharp={}",
@@ -413,7 +438,7 @@ fn skill_mismatches(case: &SkillCase, seed: i32, hit_interval: i32) -> Vec<Strin
             }
         }
         "buff_ac" => {
-            let got = power_defence_area(&mut rng, magic, level, case.sc);
+            let got = power_defence_area(&mut rng, magic, level, case.sc, atk);
             if i64::from(got) != i64::from(case.eff_power) {
                 problems.push(format!("effect.power rust={got} csharp={}", case.eff_power));
             }
@@ -428,6 +453,54 @@ fn skill_mismatches(case: &SkillCase, seed: i32, hit_interval: i32) -> Vec<Strin
             let got = power_transparent(&mut rng, magic, level, case.sc);
             if i64::from(got) != i64::from(case.eff_power) {
                 problems.push(format!("effect.power rust={got} csharp={}", case.eff_power));
+            }
+        }
+        "fire_wall" => {
+            let (power, time) = power_fire_wall(&mut rng, magic, level, case.mc, atk);
+            if i64::from(power) != i64::from(case.eff_power) {
+                problems.push(format!(
+                    "fire_wall.power rust={power} csharp={}",
+                    case.eff_power
+                ));
+            }
+            if i64::from(time) != i64::from(case.eff_time) {
+                problems.push(format!(
+                    "fire_wall.time rust={time} csharp={}",
+                    case.eff_time
+                ));
+            }
+        }
+        "show_hp" => {
+            let interval = power_show_hp_interval(&mut rng, magic, level, case.sc);
+            if i64::from(interval) != i64::from(case.eff_interval) {
+                problems.push(format!(
+                    "show_hp.interval rust={interval} csharp={}",
+                    case.eff_interval
+                ));
+            }
+        }
+        "shield" => {
+            let power = power_shield(&mut rng, magic, level, case.mc);
+            if i64::from(power) != i64::from(case.eff_power) {
+                problems.push(format!(
+                    "shield.power rust={power} csharp={}",
+                    case.eff_power
+                ));
+            }
+        }
+        "uenhancer" => {
+            let (power, time) = power_uenhancer(&mut rng, magic, level, case.sc, atk);
+            if i64::from(power) != i64::from(case.eff_power) {
+                problems.push(format!(
+                    "uenhancer.power rust={power} csharp={}",
+                    case.eff_power
+                ));
+            }
+            if i64::from(time) != i64::from(case.eff_time) {
+                problems.push(format!(
+                    "uenhancer.time rust={time} csharp={}",
+                    case.eff_time
+                ));
             }
         }
         other => panic!("未登记的效果类别 {other}"),
@@ -487,14 +560,21 @@ fn combat_hit_dodge_stats_match_and_are_non_trivial() {
 /// 判据③：每个已实装技能一条用例，逐项核前置/MP/效果/冷却。
 #[test]
 fn skills_match_csharp_per_skill() {
-    let (seed, hit_interval, cases, _) = load_skills();
+    let (seed, hit_interval, atk, cases, _) = load_skills();
     assert!(
-        cases.len() >= 10,
-        "已实装技能用例数 {} 少于 10（少登记了技能？）",
+        cases.len() >= 20,
+        "已实装技能用例数 {} 少于 20（少登记了技能？）",
         cases.len()
     );
+    // 第二批已实装技能的存在性硬约束：这些魔号必须有用例（防登记漏）
+    for id in [9u16, 10, 22, 23, 24, 28, 29, 31, 33, 36, 45, 47, 50] {
+        assert!(
+            cases.iter().any(|c| c.magic.magic_id == id),
+            "第二批技能 {id} 缺少用例"
+        );
+    }
     for case in &cases {
-        let problems = skill_mismatches(case, seed, hit_interval);
+        let problems = skill_mismatches(case, seed, hit_interval, atk);
         assert!(
             problems.is_empty(),
             "技能用例与 C# oracle 不一致（{}），差异 {} 项：\n{}",
@@ -509,7 +589,7 @@ fn skills_match_csharp_per_skill() {
 /// 真魔表每一行都登记，且 implemented=false 的行必须有承接说明。
 #[test]
 fn unimplemented_skills_are_registered() {
-    let (_, _, cases, registry) = load_skills();
+    let (_, _, _, cases, registry) = load_skills();
     assert!(
         registry.len() >= 100,
         "魔表登记行数 {} 过少（解析漏行？）",
@@ -613,17 +693,17 @@ fn redcheck_corrupt_one_damage_value_must_fail() {
 /// 红检②：改坏某技能的 **MP 消耗**一个值 ⇒ 该技能用例必 RED。
 #[test]
 fn redcheck_corrupt_one_mp_cost_must_fail() {
-    let (seed, hit_interval, cases, _) = load_skills();
+    let (seed, hit_interval, atk, cases, _) = load_skills();
     let case = &cases[0];
     assert!(
-        skill_mismatches(case, seed, hit_interval).is_empty(),
+        skill_mismatches(case, seed, hit_interval, atk).is_empty(),
         "前提：未改坏前必须全等"
     );
     let mut corrupt = case.clone();
     let old = corrupt.mp_cost[1];
     corrupt.mp_cost[1] = old + 1;
     assert!(
-        !skill_mismatches(&corrupt, seed, hit_interval).is_empty(),
+        !skill_mismatches(&corrupt, seed, hit_interval, atk).is_empty(),
         "红检失效：把技能 {} 的 MP 消耗 {old} 改成 {} 后仍判等",
         corrupt.magic.magic_id,
         old + 1
@@ -633,14 +713,58 @@ fn redcheck_corrupt_one_mp_cost_must_fail() {
 /// 红检③（技能·冷却）：改坏 `MagicAttackInterval` 一个值 ⇒ 该技能用例必 RED。
 #[test]
 fn redcheck_corrupt_one_cooldown_must_fail() {
-    let (seed, hit_interval, cases, _) = load_skills();
+    let (seed, hit_interval, atk, cases, _) = load_skills();
     let case = &cases[0];
     let mut corrupt = case.clone();
     let old = corrupt.interval;
     corrupt.interval = old + 1;
     assert!(
-        !skill_mismatches(&corrupt, seed, hit_interval).is_empty(),
+        !skill_mismatches(&corrupt, seed, hit_interval, atk).is_empty(),
         "红检失效：把 MagicAttackInterval {old} 改成 {} 后仍判等",
+        old + 1
+    );
+}
+
+/// 红检④（技能·效果威力）：改坏魔法盾的 `power` 一个值 ⇒ 该技能用例必 RED。
+#[test]
+fn redcheck_corrupt_one_shield_power_must_fail() {
+    let (seed, hit_interval, atk, cases, _) = load_skills();
+    let case = cases
+        .iter()
+        .find(|c| c.kind == "shield")
+        .expect("向量里应有魔法盾（shield）用例");
+    assert!(
+        skill_mismatches(case, seed, hit_interval, atk).is_empty(),
+        "前提：未改坏前魔法盾必须全等"
+    );
+    let mut corrupt = case.clone();
+    let old = corrupt.eff_power;
+    corrupt.eff_power = old + 1;
+    assert!(
+        !skill_mismatches(&corrupt, seed, hit_interval, atk).is_empty(),
+        "红检失效：把魔法盾威力 {old} 改成 {} 后仍判等",
+        old + 1
+    );
+}
+
+/// 红检⑤（技能·效果时长）：改坏火墙的 `time` 一个值 ⇒ 该技能用例必 RED。
+#[test]
+fn redcheck_corrupt_one_fire_wall_time_must_fail() {
+    let (seed, hit_interval, atk, cases, _) = load_skills();
+    let case = cases
+        .iter()
+        .find(|c| c.kind == "fire_wall")
+        .expect("向量里应有火墙（fire_wall）用例");
+    assert!(
+        skill_mismatches(case, seed, hit_interval, atk).is_empty(),
+        "前提：未改坏前火墙必须全等"
+    );
+    let mut corrupt = case.clone();
+    let old = corrupt.eff_time;
+    corrupt.eff_time = old + 1;
+    assert!(
+        !skill_mismatches(&corrupt, seed, hit_interval, atk).is_empty(),
+        "红检失效：把火墙时长 {old} 改成 {} 后仍判等",
         old + 1
     );
 }
