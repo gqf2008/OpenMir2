@@ -25,7 +25,7 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::{bail, Context, Result};
 use sqlx::mysql::{MySqlPool, MySqlPoolOptions, MySqlRow};
-use sqlx::{MySql, Row, Transaction};
+use sqlx::{Column, MySql, Row, Transaction};
 
 use crate::gbk::fold_key;
 use mir2_storage::LegacyDsn;
@@ -75,7 +75,8 @@ pub struct QryChar {
 
 /// 角色存储（两张表共用一个池 + 三份内存索引）。
 pub struct Db {
-    pool: MySqlPool,
+    /// 连接池（`playdata` 模块的 6000 面直接复用）。
+    pub(crate) pool: MySqlPool,
     /// `characters_indexes`：名字（折叠）→ Id，只含未删除行。
     quick: HashMap<Vec<u8>, i64>,
     /// `characters_indexes`：账号（折叠）→ 角色列表（按读库顺序）。
@@ -85,14 +86,31 @@ pub struct Db {
     /// `characters_indexes`：已删除的 Id（C# `_deletedList`，仅记录，建角不复用）。
     deleted_ids: Vec<i64>,
     /// `characters`：角色 Id 集合（C# `_IndexQuickIdMap`，键值同为 Id）。
-    char_ids: HashSet<i64>,
+    pub(crate) char_ids: HashSet<i64>,
     /// `characters`：名字（折叠）→ `characters.Id`。
-    name_quick: HashMap<Vec<u8>, i64>,
+    pub(crate) name_quick: HashMap<Vec<u8>, i64>,
+    /// `characters`：名字（Unicode 小写折叠）→ `characters.Id`。
+    ///
+    /// 6000 `DataService` 收的是 MemoryPack 字符串（UTF-16），C# `PlayDataStorage._NameQuickMap`
+    /// 就是 `StringComparer.OrdinalIgnoreCase` 的字符串键；这里镜像一份 Unicode 键表供 6000 面使用，
+    /// 5100 面的 GBK 字节键表（[`Db::data_index`]）保持不变。
+    pub(crate) name_text: HashMap<String, i64>,
+}
+
+/// 列名**大小写不敏感**地解析（C# MySqlConnector 的 `dr.GetXxx("HP")` 对 `Hp` 列也能取到）。
+/// sqlx 按名字取列是大小写敏感的，这里统一先解析真实列名。
+pub(crate) fn resolve_col<'a>(row: &'a MySqlRow, name: &str) -> Result<&'a str> {
+    row.columns()
+        .iter()
+        .find(|c| c.name().eq_ignore_ascii_case(name))
+        .map(Column::name)
+        .ok_or_else(|| anyhow::anyhow!("列 {name} 不存在（表结构与 C# 预期不符）"))
 }
 
 /// 整数列取值：**按 sqlx 的类型阶梯逐个尝试**（`tinyint→i8`、`smallint→i16`、
 /// `int→i32`、`bigint→i64` 各自映射不同 Rust 类型），全失败即报错 —— 不静默取默认值。
-fn int_col(row: &MySqlRow, name: &str) -> Result<i64> {
+pub(crate) fn int_col(row: &MySqlRow, name: &str) -> Result<i64> {
+    let name = resolve_col(row, name)?;
     macro_rules! try_ty {
         ($($t:ty),*) => {$(
             if let Ok(v) = row.try_get::<$t, _>(name) {
@@ -104,12 +122,14 @@ fn int_col(row: &MySqlRow, name: &str) -> Result<i64> {
     bail!("列 {name} 不是可识别的整数类型（表结构与 C# 预期不符）")
 }
 
-fn text_col(row: &MySqlRow, name: &str) -> Result<String> {
+pub(crate) fn text_col(row: &MySqlRow, name: &str) -> Result<String> {
+    let name = resolve_col(row, name)?;
     row.try_get::<String, _>(name)
         .with_context(|| format!("列 {name} 不是文本类型（表结构与 C# 预期不符）"))
 }
 
 fn gbk_col(row: &MySqlRow, name: &str) -> Result<Vec<u8>> {
+    let name = resolve_col(row, name)?;
     row.try_get::<Vec<u8>, _>(name)
         .with_context(|| format!("列 {name} 取不到字节（表结构与 C# 预期不符）"))
 }
@@ -141,6 +161,7 @@ impl Db {
             deleted_ids: Vec::new(),
             char_ids: HashSet::new(),
             name_quick: HashMap::new(),
+            name_text: HashMap::new(),
         })
     }
 
@@ -197,6 +218,7 @@ impl Db {
     async fn load_chars(&mut self) -> Result<()> {
         self.char_ids.clear();
         self.name_quick.clear();
+        self.name_text.clear();
         let rows = sqlx::query(
             "SELECT Id, LoginID, ChrName, CAST(CONVERT(ChrName USING gbk) AS BINARY) AS name_gbk \
              FROM characters WHERE Deleted=0",
@@ -217,6 +239,7 @@ impl Db {
                 );
             }
             self.char_ids.insert(id);
+            self.name_text.insert(name_text.to_lowercase(), id);
         }
         Ok(())
     }
@@ -500,6 +523,8 @@ impl Db {
         }
         tx.commit().await.context("提交建角事务失败")?;
         self.name_quick.insert(fold_key(name_gbk), player_id);
+        self.name_text
+            .insert(String::from_utf8_lossy(name_gbk).to_lowercase(), player_id);
         self.char_ids.insert(player_id);
         Ok(Some(player_id))
     }
