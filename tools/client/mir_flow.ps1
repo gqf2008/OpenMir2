@@ -30,6 +30,7 @@ param(
   [int]$LoginSubmitClicks = 1,     # 提交按钮补点次数（偶发被吞；建角探测时可给 3）
   [int]$CharSlot = 1,              # 选角界面选第几个角色（1=左，2=右）
   [switch]$SkipReenter,
+  [switch]$SkipLogout,          # 三路径 ④：跳过所有小退/顶号动作（disconnect/shutdown 需客户端留在世界里）
   [switch]$LeaveClientRunning,
   # ---- 建角阶段（用无角色的新账号走 创建角色 流程；坐标可用参数覆盖）----
   [switch]$CreateChar,
@@ -415,6 +416,11 @@ if ($WalkPath) {
 
 # ---- 小退：Alt+X -> 确定 ----
 # ---- 会话拆除（顶号）：本账号在 BotSrv 侧再登录一次 ----
+if ($SkipLogout) {
+  # 三路径 ④ 采集：disconnect/shutdown 需要客户端**留在世界里**（不触发 CM_SOFTCLOSE 1009）。
+  Stage "skip_logout"
+  Shot "07b_skip_logout_inworld.png"
+} else {
 if ($KickVia -ne "") {
   Stage "kick_relogin"
   if ($BotRunner -eq "") { $BotRunner = Join-Path (Split-Path $PSCommandPath -Parent) "..\botload\run_bots.ps1" }
@@ -499,6 +505,7 @@ Send-Click 554 435
 Start-Sleep -Seconds 8
 Stage "back_charsel"
 Shot "08_back_charsel.png"
+}
 
 if (-not $SkipReenter) {
   Stage "reenter"

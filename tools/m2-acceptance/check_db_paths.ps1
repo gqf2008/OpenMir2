@@ -51,7 +51,12 @@ param(
   [string]$MysqlHost = "127.0.0.1",
   [int]$MysqlPort = 3306,
   [string]$MysqlUser = "root",
-  [string]$MysqlPassword = ""
+  [string]$MysqlPassword = "",
+  # 跨侧真机运行必须开：`--canonical` 把 M3 已登记白名单的**易变列**（自增 Id / 墙钟时间戳等，
+  # 见 scoped_diff.VOLATILE_COLUMNS 的逐列理由）置占位后再比；否则两次侧运行的 LoginTime/ModifyDate
+  # 必然不同 ⇒ 真机 ④ **恒 RED**（假红）。M3 本体（run_m3_gate.ps1:179 / run_bag_equip_pair.ps1:121）
+  # 一直用 `--canonical`。默认关仅为了兼容 selftest 的合成短行夹具。
+  [switch]$Canonical
 )
 
 $ErrorActionPreference = "Stop"
@@ -90,7 +95,10 @@ if ($Mode -eq "snap") {
   New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
   Write-Output ("--- dbsnap snap [{0}/{1}] -> {2} ---" -f $Path, $Phase, $SnapDir)
   # 注意：dbsnap.py 的 --host/--port/--user/--password 是**顶层**选项，必须在子命令 snap 之前。
-  python $Dbsnap --host $MysqlHost --port $MysqlPort --user $MysqlUser --password $MysqlPassword snap --out $SnapDir
+  # ⚠ PowerShell 5.1 会把**空字符串实参**从原生命令行里丢掉 ⇒ `--password ""` 会退化成
+  #   `--password snap …`（snap 被当成密码、快照目录被当成子命令）⇒ 直接 RED。
+  #   故这里必须写成 `--password=<值>`（`=` 形式，空值也成立）。本机 MySQL 无口令时尤其要注意。
+  python $Dbsnap --host $MysqlHost --port $MysqlPort --user $MysqlUser "--password=$MysqlPassword" snap --out $SnapDir
   if ($LASTEXITCODE -ne 0) { Write-Output "RED: dbsnap snap 失败"; exit 1 }
   $outJsonl = Join-Path $OutDir ("{0}-{1}.jsonl" -f $Path, $Phase)
   Write-Output ("--- scoped_diff extract prefix={0} -> {1} ---" -f $Prefix, $outJsonl)
@@ -121,8 +129,10 @@ foreach ($p in $Paths) {
     $results += [pscustomobject]@{ path = $p; state = "PREREQ_MISSING"; rc = 2 }
     continue
   }
-  Write-Output ("--- scoped_diff diff [{0}] C# vs Rust ---" -f $p)
-  python $Scoped diff $a $b --summary-out (Join-Path (Split-Path -Parent $OutFile) ("{0}-diff.json" -f $p))
+  Write-Output ("--- scoped_diff diff [{0}] C# vs Rust{1} ---" -f $p, $(if ($Canonical) { " (--canonical)" } else { "" }))
+  $diffArgs = @($Scoped, "diff", $a, $b, "--summary-out", (Join-Path (Split-Path -Parent $OutFile) ("{0}-diff.json" -f $p)))
+  if ($Canonical) { $diffArgs += "--canonical" }
+  & python @diffArgs
   $rc = $LASTEXITCODE
   if ($rc -eq 0) {
     $results += [pscustomobject]@{ path = $p; state = "GREEN"; rc = 0 }

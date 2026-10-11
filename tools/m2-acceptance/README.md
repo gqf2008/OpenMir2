@@ -157,6 +157,27 @@ powershell -ExecutionPolicy Bypass -File tools/client/mir_flow.ps1 `
 
 > 目录占位见 `tools/m2-acceptance/shots/`（大图归档到 `E:\tmp`，不入库）。
 
+### 2.2 `m2-06-pickup` 在 oracle 上**不可达**（2026-10-12，判据待 owner 签字）
+
+第 6 张「捡物」要求「点击地面物品、物品消失或背包出现该物品」。但**真实 oracle 栈里地面从来没有物品**，
+所以这张图在 **C# 与 Rust 两侧都物理采不到**（不是 Rust 缺件）：
+
+- `MapItem.ItemId` 在全仓**无任何未注释赋值点**（`MapItem.cs:41` 那唯一一行是注释）⇒ 恒 0；
+- `Envirnoment.AddItemToMap` 首行 `if (mapItem.ItemId == 0) return false;` ⇒ 掉落/脚本造物**恒进不了地图**
+  （与 `m3bag` 的 **T-19** 同源）；
+- ⇒ `ClientPickUpItem` 的 `Envir.GetItem(CurrX,CurrY,ref mapItem)` 永远取不到 ⇒ `CM_PICKUP` 无物可拾。
+
+机器可判门禁与证据：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/check_pickup_unreachable.ps1
+# 0=证明成立 / 1=证明被推翻（发现新的 ItemId 赋值点） / 2=PREREQ（缺 src/**）
+```
+
+证据（含改坏必红）：`tools/m2-acceptance/evidence/m2svr-pickup-unreachable-20261012/**`。
+**处置建议**：② 采 **6/7** + 本证明，拾取决策用 `m3bag` 的 `ground-probe` 夹具（`ItemId` 由夹具显式给值）。
+若维持 7 张判据，需 owner 签字后给 `check_screenshots.ps1` 增 "oracle 不可达" 分类——**本片未擅自改判据**。
+
 ---
 
 ## 3. ③ 同序列出包 diff —— `export_s2c.ps1` + `s2c_diff.py`
@@ -253,9 +274,21 @@ Rust 侧用**同一个 `-Prefix`**、`-OutDir E:\tmp\m2acc\rust` 再采一遍。
 
 ```powershell
 powershell -File tools/m2-acceptance/check_db_paths.ps1 -Mode diff `
-  -CsharpDir E:\tmp\m2acc\csharp -RustDir E:\tmp\m2acc\rust
-# 内部对三条路径各跑：python mir2-rs/tests/parity/m3/scoped_diff.py diff <csharp>-after.jsonl <rust>-after.jsonl
+  -CsharpDir E:\tmp\m2acc\csharp -RustDir E:\tmp\m2acc\rust -Canonical
+# 内部对三条路径各跑：python …/scoped_diff.py diff <csharp>-after.jsonl <rust>-after.jsonl --canonical
 ```
+
+> ⚠ **`-Canonical` 必须带**（2026-10-12 真机验证）：两次「侧运行」的**墙钟/id 自增**列必然不同
+> （`account.LastLoginTime`、`characters.LASTUPDATE`、`characters_indexes.ModifyDate`），不 canonical ⇒ 真机 ④ **恒 RED**（假红）。
+> `--canonical` 是 M3 对拍本体一直用的口径（`run_m3_gate.ps1:179`、`run_bag_equip_pair.ps1:121`），只把
+> `scoped_diff.VOLATILE_COLUMNS`（逐列有理由）置占位；**行为列照比**（`selftest.ps1` 的 `db/canonical 行为列不同=RED` 有牙齿）。
+> `run_acceptance.ps1` 的 ③c 步骤已自动带上 `-Canonical`。
+>
+> ⚠ 另一条已修缺陷：本机 MySQL 无口令时 `--password ""` 会被 **PowerShell 5.1 丢掉空实参** ⇒ 退化成
+> `--password snap …` ⇒ `dbsnap.py` 报错、④ **假红**；现改为 `--password=<值>`。
+
+**真机结果（2026-10-12）**：三条路径 **全 GREEN（11 张表逐行一致）**；不带 `-Canonical` 的同批数据**全 RED**（差异全在墙钟列）。
+证据：`tools/m2-acceptance/evidence/m2svr-dbpaths-20261012/**`。
 
 **期望**：三条路径的 `scoped_diff.py diff` 全部 **exit 0（字段级 diff = 0）**；任何差异要么修到 0，
 要么按 §6.0-3 登记 `mir2-rs/tests/parity/whitelist.md`。

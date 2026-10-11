@@ -120,7 +120,7 @@ if (-not $SkipShots) {
 }
 
 if (-not $SkipDb) {
-  Invoke-Step "db-paths(③c)" (Join-Path $Here "check_db_paths.ps1") @("-Mode", "diff", "-CsharpDir", $CsharpDbDir, "-RustDir", $RustDbDir, "-OutFile", (Join-Path $EvidenceDir "db-paths.json"))
+  Invoke-Step "db-paths(③c)" (Join-Path $Here "check_db_paths.ps1") @("-Mode", "diff", "-CsharpDir", $CsharpDbDir, "-RustDir", $RustDbDir, "-OutFile", (Join-Path $EvidenceDir "db-paths.json"), "-Canonical")
 }
 
 $green = @($results | Where-Object { $_.state -eq "GREEN" }).Count

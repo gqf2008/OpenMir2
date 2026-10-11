@@ -117,6 +117,16 @@ function New-DbFixture([string]$Path, [bool]$Changed) {
   Write-Jsonl $Path $rows
 }
 
+# ⑦c-canonical 夹具：`mir2_db.characters_indexes`（7 列；易变列 = Id/CreateDate/ModifyDate，
+# 行为列 = Account/ChrName/SelectID/IsDeleted）。用完整列数写行，供 `scoped_diff --canonical` 消费。
+function New-IndexFixture([string]$Path, [string]$Id, [string]$SelectId) {
+  $line = ($Id, "m2acc1", "aaa", $SelectId, "0", "2026-01-01 00:00:00", "2026-01-01 00:00:00") -join "`t"
+  $sha = [System.BitConverter]::ToString(
+    [System.Security.Cryptography.SHA256]::Create().ComputeHash(
+      [System.Text.Encoding]::UTF8.GetBytes($line))).Replace("-", "").ToLower()
+  Write-Jsonl $Path @([pscustomobject]@{ table = "mir2_db.characters_indexes"; row_sha256 = $sha; line = $line })
+}
+
 $ShotsAll = @(
   "m2-01-enter-map.png", "m2-02-walk.png", "m2-03-talk.png", "m2-04-see-others.png",
   "m2-05-attack.png", "m2-06-pickup.png", "m2-07-relogin.png"
@@ -163,6 +173,23 @@ New-DbFixture (Join-Path $rust "shutdown-after.jsonl") $true
 Test-Case "db/改一字段=RED" 1 (Run-Ps $dbPaths @("-Mode", "diff", "-CsharpDir", $csharp, "-RustDir", $rust, "-OutFile", (Join-Path $Work "db-changed.json"))) "RED: 路径 DB diff 未归零" "shutdown 差异"
 Remove-Item -Force (Join-Path $rust "shutdown-after.jsonl")
 Test-Case "db/缺抽取件=PREREQ" 2 (Run-Ps $dbPaths @("-Mode", "diff", "-CsharpDir", $csharp, "-RustDir", $rust, "-OutFile", (Join-Path $Work "db-missing.json"))) "PREREQ_MISSING" "shutdown 缺 after"
+
+# ③c-canonical（真机 ④ 必需）：`--canonical` 把易变列（Id/墙钟）置占位后再比。
+# 真机两侧分开跑 ⇒ LoginTime/ModifyDate 必然不同；不 canonical 会把「同行为」误判 RED（假红）。
+# 这里同时钉两件事：① 不 canonical 时仅易变列不同必 RED；② canonical 后同夹具必 GREEN；
+# ③ canonical **不得**吃掉行为列（SelectID 变 ⇒ 仍必 RED）。
+$cc = Join-Path $Work "db-canon-csharp"; $cr = Join-Path $Work "db-canon-rust"
+New-Item -ItemType Directory -Force -Path $cc, $cr | Out-Null
+foreach ($p in @("softclose", "disconnect", "shutdown")) {
+  New-IndexFixture (Join-Path $cc ("{0}-after.jsonl" -f $p)) "1" "1"
+  New-IndexFixture (Join-Path $cr ("{0}-after.jsonl" -f $p)) "2" "1"   # Id 不同（易变列）
+}
+Test-Case "db/不 canonical 仅易变列=RED" 1 (Run-Ps $dbPaths @("-Mode", "diff", "-CsharpDir", $cc, "-RustDir", $cr, "-OutFile", (Join-Path $Work "db-canon-nocanon.json"))) "RED" "不 canonical ⇒ 仅易变列也不同必红（这正是不是假绿的牙齿）"
+Test-Case "db/canonical 仅易变列=GREEN" 0 (Run-Ps $dbPaths @("-Mode", "diff", "-CsharpDir", $cc, "-RustDir", $cr, "-OutFile", (Join-Path $Work "db-canon-same.json"), "-Canonical")) "GREEN" "Id/时间戳不同但 --canonical 置占位后同行为"
+foreach ($p in @("softclose", "disconnect", "shutdown")) {
+  New-IndexFixture (Join-Path $cr ("{0}-after.jsonl" -f $p)) "2" "9"   # SelectID 不同（行为列）
+}
+Test-Case "db/canonical 行为列不同=RED" 1 (Run-Ps $dbPaths @("-Mode", "diff", "-CsharpDir", $cc, "-RustDir", $cr, "-OutFile", (Join-Path $Work "db-canon-red.json"), "-Canonical")) "RED" "canonical 不得吃掉行为列"
 
 # ---------------------------------------------------------------- ① 分类器口径（R2-1：与 check_ports.ps1 同一函数）
 Write-Output "① portclassify.ps1（实现归属分类器：check_ports.ps1 与 selftest.ps1 共用同一口径）"

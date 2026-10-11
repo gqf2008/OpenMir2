@@ -1,0 +1,4 @@
+### 1) 全仓 ItemId 赋值点（含对象初始化器），排除注释行
+src/Modules\SystemModule\Data\MapItem.cs:41:            // this.ItemId = M2Share.ActorMgr.GetNextIdentity();
+
+rc=0

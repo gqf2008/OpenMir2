@@ -1,0 +1,5 @@
+== pickup 不可达证明 @ 2026-10-12T02:42:25.0987489+08:00 ==
+repo=E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr
+-- A) 扫描 895 个 .cs 找未注释的 ItemId 赋值点
+RED: 发现未注释的 ItemId 赋值点 —— pickup 不可达的证明被推翻：
+  src\Modules\SystemModule\Data\MapItem.cs:41: this.ItemId = 123;

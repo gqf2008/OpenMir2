@@ -1,0 +1,27 @@
+﻿{
+    "tool":  "m2-acceptance/check_db_paths.ps1",
+    "ts":  "2026-10-12T02:57:25.5016051+08:00",
+    "csharp_dir":  "E:\\tmp\\m2acc\\csharp4",
+    "rust_dir":  "E:\\tmp\\m2acc\\rust4",
+    "results":  [
+                    {
+                        "path":  "softclose",
+                        "state":  "GREEN",
+                        "rc":  0
+                    },
+                    {
+                        "path":  "disconnect",
+                        "state":  "GREEN",
+                        "rc":  0
+                    },
+                    {
+                        "path":  "shutdown",
+                        "state":  "GREEN",
+                        "rc":  0
+                    }
+                ],
+    "failed":  [
+
+               ],
+    "pass":  true
+}
