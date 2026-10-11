@@ -628,6 +628,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "encoding_rs",
+ "mir2-envir",
  "mir2-protocol",
  "mir2-shared",
  "mir2-world",

@@ -192,27 +192,50 @@ powershell -File tools/m2-acceptance/check_db_paths.ps1 -Mode diff `
 
 ### 5.1 其余入图帧「缺哪个输入 / 由哪张卡提供 / 还差哪一步」
 
-| ident | 帧 | 缺的运行时输入 | 由哪张卡提供 | 还差哪一步 |
+> **2026-10-11 更新**：两条依赖卡**已合入 master**——`openmir2-m2-map-loading`（`2a2e8d03`，`crates/envir`）
+> 与 `openmir2-m2-record-fields`（`353a28e2`，`bins/game-svr/src/record.rs` 全字段）。下表据此重判
+> 「还差哪一步」；**已合入 ≠ 已接线**（接线见 §5.2）。
+
+| ident | 帧 | 缺的运行时输入 | 由哪张卡提供 | 还差哪一步（2026-10-11 重判） |
 | --- | --- | --- | --- | --- |
 | 658 | `SM_SENDNOTICE` | 公告文本（`NoticeMgr.GetNoticeMsg`） | 配置层（未开卡） | 读 Envir/Notice 文本并接入公告管理器 |
-| 51 | `SM_NEWMAP` | ✅ 已有（记录 `CurMap`+坐标）；`DayBright()` 暂占位 0 | 记录字段（已用）/ `openmir2-m2-map-loading`（DayBright） | 真地图加载后取 `DayBright()` 真值 |
-| 50 | `SM_LOGON` | `MessageBodyWL=(GetFeatureToLong,CharStatus,Tag1,Tag2)` | `openmir2-m2-record-fields` | 解析记录其余字段并构造 `MessageBodyWL` |
-| 41 | `SM_FEATURECHANGED` | `GetFeatureToLong()` | `openmir2-m2-record-fields` | 同上 |
-| 213 | `SM_ATTACKMODE` | `AttatckMode`（会话/玩家状态） | 本卡（S2b-3 骨架）+ world | 进世界时把攻击模式从会话/记录带进来 |
+| 51 | `SM_NEWMAP` | ✅ 逻辑名+坐标（记录）；`map_id`/尺寸 ✅（envir）；**`DayBright()`** | `Env.Flag`（envir **未解析**） | envir 卡只给 cells/doors/points/尺寸/map_id，**没有 `Envir.Flag.DayLight/boDarkness`** ⇒ `DayBright()` 仍缺；占位 0 |
+| 50 | `SM_LOGON` | `MessageBodyWL=(GetFeatureToLong,CharStatus,Tag1,Tag2)` | 物品/装备层（未开卡）+ world | `GetFeatureToLong` 要 `UseItems[Dress/Weapon]` 的 `StdItem.Shape`（`PlayObject.cs:3395`）⇒ 需物品系统 |
+| 41 | `SM_FEATURECHANGED` | `GetFeatureToLong()` | 同上 | 同 50 |
+| 213 | `SM_ATTACKMODE` | `AttatckMode` | ✅ `record.rs` 全字段（已合） | 只剩把 `CharacterData.attatck_mode` 带进 `EnterWorldInputs`（属 §5.2 的下一片） |
 | 11029 | `SM_SERVERCONFIG` | `ClientConf` 序列化原文 | 配置层（未开卡） | `SystemShare.Config` 落地 + `EncodeMessage` |
-| 42 | `SM_USERNAME` | `(targetId,nameColor,showName)` | `openmir2-m2-record-fields` + world | 取角色展示名/颜色/目标 id |
-| 766 | `SM_AREASTATE` | 地图 `Flag` 位（`FightZone/SafeArea/InGuildWarArea`） | `openmir2-m2-map-loading` | 真地图 Flag 解析 |
-| 54 | `SM_MAPDESCRIPTION` | `Envir.MapDesc` + `nMusicid=Flag.Music?MusicId:-1` | `openmir2-m2-map-loading` | 真地图描述/音乐 id |
-| 5008 | `SM_GAMEGOLDNAME` | `GameGold/GamePoint` + 元宝名/金币名 | `openmir2-m2-record-fields` + 配置层 | 记录字段 + 金币名配置 |
+| 42 | `SM_USERNAME` | `(targetId,nameColor,showName)` | ✅ `record.rs` + world | `GetChrColor`/展示名属 world 侧，未接线 |
+| 766 | `SM_AREASTATE` | `Env.Flag.FightZone/SafeArea` + `InGuildWarArea` | `Env.Flag`（envir **未解析**） | envir 卡未解析 MapInfo 的 Flag 行 ⇒ 缺输入 |
+| 54 | `SM_MAPDESCRIPTION` | `Envir.MapDesc` + `nMusicid=Flag.Music?MusicId:-1` | `Env.Flag`（envir **未解析**） | `MapInfoEntry.desc` 只是原文，Flag/音乐 id 未解析 ⇒ 缺输入 |
+| 5008 | `SM_GAMEGOLDNAME` | `GameGold/GamePoint` ✅（记录）；元宝名/金币名 | 记录字段（已合）/ 配置层 | 只剩金币名配置（未开卡） |
 | 1106 | `SM_VERSION_FAIL` | `ClientFile1_CRC/ClientFile2_CRC` | 配置层（未开卡） | `Config.ClientFile*_CRC` 落地 |
-| 52 | `SM_ABILITY` | `Gold/Job/GameGold/WAbil` | `openmir2-m2-record-fields` | 记录字段→`WAbil` |
-| 752 | `SM_SUBABILITY` | `AntiMagic/HitPoint/SpeedPoint/AntiPoison/PoisonRecover/HealthRecover/SpellRecover` | `openmir2-m2-record-fields` | 记录字段→能力项 |
-| 811 | `SM_ADJUST_BONUS` | `BonusPoint` + A/B/C 能力模板 | `openmir2-m2-record-fields` + 配置层 | 记录字段 + `BonusAbilofXxx/NakedAbilofXxx` |
-| 46 | `SM_DAYCHANGING` | `Bright/DayBright` | `openmir2-m2-map-loading` | 真地图昼夜 |
-| 10 | `SM_TURN` | `CharDesc(Feature+Status)` + `msg` | `openmir2-m2-record-fields` + world | 记录字段→`CharDesc`、世界→`msg` |
+| 52 | `SM_ABILITY` | `Gold/Job/GameGold` ✅（记录）；`WAbil` 编码 | ✅ `record.rs`（字段）/ record 编码**未公开** | `record.rs` 只有私有 `encode_opt_ability`；`EncodeMessage(t:class)` 要「MemoryPack 序列化后**丢首字节**」⇒ 需补一个公开 `encode_ability` |
+| 752 | `SM_SUBABILITY` | `AntiMagic/HitPoint/SpeedPoint/…` | ✅ `record.rs`（`WAbil` 字段已全） | 同 52 的编码接缝 + 触发点（`RM_LEVELUP`/`RM_ABILITY` 支） |
+| 811 | `SM_ADJUST_BONUS` | `BonusPoint` + A/B/C 模板 | ✅ `record.rs`（`bonus_point`/`bonus_abil`）+ 配置层 | A/B/C 取 `Config.BonusAbilofXxx/NakedAbilofXxx`（配置层未开卡） |
+| 46 | `SM_DAYCHANGING` | `Bright/DayBright` | `Env.Flag`（envir **未解析**） | 同 51 的 `DayBright()`；`Bright` 属全局 |
+| 10 | `SM_TURN` | `CharDesc(Feature+Status)` + `msg` | 物品层（未开卡）+ world | `Feature` 同 50 的 `GetFeatureToLong` ⇒ 需物品系统 |
 
-> 表中"配置层"尚无独立卡：`658/11029/1106/5008/811` 的配置项需要在 M2 后续切片里开卡，
-> 或在 `openmir2-m2-record-fields` / `map-loading` 收口后评估归并。
+> **本片新查明的两条精确阻塞**（比「哪张卡」更可操作）：
+> 1. `crates/envir` **只解析格属性/门/点位/尺寸/`map_id`**，**没有** `Envir.Flag`（`FightZone/SafeArea/DayLight/boDarkness/Music/MusicId`）与 `MapDesc` 的语义 —— 帧 `51/766/54/46` 卡在这里；要么给 envir 补 `MapInfo` Flag 解析（触及 `crates/envir/**`，本片禁改），要么新开卡。
+> 2. `record.rs` 全字段已入库，但**没有公开的 `Ability` 编码**（只有私有 `encode_opt_ability`）—— 帧 `52/752` 卡在这里（`EncodeMessage` 需「序列化后丢首字节」的半开区间口径）。
+> 表中「配置层」（`658/11029/1106/5008/811`）尚无独立卡：需要在 M2 后续切片里开卡，或评估归并。
+
+### 5.2 本片接线：`CurMap`（逻辑名）→ `map_id` + 真地图尺寸（集成点 ④）
+
+`openmir2-m2-map-loading` 卡面 ④「集成到 `bins/game-svr`（`WorldMaps` 真尺寸 / `CurMap`→`map_id`）」本片落地：
+
+- `bins/game-svr/src/mapwire.rs`（新增）：`base_path`（`Server.conf` 所在目录 = 生产下的可执行体目录，
+  oracle `M2Share.BasePath`）/ `load_registry`（`base/<EnvirDir>/MapInfo.txt` + `base/<MapDir>/*.map`）/
+  `sizes`（`map_id` = 注册表下标）/ `resolve_map_id`（`require_id`，找不到 ⇒ `Err`）；
+- `config.rs`：新增 `[Share] EnvirDir`/`MapDir`（oracle `ServerConf.cs:75-76` 的键，缺省 `Envir`/`Map`，**不发明键名**）；
+- `main.rs`：启动时加载注册表（有 ⇒ 用其尺寸建世界并把 `CurMap` 换成 `map_id`；无 ⇒ 保留 S1 `WorldMaps` 占位并记 WRN）。
+  **有注册表时找不到 `CurMap` ⇒ 拒绝进图并记 WRN**（照卡面④「不许静默占位」）；
+- `WorldMaps` 占位键**暂留**（无 Envir 时的回退，登记：真机验收——那时 Envir 必在——之后删）。
+
+判据（`mapwire::tests`，不需要栈）：合成 `Envir/MapInfo.txt` + 合成 `.map` ⇒ 两张入表、`map_id` 按 section 序、
+`[0129|0100]` 认**逻辑名** `0129`、未知名 ⇒ `Err`、无 Envir ⇒ `None`+`Ok(0)` 回退。
+**红检**：把 `resolve_map_id` 改成 `id_of(cur_map).unwrap_or(0)` ⇒ `unknown_cur_map_is_rejected` 必红
+（原始输出 `E:\tmp\openmir2-watch\pi-m2svr-wire-redcheck.log`）。
 
 ---
 
@@ -240,6 +263,9 @@ cargo run -p msgcodegen -- --check
 | 三路径 DB diff 驱动 | `check_db_paths.ps1 -Mode diff` 合成夹具 | 同件 GREEN / 改一字段 RED（复用 `scoped_diff.py`） | 控制台（rc 0 / rc 1） |
 | **手册判红自检** | `selftest.ps1`（本片新增） | **14/14 OK**：②截图 4 例、③b s2c 4 例（尾字节改坏⇒RED、只改 recog⇒GREEN）、③c DB 3 例、①端口实况判属、聚合器 2 例 | `E:\tmp\openmir2-watch\pi-m2svr-selftest.log` |
 | R4-1 红检 | 改回 `unwrap_or(0)` | `route_to_gate_rejects_out_of_range_gate_idx` FAILED；还原后 passed | `E:\tmp\openmir2-watch\pi-m2svr-r41-redcheck.log` |
+| **CurMap→map_id 接线单测** | `cargo test -p game-svr --offline mapwire` | 3/3 OK（逻辑名→id / 未知名必拒 / 无 Envir 回退） | 含在 `pi-m2svr-wire-test.log` |
+| **CurMap→map_id 红检** | 把 `resolve_map_id` 改成 `id_of(cur_map).unwrap_or(0)` | `unknown_cur_map_is_rejected` FAILED（rc=101）；还原后 3/3 OK | `E:\tmp\openmir2-watch\pi-m2svr-wire-redcheck.log` |
+| 四门禁（接线后 head） | fmt / clippy `-D warnings` / `test --workspace --offline` / msgcodegen `--check` | fmt 0 / clippy 0 / **51 目标 355 passed 0 failed 11 ignored** 0 / msgcodegen 604 OK 0 | `pi-m2svr-wire-test.log`、`pi-m2svr-wire-gates.log` |
 
 残留物清单：
 
@@ -248,6 +274,8 @@ cargo run -p msgcodegen -- --check
 - `E:\tmp\m2-acceptance\selftest-*\`：`selftest.ps1` 的 14 条构造夹具与 `selftest.json`（证据，保留）；
 - `E:\tmp\openmir2-watch\pi-m2svr-*.log`：四门禁、红检、自检原始输出；
 - `E:\tmp\rust-recog-changed.jsonl` / `rust-body-broken.jsonl`：s2c 归一化红检输入（证据）；
+- `E:\tmp\openmir2-watch\pi-m2svr-wire-redcheck.log`：`CurMap→map_id` 接线红检原始输出（证据，保留）；
+- `E:\tmp\openmir2-watch\pi-m2svr-wire-test.log` / `pi-m2svr-wire-gates.log`：接线后四门禁原始输出（证据，保留）；
 - 未新增/未修改进程、端口、库内行（本片全程只读外部状态）。
 
 ---

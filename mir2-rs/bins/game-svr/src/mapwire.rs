@@ -1,0 +1,191 @@
+//! Envir 真地图注册表接入（`openmir2-m2-map-loading` 的集成点 ④：`CurMap` → `map_id`）。
+//!
+//! oracle 路径：`M2Share.BasePath`（可执行体目录）+ `Server.conf` 的 `[Share] EnvirDir`/`MapDir`
+//! （`GameSvrConf.EnvirDir/MapDir` 的默认值分别是 `Envir`/`Map`，`GameSvrConf.cs:1295-1296`）
+//! → `Envir/MapInfo.txt` 的 section 先后顺序就是 `map_id`（见 `mir2_envir::MapRegistry` 的头注释）。
+//! 角色记录里的 `CurMap` 是**逻辑地图名**，必须经 `MapRegistry::require_id` 换成 `map_id`；
+//! **找不到即拒绝进图**（返回 `Err`），不许静默退回 0 号占位图。
+//!
+//! 本模块只做「加载 + 取尺寸 + 换 id」三件事，不碰 `crates/envir` 内部，也不建世界（那是
+//! `sim_loop` 的事）。`WorldMaps`（S1 占位尺寸）作为**没有 Envir**（开发/测试）时的回退保留并登记：
+//! 真机验收（始终有 `Envir/MapInfo.txt`）之后应删掉占位键。三种加载结果的处置见 [`Maps`]。
+
+use std::path::{Path, PathBuf};
+
+use mir2_envir::{MapLoader, MapRegistry};
+
+/// 运行目录 = `Server.conf` 所在目录。
+///
+/// 生产下 `config::default_path()` 把 `Server.conf` 放在可执行体同目录，因此与 oracle 的
+/// `M2Share.BasePath = AppContext.BaseDirectory` 等价；测试/迁移场景可把 `Envir`/`Map`
+/// 与显式传入的 `Server.conf` 放在同一目录。
+#[must_use]
+pub fn base_path(conf: &Path) -> PathBuf {
+    conf.parent()
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
+}
+
+/// 注册表加载三态——**「没有 Envir」与「Envir 坏了」必须分开**，后者不许静默退回占位图。
+pub enum Maps {
+    /// 已加载到非空注册表：用它的尺寸建世界 + `CurMap` 换 `map_id`。
+    Envir(MapRegistry),
+    /// 没有 `Envir/MapInfo.txt`（开发/测试形态）：保留 S1 `WorldMaps` 占位，调用方记 WRN。
+    Placeholder,
+    /// `MapInfo.txt` 在、但读失败或**一张都没加载成功**：调用方必须拒绝启动（失败要响）。
+    Broken(String),
+}
+
+/// 按 `base/<envir_dir>/MapInfo.txt` + `base/<map_dir>/*.map` 加载注册表。
+///
+/// 判据（见 [`Maps`]）：`MapInfo.txt` 不存在 / 无 section ⇒ [`Maps::Placeholder`]；
+/// 有 section 但全加载失败或读失败 ⇒ [`Maps::Broken`]；否则 [`Maps::Envir`]。
+#[must_use]
+pub fn load_registry(base: &Path, envir_dir: &str, map_dir: &str) -> Maps {
+    let loader = MapLoader::new(base, map_dir, envir_dir);
+    match loader.load_map_info_entries() {
+        Ok(entries) if entries.is_empty() => Maps::Placeholder,
+        Ok(entries) => {
+            let reg = MapRegistry::from_entries(loader, entries);
+            if reg.is_empty() {
+                Maps::Broken(format!(
+                    "MapInfo.txt 有 {} 条 section 但一张都没加载成功（skipped={}）",
+                    reg.entries().len(),
+                    reg.skipped().len()
+                ))
+            } else {
+                Maps::Envir(reg)
+            }
+        }
+        Err(e) => Maps::Broken(e.to_string()),
+    }
+}
+
+/// 注册表的尺寸表（`map_id` = 下标），用于 `World::with_maps`。
+#[must_use]
+pub fn sizes(reg: &MapRegistry) -> Vec<(i32, i32)> {
+    reg.maps().iter().map(|m| (m.width, m.height)).collect()
+}
+
+/// `CurMap`（逻辑名）→ `map_id`。
+///
+/// - 有注册表：`require_id`（找不到 ⇒ `Err`，调用方拒绝进图）；
+/// - 无注册表（S1 `WorldMaps` 占位回退）：`Ok(0)`（调用方负责记 WRN，见 `sim_loop`）。
+///
+/// # Errors
+/// 逻辑名不在注册表内 ⇒ `EnvirError::MapNameNotFound`。
+pub fn resolve_map_id(
+    registry: Option<&MapRegistry>,
+    cur_map: &str,
+) -> Result<usize, mir2_envir::EnvirError> {
+    match registry {
+        Some(reg) => reg.require_id(cur_map),
+        None => Ok(0),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mir2_envir::{CELL_BYTES, HEADER_BYTES};
+
+    /// 生成一张全 `Walk` 的合成 `.map`（布局见 `mir2_envir` 的头：52B 头写 W/H，随后每格 12B）。
+    fn synth_map(width: u16, height: u16) -> Vec<u8> {
+        let n = usize::from(width) * usize::from(height);
+        let mut buf = vec![0u8; HEADER_BYTES + n * CELL_BYTES];
+        buf[0..2].copy_from_slice(&width.to_le_bytes());
+        buf[2..4].copy_from_slice(&height.to_le_bytes());
+        buf
+    }
+
+    struct TempEnv {
+        dir: PathBuf,
+    }
+
+    impl TempEnv {
+        /// `[0 town]`（逻辑名 = 文件名）与 `[0129|0100 zuma]`（逻辑名 ≠ 文件名）。
+        /// 描述用 **ASCII**：`decode_text` 按 GBK 解码，UTF-8 中文会把后面的 `]` 当双字节尾吃掉
+        /// （探针踩坑）——本用例只关心名字/文件名，不引入该干扰。
+        fn new(tag: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!("gs-mapwire-{tag}-{}", std::process::id()));
+            std::fs::remove_dir_all(&dir).ok();
+            std::fs::create_dir_all(dir.join("Envir")).unwrap();
+            std::fs::create_dir_all(dir.join("Map")).unwrap();
+            std::fs::write(
+                dir.join("Envir").join("MapInfo.txt"),
+                "[0 town]\n[0129|0100 zuma]\n",
+            )
+            .unwrap();
+            std::fs::write(dir.join("Map").join("0.map"), synth_map(3, 3)).unwrap();
+            std::fs::write(dir.join("Map").join("0100.map"), synth_map(5, 4)).unwrap();
+            Self { dir }
+        }
+    }
+
+    impl Drop for TempEnv {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.dir).ok();
+        }
+    }
+
+    fn registry(env: &TempEnv) -> MapRegistry {
+        match load_registry(&env.dir, "Envir", "Map") {
+            Maps::Envir(reg) => reg,
+            Maps::Placeholder => panic!("合成 Envir 不该是 Placeholder"),
+            Maps::Broken(why) => panic!("合成 Envir 不该是 Broken：{why}"),
+        }
+    }
+
+    #[test]
+    fn loads_registry_and_maps_logical_name_to_id() {
+        let env = TempEnv::new("ok");
+        let reg = registry(&env);
+        assert_eq!(reg.len(), 2, "两张都能入表");
+        // `map_id` = MapInfo.txt 的顺序。
+        assert_eq!(resolve_map_id(Some(&reg), "0").unwrap(), 0);
+        assert_eq!(resolve_map_id(Some(&reg), "0129").unwrap(), 1);
+        // 逻辑名 ≠ 文件名时，id 认的是**逻辑名**。
+        assert_eq!(reg.name_of(1), Some("0129"));
+        assert_eq!(sizes(&reg), vec![(3, 3), (5, 4)]);
+    }
+
+    /// 找不到逻辑名 ⇒ `Err`（`require_id`），**不许**静默退回 0 号图（这是集成点 ④ 的硬要求）。
+    #[test]
+    fn unknown_cur_map_is_rejected() {
+        let env = TempEnv::new("reject");
+        let reg = registry(&env);
+        assert!(
+            resolve_map_id(Some(&reg), "不存在的地图").is_err(),
+            "注册表内没有 ⇒ 必须 Err"
+        );
+        assert!(
+            resolve_map_id(Some(&reg), "0100").is_err(),
+            "文件名不是逻辑名 ⇒ 也不能命中（MapManager 的键是逻辑名）"
+        );
+    }
+
+    /// 无 Envir ⇒ `Placeholder`；`resolve_map_id` 走 S1 占位回退（`Ok(0)`，由调用方记 WRN）。
+    #[test]
+    fn missing_envir_falls_back_to_placeholder() {
+        let dir = std::env::temp_dir().join(format!("gs-mapwire-none-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(matches!(
+            load_registry(&dir, "Envir", "Map"),
+            Maps::Placeholder
+        ));
+        assert_eq!(resolve_map_id(None, "随便").unwrap(), 0);
+    }
+
+    /// `MapInfo.txt` 在但一张都没加载成功 ⇒ `Broken`（**不是** `Placeholder`）——
+    /// 这样 `main` 会拒绝启动，不会静默退回 0 号占位图。
+    #[test]
+    fn all_maps_failing_is_broken_not_placeholder() {
+        let env = TempEnv::new("broken");
+        std::fs::remove_file(env.dir.join("Map").join("0.map")).unwrap();
+        std::fs::remove_file(env.dir.join("Map").join("0100.map")).unwrap();
+        match load_registry(&env.dir, "Envir", "Map") {
+            Maps::Broken(why) => assert!(why.contains("一张都没加载成功"), "诊断：{why}"),
+            Maps::Placeholder => panic!("有 section 但全失败 ⇒ 必须是 Broken，不许当 Placeholder"),
+            Maps::Envir(_) => panic!("没有 .map 文件却加载成功？"),
+        }
+    }
+}
