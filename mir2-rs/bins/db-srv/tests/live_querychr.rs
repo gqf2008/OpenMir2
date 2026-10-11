@@ -98,7 +98,9 @@ fn copy_dir(src: &Path, dst: &Path) {
 /// 写 DBSrv 配置（`dbsvr.conf`；`GatePort` 是本测试要连的 5100 面，`IDSPort` 指向伪 LoginSrv）。
 fn write_conf(dir: &Path, gate_port: u16, ids_port: u16) {
     let body = format!(
-        "[Setup]\nShowDebug=1\nServerAddr=127.0.0.1\nServerPort={}\nGateAddr=0.0.0.0\nGatePort={gate_port}\n\
+        // `ShowDebug=0` 与现网 bin 版 conf 一致：C# 侧 `LogService.Debug` 被 appsettings.json 的
+        // Serilog `MinimumLevel=Information` 滤掉，本实现由同一开关控制 ⇒ 两侧日志行集才能逐行对齐。
+        "[Setup]\nShowDebug=0\nServerAddr=127.0.0.1\nServerPort={}\nGateAddr=0.0.0.0\nGatePort={gate_port}\n\
          ServerName=LegendOfMir2\nDenyChrName=1\nDELMaxLevel=30\nDynamicIPMode=0\n\n\
          [Server]\nIDSAddr=127.0.0.1\nIDSPort={ids_port}\nMarketAddr=127.0.0.1\nMarketPort={}\n\n\
          [DataBase]\nStoreage=MySQL\nConnctionString=server=127.0.0.1;uid=root;pwd=;database=mir2_db;\n\n\
@@ -218,6 +220,26 @@ fn log_file(dir: &Path, name: &str) -> std::fs::File {
 
 /// 子进程守卫：`Drop` 时杀掉并回收 —— 断言失败/超时 panic 时也不会留孤儿进程与僵尸。
 struct Proc(Option<Child>);
+
+/// 把夹具目录里两侧子进程的日志尾部打进测试输出 —— 验收①要求"给日志/输出"，
+/// 这样 C# SelGate 与 Rust db-srv 的时间线就和断言结果在同一条证据里。
+fn dump_child_logs(dir: &Path, tag: &str) {
+    for name in [
+        "dbsrv.out.log",
+        "dbsrv.err.log",
+        "selgate.out.log",
+        "selgate.err.log",
+    ] {
+        let Ok(text) = std::fs::read_to_string(dir.join(name)) else {
+            continue;
+        };
+        let tail: Vec<&str> = text.lines().rev().take(200).collect();
+        println!("---- [{tag}] {name}（尾部 {} 行） ----", tail.len());
+        for line in tail.into_iter().rev() {
+            println!("{line}");
+        }
+    }
+}
 
 impl Drop for Proc {
     fn drop(&mut self) {
@@ -381,6 +403,7 @@ async fn rust_dbsrv_querychr_matches_csharp_golden() {
     wait_listen(gate_port).await;
     wait_session_link(&accepted).await;
     exercise_5100_face(gate_port).await;
+    dump_child_logs(&dir, "dbsrv");
     // 先收子进程（否则它仍持有夹具目录里的日志文件句柄 ⇒ Windows 上删目录会失败留残）
     drop(dbsrv);
     std::fs::remove_dir_all(&dir).ok();
@@ -408,6 +431,7 @@ async fn csharp_dbsrv_querychr_matches_csharp_golden() {
     wait_listen(gate_port).await;
     wait_session_link(&accepted).await;
     exercise_5100_face(gate_port).await;
+    dump_child_logs(&dir, "dbsrv");
     // 先收子进程（否则它仍持有夹具目录里的日志文件句柄 ⇒ Windows 上删目录会失败留残）
     drop(dbsrv);
     std::fs::remove_dir_all(&dir).ok();
@@ -493,6 +517,8 @@ async fn csharp_selgate_to_rust_dbsrv() {
         "经 SelGate 的字节与金标准不等"
     );
 
+    dump_child_logs(&sel_dir, "selgate");
+    dump_child_logs(&dbsrv_dir, "dbsrv");
     drop(selgate);
     std::fs::remove_dir_all(&sel_dir).ok();
     drop(dbsrv);

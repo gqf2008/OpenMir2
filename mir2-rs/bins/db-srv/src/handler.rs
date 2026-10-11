@@ -279,7 +279,12 @@ async fn query_chr(
                 q.index
             ));
             let rec = db.record_get_by(q.index).await?;
-            log::info(&format!("[QueryChr]   GetBy -> result={}", rec.is_some()));
+            // 日志口径照抄 C# 的 `$"...result={result}"`（.NET 布尔渲染 True/False），
+            // 便于把两侧日志按行 diff 当证据用。
+            log::info(&format!(
+                "[QueryChr]   GetBy -> result={}",
+                if rec.is_some() { "True" } else { "False" }
+            ));
             let Some(rec) = rec else { continue };
             if rec.deleted {
                 continue;
@@ -297,10 +302,7 @@ async fn query_chr(
                 // C# 此处 `chrRecord` 为 null ⇒ NRE（被上层吞掉、**不回包**）
                 bail!("角色[{index}]在 characters 表取不到行（C# 同场景为 NRE，不回包）");
             };
-            log::info(&format!(
-                "[QueryChr]   GetQryChar -> True name=[{}]",
-                ch.name_text
-            ));
+            log::info("[QueryChr]   GetQryChar -> True");
             items.push((
                 q.name_gbk.clone(),
                 ch.job,

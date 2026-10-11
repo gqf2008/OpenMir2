@@ -63,8 +63,6 @@ pub struct IndexRow {
 /// 选角列表里一个角色要用的字段（C# `QueryChr`）。
 #[derive(Debug, Clone)]
 pub struct QryChar {
-    /// `characters.ChrName` 文本（比对/日志用）。
-    pub name_text: String,
     /// `Job`。
     pub job: u8,
     /// `Hair`。
@@ -409,7 +407,6 @@ impl Db {
             return Ok(None);
         };
         Ok(Some(QryChar {
-            name_text: text_col(&row, "ChrName")?,
             job: u8::try_from(int_col(&row, "Job")? & 0xFF).unwrap_or(0),
             hair: u8::try_from(int_col(&row, "Hair")? & 0xFF).unwrap_or(0),
             sex: u8::try_from(int_col(&row, "Sex")? & 0xFF).unwrap_or(0),

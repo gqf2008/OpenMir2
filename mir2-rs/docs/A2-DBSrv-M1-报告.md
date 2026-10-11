@@ -73,6 +73,8 @@ cargo test -p db-srv --test live_querychr --offline -- --ignored --nocapture rus
 | 端口被占 | `GatePort=5100`（被占时） | 1 | `10048 … 每个套接字地址只允许使用一次` |
 
 日志：`evidence\fail-{missing-conf,storeage,baddb,missing-table,port-busy}.log`。
+注：`ShowDebug` 与 C# 同开关（现网 bin 版 conf `ShowDebug=0` ⇒ 不打 Debug）；C# 侧另有
+`appsettings.json` 的 Serilog `MinimumLevel=Information` 把 Debug 也滤掉，两侧日志行集因此可比（见 §2.5 附带证据）。
 
 ### 2.4 ④「进程级查询自测」——**已取证**
 
@@ -80,22 +82,38 @@ cargo test -p db-srv --test live_querychr --offline -- --ignored --nocapture rus
 伪 SelGate 走 `Enter → QUERYCHR/NEWCHR/DELCHR`），断言四个命令的**字节级**应答。
 同一条用例对 C# DBSrv 也能跑通（`csharp_dbsrv_querychr_matches_csharp_golden`）。
 
-### 2.5 ①「C# SelGate(7100) → Rust DBSrv(5100)」——**链上判据待一次性窗口，见 §5**
+### 2.5 ①「C# SelGate(7100) → Rust DBSrv(5100)」——**已跑通**
 
-本报告交付的是**可直接跑的一条命令**（`csharp_selgate_to_rust_dbsrv`）：伪 LoginSrv + Rust db-srv(5100)
-+ **C# SelGate 副本**（`E:\tmp\a2-dbsrv\oracle-selgate`，配置指向 5100）+ 脚本客户端发 `CM_QUERYCHR`，
-断言经 SelGate 中继回来的帧与 §2.2 的金标准逐字节相同。
-
-**本轮未跑成的原因（外因，非本线代码）**：C# SelGate 的监听端口是**编译期常量**
-（`src/SelGate/GateShare.cs:15 public const int GatePort = 7100;`，配置里的 `GatePort0` 不参与监听），
-因此该用例必须**独占 5100 + 7100**；而这两个端口在 09:15–09:29 一直由**并行 A 线 M3-Rust 首验**的
-C# 组件占用（`5100=37084 DBSrv.exe`、`7100=32604 SelGate.exe`、`5500/5600=34716 login-srv.exe`），
-不能停别人的进程。解除判据＝这两个端口空出来（并行实验结束）后执行：
+做法：伪 LoginSrv 推会话给 Rust db-srv(5100)（因此不需要真 LoginGate/客户端），
+**C# SelGate 副本**（`E:\tmp\a2-dbsrv\oracle-selgate`＝`E:\MirServer\SelGate` 的副本，配置指向 5100）
+监听 7100，脚本客户端直接连 7100 发 `CM_QUERYCHR`：
 
 ```powershell
 $env:MIR2_ORACLE_SELGATE_DIR='E:\tmp\a2-dbsrv\oracle-selgate'
 cargo test -p db-srv --test live_querychr --offline -- --ignored --nocapture csharp_selgate_to_rust_dbsrv
+# test result: ok. 1 passed ... finished in 8.56s
 ```
+
+两侧日志时间线（`evidence\mixed-selgate-run5.log` 同一条证据里）：
+
+```text
+[C# SelGate] 09:36:41 登陆网关[127.0.0.1:7100]已启动.
+[C# SelGate] 09:36:41 数据库服务器[127.0.0.1:5100]链接成功.
+[C# SelGate] 09:36:43 用户[127.0.0.1]分配到数据库服务器[0] Server:tcp://127.0.0.1:5100/
+[Rust db-srv] 09:36:41 玩家数据网关服务[0.0.0.0:5100]已启动.等待链接...
+[Rust db-srv] 09:36:43 角色网关[2](127.0.0.1:62029)已打开...            ← C# SelGate 的接入
+[Rust db-srv] 09:36:44 [QueryChr] 候选 account=mir2test i=0 name=[aaa] quickIndex=12218 …
+断言：[csharp-selgate→rust-dbsrv] head={recog:2, ident:520, param:0, tag:1, series:0}
+      body="*aaa/0/1/1/0/bbb/2/1/1/0/"，raw 与 §2.2 的金标准**逐字节相同**
+```
+
+> 过程留痕：09:15–09:33 这两个端口被**并行 A 线 M3-Rust 首验**的 C# 组件占用
+> （`5100=37084 DBSrv.exe`、`7100=32604 SelGate.exe`），不能停别人的进程；A 线实验收工后端口空出，
+> 本用例随即跑通（C# SelGate 的监听端口是编译期常量 `src/SelGate/GateShare.cs:15`，影子副本也改不了，
+> 所以只能等窗口——这也是它必须独占 7100 的原因）。
+
+**附带证据：两侧 `[QueryChr]` 日志排序后逐行相同**（各 9 行，`evidence\logdiff-{csharp,rust}-querychr.txt`）——
+说明不只是回包字节一致，逐角色的读库决策序列也一致。
 
 ### 2.6 判据覆盖边界（如实记录）
 
@@ -149,7 +167,7 @@ C# 是"打日志带空索引继续跑"）；② 不把缺省值写回 `dbsvr.con
 ## 5. 阻塞与后续（各带解除判据）
 
 1. **① 的"真 C# SelGate"一跑**：阻塞条件＝5100/7100 被并行 A 线实验占用（见 §2.5）。
-   解除判据＝端口空出后跑 §2.5 那条命令（用例已就绪，端口固定 5100/7100）。
+   **已解除**：A 线实验收工后端口空出，本用例当场跑通（§2.5）。
 2. **6000 `DataService` 面（S4b）**：需要先补 `crates/storage` 的记录字段（S4a，会动 `crates/protocol`
    之外的接口面，须通知 B2/D2）与 `CharacterDataInfo` 等大结构的 internal 字节向量。判据与切片已写进
    `M1-边界服务移植计划.md` §5 的 S4b 行。**本轮 DBSrv 的卡片验收不含这一面**（见卡片回复条目）。
@@ -176,11 +194,12 @@ E:\...\mir2-rs\target\debug\db-srv.exe E:\tmp\a2-dbsrv\fail-loud\dbsvr-baddb.con
 
 | 路径 | 是什么 | 处置 |
 | --- | --- | --- |
-| `E:\tmp\a2-dbsrv\evidence\*.log` | 本轮全部判据日志（门禁/②③④/失败用例） | **保留**（报告引用的证据） |
+| `E:\tmp\a2-dbsrv\evidence\*.log`、`logdiff-*.txt` | 本轮全部判据日志（门禁 ①②③④ / 失败用例 / 两侧日志行集） | **保留**（报告引用的证据；定稿文件＝`gate.log`、`oracle-csharp-run7.log`、`rust-dbsrv-run7.log`、`mixed-selgate-run5.log`、`fail-*.log`、`logdiff-*.txt`） |
+| `E:\tmp\a2-dbsrv\evidence\{oracle-csharp,rust-dbsrv,mixed-selgate}-run1..6.log` | 同一判据的过程重跑（迭代期留下的中间件） | 保留；以 `run7`/`run5` 为定稿 |
 | `E:\tmp\a2-dbsrv\oracle-dbsrv`、`oracle-selgate` | C# DBSrv / SelGate 构建产物**副本**（影子拓扑用；原目录未动） | 保留（① 复跑需要） |
 | `E:\tmp\a2-dbsrv\fail-loud\*.conf` | ③ 的四个故意坏配置 | 保留（报告引用） |
 | `E:\tmp\a2-dbsrv\oracle-csharp-run*.log` 等中间重跑 | 同一判据的过程重跑（run1..run4） | 保留；以 `run4`/`run2` 为定稿 |
-| `%TEMP%\a2-dbsrv-*` | 测试夹具目录（含两侧子进程日志） | 测试正常结束时自清；若某次 panic 留残，可整目录删 |
+| `%TEMP%\a2-dbsrv-*` | 测试夹具目录（含两侧子进程日志） | 已清空（本轮自审发现 11 个残件——原因是删目录时子进程仍持有日志句柄，已修成"先收子进程再删目录"，见 commit 60f2726a）；当前 `Get-ChildItem %TEMP% -Filter a2-dbsrv-*` 为空 |
 | 我起的 `LoginSrv.exe`（主检出 bin/Release，09:17 启动） | 为拿"登录→选服→会话"链路而试起；**因 5500 已被并行 A 线的 Rust login-srv 占用而立即 EADDRINUSE 退出**（`evidence\csharp-loginsrv.err.log`） | 已自行退出，无需处置 |
 
 > `E:\MirServer` 的冻结部署**未被修改**（副本另存 `E:\tmp`）；本轮未动 `src/**`（oracle 源）。
