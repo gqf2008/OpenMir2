@@ -837,6 +837,26 @@ pub fn encode_player_data(rec: &PlayerRecord) -> Vec<u8> {
     w.out
 }
 
+/// `SaveCharacterData`（GameSvr → DBSvr 的**存档请求体**，`PlayerDataInfo.cs`）的 MemoryPack 编码：
+/// `3` 个成员 = `Account`、`ChrName`、`CharacterDataInfo{ Header, Data }`。
+///
+/// 逐行照 `WorldServer.MakeSaveRcd`（`:1231-1360`）产出的 `CharacterDataInfo` + `DataService.SaveHumanRcd`
+/// 的反序列化端（`crates/storage` 的 `SaveCharacterData`，两侧同布局）：DBSvr 收到后用
+/// `PlayDataStorage.Save.cs` 写 `characters`/`characters_ablity` 与物品族表。
+///
+/// `opt_obj(CharacterDataInfo)` 的对象头写 `CharacterDataInfo::members() == 2`（与 `encode_player_data` 一致）。
+#[must_use]
+pub fn encode_save_character_data(account: &str, chr_name: &str, rec: &PlayerRecord) -> Vec<u8> {
+    let mut w = Writer::default();
+    w.u8(3); // SaveCharacterData 成员数
+    w.string(Some(account));
+    w.string(Some(chr_name));
+    w.u8(2); // CharacterDataInfo 成员数（`opt_obj` 的 Some 对象头）
+    rec.header.encode(&mut w);
+    rec.data.encode(&mut w);
+    w.out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1247,5 +1267,34 @@ mod tests {
             .unwrap()
             .encode(&mut w);
         assert_eq!(w.out, oracle("magic0"));
+    }
+
+    /// 存档请求体 `SaveCharacterData`：必须能被 **DBSvr 侧的同一类型**
+    /// （`crates/storage::SaveCharacterData`，`bins/db-srv/src/data.rs` 用的就是它）解出，
+    /// 且重编码回**同一字节**——这是「GameSvr 的 `record::Writer` 与 DBSvr 的 MemoryPack 同布局」
+    /// 的机械证明（不是按公式重推）。
+    #[test]
+    fn save_character_data_roundtrips_through_dbsrv_type() {
+        use mir2_storage::MemPack;
+        let rec = assert_roundtrip("stage6");
+        let bytes = encode_save_character_data("acct", "aaa", &rec);
+        let back = mir2_storage::SaveCharacterData::from_bytes(&bytes)
+            .expect("DBSvr 侧 SaveCharacterData 必须能解存档体");
+        assert_eq!(back.account.as_deref(), Some("acct"));
+        assert_eq!(back.chr_name.as_deref(), Some("aaa"));
+        let cdi = back
+            .character_data
+            .as_ref()
+            .expect("CharacterDataInfo 非 null");
+        assert_eq!(
+            cdi.data.as_ref().and_then(|d| d.chr_name.as_deref()),
+            rec.data.chr_name.as_deref(),
+            "嵌套 CharacterData 必须原样携带"
+        );
+        assert_eq!(
+            mir2_storage::SaveCharacterData::to_bytes(&back),
+            bytes,
+            "重编码必须逐字节相同（两侧同 MemoryPack 布局）"
+        );
     }
 }
