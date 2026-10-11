@@ -213,6 +213,6 @@ E:\...\mir2-rs\target\debug\db-srv.exe E:\tmp\a2-dbsrv\fail-loud\dbsvr-baddb.con
 | `E:\tmp\a2-dbsrv\fail-loud\*.conf` | ③ 的四个故意坏配置 | 保留（报告引用） |
 | `E:\tmp\a2-dbsrv\oracle-csharp-run*.log` 等中间重跑 | 同一判据的过程重跑（run1..run4） | 保留；以 `run4`/`run2` 为定稿 |
 | `%TEMP%\a2-dbsrv-*` | 测试夹具目录（含两侧子进程日志） | 已清空（本轮自审发现 11 个残件——原因是删目录时子进程仍持有日志句柄，已修成"先收子进程再删目录"，见 commit 60f2726a）；当前 `Get-ChildItem %TEMP% -Filter a2-dbsrv-*` 为空 |
-| 我起的 `LoginSrv.exe`（主检出 bin/Release，09:17 启动） | 为拿"登录→选服→会话"链路而试起；**因 5500 已被并行 A 线的 Rust login-srv 占用而立即 EADDRINUSE 退出**（`evidence\csharp-loginsrv.err.log`） | 已自行退出，无需处置 |
+| 我试起的 `LoginSrv.exe` / `LoginGate.exe`（主检出 bin/Release 与 E:\MirServer，09:17–09:18） | 为拿"登录→选服→会话"链路而试起；**两者都因端口已被并行 A 线的 Rust login-srv / C# LoginGate 占用而立即 EADDRINUSE 退出**（`evidence\csharp-{loginsrv,logingate}.{out,err}.log`）——也因此没有动过别人在跑的进程 | 已自行退出，无需处置（用户侧无残留进程：`Get-CimInstance` 按 `*a2-dbsrv-*` 与端口复核均为空） |
 
 > `E:\MirServer` 的冻结部署**未被修改**（副本另存 `E:\tmp`）；本轮未动 `src/**`（oracle 源）。
