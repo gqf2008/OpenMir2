@@ -10,7 +10,7 @@
 
   阶段序列（每阶段写一条 {"t_wall_ms","stage"} 到 -StageLog）：
     start → login_id → login_pwd → login_submit → charsel → enter_game
-    → ingame → walk ×N → logout_alt_x → logout_confirm → back_charsel
+    → ingame → talk → talk_sent → walk ×N → logout_alt_x → logout_confirm → back_charsel
     → reenter → reentered → done
 
 .EXAMPLE
@@ -55,7 +55,13 @@ param(
   # 这样 BotSrv（LoginId = 前缀+序号）才能用同一个账号登进来。
   [string]$KickVia = "",     # BotSrv 前缀（账号名必须是 <前缀>0，即本客户端用的账号）
   [int]$KickWaitSec = 30,
-  [string]$BotRunner = ""    # tools/botload/run_bots.ps1 路径（默认自动定位）
+  [string]$BotRunner = "",    # tools/botload/run_bots.ps1 路径（默认自动定位）
+  # ---- 说话阶段（M2 验收② `m2-03-talk`）：进图后开聊天框 → 打字 → 回车发送 → 截图 ----
+  [switch]$SkipTalk,
+  [string]$TalkText = "m2 talk ok",  # 发送的文本（ASCII，避开客户端 GBK 输入法歧义）
+  [string]$TalkBox  = "",            # 可选：聊天输入框坐标 "x,y"；留空则只用回车开框（避免误点地面走路）
+  [string]$TalkShot = "m2-03-talk.png",  # 直接落 M2 验收② 的规定名
+  [int]$TalkWaitMs  = 1500            # 回车发送后等服务端 `SM_HEAR` 回声 + 客户端渲染
 )
 
 $ErrorActionPreference = "Stop"
@@ -290,6 +296,35 @@ if (-not $noticeClicked) { Shot "05b_after_notice.png" }
 Stage "ingame"
 Start-Sleep -Seconds 2
 Shot "05c_ingame_ready.png"
+
+# ---- 说话（M2 验收② `m2-03-talk`）：聊天框输入并回车，本角色文本出现在聊天框后 ----
+# 回车是 toggle（收起=打开 / 打开=发送并收起）：先成对按两次保证「收起」，再按一次打开，
+# 注入文本后回车发送。服务端 `SM_HEAR(40)` 会回声给说话者自己（oracle `SendRefMsg` 含 self），
+# 客户端靠这条回声渲染本角色的话。
+if (-not $SkipTalk) {
+  Stage "talk"
+  [void][MirFlow]::SetForegroundWindow($script:hwnd)
+  Start-Sleep -Milliseconds 300
+  if ($TalkBox -ne "") {
+    $tb = $TalkBox.Split(",") | ForEach-Object { [int]$_ }
+    Send-Click $tb[0] $tb[1] 1
+    Start-Sleep -Milliseconds 400
+  }
+  for ($i = 0; $i -lt 3; $i++) {
+    [MirFlow]::keybd_event(0x0D, 0, 0, [IntPtr]0)
+    Start-Sleep -Milliseconds 120
+    [MirFlow]::keybd_event(0x0D, 0, 2, [IntPtr]0)
+    Start-Sleep -Milliseconds 400
+  }
+  Send-Text $TalkText
+  Start-Sleep -Milliseconds 400
+  [MirFlow]::keybd_event(0x0D, 0, 0, [IntPtr]0)
+  Start-Sleep -Milliseconds 120
+  [MirFlow]::keybd_event(0x0D, 0, 2, [IntPtr]0)
+  Start-Sleep -Milliseconds $TalkWaitMs
+  Stage "talk_sent"
+  Shot $TalkShot
+}
 
 # ---- 自动挂机：Ctrl+Alt+X 开，跑 N 秒（走路+打怪），再关 ----
 if ($AutoPlaySec -gt 0) {

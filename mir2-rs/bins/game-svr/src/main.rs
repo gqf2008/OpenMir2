@@ -39,6 +39,7 @@ mod users;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use game_svr::chat;
 use game_svr::downlink;
 use game_svr::smframe;
 use mir2_protocol::frame::ServerMessage;
@@ -88,8 +89,15 @@ enum GateEvent {
     /// 新用户登记（`GM_OPEN`）。
     Opened { index: i32, ip: String },
     /// 客户端命令帧（`GM_DATA` 里是 12B 命令头 + 可选 EDCode 尾）。
+    ///
+    /// `chr_name` = `ChannelMessageHandler.cs:170-198` 在该网关连接自己的 `UserList` 上解出的
+    /// 说话者（先按 `SessionIndex-1` 且 socket 相符，否则线性扫 socket）——`CM_SAY` 要按它找回
+    /// `online` 登记表里的说话者；只按 `socket` 查会在**不同网关线 socket 号重复**时认错人。
+    /// `socket` = 该槽的客户端句柄（回帧路由仍要用它）。
     Command {
         index: i32,
+        chr_name: String,
+        socket: i32,
         cmd: CommandMessage,
         tail: Option<String>,
     },
@@ -298,6 +306,8 @@ async fn main() -> Result<()> {
     let colors = MsgColors {
         red_f: cfg.red_msg_f_color,
         red_b: cfg.red_msg_b_color,
+        hear_f: cfg.hear_msg_f_color,
+        hear_b: cfg.hear_msg_b_color,
     };
     // 物品模板表（帧 50/41 的 `UseItems[Dress/Weapon].StdItem.Shape` 输入）：oracle 在 `GameApp.Initialize`
     // 直连 MySQL 读 `stditems`（`MySqlDB.LoadItemsDB`，不经 DBSvr）；加载失败 ⇒ 空表
@@ -484,6 +494,65 @@ fn route_to_gate<'a>(
             None
         }
     }
+}
+
+/// `CM_SAY`(3030) 的**普通说话**落地：按在网关连接自己的 `UserList` 上解出的 `chr_name`
+/// 找回 `online` 登记表里的说话者，组 `SM_HEAR` 帧，
+/// 经 `chat::hear_targets`（`SendRefMsg` 的收件人集合）逐收件人按其 `[GateIdx, Socket]` 路由。
+///
+/// 口径见 `chat` 模块头；非普通行（`/`、`!`、`@`）本切片不接并记日志（不静默丢）。
+fn handle_say(
+    online: &OnlineRegistry,
+    world: &mir2_world::World,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    chr_name: &str,
+    socket: i32,
+    tail: Option<&str>,
+    colors: &MsgColors,
+) {
+    let Some(speaker) = online.iter().find(|e| e.chr_name == chr_name) else {
+        glog!(
+            "WRN",
+            "CM_SAY：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 不猜说话者，丢弃 tail={tail:?}"
+        );
+        return;
+    };
+    let Some(line) = tail else {
+        return;
+    };
+    if !chat::is_plain_say(line) {
+        glog!(
+            "DBG",
+            "CM_SAY：非普通说话（频道/命令），本切片未接 ⇒ 丢弃 ChrName={} tail={line:?}",
+            speaker.chr_name
+        );
+        return;
+    }
+    // `BaseObject.Base.cs:478` 的 `ChrName + ':' + sMsg`（GBK 字节；协议层不转 UTF-8）。
+    let text = chat::hear_text(&gbk_encode(&speaker.chr_name), &gbk_encode(line));
+    let body = smframe::sm_hear(speaker.actor_id, colors.hear_f, colors.hear_b, &text);
+    let mut delivered = 0usize;
+    for target_id in chat::hear_targets(world, speaker.actor_id, chat::SEND_REF_MSG_RANGE) {
+        let Some(t) = online.iter().find(|e| e.actor_id == target_id) else {
+            continue;
+        };
+        let Some(tx) = route_to_gate(gates, t.gate_idx, t.socket, "说话") else {
+            continue;
+        };
+        let _ = tx.send(SimToGate::SendFrame {
+            socket: t.socket,
+            body: body.clone(),
+        });
+        delivered += 1;
+    }
+    glog!(
+        "INF",
+        "说话 ChrName:{} ActorId:{} → {} 个收件人 tail={:?}",
+        speaker.chr_name,
+        speaker.actor_id,
+        delivered,
+        line
+    );
 }
 
 /// **S3 后半段（第一格）**：把世界 tick 的 AOI 结果（观察者实体 `VisibleActors` 里
@@ -697,6 +766,8 @@ const KICK_USER_MSG: &[u8] = &[
 struct MsgColors {
     red_f: u8,
     red_b: u8,
+    hear_f: u8,
+    hear_b: u8,
 }
 
 /// 账号级顶号的**即时部分**（oracle `TCPNetChannel.KickUser`，`TCPNetChannel.cs:226-284`）：
@@ -843,10 +914,16 @@ fn sim_loop(
                         "sim: 新用户登记 index={index} ip={ip}（open_session 属 S2b-3）"
                     );
                 }
-                GateEvent::Command { index, cmd, tail } => {
+                GateEvent::Command {
+                    index,
+                    chr_name,
+                    socket,
+                    cmd,
+                    tail,
+                } => {
                     glog!(
                         "DBG",
-                        "sim: index={index} 命令 Recog={} Ident={} Param={} Tag={} Series={} tail={:?}（进世界后才有意义，S2b-3）",
+                        "sim: index={index} 命令 Recog={} Ident={} Param={} Tag={} Series={} tail={:?}",
                         cmd.recog,
                         cmd.ident,
                         cmd.param,
@@ -854,6 +931,18 @@ fn sim_loop(
                         cmd.series,
                         tail.as_deref().unwrap_or("")
                     );
+                    // `CM_SAY`：普通说话回 `SM_HEAR`（其余 ident 仍在切片清单里，只记日志）。
+                    if cmd.ident == chat::CM_SAY {
+                        handle_say(
+                            &online,
+                            &world,
+                            &gates,
+                            &chr_name,
+                            socket,
+                            tail.as_deref(),
+                            &colors,
+                        );
+                    }
                 }
                 GateEvent::CertificationPending { index, ip } => {
                     glog!(
@@ -1723,6 +1812,8 @@ async fn dispatch(
             };
             let index = u.index;
             let ip = u.ip.clone();
+            // 说话者身份（oracle 是在该网关自己的 `UserList` 上解出的）：`CM_SAY` 用它找 `online`。
+            let chr_name = u.chr_name.clone();
             // `:201-225`：还没进世界的会话走 `DoClientCertification`（认证语义属 S2）；
             // 已进世界的才把 12B 命令头（+ EDCode 尾）当命令处理。
             if !u.in_world {
@@ -1809,7 +1900,13 @@ async fn dispatch(
                 ))
             };
             let tail = tail.map(|bytes| gbk_decode(&bytes));
-            let _ = ev_tx.send(GateEvent::Command { index, cmd, tail });
+            let _ = ev_tx.send(GateEvent::Command {
+                index,
+                chr_name,
+                socket: msg.socket,
+                cmd,
+                tail,
+            });
         }
         other => {
             glog!("DBG", "未处理的 GM_{other}（socket={}）", msg.socket);
@@ -1822,6 +1919,12 @@ async fn dispatch(
 fn gbk_decode(bytes: &[u8]) -> String {
     let (s, _, _) = encoding_rs::GBK.decode(bytes);
     s.into_owned()
+}
+
+/// GBK 编码（说话回帧 `SM_HEAR` 的尾：`ChrName + ':' + sMsg` 要与 oracle 的 GB2312 字节一致）。
+/// 合法 GBK 经 `gbk_decode` ⇒ 本函数是逐字节往返（未配对代理等在 GBK 域不存在）。
+fn gbk_encode(s: &str) -> Vec<u8> {
+    encoding_rs::GBK.encode(s).0.into_owned()
 }
 
 async fn send_raw(tx: &Arc<Mutex<OwnedWriteHalf>>, wire: &[u8]) -> Result<()> {
@@ -2218,6 +2321,90 @@ mod tests {
         assert!(online.is_empty());
     }
 
+    /// **`CM_SAY` 普通说话**：与 oracle `SendRefMsg`（`BaseObject.Message.cs:395-440`）同集合 ——
+    /// ±`SendRefMsgRange`(12) 格内、同图、`Race==Play && !Ghost` 的 actor，**含说话者自己**。
+    /// 帧 = 12B 头（`Recog=说话者 ActorId`、`Ident=SM_HEAR(40)`、`Param=MakeWord(F,B)`、`Tag=0`、
+    /// `Series=1`）+ 尾 `EncodeString("aaa:hi")`。
+    ///
+    /// 红检：把 `chat::hear_targets` 的"含自己"去掉（或把 `sm_hear` 的 `Series` 改 0 / `Ident` 改错）
+    /// ⇒ 本用例必红。
+    #[test]
+    fn say_broadcasts_hear_to_self_and_near_players_only() {
+        use std::collections::HashMap;
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let (tx1, mut rx1) = mpsc::unbounded_channel::<SimToGate>();
+        let (tx2, mut rx2) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        gates.insert(1, tx1);
+        gates.insert(2, tx2);
+
+        let mut world = mir2_world::World::with_maps(vec![(64, 64), (64, 64)]);
+        let mut mk = |name: &str, x: i32, y: i32, map_id: usize| {
+            let mut e = mir2_world::Entity::new(0, name.to_string(), x, y);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e.map_id = map_id;
+            world.add_entity(e)
+        };
+        let a = mk("aaa", 10, 10, 0); // 说话者
+        let b = mk("bbb", 12, 12, 0); // dx=dy=12 ⇒ 边界内
+        let c = mk("ccc", 11, 11, 1); // 另一张图 ⇒ 不收
+
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "aaa", 1, 0, 901, a));
+        online_set(&mut online, entry("b", "bbb", 2, 1, 902, b));
+        online_set(&mut online, entry("c", "ccc", 3, 2, 903, c));
+
+        handle_say(
+            &online,
+            &world,
+            &gates,
+            "aaa",
+            901,
+            Some("hi"),
+            &MsgColors {
+                red_f: 0xFF,
+                red_b: 0x38,
+                hear_f: 0x00,
+                hear_b: 0xFF,
+            },
+        );
+
+        let check =
+            |rx: &mut mpsc::UnboundedReceiver<SimToGate>, want_sock: i32| match rx.try_recv() {
+                Ok(SimToGate::SendFrame { socket, body }) => {
+                    assert_eq!(socket, want_sock);
+                    assert_eq!(body.len(), 12 + 8, "12B 头 + Encode(\"aaa:hi\")(8)");
+                    assert_eq!(
+                        i32::from_le_bytes([body[0], body[1], body[2], body[3]]),
+                        a,
+                        "Recog = 说话者 ActorId（BaseObject.Message.cs:154）"
+                    );
+                    assert_eq!(
+                        u16::from_le_bytes([body[4], body[5]]),
+                        mir2_protocol::messages::SM_HEAR,
+                        "Ident = SM_HEAR(40)"
+                    );
+                    assert_eq!(
+                        u16::from_le_bytes([body[6], body[7]]),
+                        0xFF00,
+                        "Param = MakeWord(FColor=0x00, BColor=0xFF)"
+                    );
+                    assert_eq!(u16::from_le_bytes([body[8], body[9]]), 0, "Tag=0");
+                    assert_eq!(u16::from_le_bytes([body[10], body[11]]), 1, "Series=1");
+                    assert_eq!(
+                        mir2_protocol::edcode::decode(&body[12..]),
+                        b"aaa:hi".to_vec(),
+                        "尾 = EncodeString(ChrName + ':' + sMsg)"
+                    );
+                }
+                _ => panic!("socket={want_sock} 未收到 SM_HEAR"),
+            };
+        check(&mut rx0, 901); // 自己（客户端靠这条回声渲染自己发的话）
+        check(&mut rx1, 902); // 边界内近邻
+        assert!(rx2.try_recv().is_err(), "另一张图的角色不该收到普通说话");
+    }
+
     /// **`openmir2-m2-session-lifecycle` ①**：账号级顶号（`SS_CLOSESESSION` ⇒ `KickUser`）：
     ///
     /// - 旧连接**立即**收到 `SM_SYSMESSAGE`（ident 100，**不是** 528），`Recog` = 旧 ActorId，
@@ -2252,6 +2439,8 @@ mod tests {
             MsgColors {
                 red_f: 0xFF,
                 red_b: 0x38,
+                hear_f: 0x00,
+                hear_b: 0xFF,
             },
             "acct1",
             424242,

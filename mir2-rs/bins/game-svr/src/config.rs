@@ -45,6 +45,11 @@ pub struct GateConfig {
     pub red_msg_f_color: u8,
     /// `[Setup] RedMsgBColor`（oracle `GameSvrConf.cs:1541` 缺省 `0x38`）——同上，高字节。
     pub red_msg_b_color: u8,
+    /// `[Setup] HearMsgFColor`（oracle `GameSvrConf.cs:1528` 缺省 `0x00`）——`CM_SAY` 普通说话
+    /// 下行 `SM_HEAR` 的前景色（`BaseObject.Base.cs:478` 的 `btHearMsgFColor`）。现网 `=0`。
+    pub hear_msg_f_color: u8,
+    /// `[Setup] HearMsgBColor`（oracle `GameSvrConf.cs:1529` 缺省 `0xFF`）——同上，背景色。现网 `=255`。
+    pub hear_msg_b_color: u8,
     /// `[Server] IDSAddr`：登录服务器地址（oracle 是 TcpClient 主动连它，`AuthenticationService.cs:22-34`）。
     pub ids_addr: String,
     /// `[Server] IDSPort`（现网 5600）。
@@ -104,6 +109,8 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut notice_dir: Option<String> = None;
     let mut red_msg_f_color: Option<u8> = None;
     let mut red_msg_b_color: Option<u8> = None;
+    let mut hear_msg_f_color: Option<u8> = None;
+    let mut hear_msg_b_color: Option<u8> = None;
     let mut show_rank_level_name: Option<bool> = None;
     let mut ids_addr: Option<String> = None;
     let mut ids_port: Option<u16> = None;
@@ -188,6 +195,18 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                             .with_context(|| format!("RedMsgBColor 不是合法字节：{v:?}"))?,
                     );
                 }
+                "HEARMSGFCOLOR" => {
+                    hear_msg_f_color = Some(
+                        v.parse()
+                            .with_context(|| format!("HearMsgFColor 不是合法字节：{v:?}"))?,
+                    );
+                }
+                "HEARMSGBCOLOR" => {
+                    hear_msg_b_color = Some(
+                        v.parse()
+                            .with_context(|| format!("HearMsgBColor 不是合法字节：{v:?}"))?,
+                    );
+                }
                 // `ServerConf.cs:271` 的 `ReadWriteBool("Setup", ...)`：现网 `0/1`。
                 "SHOWRANKLEVELNAME" => {
                     show_rank_level_name = Some(match v.trim() {
@@ -241,6 +260,9 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         // oracle 缺省值（`GameSvrConf.cs:1540-1541`）：`[Setup]` 里没写也照常起。
         red_msg_f_color: red_msg_f_color.unwrap_or(0xFF),
         red_msg_b_color: red_msg_b_color.unwrap_or(0x38),
+        // oracle 缺省值（`GameSvrConf.cs:1528-1529`）：`HearMsgFColor=0x00` / `HearMsgBColor=0xFF`。
+        hear_msg_f_color: hear_msg_f_color.unwrap_or(0x00),
+        hear_msg_b_color: hear_msg_b_color.unwrap_or(0xFF),
         // oracle 缺省值（`GameSvrConf.cs:1464`）：`[Setup]` 里没写不算错。
         show_rank_level_name: show_rank_level_name.unwrap_or(false),
         ids_addr,
@@ -306,6 +328,14 @@ mod tests {
             "[Setup] ShowRankLevelName=1（现网值）"
         );
         assert_eq!(
+            c.hear_msg_f_color, 0x00,
+            "缺 [Setup] HearMsgFColor ⇒ oracle 缺省 0x00（GameSvrConf.cs:1528）"
+        );
+        assert_eq!(
+            c.hear_msg_b_color, 0xFF,
+            "缺 [Setup] HearMsgBColor ⇒ oracle 缺省 0xFF（GameSvrConf.cs:1529）"
+        );
+        assert_eq!(
             c.envir_dir, "Envir",
             "缺 [Share] EnvirDir 时用 oracle 缺省值"
         );
@@ -314,6 +344,21 @@ mod tests {
             c.notice_dir, "Notice",
             "缺 [Share] NoticeDir 时用 oracle 缺省值（GameSvrConf.cs:1297）"
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `[Setup] HearMsgFColor/HearMsgBColor`（现网 `Server.conf` 实值 `0` / `255`）：解析到
+    /// `GateConfig` 供 `CM_SAY` 回帧 `SM_HEAR` 的 `Param` 低/高字节。
+    #[test]
+    fn hears_msg_colors_from_setup_section() {
+        let dir = std::env::temp_dir().join(format!("gs-conf-hear-{}", std::process::id()));
+        let p = write(
+            &dir,
+            "[Server]\nGateAddr=127.0.0.1\nGatePort=5000\nCheckBlock=12288\nIDSAddr=127.0.0.1\nIDSPort=5600\nDBAddr=127.0.0.1\nDBPort=6000\n[Setup]\nHearMsgFColor=0\nHearMsgBColor=255\n",
+        );
+        let c = load(&p).unwrap();
+        assert_eq!(c.hear_msg_f_color, 0);
+        assert_eq!(c.hear_msg_b_color, 255);
         std::fs::remove_dir_all(&dir).ok();
     }
 
