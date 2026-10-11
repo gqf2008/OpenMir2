@@ -1,15 +1,16 @@
 {
   "schema": "m3-bag-equip-sequence/v1",
   "card": "openmir2-m3-bag-equip-alignment",
-  "whitelist": ["T-14", "T-22"],
+  "whitelist": ["T-14", "T-22", "T-26"],
   "purpose": "M3 逐系统对齐①（背包/装备）的『两侧同一序列』定义：C# 栈与 Rust 栈各跑同一串 CM_* 字节，最后做跨侧作用域字段级 diff（判据 = 0）。",
   "driver": {
     "where": "src/BotSrv/Player/RobotPlayer.cs :: BagEquipSequenceTick()",
     "enable": "BotSrv 的 BotPlay.BagEquipSequence=true（tools/botload/run_bots.ps1 -BagEquipSequence 透传；夹具专用，默认 false = 原行为）",
     "arm": "本假人收到自己的 SM_LOGON 后武装（MarkInWorld → ArmBagEquipSequence）；第一步再等 BagEquipStartDelayMs（默认 3000ms），给服务端把物品列表推完",
     "step_interval": "BagEquipStepMs（默认 1000ms）",
-    "argument_source": "本假人的客户端视图（MShare.ItemArr / MShare.UseItems，来自服务端 SM_* 推送）。两侧服务端行为相同时，发出去的 CM_* 字节逐条相同 —— 这就是『两侧同一序列』。",
-    "markers": "每一步落一条 `M3BAGSEQ step=N op=<CM_*> ...`、收尾一条 `M3BAGSEQ done`；run_pair.ps1 把它们写进 baseline.json 的 bag_equip_markers，缺整串即 RED。",
+    "argument_source": "本假人的**初始视图**（MShare.ItemArr = SM_BAGITEMS 装载的背包；UseItems = 装备）。五步参数在 step=0 由 SnapshotBagEquipSequence() **一次性钉住**，之后不再读会随服务端回应演化的视图 ⇒ 发出去的 CM_* 字节只由初始视图决定。两侧服务端推来的初始视图一致（同一 mir2_db 记录 / 同一固定建角），这串字节就逐条相同。",
+    "snapshot_note": "为什么不在每步读活视图：BotSrv 的 g_WaitingUseItem/g_EatingItem 与 ClientItem 解码在 T-14 之前从未被真实触发，回应处理器里有 latent NRE（本片已修 ClientItem 解码、AddItemBag 空槽守卫、g_* 初始化，见 T-22），但『逐步骤读活视图』仍会把两侧同一性绑到未实现路径上。快照只依赖两侧应对齐的输入。",
+    "markers": "`M3BAGSEQ SM_BAGITEMS body_len=N bag_view=M`（收到并装载背包列表）、`M3BAGSEQ snapshot bag_view=… takeon=… takeoff=… drop=… eat=…`、每步一条 `M3BAGSEQ step=N op=<CM_*> ...`、收尾 `M3BAGSEQ done`；run_pair.ps1 把它们写进 baseline.json 的 bag_equip_markers，缺整串即 RED。run_bots.ps1 -BagEquipSequence 会等整串（含每个假人的 done）再收工（旧实现按 login_ok 立即 kill ⇒ 序列跑不完）。",
     "writes_on_wire": "仅本假人自己的 socket；不读不写跨假人共享世界态（同 ProbeActionTick 的纪律）"
   },
   "oracle_dispatch_anchors": {
@@ -17,7 +18,8 @@
     "src/M2Server/Player/PlayObject.Message.cs:811": "CM_PICKUP(1001) → 仅当 CurrX==nParam2 && CurrY==nParam3 才 ClientPickUpItem()",
     "src/M2Server/Player/PlayObject.Message.cs:820": "CM_TAKEONITEM(1003) → ClientTakeOnItems((byte)nParam2, nParam1, msg)",
     "src/M2Server/Player/PlayObject.Message.cs:823": "CM_TAKEOFFITEM(1004) → ClientTakeOffItems((byte)nParam2, nParam1, msg)",
-    "src/M2Server/Player/PlayObject.Message.cs:826": "CM_EAT(1006) → ClientUseItems(nParam1, msg)"
+    "src/M2Server/Player/PlayObject.Message.cs:826": "CM_EAT(1006) → ClientUseItems(nParam1, msg)",
+    "src/M2Server/Player/PlayObject.Operate.cs:37": "ClientQueryBagItems() ⇒ SM_BAGITEMS(201)（客户端 SM_LOGON 后发 CM_QUERYBAGITEMS 取背包；BotSrv RobotPlayer.Operate.cs 的 SM_LOGON 分支照发）"
   },
   "steps": [
     {
@@ -29,7 +31,7 @@
       "encoding": "MakeMessage(CM_PICKUP, 0, CurrX, CurrY, 0)  // Recog=0、Param1=X、Param2=Y、Tag=0、Series=0",
       "sender": "RobotPlayer.SendPickup()",
       "oracle_handler": "src/M2Server/Player/PlayObject.Base.cs:55 ClientPickUpItem()",
-      "observation": "地面物品消失 / 背包出现该物品（SM_ADDITEM=200 或 SM_ITEM*）；无非金币物可拾时服务端不动（两侧同）"
+      "observation": "两侧都无地面物（T-25：oracle 的 MapItem.ItemId 恒 0 ⇒ 掉/脚本造的地面物恒加不进地图）⇒ 无状态变更、无下行帧；这是 T-25 判据的可达形态。"
     },
     {
       "n": 1,
@@ -39,9 +41,9 @@
       "ident": 1003,
       "encoding": "MakeMessage(CM_TAKEONITEM, MakeIndex, where, 0, 0) + EncodeString(ItemName)  // Recog=MakeIndex、Param1=槽位、Param2=0",
       "sender": "RobotPlayer.SendTakeOnItem(int where, int itmindex, string itmname)",
-      "selection": "背包里第一件 NeedIdentify<4 且 BotHelper.GetTakeOnPosition(...) >= 0 的物品；槽位由 GetTakeOnPosition 定（戒指/手镯的左右由 MShare.g_boTakeOnPos 交替，单假人确定）",
+      "selection": "初始视图 backpack 6.. 里第一件 NeedIdentify<4 且 BotHelper.GetTakeOnPosition(...)>=0 的物品；槽位由 GetTakeOnPosition 定（本片固定建角实测 = 木剑 StdMode 5 ⇒ where=1）。",
       "oracle_handler": "src/M2Server/Player/PlayObject.Operate.cs:377 ClientTakeOnItems(byte btWhere, int nItemIdx, string sItemName)",
-      "observation": "SM_TAKEON_OK=615 / SM_TAKEON_FAIL=619；成功后 characters_item/hum_items(UseItems[where]) 写入、背包行移除、WAbil 重算"
+      "observation": "SM_TAKEON_OK(615)（oracle 还会 RM_ABILITY/RM_SUBABILITY + FeatureChanged ⇒ SM_FEATURECHANGED(41)）；成功后 characters_item(UseItems[where]) 写入、characters_bagitem 对应行移除、WAbil 重算。"
     },
     {
       "n": 2,
@@ -51,9 +53,9 @@
       "ident": 1004,
       "encoding": "MakeMessage(CM_TAKEOFFITEM, MakeIndex, where, 0, 0) + EncodeString(ItemName)  // Recog=MakeIndex、Param1=槽位、Param2=0",
       "sender": "RobotPlayer.SendTakeOffItem(byte where, int itmindex, string itmname)",
-      "selection": "身上第一件非空 UseItems[where]（0..13）",
+      "selection": "**步骤 1 穿上那一件的落点**（where=step1 的 GetTakeOnPosition 结果、MakeIndex/name=step1 的物品）；step1 无件时才回落到初始 UseItems 的第一件非空。",
       "oracle_handler": "src/M2Server/Player/PlayObject.Operate.cs:499 ClientTakeOffItems(byte btWhere, int nItemIdx, string sItemName)",
-      "observation": "SM_TAKEOFF_OK=616 / SM_TAKEOFF_FAIL=620；成功后 UseItems[where] 清空、背包行出现、WAbil 重算"
+      "observation": "SM_TAKEOFF_OK(616)（+ SM_ADDITEM(200) 把该件放回背包 + FeatureChanged）；成功后 UseItems[where] 清空、背包行出现、WAbil 重算。"
     },
     {
       "n": 3,
@@ -63,9 +65,9 @@
       "ident": 1000,
       "encoding": "MakeMessage(CM_DROPITEM, MakeIndex, 1, 0, 0) + EncodeString(ItemName)  // Recog=MakeIndex、Param1=数量、Param2=0",
       "sender": "RobotPlayer.SendDropItem(string name, int itemserverindex, int dropcnt)",
-      "selection": "背包里第一件非空物品",
+      "selection": "初始视图 backpack 6.. 第一件非空物品（本片固定建角实测 = 木剑；蜡烛 StdMode 30 被 AddItemBag 放在 0..4，不在 6.. ⇒ 旧『每步读活视图』口径会选到别的件，快照口径固定选 6.. 第一件）。",
       "oracle_handler": "src/M2Server/Player/PlayObject.Operate.cs:251 ClientDropItem(string sItemName, int nItemIdx)",
-      "observation": "SM_DROPITEM_SUCCESS=600 / SM_DROPITEM_FAIL=601。注意 T-19：oracle 正常丢弃**恒失败**（MapItem.ItemId 恒 0），Rust 1:1 复刻 ⇒ 两侧都是 601、背包不动；这本身就是『同序列同结果』的一部分"
+      "observation": "SM_DROPITEM_FAIL(601)。T-19：oracle 正常丢弃**恒失败**（MapItem.ItemId 恒 0），Rust 1:1 复刻 ⇒ 两侧都是 601、背包不动；这本身就是『同序列同结果』的一部分。"
     },
     {
       "n": 4,
@@ -75,19 +77,25 @@
       "ident": 1006,
       "encoding": "MakeMessage(CM_EAT, MakeIndex, 0, 0, StdMode)  // Recog=MakeIndex、Param1/2=0、Series=StdMode",
       "sender": "RobotPlayer.SendEat(int itmindex, string itmname, int nUnBindItem)",
-      "selection": "背包里第一件药品（StdMode ∈ {0,1,2}）",
+      "selection": "初始视图 **全槽 0..MaxBagItemcl**（52）里第一件 StdMode ∈ {0,1,2} 的药品。BotSrv 的 AddItemBag 把 StdMode<=3 的消耗品放在 0..4（不进 6..），旧实现只扫 6.. 永远 skip ⇒ 本片改全槽（本片实测吃到 0..4 的『金创药(小量)』index=1）。",
       "oracle_handler": "src/M2Server/Player/PlayObject.Operate.cs:601 ClientUseItems(int nItemIdx, string sItemName)",
-      "observation": "SM_EAT_OK=635 / SM_EAT_FAIL=636；成功后物品移除 + RM_WEIGHTCHANGED=10115（+ StdMode 1 的 RM_* 通知）"
+      "observation": "SM_EAT_OK(635) / SM_EAT_FAIL(636)；成功后物品移除（characters_bagitem 行内容变化）+ RM_WEIGHTCHANGED(10115)（+ StdMode 1 的 RM_* 通知）。"
     }
   ],
   "red_check_teeth": [
     "删 BotSrv 的 `_inWorld` 武装判据 ⇒ 序列在登录前抢跑：网关按坏首包 Kick，序列标记缺失 ⇒ run_pair 判 RED。",
     "把 `-BagEquipSequence` 透传去掉（run_bots.ps1 不写 BotPlay.BagEquipSequence）⇒ run_bag_equip_pair.ps1 -SelfCheckNoStack 第①条 RED（配置透传有牙齿）。",
-    "把某步（如 take_on）改成不发送 ⇒ 该步的 `M3BAGSEQ step=1` 标记缺失、或 pairs 两侧行为不同 ⇒ 跨侧 diff 非 0。"
+    "把某步（如 take_on）改成不发送 ⇒ 该步的 `M3BAGSEQ step=1` 标记缺失、或 pairs 两侧行为不同 ⇒ 跨侧 diff 非 0。",
+    "把 run_bots 的 bag_seq_done 等待去掉（回到按 login_ok 收工）⇒ `M3BAGSEQ done` 缺失 ⇒ run_pair 判 RED（实测：修前该步恒 RED）。",
+    "把 ClientItemCodec 换回 `EDCode.DecodeClientBuffer<ClientItem>` ⇒ bag_view=0、五步全 skip ⇒ 序列退化为空转（实测：修前 bag_view=0）。"
   ],
   "known_gaps": [
     "T-15：地面物品模型只在 bins/game-svr 的最小切片，未接 crates/world；CM_PICKUP 的『真实地面物』要等接线。",
     "T-22：本序列是 BotSrv 夹具驱动（不进 oracle 冻结面），默认关时 BotSrv 行为逐字节不变。",
-    "T-14：本文件 + run_bag_equip_pair.ps1 是『一条命令』；真实跨侧 diff=0 仍要在全栈窗口跑（优先让给 M2 真机验收）"
+    "T-26（本片实测新增，全部归 m2-svr 接线）——C# 基线（csharp-20261012-054849）已 GREEN；但 Rust 侧当前还产不出同一序列：",
+    "T-26 (a) **Rust 新建角色的地图字段为空**：Rust 栈建出的 `characters.MapName/HomeMap/CX/CY` = NULL/0，而 C# 建角写入 `MapName='0'` 等；Rust game-svr 进图时 `mapwire::resolve_map_id(\"\")` 失败 ⇒ 日志 `拒绝进图 ChrName:… CurMap:：地图名未找到`，bot 收不到 SM_LOGON ⇒ 序列根本不武装（实测 in_world=0/1）。",
+    "T-26 (b) **Rust 不答 `CM_QUERYBAGITEMS`**：oracle 在收到该消息后回 `SM_BAGITEMS(201)`（PlayObject.Operate.cs:37），Rust main.rs 无此分支 ⇒ Rust 侧假人 bag_view 恒 0 ⇒ 五步全 skip；两侧初始视图不一致，『同一序列』不成立。",
+    "T-26 (c) **Rust 未接 `CM_EAT(1006)` 收包派发**：1000/1001/1003/1004 已由 main.rs 接（owner §26 / N-1），1006 仍只记日志丢弃；即便 (a)(b) 修好，用药步在 Rust 侧也不会落库 ⇒ 跨侧 diff 非 0。",
+    "T-14 本片结论：C# 侧同序列判据已 GREEN（markers=9 done=True，作用域 115 行/9 表）；`scoped_diff.py diff --canonical --fixed-newchr` 仍拿不到 0，因为 Rust 侧缺上列三项接线（均在 `bins/game-svr/src/main.rs`，归 m2-svr）。"
   ]
 }

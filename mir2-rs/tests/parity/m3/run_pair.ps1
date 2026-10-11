@@ -243,6 +243,13 @@ if (-not $SkipBots) {
 }
 
 # ---- 5. 快照 AFTER ----
+# M3 T-14：run_bots 收工时 kill BotSrv ⇒ 服务端从掉线路径走 `SaveHumanRcd`（WorldServer 的非活跃分支），
+# 把本段 in-world 改动（装备/卸下/用药）落库。给保存线程一点时间再取 AFTER 快照，否则会漏掉刚发生的改动。
+# 仅 -BagEquipSequence 时等待；其余路径逐字节不变（不加额外等待）。
+if ($BagEquipSequence) {
+  Write-Output 'SETTLE_BAGSEQ 等掉线存档落库（3s）'
+  Start-Sleep -Seconds 3
+}
 $snapAfter = Join-Path $SessionDir 'snap_after'
 python $Dbsnap snap --out $snapAfter | Tee-Object -FilePath (Join-Path $SessionDir 'dbsnap_after.log')
 if ($LASTEXITCODE -ne 0) { throw 'snap_after 失败' }

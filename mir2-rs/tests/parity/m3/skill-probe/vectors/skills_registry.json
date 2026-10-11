@@ -1,0 +1,979 @@
+{
+  "generated_by": "mir2-rs/tests/parity/m3/skill-probe",
+  "total_magic_rows": 108,
+  "implemented": 11,
+  "skills": [
+    {
+      "magic_id": 1,
+      "name": "\u706B\u7403\u672F",
+      "job": 1,
+      "train_level0": 7,
+      "delay_time": 60,
+      "implemented": true,
+      "reason": "\u672C\u7247\u5DF2\u5B9E\u88C5\uFF1A\u65BD\u6CD5\u524D\u7F6E \u002B MP \u6D88\u8017 \u002B \u5A01\u529B\u516C\u5F0F \u002B \u51B7\u5374\uFF08\u89C1 crates/world/src/magic.rs\uFF09"
+    },
+    {
+      "magic_id": 2,
+      "name": "\u6CBB\u6108\u672F",
+      "job": 2,
+      "train_level0": 7,
+      "delay_time": 40,
+      "implemented": true,
+      "reason": "\u672C\u7247\u5DF2\u5B9E\u88C5\uFF1A\u65BD\u6CD5\u524D\u7F6E \u002B MP \u6D88\u8017 \u002B \u5A01\u529B\u516C\u5F0F \u002B \u51B7\u5374\uFF08\u89C1 crates/world/src/magic.rs\uFF09"
+    },
+    {
+      "magic_id": 3,
+      "name": "\u57FA\u672C\u5251\u672F",
+      "job": 0,
+      "train_level0": 7,
+      "delay_time": 0,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 4,
+      "name": "\u7CBE\u795E\u529B\u6218\u6CD5",
+      "job": 2,
+      "train_level0": 9,
+      "delay_time": 0,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 5,
+      "name": "\u5927\u706B\u7403",
+      "job": 1,
+      "train_level0": 19,
+      "delay_time": 60,
+      "implemented": true,
+      "reason": "\u672C\u7247\u5DF2\u5B9E\u88C5\uFF1A\u65BD\u6CD5\u524D\u7F6E \u002B MP \u6D88\u8017 \u002B \u5A01\u529B\u516C\u5F0F \u002B \u51B7\u5374\uFF08\u89C1 crates/world/src/magic.rs\uFF09"
+    },
+    {
+      "magic_id": 6,
+      "name": "\u65BD\u6BD2\u672F",
+      "job": 2,
+      "train_level0": 14,
+      "delay_time": 40,
+      "implemented": true,
+      "reason": "\u672C\u7247\u5DF2\u5B9E\u88C5\uFF1A\u65BD\u6CD5\u524D\u7F6E \u002B MP \u6D88\u8017 \u002B \u5A01\u529B\u516C\u5F0F \u002B \u51B7\u5374\uFF08\u89C1 crates/world/src/magic.rs\uFF09"
+    },
+    {
+      "magic_id": 7,
+      "name": "\u653B\u6740\u5251\u672F",
+      "job": 0,
+      "train_level0": 19,
+      "delay_time": 0,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 8,
+      "name": "\u6297\u62D2\u706B\u73AF",
+      "job": 1,
+      "train_level0": 12,
+      "delay_time": 30,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 9,
+      "name": "\u5730\u72F1\u706B",
+      "job": 1,
+      "train_level0": 16,
+      "delay_time": 60,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 10,
+      "name": "\u75BE\u5149\u7535\u5F71",
+      "job": 1,
+      "train_level0": 26,
+      "delay_time": 100,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 11,
+      "name": "\u96F7\u7535\u672F",
+      "job": 1,
+      "train_level0": 17,
+      "delay_time": 100,
+      "implemented": true,
+      "reason": "\u672C\u7247\u5DF2\u5B9E\u88C5\uFF1A\u65BD\u6CD5\u524D\u7F6E \u002B MP \u6D88\u8017 \u002B \u5A01\u529B\u516C\u5F0F \u002B \u51B7\u5374\uFF08\u89C1 crates/world/src/magic.rs\uFF09"
+    },
+    {
+      "magic_id": 12,
+      "name": "\u523A\u6740\u5251\u672F",
+      "job": 0,
+      "train_level0": 25,
+      "delay_time": 0,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 13,
+      "name": "\u7075\u9B42\u706B\u7B26",
+      "job": 2,
+      "train_level0": 18,
+      "delay_time": 60,
+      "implemented": true,
+      "reason": "\u672C\u7247\u5DF2\u5B9E\u88C5\uFF1A\u65BD\u6CD5\u524D\u7F6E \u002B MP \u6D88\u8017 \u002B \u5A01\u529B\u516C\u5F0F \u002B \u51B7\u5374\uFF08\u89C1 crates/world/src/magic.rs\uFF09"
+    },
+    {
+      "magic_id": 14,
+      "name": "\u5E7D\u7075\u76FE",
+      "job": 2,
+      "train_level0": 22,
+      "delay_time": 40,
+      "implemented": true,
+      "reason": "\u672C\u7247\u5DF2\u5B9E\u88C5\uFF1A\u65BD\u6CD5\u524D\u7F6E \u002B MP \u6D88\u8017 \u002B \u5A01\u529B\u516C\u5F0F \u002B \u51B7\u5374\uFF08\u89C1 crates/world/src/magic.rs\uFF09"
+    },
+    {
+      "magic_id": 15,
+      "name": "\u795E\u5723\u6218\u7532\u672F",
+      "job": 2,
+      "train_level0": 25,
+      "delay_time": 40,
+      "implemented": true,
+      "reason": "\u672C\u7247\u5DF2\u5B9E\u88C5\uFF1A\u65BD\u6CD5\u524D\u7F6E \u002B MP \u6D88\u8017 \u002B \u5A01\u529B\u516C\u5F0F \u002B \u51B7\u5374\uFF08\u89C1 crates/world/src/magic.rs\uFF09"
+    },
+    {
+      "magic_id": 16,
+      "name": "\u56F0\u9B54\u5492",
+      "job": 2,
+      "train_level0": 28,
+      "delay_time": 50,
+      "implemented": true,
+      "reason": "\u672C\u7247\u5DF2\u5B9E\u88C5\uFF1A\u65BD\u6CD5\u524D\u7F6E \u002B MP \u6D88\u8017 \u002B \u5A01\u529B\u516C\u5F0F \u002B \u51B7\u5374\uFF08\u89C1 crates/world/src/magic.rs\uFF09"
+    },
+    {
+      "magic_id": 17,
+      "name": "\u53EC\u5524\u9AB7\u9AC5",
+      "job": 2,
+      "train_level0": 19,
+      "delay_time": 50,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 18,
+      "name": "\u9690\u8EAB\u672F",
+      "job": 2,
+      "train_level0": 20,
+      "delay_time": 50,
+      "implemented": true,
+      "reason": "\u672C\u7247\u5DF2\u5B9E\u88C5\uFF1A\u65BD\u6CD5\u524D\u7F6E \u002B MP \u6D88\u8017 \u002B \u5A01\u529B\u516C\u5F0F \u002B \u51B7\u5374\uFF08\u89C1 crates/world/src/magic.rs\uFF09"
+    },
+    {
+      "magic_id": 19,
+      "name": "\u96C6\u4F53\u9690\u8EAB\u672F",
+      "job": 2,
+      "train_level0": 21,
+      "delay_time": 50,
+      "implemented": true,
+      "reason": "\u672C\u7247\u5DF2\u5B9E\u88C5\uFF1A\u65BD\u6CD5\u524D\u7F6E \u002B MP \u6D88\u8017 \u002B \u5A01\u529B\u516C\u5F0F \u002B \u51B7\u5374\uFF08\u89C1 crates/world/src/magic.rs\uFF09"
+    },
+    {
+      "magic_id": 20,
+      "name": "\u8BF1\u60D1\u4E4B\u5149",
+      "job": 1,
+      "train_level0": 13,
+      "delay_time": 60,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 21,
+      "name": "\u77AC\u606F\u79FB\u52A8",
+      "job": 1,
+      "train_level0": 19,
+      "delay_time": 50,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 22,
+      "name": "\u706B\u5899",
+      "job": 1,
+      "train_level0": 24,
+      "delay_time": 120,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 23,
+      "name": "\u7206\u88C2\u706B\u7130",
+      "job": 1,
+      "train_level0": 22,
+      "delay_time": 60,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 24,
+      "name": "\u5730\u72F1\u96F7\u5149",
+      "job": 1,
+      "train_level0": 30,
+      "delay_time": 60,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 25,
+      "name": "\u534A\u6708\u5F2F\u5200",
+      "job": 0,
+      "train_level0": 28,
+      "delay_time": 0,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 26,
+      "name": "\u70C8\u706B\u5251\u6CD5",
+      "job": 0,
+      "train_level0": 35,
+      "delay_time": 0,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 27,
+      "name": "\u91CE\u86EE\u51B2\u649E",
+      "job": 0,
+      "train_level0": 30,
+      "delay_time": 0,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 28,
+      "name": "\u5FC3\u7075\u542F\u793A",
+      "job": 2,
+      "train_level0": 26,
+      "delay_time": 40,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 29,
+      "name": "\u7FA4\u4F53\u6CBB\u7597\u672F",
+      "job": 2,
+      "train_level0": 33,
+      "delay_time": 40,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 30,
+      "name": "\u53EC\u5524\u795E\u517D",
+      "job": 2,
+      "train_level0": 35,
+      "delay_time": 120,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 31,
+      "name": "\u9B54\u6CD5\u76FE",
+      "job": 1,
+      "train_level0": 31,
+      "delay_time": 0,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 32,
+      "name": "\u5723\u8A00\u672F",
+      "job": 1,
+      "train_level0": 32,
+      "delay_time": 120,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 33,
+      "name": "\u51B0\u5486\u54EE",
+      "job": 1,
+      "train_level0": 35,
+      "delay_time": 60,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 34,
+      "name": "\u89E3\u6BD2\u672F",
+      "job": 2,
+      "train_level0": 48,
+      "delay_time": 40,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 36,
+      "name": "\u706B\u7130\u51B0",
+      "job": 1,
+      "train_level0": 48,
+      "delay_time": 60,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 37,
+      "name": "\u96F7\u795E\u4E4B\u6012",
+      "job": 1,
+      "train_level0": 50,
+      "delay_time": 100,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 48,
+      "name": "\u7FA4\u4F53\u65BD\u6BD2\u672F",
+      "job": 2,
+      "train_level0": 48,
+      "delay_time": 40,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 39,
+      "name": "\u4E4C\u9F9F\u8DD1\u6B65",
+      "job": 99,
+      "train_level0": 50,
+      "delay_time": 20,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 40,
+      "name": "\u5341\u65B9\u65A9",
+      "job": 0,
+      "train_level0": 48,
+      "delay_time": 20,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 41,
+      "name": "\u72EE\u5B50\u543C",
+      "job": 0,
+      "train_level0": 38,
+      "delay_time": 30,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 42,
+      "name": "\u9F99\u5F71\u5251\u6CD5",
+      "job": 0,
+      "train_level0": 38,
+      "delay_time": 0,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 43,
+      "name": "\u5F00\u5929\u65A9",
+      "job": 0,
+      "train_level0": 37,
+      "delay_time": 0,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 44,
+      "name": "\u5BD2\u51B0\u638C",
+      "job": 1,
+      "train_level0": 36,
+      "delay_time": 60,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 45,
+      "name": "\u706D\u5929\u706B",
+      "job": 1,
+      "train_level0": 38,
+      "delay_time": 60,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 46,
+      "name": "\u5206\u8EAB\u672F",
+      "job": 99,
+      "train_level0": 50,
+      "delay_time": 50,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 47,
+      "name": "\u5730\u72F1\u70C8\u7130",
+      "job": 1,
+      "train_level0": 46,
+      "delay_time": 120,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 48,
+      "name": "\u6C14\u529F\u6CE2",
+      "job": 2,
+      "train_level0": 36,
+      "delay_time": 30,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 49,
+      "name": "\u4E91\u5BC2\u672F",
+      "job": 2,
+      "train_level0": 48,
+      "delay_time": 40,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 50,
+      "name": "\u65E0\u6781\u771F\u6C14",
+      "job": 2,
+      "train_level0": 38,
+      "delay_time": 30,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 51,
+      "name": "\u6708\u9B42\u98CE\u66B4",
+      "job": 2,
+      "train_level0": 50,
+      "delay_time": 30,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 52,
+      "name": "\u795E\u4E4B\u8BC5\u5492",
+      "job": 2,
+      "train_level0": 48,
+      "delay_time": 30,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 53,
+      "name": "\u55DC\u8840\u9B54\u5492(\u4FDD\u7559)",
+      "job": 2,
+      "train_level0": 50,
+      "delay_time": 30,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 54,
+      "name": "\u53EC\u5996\u964D\u9B54",
+      "job": 2,
+      "train_level0": 18,
+      "delay_time": 30,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 55,
+      "name": "\u5438\u661F\u72C2\u6740",
+      "job": 0,
+      "train_level0": 50,
+      "delay_time": 40,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 56,
+      "name": "\u5F02\u5F62\u6362\u4F4D",
+      "job": 1,
+      "train_level0": 48,
+      "delay_time": 30,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 57,
+      "name": "\u56DE\u751F\u672F",
+      "job": 2,
+      "train_level0": 48,
+      "delay_time": 30,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 58,
+      "name": "\u6D41\u661F\u706B\u96E8",
+      "job": 1,
+      "train_level0": 46,
+      "delay_time": 60,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 59,
+      "name": "\u566C\u8840\u672F",
+      "job": 2,
+      "train_level0": 46,
+      "delay_time": 60,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 66,
+      "name": "\u56DB\u7EA7\u9B54\u6CD5\u76FE",
+      "job": 1,
+      "train_level0": 40,
+      "delay_time": 0,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 66,
+      "name": "\u767D\u65E5\u95E8\u56DB\u7EA7\u6CD5\u76FE",
+      "job": 1,
+      "train_level0": 40,
+      "delay_time": 0,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 67,
+      "name": "\u5148\u5929\u5143\u529B",
+      "job": 99,
+      "train_level0": 50,
+      "delay_time": 0,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 68,
+      "name": "\u9152\u6C14\u62A4\u4F53",
+      "job": 99,
+      "train_level0": 50,
+      "delay_time": 0,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 69,
+      "name": "\u501A\u5929\u8F9F\u5730",
+      "job": 99,
+      "train_level0": 38,
+      "delay_time": 60,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 71,
+      "name": "\u56DB\u7EA7\u53EC\u5524\u795E\u517D",
+      "job": 2,
+      "train_level0": 50,
+      "delay_time": 120,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 71,
+      "name": "\u56DB\u7EA7\u82F1\u96C4\u795E\u517D",
+      "job": 2,
+      "train_level0": 50,
+      "delay_time": 120,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 72,
+      "name": "\u53EC\u5524\u6708\u7075",
+      "job": 2,
+      "train_level0": 45,
+      "delay_time": 60,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 74,
+      "name": "\u9010\u65E5\u5251\u6CD5",
+      "job": 0,
+      "train_level0": 46,
+      "delay_time": 0,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 75,
+      "name": "\u62A4\u4F53\u795E\u76FE",
+      "job": 99,
+      "train_level0": 39,
+      "delay_time": 60,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 76,
+      "name": "\u4E09\u7EDD\u6740",
+      "job": 0,
+      "train_level0": 15,
+      "delay_time": 60,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 77,
+      "name": "\u53CC\u9F99\u7834",
+      "job": 1,
+      "train_level0": 15,
+      "delay_time": 60,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 78,
+      "name": "\u864E\u5578\u8BC0",
+      "job": 2,
+      "train_level0": 15,
+      "delay_time": 60,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 79,
+      "name": "\u8FFD\u5FC3\u523A",
+      "job": 0,
+      "train_level0": 33,
+      "delay_time": 60,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 80,
+      "name": "\u51E4\u821E\u796D",
+      "job": 1,
+      "train_level0": 33,
+      "delay_time": 60,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 81,
+      "name": "\u516B\u5366\u638C",
+      "job": 2,
+      "train_level0": 33,
+      "delay_time": 60,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 82,
+      "name": "\u65AD\u5CB3\u65A9",
+      "job": 0,
+      "train_level0": 50,
+      "delay_time": 60,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 83,
+      "name": "\u60CA\u96F7\u7206",
+      "job": 1,
+      "train_level0": 50,
+      "delay_time": 60,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 84,
+      "name": "\u4E09\u7130\u5492",
+      "job": 2,
+      "train_level0": 50,
+      "delay_time": 60,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 85,
+      "name": "\u6A2A\u626B\u5343\u519B",
+      "job": 0,
+      "train_level0": 53,
+      "delay_time": 60,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 86,
+      "name": "\u51B0\u5929\u96EA\u5730",
+      "job": 1,
+      "train_level0": 53,
+      "delay_time": 60,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 87,
+      "name": "\u4E07\u5251\u5F52\u5B97",
+      "job": 2,
+      "train_level0": 53,
+      "delay_time": 60,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 88,
+      "name": "\u56DB\u7EA7\u57FA\u672C\u5251\u672F",
+      "job": 0,
+      "train_level0": 50,
+      "delay_time": 0,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 88,
+      "name": "\u56DB\u7EA7\u82F1\u96C4\u5251\u672F",
+      "job": 0,
+      "train_level0": 50,
+      "delay_time": 0,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 89,
+      "name": "\u56DB\u7EA7\u523A\u6740\u5251\u672F",
+      "job": 0,
+      "train_level0": 50,
+      "delay_time": 0,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 89,
+      "name": "\u56DB\u7EA7\u82F1\u96C4\u523A\u6740",
+      "job": 0,
+      "train_level0": 50,
+      "delay_time": 0,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 90,
+      "name": "\u56DB\u7EA7\u534A\u6708\u5F2F\u5200",
+      "job": 0,
+      "train_level0": 50,
+      "delay_time": 0,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 90,
+      "name": "\u56DB\u7EA7\u82F1\u96C4\u534A\u6708",
+      "job": 0,
+      "train_level0": 50,
+      "delay_time": 0,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 91,
+      "name": "\u56DB\u7EA7\u96F7\u7535\u672F",
+      "job": 1,
+      "train_level0": 50,
+      "delay_time": 100,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 91,
+      "name": "\u56DB\u7EA7\u82F1\u96C4\u96F7\u7535\u672F",
+      "job": 1,
+      "train_level0": 50,
+      "delay_time": 100,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 92,
+      "name": "\u56DB\u7EA7\u6D41\u661F\u706B\u96E8",
+      "job": 1,
+      "train_level0": 50,
+      "delay_time": 30,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 92,
+      "name": "\u56DB\u7EA7\u82F1\u96C4\u706B\u96E8",
+      "job": 1,
+      "train_level0": 50,
+      "delay_time": 30,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 93,
+      "name": "\u56DB\u7EA7\u65BD\u6BD2\u672F",
+      "job": 2,
+      "train_level0": 50,
+      "delay_time": 40,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 93,
+      "name": "\u56DB\u7EA7\u82F1\u96C4\u65BD\u6BD2\u672F",
+      "job": 2,
+      "train_level0": 50,
+      "delay_time": 40,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 94,
+      "name": "\u56DB\u7EA7\u566C\u8840\u672F",
+      "job": 2,
+      "train_level0": 50,
+      "delay_time": 60,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 94,
+      "name": "\u56DB\u7EA7\u82F1\u96C4\u566C\u8840\u672F",
+      "job": 2,
+      "train_level0": 50,
+      "delay_time": 60,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 95,
+      "name": "\u6597\u8F6C\u661F\u79FB",
+      "job": 99,
+      "train_level0": 0,
+      "delay_time": 0,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 96,
+      "name": "\u8840\u9B44\u4E00\u51FB(\u6218)",
+      "job": 0,
+      "train_level0": 50,
+      "delay_time": 0,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 96,
+      "name": "\u767D\u65E5\u95E8\u8840\u9B44(\u6218)",
+      "job": 0,
+      "train_level0": 50,
+      "delay_time": 0,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 97,
+      "name": "\u8840\u9B44\u4E00\u51FB(\u6CD5)",
+      "job": 1,
+      "train_level0": 50,
+      "delay_time": 30,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 97,
+      "name": "\u767D\u65E5\u95E8\u8840\u9B44(\u6CD5)",
+      "job": 1,
+      "train_level0": 50,
+      "delay_time": 30,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 98,
+      "name": "\u8840\u9B44\u4E00\u51FB(\u9053)",
+      "job": 2,
+      "train_level0": 50,
+      "delay_time": 40,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 98,
+      "name": "\u767D\u65E5\u95E8\u8840\u9B44(\u9053)",
+      "job": 2,
+      "train_level0": 50,
+      "delay_time": 40,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 99,
+      "name": "\u767D\u65E5\u95E8\u5F3A\u8EAB\u672F",
+      "job": 99,
+      "train_level0": 50,
+      "delay_time": 0,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 100,
+      "name": "\u795E\u79D8\u89E3\u8BFB",
+      "job": 99,
+      "train_level0": 28,
+      "delay_time": 0,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 101,
+      "name": "\u795E\u9F99\u9644\u4F53",
+      "job": 99,
+      "train_level0": 50,
+      "delay_time": 0,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 102,
+      "name": "\u552F\u6211\u72EC\u5C0A",
+      "job": 99,
+      "train_level0": 50,
+      "delay_time": 0,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 103,
+      "name": "\u53EC\u5524\u5DE8\u9B54",
+      "job": 99,
+      "train_level0": 50,
+      "delay_time": 0,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 500,
+      "name": "\u7834\u8840\u72C2\u6740",
+      "job": 0,
+      "train_level0": 50,
+      "delay_time": 0,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    },
+    {
+      "magic_id": 501,
+      "name": "\u8FC5\u5F71\u79BB\u9B42",
+      "job": 0,
+      "train_level0": 50,
+      "delay_time": 0,
+      "implemented": false,
+      "reason": "\u672A\u5B9E\u88C5\uFF1A\u9700\u8981\u5730\u56FE/\u76EE\u6807/\u62A4\u8EAB\u7B26/\u53EC\u5524/\u72B6\u6001\u7B49 oracle \u4E0A\u4E0B\u6587\uFF0C\u627F\u63A5 = \u540E\u7EED M3 \u6280\u80FD\u6279\u6B21\uFF08\u672C\u5361\u62A5\u544A\u300E\u672A\u5B9E\u73B0\u300F\u6E05\u5355\uFF09"
+    }
+  ]
+}

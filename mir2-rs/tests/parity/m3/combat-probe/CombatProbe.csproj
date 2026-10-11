@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>combat-probe</AssemblyName>
+    <RootNamespace>CombatProbe</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    M3 战斗线（卡 openmir2-m3-combat-skills-align）第一片：oracle 实测向量生成器。
+    引用**真身**（同一份 src/M2Server），种子注入后反射调**私有/internal** 入口：
+      - BaseObject.GetBaseAttackPoewr（`src/M2Server/Actor/BaseObject.Attack.cs:25`，internal）
+      - BaseObject._Attack（`:30`，internal）—— 含命中骰、护甲减免、StruckDamage、DamageHealth
+    产出 = mir2-rs/tests/parity/m3/combat-probe/vectors/combat_vectors.json（Rust 侧逐字段核对）。
+
+    只读：不连 MySQL、不写任何现网文件、不发起任何 socket。
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\..\src\M2Server\M2Server.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -70,10 +70,80 @@ pub fn get_attack_power(rng: &mut impl RandomSource, base_power: i32, power: i32
 /// `BaseObject.GetBaseAttackPoewr`（`BaseObject.Attack.cs:25`）：
 /// `GetAttackPower(LoByte(DC), (sbyte)(HiByte(DC) - LoByte(DC)))`。
 pub fn get_base_attack_power(rng: &mut impl RandomSource, dc: i32) -> i32 {
+    let (lo, diff) = base_power_parts(dc);
+    get_attack_power(rng, lo, diff)
+}
+
+/// `WAbil.DC` → `(LoByte(DC), (sbyte)(HiByte(DC) - LoByte(DC)))`（`BaseObject.Attack.cs:27`）。
+fn base_power_parts(dc: i32) -> (i32, i32) {
     let lo = i32::from(lo_byte(dc));
     let hi = i32::from(hi_byte(dc));
     let diff = (hi - lo) as i8 as i32; // C# 的 (sbyte) 强转
-    get_attack_power(rng, lo, diff)
+    (lo, diff)
+}
+
+/// `PlayObject.GetAttackPower`（`PlayObject.cs:2911`）——**玩家攻方**的 override。
+///
+/// 与 [`get_attack_power`]（`BaseObject` 版）的差别：多了 `Luck` / `PowerRate` / `BoPowerItem`
+/// 三段，导致**取数次数不同**（`Luck == 0` 时每次多抽一次 `Random(10)`），
+/// 所以必须单独建模，不能拿 Base 版代替（否则同种子序列整体错位）。
+pub fn get_attack_power_player(
+    rng: &mut impl RandomSource,
+    base_power: i32,
+    power: i32,
+    luck: i32,
+    power_rate: i32,
+    bo_power_item: bool,
+    power_item: u8,
+) -> i32 {
+    let power = if power < 0 { 0 } else { power };
+    let mut result;
+    if luck > 0 {
+        // `if (Random(10 - _MIN(9, Luck)) == 0) result = basePower + power; else result = basePower + Random(power+1);`
+        if rng.random_below(10 - hutil::min_i32(9, luck)) == 0 {
+            result = base_power + power;
+        } else {
+            result = base_power + rng.random_below(power + 1);
+        }
+    } else {
+        result = base_power + rng.random_below(power + 1);
+        // `if (Luck <= 0) if (Random(10 - _MAX(0, -Luck)) == 0) result = basePower;`
+        if luck <= 0 && rng.random_below(10 - hutil::max_i32(0, -luck)) == 0 {
+            result = base_power;
+        }
+    }
+    result = hutil::round(f64::from(result) * (f64::from(power_rate) / 100.0));
+    if bo_power_item {
+        result = hutil::round(f64::from(power_item) * f64::from(result));
+    }
+    result
+}
+
+/// `PlayObject.GetBaseAttackPoewr` 的 override 版：`GetAttackPower_player(Lo(DC), (sbyte)Δ)`。
+pub fn get_base_attack_power_player(
+    rng: &mut impl RandomSource,
+    dc: i32,
+    luck: i32,
+    power_rate: i32,
+    bo_power_item: bool,
+    power_item: u8,
+) -> i32 {
+    let (lo, diff) = base_power_parts(dc);
+    get_attack_power_player(rng, lo, diff, luck, power_rate, bo_power_item, power_item)
+}
+
+/// 攻方攻击力的建模口径（`_Attack` 的调用方：`GetBaseAttackPoewr`）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AttackPowerMode {
+    /// `BaseObject.GetAttackPower`（怪物/无 override 的对象）——M2 既有 golden 用这条。
+    Base,
+    /// `PlayObject.GetAttackPower` override（`PlayObject.cs:2911`）。
+    Player {
+        luck: i32,
+        power_rate: i32,
+        bo_power_item: bool,
+        power_item: u8,
+    },
 }
 
 /// 攻击合法性（`BaseObject.IsProperTarget` → `IsAttackTarget` 的子集）。
@@ -189,7 +259,7 @@ pub struct AttackOutcome {
     pub target_hp_after: u16,
 }
 
-/// `_Attack`（`BaseObject.Attack.cs:30`）——一次攻击的完整结算。
+/// `_Attack`（`BaseObject.Attack.cs:30`）——一次攻击的完整结算（攻方走 [`AttackPowerMode::Base`]）。
 ///
 /// **RNG 消耗顺序**（与 C# 一致，勿改）：
 /// 1. 攻击力：`GetAttackPower` → `Random(power+1)`（1 次）
@@ -202,7 +272,41 @@ pub fn attack(
     last_hitter: Option<LastHitter>,
     config: &CombatConfig,
 ) -> AttackOutcome {
-    let power = get_base_attack_power(rng, attacker.dc);
+    attack_with(
+        rng,
+        attacker,
+        target,
+        last_hitter,
+        config,
+        AttackPowerMode::Base,
+    )
+}
+
+/// [`attack`] 的带攻方口径版本（M3 战斗线：玩家攻方走 `PlayObject.GetAttackPower` override）。
+pub fn attack_with(
+    rng: &mut impl RandomSource,
+    attacker: &mut Entity,
+    target: &mut Entity,
+    last_hitter: Option<LastHitter>,
+    config: &CombatConfig,
+    power_mode: AttackPowerMode,
+) -> AttackOutcome {
+    let power = match power_mode {
+        AttackPowerMode::Base => get_base_attack_power(rng, attacker.dc),
+        AttackPowerMode::Player {
+            luck,
+            power_rate,
+            bo_power_item,
+            power_item,
+        } => get_base_attack_power_player(
+            rng,
+            attacker.dc,
+            luck,
+            power_rate,
+            bo_power_item,
+            power_item,
+        ),
+    };
     let mut n_power = power;
     let mut hit = false;
 

@@ -244,11 +244,11 @@ namespace BotSrv
         public static ClientItem g_MouseItem = null;
         public static ClientItem g_MouseStateItem = null;
         public static ClientItem g_MouseUserStateItem = null;
-        public static ClientItem g_EatingItem = null;
+        public static ClientItem g_EatingItem = new ClientItem();
         public static bool g_boItemMoving = false;
         public static TMovingItem MovingItem = null;
         public static TMovingItem OpenBoxItem = null;
-        public static TMovingItem g_WaitingUseItem = null;
+        public static TMovingItem g_WaitingUseItem = new TMovingItem { Item = new ClientItem() };
         public static TMovingItem g_WaitingStallItem = null;
         public static TMovingItem g_WaitingDetectItem = null;
         public static TDropItem g_FocusItem = null;
