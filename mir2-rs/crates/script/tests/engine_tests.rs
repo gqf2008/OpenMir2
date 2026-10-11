@@ -16,6 +16,33 @@ struct MockPlayer {
     unit_status: std::collections::HashMap<i32, i32>,
     items: Vec<(String, i32)>,
     effects: Vec<String>,
+    // ---- B2/M4 条件批次新增的脚本可见状态 ----
+    game_gold: i32,
+    game_point: i32,
+    credit_point: i32,
+    member_level: i32,
+    bonus_point: i32,
+    permission: i32,
+    gender: i32,
+    job: i32,
+    dear_name: String,
+    guild: Option<String>,
+    is_guild_master: bool,
+    safe_zone: bool,
+    new_human: bool,
+    envir_map: Option<String>,
+    known_maps: Vec<String>,
+    map_human: i32,
+    chr: String,
+    account: String,
+    /// 佩戴位 `Desc` 之和（`None` = 空位）
+    use_items: Vec<Option<i32>>,
+    /// `QuestCheckItem` 返回的 `(n1C, nMaxDura, nDura)`
+    quest_item: (i32, i32, i32),
+    pose: Option<mir2_script::engine::PoseInfo>,
+    last_hiter_race: Option<i32>,
+    last_hiter_name: Option<String>,
+    target: Option<String>,
 }
 
 impl MockPlayer {
@@ -33,6 +60,30 @@ impl MockPlayer {
             unit_status: std::collections::HashMap::new(),
             items: Vec::new(),
             effects: Vec::new(),
+            game_gold: 0,
+            game_point: 0,
+            credit_point: 0,
+            member_level: 0,
+            bonus_point: 0,
+            permission: 0,
+            gender: mir2_script::engine::GENDER_MAN,
+            job: 0,
+            dear_name: String::new(),
+            guild: None,
+            is_guild_master: false,
+            safe_zone: false,
+            new_human: false,
+            envir_map: None,
+            known_maps: Vec::new(),
+            map_human: 0,
+            chr: "测试玩家".into(),
+            account: "testacct".into(),
+            use_items: Vec::new(),
+            quest_item: (0, 0, 0),
+            pose: None,
+            last_hiter_race: None,
+            last_hiter_name: None,
+            target: None,
         }
     }
 }
@@ -128,6 +179,95 @@ impl ScriptPlayer for MockPlayer {
     fn remove_item(&mut self, name: &str, count: i32) -> i32 {
         self.effects.push(format!("delitem {name} {count}"));
         count
+    }
+    fn chr_name(&self) -> String {
+        self.chr.clone()
+    }
+    fn is_enough_bag(&self) -> bool {
+        self.bag_count() < mir2_script::engine::MAX_BAG_ITEM
+    }
+    fn permission(&self) -> i32 {
+        self.permission
+    }
+    fn gender(&self) -> i32 {
+        self.gender
+    }
+    fn job(&self) -> i32 {
+        self.job
+    }
+    fn game_gold(&self) -> i32 {
+        self.game_gold
+    }
+    fn game_point(&self) -> i32 {
+        self.game_point
+    }
+    fn credit_point(&self) -> i32 {
+        self.credit_point
+    }
+    fn member_level(&self) -> i32 {
+        self.member_level
+    }
+    fn bonus_total_point(&self) -> i32 {
+        self.bonus_point
+    }
+    fn dear_name(&self) -> String {
+        self.dear_name.clone()
+    }
+    fn guild_name(&self) -> Option<String> {
+        self.guild.clone()
+    }
+    fn is_guild_master(&self) -> bool {
+        self.is_guild_master
+    }
+    fn is_new_human(&self) -> bool {
+        self.new_human
+    }
+    fn user_account(&self) -> String {
+        self.account.clone()
+    }
+    fn use_items_upper_bound(&self) -> i32 {
+        self.use_items.len() as i32 - 1
+    }
+    fn use_item_index(&self, where_: i32) -> i32 {
+        if where_ >= 0 && (where_ as usize) < self.use_items.len() {
+            if self.use_items[where_ as usize].is_some() {
+                1
+            } else {
+                0
+            }
+        } else {
+            0
+        }
+    }
+    fn worn_item_add_value(&self, where_: i32) -> Option<i32> {
+        self.use_items.get(where_ as usize).copied().flatten()
+    }
+    fn quest_check_item(&self, _name: &str) -> (i32, i32, i32) {
+        self.quest_item
+    }
+    fn in_safe_zone(&self) -> bool {
+        self.safe_zone
+    }
+    fn map_exists(&self, map: &str) -> bool {
+        self.known_maps.iter().any(|m| m == map)
+    }
+    fn envir_map_name(&self) -> Option<String> {
+        self.envir_map.clone()
+    }
+    fn map_human_count(&self, _map: &str) -> i32 {
+        self.map_human
+    }
+    fn last_hiter_race(&self) -> Option<i32> {
+        self.last_hiter_race
+    }
+    fn last_hiter_name(&self) -> Option<String> {
+        self.last_hiter_name.clone()
+    }
+    fn target_name(&self) -> Option<String> {
+        self.target.clone()
+    }
+    fn pose(&self) -> Option<mir2_script::engine::PoseInfo> {
+        self.pose.clone()
     }
 }
 
@@ -358,4 +498,179 @@ fn give_gold_hits_goto_lable_give_item_after_flip() {
         player.gold, 600,
         "give 金币 500 应走 GotoLableGiveItem：100 + 500"
     );
+}
+
+/// `cond6`：按解析器规则从 6 个文本参数构造条件（`nParamN` 仅当文本是数字时才填）。
+fn cond6(code: i32, p: [&str; 6]) -> mir2_script::QuestConditionInfo {
+    let num = |s: &str| mir2_shared::hutil32::str_to_int(s, 0);
+    mir2_script::QuestConditionInfo {
+        cmd_code: code,
+        s_param1: p[0].into(),
+        s_param2: p[1].into(),
+        s_param3: p[2].into(),
+        s_param4: p[3].into(),
+        s_param5: p[4].into(),
+        s_param6: p[5].into(),
+        n_param1: num(p[0]),
+        n_param2: num(p[1]),
+        n_param3: num(p[2]),
+        n_param4: num(p[3]),
+        n_param5: num(p[4]),
+        n_param6: num(p[5]),
+        ..Default::default()
+    }
+}
+
+/// B2/M4 条件批次：新增注册处理器的语义（阈值比较 / 标志位 / 佩戴位 / 地图 / 面向）。
+#[test]
+fn condition_batch_new_handlers_semantics() {
+    use mir2_script::engine::{GENDER_MAN, GENDER_WOMAN};
+    let (mut npc, mut player) = setup("[@main]\n#SAY\nx\n");
+    player.game_gold = 100;
+    player.game_point = 7;
+    player.credit_point = 3;
+    player.member_level = 5;
+    player.bonus_point = 9;
+    player.permission = 4;
+    player.job = 1; // Wizard
+    player.gender = GENDER_WOMAN;
+    player.use_items = vec![None, Some(20)];
+    player.quest_item = (1, 10_000, 0);
+    player.known_maps = vec!["0".to_string()];
+    player.envir_map = Some("0".to_string());
+    player.map_human = 3;
+
+    let mut e = Engine::new(&mut npc, &mut player);
+    // 阈值族（'=' / '>' / '<' / default '>='）
+    assert!(e.check_conditions(&[cond6(101, [">", "50", "", "", "", ""])])); // CHECKGAMEGOLD
+    assert!(!e.check_conditions(&[cond6(101, [">", "150", "", "", "", ""])]));
+    assert!(e.check_conditions(&[cond6(102, ["=", "7", "", "", "", ""])])); // CHECKGAMEPOINT
+    assert!(e.check_conditions(&[cond6(79, ["<", "9", "", "", "", ""])])); // CHECKCREDITPOINT
+    assert!(e.check_conditions(&[cond6(100, ["x", "5", "", "", "", ""])])); // CHECKMEMBERLEVEL default >=
+    assert!(e.check_conditions(&[cond6(84, ["=", "9", "", "", "", ""])])); // CHECKBONUSPOINT
+                                                                           // 权限：ISSYSOP ≥4 / ISADMIN ≥6
+    assert!(e.check_conditions(&[cond6(62, ["", "", "", "", "", ""])]));
+    assert!(!e.check_conditions(&[cond6(63, ["", "", "", "", "", ""])]));
+    // 职业 / 性别
+    assert!(e.check_conditions(&[cond6(8, ["Wizard", "", "", "", "", ""])]));
+    assert!(!e.check_conditions(&[cond6(8, ["Warrior", "", "", "", "", ""])]));
+    assert!(e.check_conditions(&[cond6(3, ["WOMAN", "", "", "", "", ""])]));
+    assert!(!e.check_conditions(&[cond6(3, ["MAN", "", "", "", "", ""])]));
+    assert_eq!(e.player.gender(), GENDER_WOMAN);
+    let _ = GENDER_MAN;
+    // 佩戴位：位置 1 有物、位置 0 空
+    assert!(e.check_conditions(&[cond6(110, ["1", "", "", "", "", ""])]));
+    assert!(!e.check_conditions(&[cond6(110, ["0", "", "", "", "", ""])]));
+    // CHECKITEMADDVALUE：C# 用 sParam1[0] 当比较符 ⇒ '1' 落 default(>=)，20 >= 5
+    assert!(e.check_conditions(&[cond6(130, ["1", "0", "5", "", "", ""])]));
+    // 地图：ISONMAP（在 map "0" 上）
+    assert!(e.check_conditions(&[cond6(190, ["0", "", "", "", "", ""])]));
+    // CHECKHUM：地图玩家数 3 ≥ 3 / < 5
+    assert!(e.check_conditions(&[cond6(23, ["0", "3", "", "", "", ""])]));
+    assert!(!e.check_conditions(&[cond6(23, ["0", "5", "", "", "", ""])]));
+    // CHECKDURAEVA（switch）：Round(10000/1/1000)=10
+    assert!(e.check_conditions(&[cond6(15, ["x", "5", "", "", "", ""])]));
+    assert!(!e.check_conditions(&[cond6(15, ["x", "50", "", "", "", ""])]));
+    // KILLBYHUM：无击杀者 ⇒ 不变；击杀者是怪物 ⇒ false
+    assert!(e.check_conditions(&[cond6(199, ["x", "", "", "", "", ""])]));
+    assert!(e.errors.is_empty(), "{:?}", e.errors);
+    drop(e);
+    player.last_hiter_race = Some(50);
+    let mut e2 = Engine::new(&mut npc, &mut player);
+    assert!(!e2.check_conditions(&[cond6(199, ["x", "", "", "", "", ""])]));
+    assert!(e2.errors.is_empty(), "{:?}", e2.errors);
+}
+
+/// B2/M4 条件批次：错误分支文本与 C# `ConditionProcessingSys.ScriptConditionError` 逐字一致；
+/// 并复现三处 C# 缺陷照搬（CHECKITEMADDVALUE 比较符取 sParam1[0]、CHECKONLINE 恒假、
+/// CHECKITEMADDVALUE 的 nAddValue 取 sParam3）。
+#[test]
+fn condition_batch_error_texts_and_csharp_bugs() {
+    let (mut npc, mut player) = setup("[@main]\n#SAY\nx\n");
+    player.use_items = vec![None, None, None, Some(0)];
+    let mut e = Engine::new(&mut npc, &mut player);
+    // 语料真实行形状：`CHECKITEMADDVALUE 3 10 = 1` ⇒ nAddValue = StrToInt("=") = -1 ⇒ 报错
+    assert!(!e.check_conditions(&[cond6(130, ["3", "10", "=", "1", "", ""])]));
+    // CHECKBAGSIZE 参数非法（> 46）
+    assert!(!e.check_conditions(&[cond6(111, ["50", "", "", "", "", ""])]));
+    // CHECKONLINE：C# 只在 false 分支赋值 ⇒ 恒假（即便玩家在线）
+    assert!(!e.check_conditions(&[cond6(150, ["<$USERNAME>", "", "", "", "", ""])]));
+    let texts: Vec<&str> = e
+        .errors
+        .iter()
+        .filter_map(|err| match err {
+            EngineError::ScriptError { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        texts[0],
+        "[脚本参数不正确] Cmd:CHECKITEMADDVALUE NPC名称:测试NPC 地图:0 座标:100:200 参数1:3 参数2:10 参数3:= 参数4:1 参数5:"
+    );
+    assert_eq!(
+        texts[1],
+        "[脚本参数不正确] Cmd:CHECKBAGSIZE NPC名称:测试NPC 地图:0 座标:100:200 参数1:50 参数2: 参数3: 参数4: 参数5:"
+    );
+    assert!(texts.len() >= 2, "{texts:?}");
+}
+
+/// B2/M4 条件批次：语料用到的条件派发目标（注册面 + 引擎 switch 面）已全部实现，
+/// 仅剩 `ConditionOfCheckVar`(139) / `ConditionOfCheckNameDateList`(144) 两个依赖动态变量层
+/// 与文件日期列表的处理器留待下一批。
+#[test]
+fn condition_batch_closes_corpus_condition_targets() {
+    use mir2_script::engine::dispatch as d;
+    const CLOSED_REGISTERED: &[&str] = &[
+        "ConditionOfCheckAccountList",
+        "ConditionOfCheckItemAddValue",
+        "ConditionOfCheckLevelEx",
+        "ConditionOfCheckGameGold",
+        "ConditionOfCheckJob",
+        "ConditionOfCheckCreditPoint",
+        "ConditionOfCheckGamePoint",
+        "ConditionOfCheckNameList",
+        "ConditionOfCheckOnLine",
+        "ConditionOfCheckMarry",
+        "ConditionOfCheckHaveGuild",
+        "ConditionOfIsAdmin",
+        "ConditionOfCheckUseItem",
+        "ConditionOfGender",
+        "ConditionOfIosnMap",
+        "ConditionOfCheckHum",
+        "ConditionOfCheckReNewLevel",
+        "ConditionOfIsDupMode",
+        "ConditionOfIsNewHuman",
+        "ConditionOfCheckBagSize",
+        "ConditionOfCheckIsCastleaGuild",
+        "ConditionOfCheckPoseDir",
+        "ConditionOfCheckPoseGender",
+        "ConditionOfCheckPoseLevel",
+        "ConditionOfCheckPoseMarry",
+        "ConditionOfCheckSafeZone",
+        "ConditionOfCheckBagGage",
+    ];
+    for name in CLOSED_REGISTERED {
+        assert!(d::IMPLEMENTED_CONDITIONS.contains(name), "{name} 应已实现");
+    }
+    for case in [
+        "CHECKDURAEVA",
+        "KILLBYHUM",
+        "KILLBYMON",
+        "CHECKDIEMON",
+        "CHECKKILLPLAYMON",
+        "CHECKINSAFEZONE",
+        "CHECKRANDOMNO",
+        "ISTAKEITEM",
+        "SCHECKDEATHPLAYMON",
+    ] {
+        assert!(
+            d::IMPLEMENTED_SWITCH_CONDITIONS.contains(&case),
+            "{case} 应已实现"
+        );
+    }
+    // 诚实登记：仍有两个条件处理器未实现（动态变量层 / 日期列表文件）
+    let undone = d::unimplemented_handlers();
+    for remain in ["ConditionOfCheckVar", "ConditionOfCheckNameDateList"] {
+        assert!(undone.contains(&remain), "{remain} 应仍在未实现清单");
+    }
 }

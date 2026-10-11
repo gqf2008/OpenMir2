@@ -233,7 +233,64 @@ impl Engine<'_, '_> {
                     *result = false;
                 }
             }
-            // 其余分支依赖世界状态（最后击杀者/目标/安全区/背包细节），批次 2 后续移植
+            // `case (int)ConditionCode.CHECKDIEMON`：`GotoLable_QuestCheckCondition_CheckDieMon`
+            "CHECKDIEMON" => {
+                *result = info.s_param1.is_empty()
+                    || self.player.last_hiter_name().as_deref() == Some(info.s_param1.as_str());
+            }
+            // `case (int)ConditionCode.CHECKKILLPLAYMON`：目标名比较
+            "CHECKKILLPLAYMON" => {
+                *result = info.s_param1.is_empty()
+                    || self.player.target_name().as_deref() == Some(info.s_param1.as_str());
+            }
+            // `case (int)ConditionCode.CHECKRANDOMNO`：C# 只记一条 TODO 错误，不改变 result
+            "CHECKRANDOMNO" => {
+                self.errors.push(EngineError::ScriptError {
+                    text: "TODO nSC_CHECKRANDOMNO...".to_string(),
+                });
+            }
+            // `case (int)ConditionCode.CHECKDURAEVA`：`Round(nMaxDura / n1C / 1000.0) < nParam2`
+            "CHECKDURAEVA" => {
+                let (n1c, n_max_dura, _n_dura) = self.player.quest_check_item(&info.s_param1);
+                if n1c > 0 {
+                    let avg = (n_max_dura / n1c) as f64 / 1000.0;
+                    if super::conditions::round_away(avg) < info.n_param2 {
+                        *result = false;
+                    }
+                } else {
+                    *result = false;
+                }
+            }
+            // `case (int)ConditionCode.KILLBYHUM`：最后击杀者不是玩家 ⇒ false
+            "KILLBYHUM" => {
+                if let Some(race) = self.player.last_hiter_race() {
+                    if race != crate::engine::ACTOR_RACE_PLAY {
+                        *result = false;
+                    }
+                }
+            }
+            // `case (int)ConditionCode.KILLBYMON`：最后击杀者是玩家 ⇒ false
+            "KILLBYMON" => {
+                if let Some(race) = self.player.last_hiter_race() {
+                    if race == crate::engine::ACTOR_RACE_PLAY {
+                        *result = false;
+                    }
+                }
+            }
+            // `case (int)ConditionCode.CHECKINSAFEZONE`
+            "CHECKINSAFEZONE" => {
+                if !self.player.in_safe_zone() {
+                    *result = false;
+                }
+            }
+            // `case (int)ConditionCode.ISTAKEITEM`：与 `GotoLabParams.ItemName` 比较
+            "ISTAKEITEM" => {
+                if self.goto_params.item_name != info.s_param1 {
+                    *result = false;
+                }
+            }
+            // `case (int)ConditionCode.SCHECKDEATHPLAYMON`：`CheckKillMon2` 恒 true
+            "SCHECKDEATHPLAYMON" => {}
             other => {
                 self.errors.push(EngineError::NotImplemented {
                     kind: "condition-switch",
