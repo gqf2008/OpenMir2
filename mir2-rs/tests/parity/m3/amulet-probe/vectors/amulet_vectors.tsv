@@ -1,0 +1,136 @@
+meta	magic_attack_rage	8	magic_hit_interval_time	800	warr_skill_sweep_max	110
+warr	0	0
+warr	1	0
+warr	2	0
+warr	3	1
+warr	4	1
+warr	5	0
+warr	6	0
+warr	7	1
+warr	8	0
+warr	9	0
+warr	10	0
+warr	11	0
+warr	12	1
+warr	13	0
+warr	14	0
+warr	15	0
+warr	16	0
+warr	17	0
+warr	18	0
+warr	19	0
+warr	20	0
+warr	21	0
+warr	22	0
+warr	23	0
+warr	24	0
+warr	25	1
+warr	26	1
+warr	27	1
+warr	28	0
+warr	29	0
+warr	30	0
+warr	31	0
+warr	32	0
+warr	33	0
+warr	34	1
+warr	35	0
+warr	36	0
+warr	37	0
+warr	38	1
+warr	39	0
+warr	40	0
+warr	41	0
+warr	42	0
+warr	43	0
+warr	44	0
+warr	45	0
+warr	46	0
+warr	47	0
+warr	48	0
+warr	49	0
+warr	50	0
+warr	51	0
+warr	52	0
+warr	53	0
+warr	54	0
+warr	55	0
+warr	56	0
+warr	57	0
+warr	58	0
+warr	59	0
+warr	60	0
+warr	61	0
+warr	62	0
+warr	63	0
+warr	64	0
+warr	65	0
+warr	66	0
+warr	67	0
+warr	68	0
+warr	69	0
+warr	70	0
+warr	71	0
+warr	72	0
+warr	73	0
+warr	74	0
+warr	75	0
+warr	76	0
+warr	77	0
+warr	78	0
+warr	79	0
+warr	80	0
+warr	81	0
+warr	82	0
+warr	83	0
+warr	84	0
+warr	85	0
+warr	86	0
+warr	87	0
+warr	88	0
+warr	89	0
+warr	90	0
+warr	91	0
+warr	92	0
+warr	93	0
+warr	94	0
+warr	95	0
+warr	96	0
+warr	97	0
+warr	98	0
+warr	99	0
+warr	100	0
+warr	101	0
+warr	102	0
+warr	103	0
+warr	104	0
+warr	105	0
+warr	106	0
+warr	107	0
+warr	108	0
+warr	109	0
+warr	110	0
+amulet	none_empty	1	1	0	0	0	0	0	0	0	0	0	-1
+amulet	none_null	1	1	-1	0	0	0	-1	0	0	0	0	-1
+amulet	t1_arm_ok	1	1	3	25	5	100	0	0	0	0	1	5
+amulet	t1_arm_dura_half_rounds_up	1	1	3	25	5	50	0	0	0	0	1	5
+amulet	t1_arm_dura_below	1	1	3	25	5	49	0	0	0	0	0	-1
+amulet	t1_arm_shape_miss	1	1	3	25	4	100	0	0	0	0	0	-1
+amulet	t1_arm_stdmode_miss	1	1	3	24	5	100	0	0	0	0	0	-1
+amulet	t1_arm_stdmode_other	1	1	3	0	5	100	0	0	0	0	0	-1
+amulet	t1_arm_c2_dura149_miss	2	1	3	25	5	149	0	0	0	0	0	-1
+amulet	t1_arm_c2_dura150_ok	2	1	3	25	5	150	0	0	0	0	1	5
+amulet	t1_arm_c5_dura449_miss	5	1	3	25	5	449	0	0	0	0	0	-1
+amulet	t1_arm_c5_dura450_ok	5	1	3	25	5	450	0	0	0	0	1	5
+amulet	t1_arm_c5_dura500_ok	5	1	3	25	5	500	0	0	0	0	1	5
+amulet	t1_bujuk_fallback	1	1	3	25	4	100	4	25	5	100	1	9
+amulet	t1_arm_priority_over_bujuk	1	1	3	25	5	100	4	25	5	100	1	5
+amulet	t1_arm_null_bujuk_ok	1	1	-1	0	0	0	4	25	5	100	1	9
+amulet	t1_bujuk_stdmode_miss	1	1	-1	0	0	0	4	24	5	100	0	-1
+amulet	t1_bujuk_index_zero	1	1	-1	0	0	0	0	25	5	100	0	-1
+amulet	t2_arm_shape2_ok	1	2	3	25	2	100	0	0	0	0	1	5
+amulet	t2_arm_shape0_ok	1	2	3	25	0	100	0	0	0	0	1	5
+amulet	t2_arm_shape3_miss	1	2	3	25	3	100	0	0	0	0	0	-1
+amulet	t2_bujuk_ok	1	2	-1	0	0	0	4	25	1	100	1	9
+amulet	cross_type1_shape5_asked_type2_miss	1	2	3	25	5	100	0	0	0	0	0	-1
+amulet	unknown_type3_miss	1	3	3	25	5	100	0	0	0	0	0	-1
