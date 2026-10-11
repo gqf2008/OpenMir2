@@ -627,6 +627,7 @@ name = "game-svr"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "encoding_rs",
  "mir2-envir",
  "mir2-protocol",

@@ -1,0 +1,247 @@
+//! `String.conf` 读取（`M2GameSvr/string.conf`）—— 帧 42 `SM_USERNAME` 的**展示名模板**输入。
+//!
+//! 逐条照 oracle：
+//! - 文件定位：`SystemShare.cs:187` = `Path.Combine(BasePath, ConfConst.StringFileName)`，
+//!   `ConfConst.cs:8` 的常量是 `"string.conf"`；`BasePath` = exe 目录 = `Server.conf` 同目录。
+//! - 读取语义：`StringConf.cs:7` 继承 `ConfigFile`，与 `Server.conf` 同一套 `Load()`
+//!   （`ConfigFile.cs:256-340`）：**GB2312/GBK** 解码 + `Trim` + 行内 `;;` 注释 + 段/键
+//!   `OrdinalIgnoreCase` + 首次出现为准。
+//! - 缺文件：oracle `ConfigFile.Load` 只 `File.Create(...)` 后返回（沿用源码默认值）；
+//!   故本模块对**缺文件**返回「全默认」，不当错误（调用方记 WRN）。
+//! - 缺键：用 `MessageSettings` 源码默认值（`src/Modules/SystemModule/MessageSettings.cs:228-237`）。
+//!
+//! 只读帧 42 用到的 9 个键（`[String]` 段），不做通用 INI。
+
+use std::path::Path;
+
+use anyhow::{Context, Result};
+
+/// oracle `MessageSettings.HumanShowName`（`MessageSettings.cs:238`）。
+pub const DEFAULT_HUMAN_SHOW_NAME: &str = "%chrname\\%guildname\\%dearname\\%mastername";
+/// oracle `MessageSettings.RankLevelName`（`MessageSettings.cs:233`）。
+pub const DEFAULT_RANK_LEVEL_NAME: &str = "{0}\\平民";
+/// oracle `MessageSettings.WarrReNewName`（`MessageSettings.cs:230`）。
+pub const DEFAULT_WARR_RE_NEW_NAME: &str = "%chrname\\*<圣>*";
+/// oracle `MessageSettings.WizardReNewName`（`MessageSettings.cs:231`）。
+pub const DEFAULT_WIZARD_RE_NEW_NAME: &str = "%chrname\\*<神>*";
+/// oracle `MessageSettings.TaosReNewName`（`MessageSettings.cs:232`）。
+pub const DEFAULT_TAOS_RE_NEW_NAME: &str = "%chrname\\*<尊>*";
+/// oracle `MessageSettings.ManDearName`（`MessageSettings.cs:234`）。
+pub const DEFAULT_MAN_DEAR_NAME: &str = "{0}的老公";
+/// oracle `MessageSettings.WoManDearName`（`MessageSettings.cs:235`）。
+pub const DEFAULT_WO_MAN_DEAR_NAME: &str = "{0}的妻子";
+/// oracle `MessageSettings.MasterName`（`MessageSettings.cs:236`）。
+pub const DEFAULT_MASTER_NAME: &str = "{0}的师傅";
+/// oracle `MessageSettings.NoMasterName`（`MessageSettings.cs:237`）。
+pub const DEFAULT_NO_MASTER_NAME: &str = "{0}的徒弟";
+
+/// `[String]` 段里帧 42 用到的键（键名照 `StringConf.cs`，**不发明**）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StringConf {
+    human_show_name: Option<String>,
+    rank_level_name: Option<String>,
+    warr_re_new_name: Option<String>,
+    wizard_re_new_name: Option<String>,
+    taos_re_new_name: Option<String>,
+    man_dear_name: Option<String>,
+    wo_man_dear_name: Option<String>,
+    master_name: Option<String>,
+    no_master_name: Option<String>,
+}
+
+impl StringConf {
+    /// 全默认（`String.conf` 缺失/none 时的取值）。
+    #[must_use]
+    pub fn defaults() -> Self {
+        Self::default()
+    }
+
+    /// `[String] HumanShowName`。
+    #[must_use]
+    pub fn human_show_name(&self) -> &str {
+        self.human_show_name
+            .as_deref()
+            .unwrap_or(DEFAULT_HUMAN_SHOW_NAME)
+    }
+
+    /// `[String] RankLevelName`。
+    #[must_use]
+    pub fn rank_level_name(&self) -> &str {
+        self.rank_level_name
+            .as_deref()
+            .unwrap_or(DEFAULT_RANK_LEVEL_NAME)
+    }
+
+    /// `[String] WarrReNewName`。
+    #[must_use]
+    pub fn warr_re_new_name(&self) -> &str {
+        self.warr_re_new_name
+            .as_deref()
+            .unwrap_or(DEFAULT_WARR_RE_NEW_NAME)
+    }
+
+    /// `[String] WizardReNewName`。
+    #[must_use]
+    pub fn wizard_re_new_name(&self) -> &str {
+        self.wizard_re_new_name
+            .as_deref()
+            .unwrap_or(DEFAULT_WIZARD_RE_NEW_NAME)
+    }
+
+    /// `[String] TaosReNewName`。
+    #[must_use]
+    pub fn taos_re_new_name(&self) -> &str {
+        self.taos_re_new_name
+            .as_deref()
+            .unwrap_or(DEFAULT_TAOS_RE_NEW_NAME)
+    }
+
+    /// `[String] ManDearName`。
+    #[must_use]
+    pub fn man_dear_name(&self) -> &str {
+        self.man_dear_name
+            .as_deref()
+            .unwrap_or(DEFAULT_MAN_DEAR_NAME)
+    }
+
+    /// `[String] WoManDearName`。
+    #[must_use]
+    pub fn wo_man_dear_name(&self) -> &str {
+        self.wo_man_dear_name
+            .as_deref()
+            .unwrap_or(DEFAULT_WO_MAN_DEAR_NAME)
+    }
+
+    /// `[String] MasterName`。
+    #[must_use]
+    pub fn master_name(&self) -> &str {
+        self.master_name.as_deref().unwrap_or(DEFAULT_MASTER_NAME)
+    }
+
+    /// `[String] NoMasterName`。
+    #[must_use]
+    pub fn no_master_name(&self) -> &str {
+        self.no_master_name
+            .as_deref()
+            .unwrap_or(DEFAULT_NO_MASTER_NAME)
+    }
+}
+
+/// 读 `String.conf` 并解析 `[String]` 段。
+///
+/// # Errors
+/// 文件存在但读失败（权限/IO）才返回错误；**文件不存在**返回 [`StringConf::defaults`]
+/// （照 oracle `ConfigFile.Load` 的「缺文件即建空文件并沿默认」语义）。
+pub fn load(path: &Path) -> Result<StringConf> {
+    if !path.exists() {
+        return Ok(StringConf::defaults());
+    }
+    let bytes =
+        std::fs::read(path).with_context(|| format!("读不到 String.conf {}", path.display()))?;
+    Ok(parse(&bytes))
+}
+
+/// 解析 `[String]` 段（`ConfigFile.Load` 的 1:1 子集：GBK + Trim + `;;` 行内注释 + 首次为准）。
+#[must_use]
+pub fn parse(bytes: &[u8]) -> StringConf {
+    let (text, _, _) = encoding_rs::GBK.decode(bytes);
+    let mut conf = StringConf::defaults();
+    let mut in_string_section = false;
+    let mut large_comment = false;
+    for raw in text.lines() {
+        let mut line = raw.trim();
+        if line.starts_with("/*") {
+            large_comment = true;
+            continue;
+        }
+        if large_comment {
+            if line.starts_with("*/") {
+                large_comment = false;
+            }
+            continue;
+        }
+        if line.starts_with(';') || line.is_empty() {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix('[') {
+            let sec = rest.split_once(']').map_or("", |(name, _)| name.trim());
+            in_string_section = sec.eq_ignore_ascii_case("String");
+            continue;
+        }
+        if !in_string_section {
+            continue;
+        }
+        // 行内注释：`ConfigFile.cs:314-318` 取首个 `;;` 之前。
+        if let Some(i) = line.find(";;") {
+            line = line[..i].trim();
+        }
+        // `SplitKeyVal`：首个 `=`，且位置必须 > 0。
+        let Some((k, v)) = line.split_once('=') else {
+            continue;
+        };
+        let (k, v) = (k.trim(), v.trim());
+        if k.is_empty() {
+            continue;
+        }
+        // `ConfigFile.cs:327`：同一键**首次出现为准**。
+        let slot = match k.to_ascii_uppercase().as_str() {
+            "HUMANSHOWNAME" => &mut conf.human_show_name,
+            "RANKLEVELNAME" => &mut conf.rank_level_name,
+            "WARRRENEWNAME" => &mut conf.warr_re_new_name,
+            "WIZARDRENEWNAME" => &mut conf.wizard_re_new_name,
+            "TAOSRENEWNAME" => &mut conf.taos_re_new_name,
+            "MANDEARNAME" => &mut conf.man_dear_name,
+            "WOMANDEARNAME" => &mut conf.wo_man_dear_name,
+            "MASTERNAME" => &mut conf.master_name,
+            "NOMASTERNAME" => &mut conf.no_master_name,
+            _ => continue,
+        };
+        if slot.is_none() {
+            *slot = Some(v.to_string());
+        }
+    }
+    conf
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 现网形态：`[String] RankLevelName=%s\` / `HumanShowName=%chrname\%guildname\%dearname`
+    /// （`E:\MirServer\M2GameSvr\String.conf:228/233`，值里的 `\` 是**字面**反斜杠）。
+    #[test]
+    fn parses_deployed_get_show_name_keys() {
+        let bytes =
+            b"[String]\nRankLevelName=%s\\\nHumanShowName=%chrname\\%guildname\\%dearname\n\
+                      [Guild]\nHumanShowName=SHOULD_NOT_WIN\n";
+        let c = parse(bytes);
+        assert_eq!(c.rank_level_name(), "%s\\");
+        assert_eq!(
+            c.human_show_name(),
+            "%chrname\\%guildname\\%dearname",
+            "只认 [String] 段"
+        );
+        assert_eq!(c.master_name(), DEFAULT_MASTER_NAME, "缺键 ⇒ 源码默认值");
+    }
+
+    /// 段名/键名 `OrdinalIgnoreCase`（`ConfigFile.cs:13`）；`;;` 行内注释照 oracle 截断。
+    #[test]
+    fn section_and_key_are_case_insensitive_and_inline_comment_stripped() {
+        let bytes = b"[string]\nhumanshowname=A;;tail\nranklevelname=B ; ; not-comment\n";
+        let c = parse(bytes);
+        assert_eq!(c.human_show_name(), "A");
+        assert_eq!(c.rank_level_name(), "B ; ; not-comment", "只认连续的 ;;");
+    }
+
+    /// 红检：把 `[String]` 段判定改坏（`sec.eq_ignore_ascii_case` → `sec == "String"`）
+    /// ⇒ 上面的小写用例必红；此处另钉「缺键回落默认值」。
+    #[test]
+    fn missing_keys_fall_back_to_oracle_defaults() {
+        let c = parse(b"[String]\n");
+        assert_eq!(c.rank_level_name(), "{0}\\平民");
+        assert_eq!(
+            c.human_show_name(),
+            "%chrname\\%guildname\\%dearname\\%mastername"
+        );
+    }
+}

@@ -32,6 +32,7 @@ mod load;
 mod mapwire;
 mod notice;
 mod record;
+mod strings;
 mod users;
 
 use std::sync::Arc;
@@ -255,6 +256,21 @@ async fn main() -> Result<()> {
             None
         }
     };
+    // `String.conf`（帧 42 `SM_USERNAME` 的展示名模板；`openmir2-m2-enter-world-frames`）：
+    // oracle `SystemShare.StringConf`（`SystemShare.cs:187`，与 `Server.conf` 同目录名 `string.conf`）。
+    // 缺文件按 oracle `ConfigFile.Load` 的「建空文件 + 沿源码默认值」处理（不当错误）。
+    let string_conf = match strings::load(&base.join("string.conf")) {
+        Ok(c) => c,
+        Err(e) => {
+            glog!(
+                "WRN",
+                "读取 String.conf 失败（{e}）⇒ 帧 42 用 oracle 源码默认模板（登记）"
+            );
+            strings::StringConf::defaults()
+        }
+    };
+    // 拷出（`bool`）供 `move` 闭包使用；`cfg` 在 spawn 之后还要用（IDS/DB 端点）。
+    let show_rank_level_name = cfg.show_rank_level_name;
     // 公告文本（658 `SM_SENDNOTICE` 的配置层输入）：`<base>/<NoticeDir>/Notice.txt`。
     // 与 oracle `NoticeMgr.GetNoticeMsg("Notice")` 同源；**R1-1**：读不到/为空时 oracle 仍发
     // 一条 header-only 658（`SendDefMessage` 空尾走 `SendSocket(ClientMsg)`），故这里只记 WRN。
@@ -290,7 +306,11 @@ async fn main() -> Result<()> {
             sim_loop(
                 map_sizes,
                 registry,
-                game_conf,
+                EnterConfig {
+                    game_conf,
+                    string_conf,
+                    show_rank_level_name,
+                },
                 notice,
                 colors,
                 ev_rx,
@@ -666,10 +686,17 @@ fn drain_soft_close(
     }
 }
 
+/// `sim_loop` 需要的入图帧配置层（`Server.conf` 的 `GameSvrConf` + `String.conf` + `[Setup] ShowRankLevelName`）。
+struct EnterConfig {
+    game_conf: Option<mir2_envir::GameSvrConf>,
+    string_conf: crate::strings::StringConf,
+    show_rank_level_name: bool,
+}
+
 fn sim_loop(
     map_sizes: Vec<(i32, i32)>,
     registry: Option<mir2_envir::MapRegistry>,
-    game_conf: Option<mir2_envir::GameSvrConf>,
+    enter_cfg: EnterConfig,
     notice: Vec<u8>,
     colors: MsgColors,
     ev_rx: std::sync::mpsc::Receiver<GateEvent>,
@@ -994,6 +1021,23 @@ fn sim_loop(
                                                     ..smframe::EnterWorldInputs::default()
                                                 };
                                                 let data = full.as_ref().map(|r| &r.data);
+                                                // 帧 42 的展示名输入（`GetShowName()`）：成员/师徒/婚姻/转生/职业
+                                                // 全取角色记录；行会在本骨架恒空（`MyGuild == null`，见 `enter::show_name`）。
+                                                let show_name = enter::ShowNameInputs {
+                                                    chr_name: &head.chr_name,
+                                                    re_level: data.map_or(0, |d| d.re_level),
+                                                    job: data.map_or(0, |d| d.job),
+                                                    sex: data.map_or(0, |d| d.sex),
+                                                    dear_name: data
+                                                        .and_then(|d| d.dear_name.as_deref())
+                                                        .unwrap_or(""),
+                                                    master_name: data
+                                                        .and_then(|d| d.master_name.as_deref())
+                                                        .unwrap_or(""),
+                                                    is_master: data.is_some_and(|d| d.is_master),
+                                                    show_rank_level_name: enter_cfg
+                                                        .show_rank_level_name,
+                                                };
                                                 let wx = enter::WorldFrameInputs {
                                                     flag: registry
                                                         .as_ref()
@@ -1001,7 +1045,7 @@ fn sim_loop(
                                                     map_desc: registry
                                                         .as_ref()
                                                         .and_then(|r| r.map_desc_of(map_id)),
-                                                    conf: game_conf.as_ref(),
+                                                    conf: enter_cfg.game_conf.as_ref(),
                                                     bonus_abil: data
                                                         .and_then(|d| d.bonus_abil.as_ref()),
                                                     soft_version_date,
@@ -1009,7 +1053,11 @@ fn sim_loop(
                                                     game_point: data.map_or(0, |d| d.game_point),
                                                     job: data.map_or(0, |d| d.job),
                                                     bonus_point: data.map_or(0, |d| d.bonus_point),
-                                                    game_time: None,
+                                                    // `Bright = M2Share.GameTime`：oracle 由 `SystemProcessor`
+                                                    // 每 50ms 按真实小时刷新，登录时读到的就是该桶值。
+                                                    game_time: Some(enter::game_time_now()),
+                                                    strings: Some(&enter_cfg.string_conf),
+                                                    show_name: Some(show_name),
                                                 };
                                                 for w in enter::apply(&mut inputs, &wx) {
                                                     glog!("WRN", "入图帧输入：{w}");

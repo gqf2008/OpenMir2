@@ -19,6 +19,9 @@ mir2-envir = { path = "../../crates/envir" }   # Envir *.map 真地图加载 + �
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "macros", "time"] }
 anyhow = "1"
 encoding_rs = "0.8"
+# 帧 46 `SM_DAYCHANGING` 的 `Bright = M2Share.GameTime`：oracle `SystemProcessor.GetGameTime()` 按
+# `DateTime.Now.Hour` 刷新（`SystemProcessor.cs:98-134`）⇒ 读真实本地时钟（`chrono::Local`，走系统时区）。
+chrono = "0.4"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "time", "process"] }
