@@ -23,8 +23,8 @@
 
 牙齿（§6.0-2「恒绿的门禁等于没有门禁」）：
 
-  --selftest   多重集门禁的「插一行 / 删一行 / 重复行」必红自检（不需语料/端口）；
-  --redcheck   篡改 C# JSON 的一个计数 / 一条错误行 → 真实门禁必红（用副本，不改入库件）。
+  selftest    多重集门禁的「插一行 / 删一行 / 重复行」必红自检（不需语料/端口）；
+  redcheck    篡改 C# JSON 的一个计数 / 一条错误行 → 真实门禁必红（用副本，不改入库件）。
 
 退出码：0 = 全绿；1 = 有差异（红）；2 = 用法/环境错误。
 """
@@ -147,6 +147,21 @@ def build_cs_harness():
         raise SystemExit("C# harness 构建失败")
 
 
+def _normalize_paths(text):
+    """把本 worktree/repo 的绝对路径归一为稳定 token。
+
+    C# harness 会把相对语料路径 `Path.GetFullPath` 补成绝对路径（含 worktree 目录名），
+    直接入库会让证据字节跨 worktree 不可复现（评审 N-1 同类）；这里只归一工具回显的
+    路径前缀，不改语料本身。
+    """
+    for p in (MIR2RS, REPO):
+        abs_p = str(Path(p).resolve())
+        token = "<" + Path(p).name + ">"
+        for variant in {abs_p, abs_p.replace("\\", "/"), abs_p.replace("/", "\\")}:
+            text = text.replace(variant, token)
+    return text
+
+
 def run_side(envir, out_dir):
     out_dir.mkdir(parents=True, exist_ok=True)
     rust_json = out_dir / "parse-stats-rust.json"
@@ -160,7 +175,8 @@ def run_side(envir, out_dir):
     if r.returncode != 0:
         print(r.stdout[-3000:]); print(r.stderr[-3000:])
         raise SystemExit("Rust parse-stats 失败")
-    (out_dir / "parse-stats-rust.stdout.txt").write_text(r.stdout, encoding="utf-8", newline="\n")
+    (out_dir / "parse-stats-rust.stdout.txt").write_text(
+        _normalize_paths(r.stdout), encoding="utf-8", newline="\n")
 
     build_cs_harness()
     r = subprocess.run(
@@ -171,7 +187,8 @@ def run_side(envir, out_dir):
     if r.returncode != 0:
         print(r.stdout[-3000:]); print(r.stderr[-3000:])
         raise SystemExit("C# parse-stats 失败")
-    (out_dir / "parse-stats-cs.stdout.txt").write_text(r.stdout, encoding="utf-8", newline="\n")
+    (out_dir / "parse-stats-cs.stdout.txt").write_text(
+        _normalize_paths(r.stdout), encoding="utf-8", newline="\n")
     return rust_json, cs_json
 
 
@@ -287,7 +304,10 @@ def macro_parity(out_dir):
     if not fixture.is_dir():
         return True, "缺边界语料目录"
     tmp = out_dir / "macro"
-    rust_json, cs_json = run_side(fixture, tmp)
+    # 用仓库相对路径调用两侧 harness：否则 stdout 里会写进本 worktree 的绝对路径，
+    # 证据字节跨 worktree 不可复现（N-1 同类问题）。
+    fixture_arg = fixture.relative_to(MIR2RS).as_posix()
+    rust_json, cs_json = run_side(fixture_arg, tmp)
     rust = json.loads(rust_json.read_text(encoding="utf-8"))
     cs = json.loads(cs_json.read_text(encoding="utf-8"))
     same = rust.get("structure_digest") == cs.get("structure_digest")

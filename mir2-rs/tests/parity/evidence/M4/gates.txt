@@ -1,22 +1,24 @@
 # M4④ 四门禁 + 新测试 3 连跑 + 门禁红检（原始输出）
 
-日期：2026-10-12 03:20:29  分支：worktree-m4-parity-cases  base：master 15cec558
+日期：2026-10-12 03:48  分支：worktree-m4-parity-cases  base：master 72513e42
 隔离：本 worktree 自有 CARGO_TARGET_DIR（mir2-rs/target），与其他车道不共享；cargo 全部 --offline。
+本文件是本片（N-1 收口片）的原始输出汇总；上一片输出见 git 历史 89fd219d 版本。
 
 ## 1. cargo fmt --all -- --check
 EXIT=0（clean）
 
 ## 2. cargo clippy --workspace --all-targets --offline -- -D warnings
-    Checking mir2-script-tool v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m4cases\mir2-rs\crates\script-tool)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.01s
-EXIT=0
+    Checking game-svr v0.1.0 (...\m4cases\mir2-rs\bins\game-svr)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.83s
+EXIT=0（其余 crate 为 fresh，无 warning/error 输出）
 
 ## 3. cargo test --workspace --offline
-test targets 全 ok；passed=521 failed=0
+test targets 全 ok；passed=522 failed=0（71 个 test target）
 EXIT=0
 
 ## 4. cargo run -q -p msgcodegen --offline -- --check
 msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+EXIT=0
 
 ## 5. 新增 Rust 测试 3 连跑：cargo test -p mir2-script-tool --offline --test m4_macro_parity
 -- run 1
@@ -34,22 +36,39 @@ GREEN: 多重集门禁 selftest 5/5（含插行/删行/重复行必红）
 -- run 3
 GREEN: 多重集门禁 selftest 5/5（含插行/删行/重复行必红）
 
-## 7. ① + ③ 完整跑（含自带自检）：python -I tests/parity/M4/m4_parity.py --envir E:/MirServer/M2GameSvr/Envir
-- Rust `define_substitutions` = 2
+## 7. 证据 hash 口径复核器自检 3 连跑（N-1）：python -I tests/parity/M4/evidence_hashes.py selftest
+-- run 1
+PASS 0/4 口径：CRLF 工作树文件的 LF 归一 sha256 == git blob 口径
+PASS 1/4 清单与证据一致 → 绿
+PASS 2/4 改 1 位 hash → 必红
+PASS 3/4 证据多一个文件 → 必红
+PASS 4/4 清单多一个条目 → 必红
+GREEN: evidence_hashes selftest 4/4（口径 + 改 hash / 多文件 / 少文件必红）
+-- run 2
+GREEN: evidence_hashes selftest 4/4（口径 + 改 hash / 多文件 / 少文件必红）
+-- run 3
+GREEN: evidence_hashes selftest 4/4（口径 + 改 hash / 多文件 / 少文件必红）
+
+## 8. ① + ③ 完整跑（含自带自检）：python -I tests/parity/M4/m4_parity.py --envir E:/MirServer/M2GameSvr/Envir
+- 语料：639 文件 / 加载 639 / 缺失 0 / 异常 0（两侧同）
+- 计数：过程 3563、标签 2386、脚本 178、条件 2137、动作 8869、否则动作 953、商品 574、解析错误 427，两侧逐项差 0
+- 逐文件结构摘要 639/639 逐字节相同；逐文件原文摘要 639/639 逐字节相同；错误行 427 vs 427
+- 边界语料（fixtures/macroenvir）：Rust `define_substitutions` = 2
 - Rust 结构摘要：{"Npc_def/define.txt": {"hash": "1effd1782e851e85", "s": 1, "r": 1, "p": 1, "c": 1, "a": 2, "e": 0}}
 - C#  结构摘要：{"Npc_def/define.txt": {"hash": "1effd1782e851e85", "s": 1, "r": 1, "p": 1, "c": 1, "a": 2, "e": 0}}
 - 判定：✓ 逐字节相同（宏展开效果一致）
 
-> 说明：C# 参照不暴露展开次数计数器，故宏展开的『条数』以 Rust 计数为准、『效果』以两侧结构摘要（命令码/参数/说词，均在替换之后）逐字节比对为准。
-
+```
+GREEN: 作用域内 640 张表逐行一致
 
 == M4 门禁结果 ==
   ① parsecount 两侧数表         : GREEN
   ③ 双侧逐行多重集差 = 0         : GREEN
   ① 宏边界语料结构摘要一致       : GREEN
+```
 EXIT=0
 
-## 8. 门禁红检（篡改副本）：python -I tests/parity/M4/m4_parity.py redcheck
+## 9. 门禁红检（篡改副本）：python -I tests/parity/M4/m4_parity.py redcheck
 PASS 红检 A：stats.conditions +1 → 门禁判红（exit 1）
   RED: 作用域内 2 行不一致
 PASS 红检 B：错误行文本改 1 字符 → 门禁判红（exit 1）
@@ -57,8 +76,11 @@ PASS 红检 B：错误行文本改 1 字符 → 门禁判红（exit 1）
 GREEN: redcheck 2/2（计数与逐行错误都真的有牙齿）
 EXIT=0
 
-## 9. ② 关键 NPC 用例：python -I tests/parity/M4/run_npc_cases.py
-
+## 10. ② 关键 NPC 用例：python -I tests/parity/M4/run_npc_cases.py
 
 == M4② 结果：可跑用例 4（GREEN） / 等窗口用例 3（PENDING WINDOW）==
+EXIT=0
+
+## 11. 证据 hash 口径复核：python -I tests/parity/M4/evidence_hashes.py
+GREEN: 证据 hash 复核 18/18 项一致（口径 = LF 归一 sha256 == git blob hash）
 EXIT=0

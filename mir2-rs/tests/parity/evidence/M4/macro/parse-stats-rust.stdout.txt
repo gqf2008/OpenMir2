@@ -1,4 +1,4 @@
-Envir: E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m4cases\mir2-rs\tests\parity\M4\fixtures\macroenvir
+Envir: tests/parity/M4/fixtures/macroenvir
 文件: 1 加载: 1 缺失: 0 异常: 0
 脚本 1 标签 1 过程 1 条件 1 动作 2 否则动作 0
 宏展开 2 #CALL成功 0 #CALL失败 0 #INCLUDE 0 商品 0

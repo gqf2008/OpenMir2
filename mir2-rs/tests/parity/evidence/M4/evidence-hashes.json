@@ -1,0 +1,31 @@
+{
+  "_meta": {
+    "card": "openmir2-m4-parity-cases",
+    "finding": "N-1：证据 hash 口径（LF/blob）与工作树 CRLF 裸 sha256sum 不同",
+    "hash_scope": "SHA-256(文件字节，先把 CRLF 归一为 LF) == git blob 内容 hash (`git show <commit>:<path> | sha256sum`)；core.autocrlf=true 下裸 `sha256sum` 得的是 CRLF 值，不是本口径。",
+    "regenerate": "python -I tests/parity/M4/evidence_hashes.py --write",
+    "verify": "python -I tests/parity/M4/evidence_hashes.py",
+    "teeth": "python -I tests/parity/M4/evidence_hashes.py selftest",
+    "instrument": "tests/parity/M4/evidence_hashes.py"
+  },
+  "hashes": {
+    "mir2-rs/tests/parity/evidence/M4/M4收口报告-20261012.md": "514fc0b7e02f776b6889e4f5fb7f763025eef2d6fe7409df5c7e893806e84714",
+    "mir2-rs/tests/parity/evidence/M4/corpus-directives.txt": "7ca915b233025b2693465c8f6e621e8a4d709607b9992efb0958f9d7d9518ffb",
+    "mir2-rs/tests/parity/evidence/M4/gates.txt": "5881f8b93a588f64656d2a8f78a26b608ce63aafb130ab594ba63aeedfdfc878",
+    "mir2-rs/tests/parity/evidence/M4/lines-cs.jsonl": "9bec0a54425f8cdce32bf53d60639604008578ea2175ab10bfe01b4aa8e9ed27",
+    "mir2-rs/tests/parity/evidence/M4/lines-rust.jsonl": "9bec0a54425f8cdce32bf53d60639604008578ea2175ab10bfe01b4aa8e9ed27",
+    "mir2-rs/tests/parity/evidence/M4/macro-parity.txt": "161d89e67ad94f985cf803e650629cfdbd2fe3bbdd70ea51e8ca95f4c08b9dc6",
+    "mir2-rs/tests/parity/evidence/M4/macro/parse-stats-cs.json": "9e3a8646dc1521ac9695bf611772d2820bc748a90b2c35e046f86ea4b1abd6f6",
+    "mir2-rs/tests/parity/evidence/M4/macro/parse-stats-cs.stdout.txt": "cf7063837b66bb1e7bbf8047fc87dc8f8cff4dac3ed9a271b599e6bab122edd4",
+    "mir2-rs/tests/parity/evidence/M4/macro/parse-stats-rust.json": "b14faa8257eb752b2e69b5224ce6fb7457bac852c3de3d93174d1835c09476c4",
+    "mir2-rs/tests/parity/evidence/M4/macro/parse-stats-rust.stdout.txt": "4f45630c6b6bc805602c0e06bb31c528ca3ff5f378443fe004abf2f1a5adb121",
+    "mir2-rs/tests/parity/evidence/M4/multiset-gate.txt": "114aea7a3cc2dd68a3bb8fb0c807c6a914de33899cfa49d342f60ec04c8696b7",
+    "mir2-rs/tests/parity/evidence/M4/multiset-summary.json": "8a0e6046ab46d2f75c8d354eb08f5784518c3d7f35f9c3c30addcbfff467acd6",
+    "mir2-rs/tests/parity/evidence/M4/npc-cases.txt": "2a65ced6997d5fe7c148f62d4c9134cc6eabda27589eeaa36d117e5196714284",
+    "mir2-rs/tests/parity/evidence/M4/parse-stats-cs.json": "a6276e6f618ea21f12e22efb5b4f9fb6cae496c74f1ae9bc1806326c2be5e229",
+    "mir2-rs/tests/parity/evidence/M4/parse-stats-cs.stdout.txt": "9b2a323e61700fc12e51a15f5e8743542e253354f90fe66d7b9c5ea3719303ae",
+    "mir2-rs/tests/parity/evidence/M4/parse-stats-rust.json": "df5ce10f93b5857140e724118496e702c040d3cf4fe0d2a5133413619a210ad6",
+    "mir2-rs/tests/parity/evidence/M4/parse-stats-rust.stdout.txt": "6ef79dfb82f09f3146e2c3ca99f3f790d65d200e9e897ce2e2d3d59061b239ad",
+    "mir2-rs/tests/parity/evidence/M4/parsecount-both-sides.md": "15e62946e2f8b97d7d875316f61627014d32947f6046b0991cbd0b4200763800"
+  }
+}
