@@ -32,6 +32,7 @@ param(
   [string]$CsharpDbDir = "",
   [string]$RustDbDir = "",
   [string]$Golden = "",
+  [string]$S2cWhitelist = "",
   [int[]]$Ports = @(5000, 7000, 7100, 7200),
   [switch]$SkipPorts, [switch]$SkipS2c, [switch]$SkipShots, [switch]$SkipDb,
   [switch]$SkipPreflight,
@@ -43,6 +44,12 @@ $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = (Resolve-Path (Join-Path $Here "..\..")).Path
 if ([string]::IsNullOrEmpty($Golden)) {
   $Golden = Join-Path $RepoRoot "mir2-rs\tests\golden\c-line-baseline-c3-20261010.jsonl"
+}
+# ③ 出包 diff 白名单：默认拿仓库内登记的 `tools/m2-acceptance/whitelist.jsonl`（§6.0-3）；
+# 缺文件则**不**传 --whitelist（对账按「0 差异」判红，绝不静默放行）。
+if ([string]::IsNullOrEmpty($S2cWhitelist)) {
+  $candidate = Join-Path $Here "whitelist.jsonl"
+  if (Test-Path $candidate) { $S2cWhitelist = $candidate }
 }
 $Stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $EvidenceDir = Join-Path "E:\tmp\m2-acceptance" ("run-$Stamp")
@@ -95,8 +102,9 @@ if (-not $SkipS2c) {
   $rcExport = $script:LastRc
   if ($rcExport -eq 0) {
     $capture = Join-Path $s2cDir "capture.jsonl"
-    python (Join-Path $Here "s2c_diff.py") `
-      --rust $capture --golden $Golden --out (Join-Path $EvidenceDir "s2c-diff.json")
+    $diffArgs = @("--rust", $capture, "--golden", $Golden, "--out", (Join-Path $EvidenceDir "s2c-diff.json"))
+    if (-not [string]::IsNullOrEmpty($S2cWhitelist)) { $diffArgs += @("--whitelist", $S2cWhitelist) }
+    python (Join-Path $Here "s2c_diff.py") @diffArgs
     $rcDiff = $LASTEXITCODE
     $state = if ($rcDiff -eq 0) { "GREEN" } elseif ($rcDiff -eq 2) { "PREREQ" } else { "RED" }
     $results.Add([pscustomobject]@{ name = "s2c-diff(③b)"; state = $state; rc = $rcDiff; detail = "s2c_diff.py" })

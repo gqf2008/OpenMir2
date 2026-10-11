@@ -210,6 +210,12 @@ python tools/m2-acceptance/s2c_diff.py `
   另比 `ident/param/tag/series/body_sha256`（把**尾**钉死，与 `recog` 无关）。
 - **归一化清单**写进报告 `normalization`：本卡只允许 `recog` 一项。要加字段必须进 `--whitelist`，
   且每条必须带 `reason` + `reviewer`（§6.0-3：差异要么 0，要么逐条登记"差异点/为什么无害/谁审的"）。
+- **白名单**：仓库内登记件 `tools/m2-acceptance/whitelist.jsonl`（`run_acceptance.ps1` 默认带上；
+  文件缺失则不传，按 0 差异判红）。当前登记 4 行，两条根因（owner §25.3 裁决）：
+  `ident=46 field=param`、`ident=50 field=series`；每条的 `raw_hex` 行是**同一字节差异的投影**，
+  故同因同审各多一行（避免靠改判据判绿）。**两侧采集口径**：金标准 2026-10-10 **09:28**（白天
+  `Bright=1`，角色 `Dir=0`）/ Rust 侧 2026-10-12 **01:28**（夜间 `Bright=3`，观察者 `Dir=4`）。
+  证据见 `evidence/m2svr-whitelist-20261012/**`。
 
 **失败怎么判红**：缺 dump / 缺 dotnet ⇒ exit 2；切帧/导出/replay 失败 ⇒ exit 1；
 对账有**未登记**差异 ⇒ exit 1；0 差异或全部落在白名单 ⇒ exit 0。
