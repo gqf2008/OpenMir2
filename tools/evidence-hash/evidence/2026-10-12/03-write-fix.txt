@@ -1,0 +1,7 @@
+# 03 write（把 3 个不一致清单显式修正到仓库字节口径）
+$ python -I tools/evidence-hash/verify_sha256sums.py write mir2-rs/tests/parity/envir-2026-10-10 tools/m2-acceptance/evidence/session-lifecycle-rerun-20261012 tools/m2-acceptance/evidence/session-lifecycle-selftest-20261012
+写入 mir2-rs\tests\parity\envir-2026-10-10\SHA256SUMS.txt（6 行，repo 口径）
+写入 tools\m2-acceptance\evidence\session-lifecycle-rerun-20261012\SHA256SUMS.txt（11 行，repo 口径）
+写入 tools\m2-acceptance\evidence\session-lifecycle-selftest-20261012\SHA256SUMS.txt（6 行，repo 口径）
+GREEN: write 完成（14 行 hash 变更，mode=repo）
+exit=0

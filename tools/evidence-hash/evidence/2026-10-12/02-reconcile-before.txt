@@ -1,0 +1,19 @@
+# 02 reconcile（修正前）：RED 3
+$ python -I tools/evidence-hash/verify_sha256sums.py reconcile
+目录                                                                         件    仓库    盘上   缺  结论
+------------------------------------------------------------------------------------------------
+mir2-rs/tests/parity/envir-2026-10-10                                      6     5     5   0  [RED] 混合/漂移：仓库字节命中 5/6、盘上字节命中 5/6
+mir2-rs/tests/parity/envir-2026-10-11                                     11    11    11   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+                                                                         未列入(信息，非判据): .gitattributes
+                                                                         仓外输入(按盘上字节): E:/MirServer/M2GameSvr/Envir/MapInfo.txt, E:/MirServer/M2GameSvr/Server.conf
+mir2-rs/tests/parity/evidence/M1/s4b-slice4-crossread                     51    51    51   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+                                                                         未列入(信息，非判据): .gitattributes
+mir2-rs/tests/parity/m1-boundary-load/evidence                            26    26    26   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+                                                                         未列入(信息，非判据): .gitattributes
+tools/m2-acceptance/evidence/m2svr-o3-pergateway-kick-20261012             4     4     4   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+tools/m2-acceptance/evidence/session-lifecycle-rerun-20261012             11     3    11   0  [RED] 盘上字节口径但未声明 .gitattributes * -text
+                                                                         未列入(信息，非判据): README.md
+tools/m2-acceptance/evidence/session-lifecycle-selftest-20261012           6     1     6   0  [RED] 盘上字节口径但未声明 .gitattributes * -text
+
+reconcile: 4/7 GREEN；RED 3
+exit=1

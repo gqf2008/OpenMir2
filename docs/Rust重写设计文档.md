@@ -248,6 +248,19 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "mysql", "chrono", "macro
 2. **必须能证伪**：每条门禁都要给出**红检方式**（故意改坏哪一处 → 必须变红），并附红检输出。恒绿的门禁等于没有。
 3. **差异要么 0，要么进白名单**：允许的差异必须写进 `tests/parity/whitelist.md`，每条写明「差异点 / 为什么无害 / 谁审的」。**没登记 = 不过**。
 4. **证据四件套**：可复现的命令 + 原始输出 + 截图/日志文件路径 + 产物 hash（或提交号）。**没有证据 = 没做**。
+   - **hash 口径（硬约定，2026-10-12 定，卡 `openmir2-evidence-hash-convention`）**：`SHA256SUMS.txt` 里的 hash
+     **一律按「仓库字节」记 = `SHA256(Git blob 内容)`**——`text` 文件（`text eol=lf` / `auto` / 未指定 + `core.autocrlf=true`）
+     即 **CRLF→LF 归一后的 sha256**；`.gitattributes` 里 `-text` 冻结的文件即**盘上原始字节**；**仓外输入**
+     （如 `E:/MirServer/**`，没有 blob）按**盘上原始字节**。**不许按工作树原始字节记 `text` 文件**——
+     `core.autocrlf=true` 下工作树是 CRLF、blob 是 LF，全新检出必然假 mismatch（C6 F9-1 / M4 N-1 / M2 life N-1 已踩三次；
+     M2 `envir-2026-10-10` 的 `parse-stats-cs.json` 是第四次，本次一并修正，见 `tools/evidence-hash/RECONCILE.md`）。
+   - 通用复核器：`python -I tools/evidence-hash/verify_sha256sums.py <目录或清单>`（默认仓库字节口径，逐目录 `OK n/n`）、
+     `… reconcile`（全仓 `SHA256SUMS.txt` 逐目录对账）、`… selftest`（改 hash / 多件 / 少件 / 口径切换各必红）。
+     口径只有一个，切错就红；目标/清单缺失一律 `exit 2`，**绝不静默通过**。
+   - **确实要按盘上字节记的目录**（多为 GB2312/CRLF 原始捕获，需要 `sha256sum -c` 能跑）必须**同时**放
+     `.gitattributes` 的 `* -text` **冻结字节**（先例：`tests/loadgate/.gitattributes`、
+     `mir2-rs/tests/parity/m1-boundary-load/evidence/.gitattributes`），复核时显式 `--disk-bytes`。
+     冻结目录里仓库字节 == 盘上字节，两种口径都绿；未声明却按盘上字节记 = 红。
 5. **跨里程碑不许夹带**：当前里程碑未验收通过前不写下一阶段代码（尤其是 M0/M1 未过不许动引擎）。
 
 ### M0 —— 协议层 + 抓包回放门禁（预计 1 周）

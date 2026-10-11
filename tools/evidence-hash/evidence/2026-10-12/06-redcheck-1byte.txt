@@ -1,0 +1,13 @@
+# 06 红检：把被引件改 1 字节 ⇒ 必 RED（随后还原）
+$ printf ' ' >> mir2-rs/tests/parity/m1-boundary-load/evidence/01-ports-green.json
+$ python -I tools/evidence-hash/verify_sha256sums.py mir2-rs/tests/parity/m1-boundary-load/evidence
+RED   mir2-rs\tests\parity\m1-boundary-load\evidence\SHA256SUMS.txt  [repo 口径]  OK 25/26
+       mismatch: E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\tests\parity\m1-boundary-load\evidence\01-ports-green.json
+         清单 bf17fa9f73ae8a6842f9d6dc7c99d3d9b331b189e77265cef3a15930b15ae45d
+         实算 cd1d02214a2d20626765e4dfa4b6190cb3f82db84ac2748097675093b7e85e35  (text attr=unset)
+exit=1
+
+$ git checkout -- mir2-rs/tests/parity/m1-boundary-load/evidence/01-ports-green.json
+$ python -I tools/evidence-hash/verify_sha256sums.py mir2-rs/tests/parity/m1-boundary-load/evidence
+GREEN mir2-rs\tests\parity\m1-boundary-load\evidence\SHA256SUMS.txt  [repo 口径]  OK 26/26
+exit=0

@@ -1,0 +1,111 @@
+[
+  {
+    "manifest": "mir2-rs/tests/parity/envir-2026-10-10/SHA256SUMS.txt",
+    "dir": "mir2-rs/tests/parity/envir-2026-10-10",
+    "listed": 6,
+    "repo_ok": 6,
+    "disk_ok": 6,
+    "missing": 0,
+    "extra": [],
+    "external": [],
+    "gitattributes": false,
+    "freeze_all": false,
+    "verdict": "GREEN",
+    "why": "仓库字节 == 盘上字节（两种口径一致）"
+  },
+  {
+    "manifest": "mir2-rs/tests/parity/envir-2026-10-11/SHA256SUMS.txt",
+    "dir": "mir2-rs/tests/parity/envir-2026-10-11",
+    "listed": 11,
+    "repo_ok": 11,
+    "disk_ok": 11,
+    "missing": 0,
+    "extra": [
+      ".gitattributes"
+    ],
+    "external": [
+      "E:/MirServer/M2GameSvr/Envir/MapInfo.txt",
+      "E:/MirServer/M2GameSvr/Server.conf"
+    ],
+    "gitattributes": true,
+    "freeze_all": false,
+    "verdict": "GREEN",
+    "why": "仓库字节 == 盘上字节（两种口径一致）"
+  },
+  {
+    "manifest": "mir2-rs/tests/parity/evidence/M1/s4b-slice4-crossread/SHA256SUMS.txt",
+    "dir": "mir2-rs/tests/parity/evidence/M1/s4b-slice4-crossread",
+    "listed": 51,
+    "repo_ok": 51,
+    "disk_ok": 51,
+    "missing": 0,
+    "extra": [
+      ".gitattributes"
+    ],
+    "external": [],
+    "gitattributes": true,
+    "freeze_all": true,
+    "verdict": "GREEN",
+    "why": "仓库字节 == 盘上字节（两种口径一致）"
+  },
+  {
+    "manifest": "mir2-rs/tests/parity/m1-boundary-load/evidence/SHA256SUMS.txt",
+    "dir": "mir2-rs/tests/parity/m1-boundary-load/evidence",
+    "listed": 26,
+    "repo_ok": 26,
+    "disk_ok": 26,
+    "missing": 0,
+    "extra": [
+      ".gitattributes"
+    ],
+    "external": [],
+    "gitattributes": true,
+    "freeze_all": true,
+    "verdict": "GREEN",
+    "why": "仓库字节 == 盘上字节（两种口径一致）"
+  },
+  {
+    "manifest": "tools/m2-acceptance/evidence/m2svr-o3-pergateway-kick-20261012/SHA256SUMS.txt",
+    "dir": "tools/m2-acceptance/evidence/m2svr-o3-pergateway-kick-20261012",
+    "listed": 4,
+    "repo_ok": 4,
+    "disk_ok": 4,
+    "missing": 0,
+    "extra": [],
+    "external": [],
+    "gitattributes": false,
+    "freeze_all": false,
+    "verdict": "GREEN",
+    "why": "仓库字节 == 盘上字节（两种口径一致）"
+  },
+  {
+    "manifest": "tools/m2-acceptance/evidence/session-lifecycle-rerun-20261012/SHA256SUMS.txt",
+    "dir": "tools/m2-acceptance/evidence/session-lifecycle-rerun-20261012",
+    "listed": 11,
+    "repo_ok": 11,
+    "disk_ok": 3,
+    "missing": 0,
+    "extra": [
+      "README.md"
+    ],
+    "external": [],
+    "gitattributes": false,
+    "freeze_all": false,
+    "verdict": "GREEN",
+    "why": "仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）"
+  },
+  {
+    "manifest": "tools/m2-acceptance/evidence/session-lifecycle-selftest-20261012/SHA256SUMS.txt",
+    "dir": "tools/m2-acceptance/evidence/session-lifecycle-selftest-20261012",
+    "listed": 6,
+    "repo_ok": 6,
+    "disk_ok": 1,
+    "missing": 0,
+    "extra": [],
+    "external": [],
+    "gitattributes": false,
+    "freeze_all": false,
+    "verdict": "GREEN",
+    "why": "仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）"
+  }
+]

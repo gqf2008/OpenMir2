@@ -60,5 +60,11 @@
 
 ## 4. 证据 hash
 
-见 `SHA256SUMS.txt`（`sha256sum` 对**盘上原始件**，未做 LF 归一化；本目录件均为复跑当日产物）。
+见 `SHA256SUMS.txt`（**按仓库字节记 = `SHA256(Git blob 内容)`**：本目录件是 `text` 文件，
+即 **CRLF→LF 归一后的 sha256**；复核器 = `python -I tools/evidence-hash/verify_sha256sums.py <本目录>`）。
+
+> **口径订正**（2026-10-12，卡 `openmir2-evidence-hash-convention`，`docs/Rust重写设计文档.md` §6.0-4）：
+> 本清单原按**盘上 CRLF**记 ⇒ 对仓库字节复核 8/11 mismatch（N-1）；本片已改记为仓库字节口径，
+> 复核 **11/11 GREEN**（`E:/tmp/...` 已在同卡报告登记；对账表见 `tools/evidence-hash/RECONCILE.md`）。
+
 脚本文件 `tools/m2-acceptance/session_lifecycle_fixture.ps1` 本片**未改动**（hash 以分支 head 上的 blob 为准）。

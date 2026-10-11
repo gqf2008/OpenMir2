@@ -1,0 +1,9 @@
+# 05 演示：一个「已合规、未修」的证据目录在新规矩下 0 mismatch（26/26）
+$ python -I tools/evidence-hash/verify_sha256sums.py mir2-rs/tests/parity/m1-boundary-load/evidence
+GREEN mir2-rs\tests\parity\m1-boundary-load\evidence\SHA256SUMS.txt  [repo 口径]  OK 26/26
+exit=0
+
+# 05b 同目录 --disk-bytes（该目录声明了 * -text 冻结字节，两种口径都应一致）
+$ python -I tools/evidence-hash/verify_sha256sums.py --disk-bytes mir2-rs/tests/parity/m1-boundary-load/evidence
+GREEN mir2-rs\tests\parity\m1-boundary-load\evidence\SHA256SUMS.txt  [disk 口径]  OK 26/26
+exit=0
