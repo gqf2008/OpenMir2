@@ -61,6 +61,13 @@ $Dbsnap = Join-Path $RepoRoot "tools\dbsnap\dbsnap.py"
 $Scoped = Join-Path $RepoRoot "mir2-rs\tests\parity\m3\scoped_diff.py"
 $Paths = @("softclose", "disconnect", "shutdown")
 
+# 两个模式都会 shell out 到 python（dbsnap/scoped_diff）。缺 python 会抛终止错误、被聚合器误当 RED，
+# 故先显式报 PREREQ（preflight.ps1 也先行拦一道）。
+if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
+  Write-Output "PREREQ_MISSING: 找不到 python（dbsnap/scoped_diff 需要；见 preflight.ps1）"
+  exit 2
+}
+
 function Test-Mysql {
   try {
     $c = New-Object System.Net.Sockets.TcpClient
