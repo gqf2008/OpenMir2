@@ -65,6 +65,11 @@ macro_rules! glog {
 /// 会话表：`SessionId → 该客户端连接的发送端`（一条网关→服务器连接一张表）。
 type Sessions = Arc<Mutex<HashMap<u16, mpsc::UnboundedSender<Vec<u8>>>>>;
 
+/// 会话在**引擎侧的索引**（`ClientSession.cs:649` 的 `SendMsg.SessionIndex = SvrListIdx`）：
+/// 由服务端用 `GM_SERVERUSERINDEX` 下发（`ClientThread.cs:272-275` 存进会话的 `SvrListIdx`），
+/// 之后该会话发往 GameSvr 的每一帧都要带上它（未收到时为 0）。
+type SessionIndexes = Arc<Mutex<HashMap<u16, i32>>>;
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let conf = std::env::args()
@@ -81,6 +86,8 @@ async fn main() -> Result<()> {
     let mut tasks = Vec::new();
     for ep in cfg.endpoints {
         let sessions: Sessions = Arc::new(Mutex::new(HashMap::new()));
+        // 会话→引擎侧索引（`SvrListIdx`；由 `GM_SERVERUSERINDEX` 下发）
+        let indexes: SessionIndexes = Arc::new(Mutex::new(HashMap::new()));
         // 下游连接：连不上 GameSvr 即失败退出（M1④）
         let downstream = TcpStream::connect((ep.srv_addr.as_str(), ep.srv_port))
             .await
@@ -102,6 +109,7 @@ async fn main() -> Result<()> {
         tasks.push(tokio::spawn(server_loop(
             down_rx,
             Arc::clone(&sessions),
+            Arc::clone(&indexes),
             ep.srv_addr.clone(),
             ep.srv_port,
         )));
@@ -123,6 +131,7 @@ async fn main() -> Result<()> {
             gate_addr,
             ep.gate_port,
             sessions,
+            indexes,
             down_tx,
         )));
     }
@@ -138,6 +147,7 @@ async fn accept_loop(
     gate_addr: String,
     gate_port: u16,
     sessions: Sessions,
+    indexes: SessionIndexes,
     down_tx: Arc<Mutex<OwnedWriteHalf>>,
 ) -> Result<()> {
     let mut used: std::collections::HashSet<u16> = std::collections::HashSet::new();
@@ -153,10 +163,19 @@ async fn accept_loop(
         used.insert(sid);
         glog!("INF", "开始连接: {peer} (SessionId={sid} socket={handle})");
         let sessions = Arc::clone(&sessions);
+        let indexes = Arc::clone(&indexes);
         let down_tx = Arc::clone(&down_tx);
         tokio::spawn(async move {
-            if let Err(e) =
-                client_loop(sock, sid, handle, peer.to_string(), sessions, down_tx).await
+            if let Err(e) = client_loop(
+                sock,
+                sid,
+                handle,
+                peer.to_string(),
+                sessions,
+                indexes,
+                down_tx,
+            )
+            .await
             {
                 glog!("WRN", "客户端[{peer}]会话结束: {e:#}");
             }
@@ -171,6 +190,7 @@ async fn client_loop(
     handle: i32,
     peer: String,
     sessions: Sessions,
+    indexes: SessionIndexes,
     down_tx: Arc<Mutex<OwnedWriteHalf>>,
 ) -> Result<()> {
     let (mut rd, mut wr) = sock.into_split();
@@ -256,13 +276,18 @@ async fn client_loop(
             }
             continue; // 登录帧不转发给 GameSvr（oracle 的 else 分支也不发）
         }
-        // 转发给 GameSvr：TODO(差分) socket/session_index/PackLength 符号按 C# 精确对齐
+        // 转发给 GameSvr。`SessionIndex` 取该会话的 `SvrListIdx`（oracle 在 `ClientSession.cs:649`
+        // 每次都写 `SendMsg.SessionIndex = SvrListIdx`）。
+        // TODO(切片 3)：命令路径在 C# 里**不是搬字节**——它把内层解码成 `CommandMessage`(16B) + 尾部
+        // **重新编码**（`ClientSession.cs:646-669`），`PackLength = 16 + tLen (+1)`。当前实现仍是原样转发，
+        // 已在协议梳理 §7.8 记为待办。
+        let session_index = *indexes.lock().await.get(&sid).unwrap_or(&0);
         let data = ServerMessage {
             packet_code: grobal2::PacketCode,
             socket: 0,
             session_id: sid,
             ident: u16::from(grobal2::GM_DATA),
-            session_index: 0,
+            session_index,
             pack_length: i32::try_from(body.len()).unwrap_or(i32::MAX),
         };
         send_internal(&down_tx, data, &body).await?;
@@ -270,6 +295,7 @@ async fn client_loop(
 
     // 离开：GM_CLOSE(session_id=0, socket=handle)（实机取证确认）
     sessions.lock().await.remove(&sid);
+    indexes.lock().await.remove(&sid);
     let leave = ServerMessage {
         packet_code: grobal2::PacketCode,
         socket: handle,
@@ -288,6 +314,7 @@ async fn client_loop(
 async fn server_loop(
     mut rd: tokio::net::tcp::OwnedReadHalf,
     sessions: Sessions,
+    indexes: SessionIndexes,
     srv_addr: String,
     srv_port: u16,
 ) -> Result<()> {
@@ -323,10 +350,17 @@ async fn server_loop(
             }
             grobal2::GM_CLOSE => {
                 sessions.lock().await.remove(&msg.session_id);
+                indexes.lock().await.remove(&msg.session_id);
                 glog!("INF", "游戏服务要求关闭会话[{}]", msg.session_id);
             }
             grobal2::GM_CHECKSERVER => {}
             grobal2::GM_SERVERUSERINDEX => {
+                // `ClientThread.cs:272-275`：把 SessionIndex 记到会话的 `SvrListIdx`，
+                // 之后该会话发往 GameSvr 的每帧都带它（`ClientSession.cs:649`）。
+                indexes
+                    .lock()
+                    .await
+                    .insert(msg.session_id, msg.session_index);
                 glog!(
                     "DBG",
                     "服务端分配会话索引：SessionId={} index={}",

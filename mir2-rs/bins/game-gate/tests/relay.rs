@@ -142,6 +142,74 @@ async fn bad_login_is_kicked_and_nothing_is_forwarded() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// 判据 7：服务端下发 `GM_SERVERUSERINDEX` 后，该会话后续 `GM_DATA` 必须带上同一个 `SessionIndex`。
+///
+/// 依据：`ClientThread.cs:272-275`（把 `SessionIndex` 记到会话的 `SvrListIdx`）+
+/// `ClientSession.cs:649`（`SendMsg.SessionIndex = SvrListIdx`）。
+#[tokio::test]
+async fn server_user_index_is_echoed_on_gm_data() {
+    let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let srv_port = l.local_addr().unwrap().port();
+    let srv_task = tokio::spawn(async move {
+        let (mut sock, _) = l.accept().await.unwrap();
+        // 先收 GM_OPEN，拿到网关生成的 SessionId
+        let mut head = [0u8; ServerMessage::SIZE];
+        sock.read_exact(&mut head).await.unwrap();
+        let open = ServerMessage::from_bytes(&head).unwrap();
+        let mut open_body = vec![0u8; open.body_len()];
+        sock.read_exact(&mut open_body).await.unwrap();
+        assert_eq!(open.ident, u16::from(grobal2::GM_OPEN));
+        // 下发 SvrListIdx=42
+        let idx = ServerMessage {
+            packet_code: grobal2::PacketCode,
+            socket: 0,
+            session_id: open.session_id,
+            ident: u16::from(grobal2::GM_SERVERUSERINDEX),
+            session_index: 42,
+            pack_length: 0,
+        };
+        sock.write_all(&idx.to_bytes()).await.unwrap();
+        sock.flush().await.unwrap();
+        // 再收数据帧，看它带没带 42
+        loop {
+            if sock.read_exact(&mut head).await.is_err() {
+                return None;
+            }
+            let m = ServerMessage::from_bytes(&head).unwrap();
+            let mut body = vec![0u8; m.body_len()];
+            if !body.is_empty() && sock.read_exact(&mut body).await.is_err() {
+                return None;
+            }
+            if m.ident == u16::from(grobal2::GM_DATA) {
+                return Some(m.session_index);
+            }
+        }
+    });
+
+    let gate_port = free_port();
+    let dir = std::env::temp_dir().join(format!("gg-idx-{}-{}", std::process::id(), gate_port));
+    write_conf(&dir, srv_port, gate_port);
+    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_game-gate"))
+        .arg(dir.join("config.conf"))
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut client = connect_with_retry(gate_port).await;
+    client.write_all(&login_frame(GOOD_LOGIN)).await.unwrap();
+    client.flush().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await; // 等服务端下发索引
+    client.write_all(&frame(11, 0, &[7u8; 32])).await.unwrap();
+    client.flush().await.unwrap();
+
+    let got = tokio::time::timeout(Duration::from_secs(5), srv_task)
+        .await
+        .expect("假 GameSvr 未按时结束")
+        .unwrap();
+    assert_eq!(got, Some(42), "GM_DATA 必须带上服务端下发的 SessionIndex");
+    child.kill().await.ok();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 #[tokio::test]
 async fn relays_open_data_heartbeat_and_close() {
     let (srv_port, srv_task) = fake_game_svr().await;

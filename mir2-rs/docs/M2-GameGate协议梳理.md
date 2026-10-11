@@ -189,6 +189,40 @@ else {                                  // :671-680
 重放必须从该连接的**第一帧**开始、且两侧状态同步。这条直接决定差分夹具怎么写（否则会得到"客户端登陆
 消息处理失败"的假红）。
 
+## 7.8 命令路径的出帧构造（切片 3 的规格，已从 oracle 源码钉住）
+
+登录通过后（`HandleLogin=true`，`:153`），每帧按命令处理：先 `EncryptUtil.DecodeSpan`（`:168`）解出
+`ClientMessage`（`:177` 读 16B 固定头），再走各命令分支（速度规则/过滤器在这一段，`:205-644`），
+**最后统一重建出帧**（`:646-669`）——**不是搬字节**：
+
+```
+SendMsg.SessionIndex = SvrListIdx;                                   // :649 索引来自 GM_SERVERUSERINDEX
+if (deCodeLen > CommandMessage.Size) {                               // :650 有超出固定头的载荷
+    byte[] sendBuffer = new byte[messagePacket.BuffLen - CommandMessage.Size + 1];
+    int tLen = EncryptUtil.Encode(decodeBuff, deCodeLen - CommandMessage.Size, sendBuffer);  // :653 尾部**重新编码**
+    SendMsg.PackLength = CommandMessage.Size + tLen + 1;             // :654（+1 是编码器补的那个字节）
+    sendLen = 20 + SendMsg.PackLength;
+    BlockCopy(decodeBuff, 0, bodyBuffer, 20, CommandMessage.Size);   // :657 固定头用**解码后**的 16B
+    BlockCopy(tempBuff, CommandFixedLength, bodyBuffer, 20 + 16, tLen); // :658 尾部直接抄**输入的编码态**字节
+} else { … PackLength = CommandMessage.Size; body = decodeBuff … }   // :660-666
+Serialize(SendMsg) → bodyBuffer[0..20]; ClientThread.Send(sendLen);  // :667-668
+```
+
+⇒ 切片 3 要复刻的是：① 先解码拿到 16B `ClientMessage` 固定头；② 固定头**按解码态**原样写进发往
+GameSvr 的 body；③ 超出部分**重新编码**（用与解码同一个 EDCode 状态）后再放进去；④ `PackLength`
+用 `16 + tLen + 1`；⑤ `SessionIndex` 用本会话的 `SvrListIdx`（**这一条本批已实现并有测试**，见下）。
+
+切片 3 还需要补的取证（**不许猜**）：
+1. `CommandMessage` 的 16 字节字段布局（`CommandMessage.Size` 的来源；本文件 `:177` 用
+   `MemoryMarshal.Read<ClientMessage>`，两者字段同名不同类，要找 `ClientPackets/*Message.cs` 的定义）；
+2. `EncryptUtil.Encode(src, len, dst)` 与 `EDCode` 的**状态推进**：同一连接上"解码 N 字节后再编码 M 字节"
+   的索引如何走（`crates/protocol::edcode` 的 `encode/decode` 是纯函数式，需要与 C# 的有状态实现对齐）；
+3. `+1` 那个字节到底是什么（编码器终止符？还是 `!`）。
+
+**本批已落地的一条**（切片 3 的第 ⑤ 点）：`GM_SERVERUSERINDEX` 下发后，该会话后续 `GM_DATA` 的
+`SessionIndex` 必须一致（`world.rs` 那侧新加 `SessionIndexes` 表 + `server_user_index_is_echoed_on_gm_data`
+测试钉住）。
+
 ## 8. 头号风险
 
 - **客户端 face 有登录门禁（§7.6）**：未通过登录帧校验的客户端会被**剔除**；切片 1 目前会照转 `GM_DATA`
