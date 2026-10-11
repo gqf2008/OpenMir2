@@ -714,6 +714,8 @@ walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 prin
 - **合并护栏**：两条 merge 都在合并树上重跑四门禁（`E:/tmp/openmir2-watch/merge-55fdde5e-*.log`），并逐条核"被审面未被合并改写"
   （botsrv：`git diff --name-only a236e607 7a878095 -- <被审路径>` = 空；life：`docs/Rust重写设计文档.md` 的 blob 与 master 侧版本逐字节相同）。
   **T-12 编号已被 botsrv 占用** ⇒ m3bag 需改号（已写入其 brief）。
+- **C6 残留 F9-1 已开卡**：`openmir2-c6-artifacts-hash-repro`（issue `b790d24ae7413dab3e461e4fc75ab5303390026b`）——`artifacts.sha256.json` 的
+  CRLF/LF 可复现性（全新检出 18/45 假 mismatch）；Minor、不是里程碑阻塞项，车道排在 `m3gs` 之后，**避免只留在散文里**。
 
 ## 18. S3：B-8 命令码位移修复（2026-10-10，oracle 行为变更）
 
