@@ -672,6 +672,23 @@ walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 prin
 
 ---
 
+### 17.1 待补的验收项与"测量窗口"要求（owner 2026-10-11 记，防止被当成已完成）
+
+- **M3 总验收未做**（§6 M3 原文）：① 十项系统逐一对齐**全绿** + M3 门禁 `diff=0`；② **300 假人长跑 24h 无 panic、无掉线**；
+  ③ 每系统的"命令 + 输出 + 差异报告"汇总成 `tests/parity/M3-report.md`。
+  现状：只到"逐系统对齐 ①（背包/装备）"；②③ **无卡**（按 §6.0-5 待对齐推进后再开，**别记成已完成**）。
+- **M5 另有四项无卡**：72h 长跑 / `mem-probe` 内存斜率 / 灰度-回滚演练 / 灰度前后 DB 快照（见 M5 行）。
+- **P99 类判据需要"静默窗口"**（两条独立事实，别再各自解释）：
+  1. tick_bench 的相对门禁带 `SKIP-UNDER-LOAD`（CPU≥40% 或 `rustc`/`cargo`/`cargo-clippy`/`msbuild`≥4 ⇒ SKIP、exit 0）。
+     本机常态是多车道在跑（实测 CPU 常在 50–80%）⇒ 该门禁**持续 SKIP**（`last-tickbench.md` 5/5）⇒ **相对 P99 判据实际处于休眠**，
+     目前只有单测 `regression_limits_are_exact` 在钉阈值。
+  2. C6 的 load gate **没有本机负载字段**（`tools/botload/load_gate.ps1:231-232` 只采被测进程）⇒ tier-1000 的 P99 越界**无法归属**
+     （见卡 `openmir2-c6-loadgate-idempotent` 的 owner comment `82f8e0c3`）。
+  ⇒ **任何要写进验收的 P99 数字，必须在没有其它车道编译/压测的窗口里采**；采集前由 owner 收拢窗口并登记
+  （`lane-status.log` + 进程实况 + 本机负载探针，三点齐才算窗口干净）。
+- **M1⑤ 的"假覆盖"已更正**（见 M1 行 + 卡 `openmir2-m1-boundary-load-200`）：**判据要落到"哪个进程收的字节"**，
+  别把"别处的成绩"当成自己的证据（C6 tier-200 是 C# 栈的成绩，没覆盖 Rust 边界服务）。
+
 ## 18. S3：B-8 命令码位移修复（2026-10-10，oracle 行为变更）
 
 > 全文与证据：`mir2-rs/tests/parity/evidence/S3/S3-报告.md`；白名单条目：`whitelist.md` **T-4**（并给 B-8 行加了注记）。
