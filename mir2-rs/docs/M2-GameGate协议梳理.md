@@ -286,6 +286,30 @@ OTP、`GM_CHECKCLIENT` 周期帧、`ClientTimeOutTime` 空闲回收。卡内验�
 `PunishMethod` 枚举已核：`TurnPack=0, DropPack=1, NullPack=2, DelaySend=3`（`GateShare.cs:198-216`）
 ⇒ 现网 `OverSpeedPunishMethod=3` **就是 DelaySend**，"超速照转、只后推预算"的结论成立。
 
+### 7.10.2 再补一刀：**聊天（say）那条间隔是"直接 return"** ⇒ 它会**丢帧**
+
+7.10.1 的"正常流量不受影响"**只对 move/attack 一类的 DelaySend 分支成立**。补读聊天分支（`ClientSession.cs:488-546`）：
+
+```
+if (!msgContent.StartsWith(_commandFlagSpan)) {          // 非 @命令
+    currentTick = GetTickCount();
+    if (currentTick - gameSpeed.SayMsgTick < Config.ChatInterval) {
+        return;                                          // :494 —— 直接丢，不转发！
+    }
+    gameSpeed.SayMsgTick = currentTick;
+}
+```
+
+而现网 `[Switch] ChatInterval=1`、`[Integer] ChatInterval=800` ⇒ **聊天帧在 800ms 内发第二条就会被丢掉**。
+另一条重写路径是 `GateShare.ChatCommandFilterMap`（命中就改写成 `SM_WHISPER` 并 `return`，`:519-537`），
+配置 `ChatCmdFilter=0` ⇒ 该 map 应为空（惰性）。
+
+⇒ 对 M2 验收（含"说话"）的影响：**聊天流量的"网关→5000 帧集合"会被时间影响**，所以
+① 逐帧差分若含聊天，必须 pacing（按金标准 `ts_ms`）或给两侧虚拟钟；② 或者把聊天从"字节等价"里
+单列成"间隔规则 + 转发形态"两个场景（间隔规则用虚拟钟单测；转发形态用 `_commandFlagSpan` 开头的命令帧走"不判间隔"的分支来比字节）。
+③ 聊天帧**被转发时**的字节形态仍走 §7.9 的通用重建（`pszChatBuffer` 那套只在命中命令过滤器时用），
+所以切片 3 核心对它依旧适用。
+
 ## 8. 头号风险
 
 
