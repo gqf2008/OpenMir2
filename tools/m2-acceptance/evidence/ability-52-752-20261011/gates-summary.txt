@@ -1,0 +1,13 @@
+### CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target (isolated)
+### date: 2026年10月11日 22:26:58
+--- fmt ---
+fmt rc=0
+--- clippy ---
+clippy rc=0
+--- msgcodegen ---
+msgcodegen rc=0
+test run 1: passed=470 failed=0 ignored=13
+test run 2: passed=470 failed=0 ignored=13
+test run 3: passed=470 failed=0 ignored=13
+test run 4: passed=470 failed=0 ignored=13
+test run 5: passed=470 failed=0 ignored=13

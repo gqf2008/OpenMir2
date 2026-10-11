@@ -1,0 +1,31 @@
+### 红检：把 `cur_hp: a.abil.hp` 改成 `cur_hp: 0`（WAbil 不再保留记录当前 HP）
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.51s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-9edafd3360ac6080.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 30 filtered out; finished in 0.00s
+
+     Running unittests src\main.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-44fed7c172342fc7.exe)
+
+running 1 test
+test enter::tests::ability_frames_follow_recalc_abilitys ... FAILED
+
+failures:
+
+---- enter::tests::ability_frames_follow_recalc_abilitys stdout ----
+
+thread 'enter::tests::ability_frames_follow_recalc_abilitys' (29368) panicked at bins\game-svr\src\enter.rs:1464:9:
+assertion `left == right` failed: 52 尾 = EncodeMessage(WAbil)
+  left: [1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 15, 0, 19, 0, 15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 0, 4, 0, 50, 0, 0, 15, 0, 12]
+ right: [1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 15, 0, 15, 0, 19, 0, 15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 0, 4, 0, 50, 0, 0, 15, 0, 12]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    enter::tests::ability_frames_follow_recalc_abilitys
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 97 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`

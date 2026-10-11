@@ -324,6 +324,9 @@ async fn main() -> Result<()> {
             }
         }
     };
+    // 查表口径只有一份：装成 `game_svr::ability::StdItemCatalog`（1-based + 空名按缺），
+    // 供帧 50/41 的 `StdItem.Shape` 与 52/752 的 `RecalcAbilitys` 共用。
+    let item_catalog = items::catalog_from(&item_table);
     let _sim = std::thread::Builder::new()
         .name("m2-sim".to_string())
         // 公告文本（oracle `NoticeMgr.GetNoticeMsg("Notice")`，帧 658 `SM_SENDNOTICE`）：
@@ -337,7 +340,7 @@ async fn main() -> Result<()> {
                     game_conf,
                     string_conf,
                     show_rank_level_name,
-                    items: item_table,
+                    catalog: item_catalog,
                 },
                 notice,
                 colors,
@@ -719,8 +722,9 @@ struct EnterConfig {
     game_conf: Option<mir2_envir::GameSvrConf>,
     string_conf: crate::strings::StringConf,
     show_rank_level_name: bool,
-    /// `stditems` 物品模板表（**1-based** 查表，见 `crate::items`）；空表 = 未加载/无配置。
-    items: Vec<mir2_data::StdItem>,
+    /// `stditems` 物品目录（`game_svr::ability::StdItemCatalog`，**1-based** 查表，见 `crate::items`）；
+    /// 空目录 = 未加载/无配置。帧 50/41 的 `StdItem.Shape` 与 52/752 的 `RecalcAbilitys` 共用。
+    catalog: game_svr::ability::StdItemCatalog,
 }
 
 fn sim_loop(
@@ -1075,7 +1079,7 @@ fn sim_loop(
                                                 let (dress_shape, weapon_shape, shape_warns) =
                                                     enter::feature_shapes(
                                                         data.and_then(|d| d.hum_items.as_deref()),
-                                                        &enter_cfg.items,
+                                                        &enter_cfg.catalog,
                                                     );
                                                 for w in shape_warns {
                                                     glog!("WRN", "入图帧输入：{w}");
@@ -1125,6 +1129,25 @@ fn sim_loop(
                                                     strings: Some(&enter_cfg.string_conf),
                                                     show_name: Some(show_name),
                                                     logon,
+                                                    // 帧 52/752：角色记录 `Abil`/`BonusAbil` + `stditems`
+                                                    // 目录 + 各职业 `Config.BonusAbilofXxx` 除数。
+                                                    ability: data.and_then(|d| {
+                                                        let conf = enter_cfg.game_conf.as_ref()?;
+                                                        let abil = d.abil.as_ref()?;
+                                                        let bonus_abil = d.bonus_abil.as_ref()?;
+                                                        let (hit, speed) =
+                                                            enter::bonus_tick(conf, d.job);
+                                                        Some(enter::AbilityInputs {
+                                                            catalog: &enter_cfg.catalog,
+                                                            abil,
+                                                            bonus_abil,
+                                                            bonus_tick_hit: hit,
+                                                            bonus_tick_speed: speed,
+                                                            use_items: d.hum_items.as_deref(),
+                                                            bag_items: d.bag_items.as_deref(),
+                                                            gold: d.gold,
+                                                        })
+                                                    }),
                                                 };
                                                 for w in enter::apply(&mut inputs, &wx) {
                                                     glog!("WRN", "入图帧输入：{w}");

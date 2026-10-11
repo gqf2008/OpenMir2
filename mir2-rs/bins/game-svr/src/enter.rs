@@ -20,29 +20,34 @@
 //! （`SendLogon()`，`PlayObject.cs:1128-1147`；`GetFeatureToLong`/`GetFeatureEx` 复用已合入的
 //! `game_svr::feature`）。
 //!
+//! **本片已接线（52/752）**：`52 SM_ABILITY` / `752 SM_SUBABILITY`——发帧点 = 登录后
+//! `PlayObject.cs:1385-1386`（`SendPriorityMsg(RM_ABILITY/RM_SUBABILITY)` → `Message.cs:1732-1735` /
+//! `:1935`），输入由 **已合入的 `game_svr::ability::recalc_abilitys`**（`PlayObject.RecalcAbilitys()` 的
+//! 纯函数等价物，`openmir2-m3-bag-equip-alignment` 交付）产出：`WAbil` → `record::encode_ability` →
+//! `smframe::sm_ability`；`SubAbility::to_frame_bytes()` → `smframe::sm_subability`。
+//!
 //! **仍缺输入（本片登记，不接线）**：
-//! - `50/41` 的 `UseItems[Dress/Weapon].StdItem.Shape` **已接线**（`crate::items`：直连 MySQL 读
-//!   `stditems`，查表口径逐行照 `GameItemSystem.GetStdItem`，1-based + 空名按缺）；仅 `CharStatus`
-//!   的 buff 部分（`ActorBuffSystem`）未移植，会话初生恒 0（金标准 #3 印证）。
-//! - `10 SM_TURN` 的 `CharDesc`（Feature+Status）依赖同一物品层（且发帧点在世界 tick）⇒ 未接；
-//! - `52 SM_ABILITY`/`752 SM_SUBABILITY`：发帧点 = `PlayObject.cs:1385-1386` 的登录后块
-//!   （`SendPriorityMsg(RM_ABILITY/RM_SUBABILITY)` → `Message.cs:1732-1735` / `:1935`），
-//!   **输入由 `RecalcAbilitys()`（`BaseObject.Abil.cs` + `PlayObject.cs:2008`）产出**（`WAbil` 40B /
-//!   `AntiMagic`·`HitPoint`·`SpeedPoint`·…）——装备/姿态/套装/被动层尚未移植 ⇒ 本片不接线、登记。
+//! - `50/41` 的 `UseItems[Dress/Weapon].StdItem.Shape` **已接线**（查表只有一份：`game_svr::ability`
+//!   的 `StdItemCatalog`，由 `crate::items::catalog_from` 从直连 MySQL 读到的 `stditems` 顺序表构造，
+//!   1-based + 空名按缺）；仅 `CharStatus` 的 buff 部分（`ActorBuffSystem`）未移植，会话初生恒 0
+//!   （金标准 #3 印证）。
+//! - `10 SM_TURN`：oracle **对自身不发的**（`PlayObject.cs:3234` 的 `if (baseObject != this)` 门）；
+//!   金标准 #16 的 `Recog` 是**同屏另一个 actor**（msg = `稻草人/255`）而非本会话 `ActorId`
+//!   ⇒ 这条帧属**世界侧 AOI/同屏 actor 展示**路径，不在「自身进世界」这条链上（台账 §3 已更正）。
 //!
 //! `GameTimeChanged()`（`PlayObject.Base.cs:824-830`，游戏时间变化时广播 `RM_DAYCHANGING`）的
 //! **触发点**属世界 tick 侧（未接，登记）；本片只实现登录时那一条 46。
 
-use mir2_data::StdItem;
 use mir2_envir::{GameSvrConf, MapInfoFlag, NakedAbility as ConfNakedAbility};
 
-use crate::record::{NakedAbility as RecNakedAbility, ServerUserItem};
+use crate::record::{Ability, NakedAbility, ServerUserItem};
 use crate::strings::StringConf;
+use game_svr::ability::{self, ItemCatalog, ItemInstance, RecalcInputs};
 use game_svr::feature::{feature_ex, human_feature, make_long, make_word};
 use game_svr::smframe::EnterWorldInputs;
 
 /// 装配入图帧额外输入所需的世界/配置层数据（`None` = 该层未就绪，对应帧**跳过并登记**）。
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct WorldFrameInputs<'a> {
     /// 当前地图的 `Envir.Flag`（`MapRegistry::flag_of(map_id)`；无 Envir 时 `None`）。
     pub flag: Option<&'a MapInfoFlag>,
@@ -51,7 +56,7 @@ pub struct WorldFrameInputs<'a> {
     /// `Server.conf` 的配置层（`GameSvrConf::load`；读不到时 `None`）。
     pub conf: Option<&'a GameSvrConf>,
     /// 角色记录的 `BonusAbil`（帧 811 的 B 段；`CharacterData.bonus_abil`）。
-    pub bonus_abil: Option<&'a RecNakedAbility>,
+    pub bonus_abil: Option<&'a NakedAbility>,
     /// oracle `PlayObject.SoftVersionDateEx`（= `LoadDBInfo.SoftVersionDate`，客户端登录版本）。
     /// `0` ⇒ 帧 11029/5008 不发（`Base.cs:930/943` 的 `if (SoftVersionDateEx == 0) return;`）。
     pub soft_version_date: i32,
@@ -72,6 +77,33 @@ pub struct WorldFrameInputs<'a> {
     /// 帧 50/41/213 的输入（`PlayObject.SendLogon()`，`PlayObject.cs:1128-1147` 同组连发三条）。
     /// `None`（未解析出角色记录全字段）⇒ 三条同组跳过并登记，绝不单发半组。
     pub logon: Option<LogonInputs>,
+    /// 帧 52/752 的输入（`PlayObject.cs:1385-1386` 登录后的 `SendPriorityMsg(RM_ABILITY/RM_SUBABILITY)`）。
+    /// `None` ⇒ 两条同组跳过并登记（`RecalcAbilitys` 的输入接缝未就绪）。
+    pub ability: Option<AbilityInputs<'a>>,
+}
+
+/// `PlayObject.RecalcAbilitys()`（`BaseObject.Abil.cs:15` + `PlayObject.cs:2008`）的一次输入。
+///
+/// 装备/卸下层的纯函数是**已合入的** [`game_svr::ability::recalc_abilitys`]（m3bag 交付），本结构只
+/// 负责把**角色记录 + `stditems` 目录**接进去（`brief-m2svr-next.md` §18：禁止复制第二份实现）。
+#[derive(Clone, Copy)]
+pub struct AbilityInputs<'a> {
+    /// `stditems` 查表目录（`crate::items::catalog_from`；oracle `SystemShare.ItemSystem`）。
+    pub catalog: &'a dyn ItemCatalog,
+    /// `BaseObject.Abil`（角色记录 `CharacterData.abil`）。
+    pub abil: &'a Ability,
+    /// `PlayObject.BonusAbil`（角色记录 `CharacterData.bonus_abil`）。
+    pub bonus_abil: &'a NakedAbility,
+    /// `Config.BonusAbilofXxx.Hit`（`RecalcHitSpeed` 的除数；见 [`bonus_tick`]）。
+    pub bonus_tick_hit: u8,
+    /// `Config.BonusAbilofXxx.Speed`（同上）。
+    pub bonus_tick_speed: i32,
+    /// `UseItems[13]`（角色记录 `hum_items`）。
+    pub use_items: Option<&'a [Option<ServerUserItem>]>,
+    /// 背包物品（角色记录 `bag_items`；只用于 `WAbil.Weight`）。
+    pub bag_items: Option<&'a [Option<ServerUserItem>]>,
+    /// `Gold`（`SM_ABILITY` 的 `Recog`）。
+    pub gold: i32,
 }
 
 /// `PlayObject.SendLogon()`（`PlayObject.cs:1128-1147`）一次产三条帧所需的输入。
@@ -326,7 +358,7 @@ pub fn game_gold_msg(conf: &GameSvrConf) -> Vec<u8> {
 
 /// 角色记录 `NakedAbility`（`record.rs`）→ 配置层 `NakedAbility`（同字段，仅类型不同）。
 #[must_use]
-pub fn conf_naked(n: &RecNakedAbility) -> ConfNakedAbility {
+pub fn conf_naked(n: &NakedAbility) -> ConfNakedAbility {
     ConfNakedAbility {
         dc: n.dc,
         mc: n.mc,
@@ -354,12 +386,13 @@ pub const ITEM_LOCATION_WEAPON: usize = 1;
 /// - `.Index > 0` 且 `GetStdItem(Index) != null` ⇒ 返回 `StdItem.Shape`（`Some(shape)`）；
 /// - `.Index > 0` 但 `GetStdItem(Index) == null`（越界/空表/空名）⇒ 计 0（`None`）+ WRN。
 ///
-/// `items` = 启动时从 `stditems` 读入的模板表（`crate::items::load_items`）；空表（加载失败/无配置）
-/// 与 oracle「物品系统为空」同形 ⇒ 所有装备槽计 0（`GetStdItem == null` 分支，**1:1**，非偏差）。
+/// `catalog` = 启动时从 `stditems` 读入的模板表构造的 [`ItemCatalog`]（`crate::items::catalog_from`）；
+/// 空目录（加载失败/无配置）与 oracle「物品系统为空」同形 ⇒ 所有装备槽计 0
+/// （`GetStdItem == null` 分支，**1:1**，非偏差）。
 #[must_use]
 pub fn feature_shapes(
     hum_items: Option<&[Option<ServerUserItem>]>,
-    items: &[StdItem],
+    catalog: &dyn ItemCatalog,
 ) -> (Option<u8>, Option<u8>, Vec<String>) {
     let index_of = |slot: usize| -> u16 {
         hum_items
@@ -373,7 +406,7 @@ pub fn feature_shapes(
         if index == 0 {
             return None;
         }
-        match crate::items::shape_of(items, index) {
+        match catalog.shape(index) {
             Some(shape) => Some(shape),
             None => {
                 warns.push(format!(
@@ -389,6 +422,45 @@ pub fn feature_shapes(
     (dress, weapon, warns)
 }
 
+/// `RecalcHitSpeed()`（`PlayObject.cs:3664-3686`）里各职业取的 `Config.BonusAbilofXxx` 除数。
+///
+/// `Job ∉ {0,1,2}` 时 oracle 的 `switch` 无 `default`（`bonusTick` 保持 null、分支不命中）⇒ 基线恒
+/// `DEFHIT/DEFSPEED`；此处返回战士模板（非 0，仅用于避免除零——该分支不消费它们）。
+#[must_use]
+pub fn bonus_tick(conf: &GameSvrConf, job: u8) -> (u8, i32) {
+    let n = match job {
+        1 => &conf.bonus_abil_wizard,
+        2 => &conf.bonus_abil_taos,
+        _ => &conf.bonus_abil_warr,
+    };
+    (n.hit, n.speed)
+}
+
+/// 角色记录 `ServerUserItem` 序列 → `RecalcAbilitys` 的 `UseItems`（本片只消费 `Index`/`Dura`）。
+#[must_use]
+fn to_instances(items: Option<&[Option<ServerUserItem>]>) -> Vec<Option<ItemInstance>> {
+    items
+        .unwrap_or(&[])
+        .iter()
+        .map(|cell| {
+            cell.as_ref().map(|it| ItemInstance {
+                index: it.index,
+                dura: it.dura,
+            })
+        })
+        .collect()
+}
+
+/// 背包物品（`bag_items`）的 `Index` 列表（`RecalcBagWeight` 只算模板重量）。
+#[must_use]
+fn bag_indices(items: Option<&[Option<ServerUserItem>]>) -> Vec<u16> {
+    items
+        .unwrap_or(&[])
+        .iter()
+        .filter_map(|cell| cell.as_ref().map(|it| it.index))
+        .collect()
+}
+
 /// `SendAdjustBonus()`（`PlayObject.Base.cs:1193-1210`）的三段 `(A, B, C)`（各自 MemoryPack 原文，20B）。
 ///
 /// - `A` = `Config.BonusAbilofXxx`；`B` = 角色 `BonusAbil`；`C` = `Config.NakedAbilofXxx`；
@@ -399,7 +471,7 @@ pub fn feature_shapes(
 pub fn adjust_bonus_parts(
     conf: &GameSvrConf,
     job: u8,
-    bonus_abil: Option<&RecNakedAbility>,
+    bonus_abil: Option<&NakedAbility>,
 ) -> Option<(Vec<u8>, Vec<u8>, Vec<u8>)> {
     let player = bonus_abil?;
     let (a, c) = match job {
@@ -510,12 +582,53 @@ pub fn apply(base: &mut EnterWorldInputs, wx: &WorldFrameInputs<'_>) -> Vec<Stri
             "未加载 Server.conf（GameSvrConf）⇒ 帧 11029/1106/5008/811 跳过（登记）".to_string(),
         ),
     }
+
+    // 帧 52 `SM_ABILITY` / 752 `SM_SUBABILITY`（`PlayObject.cs:1385-1386`）：登录后
+    // `SendPriorityMsg(RM_ABILITY/RM_SUBABILITY)`。输入由**已合入的** `game_svr::ability::recalc_abilitys`
+    // （= oracle `PlayObject.RecalcAbilitys()` / `BaseObject.Abil.cs:15`）从角色记录 `Abil` + `stditems`
+    // 目录 + `BonusAbil` 产出；本层只负责接线（禁止复制第二份实现）。
+    match wx.ability {
+        Some(a) => {
+            let use_items = to_instances(a.use_items);
+            let bag = bag_indices(a.bag_items);
+            let out = ability::recalc_abilitys(
+                a.catalog,
+                &RecalcInputs {
+                    job: wx.job,
+                    abil: a.abil,
+                    bonus_abil: a.bonus_abil,
+                    bonus_tick_hit: a.bonus_tick_hit,
+                    bonus_tick_speed: a.bonus_tick_speed,
+                    // `WAbil.HP/MP` 是**调用前**的当前值，被 `RecalcAbilitys` 保留（`BaseObject.Abil.cs:21-24`）。
+                    cur_hp: a.abil.hp,
+                    cur_mp: a.abil.mp,
+                    use_items: &use_items,
+                    bag: &bag,
+                },
+            );
+            // 52：`MakeMessage(SM_ABILITY, Gold, MakeWord((byte)Job, 99), LoWord(GameGold), HiWord(GameGold))`
+            // 尾 = `EncodeMessage(WAbil)`（`Message.cs:1732-1734`）。`Job` 在原头的高字节、99 在低字节。
+            base.ability = Some((
+                a.gold,
+                wx.job,
+                wx.game_gold,
+                crate::record::encode_ability(&out.wabil),
+            ));
+            // 752：7 个字段全在头（`Message.cs:1935`）。
+            base.sub_ability = Some(out.sub.to_frame_bytes());
+        }
+        None => warns.push(
+            "帧 52/752 输入不足（角色 Abil/BonusAbil 或 stditems 目录缺失）⇒ 两条同组跳过（登记）"
+                .to_string(),
+        ),
+    }
     warns
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mir2_data::StdItem;
     use mir2_envir::parse_section_line;
     use mir2_protocol::edcode;
     use mir2_protocol::frame::CommandMessage;
@@ -526,8 +639,8 @@ mod tests {
         (e.flag, e.desc)
     }
 
-    fn rec_naked() -> RecNakedAbility {
-        RecNakedAbility {
+    fn rec_naked() -> NakedAbility {
+        NakedAbility {
             dc: 1,
             mc: 2,
             sc: 3,
@@ -580,12 +693,13 @@ mod tests {
             strings: None,
             show_name: None,
             logon: None,
+            ability: None,
         };
         let warns = apply(&mut base, &wx);
         assert_eq!(
             warns.len(),
-            2,
-            "只该有「未加载 conf」+「50/41/213 无输入」两条：{warns:?}"
+            3,
+            "只该有「未加载 conf」+「50/41/213 无输入」+「52/752 无输入」：{warns:?}"
         );
         assert!(warns.iter().any(|w| w.contains("Server.conf")), "{warns:?}");
         assert_eq!(base.area_state, Some(0));
@@ -652,13 +766,18 @@ mod tests {
             strings: None,
             show_name: None,
             logon: None,
+            ability: None,
         };
         let mut base = EnterWorldInputs {
             actor_id: 7,
             ..EnterWorldInputs::default()
         };
         let warns = apply(&mut base, &wx);
-        assert_eq!(warns.len(), 1, "只该有「50/41/213 无输入」一条：{warns:?}");
+        assert_eq!(
+            warns.len(),
+            2,
+            "只该有「50/41/213 无输入」+「52/752 无输入」：{warns:?}"
+        );
         assert!(warns[0].contains("50/41/213"), "{warns:?}");
         assert!(base.client_conf.is_none(), "门关 ⇒ 11029 不发");
         assert!(base.game_gold_name.is_none(), "门关 ⇒ 5008 不发");
@@ -677,8 +796,8 @@ mod tests {
         let warns2 = apply(&mut base2, &wx_open);
         assert_eq!(
             warns2.len(),
-            1,
-            "只该有「50/41/213 无输入」一条：{warns2:?}"
+            2,
+            "只该有「50/41/213 无输入」+「52/752 无输入」两条：{warns2:?}"
         );
         let frames = base2.frames();
         assert_eq!(
@@ -714,7 +833,7 @@ mod tests {
     #[test]
     fn adjust_bonus_selects_template_by_job() {
         let conf = GameSvrConf::from_bytes(b"[Server]\nGatePort=5000\n");
-        let rec = RecNakedAbility {
+        let rec = NakedAbility {
             dc: 111,
             ..rec_naked()
         };
@@ -788,9 +907,14 @@ mod tests {
             strings: None,
             show_name: None,
             logon: None,
+            ability: None,
         };
         let warns = apply(&mut base, &wx);
-        assert_eq!(warns.len(), 2, "811 跳过 + 50/41/213 无输入：{warns:?}");
+        assert_eq!(
+            warns.len(),
+            3,
+            "811 跳过 + 50/41/213 无输入 + 52/752 无输入：{warns:?}"
+        );
         assert!(warns.iter().any(|w| w.contains("811")), "{warns:?}");
         let frames = base.frames();
         assert_eq!(
@@ -851,12 +975,13 @@ mod tests {
             strings: None,
             show_name: None,
             logon: None,
+            ability: None,
         };
         let warns = apply(&mut base, &wx);
         assert_eq!(
             warns.len(),
-            3,
-            "DayBright + 未加载 conf + 50/41/213 无输入：{warns:?}"
+            4,
+            "DayBright + 未加载 conf + 50/41/213 无输入 + 52/752 无输入：{warns:?}"
         );
         assert_eq!(base.day_bright, 7, "不猜 ⇒ 沿用调用方给的占位值");
         assert_eq!(base.area_state, Some(0));
@@ -978,12 +1103,13 @@ mod tests {
             strings: Some(&strings),
             show_name: Some(sn),
             logon: None,
+            ability: None,
         };
         let warns = apply(&mut base, &wx);
         assert_eq!(
             warns.len(),
-            2,
-            "只该有「未加载 conf」+「50/41/213 无输入」两条：{warns:?}"
+            3,
+            "只该有「未加载 conf」+「50/41/213 无输入」+「52/752 无输入」三条：{warns:?}"
         );
         assert_eq!(
             base.day_changing,
@@ -1050,9 +1176,14 @@ mod tests {
             strings: None,
             show_name: None,
             logon: Some(logon),
+            ability: None,
         };
         let warns = apply(&mut base, &wx);
-        assert_eq!(warns.len(), 1, "只该有「未加载 conf」一条：{warns:?}");
+        assert_eq!(
+            warns.len(),
+            2,
+            "只该有「未加载 conf」一条 +「52/752 无输入」：{warns:?}"
+        );
         assert_eq!(
             base.logon_body_wl,
             Some((0x0705_0B00, 0x1122_3344, 0x0409_0001, 0))
@@ -1106,7 +1237,8 @@ mod tests {
     #[test]
     fn naked_man_logon_matches_golden_50_bytes() {
         // 生产形态：无装备记录 + 空形状表 ⇒ 两段都计 0（oracle `GetStdItem == null` 分支）。
-        let (dress, weapon, warns) = feature_shapes(None, &[]);
+        let (dress, weapon, warns) =
+            feature_shapes(None, &game_svr::ability::StdItemCatalog::new());
         assert_eq!((dress, weapon), (None, None));
         assert!(warns.is_empty(), "无装备 ⇒ 无 WRN：{warns:?}");
         let logon = LogonInputs {
@@ -1145,6 +1277,7 @@ mod tests {
             strings: None,
             show_name: None,
             logon: Some(logon),
+            ability: None,
         };
         let _ = apply(&mut base, &wx);
         // 金标准 seq17：`Param1=0x0002_0000`（`MakeHumanFeature(0,0,0,2)`）、其余 0。
@@ -1199,22 +1332,151 @@ mod tests {
         ];
         // Dress 槽 Index=2（布衣 shape=3）、Weapon 槽空。
         let items = vec![Some(worn), Some(empty.clone())];
-        let (dress, weapon, warns) = feature_shapes(Some(&items), &table);
+        let catalog = crate::items::catalog_from(&table);
+        let (dress, weapon, warns) = feature_shapes(Some(&items), &catalog);
         assert_eq!(
             (dress, weapon),
             (Some(3), None),
             "Dress 从 stditems 查得 Shape=3"
         );
         assert!(warns.is_empty(), "命中不 WRN：{warns:?}");
-        // 空表 ⇒ 越界 ⇒ 计 0 + WRN（oracle 空物品系统分支）。
-        let (dress, weapon, warns) = feature_shapes(Some(&items), &[]);
+        // 空目录 ⇒ 越界 ⇒ 计 0 + WRN（oracle 空物品系统分支）。
+        let empty_catalog = game_svr::ability::StdItemCatalog::new();
+        let (dress, weapon, warns) = feature_shapes(Some(&items), &empty_catalog);
         assert_eq!((dress, weapon), (None, None));
         assert_eq!(warns.len(), 1, "只有 Dress 槽带装备：{warns:?}");
         assert!(warns[0].contains("Index=2"), "{warns:?}");
         // 空槽不 WRN。
         let all_empty = vec![None, Some(empty)];
-        let (_, _, warns) = feature_shapes(Some(&all_empty), &table);
+        let (_, _, warns) = feature_shapes(Some(&all_empty), &catalog);
         assert!(warns.is_empty(), "空槽不 WRN：{warns:?}");
-        assert!(feature_shapes(None, &table).2.is_empty());
+        assert!(feature_shapes(None, &catalog).2.is_empty());
+    }
+
+    /// 帧 52/752 的生产路径接线（`brief-m2svr-next.md` §18）：`apply` 必须用**已合入的**
+    /// `game_svr::ability::recalc_abilitys`（禁止第二份实现），且 52 的尾 = `record::encode_ability(WAbil)`、
+    /// 752 的 7 字段 = `SubAbility::to_frame_bytes()`；两条的相对序（`52` → `752`）不变。
+    #[test]
+    fn ability_frames_follow_recalc_abilitys() {
+        let table = vec![StdItem {
+            name: "木剑".into(),
+            shape: 5,
+            weight: 4,
+            ..StdItem::default()
+        }];
+        let catalog = crate::items::catalog_from(&table);
+        // 金标准 #12 的裸男形态：level=1 战士，`Abil` 已含等级公式算出的值。
+        let abil = Ability {
+            level: 1,
+            reserved1: 0,
+            ac: 0,
+            mac: 0,
+            dc: 0x0101,
+            mc: 0,
+            sc: 0,
+            hp: 15,
+            mp: 15,
+            max_hp: 19,
+            max_mp: 15,
+            reserved2: 0,
+            exp_count: 0,
+            exp_max_count: 0,
+            exp: 0,
+            max_exp: 10,
+            weight: 0,
+            max_weight: 50,
+            wear_weight: 0,
+            max_wear_weight: 15,
+            hand_weight: 0,
+            max_hand_weight: 12,
+        };
+        let bonus = NakedAbility {
+            dc: 0,
+            mc: 0,
+            sc: 0,
+            ac: 0,
+            mac: 0,
+            hp: 0,
+            mp: 0,
+            hit: 0,
+            speed: 0,
+            reserved: 0,
+        };
+        let use_items = vec![None; 13];
+        let bag = vec![Some(ServerUserItem {
+            make_index: 0,
+            index: 1,
+            dura: 10,
+            dura_max: 10,
+            desc: None,
+            color_r: 0,
+            color_g: 0,
+            color_b: 0,
+            prefix: None,
+        })];
+        let inputs = AbilityInputs {
+            catalog: &catalog,
+            abil: &abil,
+            bonus_abil: &bonus,
+            bonus_tick_hit: 20,
+            bonus_tick_speed: 35,
+            use_items: Some(&use_items),
+            bag_items: Some(&bag),
+            gold: 1234,
+        };
+        let mut base = EnterWorldInputs {
+            actor_id: 7,
+            ..EnterWorldInputs::default()
+        };
+        let wx = WorldFrameInputs {
+            flag: None,
+            map_desc: None,
+            conf: None,
+            bonus_abil: None,
+            soft_version_date: 0,
+            game_gold: 56,
+            game_point: 0,
+            job: 0,
+            bonus_point: 0,
+            game_time: None,
+            strings: None,
+            show_name: None,
+            logon: None,
+            ability: Some(inputs),
+        };
+        let _ = apply(&mut base, &wx);
+        let out = ability::recalc_abilitys(
+            &catalog,
+            &RecalcInputs {
+                job: 0,
+                abil: &abil,
+                bonus_abil: &bonus,
+                bonus_tick_hit: 20,
+                bonus_tick_speed: 35,
+                cur_hp: 15,
+                cur_mp: 15,
+                use_items: &to_instances(Some(&use_items)),
+                bag: &[1],
+            },
+        );
+        let (gold, job, game_gold, wabil) = base.ability.clone().expect("52 必须接线");
+        assert_eq!((gold, job, game_gold), (1234, 0, 56), "52 头字段");
+        assert_eq!(
+            wabil,
+            crate::record::encode_ability(&out.wabil),
+            "52 尾 = EncodeMessage(WAbil)"
+        );
+        assert_eq!(out.wabil.hp, 15, "cur_hp 来自记录 Abil（被保留）");
+        assert_eq!(out.wabil.weight, 4, "WAbil.Weight 来自背包模板重量");
+        assert_eq!(
+            base.sub_ability,
+            Some(out.sub.to_frame_bytes()),
+            "752 = SubAbility 的 7 个单字节通道"
+        );
+        assert_eq!(
+            idents(&base.frames()),
+            vec![658, 52, 752],
+            "52 在 752 前（`PlayObject.cs:1385-1386`）"
+        );
     }
 }
