@@ -115,7 +115,11 @@ async fn dispatch(
         x if x == CM_QUERYCHR => {
             if !u.chr_queryed || now.saturating_sub(u.chr_tick) > 200 {
                 u.chr_tick = now;
-                query_chr(server, db, slot, tx, u, &packet.body).await?;
+                // C# `UserService.cs:356-361`：`QueryChr` 成功才置 `boChrQueryed`，
+                // 否则后续 `CM_SELCHR` 恒被 `if (userInfo.boChrQueryed)` 拒掉（本卡修的缺陷）。
+                if query_chr(server, db, slot, tx, u, &packet.body).await? {
+                    u.chr_queryed = true;
+                }
             } else {
                 log::warn(&format!(
                     "[Hacker Attack] QueryChr:{}",

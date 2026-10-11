@@ -1,0 +1,28 @@
+缺陷卡门禁 —— 本片树（含 chr_queryed 修复）
+worktree=dbsrv6k  branch=worktree-m1-dbsrv-6000  base=c3fa48a2
+隔离 target：CARGO_TARGET_DIR=E:\tmp\openmir2-dbsrv6k-target
+生成时间=2026-10-11T19:15:48+08:00
+
+$ cargo fmt --all -- --check
+exit=0
+
+$ cargo clippy --workspace --all-targets --offline -- -D warnings
+    Checking db-srv v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\dbsrv6k\mir2-rs\bins\db-srv)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.95s
+exit=0
+
+$ cargo test --workspace --offline   # 3 连跑
+run 1: exit=0 suites=67 passed=398 failed=0 ignored=11
+run 2: exit=0 suites=67 passed=398 failed=0 ignored=11
+run 3: exit=0 suites=67 passed=398 failed=0 ignored=11
+
+$ cargo run -p msgcodegen --offline -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+
+$ cargo test -p db-srv --test live_querychr --offline -- --ignored --nocapture rust_dbsrv_querychr_matches_csharp_golden
+[querychr#1] head=CommandMessage { recog: 2, ident: 520, param: 0, tag: 1, series: 0 } body="*aaa/0/1/1/0/bbb/2/1/1/0/"
+[selchr] head=CommandMessage { recog: 0, ident: 525, param: 0, tag: 0, series: 0 } body="127.0.0.1/7200"
+[querychr#2] head=CommandMessage { recog: 2, ident: 520, param: 0, tag: 1, series: 0 } body="*aaa/0/1/1/0/bbb/2/1/1/0/"
+[delchr gm01] head=CommandMessage { recog: 0, ident: 523, param: 0, tag: 0, series: 0 }
+[querychr-bad-session] head=CommandMessage { recog: 0, ident: 527, param: 0, tag: 1, series: 0 }
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 5.52s

@@ -1,0 +1,46 @@
+   Compiling db-srv v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\dbsrv6k\mir2-rs\bins\db-srv)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.88s
+     Running tests\live_querychr.rs (E:\tmp\openmir2-dbsrv6k-target\debug\deps\live_querychr-3c9f32b8a9a6507d.exe)
+
+running 1 test
+[fixture] Rust db-srv pid=53432 dir=C:\Users\gxh\AppData\Local\Temp\a2-dbsrv-rust-40592
+[querychr#1] head=CommandMessage { recog: 2, ident: 520, param: 0, tag: 1, series: 0 } body="*aaa/0/1/1/0/bbb/2/1/1/0/"
+  raw=236664686b64646a696464696b6464686b5e6d49736d5f58685f613f5f615f58685f6e4a6f6e5f5a685f613f5f615f58685f3c21
+
+thread 'rust_dbsrv_querychr_matches_csharp_golden' (34836) panicked at bins\db-srv\tests\live_querychr.rs:313:10:
+等下行业务帧超时（限频？会话校验失败？）: Elapsed(())
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test rust_dbsrv_querychr_matches_csharp_golden ... FAILED
+
+failures:
+
+failures:
+    rust_dbsrv_querychr_matches_csharp_golden
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 11.81s
+
+error: test failed, to rerun pass `-p db-srv --test live_querychr`
+
+==== 被修进程侧日志（red：删掉 chr_queryed 置位后）====
+夹具目录：C:\Users\gxh\AppData\Local\Temp\a2-dbsrv-rust-40592\dbsrv.out.log
+18:59:57.835 [INF] 正在读取基础配置信息...
+18:59:57.835 [INF] 加载IP授权文件列表成功...[2]
+18:59:57.835 [INF] 读取网关配置信息成功.[1]
+18:59:57.913 [INF] [MySQL]数据存储初始化成功.
+18:59:57.913 [INF] 服务已启动成功...
+18:59:57.913 [INF] 欢迎使用翎风系列游戏软件...
+18:59:57.913 [INF] 玩家数据网关服务[0.0.0.0:55871]已启动.等待链接...
+18:59:57.913 [INF] 账号服务器[127.0.0.1:55872]链接成功.
+18:59:58.339 [INF] 角色网关[1](127.0.0.1:55878)已打开...
+18:59:58.339 [INF] 角色网关[1](127.0.0.1)已关闭...
+18:59:58.543 [INF] 角色网关[2](127.0.0.1:55884)已打开...
+18:59:58.543 [INF] [QueryChr] 候选 account=mir2test i=0 name=[aaa] quickIndex=12218
+18:59:58.546 [INF] [QueryChr]   GetBy -> result=True
+18:59:58.546 [INF] [QueryChr]   dataIndex=12215 nChrCount=0
+18:59:58.547 [INF] [QueryChr]   GetQryChar -> True
+18:59:58.547 [INF] [QueryChr] 候选 account=mir2test i=1 name=[bbb] quickIndex=12219
+18:59:58.547 [INF] [QueryChr]   GetBy -> result=True
+18:59:58.547 [INF] [QueryChr]   dataIndex=12216 nChrCount=1
+18:59:58.547 [INF] [QueryChr]   GetQryChar -> True
+18:59:58.547 [WRN] Double send SELCHR mir2test/127.0.0.1
+19:00:08.558 [INF] 角色网关[2](127.0.0.1)已关闭...

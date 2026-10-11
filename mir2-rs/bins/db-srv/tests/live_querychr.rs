@@ -31,11 +31,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use mir2_protocol::edcode;
-use mir2_protocol::frame::{CommandMessage, ServerDataPacket};
+use mir2_protocol::frame::{encode_server_frame, CommandMessage, ServerDataPacket};
 use mir2_protocol::internal::{ServerDataMessage, ServerDataType};
 use mir2_protocol::messages::{
-    CM_DELCHR, CM_NEWCHR, CM_QUERYCHR, SM_DELCHR_SUCCESS, SM_NEWCHR_FAIL, SM_QUERYCHR,
-    SM_QUERYCHR_FAIL,
+    CM_DELCHR, CM_NEWCHR, CM_QUERYCHR, CM_SELCHR, SM_DELCHR_SUCCESS, SM_NEWCHR_FAIL, SM_QUERYCHR,
+    SM_QUERYCHR_FAIL, SM_STARTPLAY,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -46,8 +46,15 @@ const ACCOUNT: &str = "mir2test";
 const SESSION: i32 = 4242;
 /// 期望的角色列表字段（C# oracle 捕获：`*aaa/职业/发型/等级/性别/` + `bbb/…`）。
 const EXPECT_CHR_LIST: &[u8] = b"*aaa/0/1/1/0/bbb/2/1/1/0/";
+/// 同上但去掉 `*`——用于**归一化前**的首次 `SM_QUERYCHR`（`*` 落哪个角色取决于库里
+/// `characters_indexes.SelectID`，是共享可变状态；选角步骤后会归一到 [`EXPECT_CHR_LIST`]）。
+const EXPECT_CHR_LIST_BARE: &[u8] = b"aaa/0/1/1/0/bbb/2/1/1/0/";
 /// C# oracle 捕获的 `SM_QUERYCHR` 下行帧（`#` + 16 字符头 + 编码体 + `!`），取自 C# DBSrv。
 const GOLDEN_QUERYCHR_FRAME_HEX: &str = "236664686b64646a696464696b6464686b5e6d49736d5f58685f613f5f615f58685f6e4a6f6e5f5a685f613f5f615f58685f3c21";
+
+/// 选角（`CM_SELCHR`）成功时 `SM_STARTPLAY`(525) 的**路由体**：夹具 `ServerInfo.txt`
+/// 写的是 `127.0.0.1 127.0.0.1 7200`，`MapFile` 缺省为空 ⇒ `MapIndex=0`（与 C# `GateRouteIp` 同）。
+const EXPECT_STARTPLAY_BODY: &[u8] = b"127.0.0.1/7200";
 
 // ==== 环境与夹具 ====
 
@@ -333,22 +340,72 @@ fn parse_down(frame: &[u8]) -> (CommandMessage, Vec<u8>) {
     (head, edcode::decode(&content[16..]))
 }
 
+/// `SM_STARTPLAY` 下行帧的期望字节（帧布局由 `crates/protocol` 冻结，路由体按夹具常量）。
+fn expected_startplay_frame() -> Vec<u8> {
+    encode_server_frame(
+        &CommandMessage::make(i32::from(SM_STARTPLAY), 0, 0, 0, 0),
+        &edcode::encode(EXPECT_STARTPLAY_BODY),
+    )
+}
+
 /// 走一遍 5100 面的四个命令并逐条断言（两种实现都必须给出同一组字节/字段）。
 async fn exercise_5100_face(port: u16) {
-    // 1) CM_QUERYCHR：字段与字节都要对上外部金标准
+    // 1) CM_QUERYCHR #1：先只核字段（`*` 落在哪个角色取决于库里 `SelectID`——共享可变状态）。
     let mut sock = pretend_selgate(port, "7").await;
     let frame = client_frame(CM_QUERYCHR, format!("{ACCOUNT}/{SESSION}").as_bytes());
     let down = gate_roundtrip(&mut sock, "7", &frame).await;
     let (head, chr_list) = parse_down(&down);
     println!(
-        "[querychr] head={head:?} body={:?}\n  raw={}",
+        "[querychr#1] head={head:?} body={:?}\n  raw={}",
         String::from_utf8_lossy(&chr_list),
         hex(&down)
     );
     assert_eq!(head.ident, SM_QUERYCHR, "不是 SM_QUERYCHR：{head:?}");
     assert_eq!(head.recog, 2, "角色数应为 2（aaa+bbb）");
     assert_eq!((head.param, head.tag, head.series), (0, 1, 0));
-    assert_eq!(chr_list, EXPECT_CHR_LIST.to_vec(), "字段级内容不符");
+    let bare: Vec<u8> = chr_list.iter().copied().filter(|b| *b != b'*').collect();
+    assert_eq!(bare, EXPECT_CHR_LIST_BARE.to_vec(), "字段级内容不符");
+
+    // 1b) CM_SELCHR：进选角前必须已查过角色（C# `boChrQueryed`）⇒ 回 `SM_STARTPLAY`(525)、
+    //     体为 `游戏网关IP/端口+MapIndex`。**本卡修的缺陷**：Rust 之前 `query_chr` 成功不置
+    //     `chr_queryed` ⇒ 这里回 `SM_STARTFAIL` 且日志打 `Double send SELCHR`。
+    //     选角会写 `characters_indexes.SelectID`（`aaa` 选中、其余置 0）⇒ 顺带把库归一到金标准态。
+    let sel = client_frame(CM_SELCHR, format!("{ACCOUNT}/aaa").as_bytes());
+    let down = gate_roundtrip(&mut sock, "7", &sel).await;
+    let (head, route) = parse_down(&down);
+    println!(
+        "[selchr] head={head:?} body={:?}\n  raw={}",
+        String::from_utf8_lossy(&route),
+        hex(&down)
+    );
+    assert_eq!(head.ident, SM_STARTPLAY, "选角应回 SM_STARTPLAY：{head:?}");
+    assert_eq!(
+        (head.recog, head.param, head.tag, head.series),
+        (0, 0, 0, 0)
+    );
+    assert_eq!(route, EXPECT_STARTPLAY_BODY.to_vec(), "选角路由体不符");
+    assert_eq!(
+        down,
+        expected_startplay_frame(),
+        "SM_STARTPLAY 下行帧字节与冻结布局不符"
+    );
+
+    // 1c) CM_QUERYCHR #2：选角已把 `SelectID` 归一到金标准态（`aaa` 选中）⇒ 再逐字节对金标准。
+    //     过 200ms 限频（`CM_QUERYCHR` 的 `dwChrTick`）即可重查。
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    let down = gate_roundtrip(&mut sock, "7", &frame).await;
+    let (head, chr_list) = parse_down(&down);
+    println!(
+        "[querychr#2] head={head:?} body={:?}\n  raw={}",
+        String::from_utf8_lossy(&chr_list),
+        hex(&down)
+    );
+    assert_eq!(head.ident, SM_QUERYCHR);
+    assert_eq!(
+        chr_list,
+        EXPECT_CHR_LIST.to_vec(),
+        "字段级内容不符（归一化后）"
+    );
     assert!(
         GOLDEN_QUERYCHR_FRAME_HEX != "PLACEHOLDER",
         "金标准未填：把上面 `raw=` 的值填进 GOLDEN_QUERYCHR_FRAME_HEX"
