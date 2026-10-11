@@ -20,8 +20,12 @@ pub struct GateConfig {
     pub gate_port: u16,
     /// `[Server] CheckBlock`（现网 12288）：`ChannelMessageHandler.cs:74` 的阻塞阈值。
     pub check_block: usize,
-    /// S1 占位：世界地图尺寸列表（真地图加载属 S2/S3——从 Envir 读，不在本切片）。
+    /// S1 占位：世界地图尺寸列表（有 Envir 真地图注册表时被其尺寸取代；无 Envir 时才用）。
     pub maps: Vec<(i32, i32)>,
+    /// `[Share] EnvirDir`（oracle `SystemShare.Config.EnvirDir`，默认 `Envir`）——`MapInfo.txt` 所在目录。
+    pub envir_dir: String,
+    /// `[Share] MapDir`（oracle `SystemShare.Config.MapDir`，默认 `Map`）——`*.map` 所在目录。
+    pub map_dir: String,
     /// `[Server] IDSAddr`：登录服务器地址（oracle 是 TcpClient 主动连它，`AuthenticationService.cs:22-34`）。
     pub ids_addr: String,
     /// `[Server] IDSPort`（现网 5600）。
@@ -55,6 +59,8 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut gate_port: Option<u16> = None;
     let mut check_block: Option<usize> = None;
     let mut maps: Option<Vec<(i32, i32)>> = None;
+    let mut envir_dir: Option<String> = None;
+    let mut map_dir: Option<String> = None;
     let mut ids_addr: Option<String> = None;
     let mut ids_port: Option<u16> = None;
     let mut db_addr: Option<String> = None;
@@ -65,45 +71,55 @@ pub fn load(path: &Path) -> Result<GateConfig> {
             continue;
         }
         if let Some(name) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-            section = name.trim().to_string();
+            // oracle `ConfigFile` 的 section 字典是 `StringComparer.OrdinalIgnoreCase`
+            // （`src/OpenMir2/Common/ConfigFile.cs:13`，R3-2）⇒ 段名按 ASCII 大小写不敏感归一。
+            section = name.trim().to_ascii_uppercase();
             continue;
         }
         let Some((k, v)) = line.split_once('=') else {
             continue;
         };
-        if section != "Server" {
-            continue;
-        }
-        let (k, v) = (k.trim(), v.trim());
-        match k {
-            "GateAddr" => gate_addr = Some(v.to_string()),
-            "GatePort" => {
-                gate_port = Some(
-                    v.parse()
-                        .with_context(|| format!("GatePort 不是合法端口：{v:?}"))?,
-                );
-            }
-            "CheckBlock" => {
-                check_block = Some(
-                    v.parse()
-                        .with_context(|| format!("CheckBlock 不是合法整数：{v:?}"))?,
-                );
-            }
-            "WorldMaps" => maps = Some(parse_maps(v)?),
-            "IDSAddr" => ids_addr = Some(v.to_string()),
-            "DBAddr" => db_addr = Some(v.to_string()),
-            "DBPort" => {
-                db_port = Some(
-                    v.parse()
-                        .with_context(|| format!("DBPort 不是合法端口：{v:?}"))?,
-                );
-            }
-            "IDSPort" => {
-                ids_port = Some(
-                    v.parse()
-                        .with_context(|| format!("IDSPort 不是合法端口：{v:?}"))?,
-                );
-            }
+        // 键字典同样 `OrdinalIgnoreCase`（`ConfigFile.cs:301`，R3-2）：键名也归一到 ASCII 大写。
+        let (k, v) = (k.trim().to_ascii_uppercase(), v.trim());
+        match section.as_str() {
+            // 网关链路真正需要的键（本切片读这些）。
+            "SERVER" => match k.as_str() {
+                "GATEADDR" => gate_addr = Some(v.to_string()),
+                "GATEPORT" => {
+                    gate_port = Some(
+                        v.parse()
+                            .with_context(|| format!("GatePort 不是合法端口：{v:?}"))?,
+                    );
+                }
+                "CHECKBLOCK" => {
+                    check_block = Some(
+                        v.parse()
+                            .with_context(|| format!("CheckBlock 不是合法整数：{v:?}"))?,
+                    );
+                }
+                "WORLDMAPS" => maps = Some(parse_maps(v)?),
+                "IDSADDR" => ids_addr = Some(v.to_string()),
+                "DBADDR" => db_addr = Some(v.to_string()),
+                "DBPORT" => {
+                    db_port = Some(
+                        v.parse()
+                            .with_context(|| format!("DBPort 不是合法端口：{v:?}"))?,
+                    );
+                }
+                "IDSPORT" => {
+                    ids_port = Some(
+                        v.parse()
+                            .with_context(|| format!("IDSPort 不是合法端口：{v:?}"))?,
+                    );
+                }
+                _ => {}
+            },
+            // oracle 的取图目录（`ServerConf.cs:75-76` 从 `[Share]` 读，缺省 Envir/Map）。
+            "SHARE" => match k.as_str() {
+                "ENVIRDIR" => envir_dir = Some(v.to_string()),
+                "MAPDIR" => map_dir = Some(v.to_string()),
+                _ => {}
+            },
             _ => {}
         }
     }
@@ -140,6 +156,9 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         gate_port,
         check_block,
         maps,
+        // oracle 缺省值（`GameSvrConf.cs:1295-1296`）：缺 `[Share]` 键不算错。
+        envir_dir: envir_dir.unwrap_or_else(|| "Envir".to_string()),
+        map_dir: map_dir.unwrap_or_else(|| "Map".to_string()),
         ids_addr,
         ids_port,
         db_addr,
@@ -197,6 +216,45 @@ mod tests {
         assert_eq!(c.ids_port, 5600);
         assert_eq!(c.db_addr, "127.0.0.1");
         assert_eq!(c.db_port, 6000);
+        assert_eq!(
+            c.envir_dir, "Envir",
+            "缺 [Share] EnvirDir 时用 oracle 缺省值"
+        );
+        assert_eq!(c.map_dir, "Map", "缺 [Share] MapDir 时用 oracle 缺省值");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `[Share] EnvirDir/MapDir` 照 oracle 的键读（`ServerConf.cs:75-76`），值要 trim。
+    #[test]
+    fn parses_share_map_dirs() {
+        let dir = std::env::temp_dir().join(format!("gs-share-{}", std::process::id()));
+        let p = write(
+            &dir,
+            "[Server]\nGateAddr=127.0.0.1\nGatePort=5000\nCheckBlock=1\nWorldMaps=10x10\n\
+             IDSAddr=127.0.0.1\nIDSPort=5600\nDBAddr=127.0.0.1\nDBPort=6000\n\
+             [Share]\nEnvirDir= Envir2\nMapDir=Map2\n",
+        );
+        let c = load(&p).unwrap();
+        assert_eq!(c.envir_dir, "Envir2");
+        assert_eq!(c.map_dir, "Map2");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **R3-2**：oracle `ConfigFile` 的 section/key 字典都是 `OrdinalIgnoreCase`（`ConfigFile.cs:13/301`）
+    /// ⇒ `[server]`/`gateaddr`/`[share]`/`envirdir` 都必须认，不能把 oracle 认的键当没写。
+    #[test]
+    fn section_and_key_matching_is_ascii_case_insensitive() {
+        let dir = std::env::temp_dir().join(format!("gs-case-{}", std::process::id()));
+        let p = write(
+            &dir,
+            "[server]\ngateaddr=127.0.0.1\ngateport=5000\ncheckblock=1\nworldmaps=10x10\n\
+             idsaddr=127.0.0.1\nidsport=5600\ndbaddr=127.0.0.1\ndbport=6000\n\
+             [share]\nenvirDir= Envir3\nMAPDIR=Map3\n",
+        );
+        let c = load(&p).unwrap();
+        assert_eq!(c.gate_port, 5000, "[server]/gateport 小写必须认");
+        assert_eq!(c.envir_dir, "Envir3", "[share]/envirDir 混合大小写必须认");
+        assert_eq!(c.map_dir, "Map3", "[share]/MAPDIR 大写必须认");
         std::fs::remove_dir_all(&dir).ok();
     }
 

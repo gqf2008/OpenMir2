@@ -12,7 +12,8 @@
 //! - 认证链（`DoClientCertification`）已落 `cert.rs`；**取角色/进世界**（`LoadDBInfo` → DBSrv → PlayObject）——S2b-3；
 //! - 会话**进世界**（`World::open_session`/`enter_map`）与命令到世界的映射——S2；
 //! - 世界 → 客户端的 **SM_* 出包**（`SendMsgQueue`/编码）——S3；
-//! - 真地图/Envir 加载（本片用配置里的占位尺寸建世界）——S2/S3；
+//! - 真地图/Envir 加载：已接入 `crates/envir` 的 `MapRegistry`（集成点 ④）——有 Envir 时按
+//!   `CurMap`→`map_id` 建世界并拒绝未知地图，无 Envir 时退回 `WorldMaps` 占位（见 `mapwire.rs`）；
 //! - 保活定时器（消费者是 **M2Server 自己** 的 `TCPNetChannel.cs:435-439`，本片只维护标志）。
 //!
 //! **失败要响**：缺配置键、绑不上端口 —— 明确报错并非零退出。
@@ -27,6 +28,7 @@ mod dbclient;
 mod hutil;
 mod ids;
 mod load;
+mod mapwire;
 mod record;
 mod users;
 
@@ -173,9 +175,43 @@ async fn main() -> Result<()> {
     let auth: Arc<std::sync::Mutex<auth::AdmissionStore>> =
         Arc::new(std::sync::Mutex::new(auth::AdmissionStore::new()));
     let maps = cfg.maps.clone();
+    // 真地图注册表（`openmir2-m2-map-loading` 集成点 ④）：BasePath = `Server.conf` 所在目录
+    // （生产下即 `config::default_path()` 的可执行体目录，等价 oracle `M2Share.BasePath`），
+    // `EnvirDir`/`MapDir` 照 `[Share]`。拿不到 Envir 时保留 `WorldMaps` 占位并记 WRN
+    // （占位键待真机验收——那时 Envir 必在——之后删）。
+    let base = mapwire::base_path(&conf);
+    let registry = match mapwire::load_registry(&base, &cfg.envir_dir, &cfg.map_dir) {
+        mapwire::Maps::Envir(reg) => {
+            glog!(
+                "INF",
+                "Envir 真地图注册表：{} 张（base={} EnvirDir={} MapDir={}，跳过 {} 张）",
+                reg.len(),
+                base.display(),
+                cfg.envir_dir,
+                cfg.map_dir,
+                reg.skipped().len()
+            );
+            Some(reg)
+        }
+        mapwire::Maps::Placeholder => {
+            glog!(
+                "WRN",
+                "未找到 Envir/MapInfo.txt（base={} EnvirDir={} MapDir={}）⇒ 地图尺寸用 WorldMaps 占位、CurMap 不校验（开发/测试形态，登记：真机验收后删占位键）",
+                base.display(),
+                cfg.envir_dir,
+                cfg.map_dir
+            );
+            None
+        }
+        // 「Envir 在但一张图都没加载成功」与「没有 Envir」不是一回事：前者必须拒绝启动，
+        // 否则会静默退回 0 号占位图（卡面 ④ 明禁）。
+        mapwire::Maps::Broken(why) => {
+            anyhow::bail!("Envir 地图配置损坏：{why}（拒绝以占位图启动）")
+        }
+    };
     let _sim = std::thread::Builder::new()
         .name("m2-sim".to_string())
-        .spawn(move || sim_loop(maps, ev_rx, Some(db)))
+        .spawn(move || sim_loop(maps, registry, ev_rx, Some(db)))
         .context("起 sim 线程失败")?;
 
     // 登录服务器（IDS）链路：oracle 是 TcpClient 主动连它（`AuthenticationService.cs:22-34`），
@@ -287,10 +323,14 @@ fn route_to_gate<'a>(
 
 fn sim_loop(
     maps: Vec<(i32, i32)>,
+    registry: Option<mir2_envir::MapRegistry>,
     ev_rx: std::sync::mpsc::Receiver<GateEvent>,
     mut db: Option<DbWiring>,
 ) {
-    let mut world = mir2_world::World::with_maps(maps);
+    // 有真地图注册表就用它的尺寸建世界（`map_id` = 注册表下标，与 `resolve_map_id` 同源）；
+    // 否则用 `WorldMaps` 占位（启动时已记 WRN）。
+    let map_sizes = registry.as_ref().map_or(maps, mapwire::sizes);
+    let mut world = mir2_world::World::with_maps(map_sizes);
     // 取角色的加载队列（`FrnEngn` 的双缓冲 + `CharacterDataProcessor` 的读档循环，见 `load.rs`）
     let mut engine = load::FrontEngine::new();
     // `GateIdx -> 该网关连接的 sim→gate 通道`（`NetChannel` 按 gateIdx 选连接，`TCPNetChannel.cs:221-223`）
@@ -298,9 +338,14 @@ fn sim_loop(
         std::collections::HashMap::new();
     glog!(
         "INF",
-        "sim 线程就绪：tick={}ms，地图 {} 张",
+        "sim 线程就绪：tick={}ms，地图 {} 张（{}）",
         mir2_world::TICK_INTERVAL_MS,
-        world.maps.len()
+        world.maps.len(),
+        if registry.is_some() {
+            "Envir 真地图"
+        } else {
+            "WorldMaps 占位"
+        }
     );
     let tick = std::time::Duration::from_millis(
         u64::try_from(mir2_world::TICK_INTERVAL_MS).unwrap_or(200),
@@ -432,72 +477,88 @@ fn sim_loop(
                             let payload = mir2_protocol::edcode::decode(&reply.packet);
                             match record::parse_player_data_head(&payload) {
                                 Some(head) => {
-                                    // 进世界：`World::open_session` + `enter_map`（S2b-3 的骨架；
-                                    // 地图名→id 的映射要等真地图加载，本片一律 0 号图并登记）
-                                    let _ = world.open_session(&head.chr_name);
-                                    let ent = mir2_world::Entity::new(
-                                        0,
-                                        head.chr_name.clone(),
-                                        i32::from(head.cur_x),
-                                        i32::from(head.cur_y),
-                                    );
-                                    match world.enter_map(&head.chr_name, ent, 0) {
-                                        Ok(id) => {
-                                            glog!(
-                                                "INF",
-                                                "进世界 ChrName:{} CurMap:{} ({},{}) Dir:{} entity={id}",
-                                                head.chr_name,
-                                                head.cur_map,
-                                                head.cur_x,
-                                                head.cur_y,
-                                                head.dir
-                                            );
-                                            // S2b-4 续：进世界后按 oracle `PlayObject.Message.cs:1680-1692`
-                                            // 的 `RM_LOGON` 支出入图帧，经**该用户的网关线**下发。
-                                            // 输入齐备的现在只有 `SM_NEWMAP`（记录里的坐标 + 地图名）；
-                                            // 其余帧的输入依赖真地图（`openmir2-m2-map-loading`）/ 记录字段
-                                            // （`openmir2-m2-record-fields`）/ 配置层 ⇒ `EnterWorldInputs` 的
-                                            // `Option` 字段留空（登记在卡，绝不猜尾字节）。
-                                            // `day_bright` 暂占位 0（`Envir.DayBright()` 属地图层）。
-                                            let inputs = smframe::EnterWorldInputs {
-                                                actor_id: id,
-                                                cur_x: u16::from_ne_bytes(head.cur_x.to_ne_bytes()),
-                                                cur_y: u16::from_ne_bytes(head.cur_y.to_ne_bytes()),
-                                                dir: head.dir,
-                                                map_file_name: Some(
-                                                    head.cur_map.as_bytes().to_vec(),
-                                                ),
-                                                ..smframe::EnterWorldInputs::default()
-                                            };
-                                            // N1（reviewer-3）：按该用户的 gate_idx 路由回**它自己那条**网关线
-                                            // （与上面 KickNoData 的 `route_to_gate` 完全同构）；找不到线号记 WRN，
-                                            // 绝不 `gates.values().next()` 静默挑一个。
-                                            if let Some(tx) = route_to_gate(
-                                                &gates,
-                                                gate_idx,
-                                                socket,
-                                                "标记进世界/下发入图帧",
-                                            ) {
-                                                let bodies = inputs.frames();
-                                                glog!(
-                                                    "INF",
-                                                    "进世界帧下发：socket={socket} 共 {} 条（输入齐备的）",
-                                                    bodies.len()
-                                                );
-                                                for body in bodies {
-                                                    let _ = tx.send(SimToGate::SendFrame {
-                                                        socket,
-                                                        body,
-                                                    });
-                                                }
-                                                let _ = tx.send(SimToGate::MarkInWorld { socket });
-                                            }
-                                        }
+                                    // 集成点 ④：`CurMap`（逻辑名）→ `map_id`。有真地图注册表时必须命中；
+                                    // 找不到即拒绝进图并记 WRN（`MapRegistry::require_id`），不许静默退回
+                                    // 0 号占位图。无注册表（S1 `WorldMaps` 占位，启动时已记 WRN）时保留 0 号图。
+                                    match mapwire::resolve_map_id(registry.as_ref(), &head.cur_map) {
                                         Err(e) => glog!(
                                             "WRN",
-                                            "进世界失败 ChrName:{}：{e:?}",
-                                            head.chr_name
+                                            "拒绝进图 ChrName:{} CurMap:{}：{e}（真地图注册表里没有这张图）",
+                                            head.chr_name,
+                                            head.cur_map
                                         ),
+                                        Ok(map_id) => {
+                                        // 进世界：`World::open_session` + `enter_map`
+                                        let _ = world.open_session(&head.chr_name);
+                                        let ent = mir2_world::Entity::new(
+                                            0,
+                                            head.chr_name.clone(),
+                                            i32::from(head.cur_x),
+                                            i32::from(head.cur_y),
+                                        );
+                                        match world.enter_map(&head.chr_name, ent, map_id) {
+                                            Ok(id) => {
+                                                glog!(
+                                                    "INF",
+                                                    concat!(
+                                                        "进世界 ChrName:{} CurMap:{} ({},{}) ",
+                                                        "Dir:{} entity={}"
+                                                    ),
+                                                    head.chr_name,
+                                                    head.cur_map,
+                                                    head.cur_x,
+                                                    head.cur_y,
+                                                    head.dir,
+                                                    id
+                                                );
+                                                // S2b-4 续：进世界后按 oracle `PlayObject.Message.cs:1680-1692`
+                                                // 的 `RM_LOGON` 支出入图帧，经**该用户的网关线**下发。
+                                                // 输入齐备的现在只有 `SM_NEWMAP`（记录里的坐标 + 地图名）；
+                                                // 其余帧的输入依赖真地图（`openmir2-m2-map-loading`）/ 记录字段
+                                                // （`openmir2-m2-record-fields`）/ 配置层 ⇒ `EnterWorldInputs` 的
+                                                // `Option` 字段留空（登记在卡，绝不猜尾字节）。
+                                                // `day_bright` 暂占位 0（`Envir.DayBright()` 属地图层）。
+                                                let inputs = smframe::EnterWorldInputs {
+                                                    actor_id: id,
+                                                    cur_x: u16::from_ne_bytes(head.cur_x.to_ne_bytes()),
+                                                    cur_y: u16::from_ne_bytes(head.cur_y.to_ne_bytes()),
+                                                    dir: head.dir,
+                                                    map_file_name: Some(
+                                                        head.cur_map.as_bytes().to_vec(),
+                                                    ),
+                                                    ..smframe::EnterWorldInputs::default()
+                                                };
+                                                // N1（reviewer-3）：按该用户的 gate_idx 路由回**它自己那条**网关线
+                                                // （与上面 KickNoData 的 `route_to_gate` 完全同构）；找不到线号记 WRN，
+                                                // 绝不 `gates.values().next()` 静默挑一个。
+                                                if let Some(tx) = route_to_gate(
+                                                    &gates,
+                                                    gate_idx,
+                                                    socket,
+                                                    "标记进世界/下发入图帧",
+                                                ) {
+                                                    let bodies = inputs.frames();
+                                                    glog!(
+                                                        "INF",
+                                                        "进世界帧下发：socket={socket} 共 {} 条（输入齐备的）",
+                                                        bodies.len()
+                                                    );
+                                                    for body in bodies {
+                                                        let _ = tx.send(SimToGate::SendFrame {
+                                                            socket,
+                                                            body,
+                                                        });
+                                                    }
+                                                    let _ = tx.send(SimToGate::MarkInWorld { socket });
+                                                }
+                                            }
+                                            Err(e) => glog!(
+                                                "WRN",
+                                                "进世界失败 ChrName:{}：{e:?}",
+                                                head.chr_name
+                                            ),
+                                        }
+                                        }
                                     }
                                 }
                                 None => {

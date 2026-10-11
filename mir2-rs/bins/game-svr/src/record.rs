@@ -321,6 +321,28 @@ impl Ability {
     }
 }
 
+/// `Ability`（= oracle `WAbil`）的 **`EDCode.EncodeMessage` 体**：MemoryPack 序列化后**丢掉成员数首字节**。
+///
+/// 口径照 `src/OpenMir2/EDcode.cs:211-229`（`EncodeMessage<T>(T packet) where T : class`）：
+/// `byte[] data = SerializerUtil.Serialize(packet); byte[] newData = data[1..];` 然后从 `pos: 1` 开始编码
+/// ⇒ 线上尾 = `EDCode.Encode(序列化原文[1..])`。本函数返回的就是 `序列化原文[1..]`（40B），
+/// 由 `smframe::sm_ability` 再 `edcode::encode` 追加。
+///
+/// **金标准锚定**：#12（`SM_ABILITY`）线缆 54B ⇒ `edcode::decode` 得 40B，正是本函数输出
+/// （测试 `encode_ability_matches_golden_frame_12_tail` 用真字节钉住，不按公式重推）。
+///
+/// **接线点**：`openmir2-m2-enter-world-frames` README §5.1 登记的 52/752 输入阻塞（「`record.rs` 只有私有
+/// `encode_opt_ability`」）——本函数补齐该公开接缝；生产路径尚未消费（52 的触发点在 `RM_ABILITY`/
+/// `RM_LEVELUP`，待 S3 世界事件接线），故 `allow(dead_code)`（与 `parse_player_data` 同）。
+#[must_use]
+#[allow(dead_code)]
+pub fn encode_ability(abil: &Ability) -> Vec<u8> {
+    let mut w = Writer::default();
+    abil.encode(&mut w);
+    // 丢首字节（`Ability` 的成员数 22）——`EncodeMessage` 的口径
+    w.out[1..].to_vec()
+}
+
 /// `NakedAbility`（class：10 个成员）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct NakedAbility {
@@ -907,6 +929,60 @@ mod tests {
         assert_eq!(head.cur_x, 100);
         assert_eq!(head.cur_y, 200);
         assert_eq!(head.dir, 3);
+    }
+
+    /// 52/752 的输入接缝：`encode_ability` 必须逐字节等于 oracle `EncodeMessage(WAbil)` 的体。
+    ///
+    /// 用 M0 金标准 #12（`SM_ABILITY`，7200/s2c）的真字节锚定：线缆 54B ⇒ `edcode::decode` 得 40B；
+    /// 补回被丢掉的成员数首字节（22）后按 [`Ability::decode`] 解出 WAbil，再 [`encode_ability`]
+    /// 必须回到那 40B（防“按直觉另写一个 40B”）。
+    #[test]
+    fn encode_ability_matches_golden_frame_12_tail() {
+        fn between<'a>(s: &'a str, a: &str, b: &str) -> &'a str {
+            let i = s.find(a).expect("缺少左标记") + a.len();
+            let j = s[i..].find(b).expect("缺少右标记") + i;
+            &s[i..j]
+        }
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../tests/golden/session-20261010-c3-hook/capture.jsonl"
+        );
+        let capture =
+            std::fs::read_to_string(path).unwrap_or_else(|e| panic!("金标准不存在：{path}（{e}）"));
+        let mut tail = None;
+        for line in capture.lines() {
+            if !line.contains("\"dir\":\"s2c\"") || !line.contains("\"port\":7200") {
+                continue;
+            }
+            if !line.contains("\"ident\":52,") {
+                continue;
+            }
+            let raw = hex(between(line, "\"raw_hex\":\"", "\""));
+            // 客户端线缆：'#' + Encode(头 12B) + 尾 + '!'（oracle GameGate ClientSession.cs:897-920）
+            assert_eq!(raw[0], b'#');
+            assert_eq!(raw[raw.len() - 1], b'!');
+            tail = Some(mir2_protocol::edcode::decode(&raw[17..raw.len() - 1]));
+            break;
+        }
+        let tail = tail.expect("金标准 #12（ident 52）必须在 7200/s2c 里");
+        assert_eq!(
+            tail.len(),
+            40,
+            "EncodeMessage(WAbil) 体 = 40B（41B 序列化丢首字节）"
+        );
+        let mut with_count = Vec::with_capacity(41);
+        with_count.push(22u8); // 补回被 EncodeMessage 丢掉的成员数首字节
+        with_count.extend_from_slice(&tail);
+        let mut r = Reader::new(&with_count);
+        let abil = Ability::decode(&mut r)
+            .expect("40B 体补首字节后必须能按 Ability 解码")
+            .expect("WAbil 非 null");
+        assert_eq!(abil.level, 1, "金标准 #12 解出的 level");
+        assert_eq!(
+            encode_ability(&abil),
+            tail,
+            "encode_ability 必须逐字节等于金标准 #12 的 EncodeMessage 体"
+        );
     }
 
     #[test]
