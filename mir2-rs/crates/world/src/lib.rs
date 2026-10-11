@@ -17,14 +17,18 @@ pub mod aoi;
 pub mod bevy_bridge;
 pub mod combat;
 pub mod entity;
+pub mod magic;
 pub mod map;
 pub mod session;
 pub mod world;
 
 pub use aoi::{search_view_range, search_view_range_death, update_visible_gay, visible_snapshot};
 pub use bevy_bridge::{collect_tick_order_system, snapshot_from_world};
-pub use combat::{attack, AttackOutcome, CombatConfig};
+pub use combat::{attack, attack_with, AttackOutcome, AttackPowerMode, CombatConfig};
 pub use entity::{Entity, EntityStore, VisibleFlag, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY};
+pub use magic::{
+    can_read_book, get_power, get_power13, get_rpow, get_spell_point, magic_attack_interval, mpow,
+};
 pub use map::{
     CellAttribute, CellObject, CellType, FloorItemKind, FloorItemMeta, MapCellInfo, MapGrid,
 };

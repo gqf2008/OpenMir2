@@ -1,0 +1,8768 @@
+{
+  "generated_by": "mir2-rs/tests/parity/m3/combat-probe",
+  "oracle": {
+    "entry": "M2Server.Actor.BaseObject._Attack (internal, \u53CD\u5C04\u8C03\u7528)",
+    "power_entry": "M2Server.Actor.BaseObject.GetBaseAttackPoewr (internal, \u53CD\u5C04\u8C03\u7528)",
+    "source": "src/M2Server/Actor/BaseObject.Attack.cs:25,30 \u002B BaseObject.Base.cs:789,827 \u002B BaseObject.cs:775",
+    "rng": "OpenMir2.RandomNumber.random (\u79C1\u6709\u9759\u6001 System.Random) \u53CD\u5C04\u8986\u76D6\u4E3A new Random(seed)"
+  },
+  "seed": 20261012,
+  "config": {
+    "warr_mon": 10,
+    "wizard_mon": 10,
+    "taos_mon": 10,
+    "mon_hum": 10
+  },
+  "cases": [
+    {
+      "name": "dodge_mix_100",
+      "attacker": {
+        "race": 0,
+        "job": 0,
+        "dc": 7700,
+        "dc_lo": 20,
+        "dc_hi": 30,
+        "hit_point": 20,
+        "undead_power": 0,
+        "luck": 0,
+        "power_rate": 100,
+        "bo_power_item": false,
+        "power_item": 0
+      },
+      "target": {
+        "race": 80,
+        "ac": 2565,
+        "ac_lo": 5,
+        "ac_hi": 10,
+        "hp": 60000,
+        "hit_point": 20,
+        "speed_point": 40,
+        "life_attrib": 0
+      },
+      "attacks": [
+        {
+          "i": 0,
+          "power": 23,
+          "damage": 0,
+          "hp_after": 60000,
+          "attacked": false
+        },
+        {
+          "i": 1,
+          "power": 23,
+          "damage": 18,
+          "hp_after": 59982,
+          "attacked": true
+        },
+        {
+          "i": 2,
+          "power": 25,
+          "damage": 16,
+          "hp_after": 59966,
+          "attacked": true
+        },
+        {
+          "i": 3,
+          "power": 27,
+          "damage": 18,
+          "hp_after": 59948,
+          "attacked": true
+        },
+        {
+          "i": 4,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 59937,
+          "attacked": true
+        },
+        {
+          "i": 5,
+          "power": 20,
+          "damage": 10,
+          "hp_after": 59927,
+          "attacked": true
+        },
+        {
+          "i": 6,
+          "power": 24,
+          "damage": 0,
+          "hp_after": 59927,
+          "attacked": false
+        },
+        {
+          "i": 7,
+          "power": 22,
+          "damage": 9,
+          "hp_after": 59918,
+          "attacked": true
+        },
+        {
+          "i": 8,
+          "power": 22,
+          "damage": 15,
+          "hp_after": 59903,
+          "attacked": true
+        },
+        {
+          "i": 9,
+          "power": 29,
+          "damage": 24,
+          "hp_after": 59879,
+          "attacked": true
+        },
+        {
+          "i": 10,
+          "power": 29,
+          "damage": 0,
+          "hp_after": 59879,
+          "attacked": false
+        },
+        {
+          "i": 11,
+          "power": 24,
+          "damage": 12,
+          "hp_after": 59867,
+          "attacked": true
+        },
+        {
+          "i": 12,
+          "power": 28,
+          "damage": 17,
+          "hp_after": 59850,
+          "attacked": true
+        },
+        {
+          "i": 13,
+          "power": 30,
+          "damage": 24,
+          "hp_after": 59826,
+          "attacked": true
+        },
+        {
+          "i": 14,
+          "power": 29,
+          "damage": 18,
+          "hp_after": 59808,
+          "attacked": true
+        },
+        {
+          "i": 15,
+          "power": 25,
+          "damage": 0,
+          "hp_after": 59808,
+          "attacked": false
+        },
+        {
+          "i": 16,
+          "power": 25,
+          "damage": 0,
+          "hp_after": 59808,
+          "attacked": false
+        },
+        {
+          "i": 17,
+          "power": 26,
+          "damage": 17,
+          "hp_after": 59791,
+          "attacked": true
+        },
+        {
+          "i": 18,
+          "power": 23,
+          "damage": 14,
+          "hp_after": 59777,
+          "attacked": true
+        },
+        {
+          "i": 19,
+          "power": 28,
+          "damage": 0,
+          "hp_after": 59777,
+          "attacked": false
+        },
+        {
+          "i": 20,
+          "power": 24,
+          "damage": 16,
+          "hp_after": 59761,
+          "attacked": true
+        },
+        {
+          "i": 21,
+          "power": 23,
+          "damage": 18,
+          "hp_after": 59743,
+          "attacked": true
+        },
+        {
+          "i": 22,
+          "power": 26,
+          "damage": 0,
+          "hp_after": 59743,
+          "attacked": false
+        },
+        {
+          "i": 23,
+          "power": 23,
+          "damage": 18,
+          "hp_after": 59725,
+          "attacked": true
+        },
+        {
+          "i": 24,
+          "power": 26,
+          "damage": 20,
+          "hp_after": 59705,
+          "attacked": true
+        },
+        {
+          "i": 25,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 59693,
+          "attacked": true
+        },
+        {
+          "i": 26,
+          "power": 26,
+          "damage": 0,
+          "hp_after": 59693,
+          "attacked": false
+        },
+        {
+          "i": 27,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 59681,
+          "attacked": true
+        },
+        {
+          "i": 28,
+          "power": 21,
+          "damage": 14,
+          "hp_after": 59667,
+          "attacked": true
+        },
+        {
+          "i": 29,
+          "power": 26,
+          "damage": 18,
+          "hp_after": 59649,
+          "attacked": true
+        },
+        {
+          "i": 30,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 59638,
+          "attacked": true
+        },
+        {
+          "i": 31,
+          "power": 24,
+          "damage": 18,
+          "hp_after": 59620,
+          "attacked": true
+        },
+        {
+          "i": 32,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 59609,
+          "attacked": true
+        },
+        {
+          "i": 33,
+          "power": 21,
+          "damage": 13,
+          "hp_after": 59596,
+          "attacked": true
+        },
+        {
+          "i": 34,
+          "power": 28,
+          "damage": 19,
+          "hp_after": 59577,
+          "attacked": true
+        },
+        {
+          "i": 35,
+          "power": 27,
+          "damage": 17,
+          "hp_after": 59560,
+          "attacked": true
+        },
+        {
+          "i": 36,
+          "power": 20,
+          "damage": 0,
+          "hp_after": 59560,
+          "attacked": false
+        },
+        {
+          "i": 37,
+          "power": 26,
+          "damage": 0,
+          "hp_after": 59560,
+          "attacked": false
+        },
+        {
+          "i": 38,
+          "power": 22,
+          "damage": 13,
+          "hp_after": 59547,
+          "attacked": true
+        },
+        {
+          "i": 39,
+          "power": 24,
+          "damage": 12,
+          "hp_after": 59535,
+          "attacked": true
+        },
+        {
+          "i": 40,
+          "power": 21,
+          "damage": 10,
+          "hp_after": 59525,
+          "attacked": true
+        },
+        {
+          "i": 41,
+          "power": 23,
+          "damage": 0,
+          "hp_after": 59525,
+          "attacked": false
+        },
+        {
+          "i": 42,
+          "power": 27,
+          "damage": 0,
+          "hp_after": 59525,
+          "attacked": false
+        },
+        {
+          "i": 43,
+          "power": 23,
+          "damage": 0,
+          "hp_after": 59525,
+          "attacked": false
+        },
+        {
+          "i": 44,
+          "power": 29,
+          "damage": 22,
+          "hp_after": 59503,
+          "attacked": true
+        },
+        {
+          "i": 45,
+          "power": 30,
+          "damage": 0,
+          "hp_after": 59503,
+          "attacked": false
+        },
+        {
+          "i": 46,
+          "power": 29,
+          "damage": 0,
+          "hp_after": 59503,
+          "attacked": false
+        },
+        {
+          "i": 47,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 59491,
+          "attacked": true
+        },
+        {
+          "i": 48,
+          "power": 20,
+          "damage": 10,
+          "hp_after": 59481,
+          "attacked": true
+        },
+        {
+          "i": 49,
+          "power": 20,
+          "damage": 0,
+          "hp_after": 59481,
+          "attacked": false
+        },
+        {
+          "i": 50,
+          "power": 26,
+          "damage": 13,
+          "hp_after": 59468,
+          "attacked": true
+        },
+        {
+          "i": 51,
+          "power": 28,
+          "damage": 0,
+          "hp_after": 59468,
+          "attacked": false
+        },
+        {
+          "i": 52,
+          "power": 28,
+          "damage": 22,
+          "hp_after": 59446,
+          "attacked": true
+        },
+        {
+          "i": 53,
+          "power": 23,
+          "damage": 0,
+          "hp_after": 59446,
+          "attacked": false
+        },
+        {
+          "i": 54,
+          "power": 28,
+          "damage": 21,
+          "hp_after": 59425,
+          "attacked": true
+        },
+        {
+          "i": 55,
+          "power": 26,
+          "damage": 0,
+          "hp_after": 59425,
+          "attacked": false
+        },
+        {
+          "i": 56,
+          "power": 21,
+          "damage": 8,
+          "hp_after": 59417,
+          "attacked": true
+        },
+        {
+          "i": 57,
+          "power": 25,
+          "damage": 0,
+          "hp_after": 59417,
+          "attacked": false
+        },
+        {
+          "i": 58,
+          "power": 29,
+          "damage": 0,
+          "hp_after": 59417,
+          "attacked": false
+        },
+        {
+          "i": 59,
+          "power": 20,
+          "damage": 15,
+          "hp_after": 59402,
+          "attacked": true
+        },
+        {
+          "i": 60,
+          "power": 20,
+          "damage": 0,
+          "hp_after": 59402,
+          "attacked": false
+        },
+        {
+          "i": 61,
+          "power": 28,
+          "damage": 0,
+          "hp_after": 59402,
+          "attacked": false
+        },
+        {
+          "i": 62,
+          "power": 21,
+          "damage": 15,
+          "hp_after": 59387,
+          "attacked": true
+        },
+        {
+          "i": 63,
+          "power": 23,
+          "damage": 0,
+          "hp_after": 59387,
+          "attacked": false
+        },
+        {
+          "i": 64,
+          "power": 20,
+          "damage": 8,
+          "hp_after": 59379,
+          "attacked": true
+        },
+        {
+          "i": 65,
+          "power": 25,
+          "damage": 0,
+          "hp_after": 59379,
+          "attacked": false
+        },
+        {
+          "i": 66,
+          "power": 20,
+          "damage": 0,
+          "hp_after": 59379,
+          "attacked": false
+        },
+        {
+          "i": 67,
+          "power": 27,
+          "damage": 0,
+          "hp_after": 59379,
+          "attacked": false
+        },
+        {
+          "i": 68,
+          "power": 26,
+          "damage": 0,
+          "hp_after": 59379,
+          "attacked": false
+        },
+        {
+          "i": 69,
+          "power": 24,
+          "damage": 16,
+          "hp_after": 59363,
+          "attacked": true
+        },
+        {
+          "i": 70,
+          "power": 30,
+          "damage": 0,
+          "hp_after": 59363,
+          "attacked": false
+        },
+        {
+          "i": 71,
+          "power": 23,
+          "damage": 0,
+          "hp_after": 59363,
+          "attacked": false
+        },
+        {
+          "i": 72,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 59351,
+          "attacked": true
+        },
+        {
+          "i": 73,
+          "power": 20,
+          "damage": 0,
+          "hp_after": 59351,
+          "attacked": false
+        },
+        {
+          "i": 74,
+          "power": 29,
+          "damage": 21,
+          "hp_after": 59330,
+          "attacked": true
+        },
+        {
+          "i": 75,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 59316,
+          "attacked": true
+        },
+        {
+          "i": 76,
+          "power": 27,
+          "damage": 0,
+          "hp_after": 59316,
+          "attacked": false
+        },
+        {
+          "i": 77,
+          "power": 28,
+          "damage": 0,
+          "hp_after": 59316,
+          "attacked": false
+        },
+        {
+          "i": 78,
+          "power": 20,
+          "damage": 15,
+          "hp_after": 59301,
+          "attacked": true
+        },
+        {
+          "i": 79,
+          "power": 27,
+          "damage": 0,
+          "hp_after": 59301,
+          "attacked": false
+        },
+        {
+          "i": 80,
+          "power": 23,
+          "damage": 18,
+          "hp_after": 59283,
+          "attacked": true
+        },
+        {
+          "i": 81,
+          "power": 26,
+          "damage": 17,
+          "hp_after": 59266,
+          "attacked": true
+        },
+        {
+          "i": 82,
+          "power": 20,
+          "damage": 0,
+          "hp_after": 59266,
+          "attacked": false
+        },
+        {
+          "i": 83,
+          "power": 27,
+          "damage": 0,
+          "hp_after": 59266,
+          "attacked": false
+        },
+        {
+          "i": 84,
+          "power": 23,
+          "damage": 15,
+          "hp_after": 59251,
+          "attacked": true
+        },
+        {
+          "i": 85,
+          "power": 26,
+          "damage": 0,
+          "hp_after": 59251,
+          "attacked": false
+        },
+        {
+          "i": 86,
+          "power": 22,
+          "damage": 17,
+          "hp_after": 59234,
+          "attacked": true
+        },
+        {
+          "i": 87,
+          "power": 28,
+          "damage": 15,
+          "hp_after": 59219,
+          "attacked": true
+        },
+        {
+          "i": 88,
+          "power": 22,
+          "damage": 0,
+          "hp_after": 59219,
+          "attacked": false
+        },
+        {
+          "i": 89,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 59208,
+          "attacked": true
+        },
+        {
+          "i": 90,
+          "power": 26,
+          "damage": 14,
+          "hp_after": 59194,
+          "attacked": true
+        },
+        {
+          "i": 91,
+          "power": 24,
+          "damage": 16,
+          "hp_after": 59178,
+          "attacked": true
+        },
+        {
+          "i": 92,
+          "power": 22,
+          "damage": 0,
+          "hp_after": 59178,
+          "attacked": false
+        },
+        {
+          "i": 93,
+          "power": 28,
+          "damage": 19,
+          "hp_after": 59159,
+          "attacked": true
+        },
+        {
+          "i": 94,
+          "power": 25,
+          "damage": 0,
+          "hp_after": 59159,
+          "attacked": false
+        },
+        {
+          "i": 95,
+          "power": 22,
+          "damage": 0,
+          "hp_after": 59159,
+          "attacked": false
+        },
+        {
+          "i": 96,
+          "power": 23,
+          "damage": 18,
+          "hp_after": 59141,
+          "attacked": true
+        },
+        {
+          "i": 97,
+          "power": 22,
+          "damage": 0,
+          "hp_after": 59141,
+          "attacked": false
+        },
+        {
+          "i": 98,
+          "power": 20,
+          "damage": 0,
+          "hp_after": 59141,
+          "attacked": false
+        },
+        {
+          "i": 99,
+          "power": 24,
+          "damage": 14,
+          "hp_after": 59127,
+          "attacked": true
+        }
+      ],
+      "stats": {
+        "n": 100,
+        "hits": 57,
+        "dodges": 43,
+        "attacked": 57,
+        "damage_sum": 873
+      }
+    },
+    {
+      "name": "no_dodge_100",
+      "attacker": {
+        "race": 0,
+        "job": 0,
+        "dc": 7700,
+        "dc_lo": 20,
+        "dc_hi": 30,
+        "hit_point": 20,
+        "undead_power": 0,
+        "luck": 0,
+        "power_rate": 100,
+        "bo_power_item": false,
+        "power_item": 0
+      },
+      "target": {
+        "race": 80,
+        "ac": 5,
+        "ac_lo": 5,
+        "ac_hi": 0,
+        "hp": 60000,
+        "hit_point": 20,
+        "speed_point": 1,
+        "life_attrib": 0
+      },
+      "attacks": [
+        {
+          "i": 0,
+          "power": 23,
+          "damage": 17,
+          "hp_after": 59983,
+          "attacked": true
+        },
+        {
+          "i": 1,
+          "power": 20,
+          "damage": 10,
+          "hp_after": 59973,
+          "attacked": true
+        },
+        {
+          "i": 2,
+          "power": 23,
+          "damage": 15,
+          "hp_after": 59958,
+          "attacked": true
+        },
+        {
+          "i": 3,
+          "power": 20,
+          "damage": 15,
+          "hp_after": 59943,
+          "attacked": true
+        },
+        {
+          "i": 4,
+          "power": 24,
+          "damage": 16,
+          "hp_after": 59927,
+          "attacked": true
+        },
+        {
+          "i": 5,
+          "power": 22,
+          "damage": 15,
+          "hp_after": 59912,
+          "attacked": true
+        },
+        {
+          "i": 6,
+          "power": 29,
+          "damage": 19,
+          "hp_after": 59893,
+          "attacked": true
+        },
+        {
+          "i": 7,
+          "power": 29,
+          "damage": 19,
+          "hp_after": 59874,
+          "attacked": true
+        },
+        {
+          "i": 8,
+          "power": 22,
+          "damage": 15,
+          "hp_after": 59859,
+          "attacked": true
+        },
+        {
+          "i": 9,
+          "power": 21,
+          "damage": 13,
+          "hp_after": 59846,
+          "attacked": true
+        },
+        {
+          "i": 10,
+          "power": 20,
+          "damage": 7,
+          "hp_after": 59839,
+          "attacked": true
+        },
+        {
+          "i": 11,
+          "power": 27,
+          "damage": 14,
+          "hp_after": 59825,
+          "attacked": true
+        },
+        {
+          "i": 12,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 59814,
+          "attacked": true
+        },
+        {
+          "i": 13,
+          "power": 21,
+          "damage": 12,
+          "hp_after": 59802,
+          "attacked": true
+        },
+        {
+          "i": 14,
+          "power": 21,
+          "damage": 12,
+          "hp_after": 59790,
+          "attacked": true
+        },
+        {
+          "i": 15,
+          "power": 26,
+          "damage": 17,
+          "hp_after": 59773,
+          "attacked": true
+        },
+        {
+          "i": 16,
+          "power": 23,
+          "damage": 14,
+          "hp_after": 59759,
+          "attacked": true
+        },
+        {
+          "i": 17,
+          "power": 28,
+          "damage": 22,
+          "hp_after": 59737,
+          "attacked": true
+        },
+        {
+          "i": 18,
+          "power": 24,
+          "damage": 15,
+          "hp_after": 59722,
+          "attacked": true
+        },
+        {
+          "i": 19,
+          "power": 20,
+          "damage": 13,
+          "hp_after": 59709,
+          "attacked": true
+        },
+        {
+          "i": 20,
+          "power": 27,
+          "damage": 21,
+          "hp_after": 59688,
+          "attacked": true
+        },
+        {
+          "i": 21,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 59674,
+          "attacked": true
+        },
+        {
+          "i": 22,
+          "power": 23,
+          "damage": 15,
+          "hp_after": 59659,
+          "attacked": true
+        },
+        {
+          "i": 23,
+          "power": 25,
+          "damage": 20,
+          "hp_after": 59639,
+          "attacked": true
+        },
+        {
+          "i": 24,
+          "power": 25,
+          "damage": 20,
+          "hp_after": 59619,
+          "attacked": true
+        },
+        {
+          "i": 25,
+          "power": 26,
+          "damage": 17,
+          "hp_after": 59602,
+          "attacked": true
+        },
+        {
+          "i": 26,
+          "power": 25,
+          "damage": 15,
+          "hp_after": 59587,
+          "attacked": true
+        },
+        {
+          "i": 27,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 59575,
+          "attacked": true
+        },
+        {
+          "i": 28,
+          "power": 22,
+          "damage": 13,
+          "hp_after": 59562,
+          "attacked": true
+        },
+        {
+          "i": 29,
+          "power": 21,
+          "damage": 15,
+          "hp_after": 59547,
+          "attacked": true
+        },
+        {
+          "i": 30,
+          "power": 26,
+          "damage": 16,
+          "hp_after": 59531,
+          "attacked": true
+        },
+        {
+          "i": 31,
+          "power": 20,
+          "damage": 9,
+          "hp_after": 59522,
+          "attacked": true
+        },
+        {
+          "i": 32,
+          "power": 25,
+          "damage": 15,
+          "hp_after": 59507,
+          "attacked": true
+        },
+        {
+          "i": 33,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 59496,
+          "attacked": true
+        },
+        {
+          "i": 34,
+          "power": 22,
+          "damage": 13,
+          "hp_after": 59483,
+          "attacked": true
+        },
+        {
+          "i": 35,
+          "power": 24,
+          "damage": 12,
+          "hp_after": 59471,
+          "attacked": true
+        },
+        {
+          "i": 36,
+          "power": 21,
+          "damage": 10,
+          "hp_after": 59461,
+          "attacked": true
+        },
+        {
+          "i": 37,
+          "power": 23,
+          "damage": 13,
+          "hp_after": 59448,
+          "attacked": true
+        },
+        {
+          "i": 38,
+          "power": 30,
+          "damage": 17,
+          "hp_after": 59431,
+          "attacked": true
+        },
+        {
+          "i": 39,
+          "power": 29,
+          "damage": 18,
+          "hp_after": 59413,
+          "attacked": true
+        },
+        {
+          "i": 40,
+          "power": 22,
+          "damage": 13,
+          "hp_after": 59400,
+          "attacked": true
+        },
+        {
+          "i": 41,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 59388,
+          "attacked": true
+        },
+        {
+          "i": 42,
+          "power": 20,
+          "damage": 10,
+          "hp_after": 59378,
+          "attacked": true
+        },
+        {
+          "i": 43,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 59366,
+          "attacked": true
+        },
+        {
+          "i": 44,
+          "power": 22,
+          "damage": 12,
+          "hp_after": 59354,
+          "attacked": true
+        },
+        {
+          "i": 45,
+          "power": 29,
+          "damage": 19,
+          "hp_after": 59335,
+          "attacked": true
+        },
+        {
+          "i": 46,
+          "power": 22,
+          "damage": 11,
+          "hp_after": 59324,
+          "attacked": true
+        },
+        {
+          "i": 47,
+          "power": 22,
+          "damage": 14,
+          "hp_after": 59310,
+          "attacked": true
+        },
+        {
+          "i": 48,
+          "power": 23,
+          "damage": 18,
+          "hp_after": 59292,
+          "attacked": true
+        },
+        {
+          "i": 49,
+          "power": 30,
+          "damage": 21,
+          "hp_after": 59271,
+          "attacked": true
+        },
+        {
+          "i": 50,
+          "power": 29,
+          "damage": 21,
+          "hp_after": 59250,
+          "attacked": true
+        },
+        {
+          "i": 51,
+          "power": 20,
+          "damage": 15,
+          "hp_after": 59235,
+          "attacked": true
+        },
+        {
+          "i": 52,
+          "power": 26,
+          "damage": 20,
+          "hp_after": 59215,
+          "attacked": true
+        },
+        {
+          "i": 53,
+          "power": 22,
+          "damage": 16,
+          "hp_after": 59199,
+          "attacked": true
+        },
+        {
+          "i": 54,
+          "power": 29,
+          "damage": 24,
+          "hp_after": 59175,
+          "attacked": true
+        },
+        {
+          "i": 55,
+          "power": 28,
+          "damage": 18,
+          "hp_after": 59157,
+          "attacked": true
+        },
+        {
+          "i": 56,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 59143,
+          "attacked": true
+        },
+        {
+          "i": 57,
+          "power": 26,
+          "damage": 17,
+          "hp_after": 59126,
+          "attacked": true
+        },
+        {
+          "i": 58,
+          "power": 22,
+          "damage": 11,
+          "hp_after": 59115,
+          "attacked": true
+        },
+        {
+          "i": 59,
+          "power": 25,
+          "damage": 15,
+          "hp_after": 59100,
+          "attacked": true
+        },
+        {
+          "i": 60,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 59088,
+          "attacked": true
+        },
+        {
+          "i": 61,
+          "power": 20,
+          "damage": 6,
+          "hp_after": 59082,
+          "attacked": true
+        },
+        {
+          "i": 62,
+          "power": 25,
+          "damage": 20,
+          "hp_after": 59062,
+          "attacked": true
+        },
+        {
+          "i": 63,
+          "power": 20,
+          "damage": 10,
+          "hp_after": 59052,
+          "attacked": true
+        },
+        {
+          "i": 64,
+          "power": 26,
+          "damage": 21,
+          "hp_after": 59031,
+          "attacked": true
+        },
+        {
+          "i": 65,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 59019,
+          "attacked": true
+        },
+        {
+          "i": 66,
+          "power": 21,
+          "damage": 15,
+          "hp_after": 59004,
+          "attacked": true
+        },
+        {
+          "i": 67,
+          "power": 20,
+          "damage": 15,
+          "hp_after": 58989,
+          "attacked": true
+        },
+        {
+          "i": 68,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 58978,
+          "attacked": true
+        },
+        {
+          "i": 69,
+          "power": 27,
+          "damage": 19,
+          "hp_after": 58959,
+          "attacked": true
+        },
+        {
+          "i": 70,
+          "power": 24,
+          "damage": 18,
+          "hp_after": 58941,
+          "attacked": true
+        },
+        {
+          "i": 71,
+          "power": 27,
+          "damage": 22,
+          "hp_after": 58919,
+          "attacked": true
+        },
+        {
+          "i": 72,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 58908,
+          "attacked": true
+        },
+        {
+          "i": 73,
+          "power": 30,
+          "damage": 25,
+          "hp_after": 58883,
+          "attacked": true
+        },
+        {
+          "i": 74,
+          "power": 22,
+          "damage": 12,
+          "hp_after": 58871,
+          "attacked": true
+        },
+        {
+          "i": 75,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 58859,
+          "attacked": true
+        },
+        {
+          "i": 76,
+          "power": 28,
+          "damage": 22,
+          "hp_after": 58837,
+          "attacked": true
+        },
+        {
+          "i": 77,
+          "power": 28,
+          "damage": 20,
+          "hp_after": 58817,
+          "attacked": true
+        },
+        {
+          "i": 78,
+          "power": 27,
+          "damage": 14,
+          "hp_after": 58803,
+          "attacked": true
+        },
+        {
+          "i": 79,
+          "power": 22,
+          "damage": 12,
+          "hp_after": 58791,
+          "attacked": true
+        },
+        {
+          "i": 80,
+          "power": 25,
+          "damage": 18,
+          "hp_after": 58773,
+          "attacked": true
+        },
+        {
+          "i": 81,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 58762,
+          "attacked": true
+        },
+        {
+          "i": 82,
+          "power": 27,
+          "damage": 19,
+          "hp_after": 58743,
+          "attacked": true
+        },
+        {
+          "i": 83,
+          "power": 30,
+          "damage": 25,
+          "hp_after": 58718,
+          "attacked": true
+        },
+        {
+          "i": 84,
+          "power": 20,
+          "damage": 13,
+          "hp_after": 58705,
+          "attacked": true
+        },
+        {
+          "i": 85,
+          "power": 28,
+          "damage": 20,
+          "hp_after": 58685,
+          "attacked": true
+        },
+        {
+          "i": 86,
+          "power": 27,
+          "damage": 13,
+          "hp_after": 58672,
+          "attacked": true
+        },
+        {
+          "i": 87,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 58658,
+          "attacked": true
+        },
+        {
+          "i": 88,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 58647,
+          "attacked": true
+        },
+        {
+          "i": 89,
+          "power": 22,
+          "damage": 17,
+          "hp_after": 58630,
+          "attacked": true
+        },
+        {
+          "i": 90,
+          "power": 29,
+          "damage": 19,
+          "hp_after": 58611,
+          "attacked": true
+        },
+        {
+          "i": 91,
+          "power": 20,
+          "damage": 9,
+          "hp_after": 58602,
+          "attacked": true
+        },
+        {
+          "i": 92,
+          "power": 20,
+          "damage": 10,
+          "hp_after": 58592,
+          "attacked": true
+        },
+        {
+          "i": 93,
+          "power": 20,
+          "damage": 8,
+          "hp_after": 58584,
+          "attacked": true
+        },
+        {
+          "i": 94,
+          "power": 29,
+          "damage": 21,
+          "hp_after": 58563,
+          "attacked": true
+        },
+        {
+          "i": 95,
+          "power": 30,
+          "damage": 25,
+          "hp_after": 58538,
+          "attacked": true
+        },
+        {
+          "i": 96,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 58527,
+          "attacked": true
+        },
+        {
+          "i": 97,
+          "power": 28,
+          "damage": 15,
+          "hp_after": 58512,
+          "attacked": true
+        },
+        {
+          "i": 98,
+          "power": 23,
+          "damage": 17,
+          "hp_after": 58495,
+          "attacked": true
+        },
+        {
+          "i": 99,
+          "power": 21,
+          "damage": 12,
+          "hp_after": 58483,
+          "attacked": true
+        }
+      ],
+      "stats": {
+        "n": 100,
+        "hits": 100,
+        "dodges": 0,
+        "attacked": 100,
+        "damage_sum": 1517
+      }
+    },
+    {
+      "name": "undead_30",
+      "attacker": {
+        "race": 0,
+        "job": 0,
+        "dc": 7700,
+        "dc_lo": 20,
+        "dc_hi": 30,
+        "hit_point": 20,
+        "undead_power": 7,
+        "luck": 0,
+        "power_rate": 100,
+        "bo_power_item": false,
+        "power_item": 0
+      },
+      "target": {
+        "race": 80,
+        "ac": 5,
+        "ac_lo": 5,
+        "ac_hi": 0,
+        "hp": 60000,
+        "hit_point": 20,
+        "speed_point": 12,
+        "life_attrib": 1
+      },
+      "attacks": [
+        {
+          "i": 0,
+          "power": 23,
+          "damage": 24,
+          "hp_after": 59976,
+          "attacked": true
+        },
+        {
+          "i": 1,
+          "power": 20,
+          "damage": 17,
+          "hp_after": 59959,
+          "attacked": true
+        },
+        {
+          "i": 2,
+          "power": 23,
+          "damage": 22,
+          "hp_after": 59937,
+          "attacked": true
+        },
+        {
+          "i": 3,
+          "power": 20,
+          "damage": 22,
+          "hp_after": 59915,
+          "attacked": true
+        },
+        {
+          "i": 4,
+          "power": 24,
+          "damage": 23,
+          "hp_after": 59892,
+          "attacked": true
+        },
+        {
+          "i": 5,
+          "power": 22,
+          "damage": 22,
+          "hp_after": 59870,
+          "attacked": true
+        },
+        {
+          "i": 6,
+          "power": 29,
+          "damage": 26,
+          "hp_after": 59844,
+          "attacked": true
+        },
+        {
+          "i": 7,
+          "power": 29,
+          "damage": 26,
+          "hp_after": 59818,
+          "attacked": true
+        },
+        {
+          "i": 8,
+          "power": 22,
+          "damage": 22,
+          "hp_after": 59796,
+          "attacked": true
+        },
+        {
+          "i": 9,
+          "power": 21,
+          "damage": 20,
+          "hp_after": 59776,
+          "attacked": true
+        },
+        {
+          "i": 10,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 59762,
+          "attacked": true
+        },
+        {
+          "i": 11,
+          "power": 27,
+          "damage": 21,
+          "hp_after": 59741,
+          "attacked": true
+        },
+        {
+          "i": 12,
+          "power": 20,
+          "damage": 18,
+          "hp_after": 59723,
+          "attacked": true
+        },
+        {
+          "i": 13,
+          "power": 21,
+          "damage": 19,
+          "hp_after": 59704,
+          "attacked": true
+        },
+        {
+          "i": 14,
+          "power": 21,
+          "damage": 19,
+          "hp_after": 59685,
+          "attacked": true
+        },
+        {
+          "i": 15,
+          "power": 26,
+          "damage": 24,
+          "hp_after": 59661,
+          "attacked": true
+        },
+        {
+          "i": 16,
+          "power": 23,
+          "damage": 21,
+          "hp_after": 59640,
+          "attacked": true
+        },
+        {
+          "i": 17,
+          "power": 28,
+          "damage": 29,
+          "hp_after": 59611,
+          "attacked": true
+        },
+        {
+          "i": 18,
+          "power": 24,
+          "damage": 22,
+          "hp_after": 59589,
+          "attacked": true
+        },
+        {
+          "i": 19,
+          "power": 20,
+          "damage": 20,
+          "hp_after": 59569,
+          "attacked": true
+        },
+        {
+          "i": 20,
+          "power": 27,
+          "damage": 28,
+          "hp_after": 59541,
+          "attacked": true
+        },
+        {
+          "i": 21,
+          "power": 20,
+          "damage": 21,
+          "hp_after": 59520,
+          "attacked": true
+        },
+        {
+          "i": 22,
+          "power": 23,
+          "damage": 22,
+          "hp_after": 59498,
+          "attacked": true
+        },
+        {
+          "i": 23,
+          "power": 25,
+          "damage": 27,
+          "hp_after": 59471,
+          "attacked": true
+        },
+        {
+          "i": 24,
+          "power": 25,
+          "damage": 27,
+          "hp_after": 59444,
+          "attacked": true
+        },
+        {
+          "i": 25,
+          "power": 26,
+          "damage": 24,
+          "hp_after": 59420,
+          "attacked": true
+        },
+        {
+          "i": 26,
+          "power": 25,
+          "damage": 22,
+          "hp_after": 59398,
+          "attacked": true
+        },
+        {
+          "i": 27,
+          "power": 20,
+          "damage": 19,
+          "hp_after": 59379,
+          "attacked": true
+        },
+        {
+          "i": 28,
+          "power": 22,
+          "damage": 20,
+          "hp_after": 59359,
+          "attacked": true
+        },
+        {
+          "i": 29,
+          "power": 21,
+          "damage": 22,
+          "hp_after": 59337,
+          "attacked": true
+        }
+      ],
+      "stats": {
+        "n": 30,
+        "hits": 30,
+        "dodges": 0,
+        "attacked": 30,
+        "damage_sum": 663
+      }
+    },
+    {
+      "name": "stats_1000",
+      "attacker": {
+        "race": 0,
+        "job": 0,
+        "dc": 7700,
+        "dc_lo": 20,
+        "dc_hi": 30,
+        "hit_point": 20,
+        "undead_power": 0,
+        "luck": 0,
+        "power_rate": 100,
+        "bo_power_item": false,
+        "power_item": 0
+      },
+      "target": {
+        "race": 80,
+        "ac": 5,
+        "ac_lo": 5,
+        "ac_hi": 0,
+        "hp": 60000,
+        "hit_point": 20,
+        "speed_point": 12,
+        "life_attrib": 0
+      },
+      "attacks": [
+        {
+          "i": 0,
+          "power": 23,
+          "damage": 17,
+          "hp_after": 59983,
+          "attacked": true
+        },
+        {
+          "i": 1,
+          "power": 20,
+          "damage": 10,
+          "hp_after": 59973,
+          "attacked": true
+        },
+        {
+          "i": 2,
+          "power": 23,
+          "damage": 15,
+          "hp_after": 59958,
+          "attacked": true
+        },
+        {
+          "i": 3,
+          "power": 20,
+          "damage": 15,
+          "hp_after": 59943,
+          "attacked": true
+        },
+        {
+          "i": 4,
+          "power": 24,
+          "damage": 16,
+          "hp_after": 59927,
+          "attacked": true
+        },
+        {
+          "i": 5,
+          "power": 22,
+          "damage": 15,
+          "hp_after": 59912,
+          "attacked": true
+        },
+        {
+          "i": 6,
+          "power": 29,
+          "damage": 19,
+          "hp_after": 59893,
+          "attacked": true
+        },
+        {
+          "i": 7,
+          "power": 29,
+          "damage": 19,
+          "hp_after": 59874,
+          "attacked": true
+        },
+        {
+          "i": 8,
+          "power": 22,
+          "damage": 15,
+          "hp_after": 59859,
+          "attacked": true
+        },
+        {
+          "i": 9,
+          "power": 21,
+          "damage": 13,
+          "hp_after": 59846,
+          "attacked": true
+        },
+        {
+          "i": 10,
+          "power": 20,
+          "damage": 7,
+          "hp_after": 59839,
+          "attacked": true
+        },
+        {
+          "i": 11,
+          "power": 27,
+          "damage": 14,
+          "hp_after": 59825,
+          "attacked": true
+        },
+        {
+          "i": 12,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 59814,
+          "attacked": true
+        },
+        {
+          "i": 13,
+          "power": 21,
+          "damage": 12,
+          "hp_after": 59802,
+          "attacked": true
+        },
+        {
+          "i": 14,
+          "power": 21,
+          "damage": 12,
+          "hp_after": 59790,
+          "attacked": true
+        },
+        {
+          "i": 15,
+          "power": 26,
+          "damage": 17,
+          "hp_after": 59773,
+          "attacked": true
+        },
+        {
+          "i": 16,
+          "power": 23,
+          "damage": 14,
+          "hp_after": 59759,
+          "attacked": true
+        },
+        {
+          "i": 17,
+          "power": 28,
+          "damage": 22,
+          "hp_after": 59737,
+          "attacked": true
+        },
+        {
+          "i": 18,
+          "power": 24,
+          "damage": 15,
+          "hp_after": 59722,
+          "attacked": true
+        },
+        {
+          "i": 19,
+          "power": 20,
+          "damage": 13,
+          "hp_after": 59709,
+          "attacked": true
+        },
+        {
+          "i": 20,
+          "power": 27,
+          "damage": 21,
+          "hp_after": 59688,
+          "attacked": true
+        },
+        {
+          "i": 21,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 59674,
+          "attacked": true
+        },
+        {
+          "i": 22,
+          "power": 23,
+          "damage": 15,
+          "hp_after": 59659,
+          "attacked": true
+        },
+        {
+          "i": 23,
+          "power": 25,
+          "damage": 20,
+          "hp_after": 59639,
+          "attacked": true
+        },
+        {
+          "i": 24,
+          "power": 25,
+          "damage": 20,
+          "hp_after": 59619,
+          "attacked": true
+        },
+        {
+          "i": 25,
+          "power": 26,
+          "damage": 17,
+          "hp_after": 59602,
+          "attacked": true
+        },
+        {
+          "i": 26,
+          "power": 25,
+          "damage": 15,
+          "hp_after": 59587,
+          "attacked": true
+        },
+        {
+          "i": 27,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 59575,
+          "attacked": true
+        },
+        {
+          "i": 28,
+          "power": 22,
+          "damage": 13,
+          "hp_after": 59562,
+          "attacked": true
+        },
+        {
+          "i": 29,
+          "power": 21,
+          "damage": 15,
+          "hp_after": 59547,
+          "attacked": true
+        },
+        {
+          "i": 30,
+          "power": 26,
+          "damage": 16,
+          "hp_after": 59531,
+          "attacked": true
+        },
+        {
+          "i": 31,
+          "power": 20,
+          "damage": 9,
+          "hp_after": 59522,
+          "attacked": true
+        },
+        {
+          "i": 32,
+          "power": 25,
+          "damage": 15,
+          "hp_after": 59507,
+          "attacked": true
+        },
+        {
+          "i": 33,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 59496,
+          "attacked": true
+        },
+        {
+          "i": 34,
+          "power": 22,
+          "damage": 13,
+          "hp_after": 59483,
+          "attacked": true
+        },
+        {
+          "i": 35,
+          "power": 24,
+          "damage": 12,
+          "hp_after": 59471,
+          "attacked": true
+        },
+        {
+          "i": 36,
+          "power": 21,
+          "damage": 10,
+          "hp_after": 59461,
+          "attacked": true
+        },
+        {
+          "i": 37,
+          "power": 23,
+          "damage": 13,
+          "hp_after": 59448,
+          "attacked": true
+        },
+        {
+          "i": 38,
+          "power": 30,
+          "damage": 17,
+          "hp_after": 59431,
+          "attacked": true
+        },
+        {
+          "i": 39,
+          "power": 29,
+          "damage": 18,
+          "hp_after": 59413,
+          "attacked": true
+        },
+        {
+          "i": 40,
+          "power": 22,
+          "damage": 13,
+          "hp_after": 59400,
+          "attacked": true
+        },
+        {
+          "i": 41,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 59388,
+          "attacked": true
+        },
+        {
+          "i": 42,
+          "power": 20,
+          "damage": 10,
+          "hp_after": 59378,
+          "attacked": true
+        },
+        {
+          "i": 43,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 59366,
+          "attacked": true
+        },
+        {
+          "i": 44,
+          "power": 22,
+          "damage": 12,
+          "hp_after": 59354,
+          "attacked": true
+        },
+        {
+          "i": 45,
+          "power": 29,
+          "damage": 19,
+          "hp_after": 59335,
+          "attacked": true
+        },
+        {
+          "i": 46,
+          "power": 22,
+          "damage": 11,
+          "hp_after": 59324,
+          "attacked": true
+        },
+        {
+          "i": 47,
+          "power": 22,
+          "damage": 14,
+          "hp_after": 59310,
+          "attacked": true
+        },
+        {
+          "i": 48,
+          "power": 23,
+          "damage": 18,
+          "hp_after": 59292,
+          "attacked": true
+        },
+        {
+          "i": 49,
+          "power": 30,
+          "damage": 21,
+          "hp_after": 59271,
+          "attacked": true
+        },
+        {
+          "i": 50,
+          "power": 29,
+          "damage": 21,
+          "hp_after": 59250,
+          "attacked": true
+        },
+        {
+          "i": 51,
+          "power": 20,
+          "damage": 15,
+          "hp_after": 59235,
+          "attacked": true
+        },
+        {
+          "i": 52,
+          "power": 26,
+          "damage": 20,
+          "hp_after": 59215,
+          "attacked": true
+        },
+        {
+          "i": 53,
+          "power": 22,
+          "damage": 16,
+          "hp_after": 59199,
+          "attacked": true
+        },
+        {
+          "i": 54,
+          "power": 29,
+          "damage": 24,
+          "hp_after": 59175,
+          "attacked": true
+        },
+        {
+          "i": 55,
+          "power": 28,
+          "damage": 18,
+          "hp_after": 59157,
+          "attacked": true
+        },
+        {
+          "i": 56,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 59143,
+          "attacked": true
+        },
+        {
+          "i": 57,
+          "power": 26,
+          "damage": 17,
+          "hp_after": 59126,
+          "attacked": true
+        },
+        {
+          "i": 58,
+          "power": 22,
+          "damage": 11,
+          "hp_after": 59115,
+          "attacked": true
+        },
+        {
+          "i": 59,
+          "power": 25,
+          "damage": 15,
+          "hp_after": 59100,
+          "attacked": true
+        },
+        {
+          "i": 60,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 59088,
+          "attacked": true
+        },
+        {
+          "i": 61,
+          "power": 20,
+          "damage": 6,
+          "hp_after": 59082,
+          "attacked": true
+        },
+        {
+          "i": 62,
+          "power": 25,
+          "damage": 20,
+          "hp_after": 59062,
+          "attacked": true
+        },
+        {
+          "i": 63,
+          "power": 20,
+          "damage": 10,
+          "hp_after": 59052,
+          "attacked": true
+        },
+        {
+          "i": 64,
+          "power": 26,
+          "damage": 21,
+          "hp_after": 59031,
+          "attacked": true
+        },
+        {
+          "i": 65,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 59019,
+          "attacked": true
+        },
+        {
+          "i": 66,
+          "power": 21,
+          "damage": 15,
+          "hp_after": 59004,
+          "attacked": true
+        },
+        {
+          "i": 67,
+          "power": 20,
+          "damage": 15,
+          "hp_after": 58989,
+          "attacked": true
+        },
+        {
+          "i": 68,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 58978,
+          "attacked": true
+        },
+        {
+          "i": 69,
+          "power": 27,
+          "damage": 19,
+          "hp_after": 58959,
+          "attacked": true
+        },
+        {
+          "i": 70,
+          "power": 24,
+          "damage": 18,
+          "hp_after": 58941,
+          "attacked": true
+        },
+        {
+          "i": 71,
+          "power": 27,
+          "damage": 22,
+          "hp_after": 58919,
+          "attacked": true
+        },
+        {
+          "i": 72,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 58908,
+          "attacked": true
+        },
+        {
+          "i": 73,
+          "power": 30,
+          "damage": 25,
+          "hp_after": 58883,
+          "attacked": true
+        },
+        {
+          "i": 74,
+          "power": 22,
+          "damage": 12,
+          "hp_after": 58871,
+          "attacked": true
+        },
+        {
+          "i": 75,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 58859,
+          "attacked": true
+        },
+        {
+          "i": 76,
+          "power": 28,
+          "damage": 22,
+          "hp_after": 58837,
+          "attacked": true
+        },
+        {
+          "i": 77,
+          "power": 28,
+          "damage": 20,
+          "hp_after": 58817,
+          "attacked": true
+        },
+        {
+          "i": 78,
+          "power": 27,
+          "damage": 14,
+          "hp_after": 58803,
+          "attacked": true
+        },
+        {
+          "i": 79,
+          "power": 22,
+          "damage": 12,
+          "hp_after": 58791,
+          "attacked": true
+        },
+        {
+          "i": 80,
+          "power": 25,
+          "damage": 18,
+          "hp_after": 58773,
+          "attacked": true
+        },
+        {
+          "i": 81,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 58762,
+          "attacked": true
+        },
+        {
+          "i": 82,
+          "power": 27,
+          "damage": 19,
+          "hp_after": 58743,
+          "attacked": true
+        },
+        {
+          "i": 83,
+          "power": 30,
+          "damage": 25,
+          "hp_after": 58718,
+          "attacked": true
+        },
+        {
+          "i": 84,
+          "power": 20,
+          "damage": 13,
+          "hp_after": 58705,
+          "attacked": true
+        },
+        {
+          "i": 85,
+          "power": 28,
+          "damage": 20,
+          "hp_after": 58685,
+          "attacked": true
+        },
+        {
+          "i": 86,
+          "power": 27,
+          "damage": 13,
+          "hp_after": 58672,
+          "attacked": true
+        },
+        {
+          "i": 87,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 58658,
+          "attacked": true
+        },
+        {
+          "i": 88,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 58647,
+          "attacked": true
+        },
+        {
+          "i": 89,
+          "power": 22,
+          "damage": 17,
+          "hp_after": 58630,
+          "attacked": true
+        },
+        {
+          "i": 90,
+          "power": 29,
+          "damage": 19,
+          "hp_after": 58611,
+          "attacked": true
+        },
+        {
+          "i": 91,
+          "power": 20,
+          "damage": 9,
+          "hp_after": 58602,
+          "attacked": true
+        },
+        {
+          "i": 92,
+          "power": 20,
+          "damage": 10,
+          "hp_after": 58592,
+          "attacked": true
+        },
+        {
+          "i": 93,
+          "power": 20,
+          "damage": 8,
+          "hp_after": 58584,
+          "attacked": true
+        },
+        {
+          "i": 94,
+          "power": 29,
+          "damage": 21,
+          "hp_after": 58563,
+          "attacked": true
+        },
+        {
+          "i": 95,
+          "power": 30,
+          "damage": 25,
+          "hp_after": 58538,
+          "attacked": true
+        },
+        {
+          "i": 96,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 58527,
+          "attacked": true
+        },
+        {
+          "i": 97,
+          "power": 28,
+          "damage": 15,
+          "hp_after": 58512,
+          "attacked": true
+        },
+        {
+          "i": 98,
+          "power": 23,
+          "damage": 17,
+          "hp_after": 58495,
+          "attacked": true
+        },
+        {
+          "i": 99,
+          "power": 21,
+          "damage": 12,
+          "hp_after": 58483,
+          "attacked": true
+        },
+        {
+          "i": 100,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 58469,
+          "attacked": true
+        },
+        {
+          "i": 101,
+          "power": 27,
+          "damage": 22,
+          "hp_after": 58447,
+          "attacked": true
+        },
+        {
+          "i": 102,
+          "power": 25,
+          "damage": 14,
+          "hp_after": 58433,
+          "attacked": true
+        },
+        {
+          "i": 103,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 58422,
+          "attacked": true
+        },
+        {
+          "i": 104,
+          "power": 23,
+          "damage": 13,
+          "hp_after": 58409,
+          "attacked": true
+        },
+        {
+          "i": 105,
+          "power": 25,
+          "damage": 19,
+          "hp_after": 58390,
+          "attacked": true
+        },
+        {
+          "i": 106,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 58379,
+          "attacked": true
+        },
+        {
+          "i": 107,
+          "power": 29,
+          "damage": 19,
+          "hp_after": 58360,
+          "attacked": true
+        },
+        {
+          "i": 108,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 58348,
+          "attacked": true
+        },
+        {
+          "i": 109,
+          "power": 29,
+          "damage": 23,
+          "hp_after": 58325,
+          "attacked": true
+        },
+        {
+          "i": 110,
+          "power": 29,
+          "damage": 22,
+          "hp_after": 58303,
+          "attacked": true
+        },
+        {
+          "i": 111,
+          "power": 24,
+          "damage": 12,
+          "hp_after": 58291,
+          "attacked": true
+        },
+        {
+          "i": 112,
+          "power": 20,
+          "damage": 8,
+          "hp_after": 58283,
+          "attacked": true
+        },
+        {
+          "i": 113,
+          "power": 20,
+          "damage": 7,
+          "hp_after": 58276,
+          "attacked": true
+        },
+        {
+          "i": 114,
+          "power": 21,
+          "damage": 10,
+          "hp_after": 58266,
+          "attacked": true
+        },
+        {
+          "i": 115,
+          "power": 25,
+          "damage": 16,
+          "hp_after": 58250,
+          "attacked": true
+        },
+        {
+          "i": 116,
+          "power": 22,
+          "damage": 15,
+          "hp_after": 58235,
+          "attacked": true
+        },
+        {
+          "i": 117,
+          "power": 26,
+          "damage": 16,
+          "hp_after": 58219,
+          "attacked": true
+        },
+        {
+          "i": 118,
+          "power": 28,
+          "damage": 23,
+          "hp_after": 58196,
+          "attacked": true
+        },
+        {
+          "i": 119,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 58182,
+          "attacked": true
+        },
+        {
+          "i": 120,
+          "power": 28,
+          "damage": 14,
+          "hp_after": 58168,
+          "attacked": true
+        },
+        {
+          "i": 121,
+          "power": 22,
+          "damage": 12,
+          "hp_after": 58156,
+          "attacked": true
+        },
+        {
+          "i": 122,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 58144,
+          "attacked": true
+        },
+        {
+          "i": 123,
+          "power": 20,
+          "damage": 13,
+          "hp_after": 58131,
+          "attacked": true
+        },
+        {
+          "i": 124,
+          "power": 30,
+          "damage": 25,
+          "hp_after": 58106,
+          "attacked": true
+        },
+        {
+          "i": 125,
+          "power": 26,
+          "damage": 17,
+          "hp_after": 58089,
+          "attacked": true
+        },
+        {
+          "i": 126,
+          "power": 23,
+          "damage": 13,
+          "hp_after": 58076,
+          "attacked": true
+        },
+        {
+          "i": 127,
+          "power": 20,
+          "damage": 15,
+          "hp_after": 58061,
+          "attacked": true
+        },
+        {
+          "i": 128,
+          "power": 23,
+          "damage": 15,
+          "hp_after": 58046,
+          "attacked": true
+        },
+        {
+          "i": 129,
+          "power": 27,
+          "damage": 18,
+          "hp_after": 58028,
+          "attacked": true
+        },
+        {
+          "i": 130,
+          "power": 30,
+          "damage": 23,
+          "hp_after": 58005,
+          "attacked": true
+        },
+        {
+          "i": 131,
+          "power": 25,
+          "damage": 17,
+          "hp_after": 57988,
+          "attacked": true
+        },
+        {
+          "i": 132,
+          "power": 24,
+          "damage": 15,
+          "hp_after": 57973,
+          "attacked": true
+        },
+        {
+          "i": 133,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 57961,
+          "attacked": true
+        },
+        {
+          "i": 134,
+          "power": 21,
+          "damage": 16,
+          "hp_after": 57945,
+          "attacked": true
+        },
+        {
+          "i": 135,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 57933,
+          "attacked": true
+        },
+        {
+          "i": 136,
+          "power": 29,
+          "damage": 19,
+          "hp_after": 57914,
+          "attacked": true
+        },
+        {
+          "i": 137,
+          "power": 20,
+          "damage": 13,
+          "hp_after": 57901,
+          "attacked": true
+        },
+        {
+          "i": 138,
+          "power": 22,
+          "damage": 10,
+          "hp_after": 57891,
+          "attacked": true
+        },
+        {
+          "i": 139,
+          "power": 23,
+          "damage": 16,
+          "hp_after": 57875,
+          "attacked": true
+        },
+        {
+          "i": 140,
+          "power": 27,
+          "damage": 16,
+          "hp_after": 57859,
+          "attacked": true
+        },
+        {
+          "i": 141,
+          "power": 21,
+          "damage": 10,
+          "hp_after": 57849,
+          "attacked": true
+        },
+        {
+          "i": 142,
+          "power": 25,
+          "damage": 17,
+          "hp_after": 57832,
+          "attacked": true
+        },
+        {
+          "i": 143,
+          "power": 20,
+          "damage": 15,
+          "hp_after": 57817,
+          "attacked": true
+        },
+        {
+          "i": 144,
+          "power": 22,
+          "damage": 15,
+          "hp_after": 57802,
+          "attacked": true
+        },
+        {
+          "i": 145,
+          "power": 23,
+          "damage": 14,
+          "hp_after": 57788,
+          "attacked": true
+        },
+        {
+          "i": 146,
+          "power": 22,
+          "damage": 13,
+          "hp_after": 57775,
+          "attacked": true
+        },
+        {
+          "i": 147,
+          "power": 27,
+          "damage": 17,
+          "hp_after": 57758,
+          "attacked": true
+        },
+        {
+          "i": 148,
+          "power": 26,
+          "damage": 17,
+          "hp_after": 57741,
+          "attacked": true
+        },
+        {
+          "i": 149,
+          "power": 27,
+          "damage": 17,
+          "hp_after": 57724,
+          "attacked": true
+        },
+        {
+          "i": 150,
+          "power": 26,
+          "damage": 20,
+          "hp_after": 57704,
+          "attacked": true
+        },
+        {
+          "i": 151,
+          "power": 21,
+          "damage": 13,
+          "hp_after": 57691,
+          "attacked": true
+        },
+        {
+          "i": 152,
+          "power": 26,
+          "damage": 16,
+          "hp_after": 57675,
+          "attacked": true
+        },
+        {
+          "i": 153,
+          "power": 29,
+          "damage": 18,
+          "hp_after": 57657,
+          "attacked": true
+        },
+        {
+          "i": 154,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 57645,
+          "attacked": true
+        },
+        {
+          "i": 155,
+          "power": 26,
+          "damage": 16,
+          "hp_after": 57629,
+          "attacked": true
+        },
+        {
+          "i": 156,
+          "power": 21,
+          "damage": 16,
+          "hp_after": 57613,
+          "attacked": true
+        },
+        {
+          "i": 157,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 57601,
+          "attacked": true
+        },
+        {
+          "i": 158,
+          "power": 20,
+          "damage": 15,
+          "hp_after": 57586,
+          "attacked": true
+        },
+        {
+          "i": 159,
+          "power": 30,
+          "damage": 18,
+          "hp_after": 57568,
+          "attacked": true
+        },
+        {
+          "i": 160,
+          "power": 30,
+          "damage": 19,
+          "hp_after": 57549,
+          "attacked": true
+        },
+        {
+          "i": 161,
+          "power": 25,
+          "damage": 15,
+          "hp_after": 57534,
+          "attacked": true
+        },
+        {
+          "i": 162,
+          "power": 25,
+          "damage": 17,
+          "hp_after": 57517,
+          "attacked": true
+        },
+        {
+          "i": 163,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 57506,
+          "attacked": true
+        },
+        {
+          "i": 164,
+          "power": 27,
+          "damage": 15,
+          "hp_after": 57491,
+          "attacked": true
+        },
+        {
+          "i": 165,
+          "power": 21,
+          "damage": 14,
+          "hp_after": 57477,
+          "attacked": true
+        },
+        {
+          "i": 166,
+          "power": 23,
+          "damage": 13,
+          "hp_after": 57464,
+          "attacked": true
+        },
+        {
+          "i": 167,
+          "power": 23,
+          "damage": 13,
+          "hp_after": 57451,
+          "attacked": true
+        },
+        {
+          "i": 168,
+          "power": 23,
+          "damage": 17,
+          "hp_after": 57434,
+          "attacked": true
+        },
+        {
+          "i": 169,
+          "power": 28,
+          "damage": 22,
+          "hp_after": 57412,
+          "attacked": true
+        },
+        {
+          "i": 170,
+          "power": 22,
+          "damage": 15,
+          "hp_after": 57397,
+          "attacked": true
+        },
+        {
+          "i": 171,
+          "power": 25,
+          "damage": 13,
+          "hp_after": 57384,
+          "attacked": true
+        },
+        {
+          "i": 172,
+          "power": 27,
+          "damage": 21,
+          "hp_after": 57363,
+          "attacked": true
+        },
+        {
+          "i": 173,
+          "power": 20,
+          "damage": 15,
+          "hp_after": 57348,
+          "attacked": true
+        },
+        {
+          "i": 174,
+          "power": 30,
+          "damage": 24,
+          "hp_after": 57324,
+          "attacked": true
+        },
+        {
+          "i": 175,
+          "power": 20,
+          "damage": 7,
+          "hp_after": 57317,
+          "attacked": true
+        },
+        {
+          "i": 176,
+          "power": 27,
+          "damage": 20,
+          "hp_after": 57297,
+          "attacked": true
+        },
+        {
+          "i": 177,
+          "power": 27,
+          "damage": 22,
+          "hp_after": 57275,
+          "attacked": true
+        },
+        {
+          "i": 178,
+          "power": 27,
+          "damage": 14,
+          "hp_after": 57261,
+          "attacked": true
+        },
+        {
+          "i": 179,
+          "power": 28,
+          "damage": 23,
+          "hp_after": 57238,
+          "attacked": true
+        },
+        {
+          "i": 180,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 57224,
+          "attacked": true
+        },
+        {
+          "i": 181,
+          "power": 27,
+          "damage": 18,
+          "hp_after": 57206,
+          "attacked": true
+        },
+        {
+          "i": 182,
+          "power": 25,
+          "damage": 20,
+          "hp_after": 57186,
+          "attacked": true
+        },
+        {
+          "i": 183,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 57174,
+          "attacked": true
+        },
+        {
+          "i": 184,
+          "power": 21,
+          "damage": 14,
+          "hp_after": 57160,
+          "attacked": true
+        },
+        {
+          "i": 185,
+          "power": 23,
+          "damage": 16,
+          "hp_after": 57144,
+          "attacked": true
+        },
+        {
+          "i": 186,
+          "power": 29,
+          "damage": 20,
+          "hp_after": 57124,
+          "attacked": true
+        },
+        {
+          "i": 187,
+          "power": 20,
+          "damage": 10,
+          "hp_after": 57114,
+          "attacked": true
+        },
+        {
+          "i": 188,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 57102,
+          "attacked": true
+        },
+        {
+          "i": 189,
+          "power": 28,
+          "damage": 18,
+          "hp_after": 57084,
+          "attacked": true
+        },
+        {
+          "i": 190,
+          "power": 28,
+          "damage": 15,
+          "hp_after": 57069,
+          "attacked": true
+        },
+        {
+          "i": 191,
+          "power": 29,
+          "damage": 19,
+          "hp_after": 57050,
+          "attacked": true
+        },
+        {
+          "i": 192,
+          "power": 24,
+          "damage": 16,
+          "hp_after": 57034,
+          "attacked": true
+        },
+        {
+          "i": 193,
+          "power": 23,
+          "damage": 15,
+          "hp_after": 57019,
+          "attacked": true
+        },
+        {
+          "i": 194,
+          "power": 23,
+          "damage": 15,
+          "hp_after": 57004,
+          "attacked": true
+        },
+        {
+          "i": 195,
+          "power": 25,
+          "damage": 15,
+          "hp_after": 56989,
+          "attacked": true
+        },
+        {
+          "i": 196,
+          "power": 24,
+          "damage": 14,
+          "hp_after": 56975,
+          "attacked": true
+        },
+        {
+          "i": 197,
+          "power": 22,
+          "damage": 12,
+          "hp_after": 56963,
+          "attacked": true
+        },
+        {
+          "i": 198,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 56949,
+          "attacked": true
+        },
+        {
+          "i": 199,
+          "power": 25,
+          "damage": 18,
+          "hp_after": 56931,
+          "attacked": true
+        },
+        {
+          "i": 200,
+          "power": 23,
+          "damage": 17,
+          "hp_after": 56914,
+          "attacked": true
+        },
+        {
+          "i": 201,
+          "power": 26,
+          "damage": 19,
+          "hp_after": 56895,
+          "attacked": true
+        },
+        {
+          "i": 202,
+          "power": 25,
+          "damage": 16,
+          "hp_after": 56879,
+          "attacked": true
+        },
+        {
+          "i": 203,
+          "power": 25,
+          "damage": 17,
+          "hp_after": 56862,
+          "attacked": true
+        },
+        {
+          "i": 204,
+          "power": 29,
+          "damage": 22,
+          "hp_after": 56840,
+          "attacked": true
+        },
+        {
+          "i": 205,
+          "power": 22,
+          "damage": 11,
+          "hp_after": 56829,
+          "attacked": true
+        },
+        {
+          "i": 206,
+          "power": 22,
+          "damage": 15,
+          "hp_after": 56814,
+          "attacked": true
+        },
+        {
+          "i": 207,
+          "power": 20,
+          "damage": 15,
+          "hp_after": 56799,
+          "attacked": true
+        },
+        {
+          "i": 208,
+          "power": 21,
+          "damage": 16,
+          "hp_after": 56783,
+          "attacked": true
+        },
+        {
+          "i": 209,
+          "power": 23,
+          "damage": 15,
+          "hp_after": 56768,
+          "attacked": true
+        },
+        {
+          "i": 210,
+          "power": 30,
+          "damage": 24,
+          "hp_after": 56744,
+          "attacked": true
+        },
+        {
+          "i": 211,
+          "power": 26,
+          "damage": 17,
+          "hp_after": 56727,
+          "attacked": true
+        },
+        {
+          "i": 212,
+          "power": 29,
+          "damage": 23,
+          "hp_after": 56704,
+          "attacked": true
+        },
+        {
+          "i": 213,
+          "power": 30,
+          "damage": 25,
+          "hp_after": 56679,
+          "attacked": true
+        },
+        {
+          "i": 214,
+          "power": 24,
+          "damage": 17,
+          "hp_after": 56662,
+          "attacked": true
+        },
+        {
+          "i": 215,
+          "power": 26,
+          "damage": 13,
+          "hp_after": 56649,
+          "attacked": true
+        },
+        {
+          "i": 216,
+          "power": 26,
+          "damage": 21,
+          "hp_after": 56628,
+          "attacked": true
+        },
+        {
+          "i": 217,
+          "power": 24,
+          "damage": 11,
+          "hp_after": 56617,
+          "attacked": true
+        },
+        {
+          "i": 218,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 56603,
+          "attacked": true
+        },
+        {
+          "i": 219,
+          "power": 27,
+          "damage": 22,
+          "hp_after": 56581,
+          "attacked": true
+        },
+        {
+          "i": 220,
+          "power": 24,
+          "damage": 18,
+          "hp_after": 56563,
+          "attacked": true
+        },
+        {
+          "i": 221,
+          "power": 21,
+          "damage": 9,
+          "hp_after": 56554,
+          "attacked": true
+        },
+        {
+          "i": 222,
+          "power": 23,
+          "damage": 17,
+          "hp_after": 56537,
+          "attacked": true
+        },
+        {
+          "i": 223,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 56526,
+          "attacked": true
+        },
+        {
+          "i": 224,
+          "power": 20,
+          "damage": 13,
+          "hp_after": 56513,
+          "attacked": true
+        },
+        {
+          "i": 225,
+          "power": 24,
+          "damage": 16,
+          "hp_after": 56497,
+          "attacked": true
+        },
+        {
+          "i": 226,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 56486,
+          "attacked": true
+        },
+        {
+          "i": 227,
+          "power": 30,
+          "damage": 19,
+          "hp_after": 56467,
+          "attacked": true
+        },
+        {
+          "i": 228,
+          "power": 28,
+          "damage": 21,
+          "hp_after": 56446,
+          "attacked": true
+        },
+        {
+          "i": 229,
+          "power": 30,
+          "damage": 24,
+          "hp_after": 56422,
+          "attacked": true
+        },
+        {
+          "i": 230,
+          "power": 26,
+          "damage": 18,
+          "hp_after": 56404,
+          "attacked": true
+        },
+        {
+          "i": 231,
+          "power": 23,
+          "damage": 11,
+          "hp_after": 56393,
+          "attacked": true
+        },
+        {
+          "i": 232,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 56382,
+          "attacked": true
+        },
+        {
+          "i": 233,
+          "power": 22,
+          "damage": 15,
+          "hp_after": 56367,
+          "attacked": true
+        },
+        {
+          "i": 234,
+          "power": 28,
+          "damage": 23,
+          "hp_after": 56344,
+          "attacked": true
+        },
+        {
+          "i": 235,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 56333,
+          "attacked": true
+        },
+        {
+          "i": 236,
+          "power": 25,
+          "damage": 20,
+          "hp_after": 56313,
+          "attacked": true
+        },
+        {
+          "i": 237,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 56299,
+          "attacked": true
+        },
+        {
+          "i": 238,
+          "power": 20,
+          "damage": 7,
+          "hp_after": 56292,
+          "attacked": true
+        },
+        {
+          "i": 239,
+          "power": 27,
+          "damage": 21,
+          "hp_after": 56271,
+          "attacked": true
+        },
+        {
+          "i": 240,
+          "power": 21,
+          "damage": 13,
+          "hp_after": 56258,
+          "attacked": true
+        },
+        {
+          "i": 241,
+          "power": 27,
+          "damage": 17,
+          "hp_after": 56241,
+          "attacked": true
+        },
+        {
+          "i": 242,
+          "power": 22,
+          "damage": 16,
+          "hp_after": 56225,
+          "attacked": true
+        },
+        {
+          "i": 243,
+          "power": 20,
+          "damage": 15,
+          "hp_after": 56210,
+          "attacked": true
+        },
+        {
+          "i": 244,
+          "power": 21,
+          "damage": 10,
+          "hp_after": 56200,
+          "attacked": true
+        },
+        {
+          "i": 245,
+          "power": 27,
+          "damage": 20,
+          "hp_after": 56180,
+          "attacked": true
+        },
+        {
+          "i": 246,
+          "power": 21,
+          "damage": 13,
+          "hp_after": 56167,
+          "attacked": true
+        },
+        {
+          "i": 247,
+          "power": 20,
+          "damage": 13,
+          "hp_after": 56154,
+          "attacked": true
+        },
+        {
+          "i": 248,
+          "power": 24,
+          "damage": 15,
+          "hp_after": 56139,
+          "attacked": true
+        },
+        {
+          "i": 249,
+          "power": 26,
+          "damage": 15,
+          "hp_after": 56124,
+          "attacked": true
+        },
+        {
+          "i": 250,
+          "power": 21,
+          "damage": 16,
+          "hp_after": 56108,
+          "attacked": true
+        },
+        {
+          "i": 251,
+          "power": 30,
+          "damage": 19,
+          "hp_after": 56089,
+          "attacked": true
+        },
+        {
+          "i": 252,
+          "power": 21,
+          "damage": 9,
+          "hp_after": 56080,
+          "attacked": true
+        },
+        {
+          "i": 253,
+          "power": 30,
+          "damage": 16,
+          "hp_after": 56064,
+          "attacked": true
+        },
+        {
+          "i": 254,
+          "power": 30,
+          "damage": 18,
+          "hp_after": 56046,
+          "attacked": true
+        },
+        {
+          "i": 255,
+          "power": 26,
+          "damage": 19,
+          "hp_after": 56027,
+          "attacked": true
+        },
+        {
+          "i": 256,
+          "power": 28,
+          "damage": 21,
+          "hp_after": 56006,
+          "attacked": true
+        },
+        {
+          "i": 257,
+          "power": 29,
+          "damage": 21,
+          "hp_after": 55985,
+          "attacked": true
+        },
+        {
+          "i": 258,
+          "power": 28,
+          "damage": 22,
+          "hp_after": 55963,
+          "attacked": true
+        },
+        {
+          "i": 259,
+          "power": 30,
+          "damage": 25,
+          "hp_after": 55938,
+          "attacked": true
+        },
+        {
+          "i": 260,
+          "power": 30,
+          "damage": 19,
+          "hp_after": 55919,
+          "attacked": true
+        },
+        {
+          "i": 261,
+          "power": 22,
+          "damage": 14,
+          "hp_after": 55905,
+          "attacked": true
+        },
+        {
+          "i": 262,
+          "power": 20,
+          "damage": 9,
+          "hp_after": 55896,
+          "attacked": true
+        },
+        {
+          "i": 263,
+          "power": 20,
+          "damage": 8,
+          "hp_after": 55888,
+          "attacked": true
+        },
+        {
+          "i": 264,
+          "power": 22,
+          "damage": 16,
+          "hp_after": 55872,
+          "attacked": true
+        },
+        {
+          "i": 265,
+          "power": 23,
+          "damage": 12,
+          "hp_after": 55860,
+          "attacked": true
+        },
+        {
+          "i": 266,
+          "power": 20,
+          "damage": 13,
+          "hp_after": 55847,
+          "attacked": true
+        },
+        {
+          "i": 267,
+          "power": 23,
+          "damage": 18,
+          "hp_after": 55829,
+          "attacked": true
+        },
+        {
+          "i": 268,
+          "power": 20,
+          "damage": 15,
+          "hp_after": 55814,
+          "attacked": true
+        },
+        {
+          "i": 269,
+          "power": 27,
+          "damage": 18,
+          "hp_after": 55796,
+          "attacked": true
+        },
+        {
+          "i": 270,
+          "power": 30,
+          "damage": 20,
+          "hp_after": 55776,
+          "attacked": true
+        },
+        {
+          "i": 271,
+          "power": 22,
+          "damage": 14,
+          "hp_after": 55762,
+          "attacked": true
+        },
+        {
+          "i": 272,
+          "power": 23,
+          "damage": 15,
+          "hp_after": 55747,
+          "attacked": true
+        },
+        {
+          "i": 273,
+          "power": 21,
+          "damage": 10,
+          "hp_after": 55737,
+          "attacked": true
+        },
+        {
+          "i": 274,
+          "power": 20,
+          "damage": 9,
+          "hp_after": 55728,
+          "attacked": true
+        },
+        {
+          "i": 275,
+          "power": 22,
+          "damage": 14,
+          "hp_after": 55714,
+          "attacked": true
+        },
+        {
+          "i": 276,
+          "power": 28,
+          "damage": 19,
+          "hp_after": 55695,
+          "attacked": true
+        },
+        {
+          "i": 277,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 55681,
+          "attacked": true
+        },
+        {
+          "i": 278,
+          "power": 26,
+          "damage": 14,
+          "hp_after": 55667,
+          "attacked": true
+        },
+        {
+          "i": 279,
+          "power": 29,
+          "damage": 24,
+          "hp_after": 55643,
+          "attacked": true
+        },
+        {
+          "i": 280,
+          "power": 29,
+          "damage": 19,
+          "hp_after": 55624,
+          "attacked": true
+        },
+        {
+          "i": 281,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 55613,
+          "attacked": true
+        },
+        {
+          "i": 282,
+          "power": 27,
+          "damage": 15,
+          "hp_after": 55598,
+          "attacked": true
+        },
+        {
+          "i": 283,
+          "power": 30,
+          "damage": 24,
+          "hp_after": 55574,
+          "attacked": true
+        },
+        {
+          "i": 284,
+          "power": 21,
+          "damage": 15,
+          "hp_after": 55559,
+          "attacked": true
+        },
+        {
+          "i": 285,
+          "power": 29,
+          "damage": 16,
+          "hp_after": 55543,
+          "attacked": true
+        },
+        {
+          "i": 286,
+          "power": 24,
+          "damage": 15,
+          "hp_after": 55528,
+          "attacked": true
+        },
+        {
+          "i": 287,
+          "power": 20,
+          "damage": 10,
+          "hp_after": 55518,
+          "attacked": true
+        },
+        {
+          "i": 288,
+          "power": 20,
+          "damage": 13,
+          "hp_after": 55505,
+          "attacked": true
+        },
+        {
+          "i": 289,
+          "power": 23,
+          "damage": 15,
+          "hp_after": 55490,
+          "attacked": true
+        },
+        {
+          "i": 290,
+          "power": 25,
+          "damage": 12,
+          "hp_after": 55478,
+          "attacked": true
+        },
+        {
+          "i": 291,
+          "power": 27,
+          "damage": 22,
+          "hp_after": 55456,
+          "attacked": true
+        },
+        {
+          "i": 292,
+          "power": 20,
+          "damage": 15,
+          "hp_after": 55441,
+          "attacked": true
+        },
+        {
+          "i": 293,
+          "power": 23,
+          "damage": 15,
+          "hp_after": 55426,
+          "attacked": true
+        },
+        {
+          "i": 294,
+          "power": 22,
+          "damage": 17,
+          "hp_after": 55409,
+          "attacked": true
+        },
+        {
+          "i": 295,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 55398,
+          "attacked": true
+        },
+        {
+          "i": 296,
+          "power": 24,
+          "damage": 17,
+          "hp_after": 55381,
+          "attacked": true
+        },
+        {
+          "i": 297,
+          "power": 20,
+          "damage": 9,
+          "hp_after": 55372,
+          "attacked": true
+        },
+        {
+          "i": 298,
+          "power": 24,
+          "damage": 18,
+          "hp_after": 55354,
+          "attacked": true
+        },
+        {
+          "i": 299,
+          "power": 20,
+          "damage": 13,
+          "hp_after": 55341,
+          "attacked": true
+        },
+        {
+          "i": 300,
+          "power": 27,
+          "damage": 19,
+          "hp_after": 55322,
+          "attacked": true
+        },
+        {
+          "i": 301,
+          "power": 27,
+          "damage": 19,
+          "hp_after": 55303,
+          "attacked": true
+        },
+        {
+          "i": 302,
+          "power": 27,
+          "damage": 18,
+          "hp_after": 55285,
+          "attacked": true
+        },
+        {
+          "i": 303,
+          "power": 24,
+          "damage": 15,
+          "hp_after": 55270,
+          "attacked": true
+        },
+        {
+          "i": 304,
+          "power": 22,
+          "damage": 15,
+          "hp_after": 55255,
+          "attacked": true
+        },
+        {
+          "i": 305,
+          "power": 24,
+          "damage": 18,
+          "hp_after": 55237,
+          "attacked": true
+        },
+        {
+          "i": 306,
+          "power": 26,
+          "damage": 20,
+          "hp_after": 55217,
+          "attacked": true
+        },
+        {
+          "i": 307,
+          "power": 28,
+          "damage": 18,
+          "hp_after": 55199,
+          "attacked": true
+        },
+        {
+          "i": 308,
+          "power": 21,
+          "damage": 15,
+          "hp_after": 55184,
+          "attacked": true
+        },
+        {
+          "i": 309,
+          "power": 20,
+          "damage": 10,
+          "hp_after": 55174,
+          "attacked": true
+        },
+        {
+          "i": 310,
+          "power": 28,
+          "damage": 18,
+          "hp_after": 55156,
+          "attacked": true
+        },
+        {
+          "i": 311,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 55142,
+          "attacked": true
+        },
+        {
+          "i": 312,
+          "power": 22,
+          "damage": 12,
+          "hp_after": 55130,
+          "attacked": true
+        },
+        {
+          "i": 313,
+          "power": 21,
+          "damage": 12,
+          "hp_after": 55118,
+          "attacked": true
+        },
+        {
+          "i": 314,
+          "power": 21,
+          "damage": 12,
+          "hp_after": 55106,
+          "attacked": true
+        },
+        {
+          "i": 315,
+          "power": 22,
+          "damage": 12,
+          "hp_after": 55094,
+          "attacked": true
+        },
+        {
+          "i": 316,
+          "power": 23,
+          "damage": 15,
+          "hp_after": 55079,
+          "attacked": true
+        },
+        {
+          "i": 317,
+          "power": 23,
+          "damage": 17,
+          "hp_after": 55062,
+          "attacked": true
+        },
+        {
+          "i": 318,
+          "power": 27,
+          "damage": 18,
+          "hp_after": 55044,
+          "attacked": true
+        },
+        {
+          "i": 319,
+          "power": 24,
+          "damage": 19,
+          "hp_after": 55025,
+          "attacked": true
+        },
+        {
+          "i": 320,
+          "power": 24,
+          "damage": 15,
+          "hp_after": 55010,
+          "attacked": true
+        },
+        {
+          "i": 321,
+          "power": 30,
+          "damage": 20,
+          "hp_after": 54990,
+          "attacked": true
+        },
+        {
+          "i": 322,
+          "power": 28,
+          "damage": 19,
+          "hp_after": 54971,
+          "attacked": true
+        },
+        {
+          "i": 323,
+          "power": 30,
+          "damage": 23,
+          "hp_after": 54948,
+          "attacked": true
+        },
+        {
+          "i": 324,
+          "power": 30,
+          "damage": 22,
+          "hp_after": 54926,
+          "attacked": true
+        },
+        {
+          "i": 325,
+          "power": 29,
+          "damage": 23,
+          "hp_after": 54903,
+          "attacked": true
+        },
+        {
+          "i": 326,
+          "power": 26,
+          "damage": 19,
+          "hp_after": 54884,
+          "attacked": true
+        },
+        {
+          "i": 327,
+          "power": 20,
+          "damage": 13,
+          "hp_after": 54871,
+          "attacked": true
+        },
+        {
+          "i": 328,
+          "power": 22,
+          "damage": 15,
+          "hp_after": 54856,
+          "attacked": true
+        },
+        {
+          "i": 329,
+          "power": 29,
+          "damage": 20,
+          "hp_after": 54836,
+          "attacked": true
+        },
+        {
+          "i": 330,
+          "power": 21,
+          "damage": 15,
+          "hp_after": 54821,
+          "attacked": true
+        },
+        {
+          "i": 331,
+          "power": 29,
+          "damage": 20,
+          "hp_after": 54801,
+          "attacked": true
+        },
+        {
+          "i": 332,
+          "power": 27,
+          "damage": 21,
+          "hp_after": 54780,
+          "attacked": true
+        },
+        {
+          "i": 333,
+          "power": 25,
+          "damage": 17,
+          "hp_after": 54763,
+          "attacked": true
+        },
+        {
+          "i": 334,
+          "power": 29,
+          "damage": 23,
+          "hp_after": 54740,
+          "attacked": true
+        },
+        {
+          "i": 335,
+          "power": 27,
+          "damage": 19,
+          "hp_after": 54721,
+          "attacked": true
+        },
+        {
+          "i": 336,
+          "power": 20,
+          "damage": 15,
+          "hp_after": 54706,
+          "attacked": true
+        },
+        {
+          "i": 337,
+          "power": 23,
+          "damage": 15,
+          "hp_after": 54691,
+          "attacked": true
+        },
+        {
+          "i": 338,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 54679,
+          "attacked": true
+        },
+        {
+          "i": 339,
+          "power": 29,
+          "damage": 20,
+          "hp_after": 54659,
+          "attacked": true
+        },
+        {
+          "i": 340,
+          "power": 20,
+          "damage": 9,
+          "hp_after": 54650,
+          "attacked": true
+        },
+        {
+          "i": 341,
+          "power": 29,
+          "damage": 20,
+          "hp_after": 54630,
+          "attacked": true
+        },
+        {
+          "i": 342,
+          "power": 26,
+          "damage": 19,
+          "hp_after": 54611,
+          "attacked": true
+        },
+        {
+          "i": 343,
+          "power": 26,
+          "damage": 16,
+          "hp_after": 54595,
+          "attacked": true
+        },
+        {
+          "i": 344,
+          "power": 22,
+          "damage": 15,
+          "hp_after": 54580,
+          "attacked": true
+        },
+        {
+          "i": 345,
+          "power": 28,
+          "damage": 20,
+          "hp_after": 54560,
+          "attacked": true
+        },
+        {
+          "i": 346,
+          "power": 26,
+          "damage": 18,
+          "hp_after": 54542,
+          "attacked": true
+        },
+        {
+          "i": 347,
+          "power": 27,
+          "damage": 21,
+          "hp_after": 54521,
+          "attacked": true
+        },
+        {
+          "i": 348,
+          "power": 25,
+          "damage": 16,
+          "hp_after": 54505,
+          "attacked": true
+        },
+        {
+          "i": 349,
+          "power": 25,
+          "damage": 19,
+          "hp_after": 54486,
+          "attacked": true
+        },
+        {
+          "i": 350,
+          "power": 28,
+          "damage": 20,
+          "hp_after": 54466,
+          "attacked": true
+        },
+        {
+          "i": 351,
+          "power": 20,
+          "damage": 8,
+          "hp_after": 54458,
+          "attacked": true
+        },
+        {
+          "i": 352,
+          "power": 26,
+          "damage": 15,
+          "hp_after": 54443,
+          "attacked": true
+        },
+        {
+          "i": 353,
+          "power": 21,
+          "damage": 13,
+          "hp_after": 54430,
+          "attacked": true
+        },
+        {
+          "i": 354,
+          "power": 26,
+          "damage": 20,
+          "hp_after": 54410,
+          "attacked": true
+        },
+        {
+          "i": 355,
+          "power": 23,
+          "damage": 11,
+          "hp_after": 54399,
+          "attacked": true
+        },
+        {
+          "i": 356,
+          "power": 22,
+          "damage": 13,
+          "hp_after": 54386,
+          "attacked": true
+        },
+        {
+          "i": 357,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 54375,
+          "attacked": true
+        },
+        {
+          "i": 358,
+          "power": 27,
+          "damage": 19,
+          "hp_after": 54356,
+          "attacked": true
+        },
+        {
+          "i": 359,
+          "power": 21,
+          "damage": 13,
+          "hp_after": 54343,
+          "attacked": true
+        },
+        {
+          "i": 360,
+          "power": 30,
+          "damage": 22,
+          "hp_after": 54321,
+          "attacked": true
+        },
+        {
+          "i": 361,
+          "power": 30,
+          "damage": 22,
+          "hp_after": 54299,
+          "attacked": true
+        },
+        {
+          "i": 362,
+          "power": 26,
+          "damage": 15,
+          "hp_after": 54284,
+          "attacked": true
+        },
+        {
+          "i": 363,
+          "power": 29,
+          "damage": 19,
+          "hp_after": 54265,
+          "attacked": true
+        },
+        {
+          "i": 364,
+          "power": 21,
+          "damage": 11,
+          "hp_after": 54254,
+          "attacked": true
+        },
+        {
+          "i": 365,
+          "power": 30,
+          "damage": 24,
+          "hp_after": 54230,
+          "attacked": true
+        },
+        {
+          "i": 366,
+          "power": 29,
+          "damage": 20,
+          "hp_after": 54210,
+          "attacked": true
+        },
+        {
+          "i": 367,
+          "power": 23,
+          "damage": 16,
+          "hp_after": 54194,
+          "attacked": true
+        },
+        {
+          "i": 368,
+          "power": 26,
+          "damage": 18,
+          "hp_after": 54176,
+          "attacked": true
+        },
+        {
+          "i": 369,
+          "power": 20,
+          "damage": 10,
+          "hp_after": 54166,
+          "attacked": true
+        },
+        {
+          "i": 370,
+          "power": 24,
+          "damage": 14,
+          "hp_after": 54152,
+          "attacked": true
+        },
+        {
+          "i": 371,
+          "power": 26,
+          "damage": 18,
+          "hp_after": 54134,
+          "attacked": true
+        },
+        {
+          "i": 372,
+          "power": 21,
+          "damage": 13,
+          "hp_after": 54121,
+          "attacked": true
+        },
+        {
+          "i": 373,
+          "power": 28,
+          "damage": 19,
+          "hp_after": 54102,
+          "attacked": true
+        },
+        {
+          "i": 374,
+          "power": 26,
+          "damage": 16,
+          "hp_after": 54086,
+          "attacked": true
+        },
+        {
+          "i": 375,
+          "power": 20,
+          "damage": 10,
+          "hp_after": 54076,
+          "attacked": true
+        },
+        {
+          "i": 376,
+          "power": 30,
+          "damage": 22,
+          "hp_after": 54054,
+          "attacked": true
+        },
+        {
+          "i": 377,
+          "power": 23,
+          "damage": 17,
+          "hp_after": 54037,
+          "attacked": true
+        },
+        {
+          "i": 378,
+          "power": 30,
+          "damage": 22,
+          "hp_after": 54015,
+          "attacked": true
+        },
+        {
+          "i": 379,
+          "power": 29,
+          "damage": 21,
+          "hp_after": 53994,
+          "attacked": true
+        },
+        {
+          "i": 380,
+          "power": 29,
+          "damage": 24,
+          "hp_after": 53970,
+          "attacked": true
+        },
+        {
+          "i": 381,
+          "power": 23,
+          "damage": 16,
+          "hp_after": 53954,
+          "attacked": true
+        },
+        {
+          "i": 382,
+          "power": 25,
+          "damage": 16,
+          "hp_after": 53938,
+          "attacked": true
+        },
+        {
+          "i": 383,
+          "power": 24,
+          "damage": 19,
+          "hp_after": 53919,
+          "attacked": true
+        },
+        {
+          "i": 384,
+          "power": 23,
+          "damage": 15,
+          "hp_after": 53904,
+          "attacked": true
+        },
+        {
+          "i": 385,
+          "power": 23,
+          "damage": 18,
+          "hp_after": 53886,
+          "attacked": true
+        },
+        {
+          "i": 386,
+          "power": 29,
+          "damage": 19,
+          "hp_after": 53867,
+          "attacked": true
+        },
+        {
+          "i": 387,
+          "power": 25,
+          "damage": 18,
+          "hp_after": 53849,
+          "attacked": true
+        },
+        {
+          "i": 388,
+          "power": 27,
+          "damage": 19,
+          "hp_after": 53830,
+          "attacked": true
+        },
+        {
+          "i": 389,
+          "power": 23,
+          "damage": 18,
+          "hp_after": 53812,
+          "attacked": true
+        },
+        {
+          "i": 390,
+          "power": 23,
+          "damage": 17,
+          "hp_after": 53795,
+          "attacked": true
+        },
+        {
+          "i": 391,
+          "power": 24,
+          "damage": 12,
+          "hp_after": 53783,
+          "attacked": true
+        },
+        {
+          "i": 392,
+          "power": 27,
+          "damage": 18,
+          "hp_after": 53765,
+          "attacked": true
+        },
+        {
+          "i": 393,
+          "power": 30,
+          "damage": 24,
+          "hp_after": 53741,
+          "attacked": true
+        },
+        {
+          "i": 394,
+          "power": 30,
+          "damage": 22,
+          "hp_after": 53719,
+          "attacked": true
+        },
+        {
+          "i": 395,
+          "power": 22,
+          "damage": 17,
+          "hp_after": 53702,
+          "attacked": true
+        },
+        {
+          "i": 396,
+          "power": 24,
+          "damage": 13,
+          "hp_after": 53689,
+          "attacked": true
+        },
+        {
+          "i": 397,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 53675,
+          "attacked": true
+        },
+        {
+          "i": 398,
+          "power": 30,
+          "damage": 21,
+          "hp_after": 53654,
+          "attacked": true
+        },
+        {
+          "i": 399,
+          "power": 24,
+          "damage": 13,
+          "hp_after": 53641,
+          "attacked": true
+        },
+        {
+          "i": 400,
+          "power": 30,
+          "damage": 25,
+          "hp_after": 53616,
+          "attacked": true
+        },
+        {
+          "i": 401,
+          "power": 27,
+          "damage": 13,
+          "hp_after": 53603,
+          "attacked": true
+        },
+        {
+          "i": 402,
+          "power": 24,
+          "damage": 16,
+          "hp_after": 53587,
+          "attacked": true
+        },
+        {
+          "i": 403,
+          "power": 22,
+          "damage": 10,
+          "hp_after": 53577,
+          "attacked": true
+        },
+        {
+          "i": 404,
+          "power": 29,
+          "damage": 23,
+          "hp_after": 53554,
+          "attacked": true
+        },
+        {
+          "i": 405,
+          "power": 21,
+          "damage": 16,
+          "hp_after": 53538,
+          "attacked": true
+        },
+        {
+          "i": 406,
+          "power": 26,
+          "damage": 21,
+          "hp_after": 53517,
+          "attacked": true
+        },
+        {
+          "i": 407,
+          "power": 22,
+          "damage": 16,
+          "hp_after": 53501,
+          "attacked": true
+        },
+        {
+          "i": 408,
+          "power": 29,
+          "damage": 19,
+          "hp_after": 53482,
+          "attacked": true
+        },
+        {
+          "i": 409,
+          "power": 24,
+          "damage": 14,
+          "hp_after": 53468,
+          "attacked": true
+        },
+        {
+          "i": 410,
+          "power": 28,
+          "damage": 15,
+          "hp_after": 53453,
+          "attacked": true
+        },
+        {
+          "i": 411,
+          "power": 24,
+          "damage": 13,
+          "hp_after": 53440,
+          "attacked": true
+        },
+        {
+          "i": 412,
+          "power": 29,
+          "damage": 20,
+          "hp_after": 53420,
+          "attacked": true
+        },
+        {
+          "i": 413,
+          "power": 25,
+          "damage": 19,
+          "hp_after": 53401,
+          "attacked": true
+        },
+        {
+          "i": 414,
+          "power": 20,
+          "damage": 15,
+          "hp_after": 53386,
+          "attacked": true
+        },
+        {
+          "i": 415,
+          "power": 28,
+          "damage": 17,
+          "hp_after": 53369,
+          "attacked": true
+        },
+        {
+          "i": 416,
+          "power": 28,
+          "damage": 22,
+          "hp_after": 53347,
+          "attacked": true
+        },
+        {
+          "i": 417,
+          "power": 27,
+          "damage": 18,
+          "hp_after": 53329,
+          "attacked": true
+        },
+        {
+          "i": 418,
+          "power": 26,
+          "damage": 19,
+          "hp_after": 53310,
+          "attacked": true
+        },
+        {
+          "i": 419,
+          "power": 30,
+          "damage": 22,
+          "hp_after": 53288,
+          "attacked": true
+        },
+        {
+          "i": 420,
+          "power": 21,
+          "damage": 12,
+          "hp_after": 53276,
+          "attacked": true
+        },
+        {
+          "i": 421,
+          "power": 23,
+          "damage": 17,
+          "hp_after": 53259,
+          "attacked": true
+        },
+        {
+          "i": 422,
+          "power": 28,
+          "damage": 23,
+          "hp_after": 53236,
+          "attacked": true
+        },
+        {
+          "i": 423,
+          "power": 22,
+          "damage": 11,
+          "hp_after": 53225,
+          "attacked": true
+        },
+        {
+          "i": 424,
+          "power": 27,
+          "damage": 17,
+          "hp_after": 53208,
+          "attacked": true
+        },
+        {
+          "i": 425,
+          "power": 27,
+          "damage": 22,
+          "hp_after": 53186,
+          "attacked": true
+        },
+        {
+          "i": 426,
+          "power": 29,
+          "damage": 21,
+          "hp_after": 53165,
+          "attacked": true
+        },
+        {
+          "i": 427,
+          "power": 29,
+          "damage": 16,
+          "hp_after": 53149,
+          "attacked": true
+        },
+        {
+          "i": 428,
+          "power": 30,
+          "damage": 20,
+          "hp_after": 53129,
+          "attacked": true
+        },
+        {
+          "i": 429,
+          "power": 24,
+          "damage": 11,
+          "hp_after": 53118,
+          "attacked": true
+        },
+        {
+          "i": 430,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 53106,
+          "attacked": true
+        },
+        {
+          "i": 431,
+          "power": 26,
+          "damage": 17,
+          "hp_after": 53089,
+          "attacked": true
+        },
+        {
+          "i": 432,
+          "power": 27,
+          "damage": 20,
+          "hp_after": 53069,
+          "attacked": true
+        },
+        {
+          "i": 433,
+          "power": 20,
+          "damage": 13,
+          "hp_after": 53056,
+          "attacked": true
+        },
+        {
+          "i": 434,
+          "power": 20,
+          "damage": 9,
+          "hp_after": 53047,
+          "attacked": true
+        },
+        {
+          "i": 435,
+          "power": 24,
+          "damage": 18,
+          "hp_after": 53029,
+          "attacked": true
+        },
+        {
+          "i": 436,
+          "power": 27,
+          "damage": 22,
+          "hp_after": 53007,
+          "attacked": true
+        },
+        {
+          "i": 437,
+          "power": 29,
+          "damage": 24,
+          "hp_after": 52983,
+          "attacked": true
+        },
+        {
+          "i": 438,
+          "power": 30,
+          "damage": 23,
+          "hp_after": 52960,
+          "attacked": true
+        },
+        {
+          "i": 439,
+          "power": 24,
+          "damage": 11,
+          "hp_after": 52949,
+          "attacked": true
+        },
+        {
+          "i": 440,
+          "power": 28,
+          "damage": 17,
+          "hp_after": 52932,
+          "attacked": true
+        },
+        {
+          "i": 441,
+          "power": 24,
+          "damage": 17,
+          "hp_after": 52915,
+          "attacked": true
+        },
+        {
+          "i": 442,
+          "power": 20,
+          "damage": 15,
+          "hp_after": 52900,
+          "attacked": true
+        },
+        {
+          "i": 443,
+          "power": 22,
+          "damage": 14,
+          "hp_after": 52886,
+          "attacked": true
+        },
+        {
+          "i": 444,
+          "power": 26,
+          "damage": 19,
+          "hp_after": 52867,
+          "attacked": true
+        },
+        {
+          "i": 445,
+          "power": 23,
+          "damage": 16,
+          "hp_after": 52851,
+          "attacked": true
+        },
+        {
+          "i": 446,
+          "power": 23,
+          "damage": 17,
+          "hp_after": 52834,
+          "attacked": true
+        },
+        {
+          "i": 447,
+          "power": 30,
+          "damage": 21,
+          "hp_after": 52813,
+          "attacked": true
+        },
+        {
+          "i": 448,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 52799,
+          "attacked": true
+        },
+        {
+          "i": 449,
+          "power": 30,
+          "damage": 25,
+          "hp_after": 52774,
+          "attacked": true
+        },
+        {
+          "i": 450,
+          "power": 25,
+          "damage": 18,
+          "hp_after": 52756,
+          "attacked": true
+        },
+        {
+          "i": 451,
+          "power": 26,
+          "damage": 18,
+          "hp_after": 52738,
+          "attacked": true
+        },
+        {
+          "i": 452,
+          "power": 28,
+          "damage": 23,
+          "hp_after": 52715,
+          "attacked": true
+        },
+        {
+          "i": 453,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 52701,
+          "attacked": true
+        },
+        {
+          "i": 454,
+          "power": 21,
+          "damage": 13,
+          "hp_after": 52688,
+          "attacked": true
+        },
+        {
+          "i": 455,
+          "power": 25,
+          "damage": 18,
+          "hp_after": 52670,
+          "attacked": true
+        },
+        {
+          "i": 456,
+          "power": 20,
+          "damage": 9,
+          "hp_after": 52661,
+          "attacked": true
+        },
+        {
+          "i": 457,
+          "power": 29,
+          "damage": 17,
+          "hp_after": 52644,
+          "attacked": true
+        },
+        {
+          "i": 458,
+          "power": 30,
+          "damage": 18,
+          "hp_after": 52626,
+          "attacked": true
+        },
+        {
+          "i": 459,
+          "power": 26,
+          "damage": 18,
+          "hp_after": 52608,
+          "attacked": true
+        },
+        {
+          "i": 460,
+          "power": 30,
+          "damage": 18,
+          "hp_after": 52590,
+          "attacked": true
+        },
+        {
+          "i": 461,
+          "power": 27,
+          "damage": 18,
+          "hp_after": 52572,
+          "attacked": true
+        },
+        {
+          "i": 462,
+          "power": 24,
+          "damage": 14,
+          "hp_after": 52558,
+          "attacked": true
+        },
+        {
+          "i": 463,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 52544,
+          "attacked": true
+        },
+        {
+          "i": 464,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 52530,
+          "attacked": true
+        },
+        {
+          "i": 465,
+          "power": 26,
+          "damage": 17,
+          "hp_after": 52513,
+          "attacked": true
+        },
+        {
+          "i": 466,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 52502,
+          "attacked": true
+        },
+        {
+          "i": 467,
+          "power": 22,
+          "damage": 16,
+          "hp_after": 52486,
+          "attacked": true
+        },
+        {
+          "i": 468,
+          "power": 26,
+          "damage": 18,
+          "hp_after": 52468,
+          "attacked": true
+        },
+        {
+          "i": 469,
+          "power": 27,
+          "damage": 19,
+          "hp_after": 52449,
+          "attacked": true
+        },
+        {
+          "i": 470,
+          "power": 26,
+          "damage": 16,
+          "hp_after": 52433,
+          "attacked": true
+        },
+        {
+          "i": 471,
+          "power": 25,
+          "damage": 18,
+          "hp_after": 52415,
+          "attacked": true
+        },
+        {
+          "i": 472,
+          "power": 29,
+          "damage": 21,
+          "hp_after": 52394,
+          "attacked": true
+        },
+        {
+          "i": 473,
+          "power": 24,
+          "damage": 17,
+          "hp_after": 52377,
+          "attacked": true
+        },
+        {
+          "i": 474,
+          "power": 29,
+          "damage": 22,
+          "hp_after": 52355,
+          "attacked": true
+        },
+        {
+          "i": 475,
+          "power": 22,
+          "damage": 14,
+          "hp_after": 52341,
+          "attacked": true
+        },
+        {
+          "i": 476,
+          "power": 21,
+          "damage": 14,
+          "hp_after": 52327,
+          "attacked": true
+        },
+        {
+          "i": 477,
+          "power": 22,
+          "damage": 11,
+          "hp_after": 52316,
+          "attacked": true
+        },
+        {
+          "i": 478,
+          "power": 30,
+          "damage": 24,
+          "hp_after": 52292,
+          "attacked": true
+        },
+        {
+          "i": 479,
+          "power": 28,
+          "damage": 18,
+          "hp_after": 52274,
+          "attacked": true
+        },
+        {
+          "i": 480,
+          "power": 20,
+          "damage": 8,
+          "hp_after": 52266,
+          "attacked": true
+        },
+        {
+          "i": 481,
+          "power": 24,
+          "damage": 17,
+          "hp_after": 52249,
+          "attacked": true
+        },
+        {
+          "i": 482,
+          "power": 27,
+          "damage": 20,
+          "hp_after": 52229,
+          "attacked": true
+        },
+        {
+          "i": 483,
+          "power": 23,
+          "damage": 14,
+          "hp_after": 52215,
+          "attacked": true
+        },
+        {
+          "i": 484,
+          "power": 23,
+          "damage": 15,
+          "hp_after": 52200,
+          "attacked": true
+        },
+        {
+          "i": 485,
+          "power": 20,
+          "damage": 8,
+          "hp_after": 52192,
+          "attacked": true
+        },
+        {
+          "i": 486,
+          "power": 30,
+          "damage": 22,
+          "hp_after": 52170,
+          "attacked": true
+        },
+        {
+          "i": 487,
+          "power": 28,
+          "damage": 16,
+          "hp_after": 52154,
+          "attacked": true
+        },
+        {
+          "i": 488,
+          "power": 29,
+          "damage": 22,
+          "hp_after": 52132,
+          "attacked": true
+        },
+        {
+          "i": 489,
+          "power": 23,
+          "damage": 14,
+          "hp_after": 52118,
+          "attacked": true
+        },
+        {
+          "i": 490,
+          "power": 21,
+          "damage": 10,
+          "hp_after": 52108,
+          "attacked": true
+        },
+        {
+          "i": 491,
+          "power": 20,
+          "damage": 10,
+          "hp_after": 52098,
+          "attacked": true
+        },
+        {
+          "i": 492,
+          "power": 20,
+          "damage": 13,
+          "hp_after": 52085,
+          "attacked": true
+        },
+        {
+          "i": 493,
+          "power": 21,
+          "damage": 14,
+          "hp_after": 52071,
+          "attacked": true
+        },
+        {
+          "i": 494,
+          "power": 26,
+          "damage": 19,
+          "hp_after": 52052,
+          "attacked": true
+        },
+        {
+          "i": 495,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 52038,
+          "attacked": true
+        },
+        {
+          "i": 496,
+          "power": 22,
+          "damage": 11,
+          "hp_after": 52027,
+          "attacked": true
+        },
+        {
+          "i": 497,
+          "power": 29,
+          "damage": 21,
+          "hp_after": 52006,
+          "attacked": true
+        },
+        {
+          "i": 498,
+          "power": 22,
+          "damage": 16,
+          "hp_after": 51990,
+          "attacked": true
+        },
+        {
+          "i": 499,
+          "power": 28,
+          "damage": 23,
+          "hp_after": 51967,
+          "attacked": true
+        },
+        {
+          "i": 500,
+          "power": 30,
+          "damage": 22,
+          "hp_after": 51945,
+          "attacked": true
+        },
+        {
+          "i": 501,
+          "power": 29,
+          "damage": 20,
+          "hp_after": 51925,
+          "attacked": true
+        },
+        {
+          "i": 502,
+          "power": 25,
+          "damage": 17,
+          "hp_after": 51908,
+          "attacked": true
+        },
+        {
+          "i": 503,
+          "power": 25,
+          "damage": 15,
+          "hp_after": 51893,
+          "attacked": true
+        },
+        {
+          "i": 504,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 51879,
+          "attacked": true
+        },
+        {
+          "i": 505,
+          "power": 21,
+          "damage": 9,
+          "hp_after": 51870,
+          "attacked": true
+        },
+        {
+          "i": 506,
+          "power": 30,
+          "damage": 24,
+          "hp_after": 51846,
+          "attacked": true
+        },
+        {
+          "i": 507,
+          "power": 21,
+          "damage": 11,
+          "hp_after": 51835,
+          "attacked": true
+        },
+        {
+          "i": 508,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 51824,
+          "attacked": true
+        },
+        {
+          "i": 509,
+          "power": 23,
+          "damage": 14,
+          "hp_after": 51810,
+          "attacked": true
+        },
+        {
+          "i": 510,
+          "power": 20,
+          "damage": 15,
+          "hp_after": 51795,
+          "attacked": true
+        },
+        {
+          "i": 511,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 51781,
+          "attacked": true
+        },
+        {
+          "i": 512,
+          "power": 27,
+          "damage": 17,
+          "hp_after": 51764,
+          "attacked": true
+        },
+        {
+          "i": 513,
+          "power": 27,
+          "damage": 18,
+          "hp_after": 51746,
+          "attacked": true
+        },
+        {
+          "i": 514,
+          "power": 24,
+          "damage": 14,
+          "hp_after": 51732,
+          "attacked": true
+        },
+        {
+          "i": 515,
+          "power": 21,
+          "damage": 11,
+          "hp_after": 51721,
+          "attacked": true
+        },
+        {
+          "i": 516,
+          "power": 29,
+          "damage": 20,
+          "hp_after": 51701,
+          "attacked": true
+        },
+        {
+          "i": 517,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 51687,
+          "attacked": true
+        },
+        {
+          "i": 518,
+          "power": 29,
+          "damage": 24,
+          "hp_after": 51663,
+          "attacked": true
+        },
+        {
+          "i": 519,
+          "power": 26,
+          "damage": 20,
+          "hp_after": 51643,
+          "attacked": true
+        },
+        {
+          "i": 520,
+          "power": 28,
+          "damage": 21,
+          "hp_after": 51622,
+          "attacked": true
+        },
+        {
+          "i": 521,
+          "power": 20,
+          "damage": 9,
+          "hp_after": 51613,
+          "attacked": true
+        },
+        {
+          "i": 522,
+          "power": 21,
+          "damage": 13,
+          "hp_after": 51600,
+          "attacked": true
+        },
+        {
+          "i": 523,
+          "power": 23,
+          "damage": 12,
+          "hp_after": 51588,
+          "attacked": true
+        },
+        {
+          "i": 524,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 51577,
+          "attacked": true
+        },
+        {
+          "i": 525,
+          "power": 20,
+          "damage": 6,
+          "hp_after": 51571,
+          "attacked": true
+        },
+        {
+          "i": 526,
+          "power": 26,
+          "damage": 21,
+          "hp_after": 51550,
+          "attacked": true
+        },
+        {
+          "i": 527,
+          "power": 25,
+          "damage": 16,
+          "hp_after": 51534,
+          "attacked": true
+        },
+        {
+          "i": 528,
+          "power": 20,
+          "damage": 15,
+          "hp_after": 51519,
+          "attacked": true
+        },
+        {
+          "i": 529,
+          "power": 25,
+          "damage": 13,
+          "hp_after": 51506,
+          "attacked": true
+        },
+        {
+          "i": 530,
+          "power": 22,
+          "damage": 16,
+          "hp_after": 51490,
+          "attacked": true
+        },
+        {
+          "i": 531,
+          "power": 23,
+          "damage": 18,
+          "hp_after": 51472,
+          "attacked": true
+        },
+        {
+          "i": 532,
+          "power": 28,
+          "damage": 21,
+          "hp_after": 51451,
+          "attacked": true
+        },
+        {
+          "i": 533,
+          "power": 26,
+          "damage": 15,
+          "hp_after": 51436,
+          "attacked": true
+        },
+        {
+          "i": 534,
+          "power": 28,
+          "damage": 20,
+          "hp_after": 51416,
+          "attacked": true
+        },
+        {
+          "i": 535,
+          "power": 25,
+          "damage": 20,
+          "hp_after": 51396,
+          "attacked": true
+        },
+        {
+          "i": 536,
+          "power": 26,
+          "damage": 18,
+          "hp_after": 51378,
+          "attacked": true
+        },
+        {
+          "i": 537,
+          "power": 20,
+          "damage": 7,
+          "hp_after": 51371,
+          "attacked": true
+        },
+        {
+          "i": 538,
+          "power": 20,
+          "damage": 15,
+          "hp_after": 51356,
+          "attacked": true
+        },
+        {
+          "i": 539,
+          "power": 27,
+          "damage": 18,
+          "hp_after": 51338,
+          "attacked": true
+        },
+        {
+          "i": 540,
+          "power": 25,
+          "damage": 20,
+          "hp_after": 51318,
+          "attacked": true
+        },
+        {
+          "i": 541,
+          "power": 29,
+          "damage": 21,
+          "hp_after": 51297,
+          "attacked": true
+        },
+        {
+          "i": 542,
+          "power": 26,
+          "damage": 19,
+          "hp_after": 51278,
+          "attacked": true
+        },
+        {
+          "i": 543,
+          "power": 23,
+          "damage": 17,
+          "hp_after": 51261,
+          "attacked": true
+        },
+        {
+          "i": 544,
+          "power": 26,
+          "damage": 14,
+          "hp_after": 51247,
+          "attacked": true
+        },
+        {
+          "i": 545,
+          "power": 23,
+          "damage": 10,
+          "hp_after": 51237,
+          "attacked": true
+        },
+        {
+          "i": 546,
+          "power": 21,
+          "damage": 13,
+          "hp_after": 51224,
+          "attacked": true
+        },
+        {
+          "i": 547,
+          "power": 27,
+          "damage": 14,
+          "hp_after": 51210,
+          "attacked": true
+        },
+        {
+          "i": 548,
+          "power": 25,
+          "damage": 19,
+          "hp_after": 51191,
+          "attacked": true
+        },
+        {
+          "i": 549,
+          "power": 20,
+          "damage": 9,
+          "hp_after": 51182,
+          "attacked": true
+        },
+        {
+          "i": 550,
+          "power": 23,
+          "damage": 11,
+          "hp_after": 51171,
+          "attacked": true
+        },
+        {
+          "i": 551,
+          "power": 23,
+          "damage": 11,
+          "hp_after": 51160,
+          "attacked": true
+        },
+        {
+          "i": 552,
+          "power": 23,
+          "damage": 16,
+          "hp_after": 51144,
+          "attacked": true
+        },
+        {
+          "i": 553,
+          "power": 21,
+          "damage": 9,
+          "hp_after": 51135,
+          "attacked": true
+        },
+        {
+          "i": 554,
+          "power": 21,
+          "damage": 9,
+          "hp_after": 51126,
+          "attacked": true
+        },
+        {
+          "i": 555,
+          "power": 30,
+          "damage": 22,
+          "hp_after": 51104,
+          "attacked": true
+        },
+        {
+          "i": 556,
+          "power": 23,
+          "damage": 13,
+          "hp_after": 51091,
+          "attacked": true
+        },
+        {
+          "i": 557,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 51077,
+          "attacked": true
+        },
+        {
+          "i": 558,
+          "power": 23,
+          "damage": 16,
+          "hp_after": 51061,
+          "attacked": true
+        },
+        {
+          "i": 559,
+          "power": 28,
+          "damage": 23,
+          "hp_after": 51038,
+          "attacked": true
+        },
+        {
+          "i": 560,
+          "power": 24,
+          "damage": 13,
+          "hp_after": 51025,
+          "attacked": true
+        },
+        {
+          "i": 561,
+          "power": 30,
+          "damage": 16,
+          "hp_after": 51009,
+          "attacked": true
+        },
+        {
+          "i": 562,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 50997,
+          "attacked": true
+        },
+        {
+          "i": 563,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 50986,
+          "attacked": true
+        },
+        {
+          "i": 564,
+          "power": 21,
+          "damage": 12,
+          "hp_after": 50974,
+          "attacked": true
+        },
+        {
+          "i": 565,
+          "power": 27,
+          "damage": 16,
+          "hp_after": 50958,
+          "attacked": true
+        },
+        {
+          "i": 566,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 50944,
+          "attacked": true
+        },
+        {
+          "i": 567,
+          "power": 25,
+          "damage": 17,
+          "hp_after": 50927,
+          "attacked": true
+        },
+        {
+          "i": 568,
+          "power": 20,
+          "damage": 13,
+          "hp_after": 50914,
+          "attacked": true
+        },
+        {
+          "i": 569,
+          "power": 23,
+          "damage": 14,
+          "hp_after": 50900,
+          "attacked": true
+        },
+        {
+          "i": 570,
+          "power": 23,
+          "damage": 14,
+          "hp_after": 50886,
+          "attacked": true
+        },
+        {
+          "i": 571,
+          "power": 28,
+          "damage": 23,
+          "hp_after": 50863,
+          "attacked": true
+        },
+        {
+          "i": 572,
+          "power": 28,
+          "damage": 14,
+          "hp_after": 50849,
+          "attacked": true
+        },
+        {
+          "i": 573,
+          "power": 30,
+          "damage": 21,
+          "hp_after": 50828,
+          "attacked": true
+        },
+        {
+          "i": 574,
+          "power": 24,
+          "damage": 14,
+          "hp_after": 50814,
+          "attacked": true
+        },
+        {
+          "i": 575,
+          "power": 26,
+          "damage": 20,
+          "hp_after": 50794,
+          "attacked": true
+        },
+        {
+          "i": 576,
+          "power": 28,
+          "damage": 17,
+          "hp_after": 50777,
+          "attacked": true
+        },
+        {
+          "i": 577,
+          "power": 28,
+          "damage": 21,
+          "hp_after": 50756,
+          "attacked": true
+        },
+        {
+          "i": 578,
+          "power": 28,
+          "damage": 18,
+          "hp_after": 50738,
+          "attacked": true
+        },
+        {
+          "i": 579,
+          "power": 22,
+          "damage": 15,
+          "hp_after": 50723,
+          "attacked": true
+        },
+        {
+          "i": 580,
+          "power": 29,
+          "damage": 23,
+          "hp_after": 50700,
+          "attacked": true
+        },
+        {
+          "i": 581,
+          "power": 25,
+          "damage": 18,
+          "hp_after": 50682,
+          "attacked": true
+        },
+        {
+          "i": 582,
+          "power": 24,
+          "damage": 17,
+          "hp_after": 50665,
+          "attacked": true
+        },
+        {
+          "i": 583,
+          "power": 23,
+          "damage": 17,
+          "hp_after": 50648,
+          "attacked": true
+        },
+        {
+          "i": 584,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 50634,
+          "attacked": true
+        },
+        {
+          "i": 585,
+          "power": 29,
+          "damage": 23,
+          "hp_after": 50611,
+          "attacked": true
+        },
+        {
+          "i": 586,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 50599,
+          "attacked": true
+        },
+        {
+          "i": 587,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 50585,
+          "attacked": true
+        },
+        {
+          "i": 588,
+          "power": 30,
+          "damage": 25,
+          "hp_after": 50560,
+          "attacked": true
+        },
+        {
+          "i": 589,
+          "power": 28,
+          "damage": 18,
+          "hp_after": 50542,
+          "attacked": true
+        },
+        {
+          "i": 590,
+          "power": 29,
+          "damage": 23,
+          "hp_after": 50519,
+          "attacked": true
+        },
+        {
+          "i": 591,
+          "power": 30,
+          "damage": 23,
+          "hp_after": 50496,
+          "attacked": true
+        },
+        {
+          "i": 592,
+          "power": 30,
+          "damage": 24,
+          "hp_after": 50472,
+          "attacked": true
+        },
+        {
+          "i": 593,
+          "power": 24,
+          "damage": 18,
+          "hp_after": 50454,
+          "attacked": true
+        },
+        {
+          "i": 594,
+          "power": 24,
+          "damage": 18,
+          "hp_after": 50436,
+          "attacked": true
+        },
+        {
+          "i": 595,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 50424,
+          "attacked": true
+        },
+        {
+          "i": 596,
+          "power": 23,
+          "damage": 14,
+          "hp_after": 50410,
+          "attacked": true
+        },
+        {
+          "i": 597,
+          "power": 27,
+          "damage": 19,
+          "hp_after": 50391,
+          "attacked": true
+        },
+        {
+          "i": 598,
+          "power": 23,
+          "damage": 17,
+          "hp_after": 50374,
+          "attacked": true
+        },
+        {
+          "i": 599,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 50363,
+          "attacked": true
+        },
+        {
+          "i": 600,
+          "power": 23,
+          "damage": 17,
+          "hp_after": 50346,
+          "attacked": true
+        },
+        {
+          "i": 601,
+          "power": 20,
+          "damage": 13,
+          "hp_after": 50333,
+          "attacked": true
+        },
+        {
+          "i": 602,
+          "power": 30,
+          "damage": 20,
+          "hp_after": 50313,
+          "attacked": true
+        },
+        {
+          "i": 603,
+          "power": 27,
+          "damage": 17,
+          "hp_after": 50296,
+          "attacked": true
+        },
+        {
+          "i": 604,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 50285,
+          "attacked": true
+        },
+        {
+          "i": 605,
+          "power": 25,
+          "damage": 12,
+          "hp_after": 50273,
+          "attacked": true
+        },
+        {
+          "i": 606,
+          "power": 20,
+          "damage": 15,
+          "hp_after": 50258,
+          "attacked": true
+        },
+        {
+          "i": 607,
+          "power": 29,
+          "damage": 21,
+          "hp_after": 50237,
+          "attacked": true
+        },
+        {
+          "i": 608,
+          "power": 20,
+          "damage": 13,
+          "hp_after": 50224,
+          "attacked": true
+        },
+        {
+          "i": 609,
+          "power": 25,
+          "damage": 16,
+          "hp_after": 50208,
+          "attacked": true
+        },
+        {
+          "i": 610,
+          "power": 21,
+          "damage": 16,
+          "hp_after": 50192,
+          "attacked": true
+        },
+        {
+          "i": 611,
+          "power": 22,
+          "damage": 11,
+          "hp_after": 50181,
+          "attacked": true
+        },
+        {
+          "i": 612,
+          "power": 23,
+          "damage": 16,
+          "hp_after": 50165,
+          "attacked": true
+        },
+        {
+          "i": 613,
+          "power": 28,
+          "damage": 23,
+          "hp_after": 50142,
+          "attacked": true
+        },
+        {
+          "i": 614,
+          "power": 21,
+          "damage": 16,
+          "hp_after": 50126,
+          "attacked": true
+        },
+        {
+          "i": 615,
+          "power": 24,
+          "damage": 16,
+          "hp_after": 50110,
+          "attacked": true
+        },
+        {
+          "i": 616,
+          "power": 27,
+          "damage": 18,
+          "hp_after": 50092,
+          "attacked": true
+        },
+        {
+          "i": 617,
+          "power": 23,
+          "damage": 14,
+          "hp_after": 50078,
+          "attacked": true
+        },
+        {
+          "i": 618,
+          "power": 21,
+          "damage": 16,
+          "hp_after": 50062,
+          "attacked": true
+        },
+        {
+          "i": 619,
+          "power": 24,
+          "damage": 13,
+          "hp_after": 50049,
+          "attacked": true
+        },
+        {
+          "i": 620,
+          "power": 20,
+          "damage": 13,
+          "hp_after": 50036,
+          "attacked": true
+        },
+        {
+          "i": 621,
+          "power": 25,
+          "damage": 13,
+          "hp_after": 50023,
+          "attacked": true
+        },
+        {
+          "i": 622,
+          "power": 20,
+          "damage": 15,
+          "hp_after": 50008,
+          "attacked": true
+        },
+        {
+          "i": 623,
+          "power": 25,
+          "damage": 15,
+          "hp_after": 49993,
+          "attacked": true
+        },
+        {
+          "i": 624,
+          "power": 20,
+          "damage": 10,
+          "hp_after": 49983,
+          "attacked": true
+        },
+        {
+          "i": 625,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 49971,
+          "attacked": true
+        },
+        {
+          "i": 626,
+          "power": 22,
+          "damage": 14,
+          "hp_after": 49957,
+          "attacked": true
+        },
+        {
+          "i": 627,
+          "power": 30,
+          "damage": 24,
+          "hp_after": 49933,
+          "attacked": true
+        },
+        {
+          "i": 628,
+          "power": 27,
+          "damage": 17,
+          "hp_after": 49916,
+          "attacked": true
+        },
+        {
+          "i": 629,
+          "power": 20,
+          "damage": 10,
+          "hp_after": 49906,
+          "attacked": true
+        },
+        {
+          "i": 630,
+          "power": 26,
+          "damage": 20,
+          "hp_after": 49886,
+          "attacked": true
+        },
+        {
+          "i": 631,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 49872,
+          "attacked": true
+        },
+        {
+          "i": 632,
+          "power": 25,
+          "damage": 17,
+          "hp_after": 49855,
+          "attacked": true
+        },
+        {
+          "i": 633,
+          "power": 24,
+          "damage": 19,
+          "hp_after": 49836,
+          "attacked": true
+        },
+        {
+          "i": 634,
+          "power": 23,
+          "damage": 16,
+          "hp_after": 49820,
+          "attacked": true
+        },
+        {
+          "i": 635,
+          "power": 23,
+          "damage": 12,
+          "hp_after": 49808,
+          "attacked": true
+        },
+        {
+          "i": 636,
+          "power": 21,
+          "damage": 16,
+          "hp_after": 49792,
+          "attacked": true
+        },
+        {
+          "i": 637,
+          "power": 26,
+          "damage": 19,
+          "hp_after": 49773,
+          "attacked": true
+        },
+        {
+          "i": 638,
+          "power": 22,
+          "damage": 10,
+          "hp_after": 49763,
+          "attacked": true
+        },
+        {
+          "i": 639,
+          "power": 23,
+          "damage": 14,
+          "hp_after": 49749,
+          "attacked": true
+        },
+        {
+          "i": 640,
+          "power": 20,
+          "damage": 13,
+          "hp_after": 49736,
+          "attacked": true
+        },
+        {
+          "i": 641,
+          "power": 20,
+          "damage": 10,
+          "hp_after": 49726,
+          "attacked": true
+        },
+        {
+          "i": 642,
+          "power": 22,
+          "damage": 17,
+          "hp_after": 49709,
+          "attacked": true
+        },
+        {
+          "i": 643,
+          "power": 28,
+          "damage": 18,
+          "hp_after": 49691,
+          "attacked": true
+        },
+        {
+          "i": 644,
+          "power": 24,
+          "damage": 12,
+          "hp_after": 49679,
+          "attacked": true
+        },
+        {
+          "i": 645,
+          "power": 25,
+          "damage": 16,
+          "hp_after": 49663,
+          "attacked": true
+        },
+        {
+          "i": 646,
+          "power": 28,
+          "damage": 14,
+          "hp_after": 49649,
+          "attacked": true
+        },
+        {
+          "i": 647,
+          "power": 20,
+          "damage": 13,
+          "hp_after": 49636,
+          "attacked": true
+        },
+        {
+          "i": 648,
+          "power": 26,
+          "damage": 21,
+          "hp_after": 49615,
+          "attacked": true
+        },
+        {
+          "i": 649,
+          "power": 22,
+          "damage": 17,
+          "hp_after": 49598,
+          "attacked": true
+        },
+        {
+          "i": 650,
+          "power": 26,
+          "damage": 21,
+          "hp_after": 49577,
+          "attacked": true
+        },
+        {
+          "i": 651,
+          "power": 27,
+          "damage": 15,
+          "hp_after": 49562,
+          "attacked": true
+        },
+        {
+          "i": 652,
+          "power": 23,
+          "damage": 10,
+          "hp_after": 49552,
+          "attacked": true
+        },
+        {
+          "i": 653,
+          "power": 25,
+          "damage": 20,
+          "hp_after": 49532,
+          "attacked": true
+        },
+        {
+          "i": 654,
+          "power": 22,
+          "damage": 14,
+          "hp_after": 49518,
+          "attacked": true
+        },
+        {
+          "i": 655,
+          "power": 21,
+          "damage": 10,
+          "hp_after": 49508,
+          "attacked": true
+        },
+        {
+          "i": 656,
+          "power": 26,
+          "damage": 20,
+          "hp_after": 49488,
+          "attacked": true
+        },
+        {
+          "i": 657,
+          "power": 20,
+          "damage": 13,
+          "hp_after": 49475,
+          "attacked": true
+        },
+        {
+          "i": 658,
+          "power": 21,
+          "damage": 16,
+          "hp_after": 49459,
+          "attacked": true
+        },
+        {
+          "i": 659,
+          "power": 23,
+          "damage": 16,
+          "hp_after": 49443,
+          "attacked": true
+        },
+        {
+          "i": 660,
+          "power": 22,
+          "damage": 10,
+          "hp_after": 49433,
+          "attacked": true
+        },
+        {
+          "i": 661,
+          "power": 30,
+          "damage": 18,
+          "hp_after": 49415,
+          "attacked": true
+        },
+        {
+          "i": 662,
+          "power": 28,
+          "damage": 22,
+          "hp_after": 49393,
+          "attacked": true
+        },
+        {
+          "i": 663,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 49382,
+          "attacked": true
+        },
+        {
+          "i": 664,
+          "power": 25,
+          "damage": 15,
+          "hp_after": 49367,
+          "attacked": true
+        },
+        {
+          "i": 665,
+          "power": 21,
+          "damage": 7,
+          "hp_after": 49360,
+          "attacked": true
+        },
+        {
+          "i": 666,
+          "power": 24,
+          "damage": 17,
+          "hp_after": 49343,
+          "attacked": true
+        },
+        {
+          "i": 667,
+          "power": 29,
+          "damage": 22,
+          "hp_after": 49321,
+          "attacked": true
+        },
+        {
+          "i": 668,
+          "power": 28,
+          "damage": 18,
+          "hp_after": 49303,
+          "attacked": true
+        },
+        {
+          "i": 669,
+          "power": 23,
+          "damage": 14,
+          "hp_after": 49289,
+          "attacked": true
+        },
+        {
+          "i": 670,
+          "power": 20,
+          "damage": 15,
+          "hp_after": 49274,
+          "attacked": true
+        },
+        {
+          "i": 671,
+          "power": 24,
+          "damage": 13,
+          "hp_after": 49261,
+          "attacked": true
+        },
+        {
+          "i": 672,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 49250,
+          "attacked": true
+        },
+        {
+          "i": 673,
+          "power": 24,
+          "damage": 16,
+          "hp_after": 49234,
+          "attacked": true
+        },
+        {
+          "i": 674,
+          "power": 23,
+          "damage": 9,
+          "hp_after": 49225,
+          "attacked": true
+        },
+        {
+          "i": 675,
+          "power": 21,
+          "damage": 11,
+          "hp_after": 49214,
+          "attacked": true
+        },
+        {
+          "i": 676,
+          "power": 27,
+          "damage": 13,
+          "hp_after": 49201,
+          "attacked": true
+        },
+        {
+          "i": 677,
+          "power": 30,
+          "damage": 25,
+          "hp_after": 49176,
+          "attacked": true
+        },
+        {
+          "i": 678,
+          "power": 23,
+          "damage": 13,
+          "hp_after": 49163,
+          "attacked": true
+        },
+        {
+          "i": 679,
+          "power": 27,
+          "damage": 22,
+          "hp_after": 49141,
+          "attacked": true
+        },
+        {
+          "i": 680,
+          "power": 26,
+          "damage": 16,
+          "hp_after": 49125,
+          "attacked": true
+        },
+        {
+          "i": 681,
+          "power": 20,
+          "damage": 9,
+          "hp_after": 49116,
+          "attacked": true
+        },
+        {
+          "i": 682,
+          "power": 20,
+          "damage": 10,
+          "hp_after": 49106,
+          "attacked": true
+        },
+        {
+          "i": 683,
+          "power": 27,
+          "damage": 18,
+          "hp_after": 49088,
+          "attacked": true
+        },
+        {
+          "i": 684,
+          "power": 24,
+          "damage": 19,
+          "hp_after": 49069,
+          "attacked": true
+        },
+        {
+          "i": 685,
+          "power": 28,
+          "damage": 22,
+          "hp_after": 49047,
+          "attacked": true
+        },
+        {
+          "i": 686,
+          "power": 20,
+          "damage": 8,
+          "hp_after": 49039,
+          "attacked": true
+        },
+        {
+          "i": 687,
+          "power": 28,
+          "damage": 18,
+          "hp_after": 49021,
+          "attacked": true
+        },
+        {
+          "i": 688,
+          "power": 27,
+          "damage": 18,
+          "hp_after": 49003,
+          "attacked": true
+        },
+        {
+          "i": 689,
+          "power": 20,
+          "damage": 8,
+          "hp_after": 48995,
+          "attacked": true
+        },
+        {
+          "i": 690,
+          "power": 20,
+          "damage": 10,
+          "hp_after": 48985,
+          "attacked": true
+        },
+        {
+          "i": 691,
+          "power": 25,
+          "damage": 14,
+          "hp_after": 48971,
+          "attacked": true
+        },
+        {
+          "i": 692,
+          "power": 25,
+          "damage": 18,
+          "hp_after": 48953,
+          "attacked": true
+        },
+        {
+          "i": 693,
+          "power": 23,
+          "damage": 17,
+          "hp_after": 48936,
+          "attacked": true
+        },
+        {
+          "i": 694,
+          "power": 24,
+          "damage": 12,
+          "hp_after": 48924,
+          "attacked": true
+        },
+        {
+          "i": 695,
+          "power": 28,
+          "damage": 15,
+          "hp_after": 48909,
+          "attacked": true
+        },
+        {
+          "i": 696,
+          "power": 28,
+          "damage": 22,
+          "hp_after": 48887,
+          "attacked": true
+        },
+        {
+          "i": 697,
+          "power": 30,
+          "damage": 21,
+          "hp_after": 48866,
+          "attacked": true
+        },
+        {
+          "i": 698,
+          "power": 21,
+          "damage": 14,
+          "hp_after": 48852,
+          "attacked": true
+        },
+        {
+          "i": 699,
+          "power": 29,
+          "damage": 20,
+          "hp_after": 48832,
+          "attacked": true
+        },
+        {
+          "i": 700,
+          "power": 23,
+          "damage": 15,
+          "hp_after": 48817,
+          "attacked": true
+        },
+        {
+          "i": 701,
+          "power": 21,
+          "damage": 8,
+          "hp_after": 48809,
+          "attacked": true
+        },
+        {
+          "i": 702,
+          "power": 26,
+          "damage": 21,
+          "hp_after": 48788,
+          "attacked": true
+        },
+        {
+          "i": 703,
+          "power": 23,
+          "damage": 16,
+          "hp_after": 48772,
+          "attacked": true
+        },
+        {
+          "i": 704,
+          "power": 28,
+          "damage": 23,
+          "hp_after": 48749,
+          "attacked": true
+        },
+        {
+          "i": 705,
+          "power": 23,
+          "damage": 12,
+          "hp_after": 48737,
+          "attacked": true
+        },
+        {
+          "i": 706,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 48725,
+          "attacked": true
+        },
+        {
+          "i": 707,
+          "power": 26,
+          "damage": 21,
+          "hp_after": 48704,
+          "attacked": true
+        },
+        {
+          "i": 708,
+          "power": 30,
+          "damage": 21,
+          "hp_after": 48683,
+          "attacked": true
+        },
+        {
+          "i": 709,
+          "power": 27,
+          "damage": 22,
+          "hp_after": 48661,
+          "attacked": true
+        },
+        {
+          "i": 710,
+          "power": 30,
+          "damage": 21,
+          "hp_after": 48640,
+          "attacked": true
+        },
+        {
+          "i": 711,
+          "power": 26,
+          "damage": 20,
+          "hp_after": 48620,
+          "attacked": true
+        },
+        {
+          "i": 712,
+          "power": 24,
+          "damage": 16,
+          "hp_after": 48604,
+          "attacked": true
+        },
+        {
+          "i": 713,
+          "power": 25,
+          "damage": 17,
+          "hp_after": 48587,
+          "attacked": true
+        },
+        {
+          "i": 714,
+          "power": 21,
+          "damage": 14,
+          "hp_after": 48573,
+          "attacked": true
+        },
+        {
+          "i": 715,
+          "power": 21,
+          "damage": 13,
+          "hp_after": 48560,
+          "attacked": true
+        },
+        {
+          "i": 716,
+          "power": 25,
+          "damage": 15,
+          "hp_after": 48545,
+          "attacked": true
+        },
+        {
+          "i": 717,
+          "power": 22,
+          "damage": 9,
+          "hp_after": 48536,
+          "attacked": true
+        },
+        {
+          "i": 718,
+          "power": 20,
+          "damage": 10,
+          "hp_after": 48526,
+          "attacked": true
+        },
+        {
+          "i": 719,
+          "power": 22,
+          "damage": 15,
+          "hp_after": 48511,
+          "attacked": true
+        },
+        {
+          "i": 720,
+          "power": 24,
+          "damage": 11,
+          "hp_after": 48500,
+          "attacked": true
+        },
+        {
+          "i": 721,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 48489,
+          "attacked": true
+        },
+        {
+          "i": 722,
+          "power": 22,
+          "damage": 14,
+          "hp_after": 48475,
+          "attacked": true
+        },
+        {
+          "i": 723,
+          "power": 30,
+          "damage": 23,
+          "hp_after": 48452,
+          "attacked": true
+        },
+        {
+          "i": 724,
+          "power": 23,
+          "damage": 17,
+          "hp_after": 48435,
+          "attacked": true
+        },
+        {
+          "i": 725,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 48421,
+          "attacked": true
+        },
+        {
+          "i": 726,
+          "power": 20,
+          "damage": 9,
+          "hp_after": 48412,
+          "attacked": true
+        },
+        {
+          "i": 727,
+          "power": 26,
+          "damage": 18,
+          "hp_after": 48394,
+          "attacked": true
+        },
+        {
+          "i": 728,
+          "power": 22,
+          "damage": 13,
+          "hp_after": 48381,
+          "attacked": true
+        },
+        {
+          "i": 729,
+          "power": 28,
+          "damage": 16,
+          "hp_after": 48365,
+          "attacked": true
+        },
+        {
+          "i": 730,
+          "power": 26,
+          "damage": 20,
+          "hp_after": 48345,
+          "attacked": true
+        },
+        {
+          "i": 731,
+          "power": 30,
+          "damage": 19,
+          "hp_after": 48326,
+          "attacked": true
+        },
+        {
+          "i": 732,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 48315,
+          "attacked": true
+        },
+        {
+          "i": 733,
+          "power": 21,
+          "damage": 16,
+          "hp_after": 48299,
+          "attacked": true
+        },
+        {
+          "i": 734,
+          "power": 28,
+          "damage": 21,
+          "hp_after": 48278,
+          "attacked": true
+        },
+        {
+          "i": 735,
+          "power": 30,
+          "damage": 22,
+          "hp_after": 48256,
+          "attacked": true
+        },
+        {
+          "i": 736,
+          "power": 24,
+          "damage": 14,
+          "hp_after": 48242,
+          "attacked": true
+        },
+        {
+          "i": 737,
+          "power": 20,
+          "damage": 9,
+          "hp_after": 48233,
+          "attacked": true
+        },
+        {
+          "i": 738,
+          "power": 28,
+          "damage": 21,
+          "hp_after": 48212,
+          "attacked": true
+        },
+        {
+          "i": 739,
+          "power": 25,
+          "damage": 14,
+          "hp_after": 48198,
+          "attacked": true
+        },
+        {
+          "i": 740,
+          "power": 27,
+          "damage": 13,
+          "hp_after": 48185,
+          "attacked": true
+        },
+        {
+          "i": 741,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 48171,
+          "attacked": true
+        },
+        {
+          "i": 742,
+          "power": 20,
+          "damage": 13,
+          "hp_after": 48158,
+          "attacked": true
+        },
+        {
+          "i": 743,
+          "power": 26,
+          "damage": 19,
+          "hp_after": 48139,
+          "attacked": true
+        },
+        {
+          "i": 744,
+          "power": 22,
+          "damage": 16,
+          "hp_after": 48123,
+          "attacked": true
+        },
+        {
+          "i": 745,
+          "power": 24,
+          "damage": 15,
+          "hp_after": 48108,
+          "attacked": true
+        },
+        {
+          "i": 746,
+          "power": 21,
+          "damage": 9,
+          "hp_after": 48099,
+          "attacked": true
+        },
+        {
+          "i": 747,
+          "power": 26,
+          "damage": 17,
+          "hp_after": 48082,
+          "attacked": true
+        },
+        {
+          "i": 748,
+          "power": 30,
+          "damage": 22,
+          "hp_after": 48060,
+          "attacked": true
+        },
+        {
+          "i": 749,
+          "power": 28,
+          "damage": 20,
+          "hp_after": 48040,
+          "attacked": true
+        },
+        {
+          "i": 750,
+          "power": 20,
+          "damage": 13,
+          "hp_after": 48027,
+          "attacked": true
+        },
+        {
+          "i": 751,
+          "power": 21,
+          "damage": 12,
+          "hp_after": 48015,
+          "attacked": true
+        },
+        {
+          "i": 752,
+          "power": 21,
+          "damage": 16,
+          "hp_after": 47999,
+          "attacked": true
+        },
+        {
+          "i": 753,
+          "power": 20,
+          "damage": 10,
+          "hp_after": 47989,
+          "attacked": true
+        },
+        {
+          "i": 754,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 47977,
+          "attacked": true
+        },
+        {
+          "i": 755,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 47965,
+          "attacked": true
+        },
+        {
+          "i": 756,
+          "power": 24,
+          "damage": 14,
+          "hp_after": 47951,
+          "attacked": true
+        },
+        {
+          "i": 757,
+          "power": 22,
+          "damage": 13,
+          "hp_after": 47938,
+          "attacked": true
+        },
+        {
+          "i": 758,
+          "power": 23,
+          "damage": 16,
+          "hp_after": 47922,
+          "attacked": true
+        },
+        {
+          "i": 759,
+          "power": 22,
+          "damage": 15,
+          "hp_after": 47907,
+          "attacked": true
+        },
+        {
+          "i": 760,
+          "power": 27,
+          "damage": 18,
+          "hp_after": 47889,
+          "attacked": true
+        },
+        {
+          "i": 761,
+          "power": 21,
+          "damage": 13,
+          "hp_after": 47876,
+          "attacked": true
+        },
+        {
+          "i": 762,
+          "power": 25,
+          "damage": 20,
+          "hp_after": 47856,
+          "attacked": true
+        },
+        {
+          "i": 763,
+          "power": 27,
+          "damage": 14,
+          "hp_after": 47842,
+          "attacked": true
+        },
+        {
+          "i": 764,
+          "power": 28,
+          "damage": 19,
+          "hp_after": 47823,
+          "attacked": true
+        },
+        {
+          "i": 765,
+          "power": 22,
+          "damage": 15,
+          "hp_after": 47808,
+          "attacked": true
+        },
+        {
+          "i": 766,
+          "power": 24,
+          "damage": 15,
+          "hp_after": 47793,
+          "attacked": true
+        },
+        {
+          "i": 767,
+          "power": 30,
+          "damage": 20,
+          "hp_after": 47773,
+          "attacked": true
+        },
+        {
+          "i": 768,
+          "power": 25,
+          "damage": 20,
+          "hp_after": 47753,
+          "attacked": true
+        },
+        {
+          "i": 769,
+          "power": 23,
+          "damage": 14,
+          "hp_after": 47739,
+          "attacked": true
+        },
+        {
+          "i": 770,
+          "power": 29,
+          "damage": 20,
+          "hp_after": 47719,
+          "attacked": true
+        },
+        {
+          "i": 771,
+          "power": 21,
+          "damage": 12,
+          "hp_after": 47707,
+          "attacked": true
+        },
+        {
+          "i": 772,
+          "power": 29,
+          "damage": 16,
+          "hp_after": 47691,
+          "attacked": true
+        },
+        {
+          "i": 773,
+          "power": 22,
+          "damage": 17,
+          "hp_after": 47674,
+          "attacked": true
+        },
+        {
+          "i": 774,
+          "power": 24,
+          "damage": 18,
+          "hp_after": 47656,
+          "attacked": true
+        },
+        {
+          "i": 775,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 47642,
+          "attacked": true
+        },
+        {
+          "i": 776,
+          "power": 26,
+          "damage": 19,
+          "hp_after": 47623,
+          "attacked": true
+        },
+        {
+          "i": 777,
+          "power": 20,
+          "damage": 10,
+          "hp_after": 47613,
+          "attacked": true
+        },
+        {
+          "i": 778,
+          "power": 25,
+          "damage": 17,
+          "hp_after": 47596,
+          "attacked": true
+        },
+        {
+          "i": 779,
+          "power": 30,
+          "damage": 20,
+          "hp_after": 47576,
+          "attacked": true
+        },
+        {
+          "i": 780,
+          "power": 25,
+          "damage": 16,
+          "hp_after": 47560,
+          "attacked": true
+        },
+        {
+          "i": 781,
+          "power": 20,
+          "damage": 13,
+          "hp_after": 47547,
+          "attacked": true
+        },
+        {
+          "i": 782,
+          "power": 21,
+          "damage": 9,
+          "hp_after": 47538,
+          "attacked": true
+        },
+        {
+          "i": 783,
+          "power": 23,
+          "damage": 18,
+          "hp_after": 47520,
+          "attacked": true
+        },
+        {
+          "i": 784,
+          "power": 21,
+          "damage": 11,
+          "hp_after": 47509,
+          "attacked": true
+        },
+        {
+          "i": 785,
+          "power": 26,
+          "damage": 19,
+          "hp_after": 47490,
+          "attacked": true
+        },
+        {
+          "i": 786,
+          "power": 29,
+          "damage": 19,
+          "hp_after": 47471,
+          "attacked": true
+        },
+        {
+          "i": 787,
+          "power": 30,
+          "damage": 18,
+          "hp_after": 47453,
+          "attacked": true
+        },
+        {
+          "i": 788,
+          "power": 28,
+          "damage": 18,
+          "hp_after": 47435,
+          "attacked": true
+        },
+        {
+          "i": 789,
+          "power": 29,
+          "damage": 21,
+          "hp_after": 47414,
+          "attacked": true
+        },
+        {
+          "i": 790,
+          "power": 25,
+          "damage": 16,
+          "hp_after": 47398,
+          "attacked": true
+        },
+        {
+          "i": 791,
+          "power": 25,
+          "damage": 15,
+          "hp_after": 47383,
+          "attacked": true
+        },
+        {
+          "i": 792,
+          "power": 28,
+          "damage": 17,
+          "hp_after": 47366,
+          "attacked": true
+        },
+        {
+          "i": 793,
+          "power": 29,
+          "damage": 15,
+          "hp_after": 47351,
+          "attacked": true
+        },
+        {
+          "i": 794,
+          "power": 28,
+          "damage": 22,
+          "hp_after": 47329,
+          "attacked": true
+        },
+        {
+          "i": 795,
+          "power": 22,
+          "damage": 13,
+          "hp_after": 47316,
+          "attacked": true
+        },
+        {
+          "i": 796,
+          "power": 28,
+          "damage": 15,
+          "hp_after": 47301,
+          "attacked": true
+        },
+        {
+          "i": 797,
+          "power": 21,
+          "damage": 16,
+          "hp_after": 47285,
+          "attacked": true
+        },
+        {
+          "i": 798,
+          "power": 27,
+          "damage": 22,
+          "hp_after": 47263,
+          "attacked": true
+        },
+        {
+          "i": 799,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 47251,
+          "attacked": true
+        },
+        {
+          "i": 800,
+          "power": 27,
+          "damage": 18,
+          "hp_after": 47233,
+          "attacked": true
+        },
+        {
+          "i": 801,
+          "power": 22,
+          "damage": 15,
+          "hp_after": 47218,
+          "attacked": true
+        },
+        {
+          "i": 802,
+          "power": 23,
+          "damage": 18,
+          "hp_after": 47200,
+          "attacked": true
+        },
+        {
+          "i": 803,
+          "power": 29,
+          "damage": 19,
+          "hp_after": 47181,
+          "attacked": true
+        },
+        {
+          "i": 804,
+          "power": 21,
+          "damage": 14,
+          "hp_after": 47167,
+          "attacked": true
+        },
+        {
+          "i": 805,
+          "power": 27,
+          "damage": 21,
+          "hp_after": 47146,
+          "attacked": true
+        },
+        {
+          "i": 806,
+          "power": 20,
+          "damage": 15,
+          "hp_after": 47131,
+          "attacked": true
+        },
+        {
+          "i": 807,
+          "power": 25,
+          "damage": 17,
+          "hp_after": 47114,
+          "attacked": true
+        },
+        {
+          "i": 808,
+          "power": 22,
+          "damage": 13,
+          "hp_after": 47101,
+          "attacked": true
+        },
+        {
+          "i": 809,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 47087,
+          "attacked": true
+        },
+        {
+          "i": 810,
+          "power": 23,
+          "damage": 15,
+          "hp_after": 47072,
+          "attacked": true
+        },
+        {
+          "i": 811,
+          "power": 27,
+          "damage": 22,
+          "hp_after": 47050,
+          "attacked": true
+        },
+        {
+          "i": 812,
+          "power": 20,
+          "damage": 10,
+          "hp_after": 47040,
+          "attacked": true
+        },
+        {
+          "i": 813,
+          "power": 22,
+          "damage": 13,
+          "hp_after": 47027,
+          "attacked": true
+        },
+        {
+          "i": 814,
+          "power": 20,
+          "damage": 13,
+          "hp_after": 47014,
+          "attacked": true
+        },
+        {
+          "i": 815,
+          "power": 24,
+          "damage": 18,
+          "hp_after": 46996,
+          "attacked": true
+        },
+        {
+          "i": 816,
+          "power": 26,
+          "damage": 16,
+          "hp_after": 46980,
+          "attacked": true
+        },
+        {
+          "i": 817,
+          "power": 22,
+          "damage": 16,
+          "hp_after": 46964,
+          "attacked": true
+        },
+        {
+          "i": 818,
+          "power": 30,
+          "damage": 22,
+          "hp_after": 46942,
+          "attacked": true
+        },
+        {
+          "i": 819,
+          "power": 21,
+          "damage": 12,
+          "hp_after": 46930,
+          "attacked": true
+        },
+        {
+          "i": 820,
+          "power": 26,
+          "damage": 21,
+          "hp_after": 46909,
+          "attacked": true
+        },
+        {
+          "i": 821,
+          "power": 24,
+          "damage": 19,
+          "hp_after": 46890,
+          "attacked": true
+        },
+        {
+          "i": 822,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 46878,
+          "attacked": true
+        },
+        {
+          "i": 823,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 46867,
+          "attacked": true
+        },
+        {
+          "i": 824,
+          "power": 24,
+          "damage": 16,
+          "hp_after": 46851,
+          "attacked": true
+        },
+        {
+          "i": 825,
+          "power": 24,
+          "damage": 18,
+          "hp_after": 46833,
+          "attacked": true
+        },
+        {
+          "i": 826,
+          "power": 22,
+          "damage": 12,
+          "hp_after": 46821,
+          "attacked": true
+        },
+        {
+          "i": 827,
+          "power": 21,
+          "damage": 14,
+          "hp_after": 46807,
+          "attacked": true
+        },
+        {
+          "i": 828,
+          "power": 29,
+          "damage": 22,
+          "hp_after": 46785,
+          "attacked": true
+        },
+        {
+          "i": 829,
+          "power": 29,
+          "damage": 19,
+          "hp_after": 46766,
+          "attacked": true
+        },
+        {
+          "i": 830,
+          "power": 20,
+          "damage": 15,
+          "hp_after": 46751,
+          "attacked": true
+        },
+        {
+          "i": 831,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 46740,
+          "attacked": true
+        },
+        {
+          "i": 832,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 46729,
+          "attacked": true
+        },
+        {
+          "i": 833,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 46717,
+          "attacked": true
+        },
+        {
+          "i": 834,
+          "power": 21,
+          "damage": 12,
+          "hp_after": 46705,
+          "attacked": true
+        },
+        {
+          "i": 835,
+          "power": 27,
+          "damage": 16,
+          "hp_after": 46689,
+          "attacked": true
+        },
+        {
+          "i": 836,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 46678,
+          "attacked": true
+        },
+        {
+          "i": 837,
+          "power": 21,
+          "damage": 16,
+          "hp_after": 46662,
+          "attacked": true
+        },
+        {
+          "i": 838,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 46648,
+          "attacked": true
+        },
+        {
+          "i": 839,
+          "power": 29,
+          "damage": 21,
+          "hp_after": 46627,
+          "attacked": true
+        },
+        {
+          "i": 840,
+          "power": 29,
+          "damage": 22,
+          "hp_after": 46605,
+          "attacked": true
+        },
+        {
+          "i": 841,
+          "power": 25,
+          "damage": 17,
+          "hp_after": 46588,
+          "attacked": true
+        },
+        {
+          "i": 842,
+          "power": 24,
+          "damage": 14,
+          "hp_after": 46574,
+          "attacked": true
+        },
+        {
+          "i": 843,
+          "power": 22,
+          "damage": 13,
+          "hp_after": 46561,
+          "attacked": true
+        },
+        {
+          "i": 844,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 46549,
+          "attacked": true
+        },
+        {
+          "i": 845,
+          "power": 21,
+          "damage": 12,
+          "hp_after": 46537,
+          "attacked": true
+        },
+        {
+          "i": 846,
+          "power": 20,
+          "damage": 7,
+          "hp_after": 46530,
+          "attacked": true
+        },
+        {
+          "i": 847,
+          "power": 23,
+          "damage": 16,
+          "hp_after": 46514,
+          "attacked": true
+        },
+        {
+          "i": 848,
+          "power": 20,
+          "damage": 9,
+          "hp_after": 46505,
+          "attacked": true
+        },
+        {
+          "i": 849,
+          "power": 25,
+          "damage": 16,
+          "hp_after": 46489,
+          "attacked": true
+        },
+        {
+          "i": 850,
+          "power": 20,
+          "damage": 15,
+          "hp_after": 46474,
+          "attacked": true
+        },
+        {
+          "i": 851,
+          "power": 28,
+          "damage": 21,
+          "hp_after": 46453,
+          "attacked": true
+        },
+        {
+          "i": 852,
+          "power": 23,
+          "damage": 16,
+          "hp_after": 46437,
+          "attacked": true
+        },
+        {
+          "i": 853,
+          "power": 23,
+          "damage": 15,
+          "hp_after": 46422,
+          "attacked": true
+        },
+        {
+          "i": 854,
+          "power": 24,
+          "damage": 11,
+          "hp_after": 46411,
+          "attacked": true
+        },
+        {
+          "i": 855,
+          "power": 27,
+          "damage": 18,
+          "hp_after": 46393,
+          "attacked": true
+        },
+        {
+          "i": 856,
+          "power": 25,
+          "damage": 18,
+          "hp_after": 46375,
+          "attacked": true
+        },
+        {
+          "i": 857,
+          "power": 20,
+          "damage": 15,
+          "hp_after": 46360,
+          "attacked": true
+        },
+        {
+          "i": 858,
+          "power": 20,
+          "damage": 15,
+          "hp_after": 46345,
+          "attacked": true
+        },
+        {
+          "i": 859,
+          "power": 30,
+          "damage": 23,
+          "hp_after": 46322,
+          "attacked": true
+        },
+        {
+          "i": 860,
+          "power": 22,
+          "damage": 12,
+          "hp_after": 46310,
+          "attacked": true
+        },
+        {
+          "i": 861,
+          "power": 22,
+          "damage": 14,
+          "hp_after": 46296,
+          "attacked": true
+        },
+        {
+          "i": 862,
+          "power": 21,
+          "damage": 13,
+          "hp_after": 46283,
+          "attacked": true
+        },
+        {
+          "i": 863,
+          "power": 29,
+          "damage": 24,
+          "hp_after": 46259,
+          "attacked": true
+        },
+        {
+          "i": 864,
+          "power": 23,
+          "damage": 16,
+          "hp_after": 46243,
+          "attacked": true
+        },
+        {
+          "i": 865,
+          "power": 30,
+          "damage": 17,
+          "hp_after": 46226,
+          "attacked": true
+        },
+        {
+          "i": 866,
+          "power": 20,
+          "damage": 9,
+          "hp_after": 46217,
+          "attacked": true
+        },
+        {
+          "i": 867,
+          "power": 22,
+          "damage": 16,
+          "hp_after": 46201,
+          "attacked": true
+        },
+        {
+          "i": 868,
+          "power": 29,
+          "damage": 18,
+          "hp_after": 46183,
+          "attacked": true
+        },
+        {
+          "i": 869,
+          "power": 24,
+          "damage": 18,
+          "hp_after": 46165,
+          "attacked": true
+        },
+        {
+          "i": 870,
+          "power": 21,
+          "damage": 16,
+          "hp_after": 46149,
+          "attacked": true
+        },
+        {
+          "i": 871,
+          "power": 29,
+          "damage": 20,
+          "hp_after": 46129,
+          "attacked": true
+        },
+        {
+          "i": 872,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 46115,
+          "attacked": true
+        },
+        {
+          "i": 873,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 46104,
+          "attacked": true
+        },
+        {
+          "i": 874,
+          "power": 23,
+          "damage": 18,
+          "hp_after": 46086,
+          "attacked": true
+        },
+        {
+          "i": 875,
+          "power": 25,
+          "damage": 13,
+          "hp_after": 46073,
+          "attacked": true
+        },
+        {
+          "i": 876,
+          "power": 27,
+          "damage": 17,
+          "hp_after": 46056,
+          "attacked": true
+        },
+        {
+          "i": 877,
+          "power": 29,
+          "damage": 18,
+          "hp_after": 46038,
+          "attacked": true
+        },
+        {
+          "i": 878,
+          "power": 27,
+          "damage": 19,
+          "hp_after": 46019,
+          "attacked": true
+        },
+        {
+          "i": 879,
+          "power": 29,
+          "damage": 19,
+          "hp_after": 46000,
+          "attacked": true
+        },
+        {
+          "i": 880,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 45989,
+          "attacked": true
+        },
+        {
+          "i": 881,
+          "power": 30,
+          "damage": 21,
+          "hp_after": 45968,
+          "attacked": true
+        },
+        {
+          "i": 882,
+          "power": 30,
+          "damage": 18,
+          "hp_after": 45950,
+          "attacked": true
+        },
+        {
+          "i": 883,
+          "power": 26,
+          "damage": 18,
+          "hp_after": 45932,
+          "attacked": true
+        },
+        {
+          "i": 884,
+          "power": 21,
+          "damage": 9,
+          "hp_after": 45923,
+          "attacked": true
+        },
+        {
+          "i": 885,
+          "power": 20,
+          "damage": 13,
+          "hp_after": 45910,
+          "attacked": true
+        },
+        {
+          "i": 886,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 45896,
+          "attacked": true
+        },
+        {
+          "i": 887,
+          "power": 26,
+          "damage": 14,
+          "hp_after": 45882,
+          "attacked": true
+        },
+        {
+          "i": 888,
+          "power": 30,
+          "damage": 20,
+          "hp_after": 45862,
+          "attacked": true
+        },
+        {
+          "i": 889,
+          "power": 24,
+          "damage": 19,
+          "hp_after": 45843,
+          "attacked": true
+        },
+        {
+          "i": 890,
+          "power": 27,
+          "damage": 16,
+          "hp_after": 45827,
+          "attacked": true
+        },
+        {
+          "i": 891,
+          "power": 23,
+          "damage": 14,
+          "hp_after": 45813,
+          "attacked": true
+        },
+        {
+          "i": 892,
+          "power": 28,
+          "damage": 21,
+          "hp_after": 45792,
+          "attacked": true
+        },
+        {
+          "i": 893,
+          "power": 27,
+          "damage": 20,
+          "hp_after": 45772,
+          "attacked": true
+        },
+        {
+          "i": 894,
+          "power": 25,
+          "damage": 18,
+          "hp_after": 45754,
+          "attacked": true
+        },
+        {
+          "i": 895,
+          "power": 29,
+          "damage": 20,
+          "hp_after": 45734,
+          "attacked": true
+        },
+        {
+          "i": 896,
+          "power": 22,
+          "damage": 13,
+          "hp_after": 45721,
+          "attacked": true
+        },
+        {
+          "i": 897,
+          "power": 25,
+          "damage": 16,
+          "hp_after": 45705,
+          "attacked": true
+        },
+        {
+          "i": 898,
+          "power": 30,
+          "damage": 16,
+          "hp_after": 45689,
+          "attacked": true
+        },
+        {
+          "i": 899,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 45675,
+          "attacked": true
+        },
+        {
+          "i": 900,
+          "power": 22,
+          "damage": 11,
+          "hp_after": 45664,
+          "attacked": true
+        },
+        {
+          "i": 901,
+          "power": 21,
+          "damage": 10,
+          "hp_after": 45654,
+          "attacked": true
+        },
+        {
+          "i": 902,
+          "power": 30,
+          "damage": 20,
+          "hp_after": 45634,
+          "attacked": true
+        },
+        {
+          "i": 903,
+          "power": 21,
+          "damage": 16,
+          "hp_after": 45618,
+          "attacked": true
+        },
+        {
+          "i": 904,
+          "power": 23,
+          "damage": 15,
+          "hp_after": 45603,
+          "attacked": true
+        },
+        {
+          "i": 905,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 45589,
+          "attacked": true
+        },
+        {
+          "i": 906,
+          "power": 29,
+          "damage": 22,
+          "hp_after": 45567,
+          "attacked": true
+        },
+        {
+          "i": 907,
+          "power": 27,
+          "damage": 18,
+          "hp_after": 45549,
+          "attacked": true
+        },
+        {
+          "i": 908,
+          "power": 30,
+          "damage": 19,
+          "hp_after": 45530,
+          "attacked": true
+        },
+        {
+          "i": 909,
+          "power": 24,
+          "damage": 15,
+          "hp_after": 45515,
+          "attacked": true
+        },
+        {
+          "i": 910,
+          "power": 25,
+          "damage": 13,
+          "hp_after": 45502,
+          "attacked": true
+        },
+        {
+          "i": 911,
+          "power": 22,
+          "damage": 14,
+          "hp_after": 45488,
+          "attacked": true
+        },
+        {
+          "i": 912,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 45477,
+          "attacked": true
+        },
+        {
+          "i": 913,
+          "power": 22,
+          "damage": 10,
+          "hp_after": 45467,
+          "attacked": true
+        },
+        {
+          "i": 914,
+          "power": 26,
+          "damage": 21,
+          "hp_after": 45446,
+          "attacked": true
+        },
+        {
+          "i": 915,
+          "power": 27,
+          "damage": 22,
+          "hp_after": 45424,
+          "attacked": true
+        },
+        {
+          "i": 916,
+          "power": 27,
+          "damage": 18,
+          "hp_after": 45406,
+          "attacked": true
+        },
+        {
+          "i": 917,
+          "power": 26,
+          "damage": 21,
+          "hp_after": 45385,
+          "attacked": true
+        },
+        {
+          "i": 918,
+          "power": 20,
+          "damage": 13,
+          "hp_after": 45372,
+          "attacked": true
+        },
+        {
+          "i": 919,
+          "power": 27,
+          "damage": 18,
+          "hp_after": 45354,
+          "attacked": true
+        },
+        {
+          "i": 920,
+          "power": 23,
+          "damage": 17,
+          "hp_after": 45337,
+          "attacked": true
+        },
+        {
+          "i": 921,
+          "power": 22,
+          "damage": 16,
+          "hp_after": 45321,
+          "attacked": true
+        },
+        {
+          "i": 922,
+          "power": 21,
+          "damage": 11,
+          "hp_after": 45310,
+          "attacked": true
+        },
+        {
+          "i": 923,
+          "power": 27,
+          "damage": 20,
+          "hp_after": 45290,
+          "attacked": true
+        },
+        {
+          "i": 924,
+          "power": 27,
+          "damage": 19,
+          "hp_after": 45271,
+          "attacked": true
+        },
+        {
+          "i": 925,
+          "power": 25,
+          "damage": 17,
+          "hp_after": 45254,
+          "attacked": true
+        },
+        {
+          "i": 926,
+          "power": 25,
+          "damage": 17,
+          "hp_after": 45237,
+          "attacked": true
+        },
+        {
+          "i": 927,
+          "power": 23,
+          "damage": 16,
+          "hp_after": 45221,
+          "attacked": true
+        },
+        {
+          "i": 928,
+          "power": 25,
+          "damage": 11,
+          "hp_after": 45210,
+          "attacked": true
+        },
+        {
+          "i": 929,
+          "power": 21,
+          "damage": 12,
+          "hp_after": 45198,
+          "attacked": true
+        },
+        {
+          "i": 930,
+          "power": 23,
+          "damage": 14,
+          "hp_after": 45184,
+          "attacked": true
+        },
+        {
+          "i": 931,
+          "power": 29,
+          "damage": 17,
+          "hp_after": 45167,
+          "attacked": true
+        },
+        {
+          "i": 932,
+          "power": 30,
+          "damage": 22,
+          "hp_after": 45145,
+          "attacked": true
+        },
+        {
+          "i": 933,
+          "power": 27,
+          "damage": 19,
+          "hp_after": 45126,
+          "attacked": true
+        },
+        {
+          "i": 934,
+          "power": 24,
+          "damage": 11,
+          "hp_after": 45115,
+          "attacked": true
+        },
+        {
+          "i": 935,
+          "power": 20,
+          "damage": 13,
+          "hp_after": 45102,
+          "attacked": true
+        },
+        {
+          "i": 936,
+          "power": 22,
+          "damage": 16,
+          "hp_after": 45086,
+          "attacked": true
+        },
+        {
+          "i": 937,
+          "power": 25,
+          "damage": 16,
+          "hp_after": 45070,
+          "attacked": true
+        },
+        {
+          "i": 938,
+          "power": 30,
+          "damage": 22,
+          "hp_after": 45048,
+          "attacked": true
+        },
+        {
+          "i": 939,
+          "power": 22,
+          "damage": 16,
+          "hp_after": 45032,
+          "attacked": true
+        },
+        {
+          "i": 940,
+          "power": 23,
+          "damage": 16,
+          "hp_after": 45016,
+          "attacked": true
+        },
+        {
+          "i": 941,
+          "power": 25,
+          "damage": 16,
+          "hp_after": 45000,
+          "attacked": true
+        },
+        {
+          "i": 942,
+          "power": 22,
+          "damage": 14,
+          "hp_after": 44986,
+          "attacked": true
+        },
+        {
+          "i": 943,
+          "power": 25,
+          "damage": 20,
+          "hp_after": 44966,
+          "attacked": true
+        },
+        {
+          "i": 944,
+          "power": 26,
+          "damage": 17,
+          "hp_after": 44949,
+          "attacked": true
+        },
+        {
+          "i": 945,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 44938,
+          "attacked": true
+        },
+        {
+          "i": 946,
+          "power": 28,
+          "damage": 23,
+          "hp_after": 44915,
+          "attacked": true
+        },
+        {
+          "i": 947,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 44904,
+          "attacked": true
+        },
+        {
+          "i": 948,
+          "power": 26,
+          "damage": 18,
+          "hp_after": 44886,
+          "attacked": true
+        },
+        {
+          "i": 949,
+          "power": 20,
+          "damage": 15,
+          "hp_after": 44871,
+          "attacked": true
+        },
+        {
+          "i": 950,
+          "power": 27,
+          "damage": 19,
+          "hp_after": 44852,
+          "attacked": true
+        },
+        {
+          "i": 951,
+          "power": 30,
+          "damage": 21,
+          "hp_after": 44831,
+          "attacked": true
+        },
+        {
+          "i": 952,
+          "power": 24,
+          "damage": 19,
+          "hp_after": 44812,
+          "attacked": true
+        },
+        {
+          "i": 953,
+          "power": 23,
+          "damage": 12,
+          "hp_after": 44800,
+          "attacked": true
+        },
+        {
+          "i": 954,
+          "power": 25,
+          "damage": 16,
+          "hp_after": 44784,
+          "attacked": true
+        },
+        {
+          "i": 955,
+          "power": 29,
+          "damage": 16,
+          "hp_after": 44768,
+          "attacked": true
+        },
+        {
+          "i": 956,
+          "power": 20,
+          "damage": 15,
+          "hp_after": 44753,
+          "attacked": true
+        },
+        {
+          "i": 957,
+          "power": 29,
+          "damage": 24,
+          "hp_after": 44729,
+          "attacked": true
+        },
+        {
+          "i": 958,
+          "power": 27,
+          "damage": 21,
+          "hp_after": 44708,
+          "attacked": true
+        },
+        {
+          "i": 959,
+          "power": 22,
+          "damage": 16,
+          "hp_after": 44692,
+          "attacked": true
+        },
+        {
+          "i": 960,
+          "power": 24,
+          "damage": 17,
+          "hp_after": 44675,
+          "attacked": true
+        },
+        {
+          "i": 961,
+          "power": 30,
+          "damage": 19,
+          "hp_after": 44656,
+          "attacked": true
+        },
+        {
+          "i": 962,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 44642,
+          "attacked": true
+        },
+        {
+          "i": 963,
+          "power": 24,
+          "damage": 18,
+          "hp_after": 44624,
+          "attacked": true
+        },
+        {
+          "i": 964,
+          "power": 28,
+          "damage": 22,
+          "hp_after": 44602,
+          "attacked": true
+        },
+        {
+          "i": 965,
+          "power": 20,
+          "damage": 13,
+          "hp_after": 44589,
+          "attacked": true
+        },
+        {
+          "i": 966,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 44577,
+          "attacked": true
+        },
+        {
+          "i": 967,
+          "power": 28,
+          "damage": 23,
+          "hp_after": 44554,
+          "attacked": true
+        },
+        {
+          "i": 968,
+          "power": 27,
+          "damage": 22,
+          "hp_after": 44532,
+          "attacked": true
+        },
+        {
+          "i": 969,
+          "power": 20,
+          "damage": 8,
+          "hp_after": 44524,
+          "attacked": true
+        },
+        {
+          "i": 970,
+          "power": 20,
+          "damage": 10,
+          "hp_after": 44514,
+          "attacked": true
+        },
+        {
+          "i": 971,
+          "power": 28,
+          "damage": 21,
+          "hp_after": 44493,
+          "attacked": true
+        },
+        {
+          "i": 972,
+          "power": 29,
+          "damage": 20,
+          "hp_after": 44473,
+          "attacked": true
+        },
+        {
+          "i": 973,
+          "power": 30,
+          "damage": 22,
+          "hp_after": 44451,
+          "attacked": true
+        },
+        {
+          "i": 974,
+          "power": 28,
+          "damage": 20,
+          "hp_after": 44431,
+          "attacked": true
+        },
+        {
+          "i": 975,
+          "power": 21,
+          "damage": 15,
+          "hp_after": 44416,
+          "attacked": true
+        },
+        {
+          "i": 976,
+          "power": 29,
+          "damage": 17,
+          "hp_after": 44399,
+          "attacked": true
+        },
+        {
+          "i": 977,
+          "power": 20,
+          "damage": 12,
+          "hp_after": 44387,
+          "attacked": true
+        },
+        {
+          "i": 978,
+          "power": 25,
+          "damage": 19,
+          "hp_after": 44368,
+          "attacked": true
+        },
+        {
+          "i": 979,
+          "power": 22,
+          "damage": 17,
+          "hp_after": 44351,
+          "attacked": true
+        },
+        {
+          "i": 980,
+          "power": 27,
+          "damage": 22,
+          "hp_after": 44329,
+          "attacked": true
+        },
+        {
+          "i": 981,
+          "power": 22,
+          "damage": 14,
+          "hp_after": 44315,
+          "attacked": true
+        },
+        {
+          "i": 982,
+          "power": 20,
+          "damage": 11,
+          "hp_after": 44304,
+          "attacked": true
+        },
+        {
+          "i": 983,
+          "power": 21,
+          "damage": 12,
+          "hp_after": 44292,
+          "attacked": true
+        },
+        {
+          "i": 984,
+          "power": 23,
+          "damage": 14,
+          "hp_after": 44278,
+          "attacked": true
+        },
+        {
+          "i": 985,
+          "power": 30,
+          "damage": 24,
+          "hp_after": 44254,
+          "attacked": true
+        },
+        {
+          "i": 986,
+          "power": 30,
+          "damage": 22,
+          "hp_after": 44232,
+          "attacked": true
+        },
+        {
+          "i": 987,
+          "power": 26,
+          "damage": 16,
+          "hp_after": 44216,
+          "attacked": true
+        },
+        {
+          "i": 988,
+          "power": 28,
+          "damage": 19,
+          "hp_after": 44197,
+          "attacked": true
+        },
+        {
+          "i": 989,
+          "power": 24,
+          "damage": 19,
+          "hp_after": 44178,
+          "attacked": true
+        },
+        {
+          "i": 990,
+          "power": 29,
+          "damage": 18,
+          "hp_after": 44160,
+          "attacked": true
+        },
+        {
+          "i": 991,
+          "power": 20,
+          "damage": 15,
+          "hp_after": 44145,
+          "attacked": true
+        },
+        {
+          "i": 992,
+          "power": 25,
+          "damage": 18,
+          "hp_after": 44127,
+          "attacked": true
+        },
+        {
+          "i": 993,
+          "power": 26,
+          "damage": 16,
+          "hp_after": 44111,
+          "attacked": true
+        },
+        {
+          "i": 994,
+          "power": 29,
+          "damage": 17,
+          "hp_after": 44094,
+          "attacked": true
+        },
+        {
+          "i": 995,
+          "power": 26,
+          "damage": 18,
+          "hp_after": 44076,
+          "attacked": true
+        },
+        {
+          "i": 996,
+          "power": 20,
+          "damage": 13,
+          "hp_after": 44063,
+          "attacked": true
+        },
+        {
+          "i": 997,
+          "power": 20,
+          "damage": 7,
+          "hp_after": 44056,
+          "attacked": true
+        },
+        {
+          "i": 998,
+          "power": 20,
+          "damage": 14,
+          "hp_after": 44042,
+          "attacked": true
+        },
+        {
+          "i": 999,
+          "power": 29,
+          "damage": 20,
+          "hp_after": 44022,
+          "attacked": true
+        }
+      ],
+      "stats": {
+        "n": 1000,
+        "hits": 1000,
+        "dodges": 0,
+        "attacked": 1000,
+        "damage_sum": 15978
+      }
+    }
+  ]
+}
