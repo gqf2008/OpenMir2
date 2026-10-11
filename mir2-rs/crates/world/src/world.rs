@@ -274,6 +274,9 @@ impl World {
             }
         }
 
+        // 命中者过期清理（照 `BaseObject.Base.cs:119-132` 的结构；墙钟那两项不在本骨架）
+        self.expire_hitters();
+
         // 死亡结算（C# 在实体下一次 `Run()` 里发现 `HP == 0` 才 `Die()`；
         // 这里同一 tick 内先跑命令、再统一结算死亡，语义等价且顺序确定）
         self.settle_deaths(&mut record);
@@ -436,6 +439,31 @@ impl World {
     }
 
     /// 死亡结算：把预算好的掉落散到地上 + 给击杀者发经验。
+    ///
+    /// 命中者过期（`LastHiter`/`ExpHitter` 在命中者死亡或隐身后失效）**不在这里**判，
+    /// 由 `expire_hitters()` 在每 tick 的命令之后、死亡结算之前统一清理——照 oracle 的结构
+    /// （`BaseObject.Base.cs:119-132` 是在**命中者自己的** `Run()` 里清的），这样"归属者已死/已隐身"
+    /// 与 oracle 同样表现为"根本没人认领"，而不是"认领了但不发"。
+    fn expire_hitters(&mut self) {
+        let gone: Vec<i32> = self
+            .entities
+            .iter()
+            .filter(|e| e.death || e.ghost)
+            .map(|e| e.id)
+            .collect();
+        if gone.is_empty() {
+            return;
+        }
+        for e in self.entities.iter_mut() {
+            if e.last_hiter.is_some_and(|h| gone.contains(&h)) {
+                e.last_hiter = None;
+            }
+            if e.exp_hitter.is_some_and(|h| gone.contains(&h)) {
+                e.exp_hitter = None;
+            }
+        }
+    }
+
     fn settle_deaths(&mut self, record: &mut TickRecord) {
         let dead: Vec<i32> = self
             .entities
@@ -481,17 +509,17 @@ impl World {
                 }
             }
             // 经验：`KillFunc`（`BaseObject.cs:2429`）认的是 `ExpHitter`，不是 `LastHiter`
-            // —— `ExpHitter` 是**第一个**命中者（`SetLastHiter` 里 `if (ExpHitter == null)`），
-            // 且命中者**死亡/隐身后不再认领**（`BaseObject.Base.cs:119-132` 在命中者自己的 `Run()` 里
-            // 清 `ExpHitter`；本骨架在 tick 结算点做同一判定，语义等价——下面的 `!k.death` 即此）。
-            // 子集口径：只做"归属者是玩家本人"这一支；`ExpHitter.Master != null`（宝宝击杀）不在本骨架；
-            // 30s（`LastHiter`）/ 6s（`ExpHitter`）的**墙钟**过期也不做（本骨架不读墙钟）。
+            // —— `ExpHitter` 是**第一个**命中者（`SetLastHiter` 里 `if (ExpHitter == null)`）。
+            // "命中者死亡/隐身后不再认领"由**每 tick 的 `expire_hitters()`** 按 oracle 的结构清理
+            // （`BaseObject.Base.cs:119-132` 在命中者自己的 `Run()` 里清），故这里只判"归属者是玩家本人"
+            // —— 与 `KillFunc` 的形状一致。
+            // 子集口径：`ExpHitter.Master != null`（宝宝击杀）不在本骨架；30s/6s 的**墙钟**过期也不做。
             let mut gained = 0;
             if let Some(hitter_id) = exp_hitter {
                 let is_player = self
                     .entities
                     .get(hitter_id)
-                    .is_some_and(|k| k.race == crate::entity::ACTOR_RACE_PLAY && !k.death);
+                    .is_some_and(|k| k.race == crate::entity::ACTOR_RACE_PLAY);
                 if is_player {
                     let need_exps = std::mem::take(&mut self.need_exps);
                     let cfg = self.combat_config;

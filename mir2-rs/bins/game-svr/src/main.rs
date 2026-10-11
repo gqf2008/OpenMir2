@@ -28,12 +28,12 @@ mod hutil;
 mod ids;
 mod load;
 mod record;
-mod smframe;
 mod users;
 
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use game_svr::smframe;
 use mir2_protocol::frame::ServerMessage;
 use mir2_protocol::messages::grobal2;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -70,6 +70,9 @@ enum SimToGate {
     /// 进世界完成（`World::open_session` + `enter_map` 成功）⇒ 该槽的 `in_world` 置真
     /// （oracle 里是 `gateUser.PlayObject`/`WorldEngine` 挂上，`:201` 的分支门就是它）。
     MarkInWorld { socket: i32 },
+    /// S2b-4 续：世界 → 客户端的一条 `SM_*` 帧（`body` = 12B 命令头 + 尾）。
+    /// gate 侧按 oracle `ClientSession.cs:897-920` 变成 `'#' + Encode(头12B) + 尾 + '!'` 发客户端。
+    SendFrame { socket: i32, body: Vec<u8> },
 }
 
 /// I/O 侧 → sim 侧的事件（sim 线程是唯一碰 `World` 的地方）。
@@ -252,13 +255,25 @@ impl DbWiring {
 ///
 /// 读档流程里的两条 sim→gate 命令（`KickUser`/`MarkInWorld`）**都**走这里 —— 每个 GameGate 连接的
 /// `UserList` 是独立的，socket 号在网关之间可重复，因此只能按 `gate_idx` 命中，找不到线号就记 WRN。
+///
+/// **R4-1**：`gate_idx` 来自客户端认证串第 7 段，除 `-1` 外还可能是 `-2`/`300` 一类越界或非法值。
+/// oracle `TCPNetChannel.cs:213-218` 的 `GetGate(gateIdx)` 对越界/非法线号返回 `null` ⇒ **直接丢弃**；
+/// 本函数与之同构：`u8::try_from` 失败即记 WRN + 返回 `None`，**绝不** `unwrap_or(0)` 把非法线号
+/// 静默折算成 0 号线（与 N1「不许静默挑线」同族）。
 fn route_to_gate<'a>(
     gates: &'a std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     gate_idx: i32,
     socket: i32,
     what: &str,
 ) -> Option<&'a mpsc::UnboundedSender<SimToGate>> {
-    match gates.get(&u8::try_from(gate_idx).unwrap_or(0)) {
+    let Some(idx) = u8::try_from(gate_idx).ok() else {
+        glog!(
+            "WRN",
+            "网关线号 {gate_idx} 越界/非法（不在 0..=255），无法{what} socket={socket}（照 oracle GetGate 丢弃）"
+        );
+        return None;
+    };
+    match gates.get(&idx) {
         Some(tx) => Some(tx),
         None => {
             glog!(
@@ -437,6 +452,23 @@ fn sim_loop(
                                                 head.cur_y,
                                                 head.dir
                                             );
+                                            // S2b-4 续：进世界后按 oracle `PlayObject.Message.cs:1680-1692`
+                                            // 的 `RM_LOGON` 支出入图帧，经**该用户的网关线**下发。
+                                            // 输入齐备的现在只有 `SM_NEWMAP`（记录里的坐标 + 地图名）；
+                                            // 其余帧的输入依赖真地图（`openmir2-m2-map-loading`）/ 记录字段
+                                            // （`openmir2-m2-record-fields`）/ 配置层 ⇒ `EnterWorldInputs` 的
+                                            // `Option` 字段留空（登记在卡，绝不猜尾字节）。
+                                            // `day_bright` 暂占位 0（`Envir.DayBright()` 属地图层）。
+                                            let inputs = smframe::EnterWorldInputs {
+                                                actor_id: id,
+                                                cur_x: u16::from_ne_bytes(head.cur_x.to_ne_bytes()),
+                                                cur_y: u16::from_ne_bytes(head.cur_y.to_ne_bytes()),
+                                                dir: head.dir,
+                                                map_file_name: Some(
+                                                    head.cur_map.as_bytes().to_vec(),
+                                                ),
+                                                ..smframe::EnterWorldInputs::default()
+                                            };
                                             // N1（reviewer-3）：按该用户的 gate_idx 路由回**它自己那条**网关线
                                             // （与上面 KickNoData 的 `route_to_gate` 完全同构）；找不到线号记 WRN，
                                             // 绝不 `gates.values().next()` 静默挑一个。
@@ -444,8 +476,20 @@ fn sim_loop(
                                                 &gates,
                                                 gate_idx,
                                                 socket,
-                                                "标记进世界",
+                                                "标记进世界/下发入图帧",
                                             ) {
+                                                let bodies = inputs.frames();
+                                                glog!(
+                                                    "INF",
+                                                    "进世界帧下发：socket={socket} 共 {} 条（输入齐备的）",
+                                                    bodies.len()
+                                                );
+                                                for body in bodies {
+                                                    let _ = tx.send(SimToGate::SendFrame {
+                                                        socket,
+                                                        body,
+                                                    });
+                                                }
                                                 let _ = tx.send(SimToGate::MarkInWorld { socket });
                                             }
                                         }
@@ -512,7 +556,9 @@ async fn gate_conn(
         let head_res = tokio::select! {
             r = rd.read_exact(&mut head) => r,
             Some(cmd) = sim_rx.recv() => {
-                apply_sim_cmd(cmd, &mut users);
+                if let Err(e) = apply_sim_cmd_async(cmd, &mut users, &tx, &mut state, check_block).await {
+                    glog!("WRN", "sim→gate 命令发送失败：{e:#}");
+                }
                 continue;
             }
         };
@@ -548,14 +594,20 @@ async fn gate_conn(
             &auth,
         )
         .await?;
-        // 处理与本帧同批到达的 sim 命令（清槽等）
+        // 处理与本帧同批到达的 sim 命令（清槽/入图发包等）
         while let Ok(cmd) = sim_rx.try_recv() {
-            apply_sim_cmd(cmd, &mut users);
+            if let Err(e) = apply_sim_cmd_async(cmd, &mut users, &tx, &mut state, check_block).await
+            {
+                glog!("WRN", "sim→gate 命令发送失败：{e:#}");
+            }
         }
     }
 }
 
-/// 施放一条 sim → gate 的命令（`NetChannel.CloseUser(gateIdx, socket)` 的落地）。
+/// 施放一条 sim → gate 的**槽操作**（`NetChannel.CloseUser(gateIdx, socket)` 的落地）。
+///
+/// `SendFrame` 是异步发包，由 [`apply_sim_cmd_async`] 处理；本函数只做纯槽表动作
+/// （单测直接调它，不必起 tokio 运行时）。
 fn apply_sim_cmd(cmd: SimToGate, users: &mut UserList) {
     match cmd {
         SimToGate::MarkInWorld { socket } => {
@@ -573,6 +625,49 @@ fn apply_sim_cmd(cmd: SimToGate, users: &mut UserList) {
                 );
             }
         }
+        // 异步发包，不在纯槽操作里处理。
+        SimToGate::SendFrame { .. } => {}
+    }
+}
+
+/// sim → gate 命令的异步落地：`SendFrame` 按 oracle `PlayObject.Socket.cs:101-116` 拼
+/// `GM_DATA`（20B 头 + 12B 命令头 + 尾）并经 [`send_gate_msg`]（= `ProcessBufferSend` 规则）上路；
+/// 其余命令走纯槽操作。
+async fn apply_sim_cmd_async(
+    cmd: SimToGate,
+    users: &mut UserList,
+    tx: &Arc<Mutex<OwnedWriteHalf>>,
+    state: &mut KeepAlive,
+    check_block: usize,
+) -> Result<()> {
+    match cmd {
+        SimToGate::SendFrame { socket, body } => {
+            // oracle `messageHead.Socket = SocketId` / `SessionId = SocketIdx`（`PlayObject.Socket.cs:104-115`）；
+            // 按 socket 找回该槽（`SessionIndex` 在出包方向上 oracle 不设，保持 0）。
+            let Some(u) = users.find(0, socket) else {
+                glog!(
+                    "WRN",
+                    "下发 SM_* 帧时 socket={socket} 的槽不存在，丢弃 {} 字节",
+                    body.len()
+                );
+                return Ok(());
+            };
+            let head = ServerMessage {
+                packet_code: grobal2::PacketCode,
+                socket: u.socket,
+                session_id: u.session_id,
+                ident: u16::from(grobal2::GM_DATA),
+                session_index: 0,
+                pack_length: i32::try_from(body.len()).unwrap_or(0),
+            };
+            let mut wire = head.to_bytes().to_vec();
+            wire.extend_from_slice(&body);
+            send_gate_msg(tx, state, check_block, &wire).await
+        }
+        other => {
+            apply_sim_cmd(other, users);
+            Ok(())
+        }
     }
 }
 
@@ -582,9 +677,8 @@ struct KeepAlive {
     send_keep_alive: bool,
     send_checked: i32,
     send_block_count: usize,
-    /// `SendCheckTick`：只有 `send_decision` 读它（本切片唯一出站载荷已按 F1 直发，故整套阻塞/确认逻辑
-    /// 要等 S3 的出包才在生产路径被使用；纯判定函数的判据见本文件 `#[cfg(test)] mod tests`）。
-    #[allow(dead_code)]
+    /// `SendCheckTick`：`send_decision` 读它判超时（S2b-4 后 `SM_*` 入图帧已走生产路径 ⇒
+    /// 整套阻塞/确认逻辑不再是纸面代码）。
     send_check_tick: i64,
 }
 
@@ -594,11 +688,9 @@ struct KeepAlive {
 /// （`ServerConf.cs:60` 只写 `SystemShare.SocCheckTimeOut`，那是另一个静态；现网 `Server.conf:48`
 /// `SocCheckTimeOut=50` 恰好也是 50，容易误以为是"从配置读 2000"——原注释抄了 `:60` 行尾那句过时的
 /// `// 2 * 1000`，reviewer-2 的 F2 已指出）。
-#[allow(dead_code)]
 const SOC_CHECK_TIMEOUT_MS: i64 = 50;
 
 /// 当前毫秒（C# 用 `HUtil32.GetTickCount`；这里只有"差值/超时"参与判定）。
-#[allow(dead_code)]
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -606,9 +698,6 @@ fn now_ms() -> i64 {
 }
 
 /// 发送口的判定结果（`ProcessBufferSend` `:58-90` 的纯函数版，便于单测）。
-///
-/// S3 的出包接上后它就走生产路径（F1 的处置：唯一应答已改直发）。
-#[allow(dead_code)]
 #[derive(Debug, PartialEq, Eq)]
 enum SendDecision {
     /// `SendChecked > 0`（等网关回 `GM_RECEIVE_OK`）：**包括刚超时清零的那一次也压住不发**（`:58-66` 的无条件 `return`）
@@ -622,7 +711,6 @@ enum SendDecision {
 }
 
 /// 判定的纯函数（副作用只有超时清零，照 `:58-66`）。
-#[allow(dead_code)]
 fn send_decision(state: &mut KeepAlive, check_block: usize, len: usize, now: i64) -> SendDecision {
     if state.send_checked > 0 {
         if now - state.send_check_tick > SOC_CHECK_TIMEOUT_MS {
@@ -648,7 +736,6 @@ fn send_decision(state: &mut KeepAlive, check_block: usize, len: usize, now: i64
 /// ② 累积 `SendBlockCount + len >= CheckBlock*10` ⇒ 先发一条 `GM_RECEIVE_OK` 并置 `SendChecked=1`（`:74-83`）；
 ///    若 `SendBlockCount == 0 && CheckBlock*10 <= len` ⇒ **直接丢**（`:76-79`）；
 /// ③ 发送后 `SendBlockCount += len`（`:89`）。
-#[allow(dead_code)]
 async fn send_gate_msg(
     tx: &Arc<Mutex<OwnedWriteHalf>>,
     state: &mut KeepAlive,
@@ -707,7 +794,8 @@ async fn dispatch(
             // F1（reviewer-2）：oracle 的 `SendNewUserMsg` 是**直发** `socket.Send(data)`（`:461`），
             // 完全不经过 `:50-95` 的 `ProcessBufferSend` ⇒ 这里也必须直发（不计 SendBlockCount、不受 SendChecked 拦截）
             send_raw(tx, reply.to_bytes().as_slice()).await?;
-            let _ = (state, check_block); // 本切片没有别的出站载荷；S3 的出包才会走 send_gate_msg
+            // 该分支（GM_OPEN）无其它出站载荷；`SM_*` 出包走 `apply_sim_cmd_async` → `send_gate_msg`。
+            let _ = (state, check_block);
             glog!(
                 "INF",
                 "新用户链接... socket={} SessionId={} index={} ip={ip} 在线={} 槽={}",
@@ -981,5 +1069,43 @@ mod tests {
             rx2.try_recv(),
             Err(mpsc::error::TryRecvError::Empty)
         ));
+    }
+
+    /// **R4-1**（reviewer-4）：越界/非法线号（`-2`、`256`、`300`）必须与 oracle `TCPNetChannel.cs:213-218`
+    /// `GetGate` 的 `null` 同构 —— **直接丢弃**，不许用 `unwrap_or(0)` 静默折算到 0 号线。
+    ///
+    /// 判据两条：① `route_to_gate` 返回 `None`（不投递）；② 0/1 号线的同号槽**不得**被标 `in_world`。
+    /// 红检：把实现改回 `unwrap_or(0)` ⇒ `-2`/`256`/`300` 都会命中 0 号线，本用例第一条断言即红。
+    #[test]
+    fn route_to_gate_rejects_out_of_range_gate_idx() {
+        use std::collections::HashMap;
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let (tx1, mut rx1) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        gates.insert(1, tx1);
+
+        // 0 号线里有一个 socket=5 的槽：越界线号**不得**把它标上（R4-1 的错标场景）。
+        let mut users0 = UserList::new();
+        users0.open(5, 111, "a".into());
+
+        for bad in [-2i32, 256, 300] {
+            assert!(
+                route_to_gate(&gates, bad, 5, "标记进世界").is_none(),
+                "gate_idx={bad} 越界/非法 ⇒ 必须丢弃（oracle GetGate 返回 null），不许折算成 0 号线"
+            );
+        }
+        assert!(matches!(
+            rx0.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            rx1.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+        assert!(
+            !users0.find(1, 5).unwrap().in_world,
+            "越界线号不得把 0 号线同号 socket 标成 in_world"
+        );
     }
 }

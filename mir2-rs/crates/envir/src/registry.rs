@@ -1,0 +1,269 @@
+//! 地图加载器 + 地图名→`map_id` 注册表。
+//!
+//! **`map_id` 的来源**：`src/GameSrv/Maps/MapManager.cs` 的 `_mapList` 是
+//! `Dictionary<string, IEnvirnoment>(StringComparer.OrdinalIgnoreCase)`，由 `Maps.LoadMapInfo`
+//! 按 **MapInfo.txt 的 section 先后顺序**逐个 `AddMapInfo` 填入（**加载成功才入表**）。
+//! Rust 世界（`crates/world`）用 `World.maps` 的下标当 `map_id`，因此本模块把
+//! 「按 MapInfo.txt 顺序加载成功的地图」的下标定义为 `map_id`；查找大小写不敏感
+//! （对应 OrdinalIgnoreCase；地图名实际都是 ASCII，故用 ASCII 小写归一化）。
+//!
+//! **找不到就报错**：`MapRegistry::require_id` 返回 `MapNameNotFound`，绝不静默退回 0 号占位图。
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+use crate::error::EnvirError;
+use crate::mapfile::{attach_points, load_map_file, MapFile};
+use crate::mapinfo::{connect_map_info_arg, parse_map_info_lines, MapInfoEntry};
+use crate::paths::{envir_file_path, map_file_path, point_file_path};
+use crate::text::decode_text;
+
+/// 一条未能入表的地图（诊断用；对应 C# 的 `LogService.Error`）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SkippedMap {
+    pub map_name: String,
+    pub map_file_name: String,
+    pub reason: String,
+}
+
+/// 取图配置（`M2Share.BasePath` + `Config.MapDir` / `Config.EnvirDir`）。
+#[derive(Clone, Debug)]
+pub struct MapLoader {
+    pub base_path: PathBuf,
+    pub envir_dir: String,
+    pub map_dir: String,
+}
+
+impl MapLoader {
+    #[must_use]
+    pub fn new(
+        base_path: impl Into<PathBuf>,
+        map_dir: impl Into<String>,
+        envir_dir: impl Into<String>,
+    ) -> Self {
+        MapLoader {
+            base_path: base_path.into(),
+            envir_dir: envir_dir.into(),
+            map_dir: map_dir.into(),
+        }
+    }
+
+    /// `Path.Combine(BasePath, MapDir, 文件名 + ".map")`。
+    #[must_use]
+    pub fn map_file_path(&self, file_name: &str) -> PathBuf {
+        map_file_path(&self.base_path, &self.map_dir, file_name)
+    }
+
+    /// `LoadMapData` 里的点位表路径（`.map` 路径 + `.txt`，见 `paths` 模块头）。
+    #[must_use]
+    pub fn point_file_path(&self, map_file: &Path) -> PathBuf {
+        point_file_path(&self.base_path, &self.envir_dir, map_file)
+    }
+
+    /// `GetEnvirFilePath("MapInfo.txt")`。
+    #[must_use]
+    pub fn map_info_path(&self) -> PathBuf {
+        envir_file_path(&self.base_path, &self.envir_dir, "", "MapInfo.txt")
+    }
+
+    /// 按文件名（不带 `.map`）加载地图 + 同名点位表。
+    ///
+    /// # Errors
+    /// 地图文件缺失/损坏（`EnvirError`）。
+    pub fn load(&self, file_name: &str) -> Result<MapFile, EnvirError> {
+        self.load_path(&self.map_file_path(file_name))
+    }
+
+    /// 按 `.map` 路径加载地图，并按 `point_file_path` 口径补读点位表。
+    ///
+    /// # Errors
+    /// 地图文件缺失/损坏（`EnvirError`）。
+    pub fn load_path(&self, map_file: &Path) -> Result<MapFile, EnvirError> {
+        let mut map = load_map_file(map_file)?;
+        let point_path = self.point_file_path(map_file);
+        if let Ok(bytes) = std::fs::read(&point_path) {
+            attach_points(&mut map, &decode_text(&bytes));
+            map.point_file = Some(point_path);
+        }
+        Ok(map)
+    }
+
+    /// 读 `Envir/MapInfo.txt` 并抽出所有 section（含 `ConnectMapInfo` 子文件展开）。
+    ///
+    /// 文件不存在时返回空表（对应 C# `if (File.Exists(...))` 为假直接跳过）。
+    ///
+    /// # Errors
+    /// 文件存在但读取失败。
+    pub fn load_map_info_entries(&self) -> Result<Vec<MapInfoEntry>, EnvirError> {
+        let path = self.map_info_path();
+        let bytes = match std::fs::read(&path) {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(source) => return Err(EnvirError::Io { path, source }),
+        };
+        let mut lines = split_lines(&decode_text(&bytes));
+
+        // `Maps.cs:38-51`：第一遍扫 `ConnectMapInfo`，把子文件内容**追加到表尾**。
+        let mut i = 0;
+        while i < lines.len() {
+            let Some(sub) = connect_map_info_arg(&lines[i]) else {
+                i += 1;
+                continue;
+            };
+            lines.remove(i);
+            // `LoadSubMapInfo`：`fileDir = GetEnvirFilePath("MapInfo")`，路径是
+            // `fileDir + sFileName`（源码用字符串拼接，没有分隔符——照抄）。
+            let file_dir = envir_file_path(&self.base_path, &self.envir_dir, "", "MapInfo");
+            let sub_path = PathBuf::from(format!("{}{sub}", file_dir.display()));
+            if let Ok(bytes) = std::fs::read(&sub_path) {
+                lines.extend(split_lines(&decode_text(&bytes)));
+            }
+        }
+        Ok(parse_map_info_lines(&lines))
+    }
+
+    /// 按 MapInfo.txt 顺序加载所有地图，构建 `map_id` 注册表。
+    ///
+    /// # Errors
+    /// MapInfo.txt 读取失败。
+    pub fn load_registry(&self) -> Result<MapRegistry, EnvirError> {
+        let entries = self.load_map_info_entries()?;
+        Ok(MapRegistry::from_entries(self.clone(), entries))
+    }
+}
+
+/// 地图名 → `map_id` 注册表。
+#[derive(Clone, Debug)]
+pub struct MapRegistry {
+    loader: MapLoader,
+    entries: Vec<MapInfoEntry>,
+    maps: Vec<MapFile>,
+    names: Vec<String>,
+    index: HashMap<String, usize>,
+    skipped: Vec<SkippedMap>,
+}
+
+impl MapRegistry {
+    /// 按条目顺序加载；加载成功且名字不重复的进入 `maps`（`map_id = maps.len()` 时刻）。
+    #[must_use]
+    pub fn from_entries(loader: MapLoader, entries: Vec<MapInfoEntry>) -> Self {
+        let mut reg = MapRegistry {
+            loader,
+            entries,
+            maps: Vec::new(),
+            names: Vec::new(),
+            index: HashMap::new(),
+            skipped: Vec::new(),
+        };
+        let entries = reg.entries.clone();
+        for e in entries {
+            if e.map_name.is_empty() {
+                continue;
+            }
+            let key = normalize_name(&e.map_name);
+            match reg.loader.load(&e.map_file_name) {
+                Ok(mut map) => {
+                    if reg.index.contains_key(&key) {
+                        reg.skipped.push(SkippedMap {
+                            map_name: e.map_name,
+                            map_file_name: e.map_file_name,
+                            reason: "地图名称重复（MapManager.AddMapInfo）".to_string(),
+                        });
+                        continue;
+                    }
+                    map.map_name = e.map_name.clone();
+                    let id = reg.maps.len();
+                    reg.index.insert(key, id);
+                    reg.names.push(e.map_name);
+                    reg.maps.push(map);
+                }
+                Err(err) => reg.skipped.push(SkippedMap {
+                    map_name: e.map_name,
+                    map_file_name: e.map_file_name,
+                    reason: err.to_string(),
+                }),
+            }
+        }
+        reg
+    }
+
+    #[must_use]
+    pub fn loader(&self) -> &MapLoader {
+        &self.loader
+    }
+
+    /// MapInfo.txt 的全部 section（含未加载成功者）。
+    #[must_use]
+    pub fn entries(&self) -> &[MapInfoEntry] {
+        &self.entries
+    }
+
+    /// 未能入表的地图（重复名 / 文件缺失 / 解析失败）。
+    #[must_use]
+    pub fn skipped(&self) -> &[SkippedMap] {
+        &self.skipped
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.maps.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.maps.is_empty()
+    }
+
+    /// 已加载地图（下标即 `map_id`）。
+    #[must_use]
+    pub fn maps(&self) -> &[MapFile] {
+        &self.maps
+    }
+
+    /// `map_id` → 逻辑名。
+    #[must_use]
+    pub fn name_of(&self, map_id: usize) -> Option<&str> {
+        self.names.get(map_id).map(String::as_str)
+    }
+
+    /// 逻辑名 → `map_id`（ASCII 大小写不敏感）。
+    #[must_use]
+    pub fn id_of(&self, map_name: &str) -> Option<usize> {
+        self.index.get(&normalize_name(map_name)).copied()
+    }
+
+    /// 同 `id_of`，但找不到时**报错**（集成点禁止静默用占位图）。
+    ///
+    /// # Errors
+    /// 名字不在注册表内 ⇒ `EnvirError::MapNameNotFound`。
+    pub fn require_id(&self, map_name: &str) -> Result<usize, EnvirError> {
+        self.id_of(map_name)
+            .ok_or_else(|| EnvirError::MapNameNotFound(map_name.to_string()))
+    }
+
+    #[must_use]
+    pub fn get(&self, map_id: usize) -> Option<&MapFile> {
+        self.maps.get(map_id)
+    }
+
+    #[must_use]
+    pub fn map_by_name(&self, map_name: &str) -> Option<&MapFile> {
+        self.id_of(map_name).and_then(|id| self.maps.get(id))
+    }
+}
+
+/// `StringComparer.OrdinalIgnoreCase` 的 ASCII 归一化（地图名实际都是 ASCII）。
+fn normalize_name(name: &str) -> String {
+    name.to_ascii_lowercase()
+}
+
+/// `StreamReader.ReadLine` 分行（\r\n / \n / \r）。
+fn split_lines(text: &str) -> Vec<String> {
+    text.split(['\n', '\r'])
+        .map(str::to_string)
+        .collect::<Vec<_>>()
+        .into_iter()
+        // 去掉 `\r\n` 被拆出的空行；但保留真正的空行（C# ReadLine 不会产生空行）。
+        .filter(|l| !l.is_empty())
+        .collect()
+}

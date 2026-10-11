@@ -46,7 +46,7 @@ fn combat_attacks_and_exp_match_csharp() {
 
 /// 语义判据（不是行数一致就能证明的）：经验归属者 = **第一个**命中者。
 ///
-/// 场景里 zombie(3) 先被 hero(1) 命中，之后由 mate(5) 连续攻击直到倒下
+/// 场景里 zombie(3) 先被 hero(1) 命中，之后由 mate(4) 连续攻击直到倒下
 /// ⇒ "死亡行前最后一击"必须是 4，而 `death` 行的归属者必须是 1。
 /// 若哪天有人把 `ExpHitter` 改回 `LastHiter`，这条会红。
 #[test]
@@ -107,6 +107,33 @@ fn kill_exp_does_not_decay_even_when_fix_off() {
     assert!(
         hero_line.ends_with(" 500 vis 1:1"),
         "hero 的经验应记到 500: {hero_line}"
+    );
+}
+
+/// 判据（给"命中者 **ghost 化** 后不再认领经验"装牙齿）：场景 `combat_exp_hitter_ghost.json`
+/// 让 hero(1) 先命中僵尸（`ExpHitter=hero`），**同一 tick 内** hero 变 ghost 且 mate(4) 打死它
+/// ⇒ 清理步（两边夹具同序：命令之后、死亡结算之前）把 `ExpHitter` 清空，死亡结算时**无人认领**：
+/// `death 2 0 0 -1 0`（killer=-1、经验 0），hero/mate 经验都停在 0。
+///
+/// 若把清理步去掉（或把它挪到死亡结算之后），本条会红；若把击杀挪到 ghost 的**下一 tick**，
+/// mate 会合法地成为新的 `ExpHitter`（`SetLastHiter` 在 `ExpHitter` 为空时认领）⇒ killer=4——
+/// 那是另一条同样正确的行为，场景刻意只钉"同 tick"这一条。
+#[test]
+fn ghosted_hitter_loses_exp_credit_in_same_tick() {
+    let mine = run_scenario("combat_exp_hitter_ghost.json");
+    let golden =
+        std::fs::read_to_string(world_dir().join("golden/combat_exp_hitter_ghost.txt")).unwrap();
+    assert_eq!(
+        mine, golden,
+        "ghost 化的命中者必须失去经验认领（期望 death 2 0 0 -1 0）"
+    );
+    assert!(
+        mine.contains("death 2 0 0 -1 0"),
+        "ghost 化后同 tick 击杀必须判为无人认领（killer=-1、经验 0）:\n{mine}"
+    );
+    assert!(
+        !mine.contains(" 500 vis"),
+        "hero/mate 的经验都必须停在 0（谁也不该拿这 500 经验）:\n{mine}"
     );
 }
 

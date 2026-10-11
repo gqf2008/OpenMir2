@@ -48,6 +48,7 @@ internal static class Program
         public int max_exp { get; set; } = 1000;
         public int view_range { get; set; } = 5;
         public int race { get; set; }
+        public bool ghost { get; set; }
     }
 
     private sealed class MonsterSpec
@@ -244,6 +245,9 @@ internal static class Program
                     case "reenter":
                         ApplyReenter(envirs, actors, envirOf, order, sessionSpecs, c);
                         break;
+                    case "ghost":
+                        ApplyGhost(actors, c);
+                        break;
                     case "spawn":
                         queue.Enqueue(new QueuedCommand
                         {
@@ -307,6 +311,24 @@ internal static class Program
                     case "leave":
                         LeaveWorld(envirs, envirOf, actors, order, cmd.id);
                         break;
+                }
+            }
+            // 2.5) 命中者过期清理：照 `BaseObject.Base.cs:119-132` 的 Death/Ghost 那半条
+            //（oracle 在命中者自己的 Run() 里清 LastHiter/ExpHitter；墙钟 30s/6s 两项不在本夹具）
+            // 顺序：命令之后、死亡结算之前 —— 与 Rust 侧 `World::expire_hitters()` 同序。
+            foreach (int id in order.ToList())
+            {
+                if (!actors.TryGetValue(id, out ActorStub a0))
+                {
+                    continue;
+                }
+                if (a0.LastHiter != null && (a0.LastHiter.Death || a0.LastHiter.Ghost))
+                {
+                    a0.LastHiter = null;
+                }
+                if (a0.ExpHitter != null && (a0.ExpHitter.Death || a0.ExpHitter.Ghost))
+                {
+                    a0.ExpHitter = null;
                 }
             }
             // 3) 死亡结算（掉落落地 + `KillFunc` 发经验）
@@ -510,6 +532,15 @@ internal static class Program
         envirs[ss.map].AddMapObject(c.x, c.y, CellType.Play, c.id, a);
     }
 
+    /// <summary>把某个 actor 置为 Ghost（对应 oracle 里 `Ghost = true` 的状态，如隐身/消失）。</summary>
+    private static void ApplyGhost(Dictionary<int, ActorStub> actors, CommandSpec c)
+    {
+        if (actors.TryGetValue(c.id, out ActorStub a))
+        {
+            a.Ghost = true;
+        }
+    }
+
     private static ActorStub SessionActor(SessionSpec ss, EnvirnomentStub envir, int id, int x, int y)
     {
         var a = new ActorStub
@@ -524,6 +555,7 @@ internal static class Program
             HitPoint = (byte)ss.hit_point,
             SpeedPoint = (byte)ss.speed_point,
             Job = (byte)ss.job,
+            Ghost = ss.ghost,
         };
         a.WAbil.Level = (byte)ss.level;
         a.WAbil.HP = (ushort)ss.hp;
