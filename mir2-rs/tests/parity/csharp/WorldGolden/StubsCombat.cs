@@ -25,7 +25,8 @@ namespace WorldGolden
         public const int WizardMon = 10;
         public const int TaosMon = 10;
         public const int MonHum = 10;
-        public const bool HighLevelKillMonFixExp = true; // 现网 Exps.conf: HighLevelKillMonFixExp=1
+        /// <summary>`Config.HighLevelKillMonFixExp`（现网 Exps.conf = 1；场景可覆写以钉住调用口径）。</summary>
+        public static bool HighLevelKillMonFixExp = true;
         public const int KillMonExpMultiple = 1;
         public const int MnKillMonExpMultiple = 1;
         public const int KillMonExpRate = 100;
@@ -42,6 +43,8 @@ namespace WorldGolden
         public byte LifeAttrib;  // 1 = LA_UNDEAD
         public int UndeadPower;  // AddAbil.UndeadPower
         public ActorStub LastHiter;
+        public ActorStub ExpHitter;                   // 经验归属者（BaseObject.cs:296）
+        public int FightExp;                          // AnimalObject.FightExp = 怪物经验（WorldServer.MonGen.cs:893）
         public int Gold;                              // mon.Gold（掉落预算）
         public List<ParityGolden.UserItem> ItemList;  // mon.ItemList（掉落预算）
         public bool DeathSettled;                     // 本骨架内部：死亡结算只做一次
@@ -51,6 +54,16 @@ namespace WorldGolden
         public static byte LoByte(int w) => (byte)w;
 
         public static byte HiByte(int w) => (byte)(w >> 8);
+
+        // ---------- src/M2Server/Actor/BaseObject.cs:1753 逐字拷贝（时间戳两行不在本子集） ----------
+        public void SetLastHiter(ActorStub baseObject)
+        {
+            LastHiter = baseObject;
+            if (ExpHitter == null)
+            {
+                ExpHitter = baseObject;
+            }
+        }
 
         // ---------- src/M2Server/Actor/BaseObject.Base.cs:886 逐字拷贝 ----------
         public virtual int GetAttackPower(int basePower, int power)
@@ -180,8 +193,11 @@ namespace WorldGolden
                     result = true;
                 }
             }
-            // C# 在攻击路径上更新命中者（用于 `StruckDamage` 的职业倍率与死亡后的经验归属）
-            targetObject.LastHiter = this;
+            // 注意：`_Attack` 里**没有**命中者赋值（C# 原文如此）。命中者的登记走
+            // `SendMsg(targetObject, RM_STRUCK, …)`（`BaseObject.Attack.cs:61-64`，条件是
+            // `targetObject.Race > ActorRace.Play`），由目标下一次 `Run()` 里
+            // `AnimalObject.Operate`（`AnimalObject.cs:118-124`）调用 `SetLastHiter(攻击方)`。
+            // 驱动侧在 `_Attack` 返回后按同一条件补这一步（见 Program.cs）。
             return result;
         }
 
@@ -231,7 +247,7 @@ namespace WorldGolden
         }
 
         // ---------- src/M2Server/Player/PlayObject.Base.cs:129 WinExp + :149 GetExp（单步升级） ----------
-        public void GainExp(int dwExp, int[] needExps)
+        public int GainExp(int dwExp, int[] needExps)
         {
             if (dwExp > 0)
             {
@@ -249,6 +265,7 @@ namespace WorldGolden
                     WAbil.MaxExp = needExps[WAbil.Level];
                 }
             }
+            return dwExp; // 实际入账的经验（乘完倍率），供对拍逐行输出
         }
 
         /// <summary>src/M2Server/Actor/BaseObject.cs:470 `GetDropPosition` 的扫描顺序子集。</summary>

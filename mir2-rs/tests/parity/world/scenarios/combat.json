@@ -1,0 +1,65 @@
+{
+  "maps": [{ "width": 32, "height": 32 }],
+  "ticks": 26,
+  "extended": true,
+  "mon_random_add_value": 40,
+  "high_level_kill_mon_fix_exp": true,
+  "item_catalog": [
+    { "name": "金创药(小量)", "std_mode": 0, "shape": 0, "dura_max": 1 }
+  ],
+  "sessions": [
+    { "chr": "hero", "id": 1, "map": 0, "x": 10, "y": 10, "level": 10, "hp": 200, "max_hp": 200,
+      "dc": 7700, "ac": 0, "hit_point": 10, "speed_point": 0, "job": 0, "exp": 0, "max_exp": 100000,
+      "view_range": 5, "race": 0 },
+    { "chr": "mate", "id": 4, "map": 0, "x": 11, "y": 11, "level": 10, "hp": 200, "max_hp": 200,
+      "dc": 7700, "ac": 0, "hit_point": 10, "speed_point": 0, "job": 0, "exp": 0, "max_exp": 100000,
+      "view_range": 5, "race": 0 }
+  ],
+  "monsters": [
+    { "id": 2, "name": "鸡", "map": 0, "x": 12, "y": 10, "level": 1, "exp": 100, "hp": 6, "dc": 1,
+      "ac": 0, "undead": 0, "hit_point": 5, "speed_point": 15,
+      "drop": [
+        { "sel_point": 9, "max_point": 10, "item_name": "金币", "count": 300 }
+      ] },
+    { "id": 3, "name": "僵尸", "map": 0, "x": 14, "y": 10, "level": 1, "exp": 500, "hp": 60, "dc": 1,
+      "ac": 2565, "undead": 0, "hit_point": 5, "speed_point": 15,
+      "drop": [
+        { "sel_point": 9, "max_point": 10, "item_name": "金币", "count": 300 },
+        { "sel_point": 9, "max_point": 10, "item_name": "金创药(小量)", "count": 1 }
+      ] },
+    { "id": 5, "name": "稻草人", "map": 0, "x": 13, "y": 12, "level": 1, "exp": 1, "hp": 50, "dc": 1,
+      "ac": 0, "undead": 0, "hit_point": 0, "speed_point": 40,
+      "drop": [] },
+    { "id": 6, "name": "幽灵", "map": 0, "x": 15, "y": 12, "level": 1, "exp": 1, "hp": 100, "dc": 1,
+      "ac": 0, "undead": 0, "hit_point": 5, "speed_point": 40,
+      "drop": [] }
+  ],
+  "commands": [
+    { "tick": 1, "kind": "enter", "chr": "hero" },
+    { "tick": 2, "kind": "enter", "chr": "mate" },
+    { "tick": 3, "kind": "spawn", "id": 2 },
+    { "tick": 4, "kind": "spawn", "id": 3 },
+    { "tick": 5, "kind": "spawn", "id": 5 },
+    { "tick": 6, "kind": "spawn", "id": 6 },
+    { "tick": 7, "kind": "attack", "id": 1, "target": 2 },
+    { "tick": 8, "kind": "attack", "id": 1, "target": 2 },
+    { "tick": 9, "kind": "attack", "id": 1, "target": 1 },
+    { "tick": 10, "kind": "attack", "id": 1, "target": 3 },
+    { "tick": 11, "kind": "attack", "id": 4, "target": 3 },
+    { "tick": 12, "kind": "attack", "id": 4, "target": 3 },
+    { "tick": 13, "kind": "attack", "id": 4, "target": 3 },
+    { "tick": 14, "kind": "attack", "id": 4, "target": 3 },
+    { "tick": 15, "kind": "attack", "id": 4, "target": 3 },
+    { "tick": 16, "kind": "attack", "id": 4, "target": 3 },
+    { "tick": 17, "kind": "attack", "id": 4, "target": 3 },
+    { "tick": 18, "kind": "attack", "id": 1, "target": 2 },
+    { "tick": 19, "kind": "attack", "id": 1, "target": 5 },
+    { "tick": 20, "kind": "attack", "id": 1, "target": 5 },
+    { "tick": 21, "kind": "attack", "id": 4, "target": 6 },
+    { "tick": 22, "kind": "attack", "id": 4, "target": 6 },
+    { "tick": 23, "kind": "attack", "id": 4, "target": 6 },
+    { "tick": 24, "kind": "attack", "id": 4, "target": 6 },
+    { "tick": 25, "kind": "attack", "id": 4, "target": 6 },
+    { "tick": 26, "kind": "attack", "id": 4, "target": 6 }
+  ]
+}

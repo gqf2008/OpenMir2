@@ -60,10 +60,57 @@ cargo test -p mir2-parity-tests --test world_aoi_parity --test world_session_par
 ```
 tick <t> clock <ms>
 ent <id> <map> <x> <y> <hp> <level> <exp> vis <目标id>:<flag> ...
-death <id> <落地件数> <金币> <击杀者|-1> <获得经验>     # 仅 extended 场景
+atk <攻击方> <目标> <攻击力> <结算后目标HP>            # 仅 extended 场景（战斗切片）
+death <id> <落地件数> <金币> <经验归属者|-1> <获得经验> # 仅 extended 场景
 floor <map> <x> <y> <obj_id>                          # 仅 extended 场景
 ```
 
 对齐过程中修掉的一处真差异：**切图后"再进"必须用会话当前地图**——Rust 测试驱动最初用会话
 初始地图（map 0），而 C# 把当前地图记在会话上（切图时更新）⇒ 首个差异就是 `ent 3 0 …` vs `ent 3 1 …`。
 两侧驱动统一为"会话当前地图"后逐行一致（`session.txt`）。
+
+## M2 下半程（第二批）：战斗结算 `_Attack` 入 golden（`combat.json`）
+
+上一批把 RNG 面收在"掉落预算"一个系统上；本批把**战斗结算**（`_Attack` 的攻击力 / 命中 /
+护甲三条 RNG）也钉进 golden，并把死亡后的**经验归属**纳入对拍。
+
+```bash
+# 金标准
+dotnet run --project mir2-rs/tests/parity/csharp/WorldGolden -c Release -- combat
+# Rust 对拍（含 2 条红检 + 1 条覆盖判据 + 1 条语义判据）
+cargo test -p mir2-parity-tests --test world_combat_parity
+```
+
+场景覆盖：攻击力 RNG（`dc=0x1E14` ⇒ 20..30）；命中骰（`RandomByte(目标 SpeedPoint)`，**真的会闪避**）；
+护甲 RNG 的两条分支（`ac=0` 一次取数 / `ac=0x0A05` 两次取数）；**目标 `HitPoint == 0` 时整段跳过命中骰**
+（`BaseObject.Attack.cs:39`）⇒ 该场景是"RNG 消费次数"的判别器；击杀 → 掉落落地 + 经验；
+攻击自己（`IsProperTarget` 假）；攻击已死目标（不再结算，但**仍**登记命中者）。
+
+`attack` 的顺序契约（两侧写死）：`GetBaseAttackPoewr()` → `_Attack(nPower, target)` →
+若 `target.Race > ActorRace.Play` 则 `target.SetLastHiter(攻击方)`。
+
+### 本批改掉的 3 处 oracle 口径（含 1 处夹具自造的假行为）
+
+1. **`_Attack` 里没有 `LastHiter` 赋值**（`BaseObject.Attack.cs:30-66` 原文如此）。命中者的登记走
+   `SendMsg(targetObject, RM_STRUCK, …)`（同文件 `:61-64`，条件是 `targetObject.Race > ActorRace.Play`），
+   由目标下一次 `Run()` 里 `AnimalObject.Operate`（`AnimalObject.cs:118-124`）调 `SetLastHiter`。
+   ⇒ 夹具旧版在 `_Attack` 末尾自造了 `targetObject.LastHiter = this;`（**假行为**，已删）；Rust 侧旧版
+   在 `attack()` 内部写 `last_hiter`（同错，已删），改为结算后按上述条件登记。
+2. **经验归属是 `ExpHitter`，不是 `LastHiter`**（`BaseObject.cs:2429 KillFunc`）。而 `SetLastHiter`
+   （`BaseObject.cs:1753`）里 `ExpHitter` **只在为空时**认领 ⇒ 归属者是"**第一个**命中者"，
+   粘住到 6 秒过期或该命中者死亡。场景 `combat.json` 造了反例：zombie(3) 先被 hero(1) 命中、
+   最后由 mate(4) 补掉 ⇒ 归属者必须是 1（`exp_goes_to_first_hitter_not_last` 断言）。
+3. **`CalcGetExp` 的入参是自己等级**：`KillTargetTrigger`（`PlayObject.cs:1643`）写的是
+   `CalcGetExp(WAbil.Level, fightExp)`，而 `CalcGetExp`（`BaseObject.cs:712`）内部又拿 `WAbil.Level`
+   跟这个入参比 ⇒ `L < L + 10` 恒真 ⇒ **击杀经验不按等级差衰减**（哪怕 `HighLevelKillMonFixExp=false`）。
+   Rust 旧版把怪物等级当入参（会在 fix=false 时衰减），已改为照抄调用口径；场景可覆写
+   `high_level_kill_mon_fix_exp` 以钉住这一条。
+
+### 本切片**不做**（明确边界，不是"漏做"）
+
+- **技能**（`MagicManager`）与 `GetAttackPowerHit`/`SkillAttackDamage` 的武器特攻面：不在 `_Attack` 子集内。
+- **宝宝击杀**：`KillFunc` 里 `ExpHitter.Master != null` 那一支（经验发给主人）未实现。
+- **升级曲线**：场景把 `max_exp` 调大，保证本批不触发升级；`need_exps` 表要与现网 `Exps.conf`
+  对齐才有意义，留待升级专用场景（避免在这里抄一张会漂移的表）。
+- **`LastHiter`/`ExpHitter` 的过期**（30s / 6s，`BaseObject.Base.cs:119-132`）：依赖墙钟，本骨架不读墙钟。
+- **不死系加成**（`LifeAttrib == LA_UNDEAD` 时加攻击方 `UndeadPower`）：场景尚未注入该字段。
