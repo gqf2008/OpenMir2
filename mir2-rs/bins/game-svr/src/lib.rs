@@ -13,5 +13,6 @@ pub mod ability;
 pub mod bag;
 pub mod downlink;
 pub mod feature;
+pub mod ground;
 pub mod smframe;
 pub mod useitem;

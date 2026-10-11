@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>ground-probe</AssemblyName>
+    <RootNamespace>GroundProbe</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    M3 背包/装备线（卡 openmir2-m3-bag-equip-alignment）第二片·拾取/丢弃切片：oracle 实测向量生成器。
+    引用**真身**（同一份 src/M2Server），反射调 **CM_PICKUP / CM_DROPITEM 的完整消息分支**：
+      - `PlayObject.Message.cs:801`——`CM_DROPITEM`(=1000) → `ClientDropItem` → `SM_DROPITEM_SUCCESS/FAIL`
+      - `PlayObject.Message.cs:811`——`CM_PICKUP`(=1001) → `ClientPickUpItem`（需 `CurrX==nParam2 && CurrY==nParam3`）
+      - `PlayObject.Base.cs:55`（`ClientPickUpItem`）/ `PlayObject.Operate.cs:251`（`ClientDropItem`）
+      - `ClientPickUpItemIsSelf / ClientPickUpItemIsOfGroup`（`PlayObject.Base.cs:24/:38`）
+      - `BaseObject.DropItemDown / GetDropPosition`（`BaseObject.cs:529/:470`）、`Envirnoment.GetItem/
+        DeleteFromMap/AddItemToMap/GetItemEx`（`:705/:635/:88/:723`）
+    用真身 Envirnoment（地图 CellArray 由反射灌入 64×64 全 Walk 网格）+ 真身 MapItem/UserItem
+    （物品表 = 内存替身），替身 `INetChannel` 截即时帧（SM_ADDITEM/SM_DROPITEM_SUCCESS/SM_DROPITEM_FAIL），
+    反射读 `ActorEntity.MsgQueue` 取出队通知（RM_ITEMHIDE/RM_GOLDCHANGED/RM_WEIGHTCHANGED/RM_MENU_OK/
+    RM_SYSMESSAGE），并核对地图格子前后状态。
+    **实测结论**：oracle 全仓无 `MapItem.ItemId = …` 赋值点 ⇒ `AddItemToMap` 的 `ItemId==0` 守卫恒命中
+    ⇒ 正常 `CM_DROPITEM` 恒 `SM_DROPITEM_FAIL`（1:1 复刻，登记 whitelist T-19）。
+    产物 = mir2-rs/tests/parity/m3/fixtures/ground_vectors.json（Rust 侧用例据此逐字段核对）。
+
+    只读：不连 MySQL、不写任何现网文件（SystemShare.ItemSystem 换成内存表）、不发起任何 socket。
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\..\src\M2Server\M2Server.csproj" />
+  </ItemGroup>
+
+</Project>
