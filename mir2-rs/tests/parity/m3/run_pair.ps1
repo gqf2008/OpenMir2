@@ -42,6 +42,10 @@ param(
   [switch]$SkipBots,
   [switch]$KeepSnapshots,
   [switch]$ProvisionSql,
+  [switch]$FixedNewChr,            # M3 固定建角场景（卡 openmir2-m3-botsrv-fixed-newchr）
+  [int]$NewChrJob = 0,             # 仅 -FixedNewChr 时生效
+  [int]$NewChrHair = 2,            # 仅 -FixedNewChr 时生效（2 = 原 Random(1) 恒走的发型）
+  [int]$NewChrSex = 0,             # 仅 -FixedNewChr 时生效
   [switch]$SelfTestRed
 )
 
@@ -170,8 +174,15 @@ $opsRunner = 'none'
 $opsExit = 0
 if (-not $SkipBots) {
   $opsRunner = "run_bots.ps1 -Count $Bots -Prefix $Prefix -NewAccount -Port $Port"
+  $botArgs = @('-Count', $Bots, '-Prefix', $Prefix, '-Address', $Address, '-Port', $Port,
+               '-NewAccount', '-TimeoutSec', $TimeoutSec)
+  if ($FixedNewChr) {
+    $opsRunner += " -FixedNewChr -NewChrJob $NewChrJob -NewChrHair $NewChrHair -NewChrSex $NewChrSex"
+    $botArgs += @('-FixedNewChr', '-NewChrJob', $NewChrJob, '-NewChrHair', $NewChrHair, '-NewChrSex', $NewChrSex)
+    Write-Output ("OPS_FIXED_NEWCHR Job={0} Hair={1} Sex={2}" -f $NewChrJob, $NewChrHair, $NewChrSex)
+  }
   Write-Output ("OPS " + $opsRunner)
-  & powershell -ExecutionPolicy Bypass -File $Botload -Count $Bots -Prefix $Prefix -Address $Address -Port $Port -NewAccount -TimeoutSec $TimeoutSec 2>&1 |
+  & powershell -ExecutionPolicy Bypass -File $Botload @botArgs 2>&1 |
     Tee-Object -FilePath $opsLog
   $opsExit = $LASTEXITCODE
   Write-Output ("OPS_EXIT " + $opsExit)
@@ -242,6 +253,7 @@ $baseline = [pscustomobject]@{
   entry        = "$Address`:$Port"
   ops_runner   = $opsRunner
   ops_exit     = $opsExit
+  fixed_new_chr = if ($FixedNewChr) { "Job=$NewChrJob Hair=$NewChrHair Sex=$NewChrSex" } else { "(off)" }
   git_rev      = (Git-Rev)
   dbsnap       = $beforeHashes
   dbsnap_after = $afterHashes

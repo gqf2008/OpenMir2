@@ -1,0 +1,67 @@
+﻿{
+    "side":  "csharp",
+    "bots":  1,
+    "seed":  42,
+    "started_at":  "2026-10-11T11:08:26.2584404+08:00",
+    "steps":  {
+                  "run_pair":  {
+                                   "exit":  0,
+                                   "session":  "csharp-20261011-110827"
+                               },
+                  "rng":  {
+                              "exit":  0,
+                              "session":  "m3rng-gate-20261011-110826",
+                              "product":  {
+                                              "seed":  42,
+                                              "prefix_calls":  1500,
+                                              "calls_run1":  33440,
+                                              "prefix_sha256":  "b677fe32e0e8feaf01a7832d033aeb6e7d16bfaab2aa59025c91d99c7f2949d1",
+                                              "stream_sha256":  "a74dbbece1770670c263e0acbe4a969e84ec4e537595e836799ff72cfd1efc57",
+                                              "hook_sha256":  "a94ee0b1db0be8cbb420d92f7dc43e6abefbe6d6cc1c9cf59cad0e57069c1bb8",
+                                              "pack_fingerprint":  {
+                                                                       "GameSrv.dll":  "72e1d01c266dd26c2009612b308935ab3b40170b9e3b824c602e23531ab1fedf",
+                                                                       "Server.conf":  "ce5e3ce98b9bb71cbb18e6be1501e20e05642fd3eeaaffd9326caef8d9a4c0e2",
+                                                                       "M2Server.dll":  "1f450d1e902909f40243a33bfd0b45789ed55b9c1f1e1b384b58c0cdb494d124",
+                                                                       "GameSrv.runtimeconfig.json":  "cffdf23bb209aa20cf97d99ffc85a9c09cde9056bb550111c0d92ab560562c3b",
+                                                                       "OpenMir2.dll":  "d904e7c106eff53f4497630e15a5e38304f0211c33c730b8746caa87a0f2f779"
+                                                                   },
+                                              "stable":  true,
+                                              "calls_run2":  32296,
+                                              "prefix_sha256_run2":  "b677fe32e0e8feaf01a7832d033aeb6e7d16bfaab2aa59025c91d99c7f2949d1",
+                                              "stream_sha256_run2":  "171a35efde37a08f3d22caab3a9acf63f0dd2c164d49d52c5030888e6f3e4053",
+                                              "common_prefix_calls":  1820,
+                                              "drop_100kills_sha256":  "e40d78c0cd169acc318d40755c20a840963be1ddd6e78af1af1e3000827f1aec",
+                                              "exp_table_sha256":  "5c1c45ce949521ccac27dc8d80a7ea17ad25568da2344f6677b4e8af1e792bb7",
+                                              "pack_unchanged":  true,
+                                              "finished_at":  "2026-10-11T11:09:57.1864829+08:00",
+                                              "git_rev":  "ee3760362469cb8e8674c168d94af31b21af8d11"
+                                          }
+                          }
+              },
+    "entry_holders":  [
+                          {
+                              "port":  7000,
+                              "process":  "LoginGate",
+                              "path":  "E:\\MirServer\\LoginGate\\LoginGate.exe",
+                              "impl":  "csharp"
+                          },
+                          {
+                              "port":  7100,
+                              "process":  "SelGate",
+                              "path":  "E:\\MirServer\\SelGate\\SelGate.exe",
+                              "impl":  "csharp"
+                          },
+                          {
+                              "port":  7200,
+                              "process":  "GameGate",
+                              "path":  "E:\\MirServer\\RunGate\\GameGate.exe",
+                              "impl":  "csharp"
+                          }
+                      ],
+    "entry_impl":  "csharp",
+    "finished_at":  "2026-10-11T11:09:57.8797104+08:00",
+    "failed":  [
+
+               ],
+    "pass":  true
+}

@@ -37,5 +37,24 @@ namespace BotSrv
         /// 报告里必须记录实际用的值（上线速率是压测口径的一部分）。
         /// </summary>
         public int ConnectStaggerMs { get; set; } = 3000;
+
+        /// <summary>
+        /// 固定建角参数（M3 跨侧对拍夹具确定性）。默认 false = 原行为：
+        /// Hair/Job/Sex 走 RandomNumber.GetInstance()（无种子）随机。
+        /// 置 true 时改用 NewChrJob/NewChrHair/NewChrSex，使 C# 侧与 Rust 侧跑同一输入序列。
+        /// </summary>
+        public bool FixedNewChr { get; set; }
+        /// <summary>
+        /// 固定建角职业（仅 FixedNewChr=true 时生效；对应 CM_NEWCHR 的 sJob 字节）。
+        /// </summary>
+        public int NewChrJob { get; set; }
+        /// <summary>
+        /// 固定建角发型（仅 FixedNewChr=true 时生效；对应 CM_NEWCHR 的 sHair 字节）。
+        /// </summary>
+        public int NewChrHair { get; set; }
+        /// <summary>
+        /// 固定建角性别（仅 FixedNewChr=true 时生效；对应 CM_NEWCHR 的 sSex 字节）。
+        /// </summary>
+        public int NewChrSex { get; set; }
     }
 }

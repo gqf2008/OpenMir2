@@ -5,7 +5,10 @@
 
 .DESCRIPTION
   设计文档 §6 M3 判据（owner 2026-10-10 决策：夹具提升为正式门禁）：
-    - DB 侧：作用域内字段级 diff = 0（`scoped_diff.py diff`）
+    - DB 侧：作用域内字段级 diff = 0（`scoped_diff.py diff --canonical`；
+      只对"每次运行必变"的列（自增 PK/FK、墙钟 datetime/unix 秒）与夹具随机输入的
+      建角列（Hair/Sex/Job）置占位，其余列逐字节比；未登记表 fail-closed。
+      易变列白名单与理由见 `scoped_diff.py` 的 TABLE_COLUMNS/VOLATILE_COLUMNS）
     - 基线侧：C# 基线一条命令可复跑且 hash 稳定（`rng-baseline.ps1`）
     - 两侧实现必须真的是"两侧"（见下方实现识别护栏）
 
@@ -36,7 +39,12 @@ param(
   [string]$PeerSession = '',
   [switch]$VerifyRepeat,
   [switch]$SkipRngBaseline,
-  [switch]$SkipBots
+  [switch]$SkipBots,
+  [switch]$FixedNewChr,          # M3 固定建角场景（卡 openmir2-m3-botsrv-fixed-newchr）：
+                                 # 跨侧 diff 带 --fixed-newchr ⇒ Job/Hair/Sex 不置占位
+  [int]$NewChrJob = 0,
+  [int]$NewChrHair = 2,
+  [int]$NewChrSex = 0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -46,6 +54,7 @@ $Stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $ReportPath = Join-Path $Here ("sessions\M3-gate-{0}-{1}.json" -f $Side, $Stamp)
 $report = [ordered]@{
   side = $Side; bots = $Bots; seed = $Seed; started_at = (Get-Date).ToString('o')
+  fixed_new_chr = if ($FixedNewChr) { "Job=$NewChrJob Hair=$NewChrHair Sex=$NewChrSex" } else { "(off)" }
   steps = [ordered]@{}
 }
 $failed = @()
@@ -110,6 +119,7 @@ Write-Output '--- 1) run_pair（快照 + 作用域抽取 + 基线） ---'
 $pairArgs = @('-Side', $Side, '-Bots', $Bots)
 if ($Prefix -ne '') { $pairArgs += @('-Prefix', $Prefix) }
 if ($SkipBots) { $pairArgs += '-SkipBots' }
+if ($FixedNewChr) { $pairArgs += @('-FixedNewChr', '-NewChrJob', $NewChrJob, '-NewChrHair', $NewChrHair, '-NewChrSex', $NewChrSex) }
 & powershell -ExecutionPolicy Bypass -File (Join-Path $Here 'run_pair.ps1') @pairArgs | Tee-Object -FilePath (Join-Path $Here ("sessions\gate-{0}-{1}.pair.log" -f $Side, $Stamp))
 $pairExit = $LASTEXITCODE
 $sessionDir = (Get-ChildItem (Join-Path $Here 'sessions') -Directory -Filter ("{0}-*" -f $Side) |
@@ -157,9 +167,11 @@ if ($PeerSession -ne '') {
     Write-Output ("RED: 参照会话缺 scoped_after_norm.jsonl: {0}" -f $peer)
     $failed += 'peer_session_missing'
   } else {
-    & python (Join-Path $Here 'scoped_diff.py') diff $peer $mine
+    $diffArgs = @((Join-Path $Here 'scoped_diff.py'), 'diff', $peer, $mine, '--canonical')
+    if ($FixedNewChr) { $diffArgs += '--fixed-newchr' }
+    & python @diffArgs
     $diffExit = $LASTEXITCODE
-    $report.steps.cross_side_diff = [ordered]@{ peer = $PeerSession; exit = $diffExit }
+    $report.steps.cross_side_diff = [ordered]@{ peer = $PeerSession; exit = $diffExit; fixed_new_chr = [bool]$FixedNewChr }
     if ($diffExit -ne 0) { $failed += 'cross_side_diff_nonzero' }
   }
 } else {
