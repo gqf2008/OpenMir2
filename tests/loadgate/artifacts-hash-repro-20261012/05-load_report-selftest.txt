@@ -1,0 +1,3 @@
+$ python tools/botload/load_report.py selftest
+GREEN: load_report selftest 全过（分位数/尾部敏感/登录阈值牙齿/在线判据牙齿/掉线分窗/内存斜率/残余丢包方向/本机负载窗）
+rc=0

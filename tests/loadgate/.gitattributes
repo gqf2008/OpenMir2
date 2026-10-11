@@ -1,0 +1,11 @@
+# tests/loadgate/** 是 C6 压测的**已入库证据件**（产物 + artifacts.sha256.json 清单）。
+#
+# 产物由 PowerShell/Python 在 Windows 上写出（CRLF），而 `artifacts.sha256.json` 记录的是
+# 「清单生成当时工作树字节」的 SHA256。若让 git 做行尾归一（本仓 `core.autocrlf=true`）：
+# blob 会被存成 LF、检出再变回 CRLF ⇒ **在全新检出上重算清单必然假 mismatch**（18/45），
+# 「核对引用件未被覆写」这条复核路径就不再可复现（F9-1，卡 openmir2-c6-artifacts-hash-repro）。
+#
+# 这里 `-text` **冻结字节**：git 原样存、原样检出，不做任何 EOL/编码转换。
+# 因此任何检出上 `python tools/botload/verify_artifacts.py <dir>/artifacts.sha256.json`
+# 都必须 0 mismatch；清单若与现状不符 = 引用件真的被覆写了。
+* -text

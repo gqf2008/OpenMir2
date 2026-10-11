@@ -1,7 +1,9 @@
 # tools/botload/ —— 假人压测 / 载荷门禁（C6）
 
 对应设计文档 §6 **M5 压测三档**、§4.2.1「用假人量单线程世界的 tick P99 曲线」。
-三个件：`run_bots.ps1`（单档冒烟，C1 就有）、`load_gate.ps1`（档位编排）、`load_report.py`（指标归算）。
+三个件：`run_bots.ps1`（单档冒烟，C1 就有）、`load_gate.ps1`（档位编排）、`load_report.py`（指标归算）；
+外加 `verify_artifacts.py`（复核 F9 的 `artifacts.sha256.json` 产物清单，字节口径，见
+`tests/loadgate/README.md》产物清单哈希口径与复核`）。
 整栈一条命令见 `tools/e2e/stack_e2e.ps1`。
 
 ```powershell
@@ -16,6 +18,7 @@ powershell -ExecutionPolicy Bypass -File tools/botload/load_gate.ps1 -Tiers 200 
 # 归算（也可单独跑）
 python tools/botload/load_report.py summarize --stats <tier>/load_stats.ndjson --mem <tier>/mem.ndjson --count 200
 python tools/botload/load_report.py selftest         # 口径自测（含尾部敏感/改坏必变）
+python tools/botload/verify_artifacts.py tests/loadgate/load-*/artifacts.sha256.json  # 复核产物清单（字节口径；期望 105/105, rc=0）
 powershell -ExecutionPolicy Bypass -File tools/botload/load_gate.ps1 -SelfTestRed   # 红检：无监听端口必须判红
 ```
 

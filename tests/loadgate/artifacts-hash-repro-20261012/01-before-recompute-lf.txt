@@ -1,0 +1,117 @@
+$ git rev-parse HEAD
+15cec558d074ea96c5dab970e43bb9583316e272
+
+$ python tools/botload/verify_artifacts.py tests/loadgate/load-20261011-155529/artifacts.sha256.json tests/loadgate/load-20261011-162213/artifacts.sha256.json tests/loadgate/load-20261011-165805/artifacts.sha256.json
+[MISMATCH] run-1/tier-1000/mem.ndjson
+           期望 567443f062b5b393eb7ad05733ecd88940ab9d3f1272bd2975b1a24d646bab64
+           实际 3b9c7eb6157a772ddb49e6da1a5f017489ec8098f54a711e53bb0574f0e4bcbd
+[MISMATCH] run-1/tier-200/mem.ndjson
+           期望 e7754794956e6e61acdb29f13fc5a1724eb5f09286232ac8f028c9cd82eeae76
+           实际 605c081f0c5f9c0fb25a8a7ca12cb4e35d29b563516f7bf5ffa1826dddf567ac
+[MISMATCH] run-1/tier-500/mem.ndjson
+           期望 e59c4c2c165d058f462ac8f794395af96ffada4b8dbd99acb92e1d25941c728c
+           实际 bd86bb016dff145d94bfb6d838e7af7b33fed1cce0e5aab0c9c1c7ecb02cd9c4
+[MISMATCH] run-2/tier-1000/mem.ndjson
+           期望 a478aa957b2ac6ff497422e9aa62b12f48c6ad07045041a3bb3ee5265924fff2
+           实际 93c05feee3311a105f15da32aa06ef736fdcaae9f649e5cd644a37491f51d4eb
+[MISMATCH] run-2/tier-200/mem.ndjson
+           期望 b75cec09a75abd3eb0f5fce84b6c6988bffc8682eb0e2ff69f3040022b95a96b
+           实际 8335886f9685bfc5c1ffca4473c2d6d06f33c3397ffc2430fa4492143ce373dc
+[MISMATCH] run-2/tier-500/mem.ndjson
+           期望 27a1fef44c3686a6a1c372cbf1b8da5016e3a1f22ce9644193c8a36a89ba494e
+           实际 a203798596efc28cb848dd55f80978058b048b1a21c61233732c0ce6d85b7216
+[MISMATCH] run-3/tier-1000/mem.ndjson
+           期望 ae52161516a38416ece9a7e5d665fd588aed08c3790c0011a5abe01f724547c2
+           实际 a76ca4659dd1fee7f8db497a13578fed08144a75af4b94ef1a1d425ed5b130c7
+[MISMATCH] run-3/tier-200/mem.ndjson
+           期望 7dcfd9ce0b26f3b55d8ccedcc2e573edc5114569a3eb87402bf8fa72a48d072b
+           实际 a677b8d3985182b154ad7c60d515aff3ea7c71919a3d5da61be92b210a5eb199
+[MISMATCH] run-3/tier-500/mem.ndjson
+           期望 f9e11ffe3063b4a8c829231a3c6034e1d72225672fbd09f774e7055d23da5165
+           实际 2adc6868b8137e101e21ee965e1b198e08b746c87f6f630aeb62883258748a73
+[FAIL] tests/loadgate/load-20261011-155529/artifacts.sha256.json  21/30 匹配
+[MISMATCH] run-1/tier-1000/mem.ndjson
+           期望 7ab27aa0b6f2a9f9a8230abc8f38d94fcc05bf9245796170a4820c50a2322d8c
+           实际 c8133be27d0847735851382eefbec9e063ee9c7f0896c9898567f4501e16a159
+[MISMATCH] run-1/tier-200/mem.ndjson
+           期望 c5339d0cabb64fb32efeec5665fe89a3138307bccb7b6e022d43344db550ffb1
+           实际 ead1721a8930de6549dabfc2c4d5dad77c29cb2d07f8097f5cce9a3ed9d8850b
+[MISMATCH] run-1/tier-500/mem.ndjson
+           期望 8480577ed45427dab7168a51b3160d31d66e4cbe7f3ae22792f5a55489ac330e
+           实际 4f94ca7724c6d3d8d2411cee7a3f70e5289292ffddbc4a89617449c80ef9712c
+[MISMATCH] run-2/tier-1000/mem.ndjson
+           期望 cb42b79704d30af63ac2da141c40b2e1cfac8956e27c84d6766c776379dca2f6
+           实际 cef4d2c376959c5ebf560cdf5922f5aeb148827a92892b9478c395427a7d8eb1
+[MISMATCH] run-2/tier-200/mem.ndjson
+           期望 9d1f20804df92108bd87d2517d2a632f24a08af3ff101bcf5ff0ccaed66fe99d
+           实际 93c6fec512bb01d00d5fe054d440d9f43596885c8db326d4f5d3917f3b846fae
+[MISMATCH] run-2/tier-500/mem.ndjson
+           期望 23e9143f8661fb5102743d56310fd3823fa37328f3479a999d5098bf70abd88c
+           实际 f6d93635aa0bc82b0fe0a80245f324306a0ee9e3c0cd57cd3d88faa74944465f
+[MISMATCH] run-3/tier-1000/mem.ndjson
+           期望 368a188bacb04e39bc5dddfdc9f8d49229150ce4e74a9d6e902edc3a138317e9
+           实际 9c2f23e2fc8090aeba4f82eb8ee6afb7f3f9f1c800e3e4fd72da26a0e8d4bcf8
+[MISMATCH] run-3/tier-200/mem.ndjson
+           期望 bf5fcc911f28312b8300dc0ef7d57055ad7cf7ba904e6c6d73a206925391d186
+           实际 5953424e1c39eb3f0188adc4f92258fdbc1f0e623473e1fd6995127ff97e1620
+[MISMATCH] run-3/tier-500/mem.ndjson
+           期望 5fb76eebffb31ff4b0591be9ec67b02f3f2a2d9b8323c8187dfe8853fd3c76d5
+           实际 400fd67758e6f5597469d683d135de5a8cd2aff282cb118dd181ea64b3da84aa
+[FAIL] tests/loadgate/load-20261011-162213/artifacts.sha256.json  21/30 匹配
+[MISMATCH] run-1/tier-1000/hostload.ndjson
+           期望 5ba29d5ced45bb338bf651c5e5e63058b2b598e4637a2a81f1f62ee73f54fcd5
+           实际 3d96e7e774b16fb4d76fab3f5173e2d1ebeebc3589558b9acb9cdfd3d2f6748a
+[MISMATCH] run-1/tier-1000/mem.ndjson
+           期望 ee2b46d82e4eaf076eae2b27b3cfd7b0c2eda9bb38c500042e0d14210dca04b8
+           实际 76fd72ece5bc631401c3833f7bfe2486ef880e2030aa259dd7009fed56fbaf6e
+[MISMATCH] run-1/tier-200/hostload.ndjson
+           期望 203282c42d8374e6bb455fe3a326cb64cdf711e171779fa96b8c0f417fbc5dfa
+           实际 1acd606f4d2ffecde542440db58612dd9c9495bf76860d2aa066f5c4dac47096
+[MISMATCH] run-1/tier-200/mem.ndjson
+           期望 c3ffb55d1ac87c3c0c8c80b9ad8a358725d7dc3917bd813e42c1e6b182f48729
+           实际 7b5c4b4a15263a5fed9a44296926bf5ad43ba1ae7e09b45ecbeea0ed1838dc23
+[MISMATCH] run-1/tier-500/hostload.ndjson
+           期望 9486fd2adc1f65eb54936b765f8d5077f6b5d5bbbba9b797f70eb3b744d20036
+           实际 27a1c669450507d16e134630912cd10e50f0993919824b81105222b9731ba8b1
+[MISMATCH] run-1/tier-500/mem.ndjson
+           期望 cac16e458e252fc8e23d065bde9322cb9b0c3e7f868e58a48bdbd25ab5fff915
+           实际 b73a90d477dcc4144aa3ce3b024ae179d547413dec22fd61978e7cc0e836895e
+[MISMATCH] run-2/tier-1000/hostload.ndjson
+           期望 068ddb405261df3631cd45fcfa796b997e480204a53a34aacb4034c44936d9a9
+           实际 e3ef47a2807952546b4d90c1fe4b9f24aca9c594565c3c7c2433900b858be027
+[MISMATCH] run-2/tier-1000/mem.ndjson
+           期望 d683d45863d203ee41100ccdec8823f6b88ed1077d693280ffe920083ce313dc
+           实际 a5a2483f7514478bf51e35006ddcaff5a4aba071109ab6b530400bb1b33db2aa
+[MISMATCH] run-2/tier-200/hostload.ndjson
+           期望 4f7e4aa7dfa5abb87fc21f5e8c15e6c0b19771dec24bf92de158bce0bb49ca66
+           实际 c7ecb6ec65fed154317eda4e5cdc5125274f91584c81d8dba0894619426e34c7
+[MISMATCH] run-2/tier-200/mem.ndjson
+           期望 eb80ffa668150249fee88d653a69e78036541908bc030ffa7d462b931ee809b3
+           实际 038877fd7b5a4b2debe112be802e477ef598affca5cc7fb60c35206f9074c9bf
+[MISMATCH] run-2/tier-500/hostload.ndjson
+           期望 bb081b381362e7d837ed0e600276b087f530328dddc506ebd01480bd2fa8ff48
+           实际 7859d924ae7535c9df1a501eb5df6ff14562e3b5057c32cf23709aeaa6abd806
+[MISMATCH] run-2/tier-500/mem.ndjson
+           期望 83f35faa1802b0013957bf0b9f1e82a23b8b21465adbabef47ce8ef0035449c1
+           实际 e8c36d54beaa1f93849b6f2f174646587b46217e9735aff6e7fff29330221d75
+[MISMATCH] run-3/tier-1000/hostload.ndjson
+           期望 1e4840d81b47db533c6f0209ed2e46e4072da540444defff4ed01288f60f1db2
+           实际 cc074ade78f88800b71fb17e1302f2c0cdd98909713952212dcc085d64fe6c6a
+[MISMATCH] run-3/tier-1000/mem.ndjson
+           期望 d03104b541af29d6a848f609a12cc92c2bad7b20c3a6558162db556477c2cf34
+           实际 bf2c5a86affe859ca29d665fb3ef7433f7f59d1677902e2b54f0797cd29fe9f7
+[MISMATCH] run-3/tier-200/hostload.ndjson
+           期望 98aaa5cb7272faf2bc4dae0d0f7ac288af555f5070cbf81ed056a0d5f05735c1
+           实际 45a8e11dfc4eea63bfed3cefdf9db413b3b2f587b50f1a78d323759a989b573b
+[MISMATCH] run-3/tier-200/mem.ndjson
+           期望 6cbfbd39151734f5d1cfe139724f03511a9ec7c652b8a354c5f57b215a405492
+           实际 b0dbeb8b7b7cf12cdada5d0ae491f5cb9fbc123d3c0a5b71180e448a395e212c
+[MISMATCH] run-3/tier-500/hostload.ndjson
+           期望 a259a2139bc3f1d9413202953bdb996d3c6a32deac9b836578f242702b2abce4
+           实际 6b98cc00d00c394edbca11861ea0cceb28d0e4845d65626e3fa85ed7fa2c198a
+[MISMATCH] run-3/tier-500/mem.ndjson
+           期望 8ad616799b594e233908be024abe66d6095347601bb2b96ae44e18237517f06d
+           实际 e55a601364407fc2d4aad132eb52376ca72cf938da76b4c815b026aa69fb2de3
+[FAIL] tests/loadgate/load-20261011-165805/artifacts.sha256.json  27/45 匹配
+verify_artifacts: FAIL 0/3 清单, 69/105 文件 0 mismatch 期望
+rc=1
