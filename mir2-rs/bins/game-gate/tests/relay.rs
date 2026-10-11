@@ -94,6 +94,15 @@ fn login_frame(text: &str) -> Vec<u8> {
 /// 现网形态（账号 8 / 角色名 4 / 版本号 9 / code 10 位）的登录文本。
 const GOOD_LOGIN: &str = "**loadbot1\\lb1a\\1\\120020522\\1200205220\\AABB";
 
+/// 造一个客户端 face 的**命令帧**：body = `#1` + EDCode(解码态载荷) + `!`。
+/// 登录通过后网关按 `ClientSession.cs:646-669` 重建出帧，所以测试要按这个形态发。
+fn command_frame(decoded: &[u8]) -> Vec<u8> {
+    let mut body = b"#1".to_vec();
+    body.extend_from_slice(&mir2_protocol::edcode::encode(decoded));
+    body.push(b'!');
+    frame(11, 0, &body)
+}
+
 /// 判据 6：登录校验失败 ⇒ 剔除（客户端被断开），且 5000 侧除 `GM_OPEN`/`GM_CLOSE` 外没有别的帧。
 #[tokio::test]
 async fn bad_login_is_kicked_and_nothing_is_forwarded() {
@@ -231,8 +240,9 @@ async fn relays_open_data_heartbeat_and_close() {
     client.write_all(&login_frame(GOOD_LOGIN)).await.unwrap();
     client.flush().await.unwrap();
     // 判据 3：登录后的数据帧必须原样转发
-    let payload: Vec<u8> = (0..=31u8).collect();
-    client.write_all(&frame(11, 0, &payload)).await.unwrap();
+    // 无尾部命令帧（解码后恰好 12B）：出帧的 body 必须是**解码态**的 12 字节、PackLength=12
+    let decoded: Vec<u8> = (0..12u8).collect();
+    client.write_all(&command_frame(&decoded)).await.unwrap();
     client.flush().await.unwrap();
 
     // 判据 4：body < 16 ⇒ 网关关会话（并补发 GM_CLOSE）
@@ -278,8 +288,12 @@ async fn relays_open_data_heartbeat_and_close() {
         datas.len()
     );
     assert_eq!(
-        datas[0].1, payload,
-        "GM_DATA 的 body 必须与客户端原始 body 逐字节相同"
+        datas[0].1, decoded,
+        "无尾部命令帧：GM_DATA 的 body 必须是**解码态**的 12 字节（oracle 抄 decodeBuff，不是原样字节）"
+    );
+    assert_eq!(
+        datas[0].0.pack_length, 12,
+        "无尾部时 PackLength = CommandMessage.Size = 12"
     );
     assert_eq!(datas[0].0.session_id, sid, "GM_DATA 必须带同一 SessionId");
 
@@ -312,5 +326,79 @@ async fn missing_config_exits_nonzero() {
     let err =
         String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("配置"), "错误信息应指明配置问题，实得：{err}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// 判据 8：**有尾部**的命令帧按 `ClientSession.cs:646-669` 重建——
+/// `PackLength = 12 + tLen + 1`（`tLen` = 尾部重编码后的长度），body = 解码态 12B + 输入尾部（编码态）
+/// + 1 字节（oracle 那句是池内存未初始化字节，我们送 0，见协议梳理 §7.9）。
+#[tokio::test]
+async fn command_frame_with_tail_is_rebuilt() {
+    let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let srv_port = l.local_addr().unwrap().port();
+    // 解码态载荷：12B 固定头 + 8B 尾部
+    let decoded: Vec<u8> = (0..20u8).collect();
+    let expect_tlen = mir2_protocol::edcode::encode(&decoded[12..]).len();
+    let srv_task = tokio::spawn(async move {
+        let (mut sock, _) = l.accept().await.unwrap();
+        loop {
+            let mut head = [0u8; ServerMessage::SIZE];
+            if sock.read_exact(&mut head).await.is_err() {
+                return None;
+            }
+            let m = ServerMessage::from_bytes(&head).unwrap();
+            let mut body = vec![0u8; m.body_len()];
+            if !body.is_empty() && sock.read_exact(&mut body).await.is_err() {
+                return None;
+            }
+            if m.ident == u16::from(grobal2::GM_DATA) {
+                return Some((m.pack_length, body));
+            }
+        }
+    });
+    let gate_port = free_port();
+    let dir = std::env::temp_dir().join(format!("gg-tail-{}-{}", std::process::id(), gate_port));
+    write_conf(&dir, srv_port, gate_port);
+    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_game-gate"))
+        .arg(dir.join("config.conf"))
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut client = connect_with_retry(gate_port).await;
+    client.write_all(&login_frame(GOOD_LOGIN)).await.unwrap();
+    client.flush().await.unwrap();
+    client.write_all(&command_frame(&decoded)).await.unwrap();
+    client.flush().await.unwrap();
+
+    let (pack_length, body) = tokio::time::timeout(Duration::from_secs(5), srv_task)
+        .await
+        .expect("假 GameSvr 未按时结束")
+        .unwrap()
+        .expect("应收到 GM_DATA");
+    assert_eq!(
+        usize::try_from(pack_length).unwrap(),
+        12 + expect_tlen + 1,
+        "PackLength = 12 + tLen + 1"
+    );
+    assert_eq!(
+        &body[..12],
+        &decoded[..12],
+        "固定头必须是**解码态**的 12 字节"
+    );
+    // 尾部抄的是**输入的编码态**字节：本用例的输入 body = `#1` + encode(decoded) + `!`，
+    // 网关视角的 payload = encode(decoded) ⇒ 尾部 = payload[16..]（oracle 抄的是 tempBuff[16..]）。
+    let enc = mir2_protocol::edcode::encode(&decoded);
+    let sent_tail = &body[12..body.len() - 1];
+    assert_eq!(
+        sent_tail,
+        &enc[16..],
+        "尾部必须逐字节等于输入的编码态尾部（oracle 抄 tempBuff[16..]）"
+    );
+    assert_eq!(
+        body[body.len() - 1],
+        0,
+        "oracle 的声明长度比实际内容多 1 字节（池内存未初始化）；Rust 侧固定送 0 —— 已登记差异"
+    );
+    child.kill().await.ok();
     std::fs::remove_dir_all(&dir).ok();
 }

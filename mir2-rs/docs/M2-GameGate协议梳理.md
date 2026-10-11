@@ -223,6 +223,25 @@ GameSvr 的 body；③ 超出部分**重新编码**（用与解码同一个 EDCo
 `SessionIndex` 必须一致（`world.rs` 那侧新加 `SessionIndexes` 表 + `server_user_index_is_echoed_on_gm_data`
 测试钉住）。
 
+## 7.9 切片 3 的三个取证点：**答案**，以及本批实现到哪
+
+§7.8 列的 3 个"不许猜"的点，本批查清并落了实现：
+
+| 点 | 答案（oracle 行号） |
+| --- | --- |
+| `CommandMessage` 的 16B 布局？ | **不是 16B，是 12B**：`Recog:int(4) + Ident/Param/Tag/Series:ushort(各 2)` = `CommandMessage.Size = 12`（`src/OpenMir2/Packets/ClientPackets/ClientMesaagePacket.cs:11-24`）。`GateShare.CommandFixedLength = 16` 是**编码态**的长度（12 解码字节 ↔ 16 编码字节，4/3 扩张）——所以 `ClientSession.cs:658` 用 16 当**编码流内**的偏移、`:657` 用 12 当**解码流内**的长度，两者不矛盾。 |
+| `EncryptUtil.Encode/Decode` 是否有跨调用状态？ | **没有**：`Encode` 每次调用 `no = 2`、`remainder = 0`，是**纯块码**（每 6 输入字节 → 8 输出字节，末块按 `no != 2` 补一个字节；`src/OpenMir2/EncryptUtil.cs:33-68`）⇒ `crates/protocol::edcode` 的纯函数口径**足够**，不需要额外状态机。 |
+| 长度里那个 `+1` 字节是什么？ | **是池内存里的未初始化字节**：`bodyBuffer = GateShare.BytePool.Rent(sendLen)`，`:657-658` 只写了 `12 + tLen` 字节，而 `Send(bodyBuffer[..sendLen])` 送出 `12 + tLen + 1` ⇒ **最后 1 字节从没被赋值**。⇒ 逐字节等价在这一格**不可能**（oracle 自己都不确定）；Rust 侧固定送 `0`，登记为**已知差异**（§8）。 |
+
+**本批实现**（`bins/game-gate`，出帧构造照 `ClientSession.cs:646-669`）：
+
+- 无尾部（解码后 ≤ 12B）：`PackLength = 12`，body = **解码态**字节（oracle 抄的是 `decodeBuff`，不是原样字节）；
+- 有尾部：`PackLength = 12 + tLen + 1`（`tLen` = 尾部**重编码**后的长度），body = 解码态 12B + **输入的编码态尾部**（`payload[16..]`）+ 固定的 `0`；
+- 两条都有进程级测试钉住（`relays_open_data_heartbeat_and_close` 的无尾部断言、`command_frame_with_tail_is_rebuilt` 的尾部布局断言）。
+
+**仍未做**（登记）：速度规则/过滤器（`SessionSpeedRule`、`Filters/*`，只在非默认配置或异常客户端下可见）、
+OTP、`GM_CHECKCLIENT` 周期帧、`ClientTimeOutTime` 空闲回收。卡内验收 #1/#2 仍需整栈窗口。
+
 ## 8. 头号风险
 
 - **客户端 face 有登录门禁（§7.6）**：未通过登录帧校验的客户端会被**剔除**；切片 1 目前会照转 `GM_DATA`
@@ -233,5 +252,11 @@ GameSvr 的 body；③ 超出部分**重新编码**（用与解码同一个 EDCo
 - **最高风险：网关是"解码→处理→重编码"的加工点，不是中继**（§2 的 ⚠️）。
   ⇒ 切片 1 的判据必须先补一条"re-encode 字节恒等性"的实验（§7.2），否则"能进图"也可能是
   "改了字节但两端都容忍"的假等价。
+  ——**追记（§7.9 查清）**：`EncryptUtil.Encode` 是**纯块码（无跨调用状态）**，"re-encode 字节恒等"对它成立；
+  但命令帧的出帧**本来就不是输入字节**（12B 解码头 + 编码态尾部），所以"逐字节等于客户端发的帧"这个
+  预期本身是错的——要比对的是**网关发往 5000 的帧**（对 C# 与 Rust 各自采集后归一化 `SessionId`）。
+- **已知不可比对的一格**（§7.9）：有尾部命令帧的最后 1 字节，oracle 是 `BytePool.Rent` 出来的**未初始化**内存
+  （`ClientSession.cs:657-668` 只写 `12+tLen` 字节却按 `12+tLen+1` 发送）。Rust 侧固定送 `0`；
+  逐帧差分要对这一格做**归一化**（或断言服务端不读它），否则会得到永远不等的假红。
 - 切片 1 若通过入口护栏，只能证明"**入口=Rust、世界=C#**"，不能当成 M3 的"游戏系统对齐"证据
   （与卡内 comment 的口径一致）。

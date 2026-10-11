@@ -43,6 +43,8 @@ use tokio::sync::{mpsc, Mutex};
 
 /// C# `GateShare.CommandFixedLength`（`GateShare.cs:18`）：命令帧最小长度。
 const COMMAND_FIXED_LENGTH: usize = 16;
+/// C# `Packets/ClientPackets/ClientMesaagePacket.cs:24`：`CommandMessage.Size`（解码后的固定头长度）。
+const COMMAND_MESSAGE_SIZE: usize = 12;
 /// C# `GateShare.MaxSession`（`GateShare.cs:14`）：每条网关→服务器连接的会话上限。
 const MAX_SESSION: usize = 10_000;
 
@@ -276,21 +278,16 @@ async fn client_loop(
             }
             continue; // 登录帧不转发给 GameSvr（oracle 的 else 分支也不发）
         }
-        // 转发给 GameSvr。`SessionIndex` 取该会话的 `SvrListIdx`（oracle 在 `ClientSession.cs:649`
-        // 每次都写 `SendMsg.SessionIndex = SvrListIdx`）。
-        // TODO(切片 3)：命令路径在 C# 里**不是搬字节**——它把内层解码成 `CommandMessage`(16B) + 尾部
-        // **重新编码**（`ClientSession.cs:646-669`），`PackLength = 16 + tLen (+1)`。当前实现仍是原样转发，
-        // 已在协议梳理 §7.8 记为待办。
+        // 命令路径的出帧重建（照 `ClientSession.cs:646-669`，**不是搬字节**）：
+        // - 固定头 12B（`CommandMessage.Size`）用**解码态**字节；
+        // - 有尾部时：`PackLength = 12 + tLen + 1`，尾部字节直接抄**输入的编码态**（oracle 里
+        //   `sendBuffer` 算了却没用，抄的是 `tempBuff[16..]`）；
+        // - 末尾那 1 字节 oracle 是**未初始化的池内存**（`bodyBuffer` 来自 `BytePool.Rent`），
+        //   这里送 0 —— **已知的不可比对差异**，见协议梳理 §7.9。
+        // - `SessionIndex` 取本会话的 `SvrListIdx`（`:649`）。
         let session_index = *indexes.lock().await.get(&sid).unwrap_or(&0);
-        let data = ServerMessage {
-            packet_code: grobal2::PacketCode,
-            socket: 0,
-            session_id: sid,
-            ident: u16::from(grobal2::GM_DATA),
-            session_index,
-            pack_length: i32::try_from(body.len()).unwrap_or(i32::MAX),
-        };
-        send_internal(&down_tx, data, &body).await?;
+        let wire = rebuild_command_frame(&body, sid, session_index);
+        send_raw(&down_tx, &wire).await?;
     }
 
     // 离开：GM_CLOSE(session_id=0, socket=handle)（实机取证确认）
@@ -389,10 +386,55 @@ async fn send_internal(
 ) -> Result<()> {
     let mut wire = msg.to_bytes().to_vec();
     wire.extend_from_slice(body);
+    send_raw(tx, &wire).await
+}
+
+/// 发一段**已经拼好**的线上字节（命令路径要自己拼 20B 头 + 解码头 + 编码尾，见 §7.9）。
+async fn send_raw(tx: &Arc<Mutex<OwnedWriteHalf>>, wire: &[u8]) -> Result<()> {
     let mut w = tx.lock().await;
-    w.write_all(&wire).await.context("写游戏服务失败")?;
+    w.write_all(wire).await.context("写游戏服务失败")?;
     w.flush().await.ok();
     Ok(())
+}
+
+/// 命令帧的出帧重建（照 `ClientSession.cs:646-669`；口径见协议梳理 §7.8/§7.9）：
+/// - 无尾部（解码后 ≤ `COMMAND_MESSAGE_SIZE`=12）：`PackLength = 12`，body = **解码态**字节；
+/// - 有尾部：`PackLength = 12 + tLen + 1`（`tLen` = 尾部重编码后的长度），
+///   body = 解码态 12B + **输入的编码态尾部**（`payload[16..]`）+ 1 字节；
+/// - 那 1 字节在 oracle 里是 `BytePool.Rent` 的**未初始化内存**，这里固定送 `0`（已知的不可比对差异）。
+fn rebuild_command_frame(body: &[u8], sid: u16, session_index: i32) -> Vec<u8> {
+    let payload = &body[2..body.len() - 1]; // = C# 的 `tempBuff`（去掉 `#1` 与尾 `!`）
+    let decoded = mir2_protocol::edcode::decode(payload);
+    let mut wire: Vec<u8> = Vec::with_capacity(ServerMessage::SIZE + decoded.len() + 1);
+    let (pack_length, tail): (i32, &[u8]) = if decoded.len() > COMMAND_MESSAGE_SIZE {
+        let t_len = mir2_protocol::edcode::encode(&decoded[COMMAND_MESSAGE_SIZE..]).len();
+        let pl = i32::try_from(COMMAND_MESSAGE_SIZE + t_len + 1).unwrap_or(i32::MAX);
+        let tail = if payload.len() > COMMAND_FIXED_LENGTH {
+            &payload[COMMAND_FIXED_LENGTH..]
+        } else {
+            &[]
+        };
+        (pl, tail)
+    } else {
+        (i32::try_from(COMMAND_MESSAGE_SIZE).unwrap_or(i32::MAX), &[])
+    };
+    let head = ServerMessage {
+        packet_code: grobal2::PacketCode,
+        socket: 0,
+        session_id: sid,
+        ident: u16::from(grobal2::GM_DATA),
+        session_index,
+        pack_length,
+    };
+    wire.extend_from_slice(&head.to_bytes());
+    if decoded.len() > COMMAND_MESSAGE_SIZE {
+        wire.extend_from_slice(&decoded[..COMMAND_MESSAGE_SIZE]);
+        wire.extend_from_slice(tail);
+        wire.push(0); // oracle 的未初始化字节（我们送 0）
+    } else {
+        wire.extend_from_slice(&decoded);
+    }
+    wire
 }
 
 /// 客户端 socket 句柄（C# 用 `Socket.Handle.ToInt32()`；Windows 下取 raw socket 低 32 位，
