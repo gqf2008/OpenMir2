@@ -1,0 +1,15 @@
+# S3 后半段（第一格）· 四门禁汇总（2026-10-11 深夜）
+
+隔离 target：CARGO_TARGET_DIR=E:\tmp\openmir2-m2svr-target（--offline）
+
+| 门禁 | 命令 | 结果 | 日志 |
+| --- | --- | --- | --- |
+| fmt | cargo fmt --all -- --check | rc=0 | （终端） |
+| clippy | cargo clippy --workspace --all-targets --offline -- -D warnings | rc=0（0 warn） | （终端） |
+| test ×3 | cargo test --workspace --offline | 3/3：68 suites / 473 passed / 0 failed / 13 ignored | gates-test-{1,2,3}.txt |
+| msgcodegen | cargo run -p msgcodegen --offline -- --check | rc=0（604 = Messages.cs 594 + Grobal2 白名单 10） | gates-msgcodegen.txt |
+
+判据/红检：
+- 判据（逐字节）：downlink::tests::turn_pair_rebuilds_golden_sm_turn_and_featurechanged（金标准 seq 30/31）
+- 判据（进程级）：tests::aoi_show_emits_turn_pair_routed_by_gate
+- 红检：去掉自身过滤 ⇒ FAILED；见 redcheck-self-filter.txt；还原 ⇒ green-after-restore.txt
