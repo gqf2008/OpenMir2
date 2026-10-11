@@ -68,7 +68,7 @@ powershell -File tools/m2-acceptance/check_db_paths.ps1 -Mode diff `
 - **C# 对照栈**：`E:\MirServer\start-all.ps1`（真客户端同一 `mir_flow.ps1` 同一动作）；
   **Rust 栈**：`start_rust_stack.ps1`（MySQL + C# DBSrv/LoginSrv 下盘 + Rust 5000/7000/7100/7200）。
 - 三条退出路径均落到真实事件：`softclose` = `CM_SOFTCLOSE(1009)`；`disconnect` = 杀客户端（无 1009）；
-  `shutdown` = 停整栈。Rust 侧日志摘录 `evidence/m2svr-dbpaths-20261012/logs/rust-game-svr-exit.txt`。
+  `shutdown` = 停整栈。Rust 侧日志摘录 `evidence/m2svr-dbpaths-20261012/console/rust-game-svr-exit.txt`。
 - **牙齿**：同批真机数据**不带** `-Canonical` ⇒ 三路径全 **RED**，差异**全在墙钟列**
   （`account.LastLoginTime` / `characters.LASTUPDATE` / `characters_indexes.ModifyDate`）
   ⇒ 判据不是恒绿空壳。证据 `db-paths-nocanonical.json`。

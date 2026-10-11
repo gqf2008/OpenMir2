@@ -20,7 +20,7 @@ powershell -File tools/m2-acceptance/check_db_paths.ps1 -Mode diff `
   下盘 oracle + Rust game-svr(5000)/三网关(7000/7100/7200)）⇒ `tools/client/mir_flow.ps1` ⇒ 停栈。
 - **C# 组**：`E:\MirServer\start-all.ps1` ⇒ 同一 `mir_flow.ps1` ⇒ 停服务端（保留共享 MySQL 以便取 after 快照）。
 - 三条退出路径：
-  - `softclose`（小退）：`mir_flow.ps1` 默认流程走到 `CM_SOFTCLOSE(1009)`（Rust 日志 `logs/rust-game-svr-exit.txt:119`）。
+  - `softclose`（小退）：`mir_flow.ps1` 默认流程走到 `CM_SOFTCLOSE(1009)`（Rust 日志 `console/rust-game-svr-exit.txt:119`）。
   - `disconnect`（掉线）：`mir_flow.ps1 -SkipLogout -LeaveClientRunning` 进世界后**杀客户端进程**（Rust 日志 `:163` 无 1009，只有"用户关闭/断线清世界"）。
   - `shutdown`（服务关闭）：同上进世界后**停整栈**（Rust：`start_rust_stack.ps1 -Stop`；C#：停 game 组件、保留 MySQL）。
 - 快照 = `check_db_paths.ps1 -Mode snap`（内部 `dbsnap.py` 13 表 + `scoped_diff.py extract --normalize`，只取本前缀
@@ -58,5 +58,5 @@ powershell -File tools/m2-acceptance/check_db_paths.ps1 -Mode diff -CsharpDir E:
 ## 残留物
 
 - `E:\tmp\m2acc\{rust4,csharp4}`（快照目录 + jsonl，本目录已归档关键件；其余可删）。
-- `E:\tmp\m2-acceptance\stack\game-svr.out.log`（Rust 退出路径原始日志，已摘录 `logs/`）。
+- `E:\tmp\m2-acceptance\stack\game-svr.out.log`（Rust 退出路径原始日志，已摘录 `console/`）。
 - 收工端口：仅共享 MySQL `3306` 在听；5000/6000/7000/7100/7200 全空。

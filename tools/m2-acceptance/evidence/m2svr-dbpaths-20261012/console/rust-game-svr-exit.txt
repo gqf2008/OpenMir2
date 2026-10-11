@@ -1,0 +1,15 @@
+### Rust game-svr 退出路径日志（1009 小退 / 断线清世界 / 栈关闭）
+16:18:38:10.746 [DBG] sim: 登记网关线号 0 的命令通道
+17:18:38:10.747 [DBG] sim: 登记网关线号 1 的命令通道
+18:18:38:10.767 [DBG] sim: 登记网关线号 2 的命令通道
+119:18:44:12.899 [DBG] sim: index=1 命令 Recog=0 Ident=1009 Param=0 Tag=0 Series=0 tail=""
+120:18:44:13.317 [INF] 用户关闭：socket=348 index=1 在线=0 槽=1
+121:18:44:13.501 [INF] 断线清世界 ChrName:aaa socket=348 index=1（FrontEngine.DeleteHuman + WorldEngine 摘除）
+163:18:45:48.777 [INF] 用户关闭：socket=348 index=1 在线=0 槽=1
+164:18:45:48.868 [INF] 断线清世界 ChrName:aaa socket=348 index=1（FrontEngine.DeleteHuman + WorldEngine 摘除）
+205:18:47:06.263 [DBG] sim: 网关线号 0 已释放
+206:18:47:06.263 [DBG] sim: 网关线号 1 已释放
+207:18:47:06.271 [DBG] sim: 网关线号 2 已释放
+208:18:47:06.380 [DBG] sim: 注销网关线号 1 的命令通道
+209:18:47:06.387 [DBG] sim: 注销网关线号 0 的命令通道
+210:18:47:06.390 [DBG] sim: 注销网关线号 2 的命令通道
