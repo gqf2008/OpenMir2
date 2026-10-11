@@ -190,6 +190,11 @@ D3 试验田 ECS 路径代价 **+10µs / 32 只怪的掉落批次（≈1.8×）*
 6. **冻结基线**：`git status` 干净；`git diff --stat <基线> -- src/ sql/` 为空（例外仅登记过的 `T-*`）；
 7. **报告**：patch 带**证据四件套**（命令 + 输出 + 路径 + hash），报告末段列"残留物清单"。
 
+### 编排运行时（拉起 agent 的约定）
+
+把「无头 agent 车道」跑起来的运行时与踩坑约定在 **`tools/orchestration/README.md`**（车道表 `lanes.conf`、`supervise.sh`/`start-lane.sh`/`status.sh`、各车道 `briefs/`）。
+要点：**控制台（交互会话）不在无人值守循环里**——循环必须由独立外部进程（watch/计划任务）拥有；无头 agent 是一次性的，交付只到 `needs-review`，不自行 merge、不自签 review。
+
 ### 本地门禁（合并前全绿；reviewer 自己重跑，不采信作者自述）
 
 ```powershell
