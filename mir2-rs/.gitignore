@@ -1,3 +1,8 @@
 /target
 **/obj/
 **/bin/
+# `**/bin/` 是给 C#/MSBuild 的构建输出用的，但 Rust 的**源文件**惯例目录也叫 `src/bin/`
+# （`cargo` 自动发现为 bin target）——两条规则相撞时源文件被静默吞掉：
+# `cargo run -p mir2-world --release --bin tick_bench` 等命令的源一直没进库。
+# 下面的否定行把 `src/bin/` 目录重新纳入（git 规定：目录被排除后，必须重新包含该目录本身）。
+!**/src/bin/
