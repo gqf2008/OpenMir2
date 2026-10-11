@@ -173,6 +173,11 @@ pub trait ItemCatalog {
     fn shape(&self, index: u16) -> Option<u8> {
         self.get(index).map(|t| t.shape)
     }
+
+    /// `SystemShare.ItemSystem.GetStdItemName(index)`（= 模板名；`CustomItemSystem.GetItemName` 的非自定义分支）。
+    fn name(&self, index: u16) -> Option<&str> {
+        self.get(index).map(|t| t.name.as_str())
+    }
 }
 
 /// `Vec<StdItem>` 的目录实现（下标 = Index，等价于 `ItemSystem` 的数组语义）。

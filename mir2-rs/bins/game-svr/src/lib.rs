@@ -10,5 +10,6 @@
 #![allow(clippy::doc_markdown)]
 
 pub mod ability;
+pub mod bag;
 pub mod feature;
 pub mod smframe;
