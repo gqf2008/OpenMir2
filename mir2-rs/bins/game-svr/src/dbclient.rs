@@ -250,9 +250,10 @@ fn parse_request_data(body: &[u8]) -> Option<Reply> {
 pub enum ReplyVerdict {
     /// 接受（`:213` → `PlayerDataService.Enqueue`）
     Accept,
-    /// `Message.len + Packet.len + 6 < 12` 或 `queryId <= 0`（`:201-208`，只累 `LoadDBErrorCount`）
+    /// `Message.len + Packet.len + 6 < 12`（`:201` 的 `nLen >= 12` 门外）：
+    /// oracle 在这个分支里**什么都不做**（既不累 `LoadDBErrorCount`、也不打日志）⇒ 静默丢。
     TooShort,
-    /// `Sign` 为空（`:204`）
+    /// `Sign` 为空或 `queryId <= 0`（`:204`）
     EmptySign,
     /// 签名对不上（`:215-218`）
     BadSign,
@@ -261,7 +262,9 @@ pub enum ReplyVerdict {
 /// **照抄 oracle 的两处怪癖**（别按"更安全"改）：
 /// 1. 期望值 `queryId = MakeLong((ushort)(qid ^ 170), (ushort)nLen)`，但比较只用 **低 16 位**
 ///    （`BitConverter.ToInt16(...)`，`:211`）⇒ `nLen` 那半根本没被校验；
-/// 2. 校验失败只累 `SystemShare.Config.LoadDBErrorCount`、**不记日志**（本实现另加一条 WARN，登记为可观测性差异）。
+/// 2. 校验失败（`EmptySign`/`BadSign`）只累 `SystemShare.Config.LoadDBErrorCount`、**不记日志**
+///    （本实现另加一条 WARN，登记为可观测性差异）；
+/// 3. 但 `nLen < 12` 的 `TooShort` 在 `:201` 的 `nLen >= 12` 门**之外**，oracle 连计数都不做。
 #[must_use]
 pub fn verify_sign(r: &Reply) -> ReplyVerdict {
     let n_len = r.message.len() + r.packet.len() + SERVER_DATA_FIXED_HEADER_LEN;
@@ -308,7 +311,7 @@ pub struct DbReplies {
     pub parser: ReplyParser,
     /// `queryId -> 应答`（oracle 的 `QueryMap`）
     map: std::collections::HashMap<i32, Reply>,
-    /// `SystemShare.Config.LoadDBErrorCount` 的对应物（签名不行/太短的次数）
+    /// `SystemShare.Config.LoadDBErrorCount` 的对应物（`EmptySign`/`BadSign` 的次数；`TooShort` **不**计）
     pub load_db_error_count: u64,
 }
 
@@ -329,6 +332,9 @@ impl DbReplies {
                     self.map.insert(qid, reply);
                     accepted.push(qid);
                 }
+                // N3（reviewer-3）：照 `DataQueryServer.cs:199-208`，`nLen < 12` 落在 `nLen >= 12` 门**之外**
+                // ⇒ 什么都不做（不累 `LoadDBErrorCount`、不打日志）。
+                ReplyVerdict::TooShort => {}
                 other => {
                     self.load_db_error_count += 1;
                     crate::glog!(
@@ -457,6 +463,33 @@ mod tests {
         assert!(r2.feed(&reply_frame(7, 101, 1, b"P", true)).is_empty());
         assert_eq!(r2.load_db_error_count, 1);
         assert!(r2.take(7).is_none());
+    }
+
+    /// N3（reviewer-3）：`nLen < 12` 的应答照 `DataQueryServer.cs:199-208` **什么都不做**
+    /// （落在 `nLen >= 12` 门之外）⇒ 不累 `LoadDBErrorCount`、不入表。
+    #[test]
+    fn too_short_reply_is_silently_dropped_without_error_count() {
+        // nLen = encoded_len(1) + encoded_len(1) + 6 = 2 + 2 + 6 = 10 < 12
+        let msg_enc = edcode::encode(b"M");
+        let pkt_enc = edcode::encode(b"P");
+        let sign_enc = edcode::encode(b"S");
+        let mut body = mp_prefix(4);
+        body.extend_from_slice(&7i32.to_le_bytes());
+        for part in [&msg_enc, &pkt_enc, &sign_enc] {
+            body.extend_from_slice(&i32::try_from(part.len()).unwrap().to_le_bytes());
+            body.extend_from_slice(part);
+        }
+        let mut frame = PACKET_CODE.to_le_bytes().to_vec();
+        frame.extend_from_slice(&u16::try_from(body.len()).unwrap().to_le_bytes());
+        frame.extend_from_slice(&body);
+
+        let mut r = DbReplies::new();
+        assert!(r.feed(&frame).is_empty(), "TooShort 不入表");
+        assert_eq!(
+            r.load_db_error_count, 0,
+            "oracle 在 nLen<12 时什么都不做 ⇒ 不累 LoadDBErrorCount"
+        );
+        assert!(r.take(7).is_none());
     }
 
     #[test]

@@ -228,8 +228,10 @@ struct DbWiring {
     next_query_id: std::sync::Arc<std::sync::atomic::AtomicI32>,
     /// 收侧汇总（分帧 + 签名 + 查询表），由 DB 链路任务与 sim 线程共享。
     replies: std::sync::Arc<std::sync::Mutex<dbclient::DbReplies>>,
-    /// 已发出、还没取走的 (query_id, socket)——socket 用于回复到达后把该槽标进世界
-    outstanding: Vec<(i32, i32)>,
+    /// 已发出、还没取走的 `(query_id, socket, gate_idx)`——socket 用于回复到达后把该槽标进世界，
+    /// `gate_idx` 用于把标记/踢人**路由回该用户的网关线**（oracle 每个 GameGate 连接一套 `SessionUser` 表，
+    /// `ChannelMessageHandler.cs:318-322` 的 `gateUser` 属该连接；各网关的 socket 号可重复 ⇒ 不能「随便挑一个」）。
+    outstanding: Vec<(i32, i32, i32)>,
 }
 
 impl DbWiring {
@@ -242,6 +244,28 @@ impl DbWiring {
             return 1;
         }
         q
+    }
+}
+
+/// `NetChannel` 按 gateIdx 选连接（`TCPNetChannel.cs:221-224`）：取该线号的 `sim → gate` 命令通道。
+///
+/// 读档流程里的两条 sim→gate 命令（`KickUser`/`MarkInWorld`）**都**走这里 —— 每个 GameGate 连接的
+/// `UserList` 是独立的，socket 号在网关之间可重复，因此只能按 `gate_idx` 命中，找不到线号就记 WRN。
+fn route_to_gate<'a>(
+    gates: &'a std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    gate_idx: i32,
+    socket: i32,
+    what: &str,
+) -> Option<&'a mpsc::UnboundedSender<SimToGate>> {
+    match gates.get(&u8::try_from(gate_idx).unwrap_or(0)) {
+        Some(tx) => Some(tx),
+        None => {
+            glog!(
+                "WRN",
+                "找不到网关线号 {gate_idx}，无法{what} socket={socket}"
+            );
+            None
+        }
     }
 }
 
@@ -326,6 +350,7 @@ fn sim_loop(
                     return None; // `IsConnected`（`DataQueryServer.cs:60`）
                 }
                 let qid = w.next_query_id();
+                // N1：把该用户的线号一并记下，回复到达后按它路由（见 `route_to_gate`）
                 let frame = dbclient::load_human_rcd_request(
                     qid,
                     &info.account,
@@ -335,7 +360,7 @@ fn sim_loop(
                 );
                 match w.req_tx.send(frame) {
                     Ok(()) => {
-                        w.outstanding.push((qid, info.socket_id));
+                        w.outstanding.push((qid, info.socket_id, info.gate_idx));
                         Some(qid)
                     }
                     Err(_) => {
@@ -366,14 +391,8 @@ fn sim_loop(
                         "WRN",
                         "读取用户数据失败,踢出用户. Account:{account} ChrName:{chr_name}"
                     );
-                    match gates.get(&u8::try_from(gate_idx).unwrap_or(0)) {
-                        Some(tx) => {
-                            let _ = tx.send(SimToGate::KickUser { socket: socket_id });
-                        }
-                        None => glog!(
-                            "WRN",
-                            "找不到网关线号 {gate_idx}，无法踢 socket={socket_id}"
-                        ),
+                    if let Some(tx) = route_to_gate(&gates, gate_idx, socket_id, "踢") {
+                        let _ = tx.send(SimToGate::KickUser { socket: socket_id });
                     }
                 }
             }
@@ -383,7 +402,7 @@ fn sim_loop(
             let replies = std::sync::Arc::clone(&w.replies);
             let mut r = replies.lock().expect("DB 应答表锁被毒化");
             let mut still = Vec::new();
-            for (qid, socket) in std::mem::take(&mut w.outstanding) {
+            for (qid, socket, gate_idx) in std::mem::take(&mut w.outstanding) {
                 match r.take(qid) {
                     Some(reply) => {
                         let (ident, recog) =
@@ -417,7 +436,15 @@ fn sim_loop(
                                                 head.cur_y,
                                                 head.dir
                                             );
-                                            if let Some(tx) = gates.values().next() {
+                                            // N1（reviewer-3）：按该用户的 gate_idx 路由回**它自己那条**网关线
+                                            // （与上面 KickNoData 的 `route_to_gate` 完全同构）；找不到线号记 WRN，
+                                            // 绝不 `gates.values().next()` 静默挑一个。
+                                            if let Some(tx) = route_to_gate(
+                                                &gates,
+                                                gate_idx,
+                                                socket,
+                                                "标记进世界",
+                                            ) {
                                                 let _ = tx.send(SimToGate::MarkInWorld { socket });
                                             }
                                         }
@@ -434,7 +461,7 @@ fn sim_loop(
                             }
                         }
                     }
-                    None => still.push((qid, socket)),
+                    None => still.push((qid, socket, gate_idx)),
                 }
             }
             w.outstanding = still;
@@ -615,7 +642,8 @@ fn send_decision(state: &mut KeepAlive, check_block: usize, len: usize, now: i64
 }
 
 /// 网关发送口的 oracle 规则（`ChannelMessageHandler.cs:50-95` 的 `ProcessBufferSend`）：
-/// ① `SendChecked > 0`（等网关回 `GM_RECEIVE_OK`）时**不发**；超过 `SocCheckTimeOut`(2s) 才清零放行（`:58-66`）；
+/// ① `SendChecked > 0`（等网关回 `GM_RECEIVE_OK`）时**不发**；超过 `SocCheckTimeOut`(50ms) 清零后**仍 Hold**
+///    （oracle `:58-66` 无条件 `return`，刚清零的那一包也丢）；
 /// ② 累积 `SendBlockCount + len >= CheckBlock*10` ⇒ 先发一条 `GM_RECEIVE_OK` 并置 `SendChecked=1`（`:74-83`）；
 ///    若 `SendBlockCount == 0 && CheckBlock*10 <= len` ⇒ **直接丢**（`:76-79`）；
 /// ③ 发送后 `SendBlockCount += len`（`:89`）。
@@ -872,5 +900,85 @@ mod tests {
         assert_eq!(st4.send_block_count, 0);
         // 清零后的下一包才正常发
         assert_eq!(send_decision(&mut st4, 12288, 20, 1061), SendDecision::Send);
+    }
+
+    /// N1（reviewer-3）的红检：`MarkInWorld` 必须按该用户的 `gate_idx` 路由，不能「随便挑一个网关」。
+    ///
+    /// 造两条假网关线并**故意让 socket 号重复**：标记应只投到 1 号线，0 号线的同号槽**不得**被标。
+    /// 两个 `same_channel` 断言锁死「按线号取通道」——把实现改回 `gates.values().next()`（对同一张表
+    /// 两次调用必返回同一条）时，这两个断言至少有一个必红。
+    #[test]
+    fn mark_in_world_routes_by_gate_idx_not_arbitrary_gate() {
+        use std::collections::HashMap;
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let (tx1, mut rx1) = mpsc::unbounded_channel::<SimToGate>();
+        let tx0_keep = tx0.clone();
+        let tx1_keep = tx1.clone();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        gates.insert(1, tx1);
+
+        // 路由选择：按 gate_idx 取到的必须是**对应那条**
+        assert!(
+            route_to_gate(&gates, 1, 5, "标记进世界")
+                .expect("1 号线存在")
+                .same_channel(&tx1_keep),
+            "gate_idx=1 必须路由到 1 号线"
+        );
+        assert!(
+            route_to_gate(&gates, 0, 5, "标记进世界")
+                .expect("0 号线存在")
+                .same_channel(&tx0_keep),
+            "gate_idx=0 必须路由到 0 号线"
+        );
+
+        // 两条线各自的槽表里都有 **同一个** socket=5（各网关各自分配，号可重复）
+        let mut users0 = UserList::new();
+        users0.open(5, 111, "a".into());
+        let mut users1 = UserList::new();
+        users1.open(5, 222, "b".into());
+
+        // 该用户的 gate_idx=1 ⇒ 标记只投 1 号线
+        route_to_gate(&gates, 1, 5, "标记进世界")
+            .unwrap()
+            .send(SimToGate::MarkInWorld { socket: 5 })
+            .unwrap();
+        assert!(
+            matches!(rx0.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
+            "0 号线不得收到该标记"
+        );
+        let cmd = rx1.try_recv().expect("1 号线应收到该标记");
+        apply_sim_cmd(cmd, &mut users1);
+        assert!(
+            users1.find(1, 5).unwrap().in_world,
+            "1 号线的槽应被标 in_world"
+        );
+        assert!(
+            !users0.find(1, 5).unwrap().in_world,
+            "0 号线的同号 socket **不得**被标（N1 的错标场景）"
+        );
+    }
+
+    /// N1 的负向：线号不在表里 ⇒ 不投递（返回 `None`），而不是静默挑一个。
+    #[test]
+    fn mark_in_world_missing_gate_idx_does_not_pick_arbitrary() {
+        use std::collections::HashMap;
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let (tx2, mut rx2) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        gates.insert(2, tx2);
+        assert!(
+            route_to_gate(&gates, 1, 5, "标记进世界").is_none(),
+            "1 号线不在表里 ⇒ 不许挑 0/2 号"
+        );
+        assert!(matches!(
+            rx0.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            rx2.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
     }
 }

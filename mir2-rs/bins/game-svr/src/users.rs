@@ -81,8 +81,12 @@ impl UserList {
         i32::try_from(idx).unwrap_or(i32::MAX) + 1
     }
 
-    /// 认证通过后落字段（C# `DoClientCertification` `:317-322` 的四项：`Certification/Account/ChrName/SessionID`；
-    /// `Account`/`ChrName` 照 `:318-319` 做 `Trim()`）。
+    /// 认证通过后落字段（C# `DoClientCertification` `:317-322` 的四项：`Certification/Account/ChrName/SessionID`）。
+    ///
+    /// **Trim 口径照 oracle `:318-319`**：`gateUser.Account = sAccount.Trim()` / `ChrName = sChrName.Trim()`
+    /// ⇒ 这里存的 `Account`/`ChrName` 是 **trim 过**的。
+    /// 注意**不能**把同一口径搬到 `LoadDBInfo`：oracle `:325-326` 给 `LoadDBInfo.Account/ChrName` 的是
+    /// `sAccount`/`sChrName` **原值**（未 trim）⇒ `main.rs` 里发给 DBSvr 的取角色请求用未 trim 原值。
     ///
     /// 进世界（`in_world`）由 S2b-3 在取到角色后置真。
     ///
@@ -98,8 +102,9 @@ impl UserList {
         for u in self.slots.iter_mut().flatten() {
             if u.socket == socket {
                 u.certification = true;
-                u.account = account.to_string();
-                u.chr_name = chr_name.to_string();
+                // `:318-319`：`gateUser.Account = sAccount.Trim()` / `ChrName = sChrName.Trim()`
+                u.account = account.trim().to_string();
+                u.chr_name = chr_name.trim().to_string();
                 u.game_session_id = game_session_id;
                 return true;
             }
@@ -196,5 +201,20 @@ mod tests {
             "SessionIndex<1 直接兜底"
         );
         assert!(l.find(9, 99).is_none());
+    }
+
+    /// N2（reviewer-3）：`certify` 落 `Account`/`ChrName` 照 oracle `:318-319` **trim**。
+    #[test]
+    fn certify_trims_account_and_chr_name() {
+        let mut l = UserList::new();
+        l.open(10, 111, "a".into());
+        assert!(l.certify(10, " loadbot1 ", "\tlb1a\n", 7));
+        let u = l.find(1, 10).unwrap();
+        assert_eq!(u.account, "loadbot1");
+        assert_eq!(u.chr_name, "lb1a");
+        assert!(u.certification);
+        assert_eq!(u.game_session_id, 7);
+        // 不存在的 socket ⇒ 不动任何槽
+        assert!(!l.certify(99, "x", "y", 1));
     }
 }
