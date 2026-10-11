@@ -97,6 +97,19 @@ $env:MIR2_ORACLE_SELGATE_DIR='E:\tmp\a2-dbsrv\oracle-selgate'
 cargo test -p db-srv --test live_querychr --offline -- --ignored --nocapture csharp_selgate_to_rust_dbsrv
 ```
 
+### 2.6 判据覆盖边界（如实记录）
+
+- **建角成功路径**（`NEWCHR` → 写 `characters` + 5 张附属表）**没有被真机判据覆盖**：
+  它会在**共享的现网库** `mir2_db` 里留下角色/物品/属性行，而本仓的既有纪律是实库测试只读
+  （见 `crates/storage/tests/account_live.rs` 的注释）。因此该路径只做**逐列对照 C# 源码**的核对
+  （列名/值/顺序/可空性，含 C# 的 `@Ac ← hd.Abil.Level` 既有 bug；`MapName`/`HomeMap`/`MasterName`/
+  `DearName`/`StoragePwd` 在 C# 绑未赋值字符串 ⇒ **NULL**，本实现同）。
+  `NEWCHR` 的**三条拒绝分支**（0 名字过短 / 2 重名 / 3 账号已满 2 个）与 `DELCHR`（含
+  "账号不匹配仍回 SUCCESS"的 `bocheck` 怪行为）都已与 C# 逐字节对齐（§2.2）。
+- `SELCHR`（选角）**未纳入 §2.2 的字节对拍**：它会写 `characters_indexes.SelectID`（改库），
+  且回包里的路由来自 `ServerInfo.txt`（现网 1 条路由 ⇒ 端口是常量）。该路径的逻辑与
+  `SelectChr` 逐行对应（见 §3.9），但真机取证留给 ① 的整链（届时客户端/脚本会顺带跑到）。
+
 ## 3. 行为对齐要点（逐条对 C# 源）
 
 1. **接入**：`AddrTable.txt` 白名单（不在表里直接断开）；槽位号＝连接号-1，数组 20（第 21 条连接按

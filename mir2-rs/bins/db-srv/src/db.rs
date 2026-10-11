@@ -518,13 +518,16 @@ async fn create_character(
     hair: u8,
 ) -> Result<i64> {
     let res = sqlx::query(
+        // 值口径逐列对 C# `PlayDataStorage.CreateCharacters`：`MapName`/`HomeMap`/`MasterName`/`DearName`/
+        // `StoragePwd` 在 C# 绑的是 `CharacterData` 里**未赋值**的字符串 ⇒ 落库是 **NULL**（不是空串）；
+        // `Ac` 那格 C# 绑的是 `hd.Abil.Level`（既有 bug），新角色两个值都是 0，故这里写 0。
         "insert into characters (ServerIndex, LoginID, ChrName, MapName, CX, CY, Level, Dir, Hair, Sex, Job, \
          Gold, GamePoint, HomeMap, HomeX, HomeY, PkPoint, ReLevel, AttatckMode, FightZoneDieCount, BodyLuck, \
          IncHealth, IncSpell, IncHealing, CreditPoint, BonusPoint, HungerStatus, PayMentPoint, LockLogon, \
          MarryCount, AllowGroupReCall, GroupRcallTime, AllowGuildReCall, IsMaster, MasterName, DearName, \
          StoragePwd, Deleted, CREATEDATE, LASTUPDATE) VALUES \
-         (0, ?, CONVERT(? USING gbk), '', 0, 0, 0, 0, ?, ?, ?, 0, 0, '', 0, 0, 0, 0, 0, 0, 0, \
-          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, '', '', '', 0, now(), now())",
+         (0, ?, CONVERT(? USING gbk), NULL, 0, 0, 0, 0, ?, ?, ?, 0, 0, NULL, 0, 0, 0, 0, 0, 0, 0, \
+          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, NULL, NULL, 0, now(), now())",
     )
     .bind(account_text)
     .bind(name_gbk)

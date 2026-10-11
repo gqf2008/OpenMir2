@@ -135,12 +135,13 @@ impl LoginState {
 
     /// 解析一段来自 LoginSrv 的文本（C# `ProcessSocketMsg`）。
     pub fn feed(&mut self, text: &mut Vec<u8>) {
-        while text.contains(&b')') {
+        // C# `while (sScoketText.IndexOf(")") > 0)`：`)` 落在**下标 0** 不算（左括号必须在前）。
+        while text.iter().position(|b| *b == b')').is_some_and(|i| i > 0) {
             let (data, rest) = arrest(text, b'(', b')');
+            *text = rest; // C# 先把 ArrestStringEx 的返回值写回缓冲，**再**判空/分发
             if data.is_empty() {
                 break;
             }
-            *text = rest;
             self.dispatch(&data);
         }
     }
@@ -291,6 +292,23 @@ mod tests {
         assert!(st.check_session(b"acc", 7));
         assert!(st.check_session(b"acc2", 8));
         assert!(text.is_empty());
+    }
+
+    /// C# 的边界口径：`)` 在下标 0 不算（`IndexOf(")") > 0`）；空载荷 `()` 会把 `(` 之前的前缀
+    /// **消费掉**（`ArrestStringEx` 的返回值先写回缓冲，再判空 break），不会卡在同一段文本上。
+    #[test]
+    fn feed_matches_csharp_edge_cases() {
+        let mut st = LoginState::default();
+        let mut junk = b")garbage".to_vec();
+        st.feed(&mut junk);
+        assert_eq!(junk, b")garbage".to_vec(), "下标 0 的 ')' 不消费");
+        let mut text = b"()".to_vec();
+        st.feed(&mut text);
+        assert!(text.is_empty(), "空载荷也要消费掉括号");
+        let mut text2 = b"(100/acc/5/0/0/1.1.1.1/0)".to_vec();
+        st.feed(&mut text2);
+        assert!(text2.is_empty());
+        assert!(st.check_session(b"acc", 5));
     }
 
     /// 离线时软下线报文只丢进队列（无连接即丢弃）。
