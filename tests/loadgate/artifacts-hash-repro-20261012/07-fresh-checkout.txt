@@ -1,0 +1,35 @@
+== ② 可复现判据：全新检出上按 README 复核必须 0 mismatch ==
+$ git clone --local --branch worktree-c6-artifacts-hash <repo> /e/tmp/c6h-fresh
+Cloning into 'E:/tmp/c6h-fresh'...
+done.
+Updating files:  94% (1965/2087)
+Updating files:  95% (1983/2087)
+Updating files:  96% (2004/2087)
+Updating files:  97% (2025/2087)
+Updating files:  98% (2046/2087)
+Updating files:  99% (2067/2087)
+Updating files: 100% (2087/2087)
+Updating files: 100% (2087/2087), done.
+
+（克隆完成）
+$ git -C /e/tmp/c6h-fresh rev-parse HEAD
+efbd59999811dba3758c3c25626a87c0defec202
+$ git -C /e/tmp/c6h-fresh config --get core.autocrlf   # 故意用会归一化的配置
+true
+
+$ git -C /e/tmp/c6h-fresh ls-files --eol tests/loadgate | awk '{print $1,$2,$3}' | sort | uniq -c
+      1 i/crlf w/crlf attr/-text
+    225 i/lf w/lf attr/-text
+      4 i/mixed w/mixed attr/-text
+
+$ git -C /e/tmp/c6h-fresh status --short
+
+$ xxd 一个被引用 ndjson 的前 16 字节（应无 0d = LF）
+00000000: 7b22 745f 6d73 223a 3137 3931 3730 3933  {"t_ms":17917093
+
+$ python tools/botload/verify_artifacts.py tests/loadgate/load-*/artifacts.sha256.json
+[OK] tests/loadgate/load-20261011-155529/artifacts.sha256.json  30/30 匹配
+[OK] tests/loadgate/load-20261011-162213/artifacts.sha256.json  30/30 匹配
+[OK] tests/loadgate/load-20261011-165805/artifacts.sha256.json  45/45 匹配
+verify_artifacts: OK 3/3 清单, 105/105 文件 0 mismatch 期望
+rc=0

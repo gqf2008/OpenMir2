@@ -4,7 +4,7 @@
 - 改法：**选 (a)** —— `tests/loadgate/.gitattributes` 的 `* -text` **冻结字节**；三个 `artifacts.sha256.json`
   按**提交字节**重算（只改 `sha256` 值，被引用的产物一个字节没动）；新增复核器
   `tools/botload/verify_artifacts.py`；README 写清口径与复核命令。
-- base = master `15cec558`。
+- base = master `15cec558`；`07` 验证的提交 = `efbd5999`（本卡 patch 的 fix commit）。
 
 ## 文件
 
@@ -16,7 +16,7 @@
 | `04-redcheck-one-byte.txt` | **牙齿**：改掉 `165805/run-1/tier-200/report.json` 一个字节 ⇒ `[MISMATCH]`；`git checkout` 还原 ⇒ 0 mismatch、worktree 干净 |
 | `05-load_report-selftest.txt` | `python tools/botload/load_report.py selftest` ⇒ rc=0（GREEN） |
 | `06-four-gates.txt` | 四门禁（隔离 `CARGO_TARGET_DIR=/e/tmp/openmir2-c6h-target`，`--offline`）：fmt / clippy `-D warnings` / `cargo test --workspace` / `msgcodegen --check (604)` 全 rc=0 |
-| `07-fresh-checkout.txt` | **②可复现判据**：`git clone` 到临时目录的**全新检出**上按 README 复核 ⇒ 0 mismatch |
+| `07-fresh-checkout.txt` | **②可复现判据**：`git clone` 到临时目录的**全新检出**（`efbd5999`，`core.autocrlf=true`）上按 README 复核 ⇒ 0 mismatch |
 
 ## 哈希口径（单一真源）
 
