@@ -1,0 +1,23 @@
+SELFTEST_RED: 指向 127.0.0.1:17999（无监听），预期判红
+==== TIER 3 (stagger=20ms, hold=5s, login_threshold=100% => ramp_target=3/3) -> E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\c6\tests\loadgate\load-20261011-161941\tier-3
+BOTSRV_PID=49576
+  RAMP login_ok=0/3 spawned=3 tick_samples=0
+  RAMP login_ok=0/3 spawned=3 tick_samples=0
+  RAMP login_ok=0/3 spawned=3 tick_samples=0
+  RAMP login_ok=0/3 spawned=3 tick_samples=0
+  RAMP login_ok=0/3 spawned=3 tick_samples=0
+  RAMP login_ok=0/3 spawned=3 tick_samples=0
+  RAMP login_ok=0/3 spawned=3 tick_samples=0
+  RAMP login_ok=0/3 spawned=3 tick_samples=0
+  RAMP login_ok=0/3 spawned=3 tick_samples=0
+  RAMP login_ok=0/3 spawned=3 tick_samples=0
+  RAMP login_ok=0/3 spawned=3 tick_samples=0
+  RAMP login_ok=0/3 spawned=3 tick_samples=0
+  RAMP login_ok=0/3 spawned=3 tick_samples=0
+  RED 爬坡未达阈值（30s 内未到 3/3）
+  RESULT tier=3 verdict=RED login=0.0% conn_lost_steady=0 tick_p50= p90= p99=ms samples=0 in_world=0 probe_sent=0
+  (tier rc=1)
+SUMMARY E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\c6\tests\loadgate\load-20261011-161941\load_gate_summary.json
+  WORST tier=3 runs=1 worst_login=0% threshold=100% verdict=RED
+SELFTEST_RED GREEN: 连不通 => 判红成立（红检本身按预期变红 = 自测通过）
+rc=0

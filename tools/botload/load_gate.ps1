@@ -243,6 +243,8 @@ foreach ($n in $TierList) {
     # ---- 归算 ----
     $reportPath = Join-Path $tierDir "report.json"
     $criteriaArgs = @("--criteria", $Criteria, "--login-threshold", "$loginThr")
+    $loginConnsPath = Join-Path $tierDir "login_conns.ndjson"
+    if (Test-Path $loginConnsPath) { $criteriaArgs += @("--login-conns", $loginConnsPath) }
     if ($AllowMissingTick) { $criteriaArgs += "--allow-missing-tick" }
     python (Join-Path $RepoRoot "tools\botload\load_report.py") summarize --stats $statsPath --mem $memPath `
         --count $n --stagger-ms $StaggerMs --hold-sec $HoldSec @criteriaArgs --out $reportPath | Out-Null

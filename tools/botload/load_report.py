@@ -174,6 +174,70 @@ def summarize_mem(rows, tail_sec=60):
     return out
 
 
+def summarize_login_conns(rows, bucket_ms=5000):
+    """T-11 残余丢包**方向**归算（owner 裁决 11dbde39 的 must_first）。
+
+    输入 = BotSrv 落的 `login_conns.ndjson`（每个假人的登录 socket 一行，见 `LoadMetrics.LoginConn`）。
+    只回答一个问题：发出 CM_IDPASSWORD 后没拿到 SM_PASSOK_SELECTSERVER（ident 529）的连接，
+    是「服务端一个字节都没回」还是「服务端回了、假人侧收包/解析丢了」：
+
+      · `rx_bytes == 0`（rx0）⇒ 服务端在这条 TCP 连接上没写过任何东西 ⇒ **方向 = 上游（C# 部署栈）**；
+      · `rx_bytes > 0` 且没解出 529 ⇒ 服务端回了、假人侧丢了 ⇒ **方向 = 假人（BotSrv，工具缺陷）**。
+
+    `resend` / `resend_ok` 是自证对照：对「窗口内无应答」的连接在同一条 TCP 连接上重发一次登录包
+    （`MIR2_BOT_LOGIN_RESEND_MS`），第二次仍拿不到应答 ⇒ 不是本机收包抖动。
+
+    返回：总数 / 无应答数 / 其中 rx0（上游）/ rx>0（假人侧）/ 按发出时刻分窗的分布 / 重发对照。
+    """
+    def gi(r, k, d=0):
+        v = r.get(k, d)
+        return d if v is None else v
+
+    total = len(rows)
+    no_resp = [r for r in rows if not r.get("saw_529")]
+    rx0 = [r for r in no_resp if gi(r, "rx_bytes") == 0]
+    rx_gt0 = [r for r in no_resp if gi(r, "rx_bytes") > 0]
+    resend = [r for r in no_resp if gi(r, "resend_sends") > 0]
+    resend_ok = [r for r in resend if r.get("saw_529")]
+
+    buckets = {}
+    for r in no_resp:
+        b = (gi(r, "login_tick") // bucket_ms) * bucket_ms
+        e = buckets.setdefault(b, {"t0": b, "count": 0, "rx0": 0, "rx_gt0": 0})
+        e["count"] += 1
+        if gi(r, "rx_bytes") == 0:
+            e["rx0"] += 1
+        else:
+            e["rx_gt0"] += 1
+
+    if not no_resp:
+        direction = "none"
+    elif not rx_gt0:
+        direction = "upstream-csharp-stack"   # 全部 rx_bytes==0：服务端没回过任何字节
+    elif not rx0:
+        direction = "bot-client"              # 全部 rx_bytes>0：假人侧收包/解析丢了
+    else:
+        direction = "mixed"
+
+    ticks = sorted(gi(r, "login_tick") for r in no_resp)
+    return {
+        "total": total,
+        "no_resp": len(no_resp),
+        "no_resp_rx0": len(rx0),
+        "no_resp_rx_gt0": len(rx_gt0),
+        "direction": direction,
+        "direction_rule": ("rx_bytes==0 ⇒ 上游（服务端没在这条连接上回过任何字节）；"
+                           "rx_bytes>0 且无 529 ⇒ 假人侧收包/解析丢失"),
+        "no_resp_first_tick": (ticks[0] if ticks else None),
+        "no_resp_last_tick": (ticks[-1] if ticks else None),
+        "no_resp_span_ms": ((ticks[-1] - ticks[0]) if ticks else 0),
+        "no_resp_resend": len(resend),
+        "no_resp_resend_ok": len(resend_ok),
+        "bucket_ms": bucket_ms,
+        "buckets": [buckets[k] for k in sorted(buckets)],
+    }
+
+
 def judge(tier, thresholds, criteria=("login", "conn", "tick"), allow_missing_tick=False,
           login_threshold=None):
     """按 §6 M5 的判据给单档结论（掉线只看稳态窗）。
@@ -221,6 +285,8 @@ def cmd_summarize(args):
     tier = summarize_tick(stats, args.count)
     if args.mem:
         tier["mem"] = summarize_mem(load_ndjson(args.mem))
+    if args.login_conns and os.path.exists(args.login_conns):
+        tier["login_conn_diag"] = summarize_login_conns(load_ndjson(args.login_conns))
     tier["count"] = args.count
     tier["stagger_ms"] = args.stagger_ms
     tier["hold_sec"] = args.hold_sec
@@ -281,6 +347,25 @@ def cmd_selftest(_args):
     expect(t_lo["verdict"] == "GREEN", "960/1000 在阈值 95 下必须 GREEN（判定随阈值变，不是恒绿）")
     expect(t_hi["login_threshold_pct"] == 100.0 and t_lo["login_threshold_pct"] == 95.0,
            "judge 必须把生效阈值写进报告")
+    # 2c) T-11 残余丢包**方向**判据（owner 裁决 11dbde39 must_first）：rx_bytes==0 ⇒ 上游；
+    #     rx_bytes>0 且无 529 ⇒ 假人侧。方向判据本身必须有牙齿（改坏必变）。
+    up = [{"login_tick": 1000, "rx_bytes": 0, "saw_529": False, "resend_sends": 1},
+          {"login_tick": 2000, "rx_bytes": 0, "saw_529": False, "resend_sends": 1},
+          {"login_tick": 3000, "rx_bytes": 40, "saw_529": True, "resend_sends": 0}]
+    d_up = summarize_login_conns(up)
+    expect(d_up["direction"] == "upstream-csharp-stack" and d_up["no_resp_rx0"] == 2,
+           "全 rx_bytes==0 应判「上游（C# 栈）」")
+    expect(d_up["no_resp_resend"] == 2 and d_up["no_resp_resend_ok"] == 0,
+           "重发对照应记「发 2 / 成功 0」")
+    expect(d_up["buckets"][0]["t0"] == 0 and d_up["buckets"][0]["rx0"] == 2, "应按 login_tick 分窗（默认 5s）")
+    bot = [{"login_tick": 1000, "rx_bytes": 128, "saw_529": False},
+           {"login_tick": 1500, "rx_bytes": 24, "saw_529": True}]
+    d_bot = summarize_login_conns(bot)
+    expect(d_bot["direction"] == "bot-client" and d_bot["no_resp_rx_gt0"] == 1,
+           "rx_bytes>0 且无 529 应判「假人侧」（方向判据的牙齿）")
+    expect(summarize_login_conns(up[:1] + bot[:1])["direction"] == "mixed", "两种都存在应判 mixed")
+    expect(summarize_login_conns([{"login_tick": 1, "rx_bytes": 8, "saw_529": True}])["direction"] == "none",
+           "无「无应答」连接应判 none")
 
     # 3) 掉线：稳态掉线判红、爬坡期掉线不算稳态
     stats4 = [dict(stats[0], conn_lost=3), dict(stats[1], conn_lost=5)]
@@ -473,6 +558,8 @@ def main():
     s.add_argument("--stagger-ms", type=int, default=0)
     s.add_argument("--hold-sec", type=int, default=0)
     s.add_argument("--out", default="")
+    s.add_argument("--login-conns", default="",
+                   help="BotSrv 落的 login_conns.ndjson（T-11 残余丢包方向归算；缺省不产出该块）")
     s.add_argument("--criteria", default="login,conn,tick",
                    help="判据子集（默认全三条）；M1 ⑤ 那种只比登录/连接的场景用 login,conn")
     s.add_argument("--login-threshold", type=float, default=None,
