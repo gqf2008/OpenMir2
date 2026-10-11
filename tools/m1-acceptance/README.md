@@ -31,7 +31,8 @@
 | --- | --- |
 | `start_boundary_stack.ps1` | 起/停全 Rust 边界链。影子配置写到 `-StackRoot`（默认 `E:\tmp\openmir2-m1load\stack`），**不碰 `E:\MirServer`**；GB2312 的 `AddrTable.txt`/`UserLimit.txt` 整体复制。`-Stop` 只停本脚本起的进程（不碰 MySQL）；缺 pid 文件 ⇒ `NOTHING_TO_STOP`。缺 exe/配置 ⇒ rc=2；端口被占 ⇒ rc=1。 |
 | `check_boundary_ports.ps1` | 五个端口的所有权实拍。复用 `tools/m2-acceptance/portclassify.ps1` 的 `Get-M2PortImpl`（rust/csharp/unknown），并加**第二层牙齿**（端口 → 期望 Rust 入口）：不是 Rust 或接错线 ⇒ rc=1；端口不在听 ⇒ rc=2；全绿 rc=0。证据写 `-OutFile`。 |
-| `run_m1_load.ps1` | 对全 Rust 链跑一层假人（默认 200）：只读复用 `load_gate.ps1`（`-Criteria login,conn`），期间另采 Rust 四进程 WS/私存/CPU（schema 同 load_gate），再用 `tools/botload/load_report.py summarize`（**同一口径**）归算出 `report-rust.json`（含 `slope_tail_mb_per_s`）；并统计 BotSrv/Rust 两侧日志计数与 panic。 |
+| `run_m1_load.ps1` | 对全 Rust 链跑一层假人（默认 200）：只读复用 `load_gate.ps1`（`-Criteria login,conn -AllowMissingTick`），期间另采 Rust 四进程 WS/私存/CPU（schema 同 load_gate），再用 `tools/botload/load_report.py summarize`（**同一口径**）归算出 `report-rust.json`（含 `slope_tail_mb_per_s`）；两侧证据计数**调 `count_m1_logs.py`**（不在本脚本里重写 pattern）。 |
+| `count_m1_logs.py` | 两侧证据计数的**单一口径**（BotSrv `bots.log` + 四份 Rust stdout）。每个 pattern 原样写进输出 JSON 的 `patterns` 字段；`query_chr`=「`[QueryChr] 候选`」（每次查询 1 行）与 `query_chr_lines`=「`[QueryChr]` 全部行」（每次查询共 5 行）**分成两个键**；login-gate 的连接串用真实输出 `开始连接:`。`--selftest` 做正/反例自检（可用**入库件**直接复算）。 |
 | `redcheck_boundary.ps1` | 红检：`-Mode swap-csharp-selgate` 停 Rust `sel-gate` 改起 C# `SelGate` ⇒ 判据必须 rc=1；`-Mode stop-login-srv` 停 `login-srv` ⇒ 必须 rc=2。再全栈重起 ⇒ 必须复绿。 |
 | `probe_m1_chain.py` | **BotSrv 无关**的协议级假人：N 并发走完整 `CM_IDPASSWORD(7000) → CM_SELECTSERVER(7000) → CM_QUERYCHR(7100) → CM_SELCHR(7100)`，逐步计数 + ident 直方图。用于把「链能不能吃住 N 并发」与「BotSrv 工具侧漏计数」分开。 |
 
@@ -45,7 +46,7 @@
 | BotSrv | C# 参考栈 | 175/200（87.5%） | — |
 | BotSrv | 全 Rust 链 | **200/200** | — |
 | probe | C# 参考栈 | — | 200/200/200/**200** |
-| probe | 全 Rust 链 | — | 200/200/200/**0** ← Rust db-srv 缺陷，见 §4 |
+| probe | 全 Rust 链 | — | 200/200/200/**0** ← Rust db-srv 缺陷（已修，等合入），见 §4 |
 
 ⇒ 判「链本身」用协议探针（确定性、无共享态）；BotSrv 的两侧计数作为**载荷**证据并列给出。
 
@@ -66,13 +67,27 @@ powershell -File tools/m1-acceptance/run_m1_load.ps1 -Tier 200 -HoldSec 60 -Skip
 # 4) 红检（弄坏必红、还原必绿）
 powershell -File tools/m1-acceptance/redcheck_boundary.ps1 -Mode swap-csharp-selgate
 
-# 5) 全栈停（端口回落）
+# 5) 两侧证据计数（单一口径；也可只用入库件复算）
+#    run_m1_load.ps1 内部已调它；单独复算入库件即：
+#    python tools/m1-acceptance/count_m1_logs.py --selftest
+#    python tools/m1-acceptance/count_m1_logs.py --bots <22-botsrv-bots-200.txt> \
+#      --login-srv <12-rust-login-srv.out.txt> --db-srv <13-rust-db-srv.out.txt> \
+#      --sel-gate <14-rust-sel-gate.out.txt> --login-gate <15-rust-login-gate.out.txt> --out <07-...json>
+
+# 6) 全栈停（端口回落）
 powershell -File tools/m1-acceptance/start_boundary_stack.ps1 -Stop
 ```
 
-## 4. 已知阻塞（本轮发现，另开卡）
+## 4. 已知阻塞（本轮发现，另开卡）——修复已交付、**待合入**
 
 Rust `bins/db-srv` 的 `query_chr()` 成功后**没有**置 `u.chr_queryed = true`
 （C# oracle `src/DBSrv/Services/Impl/UserService.cs:359` 有这一行）⇒ `CM_SELCHR` 恒被拒
 （`[WRN] Double send SELCHR`），选角**完全不通**。缺陷卡：`openmir2-m1-dbsrv-selchr-queryed`。
 本目录不改 `bins/**`（写集红线）。
+
+**当前状态（2026-10-11 本片）**：缺陷卡分支 `worktree-m1-dbsrv-6000` 已交出修复
+（head `c95e14c8`：`CM_QUERYCHR` 成功即置 `u.chr_queryed = true`，并加进程级
+`QUERYCHR→SELCHR` 断言 `SM_STARTPLAY(525)`），但**尚未合入 `master`**
+（`git merge-base --is-ancestor c95e14c8 refs/heads/master` = false）⇒ 本卡 ② 的「选角」仍
+**BLOCKED**。合入后复跑：起栈 → `run_m1_load.ps1` → `probe_m1_chain.py`（期 `select_chr 200/200`），
+把新的原始件入库即可收 ②（本卡 `openmir2-m1-boundary-load-200` 的 F-3）。

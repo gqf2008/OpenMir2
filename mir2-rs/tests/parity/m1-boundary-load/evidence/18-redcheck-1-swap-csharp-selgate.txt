@@ -1,0 +1,19 @@
+﻿M1⑤① 全 Rust 边界链端口所有权实拍（repo=E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m1load）
+PORT 7000  <- pid=29796 [rust] E:\tmp\openmir2-m1load-target\debug\login-gate.exe
+            cmd: "E:\tmp\openmir2-m1load-target\debug\login-gate.exe" E:\tmp\openmir2-m1load\stack\login-gate\config.conf 
+            entry=login-gate expected=login-gate verdict=ok
+PORT 5500  <- pid=56028 [rust] E:\tmp\openmir2-m1load-target\debug\login-srv.exe
+            cmd: "E:\tmp\openmir2-m1load-target\debug\login-srv.exe" E:\tmp\openmir2-m1load\stack\login-srv\logsrv.conf 
+            entry=login-srv expected=login-srv verdict=ok
+PORT 7100  <- pid=54904 [csharp] E:\MirServer\SelGate\SelGate.exe
+            cmd: "E:\MirServer\SelGate\SelGate.exe"
+            entry=selgate expected=sel-gate verdict=unknown
+PORT 5100  <- pid=46760 [rust] E:\tmp\openmir2-m1load-target\debug\db-srv.exe
+            cmd: "E:\tmp\openmir2-m1load-target\debug\db-srv.exe" E:\tmp\openmir2-m1load\stack\db-srv\dbsvr.conf 
+            entry=db-srv expected=db-srv verdict=ok
+PORT 5600  <- pid=56028 [rust] E:\tmp\openmir2-m1load-target\debug\login-srv.exe
+            cmd: "E:\tmp\openmir2-m1load-target\debug\login-srv.exe" E:\tmp\openmir2-m1load\stack\login-srv\logsrv.conf 
+            entry=login-srv expected=login-srv verdict=ok
+EVIDENCE E:\tmp\openmir2-m1load\evidence\redcheck-1-swap-csharp-selgate.json
+RED: 端口 7100 的监听者不是 Rust（impl=csharp）: "E:\MirServer\SelGate\SelGate.exe"
+RED: 「全 Rust 边界链」不成立——有端口被非 Rust 实现占着（C# 栈或未知入口）

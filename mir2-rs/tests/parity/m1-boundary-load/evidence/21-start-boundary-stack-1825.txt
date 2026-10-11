@@ -1,0 +1,17 @@
+MYSQL already up (3306)
+START login-srv pid=56028 ports=5500,5600
+START db-srv pid=46760 ports=5100
+START login-gate pid=29796 ports=7000
+START sel-gate pid=54060 ports=7100
+PIDFILE E:\tmp\openmir2-m1load\stack\logs\boundary-stack.pid.json
+CORE_UP login-srv ports=5500,5600
+CORE_UP db-srv ports=5100
+CORE_UP login-gate ports=7000
+CORE_UP sel-gate ports=7100
+=== M1 全 Rust 边界链 端口实况 ===
+  7000  <- pid=29796 login-gate.exe  E:\tmp\openmir2-m1load-target\debug\login-gate.exe
+  5500  <- pid=56028 login-srv.exe  E:\tmp\openmir2-m1load-target\debug\login-srv.exe
+  7100  <- pid=54060 sel-gate.exe  E:\tmp\openmir2-m1load-target\debug\sel-gate.exe
+  5100  <- pid=46760 db-srv.exe  E:\tmp\openmir2-m1load-target\debug\db-srv.exe
+  5600  <- pid=56028 login-srv.exe  E:\tmp\openmir2-m1load-target\debug\login-srv.exe
+BOUNDARY_STACK_OK E:\tmp\openmir2-m1load\stack\logs\boundary-stack.pid.json
