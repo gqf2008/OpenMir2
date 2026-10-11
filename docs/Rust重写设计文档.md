@@ -762,6 +762,9 @@ walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 prin
   `check_ports.ps1` ⇒ 5000/7000/7100/7200 全 Rust 且入口对得上；`mir_flow.ps1 -Account mir2test -Password mir2pass … -WalkClicks 3 -AutoPlaySec 20` ⇒ `FLOW_OK`，
   **进图不黑屏**（比奇省 291,666 + 城墙壁垒 + 完整 HUD，owner 目视核过）、走路、自动挂机攻击、**小退再进不黑屏**（画面里含 658 公告原文）；
   证据入库 `tools/m2-acceptance/evidence/owner-run-20261012/`（含 README 逐项写清覆盖/未覆盖）。余下：`talk`（驱动缺聊天动作）、`see-others`（需第二角色；AOI 下行的真机判据）、`pickup`（等第 4 格）、③（`10` 口径先定死）、④ 三路径 DB。
+- **M3① 的 5 个 handler 核心全部合入**（2026-10-12 00:25）：`m3bag` 第四/五格 `CM_PICKUP`/`CM_DROPITEM`（`bins/game-svr/src/ground.rs` + `ground-probe` 真身探针）经 reviewer-6 `e63bba84` approve 合入 `2a2247c5`（合并树 **68/483/0/13** + 604）；**P-1 的修法 = StdMode 40 耐久照 oracle 按 `ushort` 回绕**（不是钳 0）。⇒ 本卡剩下的是**双侧同序列驱动（T-14，要机窗口）**与**接线（归 m2-svr；接好 `pickup` 才能拍 `m2-06-pickup`）**。
+- **owner 裁决：③「入图序」判据收窄到 `658→46`**（2026-10-12 00:28，写进 `brief-m2svr-next.md` §22）：金标准 `#16 ident=10` 的 `recog ≠ ActorId` + oracle `PlayObject.Message.cs:1542` 的 `if(baseObject!=this)` ⇒ **`10 SM_TURN` 是「看见另一个 actor」的 AOI 出包、不是入图自帧**；单客户端进世界时本就不该出现。
+  ⇒ 判据 = `s2c_diff.py --start-ident 658 --upto-ident 46`（15 条自帧）**同序+等长+只归一化 `recog` 的逐字节 = 0 未登记差异**；`10` **单独由 `see-others` 那格判**（AOI 下行 `db84f98d` 的进程级用例 + 真机截图）。两条都齐才算 ③ 达成。
 - **M2 入图帧推进到 10/16 并待审**（2026-10-11 19:00）：新 head `56ac670f`（patch `c234ef9c` / status `7da05a24`）接通 **42 `SM_USERNAME`**（`GetShowName()` 1:1 + `strings.rs` 读 `String.conf [String]` + `[Setup] ShowRankLevelName`，金标准 seq21 线上字节锚定）与
   **46 `SM_DAYCHANGING`**（`Bright = M2Share.GameTime` 按**真实本地小时**算，`chrono::Local`，不是假时钟）；`52/752` 如实登记"需 `RecalcAbilitys()`（装备/buff 层未移植）"，**未假造**。
   作者还带源码证据**反驳了 reviewer-1 的 O-1**：`SendAdjustBonus` 用 2 参 `SendSocket(ClientMsg, "")`，空串**提前 return**（`PlayObject.Socket.cs:111-114`）⇒ oracle 在 `Job∉{0,1,2}` 时**什么都不发**，"跳过"本就 1:1（复审要点已写入 `brief-review.md`）。
