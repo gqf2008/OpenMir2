@@ -651,11 +651,11 @@ walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 prin
 | 里程碑 | 状态 | 证据（协调者复跑，非自述） |
 | --- | --- | --- |
 | **M0 协议层** | ✅ **GREEN（2026-10-10）** | `cargo run -p replay -- mir2-rs/tests/golden/c-line-baseline-c3-20261010.jsonl`：382 帧 → ① 逐字节 0 差异、② 字段 0 差异、unknown idents = 0、**八阶段全覆盖**（登录/选服/选角/建角/进世界/移动/攻击/小退）；红检三连（包号 +1 / 截断 1 字节 / 密钥错 1 位）全部 RED exit 1 ⇒ 判据可证伪。旧 16 帧金标准 ①② 仍 0（无回归）；oracle 向量 1072 条仍 GREEN |
-| M1 边界服务 | 🔄 进行中 | 卡片 `openmir2-a2-m1-services`（已改派 A 线；第一步＝Rust LoginGate+LoginSrv 顶住 7000、真实客户端能登录） |
-| M2 世界引擎 | 🔄 进行中 | 骨架已验收：tick 200ms、14 实体×10 tick 的 AOI 与 C# 逐行一致、P99 基线（500/1000/2000 实体 = 0.33%/0.82%/1.94% 预算）入库；下半程 `openmir2-m2b-world-session` |
-| M3 系统对齐 | ⏳ 未开始 | 门禁已就绪且 C# 侧 GREEN（`run_m3_gate.ps1 -Side csharp -VerifyRepeat`）；等 M1 顶住端口后跑 `-Side rust`（`openmir2-m3-rust-firstrun`） |
-| M4 脚本引擎 | 🔄 进行中 | 解析层 1:1 + 求值骨架 + 效果对拍机制（flow-diff 我实跑 3 一致 / 0 不一致 + 1 登记豁免）；余量见 `openmir2-b2-script-dispatch` |
-| M5 收敛/压测/灰度 | ⏳ 未开始 | 前置 `openmir2-c6-e2e-loadgate`（整栈 E2E 一条命令 + 压测档位，进行中） |
+| **M1 边界服务** | ✅ **实现部分已收口（2026-10-11）** | Rust `LoginGate`/`SelGate`/`LoginSrv`（merge `e7949ced`）与 `DBSrv`（merge `4e395fd4`）两块均经 **reviewer-1 approve** 合入 master；卡 `openmir2-a2-m1-services` 已 `closed`，合并后四门禁全绿。例外（卡内已登记、不阻塞）：M1⑤「200 假人同登+选角」载荷证据转 C6 tier-200 覆盖 |
+| M2 世界引擎 | 🔄 进行中 | **已交付**：骨架（单线程 tick 200ms + 实体/地图/AOI，14 实体×10 tick 与 C# 逐行一致）、会话进世界/掉落切片、**战斗结算 `_Attack` 的 RNG 面入 golden**（同批修正 3 处 oracle 口径：命中者登记走 `RM_STRUCK` 折叠、经验归属取 `ExpHitter`＝第一个命中者、`CalcGetExp` 入参＝自己等级⇒不衰减）；卡 `openmir2-m2b-world-session` 在独立复审。**④ tick P99 复测达标**：集成树（master+三张 patch）三轮 P50 与入库基线 `p99-baseline-tickbench.txt` 差 ≤1.6%，工具 `tick_bench` 本轮才入库（此前被 `mir2-rs/.gitignore` 的 `**/bin/` 吞掉——真缺口，已修）。**未做（本里程碑主体）**：GameGate/GameSvr 最小可玩世界（客户端 7 张截图 + 同序列出包 diff=0），当前**无人认领** |
+| M3 系统对齐 | ⏳ 未开始（前置已满足） | 门禁已就绪且 C# 侧 GREEN（`run_m3_gate.ps1 -Side csharp -VerifyRepeat`）；**M1 已合并 ⇒ 首验卡 `openmir2-m3-rust-firstrun` 的端口前置已满足**，待 A 线跑 `-Side rust` |
+| M4 脚本引擎 | 🔄 进行中 | 解析层 1:1 + 求值骨架 + 效果对拍（flow-diff 3 一致 / 0 不一致 + 1 登记豁免）；条件面未实现 **30→2**、全卡未实现 **83→55**（补丁 `246ba457` 待审），动作面 55 项按语料次数推进中（worker-3，卡 `openmir2-b2-script-dispatch`） |
+| M5 收敛/压测/灰度 | ⏳ 未开始 | 前置 `openmir2-c6-e2e-loadgate` 仍 `needs-review` 且**其自身三档判据未达标**（tier-200 GREEN；tier-500/1000 RED，登录爬坡 ~350–390/500，作者已定性为非本批缺陷并对齐跟进卡 `openmir2-c6-loadgate-idempotent`）；本轮已派独立审查者 `openmir2-reviewer-4` 出结论 |
 
 ---
 
