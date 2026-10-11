@@ -15,6 +15,7 @@ all = "deny"
 mir2-protocol = { path = "../../crates/protocol" }
 mir2-shared = { path = "../../crates/shared" }   # HUtil32.GetValidStr3 的既有 Rust 实现（别重复造）
 mir2-world = { path = "../../crates/world" }
+mir2-data = { path = "../../crates/data" }   # StdItems 模板（Index → StdItem，52/752 能力接缝；与 envir 同源）
 mir2-envir = { path = "../../crates/envir" }   # Envir *.map 真地图加载 + 逻辑名→map_id（集成点 ④）
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "macros", "time"] }
 anyhow = "1"
