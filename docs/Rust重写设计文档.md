@@ -694,6 +694,27 @@ walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 prin
   `~/.agents/rules/LESSON_并行测试临时路径须pid加原子计数构造_时钟粒度不足.md`）；② **交付含新测试的，作者自己给 ≥3 次连续 `cargo test --workspace --offline` 全绿**
   （reviewer 可要求到 5 次）；③ reviewer 抓到 flaky 一律按 **Important** 处理（它直接破坏"门禁即合同"）。
 
+### 17.2 本轮 owner 更新（2026-10-11 18:45，合并后复核）
+
+- **C6/M5 假人侧证据**：卡 `openmir2-botsrv-world-evidence` 已由 owner 按被审 commit `a236e607` 合入 master
+  （merge `7a878095`，approve reviewer-4 `627575c0`）并收卡 —— F3(a)（第三条假人无应答 = 打乱账号/角色共享判据）与
+  F4（`RunAutoPlay` 作用在未进世界假人）收口；判据锚在"进世界证据只认该假人自己那条连接"（改后 3/3 `in_world` 且
+  `autoplay_pre_world=0`，改前 legacy 对照 30；牙齿 `SUPPRESS_INWORLD=2` ⇒ `-RequireWorld` 必 RED）。合并树四门禁 67 suites / 421 passed / 0 failed / 604。
+- **M2 会话生命周期**：DoD① 真机夹具片（`e0ecd25c`，approve reviewer-4 `5e19c9df`）已合入 master（merge `55fdde5e`）。
+  **owner 裁决（O-2）**：①实测显示旧会话收到的是**账号级 kick 的 `SM_SYSMESSAGE`（非 528）**且不立即断开，新连接"放行 vs 被 `CloseUser` 关"
+  由 `WorldServer.ProcessHumansIsLogined`（`InSaveRcdList`/`PlayObjectList`）**竞态**决定 ⇒ 已合入的 ②③ 不等价，**本卡保持 open**，
+  下一片 = 按实测对齐 Rust（含把竞态本身复刻），由 m2-svr 车道承接。
+- **M2 入图帧**：m2-svr 车道交付"生产路径 **8/16**"（`3dbb4707`，patch `d2648e37`）——`766/54` + `11029/1106/5008/811` 六条接进
+  `bins/game-svr/src/enter.rs`（逐条对照 oracle 行号 + 6 条红检），**待独立审查**。剩余 8 条里 `50/41/10/213` 阻塞在
+  `m3bag` 的 `feature.rs` 接缝。
+- **M3 逐系统对齐①（背包/装备）**：片 `ef94810e` 被 reviewer-4 判 **request_changes**（`cf067560`）：F-1（Important，阻塞）=
+  新 `cmd_extract` 对"快照里有未登记表"无条件 `exit 4`，而 dbsnap 固定导出 13 表、`characters_item_attr`/`characters_magic`/`characters_quest`
+  未登记 ⇒ `run_pair.ps1` / `check_db_paths.ps1` 在每条真实快照上必 RED（reviewer 已做 base 对照）。作者按 F-1/O-1/O-2 + 改号返工中。
+  绿面（C# 真身探针 16+8+6 向量 deep-equal、红检有牙齿、四门禁 3 连跑 430/0/13）经独立复现成立。
+- **合并护栏**：两条 merge 都在合并树上重跑四门禁（`E:/tmp/openmir2-watch/merge-55fdde5e-*.log`），并逐条核"被审面未被合并改写"
+  （botsrv：`git diff --name-only a236e607 7a878095 -- <被审路径>` = 空；life：`docs/Rust重写设计文档.md` 的 blob 与 master 侧版本逐字节相同）。
+  **T-12 编号已被 botsrv 占用** ⇒ m3bag 需改号（已写入其 brief）。
+
 ## 18. S3：B-8 命令码位移修复（2026-10-10，oracle 行为变更）
 
 > 全文与证据：`mir2-rs/tests/parity/evidence/S3/S3-报告.md`；白名单条目：`whitelist.md` **T-4**（并给 B-8 行加了注记）。
