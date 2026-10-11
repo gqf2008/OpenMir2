@@ -27,8 +27,10 @@
 //! - **负载守卫**：`--baseline` 模式下若机器处于高负载窗口（CPU ≥ [`LOAD_PCT_SKIP_THRESHOLD`]% 或
 //!   rustc/cargo/cargo-clippy/msbuild ≥ [`HEAVY_PROC_SKIP_THRESHOLD`] 个），相对门禁不可信 ⇒ 打印
 //!   `SKIP-UNDER-LOAD` 并 `exit 0`（**不把负载导致的 RED 当作者的锅**）。但**数量级**劣化
-//!   （P50 相对劣化 > [`GROSS_P50_DEGRADE_PCT`]% 或 P99 中位数 > [`GROSS_P99_DEGRADE_PCT`]%）不是负载
-//!   能解释的，仍判 `RED`——门禁在负载下也保留牙齿。
+//!   （P50 相对劣化 > [`GROSS_P50_DEGRADE_PCT`]% **且** P99 中位数 > [`GROSS_P99_DEGRADE_PCT`]%）
+//!   不是负载能解释的，仍判 `RED`——门禁在负载下也保留牙齿。要求**两侧同时越线**，是因为负载噪声
+//!   是单侧随机的：500 档基线 P50/P99 只有 377/576µs，13 个并发编译下 P99 相对噪声可 > 400% 而 P50
+//!   仍在 +65%（reviewer-3 R3t-1）；真回归两侧都远超线。
 //! - 某档不在基线文件里 ⇒ 打印 `SKIP`（不静默当成通过）；读基线文件失败 ⇒ `RED`。
 //!
 //! 口径来源：owner 裁决 `5e1daee`（同次运行内交错测量 + 只判相对量 + 绝对量降级为报告值）及其可接受的
@@ -55,8 +57,10 @@ const LOAD_PCT_SKIP_THRESHOLD: u8 = 40;
 /// 高负载窗口判据：`rustc`/`cargo`/`cargo-clippy`/`msbuild` 进程数 ≥ 该值 ⇒ `SKIP-UNDER-LOAD`。
 const HEAVY_PROC_SKIP_THRESHOLD: usize = 4;
 /// 高负载窗口下仍能判红的**数量级**劣化阈值（P50，%）。
+/// 与 [`GROSS_P99_DEGRADE_PCT`] **同时**越线才判红（负载噪声是单侧的，见模块头注释）。
 const GROSS_P50_DEGRADE_PCT: f64 = 150.0;
 /// 高负载窗口下仍能判红的**数量级**劣化阈值（P99 中位数，%）。
+/// 与 [`GROSS_P50_DEGRADE_PCT`] **同时**越线才判红。
 const GROSS_P99_DEGRADE_PCT: f64 = 400.0;
 
 const MAP: i32 = 200;
@@ -361,15 +365,17 @@ fn regression_reason(cur_p50: u64, cur_p99: u64, base: BaselineTier) -> Option<S
 }
 
 /// 高负载窗口下仍能判红的"数量级"劣化（负载不可能解释的幅度）。
+///
+/// **要求 P50 与 P99 两侧同时越线**：负载噪声是单侧随机的——reviewer-3（R3t-1）在 13 个并发编译、
+/// CPU 100% 的窗口里量到未改代码的 500 档 ΔP50 +65.0% / ΔP99 +632.8%，若按"任一侧越线"判红，
+/// 纯负载噪声就会被当成回归（违反 owner 裁决「不接受把负载导致的 RED 当作者的锅」）。
+/// 真回归两侧都远超线（线性扫实测 ΔP50 +510%~+3698%、ΔP99 +844%~+3436%），负载下牙齿仍在。
 fn gross_degrade_reason(cur_p50: u64, cur_p99: u64, base: BaselineTier) -> Option<String> {
     let d50 = degrade_pct(cur_p50, base.p50);
     let d99 = degrade_pct(cur_p99, base.p99);
-    if d50 > GROSS_P50_DEGRADE_PCT {
-        return Some(format!(" P50 劣化 {d50:.1}% > {GROSS_P50_DEGRADE_PCT}%"));
-    }
-    if d99 > GROSS_P99_DEGRADE_PCT {
+    if d50 > GROSS_P50_DEGRADE_PCT && d99 > GROSS_P99_DEGRADE_PCT {
         return Some(format!(
-            " P99 中位数劣化 {d99:.1}% > {GROSS_P99_DEGRADE_PCT}%"
+            " P50 劣化 {d50:.1}% > {GROSS_P50_DEGRADE_PCT}% 且 P99 中位数劣化 {d99:.1}% > {GROSS_P99_DEGRADE_PCT}%"
         ));
     }
     None
@@ -554,8 +560,9 @@ mod tests {
         );
     }
 
-    /// 数量级劣化：负载导致的抖动（实测最高 P50 +116%、P99 +288%）不足以触发；
-    /// 线性扫这类真回归（+500%~+2771%）必然判红——即使在高负载窗口。
+    /// 数量级劣化：负载导致的抖动（实测最高 P50 +116%、P99 +288%；reviewer-3 极端窗口 P99 +632.8%）
+    /// 不足以触发；线性扫这类真回归（P50 与 P99 都在 +500% 量级）必然判红——即使在高负载窗口。
+    /// **单侧越线不算**：P99 +900% 而 P50 不动，恰是 reviewer-3 R3t-1 的负载假红形态。
     #[test]
     fn gross_thresholds_only_fire_on_order_of_magnitude() {
         let base = BaselineTier {
@@ -569,16 +576,27 @@ mod tests {
             "负载实测上限（P50 +116% / P99 +288%）不触发数量级判红"
         );
         assert!(
+            gross_degrade_reason(1000, 3000, base).is_none(),
+            "恰好 +150%/+400% 不算越线（严格大于）"
+        );
+        assert!(
+            gross_degrade_reason(400, 6000, base).is_none(),
+            "R3t-1：P99 +900% 但 P50 不动 ⇒ 只可能是负载噪声，不得判红"
+        );
+        assert!(
+            gross_degrade_reason(2400, 1000, base).is_none(),
+            "P50 +500% 但 P99 +66.7% ⇒ 单侧越线不判红（必须两侧同时越线）"
+        );
+        assert!(
             gross_degrade_reason(2400, 3600, base)
                 .unwrap()
                 .contains("P50"),
-            "+500% 必须判数量级劣化"
+            "P50 +500% 且 P99 +500% ⇒ 必须判数量级劣化"
         );
         assert!(
-            gross_degrade_reason(400, 6000, base)
-                .unwrap()
-                .contains("P99"),
-            "+900% P99 必须判数量级劣化"
+            gross_degrade_reason(400, 6000, base).is_none()
+                && gross_degrade_reason(2400, 6000, base).is_some(),
+            "两侧同时越线才判红（P50 +500% / P99 +900%）"
         );
     }
 
