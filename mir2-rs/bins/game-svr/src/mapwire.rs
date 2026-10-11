@@ -106,6 +106,28 @@ pub fn resolve_map_id(
     }
 }
 
+/// 没有 Envir 注册表时的回退尺寸来源判定（owner `272582e1` 裁决；`WorldMaps` 可选化的
+/// **fail-closed 半边**）。
+///
+/// 真 `E:/MirServer/M2GameSvr/Server.conf` 没有 `WorldMaps`（S1 占位键），故它由必需键降为可选键；
+/// 但**两者都没有**时必须拒绝启动：否则 `World::with_maps(vec![])` 是个空世界，客户端进图只能
+/// 回落 0 号占位图/静默黑屏（卡面 ④ 明禁的静默降级）。
+///
+/// - `maps` 非空（配置写了 `WorldMaps`）⇒ `Ok(maps)`：占位尺寸，调用方记 WRN（开发/测试形态）；
+/// - `maps` 为空 ⇒ `Err`：既没有 `Envir/MapInfo.txt` 也没有 `WorldMaps` ⇒ fail-closed。
+///
+/// # Errors
+/// `maps` 为空 ⇒ `Err(说明)`；调用方据此非零退出。
+pub fn placeholder_sizes(maps: &[(i32, i32)]) -> Result<Vec<(i32, i32)>, String> {
+    if maps.is_empty() {
+        return Err(
+            "既没有 Envir/MapInfo.txt 也没有 WorldMaps ⇒ 拒绝以占位图启动（fail-closed）"
+                .to_string(),
+        );
+    }
+    Ok(maps.to_vec())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,6 +218,37 @@ mod tests {
             Maps::Placeholder
         ));
         assert_eq!(resolve_map_id(None, "随便").unwrap(), 0);
+    }
+
+    /// **红检 ①**：真 `Server.conf` **没有** `WorldMaps`（`config` 解析出空表）时，只要 `Envir/MapInfo.txt`
+    /// 可读，就必须用真注册表建世界 ⇒ 空 `WorldMaps` 不阻塞启动。
+    #[test]
+    fn envir_registry_covers_missing_worldmaps() {
+        let env = TempEnv::new("nowm");
+        let reg = registry(&env);
+        let maps: Vec<(i32, i32)> = Vec::new(); // = 配置里没写 WorldMaps
+        assert!(
+            placeholder_sizes(&maps).is_err(),
+            "无 Envir + 无 WorldMaps 才 fail-closed；这里 Envir 在，不该走该支"
+        );
+        assert_eq!(sizes(&reg), vec![(3, 3), (5, 4)], "真注册表尺寸取代占位");
+        assert_eq!(resolve_map_id(Some(&reg), "0").unwrap(), 0);
+    }
+
+    /// **红检 ②**：无 Envir（`Placeholder`）且没写 `WorldMaps` ⇒ *必须* fail-closed（非零退出），
+    /// 不许静默起空世界。改回"静默放行"/"`WorldMaps` 必需键"两种方向都应被这一组用例判红。
+    #[test]
+    fn no_envir_and_no_worldmaps_is_fail_closed() {
+        let dir = std::env::temp_dir().join(format!("gs-mapwire-nowm-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(matches!(
+            load_registry(&dir, "Envir", "Map"),
+            Maps::Placeholder
+        ));
+        let err = placeholder_sizes(&[]).expect_err("无 Envir + 无 WorldMaps 必须 Err");
+        assert!(err.contains("fail-closed"), "诊断：{err}");
+        // 有 WorldMaps（无 Envir）⇒ 允许走占位尺寸（开发/测试形态，调用方记 WRN）。
+        assert_eq!(placeholder_sizes(&[(64, 64)]).unwrap(), vec![(64, 64)]);
     }
 
     /// **R3-1**：`MapInfo.txt` **在**、但 0 条有效 section（空表/全注释）⇒ `Broken`，不是 `Placeholder`；

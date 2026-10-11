@@ -14,6 +14,7 @@
 
 use std::time::Duration;
 
+use mir2_envir::{CELL_BYTES, HEADER_BYTES};
 use mir2_protocol::frame::ServerMessage;
 use mir2_protocol::messages::grobal2;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -243,6 +244,101 @@ async fn missing_config_exits_nonzero() {
     let err =
         String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("缺键"), "错误信息应指明缺键，实得：{err}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// 合成一张全 `Walk` 的 `.map`（52B 头写 W/H，随后每格 12B）。
+fn synth_map(width: u16, height: u16) -> Vec<u8> {
+    let n = usize::from(width) * usize::from(height);
+    let mut buf = vec![0u8; HEADER_BYTES + n * CELL_BYTES];
+    buf[0..2].copy_from_slice(&width.to_le_bytes());
+    buf[2..4].copy_from_slice(&height.to_le_bytes());
+    buf
+}
+
+/// **WorldMaps 可选化 红检 ①**（owner `272582e1`）：真 `Server.conf` 形态（**无 `WorldMaps`**）+
+/// `Envir/MapInfo.txt` 可读 ⇒ 必须起得来并监听（不再因缺占位键拒绝启动）。
+#[tokio::test]
+async fn starts_without_worldmaps_when_envir_present() {
+    let dir = std::env::temp_dir().join(format!("gs-nowm-ok-{}", std::process::id()));
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::create_dir_all(dir.join("Envir")).unwrap();
+    std::fs::create_dir_all(dir.join("Map")).unwrap();
+    std::fs::write(dir.join("Envir").join("MapInfo.txt"), "[0 town]\n").unwrap();
+    std::fs::write(dir.join("Map").join("0.map"), synth_map(3, 3)).unwrap();
+    let port = free_port();
+    // 现网样件：`[Server]` 段没有 `WorldMaps`（唯一缺的键）。
+    std::fs::write(
+        dir.join("Server.conf"),
+        format!(
+            "[Server]\nCheckBlock=12288\nGateAddr= 127.0.0.1\nGatePort={port}\n\
+             IDSAddr= 127.0.0.1\nIDSPort={}\nDBAddr=127.0.0.1\nDBPort={}\n",
+            free_port(),
+            free_port()
+        ),
+    )
+    .unwrap();
+    let log = dir.join("server.out.log");
+    let out = std::fs::File::create(&log).unwrap();
+    let err = out.try_clone().unwrap();
+    let mut proc = tokio::process::Command::new(env!("CARGO_BIN_EXE_game-svr"))
+        .arg(dir.join("Server.conf"))
+        .stdout(out)
+        .stderr(err)
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    // 能连上 = 真起来了（缺 WorldMaps 不再致命）；连不上会 panic。
+    let mut gate = connect_with_retry(port).await;
+    gate.write_all(&frame(grobal2::GM_OPEN, 1001, 1, 0, b"127.0.0.1"))
+        .await
+        .unwrap();
+    let (m, _) = recv_frame(&mut gate).await.unwrap();
+    assert_eq!(m.session_index, 1);
+    let text = std::fs::read_to_string(&log).unwrap_or_default();
+    assert!(
+        text.contains("Envir 真地图注册表：1 张"),
+        "必须用真注册表建世界（不是占位）；日志实得：{text}"
+    );
+    proc.kill().await.ok();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// **WorldMaps 可选化 红检 ②**（fail-closed）：无 `Envir/MapInfo.txt` **且**无 `WorldMaps` ⇒
+/// 必须非零退出（不许静默起空世界 / 回落 0 号占位图）。
+#[tokio::test]
+async fn missing_worldmaps_and_envir_exits_nonzero() {
+    let dir = std::env::temp_dir().join(format!("gs-nowm-none-{}", std::process::id()));
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::create_dir_all(&dir).unwrap();
+    let port = free_port();
+    std::fs::write(
+        dir.join("Server.conf"),
+        format!(
+            "[Server]\nCheckBlock=12288\nGateAddr=127.0.0.1\nGatePort={port}\n\
+             IDSAddr=127.0.0.1\nIDSPort={}\nDBAddr=127.0.0.1\nDBPort={}\n",
+            free_port(),
+            free_port()
+        ),
+    )
+    .unwrap();
+    let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_game-svr"));
+    cmd.arg(dir.join("Server.conf")).kill_on_drop(true);
+    // 必须**自己退出**：静默放行会让进程起栈常驻 ⇒ 超时也判红（否则红检会挂死）。
+    let out = tokio::time::timeout(Duration::from_secs(10), cmd.output())
+        .await
+        .expect("10s 内必须退出；未退出＝静默放行（起栈常驻），判红")
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "无 Envir 且无 WorldMaps 必须非零退出（fail-closed）"
+    );
+    let err =
+        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("fail-closed"),
+        "错误信息应指明 fail-closed，实得：{err}"
+    );
     std::fs::remove_dir_all(&dir).ok();
 }
 
