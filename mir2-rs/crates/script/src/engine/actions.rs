@@ -4,7 +4,7 @@
 //! 脚本写的命令会落到「前一个」成员的实现上；**B2/M4 已同批翻转**（`parser.rs` 现取字段序号，
 //! 与 C# S3 修正后一致）⇒ 本模块按 CmdCode 直查即命中“这条命令自己的”处理器。
 
-use crate::engine::{Engine, EngineError};
+use crate::engine::{DynVar, DynVarKind, Engine, EngineError, VarVal};
 use crate::model::{QuestActionInfo, QuestConditionInfo};
 
 /// C# `Messages` 常量（`src/OpenMir2/Messages.cs`）。
@@ -762,6 +762,22 @@ impl Engine<'_, '_> {
                 let rel = format!("{}{}", self.npc.path(), info.s_param1);
                 self.del_from_string_list(&account, &rel);
             }
+            // ---- B2/M4 var 家族 / 剩余动作批次（2026-10-11）----
+            "ActionOfMovData" => self.action_of_mov_data(info),
+            "ActionOfMovrData" => self.action_of_movr_data(info),
+            "ActionOfIncInteger" => self.action_of_inc_integer(info),
+            "ActionOfDecInteger" => self.action_of_dec_integer(info),
+            "ActionOfMulData" => self.action_of_mul_data(info),
+            "ActionOfVar" => self.action_of_var(info),
+            "ActionOfLoadVar" => self.action_of_load_var(info),
+            "ActionOfSaveVar" => self.action_of_save_var(info),
+            "ActionOfCalcVar" => self.action_of_calc_var(info),
+            "ActionOfUpgradeItemsEx" => self.action_of_upgrade_items_ex(info),
+            "ActionOfMarry" => self.action_of_marry(info),
+            "ActionOfUnMarry" => self.action_of_un_marry(info),
+            "ActionOfAddUseDateList" => self.action_of_add_use_date_list(info),
+            "ActionOfClearMapMon" => self.action_of_clear_map_mon(info),
+            "ActionOfMonGenEx" => self.action_of_mon_gen_ex(info),
             other => {
                 self.errors.push(EngineError::NotImplemented {
                     kind: "action",
@@ -1017,6 +1033,1053 @@ impl Engine<'_, '_> {
         false
     }
 
+    // ==== B2/M4 var 家族批次（2026-10-11）====
+
+    /// `ActionOfMovData`（`MOV`）。`GetMovDataType` 的 0..7 分支 1:1 移植。
+    fn action_of_mov_data(&mut self, info: &QuestActionInfo) {
+        let s_param1 = self.arrest_str_param(&info.s_param1);
+        let s_param2 = self.arrest_str_param(&info.s_param2);
+        let s_param3 = self.arrest_str_param(&info.s_param3);
+        if s_param1.is_empty() {
+            self.script_action_error("Mov", info);
+            return;
+        }
+        match self.get_mov_data_type(info) {
+            0 => match self.get_mov_data_human_info_value(&s_param3) {
+                Some(v) => {
+                    let (sv, nv, dt) = mov_parts(&v);
+                    let resolved = self.dyn_var_resolve(&s_param1);
+                    let ok = match resolved {
+                        Some((kind, _)) => {
+                            self.set_mov_data_dynamic_var_value(kind, &s_param2, &sv, nv, dt)
+                        }
+                        None => false,
+                    };
+                    if !ok {
+                        let msg = format!("变量{}不存在，变量类型:{}", s_param1, s_param2);
+                        self.script_action_error_msg(&msg, "Mov", info);
+                    }
+                }
+                None => self.script_action_error("Mov", info),
+            },
+            1 => match self.get_mov_data_val_name_value(&s_param3) {
+                Some(v) => {
+                    let (sv, nv, dt) = mov_parts(&v);
+                    let resolved = self.dyn_var_resolve(&s_param1);
+                    let ok = match resolved {
+                        Some((kind, _)) => {
+                            self.set_mov_data_dynamic_var_value(kind, &s_param2, &sv, nv, dt)
+                        }
+                        None => false,
+                    };
+                    if !ok {
+                        let msg = format!("变量{}不存在，变量类型:{}", s_param1, s_param2);
+                        self.script_action_error_msg(&msg, "Mov", info);
+                    }
+                }
+                None => self.script_action_error("Mov", info),
+            },
+            2 | 3 => {
+                let dt = if self.get_mov_data_type(info) == 2 {
+                    1
+                } else {
+                    0
+                };
+                let resolved = self.dyn_var_resolve(&s_param1);
+                let ok = match resolved {
+                    Some((kind, _)) => self.set_mov_data_dynamic_var_value(
+                        kind,
+                        &s_param2,
+                        &info.s_param3,
+                        info.n_param3,
+                        dt,
+                    ),
+                    None => false,
+                };
+                if !ok {
+                    let msg = format!("变量{}不存在，变量类型:{}", s_param1, s_param2);
+                    self.script_action_error_msg(&msg, "Mov", info);
+                }
+            }
+            4 | 5 => {
+                let got = if self.get_mov_data_type(info) == 4 {
+                    self.get_mov_data_human_info_value(&s_param2)
+                } else {
+                    self.get_mov_data_val_name_value(&s_param2)
+                };
+                match got {
+                    Some(v) => {
+                        let (sv, nv, dt) = mov_parts(&v);
+                        if !self.set_val_name_value(&s_param1, &sv, nv, dt) {
+                            self.script_action_error("Mov", info);
+                        }
+                    }
+                    None => self.script_action_error("Mov", info),
+                }
+            }
+            6 => {
+                let kind = self.dyn_var_resolve(&s_param2).map(|(k, _)| k);
+                let got = kind.and_then(|k| self.get_mov_data_dynamic_var_value(k, &s_param3));
+                match got {
+                    Some(v) => {
+                        let (sv, nv, dt) = mov_parts(&v);
+                        if !self.set_val_name_value(&s_param1, &sv, nv, dt) {
+                            self.script_action_error("Mov", info);
+                        }
+                    }
+                    None => {
+                        let msg = format!("变量{}不存在，变量类型:{}", s_param2, s_param3);
+                        self.script_action_error_msg(&msg, "Mov", info);
+                    }
+                }
+            }
+            7 => match self.get_mov_data_val_name_value(&s_param1) {
+                Some(v) => {
+                    let (_, _, dt0) = mov_parts(&v);
+                    let is_human_info =
+                        s_param2.starts_with('<') && s_param2.chars().nth(1) == Some('$');
+                    let (sv, dt) = if is_human_info {
+                        match self.get_mov_data_human_info_value(&s_param2) {
+                            Some(hv) => {
+                                let (mut hsv, _hnv, hdt) = mov_parts(&hv);
+                                if let Some(i) = s_param2.find('\\') {
+                                    let chars: Vec<char> = s_param2.chars().collect();
+                                    if i >= 1 {
+                                        let suffix: String = chars[i - 1..].iter().collect();
+                                        hsv = format!("{}{}", hsv, suffix);
+                                    }
+                                }
+                                (hsv, hdt)
+                            }
+                            None => {
+                                self.script_action_error("Mov", info);
+                                return;
+                            }
+                        }
+                    } else {
+                        (info.s_param2.clone(), dt0)
+                    };
+                    let _ = self.set_val_name_value(&s_param1, &sv, info.n_param2, dt);
+                }
+                None => self.script_action_error("Mov", info),
+            },
+            _ => self.script_action_error("Mov", info),
+        }
+    }
+
+    /// `ActionOfMovrData`（`MOVR`）：取随机值赋给编号变量。
+    fn action_of_movr_data(&mut self, info: &QuestActionInfo) {
+        let n14 = if mir2_shared::hutil32::compare_lstr_prefix(&info.s_param1, "<$STR(", 6) {
+            let s34 = match mir2_shared::hutil32::arrest_string_ex_ref(&info.s_param1, '(', ')').0 {
+                mir2_shared::hutil32::ArrestWrite::Value(v) => v,
+                mir2_shared::hutil32::ArrestWrite::Unchanged => String::new(),
+            };
+            crate::engine::vars::get_val_name_no(&s34)
+        } else {
+            crate::engine::vars::get_val_name_no(&info.s_param1)
+        };
+        if n14 < 0 {
+            self.script_action_error("Movr", info);
+            return;
+        }
+        let val = if info.n_param3 > info.n_param2 {
+            info.n_param2
+                .wrapping_add(self.player.random(info.n_param3 - info.n_param2))
+        } else {
+            self.player.random(info.n_param2)
+        };
+        match n14 {
+            0..=99 => {
+                self.player.set_mn_val(n14 as usize, val);
+            }
+            100..=119 => {
+                self.player.set_global_val((n14 - 100) as usize, val);
+            }
+            200..=299 => {
+                self.player.set_mdy_val((n14 - 200) as usize, val);
+            }
+            300..=399 => {
+                self.player.set_mnmval((n14 - 300) as usize, val);
+            }
+            400..=499 => {
+                self.player.set_globa_dy_mval((n14 - 400) as usize, val);
+            }
+            500..=599 => {
+                self.player.set_mn_integer((n14 - 500) as usize, val);
+            }
+            800..=1199 => {
+                self.player.set_global_val((n14 - 700) as usize, val);
+            }
+            _ => self.script_action_error("Movr", info),
+        }
+    }
+
+    /// `ActionOfIncInteger`（`INC`）：编号槽位 / `DynamicVar` 自增。
+    fn action_of_inc_integer(&mut self, info: &QuestActionInfo) {
+        let s_param1 = self.arrest_str_param(&info.s_param1);
+        let s_param2 = self.arrest_str_param(&info.s_param2);
+        let s_param3 = self.arrest_str_param(&info.s_param3);
+        if s_param1.is_empty() || s_param2.is_empty() {
+            self.script_action_error("Inc", info);
+            return;
+        }
+        if !s_param3.is_empty() {
+            if !Self::is_var_number(&s_param1) && Self::is_var_number(&s_param2) {
+                let Some((kind, _)) = self.dyn_var_resolve(&s_param2) else {
+                    let msg = format!(
+                        "变量类型错误，错误类型:{} 当前支持类型(HUMAN、GUILD、GLOBAL)",
+                        s_param2
+                    );
+                    self.script_action_error_msg(&msg, "Inc", info);
+                    return;
+                };
+                let (n3c, s01) = match self.player.dyn_var_get(kind, &s_param3) {
+                    Some(DynVar::Integer(x)) => (x, String::new()),
+                    Some(DynVar::Str(s)) => (0, s),
+                    None => {
+                        let msg = format!("变量{}不存在，变量类型:{}", s_param3, s_param2);
+                        self.script_action_error_msg(&msg, "Inc", info);
+                        return;
+                    }
+                };
+                let n14 = crate::engine::vars::get_val_name_no(&s_param1);
+                if n14 < 0 {
+                    self.script_action_error("Inc", info);
+                    return;
+                }
+                self.inc_slot_by_no(n14, n3c, &s01, info);
+                return;
+            }
+            if Self::is_var_number(&s_param1) && !Self::is_var_number(&s_param2) {
+                // C# `!IsStringNumber(sParam3)` 恒假（IsStringNumber 恒真）⇒ n3c = nParam3、s01 = ""
+                let n3c = info.n_param3;
+                let s01 = String::new();
+                let Some((kind, _)) = self.dyn_var_resolve(&s_param1) else {
+                    let msg = format!(
+                        "变量类型错误，错误类型:{} 当前支持类型(HUMAN、GUILD、GLOBAL)",
+                        s_param1
+                    );
+                    self.script_action_error_msg(&msg, "Inc", info);
+                    return;
+                };
+                match self.player.dyn_var_get(kind, &s_param2) {
+                    Some(DynVar::Integer(x)) => {
+                        let nv = if n3c > 1 {
+                            x.wrapping_add(n3c)
+                        } else {
+                            x.wrapping_add(1)
+                        };
+                        self.player
+                            .dyn_var_set(kind, &s_param2, DynVar::Integer(nv));
+                    }
+                    Some(DynVar::Str(s)) => {
+                        self.player.dyn_var_set(
+                            kind,
+                            &s_param2,
+                            DynVar::Str(format!("{}{}", s, s01)),
+                        );
+                    }
+                    None => {
+                        let msg = format!("变量{}不存在，变量类型:{}", s_param2, s_param1);
+                        self.script_action_error_msg(&msg, "Inc", info);
+                        return;
+                    }
+                }
+                return;
+            }
+            // n10 == 0 永真
+            self.script_action_error("Inc", info);
+            return;
+        }
+        // 无 sParam3：`!IsStringNumber` 恒假 ⇒ n3c = nParam2、s01 = ""
+        let n3c = info.n_param2;
+        let n14 = crate::engine::vars::get_val_name_no(&s_param1);
+        if n14 < 0 {
+            self.script_action_error("Inc", info);
+            return;
+        }
+        self.inc_slot_by_no(n14, n3c, "", info);
+    }
+
+    /// `INC` 的编号槽位自增（含 600/700/1200 的字符串拼接与越界报错）。
+    fn inc_slot_by_no(&mut self, n14: i32, n3c: i32, s01: &str, info: &QuestActionInfo) {
+        let inc = |old: i32| {
+            if n3c > 1 {
+                old.wrapping_add(n3c)
+            } else {
+                old.wrapping_add(1)
+            }
+        };
+        match n14 {
+            0..=99 => {
+                let v = inc(self.player.mn_val(n14 as usize));
+                self.player.set_mn_val(n14 as usize, v);
+            }
+            100..=199 => {
+                let i = (n14 - 100) as usize;
+                let v = inc(self.player.global_val(i));
+                self.player.set_global_val(i, v);
+            }
+            200..=299 => {
+                let i = (n14 - 200) as usize;
+                let v = inc(self.player.mdy_val(i));
+                self.player.set_mdy_val(i, v);
+            }
+            300..=399 => {
+                let i = (n14 - 300) as usize;
+                let v = inc(self.player.mnmval(i));
+                self.player.set_mnmval(i, v);
+            }
+            400..=499 => {
+                let i = (n14 - 400) as usize;
+                let v = inc(self.player.globa_dy_mval(i));
+                self.player.set_globa_dy_mval(i, v);
+            }
+            500..=599 => {
+                let i = (n14 - 500) as usize;
+                let v = inc(self.player.mn_integer(i));
+                self.player.set_mn_integer(i, v);
+            }
+            600..=699 => {
+                let i = (n14 - 600) as usize;
+                let old = self.player.ms_string(i);
+                self.player.set_ms_string(i, format!("{}{}", old, s01));
+            }
+            700..=799 => {
+                let i = (n14 - 700) as usize;
+                let old = self.player.global_a_val(i);
+                self.player.set_global_a_val(i, format!("{}{}", old, s01));
+            }
+            800..=1199 => {
+                let i = (n14 - 700) as usize;
+                let v = inc(self.player.global_val(i));
+                self.player.set_global_val(i, v);
+            }
+            1200..=1599 => {
+                let i = (n14 - 1100) as usize;
+                let old = self.player.global_a_val(i);
+                self.player.set_global_a_val(i, format!("{}{}", old, s01));
+            }
+            _ => self.script_action_error("Inc", info),
+        }
+    }
+
+    /// `ActionOfDecInteger`（`DEC`）：编号槽位 / `DynamicVar` 自减。
+    fn action_of_dec_integer(&mut self, info: &QuestActionInfo) {
+        let s_param1 = self.arrest_str_param(&info.s_param1);
+        let s_param2 = self.arrest_str_param(&info.s_param2);
+        let s_param3 = self.arrest_str_param(&info.s_param3);
+        if s_param1.is_empty() || s_param2.is_empty() {
+            self.script_action_error("Dec", info);
+            return;
+        }
+        if !s_param3.is_empty() {
+            if !Self::is_var_number(&s_param1) && Self::is_var_number(&s_param2) {
+                let Some((kind, _)) = self.dyn_var_resolve(&s_param2) else {
+                    let msg = format!(
+                        "变量类型错误，错误类型:{} 当前支持类型(HUMAN、GUILD、GLOBAL)",
+                        s_param2
+                    );
+                    self.script_action_error_msg(&msg, "Dec", info);
+                    return;
+                };
+                let (n3c, s01) = match self.player.dyn_var_get(kind, &s_param3) {
+                    Some(DynVar::Integer(x)) => (x, String::new()),
+                    Some(DynVar::Str(s)) => (0, s),
+                    None => {
+                        let msg = format!("变量{}不存在，变量类型:{}", s_param3, s_param2);
+                        self.script_action_error_msg(&msg, "Dec", info);
+                        return;
+                    }
+                };
+                let n14 = crate::engine::vars::get_val_name_no(&s_param1);
+                if n14 < 0 {
+                    self.script_action_error("Dec", info);
+                    return;
+                }
+                self.dec_slot_by_no(n14, n3c, &s01, info);
+                return;
+            }
+            if Self::is_var_number(&s_param1) && !Self::is_var_number(&s_param2) {
+                let n3c = info.n_param3;
+                let s01 = String::new();
+                let Some((kind, _)) = self.dyn_var_resolve(&s_param1) else {
+                    let msg = format!(
+                        "变量类型错误，错误类型:{} 当前支持类型(HUMAN、GUILD、GLOBAL)",
+                        s_param1
+                    );
+                    self.script_action_error_msg(&msg, "Dec", info);
+                    return;
+                };
+                match self.player.dyn_var_get(kind, &s_param2) {
+                    Some(DynVar::Integer(x)) => {
+                        let nv = if n3c > 1 {
+                            x.wrapping_sub(n3c)
+                        } else {
+                            x.wrapping_sub(1)
+                        };
+                        self.player
+                            .dyn_var_set(kind, &s_param2, DynVar::Integer(nv));
+                    }
+                    Some(DynVar::Str(s)) => {
+                        if let Some(ns) = cs_remove_string(&s, &s01, true) {
+                            self.player.dyn_var_set(kind, &s_param2, DynVar::Str(ns));
+                        }
+                    }
+                    None => {
+                        let msg = format!("变量{}不存在，变量类型:{}", s_param2, s_param1);
+                        self.script_action_error_msg(&msg, "Dec", info);
+                        return;
+                    }
+                }
+                return;
+            }
+            self.script_action_error("Dec", info);
+            return;
+        }
+        let n3c = info.n_param2;
+        let n14 = crate::engine::vars::get_val_name_no(&s_param1);
+        if n14 < 0 {
+            self.script_action_error("Dec", info);
+            return;
+        }
+        self.dec_slot_by_no(n14, n3c, "", info);
+    }
+
+    /// `DEC` 的编号槽位自减（字符串型走 C# 原文的 `Substring` 移除；越界时跳过）。
+    fn dec_slot_by_no(&mut self, n14: i32, n3c: i32, s01: &str, info: &QuestActionInfo) {
+        let dec = |old: i32| {
+            if n3c > 1 {
+                old.wrapping_sub(n3c)
+            } else {
+                old.wrapping_sub(1)
+            }
+        };
+        match n14 {
+            0..=99 => {
+                let v = dec(self.player.mn_val(n14 as usize));
+                self.player.set_mn_val(n14 as usize, v);
+            }
+            100..=199 => {
+                let i = (n14 - 100) as usize;
+                let v = dec(self.player.global_val(i));
+                self.player.set_global_val(i, v);
+            }
+            200..=299 => {
+                let i = (n14 - 200) as usize;
+                let v = dec(self.player.mdy_val(i));
+                self.player.set_mdy_val(i, v);
+            }
+            300..=399 => {
+                let i = (n14 - 300) as usize;
+                let v = dec(self.player.mnmval(i));
+                self.player.set_mnmval(i, v);
+            }
+            400..=499 => {
+                let i = (n14 - 400) as usize;
+                let v = dec(self.player.globa_dy_mval(i));
+                self.player.set_globa_dy_mval(i, v);
+            }
+            500..=599 => {
+                let i = (n14 - 500) as usize;
+                let v = dec(self.player.mn_integer(i));
+                self.player.set_mn_integer(i, v);
+            }
+            600..=699 => {
+                let i = (n14 - 600) as usize;
+                let old = self.player.ms_string(i);
+                if let Some(ns) = cs_remove_string(&old, s01, true) {
+                    self.player.set_ms_string(i, ns);
+                }
+            }
+            700..=799 => {
+                let i = (n14 - 700) as usize;
+                let old = self.player.global_a_val(i);
+                if let Some(ns) = cs_remove_string(&old, s01, true) {
+                    self.player.set_global_a_val(i, ns);
+                }
+            }
+            800..=1199 => {
+                let i = (n14 - 700) as usize;
+                let v = dec(self.player.global_val(i));
+                self.player.set_global_val(i, v);
+            }
+            1200..=1599 => {
+                let i = (n14 - 1100) as usize;
+                let old = self.player.global_a_val(i);
+                if let Some(ns) = cs_remove_string(&old, s01, true) {
+                    self.player.set_global_a_val(i, ns);
+                }
+            }
+            _ => self.script_action_error("Dec", info),
+        }
+    }
+
+    /// `ActionOfMulData`（`MUL`）：`sParam1 = sParam2 * sParam3`。
+    fn action_of_mul_data(&mut self, info: &QuestActionInfo) {
+        let n18 = self.mul_read(&info.s_param2, true, info);
+        let n1c = self.mul_read(&info.s_param3, false, info);
+        let n14 = if mir2_shared::hutil32::compare_lstr_prefix(&info.s_param1, "<$STR(", 6) {
+            let s34 = match mir2_shared::hutil32::arrest_string_ex_ref(&info.s_param1, '(', ')').0 {
+                mir2_shared::hutil32::ArrestWrite::Value(v) => v,
+                mir2_shared::hutil32::ArrestWrite::Unchanged => String::new(),
+            };
+            crate::engine::vars::get_val_name_no(&s34)
+        } else {
+            crate::engine::vars::get_val_name_no(&info.s_param1)
+        };
+        let prod = n18.wrapping_mul(n1c);
+        match n14 {
+            0..=99 => self.player.set_mn_val(n14 as usize, prod),
+            100..=199 => self.player.set_global_val((n14 - 100) as usize, prod),
+            200..=299 => self.player.set_mdy_val((n14 - 200) as usize, prod),
+            300..=399 => self.player.set_mnmval((n14 - 300) as usize, prod),
+            400..=499 => self.player.set_globa_dy_mval((n14 - 400) as usize, prod),
+            500..=599 => self.player.set_mn_integer((n14 - 500) as usize, prod),
+            600..=699 => self
+                .player
+                .set_ms_string((n14 - 600) as usize, prod.to_string()),
+            700..=799 => self
+                .player
+                .set_global_a_val((n14 - 700) as usize, prod.to_string()),
+            800..=1199 => self.player.set_global_val((n14 - 700) as usize, prod),
+            1200..=1599 => self
+                .player
+                .set_global_a_val((n14 - 1100) as usize, prod.to_string()),
+            _ => {}
+        }
+    }
+
+    /// `MUL` 一侧取值：先 `StrToInt(GetLineVariableText(x), -1)`，再按编号槽位取；
+    /// `report_missing` 为真时，槽位未命中/越界都记 `ScriptActionError(Mul)`。
+    fn mul_read(&mut self, text: &str, report_missing: bool, info: &QuestActionInfo) -> i32 {
+        let direct = mir2_shared::hutil32::str_to_int(&self.player.line_variable_text(text), -1);
+        if direct >= 0 {
+            return direct;
+        }
+        let n14 = crate::engine::vars::get_val_name_no(text);
+        if n14 < 0 {
+            if report_missing {
+                self.script_action_error("Mul", info);
+            }
+            return 0;
+        }
+        let v = match n14 {
+            0..=99 => Some(self.player.mn_val(n14 as usize)),
+            100..=199 => Some(self.player.global_val((n14 - 100) as usize)),
+            200..=299 => Some(self.player.mdy_val((n14 - 200) as usize)),
+            300..=399 => Some(self.player.mnmval((n14 - 300) as usize)),
+            400..=499 => Some(self.player.globa_dy_mval((n14 - 400) as usize)),
+            500..=599 => Some(self.player.mn_integer((n14 - 500) as usize)),
+            600..=699 => Some(mir2_shared::hutil32::str_to_int(
+                &self.player.ms_string((n14 - 600) as usize),
+                1,
+            )),
+            700..=799 => Some(mir2_shared::hutil32::str_to_int(
+                &self.player.global_a_val((n14 - 700) as usize),
+                1,
+            )),
+            800..=1199 => Some(self.player.global_val((n14 - 700) as usize)),
+            1200..=1599 => Some(mir2_shared::hutil32::str_to_int(
+                &self.player.global_a_val((n14 - 1100) as usize),
+                1,
+            )),
+            _ => None,
+        };
+        match v {
+            Some(v) => v,
+            None => {
+                self.script_action_error("Mul", info);
+                0
+            }
+        }
+    }
+
+    /// `ActionOfVar`（`VAR 数据类型 类型 变量名`）。
+    fn action_of_var(&mut self, info: &QuestActionInfo) {
+        let s_type = info.s_param2.clone();
+        let s_var_name = info.s_param3.clone();
+        let s_var_value = info.s_param4.clone();
+        let is_int = info.s_param1.eq_ignore_ascii_case("Integer");
+        let is_str = info.s_param1.eq_ignore_ascii_case("String");
+        if !is_int && !is_str {
+            self.script_action_error("Var", info);
+            return;
+        }
+        if s_type.is_empty() || s_var_name.is_empty() {
+            self.script_action_error("Var", info);
+            return;
+        }
+        let value = if is_int {
+            DynVar::Integer(mir2_shared::hutil32::str_to_int(&info.s_param4, 0))
+        } else {
+            DynVar::Str(s_var_value)
+        };
+        let Some((kind, _)) = self.dyn_var_resolve(&s_type) else {
+            let msg = format!(
+                "变量类型错误，错误类型:{} 当前支持类型(HUMAN、GUILD、GLOBAL)",
+                s_type
+            );
+            self.script_action_error_msg(&msg, "Var", info);
+            return;
+        };
+        if self.player.dyn_var_get(kind, &s_var_name).is_some() {
+            let msg = format!("变量{}已存在，变量类型:{}", s_var_name, s_type);
+            self.script_action_error_msg(&msg, "Var", info);
+        } else {
+            self.player.dyn_var_insert(kind, &s_var_name, value);
+        }
+    }
+
+    /// `ActionOfLoadVar`（`LOADVAR 类型 变量名 文件名`）。
+    fn action_of_load_var(&mut self, info: &QuestActionInfo) {
+        let s_type = info.s_param1.clone();
+        let s_var_name = info.s_param2.clone();
+        let file = trim_var_file(self.player.line_variable_text(&info.s_param3));
+        let Some(path) = self.envir_file_path(&file) else {
+            self.script_action_error("LoadVar", info);
+            return;
+        };
+        if s_type.is_empty() || s_var_name.is_empty() || !path.is_file() {
+            self.script_action_error("LoadVar", info);
+            return;
+        }
+        let Some((kind, s_name)) = self.dyn_var_resolve(&s_type) else {
+            let msg = format!(
+                "变量类型错误，错误类型:{} 当前支持类型(HUMAN、GUILD、GLOBAL)",
+                s_type
+            );
+            self.script_action_error_msg(&msg, "Var", info);
+            return;
+        };
+        let mut found = self.player.dyn_var_get(kind, &s_var_name).is_some();
+        if !found {
+            let str_val = conf_read_string(&path, &s_name, &s_var_name);
+            if !str_val.is_empty() {
+                self.player
+                    .dyn_var_insert(kind, &s_var_name, DynVar::Str(str_val));
+                found = true;
+            }
+        }
+        if !found {
+            let msg = format!("变量{}不存在，变量类型:{}", s_var_name, s_type);
+            self.script_action_error_msg(&msg, "LoadVar", info);
+        }
+    }
+
+    /// `ActionOfSaveVar`（`SAVEVAR 类型 变量名 文件名`）。
+    ///
+    /// C# `ConfFile.WriteInteger` 为空实现、`WriteString` 只改内存缓存且**从不 `Save()`**，
+    /// 故可观察行为只有：类型/变量名/文件存在性校验 + 变量是否存在校验；不落盘（原文如此）。
+    fn action_of_save_var(&mut self, info: &QuestActionInfo) {
+        let s_type = info.s_param1.clone();
+        let s_var_name = info.s_param2.clone();
+        let file = trim_var_file(self.player.line_variable_text(&info.s_param3));
+        let Some(path) = self.envir_file_path(&file) else {
+            self.script_action_error("SaveVar", info);
+            return;
+        };
+        if s_type.is_empty() || s_var_name.is_empty() || !path.is_file() {
+            self.script_action_error("SaveVar", info);
+            return;
+        }
+        let Some((kind, _)) = self.dyn_var_resolve(&s_type) else {
+            let msg = format!(
+                "变量类型错误，错误类型:{} 当前支持类型(HUMAN、GUILD、GLOBAL)",
+                s_type
+            );
+            self.script_action_error_msg(&msg, "Var", info);
+            return;
+        };
+        if self.player.dyn_var_get(kind, &s_var_name).is_none() {
+            let msg = format!("变量{}不存在，变量类型:{}", s_var_name, s_type);
+            self.script_action_error_msg(&msg, "SaveVar", info);
+        }
+    }
+
+    /// `ActionOfCalcVar`（`CALCVAR 类型 变量名 操作符 值`）。
+    /// 注意 C# 缺陷：`IsStringNumber` 恒真 ⇒ `sParam4` 永不展开；且读写**总是 HUMAN 表**。
+    fn action_of_calc_var(&mut self, info: &QuestActionInfo) {
+        let s_type = info.s_param1.clone();
+        let s_var_name = info.s_param2.clone();
+        let s_method = info.s_param3.clone();
+        let s_var_value = info.s_param4.clone();
+        let n_var_value = mir2_shared::hutil32::str_to_int(&info.s_param4, 0);
+        if s_type.is_empty() || s_var_name.is_empty() || s_method.is_empty() {
+            self.script_action_error("CalcVar", info);
+            return;
+        }
+        let Some((_kind, _)) = self.dyn_var_resolve(&s_type) else {
+            let msg = format!(
+                "变量类型错误，错误类型:{} 当前支持类型(HUMAN、GUILD、GLOBAL)",
+                s_type
+            );
+            self.script_action_error_msg(&msg, "CalcVar", info);
+            return;
+        };
+        let c_method = first_char(&s_method);
+        let mut found = false;
+        match self.player.dyn_var_get(DynVarKind::Human, &s_var_name) {
+            Some(DynVar::Integer(x)) => {
+                let nv = match c_method {
+                    '=' => n_var_value,
+                    '+' => x.wrapping_add(n_var_value),
+                    '-' => x.wrapping_sub(n_var_value),
+                    '*' => x.wrapping_mul(n_var_value),
+                    '/' => x.wrapping_div(n_var_value),
+                    _ => x,
+                };
+                self.player
+                    .dyn_var_set(DynVarKind::Human, &s_var_name, DynVar::Integer(nv));
+                found = true;
+            }
+            Some(DynVar::Str(s)) => {
+                let nv = match c_method {
+                    '=' => s_var_value.clone(),
+                    '+' => format!("{}{}", s, s_var_value),
+                    _ => s.clone(),
+                };
+                self.player
+                    .dyn_var_set(DynVarKind::Human, &s_var_name, DynVar::Str(nv));
+                found = true;
+            }
+            None => {}
+        }
+        if !found {
+            let msg = format!("变量{}不存在，变量类型:{}", s_var_name, s_type);
+            self.script_action_error_msg(&msg, "CalcVar", info);
+        }
+    }
+
+    /// `ActionOfAddUseDateList`：把「名字 + 当天日期」追加到名单（去重，忽略大小写）。
+    fn action_of_add_use_date_list(&mut self, info: &QuestActionInfo) {
+        let hum_name = self.player.chr_name();
+        let rel = format!("{}{}", self.npc.path(), info.s_param1);
+        let Some(path) = self.envir_file_path(&rel) else {
+            return;
+        };
+        let mut lines: Vec<String> = Vec::new();
+        if let Ok(bytes) = std::fs::read(&path) {
+            lines = crate::textfile::split_lines(&crate::textfile::decode_bytes(&bytes));
+        }
+        for line in &lines {
+            let (first, _) = mir2_shared::hutil32::get_valid_str_cap(line.trim(), &[' ', '\t'])
+                .unwrap_or((String::new(), String::new()));
+            if first.eq_ignore_ascii_case(&hum_name) {
+                return;
+            }
+        }
+        lines.push(format!("{}    {}", hum_name, self.player.today_string()));
+        let mut out = String::new();
+        for line in &lines {
+            out.push_str(line);
+            out.push_str("\r\n");
+        }
+        let _ = std::fs::write(&path, crate::textfile::encode_gb2312(&out));
+    }
+
+    /// `ActionOfClearMapMon`：清指定地图怪物（Master 与 NoClearMonList 由世界层排除）。
+    fn action_of_clear_map_mon(&mut self, info: &QuestActionInfo) {
+        self.player.clear_map_monsters(&info.s_param1);
+    }
+
+    /// `ActionOfMonGenEx`（`MONGENEX 地图 X Y 名 范围 数量`）。
+    fn action_of_mon_gen_ex(&mut self, info: &QuestActionInfo) {
+        let s_map_name = info.s_param1.clone();
+        let n_map_x = mir2_shared::hutil32::str_to_int(&info.s_param2, -1);
+        let n_map_y = mir2_shared::hutil32::str_to_int(&info.s_param3, -1);
+        let s_mon_name = info.s_param4.clone();
+        let n_range = info.n_param5;
+        let n_count = info.n_param6;
+        if s_map_name.is_empty() || n_map_x <= 0 || n_map_y <= 0 || n_range <= 0 || n_count <= 0 {
+            self.script_action_error("MonGenex", info);
+            return;
+        }
+        for _ in 0..n_count {
+            let n_rand_x = self.player.random(n_range * 2 + 1) + (n_map_x - n_range);
+            let n_rand_y = self.player.random(n_range * 2 + 1) + (n_map_y - n_range);
+            if !self
+                .player
+                .regen_monster(&s_map_name, n_rand_x, n_rand_y, &s_mon_name)
+            {
+                break;
+            }
+        }
+    }
+
+    /// `ActionOfUpgradeItemsEx`（`UPGRADEITEMSEX`）。
+    fn action_of_upgrade_items_ex(&mut self, info: &QuestActionInfo) {
+        let n_where = mir2_shared::hutil32::str_to_int(&info.s_param1, -1);
+        let n_val_type = mir2_shared::hutil32::str_to_int(&info.s_param2, -1);
+        let n_rate = mir2_shared::hutil32::str_to_int(&info.s_param3, -1);
+        let n_point_in = mir2_shared::hutil32::str_to_int(&info.s_param4, -1);
+        let n_upgrade_item_status = mir2_shared::hutil32::str_to_int(&info.s_param5, -1);
+        let upper = self.player.use_items_len();
+        if !(0..=14).contains(&n_val_type)
+            || n_where < 0
+            || n_where > upper
+            || n_rate < 0
+            || !(0..=255).contains(&n_point_in)
+        {
+            self.script_action_error("UpgradeItemSex", info);
+            return;
+        }
+        let std_name = self.player.use_item_std_name(n_where);
+        if self.player.use_item_index(n_where) <= 0
+            || !self.player.use_item_std_item_present(n_where)
+        {
+            self.player
+                .sys_msg("你身上没有戴指定物品!!!", MSG_COLOR_RED, MSG_TYPE_HINT);
+            return;
+        }
+        let n_rate_point = self.player.random(n_rate * 10);
+        let n_point = {
+            let r = self.player.random(n_point_in);
+            if r > 1 {
+                r
+            } else {
+                1
+            }
+        };
+        if !(0..=10).contains(&n_rate_point) {
+            match n_upgrade_item_status {
+                0 => self
+                    .player
+                    .sys_msg("装备升级未成功!!!", MSG_COLOR_RED, MSG_TYPE_HINT),
+                1 => {
+                    self.player.send_del_use_item(n_where);
+                    self.player.set_use_item_index(n_where, 0);
+                    self.player
+                        .sys_msg("装备破碎!!!", MSG_COLOR_RED, MSG_TYPE_HINT);
+                }
+                2 => {
+                    self.player.sys_msg(
+                        "装备升级失败，装备属性恢复默认!!!",
+                        MSG_COLOR_RED,
+                        MSG_TYPE_HINT,
+                    );
+                    if n_val_type != 14 {
+                        self.player.set_use_item_desc(n_where, n_val_type, 0);
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+        if n_val_type == 14 {
+            let mut n_add_point = n_point.wrapping_mul(1000);
+            let dura_max = self.player.use_item_dura_max(n_where);
+            if dura_max + n_add_point > 65535 {
+                n_add_point = 65535 - dura_max;
+            }
+            self.player
+                .set_use_item_dura_max(n_where, dura_max + n_add_point);
+        } else {
+            let mut n_add_point = n_point;
+            let desc = self.player.use_item_desc(n_where, n_val_type);
+            if desc + n_add_point > 255 {
+                n_add_point = 255 - desc;
+            }
+            self.player
+                .set_use_item_desc(n_where, n_val_type, desc + n_add_point);
+        }
+        self.player.send_update_item(n_where);
+        self.player
+            .sys_msg("装备升级成功", MSG_COLOR_GREEN, MSG_TYPE_HINT);
+        let descs: Vec<String> = (0..14)
+            .map(|i| self.player.use_item_desc(n_where, i).to_string())
+            .collect();
+        let msg = format!(
+            "{}: {}/{}-{}",
+            std_name,
+            self.player.use_item_dura(n_where),
+            self.player.use_item_dura_max(n_where),
+            descs.join("/")
+        );
+        self.player.sys_msg(&msg, MSG_COLOR_BLUE, MSG_TYPE_HINT);
+    }
+
+    /// `ActionOfMarry`（`MARRY`）。
+    fn action_of_marry(&mut self, info: &QuestActionInfo) {
+        if !self.player.dear_name().is_empty() {
+            return;
+        }
+        let pose = self.player.pose();
+        let Some(pose) = pose else {
+            self.goto_label("@MarryCheckDir", false);
+            return;
+        };
+        let npc_name = self.npc.chr_name();
+        let me_name = self.player.chr_name();
+        let pose_name = pose.chr_name.clone();
+        if info.s_param1.is_empty() {
+            if pose.race != crate::engine::ACTOR_RACE_PLAY {
+                self.goto_label("@HumanTypeErr", false);
+                return;
+            }
+            if pose.is_mutual {
+                if self.player.gender() != pose.gender {
+                    self.goto_label("@StartMarry", false);
+                    self.player.pose_goto_label("@StartMarry");
+                    if (self.player.gender() == crate::engine::GENDER_MAN
+                        && pose.gender == crate::engine::GENDER_WOMAN)
+                        || (self.player.gender() == crate::engine::GENDER_WOMAN
+                            && pose.gender == crate::engine::GENDER_MAN)
+                    {
+                        let msg = format!(
+                            "[{}]: {} 与 {} 的婚礼现在开始...",
+                            npc_name, me_name, pose_name
+                        );
+                        self.player.world_broadcast(&msg);
+                        let msg = format!(
+                            "[{}]: {} 你愿意娶 {} 小姐为妻，并照顾她一生一世吗？",
+                            npc_name, me_name, pose_name
+                        );
+                        self.player.world_broadcast(&msg);
+                    }
+                    self.player.set_is_start_marry(true);
+                    self.player.set_pose_is_start_marry(true);
+                } else {
+                    self.player.pose_goto_label("@MarrySexErr");
+                    self.goto_label("@MarrySexErr", false);
+                }
+            } else {
+                self.goto_label("@MarryDirErr", false);
+                self.player.pose_goto_label("@MarryCheckDir");
+            }
+            return;
+        }
+        if info.s_param1.eq_ignore_ascii_case("REQUESTMARRY")
+            && self.player.is_start_marry()
+            && self.player.pose_is_start_marry()
+            && self.player.gender() == crate::engine::GENDER_MAN
+            && pose.gender == crate::engine::GENDER_WOMAN
+        {
+            // C# 对 `{0}` 模板做 `%n/%s/%d` Replace（无命中）⇒ 原文广播
+            let msg =
+                "[{0}]: 我愿意!!!，{1} 小姐我会尽我一生的时间来照顾您，让您过上快乐美满的日子的。";
+            self.player.world_broadcast(msg);
+            let msg = "[{0}]: {1} 你愿意嫁给 {2} 先生为妻，并照顾他一生一世吗？";
+            self.player.world_broadcast(msg);
+            self.goto_label("@WateMarry", false);
+            self.player.pose_goto_label("@RevMarry");
+        }
+        if info.s_param1.eq_ignore_ascii_case("RESPONSEMARRY")
+            && self.player.gender() == crate::engine::GENDER_WOMAN
+            && pose.gender == crate::engine::GENDER_MAN
+        {
+            if info.s_param2.eq_ignore_ascii_case("OK") {
+                if self.player.is_start_marry() && self.player.pose_is_start_marry() {
+                    let msg = format!(
+                        "[{}]: 我愿意!!!，{} 先生我愿意让你来照顾我，保护我。",
+                        npc_name, pose_name
+                    );
+                    self.player.world_broadcast(&msg);
+                    let msg = format!(
+                        "[{}]: 我宣布 {} 先生与 {} 小姐正式成为合法夫妻。",
+                        npc_name, me_name, pose_name
+                    );
+                    self.player.world_broadcast(&msg);
+                    self.goto_label("@EndMarry", false);
+                    self.player.pose_goto_label("@EndMarry");
+                    self.player.set_is_start_marry(false);
+                    self.player.set_pose_is_start_marry(false);
+                    self.player.set_dear_name(&pose_name);
+                    self.player.set_pose_dear_name(&me_name);
+                    self.player.ref_show_name();
+                    self.player.pose_ref_show_name();
+                }
+            } else if self.player.is_start_marry() && self.player.pose_is_start_marry() {
+                self.goto_label("@EndMarryFail", false);
+                self.player.pose_goto_label("@EndMarryFail");
+                self.player.set_is_start_marry(false);
+                self.player.set_pose_is_start_marry(false);
+                let msg = format!(
+                    "[{}]: {} 你这个好色之徒，谁会愿意嫁给你呀!!!，癞蛤蟆想吃天鹅肉。",
+                    npc_name, me_name
+                );
+                self.player.world_broadcast(&msg);
+                let msg = format!(
+                    "[{}]: 真是可惜，二个人这个时候才翻脸，你们培养好感情后再来找我吧!!!",
+                    npc_name
+                );
+                self.player.world_broadcast(&msg);
+            }
+        }
+    }
+
+    /// `ActionOfUnMarry`（`UNMARRY`）。
+    fn action_of_un_marry(&mut self, info: &QuestActionInfo) {
+        if self.player.dear_name().is_empty() {
+            self.goto_label("@ExeMarryFail", false);
+            return;
+        }
+        let pose = self.player.pose();
+        if pose.is_none() {
+            self.goto_label("@UnMarryCheckDir", false);
+        }
+        if let Some(pose) = pose.as_ref() {
+            if info.s_param1.is_empty() {
+                if pose.race != crate::engine::ACTOR_RACE_PLAY {
+                    self.goto_label("@UnMarryTypeErr", false);
+                    return;
+                }
+                if pose.is_mutual && self.player.dear_name() == pose.chr_name {
+                    self.goto_label("@StartUnMarry", false);
+                    self.player.pose_goto_label("@StartUnMarry");
+                    return;
+                }
+            }
+        }
+        if info.s_param1.eq_ignore_ascii_case("REQUESTUNMARRY") {
+            if info.s_param2.is_empty() {
+                if pose.is_some() {
+                    self.player.set_is_start_un_marry(true);
+                    if self.player.is_start_un_marry() && self.player.pose_is_start_un_marry() {
+                        let npc_name = self.npc.chr_name();
+                        let me_name = self.player.chr_name();
+                        let pose_name = pose
+                            .as_ref()
+                            .map(|p| p.chr_name.clone())
+                            .unwrap_or_default();
+                        let msg = format!(
+                            "[{}]: 我宣布{} 与{}  正式脱离夫妻关系。",
+                            npc_name, pose_name, me_name
+                        );
+                        self.player.world_broadcast(&msg);
+                        self.player.set_dear_name("");
+                        self.player.set_pose_dear_name("");
+                        self.player.inc_marry_count();
+                        self.player.inc_pose_marry_count();
+                        self.player.set_is_start_un_marry(false);
+                        self.player.set_pose_is_start_un_marry(false);
+                        self.player.ref_show_name();
+                        self.player.pose_ref_show_name();
+                        self.goto_label("@UnMarryEnd", false);
+                        self.player.pose_goto_label("@UnMarryEnd");
+                    } else {
+                        self.goto_label("@WateUnMarry", false);
+                    }
+                }
+            } else if info.s_param2.eq_ignore_ascii_case("FORCE") {
+                let npc_name = self.npc.chr_name();
+                let me_name = self.player.chr_name();
+                let dear = self.player.dear_name();
+                let msg = format!(
+                    "[{}]: 我宣布{} 与{}  已经正式脱离夫妻关系!!!",
+                    npc_name, me_name, dear
+                );
+                self.player.world_broadcast(&msg);
+                // C# `poseHuman = GetPlayObject(DearName)`：世界层未接入时按「对方不在线」
+                // 走 else 分支（仅写 UnMarry.txt，此处不落盘，原文已注释）
+                self.player.set_dear_name("");
+                self.player.inc_marry_count();
+                self.goto_label("@UnMarryEnd", false);
+                self.player.ref_show_name();
+            }
+        }
+    }
+
     /// C# `ActionOfDelList(value, fileName)`：读表（文件不存在 = 空表）→ 逐行 `Trim()` 后忽略大小写
     /// 比对 → **首个**命中行 `RemoveAt(i)` 并立即整表保存；未命中不写文件。
     ///
@@ -1054,7 +2117,7 @@ impl Engine<'_, '_> {
     /// `SystemShare.GetEnvirFilePath(filePath)`（单参口径）：`Path.Combine(BasePath, EnvirDir, filePath)`；
     /// `filePath` 以 `..` 开头时丢弃前 3 个字符（`"../x"` / `"..\x"` ⇒ `x`）。
     /// `None` ⇒ host 未注入 Envir 根（文件类动作按"文件不存在"处理，不写盘）。
-    fn envir_file_path(&self, rel: &str) -> Option<std::path::PathBuf> {
+    pub(crate) fn envir_file_path(&self, rel: &str) -> Option<std::path::PathBuf> {
         let root = self.npc.envir_root()?;
         let rel = if rel.starts_with("..") {
             rel.get(3..).unwrap_or("")
@@ -1085,4 +2148,191 @@ fn worn_location_of(item_type: &str) -> Option<&'static str> {
     LOCATIONS
         .into_iter()
         .find(|loc| mir2_shared::hutil32::compare_lstr_prefix(item_type, loc, 4))
+}
+
+/// `VarVal` → `(sValue, nValue, nDataType)`（对应 C# `GetMovDataH...` ref 三元组）。
+fn mov_parts(v: &VarVal) -> (String, i32, i32) {
+    match v {
+        VarVal::Int(n) => (String::new(), *n, 1),
+        VarVal::Str(s) => (s.clone(), -1, 0),
+    }
+}
+
+/// `LOADVAR`/`SAVEVAR` 的文件名前导 `\` 剔除（C# 顺序执行的三次判断）。
+fn trim_var_file(mut s: String) -> String {
+    if s.starts_with('\\') {
+        s = s.chars().skip(1).collect();
+    }
+    if s.chars().nth(1) == Some('\\') {
+        s = s.chars().skip(2).collect();
+    }
+    if s.chars().nth(2) == Some('\\') {
+        s = s.chars().skip(3).collect();
+    }
+    s
+}
+
+/// C# `String.IndexOf(sub, OrdinalIgnoreCase)`（`-1` = 未命中）。
+fn find_ci(hay: &[char], needle: &[char]) -> i32 {
+    if needle.is_empty() {
+        return 0;
+    }
+    if needle.len() > hay.len() {
+        return -1;
+    }
+    for i in 0..=(hay.len() - needle.len()) {
+        if (0..needle.len()).all(|j| {
+            mir2_shared::hutil32::to_upper_char(hay[i + j])
+                == mir2_shared::hutil32::to_upper_char(needle[j])
+        }) {
+            return i as i32;
+        }
+    }
+    -1
+}
+
+/// `DEC` 的 C# 字符串移除（两种下标口径）。
+///
+/// `variant_a` = 编号槽位分支（`Processings:1710-1713`）：`s02 = s[1..n10]`、
+/// `s03 = s.Substring(sub.len + n10, s.len)`；否则为动态变量分支（`Processings:1815-1817`）：
+/// `s02 = s[..n10-1]`、`s03 = s.Substring(sub.len + n10 - 1, s.len)`。
+/// C# 下标越界会抛异常（语料保证 s01 存在），此处越界返回 `None`（不改写）。
+fn cs_remove_string(s: &str, sub: &str, variant_a: bool) -> Option<String> {
+    let cs: Vec<char> = s.chars().collect();
+    let sub_cs: Vec<char> = sub.chars().collect();
+    let n10 = find_ci(&cs, &sub_cs) as i64;
+    if variant_a {
+        if n10 < 1 {
+            return None;
+        }
+        let start3 = sub_cs.len() as i64 + n10;
+        if start3 > cs.len() as i64 {
+            return None;
+        }
+        let s02: String = cs[1..n10 as usize].iter().collect();
+        let s03: String = cs[start3 as usize..].iter().collect();
+        Some(format!("{}{}", s02, s03))
+    } else {
+        let end2 = n10 - 1;
+        if end2 < 0 {
+            return None;
+        }
+        let start3 = sub_cs.len() as i64 + n10 - 1;
+        if start3 > cs.len() as i64 || end2 as usize > cs.len() {
+            return None;
+        }
+        let s02: String = cs[..end2 as usize].iter().collect();
+        let s03: String = cs[start3 as usize..].iter().collect();
+        Some(format!("{}{}", s02, s03))
+    }
+}
+
+/// C# `ConfFile.Load()` + `ReadString(section, key, "")` 的读侧（不含写盘）。
+///
+/// 解析规则逐条对应 `src/OpenMir2/Common/ConfFile.cs:199-284`：逐行 `Trim`、空行跳过、
+/// `/* */` 块注释、`;;` 行注释与行内截断、`[section]`（重复段直接停止加载）、键重复取首个、
+/// 键/段比较大小写不敏感。文件不存在时 `Load()` 会创建空文件并返回 false，读侧给 ""。
+fn conf_read_string(path: &std::path::Path, section: &str, key: &str) -> String {
+    let Ok(bytes) = std::fs::read(path) else {
+        return String::new();
+    };
+    let text = crate::textfile::decode_bytes(&bytes);
+    let mut sections: Vec<(String, Vec<(String, String)>)> = Vec::new();
+    let mut large_comment = false;
+    let mut is_cur_sec_comment = false;
+    let mut cur: Option<usize> = None;
+    for raw in crate::textfile::split_lines(&text) {
+        let line = raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if line.starts_with("/*") {
+            large_comment = true;
+            continue;
+        }
+        if large_comment {
+            if line.starts_with("*/") {
+                large_comment = false;
+            }
+            continue;
+        }
+        let cs: Vec<char> = line.chars().collect();
+        if cs.len() >= 2 && cs[0] == ';' && cs[1] == ';' {
+            continue;
+        }
+        if let Some(sec) = conf_section_name(line) {
+            let sec_cs: Vec<char> = sec.chars().collect();
+            if sec_cs.len() >= 2 && sec_cs[0] == ';' && sec_cs[1] == ';' {
+                is_cur_sec_comment = true;
+                continue;
+            }
+            is_cur_sec_comment = false;
+            let lower = sec.to_lowercase();
+            if sections.iter().any(|(s, _)| *s == lower) {
+                // C# 段重复 → `goto Label_02AE` 结束加载
+                break;
+            }
+            sections.push((lower, Vec::new()));
+            cur = Some(sections.len() - 1);
+            continue;
+        }
+        if is_cur_sec_comment {
+            continue;
+        }
+        let line = match line.find(";;") {
+            Some(i) => &line[..i],
+            None => line,
+        };
+        let idx = match cur {
+            Some(i) => i,
+            None => {
+                if sections.iter().any(|(s, _)| s.is_empty()) {
+                    sections.iter().position(|(s, _)| s.is_empty()).unwrap()
+                } else {
+                    sections.push((String::new(), Vec::new()));
+                    sections.len() - 1
+                }
+            }
+        };
+        let line = line.trim();
+        if let Some((k, v)) = conf_split_key_val(line) {
+            let sec = &mut sections[idx].1;
+            if !sec.iter().any(|(ek, _)| *ek == k) {
+                sec.push((k, v));
+            }
+        }
+    }
+    let lower_sec = section.to_lowercase();
+    let lower_key = key.to_lowercase();
+    sections
+        .iter()
+        .find(|(s, _)| *s == lower_sec)
+        .and_then(|(_, kvs)| {
+            kvs.iter()
+                .find(|(k, _)| *k == lower_key)
+                .map(|(_, v)| v.clone())
+        })
+        .unwrap_or_default()
+}
+
+/// `ConfFile.GetSecString`：`[xxx]` 取段名（`]` 前内容 trim）；非 `[` 开头或无 `]` 返回 `None`。
+fn conf_section_name(line: &str) -> Option<&str> {
+    let rest = line.strip_prefix('[')?;
+    let end = rest.find(']')?;
+    if end == 0 {
+        return None;
+    }
+    Some(rest[..end].trim())
+}
+
+/// `ConfFile.SplitKeyVal`：第一个 `=` 切分，键值各自 trim（键转小写）；无 `=` 返回 `None`。
+fn conf_split_key_val(line: &str) -> Option<(String, String)> {
+    let pos = line.find('=')?;
+    if pos == 0 {
+        return None;
+    }
+    Some((
+        line[..pos].trim().to_lowercase(),
+        line[pos + 1..].trim().to_string(),
+    ))
 }

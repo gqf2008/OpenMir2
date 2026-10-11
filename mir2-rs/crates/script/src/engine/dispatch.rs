@@ -76,6 +76,22 @@ pub static IMPLEMENTED_EXECUTIONS: &[&str] = &[
     "ActionOfDelNameList",
     "ActionOfDelUseDateList",
     "ActionOfDelAccountList",
+    // ---- B2/M4 var 家族 / 剩余动作批次（2026-10-11）----
+    "ActionOfMovData",
+    "ActionOfMovrData",
+    "ActionOfIncInteger",
+    "ActionOfDecInteger",
+    "ActionOfMulData",
+    "ActionOfVar",
+    "ActionOfLoadVar",
+    "ActionOfSaveVar",
+    "ActionOfCalcVar",
+    "ActionOfUpgradeItemsEx",
+    "ActionOfMarry",
+    "ActionOfUnMarry",
+    "ActionOfAddUseDateList",
+    "ActionOfClearMapMon",
+    "ActionOfMonGenEx",
 ];
 
 /// 已实现的**条件**处理器名。
@@ -122,6 +138,9 @@ pub static IMPLEMENTED_CONDITIONS: &[&str] = &[
     "ConditionOfCheckPoseLevel",
     "ConditionOfCheckPoseMarry",
     "ConditionOfIsNewHuman",
+    // ---- B2/M4 var 家族条件批次（2026-10-11）----
+    "ConditionOfCheckVar",
+    "ConditionOfCheckNameDateList",
 ];
 
 pub fn condition_handler(code: i32) -> Option<&'static str> {

@@ -34,6 +34,8 @@ pub struct PoseInfo {
     pub level: i32,
     /// `poseHuman.GetPoseCreate() == baseObject`（互相面对）
     pub is_mutual: bool,
+    /// `IPlayerActor.ChrName`（结婚/离婚文案用）
+    pub chr_name: String,
     /// `IPlayerActor.DearName`
     pub dear_name: String,
     /// `IPlayerActor.MasterName`
@@ -285,6 +287,43 @@ pub trait ScriptPlayer {
         String::new()
     }
 
+    // ---- B2/M4 var 家族批次（2026-10-11）：编号槽位 setter 与 `DynamicVar` 存储 ----
+    // 说明：默认实现为空（世界适配层尚未接上）；引擎侧 `SetMovDataValNameValue` /
+    // `SetMovDataDynamicVarValue` 走这些方法写回。
+
+    /// `SystemShare.Config.GlobalVal[n] = v`
+    fn set_global_val(&mut self, _n: usize, _v: i32) {}
+    /// `SystemShare.Config.GlobaDyMval[n] = v`
+    fn set_globa_dy_mval(&mut self, _n: usize, _v: i32) {}
+    /// `SystemShare.Config.GlobalAVal[n] = v`
+    fn set_global_a_val(&mut self, _n: usize, _v: String) {}
+    /// `playerActor.MDyVal[n] = v`
+    fn set_mdy_val(&mut self, _n: usize, _v: i32) {}
+    /// `playerActor.MNMval[n] = v`
+    fn set_mnmval(&mut self, _n: usize, _v: i32) {}
+    /// `playerActor.MNInteger[n] = v`
+    fn set_mn_integer(&mut self, _n: usize, _v: i32) {}
+    /// `playerActor.MSString[n] = v`
+    fn set_ms_string(&mut self, _n: usize, _v: String) {}
+    /// `playerActor.ServerIntVal[n] = v`
+    fn set_server_int_val(&mut self, _n: usize, _v: i32) {}
+    /// `playerActor.ServerStrVal[n] = v`
+    fn set_server_str_val(&mut self, _n: usize, _v: String) {}
+
+    /// `GetDynamicVarMap(playerActor, kind)` 取变量值（`TryGetValue` 语义）。
+    fn dyn_var_get(&self, _kind: DynVarKind, _name: &str) -> Option<DynVar> {
+        None
+    }
+    /// 写回**已存在**的变量（`SetMovDataDynamicVarValue` 的 `TryGetValue` 命中分支）；
+    /// 返回 false 表示变量不存在（或类型不匹配），调用方据此报错。
+    fn dyn_var_set(&mut self, _kind: DynVarKind, _name: &str, _v: DynVar) -> bool {
+        false
+    }
+    /// `VAR` 声明：不存在则新增，返回是否新增（已存在返回 false）。
+    fn dyn_var_insert(&mut self, _kind: DynVarKind, _name: &str, _v: DynVar) -> bool {
+        false
+    }
+
     // ---- B2/M4 动作批次（2026-10-11）：非 var 家族动作处理器所需的世界面 ----
     // 说明：默认实现一律取「世界缺省」（0 / 空 / false / 空实现），与 C# flow 夹具
     // （DispatchProxy 未实现的方法回默认值且不落日志）一致；真世界适配层随之接上后覆写。
@@ -492,6 +531,10 @@ pub trait ScriptPlayer {
     fn use_item_std_name(&self, _i: i32) -> String {
         String::new()
     }
+    /// `SystemShare.ItemSystem.GetStdItem(UseItems[i].Index) != null`
+    fn use_item_std_item_present(&self, i: i32) -> bool {
+        self.use_item_index(i) > 0
+    }
     /// `playerActor.SendDelItems(UseItems[i])`
     fn send_del_use_item(&mut self, _i: i32) {}
     /// `playerActor.UseItems[i].Dura`
@@ -503,6 +546,68 @@ pub trait ScriptPlayer {
     fn use_item_dura_max(&self, _i: i32) -> i32 {
         0
     }
+
+    // ---- B2/M4 var 家族 / 剩余动作批次（2026-10-11）：世界面钩子 ----
+    // 约定：默认实现为「世界缺省」（no-op / 0 / false），与 C# flow 夹具（DispatchProxy
+    // 回默认值且不落日志）口径一致；真世界适配层接入后覆写。
+
+    /// `playerActor.UseItems[i].Desc[attr]`（属性附加点）
+    fn use_item_desc(&self, _i: i32, _attr: i32) -> i32 {
+        0
+    }
+    /// `playerActor.UseItems[i].Desc[attr] = v`
+    fn set_use_item_desc(&mut self, _i: i32, _attr: i32, _v: i32) {}
+    /// `playerActor.UseItems[i].DuraMax = v`
+    fn set_use_item_dura_max(&mut self, _i: i32, _v: i32) {}
+    /// `playerActor.SendUpdateItem(UseItems[i])`
+    fn send_update_item(&mut self, _i: i32) {}
+    /// `SystemShare.WorldEngine.RegenMonsterByName(map, x, y, name) != null`
+    fn regen_monster(&mut self, _map: &str, _x: i32, _y: i32, _name: &str) -> bool {
+        false
+    }
+    /// `ActionOfClearMapMon`：把地图上的怪物（排除 Master / NoClearMonList）置 NoItem + MakeGhost
+    fn clear_map_monsters(&mut self, _map: &str) {}
+    /// `DateTime.Today` 的 `ToString()` 文本（`ActionOfAddUseDateList` 用）
+    fn today_string(&self) -> String {
+        String::new()
+    }
+
+    // ---- Marry / UnMarry 的自身侧与对方（pose）侧钩子 ----
+    /// `playerActor.IsStartMarry`
+    fn is_start_marry(&self) -> bool {
+        false
+    }
+    fn set_is_start_marry(&mut self, _v: bool) {}
+    /// `playerActor.IsStartUnMarry`
+    fn is_start_un_marry(&self) -> bool {
+        false
+    }
+    fn set_is_start_un_marry(&mut self, _v: bool) {}
+    /// `playerActor.DearName = v`
+    fn set_dear_name(&mut self, _v: &str) {}
+    /// `playerActor.MarryCount++`
+    fn inc_marry_count(&mut self) {}
+    /// `playerActor.GetPoseCreate().ActorId`
+    fn pose_actor_id(&self) -> i32 {
+        0
+    }
+    /// `poseHuman.DearName`
+    fn pose_dear_name(&self) -> String {
+        String::new()
+    }
+    fn set_pose_dear_name(&mut self, _v: &str) {}
+    fn pose_is_start_marry(&self) -> bool {
+        false
+    }
+    fn set_pose_is_start_marry(&mut self, _v: bool) {}
+    fn pose_is_start_un_marry(&self) -> bool {
+        false
+    }
+    fn set_pose_is_start_un_marry(&mut self, _v: bool) {}
+    fn inc_pose_marry_count(&mut self) {}
+    fn pose_ref_show_name(&mut self) {}
+    /// `normNpc.GotoLable(poseHuman, label, false)`
+    fn pose_goto_label(&mut self, _label: &str) {}
 }
 
 /// NPC 侧。
@@ -675,8 +780,20 @@ impl<'n, 'p> Engine<'n, 'p> {
 
     /// C# `ScriptActionError`：文本逐字符对齐（"[脚本错误] " 后为两空格）。
     pub(crate) fn script_action_error(&mut self, cmd_member: &str, info: &QuestActionInfo) {
+        self.script_action_error_msg("", cmd_member, info);
+    }
+
+    /// C# `ScriptActionError(normNpc, playerActor, sErrMsg, questActionInfo, sCmd)`：
+    /// `sErrMsg` 非空时插在 "[脚本错误] " 之后（var 家族的「变量…不存在」等文本）。
+    pub(crate) fn script_action_error_msg(
+        &mut self,
+        err_msg: &str,
+        cmd_member: &str,
+        info: &QuestActionInfo,
+    ) {
         let msg = format!(
-            "[脚本错误]  脚本命令:{} NPC名称:{} 地图:{}({}:{}) 参数1:{} 参数2:{} 参数3:{} 参数4:{} 参数5:{} 参数6:{}",
+            "[脚本错误] {} 脚本命令:{} NPC名称:{} 地图:{}({}:{}) 参数1:{} 参数2:{} 参数3:{} 参数4:{} 参数5:{} 参数6:{}",
+            err_msg,
             cmd_member,
             self.npc.chr_name(),
             self.npc.map_name(),
@@ -764,6 +881,257 @@ impl<'n, 'p> Engine<'n, 'p> {
             _ => return None,
         };
         Some(v)
+    }
+
+    // ---- B2/M4 var 家族批次（2026-10-11）：`ProcessingBase` 取值/写值层 ----
+
+    /// `HUtil32.IsVarNumber`：`HUMAN`/`GUILD`/`GLOBAL` 前缀判断。
+    pub(crate) fn is_var_number(s: &str) -> bool {
+        use mir2_shared::hutil32::compare_lstr_prefix as p;
+        p(s, "HUMAN", 5) || p(s, "GUILD", 5) || p(s, "GLOBAL", 6)
+    }
+
+    /// C# `HUtil32.ArrestStringEx(s, "(", ")", ref sParam)`（仅当以 `<$STR(` 开头）。
+    pub(crate) fn arrest_str_param(&self, s: &str) -> String {
+        if mir2_shared::hutil32::compare_lstr_prefix(s, "<$STR(", 6) {
+            match mir2_shared::hutil32::arrest_string_ex_ref(s, '(', ')').0 {
+                mir2_shared::hutil32::ArrestWrite::Value(v) => v,
+                mir2_shared::hutil32::ArrestWrite::Unchanged => String::new(),
+            }
+        } else {
+            s.to_string()
+        }
+    }
+
+    /// `ProcessingBase.GetMovDataValNameValue`：编号槽位取值（命中 `(0,99)…(1200,1599)`）。
+    pub(crate) fn get_mov_data_val_name_value(&self, name: &str) -> Option<VarVal> {
+        let n100 = crate::engine::vars::get_val_name_no(name);
+        if n100 < 0 {
+            return None;
+        }
+        let p = &*self.player;
+        let v = match n100 {
+            0..=99 => VarVal::Int(p.mn_val(n100 as usize)),
+            100..=199 => VarVal::Int(p.global_val((n100 - 100) as usize)),
+            200..=299 => VarVal::Int(p.mdy_val((n100 - 200) as usize)),
+            300..=399 => VarVal::Int(p.mnmval((n100 - 300) as usize)),
+            400..=499 => VarVal::Int(p.globa_dy_mval((n100 - 400) as usize)),
+            500..=599 => VarVal::Int(p.mn_integer((n100 - 500) as usize)),
+            600..=699 => VarVal::Str(p.ms_string((n100 - 600) as usize)),
+            700..=799 => VarVal::Str(p.global_a_val((n100 - 700) as usize)),
+            800..=1199 => VarVal::Int(p.global_val((n100 - 700) as usize)),
+            1200..=1599 => VarVal::Str(p.global_a_val((n100 - 1100) as usize)),
+            _ => return None,
+        };
+        Some(v)
+    }
+
+    /// `ProcessingBase.SetMovDataValNameValue`：按 `nDataType`（1 数值 / 0 文本）写回编号槽位。
+    pub(crate) fn set_val_name_value(
+        &mut self,
+        name: &str,
+        s_value: &str,
+        n_value: i32,
+        n_data_type: i32,
+    ) -> bool {
+        let n100 = crate::engine::vars::get_val_name_no(name);
+        if n100 < 0 {
+            return false;
+        }
+        match n_data_type {
+            1 => match n100 {
+                0..=99 => self.player.set_mn_val(n100 as usize, n_value),
+                100..=199 => self.player.set_global_val((n100 - 100) as usize, n_value),
+                200..=299 => self.player.set_mdy_val((n100 - 200) as usize, n_value),
+                300..=399 => self.player.set_mnmval((n100 - 300) as usize, n_value),
+                400..=499 => self
+                    .player
+                    .set_globa_dy_mval((n100 - 400) as usize, n_value),
+                500..=599 => self.player.set_mn_integer((n100 - 500) as usize, n_value),
+                600..=699 => self
+                    .player
+                    .set_ms_string((n100 - 600) as usize, n_value.to_string()),
+                700..=799 => self
+                    .player
+                    .set_global_a_val((n100 - 700) as usize, n_value.to_string()),
+                800..=1199 => self.player.set_global_val((n100 - 700) as usize, n_value),
+                1200..=1599 => self
+                    .player
+                    .set_global_a_val((n100 - 1100) as usize, n_value.to_string()),
+                _ => return false,
+            },
+            0 => {
+                let iv = mir2_shared::hutil32::str_to_int(s_value, 0);
+                match n100 {
+                    0..=99 => self.player.set_mn_val(n100 as usize, iv),
+                    100..=199 => self.player.set_global_val((n100 - 100) as usize, iv),
+                    200..=299 => self.player.set_mdy_val((n100 - 200) as usize, iv),
+                    300..=399 => self.player.set_mnmval((n100 - 300) as usize, iv),
+                    400..=499 => self.player.set_globa_dy_mval((n100 - 400) as usize, iv),
+                    500..=599 => self.player.set_mn_integer((n100 - 500) as usize, iv),
+                    600..=699 => self
+                        .player
+                        .set_ms_string((n100 - 600) as usize, s_value.to_string()),
+                    700..=799 => self
+                        .player
+                        .set_global_a_val((n100 - 700) as usize, s_value.to_string()),
+                    800..=1199 => self.player.set_global_val((n100 - 700) as usize, iv),
+                    1200..=1599 => self
+                        .player
+                        .set_global_a_val((n100 - 1100) as usize, s_value.to_string()),
+                    _ => return false,
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// `GetDynamicVarMap` 的 null 判定 + `sName` 解析：`(kind, sName)`。
+    /// `GUILD` 且无行会 ⇒ `None`（C# 返回 null）。
+    pub(crate) fn dyn_var_resolve(&self, s_type: &str) -> Option<(DynVarKind, String)> {
+        let kind = crate::engine::vars::dyn_var_kind_of(s_type)?;
+        let name = match kind {
+            DynVarKind::Human => self.player.chr_name(),
+            DynVarKind::Guild => self.player.guild_name()?,
+            DynVarKind::Global => "GLOBAL".to_string(),
+            DynVarKind::Account => self.player.user_account(),
+        };
+        Some((kind, name))
+    }
+
+    /// `ProcessingBase.GetMovDataDynamicVarValue`。
+    pub(crate) fn get_mov_data_dynamic_var_value(
+        &self,
+        kind: DynVarKind,
+        name: &str,
+    ) -> Option<VarVal> {
+        match self.player.dyn_var_get(kind, name)? {
+            DynVar::Integer(v) => Some(VarVal::Int(v)),
+            DynVar::Str(s) => Some(VarVal::Str(s)),
+        }
+    }
+
+    /// `ProcessingBase.SetMovDataDynamicVarValue`（类型匹配才写回）。
+    pub(crate) fn set_mov_data_dynamic_var_value(
+        &mut self,
+        kind: DynVarKind,
+        name: &str,
+        s_value: &str,
+        n_value: i32,
+        n_data_type: i32,
+    ) -> bool {
+        match self.player.dyn_var_get(kind, name) {
+            Some(DynVar::Integer(_)) if n_data_type == 1 => {
+                self.player
+                    .dyn_var_set(kind, name, DynVar::Integer(n_value))
+            }
+            Some(DynVar::Str(_)) => {
+                self.player
+                    .dyn_var_set(kind, name, DynVar::Str(s_value.to_string()))
+            }
+            _ => false,
+        }
+    }
+
+    /// `ProcessingBase.GetMovDataType`（`MOV` 的 0..7 数据源判别）。
+    pub(crate) fn get_mov_data_type(&self, info: &QuestActionInfo) -> i32 {
+        let s_param1 = self.arrest_str_param(&info.s_param1);
+        let s_param2 = self.arrest_str_param(&info.s_param2);
+        let s_param3 = self.arrest_str_param(&info.s_param3);
+        if Self::is_var_number(&s_param1) {
+            if !s_param3.is_empty() && s_param3.starts_with('<') && s_param3.ends_with('>') {
+                return 0;
+            }
+            if !s_param3.is_empty() && crate::engine::vars::get_val_name_no(&s_param3) >= 0 {
+                return 1;
+            }
+            if !s_param3.is_empty() && mir2_shared::hutil32::is_string_number(&s_param3) {
+                return 2;
+            }
+            return 3;
+        }
+        let n01 = crate::engine::vars::get_val_name_no(&s_param1);
+        if n01 >= 0 {
+            if !s_param2.is_empty() && s_param2.starts_with('<') && s_param2.ends_with('>') {
+                return 4;
+            }
+            if !s_param2.is_empty() && crate::engine::vars::get_val_name_no(&s_param2) >= 0 {
+                return 5;
+            }
+            if !s_param2.is_empty() && Self::is_var_number(&s_param2) {
+                return 6;
+            }
+            return 7;
+        }
+        -1
+    }
+
+    /// `ProcessingBase.GetMovDataHumanInfoValue` 的引擎侧移植。
+    ///
+    /// 已覆盖语料用到的固定变量（`$HP`/`$MP`/`$MAXHP`/`$MAXMP`/`$LEVEL`/…）以及
+    /// `$HUMAN(...)`/`$GLOBAL(...)`/`$ACCOUNT(...)` 三类动态变量；
+    /// 其余固定变量（依赖世界未接入的 `WAbil.AC/DC/…`、在线人数、时间等）返回未命中
+    /// —— 与 C# flow 夹具（DispatchProxy 回默认值）口径一致，接入世界适配层后再补齐。
+    /// 注意：`$STR(...)`/`$H.HP` 在 C# 原文里也**不在**该 switch 内（见 ProcessingBase.cs:35-566），
+    /// 故同样返回未命中。
+    pub(crate) fn get_mov_data_human_info_value(&self, variable: &str) -> Option<VarVal> {
+        if variable.is_empty() {
+            return None;
+        }
+        let s10 = match mir2_shared::hutil32::arrest_string_ex_ref(variable, '<', '>').0 {
+            mir2_shared::hutil32::ArrestWrite::Value(v) => v,
+            mir2_shared::hutil32::ArrestWrite::Unchanged => return None,
+        };
+        if s10.is_empty() {
+            return None;
+        }
+        let s_variable = s10.as_str();
+        let fixed = match s_variable {
+            "$USERNAME" => Some(VarVal::Str(self.player.chr_name())),
+            "$X" => Some(VarVal::Int(self.player.curr_pos().0)),
+            "$Y" => Some(VarVal::Int(self.player.curr_pos().1)),
+            "$MAP" => Some(VarVal::Str(
+                self.player.envir_map_name().unwrap_or_default(),
+            )),
+            "$GUILDNAME" => Some(VarVal::Str(
+                self.player.guild_name().unwrap_or_else(|| "无".to_string()),
+            )),
+            "$RELEVEL" => Some(VarVal::Int(self.player.re_level())),
+            "$LEVEL" => Some(VarVal::Int(self.player.level())),
+            "$HP" => Some(VarVal::Int(self.player.wabil_hp())),
+            "$MAXHP" => Some(VarVal::Int(self.player.wabil_max_hp())),
+            "$MP" => Some(VarVal::Int(self.player.wabil_mp())),
+            "$MAXMP" => Some(VarVal::Int(self.player.wabil_max_mp())),
+            "$EXP" => Some(VarVal::Int(self.player.abil_exp())),
+            "$PKPOINT" => Some(VarVal::Int(self.player.pk_point())),
+            "$CREDITPOINT" => Some(VarVal::Int(self.player.credit_point())),
+            "$GOLDCOUNT" => Some(VarVal::Int(self.player.gold())),
+            "$GAMEGOLD" => Some(VarVal::Int(self.player.game_gold())),
+            "$GAMEPOINT" => Some(VarVal::Int(self.player.game_point())),
+            _ => None,
+        };
+        if fixed.is_some() {
+            return fixed;
+        }
+        if mir2_shared::hutil32::compare_lstr_prefix(s_variable, "$GLOBAL", 6) {
+            let name = match mir2_shared::hutil32::arrest_string_ex_ref(s_variable, '(', ')').0 {
+                mir2_shared::hutil32::ArrestWrite::Value(v) => v,
+                mir2_shared::hutil32::ArrestWrite::Unchanged => String::new(),
+            };
+            return self.get_mov_data_dynamic_var_value(DynVarKind::Global, &name);
+        }
+        if mir2_shared::hutil32::compare_lstr_prefix(s_variable, "$HUMAN", 6)
+            || mir2_shared::hutil32::compare_lstr_prefix(s_variable, "$ACCOUNT", 8)
+        {
+            // 注意：C# 原文 `$ACCOUNT` 亦读 `playerActor.DynamicVarMap`（非 Account 表）
+            let name = match mir2_shared::hutil32::arrest_string_ex_ref(s_variable, '(', ')').0 {
+                mir2_shared::hutil32::ArrestWrite::Value(v) => v,
+                mir2_shared::hutil32::ArrestWrite::Unchanged => String::new(),
+            };
+            return self.get_mov_data_dynamic_var_value(DynVarKind::Human, &name);
+        }
+        None
     }
 
     /// C# `ProcessingBase.GotoLableCheckStringList(sHumName, sListFileName)`：
@@ -867,3 +1235,4 @@ pub mod dispatch;
 pub mod vars;
 
 pub use vars::VarLookup;
+pub use vars::{DynVar, DynVarKind, VarVal};

@@ -85,10 +85,42 @@ struct MockPlayer {
     magics: Vec<(i32, String, u8)>,
     magic_table: Vec<(String, i32, String)>,
     training: Vec<i32>,
-    mdy: [i32; 10],
+    mdy: std::collections::HashMap<usize, i32>,
     worn_names: std::collections::HashMap<i32, String>,
     worn_dura: std::collections::HashMap<i32, i32>,
     worn_dura_max: std::collections::HashMap<i32, i32>,
+    // ---- B2/M4 var 家族批次新增的脚本可见状态 ----
+    global: std::collections::HashMap<usize, i32>,
+    globa_dy: std::collections::HashMap<usize, i32>,
+    global_a: std::collections::HashMap<usize, String>,
+    mnm: std::collections::HashMap<usize, i32>,
+    mn_int: std::collections::HashMap<usize, i32>,
+    ms_str: std::collections::HashMap<usize, String>,
+    dyn_vars: std::collections::HashMap<
+        (mir2_script::engine::DynVarKind, String),
+        mir2_script::engine::DynVar,
+    >,
+    is_start_marry: bool,
+    is_start_un_marry: bool,
+    marry_count: i32,
+    pose_state: std::cell::RefCell<PoseState>,
+    cleared_map: Option<String>,
+    regen: Vec<String>,
+    today: String,
+    worn_desc: std::collections::HashMap<(i32, i32), i32>,
+    worn_present: std::collections::HashMap<i32, bool>,
+    updated_items: Vec<i32>,
+}
+
+/// 对方（pose）侧的可观测状态。
+#[derive(Default)]
+struct PoseState {
+    dear_name: String,
+    is_start_marry: bool,
+    is_start_un_marry: bool,
+    marry_count: i32,
+    goto: Vec<String>,
+    ref_show_name: i32,
 }
 
 impl MockPlayer {
@@ -168,10 +200,27 @@ impl MockPlayer {
             magics: Vec::new(),
             magic_table: Vec::new(),
             training: Vec::new(),
-            mdy: [0; 10],
+            mdy: std::collections::HashMap::new(),
             worn_names: std::collections::HashMap::new(),
             worn_dura: std::collections::HashMap::new(),
             worn_dura_max: std::collections::HashMap::new(),
+            global: std::collections::HashMap::new(),
+            globa_dy: std::collections::HashMap::new(),
+            global_a: std::collections::HashMap::new(),
+            mnm: std::collections::HashMap::new(),
+            mn_int: std::collections::HashMap::new(),
+            ms_str: std::collections::HashMap::new(),
+            dyn_vars: std::collections::HashMap::new(),
+            is_start_marry: false,
+            is_start_un_marry: false,
+            marry_count: 0,
+            pose_state: std::cell::RefCell::new(PoseState::default()),
+            cleared_map: None,
+            regen: Vec::new(),
+            today: String::new(),
+            worn_desc: std::collections::HashMap::new(),
+            worn_present: std::collections::HashMap::new(),
+            updated_items: Vec::new(),
         }
     }
 }
@@ -238,16 +287,154 @@ impl ScriptPlayer for MockPlayer {
         self.mn[n] = v;
     }
     fn mdy_val(&self, n: usize) -> i32 {
-        self.mdy.get(n).copied().unwrap_or(0)
+        self.mdy.get(&n).copied().unwrap_or(0)
     }
-    fn mnmval(&self, _n: usize) -> i32 {
-        0
+    fn set_mdy_val(&mut self, n: usize, v: i32) {
+        self.mdy.insert(n, v);
     }
-    fn mn_integer(&self, _n: usize) -> i32 {
-        0
+    fn mnmval(&self, n: usize) -> i32 {
+        self.mnm.get(&n).copied().unwrap_or(0)
     }
-    fn ms_string(&self, _n: usize) -> String {
-        String::new()
+    fn set_mnmval(&mut self, n: usize, v: i32) {
+        self.mnm.insert(n, v);
+    }
+    fn mn_integer(&self, n: usize) -> i32 {
+        self.mn_int.get(&n).copied().unwrap_or(0)
+    }
+    fn set_mn_integer(&mut self, n: usize, v: i32) {
+        self.mn_int.insert(n, v);
+    }
+    fn ms_string(&self, n: usize) -> String {
+        self.ms_str.get(&n).cloned().unwrap_or_default()
+    }
+    fn set_ms_string(&mut self, n: usize, v: String) {
+        self.ms_str.insert(n, v);
+    }
+    fn global_val(&self, n: usize) -> i32 {
+        self.global.get(&n).copied().unwrap_or(0)
+    }
+    fn set_global_val(&mut self, n: usize, v: i32) {
+        self.global.insert(n, v);
+    }
+    fn globa_dy_mval(&self, n: usize) -> i32 {
+        self.globa_dy.get(&n).copied().unwrap_or(0)
+    }
+    fn set_globa_dy_mval(&mut self, n: usize, v: i32) {
+        self.globa_dy.insert(n, v);
+    }
+    fn global_a_val(&self, n: usize) -> String {
+        self.global_a.get(&n).cloned().unwrap_or_default()
+    }
+    fn set_global_a_val(&mut self, n: usize, v: String) {
+        self.global_a.insert(n, v);
+    }
+    fn dyn_var_get(
+        &self,
+        kind: mir2_script::engine::DynVarKind,
+        name: &str,
+    ) -> Option<mir2_script::engine::DynVar> {
+        self.dyn_vars.get(&(kind, name.to_string())).cloned()
+    }
+    fn dyn_var_set(
+        &mut self,
+        kind: mir2_script::engine::DynVarKind,
+        name: &str,
+        v: mir2_script::engine::DynVar,
+    ) -> bool {
+        let key = (kind, name.to_string());
+        if let std::collections::hash_map::Entry::Occupied(mut e) = self.dyn_vars.entry(key) {
+            e.insert(v);
+            true
+        } else {
+            false
+        }
+    }
+    fn dyn_var_insert(
+        &mut self,
+        kind: mir2_script::engine::DynVarKind,
+        name: &str,
+        v: mir2_script::engine::DynVar,
+    ) -> bool {
+        let key = (kind, name.to_string());
+        if let std::collections::hash_map::Entry::Vacant(e) = self.dyn_vars.entry(key) {
+            e.insert(v);
+            true
+        } else {
+            false
+        }
+    }
+    fn use_item_desc(&self, i: i32, attr: i32) -> i32 {
+        self.worn_desc.get(&(i, attr)).copied().unwrap_or(0)
+    }
+    fn set_use_item_desc(&mut self, i: i32, attr: i32, v: i32) {
+        self.worn_desc.insert((i, attr), v);
+    }
+    fn set_use_item_dura_max(&mut self, i: i32, v: i32) {
+        self.worn_dura_max.insert(i, v);
+    }
+    fn send_update_item(&mut self, i: i32) {
+        self.updated_items.push(i);
+    }
+    fn use_item_std_item_present(&self, i: i32) -> bool {
+        self.worn_present.get(&i).copied().unwrap_or(false)
+    }
+    fn regen_monster(&mut self, map: &str, x: i32, y: i32, name: &str) -> bool {
+        self.regen.push(format!("regen {map} {x} {y} {name}"));
+        true
+    }
+    fn clear_map_monsters(&mut self, map: &str) {
+        self.cleared_map = Some(map.to_string());
+    }
+    fn today_string(&self) -> String {
+        self.today.clone()
+    }
+    fn is_start_marry(&self) -> bool {
+        self.is_start_marry
+    }
+    fn set_is_start_marry(&mut self, v: bool) {
+        self.is_start_marry = v;
+    }
+    fn is_start_un_marry(&self) -> bool {
+        self.is_start_un_marry
+    }
+    fn set_is_start_un_marry(&mut self, v: bool) {
+        self.is_start_un_marry = v;
+    }
+    fn set_dear_name(&mut self, v: &str) {
+        self.dear_name = v.to_string();
+    }
+    fn inc_marry_count(&mut self) {
+        self.marry_count += 1;
+    }
+    fn pose_actor_id(&self) -> i32 {
+        999
+    }
+    fn pose_dear_name(&self) -> String {
+        self.pose_state.borrow().dear_name.clone()
+    }
+    fn set_pose_dear_name(&mut self, v: &str) {
+        self.pose_state.borrow_mut().dear_name = v.to_string();
+    }
+    fn pose_is_start_marry(&self) -> bool {
+        self.pose_state.borrow().is_start_marry
+    }
+    fn set_pose_is_start_marry(&mut self, v: bool) {
+        self.pose_state.borrow_mut().is_start_marry = v;
+    }
+    fn pose_is_start_un_marry(&self) -> bool {
+        self.pose_state.borrow().is_start_un_marry
+    }
+    fn set_pose_is_start_un_marry(&mut self, v: bool) {
+        self.pose_state.borrow_mut().is_start_un_marry = v;
+    }
+    fn inc_pose_marry_count(&mut self) {
+        self.pose_state.borrow_mut().marry_count += 1;
+    }
+    fn pose_ref_show_name(&mut self) {
+        self.pose_state.borrow_mut().ref_show_name += 1;
+    }
+    fn pose_goto_label(&mut self, label: &str) {
+        self.pose_state.borrow_mut().goto.push(label.to_string());
     }
     fn set_quest_unit_status(&mut self, index: i32, value: i32) {
         self.unit_status.insert(index, value);
@@ -1011,11 +1198,19 @@ fn condition_batch_closes_corpus_condition_targets() {
             "{case} 应已实现"
         );
     }
-    // 诚实登记：仍有两个条件处理器未实现（动态变量层 / 日期列表文件）
-    let undone = d::unimplemented_handlers();
-    for remain in ["ConditionOfCheckVar", "ConditionOfCheckNameDateList"] {
-        assert!(undone.contains(&remain), "{remain} 应仍在未实现清单");
+    // B2/M4 var 家族条件批次：两个遗留条件已实现（动态变量层 / 日期列表文件）
+    for name in ["ConditionOfCheckVar", "ConditionOfCheckNameDateList"] {
+        assert!(d::IMPLEMENTED_CONDITIONS.contains(&name), "{name} 应已实现");
     }
+    let undone = d::unimplemented_handlers();
+    assert!(
+        !undone.contains(&"ConditionOfCheckVar"),
+        "CheckVar 不应再在未实现清单"
+    );
+    assert!(
+        !undone.contains(&"ConditionOfCheckNameDateList"),
+        "CheckNameDateList 不应再在未实现清单"
+    );
 }
 
 // ---- B2/M4 动作批次（2026-10-11）：非 var 家族动作处理器单测 ----
@@ -1120,26 +1315,37 @@ fn action_batch_closes_corpus_action_targets() {
     // Takew 走 `ScriptEngine` switch（注册表里没有）
     assert_eq!(d::execution_target_name(4), Some("Takew"));
     assert_eq!(d::execution_target_status(4), Some(true));
-    // 诚实登记：var 家族等仍未实现（下一批）
-    let undone = d::unimplemented_handlers();
-    for remain in [
-        "ActionOfIncInteger",
-        "ActionOfDecInteger",
-        "ActionOfMulData",
-        "ActionOfMovData",
-        "ActionOfMovrData",
-        "ActionOfVar",
-        "ActionOfLoadVar",
-        "ActionOfSaveVar",
-        "ActionOfCalcVar",
-        "ActionOfUpgradeItemsEx",
-        "ActionOfMarry",
-        "ActionOfUnMarry",
-        "ActionOfAddUseDateList",
-        "ActionOfClearMapMon",
-        "ActionOfMonGenEx",
-    ] {
-        assert!(undone.contains(&remain), "{remain} 应仍在未实现清单");
+    // B2/M4 var 家族动作批次：15 个遗留动作已实现，语料动作派发目标未实现数归零
+    const NOW_CLOSED: &[(&str, i32)] = &[
+        ("ActionOfMovData", 23),
+        ("ActionOfMovrData", 36),
+        ("ActionOfIncInteger", 24),
+        ("ActionOfDecInteger", 25),
+        ("ActionOfMulData", 28),
+        ("ActionOfVar", 237),
+        ("ActionOfLoadVar", 238),
+        ("ActionOfSaveVar", 239),
+        ("ActionOfCalcVar", 240),
+        ("ActionOfUpgradeItemsEx", 213),
+        ("ActionOfMarry", 175),
+        ("ActionOfUnMarry", 176),
+        ("ActionOfAddUseDateList", 335),
+        ("ActionOfClearMapMon", 215),
+        ("ActionOfMonGenEx", 214),
+    ];
+    for (name, code) in NOW_CLOSED {
+        assert_eq!(
+            d::execution_target_name(*code),
+            Some(*name),
+            "code {code} 的落点应是 {name}"
+        );
+        assert_eq!(
+            d::execution_target_status(*code),
+            Some(true),
+            "{name}(code {code}) 应已实现"
+        );
+        let undone = d::unimplemented_handlers();
+        assert!(!undone.contains(name), "{name} 不应再在未实现清单");
     }
 }
 
@@ -1573,7 +1779,7 @@ fn query_value_item_dlg_and_upgrade_dlg_item() {
 #[test]
 fn play_dice_packs_mdy_values() {
     let (mut npc, mut player) = setup("[@main]\n#SAY\nx\n");
-    player.mdy = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    player.mdy = (1..=10).map(|i| (i - 1, i as i32)).collect();
     let errors = run_act(&mut npc, &mut player, act(42, "", "@dice", 3, 0));
     assert!(errors.is_empty(), "{errors:?}");
     assert_eq!(player.play_dice_label, "@dice");
@@ -1674,4 +1880,361 @@ fn takew_removes_worn_by_prefix_then_by_std_name() {
     let before = player.events.len();
     let _ = run_act(&mut npc, &mut player, act(4, "布衣", "", 0, 0));
     assert_eq!(player.events.len(), before);
+}
+
+// ==== B2/M4 var 家族 / 剩余动作批次（2026-10-11）====
+
+/// 构造动作（最多 6 个文本参数 + 6 个数值参数）。
+fn act_full(code: i32, ps: &[&str], ns: &[i32]) -> mir2_script::QuestActionInfo {
+    let mut info = mir2_script::QuestActionInfo {
+        n_cmd_code: code,
+        ..Default::default()
+    };
+    let mut p = ps.iter();
+    if let Some(v) = p.next() {
+        info.s_param1 = (*v).into();
+    }
+    if let Some(v) = p.next() {
+        info.s_param2 = (*v).into();
+    }
+    if let Some(v) = p.next() {
+        info.s_param3 = (*v).into();
+    }
+    if let Some(v) = p.next() {
+        info.s_param4 = (*v).into();
+    }
+    if let Some(v) = p.next() {
+        info.s_param5 = (*v).into();
+    }
+    if let Some(v) = p.next() {
+        info.s_param6 = (*v).into();
+    }
+    let mut n = ns.iter();
+    if let Some(v) = n.next() {
+        info.n_param1 = *v;
+    }
+    if let Some(v) = n.next() {
+        info.n_param2 = *v;
+    }
+    if let Some(v) = n.next() {
+        info.n_param3 = *v;
+    }
+    if let Some(v) = n.next() {
+        info.n_param4 = *v;
+    }
+    if let Some(v) = n.next() {
+        info.n_param5 = *v;
+    }
+    if let Some(v) = n.next() {
+        info.n_param6 = *v;
+    }
+    info
+}
+
+#[test]
+fn var_family_inc_dec_mul_mov_slots() {
+    let (mut npc, mut player) = setup("[@main]\n#SAY\nx\n");
+    // INC M6（无第三参）⇒ n3c=nParam2；nParam2=0 走 ++
+    let _ = run_act(&mut npc, &mut player, act(24, "M6", "1", 0, 0));
+    assert_eq!(player.mnmval(6), 1, "INC M6 → +1");
+    // INC M6 5 ⇒ n3c=5>1 ⇒ +5
+    let _ = run_act(&mut npc, &mut player, act(24, "M6", "5", 0, 5));
+    assert_eq!(player.mnmval(6), 6, "INC M6 5 → +5");
+    // DEC M6 2
+    let _ = run_act(&mut npc, &mut player, act(25, "M6", "2", 0, 2));
+    assert_eq!(player.mnmval(6), 4, "DEC M6 2 → -2");
+    // MUL M6 3 4 ⇒ 12
+    let _ = run_act(&mut npc, &mut player, act_full(28, &["M6", "3", "4"], &[]));
+    assert_eq!(player.mnmval(6), 12, "MUL M6 3 4 → 12");
+    // MOV M6 7（case 7）
+    let _ = run_act(&mut npc, &mut player, act(23, "M6", "7", 0, 7));
+    assert_eq!(player.mnmval(6), 7, "MOV M6 7 → 7");
+    // INC G5 1 ⇒ GlobalVal[5]
+    let _ = run_act(&mut npc, &mut player, act(24, "G5", "1", 0, 1));
+    assert_eq!(player.global_val(5), 1, "INC G5 1 → GlobalVal[5]=1");
+    // MOV M50 <$HP>（case 4）：WAbil.HP → M50
+    player.wabil_hp = 42;
+    let _ = run_act(&mut npc, &mut player, act(23, "M50", "<$HP>", 0, 0));
+    assert_eq!(player.mnmval(50), 42, "MOV M50 <$HP> → 42");
+    // MOVR M6 1 3：随机值由 mock 固定为 0（rng_value 默认 0）
+    let _ = run_act(&mut npc, &mut player, act_full(36, &["M6"], &[0, 1, 3]));
+    assert_eq!(
+        player.mnmval(6),
+        1,
+        "MOVR M6 1 3 → nParam2 + Random(2) = 1+0"
+    );
+}
+
+#[test]
+fn var_dynamic_var_declare_calc_and_check_var() {
+    let (mut npc, mut player) = setup("[@main]\n#SAY\nx\n");
+    // VAR Integer HUMAN 时间
+    let e = run_act(
+        &mut npc,
+        &mut player,
+        act_full(237, &["Integer", "HUMAN", "时间"], &[]),
+    );
+    assert!(e.is_empty(), "{e:?}");
+    assert_eq!(
+        player.dyn_var_get(mir2_script::engine::DynVarKind::Human, "时间"),
+        Some(mir2_script::engine::DynVar::Integer(0))
+    );
+    // CALCVAR HUMAN 时间 = 5（`IsStringNumber` 恒真 ⇒ 数值路径）
+    let _ = run_act(
+        &mut npc,
+        &mut player,
+        act_full(240, &["HUMAN", "时间", "=", "5"], &[]),
+    );
+    assert_eq!(
+        player.dyn_var_get(mir2_script::engine::DynVarKind::Human, "时间"),
+        Some(mir2_script::engine::DynVar::Integer(5))
+    );
+    // CALCVAR HUMAN 时间 + 3 → 8
+    let _ = run_act(
+        &mut npc,
+        &mut player,
+        act_full(240, &["HUMAN", "时间", "+", "3"], &[]),
+    );
+    assert_eq!(
+        player.dyn_var_get(mir2_script::engine::DynVarKind::Human, "时间"),
+        Some(mir2_script::engine::DynVar::Integer(8))
+    );
+    // VAR String HUMAN 名字 + CALCVAR = 你好
+    let _ = run_act(
+        &mut npc,
+        &mut player,
+        act_full(237, &["String", "HUMAN", "名字"], &[]),
+    );
+    let _ = run_act(
+        &mut npc,
+        &mut player,
+        act_full(240, &["HUMAN", "名字", "=", "你好"], &[]),
+    );
+    assert_eq!(
+        player.dyn_var_get(mir2_script::engine::DynVarKind::Human, "名字"),
+        Some(mir2_script::engine::DynVar::Str("你好".into()))
+    );
+    // 重复 VAR ⇒ 「变量…已存在」
+    let e = run_act(
+        &mut npc,
+        &mut player,
+        act_full(237, &["Integer", "HUMAN", "时间"], &[]),
+    );
+    assert!(first_script_error(&e).contains("变量时间已存在"));
+
+    // CHECKVAR HUMAN 时间 >= 8（C# `sMethod[1]` ⇒ '='）
+    let mut engine = Engine::new(&mut npc, &mut player);
+    assert!(engine.check_conditions(&[cond6(139, ["HUMAN", "时间", ">=", "8", "", ""])]));
+    // C# `sMethod[1]` 对单字操作符会越界（S2 崩溃面）：Rust 落 `'\0'` ⇒ 默认 `>=`
+    let mut engine = Engine::new(&mut npc, &mut player);
+    assert!(engine.check_conditions(&[cond6(139, ["HUMAN", "时间", ">", "8", "", ""])]));
+    // 不存在的变量 ⇒ 条件错误 + false
+    let mut engine = Engine::new(&mut npc, &mut player);
+    assert!(!engine.check_conditions(&[cond6(139, ["HUMAN", "不存在", ">=", "1", "", ""])]));
+}
+
+#[test]
+fn var_loadvar_and_savevar_file_io() {
+    let dir = std::env::temp_dir().join("openmir2_b2_loadvar");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("list.txt");
+    std::fs::write(
+        &file,
+        mir2_script::textfile::encode_gb2312("[测试玩家]\r\nX=hello\r\n"),
+    )
+    .unwrap();
+    let (mut npc, mut player) = setup("[@main]\n#SAY\nx\n");
+    npc.envir_root = Some(dir.to_string_lossy().to_string());
+    npc.path = String::new();
+    // LOADVAR HUMAN X list.txt：文件里存在，且变量尚未声明 ⇒ 插入 String
+    let e = run_act(
+        &mut npc,
+        &mut player,
+        act_full(238, &["HUMAN", "X", "list.txt"], &[]),
+    );
+    assert!(e.is_empty(), "{e:?}");
+    assert_eq!(
+        player.dyn_var_get(mir2_script::engine::DynVarKind::Human, "X"),
+        Some(mir2_script::engine::DynVar::Str("hello".into()))
+    );
+    let before = std::fs::read(&file).unwrap();
+    // SAVEVAR HUMAN X list.txt：变量存在、文件存在 ⇒ 无错误（C# 不落盘）
+    let e = run_act(
+        &mut npc,
+        &mut player,
+        act_full(239, &["HUMAN", "X", "list.txt"], &[]),
+    );
+    assert!(e.is_empty(), "{e:?}");
+    assert_eq!(
+        std::fs::read(&file).unwrap(),
+        before,
+        "SAVEVAR 不写盘（原文）"
+    );
+    // SAVEVAR 不存在的变量 ⇒ 变量不存在错误
+    let e = run_act(
+        &mut npc,
+        &mut player,
+        act_full(239, &["HUMAN", "Y", "list.txt"], &[]),
+    );
+    assert!(first_script_error(&e).contains("变量Y不存在"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn check_name_date_list_writes_day_vars() {
+    let dir = std::env::temp_dir().join("openmir2_b2_namedate");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("list.txt");
+    std::fs::write(
+        &file,
+        mir2_script::textfile::encode_gb2312("测试玩家 2020-01-01\r\n"),
+    )
+    .unwrap();
+    let (mut npc, mut player) = setup("[@main]\n#SAY\nx\n");
+    npc.envir_root = Some(dir.to_string_lossy().to_string());
+    npc.path = String::new();
+    // nDay 恒 int.MaxValue；'>' ⇒ 成功；p0/p1 分别写 GlobalVal[0]/[1]
+    let mut engine = Engine::new(&mut npc, &mut player);
+    assert!(engine.check_conditions(&[cond6(144, ["list.txt", ">", "30", "p0", "p1", ""])]));
+    assert_eq!(player.global_val(0), i32::MAX);
+    assert_eq!(player.global_val(1), 30i32.wrapping_sub(i32::MAX));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn upgrade_items_ex_success_and_failure_paths() {
+    let (mut npc, mut player) = setup("[@main]\n#SAY\nx\n");
+    player.use_items = vec![None; 13];
+    player.use_items[1] = Some(5);
+    player.worn_names.insert(1, "屠龙".into());
+    player.worn_present.insert(1, true);
+    player.worn_dura.insert(1, 10);
+    player.worn_dura_max.insert(1, 100);
+    player.worn_desc.insert((1, 0), 7);
+    player.rng_value = 5; // RatePoint=5（成功）、Point=max(1,5)
+                          // UPGRADEITEMSEX 1 0 10 5 0：ValType=0，Desc[0] 7→12
+    let e = run_act(
+        &mut npc,
+        &mut player,
+        act_full(213, &["1", "0", "10", "5", "0"], &[]),
+    );
+    assert!(e.is_empty(), "{e:?}");
+    assert_eq!(player.use_item_desc(1, 0), 12, "Desc[0] 应 7→12");
+    assert_eq!(player.updated_items, vec![1]);
+    // ValType=14 ⇒ DuraMax += Point*1000
+    let e = run_act(
+        &mut npc,
+        &mut player,
+        act_full(213, &["1", "14", "10", "5", "0"], &[]),
+    );
+    assert!(e.is_empty(), "{e:?}");
+    assert_eq!(player.use_item_dura_max(1), 5100, "DuraMax=100+5*1000");
+    // 参数越界 ⇒ ScriptActionError(UpgradeItemSex)
+    let e = run_act(
+        &mut npc,
+        &mut player,
+        act_full(213, &["1", "15", "10", "5", "0"], &[]),
+    );
+    assert!(first_script_error(&e).contains("脚本命令:UpgradeItemSex"));
+}
+
+#[test]
+fn mon_gen_ex_and_clear_map_mon() {
+    let (mut npc, mut player) = setup("[@main]\n#SAY\nx\n");
+    // MONGENEX 0 100 200 稻草人 5 3：Random 固定 0 ⇒ (100-5, 200-5) 三次
+    let e = run_act(
+        &mut npc,
+        &mut player,
+        act_full(214, &["0", "100", "200", "稻草人"], &[0, 0, 0, 0, 5, 3]),
+    );
+    assert!(e.is_empty(), "{e:?}");
+    assert_eq!(player.regen.len(), 3);
+    assert_eq!(player.regen[0], "regen 0 95 195 稻草人");
+    // 参数不全 ⇒ 错误
+    let e = run_act(
+        &mut npc,
+        &mut player,
+        act_full(214, &["0", "0", "0", ""], &[]),
+    );
+    assert!(first_script_error(&e).contains("脚本命令:MonGenex"));
+    // CLEARMAPMON 直接委派世界层
+    let _ = run_act(&mut npc, &mut player, act(215, "0", "", 0, 0));
+    assert_eq!(player.cleared_map.as_deref(), Some("0"));
+}
+
+#[test]
+fn add_use_date_list_appends_once() {
+    let dir = std::env::temp_dir().join("openmir2_b2_usedate");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let (mut npc, mut player) = setup("[@main]\n#SAY\nx\n");
+    npc.envir_root = Some(dir.to_string_lossy().to_string());
+    npc.path = String::new();
+    player.today = "2026-10-11".into();
+    let _ = run_act(&mut npc, &mut player, act(335, "uselist.txt", "", 0, 0));
+    let file = dir.join("uselist.txt");
+    let first = std::fs::read(&file).unwrap();
+    assert_eq!(
+        mir2_script::textfile::decode_bytes(&first),
+        "测试玩家    2026-10-11\r\n"
+    );
+    // 二次调用：名字已存在 ⇒ 不追加
+    let _ = run_act(&mut npc, &mut player, act(335, "uselist.txt", "", 0, 0));
+    assert_eq!(std::fs::read(&file).unwrap(), first);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn marry_and_unmarry_reachable_branches() {
+    let (mut npc, mut player) = setup("[@main]\n#SAY\nx\n");
+    // 无 DearName、无 pose ⇒ @MarryCheckDir（无该 label 时静默）
+    let _ = run_act(&mut npc, &mut player, act(175, "", "", 0, 0));
+    // 有 pose 且同性 ⇒ @MarrySexErr
+    player.pose = Some(mir2_script::engine::PoseInfo {
+        race: mir2_script::engine::ACTOR_RACE_PLAY,
+        gender: mir2_script::engine::GENDER_MAN,
+        chr_name: "对方".into(),
+        is_mutual: true,
+        ..Default::default()
+    });
+    player.gender = mir2_script::engine::GENDER_MAN;
+    let _ = run_act(&mut npc, &mut player, act(175, "", "", 0, 0));
+    // 异性 ⇒ 双方 IsStartMarry=true + 广播
+    player.pose = Some(mir2_script::engine::PoseInfo {
+        race: mir2_script::engine::ACTOR_RACE_PLAY,
+        gender: mir2_script::engine::GENDER_WOMAN,
+        chr_name: "对方".into(),
+        is_mutual: true,
+        ..Default::default()
+    });
+    let _ = run_act(&mut npc, &mut player, act(175, "", "", 0, 0));
+    assert!(player.is_start_marry);
+    assert!(player.pose_is_start_marry());
+    // RESPONSEMARRY（女对男，OK）⇒ 设置 DearName
+    player.gender = mir2_script::engine::GENDER_WOMAN;
+    player.pose = Some(mir2_script::engine::PoseInfo {
+        race: mir2_script::engine::ACTOR_RACE_PLAY,
+        gender: mir2_script::engine::GENDER_MAN,
+        chr_name: "男方".into(),
+        is_mutual: true,
+        ..Default::default()
+    });
+    let _ = run_act(
+        &mut npc,
+        &mut player,
+        act_full(175, &["RESPONSEMARRY", "OK"], &[]),
+    );
+    assert_eq!(player.dear_name, "男方");
+    assert_eq!(player.pose_dear_name(), "测试玩家");
+    // UNMARRY（REQUESTUNMARRY，对方已响应）⇒ DearName 清空 + MarryCount++
+    player.pose_state.borrow_mut().is_start_un_marry = true;
+    let _ = run_act(
+        &mut npc,
+        &mut player,
+        act_full(176, &["REQUESTUNMARRY", ""], &[]),
+    );
+    assert!(player.dear_name.is_empty());
+    assert_eq!(player.marry_count, 1);
 }

@@ -30,14 +30,14 @@
     "items": "祈福项链:3:1,祝福油:4:1",
     "player_items": "祈福项链:1,祝福油:1",
     "exempt": "C# 参照在 ConditionOfCheckRangeMonCount（ConditionProcessingSys.cs:1112 String.get_Chars 越界）自身崩溃，S2 已接管；本线按白名单 B-107 豁免，改作 B-8 落点回归语料（比对 rust_expect）",
-    "exempt_note_2": "2026-10-11 更新：S3 修掉 B-8 位移后，本用例的 C# 侧已能跑通（`script-parity-cs run` 实测：delitem 祝福油 1 / err [脚本参数不正确] Cmd:CHECKITEMADDVALUE NPC名称:测试NPC 地图:0 座标:100:200 参数1:3 参数2:10 参数3:= 参数4:1 参数5: / #gold=100000 / #items=祈福项链）。原崩溃（S2 的 ConditionOfCheckRangeMonCount 越界）是旧位移落点所致，不再是障碍。跑通前另修了夹具两处缺口（见 tools/script-parity-cs/RunMode.cs：GetStdItemName 拆箱用 Convert、SendAddItem/SendDelItems 不再重复改 ItemList）——都是夹具缺口，不是 oracle 行为差异。目前两侧只剩『Rust 尚未实现 ActionOfUpgradeItemsEx(code 213)』这一行差异，故本用例继续豁免（比对 rust_expect）。",
+    "exempt_note_2": "2026-10-11 更新：S3 修掉 B-8 位移后，本用例的 C# 侧已能跑通（`script-parity-cs run` 实测：delitem 祝福油 1 / err [脚本参数不正确] Cmd:CHECKITEMADDVALUE NPC名称:测试NPC 地图:0 座标:100:200 参数1:3 参数2:10 参数3:= 参数4:1 参数5: / #gold=100000 / #items=祈福项链）。原崩溃（S2 的 ConditionOfCheckRangeMonCount 越界）是旧位移落点所致，不再是障碍。跑通前另修了夹具两处缺口（见 tools/script-parity-cs/RunMode.cs：GetStdItemName 拆箱用 Convert、SendAddItem/SendDelItems 不再重复改 ItemList）——都是夹具缺口，不是 oracle 行为差异。",
     "rust_expect": [
       "delitem 祝福油 1",
       "err [脚本参数不正确] Cmd:CHECKITEMADDVALUE NPC名称:测试NPC 地图:0 座标:100:200 参数1:3 参数2:10 参数3:= 参数4:1 参数5:",
-      "err(rust) NotImplemented { kind: \"action\", code: 213, handler: \"ActionOfUpgradeItemsEx\" }",
       "#gold=100000",
       "#items=祈福项链"
     ],
-    "rust_expect_note": "B2/M4 条件批次后重新登记：ConditionOfCheckItemAddValue(130) 已实现，本条脚本 `CHECKITEMADDVALUE 3 10 = 1` 在 C# 侧落到『脚本参数不正确』错误分支（nAddValue 取 sParam3=\"=\" → -1 < 0）⇒ 条件恒假、走 #elsesay；Rust 现按同一文本报错，两侧逐字一致。动作 213(ActionOfUpgradeItemsEx) 仍未实现，故保留一行 NotImplemented。"
+    "rust_expect_note": "B2/M4 var 家族批次后重新登记：ConditionOfCheckItemAddValue(130) 已实现，本条脚本 CHECKITEMADDVALUE 3 10 = 1 在 C# 侧落到『脚本参数不正确』错误分支（nAddValue 取 sParam3=\"=\" → -1 < 0）⇒ 条件恒假、走 #elsesay；Rust 现按同一文本报错，两侧逐字一致。动作 213(ActionOfUpgradeItemsEx) 已实现且夹具补齐后与 C# 输出一致（无额外错误行）。",
+    "exempt_note_3": "B2/M4 var 家族批次（2026-10-11）：ActionOfUpgradeItemsEx(code 213) 已实现；Rust 侧 FlowPlayer 补上 use_items_len()=12（对齐 C# UseItemsStub 的 12 个空 UserItem）后，err [脚本错误] 脚本命令:UpgradeItemSex 这一行消失，两侧现逐字一致（见 rust_expect）。继续保留豁免标记以稳定 gate 口径（3 一致 / 0 不一致 / 1 exempt-OK）。"
   }
 ]

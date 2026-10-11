@@ -153,6 +153,10 @@ impl ScriptPlayer for FlowPlayer {
             .map(|(_, c)| *c)
             .sum()
     }
+    /// 对齐 C# flow 夹具：`UseItemsStub` 为 12 个 `new UserItem()`（Index 均 0）。
+    fn use_items_len(&self) -> i32 {
+        12
+    }
     fn has_worn(&self, _location: &str) -> bool {
         false
     }
