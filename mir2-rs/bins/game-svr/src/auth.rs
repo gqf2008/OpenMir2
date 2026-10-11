@@ -82,6 +82,12 @@ impl AdmissionStore {
         Some(self.list.remove(pos))
     }
 
+    /// `ClearSession()`（`:329-335`）：整张表清空（oracle 在 IDS 断线时调它，见 `:427-436`）。
+    #[allow(dead_code)]
+    pub fn clear(&mut self) {
+        self.list.clear();
+    }
+
     /// `GetAdmission`（`:338-368`）。
     #[must_use]
     pub fn get_admission(&self, account: &str, session_id: i32) -> Option<Admission> {

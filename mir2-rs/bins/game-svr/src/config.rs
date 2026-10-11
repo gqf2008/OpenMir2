@@ -22,6 +22,10 @@ pub struct GateConfig {
     pub check_block: usize,
     /// S1 占位：世界地图尺寸列表（真地图加载属 S2/S3——从 Envir 读，不在本切片）。
     pub maps: Vec<(i32, i32)>,
+    /// `[Server] IDSAddr`：登录服务器地址（oracle 是 TcpClient 主动连它，`AuthenticationService.cs:22-34`）。
+    pub ids_addr: String,
+    /// `[Server] IDSPort`（现网 5600）。
+    pub ids_port: u16,
 }
 
 /// 默认配置文件：可执行文件同目录的 `Server.conf`（与 C# `AppContext.BaseDirectory` 一致）。
@@ -47,6 +51,8 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut gate_port: Option<u16> = None;
     let mut check_block: Option<usize> = None;
     let mut maps: Option<Vec<(i32, i32)>> = None;
+    let mut ids_addr: Option<String> = None;
+    let mut ids_port: Option<u16> = None;
     for raw in text.lines() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
@@ -78,14 +84,27 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                 );
             }
             "WorldMaps" => maps = Some(parse_maps(v)?),
+            "IDSAddr" => ids_addr = Some(v.to_string()),
+            "IDSPort" => {
+                ids_port = Some(
+                    v.parse()
+                        .with_context(|| format!("IDSPort 不是合法端口：{v:?}"))?,
+                );
+            }
             _ => {}
         }
     }
-    let (Some(gate_addr), Some(gate_port), Some(check_block), Some(maps)) =
-        (gate_addr, gate_port, check_block, maps)
+    let (
+        Some(gate_addr),
+        Some(gate_port),
+        Some(check_block),
+        Some(maps),
+        Some(ids_addr),
+        Some(ids_port),
+    ) = (gate_addr, gate_port, check_block, maps, ids_addr, ids_port)
     else {
         bail!(
-            "[Server] 段缺键：需要 GateAddr/GatePort/CheckBlock/WorldMaps（现网样件见 \
+            "[Server] 段缺键：需要 GateAddr/GatePort/CheckBlock/WorldMaps/IDSAddr/IDSPort（现网样件见 \
              E:\\MirServer\\M2GameSvr\\Server.conf）"
         );
     };
@@ -97,6 +116,8 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         gate_port,
         check_block,
         maps,
+        ids_addr,
+        ids_port,
     })
 }
 
@@ -139,13 +160,15 @@ mod tests {
         let p = write(
             &dir,
             "[DataBase]\nDBPort=6000\n[Server]\nDBPort=6000\nCheckBlock=12288\nGateAddr= 127.0.0.1\n\
-             GatePort=5000\nWorldMaps=1000x1000,200x200\n[Share]\nX=1\n",
+             GatePort=5000\nIDSAddr= 127.0.0.1\nIDSPort=5600\nWorldMaps=1000x1000,200x200\n[Share]\nX=1\n",
         );
         let c = load(&p).unwrap();
         assert_eq!(c.gate_addr, "127.0.0.1", "值要 trim（现网带前导空格）");
         assert_eq!(c.gate_port, 5000);
         assert_eq!(c.check_block, 12288);
         assert_eq!(c.maps, vec![(1000, 1000), (200, 200)]);
+        assert_eq!(c.ids_addr, "127.0.0.1", "IDSAddr 值也带前导空格，要 trim");
+        assert_eq!(c.ids_port, 5600);
         std::fs::remove_dir_all(&dir).ok();
     }
 

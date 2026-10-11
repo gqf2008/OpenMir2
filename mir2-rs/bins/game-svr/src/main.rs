@@ -24,6 +24,7 @@ mod auth;
 mod cert;
 mod config;
 mod hutil;
+mod ids;
 mod users;
 
 use std::sync::Arc;
@@ -137,6 +138,15 @@ async fn main() -> Result<()> {
         .name("m2-sim".to_string())
         .spawn(move || sim_loop(maps, ev_rx))
         .context("起 sim 线程失败")?;
+
+    // 登录服务器（IDS）链路：oracle 是 TcpClient 主动连它（`AuthenticationService.cs:22-34`），
+    // 会话通知（SS_OPENSESSION/SS_CLOSESESSION）填/删准入表 ⇒ 认证链靠它
+    {
+        let store = Arc::clone(&auth);
+        let ids_addr = cfg.ids_addr.clone();
+        let ids_port = cfg.ids_port;
+        tokio::spawn(async move { ids::run_ids_link(ids_addr, ids_port, store).await });
+    }
 
     let listener = TcpListener::bind((cfg.gate_addr.as_str(), cfg.gate_port))
         .await

@@ -30,13 +30,13 @@ fn free_port() -> u16 {
     l.local_addr().unwrap().port()
 }
 
-fn write_conf(dir: &std::path::Path, port: u16, check_block: usize) {
+fn write_conf(dir: &std::path::Path, port: u16, check_block: usize, ids_port: u16) {
     std::fs::create_dir_all(dir).unwrap();
     std::fs::write(
         dir.join("Server.conf"),
         format!(
             "[Server]\nDBPort=6000\nCheckBlock={check_block}\nGateAddr= 127.0.0.1\n\
-             GatePort={port}\nWorldMaps=64x64\n"
+             GatePort={port}\nIDSAddr= 127.0.0.1\nIDSPort={ids_port}\nWorldMaps=64x64\n"
         ),
     )
     .unwrap();
@@ -88,9 +88,9 @@ struct Child {
 }
 
 impl Child {
-    fn spawn(port: u16, check_block: usize, tag: &str) -> Self {
+    fn spawn(port: u16, check_block: usize, ids_port: u16, tag: &str) -> Self {
         let dir = std::env::temp_dir().join(format!("gs-{tag}-{}-{port}", std::process::id()));
-        write_conf(&dir, port, check_block);
+        write_conf(&dir, port, check_block, ids_port);
         let log = dir.join("server.out.log");
         let out = std::fs::File::create(&log).unwrap();
         let proc = tokio::process::Command::new(env!("CARGO_BIN_EXE_game-svr"))
@@ -116,7 +116,7 @@ impl Child {
 #[tokio::test]
 async fn gm_open_gets_server_user_index_one_based() {
     let port = free_port();
-    let child = Child::spawn(port, 12288, "open");
+    let child = Child::spawn(port, 12288, free_port(), "open");
     let mut gate = connect_with_retry(port).await;
     gate.write_all(&frame(grobal2::GM_OPEN, 1001, 4242, 0, b"192.168.1.7"))
         .await
@@ -138,7 +138,7 @@ async fn gm_open_gets_server_user_index_one_based() {
 #[tokio::test]
 async fn close_frees_slot_for_reuse() {
     let port = free_port();
-    let child = Child::spawn(port, 12288, "close");
+    let child = Child::spawn(port, 12288, free_port(), "close");
     let mut gate = connect_with_retry(port).await;
     gate.write_all(&frame(grobal2::GM_OPEN, 1001, 1, 0, b"1.1.1.1"))
         .await
@@ -178,7 +178,7 @@ async fn close_frees_slot_for_reuse() {
 #[tokio::test]
 async fn blocked_send_sends_receive_ok_then_resumes() {
     let port = free_port();
-    let child = Child::spawn(port, 3, "block");
+    let child = Child::spawn(port, 3, free_port(), "block");
     let mut gate = connect_with_retry(port).await;
     // 第一条：0 + 20 < 30 ⇒ 直接回索引
     gate.write_all(&frame(grobal2::GM_OPEN, 1, 1, 0, b"a"))
@@ -219,7 +219,7 @@ async fn blocked_send_sends_receive_ok_then_resumes() {
 #[tokio::test]
 async fn gm_data_before_certification_goes_to_sim() {
     let port = free_port();
-    let child = Child::spawn(port, 12288, "data");
+    let child = Child::spawn(port, 12288, free_port(), "data");
     let mut gate = connect_with_retry(port).await;
     gate.write_all(&frame(grobal2::GM_OPEN, 777, 555, 0, b"10.0.0.9"))
         .await
@@ -269,7 +269,7 @@ async fn login_packet_without_admission_fails_certification() {
     // 真 C# GameGate 发出的合成登录包（98B；见 E:\tmp\openmir2-gamegate-imp\oracle-login-cap\out-csharp-raw.json）
     const ORACLE_LOGIN_BODY: &str = "23305e5e3c716f6d446f6e6f5478615f3c786e61497b5f623f5f6162586b6062586b61625a675f615a5f60605a6b60615a6a62603f6b6060586b6060586b6060586b6060586b6060586b6060586b6060586b6060586b6060586b6060586b5f603f21";
     let port = free_port();
-    let child = Child::spawn(port, 12288, "cert");
+    let child = Child::spawn(port, 12288, free_port(), "cert");
     let mut gate = connect_with_retry(port).await;
     gate.write_all(&frame(grobal2::GM_OPEN, 900, 42, 0, b"10.0.0.5"))
         .await
@@ -299,6 +299,56 @@ async fn login_packet_without_admission_fails_certification() {
     assert!(
         child.stdout().contains("用户不存在"),
         "CloseUser 后同 socket/session 的 GM_DATA 必须落到「用户不存在」"
+    );
+    child.stop().await;
+}
+
+/// **判据（认证闭环，S2a+S2b）**：假 IDS 先发 `(100/loadbot1/2/0/1/127.0.0.1/3600)` 把会话灌进准入表，
+/// 假网关再把**真 C# GameGate 实测的 98B 合成登录包**当 `GM_DATA` 发进来 ⇒ 必须走**认证通过**支
+/// （sim 线程的「认证通过 ⇒ 应取角色进世界」日志里能看到 loadbot1/lb1a）。
+///
+/// 这条判据把 S2a（认证链）与 S2b（IDS 通知链路）串成一条端到端链；缺任一半都会红。
+#[tokio::test]
+async fn ids_notification_enables_login_certification() {
+    const ORACLE_LOGIN_BODY: &str = "23305e5e3c716f6d446f6e6f5478615f3c786e61497b5f623f5f6162586b6062586b61625a675f615a5f60605a6b60615a6a62603f6b6060586b6060586b6060586b6060586b6060586b6060586b6060586b6060586b6060586b6060586b5f603f21";
+    // 假 IDS：接受连接后立刻发一条 SS_OPENSESSION(100)
+    let ids = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let ids_port = ids.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        if let Ok((mut s, _)) = ids.accept().await {
+            let msg = b"(100/loadbot1/2/0/1/127.0.0.1/3600)";
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut s, msg).await;
+            let _ = tokio::io::AsyncWriteExt::flush(&mut s).await;
+            tokio::time::sleep(Duration::from_secs(6)).await; // 别断线（断线会清空准入表，照 oracle）
+        }
+    });
+    let port = free_port();
+    let child = Child::spawn(port, 12288, ids_port, "ids");
+    let mut gate = connect_with_retry(port).await;
+    gate.write_all(&frame(grobal2::GM_OPEN, 501, 77, 0, b"127.0.0.1"))
+        .await
+        .unwrap();
+    let (m, _) = recv_frame(&mut gate).await.unwrap();
+    assert_eq!(m.session_index, 1);
+    tokio::time::sleep(Duration::from_millis(400)).await; // 等 IDS 通知到达
+    gate.write_all(&frame(
+        grobal2::GM_DATA,
+        501,
+        77,
+        1,
+        &hex(ORACLE_LOGIN_BODY),
+    ))
+    .await
+    .unwrap();
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let log = child.stdout();
+    assert!(
+        log.contains("认证通过"),
+        "IDS 通知 + 真登录包 ⇒ 必须认证通过；日志实得：{log}"
+    );
+    assert!(
+        log.contains("Account:loadbot1") && log.contains("ChrName:lb1a"),
+        "认证通过的日志里必须有账号/角色名；日志实得：{log}"
     );
     child.stop().await;
 }
