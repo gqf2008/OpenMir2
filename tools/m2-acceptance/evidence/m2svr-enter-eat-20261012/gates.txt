@@ -1,0 +1,13 @@
+### fmt
+FMT_OK
+### clippy
+    Checking game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.63s
+### test
+
+passed=541
+failed=0
+ignored=16
+suites=71
+### msgcodegen
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。

@@ -1,0 +1,9 @@
+BUILD BotSrv...
+CONFIG: 1 bots, prefix=m3r0624, target=127.0.0.1:7000, NewAccount=True, FixedNewChr=True
+CONFIG_FIXED_NEWCHR Job=0 Hair=2 Sex=0
+CONFIG_BAGEQUIPSEQ step_ms=1000 start_delay_ms=3000
+BOTSRV_PID=32212 LOG=E:/tmp/openmir2-watch/m2svr-20261012/bot-rust.log
+PROGRESS spawned=0 login_ok=0/1 in_world=0/1 (src=load_stats.ndjson)
+PROGRESS spawned=1 login_ok=0/1 in_world=0/1 (src=load_stats.ndjson)
+PROGRESS spawned=1 login_ok=1/1 in_world=1/1 (src=load_stats.ndjson)
+GREEN: 1/1 登录成功 (100%)；in_world=1/1

@@ -12,8 +12,8 @@
     - 基线侧：C# 基线一条命令可复跑且 hash 稳定（`rng-baseline.ps1`）
     - 两侧实现必须真的是"两侧"（见下方实现识别护栏）
 
-  三条机判护栏（peer 场景一致性 / sessionDir 空值 / `-Side rust` 已知 Rust 入口）的唯一口径在
-  `gate_guards.ps1`，主流程与 `selftest_gate.ps1` 共用（照 `tools/m2-acceptance/portclassify.ps1` 先例）。
+  五条机判护栏（peer 场景一致性 / sessionDir 空值 / `-Side rust` 已知 Rust 入口 / peer 背包-装备开关一致性 /
+  peer 固定起点一致性）的唯一口径在 `gate_guards.ps1`，主流程与 `selftest_gate.ps1` 共用（照 `tools/m2-acceptance/portclassify.ps1` 先例）。
   自检（离线，不起栈/不占端口）：`powershell -ExecutionPolicy Bypass -File selftest_gate.ps1`。
 
   流程：
@@ -26,7 +26,8 @@
        - side=csharp：`rng-baseline.ps1`（种子注入 → 世界 RNG 流 + 掉落/经验序列落盘 + hash）
        - side=rust ：重放 C# 记录流（`cargo test -p mir2-parity-tests --test rng_replay_parity`）
     3) 跨侧比对（给了 `-PeerSession` 时）：先机判「本侧会话目录非空」（`Get-M3SessionDirFault`）
-       与「两侧建角场景一致」（`baseline.json.fixed_new_chr`，`Get-M3PeerScenarioGuard`），
+       与「两侧建角场景一致」（`baseline.json.fixed_new_chr`，`Get-M3PeerScenarioGuard`）、
+       与「两侧背包/装备开关一致」（`baseline.json.bag_equip_sequence`，`Get-M3PeerBagEquipScopeGuard`），
        再跑 `scoped_diff.py diff` ⇒ 必须 0
     4) 汇总 `M3-gate-report.json`，退出码 0 仅当所有判据都过
 
@@ -54,21 +55,24 @@ param(
   [int]$NewChrSex = 0,
   [switch]$BagEquipSequence,     # M3 T-14（T-22）：固定背包/装备序列（拾取→装备→卸下→丢弃→用药）
   [int]$BagEquipStepMs = 1000,
-  [int]$BagEquipStartDelayMs = 3000
+  [int]$BagEquipStartDelayMs = 3000,
+  [switch]$PinStartPose           # T-14 固定起点变体（透传给 run_pair；owner 86478c55/d7798370）
 )
 
 $ErrorActionPreference = 'Stop'
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = (Resolve-Path (Join-Path $Here '..\..\..\..')).Path
-# 三条机判护栏的唯一口径（与 selftest_gate.ps1 共用；gate_guards.ps1 自行 dot-source portclassify.ps1）
+# 五条机判护栏的唯一口径（与 selftest_gate.ps1 共用；gate_guards.ps1 自行 dot-source portclassify.ps1）
 . (Join-Path $Here 'gate_guards.ps1')
 $LocalScenario = Format-M3Scenario -FixedNewChr ([bool]$FixedNewChr) -NewChrJob $NewChrJob -NewChrHair $NewChrHair -NewChrSex $NewChrSex
+# 背包/装备开关（T-14）：-BagEquipSequence 时 run_pair 会一并传 -DisableAutoPlay（两侧同开关）。
+$LocalBagEquipScope = Format-M3BagEquipScope -BagEquipSequence ([bool]$BagEquipSequence) -BagEquipStepMs $BagEquipStepMs -BagEquipStartDelayMs $BagEquipStartDelayMs -DisableAutoPlay ([bool]$BagEquipSequence)
 $Stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $ReportPath = Join-Path $Here ("sessions\M3-gate-{0}-{1}.json" -f $Side, $Stamp)
 $report = [ordered]@{
   side = $Side; bots = $Bots; seed = $Seed; started_at = (Get-Date).ToString('o')
   fixed_new_chr = $LocalScenario
-  bag_equip_sequence = if ($BagEquipSequence) { "on step_ms=$BagEquipStepMs start_delay_ms=$BagEquipStartDelayMs" } else { "(off)" }
+  bag_equip_sequence = $LocalBagEquipScope
   steps = [ordered]@{}
 }
 $failed = @()
@@ -121,6 +125,7 @@ if ($Prefix -ne '') { $pairArgs += @('-Prefix', $Prefix) }
 if ($SkipBots) { $pairArgs += '-SkipBots' }
 if ($FixedNewChr) { $pairArgs += @('-FixedNewChr', '-NewChrJob', $NewChrJob, '-NewChrHair', $NewChrHair, '-NewChrSex', $NewChrSex) }
 if ($BagEquipSequence) { $pairArgs += @('-BagEquipSequence', '-BagEquipStepMs', $BagEquipStepMs, '-BagEquipStartDelayMs', $BagEquipStartDelayMs) }
+if ($PinStartPose) { $pairArgs += '-PinStartPose' }
 & powershell -ExecutionPolicy Bypass -File (Join-Path $Here 'run_pair.ps1') @pairArgs | Tee-Object -FilePath (Join-Path $Here ("sessions\gate-{0}-{1}.pair.log" -f $Side, $Stamp))
 $pairExit = $LASTEXITCODE
 $sideSessionDirs = @(Get-ChildItem (Join-Path $Here 'sessions') -Directory -Filter ("{0}-*" -f $Side) |
@@ -186,14 +191,34 @@ if ($PeerSession -ne '') {
       peer = $PeerSession; peer_fixed_new_chr = $scenarioGuard.peer_scenario; local_fixed_new_chr = $LocalScenario
     }
 
+    # ④ 参照会话背包/装备开关一致性（T-14 复跑口径）：两侧必须同一组开关
+    #    （step_ms/start_delay_ms/disable_autoplay）。旧产物「开着挂机」跑（无 disable_autoplay 记录）
+    #    ⇒ characters.MapName/CX/CY 是随机走位值、跨侧必然出 diff ⇒ 不能当同口径 peer。
+    $bagScopeGuard = Get-M3PeerBagEquipScopeGuard -PeerDir $peerDir -LocalScope $LocalBagEquipScope
+    foreach ($m in $bagScopeGuard.messages) { Write-Output $m }
+    $failed += @($bagScopeGuard.failed)
+    $report.steps.peer_bag_equip_scope = [ordered]@{
+      peer = $PeerSession; peer_scope = $bagScopeGuard.peer_scope; local_scope = $LocalBagEquipScope
+    }
+
+    # ⑤ 参照会话固定起点一致性（T-14 固定起点变体，owner 86478c55/d7798370）：两侧 pin 值必须相同
+    #    （本侧钉在 baseline.json.start_pose 上；旧产物无该字段 ⇒ 本侧非 none 时判红）。
+    $localStartPose = Get-M3SessionStartPose -Dir $sessionDir.FullName
+    $poseGuard = Get-M3PeerStartPoseGuard -PeerDir $peerDir -LocalPose $localStartPose
+    foreach ($m in $poseGuard.messages) { Write-Output $m }
+    $failed += @($poseGuard.failed)
+    $report.steps.peer_start_pose = [ordered]@{
+      peer = $PeerSession; peer_start_pose = $poseGuard.peer_pose; local_start_pose = $localStartPose
+    }
+
     $peer = Join-Path $peerDir 'scoped_after_norm.jsonl'
     if (-not (Test-Path $peer)) {
       Write-Output ("RED: 参照会话缺 scoped_after_norm.jsonl: {0}" -f $peer)
       $failed += 'peer_session_missing'
-    } elseif ($scenarioGuard.failed.Count -gt 0) {
-      # 场景不一致 ⇒ 跳过 diff（比出来的差异不算数），失败项已记。
-      Write-Output 'SKIP: 参照会话场景不一致，跳过 scoped_diff（差异无仲裁力）'
-      $report.steps.cross_side_diff = [ordered]@{ peer = $PeerSession; exit = $null; skipped = 'peer_scenario_mismatch' }
+    } elseif ($scenarioGuard.failed.Count -gt 0 -or $bagScopeGuard.failed.Count -gt 0 -or $poseGuard.failed.Count -gt 0) {
+      # 场景/开关/起点不一致 ⇒ 跳过 diff（比出来的差异不算数），失败项已记。
+      Write-Output 'SKIP: 参照会话场景、背包/装备开关或固定起点不一致，跳过 scoped_diff（差异无仲裁力）'
+      $report.steps.cross_side_diff = [ordered]@{ peer = $PeerSession; exit = $null; skipped = 'peer_scope_mismatch' }
     } else {
       $diffArgs = @((Join-Path $Here 'scoped_diff.py'), 'diff', $peer, $mine, '--canonical')
       if ($FixedNewChr) { $diffArgs += '--fixed-newchr' }

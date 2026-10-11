@@ -26,6 +26,7 @@ mod cert;
 mod config;
 mod dbclient;
 mod enter;
+mod homemap;
 mod hutil;
 mod ids;
 mod items;
@@ -301,6 +302,25 @@ async fn main() -> Result<()> {
             cfg.notice_dir
         );
     }
+    // 出生点回落（`WorldServer.cs:250-260` 的 `GetHomeInfo`）：空 `HomeMap` 的新角色用它进图（见
+    // `homemap` 模块头的缺陷现场）。`<base>/<EnvirDir>/StartPoint.txt` + `[Setup] StartPointSize/HomeMap/HomeX/HomeY`。
+    let start_points = homemap::load_start_points(&base, &cfg.envir_dir);
+    let home_fallback = homemap::HomeFallback {
+        start_point_size: cfg.start_point_size,
+        home_map: cfg.home_map.clone(),
+        home_x: cfg.home_x,
+        home_y: cfg.home_y,
+        start_points,
+    };
+    glog!(
+        "INF",
+        "出生点回落已载入：StartPoint.txt {} 条，StartPointSize={}，Config.HomeMap={} ({},{})（空 HomeMap 的新角色用它；RNG 抽数照 oracle）",
+        home_fallback.start_points.len(),
+        home_fallback.start_point_size,
+        home_fallback.home_map,
+        home_fallback.home_x,
+        home_fallback.home_y
+    );
     // 消息颜色（`[Setup] RedMsgFColor/BColor`）：帧 `SM_SYSMESSAGE` 的 `Param`，
     // 账号级顶号提示（`openmir2-m2-session-lifecycle`）用它。
     let colors = MsgColors {
@@ -361,6 +381,15 @@ async fn main() -> Result<()> {
                         drop_item_rage: cfg.drop_item_rage,
                     },
                     ref_msg_range: i32::from(cfg.send_ref_msg_range),
+                    home: home_fallback,
+                    newbie: NewbieItems {
+                        candle: cfg.candle.clone(),
+                        basic_drug: cfg.basic_drug.clone(),
+                        wooden_sword: cfg.wooden_sword.clone(),
+                        cloths_man: cfg.cloths_man.clone(),
+                        cloths_woman: cfg.cloths_woman.clone(),
+                        item_number: cfg.item_number,
+                    },
                 },
                 notice,
                 colors,
@@ -904,6 +933,301 @@ fn handle_bag_cmd(
     }
 }
 
+/// oracle `PlayObject.cs:1205-1245` 的 `IsNewHuman` 四件新手物品（**固定顺序**：烛烛→金创药(小量)→木剑→布衣(男/女)）。
+///
+/// 每件照 `GameItemSystem.CopyToUserItemFromName`（`GameItemSystem.cs:113-140`）：按名查模板（`OrdinalIgnoreCase`），
+/// `Index = 表内位置+1`、`Dura = DuraMax = tpl.DuraMax`；模板缺失 ⇒ 不入包（oracle `else Dispose(userItem)`）。
+/// `MakeIndex` = `M2Share.GetItemNumber()`（`M2Share.cs:547`）——本宿主用单调计数器（`GetTickCount` 项登记）。
+/// 返回模板缺失的告警（调用方记 WRN）。
+fn add_newbie_items(
+    item_list: &mut Vec<game_svr::bag::BagItem>,
+    catalog: &game_svr::ability::StdItemCatalog,
+    newbie: &NewbieItems,
+    gender: u8,
+    item_number: &mut i32,
+) -> Vec<String> {
+    let cloth = if gender == 0 {
+        &newbie.cloths_man
+    } else {
+        &newbie.cloths_woman
+    };
+    let names = [
+        &newbie.candle,
+        &newbie.basic_drug,
+        &newbie.wooden_sword,
+        cloth,
+    ];
+    let mut warns = Vec::new();
+    for name in names {
+        match catalog.find_by_name(name) {
+            Some(index) => {
+                if let Some(tpl) = game_svr::ability::ItemCatalog::get(catalog, index) {
+                    *item_number += 1;
+                    item_list.push(game_svr::bag::BagItem {
+                        make_index: *item_number,
+                        index,
+                        dura: tpl.dura_max,
+                        dura_max: tpl.dura_max,
+                        desc: [0; 14],
+                    });
+                }
+            }
+            None => warns.push(format!("新手物品模板缺失（Name={name}）")),
+        }
+    }
+    warns
+}
+
+/// `CM_QUERYBAGITEMS(81)` 的派发（owner 追加的卡项 ②）。
+///
+/// oracle 链：`PlayObject.Message.cs:784-795` 的 30s 限频 → `ClientQueryBagItems()`
+/// （`PlayObject.Operate.cs:37-64`）：逐件 `GetStdItem != null` → `ClientItem` → `EncodeBuffer + '/'`；
+/// 非空则 `MakeMessage(SM_BAGITEMS, ActorId, 0, 0, ItemList.Count)` + 尾。
+/// 本函数只负责「找会话 → 30s 门 → 装 `ClientItem` 视图 → `itemwire` 编码 → 按 `[GateIdx,Socket]` 回帧」。
+///
+/// **登记**：限频命中时的 `SysMsg(MessageSettings.QUERYBAGITEMS, Red, Hint)` 文本未建模（`String.conf` 无该键）。
+#[allow(clippy::too_many_arguments)]
+fn handle_query_bag_cmd(
+    chr_name: &str,
+    socket: i32,
+    online: &OnlineRegistry,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    catalog: &game_svr::ability::StdItemCatalog,
+    world: &mir2_world::World,
+) {
+    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
+        glog!(
+            "WRN",
+            "CM_QUERYBAGITEMS：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃"
+        );
+        return;
+    };
+    let gate_idx = entry.gate_idx;
+    let Some(sg) = sessions.get_mut(chr_name) else {
+        glog!(
+            "WRN",
+            "CM_QUERYBAGITEMS：ChrName={chr_name} 无会话态（未进世界/已断线）⇒ 丢弃"
+        );
+        return;
+    };
+    // `PlayObject.Message.cs:786`：`(GetTickCount() - QueryBagItemsTick) > 30*1000` 才回；否则 `SysMsg`。
+    let now = world.clock_ms;
+    if let Some(t) = sg.query_bag_items_tick {
+        if now - t <= 30_000 {
+            glog!(
+                "WRN",
+                "CM_QUERYBAGITEMS：30s 限频内重复查询 ChrName={chr_name} ⇒ 照 oracle 回 SysMsg（文案未建模，登记）"
+            );
+            return;
+        }
+    }
+    sg.query_bag_items_tick = Some(now);
+    let actor_id = sg.actor_id;
+    glog!(
+        "INF",
+        "CM_QUERYBAGITEMS：ChrName={chr_name} ItemList={} 件",
+        sg.state.item_list.len()
+    );
+    // `ClientQueryBagItems`（`Operate.cs:39-57`）：逐件 `GetStdItem(Index) != null` 才编。
+    let mut views: Vec<game_svr::itemwire::ClientItem<'_>> = Vec::new();
+    for it in &sg.state.item_list {
+        let Some(tpl) = game_svr::ability::ItemCatalog::get(catalog, it.index) else {
+            continue;
+        };
+        // `CustomItemSystem.GetItemName`（默认 = 模板名；`Desc[13]==1` 的自定义名未建模，登记）。
+        let mut name = tpl.name.clone();
+        // `item.StdMode == 50` 的名字后缀（`Operate.cs:52-55`）。
+        if tpl.std_mode == 50 {
+            name = format!("{name} #{}", it.dura);
+        }
+        views.push(game_svr::itemwire::ClientItem {
+            tpl,
+            name,
+            make_index: it.make_index,
+            dura: it.dura,
+            dura_max: it.dura_max,
+            desc: it.desc,
+        });
+    }
+    let tail = game_svr::itemwire::bagitems_tail(&views);
+    if tail.is_empty() {
+        return;
+    }
+    let body = game_svr::itemwire::sm_bagitems(actor_id, views.len(), &tail);
+    glog!(
+        "INF",
+        "SM_BAGITEMS 下发：ChrName={chr_name} socket={socket} gate={gate_idx} {} 件（{} 字节）",
+        views.len(),
+        body.len()
+    );
+    if let Some(tx) = route_to_gate(gates, gate_idx, socket, "查询背包回帧") {
+        let _ = tx.send(SimToGate::SendFrame { socket, body });
+    } else {
+        glog!("WRN", "SM_BAGITEMS：找不到网关线号 {gate_idx}，丢弃");
+    }
+}
+
+/// `CM_EAT`(1006) 的派发（issue `8d07694d` 的 ②）。
+///
+/// oracle 链：`PlayObject.Message.cs:826` 的 `case CM_EAT: ClientUseItems(processMsg.nParam1, Msg)`
+/// ⇒ 纯函数在 `useitem::use_item`（m3bag 交付，逐字段对 oracle `eat_vectors.json`）；本函数只负责
+/// 「找会话 → 装 `UseItemContext`/`UseItemActorState` → 调用 → 按 `[GateIdx,Socket]` 回帧」。
+///
+/// **收包字段口径**（`WorldServer.cs:820` + `BaseObject.Message.cs:98`）：12B 头的 `Recog`(b0-3) = `nParam1`
+/// ⇒ **`make_index` = `recog`**（`Param`/`Tag` 未参与 `ClientUseItems`；`Msg` = 物品名，oracle 未用）。
+///
+/// **两路下行**（口径见 `useitem` 模块头）：
+/// - **立即帧** `SendDefMessage(SM_EAT_OK/FAIL)` ⇒ header-only，直接下发（恒 1 条）；
+/// - **延时通知** `SendMsg(RM_*)` 入 `MsgQueue`，由消息泵翻成 `SM_*`（`PlayObject.Message.cs:1736-1960`）；
+///   本宿主在同一批按 `QueuedNotice` 出队序下发（`useitem::use_item` 已按 `(byte)wIdent` 排序）。
+#[allow(clippy::too_many_arguments)]
+fn handle_eat_cmd(
+    recog: i32,
+    _param: u16,
+    _tag: u16,
+    tail: Option<&str>,
+    chr_name: &str,
+    socket: i32,
+    online: &OnlineRegistry,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    world: &mir2_world::World,
+    colors: &MsgColors,
+    registry: Option<&mir2_envir::MapRegistry>,
+) {
+    // `ClientUseItems(int nItemIdx, string sItemName)` 的 `sItemName` 在 oracle 里未被使用。
+    let _ = tail;
+    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
+        glog!(
+            "WRN",
+            "CM_EAT：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃"
+        );
+        return;
+    };
+    let gate_idx = entry.gate_idx;
+    let Some(sg) = sessions.get_mut(chr_name) else {
+        glog!(
+            "WRN",
+            "CM_EAT：ChrName={chr_name} 无会话态（未进世界/已断线）⇒ 丢弃"
+        );
+        return;
+    };
+    let actor_id = sg.actor_id;
+    // `EatItems` 的首个守卫（`PlayObject.Base.cs:2048`）：`Envir.Flag.boNODRUG`。
+    let no_drug = world
+        .entities
+        .get(actor_id)
+        .and_then(|a| registry.and_then(|r| r.flag_of(a.map_id)))
+        .is_some_and(|f| f.bo_nodrug);
+    let mut state = game_svr::useitem::UseItemActorState {
+        wabil: sg.state.wabil.clone(),
+        inc_health: sg.inc_health,
+        inc_spell: sg.inc_spell,
+        user_unlock_durg: sg.user_unlock_durg,
+        hunger_status: sg.hunger_status,
+    };
+    // `ItemList` 从会话态拿出（`use_item` 原地改）后马上放回。
+    let mut item_list = std::mem::take(&mut sg.state.item_list);
+    // `RefMyStatus()` ⇒ `RecalcAbilitys()` 的观测输入（StdMode 1 跨档才用到；与 `handle_bag_cmd` 同源）。
+    let bag: Vec<u16> = item_list.iter().map(|i| i.index).collect();
+    let mut use_inst: Vec<Option<game_svr::ability::ItemInstance>> =
+        vec![None; game_svr::ability::USE_ITEMS_LEN];
+    for (i, cell) in sg.use_items.iter().enumerate() {
+        if let Some(it) = cell {
+            use_inst[i] = Some(game_svr::ability::ItemInstance {
+                index: it.index,
+                dura: it.dura,
+            });
+        }
+    }
+    let recalc = game_svr::ability::RecalcInputs {
+        job: sg.equip.job,
+        abil: &sg.equip.abil,
+        bonus_abil: &sg.equip.bonus_abil,
+        bonus_tick_hit: sg.equip.bonus_tick_hit,
+        bonus_tick_speed: sg.equip.bonus_tick_speed,
+        cur_hp: sg.state.wabil.hp,
+        cur_mp: sg.state.wabil.mp,
+        use_items: &use_inst,
+        bag: &bag,
+    };
+    let ctx = game_svr::useitem::UseItemContext {
+        catalog,
+        // `BoCanUseItem` 在 oracle 初生即 true（`PlayObject.cs:961`）；运行期置位未建模 ⇒ 恒 true（登记）。
+        can_use_item: true,
+        // `Death` 未建模（在线即活）⇒ false（登记）。
+        dead: false,
+        actor_id,
+        // `ClientUseItems(processMsg.nParam1, ...)`：`make_index` 取自 12B 头 `Recog`。
+        make_index: recog,
+        no_drug,
+        // `SystemShare.FunctionNPC` 未建模（StdMode 31 分支）⇒ false（登记）；
+        // `StdMode 31` 的 `AniCount == 0`（解包）也未接（T-17）。
+        function_npc_present: false,
+        red_msg_fcolor: u16::from(colors.red_f),
+        red_msg_bcolor: u16::from(colors.red_b),
+        recalc: Some(recalc),
+    };
+    let out = game_svr::useitem::use_item(&ctx, &mut state, &mut item_list);
+    glog!(
+        "INF",
+        "CM_EAT 结果：ChrName={chr_name} make_index={recog} eaten={} immediate={} notices={}",
+        out.eaten,
+        out.immediate_frames.len(),
+        out.notices.len()
+    );
+    // 状态迁移写回会话（`use_item` 只在成功分支改集合；失败分支原样返回）。
+    sg.state.item_list = item_list;
+    sg.state.wabil = state.wabil;
+    sg.inc_health = state.inc_health;
+    sg.inc_spell = state.inc_spell;
+    sg.user_unlock_durg = state.user_unlock_durg;
+    sg.hunger_status = state.hunger_status;
+
+    let Some(tx) = route_to_gate(gates, gate_idx, socket, "用药回帧") else {
+        return;
+    };
+    // 立即帧（`SendDefMessage`）：`SM_EAT_OK(635)`/`SM_EAT_FAIL(636)`，header-only。
+    for f in &out.immediate_frames {
+        let body = game_svr::smframe::gm_data_body(
+            game_svr::smframe::command_header(f.recog, f.ident, f.param, f.tag, f.series),
+            &[],
+        );
+        let _ = tx.send(SimToGate::SendFrame { socket, body });
+    }
+    // 延时通知（`SendMsg(RM_*)` ⇒ `SM_*`）。
+    let wire = game_svr::pickwire::WireSession {
+        actor_id,
+        gold: sg.state.gold,
+        game_gold: sg.game_gold,
+        wabil: sg.state.wabil.clone(),
+        sys_msg: None,
+    };
+    let mut sent = out.immediate_frames.len();
+    for n in &out.notices {
+        match game_svr::pickwire::notice_frame(n, &wire) {
+            Some(body) => {
+                let _ = tx.send(SimToGate::SendFrame { socket, body });
+                sent += 1;
+            }
+            // `RM_CHARSTATUSCHANGED(10139)`/`RM_MYSTATUS(8102)`（StdMode 1 食物）需要
+            // `HitSpeed`/`GetMyStatus()` 的运行期值，本宿主未建模 ⇒ 不编造（登记，不静默）。
+            None => glog!(
+                "WRN",
+                "CM_EAT：通知 ident={} 未接 SM_* 映射（登记：StdMode 1 的 RM_CHARSTATUSCHANGED/RM_MYSTATUS）",
+                n.ident
+            ),
+        }
+    }
+    glog!(
+        "INF",
+        "CM_EAT 已下发 {} 帧（socket={socket} gate={gate_idx}）",
+        sent
+    );
+}
+
 /// `FeatureChanged()`（oracle `BaseObject.cs:1509` → `SendRefMsg(RM_FEATURECHANGED, …)`）的下行：
 /// 向**同图、周围 `range` 格（含自身格）内**的所有在线玩家各发一条 `SM_FEATURECHANGED`
 /// （`PlayObject.Message.cs:1762-1764`：`recog = processMsg.ActorId`、`param/tag = LoWord/HiWord(feature)`、
@@ -959,6 +1283,9 @@ fn bag_items_from(items: Option<&[Option<record::ServerUserItem>]>) -> Vec<game_
         .unwrap_or(&[])
         .iter()
         .flatten()
+        // oracle `WorldServer.cs:1187-1189`：`if (bagItems[i].Index > 0) ItemList.Add(...)`
+        // —— 记录里的定长槽位（新角色 = 46 个 `StdIndex=0` 空槽）**不进 `ItemList`**。
+        .filter(|it| it.index > 0)
         .map(|it| {
             let mut desc = [0u8; 14];
             if let Some(d) = it.desc.as_deref() {
@@ -1365,6 +1692,16 @@ struct SessionGround {
     sub: game_svr::ability::SubAbility,
     /// 装备/卸下重算的静态输入（进世界时从 `CharacterData` + `Server.conf` 建立）。
     equip: EquipInputs,
+    /// `CharacterObject.IncHealth`（`CM_EAT` 的 `StdMode 0 default` 分支叠加；oracle `ushort` 语义）。
+    inc_health: u16,
+    /// `CharacterObject.IncSpell`。
+    inc_spell: u16,
+    /// `CharacterObject.UserUnLockDurg`（`CM_EAT` 的 `StdMode 0 Shape 2` 置 true）。
+    user_unlock_durg: bool,
+    /// `PlayObject.HungerStatus`（`CM_EAT` 的 `StdMode 1`：`+= DuraMax/10`，上限 5000）。
+    hunger_status: i32,
+    /// `PlayObject.QueryBagItemsTick`（`PlayObject.Message.cs:786` 的 30s 限频）：`None` = 未查过（照 oracle 首次即过）。
+    query_bag_items_tick: Option<i64>,
 }
 
 /// 一次 `RecalcAbilitys()` 的静态输入（不含随动作变化的 `UseItems`/`ItemList`/`WAbil`）。
@@ -1393,6 +1730,17 @@ struct EquipInputs {
     bonus_tick_speed: i32,
 }
 
+/// `IsNewHuman` 四件新手物品的名字 + `GetItemNumber` 初值（`Server.conf [Setup]`；`PlayObject.cs:1205-1245`）。
+#[derive(Debug, Clone)]
+struct NewbieItems {
+    candle: String,
+    basic_drug: String,
+    wooden_sword: String,
+    cloths_man: String,
+    cloths_woman: String,
+    item_number: i32,
+}
+
 /// `sim_loop` 需要的入图帧配置层（`Server.conf` 的 `GameSvrConf` + `String.conf` + `[Setup] ShowRankLevelName`）。
 struct EnterConfig {
     game_conf: Option<mir2_envir::GameSvrConf>,
@@ -1406,6 +1754,10 @@ struct EnterConfig {
     /// `[Setup] SendRefMsgRange`（oracle `GameSvrConf.cs:499`，缺省 12）：
     /// 装备/卸下成功后的 `FeatureChanged()` 广播半径（`BaseObject.SendRefMsg` 的单元格扫描）。
     ref_msg_range: i32,
+    /// 空 `HomeMap` 新角色的进图回落（`homemap::HomeFallback`，`WorldServer.cs:250-260`）。
+    home: homemap::HomeFallback,
+    /// `IsNewHuman` 的新手物品输入。
+    newbie: NewbieItems,
 }
 
 fn sim_loop(
@@ -1433,6 +1785,9 @@ fn sim_loop(
     // S3 后半段（第一格）：同屏 AOI 下行要用的展示表（`ActorId -> Dir/Light/Feature/…`）。
     // 展示字段来自角色记录 + 装备（属 bins/game-svr 的读档面），**不进 `crates/world`**。
     let mut displays = downlink::DisplayTable::new();
+    // `M2Share.GetItemNumber()` 的计数器（`M2Share.cs:547`；初值 `[Setup] ItemNumber`）——
+    // 新角色新手物品的 `MakeIndex` 用它。
+    let mut item_number = enter_cfg.newbie.item_number;
     // `CM_PICKUP`/`CM_DROPITEM` 的**地面交互会话态**（按 `ChrName` 键；进世界建立、断线/小退移除）。
     // 进世界前解析出的 `CharacterData` 在其他路径上用完即弃，这里把 `ground::*` 要的字段留下来。
     let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
@@ -1527,6 +1882,34 @@ fn sim_loop(
                             &world,
                             &mut displays,
                             enter_cfg.ref_msg_range,
+                        );
+                    } else if cmd.ident == game_svr::useitem::CM_EAT {
+                        // `CM_EAT(1006)`：oracle `PlayObject.Message.cs:826` 的 `ClientUseItems(nParam1, Msg)`。
+                        handle_eat_cmd(
+                            cmd.recog,
+                            cmd.param,
+                            cmd.tag,
+                            tail.as_deref(),
+                            &chr_name,
+                            socket,
+                            &online,
+                            &mut ground_sessions,
+                            &gates,
+                            &enter_cfg.catalog,
+                            &world,
+                            &colors,
+                            registry.as_ref(),
+                        );
+                    } else if cmd.ident == mir2_protocol::messages::CM_QUERYBAGITEMS {
+                        // `CM_QUERYBAGITEMS(81)`：`PlayObject.Message.cs:784` → `ClientQueryBagItems()`。
+                        handle_query_bag_cmd(
+                            &chr_name,
+                            socket,
+                            &online,
+                            &mut ground_sessions,
+                            &gates,
+                            &enter_cfg.catalog,
+                            &world,
                         );
                     }
                 }
@@ -1710,17 +2093,43 @@ fn sim_loop(
                                             payload.len()
                                         );
                                     }
+                                    // oracle `WorldServer.cs:248-262`：`MapName = 记录 CurMap`；`HomeMap` 空 ⇒
+                                    // `GetHomeInfo` 覆盖 `MapName` 与坐标（`-FixedNewChr` 新角色两条都空）。
+                                    // 缺陷现场与确定性口径见 `homemap` 模块头。
+                                    // 只有**全字段可解**时才能判定 `HomeMap` 是否为空；仅头部窗口（合成/诊断载荷，
+                                    // 真线上 DB 回包恒为全字段）保持记录 `CurMap` + 坐标，不假设为空。
+                                    let rec_home = full
+                                        .as_ref()
+                                        .and_then(|r| r.data.home_map.as_deref())
+                                        .unwrap_or("");
+                                    let home_empty = full.as_ref().is_some_and(|r| {
+                                        r.data.home_map.as_deref().unwrap_or("").is_empty()
+                                    });
+                                    let (enter_map_name, enter_x, enter_y) = if home_empty {
+                                        // oracle `WorldServer.cs:254-259` 的**同序 3 抽**
+                                        //（1×`Random(StartPointSize)` + `GetRandHomeX/Y` 各 1×`Random(3)`）：
+                                        // 见 `homemap` 模块头的 RNG 抽数账本。
+                                        enter_cfg.home.new_human_spawn(&mut world.rng)
+                                    } else {
+                                        (head.cur_map.clone(), head.cur_x, head.cur_y)
+                                    };
                                     // 集成点 ④：`CurMap`（逻辑名）→ `map_id`。有真地图注册表时必须命中；
-                                    // 找不到即拒绝进图并记 WRN（`MapRegistry::require_id`），不许静默退回
-                                    // 0 号占位图。无注册表（S1 `WorldMaps` 占位，启动时已记 WRN）时保留 0 号图。
-                                    match mapwire::resolve_map_id(registry.as_ref(), &head.cur_map) {
+                                    // 找不到且有非空记录 `HomeMap` 时按 oracle `FindMap==null ⇒ MapName=HomeMap`
+                                    // 回落（`WorldServer.cs:319-341`）；仍找不到即拒绝进图并记 WRN
+                                    //（`MapRegistry::require_id`），不许静默退回 0 号占位图。无注册表（S1
+                                    // `WorldMaps` 占位，启动时已记 WRN）时保留 0 号图。
+                                    match mapwire::resolve_enter_map(
+                                        registry.as_ref(),
+                                        &enter_map_name,
+                                        rec_home,
+                                    ) {
                                         Err(e) => glog!(
                                             "WRN",
                                             "拒绝进图 ChrName:{} CurMap:{}：{e}（真地图注册表里没有这张图）",
                                             head.chr_name,
-                                            head.cur_map
+                                            enter_map_name
                                         ),
-                                        Ok(map_id) => {
+                                        Ok((final_map_name, map_id)) => {
                                         // 准入判据（oracle `WorldServer.cs:503` 的
                                         // `!IsFull && !ProcessHumansIsLogined(chr)`）：
                                         // `ProcessHumansIsLogined`（`:200-217`）= `FrontEngine.InSaveRcdList(chr)`
@@ -1754,8 +2163,8 @@ fn sim_loop(
                                         let ent = mir2_world::Entity::new(
                                             0,
                                             head.chr_name.clone(),
-                                            i32::from(head.cur_x),
-                                            i32::from(head.cur_y),
+                                            i32::from(enter_x),
+                                            i32::from(enter_y),
                                         );
                                         match world.enter_map(&head.chr_name, ent, map_id) {
                                             Ok(id) => {
@@ -1779,9 +2188,9 @@ fn sim_loop(
                                                         "Dir:{} entity={}"
                                                     ),
                                                     head.chr_name,
-                                                    head.cur_map,
-                                                    head.cur_x,
-                                                    head.cur_y,
+                                                    final_map_name,
+                                                    enter_x,
+                                                    enter_y,
                                                     head.dir,
                                                     id
                                                 );
@@ -1792,15 +2201,15 @@ fn sim_loop(
                                                 // 未移植、10 = 世界 tick）保持 `None` 并登记。
                                                 let mut inputs = smframe::EnterWorldInputs {
                                                     actor_id: id,
-                                                    cur_x: u16::from_ne_bytes(head.cur_x.to_ne_bytes()),
-                                                    cur_y: u16::from_ne_bytes(head.cur_y.to_ne_bytes()),
+                                                    cur_x: u16::from_ne_bytes(enter_x.to_ne_bytes()),
+                                                    cur_y: u16::from_ne_bytes(enter_y.to_ne_bytes()),
                                                     dir: head.dir,
                                                     // 658 `SM_SENDNOTICE`：oracle `PlayObject.SendNotice`
                                                     // 在 `SendLogon` **之前**下发（金标准 #1 在 #2 前），
                                                     // `EnterWorldInputs::frames()` 的序已把它放第一位。
                                                     notice: notice.clone(),
                                                     map_file_name: Some(
-                                                        head.cur_map.as_bytes().to_vec(),
+                                                        final_map_name.as_bytes().to_vec(),
                                                     ),
                                                     ..smframe::EnterWorldInputs::default()
                                                 };
@@ -1946,8 +2355,43 @@ fn sim_loop(
                                                                 bonus_tick_hit: a.bonus_tick_hit,
                                                                 bonus_tick_speed: a.bonus_tick_speed,
                                                             },
+                                                            inc_health: u16::from(d.inc_health),
+                                                            inc_spell: u16::from(d.inc_spell),
+                                                            // `UserUnLockDurg` 不在角色记录里（会话初生 false；
+                                                            // 与 `CM_EAT` 的 Shape 2 同一状态变）：登记为未建模。
+                                                            user_unlock_durg: false,
+                                                            hunger_status: d.hunger_status,
+                                                            query_bag_items_tick: None,
                                                         },
                                                     );
+                                                    // oracle `PlayObject.cs:1205-1245` 的 `IsNewHuman` 四件新手物品
+                                                    // （`IsNewHuman` 由 `WorldServer.cs:258-277` 在 `HomeMap` 空且
+                                                    // `Abil.Level==0` 时置位）。
+                                                    glog!(
+                                                        "INF",
+                                                        "IsNewHuman 判定 ChrName={} home_empty={home_empty} abil_level={} bag_items={}",
+                                                        head.chr_name,
+                                                        a.abil.level,
+                                                        d.bag_items.as_ref().map_or(0, Vec::len)
+                                                    );
+                                                    if home_empty && a.abil.level == 0 {
+                                                        if let Some(sg) =
+                                                            ground_sessions.get_mut(&head.chr_name)
+                                                        {
+                                                            for w in add_newbie_items(
+                                                                &mut sg.state.item_list,
+                                                                &enter_cfg.catalog,
+                                                                &enter_cfg.newbie,
+                                                                d.sex,
+                                                                &mut item_number,
+                                                            ) {
+                                                                glog!(
+                                                                    "WRN",
+                                                                    "{w}（照 oracle CopyToUserItemFromName 失败分支，不入包）"
+                                                                );
+                                                            }
+                                                        }
+                                                    }
                                                 }
                                                 // S3 后半段：把 oracle 在 `SendLogon` 同轮算出的
                                                 // **展示层**字段登记进同屏下行表（`GetFeatureToLong` /
@@ -2965,6 +3409,11 @@ mod tests {
                 use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
                 sub: game_svr::ability::SubAbility::first_call(),
                 equip: test_equip_inputs(),
+                inc_health: 0,
+                inc_spell: 0,
+                user_unlock_durg: false,
+                hunger_status: 0,
+                query_bag_items_tick: None,
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -3123,6 +3572,11 @@ mod tests {
                     spell_recover: 0,
                 },
                 equip: test_equip_inputs(),
+                inc_health: 0,
+                inc_spell: 0,
+                user_unlock_durg: false,
+                hunger_status: 0,
+                query_bag_items_tick: None,
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -3238,6 +3692,11 @@ mod tests {
                 use_items,
                 sub: game_svr::ability::SubAbility::first_call(),
                 equip: test_equip_inputs(),
+                inc_health: 0,
+                inc_spell: 0,
+                user_unlock_durg: false,
+                hunger_status: 0,
+                query_bag_items_tick: None,
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -3352,6 +3811,11 @@ mod tests {
                 use_items,
                 sub: game_svr::ability::SubAbility::first_call(),
                 equip: test_equip_inputs(),
+                inc_health: 0,
+                inc_spell: 0,
+                user_unlock_durg: false,
+                hunger_status: 0,
+                query_bag_items_tick: None,
             },
         );
 
@@ -3471,12 +3935,14 @@ mod tests {
             Some(item(70001, 3, Some(vec![1, 2, 3]))),
             None,
             Some(item(70002, 4, None)),
+            // oracle `WorldServer.cs:1188` 的 `Index > 0` 门：空槽（Index=0）不进 ItemList。
+            Some(item(70003, 0, None)),
         ];
         let bags = bag_items_from(Some(&items));
         assert_eq!(
             bags.len(),
             2,
-            "空槽必须被展平（oracle ItemList 是非空列表）"
+            "空槽与 Index=0 槽必须被展平（oracle ItemList 是非空列表）"
         );
         assert_eq!(bags[0].make_index, 70001);
         assert_eq!(bags[0].index, 3);
@@ -3938,6 +4404,311 @@ mod tests {
         assert!(
             kick_pending2.is_empty(),
             "旧不在 PlayObjectList ⇒ 不得置踢旧标志（夹具轮 B 旧未收到 528 的口径）"
+        );
+    }
+
+    /// **issue `8d07694d` ②（CM_EAT 派发）**：`handle_eat_cmd` 派发到 `useitem::use_item`，
+    /// 经该角色的 `[GateIdx,Socket]` 回 `SM_EAT_OK(635)` + `RM_HEALTHSPELLCHANGED→SM_HEALTHSPELLCHANGED(53)`
+    /// + `RM_WEIGHTCHANGED→SM_WEIGHTCHANGED(622)`，并把吃掉后的背包/血量写回会话态。
+    ///
+    /// **牙齿**：`make_index` 必须从 12B 头 `Recog` 取（`ClientUseItems(processMsg.nParam1, Msg)`）。
+    /// 本用例故意把 `param`/`tag` 传成**不是** `make_index` 的值（4242）——
+    /// 若把派发改成从 `param` 读（或摘掉 `useitem::CM_EAT` 分支），`hit` 找不到 ⇒ 落 `SM_EAT_FAIL`
+    /// ⇒ 本用例必红。
+    #[test]
+    fn eat_drug_dispatches_and_updates_session() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+
+        // 金创药(小量)：`StdMode 0` / `Shape 1`（固定量 `IncHealthSpell(AC, MAC)`）。
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            100,
+            mir2_data::StdItem {
+                name: "金创药(小量)".into(),
+                std_mode: 0,
+                shape: 1,
+                ac: 10,
+                mac: 0,
+                ..Default::default()
+            },
+        );
+        let world = mir2_world::World::new(32, 32);
+        let make_index = 29_033_300;
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert(
+            "hero".into(),
+            SessionGround {
+                state: game_svr::ground::GroundState {
+                    item_list: vec![game_svr::bag::BagItem {
+                        make_index,
+                        index: 100,
+                        dura: 0,
+                        dura_max: 0,
+                        desc: [0; 14],
+                    }],
+                    gold: 0,
+                    wabil: {
+                        let mut a = test_ability();
+                        a.hp = 5;
+                        a.max_hp = 20;
+                        a.mp = 3;
+                        a.max_mp = 10;
+                        a
+                    },
+                },
+                actor_id: 7,
+                game_gold: 0,
+                sys_msg: None,
+                use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
+                sub: game_svr::ability::SubAbility::first_call(),
+                equip: test_equip_inputs(),
+                inc_health: 0,
+                inc_spell: 0,
+                user_unlock_durg: false,
+                hunger_status: 0,
+                query_bag_items_tick: None,
+            },
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: 7,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let colors = MsgColors {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+        };
+
+        // `recog` = `make_index`；`param`/`tag` 故意错位（4242）—— 读数位置错就必红。
+        handle_eat_cmd(
+            make_index,
+            4242,
+            4242,
+            None,
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            &world,
+            &colors,
+            None,
+        );
+
+        let mut frames: Vec<(i32, u16)> = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
+            let cm = CommandMessage::from_bytes(&body).expect("SM_* body 至少 12B");
+            frames.push((cm.recog, cm.ident));
+        }
+        assert_eq!(
+            frames,
+            vec![
+                (0, game_svr::useitem::SM_EAT_OK),
+                (7, mir2_protocol::messages::SM_HEALTHSPELLCHANGED),
+                (0, mir2_protocol::messages::SM_WEIGHTCHANGED),
+            ],
+            "成功吃药：SM_EAT_OK + SM_HEALTHSPELLCHANGED + SM_WEIGHTCHANGED"
+        );
+        let sg = &sessions["hero"];
+        assert!(
+            sg.state.item_list.is_empty(),
+            "吃掉的物品必须从 ItemList 移除"
+        );
+        assert_eq!(sg.state.wabil.hp, 15, "HP 5 + AC 10 未到上限 20 ⇒ 15");
+        assert_eq!(sg.state.wabil.max_hp, 20);
+    }
+
+    /// 测试用：带四种新手物品模板的目录（`find_by_name` 按名字查）。
+    fn newbie_catalog() -> game_svr::ability::StdItemCatalog {
+        let mut c = game_svr::ability::StdItemCatalog::new();
+        c.insert(
+            1,
+            mir2_data::StdItem {
+                name: "蜡烛".into(),
+                dura_max: 20,
+                ..Default::default()
+            },
+        );
+        c.insert(
+            2,
+            mir2_data::StdItem {
+                name: "金创药(小量)".into(),
+                std_mode: 0,
+                shape: 1,
+                ac: 10,
+                dura_max: 30,
+                ..Default::default()
+            },
+        );
+        c.insert(
+            3,
+            mir2_data::StdItem {
+                name: "木剑".into(),
+                std_mode: 5,
+                dura_max: 20,
+                ..Default::default()
+            },
+        );
+        c.insert(
+            4,
+            mir2_data::StdItem {
+                name: "布衣(男)".into(),
+                ..Default::default()
+            },
+        );
+        c.insert(
+            5,
+            mir2_data::StdItem {
+                name: "布衣(女)".into(),
+                ..Default::default()
+            },
+        );
+        c
+    }
+
+    fn newbie_names() -> NewbieItems {
+        NewbieItems {
+            candle: "蜡烛".into(),
+            basic_drug: "金创药(小量)".into(),
+            wooden_sword: "木剑".into(),
+            cloths_man: "布衣(男)".into(),
+            cloths_woman: "布衣(女)".into(),
+            item_number: 100,
+        }
+    }
+
+    /// **owner 追加的卡项 ④**：`IsNewHuman` 四件新手物品按 oracle 固定顺序入包
+    /// （`PlayObject.cs:1205-1245`：烛烛→金创药(小量)→木剑→布衣）；`Dura=DuraMax=tpl.DuraMax`。
+    /// 红检：去掉其中一件（或改顺序）⇒ 本用例必红。
+    #[test]
+    fn newbie_items_follow_oracle_order_and_slots() {
+        let catalog = newbie_catalog();
+        let names = newbie_names();
+        let mut list = Vec::new();
+        let mut n = names.item_number;
+        let warns = add_newbie_items(&mut list, &catalog, &names, 0, &mut n);
+        assert!(warns.is_empty(), "模板都在：{warns:?}");
+        assert_eq!(
+            list.iter().map(|i| i.index).collect::<Vec<_>>(),
+            vec![1, 2, 3, 4],
+            "顺序 = 烛烛/金创药/木剑/布衣(男)"
+        );
+        assert_eq!(
+            list.iter().map(|i| i.make_index).collect::<Vec<_>>(),
+            vec![101, 102, 103, 104],
+            "MakeIndex 单调递增"
+        );
+        assert_eq!((list[1].dura, list[1].dura_max), (30, 30), "金创药 30/30");
+
+        // 女号取 `ClothsWoman`（`Gender != Man`）。
+        let mut list_f = Vec::new();
+        let mut nf = 0;
+        add_newbie_items(&mut list_f, &catalog, &names, 1, &mut nf);
+        assert_eq!(list_f[3].index, 5, "女号第 4 件 = 布衣(女)（index 5）");
+    }
+
+    /// **owner 追加的卡项 ②**：`CM_QUERYBAGITEMS(81)` 回 `SM_BAGITEMS(201)`，`recog=ActorId`、
+    /// `series=ItemList.Count`，尾 = 每件 `EncodeBuffer(ClientItem)+'/'`（非空才发）。
+    /// 红检：把 `sm_bagitems` 的 ident/series 改错、或摘掉 `handle_query_bag_cmd` 的发送 ⇒ 本用例必红。
+    #[test]
+    fn query_bagitems_replies_sm_bagitems_with_items() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+
+        let catalog = newbie_catalog();
+        let names = newbie_names();
+        let mut list = Vec::new();
+        let mut n = names.item_number;
+        add_newbie_items(&mut list, &catalog, &names, 0, &mut n);
+
+        let world = mir2_world::World::new(32, 32);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert(
+            "hero".into(),
+            SessionGround {
+                state: game_svr::ground::GroundState {
+                    item_list: list,
+                    gold: 0,
+                    wabil: test_ability(),
+                },
+                actor_id: 7,
+                game_gold: 0,
+                sys_msg: None,
+                use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
+                sub: game_svr::ability::SubAbility::first_call(),
+                equip: test_equip_inputs(),
+                inc_health: 0,
+                inc_spell: 0,
+                user_unlock_durg: false,
+                hunger_status: 0,
+                query_bag_items_tick: None,
+            },
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: 7,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        handle_query_bag_cmd(
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            &world,
+        );
+        let SimToGate::SendFrame { body, .. } = rx0.try_recv().expect("必须回 SM_BAGITEMS")
+        else {
+            panic!("应为 SendFrame")
+        };
+        let cm = CommandMessage::from_bytes(&body).expect("至少 12B");
+        assert_eq!(cm.ident, mir2_protocol::messages::SM_BAGITEMS, "ident=201");
+        assert_eq!(cm.recog, 7, "recog=ActorId");
+        assert_eq!(cm.series, 4, "series=ItemList.Count=4");
+        assert!(body.len() > 12, "必须带尾（4 件 ClientItem）");
+        assert_eq!(body.last(), Some(&b'/'), "尾以 '/' 收（每件后缀）");
+
+        // 空背包 ⇒ 不发（oracle `if (!string.IsNullOrEmpty(sSendMsg))`）。
+        sessions.get_mut("hero").unwrap().state.item_list.clear();
+        sessions.get_mut("hero").unwrap().query_bag_items_tick = None;
+        handle_query_bag_cmd(
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            &world,
+        );
+        assert!(
+            matches!(rx0.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
+            "空背包不得发 SM_BAGITEMS"
         );
     }
 }

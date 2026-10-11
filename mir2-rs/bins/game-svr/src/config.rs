@@ -96,6 +96,29 @@ pub struct GateConfig {
     /// `openmir2-m2-gamesvr-host` 的装备/卸下 `FeatureChanged()`（`SM_FEATURECHANGED`）用它。
     /// 缺键用 oracle 缺省 `12`（`GameSvrConf.cs:1503`）。
     pub send_ref_msg_range: u8,
+    /// `[Setup] StartPointSize`（oracle `GameSvrConf.cs:236/1400`，缺省 `2`，`byte`）——
+    /// `GetHomeInfo` 的 `Random(StartPointSize)` 上限（`WorldServer.cs:1388-1392`）。本宿主取
+    /// `I=0`（见 `homemap` 模块头），该键只用于日志/复核。
+    pub start_point_size: u8,
+    /// `[Setup] HomeMap`（oracle `GameSvrConf.cs:1374`，缺省 `"0"`）——`StartPointList` 为空时
+    /// `GetHomeInfo` 的回落地图（`WorldServer.cs:1403`）。
+    pub home_map: String,
+    /// `[Setup] HomeX`（oracle `GameSvrConf.cs:1375`，缺省 `289`）。
+    pub home_x: i16,
+    /// `[Setup] HomeY`（oracle `GameSvrConf.cs:1376`，缺省 `618`）。
+    pub home_y: i16,
+    /// `[Setup] Candle`（oracle `GameSvrConf.cs:1304`，缺省 `"蜡烛"`）——新角色`IsNewHuman` 首件（`PlayObject.cs:1207`）。
+    pub candle: String,
+    /// `[Setup] BasicDrug`（`GameSvrConf.cs:1305`，缺省 `"金创药(小量)"`）。
+    pub basic_drug: String,
+    /// `[Setup] WoodenSword`（`GameSvrConf.cs:1303`，缺省 `"木剑"`）。
+    pub wooden_sword: String,
+    /// `[Setup] ClothsMan`（`GameSvrConf.cs:1301`，缺省 `"布衣(男)"`）。
+    pub cloths_man: String,
+    /// `[Setup] ClothsWoman`（`GameSvrConf.cs:1302`，缺省 `"布衣(女)"`）。
+    pub cloths_woman: String,
+    /// `[Setup] ItemNumber`（oracle `GameSvrConf.cs:1699`，缺省 `0`）——`M2Share.GetItemNumber()` 的计数器初值。
+    pub item_number: i32,
 }
 
 /// 默认配置文件：可执行文件同目录的 `Server.conf`（与 C# `AppContext.BaseDirectory` 一致）。
@@ -145,6 +168,16 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut can_drop_price: Option<i32> = None;
     let mut drop_item_rage: Option<u8> = None;
     let mut send_ref_msg_range: Option<u8> = None;
+    let mut start_point_size: Option<u8> = None;
+    let mut home_map: Option<String> = None;
+    let mut home_x: Option<i16> = None;
+    let mut home_y: Option<i16> = None;
+    let mut candle: Option<String> = None;
+    let mut basic_drug: Option<String> = None;
+    let mut wooden_sword: Option<String> = None;
+    let mut cloths_man: Option<String> = None;
+    let mut cloths_woman: Option<String> = None;
+    let mut item_number: Option<i32> = None;
     let mut ids_addr: Option<String> = None;
     let mut ids_port: Option<u16> = None;
     let mut db_addr: Option<String> = None;
@@ -285,6 +318,39 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                             .with_context(|| format!("SendRefMsgRange 不是合法字节：{v:?}"))?,
                     );
                 }
+                // 出生点回落（`WorldServer.cs:250-260` 的 `GetHomeInfo`）：现网 `Server.conf`
+                // 写 `HomeMap=3`/`HomeX=839`/`HomeY=668`/`StartPointSize=2`。
+                "STARTPOINTSIZE" => {
+                    start_point_size = Some(
+                        v.parse()
+                            .with_context(|| format!("StartPointSize 不是合法字节：{v:?}"))?,
+                    );
+                }
+                "HOMEMAP" => home_map = Some(v.to_string()),
+                "HOMEX" => {
+                    home_x = Some(
+                        v.parse()
+                            .with_context(|| format!("HomeX 不是合法整数：{v:?}"))?,
+                    );
+                }
+                "HOMEY" => {
+                    home_y = Some(
+                        v.parse()
+                            .with_context(|| format!("HomeY 不是合法整数：{v:?}"))?,
+                    );
+                }
+                // 新角色 `IsNewHuman` 的 4 件新手物品（`PlayObject.cs:1205-1245`）+ `GetItemNumber` 初值。
+                "CANDLE" => candle = Some(v.to_string()),
+                "BASICDRUG" => basic_drug = Some(v.to_string()),
+                "WOODENSWORD" => wooden_sword = Some(v.to_string()),
+                "CLOTHSMAN" => cloths_man = Some(v.to_string()),
+                "CLOTHSWOMAN" => cloths_woman = Some(v.to_string()),
+                "ITEMNUMBER" => {
+                    item_number = Some(
+                        v.parse()
+                            .with_context(|| format!("ItemNumber 不是合法整数：{v:?}"))?,
+                    );
+                }
                 _ => {}
             },
             _ => {}
@@ -344,6 +410,18 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         drop_item_rage: drop_item_rage.unwrap_or(3),
         // oracle 缺省值（`GameSvrConf.cs:1503`）：`[Setup]` 里没写不算错。
         send_ref_msg_range: send_ref_msg_range.unwrap_or(12),
+        // oracle 缺省值（`GameSvrConf.cs:1400/1374/1375/1376`）：`[Setup]` 里没写不算错。
+        start_point_size: start_point_size.unwrap_or(2),
+        home_map: home_map.unwrap_or_else(|| "0".to_string()),
+        home_x: home_x.unwrap_or(289),
+        home_y: home_y.unwrap_or(618),
+        // oracle 缺省值（`GameSvrConf.cs:1301-1305/1699`）。
+        candle: candle.unwrap_or_else(|| "蜡烛".to_string()),
+        basic_drug: basic_drug.unwrap_or_else(|| "金创药(小量)".to_string()),
+        wooden_sword: wooden_sword.unwrap_or_else(|| "木剑".to_string()),
+        cloths_man: cloths_man.unwrap_or_else(|| "布衣(男)".to_string()),
+        cloths_woman: cloths_woman.unwrap_or_else(|| "布衣(女)".to_string()),
+        item_number: item_number.unwrap_or(0),
         ids_addr,
         ids_port,
         db_addr,
@@ -479,6 +557,32 @@ mod tests {
         );
         let p4 = write(&dir, &format!("{base}[Setup]\nControlDropItem=maybe\n"));
         assert!(load(&p4).is_err(), "ControlDropItem 非布尔 ⇒ 必须报错");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `[Setup] StartPointSize/HomeMap/HomeX/HomeY`（`WorldServer.cs:250-260` 的 `GetHomeInfo` 回落地图）：
+    /// 现网实值 `2/3/839/668` 解析到 `GateConfig`；缺键 ⇒ oracle 源码缺省 `2/"0"/289/618`。
+    #[test]
+    fn setup_home_fallback_keys_and_defaults() {
+        let dir = std::env::temp_dir().join(format!("gs-conf-home-{}", std::process::id()));
+        let base = "[Server]\nGateAddr=127.0.0.1\nGatePort=5000\nCheckBlock=12288\nIDSAddr=127.0.0.1\nIDSPort=5600\nDBAddr=127.0.0.1\nDBPort=6000\n";
+        let p = write(
+            &dir,
+            &format!("{base}[Setup]\nStartPointSize=2\nHomeMap=3\nHomeX=839\nHomeY=668\n"),
+        );
+        let c = load(&p).unwrap();
+        assert_eq!(c.start_point_size, 2, "现网 StartPointSize=2");
+        assert_eq!(c.home_map, "3", "现网 HomeMap=3");
+        assert_eq!((c.home_x, c.home_y), (839, 668), "现网 HomeX/HomeY");
+
+        let p2 = write(&dir, base);
+        let c2 = load(&p2).unwrap();
+        assert_eq!(
+            c2.start_point_size, 2,
+            "缺键 ⇒ 缺省 2（GameSvrConf.cs:1400）"
+        );
+        assert_eq!(c2.home_map, "0", "缺键 ⇒ 缺省 \"0\"（GameSvrConf.cs:1374）");
+        assert_eq!((c2.home_x, c2.home_y), (289, 618), "缺键 ⇒ 缺省 289/618");
         std::fs::remove_dir_all(&dir).ok();
     }
 

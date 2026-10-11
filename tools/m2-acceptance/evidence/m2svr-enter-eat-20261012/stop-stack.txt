@@ -1,0 +1,17 @@
+STOPPED login-gate pid=8528
+STOPPED sel-gate pid=19768
+STOPPED game-gate pid=7712
+STOPPED game-svr pid=7692
+STOPPED LoginSrv pid=25188
+STOPPED DBSrv pid=1508
+=== M2 验收栈 端口实况 ===
+  3306  <- pid=4540 mysqld.exe  D:\mysql\mariadb-10.11.19-winx64\bin\mysqld.exe
+  6000  DOWN
+  5100  DOWN
+  5700  DOWN
+  5500  DOWN
+  5600  DOWN
+  5000  DOWN
+  7000  DOWN
+  7100  DOWN
+  7200  DOWN

@@ -43,6 +43,7 @@ param(
   [switch]$DisableAutoPlay,          # M1③ 退出路径夹具：关掉自动挂机（默认关=原行为）；见 ClientManager.RunAutoPlay
   [switch]$WriteConfigOnly,       # 只写 AppSetting.json 并退出（不构建/不起进程；供无栈自检与红检用）
   [switch]$RequireWorld,          # F4（T-12）：要求全部假人都有"本会话收到 SM_LOGON"的进世界证据（in_world == Count）才 GREEN
+  [switch]$RequireCharCreated,    # 固定起点变体①预热相：等到 N 个「创建角色」标记（只建号，不等进世界）才收工
   [switch]$SelfTestRed
 )
 
@@ -145,6 +146,7 @@ $worldOk = 0
 # 否则 run_bots 会在 `login_ok == Count` 处立即 break + kill（登录早于进世界/序列），
 # 假人没跑完 拾取→装备→卸下→丢弃→用药 就被杀，run_pair 的 bag_equip_markers 判据必红（第九格从未在真栈跑过）。
 $bagDone = 0
+$charCreated = 0
 function Read-SharedText([string]$Path) {
   # BotSrv 的 StreamWriter 以 FileShare.ReadWrite 持有：读侧也必须放行写，否则打开即抛
   if (-not (Test-Path $Path)) { return "" }
@@ -178,11 +180,18 @@ while ((Get-Date) -lt $deadline) {
     # 序列标记由 BotSrv 打到自己的 stdout（= $LogFile），读取同 stats 一样放行写侧。
     $bagDone = ([regex]::Matches((Read-SharedText $LogFile), 'M3BAGSEQ done')).Count
   }
+  if ($RequireCharCreated) {
+    # 固定起点预热：等「创建角色」标记（BotSrv `SelectChrScene.cs` 的 LogService.Info）
+    $charCreated = ([regex]::Matches((Read-SharedText $LogFile), '创建角色')).Count
+  }
   $bagNote = if ($BagEquipSequence) { " bag_seq_done=" + $bagDone + "/" + $Count } else { "" }
   Write-Output ("PROGRESS spawned=" + $spawned + " login_ok=" + $success + "/" + $Count + " in_world=" + $worldOk + "/" + $Count + $bagNote + " (src=load_stats.ndjson)")
   if ($BagEquipSequence) {
     # T-14：序列跑完（每个假人一条 done）才算收工；否则继续等（超时上限仍是 TimeoutSec）。
     if ($success -ge $Count -and $bagDone -ge $Count) { break }
+  } elseif ($RequireCharCreated) {
+    # 固定起点①预热：等到 N 个「创建角色」即 break（不要求进世界）。
+    if ($charCreated -ge $Count) { break }
   } elseif ($RequireWorld) {
     # F4（T-12）：登录不等于进世界；等"本会话收到 SM_LOGON"的进世界证据到齐。
     if ($worldOk -ge $Count) { break }
@@ -195,6 +204,7 @@ $worldRate = if ($Count -gt 0) { [math]::Round(100.0 * $worldOk / $Count, 2) } e
 $summary = [pscustomobject]@{
   count = $Count; spawned = $spawned; login_ok = $success; in_world = $worldOk
   bag_seq_done = $bagDone; bag_equip_sequence = [bool]$BagEquipSequence
+  char_created = $charCreated; require_char_created = [bool]$RequireCharCreated
   success_rate_pct = $rate; world_rate_pct = $worldRate; require_world = [bool]$RequireWorld
   timeout_sec = $TimeoutSec; log = $LogFile; stats = $statsPath
 }
@@ -212,8 +222,8 @@ if ($SelfTestRed) {
   exit 1
 }
 
-if ($success -ge $Count -and (-not $RequireWorld -or $worldOk -ge $Count) -and (-not $BagEquipSequence -or $bagDone -ge $Count)) {
-  Write-Output ("GREEN: " + $success + "/" + $Count + " 登录成功 (100%)" + $(if ($RequireWorld) { "；in_world=" + $worldOk + "/" + $Count } else { "" }) + $(if ($BagEquipSequence) { "；bag_seq_done=" + $bagDone + "/" + $Count } else { "" }))
+if ($success -ge $Count -and (-not $RequireWorld -or $worldOk -ge $Count) -and (-not $BagEquipSequence -or $bagDone -ge $Count) -and (-not $RequireCharCreated -or $charCreated -ge $Count)) {
+  Write-Output ("GREEN: " + $success + "/" + $Count + " 登录成功 (100%)" + $(if ($RequireWorld) { "；in_world=" + $worldOk + "/" + $Count } else { "" }) + $(if ($BagEquipSequence) { "；bag_seq_done=" + $bagDone + "/" + $Count } else { "" }) + $(if ($RequireCharCreated) { "；char_created=" + $charCreated + "/" + $Count } else { "" }))
   exit 0
 }
 if ($BagEquipSequence -and $bagDone -lt $Count) {
@@ -222,6 +232,10 @@ if ($BagEquipSequence -and $bagDone -lt $Count) {
 }
 if ($RequireWorld -and $worldOk -lt $Count) {
   Write-Output ("RED: 进世界证据 in_world=" + $worldOk + "/" + $Count + "（" + $worldRate + "%）未达标（-RequireWorld：要求每个假人本会话都收到 SM_LOGON）")
+  exit 1
+}
+if ($RequireCharCreated -and $charCreated -lt $Count) {
+  Write-Output ("RED: 建角证据 char_created=" + $charCreated + "/" + $Count + " 未达标（-RequireCharCreated：预热建角没完成）")
   exit 1
 }
 Write-Output ("RED: 登录成功 " + $success + "/" + $Count + " (" + $rate + "%) 未达标")

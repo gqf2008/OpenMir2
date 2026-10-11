@@ -197,6 +197,18 @@ pub fn sm_weightchanged(weight: u16, wear_weight: u8, hand_weight: u8) -> Vec<u8
     gm_data_body(header, &[])
 }
 
+/// `SM_HEALTHSPELLCHANGED`（`PlayObject.Message.cs:1736-1739` 的 `case RM_HEALTHSPELLCHANGED`）：
+/// `MakeMessage(SM_HEALTHSPELLCHANGED, processMsg.ActorId, WAbil.HP, WAbil.MP, WAbil.MaxHP)` + `SendSocket`
+/// ⇒ `Recog=ActorId`、`Param=HP`、`Tag=MP`、`Series=MaxHP`（无尾）。
+///
+/// 调用点：`BaseObject.IncHealthSpell`（`BaseObject.cs:704`）的 `HealthSpellChanged()` ⇒ `SendMsg(RM_HEALTHSPELLCHANGED)`
+/// （`CM_EAT` 的 `StdMode 0` 回帧，`PlayObject.Base.cs:2047`）。
+#[must_use]
+pub fn sm_healthspellchanged(recog: i32, hp: u16, mp: u16, max_hp: u16) -> Vec<u8> {
+    let header = command_header(recog, messages::SM_HEALTHSPELLCHANGED, hp, mp, max_hp);
+    gm_data_body(header, &[])
+}
+
 /// 见 [`sm_additem`] 段的口径表。
 #[must_use]
 pub fn sm_goldchanged(gold: i32, game_gold: i32) -> Vec<u8> {
