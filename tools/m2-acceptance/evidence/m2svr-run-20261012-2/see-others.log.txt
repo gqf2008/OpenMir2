@@ -1,0 +1,53 @@
+# M2 ② see-others：观察者 bbb(289,618) 与同屏第二角色 loadbot0(287,620) 同时在世界的服务端日志摘录
+# 源：E:\tmp\m2-acceptance\stack\game-svr.out.log（sha256 见 README）
+
+17:25:02.862 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+17:25:04.103 [INF] 会话准入注销 SessionId:14（命中）
+17:25:04.103 [DBG] IDS: 处理 1 条会话通知
+17:25:04.112 [INF] 会话准入登记 Account:loadbot0 SessionId:16 PayCost:0 PayMode:0 IP:127.0.0.1:57928
+17:25:04.112 [DBG] IDS: 处理 1 条会话通知
+17:25:04.172 [DBG] 账号级顶号：Account:loadbot0 SessionId:14 无在线会话（无需踢）
+17:25:05.158 [INF] 新用户链接... socket=288 SessionId=7960 index=1 ip=127.0.0.1 在线=1 槽=1
+17:25:05.158 [INF] 会话验证通过 Account:loadbot0 ChrName:loadbot0 SessionId:16 PayMent:1 index=1
+17:25:05.175 [DBG] sim: 新用户登记 index=1 ip=127.0.0.1（open_session 属 S2b-3）
+17:25:05.175 [INF] sim: 认证通过 ⇒ 取角色进世界 Account:loadbot0 ChrName:loadbot0 SessionId:16 GateIdx:0 （读档控制流在 load.rs；DB 请求属 S2b-2b）
+17:25:05.235 [DBG] 执行任务Id:5成功
+17:25:05.375 [INF] 收到角色数据 queryId=5 Ident=1100 Recog=1
+17:25:05.376 [INF] 进世界 ChrName:loadbot0 CurMap:0 (287,620) Dir:6 entity=5
+17:25:05.376 [DBG] 同屏展示表登记：actor=5 dir=6 light=0 feature=131072
+17:25:05.376 [INF] 进世界帧下发：socket=288 共 15 条（输入齐备的）
+17:25:05.376 [INF] 进世界标记：socket=288
+17:25:05.576 [DBG] sim: index=1 命令 Recog=12754984 Ident=1018 Param=0 Tag=0 Series=0 tail=""
+17:25:05.576 [DBG] sim: index=1 命令 Recog=1 Ident=81 Param=0 Tag=0 Series=0 tail=""
+17:25:06.177 [DBG] sim: index=1 命令 Recog=40632606 Ident=3011 Param=0 Tag=6 Series=0 tail=""
+17:25:06.979 [DBG] sim: tick #2850 clock=570000ms 处理 0 项（本地第 2850 次）
+17:25:10.876 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+17:25:12.792 [DBG] sim: index=1 命令 Recog=40632605 Ident=3011 Param=0 Tag=6 Series=0 tail=""
+17:25:17.004 [DBG] sim: tick #2900 clock=580000ms 处理 0 项（本地第 2900 次）
+17:25:18.406 [DBG] sim: index=1 命令 Recog=40632604 Ident=3011 Param=0 Tag=6 Series=0 tail=""
+17:25:18.871 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+17:25:25.028 [DBG] sim: index=1 命令 Recog=40632603 Ident=3011 Param=0 Tag=6 Series=0 tail=""
+17:25:26.862 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+17:25:27.032 [DBG] sim: tick #2950 clock=590000ms 处理 0 项（本地第 2950 次）
+17:25:31.841 [DBG] sim: index=1 命令 Recog=40632602 Ident=3011 Param=0 Tag=6 Series=0 tail=""
+17:25:33.871 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+17:25:37.051 [DBG] sim: tick #3000 clock=600000ms 处理 0 项（本地第 3000 次）
+17:25:37.853 [DBG] sim: index=1 命令 Recog=40632601 Ident=3011 Param=0 Tag=6 Series=0 tail=""
+17:25:40.430 [INF] 会话准入注销 SessionId:15（命中）
+17:25:40.437 [DBG] IDS: 处理 1 条会话通知
+17:25:40.437 [INF] 会话准入登记 Account:mir2test SessionId:17 PayCost:0 PayMode:0 IP:127.0.0.1:58065
+17:25:40.437 [DBG] IDS: 处理 1 条会话通知
+17:25:40.457 [DBG] 账号级顶号：Account:mir2test SessionId:15 无在线会话（无需踢）
+17:25:41.863 [DBG] IDS: 未处理的消息号 104（登记在切片清单里）
+17:25:43.663 [DBG] sim: index=1 命令 Recog=40632600 Ident=3011 Param=0 Tag=6 Series=0 tail=""
+17:25:47.070 [DBG] sim: tick #3050 clock=610000ms 处理 0 项（本地第 3050 次）
+17:25:47.205 [INF] 新用户链接... socket=332 SessionId=3239 index=2 ip=127.0.0.1 在线=2 槽=2
+17:25:47.230 [INF] 会话验证通过 Account:mir2test ChrName:bbb SessionId:17 PayMent:1 index=2
+17:25:47.271 [DBG] sim: 新用户登记 index=2 ip=127.0.0.1（open_session 属 S2b-3）
+17:25:47.271 [INF] sim: 认证通过 ⇒ 取角色进世界 Account:mir2test ChrName:bbb SessionId:17 GateIdx:0 （读档控制流在 load.rs；DB 请求属 S2b-2b）
+17:25:47.332 [DBG] 执行任务Id:6成功
+17:25:47.471 [INF] 收到角色数据 queryId=6 Ident=1100 Recog=1
+17:25:47.472 [INF] 进世界 ChrName:bbb CurMap:0 (289,618) Dir:7 entity=6
+17:25:47.472 [DBG] 同屏展示表登记：actor=6 dir=7 light=0 feature=131072
+17:25:47.472 [INF] 进世界帧下发：socket=332 共 15 条（输入齐备的）
+17:25:47.472 [INF] 进世界标记：socket=332

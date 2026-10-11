@@ -10,7 +10,7 @@
 
   阶段序列（每阶段写一条 {"t_wall_ms","stage"} 到 -StageLog）：
     start → login_id → login_pwd → login_submit → charsel → enter_game
-    → ingame → talk → talk_sent → walk ×N → logout_alt_x → logout_confirm → back_charsel
+    → ingame → talk → talk_sent → see_others_wait → see_others → walk ×N → logout_alt_x → logout_confirm → back_charsel
     → reenter → reentered → done
 
 .EXAMPLE
@@ -61,7 +61,15 @@ param(
   [string]$TalkText = "m2 talk ok",  # 发送的文本（ASCII，避开客户端 GBK 输入法歧义）
   [string]$TalkBox  = "",            # 可选：聊天输入框坐标 "x,y"；留空则只用回车开框（避免误点地面走路）
   [string]$TalkShot = "m2-03-talk.png",  # 直接落 M2 验收② 的规定名
-  [int]$TalkWaitMs  = 1500            # 回车发送后等服务端 `SM_HEAR` 回声 + 客户端渲染
+  [int]$TalkWaitMs  = 1500,           # 回车发送后等服务端 `SM_HEAR` 回声 + 客户端渲染
+  # ---- 看见别人（M2 验收② `m2-04-see-others`）----
+  # >0 时在「说话」之后等这么多秒（让同屏的第二角色/假人走进 AOI，触发服务端
+  # `SM_TURN(10)`+`SM_FEATURECHANGED(41)` 下行）再截一张规定名截图。
+  # ⚠ 调用方负责先把第二角色放进同图：假人（`src/BotSrv`）的库坐标须落在观察者 AOI 内。
+  # **别用 `tools/botload/run_bots.ps1` 常驻**——它判据达成后会杀 BotSrv（见
+  # tools/m2-acceptance/README.md §2.1）；直接跑 `src/BotSrv/bin/Release/BotSrv.exe`。
+  [int]$SeeOthersWaitSec = 0,
+  [string]$SeeOthersShot = "m2-04-see-others.png"
 )
 
 $ErrorActionPreference = "Stop"
@@ -324,6 +332,17 @@ if (-not $SkipTalk) {
   Start-Sleep -Milliseconds $TalkWaitMs
   Stage "talk_sent"
   Shot $TalkShot
+}
+
+# ---- 看见别人（M2 验收② `m2-04-see-others`）：等同屏第二角色进入 AOI 后截图 ----
+# 判据（owner §22）：第二角色进屏 ⇒ 观察者应收到 `SM_TURN(10)`+`SM_FEATURECHANGED(41)`
+# （AOI 下行；进程级用例在 `bins/game-svr/src/downlink.rs`）。本阶段只负责「等待 + 截图」，
+# 假人由调用方在进图前放进同图同 AOI（**常驻跑 BotSrv.exe**，不用 `run_bots.ps1`：后者达成计数即杀）。
+if ($SeeOthersWaitSec -gt 0) {
+  Stage "see_others_wait"
+  Start-Sleep -Seconds $SeeOthersWaitSec
+  Stage "see_others"
+  Shot $SeeOthersShot
 }
 
 # ---- 自动挂机：Ctrl+Alt+X 开，跑 N 秒（走路+打怪），再关 ----

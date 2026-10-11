@@ -124,7 +124,7 @@ powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/check_ports.ps1
 | 1 | `m2-01-enter-map.png` | 进图后 | 客户端进游戏、`SM_NEWMAP` 渲染完成（人物站在地图里，非黑屏）后 2–3s |
 | 2 | `m2-02-walk.png` | 走路中 | 按住方向键走出数格、坐标已变化时 |
 | 3 | `m2-03-talk.png` | 说话 | 聊天框输入并回车，本角色文本出现在聊天框后 |
-| 4 | `m2-04-see-others.png` | 看见别人 | 另一角色进入屏内时 |
+| 4 | `m2-04-see-others.png` | 看见别人 | 另一角色进入屏内时（`mir_flow.ps1 -SeeOthersWaitSec N`，见下方复现命令） |
 | 5 | `m2-05-attack.png` | 打怪 | 发起攻击、怪物受击（血条/伤害可见）时 |
 | 6 | `m2-06-pickup.png` | 捡物 | 点击地面物品、物品消失或背包出现该物品后 |
 | 7 | `m2-07-relogin.png` | 小退再进不黑屏 | 小退（CM_SOFTCLOSE）回选角 → 重进游戏、画面正常渲染后 |
@@ -134,6 +134,26 @@ powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/check_screenshots.p
 ```
 
 **失败怎么判红**：`0` 张 ⇒ `PREREQ_MISSING`(exit 2)；缺 1–6 张或存在 <1KiB 的图 ⇒ exit 1；7 张齐全非空 ⇒ exit 0。
+
+### 2.1 `m2-04-see-others` 的复现（2026-10-12 实测）
+
+「看见别人」需要**第二角色落在观察者的 AOI 内**；最省的是 `tools/botload` 假人。两条实测坑：
+
+1. **`run_bots.ps1` 判据达成即杀 BotSrv**（`login_ok`/`in_world` 达标后 `Stop-Process`）⇒ 做见人时
+   **不能**用它常驻假人（会「先进世界又先掉线」）。直接跑 `src/BotSrv/bin/Release/BotSrv.exe`（cwd=该目录，
+   读同目录 `AppSetting.json`：`ChrCount=1` / `LoginAccount=loadbot`），跑完手动收。
+2. **假人角色坐标**取自 `mir2_db.characters`（假人登录后停在库里的 `CX/CY`）；要让它与观察者同 AOI，
+   选一个库坐标相近的角色（如观察者 `bbb`@289,618 对 `loadbot0`@287,620，相距 (2,2)）。
+
+```powershell
+# 观察者用 mir2test 的第二角色（slot 2），进图后等 20s 再截 m2-04-see-others.png
+powershell -ExecutionPolicy Bypass -File tools/client/mir_flow.ps1 `
+  -Account mir2test -Password mir2pass -CharSlot 2 -OutDir E:\tmp\m2acc\seeothers `
+  -SeeOthersWaitSec 20 -SkipTalk -SkipReenter -LeaveClientRunning
+```
+
+判据（owner §22）：第二角色进屏后观察者应收到 `SM_TURN(10)`+`SM_FEATURECHANGED(41)`（AOI 下行）；
+真机证据 = 截图里**两个角色同屏**（客户端只经该帧渲染其它 actor），服务端侧 `同屏展示表登记` + 两人同时在世界的日志为佐证。
 
 > 目录占位见 `tools/m2-acceptance/shots/`（大图归档到 `E:\tmp`，不入库）。
 
@@ -157,11 +177,21 @@ powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/check_screenshots.p
 powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/export_s2c.ps1 `
   -ProxyDir E:\tmp\m2acc\run1\proxy -OutDir E:\tmp\m2acc\run1\rust
 # ③b 与金标准对账（同序 + 逐字节，diff 必须 0 或全部进白名单）
+#    口径 = owner §22 裁决：入图序 = 658→46（15 条自帧）；10 SM_TURN 是 AOI 帧，单列判（见 §2.1）。
 python tools/m2-acceptance/s2c_diff.py `
   --rust E:\tmp\m2acc\run1\rust\capture.jsonl `
   --golden mir2-rs/tests/golden/c-line-baseline-c3-20261010.jsonl `
-  --start-ident 658 --upto-ident 10 --out E:\tmp\m2acc\run1\s2c-diff.json
+  --start-ident 658 --upto-ident 46 --out E:\tmp\m2acc\run1\s2c-diff.json
 ```
+
+> **`--upto-ident 46`，不是 `10`**（owner §22，2026-10-12）：金标准 `#16 ident=10` 的 `recog=0x7AC11879 ≠ ActorId
+> 0x7C303998`，oracle 唯一发点在 `PlayObject.Message.cs:1542` 的 `if(baseObject!=this)` ⇒ **`10` 是「看见另一个 actor」的
+> AOI 出包，不是自身入图帧**；拿 `658→10` 全序判「入图序」会把一个 AOI 事件算成入图帧。故入图序只判 `658→46`，
+> `10` 由 §2.1 的 see-others 那一格单独判。**不许**把 `10` 塞进 `--upto-ident 10` 再用白名单糊过去。
+>
+> **墙钟字段**：`46 SM_DAYCHANGING` 的 `param`(=Bright) 与 `51` 的 `series`(=DayBright) 由 oracle 按**真实小时**算
+> （`SystemProcessor.GetGameTime`）⇒ 金标准（09:28 采，白天=1）与夜里重跑（=3）必然不同；这**不是** Rust 偏差，
+> 要么同刻采、要么按 §6.0-3 逐条白名单（**owner 签字**）。
 
 > **金标准用哪份**：默认是 A 线登记、`golden_fresh_check.py` 保活的当前口径金标准
 > `mir2-rs/tests/golden/c-line-baseline-c3-20261010.jsonl`（sha256=f34a6d11…；与当前
@@ -172,7 +202,8 @@ python tools/m2-acceptance/s2c_diff.py `
 
 对拍口径（`s2c_diff.py`）：
 
-- **同序**：`--start-ident 658` 起、到 `--upto-ident 10`（`SM_TURN`）止，两侧 ident 序列逐项相等；
+- **同序**：`--start-ident 658` 起、到 `--upto-ident 46`（`SM_DAYCHANGING`）止，两侧 ident 序列逐项相等；
+  （`10 SM_TURN` 是 AOI 帧，不在入图序内——见上条 owner §22 与 §2.1）
 - **等长**：逐帧 `body_len` 相等（同序天然等长）；
 - **逐字节**：`raw_hex` 在**只归一化 `recog`**（=oracle `ActorId`，会话相关随机正数）后逐字节相等；
   归一化由既有 `mir2-rs/tests/parity/loginsrv/oracle_capture.py` 的 EDCode 完成（importlib 复用）；
@@ -235,7 +266,7 @@ MySQL 3306 不可达 / 缺快照抽取件 ⇒ exit 2；任一路径 diff != 0 �
 `658,51,50,41,213,11029,42,766,54,5008,1106,52,752,811,46,10` 产出 16 条；
 用例 `enter_world_sequence_matches_golden_order_and_bytes` 用**金标准真字节回填输入**后断言
 「ident 序相等 + 16 条 `client_frame` 逐字节相等」（长度自然相等）。
-`s2c_diff.py --upto-ident 10` 就是这条判据在**整栈验收**时的同一口径。
+`s2c_diff.py --upto-ident 46`（owner §22 收窄后）就是这条判据在**整栈验收**时的同一口径。
 
 **生产路径**已下发 **658**（公告，本片新接）+ **51**（`SM_NEWMAP`）；其余 14 条由 `EnterWorldInputs`
 的 `Option` 字段留空 ⇒ 不产出（**登记，不猜字节**，逐条见 §5.1 与本片新增台账

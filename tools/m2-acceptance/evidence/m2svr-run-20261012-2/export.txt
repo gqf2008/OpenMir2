@@ -1,0 +1,25 @@
+--- 1) segment_frames（切帧） ---
+FRAMES=27 by_dir={'c2s': 12, 's2c': 15} by_port={'7200': 27}
+FRAMES_SHA256=6dae70d73ea387c8ec1da36a3bdf1f4ce833176a5e96506129304cb6121baa7f
+OUT=E:/tmp/m2acc/run1/rust
+--- 2) GoldenExport（解码成 capture.jsonl） ---
+LAYOUT_OK head_block=16 act_prefix='+' layouts={'6': 8, '7': 8, '9': 8, '10': 8, '811': 'seg(L=20,sep=47,trail=False,fixed)', '201': 'seg(L=124,sep=47,trail=True,header_series)'} -> E:\tmp\m2acc\run1\rust\body_layout.json
+LAYOUT head_block=16 act_prefix='+' struct_then_rest=6(SM_RUSH)=8,7(SM_RUSHKUNG)=8,9(SM_BACKSTEP)=8,10(SM_TURN)=8
+LAYOUT segmented=201(SM_BAGITEMS)=seg(seg_len=124,sep=/,trailing=True,header_series),811(SM_ADJUST_BONUS)=seg(seg_len=20,sep=/,trailing=False,fixed=3)
+FRAMES=27 decoded=27 heartbeat=0 decode_error=0 seg_mismatch=0 roundtrip_fail=0
+OUT=E:\tmp\m2acc\run1\rust\capture.jsonl
+EXPORTED E:\tmp\m2acc\run1\rust\capture.jsonl
+--- 3) replay（既有门禁：逐字节往返 + 字段对拍） ---
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running `target\debug\replay.exe 'E:\tmp\m2acc\run1\rust\capture.jsonl' --no-coverage`
+== replay report: E:\tmp\m2acc\run1\rust\capture.jsonl ==
+frames: 27 (其中纯字符串帧 1), edcode vectors: 0
+内部帧（MemoryPack）: 0
+外部 kind 向量（storage 等）: 0
+明文动作帧(#+…!): 0（其中 body 口径与导出器不符 0，A-9）
+byte mismatches (①): 0
+field mismatches (②): 0
+distinct idents: 23
+unknown idents (未实现): 0
+RESULT: GREEN
+GREEN: Rust 侧 s2c 帧已导出为 capture.jsonl 且 replay 自洽（交给 s2c_diff.py 与金标准对账）
