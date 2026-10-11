@@ -1,0 +1,15 @@
+M2 验收① 端口所有权实拍（repo=E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr）
+PORT 5000  <- pid=17692 [rust] E:\tmp\openmir2-m2svr-target\debug\game-svr.exe
+            cmd: "E:\tmp\openmir2-m2svr-target\debug\game-svr.exe" E:\MirServer\M2GameSvr\Server.conf 
+            entry=game-svr expected=game-svr verdict=ok
+PORT 7000  <- pid=29720 [rust] E:\tmp\openmir2-m2svr-target\debug\login-gate.exe
+            cmd: "E:\tmp\openmir2-m2svr-target\debug\login-gate.exe" E:\MirServer\LoginGate\config.conf 
+            entry=login-gate expected=login-gate verdict=ok
+PORT 7100  <- pid=29768 [rust] E:\tmp\openmir2-m2svr-target\debug\sel-gate.exe
+            cmd: "E:\tmp\openmir2-m2svr-target\debug\sel-gate.exe" E:\MirServer\SelGate\config.conf 
+            entry=sel-gate expected=sel-gate verdict=ok
+PORT 7200  <- pid=16352 [rust] E:\tmp\openmir2-m2svr-target\debug\game-gate.exe
+            cmd: E:\tmp\openmir2-m2svr-target\debug\game-gate.exe E:/MirServer/RunGate/config.conf
+            entry=game-gate expected=game-gate verdict=ok
+EVIDENCE E:\tmp\m2-acceptance\ports-20261012-013247.json
+GREEN: 四个端口的所有权均为 Rust 二进制（验收①可判）

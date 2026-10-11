@@ -1,0 +1,53 @@
+{
+  "act_prefix": "+",
+  "constants_source": "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\.claude\\worktrees\\m2-svr\\mir2-rs\\crates\\protocol\\src\\messages.rs",
+  "head_block": 16,
+  "known_idents": {
+    "SM_ADJUST_BONUS": 811,
+    "SM_BACKSTEP": 9,
+    "SM_BAGITEMS": 201,
+    "SM_RUSH": 6,
+    "SM_RUSHKUNG": 7,
+    "SM_TURN": 10
+  },
+  "layouts": {
+    "10": {
+      "kind": "struct_then_rest",
+      "name": "SM_TURN",
+      "struct_len": 8
+    },
+    "201": {
+      "count_kind": "header_series",
+      "kind": "segmented",
+      "name": "SM_BAGITEMS",
+      "seg_len": 124,
+      "sep": 47,
+      "trailing_sep": true
+    },
+    "6": {
+      "kind": "struct_then_rest",
+      "name": "SM_RUSH",
+      "struct_len": 8
+    },
+    "7": {
+      "kind": "struct_then_rest",
+      "name": "SM_RUSHKUNG",
+      "struct_len": 8
+    },
+    "811": {
+      "count": 3,
+      "count_kind": "fixed",
+      "kind": "segmented",
+      "name": "SM_ADJUST_BONUS",
+      "seg_len": 20,
+      "sep": 47,
+      "trailing_sep": false
+    },
+    "9": {
+      "kind": "struct_then_rest",
+      "name": "SM_BACKSTEP",
+      "struct_len": 8
+    }
+  },
+  "source": "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\.claude\\worktrees\\m2-svr\\mir2-rs\\crates\\protocol\\src\\frame.rs"
+}

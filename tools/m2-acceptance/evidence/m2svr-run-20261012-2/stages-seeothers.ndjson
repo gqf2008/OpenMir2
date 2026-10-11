@@ -1,0 +1,16 @@
+﻿{"t_wall_ms":1791739518770,"stage":"start"}
+{"t_wall_ms":1791739534939,"stage":"login_id"}
+{"t_wall_ms":1791739537538,"stage":"login_pwd"}
+{"t_wall_ms":1791739540127,"stage":"login_submit"}
+{"t_wall_ms":1791739545991,"stage":"charsel"}
+{"t_wall_ms":1791739546023,"stage":"enter_game"}
+{"t_wall_ms":1791739547747,"stage":"notice_poll"}
+{"t_wall_ms":1791739568739,"stage":"ingame"}
+{"t_wall_ms":1791739570795,"stage":"see_others_wait"}
+{"t_wall_ms":1791739590804,"stage":"see_others"}
+{"t_wall_ms":1791739590851,"stage":"logout_button"}
+{"t_wall_ms":1791739594623,"stage":"logout_alt_x"}
+{"t_wall_ms":1791739605678,"stage":"logout_menu"}
+{"t_wall_ms":1791739610798,"stage":"logout_confirm"}
+{"t_wall_ms":1791739619680,"stage":"back_charsel"}
+{"t_wall_ms":1791739619758,"stage":"done"}

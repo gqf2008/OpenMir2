@@ -1,0 +1,28 @@
+# 帧 52 SM_ABILITY 尾 = record::encode_ability(WAbil)（40B）逐字段对照：M0 金标准 vs Rust 生产路径
+# 解码口径：capture.jsonl 的 raw_hex -> split_client_frame -> edcode_decode(rest) -> Ability 22 字段
+#   （Sequential 声明序 = src/OpenMir2/Packets/ClientPackets/Ability.cs）
+# golden bytes: 0100000000000101000000000f000f0013000f0000000000000000000a0000000e003200000f000c
+# rust   bytes: 01000000000000000000000013000f000000000000000000000000000a00000000003200000f000c
+field                golden       rust
+level                     1          1
+reserved1                 0          0
+ac                        0          0
+mac                       0          0
+dc                      257          0  <-- DIFF
+mc                        0          0
+sc                        0          0
+hp                       15         19  <-- DIFF
+mp                       15         15
+max_hp                   19          0  <-- DIFF
+max_mp                   15          0  <-- DIFF
+reserved2                 0          0
+exp_count                 0          0
+exp_max_count             0          0
+exp                       0          0
+max_exp                  10         10
+weight                   14          0  <-- DIFF
+max_weight               50         50
+wear_weight               0          0
+max_wear_weight          15         15
+hand_weight               0          0
+max_hand_weight          12         12
