@@ -198,6 +198,8 @@ function Test-Entry([string]$Desc, [string]$Got, [string]$Expect) {
     })
 }
 Test-Entry "entry/表 5000=game-svr"     (Get-M2ExpectedEntry -Port 5000) "game-svr"
+Test-Entry "entry/表 7000=login-gate"   (Get-M2ExpectedEntry -Port 7000) "login-gate"
+Test-Entry "entry/表 7100=sel-gate"     (Get-M2ExpectedEntry -Port 7100) "sel-gate"
 Test-Entry "entry/表 7200=game-gate"    (Get-M2ExpectedEntry -Port 7200) "game-gate"
 Test-Entry "entry/基名取 game-svr.exe"  (Get-M2EntryName -Exe "E:\x\target\debug\game-svr.exe" -Name "game-svr.exe") "game-svr"
 Test-Entry "entry/5000+game-svr=ok"     (Get-M2EntryVerdict -Port 5000 -EntryName "game-svr") "ok"

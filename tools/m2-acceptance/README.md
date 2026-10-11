@@ -49,7 +49,7 @@ powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/run_acceptance.ps1 
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/selftest.ps1
-# 29 条口径全 OK ⇒ exit 0；任何一条不符 ⇒ exit 1（见 §8）
+# 31 条口径全 OK ⇒ exit 0；任何一条不符 ⇒ exit 1（见 §8）
 ```
 
 ---
@@ -307,7 +307,8 @@ cargo run -p msgcodegen -- --check
 | s2c 对账（同序） | `s2c_diff.py --rust <重导件>` | `GREEN`（16 条同序 + 逐字节 0，归一化仅 recog） | 同上 |
 | s2c 红检 | 改 recog ⇒ 仍 GREEN；改尾一字节 ⇒ RED | 归一化只吸 recog、字节差异必红 | 同日志 / `E:\tmp\rust-body-broken.jsonl` |
 | 三路径 DB diff 驱动 | `check_db_paths.ps1 -Mode diff` 合成夹具 | 同件 GREEN / 改一字段 RED（复用 `scoped_diff.py`） | 控制台（rc 0 / rc 1） |
-| **手册判红自检** | `selftest.ps1` | **29/29 OK**：②截图 4 例、③b s2c 4 例（尾字节改坏⇒RED、只改 recog⇒GREEN）、③c DB 3 例、①端口实况判属 1 例、①a 分类器 5 例（R2-1）、①b 端口表→期望入口 6 例、**⓪ preflight 4 例（本片）**、聚合器 2 例 | `E:\tmp\openmir2-watch\pi-m2svr-pf-selftest.log` |
+| **手册判红自检** | `selftest.ps1` | **31/31 OK**：②截图 4 例、③b s2c 4 例（尾字节改坏⇒RED、只改 recog⇒GREEN）、③c DB 3 例、①端口实况判属 1 例、①a 分类器 5 例（R2-1）、①b 端口表→期望入口 8 例、⓪ preflight 4 例、聚合器 2 例 | `E:\tmp\openmir2-watch\pi-m2svr-pf-selftest.log` |
+| **R3e-1 端口表补全（本片）** | `Test-Entry` 补 `7000=login-gate` / `7100=sel-gate`（原只断言 5000/7200） | 表漂移（`7000→login-srv`）⇒ 对应用例 **FAILED**（`expect=login-gate actual=login-srv`）；还原后 31/31 | `E:\tmp\openmir2-watch\pi-m2svr-pf-redcheck-porttable.log` |
 | **⓪ 前置门（本片）** | `preflight.ps1`（工具/输入/金标准身份+schema） | 本机齐备 ⇒ `SUMMARY ok=18 missing=0 red=0`、exit 0；`-PythonCmd m2-no-such-python-xyz` ⇒ exit 2(`PREREQ_MISSING`)；`-SkipTools -ClientDir <不存在>` ⇒ exit 2；坏 schema 金标准（`-AllowGoldenDrift` 隔离）⇒ exit 1(`RED`) | `E:\tmp\openmir2-watch\pi-m2svr-pf-preflight.log` |
 | **⓪ 红检·schema** | 把 `golden:schema` 强制 `OK` | `preflight/金标准 schema 坏=RED` **FAILED**（`expect_rc=1 actual_rc=0`）⇒ `SUMMARY total=28 failed=1`；还原后 29/29 | `E:\tmp\openmir2-watch\pi-m2svr-pf-redcheck-schema.log` |
 | **⓪ 红检·工具** | 把 `Get-Command` 探针强制命中 | `preflight/缺工具=PREREQ` **FAILED**（`expect_rc=2 actual_rc=0`）⇒ `SUMMARY total=28 failed=1`；还原后 29/29 | `E:\tmp\openmir2-watch\pi-m2svr-pf-redcheck-tool.log` |
@@ -328,7 +329,7 @@ cargo run -p msgcodegen -- --check
 - `tools/m2-acceptance/portclassify.ps1`（R2-1 的共享分类器；本片加「端口表→期望入口」的第二层牙齿：`Get-M2ExpectedEntry`/`Get-M2EntryName`/`Get-M2EntryVerdict`）；
 - `tools/m2-acceptance/preflight.ps1`（**本片新增：⓪ 前置门**——工具/仓库输入/金标准身份+schema）；`run_acceptance.ps1`/`export_s2c.ps1`/`check_db_paths.ps1`（本片：接入 ⓪、缺 python 显式报 `PREREQ_MISSING`）；`selftest.ps1`（本片：+4 条 ⓪ 用例、实况判属改读同一次证据去竞态）；
 - `E:\tmp\m2-acceptance\`：无栈自检产生的 `ports-*.json`/`shots-*.json`/`run-*`/`s2c-selftest/` 等，保留作证据；
-- `E:\tmp\m2-acceptance\selftest-*\`：`selftest.ps1` 的 29 条构造夹具与 `selftest.json`（证据，保留）；
+- `E:\tmp\m2-acceptance\selftest-*\`：`selftest.ps1` 的 31 条构造夹具与 `selftest.json`（证据，保留）；
 - `E:\tmp\m2-acceptance\preflight-*.json`：本片 `preflight.ps1` 的齐备/缺工具/坏 schema 三组证据（保留）；
 - `E:\tmp\openmir2-watch\pi-m2svr-pf-*.log`：本片前置门、29 条自检、无栈自检、两条红检原始输出（证据，保留）；
 - `E:\tmp\openmir2-watch\pi-m2svr-*.log`：四门禁、红检、自检原始输出；
@@ -347,7 +348,7 @@ cargo run -p msgcodegen -- --check
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/selftest.ps1
-# 29 条全 OK ⇒ exit 0；任何一条不符 ⇒ exit 1（SELFTEST FAIL）
+# 31 条全 OK ⇒ exit 0；任何一条不符 ⇒ exit 1（SELFTEST FAIL）
 ```
 
 | # | 步骤 | 构造输入 | 期望 |
@@ -373,7 +374,7 @@ powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/selftest.ps1
 | 12c | ①a | 分类器：`E:\tmp\openmir2-m2svr-target\…\game-svr.exe` | `rust` |
 | 12d | ①a | 分类器：`C:\dev\game-svr.exe`（基名回落） | `rust`（**R2-1**：旧内联判据在此会算成非 Rust） |
 | 12e | ①a | 分类器：`C:\dev\foo.exe` | `unknown` |
-| 12f | ①b | 端口表：`5000` / `7200`（2 例） | `game-svr` / `game-gate` |
+| 12f | ①b | 端口表：`5000` / `7000` / `7100` / `7200`（4 例；**R3e-1** 补全 7000/7100） | `game-svr` / `login-gate` / `sel-gate` / `game-gate` |
 | 12g | ①b | 入口基名：`…\target\debug\game-svr.exe` | `game-svr`（去目录/去扩展名/小写） |
 | 12h | ①b | 归属：`5000` + `game-svr` | `ok` |
 | 12i | ①b | 归属：`5000` + `login-gate`（接错线） | `cross`（→ `check_ports.ps1` 判红） |
