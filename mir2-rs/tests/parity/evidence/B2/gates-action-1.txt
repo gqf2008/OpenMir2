@@ -1,0 +1,79 @@
+== B2/M4 动作批次 1 门禁（HEAD 0ac357c3） 2026-10-11 10:42:25
+--- cargo fmt --all -- --check ---
+exit=0
+--- cargo clippy --workspace --all-targets --offline -- -D warnings ---
+exit=0
+--- cargo test --workspace --offline (汇总) ---
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.54s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+exit=0
+--- cargo run -p msgcodegen -- --check ---
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+exit=0
+--- powershell run_dispatch_regression.ps1 -RequireRustFlipped ---
+== 脚本派发回归门禁（B-8 / T-4）
+   语料: E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\b2\mir2-rs\tests\parity\script-dispatch\dispatch-regression-120.tsv
+PASS  corpus-sha256  (c0d8b695bbdf3139，期望 c0d8b695bbdf3139)
+      PASS  axis-precondition  (条件 207 成员/动作 352 成员；字段序号≠枚举值 0；两套键不同 0)
+      PASS  corpus-nonempty  (120 行（E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\b2\mir2-rs\tests\parity\script-dispatch\dispatch-regression-120.tsv）)
+      PASS  no-index-out-of-range-under-current-rule  (现行口径：0/120 抛)
+      PASS  legacy-rule-still-throws  (旧位移口径：120 抛 / 期望 120)
+      PASS  all-lines-affected-by-shift  (两口径派发不同 120/120)
+      == gate: 5 PASS / 0 FAIL
+   [信息] Rust 已翻转（field_index）⇒ 请把本行改成硬判据（-RequireRustFlipped）并同步 T-4/README
+== gate GREEN（语料哈希一致 + 5 条判据全过 + Rust 已翻转）
+exit=0
+--- python -I tools/flow-diff.py tests/parity/flow-cases.json ---
+       #items=100000
+OK   商店-比奇国王@main（行会入口页）: 3 行一致
+       msg 11009 0 0 0 0 测试NPC/我是比齐皇宫管理人,掌管着许多事物。希望我能对你有帮助\ \<请求创建行会./@@buildguildnow>\<申请行会战争./@guildwar>\<如何建立行会./@buildguildexp>\<有关行会战争./@guildwarexp>\<申请攻城战争./@requestcastlewarA>\<进献[祈福项链]/@rw01>\<探询[祈福项链]的秘密/@rw02>
+       #gold=100000
+       #items=祈福项链
+EXEMPT-OK 商店-比奇国王@rw03（祈福项链复原）: Rust 落点与登记一致（5 行）
+
+== 用例 4：一致 3 / 不一致 0 ==
+exit=0
+--- parse-stats --require-implemented（DoD 硬判据：此刻按预期红）---
+  [ScriptError] Market_Def/LEGM2.CC假人NPC/假人上线NPC-jiaren.txt 行350: AbilityAdd 4 30 60
+--require-implemented：仍有 17 个语料派发目标未实现
+exit=1

@@ -46,7 +46,10 @@ class FixtureItemSystem : DispatchProxy
             case "GetStdItemIdx":
                 return ByName.TryGetValue((string)args[0], out var foundIdx) ? foundIdx : (ushort)0;
             case "GetStdItemName":
-                return ByIdx.TryGetValue((ushort)args[0], out var itemName) ? itemName : "";
+                // DispatchProxy 传进来的实参是 object：直接 `(ushort)args[0]` 会在实参为 int 时
+                // 抛 InvalidCastException（拆箱要求精确类型）。参照实现传的是 int（`userItem.Index`
+                // 为 int 局部变量），故用 Convert 归一——这是夹具缺口，不是 oracle 行为差异。
+                return ByIdx.TryGetValue(Convert.ToUInt16(args[0]), out var itemName) ? itemName : "";
             case "GetStdItem":
                 {
                     var obj = args[0];
@@ -141,14 +144,18 @@ class RunPlayer : DispatchProxy
             case "SendAddItem":
                 {
                     var it = (UserItem)args[0];
-                    Items.Add(it);
+                    // 夹具缺口修正：真实 `PlayObject.SendAddItem` 只组装 ClientItem 下发给客户端，
+                    // **不**改 `ItemList`（入包由调用方 `playerActor.ItemList.Add` 做）。
+                    // 夹具原来在这里也 Add 一次 ⇒ 同一次给物会让 Items 多一件（#items 会被算重）。
                     Log.Add($"additem {ItemNames.GetValueOrDefault(it.Index, "?")} 1");
                     return null;
                 }
             case "SendDelItems":
                 {
                     var it = (UserItem)args[0];
-                    Items.Remove(it);
+                    // 同上：真实 `SendDelItems` 只下发删除消息，`ItemList` 由调用方 `RemoveAt` 维护。
+                    // 夹具原来在这里也 Remove 一次 ⇒ `GotoLableTakeItem` 随后的 `RemoveAt(i)` 下标错位
+                    // （ArgumentOutOfRangeException），是夹具缺口而非 oracle 缺陷。
                     Log.Add($"delitem {ItemNames.GetValueOrDefault(it.Index, "?")} 1");
                     return null;
                 }
@@ -162,6 +169,25 @@ class RunPlayer : DispatchProxy
                 return null;
             case "get_ItemList":
                 return Items;
+            case "QuestCheckItem":
+                {
+                    // C# `ConditionOfCheckItem` 靠 QuestCheckItem 填 n1C 再与 nParam2 比。
+                    // 夹具原先未实现本方法（DispatchProxy 回默认）⇒ n1C 恒 0 ⇒ `checkitem 祈福项链 1` 恒假，
+                    // @main 落到 #elsay——这是**夹具缺口**，不是 oracle/Rust 行为差异（Rust 按玩家背包正确判真）。
+                    var qciName = (string)args[0];
+                    var qciCnt = 0;
+                    foreach (var it in Items)
+                    {
+                        if (string.Equals(ItemNames.GetValueOrDefault(it.Index, ""), qciName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            qciCnt++;
+                        }
+                    }
+                    args[1] = qciCnt;   // ref int n1C
+                    args[2] = 0;        // ref int nMaxDura
+                    args[3] = 0;        // ref int nDura
+                    return null;
+                }
             case "get_SlaveList":
                 // IPlayerActor/IActor 的声明类型是 IList<IMonsterActor>
                 return new List<IMonsterActor>();

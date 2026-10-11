@@ -8,7 +8,8 @@
 ## 一条命令
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/script-dispatch/run_dispatch_regression.ps1
+# Rust 已翻转（2026-10-11 起）⇒ 带上 -RequireRustFlipped，让"Rust 口径"也成为硬判据
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/script-dispatch/run_dispatch_regression.ps1 -RequireRustFlipped
 powershell -ExecutionPolicy Bypass -File .../run_dispatch_regression.ps1 -SelfTestRed   # 阳性对照
 ```
 
@@ -51,8 +52,11 @@ powershell -ExecutionPolicy Bypass -File .../run_dispatch_regression.ps1 -SelfTe
 - **本目录只管 C#/oracle 侧**（探针直接跑生产类型 `ConditionProcessingSys`，不依赖整栈、不需要 DB/客户端）。
 - **Rust 侧**（`crates/script`）不在本门禁内。协调者已裁定 **Rust 侧同批翻转**
   （`crates/script/src/parser.rs` 的 `field_index - 1` → `field_index`，见设计文档 §17），执行归 B 线；
-  翻转后 flow-diff 期望回到 **3 一致 / 0 不一致**。运行器最后会打印一行"Rust 侧当前口径"
-  （读 `crates/script/src/parser.rs`）：翻转前显示"待 B 线执行"，翻转后显示"已翻转 ⇒ 请把本行改成硬判据"
-  （运行器已有 `-RequireRustFlipped` 开关，翻转后加上它即可让 Rust 口径也变成判据）。
+  **运行器最后会打印一行"Rust 侧当前口径"**（读 `crates/script/src/parser.rs`，只扫代码不扫注释）。
+
+  **2026-10-11 状态：Rust 侧已由 B2/M4 同批翻转**（`parser.rs` 两处 `field_index-1` → `field_index`），
+  故现在一律带 `-RequireRustFlipped` 把 Rust 口径变成硬判据（命令见上）；门禁实测 `gate GREEN（… + Rust 已翻转）`。
+  注意：翻转本身只把"派发落点"对齐 C#，flow-diff 是否一致还取决于**处理器是否已实现**——
+  翻转后 flow-diff 会从旧位移下的伪一致变成"命中正确处理器但 NotImplemented"，这是预期，靠补 handler 收敛。
 - 动作侧（6286 行）同样 100% 受位移影响，但抽样 400 行实测**没有**"参数形状必抛"这一类
   （见 `expected.json.action_side`）⇒ 不另设崩溃夹具，由效果级对拍覆盖。

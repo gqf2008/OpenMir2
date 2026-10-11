@@ -99,6 +99,71 @@ fn report_usage(t: &Totals) {
     );
 }
 
+/// 覆盖报告：语料用到的派发目标里，Rust 侧**尚未实现**的清单（B2/M4 的 DoD 判据）。
+///
+/// 返回 `(未实现目标数, 逐条文本)`。口径与 `engine/dispatch.rs` 的实现集合同源：
+/// - 注册处理器：看 `IMPLEMENTED_CONDITIONS` / `IMPLEMENTED_EXECUTIONS`；
+/// - `ScriptEngine` switch 分支：看 `IMPLEMENTED_SWITCH_*`；
+/// - 两者都没有（C# 也静默忽略）⇒ 不算缺口。
+fn coverage_lines(t: &Totals) -> (usize, Vec<String>) {
+    use mir2_script::engine::dispatch as d;
+    use std::collections::BTreeMap;
+    let mut undone: BTreeMap<String, (usize, Vec<i32>)> = BTreeMap::new();
+    let mut done_calls = 0usize;
+    let mut done_targets = 0usize;
+    for (code, n) in &t.cond_usage {
+        match d::condition_target_status(*code) {
+            Some(true) => {
+                done_calls += n;
+                done_targets += 1;
+            }
+            Some(false) => {
+                let name = d::condition_target_name(*code).unwrap_or("?").to_string();
+                let e = undone.entry(format!("条件/{name}")).or_default();
+                e.0 += n;
+                e.1.push(*code);
+            }
+            None => {}
+        }
+    }
+    for (code, n) in &t.act_usage {
+        match d::execution_target_status(*code) {
+            Some(true) => {
+                done_calls += n;
+                done_targets += 1;
+            }
+            Some(false) => {
+                let name = d::execution_target_name(*code).unwrap_or("?").to_string();
+                let e = undone.entry(format!("动作/{name}")).or_default();
+                e.0 += n;
+                e.1.push(*code);
+            }
+            None => {}
+        }
+    }
+    let mut lines = Vec::new();
+    lines.push(format!(
+        "语料派发目标覆盖：已实现 {done_targets} 个（{done_calls} 次调用）；未实现 {} 个（按调用次数降序）：",
+        undone.len()
+    ));
+    let mut items: Vec<_> = undone.into_iter().collect();
+    items.sort_by(|a, b| b.1 .0.cmp(&a.1 .0).then(a.0.cmp(&b.0)));
+    for (label, (n, codes)) in &items {
+        let mut codes = codes.clone();
+        codes.sort_unstable();
+        codes.dedup();
+        lines.push(format!(
+            "  {label}: {n} 次（code {}）",
+            codes
+                .iter()
+                .map(|c| c.to_string())
+                .collect::<Vec<_>>()
+                .join("/")
+        ));
+    }
+    (items.len(), lines)
+}
+
 fn walk_txt(dir: &Path, out: &mut Vec<PathBuf>) {
     let mut entries: Vec<_> = match std::fs::read_dir(dir) {
         Ok(rd) => rd.filter_map(std::result::Result::ok).collect(),
@@ -235,7 +300,7 @@ fn stats_json(t: &Totals) -> String {
     o
 }
 
-pub fn run(envir: &Path, json_out: Option<PathBuf>) -> ExitCode {
+pub fn run(envir: &Path, json_out: Option<PathBuf>, require_implemented: bool) -> ExitCode {
     if !envir.is_dir() {
         eprintln!("Envir 目录不存在: {}", envir.display());
         return ExitCode::FAILURE;
@@ -427,6 +492,11 @@ pub fn run(envir: &Path, json_out: Option<PathBuf>) -> ExitCode {
     );
     report_usage(&totals);
 
+    let (undone, cov_lines) = coverage_lines(&totals);
+    for line in &cov_lines {
+        println!("{line}");
+    }
+
     if !totals.errors.is_empty() {
         println!("错误明细（前 20 条）:");
         for e in totals.errors.iter().take(20) {
@@ -441,6 +511,9 @@ pub fn run(envir: &Path, json_out: Option<PathBuf>) -> ExitCode {
     }
     // 退出码：有解析异常（LoadPanic）→ 非零；解析错误行属语料事实，不影响退出码
     if totals.panics > 0 {
+        ExitCode::FAILURE
+    } else if require_implemented && undone > 0 {
+        println!("--require-implemented：仍有 {undone} 个语料派发目标未实现");
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS

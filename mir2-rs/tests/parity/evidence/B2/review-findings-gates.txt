@@ -1,0 +1,65 @@
+== B2/M4 审查发现收口批次 门禁证据 (2026-10-11 11:05:22) ==
+
+## git HEAD
+2804114612d9600cc799711f3bed71dd21d59c2e
+
+## 1) cargo fmt --all -- --check
+OK: fmt clean
+
+## 2) cargo clippy --workspace --all-targets --offline -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.93s
+
+## 3) cargo test --workspace --offline（汇总）
+     16 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      1 test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      1 test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      1 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+      1 test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+      1 test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+      1 test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+      1 test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+      1 test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+      1 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+      1 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+      1 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+      1 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+      2 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.70s
+      1 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+      1 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+      1 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+      1 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+      1 test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+      1 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+      3 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+      1 test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+      1 test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+      1 test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+failed 总数: 0
+
+## 4) cargo run -q -p msgcodegen -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+
+## 5) 派发回归门禁 run_dispatch_regression.ps1 -RequireRustFlipped
+== 脚本派发回归门禁（B-8 / T-4）
+   语料: E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\b2\mir2-rs\tests\parity\script-dispatch\dispatch-regression-120.tsv
+PASS  corpus-sha256  (c0d8b695bbdf3139，期望 c0d8b695bbdf3139)
+      PASS  axis-precondition  (条件 207 成员/动作 352 成员；字段序号≠枚举值 0；两套键不同 0)
+      PASS  corpus-nonempty  (120 行（E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\b2\mir2-rs\tests\parity\script-dispatch\dispatch-regression-120.tsv）)
+      PASS  no-index-out-of-range-under-current-rule  (现行口径：0/120 抛)
+      PASS  legacy-rule-still-throws  (旧位移口径：120 抛 / 期望 120)
+      PASS  all-lines-affected-by-shift  (两口径派发不同 120/120)
+      == gate: 5 PASS / 0 FAIL
+   [信息] Rust 已翻转（field_index）⇒ 请把本行改成硬判据（-RequireRustFlipped）并同步 T-4/README
+== gate GREEN（语料哈希一致 + 5 条判据全过 + Rust 已翻转）
+
+## 6) 覆盖报告 parse-stats --require-implemented（语料派发目标）
+语料派发目标覆盖：已实现 106 个（11829 次调用）；未实现 0 个（按调用次数降序）：
+（parse-stats --require-implemented exit 0）
+
+## 7) python -I tools/flow-diff.py tests/parity/flow-cases.json
+       msg 11009 0 0 0 0 测试NPC/我是比齐皇宫管理人,掌管着许多事物。希望我能对你有帮助\ \<请求创建行会./@@buildguildnow>\<申请行会战争./@guildwar>\<如何建立行会./@buildguildexp>\<有关行会战争./@guildwarexp>\<申请攻城战争./@requestcastlewarA>\<进献[祈福项链]/@rw01>\<探询[祈福项链]的秘密/@rw02>
+       #gold=100000
+       #items=祈福项链
+EXEMPT-OK 商店-比奇国王@rw03（祈福项链复原）: Rust 落点与登记一致（4 行）
+
+== 用例 4：一致 3 / 不一致 0 ==

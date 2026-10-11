@@ -145,6 +145,25 @@ pub fn text_as_string_list_text(lines: &[String]) -> String {
     out
 }
 
+/// `StringList.SaveToFile` 的编码口径：`Encoding.GetEncoding("gb2312")`（cp936≈GBK，**无 BOM**），
+/// 逐行 `WriteLine`（每行后接 CRLF，由调用方拼好）。
+///
+/// 逐字符编码：不可映射字符回退单字节 `'?'`，与 .NET 编码器 best-fit 失败时的 `?` 回退同类；
+/// **不用** one-shot `Encoding::encode` 的整串替换（它会写 `&#NNNN;` 数值字符引用，会把列表写坏）。
+pub fn encode_gb2312(text: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(text.len());
+    let mut buf = [0u8; 4];
+    for c in text.chars() {
+        let (bytes, _, had_errors) = encoding_rs::GBK.encode(c.encode_utf8(&mut buf));
+        if had_errors {
+            out.push(b'?');
+        } else {
+            out.extend_from_slice(&bytes);
+        }
+    }
+    out
+}
+
 /// FNV-1a 64（与 digest.rs / C# harness 同算法，用于原文摘要）。
 pub fn fnv1a64(bytes: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
