@@ -1,0 +1,26 @@
+== C#DBSrv侧  (session=csharp-20261012-021403 prefix=m1c021402 bots=1) ==
+ops_runner: run_bots.ps1 -Count 1 -Prefix m1c021402 -NewAccount -Port 7000 -FixedNewChr -NewChrJob 1 -NewChrHair 2 -NewChrSex 0
+ops_markers: {}
+scoped_rows: {"before": 0, "after": 115}
+delta: {"mir2_account.account": {"added": 1, "removed": 0}, "mir2_account.account_protection": {"added": 1, "removed": 0}, "mir2_db.characters": {"added": 1, "removed": 0}, "mir2_db.characters_ablity": {"added": 1, "removed": 0}, "mir2_db.characters_bagitem": {"added": 46, "removed": 0}, "mir2_db.characters_indexes": {"added": 1, "removed": 0}, "mir2_db.characters_item": {"added": 13, "removed": 0}, "mir2_db.characters_status": {"added": 1, "removed": 0}, "mir2_db.characters_storageitem": {"added": 50, "removed": 0}}
+git_rev: ce18a1338a8c0c834d36e7beecd98abaae6da867
+  runtime mysqld <- D:\mysql\mariadb-10.11.19-winx64\bin\mysqld.exe
+  runtime DBSrv <- E:\Users\gxh\Documents\GitHub\OpenMir2\src\DBSrv\bin\Release\DBSrv.exe
+  runtime LoginSrv <- E:\Users\gxh\Documents\GitHub\OpenMir2\src\LoginSrv\bin\Release\LoginSrv.exe
+  runtime GameSrv <- E:\MirServer\M2GameSvr\GameSrv.exe
+  runtime LoginGate <- E:\MirServer\LoginGate\LoginGate.exe
+  runtime SelGate <- E:\MirServer\SelGate\SelGate.exe
+  runtime GameGate <- E:\MirServer\RunGate\GameGate.exe
+
+== RustDBSrv侧  (session=rust-20261012-021839 prefix=m1r021839 bots=1) ==
+ops_runner: run_bots.ps1 -Count 1 -Prefix m1r021839 -NewAccount -Port 7000 -FixedNewChr -NewChrJob 1 -NewChrHair 2 -NewChrSex 0
+ops_markers: {}
+scoped_rows: {"before": 0, "after": 115}
+delta: {"mir2_account.account": {"added": 1, "removed": 0}, "mir2_account.account_protection": {"added": 1, "removed": 0}, "mir2_db.characters": {"added": 1, "removed": 0}, "mir2_db.characters_ablity": {"added": 1, "removed": 0}, "mir2_db.characters_bagitem": {"added": 46, "removed": 0}, "mir2_db.characters_indexes": {"added": 1, "removed": 0}, "mir2_db.characters_item": {"added": 13, "removed": 0}, "mir2_db.characters_status": {"added": 1, "removed": 0}, "mir2_db.characters_storageitem": {"added": 50, "removed": 0}}
+git_rev: ce18a1338a8c0c834d36e7beecd98abaae6da867
+  runtime mysqld <- D:\mysql\mariadb-10.11.19-winx64\bin\mysqld.exe
+  runtime LoginSrv <- E:\Users\gxh\Documents\GitHub\OpenMir2\src\LoginSrv\bin\Release\LoginSrv.exe
+  runtime GameSrv <- E:\MirServer\M2GameSvr\GameSrv.exe
+  runtime LoginGate <- E:\MirServer\LoginGate\LoginGate.exe
+  runtime SelGate <- E:\MirServer\SelGate\SelGate.exe
+  runtime GameGate <- E:\MirServer\RunGate\GameGate.exe

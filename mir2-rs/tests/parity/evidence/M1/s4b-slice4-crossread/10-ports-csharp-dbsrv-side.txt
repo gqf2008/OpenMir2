@@ -1,0 +1,23 @@
+STOP LoginGate pid=8064
+STOP SelGate pid=26300
+STOP GameGate pid=30780
+STOP GameSrv pid=19228
+STOP LoginSrv pid=29060
+STOP db-srv pid=25948
+START DBSrv(csharp) pid=31532
+START LoginSrv pid=10492
+START GameSvr pid=17292
+START LoginGate pid=12124
+START SelGate pid=10828
+START GameGate pid=13692
+=== ports (csharp side) ===
+  5000  pid=17292 GameSrv
+  5100  pid=31532 DBSrv
+  5500  pid=10492 LoginSrv
+  5600  pid=10492 LoginSrv
+  5700  pid=31532 DBSrv
+  6000  pid=31532 DBSrv
+  7000  pid=12124 LoginGate
+  7100  pid=10828 SelGate
+  7200  pid=13692 GameGate
+SIDE_STACK_OK DBSrv=csharp

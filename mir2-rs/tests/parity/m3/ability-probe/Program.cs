@@ -203,6 +203,39 @@ internal static class Program
 
     private static NakedAbility ZeroBonus() => new() { DC = 0, MC = 0, SC = 0, AC = 0, MAC = 0, HP = 0, MP = 0, Hit = 0, Speed = 0, Reserved = 0 };
 
+    /// <summary>
+    /// `C# DBSrv.GetAbilGetRecord`（`PlayDataStorage.Query.cs:268-309`）产出的**原始记录 Abil**：
+    /// 它读 `Level/HP/MP/DC/MC/SC/Exp/MaxExp/Weight/MaxWeight/WearWeight/MaxWearWeight/HandWeight/MaxHandWeight`，
+    /// 但**不读** `characters_ablity.MaxHP/MAxMP` ⇒ 未登录前 `MaxHP=MaxMP=0`；
+    /// 且 `HP`/`MP` 列的高 16 位被塞进 `AC`/`MAC`（`HUtil32.HiWord`）。
+    /// 登录时 `RecalcLevelAbilitys()` 会用等级公式覆盖这些派生字段。
+    /// </summary>
+    private static Ability RawRecordAbil() => new()
+    {
+        Level = 1,
+        Reserved1 = 0,
+        AC = 0,
+        MAC = 0,
+        DC = 0,
+        MC = 0,
+        SC = 0,
+        HP = 19,
+        MP = 15,
+        MaxHP = 0,
+        MaxMP = 0,
+        Reserved2 = 0,
+        ExpCount = 0,
+        ExpMaxCount = 0,
+        Exp = 0,
+        MaxExp = 10,
+        Weight = 0,
+        MaxWeight = 0,
+        WearWeight = 0,
+        MaxWearWeight = 0,
+        HandWeight = 0,
+        MaxHandWeight = 0,
+    };
+
     private static object AbilityDto(Ability a) => new
     {
         level = a.Level,
@@ -249,7 +282,9 @@ internal static class Program
         var po = new PlayObject
         {
             Job = job,
-            Abil = abil,
+            // `RecalcLevelAbilitys()` 会直接改写 `Abil`（`Abil` 是 class）⇒ 探针存进 `po` 的必须是
+            // 副本，夹具里的 `abil` 保持**原始记录输入**（否则 `login_record_*` 的 `MaxHP=0` 会被抹掉）。
+            Abil = abil.Clone(),
             BonusAbil = bonus,
             UseItems = new UserItem[13],
             ItemList = new List<UserItem>(),
@@ -267,9 +302,18 @@ internal static class Program
         }
         // `RecalcAbilitys` 顶部 `ushort wOldHP = WAbil.HP;` 保留的是**调用前**的当前 HP/MP
         //（`BaseObject.Abil.cs:19-23`）——真机里这是角色当前血量/蓝量，不是 Abil.MaxHP。
-        po.WAbil.HP = curHp ?? abil.HP;
-        po.WAbil.MP = curMp ?? abil.MP;
+        // 记为 `hp_before`/`mp_before` 落进夹具：这是本接缝的**输入**（生产 `enter.rs` 传原始记录 HP/MP），
+        // 而 `cur_hp`/`cur_mp` 是**调用后**的 `WAbil.HP/MP`（输出，可能被 `PlayObject.cs:2809-2816` 钳过）。
+        ushort hpBefore = curHp ?? abil.HP;
+        ushort mpBefore = curMp ?? abil.MP;
+        po.WAbil.HP = hpBefore;
+        po.WAbil.MP = mpBefore;
 
+        // 登录/升级时 oracle 的调用序（`WorldServer.cs:351` → `PlayObject.cs:1308`）：
+        // `AbilCopyToWAbil()` → `RecalcLevelAbilitys()` → `RecalcAbilitys()`。
+        // `C# DBSrv.GetAbilGetRecord`（`PlayDataStorage.Query.cs:268-309`）不读 `MaxHP/MAxMP`
+        // ⇒ 记录里它们是 0，必须由 `RecalcLevelAbilitys()` 按等级公式补（owner brief §14）。
+        po.RecalcLevelAbilitys();
         po.RecalcAbilitys();
 
         var sub = new
@@ -298,6 +342,8 @@ internal static class Program
             bonus_abil = new { dc = bonus.DC, mc = bonus.MC, sc = bonus.SC, ac = bonus.AC, mac = bonus.MAC, hp = bonus.HP, mp = bonus.MP, hit = bonus.Hit, speed = bonus.Speed, reserved = bonus.Reserved },
             items = Array.ConvertAll(items, s => new { slot = s.Slot, index = s.Index, dura = s.Dura }),
             bag = Array.ConvertAll(bag, i => (int)i),
+            hp_before = hpBefore,
+            mp_before = mpBefore,
             cur_hp = po.WAbil.HP,
             cur_mp = po.WAbil.MP,
             expect_wabil = AbilityDto(po.WAbil),
@@ -344,6 +390,9 @@ internal static class Program
         table.Items[1115] = Tpl(stdMode: 10, shape: 0, weight: 100, light: 3);                                     // 仅称重/亮度
         table.Items[1201] = Tpl(stdMode: 7, shape: 0, weight: 1);                                                  // 背包物品（称重）
         table.Items[1202] = Tpl(stdMode: 7, shape: 0, weight: 2);
+        // 魔血项链：`ItemShapeConst.NECKLACE_OF_MANATOHEALTH = 135`（`ActorConst.cs:114`）。AniCount=0
+        // ⇒ 不触发 `MoXieSuite`（套装块本子集未建模），只置 `mhNecklace` ⇒ 只影响 HP 钳位门。
+        table.Items[1351] = Tpl(stdMode: 19, shape: 135, weight: 0);
 
         var cases = new List<object>();
         void Case(string name, PlayerJob job, Ability abil, NakedAbility bonus, EquipSpec[] items, ushort[] bag, byte gender = 0, byte hair = 1, ushort? curHp = null, ushort? curMp = null)
@@ -356,6 +405,24 @@ internal static class Program
             curHp: 15, curMp: 15);
         Case("naked_wizard", PlayerJob.Wizard, BaseAbil(), ZeroBonus(), Array.Empty<EquipSpec>(), Array.Empty<ushort>());
         Case("naked_taos", PlayerJob.Taoist, BaseAbil(), ZeroBonus(), Array.Empty<EquipSpec>(), Array.Empty<ushort>());
+
+        // A2. 登录原始记录（`DBSrv.GetAbilGetRecord` 不读 `MaxHP/MAxMP` ⇒ 记录里为 0）：
+        // `RecalcLevelAbilitys()` 必须按等级公式补出 `MaxHP/MaxMP/DC/MaxWeight/...`（owner brief §14；
+        // 真机 ③ 发现 `52` 的 `max_hp/max_mp=0`）。三职业各一条 ⇒ 覆盖等级派生公式的三个分支。
+        Case("login_record_warr", PlayerJob.Warrior, RawRecordAbil(), ZeroBonus(), Array.Empty<EquipSpec>(), Array.Empty<ushort>());
+        Case("login_record_wizard", PlayerJob.Wizard, RawRecordAbil(), ZeroBonus(), Array.Empty<EquipSpec>(), Array.Empty<ushort>());
+        Case("login_record_taos", PlayerJob.Taoist, RawRecordAbil(), ZeroBonus(), Array.Empty<EquipSpec>(), Array.Empty<ushort>());
+
+        // A3. `PlayObject.cs:2809-2816` 尾部钳位（owner rule；reviewer-6 在 `3434f219` 上标出未建模）：
+        //     `Race==Play && WAbil.HP>WAbil.MaxHP && (!mhNecklace && !mhBracelet && !mhRing) ⇒ HP=MaxHP`；
+        //     MP 同理但**无** mh 门。
+        //     ① `login_record_{wizard,taos}`（记录 HP=19 > 等级 MaxHP=16/17）已覆盖裸装 HP 钳；
+        //     ② 穿魔血项链（mhNecklace）⇒ **跳过** HP 钳（HP 留 19），MP 仍钳（curMp=25 ⇒ 18）；
+        //     ③ 裸装但 curMp=25 ⇒ MP 钳到 18。
+        Case("clamp_hp_skipped_by_mh_necklace", PlayerJob.Wizard, RawRecordAbil(), ZeroBonus(),
+            new[] { new EquipSpec(ItemLocation.Necklace, 1351, 10) }, Array.Empty<ushort>(), curMp: 25);
+        Case("clamp_mp_above_max_naked", PlayerJob.Wizard, RawRecordAbil(), ZeroBonus(), Array.Empty<EquipSpec>(),
+            Array.Empty<ushort>(), curMp: 25);
         // 带 BonusAbil（非 0）⇒ HitPoint/SpeedPoint 走 `DEFHIT + Hit/tick.Hit`
         var bonusWarr = ZeroBonus();
         bonusWarr.Hit = 40;
@@ -470,6 +537,7 @@ internal static class Program
             oracle_source = new[]
             {
                 "src/M2Server/Player/PlayObject.cs:2008 (RecalcAbilitys)",
+                "src/M2Server/Player/PlayObject.cs:5254 (RecalcLevelAbilitys)",
                 "src/M2Server/Player/PlayObject.cs:3647 (RecalcHitSpeed)",
                 "src/M2Server/Actor/BaseObject.Abil.cs:15 (BaseObject.RecalcAbilitys)",
                 "src/M2Server/Actor/BaseObject.cs:1356 (RecalcBagWeight)",
@@ -492,7 +560,9 @@ internal static class Program
                 "hit_point = DEFHIT + BonusAbil.Hit/tick.Hit + AddAbil.HIT（Taoist 分支不重置 HitPoint）",
                 "speed_point = DEFSPEED + BonusAbil.Speed/tick.Speed (+3 Taoist) + AddAbil.SPEED",
                 "WAbil.AC/MAC/DC/MC/SC = word 相加（高字节 _MIN(255, …)）；WAbil.Weight = RecalcBagWeight()",
-                "未覆盖：套装 else-if 块 / buff / MagicList 技能加成 / ApplyItemParametersByJob 龙装分支",
+                "hp_before/mp_before = 调用前 WAbil.HP/MP（oracle wOldHP/wOldMP，真机 = 记录 HP/MP），是本接缝的**输入**；cur_hp/cur_mp = 调用后 WAbil.HP/MP（**输出**，可能被 PlayObject.cs:2809-2816 钳过）",
+                "WAbil.HP 尾钳（PlayObject.cs:2809-2816）：Race==Play 且 HP>MaxHP 且 !mhNecklace&&!mhBracelet&&!mhRing ⇒ HP=MaxHP；MP 同理但无 mh 门",
+                "未覆盖：套装 else-if 块的**属性**（MoXieSuite/MuscleRing 等；魔血三件套的 Shape 门 135/133/134 已覆盖，但 AniCount≠0 时的 MaxHP/MaxMP 改写未建模）/ buff / MagicList 技能加成 / ApplyItemParametersByJob 龙装分支",
             },
             templates = templateDtos,
             cases,
