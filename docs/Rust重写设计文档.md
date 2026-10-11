@@ -716,6 +716,11 @@ walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 prin
   **T-12 编号已被 botsrv 占用** ⇒ m3bag 需改号（已写入其 brief）。
 - **C6 残留 F9-1 已开卡**：`openmir2-c6-artifacts-hash-repro`（issue `b790d24ae7413dab3e461e4fc75ab5303390026b`）——`artifacts.sha256.json` 的
   CRLF/LF 可复现性（全新检出 18/45 假 mismatch）；Minor、不是里程碑阻塞项，车道排在 `m3gs` 之后，**避免只留在散文里**。
+- **M2 入图帧 8/16 已合入**（2026-10-11 18:30）：`3dbb4707`（`enter.rs`：`766/54/11029/1106/5008/811`）经 reviewer-1 `16cb2cbf`
+  **独立 approve**（隔离 target 3 连跑 429/0/13 + 独立红检 3 条 + 六条帧逐条 oracle 行号锚定）后由 owner 合入 master `0106e9f4`（合并树四门禁 67/429/0/13 + 604）。
+  余 8 条：`50/41/10/213`（等 `m3bag` 的 `feature.rs` 接缝，该片因 F-1 返工中）、`42 SM_USERNAME`、`52/752`、`46`（世界时钟）。
+- **M2 会话生命周期"按实测对齐"片已交付待审**：`3b2e71f2` @ head `b4700ce5`（账号级 `SM_SYSMESSAGE` 顶号 + `ProcessHumansIsLogined` 竞态三支复刻，
+  `payMode≠0` 因 oracle 恒传 0 而只实现一支——如实登记）；已由 owner 路由给 reviewer 车道（审 `3dbb4707..3b2e71f2` 差量）。
 
 ## 18. S3：B-8 命令码位移修复（2026-10-10，oracle 行为变更）
 
