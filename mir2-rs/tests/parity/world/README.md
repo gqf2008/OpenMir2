@@ -77,9 +77,16 @@ floor <map> <x> <y> <obj_id>                          # 仅 extended 场景
 ```bash
 # 金标准
 dotnet run --project mir2-rs/tests/parity/csharp/WorldGolden -c Release -- combat
+dotnet run --project mir2-rs/tests/parity/csharp/WorldGolden -c Release -- combat_exp_nofix
 # Rust 对拍（含 2 条红检 + 1 条覆盖判据 + 1 条语义判据）
 cargo test -p mir2-parity-tests --test world_combat_parity
 ```
+
+`combat_exp_nofix.json` 是**判据专用场景**（4 tick，只为钉住第 3 条口径）：
+`high_level_kill_mon_fix_exp=false` 且玩家 25 级打 1 级怪 ⇒ `CalcGetExp` 的入参若是"自己等级"
+得 **500**（不衰减），若误传怪物等级得 **33**（衰减）——两者可分辨，故该行回退必被 `world_combat_parity`
+的第 2 条测试抓到（审查 reviewer-3 的 M4a 变异实测：33 vs 500 判红）。
+注：同一变异在 `combat.json`（fix=true、玩家 10 级 < 怪 1+10）下**测不出来**——那是本批补判据的原因。
 
 场景覆盖：攻击力 RNG（`dc=0x1E14` ⇒ 20..30）；命中骰（`RandomByte(目标 SpeedPoint)`，**真的会闪避**）；
 护甲 RNG 的两条分支（`ac=0` 一次取数 / `ac=0x0A05` 两次取数）；**目标 `HitPoint == 0` 时整段跳过命中骰**
@@ -103,8 +110,16 @@ cargo test -p mir2-parity-tests --test world_combat_parity
 3. **`CalcGetExp` 的入参是自己等级**：`KillTargetTrigger`（`PlayObject.cs:1643`）写的是
    `CalcGetExp(WAbil.Level, fightExp)`，而 `CalcGetExp`（`BaseObject.cs:712`）内部又拿 `WAbil.Level`
    跟这个入参比 ⇒ `L < L + 10` 恒真 ⇒ **击杀经验不按等级差衰减**（哪怕 `HighLevelKillMonFixExp=false`）。
-   Rust 旧版把怪物等级当入参（会在 fix=false 时衰减），已改为照抄调用口径；场景可覆写
-   `high_level_kill_mon_fix_exp` 以钉住这一条。
+   Rust 旧版把怪物等级当入参（会在 fix=false 时衰减），已改为照抄调用口径；本条由
+   `combat_exp_nofix.json` 覆写 `high_level_kill_mon_fix_exp=false` + 25 级打 1 级怪来**钉住**
+   （正确 500 / 误传怪物等级 33，见上）。
+4. **`StruckDamage` 的倍率取目标存的 `LastHiter`，不是本次攻击者**（`BaseObject.Base.cs:833-851`）：
+   因为命中者登记要等目标下一轮 `Run()` 处理 `RM_STRUCK` ⇒ 本次攻击看到的是**上一次**命中者
+   （`combat::LastHitter` + `world::World::attack_once` 里的取值）。默认倍率 10 时数值不可分辨，
+   只有非默认 `WarrMon/WizardMon/TaosMon/MonHum` 或同 tick 混职业才可见，故 golden 测不到，
+   但口径按 oracle 照抄。
+5. **不死系加成不加 `> 0` 守卫**：oracle 是 `nDamage += target.AddAbil.UndeadPower` 无条件相加
+   （`BaseObject.Base.cs:802-808`）；`UndeadPower` 为负时也要加。
 
 ### 本切片**不做**（明确边界，不是"漏做"）
 
@@ -112,5 +127,9 @@ cargo test -p mir2-parity-tests --test world_combat_parity
 - **宝宝击杀**：`KillFunc` 里 `ExpHitter.Master != null` 那一支（经验发给主人）未实现。
 - **升级曲线**：场景把 `max_exp` 调大，保证本批不触发升级；`need_exps` 表要与现网 `Exps.conf`
   对齐才有意义，留待升级专用场景（避免在这里抄一张会漂移的表）。
-- **`LastHiter`/`ExpHitter` 的过期**（30s / 6s，`BaseObject.Base.cs:119-132`）：依赖墙钟，本骨架不读墙钟。
+- **`LastHiter`/`ExpHitter` 的墙钟过期**（30s / 6s，`BaseObject.Base.cs:119-132`）：依赖墙钟，本骨架不读墙钟。
+  其中"命中者**死亡/隐身**后不再认领经验"这一半**已实现**（`world.rs` 的 `!k.death`，语义等价于
+  oracle 在命中者 `Run()` 里的清理）；但"命中者先死、怪物随后被别人击杀"这条时序**尚无 golden 覆盖**
+  ——**已接受的覆盖缺口**（accepted risk）：要覆盖它得先让 C# 夹具也按 `BaseObject.Base.cs:119-132`
+  逐 tick 清 `ExpHitter`，再造"命中者先死"的场景；当前场景里命中者不会死，故不影响本批判据。
 - **不死系加成**（`LifeAttrib == LA_UNDEAD` 时加攻击方 `UndeadPower`）：场景尚未注入该字段。

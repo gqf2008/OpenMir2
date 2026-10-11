@@ -6,12 +6,15 @@
 //! - 护甲 RNG 的两条分支（`ac=0` ⇒ 1 次取数；`ac=0x0A05` ⇒ 2 次取数）；
 //! - 击杀 → 掉落落地 + 经验结算（`KillFunc` → `KillTargetTrigger` → `GainExp`）；
 //! - **经验归属者是"第一个命中者"**（`ExpHitter`，`BaseObject.cs:1753/2429`），
-//!   而不是最后一击者（`LastHiter`）——场景里由 mate(5) 补完最后一击，经验仍归 hero(1)；
+//!   而不是最后一击者（`LastHiter`）——场景里由 mate(4) 补完最后一击，经验仍归 hero(1)；
 //! - 攻击自己（`IsProperTarget` 为假）/ 攻击已死目标（`_Attack` 不造成伤害但**仍**登记命中者）。
+//! - **击杀经验不按等级差衰减**（`KillTargetTrigger` 把"自己等级"当 `nLevel` 传进 `CalcGetExp`，
+//!   `L < L+10` 恒真）——由单独场景 `combat_exp_nofix.json` 钉住，见下方第 2 条测试。
 //!
 //! 驱动与输出格式见 `common/mod.rs`；金标准由 `csharp/WorldGolden` 产出：
 //! ```bash
 //! dotnet run --project mir2-rs/tests/parity/csharp/WorldGolden -c Release -- combat
+//! dotnet run --project mir2-rs/tests/parity/csharp/WorldGolden -c Release -- combat_exp_nofix
 //! ```
 
 mod common;
@@ -74,6 +77,37 @@ fn exp_goes_to_first_hitter_not_last() {
         }
     }
     panic!("金标准里没有 zombie(3) 的死亡行");
+}
+
+/// 判据（给"`CalcGetExp` 入参＝自己等级"这条口径装牙齿）：`combat_exp_nofix.json`
+/// 把 `high_level_kill_mon_fix_exp` 覆写为 **false**，且玩家等级 25 ≥ 怪等级 1 + 10
+/// ⇒ 两种实现的数值**可分辨**：
+/// - 照 oracle（入参＝自己等级 25，`25 < 35` 恒真）⇒ 不衰减，得 **500**；
+/// - 若误把怪物等级 1 当 `nLevel` ⇒ `25 < 11` 为假 ⇒ 衰减成 `500 - round(500/15*14)` = **33**。
+///
+/// 所以本测试与 golden 比对时，任何"回退到怪物等级"的改动都会红；同时直接断言 500 这个数，
+/// 免得 golden 被误重生成后判据一起失效。（审查 reviewer-3 的 M4a 变异即由此覆盖。）
+#[test]
+fn kill_exp_does_not_decay_even_when_fix_off() {
+    let mine = run_scenario("combat_exp_nofix.json");
+    let golden = std::fs::read_to_string(world_dir().join("golden/combat_exp_nofix.txt")).unwrap();
+    assert_eq!(
+        mine, golden,
+        "回退到「把怪物等级当 CalcGetExp 入参」会得到 33 而不是 500"
+    );
+    assert!(
+        mine.contains("death 2 0 0 1 500"),
+        "fix=false 下击杀经验必须仍是 500（不按等级差衰减）:\n{mine}"
+    );
+    let hero_line = mine
+        .lines()
+        .rev()
+        .find(|l| l.starts_with("ent 1 "))
+        .unwrap();
+    assert!(
+        hero_line.ends_with(" 500 vis 1:1"),
+        "hero 的经验应记到 500: {hero_line}"
+    );
 }
 
 /// 覆盖判据：金标准里必须真的出现**闪避**（`hp` 没掉）与**目标 HitPoint == 0 时不掷命中骰**

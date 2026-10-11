@@ -481,14 +481,17 @@ impl World {
                 }
             }
             // 经验：`KillFunc`（`BaseObject.cs:2429`）认的是 `ExpHitter`，不是 `LastHiter`
-            // —— `ExpHitter` 是**第一个**命中者（`SetLastHiter` 里 `if (ExpHitter == null)`）。
-            // 子集口径：只做"归属者是玩家本人"这一支；`ExpHitter.Master != null`（宝宝击杀）不在本骨架。
+            // —— `ExpHitter` 是**第一个**命中者（`SetLastHiter` 里 `if (ExpHitter == null)`），
+            // 且命中者**死亡/隐身后不再认领**（`BaseObject.Base.cs:119-132` 在命中者自己的 `Run()` 里
+            // 清 `ExpHitter`；本骨架在 tick 结算点做同一判定，语义等价——下面的 `!k.death` 即此）。
+            // 子集口径：只做"归属者是玩家本人"这一支；`ExpHitter.Master != null`（宝宝击杀）不在本骨架；
+            // 30s（`LastHiter`）/ 6s（`ExpHitter`）的**墙钟**过期也不做（本骨架不读墙钟）。
             let mut gained = 0;
             if let Some(hitter_id) = exp_hitter {
                 let is_player = self
                     .entities
                     .get(hitter_id)
-                    .is_some_and(|k| k.race == crate::entity::ACTOR_RACE_PLAY);
+                    .is_some_and(|k| k.race == crate::entity::ACTOR_RACE_PLAY && !k.death);
                 if is_player {
                     let need_exps = std::mem::take(&mut self.need_exps);
                     let cfg = self.combat_config;
@@ -531,8 +534,19 @@ impl World {
         // 取出双方属性做结算（避免同时可变借用），再写回
         let mut attacker = self.entities.get(actor_id)?.clone();
         let mut target = self.entities.get(target_id)?.clone();
+        // `StruckDamage` 的倍率取目标**当下存着**的 `LastHiter`（= 上一次命中者：本次命中者要等
+        // 目标下一轮 `Run()` 处理 `RM_STRUCK` 才登记）。默认倍率 10 时数值不可分辨，非默认配置下
+        // 才有差异 ⇒ 必须照 oracle 取，别改成本次攻击者。
+        let last_hitter = target
+            .last_hiter
+            .and_then(|id| self.entities.get(id))
+            .map(|h| crate::combat::LastHitter {
+                race: h.race,
+                job: h.job,
+                has_master: h.master.is_some(),
+            });
         let cfg = self.combat_config;
-        let outcome = attack(&mut self.rng, &mut attacker, &mut target, &cfg);
+        let outcome = attack(&mut self.rng, &mut attacker, &mut target, last_hitter, &cfg);
         if let Some(e) = self.entities.get_mut(target_id) {
             e.hp = target.hp;
             // 命中者登记的**折叠**：C# 在 `_Attack` 里对 `Race > ActorRace.Play` 的目标

@@ -119,35 +119,55 @@ pub fn get_hit_struck_damage(
         ac_lo
     };
     let mut damage = hutil::max_i32(0, n_damage - n_armor);
-    if damage > 0 && target.life_attrib == 1 && attacker.undead_power > 0 {
-        // LifeAttrib == LA_UNDEAD(1) 时加攻击方的 UndeadPower
+    if damage > 0 && target.life_attrib == 1 {
+        // `if ((LifeAttrib == Grobal2.LA_UNDEAD) && (target != null)) nDamage += target.AddAbil.UndeadPower;`
+        // 注意：oracle **无条件**相加（没有 `> 0` 守卫），UndeadPower 为负时也照加。
         damage += attacker.undead_power;
     }
     damage as u16
+}
+
+/// 目标实体当下存着的 `LastHiter` 子集（`StruckDamage` 的倍率只看它，不看本次攻击者）。
+///
+/// 为什么要有这个类型：`_Attack` **不写** `LastHiter`，命中者登记走 `RM_STRUCK` 消息、
+/// 由目标自己的 `Run()` 调 `SetLastHiter`（见 `attack()` 末尾与 `world::attack_once`）。
+/// ⇒ 本次攻击的 `StruckDamage` 看到的 `LastHiter` 是**上一次**的命中者——这是 oracle 的真实语义，
+/// 倍率必须按它取，不能按本次攻击者取。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LastHitter {
+    /// `LastHiter.Race`
+    pub race: u8,
+    /// `LastHiter.Job`
+    pub job: u8,
+    /// `LastHiter.Master != null`
+    pub has_master: bool,
 }
 
 /// `BaseObject.StruckDamage`（`BaseObject.Base.cs:827`）的职业/主从倍率部分。
 ///
 /// 配置项取 `GameSvrConf` 默认值（`WarrMon/WizardMon/TaosMon/MonHum` 都是 10 ⇒ 倍率 1.0，
 /// 与现网 Server.conf 未改动时一致；如需别的值由调用方传入）。
+///
+/// **取谁的 job**：oracle 用 `LastHiter`（`:833-846` 的 `LastHiter.Race == Play` + `((IPlayerActor)LastHiter).Job`），
+/// 不是本次攻击者；默认配置下两者都归到倍率 1.0，只有非默认倍率或同 tick 混职业时才有数值差异。
 pub fn struck_damage_multiplier(
     target: &Entity,
-    attacker: &Entity,
+    last_hitter: Option<LastHitter>,
     warr_mon: i32,
     wizard_mon: i32,
     taos_mon: i32,
     mon_hum: i32,
 ) -> i32 {
     // 返回"十分之几"的倍率（C# 里是 `伤害 * per10 / 10`）
-    if target.race >= 50 && attacker.race == ACTOR_RACE_PLAY {
-        // Race >= ActorRace.Animal(50) 且最后一击者是人
-        match attacker.job {
+    if let Some(hitter) = last_hitter.filter(|h| target.race >= 50 && h.race == ACTOR_RACE_PLAY) {
+        // `(Race >= ActorRace.Animal) && (LastHiter != null) && (LastHiter.Race == ActorRace.Play)`
+        match hitter.job {
             0 => warr_mon,   // Warrior
             1 => wizard_mon, // Wizard
             _ => taos_mon,   // Taoist
         }
-    } else if target.race == ACTOR_RACE_PLAY && attacker.master.is_some() {
-        // 人物下属怪物攻击人
+    } else if last_hitter.is_some_and(|h| target.race == ACTOR_RACE_PLAY && h.has_master) {
+        // `(Race == ActorRace.Play) && (LastHiter != null) && (LastHiter.Master != null)`
         mon_hum
     } else {
         10 // 无倍率
@@ -179,6 +199,7 @@ pub fn attack(
     rng: &mut impl RandomSource,
     attacker: &mut Entity,
     target: &mut Entity,
+    last_hitter: Option<LastHitter>,
     config: &CombatConfig,
 ) -> AttackOutcome {
     let power = get_base_attack_power(rng, attacker.dc);
@@ -204,7 +225,7 @@ pub fn attack(
             // `StruckDamage`：职业对怪倍率 / 主从对人倍率，然后 `DamageHealth`
             let per10 = struck_damage_multiplier(
                 target,
-                attacker,
+                last_hitter,
                 config.warr_mon,
                 config.wizard_mon,
                 config.taos_mon,
