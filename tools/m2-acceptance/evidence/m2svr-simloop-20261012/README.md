@@ -64,3 +64,23 @@ cargo run -p msgcodegen --offline -- --check                 # 604 OK
    客户端侧需先有可见地面物）⇒ 本片仍取不到（如实登记，不绕过）。
 4. `Dealing` / `IsCanDrop` / `GroupOwner` / `DealLastTick` 等未建模状态按 false/0 走
    （无交易/组队/PK 状态系统），已在 `handle_ground_cmd` 注释逐条标注。
+
+## 6. 上一片 review 的 F-1 / P-1 收口（option (b)：登记为已知缺失）
+
+reviewer-3 `a3af6bf7`(I-1) / reviewer-5 `c541b6b4`(F-1) / reviewer-6 `90ae5a2b`+`21083c8d`(P-1)
+三名审查者独立得同一结论：上一片 `smframe::sm_additem` 产 **header-only**，而 oracle `SendAddItem`
+（`PlayObject.Base.cs:225-227`）在头部后追加 `SendSocket(ClientMsg, EDCode.EncodeBuffer(clientItem))`
+**尾**（客户端/BotSrv 也按尾解析：`RobotPlayer.Operate.cs:838`）⇒ 该帧与 oracle 线缆体不等。
+
+本片采 reviewer 给出的 **option (b)**（`ClientItem` 构造属物品展示层，未移植；见 T-24）：
+
+1. `smframe.rs` 的 `sm_additem` 注释：删掉「**无尾**」的错误提法，改成「header-only，oracle 带头部 +
+   `EncodeBuffer(clientItem)` 尾；已知缺失 T-24」；
+2. `pickwire.rs` 的 `immediate_frames_map_to_oracle_bytes` 用例注释：明写「把当前 header-only 钉住，
+   避免后续真机 pickup 把缺尾误当 parity」（断言不变，仍钉 `series=1` + header-only）；
+3. 证据 README（本片 + `m2svr-pickwire-20261012/`）同步改正措辞；
+4. **白名单登记 T-24**（`mir2-rs/tests/parity/whitelist.md`）：锚 `PlayObject.Base.cs:225-227`，
+   写清「未实现、线上不可达、承接 = 物品展示层独立片、不得拿 header-only 当 parity」。
+
+> 这三条 finding 针对的是上一片 head `04523f5b`；本片 head 已含上述收口。上一片 `patch cf7e96f1`
+> 的 `request_changes` 结论由本片（新 head）覆盖。

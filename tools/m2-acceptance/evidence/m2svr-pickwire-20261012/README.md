@@ -10,7 +10,7 @@
   （`sm_additem` / `sm_itemhide` / `sm_weightchanged` / `sm_goldchanged` / `sm_menu_ok` / `sm_dropitem_reply`），
   逐条照 oracle 落位（`Recog/Param/Tag/Series` + 尾 `EncodeString(Msg)`）。
 - `mir2-rs/bins/game-svr/src/pickwire.rs`（新）：接线层
-  - `immediate_frame`：`Frame` → `SM_*`（`SM_ADDITEM` 无尾；`SM_DROPITEM_SUCCESS/FAIL` 补 `EncodeString(请求 Msg)`）；
+  - `immediate_frame`：`Frame` → `SM_*`（`SM_ADDITEM` 现为 **header-only，尾未接 ⇒ 已知缺失 T-24**，oracle `SendAddItem` 带 `EncodeBuffer(clientItem)` 尾；`SM_DROPITEM_SUCCESS/FAIL` 补 `EncodeString(请求 Msg)`）；
   - `notice_frame`：五条 `RM_*` → `SM_*`（`RM_WEIGHTCHANGED`/`SM_GOLDCHANGED` 用**当下**会话态）；
   - `outcome_frames`：立即帧 + 延时通知的完整下行序；
   - `build_ground_map`：world 只读视图（`floor_items_view_sorted`）→ `ground::GroundMap` 装配；
@@ -22,7 +22,7 @@
 
 | 用例 | 锚点 |
 | --- | --- |
-| `immediate_frames_map_to_oracle_bytes` | `SM_ADDITEM`=200 series=1 无尾；`SM_DROPITEM_FAIL`=601 / `SUCCESS`=600，recog=make_index，尾=`EncodeString(Msg)` |
+| `immediate_frames_map_to_oracle_bytes` | `SM_ADDITEM`=200 series=1 **header-only（已知缺失 T-24：oracle 带 `EncodeBuffer(clientItem)` 尾，本用例把这现状钉住）**；`SM_DROPITEM_FAIL`=601 / `SUCCESS`=600，recog=make_index，尾=`EncodeString(Msg)` |
 | `notices_map_to_oracle_frames` | `SM_ITEMHIDE`=611（recog=item_id,param=x,tag=y）/ `SM_WEIGHTCHANGED`=622（校验和 `((W+A+H)^0x3A5F)^0x1F35^0xaa21`）/ `SM_GOLDCHANGED`=653 / `SM_SYSMESSAGE`=100（series=1）/ `SM_MENU_OK`=767 |
 | `sysmessage_without_text_is_skipped` | 缺 `MessageSettings.CanotPickUpItem` 文本 ⇒ 不产出（缺口 1，不编造空文本） |
 | `build_ground_map_matches_view` | 只装目标图；金币 `item_id`/`count`/归属、物品模板名逐项对上 world 视图 |

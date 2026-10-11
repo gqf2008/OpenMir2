@@ -258,7 +258,10 @@ mod tests {
         v
     }
 
-    /// 立即帧：`SM_ADDITEM`（无尾）与 `SM_DROPITEM_SUCCESS/FAIL`（尾 = `EncodeString(Msg)`）。
+    /// 立即帧：`SM_DROPITEM_SUCCESS/FAIL`（尾 = `EncodeString(Msg)`）；`SM_ADDITEM` 当前为
+    /// **header-only（已知缺失 T-24）**——oracle `SendAddItem`（`PlayObject.Base.cs:225-227`）
+    /// 会追加 `EncodeBuffer(clientItem)` 尾，本函数不产该尾（物品展示层未移植）。本用例
+    /// **把当前 header-only 钉住**，避免后续真机 pickup 把缺尾误当 parity。
     ///
     /// 红检：把 `sm_additem` 的 `series` 从 1 改成 0 ⇒ `add` 断言必红。
     #[test]

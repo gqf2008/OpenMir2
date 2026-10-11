@@ -153,7 +153,13 @@ pub fn sm_attackmode(mode: u8) -> Vec<u8> {
 /// **S3 后半段（第二格）**：`CM_PICKUP`/`CM_DROPITEM` 的回帧与地面/背包延时通知的 `SM_*` 编码。
 ///
 /// 逐条口径（oracle 行号见 `## pickup/drop 接线` 的作者 comment `d552d2a2`）：
-/// - `SM_ADDITEM`（`PlayObject.Base.cs:226`）：`MakeMessage(SM_ADDITEM, ActorId, 0, 0, 1)`，**无尾**。
+/// - `SM_ADDITEM`（`PlayObject.Base.cs:225-227`）：头 = `MakeMessage(SM_ADDITEM, ActorId, 0, 0, 1)`；
+///   oracle 随后 `SendSocket(ClientMsg, EDCode.EncodeBuffer(clientItem))`——**带一条 `ClientItem` 尾**。
+///   ⚠️ 本函数当前只产 **header-only**：`ClientItem` 的构造（`GetUpgradeStdItem` /
+///   `CustomItemSystem.GetItemName` / `MakeIndex·Dura·DuraMax` / `StdMode==50` 的名称 ` #Dura` 后缀 /
+///   `StdModeMap` 的 `Desc[8]`⇒Shape 0/130）属物品**展示层**，尚未移植 ⇒ **已登记为已知缺失
+///   T-24**（`mir2-rs/tests/parity/whitelist.md`）。接线层 `pickwire::immediate_frame` 对“拾取普通
+///   物品成功”恒交 header-only；**在其实现前不得把真机 `SM_ADDITEM` 字节对拍判 GREEN**。
 /// - `SM_ITEMHIDE`（`PlayObject.Message.cs:1748`）：`SendDefMessage(SM_ITEMHIDE, nParam1, nParam2, nParam3, 0)`
 ///   ⇒ `Recog=nParam1`(=物品 `ItemId`)、`Param=nParam2`(=x)、`Tag=nParam3`(=y)、`Series=0`。
 /// - `SM_WEIGHTCHANGED`（`:1760`）：`SendDefMessage(SM_WEIGHTCHANGED, WAbil.Weight, WAbil.WearWeight, WAbil.HandWeight, chk)`
