@@ -689,7 +689,7 @@ walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 prin
 
 - **M3 总验收未做**（§6 M3 原文）：① 十项系统逐一对齐**全绿** + M3 门禁 `diff=0`；② **300 假人长跑 24h 无 panic、无掉线**；
   ③ 每系统的"命令 + 输出 + 差异报告"汇总成 `tests/parity/M3-report.md`。
-  现状：只到"逐系统对齐 ①（背包/装备）"；**②③ 已开卡** `openmir2-m3-final-acceptance`（issue `b0bb3003`，2026-10-12）——按 §6.0-5 排在逐系统对齐与 M4 收口之后，② 的 24h 长跑需**独占机器窗口**；**别记成已完成**。
+  现状：只到"逐系统对齐 ①（背包/装备）"；**②③（战斗/技能）已开卡** `openmir2-m3-combat-skills-align`（issue `a2ef74aa`，2026-10-12）；**M3 总验收另开卡** `openmir2-m3-final-acceptance`（issue `b0bb3003`，2026-10-12）——按 §6.0-5 排在逐系统对齐与 M4 收口之后，② 的 24h 长跑需**独占机器窗口**；**别记成已完成**。
 - **M5 四项已开卡**（2026-10-12）：`openmir2-m5-convergence-drills`（issue `5e54b611`）= 72h 长跑 / `mem-probe` 内存斜率 / 三档压测曲线（与 C6 口径衔接）/ 灰度-回滚演练 / 灰度前后 DB 快照；同样按 §6.0-5 排在 M1–M4 收口之后，且长跑与 P99 类判据必须在**无其它车道编译/压测的窗口**里采。
 - **P99 类判据需要"静默窗口"**（两条独立事实，别再各自解释）：
   1. tick_bench 的相对门禁带 `SKIP-UNDER-LOAD`（CPU≥40% 或 `rustc`/`cargo`/`cargo-clippy`/`msbuild`≥4 ⇒ SKIP、exit 0）。
@@ -829,7 +829,7 @@ walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 prin
 - **M4 脚本引擎 → ✅ 达成并收卡（合并 `c87d4d16`）**
   - ① `parsecount` 两侧对拍数表（逐项差 0；判据是逐项对齐而非「错误=0」）①′ 逐文件摘要逐字节 ② **7/7 关键 NPC 用例 port-free GREEN / 等窗口 0** ③ 「双侧逐行多重集差=0」门禁（复用 M3 的 `scoped_diff.py` 计数式，640 表逐行一致）④ 四门禁 ⑤ 边界；证据 hash 口径可机器复核（`ecf7b3a1`）+ 写盘显式化（`ef02a96e`）。
   - Rust 真栈上「点 NPC」属 M3 的 **NPC/商店** 系统对齐（那 3 条商人用例的真栈版另开）。
-- **仍🔄的**：M3（逐系统对齐 ① 进行中：T-14 双侧同序列；②–⑩ 见 §6 顺序（**②③ 战斗/技能已开卡 `openmir2-m3-combat-skills-align`（issue `a2ef74aa`，2026-10-12）**；M3 总验收项见卡 `openmir2-m3-final-acceptance`））、M5（四项已开卡 `openmir2-m5-convergence-drills`，需独占/长跑窗口）。
+- **仍🔄的**：M3（逐系统对齐 ① 进行中：**T-14 双侧同序列的 Rust 侧实测卡在进图门**——新角色 `CurMap/HomeMap` 皆空时 Rust `mapwire::require_id` 直接拒绝，oracle 走 `src/GameSrv/Word/WorldServer.cs:249-276` 的「`HomeMap` 空 ⇒ 出生点（`MapName = HomeMap`、`CurrX/Y = Random(3)+Home-2`）」分支 ⇒ 已开卡 **`openmir2-m3-enter-eat-wiring`**（issue `8d07694d`）= 进图门 + `CM_EAT(1006)` 派发接线，派给 m2-svr；②–⑩ 见 §6 顺序（**②③ 战斗/技能已开卡 `openmir2-m3-combat-skills-align`（issue `a2ef74aa`，2026-10-12）**；M3 总验收项见卡 `openmir2-m3-final-acceptance`））、M5（四项已开卡 `openmir2-m5-convergence-drills`，需独占/长跑窗口）。
 
 ## 18. S3：B-8 命令码位移修复（2026-10-10，oracle 行为变更）
 
