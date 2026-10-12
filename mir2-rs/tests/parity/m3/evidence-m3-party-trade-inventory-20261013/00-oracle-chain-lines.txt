@@ -1,0 +1,115 @@
+# 00 oracle 调用链行号锚点（M3⑦ 组队/交易）
+# 生成：2026-10-12T20:59:18Z  仓库 = a96ef0e690b9942f40cb601b28b95a1abcfff9d8
+# 命令：rg -n '<pattern>' src/ ...（在仓库根执行；行号为当刻实测）
+
+===== [A] 组队：状态字段声明（PlayObject / IPlayerActor） =====
+90:        public bool AllowDeal { get; set; }
+106:        public bool AllowGroup { get; set; }
+114:        public IPlayerActor DealCreat { get; set; }
+118:        public bool Dealing { get; set; }
+122:        public int DealLastTick { get; set; }
+126:        public int DealGolds { get; set; }
+130:        public bool DealSuccess { get; set; }
+203:        public IList<UserItem> DealItemList { get; set; }
+224:        public bool AllowGroupReCall { get; set; }
+583:        public int GroupOwner { get; set; }
+587:        public IList<IPlayerActor> GroupMembers { get; set; }
+739:        public bool IsCanDeal { get; set; }
+
+===== [B] 组队：收包派发（PlayObject.Message.cs Run/Operate） =====
+912:                case Messages.CM_GROUPMODE:
+930:                case Messages.CM_CREATEGROUP:
+933:                case Messages.CM_ADDGROUPMEMBER:
+936:                case Messages.CM_DELGROUPMEMBER:
+915:                        ClientGroupClose();
+931:                    ClientCreateGroup(processMsg.Msg.Trim());
+934:                    ClientAddGroupMember(processMsg.Msg.Trim());
+937:                    ClientDelGroupMember(processMsg.Msg.Trim());
+
+===== [C] 组队：客户端操作实现（PlayObject.Operate.cs） =====
+787:        private void ClientGroupClose()
+810:        private void ClientCreateGroup(string sHumName)
+847:        private void ClientAddGroupMember(string sHumName)
+885:        private void ClientDelGroupMember(string sHumName)
+
+===== [D] 组队：核心方法（PlayObject.cs / PlayObject.Base.cs） =====
+5126:        public void DelMember(IPlayerActor baseObject)
+5158:        private bool IsGroupMember(IActor target)
+5177:        public void LeaveGroup()
+5185:        public void SendGroupText(string sMsg)
+1339:        private bool CancelGroup()
+1353:        private void SendGroupMembers()
+2405:        public void OpenDealDlg(IPlayerActor baseObject)
+2418:        public void JoinGroup(IPlayerActor playObject)
+
+===== [E] 组队：归属 / 分配 / 掉线 / 死亡 =====
+24:        private bool ClientPickUpItemIsSelf(int actorId)
+38:        private bool ClientPickUpItemIsOfGroup(int actorId)
+71:            if (!ClientPickUpItemIsSelf(mapItem.OfBaseObject) && !ClientPickUpItemIsOfGroup(mapItem.OfBaseObject))
+1359:                        case AttackMode.HAM_GROUP:// [攻击模式: 编组攻击]
+4249:                    case AttackMode.HAM_GROUP:
+4254:                        if (IsGroupMember(cret))
+704:                    // 清组队已死亡成员
+710:                            GroupOwner = 0;
+1977:                groupOwnerPlay.DelMember(this);// 人物死亡立即退组，以防止组队刷经验
+764:        public void GainExp(int dwExp)
+
+===== [F] 组队：脚本/命令扩展（不在 §6 核心判据，登记） =====
+74:            _conditionMap[(int)ConditionCode.CHECKGROUPCOUNT] = ConditionOfCheckGroupCount;
+154:            _conditionMap[(int)ConditionCode.CHECKGROUPCLASS] = ConditionOfCheckGroupClass;
+262:        private void ConditionOfCheckGroupClass(INormNpc normNpc, IPlayerActor playerActor, QuestConditionInfo questConditionInfo, ref bool success)
+2670:        private void ConditionOfCheckGroupCount(INormNpc normNpc, IPlayerActor playerActor, QuestConditionInfo questConditionInfo, ref bool success)
+44:            ProcessExecutionMessage[(int)ExecutionCode.ReCallgroupMembers] = ActionOfRecallGroupMembers;
+3487:        private void ActionOfRecallGroupMembers(INormNpc normNpc, IPlayerActor playerActor, QuestActionInfo questActionInfo, ref bool Success)
+12:    public class GroupRecallCommand : GameCommand
+
+===== [G] 交易：收包派发 =====
+945:                case Messages.CM_DEALTRY:
+948:                case Messages.CM_DEALADDITEM:
+951:                case Messages.CM_DEALDELITEM:
+954:                case Messages.CM_DEALCANCEL:
+957:                case Messages.CM_DEALCHGGOLD:
+960:                case Messages.CM_DEALEND:
+
+===== [H] 交易：客户端操作实现（PlayObject.Operate.cs） =====
+911:        private void ClientDealTry(string sHumName)
+964:        private void ClientAddDealItem(int nItemIdx, string sItemName)
+1001:        private void ClientDelDealItem(int nItemIdx, string sItemName)
+1044:        private void ClientCancelDeal()
+1049:        private void ClientChangeDealGold(int nGold)
+1085:        private void ClientDealEnd()
+
+===== [I] 交易：核心方法 / 取消 / 归还（PlayObject.Base.cs） =====
+730:        public void DealCancel()
+748:        public void DealCancelA()
+833:        private void GetBackDealItems()
+2357:        private void SendDelDealItem(UserItem userItem)
+2383:        private void SendAddDealItem(UserItem userItem)
+2405:        public void OpenDealDlg(IPlayerActor baseObject)
+
+===== [J] 交易：跑循环自动取消 / 断线 / 存档（Message.cs / WorldServer.cs） =====
+30:                if (Dealing)
+701:                                        playObject.DealCancelA();
+712:                            playObject.DealCancelA();
+702:                                        SaveHumanRcd(playObject);
+710:                            playObject.Disappear();
+713:                            SaveHumanRcd(playObject);
+
+===== [K] 配置项（GameSvrConf.cs 默认 / ServerConf.cs 读法） =====
+238:        public byte GroupMembersMax;
+447:        public bool LockDealAction;
+521:        public int TryDealTime;
+525:        public int DealOKTime;
+529:        public bool CanNotGetBackDeal;
+533:        public bool DisableDeal;
+1402:            GroupMembersMax = 10;
+1515:            TryDealTime = 3000;
+1516:            DealOKTime = 1000;
+1517:            CanNotGetBackDeal = true;
+1518:            DisableDeal = false;
+225:            SystemShare.Config.GroupMembersMax = ReadWriteByte("Setup", "GroupMembersMax", SystemShare.Config.GroupMembersMax);
+308:            SystemShare.Config.TryDealTime = ReadWriteInteger("Setup", "TryDealTime", SystemShare.Config.TryDealTime);
+309:            SystemShare.Config.DealOKTime = ReadWriteInteger("Setup", "DealOKTime", SystemShare.Config.DealOKTime);
+310:            SystemShare.Config.CanNotGetBackDeal = ReadWriteBool("Setup", "CanNotGetBackDeal", SystemShare.Config.CanNotGetBackDeal);
+311:            SystemShare.Config.DisableDeal = ReadWriteBool("Setup", "DisableDeal", SystemShare.Config.DisableDeal);
+571:            SystemShare.Config.LockDealAction = ReadWriteBool("Setup", "PasswordLockDealAction", SystemShare.Config.LockDealAction);
