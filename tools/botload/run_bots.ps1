@@ -191,7 +191,10 @@ while ((Get-Date) -lt $deadline) {
     if ($success -ge $Count -and $bagDone -ge $Count) { break }
   } elseif ($RequireCharCreated) {
     # 固定起点①预热：等到 N 个「创建角色」即 break（不要求进世界）。
-    if ($charCreated -ge $Count) { break }
+    # 另等 load_stats 的 login_ok 到齐：stats 是 BotSrv 每 5s 采样一次，而「创建角色」标记
+    # 在登录后立即落日志 ⇒ 只判 charCreated 会在采样边界提前 break，读到「上一拍」的
+    # login_ok=0，末尾成功判据（$success -ge $Count）恒假红（T-14 两相 pin 实跑踩到）。
+    if ($charCreated -ge $Count -and $success -ge $Count) { break }
   } elseif ($RequireWorld) {
     # F4（T-12）：登录不等于进世界；等"本会话收到 SM_LOGON"的进世界证据到齐。
     if ($worldOk -ge $Count) { break }

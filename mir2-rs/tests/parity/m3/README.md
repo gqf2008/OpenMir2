@@ -249,8 +249,14 @@ powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_bag_equip_p
   Level=1, Dir=0`（`HomeMap` 非空 ⇒ oracle 跳过新角色分支，也就不会发新手 4 件、不走无种子出生点）。
   **分工**：真·新角色路径（空 `HomeMap`）由 `openmir2-m3-enter-eat-wiring` 的真机证据覆盖（进图 `(287,616)`、
   `bag_view=4`、4 件齐）；T-14 变体覆盖「序列对拍」。
-  ⚠ **本片未在真机验证** pin 是否真被进图路径采用（无窗口；只验了 8 条 SQL 在活库 schema 上 `rc=0`）——
-  见报告 §7 的最小实验；`-BagEquipSequence`（关挂机）仍必须保留。
+  ✅ **已在真机验证（第十四格，2026-10-12）**：pin **确实被进图路径采用**（C# `CM_PICKUP x=289 y=618`、
+  `make=90000002`，与 Rust 逐条相同）。实跑同时修出两处夹具竞态（已登记 T-22 第十四格）：
+  - `run_bots.ps1 -RequireCharCreated` 的收工条件加 `login_ok`（`load_stats` 每 5s 采样 vs 建角标记即时落日志 ⇒ 旧条件恒假红）；
+  - `run_pair.ps1 -PinStartPose` 的 pin 加 **settle + hold 循环**（预热断线存档异步，实测晚于 pin 落库并把 pin 覆盖；
+    pin → 等 3s → 复验 → 被覆盖则重 pin，最多 5 轮）。
+  ⚠ **当前唯一剩余跨侧差异 = `characters.IncHealth`**（C#=0 / Rust=20），根因 = Rust 未建模 oracle 周期
+  `HealthSpellChanged` 恢复 tick（把吃药得到的 `IncHealth` 消费回 HP，满血时归零）；登记 **T-28**，待 owner 裁决。
+  报告 `T14-对照报告-20261012.md`；判据会话 `sessions/{csharp-20261012-080312,rust-20261012-080417}`。
 
 ## 一次「侧运行」是什么
 

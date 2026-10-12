@@ -1,0 +1,22 @@
+{
+  "mir2_account.account": {
+    "added": 1,
+    "removed": 1
+  },
+  "mir2_db.characters": {
+    "added": 1,
+    "removed": 1
+  },
+  "mir2_db.characters_ablity": {
+    "added": 1,
+    "removed": 1
+  },
+  "mir2_db.characters_bagitem": {
+    "added": 3,
+    "removed": 3
+  },
+  "mir2_db.characters_indexes": {
+    "added": 1,
+    "removed": 1
+  }
+}

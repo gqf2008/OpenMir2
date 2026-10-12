@@ -233,21 +233,34 @@ if ($PinStartPose) {
   if ($LASTEXITCODE -ne 0) { throw '预热建角失败（run_bots -RequireCharCreated 非 0）' }
   $chrCnt = Invoke-Mysql ("SELECT COUNT(*) FROM mir2_db.characters WHERE ChrName LIKE '{0}%'" -f $Prefix)
   if ([int]$chrCnt -ne $Bots) { throw ("预热后 characters 行数={0}，期望 {1}——预热建角没成功，pin 无目标" -f $chrCnt, $Bots) }
-  for ($i = 0; $i -lt $Bots; $i++) {
-    $pinChar = Format-M3StartPoseSql -ChrName "${Prefix}$i" -MapName $PinMapName -HomeMap $PinHomeMap -HomeX $PinHomeX -HomeY $PinHomeY `
-      -CX $PinCX -CY $PinCY -Level $PinLevel -Dir $PinDir
-    Invoke-Mysql $pinChar | Out-Null
-    # 连「初始背包 + Abil」一起 provision（owner 643459a7）：否则五步无对象可操作。
-    foreach ($st in (Get-M3StartPosePinSql -ChrName "${Prefix}$i")) { Invoke-Mysql $st | Out-Null }
-    Write-Output ('PIN_CHAR ' + $pinChar)
+  # 预热相的掉线存档是**异步**的（BotSrv 被杀 ⇒ GameSvr `SaveHumanRcd` → FrontEngine 异步落库）：
+  # 实测（2026-10-12 T-14 复跑）pin 后立刻进图，C# 侧拿到的是**预热末态**（`CX/CY=285,622`、
+  # 物品 `MakeIndex=36685073…`）而不是 pin 的 `289,618`/`90000001…`——预热存档晚于 pin 才落库、把 pin
+  # 覆盖了（与 §5 AFTER 快照前的 settle 同因，注释见下）。做法：pin 后等一个 settle 窗口再校验；
+  # 被覆盖就重 pin，直到**连续 hold 住**（最多 5 轮；仍 hold 不住 ⇒ throw，fail-closed）。
+  $pinHold = $false
+  for ($attempt = 1; $attempt -le 5 -and -not $pinHold; $attempt++) {
+    for ($i = 0; $i -lt $Bots; $i++) {
+      $pinChar = Format-M3StartPoseSql -ChrName "${Prefix}$i" -MapName $PinMapName -HomeMap $PinHomeMap -HomeX $PinHomeX -HomeY $PinHomeY `
+        -CX $PinCX -CY $PinCY -Level $PinLevel -Dir $PinDir
+      Invoke-Mysql $pinChar | Out-Null
+      # 连「初始背包 + Abil」一起 provision（owner 643459a7）：否则五步无对象可操作。
+      foreach ($st in (Get-M3StartPosePinSql -ChrName "${Prefix}$i")) { Invoke-Mysql $st | Out-Null }
+      Write-Output ('PIN_CHAR ' + $pinChar)
+    }
+    Start-Sleep -Seconds 3
+    # pin 后校验：图/坐标/Level + 4 件初始物品 + Abil Level（三项都到位才算 pin 生效）。
+    $pinned = Invoke-Mysql ("SELECT COUNT(*) FROM mir2_db.characters WHERE ChrName LIKE '{0}%' AND MapName='{1}' AND CX={2} AND CY={3} AND Level={4}" -f $Prefix, $PinMapName, $PinCX, $PinCY, $PinLevel)
+    $bagPinned = Invoke-Mysql ("SELECT COUNT(*) FROM mir2_db.characters_bagitem b JOIN mir2_db.characters c ON b.PlayerId=c.Id WHERE c.ChrName LIKE '{0}%' AND b.StdIndex<>0" -f $Prefix)
+    $abilPinned = Invoke-Mysql ("SELECT COUNT(*) FROM mir2_db.characters_ablity a JOIN mir2_db.characters c ON a.PlayerId=c.Id WHERE c.ChrName LIKE '{0}%' AND a.Level={1}" -f $Prefix, $M3PinAbilLevel)
+    if ([int]$pinned -eq $Bots -and [int]$bagPinned -eq (4 * $Bots) -and [int]$abilPinned -eq $Bots) {
+      $pinHold = $true
+      Write-Output ("PIN_HOLD attempt={0}（pin 连续 hold 住）" -f $attempt)
+    } else {
+      Write-Output ("PIN_RETRY attempt={0} pinned={1}/{2} bag={3}/{4} abil={5}/{6}（预热掉线存档覆盖了 pin，重 pin）" -f $attempt, $pinned, $Bots, $bagPinned, (4 * $Bots), $abilPinned, $Bots)
+    }
   }
-  # pin 后校验：图/坐标/Level + 4 件初始物品 + Abil Level（三项都到位才算 pin 生效）。
-  $pinned = Invoke-Mysql ("SELECT COUNT(*) FROM mir2_db.characters WHERE ChrName LIKE '{0}%' AND MapName='{1}' AND CX={2} AND CY={3} AND Level={4}" -f $Prefix, $PinMapName, $PinCX, $PinCY, $PinLevel)
-  if ([int]$pinned -ne $Bots) { throw ("pin 后校验失败：命中 {0}/{1} 行（MapName/CX/CY/Level 不符）——pin 未生效" -f $pinned, $Bots) }
-  $bagPinned = Invoke-Mysql ("SELECT COUNT(*) FROM mir2_db.characters_bagitem b JOIN mir2_db.characters c ON b.PlayerId=c.Id WHERE c.ChrName LIKE '{0}%' AND b.StdIndex<>0" -f $Prefix)
-  if ([int]$bagPinned -ne (4 * $Bots)) { throw ("pin 后初始背包校验失败：StdIndex<>0 行={0}，期望 {1}（4 件×假人数）" -f $bagPinned, (4 * $Bots)) }
-  $abilPinned = Invoke-Mysql ("SELECT COUNT(*) FROM mir2_db.characters_ablity a JOIN mir2_db.characters c ON a.PlayerId=c.Id WHERE c.ChrName LIKE '{0}%' AND a.Level={1}" -f $Prefix, $M3PinAbilLevel)
-  if ([int]$abilPinned -ne $Bots) { throw ("pin 后 Abil 校验失败：Level={0} 行={1}，期望 {2}" -f $M3PinAbilLevel, $abilPinned, $Bots) }
+  if (-not $pinHold) { throw ("pin 未 hold 住（预热掉线存档反复覆盖）：pinned={0} bag={1} abil={2}" -f $pinned, $bagPinned, $abilPinned) }
   Write-Output ('PIN_START_POSE ' + (Get-M3StartPoseLabel))
 }
 
