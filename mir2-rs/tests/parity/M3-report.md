@@ -28,7 +28,7 @@
 | 3 | 技能 | 每个已实装技能 ≥1 条用例：前置/MP/效果/冷却 | **covered（29 技能各 1 case）** | 同上 |
 | 4 | 掉落 / 经验 | 固定种子 100 次击杀掉落逐项相同；经验曲线（含英雄）逐级相同、无 i32 截断 | **not_covered（M3 系统级）** | **已有卡** `openmir2-m3-drop-exp-align`（owner 已开，见 §4） |
 | 5 | NPC / 商店 | 买/卖/修理/仓库价格与库存变化一致；失败分支一致 | **partial** | 脚本层 7/7 引 M4；服务端派发 not_covered，**已有卡** `openmir2-m3-npc-shop-align` |
-| 6 | 任务 | 接/交/条件判定一致，任务状态落库一致 | **not_covered** | 仓内无承接卡 ⇒ **建议卡** `openmir2-m3-quest-align` |
+| 6 | 任务 | 接/交/条件判定一致，任务状态落库一致 | **not_covered** | **已有卡** `openmir2-m3-quest-align` |
 | 7 | 组队 / 交易 | 归属/分配/取消/掉线中断结果一致 | **not_covered** | **已有卡** `openmir2-m3-party-trade-align` |
 | 8 | 公会 / 攻城 | 建会/宣战费用时限/城门状态/自动结束逐项一致 | **not_covered** | **已有卡** `openmir2-m3-guild-castle-align` |
 | 9 | 英雄 / 宠物 | 召唤/升级/阵亡/经验分配/上限判定一致 | **not_covered** | **已有卡** `openmir2-m3-hero-pet-align` |
@@ -156,7 +156,7 @@
 - **判据（§6 原文）**：用现存脚本任务跑：接/交/条件判定一致，任务状态落库一致。
 - **状态：`not_covered`**。相关先例：M4 的 `Q001@main`（地图出矿提示）只覆盖脚本层恒定输出（gold/items），
   **不覆盖**任务状态落库（`characters_quest` 表）与接/交流程。
-- **承接**：仓内暂无承接卡 ⇒ **建议卡** `openmir2-m3-quest-align`（判据 = 现存脚本任务 + `characters_quest` 作用域 diff=0）。
+- **承接**：**已有卡** `openmir2-m3-quest-align`（判据 = 现存脚本任务 + `characters_quest` 作用域 diff=0）。
 
 ### 1.7 组队 / 交易（not_covered）
 
@@ -281,7 +281,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_ru
 | §6 M3 门禁 `scoped_diff.py diff --canonical` 有一处 RED | **本片实跑确认**：`--canonical` ⇒ `RED 作用域内 4 行不一致`（全在 `mir2_db.characters_ablity`；`rc=1`）；`--canonical --fixed-newchr` ⇒ `RED 8 行`（+ `characters.Hair`，夹具随机输入）；同侧 C# 自比 `--canonical --fixed-newchr` = GREEN 9 表。⇒ 跨侧差异落在 `characters_ablity`（`Ac/MAxMP/MaxWeight/MaxWearWeight/MaxHandWeight/Hp`），疑持久化/断线存档轴；**非** DoD② 攻击 RNG 轴（后者已逐 k=0）。原始件 `diff/23-scope-m3-gate-canonical.txt` | **已有卡** `openmir2-m3-scoped-diff-ability`（即原 F-2 follow-up） |
 | 掉落 / 经验（§6 顺序 ④） | `not_covered`（D 线离线先例存在，非 M3 系统级） | **已有卡** `openmir2-m3-drop-exp-align` |
 | NPC / 商店（§6 顺序 ⑤）服务端派发 + 失败分支 | `partial`（脚本层 7/7 引 M4；服务端 not_covered） | **已有卡** `openmir2-m3-npc-shop-align` |
-| 任务（§6 顺序 ⑥） | `not_covered` | 仓内无承接卡 ⇒ **建议卡** `openmir2-m3-quest-align` |
+| 任务（§6 顺序 ⑥） | `not_covered` | **已有卡** `openmir2-m3-quest-align` |
 | 组队 / 交易（§6 顺序 ⑦） | `not_covered` | **已有卡** `openmir2-m3-party-trade-align` |
 | 公会 / 攻城（§6 顺序 ⑧） | `not_covered` | **已有卡** `openmir2-m3-guild-castle-align` |
 | 英雄 / 宠物（§6 顺序 ⑨） | `not_covered` | **已有卡** `openmir2-m3-hero-pet-align` |
