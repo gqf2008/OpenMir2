@@ -339,10 +339,14 @@ fail-closed，不等 MySQL）；`-SelfCheckNoStack` **⑥c**（缺省合规 + �
 逐假人等到齐才收工，超时/未 done ⇒ RED 并如实报 `attacks/done`。离线咬合：`run_bots.ps1 -SelfCheckNoStack`
 （attack done 2/1/0 + bag done 2/0）× `run_attack_pair.ps1 -SelfCheckNoStack` **⑭**。
 
-**F-F（未做，单独登记）**：`RecalcLevelAbilitys()` 会把 1 级角色 `MaxHP` 重算为 19 ⇒ pin 抬高失效、约 19 击即死；
-三个修选项都需真机窗口选型/验证（窗口归 m3cs），本片不擅自改判据。
+**死亡建模（F-F，m3cs tick21，2026-10-12 12:54）**：`RecalcLevelAbilitys()`（`PlayObject.cs:5254-5312`）只由 `Abil.Level`
+重算 `MaxHP` 并把 `HP` clamp 到它 ⇒ 1 级战士 `MaxHP=19`，pin 抬高失效、约 19 击即死。选 **option ③**：
+`attack_diff.py` 增 `death_k`（首个「命中且 hp<=0」的 k），`diff` 逐项比 `hp/maxhp` 且比 summary `death_k`；
+`mutate` 增 `hp|maxhp|death_k`；selftest **16/16**（死亡容忍绿 + `death_k 7→8` 必红 + `hp 12→999` 必红）。
+选 ③ 而非 ①② 的理由：进世界后第二遍 pin 改不动服务端内存里的活值；靠 pin 输入抬 MaxHP 需真机调参且可能
+把伤害压成 0（破坏非平凡门）；③ 最稳且离线可判（两侧同种子 ⇒ 死亡时点也必须相同）。
 
-证据 `evidence-attack-pair-fd-fe-fix-20261012/**`。
+证据 `evidence-attack-pair-blocker2-fix-20261012/**`。
 
 **种子注入断言（F-C，owner 2026-10-12 11:55）**：两侧同种子是数值可比的**前提**，但此前夹具不校验两侧是否
 真的注入了种子 ⇒ 未设种子只会得到「不可比的红」却看不出来。新增 `gate_guards.ps1::Test-M3SeedInjected`：

@@ -87,6 +87,9 @@ def align_events(events):
     归属规则（唯一口径，写进报告）：按**文件序**消费——`role=attack` 推进 `current_k`；
     `role=struck` 归给当前 `current_k`（且只认 `src == my`，即本假人自己打出的）。
     `current_k` 为 None（还没发第一步）时出现的 struck 丢弃（不计入任何 k）。
+
+    F-F（option ③）：`death_k` = 首个命中后 `hp<=0` 的 k（受害者死亡）；两侧必须死在同一个 k，
+    死亡后的步（无 struck）算 dodge（hit=False/dmg=0），同样逐项比对 ⇒ 死亡被**显式建模**而非忽略。
     """
     by_k = {}
     current_k = None
@@ -116,14 +119,29 @@ def align_events(events):
             row["maxhp"] = int(ev.get("maxhp", 0) or 0)
     rows = [by_k[k] for k in sorted(by_k.keys())]
     hits = sum(1 for r in rows if r["hit"])
+    death_k, min_hp = death_stats(rows)
     summary = {
         "role": "summary",
         "attacked": len(rows),
         "hits": hits,
         "dodges": len(rows) - hits,
         "sum": sum(r["dmg"] for r in rows),
+        "death_k": death_k,
+        "min_hp": min_hp,
     }
     return rows, summary
+
+
+def death_stats(rows):
+    """F-F option ③ 的唯一死亡口径：首个「命中且 hp<=0」的 k；min_hp = 命中行的最小 HP。"""
+    hit_rows = [r for r in rows if r.get("hit")]
+    hp_vals = [int(r.get("hp", 0) or 0) for r in hit_rows]
+    death_k = None
+    for r in hit_rows:
+        if int(r.get("hp", 0) or 0) <= 0:
+            death_k = int(r.get("k", 0))
+            break
+    return death_k, (min(hp_vals) if hp_vals else 0)
 
 
 def load_seq(path):
@@ -168,7 +186,12 @@ def diff_seq(a_rows, a_sum, b_rows, b_sum):
             problems.append("k=%s hit 不等: a=%s b=%s" % (ra.get("k"), ra.get("hit"), rb.get("hit")))
         if int(ra.get("dmg", 0)) != int(rb.get("dmg", 0)):
             problems.append("k=%s dmg 不等: a=%s b=%s" % (ra.get("k"), ra.get("dmg"), rb.get("dmg")))
-    for key in ("attacked", "hits", "dodges", "sum"):
+        # F-F option ③：受害者 HP/MaxHP 逐项比（死亡轨迹也是判据的一部分，不只看 hit/dmg）。
+        if int(ra.get("hp", 0) or 0) != int(rb.get("hp", 0) or 0):
+            problems.append("k=%s hp 不等: a=%s b=%s" % (ra.get("k"), ra.get("hp"), rb.get("hp")))
+        if int(ra.get("maxhp", 0) or 0) != int(rb.get("maxhp", 0) or 0):
+            problems.append("k=%s maxhp 不等: a=%s b=%s" % (ra.get("k"), ra.get("maxhp"), rb.get("maxhp")))
+    for key in ("attacked", "hits", "dodges", "sum", "death_k"):
         if a_sum.get(key) != b_sum.get(key):
             problems.append("统计 %s 不等: a=%s b=%s" % (key, a_sum.get(key), b_sum.get(key)))
     return problems
@@ -225,6 +248,9 @@ def cmd_mutate(args):
 
     --field dmg --value V  ：把 k 行的 dmg 改成 V（并同步 summary.sum）。
     --field hit --value 0/1：把 k 行改成 dodge(0)/hit(1)（同步 hits/dodges/sum）。
+    --field hp --value V   ：把 k 行的 hp 改成 V（并重算 summary.death_k/min_hp；F-F option ③ 红检）。
+    --field maxhp --value V：把 k 行的 maxhp 改成 V。
+    --field death_k --value V（V<0 表示 None）：直改 summary.death_k（死亡时点反例）。
     """
     if not os.path.exists(args.seq):
         return _die("PREREQ_MISSING: 找不到序列文件 %s" % args.seq)
@@ -253,8 +279,17 @@ def cmd_mutate(args):
             target["hit"] = now
             if not now:
                 target["dmg"] = 0
+    elif args.field in ("hp", "maxhp"):
+        target[args.field] = args.value
+        if summary is not None:
+            dk, mh = death_stats(rows)
+            summary["death_k"] = dk
+            summary["min_hp"] = mh
+    elif args.field == "death_k":
+        if summary is not None:
+            summary["death_k"] = args.value if args.value >= 0 else None
     else:
-        return _die("PREREQ_MISSING: --field 只支持 dmg|hit")
+        return _die("PREREQ_MISSING: --field 只支持 dmg|hit|hp|maxhp|death_k")
     with open(args.seq, "w", encoding="utf-8", newline="\n") as fh:
         for r in rows:
             fh.write(json.dumps(r) + "\n")
@@ -365,6 +400,44 @@ def cmd_selftest(args):
     rc = cmd_diff(argparse.Namespace(a=a_seq, b=short, max_diffs=20))
     check("f-length-mismatch-red", rc == 1, "rc=%d" % rc)
 
+    # (h) F-F option ③：死亡容忍（两侧同种子在 k=7 死，k=8..10 无 struck）⇒ GREEN
+    death_events = []
+    for k in range(1, 11):
+        death_events.append({"role": "attack", "k": k, "op": "CM_HIT", "x": 1, "y": 1, "dir": 2, "my": 101})
+        if k <= 7:
+            death_events.append({"role": "struck", "dmg": 3, "hp": max(0, 21 - 3 * k), "maxhp": 19, "src": 101, "actor": 55})
+    death_events.append({"role": "done", "attacks": 10})
+    draw = os.path.join(tmp, "death.raw.jsonl")
+    _write_raw(draw, death_events)
+    d_rows, d_sum = align_events(read_raw(draw))
+    d_a = os.path.join(tmp, "death-a.seq.jsonl")
+    d_b = os.path.join(tmp, "death-b.seq.jsonl")
+    for p in (d_a, d_b):
+        with open(p, "w", encoding="utf-8", newline="\n") as fh:
+            for r in d_rows:
+                fh.write(json.dumps(r) + "\n")
+            fh.write(json.dumps(d_sum) + "\n")
+    check("h-death-k7", d_sum.get("death_k") == 7, str(d_sum))
+    rc = cmd_diff(argparse.Namespace(a=d_a, b=d_b, max_diffs=20))
+    check("h-death-symmetric-green", rc == 0, "rc=%d" % rc)
+
+    # (i) 死亡时点不同 ⇒ RED（只改 summary.death_k，行 hp 不动）
+    rc = cmd_mutate(argparse.Namespace(seq=d_b, k=7, field="death_k", value=8))
+    check("i-death-k-mutate-rc", rc == 0, "rc=%d" % rc)
+    rc = cmd_diff(argparse.Namespace(a=d_a, b=d_b, max_diffs=20))
+    check("i-death-k-mismatch-red", rc == 1, "rc=%d" % rc)
+
+    # (j) 单步 HP 不等 ⇒ RED（死亡轨迹逐项比）
+    for p in (d_b,):
+        with open(p, "w", encoding="utf-8", newline="\n") as fh:
+            for r in d_rows:
+                fh.write(json.dumps(r) + "\n")
+            fh.write(json.dumps(d_sum) + "\n")
+    rc = cmd_mutate(argparse.Namespace(seq=d_b, k=3, field="hp", value=999))
+    check("j-hp-mutate-rc", rc == 0, "rc=%d" % rc)
+    rc = cmd_diff(argparse.Namespace(a=d_a, b=d_b, max_diffs=20))
+    check("j-hp-mismatch-red", rc == 1, "rc=%d" % rc)
+
     # 清理
     for name in os.listdir(tmp):
         try:
@@ -377,7 +450,7 @@ def cmd_selftest(args):
         print("SELFTEST RED: %d/%d 未过: %s" % (len(failures), len(checks), ", ".join(failures)))
         return 1
     print("SELFTEST GREEN: attack_diff selftest %d/%d（align 窗口归属 + 同序列绿 + 改坏 dmg/hit 必红 + "
-          "全 0 非平凡门 + 空序列 + 长度不等）" % (len(checks), len(checks)))
+          "全 0 非平凡门 + 空序列 + 长度不等 + 死亡容忍/死亡时点/HP 逐项比（F-F option ③））" % (len(checks), len(checks)))
     return 0
 
 

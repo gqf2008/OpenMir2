@@ -1,10 +1,10 @@
-# 证据：修 M3②③ 攻击夹具第二轮真机 blocker F-D + F-E（卡 `openmir2-m3-attack-pair-fixture`）
+# 证据：修 M3②③ 攻击夹具第二轮真机 blocker F-D + F-E + F-F（卡 `openmir2-m3-attack-pair-fixture`）
 
 - 卡：`openmir2-m3-attack-pair-fixture`（issue `76cc08b8`）。
 - 上游 finding：m3cs tick21 第二轮真机对拍（owner 路由 comment `460c2ac00d02ad6e5d89ba39e7f0d47735b66b9f`，2026-10-12 12:54）
   暴露三条 Important（F-D/F-E/F-F），全在夹具/驱动 ⇒ 派回本卡；可复现原始件 `E:/tmp/m3cs21-evidence/**`。
-  本片修 **F-D + F-E**；**F-F 单独登记**（见下）。
-- 性质：**夹具/驱动侧修复**；零端口（只用共享 MySQL 3306）、**未起服务端栈**、未 merge、未自签 review。
+  本片修 **F-D + F-E + F-F**（F-F 选 option ③，见下）。
+- 性质：**夹具/驱动/判据侧修复**；零端口（只用共享 MySQL 3306）、**未起服务端栈**、未 merge、未自签 review。
   写集 = `mir2-rs/tests/parity/m3/**` + `tools/botload/run_bots.ps1`，**零 `.rs`**；
   `src/**`、`crates/**`、`bins/**`、`sql/**`、`MirClient` 全 0 改。
 
@@ -51,13 +51,26 @@ summary 增 `attack_seq_done` / `attack_sequence`；GREEN 文案带 `attack_seq_
 新增 `run_bots.ps1 -SelfCheckNoStack` 离线自检（合成日志计 attack done 2/1/0 + bag done 2/0；改坏计数正则 ⇒ RED），
 由 `run_attack_pair.ps1 -SelfCheckNoStack` **⑭** 调用。
 
-## F-F（Important，**本片未做，单独登记**）——pin 的 Hp/MaxHP 会被 `RecalcLevelAbilitys()` 重算
+## F-F（Important）——pin 的 Hp/MaxHP 会被 `RecalcLevelAbilitys()` 重算 ⇒ 选 **option ③（显式建模死亡）**
 
-`RecalcLevelAbilitys()` 实测把 1 级角色 `MaxHP` 重算为 **19** ⇒ pin 抬高意图失效、约 19 击即死。
-owner 给的三选项（① 进世界后第二遍 pin；② pin 能重算出高 MaxHP 的输入；③ 把「第 k 击死亡」显式建模进判据）
-都需要**真机窗口**才能选型/验证（当前窗口归 m3cs）。本片**不擅自动判据**、不猜实现，
-留待 owner 在卡上落选项后由下一片处理（`attack_diff` 的「逐 k + 非平凡门」在两侧确定性相同的前提下对死亡是容忍的，
-但这一点必须真机确认后才敢当结论）。
+`RecalcLevelAbilitys()`（`src/M2Server/Player/PlayObject.cs:5254-5312`；原始件
+`evidence-attack-pair-blocker2-20261012/03-oracle-recalc-maxhp.txt`）只由 `Abil.Level` + 配置公式算
+`MaxHP`，与 `characters_ablity.MaxHP` 无关，且 `HP` 再被 clamp 到该 `MaxHP` ⇒ 1 级战士 `MaxHP=19`，
+pin 抬高**不生效**、约 19 击即死。
+
+选型（写清）：**③ 显式把「第 k 击死亡」建模进判据**——选它的理由：① 进世界后第二遍 pin 改不动服务端
+内存里的活值；② 靠 pin 输入把重算 MaxHP 抬到「120 击不死」需真机调参且可能把伤害压成 0（破坏非平凡门）；
+③ 最稳且离线可判：两侧同种子 + 同 pin ⇒ 伤害序列逐项相同 ⇒ 死亡时点也必须相同，死亡后无 struck 的步
+算 dodge，逐项比即可。
+
+**改法**（`attack_diff.py`）：
+- `align_events` 的 summary 增 **`death_k`**（首个「命中且 `hp<=0`」的 k）与 `min_hp`（唯一口径 `death_stats`）；
+- `diff_seq` 除 `hit/dmg` 外**逐项比 `hp`/`maxhp`**，并在 summary 里比 **`death_k`**（死亡时点不等 ⇒ RED）；
+- `mutate` 新增 `--field hp|maxhp|death_k`（造反例）；
+- `selftest` 新增三条：死亡容忍（两侧同在 k=7 死 ⇒ GREEN）、死亡时点不等（`death_k 7→8` ⇒ RED）、
+  单步 HP 不等（`k=3 hp: 12→999` ⇒ RED），**16/16 GREEN**（见 `12-attackdiff-selftest.txt`）。
+
+> `attacked` 仍要求等于 N（攻击步照发）；死亡步算 dodge，非平凡门要求 `hits>=1 && sum>0`（死亡前必满足）。
 
 ## 判据原始输出（命令 + 输出 + 路径 + hash）
 
@@ -74,12 +87,14 @@ owner 给的三选项（① 进世界后第二遍 pin；② pin 能重算出高 
 | `09-gates-msgcodegen.txt` | `cargo run -p msgcodegen --offline -- --check` | 604 条一致，rc=0 |
 | `10-runbots-selfcheck-green.txt` | `powershell ... -File tools/botload/run_bots.ps1 -SelfCheckNoStack` | **GREEN（rc=0）**；attack done 2/1/0 + bag done 2/0 |
 | `11-runbots-mutation-red.txt` | 把收尾计数正则 `"role":"done"` 改成 `"DONE"` 后同上 | **RED（rc=1）**；`attack_done_2, attack_done_1` |
+| `12-attackdiff-selftest.txt` | `python mir2-rs/tests/parity/m3/attack_diff.py selftest` | **16/16 GREEN（rc=0）**；含死亡容忍绿 + `death_k 7→8` 必红 + `hp 12→999` 必红 |
 
 ## oracle / 冻结锚点
 
 - `sql/mir2_db.sql:47-49`：`IncHealth/IncSpell` 属 `characters`（F-A，已在 master `8f193a6c`）。
 - `sql/mir2_db.sql:6081-6084`：`characters_ablity.Hp/Mp/MaxHP/MAxMP` = `smallint(11)` NOT NULL（F-D 列域锚）。
 - `src/BotSrv/Player/RobotPlayer.cs:674`：攻击序列收尾标记 `M3ATTSEQ {"role":"done",...}`（F-E 锚）。
+- `src/M2Server/Player/PlayObject.cs:5254-5312`：`RecalcLevelAbilitys()` 由 `Abil.Level` 重算 MaxHP/MP 并 clamp HP（F-F 锚）。
 
 ## 复现命令（本目录，无需起服务端栈）
 
@@ -106,3 +121,5 @@ powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_bag_equip_p
   `E:/tmp/openmir2-m3gs/selftest-*`（`selftest_gate.ps1` 默认输出）。
 - 端口/进程：本片**未起任何服务**；10 端口由 m3cs 本轮 ②③ 真机栈持有（与本片无关），仅共享 3306 被本片自检读取。
 - source-mutation 已还原：`run_attack_pair.ps1` 的 `-AttackVictimHp` 缺省 = `30000`、`run_bots.ps1` 的 attack 正则 = `"role":"done"`（`git status` 干净）。
+- 下一轮真机验证（m3cs）：owner `anti_repeat` 要求先跑 **`-AttackCount 20` 小规模冒烟**（确认序列完整、判据非平凡）再跑 120；
+  本片已把 F-D/F-E/F-F 三处 fail-closed 就位，但**真机序列两相仍由 m3cs 在窗口内跑**（本片未起栈）。
