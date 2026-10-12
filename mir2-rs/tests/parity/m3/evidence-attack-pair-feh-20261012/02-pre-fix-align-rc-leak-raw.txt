@@ -1,0 +1,6 @@
+=== 修前 align 段原始输出（Invoke-AttackAlign 返回值泄漏） ===
+来源: E:/tmp/m3bag-smoke/run/03-csharp-run-20.txt:218
+
+218:RED: attack_diff align 失败（rc=ALIGN_OK E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\tests\parity\m3\sessions\csharp-20261012-130755\attack_seq.jsonl attacked=20 hits=2 dodges=18 sum=44）
+
+注: python 已成功产出 attack_seq.jsonl（ALIGN_OK … attacked=20 hits=2 dodges=18 sum=44），但 PowerShell 函数把 stdout 当返回值 ⇒ `$rc -ne 0` 恒真。

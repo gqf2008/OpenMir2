@@ -295,6 +295,20 @@ powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair
 **非平凡门**（防恒 0/恒绿）：`attacked>=1 && hits>=1 && sum>0`，否则 RED。
 目标接法 = `-AttackPinPair`：attacker（账号序号 0）与 victim（序号 1）**相邻**固定起点，victim `Hp=MaxHP` 抬高。
 
+**攻击 pin 必须无怪（F-I，m3cs tick22 真机 finding，2026-10-12 13:45）**：旧缺省 pin `(289,618)` 与冻结内容
+`Envir/MonGen.txt` 的 map-0 刷怪圈 `256 572 r=50` 最近**净距仅 6.6 格**（`hypot(289-256,618-572)=56.6-50`）
+⇒ 怪能刷到 attacker/victim 身上；真机会话 `csharp-20261012-130755` 里 29 条 `struck` 有 **27 条来自怪 `1330629693`**
+打在 attacker 身上，同种子两次 hit 数 2 vs 7（m3cs 另有一次 0/20）。⇒ 缺省 pin 改为 **`(429,320)`**（比奇城东门外空地，
+对 map-0 全部刷怪圈**最近净距 99.2 格**，最近圈 `333 268 r=10`）。唯一来源 = `gate_guards.ps1` 的
+`$script:M3AttackPinCX/CY`（`Format-M3AttackPose` 缺省与 `run_attack_pair.ps1 -AttackPinCX/-AttackPinCY` 同源）。
+机判护栏（都改回 `289,618` 必红）：`gate_guards.ps1::Test-M3AttackPinNoMonster` 读只读抽取
+`fixtures/mongen-map0.tsv`（map-0 刷怪点 `x\ty\trange`，内容冻结）要求净距 ≥50，`run_pair.ps1` 在 `-AttackPinPair`
+启动时 **fail-closed**；`run_attack_pair.ps1 -SelfCheckNoStack` **⑯** 两向（生产 99.2 绿 / 旧缺省 6.6 必红）。
+真机同种子连跑 2 次（`csharp-20261012-135416` / `-135539`，seed=42）均 `attacked=20 hits=1 done=1/1`、
+`PIN_NO_MONSTER OK clearance=99.2`、struck 只有 1 个 src（无第三方）；证据 `evidence-attack-pair-fij-20261012/**`。
+**残留**：同种子两次逐 k 仍不同——攻击判定取全局 `M2Share.RandomNumber`，被全图怪 `AnimalObject.Wondering` 等
+持续消耗 ⇒「同种子 ⇒ 逐 k 相同」不成立（详见 whitelist T-29）。
+
 与前一条（背包/装备）共用同一批护栏：入口实现识别、两相 pin、`settle+hold`、`-DisableAutoPlay` 耦合、
 peer 口径（`attack_sequence`/`attack_pose`/`fixed_new_chr`）与 `scoped_diff` 作用域判据。
 **前置**：真机两侧需注入**同一个种子**（C# 用 `m3/rng-hook`；Rust T-30 生产路径已支持，`start_rust_stack.ps1` 的透传管线见 `openmir2-m3-rust-stack-seed-plumb`）；夹具在 **0.6)** 预检**断言两侧确实注入**（F-C，未注入 ⇒ fail-closed RED；见 whitelist T-30）。

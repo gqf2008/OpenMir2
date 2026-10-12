@@ -1,0 +1,8 @@
+=== 两次冒烟 SM_STRUCK 的 src 分布（无怪干扰口径，F-I）===
+--- run1 (csharp-20261012-135416) ---
+struck 事件数 = 2 ; 不同 src 数 = 1 ; src 分布 = {1896928318: 2}
+--- run2 (csharp-20261012-135539) ---
+struck 事件数 = 2 ; 不同 src 数 = 1 ; src 分布 = {231547294: 2}
+
+口径: 两次都只出现 1 个 src（= attacker ActorId）⇒ 没有第三方（怪）打 attacker/victim；
+      对照旧 pin (289,618) 的 csharp-20261012-130755 出现 2 个 src（27 次来自怪 1330629693）。

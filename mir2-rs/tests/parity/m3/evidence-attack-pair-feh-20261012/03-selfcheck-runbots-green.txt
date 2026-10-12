@@ -1,0 +1,5 @@
+=== 修后 run_bots -SelfCheckNoStack（含新增预期数/完备性） ===
+命令: powershell -ExecutionPolicy Bypass -File tools/botload/run_bots.ps1 -SelfCheckNoStack
+rc=0
+
+SELFTEST_RED GREEN: M3 序列收尾计数离线自检全过（attack done 2/1/0 + bag done 2/0 + 预期 attack=1/bag=Bots + 完备性两向）

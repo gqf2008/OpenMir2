@@ -68,8 +68,29 @@ function Get-M3SeqDoneCount {
     return ([regex]::Matches($Text, 'M3ATTSEQ \{[^\r\n]*"role":"done"')).Count
 }
 
+# M3 序列「预期 done 数」的唯一口径（真实等待与离线自检共用）：
+#   bag    = **每个**假人都发一条 `M3BAGSEQ done`（`RobotPlayer.BagEquipSequenceTick`）⇒ = $Bots。
+#   attack = **只有 attacker 一个**假人武装（BotSrv `RobotOptions.AttackRole` 缺省 0 ⇒ exact LoginId =
+#            LoginAccount+0；见 `RobotPlayer.ArmAttackSequence` / `MShare.IsAttackAttacker`）⇒ = **1**。
+# F-E 补丁（m3bag 2026-10-12，第二轮 `-AttackCount 20` 真机冒烟）：旧实现把 attack 也写成 `>= $Count`
+# ⇒ `-Bots 2` 时永远等不到第 2 条 done（实测 `attack_seq_done=1/2` 卡到超时/进程退出再报 RED），
+# 把**已经跑完整**的序列误判成截断。
+function Get-M3SeqExpectedDone {
+    param([ValidateSet('bag', 'attack')][string]$Kind, [int]$Bots)
+    if ($Kind -eq 'attack') { return 1 }
+    return $Bots
+}
+
+# 收尾判据唯一口径：done 数达到本序列的预期 done 数。
+function Test-M3SeqComplete {
+    param([ValidateSet('bag', 'attack')][string]$Kind, [int]$Done, [int]$Bots)
+    return ($Done -ge (Get-M3SeqExpectedDone -Kind $Kind -Bots $Bots))
+}
+
 if ($SelfCheckNoStack) {
     # F-E（m3cs tick21）：攻击序列「等 M3ATTSEQ done」的收尾计数离线自检（改坏正则 ⇒ 必红）。
+    # F-E 补丁（m3bag 2026-10-12）：再加「预期 done 数 / 完备性」两向自检——把 attack 的预期改回 $Bots
+    # ⇒ `attack_expected_not_1` + `attack_1of2_not_complete` 必红（1 个 attacker 跑完整就算完整）。
     $fail = @()
     $t2 = 'M3ATTSEQ {"role":"arm","id":"a","count":2}' + "`n" +
           'M3ATTSEQ {"role":"attack","k":1,"id":"a"}' + "`n" +
@@ -80,11 +101,20 @@ if ($SelfCheckNoStack) {
     if ((Get-M3SeqDoneCount -Text 'M3ATTSEQ {"role":"attack","k":1}' -Kind attack) -ne 0) { $fail += 'attack_done_0' }
     if ((Get-M3SeqDoneCount -Text "M3BAGSEQ done`nM3BAGSEQ done" -Kind bag) -ne 2) { $fail += 'bag_done_2' }
     if ((Get-M3SeqDoneCount -Text 'M3BAGSEQ step=0 op=CM_PICKUP' -Kind bag) -ne 0) { $fail += 'bag_done_0' }
+    # 预期 done 数：attack=1（只有 attacker） / bag=$Bots。
+    if ((Get-M3SeqExpectedDone -Kind attack -Bots 2) -ne 1) { $fail += 'attack_expected_not_1' }
+    if ((Get-M3SeqExpectedDone -Kind attack -Bots 7) -ne 1) { $fail += 'attack_expected_not_1_multibot' }
+    if ((Get-M3SeqExpectedDone -Kind bag -Bots 2) -ne 2) { $fail += 'bag_expected_not_bots' }
+    # 完备性两向：2 假人里 1 条 attack done 就算完整；0 条不算；bag 必须 2 条。
+    if (-not (Test-M3SeqComplete -Kind attack -Done 1 -Bots 2)) { $fail += 'attack_1of2_not_complete' }
+    if (Test-M3SeqComplete -Kind attack -Done 0 -Bots 2) { $fail += 'attack_0of2_complete' }
+    if (Test-M3SeqComplete -Kind bag -Done 2 -Bots 2) {} else { $fail += 'bag_2of2_not_complete' }
+    if (Test-M3SeqComplete -Kind bag -Done 1 -Bots 2) { $fail += 'bag_1of2_complete' }
     if ($fail.Count -gt 0) {
         Write-Output ('SELFTEST_RED RED: ' + ($fail -join ', '))
         exit 1
     }
-    Write-Output 'SELFTEST_RED GREEN: M3 序列收尾计数离线自检全过（attack done 2/1/0 + bag done 2/0）'
+    Write-Output 'SELFTEST_RED GREEN: M3 序列收尾计数离线自检全过（attack done 2/1/0 + bag done 2/0 + 预期 attack=1/bag=Bots + 完备性两向）'
     exit 0
 }
 
@@ -188,10 +218,11 @@ $worldOk = 0
 # 假人没跑完 拾取→装备→卸下→丢弃→用药 就被杀，run_pair 的 bag_equip_markers 判据必红（第九格从未在真栈跑过）。
 # M3②③ F-E（m3cs tick21 真机 finding，2026-10-12 12:54）：-AttackSequence 同病——没有「等 M3ATTSEQ done」分支
 # ⇒ 攻击序列在登录后立即被 kill，只到 12/120、`done=0`（原始件 E:/tmp/m3cs21-evidence/csharp-stack/run-csharp.txt）。
-# 本分支与 -BagEquipSequence 同口径：等每个假人一条 `M3ATTSEQ {"role":"done"...}`（RobotPlayer.cs:674）才收工；
+# 本分支与 -BagEquipSequence 同口径：等本序列的**预期 done 数**（attack=1 个 attacker；bag=$Count）才收工；
 # 超时/未 done ⇒ 不 break，末尾判据如实报 attacks/done 并 RED（fail-closed）。
 $bagDone = 0
 $attackDone = 0
+$attackExpected = Get-M3SeqExpectedDone -Kind attack -Bots $Count
 $charCreated = 0
 function Read-SharedText([string]$Path) {
   # BotSrv 的 StreamWriter 以 FileShare.ReadWrite 持有：读侧也必须放行写，否则打开即抛
@@ -235,14 +266,14 @@ while ((Get-Date) -lt $deadline) {
     $charCreated = ([regex]::Matches((Read-SharedText $LogFile), '创建角色')).Count
   }
   $bagNote = if ($BagEquipSequence) { " bag_seq_done=" + $bagDone + "/" + $Count } else { "" }
-  $atkNote = if ($AttackSequence) { " attack_seq_done=" + $attackDone + "/" + $Count } else { "" }
+  $atkNote = if ($AttackSequence) { " attack_seq_done=" + $attackDone + "/" + $attackExpected } else { "" }
   Write-Output ("PROGRESS spawned=" + $spawned + " login_ok=" + $success + "/" + $Count + " in_world=" + $worldOk + "/" + $Count + $bagNote + $atkNote + " (src=load_stats.ndjson)")
   if ($BagEquipSequence) {
     # T-14：序列跑完（每个假人一条 done）才算收工；否则继续等（超时上限仍是 TimeoutSec）。
     if ($success -ge $Count -and $bagDone -ge $Count) { break }
   } elseif ($AttackSequence) {
-    # F-E：攻击序列跑完（每个假人一条 done）才算收工；否则继续等（超时上限仍是 TimeoutSec）。
-    if ($success -ge $Count -and $attackDone -ge $Count) { break }
+    # F-E：攻击序列跑完（attacker 的 done 到位）才算收工；否则继续等（超时上限仍是 TimeoutSec）。
+    if ($success -ge $Count -and (Test-M3SeqComplete -Kind attack -Done $attackDone -Bots $Count)) { break }
   } elseif ($RequireCharCreated) {
     # 固定起点①预热：等到 N 个「创建角色」即 break（不要求进世界）。
     # 另等 load_stats 的 login_ok 到齐：stats 是 BotSrv 每 5s 采样一次，而「创建角色」标记
@@ -280,16 +311,16 @@ if ($SelfTestRed) {
   exit 1
 }
 
-if ($success -ge $Count -and (-not $RequireWorld -or $worldOk -ge $Count) -and (-not $BagEquipSequence -or $bagDone -ge $Count) -and (-not $AttackSequence -or $attackDone -ge $Count) -and (-not $RequireCharCreated -or $charCreated -ge $Count)) {
-  Write-Output ("GREEN: " + $success + "/" + $Count + " 登录成功 (100%)" + $(if ($RequireWorld) { "；in_world=" + $worldOk + "/" + $Count } else { "" }) + $(if ($BagEquipSequence) { "；bag_seq_done=" + $bagDone + "/" + $Count } else { "" }) + $(if ($AttackSequence) { "；attack_seq_done=" + $attackDone + "/" + $Count } else { "" }) + $(if ($RequireCharCreated) { "；char_created=" + $charCreated + "/" + $Count } else { "" }))
+if ($success -ge $Count -and (-not $RequireWorld -or $worldOk -ge $Count) -and (-not $BagEquipSequence -or $bagDone -ge $Count) -and (-not $AttackSequence -or $attackDone -ge $attackExpected) -and (-not $RequireCharCreated -or $charCreated -ge $Count)) {
+  Write-Output ("GREEN: " + $success + "/" + $Count + " 登录成功 (100%)" + $(if ($RequireWorld) { "；in_world=" + $worldOk + "/" + $Count } else { "" }) + $(if ($BagEquipSequence) { "；bag_seq_done=" + $bagDone + "/" + $Count } else { "" }) + $(if ($AttackSequence) { "；attack_seq_done=" + $attackDone + "/" + $attackExpected } else { "" }) + $(if ($RequireCharCreated) { "；char_created=" + $charCreated + "/" + $Count } else { "" }))
   exit 0
 }
 if ($BagEquipSequence -and $bagDone -lt $Count) {
   Write-Output ("RED: " + $Count + " 个假人的背包/装备序列只跑完 " + $bagDone + "/" + $Count + "（缺 M3BAGSEQ done）——序列不完整，不能当『同一序列』")
   exit 1
 }
-if ($AttackSequence -and $attackDone -lt $Count) {
-  Write-Output ("RED: " + $Count + " 个假人的攻击序列只跑完 " + $attackDone + "/" + $Count + "（缺 M3ATTSEQ role=done；count=" + $AttackCount + "）——序列不完整，不能当『同一序列』")
+if ($AttackSequence -and $attackDone -lt $attackExpected) {
+  Write-Output ("RED: 攻击序列只跑完 " + $attackDone + "/" + $attackExpected + "（缺 M3ATTSEQ role=done；count=" + $AttackCount + "）——序列不完整，不能当『同一序列』（attack 预期 done 数 = attacker 数 = 1）")
   exit 1
 }
 if ($RequireWorld -and $worldOk -lt $Count) {

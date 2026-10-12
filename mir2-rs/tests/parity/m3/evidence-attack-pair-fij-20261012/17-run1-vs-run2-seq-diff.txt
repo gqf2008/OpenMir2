@@ -1,0 +1,13 @@
+=== run1 (csharp-20261012-135416) vs run2 (csharp-20261012-135539) attack_seq.jsonl ===
+命令: diff 11-run1-attack_seq.jsonl 12-run2-attack_seq.jsonl
+结论: 逐 k 不同（hit 落在 k=2 vs k=4）——见 README「残留：同种子不保证逐 k 相同」。
+--- diff 原始输出 ---
+2c2
+< {"k": 2, "hit": true, "dmg": 2, "hp": 18, "maxhp": 19}
+---
+> {"k": 2, "hit": false, "dmg": 0, "hp": 0, "maxhp": 0}
+4c4
+< {"k": 4, "hit": false, "dmg": 0, "hp": 0, "maxhp": 0}
+---
+> {"k": 4, "hit": true, "dmg": 2, "hp": 18, "maxhp": 19}
+(diff rc=1)

@@ -1,0 +1,6 @@
+7aa5e46577ea3cc8ab5d7ce8fb804ad6128e990f72012526433efc10e21249d8 *01-pre-fix-smoke-raw.txt
+8f5efba173ab45d17c9134dfdfd1dc452842eb2c8a30a272a61acbe07c7764c6 *02-pre-fix-align-rc-leak-raw.txt
+f0289ecf67f411fd0cdc6215e045c91cd4c4cbecd90dcbcaf479bbfe2a767349 *03-selfcheck-runbots-green.txt
+d5f2dc1532df972e8b62d74e1f4218e5683057d8d7123057ff262e7c6d0ffa01 *04-mutation-FE-done-count-red.txt
+a7b949710506fa242fe1f1be483bea4d124171bb9842c322ab64fe71273b800e *README.md
+1a7c9e65c92c23dfe8fe957c58977c4e853dd4c2cd235d25047e2e756974637f *selfcheck-selfcontained.txt
