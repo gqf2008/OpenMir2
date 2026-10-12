@@ -1,0 +1,11 @@
+=== ports before (run 2026-10-12 21:46:00) ===
+5000 free
+5100 free
+5500 free
+5600 free
+5700 free
+6000 free
+7000 free
+7100 free
+7200 free
+3306 LISTEN pid=29372

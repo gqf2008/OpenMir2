@@ -1,0 +1,21 @@
+# F1 夹具 finding（C# 半 7d3fb333，m3bag 写集）—— ReadAllBytes 读 GameSvr 持有的专用流
+
+## 现象（start-csharp-hook.ps1 -IsolateAttack，栈已起/端口已就绪后）
+ParentContainsErrorRecordException: E:\tmp\m3cs-iso-wt\mir2-rs\tests\parity\m3\start-csharp-hook.ps1:51
+Line |
+  51 |      $bytes = [System.IO.File]::ReadAllBytes($Path)
+     |      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+     | 调用“ReadAllBytes”并传入“1”个参数时发生异常：“The process cannot access the file
+     | 'E:\tmp\m3cs-iso2\csharp\rng-attack-stream.tsv' because it is being used by another process.”
+
+## 代码位置（7d3fb333）
+start-csharp-hook.ps1:51   $bytes = [System.IO.File]::ReadAllBytes($Path)   # Get-Sha256Hex
+gate_guards.ps1:45         $bytes = [System.IO.File]::ReadAllBytes($Path)   # Get-M3Sha256Hex
+run_attack_pair.ps1:~999   Get-M3Sha256Hex -Path $attackStreamPath          # 仅当 -AttackStreamLog/$env:MIR2_RNG_ATTACK_LOG 设置时
+
+## 持有者
+rng-hook/StartupHook.cs:152-155  new FileStream(attackLogPath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite)
+
+## 规避（本片采用）
+不设 MIR2_RNG_ATTACK_LOG ⇒ run_attack_pair 不计算 attack_stream_sha256（""）；跨侧护栏只比 isolate_attack/attack_seed。
+专用流 sha256 由 provenance/00-provenance.txt 在 -Stop 后补记。

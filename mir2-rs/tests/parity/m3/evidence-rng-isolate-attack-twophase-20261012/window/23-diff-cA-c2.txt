@@ -1,0 +1,2 @@
+NONTRIVIAL a=True() b=True()
+GREEN: 跨侧攻击序列 diff = 0（attacked=120 hits=2 dodges=118 sum=2）

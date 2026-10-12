@@ -1,0 +1,14 @@
+START DBSrv pid=5748 ports=6000,5100,5700 exe=E:\Users\gxh\Documents\GitHub\OpenMir2\src\DBSrv\bin\Release\DBSrv.exe
+START LoginSrv pid=19096 ports=5500,5600 exe=E:\Users\gxh\Documents\GitHub\OpenMir2\src\LoginSrv\bin\Release\LoginSrv.exe
+ISOLATE_ATTACK on=true seed=42 sites=E:\tmp\m3cs-iso2\csharp\rng-isolate-sites.txt attack_stream=E:\tmp\m3cs-iso2\csharp\rng-attack-stream.tsv
+START GameSvr pid=29256 ports=5000 exe=E:\MirServer\M2GameSvr-hook\GameSrv.exe
+START LoginGate pid=27376 ports=7000 exe=E:\MirServer\LoginGate\LoginGate.exe
+START SelGate pid=14752 ports=7100 exe=E:\MirServer\SelGate\SelGate.exe
+START RunGate pid=27392 ports=7200 exe=E:\MirServer\RunGate\GameGate.exe
+PIDFILE E:\tmp\m3cs-iso2\csharp\csharp-stack.pid.json
+ParentContainsErrorRecordException: E:\tmp\m3cs-iso-wt\mir2-rs\tests\parity\m3\start-csharp-hook.ps1:51
+Line |
+  51 |      $bytes = [System.IO.File]::ReadAllBytes($Path)
+     |      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+     | 调用“ReadAllBytes”并传入“1”个参数时发生异常：“The process cannot access the file
+     | 'E:\tmp\m3cs-iso2\csharp\rng-attack-stream.tsv' because it is being used by another process.”
