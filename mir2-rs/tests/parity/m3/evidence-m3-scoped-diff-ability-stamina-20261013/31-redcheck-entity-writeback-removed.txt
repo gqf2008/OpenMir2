@@ -1,0 +1,33 @@
+# 改坏必红 ②：删掉 drain_stamina 的 'world.entities.get_mut(..).hp = wabil.hp' 回写（逐击 SERVER_STATE dump / 攻击结算读 Entity.hp）
+# cmd: cargo test -p game-svr --offline drain_stamina_drops_one_hp_writes_back_and_emits_frame
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.34s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-3aa264152417c61e.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 88 filtered out; finished in 0.00s
+
+     Running unittests src\main.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-eb39968088e3f1ec.exe)
+
+running 1 test
+test tests::drain_stamina_drops_one_hp_writes_back_and_emits_frame ... FAILED
+
+failures:
+
+---- tests::drain_stamina_drops_one_hp_writes_back_and_emits_frame stdout ----
+
+thread 'tests::drain_stamina_drops_one_hp_writes_back_and_emits_frame' (12788) panicked at bins\game-svr\src\main.rs:7073:9:
+assertion `left == right` failed: 命中后必须回写世界实体 `hp`（逐击 dump / 攻击结算读它）
+  left: 100
+ right: 20668
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::drain_stamina_drops_one_hp_writes_back_and_emits_frame
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 156 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`
+rc=101

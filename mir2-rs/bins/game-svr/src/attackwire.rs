@@ -31,9 +31,9 @@
 //! - **技能/装备态**（`GetHitMode` 的 `PowerHit`/`FireHitSkill`/`MagicArr[SKILL_ERGUM|BANWOL|
 //!   CROSSMOON]` 条件）：技能层（`UserMagic`/`MagicArr`）未移植 ⇒ 这些条件恒假，模式 3/4/5/7/8
 //!   一律回落 `RM_HIT`（与「无技能角色」的 oracle 结果一致）。
-//! - **`Success` 支的体力面**：`HealthTick -= 30` / `SpellTick -= 100` 属体力/魔法点数面，
-//!   未移植（`movewire` 同源登记）；`PerHealth -= 2` / `PerSpell -= 2` 已由调用方作用于
-//!   `recover::Recovery`。
+//! - **`Success` 支的体力/魔力点**：`HealthTick -= 30` / `SpellTick -= 100` / `SpellTick = max(0,…)`
+//!   与 `PerHealth -= 2` / `PerSpell -= 2` 均已在调用方作用（`handle_hit_cmd` ⇒
+//!   `stamina::Stamina::on_attack_success` + `recover::Recovery`）。
 //! - **`IsProperTarget`/`IsAttackTarget`/`InSafeZone`** 与 PK/红名判定：目标筛选沿用
 //!   `GetMovingObject` 的 `!Ghost && !Death`，**不**做安全区/攻击模式过滤（登记）。
 //! - **`RM_MOVEFAIL`**：编码器未接（`movewire` 模块头已登记）。

@@ -1,0 +1,27 @@
+# 改坏必红 ③：吞掉 HP 支的 changes.push（= 把 oracle 的两次 HealthSpellChanged() 合并成一条）
+# cmd: cargo test -p game-svr --offline both_branches
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.59s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-3aa264152417c61e.exe)
+
+running 1 test
+test stamina::tests::both_branches_in_one_run_produce_two_distinct_change_snapshots ... FAILED
+
+failures:
+
+---- stamina::tests::both_branches_in_one_run_produce_two_distinct_change_snapshots stdout ----
+
+thread 'stamina::tests::both_branches_in_one_run_produce_two_distinct_change_snapshots' (14968) panicked at bins\game-svr\src\stamina.rs:360:9:
+assertion `left == right` failed: HP/MP 各一次 HealthSpellChanged()
+  left: 1
+ right: 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    stamina::tests::both_branches_in_one_run_produce_two_distinct_change_snapshots
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 87 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --lib`
+rc=101

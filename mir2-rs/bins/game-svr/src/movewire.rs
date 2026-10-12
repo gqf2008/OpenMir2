@@ -16,10 +16,16 @@
 //! - `M2Share.GetNextDirection`（`src/M2Server/M2Share.cs:299-378`）：由 `(sx,sy) → (dx,dy)` 求 8 向。
 //!
 //! **本片未接（登记，别按常识补）**：限速/超速（`CheckActionStatus` + `MoveTick`/`WalkIntervalTime`/
-//! `RunIntervalTime` + `MoveCount`/`OverSpeedCount`/`BoEmergencyClose`）、`ClientWalkXY` 的
-//! `HealthTick -= 10` / `ClientRunXY` 的 `HealthTick -= 60`（体力/饥饿面未移植）、失败支的
+//! `RunIntervalTime` + `MoveCount`/`OverSpeedCount`/`BoEmergencyClose`）、失败支的
 //! `SendRefMsg(RM_MOVEFAIL)`（需 `sm_movement_fail` 编码器）、`IsCanWalk`/`IsCanRun` 的状态位面、
 //! `SpaceMoved`（地图路由换图）。
+//!
+//! **已接（卡 `openmir2-m3-scoped-diff-ability`）**：成功支的体力/魔力点消耗——
+//! `ClientWalkXY` 的 `HealthTick -= 10`（`PlayObject.Attack.cs:1424`）由 `handle_move_cmd` 调
+//! `stamina::Stamina::on_walk_success`；`ClientRunXY`/`ClientHorseRunXY` 的
+//! `HealthTick -= 60; SpellTick -= 10; SpellTick = max(0,·); PerHealth -= 1; PerSpell -= 1`
+//! （`:1352-1356`/`:1041-1045`）由 `on_run_success` + `recover::Recovery` 的 `per_*` 回绕减接管
+//! （见 `bins/game-svr/src/stamina.rs`）。
 //!
 //! **`Death`/`STONE` 守卫**（`PlayObject.Operate.cs:312`、`PlayObject.Attack.cs:1373/1297/980`）：
 //! `Death` 已接（`handle_move_cmd` 读 `mir2_world::Entity.death`，为真则整支拒绝）；

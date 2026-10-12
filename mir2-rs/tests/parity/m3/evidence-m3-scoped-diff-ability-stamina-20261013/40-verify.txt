@@ -1,0 +1,28 @@
+# 证据 hash 复核（口径 = 仓库字节 / Git blob 内容；卡 openmir2-evidence-hash-convention）
+# cmd: python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/m3/evidence-m3-scoped-diff-ability-stamina-20261013
+GREEN mir2-rs\tests\parity\m3\evidence-m3-scoped-diff-ability-stamina-20261013\SHA256SUMS.txt  [repo 口径]  OK 15/15
+rc=0
+
+# cmd: python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-scoped-diff-ability-stamina-20261013
+EOLCHECK GREEN 16/16 件文本证据与仓库口径（LF）在 EOL 上一致
+rc=0
+
+# cmd: python -I tools/evidence-hash/verify_sha256sums.py selftest
+warning: in the working copy of '.gitattributes', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'evidence/.gitattributes', LF will be replaced by CRLF the next time Git touches it
+PASS 0/11 口径：text 文件按 LF 归一、-text 文件按原始字节（两者不同）
+PASS 1/11 仓库字节口径：清单与仓库字节一致 → 绿  OK 2/2
+PASS 2/11 改 1 位 hash → 必红
+PASS 3/11 多件（--check-extra）→ 必红
+PASS 4/11 少件（清单引用缺失文件）→ 必红
+PASS 5/11 口径只有一个：text 文件盘上 CRLF ⇒ 默认仓库口径(LF)绿、--disk-bytes 红
+PASS 6/11 已声明 * -text：仓库字节 == 盘上字节，两种口径都绿
+PASS 7/11 EOL 陷阱(盘上 CRLF / blob LF)：清单按盘上字节记 ⇒ 必红且点名（--disk-bytes 也红）  trap=1 disk_rc_trap=True
+PASS 8/11 EOL 陷阱(blob 含 CRLF)：盘上 LF 但清单按 blob 原始字节记 ⇒ 必红且点名  trap=1
+PASS 9/11 不误伤：盘上 CRLF 但清单按仓库口径(LF)记 ⇒ 绿
+PASS 10/13 正确的 LF 样例（盘上 LF + 清单 LF）⇒ 绿
+PASS 11/13 eolcheck：盘上 CRLF（text 属性）⇒ 必红并点名
+PASS 12/13 eolcheck：盘上 LF ⇒ 绿
+PASS 13/13 eolcheck：`-text` 冻结件不适用（不误报）
+GREEN: verify_sha256sums selftest 13/13（口径 + 改 hash / 多件 / 少件 / 口径切换 / 冻结声明 / EOL 陷阱×2 / 不误伤 / eolcheck×3）
+rc=0
