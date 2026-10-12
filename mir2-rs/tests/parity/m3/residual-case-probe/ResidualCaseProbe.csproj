@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>residual-case-probe</AssemblyName>
+    <RootNamespace>ResidualCaseProbe</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    M3 战斗/技能线（卡 openmir2-m3-combat-skills-align）第十一片：
+    DoD③ 的**第六轴**——`DoSpell` switch 里**内联 case** 的端到端真身向量。
+
+    第十片把 `no_switch_case`（20 行）+ `magicid_reject`（35 行）做成 `DoSpell` 真身向量；
+    第九片把 `no_effect_case`（43/49/51/52/53/54，共 6 行）的**共享尾** source-cited。
+    但这两类里：
+
+      * `no_effect_case` 6 行**本身**仍无 `DoSpell` 端到端真身向量（既没有独立方法可调，
+        也没被第十片反射调用覆盖）；
+      * `context_required` 的 40（`SKILL_UNAMYOUNSUL`）是**内联在 switch 里**的效果体
+        （`MagicManager.cs:495-523`：清 `DECHEALTH`/`DAMAGEARMOR`/`STONE` 三种状态计时器），
+        第七片只登记为 `<inline>`/source-cited。
+
+    本探针用反射直调 oracle 私有 `PlayObject.DoSpell(UserMagic, short, short, IActor)`
+    （`PlayObject.Base.cs:1505`：先 `GetSpellPoint` 扣 MP，再 `MagicManager.DoSpell`），
+    对上述 **7 行**逐行取端到端可观测输出：
+    `(is_warr, spell_point, MP 前后, 返回, RNG 取数账本, 状态计时器前后, 熟练度前后, 自身出帧)`。
+
+    无地图/无 socket：`Envir = new Envirnoment()`；新构造的 `PlayObject` 处于隐藏模式
+    （`PlayObject.cs:993` Reset 置 `FixedHideMode = true`）⇒ `SendRefMsg` 走
+    `BaseObject.Message.cs:390` 的自身分支，把 oracle 本来要广播的帧原样投进自身 `MsgQueue`
+    （帧内容为 oracle 原值；收件人集合不在本片判据内）。
+
+    只读：不连 MySQL、不写任何现网文件、不发起任何 socket、不起栈、不占端口。
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\..\src\M2Server\M2Server.csproj" />
+  </ItemGroup>
+
+</Project>

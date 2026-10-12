@@ -1,0 +1,493 @@
+{
+  "generated_by": "mir2-rs/tests/parity/m3/residual-case-probe",
+  "oracle": {
+    "play_object_dospell": "M2Server.Player.PlayObject.DoSpell(UserMagic, short, short, IActor)\uFF08private\uFF0C\u53CD\u5C04\u76F4\u8C03\uFF1B\u542B GetSpellPoint \u6263 MP\uFF09",
+    "source": "MagicManager.cs:145-671\uFF08:495-523 40 \u5185\u8054\u6548\u679C\uFF1B:555-556 43 break\uFF1B:607-642 49/51/52/53/54 boTrain\uFF1B:644-670 \u5171\u4EAB\u5C3E\uFF09\uFF1BPlayObject.Base.cs:1505-1529",
+    "envir": "\u7A7A Envirnoment\uFF08\u65E0\u5730\u56FE/\u65E0 socket\uFF09\u002B \u65B0\u6784\u9020 PlayObject \u9690\u85CF\u6A21\u5F0F\uFF08PlayObject.cs:993\uFF09\u21D2 SendRefMsg \u8D70 BaseObject.Message.cs:390 \u81EA\u8EAB\u5206\u652F\uFF0C\u5E27\u843D\u81EA\u8EAB MsgQueue\uFF1B\u6536\u4EF6\u4EBA\u96C6\u5408\u4E0D\u5728\u672C\u7247\u5224\u636E\u5185",
+    "rng": "OpenMir2.RandomNumber.random \u53CD\u5C04\u8986\u76D6\u4E3A RecordingRandom(seed)\uFF1A\u8BB0\u5F55\u6BCF\u6B21 Next/Next(max)/Next(min,max) \u7684\u5B9E\u53C2/\u8FD4\u56DE\u503C",
+    "note": "\u672C\u7247\u53EA\u8986\u76D6 40 \u4E0E\u8BE5 6 \u884C no_effect_case\uFF1Bcontext_required \u5176\u4F59 8 \u884C\uFF088/17/21/30/37/41/46 \u9700\u5730\u56FE/\u53EF\u89C1\u96C6/\u53EC\u5524\uFF1B\u53E6 20/32 \u5DF2\u7531\u7B2C\u4E03\u7247\u8986\u76D6\uFF09\u4E0D\u5728\u672C\u7247"
+  },
+  "seed": 20261012,
+  "rows": [
+    {
+      "kind": "inline_effect_cleared",
+      "magic_id": 40,
+      "name": "\u5341\u65B9\u65A9",
+      "um_level": 0,
+      "abil_level": 40,
+      "train_lv0": 7,
+      "seed": 20277393,
+      "status_before": {
+        "dechealth": 50,
+        "damagearmor": 60,
+        "stone": 70
+      },
+      "mp_before": 500,
+      "spell_point": 5,
+      "mp_after": 495,
+      "result": true,
+      "draws": "1|Next(max)|7|0|max;2|Next(max)|3|1|max",
+      "first_draw": 0,
+      "status_after": {
+        "dechealth": 1,
+        "damagearmor": 1,
+        "stone": 1
+      },
+      "tran_point_before": 0,
+      "tran_point_after": 2,
+      "magic_level_before": 0,
+      "magic_level_after": 0,
+      "msg_count": 4,
+      "msg": "10008:0:0:40;10052:0:0:0;10120:257:0:910040;10123:40:0:2",
+      "exception": ""
+    },
+    {
+      "kind": "inline_effect_not_cleared",
+      "magic_id": 40,
+      "name": "\u5341\u65B9\u65A9",
+      "um_level": 0,
+      "abil_level": 40,
+      "train_lv0": 7,
+      "seed": 20277396,
+      "status_before": {
+        "dechealth": 50,
+        "damagearmor": 60,
+        "stone": 70
+      },
+      "mp_before": 500,
+      "spell_point": 5,
+      "mp_after": 495,
+      "result": true,
+      "draws": "1|Next(max)|7|4|max",
+      "first_draw": 4,
+      "status_after": {
+        "dechealth": 50,
+        "damagearmor": 60,
+        "stone": 70
+      },
+      "tran_point_before": 0,
+      "tran_point_after": 0,
+      "magic_level_before": 0,
+      "magic_level_after": 0,
+      "msg_count": 3,
+      "msg": "10008:0:0:40;10052:0:0:0;10120:257:0:910040",
+      "exception": ""
+    },
+    {
+      "kind": "no_effect_break",
+      "magic_id": 43,
+      "name": "\u5F00\u5929\u65A9",
+      "um_level": 0,
+      "abil_level": 40,
+      "train_lv0": 7,
+      "seed": 20265109,
+      "status_before": {
+        "dechealth": 0,
+        "damagearmor": 0,
+        "stone": 0
+      },
+      "mp_before": 500,
+      "spell_point": 5,
+      "mp_after": 495,
+      "result": true,
+      "draws": "",
+      "first_draw": -1,
+      "status_after": {
+        "dechealth": 0,
+        "damagearmor": 0,
+        "stone": 0
+      },
+      "tran_point_before": 0,
+      "tran_point_after": 0,
+      "magic_level_before": 0,
+      "magic_level_after": 0,
+      "msg_count": 3,
+      "msg": "10008:0:0:43;10052:0:0:0;10120:257:0:0",
+      "exception": ""
+    },
+    {
+      "kind": "no_effect_break",
+      "magic_id": 43,
+      "name": "\u5F00\u5929\u65A9",
+      "um_level": 0,
+      "abil_level": 6,
+      "train_lv0": 7,
+      "seed": 20265110,
+      "status_before": {
+        "dechealth": 0,
+        "damagearmor": 0,
+        "stone": 0
+      },
+      "mp_before": 500,
+      "spell_point": 5,
+      "mp_after": 495,
+      "result": true,
+      "draws": "",
+      "first_draw": -1,
+      "status_after": {
+        "dechealth": 0,
+        "damagearmor": 0,
+        "stone": 0
+      },
+      "tran_point_before": 0,
+      "tran_point_after": 0,
+      "magic_level_before": 0,
+      "magic_level_after": 0,
+      "msg_count": 3,
+      "msg": "10008:0:0:43;10052:0:0:0;10120:257:0:0",
+      "exception": ""
+    },
+    {
+      "kind": "no_effect_train",
+      "magic_id": 49,
+      "name": "\u4E91\u5BC2\u672F",
+      "um_level": 0,
+      "abil_level": 40,
+      "train_lv0": 7,
+      "seed": 20252821,
+      "status_before": {
+        "dechealth": 0,
+        "damagearmor": 0,
+        "stone": 0
+      },
+      "mp_before": 500,
+      "spell_point": 5,
+      "mp_after": 495,
+      "result": true,
+      "draws": "1|Next(max)|3|0|max",
+      "first_draw": 0,
+      "status_after": {
+        "dechealth": 0,
+        "damagearmor": 0,
+        "stone": 0
+      },
+      "tran_point_before": 0,
+      "tran_point_after": 1,
+      "magic_level_before": 0,
+      "magic_level_after": 0,
+      "msg_count": 4,
+      "msg": "10008:0:0:49;10052:0:0:0;10120:257:0:0;10123:49:0:1",
+      "exception": ""
+    },
+    {
+      "kind": "no_effect_train",
+      "magic_id": 49,
+      "name": "\u4E91\u5BC2\u672F",
+      "um_level": 0,
+      "abil_level": 6,
+      "train_lv0": 7,
+      "seed": 20252805,
+      "status_before": {
+        "dechealth": 0,
+        "damagearmor": 0,
+        "stone": 0
+      },
+      "mp_before": 500,
+      "spell_point": 5,
+      "mp_after": 495,
+      "result": true,
+      "draws": "",
+      "first_draw": -1,
+      "status_after": {
+        "dechealth": 0,
+        "damagearmor": 0,
+        "stone": 0
+      },
+      "tran_point_before": 0,
+      "tran_point_after": 0,
+      "magic_level_before": 0,
+      "magic_level_after": 0,
+      "msg_count": 3,
+      "msg": "10008:0:0:49;10052:0:0:0;10120:257:0:0",
+      "exception": ""
+    },
+    {
+      "kind": "no_effect_train",
+      "magic_id": 51,
+      "name": "\u6708\u9B42\u98CE\u66B4",
+      "um_level": 0,
+      "abil_level": 40,
+      "train_lv0": 7,
+      "seed": 20253077,
+      "status_before": {
+        "dechealth": 0,
+        "damagearmor": 0,
+        "stone": 0
+      },
+      "mp_before": 500,
+      "spell_point": 5,
+      "mp_after": 495,
+      "result": true,
+      "draws": "1|Next(max)|3|2|max",
+      "first_draw": 2,
+      "status_after": {
+        "dechealth": 0,
+        "damagearmor": 0,
+        "stone": 0
+      },
+      "tran_point_before": 0,
+      "tran_point_after": 3,
+      "magic_level_before": 0,
+      "magic_level_after": 0,
+      "msg_count": 4,
+      "msg": "10008:0:0:51;10052:0:0:0;10120:257:0:0;10123:51:0:3",
+      "exception": ""
+    },
+    {
+      "kind": "no_effect_train",
+      "magic_id": 51,
+      "name": "\u6708\u9B42\u98CE\u66B4",
+      "um_level": 0,
+      "abil_level": 6,
+      "train_lv0": 7,
+      "seed": 20253061,
+      "status_before": {
+        "dechealth": 0,
+        "damagearmor": 0,
+        "stone": 0
+      },
+      "mp_before": 500,
+      "spell_point": 5,
+      "mp_after": 495,
+      "result": true,
+      "draws": "",
+      "first_draw": -1,
+      "status_after": {
+        "dechealth": 0,
+        "damagearmor": 0,
+        "stone": 0
+      },
+      "tran_point_before": 0,
+      "tran_point_after": 0,
+      "magic_level_before": 0,
+      "magic_level_after": 0,
+      "msg_count": 3,
+      "msg": "10008:0:0:51;10052:0:0:0;10120:257:0:0",
+      "exception": ""
+    },
+    {
+      "kind": "no_effect_train",
+      "magic_id": 52,
+      "name": "\u795E\u4E4B\u8BC5\u5492",
+      "um_level": 0,
+      "abil_level": 40,
+      "train_lv0": 7,
+      "seed": 20253333,
+      "status_before": {
+        "dechealth": 0,
+        "damagearmor": 0,
+        "stone": 0
+      },
+      "mp_before": 500,
+      "spell_point": 5,
+      "mp_after": 495,
+      "result": true,
+      "draws": "1|Next(max)|3|1|max",
+      "first_draw": 1,
+      "status_after": {
+        "dechealth": 0,
+        "damagearmor": 0,
+        "stone": 0
+      },
+      "tran_point_before": 0,
+      "tran_point_after": 2,
+      "magic_level_before": 0,
+      "magic_level_after": 0,
+      "msg_count": 4,
+      "msg": "10008:0:0:52;10052:0:0:0;10120:257:0:0;10123:52:0:2",
+      "exception": ""
+    },
+    {
+      "kind": "no_effect_train",
+      "magic_id": 52,
+      "name": "\u795E\u4E4B\u8BC5\u5492",
+      "um_level": 0,
+      "abil_level": 6,
+      "train_lv0": 7,
+      "seed": 20253317,
+      "status_before": {
+        "dechealth": 0,
+        "damagearmor": 0,
+        "stone": 0
+      },
+      "mp_before": 500,
+      "spell_point": 5,
+      "mp_after": 495,
+      "result": true,
+      "draws": "",
+      "first_draw": -1,
+      "status_after": {
+        "dechealth": 0,
+        "damagearmor": 0,
+        "stone": 0
+      },
+      "tran_point_before": 0,
+      "tran_point_after": 0,
+      "magic_level_before": 0,
+      "magic_level_after": 0,
+      "msg_count": 3,
+      "msg": "10008:0:0:52;10052:0:0:0;10120:257:0:0",
+      "exception": ""
+    },
+    {
+      "kind": "no_effect_train",
+      "magic_id": 53,
+      "name": "\u55DC\u8840\u9B54\u5492(\u4FDD\u7559)",
+      "um_level": 0,
+      "abil_level": 40,
+      "train_lv0": 7,
+      "seed": 20253589,
+      "status_before": {
+        "dechealth": 0,
+        "damagearmor": 0,
+        "stone": 0
+      },
+      "mp_before": 500,
+      "spell_point": 5,
+      "mp_after": 495,
+      "result": true,
+      "draws": "1|Next(max)|3|0|max",
+      "first_draw": 0,
+      "status_after": {
+        "dechealth": 0,
+        "damagearmor": 0,
+        "stone": 0
+      },
+      "tran_point_before": 0,
+      "tran_point_after": 1,
+      "magic_level_before": 0,
+      "magic_level_after": 0,
+      "msg_count": 4,
+      "msg": "10008:0:0:53;10052:0:0:0;10120:257:0:0;10123:53:0:1",
+      "exception": ""
+    },
+    {
+      "kind": "no_effect_train",
+      "magic_id": 53,
+      "name": "\u55DC\u8840\u9B54\u5492(\u4FDD\u7559)",
+      "um_level": 0,
+      "abil_level": 6,
+      "train_lv0": 7,
+      "seed": 20253573,
+      "status_before": {
+        "dechealth": 0,
+        "damagearmor": 0,
+        "stone": 0
+      },
+      "mp_before": 500,
+      "spell_point": 5,
+      "mp_after": 495,
+      "result": true,
+      "draws": "",
+      "first_draw": -1,
+      "status_after": {
+        "dechealth": 0,
+        "damagearmor": 0,
+        "stone": 0
+      },
+      "tran_point_before": 0,
+      "tran_point_after": 0,
+      "magic_level_before": 0,
+      "magic_level_after": 0,
+      "msg_count": 3,
+      "msg": "10008:0:0:53;10052:0:0:0;10120:257:0:0",
+      "exception": ""
+    },
+    {
+      "kind": "no_effect_train",
+      "magic_id": 54,
+      "name": "\u53EC\u5996\u964D\u9B54",
+      "um_level": 0,
+      "abil_level": 40,
+      "train_lv0": 7,
+      "seed": 20253845,
+      "status_before": {
+        "dechealth": 0,
+        "damagearmor": 0,
+        "stone": 0
+      },
+      "mp_before": 500,
+      "spell_point": 5,
+      "mp_after": 495,
+      "result": true,
+      "draws": "1|Next(max)|3|0|max",
+      "first_draw": 0,
+      "status_after": {
+        "dechealth": 0,
+        "damagearmor": 0,
+        "stone": 0
+      },
+      "tran_point_before": 0,
+      "tran_point_after": 1,
+      "magic_level_before": 0,
+      "magic_level_after": 0,
+      "msg_count": 4,
+      "msg": "10008:0:0:54;10052:0:0:0;10120:257:0:0;10123:54:0:1",
+      "exception": ""
+    },
+    {
+      "kind": "no_effect_train",
+      "magic_id": 54,
+      "name": "\u53EC\u5996\u964D\u9B54",
+      "um_level": 0,
+      "abil_level": 6,
+      "train_lv0": 7,
+      "seed": 20253829,
+      "status_before": {
+        "dechealth": 0,
+        "damagearmor": 0,
+        "stone": 0
+      },
+      "mp_before": 500,
+      "spell_point": 5,
+      "mp_after": 495,
+      "result": true,
+      "draws": "",
+      "first_draw": -1,
+      "status_after": {
+        "dechealth": 0,
+        "damagearmor": 0,
+        "stone": 0
+      },
+      "tran_point_before": 0,
+      "tran_point_after": 0,
+      "magic_level_before": 0,
+      "magic_level_after": 0,
+      "msg_count": 3,
+      "msg": "10008:0:0:54;10052:0:0:0;10120:257:0:0",
+      "exception": ""
+    },
+    {
+      "kind": "no_effect_train_level3",
+      "magic_id": 49,
+      "name": "\u4E91\u5BC2\u672F",
+      "um_level": 3,
+      "abil_level": 40,
+      "train_lv0": 7,
+      "seed": 20252565,
+      "status_before": {
+        "dechealth": 0,
+        "damagearmor": 0,
+        "stone": 0
+      },
+      "mp_before": 500,
+      "spell_point": 20,
+      "mp_after": 480,
+      "result": true,
+      "draws": "",
+      "first_draw": -1,
+      "status_after": {
+        "dechealth": 0,
+        "damagearmor": 0,
+        "stone": 0
+      },
+      "tran_point_before": 0,
+      "tran_point_after": 0,
+      "magic_level_before": 3,
+      "magic_level_after": 3,
+      "msg_count": 3,
+      "msg": "10008:0:0:49;10052:0:0:0;10120:257:0:0",
+      "exception": ""
+    }
+  ]
+}
