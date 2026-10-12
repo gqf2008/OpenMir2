@@ -11,6 +11,21 @@
 pub const ACTOR_RACE_PLAY: u8 = 0;
 pub const ACTOR_RACE_MONSTER: u8 = 80;
 
+/// `CharacterObject.UseItems` 的佩戴位数量（`CharacterObject.cs:89`：`UseItems = new UserItem[13]`）。
+pub const USE_ITEM_SLOTS: usize = 13;
+
+/// `UserItem` 的战斗子集（`src/OpenMir2/Packets/ClientPackets/ClientUserItem.cs:14`）。
+///
+/// 本骨架只用到 `PlayObject.StruckDamage`（`PlayObject.cs:3003-3039`）的耐久循环：
+/// 每格 `Index > 0`（= 已装备）各抽一次 `Random(8)`。`Dura` 只做减法，无消息面。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UseItemSlot {
+    /// `UserItem.Index`（0 = 空位）
+    pub index: u16,
+    /// `UserItem.Dura`
+    pub dura: u16,
+}
+
 /// `src/Modules/SystemModule/Enums/VisibleFlag.cs`。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -73,6 +88,18 @@ pub struct Entity {
     /// C# `PlayObject.PkPoint`——`PlayObject.PvpLevel()`（`PlayObject.cs:4352`）= `PkPoint / 100`。
     /// `HAM_PKATTACK` 支用它做红名/白名判定。
     pub pk_point: i32,
+    /// C# `PlayObject.Luck`（`PlayObject.cs:62`，`RecalcAbilitys` 里 `Luck = 0 + AddAbil.Luck - AddAbil.UnLuck`）。
+    /// 玩家攻方的 [`crate::combat::get_attack_power_player`] override 用它决定取数次数。
+    pub luck: i32,
+    /// C# `PlayObject.PowerRate`（`PlayObject.cs:724`；新角色 `PlayObject.cs:943` 置 `100`）。
+    pub power_rate: i32,
+    /// C# `PlayObject.BoPowerItem`（`PlayObject.cs:223`）。
+    pub bo_power_item: bool,
+    /// C# `PlayObject.PowerItem`（`PlayObject.cs:199`）。
+    pub power_item: u8,
+    /// C# `CharacterObject.UseItems`（`CharacterObject.cs:40`，13 格，`CharacterObject.cs:89` 初始化）。
+    /// `PlayObject.StruckDamage` 的耐久循环按它取数。
+    pub use_items: [UseItemSlot; USE_ITEM_SLOTS],
     /// C# `WantRefMsg`
     pub want_ref_msg: bool,
     /// C# `AddToMaped`（首次入图标记）
@@ -145,6 +172,14 @@ impl Entity {
             stone_mode: false,
             dear_human: None,
             pk_point: 0,
+            // `PlayObject.cs:62/943`：新角色 `Luck` 由 `RecalcAbilitys` 置 0（无 `AddAbil`），
+            // `PowerRate = 100`；`BoPowerItem=false` / `PowerItem=0`。
+            luck: 0,
+            power_rate: 100,
+            bo_power_item: false,
+            power_item: 0,
+            // `CharacterObject.cs:89`：13 个空位（`Index = 0`）。
+            use_items: [UseItemSlot::default(); USE_ITEM_SLOTS],
             want_ref_msg: false,
             add_to_mapped: false,
             visible_actors: Vec::new(),

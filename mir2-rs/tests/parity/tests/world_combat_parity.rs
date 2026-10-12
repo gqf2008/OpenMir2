@@ -1,8 +1,9 @@
 //! 判据②（M2 下半程·战斗切片）：把 `_Attack` 的 **RNG 面**纳入 golden，与 C# oracle 逐行一致。
 //!
 //! 场景 `combat.json` 覆盖：
-//! - 攻击力 RNG（`GetBaseAttackPoewr` → `Random(power+1)`，DC=0x1E14 ⇒ 20..30）；
-//! - 命中判定的 RNG（`RandomByte(目标 SpeedPoint)`，怪物 `speed_point=12` ⇒ 会真的闪避）；
+//! - 攻击力 RNG（玩家攻方走 `PlayObject.GetAttackPower` override：`Luck=0` 时 `Random(power+1)`
+//!   + `Random(10)` 两次取数；怪物攻方才是基版 `Random(power+1)`；DC=0x1E14 ⇒ 20..30）；
+//! - 命中判定的 RNG（`RandomByte(目标 SpeedPoint)`，幽灵(6) `speed_point=51` ⇒ 会真的闪避）；
 //! - 护甲 RNG 的两条分支（`ac=0` ⇒ 1 次取数；`ac=0x0A05` ⇒ 2 次取数）；
 //! - 击杀 → 掉落落地 + 经验结算（`KillFunc` → `KillTargetTrigger` → `GainExp`）；
 //! - **经验归属者是"第一个命中者"**（`ExpHitter`，`BaseObject.cs:1753/2429`），
@@ -146,9 +147,13 @@ fn golden_covers_dodge_and_no_hit_roll_branch() {
     // ⇒ 判断"掉没掉血"要用**上一个 tick** 的 `ent` 值作为 before。
     let mut prev_tick_hp: std::collections::HashMap<i32, i32> = std::collections::HashMap::new();
     let mut cur_tick_hp: std::collections::HashMap<i32, i32> = std::collections::HashMap::new();
+    // 真闪避的判据：**同一目标**相邻两次 `atk` 行里 `hp_after` 不变且 > 0。
+    // 不能拿 `prev_tick_hp` 判：同一 tick 内可能打多次，且「攻击自己」（`IsProperTarget` 假、
+    // 目标 HP 不变）会被误计成闪避——那正是 B-1 重基准后这条断言一度假绿的原因。
+    let mut last_atk_hp: std::collections::HashMap<i32, i32> = std::collections::HashMap::new();
     let mut dodges = 0;
+    let mut dodge_targets: std::collections::HashSet<i32> = std::collections::HashSet::new();
     let mut no_roll_target_hits = 0;
-    let mut last_attack_of_6: Option<i32> = None;
     for line in golden.lines() {
         if line.starts_with("tick ") {
             prev_tick_hp = std::mem::take(&mut cur_tick_hp);
@@ -162,31 +167,32 @@ fn golden_covers_dodge_and_no_hit_roll_branch() {
         if let Some(rest) = line.strip_prefix("atk ") {
             let f: Vec<&str> = rest.split_whitespace().collect();
             let (target, after): (i32, i32) = (f[1].parse().unwrap(), f[3].parse().unwrap());
-            let before = *prev_tick_hp.get(&target).unwrap_or(&after);
-            if after == before && after > 0 {
-                dodges += 1; // 命中骰判闪避 ⇒ 血量不变
+            if let Some(&prev) = last_atk_hp.get(&target) {
+                if after == prev && after > 0 {
+                    dodges += 1; // 命中骰判闪避 ⇒ 血量不变
+                    dodge_targets.insert(target);
+                }
             }
+            let before = *prev_tick_hp.get(&target).unwrap_or(&after);
             if target == 5 && after < before {
                 // 稻草人 HitPoint == 0 ⇒ C# 整段跳过命中骰（RNG 少消费一次）仍照常掉血
                 no_roll_target_hits += 1;
             }
-            if target == 6 {
-                last_attack_of_6 = Some(after);
-            }
+            last_atk_hp.insert(target, after);
         }
     }
     assert!(
         dodges >= 1,
-        "金标准必须至少覆盖一次闪避（否则离散步进未验证）"
+        "金标准必须至少覆盖一次真闪避（否则离散步进未验证）"
+    );
+    assert!(
+        dodge_targets.contains(&6),
+        "幽灵(6) `speed_point=51` ⇒ 固定种子流下必须真的闪过（B-1 按 oracle 重基准后 \
+         原 speed=40 已不再产生闪避，scenario 特意调到会闪的值以保住这条覆盖）"
     );
     assert!(
         no_roll_target_hits >= 1,
         "金标准必须覆盖『目标 HitPoint == 0 ⇒ 不掷命中骰』分支"
-    );
-    assert_eq!(
-        last_attack_of_6,
-        Some(50),
-        "幽灵(6) hp=100 且 speed_point=40 ⇒ 6 次攻击后应还剩 50（证明闪避真的发生过）"
     );
 }
 

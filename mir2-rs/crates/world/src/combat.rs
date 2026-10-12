@@ -716,12 +716,22 @@ pub fn attack_with(
             if target.hp == 0 {
                 killed = true;
             }
-            // `PlayObject.StruckDamage`（`PlayObject.cs:2954`）在 `base.StruckDamage` 之后**无条件**
-            // 抽一次 `Random(10)`（护甲耐久磨损点数）；玩家目标走这个 override，怪物走
-            // `BaseObject.StruckDamage`（无随机数）。本骨架未建模玩家装备耐久（逐格 `Random(8)` 循环），
-            // 只补这条**无条件**抽数——否则同种子 PvP 序列的取数账本从第一次命中起整体错位。
+            // `PlayObject.StruckDamage`（`PlayObject.cs:2954`）在 `base.StruckDamage` 之后的作用：
+            //   1. `:2957` **无条件**抽一次 `Random(10)`（护甲耐久磨损点数 `nDam = Random(10)+5`）；
+            //   2. `:2960-2996` 衣服位（`UseItems[ItemLocation.Dress=0]`）特判——**不抽数**，只扣耐久；
+            //   3. `:2998-3039` 逐格循环：`Index > 0`（已装备）的每格**各抽一次 `Random(8)`**。
+            // 玩家目标走这个 override，怪物走 `BaseObject.StruckDamage`（无随机数）。
+            // 漏掉任一条都会让同种子跨侧取数账本从第一次命中起整体错位。
             if target.race == ACTOR_RACE_PLAY {
-                let _durability_damage = rng.random_below(10);
+                // `usort nDam = (ushort)(Random(10) + 5)`（`PlayObject.cs:2957`）。
+                let n_dam = (rng.random_below(10) + 5) as u16;
+                // `StatusTimeArr[PoisonState.DAMAGEARMOR] > 0` 的 1.2 倍分支未建模（本骨架无 buff 状态）。
+                // 衣服位特判（`PlayObject.cs:2960-2996`）不抽数，只扣耐久；本骨架不落耐久消息。
+                for slot in target.use_items.iter_mut() {
+                    if slot.index > 0 && rng.random_below(8) == 0 {
+                        slot.dura = slot.dura.saturating_sub(n_dam);
+                    }
+                }
             }
         }
     }

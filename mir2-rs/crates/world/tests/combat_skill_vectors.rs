@@ -27,7 +27,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use mir2_data::models::MagicInfo;
-use mir2_shared::rng::RandomNumber;
+use mir2_shared::rng::{RandomNumber, RandomSource};
+use mir2_world::combat::{get_base_attack_power, get_base_attack_power_player};
 use mir2_world::magic::{
     can_read_book, get_spell_point, group_melee_damage, magic_attack_interval, power_defence_area,
     power_fire_wall, power_get_power_plus_mc, power_get_power_plus_sc,
@@ -35,8 +36,8 @@ use mir2_world::magic::{
     power_show_hp_interval, power_transparent, power_uenhancer, resolve_magic,
 };
 use mir2_world::{
-    attack_with, is_proper_target, AttackPowerMode, CombatConfig, Entity, ACTOR_RACE_MONSTER,
-    ACTOR_RACE_PLAY, ATTACK_MODE_HAM_PEACE,
+    attack_with, is_proper_target, AttackPowerMode, CombatConfig, Entity, World,
+    ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY, ATTACK_MODE_HAM_PEACE,
 };
 
 fn repo_parity_dir() -> PathBuf {
@@ -850,13 +851,15 @@ fn redcheck_duplicate_resolution_is_order_sensitive_must_fail() {
     );
 }
 
-/// 判据（登记未接线）：`PlayObject.GetAttackPower` override（Luck/PowerRate/BoPowerItem）
+/// 判据（B-1 已接线）：`PlayObject.GetAttackPower` override（Luck/PowerRate/BoPowerItem）
 /// 会让**取数次数**与 `BaseObject.GetAttackPower` 不同（Luck=0 时每次多抽一次 `Random(10)`）。
-/// 世界宿主 `World::attack_once` 仍走 [`AttackPowerMode::Base`]（M2 既有 golden 口径），
-/// 是**已登记的未接线项**（承接：M3 后续批次，需同步更新 M2 `WorldGolden` 桩，本卡写集外）。
+/// 世界宿主 `World::attack_once` 自 B-1 起对 `Race == Play` 的攻方走 [`AttackPowerMode::Player`]
+/// （oracle：`BaseObject.Attack.cs:25` 的虚调用 → `PlayObject.cs:2909` override），
+/// 怪物攻方仍走 `Base`（`BaseObject.Base.cs:886`）。
 ///
-/// 本测试不比对两个实现，而是断言二者**确为不同实现**（同种子同输入下取数账本不同），
-/// 免得有人误以为 `AttackMode::Base` 已覆盖玩家路径。
+/// 本测试断言两种口径在同种子下**确为不同取数账本**；世界宿主的分派与取数次数分别由
+/// `world_host_player_attacker_uses_playobject_override`、
+/// `player_target_equipped_items_draw_random8_per_slot` 钉死。
 #[test]
 fn player_attack_power_is_a_registered_distinct_path() {
     let config = CombatConfig::default();
@@ -898,6 +901,251 @@ fn player_attack_power_is_a_registered_distinct_path() {
         (out_player.power, out_player.damage),
         "两种攻方口径在同种子下应产生不同序列（否则登记项已被覆盖，可销账）"
     );
+}
+
+/// 计数随机源：把 [`RandomSource`] 委托给同种子 [`RandomNumber`]，并记录每次 `random_below` 的入参。
+/// 用来把「取数**次数与参数**」本身钉成机器可判（oracle 的 RNG 面就是顺序 + 次数）。
+/// 注意 `get_hit_struck_damage` 走 `random_range`，不计入 `below`。
+struct CountingRng {
+    inner: RandomNumber,
+    below: Vec<i32>,
+    ranges: Vec<(i32, i32)>,
+}
+
+impl CountingRng {
+    fn new(seed: i32) -> Self {
+        Self {
+            inner: RandomNumber::with_seed(seed),
+            below: Vec::new(),
+            ranges: Vec::new(),
+        }
+    }
+
+    fn count(&self, arg: i32) -> usize {
+        self.below.iter().filter(|&&v| v == arg).count()
+    }
+
+    /// 总取数次数：`random_below` + `random_range` 都算（两个入口都是 C# 的 `Random(n)`）。
+    fn draws(&self) -> usize {
+        self.below.len() + self.ranges.len()
+    }
+}
+
+impl RandomSource for CountingRng {
+    fn random(&mut self) -> i32 {
+        self.inner.random()
+    }
+
+    fn random_below(&mut self, value: i32) -> i32 {
+        self.below.push(value);
+        self.inner.random_below(value)
+    }
+
+    fn random_range(&mut self, min_value: i32, max_value: i32) -> i32 {
+        self.ranges.push((min_value, max_value));
+        self.inner.random_range(min_value, max_value)
+    }
+
+    fn next_double(&mut self) -> f64 {
+        self.inner.next_double()
+    }
+}
+
+/// B-1 判据（世界宿主分派 + oracle 行号）：玩家攻方必须走 `PlayObject.GetAttackPower` override
+///（`PlayObject.cs:2909`：`Luck <= 0` 多一次 `Random(10)`），而不是 `BaseObject.GetAttackPower`
+///（`BaseObject.Base.cs:886`）。
+///
+/// 做法：在 `World` 内连打两击，与 [`attack_with`] 的 `Player` 口径逐项核；并以 `Base` 口径作
+/// **反例**（若 `world.rs` 回退成 Base，本条必红）；再用 [`CountingRng`] 把“Player 比 Base 多一次
+/// `Random(10)`”钉死。
+#[test]
+fn world_host_player_attacker_uses_playobject_override() {
+    const SEED: i32 = 20261012;
+    const DC: i32 = 0x1E14;
+
+    let mut world = World::new(32, 32);
+    world.open_session("hero");
+    let mut hero = Entity::new(1, "hero", 10, 10);
+    hero.race = ACTOR_RACE_PLAY;
+    hero.dc = DC;
+    hero.hit_point = 20;
+    hero.luck = 0;
+    hero.power_rate = 100;
+    hero.hp = 200;
+    hero.max_hp = 200;
+    let hero_id = world.enter_map("hero", hero, 0).expect("进图");
+    let mut mon = Entity::new(2, "mon", 11, 10);
+    mon.race = ACTOR_RACE_MONSTER;
+    mon.ac = 0;
+    mon.hp = 60000;
+    mon.max_hp = 60000;
+    mon.hit_point = 0; // 不掷闪避，聚焦攻方口径
+    let mon_id = world.add_entity(mon);
+    world.tick(); // 处理 Enter 落图
+
+    // 聚焦攻击路径：把种子重置到攻击前（与 WorldGolden / combat-probe 同一种子注入口径）。
+    world.rng = RandomNumber::with_seed(SEED);
+    world.attack_cmd(hero_id, mon_id);
+    world.attack_cmd(hero_id, mon_id);
+    let rec = world.tick();
+    assert_eq!(rec.attacks.len(), 2, "两次攻击都应结算");
+    let world_powers = [rec.attacks[0].2.power, rec.attacks[1].2.power];
+
+    let config = CombatConfig::default();
+    let mk = || {
+        let mut a = Entity::new(1, "hero", 0, 0);
+        a.race = ACTOR_RACE_PLAY;
+        a.dc = DC;
+        a.hit_point = 20;
+        let mut t = Entity::new(2, "mon", 0, 0);
+        t.race = ACTOR_RACE_MONSTER;
+        t.ac = 0;
+        t.hp = 60000;
+        t.max_hp = 60000;
+        t.hit_point = 0;
+        (a, t)
+    };
+    let player_mode = AttackPowerMode::Player {
+        luck: 0,
+        power_rate: 100,
+        bo_power_item: false,
+        power_item: 0,
+    };
+    let (mut a, mut t) = mk();
+    let mut rng_p = RandomNumber::with_seed(SEED);
+    let p = [
+        attack_with(&mut rng_p, &mut a, &mut t, None, &config, player_mode).power,
+        attack_with(&mut rng_p, &mut a, &mut t, None, &config, player_mode).power,
+    ];
+    let (mut a, mut t) = mk();
+    let mut rng_b = RandomNumber::with_seed(SEED);
+    let b = [
+        attack_with(
+            &mut rng_b,
+            &mut a,
+            &mut t,
+            None,
+            &config,
+            AttackPowerMode::Base,
+        )
+        .power,
+        attack_with(
+            &mut rng_b,
+            &mut a,
+            &mut t,
+            None,
+            &config,
+            AttackPowerMode::Base,
+        )
+        .power,
+    ];
+    assert_eq!(
+        world_powers, p,
+        "世界宿主玩家攻方必须与 PlayObject override 口径逐项相同（oracle：PlayObject.cs:2909）"
+    );
+    assert_ne!(
+        p, b,
+        "红检失效：Player 与 Base 两口径在同种子下不可分辨 ⇒ 本判据没有牙齿"
+    );
+
+    let mut rng_player = CountingRng::new(SEED);
+    let _ = get_base_attack_power_player(&mut rng_player, DC, 0, 100, false, 0);
+    assert_eq!(
+        rng_player.draws(),
+        2,
+        "Luck=0 的 Player override 应抽 2 次：Random(power+1) + Random(10)"
+    );
+    assert_eq!(
+        rng_player.count(10),
+        1,
+        "Player override 的第二次抽数就是 Random(10)（PlayObject.cs:2917）"
+    );
+    let mut rng_base = CountingRng::new(SEED);
+    let _ = get_base_attack_power(&mut rng_base, DC);
+    assert_eq!(
+        rng_base.draws(),
+        1,
+        "BaseObject.GetAttackPower 只抽 1 次（BaseObject.Base.cs:886）"
+    );
+}
+
+/// B-2 判据：`PlayObject.StruckDamage`（`PlayObject.cs:2954-3039`）对**玩家目标**在
+/// `base.StruckDamage` 之后无条件抽一次 `Random(10)`（`:2957`），并逐格对 `Index > 0` 的
+/// 已装备物品各抽一次 `Random(8)`（`:2998-3039`）。
+///
+/// 用 [`CountingRng`] 直接数：3 个已装备格 ⇒ `random_below(8)` 恰好 3 次；
+/// 空装备位（`Index == 0`）**不抽**（C# 的 `&&` 短路），并把这一条作为反例。
+/// 若谁把逐格循环删掉（或改成给空位也抽/给已装备位漏抽），本条必红。
+#[test]
+fn player_target_equipped_items_draw_random8_per_slot() {
+    let config = CombatConfig::default();
+    let mk_attacker = || {
+        let mut a = Entity::new(1, "hero", 0, 0);
+        a.race = ACTOR_RACE_PLAY;
+        a.dc = 0x1E14;
+        a.hit_point = 20;
+        a
+    };
+    let mk_target = || {
+        let mut t = Entity::new(2, "victim", 0, 0);
+        t.race = ACTOR_RACE_PLAY; // 玩家目标 ⇒ 走 PlayObject.StruckDamage override
+        t.ac = 0;
+        t.hp = 60000;
+        t.max_hp = 60000;
+        t.hit_point = 0; // 不掷闪避
+        t
+    };
+
+    let mut attacker = mk_attacker();
+    let mut target = mk_target();
+    // 三个已装备格：0（衣服 · 循环里也会各抽一次 R(8)）、1、7。
+    for slot in [0usize, 1, 7] {
+        target.use_items[slot].index = 100 + slot as u16;
+        target.use_items[slot].dura = 60000;
+    }
+    let mut rng = CountingRng::new(20261012);
+    let out = attack_with(
+        &mut rng,
+        &mut attacker,
+        &mut target,
+        None,
+        &config,
+        AttackPowerMode::Base,
+    );
+    assert!(
+        out.damage > 0,
+        "前提：必须命中并造成伤害，否则 StruckDamage 不跑"
+    );
+    assert_eq!(
+        rng.count(8),
+        3,
+        "3 个已装备格 ⇒ 逐格循环恰好 3 次 Random(8)（PlayObject.cs:2998-3039）"
+    );
+    assert_eq!(
+        rng.count(10),
+        1,
+        "玩家目标的 StruckDamage 无条件抽 1 次 Random(10)（PlayObject.cs:2957）"
+    );
+
+    // 反例：空装备位不抽 Random(8)。
+    let mut attacker = mk_attacker();
+    let mut empty = mk_target();
+    let mut rng_empty = CountingRng::new(20261012);
+    let out_empty = attack_with(
+        &mut rng_empty,
+        &mut attacker,
+        &mut empty,
+        None,
+        &config,
+        AttackPowerMode::Base,
+    );
+    assert!(out_empty.damage > 0, "前提：空装备也要能命中");
+    assert_eq!(
+        rng_empty.count(8),
+        0,
+        "空装备位（Index == 0）不得抽 Random(8)（C# 的 `&&` 短路）"
+    );
+    assert_eq!(rng_empty.count(10), 1, "空装备也要抽那条无条件 Random(10)");
 }
 
 // ---- 红检 ---------------------------------------------------------------------------------------

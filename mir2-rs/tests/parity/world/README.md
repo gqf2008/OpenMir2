@@ -126,6 +126,18 @@ cargo test -p mir2-parity-tests --test world_combat_parity
    但口径按 oracle 照抄。
 5. **不死系加成不加 `> 0` 守卫**：oracle 是 `nDamage += target.AddAbil.UndeadPower` 无条件相加
    （`BaseObject.Base.cs:802-808`）；`UndeadPower` 为负时也要加。
+6. **玩家攻方走 `PlayObject.GetAttackPower` override（B-1，M3②③ 交叉修正，owner `cc42a959` 批准）**：
+   `_Attack` 的攻击力走**虚函数** `GetAttackPower`（`BaseObject.Attack.cs:25`）；`PlayObject` 覆盖它
+   （`PlayObject.cs:2909`）：`Luck <= 0` 时在 `Random(power+1)` 之外**多抽一次 `Random(10)`**
+   （命中时 `result` 直接取 `nBasePower`），再乘 `PowerRate`/`BoPowerItem`；怪物无覆盖 ⇒ 走基版
+   （`BaseObject.Base.cs:886`，只抽 1 次）。旧 `WorldGolden` 桩把玩家也当基版 ⇒ 与真 oracle 从第一次
+   命中起取数分岔。已按 oracle 更正桩（**只改「玩家攻方攻击力」这一路**）并重基准；连带变化：
+   `combat_exp_hitter_ghost.txt` 的 `atk 4 2 25 0` → `atk 4 2 21 0`（这是玩家攻方数值，属同路变化），
+   `combat.txt` 的 atk/ent 行随种子流整体重基准。
+   **同时为保住「golden 含真闪避」这条覆盖**：B-1 重基准后的种子流下，`combat.json` 的幽灵(6)
+   原 `speed_point=40` 已不再产生闪避 ⇒ 把该值调到 `51`（**只改夹具输入**；闪避判定结果变化会同路
+   改变后续护甲取数分支，golden 由 oracle 桩重新产出、两侧逐行一致）。其余怪物/会话的 `speed_point`
+   不动。对应红检仍为 `redcheck_speed_point_change_must_alter_attacks`（把速度归零 ⇒ `atk` 行必变）。
 
 ### 本切片**不做**（明确边界，不是"漏做"）
 

@@ -18,9 +18,10 @@ use mir2_world_bevy::{advance_clock_system, TickClock, TickOwnerThread, TickRunn
 
 use crate::aoi::{search_view_range, search_view_range_death};
 use crate::combat::{
-    attack, award_kill_exp, drop_position, generate_drops, AttackOutcome, CombatConfig,
+    attack_with, award_kill_exp, drop_position, generate_drops, AttackOutcome, AttackPowerMode,
+    CombatConfig,
 };
-use crate::entity::{Entity, EntityStore};
+use crate::entity::{Entity, EntityStore, ACTOR_RACE_PLAY};
 use crate::map::{CellType, FloorItemKind, FloorItemMeta, MapGrid};
 use crate::session::SessionRegistry;
 
@@ -623,7 +624,29 @@ impl World {
                 has_master: h.master.is_some(),
             });
         let cfg = self.combat_config;
-        let outcome = attack(&mut self.rng, &mut attacker, &mut target, last_hitter, &cfg);
+        // 攻方攻击力口径：oracle 的 `GetBaseAttackPoewr` 走**虚函数** `GetAttackPower`
+        //（`BaseObject.Attack.cs:25` → `BaseObject.Base.cs:886` 基版；`PlayObject.cs:2909` 玩家 override）。
+        // 玩家（`Race == ActorRace.Play`）走 override（`Luck`/`PowerRate`/`BoPowerItem`）；
+        // 怪物等无 override 的对象走基版。两版**取数次数不同**（`Luck <= 0` 时 override 多一次
+        // `Random(10)`）⇒ 必须按对象分派，不能一律走 `Base`（否则跨侧序列从第一次命中起错位）。
+        let power_mode = if attacker.race == ACTOR_RACE_PLAY {
+            AttackPowerMode::Player {
+                luck: attacker.luck,
+                power_rate: attacker.power_rate,
+                bo_power_item: attacker.bo_power_item,
+                power_item: attacker.power_item,
+            }
+        } else {
+            AttackPowerMode::Base
+        };
+        let outcome = attack_with(
+            &mut self.rng,
+            &mut attacker,
+            &mut target,
+            last_hitter,
+            &cfg,
+            power_mode,
+        );
         if let Some(e) = self.entities.get_mut(target_id) {
             e.hp = target.hp;
             // 命中者登记的**折叠**：C# 在 `_Attack` 里对 `Race > ActorRace.Play` 的目标

@@ -6,6 +6,13 @@ using System.Collections.Generic;
 
 namespace WorldGolden
 {
+    /// <summary>`UserItem` 的战斗子集（`ClientUserItem.cs:14`）：`PlayObject.StruckDamage` 的耐久循环只读这两个字段。</summary>
+    public sealed class UseItemStub
+    {
+        public ushort Index;
+        public ushort Dura;
+    }
+
     /// <summary>`BaseObject` 的 WAbil 子集（战斗数值）。</summary>
     public class AbilityStub
     {
@@ -50,6 +57,15 @@ namespace WorldGolden
         public bool DeathSettled;                     // 本骨架内部：死亡结算只做一次
         public int MapId;
 
+        // ---------- 玩家攻方取数（`PlayObject.GetAttackPower` override）与 `PlayObject.StruckDamage` 子集 ----------
+        // `PlayObject.cs:62` / `PlayObject.cs:724` / `PlayObject.cs:199` / `PlayObject.cs:223`。
+        public int Luck;                              // RecalcAbilitys：无装备 ⇒ 0（`PlayObject.cs:2011-2013`）
+        public int PowerRate = 100;                   // `PlayObject.cs:943`
+        public bool BoPowerItem;                      // `PlayObject.cs:223`
+        public byte PowerItem;                        // `PlayObject.cs:199`
+        // `CharacterObject.UseItems`（`CharacterObject.cs:40`，`CharacterObject.cs:89` 初始化为 13 格）。
+        public UseItemStub[] UseItems = new UseItemStub[13];
+
         /// <summary>src/OpenMir2/HUtil32.cs: LoByte / HiByte。</summary>
         public static byte LoByte(int w) => (byte)w;
 
@@ -65,9 +81,55 @@ namespace WorldGolden
             }
         }
 
-        // ---------- src/M2Server/Actor/BaseObject.Base.cs:886 逐字拷贝 ----------
+        // ---------- src/M2Server/Player/PlayObject.cs:2909 逐字拷贝（玩家 override） ----------
+        // `PlayObject.GetAttackPower`：`Luck <= 0` 时比基版**多一次** `Random(10)`；再乘 `PowerRate`/`PowerItem`。
+        public int GetAttackPowerPlayer(int nBasePower, int nPower)
+        {
+            if (nPower < 0)
+            {
+                nPower = 0;
+            }
+            int result;
+            if (Luck > 0)
+            {
+                if (ParityGolden.M2Share.RandomNumber.Random(10 - Math.Min(9, Luck)) == 0)
+                {
+                    result = nBasePower + nPower;
+                }
+                else
+                {
+                    result = nBasePower + ParityGolden.M2Share.RandomNumber.Random(nPower + 1);
+                }
+            }
+            else
+            {
+                result = nBasePower + ParityGolden.M2Share.RandomNumber.Random(nPower + 1);
+                if (Luck <= 0)
+                {
+                    if (ParityGolden.M2Share.RandomNumber.Random(10 - Math.Max(0, -Luck)) == 0)
+                    {
+                        result = nBasePower;
+                    }
+                }
+            }
+            result = CombatConfigStub.Round(result * (PowerRate / 100.0));
+            if (BoPowerItem)
+            {
+                result = CombatConfigStub.Round(PowerItem * (double)result);
+            }
+            return result;
+        }
+
+        // ---------- src/M2Server/Actor/BaseObject.Base.cs:886 逐字拷贝 + 虚分派 ----------
+        // oracle 的 `GetBaseAttackPoewr` 调**虚函数** `GetAttackPower`：`PlayObject` 走 override
+        //（`PlayObject.cs:2909`），`MonsterObject` 无 override ⇒ 走基版。本桩用 `Race` 分派
+        //（`ActorRace.Play = 0`；与 `IsProperTarget`/AOI 的同一判据）。
         public virtual int GetAttackPower(int basePower, int power)
         {
+            if (Race == 0)
+            {
+                return GetAttackPowerPlayer(basePower, power);
+            }
             if (power < 0)
             {
                 power = 0;
@@ -107,32 +169,52 @@ namespace WorldGolden
         }
 
         // ---------- src/M2Server/Actor/BaseObject.Base.cs:827 逐字拷贝（毒/护盾分支不在本子集） ----------
+        // 注：`PlayObject.StruckDamage`（`PlayObject.cs:2954`）在 `base.StruckDamage` 之后**无条件**
+        // 跑耐久逻辑（即使基版因 `nDamage <= 0` 早退）——故这里把 override 部分放在早退之外。
         public virtual void StruckDamage(int nDamage)
         {
-            if (nDamage <= 0)
+            // 基版（`BaseObject.StruckDamage`，`BaseObject.Base.cs:827`）。
+            if (nDamage > 0)
             {
-                return;
-            }
-            if ((Race >= 50) && (LastHiter != null) && (LastHiter.Race == 0)) // 人攻击怪物
-            {
-                switch (LastHiter.Job)
+                if ((Race >= 50) && (LastHiter != null) && (LastHiter.Race == 0)) // 人攻击怪物
                 {
-                    case 0:
-                        nDamage = (ushort)(nDamage * CombatConfigStub.WarrMon / 10);
-                        break;
-                    case 1:
-                        nDamage = (ushort)(nDamage * CombatConfigStub.WizardMon / 10);
-                        break;
-                    case 2:
-                        nDamage = (ushort)(nDamage * CombatConfigStub.TaosMon / 10);
-                        break;
+                    switch (LastHiter.Job)
+                    {
+                        case 0:
+                            nDamage = (ushort)(nDamage * CombatConfigStub.WarrMon / 10);
+                            break;
+                        case 1:
+                            nDamage = (ushort)(nDamage * CombatConfigStub.WizardMon / 10);
+                            break;
+                        case 2:
+                            nDamage = (ushort)(nDamage * CombatConfigStub.TaosMon / 10);
+                            break;
+                    }
+                }
+                if ((Race == 0) && (LastHiter != null) && (LastHiter.Master != null)) // 人物下属怪物攻击人
+                {
+                    nDamage = (ushort)(nDamage * CombatConfigStub.MonHum / 10);
+                }
+                DamageHealth(nDamage);
+            }
+
+            // 玩家 override（`PlayObject.StruckDamage`，`PlayObject.cs:2954-3039`）部分。
+            if (Race == 0)
+            {
+                ushort nDam = (ushort)(ParityGolden.M2Share.RandomNumber.Random(10) + 5);
+                // `StatusTimeArr[PoisonState.DAMAGEARMOR] > 0` 的 1.2 倍分支：本骨架无 buff 状态。
+                // 衣服位（`UseItems[ItemLocation.Dress = 0]`）特判（`PlayObject.cs:2960-2996`）**不抽数**，只扣耐久。
+                for (int i = 0; i < UseItems.Length; i++)
+                {
+                    if ((UseItems[i] != null) && (UseItems[i].Index > 0)
+                        && (ParityGolden.M2Share.RandomNumber.Random(8) == 0))
+                    {
+                        ushort nDura = UseItems[i].Dura;
+                        nDura -= nDam;
+                        UseItems[i].Dura = nDura; // 破坏分支（`SendDelItems`/`FeatureChanged`）不在本子集
+                    }
                 }
             }
-            if ((Race == 0) && (LastHiter != null) && (LastHiter.Master != null)) // 人物下属怪物攻击人
-            {
-                nDamage = (ushort)(nDamage * CombatConfigStub.MonHum / 10);
-            }
-            DamageHealth(nDamage);
         }
 
         // ---------- src/M2Server/Actor/BaseObject.cs:775 逐字拷贝（护盾分支需 MP，本子集未启用） ----------
