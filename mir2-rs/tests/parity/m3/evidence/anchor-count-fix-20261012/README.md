@@ -17,6 +17,11 @@
 | `gates-test-workspace.txt` | `cargo test --workspace --offline`（78 suites / 638 passed / 0 failed / 16 ignored） |
 | `gates-msgcodegen.txt` | `cargo run -p msgcodegen --offline -- --check`（604 OK） |
 
+> **路径口径（第十三片订正）**：表中 `E:/tmp/m3cs12/...` 是探针的**仓外输出目标/可删副本**；命名空间内一律以本目录
+> 入库件为准。§8 引用的**红检原始件** = 本目录 `red-anchor-count-{residual,dispatch}.txt`（仓外副本
+> `E:/tmp/m3cs12/{residual,dispatch}-red.out.txt`，内容一致）。`gates-*.txt` 自第十三片起统一以
+> `command:` / `exit:` 两行开头。
+
 复核：
 
 ```bash
