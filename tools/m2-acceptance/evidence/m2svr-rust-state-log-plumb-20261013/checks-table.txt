@@ -1,0 +1,15 @@
+﻿OK	①a 未设/空串 ⇒ Present=$false	Present=False
+OK	①b 合法路径 ⇒ Present 且 Path 原样	Path=E:\tmp\m2svr-slog-work\final-green\work\rng-server-state.tsv
+OK	①c 环境变量回落 ⇒ 采用 env 值	Path=E:\tmp\m2svr-slog-work\final-green\work\env-fallback.tsv
+OK	①d 父目录不存在 ⇒ 抛错 fail-closed	同 `-Seed` 非法值：调用方判红并 exit 1，不静默起一个不落 dump 的栈
+OK	②a 传路径 ⇒ 子进程环境 MIR2_RNG_STATE_LOG=该路径	cmd 读出=[E:\tmp\m2svr-slog-work\final-green\work\rng-server-state.tsv]
+OK	②b 起完还原 ⇒ 调用方 $env:MIR2_RNG_STATE_LOG 未被设置	has_env=False
+OK	②c 不传路径 ⇒ 子进程读不到该路径（不注入）	cmd 读出=[%MIR2_RNG_STATE_LOG%]
+OK	③a 传路径 ⇒ 真 game-svr 打出「服务端逐击状态 dump 已开启」	log=E:\tmp\m2svr-slog-work\final-green\work\gs-state-log\stdout.txt
+OK	③b 传路径 ⇒ game-svr 在该路径建出 dump 文件（File::create）	file=E:\tmp\m2svr-slog-work\final-green\work\gs-state-log\rng-server-state.tsv
+OK	④a 不传路径 ⇒ 真 game-svr 正常启动且无自证行	started=True has_marker=False
+OK	④b 不传路径 ⇒ 不建 dump 文件	file=E:\tmp\m2svr-slog-work\final-green\work\gs-no-state-log\rng-server-state.tsv
+OK	⑤a 传路径 ⇒ 行 = RUST_STATE_LOG_INJECTED=<path>	line=[RUST_STATE_LOG_INJECTED=E:\tmp\m2svr-slog-work\final-green\work\rng-server-state.tsv]
+OK	⑤b 不传路径 ⇒ 行 = $null（不打）	line=[]
+OK	⑥a start_rust_stack.ps1 点源管线并把 -StateLog $stateLogInfo 传给 game-svr	结构检查（端到端见证据目录的实栈 run）
+OK	⑥b 管线文件含 $env:MIR2_RNG_STATE_LOG 注入行	删掉该行 ⇒ ②a/③a/③b 必红

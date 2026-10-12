@@ -1,0 +1,60 @@
+M2 验收手册自检  evidence=E:\tmp\m2-acceptance\selftest-20261013-003510
+② check_screenshots.ps1
+  [OK  ] shots/0张=PREREQ                          expect_rc=2 actual_rc=2 out~/PREREQ_MISSING/   空目录
+  [OK  ] shots/缺1张=RED                            expect_rc=1 actual_rc=1 out~/RED: 截图不全/   6/7
+  [OK  ] shots/有<1KiB=RED                         expect_rc=1 actual_rc=1 out~/RED: 截图不全/   1 张 10B
+  [OK  ] shots/7张齐全=GREEN                         expect_rc=0 actual_rc=0 out~/GREEN: 7 张/   7/7 非空
+  [OK  ] shots/6张无pickup=GREEN                    expect_rc=0 actual_rc=0 out~/GREEN: 6 张.*oracle 不可达/   pickup 不可达不计
+  [OK  ] shots/6张无pickup+RequirePickup=RED        expect_rc=1 actual_rc=1 out~/RED: 截图不全/   -RequirePickup 仍要求 7 张
+③b s2c_diff.py
+  [OK  ] s2c/金标准自比=GREEN                          expect_rc=0 actual_rc=0 out~/GREEN: 同序列/   ident 658..10
+  [OK  ] s2c/尾字节改坏=RED                            expect_rc=1 actual_rc=1 out~/RED: .*未登记差异/   非 recog 字节必红
+  [OK  ] s2c/只改recog=GREEN                        expect_rc=0 actual_rc=0 out~/GREEN: 同序列/   归一化清单只 recog
+  [OK  ] s2c/缺输入=PREREQ                           expect_rc=2 actual_rc=2 out~/PREREQ_MISSING/   文件不存在
+③c check_db_paths.ps1 -Mode diff
+  [OK  ] db/三路径相同=GREEN                           expect_rc=0 actual_rc=0 out~/GREEN: 小退/掉线/   字段级 diff=0
+  [OK  ] db/改一字段=RED                              expect_rc=1 actual_rc=1 out~/RED: 路径 DB diff 未归零/   shutdown 差异
+  [OK  ] db/缺抽取件=PREREQ                           expect_rc=2 actual_rc=2 out~/PREREQ_MISSING/   shutdown 缺 after
+  [OK  ] db/不 canonical 仅易变列=RED                  expect_rc=1 actual_rc=1 out~/RED/   不 canonical ⇒ 仅易变列也不同必红（这正是不是假绿的牙齿）
+  [OK  ] db/canonical 仅易变列=GREEN                  expect_rc=0 actual_rc=0 out~/GREEN/   Id/时间戳不同但 --canonical 置占位后同行为
+  [OK  ] db/canonical 行为列不同=RED                   expect_rc=1 actual_rc=1 out~/RED/   canonical 不得吃掉行为列
+④ session_lifecycle_fixture.ps1（offline 判定：旧收到什么 / 新连接去向）
+  [OK  ] life/旧收账号级kick=KICKUSER                  expect_rc=0 actual_rc=0 out~/old_received=KICKUSER_SYSTEM_MSG/   TCPNetChannel.KickUser 文案
+  [OK  ] life/新进世界=ADMITTED                       expect_rc=0 actual_rc=0 out~/new_verdict=ADMITTED/   成功进入游戏 ⇒ 放行
+  [OK  ] life/新被关=CLOSED                          expect_rc=0 actual_rc=0 out~/new_verdict=CLOSED/   进入游戏后未成功、连接被关
+  [OK  ] life/先放行后断开仍=ADMITTED                    expect_rc=0 actual_rc=0 out~/new_verdict=ADMITTED/   成功进入游戏优先，不得误报 CLOSED
+  [OK  ] life/新无标记=判红                             expect_rc=1 actual_rc=1 out~/new_verdict=TIMEOUT/   无判定标记 ⇒ 非零退出
+  [OK  ] life/新进程退出=PROCESS_EXITED                expect_rc=1 actual_rc=1 out~/new_verdict=PROCESS_EXITED/   进程已退 ⇒ 判红
+  [OK  ] life/旧无kick=NONE_OBSERVED                expect_rc=0 actual_rc=0 out~/old_received=NONE_OBSERVED/   没有 kick 文案
+  [OK  ] life/旧收528=SM_OUTOFCONNECTION            expect_rc=0 actual_rc=0 out~/old_received=SM_OUTOFCONNECTION/   强行中断（区分于账号级 kick）
+  [OK  ] life/旧普通断开=CONNECTION_CLOSED             expect_rc=0 actual_rc=0 out~/old_received=CONNECTION_CLOSED/   仅关闭连接
+① portclassify.ps1（实现归属分类器：check_ports.ps1 与 selftest.ps1 共用同一口径）
+  [OK  ] impl/C# 根目录=csharp                       expect=csharp actual=csharp
+  [OK  ] impl/mir2-rs target=rust                 expect=rust actual=rust
+  [OK  ] impl/隔离 target(m2svr)=rust               expect=rust actual=rust
+  [OK  ] impl/基名回落 rust                           expect=rust actual=rust
+  [OK  ] impl/未知基名=unknown                        expect=unknown actual=unknown
+  [OK  ] impl/Rust 入口带现网配置参数仍=rust                expect=rust actual=rust
+  [OK  ] impl/C# 入口（Exe 在 MirServer）=csharp       expect=csharp actual=csharp
+① 端口表 -> 期望入口（端口归属：不只看是否 Rust，还要看是不是该端口的入口）
+  [OK  ] entry/表 5000=game-svr                    expect=game-svr actual=game-svr
+  [OK  ] entry/表 7000=login-gate                  expect=login-gate actual=login-gate
+  [OK  ] entry/表 7100=sel-gate                    expect=sel-gate actual=sel-gate
+  [OK  ] entry/表 7200=game-gate                   expect=game-gate actual=game-gate
+  [OK  ] entry/基名取 game-svr.exe                   expect=game-svr actual=game-svr
+  [OK  ] entry/5000+game-svr=ok                   expect=ok actual=ok
+  [OK  ] entry/5000+login-gate=cross              expect=cross actual=cross
+  [OK  ] entry/7200+game-svr=cross                expect=cross actual=cross
+① check_ports.ps1（只读实况端口 5000/7000/7100/7200）
+  [OK  ] ports/实况判属（Rust绿/C#红/缺前置）                expect_rc=1 actual_rc=1 out~/RED: 端口/   notListening= nonRust=5000/7000/7100/7200 crossed=
+⓪ preflight.ps1（外部工具/仓库输入/金标准身份+schema）
+  [OK  ] preflight/在库前置齐备=GREEN                   expect_rc=0 actual_rc=0 out~/GREEN: 前置齐备/   仓库输入 + 金标准 schema/身份
+  [OK  ] preflight/缺工具=PREREQ                     expect_rc=2 actual_rc=2 out~/PREREQ_MISSING/   注入不存在的 python
+  [OK  ] preflight/缺客户端入口=PREREQ                  expect_rc=2 actual_rc=2 out~/PREREQ_MISSING/   客户端入口路径不存在
+  [OK  ] preflight/金标准 schema 坏=RED               expect_rc=1 actual_rc=1 out~/RED: 前置在但已损坏/   缺 8 个必需字段（-AllowGoldenDrift 隔离出 schema 独立牙齿）
+run_acceptance.ps1（聚合口径）
+  [OK  ] agg/全PREREQ=2（不静默通过）                     expect_rc=2 actual_rc=2 out~/PREREQ_MISSING/   无栈自检
+  [OK  ] agg/有RED=1（红不许被说成前置）                     expect_rc=1 actual_rc=1 out~/RED: 有步骤判红/   shots 6/7 判红
+SELFTEST_REPORT E:\tmp\m2-acceptance\selftest-20261013-003510\selftest.json
+SUMMARY total=47 failed=0
+GREEN: 手册每一步的判红/判绿口径都经构造输入验证（不含真栈验收本身）

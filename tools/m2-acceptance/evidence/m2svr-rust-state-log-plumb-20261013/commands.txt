@@ -1,0 +1,54 @@
+# 确切命令（cwd：worktree m2-svr；TARGET=E:/tmp/openmir2-m2svr-target；base=master 0f4e141b）
+# 行尾 LF。所有 powershell 均为 Windows PowerShell 5.1；python 为 Windows `python`。
+
+## 0. 判据：状态 dump 管线自检（真实 game-svr；不占真端口，用空闲端口 + 临时 conf）
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/check_state_log_plumb.ps1 `
+  -GameSvrExe E:/tmp/openmir2-m2svr-target/debug/game-svr.exe `
+  -OutDir E:/tmp/m2svr-slog-work/final-green
+#   => SUMMARY total=15 ok=15 fail=0 ; STATE_LOG_PLUMB GREEN ; rc=0
+#   -> checks-green.txt（stdout）+ checks-table.txt（脚本落盘的逐项表）
+
+## 0b. 启动器 fail-closed（父目录不存在；`-Force` 跳过端口检查，在起任何进程之前就退出）
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 `
+  -Force -StateLog 'E:\no-such-dir-xyz\rng.tsv'
+#   => SEED: 未指定种子… / RED: MIR2_RNG_STATE_LOG/-StateLog 的父目录不存在: E:\no-such-dir-xyz
+#      —— 拒绝在非法状态 dump 路径下起栈（fail-closed）; rc=1（未 START 任何进程）
+#   -> launcher-failclosed.txt
+
+## 1. 改坏必红：删掉 rust_seed_plumb.ps1 的 `$env:MIR2_RNG_STATE_LOG = [string]$StateLog.Path` 注入行
+#   （把该行改为 `# [REDCHECK] injection removed: …`；随后从备份还原并 cmp 逐字节相同）
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/check_state_log_plumb.ps1 `
+  -GameSvrExe E:/tmp/openmir2-m2svr-target/debug/game-svr.exe `
+  -OutDir E:/tmp/m2svr-slog-work/redcheck
+#   => [FAIL] ②a / ③a / ③b ; SUMMARY total=15 ok=12 fail=3 ; STATE_LOG_PLUMB FAIL ; rc=1
+#   -> redcheck-injection-removed.txt
+#   还原后复跑（checks-green-after-restore.txt）=> 15/15 GREEN、rc=0。
+
+## 2. 回归：共享管线改动后，种子管线判据与 M2 手册自检仍绿
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/check_seed_plumb.ps1 `
+  -GameSvrExe E:/tmp/openmir2-m2svr-target/debug/game-svr.exe -OutDir E:/tmp/m2svr-slog-work/seed
+#   => SUMMARY total=15 ok=15 fail=0 ; SEED_PLUMB GREEN ; rc=0            -> seed-plumb-regression.txt
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/selftest.ps1
+#   => SUMMARY total=47 failed=0 ; GREEN ; rc=0                           -> harness-selftest.txt
+
+## 3. 四门禁（cwd：mir2-rs/；CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target）
+cargo fmt --all -- --check                                              # rc=0  -> gate-fmt.txt
+cargo clippy --workspace --all-targets --offline -- -D warnings         # rc=0  -> gate-clippy.txt
+cargo test --workspace --offline                                        # rc=0  -> gate-test.txt
+cargo run -p msgcodegen --offline -- --check                            # rc=0  -> gate-msgcodegen.txt
+
+## 4. 证据 hash（仓库口径 = LF 归一 / git blob 字节）
+python -I tools/evidence-hash/verify_sha256sums.py write tools/m2-acceptance/evidence/m2svr-rust-state-log-plumb-20261013
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra tools/m2-acceptance/evidence/m2svr-rust-state-log-plumb-20261013
+
+## 5. 干净检出复核（detached worktree @ 本片提交，autocrlf 下重新物化）
+git worktree add --detach E:/tmp/m2svr-clean2 HEAD-of-this-patch
+# 在该树上（清单已按本片提交重算后复核；验证器自身输出不列入清单）:
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra tools/m2-acceptance/evidence/m2svr-rust-state-log-plumb-20261013
+#   => GREEN … OK 15/15 ; rc=0（原始输出见 patch body，不入库——工具自身输出不入清单）
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/check_state_log_plumb.ps1 `
+  -GameSvrExe E:/tmp/openmir2-m2svr-target/debug/game-svr.exe -OutDir E:/tmp/m2svr-slog-work/clean2
+#   => SUMMARY total=15 ok=15 fail=0 ; STATE_LOG_PLUMB GREEN ; rc=0  -> clean-checkout-state-log.txt
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/check_seed_plumb.ps1 `
+  -GameSvrExe E:/tmp/openmir2-m2svr-target/debug/game-svr.exe -OutDir E:/tmp/m2svr-slog-work/clean2-seed
+#   => SUMMARY total=15 ok=15 fail=0 ; SEED_PLUMB GREEN ; rc=0        -> clean-checkout-seed.txt

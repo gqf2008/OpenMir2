@@ -1,0 +1,2 @@
+SEED: 未指定种子（不注入，与改动前行为一致）
+RED: MIR2_RNG_STATE_LOG/-StateLog 的父目录不存在: E:\no-such-dir-xyz —— 拒绝在非法状态 dump 路径下起栈（fail-closed）

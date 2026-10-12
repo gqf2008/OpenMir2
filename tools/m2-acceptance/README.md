@@ -111,6 +111,39 @@ powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/check_seed_plumb.ps
 
 证据：`tools/m2-acceptance/evidence/rust-stack-seed-plumb-20261012/`（卡 `openmir2-m3-rust-stack-seed-plumb`）。
 
+### 0b.2 `-StateLog` · Rust 半的 `MIR2_RNG_STATE_LOG` 状态 dump 管线（目标可用性门两侧强制的 Rust 半）
+
+M3②③ 隔离两相的目标可用性门（`mir2-rs/tests/parity/m3/server_state_gate.py`）要**两侧都强制**：
+C# 半由 `start-csharp-hook.ps1 -StateLog` 写 `MIR2_RNG_STATE_LOG`；Rust 半由 `bins/game-svr`
+（`bins/game-svr/src/state_log.rs`，卡 `openmir2-m2-rust-server-state-dump`）读同一个变量，
+每个玩家攻击单元落一行 `SERVER_STATE <seq> <json 数组>`。起栈时用 `-StateLog <path>`（或先在 shell 里
+`$env:MIR2_RNG_STATE_LOG=<path>`）把该变量**注入 game-svr 子进程环境**，脚本会打一行
+`RUST_STATE_LOG_INJECTED=<path>`：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 `
+  -RustBinDir E:\tmp\openmir2-m2svr-target\debug -StateLog E:\tmp\m3-rust\rng-server-state.tsv
+# 启动日志出现：STATE_LOG: 将向 game-svr 注入 MIR2_RNG_STATE_LOG=… … RUST_STATE_LOG_INJECTED=…
+# game-svr.out.log 出现：服务端逐击状态 dump 已开启（MIR2_RNG_STATE_LOG）…
+```
+
+- **不传路径 ⇒ 不注入、不打该行、不建文件**（与改动前逐字节一致）。
+- **路径父目录不存在 ⇒ fail-closed**：打印 `RED: MIR2_RNG_STATE_LOG/-StateLog 的父目录不存在: …` 并 **exit 1**，
+  **不起栈**（不静默起一个永远不落 dump 的栈）。
+- 管线实现（`Resolve-Mir2StateLog` / `Get-StateLogInjectedLine` / `Start-SeededProcess`）在
+  `tools/m2-acceptance/rust_seed_plumb.ps1`，与判据脚本**共用同一份**（与 `-Seed` 同文件、互不干扰）。
+- 判红/判绿（不起栈、不占真端口）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/check_state_log_plumb.ps1 `
+  -GameSvrExe E:\tmp\openmir2-m2svr-target\debug\game-svr.exe
+# 15/15 ⇒ STATE_LOG_PLUMB GREEN (rc=0)；删掉 rust_seed_plumb.ps1 的注入行 ⇒ ②a/③a/③b 必红 (rc=1)
+```
+
+证据：`tools/m2-acceptance/evidence/m2svr-rust-state-log-plumb-20261013/`（卡 `openmir2-m2-rust-state-log-plumb`）。
+**接线余量（属夹具写集）**：`run_attack_pair.ps1 -Side rust` 读 Rust 侧 dump 并调同一 gate（`run_attack_pair.ps1:1164`
+的 NOTE 尚未去掉，归 m3bag 夹具）。本管线只保证 "Rust 栈起得来 dump"。
+
 ---
 
 ## 1. ① 端口所有权实拍 —— `check_ports.ps1`
