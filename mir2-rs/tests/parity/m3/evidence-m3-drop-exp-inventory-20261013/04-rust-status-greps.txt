@@ -1,0 +1,63 @@
+# Rust 侧现状证据（只读 grep；命令在本文件内，逐条可复跑）
+# 仓库 = 2313a2b8  生成时间 = 2026-10-12T19:30:13Z
+
+== [1] MonGen 加载器：crates/** 与 bins/** 是否出现 mongen ==
+$ grep -rni mongen --include=*.rs crates bins
+mir2-rs/crates/formula/src/drop.rs:2://! - `src/GameSrv/Word/WorldServer.MonGen.cs:440`（`MonGetRandomItems`，创建怪物时
+mir2-rs/crates/formula/src/drop.rs:564:/// C# `WorldServer.MonGetRandomItems`（`WorldServer.MonGen.cs:440`）逐条移植。
+mir2-rs/crates/formula/src/drop.rs:576:/// `WorldServer.MonGen.cs:453-456`）。
+mir2-rs/crates/script/src/codes.rs:252:    CodeDef { name: "MONGEN", member: "MonGen", field_index: 20, enum_value: 20 },
+mir2-rs/crates/script/src/codes.rs:253:    CodeDef { name: "MONGENP", member: "MonGenp", field_index: 21, enum_value: 21 },
+mir2-rs/crates/script/src/codes.rs:446:    CodeDef { name: "MONGENEX", member: "MonGenex", field_index: 214, enum_value: 214 },
+mir2-rs/crates/script/src/engine/actions.rs:788:            "ActionOfMonGenEx" => self.action_of_mon_gen_ex(info),
+mir2-rs/crates/script/src/engine/actions.rs:1794:    /// `ActionOfMonGenEx`（`MONGENEX 地图 X Y 名 范围 数量`）。
+mir2-rs/crates/script/src/engine/actions.rs:1803:            self.script_action_error("MonGenex", info);
+mir2-rs/crates/script/src/engine/dispatch.rs:94:    "ActionOfMonGenEx",
+mir2-rs/crates/script/src/handlers.rs:136:    (20, "ActionOfMonGen"),
+mir2-rs/crates/script/src/handlers.rs:209:    (214, "ActionOfMonGenEx"),
+mir2-rs/crates/script/tests/engine_tests.rs:1334:        ("ActionOfMonGenEx", 214),
+mir2-rs/crates/script/tests/engine_tests.rs:2153:    // MONGENEX 0 100 200 稻草人 5 3：Random 固定 0 ⇒ (100-5, 200-5) 三次
+mir2-rs/crates/script/tests/engine_tests.rs:2168:    assert!(first_script_error(&e).contains("脚本命令:MonGenex"));
+mir2-rs/crates/world/src/combat.rs:12://! - `src/GameSrv/Word/WorldServer.MonGen.cs:440` `MonGetRandomItems`（**掉落在地图生成怪物时预算**，
+mir2-rs/crates/world/src/combat.rs:913:/// 在**怪物生成时**预算掉落（`WorldServer.MonGen.cs:440` 的时机）——RNG 在这里消耗。
+mir2-rs/crates/world/src/world.rs:497:        // 掉落预算（`WorldServer.MonGen.cs:440` 的时机）：RNG 在这里消耗
+mir2-rs/crates/world-bevy/src/lib.rs:97:/// 随机数消耗顺序与 C# `WorldServer.MonGen.cs::MonGetRandomItems` 逐条一致
+
+== [2] load_monthus / MonGenInfo 模型 ==
+$ grep -rn "load_mongen\|MonGenInfo" --include=*.rs mir2-rs/crates mir2-rs/bins
+(no match)
+
+== [3] 怪物 AI（Wondering/Think/Run） ==
+$ grep -rni "wondering|fn think|monster.*run\b" --include=*.rs mir2-rs/crates mir2-rs/bins
+(no match)
+
+== [4] spawn_monster / SpawnMonster 调用点 ==
+$ grep -rn "SpawnMonster" --include=*.rs mir2-rs/bins
+mir2-rs/bins/game-svr/src/main.rs:5451:        world.spawn_monster(Command::SpawnMonster {
+
+== [5] 掉落/经验公式与死亡结算（world 骨架，已实现） ==
+$ grep -n "generate_drops|award_kill_exp|settle_deaths|place_floor_item" mir2-rs/crates/world/src/{combat.rs,world.rs}
+mir2-rs/crates/world/src/combat.rs:916:pub fn generate_drops<C: ItemCatalog>(
+mir2-rs/crates/world/src/combat.rs:945:pub fn award_kill_exp(
+mir2-rs/crates/world/src/world.rs:468:    pub fn spawn_monster(&mut self, cmd: Command) -> bool {
+mir2-rs/crates/world/src/world.rs:562:    fn settle_deaths(&mut self, record: &mut TickRecord) {
+mir2-rs/crates/world/src/world.rs:648:    fn place_floor_item(
+
+== [6] MonItems 解析存在，但 load_monster_db 不挂 ItemList ==
+$ grep -n "LoadMonitems\|掉落列表" mir2-rs/crates/data/src/loaders.rs mir2-rs/crates/data/src/monitems.rs
+mir2-rs/crates/data/src/loaders.rs:248:    /// 掉落列表（`LoadMonitems`）不在此函数内——C# 也是从 `Envir/MonItems`
+mir2-rs/crates/data/src/loaders.rs:250:    pub async fn load_monster_db(&self) -> Result<Vec<MonsterInfo>, DataError> {
+mir2-rs/crates/data/src/monitems.rs:2://! （`LoadMonitems`）。文件为 GBK 编码。
+mir2-rs/crates/data/src/monitems.rs:17:/// 逐条对应 `LoadMonitems`：
+
+== [7] 客户端帧常量存在但生产路径未发 ==
+$ grep -rn "SM_WINEXP|SM_ITEMSHOW" --include=*.rs mir2-rs/crates/protocol/src/messages.rs mir2-rs/bins
+mir2-rs/crates/protocol/src/messages.rs:200:pub const SM_WINEXP: u16 = 44;
+mir2-rs/crates/protocol/src/messages.rs:256:pub const SM_ITEMSHOW: u16 = 610;
+mir2-rs/crates/protocol/src/messages.rs:762:        44 => &["SM_WINEXP"],
+mir2-rs/crates/protocol/src/messages.rs:873:        610 => &["SM_ITEMSHOW"],
+
+== [8] live sim 载入：stditems + Exps.conf（无 monsters/MonGen） ==
+$ grep -n "load_items_db|load_monster_db|ExpsConfig|item_catalog|need_exps" mir2-rs/bins/game-svr/src/main.rs
+373:    let item_catalog = items::catalog_from(&item_table);
+376:    let need_exps = match mir2_data::exps::ExpsConfig::from_file(&base.join("Exps.conf")) {

@@ -1,0 +1,78 @@
+SELFTEST_NO_STACK: 无栈自检——所有路径都必须 fail-closed（缺失绝不静默 GREEN）
+SELFTEST ok scenario-fixed-input (canon/kills/seed/map/monster/pose)
+SELFTEST ok comparator-selftest (rc=0)
+STATS kills=2 drop_slots=2 gold_total=37 exp_delta_total=24
+CSHARP=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-585o3n0j\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-585o3n0j\rs0.jsonl
+DIFF 0
+GREEN: 掉落列表逐项相同 + 经验逐级相同（kills=2）
+KILL k=0 slot=1 RED 掉落槽 csharp=('木剑', 2, 1, 13, 20) rust=('铁剑', 2, 1, 13, 20)
+KILL k=0 RED 掉落多重集 csharp={"('木剑', 2, 1, 13, 20)": 1} rust={"('铁剑', 2, 1, 13, 20)": 1}
+STATS kills=2 drop_slots=2 gold_total=37 exp_delta_total=24
+CSHARP=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-585o3n0j\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-585o3n0j\rs_name.jsonl
+DIFF n=2
+RED: 掉落/经验跨侧差异 2 项（定位见上）
+KILL k=0 RED 字段 gold csharp=37 rust=38
+KILL k=0 slot=0 RED 掉落槽 csharp=('金币', None, 37, None, None) rust=('金币', None, 38, None, None)
+KILL k=0 RED 掉落多重集 csharp={"('金币', None, 37, None, None)": 1} rust={"('金币', None, 38, None, None)": 1}
+STATS kills=2 drop_slots=2 gold_total=37 exp_delta_total=24
+CSHARP=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-585o3n0j\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-585o3n0j\rs_gold.jsonl
+DIFF n=3
+RED: 掉落/经验跨侧差异 3 项（定位见上）
+KILL k=1 RED 字段 exp_delta csharp=12 rust=13
+STATS kills=2 drop_slots=2 gold_total=37 exp_delta_total=24
+CSHARP=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-585o3n0j\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-585o3n0j\rs_exp.jsonl
+DIFF n=1
+RED: 掉落/经验跨侧差异 1 项（定位见上）
+KILL k=0 RED 掉落条数 csharp=2 rust=3
+KILL k=0 RED 掉落多重集 csharp={} rust={"('布衣', 5, 1, None, None)": 1}
+STATS kills=2 drop_slots=2 gold_total=37 exp_delta_total=24
+CSHARP=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-585o3n0j\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-585o3n0j\rs_cnt.jsonl
+DIFF n=2
+RED: 掉落/经验跨侧差异 2 项（定位见上）
+KILL k=- RED 记录条数不同 csharp='csharp=2' rust='rust=1'
+STATS kills=2 drop_slots=0 gold_total=0 exp_delta_total=0
+CSHARP=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-585o3n0j\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-585o3n0j\rs_len.jsonl
+DIFF n=1
+RED: 掉落/经验跨侧差异 1 项（定位见上）
+KILL k=0 RED 字段 gold csharp=3000000000 rust=7294967296
+STATS kills=2 drop_slots=2 gold_total=3000000000 exp_delta_total=24
+CSHARP=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-585o3n0j\cs_big.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-585o3n0j\rs_big.jsonl
+DIFF n=1
+RED: 掉落/经验跨侧差异 1 项（定位见上）
+STATS kills=2 drop_slots=2 gold_total=7294967296 exp_delta_total=24
+CSHARP=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-585o3n0j\cs_big2.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-585o3n0j\rs_big2.jsonl
+DIFF 0
+GREEN: 掉落列表逐项相同 + 经验逐级相同（kills=2）
+RED: PREREQ_RED 缺文件: C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-585o3n0j\nope.jsonl
+RED: PREREQ_RED rust: k=0 缺字段 exp_delta (C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-585o3n0j\rs_missing.jsonl)
+RED: PREREQ_RED 非法 JSON C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-585o3n0j\rs_bad.jsonl:1: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+RED: PREREQ_RED rust: k 不连续/非 0 起（第 1 条 k=5）(C:\Users\gxh\AppData\Local\Temp\drop-exp-selftest-585o3n0j\rs_gap.jsonl)
+SELFTEST ok identical-green expect=GREEN got=GREEN
+SELFTEST ok mutate-drop-name-red expect=RED got=RED
+SELFTEST ok mutate-gold-red expect=RED got=RED
+SELFTEST ok mutate-exp-red expect=RED got=RED
+SELFTEST ok mutate-drop-count-red expect=RED got=RED
+SELFTEST ok mutate-kill-count-red expect=RED got=RED
+SELFTEST ok i32-truncation-red expect=RED got=RED
+SELFTEST ok big-value-equal-green expect=GREEN got=GREEN
+SELFTEST ok missing-file-prereq expect=PREREQ got=PREREQ
+SELFTEST ok missing-field-prereq expect=PREREQ got=PREREQ
+SELFTEST ok invalid-json-prereq expect=PREREQ got=PREREQ
+SELFTEST ok k-gap-prereq expect=PREREQ got=PREREQ
+SELFTEST ok=12/12
+
+SELFTEST ok identical-green (rc=0)
+SELFTEST ok mutate-exp-red (rc=1)
+SELFTEST ok missing-file-prereq (rc=2)
+SELFTEST ok lf-writer-selftest
+SELFTEST ok no-port-touched (offline-only)
+SELFTEST ok=7/7 failures=
+GREEN: 无栈自检全绿（比较器 fail-closed + 改坏必红 + LF 写出 + 零端口）

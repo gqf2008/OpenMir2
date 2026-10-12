@@ -1,0 +1,2 @@
+PREREQ_MISSING: 真机 100 杀需 owner 发放窗口（起栈禁接管道；本片只交夹具骨架，不占端口）
+NEXT: 获窗口后按 README 的命令序列跑（-Side csharp 基线 → -Side rust -PeerSession <csharp 会话> → -DiffOnly）
