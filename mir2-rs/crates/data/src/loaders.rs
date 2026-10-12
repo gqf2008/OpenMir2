@@ -293,6 +293,10 @@ impl DataLoaders {
                 walk_step: hutil::max_i32(1, get_i32(row, "WalkStep")) as u16,
                 walk_wait: get_i32(row, "WaLkWait") as u16,
                 attack_speed,
+                // C# 在 `LoadMonsterDB` 里先 `ItemList = null`，随后 `LoadMonitems` 才挂接；
+                // 纯 DB 装载阶段与 oracle 同形：挂着 None（挂接由 `monitems::attach_monitems` 负责，
+                // 见 `MySqlDB.cs:226`）。
+                item_list: None,
             });
         }
         Ok(monsters)

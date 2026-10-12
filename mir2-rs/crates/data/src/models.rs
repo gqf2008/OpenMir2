@@ -117,6 +117,16 @@ pub struct MonsterInfo {
     pub walk_step: u16,
     pub walk_wait: u16,
     pub attack_speed: u16,
+    /// `MonsterInfo.ItemList`（`src/OpenMir2/Data/MonsterInfo.cs`）。
+    ///
+    /// `None` ⇔ oracle 的 `null`：`Envir/MonItems/<name>.txt` 不存在时 `LoadMonitems`
+    /// 不做任何事（`LocalDB.cs:596` 的 `File.Exists` 为假分支）；
+    /// `Some(vec![])` ⇔ 文件存在但一行都没收录（oracle `new List<MonsterDropItem>()`）。
+    ///
+    /// 由 [`crate::monitems::attach_monitems`] 在 `load_monster_db` 之后按怪名挂接
+    /// （oracle `MySqlDB.LoadMonsterDB` 的 `monster.ItemList = null;` + `LoadMonitems`，
+    /// `MySqlDB.cs:226`）。
+    pub item_list: Option<Vec<MonsterDropItem>>,
 }
 
 /// `src/OpenMir2/Data/MonsterDropItem.cs`。

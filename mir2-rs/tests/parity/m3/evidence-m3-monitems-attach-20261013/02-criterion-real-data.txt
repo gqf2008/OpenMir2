@@ -1,0 +1,10 @@
+$ cargo test --offline -p game-svr --test monitems_attach -- --ignored --nocapture   # 真数据覆盖（MySQL mir2_data + E:/MirServer/M2GameSvr/Envir）
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running tests\monitems_attach.rs (E:/tmp/openmir2-m3bag-target\debug\deps\monitems_attach-6ab8bafe741e319c.exe)
+
+running 1 test
+MonItems 覆盖：monsters=705 attached=182 entries=7427 磁盘孤儿表=["命运教主", "宝箱0", "暗之触龙神", "白野猪9", "祖玛卫士9", "祖玛弓箭手9", "祖玛雕像9", "神鹰", "稻草人9", "虹魔教主0", "血僵尸9", "邪恶蜈蚣1", "邪恶蜈蚣2", "骷髅王", "魔龙教主2"]
+test real_monster_db_every_monster_matches_its_table_on_disk ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.12s
+
