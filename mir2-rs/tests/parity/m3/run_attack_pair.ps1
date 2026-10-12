@@ -26,6 +26,7 @@
 
   目标接法：`-AttackPinPair` 把 attacker（账号序号 0）钉在 (PinCX,PinCY) 面向 `AttackPinDir`，
   victim（序号 1）钉在 (PinCX+1,PinCY)；victim HP/MaxHP 抬高（防 100+ 次内死亡）。
+  **F-F（owner 2026-10-12 22:35）**：光写大 `Hp/MaxHP` 不生效——进世界时 oracle `RecalcLevelAbilitys()`（`PlayObject.cs:5295`）会按 `Abil.Level`+`Job` 重算 `MaxHP` 并把 `HP` 钳回去（L1 战士 ⇒ 19）⇒ pin 必须把 `Level/Job` 一并钉到与目标 HP 自洽的值（本片缺省 L255/战士 ⇒ 20669），并有「pin 后复核 maxhp == 期望」的 fail-closed 门（run 末尾 `VICTIM_HP_POSTPIN` + 自检 ⑥d/⑥e）。
   **R-1（owner 2026-10-12 14:30）**：攻击判定取全局 `M2Share.RandomNumber`，被全图怪 AI 消耗 ⇒
   对拍场景必须**除攻击路径外零 RNG 消费者**。最简 = **整张图零刷怪**：pin 地图缺省 = `0137`（竞技场，
   `MonGen.txt` 零行、无 NPC/守卫），落点 `(17,20) dir=2`、victim `(18,20)`（均可走）。不是无怪图就
@@ -58,6 +59,9 @@
                  临时表会话结束即消失，真实数据零改动。
     2 同序列     run_pair -AttackSequence 后 bot.log 必须出现 `M3ATTSEQ`：`role=attack` k=1..N
                  且 `role=done attacks=N`；缺 ⇒ RED。
+    2.5 pin 后复核受害者 HP（F-F）  会话 `attack_raw.jsonl` 里每条 `role=struck` 的 `maxhp`（= 服务端
+                 `WAbil.MaxHP`）必须 == 期望（缺省 20669 = L255/战士）；被 `RecalcLevelAbilitys` 重算回 19
+                 ⇒ `VICTIM_HP_POSTPIN` RED（fail-closed）。
     3 跨侧口径   两侧 baseline.json 的 `attack_sequence` / `attack_pose` / `fixed_new_chr` 必须一致；
                  不一致 ⇒ PREREQ（exit 2）。
     3.1 pin 记账门（owner 2026-10-12 16:30；**19:20 降级为 informational**）  `baseline.json.pin_attempts`
@@ -94,7 +98,8 @@ param(
   [string]$PinMapName = '',        # R-1：攻击 pin 地图（必须整张零刷怪）；空 ⇒ gate_guards 的 $script:M3AttackPinMap = '0137'
   [int]$AttackPinCX = -1,          # R-1：attacker 落点 X（<0 ⇒ 用 gate_guards 的 $script:M3AttackPinCX = 17，0137 竞技场可走空地）
   [int]$AttackPinCY = -1,          # R-1：attacker 落点 Y（<0 ⇒ 用 $script:M3AttackPinCY = 20）
-  [int]$AttackVictimHp = 30000,
+  [int]$AttackVictimHp = 0,        # F-F：0 ⇒ gate_guards 的 oracle 等级派生值（L255/战士=20669）；显式值必须与 -AttackVictimLevel 自洽
+  [int]$AttackVictimLevel = 0,     # F-F：victim/attacker 钉的等级（byte 0..255）；0 ⇒ $script:M3AttackVictimLevel
   [string]$PeerSession = '',
   [string]$CsharpSession = '',
   [string]$RustSession = '',
@@ -135,6 +140,10 @@ $MysqlExe = 'D:\mysql\mariadb-10.11.19-winx64\bin\mysql.exe'
 if ([string]::IsNullOrEmpty($PinMapName)) { $PinMapName = $script:M3AttackPinMap }
 if ($AttackPinCX -lt 0) { $AttackPinCX = $script:M3AttackPinCX }
 if ($AttackPinCY -lt 0) { $AttackPinCY = $script:M3AttackPinCY }
+# F-F（owner 2026-10-12 22:35）：攻击 pin 的 `Level/Job/Hp` 口径归 gate_guards（oracle 等级公式）；
+# 缺省 0 ⇒ 用脚本常量（L255/战士 ⇒ 20669），显式值必须自洽（`Get-M3AttackPinSql` 会 fail-closed）。
+if ($AttackVictimHp -le 0) { $AttackVictimHp = $script:M3AttackVictimHp }
+if ($AttackVictimLevel -le 0) { $AttackVictimLevel = $script:M3AttackVictimLevel }
 
 function Get-EntryHolders {
   $list = @()
@@ -339,14 +348,17 @@ if ($SelfCheckNoStack) {
   if ($LASTEXITCODE -ne 0) { $failures += 'emit_pair_rc=non-zero' }
   else {
     $pair = (((@($emitPairRaw) | Where-Object { $_ -notmatch '^\s*(WARN:|PIN_NO_MONSTER|MAP_HAS_NO_MONSTER|MAP_HAS_NO_AI_CONSUMERS)' }) -join "`n").Trim() | ConvertFrom-Json)
-    $wantPose = ('pair map={0} attacker={1},{2},dir=2 victim={3},{2} level=1 vhp=30000' -f $PinMapName, $AttackPinCX, $AttackPinCY, ($AttackPinCX + 1))
+    $wantPose = ('pair map={0} attacker={1},{2},dir=2 victim={3},{2} level={4} vhp={5}' -f $PinMapName, $AttackPinCX, $AttackPinCY, ($AttackPinCX + 1), $AttackVictimLevel, $AttackVictimHp)
     if ($pair.attack_pose -ne $wantPose) { $failures += ('attack_pose=' + $pair.attack_pose) }
     $all = @($pair.attack_pin_sql_all)
     if ($all.Count -lt 4) { $failures += ('attack_pin_sql_all_count=' + $all.Count) }
     $joined = ($all -join ' || ')
     if ($joined -notmatch 'ChrName=''m3[^'']*0''') { $failures += 'attack_pin_missing_attacker_row' }
     if ($joined -notmatch ('CX=' + ($AttackPinCX + 1) + '[^0-9]')) { $failures += 'attack_pin_missing_victim_cell' }
-    if ($joined -notmatch 'a\.Hp=30000, a\.MaxHP=30000') { $failures += 'attack_pin_missing_victim_hp' }
+    if ($joined -notmatch ('a\.Hp={0}, a\.MaxHP={0}' -f $AttackVictimHp)) { $failures += 'attack_pin_missing_victim_hp' }
+    # F-F：pin 必须把 `Level`/`Job` 一并钉死（否则进世界被 `RecalcLevelAbilitys` 重算回 19）。
+    if ($joined -notmatch ('a\.Level={0}' -f $AttackVictimLevel)) { $failures += ('attack_pin_missing_victim_level=' + $AttackVictimLevel) }
+    if ($joined -notmatch ('c\.Job={0}[^0-9]' -f $script:M3AttackVictimJob)) { $failures += ('attack_pin_missing_victim_job=' + $script:M3AttackVictimJob) }
     # F-D（m3cs tick21）：探针行真执行才能咬住越界值；旧缺省 100000 > smallint(32767) ⇒ pin 真机必 ERROR 1264。
     if ($joined -match 'a\.Hp=100000') { $failures += 'attack_pin_victim_hp_out_of_range' }
     # R-1：-PinMapName 必须真落进攻击 pin SQL（改坏透传 ⇒ 本项必红）。
@@ -365,7 +377,7 @@ if ($SelfCheckNoStack) {
     $mutExec = Test-M3PinSqlExecutable -SqlStatements $mutAll -MysqlExe $MysqlExe
     if ($mutExec.rc -eq 0) { $failures += 'pin_sql_exec_mutation_not_red' }
     if (-not (($mutExec.failures -join ';') -match 'a\.IncHealth')) { $failures += 'pin_sql_exec_mutation_not_diff_shaped' }
-    $mutHp = @($all | ForEach-Object { $_ -replace 'a\.Hp=30000, a\.MaxHP=30000', 'a.Hp=100000, a.MaxHP=100000' })
+    $mutHp = @($all | ForEach-Object { $_ -replace ('a\.Hp={0}, a\.MaxHP={0}' -f $AttackVictimHp), 'a.Hp=100000, a.MaxHP=100000' })
     $mutHpExec = Test-M3PinSqlExecutable -SqlStatements $mutHp -MysqlExe $MysqlExe
     if ($mutHpExec.rc -eq 0) { $failures += 'pin_sql_range_mutation_not_red' }
     if (-not (($mutHpExec.failures -join ';') -match 'Out of range|1264')) { $failures += 'pin_sql_range_mutation_not_diff_shaped' }
@@ -381,6 +393,47 @@ if ($SelfCheckNoStack) {
   }
   if (Test-M3AttackVictimHpRange -VictimHp 100000) { $failures += 'attack_victim_hp_range_guard_not_red' }
   Write-Output ("SELFTEST ⑥c -AttackVictimHp 范围护栏：缺省 {0} 合规（≤32767）；100000 必判红" -f $AttackVictimHp)
+
+  # ⑥d F-F（owner 2026-10-12 22:35）：「pin 真把受害者 HP 抬起来」的离线门 ——
+  #    ① oracle 公式锚：L1 战士 = 19（= 真机实测 maxhp），L{AttackVictimLevel} 战士 = {AttackVictimHp}；
+  #    ② 自洽门：pin 的 Level/Job 必须能反推出 pin 的 Hp；
+  #    ③ 改坏必红：Level 留 255 但 Hp 写回 19 / Hp 写回旧缺省 30000（不是任何≤255 等级的战士 MaxHP）⇒ 必红；
+  #    ④ 幸存上界：Hp > AttackCount * (dc_hi + 1)（AC 减免只会更小）。
+  $laAnchor = Get-M3AttackVictimLevelAbility -Level 1 -Job 0
+  if ($laAnchor.max_hp -ne 19) { $failures += ('f_f_anchor_L1_maxhp=' + $laAnchor.max_hp) }
+  $laVictim = Get-M3AttackVictimLevelAbility -Level $AttackVictimLevel -Job $script:M3AttackVictimJob
+  if ($laVictim.max_hp -ne $AttackVictimHp) { $failures += ('f_f_derived_maxhp=' + $laVictim.max_hp + ' vs pinned=' + $AttackVictimHp) }
+  $selfOk = Test-M3AttackVictimHpSelfConsistent -Level $AttackVictimLevel -Job $script:M3AttackVictimJob -Hp $AttackVictimHp
+  if (-not $selfOk.ok) { $failures += ('f_f_self_consistent=' + (@($selfOk.issues) -join ';')) }
+  if ((Test-M3AttackVictimHpSelfConsistent -Level $AttackVictimLevel -Job $script:M3AttackVictimJob -Hp 19).ok) { $failures += 'f_f_self_consistent_mutation_recalc19_not_red' }
+  if ((Test-M3AttackVictimHpSelfConsistent -Level $AttackVictimLevel -Job $script:M3AttackVictimJob -Hp 30000).ok) { $failures += 'f_f_self_consistent_mutation_legacy30000_not_red' }
+  $surv = Test-M3AttackVictimSurvives -Level $AttackVictimLevel -Job $script:M3AttackVictimJob -Hp $AttackVictimHp -AttackCount $AttackCount
+  if (-not $surv.ok) { $failures += ('f_f_victim_may_die: hp={0} bound={1}' -f $surv.hp, $surv.bound) }
+  Write-Output ("SELFTEST ⑥d F-F oracle 等级公式：L1 战士 MaxHP={0}（锚 19）、L{1} 战士 MaxHP={2}；单击上界 dc_hi+1={3}；{4} 击最坏 {5} < Hp {6}（改坏 Level/Hp 或写回 19/30000 ⇒ 自洽门必红）" -f `
+    $laAnchor.max_hp, $AttackVictimLevel, $laVictim.max_hp, ($surv.dc_hi + 1), $AttackCount, $surv.bound, $AttackVictimHp)
+
+  # ⑥e F-F「pin 后复核 HP == 期望值」fail-closed 门（真机产物 = 受害者 SM_STRUCK 落的 attack_raw.jsonl）。
+  #    合成三例：maxhp 匹配=绿；maxhp=19（pin 被重算回旧值，= 改坏必红）/ 零 struck 行 = 必红。
+  $pinRawOk = Join-Path $tmpRoot 'ff-struck-ok.jsonl'
+  $pinRawBad = Join-Path $tmpRoot 'ff-struck-recalc19.jsonl'
+  $pinRawEmpty = Join-Path $tmpRoot 'ff-struck-empty.jsonl'
+  Set-Content -Path $pinRawOk -Encoding utf8 -Value @(
+    '{"role":"attack","k":1,"op":"CM_HIT","x":17,"y":20,"dir":2,"my":1105911852,"id":"a0"}',
+    ('{{"role":"struck","dmg":1,"hp":{0},"maxhp":{1},"src":1105911852,"actor":1512982481,"my":1512982481}}' -f ($AttackVictimHp - 1), $AttackVictimHp),
+    ('{{"role":"struck","dmg":1,"hp":{0},"maxhp":{1},"src":1105911852,"actor":1512982481,"my":1512982481}}' -f ($AttackVictimHp - 2), $AttackVictimHp)
+  )
+  Set-Content -Path $pinRawBad -Encoding utf8 -Value @(
+    '{"role":"attack","k":1,"op":"CM_HIT","x":17,"y":20,"dir":2,"my":1105911852,"id":"a0"}',
+    '{"role":"struck","dmg":1,"hp":18,"maxhp":19,"src":1105911852,"actor":1512982481,"my":1512982481}'
+  )
+  Set-Content -Path $pinRawEmpty -Encoding utf8 -Value @('{"role":"done","id":"a0","attacks":1}')
+  $postOk = Test-M3AttackVictimPostPinHp -RawPath $pinRawOk -ExpectedHp $AttackVictimHp
+  if (-not $postOk.ok) { $failures += ('f_f_postpin_ok_case=' + $postOk.reason) }
+  $postBad = Test-M3AttackVictimPostPinHp -RawPath $pinRawBad -ExpectedHp $AttackVictimHp
+  if ($postBad.ok) { $failures += 'f_f_postpin_recalc19_not_red' }
+  $postEmpty = Test-M3AttackVictimPostPinHp -RawPath $pinRawEmpty -ExpectedHp $AttackVictimHp
+  if ($postEmpty.ok) { $failures += 'f_f_postpin_no_struck_not_red' }
+  Write-Output ("SELFTEST ⑥e F-F pin 后复核 HP：期望 {0} ⇒ 合成的 maxhp 匹配=绿、maxhp=19（被重算）=红、零 struck=红" -f $AttackVictimHp)
 
   # ⑯ R-1（owner 2026-10-12 14:30）：攻击 pin 场景必须**整张图无怪**——按地图查冻结提取件
   #    `fixtures/mongen-map<map>.tsv` + `fixtures/mongen-provenance.tsv`，判「该图刷怪行数 == 0」。
@@ -687,10 +740,10 @@ if ($SelfCheckNoStack) {
   $schemaCols = Get-M3SchemaColumns -SchemaPath (Join-Path $RepoRoot 'sql\mir2_db.sql')
   $prodPinSql = @()
   $prodPinSql += Get-M3StartPosePinSql -ChrName 'm3fix0'
-  $prodPinSql += Get-M3AttackPinSql -ChrName 'm3fix0' -CX 289 -CY 618 -Dir 2 -MapName '0' -HomeMap 0 -HomeX 289 -HomeY 618 -Level 1 -Hp 30000
+  $prodPinSql += Get-M3AttackPinSql -ChrName 'm3fix0' -CX 289 -CY 618 -Dir 2 -MapName '0' -HomeMap 0 -HomeX 289 -HomeY 618 -Level $AttackVictimLevel -Job $script:M3AttackVictimJob -Hp $AttackVictimHp
   $prodVio = @(Test-M3PinSqlColumns -SqlStatements $prodPinSql -SchemaColumns $schemaCols)
   if ($prodVio.Count -ne 0) { $failures += ('pin_sql_column_violations=' + ($prodVio -join ';')) }
-  $mutPinSql = @(Get-M3AttackPinSql -ChrName 'm3fix0' -CX 289 -CY 618 -Dir 2 -MapName '0' -HomeMap 0 -HomeX 289 -HomeY 618 -Level 1 -Hp 30000 |
+  $mutPinSql = @(Get-M3AttackPinSql -ChrName 'm3fix0' -CX 289 -CY 618 -Dir 2 -MapName '0' -HomeMap 0 -HomeX 289 -HomeY 618 -Level $AttackVictimLevel -Job $script:M3AttackVictimJob -Hp $AttackVictimHp |
     ForEach-Object { $_ -replace 'c\.IncHealth=0, c\.IncSpell=0', 'a.IncHealth=0, a.IncSpell=0' })
   $mutVio = @(Test-M3PinSqlColumns -SqlStatements $mutPinSql -SchemaColumns $schemaCols)
   if ($mutVio.Count -eq 0) { $failures += 'pin_sql_column_mutation_not_red' }
@@ -1042,6 +1095,16 @@ if ($markers.Count -eq 0 -or -not (Test-Path (Join-Path $mine.FullName 'attack_r
   exit 1
 }
 Write-Output ("ATTACKSEQ_OK markers={0} raw=True" -f $markers.Count)
+
+# F-F（owner 2026-10-12 22:35）：「pin 后复核 HP == 期望值」fail-closed —— 受害者收到的 `SM_STRUCK` 的 `maxhp`
+# 就是服务端 `WAbil.MaxHP`（oracle `BaseObject.Attack.cs:52`）。pin 若不生效（被 `RecalcLevelAbilitys` 按 L1
+# 重算回 19），这里读到 19 != 期望 ⇒ RED（不再等到两侧 diff 才发现「没有目标窗口」）。
+$postPin = Test-M3AttackVictimPostPinHp -RawPath (Join-Path $mine.FullName 'attack_raw.jsonl') -ExpectedHp $AttackVictimHp
+if (-not $postPin.ok) {
+  Write-Output ("RED: pin 后复核受害者 HP 失败——期望 maxhp={0}（Level={1} Job={2}）；{3}" -f $AttackVictimHp, $AttackVictimLevel, $script:M3AttackVictimJob, $postPin.reason)
+  exit 1
+}
+Write-Output ("VICTIM_HP_POSTPIN ok expected={0} struck_lines={1}（Level={2} Job={3}，oracle RecalcLevelAbilitys 自洽）" -f $AttackVictimHp, @($postPin.observed).Count, $AttackVictimLevel, $script:M3AttackVictimJob)
 
 # pin 记账字段存在性护栏（owner 2026-10-12 16:30；**19:20 降级为 informational**）：本侧产物必须至少把
 # `pin_attempts` 记账落盘（缺失/不可解析 ⇒ PREREQ exit 2）；attempts 数值只打 INFO（不再拒比）。

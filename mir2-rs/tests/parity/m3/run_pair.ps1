@@ -68,7 +68,8 @@ param(
   [switch]$AttackPinPair,          # 攻击变体：两 bot **相邻**固定起点（attacker/victim；配合 -AttackSequence）
   [int]$AttackPinDir = 2,          # 仅 -AttackPinPair：attacker 朝向（默认 2=RIGHT，victim 在右邻格）
   [int]$AttackPinDx = 1,           # 仅 -AttackPinPair：victim 相对 attacker 的 X 偏移（默认 +1）
-  [int]$AttackVictimHp = 30000,   # 仅 -AttackPinPair：victim（与 attacker）Hp/MaxHP 抬高（防序列中死亡）；F-D：≤32767（characters_ablity.Hp = smallint 有符号）
+  [int]$AttackVictimHp = 0,   # 仅 -AttackPinPair：victim（与 attacker）Hp/MaxHP；F-F：0 ⇒ 用 gate_guards 的 oracle 等级派生值（L255/战士=20669）；否则必须与 -AttackVictimLevel 自洽
+  [int]$AttackVictimLevel = 0,   # 仅 -AttackPinPair：victim/attacker 钉的等级（byte 0..255）；0 ⇒ gate_guards 的 $script:M3AttackVictimLevel
   [switch]$SelfTestRed
 )
 
@@ -89,10 +90,21 @@ if ([string]::IsNullOrEmpty($PinMapName)) { $PinMapName = if ($AttackPinPair) { 
 if ($PinCX -lt 0) { $PinCX = if ($AttackPinPair) { $script:M3AttackPinCX } else { 289 } }
 if ($PinCY -lt 0) { $PinCY = if ($AttackPinPair) { $script:M3AttackPinCY } else { 618 } }
 
-# F-D（m3cs tick21）：攻击 pin 的抬高值范围守卫——越界就 fail-closed，不等真机 MySQL `ERROR 1264`。
-if ($AttackPinPair -and -not (Test-M3AttackVictimHpRange -VictimHp $AttackVictimHp)) {
-  Write-Output ("RED: -AttackVictimHp={0} 越界（characters_ablity.Hp/MaxHP = smallint 有符号，1..32767）——见 F-D" -f $AttackVictimHp)
-  exit 1
+# F-D（m3cs tick21）+ F-F（owner 2026-10-12 22:35）：攻击 pin 的 `Level/Job/Hp` 必须由 oracle `RecalcLevelAbilitys`
+# 自洽（否则进世界被重算回 L1 的 19，受害者早死）。`-AttackVictimHp`/`-AttackVictimLevel` 缺省 0 =
+# 用 gate_guards 的唯一口径（L255/战士 ⇒ 20669）；显式传值时必须自洽、且在列域内，否则 fail-closed。
+if ($AttackVictimHp -le 0) { $AttackVictimHp = $script:M3AttackVictimHp }
+if ($AttackVictimLevel -le 0) { $AttackVictimLevel = $script:M3AttackVictimLevel }
+if ($AttackPinPair) {
+  if (-not (Test-M3AttackVictimHpRange -VictimHp $AttackVictimHp)) {
+    Write-Output ("RED: -AttackVictimHp={0} 越界（characters_ablity.Hp/MaxHP = smallint 有符号，1..32767）——见 F-D" -f $AttackVictimHp)
+    exit 1
+  }
+  $hpConsistency = Test-M3AttackVictimHpSelfConsistent -Level $AttackVictimLevel -Job $script:M3AttackVictimJob -Hp $AttackVictimHp
+  if (-not $hpConsistency.ok) {
+    Write-Output ("RED: 攻击 pin 的 Level/Hp 与 oracle `RecalcLevelAbilitys` 不自洽（{0}）——进世界会被重算 ⇒ 见 F-F" -f (@($hpConsistency.issues) -join '; '))
+    exit 1
+  }
 }
 
 function Get-M3BotOpPlan {
@@ -150,7 +162,7 @@ function Get-M3StartPoseLabel {
 function Get-M3AttackPoseLabel {
   if (-not $AttackPinPair) { return 'none' }
   return (Format-M3AttackPose -MapName $PinMapName -AX $PinCX -AY $PinCY -Dir $AttackPinDir `
-    -VX ($PinCX + $AttackPinDx) -VY $PinCY -Level $PinLevel -VictimHp $AttackVictimHp)
+    -VX ($PinCX + $AttackPinDx) -VY $PinCY -Level $AttackVictimLevel -VictimHp $AttackVictimHp)
 }
 
 if ($SelfTestRed) {
@@ -227,8 +239,8 @@ if ($EmitOpsArgs) {
     $obj['pin_attempts_expected'] = (Get-M3PinExpectedAttempts)
     if ($AttackPinPair) {
       $attackSql = New-Object System.Collections.Generic.List[string]
-      foreach ($st in (Get-M3AttackPinSql -ChrName "${Prefix}0" -CX $PinCX -CY $PinCY -Dir $AttackPinDir -MapName $PinMapName -HomeMap $PinHomeMap -HomeX $PinHomeX -HomeY $PinHomeY -Level $PinLevel -Hp $AttackVictimHp)) { $attackSql.Add($st) }
-      foreach ($st in (Get-M3AttackPinSql -ChrName "${Prefix}1" -CX ($PinCX + $AttackPinDx) -CY $PinCY -Dir 6 -MapName $PinMapName -HomeMap $PinHomeMap -HomeX $PinHomeX -HomeY $PinHomeY -Level $PinLevel -Hp $AttackVictimHp)) { $attackSql.Add($st) }
+      foreach ($st in (Get-M3AttackPinSql -ChrName "${Prefix}0" -CX $PinCX -CY $PinCY -Dir $AttackPinDir -MapName $PinMapName -HomeMap $PinHomeMap -HomeX $PinHomeX -HomeY $PinHomeY -Level $AttackVictimLevel -Job $script:M3AttackVictimJob -Hp $AttackVictimHp)) { $attackSql.Add($st) }
+      foreach ($st in (Get-M3AttackPinSql -ChrName "${Prefix}1" -CX ($PinCX + $AttackPinDx) -CY $PinCY -Dir 6 -MapName $PinMapName -HomeMap $PinHomeMap -HomeX $PinHomeX -HomeY $PinHomeY -Level $AttackVictimLevel -Job $script:M3AttackVictimJob -Hp $AttackVictimHp)) { $attackSql.Add($st) }
       $obj['attack_pin_sql_all'] = $attackSql.ToArray()
     }
   }
@@ -365,7 +377,7 @@ if ($PinStartPose) {
   $pinCtx = [pscustomobject]@{
     Prefix = $Prefix; Bots = $Bots; SettleSeconds = $PinSettleSeconds
     MapName = $PinMapName; HomeMap = $PinHomeMap; HomeX = $PinHomeX; HomeY = $PinHomeY
-    CX = $PinCX; CY = $PinCY; Level = $PinLevel; Dir = $PinDir
+    CX = $PinCX; CY = $PinCY; Level = $(if ($AttackPinPair) { $AttackVictimLevel } else { $PinLevel }); Dir = $PinDir
   }
   $pinResult = Invoke-M3PinSettleHold -Bots $Bots -MaxAttempts $PinMaxAttempts -Context $pinCtx -BagPerBot $(if ($AttackPinPair) { 0 } else { 4 }) `
     -Pin {

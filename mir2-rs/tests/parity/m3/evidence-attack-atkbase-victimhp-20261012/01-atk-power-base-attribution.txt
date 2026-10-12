@@ -1,0 +1,81 @@
+# 01 atk_power_base（C# 16 / Rust 0）归因 —— 离线复算（只读同一份已入库流水）
+
+来源流水（已入库，只读）：mir2-rs/tests/parity/m3/evidence-rng-isolate-attack-twophase-20261012/provenance/csharp-attack-stream-stack2.tsv
+行数 = 300
+
+## 1) 分流站点取数次数（clean 120 击首跑，m3cs tick22 口径）
+    120 M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2934
+    120 M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929
+     19 M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41
+     17 M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:792
+     16 M2Server.Actor.BaseObject.GetAttackPower@BaseObject.Base.cs:892
+      4 M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:793
+      3 M2Server.Player.PlayObject.AttackSuccess@PlayObject.Attack.cs:223
+      1 M2Server.Player.PlayObject.StruckDamage@PlayObject.cs:2957
+
+## 2) cs:892（BaseObject.GetAttackPower）出现位置（1-based 行号）
+1 4 7 10 14 17 20 23 36 43 62 83 88 107 239 259 
+   位置 1..24 **早于**本场景 attacker 的第一发（首次 cs:2929 = 第 26 行）⇒ 与本场景 attacker 无关的进程级并发攻击。
+
+## 3) 每次 cs:892 紧跟 cs:41（hit_gate）——完整「非玩家攻击循环」
+  #1 892 -> #2 M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41 (target SpeedPoint arg=8)
+  #4 892 -> #5 M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41 (target SpeedPoint arg=8)
+  #7 892 -> #8 M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41 (target SpeedPoint arg=8)
+  #10 892 -> #11 M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41 (target SpeedPoint arg=15)
+  #14 892 -> #15 M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41 (target SpeedPoint arg=8)
+  #17 892 -> #18 M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41 (target SpeedPoint arg=13)
+  #20 892 -> #21 M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41 (target SpeedPoint arg=13)
+  #23 892 -> #24 M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41 (target SpeedPoint arg=13)
+  #36 892 -> #37 M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41 (target SpeedPoint arg=13)
+  #43 892 -> #44 M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41 (target SpeedPoint arg=13)
+  #62 892 -> #63 M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41 (target SpeedPoint arg=13)
+  #83 892 -> #84 M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41 (target SpeedPoint arg=13)
+  #88 892 -> #89 M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41 (target SpeedPoint arg=13)
+  #107 892 -> #108 M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41 (target SpeedPoint arg=15)
+  #239 892 -> #240 M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41 (target SpeedPoint arg=15)
+  #259 892 -> #260 M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41 (target SpeedPoint arg=15)
+
+## 4) 对照：本场景 attacker（玩家）的攻击路径 = cs:2929/2934（PlayObject 覆写）
+  #26 Next(max) arg=1 -> M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929
+  #27 Next(max) arg=10 -> M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2934
+  #28 Next(max) arg=15 -> M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41
+  #29 Next(max) arg=5 -> M2Server.Player.PlayObject.AttackSuccess@PlayObject.Attack.cs:223
+  #30 Next(max) arg=1 -> M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929
+  #31 Next(max) arg=10 -> M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2934
+  #32 Next(max) arg=15 -> M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41
+  #33 Next(max) arg=1 -> M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:792
+  #34 Next(max) arg=10 -> M2Server.Player.PlayObject.StruckDamage@PlayObject.cs:2957
+  #35 Next(max) arg=5 -> M2Server.Player.PlayObject.AttackSuccess@PlayObject.Attack.cs:223
+  #36 Next(max) arg=1 -> M2Server.Actor.BaseObject.GetAttackPower@BaseObject.Base.cs:892
+  #37 Next(max) arg=13 -> M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41
+  #38 Next(max) arg=1 -> M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:792
+  #39 Next(max) arg=1 -> M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929
+  #40 Next(max) arg=10 -> M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2934
+
+## 5) oracle 侧：只有非玩家 actor 走 BaseObject.GetAttackPower（grep src/M2Server，只读）
+  src/M2Server/Actor/AnimalObject.cs:169:            int nPower = GetBaseAttackPoewr();
+  src/M2Server/Actor/BaseObject.Attack.cs:25:        internal int GetBaseAttackPoewr()
+  src/M2Server/Actor/BaseObject.Attack.cs:27:            return GetAttackPower(HUtil32.LoByte(WAbil.DC), (sbyte)(HUtil32.HiByte(WAbil.DC) - HUtil32.LoByte(WAbil.DC)));
+  src/M2Server/Monster/Monsters/BoneKingMonster.cs:44:            int nPower = GetAttackPower(HUtil32.LoByte(WAbil.DC), Math.Abs(HUtil32.HiByte(WAbil.DC) - HUtil32.LoByte(WAbil.DC)));
+  src/M2Server/Monster/Monsters/CowKingMonster.cs:29:            int nPower = GetAttackPower(HUtil32.LoByte(WAbil.DC), Math.Abs(HUtil32.HiByte(WAbil.DC) - HUtil32.LoByte(WAbil.DC)));
+  src/M2Server/Monster/Monsters/ElectronicScolpionMon.cs:18:            int nPower = GetAttackPower(HUtil32.LoByte(WAbil.DC), Math.Abs(HUtil32.HiByte(WAbil.DC) - HUtil32.LoByte(WAbil.DC)));
+  src/M2Server/Monster/Monsters/RonObject.cs:22:                int nPower = GetBaseAttackPoewr();
+  src/M2Server/Monster/Monsters/ScultureKingMonster.cs:57:            int nPower = GetAttackPower(HUtil32.LoByte(WAbil.DC), Math.Abs(HUtil32.HiByte(WAbil.DC) - HUtil32.LoByte(WAbil.DC)));
+  src/M2Server/Monster/Monsters/SuperGuard.cs:34:                    this._Attack(GetBaseAttackPoewr(), this.TargetCret);
+  src/M2Server/Player/PlayObject.Attack.cs:73:            int nPower = GetAttackPowerHit(wHitMode, GetBaseAttackPoewr(), attackTarget, ref canHit);
+
+   本场景两名 bot 都是 PlayObject（PlayObject.cs:2909 覆写 GetAttackPower）⇒ 不是它们；0137 图 MonGen 零行、Guard/NPC/MapEvent/MapQuest 零引用（R-1 机判）
+   ⇒ 只能是**别的地图上的守卫/怪物 AI** 也在跑，它的攻击取数被调用点级 divert 吸进同一条专用流。
+
+## 6) 谓词是精确匹配（不是宽松正则）——所以不是「收紧谓词」能解决的 case
+  atk_power_base	csharp	M2Server\.Actor\.BaseObject\.GetAttackPower@BaseObject\.Base\.cs:892$	Random(power+1)	BaseObject.Base.cs:886	1	非玩家攻方（怪物）；F-1 实测 34
+  atk_power_base	rust	crates/world/src/combat\.rs:67$	random_range(0,power+1)	BaseObject.Base.cs:886	1	非玩家攻方（怪物）
+
+## 结论
+  * 判定 = **确实有第二个（非玩家）攻方实体**（进程级并发 AI），不是 divert 谓词把不该分流的站点分走了。
+  * 影响 = 调用点级 divert 无法按实体隔离：共用站点（hit_gate cs:41 / struck cs:792）同样被它污染 ⇒
+    C# hit_gate 19、struck_damage 17 里都含这些外来攻击；本场景的专用流并非「只有本 attacker」。
+  * 处置 = 本片只做**证据 + 登记**（不改 m3cs 定的接口 / 不动 Rust 代码）；建议由 owner 裁决二选一：
+    (a) 把非玩家路径（atk_power_base 等）从**本场景**的 divert 表里摘掉（需两侧表 + Rust combat.rs:67 同步改）；
+    (b) 给 hook 加**实体过滤**（只分流本 session attacker 的取数）——接口变化，需 owner/m3cs 定。
+    —— 在 (a)/(b) 落地前，DoD②「逐 k = 0」不可达（本片不放宽判据）。

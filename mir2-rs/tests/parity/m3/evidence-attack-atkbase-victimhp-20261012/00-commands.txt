@@ -1,0 +1,33 @@
+# 00 复现命令（本片全部离线；未起栈/未占端口/未改 oracle）
+
+## 0) 本片改动（零 .rs；全在 mir2-rs/tests/parity/m3/**）
+#   gate_guards.ps1  : +Get-M3AttackVictimLevelAbility / Test-M3AttackVictimHpSelfConsistent
+#                      / Test-M3AttackVictimSurvives / Test-M3AttackVictimPostPinHp；
+#                      $script:M3AttackVictimLevel=255 / Job=0 / Hp=20669；Get-M3AttackPinSql 派生 Hp + 钉 Job；
+#                      Format-M3AttackPose 缺省改派生口径
+#   run_pair.ps1     : -AttackVictimHp/-AttackVictimLevel 缺省 0 ⇒ gate_guards 口径；攻击 pin 用该口径；pose 用该口径
+#   run_attack_pair.ps1 : 缺省 0 解析；自检 ⑥/⑥b/⑥d/⑥e；真机 run 后新增 VICTIM_HP_POSTPIN 门
+#   run_bag_equip_pair.ps1 : ⑪ 的 Get-M3AttackPinSql 调用改默认口径（去 -Level 1 -Hp 30000）
+#   mir2-rs/tests/parity/whitelist.md : T-29 第十一轮登记
+
+## 1) 无栈自检（必须 GREEN；本片核心判据）
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 -SelfCheckNoStack
+#   -> 03-selfcheck-nostack.txt（rc=0 SELFTEST_RED GREEN）
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/selftest_gate.ps1
+#   -> SUMMARY total=65 failed=0
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_bag_equip_pair.ps1 -SelfCheckNoStack
+#   -> SELFTEST_RED GREEN
+
+## 2) 真机旧会话上跑新门（证明「旧 pin 没抬起来」）
+. mir2-rs/tests/parity/m3/gate_guards.ps1
+Test-M3AttackVictimPostPinHp -RawPath <twophase>/sessions/csharp-20261012-215606/attack_raw.jsonl -ExpectedHp 20669
+#   -> ok=False reason=struck maxhp != expected 20669: [19]
+#   （旧会话说 maxhp=19；见 02-victim-hp-recalc.txt）
+
+## 3) 改坏必红（真改生产常量 + 还原）
+#   $script:M3AttackVictimLevel = 255 -> 1（Hp 随之派生 19）⇒ -SelfCheckNoStack rc=1
+#   -> 04-mutation-teeth.txt §2（失败键 f_f_victim_may_die / f_f_self_consistent_mutation_recalc19_not_red / f_f_postpin_recalc19_not_red）
+
+## 4) atk_power_base（C# 16 / Rust 0）归因（只读已入库流水复算）
+#   -> 01-atk-power-base-attribution.txt
+awk -F'\t' '{print $4}' mir2-rs/tests/parity/m3/evidence-rng-isolate-attack-twophase-20261012/provenance/csharp-attack-stream-stack2.tsv | sort | uniq -c | sort -rn

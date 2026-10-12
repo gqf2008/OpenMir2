@@ -1,0 +1,29 @@
+# 02 「pin -AttackVictimHp 30000 不生效」根因 + 新门在真机旧会话上的读数
+
+## A) oracle 链路（只读）
+  * pin 写的列：`characters_ablity.Hp/MaxHP`（smallint(11) 有符号，`sql/mir2_db.sql:6081-6084`）。
+  * 进世界时 oracle 调 `PlayObject.RecalcLevelAbilitys()`（`src/M2Server/Player/PlayObject.cs:5254-5317`，finding 点 :5295）：
+    按 `Abil.Level`（`characters_ablity.Level`，`PlayDataStorage.Query.cs:279` 读为 byte）+ `Job` 重算 `Abil.MaxHP`，
+    随后 :5309-5316 `if (Abil.HP > Abil.MaxHP) Abil.HP = Abil.MaxHP;` ⇒ 把 pin 的大 HP 钳回去。
+  * L1 战士：14 + round((1/4 + 4.5 + 1/20) * 1) = 19（round = Math.Round(AwayFromZero)，`HUtil32.cs:131-134`）
+
+## B) 真机旧会话说（本片新门 `Test-M3AttackVictimPostPinHp` 直接读受害者 SM_STRUCK 的 maxhp）
+  会话：mir2-rs/tests/parity/m3/evidence-rng-isolate-attack-twophase-20261012/sessions/csharp-20261012-215606
+
+    {"role":"struck","dmg":1,"hp":18,"maxhp":19,"src":1105911852,"actor":1512982481,"my":1512982481}
+    {"role":"struck","dmg":1,"hp":18,"maxhp":19,"src":1105911852,"actor":1512982481,"my":1105911852}
+
+  $ Test-M3AttackVictimPostPinHp -ExpectedHp 20669
+    ok=False observed_count=2 reason=struck maxhp != expected 20669: [19]
+  $ Test-M3AttackVictimPostPinHp -ExpectedHp 19
+    ok=True  observed_count=2 reason=
+
+  ⇒ 旧 pin（Hp=30000，Level=1）确实**没抬起来**：服务端 WAbil.MaxHP 仍是 19，受害者 ~19 点伤害即死。
+
+## C) 修法（本片）：Level/Job 与 Hp 一起 pin（oracle 公式反推），并加 fail-closed 门
+  * `gate_guards.ps1::Get-M3AttackVictimLevelAbility`（oracle 公式移植）
+  * `$script:M3AttackVictimLevel = 255`（characters_ablity.Level 是 tinyint UNSIGNED，上限 255；Ability.Level 是 byte）
+  * `$script:M3AttackVictimJob = 0`（战士）；`$script:M3AttackVictimHp = 20669`（= L255 战士 MaxHP，由函数算出）
+  * `Get-M3AttackPinSql`：pin `a.Level=255`、`a.Hp=a.MaxHP=20669`、`c.Job=0`；Level/Job 与 Hp 不自洽 ⇒ throw（fail-closed）
+  * 单击上界 dc_hi+1 = 255/5+1 = 52；120 击最坏 6240 < 20669（AC 减免只会更小）⇒ 全序列活靶
+  * 真机 run_attack_pair 新增 `VICTIM_HP_POSTPIN` 门：`attack_raw.jsonl` 里任一 struck 的 maxhp != 20669 ⇒ RED（本片只跑离线自检；真机跑归 m3cs 取窗）

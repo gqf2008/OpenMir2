@@ -1,0 +1,18 @@
+# 04 改坏必红（真跑 + 还原）
+
+## 1) 自检内建变体（`-SelfCheckNoStack` ⑥d/⑥e：合成坏输入 ⇒ 门必红）
+  SELFTEST ⑥d F-F oracle 等级公式：L1 战士 MaxHP=19（锚 19）、L255 战士 MaxHP=20669；单击上界 dc_hi+1=52；120 击最坏 6240 < Hp 20669（改坏 Level/Hp 或写回 19/30000 ⇒ 自洽门必红）
+  SELFTEST ⑥e F-F pin 后复核 HP：期望 20669 ⇒ 合成的 maxhp 匹配=绿、maxhp=19（被重算）=红、零 struck=红
+
+## 2) 真改生产常量：`$script:M3AttackVictimLevel = 255` → `1`（Hp 随之派生为 19 = 旧行为；自洽但会早死）
+   命令：powershell -File run_attack_pair.ps1 -SelfCheckNoStack
+
+  SELFTEST ⑥d F-F oracle 等级公式：L1 战士 MaxHP=19（锚 19）、L1 战士 MaxHP=19；单击上界 dc_hi+1=2；120 击最坏 240 < Hp 19（改坏 Level/Hp 或写回 19/30000 ⇒ 自洽门必红）
+  SELFTEST_RED RED: f_f_self_consistent_mutation_recalc19_not_red, f_f_victim_may_die: hp=19 bound=240, f_f_postpin_recalc19_not_red
+
+   ⇒ rc=1；失败键 = f_f_self_consistent_mutation_recalc19_not_red, f_f_victim_may_die (hp=19 bound=240), f_f_postpin_recalc19_not_red
+   ⇒ 还原：`cp` 回原文件后 `git diff` 只剩本片改动，自检回 GREEN（见 03）。
+
+## 3) 真机旧会话上跑新门（真实 maxhp=19 ⇒ 必红）
+  expected=20669 ok=False observed_count=2 reason=struck maxhp != expected 20669: [19]
+  expected=19    ok=True observed_count=2 reason=

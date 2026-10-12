@@ -1,0 +1,16 @@
+# 05 四门禁（隔离 CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target；本片零 .rs，仍按门禁复跑）
+
+### cargo fmt --all -- --check
+fmt_rc=0
+
+### cargo clippy --workspace --all-targets --offline -- -D warnings
+clippy_rc=0
+
+### cargo test --workspace --offline
+test_rc=0  suites=84  passed=682  failed=0  ignored=16
+
+### cargo run -p msgcodegen --offline -- --check
+  msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+  msgcodegen_rc=0
+
+原始输出：E:/tmp/m3bag-ff-gates.txt（仓外临时物，可删）

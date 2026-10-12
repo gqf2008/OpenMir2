@@ -576,15 +576,103 @@ function Format-M3StartPoseSql {
 # F-D（m3cs tick21 真机 finding，2026-10-12 12:45）：抬高值**必须**落在冻结 schema 的列域内——
 # `characters_ablity.Hp / MaxHP` 是 `smallint(11)` **有符号**（`sql/mir2_db.sql:6081-6084`，上限 32767），
 # 旧缺省 100000 写该列必 `ERROR 1264 (22003) Out of range value`，真机 pin 整轮 RED、一条 `CM_HIT` 都发不出。
-# 30000 ≤ 32767，且远超 120 次 1 级攻击的累计伤害（防死亡目的一样成立）。改小缺省值不改行为语义，
-# 因为 `attack_pose` 的 `vhp=` 两侧逐字节相同（见 `Get-M3PeerAttackPoseGuard`）。
-$script:M3AttackVictimHp = 30000
 # F-D 范围护栏（唯一口径，真机启动与无栈自检共用）：抬高值必须落在
 # `characters_ablity.Hp / MaxHP`（`smallint(11)` 有符号）的列域内，否则真机 pin 必 `ERROR 1264`。
 # 越界 ⇒ 调用方 fail-closed（不等 MySQL）；无栈自检用 `100000` 断言本函数必判 $false（改坏必红）。
 function Test-M3AttackVictimHpRange {
   param([int]$VictimHp)
   return ($VictimHp -ge 1 -and $VictimHp -le 32767)
+}
+
+# F-F（owner 2026-10-12 22:35；m3cs tick22 真机 finding）：**光把 `characters_ablity.Hp/MaxHP` 写大不生效**——
+# 受害者进世界时 oracle `PlayObject.RecalcLevelAbilitys()`（`src/M2Server/Player/PlayObject.cs:5254-5317`，
+# finding 点 `:5295`）会按 `Abil.Level` + `Job` **重算** `Abil.MaxHP`，随后把 `Abil.HP` 钳到它
+# （`PlayObject.cs:5309-5316`）。L1 战士 ⇒ MaxHP=19 ⇒ 受害者 ~19 点伤害即死，「有目标窗口」被压到很短
+# （C# 只 3/120 到 `AttackSuccess` 的成因之一）。⇒ pin 必须**同时**把等级/职业钉到与目标 HP 自洽的值。
+#
+# oracle 口径（全部只读，非改动）：
+#   * `humanRcd.Level = dr.GetByte("Level")` 来自 `characters_ablity.Level`
+#     （`src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Query.cs:279`）；`Ability.Level` 是 `byte`
+#     （`src/OpenMir2/Packets/ClientPackets/Ability.cs:12`）⇒ 上限 255 = `Grobal2.MaxLevel = byte.MaxValue`
+#     （`src/OpenMir2/Grobal2.cs:15`）；`characters_ablity.Level` = `tinyint(1) UNSIGNED`
+#     （`sql/mir2_db.sql:6075`）⇒ 同样 0..255。
+#   * `Job` 来自 `characters.Job`（`tinyint(2)`，0=战士/1=法师/2=道士，`sql/mir2_db.sql:36`）。
+#   * 战士 `MaxHP = min(65535, 14 + round((Level/4 + 4.5 + Level/20) * Level))`；
+#     `HUtil32.Round` = `(int)Math.Round(r, MidpointRounding.AwayFromZero)`（`src/OpenMir2/HUtil32.cs:131-134`）。
+#   * 系数默认值见 `src/Modules/SystemModule/Conf/Model/GameSvrConf.cs:1888-1894`（Rust 侧同表：
+#     `mir2-rs/crates/formula/src/level_ability.rs` + `mir2_formula::LevelValueConfig::default()`）。
+# L255 战士 ⇒ MaxHP = 14 + round(81.0 * 255) = 14 + 20655 = **20669**（≤ smallint 32767，可写 DB）。
+# 单击上界（见 `Test-M3AttackVictimSurvives`）= dc_hi + 1 = 255/5 + 1 = 52 ⇒ 120 击最坏 6240 < 20669。
+$script:M3AttackVictimLevel = 255
+$script:M3AttackVictimJob = 0
+
+# `RecalcLevelAbilitys()` 的等级派生值（oracle 逐条，只取攻击对拍需要的项）。返回 { max_hp; dc_lo; dc_hi }。
+function Get-M3AttackVictimLevelAbility {
+  param([int]$Level, [int]$Job = 0)
+  $lv = [double]$Level
+  switch ($Job) {
+    0 { $maxHp = 14 + [Math]::Round(($lv / 4.0 + 4.5 + $lv / 20.0) * $lv, [MidpointRounding]::AwayFromZero) }
+    1 { $maxHp = 14 + [Math]::Round(($lv / 15.0 + 1.8) * $lv, [MidpointRounding]::AwayFromZero) }
+    2 { $maxHp = 14 + [Math]::Round(($lv / 6.0 + 2.5) * $lv, [MidpointRounding]::AwayFromZero) }
+    default { throw ("unsupported Job: {0}（0=战士 1=法师 2=道士）" -f $Job) }
+  }
+  $maxHp = [Math]::Min(65535, [int]$maxHp)
+  $n = [int][Math]::Floor($Level / 5)   # oracle `nLevel / 5`（整数除法）
+  return [pscustomobject]@{
+    max_hp = $maxHp
+    dc_lo  = [Math]::Max($n - 1, 1)
+    dc_hi  = [Math]::Max(1, $n)
+  }
+}
+
+# pin 的唯一 HP 口径（Level/Job 反推出的 `Abil.MaxHP`）。
+$script:M3AttackVictimHp = (Get-M3AttackVictimLevelAbility -Level $script:M3AttackVictimLevel -Job $script:M3AttackVictimJob).max_hp
+
+# 自洽门（真机启动与无栈自检共用）：pin 的 Level/Job 必须由 oracle 公式反推出 pin 的 Hp（改一不改二 ⇒ 必红），
+# 且 Hp 落在 `characters_ablity.Hp/MaxHP` 列域、Level 落在 byte/DB 域。
+function Test-M3AttackVictimHpSelfConsistent {
+  param([int]$Level, [int]$Job, [int]$Hp)
+  $issues = New-Object System.Collections.Generic.List[string]
+  if ($Level -lt 1 -or $Level -gt 255) { $issues.Add(('level_out_of_range=' + $Level)) }
+  if (-not (Test-M3AttackVictimHpRange -VictimHp $Hp)) { $issues.Add(('hp_out_of_column_range=' + $Hp)) }
+  if ($issues.Count -eq 0) {
+    $exp = (Get-M3AttackVictimLevelAbility -Level $Level -Job $Job).max_hp
+    if ($exp -ne $Hp) { $issues.Add(('hp_not_self_consistent: level={0} job={1} oracle_maxhp={2} pinned={3}' -f $Level, $Job, $exp, $Hp)) }
+  }
+  return [pscustomobject]@{ ok = ($issues.Count -eq 0); issues = @($issues) }
+}
+
+# 「受害者要活过整段序列」的**保守上界**（真机启动与无栈自检共用）：
+# 战士 L 的单击上界 = `dc_hi + 1`（`GetBaseAttackPoewr` = `GetAttackPower(dc_lo, dc_hi - dc_lo)`，
+#   Luck<=0 ⇒ `dc_lo + Random((dc_hi-dc_lo)+1) <= dc_hi`；`PowerRate=100` / 无 `BoPowerItem` 不放大）
+# ⇒ 需要 `Hp > AttackCount * (dc_hi + 1)`；目标 AC 减免只会更小，故这是安全上界。
+function Test-M3AttackVictimSurvives {
+  param([int]$Level, [int]$Job, [int]$Hp, [int]$AttackCount)
+  $la = Get-M3AttackVictimLevelAbility -Level $Level -Job $Job
+  $bound = [int]$AttackCount * ([int]$la.dc_hi + 1)
+  return [pscustomobject]@{ ok = ($Hp -gt $bound); hp = $Hp; bound = $bound; dc_hi = $la.dc_hi }
+}
+
+# 「pin 后复核 HP == 期望值」fail-closed 门（owner 2026-10-12 22:35）：受害者收到的 `SM_STRUCK`
+# 的 `maxhp` 就是服务端 `WAbil.MaxHP`（oracle `BaseObject.Attack.cs:52` 的 `SendStruckDelayMsg` 第 4 参）；
+# 若 pin 被 `RecalcLevelAbilitys` 重算回 19，这里会读到 19 != 期望 ⇒ 必红（改坏 pin 的 Level/Job 亦必红）。
+function Test-M3AttackVictimPostPinHp {
+  param([Parameter(Mandatory)][string]$RawPath, [Parameter(Mandatory)][int]$ExpectedHp)
+  if (-not (Test-Path -LiteralPath $RawPath)) {
+    return [pscustomobject]@{ ok = $false; observed = @(); reason = ('raw_missing: ' + $RawPath) }
+  }
+  $observed = New-Object System.Collections.Generic.List[int]
+  foreach ($line in (Get-Content -Path $RawPath -Encoding utf8)) {
+    if ([string]::IsNullOrWhiteSpace($line)) { continue }
+    if ($line -notmatch '"role"\s*:\s*"struck"') { continue }
+    if ($line -match '"maxhp"\s*:\s*(-?\d+)') { $observed.Add([int]$Matches[1]) }
+  }
+  if ($observed.Count -eq 0) {
+    return [pscustomobject]@{ ok = $false; observed = @(); reason = 'no_struck_lines（受害者一次都没被打到 / 序列没发出）' }
+  }
+  $bad = @($observed | Where-Object { $_ -ne $ExpectedHp })
+  $reason = if ($bad.Count -eq 0) { '' } else { ('struck maxhp != expected {0}: [{1}]' -f $ExpectedHp, (($bad | Select-Object -Unique) -join ',')) }
+  return [pscustomobject]@{ ok = ($bad.Count -eq 0); observed = @($observed); reason = $reason }
 }
 # R-1（owner 2026-10-12 14:30 裁决；brief 顶部 14:55 片）：攻击判定取全局 `M2Share.RandomNumber`，
 # 被**全图怪 AI**（`AnimalObject.Wondering` 等）持续消耗 ⇒「同种子 ⇒ 逐 k 相同」不成立。**解法 = 让对拍
@@ -851,7 +939,7 @@ function Format-M3AttackPose {
     [string]$MapName = $script:M3AttackPinMap,
     [int]$AX = $script:M3AttackPinCX, [int]$AY = $script:M3AttackPinCY, [int]$Dir = 2,
     [int]$VX = ($script:M3AttackPinCX + 1), [int]$VY = $script:M3AttackPinCY,
-    [int]$Level = 1, [int]$VictimHp = 30000
+    [int]$Level = $script:M3AttackVictimLevel, [int]$VictimHp = $script:M3AttackVictimHp
   )
   return ("pair map={0} attacker={1},{2},dir={3} victim={4},{5} level={6} vhp={7}" -f `
     $MapName, $AX, $AY, $Dir, $VX, $VY, $Level, $VictimHp)
@@ -926,8 +1014,10 @@ function Get-M3SessionAttackPose {
   return (ConvertTo-M3AttackPose -Raw ([string]$baseline.attack_pose))
 }
 
-# 攻击变体的 pin SQL（按 character 返回多条）：图/坐标/朝向 + Abil（Hp=MaxHP 抬高）。
+# 攻击变体的 pin SQL（按 character 返回多条）：图/坐标/朝向 + Job/Level/Abil（Hp=MaxHP=oracle 等级派生值）。
 # `-MapName` 缺省 = 无怪场景图 `$script:M3AttackPinMap`（R-1）；`run_pair` 恒显式传 `-PinMapName`。
+# F-F：`-Level`/`-Job` 必须与 `-Hp` 自洽（`Hp == RecalcLevelAbilitys(Level, Job).MaxHP`）；否则进世界被重算
+# （L1 ⇒ 19），受害者早死。`-Hp` 缺省 = `$script:M3AttackVictimHp`（= L255/战士 的 20669）。
 function Get-M3AttackPinSql {
   param(
     [Parameter(Mandatory)][string]$ChrName,
@@ -936,15 +1026,24 @@ function Get-M3AttackPinSql {
     [int]$Dir = 0,
     [string]$MapName = $script:M3AttackPinMap,
     [int]$HomeMap = 0, [int]$HomeX = 289, [int]$HomeY = 618,
-    [int]$Level = 1,
-    [int]$Hp = 30000   # F-D：必须 ≤ 32767（characters_ablity.Hp/MaxHP = smallint 有符号）
+    [int]$Level = $script:M3AttackVictimLevel,
+    [int]$Job = $script:M3AttackVictimJob,
+    [int]$Hp = $script:M3AttackVictimHp
   )
   $safe = $ChrName.Replace("'", "''")
+  # F-F：Hp 由 oracle 等级公式反推（唯一口径）；调用方传了不一致的 Hp ⇒ fail-closed（不等真机被重算）。
+  $check = Test-M3AttackVictimHpSelfConsistent -Level $Level -Job $Job -Hp $Hp
+  if (-not $check.ok) {
+    throw ('Get-M3AttackPinSql: Level={0} Job={1} Hp={2} 不自洽（{3}）——见 F-F' -f $Level, $Job, $Hp, (@($check.issues) -join '; '))
+  }
+  $hp = [int]$Hp
   $sql = New-Object System.Collections.Generic.List[string]
   $sql.Add(("UPDATE mir2_db.characters SET MapName='{0}', CX={1}, CY={2}, HomeMap={3}, HomeX={4}, HomeY={5}, Level={6}, Dir={7} WHERE ChrName='{8}'" -f `
     $MapName, $CX, $CY, $HomeMap, $HomeX, $HomeY, $Level, $Dir, $safe))
-  $sql.Add(("UPDATE mir2_db.characters_ablity a JOIN mir2_db.characters c ON a.PlayerId=c.Id SET a.Level={0}, a.Hp={1}, a.MaxHP={1}, a.Mp=15, a.MAxMP=15, c.IncHealth=0, c.IncSpell=0 WHERE c.ChrName='{2}'" -f `
-    $Level, $Hp, $safe))
+  # F-A：`IncHealth/IncSpell` 属于 `characters`（别名 c），不是 `characters_ablity`（别名 a）。
+  # F-F：连 `c.Job` 一并钉死（否则 oracle 按未知职业的分支重算，公式不受控）。
+  $sql.Add(("UPDATE mir2_db.characters_ablity a JOIN mir2_db.characters c ON a.PlayerId=c.Id SET a.Level={0}, a.Hp={1}, a.MaxHP={1}, a.Mp=15, a.MAxMP=15, c.Job={2}, c.IncHealth=0, c.IncSpell=0 WHERE c.ChrName='{3}'" -f `
+    $Level, $hp, $Job, $safe))
   return $sql.ToArray()
 }
 
