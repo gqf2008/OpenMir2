@@ -35,6 +35,7 @@ mod magicwire;
 mod mapwire;
 mod notice;
 mod record;
+mod seed;
 mod strings;
 mod users;
 
@@ -172,6 +173,10 @@ async fn main() -> Result<()> {
         .nth(1)
         .map_or_else(config::default_path, std::path::PathBuf::from);
     let cfg = config::load(&conf)?;
+    // **M3 T-30**：`MIR2_RNG_SEED` 同种子注入（读取口径照 C# 侧 `m3/rng-hook/StartupHook.cs`）。
+    // 未设/空 ⇒ `None`（生产路径保持既有随机源，行为一字不改）；非法值 ⇒ 显式非零退出
+    // （fail-closed，不许「以为注入了种子、其实没有」）。
+    let rng_seed = seed::env_seed()?;
     glog!(
         "INF",
         "游戏服务启动：监听 {}:{}（CheckBlock={}，{ } 张地图占位，config={}）",
@@ -418,6 +423,7 @@ async fn main() -> Result<()> {
                         item_number: cfg.item_number,
                     },
                     need_exps,
+                    rng_seed,
                 },
                 notice,
                 colors,
@@ -2786,6 +2792,9 @@ struct EnterConfig {
     /// `Exps.conf` 的 `NeedExps` 表（`BaseObject.GetLevelExp` 的数据源，`crates/data::exps`）。
     /// 存档 `MaxExp`（`PlayObject.cs:1310`）与击杀经验都用它；读不到时为全 0（登记）。
     need_exps: Vec<i32>,
+    /// **M3 T-30**：`MIR2_RNG_SEED` 解析出的固定种子（`seed::env_seed`）。`None` ⇒ 不注入，
+    /// 保持 `World::with_maps` 的既有随机源（生产路径一字不改）。
+    rng_seed: Option<i32>,
 }
 
 fn sim_loop(
@@ -2800,6 +2809,22 @@ fn sim_loop(
     // 尺寸表已由调用方按「注册表优先，无注册表则 WorldMaps 占位（且非空，已 fail-closed）」算好；
     // `map_id` = 注册表下标，与 `resolve_map_id` 同源。
     let mut world = mir2_world::World::with_maps(map_sizes);
+    // **M3 T-30**：种子注入只在设了 `MIR2_RNG_SEED` 时覆盖随机源（未设 ⇒ 保持 `World::with_maps`
+    // 的既有随机源，`crates/world` 行为一字不改）。发一条与 C# 钩子同形的 `SEED_PROBE` 自证行：
+    // 取**注入后世界随机源的克隆** 8 项（比 C# 钩子的独立 reference 实例更强 —— 它直接证明被
+    // 替换的游戏随机源就是该序列），且不消耗游戏流。
+    if let Some(seed) = enter_cfg.rng_seed {
+        world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+        let mut probe_rng = world.rng.clone();
+        let probe_text = (0..seed::PROBE_LEN)
+            .map(|_| probe_rng.random().to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        glog!(
+            "INF",
+            "RNG 同种子注入：seed={seed} 参照序列=SEED_PROBE {probe_text}"
+        );
+    }
     // `Exps.conf` 的 NeedExps（`BaseObject.GetLevelExp` 的数据源；存档 `MaxExp` 也用它）。
     world.need_exps = enter_cfg.need_exps.clone();
     // 取角色的加载队列（`FrnEngn` 的双缓冲 + `CharacterDataProcessor` 的读档循环，见 `load.rs`）
