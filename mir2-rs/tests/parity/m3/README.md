@@ -314,14 +314,25 @@ peer 口径（`attack_sequence`/`attack_pose`/`fixed_new_chr`）与 `scoped_diff
 一条 `CM_HIT` 都发不出（原始件 `E:/tmp/m3cs16-evidence/csharp-stack/run-csharp.txt`）。已改为 `c.IncHealth/c.IncSpell`。
 两道互补的机判护栏（都改回 `a.IncHealth` 必 RED）：
 
-- **可执行性极小门（F-B，owner 2026-10-12 11:55）**：`gate_guards.ps1::Test-M3PinSqlExecutable`
-  把每条 pin `UPDATE` 以 **不存在角色名** 真执行一次（`WHERE ChrName='__m3_no_such_char__'`⇒ 0 行改动、
-  不碰任何角色/内容），但 MySQL 仍在 prepare 期校验表名/别名/列名 ⇒ 列挂错表必 `ERROR 1054`。
-  `run_attack_pair.ps1 -SelfCheckNoStack` **⑥b**（生产 4 条 rc=0；改坏 `a.IncHealth` ⇒ rc≠0）机判；
-  真实侧运行前的 **1.5)** 预检也会真执行一次（不再等 `run_pair` 半途才炸）。仅需共享 MySQL，不需起服务端栈。
+- **可执行性门（F-B + F-D，owner 2026-10-12 11:55 + m3cs tick21 12:45）**：`gate_guards.ps1::Test-M3PinSqlExecutable`
+  在**当前会话内**建两张 `TEMPORARY TABLE ... LIKE`（列定义等同冻结 schema），从真实表各拷 1 行、把主键/角色名
+  改成固定探针值，再把每条 pin `UPDATE` 的 `mir2_db.<真表>` 重写成 `mir2_db.tmp_<真表>` 后**真执行**：
+  prepare 期（表/别名/列名 ⇒ `ERROR 1054`）与数据期（越界/类型 ⇒ `ERROR 1264`）都当场咬住；
+  改动只落在临时表（会话结束消失，**真实数据零改动**）；引用未镜像表 ⇒ fail-closed（绝不对真表执行）。
+  `run_attack_pair.ps1 -SelfCheckNoStack` **⑥b**（生产 4 条 rc=0；改坏 `a.IncHealth` ⇒ `ERROR 1054` rc≠0；
+  改坏 `Hp=100000` ⇒ `ERROR 1264` rc≠0）机判；真实侧运行前的 **1.5)** 预检也会真执行一次（不再等 `run_pair` 半途才炸）。
+  仅需共享 MySQL，不需起服务端栈。
 - **无栈静态校验**：`Test-M3PinSqlColumns`（从 `sql/mir2_db.sql` 解析表列，核对 pin SQL 的 `alias.column`）。
   `run_attack_pair.ps1 -SelfCheckNoStack` **⑫**、`run_bag_equip_pair.ps1 -SelfCheckNoStack` **⑪**、
   `selftest_gate.ps1` **⑦** 机判。
+
+**pin 抬高值越界（F-D，m3cs tick21 真机 finding，2026-10-12 12:45）**：`characters_ablity.Hp/MaxHP` 是
+`smallint(11)` **有符号**（`sql/mir2_db.sql:6081-6084`，上限 32767），旧缺省 `-AttackVictimHp=100000` 写该列必
+`ERROR 1264 (22003) Out of range value for column 'Hp'`，真机 pin 整轮 RED、一条 `CM_HIT` 都发不出。已把缺省降到
+**30000**（≤32767，且远超 120 次 1 级攻击的累计伤害，防死亡目的一样成立；`attack_pose` 的 `vhp=` 两侧逐字节相同 ⇒ 不改仲裁力）。
+三道护栏（改回 100000 必红）：`Test-M3AttackVictimHpRange`（唯一口径，`run_attack_pair.ps1`/`run_pair.ps1` 启动即
+fail-closed，不等 MySQL）；`-SelfCheckNoStack` **⑥c**（缺省合规 + 越界值必判红）；**⑥b** 的镜像表真执行（`ERROR 1264`）。
+证据 `evidence-attack-pair-fd-range-20261012/**`。
 
 **种子注入断言（F-C，owner 2026-10-12 11:55）**：两侧同种子是数值可比的**前提**，但此前夹具不校验两侧是否
 真的注入了种子 ⇒ 未设种子只会得到「不可比的红」却看不出来。新增 `gate_guards.ps1::Test-M3SeedInjected`：

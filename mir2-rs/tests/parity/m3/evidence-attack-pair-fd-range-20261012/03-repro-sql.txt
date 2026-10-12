@@ -1,0 +1,28 @@
+# F-D 活库复现（只读口径；会话内 TEMPORARY TABLE 镜像 + 探针行；真实数据零改动）
+ts: 2026-10-12T12:51:19+08:00
+
+## oracle/冻结 schema 锚（sql/mir2_db.sql）
+6081:  `Hp` smallint(11) NOT NULL COMMENT '当前HP',
+6082:  `Mp` smallint(11) NOT NULL COMMENT '当前MP',
+6083:  `MaxHP` smallint(11) NOT NULL COMMENT '最大HP',
+6084:  `MAxMP` smallint(11) NOT NULL COMMENT '最大MP',
+-- characters_ablity.Hp/MaxHP 列定义（sed -n '6081,6084p'）--
+  `Hp` smallint(11) NOT NULL COMMENT '当前HP',
+  `Mp` smallint(11) NOT NULL COMMENT '当前MP',
+  `MaxHP` smallint(11) NOT NULL COMMENT '最大HP',
+  `MAxMP` smallint(11) NOT NULL COMMENT '最大MP',
+
+## C) 旧缺省 100000 写 characters_ablity.Hp（smallint 有符号，上限 32767）
+mysql -e "<镜像+探针 setup>; UPDATE ... SET a.Hp=100000, a.MaxHP=100000 ..."
+--------------
+UPDATE mir2_db.tmp_characters_ablity a JOIN mir2_db.tmp_characters c ON a.PlayerId=c.Id SET a.Level=1, a.Hp=100000, a.MaxHP=100000, a.Mp=15, a.MAxMP=15, c.IncHealth=0, c.IncSpell=0 WHERE c.ChrName='__m3_pin_probe__'
+--------------
+
+ERROR 1264 (22003) at line 1: Out of range value for column 'Hp' at row 1
+rc=1
+
+## D) 修后缺省 30000（F-D 修复值）
+rc=0
+
+## E) 真实数据零改动（探针名计数=0；characters/characters_ablity 行数不变）
+0	7137	7140

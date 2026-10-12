@@ -433,13 +433,26 @@ function Format-M3StartPoseSql {
 #
 # 与单起点 pin 分开的原因：`run_pair` 的既有 pin 把所有 bot 钉在同一点（供背包/装备序列），
 # 攻击需要 attacker/victim **相邻但不重叠**。victim 的 HP/MaxHP 抬高（防 100+ 次内死亡后无 struck）。
-$script:M3AttackVictimHp = 100000
+#
+# F-D（m3cs tick21 真机 finding，2026-10-12 12:45）：抬高值**必须**落在冻结 schema 的列域内——
+# `characters_ablity.Hp / MaxHP` 是 `smallint(11)` **有符号**（`sql/mir2_db.sql:6081-6084`，上限 32767），
+# 旧缺省 100000 写该列必 `ERROR 1264 (22003) Out of range value`，真机 pin 整轮 RED、一条 `CM_HIT` 都发不出。
+# 30000 ≤ 32767，且远超 120 次 1 级攻击的累计伤害（防死亡目的一样成立）。改小缺省值不改行为语义，
+# 因为 `attack_pose` 的 `vhp=` 两侧逐字节相同（见 `Get-M3PeerAttackPoseGuard`）。
+$script:M3AttackVictimHp = 30000
+# F-D 范围护栏（唯一口径，真机启动与无栈自检共用）：抬高值必须落在
+# `characters_ablity.Hp / MaxHP`（`smallint(11)` 有符号）的列域内，否则真机 pin 必 `ERROR 1264`。
+# 越界 ⇒ 调用方 fail-closed（不等 MySQL）；无栈自检用 `100000` 断言本函数必判 $false（改坏必红）。
+function Test-M3AttackVictimHpRange {
+  param([int]$VictimHp)
+  return ($VictimHp -ge 1 -and $VictimHp -le 32767)
+}
 function Format-M3AttackPose {
   param(
     [string]$MapName = '0',
     [int]$AX = 289, [int]$AY = 618, [int]$Dir = 2,
     [int]$VX = 290, [int]$VY = 618,
-    [int]$Level = 1, [int]$VictimHp = 100000
+    [int]$Level = 1, [int]$VictimHp = 30000
   )
   return ("pair map={0} attacker={1},{2},dir={3} victim={4},{5} level={6} vhp={7}" -f `
     $MapName, $AX, $AY, $Dir, $VX, $VY, $Level, $VictimHp)
@@ -524,7 +537,7 @@ function Get-M3AttackPinSql {
     [string]$MapName = '0',
     [int]$HomeMap = 0, [int]$HomeX = 289, [int]$HomeY = 618,
     [int]$Level = 1,
-    [int]$Hp = 100000
+    [int]$Hp = 30000   # F-D：必须 ≤ 32767（characters_ablity.Hp/MaxHP = smallint 有符号）
   )
   $safe = $ChrName.Replace("'", "''")
   $sql = New-Object System.Collections.Generic.List[string]
@@ -603,22 +616,26 @@ function Test-M3PinSqlColumns {
   return $violations
 }
 
-# pin SQL 的「可执行性」极小门（F-B，m3cs tick16 真机 finding 的同类漏网；owner 2026-10-12 11:55）。
+# pin SQL 的「可执行性」门（F-B + F-D：m3cs tick16 / tick21 真机 finding；owner 2026-10-12 11:55 + 12:45）。
 #
-# 为什么需要（真机实跑反例）：`run_attack_pair.ps1 -SelfCheckNoStack` ⑥ 此前只对 pin SQL 做
-# **字符串匹配**、从不真正送进 MySQL ⇒「列名挂错表」这类 **prepare 期**错误
-# （`ERROR 1054 (42S22) Unknown column 'a.IncHealth' in 'SET'`）永远穿得过四门禁与自检，
-# 真机一跑就在 `run_pair.ps1` 的 pin 步整体 RED、一条 `CM_HIT` 都发不出。
-# 本门把每条 `UPDATE` **真的执行一次**：WHERE 指向不存在的角色名 ⇒ 0 行改动（不触碰任何
-# 角色/内容），但 MySQL 仍会在 prepare 期校验表名/别名/列名 ⇒ 列挂错表必 `rc!=0`。
-# 返回：rc（0=全绿，1=有语句不可执行，2=环境缺失如 mysql 客户端不在位）、failures、outputs。
+# 为什么需要（真机实跑反例）：
+#   ① F-B（prepare 期）：`run_attack_pair.ps1 -SelfCheckNoStack` ⑥ 起初只对 pin SQL 做**字符串匹配**、
+#      从不真正送进 MySQL ⇒「列名挂错表」（`ERROR 1054 Unknown column 'a.IncHealth'`）穿得过全部门禁；
+#   ② F-D（数据/范围期）：把 WHERE 指向**不存在的角色名**时 JOIN 出 0 行，MySQL **不评估赋值表达式**
+#      ⇒ `a.Hp=100000` 写进 `smallint` 的 `characters_ablity.Hp`（上限 32767）这类 `ERROR 1264` 同样穿得过。
+# 做法：在**当前会话内**建两张 `TEMPORARY TABLE ... LIKE`（列定义逐列等同冻结 schema），从真实表各拷 1 行、
+# 把主键与角色名改成固定探针值，再把每条 pin `UPDATE` 的 `mir2_db.<真表>` 重写成 `mir2_db.tmp_<真表>`
+# 后**真的执行**。这样 prepare 期（未知表/列/别名）与数据期（越界/类型）都会被 STRICT 模式报错；
+# 改动只落在临时表（会话结束自动消失，真实数据零改动）。语句若引用未镜像的表（残留 `mir2_db.` 非 `tmp_`）
+# ⇒ fail-closed（绝不对真表执行）。
+# 返回：rc（0=全绿，1=有语句不可执行/无法构造探针行，2=环境缺失如 mysql 客户端不在位）、failures、outputs。
 function Test-M3PinSqlExecutable {
   param(
     [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$SqlStatements,
     [string]$MysqlExe = 'D:\mysql\mariadb-10.11.19-winx64\bin\mysql.exe',
     [string]$DbHost = '127.0.0.1',
     [int]$DbPort = 3306,
-    [string]$NoSuchChar = '__m3_no_such_char__'
+    [string]$ProbeChar = '__m3_pin_probe__'
   )
   $failures = New-Object System.Collections.Generic.List[string]
   $outputs = New-Object System.Collections.Generic.List[string]
@@ -629,20 +646,48 @@ function Test-M3PinSqlExecutable {
   $prevEap = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
   try {
+    # 探针行需要两表各至少一行真行可拷（表为空 ⇒ 无法构造 ⇒ fail-closed，绝不用 0 行假装绿）。
+    $cntOut = (& $MysqlExe -h $DbHost -P $DbPort -u root '--password=' --batch --skip-column-names -e 'SELECT (SELECT COUNT(*) FROM mir2_db.characters), (SELECT COUNT(*) FROM mir2_db.characters_ablity);' 2>&1 | Out-String).Trim()
+    $cntRc = $LASTEXITCODE
+    if ($cntRc -ne 0) {
+      $failures.Add(("无法读取探针行计数(rc={0}): {1}" -f $cntRc, $cntOut))
+      return [pscustomobject]@{ rc = 2; failures = @($failures); outputs = @($outputs) }
+    }
+    $cntParts = @($cntOut -split "`t")
+    if ($cntParts.Count -lt 2 -or [int]$cntParts[0] -lt 1 -or [int]$cntParts[1] -lt 1) {
+      $failures.Add(("无法构造探针行（characters / characters_ablity 有空表）: {0}" -f $cntOut))
+      return [pscustomobject]@{ rc = 1; failures = @($failures); outputs = @($outputs) }
+    }
+    # 会话内镜像 + 探针行（主键/角色名固定；只动临时表）。
+    $setup = @(
+      'CREATE TEMPORARY TABLE mir2_db.tmp_characters LIKE mir2_db.characters;',
+      'CREATE TEMPORARY TABLE mir2_db.tmp_characters_ablity LIKE mir2_db.characters_ablity;',
+      'INSERT INTO mir2_db.tmp_characters SELECT * FROM mir2_db.characters LIMIT 1;',
+      ("UPDATE mir2_db.tmp_characters SET Id=1, ChrName='{0}';" -f $ProbeChar),
+      'INSERT INTO mir2_db.tmp_characters_ablity SELECT * FROM mir2_db.characters_ablity LIMIT 1;',
+      'UPDATE mir2_db.tmp_characters_ablity SET PlayerId=1;'
+    ) -join ' '
     $i = 0
     foreach ($sql in @($SqlStatements)) {
       $i++
       if ($sql -notmatch "ChrName='") {
-        $failures.Add(("stmt#{0} 没有 ChrName='...' 子句，无法把 WHERE 指向不存在角色名（拒绝盲跑）" -f $i))
+        $failures.Add(("stmt#{0} 没有 ChrName='...' 子句，无法把 WHERE 指向探针角色名（拒绝盲跑）" -f $i))
         continue
       }
-      # 把所有 ChrName='...' 常量替换成不存在的名字：prepare 期照旧校验表/列，但 0 行落盘。
-      $safeSql = [regex]::Replace($sql, "ChrName='(?:[^']|'')*'", ("ChrName='{0}'" -f $NoSuchChar))
-      $out = (& $MysqlExe -h $DbHost -P $DbPort -u root '--password=' --batch --skip-column-names -e $safeSql 2>&1 | Out-String)
+      # 表名重写：先 `characters_ablity`（长名）再 `characters`（负向前瞻避免误伤）；随后断言无残留真表引用。
+      $safeSql = [regex]::Replace($sql, 'mir2_db\.characters_ablity', 'mir2_db.tmp_characters_ablity')
+      $safeSql = [regex]::Replace($safeSql, 'mir2_db\.characters(?![\w])', 'mir2_db.tmp_characters')
+      $safeSql = [regex]::Replace($safeSql, "ChrName='(?:[^']|'')*'", ("ChrName='{0}'" -f $ProbeChar))
+      if ($safeSql -match '(?i)mir2_db\.(?!tmp_)') {
+        $failures.Add(("stmt#{0} 引用了未镜像的表（残留 mir2_db.<真表>）——拒绝对真表执行: {1}" -f $i, $safeSql))
+        continue
+      }
+      $script = $setup + ' ' + $safeSql
+      $out = (& $MysqlExe -h $DbHost -P $DbPort -u root '--password=' --batch --skip-column-names -e $script 2>&1 | Out-String)
       $stmtRc = $LASTEXITCODE
       $outputs.Add(("stmt#{0} rc={1} sql={2}`n{3}" -f $i, $stmtRc, $safeSql, $out.Trim()))
       if ($stmtRc -ne 0) {
-        # 优先取 MySQL 的 ERROR 行（`ERROR 1054 (42S22) ... Unknown column 'a.IncHealth' ...`），
+        # 优先取 MySQL 的 ERROR 行（如 `ERROR 1054 ... Unknown column` / `ERROR 1264 ... Out of range`），
         # 便于机判与人工定位；否则退回首条非空行。
         $lines = @($out.Trim() -split "`r?`n" | Where-Object { $_ })
         $firstLine = $lines | Where-Object { $_ -match 'ERROR\s+\d+' } | Select-Object -First 1

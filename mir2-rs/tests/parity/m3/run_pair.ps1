@@ -68,7 +68,7 @@ param(
   [switch]$AttackPinPair,          # 攻击变体：两 bot **相邻**固定起点（attacker/victim；配合 -AttackSequence）
   [int]$AttackPinDir = 2,          # 仅 -AttackPinPair：attacker 朝向（默认 2=RIGHT，victim 在右邻格）
   [int]$AttackPinDx = 1,           # 仅 -AttackPinPair：victim 相对 attacker 的 X 偏移（默认 +1）
-  [int]$AttackVictimHp = 100000,   # 仅 -AttackPinPair：victim（与 attacker）Hp/MaxHP 抬高（防序列中死亡）
+  [int]$AttackVictimHp = 30000,   # 仅 -AttackPinPair：victim（与 attacker）Hp/MaxHP 抬高（防序列中死亡）；F-D：≤32767（characters_ablity.Hp = smallint 有符号）
   [switch]$SelfTestRed
 )
 
@@ -81,6 +81,12 @@ $MysqlExe = 'D:\mysql\mariadb-10.11.19-winx64\bin\mysql.exe'
 $Scoped = Join-Path $Here 'scoped_diff.py'
 # 背包/装备序列口径（T-14 复跑：两侧同一组开关）的唯一形态在 gate_guards.ps1（与 run_m3_gate/selftest 共用）。
 . (Join-Path $Here 'gate_guards.ps1')
+
+# F-D（m3cs tick21）：攻击 pin 的抬高值范围守卫——越界就 fail-closed，不等真机 MySQL `ERROR 1264`。
+if ($AttackPinPair -and -not (Test-M3AttackVictimHpRange -VictimHp $AttackVictimHp)) {
+  Write-Output ("RED: -AttackVictimHp={0} 越界（characters_ablity.Hp/MaxHP = smallint 有符号，1..32767）——见 F-D" -f $AttackVictimHp)
+  exit 1
+}
 
 function Get-M3BotOpPlan {
   param([switch]$ForPrewarm)  # 固定起点变体的①预热相：强制 -FixedNewChr + -NewAccount

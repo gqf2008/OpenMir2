@@ -372,7 +372,7 @@ if ($SelfCheckNoStack) {
   $bagPinSql += Get-M3StartPosePinSql -ChrName 'm3bagfix0'
   $bagVio = @(Test-M3PinSqlColumns -SqlStatements $bagPinSql -SchemaColumns $schemaCols)
   if ($bagVio.Count -ne 0) { $failures += ('bag_pin_sql_column_violations=' + ($bagVio -join ';')) }
-  $bagMut = @(Get-M3AttackPinSql -ChrName 'm3bagfix0' -CX 289 -CY 618 -Dir 2 -MapName '0' -HomeMap 0 -HomeX 289 -HomeY 618 -Level 1 -Hp 100000 |
+  $bagMut = @(Get-M3AttackPinSql -ChrName 'm3bagfix0' -CX 289 -CY 618 -Dir 2 -MapName '0' -HomeMap 0 -HomeX 289 -HomeY 618 -Level 1 -Hp 30000 |
     ForEach-Object { $_ -replace 'c\.IncHealth=0, c\.IncSpell=0', 'a.IncHealth=0, a.IncSpell=0' })
   $bagMutVio = @(Test-M3PinSqlColumns -SqlStatements $bagMut -SchemaColumns $schemaCols)
   if ($bagMutVio.Count -eq 0) { $failures += 'bag_pin_sql_column_mutation_not_red' }

@@ -36,8 +36,10 @@
                  启动日志的 `SEED_PROBE`（另校 `RUST_SEED_INJECTED`）；未注入/种子不符 ⇒ RED（fail-closed），
                  使「没设种子的不可比红」不再隐身。
     1 预检       入口端口不全在听 / MySQL 3306 不可读 ⇒ PREREQ（exit 2），不静默通过。
-    1.5 pin SQL 可执行性（F-B）  每条 `UPDATE` 以不存在角色名真执行一次（0 行改动）⇒ mysql rc 必须 0；
-                 列挂错表（如历史 `a.IncHealth`）⇒ RED，不再等到 run_pair 半途才炸。
+    1.5 pin SQL 可执行性（F-B + F-D）  在会话内建 `TEMPORARY TABLE ... LIKE` 并把每条 `UPDATE` 重写到镜像表、
+                 以固定探针行真执行一次 ⇒ mysql rc 必须 0；列挂错表（如历史 `a.IncHealth` = ERROR 1054）
+                 与越界值（如 `a.Hp=100000` 写 smallint = ERROR 1264）都当场 RED，不再等到 run_pair 半途才炸；
+                 临时表会话结束即消失，真实数据零改动。
     2 同序列     run_pair -AttackSequence 后 bot.log 必须出现 `M3ATTSEQ`：`role=attack` k=1..N
                  且 `role=done attacks=N`；缺 ⇒ RED。
     3 跨侧口径   两侧 baseline.json 的 `attack_sequence` / `attack_pose` / `fixed_new_chr` 必须一致；
@@ -65,7 +67,7 @@ param(
   [int]$AttackStepMs = 500,
   [int]$AttackStartDelayMs = 3000,
   [int]$AttackPinDir = 2,
-  [int]$AttackVictimHp = 100000,
+  [int]$AttackVictimHp = 30000,
   [string]$PeerSession = '',
   [string]$CsharpSession = '',
   [string]$RustSession = '',
@@ -264,28 +266,45 @@ if ($SelfCheckNoStack) {
   if ($LASTEXITCODE -ne 0) { $failures += 'emit_pair_rc=non-zero' }
   else {
     $pair = (($emitPairRaw | Out-String).Trim() | ConvertFrom-Json)
-    $wantPose = 'pair map=0 attacker=289,618,dir=2 victim=290,618 level=1 vhp=100000'
+    $wantPose = 'pair map=0 attacker=289,618,dir=2 victim=290,618 level=1 vhp=30000'
     if ($pair.attack_pose -ne $wantPose) { $failures += ('attack_pose=' + $pair.attack_pose) }
     $all = @($pair.attack_pin_sql_all)
     if ($all.Count -lt 4) { $failures += ('attack_pin_sql_all_count=' + $all.Count) }
     $joined = ($all -join ' || ')
     if ($joined -notmatch 'ChrName=''m3[^'']*0''') { $failures += 'attack_pin_missing_attacker_row' }
     if ($joined -notmatch 'CX=290') { $failures += 'attack_pin_missing_victim_cell_290' }
-    if ($joined -notmatch 'a\.Hp=100000, a\.MaxHP=100000') { $failures += 'attack_pin_missing_victim_hp' }
+    if ($joined -notmatch 'a\.Hp=30000, a\.MaxHP=30000') { $failures += 'attack_pin_missing_victim_hp' }
+    # F-D（m3cs tick21）：探针行真执行才能咬住越界值；旧缺省 100000 > smallint(32767) ⇒ pin 真机必 ERROR 1264。
+    if ($joined -match 'a\.Hp=100000') { $failures += 'attack_pin_victim_hp_out_of_range' }
     Write-Output ("SELFTEST ⑥ -AttackPinPair pose='{0}'；pin_sql_all={1} 条" -f $pair.attack_pose, $all.Count)
 
-    # ⑥b F-B：pin SQL 的「可执行性」极小门（m3cs tick16 真机 finding）。
-    #    字符串匹配永远穿得过「列名挂错表」⇒ 必须真送进 MySQL（WHERE 指向不存在角色名，0 行改动）。
-    #    两向：生产 4 条 SQL ⇒ rc=0；把 `c.IncHealth` 改回历史 bug `a.IncHealth` ⇒ 必 RED（原始件 mutation）。
+    # ⑥b F-B/F-D：pin SQL 的「可执行性」门（m3cs tick16/tick21 真机 finding）。
+    #    字符串匹配永远穿得过「列名挂错表」与「越界值」⇒ 必须真送进 MySQL。
+    #    生产 4 条 SQL（镜像临时表 + 探针行）⇒ rc=0；
+    #    把 `c.IncHealth` 改回历史 bug `a.IncHealth` ⇒ 必 RED（ERROR 1054）；
+    #    把 Hp/MaxHP 改回越界的 100000 ⇒ 必 RED（ERROR 1264）。
     $pinExec = Test-M3PinSqlExecutable -SqlStatements $all -MysqlExe $MysqlExe
     if ($pinExec.rc -ne 0) { $failures += ('pin_sql_not_executable_rc=' + $pinExec.rc + ':' + ($pinExec.failures -join ';')) }
     $mutAll = @($all | ForEach-Object { $_ -replace 'c\.IncHealth=0, c\.IncSpell=0', 'a.IncHealth=0, a.IncSpell=0' })
     $mutExec = Test-M3PinSqlExecutable -SqlStatements $mutAll -MysqlExe $MysqlExe
     if ($mutExec.rc -eq 0) { $failures += 'pin_sql_exec_mutation_not_red' }
     if (-not (($mutExec.failures -join ';') -match 'a\.IncHealth')) { $failures += 'pin_sql_exec_mutation_not_diff_shaped' }
-    Write-Output ("SELFTEST ⑥b pin SQL 可执行性（WHERE 指向不存在角色名）：生产 rc={0} failures={1}；改坏 a.IncHealth rc={2} [{3}]" -f `
-      $pinExec.rc, $pinExec.failures.Count, $mutExec.rc, (($mutExec.failures -join ';') | Select-Object -First 1))
+    $mutHp = @($all | ForEach-Object { $_ -replace 'a\.Hp=30000, a\.MaxHP=30000', 'a.Hp=100000, a.MaxHP=100000' })
+    $mutHpExec = Test-M3PinSqlExecutable -SqlStatements $mutHp -MysqlExe $MysqlExe
+    if ($mutHpExec.rc -eq 0) { $failures += 'pin_sql_range_mutation_not_red' }
+    if (-not (($mutHpExec.failures -join ';') -match 'Out of range|1264')) { $failures += 'pin_sql_range_mutation_not_diff_shaped' }
+    Write-Output ("SELFTEST ⑥b pin SQL 可执行性（镜像临时表 + 探针行真执行）：生产 rc={0} failures={1}；改坏 a.IncHealth rc={2} [{3}]；改坏 Hp=100000 rc={4} [{5}]" -f `
+      $pinExec.rc, $pinExec.failures.Count, $mutExec.rc, (($mutExec.failures -join ';') | Select-Object -First 1), $mutHpExec.rc, (($mutHpExec.failures -join ';') | Select-Object -First 1))
   }
+
+  # ⑥c F-D 范围护栏（m3cs tick21）：本脚本自己的缺省 value 必须落在
+  #    `characters_ablity.Hp/MaxHP`（smallint 有符号，1..32767）内；越界值必须被判红。
+  #    改坏（把本文件 :71-ish 的 `-AttackVictimHp` 缺省改回 100000）⇒ `attack_victim_hp_default_out_of_range` 必红。
+  if (-not (Test-M3AttackVictimHpRange -VictimHp $AttackVictimHp)) {
+    $failures += ('attack_victim_hp_default_out_of_range=' + $AttackVictimHp)
+  }
+  if (Test-M3AttackVictimHpRange -VictimHp 100000) { $failures += 'attack_victim_hp_range_guard_not_red' }
+  Write-Output ("SELFTEST ⑥c -AttackVictimHp 范围护栏：缺省 {0} 合规（≤32767）；100000 必判红" -f $AttackVictimHp)
 
   # ⑩ Minor M-1 回归（reviewer-5 76e433f0）：`-AttackSequence` 未配 `-AttackPinPair` ⇒ WARN 必须**真**出现；
   #    配了 `-AttackPinPair` ⇒ 不得出现。旧实现把 WARN 写在 `if ($EmitOpsArgs)` 块内且带 `-not $EmitOpsArgs`
@@ -402,10 +421,10 @@ if ($SelfCheckNoStack) {
   $schemaCols = Get-M3SchemaColumns -SchemaPath (Join-Path $RepoRoot 'sql\mir2_db.sql')
   $prodPinSql = @()
   $prodPinSql += Get-M3StartPosePinSql -ChrName 'm3fix0'
-  $prodPinSql += Get-M3AttackPinSql -ChrName 'm3fix0' -CX 289 -CY 618 -Dir 2 -MapName '0' -HomeMap 0 -HomeX 289 -HomeY 618 -Level 1 -Hp 100000
+  $prodPinSql += Get-M3AttackPinSql -ChrName 'm3fix0' -CX 289 -CY 618 -Dir 2 -MapName '0' -HomeMap 0 -HomeX 289 -HomeY 618 -Level 1 -Hp 30000
   $prodVio = @(Test-M3PinSqlColumns -SqlStatements $prodPinSql -SchemaColumns $schemaCols)
   if ($prodVio.Count -ne 0) { $failures += ('pin_sql_column_violations=' + ($prodVio -join ';')) }
-  $mutPinSql = @(Get-M3AttackPinSql -ChrName 'm3fix0' -CX 289 -CY 618 -Dir 2 -MapName '0' -HomeMap 0 -HomeX 289 -HomeY 618 -Level 1 -Hp 100000 |
+  $mutPinSql = @(Get-M3AttackPinSql -ChrName 'm3fix0' -CX 289 -CY 618 -Dir 2 -MapName '0' -HomeMap 0 -HomeX 289 -HomeY 618 -Level 1 -Hp 30000 |
     ForEach-Object { $_ -replace 'c\.IncHealth=0, c\.IncSpell=0', 'a.IncHealth=0, a.IncSpell=0' })
   $mutVio = @(Test-M3PinSqlColumns -SqlStatements $mutPinSql -SchemaColumns $schemaCols)
   if ($mutVio.Count -eq 0) { $failures += 'pin_sql_column_mutation_not_red' }
@@ -442,7 +461,7 @@ if ($SelfCheckNoStack) {
 
   Remove-Item -Recurse -Force $tmpRoot -ErrorAction SilentlyContinue
   if ($failures.Count -eq 0) {
-    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（攻击配置透传/默认关 + run_pair -DisableAutoPlay 耦合两向 + 攻击两相 pin pose/SQL + pin SQL 可执行性（含改坏 a.IncHealth 必红） + 入口/DiffOnly fail-closed + attack_diff selftest + 改坏 dmg/hit 必红 + scoped_diff 14/14 + M-1 WARN 有牙齿 + M-2 attacker 精确选择 selftest + pin SQL 别名/列校验 + 种子注入断言（两侧 fail-closed））'
+    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（攻击配置透传/默认关 + run_pair -DisableAutoPlay 耦合两向 + 攻击两相 pin pose/SQL + pin SQL 可执行性（含改坏 a.IncHealth 必红 + 改坏 Hp=100000 越界必红） + 入口/DiffOnly fail-closed + attack_diff selftest + 改坏 dmg/hit 必红 + scoped_diff 14/14 + M-1 WARN 有牙齿 + M-2 attacker 精确选择 selftest + pin SQL 别名/列校验 + 种子注入断言（两侧 fail-closed））'
     exit 0
   }
   Write-Output ('SELFTEST_RED RED: ' + ($failures -join ', '))
@@ -499,6 +518,13 @@ if ($Side -eq 'csharp' -and ($impls -ne @('csharp'))) {
 }
 if ($impls -contains 'csharp' -and $impls -contains 'rust-or-other') {
   Write-Output 'RED: 入口端口被两种实现混占——先统一'
+  exit 1
+}
+
+# F-D（m3cs tick21）：pin 抬高值范围守卫——越界就 fail-closed，不等真机 MySQL `ERROR 1264`。
+# 放在入口护栏之后（-SelfCheckNoStack / -DiffOnly / 无栈入口已各自 fail-closed），只卡真实侧运行。
+if (-not (Test-M3AttackVictimHpRange -VictimHp $AttackVictimHp)) {
+  Write-Output ("RED: -AttackVictimHp={0} 越界（characters_ablity.Hp/MaxHP = smallint 有符号，1..32767）——见 F-D" -f $AttackVictimHp)
   exit 1
 }
 
@@ -566,7 +592,7 @@ if ($probeExec.rc -ne 0) {
   Write-Output ("RED: pin SQL 不可执行（prepare 期错误）——{0}" -f ($probeExec.failures -join ';'))
   exit 1
 }
-Write-Output ("PREFLIGHT pin SQL 可执行性：{0} 条 UPDATE 以不存在角色名真执行，mysql rc=0" -f $probeSql.Count)
+Write-Output ("PREFLIGHT pin SQL 可执行性：{0} 条 UPDATE 在镜像临时表上以探针行真执行，mysql rc=0（prepare 期 + 范围期）" -f $probeSql.Count)
 
 Write-Output '--- 2) 侧运行（复用 run_pair.ps1；同序列 = -FixedNewChr + -AttackSequence + -AttackPinPair） ---'
 $pairArgs = @('-Side', $Side, '-Bots', $Bots, '-Prefix', $Prefix, '-Address', $Address, '-Port', $Port,
