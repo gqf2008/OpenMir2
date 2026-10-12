@@ -1,0 +1,12 @@
+# Rust 侧同形 trace：离线单线程攻击路径（MIR2_RNG_LOG=... MIR2_RNG_SEED=42 跑 combat_skill_vectors，--test-threads=1）
+# 与 C# 半（全局 RNG，多消费者交错）对照：Rust 攻击取数为连续块。
+
+RNG_TRACE_INTERLEAVE E:/tmp/m3cs-trace-single.tsv marker=crates/world/src/combat.rs:109 attacks=2996
+  intra_noise_attacks=0/2996（同一击内部两次取数之间夹噪声的攻击数）
+  internal_noise_total=0 internal_noise_max=0
+  attack_draw_gap_histogram={'0': 11950}
+  inter_attack_noise min=0 median=0 max=0
+  inter_attack_noise_histogram={'<=10': 2995}
+  VERDICT: CONTIGUOUS（攻击取数为连续块 ⇒ 窗口前重播种原则上足够）
+
+RNG_TRACE_SUMMARY E:/tmp/m3cs-trace-single.tsv total=14946 attack_path=14946 noise=0 noise_ratio=0.0000

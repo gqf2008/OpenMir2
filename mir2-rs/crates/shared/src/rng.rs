@@ -184,51 +184,87 @@ const CONSTANT: [char; 62] = [
 
 impl RandomNumber {
     /// 用固定种子构造（C# 侧为私有构造 + 单例，种子由 `new Random()` 时间源给出）。
+    ///
+    /// **M3②③ 决策片**：构造时按环境变量 [`crate::rng_trace::TRACE_ENV`]（`MIR2_RNG_LOG`）
+    /// 尝试开启逐次 RNG trace（只生效一次；未设 ⇒ 不开启，取数序列一字不改）。
     pub fn with_seed(seed: i32) -> Self {
+        crate::rng_trace::enable_from_env();
         RandomNumber {
             rng: DotNetRandom::new(seed),
         }
     }
 
     /// C# `int Random()` → `random.Next()`（非负随机数）。
+    #[track_caller]
     pub fn random(&mut self) -> i32 {
-        self.rng.next_value()
+        let v = self.rng.next_value();
+        if crate::rng_trace::enabled() {
+            let loc = std::panic::Location::caller();
+            crate::rng_trace::record("Next()", 0, i64::from(v), loc.file(), loc.line());
+        }
+        v
     }
 
     /// C# `int Random(int value)` → `random.Next(value)`，返回 `[0, value)`。
     ///
     /// C# 在 `value == int.MaxValue` 时抛 `Exception("错误的数值")`，
     /// `value < 0` 时由 `Next` 抛 `ArgumentOutOfRangeException`；均对齐为 panic。
+    #[track_caller]
     pub fn random_below(&mut self, value: i32) -> i32 {
         assert!(value < i32::MAX, "错误的数值");
-        self.rng.next_max(value)
+        let v = self.rng.next_max(value);
+        if crate::rng_trace::enabled() {
+            let loc = std::panic::Location::caller();
+            crate::rng_trace::record(
+                "Next(max)",
+                i64::from(value),
+                i64::from(v),
+                loc.file(),
+                loc.line(),
+            );
+        }
+        v
     }
 
     /// C# `int Random(int minValue, int maxValue)` → `random.Next(min, max)`，
     /// 返回 `[min, max)`（**上界不含**，与 `get_random_number` 不同）。
+    #[track_caller]
     pub fn random_range(&mut self, min_value: i32, max_value: i32) -> i32 {
-        self.rng.next_range(min_value, max_value)
+        let v = self.rng.next_range(min_value, max_value);
+        if crate::rng_trace::enabled() {
+            let loc = std::panic::Location::caller();
+            // C# `RecordingRandom` 的 `Next(min,max)` 参数编码：`((long)min << 32) | (uint)max`。
+            let arg = (i64::from(min_value) << 32) | i64::from(max_value as u32);
+            crate::rng_trace::record("Next(min,max)", arg, i64::from(v), loc.file(), loc.line());
+        }
+        v
     }
 
     /// C# `GetRandomNumber(minValue, maxValue)` → `random.Next(min, max + 1)`，
     /// 返回 `[min, max]`（**上下界都含**）。
     ///
     /// C# 在 unchecked 上下文 `max + 1` 可溢出回绕，用 `wrapping_add` 对齐。
+    #[track_caller]
     pub fn get_random_number(&mut self, min_value: i32, max_value: i32) -> i32 {
-        self.rng.next_range(min_value, max_value.wrapping_add(1))
+        // 复用 `random_range` ⇒ 取数形态/记录口径与 C# `Next(min, max+1)` 完全一致。
+        self.random_range(min_value, max_value.wrapping_add(1))
     }
 
     /// C# `byte RandomByte(byte value)`，`value == 255` 时 C# 抛异常。
+    #[track_caller]
     pub fn random_byte(&mut self, value: u8) -> u8 {
         assert!(value < u8::MAX, "错误的数值");
-        self.rng.next_max(i32::from(value)) as u8
+        // C# `RandomByte` → `random.Next(value)` ⇒ 记录形态同 `Next(max)`。
+        self.random_below(i32::from(value)) as u8
     }
 
     /// C# `string GenerateRandomNumber(int Length)`：从 62 字符表逐位取随机字符。
+    #[track_caller]
     pub fn generate_random_number(&mut self, length: usize) -> String {
         let mut out = String::with_capacity(length);
         for _ in 0..length {
-            out.push(CONSTANT[self.rng.next_max(62) as usize]);
+            // C# `Random(62)` 逐位 ⇒ 记录形态同 `Next(max)`。
+            out.push(CONSTANT[self.random_below(62) as usize]);
         }
         out
     }
@@ -237,6 +273,7 @@ impl RandomNumber {
     ///
     /// 注意 C# 每轮用 `GetRandomNumber(1, sourceList.Count)`（含上界）再减一取下标，
     /// 且会**移除**原列表元素——`source` 会被原地修改，与 C# 一致。
+    #[track_caller]
     pub fn random_select(&mut self, source: &mut Vec<i32>, select_count: usize) -> Vec<i32> {
         assert!(
             select_count <= source.len(),
@@ -257,23 +294,30 @@ impl RandomNumber {
 /// 方法集与 C# `RandomNumber` 的取数入口一一对应，见 [`RandomNumber`] 的对照表。
 pub trait RandomSource {
     /// C# `int Random()`。
+    #[track_caller]
     fn random(&mut self) -> i32;
     /// C# `int Random(int value)`：`[0, value)`。
+    #[track_caller]
     fn random_below(&mut self, value: i32) -> i32;
     /// C# `int Random(int min, int max)`：`[min, max)`。
+    #[track_caller]
     fn random_range(&mut self, min_value: i32, max_value: i32) -> i32;
     /// C# `double NextDouble()`（记录-回放需要）。
+    #[track_caller]
     fn next_double(&mut self) -> f64;
     /// C# `GetRandomNumber(min, max)`：`[min, max]`（**含上界**）。
+    #[track_caller]
     fn get_random_number(&mut self, min_value: i32, max_value: i32) -> i32 {
         self.random_range(min_value, max_value.wrapping_add(1))
     }
     /// C# `byte RandomByte(byte value)`。
+    #[track_caller]
     fn random_byte(&mut self, value: u8) -> u8 {
         assert!(value < u8::MAX, "错误的数值");
         self.random_below(i32::from(value)) as u8
     }
     /// C# `string GenerateRandomNumber(int Length)`。
+    #[track_caller]
     fn generate_random_number(&mut self, length: usize) -> String {
         let mut out = String::with_capacity(length);
         for _ in 0..length {
@@ -282,6 +326,7 @@ pub trait RandomSource {
         out
     }
     /// C# `IList<int> RandomSelect(IList<int>, int)`：不放回抽取，`source` 原地修改。
+    #[track_caller]
     fn random_select(&mut self, source: &mut Vec<i32>, select_count: usize) -> Vec<i32> {
         assert!(
             select_count <= source.len(),
@@ -297,38 +342,58 @@ pub trait RandomSource {
 }
 
 impl RandomSource for DotNetRandom {
+    #[track_caller]
     fn random(&mut self) -> i32 {
         self.next_value()
     }
 
+    #[track_caller]
     fn random_below(&mut self, value: i32) -> i32 {
         self.next_max(value)
     }
 
+    #[track_caller]
     fn random_range(&mut self, min_value: i32, max_value: i32) -> i32 {
         self.next_range(min_value, max_value)
     }
 
+    #[track_caller]
     fn next_double(&mut self) -> f64 {
         DotNetRandom::next_double(self)
     }
 }
 
 impl RandomSource for RandomNumber {
+    #[track_caller]
     fn random(&mut self) -> i32 {
         RandomNumber::random(self)
     }
 
+    #[track_caller]
     fn random_below(&mut self, value: i32) -> i32 {
         RandomNumber::random_below(self, value)
     }
 
+    #[track_caller]
     fn random_range(&mut self, min_value: i32, max_value: i32) -> i32 {
         RandomNumber::random_range(self, min_value, max_value)
     }
 
+    #[track_caller]
     fn next_double(&mut self) -> f64 {
-        self.rng.next_double()
+        let v = self.rng.next_double();
+        if crate::rng_trace::enabled() {
+            let loc = std::panic::Location::caller();
+            // C# `RecordingRandom` 的 `NextDouble()` 结果编码：IEEE-754 位型。
+            crate::rng_trace::record(
+                "NextDouble()",
+                0,
+                v.to_bits() as i64,
+                loc.file(),
+                loc.line(),
+            );
+        }
+        v
     }
 }
 

@@ -1,0 +1,13 @@
+RNG_TRACE_SUMMARY E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv total=1670754 attack_path=275 noise=1670479 noise_ratio=0.9998
+  NOISE  1060321  M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+  NOISE   195913  GameSrv.Word.WorldServer.MonGetRandomItems@WorldServer.MonGen.cs:451
+  NOISE   128717  GameSrv.Npc.Merchant.Run@Merchant.cs:132
+  NOISE   126096  GameSrv.Npc.Merchant.Run@Merchant.cs:138
+  NOISE    53169  M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:432
+  NOISE    14180  M2Server.Actor.AnimalObject..ctor@AnimalObject.cs:75
+  NOISE    13774  GameSrv.Word.WorldServer.RegenMonsters@WorldServer.MonGen.cs:815
+  NOISE    13384  M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:434
+  NOISE     9183  GameSrv.Word.WorldServer.MonGetRandomItems@WorldServer.MonGen.cs:467
+  NOISE     7090  M2Server.Actor.BaseObject..ctor@BaseObject.cs:438
+  NOISE     7090  M2Server.Actor.BaseObject..ctor@BaseObject.cs:441
+  NOISE     6936  GameSrv.Word.WorldServer.CreateMonster@WorldServer.MonGen.cs:740

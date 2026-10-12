@@ -1,0 +1,8 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests\rng_trace.rs (E:/tmp/m3cs-rng-trace-target\debug\deps\rng_trace-bf4b191e433c5399.exe)
+
+running 1 test
+test trace_off_is_byte_identical_and_on_records_same_form ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

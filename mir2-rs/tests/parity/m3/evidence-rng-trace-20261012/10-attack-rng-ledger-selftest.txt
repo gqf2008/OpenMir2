@@ -1,0 +1,22 @@
+RNG_LEDGER_SEGMENTS C:\Users\gxh\AppData\Local\Temp\rng-ledger-selftest-f25kai11\a.seg.jsonl marker=M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929 segments=6
+  SEG k=1 total=2 attack=2 noise=0 first_seq=1
+  SEG k=2 total=4 attack=1 noise=3 first_seq=3
+  SEG k=3 total=2 attack=2 noise=0 first_seq=7
+RNG_LEDGER_SEGMENTS C:\Users\gxh\AppData\Local\Temp\rng-ledger-selftest-f25kai11\b.seg.jsonl marker=M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929 segments=6
+  SEG k=1 total=2 attack=2 noise=0 first_seq=1
+  SEG k=2 total=4 attack=1 noise=3 first_seq=3
+  SEG k=3 total=2 attack=2 noise=0 first_seq=7
+GREEN: 跨侧抽数账本逐 k 一致（segments=6；attack=2 noise=0）
+RNG_LEDGER_SEGMENTS C:\Users\gxh\AppData\Local\Temp\rng-ledger-selftest-f25kai11\b.seg.jsonl marker=M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929 segments=6
+  SEG k=1 total=2 attack=2 noise=0 first_seq=1
+  SEG k=2 total=5 attack=1 noise=4 first_seq=3
+  SEG k=3 total=2 attack=2 noise=0 first_seq=8
+RNG_LEDGER_SEGMENTS C:\Users\gxh\AppData\Local\Temp\rng-ledger-selftest-f25kai11\b.seg.jsonl marker=M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929 segments=6
+  SEG k=1 total=1 attack=1 noise=0 first_seq=1
+  SEG k=2 total=4 attack=1 noise=3 first_seq=2
+  SEG k=3 total=2 attack=2 noise=0 first_seq=6
+RNG_LEDGER_SEGMENTS C:\Users\gxh\AppData\Local\Temp\rng-ledger-selftest-f25kai11\b.seg.jsonl marker=M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929 segments=6
+  SEG k=1 total=2 attack=2 noise=0 first_seq=1
+  SEG k=2 total=4 attack=1 noise=3 first_seq=3
+  SEG k=3 total=2 attack=2 noise=0 first_seq=7
+SELFTEST GREEN: attack_rng_ledger selftest 8/8（同账本绿 + 多抽/少抽必红且定位 + 段数不等必红）

@@ -9,3 +9,5 @@ pub mod hutil;
 pub mod hutil32;
 pub mod replay;
 pub mod rng;
+/// **M3②③ 决策片（owner 2026-10-12 18:00）**：opt-in 的逐次 RNG trace（与 C# `rng-hook` 同形）。
+pub mod rng_trace;
