@@ -1,0 +1,15 @@
+﻿{"role":"arm","id":"m3a1245460","count":120,"step_ms":500,"dir":2}
+{"role":"attack","k":1,"op":"CM_HIT","x":289,"y":618,"dir":2,"id":"m3a1245460"}
+{"role":"attack","k":2,"op":"CM_HIT","x":289,"y":618,"dir":2,"id":"m3a1245460"}
+{"role":"attack","k":3,"op":"CM_HIT","x":289,"y":618,"dir":2,"id":"m3a1245460"}
+{"role":"attack","k":4,"op":"CM_HIT","x":289,"y":618,"dir":2,"id":"m3a1245460"}
+{"role":"attack","k":5,"op":"CM_HIT","x":289,"y":618,"dir":2,"id":"m3a1245460"}
+{"role":"attack","k":6,"op":"CM_HIT","x":289,"y":618,"dir":2,"id":"m3a1245460"}
+{"role":"attack","k":7,"op":"CM_HIT","x":289,"y":618,"dir":2,"id":"m3a1245460"}
+{"role":"struck","dmg":1,"hp":18,"maxhp":19,"src":1516089833,"actor":352246287}
+{"role":"struck","dmg":1,"hp":18,"maxhp":19,"src":1516089833,"actor":352246287}
+{"role":"attack","k":8,"op":"CM_HIT","x":289,"y":618,"dir":2,"id":"m3a1245460"}
+{"role":"attack","k":9,"op":"CM_HIT","x":289,"y":618,"dir":2,"id":"m3a1245460"}
+{"role":"attack","k":10,"op":"CM_HIT","x":289,"y":618,"dir":2,"id":"m3a1245460"}
+{"role":"attack","k":11,"op":"CM_HIT","x":289,"y":618,"dir":2,"id":"m3a1245460"}
+{"role":"attack","k":12,"op":"CM_HIT","x":289,"y":618,"dir":2,"id":"m3a1245460"}

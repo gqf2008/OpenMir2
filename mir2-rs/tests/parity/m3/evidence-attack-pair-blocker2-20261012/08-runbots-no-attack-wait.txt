@@ -1,0 +1,46 @@
+=== run_bots.ps1 对 -AttackSequence 没有『等 M3ATTSEQ done』分支（只有 -BagEquipSequence 有）===
+来源: tools/botload/run_bots.ps1
+
+--- :42-45 param ---
+  [switch]$AttackSequence,           # M3②③ 夹具：进世界后按固定攻击序列发 CM_HIT（T-22 扩展）
+  [int]$AttackCount = 120,           # 仅 -AttackSequence 时生效：攻击步数
+  [int]$AttackStepMs = 500,          # 仅 -AttackSequence 时生效：每步间隔
+  [int]$AttackStartDelayMs = 3000,   # 仅 -AttackSequence 时生效：进世界到第一步的额外等待
+--- :186-210 收工条件（无 attack 分支）---
+    $spawned = [int]$st.spawned
+    $success = [int]$st.login_ok
+    if ($st.PSObject.Properties.Name -contains "in_world") { $worldOk = [int]$st.in_world }
+  }
+  if ($BagEquipSequence) {
+    # 序列标记由 BotSrv 打到自己的 stdout（= $LogFile），读取同 stats 一样放行写侧。
+    $bagDone = ([regex]::Matches((Read-SharedText $LogFile), 'M3BAGSEQ done')).Count
+  }
+  if ($RequireCharCreated) {
+    # 固定起点预热：等「创建角色」标记（BotSrv `SelectChrScene.cs` 的 LogService.Info）
+    $charCreated = ([regex]::Matches((Read-SharedText $LogFile), '创建角色')).Count
+  }
+  $bagNote = if ($BagEquipSequence) { " bag_seq_done=" + $bagDone + "/" + $Count } else { "" }
+  Write-Output ("PROGRESS spawned=" + $spawned + " login_ok=" + $success + "/" + $Count + " in_world=" + $worldOk + "/" + $Count + $bagNote + " (src=load_stats.ndjson)")
+  if ($BagEquipSequence) {
+    # T-14：序列跑完（每个假人一条 done）才算收工；否则继续等（超时上限仍是 TimeoutSec）。
+    if ($success -ge $Count -and $bagDone -ge $Count) { break }
+  } elseif ($RequireCharCreated) {
+    # 固定起点①预热：等到 N 个「创建角色」即 break（不要求进世界）。
+    # 另等 load_stats 的 login_ok 到齐：stats 是 BotSrv 每 5s 采样一次，而「创建角色」标记
+    # 在登录后立即落日志 ⇒ 只判 charCreated 会在采样边界提前 break，读到「上一拍」的
+    # login_ok=0，末尾成功判据（$success -ge $Count）恒假红（T-14 两相 pin 实跑踩到）。
+    if ($charCreated -ge $Count -and $success -ge $Count) { break }
+  } elseif ($RequireWorld) {
+    # F4（T-12）：登录不等于进世界；等"本会话收到 SM_LOGON"的进世界证据到齐。
+
+--- 全文 'attack' 命中（仅参数/配置打印，无 done 等待）---
+42:  [switch]$AttackSequence,           # M3②③ 夹具：进世界后按固定攻击序列发 CM_HIT（T-22 扩展）
+43:  [int]$AttackCount = 120,           # 仅 -AttackSequence 时生效：攻击步数
+44:  [int]$AttackStepMs = 500,          # 仅 -AttackSequence 时生效：每步间隔
+45:  [int]$AttackStartDelayMs = 3000,   # 仅 -AttackSequence 时生效：进世界到第一步的额外等待
+111:    AttackSequence      = [bool]$AttackSequence
+112:    AttackCount         = $AttackCount
+113:    AttackStepMs        = $AttackStepMs
+114:    AttackStartDelayMs  = $AttackStartDelayMs
+128:if ($AttackSequence) {
+129:    Write-Output "CONFIG_ATTACKSEQ count=$AttackCount step_ms=$AttackStepMs start_delay_ms=$AttackStartDelayMs"
