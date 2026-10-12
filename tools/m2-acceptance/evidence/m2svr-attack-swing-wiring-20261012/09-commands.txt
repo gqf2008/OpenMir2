@@ -1,0 +1,32 @@
+# 命令留档（m2-svr 无目标一击接线片）—— 全部相对 worktree `.claude/worktrees/m2-svr` / `mir2-rs/`
+# 隔离 target：CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target
+
+# 0) 交付树 = master de0ea592（已合 m3cs World::attack_swing 614f5407 + m3bag de0ea592）上叠加本片 commit；重跑四门禁：
+$ cd mir2-rs && export CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target
+$ cargo fmt --all -- --check
+$ cargo clippy --workspace --all-targets --offline -- -D warnings
+$ cargo test --workspace --offline
+$ cargo run -p msgcodegen --offline -- --check
+
+# 1) 绿：无目标一击的读数（走真实 handle_hit_cmd；前方格留空）
+$ cargo test -p game-svr --offline hit_cmd_without_target_still_draws_attack_power -- --nocapture
+#   期望：ATTACK_SWING_DRAWS_PER_EMPTY_HIT=2 / ATTACK_SWING_DRAWS_84_EMPTY_HITS=168 ⇒ 见 03-green-targeted.txt
+
+# 2) 红检（改坏必红）：临时删掉无目标支的 `let _ = world.attack_swing(actor_id);`（改回「只记日志」）
+$ python - <<'PY'
+import io
+p='bins/game-svr/src/main.rs'; s=io.open(p,encoding='utf-8').read()
+s=s.replace('        let _ = world.attack_swing(actor_id);\n','        // REDCHECK\n')
+io.open(p,'w',encoding='utf-8',newline='').write(s)
+PY
+$ cargo test -p game-svr --offline hit_cmd_without_target_still_draws_attack_power -- --nocapture
+#   期望：ATTACK_SWING_DRAWS_PER_EMPTY_HIT=0、断言 left:0 right:2 FAILED ⇒ 见 04-redcheck-remove-swing.txt；随后还原
+
+# 3) 生产差量
+$ git diff de0ea592..HEAD -- mir2-rs/bins/game-svr/src/main.rs   # 见 02-prod-diff.txt
+
+# 4) 端口实拍（E:/MirServer/port-status.ps1 的相关段）
+## 3. 服务端进程 / 端口（基线是否还活着）
+- mysqld      pid=29372   port=3306
+- **缺失端口**: 5000, 5100, 5500, 5600, 5700, 6000, 7000, 7100, 7200
+

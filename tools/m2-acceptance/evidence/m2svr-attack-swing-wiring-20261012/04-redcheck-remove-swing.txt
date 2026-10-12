@@ -1,0 +1,33 @@
+== 红检：删掉无目标支的 world.attack_swing(actor_id) ⇒ 预期 FAILED ==
+$ python: 删除 'let _ = world.attack_swing(actor_id);'
+
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.76s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-3aa264152417c61e.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 80 filtered out; finished in 0.00s
+
+     Running unittests src\main.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-eb39968088e3f1ec.exe)
+
+running 1 test
+12:17:12.712 [DBG] 攻击：actor_id=1 前方格 (11,10) 无目标 ⇒ 仍按 oracle 抽攻击力（attack_swing）+ 只播动作帧（`_Attack(null)` 返回 false）
+ATTACK_SWING_DRAWS_PER_EMPTY_HIT=0
+
+thread 'tests::hit_cmd_without_target_still_draws_attack_power' (28348) panicked at bins\game-svr\src\main.rs:7269:9:
+assertion `left == right` failed: 无目标一击必须抽 2 次（oracle `PlayObject.Attack.cs:73` 的玩家 GetBaseAttackPoewr）
+  left: 0
+ right: 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test tests::hit_cmd_without_target_still_draws_attack_power ... FAILED
+
+failures:
+
+failures:
+    tests::hit_cmd_without_target_still_draws_attack_power
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 148 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`
+RC=101
