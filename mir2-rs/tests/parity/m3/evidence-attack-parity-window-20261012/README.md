@@ -31,7 +31,7 @@
 | 8 | 停 Rust 栈 + 端口实拍（收工） | `08-rust-stack-stop.txt` / `09-ports-after.txt` | 0 |
 | 9 | `run_attack_pair.ps1 -DiffOnly -CsharpSession csharp-20261012-141650 -RustSession rust-20261012-141909`（不碰端口重比） | `10-attack-diff-diffonly.txt` | **1** |
 
-两侧会话原始件（`attack_raw.jsonl` / `attack_seq.jsonl` / `attack_seed.json` / `baseline.json` / `bot.log`）
+两侧会话原始件（`attack_raw.jsonl` / `attack_seq.jsonl` / `attack_seed.json` / `baseline.json` / `bot.log.txt`）
 逐会话入库在 `sessions/`：`csharp-20261012-141542`（冒烟 20）、`csharp-20261012-141650`（120）、
 `rust-20261012-141909`（120）、`rust-20261012-142253`（冒烟 20）。
 

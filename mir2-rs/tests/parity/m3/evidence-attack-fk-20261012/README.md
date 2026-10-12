@@ -80,6 +80,12 @@ Rust `RUST_SEED_INJECTED=42` + game-svr 同一 `SEED_PROBE` 参照序列。⇒ �
 
 ## 6. 窗口与残留物
 
+- **F-1 修复（reviewer-5 `a70c986b` request_changes 于 `564b3213` 片）**：两片证据里 `sessions/*/bot.log`
+  被 `.gitignore:92 *.log` 吞掉 ⇒ 干净 clone 上 `verify_sha256sums.py` 会报缺件。已把两片（本片 +
+  `evidence-attack-parity-window-20261012`）的 4+4 个 `bot.log` 一律改名为 `bot.log.txt`（同时满足
+  brief 的「证据文件名一律 `.txt`」）并重算 `SHA256SUMS.txt` ⇒ 本片 38/38 GREEN、上一片 40/40 GREEN；
+  两个 README 里的引用同步订正。
+
 - 起栈前/收工端口实拍：`00-ports-before.txt` / `09-ports-after.txt`（九端口空，仅共享 3306）⇒ **窗口已释放**。
 - 临时物：`E:/tmp/m3cs-fk/rust-stack/**`（本片 Rust 栈日志）、`E:/tmp/m3cs-fk-target/**`（隔离 target，
   含 F-K 二进制）、`E:/tmp/m3cs-tick/csharp-stack/**`（C# 栈日志，脚本复用）。
