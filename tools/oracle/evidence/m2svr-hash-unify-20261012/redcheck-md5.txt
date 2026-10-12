@@ -1,0 +1,10 @@
+# 改坏必红 B：SHA256 换成 MD5（翻一位仍会变 ⇒ 只有「钉住标准值」这条牙能抓到）
+$ powershell -ExecutionPolicy Bypass -File tools/oracle/deploy_gamesvr.ps1 -SelfTestRed
+---
+SELFTEST_RED deploy_gamesvr：验证 Get-Sha256Hex（.NET SHA256，环境无关）
+  [RED] 钉住的标准 SHA256 不符: b2d3f56bc197fd985d5965079b5e7148 != fdeab9acf3710362bd2658cdc9a29e8f9c757fcf9811603a8c447cd1d9151108
+  [OK ] 同内容同 hash
+  [OK ] 翻一位必不同 hash
+  [OK ] 16 位截断 = 前 16 位
+SELFTEST_RED RED
+rc=1

@@ -1,0 +1,9 @@
+$ powershell -ExecutionPolicy Bypass -File tools/oracle/deploy_gamesvr.ps1 -SelfTestRed
+---
+SELFTEST_RED deploy_gamesvr：验证 Get-Sha256Hex（.NET SHA256，环境无关）
+  [OK ] 钉住的标准 SHA256 = fdeab9acf3710362bd2658cdc9a29e8f9c757fcf9811603a8c447cd1d9151108
+  [OK ] 同内容同 hash
+  [OK ] 翻一位必不同 hash
+  [OK ] 16 位截断 = 前 16 位
+SELFTEST_RED GREEN
+rc=0

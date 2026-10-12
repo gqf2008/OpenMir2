@@ -1,0 +1,9 @@
+$ powershell -ExecutionPolicy Bypass -File tools/oracle/reconcile_deployment.ps1 -SelfTestRed -OutDir E:/tmp/m2svr-hash-unify/out
+---
+SELFTEST identity=MATCH bitflip=DRIFT missing-src=DEPLOY-ONLY
+  [OK ] 钉住的标准 SHA256 = fdeab9acf3710362bd2658cdc9a29e8f9c757fcf9811603a8c447cd1d9151108
+  [OK ] 同内容同 hash
+  [OK ] 翻一位必不同 hash
+  [OK ] 16 位截断 = 前 16 位
+SELFTEST_RED GREEN: 改坏一个字节必判 DRIFT（比较器可证伪）+ 标准 SHA256 被钉住
+rc=0

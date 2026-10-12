@@ -1,0 +1,17 @@
+$ powershell -ExecutionPolicy Bypass -File tools/oracle/deploy_gamesvr.ps1 -WhatIf -SkipBuild -BuildDir E:/tmp/m2svr-hash-unify/builddir -BackupDir E:/tmp/m2svr-hash-unify/backup
+# 环境：PSModulePath 含 PS7 模块路径（lane 实况），powershell = 5.1
+# 期望（改前）：在 :128 抛 CommandNotFoundException；rc=1
+---
+   新鲜度断言：构建输出都不比源码旧
+== deploy_gamesvr: E:/tmp/m2svr-hash-unify/builddir  ->  E:\MirServer\M2GameSvr
+   备份: E:/tmp/m2svr-hash-unify/backup
+   -WhatIf：只列将要替换的文件，不落盘、不重启
+Get-FileHash : The term 'Get-FileHash' is not recognized as the name of a cmdlet, function, script file, or operable pr
+ogram. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+At E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\tools\oracle\deploy_gamesvr.ps1:128 char:37
++     $same = (Test-Path $dst) -and ((Get-FileHash -LiteralPath $src).H ...
++                                     ~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (Get-FileHash:String) [], ParentContainsErrorRecordException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+rc=1

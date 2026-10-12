@@ -6,8 +6,9 @@
 
 | 工具 | 作用 | 红检（改坏必红） |
 | --- | --- | --- |
-| `reconcile_deployment.ps1` | 部署件 ↔ 源码构建输出逐字节对账；判 `SINGLE-BUILD`/`MIXED`/`FOREIGN`/`SELF-HOSTED`；另核对"未声明为部署件的旧目录"的血统（PE 还是 Mach-O、`deps.json` 的 runtimeTarget） | `-SelfTestRed`：复制一组产物改坏一个字节，比较器必须判 DRIFT |
-| `deploy_gamesvr.ps1` | 把**同一份构建**的 GameSvr 组件集整体铺到 `E:\MirServer\M2GameSvr`（带备份、只铺本仓库自有文件、铺后逐文件复核哈希）；`-WhatIf` 只列将要替换的文件 | 铺后哈希复核（`OK`/`RED` 逐文件） |
+| `reconcile_deployment.ps1` | 部署件 ↔ 源码构建输出逐字节对账；判 `SINGLE-BUILD`/`MIXED`/`FOREIGN`/`SELF-HOSTED`；另核对"未声明为部署件的旧目录"的血统（PE 还是 Mach-O、`deps.json` 的 runtimeTarget） | `-SelfTestRed`：复制一组产物改坏一个字节，比较器必须判 DRIFT；并钉住标准 SHA256（`hashutil.ps1`） |
+| `deploy_gamesvr.ps1` | 把**同一份构建**的 GameSvr 组件集整体铺到 `E:\MirServer\M2GameSvr`（带备份、只铺本仓库自有文件、铺后逐文件复核哈希）；`-WhatIf` 只列将要替换的文件 | `-SelfTestRed`：钉住标准 SHA256 且对篡改敏感；铺后哈希复核（`OK`/`RED` 逐文件） |
+| `hashutil.ps1` | 共用哈希工具：`Get-Sha256Hex` / `Get-Sha256Hex16` 用 `[System.Security.Cryptography.SHA256]`，**不用 `Get-FileHash`**（后者属 `Microsoft.PowerShell.Utility`，在 PS7 优先的 `PSModulePath` 下会让 5.1 子进程抛 `CommandNotFoundException`，脚本"按环境变色"） | `Test-HashUtilSelfTest`（供上面两个脚本的 `-SelfTestRed` 调用）：钉住 64B 0x00..0x3F 的标准值、同内容同 hash、翻一位必变、16 位截断 |
 | `verify_gate_reconnect.ps1` | **实机门禁**：只重启 GameGate 制造一次网关重连，然后跑真实客户端进世界；断言 ① 流程走到 `ingame` 且截图画出画面 ② 抖动后没有新增 `SetGateUserList` NRE ③ GameSvr 日志出现第二条"网关已打开" | `-SelfTestRed`：断言一个不存在的阶段，必须判 RED |
 | `gate-slot-probe/` | 不起整栈、不碰 oracle 进程的**确定性探针**：直接跑生产类型 `TCPNetChannel`，用"连接#1 → 断开 → 连接#2"复现/守护"网关重连后槽位失配"。输出槽位表与四项判据 | 先跑未修版本必须 1 GREEN / 3 RED（见交付说明） |
 | `cond-crash-probe/` | 脚本派发/条件求值的**确定性探针**：`--line`/`--script --label`/`--sweep`（双口径统计 + 语料漂移）/`--verify-corpus`/`--axis-audit`（证明"只能改解析器"）/`--gate`（回归门禁，见下） | `--gate --force-legacy` 必须判红（把现行口径当成旧位移评估，不碰源码） |

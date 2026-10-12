@@ -1,0 +1,20 @@
+# 改坏必红 A：Get-Sha256Hex 返回常量 '0'*64（其余不动）
+$ powershell -ExecutionPolicy Bypass -File tools/oracle/deploy_gamesvr.ps1 -SelfTestRed
+---
+SELFTEST_RED deploy_gamesvr：验证 Get-Sha256Hex（.NET SHA256，环境无关）
+  [RED] 钉住的标准 SHA256 不符: 0000000000000000000000000000000000000000000000000000000000000000 != fdeab9acf3710362bd2658cdc9a29e8f9c757fcf9811603a8c447cd1d9151108
+  [OK ] 同内容同 hash
+  [RED] 翻一位后 hash 不变（对篡改不敏感 ⇒ 门禁失效）
+  [OK ] 16 位截断 = 前 16 位
+SELFTEST_RED RED
+rc=1
+
+$ powershell -ExecutionPolicy Bypass -File tools/oracle/reconcile_deployment.ps1 -SelfTestRed -OutDir E:/tmp/m2svr-hash-unify/out
+---
+SELFTEST identity=MATCH bitflip=MATCH missing-src=DEPLOY-ONLY
+  [RED] 钉住的标准 SHA256 不符: 0000000000000000000000000000000000000000000000000000000000000000 != fdeab9acf3710362bd2658cdc9a29e8f9c757fcf9811603a8c447cd1d9151108
+  [OK ] 同内容同 hash
+  [RED] 翻一位后 hash 不变（对篡改不敏感 ⇒ 门禁失效）
+  [OK ] 16 位截断 = 前 16 位
+SELFTEST_RED RED: 比较器对篡改不敏感或哈希实现不合格——门禁失效！
+rc=1

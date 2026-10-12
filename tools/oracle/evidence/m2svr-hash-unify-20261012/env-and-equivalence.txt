@@ -1,0 +1,13 @@
+$ powershell -NoProfile -Command "(Get-Command Get-FileHash -EA SilentlyContinue) ..."   # lane 实况 PSModulePath
+---
+lane: Get-FileHash MISSING（PS7 模块优先，5.1 不导出）
+
+# 对照：把 PSModulePath 限制到 5.1 自带模块目录后 Get-FileHash 可用，
+# 在同一文件上比较 (Get-FileHash -Algorithm SHA256).Hash 与新的 Get-Sha256Hex：
+$ powershell -NoProfile -Command "$env:PSModulePath='C:\Windows\system32\WindowsPowerShell\v1.0\Modules'; ..."
+---
+file            = E:\MirServer\M2GameSvr\M2Server.dll
+Get-FileHash    = 1f450d1e902909f40243a33bfd0b45789ed55b9c1f1e1b384b58c0cdb494d124
+Get-Sha256Hex   = 1f450d1e902909f40243a33bfd0b45789ed55b9c1f1e1b384b58c0cdb494d124
+identical       = True
+rc=0
