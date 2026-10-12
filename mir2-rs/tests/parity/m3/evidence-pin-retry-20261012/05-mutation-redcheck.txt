@@ -1,0 +1,17 @@
+# 改坏必红（真跑后还原）+ 历史 pair 判据（owner 2026-10-12 16:30）
+# 命令：powershell -ExecutionPolicy Bypass -File E:/tmp/m3bag-pin-retry-redcheck.ps1
+#        （harness 自 dot-source mir2-rs/tests/parity/m3/gate_guards.ps1，用生产函数 Test-M3PinAttemptsComparable / Get-M3PinAttemptsGuard）
+
+EXPECTED_ATTEMPTS 2
+--- 历史 B-1/B-2 各运行的 attempts（由 attack_diff.py pin_attempts 从 stdout 原样复算） ---
+PAIR c2-vs-c3           => PREREQ_MISSING fail-closed failed=[pin_attempts_retried]
+PAIR c1-vs-c3           => PREREQ_MISSING fail-closed failed=[pin_attempts_retried,pin_attempts_retried]
+PAIR r1-vs-r2           => PIN_ATTEMPTS_OK 可比 failed=[]
+PAIR c1-vs-c3(recheck)  => PREREQ_MISSING fail-closed failed=[pin_attempts_retried,pin_attempts_retried]
+--- 改坏必红（真跑后还原）：同一会话 attempts 2 -> 3 -> 还原 2 ---
+[介入前 attempts=2] failed=[] retried=False
+  RED: 会话 mut 的 pin 重试超期望：attempts=3 > expected=2（额外重试 1 轮）——每次重试多跑 pin+settle，攻击序列起始的全局 RNG 位置被推移，两次运行逐 k 不可比
+[人为改坏 attempts=3] failed=[pin_attempts_retried] retried=True
+[还原 attempts=2] failed=[] retried=False
+MUTATION_REDCHECK GREEN(改坏必红 + 还原必绿)
+rc=0

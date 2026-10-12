@@ -1,0 +1,9 @@
+# 探针可复现性：连跑两次，逐字节比较（ActorId 已固定）
+b8dcb5f89ac2e9884a73ba1fcd081f71d101123042e666e8010843339e2f09de *mir2-rs/tests/parity/m3/map-effect-probe/vectors/map_effect_vectors.json
+e1960d24e89c6048534612e71f1061c62157ba79354d99363f640961c349ed93 *mir2-rs/tests/parity/m3/map-effect-probe/vectors/map_effect_vectors.tsv
+0137520a275db037894dd596033d8ae98d946b34d2a8deb71f1cc118423895e3 *mir2-rs/tests/parity/m3/map-effect-probe/vectors/context_reachability.tsv
+map-effect-probe: wrote .\mir2-rs\tests\parity\m3\map-effect-probe\vectors\map_effect_vectors.json (160 cases) / .\mir2-rs\tests\parity\m3\map-effect-probe\vectors\context_reachability.tsv (7 rows)
+## run2
+b8dcb5f89ac2e9884a73ba1fcd081f71d101123042e666e8010843339e2f09de *mir2-rs/tests/parity/m3/map-effect-probe/vectors/map_effect_vectors.json
+e1960d24e89c6048534612e71f1061c62157ba79354d99363f640961c349ed93 *mir2-rs/tests/parity/m3/map-effect-probe/vectors/map_effect_vectors.tsv
+0137520a275db037894dd596033d8ae98d946b34d2a8deb71f1cc118423895e3 *mir2-rs/tests/parity/m3/map-effect-probe/vectors/context_reachability.tsv

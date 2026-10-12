@@ -1,0 +1,2 @@
+# cargo fmt --all -- --check（合并 master 522345a5 后 head b024b307）
+fmt rc=0

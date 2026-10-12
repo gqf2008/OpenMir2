@@ -1,0 +1,13 @@
+  正在确定要还原的项目…
+  所有项目均是最新的，无法还原。
+  OpenMir2 -> E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\src\OpenMir2\bin\Release\net8.0\OpenMir2.dll
+  SystemModule -> E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\src\Modules\SystemModule\bin\Release\net8.0\SystemModule.dll
+  ScriptSystem -> E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\src\Modules\ScriptEngine\bin\Release\net8.0\ScriptSystem.dll
+  M2Server -> E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\src\M2Server\bin\Release\net8.0\M2Server.dll
+  MapEffectProbe -> E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\tests\parity\m3\map-effect-probe\bin\Release\net8.0\map-effect-probe.dll
+
+已成功生成。
+    0 个警告
+    0 个错误
+
+已用时间 00:00:01.55

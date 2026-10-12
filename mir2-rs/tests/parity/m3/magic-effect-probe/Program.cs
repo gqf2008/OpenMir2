@@ -148,16 +148,19 @@ internal static class Program
 
     private static readonly Dictionary<ushort, Reach> CtxReach = new()
     {
-        [8] = new Reach("MagPushArround", "MagicManager.cs:24-52", "map_context"),   // 抗拒火环（走 CharPushed ⇒ Envir）
-        [17] = new Reach("MagMakeSlave", "MagicManager.cs:1308-1335", "map_context"), // 召唤骷髅（刷怪 ⇒ Envir）
+        // 第十片（map-effect-probe）已把 8/37/21/46 用「合成真格式 .map + 真身 Envirnoment」离线直调成功
+        // ⇒ `probeable`；17/30/41 需 `SystemShare.WorldEngine` 真召唤 ⇒ 仍 `map_context`（见
+        // map-effect-probe/vectors/context_reachability.tsv 的 missing_prereq）。
+        [8] = new Reach("MagPushArround", "MagicManager.cs:24-52", "probeable"),   // 抗拒火环（map-effect-probe）
+        [17] = new Reach("MagMakeSlave", "MagicManager.cs:1308-1335", "map_context"), // 召唤骷髅（WorldEngine 真召唤）
         [20] = new Reach("MagTamming", "MagicManager.cs:704-825", "probeable"),       // 诱惑之光
-        [21] = new Reach("MagSaceMove", "MagicManager.cs:876-891", "map_context"),    // 瞬息移动（MapRandomMove ⇒ Envir）
+        [21] = new Reach("MagSaceMove", "MagicManager.cs:876-891", "probeable"),    // 瞬息移动（map-effect-probe）
         [30] = new Reach("MagMakeSinSuSlave", "MagicManager.cs:1269-1306", "map_context"),
         [32] = new Reach("MagTurnUndead", "MagicManager.cs:827-856", "probeable"),    // 圣言术
-        [37] = new Reach("MagPushArround", "MagicManager.cs:24-52", "map_context"),   // 雷神之怒（同 MagPushArround 入口）
+        [37] = new Reach("MagPushArround", "MagicManager.cs:24-52", "probeable"),   // 雷神之怒（同 MagPushArround 入口）
         [40] = new Reach("<inline>", "MagicManager.cs:495-523", "inline"),            // 十方斩（内联清状态）
         [41] = new Reach("MagMakeAngelSlave", "MagicManager.cs:1343-1354", "map_context"),
-        [46] = new Reach("MagMakeClone", "MagicManager.cs:1337-1341", "map_context"), // 分身术（PlayCloneObject ⇒ Envir）
+        [46] = new Reach("MagMakeClone", "MagicManager.cs:1337-1341", "probeable"), // 分身术（map-effect-probe）
     };
 
     /// <summary>

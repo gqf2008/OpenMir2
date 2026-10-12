@@ -1,0 +1,15 @@
+# verify_sha256sums.py（repo/LF 归一口径）
+## map-effect-probe
+GREEN mir2-rs\tests\parity\m3\map-effect-probe\SHA256SUMS.txt  [repo 口径]  OK 5/5
+## magic-effect-probe
+GREEN mir2-rs\tests\parity\m3\magic-effect-probe\SHA256SUMS.txt  [repo 口径]  OK 6/6
+## 改坏必红（临时改 1 字节副本）
+## 改坏 context_reachability.tsv 后复核（期望 RED）
+RED   mir2-rs\tests\parity\m3\map-effect-probe\SHA256SUMS.txt  [repo 口径]  OK 4/5
+       mismatch: E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\tests\parity\m3\map-effect-probe\vectors\context_reachability.tsv
+         清单 0137520a275db037894dd596033d8ae98d946b34d2a8deb71f1cc118423895e3
+         实算 618222a275c17ef809a9b48c9b39c20de295cec16973af5ea6041825cf57c014  (text attr=unspecified)
+verifier rc=1
+## 还原后复核（期望 GREEN）
+GREEN mir2-rs\tests\parity\m3\map-effect-probe\SHA256SUMS.txt  [repo 口径]  OK 5/5
+verifier rc=0

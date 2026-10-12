@@ -1,0 +1,71 @@
+M3 门禁护栏自检  evidence=E:\tmp\openmir2-m3gs\selftest-20261012-163836
+③ Format-M3Scenario（两侧 baseline.json 的 fixed_new_chr 同形态）
+  [OK  ] scenario/固定=Job=1 Hair=2 Sex=0                       
+  [OK  ] scenario/默认=(off)                                    
+① Get-M3EntryGuard（-Side rust 必须是已知 Rust 入口 + 期望端口）
+  [OK  ] entry/已知Rust三入口=绿                                    side=rust failed=[]
+  [OK  ] entry/C#实现@rust侧=红                                   side=rust failed=[rust_side_entry_not_known_rust]
+  [OK  ] entry/C#实现@csharp侧=绿                                 side=csharp failed=[]
+  [OK  ] entry/未知进程foo.exe=红(旧护栏放行)                           side=rust failed=[rust_side_entry_not_known_rust]
+  [OK  ] entry/已知Rust接错端口=红(旧护栏放行)                            side=rust failed=[rust_side_entry_not_known_rust]
+  [OK  ] entry/端口没听=红                                         side=rust failed=[entry_ports_not_listening]
+② Get-M3SessionDirFault（本侧会话目录空值防线）
+  [OK  ] sessionDir/null=session_dir_missing                  null
+  [OK  ] sessionDir/目录对象=无fault                               DirectoryInfo
+③ Get-M3PeerScenarioGuard（参照会话建角场景一致性）
+  [OK  ] peer/场景一致=绿                                          failed=[] peer='Job=1 Hair=2 Sex=0'
+  [OK  ] peer/固定vs默认=红                                        failed=[peer_scenario_mismatch]
+  [OK  ] peer/两侧都off=绿                                        failed=[]
+  [OK  ] peer/缺baseline.json=红                                failed=[peer_baseline_missing]
+  [OK  ] peer/缺fixed_new_chr=红                                failed=[peer_fixed_new_chr_missing]
+  [OK  ] peer/baseline.json坏JSON=红(不中断)                       failed=[peer_baseline_invalid]
+④ Get-M3PeerBagEquipScopeGuard（参照会话背包/装备开关一致性；T-14 复跑口径）
+  [OK  ] bagscope/两侧同开关(关挂机)=绿                                failed=[] peer='on step_ms=1000 start_delay_ms=3000 disable_autoplay=True'
+  [OK  ] bagscope/旧开挂机peer=红(autoplay_on)                     failed=[peer_bag_equip_autoplay_on] peer='on step_ms=1000 start_delay_ms=3000 disable_autoplay=False'
+  [OK  ] bagscope/step_ms不同=红                                 failed=[peer_bag_equip_scope_mismatch]
+  [OK  ] bagscope/两侧off=绿                                     failed=[]
+  [OK  ] bagscope/本侧on+peer缺字段=红                              failed=[peer_bag_equip_scope_missing]
+  [OK  ] bagscope/本侧off+peer缺字段=绿(旧产物默认关)                     failed=[]
+  [OK  ] bagscope/baseline.json坏JSON=红(不中断)                   failed=[peer_baseline_invalid]
+⑤ Get-M3PeerStartPoseGuard（T-14 固定起点变体；owner 86478c55/d7798370）
+  [OK  ] pose/口径形态=map=0 home=0,289,618 pos=289,618 level=1 dir=0 bag=48@0,97@1,207@2,3@3 abil=1 
+  [OK  ] pose/两侧同 pin=绿                                       failed=[] peer='map=0 home=0,289,618 pos=289,618 level=1 dir=0 bag=48@0,97@1,207@2,3@3 abil=1'
+  [OK  ] pose/peer pin 不同=红                                   failed=[peer_start_pose_mismatch]
+  [OK  ] pose/本侧 pin+peer 缺字段=红                               failed=[peer_start_pose_missing]
+  [OK  ] pose/两侧 none=绿                                       failed=[]
+  [OK  ] pose/形态认不出=红                                         failed=[peer_start_pose_invalid]
+⑥ Get-M3PinHoldVerdict / Invoke-M3PinSettleHold（T-14 两相 pin 的 settle+hold；owner 2026-10-12 08:20）
+  [OK  ] pin/仪器形态=settle_seconds=3 max_attempts=5 consecutive=2 
+  [OK  ] pin/跳过 settle=红(pin_settle_skipped)                  hold=False failed=[pin_settle_skipped]
+  [OK  ] pin/单次观测=红(needs_consecutive)                        hold=False failed=[pin_hold_needs_consecutive_settle]
+  [OK  ] pin/连续两轮到齐=绿(hold)                                   hold=True failed=[]
+  [OK  ] pin/存档覆盖=红(pin_char/bag/abil_mismatch)               hold=False failed=[pin_char_mismatch,pin_bag_mismatch,pin_abil_mismatch]
+  [OK  ] pin/循环·跳过 settle=红(fail-closed)                      hold=False attempts=3
+  [OK  ] pin/循环·正常=绿(attempt=2)                               hold=True attempts=2 settle_rounds=2
+⑦ Get-M3SchemaColumns / Test-M3PinSqlColumns（pin SQL 别名/列；不连库；m3cs tick16 finding）
+  [OK  ] schema/characters 有 IncHealth/IncSpell               
+  [OK  ] schema/characters_ablity 无 IncHealth                 
+  [OK  ] pin/生产 SQL 别名列全对=绿(0 violation)                      violations=[]
+  [OK  ] pin/改坏 a.IncHealth=红                                 violations=[列不存在: a.IncHealth（characters_ablity 无此列）;列不存在: a.IncSpell（characters_ablity 无此列）]
+⑧ Test-M3SeedInjected（两侧种子注入证据；不连库；owner 2026-10-12 11:55 F-C）
+  [OK  ] seed/csharp INJECT_OK 42=绿                           
+  [OK  ] seed/csharp 无 INJECT_OK=红                            reason=C# 种子日志无 INJECT_OK 行（hooked GameSvr 未注入种子？）: E:\tmp\openmir2-m3gs\selftest-20261012-163836\work\f-c-cs-bad.tsv
+  [OK  ] seed/csharp 种子 7!=42=红                               reason=C# 注入种子 7 != 期望 42
+  [OK  ] seed/csharp 空路径=红(fail-closed)                       reason=未提供种子日志路径（-CsharpSeedLog / $env:MIR2_RNG_LOG 或 -RustSeedLog）
+  [OK  ] seed/rust SEED_PROBE 42=绿                            
+  [OK  ] seed/rust 无 SEED_PROBE=红                             reason=Rust 启动日志无 SEED_PROBE 行（game-svr 未注入 MIR2_RNG_SEED？）: E:\tmp\openmir2-m3gs\selftest-20261012-163836\work\f-c-rs-bad.log
+  [OK  ] seed/rust 启动器行 7!=42=红                               reason=RUST_SEED_INJECTED=7 != 期望 42
+⑨ Get-M3PinAttemptsGuard / Test-M3PinAttemptsComparable（pin 重试账本；owner 2026-10-12 16:30）
+  [OK  ] pinacct/期望 attempts=2（与仪器 consecutive 同源）            expected=2
+  [OK  ] pinacct/形态 attempts=2 expected=2 settle_rounds=2 max_attempts=5 
+  [OK  ] pinacct/attempts=2=绿                                 failed=[]
+  [OK  ] pinacct/attempts=4=红(retried)                        failed=[pin_attempts_retried]
+  [OK  ] pinacct/两侧一侧重试=红                                     failed=[pin_attempts_retried]
+  [OK  ] pinacct/缺字段=红(missing)                               failed=[pin_attempts_missing]
+  [OK  ] pinacct/形态认不出=红(invalid)                             failed=[pin_attempts_invalid]
+  [OK  ] pinacct/attempts=1=红(under/仪器被削弱)                    failed=[pin_attempts_under_expected]
+  [OK  ] pinacct/期望漂移=红(expected_mismatch)                    failed=[pin_attempts_expected_mismatch]
+  [OK  ] pinacct/baseline 坏 JSON=红(不中断)                       failed=[pin_attempts_baseline_invalid]
+SELFTEST_REPORT E:\tmp\openmir2-m3gs\selftest-20261012-163836\selftest.json
+SUMMARY total=57 failed=0
+GREEN: 九条机判护栏的判红/判绿口径都经构造输入验证

@@ -1,0 +1,161 @@
+seed	20261012
+push	p_all_dir	20314372	8	930000	30	30	50	3	60	60		920001,31,30,10,0,0,4,1;920002,29,30,10,0,0,4,1;920003,30,29,10,0,0,4,1;920004,30,31,10,0,0,4,1;920005,31,31,10,0,0,4,1;920006,31,29,10,0,0,4,1;920007,29,31,10,0,0,4,1;920008,29,29,10,0,0,4,1	1|Next(max)|20|18|max;2|Next(max)|2|1|max;3|Next(max)|20|16|max;4|Next(max)|2|1|max;5|Next(max)|20|9|max;6|Next(max)|2|1|max;7|Next(max)|20|6|max;8|Next(max)|2|0|max;9|Next(max)|20|1|max;10|Next(max)|2|0|max;11|Next(max)|20|6|max;12|Next(max)|2|0|max;13|Next(max)|20|3|max;14|Next(max)|2|1|max;15|Next(max)|20|17|max;16|Next(max)|2|1|max	8	35,30,6;25,30,2;30,25,4;30,34,0;34,34,7;34,26,5;25,35,1;25,25,3
+push	p_all_dir	20314373	8	930001	30	30	50	3	60	60		920001,31,30,10,0,0,4,1;920002,29,30,10,0,0,4,1;920003,30,29,10,0,0,4,1;920004,30,31,10,0,0,4,1;920005,31,31,10,0,0,4,1;920006,31,29,10,0,0,4,1;920007,29,31,10,0,0,4,1;920008,29,29,10,0,0,4,1	1|Next(max)|20|8|max;2|Next(max)|2|0|max;3|Next(max)|20|10|max;4|Next(max)|2|1|max;5|Next(max)|20|18|max;6|Next(max)|2|1|max;7|Next(max)|20|15|max;8|Next(max)|2|1|max;9|Next(max)|20|3|max;10|Next(max)|2|1|max;11|Next(max)|20|0|max;12|Next(max)|2|1|max;13|Next(max)|20|17|max;14|Next(max)|2|0|max;15|Next(max)|20|11|max;16|Next(max)|2|0|max	8	34,30,6;25,30,2;30,25,4;30,35,0;35,35,7;35,25,5;26,34,1;26,26,3
+push	p_all_dir	20314374	8	930002	30	30	50	3	60	60		920001,31,30,10,0,0,4,1;920002,29,30,10,0,0,4,1;920003,30,29,10,0,0,4,1;920004,30,31,10,0,0,4,1;920005,31,31,10,0,0,4,1;920006,31,29,10,0,0,4,1;920007,29,31,10,0,0,4,1;920008,29,29,10,0,0,4,1	1|Next(max)|20|18|max;2|Next(max)|2|0|max;3|Next(max)|20|4|max;4|Next(max)|2|0|max;5|Next(max)|20|7|max;6|Next(max)|2|0|max;7|Next(max)|20|4|max;8|Next(max)|2|0|max;9|Next(max)|20|5|max;10|Next(max)|2|1|max;11|Next(max)|20|15|max;12|Next(max)|2|1|max;13|Next(max)|20|10|max;14|Next(max)|2|1|max;15|Next(max)|20|5|max;16|Next(max)|2|0|max	8	34,30,6;26,30,2;30,26,4;30,34,0;35,35,7;35,25,5;25,35,1;26,26,3
+push	p_all_dir	20314375	8	930003	30	30	50	3	60	60		920001,31,30,10,0,0,4,1;920002,29,30,10,0,0,4,1;920003,30,29,10,0,0,4,1;920004,30,31,10,0,0,4,1;920005,31,31,10,0,0,4,1;920006,31,29,10,0,0,4,1;920007,29,31,10,0,0,4,1;920008,29,29,10,0,0,4,1	1|Next(max)|20|9|max;2|Next(max)|2|1|max;3|Next(max)|20|18|max;4|Next(max)|2|0|max;5|Next(max)|20|16|max;6|Next(max)|2|0|max;7|Next(max)|20|13|max;8|Next(max)|2|1|max;9|Next(max)|20|8|max;10|Next(max)|2|0|max;11|Next(max)|20|10|max;12|Next(max)|2|0|max;13|Next(max)|20|4|max;14|Next(max)|2|0|max;15|Next(max)|20|19|max;16|Next(max)|2|1|max	8	35,30,6;26,30,2;30,26,4;30,35,0;34,34,7;34,26,5;26,34,1;25,25,3
+push	p_all_dir	20314368	8	930004	30	30	50	3	60	60		920001,31,30,10,0,0,4,1;920002,29,30,10,0,0,4,1;920003,30,29,10,0,0,4,1;920004,30,31,10,0,0,4,1;920005,31,31,10,0,0,4,1;920006,31,29,10,0,0,4,1;920007,29,31,10,0,0,4,1;920008,29,29,10,0,0,4,1	1|Next(max)|20|16|max;2|Next(max)|2|1|max;3|Next(max)|20|0|max;4|Next(max)|2|1|max;5|Next(max)|20|13|max;6|Next(max)|2|0|max;7|Next(max)|20|10|max;8|Next(max)|2|0|max;9|Next(max)|20|11|max;10|Next(max)|2|1|max;11|Next(max)|20|7|max;12|Next(max)|2|0|max;13|Next(max)|20|8|max;14|Next(max)|2|0|max;15|Next(max)|20|1|max;16|Next(max)|2|0|max	8	35,30,6;25,30,2;30,26,4;30,34,0;35,35,7;34,26,5;26,34,1;26,26,3
+push	p_all_dir	20314369	8	930005	30	30	50	3	60	60		920001,31,30,10,0,0,4,1;920002,29,30,10,0,0,4,1;920003,30,29,10,0,0,4,1;920004,30,31,10,0,0,4,1;920005,31,31,10,0,0,4,1;920006,31,29,10,0,0,4,1;920007,29,31,10,0,0,4,1;920008,29,29,10,0,0,4,1	1|Next(max)|20|6|max;2|Next(max)|2|1|max;3|Next(max)|20|14|max;4|Next(max)|2|0|max;5|Next(max)|20|2|max;6|Next(max)|2|0|max;7|Next(max)|20|19|max;8|Next(max)|2|1|max;9|Next(max)|20|13|max;10|Next(max)|2|0|max;11|Next(max)|20|1|max;12|Next(max)|2|1|max;13|Next(max)|20|2|max;14|Next(max)|2|1|max;15|Next(max)|20|15|max;16|Next(max)|2|1|max	8	35,30,6;26,30,2;30,26,4;30,35,0;34,34,7;35,25,5;25,35,1;25,25,3
+push	p_all_dir	20314370	8	930006	30	30	50	3	60	60		920001,31,30,10,0,0,4,1;920002,29,30,10,0,0,4,1;920003,30,29,10,0,0,4,1;920004,30,31,10,0,0,4,1;920005,31,31,10,0,0,4,1;920006,31,29,10,0,0,4,1;920007,29,31,10,0,0,4,1;920008,29,29,10,0,0,4,1	1|Next(max)|20|17|max;2|Next(max)|2|0|max;3|Next(max)|20|8|max;4|Next(max)|2|0|max;5|Next(max)|20|11|max;6|Next(max)|2|1|max;7|Next(max)|20|8|max;8|Next(max)|2|0|max;9|Next(max)|20|16|max;10|Next(max)|2|1|max;11|Next(max)|20|16|max;12|Next(max)|2|1|max;13|Next(max)|20|15|max;14|Next(max)|2|1|max;15|Next(max)|20|9|max;16|Next(max)|2|1|max	8	34,30,6;26,30,2;30,25,4;30,34,0;35,35,7;35,25,5;25,35,1;25,25,3
+push	p_all_dir	20314371	8	930007	30	30	50	3	60	60		920001,31,30,10,0,0,4,1;920002,29,30,10,0,0,4,1;920003,30,29,10,0,0,4,1;920004,30,31,10,0,0,4,1;920005,31,31,10,0,0,4,1;920006,31,29,10,0,0,4,1;920007,29,31,10,0,0,4,1;920008,29,29,10,0,0,4,1	1|Next(max)|20|7|max;2|Next(max)|2|0|max;3|Next(max)|20|2|max;4|Next(max)|2|0|max;5|Next(max)|20|0|max;6|Next(max)|2|1|max;7|Next(max)|20|17|max;8|Next(max)|2|1|max;9|Next(max)|20|18|max;10|Next(max)|2|1|max;11|Next(max)|20|11|max;12|Next(max)|2|0|max;13|Next(max)|20|9|max;14|Next(max)|2|0|max;15|Next(max)|20|3|max;16|Next(max)|2|0|max	8	34,30,6;26,30,2;30,25,4;30,35,0;35,35,7;34,26,5;26,34,1;26,26,3
+push	p_all_dir	20314380	8	930008	30	30	50	3	60	60		920001,31,30,10,0,0,4,1;920002,29,30,10,0,0,4,1;920003,30,29,10,0,0,4,1;920004,30,31,10,0,0,4,1;920005,31,31,10,0,0,4,1;920006,31,29,10,0,0,4,1;920007,29,31,10,0,0,4,1;920008,29,29,10,0,0,4,1	1|Next(max)|20|1|max;2|Next(max)|2|0|max;3|Next(max)|20|8|max;4|Next(max)|2|0|max;5|Next(max)|20|1|max;6|Next(max)|2|1|max;7|Next(max)|20|18|max;8|Next(max)|2|0|max;9|Next(max)|20|0|max;10|Next(max)|2|0|max;11|Next(max)|20|3|max;12|Next(max)|2|0|max;13|Next(max)|20|13|max;14|Next(max)|2|1|max;15|Next(max)|20|9|max;16|Next(max)|2|1|max	8	34,30,6;26,30,2;30,25,4;30,34,0;34,34,7;34,26,5;25,35,1;25,25,3
+push	p_all_dir	20314381	8	930009	30	30	50	3	60	60		920001,31,30,10,0,0,4,1;920002,29,30,10,0,0,4,1;920003,30,29,10,0,0,4,1;920004,30,31,10,0,0,4,1;920005,31,31,10,0,0,4,1;920006,31,29,10,0,0,4,1;920007,29,31,10,0,0,4,1;920008,29,29,10,0,0,4,1	1|Next(max)|20|12|max;2|Next(max)|2|0|max;3|Next(max)|20|2|max;4|Next(max)|2|1|max;5|Next(max)|20|10|max;6|Next(max)|2|1|max;7|Next(max)|20|7|max;8|Next(max)|2|1|max;9|Next(max)|20|3|max;10|Next(max)|2|1|max;11|Next(max)|20|18|max;12|Next(max)|2|0|max;13|Next(max)|20|7|max;14|Next(max)|2|0|max;15|Next(max)|20|3|max;16|Next(max)|2|0|max	8	34,30,6;25,30,2;30,25,4;30,35,0;35,35,7;34,26,5;26,34,1;26,26,3
+push	p_all_dir	20314382	8	930010	30	30	50	3	60	60		920001,31,30,10,0,0,4,1;920002,29,30,10,0,0,4,1;920003,30,29,10,0,0,4,1;920004,30,31,10,0,0,4,1;920005,31,31,10,0,0,4,1;920006,31,29,10,0,0,4,1;920007,29,31,10,0,0,4,1;920008,29,29,10,0,0,4,1	1|Next(max)|20|2|max;2|Next(max)|2|1|max;3|Next(max)|20|16|max;4|Next(max)|2|1|max;5|Next(max)|20|19|max;6|Next(max)|2|0|max;7|Next(max)|20|16|max;8|Next(max)|2|0|max;9|Next(max)|20|5|max;10|Next(max)|2|1|max;11|Next(max)|20|13|max;12|Next(max)|2|1|max;13|Next(max)|20|0|max;14|Next(max)|2|1|max;15|Next(max)|20|17|max;16|Next(max)|2|0|max	8	35,30,6;25,30,2;30,26,4;30,34,0;35,35,7;35,25,5;25,35,1;26,26,3
+push	p_all_dir	20314383	8	930011	30	30	50	3	60	60		920001,31,30,10,0,0,4,1;920002,29,30,10,0,0,4,1;920003,30,29,10,0,0,4,1;920004,30,31,10,0,0,4,1;920005,31,31,10,0,0,4,1;920006,31,29,10,0,0,4,1;920007,29,31,10,0,0,4,1;920008,29,29,10,0,0,4,1	1|Next(max)|20|12|max;2|Next(max)|2|1|max;3|Next(max)|20|10|max;4|Next(max)|2|1|max;5|Next(max)|20|8|max;6|Next(max)|2|0|max;7|Next(max)|20|5|max;8|Next(max)|2|1|max;9|Next(max)|20|8|max;10|Next(max)|2|0|max;11|Next(max)|20|8|max;12|Next(max)|2|1|max;13|Next(max)|20|14|max;14|Next(max)|2|0|max;15|Next(max)|20|11|max;16|Next(max)|2|1|max	8	35,30,6;25,30,2;30,26,4;30,35,0;34,34,7;35,25,5;26,34,1;25,25,3
+push	p_wall_block	20314372	8	930000	30	30	50	3	60	60	33,30;32,29;30,27;34,30	920001,31,30,10,0,0,4,1;920002,29,30,10,0,0,4,1;920003,30,29,10,0,0,4,1;920004,30,31,10,0,0,4,1	1|Next(max)|20|18|max;2|Next(max)|2|1|max;3|Next(max)|20|16|max;4|Next(max)|2|1|max;5|Next(max)|20|9|max;6|Next(max)|2|1|max;7|Next(max)|20|6|max;8|Next(max)|2|0|max	4	32,30,6;25,30,2;30,28,4;30,34,0
+push	p_wall_block	20314373	8	930001	30	30	50	3	60	60	33,30;32,29;30,27;34,30	920001,31,30,10,0,0,4,1;920002,29,30,10,0,0,4,1;920003,30,29,10,0,0,4,1;920004,30,31,10,0,0,4,1	1|Next(max)|20|8|max;2|Next(max)|2|0|max;3|Next(max)|20|10|max;4|Next(max)|2|1|max;5|Next(max)|20|18|max;6|Next(max)|2|1|max;7|Next(max)|20|15|max;8|Next(max)|2|1|max	4	32,30,6;25,30,2;30,28,4;30,35,0
+push	p_wall_block	20314374	8	930002	30	30	50	3	60	60	33,30;32,29;30,27;34,30	920001,31,30,10,0,0,4,1;920002,29,30,10,0,0,4,1;920003,30,29,10,0,0,4,1;920004,30,31,10,0,0,4,1	1|Next(max)|20|18|max;2|Next(max)|2|0|max;3|Next(max)|20|4|max;4|Next(max)|2|0|max;5|Next(max)|20|7|max;6|Next(max)|2|0|max;7|Next(max)|20|4|max;8|Next(max)|2|0|max	4	32,30,6;26,30,2;30,28,4;30,34,0
+push	p_wall_block	20314375	8	930003	30	30	50	3	60	60	33,30;32,29;30,27;34,30	920001,31,30,10,0,0,4,1;920002,29,30,10,0,0,4,1;920003,30,29,10,0,0,4,1;920004,30,31,10,0,0,4,1	1|Next(max)|20|9|max;2|Next(max)|2|1|max;3|Next(max)|20|18|max;4|Next(max)|2|0|max;5|Next(max)|20|16|max;6|Next(max)|2|0|max;7|Next(max)|20|13|max;8|Next(max)|2|1|max	4	32,30,6;26,30,2;30,28,4;30,35,0
+push	p_wall_block	20314368	8	930004	30	30	50	3	60	60	33,30;32,29;30,27;34,30	920001,31,30,10,0,0,4,1;920002,29,30,10,0,0,4,1;920003,30,29,10,0,0,4,1;920004,30,31,10,0,0,4,1	1|Next(max)|20|16|max;2|Next(max)|2|1|max;3|Next(max)|20|0|max;4|Next(max)|2|1|max;5|Next(max)|20|13|max;6|Next(max)|2|0|max;7|Next(max)|20|10|max;8|Next(max)|2|0|max	4	32,30,6;25,30,2;30,28,4;30,34,0
+push	p_wall_block	20314369	8	930005	30	30	50	3	60	60	33,30;32,29;30,27;34,30	920001,31,30,10,0,0,4,1;920002,29,30,10,0,0,4,1;920003,30,29,10,0,0,4,1;920004,30,31,10,0,0,4,1	1|Next(max)|20|6|max;2|Next(max)|2|1|max;3|Next(max)|20|14|max;4|Next(max)|2|0|max;5|Next(max)|20|2|max;6|Next(max)|2|0|max;7|Next(max)|20|19|max;8|Next(max)|2|1|max	4	32,30,6;26,30,2;30,28,4;30,35,0
+push	p_wall_block	20314370	8	930006	30	30	50	3	60	60	33,30;32,29;30,27;34,30	920001,31,30,10,0,0,4,1;920002,29,30,10,0,0,4,1;920003,30,29,10,0,0,4,1;920004,30,31,10,0,0,4,1	1|Next(max)|20|17|max;2|Next(max)|2|0|max;3|Next(max)|20|8|max;4|Next(max)|2|0|max;5|Next(max)|20|11|max;6|Next(max)|2|1|max;7|Next(max)|20|8|max;8|Next(max)|2|0|max	4	32,30,6;26,30,2;30,28,4;30,34,0
+push	p_wall_block	20314371	8	930007	30	30	50	3	60	60	33,30;32,29;30,27;34,30	920001,31,30,10,0,0,4,1;920002,29,30,10,0,0,4,1;920003,30,29,10,0,0,4,1;920004,30,31,10,0,0,4,1	1|Next(max)|20|7|max;2|Next(max)|2|0|max;3|Next(max)|20|2|max;4|Next(max)|2|0|max;5|Next(max)|20|0|max;6|Next(max)|2|1|max;7|Next(max)|20|17|max;8|Next(max)|2|1|max	4	32,30,6;26,30,2;30,28,4;30,35,0
+push	p_wall_block	20314380	8	930008	30	30	50	3	60	60	33,30;32,29;30,27;34,30	920001,31,30,10,0,0,4,1;920002,29,30,10,0,0,4,1;920003,30,29,10,0,0,4,1;920004,30,31,10,0,0,4,1	1|Next(max)|20|1|max;2|Next(max)|2|0|max;3|Next(max)|20|8|max;4|Next(max)|2|0|max;5|Next(max)|20|1|max;6|Next(max)|2|1|max;7|Next(max)|20|18|max;8|Next(max)|2|0|max	4	32,30,6;26,30,2;30,28,4;30,34,0
+push	p_wall_block	20314381	8	930009	30	30	50	3	60	60	33,30;32,29;30,27;34,30	920001,31,30,10,0,0,4,1;920002,29,30,10,0,0,4,1;920003,30,29,10,0,0,4,1;920004,30,31,10,0,0,4,1	1|Next(max)|20|12|max;2|Next(max)|2|0|max;3|Next(max)|20|2|max;4|Next(max)|2|1|max;5|Next(max)|20|10|max;6|Next(max)|2|1|max;7|Next(max)|20|7|max;8|Next(max)|2|1|max	4	32,30,6;25,30,2;30,28,4;30,35,0
+push	p_wall_block	20314382	8	930010	30	30	50	3	60	60	33,30;32,29;30,27;34,30	920001,31,30,10,0,0,4,1;920002,29,30,10,0,0,4,1;920003,30,29,10,0,0,4,1;920004,30,31,10,0,0,4,1	1|Next(max)|20|2|max;2|Next(max)|2|1|max;3|Next(max)|20|16|max;4|Next(max)|2|1|max;5|Next(max)|20|19|max;6|Next(max)|2|0|max;7|Next(max)|20|16|max;8|Next(max)|2|0|max	4	32,30,6;25,30,2;30,28,4;30,34,0
+push	p_wall_block	20314383	8	930011	30	30	50	3	60	60	33,30;32,29;30,27;34,30	920001,31,30,10,0,0,4,1;920002,29,30,10,0,0,4,1;920003,30,29,10,0,0,4,1;920004,30,31,10,0,0,4,1	1|Next(max)|20|12|max;2|Next(max)|2|1|max;3|Next(max)|20|10|max;4|Next(max)|2|1|max;5|Next(max)|20|8|max;6|Next(max)|2|0|max;7|Next(max)|20|5|max;8|Next(max)|2|1|max	4	32,30,6;25,30,2;30,28,4;30,35,0
+push	p_gates	20416772	37	930000	30	30	50	1	60	60		920001,31,30,10,0,0,4,1;920002,29,30,60,0,0,4,1;920003,30,29,10,1,0,4,1;920004,30,31,10,0,1,4,1;920005,35,30,10,0,0,4,1;920006,31,30,10,0,0,4,1	1|Next(max)|20|5|max;2|Next(max)|2|1|max;3|Next(max)|20|4|max;4|Next(max)|2|0|max	2	33,30,6;29,30,4;30,29,4;30,31,4;35,30,4;32,30,6
+push	p_gates	20416773	37	930001	30	30	50	1	60	60		920001,31,30,10,0,0,4,1;920002,29,30,60,0,0,4,1;920003,30,29,10,1,0,4,1;920004,30,31,10,0,1,4,1;920005,35,30,10,0,0,4,1;920006,31,30,10,0,0,4,1	1|Next(max)|20|15|max;2|Next(max)|2|0|max;3|Next(max)|20|17|max;4|Next(max)|2|0|max	2	32,30,6;29,30,4;30,29,4;30,31,4;35,30,4;32,30,6
+push	p_gates	20416774	37	930002	30	30	50	1	60	60		920001,31,30,10,0,0,4,1;920002,29,30,60,0,0,4,1;920003,30,29,10,1,0,4,1;920004,30,31,10,0,1,4,1;920005,35,30,10,0,0,4,1;920006,31,30,10,0,0,4,1	1|Next(max)|20|5|max;2|Next(max)|2|0|max;3|Next(max)|20|11|max;4|Next(max)|2|1|max	2	32,30,6;29,30,4;30,29,4;30,31,4;35,30,4;33,30,6
+push	p_gates	20416775	37	930003	30	30	50	1	60	60		920001,31,30,10,0,0,4,1;920002,29,30,60,0,0,4,1;920003,30,29,10,1,0,4,1;920004,30,31,10,0,1,4,1;920005,35,30,10,0,0,4,1;920006,31,30,10,0,0,4,1	1|Next(max)|20|16|max;2|Next(max)|2|1|max;3|Next(max)|20|5|max;4|Next(max)|2|1|max	2	33,30,6;29,30,4;30,29,4;30,31,4;35,30,4;33,30,6
+push	p_gates	20416768	37	930004	30	30	50	1	60	60		920001,31,30,10,0,0,4,1;920002,29,30,60,0,0,4,1;920003,30,29,10,1,0,4,1;920004,30,31,10,0,1,4,1;920005,35,30,10,0,0,4,1;920006,31,30,10,0,0,4,1	1|Next(max)|20|3|max;2|Next(max)|2|1|max;3|Next(max)|20|8|max;4|Next(max)|2|0|max	2	33,30,6;29,30,4;30,29,4;30,31,4;35,30,4;32,30,6
+push	p_gates	20416769	37	930005	30	30	50	1	60	60		920001,31,30,10,0,0,4,1;920002,29,30,60,0,0,4,1;920003,30,29,10,1,0,4,1;920004,30,31,10,0,1,4,1;920005,35,30,10,0,0,4,1;920006,31,30,10,0,0,4,1	1|Next(max)|20|13|max;2|Next(max)|2|1|max;3|Next(max)|20|2|max;4|Next(max)|2|1|max	2	33,30,6;29,30,4;30,29,4;30,31,4;35,30,4;33,30,6
+push	p_gates	20416770	37	930006	30	30	50	1	60	60		920001,31,30,10,0,0,4,1;920002,29,30,60,0,0,4,1;920003,30,29,10,1,0,4,1;920004,30,31,10,0,1,4,1;920005,35,30,10,0,0,4,1;920006,31,30,10,0,0,4,1	1|Next(max)|20|4|max;2|Next(max)|2|0|max;3|Next(max)|20|16|max;4|Next(max)|2|1|max	2	32,30,6;29,30,4;30,29,4;30,31,4;35,30,4;33,30,6
+push	p_gates	20416771	37	930007	30	30	50	1	60	60		920001,31,30,10,0,0,4,1;920002,29,30,60,0,0,4,1;920003,30,29,10,1,0,4,1;920004,30,31,10,0,1,4,1;920005,35,30,10,0,0,4,1;920006,31,30,10,0,0,4,1	1|Next(max)|20|14|max;2|Next(max)|2|1|max;3|Next(max)|20|10|max;4|Next(max)|2|1|max	2	33,30,6;29,30,4;30,29,4;30,31,4;35,30,4;33,30,6
+push	p_gates	20416780	37	930008	30	30	50	1	60	60		920001,31,30,10,0,0,4,1;920002,29,30,60,0,0,4,1;920003,30,29,10,1,0,4,1;920004,30,31,10,0,1,4,1;920005,35,30,10,0,0,4,1;920006,31,30,10,0,0,4,1	1|Next(max)|20|8|max;2|Next(max)|2|0|max;3|Next(max)|20|15|max;4|Next(max)|2|1|max	2	32,30,6;29,30,4;30,29,4;30,31,4;35,30,4;33,30,6
+push	p_gates	20416781	37	930009	30	30	50	1	60	60		920001,31,30,10,0,0,4,1;920002,29,30,60,0,0,4,1;920003,30,29,10,1,0,4,1;920004,30,31,10,0,1,4,1;920005,35,30,10,0,0,4,1;920006,31,30,10,0,0,4,1	1|Next(max)|20|19|max;2|Next(max)|2|0|max;3|Next(max)|20|9|max;4|Next(max)|2|0|max	2	32,30,6;29,30,4;30,29,4;30,31,4;35,30,4;32,30,6
+push	p_gates	20416782	37	930010	30	30	50	1	60	60		920001,31,30,10,0,0,4,1;920002,29,30,60,0,0,4,1;920003,30,29,10,1,0,4,1;920004,30,31,10,0,1,4,1;920005,35,30,10,0,0,4,1;920006,31,30,10,0,0,4,1	1|Next(max)|20|9|max;2|Next(max)|2|1|max;3|Next(max)|20|3|max;4|Next(max)|2|0|max	2	33,30,6;29,30,4;30,29,4;30,31,4;35,30,4;32,30,6
+push	p_gates	20416783	37	930011	30	30	50	1	60	60		920001,31,30,10,0,0,4,1;920002,29,30,60,0,0,4,1;920003,30,29,10,1,0,4,1;920004,30,31,10,0,1,4,1;920005,35,30,10,0,0,4,1;920006,31,30,10,0,0,4,1	1|Next(max)|20|19|max;2|Next(max)|2|0|max;3|Next(max)|20|17|max;4|Next(max)|2|1|max	2	32,30,6;29,30,4;30,29,4;30,31,4;35,30,4;33,30,6
+push	p_gates	20416776	37	930012	30	30	50	1	60	60		920001,31,30,10,0,0,4,1;920002,29,30,60,0,0,4,1;920003,30,29,10,1,0,4,1;920004,30,31,10,0,1,4,1;920005,35,30,10,0,0,4,1;920006,31,30,10,0,0,4,1	1|Next(max)|20|6|max;2|Next(max)|2|0|max;3|Next(max)|20|19|max;4|Next(max)|2|0|max	2	32,30,6;29,30,4;30,29,4;30,31,4;35,30,4;32,30,6
+push	p_gates	20416777	37	930013	30	30	50	1	60	60		920001,31,30,10,0,0,4,1;920002,29,30,60,0,0,4,1;920003,30,29,10,1,0,4,1;920004,30,31,10,0,1,4,1;920005,35,30,10,0,0,4,1;920006,31,30,10,0,0,4,1	1|Next(max)|20|17|max;2|Next(max)|2|0|max;3|Next(max)|20|13|max;4|Next(max)|2|0|max	2	32,30,6;29,30,4;30,29,4;30,31,4;35,30,4;32,30,6
+push	p_gates	20416778	37	930014	30	30	50	1	60	60		920001,31,30,10,0,0,4,1;920002,29,30,60,0,0,4,1;920003,30,29,10,1,0,4,1;920004,30,31,10,0,1,4,1;920005,35,30,10,0,0,4,1;920006,31,30,10,0,0,4,1	1|Next(max)|20|7|max;2|Next(max)|2|1|max;3|Next(max)|20|7|max;4|Next(max)|2|0|max	2	33,30,6;29,30,4;30,29,4;30,31,4;35,30,4;32,30,6
+push	p_gates	20416779	37	930015	30	30	50	1	60	60		920001,31,30,10,0,0,4,1;920002,29,30,60,0,0,4,1;920003,30,29,10,1,0,4,1;920004,30,31,10,0,1,4,1;920005,35,30,10,0,0,4,1;920006,31,30,10,0,0,4,1	1|Next(max)|20|18|max;2|Next(max)|2|1|max;3|Next(max)|20|1|max;4|Next(max)|2|1|max	2	33,30,6;29,30,4;30,29,4;30,31,4;35,30,4;33,30,6
+push	p_self_id	20314372	8	930000	30	30	50	3	60	60		920001,31,30,10,0,0,4,1;930000,29,30,10,0,0,4,0	1|Next(max)|20|18|max;2|Next(max)|2|1|max;3|Next(max)|20|16|max	1	35,30,6;29,30,4
+push	p_self_id	20314373	8	930001	30	30	50	3	60	60		920001,31,30,10,0,0,4,1;930001,29,30,10,0,0,4,0	1|Next(max)|20|8|max;2|Next(max)|2|0|max;3|Next(max)|20|10|max	1	34,30,6;29,30,4
+push	p_self_id	20314374	8	930002	30	30	50	3	60	60		920001,31,30,10,0,0,4,1;930002,29,30,10,0,0,4,0	1|Next(max)|20|18|max;2|Next(max)|2|0|max;3|Next(max)|20|4|max	1	34,30,6;29,30,4
+push	p_self_id	20314375	8	930003	30	30	50	3	60	60		920001,31,30,10,0,0,4,1;930003,29,30,10,0,0,4,0	1|Next(max)|20|9|max;2|Next(max)|2|1|max;3|Next(max)|20|18|max	1	35,30,6;29,30,4
+push	p_self_id	20314368	8	930004	30	30	50	3	60	60		920001,31,30,10,0,0,4,1;930004,29,30,10,0,0,4,0	1|Next(max)|20|16|max;2|Next(max)|2|1|max;3|Next(max)|20|0|max	1	35,30,6;29,30,4
+push	p_self_id	20314369	8	930005	30	30	50	3	60	60		920001,31,30,10,0,0,4,1;930005,29,30,10,0,0,4,0	1|Next(max)|20|6|max;2|Next(max)|2|1|max;3|Next(max)|20|14|max	1	35,30,6;29,30,4
+push	p_self_id	20314370	8	930006	30	30	50	3	60	60		920001,31,30,10,0,0,4,1;930006,29,30,10,0,0,4,0	1|Next(max)|20|17|max;2|Next(max)|2|0|max;3|Next(max)|20|8|max	1	34,30,6;29,30,4
+push	p_self_id	20314371	8	930007	30	30	50	3	60	60		920001,31,30,10,0,0,4,1;930007,29,30,10,0,0,4,0	1|Next(max)|20|7|max;2|Next(max)|2|0|max;3|Next(max)|20|2|max	1	34,30,6;29,30,4
+push	p_self_id	20314380	8	930008	30	30	50	3	60	60		920001,31,30,10,0,0,4,1;930008,29,30,10,0,0,4,0	1|Next(max)|20|1|max;2|Next(max)|2|0|max;3|Next(max)|20|8|max	1	34,30,6;29,30,4
+push	p_self_id	20314381	8	930009	30	30	50	3	60	60		920001,31,30,10,0,0,4,1;930009,29,30,10,0,0,4,0	1|Next(max)|20|12|max;2|Next(max)|2|0|max;3|Next(max)|20|2|max	1	34,30,6;29,30,4
+push	p_self_id	20314382	8	930010	30	30	50	3	60	60		920001,31,30,10,0,0,4,1;930010,29,30,10,0,0,4,0	1|Next(max)|20|2|max;2|Next(max)|2|1|max;3|Next(max)|20|16|max	1	35,30,6;29,30,4
+push	p_self_id	20314383	8	930011	30	30	50	3	60	60		920001,31,30,10,0,0,4,1;930011,29,30,10,0,0,4,0	1|Next(max)|20|12|max;2|Next(max)|2|1|max;3|Next(max)|20|10|max	1	35,30,6;29,30,4
+push	p_self_id	20314376	8	930012	30	30	50	3	60	60		920001,31,30,10,0,0,4,1;930012,29,30,10,0,0,4,0	1|Next(max)|20|19|max;2|Next(max)|2|1|max;3|Next(max)|20|12|max	1	35,30,6;29,30,4
+push	p_self_id	20314377	8	930013	30	30	50	3	60	60		920001,31,30,10,0,0,4,1;930013,29,30,10,0,0,4,0	1|Next(max)|20|10|max;2|Next(max)|2|0|max;3|Next(max)|20|6|max	1	34,30,6;29,30,4
+push	p_self_id	20314378	8	930014	30	30	50	3	60	60		920001,31,30,10,0,0,4,1;930014,29,30,10,0,0,4,0	1|Next(max)|20|0|max;2|Next(max)|2|1|max;3|Next(max)|20|0|max	1	35,30,6;29,30,4
+push	p_self_id	20314379	8	930015	30	30	50	3	60	60		920001,31,30,10,0,0,4,1;930015,29,30,10,0,0,4,0	1|Next(max)|20|11|max;2|Next(max)|2|1|max;3|Next(max)|20|14|max	1	35,30,6;29,30,4
+sace	same_map_l3	20271764	3	1	1	60	60	50	33	1|Next(max)|11|4|max;2|Next(max)|39|30|max;3|Next(max)|39|13|max	1	1	1	probe_map
+sace	same_map_l3	20271765	3	1	1	60	60	30	30	1|Next(max)|11|10|max	0	0	1	probe_map
+sace	same_map_l3	20271766	3	1	1	60	60	34	49	1|Next(max)|11|4|max;2|Next(max)|39|14|max;3|Next(max)|39|29|max	1	1	1	probe_map
+sace	same_map_l3	20271767	3	1	1	60	60	30	30	1|Next(max)|11|10|max	0	0	1	probe_map
+sace	same_map_l3	20271760	3	1	1	60	60	43	41	1|Next(max)|11|3|max;2|Next(max)|39|23|max;3|Next(max)|39|21|max	1	1	1	probe_map
+sace	same_map_l3	20271761	3	1	1	60	60	55	29	1|Next(max)|11|9|max;2|Next(max)|39|35|max;3|Next(max)|39|9|max	1	1	1	probe_map
+sace	same_map_l3	20271762	3	1	1	60	60	27	57	1|Next(max)|11|3|max;2|Next(max)|39|7|max;3|Next(max)|39|37|max	1	1	1	probe_map
+sace	same_map_l3	20271763	3	1	1	60	60	39	45	1|Next(max)|11|9|max;2|Next(max)|39|19|max;3|Next(max)|39|25|max	1	1	1	probe_map
+sace	same_map_l3	20271772	3	1	1	60	60	25	56	1|Next(max)|11|6|max;2|Next(max)|39|5|max;3|Next(max)|39|36|max	1	1	1	probe_map
+sace	same_map_l3	20271773	3	1	1	60	60	36	44	1|Next(max)|11|1|max;2|Next(max)|39|16|max;3|Next(max)|39|24|max	1	1	1	probe_map
+sace	same_map_l3	20271774	3	1	1	60	60	48	33	1|Next(max)|11|6|max;2|Next(max)|39|28|max;3|Next(max)|39|13|max	1	1	1	probe_map
+sace	same_map_l3	20271775	3	1	1	60	60	20	21	1|Next(max)|11|1|max;2|Next(max)|39|0|max;3|Next(max)|39|1|max	1	1	1	probe_map
+sace	same_map_l3	20271768	3	1	1	60	60	57	25	1|Next(max)|11|5|max;2|Next(max)|39|37|max;3|Next(max)|39|5|max	1	1	1	probe_map
+sace	same_map_l3	20271769	3	1	1	60	60	29	52	1|Next(max)|11|0|max;2|Next(max)|39|9|max;3|Next(max)|39|32|max	1	1	1	probe_map
+sace	same_map_l3	20271770	3	1	1	60	60	41	41	1|Next(max)|11|5|max;2|Next(max)|39|21|max;3|Next(max)|39|21|max	1	1	1	probe_map
+sace	same_map_l3	20271771	3	1	1	60	60	52	29	1|Next(max)|11|0|max;2|Next(max)|39|32|max;3|Next(max)|39|9|max	1	1	1	probe_map
+sace	same_map_l3	20271748	3	1	1	60	60	23	26	1|Next(max)|11|0|max;2|Next(max)|39|3|max;3|Next(max)|39|6|max	1	1	1	probe_map
+sace	same_map_l3	20271749	3	1	1	60	60	35	53	1|Next(max)|11|6|max;2|Next(max)|39|15|max;3|Next(max)|39|33|max	1	1	1	probe_map
+sace	same_map_l3	20271750	3	1	1	60	60	46	41	1|Next(max)|11|0|max;2|Next(max)|39|26|max;3|Next(max)|39|21|max	1	1	1	probe_map
+sace	same_map_l3	20271751	3	1	1	60	60	57	30	1|Next(max)|11|6|max;2|Next(max)|39|37|max;3|Next(max)|39|10|max	1	1	1	probe_map
+sace	same_map_l3	20271744	3	1	1	60	60	30	30	1|Next(max)|11|10|max	0	0	1	probe_map
+sace	same_map_l3	20271745	3	1	1	60	60	28	22	1|Next(max)|11|5|max;2|Next(max)|39|8|max;3|Next(max)|39|2|max	1	1	1	probe_map
+sace	same_map_l3	20271746	3	1	1	60	60	30	30	1|Next(max)|11|10|max	0	0	1	probe_map
+sace	same_map_l3	20271747	3	1	1	60	60	51	38	1|Next(max)|11|5|max;2|Next(max)|39|31|max;3|Next(max)|39|18|max	1	1	1	probe_map
+sace	other_map_l3	20272788	3	1	0	60	60	29	24	1|Next(max)|11|4|max;2|Next(max)|39|9|max;3|Next(max)|39|4|max	1	1	0	probe_map3
+sace	other_map_l3	20272789	3	1	0	60	60	41	51	1|Next(max)|11|9|max;2|Next(max)|39|21|max;3|Next(max)|39|31|max	1	1	0	probe_map3
+sace	other_map_l3	20272790	3	1	0	60	60	52	39	1|Next(max)|11|4|max;2|Next(max)|39|32|max;3|Next(max)|39|19|max	1	1	0	probe_map3
+sace	other_map_l3	20272791	3	1	0	60	60	30	30	1|Next(max)|11|10|max	0	0	1	probe_map
+sace	other_map_l3	20272784	3	1	0	60	60	22	32	1|Next(max)|11|3|max;2|Next(max)|39|2|max;3|Next(max)|39|12|max	1	1	0	probe_map3
+sace	other_map_l3	20272785	3	1	0	60	60	34	20	1|Next(max)|11|8|max;2|Next(max)|39|14|max;3|Next(max)|39|0|max	1	1	0	probe_map3
+sace	other_map_l3	20272786	3	1	0	60	60	45	47	1|Next(max)|11|3|max;2|Next(max)|39|25|max;3|Next(max)|39|27|max	1	1	0	probe_map3
+sace	other_map_l3	20272787	3	1	0	60	60	57	36	1|Next(max)|11|9|max;2|Next(max)|39|37|max;3|Next(max)|39|16|max	1	1	0	probe_map3
+sace	other_map_l3	20272796	3	1	0	60	60	43	47	1|Next(max)|11|6|max;2|Next(max)|39|23|max;3|Next(max)|39|27|max	1	1	0	probe_map3
+sace	other_map_l3	20272797	3	1	0	60	60	54	35	1|Next(max)|11|0|max;2|Next(max)|39|34|max;3|Next(max)|39|15|max	1	1	0	probe_map3
+sace	other_map_l3	20272798	3	1	0	60	60	27	24	1|Next(max)|11|6|max;2|Next(max)|39|7|max;3|Next(max)|39|4|max	1	1	0	probe_map3
+sace	other_map_l3	20272799	3	1	0	60	60	38	51	1|Next(max)|11|1|max;2|Next(max)|39|18|max;3|Next(max)|39|31|max	1	1	0	probe_map3
+sace	other_map_l3	20272792	3	1	0	60	60	36	55	1|Next(max)|11|5|max;2|Next(max)|39|16|max;3|Next(max)|39|35|max	1	1	0	probe_map3
+sace	other_map_l3	20272793	3	1	0	60	60	30	30	1|Next(max)|11|10|max	0	0	1	probe_map
+sace	other_map_l3	20272794	3	1	0	60	60	20	31	1|Next(max)|11|5|max;2|Next(max)|39|0|max;3|Next(max)|39|11|max	1	1	0	probe_map3
+sace	other_map_l3	20272795	3	1	0	60	60	31	20	1|Next(max)|11|0|max;2|Next(max)|39|11|max;3|Next(max)|39|0|max	1	1	0	probe_map3
+sace	other_map_l3	20272772	3	1	0	60	60	41	56	1|Next(max)|11|0|max;2|Next(max)|39|21|max;3|Next(max)|39|36|max	1	1	0	probe_map3
+sace	other_map_l3	20272773	3	1	0	60	60	52	44	1|Next(max)|11|5|max;2|Next(max)|39|32|max;3|Next(max)|39|24|max	1	1	0	probe_map3
+sace	other_map_l3	20272774	3	1	0	60	60	25	32	1|Next(max)|11|0|max;2|Next(max)|39|5|max;3|Next(max)|39|12|max	1	1	0	probe_map3
+sace	other_map_l3	20272775	3	1	0	60	60	36	21	1|Next(max)|11|6|max;2|Next(max)|39|16|max;3|Next(max)|39|1|max	1	1	0	probe_map3
+sace	other_map_l3	20272768	3	1	0	60	60	30	30	1|Next(max)|11|10|max	0	0	1	probe_map
+sace	other_map_l3	20272769	3	1	0	60	60	46	52	1|Next(max)|11|4|max;2|Next(max)|39|26|max;3|Next(max)|39|32|max	1	1	0	probe_map3
+sace	other_map_l3	20272770	3	1	0	60	60	30	30	1|Next(max)|11|10|max	0	0	1	probe_map
+sace	other_map_l3	20272771	3	1	0	60	60	30	28	1|Next(max)|11|5|max;2|Next(max)|39|10|max;3|Next(max)|39|8|max	1	1	0	probe_map3
+sace	map_missing_l3	20294292	3	0	0	60	60	30	30	1|Next(max)|11|6|max	1	0	1	probe_map
+sace	map_missing_l3	20294293	3	0	0	60	60	30	30	1|Next(max)|11|1|max	1	0	1	probe_map
+sace	map_missing_l3	20294294	3	0	0	60	60	30	30	1|Next(max)|11|7|max	1	0	1	probe_map
+sace	map_missing_l3	20294295	3	0	0	60	60	30	30	1|Next(max)|11|1|max	1	0	1	probe_map
+sace	map_missing_l3	20294288	3	0	0	60	60	30	30	1|Next(max)|11|5|max	1	0	1	probe_map
+sace	map_missing_l3	20294289	3	0	0	60	60	30	30	1|Next(max)|11|0|max	1	0	1	probe_map
+sace	map_missing_l3	20294290	3	0	0	60	60	30	30	1|Next(max)|11|6|max	1	0	1	probe_map
+sace	map_missing_l3	20294291	3	0	0	60	60	30	30	1|Next(max)|11|0|max	1	0	1	probe_map
+sace	map_missing_l3	20294300	3	0	0	60	60	30	30	1|Next(max)|11|8|max	1	0	1	probe_map
+sace	map_missing_l3	20294301	3	0	0	60	60	30	30	1|Next(max)|11|3|max	1	0	1	probe_map
+sace	map_missing_l3	20294302	3	0	0	60	60	30	30	1|Next(max)|11|9|max	1	0	1	probe_map
+sace	map_missing_l3	20294303	3	0	0	60	60	30	30	1|Next(max)|11|3|max	1	0	1	probe_map
+sace	map_missing_l3	20294296	3	0	0	60	60	30	30	1|Next(max)|11|7|max	1	0	1	probe_map
+sace	map_missing_l3	20294297	3	0	0	60	60	30	30	1|Next(max)|11|2|max	1	0	1	probe_map
+sace	map_missing_l3	20294298	3	0	0	60	60	30	30	1|Next(max)|11|8|max	1	0	1	probe_map
+sace	map_missing_l3	20294299	3	0	0	60	60	30	30	1|Next(max)|11|2|max	1	0	1	probe_map
+sace	map_missing_l3	20294276	3	0	0	60	60	30	30	1|Next(max)|11|2|max	1	0	1	probe_map
+sace	map_missing_l3	20294277	3	0	0	60	60	30	30	1|Next(max)|11|8|max	1	0	1	probe_map
+sace	map_missing_l3	20294278	3	0	0	60	60	30	30	1|Next(max)|11|3|max	1	0	1	probe_map
+sace	map_missing_l3	20294279	3	0	0	60	60	30	30	1|Next(max)|11|8|max	1	0	1	probe_map
+sace	map_missing_l3	20294272	3	0	0	60	60	30	30	1|Next(max)|11|1|max	1	0	1	probe_map
+sace	map_missing_l3	20294273	3	0	0	60	60	30	30	1|Next(max)|11|7|max	1	0	1	probe_map
+sace	map_missing_l3	20294274	3	0	0	60	60	30	30	1|Next(max)|11|2|max	1	0	1	probe_map
+sace	map_missing_l3	20294275	3	0	0	60	60	30	30	1|Next(max)|11|7|max	1	0	1	probe_map
+sace	same_map_l0	20295316	0	1	1	60	60	30	30	1|Next(max)|11|6|max	0	0	1	probe_map
+sace	same_map_l0	20295317	0	1	1	60	60	46	43	1|Next(max)|11|0|max;2|Next(max)|39|26|max;3|Next(max)|39|23|max	1	1	1	probe_map
+sace	same_map_l0	20295318	0	1	1	60	60	30	30	1|Next(max)|11|6|max	0	0	1	probe_map
+sace	same_map_l0	20295319	0	1	1	60	60	30	20	1|Next(max)|11|1|max;2|Next(max)|39|10|max;3|Next(max)|39|0|max	1	1	1	probe_map
+sace	same_map_l0	20295312	0	1	1	60	60	30	30	1|Next(max)|11|5|max	0	0	1	probe_map
+sace	same_map_l0	20295313	0	1	1	60	60	30	30	1|Next(max)|11|10|max	0	0	1	probe_map
+sace	same_map_l0	20295314	0	1	1	60	60	30	30	1|Next(max)|11|5|max	0	0	1	probe_map
+sace	same_map_l0	20295315	0	1	1	60	60	23	28	1|Next(max)|11|0|max;2|Next(max)|39|3|max;3|Next(max)|39|8|max	1	1	1	probe_map
+sace	same_map_l0	20295324	0	1	1	60	60	30	30	1|Next(max)|11|8|max	0	0	1	probe_map
+sace	same_map_l0	20295325	0	1	1	60	60	20	28	1|Next(max)|11|2|max;2|Next(max)|39|0|max;3|Next(max)|39|8|max	1	1	1	probe_map
+sace	same_map_l0	20295326	0	1	1	60	60	30	30	1|Next(max)|11|8|max	0	0	1	probe_map
+sace	same_map_l0	20295327	0	1	1	60	60	43	43	1|Next(max)|11|3|max;2|Next(max)|39|23|max;3|Next(max)|39|23|max	1	1	1	probe_map
+sace	same_map_l0	20295320	0	1	1	60	60	30	30	1|Next(max)|11|7|max	0	0	1	probe_map
+sace	same_map_l0	20295321	0	1	1	60	60	53	35	1|Next(max)|11|1|max;2|Next(max)|39|33|max;3|Next(max)|39|15|max	1	1	1	probe_map
+sace	same_map_l0	20295322	0	1	1	60	60	30	30	1|Next(max)|11|7|max	0	0	1	probe_map
+sace	same_map_l0	20295323	0	1	1	60	60	36	51	1|Next(max)|11|2|max;2|Next(max)|39|16|max;3|Next(max)|39|31|max	1	1	1	probe_map
+sace	same_map_l0	20295300	0	1	1	60	60	46	48	1|Next(max)|11|2|max;2|Next(max)|39|26|max;3|Next(max)|39|28|max	1	1	1	probe_map
+sace	same_map_l0	20295301	0	1	1	60	60	30	30	1|Next(max)|11|8|max	0	0	1	probe_map
+sace	same_map_l0	20295302	0	1	1	60	60	30	25	1|Next(max)|11|2|max;2|Next(max)|39|10|max;3|Next(max)|39|5|max	1	1	1	probe_map
+sace	same_map_l0	20295303	0	1	1	60	60	30	30	1|Next(max)|11|8|max	0	0	1	probe_map
+sace	same_map_l0	20295296	0	1	1	60	60	40	56	1|Next(max)|11|1|max;2|Next(max)|39|20|max;3|Next(max)|39|36|max	1	1	1	probe_map
+sace	same_map_l0	20295297	0	1	1	60	60	30	30	1|Next(max)|11|7|max	0	0	1	probe_map
+sace	same_map_l0	20295298	0	1	1	60	60	23	32	1|Next(max)|11|1|max;2|Next(max)|39|3|max;3|Next(max)|39|12|max	1	1	1	probe_map
+sace	same_map_l0	20295299	0	1	1	60	60	30	30	1|Next(max)|11|7|max	0	0	1	probe_map
+clone	dir0	20278932	0	10	10	1	1	Clone	10	10	4	1
+clone	dir1	20278933	1	10	10	1	1	Clone	10	10	5	1
+clone	dir2	20278934	2	10	10	1	1	Clone	10	10	6	1
+clone	dir3	20278935	3	10	10	1	1	Clone	10	10	7	1
+clone	dir4	20278928	4	10	10	1	1	Clone	10	10	0	1
+clone	dir5	20278929	5	10	10	1	1	Clone	10	10	1	1
+clone	dir6	20278930	6	10	10	1	1	Clone	10	10	2	1
+clone	dir7	20278931	7	10	10	1	1	Clone	10	10	3	1

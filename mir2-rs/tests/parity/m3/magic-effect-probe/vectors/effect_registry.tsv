@@ -6,7 +6,7 @@ entry	4	精神力战法	warr_reject	0	IsWarrSkill+DoSpell	MagicManager.cs:82-100
 entry	5	大火球	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
 entry	6	施毒术	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
 entry	7	攻杀剑术	warr_reject	0	IsWarrSkill+DoSpell	MagicManager.cs:82-100,151	reject
-entry	8	抗拒火环	context_required	0	MagPushArround	MagicManager.cs:24-52	map_context
+entry	8	抗拒火环	context_required	0	MagPushArround	MagicManager.cs:24-52	probeable
 entry	9	地狱火	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
 entry	10	疾光电影	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
 entry	11	雷电术	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
@@ -19,7 +19,7 @@ entry	17	召唤骷髅	context_required	0	MagMakeSlave	MagicManager.cs:1308-1335	
 entry	18	隐身术	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
 entry	19	集体隐身术	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
 entry	20	诱惑之光	context_required	0	MagTamming	MagicManager.cs:704-825	probeable
-entry	21	瞬息移动	context_required	0	MagSaceMove	MagicManager.cs:876-891	map_context
+entry	21	瞬息移动	context_required	0	MagSaceMove	MagicManager.cs:876-891	probeable
 entry	22	火墙	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
 entry	23	爆裂火焰	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
 entry	24	地狱雷光	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
@@ -34,7 +34,7 @@ entry	32	圣言术	context_required	0	MagTurnUndead	MagicManager.cs:827-856	prob
 entry	33	冰咆哮	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
 entry	34	解毒术	warr_reject	0	IsWarrSkill+DoSpell	MagicManager.cs:82-100,151	reject
 entry	36	火焰冰	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
-entry	37	雷神之怒	context_required	0	MagPushArround	MagicManager.cs:24-52	map_context
+entry	37	雷神之怒	context_required	0	MagPushArround	MagicManager.cs:24-52	probeable
 entry	48	群体施毒术	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
 entry	39	乌龟跑步	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
 entry	40	十方斩	context_required	0	<inline>	MagicManager.cs:495-523	inline
@@ -43,7 +43,7 @@ entry	42	龙影剑法	implemented	1	<implemented>	crates/world/src/magic.rs	impl
 entry	43	开天斩	no_effect_case	0	<inline break>	MagicManager.cs:555-640	none
 entry	44	寒冰掌	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
 entry	45	灭天火	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
-entry	46	分身术	context_required	0	MagMakeClone	MagicManager.cs:1337-1341	map_context
+entry	46	分身术	context_required	0	MagMakeClone	MagicManager.cs:1337-1341	probeable
 entry	47	地狱烈焰	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
 entry	48	气功波	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
 entry	49	云寂术	no_effect_case	0	<inline break>	MagicManager.cs:555-640	none

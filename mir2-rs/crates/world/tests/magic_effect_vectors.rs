@@ -381,21 +381,24 @@ fn effects_are_classified_by_reachability() {
             );
         }
     }
-    // 本片只有 20（MagTamming）与 32（MagTurnUndead）能被无地图反射直调。
+    // 第七片：20（MagTamming）与 32（MagTurnUndead）无地图即可反射直调；
+    // 第十片：8/37（MagPushArround）、21（MagSaceMove）、46（MagMakeClone）用合成真格式 .map +
+    // 真身 `Envirnoment` 也已离线直调成功 ⇒ 一并归入 probeable（见 map-effect-probe）。
     assert_eq!(
         probeable,
-        BTreeSet::from([20u16, 32]),
-        "probeable 集合（本片实测）"
+        BTreeSet::from([8u16, 20, 21, 32, 37, 46]),
+        "probeable 集合（第七 + 第十片实测）"
     );
-    // 其余 context_required = 需地图/可见集/召唤（map_context）或内联。
-    assert_eq!(counts.get("map_context").copied(), Some(7));
+    // 其余 context_required = 需 WorldEngine 真召唤（17/30/41）或内联（40）。
+    assert_eq!(counts.get("map_context").copied(), Some(3));
     assert_eq!(counts.get("inline").copied(), Some(1));
-    assert_eq!(counts.get("probeable").copied(), Some(2));
+    assert_eq!(counts.get("probeable").copied(), Some(6));
     assert_eq!(counts.get("implemented").copied(), Some(29));
     assert_eq!(counts.get("reject").copied(), Some(43)); // 8 warr_reject + 35 magicid_reject
     assert_eq!(counts.get("none").copied(), Some(26)); // 6 no_effect_case + 20 no_switch_case
 
     // 每条 probeable 行都必须有向量用例（不许只登记不产向量）。
+    // 20/32 的向量在本文件；8/21/37/46 的向量在同 crate 的 `map_effect_vectors.rs`（第十片）。
     let turn: BTreeSet<u16> = load_turn().iter().map(|_| 32u16).collect();
     let tamming: BTreeSet<u16> = load_tamming().iter().map(|_| 20u16).collect();
     assert_eq!(turn, BTreeSet::from([32u16]));
