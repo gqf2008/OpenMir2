@@ -21,10 +21,9 @@ use mir2_protocol::messages::grobal2;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-fn free_port() -> u16 {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    l.local_addr().unwrap().port()
-}
+#[path = "../../game-svr/tests/support/mod.rs"]
+#[allow(dead_code)] // 共用模块：另一个 target 的条目在本 target 未用
+mod support;
 
 /// 假 GameSvr：接受一条连接，把收到的每帧 `(header, body)` 收进 Vec 返回。
 async fn fake_game_svr() -> (u16, tokio::task::JoinHandle<Vec<(ServerMessage, Vec<u8>)>>) {
@@ -115,6 +114,58 @@ async fn connect_with_retry(port: u16) -> TcpStream {
     panic!("网关未在预期时间内监听 {port}");
 }
 
+/// 起一个 `game-gate` 子进程并**等它自己 bind 成功**（就绪门）。
+///
+/// 卡 `openmir2-m2-flaky-relay-testports`：`free_port()` 的「探测即释放」会让并行用例的
+/// `bind(:0)` 抢走端口，网关 bind 失败、客户端却连上别人的监听（owner 实测 `os error 10048`
+/// 与假红）。这里端口一律由 `support::next_port()`（进程内唯一、非临时段）给出，且只有看到
+/// 子进程在 `TcpListener::bind` 成功之后打印的 `游戏网关[…:{port}]已启动…`（`main.rs:134`）
+/// 才返回；没等到就 kill + fail-closed（绝不「先 connect 再赌」）。
+struct Gate {
+    proc: tokio::process::Child,
+    dir: std::path::PathBuf,
+    port: u16,
+}
+
+impl Gate {
+    async fn start(tag: &str, srv_port: u16, gate_port: u16) -> Gate {
+        let dir = support::unique_temp_dir(tag);
+        write_conf(&dir, srv_port, gate_port);
+        let log = dir.join("gate.out.log");
+        let out = std::fs::File::create(&log).unwrap();
+        let err = out.try_clone().unwrap();
+        let mut proc = tokio::process::Command::new(env!("CARGO_BIN_EXE_game-gate"))
+            .arg(dir.join("config.conf"))
+            .stdout(out)
+            .stderr(err)
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let text =
+            support::wait_child_ready(&mut proc, &log, gate_port, Duration::from_secs(15)).await;
+        if !text.contains(&format!(":{gate_port}]已启动")) {
+            proc.kill().await.ok();
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+        support::require_ready(&text, gate_port);
+        Gate {
+            proc,
+            dir,
+            port: gate_port,
+        }
+    }
+
+    async fn connect(&self) -> TcpStream {
+        connect_with_retry(self.port).await
+    }
+
+    /// 收工：kill 子进程 + 清临时目录（失败路径也走这里）。
+    async fn shutdown(mut self) {
+        self.proc.kill().await.ok();
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
 /// 等网关把上一帧处理完再发下一帧（只影响**测试**的节奏，不改被测算子的语义）。
 async fn settle() {
     tokio::time::sleep(Duration::from_millis(60)).await;
@@ -146,15 +197,9 @@ fn say_frame(content: &str) -> Vec<u8> {
 #[tokio::test]
 async fn say_interval_drops_the_second_chat_frame() {
     let (srv_port, srv_task) = fake_game_svr().await;
-    let gate_port = free_port();
-    let dir = std::env::temp_dir().join(format!("gg-say-{}-{}", std::process::id(), gate_port));
-    write_conf(&dir, srv_port, gate_port);
-    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_game-gate"))
-        .arg(dir.join("config.conf"))
-        .kill_on_drop(true)
-        .spawn()
-        .unwrap();
-    let mut client = connect_with_retry(gate_port).await;
+    let gate_port = support::next_port();
+    let gate = Gate::start("gg-say", srv_port, gate_port).await;
+    let mut client = gate.connect().await;
     client.write_all(&login_frame(GOOD_LOGIN)).await.unwrap();
     client.flush().await.unwrap();
     settle().await; // 等登录帧被处理完（一帧一次 send）
@@ -169,7 +214,7 @@ async fn say_interval_drops_the_second_chat_frame() {
     client.write_all(&say_frame("@move 1 2")).await.unwrap();
     client.flush().await.unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await;
-    child.kill().await.ok();
+    gate.shutdown().await;
     drop(client);
 
     let got = tokio::time::timeout(Duration::from_secs(5), srv_task)
@@ -195,7 +240,6 @@ async fn say_interval_drops_the_second_chat_frame() {
         datas[0].1, datas[1].1,
         "两条通过的聊天帧 body 必须不同（hello vs @move）"
     );
-    std::fs::remove_dir_all(&dir).ok();
 }
 
 /// 造一个客户端 face 的**命令帧**：`#1` + EDCode(解码态载荷) + `!`（同样**不加头**）。
@@ -211,15 +255,9 @@ fn command_frame(decoded: &[u8]) -> Vec<u8> {
 #[tokio::test]
 async fn bad_login_is_kicked_and_nothing_is_forwarded() {
     let (srv_port, srv_task) = fake_game_svr().await;
-    let gate_port = free_port();
-    let dir = std::env::temp_dir().join(format!("gg-kick-{}-{}", std::process::id(), gate_port));
-    write_conf(&dir, srv_port, gate_port);
-    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_game-gate"))
-        .arg(dir.join("config.conf"))
-        .kill_on_drop(true)
-        .spawn()
-        .unwrap();
-    let mut client = connect_with_retry(gate_port).await;
+    let gate_port = support::next_port();
+    let gate = Gate::start("gg-kick", srv_port, gate_port).await;
+    let mut client = gate.connect().await;
 
     // 前两位不是 `**` ⇒ 照 oracle 的 Kicked 1（本次实机取证里真网关就是这条）
     client
@@ -239,7 +277,7 @@ async fn bad_login_is_kicked_and_nothing_is_forwarded() {
         .expect("5s 内网关应剔除该连接")
         .expect("读应成功（EOF=0 也算）");
     assert_eq!(n, 0, "网关必须剔除（读到 EOF）");
-    child.kill().await.ok();
+    gate.shutdown().await;
     drop(client);
 
     let got = tokio::time::timeout(Duration::from_secs(5), srv_task)
@@ -252,7 +290,6 @@ async fn bad_login_is_kicked_and_nothing_is_forwarded() {
         vec![u16::from(grobal2::GM_OPEN), u16::from(grobal2::GM_CLOSE)],
         "登录失败时除 GM_OPEN/GM_CLOSE 外不得有别的帧（尤其不能有 GM_DATA）"
     );
-    std::fs::remove_dir_all(&dir).ok();
 }
 
 /// 判据：合成登录包**在 `GM_SERVERUSERINDEX` 之前**发出（`SessionIndex` 还是 0），
@@ -300,15 +337,9 @@ async fn server_user_index_is_echoed_on_gm_data() {
         Some(cmd.0.session_index)
     });
 
-    let gate_port = free_port();
-    let dir = std::env::temp_dir().join(format!("gg-idx-{}-{}", std::process::id(), gate_port));
-    write_conf(&dir, srv_port, gate_port);
-    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_game-gate"))
-        .arg(dir.join("config.conf"))
-        .kill_on_drop(true)
-        .spawn()
-        .unwrap();
-    let mut client = connect_with_retry(gate_port).await;
+    let gate_port = support::next_port();
+    let gate = Gate::start("gg-idx", srv_port, gate_port).await;
+    let mut client = gate.connect().await;
     client.write_all(&login_frame(GOOD_LOGIN)).await.unwrap();
     client.flush().await.unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await; // 等服务端下发索引
@@ -320,24 +351,15 @@ async fn server_user_index_is_echoed_on_gm_data() {
         .expect("假 GameSvr 未按时结束")
         .unwrap();
     assert_eq!(got, Some(42), "GM_DATA 必须带上服务端下发的 SessionIndex");
-    child.kill().await.ok();
-    std::fs::remove_dir_all(&dir).ok();
+    gate.shutdown().await;
 }
 
 #[tokio::test]
 async fn relays_open_data_heartbeat_and_close() {
     let (srv_port, srv_task) = fake_game_svr().await;
-    let gate_port = free_port();
-    let dir = std::env::temp_dir().join(format!("gg-relay-{}-{}", std::process::id(), gate_port));
-    write_conf(&dir, srv_port, gate_port);
-
-    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_game-gate"))
-        .arg(dir.join("config.conf"))
-        .kill_on_drop(true)
-        .spawn()
-        .unwrap();
-
-    let mut client = connect_with_retry(gate_port).await;
+    let gate_port = support::next_port();
+    let gate = Gate::start("gg-relay", srv_port, gate_port).await;
+    let mut client = gate.connect().await;
 
     // 判据 4（登录前）：1 字节 body——oracle 走 `:671-680` 的 else 分支、`destinationSpan[2..0]`
     // 越界抛异常被 `ServerManager.cs:238` 吞掉 ⇒ 丢帧、会话存活。**不得**被转发。
@@ -364,7 +386,7 @@ async fn relays_open_data_heartbeat_and_close() {
     // 等网关看到客户端断开
     let mut buf = [0u8; 1];
     let _ = tokio::time::timeout(Duration::from_secs(5), client.read(&mut buf)).await;
-    child.kill().await.ok();
+    gate.shutdown().await;
     drop(client);
 
     let got = tokio::time::timeout(Duration::from_secs(5), srv_task)
@@ -446,7 +468,6 @@ async fn relays_open_data_heartbeat_and_close() {
         closes[0].0.socket, open.socket,
         "GM_CLOSE 的 socket 必须与 GM_OPEN 的 handle 一致"
     );
-    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[tokio::test]
@@ -494,15 +515,9 @@ async fn command_frame_with_tail_is_rebuilt() {
             }
         }
     });
-    let gate_port = free_port();
-    let dir = std::env::temp_dir().join(format!("gg-tail-{}-{}", std::process::id(), gate_port));
-    write_conf(&dir, srv_port, gate_port);
-    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_game-gate"))
-        .arg(dir.join("config.conf"))
-        .kill_on_drop(true)
-        .spawn()
-        .unwrap();
-    let mut client = connect_with_retry(gate_port).await;
+    let gate_port = support::next_port();
+    let gate = Gate::start("gg-tail", srv_port, gate_port).await;
+    let mut client = gate.connect().await;
     client.write_all(&login_frame(GOOD_LOGIN)).await.unwrap();
     client.flush().await.unwrap();
     settle().await; // 等网关处理完登录（一帧一次 send）
@@ -538,8 +553,7 @@ async fn command_frame_with_tail_is_rebuilt() {
         0,
         "oracle 的声明长度比实际内容多 1 字节（池内存未初始化）；Rust 侧固定送 0 —— 已登记差异"
     );
-    child.kill().await.ok();
-    std::fs::remove_dir_all(&dir).ok();
+    gate.shutdown().await;
 }
 
 /// 判据 2（reviewer-1 的 Important #1）：登录通过后**必须**按 `ClientSession.cs:1203-1218` 补发
@@ -562,15 +576,9 @@ async fn login_success_sends_synthetic_login_packet() {
         (open.0, login.0, login.1)
     });
 
-    let gate_port = free_port();
-    let dir = std::env::temp_dir().join(format!("gg-login-{}-{}", std::process::id(), gate_port));
-    write_conf(&dir, srv_port, gate_port);
-    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_game-gate"))
-        .arg(dir.join("config.conf"))
-        .kill_on_drop(true)
-        .spawn()
-        .unwrap();
-    let mut client = connect_with_retry(gate_port).await;
+    let gate_port = support::next_port();
+    let gate = Gate::start("gg-login", srv_port, gate_port).await;
+    let mut client = gate.connect().await;
     client.write_all(&login_frame(GOOD_LOGIN)).await.unwrap();
     client.flush().await.unwrap();
 
@@ -604,8 +612,7 @@ async fn login_success_sends_synthetic_login_packet() {
     // 解回明文复核（不是用同一个 format! 自证）
     let back = String::from_utf8(mir2_protocol::edcode::decode(&body[2..body.len() - 1])).unwrap();
     assert_eq!(back, text);
-    child.kill().await.ok();
-    std::fs::remove_dir_all(&dir).ok();
+    gate.shutdown().await;
 }
 
 /// **判据 0 + 判据 2 的 oracle 字节版**：把 M0 金标准里**真 Delphi 客户端**发的 7200 第一帧原样喂进去，
@@ -634,15 +641,9 @@ async fn oracle_golden_login_frame_yields_oracle_synthetic_packet() {
         (open.0, login.0, login.1)
     });
 
-    let gate_port = free_port();
-    let dir = std::env::temp_dir().join(format!("gg-oracle-{}-{}", std::process::id(), gate_port));
-    write_conf(&dir, srv_port, gate_port);
-    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_game-gate"))
-        .arg(dir.join("config.conf"))
-        .kill_on_drop(true)
-        .spawn()
-        .unwrap();
-    let mut client = connect_with_retry(gate_port).await;
+    let gate_port = support::next_port();
+    let gate = Gate::start("gg-oracle", srv_port, gate_port).await;
+    let mut client = gate.connect().await;
     client.write_all(&hex(GOLDEN_LOGIN_FRAME)).await.unwrap();
     client.flush().await.unwrap();
 
@@ -666,8 +667,7 @@ async fn oracle_golden_login_frame_yields_oracle_synthetic_packet() {
         "文本必须以 `/` 分隔的账号/角色开头，实得 {:?}",
         String::from_utf8_lossy(&text[..text.len().min(48)])
     );
-    child.kill().await.ok();
-    std::fs::remove_dir_all(&dir).ok();
+    gate.shutdown().await;
 }
 
 /// **判据 0 的红检**：客户端 face **没有定长头**——给登录帧套一个 20B `ServerMessage` 头，
@@ -691,15 +691,9 @@ async fn header_prefixed_login_is_kicked() {
     head.extend_from_slice(&frame);
 
     let (srv_port, srv_task) = fake_game_svr().await;
-    let gate_port = free_port();
-    let dir = std::env::temp_dir().join(format!("gg-hdr-{}-{}", std::process::id(), gate_port));
-    write_conf(&dir, srv_port, gate_port);
-    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_game-gate"))
-        .arg(dir.join("config.conf"))
-        .kill_on_drop(true)
-        .spawn()
-        .unwrap();
-    let mut client = connect_with_retry(gate_port).await;
+    let gate_port = support::next_port();
+    let gate = Gate::start("gg-hdr", srv_port, gate_port).await;
+    let mut client = gate.connect().await;
     client.write_all(&head).await.unwrap();
     client.flush().await.unwrap();
 
@@ -710,7 +704,7 @@ async fn header_prefixed_login_is_kicked() {
         .expect("5s 内网关应剔除该连接")
         .expect("读应成功（EOF=0 也算）");
     assert_eq!(n, 0, "带 20B 头的登录帧必须被剔除（oracle 实测如此）");
-    child.kill().await.ok();
+    gate.shutdown().await;
     drop(client);
 
     let got = tokio::time::timeout(Duration::from_secs(5), srv_task)
@@ -723,7 +717,6 @@ async fn header_prefixed_login_is_kicked() {
         vec![u16::from(grobal2::GM_OPEN), u16::from(grobal2::GM_CLOSE)],
         "剔除路径不得出现 GM_DATA"
     );
-    std::fs::remove_dir_all(&dir).ok();
 }
 
 /// **判据（下行）**：网关 → 客户端的两种出帧形态必须等于 oracle 实测字节。
@@ -772,15 +765,9 @@ async fn downlink_frames_match_oracle_bytes() {
         sock.flush().await.unwrap();
     });
 
-    let gate_port = free_port();
-    let dir = std::env::temp_dir().join(format!("gg-down-{}-{}", std::process::id(), gate_port));
-    write_conf(&dir, srv_port, gate_port);
-    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_game-gate"))
-        .arg(dir.join("config.conf"))
-        .kill_on_drop(true)
-        .spawn()
-        .unwrap();
-    let mut client = connect_with_retry(gate_port).await;
+    let gate_port = support::next_port();
+    let gate = Gate::start("gg-down", srv_port, gate_port).await;
+    let mut client = gate.connect().await;
     client.write_all(&login_frame(GOOD_LOGIN)).await.unwrap();
     client.flush().await.unwrap();
 
@@ -793,7 +780,7 @@ async fn downlink_frames_match_oracle_bytes() {
             Ok(Ok(n)) => got.extend_from_slice(&buf[..n]),
         }
     }
-    child.kill().await.ok();
+    gate.shutdown().await;
     let _ = tokio::time::timeout(Duration::from_secs(2), srv_task).await;
 
     // 实测字节：`#` + Encode(10..1b) + `1c 1d 1e 1f` + `!`，然后是 `#` + `de ad be ef` + `!`
@@ -805,7 +792,6 @@ async fn downlink_frames_match_oracle_bytes() {
         got, expect,
         "下行两帧必须等于 oracle 实测字节（+16 ⇒ 编码头+原样尾；-4 ⇒ 小包原样）"
     );
-    std::fs::remove_dir_all(&dir).ok();
 }
 
 /// **判据（上限计数）**：登录后超过 `NomClientPacketSize`(400) 的帧**只丢不关**（`ClientSession.cs:196-199`）——
@@ -813,15 +799,9 @@ async fn downlink_frames_match_oracle_bytes() {
 #[tokio::test]
 async fn oversize_frame_is_dropped_without_kick() {
     let (srv_port, srv_task) = fake_game_svr().await;
-    let gate_port = free_port();
-    let dir = std::env::temp_dir().join(format!("gg-big-{}-{}", std::process::id(), gate_port));
-    write_conf(&dir, srv_port, gate_port);
-    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_game-gate"))
-        .arg(dir.join("config.conf"))
-        .kill_on_drop(true)
-        .spawn()
-        .unwrap();
-    let mut client = connect_with_retry(gate_port).await;
+    let gate_port = support::next_port();
+    let gate = Gate::start("gg-big", srv_port, gate_port).await;
+    let mut client = gate.connect().await;
     client.write_all(&login_frame(GOOD_LOGIN)).await.unwrap();
     client.flush().await.unwrap();
     settle().await; // 等登录处理完
@@ -841,7 +821,7 @@ async fn oversize_frame_is_dropped_without_kick() {
     client.write_all(&ok).await.unwrap();
     client.flush().await.unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await;
-    child.kill().await.ok();
+    gate.shutdown().await;
     drop(client);
 
     let got = tokio::time::timeout(Duration::from_secs(5), srv_task)
@@ -858,5 +838,4 @@ async fn oversize_frame_is_dropped_without_kick() {
         "超限帧必须被丢（不转发），而它后面的正常帧必须转发（会话存活）：期望 1 条命令帧，实得 {}",
         datas.len()
     );
-    std::fs::remove_dir_all(&dir).ok();
 }

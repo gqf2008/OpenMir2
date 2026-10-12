@@ -26,6 +26,11 @@ use std::time::Duration;
 
 use tokio::process::Command;
 
+// 共用「无竞态端口」工具（卡 `openmir2-m2-flaky-relay-testports`）：与 `tests/relay.rs` 同一份
+// 实现，避免每个 target 各写一份会漂移的探测即释放端口分配。
+#[allow(dead_code)] // 共用模块：另一个 target 的条目在本 target 未用
+mod support;
+
 /// C# 钩子实测的 `SEED_PROBE`（`MIR2_RNG_SEED=42`）——与
 /// `mir2-rs/tests/parity/m3/RNG同种子与记录回放方案.md` §二「实测证据」一致。
 const SEED42_PROBE: &str =
@@ -47,11 +52,6 @@ fn unique_temp_dir(tag: &str) -> PathBuf {
     std::env::temp_dir().join(format!("gs-seed-{tag}-{}-{seq}", std::process::id()))
 }
 
-fn free_port() -> u16 {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    l.local_addr().unwrap().port()
-}
-
 /// 与 `tests/relay.rs` 同形的最小合法 `Server.conf`（`[Server]` 段必需键齐；`WorldMaps` 用占位避免
 /// 依赖真 Envir）。
 fn write_conf(dir: &std::path::Path) -> std::path::PathBuf {
@@ -62,9 +62,9 @@ fn write_conf(dir: &std::path::Path) -> std::path::PathBuf {
         format!(
             "[Server]\nGateAddr=127.0.0.1\nGatePort={}\nCheckBlock=12288\n\
              IDSAddr=127.0.0.1\nIDSPort={}\nDBAddr=127.0.0.1\nDBPort={}\nWorldMaps=64x64\n",
-            free_port(),
-            free_port(),
-            free_port()
+            support::next_port(),
+            support::next_port(),
+            support::next_port()
         ),
     )
     .unwrap();
