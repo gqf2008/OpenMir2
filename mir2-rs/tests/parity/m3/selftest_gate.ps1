@@ -303,10 +303,10 @@ $schemaCols = Get-M3SchemaColumns -SchemaPath (Join-Path $script:M3GuardsRepoRoo
 Test-Case 'schema/characters 有 IncHealth/IncSpell' `
   ($schemaCols['characters'].Contains('IncHealth') -and $schemaCols['characters'].Contains('IncSpell')) ''
 Test-Case 'schema/characters_ablity 无 IncHealth' (-not $schemaCols['characters_ablity'].Contains('IncHealth')) ''
-$goodPin = @(Get-M3StartPosePinSql -ChrName 'm3gs0') + @(Get-M3AttackPinSql -ChrName 'm3gs0' -CX 289 -CY 618 -Dir 2)
+$goodPin = @(Get-M3StartPosePinSql -ChrName 'm3gs0') + @(Get-M3AttackPinSql -ChrName 'm3gs0' -CX 289 -CY 618 -Dir 2 -MapName '0')
 $goodVio = @(Test-M3PinSqlColumns -SqlStatements $goodPin -SchemaColumns $schemaCols)
 Test-Case 'pin/生产 SQL 别名列全对=绿(0 violation)' ($goodVio.Count -eq 0) ("violations=[{0}]" -f ($goodVio -join ';'))
-$badPin = @(Get-M3AttackPinSql -ChrName 'm3gs0' -CX 289 -CY 618 -Dir 2 |
+$badPin = @(Get-M3AttackPinSql -ChrName 'm3gs0' -CX 289 -CY 618 -Dir 2 -MapName '0' |
   ForEach-Object { $_ -replace 'c\.IncHealth=0, c\.IncSpell=0', 'a.IncHealth=0, a.IncSpell=0' })
 $badPinVio = @(Test-M3PinSqlColumns -SqlStatements $badPin -SchemaColumns $schemaCols)
 Test-Case 'pin/改坏 a.IncHealth=红' (($badPinVio.Count -gt 0) -and (($badPinVio -join ';') -match 'a\.IncHealth')) `
