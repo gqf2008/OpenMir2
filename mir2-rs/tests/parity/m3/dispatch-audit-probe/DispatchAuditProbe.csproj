@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>dispatch-audit-probe</AssemblyName>
+    <RootNamespace>DispatchAuditProbe</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    M3 战斗/技能线（卡 openmir2-m3-combat-skills-align）第十片：
+    DoD③ 的**第五轴**——「`DoSpell` 之外是否另有魔号效果分派器」。
+
+    第五片把 108 行魔表按 `DoSpell` 控制流分类，其中 `no_switch_case`（20 行：55–80）
+    与 `magicid_reject`（35 行：>80）的 reason 里都写着「承接 = 待确认是否有第二分派器」。
+    本探针把这个问题**机器化收口**：
+
+      1. **分派面清单**（source-cited，机器门禁）：扫 `src/M2Server/**/*.cs` 里所有
+         `switch (…MagicId|MagIdx…)` 站点 + 所有 `case MagicConst.<name>` 标签，
+         逐行锚点自检（防行号漂移）；钉死「M2Server 内魔号分派面恰好这些站点」。
+      2. **真身向量**：反射直调 oracle 私有 `PlayObject.DoSpell(UserMagic, short, short, IActor)`
+         （`PlayObject.Base.cs:1505-1529`：先按 `GetSpellPoint` 扣 MP，再调
+         `MagicManager.DoSpell`），以及 public static `MagicManager.DoSpell`（`MagicManager.cs:145`），
+         对 `no_switch_case ∪ magicid_reject` 全部行 + `warr_reject` 对照组逐行取
+         `(is_warr, spell_point, mp 前后, 返回, 自身出帧)`。
+         无地图/无 socket：`Envir = new Envirnoment()`；新构造的 `PlayObject` 处于隐藏模式
+         （`PlayObject.cs:993` Reset 置 `FixedHideMode = true`）⇒ `SendRefMsg` 走
+         `BaseObject.Message.cs:390` 的自身分支，把 oracle 本来要广播的帧原样投进自身 `MsgQueue`
+         （帧内容为 oracle 原值；收件人集合不在本片判据内）。
+
+    种子：本路径不取 RNG（`IsWarrSkill`/距离门/版本门/空 case 尾均无 `Random`），
+    故向量逐字节确定、无需 RNG 注入。
+
+    只读：不连 MySQL、不写任何现网文件、不发起任何 socket、不起栈、不占端口。
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\..\src\M2Server\M2Server.csproj" />
+  </ItemGroup>
+
+</Project>
