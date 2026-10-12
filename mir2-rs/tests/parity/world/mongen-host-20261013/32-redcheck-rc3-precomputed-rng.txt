@@ -1,0 +1,30 @@
+# 改坏必红 RC-3：给 `World::spawn_monster_precomputed` 塞一次 RNG 抽数（它必须零取数）
+# 变异点：crates/world/src/world.rs::spawn_monster_precomputed —— 在 `let id = self.entities.alloc_id();` 后加 `let _ = self.rng.random();`
+# 命中用例：world::tests::spawn_monster_precomputed_consumes_no_rng（比较调用后的下一抽：必须与新鲜同种子流相等）
+# 命令：CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test -p mir2-world --lib --offline spawn_monster_precomputed
+
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\world)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.70s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m2svr-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 1 test
+test world::tests::spawn_monster_precomputed_consumes_no_rng ... FAILED
+
+failures:
+
+---- world::tests::spawn_monster_precomputed_consumes_no_rng stdout ----
+
+thread 'world::tests::spawn_monster_precomputed_consumes_no_rng' (31928) panicked at crates\world\src\world.rs:1519:9:
+assertion `left == right` failed
+  left: 302596119
+ right: 1434747710
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    world::tests::spawn_monster_precomputed_consumes_no_rng
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 40 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-world --lib`
+# 还原：world.rs 回滚后 sha256=f943755588ac0ea68b68dc2ddf3acedc7020a6761d4e5e9f809ca95cd18830ed（与备份逐字节一致）

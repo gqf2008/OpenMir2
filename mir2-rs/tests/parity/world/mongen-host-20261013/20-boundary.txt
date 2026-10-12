@@ -1,0 +1,26 @@
+# 边界（oracle 冻结面）：本片改动清单 + src/sql/MirClient 差分
+
+## patch base = refs/heads/master = 304126ae0c46656181ef98414f182df6179ca261
+## patch head = refs/heads/mongen-host（本片交付 tip；见线程 patch/status 条目）
+## 本片（第 ③ 片）改动（git diff --name-status master..HEAD）：
+  M	mir2-rs/bins/game-svr/src/config.rs
+  M	mir2-rs/bins/game-svr/src/lib.rs
+  M	mir2-rs/bins/game-svr/src/main.rs
+  A	mir2-rs/bins/game-svr/src/mongen.rs
+  M	mir2-rs/crates/world/src/world.rs
+  A	mir2-rs/tests/parity/world/mongen-host-20261013/**
+
+## 基线说明（与上一状态不同）
+- 第 ① 片（envir 解析）已合入 master `f4790571`；第 ② 片（world 调度/RNG/哨兵）**含 R5-1/R5-2 返工**
+  已合入 master **`304126ae`**（approve reviewer-5 `1edcfad4` @reviewed_head `1400715a`）。
+- 因此本 patch 的差量 `master..HEAD` **只含第 ③ 片**（不再夹带第 ② 片 / R5）。
+
+## git diff --stat master -- src/ sql/ MirClient（必须为空）
+(空 = oracle/客户端/表结构未动)
+
+## 写集（第 ③ 片）
+mir2-rs/crates/world/src/world.rs（budget_monster_drops / spawn_monster_precomputed + 2 用例）
+mir2-rs/bins/game-svr/src/mongen.rs（宿主接线层 + 12 用例）
+mir2-rs/bins/game-svr/src/lib.rs（注册 pub mod mongen）
+mir2-rs/bins/game-svr/src/config.rs（[Setup] MonsterPowerRate 解析）
+mir2-rs/bins/game-svr/src/main.rs（加载 monsters/MonGen + sim_loop 建宿主 + step_mon_gen）

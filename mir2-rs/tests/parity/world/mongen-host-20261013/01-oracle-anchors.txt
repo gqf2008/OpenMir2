@@ -1,0 +1,87 @@
+# oracle 锚点（M3④-实现 B 第 ③ 片：bins/game-svr 宿主接线）
+#
+# 行号按本 worktree 基线（master f4790571..a96ef0e6 区间对 src/ 无改动；本片未动 src/）。
+# 每一条都在 src/ 原文实读（read 工具），不是转述盘点片。
+
+## 1. 配置（Server.conf → MonGenConfig）
+src/Modules/SystemModule/Conf/ServerConf.cs:21   [Server] VentureServer（ReadWriteString，== "TRUE" OrdinalIgnoreCase）
+src/Modules/SystemModule/Conf/ServerConf.cs:53   [Server] MonLimit（默认 M2Share.MonLimit=30，M2Share.cs:176）
+src/Modules/SystemModule/Conf/ServerConf.cs:54   [Server] ZenLimit（默认 5，M2Share.cs:177）
+src/Modules/SystemModule/Conf/ServerConf.cs:63   [Server] UserFull（默认 GameSvrConf.cs:1263 = 5000）
+src/Modules/SystemModule/Conf/ServerConf.cs:64   [Server] ZenFastStep（默认 GameSvrConf.cs:1264 = 300）
+src/Modules/SystemModule/Conf/ServerConf.cs:66   [Server] RegenMonstersTime（默认 GameSvrConf.cs:1433 = 200）
+src/Modules/SystemModule/Conf/ServerConf.cs:636  [Setup] ProcessMonsterInterval（默认 GameSvrConf.cs:1895 = 2）
+src/Modules/SystemModule/Conf/ServerConf.cs:637  [Setup] ProcessMonsterMultiThreadLimit（ReadWriteByte；默认 GameSvrConf.cs:1896 = 1）
+src/Modules/SystemModule/Conf/ServerConf.cs:560  [Setup] MonsterPowerRate（默认 GameSvrConf.cs:1476 = 10）——monsters 表能力缩放
+src/Modules/SystemModule/Conf/Model/GameSvrConf.cs:334  GenMonRate 字段（[Setup] GenMonRate，部署 Server.conf:780 = 10）
+部署实测 E:/MirServer/M2GameSvr/Server.conf：MonLimit=10(:26) ZenLimit=5(:27) UserFull=3000(:31) ZenFastStep=300(:32)
+  GenMonRate=10(:780) MonsterPowerRate=10(:377)；无 ProcessMonsterMultiThreadLimit / RegenMonstersTime / VentureServer（:9 有 VentureServer=FALSE）
+  ⇒ 本片 mon_gen_config_from_conf 实测读得 mon_limit=10/zen_limit=5/zen_fast_step=300/user_full=3000/mon_gen_rate=10/process_monster_multi_thread_limit=1/regen=200/venture=false。
+
+## 2. 加载 + 末尾哨兵
+src/GameSrv/DB/LocalDB.cs:501        LoadMonGen(out mongenCount)
+src/GameSrv/DB/LocalDB.cs:508        sFileName = M2Share.GetEnvirFilePath("MonGen.txt")
+src/GameSrv/DB/LocalDB.cs:520        HUtil32.CompareLStr("loadgen", line)（实参写反，子文件不可达——分片①保留）
+src/GameSrv/DB/LocalDB.cs:524-526    loadgen 子文件展开路径（load_map_gen_into，路径字符串拼接）
+src/GameSrv/DB/LocalDB.cs:532-557    8 列解析（Range (byte)/Count (ushort)/ZenTime=StrToInt*60000/MissionGenRate (byte)）
+src/GameSrv/DB/LocalDB.cs:558-564    入库校验（MapName&MonName 非空 && ZenTime>0 && GetMapInfo != null）
+src/GameSrv/DB/LocalDB.cs:570-590    文件存在 ⇒ 无条件追加缺省 MonGenInfo 到 MonGenInfoThreadMap[0]（末尾哨兵）并 result=1
+  本片：load_mon_gen_entries 的 Ok(Some(_)) ⇒ MonGenHost::start(sentinel_present=true)。
+
+## 3. 分组/分片（WorldServer.MonGen.cs）
+src/GameSrv/Word/WorldServer.MonGen.cs:30-114   InitializeMonster
+  :34-48  按 MonName 分组（StringComparer.OrdinalIgnoreCase）
+  :50-61  monsterGenMap.Count <= 0 ⇒ 建 0..limit 个空线程表
+  :63-88  每怪名 1 次 Random(ProcessMonsterMultiThreadLimit)（:66）+ MonGenList[i].MonName 错位写 MonsterThreadMap（:84，保留）
+  :91-99  MonsterList.Values 各再抽 1 次（:94）
+  :101-110 回填 Race = GetMonRace(name)
+src/GameSrv/Word/WorldServer.cs:77       MonsterList = new Dictionary<string, MonsterInfo>(StringComparer.OrdinalIgnoreCase)
+src/GameSrv/Word/WorldServer.cs:167-174  GetMonRace（TryGetValue；未命中 -1）
+src/GameSrv/Word/WorldServer.cs:1901     AddMonGenList（MonGenList）
+src/GameSrv/Word/WorldServer.cs:1909-1922 Check/Add/CreateMonGenInfoThreadMap（哨兵落 MonGenInfoThreadMap[0]）
+
+## 4. 每 tick regen 门（WorldServer.MonGen.cs:192-253 的 ProcessMonsters 前半）
+src/GameSrv/Word/WorldServer.MonGen.cs:207 门：(GetTickCount - RegenMonstersTick) > RegenMonstersTime（严格大于）
+src/GameSrv/Word/WorldServer.MonGen.cs:211-230 轮询 CurrMonGenIdx（越界取 0，再推进）
+src/GameSrv/Word/WorldServer.MonGen.cs:174-190 GetMonstersZenTime（<30min 且 d10>0 ⇒ 夹 6 加速）
+src/GameSrv/Word/WorldServer.MonGen.cs:232 genModCount = max(1, Round(max(1,Count)/(MonGenRate/10.0)))
+src/GameSrv/Word/WorldServer.MonGen.cs:235-243 canCreate = !(map==null || (map.Flag.boNOHUMNOMON && map.HumCount<=0))
+src/GameSrv/Word/WorldServer.MonGen.cs:244-252 genModCount>ActiveCount && canCreate ⇒ RegenMonsters；boRegened 才 StartTick=now
+src/GameSrv/Word/WorldServer.MonGen.cs:340 ProcessMonsters 循环尾 Thread.Sleep(20)（本宿主 200ms tick 等效驱动，登记见模块头）
+
+## 5. RegenMonsters（RNG 次序）
+src/GameSrv/Word/WorldServer.MonGen.cs:811-874 RegenMonsters(monGen, nCount)
+  :823     MissionGenRate>0 时先 Random(100)
+  :825-826 集中支：中心 2 次 Random(Range*2+1)
+  :829     集中支：每只 2 次 Random(20)
+  :849-850 普通支：每只 2 次 Random(Range*2+1)
+  :815/:836/:853-855 ZenLimit 闸门（本宿主注入同一 tick 时刻，登记）
+  （分片②已实现这些次序；本片只做宿主驱动与 CreateMonster 回调。）
+
+## 6. CreateMonster（RNG 次序；本片第 ③ 片的回调）
+src/GameSrv/Word/WorldServer.MonGen.cs:498-503 FindMap == null ⇒ null（在取数之前）
+src/GameSrv/Word/WorldServer.MonGen.cs:504-729 switch(nMonRace) 构造 cert：
+  511   AnimalChicken(51)        Random(3500)
+  520-539 AnimalDeer(52)         Random(30)==0 ? Random(20000) : Random(8000)
+  542   AnimalWolf(53)          Random(8000)
+  594-598 MonsterDigoutzombi(95) Random(2)
+  611-615 MonsterZilkinzombi(96) Random(4)
+  618-622 case 97 (CowMonster)   Random(2)
+  不在 switch 内的 race ⇒ cert==null（不抽任何数）
+src/GameSrv/Word/WorldServer.MonGen.cs:731-734 cert==null ⇒ return null
+src/GameSrv/Word/WorldServer.MonGen.cs:735 ApplyMonsterAbility(v880-910)（无 RNG；能力字段映射）
+src/GameSrv/Word/WorldServer.MonGen.cs:740 cert.Dir = RandomByte(8)
+src/GameSrv/Word/WorldServer.MonGen.cs:742 MonGetRandomItems(cert)（v441-488 的掉落预算）
+src/GameSrv/Word/WorldServer.MonGen.cs:743-746 Random(100) < cert.CoolEyeCode ⇒ CoolEye
+src/GameSrv/Word/WorldServer.MonGen.cs:747 cert.Initialize()（BaseObject.Base.cs:14：AbilCopyToWAbil + CanWalk(x,y,true)&&AddToMap ⇒ AddtoMapSuccess=false）
+src/GameSrv/Word/WorldServer.MonGen.cs:748-800 地形移位：仅 AddtoMapSuccess 为真时；循环内 CanWalk(x,y,false) 为假才移位
+              （Width<50?2:3 步长；Height<250? (Height<30?2:20) : 50 边距；最多 31 次；Random(Width/2)/Random(Height/2)）
+src/GameSrv/Word/WorldServer.MonGen.cs:801-802 !outofrange ⇒ return null 等价物
+
+## 7. 能力字段（ApplyMonsterAbility，v880-910）
+Race / RaceImg / Appr / Abil.Level=Level / LifeAttrib=btLifeAttrib / CoolEyeCode=CoolEye / FightExp=Exp /
+Abil.HP=MaxHP=HP / Abil.MP=0,MaxMP=MP / AC=MakeWord(AC,AC) / MAC=MakeWord(MAC,MAC) /
+DC=MakeWord(DC,MaxDC) / MC=MakeWord(MC,MC) / SC=MakeWord(SC,SC) / MonsterWeapon=LoByte(MP) /
+SpeedPoint=Speed / HitPoint=HitPoint / WalkSpeed/WalkStep/WalkWait / NextHitTime=AttackSpeed /
+NastyMode=boAggro / NoTame=boTame
+本片 WorldMonsterSink 落库子集：level/exp/hp/dc(MakeWord(dc,max_dc))/ac/life_attrib/hit_point/speed_point。

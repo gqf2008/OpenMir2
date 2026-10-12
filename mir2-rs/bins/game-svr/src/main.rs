@@ -390,6 +390,72 @@ async fn main() -> Result<()> {
             vec![0; mir2_data::models::MAX_CHANGE_LEVEL]
         }
     };
+    // **M3④-实现 B 第 ③ 片**：怪物模板表（`monsters` + MonItems）+ `Envir/MonGen.txt` 运行时条目
+    // + `Server.conf` 刷怪参数。三者任一拿不到时刷怪不启（登记），不影响既有链路。
+    let monster_table = {
+        let conn = cfg
+            .db_conn_string
+            .as_deref()
+            .unwrap_or(items::DEFAULT_CONN_STRING);
+        let envir_dir = base.join(&cfg.envir_dir);
+        match game_svr::monitems::load_monsters(conn, &envir_dir, cfg.monster_power_rate).await {
+            Ok(load) => {
+                glog!(
+                    "INF",
+                    "怪物模板表 monsters：{} 条（MonItems 挂接 {}/{}，{} 条掉落），刷怪输入就绪",
+                    load.monsters.len(),
+                    load.report.attached,
+                    load.report.total,
+                    load.report.entries
+                );
+                game_svr::mongen::MonsterTable::new(load.monsters)
+            }
+            Err(e) => {
+                glog!("WRN", "读 monsters 失败（{e}）⇒ 刷怪表为空（登记：不刷怪）");
+                game_svr::mongen::MonsterTable::new(Vec::new())
+            }
+        }
+    };
+    let mon_gen_entries = {
+        let loader = mir2_envir::MapLoader::new(&base, &cfg.map_dir, &cfg.envir_dir);
+        match registry.as_ref() {
+            Some(reg) => match game_svr::mongen::load_mon_gen_entries(&loader, reg) {
+                Ok(Some(entries)) => {
+                    glog!(
+                        "INF",
+                        "Envir/MonGen.txt 已载入：{} 条刷怪配置（有文件 ⇒ 末尾哨兵占 thread 0 首槽）",
+                        entries.len()
+                    );
+                    Some(entries)
+                }
+                Ok(None) => {
+                    glog!("INF", "无 Envir/MonGen.txt ⇒ 不刷怪（oracle result=0）");
+                    None
+                }
+                Err(e) => {
+                    glog!("WRN", "加载 Envir/MonGen.txt 失败（{e}）⇒ 不刷怪（登记）");
+                    None
+                }
+            },
+            None => {
+                glog!(
+                    "WRN",
+                    "无 Envir 真地图注册表 ⇒ 跳过 Envir/MonGen.txt（不刷怪）"
+                );
+                None
+            }
+        }
+    };
+    let mon_gen_config = match game_svr::mongen::mon_gen_config_from_conf(&conf) {
+        Ok(c) => c,
+        Err(e) => {
+            glog!(
+                "WRN",
+                "解析刷怪配置失败（{e}）⇒ 用 GameSvrConf 构造缺省（登记）"
+            );
+            mir2_world::mongen::MonGenConfig::default()
+        }
+    };
     let _sim = std::thread::Builder::new()
         .name("m2-sim".to_string())
         // 公告文本（oracle `NoticeMgr.GetNoticeMsg("Notice")`，帧 658 `SM_SENDNOTICE`）：
@@ -427,6 +493,11 @@ async fn main() -> Result<()> {
                     },
                     need_exps,
                     rng_seed,
+                    mon_gen: MonGenStartup {
+                        table: monster_table,
+                        entries: mon_gen_entries,
+                        config: mon_gen_config,
+                    },
                 },
                 notice,
                 colors,
@@ -2984,6 +3055,16 @@ struct EnterConfig {
     /// **M3 T-30**：`MIR2_RNG_SEED` 解析出的固定种子（`seed::env_seed`）。`None` ⇒ 不注入，
     /// 保持 `World::with_maps` 的既有随机源（生产路径一字不改）。
     rng_seed: Option<i32>,
+    /// **M3④-实现 B 第 ③ 片**：MonGen 刷怪启动输入（怪物模板表 + `Envir/MonGen.txt` 运行时条目
+    /// + `Server.conf` 刷怪参数）；`entries=None` ⇒ 无 `MonGen.txt`，不建宿主。
+    mon_gen: MonGenStartup,
+}
+
+/// MonGen 刷怪启动输入（[`game_svr::mongen`]）。
+struct MonGenStartup {
+    table: game_svr::mongen::MonsterTable,
+    entries: Option<Vec<mir2_world::mongen::MonGenEntry>>,
+    config: mir2_world::mongen::MonGenConfig,
 }
 
 /// `SEED_PROBE` 的 8 项参照序列（`new Random(seed).Next()` 前 `seed::PROBE_LEN` 项）。
@@ -3008,10 +3089,70 @@ fn seed_probe_text(seed: i32) -> String {
         .join(" ")
 }
 
+/// **M3④-实现 B 第 ③ 片**：单调一次 MonGen 调度（`WorldServer.MonGen.cs:192-253` 的单线程版）。
+///
+/// `world.rng` 会被临时移出并交给回调：oracle 的 `CreateMonster`（`:498-810`）与 `RegenMonsters`
+/// （`:811-874`）取的是**同一条** `M2Share.RandomNumber`；本函数把同一条流贯穿「位置抽 → 每只
+/// CreateMonster 取数」的 interleaving（`regen_monsters` 的回调契约），避免落库用的 `world.rng`
+/// 与调度用的流分叉。
+fn step_mon_gen(
+    host: &mut game_svr::mongen::MonGenHost,
+    table: &game_svr::mongen::MonsterTable,
+    registry: &mir2_envir::MapRegistry,
+    world: &mut mir2_world::World,
+    play_object_count: i32,
+) {
+    let now = i32::try_from(world.clock_ms).unwrap_or(i32::MAX);
+    // oracle `map.HumCount`：当前图上的玩家数。
+    let mut hum_by_map: std::collections::HashMap<usize, i32> = std::collections::HashMap::new();
+    for e in world.entities.iter() {
+        if e.race == mir2_world::ACTOR_RACE_PLAY {
+            *hum_by_map.entry(e.map_id).or_insert(0) += 1;
+        }
+    }
+    // `canCreate = !(map == null || (map.Flag.boNOHUMNOMON && map.HumCount <= 0))`（`:235-243`）。
+    let mut can_map: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+    for entry in &host.state.entries {
+        if can_map.contains_key(&entry.map_name) {
+            continue;
+        }
+        let ok = registry.id_of(&entry.map_name).is_some_and(|id| {
+            registry.flag_of(id).is_some_and(|f| {
+                !(f.bo_nohumnomon && hum_by_map.get(&id).copied().unwrap_or(0) <= 0)
+            })
+        });
+        can_map.insert(entry.map_name.clone(), ok);
+    }
+    let mut can = |name: &str| can_map.get(name).copied().unwrap_or(false);
+    // `HUtil32.GetTickCount()` 的确定性注入：同一 tick 内取同一值（`regen_monsters` 的
+    // `ZenLimit` 闸门因此不会因墙钟抖动而提前中断；oracle 的墙钟分支见 `game_svr::mongen` 模块头）。
+    let tick_now = now;
+    let mut clock = || tick_now;
+    // 把 `world.rng` 移出：`WorldMonsterSink` 需要 `&mut world` 落库，而取数必须走同一条流。
+    let mut rng = std::mem::replace(&mut world.rng, mir2_shared::rng::RandomNumber::with_seed(0));
+    {
+        let mut sink = game_svr::mongen::WorldMonsterSink {
+            world,
+            registry,
+            table,
+        };
+        let _ = host.step(
+            now,
+            play_object_count,
+            &mut rng,
+            &mut clock,
+            &mut can,
+            &mut sink,
+            table,
+        );
+    }
+    world.rng = rng;
+}
+
 fn sim_loop(
     map_sizes: Vec<(i32, i32)>,
     registry: Option<mir2_envir::MapRegistry>,
-    enter_cfg: EnterConfig,
+    mut enter_cfg: EnterConfig,
     notice: Vec<u8>,
     colors: MsgColors,
     ev_rx: std::sync::mpsc::Receiver<GateEvent>,
@@ -3035,6 +3176,35 @@ fn sim_loop(
     }
     // `Exps.conf` 的 NeedExps（`BaseObject.GetLevelExp` 的数据源；存档 `MaxExp` 也用它）。
     world.need_exps = enter_cfg.need_exps.clone();
+    // **M3④-实现 B 第 ③ 片**：MonGen 刷怪调度宿主（`WorldServer.MonGen.cs:30/192/811`）。
+    // `entries=None` ⇒ 无 `Envir/MonGen.txt`，不建宿主；`initialize_monster` 在此消耗一次
+    // `world.rng`（oracle `InitializeMonster` 同一时机；RNG 次序 = 怪名分组序 + `MonsterList.Values`）。
+    let mut mon_gen_host = match enter_cfg.mon_gen.entries.take() {
+        Some(entries) => {
+            let host = game_svr::mongen::MonGenHost::start(
+                entries,
+                &enter_cfg.mon_gen.table,
+                true, // 有 MonGen.txt ⇒ `LocalDB.cs:570-590` 末尾哨兵已入 thread 0
+                enter_cfg.mon_gen.config,
+                &mut world.rng,
+            );
+            glog!(
+                "INF",
+                "MonGen 刷怪宿主就绪：{} 条配置，{} 个怪名，threads={}，哨兵={}（mon_limit={} zen_limit={} user_full={} regen_time={}ms gen_rate={}）",
+                host.state.entries.len(),
+                host.init.distinct_mon_names,
+                host.state.threads.len(),
+                host.init.sentinel_present,
+                host.config.mon_limit,
+                host.config.zen_limit,
+                host.config.user_full,
+                host.config.regen_monsters_time,
+                host.config.mon_gen_rate
+            );
+            Some(host)
+        }
+        None => None,
+    };
     // 取角色的加载队列（`FrnEngn` 的双缓冲 + `CharacterDataProcessor` 的读档循环，见 `load.rs`）
     let mut engine = load::FrontEngine::new();
     // `openmir2-m2-session-lifecycle`：在线用户的世界侧网关坐标 + 待踢名单（重复进世界用）
@@ -3974,6 +4144,20 @@ fn sim_loop(
             &mut ground_sessions,
             registry.as_ref(),
         );
+        // **M3④-实现 B 第 ③ 片**：MonGen regen 门 + 刷怪（单线程串行版的 `ProcessMonsters`，
+        // `WorldServer.MonGen.cs:192-253`）。`dir`/`cool_eye` 已按 oracle 取数但未入实体内存
+        // （AOI 面属承接卡 `openmir2-m3-monster-ai-tick`，见 `game_svr::mongen` 模块头）。
+        if let Some(host) = mon_gen_host.as_mut() {
+            if let Some(reg) = registry.as_ref() {
+                step_mon_gen(
+                    host,
+                    &enter_cfg.mon_gen.table,
+                    reg,
+                    &mut world,
+                    i32::try_from(online.len()).unwrap_or(i32::MAX),
+                );
+            }
+        }
         let rec = world.tick();
         ticks += 1;
         // T-28：周期恢复 tick（oracle `PlayObject.Run` 的 `:70-141`）——同一 world tick 后处理，

@@ -1,0 +1,30 @@
+# 改坏必红 RC-1：删掉 race 51 的 `rng.random_below(3500)`（oracle WorldServer.MonGen.cs:511 MeatQuality）
+# 变异点：bins/game-svr/src/mongen.rs::draw_race_specific —— `51 => { let _ = rng.random_below(3500); }` → `51 => {}`
+# 命中用例：mongen::tests::create_monster_chicken_consumes_random_3500_then_dir_drops_cool_eye（同种子流手工复算 oracle 次序）
+# 命令：CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test -p game-svr --lib --offline create_monster_chicken
+
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.98s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-3aa264152417c61e.exe)
+
+running 1 test
+test mongen::tests::create_monster_chicken_consumes_random_3500_then_dir_drops_cool_eye ... FAILED
+
+failures:
+
+---- mongen::tests::create_monster_chicken_consumes_random_3500_then_dir_drops_cool_eye stdout ----
+
+thread 'mongen::tests::create_monster_chicken_consumes_random_3500_then_dir_drops_cool_eye' (18580) panicked at bins\game-svr\src\mongen.rs:696:9:
+assertion `left == right` failed: 抽数个数/次序与 oracle 不一致
+  left: 1879216329
+ right: 2111132622
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    mongen::tests::create_monster_chicken_consumes_random_3500_then_dir_drops_cool_eye
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 99 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --lib`
+# 还原：mongen.rs 回滚后 sha256=44d6a06ec8e17ac39a943a8a1551763c286f3134856148194f7a72188a3ad685（与备份 44d6a06e… 逐字节一致）

@@ -131,6 +131,10 @@ pub struct GateConfig {
     /// `ServerConf.cs:153` 的 `ReadWriteInteger("Setup", "SpellFillTime", …)`）——
     /// `BaseObject.Run()`（`BaseObject.Base.cs:52/78`）的魔力点回蓝阈值。
     pub spell_fill_time: i32,
+    /// `[Setup] MonsterPowerRate`（oracle `GameSvrConf.cs:391/1476`，缺省 `10`；
+    /// `ServerConf.cs:560` 的 `ReadWriteInteger("Setup", "MonsterPowerRate", …)`）——
+    /// `load_monster_db` 的怪物能力缩放（`monitems::load_monsters` 的入参）。
+    pub monster_power_rate: i32,
 }
 
 /// 默认配置文件：可执行文件同目录的 `Server.conf`（与 C# `AppContext.BaseDirectory` 一致）。
@@ -193,6 +197,7 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut save_human_rcd_time: Option<i32> = None;
     let mut health_fill_time: Option<i32> = None;
     let mut spell_fill_time: Option<i32> = None;
+    let mut monster_power_rate: Option<i32> = None;
     let mut ids_addr: Option<String> = None;
     let mut ids_port: Option<u16> = None;
     let mut db_addr: Option<String> = None;
@@ -388,6 +393,13 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                             .with_context(|| format!("SpellFillTime 不是合法整数：{v:?}"))?,
                     );
                 }
+                // 怪物能力缩放（`ServerConf.cs:560`；现网 `Server.conf:377` 写 `=10`）。
+                "MONSTERPOWERRATE" => {
+                    monster_power_rate = Some(
+                        v.parse()
+                            .with_context(|| format!("MonsterPowerRate 不是合法整数：{v:?}"))?,
+                    );
+                }
                 _ => {}
             },
             _ => {}
@@ -464,6 +476,8 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         // oracle 缺省值（`GameSvrConf.cs:1323-1324` 的 `HealthFillTime = 300` / `SpellFillTime = 800`）。
         health_fill_time: health_fill_time.unwrap_or(300),
         spell_fill_time: spell_fill_time.unwrap_or(800),
+        // oracle 缺省值（`GameSvrConf.cs:1476` 的 `MonsterPowerRate = 10`）。
+        monster_power_rate: monster_power_rate.unwrap_or(10),
         ids_addr,
         ids_port,
         db_addr,

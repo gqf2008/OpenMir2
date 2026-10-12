@@ -1,0 +1,25 @@
+# 本片（M3④-实现 B 分片③：bins/game-svr 宿主接线）复现命令
+# 工作目录：<worktree>/mir2-rs ；隔离目标目录 CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target
+
+# --- 判据（构造级，12 条）---
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test -p game-svr --lib --offline mongen
+# crates/world 新增 API 的 2 条
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test -p mir2-world --lib --offline precomputed
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test -p mir2-world --lib --offline budget_monster_drops
+
+# --- 四门禁（全绿）---
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo fmt --all -- --check
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo clippy --workspace --all-targets --offline -- -D warnings
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo run -q -p msgcodegen --offline -- --check
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test --workspace --offline
+
+# --- 改坏必红（每次：cp mongen.rs/world.rs 备份 -> 变异 -> 跑命中用例 -> 还原并 sha256 核对）---
+# RC-1：删掉 race 51 的 Random(3500)                   -> create_monster_chicken_consumes_random_3500_then_dir_drops_cool_eye FAILED
+# RC-2：`let dir = rng.random_byte(8)` 改为常量 `let dir = 0u8` -> 同一用例 FAILED（RNG 流位置错位）
+# RC-3：在 spawn_monster_precomputed 里加 `let _ = self.rng.random()` -> spawn_monster_precomputed_consumes_no_rng FAILED
+# 还原后：sha256(mongen.rs)=44d6a06e…、sha256(world.rs)=f9437555… 与备份逐字节一致；git status 只剩本片 5 处改动 + 2 处新增。
+
+# --- 证据 hash（仓库 LF/git-blob 口径）---
+python -I tools/evidence-hash/verify_sha256sums.py write mir2-rs/tests/parity/world/mongen-host-20261013
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/world/mongen-host-20261013
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/world/mongen-host-20261013
