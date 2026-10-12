@@ -1,0 +1,59 @@
+# 命令清单 —— evidence-m3-target-availability-rust-20261013
+
+owner 2026-10-13 00:20 brief（`brief-m3-combat-skills.md` 顶部，派给 m3cs）+ 2026-10-12 23:50 brief
+（`brief-m3-bag-equip.md` 顶部第 ③ 条）的「**两侧都强制**」夹具半。卡：`openmir2-m3-attack-pair-fixture`。
+所有命令在本 worktree（`.claude/worktrees/m3bag`，branch `worktree-m3-bag-equip`）执行；**纯离线、未起栈、未占端口**。
+
+依赖（由 m2-svr 车道负责，不在本片）：
+- `mir2-rs/bins/game-svr/src/state_log.rs` + `tools/m2-acceptance/start_rust_stack.ps1 -StateLog`
+  （见其待审片 `4ba36368` / `7a41aebc`，commit message 明示「夹具（run_attack_pair.ps1）侧接线归 m3bag」）。
+
+## 1. 无栈自检（生产函数级，两侧接线）
+
+```powershell
+# 改前基线（缺 ⑦c）
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 -SelfCheckNoStack
+# 改后（含 ⑦c：rust-good rc=0 / rust-ghost rc=1 / missing rc=1(missing_state_log) / csharp-good rc=0）
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 -SelfCheckNoStack
+```
+
+## 2. 改坏必红（跑完即时还原；原始件见 03/04）
+
+```bash
+# 2.1 把「缺 dump ⇒ fail-closed」改成「缺 dump ⇒ rc=0 放行」（模拟旧「只打 NOTE 放行」）
+#     ⇒ ⑦c: missing rc=0(missing_state_log) ⇒ SELFTEST_RED RED: target_avail_missing_not_failclosed=0/missing_state_log
+# 2.2 让 Rust 侧绕过门（$rc=0，仅 csharp 真跑 gate）
+#     ⇒ ⑦c: rust-ghost rc=0 ⇒ SELFTEST_RED RED: target_avail_rust_ghost_rc=0
+```
+
+## 3. 跨格式交叉核对：用 m2-svr 的**真 Rust 产出**喂本夹具的门
+
+m2-svr 待审片 `4ba36368` 的证据 `tools/m2-acceptance/evidence/m2svr-rust-server-state-dump-20261013/`
+（本目录 `inputs-rust-*.txt` 为其拷贝，LF 归一）：
+
+```bash
+python -I mir2-rs/tests/parity/m3/server_state_gate.py --state inputs-rust-good.txt \
+  --attacks 5 --attacker-id 1 --victim-x 18 --victim-y 20 --tolerance 1            # rc=0
+python -I mir2-rs/tests/parity/m3/server_state_gate.py --state inputs-rust-ghost-from-k4.txt \
+  --attacks 5 --attacker-id 1 --victim-x 18 --victim-y 20 --tolerance 1            # rc=1 点名 #4/#5
+```
+
+## 4. 四门禁（隔离 target；workspace 根 = `mir2-rs/`）
+
+```bash
+cd mir2-rs
+export CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --offline -- -D warnings
+cargo test --workspace --offline
+cargo run -p msgcodegen --offline -- --check
+```
+
+## 5. 证据 hash（**仓库口径 = LF 归一 / git blob**；本目录已按该口径生成）
+
+```bash
+python -I tools/evidence-hash/verify_sha256sums.py write \
+  mir2-rs/tests/parity/m3/evidence-m3-target-availability-rust-20261013
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra \
+  mir2-rs/tests/parity/m3/evidence-m3-target-availability-rust-20261013
+```

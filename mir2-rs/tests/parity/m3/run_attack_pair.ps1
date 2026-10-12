@@ -62,6 +62,11 @@
     2.5 pin 后复核受害者 HP（F-F）  会话 `attack_raw.jsonl` 里每条 `role=struck` 的 `maxhp`（= 服务端
                  `WAbil.MaxHP`）必须 == 期望（缺省 20669 = L255/战士）；被 `RecalcLevelAbilitys` 重算回 19
                  ⇒ `VICTIM_HP_POSTPIN` RED（fail-closed）。
+    2.6 目标可用性门（owner 23:50 第 ③ 条 / 00:20 两侧都强制）  **两侧都用**服务端权威逐击状态 dump 判
+                 （客户端视图看不到 ghost）：dump 最后 -AttackCount 行里，攻方前方格必须有非攻方、
+                 !ghost && !death 的玩家族对象（允许 1 击起跑竞态）。C# 半 `-CsharpStateLog` /
+                 `start-csharp-hook.ps1 -StateLog`；Rust 半 `-RustStateLog` / `start_rust_stack.ps1 -StateLog`。
+                 **任一侧缺 dump ⇒ RED（fail-closed）**；改坏（受害 ghost ⇒ 门点名 k）必红，自检 ⑦c。
     3 跨侧口径   两侧 baseline.json 的 `attack_sequence` / `attack_pose` / `fixed_new_chr` 必须一致；
                  不一致 ⇒ PREREQ（exit 2）。
     3.1 pin 记账门（owner 2026-10-12 16:30；**19:20 降级为 informational**）  `baseline.json.pin_attempts`
@@ -114,7 +119,8 @@ param(
   [switch]$IsolateAttack,          # owner 2026-10-12 21:15：攻击路径专用种子流（C# 栈须以 MIR2_RNG_ISOLATE_ATTACK=1 起）
   [string]$IsolateSites = '',      # C# 静态分流站点 dump（缺省读 $env:MIR2_RNG_ISOLATE_SITES，再由流水头补）
   [string]$AttackStreamLog = '',   # 专用流流水（缺省读 $env:MIR2_RNG_ATTACK_LOG）；夹具记其 sha256
-  [string]$CsharpStateLog = '',    # owner 23:50：服务端权威逐击状态 dump（缺省读 $env:MIR2_RNG_STATE_LOG）
+  [string]$CsharpStateLog = '',    # owner 23:50：C# 半服务端权威逐击状态 dump（缺省读 $env:MIR2_RNG_STATE_LOG）
+  [string]$RustStateLog = '',      # owner 2026-10-13 00:20：Rust 半同形 dump（m2-svr 管线；缺省读 $env:MIR2_RNG_STATE_LOG / <RustStackLogDir>\rng-server-state.tsv）
   [switch]$DiffOnly,
   [switch]$SelfCheckNoStack
 )
@@ -213,6 +219,38 @@ function Invoke-ServerStateGate([string]$StatePath, [int]$Attacks, [int]$Attacke
   $out = & python -I $ServerStateGate --state $StatePath --attacks $Attacks --attacker-id $AttackerId --victim-x $Vx --victim-y $Vy --tolerance $Tolerance 2>&1
   foreach ($line in @($out)) { Write-Host $line }
   return [int]$LASTEXITCODE
+}
+
+# owner 2026-10-13 00:20（owner 23:50 第 ③ 条的「两侧都强制」）：目标可用性门的**两侧接线**唯一口径。
+# C# 半由 `start-csharp-hook.ps1 -StateLog` 注入 `MIR2_RNG_STATE_LOG`；Rust 半由 m2-svr 的
+# `start_rust_stack.ps1 -StateLog`（`bins/game-svr` 的 MIR2_RNG_STATE_LOG 管线）注入同名变量。
+# 本函数：解析路径（显式 → 环境 → 侧默认）+ **fail-closed**（缺文件 ⇒ rc=1、reason=missing_state_log，
+# 不再退化成旧「-Side rust 只打 NOTE 放行」）+ 跑 `server_state_gate.py`。
+# **禁止**在这里静默放行：任一侧缺 dump 都必须是 RED——否则这道门只保护一半（owner 00:20 点名的边界）。
+function Invoke-M3TargetAvailabilityGate {
+  param(
+    [ValidateSet('csharp', 'rust')][string]$Side,
+    [string]$ExplicitStateLog = '',
+    [int]$Attacks,
+    [int]$AttackerId,
+    [int]$Vx,
+    [int]$Vy,
+    [int]$Tolerance = 1
+  )
+  $resolved = ''
+  if (-not [string]::IsNullOrEmpty($ExplicitStateLog)) { $resolved = $ExplicitStateLog }
+  elseif (-not [string]::IsNullOrEmpty($env:MIR2_RNG_STATE_LOG)) { $resolved = $env:MIR2_RNG_STATE_LOG }
+  elseif ($Side -eq 'csharp' -and (Test-Path -LiteralPath 'E:\tmp\m3-csharp-hook\rng-server-state.tsv')) {
+    $resolved = 'E:\tmp\m3-csharp-hook\rng-server-state.tsv'
+  } elseif ($Side -eq 'rust') {
+    $rustDefault = Join-Path $RustStackLogDir 'rng-server-state.tsv'
+    if (Test-Path -LiteralPath $rustDefault) { $resolved = $rustDefault }
+  }
+  if ([string]::IsNullOrEmpty($resolved) -or -not (Test-Path -LiteralPath $resolved)) {
+    return [pscustomobject]@{ rc = 1; side = $Side; path = $resolved; reason = 'missing_state_log' }
+  }
+  $rc = Invoke-ServerStateGate -StatePath $resolved -Attacks $Attacks -AttackerId $AttackerId -Vx $Vx -Vy $Vy -Tolerance $Tolerance
+  return [pscustomobject]@{ rc = $rc; side = $Side; path = $resolved; reason = '' }
 }
 
 $script:AttackDiffRc = 2
@@ -655,6 +693,42 @@ if ($SelfCheckNoStack) {
   if ($stateGateOut -notmatch 'SELFTEST GREEN') { $failures += 'server_state_gate_selftest_not_green' }
   Write-Output ("SELFTEST ⑦b server_state_gate selftest rc={0}" -f $stateGateRc)
 
+  # ⑦c 目标可用性门的**两侧接线**（owner 2026-10-13 00:20「两侧都强制」）：直接跑生产函数
+  #    `Invoke-M3TargetAvailabilityGate`（C# 半 + Rust 半），四向有牙：
+  #      (1) 合成好 dump（rust）⇒ rc=0；(2) 受害行 ghost=1 ⇒ rc=1（门点名 k）；
+  #      (3) 显式路径不存在 ⇒ rc=1 且 reason=missing_state_log（fail-closed，不许退化成旧「只打 NOTE 放行」）；
+  #      (4) csharp 与 rust 走同一函数（csharp + 好 dump ⇒ rc=0）。
+  #    改坏：把 rust 分支删掉 / 返回恒 0 / 把缺文件降级成放行 ⇒ 本项必 RED（红检原始件见证据）。
+  $gateDir = Join-Path $tmpRoot 'f-ssg'
+  New-Item -ItemType Directory -Force -Path $gateDir | Out-Null
+  $ssgGood = Join-Path $gateDir 'rust-good.tsv'
+  $ssgGhost = Join-Path $gateDir 'rust-ghost.tsv'
+  $atkJson = '{"id":100,"x":17,"y":20,"dir":2,"ghost":0,"death":0,"hp":19,"maxhp":19,"map":"0137"}'
+  $goodLines = New-Object System.Collections.Generic.List[string]
+  $ghostLines = New-Object System.Collections.Generic.List[string]
+  for ($k = 1; $k -le 5; $k++) {
+    $vicGood = '{"id":200,"x":18,"y":20,"dir":6,"ghost":0,"death":0,"hp":18,"maxhp":19,"map":"0137"}'
+    $vicGhost = '{"id":200,"x":18,"y":20,"dir":6,"ghost":' + $(if ($k -ge 4) { 1 } else { 0 }) + ',"death":0,"hp":18,"maxhp":19,"map":"0137"}'
+    $goodLines.Add('SERVER_STATE ' + $k + ' [' + $atkJson + ',' + $vicGood + ']')
+    $ghostLines.Add('SERVER_STATE ' + $k + ' [' + $atkJson + ',' + $vicGhost + ']')
+  }
+  $ssgUtf8 = New-Object System.Text.UTF8Encoding($false)
+  [System.IO.File]::WriteAllLines($ssgGood, $goodLines, $ssgUtf8)
+  [System.IO.File]::WriteAllLines($ssgGhost, $ghostLines, $ssgUtf8)
+  $prevEap = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  $ssgGoodRes = Invoke-M3TargetAvailabilityGate -Side 'rust' -ExplicitStateLog $ssgGood -Attacks 5 -AttackerId 100 -Vx 18 -Vy 20 -Tolerance 1
+  $ssgGhostRes = Invoke-M3TargetAvailabilityGate -Side 'rust' -ExplicitStateLog $ssgGhost -Attacks 5 -AttackerId 100 -Vx 18 -Vy 20 -Tolerance 1
+  $ssgMissingRes = Invoke-M3TargetAvailabilityGate -Side 'rust' -ExplicitStateLog (Join-Path $gateDir 'does-not-exist.tsv') -Attacks 5 -AttackerId 100 -Vx 18 -Vy 20 -Tolerance 1
+  $ssgCsharpRes = Invoke-M3TargetAvailabilityGate -Side 'csharp' -ExplicitStateLog $ssgGood -Attacks 5 -AttackerId 100 -Vx 18 -Vy 20 -Tolerance 1
+  $ErrorActionPreference = $prevEap
+  if ($ssgGoodRes.rc -ne 0) { $failures += ('target_avail_rust_good_rc=' + $ssgGoodRes.rc) }
+  if ($ssgGhostRes.rc -ne 1) { $failures += ('target_avail_rust_ghost_rc=' + $ssgGhostRes.rc) }
+  if ($ssgMissingRes.rc -ne 1 -or $ssgMissingRes.reason -ne 'missing_state_log') { $failures += ('target_avail_missing_not_failclosed=' + $ssgMissingRes.rc + '/' + $ssgMissingRes.reason) }
+  if ($ssgCsharpRes.rc -ne 0) { $failures += ('target_avail_csharp_good_rc=' + $ssgCsharpRes.rc) }
+  if ($ssgGoodRes -isnot [pscustomobject]) { $failures += 'target_avail_return_not_structured' }
+  Write-Output ("SELFTEST ⑦c 目标可用性门两侧接线：rust-good rc={0} / rust-ghost rc={1} / missing rc={2}({3}) / csharp-good rc={4}" -f $ssgGoodRes.rc, $ssgGhostRes.rc, $ssgMissingRes.rc, $ssgMissingRes.reason, $ssgCsharpRes.rc)
+
   # ⑧ 生产函数级「改坏必红」：合成两侧 raw → align → diff 绿；改坏一次 dmg ⇒ 红；改坏一次 hit ⇒ 红。
   #    F-J（m3cs tick22，2026-10-12 13:45）：align **必须走生产函数 `Invoke-AttackAlign`**，
   #    不再 `& python … align … | Out-Null` 把待测函数的返回值吞掉——旧写法正好绕过了
@@ -876,7 +950,7 @@ if ($SelfCheckNoStack) {
 
   Remove-Item -Recurse -Force $tmpRoot -ErrorAction SilentlyContinue
   if ($failures.Count -eq 0) {
-    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（攻击配置透传/默认关 + run_pair -DisableAutoPlay 耦合两向 + 攻击两相 pin pose/SQL（-PinMapName 透传含 MapName 断言） + pin SQL 可执行性（含改坏 a.IncHealth 必红 + 改坏 Hp=100000 越界必红） + pin 记账门（owner 19:20 降级 informational：attempts=2/3/漂移/旧会话无字段键 绿 + 键在但空/(off)/形态坏 红 + 改坏必红值清空） + 预热相 -StopAfterCharCreated 透传两向 + 攻击 pin 无怪口径（R-1，按地图查提取件：生产 0137 绿/source_verified + 换回 map 0 必红 + 合成 0/1 行·声明漂移·缺 provenance 四向有牙） + 攻击 pin 非 MonGen AI 消费者口径（R-1 refine 15:05：生产 0137 绿/source_verified + 合成 有引用/声明漂移/缺 provenance/缺提取件 四向必红） + 入口/DiffOnly fail-closed + attack_diff selftest + 改坏 dmg/hit 必红 + Invoke-AttackAlign 返回值形态两处（F-J：⑧ 生产函数直接断言 + ⑮） + scoped_diff 14/14 + M-1 WARN 有牙齿 + M-2 attacker 精确选择 selftest + pin SQL 别名/列校验 + 种子注入断言（两侧 fail-closed）+ 攻击序列收尾等待（F-E） + attack 行缺 my 的 fail-closed（残差③） + 活栈隔离口径（owner 21:15：开关 off/on/fail-closed 六向 + attack_seed 公式含 i32 回绕 + 流水头 有/无/缺文件 + C# dump vs Rust 谓词表机判（生产绿 / 删一条红 / 加未登记红）+ C# hook 离线自检 + SHA256 活文件（F1：holder FileShare.ReadWrite 下读=锚 + 旧 ReadAllBytes 必被拒）+ attack_rng_ledger 站点表与决策片同表（F2）））'
+    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（攻击配置透传/默认关 + run_pair -DisableAutoPlay 耦合两向 + 攻击两相 pin pose/SQL（-PinMapName 透传含 MapName 断言） + pin SQL 可执行性（含改坏 a.IncHealth 必红 + 改坏 Hp=100000 越界必红） + pin 记账门（owner 19:20 降级 informational：attempts=2/3/漂移/旧会话无字段键 绿 + 键在但空/(off)/形态坏 红 + 改坏必红值清空） + 预热相 -StopAfterCharCreated 透传两向 + 攻击 pin 无怪口径（R-1，按地图查提取件：生产 0137 绿/source_verified + 换回 map 0 必红 + 合成 0/1 行·声明漂移·缺 provenance 四向有牙） + 攻击 pin 非 MonGen AI 消费者口径（R-1 refine 15:05：生产 0137 绿/source_verified + 合成 有引用/声明漂移/缺 provenance/缺提取件 四向必红） + 入口/DiffOnly fail-closed + attack_diff selftest + 改坏 dmg/hit 必红 + Invoke-AttackAlign 返回值形态两处（F-J：⑧ 生产函数直接断言 + ⑮） + scoped_diff 14/14 + M-1 WARN 有牙齿 + M-2 attacker 精确选择 selftest + pin SQL 别名/列校验 + 种子注入断言（两侧 fail-closed）+ 攻击序列收尾等待（F-E） + attack 行缺 my 的 fail-closed（残差③） + 活栈隔离口径（owner 21:15：开关 off/on/fail-closed 六向 + attack_seed 公式含 i32 回绕 + 流水头 有/无/缺文件 + C# dump vs Rust 谓词表机判（生产绿 / 删一条红 / 加未登记红）+ C# hook 离线自检 + SHA256 活文件（F1：holder FileShare.ReadWrite 下读=锚 + 旧 ReadAllBytes 必被拒）+ attack_rng_ledger 站点表与决策片同表（F2）+ 目标可用性门两侧接线（owner 00:20：C#/Rust 同一函数，rust good/ghost/missing 三向 fail-closed）））'
     exit 0
   }
   Write-Output ('SELFTEST_RED RED: ' + ($failures -join ', '))
@@ -1127,42 +1201,37 @@ if (-not $postPin.ok) {
 }
 Write-Output ("VICTIM_HP_POSTPIN ok expected={0} struck_lines={1}（Level={2} Job={3}，oracle RecalcLevelAbilitys 自洽）" -f $AttackVictimHp, @($postPin.observed).Count, $AttackVictimLevel, $script:M3AttackVictimJob)
 
-# owner 2026-10-12 23:50 第 ③ 条：**目标可用性 fail-closed 门**。
-# 背景：C# 侧「目标格为空」其实是受害者被**静默 ghost**（服务端 dump 实测 k=4 起 ghost=1，而位置/地图
-# 未变），`Envir.GetMovingObject(..., true)` 对 Ghost 直接返回 null ⇒ `GetPoseCreate()==null`。客户端
-# 视图（attack_state.jsonl）看不到这个 ghost ⇒ 夹具必须用**服务端 dump** 判，否则会拿「假的有目标窗口」
-# 去比。开启：`start-csharp-hook.ps1 -StateLog`（缺省 <LogDir>\rng-server-state.tsv，写 MIR2_RNG_STATE_LOG）。
+# owner 2026-10-12 23:50 第 ③ 条 + 2026-10-13 00:20「两侧都强制」：**目标可用性 fail-closed 门**。
+# 背景：受害者的**服务端** `Ghost` 被某条 oracle 路径静默置 1 时，`Envir.GetMovingObject(..., true)`
+# 对 Ghost 直接返回 null ⇒ `GetPoseCreate()==null` ⇒ `_Attack`/`AttackSuccess` 提前返回（C# 只 3/120）。
+# 客户端视图（attack_state.jsonl）看不到这个 ghost ⇒ 夹具必须用**服务端权威 dump** 判。两侧同口径：
+#   C# 半：`start-csharp-hook.ps1 -StateLog`（缺省 `E:\tmp\m3-csharp-hook\rng-server-state.tsv`）；
+#   Rust 半：`start_rust_stack.ps1 -StateLog`（m2-svr 的 MIR2_RNG_STATE_LOG 管线；`-RustStateLog` / 环境 / 默认）。
 # 判据：dump 最后 -AttackCount 行里，攻方前方格 (Vx,Vy) 上必须有非攻方、!ghost && !death 的玩家族对象；
-# 允许多达 1 击缺失（受害晚于攻方进世界的起跑竞态），超出 ⇒ RED。
-if ($Side -eq 'csharp') {
-  $stateLogResolved = if (-not [string]::IsNullOrEmpty($CsharpStateLog)) { $CsharpStateLog }
-    elseif (-not [string]::IsNullOrEmpty($env:MIR2_RNG_STATE_LOG)) { $env:MIR2_RNG_STATE_LOG }
-    elseif (Test-Path -LiteralPath 'E:\tmp\m3-csharp-hook\rng-server-state.tsv') { 'E:\tmp\m3-csharp-hook\rng-server-state.tsv' }
-    else { '' }
-  if ([string]::IsNullOrEmpty($stateLogResolved) -or -not (Test-Path -LiteralPath $stateLogResolved)) {
-    Write-Output 'RED: 缺服务端权威逐击状态 dump（-CsharpStateLog / $env:MIR2_RNG_STATE_LOG）——目标可用性门无法判；请用 start-csharp-hook.ps1 -StateLog 起栈（fail-closed，owner 23:50 第 ③ 条）'
-    exit 1
-  }
-  $atkId = 0
-  foreach ($l in (Get-Content (Join-Path $mine.FullName 'attack_raw.jsonl'))) {
-    if ($l -match '"role"\s*:\s*"attack"' -and $l -match '"my"\s*:\s*(\d+)') { $atkId = [int]$Matches[1]; break }
-  }
-  $vx = $AttackPinCX + 1
-  $vy = $AttackPinCY
-  if ($baseline.attack_pose -match 'victim=(\d+),(\d+)') { $vx = [int]$Matches[1]; $vy = [int]$Matches[2] }
-  if ($atkId -le 0) { Write-Output 'PREREQ_MISSING: 会话 attack_raw.jsonl 里读不到攻方 ActorId（role=attack.my）'; exit 2 }
-  # 入会话留痕：本侧运行的最后 -AttackCount 行服务端 dump（dump 文件跨多次 run 累加，取尾段）。
-  @(Get-Content -LiteralPath $stateLogResolved | Select-Object -Last $AttackCount) |
-    Set-Content -Path (Join-Path $mine.FullName 'server_state_segment.tsv') -Encoding utf8
-  $ssgRc = Invoke-ServerStateGate -StatePath $stateLogResolved -Attacks $AttackCount -AttackerId $atkId -Vx $vx -Vy $vy -Tolerance 1
-  if ($ssgRc -ne 0) {
-    Write-Output ("RED: 目标可用性门未过（rc={0}）——受害不在 ({1},{2}) 或被 ghost/death（见 server_state_gate.py）" -f $ssgRc, $vx, $vy)
-    exit 1
-  }
-  Write-Output ("TARGET_AVAILABILITY_OK state={0} attacker_id={1} victim_cell={2},{3}" -f (Split-Path -Leaf $stateLogResolved), $atkId, $vx, $vy)
-} else {
-  Write-Output 'NOTE: -Side rust 无服务端状态 dump（归 m2-svr）；目标可用性门仅在 C# 侧强制（F-F pin + 同一夹具已使两侧结构一致）'
+# 允许 1 击起跑竞态。**任一侧缺 dump ⇒ RED（fail-closed）**——旧行为「-Side rust 只打 NOTE 放行」已删除。
+$atkId = 0
+foreach ($l in (Get-Content (Join-Path $mine.FullName 'attack_raw.jsonl'))) {
+  if ($l -match '"role"\s*:\s*"attack"' -and $l -match '"my"\s*:\s*(\d+)') { $atkId = [int]$Matches[1]; break }
 }
+if ($atkId -le 0) { Write-Output 'PREREQ_MISSING: 会话 attack_raw.jsonl 里读不到攻方 ActorId（role=attack.my）'; exit 2 }
+$vx = $AttackPinCX + 1
+$vy = $AttackPinCY
+if ($baseline.attack_pose -match 'victim=(\d+),(\d+)') { $vx = [int]$Matches[1]; $vy = [int]$Matches[2] }
+$stateExplicit = if ($Side -eq 'csharp') { $CsharpStateLog } else { $RustStateLog }
+$stateFlag = if ($Side -eq 'csharp') { '-CsharpStateLog' } else { '-RustStateLog' }
+$gate = Invoke-M3TargetAvailabilityGate -Side $Side -ExplicitStateLog $stateExplicit -Attacks $AttackCount -AttackerId $atkId -Vx $vx -Vy $vy -Tolerance 1
+if ($gate.rc -ne 0) {
+  if ($gate.reason -eq 'missing_state_log') {
+    Write-Output ("RED: 缺服务端权威逐击状态 dump（{0} / 环境变量 MIR2_RNG_STATE_LOG）——目标可用性门无法判；C# 用 start-csharp-hook.ps1 -StateLog，Rust 用 start_rust_stack.ps1 -StateLog（fail-closed，owner 23:50 第 ③ 条 / 00:20 两侧都强制）" -f $stateFlag)
+  } else {
+    Write-Output ("RED: 目标可用性门未过（rc={0}, side={1}）——受害不在 ({2},{3}) 或被 ghost/death（见 server_state_gate.py）" -f $gate.rc, $Side, $vx, $vy)
+  }
+  exit 1
+}
+# 入会话留痕：本侧运行的最后 -AttackCount 行服务端 dump（dump 文件跨多次 run 累加，取尾段）。
+@(Get-Content -LiteralPath $gate.path | Select-Object -Last $AttackCount) |
+  Set-Content -Path (Join-Path $mine.FullName 'server_state_segment.tsv') -Encoding utf8
+Write-Output ("TARGET_AVAILABILITY_OK side={0} state={1} attacker_id={2} victim_cell={3},{4}" -f $Side, (Split-Path -Leaf $gate.path), $atkId, $vx, $vy)
 
 # pin 记账字段存在性护栏（owner 2026-10-12 16:30；**19:20 降级为 informational**）：本侧产物必须至少把
 # `pin_attempts` 记账落盘（缺失/不可解析 ⇒ PREREQ exit 2）；attempts 数值只打 INFO（不再拒比）。
