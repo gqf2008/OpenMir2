@@ -43,3 +43,5 @@ test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 running 0 tests
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 TEST_RC=0
+
+# 注：该 checkout 为 code commit 3ed7535d（本片全部代码 + 向量）；其后的提交只加了证据包与 base 合并（docs 刷新 / monster-ai 分片③），不改动本片文件 ⇒ 本复现读数对最终 head 同样成立。

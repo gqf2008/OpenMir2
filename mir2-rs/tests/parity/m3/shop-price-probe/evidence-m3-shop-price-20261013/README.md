@@ -40,10 +40,10 @@
 | ② | 真身向量生成 | 58 条（`item_price` 6 / `uip` 15 / `user_price` 8 / `sell_price` 8 / `repair_cost` 10 / `repair_item` 11），探针 rc=0 | `02-probe-build-run.txt`、`03-vectors-inventory.txt` |
 | ③ | Rust 逐族对拍 | `cargo test -p mir2-formula` **14 passed / 0 failed**（含 `shop_price_vectors_match_oracle` 258 处断言） | `04-rust-test-green.txt` |
 | ④ | 改坏必红 ×3 | ① 去掉 `StdMode 43` DuraMax 副作用 ⇒ `stdmode43_clamp` got 300 vs 158；② 耗久改四舍五入 ⇒ `trunc_dec` dura 967 vs 968；③ `GetItemPrice` 命中 0 也回落 ⇒ `list_zero_no_fallback` got 321 vs 0 | `05/06/07-mutation-red-*.txt` |
-| ⑤ | 四门禁（隔离 target / `--offline`） | fmt 0 / clippy 0 / `test --workspace --no-fail-fast` **87 suites / 774 passed / 0 failed / 18 ignored** / msgcodegen 604 rc=0 | `08-gates.txt` |
+| ⑤ | 四门禁（隔离 target / `--offline`） | fmt 0 / clippy 0 / `test --workspace --no-fail-fast` **87 suites / 781 passed / 0 failed / 18 ignored** / msgcodegen 604 rc=0（合并 origin/master a547619a 后的合并树） | `08-gates.txt` |
 | ⑥ | 干净检出可复现 | 见 `09-clean-checkout-repro.txt` | `09-clean-checkout-repro.txt` |
 
-> `774 passed = master 基线 771 + 本片 3`（`11` 个 lib 单测里的新增 0 + 集成 3）；suite 数 `87 = 86 + 1`。
+> 合并树 `781 passed`；其中本片新增 3（集成用例）⇒ 本片相对 master（778）为 `+3`，suite 数不变（新增 test 落在既有 suite 文件之外的新集成 target ⇒ `87 = 86 + 1`）。
 
 ## 复现命令（离线，零端口）
 
