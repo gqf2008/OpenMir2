@@ -1,0 +1,25 @@
+# 冻结 schema 事实源：sql/mir2_db.sql（本仓库，未改）
+# 命令： grep -n 'IncHealth\|IncSpell\|IncHealing' sql/mir2_db.sql
+#        sed -n '24,75p' sql/mir2_db.sql        # characters 表
+#        sed -n '6073,6095p' sql/mir2_db.sql    # characters_ablity 表
+
+# --- characters 表（含 Inc* 三列） ---
+# 24: CREATE TABLE `characters`
+# 47:   `IncHealth` tinyint(3) NULL DEFAULT 0,
+# 48:   `IncSpell` tinyint(3) NULL DEFAULT 0,
+# 49:   `IncHealing` tinyint(3) NULL DEFAULT 0,
+
+# --- characters_ablity 表（列清单里**没有** IncHealth/IncSpell） ---
+# 6073: CREATE TABLE `characters_ablity`  (
+#   PlayerId, Level, Ac, Mac, Dc, Mc, Sc, Hp, Mp, MaxHP, MAxMP,
+#   Exp, MaxExp, Weight, MaxWeight, WearWeight, MaxWearWeight, HandWeight, MaxHandWeight, ModifyTime
+#   （共 20 列，无 IncHealth / IncSpell / IncHealing）
+
+# --- 活库实态（MariaDB 10.11.19） ---
+# SHOW COLUMNS FROM mir2_db.characters_ablity LIKE 'Inc%';   => 空集
+# SHOW COLUMNS FROM mir2_db.characters       LIKE 'Inc%';   =>
+#   IncHealth   tinyint(3)  YES  (default 0)
+#   IncSpell    tinyint(3)  YES  (default 0)
+#   IncHealing  tinyint(3)  YES  (default 0)
+
+# 运行态活库由 03-repro-sql.txt 的第①/②节实拍。

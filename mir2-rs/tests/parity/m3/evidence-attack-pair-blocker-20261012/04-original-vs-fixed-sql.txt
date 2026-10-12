@@ -1,0 +1,16 @@
+# 夹具原 SQL（mir2-rs/tests/parity/m3/gate_guards.ps1:533，函数 Get-M3AttackPinSql:518，git blob 3587f895）
+UPDATE mir2_db.characters_ablity a JOIN mir2_db.characters c ON a.PlayerId=c.Id
+  SET a.Level={0}, a.Hp={1}, a.MaxHP={1}, a.Mp=15, a.MAxMP=15, a.IncHealth=0, a.IncSpell=0
+  WHERE c.ChrName='{2}'
+#                          ^^^^^^^^^^^  ^^^^^^^^^^^  <- 挂到 characters_ablity 别名 a 上，该表无这两列
+
+# 建议修正（唯一改动：a.IncHealth/a.IncSpell -> c.IncHealth/c.IncSpell）
+UPDATE mir2_db.characters_ablity a JOIN mir2_db.characters c ON a.PlayerId=c.Id
+  SET a.Level={0}, a.Hp={1}, a.MaxHP={1}, a.Mp=15, a.MAxMP=15, c.IncHealth=0, c.IncSpell=0
+  WHERE c.ChrName='{2}'
+
+# oracle 锚点：Inc* 池是角色（characters）列，不是 Abil 列——
+#   src/M2Server/Player/PlayObject.Base.cs:2073-2076（IncHealth 累加）
+#   src/M2Server/Player/PlayObject.Message.cs:70-141（周期恢复 tick 消费 IncHealth/IncSpell/IncHealing）
+#   src/OpenMir2/.../PlayDataStorage.Save.cs:86,112（落库口径；T-14/T-28 已核）
+# 与 T-14 报告一致：唯一会漂移的列是 characters.IncHealth（scoped_diff.py TABLE_COLUMNS 第 22 列）。

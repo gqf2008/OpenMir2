@@ -1,0 +1,29 @@
+== 活库复现（MariaDB 10.11.19 @ 127.0.0.1:3306，mysql 客户端 D:\mysql\mariadb-10.11.19-winx64\bin\mysql.exe）==
+== 所有 UPDATE 的 WHERE 均用**不存在**的角色名 '__m3cs_no_such_char__' ⇒ 0 行改动，未触碰任何真实角色/内容 ==
+== 命令：
+   mysql -h 127.0.0.1 -P 3306 -u root --password= --batch -e "<SQL>"
+
+=== 环境 ===
+date: 2026-10-12T11:48:50+08:00
+VERSION()
+10.11.19-MariaDB
+
+=== ① characters_ablity 是否有 IncHealth/IncSpell ===
+(空 = 无此列)
+
+=== ② characters 是否有 IncHealth/IncSpell ===
+Field	Type	Null	Key	Default	Extra
+IncHealth	tinyint(3)	YES		0	
+IncSpell	tinyint(3)	YES		0	
+IncHealing	tinyint(3)	YES		0	
+
+=== ③ 夹具原 SQL（gate_guards.ps1:533 形态，a.IncHealth）——小写别名配不存在角色名仍应在 prepare 期报 1054 ===
+--------------
+UPDATE mir2_db.characters_ablity a JOIN mir2_db.characters c ON a.PlayerId=c.Id SET a.Level=1, a.Hp=100000, a.MaxHP=100000, a.Mp=15, a.MAxMP=15, a.IncHealth=0, a.IncSpell=0 WHERE c.ChrName='__m3cs_no_such_char__'
+--------------
+
+ERROR 1054 (42S22) at line 1: Unknown column 'a.IncHealth' in 'SET'
+rc=1
+
+=== ④ 建议修正 SQL（c.IncHealth，改到 characters 别名上）——应 0 rows affected、无错误 ===
+rc=0
