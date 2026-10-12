@@ -1,1 +1,9 @@
-# 干净 clone 上复核证据 hash（占位；下一次 commit 前用实跑输出覆盖）
+# 干净 clone 上复核证据 hash（'清单只含会入库的文件' + repo 字节口径在任何检出都成立）
+# 命令（在本片 head 的 worktree 上克隆到空目录后）：
+#   git clone --single-branch -b worktree-m2-gamesvr-host <本片 head 的 worktree> E:/tmp/m2svr-cleanclone-seed
+#   cd E:/tmp/m2svr-cleanclone-seed && python -I tools/evidence-hash/verify_sha256sums.py verify \
+#       mir2-rs/tests/parity/m3/evidence/rust-seed-injection-20261012 --check-extra
+# clone 里 core.autocrlf = true（Windows 默认 true ⇒ 盘上 CRLF，仍按 repo 字节口径复核）
+
+GREEN mir2-rs\tests\parity\m3\evidence\rust-seed-injection-20261012\SHA256SUMS.txt  [repo 口径]  OK 16/16
+rc=0
