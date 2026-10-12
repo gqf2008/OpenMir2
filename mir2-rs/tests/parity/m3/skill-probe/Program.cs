@@ -283,7 +283,7 @@ internal static class Program
     // `break` 或只置 `boTrain` 的归 no_effect_case；没有 case 的归 no_switch_case。
     private static readonly HashSet<ushort> WarrSkillIds = new()
     {
-        3, 4, 7, 12, 25, 26, 27, 34, 38, // MagicConst.SKILL_ONESWORD..TWINBLADE（`MagicManager.cs:82-105`）
+        3, 4, 7, 12, 25, 26, 27, 34, 38, // MagicConst.SKILL_ONESWORD..TWINBLADE（`MagicManager.cs:82-100`）
     };
 
     /// <summary>`DoSpell` 的 `switch` case 魔号全集（逐条抄 `MagicManager.cs:172-640`）。</summary>
@@ -321,7 +321,7 @@ internal static class Program
     /// <summary>每个分派类别的承接说明（DoD③「未实装逐条登记并给承接」）。</summary>
     private static string DospellClassReason(string dospellClass) => dospellClass switch
     {
-        "warr_reject" => "DoSpell 前置：IsWarrSkill(MagIdx) ⇒ return false（MagicManager.cs:82-105,151）；承接 = 战士技能走 ClientHit/Attack 路径（M3 攻击接线）",
+        "warr_reject" => "DoSpell 前置：IsWarrSkill(MagIdx) ⇒ return false（MagicManager.cs:82-100,151）；承接 = 战士技能走 ClientHit/Attack 路径（M3 攻击接线）",
         "magicid_reject" => "DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）",
         "no_effect_case" => "DoSpell case 体无副作用（43 `break`；49/51/52/53/54 只置 boTrain）；承接 = 无行为可对拍",
         "no_switch_case" => "DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器",
@@ -451,7 +451,7 @@ internal static class Program
             }
             case "group_melee":
             {
-                // MagicManager.cs:960-968（`MagGroupDeDing` 的循环体，取数顺序与 oracle 逐字一致）：
+                // MagicManager.cs:942 起 / 逐目标结算体 :956-963（`MagGroupDeDing`，取数顺序与 oracle 逐字一致）：
                 //   int nPower = playObject.GetAttackPower(LoByte(DC), HiByte(DC) - LoByte(DC));
                 //   if (Random(baseObject.SpeedPoint) >= playObject.HitPoint) nPower = 0;
                 //   if (nPower > 0) nPower = baseObject.GetHitStruckDamage(playObject, nPower);

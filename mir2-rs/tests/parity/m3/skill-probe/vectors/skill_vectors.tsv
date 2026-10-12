@@ -3,13 +3,13 @@ reg	1	火球术	1	7	60	1	本片已实装：施法前置 + MP 消耗 + 效果威�
 skill	1	火球术	1	3	7	11	16	16	200	300	500	500	4	1	8	8	2	2	60	860	2	3	4	5	1	50	1	1	0	1	7700	10290	damage	32	-1	-1	-1	-1	-1	-1	7700	20	0	0	0
 reg	2	治愈术	2	7	40	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
 skill	2	治愈术	2	3	7	11	16	16	200	300	500	500	7	0	14	20	0	0	40	840	2	4	5	7	2	50	1	1	0	1	7700	10290	heal	108	-1	-1	-1	-1	-1	-1	7700	20	0	0	0
-reg	3	基本剑术	0	7	0	0	DoSpell 前置：IsWarrSkill(MagIdx) ⇒ return false（MagicManager.cs:82-105,151）；承接 = 战士技能走 ClientHit/Attack 路径（M3 攻击接线）	warr_reject
-reg	4	精神力战法	2	9	0	0	DoSpell 前置：IsWarrSkill(MagIdx) ⇒ return false（MagicManager.cs:82-105,151）；承接 = 战士技能走 ClientHit/Attack 路径（M3 攻击接线）	warr_reject
+reg	3	基本剑术	0	7	0	0	DoSpell 前置：IsWarrSkill(MagIdx) ⇒ return false（MagicManager.cs:82-100,151）；承接 = 战士技能走 ClientHit/Attack 路径（M3 攻击接线）	warr_reject
+reg	4	精神力战法	2	9	0	0	DoSpell 前置：IsWarrSkill(MagIdx) ⇒ return false（MagicManager.cs:82-100,151）；承接 = 战士技能走 ClientHit/Attack 路径（M3 攻击接线）	warr_reject
 reg	5	大火球	1	19	60	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
 skill	5	大火球	1	3	19	23	25	25	200	300	500	500	3	5	6	6	10	10	60	860	6	7	7	8	1	50	1	1	0	1	7700	10290	damage	41	-1	-1	-1	-1	-1	-1	7700	20	0	0	0
 reg	6	施毒术	2	14	40	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
 skill	6	施毒术	2	3	14	17	20	20	200	300	500	500	4	0	0	0	0	0	40	840	1	2	3	4	2	50	1	1	0	1	7700	10290	poison	-1	-1	127	120	-1	-1	-1	7700	20	0	0	0
-reg	7	攻杀剑术	0	19	0	0	DoSpell 前置：IsWarrSkill(MagIdx) ⇒ return false（MagicManager.cs:82-105,151）；承接 = 战士技能走 ClientHit/Attack 路径（M3 攻击接线）	warr_reject
+reg	7	攻杀剑术	0	19	0	0	DoSpell 前置：IsWarrSkill(MagIdx) ⇒ return false（MagicManager.cs:82-100,151）；承接 = 战士技能走 ClientHit/Attack 路径（M3 攻击接线）	warr_reject
 reg	8	抗拒火环	1	12	30	0	DoSpell 有 case，但效果需要地图/目标/可见集/召唤/状态等上下文（如 MagPushArround/MagSaceMove/MagTurnUndead/MagMakeSlave/MagGroupDeDing 的遍历与施加）；承接 = M3 攻击/魔法接线后的批次	context_required
 reg	9	地狱火	1	16	60	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
 skill	9	地狱火	1	3	16	21	26	26	200	300	500	500	10	10	14	14	6	6	60	860	13	15	18	20	1	50	1	1	0	1	7700	10290	damage	34	-1	-1	-1	-1	-1	-1	7700	20	0	0	0
@@ -17,7 +17,7 @@ reg	10	疾光电影	1	26	100	1	本片已实装：施法前置 + MP 消耗 + 效�
 skill	10	疾光电影	1	3	26	29	32	32	200	300	500	500	25	20	12	12	12	12	100	900	26	33	39	45	1	50	1	1	0	1	7700	10290	damage	47	-1	-1	-1	-1	-1	-1	7700	20	0	0	0
 reg	11	雷电术	1	17	100	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
 skill	11	雷电术	1	3	17	20	23	23	200	300	500	500	12	6	14	28	10	10	100	900	9	12	15	18	1	50	1	1	0	1	7700	10290	damage	43	65	-1	-1	-1	-1	-1	7700	20	0	0	0
-reg	12	刺杀剑术	0	25	0	0	DoSpell 前置：IsWarrSkill(MagIdx) ⇒ return false（MagicManager.cs:82-105,151）；承接 = 战士技能走 ClientHit/Attack 路径（M3 攻击接线）	warr_reject
+reg	12	刺杀剑术	0	25	0	0	DoSpell 前置：IsWarrSkill(MagIdx) ⇒ return false（MagicManager.cs:82-100,151）；承接 = 战士技能走 ClientHit/Attack 路径（M3 攻击接线）	warr_reject
 reg	13	灵魂火符	2	18	60	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
 skill	13	灵魂火符	2	3	18	21	24	24	200	300	500	500	5	2	15	28	10	10	60	860	3	5	6	7	2	50	1	1	0	1	7700	10290	damage	73	-1	-1	-1	-1	-1	-1	7700	20	0	0	0
 reg	14	幽灵盾	2	22	40	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
@@ -39,9 +39,9 @@ reg	23	爆裂火焰	1	22	60	1	本片已实装：施法前置 + MP 消耗 + 效�
 skill	23	爆裂火焰	1	3	22	27	31	31	200	300	500	500	15	10	8	8	6	6	60	860	14	18	21	25	1	50	1	1	0	1	7700	10290	damage	41	-1	-1	-1	-1	-1	-1	7700	20	0	0	0
 reg	24	地狱雷光	1	30	60	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
 skill	24	地狱雷光	1	3	30	32	34	34	200	300	500	500	35	20	10	30	10	30	60	860	29	38	46	55	1	50	1	1	0	1	7700	10290	damage	50	-1	-1	-1	-1	-1	-1	7700	20	0	0	0
-reg	25	半月弯刀	0	28	0	0	DoSpell 前置：IsWarrSkill(MagIdx) ⇒ return false（MagicManager.cs:82-105,151）；承接 = 战士技能走 ClientHit/Attack 路径（M3 攻击接线）	warr_reject
-reg	26	烈火剑法	0	35	0	0	DoSpell 前置：IsWarrSkill(MagIdx) ⇒ return false（MagicManager.cs:82-105,151）；承接 = 战士技能走 ClientHit/Attack 路径（M3 攻击接线）	warr_reject
-reg	27	野蛮冲撞	0	30	0	0	DoSpell 前置：IsWarrSkill(MagIdx) ⇒ return false（MagicManager.cs:82-105,151）；承接 = 战士技能走 ClientHit/Attack 路径（M3 攻击接线）	warr_reject
+reg	25	半月弯刀	0	28	0	0	DoSpell 前置：IsWarrSkill(MagIdx) ⇒ return false（MagicManager.cs:82-100,151）；承接 = 战士技能走 ClientHit/Attack 路径（M3 攻击接线）	warr_reject
+reg	26	烈火剑法	0	35	0	0	DoSpell 前置：IsWarrSkill(MagIdx) ⇒ return false（MagicManager.cs:82-100,151）；承接 = 战士技能走 ClientHit/Attack 路径（M3 攻击接线）	warr_reject
+reg	27	野蛮冲撞	0	30	0	0	DoSpell 前置：IsWarrSkill(MagIdx) ⇒ return false（MagicManager.cs:82-100,151）；承接 = 战士技能走 ClientHit/Attack 路径（M3 攻击接线）	warr_reject
 reg	28	心灵启示	2	26	40	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
 skill	28	心灵启示	2	3	26	30	35	35	200	300	500	500	16	0	0	0	0	0	40	840	4	8	12	16	2	50	1	1	0	1	7700	10290	show_hp	-1	-1	-1	-1	-1	87000	-1	7700	20	0	0	0
 reg	29	群体治疗术	2	33	40	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
@@ -52,7 +52,7 @@ skill	31	魔法盾	1	3	31	34	38	38	200	300	500	500	20	30	0	0	0	0	0	800	35	40	45	
 reg	32	圣言术	1	32	120	0	DoSpell 有 case，但效果需要地图/目标/可见集/召唤/状态等上下文（如 MagPushArround/MagSaceMove/MagTurnUndead/MagMakeSlave/MagGroupDeDing 的遍历与施加）；承接 = M3 攻击/魔法接线后的批次	context_required
 reg	33	冰咆哮	1	35	60	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
 skill	33	冰咆哮	1	3	35	37	40	40	200	300	500	500	12	30	12	12	12	12	60	860	33	36	39	42	1	50	1	1	0	1	7700	10290	damage	48	-1	-1	-1	-1	-1	-1	7700	20	0	0	0
-reg	34	解毒术	2	48	40	0	DoSpell 前置：IsWarrSkill(MagIdx) ⇒ return false（MagicManager.cs:82-105,151）；承接 = 战士技能走 ClientHit/Attack 路径（M3 攻击接线）	warr_reject
+reg	34	解毒术	2	48	40	0	DoSpell 前置：IsWarrSkill(MagIdx) ⇒ return false（MagicManager.cs:82-100,151）；承接 = 战士技能走 ClientHit/Attack 路径（M3 攻击接线）	warr_reject
 reg	36	火焰冰	1	48	60	1	本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）	implemented
 skill	36	火焰冰	1	3	48	50	52	52	200	300	500	500	14	10	12	24	6	6	60	860	14	17	21	24	1	50	1	1	0	1	7700	10290	uenhancer	2	-1	-1	-1	546	-1	-1	7700	20	0	0	0
 reg	37	雷神之怒	1	50	100	0	DoSpell 有 case，但效果需要地图/目标/可见集/召唤/状态等上下文（如 MagPushArround/MagSaceMove/MagTurnUndead/MagMakeSlave/MagGroupDeDing 的遍历与施加）；承接 = M3 攻击/魔法接线后的批次	context_required

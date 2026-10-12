@@ -683,7 +683,7 @@ fn unimplemented_skills_are_registered() {
 /// 类别分布逐类钉死（内容冻结 ⇒ 行数稳定），新增/漏登魔表行都会判红。
 ///
 /// 类别口径（`src/M2Server/Magic/MagicManager.cs`）：
-/// - `warr_reject`：`IsWarrSkill(MagIdx)` ⇒ `return false`（`:82-105,151`）
+/// - `warr_reject`：`IsWarrSkill(MagIdx)` ⇒ `return false`（`:82-100,151`）
 /// - `magicid_reject`：`MagicId > 80` ⇒ `return false`（`:167`）
 /// - `implemented`：本片有用例（四种字段齐备）
 /// - `context_required`：有 case，但效果需地图/目标/可见集/召唤/状态

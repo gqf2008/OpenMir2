@@ -310,7 +310,7 @@ pub fn power_uenhancer(
     (power, time)
 }
 
-/// `MagicManager.MagGroupDeDing`（`MagicManager.cs:960-968`）的**单目标**结算（39 `SKILL_GROUPDEDING`）。
+/// `MagicManager.MagGroupDeDing`（函数起于 `MagicManager.cs:942`，逐目标结算体 `:956-963`）的**单目标**结算（39 `SKILL_GROUPDEDING`）。
 ///
 /// 逐字照抄循环体（取数顺序勿改）：
 /// 1. `nPower = playObject.GetAttackPower(LoByte(DC), HiByte(DC) - LoByte(DC))`
@@ -360,7 +360,7 @@ pub fn group_melee_damage(
 // - `spell_in_range` / `spell_version_gate` / `amulet_requirement`：`DoSpell` 的**内联语句**或
 //   `switch` case 标签，未单独成方法、无法反射直调 ⇒ **source-cited**（注释给出行号）。
 
-/// `MagicManager.IsWarrSkill`（`src/M2Server/Magic/MagicManager.cs:82-105`）：9 个战士技能魔号。
+/// `MagicManager.IsWarrSkill`（`src/M2Server/Magic/MagicManager.cs:82-100`）：9 个战士技能魔号。
 ///
 /// `DoSpell` 开头 `if (IsWarrSkill(userMagic.MagIdx)) return false;`（同文件 :151）——
 /// 战士技能不走魔法施放流程。

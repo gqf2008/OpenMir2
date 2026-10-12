@@ -1,7 +1,7 @@
 // amulet-probe —— 用 C# oracle 真身实测「施法前置 · 武器（护身符）/ 战士技能」向量。
 //
 // 本片（M3 ②③ 离线第二格）把 DoD③ 的「施法前置」里**可离线、可真身调用**的两面做成逐字段向量：
-//   ① 战士技能拒绝：`MagicManager.IsWarrSkill(int wMagIdx)`（`src/M2Server/Magic/MagicManager.cs:82-105`）
+//   ① 战士技能拒绝：`MagicManager.IsWarrSkill(int wMagIdx)`（`src/M2Server/Magic/MagicManager.cs:82-100`）
 //       —— `DoSpell` 开头 `if (IsWarrSkill(userMagic.MagIdx)) return false;`（同文件 :151）。
 //   ② 护身符（武器）前置：`MagicBase.CheckAmulet(playObject, byte nCount, byte nType, ref short Idx)`
 //      （`src/M2Server/Magic/MagicBase.cs:47-105`），用**真 PlayObject**（真 `UseItems`）+ 真
@@ -200,7 +200,7 @@ internal static class Program
             generated_by = "mir2-rs/tests/parity/m3/amulet-probe",
             oracle = new
             {
-                warr_skill_entry = "M2Server.Magic.MagicManager.IsWarrSkill(int)（public static，MagicManager.cs:82-105）",
+                warr_skill_entry = "M2Server.Magic.MagicManager.IsWarrSkill(int)（public static，MagicManager.cs:82-100）",
                 check_amulet_entry = "M2Server.Magic.MagicBase.CheckAmulet(PlayObject, byte, byte, ref short)（public static，MagicBase.cs:47-105）",
                 items = "真 GameItemSystem（GetStdItem 查表）+ 真 PlayObject.UseItems[ArmRingl=5 / Bujuk=9]",
                 config = "SystemShare.Config.MagicAttackRage / MagicHitIntervalTime（oracle 配置默认值）",

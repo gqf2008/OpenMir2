@@ -31,7 +31,7 @@
       "delay_time": 0,
       "implemented": false,
       "dospell_class": "warr_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AIsWarrSkill(MagIdx) \u21D2 return false\uFF08MagicManager.cs:82-105,151\uFF09\uFF1B\u627F\u63A5 = \u6218\u58EB\u6280\u80FD\u8D70 ClientHit/Attack \u8DEF\u5F84\uFF08M3 \u653B\u51FB\u63A5\u7EBF\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AIsWarrSkill(MagIdx) \u21D2 return false\uFF08MagicManager.cs:82-100,151\uFF09\uFF1B\u627F\u63A5 = \u6218\u58EB\u6280\u80FD\u8D70 ClientHit/Attack \u8DEF\u5F84\uFF08M3 \u653B\u51FB\u63A5\u7EBF\uFF09"
     },
     {
       "magic_id": 4,
@@ -41,7 +41,7 @@
       "delay_time": 0,
       "implemented": false,
       "dospell_class": "warr_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AIsWarrSkill(MagIdx) \u21D2 return false\uFF08MagicManager.cs:82-105,151\uFF09\uFF1B\u627F\u63A5 = \u6218\u58EB\u6280\u80FD\u8D70 ClientHit/Attack \u8DEF\u5F84\uFF08M3 \u653B\u51FB\u63A5\u7EBF\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AIsWarrSkill(MagIdx) \u21D2 return false\uFF08MagicManager.cs:82-100,151\uFF09\uFF1B\u627F\u63A5 = \u6218\u58EB\u6280\u80FD\u8D70 ClientHit/Attack \u8DEF\u5F84\uFF08M3 \u653B\u51FB\u63A5\u7EBF\uFF09"
     },
     {
       "magic_id": 5,
@@ -71,7 +71,7 @@
       "delay_time": 0,
       "implemented": false,
       "dospell_class": "warr_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AIsWarrSkill(MagIdx) \u21D2 return false\uFF08MagicManager.cs:82-105,151\uFF09\uFF1B\u627F\u63A5 = \u6218\u58EB\u6280\u80FD\u8D70 ClientHit/Attack \u8DEF\u5F84\uFF08M3 \u653B\u51FB\u63A5\u7EBF\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AIsWarrSkill(MagIdx) \u21D2 return false\uFF08MagicManager.cs:82-100,151\uFF09\uFF1B\u627F\u63A5 = \u6218\u58EB\u6280\u80FD\u8D70 ClientHit/Attack \u8DEF\u5F84\uFF08M3 \u653B\u51FB\u63A5\u7EBF\uFF09"
     },
     {
       "magic_id": 8,
@@ -121,7 +121,7 @@
       "delay_time": 0,
       "implemented": false,
       "dospell_class": "warr_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AIsWarrSkill(MagIdx) \u21D2 return false\uFF08MagicManager.cs:82-105,151\uFF09\uFF1B\u627F\u63A5 = \u6218\u58EB\u6280\u80FD\u8D70 ClientHit/Attack \u8DEF\u5F84\uFF08M3 \u653B\u51FB\u63A5\u7EBF\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AIsWarrSkill(MagIdx) \u21D2 return false\uFF08MagicManager.cs:82-100,151\uFF09\uFF1B\u627F\u63A5 = \u6218\u58EB\u6280\u80FD\u8D70 ClientHit/Attack \u8DEF\u5F84\uFF08M3 \u653B\u51FB\u63A5\u7EBF\uFF09"
     },
     {
       "magic_id": 13,
@@ -251,7 +251,7 @@
       "delay_time": 0,
       "implemented": false,
       "dospell_class": "warr_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AIsWarrSkill(MagIdx) \u21D2 return false\uFF08MagicManager.cs:82-105,151\uFF09\uFF1B\u627F\u63A5 = \u6218\u58EB\u6280\u80FD\u8D70 ClientHit/Attack \u8DEF\u5F84\uFF08M3 \u653B\u51FB\u63A5\u7EBF\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AIsWarrSkill(MagIdx) \u21D2 return false\uFF08MagicManager.cs:82-100,151\uFF09\uFF1B\u627F\u63A5 = \u6218\u58EB\u6280\u80FD\u8D70 ClientHit/Attack \u8DEF\u5F84\uFF08M3 \u653B\u51FB\u63A5\u7EBF\uFF09"
     },
     {
       "magic_id": 26,
@@ -261,7 +261,7 @@
       "delay_time": 0,
       "implemented": false,
       "dospell_class": "warr_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AIsWarrSkill(MagIdx) \u21D2 return false\uFF08MagicManager.cs:82-105,151\uFF09\uFF1B\u627F\u63A5 = \u6218\u58EB\u6280\u80FD\u8D70 ClientHit/Attack \u8DEF\u5F84\uFF08M3 \u653B\u51FB\u63A5\u7EBF\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AIsWarrSkill(MagIdx) \u21D2 return false\uFF08MagicManager.cs:82-100,151\uFF09\uFF1B\u627F\u63A5 = \u6218\u58EB\u6280\u80FD\u8D70 ClientHit/Attack \u8DEF\u5F84\uFF08M3 \u653B\u51FB\u63A5\u7EBF\uFF09"
     },
     {
       "magic_id": 27,
@@ -271,7 +271,7 @@
       "delay_time": 0,
       "implemented": false,
       "dospell_class": "warr_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AIsWarrSkill(MagIdx) \u21D2 return false\uFF08MagicManager.cs:82-105,151\uFF09\uFF1B\u627F\u63A5 = \u6218\u58EB\u6280\u80FD\u8D70 ClientHit/Attack \u8DEF\u5F84\uFF08M3 \u653B\u51FB\u63A5\u7EBF\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AIsWarrSkill(MagIdx) \u21D2 return false\uFF08MagicManager.cs:82-100,151\uFF09\uFF1B\u627F\u63A5 = \u6218\u58EB\u6280\u80FD\u8D70 ClientHit/Attack \u8DEF\u5F84\uFF08M3 \u653B\u51FB\u63A5\u7EBF\uFF09"
     },
     {
       "magic_id": 28,
@@ -341,7 +341,7 @@
       "delay_time": 40,
       "implemented": false,
       "dospell_class": "warr_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AIsWarrSkill(MagIdx) \u21D2 return false\uFF08MagicManager.cs:82-105,151\uFF09\uFF1B\u627F\u63A5 = \u6218\u58EB\u6280\u80FD\u8D70 ClientHit/Attack \u8DEF\u5F84\uFF08M3 \u653B\u51FB\u63A5\u7EBF\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AIsWarrSkill(MagIdx) \u21D2 return false\uFF08MagicManager.cs:82-100,151\uFF09\uFF1B\u627F\u63A5 = \u6218\u58EB\u6280\u80FD\u8D70 ClientHit/Attack \u8DEF\u5F84\uFF08M3 \u653B\u51FB\u63A5\u7EBF\uFF09"
     },
     {
       "magic_id": 36,
