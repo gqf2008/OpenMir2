@@ -1,0 +1,18 @@
+# owner 2026-10-13 02:15「可复用件」：stream_equiv.py 的 **fail-closed** 牙齿（真跑，非合成）
+# 目标：缺件 / 空件 / 站点表不命中 ⇒ PREREQ rc=2，绝不静默出绿（GREEN 只可能来自真实逐次比对）
+
+$ python -I mir2-rs/tests/parity/m3/attack-request-sequence/stream_equiv.py gate --csharp mir2-rs/tests/parity/m3/evidence-m3-isolate-twophase-fn1-20261013/streams/csharp-c2-attack-stream.tsv --rust /tmp/tmp.FIgq1fR6s5/MISSING.tsv
+PREREQ PREREQ_MISSING：rust 侧的输入不存在：C:\Users\gxh\AppData\Local\Temp\tmp.FIgq1fR6s5\MISSING.tsv
+rc=2
+
+$ python -I mir2-rs/tests/parity/m3/attack-request-sequence/stream_equiv.py gate --csharp /tmp/tmp.FIgq1fR6s5/empty.tsv --rust mir2-rs/tests/parity/m3/evidence-m3-isolate-twophase-fn1-20261013/streams/rust-r1-rng-stream.tsv
+PREREQ PREREQ_EMPTY：csharp 侧的输入为空文件：C:\Users\gxh\AppData\Local\Temp\tmp.FIgq1fR6s5\empty.tsv
+rc=2
+
+$ python -I mir2-rs/tests/parity/m3/attack-request-sequence/stream_equiv.py gate --csharp /tmp/tmp.FIgq1fR6s5/stale.tsv --rust mir2-rs/tests/parity/m3/evidence-m3-isolate-twophase-fn1-20261013/streams/rust-r1-rng-stream.tsv
+PREREQ PREREQ_UNMAPPED：csharp 侧 1 个数据行无一命中站点表（站点表陈旧？）：C:\Users\gxh\AppData\Local\Temp\tmp.FIgq1fR6s5\stale.tsv
+rc=2
+
+$ python -I mir2-rs/tests/parity/m3/attack-request-sequence/stream_equiv.py gate --csharp <c2> --rust <r1> --min-draws 999
+PREREQ PREREQ_TOO_SHORT：抽数 csharp=651 rust=651 < --min-draws=999
+rc=2

@@ -113,3 +113,23 @@ S = `mir2-rs/tests/parity/m3/evidence-rng-isolate-attack-twophase-20261012/sessi
     # 8.4 牙齿
     python -I $D/per_strike_requests.py selftest
     # -> 17-serverstate-selftest.txt（24/24）
+
+## 9) stream_equiv.py：攻击路径专用流逐次取数**语义等价**判据（可复用件；owner 2026-10-13 02:15；本片零 .rs）
+
+    # 9.1 把证据包里的一次性工具收成 attack-request-sequence/ 下的可复用件（fail-closed + 牙齿）
+    #     口径：Next(min,max)(min==0) 归一为 Next(max) 后再逐 index 比 (canon,kind,arg,result)
+    python -I $D/stream_equiv.py selftest
+    # -> 23-stream-equiv-reusable-selftest.txt（SELFTEST GREEN: stream_equiv 10/10）
+
+    # 9.2 复用 2026-10-13 两相真机原始件重跑（与 43-stream-equiv.txt 同结论）
+    E=mir2-rs/tests/parity/m3/evidence-m3-isolate-twophase-fn1-20261013
+    python -I $D/stream_equiv.py gate \
+      --csharp $E/streams/csharp-c2-attack-stream.tsv \
+      --rust   $E/streams/rust-r1-rng-stream.tsv \
+      --json   $D/22-stream-equiv-reusable-gate.json
+    # -> 22-stream-equiv-reusable-gate.txt/.json（GREEN 651/651；仪器口径第一处分歧 index=3 仍如实打印）
+
+    # 9.3 fail-closed 真跑（缺件 / 空件 / 陈旧站点表 / --min-draws 不满足 全部 rc=2 PREREQ）
+    # -> 24-stream-equiv-reusable-failclosed.txt
+
+    # 9.4 m3bag 观测对齐片合入后（同口径）用**同一条命令**吃新两相原始件 ⇒ 再判 DoD② 逐 k=0
