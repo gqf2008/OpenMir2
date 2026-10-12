@@ -109,6 +109,15 @@ impl FrontEngine {
         self.save_list.push(chr_name.to_string());
     }
 
+    /// `FrnEngn.IsFull()`（`:120-133`）：oracle 的实现是 `m_SaveRcdList.Count >= int.MaxValue`
+    /// ⇒ **实际恒 `false`**（1:1 搬，不“修”成有意义的容量上限；周期存档的 `!IsFull()` 门用到它，
+    /// `WorldServer.cs:698`）。
+    #[must_use]
+    pub fn is_full(&self) -> bool {
+        // 本宿主 `save_list` 是 `Vec<String>`，长度不可能 >= `i32::MAX`。
+        self.save_list.len() >= usize::try_from(i32::MAX).unwrap_or(usize::MAX)
+    }
+
     /// 保存侧出队（`RemoveSaveList`/`ClearSaveList` 的简化：按名字删第一条）。
     #[allow(dead_code)]
     pub fn end_save(&mut self, chr_name: &str) {

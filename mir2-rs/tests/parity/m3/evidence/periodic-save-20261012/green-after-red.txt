@@ -1,0 +1,5 @@
+test tests::periodic_save_due_is_strict_gt_and_resets_on_fire ... ok
+test tests::periodic_save_fires_repeatedly_and_record_is_well_formed ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 137 filtered out; finished in 0.01s
+

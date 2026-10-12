@@ -1,0 +1,47 @@
+# 卡 openmir2-m3-periodic-save —— 本片跑过的确切命令（证据四件套之「命令」）
+# 主机 shell = git-bash（Windows）；cargo 隔离 target = E:\tmp\openmir2-m2svr-target；全部 --offline
+# 工作区 = E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs
+# base = refs/heads/master（交付时 fast-forward 到 beca77c3 后再跑全部门禁）
+
+# --- 0) 前置：端口实拍（本片判据都在单测/构造层，不需起栈；只记录窗口未被本线占用）---
+powershell -NoProfile -Command 'foreach ($p in 5000,5100,5500,5600,5700,6000,7000,7100,7200,3306) { ... }'
+# 输出：5000..7200 全 free；3306 LISTEN pid=26652 mysqld（共享 MySQL）   -> ports-preflight.txt
+# 未起栈 ⇒ 无 -Stop；收工端口与开工一致。
+
+# --- 0b) oracle 逐行来源（只读核对）---
+rg -n "SaveHumanRcdTime|SaveRcdTick|SaveHumanRcd|IsFull|new PlayObject" \
+   src/Modules/SystemModule/Conf/Model/GameSvrConf.cs src/Modules/SystemModule/Conf/ServerConf.cs \
+   src/GameSrv/Word/WorldServer.cs src/M2Server/Player/PlayObject.cs src/GameSrv/Services/FrnEngn.cs
+#                                                                       -> oracle-periodic-lines.txt
+
+# --- 1) 门禁（隔离 CARGO_TARGET_DIR；全 --offline）---
+export CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target
+cargo fmt --all -- --check                                          # rc=0（空文件 = 无 diff）-> gates-fmt.txt
+cargo clippy --workspace --all-targets --offline -- -D warnings     # rc=0             -> gates-clippy.txt
+cargo test --workspace --offline                                    # rc=0；77 suites / 633 passed / 0 failed / 16 ignored
+#                                                                     -> gates-test-workspace.txt
+cargo run -p msgcodegen --offline -- --check                        # rc=0；604 条     -> gates-msgcodegen.txt
+# 注：msgcodegen 首次 rc=101（"repo root must exist"）—— 共享 target 里是**别的检出**编的旧 exe
+# （CARGO_MANIFEST_DIR 指到不复存在的路径）。`cargo clean -p msgcodegen` 后从本树重编 ⇒ rc=0/604。
+
+# --- 2) 新增/改动用例 3 连跑 ---
+for i in 1 2 3; do cargo test -p game-svr --offline > gamesvr-3run-$i.txt 2>&1; done
+# 每次：139 passed（bin unit，含本片 2 条）+ 80 passed + 13 passed（relay）+ 0 failed
+
+# --- 3) 红检（改坏 ⇒ 必红；每步跑完立即还原，末次还原后 2 条用例复跑绿 -> green-after-red.txt）---
+# A) 严格 `>` 改成 `>=`（periodic_save_due 的边界）
+cargo test -p game-svr --offline --bin game-svr periodic_save_due_is_strict_gt_and_resets_on_fire
+#   exit 101；assertion failed: !periodic_save_due(&mut tick, save_time, 6_000)      -> red-strict-gt.txt
+# B) 删掉触发时的重置 `*save_rcd_tick = now;`（不重置）
+cargo test -p game-svr --offline --bin game-svr periodic_save
+#   exit 101；周期用例观测到 3 次请求（期望 2）；纯函数用例 tick 断言红               -> red-no-reset.txt
+# C) 改坏记录某列：build_save_record 的 `rec.data.gold = sg.state.gold;` -> `= 0;`
+cargo test -p game-svr --offline --bin game-svr periodic_save_fires_repeatedly_and_record_is_well_formed
+#   exit 101；assertion `left == right` failed: 落库记录必须带实时 Gold（left=0 right=649）-> red-record-col.txt
+
+# --- 4) 证据 hash（仓库字节 = Git blob 口径；LF 归一）---
+python -I tools/evidence-hash/verify_sha256sums.py write mir2-rs/tests/parity/m3/evidence/periodic-save-20261012
+python -I tools/evidence-hash/verify_sha256sums.py verify mir2-rs/tests/parity/m3/evidence/periodic-save-20261012 --check-extra
+# 干净 clone 上复跑（证明清单只含会入库的文件、且 LF 口径在任何检出上都成立）：
+#   git clone --single-branch -b worktree-m2-gamesvr-host <worktree> <tmp> \
+#     && python -I tools/evidence-hash/verify_sha256sums.py <tmp>/mir2-rs/tests/parity/m3/evidence/periodic-save-20261012 --check-extra

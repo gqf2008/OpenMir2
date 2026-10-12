@@ -407,6 +407,7 @@ async fn main() -> Result<()> {
                         drop_item_rage: cfg.drop_item_rage,
                     },
                     ref_msg_range: i32::from(cfg.send_ref_msg_range),
+                    save_human_rcd_time: i64::from(cfg.save_human_rcd_time),
                     home: home_fallback,
                     newbie: NewbieItems {
                         candle: cfg.candle.clone(),
@@ -1578,8 +1579,9 @@ fn apply_save_reply(engine: &mut load::FrontEngine, chr_name: &str, ident: u16, 
 /// 发 `DB_SAVEHUMANRCD(101)`（`WorldServer.SaveHumanRcd` `:1077` → `PlayerDataService.SavePlayerRcd`）。
 ///
 /// **时机照 oracle**：在 `MakeGhost()`（退出世界）时调用（`RunNotice` 的 `BoSoftClose`/`BoKickFlag`
-/// 支与 `CloseUser` 断线支都会走到），所以调用点必须在 `world.disconnect` **之前**。
-/// 周期存档（`SaveHumanRcdTime` 默认 10 分钟，`WorldServer.cs:698-702`）本轮**未做**（登记）。
+/// 支与 `CloseUser` 断线支都会走到），所以调用点必须在 `world.disconnect` **之前**；
+/// **周期存档**（`SaveHumanRcdTime` 默认 10 分钟，`WorldServer.cs:698-703`）复用本函数
+/// （见 [`drain_periodic_save`]，卡 `openmir2-m3-periodic-save`）。
 fn save_human_rcd(
     db: &mut Option<DbWiring>,
     engine: &mut load::FrontEngine,
@@ -2271,6 +2273,94 @@ fn drain_recovery(
     }
 }
 
+/// oracle `WorldServer.ProcessPlayObjectData`（`WorldServer.cs:698`）的周期存档判定：
+///
+/// ```text
+/// !M2Share.FrontEngine.IsFull() && (HUtil32.GetTickCount() - playObject.SaveRcdTick)
+///     > SystemShare.Config.SaveHumanRcdTime
+///   ⇒ playObject.SaveRcdTick = HUtil32.GetTickCount(); playObject.DealCancelA(); SaveHumanRcd(playObject);
+/// ```
+///
+/// 两个口径都照抄：**严格 `>`**（相等不触发）与**先重置再发请求**。
+/// `IsFull()` 是 `m_SaveRcdList.Count >= int.MaxValue`（`FrnEngn.cs:120-133`）⇒ 实际恒 `false`
+/// （由调用方 [`load::FrontEngine::is_full`] 映射）。
+fn periodic_save_due(save_rcd_tick: &mut i64, save_time: i64, now: i64) -> bool {
+    if now - *save_rcd_tick > save_time {
+        *save_rcd_tick = now;
+        true
+    } else {
+        false
+    }
+}
+
+/// 每 tick 的**周期存档**（oracle `WorldServer.cs:698-703`，卡 `openmir2-m3-periodic-save`）。
+///
+/// 对**每个在线角色**复用既有三处触发的同一口径（[`save_human_rcd`] ⇒ `MakeSaveRcd` 逐字段 +
+/// in-save 配对 + `save_outstanding` 轮询）。逐会话**按键排序**（不让 `HashMap` 迭代序参与逻辑）。
+///
+/// # 计时口径（oracle 逐行，已核）
+///
+/// - **起算**：`PlayObject.SaveRcdTick` 在 `new PlayObject()`（`PlayObject.cs:886`）取 `GetTickCount()`；
+///   oracle 每次登入都 `new PlayObject()`（`WorldServer.cs:234`，不复用 free list）⇒ 等价于本宿主
+///   「进世界建 `SessionGround` 时取 [`now_ms`]」。断线/换图 **不复用** 对象 ⇒ 下次进世界重新起算。
+/// - **重置**：每次触发时**先**把 `SaveRcdTick = GetTickCount()`，**再** `SaveHumanRcd`（`:700-702`）。
+/// - **单位**：`SaveHumanRcdTime` 是毫秒（`GameSvrConf.cs:1484` 的 `10*60*1000`），缺省 10 分钟。
+/// - **门**：`!IsFull()`（恒真，见 [`periodic_save_due`]）+ oracle 只在 `LoginNoticeOk && BoReadyRun` 的
+///   最内层 `else` 里查（`:685-698`）。本宿主 `SessionGround` 在入图帧全部下发后才建 ⇒ 建即已就绪；
+///   构造 → 就绪之间的亚秒窗口与「10 分钟」量级无关，登记不影响判据。
+///
+/// # 登记（未建模，不静默）
+///
+/// - `playObject.DealCancelA()`（`PlayObject.Base.cs:748-752`）= `Abil.HP = WAbil.HP; DealCancel();`：
+///   交易层未移植，且 `MakeSaveRcd` 读的是 `WAbil.HP`（`WorldServer.cs:1247`）⇒ 对存档体无影响。
+/// - oracle 的 `SaveHumanRcd` 里 `IsRobot` 早返回：本宿主不建机器人会话（`RobotProcessor` 未移植）。
+///
+/// 返回**本轮发起的请求数**（DB 未连接时计时仍已重置——照 oracle 先重置再调用；计数为 0）。
+#[allow(clippy::too_many_arguments)]
+fn drain_periodic_save(
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    saves: &std::collections::HashMap<String, SavedHuman>,
+    world: &mir2_world::World,
+    db: &mut Option<DbWiring>,
+    engine: &mut load::FrontEngine,
+    registry: Option<&mir2_envir::MapRegistry>,
+    save_time: i64,
+    now: i64,
+) -> usize {
+    // oracle `:698` 的 `!FrontEngine.IsFull()`：`m_SaveRcdList.Count >= int.MaxValue`
+    // （`FrnEngn.cs:120-133`）⇒ 恒 false。查一次与逐角色查等价（本宿主每 tick 调用一次）。
+    if engine.is_full() {
+        return 0;
+    }
+    let mut names: Vec<String> = sessions.keys().cloned().collect();
+    names.sort();
+    let mut fired = 0usize;
+    for name in names {
+        let Some(sg) = sessions.get_mut(&name) else {
+            continue;
+        };
+        if !periodic_save_due(&mut sg.save_rcd_tick, save_time, now) {
+            continue;
+        }
+        // 计时已重置（oracle `:700` 先重置再存档）；没留下登入记录底稿的会话无法合成存档体。
+        let Some(saved) = saves.get(&name) else {
+            glog!(
+                "WRN",
+                "周期存档：ChrName={name} 无登入记录底稿 ⇒ 跳过（登记；不计入发起数）"
+            );
+            continue;
+        };
+        if save_human_rcd(db, engine, saved, &name, world, sg, registry).is_some() {
+            fired += 1;
+            glog!(
+                "INF",
+                "周期存档触发（SaveHumanRcdTime={save_time}ms）ChrName={name}"
+            );
+        }
+    }
+    fired
+}
+
 /// `HealthSpellChanged()` 的 `ShowHp` 支（`SendRefMsg(RM_HEALTHSPELLCHANGED,…)`）在同一图上按
 /// `SendRefMsgRange` 广播；`body` 是源 actor 的那条 `SM_HEALTHSPELLCHANGED`（观察者收到同一字节）。
 fn broadcast_healthspellchanged(
@@ -2630,6 +2720,10 @@ struct SessionGround {
     hunger_status: i32,
     /// `PlayObject.QueryBagItemsTick`（`PlayObject.Message.cs:786` 的 30s 限频）：`None` = 未查过（照 oracle 首次即过）。
     query_bag_items_tick: Option<i64>,
+    /// `PlayObject.SaveRcdTick`（`PlayObject.cs:601/886`）——周期存档计时基准（毫秒，
+    /// 与 [`now_ms`] 同源）。进世界时起算（= oracle `new PlayObject()`），每次周期触发时
+    /// **先重置**再发 `DB_SAVEHUMANRCD`（`WorldServer.cs:698-703`）；见 [`drain_periodic_save`]。
+    save_rcd_tick: i64,
 }
 
 /// 一次 `RecalcAbilitys()` 的静态输入（不含随动作变化的 `UseItems`/`ItemList`/`WAbil`）。
@@ -2682,6 +2776,9 @@ struct EnterConfig {
     /// `[Setup] SendRefMsgRange`（oracle `GameSvrConf.cs:499`，缺省 12）：
     /// 装备/卸下成功后的 `FeatureChanged()` 广播半径（`BaseObject.SendRefMsg` 的单元格扫描）。
     ref_msg_range: i32,
+    /// `[Setup] SaveHumanRcdTime`（oracle `GameSvrConf.cs:423/1484`，缺省 `600000`ms）：
+    /// 周期存档间隔（`WorldServer.cs:698-703`）；见 [`drain_periodic_save`]。
+    save_human_rcd_time: i64,
     /// 空 `HomeMap` 新角色的进图回落（`homemap::HomeFallback`，`WorldServer.cs:250-260`）。
     home: homemap::HomeFallback,
     /// `IsNewHuman` 的新手物品输入。
@@ -3402,6 +3499,11 @@ fn sim_loop(
                                                             user_unlock_durg: false,
                                                             hunger_status: d.hunger_status,
                                                             query_bag_items_tick: None,
+                                                            // `PlayObject.SaveRcdTick`（`PlayObject.cs:886`）：
+                                                            // 进世界时起算。oracle 在 `new PlayObject()` 里取
+                                                            // `GetTickCount()`（每次登入都新建对象，`WorldServer.cs:234`），
+                                                            // 与本宿主「`SessionGround` 随进世界建」同生命周期。
+                                                            save_rcd_tick: now_ms(),
                                                         },
                                                     );
                                                     // 存档用：留下原始记录 + 进图逻辑名（断线/`MakeGhost` 时用它合成）。
@@ -3617,6 +3719,18 @@ fn sim_loop(
             &online,
             &gates,
             enter_cfg.ref_msg_range,
+        );
+        // 周期存档（oracle `WorldServer.cs:698-703`）：oracle 在同一 `Run()` 之后查，
+        // 这里紧跟 [`drain_recovery`]（保证存档体读到的是本 tick 恢复后的 `WAbil`）。
+        let _ = drain_periodic_save(
+            &mut ground_sessions,
+            &saves,
+            &world,
+            &mut db,
+            &mut engine,
+            registry.as_ref(),
+            enter_cfg.save_human_rcd_time,
+            now_ms(),
         );
         // `openmir2-m3-attack-magic-wiring`（第一片）：本 tick 的攻击结算 → `SM_STRUCK`（受击者自见）
         // + `SM_NOWDEATH`（死亡广播）。
@@ -4486,6 +4600,7 @@ mod tests {
             user_unlock_durg: false,
             hunger_status: 0,
             query_bag_items_tick: None,
+            save_rcd_tick: 0,
         }
     }
 
@@ -4551,6 +4666,7 @@ mod tests {
             user_unlock_durg: false,
             hunger_status: 55,
             query_bag_items_tick: None,
+            save_rcd_tick: 0,
         };
         let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
         world.open_session("hero");
@@ -4646,6 +4762,122 @@ mod tests {
             !engine.in_save_rcd_list("HERO"),
             "DBR_SAVEHUMANRCD(1102) 应答后必须复位"
         );
+    }
+
+    /// 周期存档的计时口径（oracle `WorldServer.cs:698`）：**严格 `>`**（相等不触发）+ 触发时
+    /// **先**把 tick 重置到 `now`（随后才发请求）；单位 = `SaveHumanRcdTime` 毫秒。
+    ///
+    /// 红检：把 `>` 改成 `>=` ⇒ 第一条断言（差值 == 阈值不得触发）必红；
+    /// 删掉 `*save_rcd_tick = now;`（不重置）⇒ 第二条「重置后须再等一个周期」必红。
+    #[test]
+    fn periodic_save_due_is_strict_gt_and_resets_on_fire() {
+        let save_time = 5_000i64;
+        let mut tick = 1_000i64;
+        // 差值恰等于阈值 ⇒ 不触发（严格 `>`）。
+        assert!(!periodic_save_due(&mut tick, save_time, 6_000));
+        assert_eq!(tick, 1_000, "未触发不得动 tick");
+        // 超过 1ms ⇒ 触发，且 tick 重置到 now。
+        assert!(periodic_save_due(&mut tick, save_time, 6_001));
+        assert_eq!(tick, 6_001, "触发时先重置");
+        // 刚重置过 ⇒ 同一周期不再触发。
+        assert!(!periodic_save_due(&mut tick, save_time, 11_001));
+        // 再过一个完整周期 +1 ⇒ 第二次触发。
+        assert!(periodic_save_due(&mut tick, save_time, 11_002));
+    }
+
+    /// **卡 `openmir2-m3-periodic-save`（DoD ③）**：把 `SaveHumanRcdTime` 调到秒级 ⇒ 一个会话上
+    /// **观测 ≥2 次**周期 `DB_SAVEHUMANRCD` 请求；请求体用 **DBSvr 侧同一类型**
+    /// `mir2_storage::SaveCharacterData` 解回，逐字段核对（不按公式重推）。
+    ///
+    /// 红检（改坏 ⇒ 必红，每次跑完立即还原）：
+    /// - 删掉 `drain_periodic_save` 里对 `periodic_save_due` 的调用（或恒 `false`）⇒ 请求数 = 0 ⇒ 必红；
+    /// - 把记录某列写坏（例如 `build_save_record` 的 `gold` 置 0）⇒ 记录字段断言必红；
+    /// - 不把重置写回 `SessionGround`（`periodic_save_due` 不写 `*save_rcd_tick`）⇒ 第 3 段
+    ///   「未到期不得再发」必红。
+    #[test]
+    fn periodic_save_fires_repeatedly_and_record_is_well_formed() {
+        use mir2_protocol::messages::DB_SAVEHUMANRCD;
+        use mir2_storage::MemPack;
+        use std::sync::atomic::AtomicI32;
+
+        let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
+        world.open_session("hero");
+        let actor_id = world
+            .enter_map("hero", mir2_world::Entity::new(0, "hero", 11, 22), 0)
+            .expect("进世界");
+        let mut sg = test_session_ground(actor_id);
+        sg.state.gold = 649;
+        // 计时基准 = 1_000；周期 = 5_000ms（“调到秒级”）。
+        sg.save_rcd_tick = 1_000;
+
+        let mut sessions = std::collections::HashMap::new();
+        sessions.insert("hero".to_string(), sg);
+        let mut saves = std::collections::HashMap::new();
+        saves.insert(
+            "hero".to_string(),
+            SavedHuman {
+                account: "acct".into(),
+                record: stage6_record(),
+                enter_map: "0".into(),
+            },
+        );
+
+        // 已连接的 DB 链路：请求落到 `req_tx`，测试从 `rx` 取走。
+        let state = dbclient::DbLinkState::new();
+        state.mark_connected();
+        let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let mut db = Some(DbWiring {
+            state,
+            req_tx: tx,
+            next_query_id: Arc::new(AtomicI32::new(0)),
+            replies: Arc::new(std::sync::Mutex::new(dbclient::DbReplies::new())),
+            outstanding: Vec::new(),
+            save_outstanding: Vec::new(),
+        });
+        let mut engine = load::FrontEngine::new();
+
+        let mut fired = 0usize;
+        for now in [6_000i64, 6_001, 11_001, 11_002] {
+            fired += drain_periodic_save(
+                &mut sessions,
+                &saves,
+                &world,
+                &mut db,
+                &mut engine,
+                None,
+                5_000,
+                now,
+            );
+        }
+        assert_eq!(fired, 2, "秒级周期参数下必须观测到 ≥2 次周期请求");
+
+        let mut frames = Vec::new();
+        while let Ok(f) = rx.try_recv() {
+            frames.push(f);
+        }
+        assert_eq!(frames.len(), 2, "请求数必须 = 触发数");
+        for (i, frame) in frames.iter().enumerate() {
+            let mut p = dbclient::ReplyParser::default();
+            p.push(frame);
+            let r = p.next().expect("存档请求应可被同信封解析器解出");
+            assert_eq!(
+                dbclient::parse_reply_message(&r.message),
+                Some((DB_SAVEHUMANRCD, 0)),
+                "第 {} 条请求的 Message.Ident 必须是 DB_SAVEHUMANRCD(101)",
+                i + 1
+            );
+            let decoded = mir2_protocol::edcode::decode(&r.packet);
+            let parsed = mir2_storage::SaveCharacterData::from_bytes(&decoded)
+                .expect("DBSvr 侧必须能解周期存档体");
+            assert_eq!(parsed.account.as_deref(), Some("acct"));
+            assert_eq!(parsed.chr_name.as_deref(), Some("hero"));
+            let d = parsed.character_data.unwrap().data.unwrap();
+            assert_eq!(d.cur_map.as_deref(), Some("0"));
+            assert_eq!((d.cur_x, d.cur_y), (11, 22), "实时坐标来自世界实体");
+            assert_eq!(d.gold, 649, "落库记录必须带实时 Gold（改坏某列 ⇒ 必红）");
+        }
+        // 计时器已推进到第二次触发时刻（重置写回了会话态）。
+        assert_eq!(sessions.get("hero").unwrap().save_rcd_tick, 11_002);
     }
 
     /// **`openmir2-m3-move-wiring` ①–③（移动接线）**：`CM_TURN` **只在**目标=当前位置时改朝向、
@@ -4995,6 +5227,7 @@ mod tests {
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
+                save_rcd_tick: 0,
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -5158,6 +5391,7 @@ mod tests {
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
+                save_rcd_tick: 0,
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -5278,6 +5512,7 @@ mod tests {
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
+                save_rcd_tick: 0,
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -5397,6 +5632,7 @@ mod tests {
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
+                save_rcd_tick: 0,
             },
         );
 
@@ -6099,6 +6335,7 @@ mod tests {
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
+                save_rcd_tick: 0,
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -6237,6 +6474,7 @@ mod tests {
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
+                save_rcd_tick: 0,
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -6473,6 +6711,7 @@ mod tests {
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
+                save_rcd_tick: 0,
             },
         );
         let mut online: OnlineRegistry = Vec::new();

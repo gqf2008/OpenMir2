@@ -1,0 +1,39 @@
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.40s
+     Running unittests src\main.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-eb39968088e3f1ec.exe)
+
+running 2 tests
+test tests::periodic_save_due_is_strict_gt_and_resets_on_fire ... FAILED
+test tests::periodic_save_fires_repeatedly_and_record_is_well_formed ... FAILED
+
+failures:
+
+---- tests::periodic_save_due_is_strict_gt_and_resets_on_fire stdout ----
+
+thread 'tests::periodic_save_due_is_strict_gt_and_resets_on_fire' (8376) panicked at bins\game-svr\src\main.rs:4780:9:
+assertion `left == right` failed: 触发时先重置
+  left: 1000
+ right: 6001
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- tests::periodic_save_fires_repeatedly_and_record_is_well_formed stdout ----
+02:06:38.222 [INF] 存档请求已发（DB_SAVEHUMANRCD）ChrName:hero queryId=1 记录 6202 字节
+02:06:38.222 [INF] 周期存档触发（SaveHumanRcdTime=5000ms）ChrName=hero
+02:06:38.222 [INF] 存档请求已发（DB_SAVEHUMANRCD）ChrName:hero queryId=2 记录 6202 字节
+02:06:38.222 [INF] 周期存档触发（SaveHumanRcdTime=5000ms）ChrName=hero
+02:06:38.222 [INF] 存档请求已发（DB_SAVEHUMANRCD）ChrName:hero queryId=3 记录 6202 字节
+02:06:38.222 [INF] 周期存档触发（SaveHumanRcdTime=5000ms）ChrName=hero
+
+thread 'tests::periodic_save_fires_repeatedly_and_record_is_well_formed' (24584) panicked at bins\game-svr\src\main.rs:4851:9:
+assertion `left == right` failed: 秒级周期参数下必须观测到 ≥2 次周期请求
+  left: 3
+ right: 2
+
+
+failures:
+    tests::periodic_save_due_is_strict_gt_and_resets_on_fire
+    tests::periodic_save_fires_repeatedly_and_record_is_well_formed
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 137 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`
