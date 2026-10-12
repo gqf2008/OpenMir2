@@ -37,6 +37,9 @@ Rust 站点表与 m3cs 决策片 `rng-trace-probe/analyze_rng_trace.py --attack-
 3. **改坏必红**：Rust 段删一次取数 ⇒ RED 且定位到 k 与「少抽 1」（§1 `05`）；selftest 内亦有
    多抽/少抽/段数不等/未知 side fail-closed 四类牙齿（`04`）。
 4. **fail-closed**：未知 `--side` ⇒ rc=2（不静默降级成「不过滤」）；`segment` 未给 marker 且无 side 缺省锚 ⇒ rc=2。
+5. **干净检出复验**（F-1 口径）：`git clone --local` 到 `E:/tmp` 后在 clone 里跑 `verify_sha256sums.py --check-extra` = GREEN 15/15。
+   首版 `11-selfcheck-nostack.txt` 由 pwsh 落盘时混入了 2 个 **lone CR**（Git 只归一 CRLF、不动 lone CR）⇒ 干净 clone 上假 mismatch；
+   本片把全部证据文本 LF 归一后重记 `SHA256SUMS.txt`（不再有 lone CR）。
 
 ## 3. 边界 / 未做（如实登记）
 

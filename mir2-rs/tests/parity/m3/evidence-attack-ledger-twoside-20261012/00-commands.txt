@@ -51,3 +51,10 @@ cargo fmt --all -- --check                                          # -> 07-... 
 cargo clippy --workspace --all-targets --offline -- -D warnings     # -> 08-... (rc=0)
 cargo test --workspace --offline                                    # -> 09-... (81 suites / 668 passed / 0 failed)
 cargo run -p msgcodegen --offline -- --check                        # -> 10-... (604)
+
+## 7) 干净 clone 复验（F-1 口径：不许只在作者 worktree 里验）
+rm -rf E:/tmp/m3bag-ledger-clone
+git clone --local -q <本 worktree> E:/tmp/m3bag-ledger-clone
+cd E:/tmp/m3bag-ledger-clone && git checkout -q <head>
+python tools/evidence-hash/verify_sha256sums.py mir2-rs/tests/parity/m3/evidence-attack-ledger-twoside-20261012 --check-extra
+#   -> GREEN 15/15（首版 11-selfcheck-nostack.txt 混入 2 个 lone CR ⇒ 干净 clone 假 mismatch；本片 LF 归一后重记）
