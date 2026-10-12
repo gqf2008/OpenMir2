@@ -1,0 +1,39 @@
+# M4 已交付的 7 条 NPC 用例 = 「脚本层」口径（与 M3⑤ 服务端派发面对表）
+# 仓库 = origin/master fa82187a
+
+== M4② 7 条用例（tests/parity/M4/npc-cases.json；类别/名称/runner/脚本）==
+   传送 | 传送-幻境（金币不足/无物品） | runner=flow | E:/MirServer/M2GameSvr/Envir/Market_Def/传送员/比奇省传送员-0.txt
+   传送 | 传送-幻境（背包有名为100000的物品） | runner=flow | E:/MirServer/M2GameSvr/Envir/Market_Def/传送员/比奇省传送员-0.txt
+   行会 | 行会-攻城申请缴金条（@requestcastlewar） | runner=flow | E:/MirServer/M2GameSvr/Envir/Npc_Def/比奇国王-0122.txt
+   任务 | 任务-地图出矿提示（Q001@main） | runner=flow | E:/MirServer/M2GameSvr/Envir/MapQuest_def/Q001.txt
+   商店 | 商店-货币兑换（@changeGold 足额金币→金条） | runner=flow | E:/MirServer/M2GameSvr/Envir/Market_Def/封魔谷/恶魔修理师-d2008.txt
+   修理 | 修理-RepairAll（@StdModeFunc26） | runner=flow | E:/MirServer/M2GameSvr/Envir/Market_Def/QFunction-0.txt
+   仓库 | 仓库-捆绑卷轴（@zum_bind1 6×地牢逃脱卷） | runner=flow | E:/MirServer/M2GameSvr/Envir/Market_Def/盟重土城/仓库-0145.txt
+
+== M4 收口报告 §5-1：商人 3 条走 C# 夹具 IMerchant 代理，Rust 服务端派发归 M3 ==
+49:| `mir2-rs/tests/parity/M4/npc_window_readiness.py` | 新增 | 商人 3 条可跑性门（C# 夹具路线①裁决 + Rust 服务侧 M3 承接登记；selftest 5/5） |
+149:   **路线①**（补 `IMerchant` 代理）作为这三条的 port-free 判据；**Rust 服务侧的 NPC/商人派发
+150:   不归本卡**（属 §6 的 M3「NPC/商店」系统对齐）。已实施：
+161:     `CM_CLICKNPC`/`CM_MERCHANTDLGSELECT`、无 `mir2-script` 依赖 ⇒ 接 Rust 真栈上点 NPC 的
+162:     验收属 M3（承接：给 game-svr 接 NPC 脚本派发 + DB 副作用）；本门的
+163:     `Rust 服务侧（M3 承接）` 行就是它的机判锚点。
+
+== M4 可跑性门结果（READY）==
+22:- 裁决（本卡 ② port-free）：**READY**
+33:- 裁决（本卡 ② port-free）：**READY**
+53:- 裁决（本卡 ② port-free）：**READY**
+57:- 三条商人用例（本卡 ② port-free）：READY, READY, READY ⇒ **READY**
+
+== 用例 7 条实测输出（tests/parity/evidence/M4/npc-cases.txt 摘录）==
+16:OK   传送-幻境（金币不足/无物品）: 3 行一致
+20:OK   传送-幻境（背包有名为100000的物品）: 3 行一致
+24:OK   行会-攻城申请缴金条（@requestcastlewar）: 4 行一致
+29:OK   任务-地图出矿提示（Q001@main）: 2 行一致
+32:OK   商店-货币兑换（@changeGold 足额金币→金条）: 4 行一致
+37:OK   修理-RepairAll（@StdModeFunc26）: 2 行一致
+40:OK   仓库-捆绑卷轴（@zum_bind1 6×地牢逃脱卷）: 11 行一致
+53:== 用例 7：一致 7 / 不一致 0 ==
+
+== 结论：M4 覆盖的是 Market_Def 脚本体 label（@changeGold/@StdModeFunc26/@zum_bind1 等）的执行序列，
+   不含 CM_MERCHANTDLGSELECT/CM_USERBUYITEM/CM_USERSELLITEM/CM_USERREPAIRITEM/CM_USERSTORAGEITEM 等
+   服务端收包→商人面板→价格/库存/金币/落库 这一半 ⇒ 正是本卡要补的口径。

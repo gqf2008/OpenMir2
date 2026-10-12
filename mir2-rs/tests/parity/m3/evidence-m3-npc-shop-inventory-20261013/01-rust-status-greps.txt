@@ -1,0 +1,131 @@
+# Rust 侧现状证据（只读 grep；命令在本文件内，逐条可复跑）
+# 分支 worktree-m3-npc-shop-align，base = origin/master fa82187a
+# 生成：bash，输出 LF
+
+== [1] bins/game-svr 是否派发 NPC/商店 CM_*（1011/1012/1013/1014/1023/1024/1031/1032）==
+$ grep -rn "CM_MERCHANTDLGSELECT\|CM_MERCHANTQUERYSELLPRICE\|CM_USERSELLITEM\|CM_USERBUYITEM\|CM_USERREPAIRITEM\|CM_MERCHANTQUERYREPAIRCOST\|CM_USERSTORAGEITEM\|CM_USERTAKEBACKSTORAGEITEM" --include=*.rs bins/game-svr
+(no match)
+
+== [2] NPC/商人实体与派发：crates/envir、crates/world、bins/game-svr ==
+$ grep -rni "merchant\|FindMerchant\|UserSelect\|Market_Def\|MerChant" --include=*.rs crates/envir crates/world bins/game-svr
+crates/world/src/map.rs:24:    Merchant = 8,
+-- crates/envir 只有地图/信息，无 NPC 加载器：src 清单 --
+conf.rs
+error.rs
+lib.rs
+mapfile.rs
+mapinfo.rs
+paths.rs
+points.rs
+registry.rs
+text.rs
+
+== [3] 买/卖/修理/仓库 价格与副作用函数（Rust 是否已实现）==
+$ grep -rni "GetUserPrice\|GetUserItemPrice\|GetSellItemPrice\|ClientBuyItem\|ClientSellItem\|ClientRepairItem\|ClientStorageItem\|ClientTakeBackStorageItem\|is_add_weight_available\|AddItemToBag" --include=*.rs crates bins
+bins/game-svr/src/bag.rs:27://!   ├─ UseItems[btWhere]=userItem; DelBagItem(itemIndex); AddItemToBag(takeOffItem)
+bins/game-svr/src/bag.rs:36://!   ├─ AddItemToBag(userItem)（背包满 46 ⇒ n10=-3）；UseItems[btWhere]=null；RecalcAbilitys()
+bins/game-svr/src/bag.rs:47://! 3. **换下的旧物品进背包是"追加到尾部"**：先 `DelBagItem(itemIndex)` 再 `AddItemToBag(takeOffItem)`
+bins/game-svr/src/bag.rs:49://! 4. **`AddItemToBag` 的满包判定是 `>= Grobal2.MaxBagItem`(46)**（`BaseObject.cs:1243`），
+bins/game-svr/src/ground.rs:29://!              ? SendMsg(RM_ITEMHIDE,…)（**给自己**）+ AddItemToBag(userItem)【内部 WeightChanged()】
+bins/game-svr/src/ground.rs:359:pub fn is_add_weight_available(wabil: &Ability, n_weight: i32) -> bool {
+bins/game-svr/src/ground.rs:478:            .is_some_and(|tpl| is_add_weight_available(&state.wabil, i32::from(tpl.weight)));
+bins/game-svr/src/ground.rs:489:            // `AddItemToBag`：满包不追加、也不 WeightChanged；本分支已过 `IsEnoughBag`。
+bins/game-svr/src/ground.rs:1148:    /// 改坏 `is_add_weight_available` 分支本用例必红。
+bins/game-svr/src/main.rs:698:    // ——oracle 的 `GoldChanged()`/`WeightChanged()` 都在 `Gold +=`/`AddItemToBag` **之后**发
+bins/game-svr/src/main.rs:1316:/// oracle `PlayObject.ItemList` 是**非空物品的列表**（`AddItemToBag` 追加 / 移除删除），记录里的
+
+== [4] StdItem 模板（含 Price/Weight/DuraMax/StdMode）已加载 ==
+10:pub struct StdItem {
+11-    pub name: String,
+12-    pub std_mode: u8,
+13-    pub shape: u8,
+14-    /// 物品重量
+15-    pub weight: u8,
+16-    pub ani_count: u8,
+17-    pub special_pwr: i8,
+18-    pub item_desc: u8,
+19-    pub looks: u16,
+20-    pub dura_max: u16,
+21-    pub ac: u16,
+22-    pub mac: u16,
+23-    pub dc: u16,
+24-    pub mc: u16,
+25-    pub sc: u16,
+26-    pub need: u8,
+27-    pub need_level: u8,
+28-    pub need_identify: u8,
+29-    pub price: i32,
+30-    pub stock: i32,
+162:                price: get_i32(row, "Price"),
+
+== [5] 脚本层：crates/script 解析商人脚本头 + [goods]（M4 用） ==
+97:pub struct MerchantFlags {
+98-    pub is_buy: bool,
+99-    pub is_sell: bool,
+100-    pub is_make_drug: bool,
+101-    pub is_prices: bool,
+102-    pub is_storage: bool,
+103-    pub is_getback: bool,
+104-    pub is_upgradenow: bool,
+105-    pub is_get_backupgnow: bool,
+106-    pub is_repair: bool,
+107-    pub is_sup_repair: bool,
+108-    pub is_send_msg: bool,
+109-    pub is_use_item_name: bool,
+111:    pub refill_goods: Vec<Goods>,
+113:    pub goods_sections: usize,
+383:                    outcome.goods_sections += 1;
+522:                    outcome.refill_goods.push(Goods {
+
+== [6] 会话态里已有 Gold/ItemList/WAbil（拾取/丢弃用），但无仓库列表/NPC ==
+285:pub struct GroundState {
+287:    pub item_list: Vec<BagItem>,
+289:    pub gold: i32,
+291:    pub wabil: Ability,
+
+== [7] 仓库物品序列化在 storage crate / DB 侧存在，但 game-svr 无仓库会话态 ==
+$ grep -rn "storage_items\|characters_storageitem\|StorageItemList" --include=*.rs crates bins
+crates/storage/src/playerdata.rs:675:    pub storage_items: Option<Vec<Option<ServerUserItem>>>,
+crates/storage/src/playerdata.rs:734:            storage_items: Some(vec![None; 50]),
+crates/storage/src/playerdata.rs:795:        opt_obj_array(w, self.storage_items.as_deref());
+crates/storage/src/playerdata.rs:850:            storage_items: read_opt_obj_array(r)?,
+crates/storage/tests/playerdatainfo_vectors.rs:193:    cd.storage_items.as_mut().unwrap()[5] = Some(item());
+bins/db-srv/src/db.rs:506:            ("characters_storageitem", 50),
+bins/db-srv/src/playdata.rs:6://!   `characters_magic`/`characters_item`/`characters_bagitem`/`characters_storageitem`/
+bins/db-srv/src/playdata.rs:366:    data.storage_items = Some(
+bins/db-srv/src/playdata.rs:370:            "characters_storageitem",
+bins/db-srv/src/playdata.rs:740:        "characters_storageitem",
+bins/db-srv/src/playdata.rs:741:        d.storage_items.as_deref().unwrap_or(&[]),
+bins/db-srv/src/playdata.rs:966:        create_empty_items(&mut tx, player_id, "characters_storageitem", 50).await?;
+bins/db-srv/tests/live_data.rs:324:            "characters_storageitem",
+bins/game-svr/src/record.rs:514:    pub storage_items: Option<Vec<Option<ServerUserItem>>>,
+bins/game-svr/src/record.rs:615:            storage_items: decode_items(r)?,
+bins/game-svr/src/record.rs:672:        encode_items(w, self.storage_items.as_deref());
+bins/game-svr/src/record.rs:1105:        let sto = d.storage_items.as_ref().expect("StorageItems");
+bins/game-svr/src/record.rs:1177:        assert!(d.storage_items.is_none());
+bins/game-svr/src/record.rs:1199:            ("StorageItems", &d.storage_items),
+bins/game-svr/src/record.rs:1210:                d.storage_items.as_ref().unwrap().len(),
+
+== [8] 客户端帧常量已在 protocol，但生产路径未发 ==
+282:pub const SM_SENDGOODSLIST: u16 = 645;
+283:pub const SM_SENDUSERSELL: u16 = 646;
+284:pub const SM_SENDBUYPRICE: u16 = 647;
+287:pub const SM_BUYITEM_SUCCESS: u16 = 650;
+308:pub const SM_SENDREPAIRCOST: u16 = 671;
+326:pub const SM_SAVEITEMLIST: u16 = 704;
+897:        645 => &["SM_SENDGOODSLIST"],
+898:        646 => &["SM_SENDUSERSELL"],
+899:        647 => &["SM_SENDBUYPRICE"],
+902:        650 => &["SM_BUYITEM_SUCCESS"],
+
+== [9] game-svr 启动载入面（stditems / Exps.conf；无 NPC/MerChant/Market_Def）==
+346:    // 直连 MySQL 读 `stditems`（`MySqlDB.LoadItemsDB`，不经 DBSvr）；加载失败 ⇒ 空表
+357:                    "物品模板表 stditems：{} 条（直连 MySQL，帧 50/41 的 Shape 输入）",
+365:                    "读 stditems 失败（{e}）⇒ 装备形态按 `GetStdItem == null` 计 0（oracle 空物品系统分支）"
+374:    // 经验表（`Exps.conf` 的 `NeedExps`，`BaseObject.GetLevelExp` 的数据源）：存档 `MaxExp`
+376:    let need_exps = match mir2_data::exps::ExpsConfig::from_file(&base.join("Exps.conf")) {
+380:                "经验表 Exps.conf 已载入：NeedExps[1..] 非零 {} 项",
+388:                "读取 Exps.conf 失败（{e}）⇒ NeedExps 全 0（存档 MaxExp / 击杀经验登记）"
+2851:    /// `stditems` 物品目录（`game_svr::ability::StdItemCatalog`，**1-based** 查表，见 `crate::items`）；
+2866:    /// `Exps.conf` 的 `NeedExps` 表（`BaseObject.GetLevelExp` 的数据源，`crates/data::exps`）。
+2921:    // `Exps.conf` 的 NeedExps（`BaseObject.GetLevelExp` 的数据源；存档 `MaxExp` 也用它）。
