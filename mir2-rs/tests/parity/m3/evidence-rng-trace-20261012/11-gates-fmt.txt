@@ -1,0 +1,30 @@
+Diff in \\?\E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\crates\shared\tests\rng_trace.rs:37:
+     for _ in 0..3 {
+         rest.push((rng.next_double() * 1_000_000.0) as i32);
+     }
+-    (head, len, picked.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(","), rest)
++    (
++        head,
++        len,
++        picked
++            .iter()
++            .map(|v| v.to_string())
++            .collect::<Vec<_>>()
++            .join(","),
++        rest,
++    )
+ }
+ 
+ /// 校验 trace 行与「关闭时序列」逐项一致；改坏任一行 `result` ⇒ `Err`。
+Diff in \\?\E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\crates\shared\tests\rng_trace.rs:128:
+         .map(|s| s.to_string())
+         .collect();
+     let cols: Vec<&str> = mutated[0].split('\t').collect();
+-    let bad = format!("{}\t{}\t{}\t{}\t{}", cols[0], cols[1], cols[2], 999_999, cols[4]);
++    let bad = format!(
++        "{}\t{}\t{}\t{}\t{}",
++        cols[0], cols[1], cols[2], 999_999, cols[4]
++    );
+     mutated[0] = bad;
+     let mutated_refs: Vec<&str> = mutated.iter().map(|s| s.as_str()).collect();
+     assert!(

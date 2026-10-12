@@ -1,0 +1,37 @@
+# C# rng-stream.tsv 攻击 #2 / #3 区间原始行（决策片 §「噪声是否夹在攻击取数之间」的直接证据）
+# 源: E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv (sha256 718c23df...)
+
+## attack #2（marker 223799；噪声在 223801 夹在 GetAttackPower@2934 与 _Attack@41 之间）
+223799	Next(max)	1	0	M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929
+223800	Next(max)	10	5	M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2934
+223801	Next(max)	20	18	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+223802	Next(max)	15	1	M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41
+223803	Next(max)	20	17	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+223804	Next(max)	20	13	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+223805	Next(max)	20	11	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+223806	Next(max)	20	9	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+223807	Next(max)	20	10	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+223808	Next(max)	20	8	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+223809	Next(max)	20	16	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+223810	Next(max)	20	7	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+223811	Next(max)	20	13	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+223812	Next(max)	20	14	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+223813	Next(max)	20	13	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+223814	Next(max)	20	17	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+223815	Next(max)	1	0	M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:792
+223816	Next(max)	10	7	M2Server.Player.PlayObject.StruckDamage@PlayObject.cs:2957
+223817	Next(max)	5	0	M2Server.Player.PlayObject.AttackSuccess@PlayObject.Attack.cs:223
+223818	Next(max)	50	39	GameSrv.Npc.Merchant.Run@Merchant.cs:132
+
+## attack #3（marker 225618；每一步之间都夹 1 条 AnimalObject.Wondering@427）
+225618	Next(max)	1	0	M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929
+225619	Next(max)	10	7	M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2934
+225620	Next(max)	20	7	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+225621	Next(max)	15	0	M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41
+225622	Next(max)	20	16	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+225623	Next(max)	1	0	M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:792
+225624	Next(max)	20	16	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+225625	Next(max)	10	7	M2Server.Player.PlayObject.StruckDamage@PlayObject.cs:2957
+225626	Next(max)	20	14	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+225627	Next(max)	5	4	M2Server.Player.PlayObject.AttackSuccess@PlayObject.Attack.cs:223
+225628	Next(max)	20	17	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427

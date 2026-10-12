@@ -1,0 +1,15 @@
+{
+  "trace": "E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv",
+  "marker": "M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929",
+  "attacks": 120,
+  "intra_noise_attacks": 3,
+  "internal_noise_total": 19,
+  "internal_noise_max": 13,
+  "attack_draw_gap_histogram": {
+    "0": 123,
+    "1": 5,
+    "10-99": 1,
+    "2-9": 1
+  },
+  "verdict": "INTERLEAVED（噪声夹在攻击取数之间 ⇒ 重播种不足）"
+}

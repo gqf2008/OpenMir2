@@ -1,0 +1,52 @@
+# M3②③ 决策片（owner 2026-10-12 18:00）· 命令留档
+# base = refs/heads/master 324a182b1c6061ac2f7a42f85752bba6fd6ea426
+# 本片只加 Rust trace 代码 + 分析器/证据；未起栈、未占端口。
+
+## 0) 环境 / 输入
+# C# 半抽数流水 = m3bag 会话 csharp-20261012-170110 的 rng-stream.tsv（seed=42, MIR2_RNG_SITE=1）
+sha256sum E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv
+#   -> 718c23dfaf3b05ef2acdf5eb4ff20478ceaf6f314a863e25bd62a324804e1b31
+# m3bag 账本脚本（本片只读执行；尚未合入 master）
+sha256sum E:/tmp/attack_rng_ledger.py
+#   -> 70b0620d8e1678e4d3cf8540d08036babb0d44ccfeecd62d73c88ab5fbdd94b7
+
+## 1) C# 半账本（m3bag 仪器，只读）
+python E:/tmp/attack_rng_ledger.py summary E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv --top 12   # -> 01-...
+python E:/tmp/attack_rng_ledger.py segment E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv \
+  --marker "M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929" \
+  --json csharp-170110.rng-segments.jsonl                                                          # -> 02-...
+python E:/tmp/attack_rng_ledger.py selftest                                                         # -> 10-...
+
+## 2) 交错分析（本片分析器；决策片的直接输出）
+python mir2-rs/tests/parity/m3/rng-trace-probe/analyze_rng_trace.py interleave \
+  E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv \
+  --marker "M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929" \
+  --json mir2-rs/tests/parity/m3/evidence-rng-trace-20261012/04-csharp-interleave.json          # -> 03-/04-
+python mir2-rs/tests/parity/m3/rng-trace-probe/analyze_rng_trace.py summary \
+  E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv --top 12                                          # -> 05-...
+python mir2-rs/tests/parity/m3/rng-trace-probe/analyze_rng_trace.py selftest                     # 5/5
+
+## 3) 攻击 #2/#3 原始行摘录（噪声插在攻击取数之间）
+awk -F'\t' 'NR>2 && $1>=223799 && $1<=223818' E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv       # -> 06-...
+awk -F'\t' 'NR>2 && $1>=225618 && $1<=225628' E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv
+
+## 4) Rust trace 用例（off = 逐项不变；on = 同形 + 改坏必红）
+cd mir2-rs
+CARGO_TARGET_DIR=E:/tmp/m3cs-rng-trace-target cargo test -p mir2-shared --test rng_trace --offline  # -> 07-...
+
+## 5) Rust 离线单线程 trace（对照：攻击取数连续、零噪声）
+rm -f E:/tmp/m3cs-trace-single.tsv
+MIR2_RNG_LOG='E:/tmp/m3cs-trace-single.tsv' MIR2_RNG_SEED=42 \
+  CARGO_TARGET_DIR=E:/tmp/m3cs-rng-trace-target \
+  cargo test -p mir2-world --test combat_skill_vectors --offline -- --test-threads=1
+python mir2-rs/tests/parity/m3/rng-trace-probe/analyze_rng_trace.py interleave E:/tmp/m3cs-trace-single.tsv \
+  --marker "crates/world/src/combat.rs:109" \
+  --attack-re 'combat\.rs:(67|109|111|579|587|606|608|736)|magic\.rs:'                            # -> 08-...
+sed -n '1,16p' E:/tmp/m3cs-trace-single.tsv                                                       # -> 09-...
+
+## 6) 四门禁（隔离 target）
+cd mir2-rs; export CARGO_TARGET_DIR=E:/tmp/m3cs-rng-trace-target
+cargo fmt --all -- --check                                          # -> 11-... (rc=0)
+cargo clippy --workspace --all-targets --offline -- -D warnings     # -> 12-... (rc=0)
+cargo test --workspace --offline                                    # -> 13-... (82 suites / 669 passed / 0 failed / 16 ignored)
+cargo run -p msgcodegen --offline -- --check                        # -> 14-... (604)
