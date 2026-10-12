@@ -1,0 +1,32 @@
+SELFTEST_NO_STACK: 无栈自检——所有路径都必须 fail-closed（缺失绝不静默 GREEN）
+SELFTEST ① 配置透传 on=true? AttackSequence=True AttackCount=120 StepMs=500
+SELFTEST ② 默认关 off=false? AttackSequence=False
+SELFTEST ②b StopAfterCharCreated 透传 on=True/off=False（默认关；改坏写入⇒本项必红）
+SELFTEST ③ 无栈入口护栏 rc=2（期望 2=PREREQ）
+SELFTEST ④ -DiffOnly 缺会话 rc=2（期望 2=PREREQ）
+SELFTEST ⑤a run_pair -AttackSequence 传 -DisableAutoPlay? True（scope=on count=120 step_ms=500 start_delay_ms=3000 disable_autoplay=True）
+SELFTEST ⑤b 默认路径不带 -DisableAutoPlay 且 scope=(off)：(off)
+SELFTEST ⑥ -AttackPinPair map=0137 pose='pair map=0137 attacker=17,20,dir=2 victim=18,20 level=1 vhp=30000'；pin_sql_all=4 条
+SELFTEST ⑥b pin SQL 可执行性（镜像临时表 + 探针行真执行）：生产 rc=0 failures=0；改坏 a.IncHealth rc=1 [stmt#2 不可执行(rc=1): ERROR 1054 (42S22) at line 1: Unknown column 'a.IncHealth' in 'SET';stmt#4 不可执行(rc=1): ERROR 1054 (42S22) at line 1: Unknown column 'a.IncHealth' in 'SET']；改坏 Hp=100000 rc=1 [stmt#2 不可执行(rc=1): ERROR 1264 (22003) at line 1: Out of range value for column 'Hp' at row 1;stmt#4 不可执行(rc=1): ERROR 1264 (22003) at line 1: Out of range value for column 'Hp' at row 1]
+SELFTEST ⑥c -AttackVictimHp 范围护栏：缺省 30000 合规（≤32767）；100000 必判红
+SELFTEST ⑯ 攻击 pin 无怪口径（R-1，按地图查提取件）：生产 map=0137 spawns=0 source_verified=True；map 0 spawns=53 必红；合成 0/1 行·声明漂移·缺 provenance 四向有牙
+SELFTEST ⑰ 攻击 pin 非 MonGen AI 消费者口径（R-1 refine 15:05）：生产 map=0137 total=0 source_verified=True；合成 有引用/声明漂移/缺 provenance/缺提取件 四向必红
+SELFTEST ⑱ pin 记账门（informational，owner 19:20）：attempts=2 绿 / attempts=3(重试) 绿+informational / 旧会话无字段键 绿+informational / 键在但空/(off) 红 / 形态坏 红 / 期望漂移 绿 / 嵌套对象 绿；改坏必红（值清空 红[pin_attempts_missing]）；prewarm -StopAfterCharCreated=True
+SELFTEST ⑭ 攻击序列收尾等待（run_bots -SelfCheckNoStack）rc=0
+ALIGN_OK C:\Users\gxh\AppData\Local\Temp\m3attack-selftest-200330111\f-h-align\attack_seq.jsonl attacked=1 hits=1 dodges=0 sum=3 (filtered_foreign=0 other_observer=0 deduped=0 unattributed=0)
+SELFTEST ⑮ Invoke-AttackAlign 返回值类型/退出码（F-H）：rc=0 type=Int32
+SELFTEST ⑩ M-1 WARN 有牙齿：无 -AttackPinPair=1 条（期望≥1），有 -AttackPinPair=0 条（期望 0）
+SELFTEST ⑪ M-2 attacker 精确选择 selftest rc=0
+SELFTEST ⑦ attack_diff selftest rc=0
+ALIGN_OK C:\Users\gxh\AppData\Local\Temp\m3attack-selftest-200330111\a\attack_seq.jsonl attacked=10 hits=9 dodges=1 sum=197 (filtered_foreign=0 other_observer=0 deduped=0 unattributed=0)
+ALIGN_OK C:\Users\gxh\AppData\Local\Temp\m3attack-selftest-200330111\b\attack_seq.jsonl attacked=10 hits=9 dodges=1 sum=197 (filtered_foreign=0 other_observer=0 deduped=0 unattributed=0)
+SELFTEST ⑧ 合成两侧 → align/diff：
+  [绿] rc=0: GREEN: 跨侧攻击序列 diff = 0（attacked=10 hits=9 dodges=1 sum=197）
+  [改坏 dmg] rc=1:   - k=5 dmg 不等: a=20 b=999
+  [改坏 hit] rc=1:   - k=5 hit 不等: a=True b=False
+FAIL_CLOSED: attack 行缺 my 字段（需为 int ActorId）——拒绝静默降级为「不过滤」：{"role": "attack", "k": 1, "op": "CM_HIT", "x": 289, "y": 618, "dir": 2}；历史会话（未落 my）请先用 rebuild_attack_my.py 离线复算归一化再交给 align
+SELFTEST ⑲ attack 行缺 my ⇒ fail-closed（残差③）：rc=2（期望 2）
+SELFTEST ⑨ scoped_diff selftest rc=0（14/14）
+SELFTEST ⑫ pin SQL 别名/列校验：生产 statements=9 violations=0；改坏 a.IncHealth violations=2
+SELFTEST ⑬ 种子注入断言（离线）：7/7 向符合预期（csharp INJECT_OK / rust SEED_PROBE / 种子不符必红 / 空路径 fail-closed）
+SELFTEST_RED GREEN: 无栈自检全过（攻击配置透传/默认关 + run_pair -DisableAutoPlay 耦合两向 + 攻击两相 pin pose/SQL（-PinMapName 透传含 MapName 断言） + pin SQL 可执行性（含改坏 a.IncHealth 必红 + 改坏 Hp=100000 越界必红） + pin 记账门（owner 19:20 降级 informational：attempts=2/3/漂移/旧会话无字段键 绿 + 键在但空/(off)/形态坏 红 + 改坏必红值清空） + 预热相 -StopAfterCharCreated 透传两向 + 攻击 pin 无怪口径（R-1，按地图查提取件：生产 0137 绿/source_verified + 换回 map 0 必红 + 合成 0/1 行·声明漂移·缺 provenance 四向有牙） + 攻击 pin 非 MonGen AI 消费者口径（R-1 refine 15:05：生产 0137 绿/source_verified + 合成 有引用/声明漂移/缺 provenance/缺提取件 四向必红） + 入口/DiffOnly fail-closed + attack_diff selftest + 改坏 dmg/hit 必红 + Invoke-AttackAlign 返回值形态两处（F-J：⑧ 生产函数直接断言 + ⑮） + scoped_diff 14/14 + M-1 WARN 有牙齿 + M-2 attacker 精确选择 selftest + pin SQL 别名/列校验 + 种子注入断言（两侧 fail-closed）+ 攻击序列收尾等待（F-E） + attack 行缺 my 的 fail-closed（残差③））

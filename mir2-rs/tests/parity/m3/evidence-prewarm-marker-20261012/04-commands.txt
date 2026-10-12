@@ -1,0 +1,47 @@
+# 本片（reviewer-6 M-1：预热相门正向断言，卡 openmir2-m3-attack-pair-fixture）
+# 命令留档。全部离线，未起服务端栈（端口未占用）。
+# 注：本机 PowerShell 5.1 的 $env:PSModulePath 被 PowerShell 7 目录污染时 Get-FileHash 会消失
+#     ⇒ 跑 5.1 脚本前先清成 5.1 的模块路径（同 evidence-pin-attempts-info-20261012/06-commands.txt）。
+
+## 0) 环境（bash → powershell 5.1）
+export PSModulePath='C:\Users\gxh\Documents\WindowsPowerShell\Modules;C:\Program Files\WindowsPowerShell\Modules;C:\Windows\System32\WindowsPowerShell\v1.0\Modules'
+
+## 1) 门禁自检（本目录 01）
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/selftest_gate.ps1 \
+  -OutDir E:/tmp/openmir2-m3gs/selftest-m1      # -> 01-selftest-gate.txt（total=64 failed=0，⑩ 四向含 M-1 新用例）
+
+## 2) 改前/改后（本目录 02）
+# 改前 gate_guards.ps1 = base fa456481；改后 = 本片工作树。harness 只 dot-source 目标脚本调该函数。
+git show fa456481:mir2-rs/tests/parity/m3/gate_guards.ps1 > E:/tmp/m3bag-m1/base/mir2-rs/tests/parity/m3/gate_guards.ps1
+cp tools/m2-acceptance/portclassify.ps1 E:/tmp/m3bag-m1/base/tools/m2-acceptance/portclassify.ps1
+for log in noworld world empty; do
+  powershell -ExecutionPolicy Bypass -File E:/tmp/m3bag-m1/prewarm_harness.ps1 \
+    -GuardsPath E:/tmp/m3bag-m1/base/mir2-rs/tests/parity/m3/gate_guards.ps1 -Log "E:/tmp/m3bag-m1/logs/$log.log"
+  powershell -ExecutionPolicy Bypass -File E:/tmp/m3bag-m1/prewarm_harness.ps1 \
+    -GuardsPath "$PWD/mir2-rs/tests/parity/m3/gate_guards.ps1" -Log "E:/tmp/m3bag-m1/logs/$log.log"
+done                                          # 改前 empty=ok=True（M-1 缺陷）；改后 empty=ok=False prewarm_marker_missing
+
+## 3) 牙齿（本目录 03）
+# A. 改坏副本（$positive.Count -eq 0 → -lt 0）harness：empty 退回 ok=True。
+# B. 把改坏副本临时放回工作树（原文件已备份）后跑 selftest_gate.ps1：
+sed -i 's/\$positive\.Count -eq 0/\$positive.Count -lt 0/' mir2-rs/tests/parity/m3/gate_guards.ps1
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/selftest_gate.ps1 -OutDir E:/tmp/openmir2-m3gs/selftest-m1-mut
+#   → rc=1；⑩「日志存在但零 marker=红(fail-closed；M-1)」FAIL。
+cp <备份> mir2-rs/tests/parity/m3/gate_guards.ps1; cmp <备份> mir2-rs/tests/parity/m3/gate_guards.ps1   # RESTORED_IDENTICAL
+
+## 4) 攻击夹具无栈自检（本目录 06；确认 run_pair/gate 改动未回归）
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 -SelfCheckNoStack   # -> rc=0 SELFTEST_RED GREEN
+
+## 5) 四门禁（本目录 05；本片零 .rs，作回归）
+cd mir2-rs && export CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target
+cargo fmt --all -- --check                                            # rc=0
+cargo clippy --workspace --all-targets --offline -- -D warnings       # rc=0
+cargo test --workspace --offline                                      # rc=0；82 suites ok / 0 FAILED；670 passed / 0 failed
+cargo run -p msgcodegen -- --check                                    # rc=0（604）
+
+## 6) 证据 hash
+python -I tools/evidence-hash/verify_sha256sums.py write mir2-rs/tests/parity/m3/evidence-prewarm-marker-20261012
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/m3/evidence-prewarm-marker-20261012
+
+## 7) 未起栈
+# 本片零端口占用；5000/5100/5500/5600/5700/6000/7000/7100/7200 未起监听（仅共享 3306）。
