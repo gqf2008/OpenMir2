@@ -18,8 +18,8 @@ AI 每 tick 的语义锚点见第 ① 片证据 `../monster-ai-20261013/01-oracl
 | `RunAwayStart` / `RunAwayTime` | `= GetTickCount()` / `= 0` | `AnimalObject.cs:80-81` |
 | `WalkWaitTick` / `WalkWaitLocked` | `= GetTickCount()` / `= false` | `AnimalObject.cs:84-85` |
 | `TargetX` / `TargetY` | `TargetX = -1`（`TargetY` 保持 0） | `AnimalObject.cs:74` |
-| `SearchTime`（Derived） | `SearchTime = 3000 + Random(2000)` | `src/M2Server/Monster/MonsterObject.cs:57` |
-| `ThinkTick` | `ThinkTick = HUtil32.GetTickCount()` | `MonsterObject.cs:55` |
+| `SearchTime`（Derived） | `SearchTime = 3000 + Random(2000)` | `src/M2Server/Monster/MonsterObject.cs:65` |
+| `ThinkTick` | `ThinkTick = HUtil32.GetTickCount()` | `MonsterObject.cs:62` |
 | `NextHitTime` / `WalkSpeed` | `= 2000` / `= 1400` | `BaseObject.cs:446-447` |
 | `RunTick` 消费 | `BaseObject.Run()` 的 `RunTick < now ⇒ RunTick = now + RunTime` 段 | `BaseObject.Base.cs:25-...` |
 
@@ -35,7 +35,7 @@ AI 每 tick 的语义锚点见第 ① 片证据 `../monster-ai-20261013/01-oracl
     - **隐藏门读 `HideMode`**（`BaseObject.cs:437` 的 `HideMode`），**不是** `FixedHideMode`
       （`FixedHideMode` 只被 `Envirnoment.GetXYObjCount`（`Envirnoment.cs:1062-1093`）与
       `MonsterObject.Run`（`MonsterObject.cs:253`）读）
-  - 最近者：`int n10 = 999;`（:390）—— 全部候选 `nC >= 999` 时一个都不选
+  - 最近者：`int n10 = 999;`（:391）—— 全部候选 `nC >= 999` 时一个都不选
 - 本仓字段映射：`Entity.invisible` = oracle `Invisible`（`is_proper_target` 用）、
   `Entity.fixed_hide_mode` = oracle `FixedHideMode`、**新增** `Entity.hide_mode` = oracle `HideMode`。
 

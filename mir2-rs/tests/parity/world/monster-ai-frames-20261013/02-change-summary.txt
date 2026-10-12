@@ -1,0 +1,33 @@
+M3④-实现 C 第 ③ 片（怪物帧面）—— 改动清单
+==========================================
+
+写集：`mir2-rs/bins/game-svr/**`（本片全部代码改动都在此）+ 本证据目录。
+**零** `crates/world/**`（本片不改世界模拟/实体字段）、**零** `src/ sql/ MirClient`（oracle 冻结）。
+（分片② 对 `crates/world/**` 的改动仍在上一 head a5d8d579 上，不属本片增量。）
+
+| 文件 | 改动 | oracle |
+| --- | --- | --- |
+| `bins/game-svr/src/feature.rs` | 新增 `make_monster_feature(race_img, monster_weapon, appr)`（+位布局用例） | `M2Share.MakeMonsterFeature`（`M2Share.cs:1960`） |
+| `bins/game-svr/src/downlink.rs` | 新增 `gbk()`（从 bin 的 `enter::gbk` 收敛来的唯一实现）、`filter_show_name()`、`monster_display()`、`MONSTER_NAME_COLOR`（+3 用例） | `FilterShowName`（`M2Share.cs:571`）、`GetFeature/GetShowName/GetChrColor/Light/GetFeatureEx`（见 01） |
+| `bins/game-svr/src/enter.rs` | `enter::gbk` 改为委托 `downlink::gbk`（一份实现，防口径分叉） | 同 `HUtil32.GetBytes`（gb2312） |
+| `bins/game-svr/src/mongen.rs` | `WorldMonsterSink` 增加 `displays` 字段；`spawn_monster` 成功后按 `MonsterInfo` 登记怪物展示层（表未命中则不登记）（+1 用例） | `CreateMonster` 成功后 `cert` 的展示值 + `ApplyMonsterAbility` 输入（`WorldServer.MonGen.cs:880-910`） |
+| `bins/game-svr/src/main.rs` | ① `step_mon_gen` 透传 `&mut displays`；② `drain_aoi_downlink` 对非玩家 actor 用**世界当前 `Entity.ai.dir`** 作出现帧 `Dir`；③ `drain_combat_downlink` 死亡帧同理（怪物不再因缺展示表被跳过）；④ 新增 `new_player_entity()`（`WantRefMsg=true`）并在生产进世界路径使用；⑤ 新增 2 条用例 | `PlayObject.cs:3240/889`、`BaseObject.ViewRange.cs:112`、`PlayObject.Message.cs:1524-1560` |
+
+## 关键语义（别顺手简化）
+
+1. **`MonsterWeapon = HUtil32.LoByte(monster.MP)`**（`WorldServer.MonGen.cs:902`）——只取低字节；
+   其值参与 feature 的 bit8..15。用整 `mp` 或高字节都会改变帧字节（红检 RC-C3-B）。
+2. **出现帧的 `Dir` 取世界当前 `ai.dir`**，不是登记时的生成初值（AI 会转向/走步）。玩家仍用展示表
+   （由客户端指令 `set_display_dir` 维护）——两条来源按 `race` 区分。
+3. **`WantRefMsg = true`** 是「看到怪」的可见门的一半（`PlayObject.cs:889`）；`BaseObject` 缺省 false。
+4. **名字用 `FilterShowName` 截断**（怪物走 `BaseObject.GetShowName`，玩家走 `PlayObject.GetShowName`
+   不过滤）——表现不同、各有已定锚点。
+
+## 登记（不在本片修）
+
+- `MonsterObject.GetChrColor` 的 `CrazyMode=0xF9` / `HolySeize=0x7D` 特例未建模
+  （`CrazyMode`/`HolySeize` 无写入点 ⇒ 今天两侧相同）；`Master != null ⇒ SlaveColor[]` 属宝宝系统。
+- 怪物**移动/转向**帧（`SM_WALK`/`SM_TURN` 的增量）未建模：`TickRecord` 目前只暴露 `processed/aoi_order/
+  attacks/deaths`，没有怪物移动事件；出现帧之后怪物的走动不会逐格下发（属移动同步分片）。
+- `RM_DISAPPEAR`（`VisibleFlag.Hidden` 支）仍无编码器（上一片已登记）。
+- `NpcNameColor` 分支（`Race == ActorRace.NPC == 10`）本片不可达（`race_is_spawnable` 不含 10）。

@@ -1,0 +1,78 @@
+M3④-实现 C 第 ③ 片（怪物帧面）oracle 锚点 —— 逐条行号复核于本片（读 src/ 原文，不按公式重推）
+===============================================================================================
+
+## 1. 怪物外形（feature）
+
+src/M2Server/Actor/BaseObject.Base.cs:911  (BaseObject.GetFeature)
+    return M2Share.MakeMonsterFeature(RaceImg, MonsterWeapon, Appr);
+    —— 玩家 PlayObject 在 PlayObject.cs:3395 覆盖了 GetFeature；怪物/守卫/门墙**不覆盖**。
+
+src/M2Server/M2Share.cs:1960  (M2Share.MakeMonsterFeature)
+    return HUtil32.MakeLong(HUtil32.MakeWord(btRaceImg, btWeapon), wAppr);
+    ⇒ 位布局 LSB→MSB = [raceImg:8][weapon:8][appr:16]
+      （MakeWord(low,high)=high<<8|low；MakeLong(low,high)=low|high<<16）
+
+src/GameSrv/Word/WorldServer.MonGen.cs:880-910  (ApplyMonsterAbility，输入来源)
+    :888  monsterActor.RaceImg = monster.RaceImg;      // MonsterInfo.RaceImg
+          monsterActor.Appr    = monster.Appr;         // MonsterInfo.Appr
+    :902  monsterActor.MonsterWeapon = HUtil32.LoByte(monster.MP);   // ← 只取低字节！
+
+src/M2Server/Actor/BaseObject.cs:1487  (GetFeatureToLong = GetFeature(null))
+    SM_FEATURECHANGED 的 Param/Tag 就从它拆 Lo/HiWord（PlayObject.Message.cs:1557）。
+
+## 2. feature_ex / light / status
+
+src/M2Server/Actor/BaseObject.Base.cs:926  (BaseObject.GetFeatureEx) => 0（怪物不覆盖）。
+src/M2Server/Actor/BaseObject.cs:384       (ctor) Light = 0 —— 怪物从不调 GetMyLight()。
+src/M2Server/Actor/BaseObject.cs:1492      (GetCharStatus) = ActorBuffSystem.GetBuffStatus(this)
+                                            | (CharStatusEx & 0x0000FFFF)；怪物无 buff ⇒ 0。
+
+## 3. 名字与颜色（GetShowName / GetChrColor）
+
+src/M2Server/Actor/BaseObject.Base.cs:779  (BaseObject.GetShowName)
+    result = M2Share.FilterShowName(ChrName);
+    if (Master != null && !Master.ObMode) result += '(' + Master.ChrName + ')';
+    —— 玩家 PlayObject.GetShowName()（PlayObject.cs:3300）**覆盖**它（走 String.conf 模板，
+       不过 FilterShowName）；怪物/守卫用**基类**这条。
+
+src/M2Server/M2Share.cs:571-594  (FilterShowName)
+    从首个 ASCII 数字或 '-' 处截断；没有则原样。
+
+src/M2Server/Actor/BaseObject.cs:385   (ctor) NameColor = 255。
+src/M2Server/Actor/BaseObject.Base.cs:869 (BaseObject.GetChrColor)
+    Race==NPC ⇒ NpcNameColor；Master!=null ⇒ SlaveColor[SlaveExpLevel]；否则 GetNameColor()。
+src/M2Server/Monster/MonsterObject.cs:482 (MonsterObject.GetChrColor)
+    特例：CrazyMode ⇒ 0xF9；HolySeize ⇒ 0x7D；否则 base.GetChrColor。
+    —— 本片生成的普通怪 CrazyMode/HolySeize 均 false、Master==null、Race∈{51,80..}≠10(NPC)
+       ⇒ 落到 NameColor = 255。
+
+## 4. 帧面（出现帧与死亡帧）
+
+src/M2Server/Player/PlayObject.cs:3240  (PlayObject.Run 的 Show 支)
+    SendMsg(baseObject, RM_TURN, baseObject.Dir, baseObject.CurrX, baseObject.CurrY, 0,
+            baseObject.GetShowName());
+
+src/M2Server/Player/PlayObject.Message.cs:1524-1560  (RM_TURN/RM_PUSH/RM_RUSH/RM_RUSHKUNG 支)
+    :1532  ClientMsg = MakeMessage(SM_TURN, ActorId, nParam1, nParam2,
+                                   MakeWord((ushort)wParam /*Dir*/, baseObject.Light));
+    :1536  turnmessage.Feature = baseObject.GetFeature(baseObject);
+    :1537  turnmessage.Status  = baseObject.CharStatus;
+    :1540  nObjCount = GetChrColor(baseObject);
+    :1549  if (!string.IsNullOrEmpty(Msg)) 尾 += EncodeString($"{Msg}/{nObjCount}");
+    :1557  if (RM_TURN) SendDefMessage(SM_FEATURECHANGED, ActorId,
+                                       LoWord(GetFeatureToLong()), HiWord(...), GetFeatureEx());
+    ⇒ 出现帧 = SM_TURN(12B 头 + Encode(8B CharDesc) + Encode("ShowName/Color"))
+             + SM_FEATURECHANGED。
+
+src/M2Server/Actor/BaseObject.Base.cs:351  (Die) SendRefMsg(RM_DEATH, Dir, CurrX, CurrY, 1, "")
+    ⇒ 观察者收 SM_NOWDEATH，CharDesc 用同一 feature/status（本片让怪物死亡帧不再被跳过）。
+
+## 5. 观察者可见门（否则登记了展示也看不到怪）
+
+src/M2Server/Player/PlayObject.cs:889   (PlayObject ctor) WantRefMsg = true;
+src/M2Server/Actor/BaseObject.cs:431    (BaseObject ctor) WantRefMsg = false;   // 基类缺省
+src/M2Server/Actor/BaseObject.ViewRange.cs:112  (SearchViewRange 可见过滤)
+    (Master != null) || NastyMode || WantRefMsg
+      || (baseObject.Master != null && |dx|<=3 && |dy|<=3)
+      || (baseObject.Race == ActorRace.Play)
+    ⇒ 玩家靠 PlayObject 的 WantRefMsg=true 才能把**非玩家**纳入可见集；只靠 race==Play 只能看玩家。

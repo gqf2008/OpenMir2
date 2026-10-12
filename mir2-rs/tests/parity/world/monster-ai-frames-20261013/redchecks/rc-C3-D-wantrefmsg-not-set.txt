@@ -1,0 +1,26 @@
+# RC-C3-D — 变异点：bins/game-svr/src/main.rs::new_player_entity 不置 WantRefMsg=true
+# 期望：tests::new_player_entity_sets_want_ref_msg FAILED (rc=101)
+# 命令：cargo test -p game-svr --bins new_player_entity_sets_want_ref_msg --offline
+
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.66s
+     Running unittests src\main.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-eb39968088e3f1ec.exe)
+
+running 1 test
+test tests::new_player_entity_sets_want_ref_msg ... FAILED
+
+failures:
+
+---- tests::new_player_entity_sets_want_ref_msg stdout ----
+
+thread 'tests::new_player_entity_sets_want_ref_msg' (16112) panicked at bins\game-svr\src\main.rs:5166:9:
+oracle PlayObject 构造器置 WantRefMsg=true（PlayObject.cs:889）
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::new_player_entity_sets_want_ref_msg
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 158 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`

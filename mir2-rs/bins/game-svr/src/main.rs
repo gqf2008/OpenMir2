@@ -2202,6 +2202,17 @@ fn broadcast_ref_msg(
     }
 }
 
+/// 生产宿主构造**玩家实体**（`PlayObject` 构造器语义的最小面）。
+///
+/// oracle `PlayObject` 构造器置 `WantRefMsg = true`（`PlayObject.cs:889`；`BaseObject` 缺省 false，
+/// `BaseObject.cs:431`）。AOI 可见过滤（`BaseObject.ViewRange.cs:112`）靠它把**非玩家**（怪物）
+/// 纳入可见集 —— 只靠 `race == ActorRace.Play` 只能看到其他玩家。
+fn new_player_entity(chr_name: String, x: i32, y: i32) -> mir2_world::Entity {
+    let mut e = mir2_world::Entity::new(0, chr_name, x, y);
+    e.want_ref_msg = true;
+    e
+}
+
 /// 帮 `ActorDisplay.dir` 随转向/走步更新（展示字段在 `bins/game-svr` 的展示表里，不进 `crates/world`）。
 fn set_display_dir(displays: &mut downlink::DisplayTable, actor_id: i32, dir: u8) {
     if let Some(mut d) = displays.get(actor_id).cloned() {
@@ -2283,7 +2294,13 @@ fn drain_aoi_downlink(
             };
             let x = u16::from_ne_bytes(i16::try_from(target.x).unwrap_or(0).to_ne_bytes());
             let y = u16::from_ne_bytes(i16::try_from(target.y).unwrap_or(0).to_ne_bytes());
-            let bodies = downlink::turn_pair(target.id, x, y, display);
+            let mut frame_display = display.clone();
+            if target.race != mir2_world::ACTOR_RACE_PLAY {
+                // 怪物的 `BaseObject.Dir` 由 AI（`AnimalObject`/`MonsterObject`）写在 `Entity.ai.dir`；
+                // 展示表里的副本是生成时的初值 ⇒ 出现帧用世界**当前**朝向（oracle `SendMsg(…, Dir, …)`）。
+                frame_display.dir = target.ai.dir;
+            }
+            let bodies = downlink::turn_pair(target.id, x, y, &frame_display);
             let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "同屏下行")
             else {
                 continue;
@@ -2358,23 +2375,31 @@ fn drain_combat_downlink(
             });
         }
     }
-    // ② 死亡广播（含死者自己；展示表只登记玩家 ⇒ 怪物登记跳过）。
+    // ② 死亡广播（含死者自己；展示表登记了玩家与已生成的怪物，未登记 actor 跳过并 WRN）。
     for death in &rec.deaths {
         let dead_id = death.0;
         let Some(d) = displays.get(dead_id) else {
-            glog!(
-                "WRN",
-                "死亡下行：actor={dead_id} 无展示表（怪物 feature/status 未建模）⇒ 跳过（登记）"
-            );
+            glog!("WRN", "死亡下行：actor={dead_id} 无展示表 ⇒ 跳过（登记）");
             continue;
         };
-        let (x, y) = world.entities.get(dead_id).map_or((0, 0), |e| (e.x, e.y));
+        // 死者的 `Dir`：玩家用展示表（客户端指令维护），怪物用 `Entity.ai.dir`（AI 维护）。
+        let (x, y, dead_dir) = world.entities.get(dead_id).map_or((0, 0, d.dir), |e| {
+            (
+                e.x,
+                e.y,
+                if e.race == mir2_world::ACTOR_RACE_PLAY {
+                    d.dir
+                } else {
+                    e.ai.dir
+                },
+            )
+        });
         let body = game_svr::smframe::sm_death(
             mir2_protocol::messages::SM_NOWDEATH,
             dead_id,
             wire_coord(x),
             wire_coord(y),
-            d.dir,
+            dead_dir,
             &downlink::char_desc(d.feature, d.status),
         );
         for target_id in chat::hear_targets(world, dead_id, chat::SEND_REF_MSG_RANGE) {
@@ -3100,6 +3125,7 @@ fn step_mon_gen(
     table: &game_svr::mongen::MonsterTable,
     registry: &mir2_envir::MapRegistry,
     world: &mut mir2_world::World,
+    displays: &mut downlink::DisplayTable,
     play_object_count: i32,
 ) {
     let now = i32::try_from(world.clock_ms).unwrap_or(i32::MAX);
@@ -3135,6 +3161,7 @@ fn step_mon_gen(
             world,
             registry,
             table,
+            displays,
         };
         let _ = host.step(
             now,
@@ -3702,8 +3729,7 @@ fn sim_loop(
                                         } else {
                                         // 进世界：`World::open_session` + `enter_map`
                                         let _ = world.open_session(&head.chr_name);
-                                        let ent = mir2_world::Entity::new(
-                                            0,
+                                        let ent = new_player_entity(
                                             head.chr_name.clone(),
                                             i32::from(enter_x),
                                             i32::from(enter_y),
@@ -4161,6 +4187,7 @@ fn sim_loop(
                     &enter_cfg.mon_gen.table,
                     reg,
                     &mut world,
+                    &mut displays,
                     i32::try_from(online.len()).unwrap_or(i32::MAX),
                 );
             }
@@ -5126,6 +5153,99 @@ mod tests {
             ],
             "gate1（b 的线）应只收到 a 的一对帧（按 GateIdx 路由）"
         );
+    }
+
+    /// **C 第 ③ 片判据（观察者开可见门）**：生产宿主构造玩家实体时置 `WantRefMsg = true`
+    /// （oracle `PlayObject.cs:889`）；否则 AOI 可见过滤（`BaseObject.ViewRange.cs:112`）只放行
+    /// 玩家目标，怪物永远不可见。
+    ///
+    /// 红检：删掉 [`new_player_entity`] 里的 `e.want_ref_msg = true;` ⇒ 本用例必红。
+    #[test]
+    fn new_player_entity_sets_want_ref_msg() {
+        let e = new_player_entity("m3p".to_string(), 10, 10);
+        assert!(
+            e.want_ref_msg,
+            "oracle PlayObject 构造器置 WantRefMsg=true（PlayObject.cs:889）"
+        );
+        assert_eq!(e.race, mir2_world::ACTOR_RACE_PLAY);
+    }
+
+    /// **C 第 ③ 片判据（怪物出现帧端到端）**：怪物展示层登记后，观察者的 AOI `Show` ⇒ 收到以
+    /// 怪物 `ActorId` 为 `Recog` 的 `SM_TURN` + `SM_FEATURECHANGED`；`SM_TURN.Series` 取
+    /// **世界当前 `Entity.ai.dir`**（不是登记时的初值）。
+    ///
+    /// 红检：删掉 `drain_aoi_downlink` 里对怪物的 `frame_display.dir = target.ai.dir`（退回
+    /// 展示表初值）⇒ `Series & 0xFF == 5` 断言必红；不登记怪物展示（[`downlink::monster_display`]）
+    /// ⇒ 帧数 0 ⇒ 必红。
+    #[test]
+    fn aoi_show_emits_monster_turn_pair_with_world_dir() {
+        use std::collections::HashMap;
+
+        let mut world = mir2_world::World::new(100, 100);
+        world.open_session("p");
+        let p = world
+            .enter_map("p", mir2_world::Entity::new(0, "p", 10, 10), 0)
+            .expect("玩家进图");
+        // oracle `PlayObject` 构造器置 `WantRefMsg = true`（`PlayObject.cs:889`）——玩家靠它
+        // 才能把怪物纳入可见集（AOI 可见过滤，`BaseObject.ViewRange.cs:112`）。
+        world.entities.get_mut(p).unwrap().want_ref_msg = true;
+        // 怪物以 `add_entity` 入队 `Command::Enter`（tick 时上格）；登记展示时 dir=2，
+        // 随后 AI 把世界朝向改成 5 —— 出现帧必须取世界值。
+        let mut mon = mir2_world::Entity::new(0, "稻草人2", 12, 10);
+        mon.race = mir2_world::ACTOR_RACE_MONSTER;
+        let mon_id = world.add_entity(mon);
+        world.tick();
+
+        let info = mir2_data::models::MonsterInfo {
+            name: "稻草人2".to_string(),
+            race: 51,
+            race_img: 0x0A,
+            appr: 0x3344,
+            mp: 0x2211,
+            ..Default::default()
+        };
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(mon_id, downlink::monster_display(2, &info));
+        world.entities.get_mut(mon_id).unwrap().ai.dir = 5;
+
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "up".into(),
+                chr_name: "p".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: p,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        drain_aoi_downlink(&world, &displays, &online, &gates);
+
+        let mut frames = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
+            let cm = mir2_protocol::frame::CommandMessage::from_bytes(&body)
+                .expect("SM_* body 至少 12B");
+            frames.push((cm.recog, cm.ident, cm.series));
+        }
+        assert_eq!(
+            frames.len(),
+            2,
+            "出现帧 = SM_TURN + SM_FEATURECHANGED（怪物 Recog）"
+        );
+        assert_eq!(frames[0].0, mon_id, "SM_TURN 的 Recog = 怪物 ActorId");
+        assert_eq!(frames[0].1, mir2_protocol::messages::SM_TURN);
+        assert_eq!(
+            frames[0].2 & 0xFF,
+            5,
+            "SM_TURN.Series 低字节 = 世界当前 ai.dir（非登记初值 2）"
+        );
+        assert_eq!(frames[1].0, mon_id, "SM_FEATURECHANGED 的 Recog 同怪物");
+        assert_eq!(frames[1].1, mir2_protocol::messages::SM_FEATURECHANGED);
     }
 
     /// 测试用的 `WAbil`（金币分支不使用 `wabil`；字段值不影响本例断言）。

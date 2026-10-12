@@ -1,0 +1,26 @@
+# RC-C3-A — 变异点：bins/game-svr/src/mongen.rs::WorldMonsterSink::spawn_monster 删掉怪物展示层登记
+# 期望：game-svr mongen::tests::world_monster_sink_registers_monster_display FAILED (rc=101)
+# 命令：cargo test -p game-svr --lib world_monster_sink_registers_monster_display --offline
+
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.04s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-3aa264152417c61e.exe)
+
+running 1 test
+test mongen::tests::world_monster_sink_registers_monster_display ... FAILED
+
+failures:
+
+---- mongen::tests::world_monster_sink_registers_monster_display stdout ----
+
+thread 'mongen::tests::world_monster_sink_registers_monster_display' (7444) panicked at bins\game-svr\src\mongen.rs:1433:14:
+怪物必须登记展示层（否则 AOI 下行跳过）
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    mongen::tests::world_monster_sink_registers_monster_display
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 108 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --lib`
