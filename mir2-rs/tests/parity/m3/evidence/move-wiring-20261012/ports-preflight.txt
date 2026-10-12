@@ -1,15 +1,13 @@
-# 端口实拍（本片 DoD⑥：不起栈、不占端口——只跑离线单测/门禁）
-# 时间：2026-10-12 08:02:11
-# 说明：此刻十端口均有 LISTENING，但**全部属于 m3bag 车道正在跑的 T-14 两相对拍栈**（owner 在 openmir2-m3-bag-equip-alignment 的 GO f2ba9869 下发窗口），与本线无关；
-#       本线未起任何 game-svr/gate/DBSrv/LoginSrv/MySQL 进程，只跑 cargo 单测（relay 用例用随机端口、3 连跑全绿）。
-
-port 5000:   TCP    127.0.0.1:5000         0.0.0.0:0              LISTENING       18108   => "game-svr.exe"
-port 5100:   TCP    0.0.0.0:5100           0.0.0.0:0              LISTENING       17604   => "DBSrv.exe"
-port 5500:   TCP    0.0.0.0:5500           0.0.0.0:0              LISTENING       19260   => "LoginSrv.exe"
-port 5600:   TCP    127.0.0.1:5600         0.0.0.0:0              LISTENING       19260   => "LoginSrv.exe"
-port 5700:   TCP    127.0.0.1:5700         0.0.0.0:0              LISTENING       17604   => "DBSrv.exe"
-port 6000:   TCP    0.0.0.0:6000           0.0.0.0:0              LISTENING       17604   => "DBSrv.exe"
-port 7000:   TCP    127.0.0.1:7000         0.0.0.0:0              LISTENING       26588   => "login-gate.exe"
-port 7100:   TCP    0.0.0.0:7100           0.0.0.0:0              LISTENING       28544   => "sel-gate.exe"
-port 7200:   TCP    127.0.0.1:7200         0.0.0.0:0              LISTENING       15168   => "game-gate.exe"
-port 3306:   TCP    127.0.0.1:3306         0.0.0.0:0              LISTENING       28624   => "mysqld.exe"
+﻿# 端口实拍（本片 DoD⑥：不起栈、不占端口——只跑离线单测/门禁）
+# 时间：2026-10-12 08:19:53
+# 说明：本线未起任何 game-svr/gate/DBSrv/LoginSrv/MySQL 进程（只跑 cargo 单测/门禁）；下表 LISTENING 若存在即属别的车道。
+port 5000: (free)
+port 5100: (free)
+port 5500: (free)
+port 5600: (free)
+port 5700: (free)
+port 6000: (free)
+port 7000: (free)
+port 7100: (free)
+port 7200: (free)
+port 3306: 127.0.0.1 LISTENING pid=22624 => mysqld

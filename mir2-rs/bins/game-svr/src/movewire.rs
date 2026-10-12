@@ -18,7 +18,13 @@
 //! **本片未接（登记，别按常识补）**：限速/超速（`CheckActionStatus` + `MoveTick`/`WalkIntervalTime`/
 //! `RunIntervalTime` + `MoveCount`/`OverSpeedCount`/`BoEmergencyClose`）、`ClientWalkXY` 的
 //! `HealthTick -= 10` / `ClientRunXY` 的 `HealthTick -= 60`（体力/饥饿面未移植）、失败支的
-//! `SendRefMsg(RM_MOVEFAIL)`（需 `sm_movement_fail` 编码器）、`IsCanWalk`/`IsCanRun` 的状态位面。
+//! `SendRefMsg(RM_MOVEFAIL)`（需 `sm_movement_fail` 编码器）、`IsCanWalk`/`IsCanRun` 的状态位面、
+//! `SpaceMoved`（地图路由换图）。
+//!
+//! **`Death`/`STONE` 守卫**（`PlayObject.Operate.cs:312`、`PlayObject.Attack.cs:1373/1297/980`）：
+//! `Death` 已接（`handle_move_cmd` 读 `mir2_world::Entity.death`，为真则整支拒绝）；
+//! `STONE = StatusTimeArr[PoisonState.STONE] != 0` 属**麻痹/状态位面，未移植** ⇒ **未接登记**
+//! （`mir2_world::Entity` 无该字段，不造一份假状态）。
 
 use mir2_protocol::messages;
 
@@ -124,6 +130,20 @@ pub const fn turn_is_at_target(nx: i32, ny: i32, cur_x: i32, cur_y: i32) -> bool
     nx == cur_x && ny == cur_y
 }
 
+/// `ClientWalkXY`/`ClientRunXY`/`ClientHorseRunXY` 的 **result 门**
+/// （`PlayObject.Attack.cs:1420`/`:1348`/`:1037`）：`SpaceMoved || (CurrX == nX && CurrY == nY)`。
+///
+/// `px`/`py` = **移动后**坐标，`nx`/`ny` = 请求目标坐标。本仓库**没有** `SpaceMoved`（地图路由换图
+/// `EnterAnotherMap`/`ChangeSpaceMove` 未移植）⇒ `SpaceMoved` 那一半**已登记**（模块头），本门
+/// 退化为 `CurrX == nX && CurrY == nY`。
+///
+/// `result == false` 时 oracle **不回** `+GD`（`delayTime == 0` 时改发 `RM_MOVEFAIL`，未接）；
+/// 但移动帧广播在 `WalkTo`/`RunTo` 内部的 `Walk(RM_WALK/RM_RUN)` 里**已发出**，与本门无关。
+#[must_use]
+pub const fn move_result_ok(px: i32, py: i32, nx: i32, ny: i32) -> bool {
+    px == nx && py == ny
+}
+
 /// `M2Share.GetGoodTick`（`src/M2Server/M2Share.cs:205`）= `string.Format(MessageSettings.sSTATUS_GOOD,
 /// GetTickCount())`，而 `sSTATUS_GOOD = "+GD/{0}"`（`src/Modules/SystemModule/MessageSettings.cs:6`）
 /// ⇒ 被接受的客户端动作回的**短包**正文（`SendSocket(string)`：`PackLength = -len`，网关端变成
@@ -186,6 +206,15 @@ mod tests {
         assert!(turn_is_at_target(287, 619, 287, 619));
         assert!(!turn_is_at_target(288, 619, 287, 619));
         assert!(!turn_is_at_target(287, 620, 287, 619));
+    }
+
+    #[test]
+    fn move_result_gate_is_at_target() {
+        // 移动后坐标 == 请求目标 ⇒ result 真（回 `+GD`）
+        assert!(move_result_ok(11, 10, 11, 10));
+        // 请求目标非相邻（走 1 格后仍在半路）⇒ result 假（不回 `+GD`）
+        assert!(!move_result_ok(12, 10, 14, 10));
+        assert!(!move_result_ok(11, 10, 11, 13));
     }
 
     #[test]
