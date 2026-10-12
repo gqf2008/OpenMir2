@@ -1658,3 +1658,79 @@ function Invoke-M3PinSettleHold {
   }
   return [pscustomobject]@{ Hold = $false; Attempts = $MaxAttempts; SettleRounds = $settleRounds; Verdicts = @($verdicts) }
 }
+
+# ===========================================================================
+# 收尾「等断线存档落库」的确定性等待（唯一口径；owner 2026-10-13 04:05 待办）
+# ===========================================================================
+# 背景（F-2 归因，`evidence-m3-scoped-diff-ability-20261013/README.md` §6）：
+# `run_pair.ps1` 在跑完操作序列、取 AFTER 快照前用**固定** `Start-Sleep 3`。但 oracle 的断线存档是
+# **异步**的（`run_bots` 收工杀 BotSrv ⇒ GameSvr 异步 `SaveHumanRcd` ⇒ DBSrv 落库）：C# 实测落库滞后
+# **+3.7s / +7.7s**，Rust 亚秒级。⇒ C# 侧 `snap_after` 会**间歇性早于落库**，把「存档还没写」误当
+# 「实现差异」，T-14 家族（`scoped_diff` 9 表）持续假红（7 处差异里 6 处同因）。
+# 只把 sleep 调大仍是竞态；正确做法 = **等状态变化**：
+#   `Probe` 返回「本前缀已有多少条角色的存档在参考时刻之后落库」，轮询到 `Expected` 条全部落库、
+#   且**连续 `QuietPolls` 次**保持（挡住「单次观测」的假 GREEN），才判 settled；
+#   `TimeoutSeconds` 内未达成 ⇒ `Settled=$false` + `reason=save_rcd_settle_timeout` ⇒ 调用方 **fail-closed**
+#   （点名 RED，绝不静默继续）。
+$script:M3SaveSettleTimeoutSeconds = 30
+$script:M3SaveSettlePollMs = 250
+$script:M3SaveSettleQuietPolls = 2
+
+# 存档落库探针的**唯一口径** SQL（两侧同列：`characters_ablity.ModifyTime` 由 `SaveAblity` 置 `now()`;
+# 参考时刻由调用方取「取 BEFORE 快照时的 DB 时钟」）。`> ref` 的语义 = 「该角色的存档在参考时刻之后落库」。
+# 说明：`characters_ablity` 的 INSERT（oracle `Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Add.cs:162`）
+# **不写 `ModifyTime`**（保持 NULL）、首次 `SaveAblity` 才置值；而 Rust 侧创建时就置值
+# （`bins/db-srv/src/playdata.rs:851` create_ablity_status）⇒ 必须用「`> 参考时刻`」而非「`IS NOT NULL`」，
+# 否则 Rust 侧会**开局即 satisfied**（假 settle）。
+function Get-M3SaveSettleProbeSql {
+  param(
+    [Parameter(Mandatory)][string]$ChrNamePrefix,
+    [Parameter(Mandatory)][string]$ReferenceTime
+  )
+  $safeP = $ChrNamePrefix.Replace("'", "''")
+  $safeT = $ReferenceTime.Replace("'", "''")
+  return ("SELECT COUNT(*) FROM mir2_db.characters_ablity a JOIN mir2_db.characters c ON a.PlayerId=c.Id WHERE c.ChrName LIKE '{0}%' AND a.ModifyTime IS NOT NULL AND a.ModifyTime > '{1}'" -f $safeP, $safeT)
+}
+
+# 仪器形态标签（写进 `-EmitOpsArgs` ⇒ 无栈自检可机判生产接线有没有被削弱/改回固定 sleep）。
+function Format-M3SaveSettleInstrument {
+  param(
+    [int]$TimeoutSeconds = $script:M3SaveSettleTimeoutSeconds,
+    [int]$PollMilliseconds = $script:M3SaveSettlePollMs,
+    [int]$QuietPolls = $script:M3SaveSettleQuietPolls
+  )
+  return ("mode=save_rcd timeout_s={0} poll_ms={1} quiet_polls={2}" -f $TimeoutSeconds, $PollMilliseconds, $QuietPolls)
+}
+
+function Invoke-M3SaveRcdSettle {
+  param(
+    [Parameter(Mandatory)][scriptblock]$Probe,   # 返回 [pscustomobject]@{ Landed = <已落库条数> }
+    [Parameter(Mandatory)][int]$Expected,
+    [int]$TimeoutSeconds = $script:M3SaveSettleTimeoutSeconds,
+    [int]$PollMilliseconds = $script:M3SaveSettlePollMs,
+    [int]$QuietPolls = $script:M3SaveSettleQuietPolls
+  )
+  if ($Expected -lt 1) { throw 'Invoke-M3SaveRcdSettle: Expected 必须 >= 1（否则任何探针都会立刻 settled）' }
+  if ($QuietPolls -lt 2) { throw 'Invoke-M3SaveRcdSettle: QuietPolls 必须 >= 2（单次观测挡不住假 GREEN）' }
+  $sw = [System.Diagnostics.Stopwatch]::StartNew()
+  $polls = 0
+  $quiet = 0
+  $last = -1
+  $samples = @()
+  while ($true) {
+    $polls++
+    # 只取探针的**最后一个**输出对象（防旧同族 bug：stdout 污染把返回值变成数组）。
+    $o = @(& $Probe)[-1]
+    $landed = [int]$o.Landed
+    $last = $landed
+    $samples += $landed
+    if ($landed -ge $Expected) { $quiet++ } else { $quiet = 0 }
+    if ($quiet -ge $QuietPolls) {
+      return [pscustomobject]@{ Settled = $true; Polls = $polls; ElapsedMs = [int]$sw.ElapsedMilliseconds; Reason = 'save_rcd_settled'; LastLanded = $last; Samples = @($samples) }
+    }
+    if ($sw.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
+      return [pscustomobject]@{ Settled = $false; Polls = $polls; ElapsedMs = [int]$sw.ElapsedMilliseconds; Reason = 'save_rcd_settle_timeout'; LastLanded = $last; Samples = @($samples) }
+    }
+    Start-Sleep -Milliseconds $PollMilliseconds
+  }
+}

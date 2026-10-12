@@ -1109,9 +1109,26 @@ if ($SelfCheckNoStack) {
   Write-Output ("SELFTEST 23b eolcheck 牙（盘上字节 vs git blob）：LF 件 rc={0} / CRLF 件 rc={1}（点名 bad.txt={2}）" -f $eolGoodRc, $eolBadRc, ($eolBadOut -match 'bad\.txt'))
   Remove-Item -Recurse -Force $eolProbeDir -ErrorAction SilentlyContinue
 
+  # 24 AFTER 快照前「等断线存档落库」的仪器形态（F-2 竞态修，owner 2026-10-13 04:05）：
+  #    攻击序列同样走 run_pair 的新口径（同一函数 `gate_guards.ps1::Invoke-M3SaveRcdSettle`）；
+  #    此处机判生产接线带 `save_settle_instrument`（引擎牙齿（晚落库/永不落库/单次观测）在
+  #    `run_bag_equip_pair.ps1 -SelfCheckNoStack ⑫`，两侧共用）。
+  $emitSsRaw = & powershell -ExecutionPolicy Bypass -File $RunPair -EmitOpsArgs -AttackSequence -AttackCount 120 -AttackStepMs 500 -AttackStartDelayMs 3000
+  if ($LASTEXITCODE -ne 0) { $failures += 'emit_save_settle_attack_rc=non-zero' }
+  else {
+    $ssRawText = ((@($emitSsRaw) | Where-Object { $_ -notmatch '^\s*(WARN:|PIN_NO_MONSTER|MAP_HAS_NO_MONSTER|MAP_HAS_NO_AI_CONSUMERS)' }) -join "`n").Trim()
+    $ssInst = ($ssRawText | ConvertFrom-Json).save_settle_instrument
+    if ($ssInst -notmatch 'mode=save_rcd') { $failures += 'attack_save_settle_instrument_missing' }
+    if ($ssInst -notmatch 'timeout_s=(\d+)') { $failures += 'attack_save_settle_missing_timeout' }
+    elseif ([int]$Matches[1] -lt 1) { $failures += ('attack_save_settle_timeout_too_small=' + $Matches[1]) }
+    if ($ssInst -notmatch 'quiet_polls=(\d+)') { $failures += 'attack_save_settle_missing_quiet' }
+    elseif ([int]$Matches[1] -lt 2) { $failures += ('attack_save_settle_quiet_too_small=' + $Matches[1]) }
+    Write-Output ("SELFTEST 24 攻击路径 save_settle_instrument='{0}'（要求 mode=save_rcd 且 timeout>=1、quiet>=2）" -f $ssInst)
+  }
+
   Remove-Item -Recurse -Force $tmpRoot -ErrorAction SilentlyContinue
   if ($failures.Count -eq 0) {
-    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（攻击配置透传/默认关 + run_pair -DisableAutoPlay 耦合两向 + 攻击两相 pin pose/SQL（-PinMapName 透传含 MapName 断言） + pin SQL 可执行性（含改坏 a.IncHealth 必红 + 改坏 Hp=100000 越界必红） + pin 记账门（owner 19:20 降级 informational：attempts=2/3/漂移/旧会话无字段键 绿 + 键在但空/(off)/形态坏 红 + 改坏必红值清空） + 预热相 -StopAfterCharCreated 透传两向 + 攻击 pin 无怪口径（R-1，按地图查提取件：生产 0137 绿/source_verified + 换回 map 0 必红 + 合成 0/1 行·声明漂移·缺 provenance 四向有牙） + 攻击 pin 非 MonGen AI 消费者口径（R-1 refine 15:05：生产 0137 绿/source_verified + 合成 有引用/声明漂移/缺 provenance/缺提取件 四向必红） + 入口/DiffOnly fail-closed + attack_diff selftest + 改坏 dmg/hit 必红 + Invoke-AttackAlign 返回值形态两处（F-J：⑧ 生产函数直接断言 + ⑮） + scoped_diff 14/14 + M-1 WARN 有牙齿 + M-2 attacker 精确选择 selftest + pin SQL 别名/列校验 + 种子注入断言（两侧 fail-closed）+ 攻击序列收尾等待（F-E） + attack 行缺 my 的 fail-closed（残差③） + 活栈隔离口径（owner 21:15：开关 off/on/fail-closed 六向 + attack_seed 公式含 i32 回绕 + 流水头 有/无/缺文件 + C# dump vs Rust 谓词表机判（生产绿 / 删一条红 / 加未登记红）+ C# hook 离线自检 + SHA256 活文件（F1：holder FileShare.ReadWrite 下读=锚 + 旧 ReadAllBytes 必被拒）+ attack_rng_ledger 站点表与决策片同表（F2）+ 目标可用性门两侧接线（owner 00:20：C#/Rust 同一函数，rust good/ghost/missing 三向 fail-closed） + C# 专用流纯度门（F-N1：干净绿 / 混入 base 单元·player 数不符·污染首条 三向必红）+ EOL 生产者写 LF（23a：m3hashutil 写出 + Set-Content 覆盖自检，写出件不得含 0x0D；23b：`verify_sha256sums.py eolcheck` 盘上字节 vs git blob——LF 绿 / CRLF 必红并点名 bad.txt；`-SelfCheckOut` 脚本自落 LF 转录）））'
+    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（攻击配置透传/默认关 + run_pair -DisableAutoPlay 耦合两向 + 攻击两相 pin pose/SQL（-PinMapName 透传含 MapName 断言） + pin SQL 可执行性（含改坏 a.IncHealth 必红 + 改坏 Hp=100000 越界必红） + pin 记账门（owner 19:20 降级 informational：attempts=2/3/漂移/旧会话无字段键 绿 + 键在但空/(off)/形态坏 红 + 改坏必红值清空） + 预热相 -StopAfterCharCreated 透传两向 + 攻击 pin 无怪口径（R-1，按地图查提取件：生产 0137 绿/source_verified + 换回 map 0 必红 + 合成 0/1 行·声明漂移·缺 provenance 四向有牙） + 攻击 pin 非 MonGen AI 消费者口径（R-1 refine 15:05：生产 0137 绿/source_verified + 合成 有引用/声明漂移/缺 provenance/缺提取件 四向必红） + 入口/DiffOnly fail-closed + attack_diff selftest + 改坏 dmg/hit 必红 + Invoke-AttackAlign 返回值形态两处（F-J：⑧ 生产函数直接断言 + ⑮） + scoped_diff 14/14 + M-1 WARN 有牙齿 + M-2 attacker 精确选择 selftest + pin SQL 别名/列校验 + 种子注入断言（两侧 fail-closed）+ 攻击序列收尾等待（F-E） + attack 行缺 my 的 fail-closed（残差③） + 活栈隔离口径（owner 21:15：开关 off/on/fail-closed 六向 + attack_seed 公式含 i32 回绕 + 流水头 有/无/缺文件 + C# dump vs Rust 谓词表机判（生产绿 / 删一条红 / 加未登记红）+ C# hook 离线自检 + SHA256 活文件（F1：holder FileShare.ReadWrite 下读=锚 + 旧 ReadAllBytes 必被拒）+ attack_rng_ledger 站点表与决策片同表（F2）+ 目标可用性门两侧接线（owner 00:20：C#/Rust 同一函数，rust good/ghost/missing 三向 fail-closed） + C# 专用流纯度门（F-N1：干净绿 / 混入 base 单元·player 数不符·污染首条 三向必红）+ AFTER 快照前断线存档落库等待仪器（F-2：save_settle mode=save_rcd/timeout>=1/quiet>=2 生产接线机判） + EOL 生产者写 LF（23a：m3hashutil 写出 + Set-Content 覆盖自检，写出件不得含 0x0D；23b：`verify_sha256sums.py eolcheck` 盘上字节 vs git blob——LF 绿 / CRLF 必红并点名 bad.txt；`-SelfCheckOut` 脚本自落 LF 转录）））'
     exit 0
   }
   Write-Output ('SELFTEST_RED RED: ' + ($failures -join ', '))

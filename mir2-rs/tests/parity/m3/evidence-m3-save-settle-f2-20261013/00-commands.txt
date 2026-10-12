@@ -1,0 +1,26 @@
+# 复现命令（全部离线 / 零端口；唯二外部依赖：PowerShell 5.1 + 无栈自检）
+
+# 工作目录 = 本车道 worktree（E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3bag）
+# 交付前 base 与当时 origin/master 齐（e2b94234；开工时 62fffb2e，工作期间 master 前进一片 ⑩ 收口登记，已 rebase）。
+
+# ---- 1. 无栈自检（GREEN 原始件 01/02）----
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_bag_equip_pair.ps1 -SelfCheckNoStack
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 -SelfCheckNoStack
+
+# ---- 2. 改坏必红（真改生产件 → 自检必红 → 还原；见 03/04/05）----
+#   变异 A：run_pair.ps1 去掉 save_settle_instrument 生产接线
+#     ⇒ run_bag -SelfCheckNoStack = RED（save_settle_instrument_missing）
+#   变异 B：gate_guards.ps1 的 Invoke-M3SaveRcdSettle 超时也返回 Settled=$true（削弱 fail-closed）
+#     ⇒ run_bag -SelfCheckNoStack = RED（save_settle_never_landed_false_green 等）
+#   还原：cp 备份覆盖后 sha256sum 与变异前逐字节相同（05-restore-sha256.txt）
+
+# ---- 3. 四门禁（隔离 CARGO_TARGET_DIR；全部 --offline）----
+set CARGO_TARGET_DIR=E:/tmp/m3bag-savesettle-target
+cargo fmt --all -- --check                                          # rc=0（06）
+cargo clippy --workspace --all-targets --offline -- -D warnings      # rc=0（07）
+cargo test --workspace --offline --no-fail-fast                     # 86 suites / 759 passed / 0 failed / 18 ignored（08）
+cargo run --offline -q -p msgcodegen -- --check                     # 604 条（06）
+
+# ---- 4. 证据 hash 复核（仓库 LF/git-blob 口径 + EOL 牙）----
+python -I tools/evidence-hash/verify_sha256sums.py mir2-rs/tests/parity/m3/evidence-m3-save-settle-f2-20261013 --check-extra
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-save-settle-f2-20261013

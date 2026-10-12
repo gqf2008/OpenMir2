@@ -1,0 +1,6 @@
+=== retest on rebased head 466a8e90 (base e2b94234) ===
+=== cargo fmt --all -- --check ===
+FMT_RC=0
+=== msgcodegen --check ===
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+MSG_RC=0

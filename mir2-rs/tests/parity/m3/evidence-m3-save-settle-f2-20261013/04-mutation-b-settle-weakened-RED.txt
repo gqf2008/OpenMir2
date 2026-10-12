@@ -1,0 +1,23 @@
+SELFTEST_NO_STACK: 无栈自检——所有路径都必须 fail-closed（缺失绝不静默 GREEN）
+SELFTEST ① 配置透传 on=true? BagEquipSequence=True DisableAutoPlay=True
+SELFTEST ② 默认关 off=false? BagEquipSequence=False DisableAutoPlay=False
+SELFTEST ③ 无栈入口护栏 rc=2（期望 2=PREREQ）
+SELFTEST ④ -DiffOnly 缺会话 rc=2（期望 2=PREREQ）
+SELFTEST ⑤a run_pair -BagEquipSequence 传 -DisableAutoPlay? True（scope=on step_ms=1000 start_delay_ms=3000 disable_autoplay=True）
+SELFTEST ⑤b 默认路径不带 -DisableAutoPlay? True（scope=(off)）
+SELFTEST ⑥ 旧挂机 peer 被判红? True（peer_bag_equip_autoplay_on）
+SELFTEST ⑦ scoped_diff selftest rc=0（含 MapName/CX/CY 逐字节比断言）
+SELFTEST ⑧ preflight(T-27)：空目录 false / DB_SAVEHUMANRCD true / DBR_ 回包不算
+SELFTEST ⑨ 固定起点两相：prewarm+RequireCharCreated=True；scoring 无 -FixedNewChr/-NewAccount=True；pin_sql_all=7 条（含初始背包 4 件 + Abil）
+SELFTEST ⑨b 旧 peer 无 start_pose + 本侧 pin 被判红? True
+SELFTEST ⑩a 跳过 settle 直接 pin ⇒ Hold=False（期望 False；代码=pin_hold_needs_consecutive_settle,pin_settle_skipped）
+SELFTEST ⑩b pin 早于落库：首轮 hold=False（期望 False）；收敛 attempt=4（期望 4）Hold=True
+SELFTEST ⑩c 存档反复覆盖 ⇒ Hold=False（期望 False，fail-closed）attempts=5
+SELFTEST ⑩d 正常路径：Hold=True attempt=2 settle_rounds=2（期望 True/2/2）
+SELFTEST ⑩e 生产 pin_instrument='settle_seconds=3 max_attempts=5 consecutive=2'（要求 settle_seconds>=1 且 consecutive>=2）
+SELFTEST ⑪ pin SQL 别名/列校验：生产 statements=7 violations=0；改坏 a.IncHealth violations=2
+SELFTEST ⑫a 晚落库（第 12 轮才到）⇒ Settled=True polls=13 elapsed_ms=187（期望 True/>=13：12 轮 + 连续 2 轮确认）
+SELFTEST ⑫b 永不落库 ⇒ Settled=True reason=save_rcd_settled（期望 False/save_rcd_settle_timeout）
+SELFTEST ⑫c 落库后又掉（单次观测）⇒ Settled=True（期望 False）
+SELFTEST ⑫d 生产 save_settle_instrument='mode=save_rcd timeout_s=30 poll_ms=250 quiet_polls=2'（要求 mode=save_rcd 且 timeout/poll>=1、quiet>=2）
+SELFTEST_RED RED: save_settle_never_landed_false_green, save_settle_timeout_reason=save_rcd_settled, save_settle_single_observation_false_green
