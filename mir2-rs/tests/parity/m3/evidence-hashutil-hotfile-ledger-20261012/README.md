@@ -35,6 +35,8 @@
 | `06-hotfile-repro.txt` | 直接复现 | holder(`FileShare.ReadWrite`) 下：旧 `File.ReadAllBytes` ⇒ `EACCES ... being used by another process`；新 `Get-M3Sha256Hex` ⇒ `fdeab9ac…1108`（=标准锚）；本机 `Get-FileHash exists=False`（佐证 .NET SHA256 口径） |
 | `07-gates.txt` | `cargo fmt/clippy/test/msgcodegen`（隔离 `CARGO_TARGET_DIR`，从 `mir2-rs/`） | fmt_rc=0 / clippy_rc=0 / **test_rc=0（84 suites・682 passed・0 failed・16 ignored）** / msgcodegen_rc=0（604 条与 C# 源一致） |
 
+证据文本口径：`01`–`06` 已 **LF 归一**（去掉所有 `\r`）。首稿的 `01/02` 含 `\r\r\n`（PowerShell 重定向包裹嵌套进程的 CRLF）⇒ repo 口径的 `normalize_lf` 不幂等、干净 clone `verify_sha256sums` 假红（同族坑见 `openmir2-evidence-hash-convention`）；去 CR 后 git blob 与检出字节一致，`recon`/`verify` 任一侧都绿。
+
 ## 3. 改坏必红（真跑 + `cmp` 还原逐字节相同）
 
 | 文件 | 改坏 | 结果 |
