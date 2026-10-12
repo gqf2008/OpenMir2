@@ -6854,7 +6854,9 @@ mod tests {
     /// `SM_NOWDEATH`（头 `X/Y/Dir` + 8B `CharDesc` 尾），并把世界实体 HP 同步回会话 `WAbil.HP`。
     ///
     /// 红检：① 把 `smframe::sm_struck` 的头 `hp`/`max_hp` 互换 ⇒ 头断言必红；
-    /// ② 把死亡广播改成 `broadcast_ref_msg`（排除自己）⇒ 死者自己收不到 `SM_NOWDEATH` 必红。
+    /// ② 把死亡广播改成 `broadcast_ref_msg`（排除自己）⇒ 死者自己收不到 `SM_NOWDEATH` 必红；
+    /// ③ 把 `smframe::sm_struck` 的尾 `feature`/`status` 互换 ⇒ `struck[12..]` 尾断言必红
+    ///   （**M-1 收口**：本用例现在真的逐字节断言 16B `MessageBodyWL` 尾，不再只声称覆盖）。
     #[test]
     fn combat_downlink_sends_struck_and_nowdeath() {
         use std::collections::HashMap;
@@ -6928,6 +6930,20 @@ mod tests {
             (cm.recog, cm.param, cm.tag, cm.series),
             (victim, 0, 100, 7),
             "SM_STRUCK 头 = (受击者, HP, MaxHP, 伤害)"
+        );
+        // **M-1 收口**（reviewer-5 `ebfd15a8`）：文档声称覆盖 16B `MessageBodyWL` 尾，这里真的
+        // 逐字节断言 `struck[12..]`，否则尾 mutation 抓不到。
+        // 尾 = Encode(MessageBodyWL{ Param1=GetFeature(), Param2=CharStatus,
+        //                            Tag1=命中者 ActorId, Tag2=(RM_STRUCK_MAG ? 1 : 0) })。
+        let mut wl = [0u8; 16];
+        wl[0..4].copy_from_slice(&111_i32.to_le_bytes()); // Param1 = GetFeature()
+        wl[4..8].copy_from_slice(&0_i32.to_le_bytes()); // Param2 = CharStatus
+        wl[8..12].copy_from_slice(&attacker.to_le_bytes()); // Tag1 = 命中者 ActorId
+        wl[12..16].copy_from_slice(&0_i32.to_le_bytes()); // Tag2 = (RM_STRUCK_MAG ? 1 : 0)
+        assert_eq!(
+            &struck[12..],
+            &mir2_protocol::edcode::encode(&wl),
+            "SM_STRUCK 尾 = Encode(MessageBodyWL{{Param1=feature,Param2=status,Tag1=hitter,Tag2=mag}})"
         );
         assert_eq!(
             sessions["victim"].state.wabil.hp, 0,

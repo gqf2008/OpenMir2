@@ -1,0 +1,30 @@
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.71s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-3aa264152417c61e.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 80 filtered out; finished in 0.00s
+
+     Running unittests src\main.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-eb39968088e3f1ec.exe)
+
+running 1 test
+test tests::combat_downlink_sends_struck_and_nowdeath ... FAILED
+
+failures:
+
+---- tests::combat_downlink_sends_struck_and_nowdeath stdout ----
+
+thread 'tests::combat_downlink_sends_struck_and_nowdeath' (15084) panicked at bins\game-svr\src\main.rs:6943:9:
+assertion `left == right` failed: SM_STRUCK 尾 = Encode(MessageBodyWL{Param1=feature,Param2=status,Tag1=hitter,Tag2=mag})
+  left: [100, 100, 104, 107, 100, 111, 104, 104, 100, 100, 106, 107, 100, 100, 104, 107, 100, 100, 104, 107, 100, 63]
+ right: [111, 100, 104, 95, 100, 100, 104, 107, 100, 100, 106, 107, 100, 100, 104, 107, 100, 100, 104, 107, 100, 63]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::combat_downlink_sends_struck_and_nowdeath
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 135 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`
