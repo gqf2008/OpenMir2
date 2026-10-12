@@ -1,0 +1,2770 @@
+{
+  "seed": 40545,
+  "csharp": {
+    "path": "mir2-rs\\tests\\parity\\m3\\evidence-rng-isolate-streamcompare-20261012\\provenance\\csharp-attack-stream-stack2.tsv",
+    "n": 300,
+    "site_counts": {
+      "atk_power_base": 16,
+      "hit_gate": 19,
+      "hit_struck_damage": 17,
+      "hit_struck_damage2": 4,
+      "atk_power_a": 120,
+      "atk_power_b": 120,
+      "attack_success": 3,
+      "struck_durability": 1
+    },
+    "self_replay_mismatches": 0,
+    "units": 136,
+    "base_units": 16,
+    "player_units": 120,
+    "hitpoint": {
+      "gates": 3,
+      "hits": 1,
+      "misses": 2,
+      "hit_draws": [
+        4
+      ],
+      "miss_draws": [
+        10,
+        11
+      ],
+      "speed_points": [
+        15
+      ],
+      "hitpoint_lo_inclusive": 4,
+      "hitpoint_hi_exclusive": 10,
+      "consistent": true,
+      "detail": [
+        {
+          "speed_point": 15,
+          "draw": 10,
+          "hit": false
+        },
+        {
+          "speed_point": 15,
+          "draw": 4,
+          "hit": true
+        },
+        {
+          "speed_point": 15,
+          "draw": 11,
+          "hit": false
+        }
+      ]
+    },
+    "structure": [
+      {
+        "unit": 1,
+        "start": "atk_power_base",
+        "kind": "base",
+        "ops": [
+          "atk_power_base(1)->0",
+          "hit_gate(8)->3",
+          "hit_struck_damage(1)->0"
+        ]
+      },
+      {
+        "unit": 2,
+        "start": "atk_power_base",
+        "kind": "base",
+        "ops": [
+          "atk_power_base(1)->0",
+          "hit_gate(8)->5",
+          "hit_struck_damage(1)->0"
+        ]
+      },
+      {
+        "unit": 3,
+        "start": "atk_power_base",
+        "kind": "base",
+        "ops": [
+          "atk_power_base(1)->0",
+          "hit_gate(8)->1",
+          "hit_struck_damage(1)->0"
+        ]
+      },
+      {
+        "unit": 4,
+        "start": "atk_power_base",
+        "kind": "base",
+        "ops": [
+          "atk_power_base(1)->0",
+          "hit_gate(15)->0",
+          "hit_struck_damage(1)->0",
+          "hit_struck_damage2(1)->0"
+        ]
+      },
+      {
+        "unit": 5,
+        "start": "atk_power_base",
+        "kind": "base",
+        "ops": [
+          "atk_power_base(1)->0",
+          "hit_gate(8)->2",
+          "hit_struck_damage(1)->0"
+        ]
+      },
+      {
+        "unit": 6,
+        "start": "atk_power_base",
+        "kind": "base",
+        "ops": [
+          "atk_power_base(1)->0",
+          "hit_gate(13)->11",
+          "hit_struck_damage(1)->0"
+        ]
+      },
+      {
+        "unit": 7,
+        "start": "atk_power_base",
+        "kind": "base",
+        "ops": [
+          "atk_power_base(1)->0",
+          "hit_gate(13)->0",
+          "hit_struck_damage(1)->0"
+        ]
+      },
+      {
+        "unit": 8,
+        "start": "atk_power_base",
+        "kind": "base",
+        "ops": [
+          "atk_power_base(1)->0",
+          "hit_gate(13)->3",
+          "hit_struck_damage(1)->0"
+        ]
+      },
+      {
+        "unit": 9,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->1",
+          "hit_gate(15)->10",
+          "attack_success(5)->3"
+        ]
+      },
+      {
+        "unit": 10,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->4",
+          "hit_gate(15)->4",
+          "hit_struck_damage(1)->0",
+          "struck_durability(10)->4",
+          "attack_success(5)->0"
+        ]
+      },
+      {
+        "unit": 11,
+        "start": "atk_power_base",
+        "kind": "base",
+        "ops": [
+          "atk_power_base(1)->0",
+          "hit_gate(13)->5",
+          "hit_struck_damage(1)->0"
+        ]
+      },
+      {
+        "unit": 12,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->5",
+          "hit_gate(15)->11",
+          "attack_success(5)->0"
+        ]
+      },
+      {
+        "unit": 13,
+        "start": "atk_power_base",
+        "kind": "base",
+        "ops": [
+          "atk_power_base(1)->0",
+          "hit_gate(13)->6",
+          "hit_struck_damage(1)->0"
+        ]
+      },
+      {
+        "unit": 14,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->6"
+        ]
+      },
+      {
+        "unit": 15,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->1"
+        ]
+      },
+      {
+        "unit": 16,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->9"
+        ]
+      },
+      {
+        "unit": 17,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->0"
+        ]
+      },
+      {
+        "unit": 18,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->5"
+        ]
+      },
+      {
+        "unit": 19,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->1"
+        ]
+      },
+      {
+        "unit": 20,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->2"
+        ]
+      },
+      {
+        "unit": 21,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->6"
+        ]
+      },
+      {
+        "unit": 22,
+        "start": "atk_power_base",
+        "kind": "base",
+        "ops": [
+          "atk_power_base(1)->0",
+          "hit_gate(13)->8",
+          "hit_struck_damage(1)->0"
+        ]
+      },
+      {
+        "unit": 23,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->7"
+        ]
+      },
+      {
+        "unit": 24,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->8"
+        ]
+      },
+      {
+        "unit": 25,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->4"
+        ]
+      },
+      {
+        "unit": 26,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->5"
+        ]
+      },
+      {
+        "unit": 27,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->7"
+        ]
+      },
+      {
+        "unit": 28,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->9"
+        ]
+      },
+      {
+        "unit": 29,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->7"
+        ]
+      },
+      {
+        "unit": 30,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->0"
+        ]
+      },
+      {
+        "unit": 31,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->4"
+        ]
+      },
+      {
+        "unit": 32,
+        "start": "atk_power_base",
+        "kind": "base",
+        "ops": [
+          "atk_power_base(1)->0",
+          "hit_gate(13)->7",
+          "hit_struck_damage(1)->0"
+        ]
+      },
+      {
+        "unit": 33,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->2"
+        ]
+      },
+      {
+        "unit": 34,
+        "start": "atk_power_base",
+        "kind": "base",
+        "ops": [
+          "atk_power_base(1)->0",
+          "hit_gate(13)->12",
+          "hit_struck_damage(1)->0"
+        ]
+      },
+      {
+        "unit": 35,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->4"
+        ]
+      },
+      {
+        "unit": 36,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->4"
+        ]
+      },
+      {
+        "unit": 37,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->0"
+        ]
+      },
+      {
+        "unit": 38,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->1"
+        ]
+      },
+      {
+        "unit": 39,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->9"
+        ]
+      },
+      {
+        "unit": 40,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->7"
+        ]
+      },
+      {
+        "unit": 41,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->6"
+        ]
+      },
+      {
+        "unit": 42,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->3"
+        ]
+      },
+      {
+        "unit": 43,
+        "start": "atk_power_base",
+        "kind": "base",
+        "ops": [
+          "atk_power_base(1)->0",
+          "hit_gate(15)->4",
+          "hit_struck_damage(1)->0",
+          "hit_struck_damage2(1)->0"
+        ]
+      },
+      {
+        "unit": 44,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->3"
+        ]
+      },
+      {
+        "unit": 45,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->2"
+        ]
+      },
+      {
+        "unit": 46,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->1"
+        ]
+      },
+      {
+        "unit": 47,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->0"
+        ]
+      },
+      {
+        "unit": 48,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->6"
+        ]
+      },
+      {
+        "unit": 49,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->3"
+        ]
+      },
+      {
+        "unit": 50,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->4"
+        ]
+      },
+      {
+        "unit": 51,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->2"
+        ]
+      },
+      {
+        "unit": 52,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->6"
+        ]
+      },
+      {
+        "unit": 53,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->7"
+        ]
+      },
+      {
+        "unit": 54,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->0"
+        ]
+      },
+      {
+        "unit": 55,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->6"
+        ]
+      },
+      {
+        "unit": 56,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->0"
+        ]
+      },
+      {
+        "unit": 57,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->8"
+        ]
+      },
+      {
+        "unit": 58,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->1"
+        ]
+      },
+      {
+        "unit": 59,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->9"
+        ]
+      },
+      {
+        "unit": 60,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->4"
+        ]
+      },
+      {
+        "unit": 61,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->3"
+        ]
+      },
+      {
+        "unit": 62,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->2"
+        ]
+      },
+      {
+        "unit": 63,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->7"
+        ]
+      },
+      {
+        "unit": 64,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->3"
+        ]
+      },
+      {
+        "unit": 65,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->0"
+        ]
+      },
+      {
+        "unit": 66,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->9"
+        ]
+      },
+      {
+        "unit": 67,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->0"
+        ]
+      },
+      {
+        "unit": 68,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->9"
+        ]
+      },
+      {
+        "unit": 69,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->5"
+        ]
+      },
+      {
+        "unit": 70,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->0"
+        ]
+      },
+      {
+        "unit": 71,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->1"
+        ]
+      },
+      {
+        "unit": 72,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->7"
+        ]
+      },
+      {
+        "unit": 73,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->5"
+        ]
+      },
+      {
+        "unit": 74,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->2"
+        ]
+      },
+      {
+        "unit": 75,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->0"
+        ]
+      },
+      {
+        "unit": 76,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->4"
+        ]
+      },
+      {
+        "unit": 77,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->4"
+        ]
+      },
+      {
+        "unit": 78,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->3"
+        ]
+      },
+      {
+        "unit": 79,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->8"
+        ]
+      },
+      {
+        "unit": 80,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->0"
+        ]
+      },
+      {
+        "unit": 81,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->1"
+        ]
+      },
+      {
+        "unit": 82,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->0"
+        ]
+      },
+      {
+        "unit": 83,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->8"
+        ]
+      },
+      {
+        "unit": 84,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->9"
+        ]
+      },
+      {
+        "unit": 85,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->3"
+        ]
+      },
+      {
+        "unit": 86,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->3"
+        ]
+      },
+      {
+        "unit": 87,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->9"
+        ]
+      },
+      {
+        "unit": 88,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->3"
+        ]
+      },
+      {
+        "unit": 89,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->3"
+        ]
+      },
+      {
+        "unit": 90,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->3"
+        ]
+      },
+      {
+        "unit": 91,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->6"
+        ]
+      },
+      {
+        "unit": 92,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->8"
+        ]
+      },
+      {
+        "unit": 93,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->9"
+        ]
+      },
+      {
+        "unit": 94,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->4"
+        ]
+      },
+      {
+        "unit": 95,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->6"
+        ]
+      },
+      {
+        "unit": 96,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->4"
+        ]
+      },
+      {
+        "unit": 97,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->3"
+        ]
+      },
+      {
+        "unit": 98,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->8"
+        ]
+      },
+      {
+        "unit": 99,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->2"
+        ]
+      },
+      {
+        "unit": 100,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->6"
+        ]
+      },
+      {
+        "unit": 101,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->2"
+        ]
+      },
+      {
+        "unit": 102,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->3"
+        ]
+      },
+      {
+        "unit": 103,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->4"
+        ]
+      },
+      {
+        "unit": 104,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->3"
+        ]
+      },
+      {
+        "unit": 105,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->7"
+        ]
+      },
+      {
+        "unit": 106,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->9"
+        ]
+      },
+      {
+        "unit": 107,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->4"
+        ]
+      },
+      {
+        "unit": 108,
+        "start": "atk_power_base",
+        "kind": "base",
+        "ops": [
+          "atk_power_base(1)->0",
+          "hit_gate(15)->1",
+          "hit_struck_damage(1)->0",
+          "hit_struck_damage2(1)->0"
+        ]
+      },
+      {
+        "unit": 109,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->1"
+        ]
+      },
+      {
+        "unit": 110,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->7"
+        ]
+      },
+      {
+        "unit": 111,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->2"
+        ]
+      },
+      {
+        "unit": 112,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->4"
+        ]
+      },
+      {
+        "unit": 113,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->1"
+        ]
+      },
+      {
+        "unit": 114,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->5"
+        ]
+      },
+      {
+        "unit": 115,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->7"
+        ]
+      },
+      {
+        "unit": 116,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->1"
+        ]
+      },
+      {
+        "unit": 117,
+        "start": "atk_power_base",
+        "kind": "base",
+        "ops": [
+          "atk_power_base(1)->0",
+          "hit_gate(15)->4",
+          "hit_struck_damage(1)->0",
+          "hit_struck_damage2(1)->0"
+        ]
+      },
+      {
+        "unit": 118,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->8"
+        ]
+      },
+      {
+        "unit": 119,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->3"
+        ]
+      },
+      {
+        "unit": 120,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->2"
+        ]
+      },
+      {
+        "unit": 121,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->8"
+        ]
+      },
+      {
+        "unit": 122,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->3"
+        ]
+      },
+      {
+        "unit": 123,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->1"
+        ]
+      },
+      {
+        "unit": 124,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->6"
+        ]
+      },
+      {
+        "unit": 125,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->4"
+        ]
+      },
+      {
+        "unit": 126,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->6"
+        ]
+      },
+      {
+        "unit": 127,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->1"
+        ]
+      },
+      {
+        "unit": 128,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->6"
+        ]
+      },
+      {
+        "unit": 129,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->8"
+        ]
+      },
+      {
+        "unit": 130,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->5"
+        ]
+      },
+      {
+        "unit": 131,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->5"
+        ]
+      },
+      {
+        "unit": 132,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->9"
+        ]
+      },
+      {
+        "unit": 133,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->2"
+        ]
+      },
+      {
+        "unit": 134,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->1"
+        ]
+      },
+      {
+        "unit": 135,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->9"
+        ]
+      },
+      {
+        "unit": 136,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->9"
+        ]
+      }
+    ]
+  },
+  "rust": {
+    "path": "mir2-rs\\tests\\parity\\m3\\evidence-rng-isolate-streamcompare-20261012\\provenance\\rust-rng-stream-stack2.tsv",
+    "n": 354,
+    "site_counts": {
+      "atk_power_a": 120,
+      "atk_power_b": 120,
+      "hit_gate": 38,
+      "hit_struck_damage": 19,
+      "struck_durability": 19,
+      "attack_success": 38
+    },
+    "self_replay_mismatches": 0,
+    "units": 120,
+    "base_units": 0,
+    "player_units": 120,
+    "hitpoint": {
+      "gates": 38,
+      "hits": 19,
+      "misses": 19,
+      "hit_draws": [
+        0,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        2,
+        2,
+        3,
+        3,
+        3,
+        3,
+        3,
+        4,
+        4,
+        4,
+        4,
+        5
+      ],
+      "miss_draws": [
+        6,
+        6,
+        6,
+        6,
+        6,
+        7,
+        7,
+        8,
+        8,
+        10,
+        11,
+        11,
+        11,
+        11,
+        11,
+        12,
+        13,
+        13,
+        13
+      ],
+      "speed_points": [
+        15
+      ],
+      "hitpoint_lo_inclusive": 5,
+      "hitpoint_hi_exclusive": 6,
+      "consistent": true,
+      "detail": [
+        {
+          "speed_point": 15,
+          "draw": 3,
+          "hit": true
+        },
+        {
+          "speed_point": 15,
+          "draw": 1,
+          "hit": true
+        },
+        {
+          "speed_point": 15,
+          "draw": 5,
+          "hit": true
+        },
+        {
+          "speed_point": 15,
+          "draw": 0,
+          "hit": true
+        },
+        {
+          "speed_point": 15,
+          "draw": 1,
+          "hit": true
+        },
+        {
+          "speed_point": 15,
+          "draw": 6,
+          "hit": false
+        },
+        {
+          "speed_point": 15,
+          "draw": 6,
+          "hit": false
+        },
+        {
+          "speed_point": 15,
+          "draw": 11,
+          "hit": false
+        },
+        {
+          "speed_point": 15,
+          "draw": 10,
+          "hit": false
+        },
+        {
+          "speed_point": 15,
+          "draw": 2,
+          "hit": true
+        },
+        {
+          "speed_point": 15,
+          "draw": 7,
+          "hit": false
+        },
+        {
+          "speed_point": 15,
+          "draw": 3,
+          "hit": true
+        },
+        {
+          "speed_point": 15,
+          "draw": 11,
+          "hit": false
+        },
+        {
+          "speed_point": 15,
+          "draw": 1,
+          "hit": true
+        },
+        {
+          "speed_point": 15,
+          "draw": 11,
+          "hit": false
+        },
+        {
+          "speed_point": 15,
+          "draw": 8,
+          "hit": false
+        },
+        {
+          "speed_point": 15,
+          "draw": 8,
+          "hit": false
+        },
+        {
+          "speed_point": 15,
+          "draw": 4,
+          "hit": true
+        },
+        {
+          "speed_point": 15,
+          "draw": 7,
+          "hit": false
+        },
+        {
+          "speed_point": 15,
+          "draw": 6,
+          "hit": false
+        },
+        {
+          "speed_point": 15,
+          "draw": 3,
+          "hit": true
+        },
+        {
+          "speed_point": 15,
+          "draw": 3,
+          "hit": true
+        },
+        {
+          "speed_point": 15,
+          "draw": 6,
+          "hit": false
+        },
+        {
+          "speed_point": 15,
+          "draw": 1,
+          "hit": true
+        },
+        {
+          "speed_point": 15,
+          "draw": 13,
+          "hit": false
+        },
+        {
+          "speed_point": 15,
+          "draw": 1,
+          "hit": true
+        },
+        {
+          "speed_point": 15,
+          "draw": 1,
+          "hit": true
+        },
+        {
+          "speed_point": 15,
+          "draw": 4,
+          "hit": true
+        },
+        {
+          "speed_point": 15,
+          "draw": 6,
+          "hit": false
+        },
+        {
+          "speed_point": 15,
+          "draw": 13,
+          "hit": false
+        },
+        {
+          "speed_point": 15,
+          "draw": 13,
+          "hit": false
+        },
+        {
+          "speed_point": 15,
+          "draw": 12,
+          "hit": false
+        },
+        {
+          "speed_point": 15,
+          "draw": 3,
+          "hit": true
+        },
+        {
+          "speed_point": 15,
+          "draw": 4,
+          "hit": true
+        },
+        {
+          "speed_point": 15,
+          "draw": 11,
+          "hit": false
+        },
+        {
+          "speed_point": 15,
+          "draw": 4,
+          "hit": true
+        },
+        {
+          "speed_point": 15,
+          "draw": 11,
+          "hit": false
+        },
+        {
+          "speed_point": 15,
+          "draw": 2,
+          "hit": true
+        }
+      ]
+    },
+    "structure": [
+      {
+        "unit": 1,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->4",
+          "hit_gate(15)->3",
+          "hit_struck_damage(1)->0",
+          "struck_durability(10)->6",
+          "attack_success(5)->3"
+        ]
+      },
+      {
+        "unit": 2,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->2",
+          "hit_gate(15)->1",
+          "hit_struck_damage(1)->0",
+          "struck_durability(10)->0",
+          "attack_success(5)->2"
+        ]
+      },
+      {
+        "unit": 3,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->2",
+          "hit_gate(15)->5",
+          "hit_struck_damage(1)->0",
+          "struck_durability(10)->3",
+          "attack_success(5)->4"
+        ]
+      },
+      {
+        "unit": 4,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->5",
+          "hit_gate(15)->0",
+          "hit_struck_damage(1)->0",
+          "struck_durability(10)->3",
+          "attack_success(5)->1"
+        ]
+      },
+      {
+        "unit": 5,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->3",
+          "hit_gate(15)->1",
+          "hit_struck_damage(1)->0",
+          "struck_durability(10)->6",
+          "attack_success(5)->1"
+        ]
+      },
+      {
+        "unit": 6,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->2",
+          "hit_gate(15)->6",
+          "attack_success(5)->2"
+        ]
+      },
+      {
+        "unit": 7,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->9",
+          "hit_gate(15)->6",
+          "attack_success(5)->3"
+        ]
+      },
+      {
+        "unit": 8,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->5",
+          "hit_gate(15)->11",
+          "attack_success(5)->0"
+        ]
+      },
+      {
+        "unit": 9,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->5",
+          "hit_gate(15)->10",
+          "attack_success(5)->1"
+        ]
+      },
+      {
+        "unit": 10,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->6",
+          "hit_gate(15)->2",
+          "hit_struck_damage(1)->0",
+          "struck_durability(10)->9",
+          "attack_success(5)->1"
+        ]
+      },
+      {
+        "unit": 11,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->5",
+          "hit_gate(15)->7",
+          "attack_success(5)->2"
+        ]
+      },
+      {
+        "unit": 12,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->9",
+          "hit_gate(15)->3",
+          "hit_struck_damage(1)->0",
+          "struck_durability(10)->6",
+          "attack_success(5)->3"
+        ]
+      },
+      {
+        "unit": 13,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->6",
+          "hit_gate(15)->11",
+          "attack_success(5)->3"
+        ]
+      },
+      {
+        "unit": 14,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->8",
+          "hit_gate(15)->1",
+          "hit_struck_damage(1)->0",
+          "struck_durability(10)->7",
+          "attack_success(5)->2"
+        ]
+      },
+      {
+        "unit": 15,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->7",
+          "hit_gate(15)->11",
+          "attack_success(5)->4"
+        ]
+      },
+      {
+        "unit": 16,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->7",
+          "hit_gate(15)->8",
+          "attack_success(5)->0"
+        ]
+      },
+      {
+        "unit": 17,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->4",
+          "hit_gate(15)->8",
+          "attack_success(5)->2"
+        ]
+      },
+      {
+        "unit": 18,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->1",
+          "hit_gate(15)->4",
+          "hit_struck_damage(1)->0",
+          "struck_durability(10)->9",
+          "attack_success(5)->3"
+        ]
+      },
+      {
+        "unit": 19,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->4",
+          "hit_gate(15)->7",
+          "attack_success(5)->2"
+        ]
+      },
+      {
+        "unit": 20,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->0",
+          "hit_gate(15)->6",
+          "attack_success(5)->0"
+        ]
+      },
+      {
+        "unit": 21,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->9",
+          "hit_gate(15)->3",
+          "hit_struck_damage(1)->0",
+          "struck_durability(10)->5",
+          "attack_success(5)->3"
+        ]
+      },
+      {
+        "unit": 22,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->3",
+          "hit_gate(15)->3",
+          "hit_struck_damage(1)->0",
+          "struck_durability(10)->7",
+          "attack_success(5)->2"
+        ]
+      },
+      {
+        "unit": 23,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->3",
+          "hit_gate(15)->6",
+          "attack_success(5)->1"
+        ]
+      },
+      {
+        "unit": 24,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->1",
+          "hit_gate(15)->1",
+          "hit_struck_damage(1)->0",
+          "struck_durability(10)->2",
+          "attack_success(5)->3"
+        ]
+      },
+      {
+        "unit": 25,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->3",
+          "hit_gate(15)->13",
+          "attack_success(5)->2"
+        ]
+      },
+      {
+        "unit": 26,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->2",
+          "hit_gate(15)->1",
+          "hit_struck_damage(1)->0",
+          "struck_durability(10)->8",
+          "attack_success(5)->3"
+        ]
+      },
+      {
+        "unit": 27,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->0",
+          "hit_gate(15)->1",
+          "hit_struck_damage(1)->0",
+          "struck_durability(10)->7",
+          "attack_success(5)->0"
+        ]
+      },
+      {
+        "unit": 28,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->8",
+          "hit_gate(15)->4",
+          "hit_struck_damage(1)->0",
+          "struck_durability(10)->8",
+          "attack_success(5)->4"
+        ]
+      },
+      {
+        "unit": 29,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->4",
+          "hit_gate(15)->6",
+          "attack_success(5)->1"
+        ]
+      },
+      {
+        "unit": 30,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->2",
+          "hit_gate(15)->13",
+          "attack_success(5)->3"
+        ]
+      },
+      {
+        "unit": 31,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->3",
+          "hit_gate(15)->13",
+          "attack_success(5)->0"
+        ]
+      },
+      {
+        "unit": 32,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->9",
+          "hit_gate(15)->12",
+          "attack_success(5)->0"
+        ]
+      },
+      {
+        "unit": 33,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->9",
+          "hit_gate(15)->3",
+          "hit_struck_damage(1)->0",
+          "struck_durability(10)->4",
+          "attack_success(5)->0"
+        ]
+      },
+      {
+        "unit": 34,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->1",
+          "hit_gate(15)->4",
+          "hit_struck_damage(1)->0",
+          "struck_durability(10)->4",
+          "attack_success(5)->2"
+        ]
+      },
+      {
+        "unit": 35,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->2",
+          "hit_gate(15)->11",
+          "attack_success(5)->0"
+        ]
+      },
+      {
+        "unit": 36,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->4",
+          "hit_gate(15)->4",
+          "hit_struck_damage(1)->0",
+          "struck_durability(10)->0",
+          "attack_success(5)->1"
+        ]
+      },
+      {
+        "unit": 37,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->8",
+          "hit_gate(15)->11",
+          "attack_success(5)->0"
+        ]
+      },
+      {
+        "unit": 38,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->1",
+          "hit_gate(15)->2",
+          "hit_struck_damage(1)->0",
+          "struck_durability(10)->1",
+          "attack_success(5)->4"
+        ]
+      },
+      {
+        "unit": 39,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->9"
+        ]
+      },
+      {
+        "unit": 40,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->3"
+        ]
+      },
+      {
+        "unit": 41,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->3"
+        ]
+      },
+      {
+        "unit": 42,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->9"
+        ]
+      },
+      {
+        "unit": 43,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->3"
+        ]
+      },
+      {
+        "unit": 44,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->3"
+        ]
+      },
+      {
+        "unit": 45,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->3"
+        ]
+      },
+      {
+        "unit": 46,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->6"
+        ]
+      },
+      {
+        "unit": 47,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->8"
+        ]
+      },
+      {
+        "unit": 48,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->9"
+        ]
+      },
+      {
+        "unit": 49,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->4"
+        ]
+      },
+      {
+        "unit": 50,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->6"
+        ]
+      },
+      {
+        "unit": 51,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->4"
+        ]
+      },
+      {
+        "unit": 52,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->3"
+        ]
+      },
+      {
+        "unit": 53,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->8"
+        ]
+      },
+      {
+        "unit": 54,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->2"
+        ]
+      },
+      {
+        "unit": 55,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->6"
+        ]
+      },
+      {
+        "unit": 56,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->2"
+        ]
+      },
+      {
+        "unit": 57,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->3"
+        ]
+      },
+      {
+        "unit": 58,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->4"
+        ]
+      },
+      {
+        "unit": 59,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->3"
+        ]
+      },
+      {
+        "unit": 60,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->7"
+        ]
+      },
+      {
+        "unit": 61,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->9"
+        ]
+      },
+      {
+        "unit": 62,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->4"
+        ]
+      },
+      {
+        "unit": 63,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->1"
+        ]
+      },
+      {
+        "unit": 64,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->3"
+        ]
+      },
+      {
+        "unit": 65,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->1"
+        ]
+      },
+      {
+        "unit": 66,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->7"
+        ]
+      },
+      {
+        "unit": 67,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->2"
+        ]
+      },
+      {
+        "unit": 68,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->4"
+        ]
+      },
+      {
+        "unit": 69,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->1"
+        ]
+      },
+      {
+        "unit": 70,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->5"
+        ]
+      },
+      {
+        "unit": 71,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->7"
+        ]
+      },
+      {
+        "unit": 72,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->1"
+        ]
+      },
+      {
+        "unit": 73,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->2"
+        ]
+      },
+      {
+        "unit": 74,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->2"
+        ]
+      },
+      {
+        "unit": 75,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->8"
+        ]
+      },
+      {
+        "unit": 76,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->3"
+        ]
+      },
+      {
+        "unit": 77,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->2"
+        ]
+      },
+      {
+        "unit": 78,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->8"
+        ]
+      },
+      {
+        "unit": 79,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->3"
+        ]
+      },
+      {
+        "unit": 80,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->1"
+        ]
+      },
+      {
+        "unit": 81,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->6"
+        ]
+      },
+      {
+        "unit": 82,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->4"
+        ]
+      },
+      {
+        "unit": 83,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->6"
+        ]
+      },
+      {
+        "unit": 84,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->1"
+        ]
+      },
+      {
+        "unit": 85,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->6"
+        ]
+      },
+      {
+        "unit": 86,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->8"
+        ]
+      },
+      {
+        "unit": 87,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->5"
+        ]
+      },
+      {
+        "unit": 88,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->5"
+        ]
+      },
+      {
+        "unit": 89,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->9"
+        ]
+      },
+      {
+        "unit": 90,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->2"
+        ]
+      },
+      {
+        "unit": 91,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->1"
+        ]
+      },
+      {
+        "unit": 92,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->9"
+        ]
+      },
+      {
+        "unit": 93,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->9"
+        ]
+      },
+      {
+        "unit": 94,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->7"
+        ]
+      },
+      {
+        "unit": 95,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->8"
+        ]
+      },
+      {
+        "unit": 96,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->1"
+        ]
+      },
+      {
+        "unit": 97,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->5"
+        ]
+      },
+      {
+        "unit": 98,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->7"
+        ]
+      },
+      {
+        "unit": 99,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->2"
+        ]
+      },
+      {
+        "unit": 100,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->3"
+        ]
+      },
+      {
+        "unit": 101,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->1"
+        ]
+      },
+      {
+        "unit": 102,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->0"
+        ]
+      },
+      {
+        "unit": 103,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->2"
+        ]
+      },
+      {
+        "unit": 104,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->8"
+        ]
+      },
+      {
+        "unit": 105,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->6"
+        ]
+      },
+      {
+        "unit": 106,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->3"
+        ]
+      },
+      {
+        "unit": 107,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->5"
+        ]
+      },
+      {
+        "unit": 108,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->2"
+        ]
+      },
+      {
+        "unit": 109,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->6"
+        ]
+      },
+      {
+        "unit": 110,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->4"
+        ]
+      },
+      {
+        "unit": 111,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->5"
+        ]
+      },
+      {
+        "unit": 112,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->8"
+        ]
+      },
+      {
+        "unit": 113,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->8"
+        ]
+      },
+      {
+        "unit": 114,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->1"
+        ]
+      },
+      {
+        "unit": 115,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->6"
+        ]
+      },
+      {
+        "unit": 116,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->0"
+        ]
+      },
+      {
+        "unit": 117,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->0"
+        ]
+      },
+      {
+        "unit": 118,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->6"
+        ]
+      },
+      {
+        "unit": 119,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->5"
+        ]
+      },
+      {
+        "unit": 120,
+        "start": "atk_power_a",
+        "kind": "player",
+        "ops": [
+          "atk_power_a(1)->0",
+          "atk_power_b(10)->9"
+        ]
+      }
+    ]
+  },
+  "first_request_divergence_index": 2,
+  "first_request_divergence_csharp": "Entry(Next(max),8->3,hit_gate)",
+  "first_request_divergence_rust": "Entry(Next(max),10->4,atk_power_b)"
+}

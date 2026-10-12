@@ -1,0 +1,264 @@
+# stack2 攻击单元结构（unit = 一次攻击；ops 内按取数先后）
+
+来源：02-analyze-stack2.json。`cA`=C# 干净首跑 120；`rA`=Rust 干净首跑 120。
+
+## C#(cA)：136 个单元（player=120, base=16）
+  [base] unit   1: atk_power_base(1)->0 hit_gate(8)->3 hit_struck_damage(1)->0
+  [base] unit   2: atk_power_base(1)->0 hit_gate(8)->5 hit_struck_damage(1)->0
+  [base] unit   3: atk_power_base(1)->0 hit_gate(8)->1 hit_struck_damage(1)->0
+  [base] unit   4: atk_power_base(1)->0 hit_gate(15)->0 hit_struck_damage(1)->0 hit_struck_damage2(1)->0
+  [base] unit   5: atk_power_base(1)->0 hit_gate(8)->2 hit_struck_damage(1)->0
+  [base] unit   6: atk_power_base(1)->0 hit_gate(13)->11 hit_struck_damage(1)->0
+  [base] unit   7: atk_power_base(1)->0 hit_gate(13)->0 hit_struck_damage(1)->0
+  [base] unit   8: atk_power_base(1)->0 hit_gate(13)->3 hit_struck_damage(1)->0
+  [player] unit   9: atk_power_a(1)->0 atk_power_b(10)->1 hit_gate(15)->10 attack_success(5)->3
+  [player] unit  10: atk_power_a(1)->0 atk_power_b(10)->4 hit_gate(15)->4 hit_struck_damage(1)->0 struck_durability(10)->4 attack_success(5)->0
+  [base] unit  11: atk_power_base(1)->0 hit_gate(13)->5 hit_struck_damage(1)->0
+  [player] unit  12: atk_power_a(1)->0 atk_power_b(10)->5 hit_gate(15)->11 attack_success(5)->0
+  [base] unit  13: atk_power_base(1)->0 hit_gate(13)->6 hit_struck_damage(1)->0
+  [player] unit  14: atk_power_a(1)->0 atk_power_b(10)->6
+  [player] unit  15: atk_power_a(1)->0 atk_power_b(10)->1
+  [player] unit  16: atk_power_a(1)->0 atk_power_b(10)->9
+  [player] unit  17: atk_power_a(1)->0 atk_power_b(10)->0
+  [player] unit  18: atk_power_a(1)->0 atk_power_b(10)->5
+  [player] unit  19: atk_power_a(1)->0 atk_power_b(10)->1
+  [player] unit  20: atk_power_a(1)->0 atk_power_b(10)->2
+  [player] unit  21: atk_power_a(1)->0 atk_power_b(10)->6
+  [base] unit  22: atk_power_base(1)->0 hit_gate(13)->8 hit_struck_damage(1)->0
+  [player] unit  23: atk_power_a(1)->0 atk_power_b(10)->7
+  [player] unit  24: atk_power_a(1)->0 atk_power_b(10)->8
+  [player] unit  25: atk_power_a(1)->0 atk_power_b(10)->4
+  [player] unit  26: atk_power_a(1)->0 atk_power_b(10)->5
+  [player] unit  27: atk_power_a(1)->0 atk_power_b(10)->7
+  [player] unit  28: atk_power_a(1)->0 atk_power_b(10)->9
+  [player] unit  29: atk_power_a(1)->0 atk_power_b(10)->7
+  [player] unit  30: atk_power_a(1)->0 atk_power_b(10)->0
+  [player] unit  31: atk_power_a(1)->0 atk_power_b(10)->4
+  [base] unit  32: atk_power_base(1)->0 hit_gate(13)->7 hit_struck_damage(1)->0
+  [player] unit  33: atk_power_a(1)->0 atk_power_b(10)->2
+  [base] unit  34: atk_power_base(1)->0 hit_gate(13)->12 hit_struck_damage(1)->0
+  [player] unit  35: atk_power_a(1)->0 atk_power_b(10)->4
+  [player] unit  36: atk_power_a(1)->0 atk_power_b(10)->4
+  [player] unit  37: atk_power_a(1)->0 atk_power_b(10)->0
+  [player] unit  38: atk_power_a(1)->0 atk_power_b(10)->1
+  [player] unit  39: atk_power_a(1)->0 atk_power_b(10)->9
+  [player] unit  40: atk_power_a(1)->0 atk_power_b(10)->7
+  [player] unit  41: atk_power_a(1)->0 atk_power_b(10)->6
+  [player] unit  42: atk_power_a(1)->0 atk_power_b(10)->3
+  [base] unit  43: atk_power_base(1)->0 hit_gate(15)->4 hit_struck_damage(1)->0 hit_struck_damage2(1)->0
+  [player] unit  44: atk_power_a(1)->0 atk_power_b(10)->3
+  [player] unit  45: atk_power_a(1)->0 atk_power_b(10)->2
+  [player] unit  46: atk_power_a(1)->0 atk_power_b(10)->1
+  [player] unit  47: atk_power_a(1)->0 atk_power_b(10)->0
+  [player] unit  48: atk_power_a(1)->0 atk_power_b(10)->6
+  [player] unit  49: atk_power_a(1)->0 atk_power_b(10)->3
+  [player] unit  50: atk_power_a(1)->0 atk_power_b(10)->4
+  [player] unit  51: atk_power_a(1)->0 atk_power_b(10)->2
+  [player] unit  52: atk_power_a(1)->0 atk_power_b(10)->6
+  [player] unit  53: atk_power_a(1)->0 atk_power_b(10)->7
+  [player] unit  54: atk_power_a(1)->0 atk_power_b(10)->0
+  [player] unit  55: atk_power_a(1)->0 atk_power_b(10)->6
+  [player] unit  56: atk_power_a(1)->0 atk_power_b(10)->0
+  [player] unit  57: atk_power_a(1)->0 atk_power_b(10)->8
+  [player] unit  58: atk_power_a(1)->0 atk_power_b(10)->1
+  [player] unit  59: atk_power_a(1)->0 atk_power_b(10)->9
+  [player] unit  60: atk_power_a(1)->0 atk_power_b(10)->4
+  [player] unit  61: atk_power_a(1)->0 atk_power_b(10)->3
+  [player] unit  62: atk_power_a(1)->0 atk_power_b(10)->2
+  [player] unit  63: atk_power_a(1)->0 atk_power_b(10)->7
+  [player] unit  64: atk_power_a(1)->0 atk_power_b(10)->3
+  [player] unit  65: atk_power_a(1)->0 atk_power_b(10)->0
+  [player] unit  66: atk_power_a(1)->0 atk_power_b(10)->9
+  [player] unit  67: atk_power_a(1)->0 atk_power_b(10)->0
+  [player] unit  68: atk_power_a(1)->0 atk_power_b(10)->9
+  [player] unit  69: atk_power_a(1)->0 atk_power_b(10)->5
+  [player] unit  70: atk_power_a(1)->0 atk_power_b(10)->0
+  [player] unit  71: atk_power_a(1)->0 atk_power_b(10)->1
+  [player] unit  72: atk_power_a(1)->0 atk_power_b(10)->7
+  [player] unit  73: atk_power_a(1)->0 atk_power_b(10)->5
+  [player] unit  74: atk_power_a(1)->0 atk_power_b(10)->2
+  [player] unit  75: atk_power_a(1)->0 atk_power_b(10)->0
+  [player] unit  76: atk_power_a(1)->0 atk_power_b(10)->4
+  [player] unit  77: atk_power_a(1)->0 atk_power_b(10)->4
+  [player] unit  78: atk_power_a(1)->0 atk_power_b(10)->3
+  [player] unit  79: atk_power_a(1)->0 atk_power_b(10)->8
+  [player] unit  80: atk_power_a(1)->0 atk_power_b(10)->0
+  [player] unit  81: atk_power_a(1)->0 atk_power_b(10)->1
+  [player] unit  82: atk_power_a(1)->0 atk_power_b(10)->0
+  [player] unit  83: atk_power_a(1)->0 atk_power_b(10)->8
+  [player] unit  84: atk_power_a(1)->0 atk_power_b(10)->9
+  [player] unit  85: atk_power_a(1)->0 atk_power_b(10)->3
+  [player] unit  86: atk_power_a(1)->0 atk_power_b(10)->3
+  [player] unit  87: atk_power_a(1)->0 atk_power_b(10)->9
+  [player] unit  88: atk_power_a(1)->0 atk_power_b(10)->3
+  [player] unit  89: atk_power_a(1)->0 atk_power_b(10)->3
+  [player] unit  90: atk_power_a(1)->0 atk_power_b(10)->3
+  [player] unit  91: atk_power_a(1)->0 atk_power_b(10)->6
+  [player] unit  92: atk_power_a(1)->0 atk_power_b(10)->8
+  [player] unit  93: atk_power_a(1)->0 atk_power_b(10)->9
+  [player] unit  94: atk_power_a(1)->0 atk_power_b(10)->4
+  [player] unit  95: atk_power_a(1)->0 atk_power_b(10)->6
+  [player] unit  96: atk_power_a(1)->0 atk_power_b(10)->4
+  [player] unit  97: atk_power_a(1)->0 atk_power_b(10)->3
+  [player] unit  98: atk_power_a(1)->0 atk_power_b(10)->8
+  [player] unit  99: atk_power_a(1)->0 atk_power_b(10)->2
+  [player] unit 100: atk_power_a(1)->0 atk_power_b(10)->6
+  [player] unit 101: atk_power_a(1)->0 atk_power_b(10)->2
+  [player] unit 102: atk_power_a(1)->0 atk_power_b(10)->3
+  [player] unit 103: atk_power_a(1)->0 atk_power_b(10)->4
+  [player] unit 104: atk_power_a(1)->0 atk_power_b(10)->3
+  [player] unit 105: atk_power_a(1)->0 atk_power_b(10)->7
+  [player] unit 106: atk_power_a(1)->0 atk_power_b(10)->9
+  [player] unit 107: atk_power_a(1)->0 atk_power_b(10)->4
+  [base] unit 108: atk_power_base(1)->0 hit_gate(15)->1 hit_struck_damage(1)->0 hit_struck_damage2(1)->0
+  [player] unit 109: atk_power_a(1)->0 atk_power_b(10)->1
+  [player] unit 110: atk_power_a(1)->0 atk_power_b(10)->7
+  [player] unit 111: atk_power_a(1)->0 atk_power_b(10)->2
+  [player] unit 112: atk_power_a(1)->0 atk_power_b(10)->4
+  [player] unit 113: atk_power_a(1)->0 atk_power_b(10)->1
+  [player] unit 114: atk_power_a(1)->0 atk_power_b(10)->5
+  [player] unit 115: atk_power_a(1)->0 atk_power_b(10)->7
+  [player] unit 116: atk_power_a(1)->0 atk_power_b(10)->1
+  [base] unit 117: atk_power_base(1)->0 hit_gate(15)->4 hit_struck_damage(1)->0 hit_struck_damage2(1)->0
+  [player] unit 118: atk_power_a(1)->0 atk_power_b(10)->8
+  [player] unit 119: atk_power_a(1)->0 atk_power_b(10)->3
+  [player] unit 120: atk_power_a(1)->0 atk_power_b(10)->2
+  [player] unit 121: atk_power_a(1)->0 atk_power_b(10)->8
+  [player] unit 122: atk_power_a(1)->0 atk_power_b(10)->3
+  [player] unit 123: atk_power_a(1)->0 atk_power_b(10)->1
+  [player] unit 124: atk_power_a(1)->0 atk_power_b(10)->6
+  [player] unit 125: atk_power_a(1)->0 atk_power_b(10)->4
+  [player] unit 126: atk_power_a(1)->0 atk_power_b(10)->6
+  [player] unit 127: atk_power_a(1)->0 atk_power_b(10)->1
+  [player] unit 128: atk_power_a(1)->0 atk_power_b(10)->6
+  [player] unit 129: atk_power_a(1)->0 atk_power_b(10)->8
+  [player] unit 130: atk_power_a(1)->0 atk_power_b(10)->5
+  [player] unit 131: atk_power_a(1)->0 atk_power_b(10)->5
+  [player] unit 132: atk_power_a(1)->0 atk_power_b(10)->9
+  [player] unit 133: atk_power_a(1)->0 atk_power_b(10)->2
+  [player] unit 134: atk_power_a(1)->0 atk_power_b(10)->1
+  [player] unit 135: atk_power_a(1)->0 atk_power_b(10)->9
+  [player] unit 136: atk_power_a(1)->0 atk_power_b(10)->9
+
+## Rust(rA)：120 个单元（player=120, base=0）
+  [player] unit   1: atk_power_a(1)->0 atk_power_b(10)->4 hit_gate(15)->3 hit_struck_damage(1)->0 struck_durability(10)->6 attack_success(5)->3
+  [player] unit   2: atk_power_a(1)->0 atk_power_b(10)->2 hit_gate(15)->1 hit_struck_damage(1)->0 struck_durability(10)->0 attack_success(5)->2
+  [player] unit   3: atk_power_a(1)->0 atk_power_b(10)->2 hit_gate(15)->5 hit_struck_damage(1)->0 struck_durability(10)->3 attack_success(5)->4
+  [player] unit   4: atk_power_a(1)->0 atk_power_b(10)->5 hit_gate(15)->0 hit_struck_damage(1)->0 struck_durability(10)->3 attack_success(5)->1
+  [player] unit   5: atk_power_a(1)->0 atk_power_b(10)->3 hit_gate(15)->1 hit_struck_damage(1)->0 struck_durability(10)->6 attack_success(5)->1
+  [player] unit   6: atk_power_a(1)->0 atk_power_b(10)->2 hit_gate(15)->6 attack_success(5)->2
+  [player] unit   7: atk_power_a(1)->0 atk_power_b(10)->9 hit_gate(15)->6 attack_success(5)->3
+  [player] unit   8: atk_power_a(1)->0 atk_power_b(10)->5 hit_gate(15)->11 attack_success(5)->0
+  [player] unit   9: atk_power_a(1)->0 atk_power_b(10)->5 hit_gate(15)->10 attack_success(5)->1
+  [player] unit  10: atk_power_a(1)->0 atk_power_b(10)->6 hit_gate(15)->2 hit_struck_damage(1)->0 struck_durability(10)->9 attack_success(5)->1
+  [player] unit  11: atk_power_a(1)->0 atk_power_b(10)->5 hit_gate(15)->7 attack_success(5)->2
+  [player] unit  12: atk_power_a(1)->0 atk_power_b(10)->9 hit_gate(15)->3 hit_struck_damage(1)->0 struck_durability(10)->6 attack_success(5)->3
+  [player] unit  13: atk_power_a(1)->0 atk_power_b(10)->6 hit_gate(15)->11 attack_success(5)->3
+  [player] unit  14: atk_power_a(1)->0 atk_power_b(10)->8 hit_gate(15)->1 hit_struck_damage(1)->0 struck_durability(10)->7 attack_success(5)->2
+  [player] unit  15: atk_power_a(1)->0 atk_power_b(10)->7 hit_gate(15)->11 attack_success(5)->4
+  [player] unit  16: atk_power_a(1)->0 atk_power_b(10)->7 hit_gate(15)->8 attack_success(5)->0
+  [player] unit  17: atk_power_a(1)->0 atk_power_b(10)->4 hit_gate(15)->8 attack_success(5)->2
+  [player] unit  18: atk_power_a(1)->0 atk_power_b(10)->1 hit_gate(15)->4 hit_struck_damage(1)->0 struck_durability(10)->9 attack_success(5)->3
+  [player] unit  19: atk_power_a(1)->0 atk_power_b(10)->4 hit_gate(15)->7 attack_success(5)->2
+  [player] unit  20: atk_power_a(1)->0 atk_power_b(10)->0 hit_gate(15)->6 attack_success(5)->0
+  [player] unit  21: atk_power_a(1)->0 atk_power_b(10)->9 hit_gate(15)->3 hit_struck_damage(1)->0 struck_durability(10)->5 attack_success(5)->3
+  [player] unit  22: atk_power_a(1)->0 atk_power_b(10)->3 hit_gate(15)->3 hit_struck_damage(1)->0 struck_durability(10)->7 attack_success(5)->2
+  [player] unit  23: atk_power_a(1)->0 atk_power_b(10)->3 hit_gate(15)->6 attack_success(5)->1
+  [player] unit  24: atk_power_a(1)->0 atk_power_b(10)->1 hit_gate(15)->1 hit_struck_damage(1)->0 struck_durability(10)->2 attack_success(5)->3
+  [player] unit  25: atk_power_a(1)->0 atk_power_b(10)->3 hit_gate(15)->13 attack_success(5)->2
+  [player] unit  26: atk_power_a(1)->0 atk_power_b(10)->2 hit_gate(15)->1 hit_struck_damage(1)->0 struck_durability(10)->8 attack_success(5)->3
+  [player] unit  27: atk_power_a(1)->0 atk_power_b(10)->0 hit_gate(15)->1 hit_struck_damage(1)->0 struck_durability(10)->7 attack_success(5)->0
+  [player] unit  28: atk_power_a(1)->0 atk_power_b(10)->8 hit_gate(15)->4 hit_struck_damage(1)->0 struck_durability(10)->8 attack_success(5)->4
+  [player] unit  29: atk_power_a(1)->0 atk_power_b(10)->4 hit_gate(15)->6 attack_success(5)->1
+  [player] unit  30: atk_power_a(1)->0 atk_power_b(10)->2 hit_gate(15)->13 attack_success(5)->3
+  [player] unit  31: atk_power_a(1)->0 atk_power_b(10)->3 hit_gate(15)->13 attack_success(5)->0
+  [player] unit  32: atk_power_a(1)->0 atk_power_b(10)->9 hit_gate(15)->12 attack_success(5)->0
+  [player] unit  33: atk_power_a(1)->0 atk_power_b(10)->9 hit_gate(15)->3 hit_struck_damage(1)->0 struck_durability(10)->4 attack_success(5)->0
+  [player] unit  34: atk_power_a(1)->0 atk_power_b(10)->1 hit_gate(15)->4 hit_struck_damage(1)->0 struck_durability(10)->4 attack_success(5)->2
+  [player] unit  35: atk_power_a(1)->0 atk_power_b(10)->2 hit_gate(15)->11 attack_success(5)->0
+  [player] unit  36: atk_power_a(1)->0 atk_power_b(10)->4 hit_gate(15)->4 hit_struck_damage(1)->0 struck_durability(10)->0 attack_success(5)->1
+  [player] unit  37: atk_power_a(1)->0 atk_power_b(10)->8 hit_gate(15)->11 attack_success(5)->0
+  [player] unit  38: atk_power_a(1)->0 atk_power_b(10)->1 hit_gate(15)->2 hit_struck_damage(1)->0 struck_durability(10)->1 attack_success(5)->4
+  [player] unit  39: atk_power_a(1)->0 atk_power_b(10)->9
+  [player] unit  40: atk_power_a(1)->0 atk_power_b(10)->3
+  [player] unit  41: atk_power_a(1)->0 atk_power_b(10)->3
+  [player] unit  42: atk_power_a(1)->0 atk_power_b(10)->9
+  [player] unit  43: atk_power_a(1)->0 atk_power_b(10)->3
+  [player] unit  44: atk_power_a(1)->0 atk_power_b(10)->3
+  [player] unit  45: atk_power_a(1)->0 atk_power_b(10)->3
+  [player] unit  46: atk_power_a(1)->0 atk_power_b(10)->6
+  [player] unit  47: atk_power_a(1)->0 atk_power_b(10)->8
+  [player] unit  48: atk_power_a(1)->0 atk_power_b(10)->9
+  [player] unit  49: atk_power_a(1)->0 atk_power_b(10)->4
+  [player] unit  50: atk_power_a(1)->0 atk_power_b(10)->6
+  [player] unit  51: atk_power_a(1)->0 atk_power_b(10)->4
+  [player] unit  52: atk_power_a(1)->0 atk_power_b(10)->3
+  [player] unit  53: atk_power_a(1)->0 atk_power_b(10)->8
+  [player] unit  54: atk_power_a(1)->0 atk_power_b(10)->2
+  [player] unit  55: atk_power_a(1)->0 atk_power_b(10)->6
+  [player] unit  56: atk_power_a(1)->0 atk_power_b(10)->2
+  [player] unit  57: atk_power_a(1)->0 atk_power_b(10)->3
+  [player] unit  58: atk_power_a(1)->0 atk_power_b(10)->4
+  [player] unit  59: atk_power_a(1)->0 atk_power_b(10)->3
+  [player] unit  60: atk_power_a(1)->0 atk_power_b(10)->7
+  [player] unit  61: atk_power_a(1)->0 atk_power_b(10)->9
+  [player] unit  62: atk_power_a(1)->0 atk_power_b(10)->4
+  [player] unit  63: atk_power_a(1)->0 atk_power_b(10)->1
+  [player] unit  64: atk_power_a(1)->0 atk_power_b(10)->3
+  [player] unit  65: atk_power_a(1)->0 atk_power_b(10)->1
+  [player] unit  66: atk_power_a(1)->0 atk_power_b(10)->7
+  [player] unit  67: atk_power_a(1)->0 atk_power_b(10)->2
+  [player] unit  68: atk_power_a(1)->0 atk_power_b(10)->4
+  [player] unit  69: atk_power_a(1)->0 atk_power_b(10)->1
+  [player] unit  70: atk_power_a(1)->0 atk_power_b(10)->5
+  [player] unit  71: atk_power_a(1)->0 atk_power_b(10)->7
+  [player] unit  72: atk_power_a(1)->0 atk_power_b(10)->1
+  [player] unit  73: atk_power_a(1)->0 atk_power_b(10)->2
+  [player] unit  74: atk_power_a(1)->0 atk_power_b(10)->2
+  [player] unit  75: atk_power_a(1)->0 atk_power_b(10)->8
+  [player] unit  76: atk_power_a(1)->0 atk_power_b(10)->3
+  [player] unit  77: atk_power_a(1)->0 atk_power_b(10)->2
+  [player] unit  78: atk_power_a(1)->0 atk_power_b(10)->8
+  [player] unit  79: atk_power_a(1)->0 atk_power_b(10)->3
+  [player] unit  80: atk_power_a(1)->0 atk_power_b(10)->1
+  [player] unit  81: atk_power_a(1)->0 atk_power_b(10)->6
+  [player] unit  82: atk_power_a(1)->0 atk_power_b(10)->4
+  [player] unit  83: atk_power_a(1)->0 atk_power_b(10)->6
+  [player] unit  84: atk_power_a(1)->0 atk_power_b(10)->1
+  [player] unit  85: atk_power_a(1)->0 atk_power_b(10)->6
+  [player] unit  86: atk_power_a(1)->0 atk_power_b(10)->8
+  [player] unit  87: atk_power_a(1)->0 atk_power_b(10)->5
+  [player] unit  88: atk_power_a(1)->0 atk_power_b(10)->5
+  [player] unit  89: atk_power_a(1)->0 atk_power_b(10)->9
+  [player] unit  90: atk_power_a(1)->0 atk_power_b(10)->2
+  [player] unit  91: atk_power_a(1)->0 atk_power_b(10)->1
+  [player] unit  92: atk_power_a(1)->0 atk_power_b(10)->9
+  [player] unit  93: atk_power_a(1)->0 atk_power_b(10)->9
+  [player] unit  94: atk_power_a(1)->0 atk_power_b(10)->7
+  [player] unit  95: atk_power_a(1)->0 atk_power_b(10)->8
+  [player] unit  96: atk_power_a(1)->0 atk_power_b(10)->1
+  [player] unit  97: atk_power_a(1)->0 atk_power_b(10)->5
+  [player] unit  98: atk_power_a(1)->0 atk_power_b(10)->7
+  [player] unit  99: atk_power_a(1)->0 atk_power_b(10)->2
+  [player] unit 100: atk_power_a(1)->0 atk_power_b(10)->3
+  [player] unit 101: atk_power_a(1)->0 atk_power_b(10)->1
+  [player] unit 102: atk_power_a(1)->0 atk_power_b(10)->0
+  [player] unit 103: atk_power_a(1)->0 atk_power_b(10)->2
+  [player] unit 104: atk_power_a(1)->0 atk_power_b(10)->8
+  [player] unit 105: atk_power_a(1)->0 atk_power_b(10)->6
+  [player] unit 106: atk_power_a(1)->0 atk_power_b(10)->3
+  [player] unit 107: atk_power_a(1)->0 atk_power_b(10)->5
+  [player] unit 108: atk_power_a(1)->0 atk_power_b(10)->2
+  [player] unit 109: atk_power_a(1)->0 atk_power_b(10)->6
+  [player] unit 110: atk_power_a(1)->0 atk_power_b(10)->4
+  [player] unit 111: atk_power_a(1)->0 atk_power_b(10)->5
+  [player] unit 112: atk_power_a(1)->0 atk_power_b(10)->8
+  [player] unit 113: atk_power_a(1)->0 atk_power_b(10)->8
+  [player] unit 114: atk_power_a(1)->0 atk_power_b(10)->1
+  [player] unit 115: atk_power_a(1)->0 atk_power_b(10)->6
+  [player] unit 116: atk_power_a(1)->0 atk_power_b(10)->0
+  [player] unit 117: atk_power_a(1)->0 atk_power_b(10)->0
+  [player] unit 118: atk_power_a(1)->0 atk_power_b(10)->6
+  [player] unit 119: atk_power_a(1)->0 atk_power_b(10)->5
+  [player] unit 120: atk_power_a(1)->0 atk_power_b(10)->9
+

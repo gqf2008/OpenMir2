@@ -1,0 +1,44 @@
+{
+ "seed": 40545,
+ "csharp": "mir2-rs\\tests\\parity\\m3\\attack-request-sequence\\provenance\\csharp-attack-stream-stack2.tsv",
+ "rust": "mir2-rs\\tests\\parity\\m3\\attack-request-sequence\\provenance\\rust-rng-stream-stack2.tsv",
+ "counts": {
+  "csharp": {
+   "draws": 300,
+   "site_counts": {
+    "atk_power_base": 16,
+    "hit_gate": 19,
+    "hit_struck_damage": 17,
+    "hit_struck_damage2": 4,
+    "atk_power_a": 120,
+    "atk_power_b": 120,
+    "attack_success": 3,
+    "struck_durability": 1
+   },
+   "player_units": 120,
+   "base_units": 16
+  },
+  "rust": {
+   "draws": 354,
+   "site_counts": {
+    "atk_power_a": 120,
+    "atk_power_b": 120,
+    "hit_gate": 38,
+    "hit_struck_damage": 19,
+    "struck_durability": 19,
+    "attack_success": 38
+   },
+   "player_units": 120,
+   "base_units": 0
+  }
+ },
+ "first_divergence": {
+  "index_0based": 1,
+  "csharp": "hit_gate(8)->3",
+  "rust": "atk_power_b(10)->4",
+  "class": "base_unit"
+ },
+ "template_violations": [],
+ "verdict": "GREEN",
+ "problems": []
+}

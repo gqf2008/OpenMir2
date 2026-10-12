@@ -1,4 +1,4 @@
-a257cac0dd4ea6ad2930feea11d5d35958b941c02450ae3e3124875e2a94e956  provenance/00-provenance.txt
+0f6fbdfbb0e17b7717495e871f79d0a49ab24e080b0e6e2ca608e2077ad4b67b  provenance/00-provenance.txt
 a1841798819c668ba61b0391c5af92ba2c22de4f11ab90533ebf4b447bbd4e1b  provenance/csharp-attack-stream-stack1.tsv
 8b8101c066089e66a2e285f028255720745890c9141386573bda9467e6affc3a  provenance/csharp-attack-stream-stack2.tsv
 47061e1b24b41d192a6efb6988c24c849f48fdb08105aa40b5c852803a531d99  provenance/rng-isolate-sites.txt
@@ -63,7 +63,7 @@ a28fc05db28fbb3af9c2ebf8aa18b3fd2ecac4e914febe79b3671e1c9f6d8eeb  window/14-csha
 1de79826c56e544b11f2859728bd9c55d3f889d410ca2819b5e1d0a360816c44  window/16-rust2-120-clean.txt
 6575c273eaca604c96dbac25b99bb661ae57ab190932f2a38614fab7e5d48f75  window/17-diff-cA-rA.txt
 2abbe63a1e20df70e4b3622ed9d2b22de2acc2df1451b467d5b0ae54778fe690  window/19-ports-after.txt
-bff6b2276cb4784c16ac6a05d636ed4c95ae8e8f20e41aac8a087b53e07b4723  window/20-site-counts.txt
+f1f3421990e2881de2c579fe492ab1edd58837ad3ceae62828091fb096fe748b  window/20-site-counts.txt
 a82c34da892ea4b018b16434e15ce311a8fb60167f5c4958bd2ee32ef095d9b4  window/21-diff-c1-c2-samestack.txt
 a82c34da892ea4b018b16434e15ce311a8fb60167f5c4958bd2ee32ef095d9b4  window/22-diff-c1-cA.txt
 af92a7f0c6e205ced78842f1fb6f500880e1cb73c6212f1abfcd48b20e439389  window/23-diff-cA-c2.txt

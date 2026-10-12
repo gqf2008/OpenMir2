@@ -1,0 +1,27 @@
+# owner 22:15-① —— 「隔离是否真把两侧放在同一流上」的机判
+
+判据分两步（`compare_dedicated_streams.py`）：
+
+## A. 每条流水是否真是 Random(attack_seed=40545) 的忠实记录
+方法：把该侧自己的 `(kind, arg)` 请求序列喂给本工具内逐行复刻的 .NET legacy `System.DotNetRandom`
+（与 `crates/shared/src/rng.rs` 同算法、与真机 `SEED_PROBE` 同源），逐次比对结果值。
+
+| 侧 | 流水 | 取数条数 | 自复算 mismatch |
+|---|---|---|---|
+| C# stack2 | mir2-rs\tests\parity\m3\evidence-rng-isolate-streamcompare-20261012\provenance\csharp-attack-stream-stack2.tsv | 300 | **0** |
+| Rust stack2 | mir2-rs\tests\parity\m3\evidence-rng-isolate-streamcompare-20261012\provenance\rust-rng-stream-stack2.tsv | 354 | **0** |
+
+⇒ 两侧的攻击路径取数**逐次都等于** `Random(40545)` 的输出（0 mismatch）
+⇒ 「按调用点分流到专用种子流」在两侧都是**真的**：种子公式、分流谓词、算法都对齐。
+（`01-selftest.txt` 另证复刻器对 seed=42 的 8 项参照与真机 SEED_PROBE 一致。）
+
+## B. 两侧的 `(kind, arg)` 请求序列是否相同
+**不同**。第一处分歧（1-based，含头）：
+
+- index = 2
+- csharp = Entry(Next(max),8->3,hit_gate)
+- rust   = Entry(Next(max),10->4,atk_power_b)
+
+⇒ 这**不是**「隔离/路由不等价」：A 已证同一请求序列两侧值相同。分歧来自**两侧请求的序列不同**，
+即**被测行为（游戏逻辑）**不同 —— 见 `04`（属性判别）与 `05`（非玩家攻方）。
+

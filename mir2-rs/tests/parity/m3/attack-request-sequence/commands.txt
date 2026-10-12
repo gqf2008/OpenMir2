@@ -1,0 +1,51 @@
+# M3②③ 攻击请求序列定位 —— 全部命令（2026-10-12，m3cs）
+
+工作目录：`E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3cs`
+D = `mir2-rs/tests/parity/m3/attack-request-sequence`
+S = `mir2-rs/tests/parity/m3/evidence-rng-isolate-attack-twophase-20261012/sessions`
+
+## 0) 工具自检
+
+    python -I $D/per_strike_requests.py selftest
+    # -> 01-selftest.txt（SELFTEST GREEN 8/8）
+
+## 1) ③ 每击取数请求序列 + 第一处分歧定位
+
+    python -I $D/per_strike_requests.py analyze \
+      --csharp $D/provenance/csharp-attack-stream-stack2.tsv \
+      --rust   $D/provenance/rust-rng-stream-stack2.tsv \
+      --json $D/02-analyze-stack2.json > $D/02-analyze-stack2.txt
+
+    python -I $D/per_strike_requests.py analyze \
+      --csharp $D/provenance/csharp-attack-stream-stack1.tsv \
+      --rust   $D/provenance/rust-rng-stream-stack1.tsv \
+      --allow-count-mismatch --json $D/03-analyze-stack1.json > $D/03-analyze-stack1.txt
+
+    python -I $D/per_strike_requests.py table \
+      --csharp $D/provenance/csharp-attack-stream-stack2.tsv \
+      --rust   $D/provenance/rust-rng-stream-stack2.tsv > $D/04-per-strike-table-stack2.txt
+
+## 2) ② 目标可用性读数（会话件）
+
+    python -I $D/session_target_availability.py $S/csharp-20261012-215606 --label csharp-cA \
+      --gate-log E:/tmp/m3cs-iso2/csharp2/RunGate.out.log
+    python -I $D/session_target_availability.py $S/rust-20261012-215832 --label rust-rA
+    python -I $D/session_target_availability.py $S/csharp-20261012-214806 --label csharp-c1 \
+      --gate-log E:/tmp/m3cs-iso2/csharp/RunGate.out.log
+    # -> 05-target-availability.txt
+
+## 3) ②/③ 站点归属（inline，见 07/08 的文件头；口径 = attack_sites.tsv）
+
+    # 07-first-divergence.txt：按 (kind,arg) 逐次比，取 C#/Rust 两边前 4 次 + index=2 的站点
+    # 08-base-unit-attribution.txt：把 C# 专用流按 atk_power_* 切单元，base 单元逐条列出
+    #   （与上片 evidence-rng-isolate-streamcompare-20261012/05-base-attacker.txt 同结论）
+
+## 4) 复核 hash（仓库字节 / LF 归一口径）
+
+    python -I tools/evidence-hash/verify_sha256sums.py --check-extra $D
+    # -> 06/…（GREEN）
+
+## 5) 本片未起栈
+
+    # 本片全部输入 = 上一步已入库的两相真机原始件；未起栈、未占端口。
+    # 端口实拍沿用 evidence-rng-isolate-attack-twophase-20261012/window/19-ports-after.txt（十端口 free）。
