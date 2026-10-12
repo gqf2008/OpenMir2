@@ -302,6 +302,12 @@ peer 口径（`attack_sequence`/`attack_pose`/`fixed_new_chr`）与 `scoped_diff
 本片（不占端口）证据：`evidence-attack-pair-20261012/**`（`attack_diff.py selftest` + `run_attack_pair -SelfCheckNoStack`
 + 生产函数级「改坏 dmg/hit 必红」+ 四门禁 + `SHA256SUMS.txt`）。
 
+**清合并登记的两条 Minor（2026-10-12）**：M-1 = `run_pair.ps1` 的「`-AttackSequence` 未配 `-AttackPinPair`」WARN
+原是死代码（写在 `if ($EmitOpsArgs)` 块内且自否）⇒ 已移出；M-2 = attacker 判定由 `LoginId.EndsWith(AttackRole)`
+改为 `MShare.IsAttackAttacker` 的**精确相等**（`-Bots>10` 时 10/20… 不再被误武装）。两条均由
+`run_attack_pair.ps1 -SelfCheckNoStack` ⑩/⑪ 机判（M-2 走 `BotSrv.exe --selftest-attackrole` 生产函数级 selftest，改回 `EndsWith` 必 RED）；
+证据 `evidence-attack-pair-minors-20261012/**`。
+
 ## 一次「侧运行」是什么
 
 

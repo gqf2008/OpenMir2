@@ -232,7 +232,9 @@ if ($SelfCheckNoStack) {
   $emitOnRaw = & powershell -ExecutionPolicy Bypass -File $RunPair -EmitOpsArgs -AttackSequence -AttackCount 120 -AttackStepMs 500 -AttackStartDelayMs 3000
   if ($LASTEXITCODE -ne 0) { $failures += 'emit_on_rc=non-zero' }
   else {
-    $emitOn = (($emitOnRaw | Out-String).Trim() | ConvertFrom-Json)
+    # M-1 修复后「未配 -AttackPinPair」会真打一行 WARN（stdout，JSON 之前）⇒ 解析前先滤掉 WARN 行。
+    $emitOnText = ((@($emitOnRaw) | Where-Object { $_ -notmatch '^\s*WARN:' }) -join "`n").Trim()
+    $emitOn = ($emitOnText | ConvertFrom-Json)
     $has = (@($emitOn.bot_args) -contains '-DisableAutoPlay')
     if (-not $has) { $failures += 'attack_sequence_does_not_pass_disable_autoplay' }
     $wantScope = 'on count=120 step_ms=500 start_delay_ms=3000 disable_autoplay=True'
@@ -263,6 +265,38 @@ if ($SelfCheckNoStack) {
     if ($joined -notmatch 'a\.Hp=100000, a\.MaxHP=100000') { $failures += 'attack_pin_missing_victim_hp' }
     Write-Output ("SELFTEST ⑥ -AttackPinPair pose='{0}'；pin_sql_all={1} 条" -f $pair.attack_pose, $all.Count)
   }
+
+  # ⑩ Minor M-1 回归（reviewer-5 76e433f0）：`-AttackSequence` 未配 `-AttackPinPair` ⇒ WARN 必须**真**出现；
+  #    配了 `-AttackPinPair` ⇒ 不得出现。旧实现把 WARN 写在 `if ($EmitOpsArgs)` 块内且带 `-not $EmitOpsArgs`
+  #    ⇒ 恒 false 死代码，本项必 RED（这就是「改坏必红」：把 WARN 挪回块内 ⇒ m1_warn_missing 必红）。
+  $warnPat = 'WARN: -AttackSequence 未配 -AttackPinPair'
+  $warnOn = @(@($emitOnRaw) | Where-Object { $_ -match $warnPat }).Count
+  $warnPair = @(@($emitPairRaw) | Where-Object { $_ -match $warnPat }).Count
+  if ($warnOn -lt 1) { $failures += 'm1_warn_missing_when_no_pinpair' }
+  if ($warnPair -ne 0) { $failures += 'm1_warn_present_when_pinpair' }
+  Write-Output ("SELFTEST ⑩ M-1 WARN 有牙齿：无 -AttackPinPair={0} 条（期望≥1），有 -AttackPinPair={1} 条（期望 0）" -f $warnOn, $warnPair)
+
+  # ⑪ Minor M-2 回归（reviewer-5 76e433f0）：attacker 选择必须是**精确相等**（生产函数级，非源码扫描）。
+  #    `BotSrv.exe --selftest-attackrole` 覆盖 `-Bots>10`（10/20… 不得命中 attacker 序号 0）；
+  #    把 IsAttackAttacker 改回 EndsWith ⇒ 必 RED（红检原始件见证据 mutation-red-minors.txt）。
+  $botProj = Join-Path $RepoRoot 'src\BotSrv\BotSrv.csproj'
+  $botExe = Join-Path $RepoRoot 'src\BotSrv\bin\Release\BotSrv.exe'
+  $prevEap = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  $botBuildOut = (& dotnet build $botProj -c Release --nologo -v q 2>&1 | Out-String)
+  $botBuildRc = $LASTEXITCODE
+  if ($botBuildRc -ne 0) {
+    $failures += ('m2_botsrv_build_rc=' + $botBuildRc)
+    Write-Output '  --- BotSrv build 输出 ---'; Write-Output $botBuildOut
+  } else {
+    $roleOut = (& $botExe --selftest-attackrole 2>&1 | Out-String)
+    $roleRc = $LASTEXITCODE
+    if ($roleRc -ne 0) { $failures += ('m2_attackrole_selftest_rc=' + $roleRc) }
+    if ($roleOut -notmatch 'ATTACKROLE SELFTEST GREEN') { $failures += 'm2_attackrole_selftest_not_green' }
+    Write-Output ("SELFTEST ⑪ M-2 attacker 精确选择 selftest rc={0}" -f $roleRc)
+    if ($roleRc -ne 0) { Write-Output $roleOut }
+  }
+  $ErrorActionPreference = $prevEap
 
   # ⑦ attack_diff selftest：同序列绿 + 改坏 dmg/hit 必红 + 非平凡门 + 空序列。
   $prevEap = $ErrorActionPreference
@@ -341,7 +375,7 @@ if ($SelfCheckNoStack) {
 
   Remove-Item -Recurse -Force $tmpRoot -ErrorAction SilentlyContinue
   if ($failures.Count -eq 0) {
-    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（攻击配置透传/默认关 + run_pair -DisableAutoPlay 耦合两向 + 攻击两相 pin pose/SQL + 入口/DiffOnly fail-closed + attack_diff selftest + 改坏 dmg/hit 必红 + scoped_diff 14/14）'
+    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（攻击配置透传/默认关 + run_pair -DisableAutoPlay 耦合两向 + 攻击两相 pin pose/SQL + 入口/DiffOnly fail-closed + attack_diff selftest + 改坏 dmg/hit 必红 + scoped_diff 14/14 + M-1 WARN 有牙齿 + M-2 attacker 精确选择 selftest）'
     exit 0
   }
   Write-Output ('SELFTEST_RED RED: ' + ($failures -join ', '))

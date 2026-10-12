@@ -1,0 +1,20 @@
+# 证据包自包含性自检（照 F-1 口径；卡 openmir2-m3-attack-pair-fixture，本片清 M-1/M-2）
+# 目标：证据目录里**每一个被声明的文件**都必须入库、不被 .gitignore 吞，且干净检出可复现。
+# 生成时刻：本片提交后（HEAD 已含本目录全部文件）。
+
+# 命令 1：对每个 tracked 文件跑 git check-ignore -v（期望：无输出 / rc=1 = 无一被忽略）
+$ git check-ignore -v $(git ls-tree -r --name-only HEAD mir2-rs/tests/parity/m3/evidence-attack-pair-minors-20261012/)
+(无输出)
+check-ignore rc=1 (1 = 无命中)
+
+# 命令 2：tracked 文件数 == 盘上文件数
+$ git ls-tree -r --name-only HEAD mir2-rs/tests/parity/m3/evidence-attack-pair-minors-20261012/ | wc -l
+tracked_count = 12
+$ find mir2-rs/tests/parity/m3/evidence-attack-pair-minors-20261012 -type f | wc -l
+disk_count    = 12
+
+# 命令 3：目录内不得有 .gitignore 会吞的 *.log（本片一律用 .txt）
+$ git ls-tree -r --name-only HEAD mir2-rs/tests/parity/m3/evidence-attack-pair-minors-20261012/ | grep -c '\.log$'
+log_count     = 0
+
+VERDICT: PASS（tracked == disk；无被忽略文件；无 .log）

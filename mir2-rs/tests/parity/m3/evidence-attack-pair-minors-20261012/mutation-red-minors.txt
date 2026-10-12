@@ -1,0 +1,41 @@
+# 改坏必红（清合并登记的两条 Minor；卡 openmir2-m3-attack-pair-fixture，T-29 扩展）
+# 生产函数级/生产脚本级变异，实跑后**已还原**（还原态见 selfcheck-nostack.txt / attackrole-selftest.txt）。
+# 本文件按仓库 LF/git-blob 口径记 hash（见 SHA256SUMS.txt）。
+
+================================================================================
+# 红检 M-1：把 run_pair.ps1 的 WARN 挪回「$EmitOpsArgs 块内且自否」的死代码形态
+#   （旧 M-1 形态：if ($AttackSequence -and -not $AttackPinPair -and -not $EmitOpsArgs)）
+$ powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 -SelfCheckNoStack
+SELFCHECK_RC=1
+--- 关键行 ---
+SELFTEST ⑩ M-1 WARN 有牙齿：无 -AttackPinPair=0 条（期望≥1），有 -AttackPinPair=0 条（期望 0）
+SELFTEST ⑪ M-2 attacker 精确选择 selftest rc=0
+SELFTEST_RED RED: m1_warn_missing_when_no_pinpair
+
+================================================================================
+# 红检 M-2：把 MShare.IsAttackAttacker 改回旧形态 EndsWith(g_nAttackRole)
+$ dotnet build src/BotSrv/BotSrv.csproj -c Release
+$ ./src/BotSrv/bin/Release/BotSrv.exe --selftest-attackrole
+ROLE_RC=1
+--- 原始输出 ---
+ATTACKROLE PASS login='winplay0' attacker='winplay0' got=True want=True
+ATTACKROLE FAIL login='winplay1' attacker='winplay1' got=False want=True
+ATTACKROLE FAIL login='winplay10' attacker='winplay0' got=True want=False
+ATTACKROLE FAIL login='winplay20' attacker='winplay0' got=True want=False
+ATTACKROLE PASS login='winplay1' attacker='winplay10' got=False want=False
+ATTACKROLE PASS login='winplay10' attacker='winplay10' got=True want=True
+ATTACKROLE PASS login='winplay0' attacker='' got=False want=False
+ATTACKROLE PASS login='' attacker='winplay0' got=False want=False
+ATTACKROLE SELFTEST RED (3 failed)
+--- run_attack_pair -SelfCheckNoStack 随之 RED ---
+$ powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 -SelfCheckNoStack
+SELFCHECK_RC=1
+SELFTEST ⑪ M-2 attacker 精确选择 selftest rc=1
+SELFTEST_RED RED: m2_attackrole_selftest_rc=1, m2_attackrole_selftest_not_green
+
+================================================================================
+# 还原后（对称绿）
+$ powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 -SelfCheckNoStack
+SELFCHECK_RC=0  → 见 selfcheck-nostack.txt（SELFTEST_RED GREEN）
+$ ./src/BotSrv/bin/Release/BotSrv.exe --selftest-attackrole
+ROLE_RC=0        → 见 attackrole-selftest.txt（ATTACKROLE SELFTEST GREEN）
