@@ -31,6 +31,7 @@ mod hutil;
 mod ids;
 mod items;
 mod load;
+mod magicwire;
 mod mapwire;
 mod notice;
 mod record;
@@ -1894,6 +1895,91 @@ fn handle_hit_cmd(
     send_good_tick(online, gates, chr_name);
 }
 
+/// **`openmir2-m3-attack-magic-wiring`（第二片）**：`CM_SPELL(3017)` 派发
+/// （oracle `WorldServer.cs:783-790` → `PlayObject.Message.cs:1339-1400`）。
+///
+/// 本片实现到 `ClientSpellXY` 的**守卫**与成功后 `+GD` ack；技能效果体（限速 /`switch(MagIdx)`/
+/// `DoSpell`/`RM_SPELL`）未接，登记见 `magicwire` 模块头。拒绝支 oracle 在 `delayTime == 0`
+/// 时 `SendRefMsg(RM_MOVEFAIL, …)`（编码器未接）⇒ 只记日志、不静默。
+#[allow(clippy::too_many_arguments)]
+fn handle_spell_cmd(
+    recog: i32,
+    tag: u16,
+    param: u16,
+    series: u16,
+    chr_name: &str,
+    socket: i32,
+    online: &OnlineRegistry,
+    world: &mir2_world::World,
+    sessions: &std::collections::HashMap<String, SessionGround>,
+    displays: &mut downlink::DisplayTable,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+) {
+    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
+        glog!(
+            "WRN",
+            "魔法命令：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃 CM_SPELL"
+        );
+        return;
+    };
+    let actor_id = entry.actor_id;
+    let Some(e) = world.entities.get(actor_id) else {
+        glog!(
+            "WRN",
+            "魔法命令：actor_id={actor_id} 不在世界 ⇒ 丢弃 CM_SPELL"
+        );
+        return;
+    };
+    let (cur_x, cur_y) = (e.x, e.y);
+    let is_dead = e.death;
+    let req = magicwire::parse_spell(recog, tag, param, series);
+    let has_magic = sessions
+        .get(chr_name)
+        .is_some_and(|sg| magicwire::find_magic(&sg.magics, req.magic_id).is_some());
+    // `IsCanSpell`（`PlayObject.cs:960` 初值 true；`LockSpellAction` 状态面未移植 ⇒ 恒 true，登记）。
+    if let Some(reject) = magicwire::spell_reject(true, is_dead, has_magic) {
+        glog!(
+            "DBG",
+            "CM_SPELL：ChrName={chr_name} magic_id={} 被守卫拒绝 {reject:?}（oracle 回 RM_MOVEFAIL，编码器未接）",
+            req.magic_id
+        );
+        return;
+    }
+    // `switch(UserMagic.MagIdx)` 的 `default` 支首句 `Dir = M2Share.GetNextDirection(CurrX, CurrY, nTargetX, nTargetY)`
+    // （`PlayObject.Attack.cs:1256`）；效果体其余部分未接（登记）。
+    let dir = movewire::next_direction(cur_x, cur_y, req.target_x, req.target_y);
+    set_display_dir(displays, actor_id, dir);
+    // `ClientSpellXY` 全分支 `result = true` ⇒ 调用方 `ActionTick = GetTickCount(); SendSocket(GetGoodTick)`。
+    send_good_tick(online, gates, chr_name);
+}
+
+/// **`openmir2-m3-attack-magic-wiring`（第二片）**：`CM_MAGICKEYCHANGE(1008)` 派发
+/// （oracle `WorldServer.cs:857-859` → `PlayObject.Message.cs:871-873` → `PlayObject.Operate.cs:774-786`）。
+///
+/// 只改 `MagicList` 里命中项 `Key`，**无回帧**（oracle 不 `SendSocket`）。
+fn handle_magic_key_cmd(
+    recog: i32,
+    param: u16,
+    chr_name: &str,
+    socket: i32,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+) {
+    let (skill_idx, key) = magicwire::parse_magic_key(recog, param);
+    let Some(sg) = sessions.get_mut(chr_name) else {
+        glog!(
+            "WRN",
+            "CM_MAGICKEYCHANGE：ChrName={chr_name} socket={socket} 无会话态 ⇒ 丢弃"
+        );
+        return;
+    };
+    if !magicwire::change_magic_key(&mut sg.magics, skill_idx, key) {
+        glog!(
+            "DBG",
+            "CM_MAGICKEYCHANGE：ChrName={chr_name} magic_id={skill_idx} 不在 MagicList ⇒ 不改键（oracle 同：无命中即无动作）"
+        );
+    }
+}
+
 /// oracle `SendRefMsg` 的收件人集合 = ±`SendRefMsgRange` 格内 `Race==Play && !Ghost`
 /// （`BaseObject.Message.cs:383-440`，本仓库已有同构实现 `chat::hear_targets`）。
 ///
@@ -2525,6 +2611,10 @@ struct SessionGround {
     hunger_status: i32,
     /// `PlayObject.QueryBagItemsTick`（`PlayObject.Message.cs:786` 的 30s 限频）：`None` = 未查过（照 oracle 首次即过）。
     query_bag_items_tick: Option<i64>,
+    /// `PlayObject.MagicList`（角色记录 `CharacterData.magic` 的 `MagicRcd`，保位）：
+    /// `CM_MAGICKEYCHANGE` 改 `Key`、`CM_SPELL` 的 `GetMagicInfo(int)` 查表都用它
+    /// （`openmir2-m3-attack-magic-wiring` 第二片）。
+    magics: Vec<Option<record::MagicRcd>>,
 }
 
 /// 一次 `RecalcAbilitys()` 的静态输入（不含随动作变化的 `UseItems`/`ItemList`/`WAbil`）。
@@ -2774,6 +2864,31 @@ fn sim_loop(
                             &mut world,
                             &mut displays,
                             &mut ground_sessions,
+                            &gates,
+                        );
+                    } else if magicwire::is_magic_key_ident(cmd.ident) {
+                        // `openmir2-m3-attack-magic-wiring`（第二片）：`CM_MAGICKEYCHANGE(1008)`
+                        // （oracle `WorldServer.cs:857-859` → `PlayObject.Operate.cs:774`）。
+                        handle_magic_key_cmd(
+                            cmd.recog,
+                            cmd.param,
+                            &chr_name,
+                            socket,
+                            &mut ground_sessions,
+                        );
+                    } else if magicwire::is_spell_ident(cmd.ident) {
+                        // 同片：`CM_SPELL(3017)` 派发（oracle `WorldServer.cs:783-790`）。
+                        handle_spell_cmd(
+                            cmd.recog,
+                            cmd.tag,
+                            cmd.param,
+                            cmd.series,
+                            &chr_name,
+                            socket,
+                            &online,
+                            &world,
+                            &ground_sessions,
+                            &mut displays,
                             &gates,
                         );
                     }
@@ -3278,6 +3393,7 @@ fn sim_loop(
                                                             user_unlock_durg: false,
                                                             hunger_status: d.hunger_status,
                                                             query_bag_items_tick: None,
+                                                            magics: d.magic.clone().unwrap_or_default(),
                                                         },
                                                     );
                                                     // 存档用：留下原始记录 + 进图逻辑名（断线/`MakeGhost` 时用它合成）。
@@ -4362,6 +4478,7 @@ mod tests {
             user_unlock_durg: false,
             hunger_status: 0,
             query_bag_items_tick: None,
+            magics: Vec::new(),
         }
     }
 
@@ -4427,6 +4544,7 @@ mod tests {
             user_unlock_durg: false,
             hunger_status: 55,
             query_bag_items_tick: None,
+            magics: Vec::new(),
         };
         let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
         world.open_session("hero");
@@ -4871,6 +4989,7 @@ mod tests {
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
+                magics: Vec::new(),
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -5034,6 +5153,7 @@ mod tests {
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
+                magics: Vec::new(),
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -5154,6 +5274,7 @@ mod tests {
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
+                magics: Vec::new(),
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -5273,6 +5394,7 @@ mod tests {
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
+                magics: Vec::new(),
             },
         );
 
@@ -5975,6 +6097,7 @@ mod tests {
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
+                magics: Vec::new(),
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -6113,6 +6236,7 @@ mod tests {
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
+                magics: Vec::new(),
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -6349,6 +6473,7 @@ mod tests {
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
+                magics: Vec::new(),
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -6585,6 +6710,138 @@ mod tests {
             &gates,
         );
         assert!(rx0.try_recv().is_err(), "Death ⇒ 不得发帧/回 ack");
+    }
+
+    /// **`openmir2-m3-attack-magic-wiring`（第二片）**：`CM_SPELL`/`CM_MAGICKEYCHANGE` 派发——
+    /// 守卫（未知魔法号 / `Death` ⇒ 不回 ack）、成功后 `+GD` + `Dir = GetNextDirection`，
+    /// 以及 `ClientChangeMagicKey` 的魔法键切换（无回帧）。
+    ///
+    /// 红检：① `magicwire::change_magic_key` 改比 `magic_key` 而不是 `mag_idx` ⇒ 段 ④ 必红；
+    /// ② `magicwire::spell_reject` 不看 `has_magic`（未知魔法号也过）⇒ 段 ① 必红。
+    #[test]
+    fn spell_cmd_dispatches_guard_ack_and_magic_key_change() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(64, 64);
+        let caster = {
+            let mut e = mir2_world::Entity::new(0, "caster".to_string(), 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        world.tick();
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            caster,
+            downlink::ActorDisplay::new(4, 0, 111, 0, 0, 255, b"caster".to_vec()),
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "uc".into(),
+                chr_name: "caster".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 911,
+                actor_id: caster,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(caster);
+        sg.magics = vec![Some(record::MagicRcd {
+            mag_idx: 1,
+            level: 1,
+            magic_key: u16::from(b'm'),
+            tran_point: 0,
+        })];
+        sessions.insert("caster".into(), sg);
+        const FIREBALL: u16 = 1;
+
+        // ① 未知魔法号（守卫 NoMagic）⇒ 不回 ack。
+        handle_spell_cmd(
+            game_svr::feature::make_long(12, 10),
+            99,
+            0,
+            0,
+            "caster",
+            911,
+            &online,
+            &world,
+            &sessions,
+            &mut displays,
+            &gates,
+        );
+        assert!(rx0.try_recv().is_err(), "未知魔法号 ⇒ 不回 ack / 无帧");
+
+        // ② 有该魔法 + 目标在右 ⇒ 回 `+GD`，且展示方向朝向目标（`GetNextDirection`）。
+        handle_spell_cmd(
+            game_svr::feature::make_long(12, 10),
+            FIREBALL,
+            0,
+            0,
+            "caster",
+            911,
+            &online,
+            &world,
+            &sessions,
+            &mut displays,
+            &gates,
+        );
+        match rx0.try_recv() {
+            Ok(SimToGate::SendRaw { socket, payload }) => {
+                assert_eq!(socket, 911, "+GD 只给发起者自己");
+                assert!(payload.starts_with(b"+GD/"), "成功支回 +GD");
+            }
+            other => panic!("CM_SPELL 成功支应回 +GD：{other:?}"),
+        }
+        assert!(
+            rx0.try_recv().is_err(),
+            "本片不发任何魔法帧（效果体未接，登记）"
+        );
+        assert_eq!(
+            displays.get(caster).unwrap().dir,
+            game_svr::movewire::DIR_RIGHT,
+            "default 支 `Dir = GetNextDirection(10,10 → 12,10)` = 右"
+        );
+
+        // ③ `Death` 守卫 ⇒ 不回 ack。
+        world.entities.get_mut(caster).unwrap().death = true;
+        handle_spell_cmd(
+            game_svr::feature::make_long(12, 10),
+            FIREBALL,
+            0,
+            0,
+            "caster",
+            911,
+            &online,
+            &world,
+            &sessions,
+            &mut displays,
+            &gates,
+        );
+        assert!(rx0.try_recv().is_err(), "Death ⇒ 不回 ack");
+        world.entities.get_mut(caster).unwrap().death = false;
+
+        // ④ `CM_MAGICKEYCHANGE`：命中 `mag_idx == Recog` ⇒ 改 `Key`；无回帧。
+        handle_magic_key_cmd(1, u16::from(b'f'), "caster", 911, &mut sessions);
+        assert_eq!(
+            sessions["caster"].magics[0].as_ref().unwrap().magic_key,
+            u16::from(b'f'),
+            "ClientChangeMagicKey 置 Key"
+        );
+        assert!(
+            rx0.try_recv().is_err(),
+            "改魔法键不发帧（oracle 无 SendSocket）"
+        );
+        // 未命中 ⇒ 不改、也不红。
+        handle_magic_key_cmd(42, u16::from(b'z'), "caster", 911, &mut sessions);
+        assert_eq!(
+            sessions["caster"].magics[0].as_ref().unwrap().magic_key,
+            u16::from(b'f'),
+            "未命中不改已有键"
+        );
     }
 
     /// **第一片（战斗下行）**：手造一个 tick 记录 ⇒ `drain_combat_downlink` 给受击玩家自己发
