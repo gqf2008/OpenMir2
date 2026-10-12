@@ -1,0 +1,13 @@
+=== F-D minimal repro 2026-10-12T12:45:43+08:00 ===
+schema: sql/mir2_db.sql:6081-6084 characters_ablity.Hp/MaxHP = smallint(11) signed (max 32767)
+
+--- pin Hp=100000 against REAL char m3a1244300 ---
+--------------
+UPDATE mir2_db.characters_ablity a JOIN mir2_db.characters c ON a.PlayerId=c.Id SET a.Level=1, a.Hp=100000, a.MaxHP=100000, a.Mp=15, a.MAxMP=15, c.IncHealth=0, c.IncSpell=0 WHERE c.ChrName='m3a1244300'
+--------------
+
+ERROR 1264 (22003) at line 1: Out of range value for column 'Hp' at row 1
+rc100000=1
+
+--- pin Hp=30000 against REAL char m3a1244300 ---
+rc30000=0

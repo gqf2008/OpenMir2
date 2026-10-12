@@ -1,0 +1,9 @@
+=== m3cs tick21 起栈前端口实拍（2026-10-12 12:43）===
+命令: Get-NetTCPConnection -State Listen | Where LocalPort -in 3306,5000,5100,5500,5600,5700,6000,7000,7100,7200
+
+LocalAddress LocalPort OwningProcess
+------------ --------- -------------
+127.0.0.1         3306         29372
+
+=> 5000/5100/5500/5600/5700/6000/7000/7100/7200 全 FREE；仅共享 MySQL 3306 LISTEN（非本线启动）。
+=> 本 tick 窗口归 m3cs（T30_MERGED 路径）。

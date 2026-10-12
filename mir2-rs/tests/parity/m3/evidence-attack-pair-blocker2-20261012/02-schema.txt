@@ -1,0 +1,22 @@
+=== 冻结 schema：characters_ablity.Hp / MaxHP 是 smallint(11) 有符号（上限 32767）===
+来源: sql/mir2_db.sql:6073-6095
+
+CREATE TABLE `characters_ablity`  (
+  `PlayerId` bigint(20) NOT NULL COMMENT '角色ID',
+  `Level` tinyint(1) UNSIGNED NOT NULL COMMENT '当前等级',
+  ...
+  `Hp` smallint(11) NOT NULL COMMENT '当前HP',
+  `Mp` smallint(11) NOT NULL COMMENT '当前MP',
+  `MaxHP` smallint(11) NOT NULL COMMENT '最大HP',
+  `MAxMP` smallint(11) NOT NULL COMMENT '最大MP',
+  ...
+) ENGINE = InnoDB ...
+
+--- live DB（SHOW COLUMNS）---
+命令: mysql -uroot -h127.0.0.1 -P3306 mir2_db -e "SHOW COLUMNS FROM characters_ablity LIKE 'Hp'; SHOW COLUMNS FROM characters_ablity LIKE 'MaxHP'; SELECT @@sql_mode;"
+Field   Type    Null    Key     Default Extra
+Hp      smallint(11)     NO              NULL
+Field   Type    Null    Key     Default Extra
+MaxHP   smallint(11)     NO              NULL
+@@sql_mode
+STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION

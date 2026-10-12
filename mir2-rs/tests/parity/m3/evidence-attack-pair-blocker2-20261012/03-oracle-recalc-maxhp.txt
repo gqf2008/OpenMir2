@@ -1,0 +1,21 @@
+=== oracle：进世界后 MaxHP 由等级公式重算，DB 里的 Hp/MaxHP 被覆盖 ===
+来源: src/M2Server/Player/PlayObject.cs
+
+--- :5254-5257 ---
+        public void RecalcLevelAbilitys()
+        {
+            int n;
+            byte nLevel = Abil.Level;
+--- :5294-5296 (Warrior) ---
+                case PlayerJob.Warrior:
+                    Abil.MaxHP = (ushort)HUtil32._MIN(ushort.MaxValue, 14 + HUtil32.Round(((nLevel / (double)SystemShare.Config.nLevelValueOfWarrHP) + SystemShare.Config.nLevelValueOfWarrHPRate + (nLevel / (double)20)) * nLevel));
+                    Abil.MaxMP = (ushort)HUtil32._MIN(ushort.MaxValue, 11 + HUtil32.Round(nLevel * 3.5));
+--- :5309-5312 (clamp) ---
+            if (Abil.HP > Abil.MaxHP)
+            {
+                Abil.HP = Abil.MaxHP;
+            }
+
+=> MaxHP 只由 Abil.Level + 配置公式决定，与 characters_ablity.MaxHP 无关；HP 再被 clamp 到该 MaxHP。
+=> 经验事实（本 tick 真机 C# 半，见 06/07）：pin 写 characters_ablity.Hp=MaxHP=30000 后，进世界受击方
+   SM_STRUCK 的 maxhp=19（level 1 战士），即 pin 的 HP 抬高**不生效**。

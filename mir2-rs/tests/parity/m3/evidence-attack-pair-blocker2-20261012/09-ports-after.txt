@@ -1,0 +1,24 @@
+=== m3cs tick21 收工：停栈 + 十端口实拍（2026-10-12 12:48）===
+命令: powershell -File E:/tmp/m3cs21-evidence/csharp-stack/start-csharp-hook.ps1 -Stop
+STOPPED System.Object[] pid=System.Object[]
+  3306  LISTEN
+  6000  DOWN
+  5100  DOWN
+  5700  DOWN
+  5500  DOWN
+  5600  DOWN
+  5000  DOWN
+  7000  DOWN
+  7100  DOWN
+  7200  DOWN
+
+--- 十端口实拍 ---
+命令: Get-NetTCPConnection -State Listen | Where LocalPort -in 3306,5000,5100,5500,5600,5700,6000,7000,7100,7200
+
+LocalAddress LocalPort OwningProcess
+------------ --------- -------------
+127.0.0.1         3306         29372
+
+=> 5000/5100/5500/5600/5700/6000/7000/7100/7200 全 DOWN；仅共享 MySQL 3306 LISTEN。
+=> 无 GameSrv/DBSrv/LoginSrv/*Gate/BotSrv 残留进程（Get-Process 过滤为空）。
+=> 窗口已释放。
