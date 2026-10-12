@@ -156,6 +156,18 @@ if ($PinStartPose -and -not $FixedNewChr) {
 if ($AttackPinPair -and -not $PinStartPose) {
   throw '-AttackPinPair 必须与 -PinStartPose 同用（攻击变体仍需预热建角 + SQL pin 两相）'
 }
+# F-I（m3cs tick22 真机 finding，2026-10-12 13:45）：攻击 pin 落点必须**无怪干扰**——
+# 旧缺省 (289,618) 落在 map-0 的 `256 572 r=50` 刷怪圈边缘（净距 6.6） ⇒ 同种子连跑两次
+# hit 数 2 vs 7。真机启动即 fail-closed（不等跑出随机红）；无栈自检 ⑯ 另用旧缺省断言必红。
+if ($AttackPinPair) {
+  $pinClear = Test-M3AttackPinNoMonster -X $PinCX -Y $PinCY -SpawnFixture (Join-Path $Here 'fixtures\mongen-map0.tsv')
+  if (-not $pinClear.ok) {
+    Write-Output ("RED: -AttackPinPair 落点 ({0},{1}) 靠近刷怪圈（净距 {2:F1} < 50，最近圈 {3}）——见 F-I；请改到无怪空地（缺省 {4},{5}）" -f `
+      $PinCX, $PinCY, $pinClear.clearance, $pinClear.nearest, $script:M3AttackPinCX, $script:M3AttackPinCY)
+    throw ('F-I: attack pin 靠近刷怪圈 clearance={0:F1}' -f $pinClear.clearance)
+  }
+  Write-Output ("PIN_NO_MONSTER OK pin=({0},{1}) clearance={2:F1} nearest={3}" -f $PinCX, $PinCY, $pinClear.clearance, $pinClear.nearest)
+}
 if ($AttackSequence -and $Bots -lt 2) {
   Write-Output ('WARN: -AttackSequence 建议 -Bots 2（attacker+victim）；当前 Bots={0} ⇒ 无目标，struck 恒 0，判据必 RED' -f $Bots)
 }

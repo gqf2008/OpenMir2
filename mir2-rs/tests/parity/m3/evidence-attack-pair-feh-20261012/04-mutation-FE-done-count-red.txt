@@ -1,0 +1,7 @@
+=== F-E 改坏必红：Get-M3SeqExpectedDone attack 预期 1 -> $Bots ===
+命令: powershell -ExecutionPolicy Bypass -File tools/botload/run_bots.ps1 -SelfCheckNoStack
+rc=1（还原后 rc=0；source-mutation 已 git checkout 还原）
+
+=== mutation F-E-2 selfcheck ===
+SELFTEST_RED RED: attack_expected_not_1, attack_expected_not_1_multibot, attack_1of2_not_complete
+RC=1

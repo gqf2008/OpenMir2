@@ -1,0 +1,26 @@
+# 证据包自包含性自检（照 F-1 / 8abd8a0d 口径；卡 openmir2-m3-attack-pair-fixture，本片 = F-I + F-J 自检缺口）
+# 目标：证据目录里每一个被声明的文件都必须入库、不被 .gitignore 吞，且干净检出可复现。
+
+# 命令 1：对每个被声明的文件跑 git check-ignore -v（期望：无输出 / rc=1 = 无一被忽略）
+$ git check-ignore -v mir2-rs/tests/parity/m3/evidence-attack-pair-fij-20261012/01-ports-before.txt mir2-rs/tests/parity/m3/evidence-attack-pair-fij-20261012/02-csharp-stack-start.txt mir2-rs/tests/parity/m3/evidence-attack-pair-fij-20261012/03-csharp-run1-20-raw.txt mir2-rs/tests/parity/m3/evidence-attack-pair-fij-20261012/04-csharp-run2-20-raw.txt mir2-rs/tests/parity/m3/evidence-attack-pair-fij-20261012/05-csharp-stack-stop.txt mir2-rs/tests/parity/m3/evidence-attack-pair-fij-20261012/06-ports-after.txt mir2-rs/tests/parity/m3/evidence-attack-pair-fij-20261012/07-selfcheck-fij-green.txt mir2-rs/tests/parity/m3/evidence-attack-pair-fij-20261012/08-mutation-fj-align-rc-red.txt mir2-rs/tests/parity/m3/evidence-attack-pair-fij-20261012/09-mutation-fi-pin-near-monster-red.txt mir2-rs/tests/parity/m3/evidence-attack-pair-fij-20261012/10-selftest-gate-47of47.txt mir2-rs/tests/parity/m3/evidence-attack-pair-fij-20261012/11-run1-attack_seq.jsonl mir2-rs/tests/parity/m3/evidence-attack-pair-fij-20261012/12-run2-attack_seq.jsonl mir2-rs/tests/parity/m3/evidence-attack-pair-fij-20261012/13-run1-attack_raw.jsonl mir2-rs/tests/parity/m3/evidence-attack-pair-fij-20261012/14-run2-attack_raw.jsonl mir2-rs/tests/parity/m3/evidence-attack-pair-fij-20261012/15-run1-baseline.json mir2-rs/tests/parity/m3/evidence-attack-pair-fij-20261012/16-run2-baseline.json mir2-rs/tests/parity/m3/evidence-attack-pair-fij-20261012/17-run1-vs-run2-seq-diff.txt mir2-rs/tests/parity/m3/evidence-attack-pair-fij-20261012/18-no-monster-struck-src-analysis.txt mir2-rs/tests/parity/m3/evidence-attack-pair-fij-20261012/19-gates-fmt.txt mir2-rs/tests/parity/m3/evidence-attack-pair-fij-20261012/20-gates-clippy.txt mir2-rs/tests/parity/m3/evidence-attack-pair-fij-20261012/21-gates-test.txt mir2-rs/tests/parity/m3/evidence-attack-pair-fij-20261012/22-gates-msgcodegen.txt mir2-rs/tests/parity/m3/evidence-attack-pair-fij-20261012/README.md mir2-rs/tests/parity/m3/evidence-attack-pair-fij-20261012/selfcheck-selfcontained.txt
+  check-ignore 输出（去 rc 行后）：
+  check-ignore 命中行数 = 0
+
+# 命令 2：tracked 件数 == 盘上件数（内容件 22 + README + selfcheck + SHA256SUMS = 25）
+$ git ls-files --cached mir2-rs/tests/parity/m3/evidence-attack-pair-fij-20261012/ | wc -l
+tracked_count = 25
+$ find mir2-rs/tests/parity/m3/evidence-attack-pair-fij-20261012 -type f | wc -l
+disk_count    = 25
+
+# 命令 3：目录内不得有 .gitignore 会吞的 *.log（本片一律用 .txt）
+log_count     = 0
+
+VERDICT: PASS（tracked == disk == 25；无被忽略文件；无 .log）
+
+# 命令 4：复核器（默认 = 仓库字节口径：Git blob 内容，text 文件 LF 归一；--check-extra = 目录里未列入清单的文件也判红）
+$ python -I tools/evidence-hash/verify_sha256sums.py mir2-rs/tests/parity/m3/evidence-attack-pair-fij-20261012 --check-extra
+GREEN mir2-rs/tests/parity/m3/evidence-attack-pair-fij-20261012\SHA256SUMS.txt  [repo 口径]  OK 24/24
+rc=0
+
+# 最终目录 = 22 个编号内容件（01–22）+ README.md + selfcheck-selfcontained.txt + SHA256SUMS.txt = 25 件；
+# SHA256SUMS.txt 按仓库字节口径覆盖 24 件（25 - 清单自身）。

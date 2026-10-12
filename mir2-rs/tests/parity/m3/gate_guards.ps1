@@ -447,11 +447,52 @@ function Test-M3AttackVictimHpRange {
   param([int]$VictimHp)
   return ($VictimHp -ge 1 -and $VictimHp -le 32767)
 }
+# F-I（m3cs tick22 真机 finding，2026-10-12 13:45）：攻击 pin 的落点必须**无怪干扰**。
+# 旧缺省 (289,618) 落在 `Envir/MonGen.txt` 的 `0 256 572 ... 50`（r=50 刷怪圈）边缘，**最近净距仅 6.6 格**
+# （`hypot(289-256, 618-572)=56.6 - 50 = 6.6`）⇒ 同种子连跑两次 hit 数 2 vs 7（且 attacker/victim 被怪持续打击），
+# 「非平凡门」随机红。
+# 新缺省 (429,320) = 比奇城东门外空地，`MonGen.txt` 中 map 0 全部刷怪圈对它的**最近净距 = 99.2 格**
+# （最近圈 `0 333 268 20 10`：`hypot(429-333, 320-268)=109.2 - 10 = 99.2`）⇒ 攻击序列 20–120 步（≈10–60s）内无怪可及。
+# 唯一来源：`run_pair.ps1` 与 `run_attack_pair.ps1` 都从这里取缺省（见 `-AttackPinCX/-AttackPinCY` 解析）。
+$script:M3AttackPinCX = 429
+$script:M3AttackPinCY = 320
+
+# F-I 无怪判据（唯一口径，真机启动与无栈自检共用）：把攻击 pin 落点与**冻结内容**
+# `Envir/MonGen.txt` 的 map-0 刷怪圈做几何判定——最近净距 = min over spawns
+# (hypot(px-sx, py-sy) - range) 必须 >= 阈值。只读 `fixtures/mongen-map0.tsv`
+# （内容冻结的只读抽取，见文件头 provenance），不连真机、不起栈。
+# 背景：旧缺省 (289,618) 净距仅 6.6 ⇒ 同种子连跑两次 hit 数 2 vs 7（怪物 AI 打击 attacker/victim）。
+function Test-M3AttackPinNoMonster {
+  param(
+    [Parameter(Mandatory)][int]$X,
+    [Parameter(Mandatory)][int]$Y,
+    [Parameter(Mandatory)][string]$SpawnFixture,
+    [double]$MinClearance = 50.0
+  )
+  if (-not (Test-Path $SpawnFixture)) {
+    return [pscustomobject]@{ ok = $false; clearance = -1.0; nearest = ''; reason = ('缺刷怪点清单: ' + $SpawnFixture) }
+  }
+  $best = [double]::PositiveInfinity
+  $nearest = ''
+  foreach ($line in (Get-Content -Path $SpawnFixture)) {
+    if ([string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith('#')) { continue }
+    $parts = $line -split "`t"
+    if ($parts.Count -lt 3) { continue }
+    $sx = [double]$parts[0]; $sy = [double]$parts[1]; $r = [double]$parts[2]
+    $d = [Math]::Sqrt(($X - $sx) * ($X - $sx) + ($Y - $sy) * ($Y - $sy)) - $r
+    if ($d -lt $best) { $best = $d; $nearest = ('{0},{1} r={2}' -f $parts[0], $parts[1], $parts[2]) }
+  }
+  if ([double]::IsPositiveInfinity($best)) {
+    return [pscustomobject]@{ ok = $false; clearance = -1.0; nearest = ''; reason = '刷怪点清单为空' }
+  }
+  return [pscustomobject]@{ ok = ($best -ge $MinClearance); clearance = $best; nearest = $nearest; reason = '' }
+}
+
 function Format-M3AttackPose {
   param(
     [string]$MapName = '0',
-    [int]$AX = 289, [int]$AY = 618, [int]$Dir = 2,
-    [int]$VX = 290, [int]$VY = 618,
+    [int]$AX = $script:M3AttackPinCX, [int]$AY = $script:M3AttackPinCY, [int]$Dir = 2,
+    [int]$VX = ($script:M3AttackPinCX + 1), [int]$VY = $script:M3AttackPinCY,
     [int]$Level = 1, [int]$VictimHp = 30000
   )
   return ("pair map={0} attacker={1},{2},dir={3} victim={4},{5} level={6} vhp={7}" -f `

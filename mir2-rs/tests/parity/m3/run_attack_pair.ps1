@@ -26,6 +26,10 @@
 
   目标接法：`-AttackPinPair` 把 attacker（账号序号 0）钉在 (PinCX,PinCY) 面向 `AttackPinDir`，
   victim（序号 1）钉在 (PinCX+1,PinCY)；victim HP/MaxHP 抬高（防 100+ 次内死亡）。
+  **F-I（m3cs tick22，2026-10-12 13:45）**：pin 落点缺省 = 比奇城东门外空地 `(429,320)`——
+  对 `Envir/MonGen.txt` 里 map-0 全部刷怪圈的最近净距 **99.5 格**（旧缺省 `(289,618)` 仅 6.6 ⇒ 同种子
+  连跑两次 hit 数 2 vs 7）。落点无怪由 `gate_guards.ps1::Test-M3AttackPinNoMonster`（读只读抽取
+  `fixtures/mongen-map0.tsv`）在 `run_pair` 启动时 fail-closed 守卫，`-SelfCheckNoStack` ⑯ 另做两向红检。
   `-AttackSequence` 让 attacker 固定发 N 次 `CM_HIT`（`Recog=MakeLong(自己坐标)`、`Tag=dir`）。
 
   判红口径（逐步；任一不满足即退出码 != 0）：
@@ -67,6 +71,8 @@ param(
   [int]$AttackStepMs = 500,
   [int]$AttackStartDelayMs = 3000,
   [int]$AttackPinDir = 2,
+  [int]$AttackPinCX = -1,          # F-I：attacker 落点 X（<0 ⇒ 用 gate_guards 的 $script:M3AttackPinCX = 429，比奇城东无怪空地）
+  [int]$AttackPinCY = -1,          # F-I：attacker 落点 Y（<0 ⇒ 用 $script:M3AttackPinCY = 320）
   [int]$AttackVictimHp = 30000,
   [string]$PeerSession = '',
   [string]$CsharpSession = '',
@@ -98,6 +104,12 @@ $Sessions = Join-Path $Here 'sessions'
 $MysqlExe = 'D:\mysql\mariadb-10.11.19-winx64\bin\mysql.exe'
 # 攻击序列/起点口径与 peer 护栏的唯一实现（与 gate_guards 共用，自 dot-source）。
 . (Join-Path $Here 'gate_guards.ps1')
+
+# F-I（m3cs tick22 真机 finding，2026-10-12 13:45）：攻击 pin 落点必须无怪干扰。默认取 gate_guards 的
+# 唯一来源常量（比奇城东门外空地，对 map-0 全部刷怪圈的最近净距 99.5）；调用方可用 -AttackPinCX/-AttackPinCY 覆盖。
+if ($AttackPinCX -lt 0) { $AttackPinCX = $script:M3AttackPinCX }
+if ($AttackPinCY -lt 0) { $AttackPinCY = $script:M3AttackPinCY }
+$AttackPinFixture = Join-Path $Here 'fixtures\mongen-map0.tsv'
 
 function Get-EntryHolders {
   $list = @()
@@ -249,7 +261,7 @@ if ($SelfCheckNoStack) {
   if ($LASTEXITCODE -ne 0) { $failures += 'emit_on_rc=non-zero' }
   else {
     # M-1 修复后「未配 -AttackPinPair」会真打一行 WARN（stdout，JSON 之前）⇒ 解析前先滤掉 WARN 行。
-    $emitOnText = ((@($emitOnRaw) | Where-Object { $_ -notmatch '^\s*WARN:' }) -join "`n").Trim()
+    $emitOnText = ((@($emitOnRaw) | Where-Object { $_ -notmatch '^\s*(WARN:|PIN_NO_MONSTER)' }) -join "`n").Trim()
     $emitOn = ($emitOnText | ConvertFrom-Json)
     $has = (@($emitOn.bot_args) -contains '-DisableAutoPlay')
     if (-not $has) { $failures += 'attack_sequence_does_not_pass_disable_autoplay' }
@@ -267,17 +279,18 @@ if ($SelfCheckNoStack) {
   }
 
   # ⑥ 攻击变体两相 pin：-AttackPinPair 的 attack_pose + 每 bot SQL（attacker/victim 相邻）。
-  $emitPairRaw = & powershell -ExecutionPolicy Bypass -File $RunPair -EmitOpsArgs -FixedNewChr -PinStartPose -AttackPinPair -AttackSequence -Bots 2
+  #    F-I：pin 落点取无怪空地（gate_guards $script:M3AttackPinCX/CY）；本项断言 emit 出的 pose 与该落点逐字节相同。
+  $emitPairRaw = & powershell -ExecutionPolicy Bypass -File $RunPair -EmitOpsArgs -FixedNewChr -PinStartPose -AttackPinPair -AttackSequence -Bots 2 -PinCX $AttackPinCX -PinCY $AttackPinCY
   if ($LASTEXITCODE -ne 0) { $failures += 'emit_pair_rc=non-zero' }
   else {
-    $pair = (($emitPairRaw | Out-String).Trim() | ConvertFrom-Json)
-    $wantPose = 'pair map=0 attacker=289,618,dir=2 victim=290,618 level=1 vhp=30000'
+    $pair = (((@($emitPairRaw) | Where-Object { $_ -notmatch '^\s*(WARN:|PIN_NO_MONSTER)' }) -join "`n").Trim() | ConvertFrom-Json)
+    $wantPose = ('pair map=0 attacker={0},{1},dir=2 victim={2},{1} level=1 vhp=30000' -f $AttackPinCX, $AttackPinCY, ($AttackPinCX + 1))
     if ($pair.attack_pose -ne $wantPose) { $failures += ('attack_pose=' + $pair.attack_pose) }
     $all = @($pair.attack_pin_sql_all)
     if ($all.Count -lt 4) { $failures += ('attack_pin_sql_all_count=' + $all.Count) }
     $joined = ($all -join ' || ')
     if ($joined -notmatch 'ChrName=''m3[^'']*0''') { $failures += 'attack_pin_missing_attacker_row' }
-    if ($joined -notmatch 'CX=290') { $failures += 'attack_pin_missing_victim_cell_290' }
+    if ($joined -notmatch ('CX=' + ($AttackPinCX + 1) + '[^0-9]')) { $failures += 'attack_pin_missing_victim_cell' }
     if ($joined -notmatch 'a\.Hp=30000, a\.MaxHP=30000') { $failures += 'attack_pin_missing_victim_hp' }
     # F-D（m3cs tick21）：探针行真执行才能咬住越界值；旧缺省 100000 > smallint(32767) ⇒ pin 真机必 ERROR 1264。
     if ($joined -match 'a\.Hp=100000') { $failures += 'attack_pin_victim_hp_out_of_range' }
@@ -310,6 +323,18 @@ if ($SelfCheckNoStack) {
   }
   if (Test-M3AttackVictimHpRange -VictimHp 100000) { $failures += 'attack_victim_hp_range_guard_not_red' }
   Write-Output ("SELFTEST ⑥c -AttackVictimHp 范围护栏：缺省 {0} 合规（≤32767）；100000 必判红" -f $AttackVictimHp)
+
+  # ⑯ F-I（m3cs tick22，2026-10-12 13:45）：攻击 pin 落点必须**无怪干扰**——用冻结件
+  #    `Envir/MonGen.txt` 的 map-0 刷怪点清单（fixtures/mongen-map0.tsv）做几何判定：
+  #    生产落点（gate_guards $script:M3AttackPinCX/CY）必须净距 >= 50；
+  #    旧缺省 (289,618) 净距 6.6 ⇒ 必判红（这就是本项的「改坏必红」）。
+  $pinNoMon = Test-M3AttackPinNoMonster -X $script:M3AttackPinCX -Y $script:M3AttackPinCY -SpawnFixture $AttackPinFixture
+  if (-not $pinNoMon.ok) { $failures += ('attack_pin_near_monster=' + ('{0:F1}' -f $pinNoMon.clearance)) }
+  $oldPin = Test-M3AttackPinNoMonster -X 289 -Y 618 -SpawnFixture $AttackPinFixture
+  if ($oldPin.ok) { $failures += 'attack_pin_no_monster_guard_not_red' }
+  if ($oldPin.clearance -gt 10) { $failures += ('old_pin_clearance_unexpected=' + ('{0:F1}' -f $oldPin.clearance)) }
+  Write-Output ("SELFTEST ⑯ 攻击 pin 无怪口径（F-I）：生产 ({0},{1}) 净距={2:F1}（最近圈 {3}，阈值≥50）；旧缺省 (289,618) 净距={4:F1} 必判红" -f `
+    $script:M3AttackPinCX, $script:M3AttackPinCY, $pinNoMon.clearance, $pinNoMon.nearest, $oldPin.clearance)
 
   # ⑭ F-E（m3cs tick21）：驱动收尾等待——run_bots.ps1 的攻击序列「等 M3ATTSEQ done」离线自检
   #    （合成日志计 attack done 2/1/0 + bag done 2/0；改坏计数正则 ⇒ RED）。真机 120/120 由 m3cs 下一轮实跑覆盖。
@@ -386,23 +411,35 @@ if ($SelfCheckNoStack) {
   Write-Output ("SELFTEST ⑦ attack_diff selftest rc={0}" -f $attackStRc)
 
   # ⑧ 生产函数级「改坏必红」：合成两侧 raw → align → diff 绿；改坏一次 dmg ⇒ 红；改坏一次 hit ⇒ 红。
-  $rawA = Join-Path $tmpRoot 'a.raw.jsonl'
-  $rawB = Join-Path $tmpRoot 'b.raw.jsonl'
+  #    F-J（m3cs tick22，2026-10-12 13:45）：align **必须走生产函数 `Invoke-AttackAlign`**，
+  #    不再 `& python … align … | Out-Null` 把待测函数的返回值吞掉——旧写法正好绕过了
+  #    「返回值被 python stdout 污染」这个 bug。这里直接断言两个返回值都是 `[int]` 且为 0；
+  #    把函数体改回 `& python …; return $LASTEXITCODE` ⇒ `align_synthetic_rc_not_int=Object[]`（本项 + ⑮）必红。
+  $dirA = Join-Path $tmpRoot 'a'
+  $dirB = Join-Path $tmpRoot 'b'
+  New-Item -ItemType Directory -Force -Path $dirA, $dirB | Out-Null
+  $rawA = Join-Path $dirA 'attack_raw.jsonl'
+  $rawB = Join-Path $dirB 'attack_raw.jsonl'
   $events = New-Object System.Collections.Generic.List[string]
   for ($k = 1; $k -le 10; $k++) {
-    $events.Add('M3ATTSEQ {"role":"attack","k":' + $k + ',"op":"CM_HIT","x":289,"y":618,"dir":2}')
+    $events.Add('M3ATTSEQ {"role":"attack","k":' + $k + ',"op":"CM_HIT","x":289,"y":618,"dir":2,"my":101}')
     if ($k -ne 3) { $events.Add('M3ATTSEQ {"role":"struck","dmg":' + (20 + ($k % 5)) + ',"hp":' + (100 - $k) + ',"maxhp":100,"src":101,"actor":77}') }
   }
   $events.Add('M3ATTSEQ {"role":"done","attacks":10}')
   $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
   [System.IO.File]::WriteAllLines($rawA, $events, $utf8NoBom)
   [System.IO.File]::WriteAllLines($rawB, $events, $utf8NoBom)
-  $seqA = Join-Path $tmpRoot 'a.seq.jsonl'
-  $seqB = Join-Path $tmpRoot 'b.seq.jsonl'
-  & python $AttackDiff align $rawA --out $seqA | Out-Null
-  $alignRc = $LASTEXITCODE
-  & python $AttackDiff align $rawB --out $seqB | Out-Null
-  if ($alignRc -ne 0) { $failures += ('align_synthetic_rc=' + $alignRc) }
+  $seqA = Join-Path $dirA 'attack_seq.jsonl'
+  $seqB = Join-Path $dirB 'attack_seq.jsonl'
+  $prevEap = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  $alignRc = Invoke-AttackAlign $dirA
+  $alignRcB = Invoke-AttackAlign $dirB
+  $ErrorActionPreference = $prevEap
+  if ($alignRc -isnot [int]) { $failures += ('align_synthetic_rc_not_int=' + $(if ($null -ne $alignRc) { $alignRc.GetType().Name } else { 'null' })) }
+  elseif ($alignRc -ne 0) { $failures += ('align_synthetic_rc=' + $alignRc) }
+  if ($alignRcB -isnot [int]) { $failures += ('align_synthetic_rc_b_not_int=' + $(if ($null -ne $alignRcB) { $alignRcB.GetType().Name } else { 'null' })) }
+  elseif ($alignRcB -ne 0) { $failures += ('align_synthetic_rc_b=' + $alignRcB) }
   $prevEap = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
   $greenOut = (& python $AttackDiff diff $seqA $seqB 2>&1 | Out-String)
@@ -498,7 +535,7 @@ if ($SelfCheckNoStack) {
 
   Remove-Item -Recurse -Force $tmpRoot -ErrorAction SilentlyContinue
   if ($failures.Count -eq 0) {
-    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（攻击配置透传/默认关 + run_pair -DisableAutoPlay 耦合两向 + 攻击两相 pin pose/SQL + pin SQL 可执行性（含改坏 a.IncHealth 必红 + 改坏 Hp=100000 越界必红） + 入口/DiffOnly fail-closed + attack_diff selftest + 改坏 dmg/hit 必红 + scoped_diff 14/14 + M-1 WARN 有牙齿 + M-2 attacker 精确选择 selftest + pin SQL 别名/列校验 + 种子注入断言（两侧 fail-closed）+ 攻击序列收尾等待（F-E））'
+    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（攻击配置透传/默认关 + run_pair -DisableAutoPlay 耦合两向 + 攻击两相 pin pose/SQL + pin SQL 可执行性（含改坏 a.IncHealth 必红 + 改坏 Hp=100000 越界必红） + 攻击 pin 无怪口径（F-I，含旧缺省 (289,618) 必红） + 入口/DiffOnly fail-closed + attack_diff selftest + 改坏 dmg/hit 必红 + Invoke-AttackAlign 返回值形态两处（F-J：⑧ 生产函数直接断言 + ⑮） + scoped_diff 14/14 + M-1 WARN 有牙齿 + M-2 attacker 精确选择 selftest + pin SQL 别名/列校验 + 种子注入断言（两侧 fail-closed）+ 攻击序列收尾等待（F-E））'
     exit 0
   }
   Write-Output ('SELFTEST_RED RED: ' + ($failures -join ', '))
@@ -611,13 +648,14 @@ Write-Output 'PREFLIGHT MySQL 在听'
 # 复用 run_pair 的 `-EmitOpsArgs`（pin SQL 的唯一口径）取 attack_pin_sql_all；每条以不存在角色名执行，0 行改动。
 $probeArgs = @('-EmitOpsArgs', '-FixedNewChr', '-PinStartPose', '-AttackPinPair', '-AttackSequence',
                '-Bots', $Bots, '-Prefix', $Prefix, '-AttackCount', $AttackCount, '-AttackStepMs', $AttackStepMs,
-               '-AttackStartDelayMs', $AttackStartDelayMs, '-AttackPinDir', $AttackPinDir, '-AttackVictimHp', $AttackVictimHp)
+               '-AttackStartDelayMs', $AttackStartDelayMs, '-AttackPinDir', $AttackPinDir,
+               '-PinCX', $AttackPinCX, '-PinCY', $AttackPinCY, '-AttackVictimHp', $AttackVictimHp)
 $probeRaw = @(& powershell -ExecutionPolicy Bypass -File $RunPair @probeArgs)
 if ($LASTEXITCODE -ne 0) {
   Write-Output 'RED: 取 pin SQL 失败（run_pair -EmitOpsArgs 非 0）——无法做可执行性预检'
   exit 1
 }
-$probeText = ((@($probeRaw) | Where-Object { $_ -notmatch '^\s*WARN:' }) -join "`n").Trim()
+$probeText = ((@($probeRaw) | Where-Object { $_ -notmatch '^\s*(WARN:|PIN_NO_MONSTER)' }) -join "`n").Trim()
 $probeObj = $probeText | ConvertFrom-Json
 try { $probeSql = @($probeObj.attack_pin_sql_all) } catch { $probeSql = @() }
 if ($probeSql.Count -lt 1) {
@@ -635,7 +673,7 @@ Write-Output '--- 2) 侧运行（复用 run_pair.ps1；同序列 = -FixedNewChr 
 $pairArgs = @('-Side', $Side, '-Bots', $Bots, '-Prefix', $Prefix, '-Address', $Address, '-Port', $Port,
               '-TimeoutSec', $TimeoutSec, '-FixedNewChr', '-PinStartPose', '-AttackPinPair',
               '-AttackSequence', '-AttackCount', $AttackCount, '-AttackStepMs', $AttackStepMs, '-AttackStartDelayMs', $AttackStartDelayMs,
-              '-AttackPinDir', $AttackPinDir, '-AttackVictimHp', $AttackVictimHp)
+              '-AttackPinDir', $AttackPinDir, '-PinCX', $AttackPinCX, '-PinCY', $AttackPinCY, '-AttackVictimHp', $AttackVictimHp)
 & powershell -ExecutionPolicy Bypass -File $RunPair @pairArgs
 $pairExit = $LASTEXITCODE
 if ($pairExit -ne 0) {

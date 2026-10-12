@@ -1,0 +1,26 @@
+# 证据包自包含性自检（照 F-1 / 8abd8a0d 口径；卡 openmir2-m3-attack-pair-fixture，本片 = F-E + F-H）
+# 目标：证据目录里每一个被声明的文件都必须入库、不被 .gitignore 吞，且干净检出可复现。
+
+# 命令 1：对每个被声明的文件跑 git check-ignore -v（期望：无输出 / rc=1 = 无一被忽略）
+$ git check-ignore -v mir2-rs/tests/parity/m3/evidence-attack-pair-feh-20261012/01-pre-fix-smoke-raw.txt mir2-rs/tests/parity/m3/evidence-attack-pair-feh-20261012/02-pre-fix-align-rc-leak-raw.txt mir2-rs/tests/parity/m3/evidence-attack-pair-feh-20261012/03-selfcheck-runbots-green.txt mir2-rs/tests/parity/m3/evidence-attack-pair-feh-20261012/04-mutation-FE-done-count-red.txt mir2-rs/tests/parity/m3/evidence-attack-pair-feh-20261012/README.md mir2-rs/tests/parity/m3/evidence-attack-pair-feh-20261012/selfcheck-selfcontained.txt
+  check-ignore 输出（去 rc 行后）：
+  check-ignore 命中行数 = 0
+
+# 命令 2：tracked 件数 == 盘上件数（内容件 4 + README + selfcheck + SHA256SUMS = 7）
+$ git ls-files --cached mir2-rs/tests/parity/m3/evidence-attack-pair-feh-20261012/ | wc -l
+tracked_count = 7
+$ find mir2-rs/tests/parity/m3/evidence-attack-pair-feh-20261012 -type f | wc -l
+disk_count    = 7
+
+# 命令 3：目录内不得有 .gitignore 会吞的 *.log（本片一律用 .txt）
+log_count     = 0
+
+VERDICT: PASS（tracked == disk == 7；无被忽略文件；无 .log）
+
+# 命令 4：复核器（默认 = 仓库字节口径：Git blob 内容，text 文件 LF 归一；--check-extra = 目录里未列入清单的文件也判红）
+$ python -I tools/evidence-hash/verify_sha256sums.py mir2-rs/tests/parity/m3/evidence-attack-pair-feh-20261012 --check-extra
+GREEN mir2-rs/tests/parity/m3/evidence-attack-pair-feh-20261012\SHA256SUMS.txt  [repo 口径]  OK 6/6
+rc=0
+
+# 最终目录 = 4 个编号内容件（01–04）+ README.md + selfcheck-selfcontained.txt + SHA256SUMS.txt = 7 件；
+# SHA256SUMS.txt 按仓库字节口径覆盖 6 件（7 - 清单自身）。

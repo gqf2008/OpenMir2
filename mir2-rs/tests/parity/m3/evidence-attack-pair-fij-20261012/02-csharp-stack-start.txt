@@ -1,0 +1,18 @@
+START DBSrv pid=18716 ports=6000,5100,5700 exe=E:\Users\gxh\Documents\GitHub\OpenMir2\src\DBSrv\bin\Release\DBSrv.exe
+START LoginSrv pid=9028 ports=5500,5600 exe=E:\Users\gxh\Documents\GitHub\OpenMir2\src\LoginSrv\bin\Release\LoginSrv.exe
+START GameSvr pid=20436 ports=5000 exe=E:\MirServer\M2GameSvr-hook-m3cs16\GameSrv.exe
+START LoginGate pid=29080 ports=7000 exe=E:\MirServer\LoginGate\LoginGate.exe
+START SelGate pid=12968 ports=7100 exe=E:\MirServer\SelGate\SelGate.exe
+START RunGate pid=31140 ports=7200 exe=E:\MirServer\RunGate\GameGate.exe
+PIDFILE E:\tmp\m3bag-fi\csharp-stack\csharp-stack.pid.json
+CSHARP_STACK_GREEN
+  3306  LISTEN
+  6000  LISTEN
+  5100  LISTEN
+  5700  LISTEN
+  5500  LISTEN
+  5600  LISTEN
+  5000  LISTEN
+  7000  LISTEN
+  7100  LISTEN
+  7200  LISTEN
