@@ -1,0 +1,138 @@
+# M3⑩ 邮件/拍卖 DoD① 盘点——Rust 侧现状只读检索（文件:行 / no match）
+# 生成时间：2026-10-12T22:11:36Z  worktree=.claude/worktrees/m3cs  基线=master 670a009b
+# ============================================================================
+
+## [1] protocol 常量（已实现）
+$ rg -n 'CM_SELLOFF|CM_CANCELSELLOFFITEMING|RM_SENDDEALOFFFORM|RM_MARKET|DB_.*MARKET' mir2-rs/crates/protocol/src/messages.rs
+140:pub const CM_SELLOFFADDITEM: u16 = 23002;
+141:pub const CM_SELLOFFDELITEM: u16 = 23007;
+142:pub const CM_SELLOFFCANCEL: u16 = 23012;
+143:pub const CM_SELLOFFEND: u16 = 23015;
+144:pub const CM_CANCELSELLOFFITEMING: u16 = 23024;
+145:pub const CM_SELLOFFBUYCANCEL: u16 = 23025;
+146:pub const CM_SELLOFFBUY: u16 = 23026;
+557:pub const RM_SENDDEALOFFFORM: u16 = 23000;
+568:pub const RM_MARKET_LIST: u16 = 11015;
+569:pub const RM_MARKET_RESULT: u16 = 11016;
+679:pub const DB_LOADMARKET: u8 = 100;
+681:pub const DB_SAVEMARKET: u8 = 101;
+683:pub const DB_SEARCHMARKET: u8 = 102;
+685:pub const DB_SEARCHMARKETSUCCESS: u8 = 103;
+687:pub const DB_SRARCHMARKETFAIL: u8 = 104;
+689:pub const DB_LOADMARKETSUCCESS: u8 = 105;
+691:pub const DB_LOADMARKETFAIL: u8 = 106;
+693:pub const DB_SAVEMARKETSUCCESS: u8 = 107;
+695:pub const DB_SAVEMARKETFAIL: u8 = 108;
+697:pub const DB_LOADUSERMARKET: u8 = 109;
+699:pub const DB_LOADUSERMARKETSUCCESS: u8 = 110;
+701:pub const DB_LOADUSERMARKETFAIL: u8 = 111;
+1220:        11015 => &["RM_MARKET_LIST"],
+1221:        11016 => &["RM_MARKET_RESULT"],
+1224:        23000 => &["RM_SENDDEALOFFFORM"],
+1226:        23002 => &["CM_SELLOFFADDITEM"],
+1231:        23007 => &["CM_SELLOFFDELITEM"],
+1236:        23012 => &["CM_SELLOFFCANCEL"],
+1239:        23015 => &["CM_SELLOFFEND"],
+1248:        23024 => &["CM_CANCELSELLOFFITEMING"],
+1249:        23025 => &["CM_SELLOFFBUYCANCEL"],
+1250:        23026 => &["CM_SELLOFFBUY"],
+
+## [2] DBSrv 5700 MarketService 面（M1 S4b 已实现）
+$ ls mir2-rs/bins/db-srv/src/market.rs mir2-rs/bins/db-srv/src/marketdata.rs
+mir2-rs/bins/db-srv/src/market.rs
+mir2-rs/bins/db-srv/src/marketdata.rs
+$ rg -n 'mod market|market::run|MarketPort|market_addr' mir2-rs/bins/db-srv/src/main.rs mir2-rs/bins/db-srv/src/config.rs
+mir2-rs/bins/db-srv/src/config.rs:64:    pub market_addr: String,
+mir2-rs/bins/db-srv/src/config.rs:65:    /// `[Server] MarketPort` —— 5700。
+mir2-rs/bins/db-srv/src/config.rs:67:    pub market_port: u16,
+mir2-rs/bins/db-srv/src/config.rs:170:    let market_port = i("Server", "MarketPort", 5700);
+mir2-rs/bins/db-srv/src/config.rs:171:    if market_port <= 0 || market_port > i32::from(u16::MAX) {
+mir2-rs/bins/db-srv/src/config.rs:172:        bail!("配置 [Server] MarketPort 非法：{market_port}");
+mir2-rs/bins/db-srv/src/config.rs:179:        market_addr: s("Server", "MarketAddr", "127.0.0.1").trimmed_text(),
+mir2-rs/bins/db-srv/src/config.rs:180:        market_port: u16::try_from(market_port).unwrap_or(5700),
+mir2-rs/bins/db-srv/src/config.rs:320:            b"[Setup]\nShowDebug=0\nServerAddr=0.0.0.0\nServerPort=6000\nGateAddr=0.0.0.0\nGatePort=5100\nServerName=LegendOfMir2\nDenyChrName=1\nDELMaxLevel=30\nDynamicIPMode=0\n\n[Server]\nIDSAddr=127.0.0.1\nIDSPort=5600\nMarketAddr=127.0.0.1\nMarketPort=5700\n\n[DataBase]\nStoreage=MySQL\nConnctionString=server=127.0.0.1;uid=root;pwd=;database=mir2_db;\n\n[DBClear]\nInterval=3000\n",
+mir2-rs/bins/db-srv/src/config.rs:328:        assert_eq!(cfg.market_addr, "127.0.0.1");
+mir2-rs/bins/db-srv/src/config.rs:329:        assert_eq!(cfg.market_port, 5700);
+mir2-rs/bins/db-srv/src/main.rs:31:mod market;
+mir2-rs/bins/db-srv/src/main.rs:32:mod marketdata;
+mir2-rs/bins/db-srv/src/main.rs:87:    tokio::spawn(market::run(Arc::clone(&srv), Arc::clone(&db)));
+$ rg -n 'fn process_market_packet|DB_LOADMARKET|DB_SAVEMARKET|DB_SEARCHMARKET|DB_LOADUSERMARKET' mir2-rs/bins/db-srv/src/market.rs | head -12
+10://! - `DB_LOADMARKET`(100)：`MarketRegisterMessage` 解出后 `Token`/`ServerName` 任一为空 ⇒ 只记日志；
+11://!   否则查库；查得空 ⇒ `DB_LOADMARKETFAIL`(106) `recog=0 param=1`；
+14://! - `DB_SAVEMARKET`(101)：`Deserialize<MarketSaveDataItem>` 只要碰到 `Item` 成员就抛
+16://! - `DB_SEARCHMARKET`(102)：`SearchMarketItems` 四个分支全是空桩 ⇒ 恒 `DB_SRARCHMARKETFAIL`(104)
+18://! - `DB_LOADUSERMARKET`(109)：`GroupId==0` ⇒ 104 `param=0`；否则 `QueryMarketItemsCount` 恒 0 ⇒
+19://!   `DB_LOADUSERMARKETSUCCESS`(110) + `MarkerUserLoadMessage`（查询号**恒为 1**，C# `SendSuccessMessage` 原样）；
+35:    DBR_FAIL, DB_LOADMARKET, DB_LOADMARKETFAIL, DB_LOADUSERMARKET, DB_LOADUSERMARKETSUCCESS,
+36:    DB_SAVEMARKET, DB_SEARCHMARKET, DB_SRARCHMARKETFAIL,
+399:async fn process_market_packet(
+408:        x if x == u16::from(DB_LOADMARKET) => {
+411:        x if x == u16::from(DB_SAVEMARKET) => {
+414:        x if x == u16::from(DB_SEARCHMARKET) => {
+
+## [3] storage crate：MarketStorage trait + MarketItem（已实现）
+$ rg -n 'MarketStorage|MarketItem' mir2-rs/crates/storage/src/lib.rs mir2-rs/crates/storage/src/traits.rs mir2-rs/crates/storage/src/types.rs
+mir2-rs/crates/storage/src/traits.rs:11:use crate::types::{MarketItem, PlayQuick, QueryChr};
+mir2-rs/crates/storage/src/traits.rs:69:/// 拍卖行存储（C# `IMarketStorage`）。
+mir2-rs/crates/storage/src/traits.rs:70:pub trait MarketStorage {
+mir2-rs/crates/storage/src/traits.rs:71:    /// 按组查询在售列表（`QueryMarketItems`）。
+mir2-rs/crates/storage/src/traits.rs:72:    fn query_market_items(&self, group_id: u8) -> Result<Vec<MarketItem>, StorageError>;
+mir2-rs/crates/storage/src/traits.rs:73:    /// 查询某出售者在售数量（`QueryMarketItemsCount`）。
+mir2-rs/crates/storage/src/traits.rs:75:    /// 保存条目（`SaveMarketItem`）。
+mir2-rs/crates/storage/src/traits.rs:78:        item: &MarketItem,
+mir2-rs/crates/storage/src/traits.rs:82:    /// 搜索（`SearchMarketItems`；`item_type`/`item_set` 过滤语义与 C# 一致）。
+mir2-rs/crates/storage/src/traits.rs:91:    ) -> Result<Vec<MarketItem>, StorageError>;
+mir2-rs/crates/storage/src/types.rs:24:/// 拍卖行条目（C# `MarketItem`）。
+mir2-rs/crates/storage/src/types.rs:27:pub struct MarketItem {
+mir2-rs/crates/storage/src/lib.rs:4://! `IPlayDataStorage` / `ICacheStorage` / `IMarketStorage`），供 DBSrv 与 GameSvr 侧使用。
+mir2-rs/crates/storage/src/lib.rs:36:pub use traits::{CacheStorage, MarketStorage, PlayDataStorage, PlayRecordStorage};
+mir2-rs/crates/storage/src/lib.rs:37:pub use types::{MarketItem, PlayQuick, QueryChr};
+
+## [4] crates/data：goldsales 加载器（已实现，bug-replica D-5/B-5）
+$ rg -n 'load_sell_off_item_list|DealOffInfo|goldsales|DealChrName' mir2-rs/crates/data/src/loaders.rs mir2-rs/crates/data/src/models.rs mir2-rs/crates/data/src/lib.rs
+mir2-rs/crates/data/src/lib.rs:4://! - `src/GameSrv/DB/MySqlDB.cs`（`stditems` / `monsters` / `magics` / `goldsales`）
+mir2-rs/crates/data/src/models.rs:141:/// `src/OpenMir2/Data/DealOffInfo.cs`（寄售）。
+mir2-rs/crates/data/src/models.rs:146:pub struct DealOffInfo {
+mir2-rs/crates/data/src/loaders.rs:25:    DealOffInfo, MagicInfo, MonsterInfo, StdItem, ACTOR_RACE_SABUK_DOOR, ACTOR_RACE_SABUK_WALL,
+mir2-rs/crates/data/src/loaders.rs:307:    /// BUG-REPLICA（不改）：C# 读 `DealChrName` / `BuyChrName`，而 DDL 列名是
+mir2-rs/crates/data/src/loaders.rs:311:    pub async fn load_sell_off_item_list(&self) -> Result<Vec<DealOffInfo>, DataError> {
+mir2-rs/crates/data/src/loaders.rs:312:        let rows = sqlx::query("select * from goldsales")
+mir2-rs/crates/data/src/loaders.rs:318:            let deal_chr_name = get_string(row, "DealChrName");
+mir2-rs/crates/data/src/loaders.rs:339:            list.push(DealOffInfo {
+
+## [5] 世界侧元宝寄售 CM_SELLOFF* 派发：**no match**
+$ rg -n -i 'SELLOFF|goldsales|DealOffInfo|寄售' mir2-rs/bins/game-svr/src mir2-rs/crates/world/src mir2-rs/crates/shared/src
+(no match)
+
+## [6] 世界侧连 5700 寄售行客户端（MarketSystem）：**no match**
+$ rg -n '5700|market' mir2-rs/bins/game-svr/src
+(no match)
+
+## [7] 邮件：Rust 全仓 **no match**（除盘点报告自身）
+$ rg -n -i '\bmail' --glob '!target' mir2-rs/
+mir2-rs/tests\parity\M3-report.md:35:| 10 | 邮件 / 拍卖 | 发送/到期/成交/退回，DB 落库字段级 diff=0 | **not_covered** | **已有卡** `openmir2-m3-mail-auction-align` |
+mir2-rs/tests\parity\M3-report.md:185:- **承接**：**已有卡** `openmir2-m3-mail-auction-align`。
+mir2-rs/tests\parity\M3-report.md:288:| 邮件 / 拍卖（§6 顺序 ⑩） | `not_covered` | **已有卡** `openmir2-m3-mail-auction-align` |
+mir2-rs/tests\parity\m3\evidence-m3-mail-auction-inventory-20261013\00-oracle-chain-lines.txt:6:$ rg -n -i 'mail' src/ --glob '*.cs' | grep -viE 'EMail|email'
+mir2-rs/tests\parity\m3\evidence-m3-mail-auction-inventory-20261013\00-oracle-chain-lines.txt:16:$ grep -rin 'mail' sql/ mir2-rs/crates/storage/src/ | grep -viE 'EMail'
+mir2-rs/tests\parity\m3\evidence-m3-final-acceptance-inventory-20261013\README.md:16:| 掉落/经验、任务、组队/交易、公会/攻城、英雄/宠物、邮件/拍卖 | 本片未跑 | **not_covered**（逐项承接卡 = ④`openmir2-m3-drop-exp-align` / ⑥`openmir2-m3-quest-align` / ⑦`openmir2-m3-party-trade-align` / ⑧`openmir2-m3-guild-castle-align` / ⑨`openmir2-m3-hero-pet-align` / ⑩`openmir2-m3-mail-auction-align`；均已存在） |
+
+## [8] load_sell_off_item_list 的调用点（仅 table_counts 测试；生产启动不调用）
+$ rg -n 'load_sell_off_item_list' mir2-rs/ --glob '!target'
+mir2-rs/crates\data\src\loaders.rs:311:    pub async fn load_sell_off_item_list(&self) -> Result<Vec<DealOffInfo>, DataError> {
+mir2-rs/tests\parity\tests\table_counts.rs:49:        .load_sell_off_item_list()
+
+## [9] 白名单既有登记（D-5 / B-5 / S4B-5..S4B-10）
+$ rg -n 'goldsales|S4B-|MarketItem' mir2-rs/tests/parity/whitelist.md
+15:| D-5 | `goldsales`：C# 读错列名（`DealChrName`，DDL 实为 `DealCharName`）导致有数据时也会全部静默跳过——Rust **复刻同一错列名**而非修正 | 行为等价优先于修 bug（§8.1）。当前表 0 行，两侧均加载 0 行；表有数据时两侧同样都加载 0 行。修复应单开批次，并保留改前/改后行为记录 | D 线（待 owner 复核） |
+28:| B-5 | `goldsales` 列名 `DealChrName`/`BuyChrName` 与 DDL 不符（见 D-5） | `MySqlDB.cs:264-265` → `crates/data/src/loaders.rs` |
+187:| S4B-1 | **附属表读异常的传播不同**：C# `GetAbilGetRecord`/`GetBonusAbilRecord`/`GetItemRecord`/`GetBagItemRecord`/`GetStorageRecord`/`GetPlayerStatus` 各自 `try/catch` **内部吞掉**异常、返回「已读到的部分」；Rust 侧这些子读返回 `Err` 时**整份取档判失败**（`play_data_get`→`None`，`LoadHumanRcd` 回 `DBR_LOADHUMANRCD` `nCheckCode=-2`） | 仅当附属表列类型/行数据异常（如列类型被改、行内含越界值）；**正常数据不可达**（live_data 在真库上取档逐字段相等） | 行为等价优先（§8.1）下的**已知残余**：本片先保证正常路径 1:1；要复刻异常路径的「部分成功」需把子读改为逐表 catch 后继续，归还后续批次（届时补红检）。作者登记（worker-17），**待独立 principal 复核** |
+188:| S4B-2 | **`QueryItemAttr` 空槽回写**：C# `userItems[nPosition].Desc[nPosition] = …` 对空槽直接 NRE（被 `Get*Record` 的 catch 吞掉，保留已填部分）；Rust 侧对空槽**静默跳过**该行 | 仅当 `characters_item_attr` 行与物品槽错位（脏数据）；正常存档不可达 | 同 S4B-1。作者登记（worker-17），**待独立 principal 复核** |
+189:| S4B-3 | **`Sign` 长度 < 2 的解码**：C# `BitConverter.ToInt16(signBuff)` 在 `signBuff.Length < 2` 时抛 `ArgumentException`（未捕获）；Rust 取不到 2 字节按 `0`（⇒ 签名不匹配 ⇒ 关连接） | 仅畸形对端帧 | 线上不可达（GameSvr 恒发 4 字节 checkCode 的 EDCode）。作者登记（worker-17），**待独立 principal 复核** |
+190:| S4B-4 | **缓存键大小写折叠**：C# `ConcurrentDictionary<string,…>(StringComparer.OrdinalIgnoreCase)`；Rust `CacheStore` 用 `gbk::fold_key`（ASCII 折叠 + GBK 键）近似 | 仅当角色名含 ASCII 大小写**且**缓存非空时；而 C# `CacheStorageService.Add` 只在键已存在时替换、无 `TryAdd` ⇒ **缓存恒空** ⇒ 不可观测（`cache.rs` 单测钉住「首次 Add 是 no-op」） | 保留 1:1 怪行为；键口径近似与 D-2/B-103 同族。作者登记（worker-17），**待独立 principal 复核** |
+191:| S4B-5 | **5700 `MarketService` 已实现**（`bins/db-srv/src/{market,marketdata}.rs`）：监听 5700、四个 ident、`IMarketStorage` MySQL 实现。`config.rs` 按现网键名解析 `MarketAddr`/`MarketPort`（默认 `127.0.0.1`/`5700`）。 | GameSvr 连 5700（拍卖行） | **实现完成**；C# 侧的不可达/空桩/怪行为逐条登记为 S4B-6…S4B-10。进程级证据 `tests/parity/evidence/M1/s4b-slice3-market.txt`。作者登记（worker-17），**待独立 principal 复核** |
+192:| S4B-6 | **`MarketItem` 未注册 MemoryPack**：C# `OpenMir2.Data.MarketItem : ClientPacket` 无 `[MemoryPackable]`（仅 `MarketSaveDataItem.Item` 挂 `[MemoryPackAllowSerialize]`）⇒ `Serialize`/`Deserialize` 只要碰到它就抛 `MemoryPackSerializationException`。故 `DB_LOADMARKET` 查得非空时 C# 构造 `MarketDataMessage` 即抛 ⇒ 不回包；`DB_SAVEMARKET` 的 `Deserialize<MarketSaveDataItem>`（成员数 ≥ 1）即抛 ⇒ 不回包。Rust 1:1（`market.rs` 不实现 `MarketItem` 编解码；非空对象头按「C# 会抛」处理） | 任何含非空 `MarketItem` 的线缆帧；**真身探针已证**（`s4b-slice3-market-probe.txt`） | 保留 1:1（行为等价优先）：`marketdata.rs` 仍实现存储 SQL（由单测直接驱动），但线上不可达。作者登记（worker-17），**待独立 principal 复核** |
+193:| S4B-7 | **`QueryMarketItems` 只取第一行**：C# `if (dr.Read()) { … }` 只读首行（余行丢弃）⇒ 即使表里多条在售也只回 1 条（而该 1 条又因 S4B-6 不回包）；`Desc[i]=Value{i}` 只填 0..13（`Desc[13]` 不写）。Rust 1:1（`marketdata.rs::query_rows` 用 `rows.first()`） | 表里 ≥ 2 行在售 | 保留 1:1；`marketdata` 单测在独立临时库种 2 行、断言只回 1 行（红检：改成返回全部行必红）。作者登记（worker-17），**待独立 principal 复核** |
+194:| S4B-8 | **`SearchMarketItems` 四分支全是空桩**（`SearchMarketNameItems`/`SearchMarketItemNameItems`/`SearchMarketItemSetItems`/`SearchMarketItemTypeItems` 均 `return new List<>()`，不查库）⇒ `DB_SEARCHMARKET` 恒回 `DB_SRARCHMARKETFAIL(104)`。另有 C# 调用方**实参错位**（`SearchItem` 传到 `sellWho`、`SearchWho` 传到 `itemName`）。Rust 1:1 | 任意搜索请求 | 保留 1:1（`market.rs`/`marketdata.rs`）；因全空桩，错位不影响可观测结果。作者登记（worker-17），**待独立 principal 复核** |
+195:| S4B-9 | **`QueryMarketItemsCount` 恒 0**：C# 直接 `return 0`（不查库）⇒ `DB_LOADUSERMARKET`（`GroupId!=0`）恒回 `SellCount=0`。Rust 1:1 | 任意个人拍卖行查询 | 保留 1:1；`live_market` 断言 SellCount=0。作者登记（worker-17），**待独立 principal 复核** |
+196:| S4B-10 | **`SendSuccessMessage` 查询号恒为 1**（C# `SendRequest(connectionId, 1, …)`），而 `SendFailMessage` 回显请求 QueryId；`MarkerUserLoadMessage` 是**全非托管 struct**、MemoryPack 按原始内存布局序列化（**无成员数对象头**，12B 含 3B 尾部填充）。Rust 1:1（`market.rs::send_success` + `to_bytes`） | 所有成功应答 | 保留 1:1；`kind:market` 向量与 `live_market` 断言钉住（红检：补错对象头必红）。作者登记（worker-17），**待独立 principal 复核** |
