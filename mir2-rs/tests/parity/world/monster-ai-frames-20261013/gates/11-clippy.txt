@@ -1,5 +1,6 @@
 # cargo clippy --workspace --all-targets --offline -- -D warnings
 
     Checking game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.27s
+    Checking game-gate v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-gate)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.39s
 rc=0

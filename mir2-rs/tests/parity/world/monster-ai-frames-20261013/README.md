@@ -1,9 +1,8 @@
 # M3④-实现 C 第 ③ 片 —— 怪物帧面（monster ActorDisplay + AOI 出现/死亡帧）（证据）
 
 - 卡：`openmir2-m3-monster-ai-tick`（M3 逐系统对齐 ④ 的承接卡 C）
-- 分支 `monster-ai-host`；base = `refs/heads/master` `e2b94234`（交付前 merge origin/master）；head 见卡上 `patch`
-- 叠加：本 head 在**分片②**（head `a5d8d579`，patch `71ced740ff8f02232734e63f68671894a3ecf638`，待审）之上；
-  **本片增量 = `f7725161..<head>`**（5 个代码文件 + 本目录）
+- 分支 `monster-ai-host`；base = `refs/heads/master` `98885fd4`（交付前 merge origin/master；分片② 已随 master 合入
+  ⇒ **本片是单分片 patch**）；head 见卡上 `patch`
 - 写集：`mir2-rs/bins/game-svr/**` + 本证据目录；**零** `src/ sql/ MirClient`、**零** `crates/world/**`
 
 ## 本片做了什么
@@ -35,7 +34,8 @@
    **怪物 ActorId** 的 `SM_TURN + SM_FEATURECHANGED`，`Series` 取世界当前 `ai.dir`）
 
 读数：`cargo test -p game-svr --offline` lib **109 passed** / main **159 passed**；
-`cargo test --workspace --offline` = **86 suites · 769 passed · 0 failed · 18 ignored**（基线 762 ⇒ +7）。
+`cargo test --workspace --offline` = **86 suites · 778 passed · 0 failed · 18 ignored**
+（本片新增 7 条用例；未改任何既有用例的断言/ignored 状态 ⇒ 基线 = 771）。
 四门禁：`gates/`（fmt rc=0 / clippy rc=0 / msgcodegen 604 rc=0 / workspace rc=0）。
 
 **改坏必红 4 条**（`redchecks/`，全 rc=101）：RC-C3-A 删展示登记 / RC-C3-B `LoByte`→高字节 /

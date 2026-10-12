@@ -14,7 +14,8 @@ M3④-实现 C 第 ③ 片（怪物帧面）—— 判据与用例
 | 7 | `tests::aoi_show_emits_monster_turn_pair_with_world_dir` | 端到端：玩家 + 近距怪物 → 一 tick AOI `Show` → 观察者线收到 **怪物 ActorId** 的 `SM_TURN + SM_FEATURECHANGED`；`SM_TURN.Series` 低字节 = 世界当前 `ai.dir`(5)，非登记初值(2) |
 
 读数（`cargo test -p game-svr --offline`）：lib **109 passed**（含 1/2/3/4/5）、main **159 passed**（含 6/7）；
-`cargo test --workspace --offline` = **86 suites · 769 passed · 0 failed · 18 ignored**（基线 762 ⇒ +7）。
+`cargo test --workspace --offline` = **86 suites · 778 passed · 0 failed · 18 ignored**
+（master `98885fd4` 基线 = 86 suites · **771** passed · 0 failed · 18 ignored，独立 worktree 实测 ⇒ 本片 +7）。
 四门禁即 `gates/`（fmt rc=0 / clippy rc=0 / msgcodegen 604 rc=0 / workspace rc=0）。
 
 改坏必红 4 条（`redchecks/`，全部 rc=101，还原后源码 sha256 与备份一致）：
