@@ -1,0 +1,7 @@
+=== 两侧专用流逐次取数（语义等价口径）===
+  csharp draws=651 rust draws=651
+  csharp kinds=Next(max)
+  rust   kinds=Next(max),Next(min,max)
+  [仪器] `(kind,arg)` 口径第一处分歧 index=3：csharp req=['Next(max)', 37] / rust req=['Next(min,max)', 37] —— 两侧 repr 均为 hit_struck_damage(37)->22
+  GREEN: 两侧 (canon,归一 kind,arg,result) 逐次全等（651/651）——攻击路径取数等价
+  [json] mir2-rs/tests/parity/m3/evidence-m3-isolate-twophase-fn1-20261013/requests/43-stream-equiv.json

@@ -1,0 +1,6 @@
+# C# 专用流跨栈可复现性（fresh stack，同 seed=42 / isolate_attack / attack_seed=40545）
+# c1 = session csharp-20261013-013848
+# c2 = session csharp-20261013-015115
+"attack_stream_sha256":  "0c7f44aa1ff06c3ffd5099add0ce628150d44bab2f3a29e628744537d2622e32",
+"attack_stream_sha256":  "0c7f44aa1ff06c3ffd5099add0ce628150d44bab2f3a29e628744537d2622e32",
+# 两栈 sha 相同 ⇒ 攻击路径专用流逐字节可复现（C# 侧隔离成立）

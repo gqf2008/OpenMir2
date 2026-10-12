@@ -1,0 +1,13 @@
+=== M3②③ 两侧每击取数请求序列 ===
+--- csharp: 攻击取数 651（player unit=120, base unit=0）
+    站点计数: {"atk_power_a": 120, "atk_power_b": 120, "attack_success": 120, "hit_gate": 120, "hit_struck_damage": 57, "hit_struck_damage2": 57, "struck_durability": 57}
+--- rust: 攻击取数 651（player unit=120, base unit=0）
+    站点计数: {"atk_power_a": 120, "atk_power_b": 120, "attack_success": 120, "hit_gate": 120, "hit_struck_damage": 57, "hit_struck_damage2": 57, "struck_durability": 57}
+--- 第一处请求分歧（原始专用流逐次）
+    index(0based) = 3  class = player_path
+    csharp: hit_struck_damage(37)->22
+    rust  : hit_struck_damage(37)->22
+--- 模板校验（每侧自证）: violations=0
+--- 判读: RED  player_path_divergence@draw_index=4
+
+[json] E:/tmp/m3cs-fn1/requests/40-analyze.json

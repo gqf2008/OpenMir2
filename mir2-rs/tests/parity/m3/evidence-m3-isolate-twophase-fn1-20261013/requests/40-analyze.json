@@ -1,0 +1,46 @@
+{
+ "seed": 42,
+ "csharp": "E:\\tmp\\m3cs-fn1\\streams\\c2\\att.sha-source.tsv",
+ "rust": "E:\\tmp\\m3cs-fn1\\streams\\r1\\stream.tsv",
+ "counts": {
+  "csharp": {
+   "draws": 651,
+   "site_counts": {
+    "atk_power_a": 120,
+    "atk_power_b": 120,
+    "hit_gate": 120,
+    "hit_struck_damage": 57,
+    "hit_struck_damage2": 57,
+    "struck_durability": 57,
+    "attack_success": 120
+   },
+   "player_units": 120,
+   "base_units": 0
+  },
+  "rust": {
+   "draws": 651,
+   "site_counts": {
+    "atk_power_a": 120,
+    "atk_power_b": 120,
+    "hit_gate": 120,
+    "hit_struck_damage": 57,
+    "hit_struck_damage2": 57,
+    "struck_durability": 57,
+    "attack_success": 120
+   },
+   "player_units": 120,
+   "base_units": 0
+  }
+ },
+ "first_divergence": {
+  "index_0based": 3,
+  "csharp": "hit_struck_damage(37)->22",
+  "rust": "hit_struck_damage(37)->22",
+  "class": "player_path"
+ },
+ "template_violations": [],
+ "verdict": "RED",
+ "problems": [
+  "player_path_divergence@draw_index=4"
+ ]
+}

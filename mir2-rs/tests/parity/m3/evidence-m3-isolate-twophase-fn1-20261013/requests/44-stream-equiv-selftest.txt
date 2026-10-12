@@ -1,0 +1,4 @@
+[selftest] 等价（Next(min,max) min=0 归一后相等）： True raw_first= True
+[selftest] 改坏一抽结果 ⇒ equivalent= False （期望 False）
+[selftest] min=5 真分歧不归一抹平 ⇒ equivalent= False （期望 False）
+SELFTEST GREEN

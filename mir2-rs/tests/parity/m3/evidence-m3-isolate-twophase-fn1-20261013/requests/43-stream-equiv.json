@@ -1,0 +1,26 @@
+{
+ "csharp_draws": 651,
+ "rust_draws": 651,
+ "equivalent": true,
+ "first_semantic_diff": null,
+ "raw_kind_arg_first_diff": {
+  "index_0based": 3,
+  "csharp_req": [
+   "Next(max)",
+   37
+  ],
+  "rust_req": [
+   "Next(min,max)",
+   37
+  ],
+  "csharp": "hit_struck_damage(37)->22",
+  "rust": "hit_struck_damage(37)->22"
+ },
+ "csharp_kinds": [
+  "Next(max)"
+ ],
+ "rust_kinds": [
+  "Next(max)",
+  "Next(min,max)"
+ ]
+}

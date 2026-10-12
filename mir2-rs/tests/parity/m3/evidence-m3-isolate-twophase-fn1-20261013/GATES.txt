@@ -1,0 +1,48 @@
+# 四门禁（本片零 .rs / 零 src；隔离 CARGO_TARGET_DIR=E:/tmp/m3cs-r2-target）
+$ cargo fmt --all -- --check
+fmt rc=0
+
+$ CARGO_TARGET_DIR=E:/tmp/m3cs-r2-target cargo clippy --workspace --all-targets -- -D warnings
+    Checking game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\bins\game-svr)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.00s
+clippy rc=0
+
+$ CARGO_TARGET_DIR=E:/tmp/m3cs-r2-target cargo test --workspace
+   Doc-tests mir2_script_tool
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests mir2_shared
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests mir2_storage
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests mir2_world
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests mir2_world_bevy
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+test rc=0
+GATES_SUMMARY test: 84 suites / 686 passed / 0 failed / 16 ignored
+
+$ CARGO_TARGET_DIR=E:/tmp/m3cs-r2-target cargo run -p msgcodegen -- --check
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running `E:/tmp/m3cs-r2-target\debug\msgcodegen.exe --check`
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+msgcodegen rc=0
