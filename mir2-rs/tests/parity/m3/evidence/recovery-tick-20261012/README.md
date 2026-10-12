@@ -61,7 +61,7 @@ oracle `PlayObject.Run()` 的周期恢复段（`PlayObject.Message.cs:70-141`）
 | --- | --- | --- |
 | `cargo fmt --all -- --check` | rc=0 | `gates-fmt.txt` |
 | `cargo clippy --workspace --all-targets -- -D warnings` | rc=0 | `gates-clippy.txt` |
-| `cargo test --workspace` | rc=0，73 suites / **584 passed** / 0 failed / 16 ignored | `gates-test-workspace.txt` |
+| `cargo test --workspace` | rc=0，73 suites / **589 passed** / 0 failed / 16 ignored | `gates-test-workspace.txt` |
 | `cargo run -p msgcodegen -- --check` | rc=0（604 条常量） | `gates-msgcodegen.txt` |
 | `cargo test -p game-svr` ×3 | 各 215 passed / 0 failed | `gamesvr-3run-{1,2,3}.txt` |
 
