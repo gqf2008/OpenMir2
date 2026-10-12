@@ -1,0 +1,216 @@
+# evidence-m3-hero-pet-inventory-20261013 / 02-frames-config-and-db.txt
+# M3⑨ 英雄/宠物 —— 帧常量对照 + 配置默认值/现网 + 落库事实
+# 基线 origin/master 304126ae；真实语料根 E:/MirServer/M2GameSvr/Server.conf（冻结，只读）。
+
+============================================================
+[A] 帧常量对照（C# Messages.cs ↔ crates/protocol/src/messages.rs）
+============================================================
+
+客户端专用帧：本系统在 oracle 侧**没有**专用 CM_/SM_ 帧（召唤走 CM_SPELL(3017)）。
+宠物/英雄相关的都是 RM_* 内部消息（服务端 Actor 之间 / 自身延迟消息）：
+
+常量                       值        C#行    Rust行
+RM_PLAYERKILLMONSTER         60001      Messages.cs:828 messages.rs:573
+RM_DIEDROPITEM               60002      Messages.cs:832 messages.rs:575
+RM_MASTERDIEMUTINY           60003      Messages.cs:836 messages.rs:577
+RM_MASTERDIEGHOST            60004      Messages.cs:840 messages.rs:579
+RM_MAKEHOLYSEIZEMODE         60005      Messages.cs:844 messages.rs:581
+RM_SPIRITSUITE               9045       Messages.cs:713 messages.rs:556
+RM_10401(跨服带宝宝)    10401      Messages.cs:629 (见 04 报告 §2)
+RM_WINEXP(内部)           8075       Messages.cs:678 messages.rs:529
+SM_WINEXP(客户端帧)       44         Messages.cs:205 messages.rs:200
+
+注：RM_WINEXP(8075) 是内部消息；`PlayObject.Message.cs:1666` 把它转成客户端 `SM_WINEXP(44)`。
+
+$ rg -n "RM_PLAYERKILLMONSTER|RM_DIEDROPITEM|RM_MASTERDIEMUTINY|RM_MASTERDIEGHOST|RM_MAKEHOLYSEIZEMODE|RM_SPIRITSUITE|RM_10401|RM_WINEXP" src/OpenMir2/Messages.cs
+629:        public const int RM_10401 = 10401;
+678:        public const int RM_WINEXP = 8075;
+713:        public const int RM_SPIRITSUITE = 9045;
+828:        public const int RM_PLAYERKILLMONSTER = 60001;
+832:        public const int RM_DIEDROPITEM = 60002;
+836:        public const int RM_MASTERDIEMUTINY = 60003;
+840:        public const int RM_MASTERDIEGHOST = 60004;
+844:        public const int RM_MAKEHOLYSEIZEMODE = 60005;
+
+$ rg -n "RM_PLAYERKILLMONSTER|RM_DIEDROPITEM|RM_MASTERDIEMUTINY|RM_MASTERDIEGHOST|RM_MAKEHOLYSEIZEMODE|RM_SPIRITSUITE" mir2-rs/crates/protocol/src/messages.rs
+556:pub const RM_SPIRITSUITE: u16 = 9045;
+573:pub const RM_PLAYERKILLMONSTER: u16 = 60001;
+575:pub const RM_DIEDROPITEM: u16 = 60002;
+577:pub const RM_MASTERDIEMUTINY: u16 = 60003;
+579:pub const RM_MASTERDIEGHOST: u16 = 60004;
+581:pub const RM_MAKEHOLYSEIZEMODE: u16 = 60005;
+1115:        9045 => &["RM_SPIRITSUITE"],
+1262:        60001 => &["RM_PLAYERKILLMONSTER"],
+1263:        60002 => &["RM_DIEDROPITEM"],
+1264:        60003 => &["RM_MASTERDIEMUTINY"],
+1265:        60004 => &["RM_MASTERDIEGHOST"],
+1266:        60005 => &["RM_MAKEHOLYSEIZEMODE"],
+
+============================================================
+[B] 配置（GameSvrConf.cs 默认值 vs 现网 Server.conf）
+============================================================
+
+配置项                默认(GameSvrConf) 现网(Server.conf)
+Skeleton                 变异骷髅     (未在 Server.conf 出现，用默认)
+SkeletonCount            1 (:1756)        -               
+Dragon / Dragon1         神兽 / 神兽1 神兽 / 神兽 
+DragonCount              1 (:1760)        -               
+Angel                    精灵 (:1759)   精灵 (conf:128)
+MonUpLvNeedKillBase      100 (:1325)      100 (conf:482)  
+MonUpLvRate              16 (:1326)       16 (conf:483)   
+MagTammingLevel          50 (:1774)       40 (conf:779)   
+MagTammingTargetLevel    10 (:1775)       1 (conf:783)    
+MagTammingHPRate         100 (:1776)      100 (conf:784)  
+MagTammingCount          5 (:1777)        5 (conf:849)    
+SpiritMutiny             -                1 (conf:746)    
+SpiritMutinyTime         1800000 (:1738)  600000 (conf:747)
+MasterDieMutiny          false (:1740)    0 (conf:749)    
+MasterDieMutinyRate      5 (:1741)        10 (conf:750)   
+MasterDieMutinyPower     10 (:1742)       0 (conf:751)    
+BBMonAutoChangeColor     false (:1744)    0 (conf:852)    
+SlaveMaxLevel(Grobal2)   50 (Grobal2.cs:23) -               
+
+$ rg -n "SkeletonCount =|DragonCount =|Angel =|MonUpLvNeedKillBase =|MonUpLvRate =|MagTammingLevel =|MagTammingTargetLevel =|MagTammingHPRate =|MagTammingCount =|SpiritMutinyTime =|MasterDieMutinyRate =|MasterDieMutinyPower =|BBMonAutoChangeColorTime =" src/Modules/SystemModule/Conf/Model/GameSvrConf.cs
+1325:            MonUpLvNeedKillBase = 100;
+1326:            MonUpLvRate = 16;
+1738:            SpiritMutinyTime = 30 * 60 * 1000;
+1741:            MasterDieMutinyRate = 5;
+1742:            MasterDieMutinyPower = 10;
+1745:            BBMonAutoChangeColorTime = 3000;
+1756:            SkeletonCount = 1;
+1760:            DragonCount = 1;
+1762:            Angel = "精灵";
+1774:            MagTammingLevel = 50; //诱惑之光怪物等级限制
+1775:            MagTammingTargetLevel = 10; //诱惑怪物相差等级机率，此数字越小机率越大；
+1776:            MagTammingHPRate = 100; //成功机率=怪物最高HP 除以 此倍率，此倍率越大诱惑机率越高
+1777:            MagTammingCount = 5;
+
+$ rg -n "MonUpLvNeedKillCount =|SlaveColor =" src/Modules/SystemModule/Conf/Model/GameSvrConf.cs
+1327:            MonUpLvNeedKillCount = new[] { 0, 0, 50, 100, 200, 300, 600, 1200, 2400, 4800, 9600, 19200, 38400, 76800, 153600 };
+1328:            SlaveColor = new byte[] { 0xFF, 0xFE, 0x93, 0x9A, 0xE5, 0xA8, 0xB4, 0xFC, 249, 250, 250, 250, 250, 250, 250 };
+
+$ rg -n "MagTamming|MagTammingCount|SpiritMutiny|MasterDieMutiny|BBMonAutoChangeColor|MonUpLv|SlaveColor|Dragon|Angel" "E:/MirServer/M2GameSvr/Server.conf"
+128:Angel=精灵
+129:Dragon0=神兽
+130:Dragon1=神兽
+131:Dragon2=神兽
+132:Dragon3=神兽
+133:Dragon4=神兽
+134:Dragon5=神兽
+135:Dragon6=神兽
+136:Dragon7=
+137:Dragon8=
+138:Dragon9=
+482:MonUpLvNeedKillBase=100
+483:MonUpLvRate=16
+484:MonUpLvNeedKillCount0=20
+485:MonUpLvNeedKillCount1=20
+486:MonUpLvNeedKillCount2=50
+487:MonUpLvNeedKillCount3=100
+488:MonUpLvNeedKillCount4=200
+489:MonUpLvNeedKillCount5=300
+490:MonUpLvNeedKillCount6=600
+491:MonUpLvNeedKillCount7=1200
+492:SlaveColor0=254
+493:SlaveColor1=147
+494:SlaveColor2=154
+495:SlaveColor3=229
+496:SlaveColor4=168
+497:SlaveColor5=180
+498:SlaveColor6=252
+499:SlaveColor7=250
+500:SlaveColor8=250
+746:SpiritMutiny=1
+747:SpiritMutinyTime=600000
+749:MasterDieMutiny=0
+750:MasterDieMutinyRate=10
+751:MasterDieMutinyPower=0
+779:MagTammingLevel=40
+783:MagTammingTargetLevel=1
+784:MagTammingTargetHPRate=100
+849:MagTammingCount=5
+852:BBMonAutoChangeColor=0
+853:BBMonAutoChangeColorTime=3000
+1103:DragonHumLevel0=41
+1104:DragonCount0=1
+1105:DragonLevel0=4
+1106:DragonHumLevel1=42
+1107:DragonCount1=1
+1108:DragonLevel1=5
+1109:DragonHumLevel2=43
+1110:DragonCount2=1
+1111:DragonLevel2=6
+1112:DragonHumLevel3=44
+1113:DragonCount3=1
+1114:DragonLevel3=7
+1115:DragonHumLevel4=46
+1116:DragonCount4=1
+1117:DragonLevel4=8
+1118:DragonHumLevel5=47
+1119:DragonCount5=2
+1120:DragonLevel5=7
+1121:DragonHumLevel6=48
+1122:DragonCount6=2
+1123:DragonLevel6=8
+1124:DragonHumLevel7=0
+1125:DragonCount7=0
+1126:DragonLevel7=0
+1127:DragonHumLevel8=0
+1128:DragonCount8=0
+1129:DragonLevel8=0
+1130:DragonHumLevel9=0
+1131:DragonCount9=0
+1132:DragonLevel9=0
+1715:DragonShadowResumePoint=5
+1716:DragonShadowResumeTime=5
+1717:DragonShadowAttackRate=100
+1718:MagTammingTime=300
+2121:RecallAngelNoDog=0
+2122:RecallAngelNoBoneFamm=0
+2193:DragonShadowUseTime=10000
+2219:MonUpLvNeedKillCount8=2400
+2220:MonUpLvNeedKillCount9=4800
+2221:MonUpLvNeedKillCount10=9600
+2222:MonUpLvNeedKillCount11=19200
+2223:MonUpLvNeedKillCount12=38400
+2224:MonUpLvNeedKillCount13=76800
+2225:MonUpLvNeedKillCount14=153600
+2226:SlaveColor9=250
+2227:SlaveColor10=250
+2228:SlaveColor11=250
+2229:SlaveColor12=250
+2230:SlaveColor13=250
+2231:SlaveColor14=250
+2345:AngelDcEx=0
+2369:SpiritMutinyDie=0
+2636:MagicDragonRageInterval=90
+2637:MagicDragonRageDuration=10
+2638:MagicDragonRageDamageAdd=10000
+2697:SlaveSpiritMutinyWhenMasterDieExceptTaos=1
+2801:MaxDragonPoint=100
+2803:DecDragonPoint=1
+2837:AddDragonPoint=1
+
+============================================================
+[C] 落库事实（oracle 侧宝宝/宠物/英雄 不落库）
+============================================================
+$ rg -ni "slave|hero|pet|tamming" sql/
+  (no match：三库无 slave/pet/hero/tamming 表或列)
+
+唯一与宝宝相关的持久/跨进程载荷 = 换服包 SwitchDataInfo.SlaveArr（不是 DB）：
+$ rg -n "SlaveArr" src/OpenMir2/Data/SwitchDataInfo.cs src/GameSrv/Word/WorldServer.Switch.cs
+src/GameSrv/Word/WorldServer.Switch.cs:48:                if (string.IsNullOrEmpty(switchData.SlaveArr[nCount].SlaveName))
+src/GameSrv/Word/WorldServer.Switch.cs:54:                SystemShare.ActorMgr.AddOhter(slaveId, switchData.SlaveArr[nCount]);
+src/GameSrv/Word/WorldServer.Switch.cs:130:                    //switchData.SlaveArr[i].SlaveName = baseObject.ChrName;
+src/GameSrv/Word/WorldServer.Switch.cs:131:                    //switchData.SlaveArr[i].KillCount = baseObject.KillMonCount;
+src/GameSrv/Word/WorldServer.Switch.cs:132:                    //switchData.SlaveArr[i].SalveLevel = baseObject.SlaveMakeLevel;
+src/GameSrv/Word/WorldServer.Switch.cs:133:                    //switchData.SlaveArr[i].SlaveExpLevel = baseObject.SlaveExpLevel;
+src/GameSrv/Word/WorldServer.Switch.cs:134:                    //switchData.SlaveArr[i].RoyaltySec = (baseObject.MasterRoyaltyTick - HUtil32.GetTickCount()) / 1000;
+src/GameSrv/Word/WorldServer.Switch.cs:135:                    //switchData.SlaveArr[i].nHP = baseObject.Abil.HP;
+src/GameSrv/Word/WorldServer.Switch.cs:136:                    //switchData.SlaveArr[i].nMP = baseObject.Abil.MP;
+src/OpenMir2/Data/SwitchDataInfo.cs:21:        public SlaveInfo[] SlaveArr;
+
+=> §6 的「落库一致」在本系统 = 两侧都**不新增** slave/pet/hero 表行列：
+   - 宝宝/宠物/英雄态全部在会话内存（Master/SlaveList/SlaveExpLevel/MasterRoyaltyTick…）；
+   - 唯一跨进程/跨服传递走 SwitchDataInfo（RM_10401）；
+   - 击杀经验的副作用最终落在既有 characters 角色记录（经验/等级列），非本系统新增。
