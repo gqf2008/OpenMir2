@@ -1,0 +1,28 @@
+M3④-实现 C 第 ③ 片（怪物帧面）—— 边界与差量
+=============================================
+
+## 本片增量（工作树 vs 上一 head a5d8d579 之上的 merge 提交）
+
+`git diff --name-status HEAD`（HEAD = `f7725161` = 把 origin/master `e2b94234` 并入本分支后的 merge）：
+
+    M  mir2-rs/bins/game-svr/src/downlink.rs
+    M  mir2-rs/bins/game-svr/src/enter.rs
+    M  mir2-rs/bins/game-svr/src/feature.rs
+    M  mir2-rs/bins/game-svr/src/main.rs
+    M  mir2-rs/bins/game-svr/src/mongen.rs
+    A  mir2-rs/tests/parity/world/monster-ai-frames-20261013/**   （本证据目录）
+
+    ⇒ 本片**只动 `mir2-rs/bins/game-svr/**` + 证据目录**；**零** `crates/world/**`。
+
+## oracle 冻结边界（每个 head 都查）
+
+    git diff --name-only e2b94234 HEAD -- src sql MirClient       # 空
+    git diff --name-only a5d8d579 <new-head> -- src sql MirClient # 空
+
+`src/**`（C# oracle）、`sql/**`、`MirClient/**` 一字未改。
+
+## head 叠加说明（给 reviewer）
+
+本片 head 叠在分片②（head `a5d8d579`，patch `71ced740ff8f02232734e63f68671894a3ecf638`，
+本刻在【待审】）之上。**本片增量 = `f7725161..<new-head>`**（5 个代码文件 + 本证据目录）；
+对 master 的差量 = 分片② + 分片③。若分片② 被 `request_changes`，本片随之 rebase（不 merge、不自签）。
