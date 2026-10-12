@@ -1,0 +1,201 @@
+# 03 夹具可复用性调查 + 时间门可控性（M3⑧ 公会/攻城；DoD② 设计，不实现）
+# 生成：2026-10-12T21:21:53Z  仓库 = f2eb43d693305a02c73f745236c9f87f6391db76
+
+===== [A] run_pair.ps1：两相固定起点 pin + 会话入库（未被 peer 会话） =====
+33:  powershell -ExecutionPolicy Bypass -File run_pair.ps1 -SelfTestRed # 红检：入口不通必须判失败
+45:  [switch]$FixedNewChr,            # M3 固定建角场景（卡 openmir2-m3-botsrv-fixed-newchr）
+57:  [switch]$PinStartPose,           # T-14 固定起点变体（owner 86478c55/d7798370）：预热建角 → SQL pin → BEFORE 快照 → 计分跑（选角；不带 -FixedNewChr/-NewAccount）
+66:  [int]$PinSettleSeconds = 3,      # 仅 -PinStartPose：每轮 pin 后的 settle 窗口（异步掉线存档落库，见 gate_guards.ps1 ⑥）
+67:  [int]$PinMaxAttempts = 5,        # 仅 -PinStartPose：settle+hold 最多轮数（仍 hold 不住 ⇒ throw，fail-closed）
+68:  [switch]$AttackPinPair,          # 攻击变体：两 bot **相邻**固定起点（attacker/victim；配合 -AttackSequence）
+73:  [switch]$SelfTestRed
+168:if ($SelfTestRed) {
+233:    $obj['pin_sql'] = Format-M3StartPoseSql -ChrName "${Prefix}0" -MapName $PinMapName -HomeMap $PinHomeMap -HomeX $PinHomeX -HomeY $PinHomeY `
+235:    $obj['pin_sql_all'] = @(Get-M3StartPosePinSql -ChrName "${Prefix}0")
+244:      $obj['attack_pin_sql_all'] = $attackSql.ToArray()
+275:    if ($SelfTestRed) {
+497:  if ($SelfTestRed) {
+
+===== [B] run_attack_pair.ps1：peer 双护栏 + 跨侧会话口径 =====
+94:  powershell -ExecutionPolicy Bypass -File run_attack_pair.ps1 -Side rust -Bots 2 -AttackCount 120 -AttackPinPair -PeerSession csharp-...
+269:  $scenarioGuard = Get-M3PeerScenarioGuard -PeerDir $csharpDir -LocalScenario $LocalScenario
+275:  $scopeGuard = Get-M3PeerAttackScopeGuard -PeerDir $csharpDir -LocalScope $LocalScope
+282:  $poseGuard = Get-M3PeerAttackPoseGuard -PeerDir $csharpDir -LocalPose $LocalPose
+302:  $isoGuard = Get-M3PeerIsolationGuard -PeerDir $csharpDir -LocalDir $rustDir
+1466:  Write-Output ("NEXT: 换 Rust 栈后跑  run_attack_pair.ps1 -Side rust -Bots {0} -AttackCount {1} -AttackPinPair -PeerSession {2}" -f $Bots, $AttackCount, $mine.Name)
+1468:  Write-Output 'NOTE: 未给 -PeerSession，跳过跨侧 diff（-Side rust 的正式判据要 C# 对照会话）'
+----- 护栏实现来源（gate_guards.ps1，m3bag 写集） -----
+147:function Get-M3PeerIsolationGuard {
+262:function Get-M3PeerScenarioGuard {
+532:function Get-M3StartPosePinSql {
+752:function Test-M3MonGenEmpty {
+878:function Test-M3MapNoAiConsumers {
+958:function Get-M3PeerAttackPoseGuard {
+1021:function Get-M3AttackPinSql {
+1562:function Get-M3PeerAttackScopeGuard {
+
+===== [C] scoped_diff.py：DB 侧会话 diff（行会/攻城'落库'判据 = 两侧都不新增行/列） =====
+12:  selftest                                  改坏必红自检
+38:# `diff --canonical` 只把**白名单列的列值**替换为占位符，其余列**逐字节比**。
+42:TABLE_COLUMNS = {
+209:    改为逐字节比较——这是本场景"真的比到值"的实现（见 scoped_diff `--fixed-newchr`）。
+211:    cols = TABLE_COLUMNS.get(table)
+213:        print(f"RED: --canonical 遇到未登记表 {table}——先在 scoped_diff.py 的 TABLE_COLUMNS/"
+264:    cols = TABLE_COLUMNS[CHARACTER_TABLE]
+290:            cols = TABLE_COLUMNS.get(table)
+292:                print(f"RED: 快照里有未登记表 {table}——先在 scoped_diff.py 的 TABLE_COLUMNS/"
+419:    # 只填白名单关心的列，其余 39 列用占位常量；列序与 TABLE_COLUMNS 一致。
+420:    cols = TABLE_COLUMNS["mir2_db.characters"]
+430:def cmd_selftest(args):
+432:    tmp = tempfile.mkdtemp(prefix="scoped-diff-selftest-")
+465:    # —— 用例 3/9：--canonical 下，仅易变列（Id/Job/时间戳）不同 ⇒ 必须判绿
+472:    # —— 用例 4/9（改坏必红）：--canonical 下，改动**被比对列**（Gold）⇒ 必须判红
+482:    # —— 用例 6/9（固定建角场景）：--fixed-newchr 下 Job/Hair/Sex **不**置占位；
+491:    #    （同数据在 --canonical 不带 --fixed-newchr 时会因 Job 占位而误判绿）。
+519:    item_cols = TABLE_COLUMNS["mir2_db.characters_item"]
+520:    abil_cols = TABLE_COLUMNS["mir2_db.characters_ablity"]
+579:    #   snap_after.manifest.json）；任一表未在 TABLE_COLUMNS 登记（本片之前是
+
+===== [D] C# 影子栈：可写夹具环境（冻结基线不动） =====
+10:  `E:\MirServer\M2GameSvr` 冻结基线一字未动（只读 robocopy 到影子目录）。
+30:  [string]$Pack = 'E:\MirServer',
+31:  [string]$Shadow = '',
+32:  [string]$LogDir = 'E:\tmp\m3-csharp-hook',
+45:if ([string]::IsNullOrEmpty($Shadow)) { $Shadow = Join-Path $Pack 'M2GameSvr-hook' }
+90:# ---- 准备影子副本（不存在则 robocopy 冻结基线 + 打开 StartupHookProvider） ----
+95:  Write-Output ("SHADOW_COPY {0} -> {1}" -f $src, $Shadow)
+97:  & robocopy $src $Shadow /E /NFL /NDL /NJH /NJS /NP | Out-Null
+98:  if ($LASTEXITCODE -gt 7) { Write-Output ("RED: robocopy 失败 rc={0}" -f $LASTEXITCODE); exit 1 }
+----- 影子目录实测（已存在，含 Castle/ 与 GuildBase 等数据） -----
+E:/MirServer/M2GameSvr-hook
+  Castle/0
+  Castle/1
+  Castle/Castle
+  Castle/List.txt
+  Server.conf 在影子内（可改，冻结基线 E:/MirServer/M2GameSvr/Server.conf 不动）
+
+===== [E] Rust 栈起法：可注入 seed/state/rnglog/isolate + 可覆盖 Server.conf =====
+90:  [string]$GameSvrConf = '',
+94:  [string]$Seed       = '',
+96:  [string]$StateLog   = '',
+99:  [string]$RngLog     = '',
+101:  [switch]$IsolateAttack,
+191:$gsvrConf  = if ([string]::IsNullOrEmpty($GameSvrConf)) { Join-Path $MirServer 'M2GameSvr\Server.conf' } else { $GameSvrConf }
+197:foreach ($p in @($mysqlExe, $dbsrvExe, $lsrvExe, $gsvrExe, $lgExe, $sgExe, $ggExe, $gsvrConf, $lgConf, $sgConf, $ggConf)) {
+215:  Write-Output ("SEED: 将向 game-svr 注入 MIR2_RNG_SEED={0}" -f $seedInfo.Value)
+217:  Write-Output 'SEED: 未指定种子（不注入，与改动前行为一致）'
+229:  Write-Output ("STATE_LOG: 将向 game-svr 注入 MIR2_RNG_STATE_LOG={0}" -f $stateLogInfo.Path)
+231:  Write-Output 'STATE_LOG: 未指定服务端逐击状态 dump（不注入，与改动前行为一致）'
+249:  Write-Output ("RNG_LOG: 将向 game-svr 注入 MIR2_RNG_LOG={0}" -f $rngLogInfo.Path)
+251:  Write-Output 'RNG_LOG: 未指定逐次 rng 流水（不注入，与改动前行为一致）'
+269:  Write-Output 'ISOLATE_ATTACK: 将向 game-svr 注入 MIR2_RNG_ISOLATE_ATTACK=1（攻击路径专用流，attack_seed = MIR2_RNG_SEED + 0x9E37）'
+271:  Write-Output 'ISOLATE_ATTACK: 未指定攻击路径专用流（不注入，与改动前行为一致）'
+319:Start-One -Name 'game-svr'   -Exe $gsvrExe -ExeArgs @($gsvrConf) -WorkDir (Split-Path $gsvrConf -Parent) -Ports @(5000)           -StopOrder 5 -Seed $seedInfo -StateLog $stateLogInfo -RngLog $rngLogInfo -IsolateAttack $isolateInfo
+
+===== [F] 时间门清单（本系统与其它系统最大的不同） =====
+----- F1 Rust 世界是虚拟时钟（每 tick +200ms），模拟逻辑不读墙钟 -----
+6://! - **确定性**：时钟是**虚拟时钟**（`clock_ms`，每 tick +200），模拟逻辑不读墙钟；
+17:use mir2_world_bevy::{advance_clock_system, TickClock, TickOwnerThread, TickRunner};
+29:pub const TICK_INTERVAL_MS: i64 = 200;
+68:    pub clock_ms: i64,
+85:    /// 虚拟时钟（毫秒），每 tick 前进 `TICK_INTERVAL_MS`
+86:    pub clock_ms: i64,
+134:            .insert_resource(TickClock::new(TICK_INTERVAL_MS));
+139:        clock_runner.add_systems(advance_clock_system);
+144:            clock_ms: 0,
+274:        // facade 仍是事实源（`clock_ms`/`tick_seq` 是对外 pub 字段）：先把值写进资源，
+275:        // 跑完读回；数值语义与原 `clock_ms += 200; tick_seq += 1` 逐 tick 相同。
+277:            let mut clock = self.entities.world_mut().resource_mut::<TickClock>();
+278:            clock.clock_ms = self.clock_ms;
+283:            let clock = self.entities.world().resource::<TickClock>();
+284:            self.clock_ms = clock.clock_ms;
+289:            clock_ms: self.clock_ms,
+405:                        self.clock_ms,
+410:                        (&mut self.maps, &mut self.entities, self.clock_ms);
+431:        let now = self.clock_ms;
+671:        map.add_floor_item(px, py, obj_id, meta, self.clock_ms)
+8://! 2. **单线程 tick 宿主**：`std::thread` 拥有 `crats/world::World`，按 `TICK_INTERVAL_MS` 调 `World::tick`；
+506:/// sim 线程：建世界 → 按 `TICK_INTERVAL_MS` tick → 消费 I/O 侧事件。
+3076:        mir2_world::TICK_INTERVAL_MS,
+3085:        u64::try_from(mir2_world::TICK_INTERVAL_MS).unwrap_or(200),
+----- F2 oracle 侧时间门用 GetTickCount（进程 uptime） -----
+src/M2Server/Guild/GuildManager.cs:154:                    if ((HUtil32.GetTickCount() - warGuild.WarTick) > warGuild.WarTime) //行会战时间到
+src/M2Server/Castle/UserCastle.cs:44:            SaveTick = 0;
+src/M2Server/Castle/UserCastle.cs:73:        public int SaveTick { get; set; }
+src/M2Server/Castle/UserCastle.cs:74:        public int StartCastleWarTick { get; set; }
+src/M2Server/Castle/UserCastle.cs:358:                                StartCastleWarTick = HUtil32.GetTickCount();
+src/M2Server/Castle/UserCastle.cs:410:                        if ((HUtil32.GetTickCount() - StartCastleWarTick) > (SystemShare.Config.CastleWarTime - SystemShare.Config.ShowCastleWarEndMsgTime)) // 3 * 60 * 60 * 1000 - 10 * 60 * 1000
+src/M2Server/Castle/UserCastle.cs:419:                    if ((HUtil32.GetTickCount() - StartCastleWarTick) > SystemShare.Config.CastleWarTime)
+src/M2Server/Castle/UserCastle.cs:519:            if ((HUtil32.GetTickCount() - StartCastleWarTick) <= SystemShare.Config.GetCastleTime)
+src/M2Server/Castle/UserCastle.cs:798:            if ((HUtil32.GetTickCount() - SaveTick) > 10 * 60 * 1000)
+src/M2Server/Castle/UserCastle.cs:800:                SaveTick = HUtil32.GetTickCount();
+src/M2Server/Castle/UserCastle.cs:930:                if ((HUtil32.GetTickCount() - castleDoor.BaseObject.StruckTick) > 60 * 1000)
+src/M2Server/Castle/UserCastle.cs:939:                if ((HUtil32.GetTickCount() - castleDoor.BaseObject.StruckTick) > 60 * 1000)
+src/M2Server/Castle/UserCastle.cs:978:                if ((HUtil32.GetTickCount() - Wall.StruckTick) > 60 * 1000)
+src/M2Server/Castle/UserCastle.cs:987:                if ((HUtil32.GetTickCount() - Wall.StruckTick) > 60 * 1000)
+----- F3 oracle 侧墙钟门（DateTime.Now） -----
+77:        public DateTime IncomeToday { get; set; }
+278:                    attackerInfo.AttackDate = time;
+282:                    attackerInfo.AttackDate = DateTime.Now;
+306:                loadLis.Add(attackerInfo.sGuildName + "       \"" + attackerInfo.AttackDate + '\"');
+328:                int Year = DateTime.Now.Year;
+329:                int Month = DateTime.Now.Month;
+330:                int Day = DateTime.Now.Day;
+331:                int wYear = IncomeToday.Year;
+332:                int wMonth = IncomeToday.Month;
+333:                int wDay = IncomeToday.Day;
+337:                    IncomeToday = DateTime.Now;
+342:                    int hour = DateTime.Now.Hour;
+343:                    if (hour == SystemShare.Config.StartCastlewarTime) // 20
+350:                            wYear = attackerInfo.AttackDate.Year;
+351:                            wMonth = attackerInfo.AttackDate.Month;
+352:                            wDay = attackerInfo.AttackDate.Day;
+722:            int Year = AttackerInfo.AttackDate.Year;
+723:            int Month = AttackerInfo.AttackDate.Month;
+724:            int Day = AttackerInfo.AttackDate.Day;
+738:                int Year = AttackerInfo.AttackDate.Year;
+739:                int Month = AttackerInfo.AttackDate.Month;
+740:                int Day = AttackerInfo.AttackDate.Day;
+1006:            AttackerInfo.AttackDate = M2Share.AddDateTimeOfDay(DateTime.Now, SystemShare.Config.StartCastleWarDays);
+----- F4 生效的配置值（现网 Server.conf） -----
+348:StartCastleWarDays=2
+349:ShowCastleWarEndMsgTime=600000
+350:CastleWarTime=7200000
+351:GetCastleTime=600000
+380:StartCastlewarTime=20
+767:GuildWarTime=7200000
+
+===== [G] BotSrv 侧现成件：行会发送原语 + 行会帧观测 =====
+3141:        public void SendGuildDlg()
+3202:        public void SendGuildHome()
+3208:        private void SendGuildMemberList()
+3214:        public void SendGuildAddMem(string who)
+3223:        public void SendGuildDelMem(string who)
+3232:        public void SendGuildUpdateNotice(string notices)
+3238:        public void SendGuildUpdateGrade(string rankinfo)
+765:                case Messages.SM_GUILDMESSAGE:
+1293:                case Messages.SM_OPENGUILDDLG:
+1296:                case Messages.SM_SENDGUILDMEMBERLIST:
+1299:                case Messages.SM_OPENGUILDDLG_FAIL:
+1388:                case Messages.SM_CHANGEGUILDNAME:
+1394:                case Messages.SM_GUILDADDMEMBER_OK:
+1397:                case Messages.SM_GUILDADDMEMBER_FAIL:
+1417:                case Messages.SM_GUILDDELMEMBER_OK:
+1420:                case Messages.SM_GUILDDELMEMBER_FAIL:
+1437:                case Messages.SM_GUILDRANKUPDATE_FAIL:
+1460:                case Messages.SM_GUILDMAKEALLY_OK:
+1461:                case Messages.SM_GUILDMAKEALLY_FAIL:
+1478:                case Messages.SM_GUILDBREAKALLY_OK:
+1479:                case Messages.SM_GUILDBREAKALLY_FAIL:
+1493:                case Messages.SM_BUILDGUILD_OK:
+1497:                case Messages.SM_BUILDGUILD_FAIL:
+----- BotSrv 把 CM_GUILD* 接进动作序列的调用点（现网） -----
+src/BotSrv/Player\RobotPlayer.Operate.cs:1395:                    SendGuildMemberList();
+src/BotSrv/Player\RobotPlayer.Operate.cs:1418:                    SendGuildMemberList();
+src/BotSrv/Player\RobotPlayer.cs:3141:        public void SendGuildDlg()
+src/BotSrv/Player\RobotPlayer.cs:3202:        public void SendGuildHome()
+src/BotSrv/Player\RobotPlayer.cs:3208:        private void SendGuildMemberList()
+src/BotSrv/Player\RobotPlayer.cs:3214:        public void SendGuildAddMem(string who)
+src/BotSrv/Player\RobotPlayer.cs:3223:        public void SendGuildDelMem(string who)
+src/BotSrv/Player\RobotPlayer.cs:3232:        public void SendGuildUpdateNotice(string notices)
+src/BotSrv/Player\RobotPlayer.cs:3238:        public void SendGuildUpdateGrade(string rankinfo)
