@@ -1911,7 +1911,7 @@ fn handle_spell_cmd(
     socket: i32,
     online: &OnlineRegistry,
     world: &mir2_world::World,
-    sessions: &std::collections::HashMap<String, SessionGround>,
+    saves: &std::collections::HashMap<String, SavedHuman>,
     displays: &mut downlink::DisplayTable,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) {
@@ -1933,9 +1933,12 @@ fn handle_spell_cmd(
     let (cur_x, cur_y) = (e.x, e.y);
     let is_dead = e.death;
     let req = magicwire::parse_spell(recog, tag, param, series);
-    let has_magic = sessions
+    // `GetMagicInfo(nKey)` 读角色记录的 `MagicList`（= `SavedHuman.record.data.magic`，进世界时
+    // 保位存下的 `CharacterData.magic`）。
+    let has_magic = saves
         .get(chr_name)
-        .is_some_and(|sg| magicwire::find_magic(&sg.magics, req.magic_id).is_some());
+        .and_then(|s| s.record.data.magic.as_deref())
+        .is_some_and(|list| magicwire::find_magic(list, req.magic_id).is_some());
     // `IsCanSpell`（`PlayObject.cs:960` 初值 true；`LockSpellAction` 状态面未移植 ⇒ 恒 true，登记）。
     if let Some(reject) = magicwire::spell_reject(true, is_dead, has_magic) {
         glog!(
@@ -1956,23 +1959,32 @@ fn handle_spell_cmd(
 /// **`openmir2-m3-attack-magic-wiring`（第二片）**：`CM_MAGICKEYCHANGE(1008)` 派发
 /// （oracle `WorldServer.cs:857-859` → `PlayObject.Message.cs:871-873` → `PlayObject.Operate.cs:774-786`）。
 ///
-/// 只改 `MagicList` 里命中项 `Key`，**无回帧**（oracle 不 `SendSocket`）。
+/// 只改 `MagicList` 里命中项 `Key`，**无回帧**（oracle 不 `SendSocket`）。改的是角色记录
+/// （`SavedHuman.record.data.magic`）⇒ 存档（`build_save_record` 克隆整条记录）会把新 `Key` 一起落库
+/// （oracle `MakeSaveRcd` 的 `MagicList` 同源）。
 fn handle_magic_key_cmd(
     recog: i32,
     param: u16,
     chr_name: &str,
     socket: i32,
-    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    saves: &mut std::collections::HashMap<String, SavedHuman>,
 ) {
     let (skill_idx, key) = magicwire::parse_magic_key(recog, param);
-    let Some(sg) = sessions.get_mut(chr_name) else {
+    let Some(saved) = saves.get_mut(chr_name) else {
         glog!(
             "WRN",
-            "CM_MAGICKEYCHANGE：ChrName={chr_name} socket={socket} 无会话态 ⇒ 丢弃"
+            "CM_MAGICKEYCHANGE：ChrName={chr_name} socket={socket} 无角色记录 ⇒ 丢弃"
         );
         return;
     };
-    if !magicwire::change_magic_key(&mut sg.magics, skill_idx, key) {
+    let Some(list) = saved.record.data.magic.as_mut() else {
+        glog!(
+            "DBG",
+            "CM_MAGICKEYCHANGE：ChrName={chr_name} magic_id={skill_idx} 记录无 MagicList ⇒ 不改键"
+        );
+        return;
+    };
+    if !magicwire::change_magic_key(list, skill_idx, key) {
         glog!(
             "DBG",
             "CM_MAGICKEYCHANGE：ChrName={chr_name} magic_id={skill_idx} 不在 MagicList ⇒ 不改键（oracle 同：无命中即无动作）"
@@ -2611,10 +2623,6 @@ struct SessionGround {
     hunger_status: i32,
     /// `PlayObject.QueryBagItemsTick`（`PlayObject.Message.cs:786` 的 30s 限频）：`None` = 未查过（照 oracle 首次即过）。
     query_bag_items_tick: Option<i64>,
-    /// `PlayObject.MagicList`（角色记录 `CharacterData.magic` 的 `MagicRcd`，保位）：
-    /// `CM_MAGICKEYCHANGE` 改 `Key`、`CM_SPELL` 的 `GetMagicInfo(int)` 查表都用它
-    /// （`openmir2-m3-attack-magic-wiring` 第二片）。
-    magics: Vec<Option<record::MagicRcd>>,
 }
 
 /// 一次 `RecalcAbilitys()` 的静态输入（不含随动作变化的 `UseItems`/`ItemList`/`WAbil`）。
@@ -2869,13 +2877,7 @@ fn sim_loop(
                     } else if magicwire::is_magic_key_ident(cmd.ident) {
                         // `openmir2-m3-attack-magic-wiring`（第二片）：`CM_MAGICKEYCHANGE(1008)`
                         // （oracle `WorldServer.cs:857-859` → `PlayObject.Operate.cs:774`）。
-                        handle_magic_key_cmd(
-                            cmd.recog,
-                            cmd.param,
-                            &chr_name,
-                            socket,
-                            &mut ground_sessions,
-                        );
+                        handle_magic_key_cmd(cmd.recog, cmd.param, &chr_name, socket, &mut saves);
                     } else if magicwire::is_spell_ident(cmd.ident) {
                         // 同片：`CM_SPELL(3017)` 派发（oracle `WorldServer.cs:783-790`）。
                         handle_spell_cmd(
@@ -2887,7 +2889,7 @@ fn sim_loop(
                             socket,
                             &online,
                             &world,
-                            &ground_sessions,
+                            &saves,
                             &mut displays,
                             &gates,
                         );
@@ -3393,7 +3395,6 @@ fn sim_loop(
                                                             user_unlock_durg: false,
                                                             hunger_status: d.hunger_status,
                                                             query_bag_items_tick: None,
-                                                            magics: d.magic.clone().unwrap_or_default(),
                                                         },
                                                     );
                                                     // 存档用：留下原始记录 + 进图逻辑名（断线/`MakeGhost` 时用它合成）。
@@ -4478,7 +4479,6 @@ mod tests {
             user_unlock_durg: false,
             hunger_status: 0,
             query_bag_items_tick: None,
-            magics: Vec::new(),
         }
     }
 
@@ -4544,7 +4544,6 @@ mod tests {
             user_unlock_durg: false,
             hunger_status: 55,
             query_bag_items_tick: None,
-            magics: Vec::new(),
         };
         let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
         world.open_session("hero");
@@ -4989,7 +4988,6 @@ mod tests {
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
-                magics: Vec::new(),
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -5153,7 +5151,6 @@ mod tests {
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
-                magics: Vec::new(),
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -5274,7 +5271,6 @@ mod tests {
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
-                magics: Vec::new(),
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -5394,7 +5390,6 @@ mod tests {
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
-                magics: Vec::new(),
             },
         );
 
@@ -6097,7 +6092,6 @@ mod tests {
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
-                magics: Vec::new(),
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -6236,7 +6230,6 @@ mod tests {
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
-                magics: Vec::new(),
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -6473,7 +6466,6 @@ mod tests {
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
-                magics: Vec::new(),
             },
         );
         let mut online: OnlineRegistry = Vec::new();
@@ -6748,15 +6740,22 @@ mod tests {
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
-        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
-        let mut sg = test_session_ground(caster);
-        sg.magics = vec![Some(record::MagicRcd {
+        let mut saves: HashMap<String, SavedHuman> = HashMap::new();
+        let mut record = stage6_record();
+        record.data.magic = Some(vec![Some(record::MagicRcd {
             mag_idx: 1,
             level: 1,
             magic_key: u16::from(b'm'),
             tran_point: 0,
-        })];
-        sessions.insert("caster".into(), sg);
+        })]);
+        saves.insert(
+            "caster".into(),
+            SavedHuman {
+                account: "uc".into(),
+                record,
+                enter_map: "0".into(),
+            },
+        );
         const FIREBALL: u16 = 1;
 
         // ① 未知魔法号（守卫 NoMagic）⇒ 不回 ack。
@@ -6769,7 +6768,7 @@ mod tests {
             911,
             &online,
             &world,
-            &sessions,
+            &saves,
             &mut displays,
             &gates,
         );
@@ -6785,7 +6784,7 @@ mod tests {
             911,
             &online,
             &world,
-            &sessions,
+            &saves,
             &mut displays,
             &gates,
         );
@@ -6817,7 +6816,7 @@ mod tests {
             911,
             &online,
             &world,
-            &sessions,
+            &saves,
             &mut displays,
             &gates,
         );
@@ -6825,9 +6824,12 @@ mod tests {
         world.entities.get_mut(caster).unwrap().death = false;
 
         // ④ `CM_MAGICKEYCHANGE`：命中 `mag_idx == Recog` ⇒ 改 `Key`；无回帧。
-        handle_magic_key_cmd(1, u16::from(b'f'), "caster", 911, &mut sessions);
+        handle_magic_key_cmd(1, u16::from(b'f'), "caster", 911, &mut saves);
         assert_eq!(
-            sessions["caster"].magics[0].as_ref().unwrap().magic_key,
+            saves["caster"].record.data.magic.as_ref().unwrap()[0]
+                .as_ref()
+                .unwrap()
+                .magic_key,
             u16::from(b'f'),
             "ClientChangeMagicKey 置 Key"
         );
@@ -6836,9 +6838,12 @@ mod tests {
             "改魔法键不发帧（oracle 无 SendSocket）"
         );
         // 未命中 ⇒ 不改、也不红。
-        handle_magic_key_cmd(42, u16::from(b'z'), "caster", 911, &mut sessions);
+        handle_magic_key_cmd(42, u16::from(b'z'), "caster", 911, &mut saves);
         assert_eq!(
-            sessions["caster"].magics[0].as_ref().unwrap().magic_key,
+            saves["caster"].record.data.magic.as_ref().unwrap()[0]
+                .as_ref()
+                .unwrap()
+                .magic_key,
             u16::from(b'f'),
             "未命中不改已有键"
         );

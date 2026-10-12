@@ -1,7 +1,7 @@
 $ # red-2: magicwire::spell_reject 不看 has_magic（未知魔法号也过守卫）
 $ cargo test -p game-svr --offline --bin game-svr spell_cmd_dispatches_guard_ack_and_magic_key_change
    Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.87s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.33s
      Running unittests src\main.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-eb39968088e3f1ec.exe)
 
 running 1 test
@@ -11,7 +11,7 @@ failures:
 
 ---- tests::spell_cmd_dispatches_guard_ack_and_magic_key_change stdout ----
 
-thread 'tests::spell_cmd_dispatches_guard_ack_and_magic_key_change' (30296) panicked at bins\game-svr\src\main.rs:6776:9:
+thread 'tests::spell_cmd_dispatches_guard_ack_and_magic_key_change' (26452) panicked at bins\game-svr\src\main.rs:6775:9:
 未知魔法号 ⇒ 不回 ack / 无帧
 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 

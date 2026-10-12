@@ -10,7 +10,7 @@
 | 文件 | 内容 |
 | --- | --- |
 | `bins/game-svr/src/magicwire.rs`（新增） | `CM_SPELL`/`CM_MAGICKEYCHANGE` 的纯函数接缝：入帧映射（`parse_spell`/`parse_magic_key`）、`find_magic`（= `GetMagicInfo(int)`）、`change_magic_key`（= `ClientChangeMagicKey`）、`spell_reject`（= `ClientSpellXY` 三守卫）；6 条单测 |
-| `bins/game-svr/src/main.rs` | `SessionGround` 新增 `magics: Vec<Option<record::MagicRcd>>`（进世界时从 `CharacterData.magic` 保位载入）；`handle_spell_cmd` / `handle_magic_key_cmd`；sim 循环两处派发；1 条进程级用例 |
+| `bins/game-svr/src/main.rs` | `handle_spell_cmd` / `handle_magic_key_cmd`；魔法表**不改 `SessionGround`**——直接用已有的 `SavedHuman.record.data.magic`（该结构就是“未在 SessionGround 建模的字段原样保留”的整条记录）⇒ `CM_MAGICKEYCHANGE` 改的 `Key` 会随存档落库；sim 循环两处派发；1 条进程级用例 |
 | `mir2-rs/bins/` 其余 | 未动 |
 
 `magicwire` 留在 bin（依赖 bin 私有的 `record::MagicRcd`）；lib 里的 `movewire`/`attackwire` 只依赖 `mir2_protocol`/`mir2_world`。
@@ -89,6 +89,9 @@
 - **`LateDelivery`**：Rust 入帧路径无延时重投（`command` 直投）⇒ 恒按 `false` 处理；oracle 此时
   `!boLateDelivery` 限速支**应生效**，本片按**直通**（等价 `boLateDelivery`）并登记
   （与 `attackwire`/`movewire` 同源登记）。
+- **魔法表存放**：用 `SavedHuman.record.data.magic`（进世界时保位存下的 `CharacterData.magic`），
+  **未改 `SessionGround`**（brief 顶部 owner 约束 #1 的三处保护面之一）；`CM_MAGICKEYCHANGE` 改的 `Key`
+  随 `build_save_record`（克隆整条记录）落库，与 oracle `MakeSaveRcd` 的 `MagicList` 同源。
 - **`IsCanSpell`**：oracle 默认 `true`（`PlayObject.cs:960` 初值；`Config.LockSpellAction` 与
   `ClientUseItems` 的置位面未移植）⇒ 本片恒 `true`（登记）。
 - **`STONE`**（`StatusTimeArr[PoisonState.STONE]`）：状态位面未移植 ⇒ `Death` 已接、`STONE` 未接。

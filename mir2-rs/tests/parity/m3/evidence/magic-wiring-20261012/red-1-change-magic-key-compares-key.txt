@@ -1,7 +1,7 @@
 $ # red-1: magicwire::change_magic_key 改比 magic_key（而非 mag_idx）
 $ cargo test -p game-svr --offline --bin game-svr spell_cmd_dispatches_guard_ack_and_magic_key_change
    Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.99s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.93s
      Running unittests src\main.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-eb39968088e3f1ec.exe)
 
 running 1 test
@@ -10,11 +10,11 @@ test tests::spell_cmd_dispatches_guard_ack_and_magic_key_change ... FAILED
 failures:
 
 ---- tests::spell_cmd_dispatches_guard_ack_and_magic_key_change stdout ----
-01:15:23.636 [DBG] CM_SPELL：ChrName=caster magic_id=99 被守卫拒绝 NoMagic（oracle 回 RM_MOVEFAIL，编码器未接）
-01:15:23.636 [DBG] CM_SPELL：ChrName=caster magic_id=1 被守卫拒绝 DeathOrStone（oracle 回 RM_MOVEFAIL，编码器未接）
-01:15:23.636 [DBG] CM_MAGICKEYCHANGE：ChrName=caster magic_id=1 不在 MagicList ⇒ 不改键（oracle 同：无命中即无动作）
+01:20:16.330 [DBG] CM_SPELL：ChrName=caster magic_id=99 被守卫拒绝 NoMagic（oracle 回 RM_MOVEFAIL，编码器未接）
+01:20:16.330 [DBG] CM_SPELL：ChrName=caster magic_id=1 被守卫拒绝 DeathOrStone（oracle 回 RM_MOVEFAIL，编码器未接）
+01:20:16.330 [DBG] CM_MAGICKEYCHANGE：ChrName=caster magic_id=1 不在 MagicList ⇒ 不改键（oracle 同：无命中即无动作）
 
-thread 'tests::spell_cmd_dispatches_guard_ack_and_magic_key_change' (15052) panicked at bins\game-svr\src\main.rs:6829:9:
+thread 'tests::spell_cmd_dispatches_guard_ack_and_magic_key_change' (30292) panicked at bins\game-svr\src\main.rs:6828:9:
 assertion `left == right` failed: ClientChangeMagicKey 置 Key
   left: 109
  right: 102
