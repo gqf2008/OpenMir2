@@ -1,0 +1,103 @@
+--- 0) 入口实现识别护栏 ---
+ENTRY 5000 <- game-svr [rust-or-other] E:\tmp\openmir2-m3bag-target\debug\game-svr.exe
+ENTRY 7000 <- login-gate [rust-or-other] E:\tmp\openmir2-m3bag-target\debug\login-gate.exe
+ENTRY 7100 <- sel-gate [rust-or-other] E:\tmp\openmir2-m3bag-target\debug\sel-gate.exe
+ENTRY 7200 <- game-gate [rust-or-other] E:\tmp\openmir2-m3bag-target\debug\game-gate.exe
+--- 0.5) preflight：Rust 断线存档（T-27） ---
+PREFLIGHT Rust 断线存档：已实现（game-svr 命中 DB_SAVEHUMANRCD）
+--- 1) 预检：MySQL / 前缀 ---
+PREFLIGHT MySQL 在听
+--- 2) 侧运行（复用 run_pair.ps1；同序列 = -FixedNewChr + -BagEquipSequence） ---
+SESSION E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\tests\parity\m3\sessions\rust-20261012-090020
+SIDE=rust PREFIX=m3rbag4 BOTS=1 ENTRY=127.0.0.1:7000
+PREFLIGHT 入口 127.0.0.1:7000 在听
+RUNTIME mysqld <- D:\mysql\mariadb-10.11.19-winx64\bin\mysqld.exe
+RUNTIME DBSrv <- E:\Users\gxh\Documents\GitHub\OpenMir2\src\DBSrv\bin\Release\DBSrv.exe
+RUNTIME LoginSrv <- E:\Users\gxh\Documents\GitHub\OpenMir2\src\LoginSrv\bin\Release\LoginSrv.exe
+ACCT_LEN_OK 最长账号名 8 字符（上限 10）
+FRESH_CHECK account=0 character=0
+--- 2.5) 固定起点：预热建角 + SQL pin ---
+PREWARM run_bots.ps1 -Count 1 -Prefix m3rbag4 -NewAccount -Port 7000 -RequireCharCreated -FixedNewChr -NewChrJob 0 -NewChrHair 2 -NewChrSex 0
+BUILD BotSrv...
+CONFIG: 1 bots, prefix=m3rbag4, target=127.0.0.1:7000, NewAccount=True, FixedNewChr=True
+CONFIG_FIXED_NEWCHR Job=0 Hair=2 Sex=0
+BOTSRV_PID=27948 LOG=E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\tests\botload\bots-20261012-090021.log
+PROGRESS spawned=0 login_ok=0/1 in_world=0/1 (src=load_stats.ndjson)
+PROGRESS spawned=1 login_ok=0/1 in_world=0/1 (src=load_stats.ndjson)
+PROGRESS spawned=1 login_ok=1/1 in_world=1/1 (src=load_stats.ndjson)
+GREEN: 1/1 登录成功 (100%)；char_created=1/1
+PIN_RETRY attempt=1 settle_rounds=1 prev_match=False pinned=1/1 bag=4/4 abil=1/1（pin_hold_needs_consecutive_settle）
+PIN_HOLD attempt=2（连续两轮 settle 复验均 hold 住）
+PIN_START_POSE map=0 home=0,289,618 pos=289,618 level=1 dir=0 bag=48@0,97@1,207@2,3@3 abil=1
+SNAP mir2_account.account: rows=7268 sha256=ebe7a513520e6791…
+SNAP mir2_account.account_protection: rows=7156 sha256=b1093087385c1a8d…
+SNAP mir2_db.characters: rows=7131 sha256=3c07a65a66792246…
+SNAP mir2_db.characters_ablity: rows=7134 sha256=344a554961a8009a…
+SNAP mir2_db.characters_bonusability: rows=1 sha256=2a7c7b3966c0dc02…
+SNAP mir2_db.characters_item: rows=92731 sha256=b506ce4b403f15d4…
+SNAP mir2_db.characters_item_attr: rows=0 sha256=e3b0c44298fc1c14…
+SNAP mir2_db.characters_magic: rows=8 sha256=0ac71ebc3756c582…
+SNAP mir2_db.characters_bagitem: rows=328118 sha256=67b29b6b423dff62…
+SNAP mir2_db.characters_storageitem: rows=356650 sha256=40cb6822f0cb7368…
+SNAP mir2_db.characters_status: rows=7133 sha256=6ef824ef34cabfeb…
+SNAP mir2_db.characters_quest: rows=0 sha256=e3b0c44298fc1c14…
+SNAP mir2_db.characters_indexes: rows=7133 sha256=ba65c00b8d33c363…
+SNAP_OK 13 表 -> E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\tests\parity\m3\sessions\rust-20261012-090020\snap_before
+OPS_FIXED_NEWCHR Job=0 Hair=2 Sex=0
+OPS_BAGEQUIPSEQ step_ms=1000 start_delay_ms=3000 disable_autoplay=True
+OPS run_bots.ps1 -Count 1 -Prefix m3rbag4 -Port 7000 -BagEquipSequence -BagEquipStepMs 1000 -BagEquipStartDelayMs 3000 -DisableAutoPlay
+BUILD BotSrv...
+CONFIG: 1 bots, prefix=m3rbag4, target=127.0.0.1:7000, NewAccount=False, FixedNewChr=False
+CONFIG_BAGEQUIPSEQ step_ms=1000 start_delay_ms=3000
+CONFIG_DISABLE_AUTOPLAY on
+BOTSRV_PID=3656 LOG=E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\tests\botload\bots-20261012-090047.log
+PROGRESS spawned=0 login_ok=0/1 in_world=0/1 bag_seq_done=0/1 (src=load_stats.ndjson)
+PROGRESS spawned=1 login_ok=1/1 in_world=1/1 bag_seq_done=0/1 (src=load_stats.ndjson)
+PROGRESS spawned=1 login_ok=1/1 in_world=1/1 bag_seq_done=1/1 (src=load_stats.ndjson)
+GREEN: 1/1 登录成功 (100%)；bag_seq_done=1/1
+OPS_EXIT 0
+OPS_MARKERS login_ok=1/1 char_created=0/1 enter_world=1/1 bot_log=bots-20261012-090047.log
+OPS_BAGSEQ_MARKERS count=9
+BAGSEQ M3BAGSEQ arm start_delay_ms=3000 step_ms=1000
+BAGSEQ M3BAGSEQ SM_BAGITEMS body_len=668 bag_view=4
+BAGSEQ M3BAGSEQ snapshot bag_view=4 takeon=6 takeoff=0 drop=6 eat=1
+BAGSEQ M3BAGSEQ step=0 op=CM_PICKUP x=289 y=618
+BAGSEQ M3BAGSEQ step=1 op=CM_TAKEONITEM bag=6 where=0 make=90000002 name=布衣(男)
+BAGSEQ M3BAGSEQ step=2 op=CM_TAKEOFFITEM where=0 make=90000002 name=布衣(男)
+BAGSEQ M3BAGSEQ step=3 op=CM_DROPITEM bag=6 make=90000002 name=布衣(男)
+BAGSEQ M3BAGSEQ step=4 op=CM_EAT bag=1 make=90000004 stdmode=0 name=金创药(小量)
+BAGSEQ M3BAGSEQ done
+SETTLE_BAGSEQ 等掉线存档落库（3s）
+SNAP mir2_account.account: rows=7268 sha256=028fe51494576272…
+SNAP mir2_account.account_protection: rows=7156 sha256=b1093087385c1a8d…
+SNAP mir2_db.characters: rows=7131 sha256=329a5eb2bbe3671a…
+SNAP mir2_db.characters_ablity: rows=7134 sha256=9507fe9dee9cfa9c…
+SNAP mir2_db.characters_bonusability: rows=1 sha256=2a7c7b3966c0dc02…
+SNAP mir2_db.characters_item: rows=92731 sha256=b506ce4b403f15d4…
+SNAP mir2_db.characters_item_attr: rows=0 sha256=e3b0c44298fc1c14…
+SNAP mir2_db.characters_magic: rows=8 sha256=0ac71ebc3756c582…
+SNAP mir2_db.characters_bagitem: rows=328118 sha256=c6cc54fe90b35ef3…
+SNAP mir2_db.characters_storageitem: rows=356650 sha256=40cb6822f0cb7368…
+SNAP mir2_db.characters_status: rows=7133 sha256=6ef824ef34cabfeb…
+SNAP mir2_db.characters_quest: rows=0 sha256=e3b0c44298fc1c14…
+SNAP mir2_db.characters_indexes: rows=7133 sha256=5a6cb66984782e00…
+SNAP_OK 13 表 -> E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\tests\parity\m3\sessions\rust-20261012-090020\snap_after
+EXTRACT prefix=m3rbag4 rows=115 (family_by_playerid=111 player_ids=1) -> E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\tests\parity\m3\sessions\rust-20261012-090020\scoped_before.jsonl
+EXTRACT prefix=m3rbag4 rows=115 (family_by_playerid=111 player_ids=1) -> E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\tests\parity\m3\sessions\rust-20261012-090020\scoped_after.jsonl
+DELTA 改动行合计=14 表数=5 -> E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\tests\parity\m3\sessions\rust-20261012-090020\delta.json
+  mir2_account.account: +1 -1
+  mir2_db.characters: +1 -1
+  mir2_db.characters_ablity: +1 -1
+  mir2_db.characters_bagitem: +3 -3
+  mir2_db.characters_indexes: +1 -1
+SNAPSHOT_TRIMMED 已把 snap_before/snap_after 瘦身为 *.manifest.json（-KeepSnapshots 可保留原始 TSV）
+BASELINE_OK E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\tests\parity\m3\sessions\rust-20261012-090020\baseline.json
+SNAPSHOT_HASHES_BEFORE tables=13; AFTER tables=13
+SESSION_RUST rust-20261012-090020
+BAGSEQ_OK markers=9 done=True
+BAGEQUIP_SCOPE_OK peer='on step_ms=1000 start_delay_ms=3000 disable_autoplay=True' local='on step_ms=1000 start_delay_ms=3000 disable_autoplay=True'
+STARTPOSE_OK peer='map=0 home=0,289,618 pos=289,618 level=1 dir=0 bag=48@0,97@1,207@2,3@3 abil=1' local='map=0 home=0,289,618 pos=289,618 level=1 dir=0 bag=48@0,97@1,207@2,3@3 abil=1'
+--- 跨侧作用域字段级 diff（--canonical --fixed-newchr） ---
+GREEN: 作用域内 9 张表逐行一致
+GREEN: 跨侧作用域内字段级 diff = 0
+RC=0

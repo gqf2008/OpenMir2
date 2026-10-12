@@ -17,3 +17,8 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --offline -- -D warnings
 cargo test --workspace --offline            # 73 suites / 566 passed / 0 failed / 16 ignored
 cargo run --offline -p msgcodegen -- --check # 604 条常量一致
+
+# ⚠ 树对应关系（owner/reviewer-5 O-2，2026-10-12）：
+#   gates-test-workspace.txt 的 73/566/0/16 采于 **早于 `0d3b733a` 的树**（本片零 .rs，非 158f8101 head 计数）。
+#   158f8101 head 上由 reviewer-5 独立复跑的计数 = 73 suites / 571 passed / 0 failed / 16 ignored（条目 e55a9485）。
+#   ⇒ 本文件计数只与其对应树对齐，不作为 head 计数引用。

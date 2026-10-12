@@ -1,0 +1,24 @@
+正在停止服务端…
+  已停止 LoginGate.exe (pid 7316)
+  已停止 SelGate.exe (pid 14860)
+  已停止 GameGate.exe (pid 11668)
+  已停止 GameSrv.exe (pid 9096)
+  已停止 LoginSrv.exe (pid 25092)
+  已停止 DBSrv.exe (pid 16088)
+  已停止 mysqld.exe (pid 22624)
+
+=== Legend of Mir 2 服务端状态 ===
+
+Component PID Ports                        
+--------- --- -----                        
+MySQL     -   3306 DOWN                    
+DBSrv     -   6000 DOWN 5100 DOWN 5700 DOWN
+LoginSrv  -   5500 DOWN 5600 DOWN          
+GameSvr   -   5000 DOWN                    
+LoginGate -   7000 DOWN                    
+SelGate   -   7100 DOWN                    
+RunGate   -   7200 DOWN                    
+客户端       -   未连接                          
+
+
+日志目录: E:\MirServer\logs

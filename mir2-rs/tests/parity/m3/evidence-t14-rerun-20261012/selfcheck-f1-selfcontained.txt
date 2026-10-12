@@ -1,0 +1,53 @@
+F-1 self-check — evidence package self-containment (@ HEAD)
+dir = mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012
+
+== 1) command: git ls-tree -r --name-only HEAD mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012
+mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/README.md
+mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/SHA256SUMS.txt
+mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/commands.txt
+mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/csharp-start.txt
+mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/csharp-stop.txt
+mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/diff-scoped.txt
+mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/gates-clippy.txt
+mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/gates-fmt.txt
+mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/gates-msgcodegen.txt
+mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/gates-test-workspace.txt
+mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/inc-health.txt
+mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/ports.txt
+mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/run-csharp.txt
+mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/run-rust.txt
+mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/rust-game-svr.out.txt
+mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/rust-start.txt
+mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/rust-stop.txt
+mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/save-req-resp.txt
+mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/selfcheck-f1-selfcontained.txt
+tracked_count = 19
+
+== 2) command: find mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012 -maxdepth 1 -type f | wc -l
+disk_count = 19
+VERDICT tracked_count == disk_count : PASS
+
+== 3) command: git check-ignore -v <every tracked file> (single invocation)
+    (raw stdout below; empty = no path is ignored)
+    <<< end of raw stdout; bytes=0 rc=1
+
+== 4) per-file check (git check-ignore -v <file>; empty output = not ignored)
+PASS rc=1 mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/README.md -> (empty)
+PASS rc=1 mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/SHA256SUMS.txt -> (empty)
+PASS rc=1 mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/commands.txt -> (empty)
+PASS rc=1 mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/csharp-start.txt -> (empty)
+PASS rc=1 mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/csharp-stop.txt -> (empty)
+PASS rc=1 mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/diff-scoped.txt -> (empty)
+PASS rc=1 mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/gates-clippy.txt -> (empty)
+PASS rc=1 mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/gates-fmt.txt -> (empty)
+PASS rc=1 mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/gates-msgcodegen.txt -> (empty)
+PASS rc=1 mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/gates-test-workspace.txt -> (empty)
+PASS rc=1 mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/inc-health.txt -> (empty)
+PASS rc=1 mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/ports.txt -> (empty)
+PASS rc=1 mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/run-csharp.txt -> (empty)
+PASS rc=1 mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/run-rust.txt -> (empty)
+PASS rc=1 mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/rust-game-svr.out.txt -> (empty)
+PASS rc=1 mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/rust-start.txt -> (empty)
+PASS rc=1 mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/rust-stop.txt -> (empty)
+PASS rc=1 mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/save-req-resp.txt -> (empty)
+PASS rc=1 mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/selfcheck-f1-selfcontained.txt -> (empty)

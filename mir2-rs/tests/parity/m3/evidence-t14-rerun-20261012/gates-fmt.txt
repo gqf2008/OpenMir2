@@ -1,0 +1,2 @@
+### 命令：cargo fmt --all -- --check  (cwd=mir2-rs, head=376ea004, CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target)
+### 结果：rc=0（无输出=全部已格式化）
