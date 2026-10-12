@@ -1,0 +1,49 @@
+# 本片命令（卡 openmir2-m2-rust-rng-log-plumb）—— 原始件见同目录同名 .txt
+
+## 0. 判据（真 game-svr + 空闲端口，不占真端口）
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/check_rng_log_plumb.ps1 `
+  -GameSvrExe E:/tmp/openmir2-m2svr-target/debug/game-svr.exe -OutDir E:/tmp/openmir2-watch/m2svr-rnglog/run-green2
+#   => SUMMARY total=15 ok=15 fail=0 ; RNG_LOG_PLUMB GREEN ; rc=0        -> checks-green.txt / checks-table.txt
+
+## 1. 改坏必红：删掉 rust_seed_plumb.ps1 的注入行（$env:MIR2_RNG_LOG = [string]$RngLog.Path）后复跑
+#   => SUMMARY total=15 ok=11 fail=4 ; RNG_LOG_PLUMB FAIL ; rc=1
+#      FAIL: ②a / ③a / ③b / ⑥b                                         -> redcheck-injection-removed.txt
+#   备份还原（cmp 逐字节相同）后复跑 => 15/15 GREEN、rc=0               -> checks-green-after-restore.txt
+
+## 2. 启动器两级 fail-closed（rc=1、START 计数 0、端口全空）
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 `
+  -Force -Seed 42 -RngLog 'E:\no-such-dir-xyz-rng\rng.tsv'
+#   => RED: … 父目录不存在: E:\no-such-dir-xyz-rng ; rc=1               -> launcher-failclosed.txt
+#   交叉守卫：-Force -RngLog <有效路径>（不给 -Seed），RustBinDir/CsharpRepo/MirServer 指 dummy exe/conf
+#   => RED: 已给 MIR2_RNG_LOG/-RngLog 但无 MIR2_RNG_SEED/-Seed ; rc=1   -> launcher-crossguard.txt
+
+## 3. 回归（共享 rust_seed_plumb.ps1 改动后，同族两条管线仍绿）
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/check_seed_plumb.ps1 `
+  -GameSvrExe E:/tmp/openmir2-m2svr-target/debug/game-svr.exe
+#   => 15/15 ; SEED_PLUMB GREEN ; rc=0                                  -> reg-seed.txt
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/check_state_log_plumb.ps1 `
+  -GameSvrExe E:/tmp/openmir2-m2svr-target/debug/game-svr.exe
+#   => 15/15 ; STATE_LOG_PLUMB GREEN ; rc=0                             -> reg-state.txt
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/selftest.ps1
+#   => SUMMARY total=47 failed=0 ; GREEN ; rc=0                         -> harness-selftest.txt
+
+## 4. 四门禁（cwd：mir2-rs/；CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target）
+cargo fmt --all -- --check                                              # rc=0  -> gate-fmt.txt
+cargo clippy --workspace --all-targets --offline -- -D warnings         # rc=0  -> gate-clippy.txt
+cargo test --workspace --offline                                        # rc=0；84 suites/686 passed/0 failed/16 ignored  -> gate-test.txt
+cargo run -p msgcodegen --offline -- --check                            # rc=0；604 条常量一致  -> gate-msgcodegen.txt
+
+## 5. 证据 hash（仓库口径 = LF 归一 / git blob 字节）
+python -I tools/evidence-hash/verify_sha256sums.py write tools/m2-acceptance/evidence/m2svr-rust-rng-log-plumb-20261013
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra tools/m2-acceptance/evidence/m2svr-rust-rng-log-plumb-20261013
+
+## 6. 干净检出复核（detached worktree @ 本片提交，autocrlf 下重新物化）
+git worktree add --detach E:/tmp/m2svr-rnglog-clean <本片 head>
+# 在该树上（清单已按本片提交重算后复核；验证器自身输出不列入清单）:
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra tools/m2-acceptance/evidence/m2svr-rust-rng-log-plumb-20261013
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/check_rng_log_plumb.ps1 `
+  -GameSvrExe E:/tmp/openmir2-m2svr-target/debug/game-svr.exe -OutDir E:/tmp/m2svr-rnglog-work/clean
+#   => 15/15 GREEN ; rc=0                                               -> clean-checkout-rng-log.txt
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/check_seed_plumb.ps1 `
+  -GameSvrExe E:/tmp/openmir2-m2svr-target/debug/game-svr.exe -OutDir E:/tmp/m2svr-rnglog-work/clean-seed
+#   => 15/15 GREEN ; rc=0                                               -> clean-checkout-seed.txt

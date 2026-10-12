@@ -1,0 +1,3 @@
+SEED: 未指定种子（不注入，与改动前行为一致）
+STATE_LOG: 未指定服务端逐击状态 dump（不注入，与改动前行为一致）
+RED: 已给 MIR2_RNG_LOG/-RngLog 但无 MIR2_RNG_SEED/-Seed —— rng_trace 无种子不落流水（exit 1，拒绝静默空转）

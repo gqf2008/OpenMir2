@@ -1,0 +1,33 @@
+RNG_LOG_PLUMB 判据：game-svr=E:/tmp/openmir2-m2svr-target/debug/game-svr.exe  evidence=E:/tmp/openmir2-watch/m2svr-rnglog/run-red2
+  [OK  ] ①a 未设/空串 ⇒ Present=$false
+        Present=False
+  [OK  ] ①b 合法路径 ⇒ Present 且 Path 原样
+        Path=E:\tmp\openmir2-watch\m2svr-rnglog\run-red2\work\rng-stream.tsv
+  [OK  ] ①c 环境变量回落 ⇒ 采用 env 值
+        Path=E:\tmp\openmir2-watch\m2svr-rnglog\run-red2\work\env-fallback.tsv
+  [OK  ] ①d 父目录不存在 ⇒ 抛错 fail-closed
+        同 `-Seed` 非法值：调用方判红并 exit 1，不静默起一个不落流水的栈
+  [FAIL] ②a 传路径 ⇒ 子进程环境 MIR2_RNG_LOG=该路径
+        cmd 读出=[%MIR2_RNG_LOG%]
+  [OK  ] ②b 起完还原 ⇒ 调用方 $env:MIR2_RNG_LOG 未被设置
+        has_env=False
+  [OK  ] ②c 不传路径 ⇒ 子进程读不到该路径（不注入）
+        cmd 读出=[%MIR2_RNG_LOG%]
+  [FAIL] ③a 传种子+路径 ⇒ 真 game-svr 在该路径建出 rng 流水
+        file=E:\tmp\openmir2-watch\m2svr-rnglog\run-red2\work\gs-rng-log\rng-stream.tsv
+  [FAIL] ③b 流水含 INJECT_OK 42 + SEED_PROBE（同种子自证）
+        has_inject_ok=False has_probe=False
+  [OK  ] ④a 不传路径 ⇒ 真 game-svr 正常启动且不建流水文件
+        started=True leaked=False
+  [OK  ] ⑤a 传路径 ⇒ 行 = RUST_RNG_LOG_INJECTED=<path>
+        line=[RUST_RNG_LOG_INJECTED=E:\tmp\openmir2-watch\m2svr-rnglog\run-red2\work\rng-stream.tsv]
+  [OK  ] ⑤b 不传路径 ⇒ 行 = $null（不打）
+        line=[]
+  [OK  ] ⑥a start_rust_stack.ps1 点源管线并把 -RngLog $rngLogInfo 传给 game-svr
+        结构检查（端到端见证据目录的实栈 run）
+  [FAIL] ⑥b 管线文件含 $env:MIR2_RNG_LOG 注入行
+        删掉该行 ⇒ ②a/③a/③b 必红
+  [OK  ] ⑥c 交叉守卫真值表（RngLog 有 Seed/无 Seed/未设）+ start_rust_stack 调用本例
+        tt=True called=True；rng_trace 无种子不落流水 ⇒ RngLog 有而 Seed 无必拦
+SUMMARY total=15 ok=11 fail=4
+RNG_LOG_PLUMB FAIL

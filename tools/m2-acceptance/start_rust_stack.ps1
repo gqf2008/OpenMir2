@@ -35,6 +35,15 @@
     路径父目录不存在 ⇒ fail-closed：打印 `RED` 并 exit 1（不静默起一个永远不落 dump 的栈）。
     与 C# 半同名变量（`start-csharp-hook.ps1 -StateLog`）⇒ 两侧可同口径采集。
 
+  逐次 rng 流水管线（卡 `openmir2-m2-rust-rng-log-plumb`，两侧 site/order 账本 diff 的 Rust 半）：
+    `-RngLog <path>` 显式路径（或读调用方 `MIR2_RNG_LOG`）⇒ 起 `game-svr.exe` 时把该变量
+    **注入子进程环境**，并打一行 `RUST_RNG_LOG_INJECTED=<path>`；game-svr（`crates/shared` 的
+    `rng_trace`）在该路径落 `seq kind arg result site` 流水，头两行 `INJECT_OK <seed>` + `SEED_PROBE`。
+    **不传 ⇒ 不注入、不打该行**（与改动前逐字节一致）。路径父目录不存在 ⇒ fail-closed。
+    与 C# 半同名变量（`rng-hook` 的 `MIR2_RNG_LOG`）⇒ 两侧账本可同口径采集。
+    **交叉 fail-closed**：`rng_trace` 在 `MIR2_RNG_SEED` 缺失时关掉流水（只打 stderr）⇒ 若已给 `-RngLog`
+    但无种子，本脚本**拒绝起栈**（exit 1），不静默起一个永远不落 rng-stream 的栈。
+
   判据/退出码：
     `-Stop`   按 pid 文件停掉本脚本起的进程；缺 pid 文件 ⇒ `NOTHING_TO_STOP`。
     `-Status` 只按端口实况打印，不改状态。
@@ -54,6 +63,10 @@
   # ②③ 真机隔离两相：给 Rust 半开服务端权威逐击状态 dump（server_state_gate.py 的 Rust 半）
   powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 `
     -RustBinDir E:\tmp\openmir2-m2svr-target\debug -StateLog E:\tmp\m3-rust\rng-server-state.tsv
+.EXAMPLE
+  # ②③/Claim B 逐次 rng 账本：给 Rust 半开 rng 流水（需同时给种子，否则拒绝起栈）
+  powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 `
+    -RustBinDir E:\tmp\openmir2-m2svr-target\debug -Seed 42 -RngLog E:\tmp\m2-acceptance\stack\rng-stream.tsv
 #>
 param(
   [string]$CsharpRepo = 'E:\Users\gxh\Documents\GitHub\OpenMir2',
@@ -71,6 +84,9 @@ param(
   [string]$Seed       = '',
   # ②③ 真机目标可用性门的显式服务端 dump 路径（空 ⇒ 回落读调用方 `MIR2_RNG_STATE_LOG`；两者皆空 ⇒ 不注入）。
   [string]$StateLog   = '',
+  # ②③/Claim B 逐次 rng 流水的显式路径（空 ⇒ 回落读调用方 `MIR2_RNG_LOG`；两者皆空 ⇒ 不注入）。
+  # 注：与 `-Seed` / `MIR2_RNG_SEED` 联动（rng_trace 无种子不落流水）⇒ 已给 RngLog 但无种子会 exit 1。
+  [string]$RngLog     = '',
   [switch]$Stop,
   [switch]$Status,
   [switch]$Force
@@ -203,14 +219,35 @@ if ($stateLogInfo.Present) {
   Write-Output 'STATE_LOG: 未指定服务端逐击状态 dump（不注入，与改动前行为一致）'
 }
 
+# ---- 0d) rng 流水路径解析（fail-closed：父目录不存在 ⇒ 不起栈，exit 1；未传 ⇒ `Present=$false`，零行为差）----
+$rngLogInfo = $null
+try {
+  $rngLogInfo = Resolve-Mir2RngLog -RngLogArg $RngLog -EnvValue $env:MIR2_RNG_LOG
+} catch {
+  Write-Output ("RED: " + $_.Exception.Message + " —— 拒绝在非法 rng 流水路径下起栈（fail-closed）")
+  exit 1
+}
+if ($rngLogInfo.Present) {
+  # 交叉 fail-closed：`rng_trace::enable_from_env` 在 `MIR2_RNG_SEED` 缺失时关闭流水（仅 stderr），
+  # 栈会看起来正常却永远不落 rng-stream ⇒ 这种“静默空转”必须在起栈前拦住（判定已提为可单测的 helper）。
+  if (-not (Assert-Mir2RngLogSeed -RngLog $rngLogInfo -Seed $seedInfo)) {
+    Write-Output 'RED: 已给 MIR2_RNG_LOG/-RngLog 但无 MIR2_RNG_SEED/-Seed —— rng_trace 无种子不落流水（exit 1，拒绝静默空转）'
+    exit 1
+  }
+  Write-Output ("RNG_LOG: 将向 game-svr 注入 MIR2_RNG_LOG={0}" -f $rngLogInfo.Path)
+} else {
+  Write-Output 'RNG_LOG: 未指定逐次 rng 流水（不注入，与改动前行为一致）'
+}
+
 $started = @()
-function Start-One([string]$Name, [string]$Exe, [string[]]$ExeArgs, [string]$WorkDir, [int[]]$Ports, [int]$StopOrder, [psobject]$Seed = $null, [psobject]$StateLog = $null) {
+function Start-One([string]$Name, [string]$Exe, [string[]]$ExeArgs, [string]$WorkDir, [int[]]$Ports, [int]$StopOrder, [psobject]$Seed = $null, [psobject]$StateLog = $null, [psobject]$RngLog = $null) {
   $out = Join-Path $LogDir ($Name + '.out.log')
   $err = Join-Path $LogDir ($Name + '.err.log')
   Remove-Item $out, $err -Force -ErrorAction SilentlyContinue
-  # `Start-SeededProcess` = 原 `Start-Process @sp`；仅当 `$Seed.Present` / `$StateLog.Present` 时在子进程环境里注入。
+  # `Start-SeededProcess` = 原 `Start-Process @sp`；仅当 `$Seed.Present` / `$StateLog.Present` / `$RngLog.Present`
+  # 时在子进程环境里注入。
   $p = Start-SeededProcess -FilePath $Exe -ArgumentList $ExeArgs -WorkingDirectory $WorkDir `
-         -RedirectStandardOutput $out -RedirectStandardError $err -WindowStyle 'Hidden' -Seed $Seed -StateLog $StateLog
+         -RedirectStandardOutput $out -RedirectStandardError $err -WindowStyle 'Hidden' -Seed $Seed -StateLog $StateLog -RngLog $RngLog
   $script:started += [pscustomobject]@{ name = $Name; pid = $p.Id; ports = $Ports; stop_order = $StopOrder; exe = $Exe }
   Write-Output ("START {0} pid={1} ports={2}" -f $Name, $p.Id, ($Ports -join ','))
   # 传种子 ⇒ 打一行可判据的 `RUST_SEED_INJECTED=<n>`（不传 ⇒ `Get-SeedInjectedLine` 返回 `$null`，不打）。
@@ -219,6 +256,9 @@ function Start-One([string]$Name, [string]$Exe, [string[]]$ExeArgs, [string]$Wor
   # 传状态 dump 路径 ⇒ 打一行 `RUST_STATE_LOG_INJECTED=<path>`（不传 ⇒ `$null`，不打）。
   $stateLine = Get-StateLogInjectedLine -StateLog $StateLog
   if (-not [string]::IsNullOrEmpty($stateLine)) { Write-Output $stateLine }
+  # 传 rng 流水路径 ⇒ 打一行 `RUST_RNG_LOG_INJECTED=<path>`（不传 ⇒ `$null`，不打）。
+  $rngLine = Get-RngLogInjectedLine -RngLog $RngLog
+  if (-not [string]::IsNullOrEmpty($rngLine)) { Write-Output $rngLine }
 }
 
 # ---- 1) MySQL ----
@@ -241,7 +281,7 @@ Start-One -Name 'DBSrv'    -Exe $dbsrvExe -ExeArgs @() -WorkDir $dbsrvDir -Ports
 Start-One -Name 'LoginSrv' -Exe $lsrvExe  -ExeArgs @() -WorkDir $lsrvDir  -Ports @(5500, 5600)       -StopOrder 6
 
 # ---- 3) Rust game-svr（先于网关：网关注册需要 GameSvr 在） ----
-Start-One -Name 'game-svr'   -Exe $gsvrExe -ExeArgs @($gsvrConf) -WorkDir (Split-Path $gsvrConf -Parent) -Ports @(5000)           -StopOrder 5 -Seed $seedInfo -StateLog $stateLogInfo
+Start-One -Name 'game-svr'   -Exe $gsvrExe -ExeArgs @($gsvrConf) -WorkDir (Split-Path $gsvrConf -Parent) -Ports @(5000)           -StopOrder 5 -Seed $seedInfo -StateLog $stateLogInfo -RngLog $rngLogInfo
 # ---- 4) Rust 三网关 ----
 Start-One -Name 'login-gate' -Exe $lgExe   -ExeArgs @($lgConf)   -WorkDir (Split-Path $lgConf  -Parent) -Ports @(7000)           -StopOrder 1
 Start-One -Name 'sel-gate'   -Exe $sgExe   -ExeArgs @($sgConf)   -WorkDir (Split-Path $sgConf  -Parent) -Ports @(7100)           -StopOrder 2
