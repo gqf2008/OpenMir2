@@ -1,0 +1,12 @@
+assertion `left == right` failed: 必须只含 2 个玩家（怪物被过滤）：[Actor { id: 1, name: "m3sd0", x: 17, y: 20, ghost: 0, death: 0 }, Actor { id: 2, name: "m3sd1", x: 18, y: 20, ghost: 0, death: 0 }, Actor { id: 3, name: "mon", x: 19, y: 20, ghost: 0, death: 0 }]
+  left: 3
+ right: 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    state_log::tests::record_emits_player_actors_only_and_matches_gate_semantics
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 152 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`

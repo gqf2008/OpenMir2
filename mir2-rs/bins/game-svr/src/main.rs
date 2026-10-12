@@ -36,6 +36,7 @@ mod mapwire;
 mod notice;
 mod record;
 mod seed;
+mod state_log;
 mod strings;
 mod users;
 
@@ -1844,6 +1845,11 @@ fn front_target(
 /// **登记**（详见 `attackwire` 模块头）：限速/`LateDelivery`/`CheckActionStatus`、`STONE`、
 /// `GetHitMode` 的技能态（无技能 ⇒ 模式 3/4/5/7/8 回落 `SM_HIT`）、目标筛选的安全区/攻击模式、
 /// `GetMovingObject` 的格子 `ObjList` 次序（本片取实体槽位序）、`HealthTick`/`SpellTick` 体力面。
+///
+/// **返回值**：`true` = 本击**进入了攻击路径**（有目标 ⇒ `attack_cmd`，无目标 ⇒ `attack_swing`，
+/// 两者都在 oracle 首抽之前）⇒ `sim_loop` 据此落一行服务端权威状态 dump
+/// （`state_log::StateLog`，owner 2026-10-12 23:50 第 ③ 条 / §5.254，夹具 `run_attack_pair.ps1:1164`
+/// 明写「归 m2-svr」）；被任一守卫拒绝的支返回 `false`（无攻击单元 ⇒ 无首抽 ⇒ 无 dump 行）。
 #[allow(clippy::too_many_arguments)]
 fn handle_hit_cmd(
     ident: u16,
@@ -1856,13 +1862,13 @@ fn handle_hit_cmd(
     displays: &mut downlink::DisplayTable,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
-) {
+) -> bool {
     let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
         glog!(
             "WRN",
             "攻击命令：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃 ident={ident}"
         );
-        return;
+        return false;
     };
     let actor_id = entry.actor_id;
     let Some(e) = world.entities.get(actor_id) else {
@@ -1870,7 +1876,7 @@ fn handle_hit_cmd(
             "WRN",
             "攻击命令：actor_id={actor_id} 不在世界 ⇒ 丢弃 ident={ident}"
         );
-        return;
+        return false;
     };
     let (cur_x, cur_y, is_dead, map_id) = (e.x, e.y, e.death, e.map_id);
     if is_dead {
@@ -1880,7 +1886,7 @@ fn handle_hit_cmd(
             "DBG",
             "攻击：ChrName={chr_name} 已死亡 ⇒ 拒绝（oracle Death 守卫；STONE 未接）ident={ident}"
         );
-        return;
+        return false;
     }
     // `WorldServer.cs:835-844`：`nX = LoWord(Recog)`、`nY = HiWord(Recog)`、`nDir = (byte)Tag`。
     let nx = i32::from(game_svr::feature::lo_word(recog) as i16);
@@ -1890,10 +1896,10 @@ fn handle_hit_cmd(
             "DBG",
             "攻击：目标 ({nx},{ny}) != 当前位置 ({cur_x},{cur_y}) ⇒ 不攻击（oracle 回 RM_MOVEFAIL，登记未接）ChrName={chr_name} ident={ident}"
         );
-        return;
+        return false;
     }
     let Some(mode) = game_svr::attackwire::hit_mode(ident) else {
-        return;
+        return false;
     };
     let dir = u8::try_from(tag & 0x00FF).unwrap_or(0);
     // ⚠ 取目标用的是**状态化朝向**（对象当前 `Dir`），**不是**本帧消息 dir：oracle
@@ -1965,6 +1971,10 @@ fn handle_hit_cmd(
     }
     // `ClientHitXY` 成功 ⇒ 调用方 `SendSocket(GetGoodTick)` 回 `+GD` 短包。
     send_good_tick(online, gates, chr_name);
+    // owner 2026-10-12 23:50 第 ③ 条 / §5.254：本击**进入了攻击路径**（抽攻击力）⇒ 调用方
+    // （`sim_loop`）在返回后落一行服务端权威状态 dump（`state_log::StateLog`）；被守卫拒的支
+    // 返回 `false` ⇒ 不落行（与 oracle「没有攻击单元就没有首抽」一致）。
+    true
 }
 
 /// **`openmir2-m3-attack-magic-wiring`（第二片）**：`CM_SPELL(3017)` 派发
@@ -2904,6 +2914,19 @@ fn sim_loop(
     // S3 后半段（第一格）：同屏 AOI 下行要用的展示表（`ActorId -> Dir/Light/Feature/…`）。
     // 展示字段来自角色记录 + 装备（属 bins/game-svr 的读档面），**不进 `crates/world`**。
     let mut displays = downlink::DisplayTable::new();
+    // owner 2026-10-12 23:50 第 ③ 条 / §5.254（夹具 `run_attack_pair.ps1:1164`「归 m2-svr」）：
+    // **服务端权威逐击状态 dump**（环境变量 `MIR2_RNG_STATE_LOG`；未设 ⇒ 关闭、零行为差）。
+    // 每个**玩家攻击单元**落一行，供 `server_state_gate.py` 判「目标格上是否还站着 `!Ghost && !Death`
+    // 的对象」——客户端视图看不到服务端 `Ghost`，必须用它。
+    let mut state_log = state_log::StateLog::from_env();
+    if state_log.enabled() {
+        // 只在**设了** `MIR2_RNG_STATE_LOG` 时打印（未设 ⇒ 一行不多，行为与改动前逐字节相同）。
+        glog!(
+            "INF",
+            "服务端逐击状态 dump 已开启（{}）：每个玩家攻击单元落一行 SERVER_STATE",
+            state_log::STATE_LOG_ENV
+        );
+    }
     // `M2Share.GetItemNumber()` 的计数器（`M2Share.cs:547`；初值 `[Setup] ItemNumber`）——
     // 新角色新手物品的 `MakeIndex` 用它。
     let mut item_number = enter_cfg.newbie.item_number;
@@ -3055,7 +3078,9 @@ fn sim_loop(
                     } else if game_svr::attackwire::is_hit_ident(cmd.ident) {
                         // `openmir2-m3-attack-magic-wiring`（第一片）：9 条 `CM_*HIT` 派发
                         // （oracle `PlayObject.Message.cs:1221-1230` → `ClientHitXY`）。
-                        handle_hit_cmd(
+                        // 返回 `true` = 本击进入了攻击路径（抽攻击力）⇒ 落一行服务端权威状态 dump
+                        // （owner 2026-10-12 23:50 第 ③ 条；与 `StartupHook.cs::DumpActors` 同形）。
+                        let attacked = handle_hit_cmd(
                             cmd.ident,
                             cmd.recog,
                             cmd.tag,
@@ -3067,6 +3092,9 @@ fn sim_loop(
                             &mut ground_sessions,
                             &gates,
                         );
+                        if attacked {
+                            state_log.record(&world, &displays, registry.as_ref());
+                        }
                     } else if magicwire::is_magic_key_ident(cmd.ident) {
                         // `openmir2-m3-attack-magic-wiring`（第二片）：`CM_MAGICKEYCHANGE(1008)`
                         // （oracle `WorldServer.cs:857-859` → `PlayObject.Operate.cs:774`）。
@@ -7050,7 +7078,7 @@ mod tests {
         sessions.insert("atk".into(), test_session_ground(attacker));
 
         // ① 目标格 != 自身（(11,10)）⇒ 不攻击、不回 ack、不发帧。
-        handle_hit_cmd(
+        let rejected = handle_hit_cmd(
             CM_HIT,
             game_svr::feature::make_long(11, 10),
             0,
@@ -7063,10 +7091,14 @@ mod tests {
             &gates,
         );
         assert!(rx0.try_recv().is_err(), "目标≠自身 ⇒ 不得回 ack / 发帧");
+        assert!(
+            !rejected,
+            "被守卫拒的一击必须返回 false（无攻击单元 ⇒ 调用方不落服务端状态 dump 行）"
+        );
 
         // ② 目标格 = 自身 ⇒ SM_HIT 动作帧给观察者 + +GD 给自己 + 攻击入队（tick 后结算）。
         let per_before = sessions["atk"].recovery.per_health;
-        handle_hit_cmd(
+        let swung = handle_hit_cmd(
             CM_HIT,
             game_svr::feature::make_long(10, 10),
             4, // 本帧消息 dir = 下（与状态化朝向 0=上 相反）⇒ 取目标必须用状态化朝向才击中正上方怪
@@ -7093,6 +7125,11 @@ mod tests {
             }
         }
         assert_eq!(frames.len(), 1, "CM_HIT ⇒ 只一帧 SM_HIT（无尾）");
+        assert!(
+            swung,
+            "进入攻击路径的一击必须返回 true（owner 2026-10-12 23:50 第 ③ 条：调用方据此落
+             SERVER_STATE dump 行；恒 false ⇒ 夹具的服务端状态门永远拿不到 Rust 行）"
+        );
         assert_eq!(
             &frames[0][..12],
             // 动作帧 `Dir` 用**新** Dir（= 本帧消息 dir=4；`PlayObject.Attack.cs:76`）。
