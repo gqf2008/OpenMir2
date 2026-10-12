@@ -1,0 +1,3 @@
+# cargo fmt --all -- --check   (cwd=mir2-rs, CARGO_TARGET_DIR=E:/tmp/m3cs-mailauction-target)
+# rustfmt 成功时无输出；下面是本片实跑的重放与 rc。
+rc=0
