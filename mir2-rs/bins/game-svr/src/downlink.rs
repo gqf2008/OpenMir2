@@ -28,7 +28,9 @@
 //!   无行会/PK 时 oracle 的结果就是 `NameColor`（`PlayObject.cs:3585-3595` 的非战斗支）。
 
 use crate::ability::ItemCatalog;
+use crate::feature::make_monster_feature;
 use crate::smframe;
+use mir2_data::models::MonsterInfo;
 
 /// `EfftypeConst.EFFECTIVE_HIGHLEVEL`（`src/M2Server/Actor/ActorConst.cs:43`）：
 /// `GetMyLight` 的等级下限（`PlayObject.cs:5407`）。
@@ -54,6 +56,60 @@ pub fn my_light(level: u8, equipped: &[(u16, u16)], catalog: &dyn ItemCatalog) -
         }
     }
     light
+}
+
+/// 线上文本一律按 **GB2312/GBK 字节**（`HUtil32.GetBytes` = `Encoding.GetEncoding("gb2312")`，
+/// `EDCode.EncodeString` 编码的就是它）——本层不做 UTF-8 线上转换。
+///
+/// `bins/game-svr` 的 `enter::gbk` 已委托向此（同一实现，避免两份口径）；本函数放在 lib 侧是为了
+/// 让 [`monster_display`] 这样的纯编码函数不依赖 bin 模块。
+#[must_use]
+pub fn gbk(s: &str) -> Vec<u8> {
+    encoding_rs::GBK.encode(s).0.into_owned()
+}
+
+/// oracle `BaseObject.NameColor` 的构造缺省（`src/M2Server/Actor/BaseObject.cs:385`）。
+///
+/// 怪物既非玩家、也无 master，观察者侧的 `GetChrColor`（`PlayObject.GetChrColor` 的非玩家支
+/// ⇒ `BaseObject.GetChrColor`）最终落到 `baseObject.GetNameColor()` = 该字段。
+pub const MONSTER_NAME_COLOR: u8 = 255;
+
+/// `M2Share.FilterShowName(sName)`（`src/M2Server/M2Share.cs:571-594`）：从**首个 ASCII 数字或
+/// `-`** 处截断（`"稻草人2"` ⇒ `"稻草人"`、`"a-1"` ⇒ `"a"`）；没有则原样返回。
+///
+/// 玩家走的是 [`crate::enter::show_name`]（`PlayObject.GetShowName()` 的 override，**不**过滤）；
+/// 怪物/守卫/门墙走 `BaseObject.GetShowName()`（`BaseObject.Base.cs:779`），它先过本函数。
+#[must_use]
+pub fn filter_show_name(name: &str) -> &str {
+    match name.find(|c: char| c.is_ascii_digit() || c == '-') {
+        Some(i) => &name[..i],
+        None => name,
+    }
+}
+
+/// 怪物的展示层 [`ActorDisplay`]（oracle `BaseObject` 的怪侧取值）。
+///
+/// 逐项锚点：
+/// - `feature` = `GetFeature()` = `MakeMonsterFeature(RaceImg, MonsterWeapon, Appr)`
+///   （`BaseObject.Base.cs:911`；`RaceImg`/`Appr` 来自 `MonsterInfo`，`MonsterWeapon` =
+///   `HUtil32.LoByte(monster.MP)`，`WorldServer.MonGen.cs:888-902`）；
+/// - `feature_ex` = `GetFeatureEx()` = 0（`BaseObject.Base.cs:926`，怪物不 override）；
+/// - `light` = `BaseObject.Light` = 0（构造缺省 `BaseObject.cs:384`；怪物从不 `GetMyLight`）；
+/// - `status` = `GetCharStatus()`（`BaseObject.cs:1492`）= buff 位；怪物无 buff ⇒ 0；
+/// - `name_color` = [`MONSTER_NAME_COLOR`]（`GetChrColor` 的非玩家/非 NPC/无 master 支）；
+/// - `show_name` = `FilterShowName(ChrName)` 的 GBK 字节（`BaseObject.Base.cs:779`）。
+#[must_use]
+pub fn monster_display(dir: u8, info: &MonsterInfo) -> ActorDisplay {
+    let monster_weapon = (info.mp & 0x00FF) as u8;
+    ActorDisplay::new(
+        dir,
+        0,
+        make_monster_feature(info.race_img, monster_weapon, info.appr),
+        0,
+        0,
+        MONSTER_NAME_COLOR,
+        gbk(filter_show_name(&info.name)),
+    )
 }
 
 /// 一个 actor 的**展示层**字段（oracle `PlayObject` 在 `SendLogon` 同轮产出的那几项）。
@@ -425,6 +481,115 @@ mod tests {
             my_light(1, &[(999, 5)], &catalog),
             0,
             "GetStdItem==null 不计"
+        );
+    }
+
+    /// `FilterShowName`（`M2Share.cs:571`）：首个 ASCII 数字或 `-` 处截断；无则原样。
+    ///
+    /// 红检：把 `find` 的谓词改成只找 `'-'`（或改成 `rfind`）⇒ 数字用例必红。
+    #[test]
+    fn filter_show_name_truncates_at_first_digit_or_dash() {
+        assert_eq!(filter_show_name("稻草人"), "稻草人");
+        assert_eq!(filter_show_name("稻草人2"), "稻草人");
+        assert_eq!(filter_show_name("a-1"), "a");
+        assert_eq!(filter_show_name("1ab"), "");
+        assert_eq!(filter_show_name("-x"), "");
+        assert_eq!(filter_show_name(""), "");
+    }
+
+    /// 怪物的 [`monster_display`] 逐字段对齐 oracle：
+    /// `feature = MakeLong(MakeWord(RaceImg, LoByte(MP)), Appr)`、`Light/FeatureEx/Status = 0`、
+    /// `NameColor = 255`、`ShowName = FilterShowName(ChrName)` 的 GBK 字节。
+    ///
+    /// 红检：把 `MONSTER_NAME_COLOR` 改成 `0`、把 `feature` 换成 `MakeHumanFeature`、
+    /// 或漏掉 `LoByte`（直接用整 `mp`）⇒ 本用例必红。
+    #[test]
+    fn monster_display_matches_oracle_fields() {
+        let info = MonsterInfo {
+            name: "稻草人2".to_string(),
+            race: 51,
+            race_img: 0x0A,
+            appr: 0x3344,
+            mp: 0x2211,
+            ..MonsterInfo::default()
+        };
+        let d = monster_display(5, &info);
+        assert_eq!(d.dir, 5, "Dir 取生成/当前朝向");
+        assert_eq!(d.light, 0, "BaseObject.Light 缺省 = 0");
+        assert_eq!(
+            d.feature, 0x3344_110A_u32 as i32,
+            "MakeLong(MakeWord(raceImg, LoByte(mp)), appr)"
+        );
+        assert_eq!(d.feature_ex, 0, "BaseObject.GetFeatureEx() = 0");
+        assert_eq!(d.status, 0, "怪物无 buff ⇒ GetCharStatus() = 0");
+        assert_eq!(d.name_color, MONSTER_NAME_COLOR);
+        assert_eq!(
+            d.show_name,
+            gbk("稻草人"),
+            "ShowName = FilterShowName(ChrName) 的 GBK 字节（在 '2' 处截断）"
+        );
+        // 反证：漏掉 LoByte（用整 mp 的 0x22）会得到不同的位。
+        assert_ne!(d.feature, make_monster_feature(0x0A, 0x22, 0x3344));
+    }
+
+    /// 怪物的 AOI **出现帧**逐字节：`SM_TURN`(ident 10) 的
+    /// `Series = MakeWord(Dir, Light)`、尾 = `Encode(8B CharDesc) ++ Encode("ShowName/255")`；
+    /// 紧随的 `SM_FEATURECHANGED`(ident 41) 的 `Param/Tag = Lo/HiWord(feature)`、`Series = 0`。
+    ///
+    /// 红检：把 `turn_pair` 的名尾去掉、把 `light` 换成非 0、或把 `feature` 的 Lo/Hi 互换 ⇒ 必红。
+    #[test]
+    fn monster_aoi_turn_pair_bytes() {
+        use crate::feature::{hi_word, lo_word, make_word};
+        let info = MonsterInfo {
+            name: "稻草人2".to_string(),
+            race: 51,
+            race_img: 0x0A,
+            appr: 0x3344,
+            mp: 0x2211,
+            ..MonsterInfo::default()
+        };
+        let d = monster_display(5, &info);
+        let pair = turn_pair(9001, 18, 20, &d);
+        assert_eq!(pair.len(), 2, "出现帧 = SM_TURN + SM_FEATURECHANGED");
+
+        let turn = &pair[0];
+        assert_eq!(i32::from_le_bytes(turn[0..4].try_into().unwrap()), 9001);
+        assert_eq!(
+            u16::from_le_bytes([turn[4], turn[5]]),
+            mir2_protocol::messages::SM_TURN
+        );
+        assert_eq!(u16::from_le_bytes([turn[6], turn[7]]), 18);
+        assert_eq!(u16::from_le_bytes([turn[8], turn[9]]), 20);
+        assert_eq!(
+            u16::from_le_bytes([turn[10], turn[11]]),
+            make_word(5, 0),
+            "Series = MakeWord(Dir, Light)，怪物 Light=0"
+        );
+        let desc = mir2_protocol::edcode::decode(&turn[12..23]);
+        assert_eq!(
+            desc,
+            char_desc(d.feature, d.status).to_vec(),
+            "尾首 = Encode(8B CharDesc(feature, status))"
+        );
+        let mut expected_msg = gbk("稻草人");
+        expected_msg.extend_from_slice(b"/255");
+        assert_eq!(
+            mir2_protocol::edcode::decode(&turn[23..]),
+            expected_msg,
+            "名尾 = Encode(\"ShowName/NameColor\")"
+        );
+
+        let feat = &pair[1];
+        assert_eq!(
+            u16::from_le_bytes([feat[4], feat[5]]),
+            mir2_protocol::messages::SM_FEATURECHANGED
+        );
+        assert_eq!(u16::from_le_bytes([feat[6], feat[7]]), lo_word(d.feature));
+        assert_eq!(u16::from_le_bytes([feat[8], feat[9]]), hi_word(d.feature));
+        assert_eq!(
+            u16::from_le_bytes([feat[10], feat[11]]),
+            0,
+            "GetFeatureEx() = 0"
         );
     }
 }

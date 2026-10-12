@@ -46,6 +46,8 @@ use mir2_world::mongen::{
 };
 use mir2_world::MonsterCtorDraws;
 
+use crate::downlink;
+
 /// `Server.conf` 缺省：`[Server] VentureServer`（`ServerConf.cs:21`，`"FALSE"` ⇒ false）。
 pub const VENTURE_SERVER_DEFAULT: &str = "FALSE";
 
@@ -626,6 +628,11 @@ pub struct WorldMonsterSink<'a> {
     pub world: &'a mut mir2_world::World,
     pub registry: &'a MapRegistry,
     pub table: &'a MonsterTable,
+    /// **M3④-实现 C 第 ③ 片**：怪物的展示层字段（`Feature/Light/ShowName/…`）由
+    /// `bins/game-svr` 的展示表承载（与玩家同表）——生成时按 `MonsterInfo` 算一次注册，
+    /// 同屏下行（`drain_aoi_downlink`）/死亡广播（`drain_combat_downlink`）按 `ActorId` 查回。
+    /// 展示字段属读档/编码面，**不进** `crates/world`。
+    pub displays: &'a mut downlink::DisplayTable,
 }
 
 impl WorldMonsterSink<'_> {
@@ -717,7 +724,7 @@ impl MonsterSink for WorldMonsterSink<'_> {
                     m.speed,
                 )
             });
-        self.world.spawn_monster_precomputed(
+        let id = self.world.spawn_monster_precomputed(
             &req.mon_name,
             req.x,
             req.y,
@@ -736,7 +743,15 @@ impl MonsterSink for WorldMonsterSink<'_> {
             req.ctor,
             req.dir,
             req.cool_eye,
-        )
+        )?;
+        // **C 第 ③ 片**：生成成功即登记怪物展示层。`MonsterList` 未命中时 oracle 的
+        // `ApplyMonsterAbility` 不做任何事（`WorldServer.MonGen.cs:880-882`），`cert` 仍被构造；
+        // 本仓缺表 ⇒ 无 feature 输入，保持不登记（与玩家的“无展示表 ⇒ 跳过”同口径）。
+        if let Some(mon) = info {
+            self.displays
+                .set(id, downlink::monster_display(req.dir, mon));
+        }
+        Some(id)
     }
 }
 
@@ -1336,10 +1351,12 @@ mod tests {
             drop_items: Vec::new(),
             ctor,
         };
+        let mut displays = downlink::DisplayTable::new();
         let id = WorldMonsterSink {
             world: &mut world,
             registry: &registry,
             table: &table,
+            displays: &mut displays,
         }
         .spawn_monster(&req)
         .expect("生成成功");
@@ -1352,6 +1369,82 @@ mod tests {
         assert_eq!(e.ai.search_time, 3333);
         assert_eq!(e.ctor_draws, ctor, "构造抽结果必须原样落库（C 只消费不抽）");
         assert_eq!(e.gold, 7, "生成期已预算的金币原样落库");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// **C 第 ③ 片判据**：`WorldMonsterSink::spawn_monster` 成功后把怪物展示层登记进
+    /// `DisplayTable`（`feature`/`show_name`/`name_color`/`light` 逐字段按 oracle）。
+    ///
+    /// 红检：删掉 sink 里的 `self.displays.set(...)` ⇒ 本用例必红（`displays.get(id)` 为 None）；
+    /// 把 `monster_display` 的 `LoByte(mp)` 换成整 `mp` ⇒ `feature` 断言必红。
+    #[test]
+    fn world_monster_sink_registers_monster_display() {
+        let base = std::env::temp_dir().join(format!(
+            "gs-mongen-display-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let mut bytes = vec![0u8; mir2_envir::HEADER_BYTES];
+        bytes[0..2].copy_from_slice(&5_i16.to_le_bytes());
+        bytes[2..4].copy_from_slice(&5_i16.to_le_bytes());
+        bytes.resize(mir2_envir::HEADER_BYTES + 5 * 5 * mir2_envir::CELL_BYTES, 0);
+        std::fs::create_dir_all(base.join("Map")).unwrap();
+        std::fs::write(base.join("Map").join("0.map"), &bytes).unwrap();
+        let loader = MapLoader::new(base.clone(), "Map", "Envir");
+        let registry = MapRegistry::from_entries(
+            loader,
+            vec![mir2_envir::MapInfoEntry {
+                map_name: "0".to_string(),
+                map_file_name: "0".to_string(),
+                desc: String::new(),
+                server_index: 0,
+                flag: mir2_envir::MapInfoFlag::default(),
+            }],
+        );
+        let mut world = mir2_world::World::with_maps(vec![(5, 5)]);
+        let table = MonsterTable::new(vec![MonsterInfo {
+            name: "稻草人2".to_string(),
+            race: 51,
+            race_img: 0x0A,
+            appr: 0x3344,
+            mp: 0x2211,
+            ..MonsterInfo::default()
+        }]);
+        let req = MonsterSpawnRequest {
+            map_name: "0".to_string(),
+            mon_name: "稻草人2".to_string(),
+            x: 2,
+            y: 2,
+            race: 51,
+            dir: 5,
+            cool_eye: false,
+            gold: 0,
+            drop_items: Vec::new(),
+            ctor: MonsterCtorDraws::default(),
+        };
+        let mut displays = downlink::DisplayTable::new();
+        let id = WorldMonsterSink {
+            world: &mut world,
+            registry: &registry,
+            table: &table,
+            displays: &mut displays,
+        }
+        .spawn_monster(&req)
+        .expect("生成成功");
+        let d = displays
+            .get(id)
+            .expect("怪物必须登记展示层（否则 AOI 下行跳过）");
+        assert_eq!(d.dir, 5, "登记时的 Dir 取 req.dir（= cert.Dir）");
+        assert_eq!(d.light, 0);
+        assert_eq!(
+            d.feature,
+            crate::feature::make_monster_feature(0x0A, 0x11, 0x3344),
+            "MakeLong(MakeWord(raceImg, LoByte(mp)), appr)"
+        );
+        assert_eq!(d.feature_ex, 0);
+        assert_eq!(d.status, 0);
+        assert_eq!(d.name_color, downlink::MONSTER_NAME_COLOR);
+        assert_eq!(d.show_name, downlink::gbk("稻草人"));
         let _ = std::fs::remove_dir_all(&base);
     }
 }

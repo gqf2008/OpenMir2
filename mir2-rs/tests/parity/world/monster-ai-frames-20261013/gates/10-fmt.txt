@@ -1,0 +1,4 @@
+# cargo fmt --all -- --check   (cwd = mir2-rs, CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target)
+# base = origin/master 98885fd4（分片② 已合入；本片单分片 patch）
+
+rc=0

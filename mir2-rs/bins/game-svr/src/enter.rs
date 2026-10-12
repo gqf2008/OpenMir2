@@ -367,8 +367,7 @@ pub fn music_id(flag: &MapInfoFlag) -> i32 {
 /// `EDCode.EncodeString` 编码的就是它）——本层不做 UTF-8 线上转换。
 #[must_use]
 pub fn gbk(s: &str) -> Vec<u8> {
-    let (bytes, _, _) = encoding_rs::GBK.encode(s);
-    bytes.into_owned()
+    game_svr::downlink::gbk(s)
 }
 
 /// `SendGoldInfo(true)`（`PlayObject.Base.cs:921-939`）的 `sMsg = GameGoldName + '\r' + GamePointName`。
