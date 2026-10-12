@@ -75,6 +75,40 @@ internal static class Program
         Check(!StartupHook.IsDivertSite(null), "route/null-not-diverted");
         Check(!StartupHook.IsDivertSite(""), "route/empty-not-diverted");
 
+        // ⑤ F-N1：专用流按「被测量攻方线程」收窄（怪物 MobThread 的取数不进玩家专用流）。
+        //    牙齿：去掉线程过滤（只看调用点）⇒ 下面 4 条非玩家/异线程断言必红。
+        const string playerStart = "M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929";
+        const string playerStartLuck = "M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2918";
+        const string hitGate = "M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41";
+        const string baseAtk = "M2Server.Actor.BaseObject.GetAttackPower@BaseObject.Base.cs:892";
+        Check(StartupHook.IsPlayerAttackStartSite(playerStart), "entity/player-start-2929");
+        Check(StartupHook.IsPlayerAttackStartSite(playerStartLuck), "entity/player-start-2918");
+        Check(!StartupHook.IsPlayerAttackStartSite(hitGate), "entity/hit-gate-not-start");
+        Check(!StartupHook.IsPlayerAttackStartSite(baseAtk), "entity/base-not-start");
+        Check(!StartupHook.IsPlayerAttackStartSite(null), "entity/null-not-start");
+
+        StartupHook.ResetAttackThreadForTest();
+        Check(StartupHook.AttackThreadIdForTest() == -1, "entity/unclaimed-init=-1");
+        // 未认领前：任何分流站点都不进专用流（避免起跑前被别图怪污染）。
+        Check(!StartupHook.RouteToAttackStream(baseAtk, true, 7), "entity/base-before-player-not-diverted");
+        Check(!StartupHook.RouteToAttackStream(hitGate, true, 7), "entity/shared-before-player-not-diverted");
+        // 玩家首抽认领线程 5（自身必须进专用流）。
+        Check(StartupHook.RouteToAttackStream(playerStart, true, 5), "entity/player-start-diverted");
+        Check(StartupHook.AttackThreadIdForTest() == 5, "entity/claimed-thread=5");
+        // 同线程的共享/后续站点进专用流。
+        Check(StartupHook.RouteToAttackStream(hitGate, true, 5), "entity/shared-same-thread-diverted");
+        Check(StartupHook.RouteToAttackStream("M2Server.Player.PlayObject.AttackSuccess@PlayObject.Attack.cs:223", true, 5), "entity/succ-same-thread-diverted");
+        // 异线程（怪物 MobThread id=7）的共享/非玩家站点一律不走专用流。
+        Check(!StartupHook.RouteToAttackStream(hitGate, true, 7), "entity/shared-other-thread-not-diverted");
+        Check(!StartupHook.RouteToAttackStream(baseAtk, true, 7), "entity/base-other-thread-not-diverted");
+        // 下一击可能换线程：新首抽重新认领（ThreadPool 复用）。
+        Check(StartupHook.RouteToAttackStream(playerStartLuck, true, 9), "entity/reclaim-thread-9");
+        Check(StartupHook.AttackThreadIdForTest() == 9, "entity/reclaimed-thread=9");
+        Check(!StartupHook.RouteToAttackStream(hitGate, true, 5), "entity/old-thread-no-longer-diverted");
+        // 非分流站点在任何线程都不进专用流。
+        Check(!StartupHook.RouteToAttackStream("M2Server.Player.PlayObject.AttackSuccess@PlayObject.Attack.cs:221", false, 9), "entity/non-divert-site-never");
+        StartupHook.ResetAttackThreadForTest();
+
         Console.WriteLine(_failed == 0 ? "SELFTEST GREEN" : ("SELFTEST RED failed=" + _failed));
         return _failed == 0 ? 0 : 1;
     }
