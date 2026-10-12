@@ -1,0 +1,129 @@
+# evidence-m3-hero-pet-inventory-20261013 / 03-fixture-reuse-survey.txt
+# M3⑨ 英雄/宠物 —— 夹具可复用性调查（DoD③ 口径设计，不实现夹具）
+# 基线 origin/master 304126ae。
+
+============================================================
+[A] 复用件清单（现成、m3 已有）
+============================================================
+
+1) run_pair.ps1（D2 夹具编排）：全新前缀 + SQL pin 固定起点 + BEFORE/AFTER 快照 + scoped_diff。
+   - 两相 pin：'预热建角 → SQL pin → BEFORE 快照 → 计分跑'（-PinStartPose / -FixedNewChr）。
+   - 动作序列：-BagEquipSequence（T-14）/ -AttackSequence（T-22 扩展，M3ATTSEQ 标记）。
+$ rg -n "PinStartPose|BagEquipSequence|AttackSequence|M3ATTSEQ" mir2-rs/tests/parity/m3/run_pair.ps1 | head
+49:  [switch]$BagEquipSequence,       # M3 T-14 夹具：BotSrv 进世界后按固定顺序发背包/装备动作（白名单 T-22）
+50:  [int]$BagEquipStepMs = 1000,     # 仅 -BagEquipSequence 时生效
+51:  [int]$BagEquipStartDelayMs = 3000, # 仅 -BagEquipSequence 时生效
+52:  [switch]$AttackSequence,         # M3②③ 夹具：BotSrv 固定攻击序列（白名单 T-22 扩展）
+53:  [int]$AttackCount = 120,         # 仅 -AttackSequence 时生效：攻击步数
+54:  [int]$AttackStepMs = 500,        # 仅 -AttackSequence 时生效：每步间隔
+55:  [int]$AttackStartDelayMs = 3000, # 仅 -AttackSequence 时生效：进世界到第一步的额外等待
+57:  [switch]$PinStartPose,           # T-14 固定起点变体（owner 86478c55/d7798370）：预热建角 → SQL pin → BEFORE 快照 → 计分跑（选角；不带 -FixedNewChr/-NewAccount）
+66:  [int]$PinSettleSeconds = 3,      # 仅 -PinStartPose：每轮 pin 后的 settle 窗口（异步掉线存档落库，见 gate_guards.ps1 ⑥）
+67:  [int]$PinMaxAttempts = 5,        # 仅 -PinStartPose：settle+hold 最多轮数（仍 hold 不住 ⇒ throw，fail-closed）
+
+2) run_attack_pair.ps1（M3②③）：两假人相邻固定起点 + peer 双护栏 + -PeerSession 跨侧比对。
+$ rg -n "AttackPinPair|PeerSession|PinMapName|Bots 2" mir2-rs/tests/parity/m3/run_attack_pair.ps1 | head
+15:    ② `-AttackSequence -AttackPinPair` 透传 + `M3ATTSEQ` 标记判据（序列没跑完整 ⇒ RED）；
+27:  目标接法：`-AttackPinPair` 把 attacker（账号序号 0）钉在 (PinCX,PinCY) 面向 `AttackPinDir`，
+38:  `-PinMapName` 透传给 `run_pair` 的 pin SQL/落点口径，`-SelfCheckNoStack` ⑯/⑰ 做四向红检。
+93:  powershell -ExecutionPolicy Bypass -File run_attack_pair.ps1 -Side csharp -Bots 2 -AttackCount 120 -AttackPinPair
+94:  powershell -ExecutionPolicy Bypass -File run_attack_pair.ps1 -Side rust -Bots 2 -AttackCount 120 -AttackPinPair -PeerSession csharp-...
+109:  [string]$PinMapName = '',        # R-1：攻击 pin 地图（必须整张零刷怪）；空 ⇒ gate_guards 的 $script:M3AttackPinMap = '0137'
+114:  [string]$PeerSession = '',
+118:  [switch]$AttackPinPair,          # 攻击变体：两 bot 相邻固定起点（attacker/victim）
+156:# pin 地图/落点缺省取 gate_guards 的唯一来源常量（0137 竞技场 (17,20)）；调用方可用 -PinMapName/-AttackPinCX/-AttackPinCY 覆盖。
+157:if ([string]::IsNullOrEmpty($PinMapName)) { $PinMapName = $script:M3AttackPinMap }
+   peer 护栏函数（gate_guards.ps1）：
+55:function Test-M3IsolateAttackValue {
+103:function Test-M3IsolatePredicates {
+147:function Get-M3PeerIsolationGuard {
+262:function Get-M3PeerScenarioGuard {
+344:function Get-M3PeerBagEquipScopeGuard {
+464:function Get-M3PeerStartPoseGuard {
+582:function Test-M3AttackVictimHpRange {
+633:function Test-M3AttackVictimHpSelfConsistent {
+649:function Test-M3AttackVictimSurvives {
+659:function Test-M3AttackVictimPostPinHp {
+752:function Test-M3MonGenEmpty {
+878:function Test-M3MapNoAiConsumers {
+958:function Get-M3PeerAttackPoseGuard {
+1084:function Test-M3PinSqlColumns {
+1131:function Test-M3PinSqlExecutable {
+1215:function Test-M3SeedInjected {
+1420:function Test-M3PinAttemptsComparable {
+1461:function Test-M3PrewarmNoWorldEntry {
+1562:function Get-M3PeerAttackScopeGuard {
+
+3) drop-exp 夹具（M3④，同系统经验面）：已带 hero_exp_delta 通道（两侧都缺则不比）。
+README.md
+drop_exp_diff.py
+drop_exp_scenario.json
+run_drop_exp_pair.ps1
+$ rg -n "hero_exp_delta" mir2-rs/tests/parity/m3/drop-exp/README.md
+58:  "hero_exp_delta": 0
+62:必填：`k/gold/drops/exp_delta/exp_total/level`；可选：`monster/x/y/hero_exp_delta`。
+67:> 登记为承接项（报告 §4 / whitelist T-33）。`hero_exp_delta` 字段保留：两侧都缺 ⇒ 不参与比较；
+
+4) scoped_diff.py：DB 作用域字段级 diff（--canonical / --fixed-newchr），判「落库一致」。
+
+============================================================
+[B] BotSrv 现成件 / 缺口
+============================================================
+
+- 已现成：自己宝宝的**观测**——抓 RM_USERNAME 里 '名字(主人)' 结构把 Actor 收进 SlaveObject；
+$ rg -n "SlaveObject" src/BotSrv/Player/RobotPlayer.Operate.cs src/BotSrv/Objects/HeroActor.cs src/BotSrv/Scenes/*.cs | head -20
+src/BotSrv/Player/RobotPlayer.Operate.cs:368:                                    for (i = 0; i < MShare.MySelf.SlaveObject.Count; i++)
+src/BotSrv/Player/RobotPlayer.Operate.cs:370:                                        if (MShare.MySelf.SlaveObject[i] == Actor)
+src/BotSrv/Player/RobotPlayer.Operate.cs:378:                                        MShare.MySelf.SlaveObject.Add(Actor);
+src/BotSrv/Objects/HeroActor.cs:794:                    for (int i = 0; i < MShare.MySelf.SlaveObject.Count; i++)
+src/BotSrv/Objects/HeroActor.cs:796:                        if (MShare.MySelf.SlaveObject[i].Death)
+src/BotSrv/Objects/HeroActor.cs:801:                        if (Math.Abs(MShare.MySelf.CurrX - MShare.MySelf.SlaveObject[i].CurrX + 2) <= BotConst.MagicRange && Math.Abs(MShare.MySelf.CurrY - MShare.MySelf.SlaveObject[i].CurrY + 2) <= BotConst.MagicRange)
+src/BotSrv/Objects/HeroActor.cs:803:                            if (MShare.MySelf.SlaveObject[i].Abil.HP != 0 && HUtil32.Round(MShare.MySelf.SlaveObject[i].Abil.HP / MShare.MySelf.SlaveObject[i].Abil.MaxHP * 100) < 85)
+src/BotSrv/Objects/HeroActor.cs:805:                                if (AutoUseMagic(2, MShare.MySelf.SlaveObject[i]))
+src/BotSrv/Objects/HeroActor.cs:1205:                        if (MShare.MySelf.SlaveObject.Count == 0 && m > 0)
+src/BotSrv/Objects/HeroActor.cs:1277:                            if (MShare.MySelf.SlaveObject.Count > 0)
+src/BotSrv/Objects/HeroActor.cs:1279:                                for (i = 0; i < MShare.MySelf.SlaveObject.Count; i++)
+src/BotSrv/Objects/HeroActor.cs:1281:                                    if (MShare.MySelf.SlaveObject[i].Death)
+src/BotSrv/Objects/HeroActor.cs:1286:                                    if (MShare.MySelf.SlaveObject[i].Abil.HP != 0 && Math.Abs(MShare.MySelf.CurrX - MShare.MySelf.SlaveObject[i].CurrX + 2) <= BotConst.MagicRange
+src/BotSrv/Objects/HeroActor.cs:1287:                                                                                        && Math.Abs(MShare.MySelf.CurrY - MShare.MySelf.SlaveObject[i].CurrY + 2) <= BotConst.MagicRange)
+src/BotSrv/Objects/HeroActor.cs:1289:                                        if (HUtil32.Round(MShare.MySelf.SlaveObject[i].Abil.HP / MShare.MySelf.SlaveObject[i].Abil.MaxHP * 100) <= 80)
+src/BotSrv/Objects/HeroActor.cs:1292:                                            if (AutoUseMagic(2, MShare.MySelf.SlaveObject[i]))
+
+- 已现成：BotSrv **有**施法发送原语 `RobotPlayer.SendSpellMsg`（`RobotPlayer.cs:2926`，发 `CM_SPELL`），
+  且机器人自身会挑召唤技能（`RobotPlayer.cs:3346/3360`）；⇒ 召唤动作序列**可复用该原语**，
+  只需新增「按固定顺序召唤/停手」的动作步骤 + 观测（属 m3bag 写集，T-22/T-29 口径登记）。
+$ rg -ni "SendSpell|SendMagic|CM_SPELL" src/BotSrv
+src/BotSrv\Objects\TActor.cs:468:                        case Messages.CM_SPELL:
+src/BotSrv\Player\RobotPlayer.cs:985:                        //MShare.g_MySelf.SendMsg(Messages.CM_SPELL, targx, targy, tdir, pmag, targid, "", 0);
+src/BotSrv\Player\RobotPlayer.cs:1294:                if (MShare.MySelf.RealActionMsg.Ident == Messages.CM_SPELL)
+src/BotSrv\Player\RobotPlayer.cs:1296:                    SendSpellMsg(MShare.MySelf.RealActionMsg.Ident, (ushort)MShare.MySelf.RealActionMsg.X, (ushort)MShare.MySelf.RealActionMsg.Y, MShare.MySelf.RealActionMsg.Dir, MShare.MySelf.RealActionMsg.State);
+src/BotSrv\Player\RobotPlayer.cs:1479:                            SendSpellMsg(Messages.CM_SPELL, MShare.MySelf.m_btDir, 0, pcm.Def.MagicId, 0, false);
+src/BotSrv\Player\RobotPlayer.cs:1488:                            SendSpellMsg(Messages.CM_SPELL, MShare.MySelf.m_btDir, 0, pcm.Def.MagicId, 0, false);
+src/BotSrv\Player\RobotPlayer.cs:1589:                    //MShare.g_MySelf.SendMsg(Messages.CM_SPELL, targx, targy, tdir, pmag, targid, "", 0);
+src/BotSrv\Player\RobotPlayer.cs:2926:        private void SendSpellMsg(int ident, ushort x, ushort y, int dir, int target, bool bLock = false)
+src/BotSrv\Player\RobotPlayer.cs:2980:        public void SendMagicKeyChange(int magid, char keych)
+
+- RobotSystem（服务端机器人）有从魔法表挑召唤技能的逻辑（SC 系）：
+$ rg -n "SKILL_SKELLETON|CheckHeroAmulet|SlaveList.Count == 0" src/Modules/RobotSystem/Services/RobotPlayer.cs | head
+3346:                    if (SlaveList.Count == 0 && CheckHeroAmulet(1, 5) && CheckMagicInterval(17, 3000) && (AllowUseMagic(72) || AllowUseMagic(30) || AllowUseMagic(17)) && Abil.MP > 20)
+3360:                        else if (AllowUseMagic(MagicConst.SKILL_SKELLETON)) // 召唤骷髅
+3362:                            result = MagicConst.SKILL_SKELLETON;
+3496:                    if (CheckHeroAmulet(1, 1))
+3721:        private bool CheckHeroAmulet(int nType, int nCount)
+3820:                LogService.Error("RoboPlayObject.CheckHeroAmulet");
+
+============================================================
+[C] 「两条连接 / ExpHitter.Master 可控性」结论（写进报告 §4）
+============================================================
+
+- 宝宝**不是**第二条客户端连接：oracle 的宝宝由服务端 `SystemShare.WorldEngine.RegenMonsterByName`
+  在真实宿主里创建（BaseObject.cs:1190），随玩家会话内存存活 ⇒ 一条连接（主人）+ 一只真怪（受害者）即可构造。
+- 但「经验给主人 vs 给击杀者」的**对照**需要两条路径：a) 主人自己击杀（ExpHitter=玩家）；
+  b) 宝宝击杀（ExpHitter=宝宝，Master=主人）。b 需要夹具能真的**召出宝宝**（CM_SPELL 17/30/41/20）
+  并在世界里有可击杀目标 ⇒ 需要第二条 bot 连接仅用于「提供对照击杀者或受害者/见证者」时才有必要。
+  ⇒ 结论：主判据（经验给主人）**一条连接 + 真怪**即可；「归属对照」需两条连接。
+- `ExpHitter.Master` 的可控点：`SetLastHiter` 认**第一个**命中者（BaseObject.cs:1753）；用
+  `-AttackSequence` 的 role 顺序可控制是玩家先命中还是宝宝先命中；再配合 `KILLFUNC`/地图怪即可。
+- 召唤不可离线反射（magic.rs:833：需真 `SystemShare.WorldEngine`）⇒ 必须走真机两相（等窗口）。
+
+# ---- 复现：cwd = 仓库根（worktree） ----

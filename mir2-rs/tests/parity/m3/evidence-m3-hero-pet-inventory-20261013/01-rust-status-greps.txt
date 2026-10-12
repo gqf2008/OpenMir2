@@ -1,0 +1,148 @@
+# evidence-m3-hero-pet-inventory-20261013 / 01-rust-status-greps.txt
+# M3⑨ 英雄/宠物 DoD① 现状盘点 —— Rust 侧逐项只读 grep（文件:行 或 no match）
+# 基线 origin/master 304126ae。命令均无 -r（replace）。
+
+============================================================
+[1] 协议常量（RM_* 宠物相关）—— 已实现
+============================================================
+$ rg -n "RM_PLAYERKILLMONSTER|RM_DIEDROPITEM|RM_MASTERDIEMUTINY|RM_MASTERDIEGHOST|RM_MAKEHOLYSEIZEMODE|RM_SPIRITSUITE" mir2-rs/crates/protocol/src/messages.rs
+556:pub const RM_SPIRITSUITE: u16 = 9045;
+573:pub const RM_PLAYERKILLMONSTER: u16 = 60001;
+575:pub const RM_DIEDROPITEM: u16 = 60002;
+577:pub const RM_MASTERDIEMUTINY: u16 = 60003;
+579:pub const RM_MASTERDIEGHOST: u16 = 60004;
+581:pub const RM_MAKEHOLYSEIZEMODE: u16 = 60005;
+1115:        9045 => &["RM_SPIRITSUITE"],
+1262:        60001 => &["RM_PLAYERKILLMONSTER"],
+1263:        60002 => &["RM_DIEDROPITEM"],
+1264:        60003 => &["RM_MASTERDIEMUTINY"],
+1265:        60004 => &["RM_MASTERDIEGHOST"],
+1266:        60005 => &["RM_MAKEHOLYSEIZEMODE"],
+
+============================================================
+[2] 宠物/英雄专用 CM_/SM_ 常量 —— no match（与 oracle 一致：无专用帧）
+============================================================
+$ rg -ni "pub const (CM|SM)_[A-Z_]*(HERO|PET|SLAVE)[A-Z_]*" mir2-rs/crates/protocol/src/messages.rs
+  (no match)
+
+============================================================
+[3] 诱惑之光 MagTamming —— 已实现（真身向量）
+============================================================
+$ rg -n "pub struct TammingInput|pub struct TammingOutcome|pub fn mag_tamming|pub const LA_UNDEAD" mir2-rs/crates/world/src/magic.rs
+478:pub const LA_UNDEAD: u8 = 1;
+548:pub struct TammingInput {
+576:pub struct TammingOutcome {
+591:pub fn mag_tamming(rng: &mut impl RandomSource, inp: &TammingInput) -> TammingOutcome {
+$ rg -n "mag_tamming|Tamming" mir2-rs/crates/world/tests/magic_effect_vectors.rs | head
+5://! `MagicManager.MagTurnUndead`（`MagicManager.cs:827`）与 `MagTamming`（`:704`），
+32:    mag_tamming, mag_turn_undead, TammingInput, TammingOutcome, TurnUndeadInput, TurnUndeadOutcome,
+198:// ---- 20 诱惑之光（`MagTamming`）----------------------------------------------------------------
+201:struct TammingCase {
+202:    inp: TammingInput,
+213:fn load_tamming() -> Vec<TammingCase> {
+220:            TammingCase {
+221:                inp: TammingInput {
+254:fn tamming_mismatches(cases: &[TammingCase]) -> Vec<String> {
+259:        let got = mag_tamming(&mut rng, &inp);
+
+============================================================
+[4] 召唤技能 MagMakeSlave 一族（17/30/41/46）—— 仅登记可达性，未实现
+============================================================
+$ rg -n "MagMakeSlave|MagMakeSinSuSlave|MagMakeAngelSlave|MagMakeClone" mir2-rs/crates mir2-rs/bins
+mir2-rs/crates\world\tests\map_effect_vectors.rs:6://! `MagMakeClone`（`:1337-1341`）；合成真格式 `.map` 交给真身 `Envirnoment.LoadMapData`；
+mir2-rs/crates\world\tests\map_effect_vectors.rs:350:// ---- 46 MagMakeClone ----------------------------------------------------------------------------
+mir2-rs/crates\world\tests\map_effect_vectors.rs:395:            out.push(format!("clone[{n}] 真身 MagMakeClone 未返回 true"));
+mir2-rs/crates\world\tests\magic_effect_vectors.rs:385:    // 第十片：8/37（MagPushArround）、21（MagSaceMove）、46（MagMakeClone）用合成真格式 .map +
+mir2-rs/crates\world\src\magic.rs:471:// （`MagPushArround`/`MagSaceMove`/`MagMakeSlave`/`MagMakeSinSuSlave`/`MagMakeAngelSlave`/
+mir2-rs/crates\world\src\magic.rs:472:// `MagMakeClone`）体内部走 `Envir`/`GetMapBaseObjects`/`MakeSlave`，本片只登记可达性。
+mir2-rs/crates\world\src\magic.rs:830://   - 46 `MagMakeClone`（`:1337-1341`）
+mir2-rs/crates\world\src\magic.rs:833:// 17/30/41（`MagMakeSlave`/`MagMakeSinSuSlave`/`MagMakeAngelSlave`）需 `SystemShare.WorldEngine`
+mir2-rs/crates\world\src\magic.rs:1172:/// `MagMakeClone`（`MagicManager.cs:1337-1341`）的入参：`new PlayCloneObject(playObject)` 的全部效果。
+mir2-rs/crates\world\src\magic.rs:1191:/// `MagMakeClone`（`MagicManager.cs:1337-1341`）：`new PlayCloneObject(playObject)` 只拷
+  => 只出现在 crates/world/src/magic.rs 的注释/登记（:471-472 与 :833），无实现体。
+$ rg -n "make_slave|MakeSlave" mir2-rs/crates mir2-rs/bins
+mir2-rs/crates\world\src\magic.rs:471:// （`MagPushArround`/`MagSaceMove`/`MagMakeSlave`/`MagMakeSinSuSlave`/`MagMakeAngelSlave`/
+mir2-rs/crates\world\src\magic.rs:472:// `MagMakeClone`）体内部走 `Envir`/`GetMapBaseObjects`/`MakeSlave`，本片只登记可达性。
+mir2-rs/crates\world\src\magic.rs:833:// 17/30/41（`MagMakeSlave`/`MagMakeSinSuSlave`/`MagMakeAngelSlave`）需 `SystemShare.WorldEngine`
+
+============================================================
+[5] 实体主从字段 / 经验归属字段 —— 部分已实现
+============================================================
+$ rg -n "pub master|pub exp_hitter|pub last_hiter" mir2-rs/crates/world/src/entity.rs
+64:    pub master: Option<i32>,
+139:    pub last_hiter: Option<i32>,
+143:    pub exp_hitter: Option<i32>,
+$ rg -n "fn set_last_hiter|exp_hitter" mir2-rs/crates/world/src/entity.rs | head
+143:    pub exp_hitter: Option<i32>,
+205:            exp_hitter: None,
+216:    pub fn set_last_hiter(&mut self, hitter: i32) {
+218:        if self.exp_hitter.is_none() {
+219:            self.exp_hitter = Some(hitter);
+
+============================================================
+[6] 主从目标/可见集（master-aware）—— 已实现
+============================================================
+$ rg -n "master" mir2-rs/crates/world/src/combat.rs
+426:        if attacker.master.is_none() {
+434:            if target.master.is_some() {
+520:        if let Some(master) = target.master {
+521:            if master == attacker.id {
+656:    pub has_master: bool,
+682:    } else if last_hitter.is_some_and(|h| target.race == ACTOR_RACE_PLAY && h.has_master) {
+$ rg -n "master" mir2-rs/crates/world/src/aoi.rs
+32:    let target_is_active = target.race == ACTOR_RACE_PLAY || target.master.is_some();
+60:    let viewer_master = viewer.master;
+109:                            && (viewer_master.is_some()
+112:                                || (other.master.is_some()
+
+============================================================
+[7] settle_deaths：掉落归属走 master（已实现），经验只给玩家本人（缺口 = T-33）
+============================================================
+$ rg -n "drop_owner|is_player|ExpHitter.Master|宝宝击杀" mir2-rs/crates/world/src/world.rs | head
+589:            // `ExpHitter.Master?.ActorId ?? ExpHitter.ActorId`（`BaseObject.cs:2437/2442`）——
+591:            let drop_owner = exp_hitter
+601:                    of_base_object: drop_owner,
+615:                    of_base_object: drop_owner,
+626:            // 子集口径：`ExpHitter.Master != null`（宝宝击杀）不在本骨架；30s/6s 的**墙钟**过期也不做。
+629:                let is_player = self
+633:                if is_player {
+
+============================================================
+[8] 宝宝列表/等级/叛变 等字段 —— no match
+============================================================
+$ rg -ni "slave_list|is_slave|slave_exp|slave_make_level|master_royalty|recall_slave|spirit_mutiny|master_die_mutiny" mir2-rs/crates mir2-rs/bins
+mir2-rs/crates\script\src\engine\conditions.rs:48:            "ConditionOfCheckSlaveListCount" => self.cond_slave_list_count(info, result),
+mir2-rs/crates\script\src\engine\conditions.rs:451:    fn cond_slave_list_count(&mut self, info: &QuestConditionInfo, result: &mut bool) {
+
+============================================================
+[9] 脚本条件 CHECK... 宝宝数量 —— 已实现（照搬 oracle 恒假）
+============================================================
+$ rg -n "cond_slave_list_count|ConditionOfCheckSlaveListCount|fn slave_count" mir2-rs/crates/script/src mir2-rs/crates/script-tool/src
+mir2-rs/crates/script-tool/src\flowrun.rs:143:    fn slave_count(&self) -> i32 {
+mir2-rs/crates/script/src\handlers.rs:17:    (9, "ConditionOfCheckSlaveListCount"),
+mir2-rs/crates/script/src\engine\conditions.rs:48:            "ConditionOfCheckSlaveListCount" => self.cond_slave_list_count(info, result),
+mir2-rs/crates/script/src\engine\conditions.rs:448:    /// `ConditionOfCheckSlaveListCount`（C# 缺陷照搬）：
+mir2-rs/crates/script/src\engine\conditions.rs:451:    fn cond_slave_list_count(&mut self, info: &QuestConditionInfo, result: &mut bool) {
+mir2-rs/crates/script/src\engine\mod.rs:110:    fn slave_count(&self) -> i32;
+mir2-rs/crates/script/src\engine\dispatch.rs:106:    "ConditionOfCheckSlaveListCount",
+
+============================================================
+[10] crates/data 配置（tamming/slave/hero）—— no match
+============================================================
+$ rg -ni "tamming|slave|skeleton|dragon_count|angel|mon_up_lv|slave_color" mir2-rs/crates/data/src
+mir2-rs/crates/data/src\models.rs:166:/// C# `Grobal2.MaxChangeLevel`（`NeedExps` 表长）。
+
+============================================================
+[11] bins/game-svr 宠物派发/召唤 —— no match
+============================================================
+$ rg -ni "make_slave|slave_list|is_slave|spirit_mutiny|tamming|MASTERDIE|MAKEHOLY" mir2-rs/bins/game-svr/src
+  (no match)
+
+============================================================
+[12] whitelist 登记（T-32 / T-33）
+============================================================
+$ rg -n "T-32|T-33" mir2-rs/tests/parity/whitelist.md
+174:| T-32 | **客户端帧未发 + 经验子集未实现**：帧 `SM_ITEMSHOW(610)`/`SM_WINEXP(44)` 在 Rust 生产路径**未发**（常量在 `crates/protocol/src/messages.rs:256`/`:200`）；`award_kill_exp`（`combat.rs:945`）是子集——**无**组队 `GainExp` 分支、**无** `Envir.Flag.EXPRATE`、**无** `AddBodyLuck`、**无**升级 `IncHealthSpell`；`settle_deaths` **无**墙钟 30s/6s 的 `LastHiter`/`ExpHiter` 过期。 | **未实现（不是差异）**：所有分支都在「生产无刷怪」前提下不可达（T-31）。收敛随 `openmir2-m3-drop-exp-wiring`（帧 + 经验全支）与 `openmir2-m3-exp-misc`（组队/luck/升级）；真机 100 杀窗口应在其后发放。 | 作者登记（worker-4）；**待独立 principal 复核** |
+175:| T-33 | **「英雄经验」语义**：oracle（本代码库）**没有**独立的英雄实体/英雄经验表；唯一对应路径 = 下属/宠物击杀经验给主人（`src/M2Server/Actor/BaseObject.cs:2434-2437` 的 `ExpHitter.Master` 分支）。Rust `world.rs::settle_deaths` 只把经验给**玩家本人**，未实现 master 分支。 | 卡内 DoD 的「经验曲线（含英雄）」按**该 oracle 语义**覆盖（= `ExpHitter.Master`）；`drop_exp_raw.jsonl` 保留可选 `hero_exp_delta`（两侧都缺 ⇒ 不比）。未实现登记，收敛随 `openmir2-m3-drop-exp-wiring`；**不得**为它造一个 oracle 里不存在的独立英雄流。 | 作者登记（worker-4）；**待独立 principal 复核** |
+
+# ---- 复现：cwd = 仓库根（worktree）；以上命令逐条可重跑 ----

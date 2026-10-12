@@ -1,0 +1,608 @@
+# evidence-m3-hero-pet-inventory-20261013 / 00-oracle-chain-lines.txt
+# M3⑨ 英雄/宠物 DoD① 现状盘点 —— oracle 侧完整链与行号（仓库 src/ 内实测）
+# 基线 origin/master 304126ae；全部只读；命令均为 ripgrep/sed，无 -r（replace）误用。
+
+============================================================
+[A] 召唤/下属（slave/pet）字段与类型
+============================================================
+$ rg -n "SlaveList|ExpHitter|ExpHitterTick" src/M2Server/Actor/BaseObject.cs | head
+141:        public IList<IMonsterActor> SlaveList { get; set; }
+296:        public IActor ExpHitter { get; set; }
+297:        public int ExpHitterTick { get; set; }
+452:            ExpHitter = null;
+1181:            if (SlaveList == null)
+1183:                SlaveList = new List<IMonsterActor>();
+1185:            if (SlaveList.Count < nMaxMob)
+1204:                    SlaveList.Add(monObj);
+1757:            if (ExpHitter == null)
+1759:                ExpHitter = baseObject;
+$ rg -n "FightExp|SlaveExpLevel|IsSlave" src/M2Server/Actor/AnimalObject.cs
+17:        public int FightExp { get; set; }
+27:        public byte SlaveExpLevel { get; set; }
+54:        public bool IsSlave { get; set; }
+$ rg -n "KillMonCount|SlaveMakeLevel|MasterRoyaltyTick|MasterTick|CrazyMode|class MonsterObject" src/M2Server/Monster/MonsterObject.cs | head
+12:    public class MonsterObject : AnimalObject, IMonsterActor
+17:        public int KillMonCount;
+21:        public byte SlaveMakeLevel;
+37:        public int MasterRoyaltyTick;
+41:        public int MasterTick;
+49:        public bool CrazyMode;
+53:        private int CrazyModeTick;
+57:        private int CrazyModeInterval;
+68:            CrazyMode = false;
+73:            KillMonCount += nLevel;
+$ rg -n "class MonsterObject|class AnimalObject" src/M2Server/Monster/MonsterObject.cs src/M2Server/Actor/AnimalObject.cs
+src/M2Server/Monster/MonsterObject.cs:12:    public class MonsterObject : AnimalObject, IMonsterActor
+src/M2Server/Actor/AnimalObject.cs:12:    public class AnimalObject : BaseObject, IMonsterActor
+$ cat src/OpenMir2/Data/SlaveInfo.cs
+namespace OpenMir2.Data
+{
+    public class SlaveInfo
+    {
+        /// <summary>
+        /// 宝宝名字
+        /// </summary>
+        public string SlaveName;
+        /// <summary>
+        /// 宝宝等级
+        /// </summary>
+        public byte SlaveLevel;
+        /// <summary>
+        /// 叛变时间
+        /// </summary>
+        public int RoyaltySec;
+        /// <summary>
+        /// 杀怪数量
+        /// </summary>
+        public int KillCount;
+        public byte SalveLevel;
+        public byte SlaveExpLevel;
+        public ushort nHP;
+        public ushort nMP;
+    }
+}$ cat src/OpenMir2/Data/RecallMigic.cs
+﻿namespace OpenMir2.Data
+{
+    public struct RecallMigic
+    {
+        public int nHumLevel;
+        public string sMonName;
+        public int nCount;
+        public int nLevel;
+    }
+}$ rg -n "Master|IsSlave|SlaveExpLevel" src/Modules/SystemModule/Actors/IMonsterActor.cs
+7:        bool IsSlave { get; set; }
+9:        byte SlaveExpLevel { get; set; }
+
+============================================================
+[B] 召唤（MagMakeSlave 一族 + 诱惑之光 MagTamming + MakeSlave/RecallSlave）
+============================================================
+$ rg -n "SKILL_SKELLETON|SKILL_TAMMING|SKILL_SINSU|SKILL_ANGEL" src/Modules/SystemModule/Const/MagicConst.cs
+72:        public const byte SKILL_SKELLETON = 17;
+84:        public const byte SKILL_TAMMING = 20;
+124:        public const byte SKILL_SINSU = 30;
+161:        public const byte SKILL_ANGEL = 41;
+$ rg -n "MagMakeSlave|MagMakeSinSuSlave|MagMakeAngelSlave|MagMakeClone|MagTamming" src/M2Server/Magic/MagicManager.cs
+373:                                if (MagMakeSlave(playObject, userMagic))
+397:                        if (MagTamming(playObject, (MonsterObject)targetObject, nTargetX, nTargetY, userMagic.Level))
+455:                        if (MagMakeSinSuSlave(playObject, userMagic))
+467:                        if (MagMakeAngelSlave(playObject, userMagic))
+590:                    if (MagMakeClone(playObject, userMagic))
+704:        private static bool MagTamming(PlayObject playObject, MonsterObject targetObject, int nTargetX, int nTargetY, byte magicLevel)
+723:                                if (M2Share.RandomNumber.Random(playObject.Abil.Level + 20 + magicLevel * 5) > targetObject.Abil.Level + SystemShare.Config.MagTammingTargetLevel)
+725:                                    if (!targetObject.NoTame && targetObject.LifeAttrib != Grobal2.LA_UNDEAD && targetObject.Abil.Level < SystemShare.Config.MagTammingLevel && playObject.SlaveList.Count < SystemShare.Config.MagTammingCount)
+727:                                        int n14 = targetObject.Abil.MaxHP / SystemShare.Config.MagTammingHPRate;
+1269:        private static bool MagMakeSinSuSlave(PlayObject playObject, UserMagic userMagic)
+1308:        private static bool MagMakeSlave(BaseObject playObject, UserMagic userMagic)
+1337:        private static bool MagMakeClone(PlayObject playObject, UserMagic userMagic)
+1343:        private static bool MagMakeAngelSlave(BaseObject playObject, UserMagic userMagic)
+$ rg -n "case MagicConst.SKILL_SKELLETON|case MagicConst.SKILL_TAMMING|case MagicConst.SKILL_SINSU|case MagicConst.SKILL_ANGEL|case MagicConst.SKILL_CLONE" src/M2Server/Magic/MagicManager.cs
+319:                case MagicConst.SKILL_SKELLETON:
+372:                            case MagicConst.SKILL_SKELLETON:
+394:                case MagicConst.SKILL_TAMMING:
+450:                case MagicConst.SKILL_SINSU:
+462:                case MagicConst.SKILL_ANGEL:
+$ rg -n "public IActor MakeSlave|public bool CheckServerMakeSlave|public void RecallSlave" src/M2Server/Actor/BaseObject.cs
+1179:        public IActor MakeSlave(string sMonName, int nMakeLevel, int nExpLevel, int nMaxMob, int dwRoyaltySec)
+1850:        public void RecallSlave(string sSlaveName)
+1979:        public bool CheckServerMakeSlave()
+$ rg -n "ChangeServerMakeSlave|RM_10401" src/M2Server/Player/PlayObject.Base.cs src/M2Server/Player/PlayObject.Message.cs
+src/M2Server/Player/PlayObject.Message.cs:2005:                case Messages.RM_10401:
+src/M2Server/Player/PlayObject.Message.cs:2006:                    ChangeServerMakeSlave((SlaveInfo)SystemShare.ActorMgr.GetOhter(processMsg.nParam1));
+src/M2Server/Player/PlayObject.Base.cs:2335:        private void ChangeServerMakeSlave(SlaveInfo slaveInfo)
+
+--- MakeSlave 体（BaseObject.cs:1179-1209）---
+        public IActor MakeSlave(string sMonName, int nMakeLevel, int nExpLevel, int nMaxMob, int dwRoyaltySec)
+        {
+            if (SlaveList == null)
+            {
+                SlaveList = new List<IMonsterActor>();
+            }
+            if (SlaveList.Count < nMaxMob)
+            {
+                short nX = 0;
+                short nY = 0;
+                GetFrontPosition(ref nX, ref nY);
+                MonsterObject monObj = (MonsterObject)SystemShare.WorldEngine.RegenMonsterByName(Envir.MapName, nX, nY, sMonName);
+                if (monObj != null)
+                {
+                    monObj.Master = this;
+                    monObj.IsSlave = true;
+                    monObj.MasterRoyaltyTick = HUtil32.GetTickCount() + (dwRoyaltySec * 1000);
+                    monObj.SlaveMakeLevel = (byte)nMakeLevel;
+                    monObj.SlaveExpLevel = (byte)nExpLevel;
+                    monObj.RecalcAbilitys();
+                    if (monObj.WAbil.HP < monObj.WAbil.MaxHP)
+                    {
+                        monObj.WAbil.HP = (ushort)(monObj.WAbil.HP + (monObj.WAbil.MaxHP - monObj.WAbil.HP) / 2);
+                    }
+                    monObj.RefNameColor();
+                    SlaveList.Add(monObj);
+                    return monObj;
+                }
+            }
+            return null;
+        }
+--- CheckServerMakeSlave 体（BaseObject.cs:1979-1994）---
+        public bool CheckServerMakeSlave()
+        {
+            bool result = false;
+            for (int i = 0; i < MsgQueue.Count; i++)
+            {
+                if (MsgQueue.TryPeek(out SendMessage sendMessage, out _))
+                {
+                    if (sendMessage.wIdent == Messages.RM_10401)
+                    {
+                        result = true;
+                        break;
+                    }
+                }
+            }
+            return result;
+        }
+--- ChangeServerMakeSlave 体（PlayObject.Base.cs:2335-2358）---
+        private void ChangeServerMakeSlave(SlaveInfo slaveInfo)
+        {
+            int nSlavecount = Job == PlayerJob.Taoist ? 1 : 5;
+            MonsterObject baseObject = (MonsterObject)MakeSlave(slaveInfo.SlaveName, 3, slaveInfo.SlaveLevel, nSlavecount, slaveInfo.RoyaltySec);
+            if (baseObject != null)
+            {
+                baseObject.KillMonCount = slaveInfo.KillCount;
+                baseObject.SlaveExpLevel = slaveInfo.SlaveExpLevel;
+                baseObject.WAbil.HP = slaveInfo.nHP;
+                baseObject.WAbil.MP = slaveInfo.nMP;
+                if (1500 - slaveInfo.SlaveLevel * 200 < baseObject.WalkSpeed)
+                {
+                    baseObject.WalkSpeed = (1500 - slaveInfo.SlaveLevel) * 200;
+                }
+                if (2000 - slaveInfo.SlaveLevel * 200 < baseObject.NextHitTime)
+                {
+                    baseObject.WalkSpeed = (2000 - slaveInfo.SlaveLevel) * 200;
+                }
+                RecalcAbilitys();
+            }
+        }
+
+        private void SendDelDealItem(UserItem userItem)
+        {
+
+============================================================
+[C] 升级（SlaveExpLevel / SlaveMakeLevel —— 注意 GainSlaveExp 为死代码）
+============================================================
+$ rg -n "GainSlaveExp" src/
+src/M2Server\Monster\MonsterObject.cs:71:        private void GainSlaveExp(byte nLevel)
+  => 只有定义、无调用点 ⇒ 宝宝按击杀数升级（SlaveExpLevel++）在本 oracle 里不可达（死代码）。
+$ rg -n "GainSlaveUpKillCount|SlaveExpLevel <|SlaveMakeLevel \* 2" src/M2Server/Monster/MonsterObject.cs
+74:            if (GainSlaveUpKillCount() < KillMonCount)
+76:                KillMonCount -= GainSlaveUpKillCount();
+77:                if (SlaveExpLevel < (SlaveMakeLevel * 2 + 1))
+86:        private int GainSlaveUpKillCount()
+89:            if (SlaveExpLevel < Grobal2.SlaveMaxLevel - 2)
+370:                    if ((M2Share.SpiritMutinyTick > HUtil32.GetTickCount()) && (this.SlaveExpLevel < 5))
+--- GainSlaveExp / GainSlaveUpKillCount 体（MonsterObject.cs:71-97）---
+        private void GainSlaveExp(byte nLevel)
+        {
+            KillMonCount += nLevel;
+            if (GainSlaveUpKillCount() < KillMonCount)
+            {
+                KillMonCount -= GainSlaveUpKillCount();
+                if (SlaveExpLevel < (SlaveMakeLevel * 2 + 1))
+                {
+                    SlaveExpLevel++;
+                    RecalcAbilitys();
+                    RefNameColor();
+                }
+            }
+        }
+
+        private int GainSlaveUpKillCount()
+        {
+            int tCount;
+            if (SlaveExpLevel < Grobal2.SlaveMaxLevel - 2)
+            {
+                tCount = SystemShare.Config.MonUpLvNeedKillCount[SlaveExpLevel];
+            }
+            else
+            {
+                tCount = 0;
+            }
+            return (Abil.Level * SystemShare.Config.MonUpLvRate) - Abil.Level + SystemShare.Config.MonUpLvNeedKillBase + tCount;
+$ rg -n "SlaveExpLevel|SlaveMakeLevel|SlaveColor|GetChrColor" src/M2Server/Actor/BaseObject.cs src/M2Server/Actor/BaseObject.Abil.cs src/M2Server/Actor/BaseObject.Base.cs src/M2Server/Player/PlayObject.Base.cs
+src/M2Server/Actor/BaseObject.Abil.cs:140:            byte slaveExpLevel = ((MonsterObject)this).SlaveExpLevel;
+src/M2Server/Actor/BaseObject.Base.cs:869:        protected virtual byte GetChrColor(IActor baseObject)
+src/M2Server/Actor/BaseObject.Base.cs:877:                byte slaveExpLevel = ((MonsterObject)baseObject).SlaveExpLevel;
+src/M2Server/Actor/BaseObject.Base.cs:880:                    return SystemShare.Config.SlaveColor[slaveExpLevel];
+src/M2Server/Player/PlayObject.Base.cs:347:                    SlaveList[i].SlaveExpLevel = (byte)SystemShare.Config.SlaveColor.Length;
+src/M2Server/Player/PlayObject.Base.cs:2342:                baseObject.SlaveExpLevel = slaveInfo.SlaveExpLevel;
+src/M2Server/Actor/BaseObject.cs:1196:                    monObj.SlaveMakeLevel = (byte)nMakeLevel;
+src/M2Server/Actor/BaseObject.cs:1197:                    monObj.SlaveExpLevel = (byte)nExpLevel;
+src/M2Server/Actor/BaseObject.cs:1464:                byte slaveExpLevel = ((MonsterObject)this).SlaveExpLevel;
+src/M2Server/Actor/BaseObject.cs:1479:                byte slaveExpLevel = ((MonsterObject)this).SlaveExpLevel;
+$ rg -n "SlaveMakeLevel|SlaveExpLevel" src/M2Server/Monster/Monsters/*.cs
+src/M2Server/Monster/Monsters/ElfWarriorMonster.cs:107:            NextHitTime = 1500 - SlaveMakeLevel * 100;
+src/M2Server/Monster/Monsters/ElfWarriorMonster.cs:108:            WalkSpeed = 500 - SlaveMakeLevel * 50;
+src/M2Server/Monster/Monsters/ElfMonster.cs:39:            WalkSpeed = 500 - SlaveMakeLevel * 50;
+src/M2Server/Monster/Monsters/WhiteSkeleton.cs:24:            this.NextHitTime = 3000 - this.SlaveMakeLevel * 600;
+src/M2Server/Monster/Monsters/WhiteSkeleton.cs:25:            this.WalkSpeed = 1200 - this.SlaveMakeLevel * 250;
+--- GetChrColor 体（BaseObject.Base.cs:869-884）---
+        protected virtual byte GetChrColor(IActor baseObject)
+        {
+            if (baseObject.Race == ActorRace.NPC) //增加NPC名字颜色单独控制
+            {
+                return SystemShare.Config.NpcNameColor;
+            }
+            if (baseObject.Master != null)
+            {
+                byte slaveExpLevel = ((MonsterObject)baseObject).SlaveExpLevel;
+                if (slaveExpLevel <= Grobal2.SlaveMaxLevel)
+                {
+                    return SystemShare.Config.SlaveColor[slaveExpLevel];
+                }
+            }
+            return baseObject.GetNameColor();
+        }
+$ rg -n "MonUpLvNeedKillCount =|MonUpLvRate =|MonUpLvNeedKillBase =" src/Modules/SystemModule/Conf/Model/GameSvrConf.cs
+1325:            MonUpLvNeedKillBase = 100;
+1326:            MonUpLvRate = 16;
+1327:            MonUpLvNeedKillCount = new[] { 0, 0, 50, 100, 200, 300, 600, 1200, 2400, 4800, 9600, 19200, 38400, 76800, 153600 };
+$ rg -n "SlaveMaxLevel" src/OpenMir2/Grobal2.cs
+23:        public const byte SlaveMaxLevel = 50;
+
+============================================================
+[D] 阵亡 / 叛变（SlaveList 清理 + CheckRoyalty + ProcessSlaveMutiny/Ghost）
+============================================================
+--- 死亡/幽灵/换主清理（BaseObject.Base.cs:208-217）---
+            // 清除宝宝列表中已经死亡及叛变的宝宝信息
+            if (SlaveList != null && SlaveList.Any())
+            {
+                for (int i = SlaveList.Count - 1; i >= 0; i--)
+                {
+                    if (SlaveList[i].Death || SlaveList[i].Ghost || (SlaveList[i].Master != this))
+                    {
+                        SlaveList.RemoveAt(i);
+                    }
+                }
+--- ProcessSlaveMutiny / ProcessSlaveGhost（PlayObject.Base.cs:333-370）---
+            // 宝宝在主人死亡后死亡处理
+            if (!Death)
+            {
+                return;
+            }
+            if (!SystemShare.Config.MasterDieMutiny)
+            {
+                return;
+            }
+            for (int i = SlaveList.Count - 1; i >= 0; i--)
+            {
+                if (SlaveList[i].Master.LastHiter != null && (M2Share.RandomNumber.Random(SystemShare.Config.MasterDieMutinyRate) == 0))
+                {
+                    SlaveList[i].Master = null;
+                    SlaveList[i].SlaveExpLevel = (byte)SystemShare.Config.SlaveColor.Length;
+                    SlaveList[i].RecalcAbilitys();
+                    SlaveList[i].WAbil.DC = (ushort)HUtil32.MakeLong((short)(HUtil32.LoByte(SlaveList[i].WAbil.DC) * SystemShare.Config.MasterDieMutinyPower), (short)(HUtil32.HiByte(SlaveList[i].WAbil.DC) * SystemShare.Config.MasterDieMutinyPower));
+                    SlaveList[i].WalkSpeed = SlaveList[i].WalkSpeed / SystemShare.Config.MasterDieMutinySpeed;
+                    SlaveList[i].RefNameColor();
+                    SlaveList[i].RefShowName();
+                }
+                else
+                {
+                    SlaveList[i].WAbil.HP = 0;
+                }
+            }
+        }
+
+        private void ProcessSlaveGhost()
+        {
+            if (!Ghost)
+            {
+                return;
+            }
+            for (int i = SlaveList.Count - 1; i >= 0; i--)
+            {
+                SlaveList[i].MakeGhost();
+            }
+$ rg -n "CheckRoyalty\(\)|private void CheckRoyalty" src/M2Server/Monster/MonsterObject.cs
+352:            CheckRoyalty();
+363:        private void CheckRoyalty()
+--- CheckRoyalty 体（MonsterObject.cs:363-397）---
+        private void CheckRoyalty()
+        {
+            if ((HUtil32.GetTickCount() - CheckRoyaltyTick) > 10000)
+            {
+                CheckRoyaltyTick = HUtil32.GetTickCount();
+                if (Master != null)
+                {
+                    if ((M2Share.SpiritMutinyTick > HUtil32.GetTickCount()) && (this.SlaveExpLevel < 5))
+                    {
+                        MasterRoyaltyTick = 0;
+                    }
+                    if (HUtil32.GetTickCount() > MasterRoyaltyTick)
+                    {
+                        for (int i = 0; i < Master.SlaveList.Count; i++)
+                        {
+                            if (Master.SlaveList[i] == this)
+                            {
+                                Master.SlaveList.RemoveAt(i);
+                                break;
+                            }
+                        }
+                        Master = null;
+                        WAbil.HP = (ushort)(WAbil.HP / 10);
+                        RefShowName();
+                    }
+                    if (MasterTick > 0)
+                    {
+                        if ((HUtil32.GetTickCount() - MasterTick) > 12 * 60 * 60 * 1000) //超过叛变时间则死亡
+                        {
+                            WAbil.HP = 0;
+                        }
+                    }
+                }
+            }
+        }
+$ rg -n "RM_MASTERDIEMUTINY|RM_MASTERDIEGHOST|RM_SPIRITSUITE|RM_MAKEHOLYSEIZEMODE" src/M2Server/Player/PlayObject.cs src/M2Server/Player/PlayObject.Message.cs src/M2Server/Actor/AnimalObject.cs src/M2Server/Magic/MagicManager.cs
+src/M2Server/Actor/AnimalObject.cs:134:                case Messages.RM_MAKEHOLYSEIZEMODE:
+src/M2Server/Magic/MagicManager.cs:712:                    targetObject.SendMsg(Messages.RM_MAKEHOLYSEIZEMODE, (magicLevel * 5 + 10) * 1000, 0, 0, 0);
+src/M2Server/Magic/MagicManager.cs:812:                        targetObject.SendMsg(Messages.RM_MAKEHOLYSEIZEMODE, (magicLevel * 5 + 10) * 1000, 0, 0, 0);
+src/M2Server/Magic/MagicManager.cs:1168:                        targetObject.SendMsg(Messages.RM_MAKEHOLYSEIZEMODE, nPower * 1000, 0, 0, 0);
+src/M2Server/Player/PlayObject.Message.cs:2113:                case Messages.RM_SPIRITSUITE:
+src/M2Server/Player/PlayObject.Message.cs:2116:                case Messages.RM_MASTERDIEMUTINY:
+src/M2Server/Player/PlayObject.Message.cs:2119:                case Messages.RM_MASTERDIEGHOST:
+src/M2Server/Player/PlayObject.cs:1996:            SendSelfDelayMsg(Messages.RM_MASTERDIEMUTINY, 0, 0, 0, 0, "", 1000);
+src/M2Server/Player/PlayObject.cs:2005:            SendSelfDelayMsg(Messages.RM_MASTERDIEMUTINY, 0, 0, 0, 0, "", 1000);
+src/M2Server/Player/PlayObject.cs:2888:                SendSelfDelayMsg(Messages.RM_SPIRITSUITE, 0, 0, 0, 0, "", 500);
+src/M2Server/Player/PlayObject.cs:3527:                SendSelfDelayMsg(Messages.RM_MASTERDIEGHOST, 0, 0, 0, 0, "", 1000);
+
+============================================================
+[E] 经验分配（KillFunc 的 ExpHitter.Master 分支 → RM_PLAYERKILLMONSTER → KillTargetTrigger → GainExp）
+============================================================
+--- SetLastHiter / ExpHitter 认领（BaseObject.cs:1753-1768）---
+        public void SetLastHiter(IActor baseObject)
+        {
+            LastHiter = baseObject;
+            LastHiterTick = HUtil32.GetTickCount();
+            if (ExpHitter == null)
+            {
+                ExpHitter = baseObject;
+                ExpHitterTick = HUtil32.GetTickCount();
+            }
+            else
+            {
+                if (ExpHitter == baseObject)
+                {
+                    ExpHitterTick = HUtil32.GetTickCount();
+                }
+            }
+--- KillFunc（BaseObject.cs:2429-2443）---
+        private void KillFunc()
+        {
+            if (ExpHitter != null)
+            {
+                int fightExp = ((AnimalObject)this).FightExp; //后续移动到AnimalObject实现,减少一次转换
+                if (ExpHitter.Master != null) //如果是角色下属杀死对象
+                {
+                    ExpHitter.Master.SendMsg(Messages.RM_PLAYERKILLMONSTER, this.ActorId, fightExp, 0, 0);
+                    SendMsg(Messages.RM_DIEDROPITEM, ExpHitter.Master.ActorId, 0, 0, 0);
+                }
+                if (ExpHitter.Race == ActorRace.Play)
+                {
+                    ExpHitter.SendMsg(Messages.RM_PLAYERKILLMONSTER, this.ActorId, fightExp, 0, 0);
+                    SendMsg(Messages.RM_DIEDROPITEM, ExpHitter.ActorId, 0, 0, 0);
+                }
+--- ExpHitter 6s 过期（BaseObject.Base.cs:119-132）---
+            if (LastHiter != null)
+            {
+                if (((HUtil32.GetTickCount() - LastHiterTick) > 30000) || LastHiter.Death || LastHiter.Ghost)
+                {
+                    LastHiter = null;
+                }
+            }
+            if (ExpHitter != null)
+            {
+                if (((HUtil32.GetTickCount() - ExpHitterTick) > 6000) || ExpHitter.Death || ExpHitter.Ghost)
+                {
+                    ExpHitter = null;
+                }
+            }
+$ rg -n "KillFunc\(\)" src/M2Server/Actor/BaseObject.Base.cs
+343:            KillFunc();
+--- RM_PLAYERKILLMONSTER 派发（PlayObject.Message.cs:2110-2111）---
+                case Messages.RM_PLAYERKILLMONSTER:
+                    KillTargetTrigger(processMsg.wParam, processMsg.nParam1);
+$ rg -n "private void KillTargetTrigger|private void GainExp|public void WinExp|private void GetExp" src/M2Server/Player/PlayObject.cs src/M2Server/Player/PlayObject.Base.cs src/M2Server/Actor/BaseObject.Base.cs
+src/M2Server/Player/PlayObject.Base.cs:129:        public void WinExp(int dwExp)
+src/M2Server/Player/PlayObject.Base.cs:149:        private void GetExp(int dwExp)
+src/M2Server/Player/PlayObject.cs:1632:        private void KillTargetTrigger(int actorId, int fightExp)
+--- KillTargetTrigger 关键行（PlayObject.cs:1632-1652）---
+        private void KillTargetTrigger(int actorId, int fightExp)
+        {
+            IActor killObject = SystemShare.ActorMgr.Get(actorId);
+            if (killObject == null)
+            {
+                return;
+            }
+            if (SystemShare.FunctionNPC != null)
+            {
+                SystemShare.FunctionNPC.GotoLable(this, "@PlayKillMob", false);
+            }
+            int monsterExp = CalcGetExp(WAbil.Level, fightExp);
+            if (!SystemShare.Config.VentureServer)
+            {
+                if (IsRobot && ExpHitter != null && ExpHitter.Race == ActorRace.Play)
+                {
+                    // ((IRobotPlayer)ExpHitter).GainExp(monsterExp);
+                }
+                else
+                {
+                    GainExp(monsterExp);
+--- WinExp/GetExp（PlayObject.Base.cs:129-166）---
+        public void WinExp(int dwExp)
+        {
+            if (Abil.Level > SystemShare.Config.LimitExpLevel)
+            {
+                dwExp = SystemShare.Config.LimitExpValue;
+                GetExp(dwExp);
+            }
+            else if (dwExp > 0)
+            {
+                dwExp = SystemShare.Config.KillMonExpMultiple * dwExp; // 系统指定杀怪经验倍数
+                dwExp = MNKillMonExpMultiple * dwExp; // 人物指定的杀怪经验倍数
+                dwExp = HUtil32.Round(KillMonExpRate / 100.0 * dwExp);// 人物指定的杀怪经验倍数
+                if (Envir.Flag.boEXPRATE)
+                {
+                    dwExp = HUtil32.Round(Envir.Flag.ExpRate / 100.0 * dwExp);// 地图上指定杀怪经验倍数
+                }
+                GetExp(dwExp);
+            }
+        }
+
+        private void GetExp(int dwExp)
+        {
+            Abil.Exp += dwExp;
+            AddBodyLuck(dwExp * 0.002);
+            SendMsg(Messages.RM_WINEXP, 0, dwExp, 0, 0);
+            if (Abil.Exp >= Abil.MaxExp)
+            {
+                Abil.Exp -= Abil.MaxExp;
+                if (Abil.Level < MessageSettings.MAXUPLEVEL)
+                {
+                    Abil.Level++;
+                }
+                HasLevelUp(Abil.Level - 1);
+                AddBodyLuck(100);
+                //M2Share.EventSource.AddEventLog(12, MapName + "\t" + Abil.Level + "\t" + Abil.Exp + "\t" + ChrName + "\t" + '0' + "\t" + '0' + "\t" + '1' + "\t" + '0');
+                IncHealthSpell(2000, 2000);
+            }
+        }
+
+============================================================
+[F] 上限判定（SlaveList.Count 门）
+============================================================
+$ rg -n "SlaveList.Count <" src/M2Server/Actor/BaseObject.cs src/M2Server/Magic/MagicManager.cs
+src/M2Server/Magic/MagicManager.cs:725:                                    if (!targetObject.NoTame && targetObject.LifeAttrib != Grobal2.LA_UNDEAD && targetObject.Abil.Level < SystemShare.Config.MagTammingLevel && playObject.SlaveList.Count < SystemShare.Config.MagTammingCount)
+src/M2Server/Actor/BaseObject.cs:1185:            if (SlaveList.Count < nMaxMob)
+$ rg -n "nSlavecount" src/M2Server/Player/PlayObject.Base.cs
+2337:            int nSlavecount = Job == PlayerJob.Taoist ? 1 : 5;
+2338:            MonsterObject baseObject = (MonsterObject)MakeSlave(slaveInfo.SlaveName, 3, slaveInfo.SlaveLevel, nSlavecount, slaveInfo.RoyaltySec);
+$ rg -n "SkeletonCount =|DragonCount =|MagTammingCount =|MagTammingLevel =|Skeleton =|Dragon =|Angel =" src/Modules/SystemModule/Conf/Model/GameSvrConf.cs
+1755:            Skeleton = "变异骷髅";
+1756:            SkeletonCount = 1;
+1758:            Dragon = "神兽";
+1760:            DragonCount = 1;
+1762:            Angel = "精灵";
+1774:            MagTammingLevel = 50; //诱惑之光怪物等级限制
+1777:            MagTammingCount = 5;
+
+============================================================
+[G] 帧（RM_* 内部消息；本系统无专用 CM_/SM_ 宠物帧）
+============================================================
+$ rg -n "RM_PLAYERKILLMONSTER|RM_DIEDROPITEM|RM_MASTERDIEMUTINY|RM_MASTERDIEGHOST|RM_MAKEHOLYSEIZEMODE|RM_SPIRITSUITE|RM_10401" src/OpenMir2/Messages.cs
+629:        public const int RM_10401 = 10401;
+713:        public const int RM_SPIRITSUITE = 9045;
+828:        public const int RM_PLAYERKILLMONSTER = 60001;
+832:        public const int RM_DIEDROPITEM = 60002;
+836:        public const int RM_MASTERDIEMUTINY = 60003;
+840:        public const int RM_MASTERDIEGHOST = 60004;
+844:        public const int RM_MAKEHOLYSEIZEMODE = 60005;
+$ rg -n "CM_|SM_" src/OpenMir2/Messages.cs | grep -iE "slave|pet|hero|tamming"
+  (no match：C# Messages.cs 无宠物/英雄专用 CM_/SM_ 常量)
+$ rg -n "RM_WINEXP" src/OpenMir2/Messages.cs
+678:        public const int RM_WINEXP = 8075;
+$ rg -n "RefNameColor|RefShowName" src/M2Server/Actor/BaseObject.cs src/M2Server/Actor/BaseObject.Base.cs | head
+src/M2Server/Actor/BaseObject.cs:730:        public void RefNameColor()
+src/M2Server/Actor/BaseObject.cs:1174:        public void RefShowName()
+src/M2Server/Actor/BaseObject.cs:1203:                    monObj.RefNameColor();
+
+============================================================
+[H] 落库（oracle 侧宝宝/宠物/英雄 不落库）
+============================================================
+$ rg -ni "slave|hero|pet|tamming" sql/   (no match 即为事实)
+  (no match：三库 22 表无 slave/pet/hero/tamming 列)
+$ rg -n "SlaveInfo|SwitchDataInfo" src/OpenMir2/Data/SwitchDataInfo.cs src/GameSrv/Word/WorldServer.Switch.cs
+src/OpenMir2/Data/SwitchDataInfo.cs:6:    public class SwitchDataInfo
+src/OpenMir2/Data/SwitchDataInfo.cs:21:        public SlaveInfo[] SlaveArr;
+src/GameSrv/Word/WorldServer.Switch.cs:7:        private SwitchDataInfo GetSwitchData(string sChrName, int nCode)
+src/GameSrv/Word/WorldServer.Switch.cs:9:            SwitchDataInfo result = null;
+src/GameSrv/Word/WorldServer.Switch.cs:12:                SwitchDataInfo switchData = ChangeServerList[i];
+src/GameSrv/Word/WorldServer.Switch.cs:22:        private static void LoadSwitchData(SwitchDataInfo switchData, ref IPlayerActor playObject)
+src/GameSrv/Word/WorldServer.Switch.cs:75:        public void AddSwitchData(SwitchDataInfo switchData)
+src/GameSrv/Word/WorldServer.Switch.cs:81:        private void DelSwitchData(SwitchDataInfo switchData)
+src/GameSrv/Word/WorldServer.Switch.cs:85:                SwitchDataInfo switchDataInfo = ChangeServerList[i];
+src/GameSrv/Word/WorldServer.Switch.cs:96:            SwitchDataInfo switchData = null;
+src/GameSrv/Word/WorldServer.Switch.cs:105:        private static void MakeSwitchData(IPlayerActor playObject, ref SwitchDataInfo switchData)
+src/GameSrv/Word/WorldServer.Switch.cs:107:            switchData = new SwitchDataInfo();
+  => 宝宝跨服只随 SwitchDataInfo（换服包）传递，不落任何 DB 表/列。
+
+============================================================
+[I] 「英雄」在 oracle 的实际归属（无玩家英雄实体）
+============================================================
+$ rg -ni "HeroObject|PetObject|class Hero|class Pet" src/
+src/BotSrv\Scenes\Scene\PlayScene.cs:52:            //    if ((((TActor)(MActorList[i])) != MShare.g_MySelf) && (((TActor)(MActorList[i])) != MShare.g_MySelf.m_HeroObject) && !PlayScn.IsMySlaveObject(((TActor)(MActorList[i]))))
+src/BotSrv\Objects\HeroActor.cs:10:    public class HeroActor
+src/M2Server\Monster\Monsters\PetSuperGuard.cs:3:    public class PetSuperGuard : SuperGuard
+$ find src -iname "*hero*" -o -iname "*pet*" -o -iname "*slave*"
+src/BotSrv/Objects/HeroActor.cs
+src/M2Server/Monster/Monsters/PetSuperGuard.cs
+src/OpenMir2/Data/SlaveInfo.cs
+$ rg -ni "hero" src/M2Server src/GameSrv src/OpenMir2/Messages.cs
+  (no match：M2Server/GameSrv/服务端消息表无 hero)
+$ rg -n "boHeroAttackTao|boHeroAttackTarget|btHeroSkillMode|dwHeroWarrorAttackTime|sHeroAIConfigListFileName" src/Modules/SystemModule/Conf/Model/GameSvrConf.cs
+1172:        public bool boHeroAttackTao;
+1176:        public bool boHeroAttackTarget;
+1208:        public bool btHeroSkillMode;
+1209:        public long dwHeroWarrorAttackTime;//战士英雄的攻击速度
+1213:        public string sHeroAIConfigListFileName;
+1912:            btHeroSkillMode = true;
+1913:            dwHeroWarrorAttackTime = 1660;
+1917:            sHeroAIConfigListFileName = @"\Envir\QuestDiary\机器人配置文件列表.txt";
+1918:            boHeroAttackTarget = true;
+  => 这些 hero* 字段属于机器人（RobotSystem/RobotPlayer）配置；见 src/Modules/RobotSystem/**。
+$ rg -n "class HeroActor|class RobotPlayer : PlayObject" src/BotSrv/Objects/HeroActor.cs src/Modules/RobotSystem/Services/RobotPlayer.cs
+src/BotSrv/Objects/HeroActor.cs:10:    public class HeroActor
+src/Modules/RobotSystem/Services/RobotPlayer.cs:27:    public partial class RobotPlayer : PlayObject, IRobotPlayer
+$ rg -n "CHECKHEROGROUP" src/Modules/ScriptEngine/Consts/ConditionCode.cs
+401:        [ScriptDefName("CHECKHEROGROUP")]
+402:        CHECKHEROGROUP,
+
+============================================================
+[J] 扩展面（神之祈祷/IsSpirit、跨服、脚本条件）
+============================================================
+$ rg -n "IsSpirit|SpiritSuite|RM_SPIRITSUITE" src/M2Server/Player/PlayObject.cs src/M2Server/Player/PlayObject.Message.cs | head
+src/M2Server/Player/PlayObject.Message.cs:2113:                case Messages.RM_SPIRITSUITE:
+src/M2Server/Player/PlayObject.Message.cs:2114:                    ProcessSpiritSuite();
+src/M2Server/Player/PlayObject.cs:160:        public bool IsSpirit { get; set; }
+src/M2Server/Player/PlayObject.cs:2808:                IsSpirit = true;
+src/M2Server/Player/PlayObject.cs:2886:            if (IsSpirit)
+src/M2Server/Player/PlayObject.cs:2888:                SendSelfDelayMsg(Messages.RM_SPIRITSUITE, 0, 0, 0, 0, "", 500);
+$ rg -n "CHECKHEROGROUP|CHECKGROUPCOUNT" src/Modules/ScriptEngine | head
+src/Modules/ScriptEngine\Consts\ConditionCode.cs:173:        [ScriptDefName("CHECKGROUPCOUNT")]
+src/Modules/ScriptEngine\Consts\ConditionCode.cs:174:        CHECKGROUPCOUNT,
+src/Modules/ScriptEngine\Consts\ConditionCode.cs:401:        [ScriptDefName("CHECKHEROGROUP")]
+src/Modules/ScriptEngine\Consts\ConditionCode.cs:402:        CHECKHEROGROUP,
+src/Modules/ScriptEngine\Processings\ConditionProcessingSys.cs:74:            _conditionMap[(int)ConditionCode.CHECKGROUPCOUNT] = ConditionOfCheckGroupCount;
+src/Modules/ScriptEngine\Processings\ConditionProcessingSys.cs:2683:                    ScriptConditionError(normNpc, playerActor, questConditionInfo, ConditionCode.CHECKGROUPCOUNT);
+$ rg -n "class RecallMigic|struct RecallMigic" src/OpenMir2/Data/RecallMigic.cs
+3:    public struct RecallMigic
+
+# ---- 复现：以下命令在仓库根 E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3cs 下执行 ----
+# rg -n "GainSlaveExp" src/                 # 只有定义一行 => 死代码
