@@ -1,0 +1,27 @@
+M2 验收前置检查（preflight；只读，不起栈/不占端口）  repo=E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr
+tool:
+  [OK     ] tool:python                        C:\Users\gxh\AppData\Local\Programs\Python\Python312\python.exe
+  [OK     ] tool:dotnet                        C:\Program Files\dotnet\dotnet.exe
+  [OK     ] tool:cargo                         C:\Users\gxh\.cargo\bin\cargo.exe
+  [OK     ] tool:GoldenExport可用                预构建 exe 在
+input:
+  [OK     ] input:tools\capture\mir2_proxy.py  抓包（客户端↔7200）
+  [OK     ] input:tools\capture\segment_frames.py 切帧
+  [OK     ] input:tools\capture\dump_body_layout.py 当前分段布局（防 A-9 假红）
+  [OK     ] input:tools\capture\GoldenExport\GoldenExport.csproj 解码成 capture.jsonl
+  [OK     ] input:tools\client\mir_flow.ps1    真客户端驱动/截图
+  [OK     ] input:tools\dbsnap\dbsnap.py       13 表快照
+  [OK     ] input:mir2-rs\tests\parity\m3\scoped_diff.py 作用域字段级 diff（DB 三路径）
+  [OK     ] input:mir2-rs\tests\parity\loginsrv\oracle_capture.py 既有 EDCode（s2c recog 归一化复用）
+  [OK     ] input:mir2-rs\tools\replay\Cargo.toml 既有 replay 自洽门禁
+golden:
+  [OK     ] golden:文件                          E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\tests\golden\c-line-baseline-c3-20261010.jsonl sha256=f34a6d111892912436eeb0d50cf2effc7e6f2915bf6ebfbf583104d3409a7ed9
+  [OK     ] golden:sha256                      f34a6d111892912436eeb0d50cf2effc7e6f2915bf6ebfbf583104d3409a7ed9
+  [OK     ] golden:schema                      dir,seq,port,hop,conn,raw_hex,ident,param,tag,series
+client:
+  [OK     ] client:entry                       D:\MirClient-run\run-release.cmd
+mysql:
+  [OK     ] mysql:reachable                    127.0.0.1:3306 可连
+EVIDENCE E:\tmp\m2-acceptance\preflight-20261012-191128.json
+SUMMARY ok=18 missing=0 red=0 info=0
+GREEN: 前置齐备（外部工具/仓库输入/金标准身份与 schema；栈与产物仍由 run_acceptance.ps1 判）
