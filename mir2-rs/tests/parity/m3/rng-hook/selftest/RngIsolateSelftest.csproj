@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>RngIsolateSelftest</AssemblyName>
+    <RootNamespace>RngIsolateSelftest</RootNamespace>
+    <!-- 与影子 hook 共用同一份源与站点清单（编译进本 exe，可在无 OpenMir2/oracle 依赖下跑）。 -->
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\StartupHook.cs" />
+    <EmbeddedResource Include="..\divert-sites.txt" Link="divert-sites.txt" />
+  </ItemGroup>
+</Project>

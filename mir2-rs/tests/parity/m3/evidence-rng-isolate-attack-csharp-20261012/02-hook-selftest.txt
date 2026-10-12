@@ -1,0 +1,52 @@
+# 02 —— C# 影子 hook 离线自检（RngIsolateSelftest）：开关解析 / attack_seed 公式 / 站点清单 / 路由
+
+## 命令
+$ dotnet run --project mir2-rs/tests/parity/m3/rng-hook/selftest/RngIsolateSelftest.csproj -c Release
+
+## 输出
+PASS parse/null=off
+PASS parse/empty=off
+PASS parse/0=off
+PASS parse/false=off
+PASS parse/OFF=off
+PASS parse/no=off
+PASS parse/1=on
+PASS parse/true=on
+PASS parse/' ON '=on
+PASS parse/yes=on
+PASS parse/maybe=fail-closed
+PASS parse/2=fail-closed
+PASS parse/'on '=on
+PASS seed/42
+PASS seed/0
+PASS seed/int.MaxValue-wrap
+PASS seed/-1
+PASS sites/count=11 (got 11)
+PASS sites/has M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929
+PASS sites/has M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2934
+PASS sites/has M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2918
+PASS sites/has M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2924
+PASS sites/has M2Server.Actor.BaseObject.GetAttackPower@BaseObject.Base.cs:892
+PASS sites/has M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41
+PASS sites/has M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:792
+PASS sites/has M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:793
+PASS sites/has M2Server.Player.PlayObject.StruckDamage@PlayObject.cs:2957
+PASS sites/has M2Server.Player.PlayObject.StruckDamage@PlayObject.cs:3000
+PASS sites/has M2Server.Player.PlayObject.AttackSuccess@PlayObject.Attack.cs:223
+PASS route/atk_power_a
+PASS route/hit_gate
+PASS route/attack_success
+PASS route/attack_paralysis-not-diverted
+PASS route/unknown-line-not-diverted
+PASS route/noise-not-diverted
+PASS route/null-not-diverted
+PASS route/empty-not-diverted
+SELFTEST GREEN
+
+## 影子 hook 本身可编译（含嵌入 divert-sites.txt；selftest/obj 已显式排除，防 CS0579）
+$ dotnet build mir2-rs/tests/parity/m3/rng-hook/RngSeedHook.csproj -c Release
+已成功生成。
+    0 个警告
+    0 个错误
+
+已用时间 00:00:00.54

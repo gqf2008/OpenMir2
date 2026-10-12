@@ -1,0 +1,23 @@
+# 01 —— Get-FileHash 同族缺陷：本机 PS 5.1 缺该 cmdlet（改前崩溃）⇒ .NET SHA256（改后 GREEN）
+
+## 0) 本机 PowerShell = 5.1，且 Get-FileHash 不可解析（PSModulePath 被 PS7 污染）
+$ powershell -NoProfile -Command "\$PSVersionTable.PSVersion.ToString(); (Get-Command Get-FileHash -ErrorAction SilentlyContinue) -eq \$null"
+5.1.19041.7725
+True
+
+## 1) 改前（bug 形态）：直接调 Get-FileHash ⇒ CommandNotFoundException
+$ powershell -NoProfile -Command "Get-FileHash -Algorithm SHA256 -Path <fixture>"
+BEFORE_CRASH: CommandNotFoundException: The term 'Get-FileHash' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+
+## 2) 改后（GREEN）：gate_guards 的 Get-M3Sha256Hex（.NET SHA256）+ 两个原调用点真跑 -VerifySource
+$ powershell -NoProfile -ExecutionPolicy Bypass -Command ". mir2-rs/tests/parity/m3/gate_guards.ps1; (Test-M3MonGenEmpty -MapName 0137 -VerifySource) | ConvertTo-Json -Compress; (Test-M3MapNoAiConsumers -MapName 0137 -VerifySource) | ConvertTo-Json -Compress"
+{"ok":true,"spawns":0,"declared":0,"fixture":"E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\.claude\\worktrees\\m3bag\\mir2-rs\\tests\\parity\\m3\\fixtures\\mongen-map0137.tsv","source_verified":true,"reason":""}
+{"ok":true,"total":0,"declared":0,"fixture":"E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\.claude\\worktrees\\m3bag\\mir2-rs\\tests\\parity\\m3\\fixtures\\ai-consumer-map0137.tsv","source_verified":true,"reason":""}
+
+## 3) 残留 Get-FileHash **调用**扫描（注释不算；生产脚本应为 0）
+$ powershell -Command "Select-String -Path <files> -Pattern Get-FileHash | Where-Object { $_.Line -notmatch ^\s*# } | ForEach-Object { $_.Path + : + $_.LineNumber + :  + $_.Line }"
+(以上无输出 = 只剩注释里的说明文字，零 Get-FileHash 调用)
+
+## 4) 同一内容：Get-M3Sha256Hex 的实际输出（.NET SHA256；与 Get-FileHash -Algorithm SHA256 同值）
+fixture (mongen-map0137.tsv) = 81f0cc3cba35563e96d9052a044d857f99130986d2e1ab514be9675f6c0971db
+hook list (divert-sites.txt) = 47061e1b24b41d192a6efb6988c24c849f48fdb08105aa40b5c852803a531d99

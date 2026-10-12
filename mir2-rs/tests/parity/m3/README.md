@@ -412,6 +412,28 @@ C# 读 rng-hook `MIR2_RNG_LOG` 的 `INJECT_OK <seed>`；Rust 读 game-svr 启动
 （修「HP 回满后不同 k 同一击被误折叠」；`attack_diff.py selftest` 28→**30/30**，改回全局键必红）；历史会话
 口径写清（见上，fail-closed 不降级）；残差① 措辞订正（见上）。证据 `evidence-attack-minors6-20261012/**`。
 
+**活栈隔离口径（owner 2026-10-12 21:15，§6.0-3 owner 签字）**：真机上 C# 侧**自己不可复现**（全局随机源被并发噪声消费者共享；
+本窗口噪声占 99.95%、同侧 3/3 各不同）⇒「同种子 ⇒ 逐 k 相同」在全服共享流下**原则不可达成**。DoD② 改为
+**活栈隔离口径**：两侧把**攻击路径的取数**接到各自一条**专用种子流**，其余消费者走原全局流；判据仍是真机
+`attack_diff.py diff` **逐 k = 0**。谓词/契约唯一事实源 = `tests/parity/m3/rng-isolate-attack/{attack_sites.tsv,check_predicates.py,README.md}`。
+
+- **C# 半（m3bag）**：`rng-hook/StartupHook.cs` 按 `divert-sites.txt`（11 个 divert 站点，**嵌入 hook、路由与 dump 同源**）
+  把命中调用点的取数分流到 `Random(attack_seed)`，`attack_seed = MIR2_RNG_SEED + 0x9E37`（i32 回绕）；
+  开关 `MIR2_RNG_ISOLATE_ATTACK`（空/`0`/`false`/`off`/`no`=关；`1`/`true`/`on`/`yes`=开；其它非空 fail-closed），
+  **缺省关 ⇒ 逐字节不变**；流水头补 `ISOLATE_ATTACK <attack_seed> isolate_sites=<path>`；静态清单落盘
+  `MIR2_RNG_ISOLATE_SITES`、可选专用流流水 `MIR2_RNG_ATTACK_LOG`。
+- **夹具半**：`run_attack_pair.ps1 -IsolateAttack/-IsolateSites/-AttackStreamLog/-RustRngLog` —— **0.7)** 断言流水头
+  `ISOLATE_ATTACK` 且 seed 同公式；C# 侧调 `check_predicates.py static + table-vs-csharp`（**缺一条/未登记 ⇒ RED**）；
+  会话产物 `attack_isolation.json`（隔离开关 + seed + dump/专用流 sha256）；跨侧护栏 `Get-M3PeerIsolationGuard`
+  （两侧 `isolate_attack` 一致、开启时 `attack_seed` 一致，否则 PREREQ exit 2）。
+- **仓库内规范 C# 影子起栈**：`start-csharp-hook.ps1`（历史为各 lane 仓外自备）——透传隔离 env（默认关）、
+  构建/部署 hook、写 `csharp_isolation.json`。
+- **Get-FileHash 同族缺陷（顺手清）**：`gate_guards.ps1`/`rng-baseline.ps1` 改 .NET `SHA256`（`Get-M3Sha256Hex`/`Get-Sha256`）；
+  本机 PS 5.1 缺 `Get-FileHash`，原路径走到 `Test-M3MonGenEmpty -VerifySource` 会 `CommandNotFoundException`。
+- 离线机判：`rng-hook/selftest`（hook 解析/公式/清单/路由，37 PASS）+ `run_attack_pair.ps1 -SelfCheckNoStack` **21**
+  （开关六向 + 公式含回绕 + 流水头三向 + C# dump vs Rust 谓词表：生产绿/删一条红/加未登记红）。
+  证据 `evidence-rng-isolate-attack-csharp-20261012/**`。**真机两相（C#/Rust 同专用流 ⇒ 逐 k=0）由 m3cs 取窗跑。**
+
 ## 一次「侧运行」是什么
 
 

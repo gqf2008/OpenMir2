@@ -1,0 +1,17 @@
+# 06 —— 四门禁（本片零 .rs；隔离 CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target）
+# 注：本片 base = 同卡 m3cs 的 Rust 半 b9e37389（待审），故门禁树同时含那部分 .rs。
+
+## cargo fmt --all -- --check
+(无输出 = 通过)
+rc=0
+
+## cargo clippy --workspace --all-targets --offline -- -D warnings
+    Checking game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\bins\game-svr)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.03s
+
+## cargo test --workspace --offline
+suites_ok=84  passed=682 failed=0 ignored=16
+(无 FAILED)
+
+## cargo run -p msgcodegen --offline -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。

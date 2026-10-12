@@ -1,0 +1,45 @@
+# 03 —— 分流谓词机判：C# 影子 hook 的分流站点清单 vs Rust 侧谓词表（attack_sites.tsv）
+
+## 0) 唯一事实源（m3cs 的 Rust 半，同卡待审 b9e37389）：rng-isolate-attack/attack_sites.tsv + check_predicates.py
+$ python mir2-rs/tests/parity/m3/rng-isolate-attack/check_predicates.py static
+STATIC table=E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\tests\parity\m3\rng-isolate-attack\attack_sites.tsv csharp_canons=11 rust_canons=11
+  CANON atk_power_a
+  CANON atk_power_b
+  CANON atk_power_base
+  CANON atk_power_luck_a
+  CANON atk_power_luck_b
+  CANON attack_success
+  CANON hit_gate
+  CANON hit_struck_damage
+  CANON hit_struck_damage2
+  CANON struck_durability
+  CANON struck_durability_slot
+GREEN: 表内每个 divert canon 两侧齐备（csharp/rust）
+
+## 1) 生产：C# hook 的静态清单 rng-hook/divert-sites.txt ⇒ GREEN（覆盖 11/11 divert canon，无未登记）
+$ python mir2-rs/tests/parity/m3/rng-isolate-attack/check_predicates.py table-vs-csharp --csharp mir2-rs/tests/parity/m3/rng-hook/divert-sites.txt
+TABLE_VS_CSHARP table=E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\tests\parity\m3\rng-isolate-attack\attack_sites.tsv csharp=mir2-rs/tests/parity/m3/rng-hook/divert-sites.txt draws=11 canon=11
+GREEN: C# 分流站点覆盖表内全部 canon 且无未登记站点
+rc=0
+
+## 2) 与 m3cs 示例 dump 同判定（格式口径一致）
+TABLE_VS_CSHARP table=E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\tests\parity\m3\rng-isolate-attack\attack_sites.tsv csharp=mir2-rs/tests/parity/m3/rng-isolate-attack/csharp_predicate_dump.example.txt draws=11 canon=11
+GREEN: C# 分流站点覆盖表内全部 canon 且无未登记站点
+
+## 3) 生产走夹具函数 Test-M3IsolatePredicates（PS 侧同一调用口径）
+{"rc":0,"output":"STATIC table=E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\.claude\\worktrees\\m3bag\\mir2-rs\\tests\\parity\\m3\\rng-isolate-attack\\attack_sites.tsv csharp_canons=11 rust_canons=11\r\n  CANON atk_power_a\r\n  CANON atk_power_b\r\n  CANON atk_power_base\r\n  CANON atk_power_luck_a\r\n  CANON atk_power_luck_b\r\n  CANON attack_success\r\n  CANON hit_gate\r\n  CANON hit_struck_damage\r\n  CANON hit_struck_damage2\r\n  CANON struck_durability\r\n  CANON struck_durability_slot\r\nGREEN: 表内每个 divert canon 两侧齐备（csharp/rust）\r\nTABLE_VS_CSHARP table=E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\.claude\\worktrees\\m3bag\\mir2-rs\\tests\\parity\\m3\\rng-isolate-attack\\attack_sites.tsv csharp=mir2-rs/tests/parity/m3/rng-hook/divert-sites.txt draws=11 canon=11\r\nGREEN: C# 分流站点覆盖表内全部 canon 且无未登记站点\r\n"}
+
+## 4) 改坏必红：删一条 divert site（hit_gate）⇒ 缺 canon
+TABLE_VS_CSHARP table=E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\tests\parity\m3\rng-isolate-attack\attack_sites.tsv csharp=E:/tmp/m3bag-iso/predmut/drop-one.txt draws=10 canon=10
+RED: C# 未分流表内站点（缺一条 ⇒ fail-closed）: ['hit_gate']
+rc=1
+
+## 5) 改坏必红：加一条未登记 site ⇒ UNKNOWN
+TABLE_VS_CSHARP table=E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\tests\parity\m3\rng-isolate-attack\attack_sites.tsv csharp=E:/tmp/m3bag-iso/predmut/extra.txt draws=12 canon=11
+RED: C# 分流了未登记的 site（表里查不到 ⇒ fail-closed）:
+  UNKNOWN M2Server.Player.PlayObject.Bogus@PlayObject.cs:1
+rc=1
+
+## 6) 机判自检（m3cs 侧工具自身 7 向）
+$ python .../check_predicates.py selftest
+selftest rc=0

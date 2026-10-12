@@ -42,12 +42,17 @@ import sys
 # 攻击路径站点（C# 分类用；命中即「有仲裁力的取数」）。与 oracle 攻击链一一对应。
 CSHARP_ATTACK_RE = re.compile(
     r"(PlayObject\.GetAttackPower@|BaseObject\._Attack@|PlayObject\.StruckDamage@|"
-    r"BaseObject\.GetHitStruckDamage@|PlayObject\.AttackSuccess@|PlayObject\.AttackDir@)"
+    r"BaseObject\.GetHitStruckDamage@|PlayObject\.AttackSuccess@|PlayObject\.AttackDir@|"
+    r"BaseObject\.GetAttackPower@)"
 )
 # Rust 侧攻击路径站点（世界层调用点，**不是** `crates/shared/src/rng.rs` 的包装层）。
-# 与 m3cs 决策片 `rng-trace-probe/analyze_rng_trace.py --attack-re` 用**同一张表**
+# 与 m3cs 决策片 `rng-trace-probe/rng_ledger_diff.py` 的 `RUST_ATTACK_RE` **逐字节同一张表**
 # （`evidence-rng-trace-20261012/00-commands.txt` §5），保证两侧「攻击路径」同口径。
-RUST_ATTACK_RE = re.compile(r"combat\.rs:(67|109|111|579|587|606|608|736)|magic\.rs:")
+# m3cs tick22 F2：旧表漏 758/628/630/601/609/831/250 ⇒ 同一条 Rust 流水把攻击路径取数
+# 算成噪声、报 attack=2/段；本表由 selftest 钉住（新站点必须分类为 attack）。
+RUST_ATTACK_RE = re.compile(
+    r"combat\.rs:(67|109|111|250|579|587|601|606|608|609|628|630|736|758|831)|magic\.rs:"
+)
 
 # 每侧缺省：分段锚（每次攻击恰调用一次的站点）+ 攻击路径正则。
 CSHARP_MARKER = "M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929"
@@ -314,6 +319,18 @@ def cmd_selftest(args):
     out = _capture(lambda: cmd_summary(argparse.Namespace(trace=tr, top=5, side="bogus", attack_re="")))
     check("unknown-side-failclosed", out[0] == 2, "rc=%d" % out[0])
 
+    # ---- F2（m3cs tick22）：Rust 攻击路径站点表必须含当前活栈站点（旧表漏 758/628/630/601/609/831/250）
+    for line in ("758", "628", "630", "601", "609", "831", "250"):
+        site = "crates\\world\\src\\combat.rs:" + line
+        check("rust-site-%s-is-attack" % line, bool(RUST_ATTACK_RE.search(site)), site)
+    check("rust-nonsite-not-attack",
+          not bool(RUST_ATTACK_RE.search("crates\\world\\src\\animal.rs:10")),
+          "animal.rs:10")
+    # C# 侧同表：atk_power_base（BaseObject.GetAttackPower）必须算攻击路径。
+    check("csharp-atk-power-base-is-attack",
+          bool(CSHARP_ATTACK_RE.search(
+              "M2Server.Actor.BaseObject.GetAttackPower@BaseObject.Base.cs:892")))
+
     for name in os.listdir(tmp):
         try:
             os.remove(os.path.join(tmp, name))
@@ -323,7 +340,7 @@ def cmd_selftest(args):
     if failures:
         print("SELFTEST RED: %d/%d 未过: %s" % (len(failures), len(checks), ", ".join(failures)))
         return 1
-    print("SELFTEST GREEN: attack_rng_ledger selftest %d/%d（C#+Rust 两侧：同账本绿 + 多抽/少抽必红且定位 + 段数不等必红 + 未知 side fail-closed）"
+    print("SELFTEST GREEN: attack_rng_ledger selftest %d/%d（C#+Rust 两侧：同账本绿 + 多抽/少抽必红且定位 + 段数不等必红 + 未知 side fail-closed + F2 站点表同表：新站点分类为 attack / 非站点为 noise）"
           % (len(checks), len(checks)))
     return 0
 

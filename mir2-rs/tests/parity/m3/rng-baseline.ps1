@@ -41,9 +41,10 @@ $SessionDir = Join-Path $Here ("sessions\{0}" -f $Session)
 New-Item -ItemType Directory -Force -Path $SessionDir | Out-Null
 Write-Output ("SESSION " + $SessionDir)
 
-function Get-Sha256([string]$Path) {
-  return (Get-FileHash -Algorithm SHA256 -Path $Path).Hash.ToLower()
-}
+# 环境无关 SHA256（.NET）取代 `Get-FileHash` + 活文件共享读（FileShare.ReadWrite）——
+# 与 gate_guards/start-csharp-hook 同一实现（m3hashutil.ps1）。
+. (Join-Path $Here 'm3hashutil.ps1')
+function Get-Sha256([string]$Path) { return (Get-M3Sha256Hex -Path $Path) }
 
 function Get-TextSha256([string]$Text) {
   $sha = [System.Security.Cryptography.SHA256]::Create()
