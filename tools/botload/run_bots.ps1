@@ -48,6 +48,8 @@ param(
   [switch]$WriteConfigOnly,       # 只写 AppSetting.json 并退出（不构建/不起进程；供无栈自检与红检用）
   [switch]$RequireWorld,          # F4（T-12）：要求全部假人都有"本会话收到 SM_LOGON"的进世界证据（in_world == Count）才 GREEN
   [switch]$RequireCharCreated,    # 固定起点变体①预热相：等到 N 个「创建角色」标记（只建号，不等进世界）才收工
+  [switch]$StopAfterCharCreated,  # M3 预热相夹具（白名单 T-29 扩展）：建角后停在选角界面、不发 CM_SELCHR（默认关=原行为）
+                                  # 根因：预热假人进世界后 Stop-Process 会被 GameSvr 当真实下线并异步 SaveHumanRcd 覆盖 pin（owner 19:20）
   [switch]$SelfCheckNoStack,      # 离线自检：只测 M3 序列收尾计数（attack done / bag done），不构建/不起进程
   [switch]$SelfTestRed
 )
@@ -174,6 +176,7 @@ $cfg = @{
     AttackStartDelayMs  = $AttackStartDelayMs
     SoftCloseAfterWorldMs = $SoftCloseAfterWorldMs
     DisableAutoPlay     = [bool]$DisableAutoPlay
+    StopAfterCharCreated = [bool]$StopAfterCharCreated
   }
 } | ConvertTo-Json -Depth 4
 New-Item -ItemType Directory -Force -Path $BotBinDir | Out-Null
@@ -193,6 +196,9 @@ if ($SoftCloseAfterWorldMs -gt 0) {
 }
 if ($DisableAutoPlay) {
     Write-Output "CONFIG_DISABLE_AUTOPLAY on"
+}
+if ($StopAfterCharCreated) {
+    Write-Output "CONFIG_STOP_AFTER_CHARCREATED on（建角后不进世界）"
 }
 
 # 无栈自检/红检：只写配置即退（不构建、不起进程）。

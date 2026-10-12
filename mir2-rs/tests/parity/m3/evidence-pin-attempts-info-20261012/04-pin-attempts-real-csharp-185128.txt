@@ -1,0 +1,7 @@
+# 原件：m3cs 卡证据 mir2-rs/tests/parity/m3/evidence-rng-ledger-diff-20261012/33-pin-attempts.txt
+#      的「权威会话 csharp-20261012-185128/pin_hold.txt」四行（真机 C# 侧 pin 循环 stdout，owner 19:20 判决性实验窗口）
+# 用途：对同一份真实 pin 日志，演示「改前 rc=1 / 改后 rc=0」。
+PIN_RETRY attempt=1 settle_rounds=1 prev_match=False pinned=2/2 bag=0/0 abil=2/2（pin_hold_needs_consecutive_settle）
+PIN_RETRY attempt=2 settle_rounds=2 prev_match=True pinned=1/2 bag=0/0 abil=1/2（pin_char_mismatch,pin_abil_mismatch）
+PIN_RETRY attempt=3 settle_rounds=3 prev_match=False pinned=2/2 bag=0/0 abil=2/2（pin_hold_needs_consecutive_settle）
+PIN_HOLD attempt=4（连续两轮 settle 复验均 hold 住）

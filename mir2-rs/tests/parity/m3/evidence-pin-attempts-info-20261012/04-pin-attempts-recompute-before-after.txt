@@ -1,0 +1,20 @@
+# pin_attempts 复算：改前 / 改后（同一份真实 pin 日志 04-*.txt）
+
+## 输入 = mir2-rs/tests/parity/m3/evidence-pin-attempts-info-20261012/04-pin-attempts-real-csharp-185128.txt（C# 侧 pin_hold.txt 原文，PIN_HOLD attempt=4 ⇒ 旧数值门必红）
+
+### 改前（git show HEAD:mir2-rs/tests/parity/m3/attack_diff.py，数值门 attempts==expected）
+$ python -I E:/tmp/attack_diff_old.py pin_attempts <log>
+PIN_ATTEMPTS attempts=4 expected=2 settle_rounds=4 max_attempts=5 hold_attempt=4 pin_retry_lines=3 extra_retries=2 ok=False
+{"attempts": 4, "expected": 2, "hold_attempt": 4, "pin_retry_lines": 3, "max_retry_attempt": 3, "extra_retries": 2, "ok": false, "log": "mir2-rs/tests/parity/m3/evidence-pin-attempts-info-20261012/04-pin-attempts-real-csharp-185128.txt"}
+RC=1
+
+### 改后（本片 attack_diff.py，informational：只要解析出 PIN_HOLD 即 0）
+$ python -I mir2-rs/tests/parity/m3/attack_diff.py pin_attempts <log>
+PIN_ATTEMPTS attempts=4 expected=2 settle_rounds=4 max_attempts=5 hold_attempt=4 pin_retry_lines=3 extra_retries=2 informational=True ok=True
+{"attempts": 4, "expected": 2, "hold_attempt": 4, "pin_retry_lines": 3, "max_retry_attempt": 3, "extra_retries": 2, "retried": true, "informational": true, "ok": true, "log": "mir2-rs/tests/parity/m3/evidence-pin-attempts-info-20261012/04-pin-attempts-real-csharp-185128.txt"}
+RC=0
+
+### 唯一保留的牙：日志里没有 PIN_HOLD ⇒ rc=2（fail-closed）
+$ python -I mir2-rs/tests/parity/m3/attack_diff.py pin_attempts E:/tmp/pin-no-hold.txt
+PREREQ_MISSING: E:/tmp/pin-no-hold.txt 里没有 PIN_HOLD 行（pin 未 hold 住/日志被截断）
+RC=2
