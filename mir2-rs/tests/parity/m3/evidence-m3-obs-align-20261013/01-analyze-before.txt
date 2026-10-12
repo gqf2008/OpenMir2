@@ -1,0 +1,24 @@
+Traceback (most recent call last):
+  File "E:\tmp\psr-old.py", line 1061, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "E:\tmp\psr-old.py", line 1057, in main
+    return args.func(args)
+           ^^^^^^^^^^^^^^^
+  File "E:\tmp\psr-old.py", line 761, in cmd_analyze
+    res = analyze(Path(args.csharp), Path(args.rust), args.seed, getattr(args, "allow_count_mismatch", False))
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "E:\tmp\psr-old.py", line 506, in analyze
+    smap = load_site_map()
+           ^^^^^^^^^^^^^^^
+  File "E:\tmp\psr-old.py", line 119, in load_site_map
+    for line in tsv.read_text(encoding="utf-8").splitlines():
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gxh\AppData\Local\Programs\Python\Python312\Lib\pathlib.py", line 1027, in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gxh\AppData\Local\Programs\Python\Python312\Lib\pathlib.py", line 1013, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: 'E:\\rng-isolate-attack\\attack_sites.tsv'
+rc=1

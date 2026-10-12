@@ -1,0 +1,3 @@
+## selftest: attack_diff.py
+SELFTEST GREEN: attack_diff selftest 41/41（align 窗口归属 + 同序列绿 + 改坏 dmg/hit 必红 + 全 0 非平凡门 + 空序列 + 长度不等 + 死亡容忍/死亡时点/HP 逐项比（F-F option ③） + my 口径（残差③：attack 行缺 my ⇒ fail-closed rc=2；外来命中过滤；多视角/重复投递同帧按**按 k 分段**事件键去重） + 服务端权威口径（SERVER_STATE 派生逐 k：异步/双观察者帧跨 k 下旧口径错、权威口径对；HP 回升/行数不符/非攻方不唯一/坏 JSON 全 fail-closed；同目录自动探测） + pin_attempts 复算（informational：干净=绿 / 多一次重试**仍绿** / 缺 PIN_HOLD=PREREQ））
+rc=0

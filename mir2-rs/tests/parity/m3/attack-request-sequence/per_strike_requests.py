@@ -76,6 +76,10 @@ internal bool _Attack(int nPower, IActor targetObject)                   # BaseO
 * 状态记录必须覆盖 RNG 流水切出的**每一个**玩家单元（击数），`k` 不得有洞 ⇒ 否则 RED；
 * 状态记录缺字段 / 缺键 / 不是 JSON ⇒ **PREREQ 点名**（`k` + 字段），**绝不**静默丢；
 * `victim` 允许为 `null`（该击目标格为空，正是要看的「(18,20) 为什么空」）。
+* **`align_vs_rng_hit_mismatch`（owner 2026-10-13 02:15 起判红）**：`attack_seq.hit` 与该击的 RNG 取数
+  不一致 ⇒ **RED 点名** side/caliber/ks。C# 侧的异步/双观察者 `SM_STRUCK` 归属缺陷使旧 client 口径
+  对不上；修法 = 用**服务端权威 `SERVER_STATE` 派生**的 `attack_seq`
+  （`attack_diff.py align --server-state`，`summary.caliber=server-state`）⇒ 该不一致必须为 0。
 
 **夹具状态记录规范（唯一真源；m3bag 按此产出）**：每侧一个 JSONL，一行一击，
 `{"role":"state","k":<int>,"attacker":{"x","y","dir","ghost","death","hp"},
@@ -86,7 +90,8 @@ internal bool _Attack(int nPower, IActor targetObject)                   # BaseO
 （攻方 `x/y/dir` ← `role=attack`；受害 `present/hp` ← `role=struck`；其余字段写 `-`，
 列内 `state=derived` 明示），**不替代**权威夹具记录。
 
-退出码：`0` = 表已出且两侧覆盖/计数/无洞全过；`1` = RED（覆盖不全 / 计数不等）；
+退出码：`0` = 表已出且两侧覆盖/计数/无洞全过且 `align_vs_rng_hit_mismatch` 为空；
+`1` = RED（覆盖不全 / 计数不等 / align 与 RNG 口径不一致）；
 `2` = PREREQ（流水缺失 / 状态记录缺失或格式坏）。
 
 站点表（canon ↔ 正则）唯一事实源 = 同卡 `../rng-isolate-attack/attack_sites.tsv`。
@@ -151,6 +156,28 @@ class Entry:
 
     def __repr__(self):
         return "%s(%d)->%d" % (self.canon, self.arg, self.result)
+
+
+def norm_kind(kind: str, arg: int):
+    """语义等价的取数请求归一（owner 2026-10-13 02:15 第 ② 条）。
+
+    Rust 侧 `random_range(0, n)` 记录的 kind 是 `Next(min,max)`（packed arg 高 32 位 = min），
+    C# 侧等价的 `Random(n)` 记 `Next(max)`；二者**语义相同**（同为 [0,n) 均匀取数）。
+    ⇒ 仅当 **min == 0** 时把 `Next(min,max)` 归一为 `Next(max)`；真的 `min > 0` 保持原样
+    （不得抹平——那会遮住真分歧）。与 `rng-isolate-attack/stream_equiv.py::norm_kind` 同口径。
+    """
+    if kind == "Next(min,max)":
+        unsigned = arg & 0xFFFFFFFFFFFFFFFF
+        lo = unsigned & 0xFFFFFFFF
+        hi = (unsigned >> 32) & 0xFFFFFFFF
+        if hi == 0:
+            return ("Next(max)", lo)
+    return (kind, arg)
+
+
+def req_of(e: Entry):
+    """逐次比对用的**语义归一请求**（≠ `Entry.req()` 的原始标签；`req()` 保留原标签供证据展示）。"""
+    return norm_kind(e.kind, e.arg)
 
 
 def parse_csharp(path: Path, smap) -> list[Entry]:
@@ -410,6 +437,27 @@ def parse_attack_seq(path: Path) -> dict:
     return out
 
 
+def seq_caliber(path) -> str:
+    """读 `attack_seq.jsonl` 的 `summary.caliber`（旧会话无该字段 ⇒ 视为 client-smstruck）。
+
+    owner 2026-10-13 02:15：C# 侧 `SM_STRUCK` 仪器存在异步/双观察者归属缺陷 ⇒ 只有
+    `server-state` 口径的 `attack_seq.hit` 才与服务端 RNG 可比（`attack_diff.py align --server-state`）。
+    """
+    if not path or not Path(path).exists():
+        return ""
+    for raw in Path(path).read_text(encoding="utf-8-sig", errors="replace").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            d = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(d, dict) and d.get("role") == "summary":
+            return str(d.get("caliber", "client-smstruck"))
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # 单元切分 / 模板
 # ---------------------------------------------------------------------------
@@ -475,14 +523,18 @@ def template_ok(canons: list[str]) -> bool:
 # 分析
 # ---------------------------------------------------------------------------
 def first_divergence(a: list[Entry], b: list[Entry]):
-    """按「取数请求序列」= `(kind, arg)` 逐次比（与 `compare_dedicated_streams.py` 同口径）。
+    """按「取数请求序列」逐次比。
+
+    口径（owner 2026-10-13 02:15 第 ② 条）：比的是**语义归一后的 `(kind, arg)`**——
+    `Next(min,max)` 且 packed min==0 与 `Next(max)` 是同一形态（都是 [0,n) 均匀取数），
+    不归一会把实测 651/651 全等的两侧流水在 index=3 报成假分歧。真的 `min>0` 不归一。
 
     注意：不比 canon——`atk_power_a(Next(max),1)` 与 `atk_power_base(Next(max),1)` 的
     **请求本身完全相同**（都是 `Random(1)`），继续下移一次才显形（这正是 owner 看到的 index=2）。
     """
     n = min(len(a), len(b))
     for i in range(n):
-        if a[i].req() != b[i].req():
+        if req_of(a[i]) != req_of(b[i]):
             return i, a[i], b[i]
     if len(a) != len(b):
         return n, (a[n] if len(a) > n else None), (b[n] if len(b) > n else None)
@@ -685,7 +737,8 @@ def jointable(csharp_stream, rust_stream, csharp_seq="", rust_seq="",
                     pass  # 客户端记录本身坏 ⇒ 只比服务端
             _check_state_coverage(state, len(units), side, problems)
             data[side] = {"units": units, "state": state, "src": src,
-                          "seq": parse_attack_seq(Path(seqp)) if seqp else {}}
+                          "seq": parse_attack_seq(Path(seqp)) if seqp else {},
+                          "caliber": seq_caliber(seqp)}
     except (StateError, MissingError) as exc:
         return 2, "", [str(exc)]
     lines = ["\t".join(JOINT_COLS)]
@@ -711,7 +764,13 @@ def jointable(csharp_stream, rust_stream, csharp_seq="", rust_seq="",
             lines.append("\t".join(str(x) for x in row))
     for side in ("csharp", "rust"):
         if mismatch[side]:
-            problems.append("info:align_vs_rng_hit_mismatch side=%s ks=%s" % (side, mismatch[side]))
+            # owner 2026-10-13 02:15 第 ① 条：口径不一致必须**判红点名**（不再是 info）。
+            # 权威 SERVER_STATE 口径下该不一致必须为 0；C# 的异步 SM_STRUCK 归属缺陷是已知仪器问题，
+            # 修法 = `attack_diff.py align --server-state`（口径摘要见 attack_seq.jsonl 的 summary.caliber）。
+            problems.append(
+                "align_vs_rng_hit_mismatch side=%s caliber=%s ks=%s"
+                "（attack_seq.hit 与服务端 RNG 推出的命中不一致——观测口径缺陷）"
+                % (side, data[side].get("caliber") or "client-smstruck", mismatch[side]))
     blocking = [p for p in problems if not p.startswith("info:")]
     return (1 if blocking else 0), "\n".join(lines), problems
 
@@ -823,6 +882,22 @@ def _mk_rust(unit_ops, tmp, name):
     return p
 
 
+def _mk_rust_minmax(unit_ops, tmp, name, min_value=0):
+    """Rust `random_range(min, max)` 形态：packed arg = `(min<<32)|max`（owner 2026-10-13 02:15）。"""
+    rows = [("1", "INJECT_OK", "42", "0", "")]
+    rows.append(("SEED_PROBE",))
+    n = 0
+    for ops in unit_ops:
+        for op in ops:
+            n += 1
+            maxv = 1 if op in ("a", "base", "hsd") else (10 if op in ("b", "durab") else 15)
+            packed = ((min_value & 0xFFFFFFFF) << 32) | (maxv & 0xFFFFFFFF)
+            rows.append((str(n), "Next(min,max)", str(packed), str(n % 7), RS_SITE[op]))
+    p = tmp / name
+    p.write_text(_tsv(rows), encoding="utf-8", newline="\n")
+    return p
+
+
 def _mk_jsonl(path, rows):
     path.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n",
                     encoding="utf-8", newline="\n")
@@ -906,13 +981,42 @@ def cmd_selftest(args) -> int:
     check("player-unit-count-red", r5["verdict"] == "RED" and any("player_units_mismatch" in p for p in r5["problems"]),
           str(r5["problems"]))
 
+    # ② owner 2026-10-13 02:15：`(kind,arg)` 假阳性修 + 牙齿
+    #   Rust `random_range(0,n)` 记 `Next(min,max)`（packed min=0） vs C# `Random(n)` 记 `Next(max)`
+    #   ⇒ 语义相同，**不得**报 player_path 分歧。
+    ops_n = [["a", "b", "gate", "succ"], ["a", "b", "gate", "hsd", "durab", "succ"]]
+    cs_norm = _mk_csharp(ops_n, tmp, "cs-norm.tsv")
+    rt_norm = _mk_rust_minmax(ops_n, tmp, "rt-norm.tsv", min_value=0)
+    rn = analyze(cs_norm, rt_norm, 40545)
+    check("norm-kind-min0-green",
+          rn["verdict"] == "GREEN" and rn["first_divergence"]["class"] == "none",
+          str(rn["problems"]) + str(rn["first_divergence"]))
+    # 牙齿 a：真的 min>0 ⇒ 不归一 ⇒ 必报分歧（不得抹平）
+    rt_min5 = _mk_rust_minmax(ops_n, tmp, "rt-min5.tsv", min_value=5)
+    rn5 = analyze(cs_norm, rt_min5, 40545)
+    check("norm-kind-min5-red",
+          rn5["verdict"] == "RED" and rn5["first_divergence"]["class"] != "none",
+          str(rn5["problems"]) + str(rn5["first_divergence"]))
+    # 牙齿 b：真的 arg 分歧 ⇒ 仍必红
+    cs_arg = tmp / "cs-arg.tsv"
+    rt_arg = tmp / "rt-arg.tsv"
+    cs_arg.write_text("Next(max)\t1\t3\t" + CS_SITE["a"] + "\nNext(max)\t10\t4\t" + CS_SITE["b"]
+                      + "\nNext(max)\t15\t5\t" + CS_SITE["gate"] + "\nNext(max)\t15\t6\t"
+                      + CS_SITE["succ"] + "\n", encoding="utf-8", newline="\n")
+    rt_arg.write_text("1\tNext(max)\t1\t3\t" + RS_SITE["a"] + "\n2\tNext(max)\t11\t4\t" + RS_SITE["b"]
+                      + "\n3\tNext(max)\t15\t5\t" + RS_SITE["gate"] + "\n4\tNext(max)\t15\t6\t"
+                      + RS_SITE["succ"] + "\n", encoding="utf-8", newline="\n")
+    ra = analyze(cs_arg, rt_arg, 40545)
+    check("genuine-arg-diff-red", ra["verdict"] == "RED", str(ra["problems"]) + str(ra["first_divergence"]))
+
     # jointable：夹具逐击状态记录（两侧同表）——owner 23:50 第 ① 条的权威路径
     st_cs = _mk_state(tmp / "state-cs.jsonl", [(1, dict(ACT6), None), (2, dict(ACT6), dict(VIC18))])
     st_rt = _mk_state(tmp / "state-rt.jsonl", [(1, dict(ACT6), dict(VIC18)), (2, dict(ACT6), None)])
     seq_cs = _mk_jsonl(tmp / "seq-cs.jsonl", [{"k": 1, "hit": False, "dmg": 0},
                                                {"k": 2, "hit": True, "dmg": 1}])
-    seq_rt = _mk_jsonl(tmp / "seq-rt.jsonl", [{"k": 1, "hit": True, "dmg": 1},
-                                               {"k": 2, "hit": False, "dmg": 0}])
+    # 两侧 seq 都必须与本侧 RNG 单元一致（unit1=dodge, unit2=hit）——否则 align_vs_rng_hit_mismatch 判红。
+    seq_rt = _mk_jsonl(tmp / "seq-rt.jsonl", [{"k": 1, "hit": False, "dmg": 0},
+                                               {"k": 2, "hit": True, "dmg": 1}])
     rc, text, probs = jointable(cs, rt, seq_cs, seq_rt, st_cs, st_rt)
     tl = text.splitlines()
     check("jointable-fixture-green", rc == 0, str(probs))
@@ -920,6 +1024,25 @@ def cmd_selftest(args) -> int:
           any(l.startswith("csharp\t") for l in tl) and any(l.startswith("rust\t") for l in tl)
           and "atk_hp" in text and "vic_x" in text)
     check("jointable-victim-present-absent", "present" in text and "absent" in text)
+
+    # ① owner 2026-10-13 02:15：`attack_seq.hit` 与 RNG 推出的命中不一致 ⇒ **判红点名**（不再是 info）
+    seq_bad = _mk_jsonl(tmp / "seq-bad.jsonl", [{"k": 1, "hit": True, "dmg": 1},
+                                                {"k": 2, "hit": False, "dmg": 0}])
+    rc, _t, probs = jointable(cs, rt, seq_cs, seq_bad, st_cs, st_rt)
+    check("jointable-rng-mismatch-red",
+          rc == 1 and any(p.startswith("align_vs_rng_hit_mismatch") and "side=rust" in p for p in probs),
+          str(probs))
+    # 口径标注进判据消息（旧会话无 summary.caliber ⇒ 归为 client-smstruck）
+    seq_rt_cal = tmp / "seq-rt-cal.jsonl"
+    seq_rt_cal.write_text("\n".join(json.dumps(r) for r in
+                                     [{"k": 1, "hit": False, "dmg": 0}, {"k": 2, "hit": True, "dmg": 1},
+                                      {"role": "summary", "attacked": 2, "hits": 1, "dodges": 1, "sum": 1,
+                                       "caliber": "client-smstruck"}]) + "\n", encoding="utf-8", newline="\n")
+    seq_cs_bad = _mk_jsonl(tmp / "seq-cs-bad.jsonl", [{"k": 1, "hit": True, "dmg": 1},
+                                                      {"k": 2, "hit": False, "dmg": 0}])
+    rc, _t, probs = jointable(cs, rt, seq_cs_bad, seq_rt_cal, st_cs, st_rt)
+    check("jointable-mismatch-names-caliber",
+          rc == 1 and any("caliber=client-smstruck" in p for p in probs), str(probs))
 
     # 缺状态记录 ⇒ PREREQ（rc=2），绝不静默出表
     rc, _t, probs = jointable(cs, rt)

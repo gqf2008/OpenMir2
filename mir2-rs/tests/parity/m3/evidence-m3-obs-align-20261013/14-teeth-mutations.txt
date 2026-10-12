@@ -1,0 +1,13 @@
+## 改坏必红 #1：attack_diff.py 关掉权威口径分支（cmd_align 的 if state → if False）⇒ selftest 必红
+SELFTEST RED: 3/41 未过: q-cmd-align-writes-authoritative ({'role': 'summary', 'attacked': 4, 'hits': 3, 'dodges': 1, 'sum': 162, 'death_k': None, 'min_hp': 119, 'filtered_foreign': 0, 'other_observer': 2, 'deduped': 0, 'unattributed': 0, 'caliber': 'client-smstruck'}), q-autodetect-authoritative ({'role': 'summary', 'attacked': 4, 'hits': 3, 'dodges': 1, 'sum': 162, 'death_k': None, 'min_hp': 119, 'filtered_foreign': 0, 'other_observer': 2, 'deduped': 0, 'unattributed': 0, 'caliber': 'client-smstruck'}), r-cmd-align-rc2 (rc=0)
+rc=1
+
+## 改坏必红 #2：per_strike_requests.py req_of → raw (kind,arg) ⇒ selftest 必红
+SELFTEST RED: 1/29 未过: norm-kind-min0-green (['player_path_divergence@draw_index=1']{'index_0based': 0, 'csharp': 'atk_power_a(1)->1', 'rust': 'atk_power_a(1)->1', 'class': 'player_path'})
+rc=1
+
+## 改坏必红 #3：per_strike_requests.py align_vs_rng_hit_mismatch 加回 info: ⇒ selftest 必红
+SELFTEST RED: 2/29 未过: jointable-rng-mismatch-red (['info:align_vs_rng_hit_mismatch side=rust caliber=client-smstruck ks=[1, 2]（attack_seq.hit 与服务端 RNG 推出的命中不一致——观测口径缺陷）']), jointable-mismatch-names-caliber (['info:align_vs_rng_hit_mismatch side=csharp caliber=client-smstruck ks=[1, 2]（attack_seq.hit 与服务端 RNG 推出的命中不一致——观测口径缺陷）'])
+rc=1
+
+## 改坏必红 #4（真机数据）：客户端口径 seq 下跨侧 diff / jointable ⇒ RED（原始输出见 08/09）
