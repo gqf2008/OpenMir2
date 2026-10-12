@@ -1,0 +1,33 @@
+SEED_PLUMB 判据：game-svr=E:/tmp/openmir2-m2svr-target/debug/game-svr.exe  evidence=E:/tmp/m2svr-slog-work/clean2-seed
+  [OK  ] ①a 未设/空串 ⇒ Present=$false
+        Present=False
+  [OK  ] ①b -Seed 42 ⇒ Present, Value=42
+        Value=42
+  [OK  ] ①c " +7 " ⇒ Value=7（TryParse 允许空白/正号）
+        Value=7
+  [OK  ] ①d 环境变量回落 ⇒ Value=1234
+        Value=1234
+  [OK  ] ①e 非法值 ⇒ 抛错 fail-closed（abc/4.2/0x10/溢出/空白串）
+        全部应抛错；同 C# TryParse 失败 ⇒ Fail/Exit(97)
+  [OK  ] ②a 传种子 ⇒ 子进程环境 MIR2_RNG_SEED=42
+        cmd 读出=[42]
+  [OK  ] ②b 起完还原 ⇒ 调用方 $env:MIR2_RNG_SEED 未被设置
+        has_env=False
+  [OK  ] ②c 不传种子 ⇒ 子进程读不到 42（不注入）
+        cmd 读出=[%MIR2_RNG_SEED%]
+  [OK  ] ③a 传种子 ⇒ 真 game-svr 打出 SEED_PROBE
+        log=E:\tmp\m2svr-slog-work\clean2-seed\work\gs-seeded\stdout.txt
+  [OK  ] ③b SEED_PROBE 与 C# 同种子逐项一致
+        期望尾：SEED_PROBE 1434747710 302596119 269548474 1122627734 361709742 563913476 1555655117 1101493307
+  [OK  ] ③c 有同种子注入行（seed=42）
+        game-svr 自证行
+  [OK  ] ④a 不传种子 ⇒ 真 game-svr 正常启动（无 SEED_PROBE）
+        started=True has_probe=False
+  [OK  ] ⑤a 传种子 ⇒ 行 = RUST_SEED_INJECTED=42
+        line=[RUST_SEED_INJECTED=42]
+  [OK  ] ⑤b 不传种子 ⇒ 行 = $null（不打）
+        line=[]
+  [OK  ] ⑥ start_rust_stack.ps1 点源管线并把 -Seed $seedInfo 传给 game-svr
+        结构检查（端到端见证据目录的实栈 run）
+SUMMARY total=15 ok=15 fail=0 seeded_line=RUST_SEED_INJECTED=42
+SEED_PLUMB GREEN

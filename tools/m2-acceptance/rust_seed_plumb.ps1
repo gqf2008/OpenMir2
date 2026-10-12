@@ -1,7 +1,9 @@
 #requires -Version 5
 <#
 .SYNOPSIS
-  rust_seed_plumb.ps1 — `start_rust_stack.ps1` 的 `MIR2_RNG_SEED` 种子管线（卡 `openmir2-m3-rust-stack-seed-plumb`）。
+  rust_seed_plumb.ps1 — `start_rust_stack.ps1` 起 game-svr 时的**环境变量注入管线**。
+  目前承载两条：`MIR2_RNG_SEED`（种子，卡 `openmir2-m3-rust-stack-seed-plumb`）与
+  `MIR2_RNG_STATE_LOG`（服务端权威逐击状态 dump，卡 `openmir2-m2-rust-state-log-plumb`）。
 
 .DESCRIPTION
   ②③ 真机同种子攻击对拍要求两岸同种子：
@@ -23,7 +25,18 @@
     ③ 非法值 ⇒ **fail-closed**（`Resolve-Mir2Seed` 抛错，调用方判红并退出），绝不静默降级
        （同 C# 钩子的 `Fail(...) => Environment.Exit(97)`）。
 
-  只读约束：本文件不自己起栈、不占端口；进程级用例由 `check_seed_plumb.ps1` 驱动。
+  `MIR2_RNG_STATE_LOG`（卡 `openmir2-m2-rust-state-log-plumb`）——与 `MIR2_RNG_SEED` 完全同构的一条：
+  - **C# 半**：`mir2-rs/tests/parity/m3/start-csharp-hook.ps1 -StateLog` 写 `MIR2_RNG_STATE_LOG`，影子
+    GameSvr 的 StartupHook 每个玩家攻击起点落一行 `SERVER_STATE`；
+  - **Rust 半**：`bins/game-svr/src/state_log.rs` 读同一个变量，落同形一行（卡 `openmir2-m2-rust-server-state-dump`）；
+  - 启动器此前同样**没有管线** ⇒ 只有 operator 手工在起栈 shell 里设过变量才会落盘，否则
+    `run_attack_pair.ps1 -Side rust` 拿不到 Rust 侧 dump、目标可用性门只保护 C# 一半。
+
+  三条硬约束同上：① 未指定 ⇒ 不注入、不打 `RUST_STATE_LOG_INJECTED` 行；② 指定 ⇒ 子进程环境确为该路径，
+  且打印可判据一行；③ 路径父目录不存在 ⇒ **fail-closed**（`Resolve-Mir2StateLog` 抛错，调用方判红退出），
+  不静默起一个永远不落 dump 的栈。
+
+  只读约束：本文件不自己起栈、不占端口；进程级用例由 `check_seed_plumb.ps1` / `check_state_log_plumb.ps1` 驱动。
 #>
 
 function Resolve-Mir2Seed {
@@ -60,6 +73,41 @@ function Get-SeedInjectedLine {
   return $null
 }
 
+function Resolve-Mir2StateLog {
+  [CmdletBinding()]
+  param(
+    # 显式路径（`start_rust_stack.ps1 -StateLog <path>` 或 `check_state_log_plumb.ps1 -StateLog <path>`）。空串 = 未给。
+    [string]$StateLogArg = '',
+    # 调用方环境里的 `MIR2_RNG_STATE_LOG` 值（`start_rust_stack.ps1` 传 `$env:MIR2_RNG_STATE_LOG`）。
+    [string]$EnvValue = ''
+  )
+  # 优先级：显式 `-StateLog` > 环境变量（与 `Resolve-Mir2Seed` 同口径）。
+  $text = if (-not [string]::IsNullOrEmpty($StateLogArg)) { $StateLogArg } else { $EnvValue }
+  if ([string]::IsNullOrEmpty($text)) {
+    # C# `String.IsNullOrEmpty`：未设与空串同义 ⇒ 不启用。
+    return [pscustomobject]@{ Present = $false; Path = '' }
+  }
+  # fail-closed：父目录必须已存在（否则 game-svr 静默关闭 dump、栈看起来正常却永远不落盘）。
+  # 无目录分量（相对文件名）⇒ `Split-Path -Parent` 为空，跳过（等同当前工作目录）。
+  $parent = Split-Path -Parent $text
+  if (-not [string]::IsNullOrEmpty($parent) -and -not (Test-Path -LiteralPath $parent -PathType Container)) {
+    throw "MIR2_RNG_STATE_LOG/-StateLog 的父目录不存在: $parent"
+  }
+  return [pscustomobject]@{ Present = $true; Path = $text }
+}
+
+function Get-StateLogInjectedLine {
+  [CmdletBinding()]
+  param(
+    # `Resolve-Mir2StateLog` 的返回值；`$null` 或 `Present=$false` ⇒ 不打该行（返回 `$null`）。
+    [psobject]$StateLog = $null
+  )
+  if (($null -ne $StateLog) -and ($StateLog.Present -eq $true)) {
+    return ("RUST_STATE_LOG_INJECTED={0}" -f $StateLog.Path)
+  }
+  return $null
+}
+
 function Start-SeededProcess {
   [CmdletBinding()]
   param(
@@ -70,14 +118,19 @@ function Start-SeededProcess {
     [string]$RedirectStandardError = '',
     [string]$WindowStyle = 'Hidden',
     # `Resolve-Mir2Seed` 的返回值；`$null` / `Present=$false` ⇒ 不注入（与改动前逐字节相同）。
-    [psobject]$Seed = $null
+    [psobject]$Seed = $null,
+    # `Resolve-Mir2StateLog` 的返回值；`$null` / `Present=$false` ⇒ 不注入（与改动前逐字节相同）。
+    [psobject]$StateLog = $null
   )
   $inject = ($null -ne $Seed) -and ($Seed.Present -eq $true)
+  $injectState = ($null -ne $StateLog) -and ($StateLog.Present -eq $true)
 
   # 快照调用方环境：只改 game-svr 这一个子进程的环境，起完立即还原（不影响后续网关等子进程，
   # 也不污染调用方 shell）。`Start-Process` 的子进程在**创建时**快照环境块 ⇒ 还原时机安全。
   $had = Test-Path Env:MIR2_RNG_SEED
   $prev = if ($had) { $env:MIR2_RNG_SEED } else { $null }
+  $hadState = Test-Path Env:MIR2_RNG_STATE_LOG
+  $prevState = if ($hadState) { $env:MIR2_RNG_STATE_LOG } else { $null }
 
   $sp = @{ FilePath = $FilePath; WindowStyle = $WindowStyle; PassThru = $true }
   if ($ArgumentList.Count -gt 0) { $sp.ArgumentList = $ArgumentList }
@@ -88,10 +141,15 @@ function Start-SeededProcess {
   try {
     # 注入**原文**（与 C# 半看到的字符串一致；game-svr 的 `seed::parse_seed` 同样 trim + 解析）。
     if ($inject) { $env:MIR2_RNG_SEED = [string]$Seed.Text }
+    # 路径按**原文**注入（game-svr 的 `state_log::from_env` 原样用作 `File::create` 目标）。
+    if ($injectState) { $env:MIR2_RNG_STATE_LOG = [string]$StateLog.Path }
     $p = Start-Process @sp
   } finally {
     if ($inject) {
       if ($had) { $env:MIR2_RNG_SEED = $prev } else { Remove-Item Env:MIR2_RNG_SEED -ErrorAction SilentlyContinue }
+    }
+    if ($injectState) {
+      if ($hadState) { $env:MIR2_RNG_STATE_LOG = $prevState } else { Remove-Item Env:MIR2_RNG_STATE_LOG -ErrorAction SilentlyContinue }
     }
   }
   # 只返回进程对象（`RUST_SEED_INJECTED` 行由调用方经 `Get-SeedInjectedLine` 打印）——
