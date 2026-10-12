@@ -5,10 +5,12 @@ C# stack1 全局流水 rng-stream.tsv                  bytes=112838697   sha256=
 C# stack1 攻击专用流 rng-attack-stream.tsv          bytes=47488       sha256=dcee2da7e91724351e7395e36a3177faa1ead88c7fd88a7228365f866848300d  [in-repo provenance/]
 C# stack2 全局流水 rng-stream.tsv                  bytes=31208054    sha256=5770f56087b804b5c8b794befe24e62b32861d9fd0a658b3dcdcaecf98ca35bf  [kept-out-of-repo]
 C# stack2 攻击专用流 rng-attack-stream.tsv          bytes=23091       sha256=2de967615d9cf4152ae4d24524d3403f9c9cb6460c8db9bb9891fc22d34f9c61  [in-repo provenance/]
-Rust stack1 全局流水 rng-stream.tsv                bytes=22862       sha256=5c2fb03629710922d26c863195de7c64b1010381b4d07c65d1fc424d63791ece  [in-repo provenance/]
-Rust stack2 全局流水 rng-stream.tsv                bytes=18070       sha256=ffd50c5ac2396b0a6242ada41a23a7a9f4651bd2a0f3d5d184cedf66c8dbff23  [in-repo provenance/]
+Rust stack1 全局流水 rng-stream.tsv                bytes=22862       sha256=5c2fb03629710922d26c863195de7c64b1010381b4d07c65d1fc424d63791ece  [副本已入 evidence-rng-isolate-streamcompare-20261012/provenance/rust-rng-stream-stack1.tsv]
+Rust stack2 全局流水 rng-stream.tsv                bytes=18070       sha256=ffd50c5ac2396b0a6242ada41a23a7a9f4651bd2a0f3d5d184cedf66c8dbff23  [副本已入 evidence-rng-isolate-streamcompare-20261012/provenance/rust-rng-stream-stack2.tsv]
 C# 静态分流 dump rng-isolate-sites.txt             bytes=2165        sha256=47061e1b24b41d192a6efb6988c24c849f48fdb08105aa40b5c852803a531d99  [in-repo provenance/]
 
 # head（Rust 半 master 50fc02bd 的隔离片）：b9e37389ab5f86a659991eb1751aaa28d4311378
 # head（C# 半，待审未合）：7d3fb33392172583ec5102f67f92d1457b7e7ff4
+# reviewer-5 O-1（2026-10-12，Minor）订正：上两行原标 [in-repo provenance/] 与事实不符（当时只在仓外）；
+#   现在两条 Rust 流水的副本已随 evidence-rng-isolate-streamcompare-20261012/provenance/ 入库（含其 SHA256SUMS）。
 # 影子 hook DLL 部署件 sha256=9e0523f06832f7730fd5706c8b494769a2ce3adc87bd280b49fad547fc5fb6fb (E:/MirServer/M2GameSvr-hook/RngSeedHook.dll)

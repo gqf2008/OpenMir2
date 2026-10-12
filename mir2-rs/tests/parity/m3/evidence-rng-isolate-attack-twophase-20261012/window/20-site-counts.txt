@@ -1,5 +1,6 @@
 # 隔离口径下 120 击（首次、无冒烟）各侧攻击路径分流站点取数次数
-# C# 侧 trace = provenance/csharp2-rng-stream.tsv；Rust 侧 = rust2/rng-stream.tsv
+# C# 侧 trace = provenance/csharp-attack-stream-stack2.tsv（包内实名）；Rust 侧 = 仓外审计保留件 E:/tmp/m3cs-iso2/rust2/rng-stream.tsv
+#   （sha256=ffd50c5ac2396b0a6242ada41a23a7a9f4651bd2a0f3d5d184cedf66c8dbff23；副本已入 evidence-rng-isolate-streamcompare-20261012/provenance/rust-rng-stream-stack2.tsv）
 canon/csharp-site                                    C# Rust-equivalent
 atk_power_a(PlayObject.cs:2929)                     120      120
 atk_power_b(PlayObject.cs:2934)                     120      120
