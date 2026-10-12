@@ -1,0 +1,58 @@
+item_price	list_hit_overrides_std	5	1	5	1234.5	1	0	999	0	1234.5
+item_price	std_fallback_type_hit	7	0	0	0	1	5	777	1	777
+item_price	std_fallback_type_miss	8	0	0	0	1	3	777	0	-1
+item_price	std_missing	9	0	0	0	0	0	0	0	-1
+item_price	list_negative_falls_back	10	1	10	-5	1	5	321	1	321
+item_price	list_zero_no_fallback	11	1	11	0	1	5	321	1	0
+uip	price_nonpositive	1	-1	5	1000	10	100	0	0	0	0	0	0	0	0	-1	100
+uip	std_missing	0	500	5	1000	10	100	0	0	0	0	0	0	0	0	500	100
+uip	stdmode_le4	1	500	4	1000	10	100	0	0	0	0	0	0	0	0	500	100
+uip	std_duramax_zero	1	500	5	0	10	100	0	0	0	0	0	0	0	0	500	100
+uip	user_duramax_zero	1	500	5	1000	0	0	0	0	0	0	0	0	0	0	500	0
+uip	meat_dura_le	1	200	40	1000	600	1000	0	0	0	0	0	0	0	0	160	1000
+uip	meat_dura_gt	1	200	40	1000	1200	1000	0	0	0	0	0	0	0	0	120	1000
+uip	stdmode43_clamp	1	300	43	1000	500	500	0	0	0	0	0	0	0	0	158	10000
+uip	stdmode43_dura_gt	1	300	43	1000	900	500	0	0	0	0	0	0	0	0	164	10000
+uip	generic_desc_sum	1	500	15	1000	400	500	3	4	5	0	0	0	0	0	540	500
+uip	generic_desc_zero	1	500	15	1000	400	500	0	0	0	0	0	0	0	0	225	500
+uip	stdmode5_desc6_normal	1	500	5	1000	400	500	2	0	0	0	0	0	4	0	90	500
+uip	stdmode5_desc6_double	1	500	5	1000	400	500	2	0	0	0	0	0	13	0	360	500
+uip	stdmode6_desc6_double	1	700	6	2000	1500	2000	0	0	0	0	0	0	20	1	2573	2000
+uip	generic_two_duramax	1	500	19	800	300	600	1	0	0	0	0	0	0	0	56	600
+user_price	plain_rate100	101	100	0	0	80	101
+user_price	plain_rate150	101	150	0	0	80	152
+user_price	plain_half	1234.5	100	0	0	80	1235
+user_price	plain_rate33	1234.5	33	0	0	80	407
+user_price	castle_nonmember	250	100	1	0	80	250
+user_price	castle_member_80	250	100	1	1	80	200
+user_price	castle_member_clamp60	250	50	1	1	80	150
+user_price	castle_merchant_null_castle	333	120	1	0	80	400
+sell_price	p100	100	50
+sell_price	p101	101	51
+sell_price	p99	99	50
+sell_price	p1	1	1
+sell_price	p0	0	0
+sell_price	p2_5	2.5	1
+sell_price	p0_5	0.5	0
+sell_price	pm3	-3	-2
+repair_cost	plain_ok	900	100	400	1000	5	0	1	0	126
+repair_cost	plain_ok_stdmode0	900	100	400	1000	0	0	1	0	180
+repair_cost	round_half	900	100	435	1000	0	0	1	0	170
+repair_cost	plain_not_supported	900	100	400	1000	5	0	0	0	-1
+repair_cost	super_ok	900	100	400	1000	5	1	1	1	378
+repair_cost	super_not_supported	900	100	400	1000	5	1	1	0	-1
+repair_cost	no_damage	900	100	1000	1000	5	0	1	0	-1
+repair_cost	dura_gt_duramax	900	100	1200	1000	5	0	1	0	-1
+repair_cost	rate150	900	150	100	1000	5	0	1	0	223
+repair_cost	stdmode43_query	900	100	400	1000	43	0	1	0	150
+repair_item	plain_ok	900	100	400	1000	5	0	1	0	100000	OK,99874,980,980	99874	980	980
+repair_item	plain_ok_stdmode0	900	100	400	1000	0	0	1	0	100000	OK,99820,980,980	99820	980	980
+repair_item	trunc_dec	900	100	14	1000	0	0	1	0	100000	OK,99704,968,968	99704	968	968
+repair_item	plain_unsupported_early	900	100	400	1000	5	0	0	0	100000	NONE	100000	400	1000
+repair_item	super_ok	900	100	400	1000	5	1	1	1	100000	OK,99622,1000,1000	99622	1000	1000
+repair_item	super_unsupported_early	900	100	400	1000	5	1	1	0	100000	NONE	100000	400	1000
+repair_item	superrepairfail	900	100	400	1000	5	2	1	1	100000	FAIL	100000	400	1000
+repair_item	no_damage	900	100	1000	1000	5	0	1	0	100000	FAIL	100000	1000	1000
+repair_item	stdmode43_reject	900	100	400	1000	43	0	1	0	100000	FAIL	100000	400	10000
+repair_item	not_enough_gold	900	100	400	1000	5	0	1	0	0	FAIL	0	400	1000
+repair_item	rate150	900	150	100	1000	5	0	1	0	100000	OK,99777,970,970	99777	970	970

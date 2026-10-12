@@ -1,0 +1,25 @@
+# oracle 真身向量生成（C# 探针 → vectors/shop_price_vectors.{json,tsv}）
+# 环境：dotnet 9.0.313
+
+$ dotnet build mir2-rs/tests/parity/m3/shop-price-probe/shop-price-probe.csproj -c Release
+  正在确定要还原的项目…
+  所有项目均是最新的，无法还原。
+  OpenMir2 -> E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\src\OpenMir2\bin\Release\net8.0\OpenMir2.dll
+  SystemModule -> E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\src\Modules\SystemModule\bin\Release\net8.0\SystemModule.dll
+  ScriptSystem -> E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\src\Modules\ScriptEngine\bin\Release\net8.0\ScriptSystem.dll
+  CommandSystem -> E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\src\Modules\GameCommand\bin\Release\net8.0\CommandSystem.dll
+  PlanesSystem -> E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\src\Modules\PlanesSystem\bin\Release\net8.0\PlanesSystem.dll
+  M2Server -> E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\src\M2Server\bin\Release\net8.0\M2Server.dll
+  GameSrv -> E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\src\GameSrv\bin\Release\GameSrv.dll
+  shop-price-probe -> E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\tests\parity\m3\shop-price-probe\bin\Release\net8.0\shop-price-probe.dll
+
+已成功生成。
+    0 个警告
+    0 个错误
+
+已用时间 00:00:02.99
+BUILD_RC=0
+
+$ dotnet mir2-rs/tests/parity/m3/shop-price-probe/bin/Release/net8.0/shop-price-probe.dll mir2-rs/tests/parity/m3/shop-price-probe/vectors/shop_price_vectors.json
+shop-price-probe: wrote E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\tests\parity\m3\shop-price-probe\vectors\shop_price_vectors.json (58 cases) + .tsv
+PROBE_RC=0

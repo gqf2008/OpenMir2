@@ -1,0 +1,47 @@
+# 干净检出可复现（一次性 worktree，detached @ 交付 head）
+# 命令：git worktree add --detach E:/tmp/m3bag-shop-verify <head>
+
+$ git rev-parse HEAD
+3ed7535d2df210663c856e9971b09ce25390225a
+
+$ git status --porcelain   # 干净检出
+(空 = 干净)
+
+$ dotnet build mir2-rs/tests/parity/m3/shop-price-probe/shop-price-probe.csproj -c Release
+    0 个错误
+已用时间 00:00:04.34
+
+$ dotnet .../shop-price-probe.dll <本目录>/shop_price_vectors.regen.json
+shop-price-probe: wrote E:\tmp\m3bag-shop-verify\mir2-rs\tests\parity\m3\shop-price-probe\vectors\shop_price_vectors.regen.json (58 cases) + .tsv
+PROBE_RC=0
+
+$ sha256sum 重生成 vs 入库（应按 LF 归一前/后一致；探针已写 LF）
+965b206afa4930ead1735a67a81eb09e5b3f731a31eae153be47e7806ae49ddb *mir2-rs/tests/parity/m3/shop-price-probe/vectors/shop_price_vectors.regen.tsv
+965b206afa4930ead1735a67a81eb09e5b3f731a31eae153be47e7806ae49ddb *mir2-rs/tests/parity/m3/shop-price-probe/vectors/shop_price_vectors.tsv
+7cb8ec3940545db99b0ece216b520d0afb8795238122c187799ad5490b707a70 *mir2-rs/tests/parity/m3/shop-price-probe/vectors/shop_price_vectors.regen.json
+7cb8ec3940545db99b0ece216b520d0afb8795238122c187799ad5490b707a70 *mir2-rs/tests/parity/m3/shop-price-probe/vectors/shop_price_vectors.json
+
+$ cd mir2-rs && CARGO_TARGET_DIR=E:/tmp/m3bag-shop-target cargo test -p mir2-formula --offline
+running 11 tests
+test drop::tests::item_number_counter_wraps ... ok
+test drop::tests::gold_uses_half_plus_random ... ok
+test drop::tests::item_name_bug_replica ... ok
+test exp::tests::calc_get_exp_decay ... ok
+test drop::tests::unknown_item_sets_desc8 ... ok
+test exp::tests::calc_get_exp_no_decay_when_fix_on ... ok
+test exp::tests::level_exp_indexes_table ... ok
+test level_ability::tests::taoist_hand_weight_bug_replica ... ok
+test exp::tests::level_exp_above_max_panics_like_csharp - should panic ... ok
+test level_ability::tests::warrior_level1 ... ok
+test level_ability::tests::wizard_level50 ... ok
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 3 tests
+test redcheck_repair_dec_dura_truncation ... ok
+test redcheck_stdmode43_duramax_side_effect ... ok
+test shop_price_vectors_match_oracle ... ok
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+TEST_RC=0
+
+# 注：该 checkout 为 code commit 3ed7535d（本片全部代码 + 向量）；其后的提交只加了证据包与 base 合并（docs 刷新 / monster-ai 分片③），不改动本片文件 ⇒ 本复现读数对最终 head 同样成立。
