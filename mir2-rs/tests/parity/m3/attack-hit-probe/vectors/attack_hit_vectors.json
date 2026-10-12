@@ -1,0 +1,551 @@
+{
+  "generated_by": "mir2-rs/tests/parity/m3/attack-hit-probe",
+  "oracle": {
+    "recalc_entry": "M2Server.Player.PlayObject.RecalcHitSpeed (protected, \u53CD\u5C04\u8C03\u7528)",
+    "aph_entry": "M2Server.Player.PlayObject.GetAttackPowerHit (protected, \u53CD\u5C04\u8C03\u7528)",
+    "source": "src/M2Server/Player/PlayObject.cs:3659-3713 \u002B PlayObject.Attack.cs:579-625",
+    "rng": "OpenMir2.RandomNumber.random (\u79C1\u6709\u9759\u6001 System.Random) \u53CD\u5C04\u8986\u76D6\u4E3A RecordingRandom(seed)",
+    "constants": "MessageSettings.DEFHIT=5 / DEFSPEED=15\uFF1BBonusAbilofWarr{Hit=20,Speed=35} / Wizard{Hit=25,Speed=35} / Taos{Speed=30}"
+  },
+  "seed": 20261012,
+  "recalc_cases": [
+    {
+      "name": "warr_naked",
+      "job": 0,
+      "bonus_hit": 40,
+      "bonus_speed": 70,
+      "tick_hit": 20,
+      "tick_speed": 35,
+      "init_hit_point": 0,
+      "init_speed_point": 0,
+      "magics": [],
+      "hit_point": 7,
+      "speed_point": 17,
+      "hit_plus": 0,
+      "hit_double": 0,
+      "attack_skill_count": 0,
+      "attack_skill_point_count": 0,
+      "draws": ""
+    },
+    {
+      "name": "warr_basic3",
+      "job": 0,
+      "bonus_hit": 40,
+      "bonus_speed": 70,
+      "tick_hit": 20,
+      "tick_speed": 35,
+      "init_hit_point": 0,
+      "init_speed_point": 0,
+      "magics": [
+        {
+          "id": 3,
+          "level": 3
+        }
+      ],
+      "hit_point": 16,
+      "speed_point": 17,
+      "hit_plus": 0,
+      "hit_double": 0,
+      "attack_skill_count": 0,
+      "attack_skill_point_count": 0,
+      "draws": ""
+    },
+    {
+      "name": "warr_ilkwang2",
+      "job": 0,
+      "bonus_hit": 40,
+      "bonus_speed": 70,
+      "tick_hit": 20,
+      "tick_speed": 35,
+      "init_hit_point": 0,
+      "init_speed_point": 0,
+      "magics": [
+        {
+          "id": 4,
+          "level": 2
+        }
+      ],
+      "hit_point": 12,
+      "speed_point": 17,
+      "hit_plus": 0,
+      "hit_double": 0,
+      "attack_skill_count": 0,
+      "attack_skill_point_count": 0,
+      "draws": ""
+    },
+    {
+      "name": "warr_yedo_lv1",
+      "job": 0,
+      "bonus_hit": 40,
+      "bonus_speed": 70,
+      "tick_hit": 20,
+      "tick_speed": 35,
+      "init_hit_point": 0,
+      "init_speed_point": 0,
+      "magics": [
+        {
+          "id": 7,
+          "level": 1
+        }
+      ],
+      "hit_point": 8,
+      "speed_point": 17,
+      "hit_plus": 6,
+      "hit_double": 0,
+      "attack_skill_count": 6,
+      "attack_skill_point_count": 1,
+      "draws": "1|Next(max)|6|1|max"
+    },
+    {
+      "name": "warr_yedo_lv3",
+      "job": 0,
+      "bonus_hit": 40,
+      "bonus_speed": 70,
+      "tick_hit": 20,
+      "tick_speed": 35,
+      "init_hit_point": 0,
+      "init_speed_point": 0,
+      "magics": [
+        {
+          "id": 7,
+          "level": 3
+        }
+      ],
+      "hit_point": 10,
+      "speed_point": 17,
+      "hit_plus": 8,
+      "hit_double": 0,
+      "attack_skill_count": 4,
+      "attack_skill_point_count": 1,
+      "draws": "1|Next(max)|4|1|max"
+    },
+    {
+      "name": "warr_firesword_lv3",
+      "job": 0,
+      "bonus_hit": 40,
+      "bonus_speed": 70,
+      "tick_hit": 20,
+      "tick_speed": 35,
+      "init_hit_point": 0,
+      "init_speed_point": 0,
+      "magics": [
+        {
+          "id": 26,
+          "level": 3
+        }
+      ],
+      "hit_point": 7,
+      "speed_point": 17,
+      "hit_plus": 0,
+      "hit_double": 16,
+      "attack_skill_count": 0,
+      "attack_skill_point_count": 0,
+      "draws": ""
+    },
+    {
+      "name": "warr_all_four",
+      "job": 0,
+      "bonus_hit": 40,
+      "bonus_speed": 70,
+      "tick_hit": 20,
+      "tick_speed": 35,
+      "init_hit_point": 0,
+      "init_speed_point": 0,
+      "magics": [
+        {
+          "id": 3,
+          "level": 3
+        },
+        {
+          "id": 4,
+          "level": 2
+        },
+        {
+          "id": 7,
+          "level": 2
+        },
+        {
+          "id": 26,
+          "level": 1
+        }
+      ],
+      "hit_point": 23,
+      "speed_point": 17,
+      "hit_plus": 7,
+      "hit_double": 8,
+      "attack_skill_count": 5,
+      "attack_skill_point_count": 1,
+      "draws": "1|Next(max)|5|1|max"
+    },
+    {
+      "name": "wizard_hit",
+      "job": 1,
+      "bonus_hit": 50,
+      "bonus_speed": 70,
+      "tick_hit": 25,
+      "tick_speed": 35,
+      "init_hit_point": 0,
+      "init_speed_point": 0,
+      "magics": [],
+      "hit_point": 7,
+      "speed_point": 17,
+      "hit_plus": 0,
+      "hit_double": 0,
+      "attack_skill_count": 0,
+      "attack_skill_point_count": 0,
+      "draws": ""
+    },
+    {
+      "name": "taos_speed",
+      "job": 2,
+      "bonus_hit": 50,
+      "bonus_speed": 60,
+      "tick_hit": 30,
+      "tick_speed": 30,
+      "init_hit_point": 0,
+      "init_speed_point": 0,
+      "magics": [],
+      "hit_point": 0,
+      "speed_point": 20,
+      "hit_plus": 0,
+      "hit_double": 0,
+      "attack_skill_count": 0,
+      "attack_skill_point_count": 0,
+      "draws": ""
+    },
+    {
+      "name": "taos_init_hp_kept",
+      "job": 2,
+      "bonus_hit": 50,
+      "bonus_speed": 60,
+      "tick_hit": 30,
+      "tick_speed": 30,
+      "init_hit_point": 7,
+      "init_speed_point": 9,
+      "magics": [],
+      "hit_point": 7,
+      "speed_point": 20,
+      "hit_plus": 0,
+      "hit_double": 0,
+      "attack_skill_count": 0,
+      "attack_skill_point_count": 0,
+      "draws": ""
+    }
+  ],
+  "aph_cases": [
+    {
+      "name": "mode3_powerhit_t",
+      "hit_mode": 3,
+      "power": 25,
+      "has_target": true,
+      "hit_plus": 9,
+      "hit_double": 0,
+      "power_hit": true,
+      "fire_hit": false,
+      "twin_hit": false,
+      "out_power": 34,
+      "can_hit": true,
+      "post_power_hit": false,
+      "post_fire_hit": false,
+      "post_twin_hit": false
+    },
+    {
+      "name": "mode3_nopowerhit_t",
+      "hit_mode": 3,
+      "power": 25,
+      "has_target": true,
+      "hit_plus": 9,
+      "hit_double": 0,
+      "power_hit": false,
+      "fire_hit": false,
+      "twin_hit": false,
+      "out_power": 25,
+      "can_hit": false,
+      "post_power_hit": false,
+      "post_fire_hit": false,
+      "post_twin_hit": false
+    },
+    {
+      "name": "mode7_fire_low_t",
+      "hit_mode": 7,
+      "power": 25,
+      "has_target": true,
+      "hit_plus": 0,
+      "hit_double": 8,
+      "power_hit": false,
+      "fire_hit": true,
+      "twin_hit": false,
+      "out_power": 25,
+      "can_hit": true,
+      "post_power_hit": false,
+      "post_fire_hit": false,
+      "post_twin_hit": false
+    },
+    {
+      "name": "mode7_fire_high_t",
+      "hit_mode": 7,
+      "power": 250,
+      "has_target": true,
+      "hit_plus": 0,
+      "hit_double": 8,
+      "power_hit": false,
+      "fire_hit": true,
+      "twin_hit": false,
+      "out_power": 410,
+      "can_hit": true,
+      "post_power_hit": false,
+      "post_fire_hit": false,
+      "post_twin_hit": false
+    },
+    {
+      "name": "mode7_nofire_t",
+      "hit_mode": 7,
+      "power": 250,
+      "has_target": true,
+      "hit_plus": 0,
+      "hit_double": 8,
+      "power_hit": false,
+      "fire_hit": false,
+      "twin_hit": false,
+      "out_power": 250,
+      "can_hit": false,
+      "post_power_hit": false,
+      "post_fire_hit": false,
+      "post_twin_hit": false
+    },
+    {
+      "name": "mode9_twin_high_t",
+      "hit_mode": 9,
+      "power": 333,
+      "has_target": true,
+      "hit_plus": 0,
+      "hit_double": 12,
+      "power_hit": false,
+      "fire_hit": false,
+      "twin_hit": true,
+      "out_power": 693,
+      "can_hit": true,
+      "post_power_hit": false,
+      "post_fire_hit": false,
+      "post_twin_hit": false
+    },
+    {
+      "name": "mode9_notwin_t",
+      "hit_mode": 9,
+      "power": 333,
+      "has_target": true,
+      "hit_plus": 0,
+      "hit_double": 12,
+      "power_hit": false,
+      "fire_hit": false,
+      "twin_hit": false,
+      "out_power": 333,
+      "can_hit": false,
+      "post_power_hit": false,
+      "post_fire_hit": false,
+      "post_twin_hit": false
+    },
+    {
+      "name": "mode0_default_t",
+      "hit_mode": 0,
+      "power": 77,
+      "has_target": true,
+      "hit_plus": 5,
+      "hit_double": 6,
+      "power_hit": true,
+      "fire_hit": true,
+      "twin_hit": true,
+      "out_power": 77,
+      "can_hit": false,
+      "post_power_hit": true,
+      "post_fire_hit": true,
+      "post_twin_hit": true
+    },
+    {
+      "name": "mode3_powerhit_n",
+      "hit_mode": 3,
+      "power": 25,
+      "has_target": false,
+      "hit_plus": 9,
+      "hit_double": 0,
+      "power_hit": true,
+      "fire_hit": false,
+      "twin_hit": false,
+      "out_power": 34,
+      "can_hit": true,
+      "post_power_hit": false,
+      "post_fire_hit": false,
+      "post_twin_hit": false
+    },
+    {
+      "name": "mode3_nopowerhit_n",
+      "hit_mode": 3,
+      "power": 25,
+      "has_target": false,
+      "hit_plus": 9,
+      "hit_double": 0,
+      "power_hit": false,
+      "fire_hit": false,
+      "twin_hit": false,
+      "out_power": 25,
+      "can_hit": false,
+      "post_power_hit": false,
+      "post_fire_hit": false,
+      "post_twin_hit": false
+    },
+    {
+      "name": "mode7_fire_low_n",
+      "hit_mode": 7,
+      "power": 25,
+      "has_target": false,
+      "hit_plus": 0,
+      "hit_double": 8,
+      "power_hit": false,
+      "fire_hit": true,
+      "twin_hit": false,
+      "out_power": 25,
+      "can_hit": false,
+      "post_power_hit": false,
+      "post_fire_hit": false,
+      "post_twin_hit": false
+    },
+    {
+      "name": "mode7_fire_high_n",
+      "hit_mode": 7,
+      "power": 250,
+      "has_target": false,
+      "hit_plus": 0,
+      "hit_double": 8,
+      "power_hit": false,
+      "fire_hit": true,
+      "twin_hit": false,
+      "out_power": 250,
+      "can_hit": false,
+      "post_power_hit": false,
+      "post_fire_hit": false,
+      "post_twin_hit": false
+    },
+    {
+      "name": "mode7_nofire_n",
+      "hit_mode": 7,
+      "power": 250,
+      "has_target": false,
+      "hit_plus": 0,
+      "hit_double": 8,
+      "power_hit": false,
+      "fire_hit": false,
+      "twin_hit": false,
+      "out_power": 250,
+      "can_hit": false,
+      "post_power_hit": false,
+      "post_fire_hit": false,
+      "post_twin_hit": false
+    },
+    {
+      "name": "mode9_twin_high_n",
+      "hit_mode": 9,
+      "power": 333,
+      "has_target": false,
+      "hit_plus": 0,
+      "hit_double": 12,
+      "power_hit": false,
+      "fire_hit": false,
+      "twin_hit": true,
+      "out_power": 333,
+      "can_hit": false,
+      "post_power_hit": false,
+      "post_fire_hit": false,
+      "post_twin_hit": false
+    },
+    {
+      "name": "mode9_notwin_n",
+      "hit_mode": 9,
+      "power": 333,
+      "has_target": false,
+      "hit_plus": 0,
+      "hit_double": 12,
+      "power_hit": false,
+      "fire_hit": false,
+      "twin_hit": false,
+      "out_power": 333,
+      "can_hit": false,
+      "post_power_hit": false,
+      "post_fire_hit": false,
+      "post_twin_hit": false
+    },
+    {
+      "name": "mode0_default_n",
+      "hit_mode": 0,
+      "power": 77,
+      "has_target": false,
+      "hit_plus": 5,
+      "hit_double": 6,
+      "power_hit": true,
+      "fire_hit": true,
+      "twin_hit": true,
+      "out_power": 77,
+      "can_hit": false,
+      "post_power_hit": true,
+      "post_fire_hit": true,
+      "post_twin_hit": true
+    }
+  ],
+  "reach_registry": [
+    {
+      "magic_id": 3,
+      "name": "\u57FA\u672C\u5251\u672F",
+      "combat_entry": "RecalcHitSpeed",
+      "probeability": "probeable",
+      "anchor": "PlayObject.cs:3659-3713\uFF08:3687 SKILL_ONESWORD \u5206\u652F\uFF09"
+    },
+    {
+      "magic_id": 4,
+      "name": "\u7CBE\u795E\u529B\u6218\u6CD5",
+      "combat_entry": "RecalcHitSpeed",
+      "probeability": "probeable",
+      "anchor": "PlayObject.cs:3659-3713\uFF08:3693 SKILL_ILKWANG \u5206\u652F\uFF09"
+    },
+    {
+      "magic_id": 7,
+      "name": "\u653B\u6740\u5251\u672F",
+      "combat_entry": "RecalcHitSpeed\u002BGetAttackPowerHit",
+      "probeability": "probeable",
+      "anchor": "PlayObject.cs:3659-3713\uFF08:3698 SKILL_YEDO\uFF09\u002B PlayObject.Attack.cs:579-625\uFF08mode 3\uFF09"
+    },
+    {
+      "magic_id": 12,
+      "name": "\u523A\u6740\u5251\u672F",
+      "combat_entry": "SkillAttackDamage",
+      "probeability": "map_context",
+      "anchor": "PlayObject.Attack.cs:141-199\uFF08mode 4 \u21D2 SwordLongAttack \u21D2 Envir\uFF09"
+    },
+    {
+      "magic_id": 25,
+      "name": "\u534A\u6708\u5F2F\u5200",
+      "combat_entry": "SkillAttackDamage",
+      "probeability": "map_context",
+      "anchor": "PlayObject.Attack.cs:141-199\uFF08mode 5 \u21D2 SwordWideAttack \u21D2 Envir\uFF09"
+    },
+    {
+      "magic_id": 26,
+      "name": "\u70C8\u706B\u5251\u6CD5",
+      "combat_entry": "RecalcHitSpeed\u002BGetAttackPowerHit",
+      "probeability": "probeable",
+      "anchor": "PlayObject.cs:3659-3713\uFF08:3708 SKILL_FIRESWORD\uFF09\u002B PlayObject.Attack.cs:579-625\uFF08mode 7\uFF09"
+    },
+    {
+      "magic_id": 27,
+      "name": "\u91CE\u86EE\u51B2\u649E",
+      "combat_entry": "DoMotaebo",
+      "probeability": "map_context",
+      "anchor": "PlayObject.Attack.cs:1187 DoMotaebo\uFF08\u21D2 Envir \u4F4D\u79FB\uFF09"
+    },
+    {
+      "magic_id": 34,
+      "name": "\u89E3\u6BD2\u672F",
+      "combat_entry": "SkillAttackDamage",
+      "probeability": "map_context",
+      "anchor": "PlayObject.Attack.cs:141-199\uFF08mode 8 \u21D2 CrsWideAttack \u21D2 Envir\uFF1B\u0060MagicConst.SKILL_CROSSMOON=34\u0060\uFF09"
+    }
+  ]
+}
