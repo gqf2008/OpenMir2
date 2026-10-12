@@ -1153,8 +1153,8 @@ fn handle_eat_cmd(
         .is_some_and(|f| f.bo_nodrug);
     let mut state = game_svr::useitem::UseItemActorState {
         wabil: sg.state.wabil.clone(),
-        inc_health: sg.inc_health,
-        inc_spell: sg.inc_spell,
+        inc_health: sg.recovery.inc_health,
+        inc_spell: sg.recovery.inc_spell,
         user_unlock_durg: sg.user_unlock_durg,
         hunger_status: sg.hunger_status,
     };
@@ -1211,8 +1211,8 @@ fn handle_eat_cmd(
     // 状态迁移写回会话（`use_item` 只在成功分支改集合；失败分支原样返回）。
     sg.state.item_list = item_list;
     sg.state.wabil = state.wabil;
-    sg.inc_health = state.inc_health;
-    sg.inc_spell = state.inc_spell;
+    sg.recovery.inc_health = state.inc_health;
+    sg.recovery.inc_spell = state.inc_spell;
     sg.user_unlock_durg = state.user_unlock_durg;
     sg.hunger_status = state.hunger_status;
 
@@ -1521,8 +1521,8 @@ fn build_save_record(
     }
     rec.data.gold = sg.state.gold;
     rec.data.game_gold = sg.game_gold;
-    rec.data.inc_health = u8::try_from(sg.inc_health & 0x00FF).unwrap_or(0);
-    rec.data.inc_spell = u8::try_from(sg.inc_spell & 0x00FF).unwrap_or(0);
+    rec.data.inc_health = u8::try_from(sg.recovery.inc_health & 0x00FF).unwrap_or(0);
+    rec.data.inc_spell = u8::try_from(sg.recovery.inc_spell & 0x00FF).unwrap_or(0);
     rec.data.hunger_status = sg.hunger_status;
     let base = &sg.equip.abil;
     let w = &sg.state.wabil;
@@ -1890,6 +1890,93 @@ fn drain_aoi_downlink(
     }
 }
 
+/// 每 tick 的**周期恢复**（oracle `PlayObject.Run` 的 `:70-141` 段，见 [`game_svr::recover`] 模块头）。
+///
+/// 逐会话（**按键排序**，不让 `HashMap` 迭代序参与逻辑）执行
+/// [`game_svr::recover::recovery_tick`]；命中（`IncHealthSpell` 被调用）⇒ 照
+/// `BaseObject.HealthSpellChanged()`（`BaseObject.cs:700-710`）：
+///
+/// - `Race==Play`（本宿主的会话全是玩家）⇒ `SendUpdateMsg(RM_HEALTHSPELLCHANGED,…)` = **给自己**；
+/// - `ShowHp` ⇒ 再 `SendRefMsg(RM_HEALTHSPELLCHANGED,…)` = 同一图内 `SendRefMsgRange` 格的观察者
+///   （含自己；`SendRefMsg` 的单元格扫描含源格）。`ShowHp` 由技能「心灵启示」置位（未移植）
+///   ⇒ 生产路径不可达，登记。
+///
+/// **登记**：oracle `SendRefMsg` 有 500ms 的 `VisibleHumanList` 重建缓存（`BaseObject.Message.cs:395`），
+/// 与 `broadcast_feature_changed` 同源地按“实时扫描”近似。
+fn drain_recovery(
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    world: &mir2_world::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    range: i32,
+) {
+    let now = now_ms();
+    let mut names: Vec<String> = sessions.keys().cloned().collect();
+    names.sort();
+    for name in names {
+        let Some(sg) = sessions.get_mut(&name) else {
+            continue;
+        };
+        let death = world.entities.get(sg.actor_id).is_some_and(|e| e.death);
+        if !game_svr::recover::recovery_tick(&mut sg.recovery, &mut sg.state.wabil, death, now) {
+            continue;
+        }
+        let Some(entry) = online.iter().find(|e| e.chr_name == name) else {
+            glog!(
+                "WRN",
+                "周期恢复：ChrName={name} 无在线网关坐标 ⇒ 不回帧（登记）"
+            );
+            continue;
+        };
+        let body = game_svr::smframe::sm_healthspellchanged(
+            sg.actor_id,
+            sg.state.wabil.hp,
+            sg.state.wabil.mp,
+            sg.state.wabil.max_hp,
+        );
+        if let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "周期恢复回帧") {
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: entry.socket,
+                body: body.clone(),
+            });
+        }
+        // `ShowHp` 的 AOI 支（oracle `SendRefMsg`）：同图范围内观察者各收一份。
+        if sg.show_hp {
+            broadcast_healthspellchanged(world, online, gates, sg.actor_id, &body, range);
+        }
+    }
+}
+
+/// `HealthSpellChanged()` 的 `ShowHp` 支（`SendRefMsg(RM_HEALTHSPELLCHANGED,…)`）在同一图上按
+/// `SendRefMsgRange` 广播；`body` 是源 actor 的那条 `SM_HEALTHSPELLCHANGED`（观察者收到同一字节）。
+fn broadcast_healthspellchanged(
+    world: &mir2_world::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    actor_id: i32,
+    body: &[u8],
+    range: i32,
+) {
+    let Some(src) = world.entities.get(actor_id) else {
+        return;
+    };
+    let (sx, sy, smap) = (src.x, src.y, src.map_id);
+    for e in online {
+        let Some(t) = world.entities.get(e.actor_id) else {
+            continue;
+        };
+        if t.map_id != smap || (t.x - sx).abs() > range || (t.y - sy).abs() > range {
+            continue;
+        }
+        if let Some(tx) = route_to_gate(gates, e.gate_idx, e.socket, "周期恢复广播") {
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: e.socket,
+                body: body.to_vec(),
+            });
+        }
+    }
+}
+
 /// 在线用户的世界侧网关坐标（`PlayObject.GateIdx`/`SocketId` 的对应物）。
 ///
 /// 进世界成功时登记，断线/被踢时移除；重复进世界的"踢旧"与账号级顶号靠它找回旧连接。
@@ -2206,10 +2293,13 @@ struct SessionGround {
     sub: game_svr::ability::SubAbility,
     /// 装备/卸下重算的静态输入（进世界时从 `CharacterData` + `Server.conf` 建立）。
     equip: EquipInputs,
-    /// `CharacterObject.IncHealth`（`CM_EAT` 的 `StdMode 0 default` 分支叠加；oracle `ushort` 语义）。
-    inc_health: u16,
-    /// `CharacterObject.IncSpell`。
-    inc_spell: u16,
+    /// `CharacterObject.IncHealth/IncSpell/IncHealing` + `Per*` + `IncHealthSpellTick`
+    /// （周期恢复 tick，[`game_svr::recover::Recovery`]；`CM_EAT` 的 `StdMode 0 default` 分支
+    /// 叠加 `IncHealth/IncSpell`）。
+    recovery: game_svr::recover::Recovery,
+    /// `BaseObject.ShowHp`（`MakeOpenHealth()` 置位，`BaseObject.cs:944`）；发点是技能「心灵启示」
+    /// （`MagicManager.cs:438`）⇒ 技能层未移植，生产路径恒 `false`（登记）。
+    show_hp: bool,
     /// `CharacterObject.UserUnLockDurg`（`CM_EAT` 的 `StdMode 0 Shape 2` 置 true）。
     user_unlock_durg: bool,
     /// `PlayObject.HungerStatus`（`CM_EAT` 的 `StdMode 1`：`+= DuraMax/10`，上限 5000）。
@@ -2940,8 +3030,15 @@ fn sim_loop(
                                                                 bonus_tick_hit: a.bonus_tick_hit,
                                                                 bonus_tick_speed: a.bonus_tick_speed,
                                                             },
-                                                            inc_health: u16::from(d.inc_health),
-                                                            inc_spell: u16::from(d.inc_spell),
+                                                            recovery: game_svr::recover::Recovery {
+                                                                inc_health: u16::from(d.inc_health),
+                                                                inc_spell: u16::from(d.inc_spell),
+                                                                // `CharacterObject()` 初值：Per*=5、
+                                                                // tick = GetTickCount()（`CharacterObject.cs:83-86`）。
+                                                                ..game_svr::recover::Recovery::new(now_ms())
+                                                            },
+                                                            // `ShowHp` 由技能「心灵启示」置位（未移植）⇒ 初生 false。
+                                                            show_hp: false,
                                                             // `UserUnLockDurg` 不在角色记录里（会话初生 false；
                                                             // 与 `CM_EAT` 的 Shape 2 同一状态变）：登记为未建模。
                                                             user_unlock_durg: false,
@@ -3154,6 +3251,15 @@ fn sim_loop(
         );
         let rec = world.tick();
         ticks += 1;
+        // T-28：周期恢复 tick（oracle `PlayObject.Run` 的 `:70-141`）——同一 world tick 后处理，
+        // 把 `IncHealth/IncSpell/IncHealing` 按 oracle 节奏消费回 `WAbil.HP/MP` 并回帧。
+        drain_recovery(
+            &mut ground_sessions,
+            &world,
+            &online,
+            &gates,
+            enter_cfg.ref_msg_range,
+        );
         // S3 后半段（第一格）：世界 tick 的 AOI 结果 → `SM_TURN` + `SM_FEATURECHANGED` 回帧。
         drain_aoi_downlink(&world, &displays, &online, &gates);
         if ticks.is_multiple_of(50) {
@@ -4046,8 +4152,12 @@ mod tests {
             use_items,
             sub: game_svr::ability::SubAbility::first_call(),
             equip: test_equip_inputs(),
-            inc_health: 3,
-            inc_spell: 4,
+            recovery: game_svr::recover::Recovery {
+                inc_health: 3,
+                inc_spell: 4,
+                ..game_svr::recover::Recovery::new(0)
+            },
+            show_hp: false,
             user_unlock_durg: false,
             hunger_status: 55,
             query_bag_items_tick: None,
@@ -4490,8 +4600,8 @@ mod tests {
                 use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
                 sub: game_svr::ability::SubAbility::first_call(),
                 equip: test_equip_inputs(),
-                inc_health: 0,
-                inc_spell: 0,
+                recovery: game_svr::recover::Recovery::new(0),
+                show_hp: false,
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
@@ -4653,8 +4763,8 @@ mod tests {
                     spell_recover: 0,
                 },
                 equip: test_equip_inputs(),
-                inc_health: 0,
-                inc_spell: 0,
+                recovery: game_svr::recover::Recovery::new(0),
+                show_hp: false,
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
@@ -4773,8 +4883,8 @@ mod tests {
                 use_items,
                 sub: game_svr::ability::SubAbility::first_call(),
                 equip: test_equip_inputs(),
-                inc_health: 0,
-                inc_spell: 0,
+                recovery: game_svr::recover::Recovery::new(0),
+                show_hp: false,
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
@@ -4892,8 +5002,8 @@ mod tests {
                 use_items,
                 sub: game_svr::ability::SubAbility::first_call(),
                 equip: test_equip_inputs(),
-                inc_health: 0,
-                inc_spell: 0,
+                recovery: game_svr::recover::Recovery::new(0),
+                show_hp: false,
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
@@ -5594,8 +5704,8 @@ mod tests {
                 use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
                 sub: game_svr::ability::SubAbility::first_call(),
                 equip: test_equip_inputs(),
-                inc_health: 0,
-                inc_spell: 0,
+                recovery: game_svr::recover::Recovery::new(0),
+                show_hp: false,
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,
@@ -5661,6 +5771,192 @@ mod tests {
         );
         assert_eq!(sg.state.wabil.hp, 15, "HP 5 + AC 10 未到上限 20 ⇒ 15");
         assert_eq!(sg.state.wabil.max_hp, 20);
+    }
+
+    /// **T-28（卡 `openmir2-m3-recovery-tick`）进程级判据**：吃下 `StdMode 0` 的池药后，
+    /// 周期恢复 tick 把它消费回 HP 并回 `SM_HEALTHSPELLCHANGED`——HP 已满 ⇒ 首轮即把池清零
+    /// （T-14 `characters.IncHealth` 归零的主路径）。
+    ///
+    /// 同时钉住 [`drain_recovery`] 的 `ShowHp` 支：`show_hp=true` 时同屏观察者也收到同一字节的
+    /// `SM_HEALTHSPELLCHANGED`（oracle `SendRefMsg`；生产上 `ShowHp` 由未移植的技能置位）。
+    ///
+    /// 红检：① 把 `recovery_tick` 里 `IncHealth < PerHealth` 分支的 `rec.inc_health = 0`
+    /// 删掉 ⇒ `recover::tests::pooled_drug_is_consumed_over_ticks_when_not_at_full_hp` 必红；
+    /// ② 把 `drain_recovery` 回帧的 `hp`/`mp` 互换 ⇒ 本用例的头部断言必红。
+    #[test]
+    fn recovery_tick_consumes_pool_and_broadcasts() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+
+        // 金创药(小量) 的**池药**形态：`StdMode 0` / `Shape 0` ⇒ `IncHealth += AC`（无即时帧）。
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            100,
+            mir2_data::StdItem {
+                name: "金创药(小量)".into(),
+                std_mode: 0,
+                shape: 0,
+                ac: 20,
+                mac: 0,
+                ..Default::default()
+            },
+        );
+
+        let mut world = mir2_world::World::with_maps(vec![(32, 32)]);
+        world.open_session("hero");
+        let hid = world
+            .enter_map("hero", mir2_world::Entity::new(0, "hero", 10, 10), 0)
+            .expect("hero 进世界");
+        world.open_session("obs");
+        let oid = world
+            .enter_map("obs", mir2_world::Entity::new(0, "obs", 11, 11), 0)
+            .expect("obs 进世界");
+
+        let make_index = 29_033_300;
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert(
+            "hero".into(),
+            SessionGround {
+                state: game_svr::ground::GroundState {
+                    item_list: vec![game_svr::bag::BagItem {
+                        make_index,
+                        index: 100,
+                        dura: 0,
+                        dura_max: 0,
+                        desc: [0; 14],
+                    }],
+                    gold: 0,
+                    wabil: {
+                        let mut a = test_ability();
+                        a.level = 1;
+                        a.hp = 19;
+                        a.max_hp = 19;
+                        a.mp = 15;
+                        a.max_mp = 15;
+                        a
+                    },
+                },
+                actor_id: hid,
+                game_gold: 0,
+                sys_msg: None,
+                use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
+                sub: game_svr::ability::SubAbility::first_call(),
+                equip: test_equip_inputs(),
+                recovery: game_svr::recover::Recovery::new(0),
+                show_hp: true,
+                user_unlock_durg: false,
+                hunger_status: 0,
+                query_bag_items_tick: None,
+            },
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hid,
+            },
+        );
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ub".into(),
+                chr_name: "obs".into(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 902,
+                actor_id: oid,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let colors = MsgColors {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+        };
+
+        // 1) 吃药：池药形态只叠加 `IncHealth = 0 + 20`，尾只有 `SM_EAT_OK` + `RM_WEIGHTCHANGED`。
+        handle_eat_cmd(
+            make_index,
+            0,
+            0,
+            None,
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            &world,
+            &colors,
+            None,
+        );
+        let mut eat_frames = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
+            let cm = CommandMessage::from_bytes(&body).expect("SM_* body 至少 12B");
+            eat_frames.push((cm.recog, cm.ident));
+        }
+        assert_eq!(
+            eat_frames,
+            vec![
+                (0, game_svr::useitem::SM_EAT_OK),
+                (0, mir2_protocol::messages::SM_WEIGHTCHANGED),
+            ],
+            "池药（Shape 0）不吃即时回血帧，只累加 IncHealth"
+        );
+        assert_eq!(sessions["hero"].recovery.inc_health, 20);
+
+        // 2) 周期恢复 tick：tick 初值 0、now = 真实时钟 ⇒ 远超 1 级阈值 590ms ⇒ 首轮命中。
+        drain_recovery(&mut sessions, &world, &online, &gates, 12);
+        let mut frames = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, socket }) = rx0.try_recv() {
+            let cm = CommandMessage::from_bytes(&body).expect("SM_* body 至少 12B");
+            frames.push((socket, cm.recog, cm.ident, cm.param, cm.tag, cm.series));
+        }
+        // 自见（`SendUpdateMsg`）+ ShowHp 的 AOI（`SendRefMsg` 含源格 ⇒ 自己也再收一份 + 观察者一份）。
+        assert_eq!(
+            frames,
+            vec![
+                (
+                    901,
+                    hid,
+                    mir2_protocol::messages::SM_HEALTHSPELLCHANGED,
+                    19,
+                    15,
+                    19
+                ),
+                (
+                    901,
+                    hid,
+                    mir2_protocol::messages::SM_HEALTHSPELLCHANGED,
+                    19,
+                    15,
+                    19
+                ),
+                (
+                    902,
+                    hid,
+                    mir2_protocol::messages::SM_HEALTHSPELLCHANGED,
+                    19,
+                    15,
+                    19
+                ),
+            ],
+            "HP 夹回 MaxHP=19、MP=15、MaxHP=19；观察者收到同一字节"
+        );
+        let sg = &sessions["hero"];
+        assert_eq!(
+            sg.recovery.inc_health, 0,
+            "HP 打满 ⇒ IncHealth 清零（T-14 归零路径）"
+        );
+        assert_eq!(sg.state.wabil.hp, 19, "HP 夹到 MaxHP");
     }
 
     /// 测试用：带四种新手物品模板的目录（`find_by_name` 按名字查）。
@@ -5782,8 +6078,8 @@ mod tests {
                 use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
                 sub: game_svr::ability::SubAbility::first_call(),
                 equip: test_equip_inputs(),
-                inc_health: 0,
-                inc_spell: 0,
+                recovery: game_svr::recover::Recovery::new(0),
+                show_hp: false,
                 user_unlock_durg: false,
                 hunger_status: 0,
                 query_bag_items_tick: None,

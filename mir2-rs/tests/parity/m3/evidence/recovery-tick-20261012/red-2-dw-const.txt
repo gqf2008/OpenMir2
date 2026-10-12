@@ -1,0 +1,33 @@
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+warning: unused variable: `level_scaled`
+   --> bins\game-svr\src\recover.rs:108:13
+    |
+108 |         let level_scaled = i64::from(wabil.level) * 10;
+    |             ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_level_scaled`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `game-svr` (lib) generated 1 warning (run `cargo fix --lib -p game-svr` to apply 1 suggestion)
+warning: `game-svr` (lib test) generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.73s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-3aa264152417c61e.exe)
+
+running 1 test
+test recover::tests::dw_in_chs_time_shrinks_with_level ... FAILED
+
+failures:
+
+---- recover::tests::dw_in_chs_time_shrinks_with_level stdout ----
+
+thread 'recover::tests::dw_in_chs_time_shrinks_with_level' (28560) panicked at bins\game-svr\src\recover.rs:277:9:
+assertion failed: recovery_tick(&mut rec, &mut wabil, false, 400)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    recover::tests::dw_in_chs_time_shrinks_with_level
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 74 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --lib`
+rc=101

@@ -416,21 +416,10 @@ pub fn use_item(
 ///
 /// 返回 `false` ⇔ oracle 在开头的 `nHp<0 || nMp<0` 处 `return`（此时**不**调 `HealthSpellChanged`）。
 /// `HP/MP` 用 `ushort` 语义（oracle `(ushort)nHp` 强转），超上限则夹到 `MaxHP/MaxMP`。
+///
+/// 实现只有一份：委托 [`crate::recover::inc_health_spell`]（周期恢复 tick 也用它）。
 fn inc_health_spell(state: &mut UseItemActorState, n_hp: i32, n_mp: i32) -> bool {
-    if n_hp < 0 || n_mp < 0 {
-        return false;
-    }
-    if state.wabil.hp as i32 + n_hp >= state.wabil.max_hp as i32 {
-        state.wabil.hp = state.wabil.max_hp;
-    } else {
-        state.wabil.hp = state.wabil.hp.wrapping_add(n_hp as u16);
-    }
-    if state.wabil.mp as i32 + n_mp >= state.wabil.max_mp as i32 {
-        state.wabil.mp = state.wabil.max_mp;
-    } else {
-        state.wabil.mp = state.wabil.mp.wrapping_add(n_mp as u16);
-    }
-    true
+    crate::recover::inc_health_spell(&mut state.wabil, n_hp, n_mp)
 }
 
 /// `PlayObject.GetMyStatus()`（`PlayObject.Base.cs:1183-1191`）：`min(HungerStatus/1000, 4)`（整数除）。

@@ -1,0 +1,33 @@
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.66s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-3aa264152417c61e.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 75 filtered out; finished in 0.00s
+
+     Running unittests src\main.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-eb39968088e3f1ec.exe)
+
+running 1 test
+test tests::recovery_tick_consumes_pool_and_broadcasts ... FAILED
+
+failures:
+
+---- tests::recovery_tick_consumes_pool_and_broadcasts stdout ----
+00:33:49.551 [INF] CM_EAT 结果：ChrName=hero make_index=29033300 eaten=true immediate=1 notices=1
+00:33:49.551 [INF] CM_EAT 已下发 2 帧（socket=901 gate=0）
+
+thread 'tests::recovery_tick_consumes_pool_and_broadcasts' (14964) panicked at bins\game-svr\src\main.rs:5924:9:
+assertion `left == right` failed: HP 夹回 MaxHP=19、MP=15、MaxHP=19；观察者收到同一字节
+  left: [(901, 1, 53, 15, 19, 19), (901, 1, 53, 15, 19, 19), (902, 1, 53, 15, 19, 19)]
+ right: [(901, 1, 53, 19, 15, 19), (901, 1, 53, 19, 15, 19), (902, 1, 53, 19, 15, 19)]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::recovery_tick_consumes_pool_and_broadcasts
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 126 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`
+rc=101
