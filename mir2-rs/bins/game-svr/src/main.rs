@@ -3176,6 +3176,13 @@ fn sim_loop(
     }
     // `Exps.conf` 的 NeedExps（`BaseObject.GetLevelExp` 的数据源；存档 `MaxExp` 也用它）。
     world.need_exps = enter_cfg.need_exps.clone();
+    // **M3④-实现 C 第 ② 片**：生产宿主启用怪物 AI（oracle `ProcessMonsters` 线程的单线程等价物）。
+    // 生成路径已按 oracle 把 `cert.Dir`/`CoolEye`/构造链抽数写进 `Entity.ai`
+    // （`World::spawn_monster_precomputed` → `AnimalState::seed_from_spawn`），这里只开闸；
+    // `World::tick` 在死亡结算之后、AOI 刷新之前按实体槽位顺序驱动 `monster_ai_tick`。
+    // 合成 golden 场景不经本函数 ⇒ 仍缺省关闭，逐字节不变。
+    game_svr::mongen::enable_production_monster_ai(&mut world);
+    glog!("INF", "Monster AI 已启用（生产宿主）EnableMonsterAI=true");
     // **M3④-实现 B 第 ③ 片**：MonGen 刷怪调度宿主（`WorldServer.MonGen.cs:30/192/811`）。
     // `entries=None` ⇒ 无 `Envir/MonGen.txt`，不建宿主；`initialize_monster` 在此消耗一次
     // `world.rng`（oracle `InitializeMonster` 同一时机；RNG 次序 = 怪名分组序 + `MonsterList.Values`）。
@@ -4145,8 +4152,8 @@ fn sim_loop(
             registry.as_ref(),
         );
         // **M3④-实现 B 第 ③ 片**：MonGen regen 门 + 刷怪（单线程串行版的 `ProcessMonsters`，
-        // `WorldServer.MonGen.cs:192-253`）。`dir`/`cool_eye` 已按 oracle 取数但未入实体内存
-        // （AOI 面属承接卡 `openmir2-m3-monster-ai-tick`，见 `game_svr::mongen` 模块头）。
+        // `WorldServer.MonGen.cs:192-253`）。`dir`/`cool_eye`/构造抽已随生成结果写进
+        // `Entity.ai`（卡 C 第 ② 片）；**怪物帧面**（`SM_TURN`/`SM_FEATURECHANGED`）仍属后续分片。
         if let Some(host) = mon_gen_host.as_mut() {
             if let Some(reg) = registry.as_ref() {
                 step_mon_gen(

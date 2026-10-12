@@ -20,8 +20,9 @@
 //!   [`MonGenHost::step`]（单线程确定性，设计文档 §4.2 硬约束①）。总刷怪数由 `genModCount`
 //!   封顶（每分钟的 `Count`），故长跑收敛；**短窗内的 interleaving 与 oracle 不同**——这条已由
 //!   第 ② 片登记，Claim B 的 site/order 账本据此对齐。
-//! - **`dir`/`cool_eye`**：本层按 oracle 取数并随 [`MonsterSpawnRequest`] 交给 sink；world 的
-//!   `Entity` 尚未建模这两个字段（AOI 面属承接卡），故 `WorldMonsterSink` 落库时**不入实体内存**。
+//! - **`dir`/`cool_eye`**：本层按 oracle 取数并随 [`MonsterSpawnRequest`] 交给 sink；
+//!   `WorldMonsterSink` 落库时写进 `Entity.ai`（`dir`/`cool_eye`，卡 C 第 ② 片宿主接线）。
+//!   **怪物帧面**（`SM_TURN`/`SM_FEATURECHANGED` 的 monster `CharDesc`）仍属后续分片（登记）。
 //! - **构造链抽值**：本层按 oracle 逐 race 抽完（含公共链 `BaseObject`/`AnimalObject` ctor），并作为
 //!   [`MonsterCtorDraws`] 随生成结果落到 `Entity.ctor_draws`（供承接卡 C 的 AI 消费，C 不再重抽）。
 //! - **`Envir.FindMap` 已并入 `MapRegistry::id_of`**（部署态 `ServerIndex` 全 0，与
@@ -47,6 +48,17 @@ use mir2_world::MonsterCtorDraws;
 
 /// `Server.conf` 缺省：`[Server] VentureServer`（`ServerConf.cs:21`，`"FALSE"` ⇒ false）。
 pub const VENTURE_SERVER_DEFAULT: &str = "FALSE";
+
+/// **M3④-实现 C 第 ② 片**：生产宿主的怪物 AI 闸门（`bins/game-svr` 的 sim 循环起世界时调用一次）。
+///
+/// 单独成函数（而不是在 `sim_loop` 里直接 `world.enable_monster_ai()`）是为了给「宿主真的开了
+/// AI」一条**可判据 + 可改坏**的接缝：合成 golden 场景不经这里 ⇒ 仍缺省关闭、逐字节不变。
+///
+/// `World::tick` 在死亡结算之后、AOI 刷新之前按实体槽位顺序驱动 `monster_ai_tick`
+/// （oracle `ProcessMonsters` 线程的单线程等价物，见设计文档 §4.2 硬约束①）。
+pub fn enable_production_monster_ai(world: &mut mir2_world::World) {
+    world.enable_monster_ai();
+}
 
 /// 剥 UTF-8 BOM（`GameSvrConf::load` 走 `decode_text` 的同口径；现网 `Server.conf` 首行带 BOM）。
 fn strip_utf8_bom(bytes: &[u8]) -> &[u8] {
@@ -609,7 +621,7 @@ impl MonGenHost {
 /// 能力字段照 oracle `ApplyMonsterAbility`（`WorldServer.MonGen.cs:880-910`）：
 /// `Level = monster.Level`、`HP/MaxHP = monster.HP`、`AC = AC`、`DC = MakeWord(DC, MaxDC)`、
 /// `LifeAttrib = monster.btLifeAttrib`、`HitPoint = monster.HitPoint`、`SpeedPoint = monster.Speed`、
-/// `FightExp = monster.Exp`。**`dir`/`cool_eye` 不入实体内存**（建模差异，见模块头）。
+/// `FightExp = monster.Exp`。`dir`/`cool_eye` 随生成结果写进 `Entity.ai`（见模块头）。
 pub struct WorldMonsterSink<'a> {
     pub world: &'a mut mir2_world::World,
     pub registry: &'a MapRegistry,
@@ -722,6 +734,8 @@ impl MonsterSink for WorldMonsterSink<'_> {
             req.gold,
             req.drop_items.clone(),
             req.ctor,
+            req.dir,
+            req.cool_eye,
         )
     }
 }
@@ -736,6 +750,9 @@ pub fn venture_server_default_is_false() -> bool {
 mod tests {
     use super::*;
     use mir2_data::models::MonsterDropItem;
+
+    /// 用例级唯一临时目录的序号（`pid + 原子计数`，照 `LESSON_并行测试临时路径须pid加原子计数构造`）。
+    static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
     /// 记录型 sink：把回调结果留档，地图查询走构造表（不依赖 `crates/world`）。
     #[derive(Default)]
@@ -1245,5 +1262,96 @@ mod tests {
         assert!(d[0].gate_due);
         assert!(!d[0].regened);
         assert!(sink.spawns.is_empty());
+    }
+
+    /// **C 第 ② 片判据 1（宿主开闸）**：生产宿主必须开怪物 AI；合成 golden 不经此函数 ⇒ 缺省仍关。
+    ///
+    /// 红检：把 [`enable_production_monster_ai`] 改成空函数 ⇒ 本用例必红（`monster_ai_enabled()` 为
+    /// false）。
+    #[test]
+    fn production_host_enables_monster_ai() {
+        let mut world = mir2_world::World::new(4, 4);
+        assert!(
+            !world.monster_ai_enabled(),
+            "缺省必须关（既有 golden/合成场景逐字节不变）"
+        );
+        enable_production_monster_ai(&mut world);
+        assert!(
+            world.monster_ai_enabled(),
+            "生产宿主必须开闸（World::tick 才会驱动 monster_ai_tick）"
+        );
+    }
+
+    /// **C 第 ② 片判据 2（生成期取数落进 AI 初始态）**：`WorldMonsterSink::spawn_monster` 把
+    /// `dir`/`cool_eye`/构造抽（含 `AttackTick`/`WalkTick`/`SearchTime` 的随机分量）写进 `Entity.ai`，
+    /// 且**不重抽**。
+    ///
+    /// 红检：把 sink 的 `req.dir, req.cool_eye` 改成 `0, false` ⇒ `ai.dir`/`ai.cool_eye` 断言必红。
+    #[test]
+    fn world_monster_sink_seeds_ai_from_spawn_request() {
+        let base = std::env::temp_dir().join(format!(
+            "gs-mongen-sink-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        // 5×5 全零地形：`parse_map_bytes` 只要求 width/height > 1 且字节足够。
+        let mut bytes = vec![0u8; mir2_envir::HEADER_BYTES];
+        bytes[0..2].copy_from_slice(&5_i16.to_le_bytes());
+        bytes[2..4].copy_from_slice(&5_i16.to_le_bytes());
+        bytes.resize(mir2_envir::HEADER_BYTES + 5 * 5 * mir2_envir::CELL_BYTES, 0);
+        std::fs::create_dir_all(base.join("Map")).unwrap();
+        std::fs::write(base.join("Map").join("0.map"), &bytes).unwrap();
+        let loader = MapLoader::new(base.clone(), "Map", "Envir");
+        let registry = MapRegistry::from_entries(
+            loader,
+            vec![mir2_envir::MapInfoEntry {
+                map_name: "0".to_string(),
+                map_file_name: "0".to_string(),
+                desc: String::new(),
+                server_index: 0,
+                flag: mir2_envir::MapInfoFlag::default(),
+            }],
+        );
+        assert_eq!(registry.id_of("0"), Some(0), "注册表必须命中 map 0");
+
+        let mut world = mir2_world::World::with_maps(vec![(5, 5)]);
+        world.clock_ms = 12_345;
+        let table = MonsterTable::default();
+        let ctor = MonsterCtorDraws {
+            attack_tick_delta: 33,
+            walk_tick_delta: 44,
+            search_time: 3333,
+            bo_fear_fire: true,
+            ..MonsterCtorDraws::default()
+        };
+        let req = MonsterSpawnRequest {
+            map_name: "0".to_string(),
+            mon_name: "鸡".to_string(),
+            x: 2,
+            y: 2,
+            race: 51,
+            dir: 5,
+            cool_eye: true,
+            gold: 7,
+            drop_items: Vec::new(),
+            ctor,
+        };
+        let id = WorldMonsterSink {
+            world: &mut world,
+            registry: &registry,
+            table: &table,
+        }
+        .spawn_monster(&req)
+        .expect("生成成功");
+        let e = world.entities.get(id).expect("怪物在仓库");
+        assert_eq!(e.ai.dir, 5, "cert.Dir 必须落进 Entity.ai.dir");
+        assert!(e.ai.cool_eye, "CoolEye 必须落进 Entity.ai.cool_eye");
+        assert!(e.ai.bo_fear_fire, "构造抽 BoFearFire 必须落进 Entity.ai");
+        assert_eq!(e.ai.attack_tick, 12_345 - 33);
+        assert_eq!(e.ai.walk_tick, 12_345 - 44);
+        assert_eq!(e.ai.search_time, 3333);
+        assert_eq!(e.ctor_draws, ctor, "构造抽结果必须原样落库（C 只消费不抽）");
+        assert_eq!(e.gold, 7, "生成期已预算的金币原样落库");
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

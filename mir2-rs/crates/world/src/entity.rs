@@ -144,6 +144,38 @@ pub struct AnimalState {
     pub run_away_time: i64,
 }
 
+impl AnimalState {
+    /// 按 oracle 的**生成期取数**初始化一个怪物的 AI 状态（承接卡 `openmir2-m3-monster-ai-tick` 的宿主接线）。
+    ///
+    /// 这些值的抽取时机在 oracle 里分两处、但都发生在 `CreateMonster` 内、落在实体登记之前：
+    /// - 构造链（`new Xxx()`）抽出的 `ctor`（`BaseObject.cs:439/441`、`AnimalObject.cs:76/77`、
+    ///   `MonsterObject.cs:65`/各派生类 ctor）；
+    /// - `cert.Dir = RandomByte(8)`（`WorldServer.MonGen.cs:740`）与 `CoolEye`（`:745-747`）。
+    ///
+    /// `now` = oracle 的 `HUtil32.GetTickCount()`（本骨架用 `World::clock_ms` 的确定性注入）。
+    /// 本函数**不抽任何随机数**（抽数已在生成路径完成，见 [`MonsterCtorDraws`]）。
+    ///
+    /// 未建模的构造抽：`BaseObject.RunTick`（`run_tick_delta`）、`MeatQuality`、`ZilKillCount`
+    /// 无对应字段（AI tick 不消费它们）——登记，不假造。
+    pub fn seed_from_spawn(&mut self, dir: u8, cool_eye: bool, ctor: &MonsterCtorDraws, now: i64) {
+        self.dir = dir;
+        self.cool_eye = cool_eye;
+        self.bo_fear_fire = ctor.bo_fear_fire;
+        // `AnimalObject.AttackTick/WalkTick = GetTickCount() - Random(3000)`（`AnimalObject.cs:76-77`）。
+        self.attack_tick = now - i64::from(ctor.attack_tick_delta);
+        self.walk_tick = now - i64::from(ctor.walk_tick_delta);
+        // 构造链最终生效的 `SearchTime`（`MonsterObject.cs:57` 覆盖 `BaseObject.cs:441`）。
+        self.search_time = i64::from(ctor.search_time);
+        // `SearchTick`/`ThinkTick`/`SearchEnemyTick`/`WalkWaitTick`/`RunAwayStart = now`
+        // （`BaseObject.cs:442`、`MonsterObject.cs:55-58`、`AnimalObject.cs:78/84/80`）。
+        self.search_tick = now;
+        self.search_enemy_tick = now;
+        self.think_tick = now;
+        self.walk_wait_tick = now;
+        self.run_away_start = now;
+    }
+}
+
 impl Default for AnimalState {
     fn default() -> Self {
         AnimalState {
@@ -200,6 +232,15 @@ pub struct Entity {
     pub death: bool,
     pub invisible: bool,
     pub ghost: bool,
+    /// C# `BaseObject.HideMode`（隐身术/隐身戒指的"完全隐身"）。
+    ///
+    /// 与 [`Entity::invisible`]（oracle `Invisible`，`is_proper_target` 用）和
+    /// [`Entity::fixed_hide_mode`]（oracle `FixedHideMode`）是**三个不同字段**：
+    /// oracle `AnimalObject.SearchTarget` 的隐藏门读的是 `HideMode`（`AnimalObject.cs:402`），
+    /// 只有 `Envirnoment.GetXYObjCount` / `BaseObject.Run` 才读 `FixedHideMode`。
+    /// 当前本仓无写入点（隐身术/隐身戒指未接线）⇒ 两侧行为今天相同；接线后在 `search_target`
+    /// 的隐藏门上与 oracle 1:1。
+    pub hide_mode: bool,
     pub fixed_hide_mode: bool,
     pub ob_mode: bool,
     /// C# `NastyMode`（PK 模式等）
@@ -300,6 +341,7 @@ impl Entity {
             master: None,
             death: false,
             invisible: false,
+            hide_mode: false,
             ghost: false,
             fixed_hide_mode: false,
             ob_mode: false,
