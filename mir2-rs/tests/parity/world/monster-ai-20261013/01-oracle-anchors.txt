@@ -1,0 +1,46 @@
+# M3④-实现 C 第 ① 片：oracle 锚点（行号复核于 2026-10-13，路径 = 仓库根相对）
+
+## 基类：BaseObject
+- Run()                      src/M2Server/Actor/BaseObject.Base.cs:25
+  - 消息泵 :28-31；SuperMan 满血 :35-38；恢复(HealthTick/SpellTick) :39-66；
+    HP==0 ⇒ Die() :70-73；死亡 MakeGhost :86-101；体力点段 :105-110；
+    TargetCret 30s/死亡/异图/|Δ|>15 清理 :111-118；
+    LastHiter 30s/死亡/隐身过期 :119-125；ExpHitter 6s/死亡/隐身过期 :126-132
+- WalkTo(btDir,boFlag,fearFire)  src/M2Server/Actor/BaseObject.cs:601   （先置 Dir；禁区/主人占位；MoveToMovingObject）
+- TurnTo(nDir)                   src/M2Server/Actor/BaseObject.cs:1582  （只置 Dir + 发 RM_TURN）
+- GetAttackDir(target,ref dir)   src/M2Server/Actor/BaseObject.cs:1264  （八邻格，判定序 Left/Right/Up/Down/UpLeft/UpRight/DownLeft/DownRight）
+- NextHitTime/WalkSpeed          src/M2Server/Actor/BaseObject.cs:446-447 (= 1400 / 2000)
+- ctor RNG: RunTick=Random(1500) src/M2Server/Actor/BaseObject.cs:439；SearchTime=Random(2000)+2000 :441
+- Envir.GetXYObjCount            src/M2Server/Maps/Envirnoment.cs:1062
+
+## AnimalObject
+- ctor RNG: AttackTick = now - Random(3000)  src/M2Server/Actor/AnimalObject.cs:76
+             WalkTick   = now - Random(3000)  src/M2Server/Actor/AnimalObject.cs:77
+- Run()            src/M2Server/Actor/AnimalObject.cs:142  （HolySeize 到点 -> BreakHolySeizeMode + base.Run）
+- DelTargetCreat() src/M2Server/Actor/AnimalObject.cs:151  （追加 TargetX/Y = -1）
+- Attack(target,dir)  src/M2Server/Actor/AnimalObject.cs:167（GetBaseAttackPoewr + AttackDir + SendAttackMsg(RM_HIT)）
+- GotoTargetXY()   src/M2Server/Actor/AnimalObject.cs:174-249 （主方向 -> WalkTo -> 无条件 Random(3) -> 8 向重试）
+- Struck(hiter)    src/M2Server/Actor/AnimalObject.cs:336
+- SearchTarget()   src/M2Server/Actor/AnimalObject.cs:388-423 （VisibleActors 序；Clear 死亡/异图/|Δ|>15；最近曼哈顿）
+- Wondering()      src/M2Server/Actor/AnimalObject.cs:425-441 （Random(20)!=0 返回；Random(4)==1 ⇒ RandomByte(8)+TurnTo；否则 WalkTo(Dir)）
+
+## MonsterObject
+- ctor RNG: SearchTime = 3000 + Random(2000)  src/M2Server/Monster/MonsterObject.cs:65
+- Think()        src/M2Server/Monster/MonsterObject.cs:187-215 （3s 门；GetXYObjCount>=2 ⇒ DupMode；TargetCret 失效置空；DupMode 支 WalkTo(RandomByte(8))）
+- AttackTarget() src/M2Server/Monster/MonsterObject.cs:220-245 （邻接且到点 ⇒ AttackTick/TargetFocusTick + Attack；否则 SetTargetXy / DelTargetCreat）
+- Run()          src/M2Server/Monster/MonsterObject.cs:251-360
+  - CanMove && !FixedHideMode && !StoneMode :253
+  - Think() 返回 true ⇒ base.Run + return :255-258
+  - WalkWaitLocked 解锁 :259-264
+  - WalkTick 门 :265-280（WalkCount>WalkStep ⇒ WalkWaitLocked）
+  - RunAway / NoAttackMode / Master / Mission 支 :281-340
+  - TargetX != -1 ⇒ GotoTargetXY，否则 TargetCret==null ⇒ Wondering :341-351
+  - CheckRoyalty / CrazyMode / base.Run :353-359
+
+## CreateMonster（生成序）
+- CreateMonster(...)         src/GameSrv/Word/WorldServer.MonGen.cs:498
+- cert = new MonsterObject.. :519-620（**构造函数先抽**，见 02 号文件）
+- cert.Dir = RandomByte(8)   src/GameSrv/Word/WorldServer.MonGen.cs:740
+- MonGetRandomItems(cert)    src/GameSrv/Word/WorldServer.MonGen.cs:744
+- Random(100) < CoolEyeCode  src/GameSrv/Word/WorldServer.MonGen.cs:745
+- cert.Initialize()          src/GameSrv/Word/WorldServer.MonGen.cs:750

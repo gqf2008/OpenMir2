@@ -1,0 +1,11 @@
+# 本片证据的复现命令（cwd = 仓库根，除非另注）
+
+# 隔离 target；cwd = mir2-rs
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test -p mir2-world --lib --offline monai
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test --workspace --offline --no-fail-fast
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo fmt --all -- --check
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo clippy --workspace --all-targets --offline -- -D warnings
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo run -p msgcodegen --offline -- --check
+
+# 证据 hash
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/world/monster-ai-20261013

@@ -1,0 +1,24 @@
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\world)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.70s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m2svr-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 1 test
+test monai::tests::search_target_picks_nearest_and_clears_invalid ... FAILED
+
+failures:
+
+---- monai::tests::search_target_picks_nearest_and_clears_invalid stdout ----
+
+thread 'monai::tests::search_target_picks_nearest_and_clears_invalid' (18844) panicked at crates\world\src\monai.rs:712:9:
+assertion `left == right` failed: 应选曼哈顿距离最近的合法目标
+  left: Some(3)
+ right: Some(2)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    monai::tests::search_target_picks_nearest_and_clears_invalid
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 46 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-world --lib`
