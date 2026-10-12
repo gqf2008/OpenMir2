@@ -1,0 +1,7 @@
+# 红检②（改坏必红）：把 C# c2 攻方 Hp 20668 改成 20670（多 1）
+
+DIFF mir2_db.characters_ablity: rows A=2 B=2 仅A=1 仅B=1
+    A: <VOLATILE>	255	255	0	0	0	0	20670	15	20669	904	0	0	0	21725	0	255	0	150	<VOLATILE>
+    B: <VOLATILE>	255	255	0	0	0	0	20669	15	20669	904	0	0	0	21725	0	255	0	150	<VOLATILE>
+RED: 作用域内 2 行不一致
+rc=1

@@ -1,0 +1,5 @@
+# 红检①（判据有牙 + 证明残留唯一）：把 C# c2 攻方 Hp 20668 改成 Rust 的 20669
+# 输入: E:/tmp/m2svr-scopediff/redcheck/c2-attacker-hp-20669.jsonl（由 19-c2-scoped.jsonl 单字段替换得到）
+
+GREEN: 作用域内 9 张表逐行一致
+rc=0

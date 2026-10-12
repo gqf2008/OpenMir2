@@ -1,0 +1,19 @@
+# postsavesnap = 本轮从活库 mir2_db 重取的 13 表快照（命令: python tools/dbsnap/dbsnap.py snap --out E:/tmp/m2svr-scopediff/postsavesnap）
+# 生成时刻 2026-10-13（本轮）；用途：得到「两侧断线存档都落库之后」的终态，做一次 post-save scoped_diff
+
+mir2_account.account	rows=7456	sha256=adcee38bb9f4bc5af38e19d0b00940516eb2c570db9fd6ea4a6389a371122197
+mir2_account.account_protection	rows=7344	sha256=45c8784863262773003c34620cdc03a6c9d647928f0917c491535d7d0564a021
+mir2_db.characters	rows=7317	sha256=0803f291a14bccc0fda9ab23145160333581cca4d5fc92ad570b7aba2ce71a29
+mir2_db.characters_ablity	rows=7320	sha256=19a9242097c1bfed747122d3904cc03415fedf516d7bd1facf2ec4716e69536b
+mir2_db.characters_bonusability	rows=1	sha256=2a7c7b3966c0dc02e065463974cf094903f37b13bfa126a48167107a171ef4bc
+mir2_db.characters_item	rows=95149	sha256=815518d771199b2de35507b334a4c06e2bd73c15fd5c1bd0e65673a1b42eb3d4
+mir2_db.characters_item_attr	rows=0	sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+mir2_db.characters_magic	rows=8	sha256=0ac71ebc3756c582ca5e26f8b00e82cc2ff2f294a4206414c657c4d9b5470333
+mir2_db.characters_bagitem	rows=336674	sha256=f5b69ee3ff4b89163a73e3c8fad713aee2a522c740bc45fd135fad8898898a68
+mir2_db.characters_storageitem	rows=365950	sha256=85b25f86873438bceb79410c5a8abef9ba130061dba3dfd95b807107983f6173
+mir2_db.characters_status	rows=7319	sha256=55b663c0c4d9dbbbf289d5406cf857a5722e85a2741c48455f93df57af356d4b
+mir2_db.characters_quest	rows=0	sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+mir2_db.characters_indexes	rows=7319	sha256=294f06ef96bb04438abab829611a658a024b681bf3073b2816411cca82fc78c9
+
+# 关键对照：characters sha=0803f291a14bccc0… 与 characters_ablity sha=19a9242097c1bfed…
+#   与 21-rust-120-r1.txt 的 snap_after 两个 sha 完全相同 ⇒ 现活库即「两侧存档都落库」的终态（此后无人再动这两条角色）。

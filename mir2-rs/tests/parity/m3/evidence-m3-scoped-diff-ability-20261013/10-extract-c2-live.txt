@@ -1,0 +1,1 @@
+EXTRACT prefix=m3finc2 rows=230 (family_by_playerid=222 player_ids=2) -> mir2-rs/tests/parity/m3/evidence-m3-scoped-diff-ability-20261013/19-c2-scoped.jsonl

@@ -1,0 +1,28 @@
+# 时刻轴（C# c2 侧）：掉线 → 快照 → 落库
+
+## 1) C# RunGate 掉线时刻（源: E:/tmp/m3cs-fin/csharp/RunGate.out.log）
+28:02:44:26.306 [INF] 断开链接: 127.0.0.1
+29:02:44:26.306 [INF] 断开链接: 127.0.0.1
+
+## 2) run_pair 固定 settle=3s 后取 snap_after（源: 证据包 mir2-rs/tests/parity/m3/evidence-m3-isolate-twophase-dod2-20261013/window/15-csharp-120-c2.txt）
+49:SNAP mir2_db.characters: rows=7313 sha256=fbe2120d06525279…
+50:SNAP mir2_db.characters_ablity: rows=7316 sha256=7b89deda69e5b262…
+60:SNAP_OK 13 表 -> E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\tests\parity\m3\sessions\csharp-20261013-024249\snap_before
+89:SETTLE_SEQ 等掉线存档落库（3s）
+92:SNAP mir2_db.characters: rows=7313 sha256=fbe2120d06525279…
+93:SNAP mir2_db.characters_ablity: rows=7316 sha256=7b89deda69e5b262…
+103:SNAP_OK 13 表 -> E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\tests\parity\m3\sessions\csharp-20261013-024249\snap_after
+106:DELTA 改动行合计=8 表数=2 -> E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\tests\parity\m3\sessions\csharp-20261013-024249\delta.json
+108:  mir2_db.characters_indexes: +2 -2
+
+  说明：snap_before 与 snap_after 的 characters_ablity sha 相同（均为 7b89deda69e5b262…）
+        ⇒ 取 snap_after 时 C# 的断线存档尚未落库；DELTA 里没有 characters/characters_ablity。
+
+## 3) 随后真正落库的 C# 存档（源: 14-live-db-rows.txt，MySQL now()）
+  13552(m3finc21/victim)  : characters.LASTUPDATE=2026-10-13 02:44:30  characters_ablity.ModifyTime=02:44:30
+  13551(m3finc20/attacker): characters.LASTUPDATE=2026-10-13 02:44:34  characters_ablity.ModifyTime=02:44:34
+
+  ⇒ 掉线 02:44:26.306 → 落库 02:44:30 与 02:44:34（滞后 3.7s 与 7.7s），晚于固定 3s settle 取的快照（约 02:44:29.3）。
+
+## 4) 判读
+  C# 并非「不写档」，而是「写得比固定 3s settle 慢」：本 run 的断线存档落在快照之后。
