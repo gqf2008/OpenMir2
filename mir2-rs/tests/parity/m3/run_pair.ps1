@@ -340,7 +340,11 @@ if ($PinStartPose) {
   #   BotSrv `-StopAfterCharCreated` 在建角后短路 SendSelChr ⇒ 永不进世界。
   $prewarmNoWorld = Test-M3PrewarmNoWorldEntry -LogPath $prewarmBotLog
   if (-not $prewarmNoWorld.ok) {
-    throw ("预热相违规：BotSrv 日志 {0} 出现进世界标记 [{1}]（{2}）——GameSvr 会在断线时异步 SaveHumanRcd 覆盖 pin；请确认 -StopAfterCharCreated 接线（owner 19:20 根因修）" -f $prewarmBotLog, (@($prewarmNoWorld.markers) -join ','), $prewarmNoWorld.reason)
+    if ($prewarmNoWorld.reason -eq 'prewarm_entered_world') {
+      throw ("预热相违规：BotSrv 日志 {0} 出现进世界标记 [{1}]（{2}）——GameSvr 会在断线时异步 SaveHumanRcd 覆盖 pin；请确认 -StopAfterCharCreated 接线（owner 19:20 根因修）" -f $prewarmBotLog, (@($prewarmNoWorld.markers) -join ','), $prewarmNoWorld.reason)
+    }
+    # reviewer-6 M-1：日志缺失/不可读/零 marker（无建角正证）都 fail-closed——否则「预热未跑到建角」会被误当合格。
+    throw ("预热相无合格证据：BotSrv 日志 {0} reason={1} positive=[{2}]——预热必须带「创建角色」/「预热建角完成」正证且无进世界标记（reviewer-6 M-1）" -f $prewarmBotLog, $prewarmNoWorld.reason, (@($prewarmNoWorld.positive) -join ','))
   }
   $prewarmNoWorldEntry = $true
   Write-Output ("PREWARM_NO_WORLD_ENTRY ok log={0} markers=0" -f $prewarmBotLog)

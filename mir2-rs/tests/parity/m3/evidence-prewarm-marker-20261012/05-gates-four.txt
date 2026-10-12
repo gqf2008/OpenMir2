@@ -1,0 +1,18 @@
+# 四门禁（本片零 .rs，作回归）；合 master bf628fdb 后的交付树；cwd=mir2-rs/ CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target
+
+## cargo fmt --all -- --check
+fmt_rc=0
+
+## cargo clippy --workspace --all-targets --offline -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.57s
+clippy_rc=0
+
+## cargo test --workspace --offline
+
+test_rc=0; suites(ok)=82 suites(FAILED)=0; total_passed=670 total_failed=0
+
+## cargo run -p msgcodegen -- --check
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.14s
+     Running `E:/tmp/openmir2-m3bag-target\debug\msgcodegen.exe --check`
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+msgcodegen_rc=0
