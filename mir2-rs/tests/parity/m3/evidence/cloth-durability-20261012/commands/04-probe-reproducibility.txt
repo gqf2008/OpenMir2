@@ -1,0 +1,9 @@
+$ dotnet run --project mir2-rs/tests/parity/m3/struck-durability-probe -c Release -- mir2-rs/tests/parity/m3/struck-durability-probe/vectors/struck_durability_vectors.json
+
+已用时间 00:00:00.91
+struck-durability-probe: wrote E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\tests\parity\m3\struck-durability-probe\vectors\struck_durability_vectors.json (5 cases) + struck_durability_vectors.tsv
+--- diff run1 run2 (empty = byte-identical) ---
+IDENTICAL
+--- sha256 ---
+e72f703d241982e9589f558a210a32155abdcdc694fc285d25479217922612ba *mir2-rs/tests/parity/m3/struck-durability-probe/vectors/struck_durability_vectors.tsv
+a41c5136c016dd245cea4827b2c9d370b4c193e5e160fbcdfcd7c1b59ff05916 *mir2-rs/tests/parity/m3/struck-durability-probe/vectors/struck_durability_vectors.json

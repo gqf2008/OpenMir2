@@ -1,0 +1,14 @@
+$ python -I tools/evidence-hash/verify_sha256sums.py --check-extra --exclude "bin/*" --exclude "obj/*" mir2-rs/tests/parity/m3/struck-durability-probe
+GREEN mir2-rs\tests\parity\m3\struck-durability-probe\SHA256SUMS.txt  [repo 口径]  OK 4/4
+rc=0
+
+--- 改坏必红：把 Program.cs 那行的 hash 首字符改掉 ---
+RED   mir2-rs\tests\parity\m3\struck-durability-probe\SHA256SUMS.txt  [repo 口径]  OK 3/4
+       mismatch: E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\tests\parity\m3\struck-durability-probe\Program.cs
+         清单 057b14e5d1c7a7b3368a990a01d3b11d572f54e16a8a396e2ce388297aaab29a
+         实算 957b14e5d1c7a7b3368a990a01d3b11d572f54e16a8a396e2ce388297aaab29a  (text attr=set)
+rc=1
+
+--- 还原 ---
+GREEN mir2-rs\tests\parity\m3\struck-durability-probe\SHA256SUMS.txt  [repo 口径]  OK 4/4
+rc=0

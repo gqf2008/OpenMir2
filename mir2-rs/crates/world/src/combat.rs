@@ -29,7 +29,7 @@ use mir2_formula::exp::{calc_get_exp, get_level_exp};
 use mir2_shared::hutil;
 use mir2_shared::rng::RandomSource;
 
-use crate::entity::{Entity, ACTOR_RACE_PLAY};
+use crate::entity::{Entity, UseItemSlot, ACTOR_RACE_PLAY};
 
 /// `HUtil32.LoByte(short)`：低 8 位。
 pub fn lo_byte(w: i32) -> u8 {
@@ -539,6 +539,57 @@ pub fn is_attack_target(attacker: &Entity, target: &Entity) -> bool {
     is_proper_target(attacker, target)
 }
 
+/// `ItemLocation.Dress`（`src/OpenMir2/Enums/ItemLocation.cs:7`）：`UseItems` 的衣服位。
+pub const ITEM_LOCATION_DRESS: usize = 0;
+
+/// `PlayObject.StruckDamage` 的单格耐久磨损（`PlayObject.cs:2965-2996` 衣服位特判 /
+/// `:3005-3038` 逐格循环共用）。
+///
+/// 逐字复刻 oracle 的两点易错语义（**不是**「减到 0 就停」）：
+///   1. `ushort nDura; nDura -= nDam;` 是 **unchecked ushort 回绕**（工程默认
+///      `CheckForOverflowUnderflow=false`，`Directory.Build.targets` 未开启 checked）
+///      ⇒ `Dura < nDam` 时结果是**大正数**，**不破零**；
+///   2. `if (nDura <= 0)` 对 `ushort` 等价于 `nDura == 0` ⇒ 只有 `Dura` **恰好等于** `nDam`
+///      才破零；破零后 `Index = 0`（`:2982`/`:3008`）+ `Dura = 0`（`:2985`/`:3012`）。
+///
+/// 为什么必须逐字：破零清 `Index` 会改变**同一击**里逐格循环是否给该格抽 `Random(8)`
+/// （衣服位特判在循环之前跑），从而让全局 RNG 流错位。
+fn wear_durability(slot: &mut UseItemSlot, n_dam: u16) {
+    let next = slot.dura.wrapping_sub(n_dam);
+    if next == 0 {
+        slot.index = 0;
+        slot.dura = 0;
+    } else {
+        slot.dura = next;
+    }
+}
+
+/// `PlayObject.StruckDamage`（`PlayObject.cs:2954-3036`）在 `base.StruckDamage` 之后、
+/// 只与**耐久与取数**有关的那一部分（`nDam` 抽取 + 衣服位特判 + 逐格循环）。
+///
+/// RNG 消耗（仅玩家目标）：`Random(10)` 一次（`:2957`），再对每个 `Index > 0` 的格子各抽
+/// `Random(8)`（`:3000`）——衣服位在特判里破零清 `Index` 会**少抽一次**（见 [`wear_durability`]）。
+///
+/// 怪物目标走 `BaseObject.StruckDamage`（`BaseObject.Base.cs:827`，无随机数）⇒ 直接返回。
+pub fn struck_damage_durability(rng: &mut impl RandomSource, target: &mut Entity) {
+    if target.race != ACTOR_RACE_PLAY {
+        return;
+    }
+    // `usort nDam = (ushort)(Random(10) + 5)`（`PlayObject.cs:2957`）。
+    let n_dam = (rng.random_below(10) + 5) as u16;
+    // 衣服位特判（`PlayObject.cs:2965-2996`）：**不抽数**，只扣耐久；破零先清 `Index`。
+    let dress = &mut target.use_items[ITEM_LOCATION_DRESS];
+    if dress.index > 0 {
+        wear_durability(dress, n_dam);
+    }
+    // 逐格循环（`PlayObject.cs:2998-3039`）：每格 `Index > 0` **先抽一次 `Random(8)`**。
+    for slot in target.use_items.iter_mut() {
+        if slot.index > 0 && rng.random_below(8) == 0 {
+            wear_durability(slot, n_dam);
+        }
+    }
+}
+
 /// `BaseObject.GetHitStruckDamage`（`BaseObject.Base.cs:789`）——目标侧护甲减免。
 ///
 /// 逐字语义：`nRnd = LoByte(AC) + Random(|HiByte(AC)-LoByte(AC)| + 1)`；
@@ -718,21 +769,12 @@ pub fn attack_with(
             }
             // `PlayObject.StruckDamage`（`PlayObject.cs:2954`）在 `base.StruckDamage` 之后的作用：
             //   1. `:2957` **无条件**抽一次 `Random(10)`（护甲耐久磨损点数 `nDam = Random(10)+5`）；
-            //   2. `:2960-2996` 衣服位（`UseItems[ItemLocation.Dress=0]`）特判——**不抽数**，只扣耐久；
+            //   2. `:2965-2996` 衣服位（`UseItems[ItemLocation.Dress=0]`）特判——**不抽数**，只扣耐久，
+            //      但破零会先清 `Index`（`:2982`），使逐格循环跳过该格的 `Random(8)`；
             //   3. `:2998-3039` 逐格循环：`Index > 0`（已装备）的每格**各抽一次 `Random(8)`**。
             // 玩家目标走这个 override，怪物走 `BaseObject.StruckDamage`（无随机数）。
             // 漏掉任一条都会让同种子跨侧取数账本从第一次命中起整体错位。
-            if target.race == ACTOR_RACE_PLAY {
-                // `usort nDam = (ushort)(Random(10) + 5)`（`PlayObject.cs:2957`）。
-                let n_dam = (rng.random_below(10) + 5) as u16;
-                // `StatusTimeArr[PoisonState.DAMAGEARMOR] > 0` 的 1.2 倍分支未建模（本骨架无 buff 状态）。
-                // 衣服位特判（`PlayObject.cs:2960-2996`）不抽数，只扣耐久；本骨架不落耐久消息。
-                for slot in target.use_items.iter_mut() {
-                    if slot.index > 0 && rng.random_below(8) == 0 {
-                        slot.dura = slot.dura.saturating_sub(n_dam);
-                    }
-                }
-            }
+            struck_damage_durability(rng, target);
         }
     }
     // 注意：`_Attack` 里**没有** `LastHiter` 赋值（C# 原文如此）。命中者的登记走
