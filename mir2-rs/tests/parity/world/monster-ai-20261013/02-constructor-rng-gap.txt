@@ -1,0 +1,39 @@
+# 构造期 RNG 缺口（本片最有价值的发现；不改被审代码，交 owner 裁决）
+
+## 现象
+oracle 的 `CreateMonster`（src/GameSrv/Word/WorldServer.MonGen.cs:498）里，
+`cert = new MonsterObject(...)` 发生在 `switch` 内（:519-620），而 `cert.Dir =
+M2Share.RandomNumber.RandomByte(8)` 在 :740 —— 即**构造函数先消耗 RNG**。
+
+`new MonsterObject()` 的构造链（C# 先基类后派生）依次抽：
+
+| 次序 | 位置 | 调用 |
+| --- | --- | --- |
+| 1 | src/M2Server/Actor/BaseObject.cs:439 | `RunTick = now + Random(1500)` |
+| 2 | src/M2Server/Actor/BaseObject.cs:441 | `SearchTime = Random(2000) + 2000` |
+| 3 | src/M2Server/Actor/AnimalObject.cs:76 | `AttackTick = now - Random(3000)` |
+| 4 | src/M2Server/Actor/AnimalObject.cs:77 | `WalkTick = now - Random(3000)` |
+| 5 | src/M2Server/Monster/MonsterObject.cs:65 | `SearchTime = 3000 + Random(2000)` |
+
+之后才是 `RandomByte(8)`（Dir, :740）→ `MonGetRandomItems` 预算（:744）→
+`Random(100)`（CoolEye, :745）→（地形不可站时）移位抽。
+
+## 与 Rust 现状的差
+`crates/world/src/mongen.rs` 的 `MonsterCreator` 契约（模块头 `## RNG 取数次序` 第 3 条 +
+`regen_monsters` 文档）只声明 `RandomByte(8) → 掉落预算 → Random(100) → 移位`；
+**上述 5 抽未建模**（`WorldServer.MonGen.cs:519-620` 的构造段从未被登记）。
+
+⇒ 同种子下，Rust 侧每次 `CreateMonster` 的随机流相对 oracle **少 5 抽**，
+从第一只怪起，Dir/掉落/CoolEye 全部取到 oracle 的**更早**位置；
+100 杀「同种子刷怪位置/朝向/掉落列表逐项相同」的判据**必然发散**。
+
+## 归属与建议（不自行改）
+- 该 5 抽属 **`create_monster` 回调契约**（`crates/world/src/mongen.rs`，B 分片①② 已合入 master）
+  **与** 承接卡 C 的实体构造（`Entity.ai` 的 AttackTick/WalkTick/SearchTime 初值）——两侧模型需**同步**改。
+- 本片（C 第 ① 片）**不单方面改动**已合入/在审的 B 代码，只在 `Entity.ai` 里预留了
+  `attack_tick`/`walk_tick`/`search_time` 字段（默认 0/0/3000），并把该缺口写进
+  `crates/world/src/monai.rs` 模块头的「建模差异」。
+- 建议 owner 裁：① 在 `MonsterCreator` 契约里补 5 抽（含 `AnimalState` 初值写入）——
+  最干净，与 C 的 `Entity.ai` 一起落；或 ② 单开小卡在 B 侧补 5 抽 + 红检（改坏 ⇒ 同种子序列发散必红）。
+- **专用怪子类**（`SuperGuard`/`ArcherPolice`/… `:505-620` 的各自 ctor）可能有额外抽数，
+  需按怪逐个核对；本次只钉 `MonsterObject` 基链（fixture 用的「稻草人」口径待接 100 杀窗口时复核）。

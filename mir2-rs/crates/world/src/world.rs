@@ -95,6 +95,14 @@ pub struct World {
     pub rng_attack: RandomNumber,
     /// 是否把攻击路径取数路由到 [`World::rng_attack`]。缺省 `false`（生产/既有 golden 路径不变）。
     isolate_attack: bool,
+    /// 是否在 [`World::tick`] 里驱动怪物 AI（[`crate::monai::monster_ai_tick`]）。
+    ///
+    /// **缺省 `false`**：M2 的 golden 场景（`tests/parity/world/scenarios/*.json`）是「直接驱动
+    /// `_Attack`」的合成探针（`csharp/WorldGolden`），不含 oracle 的 `ProcessMonsters` 线程，
+    /// 因此**不能**默认跑 AI（否则每次 `CreateMonster` 后的第一只怪就会多抽 `Wondering`，
+    /// 把 golden 的 RNG 序列整体移位）。接线层（`bins/game-svr` 的 sim 循环）在起世界时显式
+    /// [`World::enable_monster_ai`]；`openmir2-m3-monster-ai-tick` 的宿主接线为后续分片。
+    ai_enabled: bool,
     /// 物品目录（掉落生成按名查 `StdItem`）
     pub item_catalog: Vec<StdItem>,
     /// 怪物极品掉落几率（`Config.MonRandomAddValue`）
@@ -146,6 +154,7 @@ impl World {
             rng: RandomNumber::with_seed(42),
             rng_attack: RandomNumber::with_seed(42),
             isolate_attack: false,
+            ai_enabled: false,
             item_catalog: Vec::new(),
             mon_random_add_value: 40,
             need_exps: vec![0; 1000],
@@ -179,6 +188,20 @@ impl World {
     #[must_use]
     pub fn attack_isolation_enabled(&self) -> bool {
         self.isolate_attack
+    }
+
+    /// 开启怪物 AI 驱动（缺省关闭；见 `World` 的 `ai_enabled` 字段说明）。
+    ///
+    /// 幂等：重复调用无副作用。生产路径由 `bins/game-svr` 的 sim 循环在起世界时调用；
+    /// 合成 golden 场景保持关闭 ⇒ 既有 `tests/parity/world` 逐字节不变。
+    pub fn enable_monster_ai(&mut self) {
+        self.ai_enabled = true;
+    }
+
+    /// 怪物 AI 驱动是否开启（自证/测试用）。
+    #[must_use]
+    pub fn monster_ai_enabled(&self) -> bool {
+        self.ai_enabled
     }
 
     /// 攻击路径取数的统一入口：按隔离开关选流。
@@ -370,10 +393,17 @@ impl World {
 
         // 命中者过期清理（照 `BaseObject.Base.cs:119-132` 的结构；墙钟那两项不在本骨架）
         self.expire_hitters();
-
         // 死亡结算（C# 在实体下一次 `Run()` 里发现 `HP == 0` 才 `Die()`；
         // 这里同一 tick 内先跑命令、再统一结算死亡，语义等价且顺序确定）
         self.settle_deaths(&mut record);
+
+        // M3④-实现 C：怪物 AI 一步（oracle `ProcessMonsters` → 每只 `monster.Run()`）。
+        // **缺省关闭**：合成 golden 场景不含 oracle 的怪物线程，开 AI 会把 RNG 序列整体移位；
+        // 由 `bins/game-svr` 的 sim 循环显式 `enable_monster_ai()`（见字段说明）。
+        // 单线程串行：按实体槽位顺序（`EntityStore` 显式索引），在死亡结算之后、AOI 之前。
+        if self.ai_enabled {
+            crate::monai::monster_ai_tick(self);
+        }
 
         // AOI 刷新：按地图、地图内按槽位顺序（顺序来自 ECS 内核的**显式槽位索引**，
         // `EcsStore::iter` 不迭代 `Query` 求顺序）；AOI 的扫描/过滤语义仍归 S2。
@@ -672,7 +702,7 @@ impl World {
     }
 
     /// 一次攻击结算（`_Attack`）。
-    fn attack_once(&mut self, actor_id: i32, target_id: i32) -> Option<AttackOutcome> {
+    pub(crate) fn attack_once(&mut self, actor_id: i32, target_id: i32) -> Option<AttackOutcome> {
         if self.entities.get(actor_id).is_none() || self.entities.get(target_id).is_none() {
             return None;
         }

@@ -1,0 +1,14 @@
+     Running unittests src\lib.rs (E:/tmp/openmir2-m2svr-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 8 tests
+test monai::tests::think_sets_dup_mode_when_cell_has_two_objects ... ok
+test monai::tests::wondering_turn_branch_matches_oracle_draw_order ... ok
+test monai::tests::wondering_walk_branch_moves_and_keeps_dir ... ok
+test monai::tests::wondering_gate_nonzero_consumes_exactly_one_draw_no_move ... ok
+test monai::tests::goto_target_xy_walks_and_consumes_one_random3 ... ok
+test monai::tests::search_target_picks_nearest_and_clears_invalid ... ok
+test monai::tests::monster_ai_tick_is_slot_ordered_and_deterministic ... ok
+test monai::tests::monster_ai_is_opt_in_and_off_by_default ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 39 filtered out; finished in 0.01s
+

@@ -45,6 +45,110 @@ pub struct VisibleBaseObject {
     pub flag: VisibleFlag,
 }
 
+/// 怪物/动物 AI 状态 —— oracle `AnimalObject` / `MonsterObject` 的计时器与目标格字段子集。
+///
+/// 逐字段 oracle 锚点：
+/// - `Dir`（`BaseObject.cs:40`，`WalkTo` `:601`/`TurnTo` `:1582` 写它；`CreateMonster` 里
+///   `cert.Dir = RandomByte(8)` `WorldServer.MonGen.cs:740`）；
+/// - `TargetX/TargetY`（`AnimalObject.cs:15-16`，ctor `TargetX = -1`；`MonsterObject.cs:296-301`
+///   无目标时 `TargetX = -1`）；
+/// - `TargetCret`（`BaseObject` 的当前攻击目标）、`TargetFocusTick`（`BaseObject.Base.cs:113`）；
+/// - `AttackTick`/`WalkTick`（`AnimalObject.cs:77-78`：ctor `= now - Random(3000)`）/
+///   `WalkCount`/`WalkStep`/`WalkWait`/`WalkWaitTick`/`WalkWaitLocked`（`AnimalObject.cs:29-38`）；
+/// - `WalkSpeed`（`BaseObject.cs:446` = 1400）/`NextHitTime`（`:447` = 2000）；
+/// - `SearchTick`/`SearchTime`（`BaseObject.cs:441-442` `Random(2000)+2000`，`MonsterObject.cs:56-57`
+///   覆盖为 `3000 + Random(2000)`）/`SearchEnemyTick`（`AnimalObject.cs:23`）；
+/// - `ThinkTick`（`MonsterObject.cs:22`）/`DupMode`（`:26`）/`HolySeize`（`AnimalObject.cs:47`）；
+/// - `CoolEye`（`BaseObject`，`CreateMonster` `:745-747` 按 `Random(100) < CoolEyeCode` 置位）。
+///
+/// **本片（C 第 ① 片）不建模**：`Mission`/`MissionX/MissionY`（任务怪路径）、`RunAwayMode` 的
+/// 触发点（`RunAway`/`BeeQueen` 等专用怪）、`Master` 宝宝跟随之类；默认值下这些分支恒不命中
+/// （与「普通 `MonsterObject`、无 master、无任务」的 oracle 执行路径一致，见 `monai` 模块头）。
+#[derive(Clone, Debug)]
+pub struct AnimalState {
+    /// `BaseObject.Dir`。
+    pub dir: u8,
+    /// `BaseObject.CoolEye`（`SearchTarget` 的 `!HideMode || CoolEye` 门）。
+    pub cool_eye: bool,
+    /// `AnimalObject.BoFearFire`（`WalkTo(..., fearFire)`）；专用怪 ctor 置位，普通怪 false。
+    pub bo_fear_fire: bool,
+    /// `AnimalObject.NoAttackMode`（非攻击模式）。
+    pub no_attack_mode: bool,
+    /// `MonsterObject` 的当前目标（C# `BaseObject.TargetCret`）。
+    pub target_creature: Option<i32>,
+    /// `BaseObject.TargetFocusTick`（`BaseObject.Base.cs:113` 的 30s 过期门）。
+    pub target_focus_tick: i64,
+    /// `AnimalObject.TargetX` / `TargetY`（C# 默认 `TargetX = -1`、`TargetY = 0`）。
+    pub target_x: i32,
+    pub target_y: i32,
+    /// `AnimalObject.AttackTick`。
+    pub attack_tick: i64,
+    /// `BaseObject.NextHitTime`（= 2000）。
+    pub next_hit_time: i64,
+    /// `AnimalObject.WalkTick`。
+    pub walk_tick: i64,
+    /// `AnimalObject.WalkCount` / `WalkStep`。
+    pub walk_count: i32,
+    pub walk_step: i32,
+    /// `AnimalObject.WalkWait` / `WalkWaitTick` / `WalkWaitLocked`。
+    pub walk_wait: i64,
+    pub walk_wait_tick: i64,
+    pub walk_wait_locked: bool,
+    /// `BaseObject.WalkSpeed`（= 1400）。
+    pub walk_speed: i64,
+    /// `BaseObject.SearchTick` / `SearchTime` / `AnimalObject.SearchEnemyTick`。
+    pub search_tick: i64,
+    pub search_time: i64,
+    pub search_enemy_tick: i64,
+    /// `MonsterObject.ThinkTick` / `DupMode`。
+    pub think_tick: i64,
+    pub dup_mode: bool,
+    /// `AnimalObject.HolySeize` 系列（困魔咒）。
+    pub holy_seize: bool,
+    pub holy_seize_tick: i64,
+    pub holy_seize_interval: i64,
+    /// `AnimalObject.RunAwayMode` 系列。
+    pub run_away_mode: bool,
+    pub run_away_start: i64,
+    pub run_away_time: i64,
+}
+
+impl Default for AnimalState {
+    fn default() -> Self {
+        AnimalState {
+            dir: 0,
+            cool_eye: false,
+            bo_fear_fire: false,
+            no_attack_mode: false,
+            target_creature: None,
+            target_focus_tick: 0,
+            // oracle ctor 只置 `TargetX = -1`（`AnimalObject.cs:74`），`TargetY` 保持 0。
+            target_x: -1,
+            target_y: 0,
+            attack_tick: 0,
+            next_hit_time: 2000,
+            walk_tick: 0,
+            walk_count: 0,
+            walk_step: 0,
+            walk_wait: 0,
+            walk_wait_tick: 0,
+            walk_wait_locked: false,
+            walk_speed: 1400,
+            search_tick: 0,
+            search_time: 3000,
+            search_enemy_tick: 0,
+            think_tick: 0,
+            dup_mode: false,
+            holy_seize: false,
+            holy_seize_tick: 0,
+            holy_seize_interval: 0,
+            run_away_mode: false,
+            run_away_start: 0,
+            run_away_time: 0,
+        }
+    }
+}
+
 /// `BaseObject` 中参与本骨架（tick / AOI / 移动）的字段子集。
 ///
 /// S1 起 `Entity` 直接就是 bevy 的**组件**（每个实体一个组件），由
@@ -147,6 +251,8 @@ pub struct Entity {
     pub drop_items: Vec<crate::combat::DropItem>,
     /// 死亡结算是否已做（避免重复发经验/重复掉落）
     pub death_settled: bool,
+    /// 怪物/动物 AI 状态（`AnimalObject`/`MonsterObject` 字段子集；玩家不用，保持默认）。
+    pub ai: AnimalState,
 }
 
 impl Entity {
@@ -206,7 +312,14 @@ impl Entity {
             gold: 0,
             drop_items: Vec::new(),
             death_settled: false,
+            ai: AnimalState::default(),
         }
+    }
+
+    /// 当前朝向（C# `BaseObject.Dir`），供接线层发 `SM_TURN`/`RM_TURN` 等帧面用。
+    #[must_use]
+    pub fn dir(&self) -> u8 {
+        self.ai.dir
     }
 
     /// C# `BaseObject.SetLastHiter`（`BaseObject.cs:1753`）。

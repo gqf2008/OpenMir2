@@ -1,0 +1,122 @@
+# M3⑩ 邮件/拍卖 DoD① 盘点——oracle 侧调用链与行号锚点（本仓库 src/ 实测）
+# 生成时间：2026-10-12T22:11:29Z  worktree=.claude/worktrees/m3cs  基线=master 670a009b
+# ============================================================================
+
+## [0] 邮件：oracle 全仓检索（结论 = 无邮件实现，仅 boShowMail 客户端配置）
+$ rg -n -i 'mail' src/ --glob '*.cs' | grep -viE 'EMail|email'
+src/Modules\SystemModule\Conf\GameSettingConf.cs:74:            nInteger = ReadWriteInteger("Config", "ShowMail", -1);
+src/Modules\SystemModule\Conf\GameSettingConf.cs:77:                WriteBool("Config", "ShowMail", SystemShare.Config.ClientConf.boShowMail);
+src/Modules\SystemModule\Conf\GameSettingConf.cs:138:            SystemShare.Config.ClientConf.boShowMail = ReadWriteBool("Config", "ShowMail", SystemShare.Config.ClientConf.boShowMail);
+src/OpenMir2\Packets\ClientPackets\ClientConf.cs:20:        public bool boShowMail { get; set; }
+
+$ rg -n -i '邮件' src/ --glob '*.cs'
+src/Modules\MarketSystem\Services\MarketService.cs:387:                                    //todo 把物品还给玩家，或者需要通过邮件发送给玩家
+
+# DDL：邮件表？
+$ grep -rin 'mail' sql/ mir2-rs/crates/storage/src/ | grep -viE 'EMail'
+(no match)
+
+# ============================================================================
+## [1] 拍卖 = 元宝寄售（goldsales，活代码：GameSrv/M2Server）
+
+### 1.1 NPC 入口（脚本 label sDealYBme -> 打开出售窗口）
+$ rg -n 'UserSelectOpenDealOffForm|IsYbDeal|sDealYBme' src/GameSrv/Npc/Merchant.cs src/Modules/ScriptEngine/ScriptParsers.cs
+src/GameSrv/Npc/Merchant.cs:79:        public bool IsYbDeal { get; set; }
+src/GameSrv/Npc/Merchant.cs:930:                        else if (string.Compare(sLabel, ScriptFlagConst.sDealYBme, StringComparison.OrdinalIgnoreCase) == 0) // 元宝寄售:出售物品 
+src/GameSrv/Npc/Merchant.cs:932:                            if (IsYbDeal)
+src/GameSrv/Npc/Merchant.cs:934:                                UserSelectOpenDealOffForm(playObject); // 打开出售物品窗口
+src/GameSrv/Npc/Merchant.cs:1038:        private void UserSelectOpenDealOffForm(IPlayerActor user)
+src/GameSrv/Npc/Merchant.cs:1044:                    user.SendMsg(Messages.RM_SENDDEALOFFFORM, 0, ActorId, 0, 0);
+src/Modules/ScriptEngine/ScriptParsers.cs:778:                                        ((IMerchant)NPC).IsYbDeal = true;
+
+### 1.2 客户端 CM_ 派发（M2Server/Player/PlayObject.Message.cs）
+$ rg -n 'CM_SELLOFF|CM_CANCELSELLOFFITEMING|RM_SENDDEALOFFFORM|RM_QUERYYB' src/M2Server/Player/PlayObject.Message.cs
+2046:                case Messages.RM_SENDDEALOFFFORM:// 打开出售物品窗口
+2049:                case Messages.RM_QUERYYBSELL:// 查询正在出售的物品
+2053:                case Messages.RM_QUERYYBDEAL:// 查询可以的购买物品
+2057:                case Messages.CM_SELLOFFADDITEM:// 客户端往出售物品窗口里加物品 
+2060:                case Messages.CM_SELLOFFDELITEM:// 客户端删除出售物品窗里的物品 
+2063:                case Messages.CM_SELLOFFCANCEL:// 客户端取消元宝寄售 
+2066:                case Messages.CM_SELLOFFEND:// 客户端元宝寄售结束 
+2069:                case Messages.CM_CANCELSELLOFFITEMING:// 取消正在寄售的物品(出售人)
+2072:                case Messages.CM_SELLOFFBUYCANCEL:// 取消寄售 物品购买(购买人)
+2075:                case Messages.CM_SELLOFFBUY:// 确定购买寄售物品
+
+### 1.3 世界侧逻辑（M2Server/Player/PlayObject.Sale.cs，方法名:行）
+$ rg -n '(private|public).*\(' src/M2Server/Player/PlayObject.Sale.cs
+19:        private void UpdateSellOffInfo(int code)
+60:        private void ClientAddSellOffItem(int nItemIdx, string sItemName)
+127:        private void ClientDelSellOffItem(int nItemIdx, string sItemName)
+185:        private void ClientCancelSellOffIng()
+254:        private void ClientBuyCancelSellOff(string dealChrName)
+281:        private void ClientBuySellOffItme(string dealChrName)
+387:        private void GetSellOffGlod()
+431:        private void ClientCancelSellOff()
+440:        public string SelectSellDate()
+475:        public bool SellOffInTime(int nCode)
+516:        private void ClientSellOffEnd(string sBuyChrName, int nSellGold, int nGameDiamond, int nCode)
+593:        private void SellOffCancel()
+602:        public void GetBackSellOffItems()
+
+### 1.4 内存列表 / 玩家字段 / 数据结构
+$ rg -n 'SellOffItemList|SaleDeal' src/M2Server/M2Share.cs src/M2Server/Player/PlayObject.cs
+src/M2Server/M2Share.cs:79:        public static IList<DealOffInfo> SellOffItemList = null;
+src/M2Server/Player/PlayObject.cs:856:        public bool SaleDeal { get; set; }
+src/M2Server/Player/PlayObject.cs:864:        public IList<UserItem> SellOffItemList { get; set; }
+$ rg -n 'class DealOffInfo|sDealChrName|sBuyChrName|nSellGold|UseItems|Flag' src/OpenMir2/Data/DealOffInfo.cs
+9:    public class DealOffInfo
+14:        public string sDealChrName;
+18:        public string sBuyChrName;
+22:        public DateTime dSellDateTime;
+26:        public int nSellGold;
+30:        public UserItem[] UseItems;
+31:        public byte Flag;
+
+### 1.5 落库（GameSrv/DB/MySqlDB.cs 加载/保存 + goldsales DDL）
+$ rg -n 'LoadSellOffItemList|SaveSellOffItemList|goldsales|DealChrName|BuyChrName' src/GameSrv/DB/MySqlDB.cs src/GameSrv/GameApp.cs src/M2Server/IDataSource.cs
+src/GameSrv/GameApp.cs:182:            GameShare.DataSource.LoadSellOffItemList();
+src/GameSrv/DB/MySqlDB.cs:251:        public void LoadSellOffItemList()
+src/GameSrv/DB/MySqlDB.cs:260:                const string sSQLString = "select * from goldsales";
+src/GameSrv/DB/MySqlDB.cs:264:                    string sDealChrName = dr.GetString("DealChrName");
+src/GameSrv/DB/MySqlDB.cs:265:                    string sBuyChrName = dr.GetString("BuyChrName");
+src/GameSrv/DB/MySqlDB.cs:270:                    if ((!string.IsNullOrEmpty(sDealChrName)) && (!string.IsNullOrEmpty(sBuyChrName)) && (nState < 4))
+src/GameSrv/DB/MySqlDB.cs:273:                        DealOffInfo.sDealChrName = sDealChrName;
+src/GameSrv/DB/MySqlDB.cs:274:                        DealOffInfo.sBuyChrName = sBuyChrName;
+src/GameSrv/DB/MySqlDB.cs:290:        private const string SaveSellItemSql = "INSERT INTO goldsales (DealChrName, BuyChrName, SellDateTime, State, SellGold,UseItems) values (@DealChrName, @BuyChrName, @SellDateTime, @State, @SellGold,@UseItems))";
+src/GameSrv/DB/MySqlDB.cs:295:        public void SaveSellOffItemList()
+src/GameSrv/DB/MySqlDB.cs:303:            const string sSQLString = "delete from goldsales";
+src/GameSrv/DB/MySqlDB.cs:317:                            command.Parameters.AddWithValue("@DealChrName", DealOffInfo.sDealChrName);
+src/GameSrv/DB/MySqlDB.cs:318:                            command.Parameters.AddWithValue("@BuyChrName", DealOffInfo.sBuyChrName);
+src/M2Server/IDataSource.cs:28:        void LoadSellOffItemList();
+src/M2Server/IDataSource.cs:33:        void SaveSellOffItemList();
+$ sed -n '24,36p' sql/mir2_data.sql   # DDL 列名 DealCharName/BuyCharName（与代码 DealChrName/BuyChrName 不符）
+CREATE TABLE `goldsales`  (
+  `Id` bigint(20) NOT NULL AUTO_INCREMENT,
+  `DealCharName` varchar(50) CHARACTER SET utf8 COLLATE utf8_general_ci NULL DEFAULT NULL,
+  `BuyCharName` varchar(50) CHARACTER SET utf8 COLLATE utf8_general_ci NULL DEFAULT NULL,
+  `SellDateTime` datetime NULL DEFAULT NULL,
+  `State` tinyint(1) NULL DEFAULT NULL,
+  `SellGold` int(11) NULL DEFAULT NULL,
+  `UseItems` json NULL,
+  PRIMARY KEY (`Id`) USING BTREE
+) ENGINE = InnoDB AUTO_INCREMENT = 1 CHARACTER SET = utf8 COLLATE = utf8_general_ci COMMENT = '金币寄售' ROW_FORMAT = DYNAMIC;
+
+-- ----------------------------
+-- Records of goldsales
+
+### 1.6 所有 SaveSellOffItemList 调用点（全部被注释 => 永不落库）
+$ rg -n 'SaveSellOffItemList' src/
+src/GameSrv\DB\MySqlDB.cs:295:        public void SaveSellOffItemList()
+src/M2Server\IDataSource.cs:33:        void SaveSellOffItemList();
+src/M2Server\Player\PlayObject.Sale.cs:240:                            // M2Share.CommonDb.SaveSellOffItemList();//保存元宝寄售列表
+src/M2Server\Player\PlayObject.Sale.cs:332:                                //M2Share.CommonDb.SaveSellOffItemList();//保存元宝寄售列表
+src/M2Server\Player\PlayObject.Sale.cs:577:                //M2Share.CommonDb.SaveSellOffItemList();//保存元宝寄售列表 
+src/Modules\GoldDealSystem\Service\GoldDealService.cs:237:                            // M2Share.CommonDb.SaveSellOffItemList();//保存元宝寄售列表
+src/Modules\GoldDealSystem\Service\GoldDealService.cs:329:                                //M2Share.CommonDb.SaveSellOffItemList();//保存元宝寄售列表
+src/Modules\GoldDealSystem\Service\GoldDealService.cs:574:                //M2Share.CommonDb.SaveSellOffItemList();//保存元宝寄售列表 
+
+### 1.7 LoadSellOffItemList 调用点（仅启动一次）
+$ rg -n 'LoadSellOffItemList' src/
+src/GameSrv\GameApp.cs:182:            GameShare.DataSource.LoadSellOffItemList();
+src/GameSrv\DB\MySqlDB.cs:251:        public void LoadSellOffItemList()
+src/M2Server\IDataSource.cs:28:        void LoadSellOffItemList();

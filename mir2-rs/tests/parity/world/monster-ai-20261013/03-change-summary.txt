@@ -1,0 +1,33 @@
+# 本片代码变更（git diff --stat master..HEAD 的归纳）
+
+- crates/world/src/entity.rs
+  - 新增 `AnimalState`（Dir/目标格/TargetCret/各计时器/Walk* / Search* / Think / DupMode /
+    HolySeize / RunAway / CoolEye / BoFearFire / NoAttackMode），逐字段 oracle 锚点见 doc comment；
+  - `Entity` 新增 `pub ai: AnimalState`（默认值 = oracle ctor 缺省：dir=0、TargetX=-1、TargetY=0、
+    WalkSpeed=1400、NextHitTime=2000、SearchTime=3000），新增 `Entity::dir()` 只读访问器。
+- crates/world/src/monai.rs（新）
+  - `dir_delta`/`turn_to`/`walk_to`（BaseObject.WalkTo：**先置 Dir 再试走**）；
+  - `wondering`/`search_target`/`set_target_creature`/`del_target_creature`/`goto_target_xy`；
+  - `think`/`attack_target`/`can_move`/`monster_run`（MonsterObject.Run 普通怪路径）；
+  - `monster_ai_tick`（按实体槽位顺序对全场怪物跑一遍 Run 的 AI 部分）；
+  - `get_attack_dir`/`count_at_cell`（GetAttackDir / GetXYObjCount 子集）；
+  - 7 条构造级用例（RNG 取数次序 + 语义 + 确定性）。
+- crates/world/src/world.rs
+  - `World::tick` 在死亡结算之后、AOI 之前插入 `monai::monster_ai_tick(self)`；
+  - `attack_once` 提升为 `pub(crate)`（供 monai 的怪物攻击复用，取数口径不变）。
+- crates/world/src/lib.rs
+  - `pub mod monai;` + 重导出。
+
+## 未建模 / 登记（见 monai.rs 模块头）
+- BaseObject.Run 的公共段（恢复/Die/MakeGhost/过期）由 World 的 expire_hitters/settle_deaths 承担；
+- 构造期 5 抽（见 02 号文件，交 owner）；
+- Master/Mission/RunAway 触发点/CrazyMode/CheckRoyalty/专用怪子类 SearchTarget 调用点未建模
+  （默认值下恒不命中）；
+- WalkTo 的 `fearFire`（火墙 CanSafeWalk）子集未建模。
+
+## 补（交付前）：AI 驱动为 opt-in
+- `World` 新增私有 `ai_enabled`（缺省 `false`）+ `enable_monster_ai()`/`monster_ai_enabled()`；
+  `World::tick` 仅在 `ai_enabled` 时调 `monai::monster_ai_tick`。
+- 动机实测：不加开关时 `world_combat_parity` 的 `atk 1 1 20` vs golden `24`（合成探针不含
+  oracle 的怪物线程，AI 抽数把 golden 序列移位）。加开关后既有 golden 逐字节不变。
+- 宿主接线（`bins/game-svr` sim 循环里 `enable_monster_ai()`）属本卡**下一分片**。
