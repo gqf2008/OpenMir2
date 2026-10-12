@@ -476,7 +476,7 @@ internal static class Program
             string effect = TailEffect(id, cls);
             string anchor = TailAnchor.TryGetValue(id, out string a)
                 ? a
-                : "MagicManager.cs:172-641 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）";
+                : "MagicManager.cs:172-640 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）";
             tsv.Add(string.Join("\t", "reach", rowIndex, id, name, cls, effect, anchor));
             reachObjs.Add(new
             {

@@ -26,23 +26,23 @@ reach	50	51	月魂风暴	no_effect_case	case_train	MagicManager.cs:631-633（cas
 reach	51	52	神之诅咒	no_effect_case	case_train	MagicManager.cs:634-636（case SKILL_52: boTrain = true; break;）
 reach	52	53	嗜血魔咒(保留)	no_effect_case	case_train	MagicManager.cs:637-639（case SKILL_53: boTrain = true; break;）
 reach	53	54	召妖降魔	no_effect_case	case_train	MagicManager.cs:640-642（case SKILL_54: boTrain = true; break;）
-reach	54	55	吸星狂杀	no_switch_case	no_case_no_train	MagicManager.cs:172-641 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
-reach	55	56	异形换位	no_switch_case	no_case_no_train	MagicManager.cs:172-641 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
-reach	56	57	回生术	no_switch_case	no_case_no_train	MagicManager.cs:172-641 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
-reach	57	58	流星火雨	no_switch_case	no_case_no_train	MagicManager.cs:172-641 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
-reach	58	59	噬血术	no_switch_case	no_case_no_train	MagicManager.cs:172-641 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
-reach	59	66	四级魔法盾	no_switch_case	no_case_no_train	MagicManager.cs:172-641 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
-reach	60	66	白日门四级法盾	no_switch_case	no_case_no_train	MagicManager.cs:172-641 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
-reach	61	67	先天元力	no_switch_case	no_case_no_train	MagicManager.cs:172-641 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
-reach	62	68	酒气护体	no_switch_case	no_case_no_train	MagicManager.cs:172-641 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
-reach	63	69	倚天辟地	no_switch_case	no_case_no_train	MagicManager.cs:172-641 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
-reach	64	71	四级召唤神兽	no_switch_case	no_case_no_train	MagicManager.cs:172-641 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
-reach	65	71	四级英雄神兽	no_switch_case	no_case_no_train	MagicManager.cs:172-641 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
-reach	66	72	召唤月灵	no_switch_case	no_case_no_train	MagicManager.cs:172-641 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
-reach	67	74	逐日剑法	no_switch_case	no_case_no_train	MagicManager.cs:172-641 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
-reach	68	75	护体神盾	no_switch_case	no_case_no_train	MagicManager.cs:172-641 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
-reach	69	76	三绝杀	no_switch_case	no_case_no_train	MagicManager.cs:172-641 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
-reach	70	77	双龙破	no_switch_case	no_case_no_train	MagicManager.cs:172-641 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
-reach	71	78	虎啸诀	no_switch_case	no_case_no_train	MagicManager.cs:172-641 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
-reach	72	79	追心刺	no_switch_case	no_case_no_train	MagicManager.cs:172-641 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
-reach	73	80	凤舞祭	no_switch_case	no_case_no_train	MagicManager.cs:172-641 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
+reach	54	55	吸星狂杀	no_switch_case	no_case_no_train	MagicManager.cs:172-640 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
+reach	55	56	异形换位	no_switch_case	no_case_no_train	MagicManager.cs:172-640 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
+reach	56	57	回生术	no_switch_case	no_case_no_train	MagicManager.cs:172-640 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
+reach	57	58	流星火雨	no_switch_case	no_case_no_train	MagicManager.cs:172-640 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
+reach	58	59	噬血术	no_switch_case	no_case_no_train	MagicManager.cs:172-640 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
+reach	59	66	四级魔法盾	no_switch_case	no_case_no_train	MagicManager.cs:172-640 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
+reach	60	66	白日门四级法盾	no_switch_case	no_case_no_train	MagicManager.cs:172-640 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
+reach	61	67	先天元力	no_switch_case	no_case_no_train	MagicManager.cs:172-640 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
+reach	62	68	酒气护体	no_switch_case	no_case_no_train	MagicManager.cs:172-640 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
+reach	63	69	倚天辟地	no_switch_case	no_case_no_train	MagicManager.cs:172-640 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
+reach	64	71	四级召唤神兽	no_switch_case	no_case_no_train	MagicManager.cs:172-640 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
+reach	65	71	四级英雄神兽	no_switch_case	no_case_no_train	MagicManager.cs:172-640 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
+reach	66	72	召唤月灵	no_switch_case	no_case_no_train	MagicManager.cs:172-640 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
+reach	67	74	逐日剑法	no_switch_case	no_case_no_train	MagicManager.cs:172-640 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
+reach	68	75	护体神盾	no_switch_case	no_case_no_train	MagicManager.cs:172-640 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
+reach	69	76	三绝杀	no_switch_case	no_case_no_train	MagicManager.cs:172-640 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
+reach	70	77	双龙破	no_switch_case	no_case_no_train	MagicManager.cs:172-640 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
+reach	71	78	虎啸诀	no_switch_case	no_case_no_train	MagicManager.cs:172-640 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
+reach	72	79	追心刺	no_switch_case	no_case_no_train	MagicManager.cs:172-640 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
+reach	73	80	凤舞祭	no_switch_case	no_case_no_train	MagicManager.cs:172-640 的 switch 无此魔号 case（⇒ :648 RM_MAGICFIRE，无训练）
