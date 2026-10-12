@@ -2,6 +2,14 @@
 
 **issue**：`02e67b0e`（`walgit collab thread openmir2-m3-rust-seed-injection`）
 **patch**：`patch --base refs/heads/master --head refs/heads/worktree-m2-gamesvr-host`（head 提交记录在 walgit patch 条目里）
+
+> ⚠ **本 head = finding 返工**（owner `ad34af10`）：上一 head `c0a5755a`（已被 rev approve `55501d6c`）的
+> 进程级用例在子进程未退出时会**无限挂死并泄漏 `game-svr`**（owner 实拍 9 分钟）。本 head **只改
+> `tests/seed_inject.rs` 的健壮性**（有界超时 + 因子进程树 kill + 不留 game-svr 断言 + 诊断证据），
+> **不动生产路径**（`src/seed.rs`、`src/main.rs` 语义与 `c0a5755a` 逐字节相同）。诊断结论与复现见
+> `owner-t30-hang-diagnosis.txt`：**生产 fail-closed 是对的**（直探 rc=1/61ms）；挂死的发动机是
+> 判据 3 的**无界 `Command::output()`**，触发条件是子进程此刻忽略/未拿到非法种子（用已登记的
+> 「忽略环境变数」变异逐现象复现）。
 **base**：`refs/heads/master`，交付时已 merge 到 **`9456ed6f`**（M3 ②③ 第十一片合入后；master 已含周期存档 `e4a18ca8`）
 **worktree**：`E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr`（分支 `worktree-m2-gamesvr-host`）
 **写集**：`mir2-rs/bins/game-svr/**` + 本证据目录（未动 `crates/**`、`src/**`、`MirClient`、表结构/脚本/数据格式、`mir2-rs/tests/parity/m3/**` 的夹具脚本）
@@ -66,7 +74,16 @@ DoD①②（固定种子 100 次攻击伤害序列逐项相同）跑不出结论
 | --- | --- |
 | `seed_env_injection_logs_csharp_probe` | 设 `MIR2_RNG_SEED=42` ⇒ 日志出现 `RNG 同种子注入：seed=42` 且 `SEED_PROBE` 8 项 = C# 实测 |
 | `unset_seed_env_is_inert` | 不设 ⇒ 日志**没有**注入行（生产路径一字不改） |
-| `invalid_seed_env_exits_nonzero` | 设 `not-an-int` ⇒ 进程**非零退出**且点名 `MIR2_RNG_SEED` |
+| `invalid_seed_env_exits_nonzero` | 设 `not-an-int` ⇒ **≤N=10s 内**进程**非零退出**且点名 `MIR2_RNG_SEED`（到界即判红 + 因子进程树 kill + 零残留；N 对应 oracle `Exit(97)` 立即 / Rust 实测 ~5–60ms） |
+
+**抗挂死兜底（本 head 新增；owner finding ②③）**：
+
+- 三个进程级用例**全部有界**：等退出 / 读 probe 都是 `tokio::time::timeout`；**没有无界 `Command::output()`**。
+- 到界/失败一律 `taskkill /T /F /PID`（**因子进程树 kill**）+ 收尸；`ProcGuard` 在断言 panic 路径也收。
+- 每个用例结束断言「**不留本用例（按唯一临时目录名过滤）的 `game-svr`**」。
+- 判据 3 用**文件**而非管道收 stdout/stderr（管道在句柄继承竞态下可能等不到 EOF）。
+- 新增证据：`owner-t30-hang-diagnosis.txt`（①诊断 A/B/C）、`red-ignore-env-bounded-timeout.txt`
+  （同变异下**有界红** rc=101/20s/零残留）、`invalid-seed-3run-1..3.txt`（非法种子连跑 3 次稳定）。
 
 **红检（改坏 ⇒ 必红；每步跑完立即 `git checkout` 还原）**：
 

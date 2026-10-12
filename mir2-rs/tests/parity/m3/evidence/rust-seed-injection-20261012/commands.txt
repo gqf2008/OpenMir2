@@ -52,3 +52,22 @@ python -I tools/evidence-hash/verify_sha256sums.py verify mir2-rs/tests/parity/m
 #   git clone --single-branch -b worktree-m2-gamesvr-host <worktree> <tmp> \
 #     && python -I tools/evidence-hash/verify_sha256sums.py <tmp>/mir2-rs/tests/parity/m3/evidence/rust-seed-injection-20261012 --check-extra
 #                                                                                 -> clean-clone-verify.txt
+
+# ============================================================================
+# --- 7) finding 返工（owner ad34af10）：诊断 + 有界兜底 + 可重复判据 ---
+# ============================================================================
+# 诊断 A：(b)「拿到非法种子但没 fail-closed」证伪 —— 直探生产路径（不经用例）：
+MIR2_RNG_SEED=not-an-int E:/tmp/openmir2-m2svr-target/debug/game-svr.exe <conf>
+#   exit_code=1 elapsed_ms=61；stderr: Error: MIR2_RNG_SEED 不是合法 int: not-an-int
+#                                                                                 -> owner-t30-hang-diagnosis.txt
+# 诊断 B：把「忽略环境变数」变异挂上（main.rs:179 -> None）+ 旧 head 的无界 .output() 跑整组
+#   ⇒ 用例挂死 >60s 并泄漏 game-svr（conf=gs-seed-bad-<pid>-<seq>）——精确复现 owner 的签名。
+#   （复现见 owner-t30-hang-diagnosis.txt 证据 B）
+# 判据 ③（可重复）：非法种子用例连跑 3 次全绿（同一命令同结论、每次 exit=Some(1)、≤10s、零残留）
+for i in 1 2 3; do cargo test -p game-svr --offline --test seed_inject invalid_seed_env_exits_nonzero -- --nocapture; done
+#                                                                                 -> invalid-seed-3run-1..3.txt
+# 红检（有界版）：同变异下整组 seed_inject 必须 ≤N 到界判红 + 因子进程树 kill + 零残留：
+#   cargo test -p game-svr --offline --test seed_inject -- --nocapture
+#   rc=101 / 20s / wmic 复查无 game-svr                                              -> red-ignore-env-bounded-timeout.txt
+# 还原后复跑：cargo test -p game-svr --offline --test seed_inject -- --nocapture   -> green-after-red.txt
+# package 3 连跑（新 head）：cargo test -p game-svr --offline  x3 = 242/0    -> gamesvr-3run-1..3.txt

@@ -1,0 +1,63 @@
+# T-30 finding ② 红检（有界版）：把「忽略环境变数」变异挂上（main.rs:179 -> Option::None）后
+# 跑**整组** seed_inject —— 旧 head 会无限挂死并泄漏 game-svr（见 owner-t30-hang-diagnosis.txt 证据 B）；
+# 修完后必须 ≤N(=10s) 到界判红 + 因子进程树 kill + 零残留。
+# 命令：cargo test -p game-svr --offline --test seed_inject -- --nocapture
+# 变异：main.rs:179  let rng_seed = seed::env_seed()?;  ->  let rng_seed: Option<i32> = None;
+# ------- 实跑（原样，rc=101 / 20s / 无残留）-------
+
+running 3 tests
+test unset_seed_env_is_inert ... ok
+
+thread 'invalid_seed_env_exits_nonzero' (13000) panicked at bins\game-svr\tests\seed_inject.rs:286:9:
+非法 MIR2_RNG_SEED 必须 ≤10s 退出（oracle `int.TryParse` 失败 ⇒ `Environment.Exit(97)` 立即；Rust 实测 ~1s）；到界 10.0045714s 仍未退出 ⇒ 已因子进程树 kill（防挂死/防泄漏）。子进程原始输出：
+02:54:26.211 [INF] 游戏服务启动：监听 127.0.0.1:63073（CheckBlock=12288，1 张地图占位，config=C:\Users\gxh\AppData\Local\Temp\gs-seed-bad-5016-2\Server.conf）
+02:54:26.211 [WRN] 未找到 Envir/MapInfo.txt（base=C:\Users\gxh\AppData\Local\Temp\gs-seed-bad-5016-2 EnvirDir=Envir MapDir=Map）⇒ 地图尺寸用 WorldMaps 占位、CurMap 不校验（开发/测试形态，登记：真机验收后删占位键）
+02:54:26.212 [INF] 配置层已载入：[Names] GameGold=元宝 GamePoint=游戏点（帧 5008）/ [Setup] BonusAbilofWarr/NakedAbilofWarr 等（帧 811）
+02:54:26.212 [WRN] 公告为空/缺失（base=C:\Users\gxh\AppData\Local\Temp\gs-seed-bad-5016-2 NoticeDir=Notice）⇒ 仍发 header-only 658（照 oracle）
+02:54:26.212 [INF] 出生点回落已载入：StartPoint.txt 0 条，StartPointSize=2，Config.HomeMap=0 (289,618)（空 HomeMap 的新角色用它；RNG 抽数照 oracle）
+02:54:26.214 [WRN] 读 stditems 失败（连接 MySQL 失败（读 stditems）：error returned from database: 1049 (42000): Unknown database 'mir2'）⇒ 装备形态按 `GetStdItem == null` 计 0（oracle 空物品系统分支）
+02:54:26.214 [WRN] 读取 Exps.conf 失败（系统找不到指定的文件。 (os error 2)）⇒ NeedExps 全 0（存档 MaxExp / 击杀经验登记）
+02:54:26.215 [INF] 游戏服务[127.0.0.1:63073]已启动...
+02:54:26.215 [INF] sim 线程就绪：tick=200ms，地图 1 张（WorldMaps 占位）
+02:54:28.256 [ERR] 链接数据库服务器[127.0.0.1:63080]失败...（由于目标计算机积极拒绝，无法连接。 (os error 10061)）
+02:54:28.256 [ERR] 链接登录服务器[127.0.0.1:63077]失败...（由于目标计算机积极拒绝，无法连接。 (os error 10061)）
+02:54:33.311 [ERR] 链接数据库服务器[127.0.0.1:63080]失败...（由于目标计算机积极拒绝，无法连接。 (os error 10061)）
+02:54:33.312 [ERR] 链接登录服务器[127.0.0.1:63077]失败...（由于目标计算机积极拒绝，无法连接。 (os error 10061)）
+02:54:36.036 [DBG] sim: tick #50 clock=10000ms 处理 0 项（本地第 50 次）
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test invalid_seed_env_exits_nonzero ... FAILED
+
+thread 'seed_env_injection_logs_csharp_probe' (28812) panicked at bins\game-svr\tests\seed_inject.rs:202:5:
+应有同种子注入行；实得日志：
+02:54:26.230 [INF] 游戏服务启动：监听 127.0.0.1:63074（CheckBlock=12288，1 张地图占位，config=C:\Users\gxh\AppData\Local\Temp\gs-seed-set-5016-1\Server.conf）
+02:54:26.231 [WRN] 未找到 Envir/MapInfo.txt（base=C:\Users\gxh\AppData\Local\Temp\gs-seed-set-5016-1 EnvirDir=Envir MapDir=Map）⇒ 地图尺寸用 WorldMaps 占位、CurMap 不校验（开发/测试形态，登记：真机验收后删占位键）
+02:54:26.231 [INF] 配置层已载入：[Names] GameGold=元宝 GamePoint=游戏点（帧 5008）/ [Setup] BonusAbilofWarr/NakedAbilofWarr 等（帧 811）
+02:54:26.231 [WRN] 公告为空/缺失（base=C:\Users\gxh\AppData\Local\Temp\gs-seed-set-5016-1 NoticeDir=Notice）⇒ 仍发 header-only 658（照 oracle）
+02:54:26.231 [INF] 出生点回落已载入：StartPoint.txt 0 条，StartPointSize=2，Config.HomeMap=0 (289,618)（空 HomeMap 的新角色用它；RNG 抽数照 oracle）
+02:54:26.233 [WRN] 读 stditems 失败（连接 MySQL 失败（读 stditems）：error returned from database: 1049 (42000): Unknown database 'mir2'）⇒ 装备形态按 `GetStdItem == null` 计 0（oracle 空物品系统分支）
+02:54:26.233 [WRN] 读取 Exps.conf 失败（系统找不到指定的文件。 (os error 2)）⇒ NeedExps 全 0（存档 MaxExp / 击杀经验登记）
+02:54:26.233 [INF] 游戏服务[127.0.0.1:63074]已启动...
+02:54:26.234 [INF] sim 线程就绪：tick=200ms，地图 1 张（WorldMaps 占位）
+02:54:28.272 [ERR] 链接登录服务器[127.0.0.1:63076]失败...（由于目标计算机积极拒绝，无法连接。 (os error 10061)）
+02:54:28.272 [ERR] 链接数据库服务器[127.0.0.1:63079]失败...（由于目标计算机积极拒绝，无法连接。 (os error 10061)）
+02:54:33.311 [ERR] 链接登录服务器[127.0.0.1:63076]失败...（由于目标计算机积极拒绝，无法连接。 (os error 10061)）
+02:54:33.312 [ERR] 链接数据库服务器[127.0.0.1:63079]失败...（由于目标计算机积极拒绝，无法连接。 (os error 10061)）
+02:54:36.054 [DBG] sim: tick #50 clock=10000ms 处理 0 项（本地第 50 次）
+02:54:38.346 [ERR] 链接数据库服务器[127.0.0.1:63079]失败...（由于目标计算机积极拒绝，无法连接。 (os error 10061)）
+02:54:38.346 [ERR] 链接登录服务器[127.0.0.1:63076]失败...（由于目标计算机积极拒绝，无法连接。 (os error 10061)）
+02:54:43.383 [ERR] 链接数据库服务器[127.0.0.1:63079]失败...（由于目标计算机积极拒绝，无法连接。 (os error 10061)）
+02:54:43.383 [ERR] 链接登录服务器[127.0.0.1:63076]失败...（由于目标计算机积极拒绝，无法连接。 (os error 10061)）
+02:54:46.076 [DBG] sim: tick #100 clock=20000ms 处理 0 项（本地第 100 次）
+
+test seed_env_injection_logs_csharp_probe ... FAILED
+
+failures:
+
+failures:
+    invalid_seed_env_exits_nonzero
+    seed_env_injection_logs_csharp_probe
+
+test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.45s
+
+# wmic 复查：无残留 game-svr（tree-kill 已将 gs-seed-bad-<pid>-<seq> 收干净）
