@@ -1,4 +1,4 @@
-# ports-preflight (attack-magic-minor-closeout-20261012) 2026-10-12T09:33:59.824060+08:00
+# ports-preflight (attack-magic-minor-closeout-20261012) 2026-10-12T09:45:24.366041+08:00
 端口     状态               监听进程PID      进程
 3306   LISTENING        26652        mysqld.exe
 5000   FREE            

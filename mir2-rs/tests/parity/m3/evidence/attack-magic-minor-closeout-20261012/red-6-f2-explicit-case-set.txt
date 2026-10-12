@@ -1,0 +1,65 @@
+### mutation: EXPLICIT_CASE_MAG_IDX[0] 12 -> 120
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.77s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m2svr-amw-target\debug\deps\game_svr-3aa264152417c61e.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 80 filtered out; finished in 0.00s
+
+     Running unittests src\main.rs (E:/tmp/openmir2-m2svr-amw-target\debug\deps\game_svr-eb39968088e3f1ec.exe)
+
+running 7 tests
+test magicwire::tests::parse_spell_maps_world_server_fields ... ok
+test magicwire::tests::spell_reject_order_and_results ... ok
+test magicwire::tests::parse_magic_key_truncates_recog_to_u16 ... ok
+test magicwire::tests::change_magic_key_sets_only_matching_id ... ok
+test magicwire::tests::find_magic_matches_magic_id_and_skips_none ... ok
+test magicwire::tests::change_magic_key_ignores_when_absent ... ok
+test magicwire::tests::default_dir_only_for_non_explicit_case_magics ... FAILED
+
+failures:
+
+---- magicwire::tests::default_dir_only_for_non_explicit_case_magics stdout ----
+
+thread 'magicwire::tests::default_dir_only_for_non_explicit_case_magics' (2716) panicked at bins\game-svr\src\magicwire.rs:262:9:
+assertion `left == right` failed
+  left: [120, 25, 26, 27, 34, 38, 43, 56]
+ right: [12, 25, 26, 27, 34, 38, 43, 56]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    magicwire::tests::default_dir_only_for_non_explicit_case_magics
+
+test result: FAILED. 6 passed; 1 failed; 0 ignored; 0 measured; 130 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`
+
+### process-level:
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+     Running unittests src\main.rs (E:/tmp/openmir2-m2svr-amw-target\debug\deps\game_svr-eb39968088e3f1ec.exe)
+
+running 1 test
+test tests::spell_cmd_dispatches_guard_ack_and_magic_key_change ... FAILED
+
+failures:
+
+---- tests::spell_cmd_dispatches_guard_ack_and_magic_key_change stdout ----
+01:44:59.480 [DBG] CM_SPELL：ChrName=caster magic_id=99 被守卫拒绝 NoMagic（oracle 回 RM_MOVEFAIL，编码器未接）
+01:44:59.480 [DBG] CM_SPELL：ChrName=caster magic_id=1 被守卫拒绝 DeathOrStone（oracle 回 RM_MOVEFAIL，编码器未接）
+01:44:59.480 [DBG] CM_MAGICKEYCHANGE：ChrName=caster magic_id=42 不在 MagicList ⇒ 不改键（oracle 同：无命中即无动作）
+
+thread 'tests::spell_cmd_dispatches_guard_ack_and_magic_key_change' (29760) panicked at bins\game-svr\src\main.rs:6911:9:
+assertion `left == right` failed: F-2：mag_idx=12 有独立 case ⇒ 不套用 default 的 Dir（方向保持左）
+  left: 2
+ right: 6
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::spell_cmd_dispatches_guard_ack_and_magic_key_change
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 136 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`

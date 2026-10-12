@@ -1935,10 +1935,12 @@ fn handle_spell_cmd(
     let req = magicwire::parse_spell(recog, tag, param, series);
     // `GetMagicInfo(nKey)` 读角色记录的 `MagicList`（= `SavedHuman.record.data.magic`，进世界时
     // 保位存下的 `CharacterData.magic`）。
-    let has_magic = saves
+    let matched_mag_idx = saves
         .get(chr_name)
         .and_then(|s| s.record.data.magic.as_deref())
-        .is_some_and(|list| magicwire::find_magic(list, req.magic_id).is_some());
+        .and_then(|list| magicwire::find_magic(list, req.magic_id))
+        .map(|m| i32::from(m.mag_idx));
+    let has_magic = matched_mag_idx.is_some();
     // `IsCanSpell`（`PlayObject.cs:960` 初值 true；`LockSpellAction` 状态面未移植 ⇒ 恒 true，登记）。
     if let Some(reject) = magicwire::spell_reject(true, is_dead, has_magic) {
         glog!(
@@ -1948,10 +1950,15 @@ fn handle_spell_cmd(
         );
         return;
     }
-    // `switch(UserMagic.MagIdx)` 的 `default` 支首句 `Dir = M2Share.GetNextDirection(CurrX, CurrY, nTargetX, nTargetY)`
-    // （`PlayObject.Attack.cs:1256`）；效果体其余部分未接（登记）。
-    let dir = movewire::next_direction(cur_x, cur_y, req.target_x, req.target_y);
-    set_display_dir(displays, actor_id, dir);
+    // `switch (UserMagic.MagIdx)` 的 `default` 支首句
+    // `Dir = M2Share.GetNextDirection(CurrX, CurrY, nTargetX, nTargetY)`
+    // （`PlayObject.Attack.cs:1269-1270`；原注误写 :1256，已按 reviewer-5 `1de8fca5` 的 F-1 订正）；
+    // 效果体其余部分未接（登记）。**F-2 收口**（reviewer-5 `1de8fca5`）：该句只在 `default` 支执行，
+    // `switch` 的 8 条独立 `case`（12/25/26/27/34/38/43/56）**不执行** ⇒ 只有非这 8 个魔号才改展示方向。
+    if matched_mag_idx.is_some_and(magicwire::takes_default_dir) {
+        let dir = movewire::next_direction(cur_x, cur_y, req.target_x, req.target_y);
+        set_display_dir(displays, actor_id, dir);
+    }
     // `ClientSpellXY` 全分支 `result = true` ⇒ 调用方 `ActionTick = GetTickCount(); SendSocket(GetGoodTick)`。
     send_good_tick(online, gates, chr_name);
 }
@@ -6705,11 +6712,13 @@ mod tests {
     }
 
     /// **`openmir2-m3-attack-magic-wiring`（第二片）**：`CM_SPELL`/`CM_MAGICKEYCHANGE` 派发——
-    /// 守卫（未知魔法号 / `Death` ⇒ 不回 ack）、成功后 `+GD` + `Dir = GetNextDirection`，
-    /// 以及 `ClientChangeMagicKey` 的魔法键切换（无回帧）。
+    /// 守卫（未知魔法号 / `Death` ⇒ 不回 ack）、成功后 `+GD` + `Dir = GetNextDirection`
+    /// （**仅 `default` 支的魔号**，见 F-2），以及 `ClientChangeMagicKey` 的魔法键切换（无回帧）。
     ///
     /// 红检：① `magicwire::change_magic_key` 改比 `magic_key` 而不是 `mag_idx` ⇒ 段 ④ 必红；
-    /// ② `magicwire::spell_reject` 不看 `has_magic`（未知魔法号也过）⇒ 段 ① 必红。
+    /// ② `magicwire::spell_reject` 不看 `has_magic`（未知魔法号也过）⇒ 段 ① 必红；
+    /// ③（旧 F-2 收口）`magicwire::EXPLICIT_CASE_MAG_IDX` 里任一魔号改错 ⇒ 段 ⑤ 与
+    ///   `magicwire::tests::default_dir_only_for_non_explicit_case_magics` 必红。
     #[test]
     fn spell_cmd_dispatches_guard_ack_and_magic_key_change() {
         use std::collections::HashMap;
@@ -6846,6 +6855,63 @@ mod tests {
                 .magic_key,
             u16::from(b'f'),
             "未命中不改已有键"
+        );
+
+        // ⑤ F-2 收口（reviewer-5 `1de8fca5`）：`switch(MagIdx)` 有 8 条独立 `case` 的魔号不套用
+        //    `default` 的 `Dir`。补一个 SKILL_ERGUM(12)，把展示方向置为左，再打右侧目标。
+        saves.get_mut("caster").unwrap().record.data.magic = Some(vec![
+            Some(record::MagicRcd {
+                mag_idx: 1,
+                level: 1,
+                magic_key: u16::from(b'f'),
+                tran_point: 0,
+            }),
+            Some(record::MagicRcd {
+                mag_idx: 12,
+                level: 1,
+                magic_key: u16::from(b'e'),
+                tran_point: 0,
+            }),
+        ]);
+        displays.set(
+            caster,
+            downlink::ActorDisplay::new(
+                game_svr::movewire::DIR_LEFT,
+                0,
+                111,
+                0,
+                0,
+                255,
+                b"caster".to_vec(),
+            ),
+        );
+        handle_spell_cmd(
+            game_svr::feature::make_long(12, 10),
+            12,
+            0,
+            0,
+            "caster",
+            911,
+            &online,
+            &world,
+            &saves,
+            &mut displays,
+            &gates,
+        );
+        match rx0.try_recv() {
+            Ok(SimToGate::SendRaw { socket, payload }) => {
+                assert_eq!(socket, 911);
+                assert!(
+                    payload.starts_with(b"+GD/"),
+                    "有独立 case 的魔号仍过守卫并回 +GD"
+                );
+            }
+            other => panic!("CM_SPELL(12) 成功支应回 +GD：{other:?}"),
+        }
+        assert_eq!(
+            displays.get(caster).unwrap().dir,
+            game_svr::movewire::DIR_LEFT,
+            "F-2：mag_idx=12 有独立 case ⇒ 不套用 default 的 Dir（方向保持左）"
         );
     }
 

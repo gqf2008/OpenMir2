@@ -34,8 +34,10 @@
   （`!IsCanSpell` → `Death||STONE` → `GetMagicInfo(nKey)==null`，任一 ⇒ `return false`）。
 - **`GetMagicInfo(int)`**：`src/M2Server/Player/PlayObject.cs:4174-4185`（比 `userMagic.Magic.MagicId`，**不是按键**）。
 - **`ClientChangeMagicKey`**：`src/M2Server/Player/PlayObject.Operate.cs:774-786`（命中 `MagicId==nSkillIdx` 置 `Key` 后 `break`，**无回帧**）。
-- **`switch(MagIdx)` 的 `default` 首句**：`PlayObject.Attack.cs:1256`
+- **`switch(MagIdx)` 的 `default` 首句**：`PlayObject.Attack.cs:1269-1270`
   `Dir = M2Share.GetNextDirection(CurrX, CurrY, nTargetX, nTargetY)`（复用 `movewire::next_direction`）。
+  该句**只在 `default` 支执行**：`switch` 的 8 条独立 `case`（`:1120/1136/1152/1168/1187/1218/1234/1253`，
+  魔号 12/25/26/27/34/38/43/56）**不执行**（reviewer-5 `1de8fca5` 的 F-1/F-2 收口，代码见 `magicwire::EXPLICIT_CASE_MAG_IDX`）。
 
 ## 2. 门禁（隔离 `CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target`，全 `--offline`）
 

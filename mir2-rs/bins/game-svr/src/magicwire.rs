@@ -36,7 +36,9 @@
 //! `SpellTick -= 450`、`GetSpellPoint`/`DamageSpell`、战士技切换
 //! （`ThrustingOnOff`/`HalfMoonOnOff`/`RedHalfMoonOnOff`/`SkillCrsOnOff`/`Skill43OnOff` 与
 //! `SendSocket("+LNG"/"+ULNG"/"+WID"/"+UWID"/"+FIR"/"+CRS"/"+UCRS"/"+TWN"/"+CID"/"+UCID")`），
-//! 以及 `default` 支的 `Dir = GetNextDirection` + `CretInNearXy` + `DoSpell`（`MagicManager.cs:145-…`）。
+//! 以及 `default` 支的 `Dir = GetNextDirection`（`:1269-1270`）+ `CretInNearXy` + `DoSpell`（`MagicManager.cs:145-…`）。
+//! 其中 `switch` 的 8 条独立 `case`（`:1120/1136/1152/1168/1187/1218/1234/1253`，魔号见
+//! [`EXPLICIT_CASE_MAG_IDX`]）**不走 `default`** ⇒ Rust 侧只对这些之外的魔号套用 `Dir`。
 //! `DoSpell` 开头的 `IsWarrSkill`/`MagicAttackRage` 门与
 //! `SendRefMsg(RM_SPELL, Effect, x, y, MagicId, "")`（`MagicManager.cs:151-159`）**都未接** ——
 //! 本片不产出 `SM_SPELL(17)`，失败支的 `RM_MAGICFIREFAIL` ⇒ `SM_MAGICFIRE_FAIL(639)` 亦未接。
@@ -70,6 +72,22 @@ pub const fn is_spell_ident(ident: u16) -> bool {
 #[must_use]
 pub const fn is_magic_key_ident(ident: u16) -> bool {
     ident == messages::CM_MAGICKEYCHANGE
+}
+
+/// `switch (UserMagic.MagIdx)`（`PlayObject.Attack.cs:1119`）里**有独立 `case` 的 8 个魔号**：
+/// `SKILL_ERGUM(12)` / `SKILL_BANWOL(25)` / `SKILL_FIRESWORD(26)` / `SKILL_MOOTEBO(27)` /
+/// `SKILL_CROSSMOON(34)` / `SKILL_TWINBLADE(38)` / `SKILL_43(43)` / `SKILL_REDBANWOL(56)`
+/// （`src/Modules/SystemModule/Const/MagicConst.cs:52-197`；`case` 行号 `:1120/1136/1152/1168/1187/1218/1234/1253`）。
+///
+/// 这 8 支**不执行** `default:` 首句 `Dir = M2Share.GetNextDirection(...)`（`:1269-1270`）——效果体
+/// 整段未接（归 m3cs），本表只用于对齐“走哪条分支”：不在表内的魔号才套用 `default` 首句。
+/// （reviewer-5 `1de8fca5` 的 **F-2** 收口。）
+pub const EXPLICIT_CASE_MAG_IDX: [i32; 8] = [12, 25, 26, 27, 34, 38, 43, 56];
+
+/// 该 `mag_idx` 是否走 `switch (UserMagic.MagIdx)` 的 `default` 支（⇒ 才执行 `Dir = GetNextDirection`）。
+#[must_use]
+pub fn takes_default_dir(mag_idx: i32) -> bool {
+    !EXPLICIT_CASE_MAG_IDX.contains(&mag_idx)
 }
 
 /// `CM_SPELL` 经 `WorldServer.cs:783-790` 映射后的 `ClientSpellXY` 入参（除 `wIdent`/`LateDelivery`）。
@@ -235,5 +253,23 @@ mod tests {
         );
         assert_eq!(spell_reject(true, false, false), Some(SpellReject::NoMagic));
         assert_eq!(spell_reject(true, false, true), None);
+    }
+
+    /// **F-2 收口**：`switch (UserMagic.MagIdx)` 的 8 个独立 `case` 不套用 `default` 首句 `Dir`。
+    /// 断言**精确集合**（改/漏一个魔号 ⇒ 必红）。
+    #[test]
+    fn default_dir_only_for_non_explicit_case_magics() {
+        assert_eq!(EXPLICIT_CASE_MAG_IDX, [12, 25, 26, 27, 34, 38, 43, 56]);
+        for m in EXPLICIT_CASE_MAG_IDX {
+            assert!(
+                !takes_default_dir(m),
+                "mag_idx={m} 有独立 case ⇒ 不套用 default 的 Dir"
+            );
+        }
+        assert!(
+            takes_default_dir(1),
+            "SKILL_FIREBALL(1) 无独立 case ⇒ 走 default"
+        );
+        assert!(takes_default_dir(999));
     }
 }
