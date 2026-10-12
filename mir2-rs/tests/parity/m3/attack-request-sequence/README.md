@@ -85,7 +85,7 @@ owner 已把「查清 C# 目标格 (18,20) 从 k=4 起为空」转 m3bag（加**
 
 | 文件 | 内容 |
 |---|---|
-| `01-selftest.txt` | `per_strike_requests.py selftest`（16/16 牙齿，含 jointable 五项） |
+| `01-selftest.txt` | `per_strike_requests.py selftest`（16/16 牙齿，含 jointable 8 项） |
 | `02-analyze-stack2.txt` / `.json` | cA(120) vs rA(120)：站点计数 / player 单元模板 / 第一分歧 class=base_unit |
 | `03-analyze-stack1.txt` / `.json` | 交叉印证（含 20 冒烟 + 两次 120；`--allow-count-mismatch` 因两侧会话构成不同） |
 | `04-per-strike-table-stack2.txt` | 120 击逐 k 的**每击取数请求序列**（C#/Rust 并排，带 hit/dodge） |

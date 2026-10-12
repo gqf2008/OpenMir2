@@ -1,0 +1,62 @@
+# 14-minors5-fix.txt —— reviewer-5 Minor（51587022）清账原始件（2026-10-12，m3cs / openmir2-worker-5）
+
+卡：`openmir2-m3-combat-skills-align`；上片 patch `ed3ae18d` @ head `60252bb8`（approve = reviewer-5 `51587022`，
+`decision=approve`，两条 **Minor（不阻塞）**）。本片 = 清零这两条，**只动文档 + `SHA256SUMS.txt`**（零 `.rs`、零判据/门）。
+
+## Minor ①：jointable 牙齿计数写成「五项 / 5 条」，实为 8 条
+
+reviewer 原文：`commands.txt/报告把新增 jointable 检查写成 五项/5 条，实际 8 条（8->16）`。
+
+`per_strike_requests.py` 里 `jointable-*` 实有 8 条（`grep -n 'check("' per_strike_requests.py`）：
+
+    jointable-fixture-green
+    jointable-both-sides-one-table
+    jointable-victim-present-absent
+    jointable-missing-state-prereq
+    jointable-missing-field-prereq
+    jointable-k-gap-red
+    jointable-count-mismatch-red
+    jointable-derived-green
+
+改前 → 改后：
+
+- `commands.txt`：`# 自检（16/16，含 jointable 夹具状态/缺字段/缺口/计数/derived 五项）`
+  → `# 自检（16/16；jointable 新增 8 项：夹具状态/两侧同表/present-absent/缺状态/缺字段/k 洞/计数不等/derived）`
+- `README.md`：`（16/16 牙齿，含 jointable 五项）` → `（16/16 牙齿，含 jointable 8 项）`
+- `M3②③逐击状态表接线与夹具接口报告-20261012.md`：`新增 5 条，都在生产函数上跑：`
+  → `新增 8 条（jointable-*，selftest 8/8 → 16/16），都在生产函数上跑：`（并在 §4 末尾加「Minor 订正」小注）
+
+## Minor ②：`commands.txt` 把 `[info]` 写成走 `stderr`，实为 `stdout`
+
+实测（捕获分流）：
+
+    python -I D/per_strike_requests.py jointable ... --derive-state --csharp-raw ... --rust-raw ... | ...
+    # STDOUT has info: True
+    # STDERR has info: False   （stderr len = 0）
+
+改前 → 改后（`commands.txt`）：
+
+    # -> ...（240 行 = 两侧各 120）；stderr [info] align_vs_rng_hit_mismatch side=csharp ks=[3]
+    # -> ...（240 行 = 两侧各 120）；stdout [info] align_vs_rng_hit_mismatch side=csharp ks=[3]
+
+## 去回归 / 判据（本片重跑）
+
+    python -I tools/evidence-hash/verify_sha256sums.py write mir2-rs/tests/parity/m3/attack-request-sequence
+    # 写入 …（24 行，repo 口径）；GREEN: write 完成（2 行 hash 变更，mode=repo）
+
+    python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/m3/attack-request-sequence
+    # GREEN … [repo 口径]  OK 25/25
+
+    python -I D/per_strike_requests.py selftest
+    # SELFTEST GREEN: per_strike_requests 16/16
+
+四门禁（`CARGO_TARGET_DIR=E:/tmp/m3cs-r2-target`；工作目录 `mir2-rs/`；全 `--offline`）：
+
+    cargo fmt --all -- --check                                       # rc=0
+    cargo clippy --workspace --all-targets --offline -- -D warnings  # rc=0
+    cargo test --workspace --offline                                 # rc=0  84 suites / 682 passed / 0 failed / 16 ignored
+    cargo run -p msgcodegen --offline -- --check                     # rc=0  604 条常量
+
+行为零变更：本片只改 2 个文本文件（`commands.txt` / `README.md`）的计数与流向表述 + 报告小注 +
+`SHA256SUMS.txt` 两行 hash；`per_strike_requests.py`、`attack_sites`、夹具脚本、`crates/**` 均未动（`git diff --stat` 可核）。
+DoD② 仍未达成、未放宽、未声明达成（真机隔离两相逐 k=0 仍等 m3bag 夹具）。
