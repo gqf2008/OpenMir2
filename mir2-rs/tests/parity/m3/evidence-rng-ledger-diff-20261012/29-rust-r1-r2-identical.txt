@@ -1,0 +1,8 @@
+# Rust 活栈同侧可复现（r1 vs r2，seed=42，同为 0137/-AttackPinPair/-AttackCount 120）
+\$ sha256sum E:/tmp/m3cs-r2/rust-rng-stream-r1.tsv E:/tmp/m3cs-r2/rust-rng-stream-r2.tsv
+4963e9f6f5012a74f9cf59984bd33098895ab21d35b63204cc7588376cd4d12d *E:/tmp/m3cs-r2/rust-rng-stream-r1.tsv
+4963e9f6f5012a74f9cf59984bd33098895ab21d35b63204cc7588376cd4d12d *E:/tmp/m3cs-r2/rust-rng-stream-r2.tsv
+
+\$ diff rust-rng-stream-r1.tsv rust-rng-stream-r2.tsv
+(no output)
+R1_R2_IDENTICAL sha256=4963e9f6f5012a74f9cf59984bd33098895ab21d35b63204cc7588376cd4d12d

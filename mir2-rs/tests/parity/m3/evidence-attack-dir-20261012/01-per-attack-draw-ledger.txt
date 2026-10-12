@@ -1,0 +1,82 @@
+# oracle 真身单次攻击的取数次序/次数（attack-dir-probe，seed=20261012）
+# 来源：mir2-rs/tests/parity/m3/attack-dir-probe/vectors/attack_dir_vectors.{json,tsv}
+
+## no_target_power_only
+case(dc,attacker_hit_point,target_ac,target_speed,target_hp,power_only,draws) = ['7700', '20', '0', '0', '1', '6']
+  draw  1  Next(max)    arg=11   -> 3     PlayObject.cs:2929
+  draw  2  Next(max)    arg=10   -> 9     PlayObject.cs:2932
+  draw  3  Next(max)    arg=11   -> 9     PlayObject.cs:2929
+  draw  4  Next(max)    arg=10   -> 3     PlayObject.cs:2932
+  draw  5  Next(max)    arg=11   -> 2     PlayObject.cs:2929
+  draw  6  Next(max)    arg=10   -> 5     PlayObject.cs:2932
+  attacks(i,power,damage,hp_after,hit):
+    0, 23, 0, 60000, 0
+    1, 29, 0, 60000, 0
+    2, 22, 0, 60000, 0
+
+## target_hit_ac0
+case(dc,attacker_hit_point,target_ac,target_speed,target_hp,power_only,draws) = ['7700', '255', '0', '1', '0', '15']
+  draw  1  Next(max)    arg=11   -> 3     PlayObject.cs:2929
+  draw  2  Next(max)    arg=10   -> 9     PlayObject.cs:2932
+  draw  3  Next(max)    arg=1    -> 0     BaseObject.Attack.cs:41
+  draw  4  Next(max)    arg=1    -> 0     BaseObject.Base.cs:792
+  draw  5  Next(max)    arg=5    -> 0     PlayObject.Attack.cs:225
+  draw  6  Next(max)    arg=11   -> 5     PlayObject.cs:2929
+  draw  7  Next(max)    arg=10   -> 0     PlayObject.cs:2932
+  draw  8  Next(max)    arg=1    -> 0     BaseObject.Attack.cs:41
+  draw  9  Next(max)    arg=1    -> 0     BaseObject.Base.cs:792
+  draw 10  Next(max)    arg=5    -> 3     PlayObject.Attack.cs:225
+  draw 11  Next(max)    arg=11   -> 3     PlayObject.cs:2929
+  draw 12  Next(max)    arg=10   -> 2     PlayObject.cs:2932
+  draw 13  Next(max)    arg=1    -> 0     BaseObject.Attack.cs:41
+  draw 14  Next(max)    arg=1    -> 0     BaseObject.Base.cs:792
+  draw 15  Next(max)    arg=5    -> 1     PlayObject.Attack.cs:225
+  attacks(i,power,damage,hp_after,hit):
+    0, 0, 23, 59977, 1
+    1, 0, 20, 59957, 1
+    2, 0, 23, 59934, 1
+
+## target_hit_ac2
+case(dc,attacker_hit_point,target_ac,target_speed,target_hp,power_only,draws) = ['7700', '255', '2565', '1', '0', '18']
+  draw  1  Next(max)    arg=11   -> 3     PlayObject.cs:2929
+  draw  2  Next(max)    arg=10   -> 9     PlayObject.cs:2932
+  draw  3  Next(max)    arg=1    -> 0     BaseObject.Attack.cs:41
+  draw  4  Next(max)    arg=6    -> 2     BaseObject.Base.cs:792
+  draw  5  Next(max)    arg=7    -> 1     BaseObject.Base.cs:795
+  draw  6  Next(max)    arg=5    -> 2     PlayObject.Attack.cs:225
+  draw  7  Next(max)    arg=11   -> 0     PlayObject.cs:2929
+  draw  8  Next(max)    arg=10   -> 1     PlayObject.cs:2932
+  draw  9  Next(max)    arg=1    -> 0     BaseObject.Attack.cs:41
+  draw 10  Next(max)    arg=6    -> 4     BaseObject.Base.cs:792
+  draw 11  Next(max)    arg=9    -> 3     BaseObject.Base.cs:795
+  draw 12  Next(max)    arg=5    -> 1     PlayObject.Attack.cs:225
+  draw 13  Next(max)    arg=11   -> 8     PlayObject.cs:2929
+  draw 14  Next(max)    arg=10   -> 7     PlayObject.cs:2932
+  draw 15  Next(max)    arg=1    -> 0     BaseObject.Attack.cs:41
+  draw 16  Next(max)    arg=6    -> 2     BaseObject.Base.cs:792
+  draw 17  Next(max)    arg=7    -> 0     BaseObject.Base.cs:795
+  draw 18  Next(max)    arg=5    -> 4     PlayObject.Attack.cs:225
+  attacks(i,power,damage,hp_after,hit):
+    0, 0, 17, 59983, 1
+    1, 0, 12, 59971, 1
+    2, 0, 23, 59948, 1
+
+## target_miss
+case(dc,attacker_hit_point,target_ac,target_speed,target_hp,power_only,draws) = ['7700', '0', '0', '254', '0', '12']
+  draw  1  Next(max)    arg=11   -> 3     PlayObject.cs:2929
+  draw  2  Next(max)    arg=10   -> 9     PlayObject.cs:2932
+  draw  3  Next(max)    arg=254  -> 211   BaseObject.Attack.cs:41
+  draw  4  Next(max)    arg=5    -> 1     PlayObject.Attack.cs:225
+  draw  5  Next(max)    arg=11   -> 2     PlayObject.cs:2929
+  draw  6  Next(max)    arg=10   -> 5     PlayObject.cs:2932
+  draw  7  Next(max)    arg=254  -> 8     BaseObject.Attack.cs:41
+  draw  8  Next(max)    arg=5    -> 0     PlayObject.Attack.cs:225
+  draw  9  Next(max)    arg=11   -> 5     PlayObject.cs:2929
+  draw 10  Next(max)    arg=10   -> 6     PlayObject.cs:2932
+  draw 11  Next(max)    arg=254  -> 91    BaseObject.Attack.cs:41
+  draw 12  Next(max)    arg=5    -> 1     PlayObject.Attack.cs:225
+  attacks(i,power,damage,hp_after,hit):
+    0, 0, 0, 60000, 0
+    1, 0, 0, 60000, 0
+    2, 0, 0, 60000, 0
+

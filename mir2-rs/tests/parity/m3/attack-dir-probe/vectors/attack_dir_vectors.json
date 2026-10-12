@@ -1,0 +1,155 @@
+{
+  "generated_by": "mir2-rs/tests/parity/m3/attack-dir-probe",
+  "oracle": {
+    "entry": "M2Server.Player.PlayObject.AttackDir(IActor, short, byte) (protected, \u53CD\u5C04\u8C03\u7528)",
+    "source": "src/M2Server/Player/PlayObject.Attack.cs:25-77\uFF08GetBaseAttackPoewr=:73 / AttackSuccess=:77,:225\uFF09 \u002B src/M2Server/Actor/BaseObject.Attack.cs:30-64\uFF08_Attack/\u547D\u4E2D\u95E8 :41\uFF09",
+    "rng": "OpenMir2.RandomNumber.random (\u79C1\u6709\u9759\u6001 System.Random) \u53CD\u5C04\u8986\u76D6\u4E3A RecordingRandom(seed)"
+  },
+  "seed": 20261012,
+  "cases": [
+    {
+      "name": "no_target_power_only",
+      "dc": 7700,
+      "attacker_hit_point": 20,
+      "target": {
+        "ac": 0,
+        "speed_point": 0,
+        "hit_point": 10,
+        "hp": 60000
+      },
+      "power_only": true,
+      "attacks": [
+        {
+          "i": 0,
+          "power": 23,
+          "damage": 0,
+          "hp_after": 60000,
+          "hit": false
+        },
+        {
+          "i": 1,
+          "power": 29,
+          "damage": 0,
+          "hp_after": 60000,
+          "hit": false
+        },
+        {
+          "i": 2,
+          "power": 22,
+          "damage": 0,
+          "hp_after": 60000,
+          "hit": false
+        }
+      ],
+      "draws": "1|Next(max)|11|3|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929;2|Next(max)|10|9|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2932;3|Next(max)|11|9|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929;4|Next(max)|10|3|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2932;5|Next(max)|11|2|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929;6|Next(max)|10|5|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2932"
+    },
+    {
+      "name": "target_hit_ac0",
+      "dc": 7700,
+      "attacker_hit_point": 255,
+      "target": {
+        "ac": 0,
+        "speed_point": 1,
+        "hit_point": 10,
+        "hp": 60000
+      },
+      "power_only": false,
+      "attacks": [
+        {
+          "i": 0,
+          "power": 0,
+          "damage": 23,
+          "hp_after": 59977,
+          "hit": true
+        },
+        {
+          "i": 1,
+          "power": 0,
+          "damage": 20,
+          "hp_after": 59957,
+          "hit": true
+        },
+        {
+          "i": 2,
+          "power": 0,
+          "damage": 23,
+          "hp_after": 59934,
+          "hit": true
+        }
+      ],
+      "draws": "1|Next(max)|11|3|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929;2|Next(max)|10|9|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2932;3|Next(max)|1|0|M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41;4|Next(max)|1|0|M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:792;5|Next(max)|5|0|M2Server.Player.PlayObject.AttackSuccess@PlayObject.Attack.cs:225;6|Next(max)|11|5|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929;7|Next(max)|10|0|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2932;8|Next(max)|1|0|M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41;9|Next(max)|1|0|M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:792;10|Next(max)|5|3|M2Server.Player.PlayObject.AttackSuccess@PlayObject.Attack.cs:225;11|Next(max)|11|3|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929;12|Next(max)|10|2|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2932;13|Next(max)|1|0|M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41;14|Next(max)|1|0|M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:792;15|Next(max)|5|1|M2Server.Player.PlayObject.AttackSuccess@PlayObject.Attack.cs:225"
+    },
+    {
+      "name": "target_hit_ac2",
+      "dc": 7700,
+      "attacker_hit_point": 255,
+      "target": {
+        "ac": 2565,
+        "speed_point": 1,
+        "hit_point": 10,
+        "hp": 60000
+      },
+      "power_only": false,
+      "attacks": [
+        {
+          "i": 0,
+          "power": 0,
+          "damage": 17,
+          "hp_after": 59983,
+          "hit": true
+        },
+        {
+          "i": 1,
+          "power": 0,
+          "damage": 12,
+          "hp_after": 59971,
+          "hit": true
+        },
+        {
+          "i": 2,
+          "power": 0,
+          "damage": 23,
+          "hp_after": 59948,
+          "hit": true
+        }
+      ],
+      "draws": "1|Next(max)|11|3|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929;2|Next(max)|10|9|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2932;3|Next(max)|1|0|M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41;4|Next(max)|6|2|M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:792;5|Next(max)|7|1|M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:795;6|Next(max)|5|2|M2Server.Player.PlayObject.AttackSuccess@PlayObject.Attack.cs:225;7|Next(max)|11|0|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929;8|Next(max)|10|1|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2932;9|Next(max)|1|0|M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41;10|Next(max)|6|4|M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:792;11|Next(max)|9|3|M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:795;12|Next(max)|5|1|M2Server.Player.PlayObject.AttackSuccess@PlayObject.Attack.cs:225;13|Next(max)|11|8|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929;14|Next(max)|10|7|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2932;15|Next(max)|1|0|M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41;16|Next(max)|6|2|M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:792;17|Next(max)|7|0|M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:795;18|Next(max)|5|4|M2Server.Player.PlayObject.AttackSuccess@PlayObject.Attack.cs:225"
+    },
+    {
+      "name": "target_miss",
+      "dc": 7700,
+      "attacker_hit_point": 0,
+      "target": {
+        "ac": 0,
+        "speed_point": 254,
+        "hit_point": 10,
+        "hp": 60000
+      },
+      "power_only": false,
+      "attacks": [
+        {
+          "i": 0,
+          "power": 0,
+          "damage": 0,
+          "hp_after": 60000,
+          "hit": false
+        },
+        {
+          "i": 1,
+          "power": 0,
+          "damage": 0,
+          "hp_after": 60000,
+          "hit": false
+        },
+        {
+          "i": 2,
+          "power": 0,
+          "damage": 0,
+          "hp_after": 60000,
+          "hit": false
+        }
+      ],
+      "draws": "1|Next(max)|11|3|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929;2|Next(max)|10|9|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2932;3|Next(max)|254|211|M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41;4|Next(max)|5|1|M2Server.Player.PlayObject.AttackSuccess@PlayObject.Attack.cs:225;5|Next(max)|11|2|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929;6|Next(max)|10|5|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2932;7|Next(max)|254|8|M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41;8|Next(max)|5|0|M2Server.Player.PlayObject.AttackSuccess@PlayObject.Attack.cs:225;9|Next(max)|11|5|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929;10|Next(max)|10|6|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2932;11|Next(max)|254|91|M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41;12|Next(max)|5|1|M2Server.Player.PlayObject.AttackSuccess@PlayObject.Attack.cs:225"
+    }
+  ]
+}

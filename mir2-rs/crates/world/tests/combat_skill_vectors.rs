@@ -28,7 +28,7 @@ use std::path::PathBuf;
 
 use mir2_data::models::MagicInfo;
 use mir2_shared::rng::{RandomNumber, RandomSource};
-use mir2_world::combat::{get_base_attack_power, get_base_attack_power_player};
+use mir2_world::combat::{get_base_attack_power, get_base_attack_power_player, swing_power};
 use mir2_world::magic::{
     can_read_book, get_spell_point, group_melee_damage, magic_attack_interval, power_defence_area,
     power_fire_wall, power_get_power_plus_mc, power_get_power_plus_sc,
@@ -36,7 +36,7 @@ use mir2_world::magic::{
     power_show_hp_interval, power_transparent, power_uenhancer, resolve_magic,
 };
 use mir2_world::{
-    attack_with, is_proper_target, AttackPowerMode, CombatConfig, Entity, World,
+    attack_dir, attack_with, is_proper_target, AttackPowerMode, CombatConfig, Entity, World,
     ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY, ATTACK_MODE_HAM_PEACE,
 };
 
@@ -1005,17 +1005,13 @@ fn world_host_player_attacker_uses_playobject_override() {
         t.hit_point = 0;
         (a, t)
     };
-    let player_mode = AttackPowerMode::Player {
-        luck: 0,
-        power_rate: 100,
-        bo_power_item: false,
-        power_item: 0,
-    };
     let (mut a, mut t) = mk();
     let mut rng_p = RandomNumber::with_seed(SEED);
+    // 世界宿主完整口径 = `PlayObject.AttackDir`：Player override 的两抽 **+** `_Attack` 之后
+    // `AttackSuccess` 的 `Random(5)`（`PlayObject.Attack.cs:225`）。
     let p = [
-        attack_with(&mut rng_p, &mut a, &mut t, None, &config, player_mode).power,
-        attack_with(&mut rng_p, &mut a, &mut t, None, &config, player_mode).power,
+        attack_dir(&mut rng_p, &mut a, &mut t, None, &config).power,
+        attack_dir(&mut rng_p, &mut a, &mut t, None, &config).power,
     ];
     let (mut a, mut t) = mk();
     let mut rng_b = RandomNumber::with_seed(SEED);
@@ -1066,6 +1062,131 @@ fn world_host_player_attacker_uses_playobject_override() {
         rng_base.draws(),
         1,
         "BaseObject.GetAttackPower 只抽 1 次（BaseObject.Base.cs:886）"
+    );
+}
+
+/// owner 2026-10-12 19:20 裁决②：`attack_success` 站点在 Rust 侧**漏实现**。
+///
+/// oracle：`PlayObject.AttackDir` 在 `_Attack` 之后调 `AttackSuccess`（`PlayObject.Attack.cs:77`），
+/// 目标非空即**无条件**抽一次 `Random(5)`（`:225`；记录站点 `PlayObject.AttackSuccess@PlayObject.Attack.cs:223`）。
+/// 世界宿主的玩家攻击走 [`attack_dir`]（`_Attack` + `AttackSuccess`）；[`attack_with`] 是
+/// `_Attack` 口径（`combat-probe` 真身向量的口径）**不含**这一次。
+///
+/// 改坏必红：把 `attack_dir` 里的 `attack_success_weapon_damage` 删掉（或让 `world.attack_once`
+/// 回退调 `attack_with`）⇒ 本条 `count(5)` 从 1 变 0。
+#[test]
+fn attack_dir_appends_attack_success_random5() {
+    let config = CombatConfig::default();
+    let mk = || {
+        let mut a = Entity::new(1, "hero", 0, 0);
+        a.race = ACTOR_RACE_PLAY;
+        a.dc = 0x1E14;
+        a.hit_point = 20;
+        a.luck = 0;
+        a.power_rate = 100;
+        let mut t = Entity::new(2, "mon", 0, 0);
+        t.race = ACTOR_RACE_MONSTER;
+        t.ac = 0;
+        t.hp = 60000;
+        t.max_hp = 60000;
+        t.hit_point = 0; // 不掷闪避，聚焦 attack_success
+        (a, t)
+    };
+
+    // 世界宿主口径：`_Attack` + `AttackSuccess` ⇒ 多一次 `Random(5)`。
+    let mut rng = CountingRng::new(20261012);
+    let (mut a, mut t) = mk();
+    let _ = attack_dir(&mut rng, &mut a, &mut t, None, &config);
+    assert_eq!(
+        rng.count(5),
+        1,
+        "玩家有目标攻击必须追加一次 AttackSuccess 的 Random(5)（PlayObject.Attack.cs:225）"
+    );
+    assert_eq!(
+        rng.count(11),
+        1,
+        "攻击力 Random(power+1)=Random(11)（DC=0x1E14 ⇒ power=10）"
+    );
+    assert_eq!(
+        rng.count(10),
+        1,
+        "Player override 的 Random(10)（PlayObject.cs:2932）；目标不是玩家 ⇒ 无耐久 Random(10)"
+    );
+
+    // 反例（旧口径）：`attack_with` = `_Attack`，不含 `AttackSuccess` ⇒ `count(5) == 0`。
+    let mut rng_old = CountingRng::new(20261012);
+    let (mut a2, mut t2) = mk();
+    let _ = attack_with(
+        &mut rng_old,
+        &mut a2,
+        &mut t2,
+        None,
+        &config,
+        AttackPowerMode::Player {
+            luck: 0,
+            power_rate: 100,
+            bo_power_item: false,
+            power_item: 0,
+        },
+    );
+    assert_eq!(
+        rng_old.count(5),
+        0,
+        "对照：`_Attack` 口径不含 AttackSuccess 的 Random(5)"
+    );
+}
+
+/// owner 2026-10-12 19:20 裁决③的 `.rs` 侧：**无目标挥砍**也必须抽攻击力。
+///
+/// oracle 在取目标**之前**先算 `GetBaseAttackPoewr()`（`PlayObject.Attack.cs:73`）⇒ 即使前方格无目标
+/// （`GetPoseCreate()` 返回 null），玩家 `Luck <= 0` 仍抽 `Random(power+1)` + `Random(10)` 两次；
+/// 之后 `_Attack(null)`/`AttackSuccess(…, null)` 都不抽 ⇒ **恰好 2 抽、无命中门**。
+///
+/// 改坏必红：若把 `World::attack_swing` 改成「无目标 ⇒ 不抽」（旧接线行为）或误抽命中门，本条必红。
+#[test]
+fn world_attack_swing_draws_power_without_target() {
+    let player = AttackPowerMode::Player {
+        luck: 0,
+        power_rate: 100,
+        bo_power_item: false,
+        power_item: 0,
+    };
+    let mut rng = CountingRng::new(20261012);
+    let p = swing_power(&mut rng, 0x1E14, player);
+    assert_eq!(
+        rng.draws(),
+        2,
+        "无目标挥砍对玩家攻方恰抽 2 次（PlayObject.Attack.cs:73 的 GetBaseAttackPoewr）"
+    );
+    assert_eq!(rng.count(11), 1, "Random(power+1)=Random(11)");
+    assert_eq!(rng.count(10), 1, "Luck=0 的 Random(10)");
+    assert!(
+        (20..=30).contains(&p),
+        "DC=0x1E14 ⇒ power ∈ [20,30]，实际 {p}"
+    );
+
+    // `World::attack_swing` 同口径、同取数次数。
+    let mut world = World::new(32, 32);
+    world.open_session("hero");
+    let mut hero = Entity::new(1, "hero", 10, 10);
+    hero.race = ACTOR_RACE_PLAY;
+    hero.dc = 0x1E14;
+    hero.luck = 0;
+    hero.power_rate = 100;
+    hero.hp = 200;
+    hero.max_hp = 200;
+    let hero_id = world.enter_map("hero", hero, 0).expect("进图");
+    world.tick();
+    world.rng = RandomNumber::with_seed(20261012);
+    let s1 = world.attack_swing(hero_id).unwrap();
+    let s2 = world.attack_swing(hero_id).unwrap();
+    let mut replay = RandomNumber::with_seed(20261012);
+    let r1 = swing_power(&mut replay, 0x1E14, player);
+    let r2 = swing_power(&mut replay, 0x1E14, player);
+    assert_eq!(
+        [s1, s2],
+        [r1, r2],
+        "World::attack_swing 必须与 swing_power 逐值相同（无额外取数、无漏抽）"
     );
 }
 

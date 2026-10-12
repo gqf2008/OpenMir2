@@ -16,5 +16,5 @@ tick 5 clock 1000
 ent 1 0 10 10 200 10 0 vis 4:1
 ent 2 0 12 10 0 1 0 vis
 ent 4 0 11 11 200 10 0 vis 4:1
-atk 4 2 21 0
+atk 4 2 22 0
 death 2 0 0 -1 0

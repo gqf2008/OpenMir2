@@ -1,0 +1,41 @@
+# F-1 溯源重采：C# 权威 RNG 流水（owner 2026-10-12 19:40）
+
+reviewer-5 对活栈账本片（patch `f981157d` @ `ddf3fbbb`）判 request_changes 的 **F-1**：
+报告 §5 引用的 C# 流水路径**已被后续运行覆盖**，`22/25/28/32` 的 C# 侧数字不可复算。
+本片按 owner 要求**重采一次**并**备份到不被覆盖的路径**，当场记 sha256 + 字节数，重出 C# 侧入库件。
+
+## 新权威件（可复算）
+
+| 项 | 值 |
+|---|---|
+| 采集源 | `E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv`（钩子 `MIR2_RNG_LOG`，`MIR2_RNG_SITE=1`） |
+| **备份件（不可覆盖）** | `E:/tmp/m3cs-f1/csharp-rng-stream-f1-20261012.tsv` |
+| **sha256** | `a7df711624e6f3d9651c2b6731b946a0fa9a3fcbf7732c33b2ffc81c1788f7fa` |
+| **字节数** | `416513542` |
+| **行数** | `5090896`（含 `INJECT_OK 42` + `SEED_PROBE` 两行头） |
+| 会话 | `csharp-20261012-195722`（本目录 `sessions/csharp-20261012-195722/`，5 件） |
+| 口径 | `0137` / `MIR2_RNG_SEED=42` / `-Side csharp -Bots 2 -AttackCount 120 -AttackPinPair` |
+| 夹具读数 | `pin_attempts=5 > expected=2`（`pin_hold.txt`）⇒ run_attack_pair 在 pin 门 PREREQ 退出（**m3bag 写集**，本片只登记）；`ATTACKSEQ_OK markers=124 raw=True` |
+
+### 重算读数（`rng_ledger_diff.py summary/segments`，见 `../22-csharp-summary.txt`、`../26-csharp-segments.txt`）
+
+- `total=5090894`、`attack_path=352`、`noise=5090542`（**99.99%**）、`distinct_sites=95`。
+- canonical 攻击面：`atk_power_a=120`、`atk_power_b=120`、`hit_gate=36`、`hit_struck_damage=35`、
+  `atk_power_base=34`、`struck_durability=3`、`attack_success=2`。
+- 分段 = **120**：116 × `[atk_power_a, atk_power_b]`；2 × `[.. hit_gate, hit_struck_damage, struck_durability, attack_success]`；
+  2 × `[.. atk_power_base, hit_gate, hit_struck_damage]`。
+
+## 旧件（作废，不可独立复算）
+
+- 旧报告/README 引用的 `E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv` = `38,667,923 B`（会话 `csharp-20261012-185128`），
+  读数 `total=479028 / hit_gate=9 / atk_power_base=5 / attack_success=4 / struck_durability=2`。
+- **该 38,667,923 B 原件已被后续运行覆盖**（owner 现场已核：本机无备份可捞）⇒ 旧数字**作废**，
+  `22/23/25/26/28/32` 已按新权威件重出。旧件曾自称「可复算」的表述**不成立**，本片更正为
+  「作者自述、原件已被覆盖、不可独立复算」。
+
+## Rust 侧（未重采，标注）
+
+- `E:/tmp/m3cs-r2/rust-rng-stream-r1.tsv`（=`-r2.tsv`），sha256 `4963e9f6f5012a74f9cf59984bd33098895ab21d35b63204cc7588376cd4d12d`，8078 B。
+- **注意**：该 Rust trace 是**本片 .rs 改动之前**采集的（无 `attack_success`、旧行号 736/606/579…）；
+  本片给 `rng_ledger_diff.py` 加了旧行号别名以便旧件仍可复算。`25/28/32` 的 **B 侧（Rust）是旧代码 trace**，
+  逐 k/段形状的跨侧结论仍受此限制；Rust 侧要用新代码重采需再取窗口（本片未做）。

@@ -25,12 +25,12 @@ pub mod world;
 pub use aoi::{search_view_range, search_view_range_death, update_visible_gay, visible_snapshot};
 pub use bevy_bridge::{collect_tick_order_system, snapshot_from_world};
 pub use combat::{
-    attack, attack_with, get_attack_power_hit, is_attack_target, is_attack_target_base,
-    is_attack_target_player, is_proper_target, is_protect_target, recalc_hit_speed, AttackHitState,
-    AttackOutcome, AttackPowerMode, CombatConfig, HitSpeedInput, HitSpeedOutcome,
-    ACTOR_RACE_ANIMAL, ACTOR_RACE_NPC, ACTOR_RACE_PEACE_NPC, ATTACK_MODE_HAM_ALL,
-    ATTACK_MODE_HAM_DEAR, ATTACK_MODE_HAM_GROUP, ATTACK_MODE_HAM_GUILD, ATTACK_MODE_HAM_MASTER,
-    ATTACK_MODE_HAM_PEACE, ATTACK_MODE_HAM_PKATTACK,
+    attack, attack_dir, attack_success_weapon_damage, attack_with, get_attack_power_hit,
+    is_attack_target, is_attack_target_base, is_attack_target_player, is_proper_target,
+    is_protect_target, recalc_hit_speed, AttackHitState, AttackOutcome, AttackPowerMode,
+    CombatConfig, HitSpeedInput, HitSpeedOutcome, ACTOR_RACE_ANIMAL, ACTOR_RACE_NPC,
+    ACTOR_RACE_PEACE_NPC, ATTACK_MODE_HAM_ALL, ATTACK_MODE_HAM_DEAR, ATTACK_MODE_HAM_GROUP,
+    ATTACK_MODE_HAM_GUILD, ATTACK_MODE_HAM_MASTER, ATTACK_MODE_HAM_PEACE, ATTACK_MODE_HAM_PKATTACK,
 };
 pub use entity::{Entity, EntityStore, VisibleFlag, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY};
 pub use magic::{

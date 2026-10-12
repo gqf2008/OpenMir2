@@ -1,0 +1,9 @@
+RNG_LEDGER_DIFF attack_only=True a=E:/tmp/m3cs-f1/csharp-rng-stream-f1-20261012.tsv(352) b=E:/tmp/m3cs-r2/rust-rng-stream-r1.tsv(146)
+  A_CANONICAL {'atk_power_a': 120, 'atk_power_b': 120, 'hit_gate': 36, 'hit_struck_damage': 35, 'atk_power_base': 34, 'struck_durability': 3, 'M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:793': 2, 'attack_success': 2}
+  B_CANONICAL {'atk_power_a': 36, 'atk_power_b': 36, 'hit_gate': 36, 'hit_struck_damage': 19, 'struck_durability': 19}
+  ONLY_IN_A(missing_in_B) {'atk_power_base': 34, 'M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:793': 2, 'attack_success': 2}
+  ONLY_IN_B(extra_in_B)   {}
+  FIRST_DIVERGENCE index=0  a=M2Server.Actor.BaseObject.GetAttackPower@BaseObject.Base.cs:892  b=crates/world/src/combat.rs:109
+    context a[0:2]=['atk_power_base', 'hit_gate']
+    context b[0:2]=['atk_power_a', 'atk_power_b']
+  VERDICT ORDER_DIVERGENCE
