@@ -1,0 +1,19 @@
+# M3 T-14 pin settle+hold 可判红自检（owner 2026-10-12 08:20）——判据原始命令
+# cwd = 仓库根 E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3bag
+# 全部离线：不起栈、不占端口、不碰 DB。
+
+# 0) PowerShell 语法解析自检（四文件）
+powershell -NoProfile -ExecutionPolicy Bypass -File E:/tmp/m3bag-parsecheck.ps1
+
+# 1) 门禁护栏自检（含新增 ⑥ pin settle+hold 组；离线）
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/selftest_gate.ps1
+
+# 2) T-14 无栈自检（含新增 ⑩ pin settle+hold 可判红自检；离线）
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_bag_equip_pair.ps1 -SelfCheckNoStack
+
+# 3) 四门禁（本片零 .rs 改动 ⇒ 回归确认；隔离 CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target，--offline）
+cd mir2-rs
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --offline -- -D warnings
+cargo test --workspace --offline            # 73 suites / 566 passed / 0 failed / 16 ignored
+cargo run --offline -p msgcodegen -- --check # 604 条常量一致
