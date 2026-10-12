@@ -1,0 +1,11 @@
+# 四门禁汇总（m2svr-preflight-modulepath-20261012）
+# 隔离 target：E:/tmp/openmir2-m2svr-amw-target；--offline；cwd = <worktree>/mir2-rs
+fmt        rc=0   (无输出)                                   gate-fmt.txt            [0B]
+clippy     rc=0   Finished `dev` profile                     gate-clippy-full.txt
+test       rc=0   82 suites / 669 passed / 0 failed / 16 ignored   gate-test-full.txt
+msgcodegen rc=0   604 条常量与 C# 源一致                      gate-msgcodegen.txt
+
+# 非 Rust 门（本片核心判据）：
+preflight  rc=0   SUMMARY ok=18 missing=0 red=0 info=0  GREEN   preflight-after.txt   （改前 rc=1 → preflight-before.txt）
+selftest   rc=0   46/46 GREEN                                  selftest-after.txt    （改前 46/5 → selftest-before.txt）
+redcheck   rc=1   46/4（sha 改常量 ⇒ preflight GREEN 用例必红） selftest-redcheck.txt

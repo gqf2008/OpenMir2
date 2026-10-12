@@ -123,7 +123,13 @@ $goldenPresent = Test-Path $GoldenPath
 if (-not $goldenPresent) {
   Add-Item "golden" "golden:文件" "MISSING" ("金标准不存在 " + $GoldenPath)
 } else {
-  $sha = (Get-FileHash -Path $GoldenPath -Algorithm SHA256).Hash.ToLowerInvariant()
+  # 用 .NET 算 sha256，**不要**用 `Get-FileHash`：后者属 `Microsoft.PowerShell.Utility`，在父进程把
+  # `PSModulePath` 指成 PS7 优先的环境里，5.1 子进程会加载 PS7 的 Utility（不导出该 cmdlet）⇒ 脚本**崩溃**
+  # 并被上层（selftest/run_acceptance）误判为 RED。.NET 不依赖模块解析，结果与 `-Algorithm SHA256` 逐字节相同。
+  $shaAlg = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    $sha = ([System.BitConverter]::ToString($shaAlg.ComputeHash([System.IO.File]::ReadAllBytes($GoldenPath))) -replace '-', '').ToLowerInvariant()
+  } finally { $shaAlg.Dispose() }
   Add-Item "golden" "golden:文件" "OK" ("{0} sha256={1}" -f $GoldenPath, $sha)
   # 身份：金标准即合同。换成 A-9 旧件会在 811 出假红（brief/README 明写）。
   if ($sha -eq $ExpectedGoldenSha.ToLowerInvariant()) {
