@@ -1,0 +1,25 @@
+# 变异 / 还原的逐文件 sha256（sha256sum；盘上字节 = LF，等同仓库 blob 口径）
+
+## 交付前的生产件（= 自检 GREEN 的状态；也是本片 head 的内容）
+
+    fc75d576d56555c9903ce10f9004a600b0b6e70f5cb014d6ff6d3f18c301c26b *run_pair.ps1
+    3ca8f5d86373f8ddc28f05996c70754875f60818bed35dd8660f0c28b1cdf36b *gate_guards.ps1
+    93b1d6f0309a65bcaa2bd43d1d2085960c767e78597ee3cf5541c13f1954f3c2 *run_bag_equip_pair.ps1
+    f5c68c6293f3aed1e78a3ddfc9060adf2ec21e42a3b10021308d58e23dd5c432 *run_attack_pair.ps1
+
+（原始输出 `00-sha-before.txt` 式：`sha256sum <4 文件>`。）
+
+## 变异 A（run_pair.ps1：注释掉 `save_settle_instrument` 生产接线）
+
+- 自检结果：RED（`save_settle_instrument_missing, ..._missing_timeout, ..._missing_poll, ..._missing_quiet`）→ `03-mutation-a-no-instrument-RED.txt`
+- 还原：`cp backup/run_pair.ps1 run_pair.ps1` ⇒ `fc75d576d56555c9903ce10f9004a600b0b6e70f5cb014d6ff6d3f18c301c26b`（与上表**逐字节相同**）
+
+## 变异 B（gate_guards.ps1：`Invoke-M3SaveRcdSettle` 超时也返回 `Settled=$true`，削弱 fail-closed）
+
+- 自检结果：RED（`save_settle_never_landed_false_green, save_settle_timeout_reason=save_rcd_settled, save_settle_single_observation_false_green`）→ `04-mutation-b-settle-weakened-RED.txt`
+- 还原：`cp backup/gate_guards.ps1 gate_guards.ps1` ⇒ `3ca8f5d86373f8ddc28f05996c70754875f60818bed35dd8660f0c28b1cdf36b`（与上表**逐字节相同**）
+
+## 还原后复跑（证明交付态确实是 GREEN）
+
+- `01-bag-selfcheck-GREEN.txt`（rc=0）
+- `02-attack-selfcheck-GREEN.txt`（rc=0）

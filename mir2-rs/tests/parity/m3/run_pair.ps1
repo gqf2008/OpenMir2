@@ -65,6 +65,9 @@ param(
   [int]$PinDir = 0,
   [int]$PinSettleSeconds = 3,      # 仅 -PinStartPose：每轮 pin 后的 settle 窗口（异步掉线存档落库，见 gate_guards.ps1 ⑥）
   [int]$PinMaxAttempts = 5,        # 仅 -PinStartPose：settle+hold 最多轮数（仍 hold 不住 ⇒ throw，fail-closed）
+  [int]$SaveSettleTimeoutSeconds = 0,  # AFTER 快照前「等断线存档落库」上限秒数（<=0 ⇒ gate_guards 唯一口径）
+  [int]$SaveSettlePollMs = 0,          # 同上：轮询间隔 ms（<=0 ⇒ gate_guards 唯一口径）
+  [int]$SaveSettleQuietPolls = 0,      # 同上：连续达标轮数（<=0 ⇒ gate_guards 唯一口径；必须 >=2）
   [switch]$AttackPinPair,          # 攻击变体：两 bot **相邻**固定起点（attacker/victim；配合 -AttackSequence）
   [int]$AttackPinDir = 2,          # 仅 -AttackPinPair：attacker 朝向（默认 2=RIGHT，victim 在右邻格）
   [int]$AttackPinDx = 1,           # 仅 -AttackPinPair：victim 相对 attacker 的 X 偏移（默认 +1）
@@ -82,6 +85,11 @@ $MysqlExe = 'D:\mysql\mariadb-10.11.19-winx64\bin\mysql.exe'
 $Scoped = Join-Path $Here 'scoped_diff.py'
 # 背包/装备序列口径（T-14 复跑：两侧同一组开关）的唯一形态在 gate_guards.ps1（与 run_m3_gate/selftest 共用）。
 . (Join-Path $Here 'gate_guards.ps1')
+# F-2 竞态修（owner 2026-10-13 04:05）：AFTER 快照前「等断线存档落库」的唯一口径在 gate_guards.ps1；
+# 参数 0 表示用唯一口径常量（单一真源，避免 run_pair 与 gate_guards 漂移）。
+if ($SaveSettleTimeoutSeconds -le 0) { $SaveSettleTimeoutSeconds = $script:M3SaveSettleTimeoutSeconds }
+if ($SaveSettlePollMs -le 0) { $SaveSettlePollMs = $script:M3SaveSettlePollMs }
+if ($SaveSettleQuietPolls -le 0) { $SaveSettleQuietPolls = $script:M3SaveSettleQuietPolls }
 
 # R-1（owner 2026-10-12 14:30）：攻击对拍场景必须整张图无怪 ⇒ `-AttackPinPair` 的 pin 地图缺省取
 # `gate_guards` 的唯一来源常量 `$script:M3AttackPinMap`（0137，MonGen 为空）；背包/装备（非攻击）路径仍缺省 map 0。
@@ -225,6 +233,11 @@ if ($EmitOpsArgs) {
     attack_sequence   = Format-M3AttackScope -AttackSequence ([bool]$AttackSequence) -AttackCount $AttackCount -AttackStepMs $AttackStepMs -AttackStartDelayMs $AttackStartDelayMs -DisableAutoPlay ([bool]$AttackSequence)
     start_pose        = (Get-M3StartPoseLabel)
     attack_pose       = (Get-M3AttackPoseLabel)
+  }
+  # F-2 竞态修（owner 2026-10-13 04:05）：存档序列的 AFTER 快照前「等断线存档落库」仪器形态，
+  # 无栈自检据此机判生产接线未被削弱（mode=save_rcd、timeout/poll>=1、quiet>=2），也据此发现「改回固定 sleep」。
+  if ($BagEquipSequence -or $AttackSequence) {
+    $obj['save_settle_instrument'] = (Format-M3SaveSettleInstrument -TimeoutSeconds $SaveSettleTimeoutSeconds -PollMilliseconds $SaveSettlePollMs -QuietPolls $SaveSettleQuietPolls)
   }
   if ($PinStartPose) {
     $pre = Get-M3BotOpPlan -ForPrewarm
@@ -443,6 +456,14 @@ if ($PinStartPose) {
 }
 
 # ---- 3. 快照 BEFORE ----
+# F-2 竞态修（owner 2026-10-13 04:05）：AFTER 快照前「等断线存档落库」的参考时刻 = BEFORE 快照时的 DB 时钟。
+# `characters_ablity.ModifyTime` 由存档 `SaveAblity` 置 `now()`；只有**晚于**该参考才说明本段存档已落库。
+# 仅存档序列（-BagEquipSequence/-AttackSequence）需要；其余路径不取参考、不额外等待（行为逐字节不变）。
+$saveSettleRef = ''
+if (($BagEquipSequence -or $AttackSequence) -and -not $SkipBots) {
+  $saveSettleRef = ([string](Invoke-Mysql "SELECT DATE_FORMAT(NOW(),'%Y-%m-%d %H:%i:%s')")).Trim()
+  Write-Output ("SAVE_SETTLE_REF {0}" -f $saveSettleRef)
+}
 $snapBefore = Join-Path $SessionDir 'snap_before'
 python $Dbsnap snap --out $snapBefore | Tee-Object -FilePath (Join-Path $SessionDir 'dbsnap_before.log')
 if ($LASTEXITCODE -ne 0) { throw 'snap_before 失败' }
@@ -604,11 +625,29 @@ if (-not $SkipBots) {
 
 # ---- 5. 快照 AFTER ----
 # M3 T-14：run_bots 收工时 kill BotSrv ⇒ 服务端从掉线路径走 `SaveHumanRcd`（WorldServer 的非活跃分支），
-# 把本段 in-world 改动（装备/卸下/用药）落库。给保存线程一点时间再取 AFTER 快照，否则会漏掉刚发生的改动。
-# 仅 -BagEquipSequence 时等待；其余路径逐字节不变（不加额外等待）。
-if ($BagEquipSequence -or $AttackSequence) {
-  Write-Output 'SETTLE_SEQ 等掉线存档落库（3s）'
-  Start-Sleep -Seconds 3
+# 把本段 in-world 改动（装备/卸下/用药）落库。**但 oracle 的断线存档是异步的**（C# 实测落库滞后
+# +3.7s/+7.7s，Rust 亚秒级）⇒ 旧实现固定 `Start-Sleep 3` 会间歇早于落库、把「存档未写」误判成实现差
+# （F-2 归因：`evidence-m3-scoped-diff-ability-20261013/README.md` §6；7 处差异里 6 处同因）。
+# 修法 = **等状态变化**（轮询到本前缀角色存档落库），超时 ⇒ fail-closed（点名 RED，绝不静默继续）。
+# 仅 -BagEquipSequence/-AttackSequence（且非 -SkipBots）生效；其余路径逐字节不变（不加任何等待）。
+$saveSettleLabel = '(off)'
+if (($BagEquipSequence -or $AttackSequence) -and -not $SkipBots) {
+  if ([string]::IsNullOrEmpty($saveSettleRef)) { throw 'SAVE_SETTLE_REF 缺失——存档序列必须在 BEFORE 快照前取 DB 参考时刻（F-2）' }
+  $saveSettleProbe = {
+    $n = Invoke-Mysql (Get-M3SaveSettleProbeSql -ChrNamePrefix $Prefix -ReferenceTime $saveSettleRef)
+    return [pscustomobject]@{ Landed = [int]$n }
+  }
+  $saveSettle = Invoke-M3SaveRcdSettle -Probe $saveSettleProbe -Expected $Bots -TimeoutSeconds $SaveSettleTimeoutSeconds -PollMilliseconds $SaveSettlePollMs -QuietPolls $SaveSettleQuietPolls
+  $saveSettleLabel = 'mode=save_rcd expected={0} landed={1} polls={2} elapsed_ms={3} quiet_polls={4} timeout_s={5} ref={6} verdict={7}' -f `
+    $Bots, $saveSettle.LastLanded, $saveSettle.Polls, $saveSettle.ElapsedMs, $SaveSettleQuietPolls, $SaveSettleTimeoutSeconds, $saveSettleRef, $saveSettle.Reason
+  Write-Output ('SETTLE_SAVE_RCD ' + $saveSettleLabel)
+  if (-not $saveSettle.Settled) {
+    throw ("RED: 断线存档未在 {0}s 内落库（{1}，landed={2}/{3}，ref={4}）—— AFTER 快照会漏掉本段改动（F-2 竞态）；绝不静默继续" -f `
+      $SaveSettleTimeoutSeconds, $saveSettle.Reason, $saveSettle.LastLanded, $Bots, $saveSettleRef)
+  }
+} elseif ($BagEquipSequence -or $AttackSequence) {
+  $saveSettleLabel = '(off: -SkipBots)'
+  Write-Output 'SETTLE_SAVE_RCD SKIPPED (-SkipBots)'
 }
 $snapAfter = Join-Path $SessionDir 'snap_after'
 python $Dbsnap snap --out $snapAfter | Tee-Object -FilePath (Join-Path $SessionDir 'dbsnap_after.log')
@@ -653,6 +692,7 @@ $baseline = [pscustomobject]@{
   attack_sequence = (Format-M3AttackScope -AttackSequence ([bool]$AttackSequence) -AttackCount $AttackCount -AttackStepMs $AttackStepMs -AttackStartDelayMs $AttackStartDelayMs -DisableAutoPlay ([bool]$AttackSequence))
   attack_pose = (Get-M3AttackPoseLabel)
   pin_attempts = $(if ($pinAttempts -ge 1) { Format-M3PinAttempts -Attempts $pinAttempts -Expected $pinAttemptsExpected -SettleRounds $pinSettleRounds -MaxAttempts $PinMaxAttempts } else { '(off)' })
+  save_settle = $saveSettleLabel
   prewarm_no_world_entry = $prewarmNoWorldEntry
   attack_markers = $attackMarkers
   attack_raw = $(if (Test-Path $attackRawPath) { (Split-Path $attackRawPath -Leaf) } else { '' })

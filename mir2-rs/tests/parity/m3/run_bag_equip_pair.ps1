@@ -379,8 +379,50 @@ if ($SelfCheckNoStack) {
   if (-not (($bagMutVio -join ';') -match 'a\.IncHealth')) { $failures += 'bag_pin_sql_column_mutation_not_diff_shaped' }
   Write-Output ("SELFTEST ⑪ pin SQL 别名/列校验：生产 statements={0} violations={1}；改坏 a.IncHealth violations={2}" -f $bagPinSql.Count, $bagVio.Count, $bagMutVio.Count)
 
+  # ⑫ AFTER 快照前的「断线存档落库」确定性等待（F-2 竞态修，owner 2026-10-13 04:05 待办）。
+  #    驱动**生产同一函数** `gate_guards.ps1::Invoke-M3SaveRcdSettle`（唯一口径）：
+  #    (a) 晚落库（第 12 轮才到）⇒ 必须等到（证明已不再固定 3s、且判据不是恒真）；
+  #    (b) 永不落库 ⇒ Settled=false 且 reason=save_rcd_settle_timeout（fail-closed 有牙）；
+  #    (c) 落库后又掉（单次观测）⇒ 不得 settled（连续 QuietPolls 才成立）；
+  #    (d) 生产接线未被削弱：`run_pair -EmitOpsArgs -BagEquipSequence` 必带 `save_settle_instrument`
+  #        （mode=save_rcd）且 timeout/poll>=1、quiet>=2。
+  $script:ssPoll = 0
+  $rLate = Invoke-M3SaveRcdSettle -Expected 2 -TimeoutSeconds 5 -PollMilliseconds 10 -QuietPolls 2 -Probe {
+    $script:ssPoll++
+    if ($script:ssPoll -ge 12) { return [pscustomobject]@{ Landed = 2 } }
+    return [pscustomobject]@{ Landed = 0 }
+  }
+  if (-not $rLate.Settled) { $failures += ('save_settle_late_not_settled=' + $rLate.Reason) }
+  if ($rLate.Polls -lt 13) { $failures += ('save_settle_late_too_few_polls=' + $rLate.Polls) }
+  Write-Output ("SELFTEST ⑫a 晚落库（第 12 轮才到）⇒ Settled={0} polls={1} elapsed_ms={2}（期望 True/>=13：12 轮 + 连续 2 轮确认）" -f $rLate.Settled, $rLate.Polls, $rLate.ElapsedMs)
+  $rNever = Invoke-M3SaveRcdSettle -Expected 2 -TimeoutSeconds 1 -PollMilliseconds 20 -Probe { return [pscustomobject]@{ Landed = 0 } }
+  if ($rNever.Settled) { $failures += 'save_settle_never_landed_false_green' }
+  if ($rNever.Reason -ne 'save_rcd_settle_timeout') { $failures += ('save_settle_timeout_reason=' + $rNever.Reason) }
+  Write-Output ("SELFTEST ⑫b 永不落库 ⇒ Settled={0} reason={1}（期望 False/save_rcd_settle_timeout）" -f $rNever.Settled, $rNever.Reason)
+  $script:ssFlap = 0
+  $rFlap = Invoke-M3SaveRcdSettle -Expected 1 -TimeoutSeconds 1 -PollMilliseconds 5 -QuietPolls 3 -Probe {
+    $script:ssFlap++
+    if ($script:ssFlap -eq 1) { return [pscustomobject]@{ Landed = 1 } }
+    return [pscustomobject]@{ Landed = 0 }
+  }
+  if ($rFlap.Settled) { $failures += 'save_settle_single_observation_false_green' }
+  Write-Output ("SELFTEST ⑫c 落库后又掉（单次观测）⇒ Settled={0}（期望 False）" -f $rFlap.Settled)
+  $emitSs = & powershell -ExecutionPolicy Bypass -File $RunPair -EmitOpsArgs -BagEquipSequence
+  if ($LASTEXITCODE -ne 0) { $failures += 'emit_save_settle_rc=non-zero' }
+  else {
+    $inst = (($emitSs | Out-String).Trim() | ConvertFrom-Json).save_settle_instrument
+    if ($inst -notmatch 'mode=save_rcd') { $failures += 'save_settle_instrument_missing' }
+    if ($inst -notmatch 'timeout_s=(\d+)') { $failures += 'save_settle_instrument_missing_timeout' }
+    elseif ([int]$Matches[1] -lt 1) { $failures += ('save_settle_timeout_too_small=' + $Matches[1]) }
+    if ($inst -notmatch 'poll_ms=(\d+)') { $failures += 'save_settle_instrument_missing_poll' }
+    elseif ([int]$Matches[1] -lt 1) { $failures += ('save_settle_poll_too_small=' + $Matches[1]) }
+    if ($inst -notmatch 'quiet_polls=(\d+)') { $failures += 'save_settle_instrument_missing_quiet' }
+    elseif ([int]$Matches[1] -lt 2) { $failures += ('save_settle_quiet_too_small=' + $Matches[1]) }
+    Write-Output ("SELFTEST ⑫d 生产 save_settle_instrument='{0}'（要求 mode=save_rcd 且 timeout/poll>=1、quiet>=2）" -f $inst)
+  }
+
   if ($failures.Count -eq 0) {
-    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（配置透传有/无两向 + run_pair 关挂机耦合两向 + 固定起点两相 + pin settle+hold 可判红自检（跳过 settle / 早于落库 / 反复覆盖 / 正常收敛）+ 旧挂机 peer/旧起点 peer 必红 + CX/CY 逐字节比断言 + 断线存档 preflight + 入口护栏/DiffOnly fail-closed + pin SQL 别名/列校验（含改坏 a.IncHealth 必红））'
+    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（配置透传有/无两向 + run_pair 关挂机耦合两向 + 固定起点两相 + pin settle+hold 可判红自检（跳过 settle / 早于落库 / 反复覆盖 / 正常收敛）+ 旧挂机 peer/旧起点 peer 必红 + CX/CY 逐字节比断言 + 断线存档 preflight + 入口护栏/DiffOnly fail-closed + pin SQL 别名/列校验（含改坏 a.IncHealth 必红）+ AFTER 快照前断线存档落库等待（F-2：晚落库必等到 / 永不落库 fail-closed / 单次观测不得 settled / 生产仪器 save_settle 机判））'
     exit 0
   }
   Write-Output ('SELFTEST_RED RED: ' + ($failures -join ', '))
