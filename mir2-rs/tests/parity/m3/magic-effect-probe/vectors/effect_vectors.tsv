@@ -1,0 +1,158 @@
+seed	20261012
+turn_undead	20209540	50	20	1	0	1	0	50	1|Next(max)|300|3|max;2|Next(max)|2|0|max;3|Next(max)|100|52|max	0	500	1	0	1
+turn_undead	20209541	50	20	1	0	1	0	50	1|Next(max)|300|159|max;2|Next(max)|2|0|max;3|Next(max)|100|22|max	1	0	1	0	1
+turn_undead	20209542	50	20	1	0	1	0	50	1|Next(max)|300|16|max;2|Next(max)|2|1|max;3|Next(max)|100|91|max	0	500	1	0	1
+turn_undead	20209543	50	20	1	0	1	0	50	1|Next(max)|300|173|max;2|Next(max)|2|1|max;3|Next(max)|100|61|max	0	500	1	0	1
+turn_undead	20209536	50	20	1	0	1	0	50	1|Next(max)|300|276|max;2|Next(max)|2|1|max;3|Next(max)|100|72|max	0	500	1	0	1
+turn_undead	20209537	50	20	1	0	1	0	50	1|Next(max)|300|132|max;2|Next(max)|2|0|max;3|Next(max)|100|42|max	1	0	1	0	1
+turn_undead	20209540	50	20	1	0	1	3	50	1|Next(max)|300|3|max;2|Next(max)|2|0|max;3|Next(max)|100|52|max	1	0	1	0	1
+turn_undead	20209541	50	20	1	0	1	3	50	1|Next(max)|300|159|max;2|Next(max)|2|0|max;3|Next(max)|100|22|max	1	0	1	0	1
+turn_undead	20209542	50	20	1	0	1	3	50	1|Next(max)|300|16|max;2|Next(max)|2|1|max;3|Next(max)|100|91|max	0	500	1	0	1
+turn_undead	20209543	50	20	1	0	1	3	50	1|Next(max)|300|173|max;2|Next(max)|2|1|max;3|Next(max)|100|61|max	1	0	1	0	1
+turn_undead	20209536	50	20	1	0	1	3	50	1|Next(max)|300|276|max;2|Next(max)|2|1|max;3|Next(max)|100|72|max	0	500	1	0	1
+turn_undead	20209537	50	20	1	0	1	3	50	1|Next(max)|300|132|max;2|Next(max)|2|0|max;3|Next(max)|100|42|max	1	0	1	0	1
+turn_undead	20232324	50	60	1	0	1	3	50	1|Next(max)|300|284|max;2|Next(max)|2|0|max	0	500	1	0	1
+turn_undead	20232325	50	60	1	0	1	3	50	1|Next(max)|300|141|max;2|Next(max)|2|1|max	0	500	1	0	1
+turn_undead	20232326	50	60	1	0	1	3	50	1|Next(max)|300|298|max;2|Next(max)|2|1|max	0	500	1	0	1
+turn_undead	20232327	50	60	1	0	1	3	50	1|Next(max)|300|154|max;2|Next(max)|2|0|max	0	500	1	0	1
+turn_undead	20209556	50	20	0	0	1	3	50		0	500	0	0	0
+turn_undead	20209557	50	20	0	0	1	3	50		0	500	0	0	0
+turn_undead	20209540	50	20	1	1	1	3	50		0	500	0	0	0
+turn_undead	20209541	50	20	1	1	1	3	50		0	500	0	0	0
+turn_undead	20305316	30	25	1	0	1	3	50	1|Next(max)|300|245|max;2|Next(max)|2|1|max;3|Next(max)|100|79|max	0	500	1	0	1
+turn_undead	20305317	30	25	1	0	1	3	50	1|Next(max)|300|101|max;2|Next(max)|2|1|max;3|Next(max)|100|49|max	0	500	1	0	1
+turn_undead	20305318	30	25	1	0	1	3	50	1|Next(max)|300|258|max;2|Next(max)|2|0|max;3|Next(max)|100|19|max	1	0	1	0	1
+turn_undead	20305319	30	25	1	0	1	3	50	1|Next(max)|300|115|max;2|Next(max)|2|0|max;3|Next(max)|100|89|max	0	500	1	0	1
+turn_undead	20209540	50	20	1	0	0	3	50	1|Next(max)|2|0|max;2|Next(max)|100|10|max	1	0	1	0	1
+turn_undead	20209541	50	20	1	0	0	3	50	1|Next(max)|2|1|max;2|Next(max)|100|39|max	1	0	1	0	1
+turn_undead	20209542	50	20	1	0	0	3	50	1|Next(max)|2|0|max;2|Next(max)|100|69|max	0	500	1	0	1
+turn_undead	20209543	50	20	1	0	0	3	50	1|Next(max)|2|1|max;2|Next(max)|100|98|max	0	500	1	0	1
+tamming	20271828	50	10	80	0	0	0	0	0	500	0	10	50	5	100	1400	2000	1|Next(max)|4|3|max;2|Next(max)|2|1|max	0	500	0	0	1400	2000	0
+tamming	20271829	50	10	80	0	0	0	0	0	500	0	10	50	5	100	1400	2000	1|Next(max)|4|1|max;2|Next(max)|2|1|max	0	500	0	0	1400	2000	0
+tamming	20271830	50	10	80	0	0	0	0	0	500	0	10	50	5	100	1400	2000	1|Next(max)|4|3|max;2|Next(max)|2|0|max	1	500	0	0	1400	2000	0
+tamming	20271831	50	10	80	0	0	0	0	0	500	0	10	50	5	100	1400	2000	1|Next(max)|4|1|max;2|Next(max)|2|0|max	1	500	0	0	1400	2000	0
+tamming	20292308	50	10	80	0	0	0	0	0	500	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	500	1	0	1400	2000	0
+tamming	20292309	50	10	80	0	0	0	0	0	500	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|0|max;4|Next(max)|85|39|max;5|Next(max)|10|3|max;6|Next(max)|14|12|max	1	500	1	0	1400	2000	0
+tamming	20292310	50	10	80	0	0	0	0	0	500	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|2|max;4|Next(max)|20|13|max	1	500	1	0	1400	2000	1
+tamming	20292311	50	10	80	0	0	0	0	0	500	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	500	1	0	1400	2000	0
+tamming	20284820	50	40	80	0	0	0	0	0	100	3	10	50	5	100	3000	3000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	3000	3000	0
+tamming	20284821	50	40	80	0	0	0	0	0	100	3	10	50	5	100	3000	3000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	3000	3000	0
+tamming	20284822	50	40	80	0	0	0	0	0	100	3	10	50	5	100	3000	3000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|2|max;4|Next(max)|20|8|max	1	100	1	0	3000	3000	1
+tamming	20284823	50	40	80	0	0	0	0	0	100	3	10	50	5	100	3000	3000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	3000	3000	0
+tamming	20284816	50	40	80	0	0	0	0	0	100	3	10	50	5	100	3000	3000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|1|max;4|Next(max)|20|2|max	1	100	1	0	3000	3000	1
+tamming	20284817	50	40	80	0	0	0	0	0	100	3	10	50	5	100	3000	3000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	3000	3000	0
+tamming	20284818	50	40	80	0	0	0	0	0	100	3	10	50	5	100	3000	3000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|2|max;4|Next(max)|20|11|max	1	100	1	0	3000	3000	1
+tamming	20284819	50	40	80	0	0	0	0	0	100	3	10	50	5	100	3000	3000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|1|max;4|Next(max)|20|15|max	1	100	1	0	3000	3000	1
+tamming	20284828	50	40	80	0	0	0	0	0	100	3	10	50	5	100	3000	3000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|2|max;4|Next(max)|20|13|max	1	100	1	0	3000	3000	1
+tamming	20284829	50	40	80	0	0	0	0	0	100	3	10	50	5	100	3000	3000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|1|max;4|Next(max)|20|18|max	1	100	1	0	3000	3000	1
+tamming	20284830	50	40	80	0	0	0	0	0	100	3	10	50	5	100	3000	3000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	3000	3000	0
+tamming	20284831	50	40	80	0	0	0	0	0	100	3	10	50	5	100	3000	3000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	3000	3000	0
+tamming	20284824	50	40	80	0	0	0	0	0	100	3	10	50	5	100	3000	3000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	3000	3000	0
+tamming	20284825	50	40	80	0	0	0	0	0	100	3	10	50	5	100	3000	3000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|2|max;4|Next(max)|20|1|max	1	100	1	0	3000	3000	1
+tamming	20284826	50	40	80	0	0	0	0	0	100	3	10	50	5	100	3000	3000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|1|max;4|Next(max)|20|5|max	1	100	1	0	3000	3000	1
+tamming	20284827	50	40	80	0	0	0	0	0	100	3	10	50	5	100	3000	3000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	3000	3000	0
+tamming	20284804	50	40	80	0	0	0	0	0	100	3	10	50	5	100	3000	3000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	3000	3000	0
+tamming	20284805	50	40	80	0	0	0	0	0	100	3	10	50	5	100	3000	3000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|2|max;4|Next(max)|20|15|max	1	100	1	0	3000	3000	1
+tamming	20284806	50	40	80	0	0	0	0	0	100	3	10	50	5	100	3000	3000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	3000	3000	0
+tamming	20284807	50	40	80	0	0	0	0	0	100	3	10	50	5	100	3000	3000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	3000	3000	0
+tamming	20284800	50	40	80	0	0	0	0	0	100	3	10	50	5	100	3000	3000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	3000	3000	0
+tamming	20284801	50	40	80	0	0	0	0	0	100	3	10	50	5	100	3000	3000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|0|max;4|Next(max)|85|79|max;5|Next(max)|2|1|max;6|Next(max)|14|9|max	1	100	1	0	3000	3000	0
+tamming	20284802	50	40	80	0	0	0	0	0	100	3	10	50	5	100	3000	3000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|2|max;4|Next(max)|20|2|max	1	100	1	0	3000	3000	1
+tamming	20284803	50	40	80	0	0	0	0	0	100	3	10	50	5	100	3000	3000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	3000	3000	0
+tamming	20284100	50	10	80	1	0	0	0	0	500	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|0|max;4|Next(max)|85|26|max;5|Next(max)|20|2|max	1	500	1	0	1400	2000	0
+tamming	20284101	50	10	80	1	0	0	0	0	500	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	500	1	0	1400	2000	0
+tamming	20284102	50	10	80	1	0	0	0	0	500	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	500	1	0	1400	2000	0
+tamming	20288212	50	10	80	0	0	1	0	1	500	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max	1	500	1	1	1400	2000	0
+tamming	20288213	50	10	80	0	0	1	0	1	500	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max	1	500	1	1	1400	2000	0
+tamming	20288214	50	10	80	0	0	1	0	1	500	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max	1	500	1	1	1400	2000	0
+tamming	20308692	50	10	80	0	1	0	0	0	500	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|1|max;4|Next(max)|20|5|max	1	500	1	0	1400	2000	1
+tamming	20308693	50	10	80	0	1	0	0	0	500	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|0|max;4|Next(max)|85|43|max	1	500	1	0	1400	2000	0
+tamming	20308694	50	10	80	0	1	0	0	0	500	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	500	1	0	1400	2000	0
+tamming	20312788	50	10	80	0	0	0	0	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20312789	50	10	80	0	0	0	0	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|0|max;4|Next(max)|85|65|max;5|Next(max)|2|1|max;6|Next(max)|14|4|max	1	100	1	0	1400	2000	0
+tamming	20312790	50	10	80	0	0	0	0	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20312791	50	10	80	0	0	0	0	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20312784	50	10	80	0	0	0	0	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20312785	50	10	80	0	0	0	0	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|1|max;4|Next(max)|20|18|max	1	100	1	0	1400	2000	1
+tamming	20312786	50	10	80	0	0	0	0	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|0|max;4|Next(max)|85|11|max;5|Next(max)|20|8|max	1	100	1	0	1400	2000	0
+tamming	20312787	50	10	80	0	0	0	0	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20312796	50	10	80	0	0	0	0	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|0|max;4|Next(max)|85|22|max;5|Next(max)|2|1|max;6|Next(max)|14|6|max	1	100	1	0	1400	2000	0
+tamming	20312797	50	10	80	0	0	0	0	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20312798	50	10	80	0	0	0	0	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20312799	50	10	80	0	0	0	0	1	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|0|max;4|Next(max)|85|76|max;5|Next(max)|2|0|max;6|Next(max)|100|5|max	1	100	1	1	900	1400	0
+tamming	20312792	50	10	80	0	0	0	0	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|1|max;4|Next(max)|20|8|max	1	100	1	0	1400	2000	1
+tamming	20312793	50	10	80	0	0	0	0	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|0|max;4|Next(max)|85|53|max;5|Next(max)|2|1|max;6|Next(max)|14|11|max	1	100	1	0	1400	2000	0
+tamming	20312794	50	10	80	0	0	0	0	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20312795	50	10	80	0	0	0	0	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|1|max;4|Next(max)|20|1|max	1	100	1	0	1400	2000	1
+tamming	20312772	50	10	80	0	0	0	0	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|1|max;4|Next(max)|20|2|max	1	100	1	0	1400	2000	1
+tamming	20312773	50	10	80	0	0	0	0	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20312774	50	10	80	0	0	0	0	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20312775	50	10	80	0	0	0	0	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|1|max;4|Next(max)|20|15|max	1	100	1	0	1400	2000	1
+tamming	20312768	50	10	80	0	0	0	0	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|1|max;4|Next(max)|20|5|max	1	100	1	0	1400	2000	1
+tamming	20312769	50	10	80	0	0	0	0	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|1|max;4|Next(max)|20|10|max	1	100	1	0	1400	2000	1
+tamming	20312770	50	10	80	0	0	0	0	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20312771	50	10	80	0	0	0	0	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|2|max;4|Next(max)|20|18|max	1	100	1	0	1400	2000	1
+tamming	20300500	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|1|max;4|Next(max)|20|15|max	1	100	1	0	1400	2000	1
+tamming	20300501	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20300502	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|2|max;4|Next(max)|20|3|max	1	100	1	0	1400	2000	1
+tamming	20300503	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|1|max;4|Next(max)|20|8|max	1	100	1	0	1400	2000	1
+tamming	20300496	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|2|max;4|Next(max)|20|18|max	1	100	1	0	1400	2000	1
+tamming	20300497	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20300498	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20300499	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|2|max;4|Next(max)|20|11|max	1	100	1	0	1400	2000	1
+tamming	20300508	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20300509	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|2|max;4|Next(max)|20|13|max	1	100	1	0	1400	2000	1
+tamming	20300510	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|1|max;4|Next(max)|20|18|max	1	100	1	0	1400	2000	1
+tamming	20300511	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20300504	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20300505	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20300506	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|1|max;4|Next(max)|20|1|max	1	100	1	0	1400	2000	1
+tamming	20300507	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20300484	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20300485	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|2|max;4|Next(max)|20|11|max	1	100	1	0	1400	2000	1
+tamming	20300486	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|2|max;4|Next(max)|20|15|max	1	100	1	0	1400	2000	1
+tamming	20300487	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20300480	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20300481	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20300482	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|2|max;4|Next(max)|20|18|max	1	100	1	0	1400	2000	1
+tamming	20300483	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|1|max;4|Next(max)|20|2|max	1	100	1	0	1400	2000	1
+tamming	20300492	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|2|max;4|Next(max)|20|1|max	1	100	1	0	1400	2000	1
+tamming	20300493	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|1|max;4|Next(max)|20|5|max	1	100	1	0	1400	2000	1
+tamming	20300494	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20300495	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20300488	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20300489	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|2|max;4|Next(max)|20|8|max	1	100	1	0	1400	2000	1
+tamming	20300490	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20300491	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20300532	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20300533	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|1|max;4|Next(max)|20|16|max	1	100	1	0	1400	2000	1
+tamming	20300534	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|0|max;4|Next(max)|85|2|max;5|Next(max)|20|16|max	1	100	1	0	1400	2000	0
+tamming	20300535	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20300528	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20300529	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20300530	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|1|max;4|Next(max)|20|3|max	1	100	1	0	1400	2000	1
+tamming	20300531	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20300540	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|1|max;4|Next(max)|20|6|max	1	100	1	0	1400	2000	1
+tamming	20300541	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|0|max;4|Next(max)|85|44|max;5|Next(max)|2|1|max;6|Next(max)|14|11|max	1	100	1	0	1400	2000	0
+tamming	20300542	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20300543	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|1|max;4|Next(max)|20|18|max	1	100	1	0	1400	2000	1
+tamming	20300536	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|1|max;4|Next(max)|20|9|max	1	100	1	0	1400	2000	1
+tamming	20300537	50	10	80	0	0	0	1	1	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|0|max;4|Next(max)|85|56|max;5|Next(max)|2|0|max;6|Next(max)|100|31|max	1	10	1	1	900	1400	0
+tamming	20300538	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20300539	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20300516	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|1|max;4|Next(max)|20|3|max	1	100	1	0	1400	2000	1
+tamming	20300517	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|1|max;4|Next(max)|20|7|max	1	100	1	0	1400	2000	1
+tamming	20300518	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20300519	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|2|max;4|Next(max)|20|16|max	1	100	1	0	1400	2000	1
+tamming	20300512	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20300513	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|1|max;4|Next(max)|20|10|max	1	100	1	0	1400	2000	1
+tamming	20300514	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20300515	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20300524	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20300525	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20300526	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|1|max;4|Next(max)|20|6|max	1	100	1	0	1400	2000	1
+tamming	20300527	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|1|max;4|Next(max)|20|10|max	1	100	1	0	1400	2000	1
+tamming	20300520	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|1|max;4|Next(max)|20|0|max	1	100	1	0	1400	2000	1
+tamming	20300521	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20300522	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|1|max	1	100	1	0	1400	2000	0
+tamming	20300523	50	10	80	0	0	0	1	0	100	3	10	50	5	100	1400	2000	1|Next(max)|1|0|max;2|Next(max)|2|0|max;3|Next(max)|3|1|max;4|Next(max)|20|13|max	1	100	1	0	1400	2000	1

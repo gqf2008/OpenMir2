@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>magic-effect-probe</AssemblyName>
+    <RootNamespace>MagicEffectProbe</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    M3 技能线（卡 openmir2-m3-combat-skills-align）第七片：DoD③ 剩余未实装技能的
+    「可达性」二次分类 + 首个 context_required 真身向量。
+
+    引用**真身**（同一份 src/M2Server），用反射直调 oracle 的**私有技能效果入口**：
+      - MagicManager.MagTurnUndead（`src/M2Server/Magic/MagicManager.cs:827`，private static）
+      - MagicManager.MagTamming（`:704`，private static）
+    种子注入 + 记录取数账本（`RecordingRandom : System.Random`），产出
+      mir2-rs/tests/parity/m3/magic-effect-probe/vectors/effect_vectors.{json,tsv}
+      mir2-rs/tests/parity/m3/magic-effect-probe/vectors/effect_registry.{json,tsv}
+
+    只读：不连 MySQL、不写任何现网文件、不发起任何 socket、不起栈、不占端口。
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\..\src\M2Server\M2Server.csproj" />
+  </ItemGroup>
+
+</Project>

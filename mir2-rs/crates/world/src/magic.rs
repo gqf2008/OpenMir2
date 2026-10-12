@@ -462,3 +462,191 @@ pub fn amulet_requirement(magic_id: i32) -> Option<(u8, u8)> {
         _ => None,
     }
 }
+
+// ---- context_required 效果：独立可调方法（第七片真身向量）------------------------------------
+//
+// 这两条是 `DoSpell` 的 `case` 体里**唯一**不需要地图/可见集/召唤的独立方法：
+// `MagTurnUndead`（32 圣言术）与 `MagTamming`（20 诱惑之光）。其余 context_required 分支
+// （`MagPushArround`/`MagSaceMove`/`MagMakeSlave`/`MagMakeSinSuSlave`/`MagMakeAngelSlave`/
+// `MagMakeClone`）体内部走 `Envir`/`GetMapBaseObjects`/`MakeSlave`，本片只登记可达性。
+// 向量来源：`mir2-rs/tests/parity/m3/magic-effect-probe`（反射直调真身，记录 System.Random 取数账本）。
+
+/// `Grobal2.LA_UNDEAD`（`src/OpenMir2/Grobal2.cs:66`）。
+///
+/// **source-cited**（常量，未单独成方法）。
+pub const LA_UNDEAD: u8 = 1;
+
+/// `MagicManager.MagTurnUndead`（`src/M2Server/Magic/MagicManager.cs:827-856`）的**探针口径**。
+///
+/// 逐字移植：
+/// 1. `if (target.SuperMan || target.LifeAttrib != LA_UNDEAD) return false;`
+/// 2. `((AnimalObject)target).Struck(playObject)` —— 本口径下目标进入时 `TargetCret == null`
+///    且 `IsProperTarget(施法者)` 为真 ⇒ **不抽** `Random(6)`、`target.TargetCret = 施法者`；
+///    `Animal` 为真时 `MeatQuality -= Random(300)`（oracle 无条件抽这一次）。
+/// 3. `if (target.TargetCret == null) { RunAwayMode = true; … }` —— 因第 2 步已写 `TargetCret`，本口径**不进**。
+/// 4. `playObject.SetTargetCreat(target)`。
+/// 5. `if (Random(2) + (caster.Lv - 1) > target.Lv)` 且 `target.Lv < cfg`：
+///    `level = caster.Lv - target.Lv`，再 `if (Random(100) < (magicLevel << 3) - magicLevel + 15 + level)`
+///    ⇒ `target.WAbil.HP = 0; result = true;`。
+///
+/// 未覆盖（承接攻击/魔法接线批次，需地图与朝向）：`TargetCret != null` 时 `Struck` 的
+/// `GetAttackDir`/`Random(6)` 分支、`RunAwayMode` 分支、`SetLastHiter` 的其它副作用。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TurnUndeadOutcome {
+    pub result: bool,
+    pub target_hp_zeroed: bool,
+    pub target_targeted_by_caster: bool,
+    pub target_run_away: bool,
+    pub caster_target_is_target: bool,
+}
+
+/// `MagicManager.MagTurnUndead`（`MagicManager.cs:827-856`）的入参（探针口径）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TurnUndeadInput {
+    pub super_man: bool,
+    pub life_attrib: u8,
+    /// 目标 `Animal`（`Struck` 里决定是否抽 `Random(300)`）。
+    pub animal: bool,
+    pub caster_level: i32,
+    pub target_level: i32,
+    pub magic_level: u8,
+    /// `SystemShare.Config.MagTurnUndeadLevel`。
+    pub mag_turn_undead_level: i32,
+}
+
+/// 见 [`TurnUndeadInput`]/[`TurnUndeadOutcome`]（`MagicManager.cs:827-856`，探针口径）。
+pub fn mag_turn_undead(rng: &mut impl RandomSource, inp: &TurnUndeadInput) -> TurnUndeadOutcome {
+    let mut out = TurnUndeadOutcome::default();
+    if inp.super_man || inp.life_attrib != LA_UNDEAD {
+        return out;
+    }
+    // `((AnimalObject)target).Struck(playObject)` —— 探针口径（TargetCret 为空 ⇒ 短路）。
+    if inp.animal {
+        rng.random_below(300);
+    }
+    out.target_targeted_by_caster = true;
+    // `playObject.SetTargetCreat(targetObject)`（无条件，在早退之后）。
+    out.caster_target_is_target = true;
+    if rng.random_below(2) + (inp.caster_level - 1) > inp.target_level
+        && inp.target_level < inp.mag_turn_undead_level
+    {
+        let level = inp.caster_level - inp.target_level;
+        let magic_level = i32::from(inp.magic_level);
+        if rng.random_below(100) < (magic_level << 3) - magic_level + 15 + level {
+            out.target_hp_zeroed = true;
+            out.result = true;
+        }
+    }
+    out
+}
+
+/// `MagicManager.MagTamming`（`src/M2Server/Magic/MagicManager.cs:704-825`）的入参。
+///
+/// 只取 oracle 该函数**读/写到的标量**；`target.WAbil.HP` 等以调用初值给出。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TammingInput {
+    pub magic_level: u8,
+    pub caster_level: i32,
+    /// `target.Race`（`> ACTOR_RACE_PLAY` 才可能被诱惑）。
+    pub target_race: u8,
+    pub target_level: i32,
+    /// `target.Abil.MaxHP`（`n14 = MaxHP / MagTammingHPRate`）。
+    pub target_abil_max_hp: i32,
+    pub target_life_attrib: u8,
+    pub target_no_tame: bool,
+    /// 调用前 `target.Master == 施法者`。
+    pub target_master_is_caster: bool,
+    /// 调用前 `target.Master != null`（含 ≠ 施法者）——决定受奴时是否先 `HP = HP/10`。
+    pub target_master_present: bool,
+    /// 调用前 `target.WAbil.HP` 初值（受奴且已有别的 Master 时先 `/10`；只影响输出，不参与判定）。
+    pub target_hp: i32,
+    /// 调用前 `target.WalkSpeed` / `target.NextHitTime`（受奴时按 `1500/2000 - magicLevel*200` 封顶）。
+    pub walk_speed: i32,
+    pub next_hit_time: i32,
+    pub caster_slave_count: i32,
+    pub cfg_target_level: i32,
+    pub cfg_tamming_level: i32,
+    pub cfg_tamming_count: i32,
+    pub cfg_hp_rate: i32,
+}
+
+/// `MagTamming` 的可观测输出（`MasterRoyaltyTick` 含 `GetTickCount()` 非确定，不在此列）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TammingOutcome {
+    pub result: bool,
+    /// `target.TargetCret = null`（进入分支时无条件清）。
+    pub target_creature_cleared: bool,
+    pub target_master_is_caster: bool,
+    pub target_hp: i32,
+    pub walk_speed: i32,
+    pub next_hit_time: i32,
+    pub crazy_mode: bool,
+}
+
+/// 见 [`TammingInput`]/[`TammingOutcome`]（`MagicManager.cs:704-825`）。
+///
+/// 逐字移植 oracle 控制流；`SendMsg`/`BreakCrazyMode`/`RefShowName` 等无 RNG、无返回值
+/// 的副作用不建模（oracle 里它们不改变取数账本与上面这些输出）。
+pub fn mag_tamming(rng: &mut impl RandomSource, inp: &TammingInput) -> TammingOutcome {
+    let magic_level = i32::from(inp.magic_level);
+    let mut out = TammingOutcome {
+        target_hp: inp.target_hp,
+        walk_speed: inp.walk_speed,
+        next_hit_time: inp.next_hit_time,
+        ..Default::default()
+    };
+    if inp.target_race > crate::entity::ACTOR_RACE_PLAY && rng.random_below(4 - magic_level) == 0 {
+        out.target_creature_cleared = true;
+        if inp.target_master_is_caster {
+            out.target_master_is_caster = true;
+            out.result = true;
+        } else {
+            if rng.random_below(2) == 0 && inp.target_level <= inp.caster_level + 2 {
+                if rng.random_below(3) == 0 {
+                    let roll = rng.random_below(inp.caster_level + 20 + magic_level * 5);
+                    if roll > inp.target_level + inp.cfg_target_level {
+                        if !inp.target_no_tame
+                            && inp.target_life_attrib != LA_UNDEAD
+                            && inp.target_level < inp.cfg_tamming_level
+                            && inp.caster_slave_count < inp.cfg_tamming_count
+                        {
+                            let mut n14 = inp.target_abil_max_hp / inp.cfg_hp_rate;
+                            if n14 <= 2 {
+                                n14 = 2;
+                            } else {
+                                n14 += n14;
+                            }
+                            // 此处 target.Master != 施法者 恒成立（已在上面 else 分支）。
+                            if rng.random_below(n14) == 0 {
+                                if inp.target_master_present {
+                                    out.target_hp /= 10;
+                                }
+                                out.target_master_is_caster = true;
+                                out.crazy_mode = false; // BreakCrazyMode()
+                                                        // `MasterRoyaltyTick = (Random(caster.Lv * 2) + …) * 60_000 + GetTickCount()`：
+                                                        // GetTickCount 非确定，但 Random(caster.Lv * 2) 是取数账本的一部分。
+                                rng.random_below(inp.caster_level * 2);
+                                out.walk_speed = out.walk_speed.min(1500 - magic_level * 200);
+                                out.next_hit_time = out.next_hit_time.min(2000 - magic_level * 200);
+                            } else if rng.random_below(14) == 0 {
+                                out.target_hp = 0;
+                            }
+                        } else if inp.target_life_attrib == LA_UNDEAD && rng.random_below(20) == 0 {
+                            out.target_hp = 0;
+                        }
+                    } else if inp.target_life_attrib != LA_UNDEAD && rng.random_below(20) == 0 {
+                        rng.random_below(20);
+                        out.crazy_mode = true; // OpenCrazyMode(Random(20) + 10)
+                    }
+                } else if inp.target_life_attrib != LA_UNDEAD {
+                    rng.random_below(20);
+                    out.crazy_mode = true; // OpenCrazyMode(Random(20) + 10)
+                }
+            }
+            out.result = true;
+        }
+    } else if rng.random_below(2) == 0 {
+        out.result = true;
+    }
+    out
+}
