@@ -1,0 +1,105 @@
+# 根因：预热相假人进了世界 ⇒ GameSvr 断线异步存档覆盖 pin
+# （owner 2026-10-12 19:20 派；「首轮只 pin 1/2、12 轮从未到 attempts==2」）
+
+## 0. 结论（一句话）
+
+固定起点变体（T-14 / M3②③）的**预热相** `run_bots.ps1 -NewAccount -FixedNewChr -RequireCharCreated`
+在等「创建角色」标记期间，假人会继续发 `CM_SELCHR` 并**进入世界**；`run_bots.ps1` 一看到建角标记就
+`Stop-Process` ⇒ GameSvr 把这次断线当**真实下线**，调 `WorldServer.SaveHumanRcd` →
+`M2Share.FrontEngine.AddToSaveRcdList`（**异步**，由 FrontEngine/DBSrv 落库）⇒ 预热末态（随机挂机坐标 +
+被 `RecalcLevelAbilitys` 重算后的 MaxHP）**落在随后 SQL pin 之后**，把 pin 覆盖。
+pin 循环的 settle+hold 要「连续两轮 settle 后复验都到位」，而这两个 bot 的存档落库时刻不同
+⇒ 首轮常观测到 1/2、要到第 3~5 轮才收敛（`attempts=4/5`）。**这是夹具竞态，不是实现缺口。**
+
+## 1. 真机原件（预热相 BotSrv 日志）
+
+来源：`E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3cs/tests/botload/bots-20261012-150104.log`
+（由 T-14 会话 `mir2-rs/tests/parity/m3/sessions/csharp-20261012-150100/prewarm.log` 的 `LOG=` 指向；
+该 prewarm.log 的 `PREWARM` 行记录的 runner = `run_bots.ps1 -Count 2 -Prefix m3cfk1502 -NewAccount -Port 7000
+-RequireCharCreated -FixedNewChr -NewChrJob 0 -NewChrHair 2 -NewChrSex 0`）。
+sha256（该日志，LF 原样）：`374f28f090afa89c5b8b45ba80508eec6fa03ae87b2ed515ccfc8b5818fac788`
+
+原始行（逐字节摘录，含行号）：
+
+```
+17:15:01:16.253 [INF] 创建角色 m3cfk15020
+19:15:01:16.373 [INF] 选择角色 m3cfk15020
+20:15:01:16.377 [INF] 准备进入游戏
+21:15:01:16.382 [INF] 机器人:[m3cfk15020] 进入游戏
+30:15:01:18.738 [INF] 机器人:[m3cfk15020] 成功进入游戏
+36:15:01:19.256 [INF] 创建角色 m3cfk15021
+38:15:01:19.445 [INF] 选择角色 m3cfk15021
+39:15:01:19.450 [INF] 准备进入游戏
+40:15:01:19.453 [INF] 机器人:[m3cfk15021] 进入游戏
+45:15:01:21.612 [INF] 机器人:[m3cfk15021] 成功进入游戏
+```
+
+⇒ 两个预热假人都**真进了世界**（`进入游戏` + `成功进入游戏`）。预热相并没有「只建号、不进世界」的开关，
+`-RequireCharCreated` 只是「等到建角标记就收工」，收工前 BotSrv 已经把角色送进了 RunGate。
+
+## 2. Oracle 依据（为什么进世界就会覆盖 pin）
+
+- 断线/下线触发存档：`src/GameSrv/Word/WorldServer.cs:711-713`
+  ```csharp
+  PlayObjectList.Remove(playObject);
+  playObject.Disappear();
+  AddToHumanFreeList(playObject);
+  playObject.DealCancelA();
+  SaveHumanRcd(playObject);
+  M2Share.NetChannel.CloseUser(playObject.GateIdx, playObject.SocketId);
+  ```
+- `WorldServer.SaveHumanRcd`（`src/GameSrv/Word/WorldServer.cs:1077-1091`）把记录**放进异步队列**：
+  ```csharp
+  saveRcd.CharacterData = MakeSaveRcd(playObject);
+  M2Share.FrontEngine.AddToSaveRcdList(saveRcd);   // ← 异步：由 FrontEngine/DBSrv 线程落库
+  ```
+  `AddToSaveRcdList` 不是同步写库 ⇒ `Stop-Process` 之后才落；落库时刻与 pin 循环的 settle 窗口交错。
+- 周期存档同族（`WorldServer.cs:698-702`，`SaveHumanRcdTime` 缺省 10 分钟）在本次窗口不是主因
+  （预热到 pin 只有几秒），主因是**断线存档**。
+- 覆盖的字段：`MakeSaveRcd(playObject)` 会把 `CurMap/CurX/CurY/Dir/Abil(MaxHP…)` 等按**进世界后的内存态**
+  写回 —— 所以 `Observe` 里 `pinned`（`characters` 图/坐标/Dir）与 `abilPinned`（`characters_ablity.Hp/MaxHP`）
+  会**同一次**掉到 1/2（真机日志正是 `pinned=1/2 ... abil=1/2`）。
+- 进世界的 `MaxHP` 还会被 oracle `RecalcLevelAbilitys()` 重算（F-F 已登记：pin 的 `Hp/MaxHP=30000` 在进世界后
+  变回 19），所以即使 pin 在存档前生效、进世界也会改掉 —— 但本根因是**顺序**问题（存档晚于 pin 覆盖）。
+
+## 3. 与判决性实验的关系
+
+- owner 19:20 判决性实验（`evidence-rng-ledger-diff-20261012/41-pin-experiment.txt` + `42-exp-runs.txt`，
+  `33-pin-attempts.txt`）：3 次 C# 基线 `attempts=4/5/5`，`attack_seq` 与攻击路径取数序列都不同
+  ⇒ `attempts` 是协变量、不是判据（因此本片把它降级为 informational）。
+- 本根因解释**为什么 attempts 从不是 2**：预热存档把一个/两个 bot 的 pin 顶掉，至少要等两轮 settle + hold
+  ⇒ `attempts = (存档落库轮次) + 2`。修复后 pin 不再被覆盖，正常应回到 `attempts=2`
+  （但修复当天不再以 attempts 是否 == 2 作为判据，见 `whitelist.md` T-29 第七轮）。
+
+## 4. 修法（本片）
+
+1. **BotSrv（白名单 T-29 扩展；`src/BotSrv/**`）**
+   - `RobotOptions.StopAfterCharCreated`（默认 `false` = 原行为）。
+   - `MShare.g_boStopAfterCharCreated`；`AppService` 从配置装配 + 启动日志。
+   - `SelectChrScene.ClientGetReceiveChrs`：`nChrCount > 0` 且开关打开时，**打印
+     `预热建角完成（StopAfterCharCreated；不进世界） <name>` 后 `return`（不发 `CM_SELCHR`）**
+     ⇒ 永不进世界 ⇒ GameSvr 无该 `PlayObject` ⇒ 断线不触发 `SaveHumanRcd`。
+2. **驱动（`tools/botload/run_bots.ps1`）**：`-StopAfterCharCreated` 透传进 `AppSetting.json` 的 `BotPlay`。
+3. **夹具判据（`run_pair.ps1` + `gate_guards.ps1`）**
+   - 预热相强制带 `-StopAfterCharCreated`（`Get-M3BotOpPlan -ForPrewarm`）。
+   - 预热 BotSrv 日志显式落 `sessions/<id>/prewarm-bot.log`（`run_bots -LogFile`）。
+   - 新门 `Test-M3PrewarmNoWorldEntry`：日志出现 `进入游戏`/`成功进入游戏`/`准备进入游戏` ⇒ **fail-closed 拒跑**；
+     并把结果落 `baseline.json.prewarm_no_world_entry`。
+
+## 5. 机判与牙齿（离线，未起栈）
+
+- `selftest_gate.ps1` ⑩：无进世界标记=绿 / 有进世界标记=红 / 日志缺失=红（见 `01-selftest-gate.txt`）。
+- `run_attack_pair.ps1 -SelfCheckNoStack` ⑱：断言 `-EmitOpsArgs` 的 `prewarm_bot_args` 含
+  `-StopAfterCharCreated`；②b：`run_bots -WriteConfigOnly` 的 `StopAfterCharCreated` 透传两向
+  （见 `02-attack-pair-selftest.txt`）。
+- 改坏必红：把 `Get-M3BotOpPlan -ForPrewarm` 里的 `-StopAfterCharCreated` 去掉 ⇒ ⑱ 报
+  `prewarm_stop_after_char_created_not_passed`（`-SelfCheckNoStack` rc=1）；把 `Test-M3PrewarmNoWorldEntry`
+  的「有标记 ⇒ 红」改成恒绿 ⇒ `selftest_gate` ⑩ 报 `prewarm/有进世界标记=红` 失败（rc=1）。
+
+## 6. 未做 / 边界（如实登记）
+
+- 本片**未起真栈**验证「修复后 attempts 回到 2」（owner 19:20 明确：离线可判的别起栈；且 attempts 已不再是判据）。
+  真机复跑由 m3cs 取窗执行。
+- `-StopAfterCharCreated` 打开时，BotSrv 停在选角、不发 `CM_SELCHR`，因此预热假人不会进世界；
+  若某条线误把开关放进**计分相**，`-AttackSequence`/`-BagEquipSequence` 会因收不到 `SM_LOGON` 而不武装
+  ⇒ 现有 `M3ATTSEQ done`/`M3BAGSEQ done` 收尾判据会 RED（fail-closed，不会静默绿）。

@@ -58,6 +58,17 @@ namespace BotSrv
         public int NewChrSex { get; set; }
 
         /// <summary>
+        /// M3 预建角夹具（卡 openmir2-m3-attack-pair-fixture；白名单 T-29 扩展）。
+        /// 默认 false = 原行为（建角后继续选角/进世界）。置 true 时，本假人在收到「已建新角色」的
+        /// 角色列表后**不再发 CM_SELCHR**、停在选角界面（见 SelectChrScene.ClientGetReceiveChrs）。
+        /// 用途：T-14/②③ 的**预热相**只建号；若预热假人进了世界，`run_bots` 的 Stop-Process 会被
+        /// GameSvr 当成真实下线，走 `WorldServer.SaveHumanRcd`（异步，WorldServer.cs:1077-1091）把预热
+        /// 末态写回、覆盖随后的 SQL pin ⇒ 这就是「首轮只 pin 1/2、12 轮从未到 attempts==2」的根因（竞态，
+        /// 不是实现缺口）。默认关时 BotSrv 逐字节不变。
+        /// </summary>
+        public bool StopAfterCharCreated { get; set; }
+
+        /// <summary>
         /// M3 跨侧对拍夹具（卡 openmir2-m3-bag-equip-alignment 的 T-14；白名单 T-22）。
         /// 默认 false = 原行为（不新增任何发送）。
         /// 置 true 时，本假人在收到自己的 SM_LOGON（服务端确认进世界）后，按**固定顺序**

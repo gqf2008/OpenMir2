@@ -137,6 +137,15 @@ namespace BotSrv.Scenes.Scene
             }
             if (nChrCount > 0)
             {
+                if (MShare.g_boStopAfterCharCreated)
+                {
+                    // M3 预热相根因修（白名单 T-29 扩展；owner 2026-10-12 19:20）：
+                    // 只建号，**不发 CM_SELCHR**——若进了世界，`run_bots` 的 Stop-Process 会被 GameSvr
+                    // 当成真实下线，走 `WorldServer.SaveHumanRcd`（异步）把预热末态写回、覆盖随后的 SQL
+                    // pin ⇒ 「首轮只 pin 1/2」的真根因。默认 false = 原行为（逐字节不变）。
+                    LogService.Info($"预热建角完成（StopAfterCharCreated；不进世界） {ChrArr[select].UserChr.Name}");
+                    return;
+                }
                 SendSelChr(ChrArr[select].UserChr.Name);
             }
             else
