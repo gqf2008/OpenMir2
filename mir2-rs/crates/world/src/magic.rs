@@ -22,7 +22,11 @@ use mir2_data::models::MagicInfo;
 use mir2_shared::hutil;
 use mir2_shared::rng::RandomSource;
 
-use crate::combat::{get_attack_power, get_attack_power_player, hi_byte, lo_byte, AttackPowerMode};
+use crate::combat::{
+    get_attack_power, get_attack_power_player, get_hit_struck_damage, hi_byte, lo_byte,
+    AttackPowerMode,
+};
+use crate::entity::Entity;
 
 /// 攻方攻击力口径（`GetAttackPower`）：`DoSpell` 的施法者是 `PlayObject`，
 /// 走 `PlayObject.GetAttackPower` override（`PlayObject.cs:2909`）——**取数次数与 Base 版不同**
@@ -107,6 +111,21 @@ pub fn can_read_book(magic: &MagicInfo, job: u8, char_level: u8, is_training_ski
 /// `PlayObject.Attack.cs:1105`：`MagicAttackInterval = UserMagic.Magic.DelayTime + Config.MagicHitIntervalTime`。
 pub fn magic_attack_interval(delay_time: i32, magic_hit_interval_time: i32) -> i32 {
     delay_time + magic_hit_interval_time
+}
+
+/// `WorldServer.FindMagic(int nMagIdx)`（`src/GameSrv/Word/WorldServer.cs:1430-1444`）：
+/// 在**装表顺序**里返回第一个 `MagicId == magic_id` 的行；找不到返回 `None`。
+///
+/// 装表顺序 = `MySqlDB.LoadMagicDB`（`src/GameSrv/DB/MySqlDB.cs:105-160`）的
+/// `select * from magics` 行序（InnoDB 按主键 `Idx` 返回）经 `MagicList.Add` 追加后的次序。
+///
+/// **真魔表存在同一 `MagID` 多行**（实测 108 行 / 95 个不同 MagID / 13 个重复 MagID）：
+/// 例如 `Idx=38`（群体施毒术）与 `Idx=48`（气功波）都是 `MagID=48`。
+/// `SkillGroupAmyounsul = 48` 的 `DoSpell` 分支只按魔号分派 ⇒ 运行时 `FindMagic(48)`
+/// 恒取**先入表**的「群体施毒术」，「气功波」一行被遮蔽（shadowed）且不可按魔号到达。
+/// Rust 侧必须复刻该「首匹配」语义，**不能**用 `HashMap`/`last-wins` 覆盖。
+pub fn resolve_magic(magics: &[MagicInfo], magic_id: u16) -> Option<&MagicInfo> {
+    magics.iter().find(|m| m.magic_id == magic_id)
 }
 
 // ---- DoSpell 各分支的威力表达式（只取纯数值部分）--------------------------------------------
@@ -291,6 +310,37 @@ pub fn power_uenhancer(
     (power, time)
 }
 
+/// `MagicManager.MagGroupDeDing`（函数起于 `MagicManager.cs:942`，逐目标结算体 `:956-963`）的**单目标**结算（39 `SKILL_GROUPDEDING`）。
+///
+/// 逐字照抄循环体（取数顺序勿改）：
+/// 1. `nPower = playObject.GetAttackPower(LoByte(DC), HiByte(DC) - LoByte(DC))`
+///    —— 注意与普攻 `GetBaseAttackPoewr` 不同：这里第二参**不做 sbyte 强转、也不 +1**；
+/// 2. `if (Random(baseObject.SpeedPoint) >= playObject.HitPoint) nPower = 0;`
+///    —— **无条件**抽一次 `Random(SpeedPoint)`（在攻击力之后）；
+/// 3. `if (nPower > 0) nPower = baseObject.GetHitStruckDamage(playObject, nPower);`
+///
+/// 返回 `(闪避前的 power, 护甲减免后的 damage)`。
+/// 遍历可见集 / `StruckDamage` 倍率 / `RM_DELAYMAGIC` 回帧由调用方承接（需地图与目标态）。
+pub fn group_melee_damage(
+    rng: &mut impl RandomSource,
+    attacker: &Entity,
+    target: &Entity,
+    atk: AttackPowerMode,
+) -> (i32, u16) {
+    let dc_lo = i32::from(lo_byte(attacker.dc));
+    let dc_diff = i32::from(hi_byte(attacker.dc)) - dc_lo;
+    let mut power = atk_power(rng, dc_lo, dc_diff, atk);
+    if rng.random_below(i32::from(target.speed_point)) >= i32::from(attacker.hit_point) {
+        power = 0;
+    }
+    let damage = if power > 0 {
+        get_hit_struck_damage(rng, target, attacker, power)
+    } else {
+        0
+    };
+    (power, damage)
+}
+
 // ---- 第三批已实装技能：群体变体（逐目标表达式与单目标同式）----------------------------------
 //
 // - 42（`SKILL_GROUPLIGHTENING` → `MagGroupLightening`，`MagicManager.cs:981-1018`）：逐目标
@@ -310,7 +360,7 @@ pub fn power_uenhancer(
 // - `spell_in_range` / `spell_version_gate` / `amulet_requirement`：`DoSpell` 的**内联语句**或
 //   `switch` case 标签，未单独成方法、无法反射直调 ⇒ **source-cited**（注释给出行号）。
 
-/// `MagicManager.IsWarrSkill`（`src/M2Server/Magic/MagicManager.cs:82-105`）：9 个战士技能魔号。
+/// `MagicManager.IsWarrSkill`（`src/M2Server/Magic/MagicManager.cs:82-100`）：9 个战士技能魔号。
 ///
 /// `DoSpell` 开头 `if (IsWarrSkill(userMagic.MagIdx)) return false;`（同文件 :151）——
 /// 战士技能不走魔法施放流程。

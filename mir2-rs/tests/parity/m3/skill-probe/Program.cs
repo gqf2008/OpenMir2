@@ -15,6 +15,14 @@
 // "已实装" = 本片在 `crates/world/src/magic.rs` 里实现的那批（见 Implemented 表）。
 // 其余魔表行逐条登记进 `skills_registry.json`（implemented=false + 承接说明），不许静默漏。
 //
+// 第五片（本轮）：
+//   * 39（`SKILL_GROUPDEDING`→`MagGroupDeDing`，数据行名「乌龟跑步」）的**逐目标群体物理伤害**：
+//     `GetAttackPower(Lo(DC), Hi(DC)-Lo(DC))` + 闪避门 `Random(target.SpeedPoint) >= HitPoint`
+//     + `target.GetHitStruckDamage`（真身子函数，同种子；目标为真 `MonsterObject`）。
+//   * `DoSpell` **全表分派分类**（`dospell_class`）：按 oracle 控制流把每一行归为
+//     warr_reject / magicid_reject / implemented / context_required / no_effect_case / no_switch_case，
+//     写进 registry JSON 与 `reg` TSV 行（Rust 侧 `dospell_classes_are_fully_registered` 逐类钉行数）。
+//
 // 用法（**在仓库根运行**）：
 //   dotnet run --project mir2-rs/tests/parity/m3/skill-probe -c Release -- <sql路径> <向量输出路径> <登记输出路径>
 //
@@ -31,6 +39,7 @@ using System.Text.Json;
 using M2Server;
 using M2Server.Actor;
 using M2Server.Magic;
+using M2Server.Monster;
 using M2Server.Player;
 using OpenMir2;
 using OpenMir2.Data;
@@ -217,9 +226,29 @@ internal static class Program
             UseItems = new UserItem[13],
             IsRobot = false,
         };
-        // MC = 0x1E14（Lo=20 Hi=30），SC = 0x2832（Lo=50 Hi=40 → Δ 为负，覆盖 GetRPow 的 else 分支）
-        po.WAbil = new Ability { MC = 0x1E14, SC = 0x2832, HP = 500, MP = 500, MaxHP = 500, MaxMP = 500 };
+        // DC = 0x1E14（Lo=20 Hi=30），MC = 0x1E14（Lo=20 Hi=30），SC = 0x2832（Lo=50 Hi=40 → Δ 为负，覆盖 GetRPow 的 else 分支）
+        po.WAbil = new Ability { DC = 0x1E14, MC = 0x1E14, SC = 0x2832, HP = 500, MP = 500, MaxHP = 500, MaxMP = 500 };
+        // 准确（命中判定攻方一侧）：39（`MagGroupDeDing`）的闪避门 = `Random(target.SpeedPoint) >= playObject.HitPoint`。
+        po.HitPoint = 20;
         return po;
+    }
+
+    /// <summary>
+    /// 造一个探针目标怪：39（`MagGroupDeDing`）的逐目标结算需要真目标（`SpeedPoint`/`AC`/`LifeAttrib`）。
+    /// 与 `combat-probe` 同形；构造本对象的 RNG 消耗发生在 `SeedRng` **之前**，不入取数账本。
+    /// </summary>
+    private static MonsterObject NewTarget(ushort ac, ushort hp, byte hitPoint, byte speedPoint, byte lifeAttrib)
+    {
+        var mo = new MonsterObject();
+        mo.Race = ActorRace.Monster;
+        mo.ChrName = "skill_probe_target";
+        mo.ActorId = 910001;
+        mo.HitPoint = hitPoint;
+        mo.SpeedPoint = speedPoint;
+        mo.LifeAttrib = lifeAttrib;
+        mo.WAbil = new Ability { AC = ac, HP = hp, MaxHP = hp };
+        mo.AddAbil = new AddAbility();
+        return mo;
     }
 
     /// <summary>每个已实装技能的"效果威力"表达式类别（与 `crates/world/src/magic.rs` 一一对应）。</summary>
@@ -240,7 +269,64 @@ internal static class Program
         28 => "show_hp",                          // 心灵启示：interval=GetPower13(GetRPow(SC)*2+30)*1000
         31 => "shield",                           // 魔法盾：GetPower(GetRPow(MC)+15)
         36 => "uenhancer",                        // 无极真气分支(数据行=火焰冰)：Level+1+Random(Level) / GetPower13(60)+Lo(SC)*10
+        39 => "group_melee",                      // 乌龟跑步/十方斩族（`SKILL_GROUPDEDING`→`MagGroupDeDing`）：逐目标 DC 物理伤害 + 闪避门 + 护甲减免
         _ => "none",
+    };
+
+    // ---- DoSpell 的**全表分派分类**（DoD③「未实装逐条登记，不许静默漏」的机器可判口径）----------
+    //
+    // oracle 控制流（`src/M2Server/Magic/MagicManager.cs::DoSpell`）：
+    //   :151  if (IsWarrSkill(userMagic.MagIdx)) return false;                     → warr_reject
+    //   :167  if (SoftVersionDateEx==0 && ClientTick==0 || MagicId > 80) return false; → magicid_reject
+    //   :172  switch (userMagic.Magic.MagicId) { … }                               → 每条 case 的类别
+    // 其中 case 体只需**地图/目标/可见集/召唤/状态**的归 context_required；case 体只有
+    // `break` 或只置 `boTrain` 的归 no_effect_case；没有 case 的归 no_switch_case。
+    private static readonly HashSet<ushort> WarrSkillIds = new()
+    {
+        3, 4, 7, 12, 25, 26, 27, 34, 38, // MagicConst.SKILL_ONESWORD..TWINBLADE（`MagicManager.cs:82-100`）
+    };
+
+    /// <summary>`DoSpell` 的 `switch` case 魔号全集（逐条抄 `MagicManager.cs:172-640`）。</summary>
+    private static readonly HashSet<ushort> DospellSwitchCases = new()
+    {
+        1, 2, 5, 6, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+        28, 29, 30, 31, 32, 33, 35, 36, 37, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
+        50, 51, 52, 53, 54,
+    };
+
+    /// <summary>case 体无副作用（`break` 或只置 `boTrain`）的魔号：43 `break`；49/51/52/53/54 只 `boTrain=true`。</summary>
+    private static readonly HashSet<ushort> NoEffectCaseIds = new() { 43, 49, 51, 52, 53, 54 };
+
+    private static string DospellClass(ushort magId)
+    {
+        if (WarrSkillIds.Contains(magId))
+        {
+            return "warr_reject";
+        }
+        if (magId > 80)
+        {
+            return "magicid_reject";
+        }
+        if (IsImplemented(magId))
+        {
+            return "implemented";
+        }
+        if (DospellSwitchCases.Contains(magId))
+        {
+            return NoEffectCaseIds.Contains(magId) ? "no_effect_case" : "context_required";
+        }
+        return "no_switch_case";
+    }
+
+    /// <summary>每个分派类别的承接说明（DoD③「未实装逐条登记并给承接」）。</summary>
+    private static string DospellClassReason(string dospellClass) => dospellClass switch
+    {
+        "warr_reject" => "DoSpell 前置：IsWarrSkill(MagIdx) ⇒ return false（MagicManager.cs:82-100,151）；承接 = 战士技能走 ClientHit/Attack 路径（M3 攻击接线）",
+        "magicid_reject" => "DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）",
+        "no_effect_case" => "DoSpell case 体无副作用（43 `break`；49/51/52/53/54 只置 boTrain）；承接 = 无行为可对拍",
+        "no_switch_case" => "DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器",
+        "context_required" => "DoSpell 有 case，但效果需要地图/目标/可见集/召唤/状态等上下文（如 MagPushArround/MagSaceMove/MagTurnUndead/MagMakeSlave/MagGroupDeDing 的遍历与施加）；承接 = M3 攻击/魔法接线后的批次",
+        _ => "未分类：登记器缺陷",
     };
 
     private static bool IsImplemented(ushort magIdx) => EffectKind(magIdx) != "none";
@@ -254,9 +340,10 @@ internal static class Program
         public int Red = -1;
         public int Time = -1;
         public int Interval = -1;
+        public int MeleeDamage = -1;
 
-        /// <summary>TSV 伴生件的 7 列（kind + 6 个数值，缺项为 -1）。</summary>
-        public string Tsv => string.Join("\t", Kind, Power, VsUndead, Green, Red, Time, Interval);
+        /// <summary>TSV 伴生件的 8 列（kind + 7 个数值，缺项为 -1）。</summary>
+        public string Tsv => string.Join("\t", Kind, Power, VsUndead, Green, Red, Time, Interval, MeleeDamage);
 
         public object Json => new
         {
@@ -267,10 +354,11 @@ internal static class Program
             power_red = Red,
             time = Time,
             interval = Interval,
+            melee_damage = MeleeDamage,
         };
     }
 
-    private static EffectVal ComputeEffect(PlayObject caster, UserMagic um)
+    private static EffectVal ComputeEffect(PlayObject caster, UserMagic um, MonsterObject target)
     {
         ushort magIdx = um.MagIdx;
         // 每个技能独立子种子（两侧同序），避免跨技能取数顺序耦合。
@@ -361,6 +449,27 @@ internal static class Program
                 int power = MagicBase.GetPower13(30, um) + MagicBase.GetRPow(caster.WAbil.SC) * 3;
                 return new EffectVal { Kind = "buff_transparent", Power = power };
             }
+            case "group_melee":
+            {
+                // MagicManager.cs:942 起 / 逐目标结算体 :956-963（`MagGroupDeDing`，取数顺序与 oracle 逐字一致）：
+                //   int nPower = playObject.GetAttackPower(LoByte(DC), HiByte(DC) - LoByte(DC));
+                //   if (Random(baseObject.SpeedPoint) >= playObject.HitPoint) nPower = 0;
+                //   if (nPower > 0) nPower = baseObject.GetHitStruckDamage(playObject, nPower);
+                // 注意：oracle 这里**无条件**抽一次 `Random(SpeedPoint)`（先算 power），Rust 侧同序。
+                int power = caster.GetAttackPower(
+                    HUtil32.LoByte(caster.WAbil.DC),
+                    HUtil32.HiByte(caster.WAbil.DC) - HUtil32.LoByte(caster.WAbil.DC));
+                if (M2Share.RandomNumber.Random(target.SpeedPoint) >= caster.HitPoint)
+                {
+                    power = 0;
+                }
+                int damage = 0;
+                if (power > 0)
+                {
+                    damage = target.GetHitStruckDamage(caster, power);
+                }
+                return new EffectVal { Kind = "group_melee", Power = power, MeleeDamage = damage };
+            }
             default:
                 return null;
         }
@@ -400,9 +509,10 @@ internal static class Program
         foreach (MagicRow row in allRows)
         {
             bool implemented = IsImplemented(row.MagId);
+            string dospellClass = DospellClass(row.MagId);
             string reason = implemented
-                ? "本片已实装：施法前置 + MP 消耗 + 威力公式 + 冷却（见 crates/world/src/magic.rs）"
-                : "未实装：需要地图/目标/护身符/召唤/状态等 oracle 上下文，承接 = 后续 M3 技能批次（本卡报告『未实现』清单）";
+                ? "本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）"
+                : DospellClassReason(dospellClass);
             registry.Add(new
             {
                 magic_id = (int)row.MagId,
@@ -411,9 +521,10 @@ internal static class Program
                 train_level0 = (int)row.NeedL1,
                 delay_time = row.Delay,
                 implemented,
+                dospell_class = dospellClass,
                 reason,
             });
-            tsv.Add(string.Join("\t", "reg", row.MagId, row.Name, row.Job, row.NeedL1, row.Delay, implemented ? 1 : 0, reason));
+            tsv.Add(string.Join("\t", "reg", row.MagId, row.Name, row.Job, row.NeedL1, row.Delay, implemented ? 1 : 0, reason, dospellClass));
             if (!implemented)
             {
                 continue;
@@ -422,6 +533,10 @@ internal static class Program
             var magic = ToMagicInfo(row);
             var caster = NewCaster(row.Job == 99 ? 1 : row.Job);
             var um1 = ToUserMagic(magic, 1);
+            // 39 的逐目标结算需要真目标；构造在 SeedRng 之前（构造消耗不入取数账本）。
+            MonsterObject effectTarget = EffectKind(magic.MagicId) == "group_melee"
+                ? NewTarget(0x0A05, 60000, 20, 40, 0)
+                : null;
 
             var mpCost = new Dictionary<string, int>();
             for (byte lv = 0; lv <= 3; lv++)
@@ -436,7 +551,7 @@ internal static class Program
             bool isTraining = caster.IsTrainingSkill(magic.MagicId);
             bool canReadBook = !isTraining && jobOk && levelOk;
 
-            EffectVal effect = ComputeEffect(caster, um1);
+            EffectVal effect = ComputeEffect(caster, um1, effectTarget);
 
             tsv.Add(string.Join("\t", "skill",
                 magic.MagicId, magic.MagicName, magic.Job, magic.TrainLv,
@@ -447,7 +562,11 @@ internal static class Program
                 mpCost["0"], mpCost["1"], mpCost["2"], mpCost["3"],
                 (int)caster.Job, (int)caster.Abil.Level,
                 jobOk ? 1 : 0, levelOk ? 1 : 0, isTraining ? 1 : 0, canReadBook ? 1 : 0,
-                (int)caster.WAbil.MC, (int)caster.WAbil.SC, effect.Tsv));
+                (int)caster.WAbil.MC, (int)caster.WAbil.SC, effect.Tsv,
+                (int)caster.WAbil.DC, (int)caster.HitPoint,
+                effectTarget == null ? 0 : (int)effectTarget.SpeedPoint,
+                effectTarget == null ? 0 : (int)effectTarget.WAbil.AC,
+                effectTarget == null ? 0 : (int)effectTarget.LifeAttrib));
 
             cases.Add(new
             {
@@ -482,9 +601,19 @@ internal static class Program
                 },
                 caster_abil = new
                 {
+                    dc = (int)caster.WAbil.DC,
                     mc = (int)caster.WAbil.MC,
                     sc = (int)caster.WAbil.SC,
+                    hit_point = (int)caster.HitPoint,
                 },
+                effect_target = effectTarget == null
+                    ? null
+                    : new
+                    {
+                        speed_point = (int)effectTarget.SpeedPoint,
+                        ac = (int)effectTarget.WAbil.AC,
+                        life_attrib = (int)effectTarget.LifeAttrib,
+                    },
                 effect = effect.Json,
             });
         }
@@ -500,6 +629,7 @@ internal static class Program
                 prereq_entry = "M2Server.Player.PlayObject.IsTrainingSkill + ReadBook 口径（PlayObject.Base.cs:2170-2196）",
                 rng = "OpenMir2.RandomNumber.random 反射覆盖为 new Random(seed ^ magic_id)",
                 attack_power = "PlayObject.GetAttackPower override（PlayObject.cs:2909）；向量附 luck/power_rate/bo_power_item/power_item",
+                dospell_class = "DoSpell 全表分派分类：warr_reject(:151) / magicid_reject(:167) / implemented / no_effect_case / context_required / no_switch_case（switch 见 :172-640）",
             },
             seed = RngSeed,
             magic_hit_interval_time = SystemShare.Config.MagicHitIntervalTime,

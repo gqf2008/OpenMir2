@@ -6,7 +6,8 @@
     "mp_cost_entry": "M2Server.Player.PlayObject.GetSpellPoint (protected static, \u53CD\u5C04\u8C03\u7528)",
     "prereq_entry": "M2Server.Player.PlayObject.IsTrainingSkill \u002B ReadBook \u53E3\u5F84\uFF08PlayObject.Base.cs:2170-2196\uFF09",
     "rng": "OpenMir2.RandomNumber.random \u53CD\u5C04\u8986\u76D6\u4E3A new Random(seed ^ magic_id)",
-    "attack_power": "PlayObject.GetAttackPower override\uFF08PlayObject.cs:2909\uFF09\uFF1B\u5411\u91CF\u9644 luck/power_rate/bo_power_item/power_item"
+    "attack_power": "PlayObject.GetAttackPower override\uFF08PlayObject.cs:2909\uFF09\uFF1B\u5411\u91CF\u9644 luck/power_rate/bo_power_item/power_item",
+    "dospell_class": "DoSpell \u5168\u8868\u5206\u6D3E\u5206\u7C7B\uFF1Awarr_reject(:151) / magicid_reject(:167) / implemented / no_effect_case / context_required / no_switch_case\uFF08switch \u89C1 :172-640\uFF09"
   },
   "seed": 20261012,
   "magic_hit_interval_time": 800,
@@ -55,9 +56,12 @@
         "can_read_book": true
       },
       "caster_abil": {
+        "dc": 7700,
         "mc": 7700,
-        "sc": 10290
+        "sc": 10290,
+        "hit_point": 20
       },
+      "effect_target": null,
       "effect": {
         "kind": "damage",
         "power": 32,
@@ -65,7 +69,8 @@
         "power_green": -1,
         "power_red": -1,
         "time": -1,
-        "interval": -1
+        "interval": -1,
+        "melee_damage": -1
       }
     },
     {
@@ -112,9 +117,12 @@
         "can_read_book": true
       },
       "caster_abil": {
+        "dc": 7700,
         "mc": 7700,
-        "sc": 10290
+        "sc": 10290,
+        "hit_point": 20
       },
+      "effect_target": null,
       "effect": {
         "kind": "heal",
         "power": 108,
@@ -122,7 +130,8 @@
         "power_green": -1,
         "power_red": -1,
         "time": -1,
-        "interval": -1
+        "interval": -1,
+        "melee_damage": -1
       }
     },
     {
@@ -169,9 +178,12 @@
         "can_read_book": true
       },
       "caster_abil": {
+        "dc": 7700,
         "mc": 7700,
-        "sc": 10290
+        "sc": 10290,
+        "hit_point": 20
       },
+      "effect_target": null,
       "effect": {
         "kind": "damage",
         "power": 41,
@@ -179,7 +191,8 @@
         "power_green": -1,
         "power_red": -1,
         "time": -1,
-        "interval": -1
+        "interval": -1,
+        "melee_damage": -1
       }
     },
     {
@@ -226,9 +239,12 @@
         "can_read_book": true
       },
       "caster_abil": {
+        "dc": 7700,
         "mc": 7700,
-        "sc": 10290
+        "sc": 10290,
+        "hit_point": 20
       },
+      "effect_target": null,
       "effect": {
         "kind": "poison",
         "power": -1,
@@ -236,7 +252,8 @@
         "power_green": 127,
         "power_red": 120,
         "time": -1,
-        "interval": -1
+        "interval": -1,
+        "melee_damage": -1
       }
     },
     {
@@ -283,9 +300,12 @@
         "can_read_book": true
       },
       "caster_abil": {
+        "dc": 7700,
         "mc": 7700,
-        "sc": 10290
+        "sc": 10290,
+        "hit_point": 20
       },
+      "effect_target": null,
       "effect": {
         "kind": "damage",
         "power": 34,
@@ -293,7 +313,8 @@
         "power_green": -1,
         "power_red": -1,
         "time": -1,
-        "interval": -1
+        "interval": -1,
+        "melee_damage": -1
       }
     },
     {
@@ -340,9 +361,12 @@
         "can_read_book": true
       },
       "caster_abil": {
+        "dc": 7700,
         "mc": 7700,
-        "sc": 10290
+        "sc": 10290,
+        "hit_point": 20
       },
+      "effect_target": null,
       "effect": {
         "kind": "damage",
         "power": 47,
@@ -350,7 +374,8 @@
         "power_green": -1,
         "power_red": -1,
         "time": -1,
-        "interval": -1
+        "interval": -1,
+        "melee_damage": -1
       }
     },
     {
@@ -397,9 +422,12 @@
         "can_read_book": true
       },
       "caster_abil": {
+        "dc": 7700,
         "mc": 7700,
-        "sc": 10290
+        "sc": 10290,
+        "hit_point": 20
       },
+      "effect_target": null,
       "effect": {
         "kind": "damage",
         "power": 43,
@@ -407,7 +435,8 @@
         "power_green": -1,
         "power_red": -1,
         "time": -1,
-        "interval": -1
+        "interval": -1,
+        "melee_damage": -1
       }
     },
     {
@@ -454,9 +483,12 @@
         "can_read_book": true
       },
       "caster_abil": {
+        "dc": 7700,
         "mc": 7700,
-        "sc": 10290
+        "sc": 10290,
+        "hit_point": 20
       },
+      "effect_target": null,
       "effect": {
         "kind": "damage",
         "power": 73,
@@ -464,7 +496,8 @@
         "power_green": -1,
         "power_red": -1,
         "time": -1,
-        "interval": -1
+        "interval": -1,
+        "melee_damage": -1
       }
     },
     {
@@ -511,9 +544,12 @@
         "can_read_book": true
       },
       "caster_abil": {
+        "dc": 7700,
         "mc": 7700,
-        "sc": 10290
+        "sc": 10290,
+        "hit_point": 20
       },
+      "effect_target": null,
       "effect": {
         "kind": "buff_ac",
         "power": 540,
@@ -521,7 +557,8 @@
         "power_green": -1,
         "power_red": -1,
         "time": -1,
-        "interval": -1
+        "interval": -1,
+        "melee_damage": -1
       }
     },
     {
@@ -568,9 +605,12 @@
         "can_read_book": true
       },
       "caster_abil": {
+        "dc": 7700,
         "mc": 7700,
-        "sc": 10290
+        "sc": 10290,
+        "hit_point": 20
       },
+      "effect_target": null,
       "effect": {
         "kind": "buff_ac",
         "power": 540,
@@ -578,7 +618,8 @@
         "power_green": -1,
         "power_red": -1,
         "time": -1,
-        "interval": -1
+        "interval": -1,
+        "melee_damage": -1
       }
     },
     {
@@ -625,9 +666,12 @@
         "can_read_book": true
       },
       "caster_abil": {
+        "dc": 7700,
         "mc": 7700,
-        "sc": 10290
+        "sc": 10290,
+        "hit_point": 20
       },
+      "effect_target": null,
       "effect": {
         "kind": "buff_holy",
         "power": 177,
@@ -635,7 +679,8 @@
         "power_green": -1,
         "power_red": -1,
         "time": -1,
-        "interval": -1
+        "interval": -1,
+        "melee_damage": -1
       }
     },
     {
@@ -682,9 +727,12 @@
         "can_read_book": true
       },
       "caster_abil": {
+        "dc": 7700,
         "mc": 7700,
-        "sc": 10290
+        "sc": 10290,
+        "hit_point": 20
       },
+      "effect_target": null,
       "effect": {
         "kind": "buff_transparent",
         "power": 170,
@@ -692,7 +740,8 @@
         "power_green": -1,
         "power_red": -1,
         "time": -1,
-        "interval": -1
+        "interval": -1,
+        "melee_damage": -1
       }
     },
     {
@@ -739,9 +788,12 @@
         "can_read_book": true
       },
       "caster_abil": {
+        "dc": 7700,
         "mc": 7700,
-        "sc": 10290
+        "sc": 10290,
+        "hit_point": 20
       },
+      "effect_target": null,
       "effect": {
         "kind": "buff_transparent",
         "power": 170,
@@ -749,7 +801,8 @@
         "power_green": -1,
         "power_red": -1,
         "time": -1,
-        "interval": -1
+        "interval": -1,
+        "melee_damage": -1
       }
     },
     {
@@ -796,9 +849,12 @@
         "can_read_book": true
       },
       "caster_abil": {
+        "dc": 7700,
         "mc": 7700,
-        "sc": 10290
+        "sc": 10290,
+        "hit_point": 20
       },
+      "effect_target": null,
       "effect": {
         "kind": "fire_wall",
         "power": 27,
@@ -806,7 +862,8 @@
         "power_green": -1,
         "power_red": -1,
         "time": 22,
-        "interval": -1
+        "interval": -1,
+        "melee_damage": -1
       }
     },
     {
@@ -853,9 +910,12 @@
         "can_read_book": true
       },
       "caster_abil": {
+        "dc": 7700,
         "mc": 7700,
-        "sc": 10290
+        "sc": 10290,
+        "hit_point": 20
       },
+      "effect_target": null,
       "effect": {
         "kind": "damage",
         "power": 41,
@@ -863,7 +923,8 @@
         "power_green": -1,
         "power_red": -1,
         "time": -1,
-        "interval": -1
+        "interval": -1,
+        "melee_damage": -1
       }
     },
     {
@@ -910,9 +971,12 @@
         "can_read_book": true
       },
       "caster_abil": {
+        "dc": 7700,
         "mc": 7700,
-        "sc": 10290
+        "sc": 10290,
+        "hit_point": 20
       },
+      "effect_target": null,
       "effect": {
         "kind": "damage",
         "power": 50,
@@ -920,7 +984,8 @@
         "power_green": -1,
         "power_red": -1,
         "time": -1,
-        "interval": -1
+        "interval": -1,
+        "melee_damage": -1
       }
     },
     {
@@ -967,9 +1032,12 @@
         "can_read_book": true
       },
       "caster_abil": {
+        "dc": 7700,
         "mc": 7700,
-        "sc": 10290
+        "sc": 10290,
+        "hit_point": 20
       },
+      "effect_target": null,
       "effect": {
         "kind": "show_hp",
         "power": -1,
@@ -977,7 +1045,8 @@
         "power_green": -1,
         "power_red": -1,
         "time": -1,
-        "interval": 87000
+        "interval": 87000,
+        "melee_damage": -1
       }
     },
     {
@@ -1024,9 +1093,12 @@
         "can_read_book": true
       },
       "caster_abil": {
+        "dc": 7700,
         "mc": 7700,
-        "sc": 10290
+        "sc": 10290,
+        "hit_point": 20
       },
+      "effect_target": null,
       "effect": {
         "kind": "heal",
         "power": 109,
@@ -1034,7 +1106,8 @@
         "power_green": -1,
         "power_red": -1,
         "time": -1,
-        "interval": -1
+        "interval": -1,
+        "melee_damage": -1
       }
     },
     {
@@ -1081,9 +1154,12 @@
         "can_read_book": true
       },
       "caster_abil": {
+        "dc": 7700,
         "mc": 7700,
-        "sc": 10290
+        "sc": 10290,
+        "hit_point": 20
       },
+      "effect_target": null,
       "effect": {
         "kind": "shield",
         "power": 21,
@@ -1091,7 +1167,8 @@
         "power_green": -1,
         "power_red": -1,
         "time": -1,
-        "interval": -1
+        "interval": -1,
+        "melee_damage": -1
       }
     },
     {
@@ -1138,9 +1215,12 @@
         "can_read_book": true
       },
       "caster_abil": {
+        "dc": 7700,
         "mc": 7700,
-        "sc": 10290
+        "sc": 10290,
+        "hit_point": 20
       },
+      "effect_target": null,
       "effect": {
         "kind": "damage",
         "power": 48,
@@ -1148,7 +1228,8 @@
         "power_green": -1,
         "power_red": -1,
         "time": -1,
-        "interval": -1
+        "interval": -1,
+        "melee_damage": -1
       }
     },
     {
@@ -1195,9 +1276,12 @@
         "can_read_book": true
       },
       "caster_abil": {
+        "dc": 7700,
         "mc": 7700,
-        "sc": 10290
+        "sc": 10290,
+        "hit_point": 20
       },
+      "effect_target": null,
       "effect": {
         "kind": "uenhancer",
         "power": 2,
@@ -1205,7 +1289,8 @@
         "power_green": -1,
         "power_red": -1,
         "time": 546,
-        "interval": -1
+        "interval": -1,
+        "melee_damage": -1
       }
     },
     {
@@ -1252,9 +1337,12 @@
         "can_read_book": true
       },
       "caster_abil": {
+        "dc": 7700,
         "mc": 7700,
-        "sc": 10290
+        "sc": 10290,
+        "hit_point": 20
       },
+      "effect_target": null,
       "effect": {
         "kind": "poison",
         "power": -1,
@@ -1262,7 +1350,73 @@
         "power_green": 131,
         "power_red": 124,
         "time": -1,
-        "interval": -1
+        "interval": -1,
+        "melee_damage": -1
+      }
+    },
+    {
+      "magic_id": 39,
+      "name": "\u4E4C\u9F9F\u8DD1\u6B65",
+      "job": 99,
+      "train_lv": 3,
+      "train_level": [
+        50,
+        52,
+        55,
+        55
+      ],
+      "max_train": [
+        200,
+        300,
+        500,
+        500
+      ],
+      "spell": 4,
+      "def_spell": 1,
+      "power": 8,
+      "max_power": 8,
+      "def_power": 2,
+      "def_max_power": 2,
+      "delay_time": 20,
+      "cooldown": {
+        "delay_time": 20,
+        "magic_hit_interval_time": 800,
+        "interval": 820
+      },
+      "mp_cost": {
+        "0": 2,
+        "1": 3,
+        "2": 4,
+        "3": 5
+      },
+      "prereq": {
+        "probe_job": 1,
+        "probe_level": 50,
+        "job_ok": true,
+        "level_ok": true,
+        "is_training_skill": false,
+        "can_read_book": true
+      },
+      "caster_abil": {
+        "dc": 7700,
+        "mc": 7700,
+        "sc": 10290,
+        "hit_point": 20
+      },
+      "effect_target": {
+        "speed_point": 40,
+        "ac": 2565,
+        "life_attrib": 0
+      },
+      "effect": {
+        "kind": "group_melee",
+        "power": 20,
+        "vs_undead": -1,
+        "power_green": -1,
+        "power_red": -1,
+        "time": -1,
+        "interval": -1,
+        "melee_damage": 14
       }
     },
     {
@@ -1309,9 +1463,12 @@
         "can_read_book": true
       },
       "caster_abil": {
+        "dc": 7700,
         "mc": 7700,
-        "sc": 10290
+        "sc": 10290,
+        "hit_point": 20
       },
+      "effect_target": null,
       "effect": {
         "kind": "damage",
         "power": 22,
@@ -1319,7 +1476,8 @@
         "power_green": -1,
         "power_red": -1,
         "time": -1,
-        "interval": -1
+        "interval": -1,
+        "melee_damage": -1
       }
     },
     {
@@ -1366,9 +1524,12 @@
         "can_read_book": true
       },
       "caster_abil": {
+        "dc": 7700,
         "mc": 7700,
-        "sc": 10290
+        "sc": 10290,
+        "hit_point": 20
       },
+      "effect_target": null,
       "effect": {
         "kind": "damage",
         "power": 38,
@@ -1376,7 +1537,8 @@
         "power_green": -1,
         "power_red": -1,
         "time": -1,
-        "interval": -1
+        "interval": -1,
+        "melee_damage": -1
       }
     },
     {
@@ -1423,9 +1585,12 @@
         "can_read_book": true
       },
       "caster_abil": {
+        "dc": 7700,
         "mc": 7700,
-        "sc": 10290
+        "sc": 10290,
+        "hit_point": 20
       },
+      "effect_target": null,
       "effect": {
         "kind": "damage",
         "power": 53,
@@ -1433,7 +1598,8 @@
         "power_green": -1,
         "power_red": -1,
         "time": -1,
-        "interval": -1
+        "interval": -1,
+        "melee_damage": -1
       }
     },
     {
@@ -1480,9 +1646,12 @@
         "can_read_book": true
       },
       "caster_abil": {
+        "dc": 7700,
         "mc": 7700,
-        "sc": 10290
+        "sc": 10290,
+        "hit_point": 20
       },
+      "effect_target": null,
       "effect": {
         "kind": "damage",
         "power": 50,
@@ -1490,7 +1659,8 @@
         "power_green": -1,
         "power_red": -1,
         "time": -1,
-        "interval": -1
+        "interval": -1,
+        "melee_damage": -1
       }
     },
     {
@@ -1537,9 +1707,12 @@
         "can_read_book": true
       },
       "caster_abil": {
+        "dc": 7700,
         "mc": 7700,
-        "sc": 10290
+        "sc": 10290,
+        "hit_point": 20
       },
+      "effect_target": null,
       "effect": {
         "kind": "poison",
         "power": -1,
@@ -1547,7 +1720,8 @@
         "power_green": 127,
         "power_red": 120,
         "time": -1,
-        "interval": -1
+        "interval": -1,
+        "melee_damage": -1
       }
     },
     {
@@ -1594,9 +1768,12 @@
         "can_read_book": true
       },
       "caster_abil": {
+        "dc": 7700,
         "mc": 7700,
-        "sc": 10290
+        "sc": 10290,
+        "hit_point": 20
       },
+      "effect_target": null,
       "effect": {
         "kind": "damage",
         "power": 25,
@@ -1604,7 +1781,8 @@
         "power_green": -1,
         "power_red": -1,
         "time": -1,
-        "interval": -1
+        "interval": -1,
+        "melee_damage": -1
       }
     }
   ]
