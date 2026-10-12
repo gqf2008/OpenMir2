@@ -11,8 +11,13 @@ M3④-实现 C 第 ③ 片（怪物帧面）—— 边界与差量
     M  mir2-rs/bins/game-svr/src/main.rs
     M  mir2-rs/bins/game-svr/src/mongen.rs
     A  mir2-rs/tests/parity/world/monster-ai-frames-20261013/**   （本证据目录）
+    M  mir2-rs/tests/parity/world/monster-ai-host-20261013/01-oracle-anchors.txt
+    M  mir2-rs/tests/parity/world/monster-ai-host-20261013/SHA256SUMS.txt
 
-    ⇒ 本片**只动 `mir2-rs/bins/game-svr/**` + 证据目录**；**零** `crates/world/**`。
+    ⇒ 本片只动 `mir2-rs/bins/game-svr/**` + 证据目录；**零** `crates/world/**`。
+      后两件是 reviewer-5 的 M-1（分片② 证据锚点行号漂移，Minor/informational）按 owner
+      “下一片顺手订正” 建议做的**纯文档**订正（MonsterObject.cs ThinkTick :55→:62、
+      SearchTime :57→:65；AnimalObject n10 :390→:391）+ 该目录 SHA256SUMS 重算（15/15 GREEN）。
 
 ## oracle 冻结边界
 
