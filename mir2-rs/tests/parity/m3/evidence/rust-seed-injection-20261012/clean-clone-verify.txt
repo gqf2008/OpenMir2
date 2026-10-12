@@ -1,9 +1,14 @@
 # 干净 clone 上复核证据 hash（'清单只含会入库的文件' + repo 字节口径在任何检出都成立）
 # 命令（在本片 head 的 worktree 上克隆到空目录后）：
-#   git clone --single-branch -b worktree-m2-gamesvr-host <本片 head 的 worktree> E:/tmp/m2svr-cleanclone-seed
-#   cd E:/tmp/m2svr-cleanclone-seed && python -I tools/evidence-hash/verify_sha256sums.py verify \
+#   git clone --single-branch -b worktree-m2-gamesvr-host <本片 head 的 worktree> E:/tmp/m2svr-cleanclone-seed2
+#   cd E:/tmp/m2svr-cleanclone-seed2 && python -I tools/evidence-hash/verify_sha256sums.py verify \
 #       mir2-rs/tests/parity/m3/evidence/rust-seed-injection-20261012 --check-extra
 # clone 里 core.autocrlf = true（Windows 默认 true ⇒ 盘上 CRLF，仍按 repo 字节口径复核）
+# clone HEAD = f4661bb2（finding 返工 head：进程级用例有界超时 + 因子进程树 kill + 不残留断言）
 
-GREEN mir2-rs\tests\parity\m3\evidence\rust-seed-injection-20261012\SHA256SUMS.txt  [repo 口径]  OK 16/16
+GREEN mir2-rs\tests\parity\m3\evidence\rust-seed-injection-20261012\SHA256SUMS.txt  [repo 口径]  OK 21/21
 rc=0
+
+# 本文件自身更新后，在 worktree 上重算清单（含本文件）并复核：
+#   python -I tools/evidence-hash/verify_sha256sums.py write <dir>; python -I tools/... verify <dir> --check-extra
+# GREEN ... SHA256SUMS.txt  [repo 口径]  OK 21/21  （manifest 覆盖本文件后仍全绿）
