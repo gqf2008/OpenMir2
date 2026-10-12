@@ -43,15 +43,9 @@ if ([string]::IsNullOrEmpty($AttackStreamLog)) { $AttackStreamLog = Join-Path $L
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 $PidFile = Join-Path $LogDir 'csharp-stack.pid.json'
 
-function Get-Sha256Hex([string]$Path) {
-  if ([string]::IsNullOrEmpty($Path)) { throw 'Get-Sha256Hex: 路径为空' }
-  if (-not (Test-Path -LiteralPath $Path)) { throw "Get-Sha256Hex: 文件不存在: $Path" }
-  $alg = [System.Security.Cryptography.SHA256]::Create()
-  try {
-    $bytes = [System.IO.File]::ReadAllBytes($Path)
-    return ([System.BitConverter]::ToString($alg.ComputeHash($bytes)) -replace '-', '').ToLowerInvariant()
-  } finally { $alg.Dispose() }
-}
+# 环境无关 SHA256（.NET）+ 活文件共享读（m3cs tick22 F1：GameSvr 以 FileShare.ReadWrite 持有
+# `rng-attack-stream.tsv`，旧 ReadAllBytes 的 FileShare.Read 会 EACCES）——与 gate_guards 同一实现。
+. (Join-Path $Here 'm3hashutil.ps1')
 
 function Test-Port([int]$Port) {
   foreach ($ep in [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners()) {
@@ -110,7 +104,7 @@ if (-not $SkipHookDeploy) {
   $hookDll = Join-Path $Repo 'mir2-rs\tests\parity\m3\rng-hook\bin\Release\net8.0\RngSeedHook.dll'
   if (-not (Test-Path $hookDll)) { Write-Output ("RED: 找不到 hook 产物 {0}" -f $hookDll); exit 1 }
   Copy-Item -Force $hookDll (Join-Path $Shadow 'RngSeedHook.dll')
-  Write-Output ("HOOK_DEPLOYED {0} sha256={1}" -f (Join-Path $Shadow 'RngSeedHook.dll'), (Get-Sha256Hex (Join-Path $Shadow 'RngSeedHook.dll')))
+  Write-Output ("HOOK_DEPLOYED {0} sha256={1}" -f (Join-Path $Shadow 'RngSeedHook.dll'), (Get-M3Sha256Hex (Join-Path $Shadow 'RngSeedHook.dll')))
 }
 
 $started = @()
@@ -171,13 +165,13 @@ $seedSum = [int64]$Seed + [int64]40503
 $seedRev = $seedSum -band [int64]4294967295
 if ($seedRev -ge [int64]2147483648) { $seedRev -= [int64]4294967296 }
 $attackSeed = [int]$seedRev
-$sitesSha = if (Test-Path -LiteralPath $IsolateSites) { Get-Sha256Hex $IsolateSites } else { '' }
-$attackStreamSha = if (Test-Path -LiteralPath $AttackStreamLog) { Get-Sha256Hex $AttackStreamLog } else { '' }
+$sitesSha = if (Test-Path -LiteralPath $IsolateSites) { Get-M3Sha256Hex $IsolateSites } else { '' }
+$attackStreamSha = if (Test-Path -LiteralPath $AttackStreamLog) { Get-M3Sha256Hex $AttackStreamLog } else { '' }
 $isoMeta = [ordered]@{
   isolate_attack = [bool]$IsolateAttack; seed = $Seed; attack_seed = $attackSeed
   sites_dump = $IsolateSites; sites_dump_sha256 = $sitesSha
   attack_stream = $AttackStreamLog; attack_stream_sha256 = $attackStreamSha
-  hook_dll_sha256 = (Get-Sha256Hex $hook); ts = (Get-Date).ToString('o')
+  hook_dll_sha256 = (Get-M3Sha256Hex $hook); ts = (Get-Date).ToString('o')
 }
 $isoMeta | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $LogDir 'csharp_isolation.json') -Encoding utf8
 Write-Output ("ISOLATION_RECORDED {0} isolate={1} attack_seed={2} sites_sha256={3}" -f (Join-Path $LogDir 'csharp_isolation.json'), [bool]$IsolateAttack, $attackSeed, $sitesSha)

@@ -1,0 +1,34 @@
+# evidence-hashutil-hotfile-ledger-20261012 — 复算命令（全部离线；不起栈/不占端口；只连共享 3306 供 pin SQL 可执行性门）
+
+工作目录 = 仓库根（worktree `m3bag`，分支 `worktree-m3-bag-equip`）。
+
+## 0. 端口实拍（本片不起栈）
+powershell -NoProfile -Command "foreach($p in 3306,5000,5100,5500,5600,5700,6000,7000,7100,7200){ ... }"
+# 结果：3306 LISTEN（共享，始终在）；5000/5100/5500/5600/5700/6000/7000/7100/7200 全 DOWN
+
+## 1. 夹具无栈自检（新增第 22 / 22b 项）
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 -SelfCheckNoStack
+# rc=0 ⇒ SELFTEST_RED GREEN（含 "SELFTEST 22 SHA256 活文件（F1）..." / "SELFTEST 22b ..."）→ 01
+# 改坏必红（把 m3hashutil.ps1::Get-M3Sha256Hex 改回 [System.IO.File]::ReadAllBytes）：
+#   rc=1 ⇒ SELFTEST_RED RED: sha256_hot_file_selftest=exception:...being used by another process → 02；cmp 还原逐字节相同
+
+## 2. 抽数账本机判（F2 站点表）
+python mir2-rs/tests/parity/m3/attack_rng_ledger.py selftest
+# rc=0 ⇒ SELFTEST GREEN 27/27 → 03
+# 改坏必红：RUST_ATTACK_RE 改回旧表 ⇒ rc=1 SELFTEST RED 7/27 → 04；CSHARP_ATTACK_RE 去掉 BaseObject.GetAttackPower@ ⇒ rc=1 1/27 → 05；cmp 还原
+
+## 3. F1 直接复现（活文件被 FileShare.ReadWrite 持有）
+powershell -NoProfile -ExecutionPolicy Bypass -File /tmp/mk06.ps1
+# 旧 File.ReadAllBytes ⇒ EACCES（being used by another process）；新 Get-M3Sha256Hex ⇒ 标准锚 → 06
+
+## 4. 四门禁（隔离 target）
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --offline -- -D warnings
+cargo test --workspace --offline
+cargo run -p msgcodegen -- --check
+# 原始输出 → 07-gates.txt
+
+## 5. 证据 hash（仓库字节口径 + 干净 clone）
+python -I tools/evidence-hash/verify_sha256sums.py write  mir2-rs/tests/parity/m3/evidence-hashutil-hotfile-ledger-20261012
+python -I tools/evidence-hash/verify_sha256sums.py        mir2-rs/tests/parity/m3/evidence-hashutil-hotfile-ledger-20261012 --check-extra
+git clone --local --no-hardlinks . E:/tmp/m3bag-clean-verify && (cd E:/tmp/m3bag-clean-verify && python -I tools/evidence-hash/verify_sha256sums.py mir2-rs/tests/parity/m3/evidence-hashutil-hotfile-ledger-20261012 --check-extra)

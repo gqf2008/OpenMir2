@@ -41,18 +41,10 @@ $SessionDir = Join-Path $Here ("sessions\{0}" -f $Session)
 New-Item -ItemType Directory -Force -Path $SessionDir | Out-Null
 Write-Output ("SESSION " + $SessionDir)
 
-function Get-Sha256([string]$Path) {
-  # 环境无关：.NET SHA256 取代 `Get-FileHash`（本机 PS 5.1 在 PSModulePath 被 PS7 污染时不导出
-  # Get-FileHash ⇒ `$ErrorActionPreference='Stop'` 下 CommandNotFoundException 崩溃）。
-  # 与 tools/oracle/hashutil.ps1、tools/m2-acceptance/preflight.ps1 同一修法，结果逐字节相同。
-  if ([string]::IsNullOrEmpty($Path)) { throw 'Get-Sha256: 路径为空' }
-  if (-not (Test-Path -LiteralPath $Path)) { throw "Get-Sha256: 文件不存在: $Path" }
-  $alg = [System.Security.Cryptography.SHA256]::Create()
-  try {
-    $bytes = [System.IO.File]::ReadAllBytes($Path)
-    return ([System.BitConverter]::ToString($alg.ComputeHash($bytes)) -replace '-', '').ToLowerInvariant()
-  } finally { $alg.Dispose() }
-}
+# 环境无关 SHA256（.NET）取代 `Get-FileHash` + 活文件共享读（FileShare.ReadWrite）——
+# 与 gate_guards/start-csharp-hook 同一实现（m3hashutil.ps1）。
+. (Join-Path $Here 'm3hashutil.ps1')
+function Get-Sha256([string]$Path) { return (Get-M3Sha256Hex -Path $Path) }
 
 function Get-TextSha256([string]$Text) {
   $sha = [System.Security.Cryptography.SHA256]::Create()

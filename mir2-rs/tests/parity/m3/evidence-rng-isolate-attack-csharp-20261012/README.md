@@ -47,8 +47,13 @@
 
 1. **真机 on-path 运行未在本片执行**：C# 影子栈隔离开 → 30/120 击两相 → `attack_diff.py diff` 逐 k=0 需要
    5000/7000/7100/7200 窗口（owner 派 m3cs 取窗跑 ②③ 收口）。本片只证仪器链路（hook 可编译 + 离线解析/路由/清单 + 夹具透传/记账）。
-2. **`attack_rng_ledger.py` 的 `RUST_ATTACK_RE` 仍是旧行号**（m3cs 在其 patch finding 里已登记）：本口径的权威两侧比对改用
-   `check_predicates.py align`；本片未改该正则（避免与 m3cs 的 Rust 行号表二次漂移）。
+2. **[已修 · 2026-10-12 第十轮片 `evidence-hashutil-hotfile-ledger-20261012`]** `attack_rng_ledger.py` 的
+   `RUST_ATTACK_RE` 当时仍是旧行号（m3cs 在其 patch finding 里已登记）；本片当时未改该正则（避免与 m3cs 的
+   Rust 行号表二次漂移）。现表已与 `rng_ledger_diff.py` **逐字节同表** + `selftest` **27/27**（改回旧表必红）；
+   本片权威两侧比对仍用 `check_predicates.py align`，结论不变。
+   - 同类 **[已修 · 同片]**：本片 §3 用 .NET SHA256 取代 `Get-FileHash`，但旧实现仍用 `File.ReadAllBytes`
+     （`FileShare.Read`）⇒ 读不了 GameSvr 以 `FileShare.ReadWrite` 持有的 `rng-attack-stream.tsv`（m3cs tick22 F1）；
+     现统一到 `m3hashutil.ps1`（`FileShare.ReadWrite|Delete`）。
 3. `atk_power_luck_a/b`、`struck_durability_slot` 在现有夹具（`Luck=0`、无装备）**未触发**；行号按谓词表源码行登记，
    待隔离口径真机实测校准（谓词表内已注明）。
 4. `attack_paralysis`（`PlayObject.Attack.cs:221`）`divert=0`（Rust 未建模）：hook 清单故意不含它；

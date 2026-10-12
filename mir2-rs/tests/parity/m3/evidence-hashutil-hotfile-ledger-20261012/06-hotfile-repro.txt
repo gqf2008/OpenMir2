@@ -1,0 +1,10 @@
+=== F1 repro: file held by a 'GameSvr-like' holder (FileShare.ReadWrite) ===
+[old way] [System.IO.File]::ReadAllBytes(...):
+  EACCES: Exception calling "ReadAllBytes" with "1" argument(s): "The process cannot access the file 'C:\Users\gxh\AppData\Local\Temp\m3-f1-fe51bdabf61c4e7c97d04f8b866bd436.tsv' because it is being used by another process."
+[new way] Get-M3Sha256Hex (m3hashutil.ps1, FileShare.ReadWrite):
+  hash=fdeab9acf3710362bd2658cdc9a29e8f9c757fcf9811603a8c447cd1d9151108
+  anchor=fdeab9acf3710362bd2658cdc9a29e8f9c757fcf9811603a8c447cd1d9151108
+  equal=True
+
+=== environment: Get-FileHash availability (why .NET SHA256 was adopted) ===
+Get-FileHash exists=False

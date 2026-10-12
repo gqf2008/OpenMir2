@@ -63,11 +63,20 @@ python check_predicates.py table-vs-csharp --csharp csharp_predicate_dump.exampl
    `PlayObject.Attack.cs:223` 是 F-1 权威流水实测），`Luck>0` 与 `struck_durability_slot` 夹具未触发，
    由 hook 实测后订正表内 pattern。
 
-## 五、夹具 finding（m3bag 写集，只登记）
+## 五、夹具 finding（m3bag 写集）
 
-- `attack_rng_ledger.py` 的 `RUST_ATTACK_RE` 仍是**旧行号**（`67|109|111|579|587|606|608|736`），
-  不含 `628/630/758/831` ⇒ 它把 `combat.rs:628` 与 `:831` 误判为噪声（本片实测：`attack_path=8/48`，
-  而 `rng_ledger_diff.py` 同 trace 报 `16/48`）。本片用 `rng_ledger_diff.py`（行号已更新）。
+- **[已修 · 2026-10-12 第十轮片 `evidence-hashutil-hotfile-ledger-20261012`]** `attack_rng_ledger.py` 的
+  `RUST_ATTACK_RE` 曾是**旧行号**（`67|109|111|579|587|606|608|736`），不含 `628/630/758/831` ⇒ 它把
+  `combat.rs:628` 与 `:831` 误判为噪声（本片实测：`attack_path=8/48`，而 `rng_ledger_diff.py` 同 trace 报
+  `16/48`）。现表已与 `rng_ledger_diff.py` 的 `RUST_ATTACK_RE` **逐字节同表**（含 `250/601/609/628/630/758/831`），
+  C# 侧同步补 `BaseObject.GetAttackPower@`；`attack_rng_ledger.py selftest` **27/27**（改回旧表 ⇒ 必红，
+  见该片证据 `04/05`）。本片当时用 `rng_ledger_diff.py`（行号已更新）的结论不变。
+- **[已修 · 2026-10-12 第十轮片 `evidence-hashutil-hotfile-ledger-20261012`]** SHA256 读**活文件**：
+  `start-csharp-hook.ps1` 的 `Get-Sha256Hex` 与 `gate_guards.ps1` 的 `Get-M3Sha256Hex` 旧实现用
+  `[System.IO.File]::ReadAllBytes`（`FileShare.Read`），而影子 GameSvr 用 `FileShare.ReadWrite` 持有
+  `rng-attack-stream.tsv` ⇒ Windows 共享冲突、专用流 sha256 记不出来（m3cs tick22 F1）。现两处统一到
+  `m3hashutil.ps1`（`FileStream(..., FileShare.ReadWrite|Delete)` 流式读）；`-SelfCheckNoStack` 的第 22 项直接断言
+  （改回 `ReadAllBytes` ⇒ 必红）。
 
 ## 六、残留物清单
 

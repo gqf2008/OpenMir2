@@ -778,9 +778,32 @@ if ($SelfCheckNoStack) {
   Write-Output ("SELFTEST 21 活栈隔离口径（owner 21:15）：开关解析 off/on/fail-closed 六向；attack_seed(42)=40545 / wrap=-2147443146；流水头 有/无/缺文件 三向；C# dump vs Rust 谓词表 生产 rc={0} / 删一条 rc={1} / 加未登记 rc={2}；hook 离线自检 rc={3}" -f `
     $predOk.rc, $predDrop.rc, $predExtra.rc, $isoSelfRc)
 
+  # 22. F1（m3cs tick22，m3bag 写集）：SHA256 必须能读「被 GameSvr 以 FileShare.ReadWrite 持有」的活文件。
+  #     旧 `[System.IO.File]::ReadAllBytes`（FileShare.Read）在 holder 共享模式下被拒 ⇒ 专用流 sha256
+  #     记不出来（m3cs 只能置空）。本项直接调生产实现 `Get-M3Sha256Hex`（gate_guards dot-source 的
+  #     m3hashutil.ps1），并断言旧读法在 holder 下必被拒。改回 `ReadAllBytes` ⇒
+  #     `hot_hash_mismatch` / `sharing_violation_not_reproduced` 必红。
+  $hotHash = Test-M3Sha256HotFileSelfTest
+  if (-not $hotHash.ok) { $failures += ('sha256_hot_file_selftest=' + $hotHash.reason) }
+  Write-Output ("SELFTEST 22 SHA256 活文件（F1）：holder(FileShare.ReadWrite) 下 hash={0}（锚 {1}）；旧 File.ReadAllBytes 必被拒={2} ok={3}" -f `
+    $hotHash.hot_hash, $hotHash.expected, $hotHash.oldway_denied, $hotHash.ok)
+
+  # 22b. F2（m3cs tick22）：`attack_rng_ledger.py` 的 Rust 攻击路径站点表必须与决策片 `rng_ledger_diff.py`
+  #      同表（旧表漏 758/628/630/601/609/831/250 ⇒ 同一条 Rust 流水报 attack=2/段）。其 selftest 直接钉住
+  #      这些站点必须分类为 attack、非站点必须为 noise（改回旧表 ⇒ selftest 必红）。
+  $ledgerPy = Join-Path $Here 'attack_rng_ledger.py'
+  $prevEap = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  $ledgerOut = (& python $ledgerPy selftest 2>&1 | Out-String)
+  $ledgerRc = $LASTEXITCODE
+  $ErrorActionPreference = $prevEap
+  if ($ledgerRc -ne 0) { $failures += ('attack_rng_ledger_selftest_rc=' + $ledgerRc) }
+  if ($ledgerOut -notmatch 'SELFTEST GREEN') { $failures += 'attack_rng_ledger_selftest_not_green' }
+  Write-Output ("SELFTEST 22b attack_rng_ledger selftest rc={0}（两侧攻击站点表同表 + 新站点分类有牙）" -f $ledgerRc)
+
   Remove-Item -Recurse -Force $tmpRoot -ErrorAction SilentlyContinue
   if ($failures.Count -eq 0) {
-    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（攻击配置透传/默认关 + run_pair -DisableAutoPlay 耦合两向 + 攻击两相 pin pose/SQL（-PinMapName 透传含 MapName 断言） + pin SQL 可执行性（含改坏 a.IncHealth 必红 + 改坏 Hp=100000 越界必红） + pin 记账门（owner 19:20 降级 informational：attempts=2/3/漂移/旧会话无字段键 绿 + 键在但空/(off)/形态坏 红 + 改坏必红值清空） + 预热相 -StopAfterCharCreated 透传两向 + 攻击 pin 无怪口径（R-1，按地图查提取件：生产 0137 绿/source_verified + 换回 map 0 必红 + 合成 0/1 行·声明漂移·缺 provenance 四向有牙） + 攻击 pin 非 MonGen AI 消费者口径（R-1 refine 15:05：生产 0137 绿/source_verified + 合成 有引用/声明漂移/缺 provenance/缺提取件 四向必红） + 入口/DiffOnly fail-closed + attack_diff selftest + 改坏 dmg/hit 必红 + Invoke-AttackAlign 返回值形态两处（F-J：⑧ 生产函数直接断言 + ⑮） + scoped_diff 14/14 + M-1 WARN 有牙齿 + M-2 attacker 精确选择 selftest + pin SQL 别名/列校验 + 种子注入断言（两侧 fail-closed）+ 攻击序列收尾等待（F-E） + attack 行缺 my 的 fail-closed（残差③） + 活栈隔离口径（owner 21:15：开关 off/on/fail-closed 六向 + attack_seed 公式含 i32 回绕 + 流水头 有/无/缺文件 + C# dump vs Rust 谓词表机判（生产绿 / 删一条红 / 加未登记红）+ C# hook 离线自检））'
+    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（攻击配置透传/默认关 + run_pair -DisableAutoPlay 耦合两向 + 攻击两相 pin pose/SQL（-PinMapName 透传含 MapName 断言） + pin SQL 可执行性（含改坏 a.IncHealth 必红 + 改坏 Hp=100000 越界必红） + pin 记账门（owner 19:20 降级 informational：attempts=2/3/漂移/旧会话无字段键 绿 + 键在但空/(off)/形态坏 红 + 改坏必红值清空） + 预热相 -StopAfterCharCreated 透传两向 + 攻击 pin 无怪口径（R-1，按地图查提取件：生产 0137 绿/source_verified + 换回 map 0 必红 + 合成 0/1 行·声明漂移·缺 provenance 四向有牙） + 攻击 pin 非 MonGen AI 消费者口径（R-1 refine 15:05：生产 0137 绿/source_verified + 合成 有引用/声明漂移/缺 provenance/缺提取件 四向必红） + 入口/DiffOnly fail-closed + attack_diff selftest + 改坏 dmg/hit 必红 + Invoke-AttackAlign 返回值形态两处（F-J：⑧ 生产函数直接断言 + ⑮） + scoped_diff 14/14 + M-1 WARN 有牙齿 + M-2 attacker 精确选择 selftest + pin SQL 别名/列校验 + 种子注入断言（两侧 fail-closed）+ 攻击序列收尾等待（F-E） + attack 行缺 my 的 fail-closed（残差③） + 活栈隔离口径（owner 21:15：开关 off/on/fail-closed 六向 + attack_seed 公式含 i32 回绕 + 流水头 有/无/缺文件 + C# dump vs Rust 谓词表机判（生产绿 / 删一条红 / 加未登记红）+ C# hook 离线自检 + SHA256 活文件（F1：holder FileShare.ReadWrite 下读=锚 + 旧 ReadAllBytes 必被拒）+ attack_rng_ledger 站点表与决策片同表（F2）））'
     exit 0
   }
   Write-Output ('SELFTEST_RED RED: ' + ($failures -join ', '))

@@ -31,21 +31,15 @@ $script:M3GuardsRepoRoot = (Resolve-Path (Join-Path $script:M3GuardsHere '..\..\
 . (Join-Path $script:M3GuardsRepoRoot 'tools\m2-acceptance\portclassify.ps1')
 
 # ---------------------------------------------------------------------------------------------------
-# 环境无关 SHA256（.NET）——统一取代 `Get-FileHash`。
+# 环境无关 SHA256（.NET）——统一取代 `Get-FileHash`，且能读**活文件**（FileShare.ReadWrite）。
 #
-# 为什么不用 `Get-FileHash`：它属于 `Microsoft.PowerShell.Utility`；本机 PS 5.1 在 PSModulePath 被
-# PS7 污染时不导出该 cmdlet ⇒ 脚本在 `$ErrorActionPreference='Stop'` 下 `CommandNotFoundException`
-# 崩溃（m3cs 首跑走 `Test-M3MonGenEmpty -VerifySource` 已复现）。与 tools/oracle/hashutil.ps1、
-# tools/m2-acceptance/preflight.ps1 同一修法（.NET SHA256 不依赖模块解析，结果与 Get-FileHash 逐字节相同）。
-function Get-M3Sha256Hex([string]$Path) {
-  if ([string]::IsNullOrEmpty($Path)) { throw 'Get-M3Sha256Hex: 路径为空' }
-  if (-not (Test-Path -LiteralPath $Path)) { throw "Get-M3Sha256Hex: 文件不存在: $Path" }
-  $alg = [System.Security.Cryptography.SHA256]::Create()
-  try {
-    $bytes = [System.IO.File]::ReadAllBytes($Path)
-    return ([System.BitConverter]::ToString($alg.ComputeHash($bytes)) -replace '-', '').ToLowerInvariant()
-  } finally { $alg.Dispose() }
-}
+# ① `Get-FileHash` 属 `Microsoft.PowerShell.Utility`；本机 PS 5.1 在 PSModulePath 被 PS7 污染时
+#    不导出该 cmdlet ⇒ `$ErrorActionPreference='Stop'` 下 `CommandNotFoundException` 崩溃
+#    （m3cs 首跑走 `Test-M3MonGenEmpty -VerifySource` 已复现）。
+# ② `[System.IO.File]::ReadAllBytes` 以 `FileShare.Read` 打开；影子 GameSvr 用 `FileShare.ReadWrite`
+#    持有 `rng-attack-stream.tsv` ⇒ Windows 共享模式下读被拒（m3cs tick22 F1：专用流 sha256 记不出来）。
+# 两处都在 `m3hashutil.ps1` 统一（`Get-M3Sha256Hex` 用 `FileShare.ReadWrite|Delete` 流式读）。
+. (Join-Path $script:M3GuardsHere 'm3hashutil.ps1')
 
 # ---------------------------------------------------------------------------------------------------
 # M3②③ 活栈隔离口径（owner 2026-10-12 21:15，§6.0-3 owner 签字）——夹具侧唯一口径。
