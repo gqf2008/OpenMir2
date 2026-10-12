@@ -6,7 +6,14 @@
   与 owner 路由 comment `5ce4c443`。owner 把 F-A/F-B + F-C 的断言半边派回本卡（brief 顶部 2026-10-12 11:55）。
 - 性质：**夹具/仪器侧修复**；零端口、未起服务端栈、未 merge、未自签 review。写集仅
   `mir2-rs/tests/parity/m3/**` + `whitelist.md`，**零 `.rs`**；`src/**`、`crates/**`、`bins/**`、`sql/**`、`MirClient` 全 0 改。
-- 交付 head：`39c0d508`（fix）+ 证据本目录。
+- 交付 head：`9cc89562`（fix）+ 本证据目录（含 `SHA256SUMS.txt`）。
+
+> **2026-10-12 续修（本证据包自身）**：首版把 `01/02` 的清单 hash 按**盘上字节**记（含 2 处 CRLF）
+> ⇒ 复核器默认的**仓库字节**口径（`tools/evidence-hash/verify_sha256sums.py`，LF 归一）算 `63d3b54b/41d5a22f`
+> 与清单 `b5e84ecf/d2c45546` 不符（干净检出/合并后 RED 9/11，属本项目第 5 次踩的同一族）。
+> 修法：把 `01/02` 归一为 LF（去掉那 2 个 CRLF），其余 `06–09` 用本次重跑刷新，再用
+> `verify_sha256sums.py write <本目录>` 把清单重记为仓库字节口径。复核命令与原始输出见
+> `selfcheck-selfcontained.txt`；本目录在干净 clone 上 `verify_sha256sums.py` **11/11 GREEN**。
 
 ## F-A（Important，硬阻塞）——pin SQL 别名挂错表
 
@@ -92,6 +99,7 @@ powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_bag_equip_p
 
 - 入库：本目录 + `gate_guards.ps1` / `run_attack_pair.ps1` / `run_bag_equip_pair.ps1` / `selftest_gate.ps1`
   / `README.md`（m3）/ `whitelist.md`。
-- 仓外临时物（可删）：`E:/tmp/m3bag-fabc/**`（自检中间输出）、`E:/tmp/m3bag-attack-fix-target`（隔离 cargo target）。
+- 仓外临时物（可删）：`E:/tmp/m3bag-fabfix/**`（本次自检/门禁中间输出）、`E:/tmp/m3bag-attack-fix-target`（隔离 cargo target）。
 - 端口/进程：本片**未起任何服务**；十端口状态与开工前一致（只剩共享 3306）。
-- source-mutation 已还原：`gate_guards.ps1` blob = `54952a474fa6da3f8ea2849b070b32b0b89d5e37`（= 交付 head 版本）。
+- source-mutation 已还原：`gate_guards.ps1` blob = `54952a474fa6da3f8ea2849b070b32b0b89d5e37`（= 代码 head `9cc89562` 版本）。
+- 证据字节：`01/02` 归一为 LF；`06–09` 为本次重跑原始输出；`SHA256SUMS.txt` 按**仓库字节**口径（`verify_sha256sums.py write`）重记。
