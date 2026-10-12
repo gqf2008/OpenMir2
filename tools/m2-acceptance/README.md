@@ -83,6 +83,34 @@ powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps
 > 要用真公告，必须把 `NoticeDir` 写成**绝对路径**（`NoticeDir=E:/MirServer/M2GameSvr/Notice`）。
 > `start_rust_stack.ps1` 不生成补键副本（副本由操作者准备）⇒ 手工起测试栈时自己保证这一点。
 
+### 0b.1 `-Seed` · Rust 半的 `MIR2_RNG_SEED` 管线（②③ 真机同种子攻击对拍的前置）
+
+C# 半的种子由 .NET Startup Hook 读 `MIR2_RNG_SEED`；Rust 半的 `bins/game-svr` 生产路径也读同一个变数
+（T-30）。起栈时用 `-Seed <int>`（或先在 shell 里 `$env:MIR2_RNG_SEED=<int>`）把该变量**注入 game-svr
+子进程环境**，脚本会打一行可判据的 `RUST_SEED_INJECTED=<n>`：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 `
+  -RustBinDir E:\tmp\openmir2-m2svr-target\debug -Seed 42
+# 启动日志出现：SEED: 将向 game-svr 注入 MIR2_RNG_SEED=42 … RUST_SEED_INJECTED=42
+# game-svr.out.log 出现：RNG 同种子注入：seed=42 参照序列=SEED_PROBE 1434747710 302596119 …
+```
+
+- **不传种子 ⇒ 不注入、不打该行**（与改动前逐字节一致）。
+- **非法 `-Seed`/环境变量 ⇒ fail-closed**：打印 `RED: MIR2_RNG_SEED/-Seed 不是合法 int: …` 并 **exit 1**，
+  **不起栈**（不静默降级；同 C# 钩子 `TryParse` 失败 ⇒ `Fail/Exit(97)`）。
+- 管线实现（`Resolve-Mir2Seed` / `Get-SeedInjectedLine` / `Start-SeededProcess`）在
+  `tools/m2-acceptance/rust_seed_plumb.ps1`，与判据脚本**共用同一份**。
+- 判红/判绿（不起栈、不占真端口）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/check_seed_plumb.ps1 `
+  -GameSvrExe E:\tmp\openmir2-m2svr-target\debug\game-svr.exe
+# 15/15 ⇒ SEED_PLUMB GREEN (rc=0)；删掉 rust_seed_plumb.ps1 的注入行 ⇒ ②a/③a/③b/③c 必红 (rc=1)
+```
+
+证据：`tools/m2-acceptance/evidence/rust-stack-seed-plumb-20261012/`（卡 `openmir2-m3-rust-stack-seed-plumb`）。
+
 ---
 
 ## 1. ① 端口所有权实拍 —— `check_ports.ps1`

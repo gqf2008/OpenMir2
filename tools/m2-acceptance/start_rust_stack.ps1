@@ -22,6 +22,12 @@
   无法支撑真客户端进图；本脚本用 C# DBSrv/LoginSrv 作为 oracle 下盘（与 M3 首验同形，仅把 game-svr
   与三网关换成 Rust）。判据侧：M2 验收①只对 5000/7000/7100/7200 四端口取所有权，不受此影响。
 
+  种子管线（卡 `openmir2-m3-rust-stack-seed-plumb`，②③ 真机同种子攻击对拍的前置）：
+    `-Seed <int>` 显式种子（或读调用方 `MIR2_RNG_SEED`）⇒ 起 `game-svr.exe` 时把该变量
+    **注入子进程环境**，并在启动日志打一行可判据的 `RUST_SEED_INJECTED=<n>`；game-svr 自身会打
+    `SEED_PROBE` 行，两者须能对上。**不传种子 ⇒ 不注入、不打该行**（与改动前逐字节一致）。
+    非法种子（`-Seed`/环境变量不是 int）⇒ fail-closed：打印 `RED` 并 exit 1（不起栈，不静默降级）。
+
   判据/退出码：
     `-Stop`   按 pid 文件停掉本脚本起的进程；缺 pid 文件 ⇒ `NOTHING_TO_STOP`。
     `-Status` 只按端口实况打印，不改状态。
@@ -33,6 +39,10 @@
     -RustBinDir E:\tmp\openmir2-m2svr-target\debug
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 -Stop
+.EXAMPLE
+  # ②③ 真机同种子对拍：给 Rust 半显式注入与 C# 半相同的种子
+  powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 `
+    -RustBinDir E:\tmp\openmir2-m2svr-target\debug -Seed 42
 #>
 param(
   [string]$CsharpRepo = 'E:\Users\gxh\Documents\GitHub\OpenMir2',
@@ -46,12 +56,17 @@ param(
   [string]$GameSvrConf = '',
   [string]$GameGateExe = '',
   [int]$WaitSeconds   = 60,
+  # ②③ 真机同种子对拍的显式种子（空 ⇒ 回落读调用方 `MIR2_RNG_SEED`；两者皆空 ⇒ 不注入）。
+  [string]$Seed       = '',
   [switch]$Stop,
   [switch]$Status,
   [switch]$Force
 )
 
 $ErrorActionPreference = 'Stop'
+$Here = Split-Path -Parent $MyInvocation.MyCommand.Path
+# 种子管线（`Resolve-Mir2Seed` / `Get-SeedInjectedLine` / `Start-SeededProcess`）与 `check_seed_plumb.ps1` 共用同一份。
+. (Join-Path $Here 'rust_seed_plumb.ps1')
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 $PidFile = Join-Path $LogDir 'rust-stack.pid.json'
 
@@ -147,17 +162,33 @@ if ($missing.Count -gt 0) {
   exit 2
 }
 
+# ---- 0b) 种子解析（fail-closed：非法值 ⇒ 不起栈，exit 1；未传 ⇒ `Present=$false`，零行为差）----
+$seedInfo = $null
+try {
+  $seedInfo = Resolve-Mir2Seed -SeedArg $Seed -EnvValue $env:MIR2_RNG_SEED
+} catch {
+  Write-Output ("RED: " + $_.Exception.Message + " —— 拒绝在非法种子下起栈（fail-closed）")
+  exit 1
+}
+if ($seedInfo.Present) {
+  Write-Output ("SEED: 将向 game-svr 注入 MIR2_RNG_SEED={0}" -f $seedInfo.Value)
+} else {
+  Write-Output 'SEED: 未指定种子（不注入，与改动前行为一致）'
+}
+
 $started = @()
-function Start-One([string]$Name, [string]$Exe, [string[]]$ExeArgs, [string]$WorkDir, [int[]]$Ports, [int]$StopOrder) {
+function Start-One([string]$Name, [string]$Exe, [string[]]$ExeArgs, [string]$WorkDir, [int[]]$Ports, [int]$StopOrder, [psobject]$Seed = $null) {
   $out = Join-Path $LogDir ($Name + '.out.log')
   $err = Join-Path $LogDir ($Name + '.err.log')
   Remove-Item $out, $err -Force -ErrorAction SilentlyContinue
-  $sp = @{ FilePath = $Exe; WorkingDirectory = $WorkDir; WindowStyle = 'Hidden'; PassThru = $true
-          RedirectStandardOutput = $out; RedirectStandardError = $err }
-  if ($ExeArgs.Count -gt 0) { $sp.ArgumentList = $ExeArgs }
-  $p = Start-Process @sp
+  # `Start-SeededProcess` = 原 `Start-Process @sp`；仅当 `$Seed.Present` 时在子进程环境里注入 `MIR2_RNG_SEED`。
+  $p = Start-SeededProcess -FilePath $Exe -ArgumentList $ExeArgs -WorkingDirectory $WorkDir `
+         -RedirectStandardOutput $out -RedirectStandardError $err -WindowStyle 'Hidden' -Seed $Seed
   $script:started += [pscustomobject]@{ name = $Name; pid = $p.Id; ports = $Ports; stop_order = $StopOrder; exe = $Exe }
   Write-Output ("START {0} pid={1} ports={2}" -f $Name, $p.Id, ($Ports -join ','))
+  # 传种子 ⇒ 打一行可判据的 `RUST_SEED_INJECTED=<n>`（不传 ⇒ `Get-SeedInjectedLine` 返回 `$null`，不打）。
+  $seedLine = Get-SeedInjectedLine -Seed $Seed
+  if (-not [string]::IsNullOrEmpty($seedLine)) { Write-Output $seedLine }
 }
 
 # ---- 1) MySQL ----
@@ -180,7 +211,7 @@ Start-One -Name 'DBSrv'    -Exe $dbsrvExe -ExeArgs @() -WorkDir $dbsrvDir -Ports
 Start-One -Name 'LoginSrv' -Exe $lsrvExe  -ExeArgs @() -WorkDir $lsrvDir  -Ports @(5500, 5600)       -StopOrder 6
 
 # ---- 3) Rust game-svr（先于网关：网关注册需要 GameSvr 在） ----
-Start-One -Name 'game-svr'   -Exe $gsvrExe -ExeArgs @($gsvrConf) -WorkDir (Split-Path $gsvrConf -Parent) -Ports @(5000)           -StopOrder 5
+Start-One -Name 'game-svr'   -Exe $gsvrExe -ExeArgs @($gsvrConf) -WorkDir (Split-Path $gsvrConf -Parent) -Ports @(5000)           -StopOrder 5 -Seed $seedInfo
 # ---- 4) Rust 三网关 ----
 Start-One -Name 'login-gate' -Exe $lgExe   -ExeArgs @($lgConf)   -WorkDir (Split-Path $lgConf  -Parent) -Ports @(7000)           -StopOrder 1
 Start-One -Name 'sel-gate'   -Exe $sgExe   -ExeArgs @($sgConf)   -WorkDir (Split-Path $sgConf  -Parent) -Ports @(7100)           -StopOrder 2
