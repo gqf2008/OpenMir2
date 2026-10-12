@@ -1,0 +1,108 @@
+=== F-K oracle 依据（C# 真身）：人打人由 IsProperTarget 决定，默认攻击模式=全体 ⇒ 允许 ===
+
+--- [O1] src/M2Server/Actor/BaseObject.Attack.cs:29-60 _Attack()：先 IsProperTarget(targetObject)，否则 nPower=0 ---
+29: 
+30:         internal bool _Attack(int nPower, IActor targetObject)
+31:         {
+32:             if (targetObject == null)
+33:             {
+34:                 return false;
+35:             }
+36:             bool result = false;
+37:             if (IsProperTarget(targetObject))
+38:             {
+39:                 if (targetObject.HitPoint > 0)
+40:                 {
+41:                     if (HitPoint < M2Share.RandomNumber.RandomByte(targetObject.SpeedPoint))
+42:                     {
+43:                         nPower = 0;
+44:                     }
+45:                 }
+46:             }
+47:             else
+48:             {
+49:                 nPower = 0;
+50:             }
+51:             if (nPower > 0)
+52:             {
+53:                 nPower = targetObject.GetHitStruckDamage(this, nPower);
+54:                 if (nPower > 0)
+55:                 {
+56:                     targetObject.StruckDamage(nPower);
+57:                     targetObject.SendStruckDelayMsg(Messages.RM_REFMESSAGE, nPower, targetObject.WAbil.HP, targetObject.WAbil.MaxHP, ActorId, "", 200);
+58:                     result = true;
+59:                 }
+60:             }
+
+--- [O2] src/M2Server/Player/PlayObject.Attack.cs:627-643 IsAttackTarget()（override；case 全体攻击=HAM_ALL 对 Play 目标也 result=true） ---
+627:         protected override bool IsAttackTarget(IActor targetObject)
+628:         {
+629:             bool result = false;
+630:             switch (AttatckMode)
+631:             {
+632:                 case AttackMode.HAM_ALL:
+633:                     if ((targetObject.Race < ActorRace.NPC) || (targetObject.Race > ActorRace.PeaceNpc))
+634:                     {
+635:                         result = true;
+636:                     }
+637:                     if (SystemShare.Config.PveServer)
+638:                     {
+639:                         return true;
+640:                     }
+641:                     break;
+642:                 case AttackMode.HAM_PEACE:
+643:                     if (targetObject.Race >= ActorRace.Animal)
+
+--- [O3] src/M2Server/Player/PlayObject.cs:1924-1936 IsProperTarget()：Play 目标走 IsProtectTarget ---
+1924:         public override bool IsProperTarget(IActor baseObject)
+1925:         {
+1926:             if (baseObject == null || baseObject.ActorId == this.ActorId)
+1927:             {
+1928:                 return false;
+1929:             }
+1930:             bool result = IsAttackTarget(baseObject);//先检查攻击模式
+1931:             if (result)
+1932:             {
+1933:                 if (baseObject.Race == ActorRace.Play)
+1934:                 {
+1935:                     return IsProtectTarget(baseObject);
+1936:                 }
+
+--- [O4] src/M2Server/Player/PlayObject.cs:908 新角色默认 AttatckMode = 0（= AttackMode.HAM_ALL 全体攻击） ---
+905:             InGuildWarArea = false;
+906:             IsNewHuman = false;
+907:             LoginNoticeOk = false;
+908:             AttatckMode = 0;
+909:             TryPlayMode = false;
+910:             BonusAbil = new NakedAbility();
+
+--- [O5] src/OpenMir2/Enums/AttackMode.cs：枚举值（注意：仓库内该文件成员名被脱敏为 n） ---
+﻿namespace OpenMir2.Enums
+{
+    public enum AttackMode : byte
+    {
+        /// <summary>
+        /// 全体攻击模式
+        /// </summary>
+        HAM_ALL = 0,
+        /// <summary>
+        /// 和平攻击模式
+        /// </summary>
+        HAM_PEACE = 1,
+        /// <summary>
+        /// 夫妻攻击模式
+        /// </summary>
+        HAM_DEAR = 2,
+        /// <summary>
+        /// 师徒攻击模式
+        /// </summary>
+        HAM_MASTER = 3,
+        /// <summary>
+        /// 组队攻击模式
+        /// </summary>
+        HAM_GROUP = 4,
+        /// <summary>
+
+口径：oracle 侧 _Attack 的命中门是 IsProperTarget（虚函数）；PlayObject 在默认 HAM_ALL 模式下
+      对同为 Play 的目标返回 true ⇒ 正常走命中判定（真机 C# 实测确实打出 2 次 SM_STRUCK）。
+      Rust 侧用固定 race 规则 is_attack_target 顶替 IsProperTarget，人打人恒 false ⇒ 结构性分歧。
