@@ -30,6 +30,16 @@ namespace BotSrv
         public static int g_nBagEquipStepMs = 1000;
         public static int g_nBagEquipStartDelayMs = 3000;
         /// <summary>
+        /// M3②③ 夹具：进世界后按固定攻击序列发 CM_HIT（白名单 T-22 扩展）。
+        /// 默认 false = 原行为（不新增任何发送）。见 RobotPlayer.AttackSequenceTick。
+        /// </summary>
+        public static bool g_boAttackSequence = false;
+        public static int g_nAttackCount = 120;
+        public static int g_nAttackStepMs = 500;
+        public static int g_nAttackStartDelayMs = 3000;
+        public static int g_nAttackDir = 2;
+        public static int g_nAttackRole = 0;
+        /// <summary>
         /// M1③ 退出路径夹具（卡 openmir2-m1-dbsrv-6000-face；白名单 M1-EXIT）：
         /// 收到本假人 SM_LOGON 后等这么久，按客户端 AppLogout 的线上形状发一条
         /// CM_SOFTCLOSE(1009)（= “小退”）。默认 0 = 关（不新增任何发送）。

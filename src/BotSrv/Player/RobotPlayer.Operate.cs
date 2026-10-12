@@ -645,6 +645,13 @@ namespace BotSrv.Player
                     break;
                 case Messages.SM_STRUCK:
                     wl = EDCode.DecodeBuffer<MessageBodyWL>(body);
+                    // M3②③ 夹具（T-22 扩展）：把收到的 SM_STRUCK 落成 `M3ATTSEQ {json}`，
+                    // 供 attack_diff.py 按「第 k 次」对齐。`Series`=本次伤害（oracle MakeMessage(SM_STRUCK,
+                    // ActorId, HP, MaxHP, wParam) 的 series），`Tag1`=命中者 ActorId。默认关时空转。
+                    if (MShare.g_boAttackSequence)
+                    {
+                        MainOutMessage($"M3ATTSEQ {{\"role\":\"struck\",\"dmg\":{msg.Series},\"hp\":{msg.Param},\"maxhp\":{msg.Tag},\"src\":{wl.Tag1},\"actor\":{msg.Recog}}}");
+                    }
                     Actor = PlayScene.FindActor(msg.Recog);
                     if (Actor != null)
                     {

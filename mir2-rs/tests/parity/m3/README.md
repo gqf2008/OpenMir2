@@ -273,6 +273,35 @@ powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_bag_equip_p
   ⇒ **T-28 已退役**（`tests/parity/whitelist.md` T-28 改为「已修/退役」口径、保留留痕，不再作为差异豁免）。
   报告 `T14-对照报告-20261012.md`；第十四格判据会话 `sessions/{csharp-20261012-080312,rust-20261012-080417}`。
 
+### 攻击「两侧同序列」（卡 `openmir2-m3-attack-pair-fixture`，issue `76cc08b8`；T-22 扩展 = whitelist T-29）
+
+M3②③ 的真机对拍仪器（卡 `openmir2-m3-combat-skills-align` 的 DoD①②）：同一 bot 固定攻击序列在两侧各跑一次
+⇒ **逐项伤害序列**（≥100 次，按「第 k 次」）+ **命中/躲闪统计** 跨侧比对。
+
+```powershell
+# ① C# 基线（C# 栈在听；attacker+victim 两个假人，相邻固定起点）
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 -Side csharp -Bots 2 -AttackCount 120 -AttackPinPair
+# ② 换 Rust 栈后与本侧对拍
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 -Side rust -Bots 2 -AttackCount 120 -AttackPinPair -PeerSession <上面打的 SESSION_CSHARP 名>
+# ③ 只重比既有产物（不碰端口）
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 -DiffOnly -CsharpSession <c#会话> -RustSession <rust会话>
+# ④ 无栈自检（离线）
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 -SelfCheckNoStack
+```
+
+**度量口径**（详见卡 comment；`attack_diff.py` 实现）：伤害从**受击方收到的 `SM_STRUCK` 的 `Series`** 读
+（oracle `MakeMessage(SM_STRUCK, ActorId, HP, MaxHP, wParam)` 的 series=本次伤害，`src=MessageBodyWL.Tag1`）；
+命中/躲闪按「第 k 次」对齐（attacker 第 k 步发出后收到 `src==attacker` 的 struck ⇒ hit）。
+**非平凡门**（防恒 0/恒绿）：`attacked>=1 && hits>=1 && sum>0`，否则 RED。
+目标接法 = `-AttackPinPair`：attacker（账号序号 0）与 victim（序号 1）**相邻**固定起点，victim `Hp=MaxHP` 抬高。
+
+与前一条（背包/装备）共用同一批护栏：入口实现识别、两相 pin、`settle+hold`、`-DisableAutoPlay` 耦合、
+peer 口径（`attack_sequence`/`attack_pose`/`fixed_new_chr`）与 `scoped_diff` 作用域判据。
+**前置（登记）**：真机两侧需 Rust game-svr 同种子注入（C# 用 `m3/rng-hook`）；未接前数值不可比（见 whitelist T-30）。
+
+本片（不占端口）证据：`evidence-attack-pair-20261012/**`（`attack_diff.py selftest` + `run_attack_pair -SelfCheckNoStack`
++ 生产函数级「改坏 dmg/hit 必红」+ 四门禁 + `SHA256SUMS.txt`）。
+
 ## 一次「侧运行」是什么
 
 

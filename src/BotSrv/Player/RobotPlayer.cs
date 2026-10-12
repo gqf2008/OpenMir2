@@ -613,6 +613,69 @@ namespace BotSrv.Player
 
         #endregion
 
+        #region M3②③ 固定攻击序列（夹具专用，默认关；白名单 T-22 扩展）
+
+        /// <summary>下一步要发的攻击序号（-1=未武装；0..count-1=待发）。</summary>
+        private int _attackSeqStep = -1;
+        /// <summary>下一步的到点时刻（MShare.GetTickCount）。</summary>
+        private int _attackSeqNextTick;
+
+        /// <summary>收到本假人 SM_LOGON 后武装固定攻击序列（`MShare.g_boAttackSequence` 关闭或本账号
+        /// 不是 attacker（`g_nAttackRole`）时空操作）。武装后不做即时发送：第一步等 `g_nAttackStartDelayMs`，
+        /// 给服务端把 ``SM_LOGON`` / 场景推送完、本假人落点（`_probeX/_probeY`）确定的时间。</summary>
+        private void ArmAttackSequence()
+        {
+            if (!MShare.g_boAttackSequence)
+            {
+                return;
+            }
+            if (!LoginId.EndsWith(MShare.g_nAttackRole.ToString(), StringComparison.Ordinal))
+            {
+                return;
+            }
+            _attackSeqStep = 0;
+            _attackSeqNextTick = MShare.GetTickCount() + MShare.g_nAttackStartDelayMs;
+            MainOutMessage($"M3ATTSEQ {{\"role\":\"arm\",\"id\":\"{LoginId}\",\"count\":{MShare.g_nAttackCount},\"step_ms\":{MShare.g_nAttackStepMs},\"dir\":{MShare.g_nAttackDir}}}");
+        }
+
+        /// <summary>M3②③ 固定攻击序列：每 `g_nAttackStepMs` 发一条 `CM_HIT`——
+        /// `Recog = MakeLong(自己的 CurrX, CurrY)`、`Tag = g_nAttackDir`（照 `ProbeActionTick` 的线上形状）；
+        /// 共 `g_nAttackCount` 步，逐步落 `M3ATTSEQ {json}` 标记（`attack_diff.py` 据此按「第 k 次」对齐）。
+        /// 只写本假人自己的 socket，不读不写跨假人共享世界态（同 T-22 纪律）。默认关时空转。</summary>
+        private void AttackSequenceTick()
+        {
+            if (!MShare.g_boAttackSequence || _attackSeqStep < 0)
+            {
+                return;
+            }
+            if (!_inWorld || ClientSocket == null || !ClientSocket.IsConnected)
+            {
+                return;
+            }
+            if (_attackSeqStep >= MShare.g_nAttackCount)
+            {
+                return;
+            }
+            int now = MShare.GetTickCount();
+            if (now < _attackSeqNextTick)
+            {
+                return;
+            }
+            _attackSeqNextTick = now + MShare.g_nAttackStepMs;
+            int k = _attackSeqStep + 1;
+            MainOutMessage($"M3ATTSEQ {{\"role\":\"attack\",\"k\":{k},\"op\":\"CM_HIT\",\"x\":{_probeX},\"y\":{_probeY},\"dir\":{MShare.g_nAttackDir},\"id\":\"{LoginId}\"}}");
+            CommandMessage msg = Messages.MakeMessage(Messages.CM_HIT,
+                HUtil32.MakeLong((short)_probeX, (short)_probeY), 0, MShare.g_nAttackDir, 0);
+            SendSocket(EDCode.EncodeMessage(msg));
+            _attackSeqStep = k;
+            if (_attackSeqStep >= MShare.g_nAttackCount)
+            {
+                MainOutMessage($"M3ATTSEQ {{\"role\":\"done\",\"id\":\"{LoginId}\",\"attacks\":{MShare.g_nAttackCount}}}");
+            }
+        }
+
+        #endregion
+
         #region M1③ 退出路径夹具：进世界后发 CM_SOFTCLOSE（小退；默认关；白名单 M1-EXIT）
 
         /// <summary>发送时刻（MShare.GetTickCount），-1=未武装。</summary>
@@ -668,6 +731,7 @@ namespace BotSrv.Player
             _probeY = y;
             _inWorld = true;
             ArmBagEquipSequence();
+            ArmAttackSequence();
             ArmSoftClose();
             if (LoadMetrics.ShouldSuppressInWorld(LoginId))
             {
@@ -697,6 +761,7 @@ namespace BotSrv.Player
                 DScreen.CurrentScene.DoNotifyEvent();
                 ProbeActionTick();
                 BagEquipSequenceTick();
+                AttackSequenceTick();
                 SoftCloseTick();
                 if (DScreen.CurrentScene == PlayScene)
                 {
