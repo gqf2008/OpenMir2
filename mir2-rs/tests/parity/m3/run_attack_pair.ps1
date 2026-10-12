@@ -484,7 +484,7 @@ if ($SelfCheckNoStack) {
   $fRaw = Join-Path $alignDir 'attack_raw.jsonl'
   $fLines = @(
     'M3ATTSEQ {"role":"attack","k":1,"op":"CM_HIT","x":1,"y":1,"dir":2,"my":11}',
-    'M3ATTSEQ {"role":"struck","dmg":3,"hp":7,"maxhp":10,"src":11,"actor":22}',
+    'M3ATTSEQ {"role":"struck","dmg":3,"hp":7,"maxhp":10,"src":11,"actor":22,"my":11}',
     'M3ATTSEQ {"role":"done","attacks":1}'
   )
   [System.IO.File]::WriteAllLines($fRaw, $fLines, (New-Object System.Text.UTF8Encoding($false)))
@@ -552,7 +552,7 @@ if ($SelfCheckNoStack) {
   $events = New-Object System.Collections.Generic.List[string]
   for ($k = 1; $k -le 10; $k++) {
     $events.Add('M3ATTSEQ {"role":"attack","k":' + $k + ',"op":"CM_HIT","x":289,"y":618,"dir":2,"my":101}')
-    if ($k -ne 3) { $events.Add('M3ATTSEQ {"role":"struck","dmg":' + (20 + ($k % 5)) + ',"hp":' + (100 - $k) + ',"maxhp":100,"src":101,"actor":77}') }
+    if ($k -ne 3) { $events.Add('M3ATTSEQ {"role":"struck","dmg":' + (20 + ($k % 5)) + ',"hp":' + (100 - $k) + ',"maxhp":100,"src":101,"actor":77,"my":101}') }
   }
   $events.Add('M3ATTSEQ {"role":"done","attacks":10}')
   $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
@@ -605,6 +605,26 @@ if ($SelfCheckNoStack) {
     Write-Output '  --- 原始输出（改坏 dmg） ---'; Write-Output $dmgRedOut
     Write-Output '  --- 原始输出（改坏 hit） ---'; Write-Output $hitRedOut
   }
+
+  # ⑲ 残差③（owner 2026-10-12 17:35）：attack 行缺 `my` ⇒ 判据层必须 **fail-closed**（rc=2），
+  #    不许静默降级成「不过滤」（旧实现就是这么把同一击算两次的）。真跑生产 `Invoke-AttackAlign`。
+  #    改坏（把 attack 行的 `"my":101` 去掉）⇒ `attack_my_missing_not_rc2` 必红。
+  $dirC = Join-Path $tmpRoot 'c'
+  New-Item -ItemType Directory -Force -Path $dirC | Out-Null
+  $rawC = Join-Path $dirC 'attack_raw.jsonl'
+  $eventsC = New-Object System.Collections.Generic.List[string]
+  for ($k = 1; $k -le 4; $k++) {
+    $eventsC.Add('M3ATTSEQ {"role":"attack","k":' + $k + ',"op":"CM_HIT","x":289,"y":618,"dir":2}')
+    $eventsC.Add('M3ATTSEQ {"role":"struck","dmg":5,"hp":' + (20 - $k) + ',"maxhp":30,"src":101,"actor":77,"my":101}')
+  }
+  [System.IO.File]::WriteAllLines($rawC, $eventsC, $utf8NoBom)
+  $prevEap = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  $myMissingRc = Invoke-AttackAlign $dirC
+  $ErrorActionPreference = $prevEap
+  if ($myMissingRc -isnot [int]) { $failures += ('attack_my_missing_rc_not_int=' + $(if ($null -ne $myMissingRc) { $myMissingRc.GetType().Name } else { 'null' })) }
+  elseif ($myMissingRc -ne 2) { $failures += ('attack_my_missing_not_rc2=' + $myMissingRc) }
+  Write-Output ("SELFTEST ⑲ attack 行缺 my ⇒ fail-closed（残差③）：rc={0}（期望 2）" -f (@($myMissingRc) -join '|'))
 
   # ⑨ scoped_diff selftest 仍须绿（DB 侧判据未被削弱）。
   $prevEap = $ErrorActionPreference
@@ -664,7 +684,7 @@ if ($SelfCheckNoStack) {
 
   Remove-Item -Recurse -Force $tmpRoot -ErrorAction SilentlyContinue
   if ($failures.Count -eq 0) {
-    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（攻击配置透传/默认关 + run_pair -DisableAutoPlay 耦合两向 + 攻击两相 pin pose/SQL（-PinMapName 透传含 MapName 断言） + pin SQL 可执行性（含改坏 a.IncHealth 必红 + 改坏 Hp=100000 越界必红） + pin 重试账本（owner 16:30：期望 attempts=2 与仪器同源 + 五向构造输入 + 改坏必红真跑还原） + 攻击 pin 无怪口径（R-1，按地图查提取件：生产 0137 绿/source_verified + 换回 map 0 必红 + 合成 0/1 行·声明漂移·缺 provenance 四向有牙） + 攻击 pin 非 MonGen AI 消费者口径（R-1 refine 15:05：生产 0137 绿/source_verified + 合成 有引用/声明漂移/缺 provenance/缺提取件 四向必红） + 入口/DiffOnly fail-closed + attack_diff selftest + 改坏 dmg/hit 必红 + Invoke-AttackAlign 返回值形态两处（F-J：⑧ 生产函数直接断言 + ⑮） + scoped_diff 14/14 + M-1 WARN 有牙齿 + M-2 attacker 精确选择 selftest + pin SQL 别名/列校验 + 种子注入断言（两侧 fail-closed）+ 攻击序列收尾等待（F-E））'
+    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（攻击配置透传/默认关 + run_pair -DisableAutoPlay 耦合两向 + 攻击两相 pin pose/SQL（-PinMapName 透传含 MapName 断言） + pin SQL 可执行性（含改坏 a.IncHealth 必红 + 改坏 Hp=100000 越界必红） + pin 重试账本（owner 16:30：期望 attempts=2 与仪器同源 + 五向构造输入 + 改坏必红真跑还原） + 攻击 pin 无怪口径（R-1，按地图查提取件：生产 0137 绿/source_verified + 换回 map 0 必红 + 合成 0/1 行·声明漂移·缺 provenance 四向有牙） + 攻击 pin 非 MonGen AI 消费者口径（R-1 refine 15:05：生产 0137 绿/source_verified + 合成 有引用/声明漂移/缺 provenance/缺提取件 四向必红） + 入口/DiffOnly fail-closed + attack_diff selftest + 改坏 dmg/hit 必红 + Invoke-AttackAlign 返回值形态两处（F-J：⑧ 生产函数直接断言 + ⑮） + scoped_diff 14/14 + M-1 WARN 有牙齿 + M-2 attacker 精确选择 selftest + pin SQL 别名/列校验 + 种子注入断言（两侧 fail-closed）+ 攻击序列收尾等待（F-E） + attack 行缺 my 的 fail-closed（残差③））'
     exit 0
   }
   Write-Output ('SELFTEST_RED RED: ' + ($failures -join ', '))

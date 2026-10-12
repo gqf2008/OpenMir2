@@ -1,0 +1,9 @@
+# 改坏必红（残差③）：把 rebuild 后的 attack 行去掉 my ⇒ 判据层必须 fail-closed（rc=2），不得静默降级
+$ python - <<'PY'  # 见 03 生成脚本：只删 role=attack 行的 my 字段
+$ python mir2-rs/tests/parity/m3/attack_diff.py align .../mutation-attack-missing-my.jsonl --out $(TMP)/mut.seq.jsonl
+FAIL_CLOSED: attack 行缺 my 字段（需为 int ActorId）——拒绝静默降级为「不过滤」：{"role": "attack", "k": 1, "op": "CM_HIT", "x": 17, "y": 20, "dir": 2, "id": "m2svrk2c10"}
+MUTATION_RC=2
+
+# 反向对照：同一文件把 my 还原（= rebuild 产物）⇒ rc=0 且 seq 产出
+ALIGN_OK E:/tmp/restore.seq.jsonl attacked=120 hits=1 dodges=119 sum=1 (filtered_foreign=0 other_observer=2 deduped=3 unattributed=0)
+RESTORE_RC=0

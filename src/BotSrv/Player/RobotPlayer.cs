@@ -300,6 +300,13 @@ namespace BotSrv.Player
         /// <summary>本假人自己的世界坐标（SM_LOGON 里服务端给的落点）。</summary>
         private int _probeX;
         private int _probeY;
+        /// <summary>本假人自己的 ActorId（SM_LOGON 的 `Recog`）。
+        /// M3②③ 夹具（T-29 扩展，owner 2026-10-12 17:35）：`M3ATTSEQ` 的 attack/struck 行都带 `my`
+        /// = 本假人自身 ActorId。attack 行的 `my` 是 `attack_diff.py` 的施击者身份来源（缺它 ⇒
+        /// 判据 fail-closed，**不**静默降级）；struck 行的 `my`（观察者自身 ActorId）供判据区分
+        /// attacker 视角与 victim 视角（真机同一击会被两个假人各落一遍；去重靠事件键，
+        /// 这个字段用于统计 `other_observer` 并佐证重复来源）。</summary>
+        private int _myActorId;
         /// <summary>防 SocketError 重入（SendText 失败会**同步**回调 OnError，见 ScoketClient.SendText）。</summary>
         private bool _sockErrorHandling;
 
@@ -664,7 +671,7 @@ namespace BotSrv.Player
             }
             _attackSeqNextTick = now + MShare.g_nAttackStepMs;
             int k = _attackSeqStep + 1;
-            MainOutMessage($"M3ATTSEQ {{\"role\":\"attack\",\"k\":{k},\"op\":\"CM_HIT\",\"x\":{_probeX},\"y\":{_probeY},\"dir\":{MShare.g_nAttackDir},\"id\":\"{LoginId}\"}}");
+            MainOutMessage($"M3ATTSEQ {{\"role\":\"attack\",\"k\":{k},\"op\":\"CM_HIT\",\"x\":{_probeX},\"y\":{_probeY},\"dir\":{MShare.g_nAttackDir},\"my\":{_myActorId},\"id\":\"{LoginId}\"}}");
             CommandMessage msg = Messages.MakeMessage(Messages.CM_HIT,
                 HUtil32.MakeLong((short)_probeX, (short)_probeY), 0, MShare.g_nAttackDir, 0);
             SendSocket(EDCode.EncodeMessage(msg));
@@ -721,13 +728,14 @@ namespace BotSrv.Player
 
         /// <summary>收到 SM_LOGON = 服务端确认本假人已进世界（探针武装 + tick 覆盖率分子），幂等。
         /// `x`/`y` = 该消息里服务端给本假人的落点（PlayScene 的 SM_LOGON 分支就用它们 NewActor）。</summary>
-        public void MarkInWorld(int x, int y)
+        public void MarkInWorld(int actorId, int x, int y)
         {
             if (_inWorldCounted)
             {
                 return;
             }
             _inWorldCounted = true;
+            _myActorId = actorId;
             _probeX = x;
             _probeY = y;
             _inWorld = true;

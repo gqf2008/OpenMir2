@@ -1,0 +1,4 @@
+RNG_LEDGER_SEGMENTS mir2-rs/tests/parity/m3/evidence-attack-my-field-20261012/csharp-170110.rng-segments.jsonl marker=M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929 segments=120
+  SEG k=1 total=1574 attack=4 noise=1570 first_seq=222225
+  SEG k=2 total=1819 attack=6 noise=1813 first_seq=223799
+  SEG k=3 total=1502 attack=6 noise=1496 first_seq=225618
