@@ -55,7 +55,7 @@
   （「翻一位」这条牙抓不到，靠「钉住标准值」这条抓到——证明钉住值必要）。
 - 还原后复跑 `deploy_gamesvr.ps1 -SelfTestRed` = GREEN（`after-deploy-selftestred.txt` 即还原态）。
 
-## 4. 四门禁（隔离 `CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target`，`--offline`）
+## 4. 四门禁（合并 master `fa456481` 后在交付树上复跑；隔离 `CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target`，`--offline`）
 
 | 门禁 | 结果 | 原始件 |
 | --- | --- | --- |
