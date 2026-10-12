@@ -44,6 +44,14 @@
 | 13 | 逐段（每击）形状 | `26-csharp-segments.{txt,json}`、`27-rust-segments.{txt,json}`、`28-segdiff.{txt,json}` |
 | 14 | Rust 活栈同侧可复现（r1==r2 逐字节） | `29-rust-r1-r2-identical.txt` |
 | 15 | 夹具读数（pin 重试 12 轮 / 84 次「无目标」） | `33-pin-attempts.txt`、`31-rust-live-84-no-target.txt` |
+| 16 | **判决性实验**（owner `bbd1390c`）：3 次 C# 基线（各自新起栈 + 独立 trace） | `41-pin-experiment.txt`、`42-exp-runs.txt`、`experiment/*` |
+| 17 | Q3：用当前 align 重算旧 c2-vs-c3（先 rebuild_attack_my 补 `my`） | `40-q3-c2-vs-c3-current-align.txt` |
+
+> **判决性实验要点**：3 次 C# 基线 attempts=4/5/5；attempts 不同（4↔5）与**相同**（5↔5）时
+> (a) `attack_seq` 与 (b) 攻击路径取数值序列**都不同**，攻击路径取数条数也变（275 vs 273）
+> ⇒ pin_attempts 门**既不充分也不必要**；根因是全局 RNG 被并发噪声消费者共享 ⇒ C# 侧同侧本就不可复现
+> （本窗口 3/3 各不同）。旧 c2-vs-c3 在当前 align 下仍差 39 项 ⇒ 旧归因非纯 align 假象。
+> 本片**不改门**，请 owner 依此裁决。
 
 ## 三、会话（`sessions/`）
 

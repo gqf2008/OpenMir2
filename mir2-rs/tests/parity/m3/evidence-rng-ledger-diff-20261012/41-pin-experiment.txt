@@ -1,0 +1,63 @@
+# 判决性实验（owner 2026-10-12 现场阻断 bbd1390c）：3 次 C# 基线（各自新起栈 + 独立 trace，seed=42，不筛选 attempts）
+# 触发：m3cs 的「重跑直到 attempts==2」循环每轮都被 pin_attempts 门判红；owner 要求判「重试是否推移起点」。
+
+## (a) attack_seq 逐 k / (b) 账本攻击路径取数 result 值序列（按序）
+
+| run | session | attempts | trace sha256(前16) | atk draws | (b) atkvals sha256(前16) | (a) seq sha256(前16) |
+|---|---|---|---|---|---|---|
+| 1 | csharp-20261012-191116 | 4 | c3cc84747d4fdb09 | 275 | 943b9f883f0ccc03 | 3362a10cb154933f |
+| 2 | csharp-20261012-191333 | 5 | f5865e6e88c81b32 | 275 | b394b7dbf99f1615 | c76b0963293d1e89 |
+| 3 | csharp-20261012-191542 | 5 | 0f4c144eef75b15f | 273 | 3f0e048f03d91da2 | 6e27df15dc7143c1 |
+
+## 三问结论
+- Q1(a) attempts 不同（4 vs 5）：seq sha 3362a10c vs c76b0963 ⇒ **不同**
+- Q1(b) attempts 不同：atkvals sha 943b9f88 vs b394b7db ⇒ **不同**
+- Q2 attempts 相同（5 vs 5）：seq c76b0963 vs 6e27df15 ⇒ **不同**；atkvals b394b7db vs 3f0e048f ⇒ **不同**；atk draws **275 vs 273**（次数也不同）
+
+## 逐对 attack_seq diff（当前 align 口径）
+--- run csharp-20261012-191116 vs csharp-20261012-191333 ---
+NONTRIVIAL a=True() b=True()
+RED: 跨侧攻击序列差异 15 项（差异要么修到 0，要么按 §6.0-3 登记 tests/parity/whitelist.md）
+  - k=2 hit 不等: a=True b=False
+  - k=2 dmg 不等: a=1 b=0
+  - k=2 hp 不等: a=18 b=0
+  - k=2 maxhp 不等: a=19 b=0
+  - k=3 hit 不等: a=True b=False
+  - k=3 dmg 不等: a=1 b=0
+  - k=3 hp 不等: a=17 b=0
+  - k=3 maxhp 不等: a=19 b=0
+  - k=4 hit 不等: a=False b=True
+  - k=4 dmg 不等: a=0 b=1
+  - k=4 hp 不等: a=0 b=18
+  - k=4 maxhp 不等: a=0 b=19
+  - 统计 hits 不等: a=2 b=1
+  - 统计 dodges 不等: a=118 b=119
+  - 统计 sum 不等: a=2 b=1
+
+--- run csharp-20261012-191116 vs csharp-20261012-191542 ---
+NONTRIVIAL a=True() b=True()
+RED: 跨侧攻击序列差异 7 项（差异要么修到 0，要么按 §6.0-3 登记 tests/parity/whitelist.md）
+  - k=3 hit 不等: a=True b=False
+  - k=3 dmg 不等: a=1 b=0
+  - k=3 hp 不等: a=17 b=0
+  - k=3 maxhp 不等: a=19 b=0
+  - 统计 hits 不等: a=2 b=1
+  - 统计 dodges 不等: a=118 b=119
+  - 统计 sum 不等: a=2 b=1
+
+--- run csharp-20261012-191333 vs csharp-20261012-191542 ---
+NONTRIVIAL a=True() b=True()
+RED: 跨侧攻击序列差异 8 项（差异要么修到 0，要么按 §6.0-3 登记 tests/parity/whitelist.md）
+  - k=2 hit 不等: a=False b=True
+  - k=2 dmg 不等: a=0 b=1
+  - k=2 hp 不等: a=0 b=18
+  - k=2 maxhp 不等: a=0 b=19
+  - k=4 hit 不等: a=True b=False
+  - k=4 dmg 不等: a=1 b=0
+  - k=4 hp 不等: a=18 b=0
+  - k=4 maxhp 不等: a=19 b=0
+
+## 判定
+- 重试**确实**改变取数流（Q1 不同）；但 **attempts 相同也不相同**（Q2）⇒ pin_attempts 门**既不充分也不必要**。
+- atk draws 275 vs 273 ⇒ 攻击路径取数**条数**都随噪声交错变化 ⇒ 根因是全局 M2Share.RandomNumber 被并发噪声消费者（其它图 AI/NPC/tick）共享，非「多一次重试」。
+- 与 Q3（c2-vs-c3 当前 align 仍差 39 项，见 40-...）一致：旧归因不成立。
