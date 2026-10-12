@@ -530,9 +530,193 @@ function Get-M3AttackPinSql {
   $sql = New-Object System.Collections.Generic.List[string]
   $sql.Add(("UPDATE mir2_db.characters SET MapName='{0}', CX={1}, CY={2}, HomeMap={3}, HomeX={4}, HomeY={5}, Level={6}, Dir={7} WHERE ChrName='{8}'" -f `
     $MapName, $CX, $CY, $HomeMap, $HomeX, $HomeY, $Level, $Dir, $safe))
-  $sql.Add(("UPDATE mir2_db.characters_ablity a JOIN mir2_db.characters c ON a.PlayerId=c.Id SET a.Level={0}, a.Hp={1}, a.MaxHP={1}, a.Mp=15, a.MAxMP=15, a.IncHealth=0, a.IncSpell=0 WHERE c.ChrName='{2}'" -f `
+  $sql.Add(("UPDATE mir2_db.characters_ablity a JOIN mir2_db.characters c ON a.PlayerId=c.Id SET a.Level={0}, a.Hp={1}, a.MaxHP={1}, a.Mp=15, a.MAxMP=15, c.IncHealth=0, c.IncSpell=0 WHERE c.ChrName='{2}'" -f `
     $Level, $Hp, $safe))
   return $sql.ToArray()
+}
+
+# ---------------------------------------------------------------------------
+# pin SQL 的「别名/列存在性」无栈校验（m3cs tick16 真机实跑 finding，2026-10-12 11:42）。
+#
+# 背景：`Get-M3AttackPinSql` 的生产 SQL 曾把 `IncHealth/IncSpell` 挂在 `characters_ablity`
+# 别名 `a` 上（`a.IncHealth=0`），而这两列在**冻结 schema** `sql/mir2_db.sql` 里属于
+# `characters`（别名 `c`）⇒ 真机 pin 抛 `ERROR 1054 (42S22) Unknown column 'a.IncHealth' in 'SET'`，
+# 攻击对拍在 `run_pair.ps1:203` 整体 RED、一条 `CM_HIT` 都发不出去（m3cs 第十六格 C# 半，原始件
+# `E:/tmp/m3cs16-evidence/csharp-stack/run-csharp.txt`）。
+#
+# 本校验**不连真库**（自检必须 -SelfCheckNoStack）：从冻结件 `sql/mir2_db.sql` 解析
+# 「表 → 列集合」，再逐条核对 pin SQL 的 `alias.column` 赋值；越界即结构化 violations。
+# 锚 schema 而非硬编码列名：表结构是冻结内容（三条硬约束之二），且 schema 一旦变该校验自动跟着走，
+# 不会与 `sql/mir2_db.sql` 漂移。
+function Get-M3SchemaColumns {
+  param([Parameter(Mandatory)][string]$SchemaPath)
+  if (-not (Test-Path $SchemaPath)) { throw ("找不到冻结 schema: {0}" -f $SchemaPath) }
+  $map = @{}
+  $current = $null
+  foreach ($line in (Get-Content -Path $SchemaPath)) {
+    if ($line -match '^\s*CREATE TABLE\s+`([^`]+)`') {
+      $current = $Matches[1]
+      $map[$current] = New-Object 'System.Collections.Generic.HashSet[string]'
+      continue
+    }
+    if ($null -ne $current) {
+      if ($line -match '^\s*\)\s*ENGINE') { $current = $null; continue }
+      if ($line -match '^\s*`([^`]+)`\s') { [void]$map[$current].Add($Matches[1]) }
+    }
+  }
+  return $map
+}
+
+# 校验一组 pin SQL 语句里的 `alias.column =` 赋值：别名必须在 `UPDATE`/`JOIN` 子句里出现过，
+# 且该列必须属于别名指向的表。返回违规清单（空 = 合规）。
+function Test-M3PinSqlColumns {
+  param(
+    [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$SqlStatements,
+    [Parameter(Mandatory)]$SchemaColumns
+  )
+  $violations = New-Object System.Collections.Generic.List[string]
+  foreach ($sql in @($SqlStatements)) {
+    # 别名表：只从 `UPDATE/JOIN db.table alias` 形态取（`ON a.x=c.y` 里的比较不算）。
+    $aliasToTable = @{}
+    foreach ($m in [regex]::Matches($sql, '(?i)\b(?:UPDATE|JOIN)\s+`?[\w]+`?\s*\.\s*`?([\w]+)`?\s+(?:AS\s+)?`?([A-Za-z][A-Za-z0-9_]*)`?(?=\s)')) {
+      $aliasToTable[$m.Groups[2].Value] = $m.Groups[1].Value
+    }
+    if ($aliasToTable.Count -eq 0) { continue }
+    # 只在 SET 子句里找赋值：避免把 JOIN 的 `a.PlayerId=c.Id` 误当赋值（那些列也合法，
+    # 但限定 SET 让违规定位更准）。
+    $setClause = $sql
+    if ($sql -match '(?is)\bSET\b(.*?)(?:\bWHERE\b|$)') { $setClause = $Matches[1] }
+    foreach ($m in [regex]::Matches($setClause, '(?<![\w.])([A-Za-z][A-Za-z0-9_]*)\.([A-Za-z][A-Za-z0-9_]*)\s*=')) {
+      $alias = $m.Groups[1].Value
+      $col = $m.Groups[2].Value
+      if (-not $aliasToTable.ContainsKey($alias)) { continue }
+      $table = $aliasToTable[$alias]
+      if (-not $SchemaColumns.ContainsKey($table)) {
+        $violations.Add(("表不在 schema: {0}（{1}.{2}）" -f $table, $alias, $col))
+        continue
+      }
+      if (-not $SchemaColumns[$table].Contains($col)) {
+        $violations.Add(("列不存在: {0}.{1}（{2} 无此列）" -f $alias, $col, $table))
+      }
+    }
+  }
+  return $violations
+}
+
+# pin SQL 的「可执行性」极小门（F-B，m3cs tick16 真机 finding 的同类漏网；owner 2026-10-12 11:55）。
+#
+# 为什么需要（真机实跑反例）：`run_attack_pair.ps1 -SelfCheckNoStack` ⑥ 此前只对 pin SQL 做
+# **字符串匹配**、从不真正送进 MySQL ⇒「列名挂错表」这类 **prepare 期**错误
+# （`ERROR 1054 (42S22) Unknown column 'a.IncHealth' in 'SET'`）永远穿得过四门禁与自检，
+# 真机一跑就在 `run_pair.ps1` 的 pin 步整体 RED、一条 `CM_HIT` 都发不出。
+# 本门把每条 `UPDATE` **真的执行一次**：WHERE 指向不存在的角色名 ⇒ 0 行改动（不触碰任何
+# 角色/内容），但 MySQL 仍会在 prepare 期校验表名/别名/列名 ⇒ 列挂错表必 `rc!=0`。
+# 返回：rc（0=全绿，1=有语句不可执行，2=环境缺失如 mysql 客户端不在位）、failures、outputs。
+function Test-M3PinSqlExecutable {
+  param(
+    [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$SqlStatements,
+    [string]$MysqlExe = 'D:\mysql\mariadb-10.11.19-winx64\bin\mysql.exe',
+    [string]$DbHost = '127.0.0.1',
+    [int]$DbPort = 3306,
+    [string]$NoSuchChar = '__m3_no_such_char__'
+  )
+  $failures = New-Object System.Collections.Generic.List[string]
+  $outputs = New-Object System.Collections.Generic.List[string]
+  if (-not (Test-Path -LiteralPath $MysqlExe)) {
+    $failures.Add(("找不到 mysql 客户端: {0}" -f $MysqlExe))
+    return [pscustomobject]@{ rc = 2; failures = @($failures); outputs = @($outputs) }
+  }
+  $prevEap = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    $i = 0
+    foreach ($sql in @($SqlStatements)) {
+      $i++
+      if ($sql -notmatch "ChrName='") {
+        $failures.Add(("stmt#{0} 没有 ChrName='...' 子句，无法把 WHERE 指向不存在角色名（拒绝盲跑）" -f $i))
+        continue
+      }
+      # 把所有 ChrName='...' 常量替换成不存在的名字：prepare 期照旧校验表/列，但 0 行落盘。
+      $safeSql = [regex]::Replace($sql, "ChrName='(?:[^']|'')*'", ("ChrName='{0}'" -f $NoSuchChar))
+      $out = (& $MysqlExe -h $DbHost -P $DbPort -u root '--password=' --batch --skip-column-names -e $safeSql 2>&1 | Out-String)
+      $stmtRc = $LASTEXITCODE
+      $outputs.Add(("stmt#{0} rc={1} sql={2}`n{3}" -f $i, $stmtRc, $safeSql, $out.Trim()))
+      if ($stmtRc -ne 0) {
+        # 优先取 MySQL 的 ERROR 行（`ERROR 1054 (42S22) ... Unknown column 'a.IncHealth' ...`），
+        # 便于机判与人工定位；否则退回首条非空行。
+        $lines = @($out.Trim() -split "`r?`n" | Where-Object { $_ })
+        $firstLine = $lines | Where-Object { $_ -match 'ERROR\s+\d+' } | Select-Object -First 1
+        if (-not $firstLine) { $firstLine = $lines | Select-Object -First 1 }
+        $failures.Add(("stmt#{0} 不可执行(rc={1}): {2}" -f $i, $stmtRc, $firstLine))
+      }
+    }
+  } finally {
+    $ErrorActionPreference = $prevEap
+  }
+  $rcv = if ($failures.Count -eq 0) { 0 } else { 1 }
+  return [pscustomobject]@{ rc = $rcv; failures = @($failures); outputs = @($outputs) }
+}
+
+# 种子注入证据断言（F-C；owner 2026-10-12 11:55）。
+#
+# 为什么需要：两侧同种子是 ②③ 对拍有仲裁力的前提；但 `run_attack_pair.ps1` 此前**不校验**两侧
+# 是否真的注入种子 ⇒ 未设种子时只会得到「不可比的红」，却看不出来（C# 侧有 `INJECT_OK 42`，
+# Rust 侧无对应断言）。
+# 证据形式都是**进程内自证**（非脚本自述）：
+#   C#   = rng-hook（`MIR2_RNG_LOG`）写出的 `1\tINJECT_OK\t<seed>\t0` 行（`rng-hook/StartupHook.cs:96`）；
+#   Rust = game-svr 启动日志的 `RNG 同种子注入：seed=<seed> 参照序列=SEED_PROBE ...` 行
+#          （T-30，`bins/game-svr/src/main.rs`），另可叠加启动器的 `RUST_SEED_INJECTED=<seed>`
+#          （`openmir2-m3-rust-stack-seed-plumb`）；两者都出现时必须一致。
+# 返回：ok / seed / reason / matched。日志缺失、无证据行、或与 ExpectSeed 不符 ⇒ ok=$false（fail-closed）。
+function Test-M3SeedInjected {
+  param(
+    [Parameter(Mandatory)][ValidateSet('csharp', 'rust')][string]$Side,
+    [Parameter(Mandatory)][AllowEmptyString()][string]$LogPath,
+    [Parameter(Mandatory)][int]$ExpectSeed
+  )
+  if ([string]::IsNullOrWhiteSpace($LogPath)) {
+    return [pscustomobject]@{ ok = $false; seed = $null; reason = '未提供种子日志路径（-CsharpSeedLog / $env:MIR2_RNG_LOG 或 -RustSeedLog）'; matched = '' }
+  }
+  if (-not (Test-Path -LiteralPath $LogPath)) {
+    return [pscustomobject]@{ ok = $false; seed = $null; reason = ("找不到种子日志: {0}" -f $LogPath); matched = '' }
+  }
+  $prevEap = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    if ($Side -eq 'csharp') {
+      # Select-String -List 只取首条、流式读大文件（rng-stream 可能百万行）。
+      $hit = Select-String -LiteralPath $LogPath -Pattern 'INJECT_OK	(-?\d+)	' -List -ErrorAction SilentlyContinue
+      if (-not $hit) {
+        return [pscustomobject]@{ ok = $false; seed = $null; reason = ("C# 种子日志无 INJECT_OK 行（hooked GameSvr 未注入种子？）: {0}" -f $LogPath); matched = '' }
+      }
+      $seed = [int]$hit.Matches[0].Groups[1].Value
+      if ($seed -ne $ExpectSeed) {
+        return [pscustomobject]@{ ok = $false; seed = $seed; reason = ("C# 注入种子 {0} != 期望 {1}" -f $seed, $ExpectSeed); matched = $hit.Line }
+      }
+      return [pscustomobject]@{ ok = $true; seed = $seed; reason = ''; matched = $hit.Line }
+    }
+    # rust：game-svr 的 `seed=<n> ... SEED_PROBE` 行（T-30）。
+    $hit = Select-String -LiteralPath $LogPath -Pattern 'seed=(-?\d+).*SEED_PROBE|SEED_PROBE.*seed=(-?\d+)' -List -ErrorAction SilentlyContinue
+    if (-not $hit) {
+      return [pscustomobject]@{ ok = $false; seed = $null; reason = ("Rust 启动日志无 SEED_PROBE 行（game-svr 未注入 MIR2_RNG_SEED？）: {0}" -f $LogPath); matched = '' }
+    }
+    $g = $hit.Matches[0].Groups
+    $seed = if ($g[1].Success) { [int]$g[1].Value } else { [int]$g[2].Value }
+    if ($seed -ne $ExpectSeed) {
+      return [pscustomobject]@{ ok = $false; seed = $seed; reason = ("Rust 注入种子 {0} != 期望 {1}" -f $seed, $ExpectSeed); matched = $hit.Line }
+    }
+    # 若启动器打了 RUST_SEED_INJECTED=<n>（openmir2-m3-rust-stack-seed-plumb DoD②），必须一致。
+    $launch = Select-String -LiteralPath $LogPath -Pattern 'RUST_SEED_INJECTED=(-?\d+)' -List -ErrorAction SilentlyContinue
+    if ($launch) {
+      $lseed = [int]$launch.Matches[0].Groups[1].Value
+      if ($lseed -ne $ExpectSeed) {
+        return [pscustomobject]@{ ok = $false; seed = $seed; reason = ("RUST_SEED_INJECTED={0} != 期望 {1}" -f $lseed, $ExpectSeed); matched = $launch.Line }
+      }
+    }
+    return [pscustomobject]@{ ok = $true; seed = $seed; reason = ''; matched = $hit.Line }
+  } finally {
+    $ErrorActionPreference = $prevEap
+  }
 }
 
 # ⑥ pin settle+hold 判据（T-14 两相固定起点；owner 2026-10-12 08:20 要求的「可判红自检」）。

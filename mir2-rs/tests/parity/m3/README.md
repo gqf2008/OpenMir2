@@ -297,7 +297,7 @@ powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair
 
 与前一条（背包/装备）共用同一批护栏：入口实现识别、两相 pin、`settle+hold`、`-DisableAutoPlay` 耦合、
 peer 口径（`attack_sequence`/`attack_pose`/`fixed_new_chr`）与 `scoped_diff` 作用域判据。
-**前置（登记）**：真机两侧需 Rust game-svr 同种子注入（C# 用 `m3/rng-hook`）；未接前数值不可比（见 whitelist T-30）。
+**前置**：真机两侧需注入**同一个种子**（C# 用 `m3/rng-hook`；Rust T-30 生产路径已支持，`start_rust_stack.ps1` 的透传管线见 `openmir2-m3-rust-stack-seed-plumb`）；夹具在 **0.6)** 预检**断言两侧确实注入**（F-C，未注入 ⇒ fail-closed RED；见 whitelist T-30）。
 
 本片（不占端口）证据：`evidence-attack-pair-20261012/**`（`attack_diff.py selftest` + `run_attack_pair -SelfCheckNoStack`
 + 生产函数级「改坏 dmg/hit 必红」+ 四门禁 + `SHA256SUMS.txt`）。
@@ -307,6 +307,30 @@ peer 口径（`attack_sequence`/`attack_pose`/`fixed_new_chr`）与 `scoped_diff
 改为 `MShare.IsAttackAttacker` 的**精确相等**（`-Bots>10` 时 10/20… 不再被误武装）。两条均由
 `run_attack_pair.ps1 -SelfCheckNoStack` ⑩/⑪ 机判（M-2 走 `BotSrv.exe --selftest-attackrole` 生产函数级 selftest，改回 `EndsWith` 必 RED）；
 证据 `evidence-attack-pair-minors-20261012/**`。
+
+**修 pin SQL 的别名 bug（2026-10-12 11:42，m3cs tick16 真机 finding）**：`Get-M3AttackPinSql` 的
+`IncHealth/IncSpell` 曾被写成 `characters_ablity` 别名 `a` 的列，而它们在**冻结 schema** 里属 `characters`（`c`）
+⇒ 真机 pin 抛 `ERROR 1054 (42S22) Unknown column 'a.IncHealth' in 'SET'`、`run_pair.ps1:203` 直接 RED、
+一条 `CM_HIT` 都发不出（原始件 `E:/tmp/m3cs16-evidence/csharp-stack/run-csharp.txt`）。已改为 `c.IncHealth/c.IncSpell`。
+两道互补的机判护栏（都改回 `a.IncHealth` 必 RED）：
+
+- **可执行性极小门（F-B，owner 2026-10-12 11:55）**：`gate_guards.ps1::Test-M3PinSqlExecutable`
+  把每条 pin `UPDATE` 以 **不存在角色名** 真执行一次（`WHERE ChrName='__m3_no_such_char__'`⇒ 0 行改动、
+  不碰任何角色/内容），但 MySQL 仍在 prepare 期校验表名/别名/列名 ⇒ 列挂错表必 `ERROR 1054`。
+  `run_attack_pair.ps1 -SelfCheckNoStack` **⑥b**（生产 4 条 rc=0；改坏 `a.IncHealth` ⇒ rc≠0）机判；
+  真实侧运行前的 **1.5)** 预检也会真执行一次（不再等 `run_pair` 半途才炸）。仅需共享 MySQL，不需起服务端栈。
+- **无栈静态校验**：`Test-M3PinSqlColumns`（从 `sql/mir2_db.sql` 解析表列，核对 pin SQL 的 `alias.column`）。
+  `run_attack_pair.ps1 -SelfCheckNoStack` **⑫**、`run_bag_equip_pair.ps1 -SelfCheckNoStack` **⑪**、
+  `selftest_gate.ps1` **⑦** 机判。
+
+**种子注入断言（F-C，owner 2026-10-12 11:55）**：两侧同种子是数值可比的**前提**，但此前夹具不校验两侧是否
+真的注入了种子 ⇒ 未设种子只会得到「不可比的红」却看不出来。新增 `gate_guards.ps1::Test-M3SeedInjected`：
+C# 读 rng-hook `MIR2_RNG_LOG` 的 `INJECT_OK <seed>`；Rust 读 game-svr 启动日志的 `SEED_PROBE` 行
+（另校启动器 `RUST_SEED_INJECTED=<n>`）；日志缺失 / 无证据行 / 种子不符 ⇒ **fail-closed RED**。
+`run_attack_pair.ps1` 新增 `-Seed`（默认 42）、`-CsharpSeedLog`、`-RustSeedLog`（缺省 `<RustStackLogDir>\game-svr.out.log`），
+并在 **0.6)** 预检逐侧断言；断言通过后把证据写入会话目录 `attack_seed.json`。`-SelfCheckNoStack` **⑬**（离线两向）
+与 `selftest_gate.ps1` **⑧** 机判（47 项）。
+证据 `evidence-attack-pair-inchealth-fix-20261012/**`。
 
 ## 一次「侧运行」是什么
 

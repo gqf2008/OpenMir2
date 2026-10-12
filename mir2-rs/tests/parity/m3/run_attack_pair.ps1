@@ -32,7 +32,12 @@
     0 入口护栏   -Side rust 而入口仍是 C#（E:\MirServer）⇒ RED；-Side csharp 而入口不是 C# ⇒ RED。
     0.5 preflight `-Side rust` 时机判 Rust game-svr 是否已实现断线存档（whitelist T-27）；
                  未实现 ⇒ PREREQ（exit 2）。
+    0.6 种子注入断言（F-C）  -Side csharp 读 `MIR2_RNG_LOG` 的 `INJECT_OK <seed>`；-Side rust 读 game-svr
+                 启动日志的 `SEED_PROBE`（另校 `RUST_SEED_INJECTED`）；未注入/种子不符 ⇒ RED（fail-closed），
+                 使「没设种子的不可比红」不再隐身。
     1 预检       入口端口不全在听 / MySQL 3306 不可读 ⇒ PREREQ（exit 2），不静默通过。
+    1.5 pin SQL 可执行性（F-B）  每条 `UPDATE` 以不存在角色名真执行一次（0 行改动）⇒ mysql rc 必须 0；
+                 列挂错表（如历史 `a.IncHealth`）⇒ RED，不再等到 run_pair 半途才炸。
     2 同序列     run_pair -AttackSequence 后 bot.log 必须出现 `M3ATTSEQ`：`role=attack` k=1..N
                  且 `role=done attacks=N`；缺 ⇒ RED。
     3 跨侧口径   两侧 baseline.json 的 `attack_sequence` / `attack_pose` / `fixed_new_chr` 必须一致；
@@ -66,6 +71,10 @@ param(
   [string]$RustSession = '',
   [string]$PortsCsv = '',          # 入口端口（逗号分隔）；默认 5000,7000,7100,7200。自检时可指一列空闲端口
   [switch]$AttackPinPair,          # 攻击变体：两 bot 相邻固定起点（attacker/victim）
+  [int]$Seed = 42,                 # F-C：两侧必须注入的同一个种子（`MIR2_RNG_SEED`）
+  [string]$CsharpSeedLog = '',     # F-C：C# rng-hook 的 `MIR2_RNG_LOG` 文件（含 `INJECT_OK <seed>`）；缺省读 $env:MIR2_RNG_LOG
+  [string]$RustSeedLog = '',       # F-C：Rust game-svr 启动日志（含 `SEED_PROBE`）；缺省 <RustStackLogDir>\game-svr.out.log
+  [string]$RustStackLogDir = 'E:\tmp\m2-acceptance\stack',  # T-30/`openmir2-m3-rust-stack-seed-plumb` 的默认 -LogDir
   [switch]$SkipSavePreflight,      # 仅供调试：跳过「Rust 侧断线存档未实现」前置
   [switch]$DiffOnly,
   [switch]$SelfCheckNoStack
@@ -264,6 +273,18 @@ if ($SelfCheckNoStack) {
     if ($joined -notmatch 'CX=290') { $failures += 'attack_pin_missing_victim_cell_290' }
     if ($joined -notmatch 'a\.Hp=100000, a\.MaxHP=100000') { $failures += 'attack_pin_missing_victim_hp' }
     Write-Output ("SELFTEST ⑥ -AttackPinPair pose='{0}'；pin_sql_all={1} 条" -f $pair.attack_pose, $all.Count)
+
+    # ⑥b F-B：pin SQL 的「可执行性」极小门（m3cs tick16 真机 finding）。
+    #    字符串匹配永远穿得过「列名挂错表」⇒ 必须真送进 MySQL（WHERE 指向不存在角色名，0 行改动）。
+    #    两向：生产 4 条 SQL ⇒ rc=0；把 `c.IncHealth` 改回历史 bug `a.IncHealth` ⇒ 必 RED（原始件 mutation）。
+    $pinExec = Test-M3PinSqlExecutable -SqlStatements $all -MysqlExe $MysqlExe
+    if ($pinExec.rc -ne 0) { $failures += ('pin_sql_not_executable_rc=' + $pinExec.rc + ':' + ($pinExec.failures -join ';')) }
+    $mutAll = @($all | ForEach-Object { $_ -replace 'c\.IncHealth=0, c\.IncSpell=0', 'a.IncHealth=0, a.IncSpell=0' })
+    $mutExec = Test-M3PinSqlExecutable -SqlStatements $mutAll -MysqlExe $MysqlExe
+    if ($mutExec.rc -eq 0) { $failures += 'pin_sql_exec_mutation_not_red' }
+    if (-not (($mutExec.failures -join ';') -match 'a\.IncHealth')) { $failures += 'pin_sql_exec_mutation_not_diff_shaped' }
+    Write-Output ("SELFTEST ⑥b pin SQL 可执行性（WHERE 指向不存在角色名）：生产 rc={0} failures={1}；改坏 a.IncHealth rc={2} [{3}]" -f `
+      $pinExec.rc, $pinExec.failures.Count, $mutExec.rc, (($mutExec.failures -join ';') | Select-Object -First 1))
   }
 
   # ⑩ Minor M-1 回归（reviewer-5 76e433f0）：`-AttackSequence` 未配 `-AttackPinPair` ⇒ WARN 必须**真**出现；
@@ -373,9 +394,55 @@ if ($SelfCheckNoStack) {
   if ($scopedOut -notmatch 'selftest 14/14') { $failures += 'scoped_diff_selftest_missing' }
   Write-Output ("SELFTEST ⑨ scoped_diff selftest rc={0}（14/14）" -f $scopedRc)
 
+  # ⑫ pin SQL 的「别名/列存在性」无栈校验（m3cs tick16 真机 finding，2026-10-12 11:42）：
+  #    `Get-M3AttackPinSql` 曾把 `IncHealth/IncSpell` 挂在 `characters_ablity` 别名 `a` 上
+  #    ⇒ 真机 `ERROR 1054 Unknown column 'a.IncHealth'`、run_pair pin 步 RED、对拍发不出攻击。
+  #    两向：生产 SQL（背包 pin + 攻击 pin）必须 0 violation；把 `c.IncHealth` 改回历史 bug 的
+  #    `a.IncHealth` 必须被检出（红检有牙齿）。不连真库、不起栈。
+  $schemaCols = Get-M3SchemaColumns -SchemaPath (Join-Path $RepoRoot 'sql\mir2_db.sql')
+  $prodPinSql = @()
+  $prodPinSql += Get-M3StartPosePinSql -ChrName 'm3fix0'
+  $prodPinSql += Get-M3AttackPinSql -ChrName 'm3fix0' -CX 289 -CY 618 -Dir 2 -MapName '0' -HomeMap 0 -HomeX 289 -HomeY 618 -Level 1 -Hp 100000
+  $prodVio = @(Test-M3PinSqlColumns -SqlStatements $prodPinSql -SchemaColumns $schemaCols)
+  if ($prodVio.Count -ne 0) { $failures += ('pin_sql_column_violations=' + ($prodVio -join ';')) }
+  $mutPinSql = @(Get-M3AttackPinSql -ChrName 'm3fix0' -CX 289 -CY 618 -Dir 2 -MapName '0' -HomeMap 0 -HomeX 289 -HomeY 618 -Level 1 -Hp 100000 |
+    ForEach-Object { $_ -replace 'c\.IncHealth=0, c\.IncSpell=0', 'a.IncHealth=0, a.IncSpell=0' })
+  $mutVio = @(Test-M3PinSqlColumns -SqlStatements $mutPinSql -SchemaColumns $schemaCols)
+  if ($mutVio.Count -eq 0) { $failures += 'pin_sql_column_mutation_not_red' }
+  if (-not (($mutVio -join ';') -match 'a\.IncHealth')) { $failures += 'pin_sql_column_mutation_not_diff_shaped' }
+  Write-Output ("SELFTEST ⑫ pin SQL 别名/列校验：生产 statements={0} violations={1}；改坏 a.IncHealth violations={2}" -f $prodPinSql.Count, $prodVio.Count, $mutVio.Count)
+
+  # ⑬ F-C：种子注入证据断言（离线；不起栈/不连库）。两向 + 种子不符 + 空路径 fail-closed。
+  #    C# = `INJECT_OK <seed>`；Rust = `SEED_PROBE` 行（+ 可选 `RUST_SEED_INJECTED`）。
+  $csGood = Join-Path $tmpRoot 'f-c-cs-good.tsv'
+  Set-Content -LiteralPath $csGood -Encoding ascii -Value "1`tINJECT_OK`t42`t0"
+  $csBad = Join-Path $tmpRoot 'f-c-cs-bad.tsv'
+  Set-Content -LiteralPath $csBad -Encoding ascii -Value "123`tNext(max)`t20`t5"
+  $csWrong = Join-Path $tmpRoot 'f-c-cs-wrong.tsv'
+  Set-Content -LiteralPath $csWrong -Encoding ascii -Value "1`tINJECT_OK`t7`t0"
+  $rsGood = Join-Path $tmpRoot 'f-c-rs-good.log'
+  Set-Content -LiteralPath $rsGood -Encoding utf8 -Value '12:00:00 [INF] RNG 同种子注入：seed=42 参照序列=SEED_PROBE 1434747710 302596119'
+  $rsBad = Join-Path $tmpRoot 'f-c-rs-bad.log'
+  Set-Content -LiteralPath $rsBad -Encoding utf8 -Value '12:00:00 [INF] 世界已加载'
+  $rsMismatch = Join-Path $tmpRoot 'f-c-rs-mismatch.log'
+  Set-Content -LiteralPath $rsMismatch -Encoding utf8 -Value "RUST_SEED_INJECTED=7`nRNG 同种子注入：seed=42 参照序列=SEED_PROBE 1434747710"
+  $evChecks = @(
+    @{ n = 'csharp/INJECT_OK 42=绿';  o = (Test-M3SeedInjected -Side csharp -LogPath $csGood -ExpectSeed 42); want = $true },
+    @{ n = 'csharp/无 INJECT_OK=红';    o = (Test-M3SeedInjected -Side csharp -LogPath $csBad -ExpectSeed 42); want = $false },
+    @{ n = 'csharp/种子 7!=42=红';      o = (Test-M3SeedInjected -Side csharp -LogPath $csWrong -ExpectSeed 42); want = $false },
+    @{ n = 'csharp/空路径=红(fail-closed)'; o = (Test-M3SeedInjected -Side csharp -LogPath '' -ExpectSeed 42); want = $false },
+    @{ n = 'rust/SEED_PROBE 42=绿';    o = (Test-M3SeedInjected -Side rust -LogPath $rsGood -ExpectSeed 42); want = $true },
+    @{ n = 'rust/无 SEED_PROBE=红';    o = (Test-M3SeedInjected -Side rust -LogPath $rsBad -ExpectSeed 42); want = $false },
+    @{ n = 'rust/启动器行 7!=42=红';    o = (Test-M3SeedInjected -Side rust -LogPath $rsMismatch -ExpectSeed 42); want = $false }
+  )
+  foreach ($c in $evChecks) {
+    if ($c.o.ok -ne $c.want) { $failures += ('seed_assert_' + ($c.n -replace '[^A-Za-z0-9]', '_')) }
+  }
+  Write-Output ("SELFTEST ⑬ 种子注入断言（离线）：{0}/{1} 向符合预期（csharp INJECT_OK / rust SEED_PROBE / 种子不符必红 / 空路径 fail-closed）" -f (@($evChecks | Where-Object { $_.o.ok -eq $_.want }).Count), $evChecks.Count)
+
   Remove-Item -Recurse -Force $tmpRoot -ErrorAction SilentlyContinue
   if ($failures.Count -eq 0) {
-    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（攻击配置透传/默认关 + run_pair -DisableAutoPlay 耦合两向 + 攻击两相 pin pose/SQL + 入口/DiffOnly fail-closed + attack_diff selftest + 改坏 dmg/hit 必红 + scoped_diff 14/14 + M-1 WARN 有牙齿 + M-2 attacker 精确选择 selftest）'
+    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（攻击配置透传/默认关 + run_pair -DisableAutoPlay 耦合两向 + 攻击两相 pin pose/SQL + pin SQL 可执行性（含改坏 a.IncHealth 必红） + 入口/DiffOnly fail-closed + attack_diff selftest + 改坏 dmg/hit 必红 + scoped_diff 14/14 + M-1 WARN 有牙齿 + M-2 attacker 精确选择 selftest + pin SQL 别名/列校验 + 种子注入断言（两侧 fail-closed））'
     exit 0
   }
   Write-Output ('SELFTEST_RED RED: ' + ($failures -join ', '))
@@ -446,12 +513,60 @@ if ($Side -eq 'rust' -and -not $SkipSavePreflight) {
   Write-Output 'PREFLIGHT Rust 断线存档：跳过'
 }
 
+Write-Output '--- 0.6) 种子注入断言（F-C，两侧同种子的前提；缺失 ⇒ fail-closed 红） ---'
+$csharpSeedLogResolved = if (-not [string]::IsNullOrEmpty($CsharpSeedLog)) { $CsharpSeedLog }
+  elseif (-not [string]::IsNullOrEmpty($env:MIR2_RNG_LOG)) { $env:MIR2_RNG_LOG }
+  else { '' }
+$rustSeedLogResolved = if (-not [string]::IsNullOrEmpty($RustSeedLog)) { $RustSeedLog }
+  else { Join-Path $RustStackLogDir 'game-svr.out.log' }
+if ($Side -eq 'csharp') {
+  $seedEv = Test-M3SeedInjected -Side csharp -LogPath $csharpSeedLogResolved -ExpectSeed $Seed
+  if (-not $seedEv.ok) {
+    Write-Output ("RED: C# 种子注入断言失败（期望 seed={0}）——{1}" -f $Seed, $seedEv.reason)
+    Write-Output '     修法：用带 rng-hook 的 C# 栈（MIR2_RNG_SEED/MIR2_RNG_LOG）起栈后，传 -CsharpSeedLog <rng-stream.tsv> 或设 $env:MIR2_RNG_LOG。'
+    exit 1
+  }
+  Write-Output ("SEED_INJECT_OK csharp seed={0} <- {1}" -f $seedEv.seed, $csharpSeedLogResolved)
+} else {
+  $seedEv = Test-M3SeedInjected -Side rust -LogPath $rustSeedLogResolved -ExpectSeed $Seed
+  if (-not $seedEv.ok) {
+    Write-Output ("RED: Rust 种子注入断言失败（期望 seed={0}）——{1}" -f $Seed, $seedEv.reason)
+    Write-Output '     修法：用 start_rust_stack.ps1 -Seed <n> 起栈（openmir2-m3-rust-stack-seed-plumb 的种子管线），或传 -RustSeedLog <game-svr 启动日志>。'
+    exit 1
+  }
+  Write-Output ("SEED_INJECT_OK rust seed={0} <- {1}" -f $seedEv.seed, $rustSeedLogResolved)
+}
+
 Write-Output '--- 1) 预检：MySQL / 前缀 ---'
 if (-not (Test-MysqlTcp)) {
   Write-Output 'PREREQ_MISSING: MySQL 127.0.0.1:3306 不可达'
   exit 2
 }
 Write-Output 'PREFLIGHT MySQL 在听'
+
+# ---- 1.5) pin SQL 可执行性（F-B）：真执行一次，列挂错表（如历史 `a.IncHealth`）不再等到 run_pair 半途才炸 ----
+# 复用 run_pair 的 `-EmitOpsArgs`（pin SQL 的唯一口径）取 attack_pin_sql_all；每条以不存在角色名执行，0 行改动。
+$probeArgs = @('-EmitOpsArgs', '-FixedNewChr', '-PinStartPose', '-AttackPinPair', '-AttackSequence',
+               '-Bots', $Bots, '-Prefix', $Prefix, '-AttackCount', $AttackCount, '-AttackStepMs', $AttackStepMs,
+               '-AttackStartDelayMs', $AttackStartDelayMs, '-AttackPinDir', $AttackPinDir, '-AttackVictimHp', $AttackVictimHp)
+$probeRaw = @(& powershell -ExecutionPolicy Bypass -File $RunPair @probeArgs)
+if ($LASTEXITCODE -ne 0) {
+  Write-Output 'RED: 取 pin SQL 失败（run_pair -EmitOpsArgs 非 0）——无法做可执行性预检'
+  exit 1
+}
+$probeText = ((@($probeRaw) | Where-Object { $_ -notmatch '^\s*WARN:' }) -join "`n").Trim()
+$probeObj = $probeText | ConvertFrom-Json
+try { $probeSql = @($probeObj.attack_pin_sql_all) } catch { $probeSql = @() }
+if ($probeSql.Count -lt 1) {
+  Write-Output 'RED: pin SQL 预检取不到 attack_pin_sql_all（run_pair 未产出）'
+  exit 1
+}
+$probeExec = Test-M3PinSqlExecutable -SqlStatements $probeSql -MysqlExe $MysqlExe
+if ($probeExec.rc -ne 0) {
+  Write-Output ("RED: pin SQL 不可执行（prepare 期错误）——{0}" -f ($probeExec.failures -join ';'))
+  exit 1
+}
+Write-Output ("PREFLIGHT pin SQL 可执行性：{0} 条 UPDATE 以不存在角色名真执行，mysql rc=0" -f $probeSql.Count)
 
 Write-Output '--- 2) 侧运行（复用 run_pair.ps1；同序列 = -FixedNewChr + -AttackSequence + -AttackPinPair） ---'
 $pairArgs = @('-Side', $Side, '-Bots', $Bots, '-Prefix', $Prefix, '-Address', $Address, '-Port', $Port,
@@ -471,6 +586,15 @@ if ($null -eq $mine) {
   exit 1
 }
 Write-Output ("SESSION_{0} {1}" -f $Side.ToUpper(), $mine.Name)
+
+# F-C 留痕：把本侧种子注入证据写进会话目录（两侧种子的可追溯锚，供跨侧审计/diff 前提核对）。
+$seedLogUsed = if ($Side -eq 'csharp') { $csharpSeedLogResolved } else { $rustSeedLogResolved }
+$seedMeta = [ordered]@{
+  side = $Side; seed = $Seed; ok = $true; expect_seed = $Seed
+  evidence_log = $seedLogUsed; matched = $seedEv.matched; ts = (Get-Date).ToString('o')
+}
+$seedMeta | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $mine.FullName 'attack_seed.json') -Encoding utf8
+Write-Output ("SEED_EVIDENCE_RECORDED {0}" -f (Join-Path $mine.FullName 'attack_seed.json'))
 
 # 同序列判据：baseline.json 的 attack_markers 必须存在（run_pair 已机判完整串）。
 $baseline = Get-Content (Join-Path $mine.FullName 'baseline.json') -Raw | ConvertFrom-Json

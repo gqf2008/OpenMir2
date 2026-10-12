@@ -30,6 +30,13 @@
        跳过 settle 直接 pin ⇒ pin_settle_skipped；单次观测 ⇒ pin_hold_needs_consecutive_settle（不 hold）；
        连续两轮 settle 后到齐 ⇒ hold；存档覆盖 ⇒ pin_char/bag/abil_mismatch；循环本体的故障注入验证。
 
+    ⑦ Get-M3SchemaColumns / Test-M3PinSqlColumns（pin SQL 别名/列存在性，不连库；m3cs tick16 真机 finding）：
+       从冻结 schema `sql/mir2_db.sql` 解表列，校验 pin SQL 的 `alias.column`；`characters_ablity`
+       无 `IncHealth`（属 `characters`）⇒ 历史 bug `a.IncHealth` 必被检出（红检）。
+
+    ⑧ Test-M3SeedInjected（F-C：两侧种子注入证据断言，离线）：C# 读 `INJECT_OK <seed>`；Rust 读 `SEED_PROBE`
+       行（另校 `RUST_SEED_INJECTED`）；缺失/种子不符/空路径 ⇒ ok=$false（fail-closed）。
+
   「改坏必红 / 还原必绿」：把 `gate_guards.ps1` 对应护栏改回旧行为（放行）再跑本脚本，
   必须 exit 1；还原后必须 exit 0。原始输出落 `E:\tmp\openmir2-watch\`。
 
@@ -290,6 +297,50 @@ $loopOk = Invoke-M3PinSettleHold -Bots 1 -MaxAttempts 5 `
 Test-Case 'pin/循环·正常=绿(attempt=2)' ($loopOk.Hold -and $loopOk.Attempts -eq 2 -and $loopOk.SettleRounds -eq 2) `
   ("hold={0} attempts={1} settle_rounds={2}" -f $loopOk.Hold, $loopOk.Attempts, $loopOk.SettleRounds)
 
+# ---------------------------------------------------------------- ⑦ pin SQL 别名/列存在性（不连库）
+Write-Output '⑦ Get-M3SchemaColumns / Test-M3PinSqlColumns（pin SQL 别名/列；不连库；m3cs tick16 finding）'
+$schemaCols = Get-M3SchemaColumns -SchemaPath (Join-Path $script:M3GuardsRepoRoot 'sql\mir2_db.sql')
+Test-Case 'schema/characters 有 IncHealth/IncSpell' `
+  ($schemaCols['characters'].Contains('IncHealth') -and $schemaCols['characters'].Contains('IncSpell')) ''
+Test-Case 'schema/characters_ablity 无 IncHealth' (-not $schemaCols['characters_ablity'].Contains('IncHealth')) ''
+$goodPin = @(Get-M3StartPosePinSql -ChrName 'm3gs0') + @(Get-M3AttackPinSql -ChrName 'm3gs0' -CX 289 -CY 618 -Dir 2)
+$goodVio = @(Test-M3PinSqlColumns -SqlStatements $goodPin -SchemaColumns $schemaCols)
+Test-Case 'pin/生产 SQL 别名列全对=绿(0 violation)' ($goodVio.Count -eq 0) ("violations=[{0}]" -f ($goodVio -join ';'))
+$badPin = @(Get-M3AttackPinSql -ChrName 'm3gs0' -CX 289 -CY 618 -Dir 2 |
+  ForEach-Object { $_ -replace 'c\.IncHealth=0, c\.IncSpell=0', 'a.IncHealth=0, a.IncSpell=0' })
+$badPinVio = @(Test-M3PinSqlColumns -SqlStatements $badPin -SchemaColumns $schemaCols)
+Test-Case 'pin/改坏 a.IncHealth=红' (($badPinVio.Count -gt 0) -and (($badPinVio -join ';') -match 'a\.IncHealth')) `
+  ("violations=[{0}]" -f ($badPinVio -join ';'))
+
+# ---------------------------------------------------------------- ⑧ 种子注入证据断言（F-C，离线）
+Write-Output '⑧ Test-M3SeedInjected（两侧种子注入证据；不连库；owner 2026-10-12 11:55 F-C）'
+$csGood = Join-Path $Work 'f-c-cs-good.tsv'
+Set-Content -LiteralPath $csGood -Encoding ascii -Value "1`tINJECT_OK`t42`t0"
+$csBad = Join-Path $Work 'f-c-cs-bad.tsv'
+Set-Content -LiteralPath $csBad -Encoding ascii -Value "123`tNext(max)`t20`t5"
+$csWrong = Join-Path $Work 'f-c-cs-wrong.tsv'
+Set-Content -LiteralPath $csWrong -Encoding ascii -Value "1`tINJECT_OK`t7`t0"
+$rsGood = Join-Path $Work 'f-c-rs-good.log'
+Set-Content -LiteralPath $rsGood -Encoding utf8 -Value '12:00:00 [INF] RNG 同种子注入：seed=42 参照序列=SEED_PROBE 1434747710 302596119'
+$rsBad = Join-Path $Work 'f-c-rs-bad.log'
+Set-Content -LiteralPath $rsBad -Encoding utf8 -Value '12:00:00 [INF] 世界已加载'
+$rsMismatch = Join-Path $Work 'f-c-rs-mismatch.log'
+Set-Content -LiteralPath $rsMismatch -Encoding utf8 -Value "RUST_SEED_INJECTED=7`nRNG 同种子注入：seed=42 参照序列=SEED_PROBE 1434747710"
+$csGoodR = Test-M3SeedInjected -Side csharp -LogPath $csGood -ExpectSeed 42
+$csBadR = Test-M3SeedInjected -Side csharp -LogPath $csBad -ExpectSeed 42
+$csWrongR = Test-M3SeedInjected -Side csharp -LogPath $csWrong -ExpectSeed 42
+$csEmptyR = Test-M3SeedInjected -Side csharp -LogPath '' -ExpectSeed 42
+$rsGoodR = Test-M3SeedInjected -Side rust -LogPath $rsGood -ExpectSeed 42
+$rsBadR = Test-M3SeedInjected -Side rust -LogPath $rsBad -ExpectSeed 42
+$rsMismatchR = Test-M3SeedInjected -Side rust -LogPath $rsMismatch -ExpectSeed 42
+Test-Case 'seed/csharp INJECT_OK 42=绿' ($csGoodR.ok -and $csGoodR.seed -eq 42) ''
+Test-Case 'seed/csharp 无 INJECT_OK=红' (-not $csBadR.ok) ("reason={0}" -f $csBadR.reason)
+Test-Case 'seed/csharp 种子 7!=42=红' (-not $csWrongR.ok) ("reason={0}" -f $csWrongR.reason)
+Test-Case 'seed/csharp 空路径=红(fail-closed)' (-not $csEmptyR.ok) ("reason={0}" -f $csEmptyR.reason)
+Test-Case 'seed/rust SEED_PROBE 42=绿' ($rsGoodR.ok -and $rsGoodR.seed -eq 42) ''
+Test-Case 'seed/rust 无 SEED_PROBE=红' (-not $rsBadR.ok) ("reason={0}" -f $rsBadR.reason)
+Test-Case 'seed/rust 启动器行 7!=42=红' (-not $rsMismatchR.ok) ("reason={0}" -f $rsMismatchR.reason)
+
 # ---------------------------------------------------------------- 汇总
 $report = [ordered]@{
   tool = 'mir2-rs/tests/parity/m3/selftest_gate.ps1'
@@ -305,7 +356,7 @@ $report | ConvertTo-Json -Depth 6 | Set-Content -Path $reportPath -Encoding utf8
 Write-Output ('SELFTEST_REPORT ' + $reportPath)
 Write-Output ('SUMMARY total={0} failed={1}' -f $script:Total, $script:Failed)
 if ($script:Failed -eq 0) {
-  Write-Output 'GREEN: 六条机判护栏的判红/判绿口径都经构造输入验证'
+  Write-Output 'GREEN: 八条机判护栏的判红/判绿口径都经构造输入验证'
   exit 0
 }
 Write-Output 'SELFTEST FAIL: 有护栏口径与实现不符（见上面 FAIL 行）'

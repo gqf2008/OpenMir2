@@ -363,8 +363,24 @@ if ($SelfCheckNoStack) {
     Write-Output ("SELFTEST ⑩e 生产 pin_instrument='{0}'（要求 settle_seconds>=1 且 consecutive>=2）" -f $inst)
   }
 
+  # ⑪ pin SQL 的「别名/列存在性」无栈校验（与攻击夹具共用 gate_guards.ps1 同一口径；
+  #    m3cs tick16 真机 finding：`a.IncHealth` 不属于 characters_ablity ⇒ ERROR 1054）。
+  #    两向：本文件的生产 pin SQL（背包 pin）必须 0 violation；把 `c.IncHealth` 改坏成
+  #    `a.IncHealth` 必须被检出。不连真库、不起栈。
+  $schemaCols = Get-M3SchemaColumns -SchemaPath (Join-Path $RepoRoot 'sql\mir2_db.sql')
+  $bagPinSql = @()
+  $bagPinSql += Get-M3StartPosePinSql -ChrName 'm3bagfix0'
+  $bagVio = @(Test-M3PinSqlColumns -SqlStatements $bagPinSql -SchemaColumns $schemaCols)
+  if ($bagVio.Count -ne 0) { $failures += ('bag_pin_sql_column_violations=' + ($bagVio -join ';')) }
+  $bagMut = @(Get-M3AttackPinSql -ChrName 'm3bagfix0' -CX 289 -CY 618 -Dir 2 -MapName '0' -HomeMap 0 -HomeX 289 -HomeY 618 -Level 1 -Hp 100000 |
+    ForEach-Object { $_ -replace 'c\.IncHealth=0, c\.IncSpell=0', 'a.IncHealth=0, a.IncSpell=0' })
+  $bagMutVio = @(Test-M3PinSqlColumns -SqlStatements $bagMut -SchemaColumns $schemaCols)
+  if ($bagMutVio.Count -eq 0) { $failures += 'bag_pin_sql_column_mutation_not_red' }
+  if (-not (($bagMutVio -join ';') -match 'a\.IncHealth')) { $failures += 'bag_pin_sql_column_mutation_not_diff_shaped' }
+  Write-Output ("SELFTEST ⑪ pin SQL 别名/列校验：生产 statements={0} violations={1}；改坏 a.IncHealth violations={2}" -f $bagPinSql.Count, $bagVio.Count, $bagMutVio.Count)
+
   if ($failures.Count -eq 0) {
-    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（配置透传有/无两向 + run_pair 关挂机耦合两向 + 固定起点两相 + pin settle+hold 可判红自检（跳过 settle / 早于落库 / 反复覆盖 / 正常收敛）+ 旧挂机 peer/旧起点 peer 必红 + CX/CY 逐字节比断言 + 断线存档 preflight + 入口护栏/DiffOnly fail-closed）'
+    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（配置透传有/无两向 + run_pair 关挂机耦合两向 + 固定起点两相 + pin settle+hold 可判红自检（跳过 settle / 早于落库 / 反复覆盖 / 正常收敛）+ 旧挂机 peer/旧起点 peer 必红 + CX/CY 逐字节比断言 + 断线存档 preflight + 入口护栏/DiffOnly fail-closed + pin SQL 别名/列校验（含改坏 a.IncHealth 必红））'
     exit 0
   }
   Write-Output ('SELFTEST_RED RED: ' + ($failures -join ', '))
