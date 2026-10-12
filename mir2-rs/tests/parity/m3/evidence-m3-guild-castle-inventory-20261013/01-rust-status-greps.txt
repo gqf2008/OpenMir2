@@ -1,0 +1,208 @@
+# 01 Rust 侧现状只读 grep（M3⑧ 公会/攻城）
+# 生成：2026-10-12T21:21:20Z  仓库 = f2eb43d693305a02c73f745236c9f87f6391db76
+# 命令：rg -n '<pattern>' {crates,bins}（cwd = mir2-rs/；行号为当刻实测）
+
+===== [1] 协议常量（crates/protocol/src/messages.rs）——数字表存在 =====
+82:pub const CM_OPENGUILDDLG: u16 = 1035;
+83:pub const CM_GUILDHOME: u16 = 1036;
+84:pub const CM_GUILDMEMBERLIST: u16 = 1037;
+85:pub const CM_GUILDADDMEMBER: u16 = 1038;
+86:pub const CM_GUILDDELMEMBER: u16 = 1039;
+87:pub const CM_GUILDUPDATENOTICE: u16 = 1040;
+88:pub const CM_GUILDUPDATERANKINFO: u16 = 1041;
+91:pub const CM_GUILDALLY: u16 = 1044;
+92:pub const CM_GUILDBREAKALLY: u16 = 1045;
+214:pub const SM_GUILDMESSAGE: u16 = 104;
+339:pub const SM_CHANGEGUILDNAME: u16 = 750;
+342:pub const SM_OPENGUILDDLG: u16 = 753;
+343:pub const SM_OPENGUILDDLG_FAIL: u16 = 754;
+344:pub const SM_SENDGUILDMEMBERLIST: u16 = 756;
+345:pub const SM_GUILDADDMEMBER_OK: u16 = 757;
+346:pub const SM_GUILDADDMEMBER_FAIL: u16 = 758;
+347:pub const SM_GUILDDELMEMBER_OK: u16 = 759;
+348:pub const SM_GUILDDELMEMBER_FAIL: u16 = 760;
+349:pub const SM_GUILDRANKUPDATE_FAIL: u16 = 761;
+350:pub const SM_BUILDGUILD_OK: u16 = 762;
+351:pub const SM_BUILDGUILD_FAIL: u16 = 763;
+355:pub const SM_GUILDMAKEALLY_OK: u16 = 768;
+356:pub const SM_GUILDMAKEALLY_FAIL: u16 = 769;
+357:pub const SM_GUILDBREAKALLY_OK: u16 = 770;
+358:pub const SM_GUILDBREAKALLY_FAIL: u16 = 771;
+480:pub const RM_CHANGEGUILDNAME: u16 = 10301;
+482:pub const RM_BUILDGUILD_OK: u16 = 10303;
+483:pub const RM_BUILDGUILD_FAIL: u16 = 10304;
+506:pub const RM_GUILDMESSAGE: u16 = 11007;
+627:pub const ISM_ADDGUILD: u16 = 205;
+628:pub const ISM_DELGUILD: u16 = 206;
+629:pub const ISM_RELOADGUILD: u16 = 207;
+630:pub const ISM_GUILDMSG: u16 = 208;
+633:pub const ISM_CHANGECASTLEOWNER: u16 = 211;
+634:pub const ISM_RELOADCASTLEINFO: u16 = 212;
+650:pub const ISM_GUILDMEMBER_RECALL: u16 = 228;
+651:pub const ISM_RELOADGUILDAGIT: u16 = 229;
+663:pub const ISM_GUILDWAR: u16 = 241;
+794:        104 => &["CM_SELECTSERVER", "SM_GUILDMESSAGE", "SS_KEEPALIVE"],
+808:        205 => &["SS_205", "ISM_ADDGUILD"],
+809:        206 => &["SS_206", "ISM_DELGUILD"],
+810:        207 => &["SS_207", "ISM_RELOADGUILD"],
+811:        208 => &["SS_208", "ISM_GUILDMSG"],
+814:        211 => &["SM_SENDMYMAGIC", "SS_211", "ISM_CHANGECASTLEOWNER"],
+815:        212 => &["SM_DELMAGIC", "SS_212", "ISM_RELOADCASTLEINFO"],
+831:        228 => &["ISM_GUILDMEMBER_RECALL"],
+832:        229 => &["ISM_RELOADGUILDAGIT"],
+844:        241 => &["ISM_GUILDWAR"],
+953:        750 => &["SM_CHANGEGUILDNAME"],
+956:        753 => &["SM_OPENGUILDDLG"],
+957:        754 => &["SM_OPENGUILDDLG_FAIL"],
+958:        756 => &["SM_SENDGUILDMEMBERLIST"],
+959:        757 => &["SM_GUILDADDMEMBER_OK"],
+960:        758 => &["SM_GUILDADDMEMBER_FAIL"],
+961:        759 => &["SM_GUILDDELMEMBER_OK"],
+962:        760 => &["SM_GUILDDELMEMBER_FAIL"],
+963:        761 => &["SM_GUILDRANKUPDATE_FAIL"],
+964:        762 => &["SM_BUILDGUILD_OK"],
+965:        763 => &["SM_BUILDGUILD_FAIL"],
+970:        768 => &["SM_GUILDMAKEALLY_OK"],
+971:        769 => &["SM_GUILDMAKEALLY_FAIL"],
+972:        770 => &["SM_GUILDBREAKALLY_OK"],
+973:        771 => &["SM_GUILDBREAKALLY_FAIL"],
+1020:        1035 => &["CM_OPENGUILDDLG"],
+1021:        1036 => &["CM_GUILDHOME"],
+1022:        1037 => &["CM_GUILDMEMBERLIST"],
+1023:        1038 => &["CM_GUILDADDMEMBER"],
+1024:        1039 => &["CM_GUILDDELMEMBER"],
+1025:        1040 => &["CM_GUILDUPDATENOTICE"],
+1026:        1041 => &["CM_GUILDUPDATERANKINFO"],
+1029:        1044 => &["CM_GUILDALLY"],
+1030:        1045 => &["CM_GUILDBREAKALLY"],
+1192:        10301 => &["RM_CHANGEGUILDNAME"],
+1194:        10303 => &["RM_BUILDGUILD_OK"],
+1195:        10304 => &["RM_BUILDGUILD_FAIL"],
+1217:        11007 => &["RM_GUILDMESSAGE"],
+
+===== [2] 行会 CM 派发（bins/ + crates/world）——期望 no match =====
+no match
+
+===== [3] 行会/攻城帧发送（bins/ + crates/world）——期望 no match =====
+no match
+
+===== [4] 行会/攻城实体与状态（MyGuild/GuildName/RankList/GuildWarList/MasterGuild/GuildOwner/CastleDoor 对象）——bins/crates 全域 =====
+crates/data\src\models.rs:157:/// C# `ActorRace.SabukWall`（`src/OpenMir2/Enums/Race.cs:52`）。
+crates/world\src\combat.rs:453:/// `IsGroupMember`/`MyGuild`/`MasterList`（师徒）——本骨架世界无组队/行会/师徒，`result` 不被剔除。
+crates/world\src\combat.rs:491:            // `MyGuild` 未建模（无行会）⇒ 不剔除。
+bins/game-svr\src\bag.rs:243:    /// `MyGuild != null`（Need 6/7/60/70）。
+bins/game-svr\src\bag.rs:245:    /// `GuildRankNo`（Need 60/70）。
+bins/game-svr\src\enter.rs:269:/// 本骨架无行会系统 ⇒ `MyGuild == null` ⇒ `sGuildName` 恒空（`ShowGuildName` 分支不可达，登记）。
+bins/game-svr\src\config.rs:523:             GatePort=5000\nIDSAddr= 127.0.0.1\nIDSPort=5600\nDBAddr=127.0.0.1\nDBPort=6000\nWorldMaps=1000x1000,200x200\n[Share]\nX=1\n[Setup]\nShowRankLevelName=1\nShowGuildName=0\n",
+bins/game-svr\src\main.rs:3600:                                                // 全取角色记录；行会在本骨架恒空（`MyGuild == null`，见 `enter::show_name`）。
+
+===== [5] 配置项（build_guild/guild_war_price/guild_war_time/castle_*）——期望 no match =====
+no match
+
+===== [6] Envir 侧行会/攻城文件加载器（GuildList/SabukW/AttackSabukWall/Castle List）——期望 no match =====
+no match
+
+===== [7] 角色记录 allow_guild_re_call（M2 record-fields）——已实现 =====
+bins/db-srv/src/playdata.rs:125:        allow_guild_re_call: bool_col(&row, "AllowGuildReCall")?,
+bins/db-srv/src/playdata.rs:443:        .bind(d.allow_guild_re_call)
+bins/db-srv/src/playdata.rs:837:    .bind(d.allow_guild_re_call)
+bins/game-svr/src/record.rs:504:    pub allow_guild_re_call: bool,
+bins/game-svr/src/record.rs:605:            allow_guild_re_call: r.boolean()?,
+bins/game-svr/src/record.rs:662:        w.boolean(self.allow_guild_re_call);
+bins/game-svr/src/record.rs:1084:        assert!(d.allow_guild_re_call);
+crates/storage/src/playerdata.rs:665:    pub allow_guild_re_call: bool,
+crates/storage/src/playerdata.rs:724:            allow_guild_re_call: false,
+crates/storage/src/playerdata.rs:785:        w.bool(self.allow_guild_re_call);
+crates/storage/src/playerdata.rs:840:            allow_guild_re_call: r.bool()?,
+
+===== [8] bag Need 6/7/60/70 的行会/城池条件（已建模但 main.rs 恒传 false/0） =====
+bins/game-svr/src/bag.rs:244:    pub has_guild: bool,
+bins/game-svr/src/bag.rs:246:    pub guild_rank_no: u8,
+bins/game-svr/src/bag.rs:248:    pub is_castle_member: bool,
+bins/game-svr/src/bag.rs:368:        6 => ctx.has_guild,
+bins/game-svr/src/bag.rs:369:        7 => ctx.has_guild && ctx.is_castle_member,
+bins/game-svr/src/bag.rs:380:        60 => ctx.has_guild && ctx.guild_rank_no == 1,
+bins/game-svr/src/bag.rs:382:            ctx.has_guild
+bins/game-svr/src/bag.rs:383:                && ctx.is_castle_member
+bins/game-svr/src/bag.rs:384:                && ctx.guild_rank_no == 1
+bins/game-svr/src/bag.rs:790:            has_guild: c["has_guild"].as_bool().unwrap(),
+bins/game-svr/src/bag.rs:791:            guild_rank_no: u8v(&c["guild_rank_no"]),
+bins/game-svr/src/bag.rs:792:            is_castle_member: c["is_castle_member"].as_bool().unwrap(),
+bins/game-svr/src/main.rs:850:        has_guild: false,
+bins/game-svr/src/main.rs:851:        guild_rank_no: 0,
+bins/game-svr/src/main.rs:852:        is_castle_member: false,
+
+===== [9] HAM_GUILD 攻击模式（不同：无行会 ⇒ 不剔除） =====
+402:pub const ATTACK_MODE_HAM_GUILD: u8 = 5;
+453:/// `IsGroupMember`/`MyGuild`/`MasterList`（师徒）——本骨架世界无组队/行会/师徒，`result` 不被剔除。
+485:            // `IsGroupMember` 未建模（无组队）⇒ 不剔除。
+487:        ATTACK_MODE_HAM_GUILD => {
+491:            // `MyGuild` 未建模（无行会）⇒ 不剔除。
+
+===== [10] Sabuk 门/墙 race 常量与 HP 特判（数据层已落，世界层无门对象） =====
+crates/data/src/loaders.rs:25:    DealOffInfo, MagicInfo, MonsterInfo, StdItem, ACTOR_RACE_SABUK_DOOR, ACTOR_RACE_SABUK_WALL,
+crates/data/src/loaders.rs:259:            let hp = if race == ACTOR_RACE_SABUK_WALL || race == ACTOR_RACE_SABUK_DOOR {
+crates/data/src/models.rs:155:/// C# `ActorRace.SabukDoor`（`src/OpenMir2/Enums/Race.cs:48`）。
+crates/data/src/models.rs:156:pub const ACTOR_RACE_SABUK_DOOR: u8 = 110;
+crates/data/src/models.rs:157:/// C# `ActorRace.SabukWall`（`src/OpenMir2/Enums/Race.cs:52`）。
+crates/data/src/models.rs:158:pub const ACTOR_RACE_SABUK_WALL: u8 = 111;
+crates/world/src/map.rs:27:    CastleDoor = 11,
+crates/world/src/map.rs:293:    ///（门另见 `CastleDoor.HoldPlace`，本骨架不含门对象，保留分支位置注释）。
+crates/world/src/map.rs:317:                            // C# 此处对 CastleDoor 还有 HoldPlace 分支，随后一律 can_move=false; break
+crates/world/src/entity.rs:84:    /// C# `BaseObject.StoneMode`（同上，石化不可被攻击）。
+crates/world/src/entity.rs:85:    pub stone_mode: bool,
+crates/world/src/entity.rs:172:            stone_mode: false,
+
+===== [11] 进图帧 766 / frame50 里的行会/攻城恒量（不同：sGuildName 恒空、InGuildWarArea 恒 false） =====
+bins/game-svr/src/smframe.rs:339:/// （`FightZone|1`、`SafeArea|2`、`InGuildWarArea|4`），落在 `Recog`。
+bins/game-svr/src/strings.rs:20:pub const DEFAULT_HUMAN_SHOW_NAME: &str = "%chrname\\%guildname\\%dearname\\%mastername";
+bins/game-svr/src/strings.rs:223:    /// 现网形态：`[String] RankLevelName=%s\` / `HumanShowName=%chrname\%guildname\%dearname`
+bins/game-svr/src/strings.rs:228:            b"[String]\nRankLevelName=%s\\\nHumanShowName=%chrname\\%guildname\\%dearname\n\
+bins/game-svr/src/strings.rs:234:            "%chrname\\%guildname\\%dearname",
+bins/game-svr/src/strings.rs:257:            "%chrname\\%guildname\\%dearname\\%mastername"
+bins/game-svr/src/enter.rs:9://! - `766 SM_AREASTATE` ← `RefUserState()`（`PlayObject.Base.cs:270-286`）：`n8 = FightZone|1 | SafeArea|2 | InGuildWarArea|4`；
+bins/game-svr/src/enter.rs:269:/// 本骨架无行会系统 ⇒ `MyGuild == null` ⇒ `sGuildName` 恒空（`ShowGuildName` 分支不可达，登记）。
+bins/game-svr/src/enter.rs:317:        .replace("%guildname", "")
+bins/game-svr/src/enter.rs:343:/// `InGuildWarArea` 在本骨架恒 `false`（无行会战系统）⇒ 只算 `FightZone|1`、`SafeArea|2`。
+bins/game-svr/src/enter.rs:1018:    /// 现网 `String.conf`（`RankLevelName=%s\` / `HumanShowName=%chrname\%guildname\%dearname`）加上
+bins/game-svr/src/enter.rs:1026:            b"[String]\nRankLevelName=%s\\\nHumanShowName=%chrname\\%guildname\\%dearname\n",
+bins/game-svr/src/enter.rs:1070:        // 缺省 `RankLevelName={0}\平民`、`HumanShowName=%chrname\%guildname\%dearname\%mastername`。
+
+===== [12] 脚本引擎：行会/攻城 condition/action 只登记名（engine 无对应分支） =====
+crates/script/src/engine/dispatch.rs:120:    "ConditionOfCheckHaveGuild",
+crates/script/src/engine/dispatch.rs:121:    "ConditionOfCheckIsCastleaGuild",
+crates/script/src/engine/dispatch.rs:122:    "ConditionOfCheckIsCastleMaster",
+crates/script/src/engine/dispatch.rs:123:    "ConditionOfCheckIsGuildMaster",
+crates/script/src/engine/conditions.rs:80:            "ConditionOfCheckHaveGuild" => {
+crates/script/src/engine/conditions.rs:84:            "ConditionOfCheckIsCastleaGuild" | "ConditionOfCheckIsCastleMaster" => {
+crates/script/src/engine/conditions.rs:87:            "ConditionOfCheckIsGuildMaster" => {
+  engine/ 下 no match（实现体缺）
+85:    (120, "ConditionOfCheckCastleGold"),
+86:    (124, "ConditionOfCheckGuildBuildPoint"),
+156:    (47, "ActionOfAddGuildList"),
+157:    (48, "ActionOfDelGuildList"),
+215:    (220, "ActionOfTakeCastleGold"),
+218:    (223, "ActionOfGuildBuildPoint"),
+238:    (328, "ActionOfGuildRecall"),
+
+===== [13] 脚本代码表：ISGUILDMASTER/ISCASTLEGUILD/ISATTACKGUILD/... 名称存在（crates/script/src/codes.rs） =====
+63:    CodeDef { name: "ISGUILDMASTER", member: "ISGUILDMASTER", field_index: 43, enum_value: 43 },
+64:    CodeDef { name: "CANPROPOSECASTLEWAR", member: "CANPROPOSECASTLEWAR", field_index: 44, enum_value: 44 },
+69:    CodeDef { name: "ISCASTLEGUILD", member: "ISCASTLEGUILD", field_index: 49, enum_value: 49 },
+70:    CodeDef { name: "ISATTACKGUILD", member: "ISATTACKGUILD", field_index: 50, enum_value: 50 },
+71:    CodeDef { name: "ISDEFENSEGUILD", member: "ISDEFENSEGUILD", field_index: 51, enum_value: 51 },
+74:    CodeDef { name: "HAVEGUILD", member: "HASGUILD", field_index: 54, enum_value: 54 },
+75:    CodeDef { name: "CHECKCASTLEDOOR", member: "CHECKCASTLEDOOR", field_index: 55, enum_value: 55 },
+76:    CodeDef { name: "CHECKCASTLEDOOROPEN", member: "CHECKCASTLEDOOROPEN", field_index: 56, enum_value: 56 },
+140:    CodeDef { name: "CHECKCASTLEGOLD", member: "CHECKCASTLEGOLD", field_index: 120, enum_value: 120 },
+315:    CodeDef { name: "BUILDGUILD", member: "BuildGuild", field_index: 83, enum_value: 83 },
+316:    CodeDef { name: "GUILDWAR", member: "Guildwar", field_index: 84, enum_value: 84 },
+321:    CodeDef { name: "PROPOSECASTLEWAR", member: "Proposecastlewar", field_index: 89, enum_value: 89 },
+663:    ("$REQUESTBUILDGUILDITEM", "<$74>"),
+667:    ("$GUILDWARFEE", "<$78>"),
+668:    ("$BUILDGUILDFEE", "<$79>"),
+
+===== [14] 落库：Rust 无 guild/castle 表列（与 oracle 一致 = 不落库） =====
+no match
+----- Rust 侧建表脚本里的 guild/castle -----
+  no match

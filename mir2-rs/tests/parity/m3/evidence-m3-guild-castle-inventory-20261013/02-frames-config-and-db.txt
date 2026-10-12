@@ -1,0 +1,387 @@
+# 02 帧常量 / 配置 / 落库 / 数据文件 对照（M3⑧ 公会/攻城）
+# 生成：2026-10-12T21:21:34Z  仓库 = f2eb43d693305a02c73f745236c9f87f6391db76
+
+===== [A] C# 帧常量（src/OpenMir2/Messages.cs） =====
+93:        public const int CM_OPENGUILDDLG = 1035;
+94:        public const int CM_GUILDHOME = 1036;
+95:        public const int CM_GUILDMEMBERLIST = 1037;
+96:        public const int CM_GUILDADDMEMBER = 1038;
+97:        public const int CM_GUILDDELMEMBER = 1039;
+98:        public const int CM_GUILDUPDATENOTICE = 1040;
+99:        public const int CM_GUILDUPDATERANKINFO = 1041;
+102:        public const int CM_GUILDALLY = 1044;
+103:        public const int CM_GUILDBREAKALLY = 1045;
+219:        public const int SM_GUILDMESSAGE = 104;
+364:        public const int SM_CHANGEGUILDNAME = 750;
+367:        public const int SM_OPENGUILDDLG = 753;
+368:        public const int SM_OPENGUILDDLG_FAIL = 754;
+369:        public const int SM_SENDGUILDMEMBERLIST = 756;
+370:        public const int SM_GUILDADDMEMBER_OK = 757;
+371:        public const int SM_GUILDADDMEMBER_FAIL = 758;
+372:        public const int SM_GUILDDELMEMBER_OK = 759;
+373:        public const int SM_GUILDDELMEMBER_FAIL = 760;
+374:        public const int SM_GUILDRANKUPDATE_FAIL = 761;
+375:        public const int SM_BUILDGUILD_OK = 762;
+376:        public const int SM_BUILDGUILD_FAIL = 763;
+380:        public const int SM_GUILDMAKEALLY_OK = 768;
+381:        public const int SM_GUILDMAKEALLY_FAIL = 769;
+382:        public const int SM_GUILDBREAKALLY_OK = 770;
+383:        public const int SM_GUILDBREAKALLY_FAIL = 771;
+453:        public const int SS_204 = 204;
+454:        public const int SS_205 = 205;
+455:        public const int SS_206 = 206;
+456:        public const int SS_207 = 207;
+460:        public const int SS_211 = 211;
+461:        public const int SS_212 = 212;
+619:        public const int RM_CHANGEGUILDNAME = 10301;
+621:        public const int RM_BUILDGUILD_OK = 10303;
+622:        public const int RM_BUILDGUILD_FAIL = 10304;
+649:        public const int RM_GUILDMESSAGE = 11007;
+721:        public const int ISM_ADDGUILD = 205;
+722:        public const int ISM_DELGUILD = 206;
+723:        public const int ISM_RELOADGUILD = 207;
+724:        public const int ISM_GUILDMSG = 208;
+727:        public const int ISM_CHANGECASTLEOWNER = 211;
+728:        public const int ISM_RELOADCASTLEINFO = 212;
+745:        public const int ISM_GUILDMEMBER_RECALL = 228;
+746:        public const int ISM_RELOADGUILDAGIT = 229;
+758:        public const int ISM_GUILDWAR = 241;
+
+===== [B] Rust 帧常量（mir2-rs/crates/protocol/src/messages.rs） =====
+82:pub const CM_OPENGUILDDLG: u16 = 1035;
+83:pub const CM_GUILDHOME: u16 = 1036;
+84:pub const CM_GUILDMEMBERLIST: u16 = 1037;
+85:pub const CM_GUILDADDMEMBER: u16 = 1038;
+86:pub const CM_GUILDDELMEMBER: u16 = 1039;
+87:pub const CM_GUILDUPDATENOTICE: u16 = 1040;
+88:pub const CM_GUILDUPDATERANKINFO: u16 = 1041;
+91:pub const CM_GUILDALLY: u16 = 1044;
+92:pub const CM_GUILDBREAKALLY: u16 = 1045;
+214:pub const SM_GUILDMESSAGE: u16 = 104;
+339:pub const SM_CHANGEGUILDNAME: u16 = 750;
+342:pub const SM_OPENGUILDDLG: u16 = 753;
+343:pub const SM_OPENGUILDDLG_FAIL: u16 = 754;
+344:pub const SM_SENDGUILDMEMBERLIST: u16 = 756;
+345:pub const SM_GUILDADDMEMBER_OK: u16 = 757;
+346:pub const SM_GUILDADDMEMBER_FAIL: u16 = 758;
+347:pub const SM_GUILDDELMEMBER_OK: u16 = 759;
+348:pub const SM_GUILDDELMEMBER_FAIL: u16 = 760;
+349:pub const SM_GUILDRANKUPDATE_FAIL: u16 = 761;
+350:pub const SM_BUILDGUILD_OK: u16 = 762;
+351:pub const SM_BUILDGUILD_FAIL: u16 = 763;
+355:pub const SM_GUILDMAKEALLY_OK: u16 = 768;
+356:pub const SM_GUILDMAKEALLY_FAIL: u16 = 769;
+357:pub const SM_GUILDBREAKALLY_OK: u16 = 770;
+358:pub const SM_GUILDBREAKALLY_FAIL: u16 = 771;
+480:pub const RM_CHANGEGUILDNAME: u16 = 10301;
+482:pub const RM_BUILDGUILD_OK: u16 = 10303;
+483:pub const RM_BUILDGUILD_FAIL: u16 = 10304;
+506:pub const RM_GUILDMESSAGE: u16 = 11007;
+627:pub const ISM_ADDGUILD: u16 = 205;
+628:pub const ISM_DELGUILD: u16 = 206;
+629:pub const ISM_RELOADGUILD: u16 = 207;
+630:pub const ISM_GUILDMSG: u16 = 208;
+633:pub const ISM_CHANGECASTLEOWNER: u16 = 211;
+634:pub const ISM_RELOADCASTLEINFO: u16 = 212;
+650:pub const ISM_GUILDMEMBER_RECALL: u16 = 228;
+651:pub const ISM_RELOADGUILDAGIT: u16 = 229;
+663:pub const ISM_GUILDWAR: u16 = 241;
+794:        104 => &["CM_SELECTSERVER", "SM_GUILDMESSAGE", "SS_KEEPALIVE"],
+808:        205 => &["SS_205", "ISM_ADDGUILD"],
+809:        206 => &["SS_206", "ISM_DELGUILD"],
+810:        207 => &["SS_207", "ISM_RELOADGUILD"],
+811:        208 => &["SS_208", "ISM_GUILDMSG"],
+814:        211 => &["SM_SENDMYMAGIC", "SS_211", "ISM_CHANGECASTLEOWNER"],
+815:        212 => &["SM_DELMAGIC", "SS_212", "ISM_RELOADCASTLEINFO"],
+831:        228 => &["ISM_GUILDMEMBER_RECALL"],
+832:        229 => &["ISM_RELOADGUILDAGIT"],
+844:        241 => &["ISM_GUILDWAR"],
+953:        750 => &["SM_CHANGEGUILDNAME"],
+956:        753 => &["SM_OPENGUILDDLG"],
+957:        754 => &["SM_OPENGUILDDLG_FAIL"],
+958:        756 => &["SM_SENDGUILDMEMBERLIST"],
+959:        757 => &["SM_GUILDADDMEMBER_OK"],
+960:        758 => &["SM_GUILDADDMEMBER_FAIL"],
+961:        759 => &["SM_GUILDDELMEMBER_OK"],
+962:        760 => &["SM_GUILDDELMEMBER_FAIL"],
+963:        761 => &["SM_GUILDRANKUPDATE_FAIL"],
+964:        762 => &["SM_BUILDGUILD_OK"],
+965:        763 => &["SM_BUILDGUILD_FAIL"],
+970:        768 => &["SM_GUILDMAKEALLY_OK"],
+971:        769 => &["SM_GUILDMAKEALLY_FAIL"],
+972:        770 => &["SM_GUILDBREAKALLY_OK"],
+973:        771 => &["SM_GUILDBREAKALLY_FAIL"],
+1020:        1035 => &["CM_OPENGUILDDLG"],
+1021:        1036 => &["CM_GUILDHOME"],
+1022:        1037 => &["CM_GUILDMEMBERLIST"],
+1023:        1038 => &["CM_GUILDADDMEMBER"],
+1024:        1039 => &["CM_GUILDDELMEMBER"],
+1025:        1040 => &["CM_GUILDUPDATENOTICE"],
+1026:        1041 => &["CM_GUILDUPDATERANKINFO"],
+1029:        1044 => &["CM_GUILDALLY"],
+1030:        1045 => &["CM_GUILDBREAKALLY"],
+1192:        10301 => &["RM_CHANGEGUILDNAME"],
+1194:        10303 => &["RM_BUILDGUILD_OK"],
+1195:        10304 => &["RM_BUILDGUILD_FAIL"],
+1217:        11007 => &["RM_GUILDMESSAGE"],
+
+===== [C] C# 触发点 → 帧（行号） =====
+src/GameSrv/Npc/GuildOfficial.cs:165:                PlayObject.SendMsg(this, Messages.RM_BUILDGUILD_OK, 0, 0, 0, 0);
+src/GameSrv/Npc/GuildOfficial.cs:169:                PlayObject.SendMsg(this, Messages.RM_BUILDGUILD_FAIL, 0, result, 0, 0);
+src/M2Server/Guild/GuildInfo.cs:451:                            guildMember.SendMsg(guildMember, Messages.RM_GUILDMESSAGE, 0, SystemShare.Config.GuildMsgFColor, SystemShare.Config.GuildMsgBColor, 0, sMsg);
+src/M2Server/Guild/GuildInfo.cs:499:                        playObject.SendMsg(playObject, Messages.RM_CHANGEGUILDNAME, 0, 0, 0, 0);
+src/M2Server/Player/PlayObject.Base.cs:1629:                SendDefMessage(Messages.SM_CHANGEGUILDNAME, 0, 0, 0, 0, MyGuild.GuildName + '/' + GuildRankName);
+src/M2Server/Player/PlayObject.Base.cs:1633:                SendDefMessage(Messages.SM_CHANGEGUILDNAME, 0, 0, 0, 0);
+src/M2Server/Player/PlayObject.Base.cs:2659:            SendMsg(Messages.RM_CHANGEGUILDNAME, 0, 0, 0, 0);
+src/M2Server/Player/PlayObject.Operate.cs:1269:                ClientMsg = Messages.MakeMessage(Messages.SM_OPENGUILDDLG, 0, 0, 0, 1);
+src/M2Server/Player/PlayObject.Operate.cs:1274:                SendDefMessage(Messages.SM_OPENGUILDDLG_FAIL, 0, 0, 0, 0);
+src/M2Server/Player/PlayObject.Operate.cs:1303:            ClientMsg = Messages.MakeMessage(Messages.SM_SENDGUILDMEMBERLIST, 0, 0, 0, 1);
+src/M2Server/Player/PlayObject.Operate.cs:1361:                SendDefMessage(Messages.SM_GUILDADDMEMBER_OK, 0, 0, 0, 0);
+src/M2Server/Player/PlayObject.Operate.cs:1365:                SendDefMessage(Messages.SM_GUILDADDMEMBER_FAIL, nC, 0, 0, 0);
+src/M2Server/Player/PlayObject.Operate.cs:1418:                SendDefMessage(Messages.SM_GUILDDELMEMBER_OK, 0, 0, 0, 0);
+src/M2Server/Player/PlayObject.Operate.cs:1422:                SendDefMessage(Messages.SM_GUILDDELMEMBER_FAIL, nC, 0, 0, 0);
+src/M2Server/Player/PlayObject.Operate.cs:1460:                    SendDefMessage(Messages.SM_GUILDRANKUPDATE_FAIL, nC, 0, 0, 0);
+src/M2Server/Player/PlayObject.Operate.cs:1511:                    SendDefMessage(Messages.SM_GUILDMAKEALLY_OK, 0, 0, 0, 0);
+src/M2Server/Player/PlayObject.Operate.cs:1515:                    SendDefMessage(Messages.SM_GUILDMAKEALLY_FAIL, n8, 0, 0, 0);
+src/M2Server/Player/PlayObject.Operate.cs:1550:                SendDefMessage(Messages.SM_GUILDBREAKALLY_OK, 0, 0, 0, 0);
+src/M2Server/Player/PlayObject.Operate.cs:1554:                SendDefMessage(Messages.SM_GUILDMAKEALLY_FAIL, 0, 0, 0, 0);
+
+===== [D] 配置默认值（GameSvrConf.cs）/ 读法（ServerConf.cs）/ 现网 Server.conf =====
+162:        public string WomaHorn;
+163:        public string ZumaPiece;
+342:        public byte StartCastleWarDays;
+343:        public int StartCastlewarTime;
+344:        public int ShowCastleWarEndMsgTime;
+345:        public int CastleWarTime;
+346:        public int GetCastleTime;
+347:        public int GuildWarTime;
+351:        public int BuildGuildPrice;
+355:        public int GuildWarPrice;
+789:        public byte GuildRankNameLen;
+790:        public int GuildMemberMaxLimit;
+791:        public byte GuildNameLen;
+792:        public byte CastleNameLen;
+960:        public int CastleTaxRate;
+961:        public bool GetAllNpcTax;
+962:        public int HireGuardPrice;
+963:        public int HireArcherPrice;
+964:        public int CastleGoldMax;
+965:        public int CastleOneDayGold;
+966:        public int RepairDoorPrice;
+967:        public int RepairWallPrice;
+968:        public int CastleMemberPriceRate;
+1318:            WomaHorn = "沃玛号角";
+1319:            ZumaPiece = "祖玛头像";
+1442:            StartCastleWarDays = 4;
+1443:            StartCastlewarTime = 20;
+1444:            ShowCastleWarEndMsgTime = 10 * 60 * 1000;
+1445:            CastleWarTime = 3 * 60 * 60 * 1000;
+1446:            GetCastleTime = 10 * 60 * 1000;
+1447:            GuildWarTime = 3 * 60 * 60 * 1000;
+1448:            BuildGuildPrice = 1000000;
+1449:            GuildWarPrice = 30000;
+1720:            GuildRankNameLen = 16;
+1721:            GuildMemberMaxLimit = 200;
+1722:            GuildNameLen = 16;
+1788:            CastleTaxRate = 5;
+1789:            GetAllNpcTax = false;
+1790:            HireGuardPrice = 300000;
+1791:            HireArcherPrice = 300000;
+1792:            CastleGoldMax = 10000000;
+1793:            CastleOneDayGold = 2000000;
+1794:            RepairDoorPrice = 2000000;
+1795:            RepairWallPrice = 500000;
+1796:            CastleMemberPriceRate = 80;
+----- ServerConf.cs 读法（键名） -----
+102:            SystemShare.Config.WomaHorn = ReadWriteString("Names", "WomaHorn", SystemShare.Config.WomaHorn);
+103:            SystemShare.Config.ZumaPiece = ReadWriteString("Names", "ZumaPiece", SystemShare.Config.ZumaPiece);
+243:            SystemShare.Config.BuildGuildPrice = ReadWriteInteger("Setup", "BuildGuild", SystemShare.Config.BuildGuildPrice);
+245:            SystemShare.Config.GuildWarPrice = ReadWriteInteger("Setup", "GuildWarFee", SystemShare.Config.GuildWarPrice);
+246:            SystemShare.Config.HireGuardPrice = ReadWriteInteger("Setup", "HireGuard", SystemShare.Config.HireGuardPrice);
+247:            SystemShare.Config.HireArcherPrice = ReadWriteInteger("Setup", "HireArcher", SystemShare.Config.HireArcherPrice);
+248:            SystemShare.Config.RepairDoorPrice = ReadWriteInteger("Setup", "RepairDoor", SystemShare.Config.RepairDoorPrice);
+249:            SystemShare.Config.RepairWallPrice = ReadWriteInteger("Setup", "RepairWall", SystemShare.Config.RepairWallPrice);
+250:            SystemShare.Config.CastleMemberPriceRate = ReadWriteInteger("Setup", "CastleMemberPriceRate", SystemShare.Config.CastleMemberPriceRate);
+251:            SystemShare.Config.CastleGoldMax = ReadWriteInteger("Setup", "CastleGoldMax", SystemShare.Config.CastleGoldMax);
+252:            SystemShare.Config.CastleOneDayGold = ReadWriteInteger("Setup", "CastleOneDayGold", SystemShare.Config.CastleOneDayGold);
+259:            SystemShare.Config.CastleTaxRate = ReadWriteInteger("Setup", "CastleTaxRate", SystemShare.Config.CastleTaxRate);
+260:            SystemShare.Config.GetAllNpcTax = ReadWriteBool("Setup", "CastleGetAllNpcTax", SystemShare.Config.GetAllNpcTax);
+499:            SystemShare.Config.GuildNameLen = ReadWriteByte("Setup", "GuildNameLen", SystemShare.Config.GuildNameLen);
+500:            SystemShare.Config.GuildMemberMaxLimit = ReadWriteInteger("Setup", "GuildMemberMaxLimit", SystemShare.Config.GuildMemberMaxLimit);
+638:            SystemShare.Config.StartCastleWarDays = ReadWriteByte("Setup", "StartCastleWarDays", SystemShare.Config.StartCastleWarDays);
+639:            SystemShare.Config.StartCastlewarTime = ReadWriteInteger("Setup", "StartCastlewarTime", SystemShare.Config.StartCastlewarTime);
+640:            SystemShare.Config.ShowCastleWarEndMsgTime = ReadWriteInteger("Setup", "ShowCastleWarEndMsgTime", SystemShare.Config.ShowCastleWarEndMsgTime);
+642:            SystemShare.Config.CastleWarTime = ReadWriteInteger("Setup", "CastleWarTime", SystemShare.Config.CastleWarTime);
+643:            SystemShare.Config.GetCastleTime = ReadWriteInteger("Setup", "GetCastleTime", SystemShare.Config.GetCastleTime);
+644:            SystemShare.Config.GuildWarTime = ReadWriteInteger("Setup", "GuildWarTime", SystemShare.Config.GuildWarTime);
+----- 现网 Server.conf 实测 -----
+94:WomaHorn=沃玛号角
+95:ZumaPiece=祖玛头像
+303:BuildGuild=1000000
+305:GuildWarFee=30000
+306:HireGuard=300000
+307:HireArcher=300000
+308:RepairDoor=2000000
+309:RepairWall=500000
+310:CastleGoldMax=5000000
+337:CastleOneDayGold=2000000
+344:CastleTaxRate=5
+345:CastleGetAllNpcTax=0
+348:StartCastleWarDays=2
+349:ShowCastleWarEndMsgTime=600000
+350:CastleWarTime=7200000
+351:GetCastleTime=600000
+380:StartCastlewarTime=20
+574:CastleMemberPriceRate=80
+767:GuildWarTime=7200000
+768:GuildNameLen=15
+769:GuildMemberMaxLimit=500
+876:CastleNameLen=16
+
+===== [E] 落库事实（oracle = 不落库 + 文件） =====
+----- sql/ 全部表（无 guild/guildmember/castle） -----
+sql/mir2_account.sql:24:CREATE TABLE `account`  (
+sql/mir2_account.sql:6163:CREATE TABLE `account_friend`  (
+sql/mir2_account.sql:6183:CREATE TABLE `account_protection`  (
+sql/mir2_account.sql:12214:CREATE TABLE `tbl_conncheckuser`  (
+sql/mir2_account.sql:12227:CREATE TABLE `tbl_connectlogs`  (
+sql/mir2_account.sql:15267:CREATE TABLE `tbl_countlogs`  (
+sql/mir2_account.sql:21015:CREATE TABLE `tbl_gmip`  (
+sql/mir2_account.sql:21030:CREATE TABLE `tbl_itemgive`  (
+sql/mir2_account.sql:21051:CREATE TABLE `tbl_m2premiumuser`  (
+sql/mir2_account.sql:21070:CREATE TABLE `tbl_pubips`  (
+sql/mir2_account.sql:21085:CREATE TABLE `tbl_selectgateips`  (
+sql/mir2_account.sql:21101:CREATE TABLE `tbl_serverinfo`  (
+sql/mir2_account.sql:21117:CREATE TABLE `tbl_usercount`  (
+sql/mir2_data.sql:24:CREATE TABLE `goldsales`  (
+sql/mir2_data.sql:43:CREATE TABLE `magics`  (
+sql/mir2_data.sql:183:CREATE TABLE `monsters`  (
+sql/mir2_data.sql:936:CREATE TABLE `stditems`  (
+sql/mir2_data.sql:1996:CREATE TABLE `upgradeinfo`  (
+sql/mir2_data.sql:2019:CREATE TABLE `upgradeinfo_item`  (
+sql/mir2_data.sql:2037:CREATE TABLE `upgradeinfo_item_attr`  (
+sql/mir2_db.sql:24:CREATE TABLE `characters`  (
+sql/mir2_db.sql:6073:CREATE TABLE `characters_ablity`  (
+sql/mir2_db.sql:12100:CREATE TABLE `characters_bagitem`  (
+sql/mir2_db.sql:287889:CREATE TABLE `characters_bonusability`  (
+sql/mir2_db.sql:287912:CREATE TABLE `characters_indexes`  (
+sql/mir2_db.sql:293929:CREATE TABLE `characters_item`  (
+sql/mir2_db.sql:371883:CREATE TABLE `characters_item_attr`  (
+sql/mir2_db.sql:371912:CREATE TABLE `characters_magic`  (
+sql/mir2_db.sql:371937:CREATE TABLE `characters_quest`  (
+sql/mir2_db.sql:371954:CREATE TABLE `characters_status`  (
+sql/mir2_db.sql:377977:CREATE TABLE `characters_storageitem`  (
+----- sql/ 内 guild|castle 命中（唯一一列） -----
+sql/mir2_db.sql:59:  `AllowGuildReCall` tinyint(1) NULL DEFAULT 0 COMMENT '是否允许行会传送',
+----- Storeages 内 guild|castle 命中 -----
+src/Storeages/DBSvr.Storage.MySQL\PlayDataStorage.Add.cs:96:            strSql.AppendLine("HungerStatus, PayMentPoint, LockLogon, MarryCount, AllowGroupReCall, GroupRcallTime, AllowGuildReCall, IsMaster, MasterName, DearName");
+src/Storeages/DBSvr.Storage.MySQL\PlayDataStorage.Add.cs:100:            strSql.AppendLine("@HungerStatus, @PayMentPoint, @LockLogon, @MarryCount, @AllowGroupReCall, @GroupRcallTime, @AllowGuildReCall, @IsMaster, @MasterName, @DearName");
+src/Storeages/DBSvr.Storage.MySQL\PlayDataStorage.Add.cs:137:            command.Parameters.AddWithValue("@AllowGuildReCall", hd.AllowGuildReCall);
+src/Storeages/DBSvr.Storage.MySQL\PlayDataStorage.Query.cs:251:                    humInfoData.AllowGuildReCall = dr.GetBoolean("AllowGuildReCall");
+src/Storeages/DBSvr.Storage.MySQL\PlayDataStorage.Save.cs:88:            strSql.AppendLine("GroupRcallTime = @GroupRcallTime, AllowGuildReCall = @AllowGuildReCall, IsMaster = @IsMaster, MasterName = @MasterName, DearName = @DearName, StoragePwd = @StoragePwd, Deleted = @Deleted,LASTUPDATE = now() WHERE ID = @ID;");
+src/Storeages/DBSvr.Storage.MySQL\PlayDataStorage.Save.cs:123:            command.Parameters.AddWithValue("@AllowGuildReCall", hd.AllowGuildReCall);
+----- 文件落盘锚点（GuildManager/GuildInfo/UserCastle/CastleManager） -----
+src/M2Server/Castle/CastleConf.cs:98:            string filePath = Path.Combine(M2Share.BasePath, SystemShare.Config.CastleDir, userCastle.ConfigDir);
+src/M2Server/Castle/UserCastle.cs:27:        public UserCastle(string sCastleDir)
+src/M2Server/Castle/UserCastle.cs:34:            ConfigDir = sCastleDir;
+src/M2Server/Castle/UserCastle.cs:50:            string filePath = Path.Combine(M2Share.BasePath, SystemShare.Config.CastleDir, ConfigDir);
+src/M2Server/Castle/UserCastle.cs:55:            castleConf = new CastleConf(Path.Combine(filePath, CastleConst.SabukWFileName));
+src/M2Server/Castle/UserCastle.cs:93:        public string ConfigDir { get; set; }
+src/M2Server/Castle/UserCastle.cs:112:            LoadAttackSabukWall();
+src/M2Server/Castle/UserCastle.cs:242:        private void LoadAttackSabukWall()
+src/M2Server/Castle/UserCastle.cs:244:            string sabukwallPath = Path.Combine(M2Share.BasePath, SystemShare.Config.CastleDir, ConfigDir);
+src/M2Server/Castle/UserCastle.cs:251:            string sFileName = Path.Combine(sabukwallPath, CastleConst.AttackSabukWallList);
+src/M2Server/Castle/UserCastle.cs:293:        private void SaveAttackSabukWall()
+src/M2Server/Castle/UserCastle.cs:295:            string sabukwallPath = Path.Combine(M2Share.BasePath, SystemShare.Config.CastleDir, ConfigDir);
+src/M2Server/Castle/UserCastle.cs:301:            string sFileName = Path.Combine(sabukwallPath, CastleConst.AttackSabukWallList);
+src/M2Server/Castle/UserCastle.cs:367:                            SaveAttackSabukWall();
+src/M2Server/Castle/UserCastle.cs:451:            SaveAttackSabukWall();
+src/M2Server/Castle/UserCastle.cs:1010:            SaveAttackSabukWall();
+src/M2Server/Castle/CastleManager.cs:67:                IUserCastle castle = new UserCastle(SystemShare.Config.CastleDir);
+src/M2Server/Castle/CastleManager.cs:69:                castle.ConfigDir = "0";
+src/M2Server/Castle/CastleManager.cs:156:            string castleFile = Path.Combine(M2Share.BasePath, SystemShare.Config.CastleFile);
+src/M2Server/Castle/CastleManager.cs:163:                    string sCastleDir = loadList[i].Trim();
+src/M2Server/Castle/CastleManager.cs:164:                    if (!string.IsNullOrEmpty(sCastleDir))
+src/M2Server/Castle/CastleManager.cs:166:                        UserCastle castle = new UserCastle(sCastleDir);
+src/M2Server/Castle/CastleManager.cs:180:            string castleDirPath = Path.Combine(M2Share.BasePath, SystemShare.Config.CastleDir);
+src/M2Server/Castle/CastleManager.cs:190:            string savePath = Path.Combine(M2Share.BasePath, SystemShare.Config.CastleFile);
+src/M2Server/Guild/GuildInfo.cs:125:            string sFileName = Path.Combine(SystemShare.Config.GuildDir, string.Concat(sName + ".ini"));
+src/M2Server/Guild/GuildInfo.cs:142:            SaveGuildInfoFile();
+src/M2Server/Guild/GuildInfo.cs:199:            return LoadGuildFile(sFileName);
+src/M2Server/Guild/GuildInfo.cs:209:        public bool LoadGuildFile(string sGuildFileName)
+src/M2Server/Guild/GuildInfo.cs:214:            string sFileName = Path.Combine(SystemShare.Config.GuildDir, sGuildFileName);
+src/M2Server/Guild/GuildInfo.cs:366:        public void SaveGuildInfoFile()
+src/M2Server/Guild/GuildInfo.cs:370:                SaveGuildFile(Path.Combine(SystemShare.Config.GuildDir, string.Concat(GuildName, ".txt")));
+src/M2Server/Guild/GuildInfo.cs:375:                SaveGuildFile(Path.Combine(SystemShare.Config.GuildDir, GuildName, ".", M2Share.ServerIndex.ToString()));
+src/M2Server/Guild/GuildInfo.cs:384:        private void SaveGuildFile(string sFileName)
+src/M2Server/Guild/GuildInfo.cs:480:                SaveGuildInfoFile();
+src/M2Server/Guild/GuildInfo.cs:525:        public void CheckSaveGuildFile()
+src/M2Server/Guild/GuildInfo.cs:530:                SaveGuildInfoFile();
+src/M2Server/Guild/GuildInfo.cs:536:            CheckSaveGuildFile();
+src/M2Server/Guild/GuildInfo.cs:584:        public void UpdateGuildFile()
+src/M2Server/Guild/GuildInfo.cs:588:            SaveGuildInfoFile();
+src/M2Server/Guild/GuildInfo.cs:591:        public void BackupGuildFile()
+src/M2Server/Guild/GuildInfo.cs:595:                SaveGuildFile(Path.Combine(SystemShare.Config.GuildDir, GuildName, '.' + HUtil32.GetTickCount() + ".bak"));
+src/M2Server/Guild/GuildInfo.cs:620:            SaveGuildInfoFile();
+src/M2Server/Guild/GuildInfo.cs:650:            UpdateGuildFile();
+src/M2Server/Guild/GuildInfo.cs:675:                UpdateGuildFile();
+src/M2Server/Guild/GuildInfo.cs:693:                BackupGuildFile();
+src/M2Server/Guild/GuildInfo.cs:986:                UpdateGuildFile();
+src/M2Server/Guild/GuildInfo.cs:1017:            SaveGuildInfoFile();
+src/M2Server/Guild/GuildInfo.cs:1054:            UpdateGuildFile();
+src/M2Server/Guild/GuildManager.cs:27:                SaveGuildList();
+src/M2Server/Guild/GuildManager.cs:46:                    guild.BackupGuildFile();
+src/M2Server/Guild/GuildManager.cs:48:                    SaveGuildList();
+src/M2Server/Guild/GuildManager.cs:78:        public void LoadGuildInfo()
+src/M2Server/Guild/GuildManager.cs:81:            if (File.Exists(SystemShare.Config.GuildFile))
+src/M2Server/Guild/GuildManager.cs:84:                loadList.LoadFromFile(SystemShare.Config.GuildFile);
+src/M2Server/Guild/GuildManager.cs:101:                        SaveGuildList();
+src/M2Server/Guild/GuildManager.cs:124:        private void SaveGuildList()
+src/M2Server/Guild/GuildManager.cs:137:                saveList.SaveToFile(SystemShare.Config.GuildFile);
+src/M2Server/Guild/GuildManager.cs:163:                    guild.UpdateGuildFile();
+src/M2Server/Guild/GuildManager.cs:165:                guild.CheckSaveGuildFile();
+
+===== [F] 冻结数据文件实测 =====
+Server.conf: GuildDir=GuildDir=GuildBase/Guilds GuildFile=GuildFile=GuildBase/Guildlist.txt CastleDir=CastleDir=Castle CastleFile=CastleFile=Castle/List.txt
+GuildBase/GuildList.txt = 0 字节（空）; GuildBase/Guilds/ 存在? no
+Castle/List.txt = [0]
+Castle/0/SabukW.txt 关键行：
+2:CastleName=ɳ�Ϳ�
+6:OwnGuild=
+8:TotalGold=0
+9:TodayIncome=0
+12:CastleMapList=0151,0152,0153,0154,0155,0156,
+13:CastleMap=3
+14:CastleHomeMap=3
+15:CastleHomeX=644
+16:CastleHomeY=290
+17:CastleWarRangeX=100
+18:CastleWarRangeY=100
+19:CastlePlaceMap=0150
+27:MainDoorOpen=0
+28:MainDoorHP=9999
+33:LeftWallHP=4999
+38:CenterWallHP=4999
+43:RightWallHP=4999
+Castle/0/AttackSabukWall.txt = 0 字节（空）
+
+===== [G] Npcs.txt 里两类 NPC（type=1 GuildOfficial / type=2 CastleOfficial） =====
+格式：名称 type-map-x-y-范围-外观；来源 src/GameSrv/DB/LocalDB.cs:658-697（type→类）
+3:比奇国王           1     0122  29    32    0     8
+4:沙巴克城堡管理           2     0150  7     16    0     8
+----- 触发标签（ScriptFlagConst.cs） -----
+68:        public const string sBUILDGUILDNOW = "@@buildguildnow";
+69:        public const string sSCL_GUILDWAR = "@@guildwar";
+70:        public const string sDONATE = "@@donate";
+71:        public const string sREQUESTCASTLEWAR = "@requestcastlewarnow";
+72:        public const string sCASTLENAME = "@@castlename";
+73:        public const string sWITHDRAWAL = "@@withdrawal";
+74:        public const string sRECEIPTS = "@@receipts";
+75:        public const string sOPENMAINDOOR = "@openmaindoor";
+76:        public const string sCLOSEMAINDOOR = "@closemaindoor";
+77:        public const string sREPAIRDOORNOW = "@repairdoornow";
+78:        public const string sREPAIRWALLNOW1 = "@repairwallnow1";
+79:        public const string sREPAIRWALLNOW2 = "@repairwallnow2";
+80:        public const string sREPAIRWALLNOW3 = "@repairwallnow3";
+81:        public const string sHIREARCHERNOW = "@hirearchernow";
+82:        public const string sHIREGUARDNOW = "@hireguardnow";
