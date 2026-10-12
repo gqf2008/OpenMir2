@@ -1,0 +1,21 @@
+# 四门禁（head 0dc48618，隔离 CARGO_TARGET_DIR=E:/tmp/m3bag-gitattr-target，--offline）
+# $ cd <repo>/.claude/worktrees/m3bag/mir2-rs
+
+$ cargo fmt --all -- --check
+rc=0
+
+$ cargo clippy --workspace --all-targets --offline -- -D warnings
+    Checking mir2-envir v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\crates\envir)
+    Checking game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\bins\game-svr)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.74s
+rc=0
+
+$ cargo run -q -p msgcodegen -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+rc=0
+
+$ cargo test --workspace --offline
+rc=0
+--- test result 行 ---
+suites=84 passed=687 failed=0 ignored=16
+--- 失败/错误（应为空）---

@@ -1,0 +1,42 @@
+# 判据③：code commit 0dc48618 只改属性，不改任何被跟踪文件的 blob 内容
+# $ cd <repo>/.claude/worktrees/m3bag
+
+$ git diff --stat 384379fb 0dc48618
+ mir2-rs/.gitattributes | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+$ git diff --stat 384379fb 0dc48618 -- ':!mir2-rs/.gitattributes'   # 必须为空
+[empty above]
+
+$ git diff --diff-filter=M --name-only 384379fb 0dc48618            # 仅被修改的既有文件
+mir2-rs/.gitattributes
+
+$ git diff --diff-filter=A --name-only 384379fb 0dc48618            # 新增文件（此 commit 应为空）
+
+$ git diff --raw 384379fb 0dc48618
+:100644 100644 eb9ba4e9 356aa66c M	mir2-rs/.gitattributes
+
+$ git diff --numstat 384379fb 0dc48618
+12	0	mir2-rs/.gitattributes
+
+$ git diff 384379fb 0dc48618 -- mir2-rs/.gitattributes
+diff --git a/mir2-rs/.gitattributes b/mir2-rs/.gitattributes
+index eb9ba4e9..356aa66c 100644
+--- a/mir2-rs/.gitattributes
++++ b/mir2-rs/.gitattributes
+@@ -11,3 +11,15 @@
+ .gitignore    text eol=lf
+ .gitattributes text eol=lf
+ Cargo.lock    text eol=lf
++
++# 证据 / 夹具 / 脚本扩展名（2026-10-13，卡 openmir2-gitattributes-eol-coverage）：这些扩展名承载
++# 文本证据与判据脚本，夹具按字段/字节逐行比对；未声明时 `core.autocrlf=true` 的检出恒落 CRLF，
++# `verify_sha256sums.py eolcheck` 在干净检出上恒假红（同族坑第 5 次）。
++# 判据：clean clone 上 `python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs` 由 RED → GREEN
++# （证据四件套：tools/evidence-hash/evidence/2026-10-13-gitattributes-eol-coverage/）。
++*.py     text eol=lf
++*.tsv    text eol=lf
++*.ps1    text eol=lf
++*.patch  text eol=lf
++*.ndjson text eol=lf
++*.js     text eol=lf

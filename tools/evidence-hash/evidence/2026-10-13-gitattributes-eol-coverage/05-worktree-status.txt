@@ -1,0 +1,39 @@
+# 判据④：属性变更不弄脏任何 worktree（tracked 侧）；需要重检出的范围/步骤
+
+## 现场（2026-10-13，本片落地时）：各 worktree 的 tracked 侧 status
+
+$ git -C E:/Users/gxh/Documents/GitHub/OpenMir2 status --porcelain | grep -v '^??'   # tracked
+    [以上为 tracked 侧；未跟踪条目数 = 0]
+
+$ git -C E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr status --porcelain | grep -v '^??'   # tracked
+    [以上为 tracked 侧；未跟踪条目数 = 0]
+
+$ git -C E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/rev2 status --porcelain | grep -v '^??'   # tracked
+    [以上为 tracked 侧；未跟踪条目数 = 0]
+
+$ git -C E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3cs status --porcelain | grep -v '^??'   # tracked
+    [以上为 tracked 侧；未跟踪条目数 = 6]
+
+$ git -C E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3bag status --porcelain | grep -v '^??'   # tracked
+    [以上为 tracked 侧；未跟踪条目数 = 9]
+
+## 关键结论：新增属性不会把已有 worktree 弄脏
+# 证据：在 384379fb 的干净检出（盘上 .py/.tsv/.ps1 仍是 CRLF）里把新 .gitattributes 覆盖进去，
+#       tracked status 只多出 ' M mir2-rs/.gitattributes'（属性文件自身），没有任何内容文件被判脏：
+$ (cd E:/tmp/eol-stale && git status --porcelain | grep -v '^??')
+     M mir2-rs/.gitattributes
+$ (cd E:/tmp/eol-stale && python -I -c "print('scoped_diff.py CRLF:', b'\r\n' in open('mir2-rs/tests/parity/m3/scoped_diff.py','rb').read())")
+    scoped_diff.py CRLF: True
+
+## 重检出的范围与步骤（只在本片自己的 worktree 里做；未动共享主检出）
+# 需要重检出：是——既有 worktree 的盘上文件在补属性后不会自动变 LF；要本地 eolcheck 变绿必须重检出。
+# 不需要：任何内容/blob 改动（git status 在重检出前后都干净）。
+# 范围：仅 mir2-rs 下的被跟踪文件；命令（本 worktree 实测）：
+$ git ls-files -z mir2-rs | xargs -0 rm -f && git checkout -- mir2-rs
+# 重检出后：盘上 .py/.tsv 变 LF；tracked status 干净；本地 eolcheck m3 GREEN 2532/2532。
+
+$ git -C E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3bag status --porcelain | grep -v '^??'   # 重检出后仍干净
+    [empty above]
+
+$ git -C E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3bag config core.autocrlf
+    true
