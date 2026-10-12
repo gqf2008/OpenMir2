@@ -20,7 +20,9 @@
 12) 旧 client 口径 seq 复算跨侧 diff/jointable                          -> RED 72/102/121 + 点名 20 个 k (08/09)
 
 ## 惰性判定
-- 本片改动仅 4 个文件，均在 `mir2-rs/tests/parity/m3/**`（夹具写集），**零 `.rs`**：
+- 本片改动共 **5** 个文件（reviewer-6 的 M-2 订正：原记「仅 4 个」，漏 `attack-request-sequence/README.md`），
+  均在 `mir2-rs/tests/parity/m3/**`（夹具写集），**零 `.rs`**：
   `attack_diff.py`、`attack-request-sequence/per_strike_requests.py`、
-  `rng-isolate-attack/compare_dedicated_streams.py`、`run_attack_pair.ps1`。
+  `rng-isolate-attack/compare_dedicated_streams.py`、`run_attack_pair.ps1`、
+  `attack-request-sequence/README.md`。
 - 四门禁 rc=0 只证明「未劣化」（`.rs` 未动，结果与 master 同）。

@@ -3,7 +3,8 @@
 - 卡：`openmir2-m3-attack-pair-fixture`（issue `76cc08b8`）
 - 基准树：`master 17f55b2d`（含 m3cs 的 F-N1 后两相实跑 `5e502a97`、本车道 F-N1 `1e7f2280` / EOL 生产者侧 `59401d19`）
 - 写集：`mir2-rs/tests/parity/m3/**`；**零 `.rs`**；**未起栈、未占端口**（纯离线复算，输入为 m3cs 实拍的两相原始件）
-- 判据口径：**逐 k `hit`/`dmg` 以服务端权威 `SERVER_STATE` 为准**（owner 2026-10-13 02:15 明写「与服务端 SERVER_STATE/RNG 推出的命中」），两侧用**同一个 dump** ⇒ 逐 k 可比。
+- 判据口径：**逐 k `hit`/`dmg` 以服务端权威 `SERVER_STATE` 为准**（owner 2026-10-13 02:15 明写「与服务端 SERVER_STATE/RNG 推出的命中」）；
+  两侧**同一口径（各侧自身 dump）**——实测两侧受害 HP 轨迹逐点相同（非同一文件自比）⇒ 逐 k 可比。
 
 ## 结论（三条）
 
@@ -19,7 +20,7 @@
    `SERVER_STATE k` = 处理第 k 击**之前**的服务端权威受害 HP（C# `StartupHook.DumpActors` 在玩家单元
    首抽时落；Rust `state_log.rs` 同形；两侧实测**逐字节同形**）⇒
    `dmg_k = preHP[k] − preHP[k+1]`（`k < N`）、`dmg_N = preHP[N] − min(客户端 struck 结果 HP)`；
-   `hit = dmg > 0`。**与时序无关**、**两侧同一 dump** ⇒ 逐 k 可比。
+   `hit = dmg > 0`。**与时序无关**、**两侧同一口径**（各侧自身 dump；实测 HP 轨迹逐点相同）⇒ 逐 k 可比。
    实现：`attack_diff.py align --server-state <dump>`（或 `attack_raw.jsonl` 同目录有
    `server_state_segment.tsv` 时**自动采用**；见 `04-align-after-server.txt` 的 `caliber=server-state`）。
 3. **分析器 `(kind,arg)` 假阳性（`index=3`）已修。**
@@ -62,7 +63,27 @@
 | `15..18-gate-*.txt` | 四门禁 fmt / clippy / test / msgcodegen（全 rc=0；隔离 target） |
 | `19-selfcheck-nostack.txt` | `run_attack_pair.ps1 -SelfCheckNoStack` 全绿（含新增 ⑮b：`good_rc=0 bad_rc=2 caliber_ok=True`） |
 | `20-smstruck-broadcast-scope-diff.txt` | **登记（实现侧，非本片写集）**：C# `SM_STRUCK` 2 帧/击（广播到观察者）vs Rust 1 帧/击 |
+| `21-followup-reviewer6-minors.txt` | 复核订正（reviewer-6 M-1/M-2/M-3）后的重验证：`verify --check-extra` + `eolcheck` + 三工具 selftest 全 GREEN |
 | `commands.txt` | 全部命令与原始输出落点 |
+
+## 复核订正（reviewer-6 `88f120f3`，2026-10-13）
+
+> 本目录内容随本片一并订正；改动**只碰证据件本身**（`01`/`GATES`/`README`/`commands` + 重算 `SHA256SUMS.txt`），
+> **未改任何夹具/生产函数**（`attack_diff.py` / `per_strike_requests.py` / `compare_dedicated_streams.py` /
+> `run_attack_pair.ps1` 一字未动），结论不变。
+
+- **M-1（已修）**：`01-analyze-before.txt` 原为一次 Python `FileNotFoundError` traceback（旧实现被 copy 到
+  `E:/tmp/psr-old.py` 后 `load_site_map()` 相对 `__file__` 解析成 `E:\rng-isolate-attack\attack_sites.tsv`），
+  并非索引所写的「旧实现 index=3 假分歧」。现改为**在 `attack-request-sequence/` 内原位执行**从 base
+  `17f55b2d` 取出的旧实现（`load_site_map()` 正常解析站点表）⇒ 真输出：
+  `index(0based)=3 class=player_path`，两侧 `repr` 同为 `hit_struck_damage(37)->22`，`判读 RED player_path_divergence@draw_index=4`。
+  命令已同步修订进 `commands.txt`（含「必须原位执行」的原因）。
+- **M-2（已修）**：`GATES.txt` 惰性判定原记「本片改动仅 4 个文件」⇒ 订正为 **5** 个（补 `attack-request-sequence/README.md`）。
+- **M-3（已修）**：本 README 原写「两侧用**同一个 dump** ⇒ 逐 k 可比」，易被误读为同一文件自比 ⇒
+  改为「两侧**同一口径（各侧自身 dump）**；实测两侧受害 HP 轨迹逐点相同」。
+
+订正后重验证件：`21-followup-reviewer6-minors.txt`（`verify --check-extra` GREEN 24/24、`eolcheck` GREEN 25/25、
+三工具 selftest 41/41 + 29/29 + 9/9 全 rc=0）。
 
 ## 复现（干净检出，全离线）
 

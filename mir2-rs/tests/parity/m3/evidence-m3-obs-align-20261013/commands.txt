@@ -9,10 +9,15 @@
 #   D=E:/tmp/m3bag-obsalign-check ; client-only/$s = 只含 attack_raw.jsonl（无 state ⇒ client 口径）
 
 ## 1) 分析器 `(kind,arg)` 假阳性：before（旧实现 index=3 假分歧）/ after（语义归一后 none）
-git show HEAD:mir2-rs/tests/parity/m3/attack-request-sequence/per_strike_requests.py > E:/tmp/psr-old.py
-python -I E:/tmp/psr-old.py analyze --csharp $EV/streams/csharp-c2-attack-stream.tsv \
-  --rust $EV/streams/rust-r1-rng-stream.tsv --seed 42
-#   -> 01-analyze-before.txt（index=3 class=player_path；两侧 repr 均为 hit_struck_damage(37)->22）
+#   ⚠ 旧实现必须放在 `attack-request-sequence/` 内**原位执行**：`load_site_map()` 以
+#     `Path(__file__).parent.parent/"rng-isolate-attack"/attack_sites.tsv` 解析站点表；
+#     copy 到 `E:/tmp` 会解析成 `E:/rng-isolate-attack/…` 而 FileNotFoundError（reviewer-6 M-1）。
+git show 17f55b2d:mir2-rs/tests/parity/m3/attack-request-sequence/per_strike_requests.py \
+  > mir2-rs/tests/parity/m3/attack-request-sequence/_oldimpl_psr.py
+python -I mir2-rs/tests/parity/m3/attack-request-sequence/_oldimpl_psr.py analyze \
+  --csharp $EV/streams/csharp-c2-attack-stream.tsv --rust $EV/streams/rust-r1-rng-stream.tsv --seed 42
+rm mir2-rs/tests/parity/m3/attack-request-sequence/_oldimpl_psr.py
+#   -> 01-analyze-before.txt（index=3 class=player_path；两侧 repr 均为 hit_struck_damage(37)->22；rc=1）
 python -I mir2-rs/tests/parity/m3/attack-request-sequence/per_strike_requests.py analyze \
   --csharp $EV/streams/csharp-c2-attack-stream.tsv --rust $EV/streams/rust-r1-rng-stream.tsv --seed 42
 #   -> 02-analyze-after.txt（GREEN；第一处请求分歧 index=None class=none）
