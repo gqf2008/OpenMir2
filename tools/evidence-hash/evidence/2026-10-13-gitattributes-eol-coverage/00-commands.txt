@@ -1,0 +1,46 @@
+# 卡 openmir2-gitattributes-eol-coverage —— 证据复现命令（2026-10-13）
+# base   = 384379fb (origin/master)
+# fix    = 0dc48618 (branch worktree-m3-gitattributes，code commit：只改 mir2-rs/.gitattributes)
+# 机器口径：Windows + git core.autocrlf=true（本机默认），Python 3（`python -I`）。
+
+## 1. 干净检出（--no-checkout + 显式 checkout，属性按被检出 commit 生效）
+cd <repo>/.claude/worktrees/m3bag
+git clone --local --quiet --no-checkout . E:/tmp/eol-base3
+git clone --local --quiet --no-checkout . E:/tmp/eol-fix4
+(cd E:/tmp/eol-base3 && git checkout -q 384379fb)
+(cd E:/tmp/eol-fix4  && git checkout -q 0dc48618)
+
+## 2. 基线（RED）—— 见 01-baseline-clean-clone-eolcheck.txt / 01b-baseline-breakdown.txt
+(cd E:/tmp/eol-base3 && python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3)   # RED 79/1706，rc=1
+(cd E:/tmp/eol-base3 && python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs)                  # RED 98/2278，rc=1
+
+## 3. 修复后（GREEN）—— 见 02-fixed-clean-clone-eolcheck.txt
+(cd E:/tmp/eol-fix4 && python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3)   # GREEN 1706/1706，rc=0
+(cd E:/tmp/eol-fix4 && python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs)                  # GREEN 2278/2278，rc=0
+
+## 4. 改坏必红：从 code commit 0dc48618 的 .gitattributes 删掉 `*.tsv    text eol=lf` 并重新检出
+##    —— 见 03-mutation-red-drop-tsv.txt
+rm -rf E:/tmp/eol-mut3 E:/tmp/eol-mut4
+git clone --local --quiet --no-checkout . E:/tmp/eol-mut3
+(cd E:/tmp/eol-mut3 && git checkout -q 0dc48618 && \
+  python -I -c "p='mir2-rs/.gitattributes'; s=open(p,encoding='utf-8',newline='').read(); s=s.replace('*.tsv    text eol=lf\n',''); open(p,'w',encoding='utf-8',newline='').write(s)" && \
+  git add mir2-rs/.gitattributes && git commit -m "mutation: drop *.tsv (break-must-be-red)")
+git clone --local --quiet --no-checkout E:/tmp/eol-mut3 E:/tmp/eol-mut4
+(cd E:/tmp/eol-mut4 && git checkout -q HEAD)      # mutation commit = fd1ba8f2
+(cd E:/tmp/eol-mut4 && python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3)   # RED 52/1706，rc=1
+(cd E:/tmp/eol-mut4 && python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs)                  # RED 53/2278，rc=1
+
+## 5. 只改属性、不改被跟踪文件内容 —— 见 04-only-attributes-no-blob-change.txt
+cd <repo>/.claude/worktrees/m3bag
+git diff --stat 384379fb 0dc48618                                    # 只有 mir2-rs/.gitattributes
+git diff --stat 384379fb 0dc48618 -- ':!mir2-rs/.gitattributes'      # 空
+git diff --diff-filter=M --name-only 384379fb 0dc48618               # 只有 mir2-rs/.gitattributes
+
+## 6. worktree 现场 + 重检出范围 —— 见 05-worktree-status.txt
+
+## 7. 四门禁（隔离 target、--offline）—— 见 06-gates.txt
+cd mir2-rs && export CARGO_TARGET_DIR=E:/tmp/m3bag-gitattr-target
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --offline -- -D warnings
+cargo test --workspace --offline
+cargo run -q -p msgcodegen -- --check
