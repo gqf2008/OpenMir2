@@ -7,7 +7,7 @@
 export PSModulePath='C:\Users\gxh\Documents\WindowsPowerShell\Modules;C:\Program Files\WindowsPowerShell\Modules;C:\Windows\system32\WindowsPowerShell\v1.0\Modules'
 
 ## 1) 门禁/自检（本目录 01..03）
-powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/selftest_gate.ps1                          # -> 01-selftest-gate.txt（total=61 failed=0）
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/selftest_gate.ps1                          # -> 01-selftest-gate.txt（total=63 failed=0）
 powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 -SelfCheckNoStack       # -> 02-attack-pair-selftest.txt（SELFTEST_RED GREEN）
 python -I mir2-rs/tests/parity/m3/attack_diff.py selftest                                                    # -> 03-attack-diff-selftest.txt（SELFTEST GREEN 30/30）
 

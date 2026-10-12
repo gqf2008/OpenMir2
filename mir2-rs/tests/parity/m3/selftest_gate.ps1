@@ -38,8 +38,8 @@
        行（另校 `RUST_SEED_INJECTED`）；缺失/种子不符/空路径 ⇒ ok=$false（fail-closed）。
 
     ⑨ Get-M3PinAttemptsGuard / Test-M3PinAttemptsComparable（pin 重试账本；owner 2026-10-12 16:30；
-       **19:20 降级为 informational**）：只对「字段缺失/形态认不出/baseline 坏 JSON/会话缺失」fail-closed；
-       attempts=2/4/1、expected 漂移均**绿**（只进 informational）。attempts=2 ⇒ 绿。
+       **19:20 降级为 informational**）：只对「键在但值空/`(off)`、形态认不出、baseline 坏 JSON、会话缺失」
+       fail-closed；attempts=2/4/1、expected 漂移、**旧会话（根本没有 pin_attempts 键）均绿**（只进 informational）。
 
     ⑩ Test-M3PrewarmNoWorldEntry（预热相不进世界；owner 2026-10-12 19:20 根因修）：读预热相 BotSrv 日志，
        出现 `进入游戏`/`成功进入游戏`/`准备进入游戏` ⇒ fail-closed；日志缺失也 fail-closed。
@@ -88,13 +88,15 @@ function Test-EntryGuard([string]$Desc, [object[]]$Holders, [string]$Side, [int]
   Test-Case ("entry/{0}" -f $Desc) $ok ("side={0} failed=[{1}]" -f $Side, ($codes -join ','))
 }
 
-function New-Baseline([string]$Dir, [string]$FixedNewChr, [switch]$OmitField, [string]$BagEquipSequence = '', [string]$StartPose = '', [string]$PinAttempts = '') {
+function New-Baseline([string]$Dir, [string]$FixedNewChr, [switch]$OmitField, [string]$BagEquipSequence = '', [string]$StartPose = '', [string]$PinAttempts = '', [switch]$EmptyPinAttempts) {
   New-Item -ItemType Directory -Force -Path $Dir | Out-Null
   $obj = [ordered]@{ session = (Split-Path $Dir -Leaf); side = 'csharp' }
   if (-not $OmitField) { $obj['fixed_new_chr'] = $FixedNewChr }
   if (-not [string]::IsNullOrEmpty($BagEquipSequence)) { $obj['bag_equip_sequence'] = $BagEquipSequence }
   if (-not [string]::IsNullOrEmpty($StartPose)) { $obj['start_pose'] = $StartPose }
-  if (-not [string]::IsNullOrEmpty($PinAttempts)) { $obj['pin_attempts'] = $PinAttempts }
+  # -EmptyPinAttempts：键在但值为空（=仪器写了字段却没落有效记账）——与「键不存在（旧会话）」区分开。
+  if ($EmptyPinAttempts) { $obj['pin_attempts'] = '' }
+  elseif (-not [string]::IsNullOrEmpty($PinAttempts)) { $obj['pin_attempts'] = $PinAttempts }
   $obj | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $Dir 'baseline.json') -Encoding utf8
 }
 
@@ -367,10 +369,21 @@ Test-Case 'pinacct/attempts=4=绿(informational，不再拒比)' `
   ((@($g.failed).Count -eq 0) -and $g.retried -and (@($g.informational) -match 'retried|重试').Count -gt 0) ("failed=[{0}] info=[{1}]" -f (@($g.failed) -join ','), (@($g.informational) -join ';'))
 $g = Test-M3PinAttemptsComparable -Dirs @($paOk, $paRetry)
 Test-Case 'pinacct/两侧一侧重试=绿(informational)' (@($g.failed).Count -eq 0) ("failed=[{0}] info=[{1}]" -f (@($g.failed) -join ','), (@($g.informational) -join ';'))
-$paMissing = Join-Path $Work 'pin-missing'
-New-Baseline $paMissing '(off)'
-$g = Get-M3PinAttemptsGuard -PlayerDir $paMissing
-Test-Case 'pinacct/缺字段=红(missing=唯一保留的牙)' (@($g.failed) -contains 'pin_attempts_missing') ("failed=[{0}]" -f (@($g.failed) -join ','))
+# 旧会话（baseline.json 根本没有 pin_attempts 键）= 绿（informational）——收掉旧登记 Minor「无字段旧会话被拒比」。
+$paNoField = Join-Path $Work 'pin-nofield'
+New-Baseline $paNoField '(off)'
+$g = Get-M3PinAttemptsGuard -PlayerDir $paNoField
+Test-Case 'pinacct/旧会话无字段键=绿(informational，收旧 Minor)' `
+  ((@($g.failed).Count -eq 0) -and (@($g.informational) -match '旧产物').Count -gt 0) ("failed=[{0}] info=[{1}]" -f (@($g.failed) -join ','), (@($g.informational) -join ';'))
+# 键在但值空 / `(off)` = 红（保留的牙：仪器写了字段却没落有效 attempts）。
+$paEmpty = Join-Path $Work 'pin-empty'
+New-Baseline $paEmpty '(off)' -EmptyPinAttempts
+$g = Get-M3PinAttemptsGuard -PlayerDir $paEmpty
+Test-Case 'pinacct/键在但值空=红(missing=保留的牙)' (@($g.failed) -contains 'pin_attempts_missing') ("failed=[{0}]" -f (@($g.failed) -join ','))
+$paOff = Join-Path $Work 'pin-off'
+New-Baseline $paOff '(off)' -PinAttempts '(off)'
+$g = Get-M3PinAttemptsGuard -PlayerDir $paOff
+Test-Case 'pinacct/键在但值 (off)=红(missing)' (@($g.failed) -contains 'pin_attempts_missing') ("failed=[{0}]" -f (@($g.failed) -join ','))
 $paInvalid = Join-Path $Work 'pin-invalid'
 New-Baseline $paInvalid '(off)' -PinAttempts 'attempts=x'
 $g = Get-M3PinAttemptsGuard -PlayerDir $paInvalid
@@ -388,15 +401,15 @@ New-Item -ItemType Directory -Force -Path $paBad | Out-Null
 Set-Content -Path (Join-Path $paBad 'baseline.json') -Encoding utf8 -Value '{ "pin_attempts": "attempts=2'
 $g = Get-M3PinAttemptsGuard -PlayerDir $paBad
 Test-Case 'pinacct/baseline 坏 JSON=红(不中断)' (@($g.failed) -contains 'pin_attempts_baseline_invalid') ("failed=[{0}]" -f (@($g.failed) -join ','))
-# 改坏必红：把 attempts=2 会话的 pin_attempts 字段删掉（=记账没落盘）⇒ 必红；还原 ⇒ 绿。
+# 改坏必红：把 attempts=2 会话的 pin_attempts 值清空（=仪器写了字段却没落有效记账）⇒ 必红；还原 ⇒ 绿。
 $paMutFile = Join-Path $paOk 'baseline.json'
 $paMutOrig = Get-Content $paMutFile -Raw
 $paPreGreen = (@((Get-M3PinAttemptsGuard -PlayerDir $paOk).failed).Count -eq 0)
-Set-Content -Path $paMutFile -Encoding utf8 -Value '{ "session": "pin-ok", "side": "csharp" }'
+Set-Content -Path $paMutFile -Encoding utf8 -Value '{ "session": "pin-ok", "side": "csharp", "pin_attempts": "" }'
 $paMutRed = (@((Get-M3PinAttemptsGuard -PlayerDir $paOk).failed) -contains 'pin_attempts_missing')
 Set-Content -Path $paMutFile -Encoding utf8 -Value $paMutOrig
 $paRestoredGreen = (@((Get-M3PinAttemptsGuard -PlayerDir $paOk).failed).Count -eq 0)
-Test-Case 'pinacct/改坏必红：删字段=红，还原=绿' ($paPreGreen -and $paMutRed -and $paRestoredGreen) ("pre={0} mutRed={1} restored={2}" -f $paPreGreen, $paMutRed, $paRestoredGreen)
+Test-Case 'pinacct/改坏必红：键值清空=红，还原=绿' ($paPreGreen -and $paMutRed -and $paRestoredGreen) ("pre={0} mutRed={1} restored={2}" -f $paPreGreen, $paMutRed, $paRestoredGreen)
 
 # ---------------------------------------------------------------- ⑩ 预热相不进世界（owner 2026-10-12 19:20 根因修）
 Write-Output '⑩ Test-M3PrewarmNoWorldEntry（预热相 bot 不得进世界——防 GameSvr 异步存档覆盖 pin）'

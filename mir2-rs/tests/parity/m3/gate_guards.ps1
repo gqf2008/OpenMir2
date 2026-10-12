@@ -1059,9 +1059,10 @@ function Format-M3PinInstrument {
 #
 # ⇒ 本账本**降级为 informational**：仍结构化记录 attempts / 原始 `PIN_HOLD`/`PIN_RETRY`（保留可观测性），
 #   但**不再因 `attempts ≠ expected` 判 PREREQ/拒绝比对**（数值门 → 字段存在性门）。
-#   **唯一保留的牙** = `pin_attempts` **缺失 / 形态认不出 / baseline 坏 JSON / 会话目录缺失** ⇒ fail-closed：
-#   这属于「仪器接线断裂（记账没落盘）」，不是数值口径，无法证明该运行至少记录过 pin。
-#   （顺带收掉旧登记 Minor：无 `pin_attempts` 字段的老会话在降级后仍按「缺失」拒比，行为不变。）
+#   **唯一保留的牙** = 字段在但**值为空/`(off)`/无 attempts、形态认不出、baseline 坏 JSON、会话目录缺失**
+#   ⇒ fail-closed：这是「仪器写了字段却没落有效记账 / 接线断裂」，不是数值口径。
+#   **旧会话（baseline.json 根本没有 `pin_attempts` 键）⇒ informational，不再拒比**（owner 19:20
+#   「降级后旧会话不再被拒」，顺带收掉旧登记 Minor）；空值/坏值与「键不存在」因此区分开。
 $script:M3PinExpectedAttempts = 2
 
 function Get-M3PinExpectedAttempts { return [int]$script:M3PinExpectedAttempts }
@@ -1114,6 +1115,11 @@ function Get-M3SessionPinAttempts {
   if ($null -eq $baseline) {
     return [pscustomobject]@{ ok = $false; reason = 'baseline_invalid'; attempts = $null; expected = $null; settle_rounds = $null; max_attempts = $null; raw = '' }
   }
+  # 旧会话（pin_attempts 特性加入前生成）baseline.json **根本没有这个键** ⇒ reason='no_field'（informational，不拒比）。
+  # 注：与「键在但值为空/`(off)`/认不出」区分开——后者是仪器写了字段却没落有效 attempts（仍 fail-closed）。
+  if ($baseline.PSObject.Properties.Name -notcontains 'pin_attempts') {
+    return [pscustomobject]@{ ok = $false; reason = 'no_field'; attempts = $null; expected = $null; settle_rounds = $null; max_attempts = $null; raw = '' }
+  }
   # baseline.json 里若写成嵌套对象（{attempts,expected,...}）也认（结构化字段的两种形态都兼容）。
   if ($null -ne $baseline.pin_attempts -and $baseline.pin_attempts -isnot [string]) {
     $pa = $baseline.pin_attempts
@@ -1124,11 +1130,12 @@ function Get-M3SessionPinAttempts {
   return (ConvertTo-M3PinAttempts -Raw ([string]$baseline.pin_attempts))
 }
 
-# 字段存在性门（唯一 fail-closed 口径，owner 19:20）：只拒绝「记账没落盘/认不出」的会话。
-#   缺失 ⇒ pin_attempts_missing；形态认不出 ⇒ pin_attempts_invalid；baseline 坏 JSON ⇒ pin_attempts_baseline_invalid；
-#   会话目录缺失 ⇒ pin_attempts_session_missing。
-# **informational（不再判红）**：attempts > expected（重试）/ attempts < expected / expected 漂移 —— 只进
-#   `informational` 列表由报告打印（保留可观测性）；`retried` 字段仍保留供汇总统计。
+# 字段存在性门（唯一 fail-closed 口径，owner 19:20）：只拒绝「记账写了字段却没落有效 attempts / 认不出」的会话。
+#   键在但值空/`(off)` ⇒ pin_attempts_missing；形态认不出 ⇒ pin_attempts_invalid；baseline 坏 JSON ⇒
+#   pin_attempts_baseline_invalid；会话目录缺失 ⇒ pin_attempts_session_missing。
+# **informational（不再判红）**：attempts > expected（重试）/ attempts < expected / expected 漂移（保留可观测性）；
+#   **旧会话（baseline.json 根本没有 pin_attempts 键）也 informational**——owner 19:20「降级后旧会话不再被拒」
+#   （收掉旧登记 Minor：无字段旧会话被拒比）。`retried` 字段仍保留供汇总统计。
 function Get-M3PinAttemptsGuard {
   param(
     [Parameter(Mandatory)][string]$PlayerDir,
@@ -1140,8 +1147,12 @@ function Get-M3PinAttemptsGuard {
   $leaf = Split-Path $PlayerDir -Leaf
   $info = Get-M3SessionPinAttempts -Dir $PlayerDir
   if (-not $info.ok) {
-    if ($info.reason -eq 'missing') {
-      $messages.Add(("RED: 会话 {0} 缺 baseline.json.pin_attempts 记账（旧产物/未接线）——仪器接线断裂，无法证明该运行记录过 pin，拒绝比对" -f $leaf))
+    if ($info.reason -eq 'no_field') {
+      # 旧会话（特性加入前）——informational：不再拒比（owner 19:20，收掉旧 Minor）。
+      $informational.Add(("INFO: 会话 {0} 的 baseline.json 无 pin_attempts 字段（旧产物）——informational，不再拒绝比对" -f $leaf))
+      return [pscustomobject]@{ failed = @($failed); messages = @($messages); informational = @($informational); info = $info; retried = $false }
+    } elseif ($info.reason -eq 'missing') {
+      $messages.Add(("RED: 会话 {0} 的 baseline.json.pin_attempts 存在但为空/(off)/无 attempts——仪器写了字段却没落有效记账，拒绝比对" -f $leaf))
       $failed.Add('pin_attempts_missing')
     } elseif ($info.reason -eq 'invalid') {
       $messages.Add(("RED: 会话 {0} 的 pin_attempts 形态认不出: '{1}'" -f $leaf, $info.raw))

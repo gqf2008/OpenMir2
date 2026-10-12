@@ -53,8 +53,9 @@
                  且 `role=done attacks=N`；缺 ⇒ RED。
     3 跨侧口径   两侧 baseline.json 的 `attack_sequence` / `attack_pose` / `fixed_new_chr` 必须一致；
                  不一致 ⇒ PREREQ（exit 2）。
-    3.1 pin 记账门（owner 2026-10-12 16:30；**19:20 降级为 informational**）  只要求两侧 `baseline.json.pin_attempts`
-                 **字段存在且可解析**（缺失/形态坏/baseline 坏 JSON ⇒ PREREQ exit 2，仪器接线断裂）；
+    3.1 pin 记账门（owner 2026-10-12 16:30；**19:20 降级为 informational**）  `baseline.json.pin_attempts`
+                 **键在但值空/(off)/形态坏/baseline 坏 JSON ⇒ PREREQ exit 2**（仪器写了字段却没落有效记账）；
+                 **旧会话（根本没有该键）⇒ informational、不再拒比**（owner 19:20「降级后旧会话不再被拒」）；
                  attempts 数值差异（> / < / expected 漂移）只打 INFO，**不再拒绝比对**。依据：owner 19:20 判决性
                  实验（attempts 既不充分也不必要——4↔5 与 5↔5 时 attack_seq 都不同；而 c1≡c3 attempts 3/4 却逐字节全等）。
                  另：预热相必须带 `-StopAfterCharCreated`，且预热 BotSrv 日志不得出现进世界标记（防 GameSvr 异步存档覆盖 pin）
@@ -430,8 +431,9 @@ if ($SelfCheckNoStack) {
     $PinMapName, $aiChk.total, $aiChkV.source_verified)
 
   # ⑱ pin 记账门（owner 2026-10-12 16:30；**19:20 降级为 informational**）：
-  #    唯一 fail-closed = 字段缺失/形态认不出/baseline 坏 JSON；attempts=4 / expected 漂移 均**绿**（只 informational）。
-  #    改坏必红（真跑后还原）：删掉 `pin_attempts` 字段（=记账没落盘）⇒ 必红；还原 ⇒ 绿。
+  #    唯一 fail-closed = 键在但值空/`(off)`、形态认不出、baseline 坏 JSON；attempts=4 / expected 漂移 /
+  #    旧会话（根本没有 `pin_attempts` 键）均**绿**（只 informational——旧 Minor「无字段旧会话被拒比」已收）。
+  #    改坏必红（真跑后还原）：把 `pin_attempts` 值清空（=仪器写了字段却没落有效记账）⇒ 必红；还原 ⇒ 绿。
   #    另：断言 `-EmitOpsArgs` 的 `prewarm_bot_args` 含 `-StopAfterCharCreated`（预热不进世界的接线面）。
   $pinExpected = Get-M3PinExpectedAttempts
   if ($pinExpected -lt 1) { $failures += ('pin_expected_attempts=' + $pinExpected) }
@@ -456,27 +458,35 @@ if ($SelfCheckNoStack) {
   if (@($cmpRetry.failed).Count -ne 0) { $failures += ('pin_attempts_retry_not_informational_green=' + (@($cmpRetry.failed) -join ';')) }
   if (-not (@($cmpRetry.infos | Where-Object { $_.retried }).Count -gt 0)) { $failures += 'pin_attempts_retry_not_flagged_informational' }
   if (@($cmpRetry.informational).Count -eq 0) { $failures += 'pin_attempts_retry_no_info_message' }
-  $pinMissing = New-M3PinSession 'missing' $null
-  if (-not (@((Get-M3PinAttemptsGuard -PlayerDir $pinMissing).failed) -contains 'pin_attempts_missing')) { $failures += 'pin_attempts_missing_not_red' }
+  # 旧会话（baseline.json 根本没有 pin_attempts 键）= 绿（informational）——收掉旧登记 Minor「无字段旧会话被拒比」。
+  $pinNoField = New-M3PinSession 'nofield' $null
+  $pinNoFieldInfo = Get-M3PinAttemptsGuard -PlayerDir $pinNoField
+  if (@($pinNoFieldInfo.failed).Count -ne 0) { $failures += ('pin_attempts_nofield_not_green=' + (@($pinNoFieldInfo.failed) -join ';')) }
+  if (@($pinNoFieldInfo.informational).Count -eq 0) { $failures += 'pin_attempts_nofield_no_info' }
+  # 键在但值为空 / `(off)` = 红（保留的牙：仪器写了字段却没落有效 attempts）。
+  $pinEmpty = New-M3PinSession 'empty' ''
+  if (-not (@((Get-M3PinAttemptsGuard -PlayerDir $pinEmpty).failed) -contains 'pin_attempts_missing')) { $failures += 'pin_attempts_empty_not_red' }
+  $pinOff = New-M3PinSession 'off' '(off)'
+  if (-not (@((Get-M3PinAttemptsGuard -PlayerDir $pinOff).failed) -contains 'pin_attempts_missing')) { $failures += 'pin_attempts_off_not_red' }
   $pinInvalid = New-M3PinSession 'invalid' 'attempts=garbage'
   if (-not (@((Get-M3PinAttemptsGuard -PlayerDir $pinInvalid).failed) -contains 'pin_attempts_invalid')) { $failures += 'pin_attempts_invalid_not_red' }
   $pinDrift = New-M3PinSession 'drift' (Format-M3PinAttempts -Attempts 2 -Expected 3 -SettleRounds 2 -MaxAttempts 5)
   if (@((Get-M3PinAttemptsGuard -PlayerDir $pinDrift).failed).Count -ne 0) { $failures += ('pin_attempts_expected_drift_not_informational_green=' + (@((Get-M3PinAttemptsGuard -PlayerDir $pinDrift).failed) -join ';')) }
   $pinNested = New-M3PinSession 'nested' ([pscustomobject]@{ attempts = 2; expected = 2; settle_rounds = 2; max_attempts = 5 })
   if (@((Get-M3PinAttemptsGuard -PlayerDir $pinNested).failed).Count -ne 0) { $failures += ('pin_attempts_nested_not_green=' + (@((Get-M3PinAttemptsGuard -PlayerDir $pinNested).failed) -join ';')) }
-  # 改坏必红（真跑 + 还原）：删掉 `pin_attempts` 字段 ⇒ 必红；还原 ⇒ 绿。
+  # 改坏必红（真跑 + 还原）：把 `pin_attempts` 值清空（=仪器写了字段却没落有效记账）⇒ 必红；还原 ⇒ 绿。
   $pinMutFile = Join-Path $pinOkA 'baseline.json'
   $pinOrigJson = Get-Content $pinMutFile -Raw
   $pinPreGreen = (@((Get-M3PinAttemptsGuard -PlayerDir $pinOkA).failed).Count -eq 0)
-  Set-Content -Path $pinMutFile -Encoding utf8 -Value '{ "session": "pin-ok-a", "side": "csharp" }'
+  Set-Content -Path $pinMutFile -Encoding utf8 -Value '{ "session": "pin-ok-a", "side": "csharp", "pin_attempts": "" }'
   $pinMutInfo = Get-M3PinAttemptsGuard -PlayerDir $pinOkA
   $pinMutRed = (@($pinMutInfo.failed) -contains 'pin_attempts_missing')
   Set-Content -Path $pinMutFile -Encoding utf8 -Value $pinOrigJson
   $pinRestoredGreen = (@((Get-M3PinAttemptsGuard -PlayerDir $pinOkA).failed).Count -eq 0)
   if (-not $pinPreGreen) { $failures += 'pin_mutation_pre_not_green' }
-  if (-not $pinMutRed) { $failures += 'pin_mutation_delete_field_not_red' }
+  if (-not $pinMutRed) { $failures += 'pin_mutation_empty_value_not_red' }
   if (-not $pinRestoredGreen) { $failures += 'pin_mutation_restore_not_green' }
-  Write-Output ("SELFTEST ⑱ pin 记账门（informational，owner 19:20）：attempts=2 绿 / attempts=3(重试) 绿+informational / 缺字段 红 / 形态坏 红 / 期望漂移 绿 / 嵌套对象 绿；改坏必红（删字段 红[{0}]）；prewarm -StopAfterCharCreated={1}" -f `
+  Write-Output ("SELFTEST ⑱ pin 记账门（informational，owner 19:20）：attempts=2 绿 / attempts=3(重试) 绿+informational / 旧会话无字段键 绿+informational / 键在但空/(off) 红 / 形态坏 红 / 期望漂移 绿 / 嵌套对象 绿；改坏必红（值清空 红[{0}]）；prewarm -StopAfterCharCreated={1}" -f `
     (@($pinMutInfo.failed) -join ','), (@($pair.prewarm_bot_args) -contains '-StopAfterCharCreated'))
 
   # ⑭ F-E（m3cs tick21）：驱动收尾等待——run_bots.ps1 的攻击序列「等 M3ATTSEQ done」离线自检
@@ -698,7 +708,7 @@ if ($SelfCheckNoStack) {
 
   Remove-Item -Recurse -Force $tmpRoot -ErrorAction SilentlyContinue
   if ($failures.Count -eq 0) {
-    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（攻击配置透传/默认关 + run_pair -DisableAutoPlay 耦合两向 + 攻击两相 pin pose/SQL（-PinMapName 透传含 MapName 断言） + pin SQL 可执行性（含改坏 a.IncHealth 必红 + 改坏 Hp=100000 越界必红） + pin 记账门（owner 19:20 降级 informational：attempts=2/3/漂移 绿 + 缺字段/形态坏 红 + 改坏必红删字段） + 预热相 -StopAfterCharCreated 透传两向 + 攻击 pin 无怪口径（R-1，按地图查提取件：生产 0137 绿/source_verified + 换回 map 0 必红 + 合成 0/1 行·声明漂移·缺 provenance 四向有牙） + 攻击 pin 非 MonGen AI 消费者口径（R-1 refine 15:05：生产 0137 绿/source_verified + 合成 有引用/声明漂移/缺 provenance/缺提取件 四向必红） + 入口/DiffOnly fail-closed + attack_diff selftest + 改坏 dmg/hit 必红 + Invoke-AttackAlign 返回值形态两处（F-J：⑧ 生产函数直接断言 + ⑮） + scoped_diff 14/14 + M-1 WARN 有牙齿 + M-2 attacker 精确选择 selftest + pin SQL 别名/列校验 + 种子注入断言（两侧 fail-closed）+ 攻击序列收尾等待（F-E） + attack 行缺 my 的 fail-closed（残差③））'
+    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（攻击配置透传/默认关 + run_pair -DisableAutoPlay 耦合两向 + 攻击两相 pin pose/SQL（-PinMapName 透传含 MapName 断言） + pin SQL 可执行性（含改坏 a.IncHealth 必红 + 改坏 Hp=100000 越界必红） + pin 记账门（owner 19:20 降级 informational：attempts=2/3/漂移/旧会话无字段键 绿 + 键在但空/(off)/形态坏 红 + 改坏必红值清空） + 预热相 -StopAfterCharCreated 透传两向 + 攻击 pin 无怪口径（R-1，按地图查提取件：生产 0137 绿/source_verified + 换回 map 0 必红 + 合成 0/1 行·声明漂移·缺 provenance 四向有牙） + 攻击 pin 非 MonGen AI 消费者口径（R-1 refine 15:05：生产 0137 绿/source_verified + 合成 有引用/声明漂移/缺 provenance/缺提取件 四向必红） + 入口/DiffOnly fail-closed + attack_diff selftest + 改坏 dmg/hit 必红 + Invoke-AttackAlign 返回值形态两处（F-J：⑧ 生产函数直接断言 + ⑮） + scoped_diff 14/14 + M-1 WARN 有牙齿 + M-2 attacker 精确选择 selftest + pin SQL 别名/列校验 + 种子注入断言（两侧 fail-closed）+ 攻击序列收尾等待（F-E） + attack 行缺 my 的 fail-closed（残差③））'
     exit 0
   }
   Write-Output ('SELFTEST_RED RED: ' + ($failures -join ', '))

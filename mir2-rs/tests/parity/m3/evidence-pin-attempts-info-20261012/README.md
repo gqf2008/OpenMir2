@@ -14,9 +14,12 @@ owner 2026-10-12 19:20 派（卡 `openmir2-m3-attack-pair-fixture`）：
 只是观测到的协变量（根因 = 全局 `M2Share.RandomNumber` 被并发噪声消费者共享）。
 
 - `mir2-rs/tests/parity/m3/gate_guards.ps1`
-  - `Get-M3PinAttemptsGuard` / `Test-M3PinAttemptsComparable`：`failed` 只保留
-    `pin_attempts_missing` / `_invalid` / `_baseline_invalid` / `_session_missing`；
-    `attempts >/< expected`、`expected` 漂移 ⇒ 只进 `informational`（`retried` 字段仍保留供汇总）。
+  - `Get-M3PinAttemptsGuard` / `Test-M3PinAttemptsComparable`：`failed` 只保留「**键在但值空/`(off)`/无 attempts**
+    （`pin_attempts_missing`）」「形态认不出（`_invalid`）」「baseline 坏 JSON（`_baseline_invalid`）」「会话缺失
+    （`_session_missing`）」；`attempts >/< expected`、`expected` 漂移 ⇒ 只进 `informational`（`retried` 仍保留供汇总）。
+  - **旧会话（baseline.json 根本没有 `pin_attempts` 键）⇒ `informational`、不再拒比**（收掉旧登记 Minor
+    「无字段旧会话被拒比」；owner 19:20「降级后旧会话不再被拒」）。⇒ 「键不存在（旧产物）」与「键在但值无效
+    （仪器写了字段却没落有效记账）」两个失败模式区分开，后者仍 fail-closed。
 - `mir2-rs/tests/parity/m3/attack_diff.py`
   - `pin_attempts` 子命令：解析出 `PIN_HOLD` 即 `rc=0`（`informational`/`retried` 仍打印）；无 `PIN_HOLD` 仍 `rc=2`。
 - `mir2-rs/tests/parity/m3/run_attack_pair.ps1`
@@ -46,8 +49,8 @@ owner 2026-10-12 19:20 派（卡 `openmir2-m3-attack-pair-fixture`）：
 
 | 文件 | 内容 | 结果 |
 |---|---|---|
-| `01-selftest-gate.txt` | `selftest_gate.ps1`（含 ⑨ pinacct informational 双向 + ⑩ prewarm 三向 + 改坏必红） | `total=61 failed=0` GREEN |
-| `02-attack-pair-selftest.txt` | `run_attack_pair.ps1 -SelfCheckNoStack`（含 ②b 透传 + ⑱ 降级 + ⑲ 缺 my） | `SELFTEST_RED GREEN` rc=0 |
+| `01-selftest-gate.txt` | `selftest_gate.ps1`（含 ⑨ pinacct informational（旧会话无键=绿 / 键空=红）+ ⑩ prewarm 三向 + 改坏必红） | `total=63 failed=0` GREEN |
+| `02-attack-pair-selftest.txt` | `run_attack_pair.ps1 -SelfCheckNoStack`（含 ②b 透传 + ⑱ 降级（旧会话无键=绿/键空=红）+ ⑲ 缺 my） | `SELFTEST_RED GREEN` rc=0 |
 | `03-attack-diff-selftest.txt` | `attack_diff.py selftest`（含 k-pin-retry **仍绿**） | `SELFTEST GREEN 30/30` |
 | `04-pin-attempts-real-csharp-185128.txt` | C# 侧 `pin_hold.txt` 原文（PIN_HOLD attempt=4） | 输入 |
 | `04-pin-attempts-recompute-before-after.txt` | 同一输入：改前 `rc=1` / 改后 `rc=0` / 无 PIN_HOLD `rc=2` | 改前/改后 |
@@ -65,3 +68,5 @@ C# 可编译性：`dotnet build src/BotSrv/BotSrv.csproj -c Release` = 0 error�
   `M3ATTSEQ done`/`M3BAGSEQ done` 收尾判据会 RED（fail-closed，不会静默绿）。
 - 预热相仍依赖 `run_bots -RequireCharCreated` 的「创建角色」标记（建角请求时落，不是服务端确认）——
   现有 `run_pair` 用 `SELECT COUNT(*) FROM characters` 复核建角成功，本片未改这一口径。
+- pin_attempts 降级后，**唯一保留的牙** = 「键在但值空/`(off)`/形态坏/baseline 坏 JSON/会话缺失」。旧会话（无键）
+  被容忍 ⇒ 若将来需要用旧会话做跨侧 peer，可直接用（不再是 Minor）。
