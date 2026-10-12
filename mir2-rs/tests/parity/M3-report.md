@@ -14,7 +14,7 @@
   （`SHA256SUMS.txt`，仓库字节口径；复核命令见 §5）。
 
 > **本报告不得被读成「M3 全部达成」**。① 十项里只有 3 项在本报告口径下算对齐（背包/装备、战斗、技能），
-> NPC/商店 为 `partial`，其余 6 项为 `not_covered`；② 24h 长跑 **未跑**；④ M3 门禁 `scoped_diff` 当前有一处已知 RED
+> NPC/商店 与 拍卖（⑩b，按 SellOff 口径）为 `partial`，邮件（⑩a）为 `oracle_absent`，其余 5 项为 `not_covered`；② 24h 长跑 **未跑**；④ M3 门禁 `scoped_diff` 当前有一处已知 RED
 > （已由 follow-up 卡 `openmir2-m3-final-acceptance` 的 F-2 轨承接，见 §4）。
 
 ---
@@ -32,10 +32,13 @@
 | 7 | 组队 / 交易 | 归属/分配/取消/掉线中断结果一致 | **not_covered** | **已有卡** `openmir2-m3-party-trade-align` |
 | 8 | 公会 / 攻城 | 建会/宣战费用时限/城门状态/自动结束逐项一致 | **not_covered** | **已有卡** `openmir2-m3-guild-castle-align` |
 | 9 | 英雄 / 宠物 | 召唤/升级/阵亡/经验分配/上限判定一致 | **not_covered** | **已有卡** `openmir2-m3-hero-pet-align` |
-| 10 | 邮件 / 拍卖 | 发送/到期/成交/退回，DB 落库字段级 diff=0 | **not_covered** | **已有卡** `openmir2-m3-mail-auction-align` |
+| 10a | 邮件 | 发送 / 到期 / 退回（§6 原文） | **`oracle_absent`（已登记 T-36）** | oracle 全仓无邮件实现（仅客户端开关 `boShowMail`）⇒ **不开实现卡**；Rust 与 oracle 一致地不实现 |
+| 10b | 拍卖 | 成交 / 退回（按 oracle 实际语义重划为「元宝寄售 SellOff」） | **partial**（oracle 链与判据已盘；世界侧 `CM_SELLOFF*` 派发 / `DealOffInfo` 世界态 / 帧未实现） | **已有卡** `openmir2-m3-mail-auction-align` + 承接卡 `-selloff-consignment-world` / `-selloff-goldsales-load-wire` / `-selloff-fixture-botsrv` |
 
 > 说明：§6 的 M3 判据表把「战斗」与「技能」列为两项；本表的 2/3 与卡 `openmir2-m3-combat-skills-align`
 > 的 ②③ 一一对应。§6「顺序」原文把两者并列写作「战斗/技能」，故十项计数以本表为准。
+> §6「⑩ 邮件/拍卖」原为一项；owner 2026-10-13 06:24 按 §6.0-3 重划口径后拆为 **10a（邮件 = `oracle_absent`）/ 10b（拍卖 = SellOff 口径）** 两行（**计数仍作一项**），
+> 其判据与 DB 落库现状见 [`m3/M3⑩邮件拍卖现状盘点报告-20261013.md`](m3/M3⑩邮件拍卖现状盘点报告-20261013.md)、登记见 `whitelist.md` 的 T-36。
 
 ### 1.1 背包 / 装备（covered）
 
@@ -178,11 +181,19 @@
   `SystemShare.WorldEngine.RegenMonsterByName` / 真栈探针而 deferred，属**技能召唤**而非系统级英雄/宠物对齐。
 - **承接**：**已有卡** `openmir2-m3-hero-pet-align`。
 
-### 1.10 邮件 / 拍卖（not_covered）
+### 1.10 邮件 / 拍卖（邮件 = `oracle_absent`；拍卖 = `partial`，按 SellOff 口径）
 
 - **判据（§6 原文）**：发送 / 到期 / 成交 / 退回，DB 落库字段级 diff = 0。
-- **状态：`not_covered`**（本片未跑，仓内未见承接卡）。
-- **承接**：**已有卡** `openmir2-m3-mail-auction-align`。
+- **邮件：`oracle_absent`（已登记 `whitelist.md` T-36）**。oracle 全仓无邮件实现（只有客户端开关 `boShowMail`，
+  无实体 / 无 `CM_*`·`SM_*` / 无表 / 无调用链）⇒ 「发送 / 到期 / 退回」无行为可对齐；owner 2026-10-13 06:24 裁决：
+  **不开实现卡**，Rust 与 oracle 一致地不实现（发相关包同样无响应/忽略）。
+- **拍卖：`partial`**。oracle 实为**只读且坏的 P2P 元宝寄售（SellOff）**（`M2Share.SellOffItemList`/`DealOffInfo` +
+  `SaleDeal`/`SellOffConfirm` + 3 个 `RM_*` + 7 个 `CM_SELLOFF*` 派发；`goldsales` 加载只读、读错列名、`save` 调用点全注释）；
+  5700 `MarketSystem` 是**死接线**（Rust M1 S4b 已 1:1，非缺口）。Rust **世界侧派发 / 世界态 / 帧 = 未实现**
+  （`rg -n 'CM_SELLOFF|SellOffItem|DealOffInfo' mir2-rs/{bins/game-svr/src,crates/world/src,crates/shared/src}` = no match）。
+- **承接**：**已有卡** `openmir2-m3-mail-auction-align`；实现/夹具已拆 3 张承接卡
+  `-selloff-consignment-world` / `-selloff-goldsales-load-wire` / `-selloff-fixture-botsrv`。
+- **盘点报告**：[`m3/M3⑩邮件拍卖现状盘点报告-20261013.md`](m3/M3⑩邮件拍卖现状盘点报告-20261013.md)。
 
 ---
 
@@ -285,9 +296,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_ru
 | 组队 / 交易（§6 顺序 ⑦） | `not_covered` | **已有卡** `openmir2-m3-party-trade-align` |
 | 公会 / 攻城（§6 顺序 ⑧） | `not_covered` | **已有卡** `openmir2-m3-guild-castle-align` |
 | 英雄 / 宠物（§6 顺序 ⑨） | `not_covered` | **已有卡** `openmir2-m3-hero-pet-align` |
-| 邮件 / 拍卖（§6 顺序 ⑩） | `not_covered` | **已有卡** `openmir2-m3-mail-auction-align` |
+| 邮件（§6 顺序 ⑩a） | **`oracle_absent`**（已登记 T-36） | **不开实现卡**；Rust 与 oracle 一致地不实现（oracle 无此功能） |
+| 拍卖（§6 顺序 ⑩b，元宝寄售 SellOff） | `partial`（oracle 链/判据已盘；世界侧派发未实现） | **已有卡** `openmir2-m3-mail-auction-align` + 承接卡 `-selloff-consignment-world` / `-selloff-goldsales-load-wire` / `-selloff-fixture-botsrv` |
 | **300 假人 24h 长跑**（DoD②） | **`not_run`**（等 owner 收拢窗口；方案见 §2） | 本卡（`openmir2-m3-final-acceptance`）自身，窗口发放后开跑 |
-| §6 M3 十项「全绿」总判 | **未达成**（3 covered / 1 partial / 6 not_covered） | 上述各承接卡收敛后回本卡复核 |
+| §6 M3 十项「全绿」总判 | **未达成**（3 covered / 2 partial / 1 oracle_absent / 5 not_covered；⑩ 拆 10a/10b 计作一项） | 上述各承接卡收敛后回本卡复核 |
 
 ## 5. 本片命令与证据四件套
 

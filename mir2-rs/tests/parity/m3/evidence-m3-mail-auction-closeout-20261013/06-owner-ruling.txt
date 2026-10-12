@@ -1,0 +1,23 @@
+### entry oid=924c9c1d3fd81ab1f5e41318b692505a180b34f6 kind=comment ts=1791833212
+{
+  "note": "goal 文案订正：模板里的「建/jie 用夹具」应为「建**可复用**夹具」（同一模板笔误）；判据/DoD 各条不受影响。本卡第一步 = 现状盘点（oracle 调用链 + 行号 + Rust 现状 + 未实现项的承接卡建议），未盘点完不动实现写集。"
+}
+
+### entry oid=1bd1361c6ce498fa3fcf89d9d1605d355106f126 kind=comment ts=1791843875
+{
+  "auction": "**拍卖 = 按 oracle 实际语义重划为「元宝寄售（SellOff）」**：oracle 没有带出价/佣金的拍卖行，实际是**只读且坏的 P2P 元宝寄售**（`M2Share.SellOffItemList`/`DealOffInfo` + `SaleDeal`/`SellOffConfirm` + 7 个 `CM_SELLOFF*` 派发；`goldsales` 加载只读、读错列名、save 调用点全注释）。⇒ 判据改为「**上架/成交/取消/退回** 逐项与 oracle 一致（含上述缺陷照搬）」，由新开的三张卡承接：`openmir2-m3-selloff-consignment-world`(1) / `openmir2-m3-selloff-goldsales-load-wire`(2) / `openmir2-m3-selloff-fixture-botsrv`(3)。",
+  "decision": "owner 对 ⑩ 的两项 **§6.0-3 口径重划** 裁决（盘点 §3/§4.1 点名要 owner 定）",
+  "mail": "**邮件 = `oracle_absent`，判据重划并登记**：oracle 全仓**没有任何邮件实现**（只有客户端界面开关 `boShowMail`，无实体/无 `CM_*`/`SM_*`/无表/无调用链）。⇒ ① **不开任何 `openmir2-m3-mail-*` 实现卡**（开卡 = 自行发明一套邮件，直接违反「行为等价优先」）；② §6 的「邮件：发送/到期/退回」在本项目**按 `oracle_absent` 记分**：Rust 侧必须与 oracle 一致地**不实现**（客户端若发相关包 ⇒ 与 C# 同样无响应/忽略，且要有断言钉住）；③ 要求本卡在收口时把这条写进 `whitelist.md`（新 `T-*`：邮件判据 = oracle_absent，附 `src/` 全仓 no-match 证据）并在 `M3-report.md` 十项表里把 ⑩ 拆成「邮件：oracle_absent（已登记）」+「拍卖：按 SellOff 口径」。",
+  "not_downgraded": true,
+  "not_open": "**明确不开**：`openmir2-m3-mail-*`（无物可对）、`openmir2-m3-market-5700-worldclient`（5700 世界侧是 oracle 死接线，Rust DBSrv 5700 面已 1:1；再实现只是对齐死代码、无验收价值）。若将来 owner 明确要求「死代码 byte 级等价」再另议。",
+  "report_update": "收口时请把上面两条**同时**写进：`whitelist.md`（邮件 = oracle_absent 的新 T-*）+ `M3-report.md` ⑩ 行（拆成邮件/拍卖两栏）+ 本卡 `status` 的 work 文本。"
+}
+
+### entry oid=1764853319b51da3fb23b8e4db52a28ad06b2382 kind=status ts=1791843889
+{
+  "branch": "worktree-m3-mail-auction",
+  "owner": "openmir2-worker-5",
+  "status": "in-progress",
+  "work": "DoD① 盘点已合入 master 4d276812（approve reviewer-5 @d7db7e06）。**owner 已按 §6.0-3 重划口径并落卡 comment**：① **邮件 = `oracle_absent`**（oracle 全仓无邮件实现）⇒ **不开实现卡**、按登记记分、Rust 侧与 oracle 一致地不实现；② **拍卖 = 按 oracle 实际语义重划为「元宝寄售 SellOff」**（上架/成交/取消/退回 + 照搬只读/坏列名/无 save 的缺陷）⇒ 开 3 张卡：`-selloff-consignment-world`(1) / `-selloff-goldsales-load-wire`(2) / `-selloff-fixture-botsrv`(3)；③ **明确不开** `-mail-*` 与 `-market-5700-worldclient`。**剩余**：DoD②③ = 夹具（承接卡 3）+ 真机对拍（要窗口）；收口时把上面两条**同时**写进 `whitelist.md`（邮件新 T-*）+ `M3-report.md` ⑩ 行（拆两栏）。",
+  "worktree": "m3cs"
+}

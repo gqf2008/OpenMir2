@@ -176,6 +176,20 @@ M0 金标准验收状态（2026-10-10）：① 逐字节回放 0 差异、② �
 | T-34 | **夹具口径（本片交付）**：`mir2-rs/tests/parity/m3/drop-exp/` —— 比较器 `drop_exp_diff.py`（`diff` 多重集/逐槽位 + **不 i32 截断**；`selftest` 12/12 含 fail-closed 与改坏必红）＋ 入口 `run_drop_exp_pair.ps1`（`-SelfCheckNoStack` 7/7、零端口；real-run fail-closed）。场景 `drop_exp_scenario.json`：`kills=100`、`seed=42`、`map=0137`、`monster=稻草人`、attacker pose `(17,20) dir=2`。 | 判据本体已完整、离线可复跑；**真机 100 杀等 owner 发窗口**，且需 T-31 的承接卡落地后才能产生可判原始件（BotSrv 驱动亦未建）。证据 `m3/evidence-m3-drop-exp-inventory-20261013/**`（含 `02` 外部改坏必红：把比较器截成 i32 ⇒ `i32-truncation-red` FAIL、rc=1）。 | 作者登记（worker-4）；**待独立 principal 复核** |
 | T-35 | **隔离口径降级登记（需 owner 确认）**：M3②③ 的 R-1 门 `Test-M3MonGenEmpty`/`Test-M3MapNoAiConsumers` 在本卡只证「**地图自身**无消费者」，**不再**等价于「全场景零怪物」——本卡恰恰要刷怪。夹具在 0137 上**只** spawn 固定的一只固定怪（承接卡 2 落地后由 MonGen 驱动 + `-PinMonster` 控制），除本夹具 spawn/掉落/击杀路径外零 RNG 消费者。 | 这是**夹具/场景口径**变更，不是实现差异；需 owner 在承接卡落地时确认新隔离口径（否则「同种子 ⇒ 逐 k 相同」的前提在本场景不成立）。 | 作者登记（worker-4）；**待 owner 裁决 / 独立 principal 复核** |
 
+## M3⑩ 登记（邮件 / 拍卖；卡片 `openmir2-m3-mail-auction-align`，issue `4125cc72`，2026-10-13）
+
+> 盘点报告：[`m3/M3⑩邮件拍卖现状盘点报告-20261013.md`](m3/M3⑩邮件拍卖现状盘点报告-20261013.md)。
+> owner 于 2026-10-13 06:24 对 §6 判据做两条 **§6.0-3 口径重划**（裁决见该卡 comment `1bd1361c`）：
+> **邮件 = `oracle_absent`**；**拍卖 = 按 oracle 实际语义重划为「元宝寄售（SellOff）」**。本片零 `.rs`/零 `src/**`/零 `sql/**`、未起栈。
+
+| 编号 | 差异/豁免点 | 为什么无害 / 处置 | 谁审的 |
+| --- | --- | --- | --- |
+| T-36 | **邮件 = `oracle_absent`（§6.0-3 owner 裁决）**：oracle 全仓**没有任何邮件实现**——`src/` 里与 mail 相关的只有客户端界面开关（`GameSettingConf.cs:74/77/138` 的 `ShowMail`、`OpenMir2/Packets/ClientPackets/ClientConf.cs:20` 的 `boShowMail`），**无邮件实体、无 `CM_*`/`SM_*`、无表、无调用链**；`sql/` 里命中的 `account_protection.EMail` 是账号保护邮箱（非游戏邮件）；`rg 'CM_MAIL|SM_MAIL|MAIL' src/OpenMir2/Packets/` = no match。⇒ §6 的「发送 / 到期 / 退回」**没有 oracle 行为可对齐**。**处置**：① **不开任何 `openmir2-m3-mail-*` 实现卡**（开卡 = 自行发明一套邮件，违反「行为等价优先」）；② Rust 侧与 oracle **一致地不实现**（客户端若发相关包 ⇒ 与 C# 同样无响应/忽略，且要有断言钉住）；③ M3 计分按 `oracle_absent` 记。 | **不是差异，是「无物可对」**：两侧都不存在该功能，不存在可登记的行为差。**取证**：`rg -i 'mail' src/ --glob '*.cs'`（仅配置开关）、`rg '邮件' src/ --glob '*.cs'`（仅 `MarketSystem/Services/MarketService.cs:387` 一条 TODO）、`grep -i mail sql/`（仅账号保护邮箱）。原始件见盘点报告 §1.A 与证据包 `evidence-m3-mail-auction-inventory-20261013/00-oracle-chain-lines.txt`/`01-rust-status-greps.txt`。 | owner §6.0-3 裁决（`1bd1361c`，2026-10-13 06:24）；报告盘点片 approve reviewer-5 `10aeeae0`、合入 master `4d276812`；**待独立 principal 复核本登记行** |
+
+> 拍卖（元宝寄售 SellOff）本批**不登记 T-***：它是有 oracle 实现的活路径（世界侧派发/世界态/帧在 Rust 未实现，属**未实现**而非行为差异），
+> 承接卡 `openmir2-m3-selloff-consignment-world` / `-selloff-goldsales-load-wire` / `-selloff-fixture-botsrv` 落地前，
+> 不产生可对拍差异；已 1:1 复刻的只读且坏的 `goldsales` 加载（读错列名、无 save）另见 D-5 / B-5。
+
 ## M1 S4b 登记（DBSrv 6000 `DataService` 面 + 5700 `MarketService` 面 + `TimedService` 缓存回写，2026-10-12）
 
 > 卡 `openmir2-m1-dbsrv-6000-face`；交付说明 `docs/M1-S4b-DBSrv-6000-交付说明.md`。

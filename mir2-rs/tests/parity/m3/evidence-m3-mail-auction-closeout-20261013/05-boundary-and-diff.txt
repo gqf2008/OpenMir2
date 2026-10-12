@@ -1,0 +1,13 @@
+# git diff --stat (working tree vs 4d276812)
+ mir2-rs/tests/parity/M3-report.md                  | 26 ++++++++++++++++------
+ ...47\202\271\346\212\245\345\221\212-20261013.md" | 18 +++++++++++++++
+ mir2-rs/tests/parity/whitelist.md                  | 14 ++++++++++++
+ 3 files changed, 51 insertions(+), 7 deletions(-)
+
+# git diff --name-only -- src sql MirClient mir2-rs/crates mir2-rs/bins  (expect EMPTY)
+(end boundary)
+
+# changed files (name-status)
+M	mir2-rs/tests/parity/M3-report.md
+M	"mir2-rs/tests/parity/m3/M3\342\221\251\351\202\256\344\273\266\346\213\215\345\215\226\347\216\260\347\212\266\347\233\230\347\202\271\346\212\245\345\221\212-20261013.md"
+M	mir2-rs/tests/parity/whitelist.md
