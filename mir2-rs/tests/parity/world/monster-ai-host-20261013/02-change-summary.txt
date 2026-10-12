@@ -1,0 +1,30 @@
+# M3④-实现 C 第 ② 片（宿主 AI 接线）：改动清单
+
+base = 交付时 `refs/heads/master`（B 分片③ F-1 返工合入后的 `62fffb2e`）。
+分支 `monster-ai-host`，head 见卡上 `patch` 条目。
+
+## 写集（`git diff --name-status <base>..HEAD`）
+
+| 文件 | 变更 |
+| --- | --- |
+| `mir2-rs/crates/world/src/entity.rs` | `AnimalState::seed_from_spawn(dir, cool_eye, ctor, now)`（生成期取数 → AI 初始态）；新增 `Entity.hide_mode`（oracle `HideMode`，与 `invisible`/`fixed_hide_mode` 三字段分开） |
+| `mir2-rs/crates/world/src/world.rs` | `spawn_monster_precomputed` 追加 `dir: u8` / `cool_eye: bool` 参数，落库时调 `seed_from_spawn`（**仍零取数**） |
+| `mir2-rs/crates/world/src/monai.rs` | `search_target` 隐藏门改读 `hide_mode`（reviewer-6 Important）；初值 `n10 = 999` + 删不可达的重复 `if t.death { continue; }`（oracle 第二道 `if (!baseObject.Death)` 不可达，照搬时省略） |
+| `mir2-rs/bins/game-svr/src/mongen.rs` | `WorldMonsterSink::spawn_monster` 转发 `req.dir`/`req.cool_eye`（原先丢弃）；新增 `enable_production_monster_ai(world)`（可判据/可改坏的接缝） |
+| `mir2-rs/bins/game-svr/src/main.rs` | `sim_loop` 起世界后调 `enable_production_monster_ai(&mut world)` + 一行 `glog!` |
+| `mir2-rs/tests/parity/world/monster-ai-host-20261013/**` | 本证据包 |
+
+**零** `src/ sql/ MirClient` 改动（边界见 `20-boundary.txt` 复现命令）。
+
+## 为什么在 C 里做隐藏门收口
+
+reviewer-6 在 C 第 ① 片签了 `comment{decision:skip, covered_by: <approve>}`（其 Important：`SearchTarget`
+隐藏门用了 `fixed_hide_mode` 而非 oracle 的 `HideMode`；要求「二选一：加 `hide_mode` 字段 / 登记白名单」）。
+本片启用生产 AI 后 `search_target` 每 tick 都会跑 ⇒ 顺手按**选项①**收口（1:1），不留未登记偏差。
+
+## 与原 B 片注释的订正
+
+B 分片③ 的注册偏差「`dir`/`cool_eye` 不入实体内存（AOI 面属承接卡 C）」在本片**关闭**：
+`dir`/`cool_eye` 已随生成结果写进 `Entity.ai`。**怪物帧面**（`SM_TURN`/`SM_FEATURECHANGED` 的
+monster `CharDesc`：`MonsterObject.GetFeature = MakeMonsterFeature(RaceImg, MonsterWeapon, Appr)`、
+`GetShowName`、`GetChrColor`）**仍属后续分片**（登记在 README「残留」）。

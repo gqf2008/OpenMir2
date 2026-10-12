@@ -1,0 +1,48 @@
+# M3④-实现 C 第 ② 片（宿主 AI 接线）：oracle 锚点（行号复核于 2026-10-13，路径 = 仓库根相对）
+
+本片只做「生成期取数 → 实体 AI 初始态」的接缝 + 生产宿主开闸 + `SearchTarget` 隐藏门 1:1。
+AI 每 tick 的语义锚点见第 ① 片证据 `../monster-ai-20261013/01-oracle-anchors.txt`（不重复）。
+
+## A. 构造链落在实体上的初始值（本片 `AnimalState::seed_from_spawn`）
+
+| 字段 | oracle 赋值 | 行号 |
+| --- | --- | --- |
+| `Dir` | `cert.Dir = M2Share.RandomNumber.RandomByte(8)` | `src/GameSrv/Word/WorldServer.MonGen.cs:740` |
+| `CoolEye` | `if (Random(100) < CoolEyeCode) cert.CoolEye = true;` | `WorldServer.MonGen.cs:745-747` |
+| `RunTick` | `RunTick = HUtil32.GetTickCount() + Random(1500)` | `src/M2Server/Actor/BaseObject.cs:439` |
+| `SearchTime`（Base） | `SearchTime = Random(2000) + 2000` | `BaseObject.cs:441` |
+| `SearchTick` | `SearchTick = HUtil32.GetTickCount()` | `BaseObject.cs:442` |
+| `AttackTick` | `AttackTick = GetTickCount() - Random(3000)` | `src/M2Server/Actor/AnimalObject.cs:76` |
+| `WalkTick` | `WalkTick = GetTickCount() - Random(3000)` | `AnimalObject.cs:77` |
+| `SearchEnemyTick` | `SearchEnemyTick = GetTickCount()` | `AnimalObject.cs:78` |
+| `RunAwayStart` / `RunAwayTime` | `= GetTickCount()` / `= 0` | `AnimalObject.cs:80-81` |
+| `WalkWaitTick` / `WalkWaitLocked` | `= GetTickCount()` / `= false` | `AnimalObject.cs:84-85` |
+| `TargetX` / `TargetY` | `TargetX = -1`（`TargetY` 保持 0） | `AnimalObject.cs:74` |
+| `SearchTime`（Derived） | `SearchTime = 3000 + Random(2000)` | `src/M2Server/Monster/MonsterObject.cs:57` |
+| `ThinkTick` | `ThinkTick = HUtil32.GetTickCount()` | `MonsterObject.cs:55` |
+| `NextHitTime` / `WalkSpeed` | `= 2000` / `= 1400` | `BaseObject.cs:446-447` |
+| `RunTick` 消费 | `BaseObject.Run()` 的 `RunTick < now ⇒ RunTick = now + RunTime` 段 | `BaseObject.Base.cs:25-...` |
+
+**取数时机**：以上构造抽 + `cert.Dir` + `CoolEye` 全部在 `CreateMonster` 内、实体 `Initialize()`（`:750`）
+之前完成；本片把**抽出的值**（`MonsterCtorDraws` + `dir`/`cool_eye`）以零取数方式写进 `Entity.ai`，
+**不在每 tick 的 AI 里重抽**（与 Claim B 的 site/order 账本一致）。
+
+## B. `SearchTarget` 的隐藏门（reviewer-6 Important 收口）
+
+- `AnimalObject.SearchTarget()`  src/M2Server/Actor/AnimalObject.cs:388-423
+  - 清理支 :394-397（`Death || Ghost || 异图 || |Δx|>15 || |Δy|>15` ⇒ `ClearTargetCreat`）
+  - 目标支 :398-410：`if (!baseObject.Death) { if (IsProperTarget(baseObject) && (!baseObject.HideMode || CoolEye)) {...} }`
+    - **隐藏门读 `HideMode`**（`BaseObject.cs:437` 的 `HideMode`），**不是** `FixedHideMode`
+      （`FixedHideMode` 只被 `Envirnoment.GetXYObjCount`（`Envirnoment.cs:1062-1093`）与
+      `MonsterObject.Run`（`MonsterObject.cs:253`）读）
+  - 最近者：`int n10 = 999;`（:390）—— 全部候选 `nC >= 999` 时一个都不选
+- 本仓字段映射：`Entity.invisible` = oracle `Invisible`（`is_proper_target` 用）、
+  `Entity.fixed_hide_mode` = oracle `FixedHideMode`、**新增** `Entity.hide_mode` = oracle `HideMode`。
+
+## C. 宿主开闸（生产 vs 合成）
+
+- oracle 的 `ProcessMonsters` 跑在**独立线程**（`src/GameSrv/Word/WorldServer.MonGen.cs:192-253`），
+  与主 tick 并发；本骨架单线程（设计文档 §4.2 硬约束①）⇒ `World::tick` 在「死亡结算之后、AOI 之前」
+  按实体槽位顺序驱动 `monster_ai_tick`（第 ① 片）。
+- 合成 golden（`tests/parity/world/scenarios/*.json`）**不含**该线程 ⇒ 本片保持 `ai_enabled` 缺省 false；
+  生产宿主 `bins/game-svr` 的 `sim_loop` 经 `enable_production_monster_ai` 显式开闸。

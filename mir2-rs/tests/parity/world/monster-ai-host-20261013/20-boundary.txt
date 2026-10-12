@@ -1,0 +1,11 @@
+# 边界：本片不得改 oracle（src/ sql/ MirClient）——命令 + 原始输出（cwd = 仓库根）
+
+$ git diff --name-only <base=62fffb2e> HEAD -- src sql MirClient
+(空 = 通过)
+
+$ git diff --name-status 62fffb2e HEAD
+M	mir2-rs/bins/game-svr/src/main.rs
+M	mir2-rs/bins/game-svr/src/mongen.rs
+M	mir2-rs/crates/world/src/entity.rs
+M	mir2-rs/crates/world/src/monai.rs
+M	mir2-rs/crates/world/src/world.rs

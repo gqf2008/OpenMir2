@@ -1,0 +1,12 @@
+# 改坏必红 RC-C2-A：把 enable_production_monster_ai 改成空函数（宿主不再开闸）
+# 变异点：bins/game-svr/src/mongen.rs::enable_production_monster_ai
+# 命中用例：game-svr mongen::tests::production_host_enables_monster_ai
+
+$ CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test -p game-svr --lib --offline production_host_enables_monster_ai
+running 1 test
+test mongen::tests::production_host_enables_monster_ai ... FAILED
+thread 'mongen::tests::production_host_enables_monster_ai' (13724) panicked at bins\game-svr\src\mongen.rs:1279:9:
+生产宿主必须开闸（World::tick 才会驱动 monster_ai_tick）
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 103 filtered out; finished in 0.00s
+error: test failed, to rerun pass `-p game-svr --lib`

@@ -33,12 +33,11 @@
 //!   本模块**不重复**；[`monster_run`] 只做 AI（Think/Walk/Attack/Wondering）。
 //! - **构造期 RNG**：oracle 在 `new MonsterObject()` 时先抽 `BaseObject` 的 `Random(1500)`+
 //!   `Random(2000)`、`AnimalObject` 的 `Random(3000)`×2、`MonsterObject` 的 `Random(2000)`
-//!   （`BaseObject.cs:440-442`、`AnimalObject.cs:76-79`、`MonsterObject.cs:52-58`），**再**由
-//!   `CreateMonster` 抽 `RandomByte(8)` 的 `Dir`（`WorldServer.MonGen.cs:740`）。当前
-//!   `crates/world/src/mongen.rs` 的 `MonsterCreator` 契约只声明了 Dir/掉落/CoolEye 三抽，
-//!   构造期 5 抽**尚未建模** ⇒ 真机 100  kill 的 RNG 次序会整体提前。该缺口在本片证据
-//!   `02-constructor-rng-gap.txt` 定性，属 `openmir2-m3-mongen-load-spawn`/本卡的**共同**待办，
-//!   需两侧模型同步改（本片不单方面改动被审代码）。
+//!   （`BaseObject.cs:439/441`、`AnimalObject.cs:76/77`、`MonsterObject.cs:65`），**再**由
+//!   `CreateMonster` 抽 `RandomByte(8)` 的 `Dir`（`WorldServer.MonGen.cs:740`）。该缺口已由
+//!   卡 `openmir2-m3-mongen-load-spawn` 的 F-1 返工闭合：生成路径把构造抽存进
+//!   `Entity.ctor_draws`（[`MonsterCtorDraws`]），AI 在宿主接线时只**消费**（
+//!   [`AnimalState::seed_from_spawn`](crate::entity::AnimalState::seed_from_spawn)），**不重抽**。
 //! - **专用怪子类**（`ATMonster`/`BeeQueen`/... 在各自 `Run()` 里调 `SearchTarget`）与
 //!   `Mission`/`RunAway`/`Master`/`CrazyMode`/`CheckRoyalty` 分支**未建模**：默认值下它们
 //!   恒不命中，与「普通 `MonsterObject`、无 master、无任务」的 oracle 执行路径一致。
@@ -191,7 +190,10 @@ pub fn search_target(world: &mut World, actor_id: i32) {
     else {
         return;
     };
-    let mut best: Option<(i32, i32)> = None;
+    // oracle `int n10 = 999;`（`AnimalObject.cs:390`）：全部候选距离都 ≥999 时**一个都不选**
+    // （±15 窗口内曼哈顿距离上限 30，不可达，但按 1:1 保留该初值）。
+    let mut n10 = 999;
+    let mut best: Option<i32> = None;
     let mut to_clear: Vec<i32> = Vec::new();
     for target_id in visible {
         let Some(t) = world.entities.get(target_id) else {
@@ -207,17 +209,18 @@ pub fn search_target(world: &mut World, actor_id: i32) {
             to_clear.push(target_id);
             continue;
         }
-        if t.death {
-            continue;
-        }
+        // oracle 在 `ClearTargetCreat` 之后还写了一遍 `if (!baseObject.Death)`（`AnimalObject.cs:402`）：
+        // 上面的 `baseObject.Death` 已 `continue` ⇒ 该层不可达（照搬时省略，行为等价）。
+        // 隐藏门读的是 `HideMode`（**不是** `FixedHideMode`，后者只用于 `GetXYObjCount`/`Run`）。
         let proper = world
             .entities
             .get(actor_id)
-            .is_some_and(|a| is_proper_target(a, t) && (!t.fixed_hide_mode || cool_eye));
+            .is_some_and(|a| is_proper_target(a, t) && (!t.hide_mode || cool_eye));
         if proper {
             let dist = (cx - t.x).abs() + (cy - t.y).abs();
-            if best.is_none_or(|(bd, _)| dist < bd) {
-                best = Some((dist, target_id));
+            if dist < n10 {
+                n10 = dist;
+                best = Some(target_id);
             }
         }
     }
@@ -227,7 +230,7 @@ pub fn search_target(world: &mut World, actor_id: i32) {
             e.visible_actors.retain(|v| !to_clear.contains(&v.target));
         }
     }
-    if let Some((_, target_id)) = best {
+    if let Some(target_id) = best {
         set_target_creature(world, actor_id, target_id);
     }
 }
@@ -721,6 +724,44 @@ mod tests {
             2,
             "重复可见项保留"
         );
+    }
+
+    /// **reviewer-6 的 Important 收口（`AnimalObject.cs:402`）**：`SearchTarget` 的隐藏门读的是
+    /// `HideMode`，**不是** `FixedHideMode`。
+    ///
+    /// - `hide_mode=true && cool_eye=false` ⇒ 不得被选为目标（oracle 的 `(!HideMode || CoolEye)` 不成立）；
+    /// - `hide_mode=false && fixed_hide_mode=true` ⇒ **可以**被选为（oracle 该函数不看 `FixedHideMode`）；
+    /// - `hide_mode=true && cool_eye=true` ⇒ 可以被选（`CoolEye` 破隐身）。
+    ///
+    /// 红检：把门改回 `fixed_hide_mode` ⇒ 第 1/3 条断言必红。
+    #[test]
+    fn search_target_hide_gate_reads_hide_mode_not_fixed_hide_mode() {
+        fn run(hide_mode: bool, fixed: bool, cool_eye: bool) -> (i32, Option<i32>) {
+            let mut world = World::new(60, 60);
+            let mid = monster(&mut world, 10, 10);
+            world.entities.get_mut(mid).unwrap().ai.cool_eye = cool_eye;
+            let target = player(&mut world, 12, 10);
+            {
+                let t = world.entities.get_mut(target).unwrap();
+                t.hide_mode = hide_mode;
+                t.fixed_hide_mode = fixed;
+            }
+            world.entities.get_mut(mid).unwrap().visible_actors = vec![VisibleBaseObject {
+                target,
+                flag: VisibleFlag::Show,
+            }];
+            search_target(&mut world, mid);
+            (target, world.entities.get(mid).unwrap().ai.target_creature)
+        }
+        assert_eq!(run(true, true, false).1, None, "HideMode 挡住：不得选中");
+        let (target, picked) = run(false, true, false);
+        assert_eq!(
+            picked,
+            Some(target),
+            "FixedHideMode 不属该门 ⇒ 照选（与 oracle 1:1）"
+        );
+        let (target, picked) = run(true, true, true);
+        assert_eq!(picked, Some(target), "CoolEye 破 HideMode");
     }
 
     /// `GotoTargetXY`：进函数先 `WalkTo(主方向)`，**无条件**抽一次 `Random(3)`；

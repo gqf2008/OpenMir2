@@ -1,0 +1,37 @@
+# M3④-实现 C 第 ② 片判据：宿主 AI 接线 + 隐藏门（原始输出，cwd = mir2-rs）
+# head = 15203a2f34c7e297d3a11317d3abefaa91f88fab
+
+$ CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test -p game-svr --lib --offline mongen
+running 16 tests
+test mongen::tests::create_monster_unknown_race_consumes_nothing ... ok
+test mongen::tests::create_monster_missing_map_consumes_nothing ... ok
+test mongen::tests::entries_from_envir_field_mapping ... ok
+test mongen::tests::create_monster_cool_eye_threshold ... ok
+test mongen::tests::create_monster_terrain_shift_only_when_cell_unwalkable ... ok
+test mongen::tests::create_monster_deer_branch_matches_oracle ... ok
+test mongen::tests::create_monster_chicken_consumes_random_3500_then_dir_drops_cool_eye ... ok
+test mongen::tests::monster_table_lookup_is_ordinal_ignore_case ... ok
+test mongen::tests::host_venture_server_disables_regen ... ok
+test mongen::tests::host_sentinel_first_slot_is_skipped_by_regen ... ok
+test mongen::tests::host_start_and_step_regen_one_monster ... ok
+test mongen::tests::monster_constructor_values_match_oracle_order ... ok
+test mongen::tests::monster_constructor_draw_count_matches_oracle_per_race ... ok
+test mongen::tests::mon_gen_config_reads_oracle_keys_with_bom ... ok
+test mongen::tests::production_host_enables_monster_ai ... ok
+test mongen::tests::world_monster_sink_seeds_ai_from_spawn_request ... ok
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 88 filtered out; finished in 0.00s
+
+$ CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test -p mir2-world --lib --offline
+running 50 tests
+test monai::tests::wondering_turn_branch_matches_oracle_draw_order ... ok
+test monai::tests::think_sets_dup_mode_when_cell_has_two_objects ... ok
+test monai::tests::goto_target_xy_walks_and_consumes_one_random3 ... ok
+test monai::tests::wondering_gate_nonzero_consumes_exactly_one_draw_no_move ... ok
+test monai::tests::wondering_walk_branch_moves_and_keeps_dir ... ok
+test monai::tests::search_target_picks_nearest_and_clears_invalid ... ok
+test monai::tests::monster_ai_tick_is_slot_ordered_and_deterministic ... ok
+test monai::tests::search_target_hide_gate_reads_hide_mode_not_fixed_hide_mode ... ok
+test monai::tests::monster_ai_is_opt_in_and_off_by_default ... ok
+test world::tests::budget_monster_drops_matches_spawn_monster_now_drop_budget ... ok
+test world::tests::spawn_monster_precomputed_consumes_no_rng ... ok
+test result: ok. 50 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s

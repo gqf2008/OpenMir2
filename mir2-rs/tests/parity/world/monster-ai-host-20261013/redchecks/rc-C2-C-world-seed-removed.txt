@@ -1,0 +1,14 @@
+# 改坏必红 RC-C2-C：spawn_monster_precomputed 不再把生成期取数写进 AI 初始态
+# 变异点：crates/world/src/world.rs::spawn_monster_precomputed
+# 命中用例：mir2-world world::tests::spawn_monster_precomputed_consumes_no_rng
+
+$ CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test -p mir2-world --lib --offline spawn_monster_precomputed_consumes_no_rng
+running 1 test
+test world::tests::spawn_monster_precomputed_consumes_no_rng ... FAILED
+thread 'world::tests::spawn_monster_precomputed_consumes_no_rng' (28928) panicked at crates\world\src\world.rs:1575:9:
+assertion `left == right` failed: dir 必须是 CreateMonster 的 cert.Dir
+  left: 0
+ right: 5
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 49 filtered out; finished in 0.00s
+error: test failed, to rerun pass `-p mir2-world --lib`

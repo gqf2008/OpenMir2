@@ -600,8 +600,9 @@ impl World {
     /// 与 [`World::spawn_monster_now`] 的唯一差别是「不自己抽掉落」——用于
     /// `RegenMonsters` 的 `CreateMonster` 回调（拖到 tick 里再抽会与 oracle 的 interleaving 不同）。
     /// `ctor` = 构造函数链已抽出的值（[`crate::entity::MonsterCtorDraws`]），随生成结果落实体；
-    /// `dir`/`cool_eye` 属 AOI 实体面（承接卡 `openmir2-m3-monster-ai-tick`），本骨架的
-    /// `Entity` 尚未建模，故**此处登记为不入参与返回值的差值**（接线层已按 oracle 取数）。
+    /// `dir`/`cool_eye` = `CreateMonster` 的 `cert.Dir = RandomByte(8)`（`WorldServer.MonGen.cs:740`）
+    /// 与 `CoolEye`（`:745-747`）——与本函数**同时**作为生成期取数落进 `Entity.ai` 的初始态
+    /// （[`crate::entity::AnimalState::seed_from_spawn`]），供 `World::tick` 的 AI 消费。
     #[allow(clippy::too_many_arguments)]
     pub fn spawn_monster_precomputed(
         &mut self,
@@ -621,6 +622,8 @@ impl World {
         gold: i32,
         drop_items: Vec<crate::combat::DropItem>,
         ctor: crate::entity::MonsterCtorDraws,
+        dir: u8,
+        cool_eye: bool,
     ) -> Option<i32> {
         if map_id >= self.maps.len() {
             return None;
@@ -646,6 +649,8 @@ impl World {
         e.gold = gold;
         e.drop_items = drop_items;
         e.ctor_draws = ctor;
+        // 生成期取数已全部完成（本函数不再抽随机数）；把结果写进 AI 初始态。
+        e.ai.seed_from_spawn(dir, cool_eye, &ctor, self.clock_ms);
         let id = self.entities.insert(e);
         if !self.enter_world(id) {
             self.entities.remove(id);
@@ -1511,9 +1516,13 @@ mod tests {
 
     /// `spawn_monster_precomputed`（M3④-实现 B 第 ③ 片的新 API）：掉落/朝向/构造抽已在回调里
     /// 按 oracle 次序预算完，本方法**不再取任何随机数**；构造抽结果随实体落库。
+    ///
+    /// **C 第 ② 片追加**：`dir`/`cool_eye`/构造抽同时写进 `Entity.ai` 的初始态
+    /// （`AnimalState::seed_from_spawn`）。
     #[test]
     fn spawn_monster_precomputed_consumes_no_rng() {
         let mut w = World::new(16, 16);
+        w.clock_ms = 50_000;
         let mut fresh = w.rng.clone();
         let ctor = MonsterCtorDraws {
             run_tick_delta: 11,
@@ -1543,6 +1552,8 @@ mod tests {
                 99,
                 vec![],
                 ctor,
+                5,
+                true,
             )
             .expect("生成成功");
         let e = w.entities.get(id).expect("怪物在仓库");
@@ -1560,6 +1571,16 @@ mod tests {
         assert!(e.drop_items.is_empty());
         assert_eq!(e.ctor_draws, ctor, "构造抽结果必须原样落实体");
         assert!(e.add_to_mapped, "生成后必须落图");
+        // 生成期取数落进 AI 初始态（`CreateMonster` 的 `cert.Dir`/`CoolEye` + 构造链计时器）。
+        assert_eq!(e.ai.dir, 5, "dir 必须是 CreateMonster 的 cert.Dir");
+        assert!(e.ai.cool_eye, "cool_eye 必须随生成结果落库");
+        assert!(e.ai.bo_fear_fire, "bo_fear_fire 来自构造抽");
+        assert_eq!(e.ai.attack_tick, 50_000 - 33);
+        assert_eq!(e.ai.walk_tick, 50_000 - 44);
+        assert_eq!(e.ai.search_time, 3333);
+        assert_eq!(e.ai.search_tick, 50_000);
+        assert_eq!(e.ai.think_tick, 50_000);
+        assert_eq!(e.ai.walk_wait_tick, 50_000);
         // `world.rng` 必须一步未动。
         assert_eq!(w.rng.random(), fresh.random());
         // 越界地图 ⇒ None（不落库）。
@@ -1581,6 +1602,8 @@ mod tests {
                 0,
                 vec![],
                 MonsterCtorDraws::default(),
+                0,
+                false,
             )
             .is_none());
     }
