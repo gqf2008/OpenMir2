@@ -1,0 +1,42 @@
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\crates\world)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.86s
+     Running tests\combat_skill_vectors.rs (E:/tmp/m3cs-cloth-target\debug\deps\combat_skill_vectors-3ea099086177bc92.exe)
+
+running 27 tests
+test player_attack_power_is_a_registered_distinct_path ... ok
+test player_target_equipped_items_draw_random8_per_slot ... ok
+test dress_durability_below_damage_wraps_without_breaking ... ok
+test dress_break_clears_index_and_skips_random8_in_same_attack ... ok
+test loop_break_clears_index_and_affects_next_attack_draws ... ok
+test proper_target_matches_csharp_on_boundaries ... ok
+test pvp_sequence_matches_csharp_per_k ... ok
+test redcheck_corrupt_one_cooldown_must_fail ... ok
+test redcheck_corrupt_one_group_melee_damage_must_fail ... ok
+test redcheck_corrupt_one_fire_wall_time_must_fail ... ok
+test duplicate_magic_ids_resolve_to_first_row_like_oracle ... ok
+test redcheck_corrupt_one_group_lightening_vs_undead_must_fail ... ok
+test implemented_cases_are_counted_per_reachable_magic_id ... ok
+test dospell_classes_are_fully_registered ... ok
+test redcheck_corrupt_one_pvp_damage_must_fail ... ok
+test redcheck_corrupt_one_group_poison_green_must_fail ... ok
+test redcheck_ham_all_pvp_boundary_must_fail ... ok
+test redcheck_own_pet_boundary_must_fail ... ok
+test redcheck_corrupt_one_mp_cost_must_fail ... ok
+test redcheck_duplicate_resolution_is_order_sensitive_must_fail ... ok
+test redcheck_corrupt_one_shield_power_must_fail ... ok
+test unimplemented_skills_are_registered ... ok
+test skills_match_csharp_per_skill ... ok
+test combat_damage_sequence_matches_csharp ... ok
+test combat_hit_dodge_stats_match_and_are_non_trivial ... ok
+test redcheck_corrupt_one_damage_value_must_fail ... ok
+test world_host_player_attacker_uses_playobject_override ... ok
+
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\struck_durability_vectors.rs (E:/tmp/m3cs-cloth-target\debug\deps\struck_durability_vectors-ce76c5a4890ff64a.exe)
+
+running 1 test
+test struck_durability_matches_oracle_vectors ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

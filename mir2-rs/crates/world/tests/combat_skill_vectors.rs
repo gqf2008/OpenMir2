@@ -1148,6 +1148,194 @@ fn player_target_equipped_items_draw_random8_per_slot() {
     assert_eq!(rng_empty.count(10), 1, "空装备也要抽那条无条件 Random(10)");
 }
 
+/// 定向随机源：`random_below(arg)` 命中 `force` 表时返回**指定值**（用来构造耐久“恰好破零”/
+/// “短耐久回绕”这类 C# 的 `ushort` 语义角落），其余入口委托同种子 [`RandomNumber`]；
+/// 同时记录每次 `random_below` 的入参。
+struct TargetedRng {
+    inner: RandomNumber,
+    below: Vec<i32>,
+    force: BTreeMap<i32, i32>,
+}
+
+impl TargetedRng {
+    fn new(seed: i32, force: [(i32, i32); 2]) -> Self {
+        Self {
+            inner: RandomNumber::with_seed(seed),
+            below: Vec::new(),
+            force: force.into_iter().collect(),
+        }
+    }
+
+    fn count(&self, arg: i32) -> usize {
+        self.below.iter().filter(|&&v| v == arg).count()
+    }
+}
+
+impl RandomSource for TargetedRng {
+    fn random(&mut self) -> i32 {
+        self.inner.random()
+    }
+
+    fn random_below(&mut self, value: i32) -> i32 {
+        self.below.push(value);
+        if let Some(&v) = self.force.get(&value) {
+            return v;
+        }
+        self.inner.random_below(value)
+    }
+
+    fn random_range(&mut self, min_value: i32, max_value: i32) -> i32 {
+        self.inner.random_range(min_value, max_value)
+    }
+
+    fn next_double(&mut self) -> f64 {
+        self.inner.next_double()
+    }
+}
+
+/// 构造一个“必定命中、必定造成伤害”的玩家/玩家对，并把若干装备位设成给定 `(slot, index, dura)`。
+fn equipped_target(slots: &[(usize, u16, u16)]) -> (Entity, Entity) {
+    let mut attacker = Entity::new(1, "hero", 0, 0);
+    attacker.race = ACTOR_RACE_PLAY;
+    attacker.dc = 0x1E14;
+    attacker.hit_point = 20;
+    let mut target = Entity::new(2, "victim", 0, 0);
+    target.race = ACTOR_RACE_PLAY;
+    target.ac = 0;
+    target.hp = 60000;
+    target.max_hp = 60000;
+    target.hit_point = 0; // 不掷闪避
+    for &(slot, index, dura) in slots {
+        target.use_items[slot].index = index;
+        target.use_items[slot].dura = dura;
+    }
+    (attacker, target)
+}
+
+/// 衣服位（`ItemLocation.Dress = 0`）**恰好破零**（`Dura == nDam`）⇒ 清 `Index`
+/// ⇒ 同一击的逐格循环**跳过** slot 0 的 `Random(8)`（`PlayObject.cs:2965-2996` + `:2998-3039`）。
+///
+/// 破零必红手法：把 `wear_durability` 里的 `slot.index = 0` 去掉（或删掉衣服位特判）⇒
+/// `rng.count(8)` 从 1 变 2，本条 FAILED。
+#[test]
+fn dress_break_clears_index_and_skips_random8_in_same_attack() {
+    let config = CombatConfig::default();
+    // force: Random(10)=0 ⇒ nDam=5；Random(8)=7 ⇒ 循环里的每一格都不扣耐久（只数取数）。
+    let mut rng = TargetedRng::new(20261012, [(10, 0), (8, 7)]);
+    // 衣服 Dura=5 == nDam ⇒ 破零；slot 1 正常装备。
+    let (mut attacker, mut target) = equipped_target(&[(0, 100, 5), (1, 101, 60000)]);
+    let out = attack_with(
+        &mut rng,
+        &mut attacker,
+        &mut target,
+        None,
+        &config,
+        AttackPowerMode::Base,
+    );
+    assert!(
+        out.damage > 0,
+        "前提：必须命中并造成伤害，否则 StruckDamage 不跑"
+    );
+    assert_eq!(
+        target.use_items[0].index, 0,
+        "衣服破零后 Index 必被清 0（PlayObject.cs:2982）"
+    );
+    assert_eq!(
+        target.use_items[0].dura, 0,
+        "衣服破零后 Dura 必为 0（PlayObject.cs:2985）"
+    );
+    assert_eq!(
+        target.use_items[1].dura, 60000,
+        "Random(8)=7 ⇒ 逐格循环不扣耐久"
+    );
+    assert_eq!(
+        rng.count(8),
+        1,
+        "衣服在特判里破零 ⇒ 同一击逐格循环只给 slot 1 抽 Random(8)（不是 2）"
+    );
+}
+
+/// 衣服位**耐久 < nDam**（`Dura=3 < nDam=5`）：C# `ushort nDura -= nDam` **回绕**成大正数
+/// ⇒ **不破零**、`Index` 保留、逐格循环照抽 `Random(8)`（`PlayObject.cs:2969-2970`）。
+///
+/// 破零必红手法：把 `wear_durability` 的 `wrapping_sub` 改成 `saturating_sub`（或“<= nDam 就破零”）
+/// ⇒ `count(8)` 从 2 变 1 且 `Index` 被清 ⇒ 本条 FAILED。
+#[test]
+fn dress_durability_below_damage_wraps_without_breaking() {
+    let config = CombatConfig::default();
+    let mut rng = TargetedRng::new(20261012, [(10, 0), (8, 7)]);
+    let (mut attacker, mut target) = equipped_target(&[(0, 100, 3), (1, 101, 60000)]);
+    let out = attack_with(
+        &mut rng,
+        &mut attacker,
+        &mut target,
+        None,
+        &config,
+        AttackPowerMode::Base,
+    );
+    assert!(out.damage > 0, "前提：必须命中并造成伤害");
+    assert_eq!(
+        target.use_items[0].index, 100,
+        "耐久短于 nDam 时按 ushort 回绕 ⇒ 不破零、Index 保留"
+    );
+    assert_eq!(
+        target.use_items[0].dura, 65534,
+        "3u16.wrapping_sub(5) == 65534（unchecked ushort 语义）"
+    );
+    assert_eq!(
+        rng.count(8),
+        2,
+        "衣服未破零 ⇒ 同一击里 slot 0 + slot 1 各抽一次 Random(8)"
+    );
+}
+
+/// 逐格循环里的破零同样清 `Index`（`PlayObject.cs:3008`/`:3012`）：`Random(8)==0` 且
+/// `Dura == nDam` 的格子被清位。影响的是**后续攻击**的取数（本击的抽数已发生）。
+///
+/// 破零必红手法：让循环只改 `dura` 不清 `index` ⇒ 第二击仍会给 slot1 抽 `Random(8)`，
+/// `rng.count(8)` 变 2，本条 FAILED。
+#[test]
+fn loop_break_clears_index_and_affects_next_attack_draws() {
+    let config = CombatConfig::default();
+    // 第一次攻击：衣服 Dura==nDam 破零；slot1 也 Dura==nDam 且 Random(8)=0 ⇒ 破零。
+    let mut rng = TargetedRng::new(20261012, [(10, 0), (8, 0)]);
+    let (mut attacker, mut target) = equipped_target(&[(0, 100, 5), (1, 101, 5)]);
+    let out1 = attack_with(
+        &mut rng,
+        &mut attacker,
+        &mut target,
+        None,
+        &config,
+        AttackPowerMode::Base,
+    );
+    assert!(out1.damage > 0, "前提：第一击必须造成伤害");
+    assert_eq!(target.use_items[0].index, 0, "衣服在第一击破零");
+    assert_eq!(
+        target.use_items[1].index, 0,
+        "slot1 在循环里 Random(8)==0 + Dura==nDam ⇒ 破零"
+    );
+    assert_eq!(
+        rng.count(8),
+        1,
+        "第一击只给 slot1 抽 Random(8)（slot0 已被特判清位）"
+    );
+    // 第二次攻击：两格都被清位 ⇒ 逐格循环 0 抽。
+    let out2 = attack_with(
+        &mut rng,
+        &mut attacker,
+        &mut target,
+        None,
+        &config,
+        AttackPowerMode::Base,
+    );
+    assert!(out2.damage > 0, "前提：第二击必须造成伤害");
+    assert_eq!(
+        rng.count(8),
+        1,
+        "第二击两格都已清位 ⇒ 不再抽 Random(8)（全局流位置与 oracle 同步的关键）"
+    );
+}
+
 // ---- 红检 ---------------------------------------------------------------------------------------
 
 /// 红检①：改坏伤害序列里的**一个数** ⇒ 战斗对拍必 RED。

@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>struck-durability-probe</AssemblyName>
+    <RootNamespace>StruckDurabilityProbe</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    M3②③ 战斗线（卡 openmir2-m3-combat-skills-align）reviewer-5 Minor ① 真身探针：
+    `PlayObject.StruckDamage`（`src/M2Server/Player/PlayObject.cs:2954`）的衣服位（`Index 0` /
+    `ItemLocation.Dress`）特判与逐格耐久磨损的**取数账本 + 前后状态**。
+
+    直调**真身** `PlayObject.StruckDamage`（不经 `_Attack`，隔离出「nDam 抽取 + 衣服位特判 +
+    逐格 `Random(8)` 循环」这一段的种子流语义），把每次 `System.Random.Next(max)` 记账成
+    `ReplayRandom` 行式格式（`seq|kind|arg|result|site`），并记录 `UseItems` 前后状态：
+
+      - `cloth` 行：一个用例的 nDam、取数账本、输入/输出装备位。
+
+    产物 = mir2-rs/tests/parity/m3/struck-durability-probe/vectors/struck_durability_vectors.{json,tsv}
+    （Rust 侧 `crates/world/tests/struck_durability_vectors.rs` 用 `ReplayRandom` 回放并逐字段核对）。
+
+    只读：不连 MySQL、不写任何现网文件、不发起任何 socket。
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\..\src\M2Server\M2Server.csproj" />
+  </ItemGroup>
+
+</Project>

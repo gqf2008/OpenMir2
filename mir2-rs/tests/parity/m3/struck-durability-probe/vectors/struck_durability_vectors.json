@@ -1,0 +1,51 @@
+{
+  "generated_by": "mir2-rs/tests/parity/m3/struck-durability-probe",
+  "oracle": {
+    "entry": "M2Server.Player.PlayObject.StruckDamage (public override, \u76F4\u8C03)",
+    "source": "src/M2Server/Player/PlayObject.cs:2954-3036\uFF08nDam=:2957 / \u8863\u670D\u4F4D\u7279\u5224=:2965-2996 / \u9010\u683C\u5FAA\u73AF=:2998-3039\uFF09",
+    "rng": "OpenMir2.RandomNumber.random (\u79C1\u6709\u9759\u6001 System.Random) \u53CD\u5C04\u8986\u76D6\u4E3A RecordingRandom(seed)",
+    "item_system": "SystemShare.ItemSystem = NullItemSystem\uFF08GetStdItem \u6052 null \u21D2 SendDelItems \u65E9\u9000\uFF09"
+  },
+  "cases": [
+    {
+      "name": "dress_break",
+      "seed": 20261012,
+      "n_dam": 7,
+      "draws": "1|Next(max)|10|2|max;2|Next(max)|8|7|max;3|Next(max)|8|6|max",
+      "items_in": "0:100:7;1:101:10007;7:107:10007",
+      "items_out": "1:101:10007;7:107:10007"
+    },
+    {
+      "name": "dress_wrap",
+      "seed": 20261013,
+      "n_dam": 13,
+      "draws": "1|Next(max)|10|8|max;2|Next(max)|8|1|max;3|Next(max)|8|4|max",
+      "items_in": "0:100:11;1:101:10013",
+      "items_out": "0:100:65534;1:101:10013"
+    },
+    {
+      "name": "dress_normal",
+      "seed": 20261014,
+      "n_dam": 8,
+      "draws": "1|Next(max)|10|3|max;2|Next(max)|8|4|max;3|Next(max)|8|1|max",
+      "items_in": "0:100:1008;1:101:10008",
+      "items_out": "0:100:1000;1:101:10008"
+    },
+    {
+      "name": "dress_empty",
+      "seed": 20261015,
+      "n_dam": 13,
+      "draws": "1|Next(max)|10|8|max;2|Next(max)|8|6|max",
+      "items_in": "1:101:13",
+      "items_out": "1:101:13"
+    },
+    {
+      "name": "loop_break",
+      "seed": 1,
+      "n_dam": 7,
+      "draws": "1|Next(max)|10|2|max;2|Next(max)|8|0|max",
+      "items_in": "1:101:7",
+      "items_out": ""
+    }
+  ]
+}
