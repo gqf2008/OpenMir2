@@ -1,0 +1,27 @@
+# 四门禁（隔离 target: E:/tmp/openmir2-m2svr-target，--offline）
+# 工作树：E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr/mir2-rs
+# 时刻：2026-10-12 19:4x
+
+## 1) cargo fmt --all -- --check
+$ cd mir2-rs && cargo fmt --all -- --check
+rc=0（无 diff）
+
+## 2) cargo clippy --workspace --all-targets --offline -- -D warnings
+$ CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo clippy --workspace --all-targets --offline -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.02s
+rc=0
+
+## 3) cargo test --workspace --offline
+$ CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test --workspace --offline
+汇总（82 个 test result: ok）: passed=670 failed=0 ignored=16
+完整日志见 08-gate-test-full.txt
+
+## 4) cargo run -p msgcodegen --offline -- --check
+$ CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo run -q -p msgcodegen --offline -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+rc=0
+
+## 本片新用例（含红检）
+$ cargo test -p game-svr --offline front_target
+test tests::front_target_dir2_finds_victim_and_excludes_ghost_or_dead ... ok
+红检见 06-redcheck-remove-death-filter.txt

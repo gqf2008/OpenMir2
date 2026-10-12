@@ -1,0 +1,122 @@
+# Rust 取目标路径（原文 + 行号；本片 refactor 后的树，语义与真机活栈运行时一致）
+# 注：把 handle_hit_cmd 内联查找抽成 front_target（行为不变）——真机 84/120 空打即运行该语义
+
+## 1) bins/game-svr/src/attackwire.rs:88-113 —— at_self + front_position（dir=2 ⇒ (x+1,y)）
+86:         messages::CM_TWINHIT => Some(9),
+87:         _ => None,
+88:     }
+89: }
+90: 
+91: /// `ClientHitXY` 的成功门（`PlayObject.Attack.cs:884`）：`nX == CurrX && nY == CurrY`。
+92: #[must_use]
+93: pub fn at_self(nx: i32, ny: i32, cur_x: i32, cur_y: i32) -> bool {
+94:     nx == cur_x && ny == cur_y
+95: }
+96: 
+97: /// `BaseObject.GetFrontPosition`（`BaseObject.cs:977-1030`）：按 `Dir` 取前方相邻格；越界时
+98: /// oracle 的 `nX/nY` **保持 CurrX/CurrY**（每个 `case` 内的边界 `if` 不满足就不动）。
+99: /// 非法 `Dir`（>7）无 `default` ⇒ 同样原地。
+100: #[must_use]
+101: pub fn front_position(dir: u8, x: i32, y: i32, width: i32, height: i32) -> (i32, i32) {
+102:     match dir {
+103:         DIR_UP if y > 0 => (x, y - 1),
+104:         DIR_UPRIGHT if x < width - 1 && y > 0 => (x + 1, y - 1),
+105:         DIR_RIGHT if x < width - 1 => (x + 1, y),
+106:         DIR_DOWNRIGHT if x < width - 1 && y < height - 1 => (x + 1, y + 1),
+107:         DIR_DOWN if y < height - 1 => (x, y + 1),
+108:         DIR_DOWNLEFT if x > 0 && y < height - 1 => (x - 1, y + 1),
+109:         DIR_LEFT if x > 0 => (x - 1, y),
+110:         DIR_UPLEFT if x > 0 && y > 0 => (x - 1, y - 1),
+111:         _ => (x, y),
+112:     }
+113: }
+
+## 2) bins/game-svr/src/main.rs:1812-1826 —— front_target（= oracle GetMovingObject(...,true) 最小等价物）
+1812: fn front_target(
+1813:     world: &mir2_world::World,
+1814:     actor_id: i32,
+1815:     map_id: usize,
+1816:     fx: i32,
+1817:     fy: i32,
+1818: ) -> Option<i32> {
+1819:     world
+1820:         .entities
+1821:         .iter()
+1822:         .find(|t| {
+1823:             t.id != actor_id && t.map_id == map_id && t.x == fx && t.y == fy && !t.ghost && !t.death
+1824:         })
+1825:         .map(|t| t.id)
+1826: }
+
+## 3) bins/game-svr/src/main.rs:1902-1922 —— pose_dir → front_position → front_target → 无目标支
+1900:     // 进世界时用 `record.dir` 初始化，`set_display_dir` 维护）。展示表缺失时退回本帧 dir
+1901:     // （等价旧行为；生产路径进世界必登记展示表）。
+1902:     let pose_dir = displays.get(actor_id).map_or(dir, |d| d.dir);
+1903:     // 取目标：`GetPoseCreate()` = 前方格首个 `!Ghost && !Death` 的对象。
+1904:     let (width, height) = world
+1905:         .maps
+1906:         .get(map_id)
+1907:         .map_or((0, 0), |m| (m.width, m.height));
+1908:     let (fx, fy) = game_svr::attackwire::front_position(pose_dir, cur_x, cur_y, width, height);
+1909:     // `BaseObject.AttackDir` 开头 `Dir = nDir`（`BaseObject.Attack.cs:12`）——取目标**之后**才更新。
+1910:     set_display_dir(displays, actor_id, dir);
+1911:     let target_id = if (fx, fy) == (cur_x, cur_y) {
+1912:         None
+1913:     } else {
+1914:         front_target(world, actor_id, map_id, fx, fy)
+1915:     };
+1916:     if let Some(tid) = target_id {
+1917:         world.attack_cmd(actor_id, tid);
+1918:     } else {
+1919:         glog!(
+1920:             "DBG",
+1921:             "攻击：actor_id={actor_id} 前方格 ({fx},{fy}) 无目标 ⇒ 只播动作帧（oracle `_Attack(null)` 返回 false）"
+1922:         );
+1923:     }
+
+## 4) crates/world/src/world.rs:516-518 —— 死亡标记（C# Die() 的 Death = true）
+514:             );
+515:             // 死亡标记（C# `Die()` 的 `Death = true`）
+516:             if let Some(e) = self.entities.get_mut(id) {
+517:                 e.death = true;
+518:                 e.death_settled = true;
+519:             }
+
+## 5) bins/game-svr/src/main.rs:4434-4470 —— 本片判据单测（含 dir=2 前方格 + 自己/ghost/death 排除）
+4434:     fn front_target_dir2_finds_victim_and_excludes_ghost_or_dead() {
+4435:         let mut world = mir2_world::World::new(30, 33);
+4436:         let atk = world.add_entity({
+4437:             let mut e = mir2_world::Entity::new(1, "atk", 17, 20);
+4438:             e.race = mir2_world::ACTOR_RACE_PLAY;
+4439:             e
+4440:         });
+4441:         let vic = world.add_entity({
+4442:             let mut e = mir2_world::Entity::new(2, "vic", 18, 20);
+4443:             e.race = mir2_world::ACTOR_RACE_PLAY;
+4444:             e.hp = 19;
+4445:             e.max_hp = 19;
+4446:             e
+4447:         });
+4448:         // oracle `GetFrontPosition` + `Direction.Right = 2` ⇒ (x+1, y) = (18,20)
+4449:         assert_eq!(
+4450:             game_svr::attackwire::front_position(2, 17, 20, 30, 33),
+4451:             (18, 20),
+4452:             "dir=2 的前方格 = 受害者所在格"
+4453:         );
+4454:         assert_eq!(
+4455:             front_target(&world, atk, 0, 18, 20),
+4456:             Some(vic),
+4457:             "受害者在位 ⇒ 取到"
+4458:         );
+4459:         // 自己（`t.id != actor_id`）不算目标
+4460:         assert_eq!(front_target(&world, atk, 0, 17, 20), None, "自己不算目标");
+4461:         // 死亡后（`world.rs:516` 的 `e.death = true`；oracle `Die()`）⇒ `!Death` 排除 ⇒ 空打
+4462:         world.entities.get_mut(vic).unwrap().death = true;
+4463:         assert_eq!(front_target(&world, atk, 0, 18, 20), None, "!Death 过滤");
+4464:         world.entities.get_mut(vic).unwrap().death = false;
+4465:         // 幽灵（`MakeGhost`）⇒ `!Ghost` 排除
+4466:         world.entities.get_mut(vic).unwrap().ghost = true;
+4467:         assert_eq!(front_target(&world, atk, 0, 18, 20), None, "!Ghost 过滤");
+4468:     }
+4469: 
+4470:     /// F2（reviewer-2）的判据：`ProcessBufferSend` `:58-90` 的四条分支，**含"刚超时清零的那一包也要压住"**。

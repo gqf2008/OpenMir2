@@ -1,0 +1,175 @@
+# oracle 取目标路径（原文 + 行号）
+
+## 1) PlayObject.Attack.cs:26 —— AttackDir 入口（目标 = 显式 target ?? GetPoseCreate()）
+##    注意 :26 在 BaseObject.Attack.cs:12 的 Dir = nDir 之前 ⇒ 用状态化 Dir 取前方格
+     1	        protected void AttackDir(IActor targetObject, short wHitMode, byte nDir)
+     2	        {
+     3	            IActor attackTarget = targetObject ?? GetPoseCreate();
+     4	            if (UseItems[ItemLocation.Weapon] != null && (UseItems[ItemLocation.Weapon].Index > 0) && UseItems[ItemLocation.Weapon].Desc[ItemAttr.WeaponUpgrade] > 0)
+     5	            {
+
+## 2) PlayObject.Attack.cs:73 —— GetBaseAttackPoewr() 无条件求值（target 为 null 也抽数）
+            }
+
+            bool canHit = false;
+            int nPower = GetAttackPowerHit(wHitMode, GetBaseAttackPoewr(), attackTarget, ref canHit);
+            SkillAttackDamage(wHitMode, nPower);
+            AttackDir(attackTarget, nPower, nDir);
+            SendAttackMsg(GetHitMode(wHitMode), Dir, CurrX, CurrY);
+            AttackSuccess(wHitMode, nPower, canHit, attackTarget);
+        }
+
+## 3) BaseObject.cs:1253-1261 —— GetPoseCreate
+1253:         public IActor GetPoseCreate()
+1254:         {
+1255:             short nX = 0;
+1256:             short nY = 0;
+1257:             if (GetFrontPosition(ref nX, ref nY))
+1258:             {
+1259:                 return Envir.GetMovingObject(nX, nY, true);
+1260:             }
+1261:             return null;
+1262:         }
+
+## 4) Envirnoment.cs:1203-1234 —— GetMovingObject(nX,nY,boFlag=true)：!Ghost && !Death
+1203:         public IActor GetMovingObject(short nX, short nY, bool boFlag)
+1204:         {
+1205:             IActor result = null;
+1206:             ref MapCellInfo cellInfo = ref GetCellInfo(nX, nY, out bool cellSuccess);
+1207:             if (cellSuccess && cellInfo.IsAvailable)
+1208:             {
+1209:                 for (int i = 0; i < cellInfo.ObjList.Count; i++)
+1210:                 {
+1211:                     CellObject cellObject = cellInfo.ObjList[i];
+1212:                     if (cellObject.CellObjId > 0 && cellObject.ActorObject)
+1213:                     {
+1214:                         IActor baseObject = SystemShare.ActorMgr.Get(cellObject.CellObjId);
+1215:                         if (baseObject != null && !baseObject.Ghost)
+1216:                         {
+1217:                             if (baseObject.CellType == CellType.CastleDoor)
+1218:                             {
+1219:                                 if (((CastleDoor)baseObject).HoldPlace && (!boFlag || !baseObject.Death))
+1220:                                 {
+1221:                                     result = baseObject;
+1222:                                     break;
+1223:                                 }
+1224:                             }
+1225:                             else
+1226:                             {
+1227:                                 if ((!boFlag || !baseObject.Death))
+1228:                                 {
+1229:                                     result = baseObject;
+1230:                                     break;
+1231:                                 }
+1232:                             }
+1233:                         }
+
+## 5) BaseObject.Base.cs:351-353 —— Die()：Death = true
+350:             }
+351:             SendRefMsg(Messages.RM_DEATH, Dir, CurrX, CurrY, 1, "");
+352:         }
+353: 
+354:         public virtual void ReAlive()
+
+## 6) BaseObject.Attack.cs:5-28 —— AttackDir：Dir=nDir 在 _Attack 之前；target==null ⇒ _Attack 直接 false
+5: 
+6: namespace M2Server.Actor
+7: {
+8:     public partial class BaseObject
+9:     {
+10:         protected bool AttackDir(IActor attackTarget, int nPower, byte nDir)
+11:         {
+12:             Dir = nDir;
+13:             if (_Attack(nPower, attackTarget))
+14:             {
+15:                 SetTargetCreat(attackTarget);
+16:                 return true;
+17:             }
+18:             return false;
+19:         }
+20: 
+21:         /// <summary>
+22:         /// 基础攻击力
+23:         /// </summary>
+24:         /// <returns></returns>
+25:         internal int GetBaseAttackPoewr()
+26:         {
+27:             return GetAttackPower(HUtil32.LoByte(WAbil.DC), (sbyte)(HUtil32.HiByte(WAbil.DC) - HUtil32.LoByte(WAbil.DC)));
+28:         }
+
+## 7) BaseObject.cs:977-1035 —— GetFrontPosition（dir=2 = Direction.Right ⇒ (x+1,y)）
+977:         public bool GetFrontPosition(ref short nX, ref short nY)
+978:         {
+979:             IEnvirnoment envir = Envir;
+980:             nX = CurrX;
+981:             nY = CurrY;
+982:             switch (Dir)
+983:             {
+984:                 case Direction.Up:
+985:                     if (nY > 0)
+986:                     {
+987:                         nY -= 1;
+988:                     }
+989:                     break;
+990:                 case Direction.UpRight:
+991:                     if ((nX < (envir.Width - 1)) && (nY > 0))
+992:                     {
+993:                         nX++;
+994:                         nY -= 1;
+995:                     }
+996:                     break;
+997:                 case Direction.Right:
+998:                     if (nX < (envir.Width - 1))
+999:                     {
+1000:                         nX++;
+1001:                     }
+1002:                     break;
+1003:                 case Direction.DownRight:
+1004:                     if ((nX < (envir.Width - 1)) && (nY < (envir.Height - 1)))
+1005:                     {
+1006:                         nX++;
+1007:                         nY++;
+1008:                     }
+1009:                     break;
+1010:                 case Direction.Down:
+1011:                     if (nY < (envir.Height - 1))
+1012:                     {
+1013:                         nY++;
+1014:                     }
+1015:                     break;
+1016:                 case Direction.DownLeft:
+1017:                     if ((nX > 0) && (nY < (envir.Height - 1)))
+1018:                     {
+1019:                         nX -= 1;
+1020:                         nY++;
+1021:                     }
+1022:                     break;
+1023:                 case Direction.Left:
+1024:                     if (nX > 0)
+1025:                     {
+1026:                         nX -= 1;
+1027:                     }
+1028:                     break;
+1029:                 case Direction.UpLeft:
+1030:                     if ((nX > 0) && (nY > 0))
+1031:                     {
+1032:                         nX -= 1;
+1033:                         nY -= 1;
+1034:                     }
+1035:                     break;
+
+## 8) src/OpenMir2/Enums/Direction.cs —— Right = 2
+﻿namespace OpenMir2.Enums
+{
+    public static class Direction
+    {
+        public const byte Up = 0;
+        public const byte UpRight = 1;
+        public const byte Right = 2;
+        public const byte DownRight = 3;
+        public const byte Down = 4;
+        public const byte DownLeft = 5;
+        public const byte Left = 6;
+        public const byte UpLeft = 7;
+    }
+}
