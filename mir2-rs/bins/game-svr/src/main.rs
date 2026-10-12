@@ -414,6 +414,8 @@ async fn main() -> Result<()> {
                     },
                     ref_msg_range: i32::from(cfg.send_ref_msg_range),
                     save_human_rcd_time: i64::from(cfg.save_human_rcd_time),
+                    health_fill_time: cfg.health_fill_time,
+                    spell_fill_time: cfg.spell_fill_time,
                     home: home_fallback,
                     newbie: NewbieItems {
                         candle: cfg.candle.clone(),
@@ -1651,7 +1653,7 @@ fn save_human_rcd(
 ///   `Race==Play && !Ghost`）广播，而收件人处理器排除自己（`processMsg.ActorId != ActorId`）
 ///   ⇒ **转折/移动帧只发给附近观察者**，自己那条连接只收 `+GD` ack。
 ///
-/// 未接（登记，见 `movewire` 模块头）：限速/超速、`HealthTick` 扣减、失败支 `RM_MOVEFAIL`。
+/// 未接（登记，见 `movewire` 模块头）：限速/超速、失败支 `RM_MOVEFAIL`。
 #[allow(clippy::too_many_arguments)]
 fn handle_move_cmd(
     ident: u16,
@@ -1660,6 +1662,7 @@ fn handle_move_cmd(
     chr_name: &str,
     socket: i32,
     online: &OnlineRegistry,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
     world: &mut mir2_world::World,
     displays: &mut downlink::DisplayTable,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -1740,6 +1743,21 @@ fn handle_move_cmd(
                 return;
             }
             set_display_dir(displays, actor_id, dir);
+            // 体力/魔力点（`PlayObject.Attack.cs:1424` 走路 `HealthTick -= 10`；
+            // `:1352-1356`/`:1041-1045` 跑步/骑跑 `HealthTick -= 60; SpellTick -= 10;
+            // SpellTick = max(0, SpellTick); PerHealth -= 1; PerSpell -= 1`）。
+            if let Some(sg) = sessions.get_mut(chr_name) {
+                if ident == mir2_protocol::messages::CM_WALK {
+                    // `ClientWalkXY` 只 `HealthTick -= 10`（无 Per* 扣减）。
+                    sg.stamina.on_walk_success();
+                } else {
+                    sg.stamina.on_run_success();
+                    // `ClientRunXY`/`ClientHorseRunXY` 另扣 `PerHealth/PerSpell` 各 1
+                    // （`PerHealth`/`PerSpell` 是 `byte` ⇒ oracle 是无符号回绕减）。
+                    sg.recovery.per_health = sg.recovery.per_health.wrapping_sub(1);
+                    sg.recovery.per_spell = sg.recovery.per_spell.wrapping_sub(1);
+                }
+            }
             let (px, py) = world
                 .entities
                 .get(actor_id)
@@ -1844,7 +1862,7 @@ fn front_target(
 ///
 /// **登记**（详见 `attackwire` 模块头）：限速/`LateDelivery`/`CheckActionStatus`、`STONE`、
 /// `GetHitMode` 的技能态（无技能 ⇒ 模式 3/4/5/7/8 回落 `SM_HIT`）、目标筛选的安全区/攻击模式、
-/// `GetMovingObject` 的格子 `ObjList` 次序（本片取实体槽位序）、`HealthTick`/`SpellTick` 体力面。
+/// `GetMovingObject` 的格子 `ObjList` 次序（本片取实体槽位序）。
 ///
 /// **返回值**：`true` = 本击**进入了攻击路径**（有目标 ⇒ `attack_cmd`，无目标 ⇒ `attack_swing`，
 /// 两者都在 oracle 首抽之前）⇒ `sim_loop` 据此落一行服务端权威状态 dump
@@ -1941,12 +1959,13 @@ fn handle_hit_cmd(
             "攻击：actor_id={actor_id} 前方格 ({fx},{fy}) 无目标 ⇒ 仍按 oracle 抽攻击力（attack_swing）+ 只播动作帧（`_Attack(null)` 返回 false）"
         );
     }
-    // 成功支的体力扣减（`PlayObject.Attack.cs:943-947`：`PerHealth -= 2; PerSpell -= 2`；
-    // `PerHealth`/`PerSpell` 是 `byte` ⇒ oracle 是无符号回绕减。`HealthTick`/`SpellTick` 属体力点面，
-    // 未移植（`movewire` 同源登记）。
+    // 成功支的体力扣减（`PlayObject.Attack.cs:955-959`）：`HealthTick -= 30; SpellTick -= 100;
+    // SpellTick = max(0, SpellTick); PerHealth -= 2; PerSpell -= 2`（`PerHealth`/`PerSpell` 是
+    // `byte` ⇒ oracle 是无符号回绕减）。
     if let Some(sg) = sessions.get_mut(chr_name) {
         sg.recovery.per_health = sg.recovery.per_health.wrapping_sub(2);
         sg.recovery.per_spell = sg.recovery.per_spell.wrapping_sub(2);
+        sg.stamina.on_attack_success();
     }
     // 动作帧：`SendAttackMsg(GetHitMode, Dir, CurrX, CurrY)` → `SendRefMsg` ⇒ 附近观察者（排除自己）。
     if let Some(d) = displays.get(actor_id) {
@@ -2244,6 +2263,12 @@ fn drain_combat_downlink(
         // 世界实体 HP 是本次结算后的权威值；同步回该会话的 `WAbil.HP`（供 52/752 与后续帧）。
         if let Some(sg) = sessions.get_mut(&entry.chr_name) {
             sg.state.wabil.hp = outcome.target_hp_after;
+            // `RM_STRUCK` 处理器开头（`PlayObject.Message.cs:1587-1590`）：
+            // `HealthTick = 0; SpellTick = 0; PerHealth -= 1; PerSpell -= 1`。
+            // 受击清零 ⇒ 受害者永远到不了 `HealthFillTime`，与真机 dump 一致（受害方不回血）。
+            sg.stamina.on_struck();
+            sg.recovery.per_health = sg.recovery.per_health.wrapping_sub(1);
+            sg.recovery.per_spell = sg.recovery.per_spell.wrapping_sub(1);
         }
         let body = game_svr::smframe::sm_struck(
             *target,
@@ -2349,6 +2374,86 @@ fn drain_recovery(
         // `ShowHp` 的 AOI 支（oracle `SendRefMsg`）：同图范围内观察者各收一份。
         if sg.show_hp {
             broadcast_healthspellchanged(world, online, gates, sg.actor_id, &body, range);
+        }
+    }
+}
+
+/// 每 tick 的**体力/魔力点段**（oracle `BaseObject.Run()` 的 `:26-109`，见 [`game_svr::stamina`]）。
+///
+/// 与 [`drain_recovery`] 同一位置（`PlayObject.Run()` 的恢复段之后）：逐会话（**按键排序**）调
+/// [`game_svr::stamina::stamina_tick`]，命中（`HealthSpellChanged()` 被调用）⇒ 照
+/// `BaseObject.HealthSpellChanged()` 给自己发 `SM_HEALTHSPELLCHANGED`（`ShowHp` 再广播）。
+/// **一次 `Run()` 可命中两次**（HP 支 `:55` + MP 支 `:68`）⇒ 逐次各发一条帧，帧内容取自当次
+/// `(HP, MP)` 快照（HP 支那条是「MP 未加」的中间态，照 `PlayObject.Message.cs:1736-1739`）。
+///
+/// **与 [`drain_recovery`] 的差别**：本段改动的是 `BaseObject.Run()` 里的 `WAbil.HP/MP`，
+/// 攻击结算与 `state_log` 的 `SERVER_STATE` dump 读的是世界实体 [`mir2_world::Entity::hp`]
+/// ⇒ 命中后**回写实体 `hp`**（`mp` 不在世界实体里，只在 `WAbil`，见 `Entity` 字段表）。
+///
+/// **登记（阶段顺序）**：oracle 一次 `ProcessPlayObjectData` 的顺序是「`PlayObject.Run()` 的恢复段
+/// → `BaseObject.Run()` 的消息段（攻击/移动在此扣点）→ `BaseObject.Run()` 的体力点段」。
+/// 本宿主把玩家指令走了 gate→sim 的异步通道（不在 tick 内收消息）⇒ 本段相对同 tick 内已处理的
+/// 指令晚一拍/早一拍（最多一个 world tick = 200ms）。掉血阈值跨过点因此可能与 oracle 差 1 击，
+/// 但**终值一致**（本卡判据 = `scoped_diff` 的末态），登记不静默。
+fn drain_stamina(
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    world: &mut mir2_world::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    range: i32,
+    health_fill_time: i32,
+    spell_fill_time: i32,
+) {
+    let now = now_ms();
+    let mut names: Vec<String> = sessions.keys().cloned().collect();
+    names.sort();
+    for name in names {
+        let Some(sg) = sessions.get_mut(&name) else {
+            continue;
+        };
+        let death = world.entities.get(sg.actor_id).is_some_and(|e| e.death);
+        // oracle `HealthSpellChanged()` 的调用次数 = 帧数（HP 支/MP 支各一条，内容为当时 WAbil）。
+        let mut changes: Vec<(u16, u16)> = Vec::new();
+        let changed = game_svr::stamina::stamina_tick(
+            &mut sg.stamina,
+            &mut sg.state.wabil,
+            death,
+            now,
+            health_fill_time,
+            spell_fill_time,
+            &mut changes,
+        );
+        if changed == 0 {
+            continue;
+        }
+        let actor_id = sg.actor_id;
+        let show_hp = sg.show_hp;
+        let max_hp = sg.state.wabil.max_hp;
+        // 回写世界实体：攻击结算（`crates/world`）与逐击 `SERVER_STATE` dump 读 `Entity.hp`。
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            e.hp = sg.state.wabil.hp;
+        }
+        let Some(entry) = online.iter().find(|e| e.chr_name == name) else {
+            glog!(
+                "WRN",
+                "体力/魔力点：ChrName={name} 无在线网关坐标 ⇒ 不回帧（登记）"
+            );
+            continue;
+        };
+        // 每次 `HealthSpellChanged()` 各发一条帧；帧内容取自**当次快照**（不是终态）——
+        // oracle `PlayObject.Message.cs:1736-1739` 用当时 `WAbil` 拼包，HP 支那条是中间态。
+        for (hp, mp) in &changes {
+            let body = game_svr::smframe::sm_healthspellchanged(actor_id, *hp, *mp, max_hp);
+            if let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "体力/魔力点回帧")
+            {
+                let _ = tx.send(SimToGate::SendFrame {
+                    socket: entry.socket,
+                    body: body.clone(),
+                });
+            }
+            if show_hp {
+                broadcast_healthspellchanged(&*world, online, gates, actor_id, &body, range);
+            }
         }
     }
 }
@@ -2791,6 +2896,10 @@ struct SessionGround {
     /// （周期恢复 tick，[`game_svr::recover::Recovery`]；`CM_EAT` 的 `StdMode 0 default` 分支
     /// 叠加 `IncHealth/IncSpell`）。
     recovery: game_svr::recover::Recovery,
+    /// `BaseObject.HealthTick/SpellTick/AutoRecoveryTick`（体力/魔力点，[`game_svr::stamina`]）：
+    /// 攻击/移动扣点、按 `Run()` 节奏回收、到 `HealthFillTime` 回血、低于 `-HealthFillTime` 掉 1 HP。
+    /// 本片判据：真机隔离两相 `scoped_diff` 唯一残留 `characters_ablity.Hp` 攻方（C# 20668/Rust 20669）。
+    stamina: game_svr::stamina::Stamina,
     /// `BaseObject.ShowHp`（`MakeOpenHealth()` 置位，`BaseObject.cs:944`）；发点是技能「心灵启示」
     /// （`MagicManager.cs:438`）⇒ 技能层未移植，生产路径恒 `false`（登记）。
     show_hp: bool,
@@ -2859,6 +2968,12 @@ struct EnterConfig {
     /// `[Setup] SaveHumanRcdTime`（oracle `GameSvrConf.cs:423/1484`，缺省 `600000`ms）：
     /// 周期存档间隔（`WorldServer.cs:698-703`）；见 [`drain_periodic_save`]。
     save_human_rcd_time: i64,
+    /// `[Setup] HealthFillTime`（oracle `GameSvrConf.cs:1323`，缺省 `300`）：
+    /// 体力点回血/掉血阈值（`BaseObject.Base.cs:44/74/105`）；见 [`game_svr::stamina`]。
+    health_fill_time: i32,
+    /// `[Setup] SpellFillTime`（oracle `GameSvrConf.cs:1324`，缺省 `800`）：
+    /// 魔力点回蓝阈值（`BaseObject.Base.cs:52/78`）。
+    spell_fill_time: i32,
     /// 空 `HomeMap` 新角色的进图回落（`homemap::HomeFallback`，`WorldServer.cs:250-260`）。
     home: homemap::HomeFallback,
     /// `IsNewHuman` 的新手物品输入。
@@ -3090,6 +3205,7 @@ fn sim_loop(
                             &chr_name,
                             socket,
                             &online,
+                            &mut ground_sessions,
                             &mut world,
                             &mut displays,
                             &gates,
@@ -3638,6 +3754,9 @@ fn sim_loop(
                                                                 // tick = GetTickCount()（`CharacterObject.cs:83-86`）。
                                                                 ..game_svr::recover::Recovery::new(now_ms())
                                                             },
+                                                            // 体力/魔力点（`BaseObject.cs:445-448`：HealthTick/SpellTick=0、
+                                                            // AutoRecoveryTick=GetTickCount()）。
+                                                            stamina: game_svr::stamina::Stamina::new(now_ms()),
                                                             // `ShowHp` 由技能「心灵启示」置位（未移植）⇒ 初生 false。
                                                             show_hp: false,
                                                             // `UserUnLockDurg` 不在角色记录里（会话初生 false；
@@ -3865,6 +3984,17 @@ fn sim_loop(
             &online,
             &gates,
             enter_cfg.ref_msg_range,
+        );
+        // 体力/魔力点段（oracle `BaseObject.Run()` `:26-109`）：同一 `Run()` 里紧接
+        // `PlayObject` 的恢复段之后；命中会回写 `Entity.hp` ⇒ 必须在周期存档之前。
+        drain_stamina(
+            &mut ground_sessions,
+            &mut world,
+            &online,
+            &gates,
+            enter_cfg.ref_msg_range,
+            enter_cfg.health_fill_time,
+            enter_cfg.spell_fill_time,
         );
         // 周期存档（oracle `WorldServer.cs:698-703`）：oracle 在同一 `Run()` 之后查，
         // 这里紧跟 [`drain_recovery`]（保证存档体读到的是本 tick 恢复后的 `WAbil`）。
@@ -4876,6 +5006,7 @@ mod tests {
             sub: game_svr::ability::SubAbility::first_call(),
             equip: test_equip_inputs(),
             recovery: game_svr::recover::Recovery::new(0),
+            stamina: game_svr::stamina::Stamina::new(0),
             show_hp: false,
             user_unlock_durg: false,
             hunger_status: 0,
@@ -4942,6 +5073,7 @@ mod tests {
                 inc_spell: 4,
                 ..game_svr::recover::Recovery::new(0)
             },
+            stamina: game_svr::stamina::Stamina::new(0),
             show_hp: false,
             user_unlock_durg: false,
             hunger_status: 55,
@@ -5235,6 +5367,7 @@ mod tests {
             "mover",
             901,
             &online,
+            &mut std::collections::HashMap::new(),
             &mut world,
             &mut displays,
             &gates,
@@ -5254,6 +5387,7 @@ mod tests {
             "mover",
             901,
             &online,
+            &mut std::collections::HashMap::new(),
             &mut world,
             &mut displays,
             &gates,
@@ -5313,6 +5447,7 @@ mod tests {
             "mover",
             901,
             &online,
+            &mut std::collections::HashMap::new(),
             &mut world,
             &mut displays,
             &gates,
@@ -5357,6 +5492,7 @@ mod tests {
             "mover",
             901,
             &online,
+            &mut std::collections::HashMap::new(),
             &mut world,
             &mut displays,
             &gates,
@@ -5396,6 +5532,7 @@ mod tests {
                 "mover",
                 901,
                 &online,
+                &mut std::collections::HashMap::new(),
                 &mut world,
                 &mut displays,
                 &gates,
@@ -5503,6 +5640,7 @@ mod tests {
                 sub: game_svr::ability::SubAbility::first_call(),
                 equip: test_equip_inputs(),
                 recovery: game_svr::recover::Recovery::new(0),
+                stamina: game_svr::stamina::Stamina::new(0),
                 show_hp: false,
                 user_unlock_durg: false,
                 hunger_status: 0,
@@ -5667,6 +5805,7 @@ mod tests {
                 },
                 equip: test_equip_inputs(),
                 recovery: game_svr::recover::Recovery::new(0),
+                stamina: game_svr::stamina::Stamina::new(0),
                 show_hp: false,
                 user_unlock_durg: false,
                 hunger_status: 0,
@@ -5788,6 +5927,7 @@ mod tests {
                 sub: game_svr::ability::SubAbility::first_call(),
                 equip: test_equip_inputs(),
                 recovery: game_svr::recover::Recovery::new(0),
+                stamina: game_svr::stamina::Stamina::new(0),
                 show_hp: false,
                 user_unlock_durg: false,
                 hunger_status: 0,
@@ -5908,6 +6048,7 @@ mod tests {
                 sub: game_svr::ability::SubAbility::first_call(),
                 equip: test_equip_inputs(),
                 recovery: game_svr::recover::Recovery::new(0),
+                stamina: game_svr::stamina::Stamina::new(0),
                 show_hp: false,
                 user_unlock_durg: false,
                 hunger_status: 0,
@@ -6611,6 +6752,7 @@ mod tests {
                 sub: game_svr::ability::SubAbility::first_call(),
                 equip: test_equip_inputs(),
                 recovery: game_svr::recover::Recovery::new(0),
+                stamina: game_svr::stamina::Stamina::new(0),
                 show_hp: false,
                 user_unlock_durg: false,
                 hunger_status: 0,
@@ -6750,6 +6892,7 @@ mod tests {
                 sub: game_svr::ability::SubAbility::first_call(),
                 equip: test_equip_inputs(),
                 recovery: game_svr::recover::Recovery::new(0),
+                stamina: game_svr::stamina::Stamina::new(0),
                 show_hp: true,
                 user_unlock_durg: false,
                 hunger_status: 0,
@@ -6865,6 +7008,185 @@ mod tests {
             "HP 打满 ⇒ IncHealth 清零（T-14 归零路径）"
         );
         assert_eq!(sg.state.wabil.hp, 19, "HP 夹到 MaxHP");
+    }
+
+    /// **本片（`openmir2-m3-scoped-diff-ability`）构造级判据**：`drain_stamina` 把
+    /// `BaseObject.Run()` 的负值扣血支（`BaseObject.Base.cs:105-109`）作用到 `WAbil.HP`，
+    /// **回写世界实体**（逐击 `SERVER_STATE` dump 与攻击结算读 `Entity.hp`），并照
+    /// `HealthSpellChanged()` 给自己回一条 `SM_HEALTHSPELLCHANGED`（帧内容 = 当次快照）。
+    ///
+    /// 红检：① 删掉 `world.entities.get_mut(...).hp = …` 回写 ⇒ 实体 HP 断言必红；
+    /// ② 回帧的 `hp`/`mp` 互换 ⇒ 头部断言必红；③ 把两次 `HealthSpellChanged()` 合并成一条
+    /// （只发终态）⇒ `stamina::tests::both_branches_in_one_run_produce_two_distinct_change_snapshots` 必红。
+    #[test]
+    fn drain_stamina_drops_one_hp_writes_back_and_emits_frame() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::with_maps(vec![(32, 32)]);
+        world.open_session("hero");
+        let hid = world
+            .enter_map("hero", mir2_world::Entity::new(0, "hero", 10, 10), 0)
+            .expect("hero 进世界");
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(hid);
+        sg.state.wabil.hp = 20_669;
+        sg.state.wabil.max_hp = 20_669;
+        sg.state.wabil.mp = 900;
+        sg.state.wabil.max_mp = 900;
+        // 体力点已被打事件推到阈值以下；`replay_cursor` 落后 ~60ms ⇒ 本轮至少重放一次 `Run()`。
+        sg.stamina.health_tick = -400;
+        sg.stamina.replay_cursor = now_ms() - 60;
+        sg.stamina.auto_recovery_tick = sg.stamina.replay_cursor;
+        sessions.insert("hero".into(), sg);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hid,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        drain_stamina(&mut sessions, &mut world, &online, &gates, 12, 300, 800);
+        let mut frames = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            let cm = CommandMessage::from_bytes(&body).expect("SM_* body 至少 12B");
+            frames.push((socket, cm.recog, cm.ident, cm.param, cm.tag, cm.series));
+        }
+        assert_eq!(
+            frames,
+            vec![(
+                901,
+                hid,
+                mir2_protocol::messages::SM_HEALTHSPELLCHANGED,
+                20_668,
+                900,
+                20_669
+            )],
+            "负值扣血支：一条自见帧（recog=ActorId、param=HP、tag=MP、series=MaxHP）"
+        );
+        assert_eq!(
+            world.entities.get(hid).unwrap().hp,
+            20_668,
+            "命中后必须回写世界实体 `hp`（逐击 dump / 攻击结算读它）"
+        );
+        assert_eq!(sessions["hero"].state.wabil.hp, 20_668);
+        assert!(
+            sessions["hero"].stamina.health_tick > -300,
+            "扣血后 HealthTick += HealthFillTime"
+        );
+
+        // 无变更 ⇒ 无帧（oracle 只在 `HealthSpellChanged()` 被调用时发包）。
+        sessions.get_mut("hero").unwrap().stamina.replay_cursor = now_ms();
+        drain_stamina(&mut sessions, &mut world, &online, &gates, 12, 300, 800);
+        assert!(rx0.try_recv().is_err(), "无变更 ⇒ 不得回帧");
+    }
+
+    /// **本片构造级判据（移动消耗点）**：`handle_move_cmd` 成功支按 oracle 扣体力/魔力点——
+    /// `CM_WALK` 只 `HealthTick -= 10`（`PlayObject.Attack.cs:1424`）；
+    /// `CM_RUN`/`CM_HORSERUN` = `HealthTick -= 60; SpellTick -= 10; SpellTick = max(0, ·);
+    /// PerHealth -= 1; PerSpell -= 1`（`:1352-1356` / `:1041-1045`）。
+    ///
+    /// 红检：把 `on_run_success` 的 `SpellTick` 扣减删掉，或跑步不扣 `PerHealth/PerSpell`
+    /// ⇒ 本用例必红。
+    #[test]
+    fn move_run_consumes_stamina_and_per_pool() {
+        use mir2_protocol::messages::{CM_HORSERUN, CM_RUN, CM_WALK};
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(64, 64);
+        let mover = {
+            let mut e = mir2_world::Entity::new(0, "mover".to_string(), 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        world.tick();
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            mover,
+            downlink::ActorDisplay::new(0, 0, 111, 0, 0, 255, b"mover".to_vec()),
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "mover".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: mover,
+            },
+        );
+        let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("mover".into(), test_session_ground(mover));
+
+        // 走路（1 格）：只 `HealthTick -= 10`，不动 `Per*`。
+        handle_move_cmd(
+            CM_WALK,
+            game_svr::feature::make_long(11, 10),
+            0,
+            "mover",
+            901,
+            &online,
+            &mut sessions,
+            &mut world,
+            &mut displays,
+            &gates,
+        );
+        assert_eq!(sessions["mover"].stamina.health_tick, -10);
+        assert_eq!(
+            sessions["mover"].recovery.per_health, 5,
+            "走路不扣 PerHealth（oracle 只在跑步/骑跑扣）"
+        );
+        assert_eq!(sessions["mover"].recovery.per_spell, 5);
+
+        // 跑步（2 格）：`HealthTick -= 60`；`SpellTick = max(0, -10) = 0`；`Per*` 各 -1。
+        handle_move_cmd(
+            CM_RUN,
+            game_svr::feature::make_long(13, 10),
+            0,
+            "mover",
+            901,
+            &online,
+            &mut sessions,
+            &mut world,
+            &mut displays,
+            &gates,
+        );
+        assert_eq!(sessions["mover"].stamina.health_tick, -70);
+        assert_eq!(
+            sessions["mover"].stamina.spell_tick, 0,
+            "SpellTick 有 0 下限（`HUtil32._MAX(0, …)`）"
+        );
+        assert_eq!(sessions["mover"].recovery.per_health, 4);
+        assert_eq!(sessions["mover"].recovery.per_spell, 4);
+
+        // 骑跑（3 格）：再 `HealthTick -= 60` ⇒ -130。
+        handle_move_cmd(
+            CM_HORSERUN,
+            game_svr::feature::make_long(16, 10),
+            0,
+            "mover",
+            901,
+            &online,
+            &mut sessions,
+            &mut world,
+            &mut displays,
+            &gates,
+        );
+        assert_eq!(sessions["mover"].stamina.health_tick, -130);
+        assert_eq!(sessions["mover"].recovery.per_health, 3);
+        assert_eq!(sessions["mover"].recovery.per_spell, 3);
     }
 
     /// 测试用：带四种新手物品模板的目录（`find_by_name` 按名字查）。
@@ -6987,6 +7309,7 @@ mod tests {
                 sub: game_svr::ability::SubAbility::first_call(),
                 equip: test_equip_inputs(),
                 recovery: game_svr::recover::Recovery::new(0),
+                stamina: game_svr::stamina::Stamina::new(0),
                 show_hp: false,
                 user_unlock_durg: false,
                 hunger_status: 0,
@@ -7188,6 +7511,15 @@ mod tests {
             sessions["atk"].recovery.per_health,
             per_before.wrapping_sub(2),
             "成功支 PerHealth -= 2（oracle 无符号回绕）"
+        );
+        // 本片（`openmir2-m3-scoped-diff-ability`）：成功支的体力/魔力点（`PlayObject.Attack.cs:955-957`）。
+        assert_eq!(
+            sessions["atk"].stamina.health_tick, -30,
+            "成功支 HealthTick -= 30（初始 0 ⇒ -30）"
+        );
+        assert_eq!(
+            sessions["atk"].stamina.spell_tick, 0,
+            "成功支 SpellTick -= 100 ⇒ max(0, ...)（初始 0 ⇒ 0）"
         );
         let rec = world.tick();
         assert!(

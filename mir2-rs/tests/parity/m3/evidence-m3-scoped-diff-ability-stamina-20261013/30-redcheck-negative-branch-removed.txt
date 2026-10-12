@@ -1,0 +1,42 @@
+# 改坏必红 ①：把 stamina.rs 的负值扣血支条件改成 'if false && ...'（= 删掉 BaseObject.Base.cs:105-109 的 HP -= 1）
+# cmd: cargo test -p game-svr --offline stamina
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.84s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-3aa264152417c61e.exe)
+
+running 8 tests
+test stamina::tests::attacker_loses_one_hp_when_health_tick_drops_below_fill_time ... FAILED
+test stamina::tests::death_freezes_auto_recovery_tick ... ok
+test stamina::tests::both_branches_in_one_run_produce_two_distinct_change_snapshots ... ok
+test stamina::tests::struck_resets_stamina ... ok
+test stamina::tests::removing_the_negative_tick_branch_must_break_the_regression ... FAILED
+test stamina::tests::run_interval_is_fifty_ms ... ok
+test stamina::tests::health_tick_recovers_two_per_fifty_ms ... ok
+test stamina::tests::recovery_is_fifty_ms_based_not_world_tick_based ... ok
+
+failures:
+
+---- stamina::tests::attacker_loses_one_hp_when_health_tick_drops_below_fill_time stdout ----
+
+thread 'stamina::tests::attacker_loses_one_hp_when_health_tick_drops_below_fill_time' (6056) panicked at bins\game-svr\src\stamina.rs:274:9:
+assertion `left == right` failed: 660ms 间隔 ⇒ 120 击内只触发一次 HealthTick<-300 的扣血
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- stamina::tests::removing_the_negative_tick_branch_must_break_the_regression stdout ----
+
+thread 'stamina::tests::removing_the_negative_tick_branch_must_break_the_regression' (32296) panicked at bins\game-svr\src\stamina.rs:309:9:
+assertion `left == right` failed: HealthTick < -300 且 HP>1 ⇒ 扣 1 HP
+  left: 20669
+ right: 20668
+
+
+failures:
+    stamina::tests::attacker_loses_one_hp_when_health_tick_drops_below_fill_time
+    stamina::tests::removing_the_negative_tick_branch_must_break_the_regression
+
+test result: FAILED. 6 passed; 2 failed; 0 ignored; 0 measured; 80 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --lib`
+rc=101

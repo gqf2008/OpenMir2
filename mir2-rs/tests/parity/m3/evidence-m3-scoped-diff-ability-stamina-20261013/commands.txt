@@ -1,0 +1,60 @@
+# 命令（M3②③ follow-up：`characters_ablity.Hp` 唯一残留的离线根因修 = 体力/魔力点段）
+# 卡：openmir2-m3-scoped-diff-ability（issue 05f9079a）
+# 车道 m2-svr / principal openmir2-worker-11 / 分支 worktree-m2-stamina-healthtick
+# 工作目录 = E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr
+# base = refs/heads/master fa82187a（F-2 归因片 merge 33294574 + M3④ 盘点 103995c1）
+# 本片只改 mir2-rs/bins/game-svr/**；零 src/sql/MirClient、零夹具改动；未起栈、未占端口。
+
+## 0) 树状态（base/分支/改动面）
+git rev-parse HEAD                                      # fa82187ada03d8a7d3636308952f5d57ecf6dd3d
+git status --porcelain                                  # 5 改 + 1 未跟踪（stamina.rs），全在 mir2-rs/bins/game-svr/src/
+
+## 1) oracle 行号原始件（只读共享主检出的 C# oracle，不改）
+#    -> 02-oracle-baseobject-run.txt / 03-oracle-consumption-sites.txt / 04-oracle-frame-config.txt
+sed -n '25,110p' E:/Users/gxh/Documents/GitHub/OpenMir2/src/M2Server/Actor/BaseObject.Base.cs
+sed -n '883,960p;1030,1046p;1350,1356p;1420,1426p' E:/Users/gxh/Documents/GitHub/OpenMir2/src/M2Server/Player/PlayObject.Attack.cs
+sed -n '1562,1592p' E:/Users/gxh/Documents/GitHub/OpenMir2/src/M2Server/Player/PlayObject.Message.cs
+sed -n '700,710p;287,289p;306,307p;445,450p' E:/Users/gxh/Documents/GitHub/OpenMir2/src/M2Server/Actor/BaseObject.cs
+sed -n '168,175p;1322,1325p' E:/Users/gxh/Documents/GitHub/OpenMir2/src/Modules/SystemModule/Conf/Model/GameSvrConf.cs
+sed -n '152,153p' E:/Users/gxh/Documents/GitHub/OpenMir2/src/Modules/SystemModule/Conf/ServerConf.cs
+grep -in 'HealthFillTime\|SpellFillTime' E:/MirServer/M2GameSvr/Server.conf     # 785: 300 / 786: 800
+sed -n '1,12p' E:/Users/gxh/Documents/GitHub/OpenMir2/src/GameSrv/Word/Threads/UserProcessor.cs   # TimerScheduledService(50ms)
+
+## 2) 构造级判据（GREEN：lib 88 / bin 157 / relay 13 / seed_inject 3）
+export CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target
+cargo test -p game-svr --offline                        # -> 20-game-svr-tests.txt
+cargo test -p game-svr --offline stamina                # 8 条 stamina::tests::* 全 ok
+cargo test -p game-svr --offline drain_stamina_drops_one_hp_writes_back_and_emits_frame
+cargo test -p game-svr --offline move_run_consumes_stamina_and_per_pool
+cargo test -p game-svr --offline setup_stamina_fill_times_and_defaults
+
+## 3) 改坏必红（逐次：变异 ⇒ 跑 ⇒ 记原始件 ⇒ 用 /e/tmp/m2svr-stamina-redcheck/*.bak 还原 ⇒ diff -q 核对）
+cp mir2-rs/bins/game-svr/src/stamina.rs /e/tmp/m2svr-stamina-redcheck/stamina.rs.bak
+cp mir2-rs/bins/game-svr/src/main.rs    /e/tmp/m2svr-stamina-redcheck/main.rs.bak
+#   ① 负值扣血支条件改 `if false && …`（= 删 BaseObject.Base.cs:105-109）
+cargo test -p game-svr --offline stamina                            # -> 30-redcheck-negative-branch-removed.txt（2 红）
+#   ② 删掉 drain_stamina 的 `world.entities.get_mut(..).hp = wabil.hp`
+cargo test -p game-svr --offline drain_stamina_drops_one_hp_writes_back_and_emits_frame  # -> 31-*（1 红）
+#   ③ 吞掉 HP 支的 changes.push（两次 HealthSpellChanged 合并成一条）
+cargo test -p game-svr --offline both_branches                      # -> 32-*（1 红）
+#   ④ 删掉跑步/骑跑的 PerHealth/PerSpell -= 1
+cargo test -p game-svr --offline move_run_consumes_stamina_and_per_pool                  # -> 33-*（1 红）
+diff -q mir2-rs/bins/game-svr/src/stamina.rs /e/tmp/m2svr-stamina-redcheck/stamina.rs.bak   # 一致
+diff -q mir2-rs/bins/game-svr/src/main.rs    /e/tmp/m2svr-stamina-redcheck/main.rs.bak      # 一致
+
+## 4) 四门禁（隔离 target）
+cargo fmt --all -- --check                                                        # -> gates/10-fmt.txt  rc=0
+cargo clippy --workspace --all-targets --offline -- -D warnings                   # -> gates/11-clippy.txt  rc=0
+cargo run -p msgcodegen --offline -- --check                                      # -> gates/12-msgcodegen.txt  rc=0（604）
+cargo test --workspace --offline                                                  # -> gates/13-test-workspace.txt  rc=0（84 suites / 698 passed / 0 failed / 16 ignored）
+
+## 5) 证据 hash 复核（仓库字节 = LF 归一口径）
+python -I tools/evidence-hash/verify_sha256sums.py write mir2-rs/tests/parity/m3/evidence-m3-scoped-diff-ability-stamina-20261013
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/m3/evidence-m3-scoped-diff-ability-stamina-20261013
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-scoped-diff-ability-stamina-20261013
+python -I tools/evidence-hash/verify_sha256sums.py selftest
+#    -> 40-verify.txt
+
+## 6) 窗口
+# 未起栈：5000/5100/5500/5600/5700/6000/7000/7100/7200 本轮未使用；未连 MySQL。
+# 真机两相复跑（证明那 1 HP 差消失）要两侧栈窗口 ⇒ 按卡 DoD §4 登记，等 owner 排在 ④ 的 B/C/D 之后。

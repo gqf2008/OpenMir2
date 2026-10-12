@@ -1,0 +1,144 @@
+# oracle: 消耗点（PlayObject.Attack.cs）与受击清零（PlayObject.Message.cs）
+# cmd: sed -n '883,960p;1030,1046p;1350,1356p;1420,1426p' src/M2Server/Player/PlayObject.Attack.cs
+                if (nX == CurrX && nY == CurrY)
+                {
+                    result = true;
+                    AttackTick = HUtil32.GetTickCount();
+                    if (wIdent == Messages.CM_HEAVYHIT && UseItems[ItemLocation.Weapon] != null && UseItems[ItemLocation.Weapon].Dura > 0)// 挖矿
+                    {
+                        if (GetFrontPosition(ref n14, ref n18) && !Envir.CanWalk(n14, n18, false))
+                        {
+                            StdItem StdItem = SystemShare.ItemSystem.GetStdItem(UseItems[ItemLocation.Weapon].Index);
+                            if (StdItem != null && StdItem.Shape == 19)
+                            {
+                                if (PileStones(n14, n18))
+                                {
+                                    SendSocket("=DIG");
+                                }
+                                HealthTick -= 30;
+                                SpellTick -= 50;
+                                SpellTick = HUtil32._MAX(0, SpellTick);
+                                PerHealth -= 2;
+                                PerSpell -= 2;
+                                return true;
+                            }
+                        }
+                    }
+                    switch (wIdent)
+                    {
+                        case Messages.CM_HIT:
+                            AttackDir(null, 0, nDir);
+                            break;
+                        case Messages.CM_HEAVYHIT:
+                            AttackDir(null, 1, nDir);
+                            break;
+                        case Messages.CM_BIGHIT:
+                            AttackDir(null, 2, nDir);
+                            break;
+                        case Messages.CM_POWERHIT:
+                            AttackDir(null, 3, nDir);
+                            break;
+                        case Messages.CM_LONGHIT:
+                            AttackDir(null, 4, nDir);
+                            break;
+                        case Messages.CM_WIDEHIT:
+                            AttackDir(null, 5, nDir);
+                            break;
+                        case Messages.CM_FIREHIT:
+                            AttackDir(null, 7, nDir);
+                            break;
+                        case Messages.CM_CRSHIT:
+                            AttackDir(null, 8, nDir);
+                            break;
+                        case Messages.CM_TWINHIT:
+                            AttackDir(null, 9, nDir);
+                            break;
+                        case Messages.CM_42HIT:
+                            AttackDir(null, 10, nDir);
+                            AttackDir(null, 11, nDir);
+                            break;
+                    }
+                    if (MagicArr[MagicConst.SKILL_YEDO] != null && UseItems[ItemLocation.Weapon].Dura > 0)
+                    {
+                        AttackSkillCount -= 1;
+                        if (AttackSkillPointCount == AttackSkillCount)
+                        {
+                            PowerHit = true;
+                            SendSocket("+PWR");
+                        }
+                        if (AttackSkillCount <= 0)
+                        {
+                            AttackSkillCount = (byte)(7 - MagicArr[MagicConst.SKILL_YEDO].Level);
+                            AttackSkillPointCount = M2Share.RandomNumber.RandomByte(AttackSkillCount);
+                        }
+                    }
+                    HealthTick -= 30;
+                    SpellTick -= 100;
+                    SpellTick = HUtil32._MAX(0, SpellTick);
+                    PerHealth -= 2;
+                    PerSpell -= 2;
+                }
+            n14 = M2Share.GetNextDirection(CurrX, CurrY, nX, nY);
+            if (HorseRunTo(n14, false))
+            {
+                if (Transparent && HideMode)
+                {
+                    StatusTimeArr[PoisonState.STATETRANSPARENT] = 1;
+                }
+                if (SpaceMoved || CurrX == nX && CurrY == nY)
+                {
+                    result = true;
+                }
+                HealthTick -= 60;
+                SpellTick -= 10;
+                SpellTick = HUtil32._MAX(0, SpellTick);
+                PerHealth -= 1;
+                PerSpell -= 1;
+            }
+                    result = true;
+                }
+                HealthTick -= 60;
+                SpellTick -= 10;
+                SpellTick = HUtil32._MAX(0, SpellTick);
+                PerHealth -= 1;
+                PerSpell -= 1;
+                if (SpaceMoved || CurrX == nX && CurrY == nY)
+                {
+                    result = true;
+                }
+                HealthTick -= 10;
+            }
+            else
+
+# cmd: sed -n '1562,1592p' src/M2Server/Player/PlayObject.Message.cs  （RM_STRUCK 处理器开头）
+                case Messages.RM_STRUCK:
+                case Messages.RM_STRUCK_MAG:
+                    if (processMsg.wParam > 0)
+                    {
+                        if (processMsg.ActorId == ActorId)
+                        {
+                            if (SystemShare.ActorMgr.Get(processMsg.nParam3) != null)
+                            {
+                                if (SystemShare.ActorMgr.Get(processMsg.nParam3).Race == ActorRace.Play)
+                                {
+                                    SetPkFlag(SystemShare.ActorMgr.Get(processMsg.nParam3));
+                                }
+                                SetLastHiter(SystemShare.ActorMgr.Get(processMsg.nParam3));
+                            }
+                            if (this.MyGuild != null && this.Castle != null)
+                            {
+                                if (SystemShare.CastleMgr.IsCastleMember(this) != null && SystemShare.ActorMgr.Get(processMsg.nParam3) != null)
+                                {
+                                    if (SystemShare.ActorMgr.Get(processMsg.nParam3).Race == ActorRace.Guard)
+                                    {
+                                        ((GuardUnit)SystemShare.ActorMgr.Get(processMsg.nParam3)).CrimeforCastle = true;
+                                        ((GuardUnit)SystemShare.ActorMgr.Get(processMsg.nParam3)).CrimeforCastleTime = HUtil32.GetTickCount();
+                                    }
+                                }
+                            }
+                            HealthTick = 0;
+                            SpellTick = 0;
+                            PerHealth -= 1;
+                            PerSpell -= 1;
+                            StruckTick = HUtil32.GetTickCount();
+                        }
