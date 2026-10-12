@@ -523,15 +523,20 @@ pub fn regen_gate(
     let gen_mod_count = gen_mod_count(entry.count, config.mon_gen_rate);
     decision.gen_mod_count = gen_mod_count;
     decision.active_count = i32::from(entry.active_count);
-    if gen_mod_count <= i32::from(entry.active_count) || !can_create(&entry.map_name) {
-        return decision;
+    // **R5-1**：oracle 进入 zen 到期块就 `bool boRegened = true;`（`WorldServer.MonGen.cs:231`），
+    // 只有 `genModCount > nGenCount && canCreate` 成立才把它改成 `RegenMonsters` 的返回值
+    // （`:244-246`），随后 `if (boRegened) monGen.StartTick = GetTickCount();`（`:248-250`）
+    // ⇒ **饱和 / `!canCreate` 也要回写 `StartTick`**（否则 `!canCreate` 恢复可刷后 Rust 比 oracle 早一个 zen 周期）。
+    let mut bo_regened = true;
+    if gen_mod_count > i32::from(entry.active_count) && can_create(&entry.map_name) {
+        let n_count = gen_mod_count - i32::from(entry.active_count);
+        decision.n_count = n_count;
+        // `decision.regened` 仍只表示「调用了 `RegenMonsters`」。
+        decision.regened = true;
+        bo_regened = regen_monsters(rng, entry, n_count, config, clock, create_monster);
+        decision.regen_result = bo_regened;
     }
-    let n_count = gen_mod_count - i32::from(entry.active_count);
-    decision.n_count = n_count;
-    decision.regened = true;
-    let result = regen_monsters(rng, entry, n_count, config, clock, create_monster);
-    decision.regen_result = result;
-    if result {
+    if bo_regened {
         entry.start_tick = now;
         decision.start_tick_updated = true;
     }
@@ -601,10 +606,12 @@ pub fn regen_monsters(
     create_monster: &mut MonsterCreator,
 ) -> bool {
     let mut result = true;
+    // **R5-2**：oracle 在 `if (monGen.Race > 0)` **之前**就取 `dwStartTick`（`WorldServer.MonGen.cs:816`）；
+    // 真实时钟无功能影响，但注入式 `TickClockFn` 下会被放大成假绿/假红。
+    let dw_start_tick = clock();
     if entry.race <= 0 {
         return result;
     }
-    let dw_start_tick = clock();
     let range = i32::from(entry.range);
     let span = range * 2 + 1;
     let base_x = i32::from(entry.x) - range;
@@ -968,6 +975,36 @@ mod tests {
         assert_eq!(e.active_count, 0);
     }
 
+    /// **R5-2**：`dw_start_tick = clock()` 必须在 `entry.race <= 0` 判断**之前**
+    /// （oracle `WorldServer.MonGen.cs:816`）；注入式时钟下可判红。
+    #[test]
+    fn regen_monsters_reads_clock_before_race_guard() {
+        let c = cfg();
+        let mut e = entry("A", 1, 0, 0, 0, 0);
+        e.race = 0; // race <= 0 ⇒ 早退，但先取一次时钟
+        let mut rng = RandomNumber::with_seed(1);
+        let mut calls = 0;
+        let mut clock = || {
+            calls += 1;
+            100
+        };
+        let mut created = 0;
+        let ok = regen_monsters(
+            &mut rng,
+            &mut e,
+            1,
+            &c,
+            &mut clock,
+            &mut |_rng, _map, _x, _y, _race, _name| {
+                created += 1;
+                Some(1)
+            },
+        );
+        assert!(ok);
+        assert_eq!(created, 0);
+        assert_eq!(calls, 1, "R5-2：race<=0 早退前也必须先取一次 dwStartTick");
+    }
+
     #[test]
     fn regen_monsters_normal_branch_null_returns_false() {
         let c = cfg();
@@ -1210,5 +1247,97 @@ mod tests {
         );
         assert!(ok);
         assert_eq!(xy, vec![(163, 256), (163, 256), (158, 263)]);
+    }
+
+    /// **R5-1 用例①**：饱和（`active_count >= genModCount`）且 zen 到期 ⇒ `StartTick` 被回写、
+    /// 不调 `RegenMonsters`、**不抽随机数**（oracle `WorldServer.MonGen.cs:231/244-250`）。
+    #[test]
+    fn regen_gate_writes_start_tick_when_saturated() {
+        let mut state = MonGenState::default();
+        let mut e = entry("A", 1, 0, 0, 10, 10);
+        e.active_count = 1; // genModCount = max(1, Round(1 / (10/10.0))) = 1 ⇒ 饱和
+        e.start_tick = 1; // 非 0 ⇒ 走 zen 判定
+        state.entries.push(e);
+        let mut thread = MonGenThread {
+            id: 0,
+            ..MonGenThread::default()
+        };
+        thread.entries.push(0);
+        state.threads.insert(0, thread);
+
+        let mut rng = RandomNumber::with_seed(1);
+        let mut fresh = RandomNumber::with_seed(1);
+        let mut clock = || 0;
+        let mut can = |_: &str| true;
+        let mut created = 0;
+        let d = regen_gate(
+            &mut state,
+            0,
+            1_000_000,
+            0,
+            &cfg(),
+            &mut rng,
+            &mut clock,
+            &mut can,
+            &mut |_rng, _, _, _, _, _| {
+                created += 1;
+                Some(1)
+            },
+        );
+        assert!(d.gate_due);
+        assert!(!d.regened, "饱和不调 RegenMonsters");
+        assert!(
+            d.start_tick_updated,
+            "R5-1：饱和（boRegened 初值 true）也要回写 StartTick"
+        );
+        assert_eq!(state.entries[0].start_tick, 1_000_000);
+        assert_eq!(created, 0);
+        assert_eq!(rng.random(), fresh.random(), "饱和支不抽任何随机数");
+    }
+
+    /// **R5-1 用例②**：`can_create = false`（`boNOHUMNOMON && HumCount<=0`）且 zen 到期
+    /// ⇒ `StartTick` 同样被回写、不抽随机数（否则 !canCreate 恢复后可刷时 Rust 比 oracle 早一个 zen 周期）。
+    #[test]
+    fn regen_gate_writes_start_tick_when_map_cannot_create() {
+        let mut state = MonGenState::default();
+        let mut e = entry("A", 1, 0, 0, 10, 10);
+        e.active_count = 0; // genModCount = 1 > 0，但 canCreate=false 阻止进入 RegenMonsters
+        e.start_tick = 1;
+        state.entries.push(e);
+        let mut thread = MonGenThread {
+            id: 0,
+            ..MonGenThread::default()
+        };
+        thread.entries.push(0);
+        state.threads.insert(0, thread);
+
+        let mut rng = RandomNumber::with_seed(1);
+        let mut fresh = RandomNumber::with_seed(1);
+        let mut clock = || 0;
+        let mut can = |_: &str| false;
+        let mut created = 0;
+        let d = regen_gate(
+            &mut state,
+            0,
+            1_000_000,
+            0,
+            &cfg(),
+            &mut rng,
+            &mut clock,
+            &mut can,
+            &mut |_rng, _, _, _, _, _| {
+                created += 1;
+                Some(1)
+            },
+        );
+        assert!(d.gate_due);
+        assert!(!d.regened);
+        assert!(
+            d.start_tick_updated,
+            "R5-1：!can_create（boRegened 初值 true）也要回写 StartTick"
+        );
+        assert_eq!(state.entries[0].start_tick, 1_000_000);
+        assert_eq!(created, 0);
+        assert_eq!(rng.random(), fresh.random(), "!can_create 支不抽任何随机数");
     }
 }

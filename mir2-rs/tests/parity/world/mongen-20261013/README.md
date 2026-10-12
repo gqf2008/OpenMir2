@@ -21,7 +21,7 @@
 | `CurrMonGenIdx` 轮询（越界取 0、推进） | 同文件 `:211-230` | 同上 |
 | `genModCount = max(1, Round(max(1,Count)/(MonGenRate/10.0)))` | 同文件 `:232` | `gen_mod_count` |
 | `canCreate = !(map==null \|\| map.Flag.boNOHUMNOMON && map.HumCount<=0)` | 同文件 `:235-243` | `regen_gate` 的 `can_create` 回调 |
-| `genModCount > ActiveCount && canCreate` ⇒ `RegenMonsters`；成功才回写 `StartTick` | 同文件 `:244-252` | 同上 |
+| `genModCount > ActiveCount && canCreate` ⇒ `RegenMonsters`；**进入 zen 到期块即 `boRegened=true`**（唯二例外 = `RegenMonsters` 返回 false）⇒ `if(boRegened) StartTick=now`（饱和 / `!canCreate` 也回写） | 同文件 `:231`、`:244-250` | 同上 |
 | 复活条件 `Death && CanReAlive && Invisible && MonGen!=null` 且 `(now-ReAliveTick) > GetMonstersZenTime` | 同文件 `:283-291` | `monster_due_for_revive` |
 | ghost 5 分钟清理 | 同文件 `:302` | `monster_ghost_expired` |
 | `RegenMonsters` 集中/普通两支的取数次序 | 同文件 `:811-874` | `regen_monsters` |
@@ -62,7 +62,7 @@ interleaving 逐调用相同。第 ① 片的解析本身不抽数；末尾哨�
 
 ## 4. 判据与交叉验证
 
-- 构造级单测 **18 条**（`mongen.rs::tests`）：分批抽数、`OrdinalIgnoreCase` 分组、`MonGenList[i]` 错位缺陷、
+- 构造级单测 **21 条**（`mongen.rs::tests`）：分批抽数、`OrdinalIgnoreCase` 分组、`MonGenList[i]` 错位缺陷、
   末尾哨兵首槽/不刷怪/不影响计数、`GetMonstersZenTime`（含 30min 阈值与 d10 夹 6）、`gen_mod_count`、
   regen 门/`ActiveCount`/`VentureServer`、集中支与普通支位置窗口、`race<=0` 不抽、普通支 `null ⇒ false`、
   ZenLimit 超时（两支）、轮询与 `StartTick`、复活条件与 ghost 过期。
@@ -97,7 +97,7 @@ interleaving 逐调用相同。第 ① 片的解析本身不抽数；末尾哨�
 | `cargo fmt --all -- --check` | rc=0 | `gates/10-fmt.txt` |
 | `cargo clippy --workspace --all-targets --offline -- -D warnings` | rc=0 | `gates/11-clippy.txt` |
 | `cargo run -q -p msgcodegen --offline -- --check` | rc=0（604 条） | `gates/13-msgcodegen.txt` |
-| `cargo test --workspace --offline` | rc=0（**86 suites / 732 passed / 0 failed / 18 ignored**） | `gates/12-workspace-test.txt` |
+| `cargo test --workspace --offline` | rc=0（**86 suites / 735 passed / 0 failed / 18 ignored**） | `gates/12-workspace-test.txt` |
 
 ## 7. 边界
 
@@ -114,6 +114,20 @@ interleaving 逐调用相同。第 ① 片的解析本身不抽数；末尾哨�
    `KeyNotFoundException`（部署 `limit=1` 不触发）；本实现按 thread id 升序遍历实际存在的线程（模块头已登记）。
 3. 线程模型：oracle 每条 `ProcessMonsters` 跑在独立 `Thread` + 墙钟 + `Thread.Sleep(20)`；
    本 crate 单线程串行、显式注入时刻（`TickClockFn`），部署 `limit=1` 时两者一致。
+
+## 8.1 R5-1 / R5-2 收口（reviewer-5 `4e2bfc83` request_changes）
+
+- **R5-1（Important，已修）**：oracle 进入 zen 到期块即 `bool boRegened = true;`（`:231`），只有
+  `genModCount > nGenCount && canCreate` 才把它改成 `RegenMonsters` 的返回值（`:244-246`），
+  随后 `if (boRegened) StartTick = GetTickCount();`（`:248-250`）⇒ **饱和 / `!canCreate` 也要回写
+  `StartTick`**。`regen_gate` 已改为 `let mut bo_regened = true;` 结构；新增两条用例
+  `regen_gate_writes_start_tick_when_saturated` / `regen_gate_writes_start_tick_when_map_cannot_create`
+  （均断言 `start_tick_updated=true` 且**不抽随机数**）。牙齿 RC-6（回退为提前 return）⇒ 两条用例
+  FAILED（`35-redcheck-rc6-r51-starttick.txt`，rc=101）。
+- **R5-2（Minor，已修）**：`dw_start_tick = clock()` 移到 `entry.race <= 0` 判断**之前**（`:816`）。
+  新增用例 `regen_monsters_reads_clock_before_race_guard`；牙齿 RC-7（时钟取回 race 判断之后）⇒
+  FAILED（`36-redcheck-rc7-r52-clock.txt`，rc=101）。
+- README 本表上方 `genModCount` 行的 oracle 口径已订正（原「成功才回写」读反）。
 
 ## 9. 残留 / 下一片
 
