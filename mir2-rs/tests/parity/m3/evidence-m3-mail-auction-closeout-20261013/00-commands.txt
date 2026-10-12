@@ -1,0 +1,28 @@
+卡 openmir2-m3-mail-auction-align（issue 4125cc72）：owner 2026-10-13 06:24（comment 1bd1361c）要求的收口登记
+（邮件 = oracle_absent 新 T-*；M3-report.md ⑩ 行拆邮件/拍卖两栏）——离线片，本片零 .rs / 零 src / 零 sql、未起栈、未占端口。
+
+工作目录：E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3cs（本车道 worktree；共享主检出未触碰）
+
+# 0) 同步 + 合并当时 master（owner「patch base 跟随 master」纪律）
+git fetch origin
+git merge origin/master            # base = 4d276812（= d7db7e06 的 master 合并提交）
+
+# 1) 文档改动（写集：tests/parity/**）
+#    a) tests/parity/whitelist.md            —— 新「M3⑩ 登记」节 + T-36（邮件 = oracle_absent）
+#    b) tests/parity/M3-report.md            —— ⑩ 行拆 10a（邮件）/10b（拍卖）+ §1.10 + §4 索引 + 顶部口径句
+#    c) tests/parity/m3/M3⑩邮件拍卖现状盘点报告-20261013.md —— 新增 §0.1 owner 裁决（事后补记；盘点结论不变）
+
+# 2) 四门禁（隔离 CARGO_TARGET_DIR + --offline；在 mir2-rs/ 下）
+export CARGO_TARGET_DIR=E:/tmp/m3cs-mailauction-target
+cargo fmt --all -- --check                              # -> 01-gate-fmt.txt (rc=0)
+cargo clippy --workspace --all-targets --offline -- -D warnings   # -> 02-gate-clippy.txt (rc=0)
+cargo test --workspace --offline                        # -> 03-gate-test.txt (86 suites/743 passed/0 failed/18 ignored, rc=0)
+cargo run --offline -p msgcodegen -- --check            # -> 04-gate-msgcodegen.txt (604 条常量, rc=0)
+
+# 3) 边界与差量
+git diff --stat
+git diff --name-only -- src sql MirClient mir2-rs/crates mir2-rs/bins   # -> 05-boundary-and-diff.txt（必须为空）
+
+# 4) 证据包 hash（仓库字节 = LF 归一 / git blob 口径）
+python -I tools/evidence-hash/verify_sha256sums.py write mir2-rs/tests/parity/m3/evidence-m3-mail-auction-closeout-20261013
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/m3/evidence-m3-mail-auction-closeout-20261013
