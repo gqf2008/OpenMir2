@@ -1,0 +1,73 @@
+{
+  "initialize": {
+    "distinct_names": [
+      "A",
+      "B",
+      "C"
+    ],
+    "draws": [
+      1,
+      0,
+      0,
+      1,
+      0
+    ],
+    "limit": 2,
+    "monster_list": [
+      "A",
+      "C"
+    ],
+    "seed": 42
+  },
+  "regen_mission": {
+    "count": 3,
+    "create_draws": 2,
+    "mission_gen_rate": 100,
+    "positions": [
+      [
+        163,
+        256
+      ],
+      [
+        163,
+        256
+      ],
+      [
+        158,
+        263
+      ]
+    ],
+    "range": 3,
+    "seed": 42,
+    "x": 166,
+    "y": 266
+  },
+  "regen_normal": {
+    "count": 4,
+    "create_draws": 2,
+    "mission_gen_rate": 0,
+    "positions": [
+      [
+        167,
+        264
+      ],
+      [
+        164,
+        265
+      ],
+      [
+        164,
+        267
+      ],
+      [
+        166,
+        265
+      ]
+    ],
+    "range": 2,
+    "seed": 42,
+    "x": 166,
+    "y": 266
+  },
+  "regen_normal_next_draw": 517451
+}

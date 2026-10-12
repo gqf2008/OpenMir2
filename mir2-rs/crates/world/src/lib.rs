@@ -19,6 +19,7 @@ pub mod combat;
 pub mod entity;
 pub mod magic;
 pub mod map;
+pub mod mongen;
 pub mod session;
 pub mod world;
 
@@ -38,6 +39,12 @@ pub use magic::{
 };
 pub use map::{
     CellAttribute, CellObject, CellType, FloorItemKind, FloorItemMeta, MapCellInfo, MapGrid,
+};
+pub use mongen::{
+    gen_mod_count, get_monsters_zen_time, initialize_monster, monster_due_for_revive,
+    monster_ghost_expired, regen_gate, regen_monsters, should_regen, step_threads, MapCanCreate,
+    MonGenConfig, MonGenEntry, MonGenState, MonGenThread, MonsterCreator, TickClockFn,
+    MON_GEN_THREAD_MON_LIMIT,
 };
 pub use session::{Session, SessionError, WorldStage};
 pub use world::{Command, EntitySnapshot, FloorItemView, TickRecord, World, TICK_INTERVAL_MS};

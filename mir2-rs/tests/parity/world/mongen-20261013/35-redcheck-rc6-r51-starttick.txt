@@ -1,0 +1,29 @@
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\world)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.58s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m2svr-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 2 tests
+test mongen::tests::regen_gate_writes_start_tick_when_map_cannot_create ... FAILED
+test mongen::tests::regen_gate_writes_start_tick_when_saturated ... FAILED
+
+failures:
+
+---- mongen::tests::regen_gate_writes_start_tick_when_map_cannot_create stdout ----
+
+thread 'mongen::tests::regen_gate_writes_start_tick_when_map_cannot_create' (8120) panicked at crates\world\src\mongen.rs:1304:9:
+R5-1：!can_create（boRegened 初值 true）也要回写 StartTick
+
+---- mongen::tests::regen_gate_writes_start_tick_when_saturated stdout ----
+
+thread 'mongen::tests::regen_gate_writes_start_tick_when_saturated' (27204) panicked at crates\world\src\mongen.rs:1260:9:
+R5-1：饱和（boRegened 初值 true）也要回写 StartTick
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    mongen::tests::regen_gate_writes_start_tick_when_map_cannot_create
+    mongen::tests::regen_gate_writes_start_tick_when_saturated
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 38 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-world --lib`

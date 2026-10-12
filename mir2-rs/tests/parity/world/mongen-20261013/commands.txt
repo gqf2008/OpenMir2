@@ -1,0 +1,26 @@
+# 本片（M3④-实现 B 分片②：crates/world MonGen 调度/RNG 次序）复现命令
+# 工作目录：<worktree>/mir2-rs ；隔离目标目录 CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target
+
+# --- 判据 ---
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test -p mir2-world --offline --lib mongen
+
+# 独立 Python 复刻交叉核对（脚本在本目录，输出见 03-crosscheck-output.json）
+cd tests/parity/world/mongen-20261013 && python -I 02-crosscheck-python-mongen-rng.py.txt
+
+# --- 四门禁 ---
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo fmt --all -- --check
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo clippy --workspace --all-targets --offline -- -D warnings
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo run -q -p msgcodegen --offline -- --check
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test --workspace --offline
+
+# --- 改坏必红（每次：cp mongen.rs 备份 -> 变异 -> 跑命中用例 -> 还原并 diff -q 核对）---
+# RC-1：普通支 x/y 位置抽互换                        -> regen_positions_match_independent_python_normal FAILED
+# RC-2：`if mission > 0 && Random(100) < mission` 恒假 -> regen_positions_match_independent_python_mission FAILED
+# RC-3：GetMonstersZenTime 去掉 d10 夹 6             -> get_monsters_zen_time_matches_oracle FAILED
+# RC-4：复活边界 `>` 改 `>=`                          -> monster_due_for_revive_and_ghost_expiry FAILED
+# RC-5：去掉末尾哨兵插入（`if sentinel_present` → `if false`）-> initialize_monster_sentinel_is_first_round_robin_slot FAILED
+
+# --- 证据 hash（仓库 LF/git-blob 口径）---
+python -I tools/evidence-hash/verify_sha256sums.py write mir2-rs/tests/parity/world/mongen-20261013
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/world/mongen-20261013
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/world/mongen-20261013
