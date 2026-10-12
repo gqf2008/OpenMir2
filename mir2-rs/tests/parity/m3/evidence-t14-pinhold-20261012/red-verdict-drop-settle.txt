@@ -1,0 +1,68 @@
+=== MUTATION 1: gate_guards.ps1 Get-M3PinHoldVerdict 去掉 settle 闸门（$hold = $match -and $PreviousMatch） ===
+--- selftest_gate.ps1 ---
+M3 门禁护栏自检  evidence=E:\tmp\openmir2-m3gs\selftest-20261012-083027
+③ Format-M3Scenario（两侧 baseline.json 的 fixed_new_chr 同形态）
+  [OK  ] scenario/固定=Job=1 Hair=2 Sex=0                       
+  [OK  ] scenario/默认=(off)                                    
+① Get-M3EntryGuard（-Side rust 必须是已知 Rust 入口 + 期望端口）
+  [OK  ] entry/已知Rust三入口=绿                                    side=rust failed=[]
+  [OK  ] entry/C#实现@rust侧=红                                   side=rust failed=[rust_side_entry_not_known_rust]
+  [OK  ] entry/C#实现@csharp侧=绿                                 side=csharp failed=[]
+  [OK  ] entry/未知进程foo.exe=红(旧护栏放行)                           side=rust failed=[rust_side_entry_not_known_rust]
+  [OK  ] entry/已知Rust接错端口=红(旧护栏放行)                            side=rust failed=[rust_side_entry_not_known_rust]
+  [OK  ] entry/端口没听=红                                         side=rust failed=[entry_ports_not_listening]
+② Get-M3SessionDirFault（本侧会话目录空值防线）
+  [OK  ] sessionDir/null=session_dir_missing                  null
+  [OK  ] sessionDir/目录对象=无fault                               DirectoryInfo
+③ Get-M3PeerScenarioGuard（参照会话建角场景一致性）
+  [OK  ] peer/场景一致=绿                                          failed=[] peer='Job=1 Hair=2 Sex=0'
+  [OK  ] peer/固定vs默认=红                                        failed=[peer_scenario_mismatch]
+  [OK  ] peer/两侧都off=绿                                        failed=[]
+  [OK  ] peer/缺baseline.json=红                                failed=[peer_baseline_missing]
+  [OK  ] peer/缺fixed_new_chr=红                                failed=[peer_fixed_new_chr_missing]
+  [OK  ] peer/baseline.json坏JSON=红(不中断)                       failed=[peer_baseline_invalid]
+④ Get-M3PeerBagEquipScopeGuard（参照会话背包/装备开关一致性；T-14 复跑口径）
+  [OK  ] bagscope/两侧同开关(关挂机)=绿                                failed=[] peer='on step_ms=1000 start_delay_ms=3000 disable_autoplay=True'
+  [OK  ] bagscope/旧开挂机peer=红(autoplay_on)                     failed=[peer_bag_equip_autoplay_on] peer='on step_ms=1000 start_delay_ms=3000 disable_autoplay=False'
+  [OK  ] bagscope/step_ms不同=红                                 failed=[peer_bag_equip_scope_mismatch]
+  [OK  ] bagscope/两侧off=绿                                     failed=[]
+  [OK  ] bagscope/本侧on+peer缺字段=红                              failed=[peer_bag_equip_scope_missing]
+  [OK  ] bagscope/本侧off+peer缺字段=绿(旧产物默认关)                     failed=[]
+  [OK  ] bagscope/baseline.json坏JSON=红(不中断)                   failed=[peer_baseline_invalid]
+⑤ Get-M3PeerStartPoseGuard（T-14 固定起点变体；owner 86478c55/d7798370）
+  [OK  ] pose/口径形态=map=0 home=0,289,618 pos=289,618 level=1 dir=0 bag=48@0,97@1,207@2,3@3 abil=1 
+  [OK  ] pose/两侧同 pin=绿                                       failed=[] peer='map=0 home=0,289,618 pos=289,618 level=1 dir=0 bag=48@0,97@1,207@2,3@3 abil=1'
+  [OK  ] pose/peer pin 不同=红                                   failed=[peer_start_pose_mismatch]
+  [OK  ] pose/本侧 pin+peer 缺字段=红                               failed=[peer_start_pose_missing]
+  [OK  ] pose/两侧 none=绿                                       failed=[]
+  [OK  ] pose/形态认不出=红                                         failed=[peer_start_pose_invalid]
+⑥ Get-M3PinHoldVerdict / Invoke-M3PinSettleHold（T-14 两相 pin 的 settle+hold；owner 2026-10-12 08:20）
+  [OK  ] pin/仪器形态=settle_seconds=3 max_attempts=5 consecutive=2 
+  [FAIL] pin/跳过 settle=红(pin_settle_skipped)                  hold=True failed=[pin_settle_skipped]
+  [OK  ] pin/单次观测=红(needs_consecutive)                        hold=False failed=[pin_hold_needs_consecutive_settle]
+  [OK  ] pin/连续两轮到齐=绿(hold)                                   hold=True failed=[]
+  [OK  ] pin/存档覆盖=红(pin_char/bag/abil_mismatch)               hold=False failed=[pin_char_mismatch,pin_bag_mismatch,pin_abil_mismatch]
+  [FAIL] pin/循环·跳过 settle=红(fail-closed)                      hold=True attempts=2
+  [OK  ] pin/循环·正常=绿(attempt=2)                               hold=True attempts=2 settle_rounds=2
+SELFTEST_REPORT E:\tmp\openmir2-m3gs\selftest-20261012-083027\selftest.json
+SUMMARY total=36 failed=2
+SELFTEST FAIL: 有护栏口径与实现不符（见上面 FAIL 行）
+--- run_bag_equip_pair.ps1 -SelfCheckNoStack ---
+SELFTEST_NO_STACK: 无栈自检——所有路径都必须 fail-closed（缺失绝不静默 GREEN）
+SELFTEST ① 配置透传 on=true? BagEquipSequence=True DisableAutoPlay=True
+SELFTEST ② 默认关 off=false? BagEquipSequence=False DisableAutoPlay=False
+SELFTEST ③ 无栈入口护栏 rc=2（期望 2=PREREQ）
+SELFTEST ④ -DiffOnly 缺会话 rc=2（期望 2=PREREQ）
+SELFTEST ⑤a run_pair -BagEquipSequence 传 -DisableAutoPlay? True（scope=on step_ms=1000 start_delay_ms=3000 disable_autoplay=True）
+SELFTEST ⑤b 默认路径不带 -DisableAutoPlay? True（scope=(off)）
+SELFTEST ⑥ 旧挂机 peer 被判红? True（peer_bag_equip_autoplay_on）
+SELFTEST ⑦ scoped_diff selftest rc=0（含 MapName/CX/CY 逐字节比断言）
+SELFTEST ⑧ preflight(T-27)：空目录 false / DB_SAVEHUMANRCD true / DBR_ 回包不算
+SELFTEST ⑨ 固定起点两相：prewarm+RequireCharCreated=True；scoring 无 -FixedNewChr/-NewAccount=True；pin_sql_all=7 条（含初始背包 4 件 + Abil）
+SELFTEST ⑨b 旧 peer 无 start_pose + 本侧 pin 被判红? True
+SELFTEST ⑩a 跳过 settle 直接 pin ⇒ Hold=True（期望 False；代码=pin_hold_needs_consecutive_settle,pin_settle_skipped）
+SELFTEST ⑩b pin 早于落库：首轮 hold=False（期望 False）；收敛 attempt=4（期望 4）Hold=True
+SELFTEST ⑩c 存档反复覆盖 ⇒ Hold=False（期望 False，fail-closed）attempts=5
+SELFTEST ⑩d 正常路径：Hold=True attempt=2 settle_rounds=2（期望 True/2/2）
+SELFTEST ⑩e 生产 pin_instrument='settle_seconds=3 max_attempts=5 consecutive=2'（要求 settle_seconds>=1 且 consecutive>=2）
+SELFTEST_RED RED: pin_hold_should_fail_when_settle_skipped

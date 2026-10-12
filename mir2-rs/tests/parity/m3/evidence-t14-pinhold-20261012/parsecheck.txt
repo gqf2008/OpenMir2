@@ -1,0 +1,4 @@
+PARSE OK   mir2-rs/tests/parity/m3/gate_guards.ps1
+PARSE OK   mir2-rs/tests/parity/m3/run_pair.ps1
+PARSE OK   mir2-rs/tests/parity/m3/run_bag_equip_pair.ps1
+PARSE OK   mir2-rs/tests/parity/m3/selftest_gate.ps1

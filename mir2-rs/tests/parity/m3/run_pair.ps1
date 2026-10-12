@@ -59,6 +59,8 @@ param(
   [int]$PinCY = 618,
   [int]$PinLevel = 1,
   [int]$PinDir = 0,
+  [int]$PinSettleSeconds = 3,      # 仅 -PinStartPose：每轮 pin 后的 settle 窗口（异步掉线存档落库，见 gate_guards.ps1 ⑥）
+  [int]$PinMaxAttempts = 5,        # 仅 -PinStartPose：settle+hold 最多轮数（仍 hold 不住 ⇒ throw，fail-closed）
   [switch]$SelfTestRed
 )
 
@@ -142,6 +144,8 @@ if ($EmitOpsArgs) {
     $obj['pin_sql'] = Format-M3StartPoseSql -ChrName "${Prefix}0" -MapName $PinMapName -HomeMap $PinHomeMap -HomeX $PinHomeX -HomeY $PinHomeY `
       -CX $PinCX -CY $PinCY -Level $PinLevel -Dir $PinDir
     $obj['pin_sql_all'] = @(Get-M3StartPosePinSql -ChrName "${Prefix}0")
+    # pin 仪器形态（owner 2026-10-12 08:20）：无栈自检据此机判生产接线是否被削弱（settle_seconds>=1、consecutive>=2）。
+    $obj['pin_instrument'] = (Format-M3PinInstrument -SettleSeconds $PinSettleSeconds -MaxAttempts $PinMaxAttempts -Consecutive 2)
   }
   [pscustomobject]$obj | ConvertTo-Json -Depth 4
   exit 0
@@ -236,31 +240,46 @@ if ($PinStartPose) {
   # 预热相的掉线存档是**异步**的（BotSrv 被杀 ⇒ GameSvr `SaveHumanRcd` → FrontEngine 异步落库）：
   # 实测（2026-10-12 T-14 复跑）pin 后立刻进图，C# 侧拿到的是**预热末态**（`CX/CY=285,622`、
   # 物品 `MakeIndex=36685073…`）而不是 pin 的 `289,618`/`90000001…`——预热存档晚于 pin 才落库、把 pin
-  # 覆盖了（与 §5 AFTER 快照前的 settle 同因，注释见下）。做法：pin 后等一个 settle 窗口再校验；
-  # 被覆盖就重 pin，直到**连续 hold 住**（最多 5 轮；仍 hold 不住 ⇒ throw，fail-closed）。
-  $pinHold = $false
-  for ($attempt = 1; $attempt -le 5 -and -not $pinHold; $attempt++) {
-    for ($i = 0; $i -lt $Bots; $i++) {
-      $pinChar = Format-M3StartPoseSql -ChrName "${Prefix}$i" -MapName $PinMapName -HomeMap $PinHomeMap -HomeX $PinHomeX -HomeY $PinHomeY `
-        -CX $PinCX -CY $PinCY -Level $PinLevel -Dir $PinDir
-      Invoke-Mysql $pinChar | Out-Null
-      # 连「初始背包 + Abil」一起 provision（owner 643459a7）：否则五步无对象可操作。
-      foreach ($st in (Get-M3StartPosePinSql -ChrName "${Prefix}$i")) { Invoke-Mysql $st | Out-Null }
-      Write-Output ('PIN_CHAR ' + $pinChar)
-    }
-    Start-Sleep -Seconds 3
-    # pin 后校验：图/坐标/Level + 4 件初始物品 + Abil Level（三项都到位才算 pin 生效）。
-    $pinned = Invoke-Mysql ("SELECT COUNT(*) FROM mir2_db.characters WHERE ChrName LIKE '{0}%' AND MapName='{1}' AND CX={2} AND CY={3} AND Level={4}" -f $Prefix, $PinMapName, $PinCX, $PinCY, $PinLevel)
-    $bagPinned = Invoke-Mysql ("SELECT COUNT(*) FROM mir2_db.characters_bagitem b JOIN mir2_db.characters c ON b.PlayerId=c.Id WHERE c.ChrName LIKE '{0}%' AND b.StdIndex<>0" -f $Prefix)
-    $abilPinned = Invoke-Mysql ("SELECT COUNT(*) FROM mir2_db.characters_ablity a JOIN mir2_db.characters c ON a.PlayerId=c.Id WHERE c.ChrName LIKE '{0}%' AND a.Level={1}" -f $Prefix, $M3PinAbilLevel)
-    if ([int]$pinned -eq $Bots -and [int]$bagPinned -eq (4 * $Bots) -and [int]$abilPinned -eq $Bots) {
-      $pinHold = $true
-      Write-Output ("PIN_HOLD attempt={0}（pin 连续 hold 住）" -f $attempt)
-    } else {
-      Write-Output ("PIN_RETRY attempt={0} pinned={1}/{2} bag={3}/{4} abil={5}/{6}（预热掉线存档覆盖了 pin，重 pin）" -f $attempt, $pinned, $Bots, $bagPinned, (4 * $Bots), $abilPinned, $Bots)
-    }
+  # 覆盖了（与 §5 AFTER 快照前的 settle 同因，注释见下）。
+  # 判据统一到 `gate_guards.ps1::Invoke-M3PinSettleHold`（唯一口径，owner 2026-10-12 08:20）：
+  #   ① 每轮 pin 后必须**真实 settle**（`Start-Sleep` 后返回 $true，计入 settle 轮数）；
+  #   ② **连续两轮** settle 后的复验都到位才算 hold（单次观测挡不住「存档随后覆盖」的假 GREEN）。
+  #   ⇒ 跳过 settle 或存档反复覆盖 ⇒ 必判红（throw，fail-closed）。可判红自检见
+  #   `run_bag_equip_pair.ps1 -SelfCheckNoStack` ⑩（故障注入驱动同一函数）。
+  $pinCtx = [pscustomobject]@{
+    Prefix = $Prefix; Bots = $Bots; SettleSeconds = $PinSettleSeconds
+    MapName = $PinMapName; HomeMap = $PinHomeMap; HomeX = $PinHomeX; HomeY = $PinHomeY
+    CX = $PinCX; CY = $PinCY; Level = $PinLevel; Dir = $PinDir
   }
-  if (-not $pinHold) { throw ("pin 未 hold 住（预热掉线存档反复覆盖）：pinned={0} bag={1} abil={2}" -f $pinned, $bagPinned, $abilPinned) }
+  $pinResult = Invoke-M3PinSettleHold -Bots $Bots -MaxAttempts $PinMaxAttempts -Context $pinCtx `
+    -Pin {
+      param($ctx, $attempt)
+      for ($i = 0; $i -lt $ctx.Bots; $i++) {
+        $pinChar = Format-M3StartPoseSql -ChrName "$($ctx.Prefix)$i" -MapName $ctx.MapName -HomeMap $ctx.HomeMap -HomeX $ctx.HomeX -HomeY $ctx.HomeY `
+          -CX $ctx.CX -CY $ctx.CY -Level $ctx.Level -Dir $ctx.Dir
+        Invoke-Mysql $pinChar | Out-Null
+        # 连「初始背包 + Abil」一起 provision（owner 643459a7）：否则五步无对象可操作。
+        foreach ($st in (Get-M3StartPosePinSql -ChrName "$($ctx.Prefix)$i")) { Invoke-Mysql $st | Out-Null }
+        Write-Output ('PIN_CHAR ' + $pinChar)
+      }
+    } `
+    -Settle { param($ctx, $attempt) Start-Sleep -Seconds ([int]$ctx.SettleSeconds); return $true } `
+    -Observe {
+      param($ctx, $attempt)
+      # pin 后复验：图/坐标/Level + 4 件初始物品 + Abil Level（三项都到位才算本轮 match）。
+      $pinned = Invoke-Mysql ("SELECT COUNT(*) FROM mir2_db.characters WHERE ChrName LIKE '{0}%' AND MapName='{1}' AND CX={2} AND CY={3} AND Level={4}" -f $ctx.Prefix, $ctx.MapName, $ctx.CX, $ctx.CY, $ctx.Level)
+      $bagPinned = Invoke-Mysql ("SELECT COUNT(*) FROM mir2_db.characters_bagitem b JOIN mir2_db.characters c ON b.PlayerId=c.Id WHERE c.ChrName LIKE '{0}%' AND b.StdIndex<>0" -f $ctx.Prefix)
+      $abilPinned = Invoke-Mysql ("SELECT COUNT(*) FROM mir2_db.characters_ablity a JOIN mir2_db.characters c ON a.PlayerId=c.Id WHERE c.ChrName LIKE '{0}%' AND a.Level={1}" -f $ctx.Prefix, $M3PinAbilLevel)
+      return [pscustomobject]@{ Pinned = [int]$pinned; BagPinned = [int]$bagPinned; AbilPinned = [int]$abilPinned }
+    }
+  foreach ($v in $pinResult.Verdicts) {
+    if ($v.hold) { Write-Output ("PIN_HOLD attempt={0}（连续两轮 settle 复验均 hold 住）" -f $v.attempt) }
+    else { Write-Output ("PIN_RETRY attempt={0} {1}（{2}）" -f $v.attempt, $v.detail, (@($v.failed) -join ',')) }
+  }
+  if (-not $pinResult.Hold) {
+    $lastV = @($pinResult.Verdicts)[-1]
+    throw ("pin 未 hold 住（跳过 settle 或预热掉线存档反复覆盖）：{0}" -f $lastV.detail)
+  }
   Write-Output ('PIN_START_POSE ' + (Get-M3StartPoseLabel))
 }
 

@@ -240,9 +240,9 @@ Remove-Item -Recurse -Force mir2-rs/tests/parity/m3/sessions/*/shadow-run* -Erro
   - `m3/run_bag_equip_pair.ps1`：`-DiffOnly` / `-Side rust -PeerSession` 走同一 peer 口径护栏（开关 + 起点）；
     `-Side rust` 新增 **0.5 preflight**（whitelist **T-27**）：机判 `bins/game-svr` 是否已实现断线存档
     （请求常量 `DB_SAVEHUMANRCD`），未实现 ⇒ PREREQ（exit 2，`-SkipSavePreflight` 仅调试）；
-    新增 `-PinStartPose` 透传；`-SelfCheckNoStack` 扩到 9+ 条（含 T-27 preflight 三态与固定起点两相）。
-    `-SelfCheckNoStack` 扩到 7 条（配置透传有/无两向 + run_pair 关挂机耦合两向 + 旧挂机 peer 必红 +
-    `scoped_diff.py selftest` 14/14 + 入口护栏/DiffOnly fail-closed）。
+    新增 `-PinStartPose` 透传；`-SelfCheckNoStack` 扩到 **9 条**（配置透传有/无两向 + run_pair 关挂机耦合两向 +
+    旧挂机 peer 必红 + `scoped_diff.py selftest` 14/14 + 入口护栏/DiffOnly fail-closed + T-27 preflight 三态 +
+    固定起点两相 + 旧起点 peer 必红）。
     顺带修一处**潜伏 bug**：`exit (Invoke-CrossSideDiff …)` 会把函数的 `Write-Output` 全吃进子表达式
     ⇒ 真会话的跨侧 diff 消息不打印、退出码恒 0；改为脚本作用域 `$script:CrossSideDiffRc`。
   - `m3/selftest_gate.ps1`：新增 ④/⑤ 组 13 条构造用例（同开关绿 / 旧挂机 peer 红 autoplay_on / step_ms 不同红 /
@@ -257,3 +257,29 @@ Remove-Item -Recurse -Force mir2-rs/tests/parity/m3/sessions/*/shadow-run* -Erro
 - **边界（逐条）**：oracle `src/**` / `sql/**` / 表结构 / 脚本语法 / 数据文件格式零改动；
   未动 `bins/game-svr/**`（`main.rs`/`smframe.rs` 归 m2-svr）、`crates/**`、`MirClient`；
   未 merge、未签 review。
+
+## 十六、本片（2026-10-12，worktree `m3bag`：pin settle+hold 可判红自检 + 两处 Minor 收口；纯夹具/文档，不占端口）
+
+- **背景**：owner 2026-10-12 08:20（卡 `openmir2-m3-bag-equip-alignment`，第十四格已合入 master `3cd60e55`、等 m2-svr 的 T-28 片）：
+  本卡唯一待触发的话是 T-28 修好后的 T-14 重跑；本轮做**不占端口、不动 `.rs`** 的可选项。
+- **入库（本片交付）**：
+  - `m3/gate_guards.ps1`：新增 `Format-M3PinInstrument` + `Get-M3PinHoldVerdict` + `Invoke-M3PinSettleHold`
+    （pin 的 settle+hold **唯一口径**；hold 条件 = 至少一轮真实 settle + **连续两轮** settle 复验都到位）。
+  - `m3/run_pair.ps1`：`-PinStartPose` 的 pin 循环改用 `Invoke-M3PinSettleHold`；新增 `-PinSettleSeconds`/`-PinMaxAttempts`；
+    `-EmitOpsArgs` 增 `pin_instrument`（供无栈自检机判生产接线未被削弱）。
+  - `m3/run_bag_equip_pair.ps1`：`-SelfCheckNoStack` 新增 **⑩**（故障注入驱动生产同一函数：跳过 settle / pin 早于落库 /
+    存档反复覆盖 ⇒ 必判红；正常路径 attempt=2；并机判 `pin_instrument`）。
+  - `m3/selftest_gate.ps1`：新增 **⑥** pin settle+hold 组 7 条构造用例 ⇒ **36/36**（原 29）。
+  - `m3/README.md` / `m3/T14-对照报告-20261012.md`（新增 §10 补强节）—— 口径与原始输出同步。
+  - `m3/T14-复跑口径报告-20261012.md`（**M-1**）：订正滞后计数（「7 条/23/23」→ 实际 9 条/23 → 第十四格 29 → 本片 10 条/36）。
+  - `m3/evidence-t14-20261012/SHA256SUMS.txt`（**reviewer-5 M-1**）：补证据清单，`verify_sha256sums.py` **9/9 GREEN**。
+  - `m3/evidence-t14-pinhold-20261012/**`（新）：本片自检原始件（commands/parsecheck/selfcheck/selftest/三条 red-*/restore-regreen/gates-*）
+    + `SHA256SUMS.txt` **12/12 GREEN**；四门禁亦回归：fmt rc=0 / clippy rc=0 / test 73 suites 566 passed 0 failed 16 ignored / msgcodegen 604。
+- **未入库/临时物**：本片日志与变异还原备份原在 `E:/tmp/m3bag*`（**M-2 已清**，见下）；
+  `src/BotSrv/bin/Release/AppSetting.json` 被无栈自检写入（`.gitignore` 覆盖）。
+- **M-2 清理**：删除第十三/十四格遗留的 `E:/tmp/{m3bag_*.log,m3bag*.json,m3bag_thread*.txt,diffonly*.log,parsecheck.ps1,
+  run_pair.ps1.bak,gate_guards.ps1.bak,m3bag/,m3bag6/,m3bag-rev-verify/}`；
+  保留 `E:/tmp/openmir2-m3bag-target/**`（隔离 cargo target，供 T-28 重跑复用）与 `E:/tmp/openmir2-watch/m3bag*`（本 lane 会话日志）。
+- **未起栈、未占端口**：本片全程未新建 LISTENING；未用 5000/7000/7100/7200/3306。
+- **边界（逐条）**：oracle `src/**` / `sql/**` / 表结构 / 脚本语法 / 数据文件格式零改动；
+  `crates/**`、`bins/game-svr/**`、`MirClient`、`tools/botload/**` 零改动；未 merge、未签 review。

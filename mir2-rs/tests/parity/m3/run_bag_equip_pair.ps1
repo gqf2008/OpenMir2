@@ -30,6 +30,10 @@
     -Side rust -PeerSession <C#会话> 跑 Rust 侧并跨侧 diff（= 本卡的正式判据）。
     -DiffOnly -CsharpSession <名> -RustSession <名>  只重比既有产物（**不碰端口**）。
     -SelfCheckNoStack                无栈自检：所有路径都必须 fail-closed（PREREQ/RED），缺栈绝不静默 GREEN。
+                                     ⑩ 含 **pin settle+hold 的可判红自检**（owner 2026-10-12 08:20）：故障注入驱动
+                                     生产同一函数 `gate_guards.ps1::Invoke-M3PinSettleHold` —— 跳过 settle、
+                                     pin 早于异步落库、存档反复覆盖 ⇒ 必判红；并机判 `run_pair -EmitOpsArgs`
+                                     的 `pin_instrument`（`settle_seconds>=1` 且 `consecutive>=2`）。
 
   判红口径（逐步；任一不满足即退出码 != 0）：
     0 入口护栏   -Side rust 而入口监听进程路径仍是 `E:\MirServer\*`（C#）⇒ RED（否则拿 C# 比 C# 恒绿）；
@@ -307,8 +311,60 @@ if ($SelfCheckNoStack) {
     Write-Output ("SELFTEST ⑨b 旧 peer 无 start_pose + 本侧 pin 被判红? {0}" -f (@($pg.failed) -contains 'peer_start_pose_missing'))
   }
 
+  # ⑩ pin settle+hold 仪器的**可判红自检**（owner 2026-10-12 08:20；审阅者会问「仪器有没有被削弱」）：
+  #    故障注入驱动**生产同一函数** `gate_guards.ps1::Invoke-M3PinSettleHold`，断言：
+  #    (a) 跳过 settle 直接 pin（Settle 返回 $false）⇒ Hold=false 且带 pin_settle_skipped；
+  #    (b) pin 早于异步落库——存档在首轮复验后落库覆盖 pin ⇒ 首轮虽 match 但 hold=false
+  #        （单次观测挡不住假 GREEN），重 pin 后连续两轮到位才 hold（attempt=4）；
+  #    (c) 存档反复覆盖 ⇒ 5 轮 hold 不住 ⇒ Hold=false（fail-closed，起点守卫 RED）；
+  #    (d) 正常路径（settle + 三项到位）⇒ attempt=2 hold（连续两轮）。
+  $emptyPin = { param($ctx, $attempt) }
+  $okObserve = { param($ctx, $attempt) return [pscustomobject]@{ Pinned = 1; BagPinned = 4; AbilPinned = 1 } }
+  # (a) 跳过 settle 直接 pin：Settle 报告「没等」⇒ 每轮都判 pin_settle_skipped，永不 hold（假 GREEN 被拦）
+  $rSkip = Invoke-M3PinSettleHold -Bots 1 -MaxAttempts 3 -Pin $emptyPin `
+    -Settle { param($ctx, $attempt) return $false } -Observe $okObserve
+  $skipCodes = @($rSkip.Verdicts | ForEach-Object { @($_.failed) } | Sort-Object -Unique)
+  if ($rSkip.Hold) { $failures += 'pin_hold_should_fail_when_settle_skipped' }
+  if (-not ($skipCodes -contains 'pin_settle_skipped')) { $failures += ('pin_settle_skipped_missing=' + ($skipCodes -join ',')) }
+  Write-Output ("SELFTEST ⑩a 跳过 settle 直接 pin ⇒ Hold={0}（期望 False；代码={1}）" -f $rSkip.Hold, ($skipCodes -join ','))
+  # (b) pin 早于异步落库：首轮 match 但不得 hold；重 pin 后连续两轮到齐 ⇒ attempt=4
+  $rAsync = Invoke-M3PinSettleHold -Bots 1 -MaxAttempts 5 -Pin $emptyPin `
+    -Settle { param($ctx, $attempt) Start-Sleep -Milliseconds 1; return $true } `
+    -Observe {
+      param($ctx, $attempt)
+      if ($attempt -eq 1) { return [pscustomobject]@{ Pinned = 1; BagPinned = 4; AbilPinned = 1 } }   # 首轮：pin 刚写，存档未落
+      if ($attempt -eq 2) { return [pscustomobject]@{ Pinned = 0; BagPinned = 0; AbilPinned = 0 } }   # 存档落库覆盖了 pin
+      return [pscustomobject]@{ Pinned = 1; BagPinned = 4; AbilPinned = 1 }                            # 重 pin 后稳定
+    }
+  $firstHold = @($rAsync.Verdicts)[0].hold
+  if ($firstHold) { $failures += 'pin_hold_single_observation_false_green' }
+  if (-not ($rAsync.Hold -and $rAsync.Attempts -eq 4)) { $failures += ('pin_async_overwrite_not_converged=' + $rAsync.Attempts) }
+  Write-Output ("SELFTEST ⑩b pin 早于落库：首轮 hold={0}（期望 False）；收敛 attempt={1}（期望 4）Hold={2}" -f $firstHold, $rAsync.Attempts, $rAsync.Hold)
+  # (c) 存档反复覆盖 ⇒ fail-closed（绝不静默 GREEN）
+  $rRepeat = Invoke-M3PinSettleHold -Bots 1 -MaxAttempts 5 -Pin $emptyPin `
+    -Settle { param($ctx, $attempt) Start-Sleep -Milliseconds 1; return $true } `
+    -Observe { param($ctx, $attempt) return [pscustomobject]@{ Pinned = 0; BagPinned = 0; AbilPinned = 0 } }
+  if ($rRepeat.Hold) { $failures += 'pin_hold_should_fail_when_save_keeps_overwriting' }
+  Write-Output ("SELFTEST ⑩c 存档反复覆盖 ⇒ Hold={0}（期望 False，fail-closed）attempts={1}" -f $rRepeat.Hold, $rRepeat.Attempts)
+  # (d) 正常路径：settle + 三项到位 ⇒ 连续两轮 ⇒ attempt=2
+  $rOk = Invoke-M3PinSettleHold -Bots 1 -MaxAttempts 5 -Pin $emptyPin `
+    -Settle { param($ctx, $attempt) Start-Sleep -Milliseconds 1; return $true } -Observe $okObserve
+  if (-not ($rOk.Hold -and $rOk.Attempts -eq 2 -and $rOk.SettleRounds -eq 2)) { $failures += ('pin_normal_path_not_hold_at_2=' + $rOk.Attempts) }
+  Write-Output ("SELFTEST ⑩d 正常路径：Hold={0} attempt={1} settle_rounds={2}（期望 True/2/2）" -f $rOk.Hold, $rOk.Attempts, $rOk.SettleRounds)
+  # (e) 生产接线未被削弱：run_pair -EmitOpsArgs -PinStartPose 的 pin_instrument 必须 settle_seconds>=1 且 consecutive>=2
+  $instRaw = & powershell -ExecutionPolicy Bypass -File $RunPair -EmitOpsArgs -FixedNewChr -BagEquipSequence -PinStartPose
+  if ($LASTEXITCODE -ne 0) { $failures += 'emit_pin_instrument_rc=non-zero' }
+  else {
+    $inst = (($instRaw | Out-String).Trim() | ConvertFrom-Json).pin_instrument
+    if ($inst -notmatch 'settle_seconds=(\d+)') { $failures += 'pin_instrument_missing_settle' }
+    elseif ([int]$Matches[1] -lt 1) { $failures += ('pin_instrument_settle_too_small=' + $Matches[1]) }
+    if ($inst -notmatch 'consecutive=(\d+)') { $failures += 'pin_instrument_missing_consecutive' }
+    elseif ([int]$Matches[1] -lt 2) { $failures += ('pin_instrument_consecutive_too_small=' + $Matches[1]) }
+    Write-Output ("SELFTEST ⑩e 生产 pin_instrument='{0}'（要求 settle_seconds>=1 且 consecutive>=2）" -f $inst)
+  }
+
   if ($failures.Count -eq 0) {
-    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（配置透传有/无两向 + run_pair 关挂机耦合两向 + 固定起点两相 + 旧挂机 peer/旧起点 peer 必红 + CX/CY 逐字节比断言 + 断线存档 preflight + 入口护栏/DiffOnly fail-closed）'
+    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（配置透传有/无两向 + run_pair 关挂机耦合两向 + 固定起点两相 + pin settle+hold 可判红自检（跳过 settle / 早于落库 / 反复覆盖 / 正常收敛）+ 旧挂机 peer/旧起点 peer 必红 + CX/CY 逐字节比断言 + 断线存档 preflight + 入口护栏/DiffOnly fail-closed）'
     exit 0
   }
   Write-Output ('SELFTEST_RED RED: ' + ($failures -join ', '))

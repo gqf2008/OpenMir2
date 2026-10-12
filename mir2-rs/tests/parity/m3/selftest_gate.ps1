@@ -1,10 +1,10 @@
 #requires -Version 5
 <#
 .SYNOPSIS
-  selftest_gate.ps1 — M3 门禁（run_m3_gate.ps1）五条机判护栏的「判红/判绿」自检。
+  selftest_gate.ps1 — M3 门禁（run_m3_gate.ps1）机判护栏的「判红/判绿」自检。
 
 .DESCRIPTION
-  五条护栏的唯一口径在 `gate_guards.ps1`（主流程与自检共用同一批函数，照
+  护栏的唯一口径在 `gate_guards.ps1`（主流程与自检共用同一批函数，照
   `tools/m2-acceptance/selftest.ps1` + `portclassify.ps1` 的先例）。本脚本用**构造输入**
   把每条口径都跑一遍，断言「失败项代码」而不只看"有没有报错"——只看报错会把"脚本崩了"
   误当"判红"。**全部离线**：不起栈、不占端口、不碰 DB。
@@ -25,6 +25,10 @@
     ⑤ Get-M3PeerStartPoseGuard（T-14 固定起点变体）：两侧 baseline.json.start_pose 必须逐字节相同；
        不同 ⇒ peer_start_pose_mismatch；本侧 pin + peer 缺字段 ⇒ peer_start_pose_missing；
        形态认不出 ⇒ peer_start_pose_invalid；两侧 none ⇒ 绿。
+
+    ⑥ Get-M3PinHoldVerdict / Invoke-M3PinSettleHold（T-14 两相 pin 的 settle+hold；owner 2026-10-12 08:20）：
+       跳过 settle 直接 pin ⇒ pin_settle_skipped；单次观测 ⇒ pin_hold_needs_consecutive_settle（不 hold）；
+       连续两轮 settle 后到齐 ⇒ hold；存档覆盖 ⇒ pin_char/bag/abil_mismatch；循环本体的故障注入验证。
 
   「改坏必红 / 还原必绿」：把 `gate_guards.ps1` 对应护栏改回旧行为（放行）再跑本脚本，
   必须 exit 1；还原后必须 exit 0。原始输出落 `E:\tmp\openmir2-watch\`。
@@ -251,6 +255,41 @@ $g = Get-M3PeerStartPoseGuard -PeerDir $pBadPose -LocalPose $LocalPose
 Test-Case 'pose/形态认不出=红' (@($g.failed) -contains 'peer_start_pose_invalid') `
   ("failed=[{0}]" -f (@($g.failed) -join ','))
 
+# ---------------------------------------------------------------- ⑥ pin settle+hold 判据
+Write-Output '⑥ Get-M3PinHoldVerdict / Invoke-M3PinSettleHold（T-14 两相 pin 的 settle+hold；owner 2026-10-12 08:20）'
+# 形态标签（无栈自检据此机判生产接线是否被削弱：settle_seconds>=1、consecutive>=2）
+Test-Case 'pin/仪器形态=settle_seconds=3 max_attempts=5 consecutive=2' `
+  ((Format-M3PinInstrument) -eq 'settle_seconds=3 max_attempts=5 consecutive=2') ''
+# 跳过 settle 直接 pin ⇒ 必判红（假 GREEN 被拦）
+$vSkip = Get-M3PinHoldVerdict -SettleRounds 0 -PreviousMatch $true -Pinned 1 -BagPinned 4 -AbilPinned 1 -Bots 1
+Test-Case 'pin/跳过 settle=红(pin_settle_skipped)' ((@($vSkip.failed) -contains 'pin_settle_skipped') -and (-not $vSkip.hold)) `
+  ("hold={0} failed=[{1}]" -f $vSkip.hold, (@($vSkip.failed) -join ','))
+# 单次观测（pin 早于落库静默）⇒ 不足 hold，必须再来一轮（连续两轮）
+$vOnce = Get-M3PinHoldVerdict -SettleRounds 1 -PreviousMatch $false -Pinned 1 -BagPinned 4 -AbilPinned 1 -Bots 1
+Test-Case 'pin/单次观测=红(needs_consecutive)' ((@($vOnce.failed) -contains 'pin_hold_needs_consecutive_settle') -and (-not $vOnce.hold)) `
+  ("hold={0} failed=[{1}]" -f $vOnce.hold, (@($vOnce.failed) -join ','))
+# 连续两轮 settle 后到位 ⇒ 绿
+$vHold = Get-M3PinHoldVerdict -SettleRounds 2 -PreviousMatch $true -Pinned 1 -BagPinned 4 -AbilPinned 1 -Bots 1
+Test-Case 'pin/连续两轮到齐=绿(hold)' ($vHold.hold -and (@($vHold.failed).Count -eq 0)) `
+  ("hold={0} failed=[{1}]" -f $vHold.hold, (@($vHold.failed) -join ','))
+# 存档覆盖 pin（坐标/背包/Abil 不符）⇒ 红
+$vOver = Get-M3PinHoldVerdict -SettleRounds 2 -PreviousMatch $true -Pinned 0 -BagPinned 0 -AbilPinned 0 -Bots 1
+Test-Case 'pin/存档覆盖=红(pin_char/bag/abil_mismatch)' ((@($vOver.failed) -contains 'pin_char_mismatch') -and (@($vOver.failed) -contains 'pin_bag_mismatch') -and (@($vOver.failed) -contains 'pin_abil_mismatch') -and (-not $vOver.hold)) `
+  ("hold={0} failed=[{1}]" -f $vOver.hold, (@($vOver.failed) -join ','))
+# 循环本体：故障注入「跳过 settle」⇒ Hold=$false（同一函数即生产用的那个）
+$loopSkip = Invoke-M3PinSettleHold -Bots 1 -MaxAttempts 3 `
+  -Pin { param($c, $a) } `
+  -Settle { param($c, $a) return $false } `
+  -Observe { param($c, $a) return [pscustomobject]@{ Pinned = 1; BagPinned = 4; AbilPinned = 1 } }
+Test-Case 'pin/循环·跳过 settle=红(fail-closed)' (-not $loopSkip.Hold) ("hold={0} attempts={1}" -f $loopSkip.Hold, $loopSkip.Attempts)
+# 循环本体：正常路径 ⇒ attempt=2（连续两轮）
+$loopOk = Invoke-M3PinSettleHold -Bots 1 -MaxAttempts 5 `
+  -Pin { param($c, $a) } `
+  -Settle { param($c, $a) Start-Sleep -Milliseconds 1; return $true } `
+  -Observe { param($c, $a) return [pscustomobject]@{ Pinned = 1; BagPinned = 4; AbilPinned = 1 } }
+Test-Case 'pin/循环·正常=绿(attempt=2)' ($loopOk.Hold -and $loopOk.Attempts -eq 2 -and $loopOk.SettleRounds -eq 2) `
+  ("hold={0} attempts={1} settle_rounds={2}" -f $loopOk.Hold, $loopOk.Attempts, $loopOk.SettleRounds)
+
 # ---------------------------------------------------------------- 汇总
 $report = [ordered]@{
   tool = 'mir2-rs/tests/parity/m3/selftest_gate.ps1'
@@ -266,7 +305,7 @@ $report | ConvertTo-Json -Depth 6 | Set-Content -Path $reportPath -Encoding utf8
 Write-Output ('SELFTEST_REPORT ' + $reportPath)
 Write-Output ('SUMMARY total={0} failed={1}' -f $script:Total, $script:Failed)
 if ($script:Failed -eq 0) {
-  Write-Output 'GREEN: 五条机判护栏的判红/判绿口径都经构造输入验证'
+  Write-Output 'GREEN: 六条机判护栏的判红/判绿口径都经构造输入验证'
   exit 0
 }
 Write-Output 'SELFTEST FAIL: 有护栏口径与实现不符（见上面 FAIL 行）'
