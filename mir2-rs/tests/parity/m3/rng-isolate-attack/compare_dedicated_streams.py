@@ -245,14 +245,26 @@ def self_replay(seq: list[Entry], seed: int) -> list[tuple[int, Entry, int]]:
 
 
 def first_request_divergence(a: list[Entry], b: list[Entry]):
+    """语义归一后的请求序列第一处分歧（owner 2026-10-13 02:15：`Next(min,max)` min=0 ≡ `Next(max)`）。"""
     n = min(len(a), len(b))
     for i in range(n):
-        if (a[i].kind, a[i].arg) != (b[i].kind, b[i].arg):
+        if _norm_req(a[i]) != _norm_req(b[i]):
             return i + 1, a[i], b[i]
     if len(a) != len(b):
         longer = "csharp" if len(a) > len(b) else "rust"
         return n + 1, (a[n] if longer == "csharp" else None), (b[n] if longer == "rust" else None)
     return None, None, None
+
+
+def _norm_req(e: Entry):
+    """`Next(min,max)` 且 packed 高 32 位（min）==0 ⇒ `Next(max)`（语义等价，不抹平真 min>0）。"""
+    if e.kind == "Next(min,max)":
+        unsigned = e.arg & 0xFFFFFFFFFFFFFFFF
+        lo = unsigned & 0xFFFFFFFF
+        hi = (unsigned >> 32) & 0xFFFFFFFF
+        if hi == 0:
+            return ("Next(max)", lo)
+    return (e.kind, e.arg)
 
 
 def hitpoint_interval(units: list[list[Entry]]) -> dict:
@@ -390,6 +402,16 @@ def selftest() -> int:
     idx, _, _ = first_request_divergence(a, b)
     if idx != 1:
         fails.append("first_divergence_must_be_1")
+    # 3b) owner 2026-10-13 02:15：`Next(min,max)` min=0 ≡ `Next(max)` ⇒ 不报分歧……
+    b_norm = [Entry("Next(min,max)", (0 << 32) | 1, 0, "atk_power_a", "x")]
+    idx_n, _, _ = first_request_divergence(a, b_norm)
+    if idx_n is not None:
+        fails.append("min0_must_not_diverge")
+    # 3c) ……但真 min>0 不得抹平
+    b_min5 = [Entry("Next(min,max)", (5 << 32) | 1, 0, "atk_power_a", "x")]
+    idx_m, _, _ = first_request_divergence(a, b_min5)
+    if idx_m != 1:
+        fails.append("min5_must_diverge")
     # 4) HitPoint 区间 teeth（hit=5 / miss=6 ⇒ [5,6)）
     u = [
         [Entry("Next(max)", 1, 0, "atk_power_a", "x"), Entry("Next(max)", 15, 5, "hit_gate", "x"), Entry("Next(min,max)", 1, 0, "hit_struck_damage", "x")],
@@ -401,7 +423,7 @@ def selftest() -> int:
     if fails:
         print("SELFTEST RED: " + ",".join(fails))
         return 1
-    print("SELFTEST GREEN: 9/9")
+    print("SELFTEST GREEN: 9/9（含 `Next(min,max)` min=0 归一不报分歧 / 真 min>0 不抹平）")
     return 0
 
 

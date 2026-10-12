@@ -1,0 +1,72 @@
+# M3②③ 观测口径收口（owner 2026-10-13 02:15）——命令与原始输出落点（全离线，零 .rs，未起栈、未占端口）
+
+# 真机输入来源（追踪件，只读引用；由 m3cs 的 F-N1 后两相实跑产出）：
+#   EV = mir2-rs/tests/parity/m3/evidence-m3-isolate-twophase-fn1-20261013
+#   会话 raw/state：$EV/sessions/{csharp-20261013-013848,csharp-20261013-015115,rust-20261013-015537}/
+#   专用流/服务端 dump：$EV/streams/{csharp-c2-attack-stream.tsv,rust-r1-rng-stream.tsv,
+#                                  csharp-c2-server-state.tsv,rust-r1-server-state.tsv}
+# 运行前把会话的 attack_raw.jsonl + server_state_segment.tsv 复制到临时目录 D（不写追踪件）：
+#   D=E:/tmp/m3bag-obsalign-check ; client-only/$s = 只含 attack_raw.jsonl（无 state ⇒ client 口径）
+
+## 1) 分析器 `(kind,arg)` 假阳性：before（旧实现 index=3 假分歧）/ after（语义归一后 none）
+git show HEAD:mir2-rs/tests/parity/m3/attack-request-sequence/per_strike_requests.py > E:/tmp/psr-old.py
+python -I E:/tmp/psr-old.py analyze --csharp $EV/streams/csharp-c2-attack-stream.tsv \
+  --rust $EV/streams/rust-r1-rng-stream.tsv --seed 42
+#   -> 01-analyze-before.txt（index=3 class=player_path；两侧 repr 均为 hit_struck_damage(37)->22）
+python -I mir2-rs/tests/parity/m3/attack-request-sequence/per_strike_requests.py analyze \
+  --csharp $EV/streams/csharp-c2-attack-stream.tsv --rust $EV/streams/rust-r1-rng-stream.tsv --seed 42
+#   -> 02-analyze-after.txt（GREEN；第一处请求分歧 index=None class=none）
+
+## 2) align 观测口径：before（client-smstruck）/ after（server-state 权威）
+for s in csharp-20261013-013848 csharp-20261013-015115 rust-20261013-015537; do
+  python -I mir2-rs/tests/parity/m3/attack_diff.py align $D/client-only/$s/attack_raw.jsonl \
+    --out $D/client-only/$s/attack_seq.jsonl
+done
+#   -> 03-align-before-client.txt（caliber=client-smstruck；c1 hits=81 / c2 hits=75；Rust hits=57）
+for s in csharp-20261013-013848 csharp-20261013-015115 rust-20261013-015537; do
+  python -I mir2-rs/tests/parity/m3/attack_diff.py align $D/$s/attack_raw.jsonl \
+    --out $D/$s/attack_seq.jsonl
+done
+#   -> 04-align-after-server.txt（caliber=server-state；三侧均 hits=57 dodges=63 sum=2425）
+
+## 3) 跨侧逐 k 判据（DoD②）：权威口径 ⇒ 0
+python -I mir2-rs/tests/parity/m3/attack_diff.py diff $D/csharp-20261013-013848/attack_seq.jsonl $D/csharp-20261013-015115/attack_seq.jsonl
+python -I mir2-rs/tests/parity/m3/attack_diff.py diff $D/csharp-20261013-015115/attack_seq.jsonl $D/rust-20261013-015537/attack_seq.jsonl
+python -I mir2-rs/tests/parity/m3/attack_diff.py diff $D/csharp-20261013-013848/attack_seq.jsonl $D/rust-20261013-015537/attack_seq.jsonl
+#   -> 05/06/07-diff-*.txt（三对全 GREEN rc=0）
+
+## 4) 改坏必红（同一对）用旧 client 口径 seq ⇒ 必须 RED（与 m3cs 报告的 72/102/121 完全一致）
+python -I mir2-rs/tests/parity/m3/attack_diff.py diff $D/client-only/<a>/attack_seq.jsonl $D/client-only/<b>/attack_seq.jsonl --max-diffs 3
+#   -> 08-diff-client-caliber-red.txt（72 / 102 / 121，rc=1）
+
+## 5) jointable：bot 侧 hit/dodge 与服务端 RNG 推出的命中
+#   before（client 口径 seq）：align_vs_rng_hit_mismatch side=csharp caliber=client-smstruck ks=[20 个] ⇒ RED
+#   after （server 口径 seq）：0 条 mismatch ⇒ GREEN
+python -I mir2-rs/tests/parity/m3/attack-request-sequence/per_strike_requests.py jointable \
+  --csharp-stream $EV/streams/csharp-c2-attack-stream.tsv --rust-stream $EV/streams/rust-r1-rng-stream.tsv \
+  --csharp-seq <那一侧的 attack_seq.jsonl> --rust-seq <那一侧的 attack_seq.jsonl> \
+  --csharp-server-state $EV/streams/csharp-c2-server-state.tsv --rust-server-state $EV/streams/rust-r1-server-state.tsv \
+  --csharp-attacker-id 258583613 --rust-attacker-id 1 --victim-x 18 --victim-y 20
+#   -> 09-jointable-before-client.txt（JOINTABLE RED，ks=[1,5,9,16,20,32,35,48,54,60,63,69,86,89,93,100,105,108,112,119]）
+#   -> 10-jointable-after-server.txt（JOINTABLE GREEN，0 条 mismatch）
+
+## 6) 自检（把新口径的牙钉在生产函数上；改坏必红）
+python -I mir2-rs/tests/parity/m3/attack_diff.py selftest
+python -I mir2-rs/tests/parity/m3/attack-request-sequence/per_strike_requests.py selftest
+python -I mir2-rs/tests/parity/m3/rng-isolate-attack/compare_dedicated_streams.py selftest
+#   -> 11/12/13-selftest-*.txt（41/41、29/29、9/9 全 GREEN）
+#   改坏 #1：attack_diff.py `cmd_align` 的 `if state:` → `if False:`（关掉权威口径）⇒ selftest RED 3/41
+#   改坏 #2：per_strike_requests.py `req_of` → `Entry.req()`（退回 raw (kind,arg)）⇒ selftest RED 1/29
+#   改坏 #3：per_strike_requests.py `align_vs_rng_hit_mismatch` 加回 `info:` 前缀 ⇒ selftest RED 2/29
+#   -> 14-teeth-mutations.txt
+
+## 7) 四门禁（隔离 target；零 .rs，仅证明未劣化）
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target cargo fmt --all -- --check
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target cargo clippy --workspace --all-targets --offline -- -D warnings
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target cargo test --workspace --offline
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target cargo run -p msgcodegen --offline -- --check
+#   -> 15..18-gate-*.txt（全 rc=0）
+# 无栈自检（生产函数级；含新增 ⑮b 观测口径）：
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 \
+  -SelfCheckNoStack -SelfCheckOut <out.txt>
+#   -> 19-selfcheck-nostack.txt（SELFTEST_RED GREEN；⑮b good_rc=0 bad_rc=2 caliber_ok=True）

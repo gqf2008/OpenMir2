@@ -18,17 +18,32 @@
 
 本脚本做两件事（都不连网、不碰 DB）：
 
-  align <raw.jsonl> --out <seq.jsonl>
-      把一条侧运行的原始事件流**按「第 k 次」对齐**成逐次结果：
-      遍历事件流，`role=attack` 更新 `current_k`；`role=struck` 归到最近一次 `k`（= hit，记 `dmg`），
-      但**必须** `struck.src == attack.my`（命中者 = 攻击方），且同一 `(k,src,actor,dmg,hp,maxhp)`
-      事件键只消费一次（同一击被多视角/多次投递重复落库 ⇒ 去重，不累加；键带 `k` ⇒ HP 回满后
-      不同 `k` 的同一击不会被误折叠）。`k` 无 struck ⇒
-      dodge（`dmg=0`）。输出每行 `{"k":k,"hit":bool,"dmg":int,"hp":int,"maxhp":int}`。
-      末尾附一行 `{"role":"summary",...}`（含计数 filtered_foreign/other_observer/deduped）。
-      **fail-closed（owner 2026-10-12 17:35，残差③）**：`attack` 行缺 `my` ⇒ 直接 rc=2 报错，
-      **绝不**静默降级成「不过滤」（旧实现就是这么把同一击算两次的）。历史会话（未落 `my`）
-      先跑 `rebuild_attack_my.py` 离线复算归一化（见其文档），**没有**任何「缺字段也继续」的旁路。
+  align <raw.jsonl> --out <seq.jsonl> [--server-state <SERVER_STATE dump>]
+      把一条侧运行的原始事件流**按「第 k 次」对齐**成逐次结果。**两种口径**：
+
+      (A) **server-state（权威口径，owner 2026-10-13 02:15 收口）**：给了 `--server-state`
+          （或 `attack_raw.jsonl` 同目录下存在 `server_state_segment.tsv` ⇒ 自动采用）时，逐 k 的
+          `hit`/`dmg` 从**服务端权威逐击状态 dump** 派生：`SERVER_STATE k` = 处理第 k 击**之前**的
+          服务端权威受害 HP（C# `StartupHook.DumpActors` 在玩家单元首抽时落；Rust `state_log.rs` 同形）
+          ⇒ `dmg_k = preHP[k] - preHP[k+1]`（`k < N`）、`dmg_N = preHP[N] - min(客户端 struck 结果 HP)`；
+          `hit = dmg > 0`。**为什么**：C# 侧 `SM_STRUCK` 是**异步**帧且服务端向攻击方+受害方各发一份，
+          响应跨过下一个 `role=attack` 标记时「struck 归最近一次 k」会把同一击的两个观察者帧分到相邻 k
+          （一个 k 少算、下一个多算）⇒ C# 逐 k 命中/伤害与服务端 RNG/权威状态对不上（实测 20 个 k）。
+          那是**测量**缺陷，不是实现差异；权威 HP 轨迹与逐 k 时序无关 ⇒ 两侧用**同一个服务端 dump** ⇒ 逐 k 可比。
+
+      (B) **client-smstruck（旧口径，回退）**：无 dump 时，遍历事件流，`role=attack` 更新 `current_k`；
+          `role=struck` 归到最近一次 `k`（= hit，记 `dmg`），但**必须** `struck.src == attack.my`
+          （命中者 = 攻击方），且同一 `(k,src,actor,dmg,hp,maxhp)` 事件键只消费一次（同一击被
+          多视角/多次投递重复落库 ⇒ 去重，不累加；键带 `k` ⇒ HP 回满后不同 `k` 的同一击不会被误折叠）。
+          `k` 无 struck ⇒ dodge（`dmg=0`）。**注意 C# 真机上该口径受上述异步/双观察者缺陷影响** ⇒
+          只作诊断（frozen `filtered_foreign/other_observer/deduped` 仍由它统计），**不作跨侧判据**。
+
+      两种口径都输出每行 `{"k":k,"hit":bool,"dmg":int,"hp":int,"maxhp":int}`，末尾附一行
+      `{"role":"summary",...}`（含 `caliber` 标注与计数 filtered_foreign/other_observer/deduped）。
+      **fail-closed（owner 2026-10-12 17:35，残差③ / 2026-10-13 02:15）**：`attack` 行缺 `my` ⇒ rc=2；
+      权威路径里 SERVER_STATE 行数与攻击数不等 / 非攻方玩家族对象不唯一 / 受害 HP 回升（治疗）
+      ⇒ rc=2，**绝不**静默产出不可比序列。历史会话（未落 `my`）先跑 `rebuild_attack_my.py` 离线复算
+      归一化（见其文档），**没有**任何「缺字段也继续」的旁路。
 
   diff <a_seq.jsonl> <b_seq.jsonl>
       跨侧逐项比对（**判据本体**）：
@@ -61,6 +76,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import sys
 
 
@@ -216,6 +232,126 @@ def death_stats(rows):
     return death_k, (min(hp_vals) if hp_vals else 0)
 
 
+# ---------------------------------------------------------------------------
+# 服务端权威逐击状态 dump（SERVER_STATE）—— owner 2026-10-13 02:15 观测口径收口
+# ---------------------------------------------------------------------------
+SERVER_STATE_PREFIX = "SERVER_STATE "
+
+
+def parse_server_state(path):
+    """读 `SERVER_STATE <seq> <json 数组>` → [ {id: actor} ]（逐行）。
+
+    与 `StartupHook.cs::DumpActors` / `bins/game-svr/src/state_log.rs` 同形。非本格式行忽略；
+    坏 JSON / 非数组 / 缺 `id` 字段 ⇒ FailClosed（绝不静默丢行）；一条都没有 ⇒ FailClosed。
+    """
+    rows = []
+    with open(path, "r", encoding="utf-8-sig", errors="replace") as fh:
+        for lineno, raw in enumerate(fh, 1):
+            line = raw.strip()
+            if not line.startswith(SERVER_STATE_PREFIX):
+                continue
+            rest = line[len(SERVER_STATE_PREFIX):]
+            sp = rest.find(" ")
+            if sp < 0:
+                raise FailClosed("%s:%d SERVER_STATE 行缺 seq/JSON" % (path, lineno))
+            try:
+                actors = json.loads(rest[sp + 1:].strip())
+            except ValueError as exc:
+                raise FailClosed("%s:%d SERVER_STATE JSON 非法: %s" % (path, lineno, exc))
+            if not isinstance(actors, list):
+                raise FailClosed("%s:%d SERVER_STATE 不是 JSON 数组" % (path, lineno))
+            by_id = {}
+            for a in actors:
+                if not isinstance(a, dict) or "id" not in a:
+                    raise FailClosed("%s:%d SERVER_STATE 数组元素缺 id" % (path, lineno))
+                by_id[int(a["id"])] = a
+            rows.append(by_id)
+    if not rows:
+        raise FailClosed("%s 无任何 SERVER_STATE 行（目标可用性门应已拦下）" % path)
+    return rows
+
+
+def derive_authoritative_seq(events, server_state_path):
+    """从**服务端权威**逐击状态 dump 派生逐 k `hit`/`dmg`（owner 2026-10-13 02:15）。
+
+    口径（唯一，写进 README）：`SERVER_STATE k` = 处理第 k 击**之前**的服务端权威受害 HP ⇒
+        dmg_k = preHP[k] - preHP[k+1]  (k < N)
+        dmg_N = preHP[N] - min(客户端 struck 结果 HP)   （第 N 击之后无 dump 行）
+    HP 单调不减 ⇒ 与时序无关；两侧用**同一个服务端 dump** ⇒ 逐 k 可比。
+
+    fail-closed：attack 行缺 `my`、SERVER_STATE 行数 != 攻击数、非攻方玩家族对象不唯一、
+    行里找不到攻方、受害缺 hp/maxhp、HP 回升（治疗/重置）⇒ FailClosed。
+    """
+    _client_rows, client_summary = align_events(events)  # 复用 fail-closed/去重诊断（只留 stats）
+    my = None
+    n_attack = 0
+    for e in events:
+        if e.get("role") == "attack":
+            if my is None:
+                my = _require_actor_id(e, "attack", "my")
+            n_attack = max(n_attack, int(e.get("k") or 0))
+    rows_state = parse_server_state(server_state_path)
+    if n_attack <= 0:
+        raise FailClosed("事件流里没有可用的 role=attack.k")
+    if len(rows_state) != n_attack:
+        raise FailClosed("%s SERVER_STATE 行数 %d != 攻击数 %d（dump 未按本侧序列落）"
+                         % (server_state_path, len(rows_state), n_attack))
+    others = set()
+    for rr in rows_state:
+        if my not in rr:
+            raise FailClosed("%s SERVER_STATE 行里找不到攻方 id=%s" % (server_state_path, my))
+        others.update(aid for aid in rr if aid != my)
+    if len(others) != 1:
+        raise FailClosed("%s 非攻方玩家族对象不唯一（%s）——无法确定受害"
+                         % (server_state_path, sorted(others)))
+    vid = others.pop()
+    pre = []
+    for i, rr in enumerate(rows_state):
+        a = rr.get(vid)
+        if not isinstance(a, dict) or "hp" not in a or "maxhp" not in a:
+            raise FailClosed("%s 第 %d 行缺受害 id=%d 的 hp/maxhp" % (server_state_path, i + 1, vid))
+        pre.append((int(a["hp"]), int(a["maxhp"])))
+    for i in range(1, len(pre)):
+        if pre[i][0] > pre[i - 1][0]:
+            raise FailClosed("%s 受害 HP 回升（治疗/重置）k=%d：%d -> %d——HP 差口径不适用"
+                             % (server_state_path, i + 1, pre[i - 1][0], pre[i][0]))
+    # 第 N 击（无后续 dump 行）：结果 HP 取客户端 struck 逻辑击的最小结果 HP（同一受害/同一攻方；
+    # 夹具为固定 2 假人场景，struck 帧是交付保证）。同帧多视角按 (actor,dmg,hp,maxhp) 去重。
+    hit_hps = []
+    seen = set()
+    for e in events:
+        if e.get("role") != "struck":
+            continue
+        if e.get("src") != my or e.get("actor") != vid:
+            continue
+        key = (e.get("actor"), e.get("dmg"), e.get("hp"), e.get("maxhp"))
+        if key in seen:
+            continue
+        seen.add(key)
+        if isinstance(e.get("hp"), (int, float)):
+            hit_hps.append(int(e["hp"]))
+    final_hp = min(hit_hps) if hit_hps else pre[-1][0]
+    n = len(pre)
+    rows = []
+    for k in range(1, n + 1):
+        if k < n:
+            before, maxhp = pre[k - 1][0], pre[k][1]
+            after = pre[k][0]
+        else:
+            before, maxhp = pre[n - 1][0], pre[n - 1][1]
+            after = min(final_hp, before)
+        dmg = before - after
+        rows.append({"k": k, "hit": dmg > 0, "dmg": dmg if dmg > 0 else 0,
+                     "hp": after if dmg > 0 else 0, "maxhp": maxhp if dmg > 0 else 0})
+    hits = sum(1 for r in rows if r["hit"])
+    death_k, min_hp = death_stats(rows)
+    summary = dict(client_summary)
+    summary.update({"attacked": len(rows), "hits": hits, "dodges": len(rows) - hits,
+                    "sum": sum(r["dmg"] for r in rows), "death_k": death_k, "min_hp": min_hp,
+                    "caliber": "server-state"})
+    return rows, summary
+
+
 def load_seq(path):
     rows, summary = [], None
     with open(path, "r", encoding="utf-8-sig") as fh:
@@ -275,18 +411,33 @@ def cmd_align(args):
     events = read_raw(args.raw)
     if not events:
         return _die("PREREQ_MISSING: %s 里没有 M3ATTSEQ 事件（驱动没跑/开关没开）" % args.raw)
-    try:
-        rows, summary = align_events(events)
-    except FailClosed as exc:
-        return _die("FAIL_CLOSED: %s" % exc)
+    state = getattr(args, "server_state", "") or ""
+    if not state:
+        cand = os.path.join(os.path.dirname(os.path.abspath(args.raw)), "server_state_segment.tsv")
+        if os.path.exists(cand):
+            state = cand
     out = args.out or (os.path.splitext(args.raw)[0] + ".seq.jsonl")
+    if state:
+        if not os.path.exists(state):
+            return _die("PREREQ_MISSING: 找不到服务端权威状态 dump %s" % state)
+        try:
+            rows, summary = derive_authoritative_seq(events, state)
+        except FailClosed as exc:
+            return _die("FAIL_CLOSED: %s" % exc)
+    else:
+        try:
+            rows, summary = align_events(events)
+        except FailClosed as exc:
+            return _die("FAIL_CLOSED: %s" % exc)
+        summary = dict(summary)
+        summary["caliber"] = "client-smstruck"
     with open(out, "w", encoding="utf-8", newline="\n") as fh:
         for r in rows:
             fh.write(json.dumps(r, ensure_ascii=False) + "\n")
         fh.write(json.dumps(summary, ensure_ascii=False) + "\n")
-    print("ALIGN_OK %s attacked=%d hits=%d dodges=%d sum=%d "
+    print("ALIGN_OK %s caliber=%s attacked=%d hits=%d dodges=%d sum=%d "
           "(filtered_foreign=%d other_observer=%d deduped=%d unattributed=%d)" %
-          (out, summary["attacked"], summary["hits"], summary["dodges"], summary["sum"],
+          (out, summary["caliber"], summary["attacked"], summary["hits"], summary["dodges"], summary["sum"],
            summary["filtered_foreign"], summary["other_observer"], summary["deduped"],
            summary["unattributed"]))
     return 0
@@ -381,6 +532,13 @@ def _write_raw(path, events):
     with open(path, "w", encoding="utf-8", newline="\n") as fh:
         for ev in events:
             fh.write("M3ATTSEQ " + json.dumps(ev, ensure_ascii=False) + "\n")
+
+
+def _write_server_state(path, rows):
+    """rows = [(attacker_actor, victim_actor), ...]（逐击 pre 状态）。"""
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        for i, (atk, vic) in enumerate(rows, 1):
+            fh.write("SERVER_STATE %d %s\n" % (i, json.dumps([atk, vic], ensure_ascii=False)))
 
 
 def _mk_events(n, my, base_dmg):
@@ -609,13 +767,92 @@ def cmd_selftest(args):
     # (l2) 旧实现回归反例：若把「不过滤」写回来（my 缺失时继续累计），m 用例会多算
     #      —— 这里直接断言「同一击在两视角+重复帧下 hits 必须 == 2（不是 3/4）」，已由 m 覆盖。
 
+    # (q) owner 2026-10-13 02:15：**服务端权威口径**——C# 实测缺陷（异步响应 + 双观察者帧跨 k）下，
+    #     旧「struck 归最近一次 k」会把同一击的两个观察者帧分到相邻 k（k 少算/多算）；
+    #     SERVER_STATE 的 pre-HP 轨迹与时序无关 ⇒ 逐 k 正确。与 client 口径对比证明「改坏必红」（嘴）。
+    atk = {"id": 101, "x": 1, "y": 1, "dir": 2, "ghost": 0, "death": 0, "hp": 500, "maxhp": 500}
+    vic = lambda hp: {"id": 202, "x": 2, "y": 1, "dir": 6, "ghost": 0, "death": 0, "hp": hp, "maxhp": 200}
+    ss_q = os.path.join(tmp, "q.server-state.tsv")
+    _write_server_state(ss_q, [(atk, vic(200)), (atk, vic(165)), (atk, vic(165)), (atk, vic(119))])
+    raw_q = os.path.join(tmp, "q.raw.jsonl")
+    _write_raw(raw_q, [
+        {"role": "attack", "k": 1, "op": "CM_HIT", "x": 1, "y": 1, "dir": 2, "my": 101},
+        {"role": "attack", "k": 2, "op": "CM_HIT", "x": 1, "y": 1, "dir": 2, "my": 101},
+        {"role": "struck", "dmg": 35, "hp": 165, "maxhp": 200, "src": 101, "actor": 202, "my": 202},
+        {"role": "attack", "k": 3, "op": "CM_HIT", "x": 1, "y": 1, "dir": 2, "my": 101},
+        {"role": "struck", "dmg": 35, "hp": 165, "maxhp": 200, "src": 101, "actor": 202, "my": 101},
+        {"role": "struck", "dmg": 46, "hp": 119, "maxhp": 200, "src": 101, "actor": 202, "my": 202},
+        {"role": "attack", "k": 4, "op": "CM_HIT", "x": 1, "y": 1, "dir": 2, "my": 101},
+        {"role": "struck", "dmg": 46, "hp": 119, "maxhp": 200, "src": 101, "actor": 202, "my": 101},
+    ])
+    q_rows, q_sum = derive_authoritative_seq(read_raw(raw_q), ss_q)
+    check("q-authoritative-hits", [(r["hit"], r["dmg"]) for r in q_rows] ==
+          [(True, 35), (False, 0), (True, 46), (False, 0)], str(q_rows))
+    check("q-authoritative-summary", q_sum["hits"] == 2 and q_sum["sum"] == 81 and q_sum["caliber"] == "server-state",
+          str(q_sum))
+    # 同输入下旧 client 口径确实错（H=3、sum=162）——这是「测量缺陷」的构造性复现
+    c_rows, c_sum = align_events(read_raw(raw_q))
+    check("q-client-caliber-differs", c_sum["hits"] == 3 and c_sum["sum"] == 162, str(c_sum))
+    q_seq = os.path.join(tmp, "q.seq.jsonl")
+    rc_q = cmd_align(argparse.Namespace(raw=raw_q, out=q_seq, server_state=ss_q))
+    check("q-cmd-align-rc", rc_q == 0, "rc=%d" % rc_q)
+    qr, qs = load_seq(q_seq)
+    check("q-cmd-align-writes-authoritative", qs.get("caliber") == "server-state" and qs["sum"] == 81, str(qs))
+    # 自动探测：raw 同目录的 server_state_segment.tsv ⇒ 默认走权威口径
+    autodir = os.path.join(tmp, "q-autodetect")
+    os.makedirs(autodir, exist_ok=True)
+    shutil.copyfile(raw_q, os.path.join(autodir, "attack_raw.jsonl"))
+    shutil.copyfile(ss_q, os.path.join(autodir, "server_state_segment.tsv"))
+    rc_auto = cmd_align(argparse.Namespace(raw=os.path.join(autodir, "attack_raw.jsonl"),
+                                          out=os.path.join(autodir, "attack_seq.jsonl"), server_state=""))
+    ar, asum = load_seq(os.path.join(autodir, "attack_seq.jsonl"))
+    check("q-autodetect-authoritative", rc_auto == 0 and asum.get("caliber") == "server-state", str(asum))
+
+    # (r) 权威口径 fail-closed：受害 HP 回升（治疗/重置）⇒ rc=2
+    ss_r = os.path.join(tmp, "r.server-state.tsv")
+    _write_server_state(ss_r, [(atk, vic(200)), (atk, vic(165)), (atk, vic(200)), (atk, vic(119))])
+    try:
+        derive_authoritative_seq(read_raw(raw_q), ss_r)
+        rc_r = 0
+    except FailClosed:
+        rc_r = 2
+    check("r-hp-rebound-failclosed", rc_r == 2, "rc=%d" % rc_r)
+    rc_rc = cmd_align(argparse.Namespace(raw=raw_q, out=os.path.join(tmp, "r.seq.jsonl"), server_state=ss_r))
+    check("r-cmd-align-rc2", rc_rc == 2, "rc=%d" % rc_rc)
+
+    # (s) SERVER_STATE 行数 != 攻击数 ⇒ fail-closed
+    ss_s = os.path.join(tmp, "s.server-state.tsv")
+    _write_server_state(ss_s, [(atk, vic(200)), (atk, vic(165)), (atk, vic(165))])
+    try:
+        derive_authoritative_seq(read_raw(raw_q), ss_s)
+        rc_s = 0
+    except FailClosed:
+        rc_s = 2
+    check("s-rowcount-failclosed", rc_s == 2, "rc=%d" % rc_s)
+
+    # (t) 非攻方玩家族对象不唯一 ⇒ fail-closed（不猜受害）
+    ss_t = os.path.join(tmp, "t.server-state.tsv")
+    _write_server_state(ss_t, [(atk, vic(200)), (atk, {**vic(165), "id": 203}), (atk, vic(165)), (atk, vic(119))])
+    try:
+        derive_authoritative_seq(read_raw(raw_q), ss_t)
+        rc_t = 0
+    except FailClosed:
+        rc_t = 2
+    check("t-multi-other-failclosed", rc_t == 2, "rc=%d" % rc_t)
+
+    # (u) 非法 SERVER_STATE JSON / 缺 id ⇒ fail-closed
+    ss_u = os.path.join(tmp, "u.server-state.tsv")
+    with open(ss_u, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("SERVER_STATE 1 [oops\n")
+    try:
+        derive_authoritative_seq(read_raw(raw_q), ss_u)
+        rc_u = 0
+    except FailClosed:
+        rc_u = 2
+    check("u-badjson-failclosed", rc_u == 2, "rc=%d" % rc_u)
+
     # 清理
-    for name in os.listdir(tmp):
-        try:
-            os.remove(os.path.join(tmp, name))
-        except OSError:
-            pass
-    os.rmdir(tmp)
+    shutil.rmtree(tmp, ignore_errors=True)
 
     if failures:
         print("SELFTEST RED: %d/%d 未过: %s" % (len(failures), len(checks), ", ".join(failures)))
@@ -624,6 +861,8 @@ def cmd_selftest(args):
           "全 0 非平凡门 + 空序列 + 长度不等 + 死亡容忍/死亡时点/HP 逐项比（F-F option ③） + "
           "my 口径（残差③：attack 行缺 my ⇒ fail-closed rc=2；外来命中过滤；"
           "多视角/重复投递同帧按**按 k 分段**事件键去重） + "
+          "服务端权威口径（SERVER_STATE 派生逐 k：异步/双观察者帧跨 k 下旧口径错、权威口径对；"
+          "HP 回升/行数不符/非攻方不唯一/坏 JSON 全 fail-closed；同目录自动探测） + "
           "pin_attempts 复算（informational：干净=绿 / 多一次重试**仍绿** / 缺 PIN_HOLD=PREREQ））" % (len(checks), len(checks)))
     return 0
 
@@ -686,6 +925,9 @@ def main(argv=None):
     p_align = sub.add_parser("align")
     p_align.add_argument("raw")
     p_align.add_argument("--out", default="")
+    p_align.add_argument("--server-state", default="",
+                         help="服务端权威逐击状态 dump（SERVER_STATE；C# StartupHook.DumpActors / Rust state_log.rs 同形）"
+                              "；缺省时若 raw 同目录有 server_state_segment.tsv 则自动采用（权威口径）")
     p_align.set_defaults(func=cmd_align)
 
     p_diff = sub.add_parser("diff")

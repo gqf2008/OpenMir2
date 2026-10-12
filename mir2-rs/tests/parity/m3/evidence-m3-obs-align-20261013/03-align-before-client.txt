@@ -1,0 +1,6 @@
+ALIGN_OK E:/tmp/m3bag-obsalign-check/client-only/csharp-20261013-013848/attack_seq.jsonl caliber=client-smstruck attacked=120 hits=81 dodges=39 sum=4208 (filtered_foreign=0 other_observer=57 deduped=15 unattributed=0)
+rc=0
+ALIGN_OK E:/tmp/m3bag-obsalign-check/client-only/csharp-20261013-015115/attack_seq.jsonl caliber=client-smstruck attacked=120 hits=75 dodges=45 sum=3831 (filtered_foreign=0 other_observer=57 deduped=24 unattributed=0)
+rc=0
+ALIGN_OK E:/tmp/m3bag-obsalign-check/client-only/rust-20261013-015537/attack_seq.jsonl caliber=client-smstruck attacked=120 hits=57 dodges=63 sum=2425 (filtered_foreign=0 other_observer=57 deduped=0 unattributed=0)
+rc=0

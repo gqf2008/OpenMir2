@@ -1,0 +1,2 @@
+## 1) cargo fmt --all -- --check
+rc=0

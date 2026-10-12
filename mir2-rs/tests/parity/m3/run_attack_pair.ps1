@@ -673,6 +673,55 @@ if ($SelfCheckNoStack) {
   if (-not (Test-Path (Join-Path $alignDir 'attack_seq.jsonl'))) { $failures += 'attack_align_seq_missing' }
   Write-Output ("SELFTEST ⑮ Invoke-AttackAlign 返回值类型/退出码（F-H）：rc={0} type={1}" -f (@($alignRc2) -join '|'), $(if ($null -ne $alignRc2) { $alignRc2.GetType().Name } else { 'null' }))
 
+  # ⑮b owner 2026-10-13 02:15：**观测口径**——`align` 必须按服务端权威 SERVER_STATE 派生逐 k `hit`/`dmg`。
+  #    根因：C# 侧 `SM_STRUCK` 异步且服务端向攻击方+受害方各发一份，响应跨过下一个 `role=attack` 标记时
+  #    「struck 归最近一次 k」会把同一击的两个观察者帧分到相邻 k（旧口径实测 C# hits=75 vs RNG 57、
+  #    20 个 k 对不上）。权威 pre-HP 轨迹与时序无关 ⇒ 两侧同一 dump ⇒ 逐 k 可比。
+  #    真跑生产 CLI（同目录 server_state_segment.tsv ⇒ 自动权威口径）。改坏（关掉权威路径回退 client 口径）
+  #    ⇒ `align_caliber_server_state_missing`/`align_authoritative_seq_wrong` 必红；受害 HP 回升 ⇒ rc=2。
+  $obsDir = Join-Path $tmpRoot 'f-obs-align'
+  New-Item -ItemType Directory -Force -Path $obsDir | Out-Null
+  $obsRaw = Join-Path $obsDir 'attack_raw.jsonl'
+  Write-M3LfLines -Path $obsRaw -Lines @(
+    'M3ATTSEQ {"role":"attack","k":1,"op":"CM_HIT","x":1,"y":1,"dir":2,"my":11}',
+    'M3ATTSEQ {"role":"attack","k":2,"op":"CM_HIT","x":1,"y":1,"dir":2,"my":11}',
+    'M3ATTSEQ {"role":"struck","dmg":3,"hp":7,"maxhp":10,"src":11,"actor":22,"my":22}',
+    'M3ATTSEQ {"role":"attack","k":3,"op":"CM_HIT","x":1,"y":1,"dir":2,"my":11}',
+    'M3ATTSEQ {"role":"struck","dmg":3,"hp":7,"maxhp":10,"src":11,"actor":22,"my":11}',
+    'M3ATTSEQ {"role":"struck","dmg":5,"hp":2,"maxhp":10,"src":11,"actor":22,"my":22}',
+    'M3ATTSEQ {"role":"struck","dmg":5,"hp":2,"maxhp":10,"src":11,"actor":22,"my":11}',
+    'M3ATTSEQ {"role":"done","attacks":3}'
+  )
+  $obsAtk = '{"id":11,"x":1,"y":1,"dir":2,"ghost":0,"death":0,"hp":99,"maxhp":99}'
+  $obsVic7 = '{"id":22,"x":2,"y":1,"dir":6,"ghost":0,"death":0,"hp":7,"maxhp":10}'
+  $obsVic10 = '{"id":22,"x":2,"y":1,"dir":6,"ghost":0,"death":0,"hp":10,"maxhp":10}'
+  $obsGood = Join-Path $obsDir 'server_state_segment.tsv'
+  Write-M3LfLines -Path $obsGood -Lines @(
+    ('SERVER_STATE 1 [' + $obsAtk + ',' + $obsVic10 + ']'),
+    ('SERVER_STATE 2 [' + $obsAtk + ',' + $obsVic7 + ']'),
+    ('SERVER_STATE 3 [' + $obsAtk + ',' + $obsVic7 + ']')
+  )
+  $prevEap = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  $obsAlignOut = (& python $AttackDiff align $obsRaw --out (Join-Path $obsDir 'attack_seq.jsonl') 2>&1 | Out-String)
+  $obsAlignRc = $LASTEXITCODE
+  $ErrorActionPreference = $prevEap
+  if ($obsAlignRc -ne 0) { $failures += ('align_caliber_rc=' + $obsAlignRc) }
+  if ($obsAlignOut -notmatch 'caliber=server-state') { $failures += 'align_caliber_server_state_missing' }
+  if ($obsAlignOut -notmatch 'hits=2 dodges=1 sum=8') { $failures += 'align_authoritative_seq_wrong' }
+  $obsBad = Join-Path $obsDir 'server_state_bad.tsv'
+  Write-M3LfLines -Path $obsBad -Lines @(
+    ('SERVER_STATE 1 [' + $obsAtk + ',' + $obsVic10 + ']'),
+    ('SERVER_STATE 2 [' + $obsAtk + ',' + $obsVic7 + ']'),
+    ('SERVER_STATE 3 [' + $obsAtk + ',' + $obsVic10 + ']')
+  )
+  $ErrorActionPreference = 'Continue'
+  $obsBadOut = (& python $AttackDiff align $obsRaw --out (Join-Path $obsDir 'bad.seq.jsonl') --server-state $obsBad 2>&1 | Out-String)
+  $obsBadRc = $LASTEXITCODE
+  $ErrorActionPreference = $prevEap
+  if ($obsBadRc -ne 2) { $failures += ('align_badstate_rc2=' + $obsBadRc) }
+  Write-Output ("SELFTEST ⑮b 观测口径（SERVER_STATE 派生逐 k + 受害 HP 回升 fail-closed）：good_rc={0} bad_rc={1} caliber_ok={2}" -f $obsAlignRc, $obsBadRc, ($obsAlignOut -match 'caliber=server-state'))
+
   # ⑩ Minor M-1 回归（reviewer-5 76e433f0）：`-AttackSequence` 未配 `-AttackPinPair` ⇒ WARN 必须**真**出现；
   #    配了 `-AttackPinPair` ⇒ 不得出现。旧实现把 WARN 写在 `if ($EmitOpsArgs)` 块内且带 `-not $EmitOpsArgs`
   #    ⇒ 恒 false 死代码，本项必 RED（这就是「改坏必红」：把 WARN 挪回块内 ⇒ m1_warn_missing 必红）。

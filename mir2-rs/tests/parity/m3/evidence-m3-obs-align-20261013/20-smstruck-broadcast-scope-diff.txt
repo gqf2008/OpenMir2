@@ -1,0 +1,25 @@
+# 登记（实现侧，非本片写集）—— SM_STRUCK 广播范围：C# 2 帧/击 vs Rust 1 帧/击
+
+## 证据（两侧同一次 120 击两相的 attack_raw.jsonl 里 role=struck 分组）
+csharp c2: struck 帧合计 114
+    my=26505073     actor=26505073     src=258583613    -> 57
+    my=258583613    actor=26505073     src=258583613    -> 57
+rust   r1: struck 帧合计 57
+    my=2            actor=2            src=1            -> 57
+
+## 结论：两侧逐 k 命中数都是 57 —— 但**客户端可见帧数不同**：
+   C# = 57（受害视角）+ 57（攻击方视角，actor 仍是受害、src 仍是攻方）= 114；Rust = 57（只有受害视角）。
+
+## oracle 路径（C#，冻结面）：服务端把 RM_STRUCK **广播给附近对象**，每个 PlayObject 各自把
+   SM_STRUCK 发给自己客户端 ⇒ 攻击方也收到一帧：
+   - src/M2Server/Actor/BaseObject.Attack.cs:63  targetObject.SendMsg(targetObject, RM_STRUCK, …, ActorId)
+   - src/M2Server/Player/PlayObject.Message.cs:1592-1610  （收到 RM_STRUCK 后 SendSocket(SM_STRUCK, …)）
+
+## Rust 现状（bins/game-svr/src/main.rs:2229 起）：注释明写「受击帧（发给受击者自己）」——
+   downlink 只给受害会话发 SM_STRUCK，未向附近观察者广播。
+
+## 处置（owner 转 m2-svr / m3cs）
+   * 这是**实现侧**（bins/**，非本片写集）的客户端可见帧流差异；本片**只登记、不修**。
+   * 它**不影响** RNG 抽数（651/651 等价）与**服务端权威状态**（两侧 SERVER_STATE 逐字节同形）
+     ⇒ 本片「逐 k hit/dmg = 服务端权威口径」的判据不受其影响。
+   * 但若 M2 的「同序 s2c 帧 diff」采用**广播到观察者**的口径，Rust 缺的这一帧会成为真差异 ⇒ 应由 m2-svr 裁决。

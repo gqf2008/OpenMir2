@@ -31,9 +31,14 @@
    Rust 首个 `atk_power_a(Next(max),1)` **完全相同**（都是 `Random(1)`）⇒ 第 1 次不比出差异，第 2 次即因
    base 单元的 `hit_gate` 显形，此后整体推移。**玩家路径本身无分歧**：120 个 player 单元的取数模板
    两侧均 0 违规（`02/03-analyze-*`）。
-   - 机判工具：`per_strike_requests.py`（`selftest` 16/16；玩家路径多抽 / 次序颠倒 / 单元数不等**必红**；
+   - 机判工具：`per_strike_requests.py`（`selftest` **29/29**；玩家路径多抽 / 次序颠倒 / 单元数不等**必红**；
      base 单元分类为 `base_unit`，不误判为 `player_path`）。同文件的 `jointable` 子命令把本表接到夹具
      **逐击状态记录**上（见下节）。
+   - **2026-10-13 02:15 修**：`first_divergence` 改按**语义归一的 `(kind, arg)`** 比——Rust
+     `random_range(0, n)` 记 `Next(min,max)`（packed 高 32 位 min=0）与 C# `Random(n)` 记 `Next(max)`
+     **语义相同**，旧口径会在后续 index 报假 `player_path` 分歧（实测 index=3，两侧 `repr` 实为同一
+     `hit_struck_damage(37)->22`）。**真的 `min>0` 不得抹平**（牙齿）。`compare_dedicated_streams.py`
+     同口径修复。
 4. **④ 因果登记（不修）**：目标 maxhp=19（`-AttackVictimHp 30000` 被 `RecalcLevelAbilitys`
    `PlayObject.cs:5295` 按 L1 重算）确实把「有目标窗口」压短（Rust 在 k=38 目标 HP 归零后即无目标），
    但**不是** C# 停在 k=4 的直接成因（C# 目标全程 `min_hp=18`、未死）。C# 为何在 k=4 起目标格为空，
@@ -59,9 +64,14 @@ owner 已把「查清 C# 目标格 (18,20) 从 k=4 起为空」转 m3bag（加**
 
 **机判（fail-closed）**：状态记录必须覆盖 RNG 流水切出的**每一个**玩家单元且 `k` 无洞 ⇒ 否则 RED；
 缺字段 / 缺键 / 非法 JSON ⇒ **PREREQ 点名 k+字段**；`victim:null` 合法（目标格空，正是要看的东西）。
-`hit` 与 `rng` 不一致时打 `info:`（不判红）——本次真机 C# `k=3` 就命中，是会话件跨观察者重复计数
-（`attack_raw.jsonl` 里同一次 `SM_STRUCK` 被 attacker/victim 两个客户端各记一行，`attack_diff.py align`
-因此把 k=3 算成 hit 而 RNG 只有一次玩家命中）⇒ 已登记转 m3bag，**不是**本工具或判据的缺口。
+
+**`align_vs_rng_hit_mismatch`（2026-10-13 02:15 起判红）**：`hit`（`attack_seq.jsonl`）与该击的 RNG 取数
+（`rng`）不一致 ⇒ **RED 点名** side/caliber/ks（不再是 `info:`）。
+根因已定位为**观测/仪器**（见 `../evidence-m3-obs-align-20261013/README.md`）：C# 侧 `SM_STRUCK` 异步且服务端向
+攻击方+受害方各发一份，旧 `attack_diff.py align` 的「struck 归最近一次 k」把同一击的两个观察者帧分到
+相邻 k（`other_observer` 重复计数、`deduped` 漏合）。⇒ 口径收口为**服务端权威 `SERVER_STATE` 派生**
+（`attack_diff.py align --server-state`，`summary.caliber=server-state`）；该口径下本不一致实测降为 **0**。
+判据只认 `hit`/`dmg` 的相对一致，**未放宽**任何非平凡门。
 
 ### 需要 m3bag 夹具产出的接口（owner 转）
 

@@ -1,0 +1,26 @@
+# GATES — M3②③ 观测口径收口（零 .rs；隔离 target E:/tmp/openmir2-m3bag-target）
+
+## 四门禁（合并前必绿）
+1) cargo fmt --all -- --check                         -> rc=0   (15-gate-fmt.txt)
+2) cargo clippy --workspace --all-targets --offline -- -D warnings -> rc=0   (16-gate-clippy.txt)
+3) cargo test --workspace --offline                    -> rc=0   (17-gate-test.txt；全 suites 0 failed)
+4) cargo run -p msgcodegen --offline -- --check        -> rc=0   (18-gate-msgcodegen.txt；604 条常量一致)
+
+## 生产函数自检（无栈，不占端口）
+5) python -I mir2-rs/tests/parity/m3/attack_diff.py selftest                         -> GREEN 41/41 (11)
+6) python -I mir2-rs/tests/parity/m3/attack-request-sequence/per_strike_requests.py selftest -> GREEN 29/29 (12)
+7) python -I mir2-rs/tests/parity/m3/rng-isolate-attack/compare_dedicated_streams.py selftest -> GREEN 9/9 (13)
+8) powershell -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 -SelfCheckNoStack     -> SELFTEST_RED GREEN (19)
+   含新增 ⑮b：SERVER_STATE 派生逐 k good_rc=0 / 受害 HP 回升 fail-closed bad_rc=2 / caliber_ok=True
+
+## 改坏必红（14-teeth-mutations.txt）
+9)  attack_diff.py `cmd_align` 关掉权威口径（if state → if False）      -> selftest RED 3/41
+10) per_strike_requests.py `req_of` 退回 raw `(kind,arg)`              -> selftest RED 1/29
+11) per_strike_requests.py `align_vs_rng_hit_mismatch` 降回 `info:`     -> selftest RED 2/29
+12) 旧 client 口径 seq 复算跨侧 diff/jointable                          -> RED 72/102/121 + 点名 20 个 k (08/09)
+
+## 惰性判定
+- 本片改动仅 4 个文件，均在 `mir2-rs/tests/parity/m3/**`（夹具写集），**零 `.rs`**：
+  `attack_diff.py`、`attack-request-sequence/per_strike_requests.py`、
+  `rng-isolate-attack/compare_dedicated_streams.py`、`run_attack_pair.ps1`。
+- 四门禁 rc=0 只证明「未劣化」（`.rs` 未动，结果与 master 同）。

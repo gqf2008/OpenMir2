@@ -1,0 +1,25 @@
+== same 3 diffs on the OLD client caliber seq (teeth: 口径不一致 ⇒ 必红) ==
+-- csharp-20261013-013848 vs csharp-20261013-015115 --
+NONTRIVIAL a=True() b=True()
+RED: 跨侧攻击序列差异 72 项（差异要么修到 0，要么按 §6.0-3 登记 tests/parity/whitelist.md）
+  - k=1 hit 不等: a=True b=False
+  - k=1 dmg 不等: a=35 b=0
+  - k=1 hp 不等: a=20634 b=0
+  ... 另有 69 项（--max-diffs 截断）
+rc=1
+-- csharp-20261013-015115 vs rust-20261013-015537 --
+NONTRIVIAL a=True() b=True()
+RED: 跨侧攻击序列差异 102 项（差异要么修到 0，要么按 §6.0-3 登记 tests/parity/whitelist.md）
+  - k=1 hit 不等: a=False b=True
+  - k=1 dmg 不等: a=0 b=35
+  - k=1 hp 不等: a=0 b=20634
+  ... 另有 99 项（--max-diffs 截断）
+rc=1
+-- csharp-20261013-013848 vs rust-20261013-015537 --
+NONTRIVIAL a=True() b=True()
+RED: 跨侧攻击序列差异 121 项（差异要么修到 0，要么按 §6.0-3 登记 tests/parity/whitelist.md）
+  - k=2 dmg 不等: a=35 b=50
+  - k=2 hp 不等: a=20634 b=20584
+  - k=3 dmg 不等: a=93 b=43
+  ... 另有 118 项（--max-diffs 截断）
+rc=1
