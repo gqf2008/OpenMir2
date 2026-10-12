@@ -1,0 +1,42 @@
+# 判据①：base 363c0bd1 干净检出（git clone --local --no-checkout + checkout 363c0bd1）
+# tools/** 无 tools/.gitattributes ⇒ 文本扩展名 text attr=unspecified（core.autocrlf=true ⇒ 检出落 CRLF）
+
+$ git check-attr text -- tools/README.md tools/orchestration/park.sh tools/evidence-hash/verify_sha256sums.py tools/capture/clienthook/Inject.dpr tools/capture/GoldenExport/Program.cs tools/worldsample/world_sampler.py tools/botload/run_bots.ps1
+tools/README.md: text: unspecified
+tools/orchestration/park.sh: text: unspecified
+tools/evidence-hash/verify_sha256sums.py: text: unspecified
+tools/capture/clienthook/Inject.dpr: text: unspecified
+tools/capture/GoldenExport/Program.cs: text: unspecified
+tools/worldsample/world_sampler.py: text: unspecified
+tools/botload/run_bots.ps1: text: unspecified
+
+$ git check-attr text -- tools/m2-acceptance/evidence/m2svr-featurechanged-20261012/foo.txt   # 更深目录的 `* -text` 冻结，优先级更高
+tools/m2-acceptance/evidence/m2svr-featurechanged-20261012/foo.txt: text: unset
+
+$ git ls-files --eol tools | awk '{print $1}' | sort | uniq -c
+     22 i/-text
+    507 i/lf
+     10 i/none
+# i/-text = 22 个 .png（位于 tools/m2-acceptance/evidence/**/shots 等 `* -text` 冻结目录）
+# i/none  = 10 个 0 字节 .txt（空文件）
+# i/crlf = 0，i/mixed = 0 ⇒ 没有任何被跟踪 blob 自身含 CRLF
+#   ⇒ 给这些文本扩展名加 `text eol=lf` 不会改动任何被跟踪 blob 内容（只是让检出换成 LF）。
+
+$ python -I tools/evidence-hash/verify_sha256sums.py eolcheck tools    # RED 500/539，rc=1
+RED 命中按扩展名分布（自 01-baseline-clean-clone-eolcheck.txt 的 `EOLCHECK RED <path>` 行统计）：
+    302 .txt
+     68 .md
+     34 .ps1
+     26 .json
+     22 .jsonl
+     20 .py
+      9 .ndjson
+      4 .sh
+      4 .cs
+      3 .sha256
+      3 .csproj
+      2 .tsv
+      2 .dpr
+      1 .conf
+    ---
+    500 （共 539 件；未被点名的 39 件 = 22 个 .png 冻结 + 10 个空 .txt + 7 个更深冻结目录里的文件）

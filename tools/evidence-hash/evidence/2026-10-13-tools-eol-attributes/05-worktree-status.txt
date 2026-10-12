@@ -1,0 +1,23 @@
+# 判据④：属性只影响新检出；已存在工作树的盘上 CRLF 不会自动回写（这不是仓库内容问题）
+
+$ git -C <本 worktree> status --short --branch   # 本片所在 worktree（tracked 侧）
+## worktree-m3-tools-eol
+?? mir2-rs/tests/parity/m3/sessions/csharp-20261012-232321/
+?? mir2-rs/tests/parity/m3/sessions/csharp-20261012-232521/
+?? mir2-rs/tests/parity/m3/sessions/csharp-20261012-232825/
+?? mir2-rs/tests/parity/m3/sessions/csharp-20261012-233056/
+?? mir2-rs/tests/parity/m3/sessions/csharp-20261012-233325/
+?? mir2-rs/tests/parity/m3/sessions/csharp-20261012-233735/
+?? mir2-rs/tests/parity/m3/sessions/csharp-20261012-234457/
+?? mir2-rs/tests/parity/m3/sessions/csharp-20261012-234651/
+?? tools/evidence-hash/evidence/2026-10-13-tools-eol-attributes/
+
+# 上面 8 个未跟踪 mir2-rs/tests/parity/m3/sessions/csharp-20261012-* 是别的卡的残留，未纳入本片
+
+$ GIT_OPTIONAL_LOCKS=0 git -C E:/Users/gxh/Documents/GitHub/OpenMir2 status --short --branch   # 共享主检出（只读；未创建/修改/删除/提交/推送/编译）
+## master...origin/master
+
+# 已存在工作树本地变 LF 的可靠做法（本片只在 E:/tmp 的一次性 clone 上做，未动任何车道 worktree）：
+#   git clone --local --no-checkout <repo> E:/tmp/<x> && (cd E:/tmp/<x> && git checkout <oid>)
+#   —— 全新检出才会按新属性写 LF；已存在工作树里属性生效前检出的 CRLF 不会被 git checkout 自动回写。
+#   （所以本片的固定/基线读数都在 E:/tmp/m3bag-toolseol/{base,fix1,mutation} 的一次性 clone 上取，不是在工作树里。）

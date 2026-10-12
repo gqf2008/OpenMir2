@@ -87,6 +87,20 @@ pub const fn make_human_feature(race_img: u8, dress: u8, weapon: u8, hair: u8) -
     make_long(make_word(race_img, weapon), make_word(hair, dress))
 }
 
+/// `M2Share.MakeMonsterFeature(byte raceImg, byte weapon, ushort appr)`
+/// （`src/M2Server/M2Share.cs:1960`）：`MakeLong(MakeWord(raceImg, weapon), appr)`。
+///
+/// 怪物的 `GetFeature()`（`BaseObject.Base.cs:911`）/`GetFeatureToLong()`（`BaseObject.cs:1487`）
+/// 都走它；输入全部来自 `MonsterInfo.RaceImg` / `MonsterInfo.Appr` 与
+/// `cert.MonsterWeapon = HUtil32.LoByte(monster.MP)`（`WorldServer.MonGen.cs:902`）。
+///
+/// 位布局（LSB→MSB）= **`[raceImg:8][weapon:8][appr:16]`**（与 `make_human_feature` 的
+/// `[raceImg][weapon][hair][dress]` 不同——别把两个搞混）。
+#[must_use]
+pub const fn make_monster_feature(race_img: u8, monster_weapon: u8, appr: u16) -> i32 {
+    make_long(make_word(race_img, monster_weapon), appr)
+}
+
 /// oracle `GetFeature` 里的 `nDress`：`(byte)(Shape * 2) + (byte)Gender`，全按 byte 截断。
 ///
 /// `dress_shape = None` 表示该槽未计入（未穿 / `Index == 0` / `GetStdItem` 返回 null）。
@@ -172,6 +186,20 @@ mod tests {
         );
         assert_eq!(lo_word(f), 0x0507, "低字 = weapon<<8|raceImg");
         assert_eq!(hi_word(f), 0x0604, "高字 = dress<<8|hair");
+    }
+
+    /// `MakeMonsterFeature` 的位布局（LSB→MSB = raceImg, weapon, appr:lo, appr:hi）——
+    /// 改坏字段序必红。
+    #[test]
+    fn monster_feature_byte_layout_is_race_img_weapon_then_appr() {
+        let f = make_monster_feature(0x11, 0x22, 0x3344);
+        assert_eq!(
+            f.to_le_bytes(),
+            [0x11, 0x22, 0x44, 0x33],
+            "layout: [raceImg][weapon][appr.lo][appr.hi]"
+        );
+        assert_eq!(lo_word(f), 0x2211, "低字 = weapon<<8|raceImg");
+        assert_eq!(hi_word(f), 0x3344, "高字 = appr");
     }
 
     /// MakeWord 的参数序：`MakeWord(low, high) = high << 8 | low`。

@@ -1,0 +1,13 @@
+# 判据③：code commit c75e6486 干净检出：tools/** 文本件全部 w/lf（属性生效）
+
+$ git ls-files --eol tools | awk '{print $1" "$2}' | sort | uniq -c
+     22 i/-text w/-text
+    508 i/lf w/lf
+     10 i/none w/none
+
+$ python -I tools/evidence-hash/verify_sha256sums.py eolcheck tools
+EOLCHECK GREEN 540/540 件文本证据与仓库口径（LF）在 EOL 上一致
+rc=0
+
+$ git status --short   # 新检出后无归一脏
+(空 = 干净)

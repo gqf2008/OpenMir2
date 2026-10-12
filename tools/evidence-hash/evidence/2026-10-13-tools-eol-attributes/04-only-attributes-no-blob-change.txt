@@ -1,0 +1,23 @@
+# 判据②：code commit 只含 tools/.gitattributes，零被跟踪文件 blob 内容改动
+# base=363c0bd1  code=c75e6486（= 本片 code commit）
+
+$ git diff --stat 363c0bd1 c75e6486
+ tools/.gitattributes | 32 ++++++++++++++++++++++++++++++++
+ 1 file changed, 32 insertions(+)
+
+$ git diff --name-status 363c0bd1 c75e6486
+A	tools/.gitattributes
+
+$ git diff --stat 363c0bd1 c75e6486 -- ':!.gitattributes' ':!**/.gitattributes'
+(空 = 除属性文件外无任何路径变化)
+
+$ git diff --name-status 363c0bd1 c75e6486 -- src/ sql/ MirClient
+(空 = 冻结边界零改动)
+
+$ for f in tools/README.md tools/botload/run_bots.ps1 tools/evidence-hash/verify_sha256sums.py tools/capture/GoldenExport/Program.cs tools/orchestration/park.sh; do echo "$f $(git rev-parse 363c0bd1:$f) == $(git rev-parse c75e6486:$f)"; done
+tools/README.md  0c8b3f18c3fc2e309310ad0c13d817e51034bff7  ==  0c8b3f18c3fc2e309310ad0c13d817e51034bff7
+tools/botload/run_bots.ps1  71fe682b774f781ee7e0277dc6dcd608ae9d8ec5  ==  71fe682b774f781ee7e0277dc6dcd608ae9d8ec5
+tools/evidence-hash/verify_sha256sums.py  a9278acb34dade7cc6932b1b422fe16ebe36fefe  ==  a9278acb34dade7cc6932b1b422fe16ebe36fefe
+tools/capture/GoldenExport/Program.cs  bf1f0b045bf56e3cfc3619f4eeff008d6a6bc972  ==  bf1f0b045bf56e3cfc3619f4eeff008d6a6bc972
+tools/orchestration/park.sh  8a1a37051b05c708b2ec4dc99f9fc31f73789a9e  ==  8a1a37051b05c708b2ec4dc99f9fc31f73789a9e
+(逐 blob oid 相同 = 属性变更不改仓库内容)

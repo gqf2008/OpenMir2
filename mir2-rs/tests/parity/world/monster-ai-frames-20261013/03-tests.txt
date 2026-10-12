@@ -1,0 +1,34 @@
+M3④-实现 C 第 ③ 片（怪物帧面）—— 判据与用例
+============================================
+
+全部新增用例（7 条，均在 `bins/game-svr`）：
+
+| # | 用例 | 断言 |
+| --- | --- | --- |
+| 1 | `feature::tests::monster_feature_byte_layout_is_race_img_weapon_then_appr` | `MakeMonsterFeature(0x11,0x22,0x3344)` 逐字节 = `[0x11,0x22,0x44,0x33]`；Lo/HiWord = 0x2211/0x3344 |
+| 2 | `downlink::tests::filter_show_name_truncates_at_first_digit_or_dash` | `FilterShowName`：数字/`-` 处截断；空串/无数字原样 |
+| 3 | `downlink::tests::monster_display_matches_oracle_fields` | `monster_display` 的 `dir/light/feature/feature_ex/status/name_color/show_name` 逐字段按 oracle；反证漏 `LoByte` 会不同 |
+| 4 | `downlink::tests::monster_aoi_turn_pair_bytes` | 出现帧逐字节：`SM_TURN.Series=MakeWord(Dir,0)`、尾=`Encode(8B CharDesc)+Encode("ShowName/255")`；`SM_FEATURECHANGED.Param/Tag=Lo/HiWord(feature)`、`Series=0` |
+| 5 | `mongen::tests::world_monster_sink_registers_monster_display` | 临时 5×5 `.map` → `MapRegistry` → `WorldMonsterSink::spawn_monster` → `DisplayTable` 里逐字段正确（feature/show_name/name_color/light/status） |
+| 6 | `tests::new_player_entity_sets_want_ref_msg` | 生产玩家实体构造置 `WantRefMsg=true`（`PlayObject.cs:889`）、`race=Play` |
+| 7 | `tests::aoi_show_emits_monster_turn_pair_with_world_dir` | 端到端：玩家 + 近距怪物 → 一 tick AOI `Show` → 观察者线收到 **怪物 ActorId** 的 `SM_TURN + SM_FEATURECHANGED`；`SM_TURN.Series` 低字节 = 世界当前 `ai.dir`(5)，非登记初值(2) |
+
+读数（`cargo test -p game-svr --offline`）：lib **109 passed**（含 1/2/3/4/5）、main **159 passed**（含 6/7）；
+`cargo test --workspace --offline` = **86 suites · 778 passed · 0 failed · 18 ignored**
+（master `98885fd4` 基线 = 86 suites · **771** passed · 0 failed · 18 ignored，独立 worktree 实测 ⇒ 本片 +7）。
+四门禁即 `gates/`（fmt rc=0 / clippy rc=0 / msgcodegen 604 rc=0 / workspace rc=0）。
+
+改坏必红 4 条（`redchecks/`，全部 rc=101，还原后源码 sha256 与备份一致）：
+
+| 编号 | 变异 | 变红用例 |
+| --- | --- | --- |
+| RC-C3-A | `WorldMonsterSink::spawn_monster` 删掉展示层登记 | `world_monster_sink_registers_monster_display` |
+| RC-C3-B | `monster_display` 用 `mp` 高字节代替 `LoByte(mp)` | `monster_display_matches_oracle_fields` |
+| RC-C3-C | `drain_aoi_downlink` 不再用 `ai.dir` 刷新怪物出现帧朝向 | `aoi_show_emits_monster_turn_pair_with_world_dir` |
+| RC-C3-D | `new_player_entity` 不置 `WantRefMsg=true` | `new_player_entity_sets_want_ref_msg` |
+
+## 真机（登记，待窗口）
+
+本片判据全在构造/进程级（如上），**未起栈、未占端口、未连 MySQL**。怪物帧面的真机判据
+（第二客户端/假人进屏 ⇒ 观察者收怪物 `SM_TURN`/`SM_FEATURECHANGED` 截图）按卡 DoD⑤ 等 owner 发窗口；
+与卡 D（100 杀对拍）合并跑（起栈禁接管道）。

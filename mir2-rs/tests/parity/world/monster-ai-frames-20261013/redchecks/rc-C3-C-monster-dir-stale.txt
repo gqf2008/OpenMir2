@@ -1,0 +1,39 @@
+# RC-C3-C — 变异点：bins/game-svr/src/main.rs::drain_aoi_downlink 不再用 Entity.ai.dir 刷新怪物出现帧朝向
+# 期望：tests::aoi_show_emits_monster_turn_pair_with_world_dir FAILED (rc=101)
+# 命令：cargo test -p game-svr --bins aoi_show_emits_monster_turn_pair_with_world_dir --offline
+
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+warning: variable does not need to be mutable
+    --> bins\game-svr\src\main.rs:2297:17
+     |
+2297 |             let mut frame_display = display.clone();
+     |                 ----^^^^^^^^^^^^^
+     |                 |
+     |                 help: remove this `mut`
+     |
+     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `game-svr` (bin "game-svr" test) generated 1 warning (run `cargo fix --bin "game-svr" -p game-svr --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.90s
+     Running unittests src\main.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-eb39968088e3f1ec.exe)
+
+running 1 test
+test tests::aoi_show_emits_monster_turn_pair_with_world_dir ... FAILED
+
+failures:
+
+---- tests::aoi_show_emits_monster_turn_pair_with_world_dir stdout ----
+
+thread 'tests::aoi_show_emits_monster_turn_pair_with_world_dir' (19340) panicked at bins\game-svr\src\main.rs:5238:9:
+assertion `left == right` failed: SM_TURN.Series 低字节 = 世界当前 ai.dir（非登记初值 2）
+  left: 2
+ right: 5
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::aoi_show_emits_monster_turn_pair_with_world_dir
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 158 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`

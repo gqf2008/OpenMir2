@@ -1,0 +1,27 @@
+# M3④-实现 C 第 ③ 片（怪物帧面）复现命令
+# cwd = mir2-rs（本仓库 E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr/mir2-rs）
+# 隔离 target：CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target
+
+# 0) 前置：把 origin/master 并入分支（新规矩）
+cd ..
+git fetch origin
+git merge origin/master
+cd mir2-rs
+
+# 1) 新用例（本片 7 条）
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test -p game-svr --lib --offline
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test -p game-svr --bins --offline
+
+# 2) 四门禁（输出见 gates/）
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo fmt --all -- --check
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo clippy --workspace --all-targets --offline -- -D warnings
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo run -p msgcodegen --offline -- --check
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test --workspace --offline
+
+# 3) 边界（oracle 冻结）
+git diff --name-only e2b94234 HEAD -- src sql MirClient   # 期望空
+
+# 4) 证据 hash 复核（仓库 LF/git-blob 口径；eolcheck 另跑）
+cd ..
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/world/monster-ai-frames-20261013
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs
