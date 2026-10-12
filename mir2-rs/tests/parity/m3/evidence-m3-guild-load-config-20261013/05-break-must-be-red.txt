@@ -1,0 +1,48 @@
+== 改坏前 sha256 ==
+8a018472d7bee2fa071a7962069ffc593900ac7a1a33fe102dd7a15384198e1f *mir2-rs/crates/data/src/guild_castle.rs
+
+== 改坏：build_guild_price 默认 1_000_000 -> 999_999 ==
+83:    pub build_guild_price: i32,
+160:            build_guild_price: 999_999,
+
+== 改坏后跑向量门（期望 RED）==
+   Compiling mir2-data v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\crates\data)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.17s
+     Running tests\guild_castle_config.rs (E:/tmp/m3cs-guild-target\debug\deps\guild_castle_config-3a8289a7e5fe188c.exe)
+
+running 1 test
+test defaults_match_oracle_vector ... FAILED
+
+failures:
+
+---- defaults_match_oracle_vector stdout ----
+
+thread 'defaults_match_oracle_vector' (11140) panicked at crates\data\tests\guild_castle_config.rs:80:9:
+assertion `left == right` failed: 向量第 12 行 `build_guild_price`（GameSvrConf.cs:1448 / ServerConf.cs:243 [Setup] BuildGuild）与 oracle 初值不一致
+  left: "999999"
+ right: "1000000"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    defaults_match_oracle_vector
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-data --test guild_castle_config`
+
+== 还原 ==
+83:    pub build_guild_price: i32,
+160:            build_guild_price: 1_000_000,
+还原后 sha256:
+8a018472d7bee2fa071a7962069ffc593900ac7a1a33fe102dd7a15384198e1f *mir2-rs/crates/data/src/guild_castle.rs
+
+== 还原后跑向量门（期望 GREEN）==
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.15s
+     Running tests\guild_castle_config.rs (E:/tmp/m3cs-guild-target\debug\deps\guild_castle_config-3a8289a7e5fe188c.exe)
+
+running 1 test
+test defaults_match_oracle_vector ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

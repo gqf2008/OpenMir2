@@ -9,6 +9,7 @@
 //! Rust 侧刻意不实现写回，见各模块注释）。
 
 pub mod exps;
+pub mod guild_castle;
 pub mod loaders;
 pub mod models;
 pub mod monitems;

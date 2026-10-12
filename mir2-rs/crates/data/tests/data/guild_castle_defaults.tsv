@@ -1,0 +1,44 @@
+# 行会/攻城配置项默认值向量（oracle = GameSvrConf 构造函数初值）
+# 字段	默认值	oracle 锚（默认值 / 读取点；均在 src/ 内实测）
+# 采集方式：逐行读 src/Modules/SystemModule/Conf/Model/GameSvrConf.cs 的初值，
+#          读取点逐行核 src/Modules/SystemModule/Conf/ServerConf.cs。
+# 说明：castle_name_len 在 oracle 里只有声明（GameSvrConf.cs:792），ServerConf 无读取点 ⇒ 恒 0。
+guild_dir	GuildBase\Guilds\	GameSvrConf.cs:1289 / ServerConf.cs:69 [Share] GuildDir
+guild_file	GuildBase\GuildList.txt	GameSvrConf.cs:1290 / ServerConf.cs:70 [Share] GuildFile
+castle_dir	Envir\Castle\	GameSvrConf.cs:1293 / ServerConf.cs:73 [Share] CastleDir
+castle_file	Envir\Castle\List.txt	GameSvrConf.cs:1294 / ServerConf.cs:74 [Share] CastleFile
+woma_horn	沃玛号角	GameSvrConf.cs:1318 / ServerConf.cs:102 [Names] WomaHorn
+zuma_piece	祖玛头像	GameSvrConf.cs:1319 / ServerConf.cs:103 [Names] ZumaPiece
+build_guild_price	1000000	GameSvrConf.cs:1448 / ServerConf.cs:243 [Setup] BuildGuild
+guild_war_price	30000	GameSvrConf.cs:1449 / ServerConf.cs:245 [Setup] GuildWarFee
+guild_war_time	10800000	GameSvrConf.cs:1447 / ServerConf.cs:644 [Setup] GuildWarTime
+guild_name_len	16	GameSvrConf.cs:1722 / ServerConf.cs:499 [Setup] GuildNameLen
+guild_member_max_limit	200	GameSvrConf.cs:1721 / ServerConf.cs:500 [Setup] GuildMemberMaxLimit
+guild_rank_name_len	16	GameSvrConf.cs:1720 / ServerConf.cs:498 [Setup] GuildRankNameLen
+castle_name_len	0	GameSvrConf.cs:792（仅声明，无读取点）
+start_castle_war_days	4	GameSvrConf.cs:1442 / ServerConf.cs:638 [Setup] StartCastleWarDays
+start_castlewar_time	20	GameSvrConf.cs:1443 / ServerConf.cs:639 [Setup] StartCastlewarTime
+show_castle_war_end_msg_time	600000	GameSvrConf.cs:1444 / ServerConf.cs:640 [Setup] ShowCastleWarEndMsgTime
+castle_war_time	10800000	GameSvrConf.cs:1445 / ServerConf.cs:642 [Setup] CastleWarTime
+get_castle_time	600000	GameSvrConf.cs:1446 / ServerConf.cs:643 [Setup] GetCastleTime
+hire_guard_price	300000	GameSvrConf.cs:1790 / ServerConf.cs:246 [Setup] HireGuard
+hire_archer_price	300000	GameSvrConf.cs:1791 / ServerConf.cs:247 [Setup] HireArcher
+repair_door_price	2000000	GameSvrConf.cs:1794 / ServerConf.cs:248 [Setup] RepairDoor
+repair_wall_price	500000	GameSvrConf.cs:1795 / ServerConf.cs:249 [Setup] RepairWall
+castle_gold_max	10000000	GameSvrConf.cs:1792 / ServerConf.cs:251 [Setup] CastleGoldMax
+castle_one_day_gold	2000000	GameSvrConf.cs:1793 / ServerConf.cs:252 [Setup] CastleOneDayGold
+castle_tax_rate	5	GameSvrConf.cs:1788 / ServerConf.cs:259 [Setup] CastleTaxRate
+get_all_npc_tax	false	GameSvrConf.cs:1789 / ServerConf.cs:260 [Setup] CastleGetAllNpcTax
+castle_member_price_rate	80	GameSvrConf.cs:1796 / ServerConf.cs:250 [Setup] CastleMemberPriceRate
+castle_name	沙巴克	GameSvrConf.cs:1782 / ServerConf.cs:253 [Setup] CastleName
+castle_home_map	3	GameSvrConf.cs:1783 / ServerConf.cs:254 [Setup] CastleHomeMap
+castle_home_x	644	GameSvrConf.cs:1784 / ServerConf.cs:255 [Setup] CastleHomeX
+castle_home_y	290	GameSvrConf.cs:1785 / ServerConf.cs:256 [Setup] CastleHomeY
+castle_war_range_x	100	GameSvrConf.cs:1786 / ServerConf.cs:257 [Setup] CastleWarRangeX
+castle_war_range_y	100	GameSvrConf.cs:1787 / ServerConf.cs:258 [Setup] CastleWarRangeY
+guild_notice	公告	GameSvrConf.cs:1850（ServerConf 无读取点 ⇒ 恒初值）
+guild_war_header	敌对行会	GameSvrConf.cs:1851（ServerConf 无读取点 ⇒ 恒初值）
+guild_all	联盟行会	GameSvrConf.cs:1852（ServerConf 无读取点 ⇒ 恒初值）
+guild_member	行会成员	GameSvrConf.cs:1853（ServerConf 无读取点 ⇒ 恒初值）
+guild_member_rank	行会成员	GameSvrConf.cs:1854（ServerConf 无读取点 ⇒ 恒初值）
+guild_chief	掌门人	GameSvrConf.cs:1855（ServerConf 无读取点 ⇒ 恒初值）

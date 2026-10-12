@@ -1,0 +1,21 @@
+# base = origin/master a547619a
+
+$ git diff --stat a547619a -- src/ sql/ MirClient
+(空 = 冻结基线零改动)
+
+$ git status --porcelain -- src/ sql/ MirClient
+(空 = 干净)
+
+$ git diff --stat a547619a (完整改动面)
+ M mir2-rs/crates/data/src/exps.rs
+ M mir2-rs/crates/data/src/lib.rs
+?? mir2-rs/crates/data/examples/
+?? mir2-rs/crates/data/src/guild_castle.rs
+?? mir2-rs/crates/data/tests/
+?? "mir2-rs/tests/parity/m3/M3\342\221\247\350\241\214\344\274\232\346\224\273\345\237\216\351\205\215\347\275\256\351\241\271\346\212\245\345\221\212-20261013.md"
+?? mir2-rs/tests/parity/m3/evidence-m3-guild-load-config-20261013/
+?? mir2-rs/tests/parity/m3/sessions/csharp-20261013-023941/
+?? mir2-rs/tests/parity/m3/sessions/csharp-20261013-024050/
+?? mir2-rs/tests/parity/m3/sessions/csharp-20261013-024249/
+?? mir2-rs/tests/parity/m3/sessions/rust-20261013-024454/
+?? mir2-rs/tests/parity/m3/sessions/rust-20261013-024604/
