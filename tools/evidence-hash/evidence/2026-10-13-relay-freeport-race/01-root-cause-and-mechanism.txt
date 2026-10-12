@@ -1,0 +1,54 @@
+# 根因与机制（owner 实拍 + 本机复核）
+
+## owner 实拍（brief 05:18 / 05:12，master `f2eb43d6` 的**合并树**上 `cargo test --workspace --offline`）
+
+- `bins/game-gate/tests/relay.rs` 两条 **FAILED**：
+  `relays_open_data_heartbeat_and_close` / `bad_login_is_kicked_and_nothing_is_forwarded`；
+  报错 `通常每个套接字地址…只允许使用一次。(os error 10048)`。
+- cargo 因 **fail-fast** 提前收工（只跑到 6 个 target）⇒ 后续 target 根本没跑，判据面被截断。
+- **对照**：单跑 `cargo test -p game-gate --test relay` = **11 passed / 0 failed**；
+  workspace 复跑 = 86 suites / 714 passed / 0 failed / 18 ignored。
+- ⇒ 定性为并发/负载下的**端口竞态假红**（flaky = Important，破坏「合并树门禁即合同」）。
+
+## 机制（为什么两条用例会红成不同形态）
+
+旧口令 `free_port()` = `bind(:0)` → 读端口 → `drop`，是 **TOCTOU**：
+
+1. 用例 A 取到 `gate_port = P` 并**立刻释放** P（回到 OS 临时端口池）；
+2. 并行用例 B 的假服务 `TcpListener::bind("127.0.0.1:0")`（假 GameSvr / 假 DBSvr / 假 IDS）
+   拿到同一个 P 并**持有**；
+3. 用例 A 的网关子进程 `bind(P)` 失败（`WSAEADDRINUSE` / os error 10048）退出；
+4. 用例 A 的客户端 `connect_with_retry(P)` 却连上了**用例 B 的假服务**：
+   - 假服务读到不属于它的 20B 头/帧 ⇒ 用例 B 的 idents/frames 断言形态错（`:250`）；
+   - 用例 A 自己的假服务只收到一条空连接就 EOF ⇒ `got.first()` 为空（`:376`）。
+
+本机动态端口段（Windows 默认）——`bind(:0)` 的取值全在这个区间：
+
+```
+Protocol tcp Dynamic Port Range
+---------------------------------
+Start Port      : 49152
+Number of Ports : 16384
+```
+
+本机旧口径 `free_port()` 的 12 个抽样（全部落在动态段 `49152+`，与 `bind(:0)` 同池）：
+`61261 61262 61263 61264 61265 61266 61267 61268 61269 61270 61271 61272`
+
+## 修法口径（照已 approve 的 `openmir2-m2-flaky-relay-nowm@00af1c78`）
+
+1. **候选端口不再来自 OS 动态池**：`support::next_port()` = 进程内原子计数器 + 固定段
+   `[20000, 32000)`（`32000 < 32768`，与 Windows 动态段 `49152+` 和 Linux 默认段 `32768+`
+   都不相交）⇒ 并行用例的 `bind(:0)` **不可能**返回我们的候选；原子计数器保证同进程内不重号；
+   另按 pid 错开起点，避免 cargo 并行跑多个 test binary 时两进程同起点。
+2. **就绪门**：只有看到**本用例子进程**在 `TcpListener::bind` 成功之后打印的
+   `…[{addr}:{port}]已启动…`（`game-svr main.rs:459` / `game-gate main.rs:134`）才连接；
+   没等到（子进程退出 = bind 失败）⇒ **fail-closed**（把全文日志打进 panic），
+   绝不「先 connect 再赌」——那正是连到别人监听的路径。
+3. **有界重试**：`next_port()` 候选若已被外部占用（`bind` 失败）⇒ 段内换下一个（最多 `SPAN` 次）。
+4. **临时目录用例级唯一**：`pid + 原子计数` + RAII（断言 panic 失败路径也删）。
+
+## 确定性复现旧机制（本机，见 04-mutation-red 与 `support::teeth`）
+
+`support::teeth::legacy_probe_release_port_is_left_unprotected`：
+`free_port()` 释放的端口**未受保护**，紧接着的 `bind` 得到 `AddrInUse`
+（Windows = 10048，即子进程 bind 失败那一步）；而新候选不在动态段，`bind(:0)` 拿不到它。

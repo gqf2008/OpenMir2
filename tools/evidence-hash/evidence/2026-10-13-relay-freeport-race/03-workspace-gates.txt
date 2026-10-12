@@ -1,0 +1,10 @@
+# workspace `cargo test --offline --workspace` ×3
+[ws run 1] rc=0  suites=86 passed=744 failed=0
+[ws run 2] rc=0  suites=86 passed=744 failed=0
+[ws run 3] rc=0  suites=86 passed=744 failed=0
+
+# 四门禁
+fmt rc=0 ()
+clippy --workspace --all-targets -D warnings rc=0 (tail:     Finished `dev` profile [unoptimized + debuginfo] target(s) in 16.87s)
+test --workspace: 见上（86 suites / 744 passed / 0 failed ×3）
+msgcodegen --check rc=0: msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
