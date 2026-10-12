@@ -1,0 +1,18 @@
+# 改前/改后：Test-M3PrewarmNoWorldEntry 对「日志存在但无 marker」的判定（reviewer-6 M-1）
+#
+# 改前 = base fa456481（本片 base，即合入 master 的上一版）的 gate_guards.ps1；
+# 改后 = 本片工作树（把正向断言补上）；空日志 empty.log 是判别的关键输入。
+# harness: E:/tmp/m3bag-m1/prewarm_harness.ps1（只 dot-source 目标 gate_guards.ps1 调该函数，不起栈/不连库）。
+
+## 改前（base fa456481）
+gate_guards.ps1 | log=noworld.log | ok=True reason='' markers=[] positive=[<no-positive-field>]
+gate_guards.ps1 | log=world.log | ok=False reason='prewarm_entered_world' markers=[准备进入游戏,进入游戏,成功进入游戏] positive=[<no-positive-field>]
+gate_guards.ps1 | log=empty.log | ok=True reason='' markers=[] positive=[<no-positive-field>]
+
+## 改后（本片工作树）
+gate_guards.ps1 | log=noworld.log | ok=True reason='' markers=[] positive=[创建角色,预热建角完成]
+gate_guards.ps1 | log=world.log | ok=False reason='prewarm_entered_world' markers=[准备进入游戏,进入游戏,成功进入游戏] positive=[创建角色]
+gate_guards.ps1 | log=empty.log | ok=False reason='prewarm_marker_missing' markers=[] positive=[]
+
+## 结论
+# noworld=绿（有建角正证、无进世界标记）；world=红（进世界）；empty：改前 ok=True（M-1 缺陷），改后 ok=False reason=prewarm_marker_missing（fail-closed）。

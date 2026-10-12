@@ -58,7 +58,8 @@
                  **旧会话（根本没有该键）⇒ informational、不再拒比**（owner 19:20「降级后旧会话不再被拒」）；
                  attempts 数值差异（> / < / expected 漂移）只打 INFO，**不再拒绝比对**。依据：owner 19:20 判决性
                  实验（attempts 既不充分也不必要——4↔5 与 5↔5 时 attack_seq 都不同；而 c1≡c3 attempts 3/4 却逐字节全等）。
-                 另：预热相必须带 `-StopAfterCharCreated`，且预热 BotSrv 日志不得出现进世界标记（防 GameSvr 异步存档覆盖 pin）
+                 另：预热相必须带 `-StopAfterCharCreated`，且预热 BotSrv 日志不得出现进世界标记（防 GameSvr 异步存档覆盖 pin），
+                 且必须有建角正证（`创建角色`/`预热建角完成`）——日志零 marker 也 fail-closed（reviewer-6 M-1）
                  ——见 `gate_guards.ps1::Test-M3PrewarmNoWorldEntry`。
     4 逐次对拍   `attack_diff.py align` 两侧 ⇒ `attack_diff.py diff`；非 0 即 RED。
                  另 `scoped_diff.py diff --canonical --fixed-newchr`（DB 侧）非 0 即 RED。

@@ -1,0 +1,23 @@
+# 牙齿：把「正向断言」改坏 ⇒ 必须有牙（改坏后 empty.log 变绿；selftest_gate ⑩ 新用例 FAIL、rc=1）
+#
+# 改坏 = $positive.Count -eq 0 → $positive.Count -lt 0（恒假，等于删掉 M-1 正向断言），临时副本。
+
+## A. 改坏副本的 harness 输出（empty.log 退回 ok=True）
+gate_guards.ps1 | log=noworld.log | ok=True reason='' markers=[] positive=[创建角色,预热建角完成]
+gate_guards.ps1 | log=world.log | ok=False reason='prewarm_entered_world' markers=[准备进入游戏,进入游戏,成功进入游戏] positive=[创建角色]
+gate_guards.ps1 | log=empty.log | ok=True reason='' markers=[] positive=[]
+
+## B. 把改坏副本临时放回工作树跑 selftest_gate.ps1（原文件已备份、跑完还原）
+#   sed -i 's/\$positive\.Count -eq 0/\$positive.Count -lt 0/' mir2-rs/tests/parity/m3/gate_guards.ps1
+#   powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/selftest_gate.ps1 -OutDir E:/tmp/openmir2-m3gs/selftest-m1-mut
+#   → rc=1；⑩ 的新用例「日志存在但零 marker=红」FAIL：
+  [OK  ] prewarm/无进世界标记+有建角正证=绿                               ok=True positive=[创建角色,预热建角完成]
+  [OK  ] prewarm/有进世界标记=红(fail-closed)                        reason=prewarm_entered_world markers=[准备进入游戏,进入游戏,成功进入游戏]
+  [OK  ] prewarm/日志缺失=红(fail-closed)                          reason=log_missing
+  [FAIL] prewarm/日志存在但零 marker=红(fail-closed；M-1)             reason= markers=[] positive=[]
+SELFTEST_REPORT E:\tmp\openmir2-m3gs\selftest-m1-mut\selftest.json
+SUMMARY total=64 failed=1
+SELFTEST FAIL: 有护栏口径与实现不符（见上面 FAIL 行）
+
+## C. 还原
+#   cp <备份> 回工作树；cmp 逐字节相同（RESTORED_IDENTICAL）；git diff 行数回到 18/5。
