@@ -1,0 +1,8 @@
+PASS green-with-1-tolerance :: GREEN: 目标可用性门通过（5 击里 4 击受害在场且 !ghost && !death，tolerance=1）
+PASS mutation-ghost-red-names-k4 :: RED: 目标在 2/5 击不可用（> tolerance 1）——受害不在 (18,20) 或 ghost/death=1；前几处：#4(seq=4), #5(seq=5)
+PASS mutation-moved-red :: RED: 目标在 5/5 击不可用（> tolerance 1）——受害不在 (18,20) 或 ghost/death=1；前几处：#1(seq=1), #2(seq=2), #3(seq=3), #4(seq=4), #5(seq=5)
+PASS prereq-short :: PREREQ: 服务端状态 dump 行数 3 < 本次攻击数 5（C:\Users\gxh\AppData\Local\Temp\server-state-gate-selftest-ils06657\short.txt）
+PASS prereq-badjson :: PREREQ: 第 1 行 dump 非法 JSON（seq=1）
+PASS tolerance0-first-miss-red :: RED: 目标在 1/5 击不可用（> tolerance 0）——受害不在 (18,20) 或 ghost/death=1；前几处：#1(seq=1)
+PASS writer-lf-no-crlf :: LF
+SELFTEST GREEN 7/7

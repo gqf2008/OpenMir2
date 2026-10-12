@@ -165,7 +165,8 @@ def _read_cmd(args):
         "problems": problems,
     }
     if args.json:
-        with open(args.json, "w", encoding="utf-8") as fh:
+        # EOL：证据/JSON 一律 LF（owner 2026-10-13 01:15，EOL 陷阱同族第 5 次的根因修）
+        with open(args.json, "w", encoding="utf-8", newline="\n") as fh:
             json.dump(payload, fh, ensure_ascii=False, indent=1)
             fh.write("\n")
     print("=== 专用流纯度（attack_stream_gate）===")
@@ -248,9 +249,9 @@ def _cmd_selftest(_args):
     with tempfile.TemporaryDirectory() as td:
         good = os.path.join(td, "good.tsv")
         bad = os.path.join(td, "bad.tsv")
-        with open(good, "w", encoding="utf-8") as fh:
+        with open(good, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(_lines(_clean_rows(3)))
-        with open(bad, "w", encoding="utf-8") as fh:
+        with open(bad, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(_lines(lead + _clean_rows(2)))
         rc_good, _ = _read_cmd(argparse.Namespace(stream=good, expected=3, json=""))
         rc_bad, _ = _read_cmd(argparse.Namespace(stream=bad, expected=2, json=""))

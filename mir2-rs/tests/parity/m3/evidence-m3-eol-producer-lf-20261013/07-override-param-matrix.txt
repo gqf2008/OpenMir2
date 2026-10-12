@@ -1,0 +1,14 @@
+# Set-Content 覆盖的参数形态矩阵（夹具实际用到的全部形态）——全部必须 LF（crlf=False）
+# 命令：powershell -NoProfile -ExecutionPolicy Bypass -File /e/tmp/m3bag-matrix-probe.ps1 ; python -I tools/evidence-hash/verify_sha256sums.py eolcheck <probe dir>
+
+array-value: crlf=False text=a\nb\n
+pipeline: crlf=False text=x\n
+getcontent-pipe: crlf=False text=l1\nl2\n
+literalpath: crlf=False text=y\n
+embedded-crlf: crlf=False text=m\nn\n
+jsonl-array: crlf=False text={"k":1}\n{"k":2}\n{"k":3}\n
+no-value: exists=True len=0
+# 追加：故意用 [IO.File]::WriteAllText 写 CRLF 的 src.txt（不经覆盖）⇒ eolcheck 必须 RED 点名它：
+EOLCHECK RED mir2-rs\tests\parity\m3\sessions\.eolcheck-matrix\src.txt  (盘上是 CRLF，text attr=set；仓库口径应为 LF)
+EOLCHECK RED 1/8 件与仓库口径（LF）在 EOL 上不一致（修法：生产者用 LF 写出 / `verify_sha256sums.py write` 重记，或对冻结字节目录声明 `.gitattributes * -text`）
+EOLCHECK_RC=1

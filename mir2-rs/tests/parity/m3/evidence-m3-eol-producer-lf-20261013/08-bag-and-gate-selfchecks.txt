@@ -1,0 +1,11 @@
+# 共用夹具脚本回归（gate_guards.ps1 -> m3hashutil.ps1 覆盖生效，均不改调用点）
+
+## run_bag_equip_pair.ps1 -SelfCheckNoStack
+命令：powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_bag_equip_pair.ps1 -SelfCheckNoStack
+SELFTEST_RED GREEN: 无栈自检全过（配置透传有/无两向 + run_pair 关挂机耦合两向 + 固定起点两相 + pin settle+hold 可判红自检（跳过 settle / 早于落库 / 反复覆盖 / 正常收敛）+ 旧挂机 peer/旧起点 peer 必红 + CX/CY 逐字节比断言 + 断线存档 preflight + 入口护栏/DiffOnly fail-closed + pin SQL 别名/列校验（含改坏 a.IncHealth 必红））
+
+## selftest_gate.ps1 -OutDir E:\tmp\m3bag-selftest-gate
+命令：powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/selftest_gate.ps1 -OutDir E:\tmp\m3bag-selftest-gate
+SELFTEST_REPORT E:\tmp\m3bag-selftest-gate\selftest.json
+SUMMARY total=65 failed=0
+GREEN: 十条机判护栏的判红/判绿口径都经构造输入验证

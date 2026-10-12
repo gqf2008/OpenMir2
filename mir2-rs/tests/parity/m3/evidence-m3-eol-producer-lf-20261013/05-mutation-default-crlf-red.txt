@@ -1,0 +1,13 @@
+# 改坏必红：把 m3hashutil.ps1 的 Set-Content 覆盖改回**默认 cmdlet**（Windows 上 CRLF）
+# 改法（唯一一处，生产写出点）：
+#   foreach ($t in @($targets)) { Write-M3LfText -Path $t -Text $text }
+#   =>  foreach ($t in @($targets)) { Microsoft.PowerShell.Management\Set-Content -Path $t -Value $text -Encoding utf8 }
+
+<stdin>:6: SyntaxWarning: invalid escape sequence '\S'
+MUTATED the Set-Content override at line 182 -> default cmdlet (CRLF)
+MUTATED_CRLF_PRESENT=True
+LF_SELFTEST ok=False reason=setcontent_override_not_lf
+# 改坏后 eolcheck（必须 RED 且点名 mutated.txt）：
+EOLCHECK RED mir2-rs\tests\parity\m3\sessions\.eolcheck-mutation\mutated.txt  (盘上是 CRLF，text attr=set；仓库口径应为 LF)
+EOLCHECK RED 1/1 件与仓库口径（LF）在 EOL 上不一致（修法：生产者用 LF 写出 / `verify_sha256sums.py write` 重记，或对冻结字节目录声明 `.gitattributes * -text`）
+EOLCHECK_RC=1

@@ -1,0 +1,16 @@
+/usr/bin/bash: line 2: window/00-selfcheck-nostack.txt: No such file or directory
+# -SelfCheckOut 自落 LF 转录（替代 pwsh ... > window/00-selfcheck-nostack.txt 的 CRLF 重定向）
+# 命令：
+#   powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 \
+#     -SelfCheckNoStack -SelfCheckOut <repo>/mir2-rs/tests/parity/m3/sessions/.eolcheck-selftest/transcript.txt
+
+SELFCHECK_WITH_SELFCHECKOUT_RC=0
+transcript_bytes=8114 crlf=0 cr=0 lf=48
+# 转录件 eolcheck（盘上字节 vs git blob）：
+EOLCHECK GREEN 1/1 件文本证据与仓库口径（LF）在 EOL 上一致
+EOLCHECK_RC=0
+
+# 控制台里 23a/23b 与总判：
+SELFTEST 23a LF 写出（m3hashutil + Set-Content 覆盖）：ok=True（helper_has_cr=False override_has_cr=False）
+SELFTEST 23b eolcheck 牙（盘上字节 vs git blob）：LF 件 rc=0 / CRLF 件 rc=1（点名 bad.txt=True）
+1

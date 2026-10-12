@@ -128,7 +128,9 @@ param(
   [string]$CsharpStateLog = '',    # owner 23:50：C# 半服务端权威逐击状态 dump（缺省读 $env:MIR2_RNG_STATE_LOG）
   [string]$RustStateLog = '',      # owner 2026-10-13 00:20：Rust 半同形 dump（m2-svr 管线；缺省读 $env:MIR2_RNG_STATE_LOG / <RustStackLogDir>\rng-server-state.tsv）
   [switch]$DiffOnly,
-  [switch]$SelfCheckNoStack
+  [switch]$SelfCheckNoStack,
+  [string]$SelfCheckOut = ''     # owner 2026-10-13 01:15：把 -SelfCheckNoStack 的转录**由脚本自己**以 LF 落盘
+                                # （代替 `pwsh ... -SelfCheckNoStack > window/00-....txt` 的 CRLF 重定向）
 )
 
 $ErrorActionPreference = 'Stop'
@@ -331,6 +333,28 @@ function Invoke-AttackCrossSideDiff([string]$csharpDir, [string]$rustDir, [strin
 # ===========================================================================
 # Mode: SelfCheckNoStack —— 无栈自检（机器可判，不碰真端口）
 # ===========================================================================
+# -SelfCheckOut（owner 2026-10-13 01:15，EOL 陷阱同族第 5 次）：把本次无栈自检的**完整转录**
+# **由脚本自己**以 LF 落盘。历史事故：`window/00-selfcheck-nostack.txt` 由 `pwsh ... > file`
+# 重定向产生，Windows PowerShell 默认写 CRLF，而仓库 `*.txt text eol=lf` ⇒ 清单「工作树自洽、
+# 干净检出不可复现」。这里改成：父进程重入一次子进程（不带 -SelfCheckOut）并重定向到临时文件，
+# 再把字节 LF 归一后写出——重定向的 CRLF 在**写出点**被吃掉。
+# ---------------------------------------------------------------------------
+if ($SelfCheckNoStack -and -not [string]::IsNullOrEmpty($SelfCheckOut)) {
+  $selfTmp = Join-Path $env:TEMP ('m3attack-selfcheck-' + [guid]::NewGuid().ToString('N') + '.txt')
+  $childArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath, '-SelfCheckNoStack')
+  if (-not [string]::IsNullOrEmpty($PortsCsv)) { $childArgs += @('-PortsCsv', $PortsCsv) }
+  try {
+    & powershell @childArgs *> $selfTmp
+    $selfRc = $LASTEXITCODE
+    $selfText = [System.IO.File]::ReadAllText($selfTmp)
+    Write-M3LfText -Path $SelfCheckOut -Text $selfText
+    [Console]::Out.Write((ConvertTo-M3LfText $selfText))
+    exit $selfRc
+  } finally {
+    Remove-Item -LiteralPath $selfTmp -Force -ErrorAction SilentlyContinue
+  }
+}
+
 if ($SelfCheckNoStack) {
   Write-Output 'SELFTEST_NO_STACK: 无栈自检——所有路径都必须 fail-closed（缺失绝不静默 GREEN）'
   $failures = @()
@@ -512,7 +536,7 @@ if ($SelfCheckNoStack) {
   [System.IO.File]::WriteAllText((Join-Path $synthDir 'mongen-mapF.tsv'), "1`t1`t1`n", (New-Object System.Text.UTF8Encoding($false)))
   [System.IO.File]::WriteAllText((Join-Path $synthDir 'mongen-mapG.tsv'), "2`t2`t2`n", (New-Object System.Text.UTF8Encoding($false)))
   $synthLines = @("E`tmongen-mapE.tsv`t0`t`t", "F`tmongen-mapF.tsv`t1`t`t", "G`tmongen-mapG.tsv`t0`t`t")
-  [System.IO.File]::WriteAllLines($synthProv, $synthLines, (New-Object System.Text.UTF8Encoding($false)))
+  Write-M3LfLines -Path $synthProv -Lines $synthLines
   $synthE = Test-M3MonGenEmpty -MapName 'E' -FixtureDir $synthDir -ProvenancePath $synthProv
   if (-not $synthE.ok) { $failures += ('synth_empty_not_ok=' + $synthE.reason) }
   $synthF = Test-M3MonGenEmpty -MapName 'F' -FixtureDir $synthDir -ProvenancePath $synthProv
@@ -544,7 +568,7 @@ if ($SelfCheckNoStack) {
   [System.IO.File]::WriteAllText((Join-Path $aiSynthDir 'ai-consumer-mapB.tsv'), $aiOneG, (New-Object System.Text.UTF8Encoding($false)))
   [System.IO.File]::WriteAllText((Join-Path $aiSynthDir 'ai-consumer-mapC.tsv'), $aiOneG, (New-Object System.Text.UTF8Encoding($false)))
   $aiSynthLines = @("A`tai-consumer-mapA.tsv`t0`t`t", "B`tai-consumer-mapB.tsv`t1`t`t", "C`tai-consumer-mapC.tsv`t0`t`t", "E`tai-consumer-mapE.tsv`t0`t`t")
-  [System.IO.File]::WriteAllLines($aiSynthProv, $aiSynthLines, (New-Object System.Text.UTF8Encoding($false)))
+  Write-M3LfLines -Path $aiSynthProv -Lines $aiSynthLines
   $aiSynthA = Test-M3MapNoAiConsumers -MapName 'A' -FixtureDir $aiSynthDir -ProvenancePath $aiSynthProv
   if (-not $aiSynthA.ok) { $failures += ('synth_ai_empty_not_ok=' + $aiSynthA.reason) }
   $aiSynthB = Test-M3MapNoAiConsumers -MapName 'B' -FixtureDir $aiSynthDir -ProvenancePath $aiSynthProv
@@ -639,7 +663,7 @@ if ($SelfCheckNoStack) {
     'M3ATTSEQ {"role":"struck","dmg":3,"hp":7,"maxhp":10,"src":11,"actor":22,"my":11}',
     'M3ATTSEQ {"role":"done","attacks":1}'
   )
-  [System.IO.File]::WriteAllLines($fRaw, $fLines, (New-Object System.Text.UTF8Encoding($false)))
+  Write-M3LfLines -Path $fRaw -Lines $fLines
   $prevEap = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
   $alignRc2 = Invoke-AttackAlign $alignDir
@@ -720,8 +744,8 @@ if ($SelfCheckNoStack) {
     $ghostLines.Add('SERVER_STATE ' + $k + ' [' + $atkJson + ',' + $vicGhost + ']')
   }
   $ssgUtf8 = New-Object System.Text.UTF8Encoding($false)
-  [System.IO.File]::WriteAllLines($ssgGood, $goodLines, $ssgUtf8)
-  [System.IO.File]::WriteAllLines($ssgGhost, $ghostLines, $ssgUtf8)
+  Write-M3LfLines -Path $ssgGood -Lines $goodLines
+  Write-M3LfLines -Path $ssgGhost -Lines $ghostLines
   $prevEap = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
   $ssgGoodRes = Invoke-M3TargetAvailabilityGate -Side 'rust' -ExplicitStateLog $ssgGood -Attacks 5 -AttackerId 100 -Vx 18 -Vy 20 -Tolerance 1
@@ -753,8 +777,8 @@ if ($SelfCheckNoStack) {
   }
   $events.Add('M3ATTSEQ {"role":"done","attacks":10}')
   $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-  [System.IO.File]::WriteAllLines($rawA, $events, $utf8NoBom)
-  [System.IO.File]::WriteAllLines($rawB, $events, $utf8NoBom)
+  Write-M3LfLines -Path $rawA -Lines $events
+  Write-M3LfLines -Path $rawB -Lines $events
   $seqA = Join-Path $dirA 'attack_seq.jsonl'
   $seqB = Join-Path $dirB 'attack_seq.jsonl'
   $prevEap = $ErrorActionPreference
@@ -814,7 +838,7 @@ if ($SelfCheckNoStack) {
     $eventsC.Add('M3ATTSEQ {"role":"attack","k":' + $k + ',"op":"CM_HIT","x":289,"y":618,"dir":2}')
     $eventsC.Add('M3ATTSEQ {"role":"struck","dmg":5,"hp":' + (20 - $k) + ',"maxhp":30,"src":101,"actor":77,"my":101}')
   }
-  [System.IO.File]::WriteAllLines($rawC, $eventsC, $utf8NoBom)
+  Write-M3LfLines -Path $rawC -Lines $eventsC
   $prevEap = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
   $myMissingRc = Invoke-AttackAlign $dirC
@@ -913,9 +937,9 @@ if ($SelfCheckNoStack) {
   $mutDir = Join-Path $tmpRoot 'iso-mut'
   New-Item -ItemType Directory -Force -Path $mutDir | Out-Null
   $mutDrop = Join-Path $mutDir 'drop-one.txt'
-  [System.IO.File]::WriteAllLines($mutDrop, @($curLines | Select-Object -Skip 1), (New-Object System.Text.UTF8Encoding($false)))
+  Write-M3LfLines -Path $mutDrop -Lines @($curLines | Select-Object -Skip 1)
   $mutExtra = Join-Path $mutDir 'extra.txt'
-  [System.IO.File]::WriteAllLines($mutExtra, @($curLines + 'M2Server.Player.PlayObject.Bogus@PlayObject.cs:1'), (New-Object System.Text.UTF8Encoding($false)))
+  Write-M3LfLines -Path $mutExtra -Lines @($curLines + 'M2Server.Player.PlayObject.Bogus@PlayObject.cs:1')
   $predDrop = Test-M3IsolatePredicates -CsharpDump $mutDrop
   if ($predDrop.rc -eq 0) { $failures += 'iso_predicates_drop_not_red' }
   $predExtra = Test-M3IsolatePredicates -CsharpDump $mutExtra
@@ -971,10 +995,10 @@ if ($SelfCheckNoStack) {
     $asgCleanRows += "Next(max)`t15`t7`tM2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41"
     $asgCleanRows += "Next(max)`t5`t2`tM2Server.Player.PlayObject.AttackSuccess@PlayObject.Attack.cs:223"
   }
-  [System.IO.File]::WriteAllLines($asgClean, $asgCleanRows, (New-Object System.Text.UTF8Encoding($false)))
+  Write-M3LfLines -Path $asgClean -Lines $asgCleanRows
   $asgPollutedRows = @("Next(max)`t1`t0`tM2Server.Actor.BaseObject.GetAttackPower@BaseObject.Base.cs:892",
                        "Next(max)`t8`t3`tM2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41") + $asgCleanRows
-  [System.IO.File]::WriteAllLines($asgPolluted, $asgPollutedRows, (New-Object System.Text.UTF8Encoding($false)))
+  Write-M3LfLines -Path $asgPolluted -Lines $asgPollutedRows
   $prevEap = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
   $asgCleanOut = (& python $asg gate --stream $asgClean --expected 3 2>&1 | Out-String)
@@ -1007,9 +1031,38 @@ if ($SelfCheckNoStack) {
   if ($hookStatusOut -match 'Cannot bind argument to parameter') { $failures += 'f_n2_repo_here_null' }
   Write-Output ("SELFTEST 22d start-csharp-hook -Repo（F-N2）：-Status rc={0}（脚本自身目录 `$Here 已无条件赋值，不再 null 绑定崩溃）" -f $hookStatusRc)
 
+  # 23. EOL 陷阱「生产者写 LF」牙（owner 2026-10-13 01:15，同族第 5 次；本次正是 `-SelfCheckNoStack`
+  #     的转录件 `window/00-selfcheck-nostack.txt`）：
+  #     （a）m3hashutil 的 LF 写出 + `Set-Content` 覆盖自检（写出件不得含 0x0D）；
+  #     （b）对**新写出的文本证据**跑 `verify_sha256sums.py eolcheck`（不看清单，直接咬盘上字节 vs git blob）：
+  #         LF 件绿、CRLF 件必红并**点名**。改回默认 CRLF 写出 ⇒ （a）或（b）必红。
+  $lfSelf = Test-M3LfWriterSelfTest
+  if (-not $lfSelf.ok) { $failures += ('lf_writer_selftest=' + $lfSelf.reason) }
+  Write-Output ("SELFTEST 23a LF 写出（m3hashutil + Set-Content 覆盖）：ok={0}（helper_has_cr={1} override_has_cr={2}）" -f $lfSelf.ok, $lfSelf.has_cr, $lfSelf.override_cr)
+  # 证据探针必须在**仓库内**（`git check-attr` 才能解析 `text eol=lf`）；建在 sessions 下、结束时删除。
+  $eolProbeDir = Join-Path $Here 'sessions\.eolcheck-selftest'
+  New-Item -ItemType Directory -Force -Path $eolProbeDir | Out-Null
+  $eolGood = Join-Path $eolProbeDir 'good.txt'
+  $eolBad = Join-Path $eolProbeDir 'bad.txt'
+  Set-M3LfContent -Path $eolGood -Value @('alpha', 'beta')
+  [System.IO.File]::WriteAllText($eolBad, "alpha`r`nbeta`r`n", (New-Object System.Text.UTF8Encoding($false)))
+  $eolVerify = Join-Path $RepoRoot 'tools\evidence-hash\verify_sha256sums.py'
+  $prevEap = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  $eolGoodOut = (& python -I $eolVerify eolcheck $eolGood 2>&1 | Out-String)
+  $eolGoodRc = $LASTEXITCODE
+  $eolBadOut = (& python -I $eolVerify eolcheck $eolBad 2>&1 | Out-String)
+  $eolBadRc = $LASTEXITCODE
+  $ErrorActionPreference = $prevEap
+  if ($eolGoodRc -ne 0) { $failures += ('eolcheck_lf_not_green_rc=' + $eolGoodRc) }
+  if ($eolBadRc -eq 0) { $failures += 'eolcheck_crlf_not_red' }
+  if ($eolBadOut -notmatch 'bad\.txt') { $failures += 'eolcheck_crlf_no_naming' }
+  Write-Output ("SELFTEST 23b eolcheck 牙（盘上字节 vs git blob）：LF 件 rc={0} / CRLF 件 rc={1}（点名 bad.txt={2}）" -f $eolGoodRc, $eolBadRc, ($eolBadOut -match 'bad\.txt'))
+  Remove-Item -Recurse -Force $eolProbeDir -ErrorAction SilentlyContinue
+
   Remove-Item -Recurse -Force $tmpRoot -ErrorAction SilentlyContinue
   if ($failures.Count -eq 0) {
-    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（攻击配置透传/默认关 + run_pair -DisableAutoPlay 耦合两向 + 攻击两相 pin pose/SQL（-PinMapName 透传含 MapName 断言） + pin SQL 可执行性（含改坏 a.IncHealth 必红 + 改坏 Hp=100000 越界必红） + pin 记账门（owner 19:20 降级 informational：attempts=2/3/漂移/旧会话无字段键 绿 + 键在但空/(off)/形态坏 红 + 改坏必红值清空） + 预热相 -StopAfterCharCreated 透传两向 + 攻击 pin 无怪口径（R-1，按地图查提取件：生产 0137 绿/source_verified + 换回 map 0 必红 + 合成 0/1 行·声明漂移·缺 provenance 四向有牙） + 攻击 pin 非 MonGen AI 消费者口径（R-1 refine 15:05：生产 0137 绿/source_verified + 合成 有引用/声明漂移/缺 provenance/缺提取件 四向必红） + 入口/DiffOnly fail-closed + attack_diff selftest + 改坏 dmg/hit 必红 + Invoke-AttackAlign 返回值形态两处（F-J：⑧ 生产函数直接断言 + ⑮） + scoped_diff 14/14 + M-1 WARN 有牙齿 + M-2 attacker 精确选择 selftest + pin SQL 别名/列校验 + 种子注入断言（两侧 fail-closed）+ 攻击序列收尾等待（F-E） + attack 行缺 my 的 fail-closed（残差③） + 活栈隔离口径（owner 21:15：开关 off/on/fail-closed 六向 + attack_seed 公式含 i32 回绕 + 流水头 有/无/缺文件 + C# dump vs Rust 谓词表机判（生产绿 / 删一条红 / 加未登记红）+ C# hook 离线自检 + SHA256 活文件（F1：holder FileShare.ReadWrite 下读=锚 + 旧 ReadAllBytes 必被拒）+ attack_rng_ledger 站点表与决策片同表（F2）+ 目标可用性门两侧接线（owner 00:20：C#/Rust 同一函数，rust good/ghost/missing 三向 fail-closed） + C# 专用流纯度门（F-N1：干净绿 / 混入 base 单元·player 数不符·污染首条 三向必红）））'
+    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（攻击配置透传/默认关 + run_pair -DisableAutoPlay 耦合两向 + 攻击两相 pin pose/SQL（-PinMapName 透传含 MapName 断言） + pin SQL 可执行性（含改坏 a.IncHealth 必红 + 改坏 Hp=100000 越界必红） + pin 记账门（owner 19:20 降级 informational：attempts=2/3/漂移/旧会话无字段键 绿 + 键在但空/(off)/形态坏 红 + 改坏必红值清空） + 预热相 -StopAfterCharCreated 透传两向 + 攻击 pin 无怪口径（R-1，按地图查提取件：生产 0137 绿/source_verified + 换回 map 0 必红 + 合成 0/1 行·声明漂移·缺 provenance 四向有牙） + 攻击 pin 非 MonGen AI 消费者口径（R-1 refine 15:05：生产 0137 绿/source_verified + 合成 有引用/声明漂移/缺 provenance/缺提取件 四向必红） + 入口/DiffOnly fail-closed + attack_diff selftest + 改坏 dmg/hit 必红 + Invoke-AttackAlign 返回值形态两处（F-J：⑧ 生产函数直接断言 + ⑮） + scoped_diff 14/14 + M-1 WARN 有牙齿 + M-2 attacker 精确选择 selftest + pin SQL 别名/列校验 + 种子注入断言（两侧 fail-closed）+ 攻击序列收尾等待（F-E） + attack 行缺 my 的 fail-closed（残差③） + 活栈隔离口径（owner 21:15：开关 off/on/fail-closed 六向 + attack_seed 公式含 i32 回绕 + 流水头 有/无/缺文件 + C# dump vs Rust 谓词表机判（生产绿 / 删一条红 / 加未登记红）+ C# hook 离线自检 + SHA256 活文件（F1：holder FileShare.ReadWrite 下读=锚 + 旧 ReadAllBytes 必被拒）+ attack_rng_ledger 站点表与决策片同表（F2）+ 目标可用性门两侧接线（owner 00:20：C#/Rust 同一函数，rust good/ghost/missing 三向 fail-closed） + C# 专用流纯度门（F-N1：干净绿 / 混入 base 单元·player 数不符·污染首条 三向必红）+ EOL 生产者写 LF（23a：m3hashutil 写出 + Set-Content 覆盖自检，写出件不得含 0x0D；23b：`verify_sha256sums.py eolcheck` 盘上字节 vs git blob——LF 绿 / CRLF 必红并点名 bad.txt；`-SelfCheckOut` 脚本自落 LF 转录）））'
     exit 0
   }
   Write-Output ('SELFTEST_RED RED: ' + ($failures -join ', '))
@@ -1326,6 +1379,22 @@ $alignRc = Invoke-AttackAlign $mine.FullName
 if ($alignRc -ne 0) {
   Write-Output ("RED: attack_diff align 失败（rc={0}）" -f $alignRc)
   exit 1
+}
+
+# EOL 护栏（owner 2026-10-13 01:15，同族第 5 次）：本侧夹具**自己写的文本证据**必须与仓库口径
+# （LF）在 EOL 上一致，否则交付/清单「工作树自洽、干净检出不可复现」⇒ fail-closed 点名拒交。
+# 只查本夹具的落盘件（快照/驱动日志不在本清单；它们走各自写集）。
+$eolArtifacts = @('baseline.json', 'attack_raw.jsonl', 'attack_state.jsonl', 'attack_seq.jsonl',
+                  'server_state_segment.tsv', 'attack_seed.json', 'attack_isolation.json') |
+  ForEach-Object { Join-Path $mine.FullName $_ } | Where-Object { Test-Path -LiteralPath $_ }
+if ($eolArtifacts.Count -gt 0) {
+  $eolOut = (& python -I (Join-Path $RepoRoot 'tools\evidence-hash\verify_sha256sums.py') eolcheck @eolArtifacts 2>&1 | Out-String)
+  if ($LASTEXITCODE -ne 0) {
+    Write-Output 'RED: 本侧夹具文本证据 EOL 与仓库口径（LF）不一致——交付清单在干净检出上不可复现（fail-closed，owner 2026-10-13 01:15）'
+    Write-Output $eolOut
+    exit 1
+  }
+  Write-Output ("EOLCHECK_OK side={0} files={1}（盘上字节 vs git blob 在 EOL 上一致）" -f $Side, $eolArtifacts.Count)
 }
 
 if ($Side -eq 'rust' -and -not [string]::IsNullOrEmpty($PeerSession)) {
