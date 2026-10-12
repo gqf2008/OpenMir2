@@ -1,0 +1,83 @@
+{
+  "tool": "dbsnap",
+  "tables": [
+    {
+      "table": "mir2_account.account",
+      "rows": 7358,
+      "sha256": "2949485028035e13fe14817c38e4b96ff451ee6e4b2d668824da3c5069136d68",
+      "file": "mir2_account.account.tsv"
+    },
+    {
+      "table": "mir2_account.account_protection",
+      "rows": 7246,
+      "sha256": "35a504292500031416adbc76aa90343918ae297bbac8f26d87c9c860c7e67414",
+      "file": "mir2_account.account_protection.tsv"
+    },
+    {
+      "table": "mir2_db.characters",
+      "rows": 7221,
+      "sha256": "72e1d78ce1aaeb0054781a4851ba138cf15dac02d28e35ed62240177191385a2",
+      "file": "mir2_db.characters.tsv"
+    },
+    {
+      "table": "mir2_db.characters_ablity",
+      "rows": 7224,
+      "sha256": "e1bb2c78471680f83d72a1187a4e71268bba2dfce9b18c0ec8c2e7c5e5afc2fa",
+      "file": "mir2_db.characters_ablity.tsv"
+    },
+    {
+      "table": "mir2_db.characters_bonusability",
+      "rows": 1,
+      "sha256": "2a7c7b3966c0dc02e065463974cf094903f37b13bfa126a48167107a171ef4bc",
+      "file": "mir2_db.characters_bonusability.tsv"
+    },
+    {
+      "table": "mir2_db.characters_item",
+      "rows": 93901,
+      "sha256": "e419a925589f2892f53a783277ba1ccc9f9bef935116ac9c089e9230e9d38ac8",
+      "file": "mir2_db.characters_item.tsv"
+    },
+    {
+      "table": "mir2_db.characters_item_attr",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "file": "mir2_db.characters_item_attr.tsv"
+    },
+    {
+      "table": "mir2_db.characters_magic",
+      "rows": 8,
+      "sha256": "0ac71ebc3756c582ca5e26f8b00e82cc2ff2f294a4206414c657c4d9b5470333",
+      "file": "mir2_db.characters_magic.tsv"
+    },
+    {
+      "table": "mir2_db.characters_bagitem",
+      "rows": 332258,
+      "sha256": "3d99d1d2c53d1ef314214f1129ad60628ae70c9d2c52f7f2e8416528ab072539",
+      "file": "mir2_db.characters_bagitem.tsv"
+    },
+    {
+      "table": "mir2_db.characters_storageitem",
+      "rows": 361150,
+      "sha256": "c706927cd26159122cea2a1b4831454cdc78fccc399ba790ea623ab568814af9",
+      "file": "mir2_db.characters_storageitem.tsv"
+    },
+    {
+      "table": "mir2_db.characters_status",
+      "rows": 7223,
+      "sha256": "0a4b40aea1e847c4871bd6543e20edce161d8e188c12b5ab22d40bfa4c4e772e",
+      "file": "mir2_db.characters_status.tsv"
+    },
+    {
+      "table": "mir2_db.characters_quest",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "file": "mir2_db.characters_quest.tsv"
+    },
+    {
+      "table": "mir2_db.characters_indexes",
+      "rows": 7223,
+      "sha256": "9d8f3d05b660ae85332a097401891b826d465cf05e4219982e2288e76b03a9c4",
+      "file": "mir2_db.characters_indexes.tsv"
+    }
+  ]
+}

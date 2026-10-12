@@ -1,0 +1,29 @@
+{
+  "trace": "E:/tmp/m3cs-r2/rust-rng-stream-r1.tsv",
+  "side": "rust",
+  "total": 160,
+  "attack_path": 146,
+  "noise": 14,
+  "sites": {
+    "bins/game-svr/src/main.rs:2856": 8,
+    "bins/game-svr/src/homemap.rs:130": 2,
+    "bins/game-svr/src/homemap.rs:162": 2,
+    "bins/game-svr/src/homemap.rs:163": 2,
+    "crates/world/src/combat.rs:109": 36,
+    "crates/world/src/combat.rs:111": 36,
+    "crates/world/src/combat.rs:736": 36,
+    "crates/world/src/combat.rs:606": 19,
+    "crates/world/src/combat.rs:579": 19
+  },
+  "canonical": {
+    "bins/game-svr/src/main.rs:2856": 8,
+    "bins/game-svr/src/homemap.rs:130": 2,
+    "bins/game-svr/src/homemap.rs:162": 2,
+    "bins/game-svr/src/homemap.rs:163": 2,
+    "atk_power_a": 36,
+    "atk_power_b": 36,
+    "hit_gate": 36,
+    "hit_struck_damage": 19,
+    "struck_durability": 19
+  }
+}

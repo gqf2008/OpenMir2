@@ -1,0 +1,20 @@
+$ CARGO_TARGET_DIR=E:/tmp/m3cs-r2-target cargo test -p mir2-world --offline --test attack_dir_vectors
+test redcheck_dropping_attack_success_shifts_sequence ... ok
+test attack_dir_matches_oracle_vectors ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+$ CARGO_TARGET_DIR=E:/tmp/m3cs-r2-target cargo test -p mir2-world --offline --test combat_skill_vectors
+test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+$ CARGO_TARGET_DIR=E:/tmp/m3cs-r2-target cargo test -p mir2-parity-tests --offline --test world_combat_parity
+test exp_goes_to_first_hitter_not_last ... ok
+test golden_covers_dodge_and_no_hit_roll_branch ... ok
+test ghosted_hitter_loses_exp_credit_in_same_tick ... ok
+test kill_exp_does_not_decay_even_when_fix_off ... ok
+test combat_attacks_and_exp_match_csharp ... ok
+test redcheck_speed_point_change_must_alter_attacks ... ok
+test redcheck_hit_point_zero_branch_consumes_no_rng ... ok
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+$ CARGO_TARGET_DIR=E:/tmp/m3cs-r2-target cargo test --workspace --offline  (summary)
+suites=83 passed=673 failed=0 ignored=16

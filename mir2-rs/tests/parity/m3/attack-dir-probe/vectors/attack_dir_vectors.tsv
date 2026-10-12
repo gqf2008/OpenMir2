@@ -1,0 +1,67 @@
+case	no_target_power_only	7700	20	0	0	1	6
+atk	no_target_power_only	0	23	0	60000	0
+atk	no_target_power_only	1	29	0	60000	0
+atk	no_target_power_only	2	22	0	60000	0
+draw	no_target_power_only	1|Next(max)|11|3|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929
+draw	no_target_power_only	2|Next(max)|10|9|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2932
+draw	no_target_power_only	3|Next(max)|11|9|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929
+draw	no_target_power_only	4|Next(max)|10|3|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2932
+draw	no_target_power_only	5|Next(max)|11|2|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929
+draw	no_target_power_only	6|Next(max)|10|5|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2932
+case	target_hit_ac0	7700	255	0	1	0	15
+atk	target_hit_ac0	0	0	23	59977	1
+atk	target_hit_ac0	1	0	20	59957	1
+atk	target_hit_ac0	2	0	23	59934	1
+draw	target_hit_ac0	1|Next(max)|11|3|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929
+draw	target_hit_ac0	2|Next(max)|10|9|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2932
+draw	target_hit_ac0	3|Next(max)|1|0|M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41
+draw	target_hit_ac0	4|Next(max)|1|0|M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:792
+draw	target_hit_ac0	5|Next(max)|5|0|M2Server.Player.PlayObject.AttackSuccess@PlayObject.Attack.cs:225
+draw	target_hit_ac0	6|Next(max)|11|5|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929
+draw	target_hit_ac0	7|Next(max)|10|0|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2932
+draw	target_hit_ac0	8|Next(max)|1|0|M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41
+draw	target_hit_ac0	9|Next(max)|1|0|M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:792
+draw	target_hit_ac0	10|Next(max)|5|3|M2Server.Player.PlayObject.AttackSuccess@PlayObject.Attack.cs:225
+draw	target_hit_ac0	11|Next(max)|11|3|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929
+draw	target_hit_ac0	12|Next(max)|10|2|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2932
+draw	target_hit_ac0	13|Next(max)|1|0|M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41
+draw	target_hit_ac0	14|Next(max)|1|0|M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:792
+draw	target_hit_ac0	15|Next(max)|5|1|M2Server.Player.PlayObject.AttackSuccess@PlayObject.Attack.cs:225
+case	target_hit_ac2	7700	255	2565	1	0	18
+atk	target_hit_ac2	0	0	17	59983	1
+atk	target_hit_ac2	1	0	12	59971	1
+atk	target_hit_ac2	2	0	23	59948	1
+draw	target_hit_ac2	1|Next(max)|11|3|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929
+draw	target_hit_ac2	2|Next(max)|10|9|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2932
+draw	target_hit_ac2	3|Next(max)|1|0|M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41
+draw	target_hit_ac2	4|Next(max)|6|2|M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:792
+draw	target_hit_ac2	5|Next(max)|7|1|M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:795
+draw	target_hit_ac2	6|Next(max)|5|2|M2Server.Player.PlayObject.AttackSuccess@PlayObject.Attack.cs:225
+draw	target_hit_ac2	7|Next(max)|11|0|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929
+draw	target_hit_ac2	8|Next(max)|10|1|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2932
+draw	target_hit_ac2	9|Next(max)|1|0|M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41
+draw	target_hit_ac2	10|Next(max)|6|4|M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:792
+draw	target_hit_ac2	11|Next(max)|9|3|M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:795
+draw	target_hit_ac2	12|Next(max)|5|1|M2Server.Player.PlayObject.AttackSuccess@PlayObject.Attack.cs:225
+draw	target_hit_ac2	13|Next(max)|11|8|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929
+draw	target_hit_ac2	14|Next(max)|10|7|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2932
+draw	target_hit_ac2	15|Next(max)|1|0|M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41
+draw	target_hit_ac2	16|Next(max)|6|2|M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:792
+draw	target_hit_ac2	17|Next(max)|7|0|M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:795
+draw	target_hit_ac2	18|Next(max)|5|4|M2Server.Player.PlayObject.AttackSuccess@PlayObject.Attack.cs:225
+case	target_miss	7700	0	0	254	0	12
+atk	target_miss	0	0	0	60000	0
+atk	target_miss	1	0	0	60000	0
+atk	target_miss	2	0	0	60000	0
+draw	target_miss	1|Next(max)|11|3|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929
+draw	target_miss	2|Next(max)|10|9|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2932
+draw	target_miss	3|Next(max)|254|211|M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41
+draw	target_miss	4|Next(max)|5|1|M2Server.Player.PlayObject.AttackSuccess@PlayObject.Attack.cs:225
+draw	target_miss	5|Next(max)|11|2|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929
+draw	target_miss	6|Next(max)|10|5|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2932
+draw	target_miss	7|Next(max)|254|8|M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41
+draw	target_miss	8|Next(max)|5|0|M2Server.Player.PlayObject.AttackSuccess@PlayObject.Attack.cs:225
+draw	target_miss	9|Next(max)|11|5|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929
+draw	target_miss	10|Next(max)|10|6|M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2932
+draw	target_miss	11|Next(max)|254|91|M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41
+draw	target_miss	12|Next(max)|5|1|M2Server.Player.PlayObject.AttackSuccess@PlayObject.Attack.cs:225

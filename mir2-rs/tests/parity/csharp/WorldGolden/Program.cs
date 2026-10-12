@@ -294,11 +294,16 @@ internal static class Program
                         if (actors.TryGetValue(cmd.id, out ActorStub attackerObj)
                             && actors.TryGetValue(cmd.target, out ActorStub attackVictim))
                         {
-                            // C# `PlayObject.AttackDir`（`PlayObject.Attack.cs:73-75`）的子集：
+                            // C# `PlayObject.AttackDir`（`PlayObject.Attack.cs:73-77`）的子集：
                             // 先 `GetBaseAttackPoewr()`（消耗攻击力 RNG），再 `_Attack(nPower, target)`
-                            // （消耗命中/护甲 RNG）。技能与 `GetAttackPowerHit` 不在此子集。
+                            // （消耗命中/护甲 RNG），最后 `AttackSuccess`（玩家攻方有目标 ⇒ 再抽一次
+                            // `Random(5)`，`PlayObject.Attack.cs:225`）。技能与 `GetAttackPowerHit` 不在此子集。
                             int nPower = attackerObj.GetBaseAttackPoewr();
                             attackerObj._Attack(nPower, attackVictim);
+                            if (attackerObj.Race == 0)
+                            {
+                                attackerObj.AttackSuccess();
+                            }
                             // `BaseObject.Attack.cs:61-64` 的 `SendMsg(RM_STRUCK)` 条件：
                             // `targetObject.Race > ActorRace.Play` ⇒ 目标下一次 Run 里 `SetLastHiter(攻击方)`
                             if (attackVictim.Race > 0)

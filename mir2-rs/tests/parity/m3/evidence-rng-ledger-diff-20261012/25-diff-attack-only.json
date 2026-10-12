@@ -1,0 +1,32 @@
+{
+  "attack_only": true,
+  "a": "E:/tmp/m3cs-f1/csharp-rng-stream-f1-20261012.tsv",
+  "b": "E:/tmp/m3cs-r2/rust-rng-stream-r1.tsv",
+  "a_len": 352,
+  "b_len": 146,
+  "first_divergence": 0,
+  "a_canonical": {
+    "atk_power_base": 34,
+    "hit_gate": 36,
+    "hit_struck_damage": 35,
+    "M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:793": 2,
+    "struck_durability": 3,
+    "atk_power_a": 120,
+    "atk_power_b": 120,
+    "attack_success": 2
+  },
+  "b_canonical": {
+    "atk_power_a": 36,
+    "atk_power_b": 36,
+    "hit_gate": 36,
+    "hit_struck_damage": 19,
+    "struck_durability": 19
+  },
+  "only_in_a": {
+    "atk_power_base": 34,
+    "M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:793": 2,
+    "attack_success": 2
+  },
+  "only_in_b": {},
+  "verdict": "ORDER_DIVERGENCE"
+}

@@ -1,0 +1,2 @@
+SELFTEST GREEN: rng_ledger_diff selftest 6/6（同序绿 + 次序漂移必红且定位 + 缺消费者必红且点名）
+rc=0

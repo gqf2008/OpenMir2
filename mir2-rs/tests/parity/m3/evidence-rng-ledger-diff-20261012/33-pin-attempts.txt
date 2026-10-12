@@ -1,0 +1,33 @@
+# 夹具读数（本片真机窗口）：pin 重试次数达不到 expected=2 ⇒ run_attack_pair 跨侧 -PeerSession 判 PREREQ(exit 2)
+
+## C# 侧 12 轮重跑（新前缀 m3csr2c1..c12，每轮重启栈）：
+  第 1 轮: pin_attempts_retried  attempts=4 > expected=2
+  第 2 轮: pin_attempts_retried  attempts=4 > expected=2
+  第 3 轮: pin_attempts_retried  attempts=4 > expected=2
+  第 4 轮: pin_attempts_retried  attempts=4 > expected=2
+  第 5 轮: pin_attempts_retried  attempts=4 > expected=2
+  第 6 轮: pin_attempts_retried  attempts=4 > expected=2
+  第 7 轮: pin_attempts_retried  attempts=4 > expected=2
+  第 8 轮: pin_attempts_retried  attempts=4 > expected=2
+  第 9 轮: pin_attempts_retried  attempts=5 > expected=2
+  第 10 轮:   
+  第 11 轮:   
+  第 12 轮: pin_attempts_retried  attempts=4 > expected=2
+
+## 权威会话（本片入库）：
+--- csharp-20261012-185128/pin_hold.txt ---
+﻿PIN_RETRY attempt=1 settle_rounds=1 prev_match=False pinned=2/2 bag=0/0 abil=2/2（pin_hold_needs_consecutive_settle）
+PIN_RETRY attempt=2 settle_rounds=2 prev_match=True pinned=1/2 bag=0/0 abil=1/2（pin_char_mismatch,pin_abil_mismatch）
+PIN_RETRY attempt=3 settle_rounds=3 prev_match=False pinned=2/2 bag=0/0 abil=2/2（pin_hold_needs_consecutive_settle）
+PIN_HOLD attempt=4（连续两轮 settle 复验均 hold 住）
+--- rust-20261012-185617/pin_hold.txt (r1) ---
+﻿PIN_RETRY attempt=1 settle_rounds=1 prev_match=False pinned=0/2 bag=0/0 abil=1/2（pin_char_mismatch,pin_abil_mismatch）
+PIN_RETRY attempt=2 settle_rounds=2 prev_match=False pinned=2/2 bag=0/0 abil=2/2（pin_hold_needs_consecutive_settle）
+PIN_HOLD attempt=3（连续两轮 settle 复验均 hold 住）
+--- rust-20261012-185955/pin_hold.txt (r2) ---
+﻿PIN_RETRY attempt=1 settle_rounds=1 prev_match=False pinned=2/2 bag=0/0 abil=2/2（pin_hold_needs_consecutive_settle）
+PIN_HOLD attempt=2（连续两轮 settle 复验均 hold 住）
+
+## 结论：C# 每次都在 attempt=4（一轮 5），达不到 expected=2；Rust r1=3 / r2=2。
+## ⇒ attack_diff.py 逐 k 判据本轮**未执行**（被 pin_attempts 护栏 fail-closed 拦下）；
+## 本片判据 = 两侧 RNG 账本 diff（不依赖 pin 重试对齐，按 site + 逐段）。

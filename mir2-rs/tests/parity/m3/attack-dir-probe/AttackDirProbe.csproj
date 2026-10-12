@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>attack-dir-probe</AssemblyName>
+    <RootNamespace>AttackDirProbe</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    M3②③ 战斗线（卡 openmir2-m3-combat-skills-align）owner 2026-10-12 19:20 裁决：
+    把「玩家一次攻击到底抽几次/什么次序」按 oracle 钉成**真身向量**。
+
+    直调**真身** `PlayObject.AttackDir(IActor targetObject, short wHitMode, byte nDir)`
+    （`src/M2Server/Player/PlayObject.Attack.cs:25`，protected，反射调用），把每次
+    `System.Random` 调用记账成 `seq|kind|arg|result|site`（与 D2 的 `RngSeedHook` 同形），
+    从而给出 `GetAttackPower`（玩家 override 两抽）→ 命中门 `RandomByte` → 护甲 `GetHitStruckDamage`
+    → `AttackSuccess` 的 `Random(5)` 的**顺序 + 次数**。
+
+    另有 `no_target_power_only` 一例：oracle 在取目标**之前**先算 `GetBaseAttackPoewr()`
+    （`PlayObject.Attack.cs:73`），故无目标也抽攻击力；该例直接调 `GetBaseAttackPoewr` 复刻
+    这一段（`GetPoseCreate()` 需要 `Envir`，本探针不构造运行中的世界，故不调整体 `AttackDir(null)`）。
+
+    产物 = mir2-rs/tests/parity/m3/attack-dir-probe/vectors/attack_dir_vectors.{json,tsv}
+    （Rust 侧 `crates/world/tests/attack_dir_vectors.rs` 用 `ReplayRandom` 回放并逐字段核对）。
+
+    只读：不连 MySQL、不写任何现网文件、不发起任何 socket。
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\..\src\M2Server\M2Server.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,337 @@
+{
+  "trace": "E:/tmp/m3cs-r2/rust-rng-stream-r1.tsv",
+  "side": "rust",
+  "segments": 36,
+  "shapes": {
+    "atk_power_a|atk_power_b|hit_gate|hit_struck_damage|struck_durability": 19,
+    "atk_power_a|atk_power_b|hit_gate": 17
+  },
+  "per_seg": [
+    {
+      "k": 1,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate",
+        "hit_struck_damage",
+        "struck_durability"
+      ]
+    },
+    {
+      "k": 2,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate",
+        "hit_struck_damage",
+        "struck_durability"
+      ]
+    },
+    {
+      "k": 3,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate"
+      ]
+    },
+    {
+      "k": 4,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate",
+        "hit_struck_damage",
+        "struck_durability"
+      ]
+    },
+    {
+      "k": 5,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate",
+        "hit_struck_damage",
+        "struck_durability"
+      ]
+    },
+    {
+      "k": 6,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate"
+      ]
+    },
+    {
+      "k": 7,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate",
+        "hit_struck_damage",
+        "struck_durability"
+      ]
+    },
+    {
+      "k": 8,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate"
+      ]
+    },
+    {
+      "k": 9,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate",
+        "hit_struck_damage",
+        "struck_durability"
+      ]
+    },
+    {
+      "k": 10,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate",
+        "hit_struck_damage",
+        "struck_durability"
+      ]
+    },
+    {
+      "k": 11,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate",
+        "hit_struck_damage",
+        "struck_durability"
+      ]
+    },
+    {
+      "k": 12,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate"
+      ]
+    },
+    {
+      "k": 13,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate",
+        "hit_struck_damage",
+        "struck_durability"
+      ]
+    },
+    {
+      "k": 14,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate"
+      ]
+    },
+    {
+      "k": 15,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate",
+        "hit_struck_damage",
+        "struck_durability"
+      ]
+    },
+    {
+      "k": 16,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate",
+        "hit_struck_damage",
+        "struck_durability"
+      ]
+    },
+    {
+      "k": 17,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate"
+      ]
+    },
+    {
+      "k": 18,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate"
+      ]
+    },
+    {
+      "k": 19,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate"
+      ]
+    },
+    {
+      "k": 20,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate",
+        "hit_struck_damage",
+        "struck_durability"
+      ]
+    },
+    {
+      "k": 21,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate",
+        "hit_struck_damage",
+        "struck_durability"
+      ]
+    },
+    {
+      "k": 22,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate"
+      ]
+    },
+    {
+      "k": 23,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate"
+      ]
+    },
+    {
+      "k": 24,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate"
+      ]
+    },
+    {
+      "k": 25,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate",
+        "hit_struck_damage",
+        "struck_durability"
+      ]
+    },
+    {
+      "k": 26,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate"
+      ]
+    },
+    {
+      "k": 27,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate"
+      ]
+    },
+    {
+      "k": 28,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate"
+      ]
+    },
+    {
+      "k": 29,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate",
+        "hit_struck_damage",
+        "struck_durability"
+      ]
+    },
+    {
+      "k": 30,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate",
+        "hit_struck_damage",
+        "struck_durability"
+      ]
+    },
+    {
+      "k": 31,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate"
+      ]
+    },
+    {
+      "k": 32,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate",
+        "hit_struck_damage",
+        "struck_durability"
+      ]
+    },
+    {
+      "k": 33,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate",
+        "hit_struck_damage",
+        "struck_durability"
+      ]
+    },
+    {
+      "k": 34,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate"
+      ]
+    },
+    {
+      "k": 35,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate"
+      ]
+    },
+    {
+      "k": 36,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate",
+        "hit_struck_damage",
+        "struck_durability"
+      ]
+    }
+  ]
+}

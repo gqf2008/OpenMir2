@@ -1,0 +1,41 @@
+# 判决性实验 Q3（owner 2026-10-12 现场阻断 bbd1390c）：用【当前】align 重算当年 c2-vs-c3
+# 旧会话 attack_raw 缺 my（残差③）⇒ 先用 master 的 rebuild_attack_my.py 从 bot.log.txt 补 my
+
+$ python -I mir2-rs/tests/parity/m3/rebuild_attack_my.py mir2-rs/tests/parity/m3/evidence-b1b2-20261012/sessions/csharp-20261012-160205/bot.log.txt E:/tmp/m3cs-r2/csharp-20261012-160205.raw.jsonl
+REBUILD_OK E:/tmp/m3cs-r2/csharp-20261012-160205.raw.jsonl attacker_login=m3cb1c20 attacker_actor=2061019540 observers={"m3cb1c20": 2061019540, "m3cb1c21": 179065458} attacks=120 struck=8
+  rc=0
+$ python -I mir2-rs/tests/parity/m3/attack_diff.py align E:/tmp/m3cs-r2/csharp-20261012-160205.raw.jsonl --out E:/tmp/m3cs-r2/csharp-20261012-160205.seq.jsonl
+ALIGN_OK E:/tmp/m3cs-r2/csharp-20261012-160205.seq.jsonl attacked=120 hits=8 dodges=112 sum=14 (filtered_foreign=0 other_observer=8 deduped=0 unattributed=0)
+  rc=0
+$ python -I mir2-rs/tests/parity/m3/rebuild_attack_my.py mir2-rs/tests/parity/m3/evidence-b1b2-20261012/sessions/csharp-20261012-160446/bot.log.txt E:/tmp/m3cs-r2/csharp-20261012-160446.raw.jsonl
+REBUILD_OK E:/tmp/m3cs-r2/csharp-20261012-160446.raw.jsonl attacker_login=m3cb1c30 attacker_actor=1345584985 observers={"m3cb1c30": 1345584985, "m3cb1c31": 184091248} attacks=120 struck=2
+  rc=0
+$ python -I mir2-rs/tests/parity/m3/attack_diff.py align E:/tmp/m3cs-r2/csharp-20261012-160446.raw.jsonl --out E:/tmp/m3cs-r2/csharp-20261012-160446.seq.jsonl
+ALIGN_OK E:/tmp/m3cs-r2/csharp-20261012-160446.seq.jsonl attacked=120 hits=1 dodges=119 sum=1 (filtered_foreign=0 other_observer=1 deduped=1 unattributed=0)
+  rc=0
+
+$ python -I mir2-rs/tests/parity/m3/attack_diff.py diff c2.seq c3.seq（当前 align 口径）
+NONTRIVIAL a=True() b=True()
+RED: 跨侧攻击序列差异 39 项（差异要么修到 0，要么按 §6.0-3 登记 tests/parity/whitelist.md）
+  - k=2 hit 不等: a=False b=True
+  - k=2 dmg 不等: a=0 b=1
+  - k=2 hp 不等: a=0 b=18
+  - k=2 maxhp 不等: a=0 b=19
+  - k=8 hit 不等: a=True b=False
+  - k=8 dmg 不等: a=1 b=0
+  - k=8 hp 不等: a=15 b=0
+  - k=8 maxhp 不等: a=19 b=0
+  - k=14 hit 不等: a=True b=False
+  - k=14 dmg 不等: a=2 b=0
+  - k=14 hp 不等: a=13 b=0
+  - k=14 maxhp 不等: a=19 b=0
+  - k=34 hit 不等: a=True b=False
+  - k=34 dmg 不等: a=2 b=0
+  - k=34 hp 不等: a=12 b=0
+  - k=34 maxhp 不等: a=19 b=0
+  - k=41 hit 不等: a=True b=False
+  - k=41 dmg 不等: a=2 b=0
+  - k=41 hp 不等: a=10 b=0
+  - k=41 maxhp 不等: a=19 b=0
+  ... 另有 19 项（--max-diffs 截断）
+  rc=1
