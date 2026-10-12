@@ -1,0 +1,26 @@
+# 证据包自包含性自检（照 F-1 / 8abd8a0d 口径；卡 openmir2-m3-attack-pair-fixture，本片修 F-D + 加固 F-B 门）
+# 目标：证据目录里每一个被声明的文件都必须入库、不被 .gitignore 吞，且干净检出可复现。
+
+# 命令 1：对每个被声明的文件跑 git check-ignore -v（期望：无输出 / rc=1 = 无一被忽略）
+$ git check-ignore -v mir2-rs/tests/parity/m3/evidence-attack-pair-fd-range-20261012/01-selfcheck-nostack-green.txt mir2-rs/tests/parity/m3/evidence-attack-pair-fd-range-20261012/02-mutation-red.txt mir2-rs/tests/parity/m3/evidence-attack-pair-fd-range-20261012/03-repro-sql.txt mir2-rs/tests/parity/m3/evidence-attack-pair-fd-range-20261012/04-selftest-gate-47of47.txt mir2-rs/tests/parity/m3/evidence-attack-pair-fd-range-20261012/05-bagequip-selfcheck-green.txt mir2-rs/tests/parity/m3/evidence-attack-pair-fd-range-20261012/06-gates-fmt.txt mir2-rs/tests/parity/m3/evidence-attack-pair-fd-range-20261012/07-gates-clippy.txt mir2-rs/tests/parity/m3/evidence-attack-pair-fd-range-20261012/08-gates-test.txt mir2-rs/tests/parity/m3/evidence-attack-pair-fd-range-20261012/09-gates-msgcodegen.txt mir2-rs/tests/parity/m3/evidence-attack-pair-fd-range-20261012/README.md mir2-rs/tests/parity/m3/evidence-attack-pair-fd-range-20261012/selfcheck-selfcontained.txt mir2-rs/tests/parity/m3/evidence-attack-pair-fd-range-20261012/SHA256SUMS.txt 
+  check-ignore 输出（去 rc 行后）：
+  check-ignore 命中行数 = 0
+
+# 命令 2：tracked 件数 == 盘上件数（内容件 10 + selfcheck/SHA256SUMS = 12）
+$ git ls-tree -r --name-only HEAD mir2-rs/tests/parity/m3/evidence-attack-pair-fd-range-20261012/ | wc -l
+tracked_count = 12
+$ find mir2-rs/tests/parity/m3/evidence-attack-pair-fd-range-20261012 -type f | wc -l
+disk_count    = 12
+
+# 命令 3：目录内不得有 .gitignore 会吞的 *.log（本片一律用 .txt）
+log_count     = 0
+
+VERDICT: PASS（tracked == disk == 12；无被忽略文件；无 .log）
+
+# 命令 4：复核器（默认 = 仓库字节口径：Git blob 内容，text 文件 LF 归一；--check-extra = 目录里未列入清单的文件也判红）
+$ python -I tools/evidence-hash/verify_sha256sums.py mir2-rs/tests/parity/m3/evidence-attack-pair-fd-range-20261012 --check-extra
+GREEN mir2-rs/tests/parity/m3/evidence-attack-pair-fd-range-20261012\SHA256SUMS.txt  [repo 口径]  OK 11/11
+rc=0
+
+# 最终目录 = 9 个内容件（01–09）+ README.md + selfcheck-selfcontained.txt + SHA256SUMS.txt = 12 件；
+# SHA256SUMS.txt 按仓库字节口径覆盖 11 件（12 - 清单自身）。干净 clone 复核见 patch body / last-m3bag.md。
