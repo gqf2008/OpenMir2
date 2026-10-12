@@ -1,0 +1,109 @@
+cfg	50	10	50	5	100
+entry	1	火球术	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
+entry	2	治愈术	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
+entry	3	基本剑术	warr_reject	0	IsWarrSkill+DoSpell	MagicManager.cs:82-100,151	reject
+entry	4	精神力战法	warr_reject	0	IsWarrSkill+DoSpell	MagicManager.cs:82-100,151	reject
+entry	5	大火球	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
+entry	6	施毒术	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
+entry	7	攻杀剑术	warr_reject	0	IsWarrSkill+DoSpell	MagicManager.cs:82-100,151	reject
+entry	8	抗拒火环	context_required	0	MagPushArround	MagicManager.cs:24-52	map_context
+entry	9	地狱火	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
+entry	10	疾光电影	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
+entry	11	雷电术	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
+entry	12	刺杀剑术	warr_reject	0	IsWarrSkill+DoSpell	MagicManager.cs:82-100,151	reject
+entry	13	灵魂火符	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
+entry	14	幽灵盾	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
+entry	15	神圣战甲术	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
+entry	16	困魔咒	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
+entry	17	召唤骷髅	context_required	0	MagMakeSlave	MagicManager.cs:1308-1335	map_context
+entry	18	隐身术	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
+entry	19	集体隐身术	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
+entry	20	诱惑之光	context_required	0	MagTamming	MagicManager.cs:704-825	probeable
+entry	21	瞬息移动	context_required	0	MagSaceMove	MagicManager.cs:876-891	map_context
+entry	22	火墙	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
+entry	23	爆裂火焰	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
+entry	24	地狱雷光	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
+entry	25	半月弯刀	warr_reject	0	IsWarrSkill+DoSpell	MagicManager.cs:82-100,151	reject
+entry	26	烈火剑法	warr_reject	0	IsWarrSkill+DoSpell	MagicManager.cs:82-100,151	reject
+entry	27	野蛮冲撞	warr_reject	0	IsWarrSkill+DoSpell	MagicManager.cs:82-100,151	reject
+entry	28	心灵启示	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
+entry	29	群体治疗术	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
+entry	30	召唤神兽	context_required	0	MagMakeSinSuSlave	MagicManager.cs:1269-1306	map_context
+entry	31	魔法盾	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
+entry	32	圣言术	context_required	0	MagTurnUndead	MagicManager.cs:827-856	probeable
+entry	33	冰咆哮	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
+entry	34	解毒术	warr_reject	0	IsWarrSkill+DoSpell	MagicManager.cs:82-100,151	reject
+entry	36	火焰冰	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
+entry	37	雷神之怒	context_required	0	MagPushArround	MagicManager.cs:24-52	map_context
+entry	48	群体施毒术	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
+entry	39	乌龟跑步	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
+entry	40	十方斩	context_required	0	<inline>	MagicManager.cs:495-523	inline
+entry	41	狮子吼	context_required	0	MagMakeAngelSlave	MagicManager.cs:1343-1354	map_context
+entry	42	龙影剑法	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
+entry	43	开天斩	no_effect_case	0	<inline break>	MagicManager.cs:555-640	none
+entry	44	寒冰掌	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
+entry	45	灭天火	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
+entry	46	分身术	context_required	0	MagMakeClone	MagicManager.cs:1337-1341	map_context
+entry	47	地狱烈焰	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
+entry	48	气功波	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
+entry	49	云寂术	no_effect_case	0	<inline break>	MagicManager.cs:555-640	none
+entry	50	无极真气	implemented	1	<implemented>	crates/world/src/magic.rs	implemented
+entry	51	月魂风暴	no_effect_case	0	<inline break>	MagicManager.cs:555-640	none
+entry	52	神之诅咒	no_effect_case	0	<inline break>	MagicManager.cs:555-640	none
+entry	53	嗜血魔咒(保留)	no_effect_case	0	<inline break>	MagicManager.cs:555-640	none
+entry	54	召妖降魔	no_effect_case	0	<inline break>	MagicManager.cs:555-640	none
+entry	55	吸星狂杀	no_switch_case	0	<none>	MagicManager.cs:172-640 switch 无分支	none
+entry	56	异形换位	no_switch_case	0	<none>	MagicManager.cs:172-640 switch 无分支	none
+entry	57	回生术	no_switch_case	0	<none>	MagicManager.cs:172-640 switch 无分支	none
+entry	58	流星火雨	no_switch_case	0	<none>	MagicManager.cs:172-640 switch 无分支	none
+entry	59	噬血术	no_switch_case	0	<none>	MagicManager.cs:172-640 switch 无分支	none
+entry	66	四级魔法盾	no_switch_case	0	<none>	MagicManager.cs:172-640 switch 无分支	none
+entry	66	白日门四级法盾	no_switch_case	0	<none>	MagicManager.cs:172-640 switch 无分支	none
+entry	67	先天元力	no_switch_case	0	<none>	MagicManager.cs:172-640 switch 无分支	none
+entry	68	酒气护体	no_switch_case	0	<none>	MagicManager.cs:172-640 switch 无分支	none
+entry	69	倚天辟地	no_switch_case	0	<none>	MagicManager.cs:172-640 switch 无分支	none
+entry	71	四级召唤神兽	no_switch_case	0	<none>	MagicManager.cs:172-640 switch 无分支	none
+entry	71	四级英雄神兽	no_switch_case	0	<none>	MagicManager.cs:172-640 switch 无分支	none
+entry	72	召唤月灵	no_switch_case	0	<none>	MagicManager.cs:172-640 switch 无分支	none
+entry	74	逐日剑法	no_switch_case	0	<none>	MagicManager.cs:172-640 switch 无分支	none
+entry	75	护体神盾	no_switch_case	0	<none>	MagicManager.cs:172-640 switch 无分支	none
+entry	76	三绝杀	no_switch_case	0	<none>	MagicManager.cs:172-640 switch 无分支	none
+entry	77	双龙破	no_switch_case	0	<none>	MagicManager.cs:172-640 switch 无分支	none
+entry	78	虎啸诀	no_switch_case	0	<none>	MagicManager.cs:172-640 switch 无分支	none
+entry	79	追心刺	no_switch_case	0	<none>	MagicManager.cs:172-640 switch 无分支	none
+entry	80	凤舞祭	no_switch_case	0	<none>	MagicManager.cs:172-640 switch 无分支	none
+entry	81	八卦掌	magicid_reject	0	DoSpell	MagicManager.cs:167	reject
+entry	82	断岳斩	magicid_reject	0	DoSpell	MagicManager.cs:167	reject
+entry	83	惊雷爆	magicid_reject	0	DoSpell	MagicManager.cs:167	reject
+entry	84	三焰咒	magicid_reject	0	DoSpell	MagicManager.cs:167	reject
+entry	85	横扫千军	magicid_reject	0	DoSpell	MagicManager.cs:167	reject
+entry	86	冰天雪地	magicid_reject	0	DoSpell	MagicManager.cs:167	reject
+entry	87	万剑归宗	magicid_reject	0	DoSpell	MagicManager.cs:167	reject
+entry	88	四级基本剑术	magicid_reject	0	DoSpell	MagicManager.cs:167	reject
+entry	88	四级英雄剑术	magicid_reject	0	DoSpell	MagicManager.cs:167	reject
+entry	89	四级刺杀剑术	magicid_reject	0	DoSpell	MagicManager.cs:167	reject
+entry	89	四级英雄刺杀	magicid_reject	0	DoSpell	MagicManager.cs:167	reject
+entry	90	四级半月弯刀	magicid_reject	0	DoSpell	MagicManager.cs:167	reject
+entry	90	四级英雄半月	magicid_reject	0	DoSpell	MagicManager.cs:167	reject
+entry	91	四级雷电术	magicid_reject	0	DoSpell	MagicManager.cs:167	reject
+entry	91	四级英雄雷电术	magicid_reject	0	DoSpell	MagicManager.cs:167	reject
+entry	92	四级流星火雨	magicid_reject	0	DoSpell	MagicManager.cs:167	reject
+entry	92	四级英雄火雨	magicid_reject	0	DoSpell	MagicManager.cs:167	reject
+entry	93	四级施毒术	magicid_reject	0	DoSpell	MagicManager.cs:167	reject
+entry	93	四级英雄施毒术	magicid_reject	0	DoSpell	MagicManager.cs:167	reject
+entry	94	四级噬血术	magicid_reject	0	DoSpell	MagicManager.cs:167	reject
+entry	94	四级英雄噬血术	magicid_reject	0	DoSpell	MagicManager.cs:167	reject
+entry	95	斗转星移	magicid_reject	0	DoSpell	MagicManager.cs:167	reject
+entry	96	血魄一击(战)	magicid_reject	0	DoSpell	MagicManager.cs:167	reject
+entry	96	白日门血魄(战)	magicid_reject	0	DoSpell	MagicManager.cs:167	reject
+entry	97	血魄一击(法)	magicid_reject	0	DoSpell	MagicManager.cs:167	reject
+entry	97	白日门血魄(法)	magicid_reject	0	DoSpell	MagicManager.cs:167	reject
+entry	98	血魄一击(道)	magicid_reject	0	DoSpell	MagicManager.cs:167	reject
+entry	98	白日门血魄(道)	magicid_reject	0	DoSpell	MagicManager.cs:167	reject
+entry	99	白日门强身术	magicid_reject	0	DoSpell	MagicManager.cs:167	reject
+entry	100	神秘解读	magicid_reject	0	DoSpell	MagicManager.cs:167	reject
+entry	101	神龙附体	magicid_reject	0	DoSpell	MagicManager.cs:167	reject
+entry	102	唯我独尊	magicid_reject	0	DoSpell	MagicManager.cs:167	reject
+entry	103	召唤巨魔	magicid_reject	0	DoSpell	MagicManager.cs:167	reject
+entry	500	破血狂杀	magicid_reject	0	DoSpell	MagicManager.cs:167	reject
+entry	501	迅影离魂	magicid_reject	0	DoSpell	MagicManager.cs:167	reject
