@@ -1,0 +1,22 @@
+== 红检：删掉 front_target 的 !t.death（改坏）⇒ 预期 FAILED ==
+
+thread 'tests::front_target_dir2_finds_victim_and_excludes_ghost_or_dead' (660) panicked at bins\game-svr\src\main.rs:4459:9:
+assertion `left == right` failed: !Death 过滤
+  left: Some(2)
+ right: None
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::front_target_dir2_finds_victim_and_excludes_ghost_or_dead
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 147 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`
+== 还原后复跑 ==
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 80 filtered out; finished in 0.00s
+running 1 test
+test tests::front_target_dir2_finds_victim_and_excludes_ghost_or_dead ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 147 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s

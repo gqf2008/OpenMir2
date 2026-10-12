@@ -1,0 +1,63 @@
+# 与 m3cs 攻击路径取数结构片（evidence-rng-ledger-diff-20261012）的同源关系
+
+## 1. 本片的直接结论（先看这个）
+
+owner 2026-10-12 19:20 的假设是「空打 = 接线/取目标缺陷」。**不成立**（证据见 README §2–§4）：
+
+* Rust 取目标路径与 oracle 同形同域：`pose_dir`（状态化 `DisplayTable.dir`）→ `front_position(dir, x, y, w, h)`
+  （`bins/game-svr/src/attackwire.rs:101`，dir=2 ⇒ `(x+1, y)`）→ 线性格子查找 `!ghost && !death`
+  （`bins/game-svr/src/main.rs:1886-1900`）；oracle 为 `PlayObject.Attack.cs:26` →
+  `BaseObject.cs:1253 GetPoseCreate` → `BaseObject.cs:977 GetFrontPosition` →
+  `Envirnoment.cs:1203 GetMovingObject(nX,nY,true)`（`!Ghost && !Death`）。两侧 dir=2 都得 `(18,20)`。
+* 真机日志：受害者 `m3csr2r21` 于 11:00:31.924 进 `0137 (18,20)`，此前 1ms 的第 1 击空打（尚未入世界）；
+  此后 **36 击进入攻击路径**（命中/躲避都无日志）；受害者 HP 在 Rust 侧归零（`death_k=36`）后，
+  从 11:00:50.562 起的 **83 击全部空打**（总 84，全部「前方格 (18,20) 无目标」）。受害者在断线（11:01:34.554）
+  前**未移动、未发其它命令** ⇒ 不是走开、不是 AOI 未同步、不是取目标算错。
+* ⇒ 归类 **(c) 其它**：84 空打是受害者**死亡后** `!Death` 过滤的**正常 oracle 行为**；
+  Rust 的 `death=true`（`crates/world/src/world.rs:516`）与 oracle `Die()` 的 `Death = true`
+  （`BaseObject.Base.cs:351`）一致。
+
+## 2. 与 m3cs 的同源（同一根：攻击路径取数结构/消费者集合不同）
+
+两侧受害者 HP 走向不同，直接量是**命中门/取数结构**不同（m3cs 片 21–28 号件）：
+
+| 站点（canonical） | C#（`csharp-20261012-185128`） | Rust（`rust-20261012-185617`） | 说明 |
+|---|---:|---:|---|
+| `atk_power_a` / `atk_power_b` | 120 / 120 | 36 / 36 | C# 每次攻击都求 `GetBaseAttackPoewr()`；Rust 只在有目标时求 |
+| `hit_gate` | 9 | 36 | 两侧都只在「proper target 且 victim.HitPoint>0」时求值，次数差来自 C# 侧大量 `nPower=0`（proper-target/目标为空） |
+| `hit_struck_damage` / `struck_durability` | 7 / 2 | 19 / 19 | 落伤次数不同 |
+| `attack_success` | 4 | 0 | Rust 未移植（登记） |
+| `atk_power_base` | 5 | 0 | — |
+
+* Rust 19 击落伤 × dmg=1 = 19 = 受害者 `maxhp=19` ⇒ 死亡 ⇒ 84 空打。
+* C# 只 7 击落伤 ⇒ 受害者存活（`hp=18`）⇒ 没有 post-death 空打。
+* 即：**空打数与攻击路径取数结构同源** —— 把 hit_gate/attack_success/atk_power 站点对齐后，
+  受害者死亡击号会变，84 空打这个读数自然随之变。
+
+## 3. 顺带坐实一条**真接线缺口**（建议由 owner 裁决归属，勿与 m3cs 抢同一写集）
+
+oracle 对**空打**也会抽「基础攻击力」：
+
+* `PlayObject.Attack.cs:73`：`GetAttackPowerHit(wHitMode, GetBaseAttackPoewr(), attackTarget, ref canHit)`
+  —— `GetBaseAttackPoewr()` 作为实参**无条件求值**；
+* `BaseObject.Attack.cs:25`：`GetBaseAttackPoewr()` → `GetAttackPower`；玩家走
+  `PlayObject.cs:2909` 的 override ⇒ 抽 `atk_power_a/b`（`PlayObject.cs:2929/2934`）；
+* 目标为空时 `_Attack(null)` 直接 `return false`（`BaseObject.Attack.cs:30-33`），
+  `AttackSuccess(..., null)` 直接 return（`PlayObject.Attack.cs:217`）⇒ **空打只抽基础攻击力这 1–2 次**。
+
+Rust 现在在 `main.rs:1902-1908` 的「无目标」支**只发动作帧、不消费任何 RNG**（`world.attack_cmd` 只在有目标时入队，
+`attack_once` 对 target 缺失直接 `None` 返回、不抽数）。这解释了两侧 `atk_power_a/b` 的 36 vs 120。
+
+* 可行的最小修点（**在 `bins/game-svr`，用 `world.rng` + `mir2_world::combat::get_base_attack_power_player`
+  这类 pub API**）：无目标分支也按 oracle 口径抽一次基础攻击力。
+* ⚠ 但 oracle 是在**消息处理线程同步**抽数，而 Rust 有目标时是在 **tick** 里抽（`Command::Attack` 入队结算）
+  ⇒ 若只在无目标分支同步抽，会得到「有目标 tick 抽、无目标 dispatch 抽」的混合次序，**比现状更不等价**。
+  真正 oracle 等价的修法是让 `crates/world` 的 `attack_once` 接受「无目标」并在同一处抽数 —— 那属
+  `crates/world/src/combat.rs`/`world.rs`，**正是 m3cs 本片在动的界面**。
+* ⇒ 按 §0b（同一文件一次只动一路）与 owner 19:20 「相关」条的协调口径，本片**不动**该处，
+  只把定位、行号与两个读数交出，等 owner 决定由 m3cs 一并修还是单开片。
+
+## 4. 本片未做 / 未改
+
+* 未改任何生产代码（`src/**`、`crates/**`、`bins/**` 均 0 改动）；未改 m3bag/m3cs 的 `tests/parity/m3/**` 夹具与判据。
+* 未放宽任何门/白名单；未起栈、未占端口（窗口归 0137 两相）。

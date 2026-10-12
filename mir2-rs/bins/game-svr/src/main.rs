@@ -1800,6 +1800,31 @@ fn apply_ability_to_entity(
     e.level = wabil.level;
 }
 
+/// `Envir.GetMovingObject(frontX, frontY, true)`（`Envirnoment.cs:1203-1234`）的**接线面最小等价物**：
+/// 前方格里**首个** `!Ghost && !Death` 且不是自己的对象。
+///
+/// 与 oracle 的差异（登记）：oracle 走格子 `ObjList`（`GetCellInfo(...).IsAvailable` 门 + 该格
+/// 插入次序），本接缝用**实体槽位序** + `map_id` 对齐代替（不建地图格子模型）。
+///
+/// 该接缝是 `openmir2-m3-attacker-attr-loading` 空打片（owner 2026-10-12 19:20）的**判据**：
+/// 真机 84/120「前方格 (18,20) 无目标」是受害者在 k=36 HP 归零、`death=true` 后的**正常
+/// oracle 行为**（不是取目标算错）；本函数把这一语义钉成可判红/红检的单测。
+fn front_target(
+    world: &mir2_world::World,
+    actor_id: i32,
+    map_id: usize,
+    fx: i32,
+    fy: i32,
+) -> Option<i32> {
+    world
+        .entities
+        .iter()
+        .find(|t| {
+            t.id != actor_id && t.map_id == map_id && t.x == fx && t.y == fy && !t.ghost && !t.death
+        })
+        .map(|t| t.id)
+}
+
 /// `openmir2-m3-attack-magic-wiring`（第一片）——`CM_HIT`/`CM_HEAVYHIT`/`CM_BIGHIT`/
 /// `CM_POWERHIT`/`CM_LONGHIT`/`CM_WIDEHIT`/`CM_FIREHIT`/`CM_CRSHIT`/`CM_TWINHIT` 9 条攻击命令的派发。
 ///
@@ -1886,18 +1911,7 @@ fn handle_hit_cmd(
     let target_id = if (fx, fy) == (cur_x, cur_y) {
         None
     } else {
-        world
-            .entities
-            .iter()
-            .find(|t| {
-                t.id != actor_id
-                    && t.map_id == map_id
-                    && t.x == fx
-                    && t.y == fy
-                    && !t.ghost
-                    && !t.death
-            })
-            .map(|t| t.id)
+        front_target(world, actor_id, map_id, fx, fy)
     };
     if let Some(tid) = target_id {
         world.attack_cmd(actor_id, tid);
@@ -4405,6 +4419,52 @@ mod tests {
             (18, 19, 1),
             "HP/MaxHP/Level ← WAbil"
         );
+    }
+
+    /// **空打片（owner 2026-10-12 19:20）判据**：`dir=2` 的前方格 = 受害者所在格；取目标只按
+    /// `!ghost && !death` 过滤（oracle `Envir.GetMovingObject(nX,nY,true)`，`Envirnoment.cs:1203-1234`）。
+    ///
+    /// 真机 120 击里 84 击「前方格 (18,20) 无目标」是受害者在 36 击后 HP 归零、`death=true`
+    /// 被排除的**正常 oracle 行为**（`world.rs` 的 `e.death = true` = oracle `Die()`），
+    /// **不是**前方格/取目标算错。原始件见
+    /// `tools/m2-acceptance/evidence/m2svr-attack-empty-target-20261012/`。
+    ///
+    /// 红检：删掉 `front_target` 的 `!t.death` ⇒ 死亡后 `None` 断言必红；删 `!t.ghost` ⇒ 幽灵断言必红。
+    #[test]
+    fn front_target_dir2_finds_victim_and_excludes_ghost_or_dead() {
+        let mut world = mir2_world::World::new(30, 33);
+        let atk = world.add_entity({
+            let mut e = mir2_world::Entity::new(1, "atk", 17, 20);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e
+        });
+        let vic = world.add_entity({
+            let mut e = mir2_world::Entity::new(2, "vic", 18, 20);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e.hp = 19;
+            e.max_hp = 19;
+            e
+        });
+        // oracle `GetFrontPosition` + `Direction.Right = 2` ⇒ (x+1, y) = (18,20)
+        assert_eq!(
+            game_svr::attackwire::front_position(2, 17, 20, 30, 33),
+            (18, 20),
+            "dir=2 的前方格 = 受害者所在格"
+        );
+        assert_eq!(
+            front_target(&world, atk, 0, 18, 20),
+            Some(vic),
+            "受害者在位 ⇒ 取到"
+        );
+        // 自己（`t.id != actor_id`）不算目标
+        assert_eq!(front_target(&world, atk, 0, 17, 20), None, "自己不算目标");
+        // 死亡后（`world.rs:516` 的 `e.death = true`；oracle `Die()`）⇒ `!Death` 排除 ⇒ 空打
+        world.entities.get_mut(vic).unwrap().death = true;
+        assert_eq!(front_target(&world, atk, 0, 18, 20), None, "!Death 过滤");
+        world.entities.get_mut(vic).unwrap().death = false;
+        // 幽灵（`MakeGhost`）⇒ `!Ghost` 排除
+        world.entities.get_mut(vic).unwrap().ghost = true;
+        assert_eq!(front_target(&world, atk, 0, 18, 20), None, "!Ghost 过滤");
     }
 
     /// F2（reviewer-2）的判据：`ProcessBufferSend` `:58-90` 的四条分支，**含"刚超时清零的那一包也要压住"**。

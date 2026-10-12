@@ -1,0 +1,32 @@
+# 真机活栈日志时间线（Rust 半，m3cs r1 会话 rust-20261012-185617）
+# 源：E:/tmp/m3cs-r2/rust-stack/game-svr.out.log（m3cs 车道留档，只读引用）
+
+## 计数（本次独立复算）
+$ grep -c '无目标' game-svr.out.log                 # 84
+$ grep -o '前方格 ([0-9,]*)' game-svr.out.log | sort | uniq -c   # 84 前方格 (18,20)
+$ grep -c 'Ident=3014' game-svr.out.log            # 120
+
+## 关键行
+--- 攻方 actor=3（m3csr2r20）进 0137 @11:00:28.717 ---
+89:11:00:28.717 [INF] 进世界 ChrName:m3csr2r20 CurMap:0137 (17,20) Dir:2 entity=3
+--- 受害者 actor=4（m3csr2r21）进 0137 (18,20) @11:00:31.924 ---
+111:11:00:31.924 [INF] 进世界 ChrName:m3csr2r21 CurMap:0137 (18,20) Dir:6 entity=4
+--- 第 1 条空打 @11:00:31.923（比受害者进图早 1ms：受害者尚未入世界）---
+109:11:00:31.923 [DBG] 攻击：actor_id=3 前方格 (18,20) 无目标 ⇒ 只播动作帧（oracle `_Attack(null)` 返回 false）
+--- 第 2 条空打 @11:00:50.562（此后每击皆空打；35 击命中在两者之间、无日志）---
+162:11:00:50.562 [DBG] 攻击：actor_id=3 前方格 (18,20) 无目标 ⇒ 只播动作帧（oracle `_Attack(null)` 返回 false）
+--- 末条空打 @11:01:32.060 ---
+336:11:01:32.060 [DBG] 攻击：actor_id=3 前方格 (18,20) 无目标 ⇒ 只播动作帧（oracle `_Attack(null)` 返回 false）
+--- 受害者断线 @11:01:34.554（之前无移动/无用户关闭 ⇒ 位置未变）---
+338:11:01:34.554 [INF] 用户关闭：socket=348 index=1 在线=1 槽=2
+339:11:01:34.558 [INF] 用户关闭：socket=352 index=2 在线=0 槽=2
+
+## 受害者移动/其他命令（index=2）在 11:00:32.124 之后为 0 ⇒ 不是走开
+$ grep -c 'sim: index=2 命令' game-svr.out.log ; 最后一条：
+117:11:00:32.123 [DBG] sim: index=2 命令 Recog=1 Ident=81 Param=0 Tag=0 Series=0 tail=""
+121:11:00:32.524 [DBG] sim: index=2 命令 Recog=0 Ident=1009 Param=0 Tag=0 Series=0 tail=""
+
+## 两端夹逼
+84 空打 = 第 1 击（受害者进世界早 1ms，尚未入世界）+ 其后自 11:00:50.562 起的 83 击。
+中间 36 击进入攻击路径（命中/躲避均无日志）= 120 - 84；受害者 HP 在此期间归零
+（attack_seq summary 的 death_k=36，见 04-two-readings.txt）⇒ 此后 !death 过滤把它排除。

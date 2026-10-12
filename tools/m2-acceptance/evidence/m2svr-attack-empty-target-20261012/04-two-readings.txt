@@ -1,0 +1,37 @@
+# 两个读数（本片要求的判据读数）
+
+## 读数 1：进入攻击路径的击数 = 36
+  —— 等价判据：Rust 侧攻击路径 RNG 站点 per-attack 计数 = 36
+$ git show ddf3fbbb:.../24-rust-attack-order.txt | sort | uniq -c
+     36 hit_gate
+     36 atk_power_b
+     36 atk_power_a
+     19 struck_durability
+     19 hit_struck_damage
+
+## 读数 2：空打击数 = 84
+$ grep -c '无目标' E:/tmp/m3cs-r2/rust-stack/game-svr.out.log   # = 84（全部 前方格 (18,20)）
+$ grep -c 'Ident=3014'  E:/tmp/m3cs-r2/rust-stack/game-svr.out.log   # = 120
+  —— 120 - 84 = 36 ⇒ 与读数 1 自洽。
+
+## 对照：C# 侧同会话攻击路径站点（同工具口径）
+$ git show ddf3fbbb:.../23-csharp-attack-order.txt | sort | uniq -c
+    120 atk_power_b
+    120 atk_power_a
+      9 hit_gate
+      7 hit_struck_damage
+      5 atk_power_base
+      4 attack_success
+      2 struck_durability
+
+## 两侧 attack_seq.jsonl 的 summary 行
+--- rust-20261012-185617 ---
+{"role": "summary", "attacked": 120, "hits": 19, "dodges": 101, "sum": 19, "death_k": 36, "min_hp": 0, "filtered_foreign": 0, "other_observer": 19, "deduped": 0, "unattributed": 0}
+--- csharp-20261012-185128 ---
+{"role": "summary", "attacked": 120, "hits": 1, "dodges": 119, "sum": 1, "death_k": null, "min_hp": 18, "filtered_foreign": 0, "other_observer": 1, "deduped": 1, "unattributed": 0}
+
+## 结论（读数层）
+* Rust：36 击进入攻击路径（其中 19 击造成伤害）⇒ 受害者 HP 19→0（death_k=36）⇒ 其余 84 击空打。
+* C#：120 击里 仅 9 击命中门被求值（hit_gate=9）、7 击造成伤害 ⇒ 受害者 HP 18（未死）⇒ 无 post-death 空打。
+* 两侧差异的**直接量**是 hit_gate/attack_success/atk_power_* 站点集合与次数（m3cs 片在算）；
+  不是「前方格/取目标」算错 —— 见 05-same-source-with-m3cs.txt。
