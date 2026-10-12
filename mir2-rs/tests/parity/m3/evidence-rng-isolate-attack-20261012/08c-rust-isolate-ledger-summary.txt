@@ -1,0 +1,8 @@
+RNG_LEDGER E:/tmp/m3cs-iso/rust-isolate-on.tsv side=rust total=48 attack_path=16 noise=32 noise_ratio=0.6667 distinct_sites=5
+  CANONICAL {'crates/world/tests/rng_attack_isolation.rs:31': 32, 'atk_power_a': 4, 'atk_power_b': 4, 'hit_struck_damage': 4, 'attack_success': 4}
+  SITE       32  crates/world/tests/rng_attack_isolation.rs:31
+  SITE        4  crates/world/src/combat.rs:109
+  SITE        4  crates/world/src/combat.rs:111
+  SITE        4  crates/world/src/combat.rs:628
+  SITE        4  crates/world/src/combat.rs:831
+ledger rc=0

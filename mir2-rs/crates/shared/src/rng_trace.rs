@@ -111,6 +111,24 @@ pub fn enable_from_env() {
     if let Err(e) = enable(Path::new(&raw), seed) {
         // 不静默降级：trace 是旁路仪器，打不开就点名报错，但不影响游戏逻辑（值序列不变）。
         eprintln!("[rng-trace][ERROR] 无法打开 {raw}: {e}（trace 关闭，游戏逻辑不受影响）");
+        return;
+    }
+    // **M3②③ 隔离口径**：若攻击路径专用流已开启，把「隔离开启 + 专用流种子」也写进流水头部，
+    // 让两侧会话产物都能自证「这次跑的是隔离口径」而不是偶然的全局流相等。
+    if let Some(attack_seed) = crate::rng::attack_isolation_seed_from_env() {
+        write_isolation_marker(attack_seed);
+    }
+}
+
+/// 往已打开的流水头部补一行 `ISOLATE_ATTACK <attack_seed>`（两侧机器可判的「隔离开启」自证）。
+///
+/// 以**空格**分隔（不是 TSV）⇒ 既有的 trace 解析器（`attack_rng_ledger.py` / `rng_ledger_diff.py`）
+/// 按「首列不是 int」跳过，不污染逐次取数行。
+pub fn write_isolation_marker(attack_seed: i32) {
+    if let Some(sink) = SINK.get() {
+        if let Ok(mut w) = sink.lock() {
+            let _ = writeln!(w, "ISOLATE_ATTACK {attack_seed}");
+        }
     }
 }
 

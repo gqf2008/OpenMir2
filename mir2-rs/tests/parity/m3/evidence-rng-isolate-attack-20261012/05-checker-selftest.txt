@@ -1,0 +1,27 @@
+--- selftest static (expect rc=0) ---
+STATIC table=C:\Users\gxh\AppData\Local\Temp\check_predicates_xphm4dvw\table.tsv csharp_canons=2 rust_canons=2
+  CANON a_a
+  CANON b_b
+GREEN: 表内每个 divert canon 两侧齐备（csharp/rust）
+--- selftest align-good (expect rc=0) ---
+ALIGN(order) csharp=2 rust=2 first_divergence=none
+GREEN: 两侧分流站点对齐（order）
+--- selftest table-vs-csharp-good (expect rc=0) ---
+TABLE_VS_CSHARP table=C:\Users\gxh\AppData\Local\Temp\check_predicates_xphm4dvw\table.tsv csharp=C:\Users\gxh\AppData\Local\Temp\check_predicates_xphm4dvw\cs_good.txt draws=2 canon=2
+GREEN: C# 分流站点覆盖表内全部 canon 且无未登记站点
+--- selftest table-vs-csharp-missing (expect rc=1) ---
+TABLE_VS_CSHARP table=C:\Users\gxh\AppData\Local\Temp\check_predicates_xphm4dvw\table.tsv csharp=C:\Users\gxh\AppData\Local\Temp\check_predicates_xphm4dvw\cs_bad.txt draws=1 canon=1
+RED: C# 未分流表内站点（缺一条 ⇒ fail-closed）: ['a_a']
+--- selftest table-vs-csharp-unknown (expect rc=1) ---
+TABLE_VS_CSHARP table=C:\Users\gxh\AppData\Local\Temp\check_predicates_xphm4dvw\table.tsv csharp=C:\Users\gxh\AppData\Local\Temp\check_predicates_xphm4dvw\cs_unknown.txt draws=1 canon=0
+RED: C# 分流了未登记的 site（表里查不到 ⇒ fail-closed）:
+  UNKNOWN Bar@Bar.cs:99
+RED: C# 未分流表内站点（缺一条 ⇒ fail-closed）: ['a_a', 'b_b']
+--- selftest align-order-mismatch (expect rc=1) ---
+ALIGN(order) csharp=2 rust=2 first_divergence=0
+RED: 第一处分歧 @1 csharp=a_a rust=b_b
+--- selftest align-set-ok (expect rc=0) ---
+ALIGN(set) csharp=2 rust=2 symmetric_diff=0
+GREEN: 两侧分流站点对齐（set）
+SELFTEST total=7 failed=0
+selftest rc=0

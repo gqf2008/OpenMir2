@@ -1,0 +1,14 @@
+STATIC table=E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\tests\parity\m3\rng-isolate-attack\attack_sites.tsv csharp_canons=11 rust_canons=11
+  CANON atk_power_a
+  CANON atk_power_b
+  CANON atk_power_base
+  CANON atk_power_luck_a
+  CANON atk_power_luck_b
+  CANON attack_success
+  CANON hit_gate
+  CANON hit_struck_damage
+  CANON hit_struck_damage2
+  CANON struck_durability
+  CANON struck_durability_slot
+GREEN: 表内每个 divert canon 两侧齐备（csharp/rust）
+static rc=0

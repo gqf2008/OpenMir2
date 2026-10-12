@@ -1,0 +1,5 @@
+# 四门禁（合并 master e2470c9d 后的交付树；隔离 CARGO_TARGET_DIR=E:/tmp/m3cs-r3-target + --offline）
+fmt:     fmt rc=0
+clippy:  clippy rc=0
+test:    suites=84 passed=682 failed=0 ignored=16
+msgcodegen: msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。

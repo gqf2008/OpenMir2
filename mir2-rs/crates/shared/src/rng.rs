@@ -14,6 +14,67 @@ const MBIG: i32 = i32::MAX; // 2147483647
 /// .NET `System.Random` 的 MSEED 常量。
 const MSEED: i32 = 161803398;
 
+/// **M3②③ 活栈隔离口径（owner 2026-10-12 21:15，§6.0-3 owner 签字）**：
+/// 攻击路径专用种子流的开关环境变量。非空且为「开」值（`1`/`true`/`on`/`yes`，大小写不敏感）
+/// ⇒ 开启；空/`0`/`false`/`off`/`no` ⇒ 关闭（缺省）。
+///
+/// 这是**测量口径**的开关：开启时把攻击路径的取数从全服共享流隔离到
+/// [`attack_seed`] 派生出的专用流，使两侧「同种子 ⇒ 逐 k 相同」重新可判；
+/// **关闭时（缺省）行为与改动前逐字节相同**（专用流不构造、不被取数）。
+pub const ISOLATE_ATTACK_ENV: &str = "MIR2_RNG_ISOLATE_ATTACK";
+
+/// 专用流种子的派生常量（**两侧同口径**：C# 影子 hook 与 Rust 侧必须用同一公式）。
+///
+/// 口径：`attack_seed = base_seed.wrapping_add(0x9E37)`，`base_seed` = 既有 `MIR2_RNG_SEED`。
+/// 用 `i32` 回绕加法（.NET 的 `int + int` 在 unchecked 上下文同样回绕），
+/// 保证两侧对同一 `MIR2_RNG_SEED` 得到同一 `attack_seed`。
+pub const ATTACK_SEED_DELTA: i32 = 0x9E37;
+
+/// 既有同种子注入口环境变量名（`bins/game-svr/src/seed.rs::RNG_SEED_ENV` 同名，
+/// 此处复写以避免 `shared` 反向依赖 `bins`）。
+pub const RNG_SEED_ENV: &str = "MIR2_RNG_SEED";
+
+/// `attack_seed = base_seed + 0x9E37`（i32 回绕；两侧同口径）。
+#[must_use]
+pub fn attack_seed(base_seed: i32) -> i32 {
+    base_seed.wrapping_add(ATTACK_SEED_DELTA)
+}
+
+/// 从进程环境解析攻击路径专用流种子：
+///
+/// - [`ISOLATE_ATTACK_ENV`] 未设/空/「关」值 ⇒ `None`（不隔离，生产缺省路径）；
+/// - 「开」值 ⇒ 读 [`RNG_SEED_ENV`] 并返回 [`attack_seed`]；
+/// - 「开」但 [`RNG_SEED_ENV`] 缺失/为空/非法 int，或 [`ISOLATE_ATTACK_ENV`] 取值认不出
+///   ⇒ **panic（fail-closed）**：专用流种子无法与对侧对齐时不许静默退回全局流
+///   （那会把「隔离后的逐 k=0」伪装成「没隔离的偶然相等」）。
+#[must_use]
+pub fn attack_isolation_seed_from_env() -> Option<i32> {
+    let raw = std::env::var(ISOLATE_ATTACK_ENV).ok()?;
+    let on = match raw.trim().to_ascii_lowercase().as_str() {
+        "" | "0" | "false" | "off" | "no" => false,
+        "1" | "true" | "on" | "yes" => true,
+        other => panic!(
+            "{ISOLATE_ATTACK_ENV} 取值非法: {other:?} \
+             （只认 1/true/on/yes 与 0/false/off/no/空；别把认不出的值当开或当关）"
+        ),
+    };
+    if !on {
+        return None;
+    }
+    let seed_raw = match std::env::var(RNG_SEED_ENV) {
+        Ok(s) if !s.is_empty() => s,
+        _ => panic!(
+            "{ISOLATE_ATTACK_ENV} 已开启但 {RNG_SEED_ENV} 未设/为空 \
+             ⇒ 无法派生专用流种子（fail-closed）"
+        ),
+    };
+    let base: i32 = seed_raw
+        .trim()
+        .parse()
+        .unwrap_or_else(|_| panic!("{RNG_SEED_ENV} 不是合法 int: {seed_raw:?}（fail-closed）"));
+    Some(attack_seed(base))
+}
+
 /// `System.Random(int seed)` 的逐行复刻（legacy 减法算法）。
 ///
 /// 状态布局与 .NET 一致：`seed_array[56]`、`inext`、`inextp`。
@@ -430,6 +491,30 @@ mod tests {
     fn dotnet_random_seed42_smoke() {
         let mut r = DotNetRandom::new(42);
         assert_eq!(r.next_value(), 1_434_747_710);
+    }
+
+    /// M3②③ 隔离口径的种子派生必须逐位可复现，且**两侧同公式**（C# 影子 hook 复用同一常量）。
+    #[test]
+    fn attack_seed_derivation_is_stable() {
+        assert_eq!(attack_seed(42), 42 + 0x9E37);
+        // i32 回绕（.NET `int + int` unchecked 同口径）。
+        assert_eq!(attack_seed(i32::MAX), i32::MAX.wrapping_add(0x9E37));
+        assert_eq!(attack_seed(i32::MIN), i32::MIN.wrapping_add(0x9E37));
+        // 专用流与全局流在同一基础种子上必须**可分辨**（否则隔离无意义）。
+        assert_ne!(attack_seed(42), 42);
+    }
+
+    /// 专用流确实是一条独立推进的 `System.Random` 序列（首项与全局流不同、且可复现）。
+    #[test]
+    fn attack_stream_is_a_distinct_reproducible_sequence() {
+        let mut a1 = DotNetRandom::new(attack_seed(42));
+        let mut a2 = DotNetRandom::new(attack_seed(42));
+        let mut global = DotNetRandom::new(42);
+        let sa: Vec<i32> = (0..4).map(|_| a1.next_value()).collect();
+        let sb: Vec<i32> = (0..4).map(|_| a2.next_value()).collect();
+        let sg: Vec<i32> = (0..4).map(|_| global.next_value()).collect();
+        assert_eq!(sa, sb, "同 attack_seed ⇒ 逐项可复现");
+        assert_ne!(sa, sg, "专用流种子必须与全局种子不同源");
     }
 
     #[test]

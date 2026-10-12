@@ -1,0 +1,3 @@
+TABLE_VS_CSHARP table=E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\tests\parity\m3\rng-isolate-attack\attack_sites.tsv csharp=csharp_predicate_dump.example.txt draws=11 canon=11
+GREEN: C# 分流站点覆盖表内全部 canon 且无未登记站点
+table-vs-csharp rc=0

@@ -1,0 +1,36 @@
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\crates\world)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.01s
+     Running tests\rng_attack_isolation.rs (E:/tmp/m3cs-r3-target\debug\deps\rng_attack_isolation-97b5214e8716bc96.exe)
+
+running 5 tests
+test dedicated_stream_seed_matches_two_sided_formula ... ok
+test isolation_off_routes_attacks_to_global_stream ... ok
+test isolation_on_routes_attacks_to_dedicated_stream ... FAILED
+test attack_swing_is_routed_to_dedicated_stream ... FAILED
+test isolation_on_is_reproducible_across_worlds ... ok
+
+failures:
+
+---- isolation_on_routes_attacks_to_dedicated_stream stdout ----
+
+thread 'isolation_on_routes_attacks_to_dedicated_stream' (26928) panicked at crates\world\tests\rng_attack_isolation.rs:129:5:
+assertion `left == right` failed: 开启时攻击路径必须逐次消费专用流，且次序/次数与独立 attack_dir 逐项一致
+  left: [168864509, 609046168, 2021905646, 891389471, 1555137906, 2125403689, 1445190463, 1870868426]
+ right: [916452335, 459034845, 334724226, 1045494395, 1322275312, 1336184236, 673671250, 803764956]
+
+---- attack_swing_is_routed_to_dedicated_stream stdout ----
+
+thread 'attack_swing_is_routed_to_dedicated_stream' (760) panicked at crates\world\tests\rng_attack_isolation.rs:162:5:
+assertion `left == right` failed: attack_swing 必须与专用流口径逐值相同
+  left: [23, 29]
+ right: [20, 30]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    attack_swing_is_routed_to_dedicated_stream
+    isolation_on_routes_attacks_to_dedicated_stream
+
+test result: FAILED. 3 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p mir2-world --test rng_attack_isolation`
