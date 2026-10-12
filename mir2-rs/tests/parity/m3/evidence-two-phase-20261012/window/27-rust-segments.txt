@@ -1,0 +1,7 @@
+RNG_SEGMENTS E:/tmp/m3cs-2phase/rust-rng-stream-bk.tsv side=rust segments=140
+  SHAPE x82   ['atk_power_a', 'atk_power_b']
+  SHAPE x32   ['atk_power_a', 'atk_power_b', 'hit_gate', 'hit_struck_damage', 'struck_durability', 'attack_success']
+  SHAPE x26   ['atk_power_a', 'atk_power_b', 'hit_gate', 'attack_success']
+  SEG k=1 ['atk_power_a', 'atk_power_b', 'hit_gate', 'hit_struck_damage', 'struck_durability', 'attack_success']
+  SEG k=2 ['atk_power_a', 'atk_power_b', 'hit_gate', 'hit_struck_damage', 'struck_durability', 'attack_success']
+  SEG k=3 ['atk_power_a', 'atk_power_b', 'hit_gate', 'hit_struck_damage', 'struck_durability', 'attack_success']

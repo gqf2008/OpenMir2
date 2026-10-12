@@ -1,0 +1,209 @@
+# OpenMir2->Rust 巡检报告
+生成时间: 2026-10-12 20:44:59
+
+## 1. 仓库状态（冻结基线必须干净）
+- **OpenMir2** [master] 8d9d0601 Merge commit a0d93bcf (worktree-m2-gamesvr-host)：M3②③ 接线——handle_hit_cmd 的「无目标一击」接到 World::attack_swing（空打也按 oracle 抽攻击力）；approve reviewer @reviewed_head a0d93bcf | 未提交文件=0 | 未推送提交=0
+- **MirClient** [main] c61d912d 修复底部主面板错位 + 攻击模式标签卡英文 | 未提交文件=1 | 未推送提交=0
+    - ?? AGENTS.md
+- **Crystal** [master] 93e3a4aa5 Merge pull request #3467 from gqf2008/docs/ab-table-attribution | 未提交文件=0 | 未推送提交=0
+
+## 2. Rust 产物是否出现（A/B/D 线的产出）
+- Cargo.toml: E:\Users\gxh\Documents\GitHub\OpenMir2\mir2-rs\Cargo.toml
+- Cargo.toml: E:\Users\gxh\Documents\GitHub\OpenMir2\mir2-rs\bins\db-srv\Cargo.toml
+- Cargo.toml: E:\Users\gxh\Documents\GitHub\OpenMir2\mir2-rs\bins\game-gate\Cargo.toml
+- Cargo.toml: E:\Users\gxh\Documents\GitHub\OpenMir2\mir2-rs\bins\game-svr\Cargo.toml
+- Cargo.toml: E:\Users\gxh\Documents\GitHub\OpenMir2\mir2-rs\bins\login-gate\Cargo.toml
+- Cargo.toml: E:\Users\gxh\Documents\GitHub\OpenMir2\mir2-rs\bins\login-srv\Cargo.toml
+- Cargo.toml: E:\Users\gxh\Documents\GitHub\OpenMir2\mir2-rs\bins\sel-gate\Cargo.toml
+- Cargo.toml: E:\Users\gxh\Documents\GitHub\OpenMir2\mir2-rs\crates\data\Cargo.toml
+- Cargo.toml: E:\Users\gxh\Documents\GitHub\OpenMir2\mir2-rs\crates\envir\Cargo.toml
+- Cargo.toml: E:\Users\gxh\Documents\GitHub\OpenMir2\mir2-rs\crates\formula\Cargo.toml
+- Cargo.toml: E:\Users\gxh\Documents\GitHub\OpenMir2\mir2-rs\crates\protocol\Cargo.toml
+- Cargo.toml: E:\Users\gxh\Documents\GitHub\OpenMir2\mir2-rs\crates\script\Cargo.toml
+- Cargo.toml: E:\Users\gxh\Documents\GitHub\OpenMir2\mir2-rs\crates\script-tool\Cargo.toml
+- Cargo.toml: E:\Users\gxh\Documents\GitHub\OpenMir2\mir2-rs\crates\shared\Cargo.toml
+- Cargo.toml: E:\Users\gxh\Documents\GitHub\OpenMir2\mir2-rs\crates\storage\Cargo.toml
+- Cargo.toml: E:\Users\gxh\Documents\GitHub\OpenMir2\mir2-rs\crates\world\Cargo.toml
+- Cargo.toml: E:\Users\gxh\Documents\GitHub\OpenMir2\mir2-rs\crates\world-bevy\Cargo.toml
+- Cargo.toml: E:\Users\gxh\Documents\GitHub\OpenMir2\mir2-rs\tests\parity\Cargo.toml
+- Cargo.toml: E:\Users\gxh\Documents\GitHub\OpenMir2\mir2-rs\tools\msgcodegen\Cargo.toml
+- Cargo.toml: E:\Users\gxh\Documents\GitHub\OpenMir2\mir2-rs\tools\replay\Cargo.toml
+- 目录: E:\Users\gxh\Documents\GitHub\OpenMir2\mir2-rs
+
+## 3. 服务端进程 / 端口（基线是否还活着）
+- mysqld      pid=29372   port=3306
+- **缺失端口**: 5000, 5100, 5500, 5600, 5700, 6000, 7000, 7100, 7200
+
+## 4. 客户端与环境
+- 当前无客户端进程
+
+## 5. 各线证据（金标准 / 报告 / 白名单）
+- tests\golden: 79 个文件, 26252.8 KB, 最近 2026/10/11 17:29:09
+- tests\parity : 不存在
+- tests\parity\whitelist.md : 不存在
+- tools: 569 个文件, 37910.3 KB, 最近 2026/10/12 20:42:09
+- crates : 不存在
+
+## 6. 服务端日志（基线是否被弄坏）
+- **MySQL.err.log**: 2914 bytes, 最近 2026/10/12 8:04:00
+- E:\MirServer\M2GameSvr\logs : 无 .err.log（正常）
+
+## 7. 最近 2 小时的活动（哪个线在动）
+- OpenMir2:
+    - 20:42:09  tools\m2-acceptance\evidence\m2svr-attack-swing-wiring-20261012\README.md
+    - 20:42:09  tools\m2-acceptance\evidence\m2svr-attack-swing-wiring-20261012\SHA256SUMS.txt
+    - 20:42:09  tools\m2-acceptance\evidence\m2svr-attack-swing-wiring-20261012\09-commands.txt
+    - 20:42:09  tools\m2-acceptance\evidence\m2svr-attack-swing-wiring-20261012\08-gate-msgcodegen.txt
+    - 20:42:09  tools\m2-acceptance\evidence\m2svr-attack-swing-wiring-20261012\07-gate-test.txt
+    - 20:42:09  tools\m2-acceptance\evidence\m2svr-attack-swing-wiring-20261012\06-gate-clippy.txt
+- MirClient:
+    - （2 小时内无改动）
+- Crystal:
+    - （2 小时内无改动）
+
+## 8. 各线 worktree（Claude Code 的 .claude/worktrees）
+- **dbsrv6k** [worktree-m1-dbsrv-6000] 3644412f feat(m1-dbsrv): S4b ③ 退出路径跨实现互读（softclose 小退 + shutdown 优雅关）+ BotSrv 夹具例外 M1-EXIT | 未提交=0 | 新建目录=tests,tools
+    - Cargo.toml: mir2-rs\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\db-srv\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\game-gate\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\game-svr\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\login-gate\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\login-srv\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\sel-gate\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\data\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\envir\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\formula\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\protocol\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\script\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\script-tool\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\shared\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\storage\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\world\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\world-bevy\Cargo.toml
+    - Cargo.toml: mir2-rs\tests\parity\Cargo.toml
+    - Cargo.toml: mir2-rs\tools\msgcodegen\Cargo.toml
+    - Cargo.toml: mir2-rs\tools\replay\Cargo.toml
+- **gamegate** [worktree-m2-gamegate] 2527c7c3 fix(m2): 四个网关/服务按 GB2312 读配置（照 oracle ConfigFile），game-gate 7200 复起 | 未提交=0 | 新建目录=tests,tools
+    - Cargo.toml: mir2-rs\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\db-srv\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\game-gate\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\game-svr\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\login-gate\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\login-srv\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\sel-gate\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\data\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\envir\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\formula\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\protocol\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\script\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\script-tool\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\shared\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\storage\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\world\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\world-bevy\Cargo.toml
+    - Cargo.toml: mir2-rs\tests\parity\Cargo.toml
+    - Cargo.toml: mir2-rs\tools\msgcodegen\Cargo.toml
+    - Cargo.toml: mir2-rs\tools\replay\Cargo.toml
+- **m2-svr** [worktree-m2-gamesvr-host] a0d93bcf chore(evidence): 无目标一击接线片证据（oracle 行号 + 改前/改后读数 + 改坏必红 + 四门禁） | 未提交=0 | 新建目录=tests,tools
+    - Cargo.toml: mir2-rs\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\db-srv\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\game-gate\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\game-svr\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\login-gate\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\login-srv\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\sel-gate\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\data\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\envir\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\formula\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\protocol\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\script\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\script-tool\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\shared\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\storage\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\world\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\world-bevy\Cargo.toml
+    - Cargo.toml: mir2-rs\tests\parity\Cargo.toml
+    - Cargo.toml: mir2-rs\tools\msgcodegen\Cargo.toml
+    - Cargo.toml: mir2-rs\tools\replay\Cargo.toml
+- **m3bag** [worktree-m3-bag-equip] b0fa93e0 docs(m3-attack-pair): 清 reviewer-5 N-1 的 M-1/M-2（证据命令路径订正 + 改坏 diff 归一为单行 hunk）；零 .rs | 未提交=0 | 新建目录=tests,tools
+    - Cargo.toml: mir2-rs\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\db-srv\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\game-gate\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\game-svr\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\login-gate\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\login-srv\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\sel-gate\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\data\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\envir\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\formula\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\protocol\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\script\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\script-tool\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\shared\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\storage\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\world\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\world-bevy\Cargo.toml
+    - Cargo.toml: mir2-rs\tests\parity\Cargo.toml
+    - Cargo.toml: mir2-rs\tools\msgcodegen\Cargo.toml
+    - Cargo.toml: mir2-rs\tools\replay\Cargo.toml
+- **m3cs** [worktree-m3-combat-skills] 8d9d0601 Merge commit a0d93bcf (worktree-m2-gamesvr-host)：M3②③ 接线——handle_hit_cmd 的「无目标一击」接到 World::attack_swing（空打也按 oracle 抽攻击力）；approve reviewer @reviewed_head a0d93bcf | 未提交=1 | 新建目录=tests,tools
+    - ?? mir2-rs/tests/parity/m3/evidence-two-phase-20261012/
+    - Cargo.toml: mir2-rs\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\db-srv\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\game-gate\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\game-svr\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\login-gate\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\login-srv\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\sel-gate\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\data\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\envir\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\formula\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\protocol\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\script\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\script-tool\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\shared\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\storage\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\world\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\world-bevy\Cargo.toml
+    - Cargo.toml: mir2-rs\tests\parity\Cargo.toml
+    - Cargo.toml: mir2-rs\tools\msgcodegen\Cargo.toml
+    - Cargo.toml: mir2-rs\tools\replay\Cargo.toml
+- **rev2** [worktree-rev2] 35f9b2a5 fix(m3-attack-pair): 清合并登记的两条 Minor（M-1 WARN 死代码 / M-2 attacker 误武装）+ 生产函数级自检 | 未提交=0 | 新建目录=tests,tools
+    - Cargo.toml: mir2-rs\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\db-srv\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\game-gate\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\game-svr\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\login-gate\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\login-srv\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\sel-gate\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\data\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\envir\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\formula\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\protocol\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\script\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\script-tool\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\shared\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\storage\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\world\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\world-bevy\Cargo.toml
+    - Cargo.toml: mir2-rs\tests\parity\Cargo.toml
+    - Cargo.toml: mir2-rs\tools\msgcodegen\Cargo.toml
+    - Cargo.toml: mir2-rs\tools\replay\Cargo.toml
+- **wbevy** [worktree-world-bevy] 8b989d51 docs(world-bevy): S2 复核——15 轮平衡 A/B GREEN + 订正 join 轮换口径 + 身份交接 worker-14 | 未提交=0 | 新建目录=tests,tools
+    - Cargo.toml: mir2-rs\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\db-srv\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\login-gate\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\login-srv\Cargo.toml
+    - Cargo.toml: mir2-rs\bins\sel-gate\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\data\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\formula\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\protocol\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\script\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\script-tool\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\shared\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\storage\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\world\Cargo.toml
+    - Cargo.toml: mir2-rs\crates\world-bevy\Cargo.toml
+    - Cargo.toml: mir2-rs\tests\parity\Cargo.toml
+    - Cargo.toml: mir2-rs\tools\msgcodegen\Cargo.toml
+    - Cargo.toml: mir2-rs\tools\replay\Cargo.toml

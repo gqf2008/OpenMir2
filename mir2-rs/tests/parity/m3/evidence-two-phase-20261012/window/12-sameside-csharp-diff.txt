@@ -1,0 +1,17 @@
+NONTRIVIAL a=True() b=True()
+RED: 跨侧攻击序列差异 15 项（差异要么修到 0，要么按 §6.0-3 登记 tests/parity/whitelist.md）
+  - k=4 hit 不等: a=True b=False
+  - k=4 dmg 不等: a=1 b=0
+  - k=4 hp 不等: a=18 b=0
+  - k=4 maxhp 不等: a=19 b=0
+  - k=5 hit 不等: a=True b=False
+  - k=5 dmg 不等: a=1 b=0
+  - k=5 hp 不等: a=18 b=0
+  - k=5 maxhp 不等: a=19 b=0
+  - k=6 hit 不等: a=False b=True
+  - k=6 dmg 不等: a=0 b=1
+  - k=6 hp 不等: a=0 b=18
+  - k=6 maxhp 不等: a=0 b=19
+  - 统计 hits 不等: a=2 b=1
+  - 统计 dodges 不等: a=118 b=119
+  - 统计 sum 不等: a=2 b=1

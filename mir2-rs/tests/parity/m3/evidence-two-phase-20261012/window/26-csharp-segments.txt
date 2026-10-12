@@ -1,0 +1,10 @@
+RNG_SEGMENTS E:/tmp/m3cs-2phase/csharp-rng-stream.tsv side=csharp segments=260
+  SHAPE x239  ['atk_power_a', 'atk_power_b']
+  SHAPE x13   ['atk_power_a', 'atk_power_b', 'hit_gate', 'attack_success']
+  SHAPE x5    ['atk_power_a', 'atk_power_b', 'hit_gate', 'hit_struck_damage', 'struck_durability', 'attack_success']
+  SHAPE x1    ['atk_power_a', 'atk_power_b', 'hit_gate', 'attack_success', 'atk_power_base', 'hit_gate', 'hit_struck_damage']
+  SHAPE x1    ['atk_power_a', 'atk_power_b', 'atk_power_base', 'hit_gate', 'hit_struck_damage', 'M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:793']
+  SHAPE x1    ['atk_power_a', 'atk_power_b', 'atk_power_base', 'hit_gate', 'hit_struck_damage']
+  SEG k=1 ['atk_power_a', 'atk_power_b', 'hit_gate', 'attack_success']
+  SEG k=2 ['atk_power_a', 'atk_power_b', 'hit_gate', 'attack_success']
+  SEG k=3 ['atk_power_a', 'atk_power_b', 'hit_gate', 'attack_success', 'atk_power_base', 'hit_gate', 'hit_struck_damage']
