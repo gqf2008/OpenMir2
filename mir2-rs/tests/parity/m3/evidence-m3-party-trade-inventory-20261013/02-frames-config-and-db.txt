@@ -1,0 +1,143 @@
+# 02 帧常量 / 配置 / 落库 对照（M3⑦ 组队/交易）
+# 生成：2026-10-12T20:59:36Z  仓库 = a96ef0e690b9942f40cb601b28b95a1abcfff9d8
+
+===== [A] C# 帧常量（src/OpenMir2/Messages.cs） =====
+74:        public const int CM_GROUPMODE = 1019;
+75:        public const int CM_CREATEGROUP = 1020;
+76:        public const int CM_ADDGROUPMEMBER = 1021;
+77:        public const int CM_DELGROUPMEMBER = 1022;
+83:        public const int CM_DEALTRY = 1025;
+84:        public const int CM_DEALADDITEM = 1026;
+85:        public const int CM_DEALDELITEM = 1027;
+86:        public const int CM_DEALCANCEL = 1028;
+87:        public const int CM_DEALCHGGOLD = 1029;
+88:        public const int CM_DEALEND = 1030;
+216:        public const int SM_GROUPMESSAGE = 101;
+321:        public const int SM_GROUPMODECHANGED = 659;
+322:        public const int SM_CREATEGROUP_OK = 660;
+323:        public const int SM_CREATEGROUP_FAIL = 661;
+324:        public const int SM_GROUPADDMEM_OK = 662;
+325:        public const int SM_GROUPDELMEM_OK = 663;
+326:        public const int SM_GROUPADDMEM_FAIL = 664;
+327:        public const int SM_GROUPDELMEM_FAIL = 665;
+328:        public const int SM_GROUPCANCEL = 666;
+329:        public const int SM_GROUPMEMBERS = 667;
+334:        public const int SM_DEALMENU = 673;
+335:        public const int SM_DEALTRY_FAIL = 674;
+336:        public const int SM_DEALADDITEM_OK = 675;
+337:        public const int SM_DEALADDITEM_FAIL = 676;
+338:        public const int SM_DEALDELITEM_OK = 677;
+339:        public const int SM_DEALDELITEM_FAIL = 678;
+340:        public const int SM_DEALCANCEL = 681;
+341:        public const int SM_DEALREMOTEADDITEM = 682;
+342:        public const int SM_DEALREMOTEDELITEM = 683;
+343:        public const int SM_DEALCHGGOLD_OK = 684;
+344:        public const int SM_DEALCHGGOLD_FAIL = 685;
+345:        public const int SM_DEALREMOTECHGGOLD = 686;
+346:        public const int SM_DEALSUCCESS = 687;
+600:        public const int RM_GROUPCANCEL = 10140;
+647:        public const int RM_GROUPMESSAGE = 11005;
+
+===== [B] Rust 帧常量（crates/protocol/src/messages.rs） =====
+65:pub const CM_GROUPMODE: u16 = 1019;
+66:pub const CM_CREATEGROUP: u16 = 1020;
+67:pub const CM_ADDGROUPMEMBER: u16 = 1021;
+68:pub const CM_DELGROUPMEMBER: u16 = 1022;
+72:pub const CM_DEALTRY: u16 = 1025;
+73:pub const CM_DEALADDITEM: u16 = 1026;
+74:pub const CM_DEALDELITEM: u16 = 1027;
+75:pub const CM_DEALCANCEL: u16 = 1028;
+76:pub const CM_DEALCHGGOLD: u16 = 1029;
+77:pub const CM_DEALEND: u16 = 1030;
+1004:        1019 => &["CM_GROUPMODE"],
+1005:        1020 => &["CM_CREATEGROUP"],
+1006:        1021 => &["CM_ADDGROUPMEMBER"],
+1007:        1022 => &["CM_DELGROUPMEMBER"],
+1010:        1025 => &["CM_DEALTRY"],
+1011:        1026 => &["CM_DEALADDITEM"],
+1012:        1027 => &["CM_DEALDELITEM"],
+1013:        1028 => &["CM_DEALCANCEL"],
+1014:        1029 => &["CM_DEALCHGGOLD"],
+1015:        1030 => &["CM_DEALEND"],
+211:pub const SM_GROUPMESSAGE: u16 = 101;
+296:pub const SM_GROUPMODECHANGED: u16 = 659;
+297:pub const SM_CREATEGROUP_OK: u16 = 660;
+298:pub const SM_CREATEGROUP_FAIL: u16 = 661;
+299:pub const SM_GROUPADDMEM_OK: u16 = 662;
+300:pub const SM_GROUPDELMEM_OK: u16 = 663;
+301:pub const SM_GROUPADDMEM_FAIL: u16 = 664;
+302:pub const SM_GROUPDELMEM_FAIL: u16 = 665;
+303:pub const SM_GROUPCANCEL: u16 = 666;
+304:pub const SM_GROUPMEMBERS: u16 = 667;
+783:            "SM_GROUPMESSAGE",
+911:        659 => &["SM_GROUPMODECHANGED"],
+912:        660 => &["SM_CREATEGROUP_OK"],
+913:        661 => &["SM_CREATEGROUP_FAIL"],
+914:        662 => &["SM_GROUPADDMEM_OK"],
+915:        663 => &["SM_GROUPDELMEM_OK"],
+916:        664 => &["SM_GROUPADDMEM_FAIL"],
+917:        665 => &["SM_GROUPDELMEM_FAIL"],
+918:        666 => &["SM_GROUPCANCEL"],
+919:        667 => &["SM_GROUPMEMBERS"],
+309:pub const SM_DEALMENU: u16 = 673;
+310:pub const SM_DEALTRY_FAIL: u16 = 674;
+311:pub const SM_DEALADDITEM_OK: u16 = 675;
+312:pub const SM_DEALADDITEM_FAIL: u16 = 676;
+313:pub const SM_DEALDELITEM_OK: u16 = 677;
+314:pub const SM_DEALDELITEM_FAIL: u16 = 678;
+315:pub const SM_DEALCANCEL: u16 = 681;
+316:pub const SM_DEALREMOTEADDITEM: u16 = 682;
+317:pub const SM_DEALREMOTEDELITEM: u16 = 683;
+318:pub const SM_DEALCHGGOLD_OK: u16 = 684;
+319:pub const SM_DEALCHGGOLD_FAIL: u16 = 685;
+320:pub const SM_DEALREMOTECHGGOLD: u16 = 686;
+321:pub const SM_DEALSUCCESS: u16 = 687;
+924:        673 => &["SM_DEALMENU"],
+925:        674 => &["SM_DEALTRY_FAIL"],
+926:        675 => &["SM_DEALADDITEM_OK"],
+927:        676 => &["SM_DEALADDITEM_FAIL"],
+928:        677 => &["SM_DEALDELITEM_OK"],
+929:        678 => &["SM_DEALDELITEM_FAIL"],
+930:        681 => &["SM_DEALCANCEL"],
+931:        682 => &["SM_DEALREMOTEADDITEM"],
+932:        683 => &["SM_DEALREMOTEDELITEM"],
+933:        684 => &["SM_DEALCHGGOLD_OK"],
+934:        685 => &["SM_DEALCHGGOLD_FAIL"],
+935:        686 => &["SM_DEALREMOTECHGGOLD"],
+936:        687 => &["SM_DEALSUCCESS"],
+461:pub const RM_GROUPCANCEL: u16 = 10140;
+504:pub const RM_GROUPMESSAGE: u16 = 11005;
+1174:        10140 => &["RM_GROUPCANCEL"],
+1215:        11005 => &["RM_GROUPMESSAGE"],
+
+===== [C] 落库：characters 里组队相关列（会话外持久；组队/交易态本身不落库） =====
+56:  `AllowGroup` tinyint(1) NULL DEFAULT 0 COMMENT '是否允许组队',
+57:  `AllowGroupReCall` tinyint(1) NULL DEFAULT 0 COMMENT '是否允许组队传送',
+--- C# 读档/存档映射 ---
+1146:            playObject.AllowGroup = humData.AllowGroup > 0;
+1159:            playObject.AllowGroupReCall = humData.AllowGroupReCall;
+1276:            playerInfo.AllowGroup = playObject.AllowGroup ? (byte)1 : (byte)0;
+1290:            playerInfo.AllowGroupReCall = playObject.AllowGroupReCall;
+--- C# 交易/组队成员态是否有列（no match 即不落库） ---
+(no match: 组队成员/交易态无 DB 列)
+
+===== [D] 配置默认值（GameSvrConf.cs） =====
+1402:            GroupMembersMax = 10;
+1490:            LockDealAction = false;  //是否锁定交易操作
+1515:            TryDealTime = 3000;
+1516:            DealOKTime = 1000;
+1517:            CanNotGetBackDeal = true;
+1518:            DisableDeal = false;
+
+===== [E] 服务端配置面（本机 E:/MirServer/M2GameSvr/Server.conf 关键项，只读；Server1.conf 同值） =====
+292:GroupMembersMax=10
+383:PasswordLockDealAction=0
+579:TryDealTime=3000
+580:DealOKTime=1000
+581:CanNotGetBackDeal=1
+582:DisableDeal=0
+⇒ 现网配置 = 编译默认（无覆盖）。
+
+===== [F] 常量覆盖交叉核对（35 个组队/交易 CM/SM/RM 常量：C# 与 Rust 都有） =====
+C# 命中=35/35  Rust 命中=35/35  缺口=无
+⇒ 常量表两侧一致；缺口在「派发 + 状态机 + 帧发送」，不在常量。

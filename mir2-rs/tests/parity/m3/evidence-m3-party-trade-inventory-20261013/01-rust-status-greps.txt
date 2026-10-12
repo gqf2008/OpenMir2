@@ -1,0 +1,230 @@
+# 01 Rust 侧现状只读 grep（M3⑦ 组队/交易）
+# 生成：2026-10-12T20:59:27Z  仓库 = a96ef0e690b9942f40cb601b28b95a1abcfff9d8
+# 命令：rg -n '<pattern>' mir2-rs/{crates,bins,tests} --glob '!target'（在仓库根执行）
+
+===== [1] 协议常量（crates/protocol）——存在，但只是数字表 =====
+65:pub const CM_GROUPMODE: u16 = 1019;
+66:pub const CM_CREATEGROUP: u16 = 1020;
+67:pub const CM_ADDGROUPMEMBER: u16 = 1021;
+68:pub const CM_DELGROUPMEMBER: u16 = 1022;
+72:pub const CM_DEALTRY: u16 = 1025;
+73:pub const CM_DEALADDITEM: u16 = 1026;
+74:pub const CM_DEALDELITEM: u16 = 1027;
+75:pub const CM_DEALCANCEL: u16 = 1028;
+76:pub const CM_DEALCHGGOLD: u16 = 1029;
+77:pub const CM_DEALEND: u16 = 1030;
+1004:        1019 => &["CM_GROUPMODE"],
+1005:        1020 => &["CM_CREATEGROUP"],
+1006:        1021 => &["CM_ADDGROUPMEMBER"],
+1007:        1022 => &["CM_DELGROUPMEMBER"],
+1010:        1025 => &["CM_DEALTRY"],
+1011:        1026 => &["CM_DEALADDITEM"],
+1012:        1027 => &["CM_DEALDELITEM"],
+1013:        1028 => &["CM_DEALCANCEL"],
+1014:        1029 => &["CM_DEALCHGGOLD"],
+1015:        1030 => &["CM_DEALEND"],
+211:pub const SM_GROUPMESSAGE: u16 = 101;
+296:pub const SM_GROUPMODECHANGED: u16 = 659;
+297:pub const SM_CREATEGROUP_OK: u16 = 660;
+298:pub const SM_CREATEGROUP_FAIL: u16 = 661;
+299:pub const SM_GROUPADDMEM_OK: u16 = 662;
+300:pub const SM_GROUPDELMEM_OK: u16 = 663;
+301:pub const SM_GROUPADDMEM_FAIL: u16 = 664;
+302:pub const SM_GROUPDELMEM_FAIL: u16 = 665;
+303:pub const SM_GROUPCANCEL: u16 = 666;
+304:pub const SM_GROUPMEMBERS: u16 = 667;
+783:            "SM_GROUPMESSAGE",
+911:        659 => &["SM_GROUPMODECHANGED"],
+912:        660 => &["SM_CREATEGROUP_OK"],
+913:        661 => &["SM_CREATEGROUP_FAIL"],
+914:        662 => &["SM_GROUPADDMEM_OK"],
+915:        663 => &["SM_GROUPDELMEM_OK"],
+916:        664 => &["SM_GROUPADDMEM_FAIL"],
+917:        665 => &["SM_GROUPDELMEM_FAIL"],
+918:        666 => &["SM_GROUPCANCEL"],
+919:        667 => &["SM_GROUPMEMBERS"],
+309:pub const SM_DEALMENU: u16 = 673;
+310:pub const SM_DEALTRY_FAIL: u16 = 674;
+311:pub const SM_DEALADDITEM_OK: u16 = 675;
+312:pub const SM_DEALADDITEM_FAIL: u16 = 676;
+313:pub const SM_DEALDELITEM_OK: u16 = 677;
+314:pub const SM_DEALDELITEM_FAIL: u16 = 678;
+315:pub const SM_DEALCANCEL: u16 = 681;
+316:pub const SM_DEALREMOTEADDITEM: u16 = 682;
+317:pub const SM_DEALREMOTEDELITEM: u16 = 683;
+318:pub const SM_DEALCHGGOLD_OK: u16 = 684;
+319:pub const SM_DEALCHGGOLD_FAIL: u16 = 685;
+320:pub const SM_DEALREMOTECHGGOLD: u16 = 686;
+321:pub const SM_DEALSUCCESS: u16 = 687;
+924:        673 => &["SM_DEALMENU"],
+925:        674 => &["SM_DEALTRY_FAIL"],
+926:        675 => &["SM_DEALADDITEM_OK"],
+927:        676 => &["SM_DEALADDITEM_FAIL"],
+928:        677 => &["SM_DEALDELITEM_OK"],
+929:        678 => &["SM_DEALDELITEM_FAIL"],
+930:        681 => &["SM_DEALCANCEL"],
+931:        682 => &["SM_DEALREMOTEADDITEM"],
+932:        683 => &["SM_DEALREMOTEDELITEM"],
+933:        684 => &["SM_DEALCHGGOLD_OK"],
+934:        685 => &["SM_DEALCHGGOLD_FAIL"],
+935:        686 => &["SM_DEALREMOTECHGGOLD"],
+936:        687 => &["SM_DEALSUCCESS"],
+461:pub const RM_GROUPCANCEL: u16 = 10140;
+504:pub const RM_GROUPMESSAGE: u16 = 11005;
+1174:        10140 => &["RM_GROUPCANCEL"],
+1215:        11005 => &["RM_GROUPMESSAGE"],
+
+===== [2] 组队/交易派发（bins/game-svr）——no match =====
+mir2-rs/crates\protocol\src\messages.rs:65:pub const CM_GROUPMODE: u16 = 1019;
+mir2-rs/crates\protocol\src\messages.rs:66:pub const CM_CREATEGROUP: u16 = 1020;
+mir2-rs/crates\protocol\src\messages.rs:67:pub const CM_ADDGROUPMEMBER: u16 = 1021;
+mir2-rs/crates\protocol\src\messages.rs:68:pub const CM_DELGROUPMEMBER: u16 = 1022;
+mir2-rs/crates\protocol\src\messages.rs:72:pub const CM_DEALTRY: u16 = 1025;
+mir2-rs/crates\protocol\src\messages.rs:73:pub const CM_DEALADDITEM: u16 = 1026;
+mir2-rs/crates\protocol\src\messages.rs:74:pub const CM_DEALDELITEM: u16 = 1027;
+mir2-rs/crates\protocol\src\messages.rs:75:pub const CM_DEALCANCEL: u16 = 1028;
+mir2-rs/crates\protocol\src\messages.rs:76:pub const CM_DEALCHGGOLD: u16 = 1029;
+mir2-rs/crates\protocol\src\messages.rs:77:pub const CM_DEALEND: u16 = 1030;
+mir2-rs/crates\protocol\src\messages.rs:1004:        1019 => &["CM_GROUPMODE"],
+mir2-rs/crates\protocol\src\messages.rs:1005:        1020 => &["CM_CREATEGROUP"],
+mir2-rs/crates\protocol\src\messages.rs:1006:        1021 => &["CM_ADDGROUPMEMBER"],
+mir2-rs/crates\protocol\src\messages.rs:1007:        1022 => &["CM_DELGROUPMEMBER"],
+mir2-rs/crates\protocol\src\messages.rs:1010:        1025 => &["CM_DEALTRY"],
+mir2-rs/crates\protocol\src\messages.rs:1011:        1026 => &["CM_DEALADDITEM"],
+mir2-rs/crates\protocol\src\messages.rs:1012:        1027 => &["CM_DEALDELITEM"],
+mir2-rs/crates\protocol\src\messages.rs:1013:        1028 => &["CM_DEALCANCEL"],
+mir2-rs/crates\protocol\src\messages.rs:1014:        1029 => &["CM_DEALCHGGOLD"],
+mir2-rs/crates\protocol\src\messages.rs:1015:        1030 => &["CM_DEALEND"],
+
+===== [3] 组队实体/注册表（crates/world, bins/game-svr）——no match（只有 ground.rs 注入字段） =====
+mir2-rs/bins/game-svr/src\enter.rs:116:    /// `PlayObject.AllowGroup`（帧 50 的 `Tag1` 门；`WorldServer.cs:1146` = 记录 `allow_group > 0`）。
+mir2-rs/bins/game-svr/src\enter.rs:117:    pub allow_group: bool,
+mir2-rs/bins/game-svr/src\enter.rs:565:            let tag1 = if l.allow_group {
+mir2-rs/bins/game-svr/src\enter.rs:1154:            allow_group: true,
+mir2-rs/bins/game-svr/src\enter.rs:1229:                allow_group: false,
+mir2-rs/bins/game-svr/src\enter.rs:1263:            allow_group: false,
+mir2-rs/bins/game-svr/src\ground.rs:113://! - **`ClientPickUpItemIsOfGroup` 的群组列表来源**：输入是 `group_member_actor_ids`（oracle 由
+mir2-rs/bins/game-svr/src\ground.rs:316:    pub group_owner: i32,
+mir2-rs/bins/game-svr/src\ground.rs:318:    pub group_member_actor_ids: &'a [i32],
+mir2-rs/bins/game-svr/src\ground.rs:344:pub fn is_of_group(group_owner: i32, group_member_actor_ids: &[i32], actor_id: i32) -> bool {
+mir2-rs/bins/game-svr/src\ground.rs:345:    if group_owner == 0 {
+mir2-rs/bins/game-svr/src\ground.rs:348:    group_member_actor_ids.contains(&actor_id)
+mir2-rs/bins/game-svr/src\ground.rs:435:            ctx.group_owner,
+mir2-rs/bins/game-svr/src\ground.rs:436:            ctx.group_member_actor_ids,
+mir2-rs/bins/game-svr/src\ground.rs:904:            let member_ids: Vec<i32> = c["group_member_actor_ids"]
+mir2-rs/bins/game-svr/src\ground.rs:928:                        group_owner: i32v(&c["group_owner"]),
+mir2-rs/bins/game-svr/src\ground.rs:929:                        group_member_actor_ids: &member_ids,
+mir2-rs/bins/game-svr/src\ground.rs:1130:            group_owner: 0,
+mir2-rs/bins/game-svr/src\ground.rs:1131:            group_member_actor_ids: &[],
+mir2-rs/bins/game-svr/src\ground.rs:1176:            group_owner: 0,
+mir2-rs/bins/game-svr/src\ground.rs:1177:            group_member_actor_ids: &[],
+mir2-rs/bins/game-svr/src\ground.rs:1218:            group_owner: 0,
+mir2-rs/bins/game-svr/src\ground.rs:1219:            group_member_actor_ids: &[],
+mir2-rs/bins/game-svr/src\ground.rs:1251:            group_owner: 0,
+mir2-rs/bins/game-svr/src\ground.rs:1252:            group_member_actor_ids: &[],
+mir2-rs/bins/game-svr/src\main.rs:724:            group_owner: 0,
+mir2-rs/bins/game-svr/src\main.rs:725:            group_member_actor_ids: &[],
+mir2-rs/bins/game-svr/src\main.rs:3647:                                                    // `WorldServer.cs:1146`：`AllowGroup = 记录 allow_group > 0`。
+mir2-rs/bins/game-svr/src\main.rs:3648:                                                    allow_group: d.allow_group > 0,
+mir2-rs/bins/game-svr/src\record.rs:491:    pub allow_group: u8,
+mir2-rs/bins/game-svr/src\record.rs:507:    pub allow_group_re_call: bool,
+mir2-rs/bins/game-svr/src\record.rs:592:            allow_group: r.u8()?,
+mir2-rs/bins/game-svr/src\record.rs:608:            allow_group_re_call: r.boolean()?,
+mir2-rs/bins/game-svr/src\record.rs:649:        w.u8(self.allow_group);
+mir2-rs/bins/game-svr/src\record.rs:665:        w.boolean(self.allow_group_re_call);
+mir2-rs/bins/game-svr/src\record.rs:1068:                d.allow_group,
+mir2-rs/bins/game-svr/src\record.rs:1087:        assert!(!d.allow_group_re_call);
+
+===== [4] 交易态（dealing / DealItemList / DealGolds） =====
+mir2-rs/bins/game-svr/src\bag.rs:33://!   ├─ Dealing / btWhere<13 守卫；UseItems[btWhere].Index>0 守卫（否则 n10=-2）
+mir2-rs/bins/game-svr/src\bag.rs:251:    /// `Dealing`（交易中）。
+mir2-rs/bins/game-svr/src\bag.rs:252:    pub dealing: bool,
+mir2-rs/bins/game-svr/src\bag.rs:532:/// 失败码（oracle `n10`）：`-1` = `Dealing` 或 `btWhere >= 13`；`-2` = 槽为空（`Index == 0`）；
+mir2-rs/bins/game-svr/src\bag.rs:544:    if ctx.dealing || usize::from(slot) >= USE_ITEMS_LEN {
+mir2-rs/bins/game-svr/src\bag.rs:794:            dealing: c["dealing"].as_bool().unwrap(),
+mir2-rs/bins/game-svr/src\ground.rs:16://!   ├─ Dealing ⇒ return
+mir2-rs/bins/game-svr/src\ground.rs:307:    /// `PlayObject.Dealing`。
+mir2-rs/bins/game-svr/src\ground.rs:308:    pub dealing: bool,
+mir2-rs/bins/game-svr/src\ground.rs:415:    if ctx.dealing {
+mir2-rs/bins/game-svr/src\ground.rs:924:                        dealing: c["dealing"].as_bool().unwrap(),
+mir2-rs/bins/game-svr/src\ground.rs:1126:            dealing: false,
+mir2-rs/bins/game-svr/src\ground.rs:1172:            dealing: false,
+mir2-rs/bins/game-svr/src\ground.rs:1214:            dealing: false,
+mir2-rs/bins/game-svr/src\ground.rs:1247:            dealing: false,
+mir2-rs/bins/game-svr/src\main.rs:717:            // `Dealing` 本接缝未建模（无交易系统）⇒ false（登记）。
+mir2-rs/bins/game-svr/src\main.rs:718:            dealing: false,
+mir2-rs/bins/game-svr/src\main.rs:854:        dealing: false,
+
+===== [5] 配置项（deal / group）——no match =====
+(no match)
+
+===== [6] 角色记录 allow_group / allow_group_re_call（M2 record-fields 已解析） =====
+mir2-rs/crates/storage/src/playerdata.rs:652:    pub allow_group: u8,
+mir2-rs/crates/storage/src/playerdata.rs:668:    pub allow_group_re_call: bool,
+mir2-rs/crates/storage/src/playerdata.rs:711:            allow_group: 0,
+mir2-rs/crates/storage/src/playerdata.rs:727:            allow_group_re_call: false,
+mir2-rs/crates/storage/src/playerdata.rs:772:        w.u8(self.allow_group);
+mir2-rs/crates/storage/src/playerdata.rs:788:        w.bool(self.allow_group_re_call);
+mir2-rs/crates/storage/src/playerdata.rs:827:            allow_group: r.u8()?,
+mir2-rs/crates/storage/src/playerdata.rs:843:            allow_group_re_call: r.bool()?,
+mir2-rs/bins/db-srv/src/playdata.rs:119:        allow_group: u8::try_from(int_col(&row, "AllowGroup")?).context("AllowGroup 越界")?,
+mir2-rs/bins/db-srv/src/playdata.rs:126:        allow_group_re_call: bool_col(&row, "AllowGroupReCall")?,
+mir2-rs/bins/db-srv/src/playdata.rs:441:        .bind(i16::from(d.allow_group))
+mir2-rs/bins/db-srv/src/playdata.rs:835:    .bind(i16::from(d.allow_group))
+mir2-rs/bins/game-svr/src/record.rs:491:    pub allow_group: u8,
+mir2-rs/bins/game-svr/src/record.rs:507:    pub allow_group_re_call: bool,
+mir2-rs/bins/game-svr/src/record.rs:592:            allow_group: r.u8()?,
+mir2-rs/bins/game-svr/src/record.rs:608:            allow_group_re_call: r.boolean()?,
+mir2-rs/bins/game-svr/src/record.rs:649:        w.u8(self.allow_group);
+mir2-rs/bins/game-svr/src/record.rs:665:        w.boolean(self.allow_group_re_call);
+mir2-rs/bins/game-svr/src/record.rs:1068:                d.allow_group,
+mir2-rs/bins/game-svr/src/record.rs:1087:        assert!(!d.allow_group_re_call);
+
+===== [7] 进图帧 50 Tag1（allow_group） =====
+116:    /// `PlayObject.AllowGroup`（帧 50 的 `Tag1` 门；`WorldServer.cs:1146` = 记录 `allow_group > 0`）。
+117:    pub allow_group: bool,
+565:            let tag1 = if l.allow_group {
+1154:            allow_group: true,
+1229:                allow_group: false,
+1263:            allow_group: false,
+
+===== [8] HAM_GROUP 攻击模式分支（IsGroupMember 未建模） =====
+401:pub const ATTACK_MODE_HAM_GROUP: u8 = 4;
+453:/// `IsGroupMember`/`MyGuild`/`MasterList`（师徒）——本骨架世界无组队/行会/师徒，`result` 不被剔除。
+481:        ATTACK_MODE_HAM_GROUP => {
+485:            // `IsGroupMember` 未建模（无组队）⇒ 不剔除。
+
+===== [9] 拾取归属 group 分支（注入字段；main.rs 传 0） =====
+mir2-rs/bins/game-svr/src/main.rs:724:            group_owner: 0,
+mir2-rs/bins/game-svr/src/main.rs:725:            group_member_actor_ids: &[],
+mir2-rs/bins/game-svr/src/ground.rs:113://! - **`ClientPickUpItemIsOfGroup` 的群组列表来源**：输入是 `group_member_actor_ids`（oracle 由
+mir2-rs/bins/game-svr/src/ground.rs:316:    pub group_owner: i32,
+mir2-rs/bins/game-svr/src/ground.rs:318:    pub group_member_actor_ids: &'a [i32],
+mir2-rs/bins/game-svr/src/ground.rs:344:pub fn is_of_group(group_owner: i32, group_member_actor_ids: &[i32], actor_id: i32) -> bool {
+mir2-rs/bins/game-svr/src/ground.rs:345:    if group_owner == 0 {
+mir2-rs/bins/game-svr/src/ground.rs:348:    group_member_actor_ids.contains(&actor_id)
+mir2-rs/bins/game-svr/src/ground.rs:434:        && !is_of_group(
+mir2-rs/bins/game-svr/src/ground.rs:435:            ctx.group_owner,
+mir2-rs/bins/game-svr/src/ground.rs:436:            ctx.group_member_actor_ids,
+mir2-rs/bins/game-svr/src/ground.rs:904:            let member_ids: Vec<i32> = c["group_member_actor_ids"]
+mir2-rs/bins/game-svr/src/ground.rs:928:                        group_owner: i32v(&c["group_owner"]),
+mir2-rs/bins/game-svr/src/ground.rs:929:                        group_member_actor_ids: &member_ids,
+mir2-rs/bins/game-svr/src/ground.rs:1130:            group_owner: 0,
+mir2-rs/bins/game-svr/src/ground.rs:1131:            group_member_actor_ids: &[],
+mir2-rs/bins/game-svr/src/ground.rs:1176:            group_owner: 0,
+mir2-rs/bins/game-svr/src/ground.rs:1177:            group_member_actor_ids: &[],
+mir2-rs/bins/game-svr/src/ground.rs:1218:            group_owner: 0,
+mir2-rs/bins/game-svr/src/ground.rs:1219:            group_member_actor_ids: &[],
+mir2-rs/bins/game-svr/src/ground.rs:1251:            group_owner: 0,
+mir2-rs/bins/game-svr/src/ground.rs:1252:            group_member_actor_ids: &[],
+
+===== [10] 组队经验分配（GainExp group 分支）——no match =====
+(no match)
+
+===== [11] DB 列 AllowGroup（既有列，非本卡新增） =====
+119:        allow_group: u8::try_from(int_col(&row, "AllowGroup")?).context("AllowGroup 越界")?,
+126:        allow_group_re_call: bool_col(&row, "AllowGroupReCall")?,
+398:     IncHealing = ?, CreditPoint = ?, BonusPoint = ?, HungerStatus = ?, PayMentPoint = ?, LockLogon = ?, MarryCount = ?, AllowGroupReCall = ?, \
+440:        // C# 既有 bug：`@AllowGroupReCall` 绑的是 `hd.AllowGroup`。
+792:/// C# `PlayDataStorage.CreateCharacters`（写完整 `CharacterData` 字段，`AllowGroupReCall` 收的是 `AllowGroup`）。
+801:         HungerStatus, PayMentPoint, LockLogon, MarryCount, AllowGroupReCall, GroupRcallTime, AllowGuildReCall, IsMaster, MasterName, DearName \
