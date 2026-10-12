@@ -1,40 +1,26 @@
-# 受影响 target ≥3 连跑（默认线程）
-[gate default run 1] test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.76s
-[gate default run 2] test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.16s
-[gate default run 3] test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.20s
-[svr  default run 1] test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.60s
-[svr  default run 2] test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.16s
-[svr  default run 3] test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.48s
+# 受影响 target 连跑（最终 head）——默认线程 ×3 + --test-threads=32 ×3 + 并发 ×6
+# 被测代码 head = f55911f0（本分支 merge 当前 master 031ff37e 后）；base = 031ff37e。
 
-# --test-threads=32 ×3（gate/svr 各）
-### gate --test-threads=32 run 1
-test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.79s
-### svr --test-threads=32 run 1
-test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.19s
-### gate --test-threads=32 run 2
-test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.79s
-### svr --test-threads=32 run 2
-test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.14s
-### gate --test-threads=32 run 3
-test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.75s
-### svr --test-threads=32 run 3
-test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.05s
+[gate default 1] test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.77s
+[svr  default 1] test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.19s
+[gate t32 1] test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.75s
+[svr  t32 1] test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.03s
+[gate default 2] test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.72s
+[svr  default 2] test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.10s
+[gate t32 2] test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.67s
+[svr  t32 2] test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.36s
+[gate default 3] test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.83s
+[svr  default 3] test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.18s
+[gate t32 3] test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.69s
+[svr  t32 3] test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.07s
+[seed_inject] test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.00s
 
-# 两个 test binary 并发 ×6（各 --test-threads=16）
-iter 1: svr rc=0 test result: ok. 16 passed; 0 failed | gate rc=0 test result: ok. 14 passed; 0 failed
-iter 2: svr rc=0 test result: ok. 16 passed; 0 failed | gate rc=0 test result: ok. 14 passed; 0 failed
-iter 3: svr rc=0 test result: ok. 16 passed; 0 failed | gate rc=0 test result: ok. 14 passed; 0 failed
-iter 4: svr rc=0 test result: ok. 16 passed; 0 failed | gate rc=0 test result: ok. 14 passed; 0 failed
-iter 5: svr rc=0 test result: ok. 16 passed; 0 failed | gate rc=0 test result: ok. 14 passed; 0 failed
-iter 6: svr rc=0 test result: ok. 16 passed; 0 failed | gate rc=0 test result: ok. 14 passed; 0 failed
+# 两个 test binary 并发 ×6（各 --test-threads=16，--skip teeth 以隔离继电器用例）
+#   game-gate = relay-6a598fbef552edc3.exe / game-svr = relay-280172755705bc2a.exe
+iter 1: svr rc=0 test result: ok. 13 passed; 0 failed | gate rc=0 test result: ok. 11 passed; 0 failed
+iter 2: svr rc=0 test result: ok. 13 passed; 0 failed | gate rc=0 test result: ok. 11 passed; 0 failed
+iter 3: svr rc=0 test result: ok. 13 passed; 0 failed | gate rc=0 test result: ok. 11 passed; 0 failed
+iter 4: svr rc=0 test result: ok. 13 passed; 0 failed | gate rc=0 test result: ok. 11 passed; 0 failed
+iter 5: svr rc=0 test result: ok. 13 passed; 0 failed | gate rc=0 test result: ok. 11 passed; 0 failed
+iter 6: svr rc=0 test result: ok. 13 passed; 0 failed | gate rc=0 test result: ok. 11 passed; 0 failed
 any_fail=0
-
-# game-svr 同 crate 同源 target：seed_inject
-test support::teeth::ports_are_unique_across_parallel_callers ... ok
-test support::teeth::ports_live_outside_the_os_dynamic_range ... ok
-test invalid_seed_env_exits_nonzero ... ok
-test seed_env_injection_logs_csharp_probe ... ok
-test unset_seed_env_is_inert ... ok
-
-test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.28s
-

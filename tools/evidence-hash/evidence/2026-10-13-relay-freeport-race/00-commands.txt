@@ -1,6 +1,6 @@
 卡：openmir2-m2-flaky-relay-testports（门禁卫生：relay free_port() TOCTOU）
 车道：m3bag / principal openmir2-worker-4 / worktree E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3bag
-分支：worktree-m2-relay-testports（base = master 518a9ad9）
+分支：worktree-m2-relay-testports（base = master 031ff37e；开工时 origin/master 从 518a9ad9 前进到 031ff37e，已在交付前 forward-merge 消除回退假差量）
 隔离 target：CARGO_TARGET_DIR=E:/tmp/m3bag-relay-target（全部 cargo 命令 --offline）
 
 # --- 受影响 target 连跑（默认线程） ---
