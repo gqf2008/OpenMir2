@@ -99,11 +99,14 @@ owner 裁决：同种子「逐 k 完全一致」当前不成立，因为攻击�
 
 ## 5. 四门禁（本片零 `.rs`；隔离 `CARGO_TARGET_DIR=E:/tmp/m3bag-fij-target`，在 `mir2-rs/` 下跑）
 
+> 2026-10-12 15:37 在**合并 master `fd6a02e1` 后的 head**上重跑（`06`–`09` + `04`/`13` 同步刷新）：
+> 本片零 `.rs` ⇒ 门禁结果只随 master 新增用例变化（`648 → 654 passed`）。
+
 | 件 | 命令 | 结果 |
 |---|---|---|
 | `06-gate-fmt.txt` | `cargo fmt --all -- --check` | rc=0 |
 | `07-gate-clippy.txt` | `cargo clippy --workspace --all-targets --offline -- -D warnings` | rc=0 |
-| `08-gate-test.txt` | `cargo test --workspace --offline` | **79 suites / 648 passed / 0 failed / 16 ignored**，rc=0 |
+| `08-gate-test.txt` | `cargo test --workspace --offline` | **79 suites / 654 passed / 0 failed / 16 ignored**，rc=0 |
 | `09-gate-msgcodegen.txt` | `cargo run -q -p msgcodegen --offline -- --check` | 604 条一致，rc=0 |
 
 ## 6. 复现命令
