@@ -1,0 +1,15 @@
+# 隔离口径下 120 击（首次、无冒烟）各侧攻击路径分流站点取数次数
+# C# 侧 trace = provenance/csharp2-rng-stream.tsv；Rust 侧 = rust2/rng-stream.tsv
+canon/csharp-site                                    C# Rust-equivalent
+atk_power_a(PlayObject.cs:2929)                     120      120
+atk_power_b(PlayObject.cs:2934)                     120      120
+atk_power_base(BaseObject.Base.cs:892)               16        0
+hit_gate(BaseObject.Attack.cs:41)                    19       38
+hit_struck_damage(BaseObject.Base.cs:792)            17       19
+hit_struck_damage2(BaseObject.Base.cs:793)            4        0
+struck_durability(PlayObject.cs:2957)                 1       19
+struck_durability_slot(PlayObject.cs:3000)            0        0
+attack_success(PlayObject.Attack.cs:223)              3       38
+
+C# 攻击路径分流取数合计 = 300
+Rust 攻击路径分流取数合计 = 354

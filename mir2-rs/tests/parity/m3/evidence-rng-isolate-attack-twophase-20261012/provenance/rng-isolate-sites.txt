@@ -1,0 +1,31 @@
+# M3②③ 活栈隔离口径 —— C# 影子 hook 的**静态分流站点**清单（唯一事实源，嵌入 RngSeedHook.dll）。
+#
+# 每行一个 `Type.Method@file:line`（PDB/JIT 归因行，与运行期 hook 记录的 site 同形）。
+# 开启 `MIR2_RNG_ISOLATE_ATTACK` 时，hook 只把这些调用点的取数委托给 `Random(attack_seed)`
+# （attack_seed = MIR2_RNG_SEED + 0x9E37，i32 回绕），其余取数仍走原全局流；并把本清单原样
+# 落盘为「静态分流站点 dump」（env `MIR2_RNG_ISOLATE_SITES`）。
+#
+# 机判（缺一条 / 多一条都 fail-closed）：
+#   python mir2-rs/tests/parity/m3/rng-isolate-attack/check_predicates.py table-vs-csharp \
+#     --csharp mir2-rs/tests/parity/m3/rng-hook/divert-sites.txt
+#
+# 本清单必须与 tests/parity/m3/rng-isolate-attack/attack_sites.tsv 的
+# `side=csharp, divert=1` 行逐条一致（11 个 divert canon）。
+# atk_power_a / atk_power_b（玩家攻方 Luck<=0；PDB 归因 2929/2934）
+M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929
+M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2934
+# atk_power_luck_a / atk_power_luck_b（玩家攻方 Luck>0；夹具 Luck=0 未触发，行号待实测校准）
+M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2918
+M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2924
+# atk_power_base（非玩家攻方基版 GetAttackPower）
+M2Server.Actor.BaseObject.GetAttackPower@BaseObject.Base.cs:892
+# hit_gate（_Attack 命中门）
+M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41
+# hit_struck_damage / hit_struck_damage2（护甲减免两抽；PDB 归因 792/793）
+M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:792
+M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:793
+# struck_durability / struck_durability_slot（玩家目标受击 Random(10) + 逐格 Random(8)）
+M2Server.Player.PlayObject.StruckDamage@PlayObject.cs:2957
+M2Server.Player.PlayObject.StruckDamage@PlayObject.cs:3000
+# attack_success（PDB 归因 223；同方法的 221 attack_paralysis divert=0，故意不在本清单）
+M2Server.Player.PlayObject.AttackSuccess@PlayObject.Attack.cs:223
