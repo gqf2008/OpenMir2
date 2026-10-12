@@ -1,0 +1,53 @@
+# M3②③ k=2 分岔（m2-svr 半）· 复现与验证命令（2026-10-12）
+
+写入集：`mir2-rs/bins/game-svr/src/main.rs`（不改 `crates/world/**`、不改夹具、不改 `src/**`）。
+
+## 1) 独立复现（真机两侧、同种子 seed=42、图 0137）
+
+```sh
+# C# oracle 栈（带 RNG 同种子钩子；M2GameSvr 冻结基线未动）
+powershell -ExecutionPolicy Bypass -File E:/tmp/m3cs-tick/start-csharp-hook.ps1 -Seed 42
+python - <<'PY'  # 略：见 run_attack_pair 的参数
+PY
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 \
+  -Side csharp -Bots 2 -AttackCount 120 -AttackPinPair -Prefix m2svrk2c1 \
+  -CsharpSeedLog E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv
+powershell -ExecutionPolicy Bypass -File E:/tmp/m3cs-tick/start-csharp-hook.ps1 -Stop
+# → 会话 csharp-20261012-170110：attacked=120 hits=2 dodges=118 sum=4（非平凡门绿）
+
+# Rust 栈（先 pre-fix 二进制 = master 8ac62fb8，再 post-fix = 本 patch）
+powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 \
+  -RustBinDir E:/tmp/m3cs-b1b2-target/debug -Seed 42 -LogDir E:/tmp/m2svr-k2/rust-stack-prefix
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 \
+  -Side rust -Bots 2 -AttackCount 120 -AttackPinPair -Prefix m2svrk2r0 \
+  -PeerSession csharp-20261012-170110 \
+  -RustSeedLog E:/tmp/m2svr-k2/rust-stack-prefix/game-svr.out.log
+powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 \
+  -LogDir E:/tmp/m2svr-k2/rust-stack-prefix -Stop
+# → 会话 rust-20261012-171710：attacked=120 hits=0 sum=0（非平凡门 RED，复现 m3cs 的 k=2 现象）
+
+# post-fix 同上（换 post-fix 二进制 / -LogDir rust-stack-postfix / -Prefix m2svrk2r2）
+# → 会话 rust-20261012-171957：attacked=120 hits=19 sum=19（非平凡门绿；跨侧 diff 仍非 0，见 README §4）
+```
+
+## 2) 红检（改坏必红）
+
+```sh
+# 把 apply_ability_to_entity 里的 `e.dc = i32::from(wabil.dc);` 注释掉
+CARGO_TARGET_DIR=E:/tmp/m3cs-b1b2-target cargo test -p game-svr --offline apply_ability_to_entity_loads_wabil_and_sub
+# → FAILED：left: 0 right: 257（原始件 redcheck-dc-assignment-removed.txt），随即将该行还原
+```
+
+## 3) 四门禁（隔离 target）
+
+```sh
+cd mir2-rs
+CARGO_TARGET_DIR=E:/tmp/m3cs-b1b2-target cargo fmt --all -- --check
+CARGO_TARGET_DIR=E:/tmp/m3cs-b1b2-target cargo clippy --workspace --all-targets --offline -- -D warnings
+CARGO_TARGET_DIR=E:/tmp/m3cs-b1b2-target cargo test --workspace --offline
+CARGO_TARGET_DIR=E:/tmp/m3cs-b1b2-target cargo run -p msgcodegen --offline -- --check
+```
+
+## 4) 窗口
+
+起栈前实拍端口（仅共享 3306 在听）；收工 `-Stop` 后十端口回落（5000/5100/5500/5600/5700/6000/7000/7100/7200 全 DOWN）。

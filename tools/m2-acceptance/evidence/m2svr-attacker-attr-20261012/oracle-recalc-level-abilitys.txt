@@ -1,0 +1,18 @@
+# oracle：L1 战士登录时 WAbil.DC 的来源（不是 characters_ablity.Dc）
+# 源：src/M2Server/Player/PlayObject.cs（只读 oracle，未改）
+
+--- PlayObject.cs:5305（RecalcLevelAbilitys，Warrior 分支）---
+                    Abil.DC = HUtil32.MakeWord((ushort)HUtil32._MAX(nLevel / 5 - 1, 1), (ushort)HUtil32._MAX(1, nLevel / 5));
+                    Abil.SC = 0;
+                    Abil.MC = 0;
+                    Abil.AC = HUtil32.MakeWord(0, (ushort)(nLevel / 7));
+                    Abil.MAC = 0;
+                    break;
+                case PlayerJob.None:
+                    break;
+            }
+            if (Abil.HP > Abil.MaxHP)
+            {
+
+--- PlayObject.cs:5290（RecalcLevelAbilitys 的触发点备注）---
+Abil.DC = MakeWord(MAX(Level/5-1,1), MAX(1, Level/5))  ⇒ L1 = MakeWord(1,1) = 0x0101

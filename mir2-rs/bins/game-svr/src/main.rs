@@ -1772,6 +1772,34 @@ fn handle_move_cmd(
     }
 }
 
+/// M3②③ k=2 收口（真机攻方属性装载）：把 `RecalcAbilitys()` 产出的 `WAbil`/`SubAbility`
+/// 写进 **世界实体**。
+///
+/// oracle 登录序 = `AbilCopyToWAbil()` → `RecalcLevelAbilitys()` → `RecalcAbilitys()`
+/// （`WorldServer.cs:351` / `PlayObject.cs:1308`），此后 `_Attack` 读的就是这些字段：
+/// - `Entity.dc`/`ac` ← `WAbil.DC`/`WAbil.AC`（`BaseObject.Attack.cs:25/27` 的
+///   `GetBaseAttackPoewr`；`BaseObject.Base.cs:789` 的 `GetHitStruckDamage`）；
+/// - `Entity.hit_point`/`speed_point` ← `SubAbility.HitPoint`/`SpeedPoint`
+///   （`BaseObject.Attack.cs:41` 的命中门 `HitPoint < RandomByte(target.SpeedPoint)`）；
+/// - `Entity.hp`/`max_hp` ← `WAbil.HP`/`MaxHP`；`Entity.level` ← `WAbil.Level`。
+///
+/// 此前这三组只喂了 52/752/50/41 帧，实体仍是 `Entity::new` 的空属性
+/// （`dc/ac/hit_point/speed_point=0`、`hp/max_hp=100`）⇒ 攻方攻击力恒 0，且
+/// **守方** `hit_point==0` 让命中门短路 ⇒ 真机 120 击全记躲闪（`attack_diff.py` 的 k=2 分岔根因）。
+fn apply_ability_to_entity(
+    e: &mut mir2_world::Entity,
+    wabil: &game_svr::ability::Ability,
+    sub: &game_svr::ability::SubAbility,
+) {
+    e.dc = i32::from(wabil.dc);
+    e.ac = i32::from(wabil.ac);
+    e.hit_point = sub.hit_point;
+    e.speed_point = sub.speed_point;
+    e.hp = wabil.hp;
+    e.max_hp = wabil.max_hp;
+    e.level = wabil.level;
+}
+
 /// `openmir2-m3-attack-magic-wiring`（第一片）——`CM_HIT`/`CM_HEAVYHIT`/`CM_BIGHIT`/
 /// `CM_POWERHIT`/`CM_LONGHIT`/`CM_WIDEHIT`/`CM_FIREHIT`/`CM_CRSHIT`/`CM_TWINHIT` 9 条攻击命令的派发。
 ///
@@ -3477,6 +3505,16 @@ fn sim_loop(
                                                 // GBK 原文（oracle `MessageSettings.CanotPickUpItem`）。
                                                 if let (Some(d), Some(a)) = (data, ability_inputs.as_ref()) {
                                                     let out = enter::recalc_for_session(a, d.job);
+                                                    // M3②③ k=2 收口：同一份 `RecalcAbilitys` 输出**同时**写进世界实体
+                                                    // （此前只喂 52/752 帧，实体属性仍是 `Entity::new` 的空值）。
+                                                    if let Some(e) = world.entities.get_mut(id) {
+                                                        apply_ability_to_entity(e, &out.wabil, &out.sub);
+                                                    } else {
+                                                        glog!(
+                                                            "WRN",
+                                                            "进世界后找不到 actor_id={id} 的实体 ⇒ 攻击/命中属性未装载（登记）"
+                                                        );
+                                                    }
                                                     ground_sessions.insert(
                                                         head.chr_name.clone(),
                                                         SessionGround {
@@ -4300,6 +4338,66 @@ async fn send_raw(tx: &Arc<Mutex<OwnedWriteHalf>>, wire: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// M3②③ k=2 收口红检：`apply_ability_to_entity` 必须把 `WAbil`/`SubAbility` **真写进世界实体**。
+    ///
+    /// 锚 oracle：L1 战士登录时 `RecalcLevelAbilitys()` 把 `Abil.DC` 设为
+    /// `MakeWord(MAX(1/5-1,1), MAX(1,1/5)) = 0x0101`（`PlayObject.cs:5305`），此后
+    /// `GetBaseAttackPoewr` 取 `LoByte(DC)=1` 作为攻击力（`BaseObject.Attack.cs:25/27`）；
+    /// `SubAbility.HitPoint/SpeedPoint = 5/15`（`BaseObject.Attack.cs:41` 的命中门）。
+    /// **改坏（逐字段）**：删掉 `apply_ability_to_entity` 里任一赋值行（如 `e.dc = ...`）
+    /// ⇒ 本用例必红。修复前的真机形态 = 全部默认 0（本用例开头的断言锁死它）。
+    #[test]
+    fn apply_ability_to_entity_loads_wabil_and_sub() {
+        let mut e = mir2_world::Entity::new(0, "k2", 17, 20);
+        // 进世界前的空实体默认值（＝修复前真机形态：dc/ac/hit_point/speed_point=0）。
+        assert_eq!((e.dc, e.ac, e.hit_point, e.speed_point), (0, 0, 0, 0));
+        let wabil = game_svr::ability::Ability {
+            level: 1,
+            reserved1: 0,
+            ac: 0,
+            mac: 0,
+            dc: 0x0101, // L1 战士 `RecalcLevelAbilitys` 的等级派生 DC
+            mc: 0,
+            sc: 0,
+            hp: 18,
+            mp: 15,
+            max_hp: 19,
+            max_mp: 15,
+            reserved2: 0,
+            exp_count: 0,
+            exp_max_count: 0,
+            exp: 0,
+            max_exp: 10,
+            weight: 0,
+            max_weight: 50,
+            wear_weight: 0,
+            max_wear_weight: 15,
+            hand_weight: 0,
+            max_hand_weight: 12,
+        };
+        let sub = game_svr::ability::SubAbility {
+            hit_point: 5,
+            speed_point: 15,
+            ..game_svr::ability::SubAbility::default()
+        };
+        apply_ability_to_entity(&mut e, &wabil, &sub);
+        assert_eq!(
+            e.dc, 0x0101,
+            "攻方 DC ← WAbil.DC（GetBaseAttackPoewr 取 LoByte=1，不是 0）"
+        );
+        assert_eq!(e.ac, 0, "目标 AC ← WAbil.AC");
+        assert_eq!(
+            (e.hit_point, e.speed_point),
+            (5, 15),
+            "命中门 HitPoint/SpeedPoint ← SubAbility"
+        );
+        assert_eq!(
+            (e.hp, e.max_hp, e.level),
+            (18, 19, 1),
+            "HP/MaxHP/Level ← WAbil"
+        );
+    }
 
     /// F2（reviewer-2）的判据：`ProcessBufferSend` `:58-90` 的四条分支，**含"刚超时清零的那一包也要压住"**。
     #[test]

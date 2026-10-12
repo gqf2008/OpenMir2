@@ -1,0 +1,44 @@
+# C# oracle 真机 120 击里两次「攻方命中」的 RNG 调用序列（csharp-20261012-170110 那一次的 rng-stream）
+# 源：E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv（C# 栈 MIR2_RNG_SEED=42 / MIR2_RNG_LOG）
+# 列：seq <TAB> 调用形态 <TAB> 参数(max) <TAB> 结果 <TAB> 调用点
+
+## hit A（k=3）：223799-223817
+223797	Next(max)	20	4	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+223798	Next(max)	20	17	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+223799	Next(max)	1	0	M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929
+223800	Next(max)	10	5	M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2934
+223801	Next(max)	20	18	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+223802	Next(max)	15	1	M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41
+223803	Next(max)	20	17	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+223804	Next(max)	20	13	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+223805	Next(max)	20	11	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+223806	Next(max)	20	9	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+223807	Next(max)	20	10	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+223808	Next(max)	20	8	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+223809	Next(max)	20	16	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+223810	Next(max)	20	7	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+223811	Next(max)	20	13	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+223812	Next(max)	20	14	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+223813	Next(max)	20	13	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+223814	Next(max)	20	17	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+223815	Next(max)	1	0	M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:792
+
+## hit B（k=4）：225618-225627
+225616	Next(max)	20	17	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+225617	Next(max)	20	9	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+225618	Next(max)	1	0	M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929
+225619	Next(max)	10	7	M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2934
+225620	Next(max)	20	7	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+225621	Next(max)	15	0	M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41
+225622	Next(max)	20	16	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+225623	Next(max)	1	0	M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:792
+225624	Next(max)	20	16	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+225625	Next(max)	10	7	M2Server.Player.PlayObject.StruckDamage@PlayObject.cs:2957
+
+## 关键读数（逐条）
+# 223799 PlayObject.GetAttackPower@2929  Next(max=1)->0  ⇒ nBasePower=LoByte(WAbil.DC) 未加随机（HiByte-LoByte<=0 ⇒ nPower=0）
+# 223800 PlayObject.GetAttackPower@2934  Next(max=10)->5  ⇒ Luck<=0 的 result=nBasePower 分支
+# 223802 BaseObject._Attack@41           Next(max=15)->1  ⇒ 命中门 RandomByte(target.SpeedPoint=15)，未躲闪
+# 223815 GetHitStruckDamage@792          Next(max=1)->0   ⇒ 目标 AC 低字节=0，伤害未减免
+# 223816 PlayObject.StruckDamage@2957     Next(max=10)->7  ⇒ 目标是玩家（玩家 StruckDamage override）
+# 223817 AttackSuccess@223               Next(max=5)->0   ⇒ 攻方是玩家（AttackDir 路径）

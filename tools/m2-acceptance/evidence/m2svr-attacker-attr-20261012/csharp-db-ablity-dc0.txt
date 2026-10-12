@@ -1,0 +1,6 @@
+# C# 真机攻方/受方 characters_ablity 行（pin 后、跑完）——注意 Dc=0、Ac=1
+# 但 C# 读档把 AC 放 HiWord(HP)、忽略 Ac 列（PlayDataStorage.Query.cs:275-279），DC 读 Dc 列；
+# 登录时 RecalcLevelAbilitys() 再用等级派生值覆盖 DC=0x0101（oracle-recalc-level-abilitys.txt）。
+ChrName	Level	Ac	Dc	Hp	MaxHP
+m2svrk2c10	1	1	0	18	19
+m2svrk2c11	1	1	0	17	19
