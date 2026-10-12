@@ -1,0 +1,47 @@
+# 卡 `openmir2-m2-rust-isolate-attack-plumb` 证据命令（全程**不占真端口、不起完整栈**）
+# head: a0160cf1（worktree E:\tmp\openmir2-m2svr-iso / branch worktree-m2-isolate-plumb / base origin/master 5221f98a）
+# 被测对象：tools/m2-acceptance/rust_seed_plumb.ps1（新增第 3 条管线 MIR2_RNG_ISOLATE_ATTACK）
+#           tools/m2-acceptance/start_rust_stack.ps1（新增 -IsolateAttack）
+#           tools/m2-acceptance/check_isolate_plumb.ps1（新判据，17 项）
+
+## 1) 判据 GREEN
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/check_isolate_plumb.ps1 `
+  -GameSvrExe <main target>\debug\game-svr.exe -OutDir E:\tmp\m2-acceptance\isolate-plumb-green
+# ⇒ SUMMARY total=17 ok=17 fail=0 ; ISOLATE_PLUMB GREEN ; rc=0
+#   原始件：checks-green.txt（stdout 全文）+ checks-table.txt（逐项表）
+#   注：真 game-svr 三项（③a/③b/④a/④b）用**空闲端口 + 临时 Server.conf** 起单个 game-svr，
+#       不监听 5000/7000/7100/7200；③ 用 MIR2_RNG_LOG 流水头证明隔离确实到达生产读取点。
+
+## 2) 改坏必红（四条，逐条改坏 → 跑 1) → git checkout 还原）
+# A 删 rust_seed_plumb.ps1 的注入行 `if ($injectIso) { $env:MIR2_RNG_ISOLATE_ATTACK = '1' }`
+#   ⇒ [FAIL] ②a / ③a / ⑥b ; rc=1  → redcheck-A-injection-removed.txt
+# B 把 Resolve-Mir2IsolateAttack 的非法值 throw 换成 `return Present=$false`（静默当关）
+#   ⇒ [FAIL] ①e ; rc=1  → redcheck-B-invalid-value-silent.txt
+# C 删 start_rust_stack.ps1 的 Assert-Mir2IsolateAttackSeed 交叉守卫块
+#   ⇒ [FAIL] ⑥c ; rc=1  → redcheck-C-guard-removed.txt
+# D 注入值由 '1' 改成 '0'（Rust `attack_isolation_seed_from_env` 视角=关）
+#   ⇒ [FAIL] ②a / ③a / ⑥b ; rc=1  → redcheck-D-injected-zero.txt
+#   ⚠ 天牙发现的判据诚信缺陷：D 首跑 ③a **假绿**（`Wait-FileMatch` 读到上一轮 work/ 里陈旧
+#     的 `ISOLATE_ATTACK 40545` 行）。已在 check_isolate_plumb.ps1 加「每轮先删 work 目录」，
+#     D 复跑 ③a 正确判红（redcheck-D 即修补后原始件）。
+
+## 3) 启动器本体 fail-closed（隔离开但无种子 ⇒ 拒绝起栈、零进程）
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 `
+  -RustBinDir <main target>\debug -Force -IsolateAttack
+# ⇒ RED: 已给 -IsolateAttack/MIR2_RNG_ISOLATE_ATTACK 但无 MIR2_RNG_SEED/-Seed —— ...
+#   rc=1，输出里 START 行 = 0（未起任何进程）  → launcher-failclosed.txt
+
+## 4) 回归（既有两条管线未被本次改动破坏）
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/check_seed_plumb.ps1 `
+  -GameSvrExe <exe>  # SUMMARY total=15 ok=15 fail=0 ; SEED_PLUMB GREEN ; rc=0  → regression-seed-plumb.txt
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/check_state_log_plumb.ps1 `
+  -GameSvrExe <exe>  # SUMMARY total=15 ok=15 fail=0 ; STATE_LOG_PLUMB GREEN ; rc=0 → regression-state-log-plumb.txt
+
+## 5) 四门禁（隔离 CARGO_TARGET_DIR=E:\tmp\openmir2-m2svr-iso-target，cargo 在 mir2-rs/）
+cargo fmt --all -- --check                                         # rc=0                        → gate-fmt.txt
+cargo clippy --workspace --all-targets --offline -- -D warnings    # rc=0                        → gate-clippy.txt
+cargo test --workspace --offline                                   # rc=0; 84 suites/686 passed/0 failed/16 ignored → gate-test.txt
+cargo run -p msgcodegen --offline -- --check                       # rc=0; 604 条               → gate-msgcodegen.txt
+
+## 6) 证据 hash（仓库字节 / LF 归一口径；本目录无 .gitattributes * -text）
+python tools/evidence-hash/verify_sha256sums.py tools/m2-acceptance/evidence/m2svr-isolate-attack-plumb-20261013 --check-extra

@@ -43,6 +43,13 @@
     与 C# 半同名变量（`rng-hook` 的 `MIR2_RNG_LOG`）⇒ 两侧账本可同口径采集。
     **交叉 fail-closed**：`rng_trace` 在 `MIR2_RNG_SEED` 缺失时关掉流水（只打 stderr）⇒ 若已给 `-RngLog`
     但无种子，本脚本**拒绝起栈**（exit 1），不静默起一个永远不落 rng-stream 的栈。
+  攻击路径隔离管线（卡 `openmir2-m2-rust-isolate-attack-plumb`，M3②③ 活栈隔离口径的 Rust 半）：
+    `-IsolateAttack`（或读调用方 `MIR2_RNG_ISOLATE_ATTACK`）⇒ 起 `game-svr.exe` 时把该变量
+    **注入子进程环境（值 `1`）**，并打一行可判据的 `RUST_ISOLATE_ATTACK_INJECTED=1`；game-svr
+    （`crates/world`）据此把攻击路径取数分流到 `MIR2_RNG_SEED + 0x9E37` 的专用流。**不传 ⇒ 不注入、
+    不打该行**（与改动前逐字节一致）。取值认不出（既非开也非关）⇒ fail-closed：打印 `RED` 并 exit 1。
+    **交叉 fail-closed**：隔离开但无 `MIR2_RNG_SEED` ⇒ 拒绝起栈（`attack_isolation_seed_from_env`
+    开而无种子会 panic）。与 C# 半同名变量（`start-csharp-hook.ps1 -IsolateAttack`）⇒ 两侧同口径。
 
   判据/退出码：
     `-Stop`   按 pid 文件停掉本脚本起的进程；缺 pid 文件 ⇒ `NOTHING_TO_STOP`。
@@ -67,6 +74,9 @@
   # ②③/Claim B 逐次 rng 账本：给 Rust 半开 rng 流水（需同时给种子，否则拒绝起栈）
   powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 `
     -RustBinDir E:\tmp\openmir2-m2svr-target\debug -Seed 42 -RngLog E:\tmp\m2-acceptance\stack\rng-stream.tsv
+  # ②③ 活栈隔离口径：给 Rust 半开攻击路径专用种子流（需同时给种子，否则拒绝起栈）
+  powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 `
+    -RustBinDir E:\tmp\openmir2-m2svr-target\debug -Seed 42 -IsolateAttack
 #>
 param(
   [string]$CsharpRepo = 'E:\Users\gxh\Documents\GitHub\OpenMir2',
@@ -87,6 +97,8 @@ param(
   # ②③/Claim B 逐次 rng 流水的显式路径（空 ⇒ 回落读调用方 `MIR2_RNG_LOG`；两者皆空 ⇒ 不注入）。
   # 注：与 `-Seed` / `MIR2_RNG_SEED` 联动（rng_trace 无种子不落流水）⇒ 已给 RngLog 但无种子会 exit 1。
   [string]$RngLog     = '',
+  # ②③ 活栈隔离口径的攻击路径专用种子流开关（显式 switch；或读调用方 `MIR2_RNG_ISOLATE_ATTACK`）。
+  [switch]$IsolateAttack,
   [switch]$Stop,
   [switch]$Status,
   [switch]$Force
@@ -239,15 +251,35 @@ if ($rngLogInfo.Present) {
   Write-Output 'RNG_LOG: 未指定逐次 rng 流水（不注入，与改动前行为一致）'
 }
 
+# ---- 0d) 攻击路径专用种子流开关（M3②③ 隔离口径；未传 ⇒ `Present=$false`，零行为差）----
+$isolateInfo = $null
+try {
+  $isolateInfo = Resolve-Mir2IsolateAttack -IsolateSwitch:$IsolateAttack -EnvValue $env:MIR2_RNG_ISOLATE_ATTACK
+} catch {
+  Write-Output ("RED: " + $_.Exception.Message + " —— 拒绝在非法隔离开关取值下起栈（fail-closed）")
+  exit 1
+}
+if ($isolateInfo.Present) {
+  # 交叉 fail-closed：`attack_isolation_seed_from_env` 在开而无种子时 panic（专用流种子无法与对侧对齐）
+  # ⇒ 必须在起栈前拦住（判定已提为可单测的 helper）。
+  if (-not (Assert-Mir2IsolateAttackSeed -IsolateAttack $isolateInfo -Seed $seedInfo)) {
+    Write-Output 'RED: 已给 -IsolateAttack/MIR2_RNG_ISOLATE_ATTACK 但无 MIR2_RNG_SEED/-Seed —— attack_isolation_seed_from_env 开而无种子会 panic（exit 1，拒绝带 panic 起栈）'
+    exit 1
+  }
+  Write-Output 'ISOLATE_ATTACK: 将向 game-svr 注入 MIR2_RNG_ISOLATE_ATTACK=1（攻击路径专用流，attack_seed = MIR2_RNG_SEED + 0x9E37）'
+} else {
+  Write-Output 'ISOLATE_ATTACK: 未指定攻击路径专用流（不注入，与改动前行为一致）'
+}
+
 $started = @()
-function Start-One([string]$Name, [string]$Exe, [string[]]$ExeArgs, [string]$WorkDir, [int[]]$Ports, [int]$StopOrder, [psobject]$Seed = $null, [psobject]$StateLog = $null, [psobject]$RngLog = $null) {
+function Start-One([string]$Name, [string]$Exe, [string[]]$ExeArgs, [string]$WorkDir, [int[]]$Ports, [int]$StopOrder, [psobject]$Seed = $null, [psobject]$StateLog = $null, [psobject]$RngLog = $null, [psobject]$IsolateAttack = $null) {
   $out = Join-Path $LogDir ($Name + '.out.log')
   $err = Join-Path $LogDir ($Name + '.err.log')
   Remove-Item $out, $err -Force -ErrorAction SilentlyContinue
-  # `Start-SeededProcess` = 原 `Start-Process @sp`；仅当 `$Seed.Present` / `$StateLog.Present` / `$RngLog.Present`
-  # 时在子进程环境里注入。
+  # `Start-SeededProcess` = 原 `Start-Process @sp`；仅当 `$Seed.Present` / `$StateLog.Present` / `$RngLog.Present` /
+  # `$IsolateAttack.Present` 时在子进程环境里注入。
   $p = Start-SeededProcess -FilePath $Exe -ArgumentList $ExeArgs -WorkingDirectory $WorkDir `
-         -RedirectStandardOutput $out -RedirectStandardError $err -WindowStyle 'Hidden' -Seed $Seed -StateLog $StateLog -RngLog $RngLog
+         -RedirectStandardOutput $out -RedirectStandardError $err -WindowStyle 'Hidden' -Seed $Seed -StateLog $StateLog -RngLog $RngLog -IsolateAttack $IsolateAttack
   $script:started += [pscustomobject]@{ name = $Name; pid = $p.Id; ports = $Ports; stop_order = $StopOrder; exe = $Exe }
   Write-Output ("START {0} pid={1} ports={2}" -f $Name, $p.Id, ($Ports -join ','))
   # 传种子 ⇒ 打一行可判据的 `RUST_SEED_INJECTED=<n>`（不传 ⇒ `Get-SeedInjectedLine` 返回 `$null`，不打）。
@@ -259,6 +291,9 @@ function Start-One([string]$Name, [string]$Exe, [string[]]$ExeArgs, [string]$Wor
   # 传 rng 流水路径 ⇒ 打一行 `RUST_RNG_LOG_INJECTED=<path>`（不传 ⇒ `$null`，不打）。
   $rngLine = Get-RngLogInjectedLine -RngLog $RngLog
   if (-not [string]::IsNullOrEmpty($rngLine)) { Write-Output $rngLine }
+  # 传隔离开关 ⇒ 打一行 `RUST_ISOLATE_ATTACK_INJECTED=1`（不传 ⇒ `$null`，不打）。
+  $isoLine = Get-IsolateAttackInjectedLine -IsolateAttack $IsolateAttack
+  if (-not [string]::IsNullOrEmpty($isoLine)) { Write-Output $isoLine }
 }
 
 # ---- 1) MySQL ----
@@ -281,7 +316,7 @@ Start-One -Name 'DBSrv'    -Exe $dbsrvExe -ExeArgs @() -WorkDir $dbsrvDir -Ports
 Start-One -Name 'LoginSrv' -Exe $lsrvExe  -ExeArgs @() -WorkDir $lsrvDir  -Ports @(5500, 5600)       -StopOrder 6
 
 # ---- 3) Rust game-svr（先于网关：网关注册需要 GameSvr 在） ----
-Start-One -Name 'game-svr'   -Exe $gsvrExe -ExeArgs @($gsvrConf) -WorkDir (Split-Path $gsvrConf -Parent) -Ports @(5000)           -StopOrder 5 -Seed $seedInfo -StateLog $stateLogInfo -RngLog $rngLogInfo
+Start-One -Name 'game-svr'   -Exe $gsvrExe -ExeArgs @($gsvrConf) -WorkDir (Split-Path $gsvrConf -Parent) -Ports @(5000)           -StopOrder 5 -Seed $seedInfo -StateLog $stateLogInfo -RngLog $rngLogInfo -IsolateAttack $isolateInfo
 # ---- 4) Rust 三网关 ----
 Start-One -Name 'login-gate' -Exe $lgExe   -ExeArgs @($lgConf)   -WorkDir (Split-Path $lgConf  -Parent) -Ports @(7000)           -StopOrder 1
 Start-One -Name 'sel-gate'   -Exe $sgExe   -ExeArgs @($sgConf)   -WorkDir (Split-Path $sgConf  -Parent) -Ports @(7100)           -StopOrder 2
