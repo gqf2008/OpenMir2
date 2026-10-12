@@ -1,0 +1,26 @@
+# owner 22:35 第 ③ 条：第一处请求分歧的站点 + 触发条件（stack2 = cA vs rA）
+
+原始专用流逐次请求序列（比较键 = (kind, arg)，与 compare_dedicated_streams.py 同口径；
+Rust 侧已只取攻击路径站点，滤掉 bins/game-svr/src/main.rs:2884 的 8 次非攻击取数）：
+  #1  C# ('Next(max)', 1)       BaseObject.Base.cs:892                        | Rust ('Next(max)', 1)       crates/world/src/combat.rs:109
+  #2  C# ('Next(max)', 8)       BaseObject.Attack.cs:41                       | Rust ('Next(max)', 10)      crates/world/src/combat.rs:111
+  #3  C# ('Next(max)', 1)       BaseObject.Base.cs:792                        | Rust ('Next(max)', 15)      crates/world/src/combat.rs:758
+  #4  C# ('Next(max)', 1)       BaseObject.Base.cs:892                        | Rust ('Next(min,max)', 1)   crates/world/src/combat.rs:628
+
+first divergence (0-based) = 1  ⇒ 1-based index = 2   class = base_unit
+  C#  : hit_gate(8)->3                 [站点 = BaseObject.Attack.cs:41，属**非玩家 base 单元**]
+  Rust: atk_power_b(10)->4             [站点 = crates/world/src/combat.rs:111，属玩家单元]
+
+触发条件（逐次）：
+  * C# 专用流第 1 次 = atk_power_base(Next(max),1) —— 非玩家攻方 BaseObject.GetAttackPower
+    （oracle src/M2Server/Actor/BaseObject.Base.cs:886，Random 在 :892）；
+  * 它的 (kind,arg) 与 Rust 第 1 次 atk_power_a(Next(max),1) **完全相同**（都是 Random(1)，恒 0）
+    ⇒ 第 1 次不比出差异；
+  * 第 2 次：C# = 该 base 单元的命中门 _Attack@41(Next(max),8)；Rust = 玩家单元的 atk_power_b(Next(max),10)
+    ⇒ 逐次比对第一处分歧（index=2，1-based）。
+
+⇒ 第一处分歧落在**非玩家 base 单元**（class=base_unit），**不在玩家攻击路径内**。
+   玩家路径的取数次序/次数两侧同形（见 06）；两侧 player 单元模板违规 = 0（02-analyze-stack2.txt）。
+
+交叉印证（stack1 = 含 20 冒烟 + 两次 120）：同一处分歧（C# hit_gate(8)->3 vs Rust atk_power_b(10)->4），
+class 同为 base_unit（03-analyze-stack1.txt）。

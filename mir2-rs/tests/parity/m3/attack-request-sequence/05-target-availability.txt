@@ -1,0 +1,59 @@
+### C# cA (csharp-20261012-215606)
+=== session csharp-cA  ===
+attacked=120 hits=2 dodges=118 death_k=None min_hp=18
+逐 k 有目标（hit=true 或 maxhp>0）的击号 = [2, 3]
+第一处无目标的击号 = 4
+bot.log role=struck 行数 = 2；[ERR] 行数 = 3
+  STRUCK 21:56:44.699 {"dmg":1,"hp":18,"maxhp":19,"src":1105911852,"actor":1512982481,"my":1512982481}
+  STRUCK 21:56:44.855 {"dmg":1,"hp":18,"maxhp":19,"src":1105911852,"actor":1512982481,"my":1105911852}
+  ERR    21:56:44.999 [ERR] Object reference not set to an instance of an object.
+  ERR    21:56:45.156 [ERR] Object reference not set to an instance of an object.
+  ERR    21:56:45.347 [ERR] Object reference not set to an instance of an object.
+gate 连接断开行 = ['21:57:44.274 [INF] 断开链接: 127.0.0.1', '21:57:44.274 [INF] 断开链接: 127.0.0.1', '21:58:09.367 [INF] 游戏网关[127.0.0.1:7200] 游戏引擎[127.0.0.1:5000]断开链接.']
+
+### Rust rA (rust-20261012-215832)
+=== session rust-rA  ===
+attacked=120 hits=19 dodges=101 death_k=38 min_hp=0
+逐 k 有目标（hit=true 或 maxhp>0）的击号 = [1, 2, 3, 4, 5, 10, 12, 14, 18, 21, 22, 24, 26, 27, 28, 33, 34, 36, 38]
+第一处无目标的击号 = 39
+bot.log role=struck 行数 = 19；[ERR] 行数 = 119
+  STRUCK 21:59:07.709 {"dmg":1,"hp":18,"maxhp":19,"src":1,"actor":2,"my":2}
+  STRUCK 21:59:08.110 {"dmg":1,"hp":17,"maxhp":19,"src":1,"actor":2,"my":2}
+  STRUCK 21:59:08.710 {"dmg":1,"hp":16,"maxhp":19,"src":1,"actor":2,"my":2}
+  STRUCK 21:59:09.111 {"dmg":1,"hp":15,"maxhp":19,"src":1,"actor":2,"my":2}
+  STRUCK 21:59:09.713 {"dmg":1,"hp":14,"maxhp":19,"src":1,"actor":2,"my":2}
+  STRUCK 21:59:12.119 {"dmg":1,"hp":13,"maxhp":19,"src":1,"actor":2,"my":2}
+  STRUCK 21:59:13.121 {"dmg":1,"hp":12,"maxhp":19,"src":1,"actor":2,"my":2}
+  STRUCK 21:59:14.123 {"dmg":1,"hp":11,"maxhp":19,"src":1,"actor":2,"my":2}
+  STRUCK 21:59:16.328 {"dmg":1,"hp":10,"maxhp":19,"src":1,"actor":2,"my":2}
+  STRUCK 21:59:17.731 {"dmg":1,"hp":9,"maxhp":19,"src":1,"actor":2,"my":2}
+  STRUCK 21:59:18.333 {"dmg":1,"hp":8,"maxhp":19,"src":1,"actor":2,"my":2}
+  STRUCK 21:59:19.336 {"dmg":1,"hp":7,"maxhp":19,"src":1,"actor":2,"my":2}
+  STRUCK 21:59:20.338 {"dmg":1,"hp":6,"maxhp":19,"src":1,"actor":2,"my":2}
+  STRUCK 21:59:20.739 {"dmg":1,"hp":5,"maxhp":19,"src":1,"actor":2,"my":2}
+  STRUCK 21:59:21.341 {"dmg":1,"hp":4,"maxhp":19,"src":1,"actor":2,"my":2}
+  STRUCK 21:59:23.748 {"dmg":1,"hp":3,"maxhp":19,"src":1,"actor":2,"my":2}
+  STRUCK 21:59:24.349 {"dmg":1,"hp":2,"maxhp":19,"src":1,"actor":2,"my":2}
+  STRUCK 21:59:25.352 {"dmg":1,"hp":1,"maxhp":19,"src":1,"actor":2,"my":2}
+  STRUCK 21:59:26.356 {"dmg":1,"hp":0,"maxhp":19,"src":1,"actor":2,"my":2}
+  ERR    21:59:08.109 [ERR] Object reference not set to an instance of an object.
+  ERR    21:59:08.710 [ERR] Object reference not set to an instance of an object.
+  ERR    21:59:09.111 [ERR] Object reference not set to an instance of an object.
+  ERR    21:59:09.713 [ERR] Object reference not set to an instance of an object.
+  ERR    21:59:10.114 [ERR] Object reference not set to an instance of an object.
+  ERR    21:59:10.715 [ERR] Object reference not set to an instance of an object.
+  ERR    21:59:11.116 [ERR] Object reference not set to an instance of an object.
+  ERR    21:59:11.718 [ERR] Object reference not set to an instance of an object.
+
+### C# c1 (csharp-20261012-214806)
+=== session csharp-c1  ===
+attacked=120 hits=1 dodges=119 death_k=None min_hp=18
+逐 k 有目标（hit=true 或 maxhp>0）的击号 = [3]
+第一处无目标的击号 = 4
+bot.log role=struck 行数 = 2；[ERR] 行数 = 3
+  STRUCK 21:48:44.614 {"dmg":1,"hp":18,"maxhp":19,"src":1328286931,"actor":756512031,"my":756512031}
+  STRUCK 21:48:44.676 {"dmg":1,"hp":18,"maxhp":19,"src":1328286931,"actor":756512031,"my":1328286931}
+  ERR    21:48:44.869 [ERR] Object reference not set to an instance of an object.
+  ERR    21:48:44.963 [ERR] Object reference not set to an instance of an object.
+  ERR    21:48:45.424 [ERR] Object reference not set to an instance of an object.
+gate 连接断开行 = ['21:47:51.386 [INF] 断开链接: 127.0.0.1', '21:47:51.386 [INF] 断开链接: 127.0.0.1', '21:49:44.408 [INF] 断开链接: 127.0.0.1', '21:49:44.408 [INF] 断开链接: 127.0.0.1', '21:51:35.954 [INF] 断开链接: 127.0.0.1', '21:51:35.954 [INF] 断开链接: 127.0.0.1']
