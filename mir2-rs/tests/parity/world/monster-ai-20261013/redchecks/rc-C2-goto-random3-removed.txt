@@ -1,0 +1,24 @@
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\world)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.67s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m2svr-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 1 test
+test monai::tests::goto_target_xy_walks_and_consumes_one_random3 ... FAILED
+
+failures:
+
+---- monai::tests::goto_target_xy_walks_and_consumes_one_random3 stdout ----
+
+thread 'monai::tests::goto_target_xy_walks_and_consumes_one_random3' (3292) panicked at crates\world\src\monai.rs:745:9:
+assertion `left == right` failed
+  left: 857019877
+ right: 1923929452
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    monai::tests::goto_target_xy_walks_and_consumes_one_random3
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 46 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-world --lib`
