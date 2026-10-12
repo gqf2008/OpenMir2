@@ -15,18 +15,24 @@
 //! Rust 侧被测实现：`crates/world/src/combat.rs`（`attack_with` + `AttackPowerMode::Player`）
 //! 与 `crates/world/src/magic.rs`。
 //!
-//! 红检（自动）：七条 `redcheck_*` 把**同一比较函数**作用在被改坏一个数的向量副本上，
+//! 红检（自动）：八条 `redcheck_*` 把**同一比较函数**作用在被改坏一个数的向量副本上，
 //! 断言必出差异 —— 证明「逐字段一致」不是恒绿。
+//!
+//! 第五片新增：39（`SKILL_GROUPDEDING`→`MagGroupDeDing`）群体物理伤害用例（`group_melee`），
+//! 以及 `dospell_classes_are_fully_registered` —— 把真魔表每一行按 oracle `DoSpell` 控制流
+//! 归入唯一确定的分派类别（warr/magicid 拒绝、implemented、context_required、no_effect_case、
+//! no_switch_case）并逐类钉死行数（DoD③「未实装逐条登记，不许静默漏」的机器门禁）。
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use mir2_data::models::MagicInfo;
 use mir2_shared::rng::RandomNumber;
 use mir2_world::magic::{
-    can_read_book, get_spell_point, magic_attack_interval, power_defence_area, power_fire_wall,
-    power_get_power_plus_mc, power_get_power_plus_sc, power_heal_get_power_plus_sc2,
-    power_holy_shield, power_lightening, power_poison, power_shield, power_show_hp_interval,
-    power_transparent, power_uenhancer,
+    can_read_book, get_spell_point, group_melee_damage, magic_attack_interval, power_defence_area,
+    power_fire_wall, power_get_power_plus_mc, power_get_power_plus_sc,
+    power_heal_get_power_plus_sc2, power_holy_shield, power_lightening, power_poison, power_shield,
+    power_show_hp_interval, power_transparent, power_uenhancer, resolve_magic,
 };
 use mir2_world::{
     attack_with, AttackPowerMode, CombatConfig, Entity, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY,
@@ -261,12 +267,20 @@ struct SkillCase {
     eff_red: i32,
     eff_time: i32,
     eff_interval: i32,
+    eff_melee_damage: i32,
+    dc: i32,
+    hit_point: u8,
+    target_speed_point: u8,
+    target_ac: u16,
+    target_life_attrib: u8,
 }
 
 struct RegRow {
     magic_id: u16,
+    name: String,
     implemented: bool,
     reason: String,
+    dospell_class: String,
 }
 
 fn load_skills() -> (i32, i32, AttackPowerMode, Vec<SkillCase>, Vec<RegRow>) {
@@ -296,8 +310,10 @@ fn load_skills() -> (i32, i32, AttackPowerMode, Vec<SkillCase>, Vec<RegRow>) {
             }
             "reg" => registry.push(RegRow {
                 magic_id: i(fields, 1) as u16,
+                name: fields[2].clone(),
                 implemented: i(fields, 6) != 0,
                 reason: fields[7].clone(),
+                dospell_class: fields[8].clone(),
             }),
             "skill" => {
                 let mut train_level = [0u8; 4];
@@ -346,6 +362,12 @@ fn load_skills() -> (i32, i32, AttackPowerMode, Vec<SkillCase>, Vec<RegRow>) {
                     eff_red: i(fields, 37) as i32,
                     eff_time: i(fields, 38) as i32,
                     eff_interval: i(fields, 39) as i32,
+                    eff_melee_damage: i(fields, 40) as i32,
+                    dc: i(fields, 41) as i32,
+                    hit_point: i(fields, 42) as u8,
+                    target_speed_point: i(fields, 43) as u8,
+                    target_ac: i(fields, 44) as u16,
+                    target_life_attrib: i(fields, 45) as u8,
                 });
             }
             other => panic!("第 {n} 行未知前缀 {other}"),
@@ -503,6 +525,31 @@ fn skill_mismatches(
                 ));
             }
         }
+        "group_melee" => {
+            // 39（`MagGroupDeDing`）：攻方走 PlayObject override，目标带 SpeedPoint/AC/LifeAttrib。
+            let mut attacker = Entity::new(1, "caster", 0, 0);
+            attacker.race = ACTOR_RACE_PLAY;
+            attacker.dc = case.dc;
+            attacker.hit_point = case.hit_point;
+            let mut target = Entity::new(2, "target", 0, 0);
+            target.race = ACTOR_RACE_MONSTER;
+            target.ac = i32::from(case.target_ac);
+            target.speed_point = case.target_speed_point;
+            target.life_attrib = case.target_life_attrib;
+            let (power, damage) = group_melee_damage(&mut rng, &attacker, &target, atk);
+            if i64::from(power) != i64::from(case.eff_power) {
+                problems.push(format!(
+                    "group_melee.power rust={power} csharp={}",
+                    case.eff_power
+                ));
+            }
+            if i64::from(damage) != i64::from(case.eff_melee_damage) {
+                problems.push(format!(
+                    "group_melee.damage rust={damage} csharp={}",
+                    case.eff_melee_damage
+                ));
+            }
+        }
         other => panic!("未登记的效果类别 {other}"),
     }
     problems
@@ -580,6 +627,12 @@ fn skills_match_csharp_per_skill() {
             "第三批技能 {id} 缺少用例"
         );
     }
+    // 第五批（`MagGroupDeDing` 群体物理）：39 必须有用例，且效果类别为 group_melee。
+    let melee = cases
+        .iter()
+        .find(|c| c.magic.magic_id == 39)
+        .expect("第五批技能 39 缺少用例");
+    assert_eq!(melee.kind, "group_melee", "39 的效果类别应为 group_melee");
     for case in &cases {
         let problems = skill_mismatches(case, seed, hit_interval, atk);
         assert!(
@@ -609,6 +662,11 @@ fn unimplemented_skills_are_registered() {
             "魔表行 {} 没有承接说明",
             row.magic_id
         );
+        assert!(
+            !row.dospell_class.is_empty(),
+            "魔表行 {} 没有 DoSpell 分派分类",
+            row.magic_id
+        );
         if row.implemented {
             implemented += 1;
         }
@@ -617,6 +675,177 @@ fn unimplemented_skills_are_registered() {
         implemented,
         cases.len(),
         "登记为已实装的技能数必须等于用例数"
+    );
+}
+
+/// 登记判据（DoD③「未实装逐条登记」的机器门禁）：
+/// 真魔表每一行按 oracle `DoSpell` 的控制流归入**唯一确定**的分派类别；
+/// 类别分布逐类钉死（内容冻结 ⇒ 行数稳定），新增/漏登魔表行都会判红。
+///
+/// 类别口径（`src/M2Server/Magic/MagicManager.cs`）：
+/// - `warr_reject`：`IsWarrSkill(MagIdx)` ⇒ `return false`（`:82-100,151`）
+/// - `magicid_reject`：`MagicId > 80` ⇒ `return false`（`:167`）
+/// - `implemented`：本片有用例（四种字段齐备）
+/// - `context_required`：有 case，但效果需地图/目标/可见集/召唤/状态
+/// - `no_effect_case`：有 case，但体内无副作用（`break` / 只置 `boTrain`）
+/// - `no_switch_case`：switch 无此魔号分支
+#[test]
+fn dospell_classes_are_fully_registered() {
+    let (_, _, _, cases, registry) = load_skills();
+    assert_eq!(registry.len(), 108, "魔表应有 108 行（content 冻结）");
+
+    let mut counts: BTreeMap<&str, i64> = BTreeMap::new();
+    for row in &registry {
+        match row.dospell_class.as_str() {
+            "implemented" | "context_required" | "no_effect_case" | "no_switch_case"
+            | "warr_reject" | "magicid_reject" => {}
+            other => panic!("魔表行 {} 出现未登记的分派类别 {:?}", row.magic_id, other),
+        }
+        *counts.entry(row.dospell_class.as_str()).or_insert(0) += 1;
+        if row.implemented {
+            assert_eq!(
+                row.dospell_class, "implemented",
+                "魔表行 {} implemented=true 但类别为 {}",
+                row.magic_id, row.dospell_class
+            );
+        }
+    }
+    assert_eq!(counts.get("implemented").copied(), Some(cases.len() as i64));
+    // 内容冻结下的逐类分布（oracle DoSpell switch + IsWarrSkill + MagicId>80 唯一决定）。
+    assert_eq!(counts.get("implemented").copied(), Some(29));
+    assert_eq!(counts.get("context_required").copied(), Some(10));
+    assert_eq!(counts.get("no_effect_case").copied(), Some(6));
+    assert_eq!(counts.get("no_switch_case").copied(), Some(20));
+    assert_eq!(counts.get("warr_reject").copied(), Some(8));
+    assert_eq!(counts.get("magicid_reject").copied(), Some(35));
+}
+
+/// 判据（DoD③ 的可达性口径）：`WorldServer.FindMagic(int)` 的**首匹配**语义。
+///
+/// 真魔表 108 行里有 13 个 `MagID` 各出现 2 次（`Idx` 序先入表者胜）：`FindMagic` 取首行，
+/// 后一行被遮蔽。本测试把该结构钉成机器门禁（content 冻结 ⇒ 数字稳定），并点名 48。
+#[test]
+fn duplicate_magic_ids_resolve_to_first_row_like_oracle() {
+    let (_, _, _, _, registry) = load_skills();
+    let magics: Vec<MagicInfo> = registry
+        .iter()
+        .map(|r| MagicInfo {
+            magic_id: r.magic_id,
+            magic_name: r.name.clone(),
+            ..Default::default()
+        })
+        .collect();
+    assert_eq!(magics.len(), 108, "真魔表行数（content 冻结）");
+
+    let mut count: BTreeMap<u16, usize> = BTreeMap::new();
+    for m in &magics {
+        *count.entry(m.magic_id).or_insert(0) += 1;
+    }
+    assert_eq!(count.len(), 95, "不同 MagID 数（108 行 − 13 个重复）");
+    let dups: Vec<u16> = count
+        .iter()
+        .filter(|(_, &n)| n > 1)
+        .map(|(&id, _)| id)
+        .collect();
+    assert_eq!(
+        dups,
+        vec![48u16, 66, 71, 88, 89, 90, 91, 92, 93, 94, 96, 97, 98],
+        "重复 MagID 集合（按魔号升序）"
+    );
+    for &id in &dups {
+        assert_eq!(count[&id], 2, "重复 MagID {id} 应恰有 2 行");
+        let first = magics
+            .iter()
+            .find(|m| m.magic_id == id)
+            .expect("重复 MagID 必有首行");
+        let resolved = resolve_magic(&magics, id).expect("按魔号必能解析");
+        assert_eq!(
+            resolved.magic_name, first.magic_name,
+            "MagID {id} 必须解析为先入表的 {}",
+            first.magic_name
+        );
+    }
+    // 点名：48（`MagicConst.SKILL_GROUPAMYOUNSUL = 48`）先入表的是「群体施毒术」，
+    // `Idx=48` 的「气功波」被遮蔽 ⇒ 运行时按魔号永远到不了「气功波」。
+    assert_eq!(
+        resolve_magic(&magics, 48).expect("48").magic_name,
+        "群体施毒术"
+    );
+    let shadowed48: Vec<&str> = magics
+        .iter()
+        .filter(|m| m.magic_id == 48 && m.magic_name != "群体施毒术")
+        .map(|m| m.magic_name.as_str())
+        .collect();
+    assert_eq!(shadowed48, vec!["气功波"], "48 的遮蔽行点名");
+}
+
+/// 判据（DoD③ 的计数口径）：`implemented` 必须按**可达魔号**计。
+///
+/// 探针按真魔表**行**产用例（108 行里 29 行 implemented），其中「48 气功波」是遮蔽行，
+/// 不构成一个独立的已实装技能 ⇒ 可达魔号为 28。遮蔽行必须逐条登记、点名，不许静默漏。
+#[test]
+fn implemented_cases_are_counted_per_reachable_magic_id() {
+    let (_, _, _, cases, registry) = load_skills();
+    // 首行 = 可达；其余 = 遮蔽。
+    let mut seen: BTreeSet<u16> = BTreeSet::new();
+    let mut impl_effective = 0usize;
+    let mut impl_shadowed: Vec<(u16, String)> = Vec::new();
+    for row in &registry {
+        let is_first_for_id = seen.insert(row.magic_id);
+        if row.implemented {
+            if is_first_for_id {
+                impl_effective += 1;
+            } else {
+                impl_shadowed.push((row.magic_id, row.name.clone()));
+            }
+        }
+    }
+    assert_eq!(
+        registry.iter().filter(|r| r.implemented).count(),
+        cases.len(),
+        "implemented 行数 = 用例数（探针按行产用例）"
+    );
+    assert_eq!(impl_effective, 28, "已实装**可达魔号**数");
+    assert_eq!(
+        impl_shadowed,
+        vec![(48u16, "气功波".to_string())],
+        "遮蔽的 implemented 行必须逐条登记且点名"
+    );
+    // 用例侧也点名 phantom，承认它是按行产出、不属于可达魔号。
+    let phantom: Vec<&SkillCase> = cases
+        .iter()
+        .filter(|c| c.magic.magic_id == 48 && c.magic.magic_name == "气功波")
+        .collect();
+    assert_eq!(phantom.len(), 1, "48 的遮蔽行仍有一份按行用例（phantom）");
+}
+
+/// 红检⑨（技能·可达性）：`resolve_magic` 若被改成 **last-wins**（`HashMap` 覆盖 / 逆序取），
+/// `FindMagic(48)` 会变成遮蔽行「气功波」⇒ 与 oracle 首匹配语义不一致。
+/// 本测试把「首匹配 ≠ 末匹配」钉成可判红：若两值相同 ⇒ 首匹配语义没有牙齿。
+#[test]
+fn redcheck_duplicate_resolution_is_order_sensitive_must_fail() {
+    let (_, _, _, _, registry) = load_skills();
+    let magics: Vec<MagicInfo> = registry
+        .iter()
+        .map(|r| MagicInfo {
+            magic_id: r.magic_id,
+            magic_name: r.name.clone(),
+            ..Default::default()
+        })
+        .collect();
+    let first = resolve_magic(&magics, 48).expect("48").magic_name.clone();
+    let last = magics
+        .iter()
+        .rev()
+        .find(|m| m.magic_id == 48)
+        .expect("48")
+        .magic_name
+        .clone();
+    assert_eq!(first, "群体施毒术");
+    assert_eq!(last, "气功波");
+    assert_ne!(
+        first, last,
+        "红检失效：48 的首匹配与末匹配相同 ⇒ 首匹配语义被覆盖（Map/last-wins）"
     );
 }
 
@@ -816,6 +1045,28 @@ fn redcheck_corrupt_one_group_poison_green_must_fail() {
     assert!(
         !skill_mismatches(&corrupt, seed, hit_interval, atk).is_empty(),
         "红检失效：把 48 的绿毒威力 {old} 改成 {} 后仍判等",
+        old + 1
+    );
+}
+
+/// 红检⑧（技能·效果威力）：改坏 39（`SKILL_GROUPDEDING`→`MagGroupDeDing`）的护甲减免后伤害一个值 ⇒ 必 RED。
+#[test]
+fn redcheck_corrupt_one_group_melee_damage_must_fail() {
+    let (seed, hit_interval, atk, cases, _) = load_skills();
+    let case = cases
+        .iter()
+        .find(|c| c.magic.magic_id == 39)
+        .expect("向量里应有 39（SKILL_GROUPDEDING）用例");
+    assert!(
+        skill_mismatches(case, seed, hit_interval, atk).is_empty(),
+        "前提：未改坏前 39 必须全等"
+    );
+    let mut corrupt = case.clone();
+    let old = corrupt.eff_melee_damage;
+    corrupt.eff_melee_damage = old + 1;
+    assert!(
+        !skill_mismatches(&corrupt, seed, hit_interval, atk).is_empty(),
+        "红检失效：把 39 的群体物理伤害 {old} 改成 {} 后仍判等",
         old + 1
     );
 }

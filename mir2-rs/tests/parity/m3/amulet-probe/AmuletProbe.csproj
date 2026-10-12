@@ -12,7 +12,7 @@
   <!--
     M3 技能线（卡 openmir2-m3-combat-skills-align）第二片：oracle 实测向量生成器。
     「施法前置」里可离线、可**真身调用**的两面：
-      - MagicManager.IsWarrSkill(int wMagIdx)                         （public static，MagicManager.cs:82-105）
+      - MagicManager.IsWarrSkill(int wMagIdx)                         （public static，MagicManager.cs:82-100）
       - MagicBase.CheckAmulet(PlayObject, byte nCount, byte nType, ref short Idx)
                                                                      （public static，MagicBase.cs:47-105）
     附：oracle 配置常量 SystemShare.Config.MagicAttackRage / MagicHitIntervalTime
