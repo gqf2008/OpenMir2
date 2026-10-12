@@ -59,6 +59,15 @@
 4. F1 的 holder 语义复现依赖 Windows 共享模式；本机为 Windows + PS 5.1（`06` 实测），Linux/mono 下
    `FileShare` 语义不同，此自检不作为跨平台判据。
 
+## 4b. 同族顺带修复（已向 owner 留 comment）
+
+合 master `27e3f658` 后，m3cs 的两相证据 `evidence-rng-isolate-attack-twophase-20261012/**` 在本机
+`git status` / 干净 clone 复核下暴露**同族 CRCRLF 缺陷**：其 `window/00-selfcheck-nostack.txt` 的 blob
+含 2 个残留 `\r`，而 `SHA256SUMS.txt` 记的是**盘上原始字节**（`a9ca0b7c…`，非仓库字节口径）⇒
+`normalize_lf` 非幂等，干净 clone `verify_sha256sums` 必红（**74/75**，master 上即已如此）。
+本片顺手把该文件 LF 归一（去 CR）+ 用同一工具重算其 `SHA256SUMS.txt`（现 **75/75 GREEN**）。
+这是 m3cs 写集的文件；若 owner 认为应留在对方卡上，可从本片撤下该 2 文件改动（不影响 F1/F2 本体）。
+
 ## 5. 残留物清单
 
 - 仓外临时物（可删）：`E:/tmp/m3bag-f1-selftest.txt`、`E:/tmp/m3bag-f1-mut-red.txt`、
