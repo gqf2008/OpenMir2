@@ -35,7 +35,8 @@ use mir2_world::magic::{
     power_show_hp_interval, power_transparent, power_uenhancer, resolve_magic,
 };
 use mir2_world::{
-    attack_with, AttackPowerMode, CombatConfig, Entity, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY,
+    attack_with, is_proper_target, AttackPowerMode, CombatConfig, Entity, ACTOR_RACE_MONSTER,
+    ACTOR_RACE_PLAY, ATTACK_MODE_HAM_PEACE,
 };
 
 fn repo_parity_dir() -> PathBuf {
@@ -1068,5 +1069,353 @@ fn redcheck_corrupt_one_group_melee_damage_must_fail() {
         !skill_mismatches(&corrupt, seed, hit_interval, atk).is_empty(),
         "红检失效：把 39 的群体物理伤害 {old} 改成 {} 后仍判等",
         old + 1
+    );
+}
+
+// -------------------------------------------------------------------------------------------
+// F-K / R-1：`IsProperTarget` 判定链 + 零 RNG 消费者 PvP 攻击序列
+//   （`mir2-rs/tests/parity/m3/proper-target-probe` → `vectors/proper_target_vectors.tsv`）
+// -------------------------------------------------------------------------------------------
+
+/// `pt` 行 = oracle `IsProperTarget` 的一个边界输入 + 期望。
+#[derive(Clone, Debug)]
+pub struct ProperCase {
+    pub name: String,
+    pub attacker_is_play: bool,
+    pub attacker_race: u8,
+    pub target_race: u8,
+    pub attack_mode: u8,
+    pub attacker_safe: bool,
+    pub target_safe: bool,
+    pub target_admin: bool,
+    pub target_stone: bool,
+    pub target_has_master: bool,
+    pub master_is_attacker: bool,
+    pub dear_is_target: bool,
+    pub attacker_pk: i32,
+    pub target_pk: i32,
+    pub attacker_nasty: bool,
+    pub expected: bool,
+}
+
+/// `pvp` 行 = 同一种子下第 i 次 `_Attack` 的真身结果。
+#[derive(Clone, Debug)]
+pub struct PvpRow {
+    pub i: i64,
+    pub power: i32,
+    pub damage: i32,
+    pub hp_after: u16,
+    pub hit: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct PvpSeq {
+    pub name: String,
+    pub rows: Vec<PvpRow>,
+    pub hits: i64,
+    pub dodges: i64,
+    pub attacked: i64,
+    pub damage_sum: i64,
+}
+
+/// 读 `proper_target_vectors.tsv`：`(seed, proper cases, pvp seqs)`。
+pub fn load_proper_target(seed: &mut i32, cases: &mut Vec<ProperCase>, seqs: &mut Vec<PvpSeq>) {
+    let lines = read_lines("proper-target-probe/vectors/proper_target_vectors.tsv");
+    for (n, fields) in lines.iter().enumerate() {
+        match fields[0].as_str() {
+            "seed" => *seed = i(fields, 1) as i32,
+            "pt" => cases.push(ProperCase {
+                name: fields[1].clone(),
+                attacker_is_play: i(fields, 2) != 0,
+                attacker_race: i(fields, 3) as u8,
+                target_race: i(fields, 4) as u8,
+                attack_mode: i(fields, 5) as u8,
+                attacker_safe: i(fields, 6) != 0,
+                target_safe: i(fields, 7) != 0,
+                target_admin: i(fields, 8) != 0,
+                target_stone: i(fields, 9) != 0,
+                target_has_master: i(fields, 10) != 0,
+                master_is_attacker: i(fields, 11) != 0,
+                dear_is_target: i(fields, 12) != 0,
+                attacker_pk: i(fields, 13) as i32,
+                target_pk: i(fields, 14) as i32,
+                attacker_nasty: i(fields, 15) != 0,
+                expected: i(fields, 16) != 0,
+            }),
+            "pvp" => {
+                let name = fields[1].clone();
+                if seqs.last().map(|s| s.name.as_str()) != Some(name.as_str()) {
+                    seqs.push(PvpSeq {
+                        name,
+                        rows: Vec::new(),
+                        hits: 0,
+                        dodges: 0,
+                        attacked: 0,
+                        damage_sum: 0,
+                    });
+                }
+                let seq = seqs.last_mut().unwrap();
+                assert_eq!(i(fields, 2) as usize, seq.rows.len(), "pvp i 不连续");
+                seq.rows.push(PvpRow {
+                    i: i(fields, 2),
+                    power: i(fields, 3) as i32,
+                    damage: i(fields, 4) as i32,
+                    hp_after: i(fields, 5) as u16,
+                    hit: i(fields, 6) != 0,
+                });
+            }
+            "pvpstats" => {
+                let seq = seqs
+                    .last_mut()
+                    .unwrap_or_else(|| panic!("第 {n} 行 pvpstats 没有前导 pvp 序列"));
+                seq.hits = i(fields, 2);
+                seq.dodges = i(fields, 3);
+                seq.attacked = i(fields, 4);
+                seq.damage_sum = i(fields, 5);
+            }
+            other => panic!("第 {n} 行未知前缀 {other}"),
+        }
+    }
+}
+
+/// 由向量行构造 Rust 侧两侧实体，跑一次 `is_proper_target`；返回与期望的差异清单。
+fn proper_mismatches(case: &ProperCase) -> Vec<String> {
+    let mut problems = Vec::new();
+    let mut attacker = Entity::new(101, "attacker", 0, 0);
+    attacker.race = case.attacker_race;
+    attacker.attack_mode = case.attack_mode;
+    attacker.in_safe_zone = case.attacker_safe;
+    attacker.pk_point = case.attacker_pk;
+    attacker.nasty_mode = case.attacker_nasty;
+    // 向量里 `attacker_is_play` 与 `race == Play` 必须一致（oracle 用对象类型分派，这里用 race）。
+    assert_eq!(
+        case.attacker_is_play,
+        case.attacker_race == ACTOR_RACE_PLAY,
+        "{}: attacker_is_play 与 race 不一致",
+        case.name
+    );
+    let mut target = Entity::new(202, "target", 0, 0);
+    target.race = case.target_race;
+    target.in_safe_zone = case.target_safe;
+    target.admin_mode = case.target_admin;
+    target.stone_mode = case.target_stone;
+    target.pk_point = case.target_pk;
+    if case.target_has_master {
+        target.master = Some(if case.master_is_attacker { 101 } else { 303 });
+    }
+    if case.dear_is_target {
+        attacker.dear_human = Some(target.id);
+    }
+    let got = is_proper_target(&attacker, &target);
+    if got != case.expected {
+        problems.push(format!(
+            "{}: proper rust={got} csharp={}",
+            case.name, case.expected
+        ));
+    }
+    problems
+}
+
+/// PvP 序列核对：同种子逐 k 复现 oracle；返回差异清单。
+fn pvp_mismatches(seq: &PvpSeq, seed: i32, config: &CombatConfig) -> Vec<String> {
+    let mut problems = Vec::new();
+    let mut rng = RandomNumber::with_seed(seed);
+    let mut attacker = Entity::new(101, "attacker", 0, 0);
+    attacker.race = ACTOR_RACE_PLAY;
+    attacker.dc = 0x1E14;
+    attacker.hit_point = 20;
+    attacker.speed_point = 12;
+    let mut target = Entity::new(202, "victim", 0, 0);
+    target.race = ACTOR_RACE_PLAY;
+    target.ac = 0x0A05;
+    target.hp = 30000;
+    target.max_hp = 30000;
+    target.hit_point = 20;
+    target.speed_point = 20;
+    let mode = AttackPowerMode::Player {
+        luck: 0,
+        power_rate: 100,
+        bo_power_item: false,
+        power_item: 0,
+    };
+
+    let mut hits = 0i64;
+    let mut dodges = 0i64;
+    let mut attacked = 0i64;
+    let mut damage_sum = 0i64;
+    for (idx, exp) in seq.rows.iter().enumerate() {
+        let out = attack_with(&mut rng, &mut attacker, &mut target, None, config, mode);
+        if i64::from(out.power) != i64::from(exp.power) {
+            problems.push(format!(
+                "[{}] power rust={} csharp={}",
+                exp.i, out.power, exp.power
+            ));
+        }
+        if i64::from(out.damage) != i64::from(exp.damage) {
+            problems.push(format!(
+                "[{}] damage rust={} csharp={}",
+                exp.i, out.damage, exp.damage
+            ));
+        }
+        if out.target_hp_after != exp.hp_after {
+            problems.push(format!(
+                "[{}] hp rust={} csharp={}",
+                exp.i, out.target_hp_after, exp.hp_after
+            ));
+        }
+        if out.hit != exp.hit {
+            problems.push(format!(
+                "[{}] hit rust={} csharp={}",
+                exp.i, out.hit, exp.hit
+            ));
+        }
+        if out.hit {
+            hits += 1;
+        } else {
+            dodges += 1;
+        }
+        if out.damage > 0 {
+            attacked += 1;
+        }
+        damage_sum += i64::from(out.damage);
+        assert_eq!(idx as i64, exp.i, "pvp 行序不等于 k");
+    }
+    if hits != seq.hits {
+        problems.push(format!("hits rust={hits} csharp={}", seq.hits));
+    }
+    if dodges != seq.dodges {
+        problems.push(format!("dodges rust={dodges} csharp={}", seq.dodges));
+    }
+    if damage_sum != seq.damage_sum {
+        problems.push(format!(
+            "damage_sum rust={damage_sum} csharp={}",
+            seq.damage_sum
+        ));
+    }
+    if attacked != seq.attacked {
+        problems.push(format!("attacked rust={attacked} csharp={}", seq.attacked));
+    }
+    // 非平凡门（oracle 侧 `attacked` 应在向量生成时已 ≥1）。
+    if seq.attacked < 1 {
+        problems.push("attacked<1（非平凡门）".to_string());
+    }
+    problems
+}
+
+/// F-K：`IsProperTarget` 判定链逐个边界与 oracle 一致（含 HAM_ALL PvP、安全区、自己宝宝、攻击模式）。
+#[test]
+fn proper_target_matches_csharp_on_boundaries() {
+    let mut seed = 0i32;
+    let mut cases = Vec::new();
+    let mut seqs = Vec::new();
+    load_proper_target(&mut seed, &mut cases, &mut seqs);
+    assert!(cases.len() >= 20, "pt 向量太少: {}", cases.len());
+    // 覆盖度自检：F-K 核心（HAM_ALL 允许 PvP）与安全区拒绝必须真的在向量里。
+    let names: BTreeSet<&str> = cases.iter().map(|c| c.name.as_str()).collect();
+    for must in [
+        "pvp_ham_all_nosafe",
+        "pvp_ham_all_atk_safe",
+        "pvp_ham_all_tgt_safe",
+        "own_pet_ham_all",
+        "own_pet_ham_peace",
+    ] {
+        assert!(names.contains(must), "缺边界向量 {must}");
+    }
+    let mut problems = Vec::new();
+    for c in &cases {
+        problems.extend(proper_mismatches(c));
+    }
+    assert!(
+        problems.is_empty(),
+        "IsProperTarget 差异:\n{}",
+        problems.join("\n")
+    );
+}
+
+/// R-1：零 RNG 消费者（无地图/无怪 AI）下，同种子 PvP 攻击序列逐 k 与 oracle 相同。
+#[test]
+fn pvp_sequence_matches_csharp_per_k() {
+    let mut seed = 0i32;
+    let mut cases = Vec::new();
+    let mut seqs = Vec::new();
+    load_proper_target(&mut seed, &mut cases, &mut seqs);
+    assert_eq!(seqs.len(), 1, "应有且仅有 1 条 pvp 序列");
+    let seq = &seqs[0];
+    assert!(
+        seq.rows.len() >= 100,
+        "pvp 序列应 ≥100 次: {}",
+        seq.rows.len()
+    );
+    // 非平凡门：至少有一次命中且伤害 > 0（防恒 0 比较器）。
+    assert!(seq.hits >= 1, "pvp 序列一次都没命中 ⇒ 判据无仲裁力");
+    assert!(seq.damage_sum > 0, "pvp 序列伤害全为 0 ⇒ 判据无仲裁力");
+    let problems = pvp_mismatches(seq, seed, &CombatConfig::default());
+    assert!(
+        problems.is_empty(),
+        "PvP 序列差异:\n{}",
+        problems.join("\n")
+    );
+}
+
+/// 红检⑨（F-K）：把 `pvp_ham_all_nosafe` 的攻击模式改成 `HAM_PEACE`（PvP 本应被拒）
+/// ⇒ 该向量必与期望不符（证明 `proper_mismatches` 有牙齿，不是恒绿）。
+#[test]
+fn redcheck_ham_all_pvp_boundary_must_fail() {
+    let mut seed = 0i32;
+    let mut cases = Vec::new();
+    let mut seqs = Vec::new();
+    load_proper_target(&mut seed, &mut cases, &mut seqs);
+    let case = cases
+        .iter()
+        .find(|c| c.name == "pvp_ham_all_nosafe")
+        .expect("向量里应有 pvp_ham_all_nosafe");
+    assert!(proper_mismatches(case).is_empty(), "前提：未改坏前必须全等");
+    let mut corrupt = case.clone();
+    corrupt.attack_mode = ATTACK_MODE_HAM_PEACE;
+    assert!(
+        !proper_mismatches(&corrupt).is_empty(),
+        "红检失效：把 HAM_ALL 改成 HAM_PEACE 后仍判等"
+    );
+}
+
+/// 红检⑩（R-1）：改坏 PvP 序列里一个伤害值 ⇒ 逐 k 比对必 RED。
+#[test]
+fn redcheck_corrupt_one_pvp_damage_must_fail() {
+    let mut seed = 0i32;
+    let mut cases = Vec::new();
+    let mut seqs = Vec::new();
+    load_proper_target(&mut seed, &mut cases, &mut seqs);
+    let seq = &seqs[0];
+    assert!(
+        pvp_mismatches(seq, seed, &CombatConfig::default()).is_empty(),
+        "前提：未改坏前必须全等"
+    );
+    let mut corrupt = seq.clone();
+    let old = corrupt.rows[0].damage;
+    corrupt.rows[0].damage = old + 1;
+    assert!(
+        !pvp_mismatches(&corrupt, seed, &CombatConfig::default()).is_empty(),
+        "红检失效：把 PvP k=0 伤害 {old} 改成 {} 后仍判等",
+        old + 1
+    );
+}
+
+/// 红检⑪（F-K）：把自己宝宝的 HAM_ALL 允许改成拒绝（用 `HAM_PEACE` 模拟）⇒ 必 RED。
+#[test]
+fn redcheck_own_pet_boundary_must_fail() {
+    let mut seed = 0i32;
+    let mut cases = Vec::new();
+    let mut seqs = Vec::new();
+    load_proper_target(&mut seed, &mut cases, &mut seqs);
+    let case = cases
+        .iter()
+        .find(|c| c.name == "own_pet_ham_all")
+        .expect("向量里应有 own_pet_ham_all");
+    assert!(proper_mismatches(case).is_empty(), "前提：未改坏前必须全等");
+    let mut corrupt = case.clone();
+    corrupt.attack_mode = ATTACK_MODE_HAM_PEACE;
+    assert!(
+        !proper_mismatches(&corrupt).is_empty(),
+        "红检失效：把自己宝宝改成非 HAM_ALL 后仍判等"
     );
 }

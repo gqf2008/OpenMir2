@@ -1,0 +1,291 @@
+﻿{
+    "session":  "rust-20261012-150343",
+    "side":  "rust",
+    "prefix":  "m3cfk1505",
+    "bots":  2,
+    "entry":  "127.0.0.1:7000",
+    "ops_runner":  "run_bots.ps1 -Count 2 -Prefix m3cfk1505 -Port 7000 -AttackSequence -AttackCount 120 -AttackStepMs 500 -AttackStartDelayMs 3000 -DisableAutoPlay",
+    "ops_exit":  0,
+    "fixed_new_chr":  "Job=0 Hair=2 Sex=0",
+    "start_pose":  "pair map=0 attacker=429,320,dir=2 victim=430,320 level=1 vhp=30000",
+    "bag_equip_sequence":  "(off)",
+    "bag_equip_markers":  [
+
+                          ],
+    "attack_sequence":  "on count=120 step_ms=500 start_delay_ms=3000 disable_autoplay=True",
+    "attack_pose":  "pair map=0 attacker=429,320,dir=2 victim=430,320 level=1 vhp=30000",
+    "attack_markers":  [
+                           "M3ATTSEQ {\"role\":\"arm\",\"id\":\"m3cfk15050\",\"count\":120,\"step_ms\":500,\"dir\":2}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":1,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":2,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":3,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":4,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":5,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":6,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":7,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":8,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":9,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":10,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":11,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":12,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":13,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":14,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":15,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":16,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":17,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":18,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":19,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":20,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":21,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":22,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":23,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":24,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":25,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":26,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":27,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":28,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":29,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":30,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":31,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":32,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":33,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":34,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":35,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":36,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":37,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":38,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":39,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":40,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":41,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":42,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":43,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":44,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":45,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":46,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":47,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":48,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":49,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":50,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":51,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":52,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":53,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":54,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":55,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":56,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":57,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":58,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":59,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":60,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":61,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":62,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":63,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":64,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":65,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":66,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":67,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":68,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":69,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":70,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":71,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":72,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":73,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":74,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":75,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":76,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":77,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":78,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":79,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":80,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":81,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":82,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":83,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":84,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":85,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":86,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":87,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":88,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":89,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":90,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":91,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":92,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":93,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":94,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":95,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":96,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":97,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":98,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":99,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":100,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":101,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":102,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":103,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":104,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":105,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":106,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":107,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":108,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":109,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":110,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":111,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":112,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":113,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":114,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":115,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":116,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":117,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":118,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":119,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":120,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15050\"}",
+                           "M3ATTSEQ {\"role\":\"done\",\"id\":\"m3cfk15050\",\"attacks\":120}"
+                       ],
+    "attack_raw":  "attack_raw.jsonl",
+    "git_rev":  "564b3213096c5ff4a10713603d7c8b1d37b00739",
+    "dbsnap":  {
+                   "mir2_account.account_protection":  {
+                                                           "rows":  7186,
+                                                           "sha256":  "4c8363b79e3b691ed878087e148439173c0e81cb6cd646d562dd0da8323b8385"
+                                                       },
+                   "mir2_db.characters_ablity":  {
+                                                     "rows":  7164,
+                                                     "sha256":  "b541045cc4fdc69f1d664eea7983f90ad56ca7f5ae16549402c6d78554d7e090"
+                                                 },
+                   "mir2_db.characters_bonusability":  {
+                                                           "rows":  1,
+                                                           "sha256":  "2a7c7b3966c0dc02e065463974cf094903f37b13bfa126a48167107a171ef4bc"
+                                                       },
+                   "mir2_db.characters_status":  {
+                                                     "rows":  7163,
+                                                     "sha256":  "4d2ddaad1902d226a1459927cfbff125ef6fb59dec2f04f777260d9d165f8464"
+                                                 },
+                   "mir2_db.characters_item_attr":  {
+                                                        "rows":  0,
+                                                        "sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                                                    },
+                   "mir2_db.characters_quest":  {
+                                                    "rows":  0,
+                                                    "sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                                                },
+                   "mir2_account.account":  {
+                                                "rows":  7298,
+                                                "sha256":  "72ea8bc8278b042ccbe9abb2763ac446acffe3143f2b777f12ac0978a483bb04"
+                                            },
+                   "mir2_db.characters":  {
+                                              "rows":  7161,
+                                              "sha256":  "71e8c672151caca2f66cb491915dd4c204d25b2b86c48535f78edf830685672d"
+                                          },
+                   "mir2_db.characters_bagitem":  {
+                                                      "rows":  329498,
+                                                      "sha256":  "1de6b06d3c89c41a3ee02fa3ffb0e69ef500d9cb820d3144f7347eb9aac0846f"
+                                                  },
+                   "mir2_db.characters_indexes":  {
+                                                      "rows":  7163,
+                                                      "sha256":  "e75f1aa12975d2a04faeb2e0e98a0563e74a94495bf8594a2ec63124631b719a"
+                                                  },
+                   "mir2_db.characters_item":  {
+                                                   "rows":  93121,
+                                                   "sha256":  "4a690c13d3808b586827b23381e89bb1ab5b483dc4f395d7373be3d225186275"
+                                               },
+                   "mir2_db.characters_storageitem":  {
+                                                          "rows":  358150,
+                                                          "sha256":  "88ef3284628dd407fc086eca96304f756de4ddf620392061fa072edc08a48e53"
+                                                      },
+                   "mir2_db.characters_magic":  {
+                                                    "rows":  8,
+                                                    "sha256":  "0ac71ebc3756c582ca5e26f8b00e82cc2ff2f294a4206414c657c4d9b5470333"
+                                                }
+               },
+    "dbsnap_after":  {
+                         "mir2_account.account_protection":  {
+                                                                 "rows":  7186,
+                                                                 "sha256":  "4c8363b79e3b691ed878087e148439173c0e81cb6cd646d562dd0da8323b8385"
+                                                             },
+                         "mir2_db.characters_ablity":  {
+                                                           "rows":  7164,
+                                                           "sha256":  "08a1d64435244dc68298354c30bd821ddba8bc611ac4b0fabc0f0d8e8c25cfa9"
+                                                       },
+                         "mir2_db.characters_bonusability":  {
+                                                                 "rows":  1,
+                                                                 "sha256":  "2a7c7b3966c0dc02e065463974cf094903f37b13bfa126a48167107a171ef4bc"
+                                                             },
+                         "mir2_db.characters_status":  {
+                                                           "rows":  7163,
+                                                           "sha256":  "4d2ddaad1902d226a1459927cfbff125ef6fb59dec2f04f777260d9d165f8464"
+                                                       },
+                         "mir2_db.characters_item_attr":  {
+                                                              "rows":  0,
+                                                              "sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                                                          },
+                         "mir2_db.characters_quest":  {
+                                                          "rows":  0,
+                                                          "sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                                                      },
+                         "mir2_account.account":  {
+                                                      "rows":  7298,
+                                                      "sha256":  "07a18f4c73a0f1a4634b90e486ee5bcc845ca9a44be883b364b8415614fc1204"
+                                                  },
+                         "mir2_db.characters":  {
+                                                    "rows":  7161,
+                                                    "sha256":  "b5019f12b9e251a53f6f992691e52cb731220e764b9318194d53f987a5e94999"
+                                                },
+                         "mir2_db.characters_bagitem":  {
+                                                            "rows":  329498,
+                                                            "sha256":  "1de6b06d3c89c41a3ee02fa3ffb0e69ef500d9cb820d3144f7347eb9aac0846f"
+                                                        },
+                         "mir2_db.characters_indexes":  {
+                                                            "rows":  7163,
+                                                            "sha256":  "30a72fc37bc18bfa4b06ba6a2519e005d1853f76151424b79299978f2aef136b"
+                                                        },
+                         "mir2_db.characters_item":  {
+                                                         "rows":  93121,
+                                                         "sha256":  "4a690c13d3808b586827b23381e89bb1ab5b483dc4f395d7373be3d225186275"
+                                                     },
+                         "mir2_db.characters_storageitem":  {
+                                                                "rows":  358150,
+                                                                "sha256":  "88ef3284628dd407fc086eca96304f756de4ddf620392061fa072edc08a48e53"
+                                                            },
+                         "mir2_db.characters_magic":  {
+                                                          "rows":  8,
+                                                          "sha256":  "0ac71ebc3756c582ca5e26f8b00e82cc2ff2f294a4206414c657c4d9b5470333"
+                                                      }
+                     },
+    "delta":  {
+                  "mir2_account.account":  {
+                                               "added":  2,
+                                               "removed":  2
+                                           },
+                  "mir2_db.characters":  {
+                                             "added":  2,
+                                             "removed":  2
+                                         },
+                  "mir2_db.characters_ablity":  {
+                                                    "added":  2,
+                                                    "removed":  2
+                                                },
+                  "mir2_db.characters_indexes":  {
+                                                     "added":  2,
+                                                     "removed":  2
+                                                 }
+              },
+    "scoped_rows":  {
+                        "before":  230,
+                        "after":  230
+                    },
+    "runtime_procs":  [
+                          {
+                              "name":  "mysqld",
+                              "path":  "D:\\mysql\\mariadb-10.11.19-winx64\\bin\\mysqld.exe",
+                              "start":  "2026-10-12T11:57:00.1944221+08:00"
+                          },
+                          {
+                              "name":  "DBSrv",
+                              "path":  "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\src\\DBSrv\\bin\\Release\\DBSrv.exe",
+                              "start":  "2026-10-12T15:03:21.3711135+08:00"
+                          },
+                          {
+                              "name":  "LoginSrv",
+                              "path":  "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\src\\LoginSrv\\bin\\Release\\LoginSrv.exe",
+                              "start":  "2026-10-12T15:03:21.4597312+08:00"
+                          }
+                      ],
+    "finished_at":  "2026-10-12T15:05:44.0661790+08:00"
+}

@@ -1,0 +1,29 @@
+SEED: 将向 game-svr 注入 MIR2_RNG_SEED=42
+MYSQL already up (3306)
+START DBSrv pid=26692 ports=6000,5100,5700
+START LoginSrv pid=30752 ports=5500,5600
+START game-svr pid=28828 ports=5000
+RUST_SEED_INJECTED=42
+START login-gate pid=3800 ports=7000
+START sel-gate pid=15064 ports=7100
+START game-gate pid=25508 ports=7200,7201,7202
+PIDFILE E:\tmp\m3cs-fk\rust-stack\rust-stack.pid.json
+CORE_UP MySQL ports=3306
+CORE_UP DBSrv ports=6000,5100,5700
+CORE_UP LoginSrv ports=5500,5600
+CORE_UP game-svr ports=5000
+CORE_UP login-gate ports=7000
+CORE_UP sel-gate ports=7100
+CORE_UP game-gate ports=7200
+=== M2 验收栈 端口实况 ===
+  3306  <- pid=29372 mysqld.exe  D:\mysql\mariadb-10.11.19-winx64\bin\mysqld.exe
+  6000  <- pid=26692 DBSrv.exe  E:\Users\gxh\Documents\GitHub\OpenMir2\src\DBSrv\bin\Release\DBSrv.exe
+  5100  <- pid=26692 DBSrv.exe  E:\Users\gxh\Documents\GitHub\OpenMir2\src\DBSrv\bin\Release\DBSrv.exe
+  5700  <- pid=26692 DBSrv.exe  E:\Users\gxh\Documents\GitHub\OpenMir2\src\DBSrv\bin\Release\DBSrv.exe
+  5500  <- pid=30752 LoginSrv.exe  E:\Users\gxh\Documents\GitHub\OpenMir2\src\LoginSrv\bin\Release\LoginSrv.exe
+  5600  <- pid=30752 LoginSrv.exe  E:\Users\gxh\Documents\GitHub\OpenMir2\src\LoginSrv\bin\Release\LoginSrv.exe
+  5000  <- pid=28828 game-svr.exe  E:\tmp\m3cs-fk-target\debug\game-svr.exe
+  7000  <- pid=3800 login-gate.exe  E:\tmp\m3cs-fk-target\debug\login-gate.exe
+  7100  <- pid=15064 sel-gate.exe  E:\tmp\m3cs-fk-target\debug\sel-gate.exe
+  7200  <- pid=25508 game-gate.exe  E:\tmp\m3cs-fk-target\debug\game-gate.exe
+RUST_STACK_OK E:\tmp\m3cs-fk\rust-stack\rust-stack.pid.json

@@ -1,0 +1,30 @@
+=== 四次真机侧运行的 SM_STRUCK 统计（同 fixture / 同种子 seed=42 / 同 pin (429,320) / F-K 修复后的 Rust 二进制）===
+
+C# smoke20   csharp-20261012-145931
+  raw roles        : {'arm': 1, 'attack': 20, 'struck': 2, 'done': 1}
+  struck events    : 2 -> [{'role': 'struck', 'dmg': 1, 'hp': 18, 'maxhp': 19, 'src': 613587730, 'actor': 2051475008}, {'role': 'struck', 'dmg': 1, 'hp': 18, 'maxhp': 19, 'src': 613587730, 'actor': 2051475008}]
+  align hit k      : [5, 6]
+  align summary    : {'role': 'summary', 'attacked': 20, 'hits': 2, 'dodges': 18, 'sum': 2, 'death_k': None, 'min_hp': 18}
+
+C# 120   csharp-20261012-150100
+  raw roles        : {'arm': 1, 'attack': 120, 'struck': 2, 'done': 1}
+  struck events    : 2 -> [{'role': 'struck', 'dmg': 1, 'hp': 18, 'maxhp': 19, 'src': 808621370, 'actor': 2041160395}, {'role': 'struck', 'dmg': 1, 'hp': 18, 'maxhp': 19, 'src': 808621370, 'actor': 2041160395}]
+  align hit k      : [1, 2]
+  align summary    : {'role': 'summary', 'attacked': 120, 'hits': 2, 'dodges': 118, 'sum': 2, 'death_k': None, 'min_hp': 18}
+
+Rust 120   rust-20261012-150343
+  raw roles        : {'arm': 1, 'attack': 120, 'done': 1}
+  struck events    : 0 -> []
+  align hit k      : []
+  align summary    : {'role': 'summary', 'attacked': 120, 'hits': 0, 'dodges': 120, 'sum': 0, 'death_k': None, 'min_hp': 0}
+
+Rust smoke20   rust-20261012-150901
+  raw roles        : {'arm': 1, 'attack': 20, 'done': 1}
+  struck events    : 0 -> []
+  align hit k      : []
+  align summary    : {'role': 'summary', 'attacked': 20, 'hits': 0, 'dodges': 20, 'sum': 0, 'death_k': None, 'min_hp': 0}
+
+口径：两侧同种子 / 同 pin / 同一 run_attack_pair 夹具；F-K 修复后 Rust 侧（crates/world is_proper_target）
+     已允许 PvP，但真机 Rust 120+20=140 击仍 0 条 SM_STRUCK（align hits=0）⇒ 非平凡门 RED，跨侧 diff RED。
+     根因不再是被 is_attack_target 结构性归零（F-K 已修、构造级向量已证），而是活图全局 RNG 被怪 AI
+     等消耗 ⇒ 同种子不保证逐 k 相同（R-1）。构造级零 RNG 消费者场景已单独证明逐 k 可比（见 proper-target-probe）。
