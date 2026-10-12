@@ -1,0 +1,13 @@
+$ powershell -ExecutionPolicy Bypass -File tools/oracle/reconcile_deployment.ps1 -SelfTestRed
+# 环境：PSModulePath 含 PS7 模块路径（lane 实况），powershell = 5.1
+# 期望（改前）：在 Get-FileHash16 → Get-FileHash 抛 CommandNotFoundException；rc=1
+---
+Get-FileHash : The term 'Get-FileHash' is not recognized as the name of a cmdlet, function, script file, or operable pr
+ogram. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+At E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\tools\oracle\reconcile_deployment.ps1:101 char:11
++   return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.Sub ...
++           ~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (Get-FileHash:String) [], ParentContainsErrorRecordException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+rc=1

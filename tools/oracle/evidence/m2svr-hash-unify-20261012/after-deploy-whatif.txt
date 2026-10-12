@@ -1,0 +1,17 @@
+$ powershell -ExecutionPolicy Bypass -File tools/oracle/deploy_gamesvr.ps1 -WhatIf -SkipBuild -BuildDir E:/tmp/m2svr-hash-unify/builddir -BackupDir E:/tmp/m2svr-hash-unify/backup
+---
+   新鲜度断言：构建输出都不比源码旧
+== deploy_gamesvr: E:/tmp/m2svr-hash-unify/builddir  ->  E:\MirServer\M2GameSvr
+   备份: E:/tmp/m2svr-hash-unify/backup
+   -WhatIf：只列将要替换的文件，不落盘、不重启
+     GameSrv.exe                      已一致
+     GameSrv.dll                      已一致
+     GameSrv.deps.json                已一致
+     GameSrv.runtimeconfig.json       已一致
+     M2Server.dll                     已一致
+     OpenMir2.dll                     已一致
+     SystemModule.dll                 已一致
+     ScriptSystem.dll                 已一致
+     CommandSystem.dll                已一致
+     PlanesSystem.dll                 已一致
+rc=0

@@ -1,0 +1,49 @@
+# m2svr-hash-unify-20261012 — 复现命令（原始件）
+
+# 环境（lane 实况，缺陷的前提）：
+#   powershell = Windows PowerShell 5.1（C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe）
+#   PSModulePath 含 PS7 模块路径（C:\Program Files\PowerShell\Modules;c:\program files\powershell\7\Modules）
+#   ⇒ 5.1 子进程加载 PS7 的 Microsoft.PowerShell.Utility（不导出 Get-FileHash）
+
+# 0. 环境实况
+powershell -NoProfile -Command "if (Get-Command Get-FileHash -ErrorAction SilentlyContinue) { 'lane: Get-FileHash PRESENT' } else { 'lane: Get-FileHash MISSING' }"
+
+# 1. 改前（原 Get-FileHash 实现，在污染环境里崩溃）
+#    1a. deploy_gamesvr.ps1 的 -WhatIf 路径（命中 :128）
+#        （用一个临时 BuildDir 装 10 个自有产物、mtime 置新，绕开“构建输出比源码旧”的前置）
+powershell -ExecutionPolicy Bypass -File tools/oracle/deploy_gamesvr.ps1 -WhatIf -SkipBuild `
+  -BuildDir E:/tmp/m2svr-hash-unify/builddir -BackupDir E:/tmp/m2svr-hash-unify/backup
+#    1b. reconcile_deployment.ps1 的红检路径（命中 Get-FileHash16 → :101）
+powershell -ExecutionPolicy Bypass -File tools/oracle/reconcile_deployment.ps1 -SelfTestRed `
+  -OutDir E:/tmp/m2svr-hash-unify/out
+
+# 2. 改后（.NET SHA256，同一污染环境）
+powershell -ExecutionPolicy Bypass -File tools/oracle/deploy_gamesvr.ps1 -SelfTestRed
+powershell -ExecutionPolicy Bypass -File tools/oracle/reconcile_deployment.ps1 -SelfTestRed `
+  -OutDir E:/tmp/m2svr-hash-unify/out
+powershell -ExecutionPolicy Bypass -File tools/oracle/deploy_gamesvr.ps1 -WhatIf -SkipBuild `
+  -BuildDir E:/tmp/m2svr-hash-unify/builddir -BackupDir E:/tmp/m2svr-hash-unify/backup
+
+# 3. 等价性：把 PSModulePath 限制到 5.1 自带模块目录（Get-FileHash 可用），
+#    在同一文件上比 (Get-FileHash -Algorithm SHA256).Hash 与 Get-Sha256Hex
+powershell -NoProfile -Command "$env:PSModulePath='C:\Windows\system32\WindowsPowerShell\v1.0\Modules';`
+  `. './tools/oracle/hashutil.ps1';`
+  `$f='E:\MirServer\M2GameSvr\M2Server.dll';`
+  `$fh=(Get-FileHash -LiteralPath $f -Algorithm SHA256).Hash.ToLowerInvariant();`
+  `$sh=Get-Sha256Hex $f; Write-Output ($fh -eq $sh)"
+
+# 4. 改坏必红（改完还原）
+#    A：Get-Sha256Hex 返回常量 '0'*64 ⇒ deploy/reconcile 的 -SelfTestRed 都 RED(rc=1)
+#    B：SHA256 换成 MD5          ⇒ 只有“钉住标准值”那条牙能抓到（rc=1）
+#    还原：cp E:/tmp/m2svr-hash-unify/hashutil.ps1.bak tools/oracle/hashutil.ps1
+
+# 5. 四门禁（隔离 target；工作区根在 mir2-rs/）
+set CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target
+cd mir2-rs
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --offline
+cargo run -p msgcodegen -- --check
+
+# 6. 证据清单（仓库字节口径）
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra tools/oracle/evidence/m2svr-hash-unify-20261012

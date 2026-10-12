@@ -39,6 +39,9 @@ $ErrorActionPreference = "Stop"
 if ($RepoRoot -eq "") { $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path }
 if ($OutDir -eq "") { $OutDir = Join-Path $RepoRoot "mir2-rs\tests\parity\evidence\S1" }
 
+# 环境无关的 SHA256（不用 Get-FileHash：它按 PSModulePath 变色；口径见 hashutil.ps1）。
+. (Join-Path $PSScriptRoot 'hashutil.ps1')
+
 # 「跑着的那一套」用的是哪个检出 —— 权威来源是 start-all.ps1 的 $Repo（DBSrv/LoginSrv 直接从
 # 它的 bin/Release 启动）。不读它、硬套本脚本所在检出，会在 worktree 里对账时把这两个组件
 # 误判成"部署目录不存在"。
@@ -97,8 +100,9 @@ function Test-Absent([string]$Path) {
 }
 
 function Get-FileHash16([string]$Path) {
+  # 函数名沿用旧名（4 处调用不动）；实现走 .NET SHA256，与 `Get-FileHash -Algorithm SHA256` 逐字节相同。
   if (Test-Absent $Path) { return $null }
-  return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.Substring(0, 16)
+  return (Get-Sha256Hex $Path).Substring(0, 16)
 }
 
 function Compare-Artifact([string]$DeployPath, [string]$SrcPath) {
@@ -216,11 +220,13 @@ if ($SelfTestRed) {
   $v1 = Compare-Artifact $same $same
   $v2 = Compare-Artifact $mutated $same
   $v3 = Compare-Artifact $mutated $null
-  $ok = ($v1 -eq 'MATCH') -and ($v2 -eq 'DRIFT') -and ($v3 -eq 'DEPLOY-ONLY')
+  $compareOk = ($v1 -eq 'MATCH') -and ($v2 -eq 'DRIFT') -and ($v3 -eq 'DEPLOY-ONLY')
   Write-Output ("SELFTEST identity={0} bitflip={1} missing-src={2}" -f $v1, $v2, $v3)
+  # 哈希实现本身也要钉住（换算法/置常量/改回按环境变色的 Get-FileHash ⇒ 必红）。
+  $hashOk = Test-HashUtilSelfTest
   Remove-Item -Recurse -Force $tmp
-  if ($ok) { Write-Output 'SELFTEST_RED GREEN: 改坏一个字节必判 DRIFT（比较器可证伪）'; exit 0 }
-  Write-Output 'SELFTEST_RED RED: 比较器对篡改不敏感——门禁失效！'
+  if ($compareOk -and $hashOk) { Write-Output 'SELFTEST_RED GREEN: 改坏一个字节必判 DRIFT（比较器可证伪）+ 标准 SHA256 被钉住'; exit 0 }
+  Write-Output 'SELFTEST_RED RED: 比较器对篡改不敏感或哈希实现不合格——门禁失效！'
   exit 1
 }
 

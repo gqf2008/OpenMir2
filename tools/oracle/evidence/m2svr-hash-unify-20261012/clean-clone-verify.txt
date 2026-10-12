@@ -1,0 +1,41 @@
+# 干净检出复核：本交付提交的全新 checkout（不在本 lane 工作树里；复现：git worktree add --detach <tmp> <delivery-head>）
+
+$ python -I tools/evidence-hash/verify_sha256sums.py --check-extra tools/oracle/evidence/m2svr-hash-unify-20261012
+GREEN tools\oracle\evidence\m2svr-hash-unify-20261012\SHA256SUMS.txt  [repo 口径]  OK 15/15
+rc=0
+
+$ powershell -ExecutionPolicy Bypass -File tools/oracle/deploy_gamesvr.ps1 -SelfTestRed
+SELFTEST_RED deploy_gamesvr：验证 Get-Sha256Hex（.NET SHA256，环境无关）
+  [OK ] 钉住的标准 SHA256 = fdeab9acf3710362bd2658cdc9a29e8f9c757fcf9811603a8c447cd1d9151108
+  [OK ] 同内容同 hash
+  [OK ] 翻一位必不同 hash
+  [OK ] 16 位截断 = 前 16 位
+SELFTEST_RED GREEN
+rc=0
+
+$ powershell -ExecutionPolicy Bypass -File tools/oracle/reconcile_deployment.ps1 -SelfTestRed -OutDir E:/tmp/m2svr-hash-unify/out
+SELFTEST identity=MATCH bitflip=DRIFT missing-src=DEPLOY-ONLY
+  [OK ] 钉住的标准 SHA256 = fdeab9acf3710362bd2658cdc9a29e8f9c757fcf9811603a8c447cd1d9151108
+  [OK ] 同内容同 hash
+  [OK ] 翻一位必不同 hash
+  [OK ] 16 位截断 = 前 16 位
+SELFTEST_RED GREEN: 改坏一个字节必判 DRIFT（比较器可证伪）+ 标准 SHA256 被钉住
+rc=0
+
+# 集成路径（-WhatIf）：临时 BuildDir 的 mtime 先置新，绕开"构建输出比源码旧"前置
+$ powershell -ExecutionPolicy Bypass -File tools/oracle/deploy_gamesvr.ps1 -WhatIf -SkipBuild -BuildDir ... -BackupDir ...
+   新鲜度断言：构建输出都不比源码旧
+== deploy_gamesvr: E:/tmp/m2svr-hash-unify/builddir  ->  E:\MirServer\M2GameSvr
+   备份: E:/tmp/m2svr-hash-unify/backup4
+   -WhatIf：只列将要替换的文件，不落盘、不重启
+     GameSrv.exe                      已一致
+     GameSrv.dll                      已一致
+     GameSrv.deps.json                已一致
+     GameSrv.runtimeconfig.json       已一致
+     M2Server.dll                     已一致
+     OpenMir2.dll                     已一致
+     SystemModule.dll                 已一致
+     ScriptSystem.dll                 已一致
+     CommandSystem.dll                已一致
+     PlanesSystem.dll                 已一致
+rc=0

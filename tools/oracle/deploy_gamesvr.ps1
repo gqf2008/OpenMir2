@@ -28,6 +28,7 @@ param(
   [string]$BackupDir = "",
   [switch]$SkipBuild,
   [switch]$WhatIf,
+  [switch]$SelfTestRed,
   [int]$BootTimeoutSec = 60
 )
 
@@ -35,6 +36,15 @@ $ErrorActionPreference = "Stop"
 if ($RepoRoot -eq "") { $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path }
 if ($BuildDir -eq "") { $BuildDir = Join-Path $RepoRoot 'src\GameSrv\bin\Release' }
 if ($BackupDir -eq "") { $BackupDir = Join-Path $env:TEMP ("s1-deploy-backup-" + (Get-Date -Format "yyyyMMdd-HHmmss")) }
+
+# ---- 哈希工具 + 红检（改回 Get-FileHash / 换算法 / 置常量 ⇒ 必红）----
+. (Join-Path $PSScriptRoot 'hashutil.ps1')
+if ($SelfTestRed) {
+  Write-Output 'SELFTEST_RED deploy_gamesvr：验证 Get-Sha256Hex（.NET SHA256，环境无关）'
+  if (Test-HashUtilSelfTest) { Write-Output 'SELFTEST_RED GREEN'; exit 0 }
+  Write-Output 'SELFTEST_RED RED'
+  exit 1
+}
 
 $Target = Join-Path $ServerRoot 'M2GameSvr'
 $LogDir = Join-Path $ServerRoot 'logs'
@@ -125,7 +135,7 @@ if ($WhatIf) {
   foreach ($name in $RepoBuiltFiles) {
     $src = Join-Path $BuildDir $name
     $dst = Join-Path $Target $name
-    $same = (Test-Path $dst) -and ((Get-FileHash -LiteralPath $src).Hash -eq (Get-FileHash -LiteralPath $dst).Hash)
+    $same = (Test-Path $dst) -and ((Get-Sha256Hex $src) -eq (Get-Sha256Hex $dst))
     Write-Output ("     {0,-32} {1}" -f $name, $(if ($same) { '已一致' } else { '将替换' }))
   }
   exit 0
@@ -169,8 +179,8 @@ if ($listening) { Write-Output '   端口 5000 已监听（GameSvr 起来了）'
 Write-Output '   铺后对账：'
 $fileHashes = [ordered]@{}
 foreach ($name in $RepoBuiltFiles) {
-  $src = (Get-FileHash -LiteralPath (Join-Path $BuildDir $name)).Hash.Substring(0, 16)
-  $dst = (Get-FileHash -LiteralPath (Join-Path $Target $name)).Hash.Substring(0, 16)
+  $src = (Get-Sha256Hex (Join-Path $BuildDir $name)).Substring(0, 16)
+  $dst = (Get-Sha256Hex (Join-Path $Target $name)).Substring(0, 16)
   $fileHashes[$name] = $dst
   $tag = 'OK '
   if ($src -ne $dst) { $tag = 'RED' }
