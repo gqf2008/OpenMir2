@@ -1,0 +1,174 @@
+# M3⑩ 盘点——夹具可复用性调查（离线只读）
+# 生成时间：2026-10-12T22:11:59Z  worktree=.claude/worktrees/m3cs  基线=master 670a009b
+# ============================================================================
+
+## [A] m3 目录下既有夹具/比较器清单
+$ ls mir2-rs/tests/parity/m3/*.ps1 mir2-rs/tests/parity/m3/*.py
+mir2-rs/tests/parity/m3/attack_diff.py
+mir2-rs/tests/parity/m3/attack_rng_ledger.py
+mir2-rs/tests/parity/m3/attack_stream_gate.py
+mir2-rs/tests/parity/m3/gate_guards.ps1
+mir2-rs/tests/parity/m3/m3hashutil.ps1
+mir2-rs/tests/parity/m3/rebuild_attack_my.py
+mir2-rs/tests/parity/m3/rng-baseline.ps1
+mir2-rs/tests/parity/m3/run_attack_pair.ps1
+mir2-rs/tests/parity/m3/run_bag_equip_pair.ps1
+mir2-rs/tests/parity/m3/run_m3_gate.ps1
+mir2-rs/tests/parity/m3/run_pair.ps1
+mir2-rs/tests/parity/m3/scoped_diff.py
+mir2-rs/tests/parity/m3/selftest_gate.ps1
+mir2-rs/tests/parity/m3/server_state_gate.py
+mir2-rs/tests/parity/m3/start-csharp-hook.ps1
+mir2-rs/tests/parity/m3/start_rust_gates.ps1
+
+## [B] run_pair.ps1 两相 pin / 快照 / 动作序列钩子
+$ rg -n 'param\(|M3ATTSEQ|AttackPinPair|PinStartPose|BEFORE|AFTER' mir2-rs/tests/parity/m3/run_pair.ps1 | head -40
+13:    3. 快照 BEFORE（tools/dbsnap，逐表 sha256）
+15:    5. 快照 AFTER
+35:param(
+57:  [switch]$PinStartPose,           # T-14 固定起点变体（owner 86478c55/d7798370）：预热建角 → SQL pin → BEFORE 快照 → 计分跑（选角；不带 -FixedNewChr/-NewAccount）
+58:  [string]$PinMapName = '',   # 攻击变体的 pin 地图（R-1 要求整张零刷怪；空 ⇒ -AttackPinPair 取 $script:M3AttackPinMap，否则 '0'）
+62:  [int]$PinCX = -1,                # -AttackPinPair 时 <0 ⇒ $script:M3AttackPinCX（0137）；否则 289
+63:  [int]$PinCY = -1,                # -AttackPinPair 时 <0 ⇒ $script:M3AttackPinCY；否则 618
+66:  [int]$PinSettleSeconds = 3,      # 仅 -PinStartPose：每轮 pin 后的 settle 窗口（异步掉线存档落库，见 gate_guards.ps1 ⑥）
+67:  [int]$PinMaxAttempts = 5,        # 仅 -PinStartPose：settle+hold 最多轮数（仍 hold 不住 ⇒ throw，fail-closed）
+68:  [switch]$AttackPinPair,          # 攻击变体：两 bot **相邻**固定起点（attacker/victim；配合 -AttackSequence）
+69:  [int]$AttackPinDir = 2,          # 仅 -AttackPinPair：attacker 朝向（默认 2=RIGHT，victim 在右邻格）
+70:  [int]$AttackPinDx = 1,           # 仅 -AttackPinPair：victim 相对 attacker 的 X 偏移（默认 +1）
+71:  [int]$AttackVictimHp = 0,   # 仅 -AttackPinPair：victim（与 attacker）Hp/MaxHP；F-F：0 ⇒ 用 gate_guards 的 oracle 等级派生值（L255/战士=20669）；否则必须与 -AttackVictimLevel 自洽
+72:  [int]$AttackVictimLevel = 0,   # 仅 -AttackPinPair：victim/attacker 钉的等级（byte 0..255）；0 ⇒ gate_guards 的 $script:M3AttackVictimLevel
+86:# R-1（owner 2026-10-12 14:30）：攻击对拍场景必须整张图无怪 ⇒ `-AttackPinPair` 的 pin 地图缺省取
+88:if ([string]::IsNullOrEmpty($PinMapName)) { $PinMapName = if ($AttackPinPair) { $script:M3AttackPinMap } else { '0' } }
+89:# 攻击变体的落点缺省也跟随场景图（仅 -AttackPinPair 生效；背包/装备路径保持 289/618 逐字节不变）。
+90:if ($PinCX -lt 0) { $PinCX = if ($AttackPinPair) { $script:M3AttackPinCX } else { 289 } }
+91:if ($PinCY -lt 0) { $PinCY = if ($AttackPinPair) { $script:M3AttackPinCY } else { 618 } }
+98:if ($AttackPinPair) {
+111:  param([switch]$ForPrewarm)  # 固定起点变体的①预热相：强制 -FixedNewChr + -NewAccount
+114:  $newAccount = if ($PinStartPose -and -not $ForPrewarm) { $false } else { $true }
+115:  $fixed = if ($ForPrewarm) { $true } elseif ($PinStartPose) { $false } else { [bool]$FixedNewChr }
+156:  if (-not $PinStartPose) { return 'none' }
+157:  if ($AttackPinPair) { return (Get-M3AttackPoseLabel) }
+163:  if (-not $AttackPinPair) { return 'none' }
+178:if ($PinStartPose -and -not $FixedNewChr) {
+179:  throw '-PinStartPose 必须与 -FixedNewChr 同用（预热建角用固定输入；计分跑仍标为固定建角场景以便 --fixed-newchr 比 Job/Hair/Sex）'
+181:if ($AttackPinPair -and -not $PinStartPose) {
+182:  throw '-AttackPinPair 必须与 -PinStartPose 同用（攻击变体仍需预热建角 + SQL pin 两相）'
+188:if ($AttackPinPair) {
+191:    Write-Output ("RED: -AttackPinPair 地图 '{0}' 不是整张无怪图（MonGen 刷怪行数 {1}，要求 0）——见 R-1 场景隔离；{2}；请改到 MonGen 为空的地图（缺省 {3}）" -f `
+201:    Write-Output ("RED: -AttackPinPair 地图 '{0}' 仍有非 MonGen 的 AI 消费者引用（守卫/NPC/地图事件/任务；refs={1}，要求 0）——见 R-1 场景隔离；{2}；请换到无 AI 消费者的图（缺省 {3}）" -f `
+212:# 使「-AttackSequence 未配 -AttackPinPair」在**真实跑与自检**两条路径都可见。
+213:if ($AttackSequence -and -not $AttackPinPair) {
+214:  Write-Output 'WARN: -AttackSequence 未配 -AttackPinPair ⇒ attacker/victim 可能重叠/无目标（真机请配 -PinStartPose -AttackPinPair）'
+229:  if ($PinStartPose) {
+240:    if ($AttackPinPair) {
+324:# ---- 2.5 固定起点变体（T-14，owner 86478c55/d7798370）：预热建角 → SQL pin → 再取 BEFORE 快照 ----
+336:if ($PinStartPose) {
+
+## [C] run_attack_pair.ps1 peer 护栏 + -PeerSession
+$ rg -n 'PeerSession|Get-M3Peer|AttackPinPair' mir2-rs/tests/parity/m3/run_attack_pair.ps1 | head -30
+15:    ② `-AttackSequence -AttackPinPair` 透传 + `M3ATTSEQ` 标记判据（序列没跑完整 ⇒ RED）；
+27:  目标接法：`-AttackPinPair` 把 attacker（账号序号 0）钉在 (PinCX,PinCY) 面向 `AttackPinDir`，
+93:  powershell -ExecutionPolicy Bypass -File run_attack_pair.ps1 -Side csharp -Bots 2 -AttackCount 120 -AttackPinPair
+94:  powershell -ExecutionPolicy Bypass -File run_attack_pair.ps1 -Side rust -Bots 2 -AttackCount 120 -AttackPinPair -PeerSession csharp-...
+114:  [string]$PeerSession = '',
+118:  [switch]$AttackPinPair,          # 攻击变体：两 bot 相邻固定起点（attacker/victim）
+269:  $scenarioGuard = Get-M3PeerScenarioGuard -PeerDir $csharpDir -LocalScenario $LocalScenario
+275:  $scopeGuard = Get-M3PeerAttackScopeGuard -PeerDir $csharpDir -LocalScope $LocalScope
+282:  $poseGuard = Get-M3PeerAttackPoseGuard -PeerDir $csharpDir -LocalPose $LocalPose
+302:  $isoGuard = Get-M3PeerIsolationGuard -PeerDir $csharpDir -LocalDir $rustDir
+406:    # M-1 修复后「未配 -AttackPinPair」会真打一行 WARN（stdout，JSON 之前）⇒ 解析前先滤掉 WARN 行。
+424:  # ⑥ 攻击变体两相 pin：-AttackPinPair 的 attack_pose + 每 bot SQL（attacker/victim 相邻）。
+427:  $emitPairRaw = & powershell -ExecutionPolicy Bypass -File $RunPair -EmitOpsArgs -FixedNewChr -PinStartPose -AttackPinPair -AttackSequence -Bots 2 -PinMapName $PinMapName -PinCX $AttackPinCX -PinCY $AttackPinCY
+447:    Write-Output ("SELFTEST ⑥ -AttackPinPair map={0} pose='{1}'；pin_sql_all={2} 条" -f $PinMapName, $pair.attack_pose, $all.Count)
+725:  # ⑩ Minor M-1 回归（reviewer-5 76e433f0）：`-AttackSequence` 未配 `-AttackPinPair` ⇒ WARN 必须**真**出现；
+726:  #    配了 `-AttackPinPair` ⇒ 不得出现。旧实现把 WARN 写在 `if ($EmitOpsArgs)` 块内且带 `-not $EmitOpsArgs`
+728:  $warnPat = 'WARN: -AttackSequence 未配 -AttackPinPair'
+733:  Write-Output ("SELFTEST ⑩ M-1 WARN 有牙齿：无 -AttackPinPair={0} 条（期望≥1），有 -AttackPinPair={1} 条（期望 0）" -f $warnOn, $warnPair)
+1148:if (-not $AttackPinPair) {
+1149:  Write-Output 'PREREQ_MISSING: 本脚本要求 -AttackPinPair（attacker/victim 必须相邻固定起点）——见卡 comment 度量口径'
+1239:$probeArgs = @('-EmitOpsArgs', '-FixedNewChr', '-PinStartPose', '-AttackPinPair', '-AttackSequence',
+1263:Write-Output '--- 2) 侧运行（复用 run_pair.ps1；同序列 = -FixedNewChr + -AttackSequence + -AttackPinPair） ---'
+1265:              '-TimeoutSec', $TimeoutSec, '-FixedNewChr', '-PinStartPose', '-AttackPinPair',
+1449:if ($Side -eq 'rust' -and -not [string]::IsNullOrEmpty($PeerSession)) {
+1450:  $peer = Join-Path $Sessions $PeerSession
+1466:  Write-Output ("NEXT: 换 Rust 栈后跑  run_attack_pair.ps1 -Side rust -Bots {0} -AttackCount {1} -AttackPinPair -PeerSession {2}" -f $Bots, $AttackCount, $mine.Name)
+1468:  Write-Output 'NOTE: 未给 -PeerSession，跳过跨侧 diff（-Side rust 的正式判据要 C# 对照会话）'
+
+## [D] scoped_diff.py --canonical（落库字段级比对器，DB diff=0 判据的现成件）
+$ sed -n '28,45p' mir2-rs/tests/parity/m3/scoped_diff.py
+CANON_PLACEHOLDER = "<VOLATILE>"
+
+# ---------------------------------------------------------------------------
+# 规范化（canonicalize）——M3 正式判据的组成部分（设计文档 §6 / owner 2026-10-11 裁决 A）
+#
+# 为什么需要：`row_sha256` 覆盖 SELECT * 的全列，而其中一部分列**每次运行必变**
+# （自增 PK/FK、墙钟 datetime/unix 秒），另有一列是**夹具自身随机**（建角 Job）。
+# 把这些列算进比对 ⇒ 两侧各自都 GREEN 也恒判 RED，判据无仲裁力。
+#
+# 口径：内容冻结（设计文档 §1 硬约束②）保证表结构不变 ⇒ 列序可静态登记；
+# `diff --canonical` 只把**白名单列的列值**替换为占位符，其余列**逐字节比**。
+# 白名单按「表 + 列名 + 为什么是易变列」逐列登记，**不做整表 ignore**；
+# 遇到未登记的表直接判红（fail-closed），避免出现"悄悄不比"的静默缺口。
+# ---------------------------------------------------------------------------
+TABLE_COLUMNS = {
+    "mir2_account.account": [
+        "Id", "Account", "PassWord", "PassFailCount", "PassFailTime", "ValidFrom",
+        "ValidUntil", "PayMode", "Seconds", "StopUntil", "State", "CreateTime",
+
+## [E] BotSrv 假人动作序列框架（M3BAGSEQ / M3ATTSEQ；CM_* 直接构造 + SendSocket）
+$ rg -n 'M3BAGSEQ|M3ATTSEQ|MakeMessage|SendSocket' src/BotSrv/Player/RobotPlayer.cs src/BotSrv/Player/RobotPlayer.Operate.cs | head -30
+src/BotSrv/Player/RobotPlayer.cs:222:            // SendClientMessage() → SendSocket() → SendText() —— 于是在同一个调用栈里无限递归：
+src/BotSrv/Player/RobotPlayer.cs:223:            //   SendText → SocketError → LoginOut → SendSocket → SendText → …
+src/BotSrv/Player/RobotPlayer.cs:304:        /// M3②③ 夹具（T-29 扩展，owner 2026-10-12 17:35）：`M3ATTSEQ` 的 attack/struck 行都带 `my`
+src/BotSrv/Player/RobotPlayer.cs:332:        /// 本探针刻意**只依赖本假人自己的东西**：自己的 socket（`SendSocket`）与自己实例上的场景状态
+src/BotSrv/Player/RobotPlayer.cs:362:            CommandMessage msg = Messages.MakeMessage(Messages.CM_TURN,
+src/BotSrv/Player/RobotPlayer.cs:364:            SendSocket(EDCode.EncodeMessage(msg));
+src/BotSrv/Player/RobotPlayer.cs:405:            MainOutMessage($"M3BAGSEQ arm start_delay_ms={MShare.g_nBagEquipStartDelayMs} step_ms={MShare.g_nBagEquipStepMs}");
+src/BotSrv/Player/RobotPlayer.cs:445:                    MainOutMessage($"M3BAGSEQ step=0 op=CM_PICKUP x={_probeX} y={_probeY}");
+src/BotSrv/Player/RobotPlayer.cs:464:                MainOutMessage("M3BAGSEQ done");
+src/BotSrv/Player/RobotPlayer.cs:555:            MainOutMessage($"M3BAGSEQ snapshot bag_view={bagView} takeon={_seqTakeOnSlot} takeoff={_seqTakeOffSlot} drop={_seqDropSlot} eat={_seqEatSlot}");
+src/BotSrv/Player/RobotPlayer.cs:563:                MainOutMessage("M3BAGSEQ step=1 op=CM_TAKEONITEM skip=no_equippable_bag_item");
+src/BotSrv/Player/RobotPlayer.cs:572:            MainOutMessage($"M3BAGSEQ step=1 op=CM_TAKEONITEM bag={_seqTakeOnSlot} where={_seqTakeOffSlot} make={_seqTakeOnMake} name={_seqTakeOnName}");
+src/BotSrv/Player/RobotPlayer.cs:581:                MainOutMessage("M3BAGSEQ step=2 op=CM_TAKEOFFITEM skip=no_equipped_item");
+src/BotSrv/Player/RobotPlayer.cs:589:            MainOutMessage($"M3BAGSEQ step=2 op=CM_TAKEOFFITEM where={_seqTakeOffSlot} make={_seqTakeOffMake} name={_seqTakeOffName}");
+src/BotSrv/Player/RobotPlayer.cs:598:                MainOutMessage("M3BAGSEQ step=3 op=CM_DROPITEM skip=no_bag_item");
+src/BotSrv/Player/RobotPlayer.cs:601:            MainOutMessage($"M3BAGSEQ step=3 op=CM_DROPITEM bag={_seqDropSlot} make={_seqDropMake} name={_seqDropName}");
+src/BotSrv/Player/RobotPlayer.cs:610:                MainOutMessage("M3BAGSEQ step=4 op=CM_EAT skip=no_drug_in_bag");
+src/BotSrv/Player/RobotPlayer.cs:617:            MainOutMessage($"M3BAGSEQ step=4 op=CM_EAT bag={_seqEatSlot} make={_seqEatMake} stdmode={_seqEatStdMode} name={_seqEatName}");
+src/BotSrv/Player/RobotPlayer.cs:646:            MainOutMessage($"M3ATTSEQ {{\"role\":\"arm\",\"id\":\"{LoginId}\",\"count\":{MShare.g_nAttackCount},\"step_ms\":{MShare.g_nAttackStepMs},\"dir\":{MShare.g_nAttackDir}}}");
+src/BotSrv/Player/RobotPlayer.cs:651:        /// 共 `g_nAttackCount` 步，逐步落 `M3ATTSEQ {json}` 标记（`attack_diff.py` 据此按「第 k 次」对齐）。
+src/BotSrv/Player/RobotPlayer.cs:677:            MainOutMessage("M3ATTSEQ " + M3AttackStateJson(k));
+src/BotSrv/Player/RobotPlayer.cs:678:            MainOutMessage($"M3ATTSEQ {{\"role\":\"attack\",\"k\":{k},\"op\":\"CM_HIT\",\"x\":{_probeX},\"y\":{_probeY},\"dir\":{MShare.g_nAttackDir},\"my\":{_myActorId},\"id\":\"{LoginId}\"}}");
+src/BotSrv/Player/RobotPlayer.cs:679:            CommandMessage msg = Messages.MakeMessage(Messages.CM_HIT,
+src/BotSrv/Player/RobotPlayer.cs:681:            SendSocket(EDCode.EncodeMessage(msg));
+src/BotSrv/Player/RobotPlayer.cs:685:                MainOutMessage($"M3ATTSEQ {{\"role\":\"done\",\"id\":\"{LoginId}\",\"attacks\":{MShare.g_nAttackCount}}}");
+src/BotSrv/Player/RobotPlayer.cs:691:        /// `M3ATTSEQ {"role":"state",...}`：攻方 = 本假人自己的视图（`MShare.MySelf`），
+src/BotSrv/Player/RobotPlayer.cs:2817:        private void SendSocket(string sendstr)
+src/BotSrv/Player/RobotPlayer.cs:2839:            CommandMessage dMsg = Messages.MakeMessage(msg, recog, param, tag, series);
+src/BotSrv/Player/RobotPlayer.cs:2840:            SendSocket(EDCode.EncodeMessage(dMsg));
+src/BotSrv/Player/RobotPlayer.cs:2851:            SendSocket(EDCode.EncodeString(sSendMsg));
+
+## [F] 跨系统前置：owner 已开卡 openmir2-m3-clock-injection（⑧ 盘点建议）
+$ walgit collab ls | grep -i clock
+openmir2-m3-clock-injection
+
+## [G] 元宝寄售用到的帧常量（Rust 协议层已有；世界侧未派发）
+$ rg -n 'CM_SELLOFF|RM_SENDDEALOFFFORM' mir2-rs/crates/protocol/src/messages.rs
+140:pub const CM_SELLOFFADDITEM: u16 = 23002;
+141:pub const CM_SELLOFFDELITEM: u16 = 23007;
+142:pub const CM_SELLOFFCANCEL: u16 = 23012;
+143:pub const CM_SELLOFFEND: u16 = 23015;
+145:pub const CM_SELLOFFBUYCANCEL: u16 = 23025;
+146:pub const CM_SELLOFFBUY: u16 = 23026;
+557:pub const RM_SENDDEALOFFFORM: u16 = 23000;
+565:pub const RM_QUERYYBSELL: u16 = 23020;
+566:pub const RM_QUERYYBDEAL: u16 = 23022;
+1224:        23000 => &["RM_SENDDEALOFFFORM"],
+1226:        23002 => &["CM_SELLOFFADDITEM"],
+1231:        23007 => &["CM_SELLOFFDELITEM"],
+1236:        23012 => &["CM_SELLOFFCANCEL"],
+1239:        23015 => &["CM_SELLOFFEND"],
+1244:        23020 => &["RM_QUERYYBSELL"],
+1246:        23022 => &["RM_QUERYYBDEAL"],
+1249:        23025 => &["CM_SELLOFFBUYCANCEL"],
+1250:        23026 => &["CM_SELLOFFBUY"],
