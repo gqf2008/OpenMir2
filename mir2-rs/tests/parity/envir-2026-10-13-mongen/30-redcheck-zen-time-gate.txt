@@ -1,0 +1,26 @@
+$ cp crates/envir/src/mongen.rs /tmp/bak ; 删除 `|| zen_time <= 0 ||`
+$ CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test -p mir2-envir --offline --lib drops_rows_failing_oracle_validation
+   Compiling mir2-envir v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\envir)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.26s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m2svr-target\debug\deps\mir2_envir-8e4f602986416d0f.exe)
+
+running 1 test
+test mongen::tests::drops_rows_failing_oracle_validation ... FAILED
+
+failures:
+
+---- mongen::tests::drops_rows_failing_oracle_validation stdout ----
+
+thread 'mongen::tests::drops_rows_failing_oracle_validation' (3872) panicked at crates\envir\src\mongen.rs:339:9:
+assertion `left == right` failed
+  left: Some(MonGenInfo { map_name: "3", x: 294, y: 341, mon_name: "神鹰", range: 10, count: 1, active_count: 0, zen_time: -60000, mission_gen_rate: 0, race: 0, start_tick: 0 })
+ right: None
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    mongen::tests::drops_rows_failing_oracle_validation
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-envir --lib`

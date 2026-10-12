@@ -1,0 +1,120 @@
+### 独立 Python 复刻（GetValidStr3 语义 + MapInfo 名/文件拆分 + LoadMonGen 校验）交叉核对 Rust 实读
+# 脚本（临时件，不属于仓库）：E:\tmp\m2svr-mongen\crosscheck.py
+$ python E:/tmp/m2svr-mongen/crosscheck.py
+
+maps_in_registry=322
+entries=2827 sum_count=39019 dropped=1
+
+# Rust 侧同口径实读（见 11-real-deployment-reading.txt）：entries=2827 sum_count=39019 maps_loaded=322
+# 两侧逐项一致。
+
+===== 脚本全文 =====
+# -*- coding: utf-8 -*-
+# 独立复刻 oracle GetValidStr3 / MapInfo 名文件拆分 / LoadMonGen 解析，交叉核对 Rust 读数。
+# 仅用于对拍取证（不属于仓库）。
+import os, re
+BASE = r'E:\MirServer\M2GameSvr'
+ENVIR = os.path.join(BASE, 'Envir')
+MAPDIR = os.path.join(BASE, 'Map')
+
+def read_gbk(p):
+    return open(p, 'rb').read().decode('gbk')
+
+def get_valid_str3(s, divs):
+    i = 0
+    n = len(s)
+    while i < n and s[i] in divs:
+        i += 1
+    start = i
+    while i < n and s[i] not in divs:
+        i += 1
+    dest = s[start:i]
+    k = i
+    while k < n and s[k] in divs:
+        k += 1
+    return dest, s[k:]
+
+SEP = [' ', ',', '\t']
+DIV3 = [' ', '\t']
+
+def split_name_file(tok):
+    if '|' in tok:
+        a, b = tok.split('|', 1)
+        return a, b
+    return tok, tok
+
+def parse_section(line):
+    if not line.startswith('['):
+        return None
+    end = line.find(']')
+    if end < 0:
+        return None
+    raw = line[1:end]
+    tok, _rest = get_valid_str3(raw, SEP)
+    if not tok:
+        return None
+    return split_name_file(tok)
+
+# MapInfo (no ConnectMapInfo in this deployment; expansion kept for generality)
+lines = read_gbk(os.path.join(ENVIR, 'MapInfo.txt')).split('\n')
+i = 0
+while i < len(lines):
+    t = lines[i].strip()
+    if t.upper().startswith('CONNECTMAPINFO'):
+        m = re.search(r'ConnectMapInfo\s*\(?([^)\s]+)\)?', t, re.I)
+        if m:
+            subp = os.path.join(ENVIR, 'MapInfo' + m.group(1))
+            lines.pop(i)
+            if os.path.exists(subp):
+                lines.extend(read_gbk(subp).split('\n'))
+            continue
+    i += 1
+
+reg = set()
+for ln in lines:
+    s = parse_section(ln)
+    if not s:
+        continue
+    name, fname = s
+    if os.path.exists(os.path.join(MAPDIR, fname + '.map')):
+        reg.add(name.lower())
+
+def sint(v, d):
+    try:
+        return int(v.strip())
+    except Exception:
+        return d
+
+mg_lines = read_gbk(os.path.join(ENVIR, 'MonGen.txt')).split('\n')
+entries = 0
+sum_count = 0
+dropped = 0
+for raw in mg_lines:
+    line = raw.rstrip('\r')
+    if not line or line[0] == ';':
+        continue
+    map_name, rest = get_valid_str3(line, DIV3)
+    x, rest = get_valid_str3(rest, DIV3)
+    y, rest = get_valid_str3(rest, DIV3)
+    if rest.startswith('"'):
+        # GetValidStrCap -> CaptureString legacy(1-based)：等价于从 index=1 起走 else 分支
+        inner = rest[1:]
+        dest, rest2 = get_valid_str3(inner, DIV3)
+        mon_name = '"' + dest
+        rest = rest2
+    else:
+        mon_name, rest = get_valid_str3(rest, DIV3)
+    rng, rest = get_valid_str3(rest, DIV3)
+    cnt, rest = get_valid_str3(rest, DIV3)
+    zen_raw, rest = get_valid_str3(rest, DIV3)
+    _mis, _rest = get_valid_str3(rest, DIV3)
+    zen = sint(zen_raw, -1) * 60 * 1000
+    cnt_i = sint(cnt, 0)
+    if map_name and mon_name and zen > 0 and map_name.lower() in reg:
+        entries += 1
+        sum_count += cnt_i & 0xFFFF
+    else:
+        dropped += 1
+
+print('maps_in_registry=%d' % len(reg))
+print('entries=%d sum_count=%d dropped=%d' % (entries, sum_count, dropped))

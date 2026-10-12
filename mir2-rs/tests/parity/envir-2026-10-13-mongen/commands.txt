@@ -1,0 +1,25 @@
+# 本片（M3④-实现 B 分片①：crates/envir MonGen 解析）复现命令
+# 工作目录：<worktree>/mir2-rs ；隔离目标目录 CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target
+
+# --- 判据 ---
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test -p mir2-envir --offline
+MIR2_MONGEN_DIR='E:\MirServer\M2GameSvr' CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test -p mir2-envir --offline --test mongen -- --ignored --nocapture
+
+# 独立 Python 复刻交叉核对（脚本在 E:/tmp/m2svr-mongen/crosscheck.py，见 12-crosscheck-python.txt）
+python E:/tmp/m2svr-mongen/crosscheck.py
+
+# --- 四门禁 ---
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo fmt --all -- --check
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo clippy --workspace --all-targets -- -D warnings
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo run -p msgcodegen -- --check
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test --workspace --offline
+
+# --- 改坏必红（每次：cp mongen.rs 备份 -> 变异 -> 跑命中用例 -> 还原并 diff -q 核对）---
+# RC-1：删掉 `|| zen_time <= 0 ||`            -> drops_rows_failing_oracle_validation
+# RC-2：GetValidStrCap 换成 GetValidStr3       -> quoted_name_keeps_oracle_capture_string_quirk
+# RC-3：CompareLStr("loadgen",行) 反转实参     -> tests/mongen.rs::loader_does_not_expand_loadgen_include
+
+# --- 证据 hash（仓库字节口径）---
+python -I tools/evidence-hash/verify_sha256sums.py write mir2-rs/tests/parity/envir-2026-10-13-mongen
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/envir-2026-10-13-mongen
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/envir-2026-10-13-mongen

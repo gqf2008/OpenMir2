@@ -38,4 +38,11 @@ pub enum EnvirError {
         #[source]
         source: std::io::Error,
     },
+
+    /// `Envir/MonGen.txt` 怪物名列走了 oracle `HUtil32.CaptureString` 的越界分支
+    /// （C# 抛 `IndexOutOfRangeException`，`LocalDB.LoadMonGen` 无 try/catch 兜底）。
+    #[error(
+        "MonGen.txt 怪物名列解析越界（CaptureString，对应 C# IndexOutOfRangeException）：{line}"
+    )]
+    MonGenCaptureString { line: String },
 }

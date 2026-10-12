@@ -1,0 +1,11 @@
+$ MIR2_MONGEN_DIR="E:\MirServer\M2GameSvr" CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test -p mir2-envir --offline --test mongen -- --ignored --nocapture
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.35s
+     Running tests\mongen.rs (E:/tmp/openmir2-m2svr-target\debug\deps\mongen-0e054e7c90c63b5b.exe)
+
+running 1 test
+MonGen entries=2827 sum_count=39019 maps_loaded=322
+test real_deployment_mongen_reading ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.57s
+
+rc=0
