@@ -1,0 +1,5 @@
+GREEN mir2-rs\tests\parity\m3\evidence-t14-rerun-20261012\SHA256SUMS.txt  [repo 口径]  OK 18/18
+GREEN mir2-rs\tests\parity\m3\evidence-m3-isolate-twophase-dod2-20261013\SHA256SUMS.txt  [repo 口径]  OK 69/69
+GREEN mir2-rs\tests\parity\m3\skill-probe\SHA256SUMS.txt  [repo 口径]  OK 5/5
+GREEN mir2-rs\tests\parity\m3\combat-probe\SHA256SUMS.txt  [repo 口径]  OK 4/4
+GREEN mir2-rs\tests\parity\m3\attack-request-sequence\SHA256SUMS.txt  [repo 口径]  OK 39/39

@@ -1,0 +1,14 @@
+# ② 战斗 DoD② 逐 k（判据本体）：三对 attack_diff.py diff
+# 会话取自入库证据包（可干净检出复算）：mir2-rs/tests/parity/m3/evidence-m3-isolate-twophase-dod2-20261013/sessions/<sid>/attack_seq.jsonl
+## c1 vs c2（C# 同侧两次独立起栈）
+NONTRIVIAL a=True() b=True()
+GREEN: 跨侧攻击序列 diff = 0（attacked=120 hits=57 dodges=63 sum=2425）
+rc=0
+## c2 vs r1（跨侧）
+NONTRIVIAL a=True() b=True()
+GREEN: 跨侧攻击序列 diff = 0（attacked=120 hits=57 dodges=63 sum=2425）
+rc=0
+## c1 vs r1（跨侧）
+NONTRIVIAL a=True() b=True()
+GREEN: 跨侧攻击序列 diff = 0（attacked=120 hits=57 dodges=63 sum=2425）
+rc=0

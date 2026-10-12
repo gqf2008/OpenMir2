@@ -1,0 +1,21 @@
+# M3 十项系统盘点 —— 技能/战斗工件计数（只读）
+
+## 技能登记表（skill-probe/vectors/skills_registry.json）
+total_magic_rows = 108
+rows            = 108
+implemented     = 29
+implemented_true_count = 29
+not_implemented = 79
+dospell_class_hist = {'implemented': 29, 'warr_reject': 8, 'context_required': 10, 'no_effect_case': 6, 'no_switch_case': 20, 'magicid_reject': 35}
+implemented_magic_ids = [1, 2, 5, 6, 9, 10, 11, 13, 14, 15, 16, 18, 19, 22, 23, 24, 28, 29, 31, 33, 36, 48, 39, 42, 44, 45, 47, 48, 50]
+implemented_magic_ids_distinct = 28
+
+## 技能真身向量（skill-probe/vectors/skill_vectors.json）
+seed = 20261012
+magic_hit_interval_time = 800
+cases = 29
+oracle keys = ['input', 'formulas', 'mp_cost_entry', 'prereq_entry', 'rng', 'attack_power', 'dospell_class']
+
+## 战斗真身向量（combat-probe/vectors/combat_vectors.json）
+top keys = ['generated_by', 'oracle', 'seed', 'config', 'cases']
+  cases list len = 4

@@ -1,0 +1,22 @@
+# ② 取数流等价门（stream_equiv）
+## selftest
+[selftest] min=0 归一后逐次全等（7/7）: ok
+[selftest] (kind,arg) 口径确有假分歧（仪器口径的证据）: ok
+[selftest] 首处分歧是 hit_struck_damage 的 Next(max) vs Next(min,max): ok
+[selftest] 改坏一抽结果 ⇒ RED: ok
+[selftest] 真 min=5 不抹平 ⇒ RED: ok
+[selftest] 抽数不等 ⇒ RED（rc=1 语义）: ok
+[selftest] 缺 C# 输入 ⇒ PREREQ: ok
+[selftest] 空输入 ⇒ PREREQ: ok
+[selftest] C# 站点表不命中 ⇒ PREREQ（不静默出绿）: ok
+[selftest] --min-draws 不满足 ⇒ PREREQ: ok
+SELFTEST GREEN: stream_equiv 10/10
+rc=0
+## gate（判据本体：两侧攻击路径逐次取数 651/651）
+=== 两侧专用流逐次取数（语义等价口径）===
+  csharp draws=651 rust draws=651
+  csharp kinds=Next(max)
+  rust   kinds=Next(max),Next(min,max)
+  [仪器] `(kind,arg)` 口径第一处分歧 index=3：csharp req=['Next(max)', 37] / rust req=['Next(min,max)', 37] —— 两侧 repr 均为 hit_struck_damage(37)->22
+  GREEN: 两侧 (canon,归一 kind,arg,result) 逐次全等（651/651）——攻击路径取数等价
+rc=0
