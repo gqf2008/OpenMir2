@@ -1,0 +1,53 @@
+## 复核订正（reviewer-6 `88f120f3`，2026-10-13）——M-1 / M-2 / M-3
+
+本件为**证据件订正后的重验证**。本片只碰证据件本体（`01` / `GATES.txt` / `README.md` / `commands.txt`
++ 重算 `SHA256SUMS.txt`），**未改任何夹具/生产函数**（`attack_diff.py`、`per_strike_requests.py`、
+`compare_dedicated_streams.py`、`run_attack_pair.ps1` 一字未动），结论不变。
+
+### M-1（已修）`01-analyze-before.txt` 从 traceback 改为真输出
+
+- 根因：旧实现被复制到 `E:/tmp/psr-old.py` 后，`load_site_map()` 以 `__file__` 相对解析站点表
+  ⇒ 解析成 `E:\rng-isolate-attack\attack_sites.tsv`（`FileNotFoundError`），
+  落件实为一次 traceback，并非索引所写的「旧实现 index=3 假分歧」。
+- 修法：从 base `17f55b2d` 取出旧实现，并**在 `attack-request-sequence/` 内原位执行**
+  （站点表正常解析），重落 `01-analyze-before.txt`：
+  - `index(0based) = 3  class = player_path`，两侧 `repr` 同为 `hit_struck_damage(37)->22`，
+    `判读: RED  player_path_divergence@draw_index=4`，`rc=1`（与 reviewer-6 独立复现一致）。
+- 命令与「必须原位执行」的坑已同步进 `commands.txt` §1。
+
+### M-2（已修）`GATES.txt` 惰性判定文件数 4 → 5
+
+- 原文「本片改动仅 4 个文件」漏 `attack-request-sequence/README.md` ⇒ 订正为 **5** 个并补列该文件。
+
+### M-3（已修）README 措辞「两侧用同一个 dump」
+
+- 改为「两侧**同一口径（各侧自身 dump）**；实测两侧受害 HP 轨迹逐点相同」，
+  避免被误读为同一文件自比。
+
+## 重验证（本件生成时，全离线、零 .rs、未起栈、未占端口）
+
+三工具 selftest（代码未动，结果与 `11`/`12`/`13` 一致）：
+
+    $ python -I mir2-rs/tests/parity/m3/attack_diff.py selftest
+    SELFTEST GREEN: attack_diff selftest 41/41
+    rc=0
+
+    $ python -I mir2-rs/tests/parity/m3/attack-request-sequence/per_strike_requests.py selftest
+    SELFTEST GREEN: per_strike_requests 29/29
+    rc=0
+
+    $ python -I mir2-rs/tests/parity/m3/rng-isolate-attack/compare_dedicated_streams.py selftest
+    SELFTEST GREEN: 9/9（含 `Next(min,max)` min=0 归一不报分歧 / 真 min>0 不抹平）
+    rc=0
+
+目录复核（含本件，`--check-extra` 多件牙齿）：
+
+    $ python tools/evidence-hash/verify_sha256sums.py verify \
+        mir2-rs/tests/parity/m3/evidence-m3-obs-align-20261013 --check-extra
+    GREEN mir2-rs\tests\parity\m3\evidence-m3-obs-align-20261013\SHA256SUMS.txt  [repo 口径]  OK 24/24
+    rc=0
+
+    $ python tools/evidence-hash/verify_sha256sums.py eolcheck \
+        mir2-rs/tests/parity/m3/evidence-m3-obs-align-20261013
+    EOLCHECK GREEN 25/25 件文本证据与仓库口径（LF）在 EOL 上一致
+    rc=0
