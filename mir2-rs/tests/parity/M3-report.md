@@ -226,14 +226,14 @@ python -I tools/botload/load_report.py --stats E:\tmp\m3final\bots\load_stats.nd
 # 5b) 选角成功率 300/300（协议探针，M1⑤ 口径）
 python -I tools/m1-acceptance/probe_m1_chain.py --count 300 --out E:\tmp\m3final\probe.json
 # 5c) in_world 曲线稳态段无跌落（Ramp=1h；5min 桶；判据 = 桶均值 min ≥ 0.95 × 桶均值 max）
-python -I E:\tmp\m3final\in_world_stability.py E:\tmp\m3final\bots\load_stats.ndjson 3600000 300000
+python -I tools/botload/in_world_stability.py E:\tmp\m3final\bots\load_stats.ndjson `
+  --ramp-ms 3600000 --bucket-ms 300000 --tail-ms 300000 --min-ratio 0.95 --json E:\tmp\m3final\in-world-stability.json
 # 6) 收工：停栈 + 十端口实拍 + 卡上写「窗口已释放」
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 -Stop
 ```
 
-> 说明：`5c` 的 `in_world_stability.py`（输入 `load_stats.ndjson` + ramp/桶宽，断言「稳态段 5min 桶均值 min ≥ 0.95 × 桶均值 max」）
-> **开跑前随本卡新增到 `tools/botload/` 并入库**（当前仓内不存在，故本片只列口径）；
-> `5b` 复用 M1⑤ 的 `probe_m1_chain.py`（`--count 300`，口径 = 登录→选服→选角四步的 `select_chr` 计数）。
+> 说明：`5c` 的 `tools/botload/in_world_stability.py` 已随本片入库（`--selftest` 7/7：丢一桶⇒RED、缺 `in_world`/坏 JSON⇒PREREQ、无稳态段⇒PREREQ；
+> 实跑演示见证据包 `inventory/31`/`32`）；`5b` 复用 M1⑤ 的 `probe_m1_chain.py`（`--count 300`，口径 = 登录→选服→选角四步的 `select_chr` 计数）。
 
 ### 2.3 采集窗口登记（§17.1 要求，跑前必写）
 
@@ -263,7 +263,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_ru
 - **本片入库（新增）**：
   - `mir2-rs/tests/parity/M3-report.md`（本报告）；
   - `mir2-rs/tests/parity/m3/evidence-m3-final-acceptance-inventory-20261013/**`
-    （`README.md` + `commands.txt` + `verify/` + `diff/` + `inventory/` + `m4/` + `gates/` + `window/` + `SHA256SUMS.txt`）。
+    （`README.md` + `commands.txt` + `verify/` + `diff/` + `inventory/` + `m4/` + `gates/` + `window/` + `SHA256SUMS.txt`）；
+  - `tools/botload/in_world_stability.py`（owner 87e84b4f 要求「预置」：DoD② 判据 (b) 的 `in_world` 稳态无跌落机判器；
+    `--selftest` 7/7，改坏必红；实跑演示见证据包 `inventory/31`/`32`）。
 - **本片未新增任何临时目录/临时库/进程**；**未起栈、未占端口**（九端口实拍 FREE，见证据包 `window/01-ports-9.txt`）。
 - **仓外临时物**：无（本片所有命令均读仓库内既有件；`run_npc_cases.py` 只写仓库内 `evidence/M4/npc-cases.txt`，
   且重跑字节不变、`git status` 干净）。
@@ -276,7 +278,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_ru
 
 | 未收口项 | 现状 | 承接卡 / 建议卡名 |
 | --- | --- | --- |
-| §6 M3 门禁 `scoped_diff.py diff --canonical` 有一处 RED | **本片实跑确认**：`--canonical` ⇒ `RED 作用域内 4 行不一致`（全在 `mir2_db.characters_ablity`；`rc=1`）；`--canonical --fixed-newchr` ⇒ `RED 8 行`（+ `characters.Hair`，夹具随机输入）；同侧 C# 自比 `--canonical --fixed-newchr` = GREEN 9 表。⇒ 跨侧差异落在 `characters_ablity`（`Ac/MAxMP/MaxWeight/MaxWearWeight/MaxHandWeight/Hp`），疑持久化/断线存档轴；**非** DoD② 攻击 RNG 轴（后者已逐 k=0）。原始件 `diff/23-scope-m3-gate-canonical.txt` | **已有卡** `openmir2-m3-final-acceptance` 的 follow-up 轨（issue：`M3②③ follow-up（F-2）`，待认领） |
+| §6 M3 门禁 `scoped_diff.py diff --canonical` 有一处 RED | **本片实跑确认**：`--canonical` ⇒ `RED 作用域内 4 行不一致`（全在 `mir2_db.characters_ablity`；`rc=1`）；`--canonical --fixed-newchr` ⇒ `RED 8 行`（+ `characters.Hair`，夹具随机输入）；同侧 C# 自比 `--canonical --fixed-newchr` = GREEN 9 表。⇒ 跨侧差异落在 `characters_ablity`（`Ac/MAxMP/MaxWeight/MaxWearWeight/MaxHandWeight/Hp`），疑持久化/断线存档轴；**非** DoD② 攻击 RNG 轴（后者已逐 k=0）。原始件 `diff/23-scope-m3-gate-canonical.txt` | **已有卡** `openmir2-m3-scoped-diff-ability`（即原 F-2 follow-up） |
 | 掉落 / 经验（§6 顺序 ④） | `not_covered`（D 线离线先例存在，非 M3 系统级） | **已有卡** `openmir2-m3-drop-exp-align` |
 | NPC / 商店（§6 顺序 ⑤）服务端派发 + 失败分支 | `partial`（脚本层 7/7 引 M4；服务端 not_covered） | **已有卡** `openmir2-m3-npc-shop-align` |
 | 任务（§6 顺序 ⑥） | `not_covered` | 仓内无承接卡 ⇒ **建议卡** `openmir2-m3-quest-align` |
@@ -299,7 +301,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_ru
   python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/m3/evidence-m3-final-acceptance-inventory-20261013
   ```
 
-- **四门禁（本片交付树 `da94fcb7` + 本报告，零 `.rs`）**：
+- **四门禁（本片交付树，零 `.rs`）**：
   - `cargo fmt --all -- --check` → `rc=0`（`gates/50-fmt.txt`）
   - `cargo clippy --workspace --all-targets --offline -- -D warnings` → `rc=0`（`gates/51-clippy.txt`）
   - `cargo test --workspace --offline` → `84 suites / 687 passed / 0 failed / 16 ignored`，`rc=0`（`gates/52-test-workspace.txt`）

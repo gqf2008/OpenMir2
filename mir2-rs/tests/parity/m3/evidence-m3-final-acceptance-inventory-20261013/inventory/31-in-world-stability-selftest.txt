@@ -1,0 +1,3 @@
+# in_world_stability.py 自测（改坏必红牙齿）
+SELFTEST GREEN: in_world_stability 7/7
+rc=0

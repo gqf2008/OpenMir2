@@ -106,6 +106,17 @@ python -I mir2-rs/tests/parity/m3/scoped_diff.py diff $D/csharp-20261013-024249/
 python -I mir2-rs/tests/parity/m3/scoped_diff.py diff $D/csharp-20261013-024050/scoped_after_norm.jsonl $D/csharp-20261013-024249/scoped_after_norm.jsonl --canonical --fixed-newchr
 ```
 
+## 6b) 300 假人长跑判据 (b) 的机判器（owner 87e84b4f 要求预置）：`tools/botload/in_world_stability.py`
+
+```bash
+# → inventory/31-in-world-stability-selftest.txt（SELFTEST GREEN 7/7）
+python -I tools/botload/in_world_stability.py selftest
+# → inventory/32-in-world-stability-redcheck.txt（稳态 ⇒ GREEN；改坏一桶 ⇒ RED；缺 in_world ⇒ PREREQ rc=2）
+python -I tools/botload/in_world_stability.py mir2-rs/tests/parity/m3/evidence-m3-final-acceptance-inventory-20261013/inventory/iw_steady.jsonl  --ramp-ms 0 --bucket-ms 300000 --tail-ms 0
+python -I tools/botload/in_world_stability.py mir2-rs/tests/parity/m3/evidence-m3-final-acceptance-inventory-20261013/inventory/iw_dropped.jsonl --ramp-ms 0 --bucket-ms 300000 --tail-ms 0
+python -I tools/botload/in_world_stability.py mir2-rs/tests/parity/m1-boundary-load/evidence/10-rust-load-stats.ndjson
+```
+
 ## 7) 四门禁（交付树 da94fcb7 + 本报告，零 .rs）
 
 ```bash

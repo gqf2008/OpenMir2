@@ -6,6 +6,16 @@
 `tests/loadgate/README.md》产物清单哈希口径与复核`）。
 整栈一条命令见 `tools/e2e/stack_e2e.ps1`。
 
+**M3 总验收 DoD② 判据 (b) 的机判器**：`in_world_stability.py`（卡 `openmir2-m3-final-acceptance`）。
+长跑判据「假人 `in_world` 曲线在稳态段无跌落」里，连接数一侧归 `load_report.py` 的 `conn_lost_steady == 0`；
+本工具判 `in_world` 一侧：稳态段（`[t0+ramp, t1-tail_ms]`）按 `bucket_ms` 分桶，判 `min(桶均值) >= min_ratio × max(桶均值)`。
+缺 `in_world`/`t_ms` 一律 PREREQ（rc=2，fail-closed，不静默当绿）。
+
+```powershell
+python tools/botload/in_world_stability.py <load_stats.ndjson> --ramp-ms 3600000 --bucket-ms 300000 --tail-ms 300000
+python tools/botload/in_world_stability.py selftest      # 7/7（改坏一桶⇒RED；缺字段/坏 JSON⇒PREREQ；无稳态段⇒PREREQ）
+```
+
 ```powershell
 # 整栈一条命令：停栈 → 批量开号 → 起栈 → 工具自测+金标准 → 压测档位 200/500/1000 → 收尾/停栈
 # （C6 第 5 轮的验收命令：同一命令 3 连跑取最差；tier<1000 登录 100%、tier≥1000 ≥ 95%，见下《阈值与理由》）

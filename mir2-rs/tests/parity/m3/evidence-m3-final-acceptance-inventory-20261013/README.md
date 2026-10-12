@@ -30,6 +30,9 @@
 | `diff/22-stream-equiv.txt` | ② `stream_equiv` selftest 10/10 + gate 651/651 |
 | `diff/23-scope-m3-gate-canonical.txt` | §6 M3 门禁实跑：跨侧 `--canonical` RED 4 行 / `--fixed-newchr` RED 8 行；同侧 C# 自比 GREEN |
 | `inventory/30-skills-combat-registry.txt` | ③ 技能/战斗工件计数（只读；生成脚本内联于 `commands.txt` §4） |
+| `inventory/31-in-world-stability-selftest.txt` | DoD② 判据 (b) 机判器 `tools/botload/in_world_stability.py` 自测 7/7 |
+| `inventory/32-in-world-stability-redcheck.txt` | 判据 (b) 实跑演示：稳态 ⇒ GREEN、改坏一桶 ⇒ RED、缺 `in_world` ⇒ PREREQ（fail-closed） |
+| `inventory/iw_steady.jsonl` / `iw_dropped.jsonl` | 上面演示的合成 `load_stats` fixture（GREEN / RED） |
 | `m4/40-npc-cases.txt` | M4 7/7 port-free NPC 用例 stdout（GREEN） |
 | `m4/41-evidence-hashes.txt` | M4 证据 hash 复核（GREEN 19/19） |
 | `gates/50-fmt.txt` `51-clippy.txt` `52-test-workspace.txt` `53-msgcodegen.txt` | 四门禁（全 rc=0；test 84 suites/687 passed/0 failed/16 ignored） |
