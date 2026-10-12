@@ -1,0 +1,1211 @@
+### cargo test --workspace
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.46s
+     Running unittests src\main.rs (E:/tmp/m3cs12-target\debug\deps\db_srv-c3c3099270ca1024.exe)
+
+running 43 tests
+test cache::tests::add_of_missing_key_is_noop ... ok
+test cache::tests::add_replaces_existing_key_case_insensitively ... ok
+test cache::tests::query_all_snapshots_values ... ok
+test data::tests::check_code_sign_boundary ... ok
+test data::tests::make_long_matches_csharp ... ok
+test data::tests::encode_buffer_threshold ... ok
+test data::tests::request_envelope_roundtrips_load_character_data ... ok
+test data::tests::fail_envelope_roundtrips ... ok
+test gbk::tests::arrest_extracts_between_delimiters ... ok
+test gbk::tests::counts_gbk_and_ascii ... ok
+test gbk::tests::divider_never_lands_inside_a_char ... ok
+test gbk::tests::split2_matches_dotnet_remove_empty_entries ... ok
+test gbk::tests::str_to_int_tryparse ... ok
+test loginsrv::tests::accumulates_across_chunks ... ok
+test loginsrv::tests::feed_matches_csharp_edge_cases ... ok
+test loginsrv::tests::parses_login_srv_messages ... ok
+test loginsrv::tests::soft_out_requires_link ... ok
+test market::tests::save_data_item_only_empty_object_decodes ... ok
+test marketdata::tests::market_storage_matches_csharp_quirks ... ignored, 需本机 MySQL（独立临时库 mir2_dbsrv6k_mkt_*，不碰 mir2_db）
+test playdata::tests::comparer_errors_on_new_null ... ok
+test playdata::tests::comparer_matches_csharp_branches ... ok
+test playdata::tests::hi_lo_word_match_csharp ... ok
+test market::tests::market_search_message_true_bytes ... ok
+test market::tests::market_register_message_true_bytes ... ok
+test market::tests::marker_user_load_true_bytes ... ok
+test config::tests::bad_port_falls_back_to_default ... ok
+test config::tests::semicolon_rules_match_csharp ... ok
+test server::tests::does_not_touch_other_negatives ... ok
+test server::tests::normalizes_csharp_keepalive_nulls ... ok
+test server::tests::leaves_valid_frames_untouched ... ok
+test server::tests::normalizes_login_gate_keepalive_null_data ... ok
+test user::tests::name_helpers ... ok
+test user::tests::query_chr_body_layout ... ok
+test config::tests::parses_deployed_dbsrv_conf ... ok
+test user::tests::request_bodies ... ok
+test user::tests::response_frame_layout ... ok
+test user::tests::short_payload_is_rejected ... ok
+test user::tests::splits_head_and_body_like_csharp ... ok
+test route::tests::select_id_table ... ok
+test route::tests::missing_files_and_map_list ... ok
+test route::tests::route_comma_ports_follow_csharp ... ok
+test config::tests::fatal_on_missing_or_bad ... ok
+test route::tests::loads_deployed_tables ... ok
+
+test result: ok. 42 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\live_data.rs (E:/tmp/m3cs12-target\debug\deps\live_data-2cbe5abdaed771b8.exe)
+
+running 1 test
+test rust_dbsrv_6000_load_save_roundtrip ... ignored, 需要本机 MySQL(mir2_db)，会起真正的 db-srv 进程 + 写临时角色行
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\live_market.rs (E:/tmp/m3cs12-target\debug\deps\live_market-d8a0a1247124ded0.exe)
+
+running 1 test
+test rust_dbsrv_5700_market_faces_csharp_behaviour ... ignored, 需要本机 MySQL，会起真正的 db-srv 进程（独立临时库 mir2_dbsrv6k_mktlive_*）
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\live_querychr.rs (E:/tmp/m3cs12-target\debug\deps\live_querychr-adac3d52411e3082.exe)
+
+running 3 tests
+test csharp_dbsrv_querychr_matches_csharp_golden ... ignored, 需要本机 MySQL(mir2_db) + MIR2_ORACLE_DBSRV_DIR（C# DBSrv 产物目录）
+test csharp_selgate_to_rust_dbsrv ... ignored, 需要本机 MySQL(mir2_db) + MIR2_ORACLE_SELGATE_DIR（C# SelGate 产物目录）
+test rust_dbsrv_querychr_matches_csharp_golden ... ignored, 需要本机 MySQL(mir2_db)，会起真正的 db-srv 进程
+
+test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\main.rs (E:/tmp/m3cs12-target\debug\deps\game_gate-c3470ed9df563629.exe)
+
+running 16 tests
+test login::tests::deployed_shaped_login_passes ... ok
+test gbk::tests::deployed_server_name_roundtrips ... ok
+test login::tests::get_valid_str3_semantics ... ok
+test login::tests::leading_separator_login_is_not_falsely_kicked ... ok
+test login::tests::length_rules_match_oracle ... ok
+test login::tests::golden_client_login_text_parses_with_deployed_divider ... ok
+test login::tests::missing_star_prefix_is_kicked_1 ... ok
+test login::tests::synthetic_login_body_matches_oracle_formula ... ok
+test rules::tests::at_prefixed_content_skips_interval_and_does_not_refresh_tick ... ok
+test rules::tests::say_interval_drops_the_second_message_too_soon ... ok
+test rules::tests::zero_interval_never_drops ... ok
+test config::tests::parses_deployed_gamegate_conf ... ok
+test config::tests::nom_client_packet_size_comes_from_config_with_default ... ok
+test config::tests::decodes_gbk_comments_and_values ... ok
+test config::tests::missing_or_bad_keys_are_fatal ... ok
+test config::tests::parses_deployed_gbk_conf_fixture ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\relay.rs (E:/tmp/m3cs12-target\debug\deps\relay-3c28c60963ab1bd3.exe)
+
+running 11 tests
+test missing_config_exits_nonzero ... ok
+06:25:11.430 [INF] 游戏网关启动：1 组端点（config=C:\Users\gxh\AppData\Local\Temp\gg-login-9032-56416\config.conf）
+06:25:11.433 [INF] 游戏服务器[127.0.0.1:56404]链接成功.
+06:25:11.433 [INF] 游戏网关[127.0.0.1:56416]已启动...
+06:25:11.443 [INF] 游戏网关启动：1 组端点（config=C:\Users\gxh\AppData\Local\Temp\gg-say-9032-56415\config.conf）
+06:25:11.446 [INF] 游戏服务器[127.0.0.1:56405]链接成功.
+06:25:11.446 [INF] 游戏网关[127.0.0.1:56415]已启动...
+06:25:11.460 [INF] 游戏网关启动：1 组端点（config=C:\Users\gxh\AppData\Local\Temp\gg-big-9032-56418\config.conf）
+06:25:11.462 [INF] 游戏服务器[127.0.0.1:56406]链接成功.
+06:25:11.462 [INF] 游戏网关[127.0.0.1:56418]已启动...
+06:25:11.474 [INF] 游戏网关启动：1 组端点（config=C:\Users\gxh\AppData\Local\Temp\gg-kick-9032-56417\config.conf）
+06:25:11.477 [INF] 游戏服务器[127.0.0.1:56408]链接成功.
+06:25:11.477 [INF] 游戏网关[127.0.0.1:56417]已启动...
+06:25:11.492 [INF] 游戏网关启动：1 组端点（config=C:\Users\gxh\AppData\Local\Temp\gg-hdr-9032-56419\config.conf）
+06:25:11.493 [INF] 游戏服务器[127.0.0.1:56410]链接成功.
+06:25:11.494 [INF] 游戏网关[127.0.0.1:56419]已启动...
+06:25:11.504 [INF] 游戏网关启动：1 组端点（config=C:\Users\gxh\AppData\Local\Temp\gg-idx-9032-56420\config.conf）
+06:25:11.506 [INF] 游戏服务器[127.0.0.1:56412]链接成功.
+06:25:11.507 [INF] 游戏网关[127.0.0.1:56420]已启动...
+06:25:11.519 [INF] 游戏网关启动：1 组端点（config=C:\Users\gxh\AppData\Local\Temp\gg-tail-9032-56414\config.conf）
+06:25:11.521 [INF] 游戏服务器[127.0.0.1:56407]链接成功.
+06:25:11.522 [INF] 游戏网关[127.0.0.1:56414]已启动...
+06:25:11.532 [INF] 游戏网关启动：1 组端点（config=C:\Users\gxh\AppData\Local\Temp\gg-relay-9032-56421\config.conf）
+06:25:11.535 [INF] 游戏服务器[127.0.0.1:56413]链接成功.
+06:25:11.535 [INF] 游戏网关[127.0.0.1:56421]已启动...
+06:25:11.547 [INF] 游戏网关启动：1 组端点（config=C:\Users\gxh\AppData\Local\Temp\gg-down-9032-56423\config.conf）
+06:25:11.549 [INF] 游戏服务器[127.0.0.1:56409]链接成功.
+06:25:11.549 [INF] 游戏网关[127.0.0.1:56423]已启动...
+06:25:11.559 [INF] 游戏网关启动：1 组端点（config=C:\Users\gxh\AppData\Local\Temp\gg-oracle-9032-56422\config.conf）
+06:25:11.561 [INF] 游戏服务器[127.0.0.1:56411]链接成功.
+06:25:11.562 [INF] 游戏网关[127.0.0.1:56422]已启动...
+06:25:11.938 [INF] 开始连接: 127.0.0.1:56424 (SessionId=2020 socket=304)
+06:25:11.938 [INF] 客户端登录通过: 127.0.0.1:56424 (SessionId=2020)
+06:25:11.938 [ERR] 游戏服务连接断开，网关停止接收。
+test login_success_sends_synthetic_login_packet ... ok
+06:25:11.954 [INF] 开始连接: 127.0.0.1:56426 (SessionId=9407 socket=304)
+06:25:11.954 [INF] 客户端登录通过: 127.0.0.1:56426 (SessionId=9407)
+06:25:11.969 [INF] 开始连接: 127.0.0.1:56428 (SessionId=3272 socket=324)
+06:25:11.969 [INF] 客户端登录通过: 127.0.0.1:56428 (SessionId=3272)
+06:25:11.985 [INF] 开始连接: 127.0.0.1:56430 (SessionId=9892 socket=316)
+06:25:11.985 [WRN] 客户端登陆消息处理失败，剔除链接: Kicked 1: 前两位不是 **（实得 "XXloadbo"） SessionId=9892
+06:25:11.985 [INF] 断开链接: 127.0.0.1:56430 (SessionId=9892)
+test bad_login_is_kicked_and_nothing_is_forwarded ... ok
+06:25:12.012 [INF] 开始连接: 127.0.0.1:56432 (SessionId=2352 socket=296)
+06:25:12.012 [WRN] 客户端登陆消息处理失败，剔除链接: Kicked 1: 前两位不是 **（实得 "�\u{1e}h讣h浖h讣"） SessionId=2352
+06:25:12.012 [INF] 断开链接: 127.0.0.1:56432 (SessionId=2352)
+test header_prefixed_login_is_kicked ... ok
+06:25:12.016 [INF] 开始连接: 127.0.0.1:56437 (SessionId=7489 socket=316)
+06:25:12.016 [INF] 客户端登录通过: 127.0.0.1:56437 (SessionId=7489)
+06:25:12.017 [INF] 开始连接: 127.0.0.1:56434 (SessionId=6645 socket=304)
+06:25:12.017 [INF] 客户端登录通过: 127.0.0.1:56434 (SessionId=6645)
+06:25:12.017 [DBG] 服务端分配会话索引：SessionId=6645 index=42
+06:25:12.031 [INF] Kick off user,over nom client packet size: 538
+06:25:12.031 [INF] 开始连接: 127.0.0.1:56439 (SessionId=627 socket=324)
+06:25:12.053 [INF] 开始连接: 127.0.0.1:56441 (SessionId=68 socket=304)
+06:25:12.053 [INF] 客户端登录通过: 127.0.0.1:56441 (SessionId=68)
+06:25:12.062 [INF] 开始连接: 127.0.0.1:56443 (SessionId=2623 socket=304)
+06:25:12.063 [INF] 客户端登录通过: 127.0.0.1:56443 (SessionId=2623)
+06:25:12.063 [ERR] 游戏服务连接断开，网关停止接收。
+test oracle_golden_login_frame_yields_oracle_synthetic_packet ... ok
+06:25:12.077 [DBG] 聊天间隔未到（800ms），丢弃该帧（SessionId=9407）
+06:25:12.078 [ERR] 游戏服务连接断开，网关停止接收。
+test command_frame_with_tail_is_rebuilt ... ok
+06:25:12.094 [INF] 客户端登录通过: 127.0.0.1:56439 (SessionId=627)
+06:25:12.308 [WRN] 异常消息封包（3 字节），关闭会话... SessionId=627
+06:25:12.308 [INF] 断开链接: 127.0.0.1:56439 (SessionId=627)
+test relays_open_data_heartbeat_and_close ... ok
+06:25:12.323 [ERR] 游戏服务连接断开，网关停止接收。
+test server_user_index_is_echoed_on_gm_data ... ok
+06:25:12.369 [ERR] 游戏服务连接断开，网关停止接收。
+test downlink_frames_match_oracle_bytes ... ok
+test say_interval_drops_the_second_chat_frame ... ok
+test oversize_frame_is_dropped_without_kick ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.18s
+
+     Running unittests src\lib.rs (E:/tmp/m3cs12-target\debug\deps\game_svr-a1496dc216e03861.exe)
+
+running 80 tests
+test ability::tests::make_word_overloads_are_distinct ... ok
+test attackwire::tests::action_sm_ident_matches_observer_table ... ok
+test attackwire::tests::front_position_clamps_at_border_like_oracle ... ok
+test attackwire::tests::at_self_only_when_same_tile ... ok
+test attackwire::tests::hit_mode_conditions_fall_back_to_rm_hit ... ok
+test attackwire::tests::nine_hit_idents_and_modes ... ok
+test bag::tests::check_user_items_whitelist ... ok
+test chat::tests::hear_text_is_name_colon_say ... ok
+test chat::tests::plain_say_only ... ok
+test chat::tests::hear_targets_unknown_speaker_is_empty ... ok
+test chat::tests::hear_targets_include_self_and_near_players_only ... ok
+test downlink::tests::my_light_follows_get_my_light ... ok
+test downlink::tests::turn_pair_nameless_has_no_show_name_tail ... ok
+test downlink::tests::move_frame_rebuilds_golden_sm_walk ... ok
+test feature::tests::golden_featurechanged_nrecog_is_reproduced ... ok
+test feature::tests::absent_slots_contribute_zero ... ok
+test ability::tests::login_record_derives_max_hp_and_mp_from_level ... ok
+test feature::tests::make_word_puts_second_arg_in_high_byte ... ok
+test ability::tests::naked_case_reproduces_m0_golden ... ok
+test downlink::tests::turn_pair_rebuilds_golden_sm_turn_and_featurechanged ... ok
+test feature::tests::human_feature_byte_layout_is_race_img_weapon_hair_dress ... ok
+test ability::tests::hp_clamp_gated_by_mh_set_and_mp_clamped_unconditionally ... ok
+test feature::tests::matches_oracle_fixture_cases ... ok
+test feature::tests::shape_and_hair_arithmetic_truncates_to_byte_like_oracle ... ok
+test feature::tests::shipped_feature_ex_is_zero_for_unset_inputs ... ok
+test ability::tests::anti_magic_baseline_is_one ... ok
+test feature::tests::matches_oracle_fixture_feature_ex ... ok
+test feature::tests::matches_oracle_fixture_packing ... ok
+test ability::tests::repeat_call_accumulation_has_teeth ... ok
+test ability::tests::matches_oracle_ability_fixture ... ok
+test itemwire::tests::write_ascii_string_matches_oracle_semantics ... ok
+test itemwire::tests::bagitems_tail_joins_encoded_items_with_slash ... ok
+test itemwire::tests::encode_client_item_layout_is_stable ... ok
+test movewire::tests::move_result_gate_is_at_target ... ok
+test movewire::tests::next_direction_eight_ways_and_flattening ... ok
+test bag::tests::matches_oracle_bag_fixture ... ok
+test movewire::tests::direction_delta_is_unit_clockwise ... ok
+test movewire::tests::good_tick_payload_shape ... ok
+test movewire::tests::steps_and_sm_ident_map ... ok
+test bag::tests::disable_take_off_branch_keeps_code_zero ... ok
+test movewire::tests::turn_ack_only_at_target ... ok
+test pickwire::tests::immediate_frames_map_to_oracle_bytes ... ok
+test pickwire::tests::notices_map_to_oracle_frames ... ok
+test pickwire::tests::sysmessage_without_text_is_skipped ... ok
+test recover::tests::death_resets_tick_without_consuming ... ok
+test recover::tests::full_hp_clears_the_health_pool ... ok
+test pickwire::tests::pickup_position_gate ... ok
+test recover::tests::dw_in_chs_time_shrinks_with_level ... ok
+test recover::tests::inc_spell_and_inc_healing_are_consumed_into_mp_and_hp ... ok
+test recover::tests::large_gap_folds_back_at_most_200ms ... ok
+test recover::tests::partial_pool_is_zeroed_and_not_reconsumed ... ok
+test ground::tests::drop_fails_because_oracle_map_item_id_is_always_zero ... ok
+test recover::tests::pooled_drug_is_consumed_over_ticks_when_not_at_full_hp ... ok
+test smframe::tests::attack_mode_goes_in_recog_not_param ... ok
+test smframe::tests::command_header_layout_is_little_endian ... ok
+test smframe::tests::empty_notice_still_sends_header_only_658 ... ok
+test ground::tests::pickup_puts_back_when_overweight ... ok
+test ground::tests::gold_pickup_inc_and_clamp ... ok
+test smframe::tests::sm_attackmode_matches_golden_frame_5 ... ok
+test ground::tests::pickup_notices_are_in_priority_dequeue_order ... ok
+test smframe::tests::sm_featurechanged_matches_golden_frame_4 ... ok
+test smframe::tests::golden_constants_are_present_in_capture ... ok
+test smframe::tests::sm_logon_matches_golden_frame_3 ... ok
+test smframe::tests::sm_newmap_matches_golden_frame_2 ... ok
+test smframe::tests::sm_outofconnection_is_header_only_with_recog_zero ... ok
+test smframe::tests::sm_version_fail_matches_golden_frame_11 ... ok
+test smframe::tests::enter_world_sequence_matches_golden_order_and_bytes ... ok
+test smframe::tests::version_fail_field_layout ... ok
+test ground::tests::stdmode40_drop_dura_wraps_like_oracle ... ok
+test smframe::tests::remaining_eleven_encoders_match_golden_frames ... ok
+test smframe::tests::sm_sysmessage_rebuilds_golden_frame_byte_for_byte ... ok
+test pickwire::tests::build_ground_map_matches_view ... ok
+test ground::tests::matches_oracle_ground_fixture ... ok
+test useitem::tests::can_not_use_item_still_menus_then_fails ... ok
+test useitem::tests::nodrug_guard_does_not_consume ... ok
+test useitem::tests::stdmode2_eats_without_effect ... ok
+test useitem::tests::stdmode31_funitem_eats_only_when_function_npc_present ... ok
+test useitem::tests::shape3_percent_rounds_away_from_zero ... ok
+test useitem::tests::unimplemented_stdmode_does_not_eat ... ok
+test useitem::tests::matches_oracle_eat_fixture ... ok
+
+test result: ok. 80 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running unittests src\main.rs (E:/tmp/m3cs12-target\debug\deps\game_svr-14e0f28d22a4aa9c.exe)
+
+running 146 tests
+test auth::tests::del_session_removes_first_match_only ... ok
+test auth::tests::match_requires_session_id_and_account_and_ignores_ip ... ok
+test auth::tests::pay_ment_mapping_and_admitted_rule ... ok
+test cert::tests::frame_without_bang_is_ignored ... ok
+test cert::tests::parse_negatives ... ok
+test cert::tests::parses_oracle_login_body ... ok
+test cert::tests::oracle_packet_with_admission_certifies ... ok
+test cert::tests::missing_or_disabled_admission_fails ... ok
+test config::tests::parses_share_map_dirs ... ok
+test dbclient::tests::load_character_data_matches_oracle_bytes ... ok
+test config::tests::parses_share_notice_dir ... ok
+test config::tests::deployed_conf_without_worldmaps_parses ... ok
+test dbclient::tests::make_long_is_hi_shifted_lo ... ok
+test config::tests::hears_msg_colors_from_setup_section ... ok
+test config::tests::section_and_key_matching_is_ascii_case_insensitive ... ok
+test dbclient::tests::reply_parser_waits_for_full_frame ... ok
+test dbclient::tests::reply_parser_resyncs_on_bad_packet_code ... ok
+test config::tests::deployed_conf_with_utf8_bom_reads_database_section ... ok
+test dbclient::tests::server_request_message_matches_oracle_bytes ... ok
+test config::tests::parses_deployed_shape ... ok
+test dbclient::tests::too_short_reply_is_silently_dropped_without_error_count ... ok
+test dbclient::tests::whole_request_frame_matches_oracle_bytes ... ok
+test dbclient::tests::reply_round_trip_and_sign_verdicts ... ok
+test enter::tests::ability_frames_follow_recalc_abilitys ... ok
+test config::tests::setup_home_fallback_keys_and_defaults ... ok
+test dbclient::tests::save_request_carries_db_savehumanrcd_and_packet ... ok
+test enter::tests::adjust_bonus_selects_template_by_job ... ok
+test enter::tests::area_state_bits_are_fight1_safe2 ... ok
+test enter::tests::area_state_and_map_description_follow_real_map0_flag ... ok
+test enter::tests::day_bright_matches_oracle ... ok
+test enter::tests::feature_shapes_resolves_shape_from_item_table ... ok
+test config::tests::bad_worldmaps_value_is_still_fatal ... ok
+test config::tests::missing_or_bad_keys_are_fatal ... ok
+test enter::tests::logon_group_is_wired_in_order_and_byte_exact ... ok
+test enter::tests::gold_msg_uses_carriage_return ... ok
+test enter::tests::music_id_falls_back_to_minus_one ... ok
+test enter::tests::naked_man_logon_matches_golden_50_bytes ... ok
+test enter::tests::rank_level_name_follows_dotnet_string_format ... ok
+test config::tests::parses_setup_red_msg_colors_with_oracle_defaults ... ok
+test enter::tests::show_name_matches_deployed_config_and_golden_42 ... ok
+test enter::tests::username_and_daychanging_are_wired_in_order ... ok
+test homemap::tests::get_home_info_falls_back_to_config_when_no_start_points ... ok
+test homemap::tests::get_home_info_consumes_one_draw_when_count_exceeds_size ... ok
+test homemap::tests::new_human_spawn_consumes_three_draws_in_oracle_order ... ok
+test enter::tests::soft_version_gate_and_config_frames ... ok
+test homemap::tests::parse_real_head_matches_oracle_tokens ... ok
+test homemap::tests::parser_splits_on_space_and_tab_only ... ok
+test homemap::tests::skips_blank_comment_and_incomplete_lines ... ok
+test enter::tests::production_path_emits_world_and_config_frames_for_real_record ... ok
+test hutil::tests::ascii_rendering_maps_high_bytes_to_question_mark ... ok
+test config::tests::setup_drop_pickup_keys_and_defaults ... ok
+test hutil::tests::tag_count_counts ... ok
+test enter::tests::game_time_from_hour_matches_oracle_switch ... ok
+test ids::tests::close_session_message_removes_admission_and_emits_kick ... ok
+test ids::tests::close_session_miss_emits_no_kick ... ok
+test ids::tests::open_session_message_fills_admission ... ok
+test ids::tests::partial_frame_stays_in_buffer ... ok
+test ids::tests::unknown_code_and_garbage_are_ignored ... ok
+test items::tests::catalog_is_one_based_and_skips_empty_names ... ok
+test load::tests::delete_human_removes_pending_load_on_both_buffers ... ok
+test load::tests::double_buffer_delivers_each_request_once ... ok
+test load::tests::in_save_list_case_insensitive_and_removable ... ok
+test load::tests::query_failure_kicks_and_session_zero_is_skipped ... ok
+test load::tests::saving_character_is_requeued_then_processed_next_round ... ok
+test magicwire::tests::change_magic_key_ignores_when_absent ... ok
+test magicwire::tests::change_magic_key_sets_only_matching_id ... ok
+test magicwire::tests::default_dir_only_for_non_explicit_case_magics ... ok
+test magicwire::tests::find_magic_matches_magic_id_and_skips_none ... ok
+test magicwire::tests::parse_magic_key_truncates_recog_to_u16 ... ok
+test magicwire::tests::parse_spell_maps_world_server_fields ... ok
+test magicwire::tests::spell_reject_order_and_results ... ok
+test mapwire::tests::relative_conf_base_is_normalized_to_cwd ... ok
+test notice::tests::empty_notice_is_empty_bytes ... ok
+test notice::tests::literal_slash_r_n_replace_is_carried_over ... ok
+test mapwire::tests::no_envir_and_no_worldmaps_is_fail_closed ... ok
+test mapwire::tests::missing_envir_falls_back_to_placeholder ... ok
+test notice::tests::readline_semantics ... ok
+test notice::tests::notice_roundtrip_matches_golden_658_tail ... ok
+test homemap::tests::load_start_points_decodes_gbk_real_file ... ok
+test record::tests::encode_ability_matches_golden_frame_12_tail ... ok
+test record::tests::parses_oracle_head ... ok
+test record::tests::null_item_desc_prefix_round_trip ... ok
+test record::tests::null_subobjects_round_trip ... ok
+test record::tests::stage1_header_and_ability_group ... ok
+test record::tests::stage3_status_time_arr ... ok
+test record::tests::null_arrays_round_trip ... ok
+test record::tests::stage2_point_fields ... ok
+test notice::tests::missing_notice_file_is_empty ... ok
+test record::tests::null_array_elements_round_trip ... ok
+test record::tests::save_character_data_roundtrips_through_dbsrv_type ... ok
+test record::tests::truncated_or_mismatched_prefix_is_rejected ... ok
+test record::tests::stage4_items_13_46_50 ... ok
+test seed::tests::parse_seed_accepts_decimal_with_sign_and_whitespace ... ok
+test record::tests::stage5_magic_20 ... ok
+test seed::tests::parse_seed_rejects_non_integer ... ok
+test seed::tests::parse_seed_unset_or_empty_is_disabled ... ok
+test seed::tests::probe_matches_csharp_seed42 ... ok
+test seed::tests::probe_is_deterministic_and_seed_sensitive ... ok
+test strings::tests::missing_keys_fall_back_to_oracle_defaults ... ok
+test strings::tests::section_and_key_are_case_insensitive_and_inline_comment_stripped ... ok
+test strings::tests::parses_deployed_get_show_name_keys ... ok
+test seed::tests::injected_world_rng_matches_csharp_probe ... ok
+test record::tests::stage6_quest_arrays_128 ... ok
+test mapwire::tests::all_maps_failing_is_broken_not_placeholder ... ok
+test seed::tests::unset_seed_keeps_existing_world_rng ... ok
+test tests::account_kick_targets_every_gateway_once ... ok
+test tests::account_kick_sends_sysmessage_then_soft_closes ... ok
+test tests::bag_cmd_field_order_is_recog_makeindex_param_slot ... ok
+test tests::aoi_show_emits_turn_pair_routed_by_gate ... ok
+test mapwire::tests::loads_registry_and_maps_logical_name_to_id ... ok
+test tests::bag_items_from_flattens_and_pads_desc ... ok
+test mapwire::tests::empty_map_info_file_is_broken_not_placeholder ... ok
+test tests::bag_takeoff_recalc_uses_prior_subability ... ok
+test mapwire::tests::enter_map_falls_back_to_home_map ... ok
+test mapwire::tests::envir_registry_covers_missing_worldmaps ... ok
+test tests::combat_downlink_sends_struck_and_nowdeath ... ok
+test tests::bag_equip_broadcasts_feature_changed_to_nearby ... ok
+test tests::drain_kicks_is_idempotent_and_safe_without_coords ... ok
+test tests::gate_slots_are_unique_per_connection_and_reusable ... ok
+test tests::duplicate_enter_kicks_old_and_closes_new ... ok
+test tests::mark_in_world_missing_gate_idx_does_not_pick_arbitrary ... ok
+test mapwire::tests::unknown_cur_map_is_rejected ... ok
+test tests::duplicate_login_race_has_both_reachable_branches ... ok
+test tests::kick_user_msg_is_oracle_text_in_gb2312 ... ok
+test tests::eat_drug_dispatches_and_updates_session ... ok
+test tests::mark_in_world_routes_by_gate_idx_not_arbitrary_gate ... ok
+test tests::newbie_items_follow_oracle_order_and_slots ... ok
+test tests::online_registry_set_and_take ... ok
+test tests::periodic_save_due_is_strict_gt_and_resets_on_fire ... ok
+test record::tests::standalone_subtype_encodings_match ... ok
+test tests::hit_cmd_dispatches_ack_action_frame_and_world_attack ... ok
+test tests::route_to_gate_rejects_out_of_range_gate_idx ... ok
+test tests::save_ledger_only_released_on_success_reply ... ok
+test tests::save_ledger_round_trips_between_begin_and_reply ... ok
+test tests::move_cmd_dispatches_turn_walk_ack_and_aoi ... ok
+test tests::send_decision_matches_process_buffer_send ... ok
+test tests::recovery_tick_consumes_pool_and_broadcasts ... ok
+test tests::query_bagitems_replies_sm_bagitems_with_items ... ok
+test users::tests::certify_trims_account_and_chr_name ... ok
+test users::tests::find_prefers_session_index_then_falls_back_to_socket ... ok
+test users::tests::index_is_one_based_and_reuses_smallest_free_slot ... ok
+test tests::pickup_gold_dispatches_and_updates_session ... ok
+test tests::say_broadcasts_hear_to_self_and_near_players_only ... ok
+test tests::spell_cmd_dispatches_guard_ack_and_magic_key_change ... ok
+test tests::periodic_save_fires_repeatedly_and_record_is_well_formed ... ok
+test tests::save_record_reflects_live_state_and_item_layout ... ok
+
+test result: ok. 146 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests\relay.rs (E:/tmp/m3cs12-target\debug\deps\relay-6a0c0da7cf28fa36.exe)
+
+running 13 tests
+test missing_config_exits_nonzero ... ok
+test missing_worldmaps_and_envir_exits_nonzero ... ok
+test starts_without_worldmaps_when_envir_present ... ok
+test gm_open_gets_server_user_index_one_based ... ok
+test close_frees_slot_for_reuse ... ok
+test gm_data_before_certification_goes_to_sim ... ok
+test login_packet_without_admission_fails_certification ... ok
+test db_load_request_is_sent_with_oracle_bytes ... ok
+test enter_world_emits_sm_newmap_byte_equal_to_golden ... ok
+test db_reply_with_player_data_enters_world_and_unlocks_commands ... ok
+test ids_notification_enables_login_certification ... ok
+test db_reply_accepted_with_good_sign_and_rejected_with_bad_sign ... ok
+test disconnect_clears_world_and_same_char_can_reenter ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.59s
+
+     Running tests\seed_inject.rs (E:/tmp/m3cs12-target\debug\deps\seed_inject-728c0d06e24428cf.exe)
+
+running 3 tests
+test invalid_seed_env_exits_nonzero ... ok
+test seed_env_injection_logs_csharp_probe ... ok
+test unset_seed_env_is_inert ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.11s
+
+     Running unittests src\main.rs (E:/tmp/m3cs12-target\debug\deps\login_gate-44f3634a0e194bd3.exe)
+
+running 4 tests
+test gbk::tests::deployed_server_name_roundtrips ... ok
+test config::tests::parses_deployed_login_gate_conf ... ok
+test config::tests::parses_gbk_chinese_conf ... ok
+test config::tests::missing_keys_are_fatal ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\relay.rs (E:/tmp/m3cs12-target\debug\deps\relay-414ff5b961a3cad1.exe)
+
+running 2 tests
+test missing_config_exits_nonzero ... ok
+06:25:18.613 [INF] 登录网关启动：监听 127.0.0.1:56565 → 登录服务 127.0.0.1:56564
+06:25:18.616 [INF] 账号服务器[127.0.0.1:56564]链接成功.
+06:25:18.616 [INF] 登录网关[127.0.0.1:56565]已启动...
+06:25:19.118 [INF] 开始连接: 127.0.0.1:56566
+test relays_frames_and_swallows_heartbeat ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s
+
+     Running unittests src\main.rs (E:/tmp/m3cs12-target\debug\deps\login_srv-fc7e156d13127128.exe)
+
+running 19 tests
+test login_server::tests::ordinal_ignore_case_matches_dotnet_shape ... ok
+test config::tests::ini_semantics ... ok
+test login_server::tests::format_second_shape ... ok
+test login_server::tests::gate_public_addr_lookup ... ok
+test login_server::tests::sort_server_list_orders_same_name_by_desc_index ... ok
+test login_server::tests::parses_user_account_packet ... ok
+test gbk::tests::deployed_server_name_roundtrips ... ok
+test login_server::tests::user_entry_buffer_is_148_bytes ... ok
+test login_server::tests::write_ascii_string_layout ... ok
+test state::tests::account_rule_matches_csharp_shape ... ok
+test state::tests::session_manager_keys ... ok
+test wire::tests::parses_client_frame_like_csharp ... ok
+test wire::tests::rejects_short_or_unterminated ... ok
+test wire::tests::response_frame_matches_csharp_golden ... ok
+test config::tests::missing_server_addr_is_not_fatal ... ok
+test config::tests::parses_gbk_chinese_conf ... ok
+test config::tests::parses_disabled_gate_and_multi_gate ... ok
+test config::tests::parses_deployed_shaped_config ... ok
+test config::tests::missing_companion_files_are_fatal ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\login.rs (E:/tmp/m3cs12-target\debug\deps\login-2bb869e6162d42b1.exe)
+
+running 3 tests
+test responses_match_csharp_oracle_bytes ... ignored, 需要本机 MySQL mir2_account；显式 --ignored 运行
+test missing_config_exits_nonzero ... ok
+test mysql_unreachable_exits_nonzero ... ok
+
+test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 30.09s
+
+     Running unittests src\lib.rs (E:/tmp/m3cs12-target\debug\deps\mir2_data-b174ea69f9bb2fff.exe)
+
+running 7 tests
+test exps::tests::ini_inline_comment ... ok
+test exps::tests::ini_basic ... ok
+test exps::tests::ini_bool_parse ... ok
+test monitems::tests::quoted_item_name ... ok
+test monitems::tests::parses_typical_lines ... ok
+test monitems::tests::skips_invalid_rows ... ok
+test exps::tests::need_exps_missing_is_zero ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\lib.rs (E:/tmp/m3cs12-target\debug\deps\mir2_envir-fc8da82de7cee2d9.exe)
+
+running 11 tests
+test conf::tests::client_conf_serializes_to_17_declaration_order_bytes ... ok
+test conf::tests::naked_ability_serializes_to_20_bytes ... ok
+test mapinfo::tests::dechp_point_and_time_are_swapped ... ok
+test mapinfo::tests::flag_defaults_match_maps_cs ... ok
+test conf::tests::missing_keys_fall_back_to_game_svr_conf_defaults ... ok
+test conf::tests::utf8_bom_server_conf_is_decoded_as_utf8 ... ok
+test mapinfo::tests::arrest_unchanged_leaks_across_sections ... ok
+test mapinfo::tests::quoted_desc_and_map_name_split ... ok
+test mapinfo::tests::l_prefix_and_unknown_commands ... ok
+test mapinfo::tests::nohorse_sets_nopositionmove_not_nohorse ... ok
+test conf::tests::reads_deployed_shaped_keys ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\csharp_parity.rs (E:/tmp/m3cs12-target\debug\deps\csharp_parity-ea0068065bc2dd99.exe)
+
+running 5 tests
+test real_mapinfo_matches_csharp_probe ... ignored, 读真机 E:\MirServer（仓外）；MIR2_REAL_MAPINFO 可覆盖路径
+test real_server_conf_matches_csharp_probe ... ignored, 读真机 E:\MirServer（仓外）；MIR2_REAL_SERVERCONF 可覆盖路径
+test client_conf_bytes_match_csharp_probe ... ok
+test synthetic_server_conf_matches_csharp_probe ... ok
+test synthetic_mapinfo_matches_csharp_probe ... ok
+
+test result: ok. 3 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\real_maps.rs (E:/tmp/m3cs12-target\debug\deps\real_maps-66c1c4530c10c6db.exe)
+
+running 4 tests
+test map_0100_matches_deployment ... ignored, 读真机 E:\MirServer（仓外）；MIR2_MAP_DIR 显式跑
+test map_0129_matches_deployment ... ignored, 读真机 E:\MirServer（仓外）；MIR2_MAP_DIR 显式跑
+test map_0_cell_zero_attribute_is_consistent ... ignored, 读真机 E:\MirServer（仓外）；MIR2_MAP_DIR 显式跑
+test map_0_matches_deployment ... ignored, 读真机 E:\MirServer（仓外）；MIR2_MAP_DIR 显式跑
+
+test result: ok. 0 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\registry.rs (E:/tmp/m3cs12-target\debug\deps\registry-67771f45d1dbb523.exe)
+
+running 7 tests
+test parse_lines_keeps_order ... ok
+test path_conventions ... ok
+test section_line_parsing_matches_maps_cs ... ok
+test registry_skips_duplicates_and_missing_files ... ok
+test registry_exposes_flag_and_map_desc ... ok
+test registry_assigns_ids_in_map_info_order ... ok
+test registry_reads_point_file_next_to_map ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\synthetic.rs (E:/tmp/m3cs12-target\debug\deps\synthetic-cc6718bc6b3d5522.exe)
+
+running 10 tests
+test obj_list_allocation_before_first_wall ... ok
+test door_byte_scan ... ok
+test onehot_pins_file_order_to_coordinates ... ok
+test door_status_merge ... ok
+test pattern_words_and_override ... ok
+test points_table_parsing ... ok
+test rejects_malformed_maps ... ok
+test red_check_flip_bit15_changes_walkability ... ok
+test red_check_coverage_order_and_mid_are_detected ... ok
+test to_grid_preserves_attributes ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\lib.rs (E:/tmp/m3cs12-target\debug\deps\mir2_formula-6d377434d6e82a79.exe)
+
+running 11 tests
+test drop::tests::item_number_counter_wraps ... ok
+test drop::tests::gold_uses_half_plus_random ... ok
+test drop::tests::item_name_bug_replica ... ok
+test drop::tests::unknown_item_sets_desc8 ... ok
+test exp::tests::calc_get_exp_decay ... ok
+test exp::tests::calc_get_exp_no_decay_when_fix_on ... ok
+test exp::tests::level_exp_indexes_table ... ok
+test level_ability::tests::warrior_level1 ... ok
+test exp::tests::level_exp_above_max_panics_like_csharp - should panic ... ok
+test level_ability::tests::wizard_level50 ... ok
+test level_ability::tests::taoist_hand_weight_bug_replica ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\lib.rs (E:/tmp/m3cs12-target\debug\deps\mir2_parity_tests-eef7e835c0b33c69.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\bin\dump_item_fixture.rs (E:/tmp/m3cs12-target\debug\deps\dump_item_fixture-f4f07145a1741c48.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\drop_parity.rs (E:/tmp/m3cs12-target\debug\deps\drop_parity-026449e30c3a86a4.exe)
+
+running 4 tests
+test redcheck_wrong_seed_must_differ ... ok
+test redcheck_tampered_drop_table_must_differ ... ok
+test drop_jiangshi1_100_kills_match_golden ... ok
+test drop_synth_branches_match_golden ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests\exp_parity.rs (E:/tmp/m3cs12-target\debug\deps\exp_parity-220e0388b9339ec7.exe)
+
+running 4 tests
+test redcheck_tampered_table_must_differ ... ok
+test need_exps_table_matches_golden ... ok
+test exp_scalars_match_golden ... ok
+test get_level_exp_1_to_max_matches_golden ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\levelabil_parity.rs (E:/tmp/m3cs12-target\debug\deps\levelabil_parity-1761d21ad6aa1052.exe)
+
+running 2 tests
+test redcheck_changed_config_must_differ ... ok
+test level_ability_all_jobs_levels_match_golden ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\rng_parity.rs (E:/tmp/m3cs12-target\debug\deps\rng_parity-706609d7a021ee6c.exe)
+
+running 5 tests
+test redcheck_shuffled_calls_must_differ ... ok
+test rng_large_range_matches_csharp_golden ... ok
+test rng_matches_csharp_golden_seed20240229 ... ok
+test rng_matches_csharp_golden_seed42 ... ok
+test redcheck_wrong_seed_must_differ ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\rng_replay_parity.rs (E:/tmp/m3cs12-target\debug\deps\rng_replay_parity-c8003ba8c3a8b881.exe)
+
+running 4 tests
+test redcheck_tampered_result_must_differ ... ok
+test csharp_process_stream_regenerates_from_seed ... ok
+test redcheck_wrong_call_shape_must_diverge ... ok
+test replay_harness_consumes_csharp_stream ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\table_counts.rs (E:/tmp/m3cs12-target\debug\deps\table_counts-735233531bf8d760.exe)
+
+running 1 test
+test table_counts_match_csharp_startup_log ... ignored, 需要本机 MySQL mir2_data；显式 --ignored 运行
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\world_aoi_parity.rs (E:/tmp/m3cs12-target\debug\deps\world_aoi_parity-6ae5e4b8bc74677d.exe)
+
+running 3 tests
+test redcheck_position_change_must_differ ... ok
+test redcheck_view_range_change_must_alter_visible_set ... ok
+test world_positions_and_visible_sets_match_csharp ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\world_combat_parity.rs (E:/tmp/m3cs12-target\debug\deps\world_combat_parity-87ba6e4eec0c7c72.exe)
+
+running 7 tests
+test exp_goes_to_first_hitter_not_last ... ok
+test golden_covers_dodge_and_no_hit_roll_branch ... ok
+test kill_exp_does_not_decay_even_when_fix_off ... ok
+test ghosted_hitter_loses_exp_credit_in_same_tick ... ok
+test combat_attacks_and_exp_match_csharp ... ok
+test redcheck_speed_point_change_must_alter_attacks ... ok
+test redcheck_hit_point_zero_branch_consumes_no_rng ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\world_session_parity.rs (E:/tmp/m3cs12-target\debug\deps\world_session_parity-77f8e95ad25bae5e.exe)
+
+running 2 tests
+test session_and_drops_match_csharp ... ok
+test redcheck_drop_change_must_alter_floor ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\lib.rs (E:/tmp/m3cs12-target\debug\deps\mir2_protocol-2e3cd42408881b57.exe)
+
+running 20 tests
+test client_only::tests::querydyncode_is_client_only_not_server ... ok
+test edcode::tests::header_encodes_to_multiple_of_4 ... ok
+test edcode::tests::seed_is_load_bearing ... ok
+test frame::tests::client_frame_roundtrip ... ok
+test frame::tests::command_message_layout ... ok
+test frame::tests::server_frame_roundtrip ... ok
+test frame::tests::make_message_truncates_like_csharp ... ok
+test frame::tests::server_frame_accepts_both_tails ... ok
+test frame::tests::loginsrv_tail_is_bang_dollar ... ok
+test frame::tests::server_frame_tails_match_csharp_golden ... ok
+test frame::tests::splitter_frames_and_heartbeat ... ok
+test frame::tests::splitter_partial_delivery ... ok
+test internal::tests::data_len_field_is_independent ... ok
+test internal::tests::keepalive_reply_wire_shape ... ok
+test internal::tests::memorypack_body_matches_csharp_golden ... ok
+test internal::tests::parses_csharp_keepalive_with_null_data ... ok
+test internal::tests::rejects_negative_other_than_null ... ok
+test internal::tests::roundtrip_and_reject_garbage ... ok
+test internal::tests::string_length_counts_utf16_units ... ok
+test edcode::tests::roundtrip_all_lengths ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\oracle_vectors.rs (E:/tmp/m3cs12-target\debug\deps\oracle_vectors-0869b1974f753a71.exe)
+
+running 2 tests
+test attackmode_is_213 ... ok
+test oracle_vectors_byte_exact ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running unittests src\lib.rs (E:/tmp/m3cs12-target\debug\deps\mir2_script-54c5736528cc65cf.exe)
+
+running 9 tests
+test engine::dispatch::tests::registry_matches_csharp_tables ... ok
+test engine::vars::tests::get_val_name_no_prefixes ... ok
+test digest::tests::digest_is_deterministic_and_sensitive ... ok
+test textfile::tests::bom_detection_matches_dotnet ... ok
+test digest::tests::merchant_section_is_sensitive ... ok
+test textfile::tests::invalid_sequence_fallback_per_branch_matches_dotnet ... ok
+test textfile::tests::split_lines_readline_semantics ... ok
+test engine::dispatch::tests::implemented_set_is_a_subset_of_registry ... ok
+test textfile::tests::gbk_decode ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\dispatch_map.rs (E:/tmp/m3cs12-target\debug\deps\dispatch_map-e96e3200aa6f071d.exe)
+
+running 1 test
+test print_dispatch_map ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\engine_tests.rs (E:/tmp/m3cs12-target\debug\deps\engine_tests-4a2c04efbe69d139.exe)
+
+running 38 tests
+test break_stops_action_list ... ok
+test condition_batch_error_texts_and_csharp_bugs ... ok
+test change_exp_level_pkpoint_ops ... ok
+test auto_get_exp_and_offline ... ok
+test condition_batch_new_handlers_semantics ... ok
+test add_skill_learns_or_reports_error ... ok
+test condition_batch_closes_corpus_condition_targets ... ok
+test credit_point_ops_follow_csharp_byte_truncation ... ok
+test condition_handlers_registered_keys ... ok
+test game_gold_and_point_ops ... ok
+test give_gold_hits_goto_lable_give_item_after_flip ... ok
+test gm_execute_substitutes_self_and_restores_permission ... ok
+test goto_executes_goto_not_endquest_after_flip ... ok
+test hairstyle_change_mode_and_flags ... ok
+test human_hp_mp_ops_follow_csharp_quirks ... ok
+test kick_kill_mission_and_mobplace ... ok
+test line_msg_modes_and_error ... ok
+test map_and_timer_actions ... ok
+test marry_and_unmarry_reachable_branches ... ok
+test mon_gen_ex_and_clear_map_mon ... ok
+test play_dice_packs_mdy_values ... ok
+test implemented_registry_entries_are_actually_implemented ... ok
+test query_value_item_dlg_and_upgrade_dlg_item ... ok
+test renew_level_actions ... ok
+test repair_all_item_skips_empty_and_charm ... ok
+test say_and_close_flow ... ok
+test take_gold_hits_goto_lable_take_item_after_flip ... ok
+test check_name_date_list_writes_day_vars ... ok
+test script_command_lands_on_correct_handler_after_flip ... ok
+test takew_removes_worn_by_prefix_then_by_std_name ... ok
+test unregistered_messagebox_is_noop_like_csharp ... ok
+test add_use_date_list_appends_once ... ok
+test var_dynamic_var_declare_calc_and_check_var ... ok
+test var_family_inc_dec_mul_mov_slots ... ok
+test upgrade_items_ex_success_and_failure_paths ... ok
+test action_batch_closes_corpus_action_targets ... ok
+test var_loadvar_and_savevar_file_io ... ok
+test name_list_actions_remove_entry_like_csharp_addlist_bug ... ok
+
+test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\gbk_decode.rs (E:/tmp/m3cs12-target\debug\deps\gbk_decode-74faf09c2f06dcb7.exe)
+
+running 2 tests
+test single_byte_edges_match_dotnet ... ok
+test all_cp936_pairs_match_dotnet ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.37s
+
+     Running tests\parser_tests.rs (E:/tmp/m3cs12-target\debug\deps\parser_tests-b67ab7d91e50f7b7.exe)
+
+running 14 tests
+test envir_path_dotdot ... ok
+test merchant_header_and_goods ... ok
+test duplicate_label_gets_random_suffix ... ok
+test call_script_expands_with_csharp_quirks ... ok
+test comment_and_empty_lines_skipped ... ok
+test basic_if_act_say ... ok
+test define_substitution_and_home ... ok
+test opname_dot_split ... ok
+test merchant_header_only_when_bo_flag ... ok
+test multi_if_creates_new_procedure_only_after_content ... ok
+test quest_block_keeps_writing_into_previous_record ... ok
+test quest_creates_new_script_info ... ok
+test say_text_concatenates_without_separator ... ok
+test unknown_command_is_parse_error_not_silent ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\lib.rs (E:/tmp/m3cs12-target\debug\deps\mir2_script_tool-19d2373beadbdab2.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\main.rs (E:/tmp/m3cs12-target\debug\deps\mir2_script_tool-23df387a4fe8f5b1.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\codegen_drift.rs (E:/tmp/m3cs12-target\debug\deps\codegen_drift-c0b01e89333a1a24.exe)
+
+running 3 tests
+test field_index_equals_enum_value_anchor ... ok
+test codes_rs_matches_csharp_source ... ok
+test handlers_rs_matches_csharp_source ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\m4_macro_parity.rs (E:/tmp/m3cs12-target\debug\deps\m4_macro_parity-ff7b3460cbf8a2b4.exe)
+
+running 3 tests
+test macro_expansion_counts_and_structure_digest_are_frozen ... ok
+test macro_expanded_content_matches_csharp_frozen_digest ... ok
+test redcheck_macro_fixture_without_define_must_differ ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\lib.rs (E:/tmp/m3cs12-target\debug\deps\mir2_shared-4a55dd2e25033d8d.exe)
+
+running 19 tests
+test hutil32::tests::capture_string_probe_cases ... ok
+test hutil32::tests::get_valid_str3_dotnet_semantics ... ok
+test hutil32::tests::arrest_string_ex_probe_cases ... ok
+test hutil32::tests::compare_lstr_probe_cases ... ok
+test hutil32::tests::str_to_int_dotnet_semantics ... ok
+test hutil32::tests::is_string_number_always_true ... ok
+test hutil::tests::arrest_quoted ... ok
+test hutil::tests::get_valid_str3_splits ... ok
+test hutil::tests::make_word_layout ... ok
+test hutil::tests::str_to_int_matches_tryparse ... ok
+test hutil::tests::round_away_from_zero ... ok
+test replay::tests::replay_detects_divergence ... ok
+test replay::tests::replay_round_trip ... ok
+test rng::tests::dotnet_random_seed42_smoke ... ok
+test rng::tests::get_random_number_is_inclusive ... ok
+test rng::tests::large_range_matches_dotnet ... ok
+test rng::tests::next_max_zero_returns_zero ... ok
+test rng::tests::random_select_removes_from_source ... ok
+test rng::tests::small_and_large_range_sequences ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\lib.rs (E:/tmp/m3cs12-target\debug\deps\mir2_storage-760fb8b4360888fd.exe)
+
+running 6 tests
+test legacy_dsn::tests::parses_deployed_values ... ok
+test playerdata::tests::mutation_changes_bytes ... ok
+test playerdata::tests::envelopes_match_csharp_golden ... ok
+test legacy_dsn::tests::rejects_incomplete_or_bad ... ok
+test legacy_dsn::tests::tolerates_case_spacing_unknowns_and_ports ... ok
+test playerdata::tests::small_structs_match_csharp_golden ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\account_live.rs (E:/tmp/m3cs12-target\debug\deps\account_live-e06e16310b43b24c.exe)
+
+running 2 tests
+test account_without_protection_row_is_invisible ... ignored, 需要本机 MySQL 与 MIR2_ACCOUNT_DSN
+test loads_real_account_table_and_finds_test_account ... ignored, 需要本机 MySQL 与 MIR2_ACCOUNT_DSN
+
+test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\playerdatainfo_vectors.rs (E:/tmp/m3cs12-target\debug\deps\playerdatainfo_vectors-e7172289f0208b91.exe)
+
+running 3 tests
+test mutation_changes_bytes ... ok
+test playerdatainfo_vector_scale_anchor ... ok
+test playerdatainfo_vectors_byte_exact ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src\lib.rs (E:/tmp/m3cs12-target\debug\deps\mir2_world-096267a3e56b8215.exe)
+
+running 17 tests
+test map::tests::get_cell_info_returns_cell0_on_failure ... ok
+test map::tests::column_major_indexing ... ok
+test map::tests::move_blocked_by_any_actor_in_target_cell ... ok
+test map::tests::move_ignores_block_when_flag_set ... ok
+test entity::tests::ids_are_stable_and_order_is_slot_order ... ok
+test world::tests::session_state_machine_enter_switch_softclose_reenter ... ok
+test world::tests::session_disconnect_leaves_world_without_softclose_count ... ok
+test world::tests::tick_advances_clock_by_200ms ... ok
+test world::tests::aoi_scan_order_is_x_outer_y_inner ... ok
+test world::tests::monster_death_floor_item_view_matches_world_state ... ok
+test world::tests::monster_death_drops_items_and_awards_exp ... ok
+test world::tests::session_enter_leave_world ... ok
+test world::tests::attack_target_rules_subset ... ok
+test world::tests::aoi_boundary_at_view_range ... ok
+test world::tests::tick_order_is_deterministic_and_documented ... ok
+test world::tests::attack_outcome_is_deterministic ... ok
+test world::tests::try_step_now_is_synchronous_and_atomic ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\bin\tick_bench.rs (E:/tmp/m3cs12-target\debug\deps\tick_bench-b8dca5744a2015df.exe)
+
+running 10 tests
+test tests::budget_threshold_flags_over_budget ... ok
+test tests::degrade_pct_is_signed_and_guards_zero_base ... ok
+test tests::combine_load_takes_peak_of_two_probes ... ok
+test tests::gross_thresholds_only_fire_on_order_of_magnitude ... ok
+test tests::load_guard_triggers_on_cpu_or_heavy_processes ... ok
+test tests::median_takes_lower_middle_of_even_count ... ok
+test tests::parse_baseline_reads_committed_format ... ok
+test tests::parse_load_probe_reads_last_non_empty_line ... ok
+test tests::regression_limits_are_exact ... ok
+test tests::percentile_is_nearest_rank ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\attack_skill_vectors.rs (E:/tmp/m3cs12-target\debug\deps\attack_skill_vectors-6b376e252e603f5e.exe)
+
+running 5 tests
+test attack_power_hit_matches_oracle_per_case ... ok
+test redcheck_corrupt_one_aph_power_must_fail ... ok
+test recalc_hit_speed_matches_oracle_per_case ... ok
+test redcheck_corrupt_one_recalc_hit_point_must_fail ... ok
+test warr_reject_rows_are_classified_by_combat_entry ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\combat_skill_vectors.rs (E:/tmp/m3cs12-target\debug\deps\combat_skill_vectors-bf24b69f59e465ce.exe)
+
+running 17 tests
+test player_attack_power_is_a_registered_distinct_path ... ok
+test implemented_cases_are_counted_per_reachable_magic_id ... ok
+test dospell_classes_are_fully_registered ... ok
+test redcheck_corrupt_one_fire_wall_time_must_fail ... ok
+test duplicate_magic_ids_resolve_to_first_row_like_oracle ... ok
+test redcheck_corrupt_one_group_lightening_vs_undead_must_fail ... ok
+test redcheck_corrupt_one_group_poison_green_must_fail ... ok
+test redcheck_corrupt_one_group_melee_damage_must_fail ... ok
+test redcheck_corrupt_one_cooldown_must_fail ... ok
+test redcheck_corrupt_one_mp_cost_must_fail ... ok
+test combat_damage_sequence_matches_csharp ... ok
+test redcheck_corrupt_one_shield_power_must_fail ... ok
+test unimplemented_skills_are_registered ... ok
+test redcheck_corrupt_one_damage_value_must_fail ... ok
+test redcheck_duplicate_resolution_is_order_sensitive_must_fail ... ok
+test skills_match_csharp_per_skill ... ok
+test combat_hit_dodge_stats_match_and_are_non_trivial ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\dispatch_surface_vectors.rs (E:/tmp/m3cs12-target\debug\deps\dispatch_surface_vectors-ee9c54cc2c2ea550.exe)
+
+running 7 tests
+test dispatch_surface_matches_pinned_inventory ... ok
+test redcheck_unregistered_bucket_case_hit_must_fail ... ok
+test redcheck_extra_dispatcher_site_must_fail ... ok
+test redcheck_corrupt_one_spell_point_must_fail ... ok
+test redcheck_corrupt_one_generic_result_must_fail ... ok
+test generic_path_matches_oracle_vectors ... ok
+test only_red_banwol_of_the_buckets_has_a_second_dispatcher ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\ecs_migration.rs (E:/tmp/m3cs12-target\debug\deps\ecs_migration-40a6d7f3ec5dde18.exe)
+
+running 5 tests
+test entity_order_follows_slots_not_query_order ... ok
+test tick_clock_is_advanced_by_single_threaded_skeleton ... ok
+test tick_aoi_order_follows_slot_index_after_slot_reuse ... ok
+test tick_refuses_to_run_on_another_thread ... ok
+test tick_order_skeleton_collects_slot_order ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\magic_effect_vectors.rs (E:/tmp/m3cs12-target\debug\deps\magic_effect_vectors-95bb50d00fd74c61.exe)
+
+running 6 tests
+test redcheck_corrupt_one_turn_draw_must_fail ... ok
+test redcheck_corrupt_one_turn_result_must_fail ... ok
+test turn_undead_matches_oracle_per_case ... ok
+test redcheck_corrupt_one_tamming_hp_must_fail ... ok
+test tamming_matches_oracle_per_case ... ok
+test effects_are_classified_by_reachability ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\no_parallel.rs (E:/tmp/m3cs12-target\debug\deps\no_parallel-1376376e2dde57e0.exe)
+
+running 5 tests
+test redcheck_forbidden_dep_detection_works ... ok
+test redcheck_scanner_detects_injected_parallel_code ... ok
+test shared_crate_has_no_dependencies_at_all ... ok
+test world_crate_allows_only_ecs_dependencies ... ok
+test world_sources_are_single_threaded_ecs_only ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\residual_case_vectors.rs (E:/tmp/m3cs12-target\debug\deps\residual_case_vectors-f396d80330e7a4f5.exe)
+
+running 5 tests
+test redcheck_corrupt_self_frame_must_fail ... ok
+test residual_cases_match_oracle_per_case ... ok
+test redcheck_corrupt_training_draw_must_fail ... ok
+test redcheck_corrupt_inline_status_after_must_fail ... ok
+test residual_rows_cover_declared_switch_inline_cases ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\spell_prereq_vectors.rs (E:/tmp/m3cs12-target\debug\deps\spell_prereq_vectors-b5a438531843f705.exe)
+
+running 8 tests
+test spell_version_gate_source_cited ... ok
+test check_amulet_matches_csharp ... ok
+test redcheck_corrupt_one_amulet_result_must_fail ... ok
+test redcheck_corrupt_one_amulet_durability_must_fail ... ok
+test spell_in_range_uses_oracle_rage ... ok
+test warr_skill_matches_csharp ... ok
+test redcheck_corrupt_one_warr_result_must_fail ... ok
+test amulet_requirement_is_source_cited_table ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\spell_tail_vectors.rs (E:/tmp/m3cs12-target\debug\deps\spell_tail_vectors-cc61d811ed430f8b.exe)
+
+running 9 tests
+test do_spell_tail_gate_and_draw_order_source_cited ... ok
+test check_magic_level_up_matches_oracle_per_case ... ok
+test train_skill_matches_oracle_per_case ... ok
+test redcheck_corrupt_one_levelup_result_must_fail ... ok
+test redcheck_corrupt_one_train_point_must_fail ... ok
+test redcheck_corrupt_one_prof_point_must_fail ... ok
+test check_skill_proficiency_matches_oracle_per_case ... ok
+test no_effect_and_no_switch_rows_are_classified_by_tail_effect ... ok
+test redcheck_corrupt_one_tail_effect_must_fail ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\lib.rs (E:/tmp/m3cs12-target\debug\deps\mir2_world_bevy-c3df249802749dbf.exe)
+
+running 5 tests
+test ecs::tests::id_index_dense_and_sparse_paths_agree ... ok
+test ecs::tests::order_follows_slots_not_query_order ... ok
+test ecs::tests::get_mut_sees_component_changes ... ok
+test ecs::tests::free_slots_are_reused_lifo ... ok
+test ecs::tests::sync_slot_order_matches_order_entities ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\bin\drop_bench.rs (E:/tmp/m3cs12-target\debug\deps\drop_bench-a304cd8de661fcdf.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\bin\ecs_microbench.rs (E:/tmp/m3cs12-target\debug\deps\ecs_microbench-318d18110d975b89.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\bevy_drop_parity.rs (E:/tmp/m3cs12-target\debug\deps\bevy_drop_parity-cbd87e795382917e.exe)
+
+running 4 tests
+test floor_placement_matches_csharp_golden ... ok
+test no_parallel_guard ... ok
+test budget_matches_existing_implementation ... ok
+test output_does_not_depend_on_query_order ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\tick_skeleton.rs (E:/tmp/m3cs12-target\debug\deps\tick_skeleton-acaca0e8df1ad5f5.exe)
+
+running 1 test
+test clock_advances_and_thread_is_pinned ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\main.rs (E:/tmp/m3cs12-target\debug\deps\msgcodegen-ce91bf273a7f49d1.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\main.rs (E:/tmp/m3cs12-target\debug\deps\replay-ce9dca5db4650206.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\main.rs (E:/tmp/m3cs12-target\debug\deps\sel_gate-52f385faf0174535.exe)
+
+running 4 tests
+test gbk::tests::deployed_server_name_roundtrips ... ok
+test config::tests::parses_deployed_sel_gate_conf ... ok
+test config::tests::parses_gbk_chinese_conf ... ok
+test config::tests::missing_keys_are_fatal ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\relay.rs (E:/tmp/m3cs12-target\debug\deps\relay-0e599fc580218507.exe)
+
+running 2 tests
+test missing_config_exits_nonzero ... ok
+06:25:52.430 [INF] 角色网关启动：监听 127.0.0.1:56710 → 数据服务 127.0.0.1:56709
+06:25:52.432 [INF] 数据服务[127.0.0.1:56709]链接成功.
+06:25:52.432 [INF] 角色网关[127.0.0.1:56710]已启动...
+06:25:52.934 [INF] 开始连接: 127.0.0.1:56711
+test relays_frames_and_swallows_heartbeat ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s
+
+   Doc-tests game_svr
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests mir2_data
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests mir2_envir
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests mir2_formula
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests mir2_parity_tests
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests mir2_protocol
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests mir2_script
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests mir2_script_tool
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests mir2_shared
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests mir2_storage
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests mir2_world
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests mir2_world_bevy
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+TEST_RC=0

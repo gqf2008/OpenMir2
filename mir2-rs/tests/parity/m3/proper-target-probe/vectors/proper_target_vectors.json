@@ -1,0 +1,1146 @@
+{
+  "generated_by": "mir2-rs/tests/parity/m3/proper-target-probe",
+  "oracle": {
+    "entry": "M2Server.Player.PlayObject.IsProperTarget (public override) / M2Server.Actor.BaseObject.IsProperTarget",
+    "attack": "M2Server.Actor.BaseObject._Attack (internal, \u53CD\u5C04\u8C03\u7528) \u002B GetBaseAttackPoewr",
+    "source": "src/M2Server/Player/PlayObject.cs:1929 \u002B PlayObject.Attack.cs:627 \u002B BaseObject.Base.cs:360,377,470 \u002B BaseObject.cs:1777",
+    "rng": "OpenMir2.RandomNumber.random (\u79C1\u6709\u9759\u6001 System.Random) \u53CD\u5C04\u8986\u76D6\u4E3A new Random(seed)"
+  },
+  "seed": 20261012,
+  "proper_target": [
+    {
+      "name": "pvp_ham_all_nosafe",
+      "attacker_is_play": true,
+      "attacker_race": 0,
+      "target_race": 0,
+      "attack_mode": 0,
+      "attacker_safe": false,
+      "target_safe": false,
+      "target_admin": false,
+      "target_stone": false,
+      "target_has_master": false,
+      "master_is_attacker": false,
+      "dear_is_target": false,
+      "attacker_pk": 0,
+      "target_pk": 0,
+      "expected": true
+    },
+    {
+      "name": "pvp_ham_all_atk_safe",
+      "attacker_is_play": true,
+      "attacker_race": 0,
+      "target_race": 0,
+      "attack_mode": 0,
+      "attacker_safe": true,
+      "target_safe": false,
+      "target_admin": false,
+      "target_stone": false,
+      "target_has_master": false,
+      "master_is_attacker": false,
+      "dear_is_target": false,
+      "attacker_pk": 0,
+      "target_pk": 0,
+      "expected": false
+    },
+    {
+      "name": "pvp_ham_all_tgt_safe",
+      "attacker_is_play": true,
+      "attacker_race": 0,
+      "target_race": 0,
+      "attack_mode": 0,
+      "attacker_safe": false,
+      "target_safe": true,
+      "target_admin": false,
+      "target_stone": false,
+      "target_has_master": false,
+      "master_is_attacker": false,
+      "dear_is_target": false,
+      "attacker_pk": 0,
+      "target_pk": 0,
+      "expected": false
+    },
+    {
+      "name": "pvp_ham_peace",
+      "attacker_is_play": true,
+      "attacker_race": 0,
+      "target_race": 0,
+      "attack_mode": 1,
+      "attacker_safe": false,
+      "target_safe": false,
+      "target_admin": false,
+      "target_stone": false,
+      "target_has_master": false,
+      "master_is_attacker": false,
+      "dear_is_target": false,
+      "attacker_pk": 0,
+      "target_pk": 0,
+      "expected": false
+    },
+    {
+      "name": "pvp_ham_dear_stranger",
+      "attacker_is_play": true,
+      "attacker_race": 0,
+      "target_race": 0,
+      "attack_mode": 2,
+      "attacker_safe": false,
+      "target_safe": false,
+      "target_admin": false,
+      "target_stone": false,
+      "target_has_master": false,
+      "master_is_attacker": false,
+      "dear_is_target": false,
+      "attacker_pk": 0,
+      "target_pk": 0,
+      "expected": true
+    },
+    {
+      "name": "pvp_ham_dear_spouse",
+      "attacker_is_play": true,
+      "attacker_race": 0,
+      "target_race": 0,
+      "attack_mode": 2,
+      "attacker_safe": false,
+      "target_safe": false,
+      "target_admin": false,
+      "target_stone": false,
+      "target_has_master": false,
+      "master_is_attacker": false,
+      "dear_is_target": true,
+      "attacker_pk": 0,
+      "target_pk": 0,
+      "expected": false
+    },
+    {
+      "name": "pvp_ham_master",
+      "attacker_is_play": true,
+      "attacker_race": 0,
+      "target_race": 0,
+      "attack_mode": 3,
+      "attacker_safe": false,
+      "target_safe": false,
+      "target_admin": false,
+      "target_stone": false,
+      "target_has_master": false,
+      "master_is_attacker": false,
+      "dear_is_target": false,
+      "attacker_pk": 0,
+      "target_pk": 0,
+      "expected": true
+    },
+    {
+      "name": "pvp_ham_group",
+      "attacker_is_play": true,
+      "attacker_race": 0,
+      "target_race": 0,
+      "attack_mode": 4,
+      "attacker_safe": false,
+      "target_safe": false,
+      "target_admin": false,
+      "target_stone": false,
+      "target_has_master": false,
+      "master_is_attacker": false,
+      "dear_is_target": false,
+      "attacker_pk": 0,
+      "target_pk": 0,
+      "expected": true
+    },
+    {
+      "name": "pvp_ham_guild",
+      "attacker_is_play": true,
+      "attacker_race": 0,
+      "target_race": 0,
+      "attack_mode": 5,
+      "attacker_safe": false,
+      "target_safe": false,
+      "target_admin": false,
+      "target_stone": false,
+      "target_has_master": false,
+      "master_is_attacker": false,
+      "dear_is_target": false,
+      "attacker_pk": 0,
+      "target_pk": 0,
+      "expected": true
+    },
+    {
+      "name": "pvp_ham_pk_white_white",
+      "attacker_is_play": true,
+      "attacker_race": 0,
+      "target_race": 0,
+      "attack_mode": 6,
+      "attacker_safe": false,
+      "target_safe": false,
+      "target_admin": false,
+      "target_stone": false,
+      "target_has_master": false,
+      "master_is_attacker": false,
+      "dear_is_target": false,
+      "attacker_pk": 0,
+      "target_pk": 0,
+      "expected": false
+    },
+    {
+      "name": "pvp_ham_pk_white_red",
+      "attacker_is_play": true,
+      "attacker_race": 0,
+      "target_race": 0,
+      "attack_mode": 6,
+      "attacker_safe": false,
+      "target_safe": false,
+      "target_admin": false,
+      "target_stone": false,
+      "target_has_master": false,
+      "master_is_attacker": false,
+      "dear_is_target": false,
+      "attacker_pk": 0,
+      "target_pk": 250,
+      "expected": true
+    },
+    {
+      "name": "pvp_ham_pk_red_white",
+      "attacker_is_play": true,
+      "attacker_race": 0,
+      "target_race": 0,
+      "attack_mode": 6,
+      "attacker_safe": false,
+      "target_safe": false,
+      "target_admin": false,
+      "target_stone": false,
+      "target_has_master": false,
+      "master_is_attacker": false,
+      "dear_is_target": false,
+      "attacker_pk": 250,
+      "target_pk": 0,
+      "expected": true
+    },
+    {
+      "name": "pvp_ham_pk_red_red",
+      "attacker_is_play": true,
+      "attacker_race": 0,
+      "target_race": 0,
+      "attack_mode": 6,
+      "attacker_safe": false,
+      "target_safe": false,
+      "target_admin": false,
+      "target_stone": false,
+      "target_has_master": false,
+      "master_is_attacker": false,
+      "dear_is_target": false,
+      "attacker_pk": 250,
+      "target_pk": 250,
+      "expected": false
+    },
+    {
+      "name": "npc_ham_all",
+      "attacker_is_play": true,
+      "attacker_race": 0,
+      "target_race": 10,
+      "attack_mode": 0,
+      "attacker_safe": false,
+      "target_safe": false,
+      "target_admin": false,
+      "target_stone": false,
+      "target_has_master": false,
+      "master_is_attacker": false,
+      "dear_is_target": false,
+      "attacker_pk": 0,
+      "target_pk": 0,
+      "expected": false
+    },
+    {
+      "name": "animal_ham_all",
+      "attacker_is_play": true,
+      "attacker_race": 0,
+      "target_race": 51,
+      "attack_mode": 0,
+      "attacker_safe": false,
+      "target_safe": false,
+      "target_admin": false,
+      "target_stone": false,
+      "target_has_master": false,
+      "master_is_attacker": false,
+      "dear_is_target": false,
+      "attacker_pk": 0,
+      "target_pk": 0,
+      "expected": true
+    },
+    {
+      "name": "monster_ham_all",
+      "attacker_is_play": true,
+      "attacker_race": 0,
+      "target_race": 80,
+      "attack_mode": 0,
+      "attacker_safe": false,
+      "target_safe": false,
+      "target_admin": false,
+      "target_stone": false,
+      "target_has_master": false,
+      "master_is_attacker": false,
+      "dear_is_target": false,
+      "attacker_pk": 0,
+      "target_pk": 0,
+      "expected": true
+    },
+    {
+      "name": "monster_ham_peace",
+      "attacker_is_play": true,
+      "attacker_race": 0,
+      "target_race": 80,
+      "attack_mode": 1,
+      "attacker_safe": false,
+      "target_safe": false,
+      "target_admin": false,
+      "target_stone": false,
+      "target_has_master": false,
+      "master_is_attacker": false,
+      "dear_is_target": false,
+      "attacker_pk": 0,
+      "target_pk": 0,
+      "expected": true
+    },
+    {
+      "name": "own_pet_ham_all",
+      "attacker_is_play": true,
+      "attacker_race": 0,
+      "target_race": 60,
+      "attack_mode": 0,
+      "attacker_safe": false,
+      "target_safe": false,
+      "target_admin": false,
+      "target_stone": false,
+      "target_has_master": true,
+      "master_is_attacker": true,
+      "dear_is_target": false,
+      "attacker_pk": 0,
+      "target_pk": 0,
+      "expected": true
+    },
+    {
+      "name": "own_pet_ham_peace",
+      "attacker_is_play": true,
+      "attacker_race": 0,
+      "target_race": 60,
+      "attack_mode": 1,
+      "attacker_safe": false,
+      "target_safe": false,
+      "target_admin": false,
+      "target_stone": false,
+      "target_has_master": true,
+      "master_is_attacker": true,
+      "dear_is_target": false,
+      "attacker_pk": 0,
+      "target_pk": 0,
+      "expected": false
+    },
+    {
+      "name": "other_pet_ham_all",
+      "attacker_is_play": true,
+      "attacker_race": 0,
+      "target_race": 60,
+      "attack_mode": 0,
+      "attacker_safe": false,
+      "target_safe": false,
+      "target_admin": false,
+      "target_stone": false,
+      "target_has_master": true,
+      "master_is_attacker": false,
+      "dear_is_target": false,
+      "attacker_pk": 0,
+      "target_pk": 0,
+      "expected": true
+    },
+    {
+      "name": "mon_attacker_admin_target",
+      "attacker_is_play": false,
+      "attacker_race": 80,
+      "target_race": 0,
+      "attack_mode": 0,
+      "attacker_safe": false,
+      "target_safe": false,
+      "target_admin": true,
+      "target_stone": false,
+      "target_has_master": false,
+      "master_is_attacker": false,
+      "dear_is_target": false,
+      "attacker_pk": 0,
+      "target_pk": 0,
+      "expected": false
+    },
+    {
+      "name": "mon_attacker_stone_target",
+      "attacker_is_play": false,
+      "attacker_race": 80,
+      "target_race": 0,
+      "attack_mode": 0,
+      "attacker_safe": false,
+      "target_safe": false,
+      "target_admin": false,
+      "target_stone": true,
+      "target_has_master": false,
+      "master_is_attacker": false,
+      "dear_is_target": false,
+      "attacker_pk": 0,
+      "target_pk": 0,
+      "expected": false
+    },
+    {
+      "name": "mon_attacker_vs_player",
+      "attacker_is_play": false,
+      "attacker_race": 80,
+      "target_race": 0,
+      "attack_mode": 0,
+      "attacker_safe": false,
+      "target_safe": false,
+      "target_admin": false,
+      "target_stone": false,
+      "target_has_master": false,
+      "master_is_attacker": false,
+      "dear_is_target": false,
+      "attacker_pk": 0,
+      "target_pk": 0,
+      "expected": true
+    },
+    {
+      "name": "mon_attacker_vs_npc",
+      "attacker_is_play": false,
+      "attacker_race": 80,
+      "target_race": 10,
+      "attack_mode": 0,
+      "attacker_safe": false,
+      "target_safe": false,
+      "target_admin": false,
+      "target_stone": false,
+      "target_has_master": false,
+      "master_is_attacker": false,
+      "dear_is_target": false,
+      "attacker_pk": 0,
+      "target_pk": 0,
+      "expected": false
+    }
+  ],
+  "pvp_sequence": {
+    "name": "pvp_ham_all_100",
+    "attacker": {
+      "race": 0,
+      "dc": 7700,
+      "hit_point": 20,
+      "skill_count": 0
+    },
+    "target": {
+      "race": 0,
+      "ac": 2565,
+      "hp": 30000,
+      "hit_point": 20,
+      "speed_point": 20
+    },
+    "seed": 20261012,
+    "attacks": 100,
+    "sequence": [
+      {
+        "i": 0,
+        "power": 23,
+        "damage": 17,
+        "hp_after": 29983,
+        "hit": true
+      },
+      {
+        "i": 1,
+        "power": 20,
+        "damage": 12,
+        "hp_after": 29971,
+        "hit": true
+      },
+      {
+        "i": 2,
+        "power": 28,
+        "damage": 23,
+        "hp_after": 29948,
+        "hit": true
+      },
+      {
+        "i": 3,
+        "power": 20,
+        "damage": 11,
+        "hp_after": 29937,
+        "hit": true
+      },
+      {
+        "i": 4,
+        "power": 27,
+        "damage": 19,
+        "hp_after": 29918,
+        "hit": true
+      },
+      {
+        "i": 5,
+        "power": 29,
+        "damage": 19,
+        "hp_after": 29899,
+        "hit": true
+      },
+      {
+        "i": 6,
+        "power": 22,
+        "damage": 15,
+        "hp_after": 29884,
+        "hit": true
+      },
+      {
+        "i": 7,
+        "power": 22,
+        "damage": 13,
+        "hp_after": 29871,
+        "hit": true
+      },
+      {
+        "i": 8,
+        "power": 26,
+        "damage": 18,
+        "hp_after": 29853,
+        "hit": true
+      },
+      {
+        "i": 9,
+        "power": 28,
+        "damage": 17,
+        "hp_after": 29836,
+        "hit": true
+      },
+      {
+        "i": 10,
+        "power": 20,
+        "damage": 11,
+        "hp_after": 29825,
+        "hit": true
+      },
+      {
+        "i": 11,
+        "power": 24,
+        "damage": 18,
+        "hp_after": 29807,
+        "hit": true
+      },
+      {
+        "i": 12,
+        "power": 25,
+        "damage": 17,
+        "hp_after": 29790,
+        "hit": true
+      },
+      {
+        "i": 13,
+        "power": 27,
+        "damage": 18,
+        "hp_after": 29772,
+        "hit": true
+      },
+      {
+        "i": 14,
+        "power": 25,
+        "damage": 17,
+        "hp_after": 29755,
+        "hit": true
+      },
+      {
+        "i": 15,
+        "power": 24,
+        "damage": 15,
+        "hp_after": 29740,
+        "hit": true
+      },
+      {
+        "i": 16,
+        "power": 20,
+        "damage": 11,
+        "hp_after": 29729,
+        "hit": true
+      },
+      {
+        "i": 17,
+        "power": 20,
+        "damage": 13,
+        "hp_after": 29716,
+        "hit": true
+      },
+      {
+        "i": 18,
+        "power": 20,
+        "damage": 15,
+        "hp_after": 29701,
+        "hit": true
+      },
+      {
+        "i": 19,
+        "power": 26,
+        "damage": 15,
+        "hp_after": 29686,
+        "hit": true
+      },
+      {
+        "i": 20,
+        "power": 25,
+        "damage": 20,
+        "hp_after": 29666,
+        "hit": true
+      },
+      {
+        "i": 21,
+        "power": 25,
+        "damage": 16,
+        "hp_after": 29650,
+        "hit": true
+      },
+      {
+        "i": 22,
+        "power": 25,
+        "damage": 19,
+        "hp_after": 29631,
+        "hit": true
+      },
+      {
+        "i": 23,
+        "power": 27,
+        "damage": 18,
+        "hp_after": 29613,
+        "hit": true
+      },
+      {
+        "i": 24,
+        "power": 20,
+        "damage": 11,
+        "hp_after": 29602,
+        "hit": true
+      },
+      {
+        "i": 25,
+        "power": 26,
+        "damage": 16,
+        "hp_after": 29586,
+        "hit": true
+      },
+      {
+        "i": 26,
+        "power": 20,
+        "damage": 11,
+        "hp_after": 29575,
+        "hit": true
+      },
+      {
+        "i": 27,
+        "power": 30,
+        "damage": 21,
+        "hp_after": 29554,
+        "hit": true
+      },
+      {
+        "i": 28,
+        "power": 23,
+        "damage": 17,
+        "hp_after": 29537,
+        "hit": true
+      },
+      {
+        "i": 29,
+        "power": 28,
+        "damage": 21,
+        "hp_after": 29516,
+        "hit": true
+      },
+      {
+        "i": 30,
+        "power": 21,
+        "damage": 10,
+        "hp_after": 29506,
+        "hit": true
+      },
+      {
+        "i": 31,
+        "power": 28,
+        "damage": 16,
+        "hp_after": 29490,
+        "hit": true
+      },
+      {
+        "i": 32,
+        "power": 24,
+        "damage": 18,
+        "hp_after": 29472,
+        "hit": true
+      },
+      {
+        "i": 33,
+        "power": 24,
+        "damage": 11,
+        "hp_after": 29461,
+        "hit": true
+      },
+      {
+        "i": 34,
+        "power": 30,
+        "damage": 21,
+        "hp_after": 29440,
+        "hit": true
+      },
+      {
+        "i": 35,
+        "power": 20,
+        "damage": 10,
+        "hp_after": 29430,
+        "hit": true
+      },
+      {
+        "i": 36,
+        "power": 20,
+        "damage": 14,
+        "hp_after": 29416,
+        "hit": true
+      },
+      {
+        "i": 37,
+        "power": 29,
+        "damage": 17,
+        "hp_after": 29399,
+        "hit": true
+      },
+      {
+        "i": 38,
+        "power": 23,
+        "damage": 14,
+        "hp_after": 29385,
+        "hit": true
+      },
+      {
+        "i": 39,
+        "power": 28,
+        "damage": 21,
+        "hp_after": 29364,
+        "hit": true
+      },
+      {
+        "i": 40,
+        "power": 23,
+        "damage": 18,
+        "hp_after": 29346,
+        "hit": true
+      },
+      {
+        "i": 41,
+        "power": 29,
+        "damage": 18,
+        "hp_after": 29328,
+        "hit": true
+      },
+      {
+        "i": 42,
+        "power": 20,
+        "damage": 15,
+        "hp_after": 29313,
+        "hit": true
+      },
+      {
+        "i": 43,
+        "power": 20,
+        "damage": 7,
+        "hp_after": 29306,
+        "hit": true
+      },
+      {
+        "i": 44,
+        "power": 21,
+        "damage": 15,
+        "hp_after": 29291,
+        "hit": true
+      },
+      {
+        "i": 45,
+        "power": 29,
+        "damage": 24,
+        "hp_after": 29267,
+        "hit": true
+      },
+      {
+        "i": 46,
+        "power": 28,
+        "damage": 23,
+        "hp_after": 29244,
+        "hit": true
+      },
+      {
+        "i": 47,
+        "power": 28,
+        "damage": 19,
+        "hp_after": 29225,
+        "hit": true
+      },
+      {
+        "i": 48,
+        "power": 30,
+        "damage": 21,
+        "hp_after": 29204,
+        "hit": true
+      },
+      {
+        "i": 49,
+        "power": 30,
+        "damage": 24,
+        "hp_after": 29180,
+        "hit": true
+      },
+      {
+        "i": 50,
+        "power": 20,
+        "damage": 12,
+        "hp_after": 29168,
+        "hit": true
+      },
+      {
+        "i": 51,
+        "power": 25,
+        "damage": 15,
+        "hp_after": 29153,
+        "hit": true
+      },
+      {
+        "i": 52,
+        "power": 24,
+        "damage": 19,
+        "hp_after": 29134,
+        "hit": true
+      },
+      {
+        "i": 53,
+        "power": 27,
+        "damage": 15,
+        "hp_after": 29119,
+        "hit": true
+      },
+      {
+        "i": 54,
+        "power": 20,
+        "damage": 15,
+        "hp_after": 29104,
+        "hit": true
+      },
+      {
+        "i": 55,
+        "power": 21,
+        "damage": 15,
+        "hp_after": 29089,
+        "hit": true
+      },
+      {
+        "i": 56,
+        "power": 20,
+        "damage": 15,
+        "hp_after": 29074,
+        "hit": true
+      },
+      {
+        "i": 57,
+        "power": 20,
+        "damage": 8,
+        "hp_after": 29066,
+        "hit": true
+      },
+      {
+        "i": 58,
+        "power": 23,
+        "damage": 15,
+        "hp_after": 29051,
+        "hit": true
+      },
+      {
+        "i": 59,
+        "power": 22,
+        "damage": 17,
+        "hp_after": 29034,
+        "hit": true
+      },
+      {
+        "i": 60,
+        "power": 20,
+        "damage": 11,
+        "hp_after": 29023,
+        "hit": true
+      },
+      {
+        "i": 61,
+        "power": 22,
+        "damage": 16,
+        "hp_after": 29007,
+        "hit": true
+      },
+      {
+        "i": 62,
+        "power": 23,
+        "damage": 18,
+        "hp_after": 28989,
+        "hit": true
+      },
+      {
+        "i": 63,
+        "power": 29,
+        "damage": 22,
+        "hp_after": 28967,
+        "hit": true
+      },
+      {
+        "i": 64,
+        "power": 22,
+        "damage": 12,
+        "hp_after": 28955,
+        "hit": true
+      },
+      {
+        "i": 65,
+        "power": 27,
+        "damage": 14,
+        "hp_after": 28941,
+        "hit": true
+      },
+      {
+        "i": 66,
+        "power": 21,
+        "damage": 12,
+        "hp_after": 28929,
+        "hit": true
+      },
+      {
+        "i": 67,
+        "power": 20,
+        "damage": 15,
+        "hp_after": 28914,
+        "hit": true
+      },
+      {
+        "i": 68,
+        "power": 30,
+        "damage": 20,
+        "hp_after": 28894,
+        "hit": true
+      },
+      {
+        "i": 69,
+        "power": 24,
+        "damage": 14,
+        "hp_after": 28880,
+        "hit": true
+      },
+      {
+        "i": 70,
+        "power": 20,
+        "damage": 13,
+        "hp_after": 28867,
+        "hit": true
+      },
+      {
+        "i": 71,
+        "power": 29,
+        "damage": 20,
+        "hp_after": 28847,
+        "hit": true
+      },
+      {
+        "i": 72,
+        "power": 25,
+        "damage": 20,
+        "hp_after": 28827,
+        "hit": true
+      },
+      {
+        "i": 73,
+        "power": 20,
+        "damage": 11,
+        "hp_after": 28816,
+        "hit": true
+      },
+      {
+        "i": 74,
+        "power": 28,
+        "damage": 20,
+        "hp_after": 28796,
+        "hit": true
+      },
+      {
+        "i": 75,
+        "power": 29,
+        "damage": 19,
+        "hp_after": 28777,
+        "hit": true
+      },
+      {
+        "i": 76,
+        "power": 22,
+        "damage": 17,
+        "hp_after": 28760,
+        "hit": true
+      },
+      {
+        "i": 77,
+        "power": 21,
+        "damage": 16,
+        "hp_after": 28744,
+        "hit": true
+      },
+      {
+        "i": 78,
+        "power": 27,
+        "damage": 22,
+        "hp_after": 28722,
+        "hit": true
+      },
+      {
+        "i": 79,
+        "power": 24,
+        "damage": 14,
+        "hp_after": 28708,
+        "hit": true
+      },
+      {
+        "i": 80,
+        "power": 20,
+        "damage": 11,
+        "hp_after": 28697,
+        "hit": true
+      },
+      {
+        "i": 81,
+        "power": 29,
+        "damage": 22,
+        "hp_after": 28675,
+        "hit": true
+      },
+      {
+        "i": 82,
+        "power": 22,
+        "damage": 13,
+        "hp_after": 28662,
+        "hit": true
+      },
+      {
+        "i": 83,
+        "power": 24,
+        "damage": 19,
+        "hp_after": 28643,
+        "hit": true
+      },
+      {
+        "i": 84,
+        "power": 22,
+        "damage": 13,
+        "hp_after": 28630,
+        "hit": true
+      },
+      {
+        "i": 85,
+        "power": 25,
+        "damage": 14,
+        "hp_after": 28616,
+        "hit": true
+      },
+      {
+        "i": 86,
+        "power": 23,
+        "damage": 15,
+        "hp_after": 28601,
+        "hit": true
+      },
+      {
+        "i": 87,
+        "power": 30,
+        "damage": 19,
+        "hp_after": 28582,
+        "hit": true
+      },
+      {
+        "i": 88,
+        "power": 24,
+        "damage": 17,
+        "hp_after": 28565,
+        "hit": true
+      },
+      {
+        "i": 89,
+        "power": 30,
+        "damage": 21,
+        "hp_after": 28544,
+        "hit": true
+      },
+      {
+        "i": 90,
+        "power": 20,
+        "damage": 12,
+        "hp_after": 28532,
+        "hit": true
+      },
+      {
+        "i": 91,
+        "power": 22,
+        "damage": 12,
+        "hp_after": 28520,
+        "hit": true
+      },
+      {
+        "i": 92,
+        "power": 21,
+        "damage": 16,
+        "hp_after": 28504,
+        "hit": true
+      },
+      {
+        "i": 93,
+        "power": 30,
+        "damage": 23,
+        "hp_after": 28481,
+        "hit": true
+      },
+      {
+        "i": 94,
+        "power": 30,
+        "damage": 21,
+        "hp_after": 28460,
+        "hit": true
+      },
+      {
+        "i": 95,
+        "power": 21,
+        "damage": 10,
+        "hp_after": 28450,
+        "hit": true
+      },
+      {
+        "i": 96,
+        "power": 20,
+        "damage": 14,
+        "hp_after": 28436,
+        "hit": true
+      },
+      {
+        "i": 97,
+        "power": 30,
+        "damage": 24,
+        "hp_after": 28412,
+        "hit": true
+      },
+      {
+        "i": 98,
+        "power": 28,
+        "damage": 18,
+        "hp_after": 28394,
+        "hit": true
+      },
+      {
+        "i": 99,
+        "power": 20,
+        "damage": 7,
+        "hp_after": 28387,
+        "hit": true
+      }
+    ],
+    "stats": {
+      "hits": 100,
+      "dodges": 0,
+      "attacked": 100,
+      "damage_sum": 1613
+    }
+  }
+}

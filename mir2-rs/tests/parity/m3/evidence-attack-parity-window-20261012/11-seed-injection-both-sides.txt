@@ -1,0 +1,12 @@
+=== 两侧同种子注入自证（F-C 前提；同一 seed=42）===
+--- C# rng-hook (MIR2_RNG_LOG = E:\tmp\m3cs16-evidence\csharp-stack\rng-stream.tsv) ---
+1	INJECT_OK	42	0
+SEED_PROBE 1434747710 302596119 269548474 1122627734 361709742 563913476 1555655117 1101493307
+
+--- Rust game-svr 启动日志 (E:\tmp\m3cs-tick\rust-stack\game-svr.out.log) ---
+06:18:55.356 [INF] RNG 同种子注入：seed=42 参照序列=SEED_PROBE 1434747710 302596119 269548474 1122627734 361709742 563913476 1555655117 1101493307
+
+--- 启动器透传行 ---
+RUST_SEED_INJECTED=42
+
+口径：两侧 SEED_PROBE 参照序列逐字段相同 ⇒ 起始 RNG 流一致（种子前提成立）。

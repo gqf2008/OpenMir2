@@ -348,27 +348,195 @@ pub enum AttackPowerMode {
     },
 }
 
-/// 攻击合法性（`BaseObject.IsProperTarget` → `IsAttackTarget` 的子集）。
+// -------------------------------------------------------------------------------------------
+// 攻击合法性（`IsProperTarget` 判定链）
+//
+// oracle 的 `_Attack`（`BaseObject.Attack.cs:37`）门是 **虚函数 `IsProperTarget`**，不是固定的
+// race 规则。两条实现：
+//   * 玩家攻方 → `PlayObject.IsProperTarget`（`PlayObject.cs:1929` override）：
+//       先 `PlayObject.IsAttackTarget`（`PlayObject.Attack.cs:627` override，按 `AttatckMode` 分派）；
+//       目标为 `Play` ⇒ 再 `IsProtectTarget`（安全区，`BaseObject.Base.cs:360`）；
+//       目标为非玩召唤物 ⇒ 按主人/召唤者分支；否则回落 `BaseObject.IsAttackTarget`（`BaseObject.Base.cs:377`）。
+//   * 非玩家攻方 → `BaseObject.IsProperTarget`（`BaseObject.Base.cs:470`）= `BaseObject.IsAttackTarget`。
+// 两处 `IsAttackTarget` **不能混用**：玩家版是攻击模式 switch，基版是主人目标集。
+//
+// 折入的「目标可见性」门（单独注明，别混进 `IsProperTarget` 的等价断言）：
+//   `Envir.GetMovingObject(x, y, true)`（`Envirnoment.cs:1203`）与接线层 `handle_hit_cmd` 的
+//   `!Ghost && !Death` 目标筛选；本骨架把「已死/幽灵/隐身不可被选为攻击目标」折进本函数顶部，
+//   与 oracle 的最终可攻击集合同解（oracle 把它放在取目标那一层）。
+// -------------------------------------------------------------------------------------------
+
+/// `src/OpenMir2/Enums/Race.cs`。
+pub const ACTOR_RACE_NPC: u8 = 10;
+pub const ACTOR_RACE_PEACE_NPC: u8 = 15;
+pub const ACTOR_RACE_ANIMAL: u8 = 50;
+
+/// `src/OpenMir2/Enums/AttackMode.cs`。
+pub const ATTACK_MODE_HAM_ALL: u8 = 0;
+pub const ATTACK_MODE_HAM_PEACE: u8 = 1;
+pub const ATTACK_MODE_HAM_DEAR: u8 = 2;
+pub const ATTACK_MODE_HAM_MASTER: u8 = 3;
+pub const ATTACK_MODE_HAM_GROUP: u8 = 4;
+pub const ATTACK_MODE_HAM_GUILD: u8 = 5;
+pub const ATTACK_MODE_HAM_PKATTACK: u8 = 6;
+
+/// `BaseObject.IsProtectTarget`（`BaseObject.Base.cs:360`）：`true` = **允许**（双方都不在安全区）。
 ///
-/// 子集口径（报告里写明未覆盖的分支）：玩家↔怪物的常规敌对判定；
-/// 不打自己/自己宝宝、不打已死或已隐身（Ghost）对象。
-pub fn is_attack_target(attacker: &Entity, target: &Entity) -> bool {
+/// 名字带 `Protect` 但语义是「不被安全区保护」：oracle `if (InSafeZone() || target.InSafeZone()) return false; return true;`。
+pub fn is_protect_target(attacker: &Entity, target: &Entity) -> bool {
+    !(attacker.in_safe_zone || target.in_safe_zone)
+}
+
+/// `BaseObject.IsAttackTarget`（`BaseObject.Base.cs:377`）——**基版**（非玩家攻方，或玩家版回落）。
+///
+/// 未建模分支（报告登记）：`Race >= Animal` 且 `Master != null` 的主从目标集（需要取主人的
+/// `LastHiter/ExpHitter/TargetCret` 实体，本函数只拿得到 `&Entity`）、`CrazyMode`（本骨架无狂暴）、
+/// `HolySeize`/`SlaveRelax`。本骨架驱怪攻人的路径 `Master == null`，该分支逐行覆盖。
+pub fn is_attack_target_base(attacker: &Entity, target: &Entity) -> bool {
+    if attacker.id == target.id {
+        return false;
+    }
+    if target.admin_mode || target.stone_mode {
+        return false;
+    }
+    if attacker.race >= ACTOR_RACE_ANIMAL {
+        let mut result = false;
+        if attacker.master.is_none() {
+            // `else` 支（`BaseObject.Base.cs:438-452`）：
+            if target.race == ACTOR_RACE_PLAY {
+                result = true; // 怪打人
+            }
+            if attacker.race > ACTOR_RACE_PEACE_NPC && attacker.race < ACTOR_RACE_ANIMAL {
+                result = true;
+            }
+            if target.master.is_some() {
+                result = true; // 可打对方召唤物
+            }
+        }
+        // `CrazyMode` 未建模（本骨架无狂暴态）；`NastyMode` 已建模。
+        if attacker.nasty_mode
+            && (target.race < ACTOR_RACE_NPC || target.race > ACTOR_RACE_PEACE_NPC)
+        {
+            result = true;
+        }
+        return result;
+    }
+    // `Race < Animal` 的攻方：oracle 直接 `return true`（`BaseObject.Base.cs:463`）。
+    true
+}
+
+/// `PlayObject.IsAttackTarget`（`PlayObject.Attack.cs:627`）——按 `AttatckMode` 分派的**玩家版**。
+///
+/// 未建模分支（报告登记）：`PveServer`（现网 `Server.conf NonPKServer=FALSE` ⇒ 默认不触发）、
+/// `IsGroupMember`/`MyGuild`/`MasterList`（师徒）——本骨架世界无组队/行会/师徒，`result` 不被剔除。
+pub fn is_attack_target_player(attacker: &Entity, target: &Entity) -> bool {
+    let mut result = false;
+    match attacker.attack_mode {
+        ATTACK_MODE_HAM_ALL => {
+            if target.race < ACTOR_RACE_NPC || target.race > ACTOR_RACE_PEACE_NPC {
+                result = true;
+            }
+            // `if (PveServer) return true;` 登记未建模（默认 false）。
+        }
+        ATTACK_MODE_HAM_PEACE => {
+            if target.race >= ACTOR_RACE_ANIMAL {
+                return true;
+            }
+        }
+        ATTACK_MODE_HAM_DEAR => {
+            if Some(target.id) != attacker.dear_human {
+                return true;
+            }
+        }
+        ATTACK_MODE_HAM_MASTER => {
+            if target.race == ACTOR_RACE_PLAY {
+                result = true;
+                // `MasterList`（师徒）为空 ⇒ 两处剔除都不发生。
+            } else {
+                result = true;
+            }
+        }
+        ATTACK_MODE_HAM_GROUP => {
+            if target.race < ACTOR_RACE_NPC || target.race > ACTOR_RACE_PEACE_NPC {
+                result = true;
+            }
+            // `IsGroupMember` 未建模（无组队）⇒ 不剔除。
+        }
+        ATTACK_MODE_HAM_GUILD => {
+            if target.race < ACTOR_RACE_NPC || target.race > ACTOR_RACE_PEACE_NPC {
+                result = true;
+            }
+            // `MyGuild` 未建模（无行会）⇒ 不剔除。
+        }
+        ATTACK_MODE_HAM_PKATTACK => {
+            if target.race < ACTOR_RACE_NPC || target.race > ACTOR_RACE_PEACE_NPC {
+                result = true;
+            }
+            if target.race == ACTOR_RACE_PLAY {
+                let atk_pvp = (attacker.pk_point / 100) as u8;
+                let tgt_pvp = (target.pk_point / 100) as u8;
+                if atk_pvp >= 2 {
+                    result = tgt_pvp < 2;
+                } else {
+                    result = tgt_pvp >= 2;
+                }
+            }
+        }
+        _ => {}
+    }
+    result
+}
+
+/// `PlayObject.IsProperTarget`（`PlayObject.cs:1929`）——**玩家攻方**的判定链。
+fn is_proper_target_play(attacker: &Entity, target: &Entity) -> bool {
+    let mut result = is_attack_target_player(attacker, target);
+    if result {
+        if target.race == ACTOR_RACE_PLAY {
+            // `if (baseObject.Race == ActorRace.Play) return IsProtectTarget(baseObject);`
+            return is_protect_target(attacker, target);
+        }
+        if let Some(master) = target.master {
+            if master == attacker.id {
+                // 自己的宝宝：非 `HAM_ALL` 直接拒绝；`HAM_ALL` 落到下面的 `if (result) return result`。
+                if attacker.attack_mode != ATTACK_MODE_HAM_ALL {
+                    return false;
+                }
+            } else {
+                // 对方召唤者：`result = base.IsAttackTarget(...)`，再 `if (IsProtectTarget(...)) result = false;`
+                // ——**照抄 oracle 的这段反直觉写法**（`IsProtectTarget` 为真时应置假）。
+                result = is_attack_target_base(attacker, target);
+                if is_protect_target(attacker, target) {
+                    result = false;
+                }
+            }
+        }
+        if result {
+            return result;
+        }
+        return is_attack_target_base(attacker, target);
+    }
+    false
+}
+
+/// 攻击合法性（`BaseObject.Attack.cs:37` 的 `IsProperTarget`，虚函数分派）。
+///
+/// 顶部折入「已死/幽灵/隐身不可被选为目标」（见本节注释）；其余逐行照 oracle。
+pub fn is_proper_target(attacker: &Entity, target: &Entity) -> bool {
     if attacker.id == target.id {
         return false;
     }
     if target.death || target.ghost || target.invisible {
         return false;
     }
-    if target.master == Some(attacker.id) {
-        return false; // 自己的宝宝
+    if attacker.race == ACTOR_RACE_PLAY {
+        return is_proper_target_play(attacker, target);
     }
-    if attacker.race == ACTOR_RACE_PLAY && target.race != ACTOR_RACE_PLAY {
-        return true; // 人打怪
-    }
-    if attacker.race != ACTOR_RACE_PLAY && target.race == ACTOR_RACE_PLAY {
-        return true; // 怪打人
-    }
-    false
+    is_attack_target_base(attacker, target)
+}
+
+/// 兼容别名：`crates/world` 旧调用点与既有用例用的名字（现与 [`is_proper_target`] 同义）。
+pub fn is_attack_target(attacker: &Entity, target: &Entity) -> bool {
+    is_proper_target(attacker, target)
 }
 
 /// `BaseObject.GetHitStruckDamage`（`BaseObject.Base.cs:789`）——目标侧护甲减免。
@@ -512,7 +680,7 @@ pub fn attack_with(
     let mut n_power = power;
     let mut hit = false;
 
-    if is_attack_target(attacker, target) {
+    if is_proper_target(attacker, target) {
         // `if (targetObject.HitPoint > 0) { if (HitPoint < RandomByte(targetObject.SpeedPoint)) nPower = 0; }`
         if target.hit_point > 0 && attacker.hit_point < rng.random_byte(target.speed_point) {
             n_power = 0;
@@ -547,6 +715,13 @@ pub fn attack_with(
             }
             if target.hp == 0 {
                 killed = true;
+            }
+            // `PlayObject.StruckDamage`（`PlayObject.cs:2954`）在 `base.StruckDamage` 之后**无条件**
+            // 抽一次 `Random(10)`（护甲耐久磨损点数）；玩家目标走这个 override，怪物走
+            // `BaseObject.StruckDamage`（无随机数）。本骨架未建模玩家装备耐久（逐格 `Random(8)` 循环），
+            // 只补这条**无条件**抽数——否则同种子 PvP 序列的取数账本从第一次命中起整体错位。
+            if target.race == ACTOR_RACE_PLAY {
+                let _durability_damage = rng.random_below(10);
             }
         }
     }

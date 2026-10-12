@@ -1,0 +1,32 @@
+=== 四次真机侧运行的 SM_STRUCK 统计（同一 fixture / 同种子 seed=42 / 同 pin (429,320)）===
+
+C# smoke20   csharp-20261012-141542
+  raw roles        : {'arm': 1, 'attack': 20, 'struck': 4, 'done': 1}
+  struck events    : 4 -> [{'role': 'struck', 'dmg': 1, 'hp': 18, 'maxhp': 19, 'src': 1384406505, 'actor': 1510257078}, {'role': 'struck', 'dmg': 1, 'hp': 18, 'maxhp': 19, 'src': 1384406505, 'actor': 1510257078}, {'role': 'struck', 'dmg': 1, 'hp': 17, 'maxhp': 19, 'src': 1384406505, 'actor': 1510257078}, {'role': 'struck', 'dmg': 1, 'hp': 17, 'maxhp': 19, 'src': 1384406505, 'actor': 1510257078}]
+  align hit k      : [2, 3]
+  align summary    : {'role': 'summary', 'attacked': 20, 'hits': 2, 'dodges': 18, 'sum': 4, 'death_k': None, 'min_hp': 17}
+
+C# 120       csharp-20261012-141650
+  raw roles        : {'arm': 1, 'attack': 120, 'struck': 2, 'done': 1}
+  struck events    : 2 -> [{'role': 'struck', 'dmg': 1, 'hp': 18, 'maxhp': 19, 'src': 715448530, 'actor': 1319944365}, {'role': 'struck', 'dmg': 1, 'hp': 18, 'maxhp': 19, 'src': 715448530, 'actor': 1319944365}]
+  align hit k      : [2, 3]
+  align summary    : {'role': 'summary', 'attacked': 120, 'hits': 2, 'dodges': 118, 'sum': 2, 'death_k': None, 'min_hp': 18}
+
+Rust 120     rust-20261012-141909
+  raw roles        : {'arm': 1, 'attack': 120, 'done': 1}
+  struck events    : 0 -> []
+  align hit k      : []
+  align summary    : {'role': 'summary', 'attacked': 120, 'hits': 0, 'dodges': 120, 'sum': 0, 'death_k': None, 'min_hp': 0}
+
+Rust smoke20 rust-20261012-142253
+  raw roles        : {'arm': 1, 'attack': 20, 'done': 1}
+  struck events    : 0 -> []
+  align hit k      : []
+  align summary    : {'role': 'summary', 'attacked': 20, 'hits': 0, 'dodges': 20, 'sum': 0, 'death_k': None, 'min_hp': 0}
+
+口径：两侧同种子 / 同 pin / 同一 run_attack_pair 夹具；C# 侧 20 与 120 都命中 2 次（k=2,3），
+      Rust 侧 120+20 共 140 击 0 命中、0 条 SM_STRUCK。C# 命中取自受击方 SM_STRUCK(src=attacker)，
+      不是推断；Rust 侧 raw 里 struck 事件数为 0（连一条都没有）。
+
+附：C# 120 与 C# smoke20 的命中都在 k=2,3（前两次攻击）⇒ 起始 RNG 前缀确定，但之后两侧/两次运行
+     逐 k 即分岔（见 reviewer-5 review 19f7ee3a 的 R-1 残留：同种子两次 hit@k=2 vs @k=4）。

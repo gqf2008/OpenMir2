@@ -1,0 +1,191 @@
+﻿{
+    "session":  "rust-20261012-142253",
+    "side":  "rust",
+    "prefix":  "m3csm1425",
+    "bots":  2,
+    "entry":  "127.0.0.1:7000",
+    "ops_runner":  "run_bots.ps1 -Count 2 -Prefix m3csm1425 -Port 7000 -AttackSequence -AttackCount 20 -AttackStepMs 500 -AttackStartDelayMs 3000 -DisableAutoPlay",
+    "ops_exit":  0,
+    "fixed_new_chr":  "Job=0 Hair=2 Sex=0",
+    "start_pose":  "pair map=0 attacker=429,320,dir=2 victim=430,320 level=1 vhp=30000",
+    "bag_equip_sequence":  "(off)",
+    "bag_equip_markers":  [
+
+                          ],
+    "attack_sequence":  "on count=20 step_ms=500 start_delay_ms=3000 disable_autoplay=True",
+    "attack_pose":  "pair map=0 attacker=429,320,dir=2 victim=430,320 level=1 vhp=30000",
+    "attack_markers":  [
+                           "M3ATTSEQ {\"role\":\"arm\",\"id\":\"m3csm14250\",\"count\":20,\"step_ms\":500,\"dir\":2}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":1,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3csm14250\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":2,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3csm14250\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":3,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3csm14250\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":4,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3csm14250\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":5,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3csm14250\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":6,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3csm14250\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":7,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3csm14250\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":8,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3csm14250\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":9,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3csm14250\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":10,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3csm14250\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":11,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3csm14250\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":12,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3csm14250\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":13,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3csm14250\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":14,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3csm14250\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":15,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3csm14250\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":16,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3csm14250\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":17,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3csm14250\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":18,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3csm14250\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":19,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3csm14250\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":20,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3csm14250\"}",
+                           "M3ATTSEQ {\"role\":\"done\",\"id\":\"m3csm14250\",\"attacks\":20}"
+                       ],
+    "attack_raw":  "attack_raw.jsonl",
+    "git_rev":  "c04f3593ff86c3338774208764b3a92d8f4ff97b",
+    "dbsnap":  {
+                   "mir2_account.account_protection":  {
+                                                           "rows":  7180,
+                                                           "sha256":  "5030a2d76076fb74517fefb5a21cfd8b3c2e48c164074b4d00117890fdafbefa"
+                                                       },
+                   "mir2_db.characters_ablity":  {
+                                                     "rows":  7158,
+                                                     "sha256":  "40484dfe17a6a2f4d3cfbd1dbba1a03e569f30cddb56ac31809a90d3ac4b0068"
+                                                 },
+                   "mir2_db.characters_bonusability":  {
+                                                           "rows":  1,
+                                                           "sha256":  "2a7c7b3966c0dc02e065463974cf094903f37b13bfa126a48167107a171ef4bc"
+                                                       },
+                   "mir2_db.characters_status":  {
+                                                     "rows":  7157,
+                                                     "sha256":  "61583ffe3fefa0e60858cc44eb8ac657d73610a0d0f592cea43f0899e86f47f1"
+                                                 },
+                   "mir2_db.characters_item_attr":  {
+                                                        "rows":  0,
+                                                        "sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                                                    },
+                   "mir2_db.characters_quest":  {
+                                                    "rows":  0,
+                                                    "sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                                                },
+                   "mir2_account.account":  {
+                                                "rows":  7292,
+                                                "sha256":  "31ccd180aa9158bd66d2e2c3dec74bd0110fce2f5d71d81baba48a8fcd3b3015"
+                                            },
+                   "mir2_db.characters":  {
+                                              "rows":  7155,
+                                              "sha256":  "cfae6527bcc0430f90de4a400a41265ad78249c65a22f1951b38569cc20887fc"
+                                          },
+                   "mir2_db.characters_bagitem":  {
+                                                      "rows":  329222,
+                                                      "sha256":  "745946865f6666959fc764a9ddcd6e264439613d1eaa9f3cfdba61c26dd32c2d"
+                                                  },
+                   "mir2_db.characters_indexes":  {
+                                                      "rows":  7157,
+                                                      "sha256":  "25578e93651c64b79c9b4842b11564149fc6aa60b8bcb5137615c06ca440a7ab"
+                                                  },
+                   "mir2_db.characters_item":  {
+                                                   "rows":  93043,
+                                                   "sha256":  "9e4ec64c0f6f4ccf2889802ecf8492143eafd6f95f3f47883d67c1bbd117c8cd"
+                                               },
+                   "mir2_db.characters_storageitem":  {
+                                                          "rows":  357850,
+                                                          "sha256":  "fefd5fc6fc1c63b2429ca9f41eaa19488d31ef9ae52aee2db1ebdf25990b84bb"
+                                                      },
+                   "mir2_db.characters_magic":  {
+                                                    "rows":  8,
+                                                    "sha256":  "0ac71ebc3756c582ca5e26f8b00e82cc2ff2f294a4206414c657c4d9b5470333"
+                                                }
+               },
+    "dbsnap_after":  {
+                         "mir2_account.account_protection":  {
+                                                                 "rows":  7180,
+                                                                 "sha256":  "5030a2d76076fb74517fefb5a21cfd8b3c2e48c164074b4d00117890fdafbefa"
+                                                             },
+                         "mir2_db.characters_ablity":  {
+                                                           "rows":  7158,
+                                                           "sha256":  "09d0d00ac117126e359a33d149194afdecdc19c1bd6a9fd550a7728c3a0b19e4"
+                                                       },
+                         "mir2_db.characters_bonusability":  {
+                                                                 "rows":  1,
+                                                                 "sha256":  "2a7c7b3966c0dc02e065463974cf094903f37b13bfa126a48167107a171ef4bc"
+                                                             },
+                         "mir2_db.characters_status":  {
+                                                           "rows":  7157,
+                                                           "sha256":  "61583ffe3fefa0e60858cc44eb8ac657d73610a0d0f592cea43f0899e86f47f1"
+                                                       },
+                         "mir2_db.characters_item_attr":  {
+                                                              "rows":  0,
+                                                              "sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                                                          },
+                         "mir2_db.characters_quest":  {
+                                                          "rows":  0,
+                                                          "sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                                                      },
+                         "mir2_account.account":  {
+                                                      "rows":  7292,
+                                                      "sha256":  "cbb797a740729c996025ffc0d527fc5eca8ce94f672d55cbf293bdd4a04d10de"
+                                                  },
+                         "mir2_db.characters":  {
+                                                    "rows":  7155,
+                                                    "sha256":  "2a2eb2538b54be8cbe2cb15f649f8d2ca8ea1c4430bb1d892e758446b260c298"
+                                                },
+                         "mir2_db.characters_bagitem":  {
+                                                            "rows":  329222,
+                                                            "sha256":  "745946865f6666959fc764a9ddcd6e264439613d1eaa9f3cfdba61c26dd32c2d"
+                                                        },
+                         "mir2_db.characters_indexes":  {
+                                                            "rows":  7157,
+                                                            "sha256":  "5abbea44e4804fee2fe34523f29bba0475bbafe78e7f98d2529272a81f890c35"
+                                                        },
+                         "mir2_db.characters_item":  {
+                                                         "rows":  93043,
+                                                         "sha256":  "9e4ec64c0f6f4ccf2889802ecf8492143eafd6f95f3f47883d67c1bbd117c8cd"
+                                                     },
+                         "mir2_db.characters_storageitem":  {
+                                                                "rows":  357850,
+                                                                "sha256":  "fefd5fc6fc1c63b2429ca9f41eaa19488d31ef9ae52aee2db1ebdf25990b84bb"
+                                                            },
+                         "mir2_db.characters_magic":  {
+                                                          "rows":  8,
+                                                          "sha256":  "0ac71ebc3756c582ca5e26f8b00e82cc2ff2f294a4206414c657c4d9b5470333"
+                                                      }
+                     },
+    "delta":  {
+                  "mir2_account.account":  {
+                                               "added":  2,
+                                               "removed":  2
+                                           },
+                  "mir2_db.characters":  {
+                                             "added":  2,
+                                             "removed":  2
+                                         },
+                  "mir2_db.characters_ablity":  {
+                                                    "added":  2,
+                                                    "removed":  2
+                                                },
+                  "mir2_db.characters_indexes":  {
+                                                     "added":  2,
+                                                     "removed":  2
+                                                 }
+              },
+    "scoped_rows":  {
+                        "before":  230,
+                        "after":  230
+                    },
+    "runtime_procs":  [
+                          {
+                              "name":  "mysqld",
+                              "path":  "D:\\mysql\\mariadb-10.11.19-winx64\\bin\\mysqld.exe",
+                              "start":  "2026-10-12T11:57:00.1944221+08:00"
+                          },
+                          {
+                              "name":  "DBSrv",
+                              "path":  "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\src\\DBSrv\\bin\\Release\\DBSrv.exe",
+                              "start":  "2026-10-12T14:18:54.3481316+08:00"
+                          },
+                          {
+                              "name":  "LoginSrv",
+                              "path":  "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\src\\LoginSrv\\bin\\Release\\LoginSrv.exe",
+                              "start":  "2026-10-12T14:18:54.4050114+08:00"
+                          }
+                      ],
+    "finished_at":  "2026-10-12T14:23:48.1287428+08:00"
+}
