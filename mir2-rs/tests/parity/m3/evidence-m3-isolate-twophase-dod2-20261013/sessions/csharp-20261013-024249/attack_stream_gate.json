@@ -1,0 +1,16 @@
+{
+ "stream": "E:/tmp/m3cs-fin/csharp/rng-attack-stream.tsv",
+ "expected_player_units": 120,
+ "verdict": "GREEN",
+ "counts": {
+  "draws": 651,
+  "units": 120,
+  "player_units": 120,
+  "base_units": 0,
+  "unknown_units": 0,
+  "expected_player_units": 120,
+  "first_kind": "player",
+  "first_site": "M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929"
+ },
+ "problems": []
+}

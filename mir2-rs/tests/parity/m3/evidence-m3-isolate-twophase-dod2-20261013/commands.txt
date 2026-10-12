@@ -1,0 +1,101 @@
+# 命令（M3②③ 隔离口径真机两相复跑：DoD② 逐 k = 0；2026-10-13，m3cs）
+# 工作目录（除注明外）= E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3cs
+# base = master 5221f98a（= 17f55b2d + m3bag obs-align f906ac98 + m3cs stream_equiv f0e5bd5a）
+# 种子 seed=42 / isolate_attack=1 / attack_seed=40545；图 0137；attacker(17,20)dir=2 / victim(18,20) L255 Hp20669
+# Rust 二进制：E:/tmp/m3cs-r2-target/debug（含 SERVER_STATE dump，built 02:01；自 17f55b2d 起 crates/bins 未变）
+# 本片为真机两相复跑；运行时会话落 mir2-rs/tests/parity/m3/sessions/<sid>/。
+
+## 0) 无栈自检（夹具；含 F-N1 专用流纯度门 / EOL 生产者写 LF / 目标可用性门 selftest）
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 -SelfCheckNoStack
+#   -> window/00-selfcheck-nostack.txt（SELFTEST_RED GREEN；本包为 pwsh > 重定向转录，入库前已 LF 归一）
+
+## 1) 窗口实拍（起前）
+powershell -NoProfile -ExecutionPolicy Bypass -File E:/MirServer/port-status.ps1
+#   -> window/01-ports-before.txt（缺失 5000/5100/5500/5600/5700/6000/7000/7100/7200；仅 3306）
+
+## 2) C# 栈（主检出起栈）
+cd E:/Users/gxh/Documents/GitHub/OpenMir2
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/start-csharp-hook.ps1 -Seed 42 -IsolateAttack -LogDir E:/tmp/m3cs-fin/csharp
+#   -> window/10-csharp-stack-start.txt（CSHARP_STACK_GREEN；ISOLATION_RECORDED attack_seed=40545）
+
+## 2a) C# 20 冒烟（同栈）
+cd E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3cs
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 -Side csharp -Bots 2 -AttackCount 20 -AttackPinPair -IsolateAttack -Prefix m3fin20 -Seed 42 -CsharpSeedLog E:/tmp/m3cs-fin/csharp/rng-stream.tsv -AttackStreamLog E:/tmp/m3cs-fin/csharp/rng-attack-stream.tsv -CsharpStateLog E:/tmp/m3cs-fin/csharp/rng-server-state.tsv
+#   -> window/11-csharp-smoke20.txt（player=20 base=0；TARGET_AVAILABILITY_OK 20/20；attacked=20 hits=12 sum=497）
+
+## 2b) C# 120 c1（每次被测 120 必须新起栈：hook 以 FileMode.Create 截断专用流）
+cd E:/Users/gxh/Documents/GitHub/OpenMir2
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/start-csharp-hook.ps1 -Stop -LogDir E:/tmp/m3cs-fin/csharp
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/start-csharp-hook.ps1 -Seed 42 -IsolateAttack -LogDir E:/tmp/m3cs-fin/csharp
+cd E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3cs
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 -Side csharp -Bots 2 -AttackCount 120 -AttackPinPair -IsolateAttack -Prefix m3finc1 -Seed 42 -CsharpSeedLog E:/tmp/m3cs-fin/csharp/rng-stream.tsv -AttackStreamLog E:/tmp/m3cs-fin/csharp/rng-attack-stream.tsv -CsharpStateLog E:/tmp/m3cs-fin/csharp/rng-server-state.tsv
+#   -> window/12/12b/13-csharp-*.txt（SESSION_CSHARP csharp-20261013-024050；player=120 base=0；attacked=120 hits=57 sum=2425）
+cp E:/tmp/m3cs-fin/csharp/rng-attack-stream.tsv E:/tmp/m3cs-fin/logs/csharp-c1-attack-stream.tsv
+cp E:/tmp/m3cs-fin/csharp/rng-server-state.tsv  E:/tmp/m3cs-fin/logs/csharp-c1-server-state.tsv
+
+## 2c) C# 120 c2（再起新栈）
+cd E:/Users/gxh/Documents/GitHub/OpenMir2
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/start-csharp-hook.ps1 -Stop -LogDir E:/tmp/m3cs-fin/csharp
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/start-csharp-hook.ps1 -Seed 42 -IsolateAttack -LogDir E:/tmp/m3cs-fin/csharp
+cd E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3cs
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 -Side csharp -Bots 2 -AttackCount 120 -AttackPinPair -IsolateAttack -Prefix m3finc2 -Seed 42 -CsharpSeedLog E:/tmp/m3cs-fin/csharp/rng-stream.tsv -AttackStreamLog E:/tmp/m3cs-fin/csharp/rng-attack-stream.tsv -CsharpStateLog E:/tmp/m3cs-fin/csharp/rng-server-state.tsv
+#   -> window/14/14b/15-csharp-*.txt（SESSION_CSHARP csharp-20261013-024249；player=120 base=0；attacked=120 hits=57 sum=2425）
+cp E:/tmp/m3cs-fin/csharp/rng-attack-stream.tsv E:/tmp/m3cs-fin/logs/csharp-c2-attack-stream.tsv
+cp E:/tmp/m3cs-fin/csharp/rng-server-state.tsv  E:/tmp/m3cs-fin/logs/csharp-c2-server-state.tsv
+#   c1 vs c2 专用流 cmp 无输出、sha256 均 0c7f44aa1ff06c3f… -> streams/36-csharp-c1-c2-stream-identity.txt
+
+## 2d) 停 C# 栈
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/start-csharp-hook.ps1 -Stop -LogDir E:/tmp/m3cs-fin/csharp
+#   -> window/16-csharp-stack-stop.txt（5000/7000/7100/7200 DOWN）
+
+## 3) Rust 栈（同种子 + isolate + SERVER_STATE）
+cd E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3cs
+powershell -NoProfile -ExecutionPolicy Bypass -Command '$env:MIR2_RNG_ISOLATE_ATTACK="1"; $env:MIR2_RNG_LOG="E:/tmp/m3cs-fin/rust/rng-stream.tsv"; & "E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3cs/tools/m2-acceptance/start_rust_stack.ps1" -RustBinDir "E:/tmp/m3cs-r2-target/debug" -Seed 42 -LogDir "E:/tmp/m3cs-fin/rust" -StateLog "E:/tmp/m3cs-fin/rust/rng-server-state.tsv"'
+#   -> window/17-rust-stack-start.txt（RUST_SEED_INJECTED=42；RUST_STATE_LOG_INJECTED=…；RUST_STACK_OK）
+
+## 3a) Rust 20 冒烟
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 -Side rust -Bots 2 -AttackCount 20 -AttackPinPair -IsolateAttack -Prefix m3finr20 -Seed 42 -RustStackLogDir E:/tmp/m3cs-fin/rust -RustRngLog E:/tmp/m3cs-fin/rust/rng-stream.tsv -RustStateLog E:/tmp/m3cs-fin/rust/rng-server-state.tsv
+#   -> window/18-rust-smoke20.txt（TARGET_AVAILABILITY_OK 20/20；attacked=20 hits=12 sum=497）
+
+## 3b) Rust 120 r1（新起栈，专用流干净）
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 -Stop -LogDir E:/tmp/m3cs-fin/rust
+powershell -NoProfile -ExecutionPolicy Bypass -Command '$env:MIR2_RNG_ISOLATE_ATTACK="1"; $env:MIR2_RNG_LOG="E:/tmp/m3cs-fin/rust/rng-stream.tsv"; & "…/start_rust_stack.ps1" -RustBinDir "E:/tmp/m3cs-r2-target/debug" -Seed 42 -LogDir "E:/tmp/m3cs-fin/rust" -StateLog "E:/tmp/m3cs-fin/rust/rng-server-state.tsv"'
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 -Side rust -Bots 2 -AttackCount 120 -AttackPinPair -IsolateAttack -Prefix m3finr1 -Seed 42 -RustStackLogDir E:/tmp/m3cs-fin/rust -RustRngLog E:/tmp/m3cs-fin/rust/rng-stream.tsv -RustStateLog E:/tmp/m3cs-fin/rust/rng-server-state.tsv -PeerSession csharp-20261013-024249
+#   -> window/19/20/21-rust-*.txt（SESSION_RUST rust-20261013-024604；TARGET_AVAILABILITY_OK 120/120；
+#      --- 跨侧攻击序列比对 --- NONTRIVIAL -> GREEN diff = 0；随后 --- 跨侧作用域字段级 diff --- RED 8 行（见下 §6））
+
+## 3c) 存 Rust 流/停栈
+cp E:/tmp/m3cs-fin/rust/rng-stream.tsv E:/tmp/m3cs-fin/logs/rust-r1-rng-stream.tsv
+cp E:/tmp/m3cs-fin/rust/rng-server-state.tsv E:/tmp/m3cs-fin/logs/rust-r1-server-state.tsv
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 -Stop -LogDir E:/tmp/m3cs-fin/rust
+#   -> window/22-rust-stack-stop.txt
+
+## 4) 收工窗口实拍
+powershell -NoProfile -ExecutionPolicy Bypass -File E:/MirServer/port-status.ps1
+#   -> window/23-ports-after.txt（缺失 9 端口；仅 3306）⇒ 窗口已释放
+
+## 5) 逐 k 判据（DoD② 本体）：三对全 0
+python -I mir2-rs/tests/parity/m3/attack_diff.py align mir2-rs/tests/parity/m3/sessions/csharp-20261013-024050/attack_raw.jsonl --out mir2-rs/tests/parity/m3/sessions/csharp-20261013-024050/attack_seq.jsonl
+python -I mir2-rs/tests/parity/m3/attack_diff.py align mir2-rs/tests/parity/m3/sessions/csharp-20261013-024249/attack_raw.jsonl --out mir2-rs/tests/parity/m3/sessions/csharp-20261013-024249/attack_seq.jsonl
+python -I mir2-rs/tests/parity/m3/attack_diff.py align mir2-rs/tests/parity/m3/sessions/rust-20261013-024604/attack_raw.jsonl --out mir2-rs/tests/parity/m3/sessions/rust-20261013-024604/attack_seq.jsonl
+python -I mir2-rs/tests/parity/m3/attack_diff.py diff .../csharp-20261013-024050/attack_seq.jsonl .../csharp-20261013-024249/attack_seq.jsonl   # -> diffs/31-diff-c1c2.txt  GREEN 0
+python -I mir2-rs/tests/parity/m3/attack_diff.py diff .../csharp-20261013-024249/attack_seq.jsonl .../rust-20261013-024604/attack_seq.jsonl     # -> diffs/32-diff-c2r1.txt  GREEN 0（判据本体）
+python -I mir2-rs/tests/parity/m3/attack_diff.py diff .../csharp-20261013-024050/attack_seq.jsonl .../rust-20261013-024604/attack_seq.jsonl     # -> diffs/33-diff-c1r1.txt  GREEN 0
+
+## 6) 取数序列工具（m3cs）
+python -I mir2-rs/tests/parity/m3/attack-request-sequence/per_strike_requests.py analyze --csharp streams/csharp-c2-attack-stream.tsv --rust streams/rust-r1-rng-stream.tsv --seed 42
+#   -> requests/40-analyze.txt（index=None；判读 GREEN）
+python -I mir2-rs/tests/parity/m3/attack-request-sequence/per_strike_requests.py jointable --csharp-stream streams/csharp-c2-attack-stream.tsv --rust-stream streams/rust-r1-rng-stream.tsv --csharp-seq sessions/csharp-20261013-024249/attack_seq.jsonl --rust-seq sessions/rust-20261013-024604/attack_seq.jsonl --csharp-server-state streams/csharp-c2-server-state.tsv --rust-server-state streams/rust-r1-server-state.tsv --csharp-attacker-id 640727120 --rust-attacker-id 1 --victim-x 18 --victim-y 20
+#   -> requests/42-jointable.txt（JOINTABLE GREEN）
+python -I mir2-rs/tests/parity/m3/attack-request-sequence/stream_equiv.py selftest
+python -I mir2-rs/tests/parity/m3/attack-request-sequence/stream_equiv.py gate --csharp streams/csharp-c2-attack-stream.tsv --rust streams/rust-r1-rng-stream.tsv --json requests/43-stream-equiv.json
+#   -> requests/43-stream-equiv.txt（GREEN 651/651）+ 44-stream-equiv-selftest.txt（10/10）
+
+## 7) 作用域（DB 侧）登记：RED（非 DoD② 轴）
+python -I mir2-rs/tests/parity/m3/scoped_diff.py diff ../../sessions/csharp-20261013-024249/scoped_after_norm.jsonl ../../sessions/rust-20261013-024604/scoped_after_norm.jsonl --canonical --fixed-newchr
+#   -> scope/50-scope-c2r1-fixednewchr.txt（RED 8 行：characters.Hair=夹具随机 + characters_ablity 4 行）
+python -I mir2-rs/tests/parity/m3/scoped_diff.py diff ... --canonical
+#   -> scope/51-scope-c2r1-canonical.txt（characters 一致；characters_ablity 仍 RED 4 行 ⇒ 非随机输入）
+python -I mir2-rs/tests/parity/m3/scoped_diff.py diff .../csharp-20261013-024050/... .../csharp-20261013-024249/... --canonical --fixed-newchr
+#   -> scope/52-scope-c1c2-csharp-identity.txt（同侧 C# GREEN ⇒ 跨侧差异）
+#   -> scope/54-scope-column-characterization.txt（逐列定位）

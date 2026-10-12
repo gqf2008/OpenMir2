@@ -1,0 +1,32 @@
+=== mir2_db.characters
+ row0: 4 differing cols
+    Id: csharp='13551' rust='13555'
+    Hair: csharp='2' rust='1'
+    CREATEDATE: csharp='2026-10-13 02:42:59' rust='2026-10-13 02:46:15'
+    LASTUPDATE: csharp='2026-10-13 02:42:59' rust='2026-10-13 02:47:42'
+ row1: 4 differing cols
+    Id: csharp='13552' rust='13556'
+    Hair: csharp='2' rust='1'
+    CREATEDATE: csharp='2026-10-13 02:43:02' rust='2026-10-13 02:46:18'
+    LASTUPDATE: csharp='2026-10-13 02:43:02' rust='2026-10-13 02:47:42'
+=== mir2_db.characters_ablity
+ row0: 7 differing cols
+    PlayerId: csharp='13551' rust='13555'
+    Ac: csharp='0' rust='255'
+    MAxMP: csharp='15' rust='904'
+    MaxWeight: csharp='0' rust='21725'
+    MaxWearWeight: csharp='0' rust='255'
+    MaxHandWeight: csharp='0' rust='150'
+    ModifyTime: csharp='NULL' rust='2026-10-13 02:47:42'
+ row1: 8 differing cols
+    PlayerId: csharp='13552' rust='13556'
+    Ac: csharp='0' rust='255'
+    Hp: csharp='20669' rust='18244'
+    MAxMP: csharp='15' rust='904'
+    MaxWeight: csharp='0' rust='21725'
+    MaxWearWeight: csharp='0' rust='255'
+    MaxHandWeight: csharp='0' rust='150'
+    ModifyTime: csharp='NULL' rust='2026-10-13 02:47:42'
+
+NOTE: characters.Hair (fixture BotSrv Random(1), unseeded) + Id/CREATEDATE/LASTUPDATE are fixture-input/volatile;
+      characters_ablity differences persist under --canonical alone => not a random-input artifact.
