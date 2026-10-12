@@ -1,0 +1,124 @@
+# 命令（M3 总验收盘点片：十项索引 + 报告骨架 + 长跑方案；2026-10-13，m3cs）
+
+- 卡：`openmir2-m3-final-acceptance`（issue `b0bb3003`），本片 = 卡上「不占窗口部分」。
+- base：`origin/master da94fcb7`；本片**零 `.rs` / 零 `src/**`**；写集 = `mir2-rs/tests/parity/**`。
+- 口径：**不起栈、不占端口**；只读仓库内既有件 + port-free 脚本 harness；证据 hash 按仓库字节（LF 归一 = git blob）。
+- 本文件列本片实跑命令；输出落在本目录 `verify/ diff/ inventory/ m4/ gates/ window/`。
+
+## 0) 窗口纪律（离线片）
+
+```bash
+# 九端口监听实拍（5000/5100/5500/5600/5700/6000/7000/7100/7200）→ window/01-ports-9.txt
+for p in 5000 5100 5500 5600 5700 6000 7000 7100 7200; do netstat -ano -p tcp | grep -E "[:.]$p[[:space:]]" | grep -i listen; done
+```
+
+## 1) 证据包 hash 复核（上游既有件，本片复跑）
+
+```bash
+# → verify/10-evidence-verify.txt
+python -I tools/evidence-hash/verify_sha256sums.py mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012
+python -I tools/evidence-hash/verify_sha256sums.py mir2-rs/tests/parity/m3/evidence-m3-isolate-twophase-dod2-20261013
+python -I tools/evidence-hash/verify_sha256sums.py mir2-rs/tests/parity/m3/skill-probe
+python -I tools/evidence-hash/verify_sha256sums.py mir2-rs/tests/parity/m3/combat-probe
+python -I tools/evidence-hash/verify_sha256sums.py mir2-rs/tests/parity/m3/attack-request-sequence
+```
+
+## 2) ① 背包/装备 判据重放
+
+```bash
+# → diff/20-bag-scope-canonical-fixednewchr.txt（GREEN 9 表 rc=0）
+python -I mir2-rs/tests/parity/m3/scoped_diff.py diff \
+  mir2-rs/tests/parity/m3/sessions/csharp-20261012-085856/scoped_after_norm.jsonl \
+  mir2-rs/tests/parity/m3/sessions/rust-20261012-090020/scoped_after_norm.jsonl --canonical --fixed-newchr
+```
+
+## 3) ② 战斗逐 k 判据重放（三对）+ 取数流等价门
+
+```bash
+# → diff/21-attack-per-k-three-pairs.txt（三对 GREEN diff=0）
+# 会话取自入库证据包（可干净检出复算）
+D=mir2-rs/tests/parity/m3/evidence-m3-isolate-twophase-dod2-20261013/sessions
+python -I mir2-rs/tests/parity/m3/attack_diff.py diff $D/csharp-20261013-024050/attack_seq.jsonl $D/csharp-20261013-024249/attack_seq.jsonl
+python -I mir2-rs/tests/parity/m3/attack_diff.py diff $D/csharp-20261013-024249/attack_seq.jsonl $D/rust-20261013-024604/attack_seq.jsonl
+python -I mir2-rs/tests/parity/m3/attack_diff.py diff $D/csharp-20261013-024050/attack_seq.jsonl $D/rust-20261013-024604/attack_seq.jsonl
+# → diff/22-stream-equiv.txt（selftest 10/10；gate 651/651）
+python -I mir2-rs/tests/parity/m3/attack-request-sequence/stream_equiv.py selftest
+python -I mir2-rs/tests/parity/m3/attack-request-sequence/stream_equiv.py gate \
+  --csharp mir2-rs/tests/parity/m3/evidence-m3-isolate-twophase-dod2-20261013/streams/csharp-c2-attack-stream.tsv \
+  --rust   mir2-rs/tests/parity/m3/evidence-m3-isolate-twophase-dod2-20261013/streams/rust-r1-rng-stream.tsv
+```
+
+## 4) ③ 技能登记/向量清点
+
+```bash
+# → inventory/30-skills-combat-registry.txt（只读；内联脚本，仓库根执行）
+python -I - <<'PY'
+import json
+from collections import Counter
+from pathlib import Path
+M3 = Path('mir2-rs') / 'tests' / 'parity' / 'm3'
+reg = json.loads((M3/'skill-probe'/'vectors'/'skills_registry.json').read_text(encoding='utf-8'))
+rows = reg['skills']; impl = [r for r in rows if r.get('implemented')]
+print('# M3 十项系统盘点 —— 技能/战斗工件计数（只读）')
+print()
+print('## 技能登记表（skill-probe/vectors/skills_registry.json）')
+print('total_magic_rows =', reg['total_magic_rows'])
+print('rows            =', len(rows))
+print('implemented     =', reg['implemented'])
+print('implemented_true_count =', len(impl))
+print('not_implemented =', len(rows) - len(impl))
+print('dospell_class_hist =', dict(Counter(r.get('dospell_class') for r in rows)))
+print('implemented_magic_ids =', [r['magic_id'] for r in impl])
+print('implemented_magic_ids_distinct =', len({r['magic_id'] for r in impl}))
+print()
+print('## 技能真身向量（skill-probe/vectors/skill_vectors.json）')
+sv = json.loads((M3/'skill-probe'/'vectors'/'skill_vectors.json').read_text(encoding='utf-8'))
+print('seed =', sv.get('seed'))
+print('magic_hit_interval_time =', sv.get('magic_hit_interval_time'))
+print('cases =', len(sv.get('cases', [])))
+print('oracle keys =', list(sv.get('oracle', {}).keys()))
+print()
+print('## 战斗真身向量（combat-probe/vectors/combat_vectors.json）')
+cv = json.loads((M3/'combat-probe'/'vectors'/'combat_vectors.json').read_text(encoding='utf-8'))
+print('top keys =', list(cv.keys()))
+for k, v in cv.items():
+    if isinstance(v, list):
+        print(' ', k, 'list len =', len(v))
+PY
+```
+
+## 5) NPC/商店：M4 7/7 脚本层用例（port-free）
+
+```bash
+# 在 mir2-rs/ 下
+# → m4/40-npc-cases.txt（== M4② 结果：可跑用例 7（GREEN） / 等窗口用例 0 ==） + m4/41-evidence-hashes.txt（GREEN 19/19）
+python -I tests/parity/M4/run_npc_cases.py
+python -I tests/parity/M4/evidence_hashes.py verify
+```
+
+## 6) §6 M3 门禁 `scoped_diff.py diff --canonical`（本片实读：跨侧 RED，同侧 GREEN）
+
+```bash
+# → diff/23-scope-m3-gate-canonical.txt（跨侧 --canonical RED 4 行 / --fixed-newchr RED 8 行；同侧 C# 自比 GREEN 9 表）
+D=mir2-rs/tests/parity/m3/evidence-m3-isolate-twophase-dod2-20261013/sessions
+python -I mir2-rs/tests/parity/m3/scoped_diff.py diff $D/csharp-20261013-024249/scoped_after_norm.jsonl $D/rust-20261013-024604/scoped_after_norm.jsonl --canonical
+python -I mir2-rs/tests/parity/m3/scoped_diff.py diff $D/csharp-20261013-024249/scoped_after_norm.jsonl $D/rust-20261013-024604/scoped_after_norm.jsonl --canonical --fixed-newchr
+python -I mir2-rs/tests/parity/m3/scoped_diff.py diff $D/csharp-20261013-024050/scoped_after_norm.jsonl $D/csharp-20261013-024249/scoped_after_norm.jsonl --canonical --fixed-newchr
+```
+
+## 7) 四门禁（交付树 da94fcb7 + 本报告，零 .rs）
+
+```bash
+# 在 mir2-rs/ 下
+cargo fmt --all -- --check                                   # → gates/50-fmt.txt rc=0
+cargo clippy --workspace --all-targets --offline -- -D warnings   # → gates/51-clippy.txt rc=0
+cargo test --workspace --offline                             # → gates/52-test-workspace.txt 84 suites/687 passed/0 failed/16 ignored rc=0
+cargo run --offline -p msgcodegen -- --check                 # → gates/53-msgcodegen.txt 604 条常量 rc=0
+```
+
+## 8) 本证据包清单自核
+
+```bash
+python -I tools/evidence-hash/verify_sha256sums.py mir2-rs/tests/parity/m3/evidence-m3-final-acceptance-inventory-20261013
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/m3/evidence-m3-final-acceptance-inventory-20261013
+```

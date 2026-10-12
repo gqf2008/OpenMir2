@@ -1,0 +1,20 @@
+# M3 门禁（§6）：scoped_diff.py diff --canonical（csharp-20261013-024249 vs rust-20261013-024604）
+# 会话取自入库证据包（可干净检出复算）：mir2-rs/tests/parity/m3/evidence-m3-isolate-twophase-dod2-20261013/sessions/<sid>/scoped_after_norm.jsonl
+## --canonical（掩 Hair/Sex/Job 等易变列后仍 RED ⇒ 非随机输入 artifact）
+DIFF mir2_db.characters_ablity: rows A=2 B=2 仅A=2 仅B=2
+    A: <VOLATILE>	255	0	0	0	0	0	20669	15	20669	15	0	0	0	0	0	0	0	0	<VOLATILE>
+    B: <VOLATILE>	255	255	0	0	0	0	20669	15	20669	904	0	0	0	21725	0	255	0	150	<VOLATILE>
+RED: 作用域内 4 行不一致
+rc=1
+
+## --canonical --fixed-newchr（加固定建角，characters 一致，characters_ablity 仍 RED）
+DIFF mir2_db.characters: rows A=2 B=2 仅A=2 仅B=2
+    A: <VOLATILE>	0	<RUN>0	<RUN>0	0137	17	20	255	2	2	0	0	0	0	0	289	618	0	0	0	0	0.000	0	0	0	0	0	0	0	0	0	0	0	0	0	0	NULL	NULL	NULL	0	<VOLATILE>	<VOLATILE>
+    B: <VOLATILE>	0	<RUN>0	<RUN>0	0137	17	20	255	2	1	0	0	0	0	0	289	618	0	0	0	0	0.000	0	0	0	0	0	0	0	0	0	0	0	0	0	0	NULL	NULL	NULL	0	<VOLATILE>	<VOLATILE>
+DIFF mir2_db.characters_ablity: rows A=2 B=2 仅A=2 仅B=2
+RED: 作用域内 8 行不一致
+rc=1
+
+## 同侧 C# 自比（c1 vs c2）作为对照：--canonical --fixed-newchr 应 GREEN
+GREEN: 作用域内 9 张表逐行一致
+rc=0

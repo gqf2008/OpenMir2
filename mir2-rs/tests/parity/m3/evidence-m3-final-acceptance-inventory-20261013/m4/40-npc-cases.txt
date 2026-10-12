@@ -1,0 +1,94 @@
+# M4② 关键 NPC 用例（6 类：商店 / 传送 / 修理 / 仓库 / 行会 / 任务）
+
+- 用例定义：`tests/parity/M4/npc-cases.json`
+- 语料：`E:/MirServer/M2GameSvr/Envir`（内容冻结）
+- 可跑（port-free）用例：两侧 harness 同脚本 + 同 label + 同初始状态，逐行 diff。
+- 等窗口用例：无——2026-10-12 owner 裁定 `e808ec99`（路线①）后，商人 3 条也走 port-free；Rust 服务侧 NPC/商人派发属 M3，不在本卡 ②。
+
+## 可跑用例（port-free）
+
+```
+python -I tests/parity/M4/run_npc_cases.py
+# 等价于：python -I tools/flow-diff.py target/m4/npc-cases-flow.json
+```
+
+```
+OK   传送-幻境（金币不足/无物品）: 3 行一致
+       gold -100000
+       #gold=100000
+       #items=
+OK   传送-幻境（背包有名为100000的物品）: 3 行一致
+       gold -100000
+       #gold=100000
+       #items=100000
+OK   行会-攻城申请缴金条（@requestcastlewar）: 4 行一致
+       delitem 金条 1
+       msg 11009 0 0 0 0 测试NPC/请求对 沙巴克 作战你应该有祖玛教主的<头像>!\战争将会在申请日期的第 二 天内开始。\ \<给祖玛头像/@requestcastlewarnow>\ \<返回./@main>
+       #gold=1000
+       #items=
+OK   任务-地图出矿提示（Q001@main）: 2 行一致
+       #gold=1000
+       #items=
+OK   商店-货币兑换（@changeGold 足额金币→金条）: 4 行一致
+       gold -1002000
+       additem 金条 1
+       #gold=198000
+       #items=金条
+OK   修理-RepairAll（@StdModeFunc26）: 2 行一致
+       #gold=1000
+       #items=
+OK   仓库-捆绑卷轴（@zum_bind1 6×地牢逃脱卷）: 11 行一致
+       gold -100
+       delitem 地牢逃脱卷 1
+       delitem 地牢逃脱卷 1
+       delitem 地牢逃脱卷 1
+       delitem 地牢逃脱卷 1
+       delitem 地牢逃脱卷 1
+       delitem 地牢逃脱卷 1
+       additem 地牢逃脱卷包 1
+       msg 11009 0 0 0 0 测试NPC/已经捆好了... 我的技术不错吧.. \以后还有要捆的，就来找我吧.. \ \<继续捆/@z_bind> \<离 开/@exit>
+       #gold=900
+       #items=地牢逃脱卷包
+
+== 用例 7：一致 7 / 不一致 0 ==
+```
+
+### 传送：传送-幻境（金币不足/无物品）
+- 失败怎么判红：两侧任一不同（或 C# 崩溃出 EX 行、Rust 出 err(rust) 行）即判红。
+- 期望（登记）：['gold -100000', '#gold=100000', '#items=']
+
+### 传送：传送-幻境（背包有名为100000的物品）
+- 失败怎么判红：两侧任一不同即判红。
+- 期望（登记）：['gold -100000', '#gold=100000', '#items=100000']
+
+### 行会：行会-攻城申请缴金条（@requestcastlewar）
+- 失败怎么判红：金条未被扣（`delitem` 缺失）或说词不同即判红；C# 崩溃出 EX 行、Rust 出 err(rust) 行亦判红。
+- 期望（登记）：['delitem 金条 1', 'msg 11009 ...', '#gold=1000', '#items=']
+
+### 任务：任务-地图出矿提示（Q001@main）
+- 失败怎么判红：两侧任一不同即判红（本脚本 `sendmsg 6 提示…` 在两侧 harness 都记为空效果，故只比 gold/items 恒定输出）。
+- 期望（登记）：['#gold=1000', '#items=']
+
+### 商店：商店-货币兑换（@changeGold 足额金币→金条）
+- 失败怎么判红：① 行为：同一 label/输入下，C# 与 Rust 的 take/give/messagebox 序列逐行相同（差 0）；② DB 作用域：角色 `Gold` 与背包/仓库物品行按 `tests/parity/m3/scoped_diff.py diff --canonical` 比对，作用域内字段级 diff = 0。任一非 0 即判红。
+- 期望（登记）：['take 金币 1002000', 'give 金条 1', 'MESSAGEBOX 金条已经为你换好了']
+
+### 修理：修理-RepairAll（@StdModeFunc26）
+- 失败怎么判红：两侧同一佩戴物在 `@StdModeFunc26` 后的 `Dura` 值逐项相同（含耐久上限、特修分支）；DB `characters_item`/`characters_item_attr` 作用域内字段级 diff = 0。
+- 期望（登记）：['RepairAll（佩戴物持久恢复；本 mock 无佩戴位，故 port-free 无可观测差异）']
+
+### 仓库：仓库-捆绑卷轴（@zum_bind1 6×地牢逃脱卷）
+- 失败怎么判红：① 行为：同一 label/输入下 take/give 序列逐行相同；② DB：`characters_storageitem` 与 `characters_bagitem` 作用域内字段级 diff = 0（`scoped_diff.py diff --canonical`）。任一非 0 即判红。
+- 期望（登记）：['take 金币 100', 'take 地牢逃脱卷 6', 'give 地牢逃脱卷包 1']
+
+## 等窗口用例
+
+无。全部 7 条（含商人 3 条）均走 port-free；Rust 服务侧 NPC/商人派发见下方「可跑性门」的`Rust 服务侧（M3 承接）` 行。
+
+## 商人用例可跑性门（`npc_window_readiness.py --no-run-cs`）
+
+- 结果：READY: C# 夹具路线① 就绪 ⇒ 三条商人用例可 port-free 跑（Rust 服务侧 NPC 派发归 M3，见证据）
+- 完整证据（含 C# 夹具行为复现）：`tests/parity/evidence/M4/npc-window-readiness.txt`
+
+
+== M4② 结果：可跑用例 7（GREEN） / 等窗口用例 0 ==
