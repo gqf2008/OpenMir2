@@ -1,0 +1,24 @@
+# 03) 缺省路径回归（不给 --side）：C# 读数必须与旧版逐字节相同
+# 3a) summary（缺省 = C#）
+RNG_LEDGER_SUMMARY E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv total=1670754 attack_path=275 noise=1670479 noise_ratio=0.9998
+  NOISE 1060321  M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+  NOISE  195913  GameSrv.Word.WorldServer.MonGetRandomItems@WorldServer.MonGen.cs:451
+  NOISE  128717  GameSrv.Npc.Merchant.Run@Merchant.cs:132
+  NOISE  126096  GameSrv.Npc.Merchant.Run@Merchant.cs:138
+  NOISE   53169  M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:432
+RC=0
+# 3b) segment（显式 marker，旧命令形态）
+RNG_LEDGER_SEGMENTS E:/tmp/m3bag-ledger2/csharp-oldcmd.seg.jsonl marker=M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929 segments=120
+  SEG k=1 total=1574 attack=4 noise=1570 first_seq=222225
+  SEG k=2 total=1819 attack=6 noise=1813 first_seq=223799
+  SEG k=3 total=1502 attack=6 noise=1496 first_seq=225618
+RC=0
+# 3c) segment --side csharp（新缺省 marker；应与 3b 逐字节相同）
+RNG_LEDGER_SEGMENTS E:/tmp/m3bag-ledger2/csharp-sidecmd.seg.jsonl marker=M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929 segments=120
+  SEG k=1 total=1574 attack=4 noise=1570 first_seq=222225
+  SEG k=2 total=1819 attack=6 noise=1813 first_seq=223799
+  SEG k=3 total=1502 attack=6 noise=1496 first_seq=225618
+RC=0
+# 3d) cmp 新产物 vs 已入库旧账本 evidence-attack-my-field-20261012/csharp-170110.rng-segments.jsonl
+DEFAULT_PATH_IDENTICAL
+SIDE_CSHARP_EQUALS_OLD_CMD
