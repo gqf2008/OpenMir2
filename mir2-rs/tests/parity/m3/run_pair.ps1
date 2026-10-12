@@ -531,16 +531,48 @@ if (-not $SkipBots) {
   $attackMarkers = @([regex]::Matches($botText, 'M3ATTSEQ [^\r\n]*') | ForEach-Object { $_.Value })
   Write-Output ("OPS_ATTACKSEQ_MARKERS count={0}" -f $attackMarkers.Count)
   if ($AttackSequence) {
-    $jsonObjs = @([regex]::Matches($botText, 'M3ATTSEQ (\{[^{}]*\})') | ForEach-Object { $_.Groups[1].Value })
+    # 逐击标记可含**嵌套** JSON（`role=state` 的 `attacker`/`victim` 子对象）⇒ 正则必须是
+    # 「行内首 `{` 到行末最后 `}`」而不是旧的 `\{[^{}]*\}`（后者会把 state 行整条丢掉）。
+    # 唯一口径：`M3ATTSEQ (\{[^\r\n]*\})`（不加 `Singleline`，`.`/`[^\r\n]` 不跨行）。
+    $jsonObjs = @([regex]::Matches($botText, 'M3ATTSEQ (\{[^\r\n]*\})') | ForEach-Object { $_.Groups[1].Value })
     if ($jsonObjs.Count -eq 0) {
       Write-Output 'RED: -AttackSequence 开了但 bot.log 里一条 M3ATTSEQ 标记都没有 —— 固定攻击序列没跑（驱动未生效/假人未进世界）'
       exit 1
     }
     # 落自包含原始事件流（每行一个 JSON 对象），供 attack_diff.py align/diff。
     Set-Content -Path $attackRawPath -Value $jsonObjs -Encoding utf8
+    # M3②③ 逐击状态记录（owner 2026-10-12 23:50）：攻方每击落一条 `role=state`，
+    # 供 m3cs `per_strike_requests.py jointable --*-state` 消费。单列一份、只含 state 行。
+    $stateObjs = @($jsonObjs | Where-Object { $_ -match '"role"\s*:\s*"state"' })
+    $attackStatePath = Join-Path $SessionDir 'attack_state.jsonl'
+    if ($stateObjs.Count -gt 0) {
+      Set-Content -Path $attackStatePath -Value $stateObjs -Encoding utf8
+    } elseif (Test-Path $attackStatePath) {
+      Remove-Item $attackStatePath -Force
+    }
     $attackSteps = @($jsonObjs | Where-Object { $_ -match '"role"\s*:\s*"attack"' }).Count
     $doneCount = @($jsonObjs | Where-Object { $_ -match '"role"\s*:\s*"done"' }).Count
-    Write-Output ("OPS_ATTACKSEQ attacks={0} done={1} raw={2}" -f $attackSteps, $doneCount, (Split-Path $attackRawPath -Leaf))
+    Write-Output ("OPS_ATTACKSEQ attacks={0} done={1} state={2} raw={3}" -f $attackSteps, $doneCount, $stateObjs.Count, (Split-Path $attackRawPath -Leaf))
+    # **fail-closed 门（owner 2026-10-12 23:50 第 ③ 条）**：攻方每一击都必须落且只落一条 `role=state`
+    # （k 从 1 起无洞）。状态记录缺项 ⇒ 拒比（否则 m3cs 的 jointable 会拿残缺状态出假结论）。
+    $stateKs = New-Object System.Collections.Generic.List[int]
+    $stateBad = 0
+    foreach ($s in $stateObjs) {
+      if ($s -match '"k"\s*:\s*(\d+)') { $stateKs.Add([int]$Matches[1]) } else { $stateBad++ }
+    }
+    if ($stateObjs.Count -ne $attackSteps) {
+      Write-Output ("RED: 逐击状态记录不完整（state={0} != attack={1}）—— 每一击必须恰一条 role=state（owner 23:50 fail-closed）" -f $stateObjs.Count, $attackSteps)
+      exit 1
+    }
+    if ($stateBad -gt 0) {
+      Write-Output ("RED: 逐击状态记录有 {0} 行缺可解析的 k —— 状态 schema 破损" -f $stateBad)
+      exit 1
+    }
+    $stateSorted = @($stateKs | Sort-Object -Unique)
+    if ($stateSorted.Count -ne $stateObjs.Count -or (($stateSorted.Count -gt 0) -and (($stateSorted[0] -ne 1) -or ($stateSorted[-1] -ne $stateSorted.Count)))) {
+      Write-Output ("RED: 逐击状态记录 k 有洞/重复（count={0} distinct={1} first={2} last={3}）" -f $stateObjs.Count, $stateSorted.Count, $stateSorted[0], $stateSorted[-1])
+      exit 1
+    }
     if ($doneCount -lt 1) {
       Write-Output 'RED: -AttackSequence 开了但没有 `M3ATTSEQ done` —— 序列未收尾（驱动中途断了）'
       exit 1

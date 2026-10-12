@@ -1,0 +1,50 @@
+# 命令清单 —— evidence-m3-target-availability-20261012
+
+owner 2026-10-12 23:50 brief 片（`openmir2-m3-attack-pair-fixture`）。所有命令在本 worktree
+（`.claude/worktrees/m3bag`，branch `worktree-m3-bag-equip`）执行；C# 栈用仓库内规范脚本
+`mir2-rs/tests/parity/m3/start-csharp-hook.ps1`（影子 hook，不碰冻结 `E:\MirServer\M2GameSvr`）。
+
+## 0. 起栈（实拍端口为空后；共享 MySQL 3306 可已在）
+
+```powershell
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/start-csharp-hook.ps1 -Seed 42 -IsolateAttack `
+  -StateLog E:/tmp/m3bag-hook/rng-server-state.tsv -LogDir E:/tmp/m3bag-hook
+```
+
+## 1. 两次真机侧运行（唯一差别 = pin 的 Level/Hp）
+
+```powershell
+# 1.1 L255/20669（F-F pin；目标可用性门 ⇒ GREEN）
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 -Side csharp -Bots 2 `
+  -AttackCount 120 -AttackPinPair -Prefix m3se -IsolateAttack `
+  -CsharpSeedLog E:/tmp/m3bag-hook/rng-stream.tsv -IsolateSites E:/tmp/m3bag-hook/rng-isolate-sites.txt `
+  -AttackStreamLog E:/tmp/m3bag-hook/rng-attack-stream.tsv -CsharpStateLog E:/tmp/m3bag-hook/rng-server-state.tsv
+
+# 1.2 L1/19（旧口径 pin；目标可用性门 ⇒ RED，点名受害 ghost 的 k）
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 -Side csharp -Bots 2 `
+  -AttackCount 120 -AttackPinPair -Prefix m3sf -AttackVictimLevel 1 -AttackVictimHp 19 -IsolateAttack `
+  -CsharpSeedLog E:/tmp/m3bag-hook/rng-stream.tsv -IsolateSites E:/tmp/m3bag-hook/rng-isolate-sites.txt `
+  -AttackStreamLog E:/tmp/m3bag-hook/rng-attack-stream.tsv -CsharpStateLog E:/tmp/m3bag-hook/rng-server-state.tsv
+```
+
+## 2. 目标可用性门 selftest + 无栈自检
+
+```powershell
+python -I mir2-rs/tests/parity/m3/server_state_gate.py --selftest
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 -SelfCheckNoStack
+```
+
+## 3. 收工（-Stop + 十端口实拍 + 窗口已释放）
+
+```powershell
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/start-csharp-hook.ps1 -Stop -LogDir E:/tmp/m3bag-hook
+```
+
+## 4. 四门禁（隔离 target；本片动 `src/BotSrv/**`，必须全绿）
+
+```sh
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target cargo fmt --all -- --check
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target cargo clippy --workspace --all-targets --offline -- -D warnings
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target cargo test --workspace --offline
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target cargo run -p msgcodegen --offline -- --check
+```

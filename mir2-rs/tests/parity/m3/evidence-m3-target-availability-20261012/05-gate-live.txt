@@ -1,0 +1,14 @@
+# 05 —— 目标可用性门真机两侧（同一 C# 栈、同一地图/落点，只换 pin 的 Level/Hp）：
+### 5.1 L255/20669（F-F pin）⇒ GREEN（run_attack_pair rc=0）
+SESSION_CSHARP csharp-20261012-234457
+VICTIM_HP_POSTPIN ok expected=20669 struck_lines=112（Level=255 Job=0，oracle RecalcLevelAbilitys 自洽）
+GREEN: 目标可用性门通过（120 击里 120 击受害在场且 !ghost && !death，tolerance=1）
+TARGET_AVAILABILITY_OK state=rng-server-state.tsv attacker_id=1440376811 victim_cell=18,20
+GREEN: 侧运行与同序列判据通过
+
+### 5.2 L1/19（旧口径 pin）⇒ RED（run_attack_pair rc=1）
+SESSION_CSHARP csharp-20261012-234651
+ISOLATE_PREDICATES_OK table-vs-csharp GREEN（dump=E:/tmp/m3bag-hook/rng-isolate-sites.txt）
+VICTIM_HP_POSTPIN ok expected=19 struck_lines=2（Level=1 Job=0，oracle RecalcLevelAbilitys 自洽）
+RED: 目标在 114/120 击不可用（> tolerance 1）——受害不在 (18,20) 或 ghost/death=1；前几处：#7(seq=247), #8(seq=248), #9(seq=249), #10(seq=250), #11(seq=251), #12(seq=252), #13(seq=253), #14(seq=254)
+RED: 目标可用性门未过（rc=1）——受害不在 (18,20) 或被 ghost/death（见 server_state_gate.py）

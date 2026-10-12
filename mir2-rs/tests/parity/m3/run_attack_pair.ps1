@@ -114,6 +114,7 @@ param(
   [switch]$IsolateAttack,          # owner 2026-10-12 21:15：攻击路径专用种子流（C# 栈须以 MIR2_RNG_ISOLATE_ATTACK=1 起）
   [string]$IsolateSites = '',      # C# 静态分流站点 dump（缺省读 $env:MIR2_RNG_ISOLATE_SITES，再由流水头补）
   [string]$AttackStreamLog = '',   # 专用流流水（缺省读 $env:MIR2_RNG_ATTACK_LOG）；夹具记其 sha256
+  [string]$CsharpStateLog = '',    # owner 23:50：服务端权威逐击状态 dump（缺省读 $env:MIR2_RNG_STATE_LOG）
   [switch]$DiffOnly,
   [switch]$SelfCheckNoStack
 )
@@ -129,6 +130,7 @@ $RepoRoot = (Resolve-Path (Join-Path $Here '..\..\..\..')).Path
 $RunPair = Join-Path $Here 'run_pair.ps1'
 $Scoped = Join-Path $Here 'scoped_diff.py'
 $AttackDiff = Join-Path $Here 'attack_diff.py'
+$ServerStateGate = Join-Path $Here 'server_state_gate.py'
 $RunBots = Join-Path $RepoRoot 'tools\botload\run_bots.ps1'
 $Sessions = Join-Path $Here 'sessions'
 $MysqlExe = 'D:\mysql\mariadb-10.11.19-winx64\bin\mysql.exe'
@@ -200,6 +202,15 @@ function Invoke-AttackAlign([string]$Dir) {
   if (-not (Test-Path $raw)) { Write-Output ("PREREQ_MISSING: 会话缺 attack_raw.jsonl -> {0}" -f $raw); return 2 }
   $seq = Join-Path $Dir 'attack_seq.jsonl'
   $out = & python $AttackDiff align $raw --out $seq 2>&1
+  foreach ($line in @($out)) { Write-Host $line }
+  return [int]$LASTEXITCODE
+}
+
+# owner 2026-10-12 23:50 第 ③ 条：目标可用性 fail-closed 门（服务端权威 dump）。
+# 唯一口径见 server_state_gate.py 头（该门咬住「受害者被静默 ghost ⇒ GetPoseCreate()==null」这类
+# **客户端视图看不到**的目标消失；旧行为：夹具不判它，m3cs 只能从 RNG 计数事后推断）。
+function Invoke-ServerStateGate([string]$StatePath, [int]$Attacks, [int]$AttackerId, [int]$Vx, [int]$Vy, [int]$Tolerance = 1) {
+  $out = & python -I $ServerStateGate --state $StatePath --attacks $Attacks --attacker-id $AttackerId --victim-x $Vx --victim-y $Vy --tolerance $Tolerance 2>&1
   foreach ($line in @($out)) { Write-Host $line }
   return [int]$LASTEXITCODE
 }
@@ -635,6 +646,15 @@ if ($SelfCheckNoStack) {
   if ($attackStOut -notmatch 'SELFTEST GREEN') { $failures += 'attack_diff_selftest_not_green' }
   Write-Output ("SELFTEST ⑦ attack_diff selftest rc={0}" -f $attackStRc)
 
+  # ⑦b 目标可用性门（owner 2026-10-12 23:50 第 ③ 条）：server_state_gate.py 的离线自检。
+  # 内建 6 向：生产形态（允许前 1 击起跑竞态）绿 / 受害 ghost ⇒ 红点名 k / 受害移格 ⇒ 红 /
+  # 行数不足 ⇒ PREREQ 2 / 非法 JSON ⇒ PREREQ 2 / tolerance=0 首击缺 ⇒ 红。任一向退化为恒绿 ⇒ 必红。
+  $stateGateOut = (& python -I $ServerStateGate --selftest 2>&1 | Out-String)
+  $stateGateRc = $LASTEXITCODE
+  if ($stateGateRc -ne 0) { $failures += ("server_state_gate_selftest_rc=$stateGateRc") }
+  if ($stateGateOut -notmatch 'SELFTEST GREEN') { $failures += 'server_state_gate_selftest_not_green' }
+  Write-Output ("SELFTEST ⑦b server_state_gate selftest rc={0}" -f $stateGateRc)
+
   # ⑧ 生产函数级「改坏必红」：合成两侧 raw → align → diff 绿；改坏一次 dmg ⇒ 红；改坏一次 hit ⇒ 红。
   #    F-J（m3cs tick22，2026-10-12 13:45）：align **必须走生产函数 `Invoke-AttackAlign`**，
   #    不再 `& python … align … | Out-Null` 把待测函数的返回值吞掉——旧写法正好绕过了
@@ -984,7 +1004,8 @@ Write-Output 'PREFLIGHT MySQL 在听'
 $probeArgs = @('-EmitOpsArgs', '-FixedNewChr', '-PinStartPose', '-AttackPinPair', '-AttackSequence',
                '-Bots', $Bots, '-Prefix', $Prefix, '-AttackCount', $AttackCount, '-AttackStepMs', $AttackStepMs,
                '-AttackStartDelayMs', $AttackStartDelayMs, '-AttackPinDir', $AttackPinDir,
-               '-PinMapName', $PinMapName, '-PinCX', $AttackPinCX, '-PinCY', $AttackPinCY, '-AttackVictimHp', $AttackVictimHp)
+               '-PinMapName', $PinMapName, '-PinCX', $AttackPinCX, '-PinCY', $AttackPinCY, '-AttackVictimHp', $AttackVictimHp,
+               '-AttackVictimLevel', $AttackVictimLevel)
 $probeRaw = @(& powershell -ExecutionPolicy Bypass -File $RunPair @probeArgs)
 if ($LASTEXITCODE -ne 0) {
   Write-Output 'RED: 取 pin SQL 失败（run_pair -EmitOpsArgs 非 0）——无法做可执行性预检'
@@ -1008,7 +1029,7 @@ Write-Output '--- 2) 侧运行（复用 run_pair.ps1；同序列 = -FixedNewChr 
 $pairArgs = @('-Side', $Side, '-Bots', $Bots, '-Prefix', $Prefix, '-Address', $Address, '-Port', $Port,
               '-TimeoutSec', $TimeoutSec, '-FixedNewChr', '-PinStartPose', '-AttackPinPair',
               '-AttackSequence', '-AttackCount', $AttackCount, '-AttackStepMs', $AttackStepMs, '-AttackStartDelayMs', $AttackStartDelayMs,
-              '-AttackPinDir', $AttackPinDir, '-PinMapName', $PinMapName, '-PinCX', $AttackPinCX, '-PinCY', $AttackPinCY, '-AttackVictimHp', $AttackVictimHp)
+              '-AttackPinDir', $AttackPinDir, '-PinMapName', $PinMapName, '-PinCX', $AttackPinCX, '-PinCY', $AttackPinCY, '-AttackVictimHp', $AttackVictimHp, '-AttackVictimLevel', $AttackVictimLevel)
 & powershell -ExecutionPolicy Bypass -File $RunPair @pairArgs
 $pairExit = $LASTEXITCODE
 if ($pairExit -ne 0) {
@@ -1105,6 +1126,43 @@ if (-not $postPin.ok) {
   exit 1
 }
 Write-Output ("VICTIM_HP_POSTPIN ok expected={0} struck_lines={1}（Level={2} Job={3}，oracle RecalcLevelAbilitys 自洽）" -f $AttackVictimHp, @($postPin.observed).Count, $AttackVictimLevel, $script:M3AttackVictimJob)
+
+# owner 2026-10-12 23:50 第 ③ 条：**目标可用性 fail-closed 门**。
+# 背景：C# 侧「目标格为空」其实是受害者被**静默 ghost**（服务端 dump 实测 k=4 起 ghost=1，而位置/地图
+# 未变），`Envir.GetMovingObject(..., true)` 对 Ghost 直接返回 null ⇒ `GetPoseCreate()==null`。客户端
+# 视图（attack_state.jsonl）看不到这个 ghost ⇒ 夹具必须用**服务端 dump** 判，否则会拿「假的有目标窗口」
+# 去比。开启：`start-csharp-hook.ps1 -StateLog`（缺省 <LogDir>\rng-server-state.tsv，写 MIR2_RNG_STATE_LOG）。
+# 判据：dump 最后 -AttackCount 行里，攻方前方格 (Vx,Vy) 上必须有非攻方、!ghost && !death 的玩家族对象；
+# 允许多达 1 击缺失（受害晚于攻方进世界的起跑竞态），超出 ⇒ RED。
+if ($Side -eq 'csharp') {
+  $stateLogResolved = if (-not [string]::IsNullOrEmpty($CsharpStateLog)) { $CsharpStateLog }
+    elseif (-not [string]::IsNullOrEmpty($env:MIR2_RNG_STATE_LOG)) { $env:MIR2_RNG_STATE_LOG }
+    elseif (Test-Path -LiteralPath 'E:\tmp\m3-csharp-hook\rng-server-state.tsv') { 'E:\tmp\m3-csharp-hook\rng-server-state.tsv' }
+    else { '' }
+  if ([string]::IsNullOrEmpty($stateLogResolved) -or -not (Test-Path -LiteralPath $stateLogResolved)) {
+    Write-Output 'RED: 缺服务端权威逐击状态 dump（-CsharpStateLog / $env:MIR2_RNG_STATE_LOG）——目标可用性门无法判；请用 start-csharp-hook.ps1 -StateLog 起栈（fail-closed，owner 23:50 第 ③ 条）'
+    exit 1
+  }
+  $atkId = 0
+  foreach ($l in (Get-Content (Join-Path $mine.FullName 'attack_raw.jsonl'))) {
+    if ($l -match '"role"\s*:\s*"attack"' -and $l -match '"my"\s*:\s*(\d+)') { $atkId = [int]$Matches[1]; break }
+  }
+  $vx = $AttackPinCX + 1
+  $vy = $AttackPinCY
+  if ($baseline.attack_pose -match 'victim=(\d+),(\d+)') { $vx = [int]$Matches[1]; $vy = [int]$Matches[2] }
+  if ($atkId -le 0) { Write-Output 'PREREQ_MISSING: 会话 attack_raw.jsonl 里读不到攻方 ActorId（role=attack.my）'; exit 2 }
+  # 入会话留痕：本侧运行的最后 -AttackCount 行服务端 dump（dump 文件跨多次 run 累加，取尾段）。
+  @(Get-Content -LiteralPath $stateLogResolved | Select-Object -Last $AttackCount) |
+    Set-Content -Path (Join-Path $mine.FullName 'server_state_segment.tsv') -Encoding utf8
+  $ssgRc = Invoke-ServerStateGate -StatePath $stateLogResolved -Attacks $AttackCount -AttackerId $atkId -Vx $vx -Vy $vy -Tolerance 1
+  if ($ssgRc -ne 0) {
+    Write-Output ("RED: 目标可用性门未过（rc={0}）——受害不在 ({1},{2}) 或被 ghost/death（见 server_state_gate.py）" -f $ssgRc, $vx, $vy)
+    exit 1
+  }
+  Write-Output ("TARGET_AVAILABILITY_OK state={0} attacker_id={1} victim_cell={2},{3}" -f (Split-Path -Leaf $stateLogResolved), $atkId, $vx, $vy)
+} else {
+  Write-Output 'NOTE: -Side rust 无服务端状态 dump（归 m2-svr）；目标可用性门仅在 C# 侧强制（F-F pin + 同一夹具已使两侧结构一致）'
+}
 
 # pin 记账字段存在性护栏（owner 2026-10-12 16:30；**19:20 降级为 informational**）：本侧产物必须至少把
 # `pin_attempts` 记账落盘（缺失/不可解析 ⇒ PREREQ exit 2）；attempts 数值只打 INFO（不再拒比）。

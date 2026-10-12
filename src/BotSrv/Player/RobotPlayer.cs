@@ -671,6 +671,10 @@ namespace BotSrv.Player
             }
             _attackSeqNextTick = now + MShare.g_nAttackStepMs;
             int k = _attackSeqStep + 1;
+            // M3②③ 逐击状态记录（owner 2026-10-12 23:50；T-29 扩展）：**发 CM_HIT 之前**落一条
+            // `role=state`——把「C# 侧目标格 (18,20) 从 k=4 起为空」钉到具体成因（受害被 ghost/移走
+            // 还是从未在格上）。m3cs `per_strike_requests.py jointable` 的权威输入。
+            MainOutMessage("M3ATTSEQ " + M3AttackStateJson(k));
             MainOutMessage($"M3ATTSEQ {{\"role\":\"attack\",\"k\":{k},\"op\":\"CM_HIT\",\"x\":{_probeX},\"y\":{_probeY},\"dir\":{MShare.g_nAttackDir},\"my\":{_myActorId},\"id\":\"{LoginId}\"}}");
             CommandMessage msg = Messages.MakeMessage(Messages.CM_HIT,
                 HUtil32.MakeLong((short)_probeX, (short)_probeY), 0, MShare.g_nAttackDir, 0);
@@ -680,6 +684,96 @@ namespace BotSrv.Player
             {
                 MainOutMessage($"M3ATTSEQ {{\"role\":\"done\",\"id\":\"{LoginId}\",\"attacks\":{MShare.g_nAttackCount}}}");
             }
+        }
+
+        /// <summary>M3②③ 逐击状态记录（owner 2026-10-12 23:50；T-29 扩展）：m3cs
+        /// `per_strike_requests.py jointable` 的权威输入——每击在**发出 CM_HIT 之前**落一条
+        /// `M3ATTSEQ {"role":"state",...}`：攻方 = 本假人自己的视图（`MShare.MySelf`），
+        /// 受害 = **本假人视角下「前方格」上的首个可见活体**（= oracle `GetPoseCreate()` 的客户端
+        /// 等价物；无 ⇒ `null`）。schema 按 m3cs 接口请求：`attacker`/`victim` 各
+        /// `x/y/dir/ghost/death/hp` 六字段；另附 `fx/fy/vid/others` 诊断（m3cs 解析器忽略未知键）。
+        ///
+        /// 口径要点：① **发 CM_HIT 之前**取快照（= oracle `PlayObject.Attack.cs:26` 取目标那一刻的
+        /// 客户端最近视图）；② 受害被 ghost/hide 时服务端向观察者发 `SM_GHOST/SM_HIDE/SM_DISAPPEAR`，
+        /// 客户端 `PlayScene` 会 `DeleteActor` ⇒ 该对象**不在** `ActorList` ⇒ 这里自然读到 `null`
+        /// （这正是「目标格为什么空」的直接证据）；③ `others` = 本假人视图里所有玩家族对象的
+        /// 坐标/HP，用于区分「受害被移走」与「受害走开了」。只读本假人自己的视图，不读不写跨假人
+        /// 共享世界态（同 T-29 纪律）。</summary>
+        private string M3AttackStateJson(int k)
+        {
+            // ⚠ `MShare.MySelf` 是**进程级共享静态**（多假人同进程时被最后处理包的假人覆盖）⇒
+            // 不能用来标识「本假人」。本记录只用**每假人字段**：`_probeX/_probeY`（= SM_LOGON 落点、
+            // 也就是本假人 CM_HIT 里 Recog 的坐标，服务端要求与 CurrX/CurrY 相等才受理）、
+            // `_myActorId`（SM_LOGON 的 Recog）、`MShare.g_nAttackDir`（夹具固定朝向），
+            // 并在自己的 `PlayScene.ActorList` 里按 `_myActorId` 找自己的对象取 HP 等。
+            short ax = (short)_probeX;
+            short ay = (short)_probeY;
+            int adir = MShare.g_nAttackDir;
+            int adeath = 0;
+            int ahp = 0;
+            int amaxhp = 0;
+            Actor selfActor = null;
+            if (PlayScene != null && PlayScene.ActorList != null)
+            {
+                for (int i = 0; i < PlayScene.ActorList.Count; i++)
+                {
+                    Actor a = PlayScene.ActorList[i];
+                    if (a != null && a.RecogId == _myActorId) { selfActor = a; break; }
+                }
+            }
+            if (selfActor != null)
+            {
+                adeath = selfActor.Death ? 1 : 0;
+                ahp = selfActor.Abil != null ? selfActor.Abil.HP : 0;
+                amaxhp = selfActor.Abil != null ? selfActor.Abil.MaxHP : 0;
+            }
+            // 前方格：唯一口径 = oracle `BaseObject.GetFrontPosition` 的 8 向位移（用夹具固定朝向；
+            // 与 oracle `AttackDir` 在 `BaseObject.AttackDir` 的 `Dir = nDir` 之前取目标一致）。
+            short fx = ax;
+            short fy = ay;
+            switch (adir)
+            {
+                case 0: fy--; break;
+                case 1: fx++; fy--; break;
+                case 2: fx++; break;
+                case 3: fx++; fy++; break;
+                case 4: fy++; break;
+                case 5: fx--; fy++; break;
+                case 6: fx--; break;
+                case 7: fx--; fy--; break;
+            }
+            Actor vic = null;
+            var others = new System.Text.StringBuilder();
+            if (PlayScene != null && PlayScene.ActorList != null)
+            {
+                for (int i = 0; i < PlayScene.ActorList.Count; i++)
+                {
+                    Actor a = PlayScene.ActorList[i];
+                    if (a == null || a.RecogId == _myActorId)
+                    {
+                        continue;
+                    }
+                    if (vic == null && a.CurrX == fx && a.CurrY == fy && !a.Death)
+                    {
+                        vic = a;
+                    }
+                    if (a.Race == ActorRace.Play)
+                    {
+                        if (others.Length > 0) others.Append(',');
+                        others.Append($"{{\"id\":{a.RecogId},\"x\":{a.CurrX},\"y\":{a.CurrY},\"dir\":{a.m_btDir},\"death\":{(a.Death ? 1 : 0)},\"hp\":{(a.Abil != null ? a.Abil.HP : 0)}}}");
+                    }
+                }
+            }
+            string vicJson = "null";
+            int vid = 0;
+            if (vic != null)
+            {
+                vid = vic.RecogId;
+                int vhp = vic.Abil != null ? vic.Abil.HP : 0;
+                int vmaxhp = vic.Abil != null ? vic.Abil.MaxHP : 0;
+                vicJson = $"{{\"x\":{vic.CurrX},\"y\":{vic.CurrY},\"dir\":{vic.m_btDir},\"ghost\":0,\"death\":{(vic.Death ? 1 : 0)},\"hp\":{vhp},\"maxhp\":{vmaxhp},\"id\":{vic.RecogId},\"race\":{vic.Race}}}";
+            }
+            return $"{{\"role\":\"state\",\"k\":{k},\"attacker\":{{\"x\":{ax},\"y\":{ay},\"dir\":{adir},\"ghost\":0,\"death\":{adeath},\"hp\":{ahp},\"maxhp\":{amaxhp},\"id\":{_myActorId}}},\"victim\":{vicJson},\"fx\":{fx},\"fy\":{fy},\"vid\":{vid},\"others\":[{others}]}}";
         }
 
         #endregion

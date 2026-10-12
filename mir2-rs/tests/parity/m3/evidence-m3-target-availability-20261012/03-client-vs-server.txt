@@ -1,0 +1,132 @@
+# 「目标格从 k=4 起为空」到底是**格子空了**还是**受害被静默 ghost**？——客户端 vs 服务端两视图
+# 同一会话 sessions/csharp-20261012-234651（C# L1/19 pin）
+#
+# 客户端视图（BotSrv 逐击状态记录 attack_state.jsonl，攻方自己的 ActorList）：
+#   role=state 行数 = 120；victim=null 的 k = [1]；其余 119 击 victim 都在 (18,20)
+#   ⇒ **客户端视图看不出目标消失**（受害被 ghost 后服务端没给观察者发可用帧；见 README 讨论）
+#
+# 服务端权威视图（RNG hook SERVER_STATE dump，见 02-server-state-L1-red.txt）：受害 ghost 从 #7 起 = 1。
+#   ⇒ **目标格没空，是受害 Ghost=1**；oracle Envir.GetMovingObject(...,boFlag=true) 对 Ghost 直接返回
+#      null ⇒ GetPoseCreate()==null ⇒ _Attack/AttackSuccess 提前返回（RNG attack_success 只 3 次）。
+#
+# 逐击对照（k, 客户端 victim 在场?, 客户端 victim x/y, 服务端 victim ghost）：
+k=  1 client_present=False client_xy=-         server_ghost=0
+k=  2 client_present=True  client_xy=18,20     server_ghost=0
+k=  3 client_present=True  client_xy=18,20     server_ghost=0
+k=  4 client_present=True  client_xy=18,20     server_ghost=0
+k=  5 client_present=True  client_xy=18,20     server_ghost=0
+k=  6 client_present=True  client_xy=18,20     server_ghost=0
+k=  7 client_present=True  client_xy=18,20     server_ghost=1
+k=  8 client_present=True  client_xy=18,20     server_ghost=1
+k=  9 client_present=True  client_xy=18,20     server_ghost=1
+k= 10 client_present=True  client_xy=18,20     server_ghost=1
+k= 11 client_present=True  client_xy=18,20     server_ghost=1
+k= 12 client_present=True  client_xy=18,20     server_ghost=1
+k= 13 client_present=True  client_xy=18,20     server_ghost=1
+k= 14 client_present=True  client_xy=18,20     server_ghost=1
+k= 15 client_present=True  client_xy=18,20     server_ghost=1
+k= 16 client_present=True  client_xy=18,20     server_ghost=1
+k= 17 client_present=True  client_xy=18,20     server_ghost=1
+k= 18 client_present=True  client_xy=18,20     server_ghost=1
+k= 19 client_present=True  client_xy=18,20     server_ghost=1
+k= 20 client_present=True  client_xy=18,20     server_ghost=1
+k= 21 client_present=True  client_xy=18,20     server_ghost=1
+k= 22 client_present=True  client_xy=18,20     server_ghost=1
+k= 23 client_present=True  client_xy=18,20     server_ghost=1
+k= 24 client_present=True  client_xy=18,20     server_ghost=1
+k= 25 client_present=True  client_xy=18,20     server_ghost=1
+k= 26 client_present=True  client_xy=18,20     server_ghost=1
+k= 27 client_present=True  client_xy=18,20     server_ghost=1
+k= 28 client_present=True  client_xy=18,20     server_ghost=1
+k= 29 client_present=True  client_xy=18,20     server_ghost=1
+k= 30 client_present=True  client_xy=18,20     server_ghost=1
+k= 31 client_present=True  client_xy=18,20     server_ghost=1
+k= 32 client_present=True  client_xy=18,20     server_ghost=1
+k= 33 client_present=True  client_xy=18,20     server_ghost=1
+k= 34 client_present=True  client_xy=18,20     server_ghost=1
+k= 35 client_present=True  client_xy=18,20     server_ghost=1
+k= 36 client_present=True  client_xy=18,20     server_ghost=1
+k= 37 client_present=True  client_xy=18,20     server_ghost=1
+k= 38 client_present=True  client_xy=18,20     server_ghost=1
+k= 39 client_present=True  client_xy=18,20     server_ghost=1
+k= 40 client_present=True  client_xy=18,20     server_ghost=1
+k= 41 client_present=True  client_xy=18,20     server_ghost=1
+k= 42 client_present=True  client_xy=18,20     server_ghost=1
+k= 43 client_present=True  client_xy=18,20     server_ghost=1
+k= 44 client_present=True  client_xy=18,20     server_ghost=1
+k= 45 client_present=True  client_xy=18,20     server_ghost=1
+k= 46 client_present=True  client_xy=18,20     server_ghost=1
+k= 47 client_present=True  client_xy=18,20     server_ghost=1
+k= 48 client_present=True  client_xy=18,20     server_ghost=1
+k= 49 client_present=True  client_xy=18,20     server_ghost=1
+k= 50 client_present=True  client_xy=18,20     server_ghost=1
+k= 51 client_present=True  client_xy=18,20     server_ghost=1
+k= 52 client_present=True  client_xy=18,20     server_ghost=1
+k= 53 client_present=True  client_xy=18,20     server_ghost=1
+k= 54 client_present=True  client_xy=18,20     server_ghost=1
+k= 55 client_present=True  client_xy=18,20     server_ghost=1
+k= 56 client_present=True  client_xy=18,20     server_ghost=1
+k= 57 client_present=True  client_xy=18,20     server_ghost=1
+k= 58 client_present=True  client_xy=18,20     server_ghost=1
+k= 59 client_present=True  client_xy=18,20     server_ghost=1
+k= 60 client_present=True  client_xy=18,20     server_ghost=1
+k= 61 client_present=True  client_xy=18,20     server_ghost=1
+k= 62 client_present=True  client_xy=18,20     server_ghost=1
+k= 63 client_present=True  client_xy=18,20     server_ghost=1
+k= 64 client_present=True  client_xy=18,20     server_ghost=1
+k= 65 client_present=True  client_xy=18,20     server_ghost=1
+k= 66 client_present=True  client_xy=18,20     server_ghost=1
+k= 67 client_present=True  client_xy=18,20     server_ghost=1
+k= 68 client_present=True  client_xy=18,20     server_ghost=1
+k= 69 client_present=True  client_xy=18,20     server_ghost=1
+k= 70 client_present=True  client_xy=18,20     server_ghost=1
+k= 71 client_present=True  client_xy=18,20     server_ghost=1
+k= 72 client_present=True  client_xy=18,20     server_ghost=1
+k= 73 client_present=True  client_xy=18,20     server_ghost=1
+k= 74 client_present=True  client_xy=18,20     server_ghost=1
+k= 75 client_present=True  client_xy=18,20     server_ghost=1
+k= 76 client_present=True  client_xy=18,20     server_ghost=1
+k= 77 client_present=True  client_xy=18,20     server_ghost=1
+k= 78 client_present=True  client_xy=18,20     server_ghost=1
+k= 79 client_present=True  client_xy=18,20     server_ghost=1
+k= 80 client_present=True  client_xy=18,20     server_ghost=1
+k= 81 client_present=True  client_xy=18,20     server_ghost=1
+k= 82 client_present=True  client_xy=18,20     server_ghost=1
+k= 83 client_present=True  client_xy=18,20     server_ghost=1
+k= 84 client_present=True  client_xy=18,20     server_ghost=1
+k= 85 client_present=True  client_xy=18,20     server_ghost=1
+k= 86 client_present=True  client_xy=18,20     server_ghost=1
+k= 87 client_present=True  client_xy=18,20     server_ghost=1
+k= 88 client_present=True  client_xy=18,20     server_ghost=1
+k= 89 client_present=True  client_xy=18,20     server_ghost=1
+k= 90 client_present=True  client_xy=18,20     server_ghost=1
+k= 91 client_present=True  client_xy=18,20     server_ghost=1
+k= 92 client_present=True  client_xy=18,20     server_ghost=1
+k= 93 client_present=True  client_xy=18,20     server_ghost=1
+k= 94 client_present=True  client_xy=18,20     server_ghost=1
+k= 95 client_present=True  client_xy=18,20     server_ghost=1
+k= 96 client_present=True  client_xy=18,20     server_ghost=1
+k= 97 client_present=True  client_xy=18,20     server_ghost=1
+k= 98 client_present=True  client_xy=18,20     server_ghost=1
+k= 99 client_present=True  client_xy=18,20     server_ghost=1
+k=100 client_present=True  client_xy=18,20     server_ghost=1
+k=101 client_present=True  client_xy=18,20     server_ghost=1
+k=102 client_present=True  client_xy=18,20     server_ghost=1
+k=103 client_present=True  client_xy=18,20     server_ghost=1
+k=104 client_present=True  client_xy=18,20     server_ghost=1
+k=105 client_present=True  client_xy=18,20     server_ghost=1
+k=106 client_present=True  client_xy=18,20     server_ghost=1
+k=107 client_present=True  client_xy=18,20     server_ghost=1
+k=108 client_present=True  client_xy=18,20     server_ghost=1
+k=109 client_present=True  client_xy=18,20     server_ghost=1
+k=110 client_present=True  client_xy=18,20     server_ghost=1
+k=111 client_present=True  client_xy=18,20     server_ghost=1
+k=112 client_present=True  client_xy=18,20     server_ghost=1
+k=113 client_present=True  client_xy=18,20     server_ghost=1
+k=114 client_present=True  client_xy=18,20     server_ghost=1
+k=115 client_present=True  client_xy=18,20     server_ghost=1
+k=116 client_present=True  client_xy=18,20     server_ghost=1
+k=117 client_present=True  client_xy=18,20     server_ghost=1
+k=118 client_present=True  client_xy=18,20     server_ghost=1
+k=119 client_present=True  client_xy=18,20     server_ghost=1
+k=120 client_present=True  client_xy=18,20     server_ghost=1

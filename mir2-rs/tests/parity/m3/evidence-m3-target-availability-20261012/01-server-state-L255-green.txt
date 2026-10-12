@@ -1,0 +1,123 @@
+# C# L255/20669（F-F pin）——服务端权威逐击状态 dump（每行 = 一个玩家攻击起点）
+# 文件 = sessions/csharp-20261012-234457/server_state_segment.tsv（本侧运行最后 120 行）
+# 攻方 m3se0=1440376811 @(17,20) dir=2；受害 m3se1 @(18,20) map=0137
+  1 ghost=0 death=0 hp=20669 x=18 y=20 map=0137
+  2 ghost=0 death=0 hp=20669 x=18 y=20 map=0137
+  3 ghost=0 death=0 hp=20669 x=18 y=20 map=0137
+  4 ghost=0 death=0 hp=20625 x=18 y=20 map=0137
+  5 ghost=0 death=0 hp=20625 x=18 y=20 map=0137
+  6 ghost=0 death=0 hp=20586 x=18 y=20 map=0137
+  7 ghost=0 death=0 hp=20586 x=18 y=20 map=0137
+  8 ghost=0 death=0 hp=20586 x=18 y=20 map=0137
+  9 ghost=0 death=0 hp=20586 x=18 y=20 map=0137
+ 10 ghost=0 death=0 hp=20540 x=18 y=20 map=0137
+ 11 ghost=0 death=0 hp=20540 x=18 y=20 map=0137
+ 12 ghost=0 death=0 hp=20540 x=18 y=20 map=0137
+ 13 ghost=0 death=0 hp=20491 x=18 y=20 map=0137
+ 14 ghost=0 death=0 hp=20450 x=18 y=20 map=0137
+ 15 ghost=0 death=0 hp=20407 x=18 y=20 map=0137
+ 16 ghost=0 death=0 hp=20376 x=18 y=20 map=0137
+ 17 ghost=0 death=0 hp=20376 x=18 y=20 map=0137
+ 18 ghost=0 death=0 hp=20376 x=18 y=20 map=0137
+ 19 ghost=0 death=0 hp=20376 x=18 y=20 map=0137
+ 20 ghost=0 death=0 hp=20376 x=18 y=20 map=0137
+ 21 ghost=0 death=0 hp=20352 x=18 y=20 map=0137
+ 22 ghost=0 death=0 hp=20352 x=18 y=20 map=0137
+ 23 ghost=0 death=0 hp=20301 x=18 y=20 map=0137
+ 24 ghost=0 death=0 hp=20256 x=18 y=20 map=0137
+ 25 ghost=0 death=0 hp=20256 x=18 y=20 map=0137
+ 26 ghost=0 death=0 hp=20206 x=18 y=20 map=0137
+ 27 ghost=0 death=0 hp=20206 x=18 y=20 map=0137
+ 28 ghost=0 death=0 hp=20158 x=18 y=20 map=0137
+ 29 ghost=0 death=0 hp=20158 x=18 y=20 map=0137
+ 30 ghost=0 death=0 hp=20158 x=18 y=20 map=0137
+ 31 ghost=0 death=0 hp=20158 x=18 y=20 map=0137
+ 32 ghost=0 death=0 hp=20133 x=18 y=20 map=0137
+ 33 ghost=0 death=0 hp=20095 x=18 y=20 map=0137
+ 34 ghost=0 death=0 hp=20095 x=18 y=20 map=0137
+ 35 ghost=0 death=0 hp=20053 x=18 y=20 map=0137
+ 36 ghost=0 death=0 hp=20053 x=18 y=20 map=0137
+ 37 ghost=0 death=0 hp=20004 x=18 y=20 map=0137
+ 38 ghost=0 death=0 hp=19953 x=18 y=20 map=0137
+ 39 ghost=0 death=0 hp=19903 x=18 y=20 map=0137
+ 40 ghost=0 death=0 hp=19855 x=18 y=20 map=0137
+ 41 ghost=0 death=0 hp=19855 x=18 y=20 map=0137
+ 42 ghost=0 death=0 hp=19855 x=18 y=20 map=0137
+ 43 ghost=0 death=0 hp=19807 x=18 y=20 map=0137
+ 44 ghost=0 death=0 hp=19807 x=18 y=20 map=0137
+ 45 ghost=0 death=0 hp=19807 x=18 y=20 map=0137
+ 46 ghost=0 death=0 hp=19807 x=18 y=20 map=0137
+ 47 ghost=0 death=0 hp=19759 x=18 y=20 map=0137
+ 48 ghost=0 death=0 hp=19759 x=18 y=20 map=0137
+ 49 ghost=0 death=0 hp=19710 x=18 y=20 map=0137
+ 50 ghost=0 death=0 hp=19661 x=18 y=20 map=0137
+ 51 ghost=0 death=0 hp=19626 x=18 y=20 map=0137
+ 52 ghost=0 death=0 hp=19585 x=18 y=20 map=0137
+ 53 ghost=0 death=0 hp=19585 x=18 y=20 map=0137
+ 54 ghost=0 death=0 hp=19535 x=18 y=20 map=0137
+ 55 ghost=0 death=0 hp=19535 x=18 y=20 map=0137
+ 56 ghost=0 death=0 hp=19535 x=18 y=20 map=0137
+ 57 ghost=0 death=0 hp=19512 x=18 y=20 map=0137
+ 58 ghost=0 death=0 hp=19470 x=18 y=20 map=0137
+ 59 ghost=0 death=0 hp=19470 x=18 y=20 map=0137
+ 60 ghost=0 death=0 hp=19437 x=18 y=20 map=0137
+ 61 ghost=0 death=0 hp=19437 x=18 y=20 map=0137
+ 62 ghost=0 death=0 hp=19437 x=18 y=20 map=0137
+ 63 ghost=0 death=0 hp=19400 x=18 y=20 map=0137
+ 64 ghost=0 death=0 hp=19400 x=18 y=20 map=0137
+ 65 ghost=0 death=0 hp=19400 x=18 y=20 map=0137
+ 66 ghost=0 death=0 hp=19362 x=18 y=20 map=0137
+ 67 ghost=0 death=0 hp=19317 x=18 y=20 map=0137
+ 68 ghost=0 death=0 hp=19317 x=18 y=20 map=0137
+ 69 ghost=0 death=0 hp=19266 x=18 y=20 map=0137
+ 70 ghost=0 death=0 hp=19266 x=18 y=20 map=0137
+ 71 ghost=0 death=0 hp=19266 x=18 y=20 map=0137
+ 72 ghost=0 death=0 hp=19218 x=18 y=20 map=0137
+ 73 ghost=0 death=0 hp=19181 x=18 y=20 map=0137
+ 74 ghost=0 death=0 hp=19136 x=18 y=20 map=0137
+ 75 ghost=0 death=0 hp=19136 x=18 y=20 map=0137
+ 76 ghost=0 death=0 hp=19136 x=18 y=20 map=0137
+ 77 ghost=0 death=0 hp=19085 x=18 y=20 map=0137
+ 78 ghost=0 death=0 hp=19034 x=18 y=20 map=0137
+ 79 ghost=0 death=0 hp=19034 x=18 y=20 map=0137
+ 80 ghost=0 death=0 hp=19034 x=18 y=20 map=0137
+ 81 ghost=0 death=0 hp=18990 x=18 y=20 map=0137
+ 82 ghost=0 death=0 hp=18951 x=18 y=20 map=0137
+ 83 ghost=0 death=0 hp=18951 x=18 y=20 map=0137
+ 84 ghost=0 death=0 hp=18951 x=18 y=20 map=0137
+ 85 ghost=0 death=0 hp=18951 x=18 y=20 map=0137
+ 86 ghost=0 death=0 hp=18951 x=18 y=20 map=0137
+ 87 ghost=0 death=0 hp=18951 x=18 y=20 map=0137
+ 88 ghost=0 death=0 hp=18911 x=18 y=20 map=0137
+ 89 ghost=0 death=0 hp=18863 x=18 y=20 map=0137
+ 90 ghost=0 death=0 hp=18837 x=18 y=20 map=0137
+ 91 ghost=0 death=0 hp=18837 x=18 y=20 map=0137
+ 92 ghost=0 death=0 hp=18837 x=18 y=20 map=0137
+ 93 ghost=0 death=0 hp=18804 x=18 y=20 map=0137
+ 94 ghost=0 death=0 hp=18804 x=18 y=20 map=0137
+ 95 ghost=0 death=0 hp=18757 x=18 y=20 map=0137
+ 96 ghost=0 death=0 hp=18757 x=18 y=20 map=0137
+ 97 ghost=0 death=0 hp=18757 x=18 y=20 map=0137
+ 98 ghost=0 death=0 hp=18715 x=18 y=20 map=0137
+ 99 ghost=0 death=0 hp=18665 x=18 y=20 map=0137
+100 ghost=0 death=0 hp=18665 x=18 y=20 map=0137
+101 ghost=0 death=0 hp=18616 x=18 y=20 map=0137
+102 ghost=0 death=0 hp=18586 x=18 y=20 map=0137
+103 ghost=0 death=0 hp=18586 x=18 y=20 map=0137
+104 ghost=0 death=0 hp=18586 x=18 y=20 map=0137
+105 ghost=0 death=0 hp=18538 x=18 y=20 map=0137
+106 ghost=0 death=0 hp=18511 x=18 y=20 map=0137
+107 ghost=0 death=0 hp=18491 x=18 y=20 map=0137
+108 ghost=0 death=0 hp=18491 x=18 y=20 map=0137
+109 ghost=0 death=0 hp=18491 x=18 y=20 map=0137
+110 ghost=0 death=0 hp=18491 x=18 y=20 map=0137
+111 ghost=0 death=0 hp=18491 x=18 y=20 map=0137
+112 ghost=0 death=0 hp=18441 x=18 y=20 map=0137
+113 ghost=0 death=0 hp=18441 x=18 y=20 map=0137
+114 ghost=0 death=0 hp=18441 x=18 y=20 map=0137
+115 ghost=0 death=0 hp=18406 x=18 y=20 map=0137
+116 ghost=0 death=0 hp=18365 x=18 y=20 map=0137
+117 ghost=0 death=0 hp=18365 x=18 y=20 map=0137
+118 ghost=0 death=0 hp=18365 x=18 y=20 map=0137
+119 ghost=0 death=0 hp=18365 x=18 y=20 map=0137
+120 ghost=0 death=0 hp=18336 x=18 y=20 map=0137

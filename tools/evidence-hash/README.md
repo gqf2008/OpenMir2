@@ -57,7 +57,7 @@ SHA-256( Git blob 内容 )
 **同时**放 `.gitattributes` 的 `* -text` 冻结字节，复核时显式 `--disk-bytes`。
 先例：`tests/loadgate/.gitattributes`、`mir2-rs/tests/parity/m1-boundary-load/evidence/.gitattributes`。
 
-## EOL 陷阱牙（2026-10-12，同族坑第 4/5 次）
+## EOL 陷阱牙（2026-10-12，同族坑第 5 次；历史先例：第 4 次＝ `170a51b9`）
 
 「仓库字节口径能算出正确值」还不够——**作者手抄清单时仍会用工作树原始字节**，于是得到一条只在自己
 工作树/提交物里自洽、在干净检出上不可复现的清单。本工具因此加了一条**主动咬住 EOL 陷阱**的 fail-closed

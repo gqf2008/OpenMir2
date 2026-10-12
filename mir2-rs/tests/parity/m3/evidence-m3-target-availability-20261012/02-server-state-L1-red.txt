@@ -1,0 +1,123 @@
+# C# L1/19（旧口径 pin）——服务端权威逐击状态 dump；受害从某击起 ghost=1（位置/地图不变）
+# 文件 = sessions/csharp-20261012-234651/server_state_segment.tsv
+# 攻方 ActorId = 91301015 @(17,20) dir=2；受害 @(18,20) map=0137
+  1 ghost=0 death=0 hp=19 x=18 y=20 map=0137
+  2 ghost=0 death=0 hp=19 x=18 y=20 map=0137
+  3 ghost=0 death=0 hp=19 x=18 y=20 map=0137
+  4 ghost=0 death=0 hp=19 x=18 y=20 map=0137
+  5 ghost=0 death=0 hp=19 x=18 y=20 map=0137
+  6 ghost=0 death=0 hp=18 x=18 y=20 map=0137
+  7 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+  8 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+  9 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 10 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 11 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 12 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 13 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 14 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 15 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 16 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 17 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 18 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 19 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 20 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 21 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 22 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 23 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 24 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 25 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 26 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 27 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 28 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 29 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 30 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 31 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 32 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 33 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 34 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 35 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 36 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 37 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 38 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 39 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 40 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 41 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 42 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 43 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 44 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 45 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 46 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 47 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 48 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 49 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 50 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 51 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 52 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 53 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 54 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 55 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 56 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 57 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 58 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 59 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 60 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 61 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 62 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 63 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 64 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 65 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 66 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 67 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 68 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 69 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 70 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 71 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 72 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 73 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 74 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 75 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 76 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 77 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 78 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 79 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 80 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 81 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 82 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 83 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 84 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 85 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 86 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 87 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 88 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 89 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 90 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 91 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 92 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 93 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 94 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 95 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 96 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 97 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 98 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+ 99 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+100 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+101 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+102 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+103 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+104 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+105 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+106 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+107 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+108 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+109 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+110 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+111 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+112 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+113 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+114 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+115 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+116 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+117 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+118 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+119 ghost=1 death=0 hp=17 x=18 y=20 map=0137
+120 ghost=1 death=0 hp=17 x=18 y=20 map=0137

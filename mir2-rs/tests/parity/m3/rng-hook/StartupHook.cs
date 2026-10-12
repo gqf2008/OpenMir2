@@ -22,6 +22,12 @@
 //                                  即 divert-sites.txt 原样字节；供 check_predicates.py 机判）。
 //                                  未设 ⇒ 落在 MIR2_RNG_LOG 同目录的 rng-isolate-sites.txt。
 //   MIR2_RNG_ATTACK_LOG=<路径>     可选：只记**分流到专用流**的取数（专用流流水，夹具记其 sha256）。
+//   MIR2_RNG_STATE_LOG=<路径>      可选（owner 2026-10-12 23:50）：在每个**玩家攻击起点**
+//                                  （`PlayObject.GetAttackPower@PlayObject.cs:2929`，即每个玩家单元首抽）
+//                                  把服务端权威 `SystemShare.ActorMgr` 里全部**玩家族**对象的
+//                                  `id/name/x/y/dir/ghost/death/hp/maxhp/map` 落成一 JSON 数组一行
+//                                  （逐次、与玩家单元同序）。用于把「目标格为何为空」钉到服务端的
+//                                  `Ghost/Death/map` 而非客户端视图。未设 ⇒ 零行为变化。
 //
 // 实现要点：
 // 1. 反射拿到 `OpenMir2.RandomNumber` 的私有静态字段 `random`（System.Random），
@@ -37,6 +43,7 @@
 // 带命名空间会报 TypeLoadException（2026-10-10 实测）。
 
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -48,9 +55,16 @@ internal static class StartupHook
     private static readonly object Sync = new object();
     private static StreamWriter _log;
     private static StreamWriter _attackLog;
+    private static StreamWriter _stateLog;
     private static long _seq;
+    private static long _stateSeq;
     private static bool _logSite;
     private static bool _isolateAttack;
+
+    /// <summary>玩家攻击起点站点（每个玩家攻击单元的首抽；oracle `PlayObject.GetAttackPower`，
+    /// `Luck<=0` 分支第一抽）。服务端状态 dump 与玩家单元同序落盘。</summary>
+    internal const string AttackStartSite =
+        "M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929";
 
     /// <summary>attack_seed = MIR2_RNG_SEED + 0x9E37（i32 回绕，与 Rust 侧同公式）。</summary>
     internal const int AttackSeedDelta = 0x9E37;
@@ -156,6 +170,19 @@ internal static class StartupHook
                 }
             }
 
+            if (_stateLog == null)
+            {
+                string statePath = Environment.GetEnvironmentVariable("MIR2_RNG_STATE_LOG");
+                if (!string.IsNullOrEmpty(statePath))
+                {
+                    _stateLog = new StreamWriter(
+                        new FileStream(statePath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite),
+                        new UTF8Encoding(false));
+                    _stateLog.AutoFlush = true;
+                    Console.WriteLine($"[RngSeedHook] SERVER_STATE_LOG {statePath}");
+                }
+            }
+
             // 1. 先建单例（此时 oracle 自己的 new Random() 被换掉）
             Assembly openMir2 = Assembly.Load("OpenMir2");
             Type rnType = openMir2.GetType("OpenMir2.RandomNumber", throwOnError: true);
@@ -169,7 +196,7 @@ internal static class StartupHook
             {
                 Fail("找不到 OpenMir2.RandomNumber.random 私有静态字段（被 trim？）");
             }
-            var recording = new RecordingRandom(seed, attackRandom, divertSet, _isolateAttack || _logSite, Record);
+            var recording = new RecordingRandom(seed, attackRandom, divertSet, _isolateAttack || _logSite || _stateLog != null, Record);
             randomField.SetValue(null, recording);
 
             // 3. 自证：字段确已被替换，并写出该种子的参照序列（不消耗游戏流）
@@ -273,6 +300,11 @@ internal static class StartupHook
 
     private static void Record(string kind, long arg, long result, string site, bool diverted)
     {
+        // 服务端权威状态 dump（owner 2026-10-12 23:50）：每个玩家攻击起点一行（与玩家单元同序）。
+        if (_stateLog != null && site != null && string.Equals(site, AttackStartSite, StringComparison.Ordinal))
+        {
+            DumpActors();
+        }
         if (diverted && _attackLog != null)
         {
             lock (Sync)
@@ -326,6 +358,98 @@ internal static class StartupHook
             // 调用点记录失败不影响数值对拍
         }
         return "?";
+    }
+
+    /// <summary>
+    /// 把服务端权威 `SystemShare.ActorMgr` 里全部**玩家族**（`Race==0`）对象的
+    /// `id/name/x/y/dir/ghost/death/hp/maxhp/map` 落成一行 JSON 数组，前缀 `SERVER_STATE <seq>`：
+    /// 用于判定目标格（服务端）上是否还站着一个 `!Ghost && !Death` 的对象。
+    /// 全程反射（影子程序集不静态依赖 SystemModule/M2Server），失败只记一行不抛。
+    /// </summary>
+    private static void DumpActors()
+    {
+        try
+        {
+            Assembly sys = Assembly.Load("SystemModule");
+            Type ss = sys.GetType("SystemModule.SystemShare", throwOnError: true);
+            object mgr = ss.GetProperty("ActorMgr", BindingFlags.Public | BindingFlags.Static)?.GetValue(null);
+            if (mgr == null)
+            {
+                lock (Sync) { _stateSeq++; _stateLog.WriteLine($"SERVER_STATE {_stateSeq} NO_ACTORMGR"); }
+                return;
+            }
+            object map = mgr.GetType().GetField("_actorsMap", BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(mgr);
+            if (map == null)
+            {
+                lock (Sync) { _stateSeq++; _stateLog.WriteLine($"SERVER_STATE {_stateSeq} NO_ACTORSMAP"); }
+                return;
+            }
+            object values = map.GetType().GetProperty("Values")?.GetValue(map);
+            if (values == null)
+            {
+                lock (Sync) { _stateSeq++; _stateLog.WriteLine($"SERVER_STATE {_stateSeq} NO_VALUES"); }
+                return;
+            }
+            var sb = new StringBuilder();
+            sb.Append("[");
+            bool first = true;
+            foreach (object a in (IEnumerable)values)
+            {
+                if (a == null)
+                {
+                    continue;
+                }
+                Type t = a.GetType();
+                object race = GetProp(t, a, "Race");
+                if (race == null || Convert.ToInt32(race) != 0)
+                {
+                    continue; // 只看玩家族（Race==0 == ActorRace.Play）
+                }
+                object wabil = GetProp(t, a, "WAbil");
+                object hp = wabil == null ? null : GetProp(wabil.GetType(), wabil, "HP");
+                object maxhp = wabil == null ? null : GetProp(wabil.GetType(), wabil, "MaxHP");
+                string name = Convert.ToString(GetProp(t, a, "ChrName") ?? "");
+                string mapName = Convert.ToString(GetProp(t, a, "MapName") ?? "");
+                bool ghost = Convert.ToBoolean(GetProp(t, a, "Ghost") ?? false);
+                bool death = Convert.ToBoolean(GetProp(t, a, "Death") ?? false);
+                if (!first)
+                {
+                    sb.Append(',');
+                }
+                first = false;
+                object id = GetProp(t, a, "ActorId");
+                object x = GetProp(t, a, "CurrX");
+                object y = GetProp(t, a, "CurrY");
+                object dir = GetProp(t, a, "Dir");
+                sb.Append("{\"id\":" + id + ",\"name\":\"" + name + "\",\"x\":" + x + ",\"y\":" + y + ",\"dir\":" + dir + ",\"ghost\":" + (ghost ? 1 : 0) + ",\"death\":" + (death ? 1 : 0) + ",\"hp\":" + hp + ",\"maxhp\":" + maxhp + ",\"map\":\"" + mapName + "\"}");
+            }
+            sb.Append("]");
+            lock (Sync)
+            {
+                _stateSeq++;
+                _stateLog.WriteLine($"SERVER_STATE {_stateSeq} {sb}");
+            }
+        }
+        catch (Exception ex)
+        {
+            lock (Sync)
+            {
+                _stateSeq++;
+                _stateLog.WriteLine($"SERVER_STATE {_stateSeq} DUMP_ERROR {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+    }
+
+    private static object GetProp(Type t, object o, string name)
+    {
+        try
+        {
+            return t.GetProperty(name, BindingFlags.Public | BindingFlags.Instance)?.GetValue(o);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static void Fail(string message)

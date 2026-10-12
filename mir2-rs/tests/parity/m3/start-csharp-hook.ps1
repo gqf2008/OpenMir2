@@ -22,6 +22,7 @@ param(
   [switch]$IsolateAttack,
   [string]$IsolateSites = '',       # 缺省 <LogDir>\rng-isolate-sites.txt
   [string]$AttackStreamLog = '',    # 缺省 <LogDir>\rng-attack-stream.tsv
+  [string]$StateLog = '',           # owner 23:50：服务端权威逐击状态 dump（缺省 <LogDir>\rng-server-state.tsv）
   [switch]$Stop,
   [switch]$Status,
   [int]$WaitSeconds = 60,
@@ -40,6 +41,7 @@ if ([string]::IsNullOrEmpty($Repo)) {
 if ([string]::IsNullOrEmpty($Shadow)) { $Shadow = Join-Path $Pack 'M2GameSvr-hook' }
 if ([string]::IsNullOrEmpty($IsolateSites)) { $IsolateSites = Join-Path $LogDir 'rng-isolate-sites.txt' }
 if ([string]::IsNullOrEmpty($AttackStreamLog)) { $AttackStreamLog = Join-Path $LogDir 'rng-attack-stream.tsv' }
+if ([string]::IsNullOrEmpty($StateLog)) { $StateLog = Join-Path $LogDir 'rng-server-state.tsv' }
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 $PidFile = Join-Path $LogDir 'csharp-stack.pid.json'
 
@@ -66,7 +68,7 @@ if ($Stop) {
   if (Test-Path $PidFile) {
     foreach ($e in @(Get-Content $PidFile -Raw | ConvertFrom-Json)) {
       $p = Get-Process -Id $e.pid -ErrorAction SilentlyContinue
-      if ($p) { Stop-Process -Id $e.pid -Force; Write-Output ("STOPPED {0} pid={1}" -f $e.name, $e.pid) }
+      if ($p) { Stop-Process -Id $e.pid -Force -ErrorAction SilentlyContinue; Write-Output ("STOPPED {0} pid={1}" -f $e.name, $e.pid) }
       else { Write-Output ("ALREADY_GONE {0} pid={1}" -f $e.name, $e.pid) }
     }
     Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
@@ -134,14 +136,15 @@ try {
     $env:MIR2_RNG_ISOLATE_ATTACK = '1'
     $env:MIR2_RNG_ISOLATE_SITES = $IsolateSites
     $env:MIR2_RNG_ATTACK_LOG = $AttackStreamLog
-    Write-Output ("ISOLATE_ATTACK on=true seed={0} sites={1} attack_stream={2}" -f $Seed, $IsolateSites, $AttackStreamLog)
+    $env:MIR2_RNG_STATE_LOG = $StateLog
+    Write-Output ("ISOLATE_ATTACK on=true seed={0} sites={1} attack_stream={2} state_log={3}" -f $Seed, $IsolateSites, $AttackStreamLog, $StateLog)
   } else {
     Write-Output 'ISOLATE_ATTACK on=false（默认关；行为逐字节不变）'
   }
   Start-One 'GameSvr' (Join-Path $Shadow 'GameSrv.exe') $Shadow @(5000) 5
 } finally {
   Remove-Item Env:DOTNET_STARTUP_HOOKS,Env:MIR2_RNG_SEED,Env:MIR2_RNG_LOG,Env:MIR2_RNG_SITE -ErrorAction SilentlyContinue
-  Remove-Item Env:MIR2_RNG_ISOLATE_ATTACK,Env:MIR2_RNG_ISOLATE_SITES,Env:MIR2_RNG_ATTACK_LOG -ErrorAction SilentlyContinue
+  Remove-Item Env:MIR2_RNG_ISOLATE_ATTACK,Env:MIR2_RNG_ISOLATE_SITES,Env:MIR2_RNG_ATTACK_LOG,Env:MIR2_RNG_STATE_LOG -ErrorAction SilentlyContinue
 }
 
 Start-One 'LoginGate' (Join-Path $Pack 'LoginGate\LoginGate.exe') (Join-Path $Pack 'LoginGate') @(7000) 1

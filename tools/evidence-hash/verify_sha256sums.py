@@ -52,7 +52,7 @@
 - **不静默通过**：清单不存在、路径缺失、`git` 不可用一律非零退出；
 - **口径只有一个**：默认仓库字节；切口径要显式 `--disk-bytes`；
 - **多件/少件是牙齿**：`--check-extra` 打开后目录里未列入清单的文件也判红；
-- **EOL 陷阱是牙齿（2026-10-12 追加，同族坑第 4 次）**：对清单里每个**受跟踪、会被 git 行尾归一**的
+- **EOL 陷阱是牙齿（2026-10-12 追加，同族坑第 5 次；历史先例：第 4 次＝ `170a51b9`）**：对清单里每个**受跟踪、会被 git 行尾归一**的
   文本文件，若**清单记的是工作树原始字节（CRLF）**而仓库字节（LF 归一 / git blob）是另一个值 ⇒
   直接判红并点名。这类清单在作者自己的工作树里可能「自洽」（尤其 `--disk-bytes` 时）却在**仓库字节口径下
   不可复现**（m3cs 片：`verify GREEN 75/75` 在钉住 head 上实为 `RED 74/75`）。**不许靠清单自洽拿到假绿。**
@@ -164,7 +164,7 @@ def blob_bytes(repo: Path, rel: str) -> bytes | None:
 
 def find_eol_traps(entries: list[tuple[str, str]], base: Path, repo: Path,
                    attrs: dict[str, str]) -> list[dict]:
-    """EOL 陷阱（fail-closed，2026-10-12；同族坑第 4 次）。
+    """EOL 陷阱（fail-closed，2026-10-12；同族坑第 5 次，历史先例第 4 次＝ `170a51b9`）。
 
     对清单里**在仓库内、会被 git 做行尾归一**（`text` 属性非 `-text`、且非二进制）的每个文件：
 
@@ -642,7 +642,7 @@ def cmd_selftest(_args) -> int:
         report(r_decl_repo["green"] and r_decl_disk["green"],
                "6/11 已声明 * -text：仓库字节 == 盘上字节，两种口径都绿")
 
-        # 7..10) EOL 陷阱（2026-10-12，同族坑第 4 次）：
+        # 7..10) EOL 陷阱（2026-10-12，同族坑第 5 次）：
         #   先建一个「受跟踪 blob = LF」的文件，再把盘上改回 CRLF。
         ga.write_text("frozen.bin -text\n", encoding="utf-8", newline="\n")
         (ev / "crlf.txt").write_bytes(b"line1\nline2\n")
