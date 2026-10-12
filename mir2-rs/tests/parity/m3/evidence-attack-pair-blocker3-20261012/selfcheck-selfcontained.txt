@@ -1,0 +1,37 @@
+# 证据包自包含性自检（照 F-1 / 8abd8a0d / blocker2-fix 口径；卡 openmir2-m3-combat-skills-align，本片 = 第三轮夹具 blocker F-H/F-I/F-J）
+# 目标：证据目录里每一个被声明的文件都必须入库、不被 .gitignore 吞，且干净检出可复现。
+
+# 命令 1：对每个被声明的文件跑 git check-ignore -v（期望：无输出 / rc=1 = 无一被忽略）
+$ git check-ignore -v <目录>/01-smoke-csharp-20.txt … <目录>/selfcheck-selfcontained.txt
+  check-ignore 输出（去 rc 行后）：
+  check-ignore 命中行数 = 0
+
+# 命令 2：tracked 件数 == 盘上件数（内容件 14 + README + selfcheck + SHA256SUMS = 17）
+$ git ls-tree -r --name-only HEAD mir2-rs/tests/parity/m3/evidence-attack-pair-blocker3-20261012/ | wc -l
+tracked_count = 17
+$ find mir2-rs/tests/parity/m3/evidence-attack-pair-blocker3-20261012 -type f | wc -l
+disk_count    = 17
+
+# 命令 3：目录内不得有 .gitignore 会吞的 *.log（本片一律用 .txt）
+log_count     = 0
+
+VERDICT: PASS（tracked == disk == 17；无被忽略文件；无 .log）
+
+# 命令 4：复核器（默认 = 仓库字节口径：Git blob 内容，text 文件 LF 归一；--check-extra = 目录里未列入清单的文件也判红）
+$ python -I tools/evidence-hash/verify_sha256sums.py mir2-rs/tests/parity/m3/evidence-attack-pair-blocker3-20261012 --check-extra
+GREEN mir2-rs\tests\parity\m3\evidence-attack-pair-blocker3-20261012\SHA256SUMS.txt  [repo 口径]  OK 16/16
+rc=0
+
+# 最终目录 = 14 个编号内容件（01–14）+ README.md + selfcheck-selfcontained.txt + SHA256SUMS.txt = 17 件；
+# SHA256SUMS.txt 按仓库字节口径覆盖 16 件（17 - 清单自身）。
+# 说明：本片零代码/仪器改动；01/02/03/04 复制自 tick24 真机现场（E:/tmp/m3cs24/evidence/），
+#       05/06/07/08/10 为离线最小复现/锚点/分析（不占端口、不连 3306）。
+
+# 命令 5：干净检出（git archive = 仓库字节 / LF）复核
+$ git archive HEAD mir2-rs/tests/parity/m3/evidence-attack-pair-blocker3-20261012 | tar -x -C E:/tmp/m3cs25/clean
+$ python -I tools/evidence-hash/verify_sha256sums.py --repo <repo> E:/tmp/m3cs25/clean/mir2-rs/tests/parity/m3/evidence-attack-pair-blocker3-20261012 --check-extra
+$ git archive HEAD mir2-rs/tests/parity/m3/evidence-attack-pair-blocker3-20261012 | tar -x -C E:/tmp/m3cs25/clean
+$ python tools/evidence-hash/verify_sha256sums.py --repo <repo> E:/tmp/m3cs25/clean/mir2-rs/tests/parity/m3/evidence-attack-pair-blocker3-20261012 --check-extra
+GREEN E:\tmp\m3cs25\clean\mir2-rs\tests\parity\m3\evidence-attack-pair-blocker3-20261012\SHA256SUMS.txt  [repo 口径]  OK 16/16
+rc=0
+rc=0（与工作树口径一致）

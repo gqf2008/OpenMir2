@@ -1,0 +1,20 @@
+# F-J 最小复现（离线、不连网、不占端口）
+# 命令: powershell -ExecutionPolicy Bypass -File E:/tmp/m3cs25/fj-repro.ps1
+# 断言: A) 生产函数 Invoke-AttackAlign 的返回类型 = Object[] 且 -ne 0 恒真；
+#       B) 正确写法（| Out-Null + [int]$LASTEXITCODE）返回 Int32 0。
+# 被测代码（仓库字节）: mir2-rs/tests/parity/m3/run_attack_pair.ps1:148-155
+
+=== A) 生产函数体（run_attack_pair.ps1:148-155 逐字复制）===
+RETURN_TYPE   = System.Object[]
+RETURN_ITEMS  = 2
+RETURN_VALUES = [ALIGN_OK E:\tmp\m3cs25\repro\attack_seq.jsonl attacked=2 hits=1 dodges=1 sum=12] [0]
+RC_NE_ZERO    = True   <- 调用点 :645-648 的判据：if ($alignRc -ne 0) { RED; exit 1 }
+=> 即便 align 真实 rc=0，也会打印 RED 并 exit 1（C# 侧恒 RED；-Side rust -PeerSession 恒 PREREQ_MISSING）
+
+=== B) 正确写法（先把 stdout 收走，只返回 exit code）===
+RETURN_TYPE   = System.Int32
+RETURN_VALUE  = 0
+RC_NE_ZERO    = False
+=> rc 正确反映 align 结果
+
+# 进程退出码 = 0 (脚本本身 rc=0)

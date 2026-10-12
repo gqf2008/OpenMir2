@@ -1,0 +1,50 @@
+# F-H 代码锚点（仓库字节；行号以本 head 为准）
+# 问题: -AttackSequence 收尾等待 done 阈值 = $Count(2)，但只有 attacker(1) 被武装 => 恒 RED + 白等满 TimeoutSec
+
+## tools/botload/run_bots.ps1:229-231 done 采样
+   229	  if ($AttackSequence) {
+   230	    # F-E：攻击序列收尾证据 = 每个假人一条 `M3ATTSEQ {"role":"done",...}`；不判它就会 login_ok 处立即 kill。
+   231	    $attackDone = Get-M3SeqDoneCount -Text (Read-SharedText $LogFile) -Kind attack
+
+## tools/botload/run_bots.ps1:242-245 break 条件（attackDone -ge $Count）
+   242	    if ($success -ge $Count -and $bagDone -ge $Count) { break }
+   243	  } elseif ($AttackSequence) {
+   244	    # F-E：攻击序列跑完（每个假人一条 done）才算收工；否则继续等（超时上限仍是 TimeoutSec）。
+   245	    if ($success -ge $Count -and $attackDone -ge $Count) { break }
+
+## tools/botload/run_bots.ps1:283 GREEN 门 / :291-293 RED
+   283	if ($success -ge $Count -and (-not $RequireWorld -or $worldOk -ge $Count) -and (-not $BagEquipSequence -or $bagDone -ge $Count) -and (-not $AttackSequence -or $attackDone -ge $Count) -and (-not $RequireCharCreated -or $charCreated -ge $Count)) {
+   291	if ($AttackSequence -and $attackDone -lt $Count) {
+   292	  Write-Output ("RED: " + $Count + " 个假人的攻击序列只跑完 " + $attackDone + "/" + $Count + "（缺 M3ATTSEQ role=done；count=" + $AttackCount + "）——序列不完整，不能当『同一序列』")
+   293	  exit 1
+
+## src/BotSrv/AppService.cs:66-69（attacker 序号 = 0）
+    66	            if (_options.AttackSequence)
+    67	            {
+    68	                LogService.Info("固定攻击序列: 启用 步数={0} 起始等待={1}ms 步间隔={2}ms dir={3} attacker序号={4}（见 RobotPlayer.AttackSequenceTick）",
+    69	                    _options.AttackCount, _options.AttackStartDelayMs, _options.AttackStepMs, _options.AttackDir, _options.AttackRole);
+
+## src/BotSrv/Player/RobotPlayer.cs:626-641（只有 IsAttackAttacker 才武装 => 只有 1 个 done）
+   626	        private void ArmAttackSequence()
+   627	        {
+   628	            if (!MShare.g_boAttackSequence)
+   629	            {
+   630	                return;
+   631	            }
+   632	            // M-2（reviewer-5 76e433f0）：精确比较，不用 EndsWith（`-Bots>10` 时 10/20… 会误武装）。
+   633	            if (!MShare.IsAttackAttacker(LoginId, MShare.g_sAttackRoleLoginId))
+   634	            {
+   635	                return;
+   636	            }
+   637	            _attackSeqStep = 0;
+   638	            _attackSeqNextTick = MShare.GetTickCount() + MShare.g_nAttackStartDelayMs;
+   639	            MainOutMessage($"M3ATTSEQ {{\"role\":\"arm\",\"id\":\"{LoginId}\",\"count\":{MShare.g_nAttackCount},\"step_ms\":{MShare.g_nAttackStepMs},\"dir\":{MShare.g_nAttackDir}}}");
+   640	        }
+   641	
+
+## src/BotSrv/Player/RobotPlayer.cs:672-676（done 标记）
+   672	            if (_attackSeqStep >= MShare.g_nAttackCount)
+   673	            {
+   674	                MainOutMessage($"M3ATTSEQ {{\"role\":\"done\",\"id\":\"{LoginId}\",\"attacks\":{MShare.g_nAttackCount}}}");
+   675	            }
+   676	        }
