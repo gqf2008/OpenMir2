@@ -5,6 +5,6 @@ bf03f080e4e2ab7a3bdedd1b754229ad07b330888d2b54363b3bebe181b8f988 *04-rust-test-g
 fcecdda87e05eeef749e500289638458bc8196ab63d1e159529f1a835fa57b18 *05-mutation-red-1-stdmode43-duramax-side-effect.txt
 d9ea611662a12ead4a5e32326a4ab8f2db8bd44ace366af5b44e898c4a7e82ad *06-mutation-red-2-repair-dec-dura-truncation.txt
 9fee721962138f9b4ed68edd45d86c2515613ff39b7f3bed3d6ca0753c58e89b *07-mutation-red-3-item-price-zero-no-fallback.txt
-fc14a3c7f565c80aefd39d5caee10549526731e00734b8ff9d8985cbbba21381 *08-gates.txt
+15f533852b8d87abe5dd8ebfebf3bcc6d07f800357a9b8fc4f7120fc656e3b44 *08-gates.txt
 d83cfb72dd5747ae73d36289c88ce604006025d9ddd30defcaaeb128038487d7 *09-clean-checkout-repro.txt
 fa9a2d1ab89c73ff294ae3613c603327aa2a771ee17eb8820575334c77d5b665 *README.md
