@@ -123,6 +123,14 @@ pub struct GateConfig {
     /// `ServerConf.cs:566` 的 `ReadWriteInteger("Setup", "SaveHumanRcdTime", …)`）——
     /// `WorldServer.ProcessPlayObjectData`（`WorldServer.cs:698-703`）的**周期存档**间隔。
     pub save_human_rcd_time: i32,
+    /// `[Setup] HealthFillTime`（oracle `GameSvrConf.cs:170/1323`，缺省 `300`；
+    /// `ServerConf.cs:152` 的 `ReadWriteInteger("Setup", "HealthFillTime", …)`）——
+    /// `BaseObject.Run()`（`BaseObject.Base.cs:44/74/105`）的体力点回血/掉血阈值。
+    pub health_fill_time: i32,
+    /// `[Setup] SpellFillTime`（oracle `GameSvrConf.cs:174/1324`，缺省 `800`；
+    /// `ServerConf.cs:153` 的 `ReadWriteInteger("Setup", "SpellFillTime", …)`）——
+    /// `BaseObject.Run()`（`BaseObject.Base.cs:52/78`）的魔力点回蓝阈值。
+    pub spell_fill_time: i32,
 }
 
 /// 默认配置文件：可执行文件同目录的 `Server.conf`（与 C# `AppContext.BaseDirectory` 一致）。
@@ -183,6 +191,8 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut cloths_woman: Option<String> = None;
     let mut item_number: Option<i32> = None;
     let mut save_human_rcd_time: Option<i32> = None;
+    let mut health_fill_time: Option<i32> = None;
+    let mut spell_fill_time: Option<i32> = None;
     let mut ids_addr: Option<String> = None;
     let mut ids_port: Option<u16> = None;
     let mut db_addr: Option<String> = None;
@@ -363,6 +373,21 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                             .with_context(|| format!("SaveHumanRcdTime 不是合法整数：{v:?}"))?,
                     );
                 }
+                // 体力/魔力点阈值（`ServerConf.cs:152-153`）：现网 `Server.conf:785-786` 写了
+                // `HealthFillTime=300` / `SpellFillTime=800`；缺键时 oracle 用
+                // `GameSvrConf.cs:1323-1324` 的源码缺省 `300`/`800`。
+                "HEALTHFILLTIME" => {
+                    health_fill_time = Some(
+                        v.parse()
+                            .with_context(|| format!("HealthFillTime 不是合法整数：{v:?}"))?,
+                    );
+                }
+                "SPELLFILLTIME" => {
+                    spell_fill_time = Some(
+                        v.parse()
+                            .with_context(|| format!("SpellFillTime 不是合法整数：{v:?}"))?,
+                    );
+                }
                 _ => {}
             },
             _ => {}
@@ -436,6 +461,9 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         item_number: item_number.unwrap_or(0),
         // oracle 缺省值（`GameSvrConf.cs:1484` 的 `SaveHumanRcdTime = 10 * 60 * 1000`）。
         save_human_rcd_time: save_human_rcd_time.unwrap_or(10 * 60 * 1000),
+        // oracle 缺省值（`GameSvrConf.cs:1323-1324` 的 `HealthFillTime = 300` / `SpellFillTime = 800`）。
+        health_fill_time: health_fill_time.unwrap_or(300),
+        spell_fill_time: spell_fill_time.unwrap_or(800),
         ids_addr,
         ids_port,
         db_addr,
@@ -620,6 +648,35 @@ mod tests {
         let c = load(&p).unwrap();
         assert_eq!(c.hear_msg_f_color, 0);
         assert_eq!(c.hear_msg_b_color, 255);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `[Setup] HealthFillTime/SpellFillTime`（`ServerConf.cs:152-153` 的 `ReadWriteInteger`）：
+    /// 现网 `Server.conf:785-786` 的实值 `300`/`800` 解析到 `GateConfig`；缺键 ⇒ oracle 源码缺省
+    /// `300`/`800`（`GameSvrConf.cs:1323-1324`）；写了但非整数 ⇒ 报错（不静默）。
+    #[test]
+    fn setup_stamina_fill_times_and_defaults() {
+        let dir = std::env::temp_dir().join(format!("gs-stamina-cfg-{}", std::process::id()));
+        let base = "[Server]\nGateAddr=127.0.0.1\nGatePort=5000\nCheckBlock=1\nIDSAddr=127.0.0.1\nIDSPort=5600\nDBAddr=127.0.0.1\nDBPort=6000\n";
+        let p = write(
+            &dir,
+            &format!("{base}[Setup]\nHealthFillTime=250\nSpellFillTime=900\n"),
+        );
+        let c = load(&p).unwrap();
+        assert_eq!(c.health_fill_time, 250, "[Setup] HealthFillTime 实值");
+        assert_eq!(c.spell_fill_time, 900, "[Setup] SpellFillTime 实值");
+        let p2 = write(&dir, base);
+        let c2 = load(&p2).unwrap();
+        assert_eq!(
+            c2.health_fill_time, 300,
+            "缺键 ⇒ HealthFillTime 缺省 300（GameSvrConf.cs:1323）"
+        );
+        assert_eq!(
+            c2.spell_fill_time, 800,
+            "缺键 ⇒ SpellFillTime 缺省 800（GameSvrConf.cs:1324）"
+        );
+        let p3 = write(&dir, &format!("{base}[Setup]\nHealthFillTime=abc\n"));
+        assert!(load(&p3).is_err(), "HealthFillTime 非整数 ⇒ 必须报错");
         std::fs::remove_dir_all(&dir).ok();
     }
 

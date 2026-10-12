@@ -1,0 +1,108 @@
+# 03 夹具可复用性调查（M3⑦ 组队/交易；DoD② 设计，不实现）
+# 生成：2026-10-12T20:59:49Z  仓库 = a96ef0e690b9942f40cb601b28b95a1abcfff9d8
+
+===== [A] run_pair.ps1：两相固定起点 pin + 会话入库（未被 peer 会话） =====
+33:  powershell -ExecutionPolicy Bypass -File run_pair.ps1 -SelfTestRed # 红检：入口不通必须判失败
+45:  [switch]$FixedNewChr,            # M3 固定建角场景（卡 openmir2-m3-botsrv-fixed-newchr）
+46:  [int]$NewChrJob = 0,             # 仅 -FixedNewChr 时生效
+47:  [int]$NewChrHair = 2,            # 仅 -FixedNewChr 时生效（2 = 原 Random(1) 恒走的发型）
+48:  [int]$NewChrSex = 0,             # 仅 -FixedNewChr 时生效
+57:  [switch]$PinStartPose,           # T-14 固定起点变体（owner 86478c55/d7798370）：预热建角 → SQL pin → BEFORE 快照 → 计分跑（选角；不带 -FixedNewChr/-NewAccount）
+58:  [string]$PinMapName = '',   # 攻击变体的 pin 地图（R-1 要求整张零刷怪；空 ⇒ -AttackPinPair 取 $script:M3AttackPinMap，否则 '0'）
+62:  [int]$PinCX = -1,                # -AttackPinPair 时 <0 ⇒ $script:M3AttackPinCX（0137）；否则 289
+63:  [int]$PinCY = -1,                # -AttackPinPair 时 <0 ⇒ $script:M3AttackPinCY；否则 618
+66:  [int]$PinSettleSeconds = 3,      # 仅 -PinStartPose：每轮 pin 后的 settle 窗口（异步掉线存档落库，见 gate_guards.ps1 ⑥）
+67:  [int]$PinMaxAttempts = 5,        # 仅 -PinStartPose：settle+hold 最多轮数（仍 hold 不住 ⇒ throw，fail-closed）
+68:  [switch]$AttackPinPair,          # 攻击变体：两 bot **相邻**固定起点（attacker/victim；配合 -AttackSequence）
+69:  [int]$AttackPinDir = 2,          # 仅 -AttackPinPair：attacker 朝向（默认 2=RIGHT，victim 在右邻格）
+70:  [int]$AttackPinDx = 1,           # 仅 -AttackPinPair：victim 相对 attacker 的 X 偏移（默认 +1）
+71:  [int]$AttackVictimHp = 0,   # 仅 -AttackPinPair：victim（与 attacker）Hp/MaxHP；F-F：0 ⇒ 用 gate_guards 的 oracle 等级派生值（L255/战士=20669）；否则必须与 -AttackVictimLevel 自洽
+72:  [int]$AttackVictimLevel = 0,   # 仅 -AttackPinPair：victim/attacker 钉的等级（byte 0..255）；0 ⇒ gate_guards 的 $script:M3AttackVictimLevel
+73:  [switch]$SelfTestRed
+86:# R-1（owner 2026-10-12 14:30）：攻击对拍场景必须整张图无怪 ⇒ `-AttackPinPair` 的 pin 地图缺省取
+88:if ([string]::IsNullOrEmpty($PinMapName)) { $PinMapName = if ($AttackPinPair) { $script:M3AttackPinMap } else { '0' } }
+89:# 攻击变体的落点缺省也跟随场景图（仅 -AttackPinPair 生效；背包/装备路径保持 289/618 逐字节不变）。
+
+===== [B] run_attack_pair.ps1：peer 双护栏（跨侧场景/作用域/位姿/隔离） =====
+269:  $scenarioGuard = Get-M3PeerScenarioGuard -PeerDir $csharpDir -LocalScenario $LocalScenario
+275:  $scopeGuard = Get-M3PeerAttackScopeGuard -PeerDir $csharpDir -LocalScope $LocalScope
+282:  $poseGuard = Get-M3PeerAttackPoseGuard -PeerDir $csharpDir -LocalPose $LocalPose
+302:  $isoGuard = Get-M3PeerIsolationGuard -PeerDir $csharpDir -LocalDir $rustDir
+--- 护栏实现来源（gate_guards.ps1，m3bag 写集） ---
+147:function Get-M3PeerIsolationGuard {
+262:function Get-M3PeerScenarioGuard {
+752:function Test-M3MonGenEmpty {
+878:function Test-M3MapNoAiConsumers {
+958:function Get-M3PeerAttackPoseGuard {
+1562:function Get-M3PeerAttackScopeGuard {
+
+===== [C] scoped_diff.py：DB 侧会话 diff（复用判据） =====
+38:# `diff --canonical` 只把**白名单列的列值**替换为占位符，其余列**逐字节比**。
+209:    改为逐字节比较——这是本场景"真的比到值"的实现（见 scoped_diff `--fixed-newchr`）。
+213:        print(f"RED: --canonical 遇到未登记表 {table}——先在 scoped_diff.py 的 TABLE_COLUMNS/"
+465:    # —— 用例 3/9：--canonical 下，仅易变列（Id/Job/时间戳）不同 ⇒ 必须判绿
+472:    # —— 用例 4/9（改坏必红）：--canonical 下，改动**被比对列**（Gold）⇒ 必须判红
+482:    # —— 用例 6/9（固定建角场景）：--fixed-newchr 下 Job/Hair/Sex **不**置占位；
+491:    #    （同数据在 --canonical 不带 --fixed-newchr 时会因 Job 占位而误判绿）。
+631:    #    本例：两侧只差 CX（其余易变列 Id 已因 --canonical 占位）⇒ 必须判红。
+644:    print("GREEN: scoped_diff selftest 14/14（含规范化前后 + 固定建角不置占位 + 改坏必红 "
+649:def main():
+671:    f.add_argument("--canonical", action="store_true",
+673:    f.add_argument("--fixed-newchr", action="store_true",
+675:                        "Hair/Sex/Job 不置占位、逐字节比；须配合 --canonical")
+
+===== [D] BotSrv 现有动作序列扩展点 =====
+49:  [switch]$BagEquipSequence,       # M3 T-14 夹具：BotSrv 进世界后按固定顺序发背包/装备动作（白名单 T-22）
+50:  [int]$BagEquipStepMs = 1000,     # 仅 -BagEquipSequence 时生效
+51:  [int]$BagEquipStartDelayMs = 3000, # 仅 -BagEquipSequence 时生效
+52:  [switch]$AttackSequence,         # M3②③ 夹具：BotSrv 固定攻击序列（白名单 T-22 扩展）
+53:  [int]$AttackCount = 120,         # 仅 -AttackSequence 时生效：攻击步数
+54:  [int]$AttackStepMs = 500,        # 仅 -AttackSequence 时生效：每步间隔
+55:  [int]$AttackStartDelayMs = 3000, # 仅 -AttackSequence 时生效：进世界到第一步的额外等待
+68:  [switch]$AttackPinPair,          # 攻击变体：两 bot **相邻**固定起点（attacker/victim；配合 -AttackSequence）
+139:  if ($BagEquipSequence -and -not $ForPrewarm) {
+143:    $runner += " -BagEquipSequence -BagEquipStepMs $BagEquipStepMs -BagEquipStartDelayMs $BagEquipStartDelayMs -DisableAutoPlay"
+144:    $planArgs += @('-BagEquipSequence', '-BagEquipStepMs', $BagEquipStepMs, '-BagEquipStartDelayMs', $BagEquipStartDelayMs, '-DisableAutoPlay')
+146:  if ($AttackSequence -and -not $ForPrewarm) {
+149:    $runner += " -AttackSequence -AttackCount $AttackCount -AttackStepMs $AttackStepMs -AttackStartDelayMs $AttackStartDelayMs -DisableAutoPlay"
+150:    $planArgs += @('-AttackSequence', '-AttackCount', $AttackCount, '-AttackStepMs', $AttackStepMs, '-AttackStartDelayMs', $AttackStartDelayMs, '-DisableAutoPlay')
+207:if ($AttackSequence -and $Bots -lt 2) {
+208:  Write-Output ('WARN: -AttackSequence 建议 -Bots 2（attacker+victim）；当前 Bots={0} ⇒ 无目标，struck 恒 0，判据必 RED' -f $Bots)
+212:# 使「-AttackSequence 未配 -AttackPinPair」在**真实跑与自检**两条路径都可见。
+213:if ($AttackSequence -and -not $AttackPinPair) {
+214:  Write-Output 'WARN: -AttackSequence 未配 -AttackPinPair ⇒ attacker/victim 可能重叠/无目标（真机请配 -PinStartPose -AttackPinPair）'
+218:# -BagEquipSequence 一并传下去；固定起点变体的预热/计分两相），**不建会话目录/不预检/不取快照**。
+--- BotSrv 侧序列实现 ---
+src/BotSrv/MShare.cs:212:        public static int g_dwChangeGroupModeTick = 0;
+src/BotSrv/Player\RobotPlayer.Operate.cs:1220:                    MShare.g_dwChangeGroupModeTick = MShare.GetTickCount();
+src/BotSrv/Player\RobotPlayer.Operate.cs:1223:                    MShare.g_dwChangeGroupModeTick = MShare.GetTickCount();
+src/BotSrv/Player\RobotPlayer.Operate.cs:1227:                    MShare.g_dwChangeGroupModeTick = MShare.GetTickCount();
+src/BotSrv/Player\RobotPlayer.Operate.cs:1245:                    MShare.g_dwChangeGroupModeTick = MShare.GetTickCount();
+src/BotSrv/Player\RobotPlayer.Operate.cs:1249:                    MShare.g_dwChangeGroupModeTick = MShare.GetTickCount();
+src/BotSrv/Player\RobotPlayer.Operate.cs:1270:                    MShare.g_dwChangeGroupModeTick = MShare.GetTickCount();
+src/BotSrv/Player\RobotPlayer.Operate.cs:1273:                    MShare.g_dwChangeGroupModeTick = MShare.GetTickCount();
+src/BotSrv/Player\RobotPlayer.cs:3112:        public void SendGroupMode(bool onoff)
+src/BotSrv/Player\RobotPlayer.cs:3117:                msg = Messages.MakeMessage(Messages.CM_GROUPMODE, 0, 1, 0, 0);
+src/BotSrv/Player\RobotPlayer.cs:3121:                msg = Messages.MakeMessage(Messages.CM_GROUPMODE, 0, 0, 0, 0);
+src/BotSrv/Player\RobotPlayer.cs:3130:                CommandMessage msg = Messages.MakeMessage(Messages.CM_CREATEGROUP, 0, 0, 0, 0);
+src/BotSrv/Player\RobotPlayer.cs:3147:        public void SendDealTry()
+src/BotSrv/Player\RobotPlayer.cs:3150:            CommandMessage msg = Messages.MakeMessage(Messages.CM_DEALTRY, 0, 0, 0, 0);
+src/BotSrv/Player\RobotPlayer.cs:3188:                CommandMessage msg = Messages.MakeMessage(Messages.CM_ADDGROUPMEMBER, 0, 0, 0, 0);
+
+--- BotSrv 侧已有的组队/交易**发送原语**（定义在 RobotPlayer.cs，逐条实测） ---
+3112: public void SendGroupMode(bool onoff)            -> CM_GROUPMODE
+3130: public void SendCreateGroup(string withwho)      -> CM_CREATEGROUP
+3147: public void SendDealTry()                        -> CM_DEALTRY
+3156: public void SendCancelDeal()                     -> CM_DEALCANCEL
+3161: public void SendAddDealItem(ClientItem ci)        -> CM_DEALADDITEM
+3167: public void SendDelDealItem(ClientItem ci)        -> CM_DEALDELITEM
+3172: public void SendChangeDealGold(int gold)          -> CM_DEALCHGGOLD
+3177: public void SendDealEnd()                         -> CM_DEALEND
+3184: public void SendAddGroupMember(string withwho)    -> CM_ADDGROUPMEMBER
+3192: public void SendDelGroupMember(string withwho)    -> CM_DELGROUPMEMBER
+--- 这些原语**无任何调用点**（`grep` 排除定义行后 no match）⇒ 夹具需新写「组队/交易动作序列」把它们接起来 ---
+(调用点 grep：rg -n 'SendGroupMode|SendCreateGroup|SendAddGroupMember|SendDelGroupMember|SendDealTry|SendCancelDeal|SendAddDealItem|SendDelDealItem|SendChangeDealGold|SendDealEnd' src/BotSrv/ 排除 'public void' => no output)
+
+===== [E] 需要的两条假人连接（peer 口径） =====
+run_attack_pair.ps1 的 peer 护栏按「同一个 C# 对照会话目录」比对；两边 bot 由 -Bots 2 起（`run_pair.ps1 -Bots` 默认 5，attack 变体用 2）。
+组队/交易对拍复用同一条「两相 pin + 会话入库 + peer 跨侧护栏」路径，只是 BotSrv 动作序列换成组队/交易。

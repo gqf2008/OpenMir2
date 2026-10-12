@@ -1,0 +1,39 @@
+# MUTATION-A（改坏必红）：删掉 attach_monitems 里 oracle 的 null-before-load 先置空
+# 期望：fail-closed 用例红（坏表时旧值残留，不该是 None）
+
+$ cargo test --offline -p game-svr --test monitems_attach
+   Compiling mir2-data v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\crates\data)
+   Compiling mir2-formula v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\crates\formula)
+   Compiling mir2-world-bevy v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\crates\world-bevy)
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\crates\world)
+   Compiling mir2-envir v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\crates\envir)
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.37s
+     Running tests\monitems_attach.rs (E:/tmp/openmir2-m3bag-target\debug\deps\monitems_attach-6ab8bafe741e319c.exe)
+
+running 5 tests
+test real_monster_db_every_monster_matches_its_table_on_disk ... ignored, 需要本机 MySQL + E:/MirServer Envir；显式 --ignored 运行
+test attach_fails_closed_on_unreadable_table ... FAILED
+test attach_only_reads_from_monitems_subdir ... ok
+test with_monitems_wrapper_is_fail_closed ... ok
+test attach_resets_and_matches_each_table_field_by_field ... ok
+
+failures:
+
+---- attach_fails_closed_on_unreadable_table stdout ----
+
+thread 'attach_fails_closed_on_unreadable_table' (24380) panicked at bins\game-svr\tests\monitems_attach.rs:126:5:
+assertion `left == right` failed
+  left: Some([MonsterDropItem { max_point: 1, sel_point: 0, item_name: "脏数据", count: 1 }])
+ right: None
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    attach_fails_closed_on_unreadable_table
+
+test result: FAILED. 3 passed; 1 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --test monitems_attach`
+
+rc=101

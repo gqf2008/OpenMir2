@@ -1,0 +1,151 @@
+# 夹具可复用性调查（只读；评估 run_pair.ps1 的两相固定起点口径能否用于 M3⑤ NPC/商店）
+# 仓库 = origin/master 384379fb
+
+== [1] run_pair.ps1 参数面（pin 两相固定起点 + 会话入库 + 无栈自检）==
+param(
+  [ValidateSet('csharp', 'rust')][string]$Side = 'csharp',
+  [int]$Bots = 5,
+  [string]$Prefix = '',
+  [string]$Address = '127.0.0.1',
+  [int]$Port = 7000,
+  [int]$TimeoutSec = 600,
+  [switch]$SkipBots,
+  [switch]$KeepSnapshots,
+  [switch]$ProvisionSql,
+  [switch]$FixedNewChr,            # M3 固定建角场景（卡 openmir2-m3-botsrv-fixed-newchr）
+  [int]$NewChrJob = 0,             # 仅 -FixedNewChr 时生效
+  [int]$NewChrHair = 2,            # 仅 -FixedNewChr 时生效（2 = 原 Random(1) 恒走的发型）
+  [int]$NewChrSex = 0,             # 仅 -FixedNewChr 时生效
+  [switch]$BagEquipSequence,       # M3 T-14 夹具：BotSrv 进世界后按固定顺序发背包/装备动作（白名单 T-22）
+  [int]$BagEquipStepMs = 1000,     # 仅 -BagEquipSequence 时生效
+  [int]$BagEquipStartDelayMs = 3000, # 仅 -BagEquipSequence 时生效
+  [switch]$AttackSequence,         # M3②③ 夹具：BotSrv 固定攻击序列（白名单 T-22 扩展）
+  [int]$AttackCount = 120,         # 仅 -AttackSequence 时生效：攻击步数
+  [int]$AttackStepMs = 500,        # 仅 -AttackSequence 时生效：每步间隔
+  [int]$AttackStartDelayMs = 3000, # 仅 -AttackSequence 时生效：进世界到第一步的额外等待
+  [switch]$EmitOpsArgs,            # 只打印 run_bots 命令组成（含 -DisableAutoPlay 耦合）后退出；无副作用，供无栈自检
+  [switch]$PinStartPose,           # T-14 固定起点变体（owner 86478c55/d7798370）：预热建角 → SQL pin → BEFORE 快照 → 计分跑（选角；不带 -FixedNewChr/-NewAccount）
+  [string]$PinMapName = '',   # 攻击变体的 pin 地图（R-1 要求整张零刷怪；空 ⇒ -AttackPinPair 取 $script:M3AttackPinMap，否则 '0'）
+  [int]$PinHomeMap = 0,
+  [int]$PinHomeX = 289,
+  [int]$PinHomeY = 618,
+  [int]$PinCX = -1,                # -AttackPinPair 时 <0 ⇒ $script:M3AttackPinCX（0137）；否则 289
+  [int]$PinCY = -1,                # -AttackPinPair 时 <0 ⇒ $script:M3AttackPinCY；否则 618
+  [int]$PinLevel = 1,
+  [int]$PinDir = 0,
+  [int]$PinSettleSeconds = 3,      # 仅 -PinStartPose：每轮 pin 后的 settle 窗口（异步掉线存档落库，见 gate_guards.ps1 ⑥）
+  [int]$PinMaxAttempts = 5,        # 仅 -PinStartPose：settle+hold 最多轮数（仍 hold 不住 ⇒ throw，fail-closed）
+  [switch]$AttackPinPair,          # 攻击变体：两 bot **相邻**固定起点（attacker/victim；配合 -AttackSequence）
+  [int]$AttackPinDir = 2,          # 仅 -AttackPinPair：attacker 朝向（默认 2=RIGHT，victim 在右邻格）
+  [int]$AttackPinDx = 1,           # 仅 -AttackPinPair：victim 相对 attacker 的 X 偏移（默认 +1）
+  [int]$AttackVictimHp = 0,   # 仅 -AttackPinPair：victim（与 attacker）Hp/MaxHP；F-F：0 ⇒ 用 gate_guards 的 oracle 等级派生值（L255/战士=20669）；否则必须与 -AttackVictimLevel 自洽
+  [int]$AttackVictimLevel = 0,   # 仅 -AttackPinPair：victim/attacker 钉的等级（byte 0..255）；0 ⇒ gate_guards 的 $script:M3AttackVictimLevel
+  [switch]$SelfTestRed
+)
+
+== [2] run_pair.ps1 头部对「两侧对拍」与「固定起点」的口径 ==
+4:  run_pair.ps1 — M3「同库同脚本对拍」夹具编排（D2 线）。
+16:    6. 抽取本次命名空间内的行（scoped_diff extract）+ 改动清单（delta）
+19:  操作序列判据：以假人日志标记为准（`帐号登录成功` 与 `成功进入游戏` 各 = N），
+23:  两侧对拍（M3 判据）：
+24:    - 先跑 `-Side csharp` 记基线；Rust 侧同一命令 `-Side rust`（先把 7000/7100/7200 指向 Rust 实现）
+25:    - 然后 `python scoped_diff.py diff <csharp>/scoped_after_norm.jsonl <rust>/scoped_after_norm.jsonl`
+26:      **判据：作用域内字段级 diff = 0**（差异要么 0，要么进 tests/parity/whitelist.md）
+29:  powershell -ExecutionPolicy Bypass -File run_pair.ps1 -Side csharp -Bots 5
+36:  [ValidateSet('csharp', 'rust')][string]$Side = 'csharp',
+-- 固定起点/PinStartPose 相关行 --
+56:  [switch]$EmitOpsArgs,            # 只打印 run_bots 命令组成（含 -DisableAutoPlay 耦合）后退出；无副作用，供无栈自检
+57:  [switch]$PinStartPose,           # T-14 固定起点变体（owner 86478c55/d7798370）：预热建角 → SQL pin → BEFORE 快照 → 计分跑（选角；不带 -FixedNewChr/-NewAccount）
+58:  [string]$PinMapName = '',   # 攻击变体的 pin 地图（R-1 要求整张零刷怪；空 ⇒ -AttackPinPair 取 $script:M3AttackPinMap，否则 '0'）
+66:  [int]$PinSettleSeconds = 3,      # 仅 -PinStartPose：每轮 pin 后的 settle 窗口（异步掉线存档落库，见 gate_guards.ps1 ⑥）
+67:  [int]$PinMaxAttempts = 5,        # 仅 -PinStartPose：settle+hold 最多轮数（仍 hold 不住 ⇒ throw，fail-closed）
+88:if ([string]::IsNullOrEmpty($PinMapName)) { $PinMapName = if ($AttackPinPair) { $script:M3AttackPinMap } else { '0' } }
+112:  # run_bots 命令组成的**唯一口径**：真实运行与 -EmitOpsArgs 自检共用（避免自检与实际漂移）。
+114:  $newAccount = if ($PinStartPose -and -not $ForPrewarm) { $false } else { $true }
+115:  $fixed = if ($ForPrewarm) { $true } elseif ($PinStartPose) { $false } else { [bool]$FixedNewChr }
+132:    $planArgs += '-StopAfterCharCreated'
+133:    $runner += ' -StopAfterCharCreated'
+156:  if (-not $PinStartPose) { return 'none' }
+158:  return (Format-M3StartPose -MapName $PinMapName -HomeMap $PinHomeMap -HomeX $PinHomeX -HomeY $PinHomeY `
+164:  return (Format-M3AttackPose -MapName $PinMapName -AX $PinCX -AY $PinCY -Dir $AttackPinDir `
+178:if ($PinStartPose -and -not $FixedNewChr) {
+179:  throw '-PinStartPose 必须与 -FixedNewChr 同用（预热建角用固定输入；计分跑仍标为固定建角场景以便 --fixed-newchr 比 Job/Hair/Sex）'
+181:if ($AttackPinPair -and -not $PinStartPose) {
+182:  throw '-AttackPinPair 必须与 -PinStartPose 同用（攻击变体仍需预热建角 + SQL pin 两相）'
+189:  $pinMapChk = Test-M3MonGenEmpty -MapName $PinMapName -VerifySource
+192:      $PinMapName, $pinMapChk.spawns, $pinMapChk.reason, $script:M3AttackPinMap)
+193:    throw ('R-1: attack pin map not monsterless: {0} spawns={1}' -f $PinMapName, $pinMapChk.spawns)
+195:  Write-Output ("MAP_HAS_NO_MONSTER ok map={0} spawns=0 fixture={1} source_verified={2}" -f $PinMapName, $pinMapChk.fixture, $pinMapChk.source_verified)
+199:  $pinAiChk = Test-M3MapNoAiConsumers -MapName $PinMapName -VerifySource
+202:      $PinMapName, $pinAiChk.total, $pinAiChk.reason, $script:M3AttackPinMap)
+203:    throw ('R-1: attack pin map has non-mongen AI consumers: {0} refs={1}' -f $PinMapName, $pinAiChk.total)
+205:  Write-Output ("MAP_HAS_NO_AI_CONSUMERS ok map={0} total_refs=0 fixture={1} source_verified={2}" -f $PinMapName, (Split-Path -Leaf $pinAiChk.fixture), $pinAiChk.source_verified)
+210:# M-1（reviewer-5 76e433f0，清登记 Minor）：本 WARN 原写在 `if ($EmitOpsArgs)` 块内**且**带
+211:# `-not $EmitOpsArgs` ⇒ 条件恒 false（死代码，任何路径都不触发）。移出该块并去掉自否条件，
+214:  Write-Output 'WARN: -AttackSequence 未配 -AttackPinPair ⇒ attacker/victim 可能重叠/无目标（真机请配 -PinStartPose -AttackPinPair）'
+217:# -EmitOpsArgs：只把 run_bots 的命令组成打印成 JSON 供无栈自检核（-DisableAutoPlay 是否随
+
+== [3] 既有兄弟夹具入口（可作模板）==
+tests/parity/m3/gate_guards.ps1
+tests/parity/m3/m3hashutil.ps1
+tests/parity/m3/rng-baseline.ps1
+tests/parity/m3/run_attack_pair.ps1
+tests/parity/m3/run_bag_equip_pair.ps1
+tests/parity/m3/run_m3_gate.ps1
+tests/parity/m3/run_pair.ps1
+tests/parity/m3/selftest_gate.ps1
+tests/parity/m3/start-csharp-hook.ps1
+tests/parity/m3/start_rust_gates.ps1
+-- run_bag_equip_pair.ps1 参数面（背包/装备序列；与「买/卖」的库存变化最接近）--
+param(
+  [ValidateSet('csharp', 'rust')][string]$Side = 'csharp',
+  [int]$Bots = 1,
+  [string]$Prefix = '',
+  [string]$Address = '127.0.0.1',
+  [int]$Port = 7000,
+  [int]$TimeoutSec = 600,
+  [string]$PeerSession = '',
+  [string]$CsharpSession = '',
+  [string]$RustSession = '',
+  [int]$BagEquipStepMs = 1000,
+  [int]$BagEquipStartDelayMs = 3000,
+  [string]$PortsCsv = '',          # 入口端口（逗号分隔）；默认 5000,7000,7100,7200。自检时可指一列空闲端口
+  [switch]$PinStartPose,           # T-14 固定起点变体（透传给 run_pair；owner 86478c55/d7798370）
+  [switch]$SkipSavePreflight,      # 仅供调试：跳过「Rust 侧断线存档未实现」前置（默认不跳）
+  [switch]$DiffOnly,
+  [switch]$SelfCheckNoStack
+)
+
+== [4] 判据本体（作用域 DB 字段级 diff）==
+104:# "行内出现 prefix" 命中（旧实现在这里就是静默缺口：物品行/Abil 行从来没进过作用域）。
+261:    从来没进过作用域——这是"悄悄不比"的静默缺口）。这里先把 characters 表里
+378:        print(f"RED: 作用域内 {problems} 行不一致")
+380:    print(f"GREEN: 作用域内 {len(a)} 张表逐行一致")
+459:    expect("1/9 未规范化：相同作用域判绿", ns, 0)
+515:    # ---- 10/12：族表归属（PlayerId 外键）——extract 必须把物品/Abil 行纳入作用域，
+555:        print(f"RED: 10/12 族表未按 PlayerId 纳入作用域: {dict(got_tables)}", file=sys.stderr)
+558:        print("RED: 10/12 非本次运行的 PlayerId=99 行混入作用域", file=sys.stderr)
+560:    print("PASS 10/12 族表（物品/Abil）按 PlayerId 归属纳入作用域，且不混入他人行")
+650:    ap = argparse.ArgumentParser(description="M3 作用域内 DB 差异比对")
+
+== [5] gate_guards.ps1 的「唯一形态」来源（run_pair/run_m3_gate/selftest 共用）==
+38:#    （m3cs 首跑走 `Test-M3MonGenEmpty -VerifySource` 已复现）。
+55:function Test-M3IsolateAttackValue {
+316:function Format-M3BagEquipScope {
+328:# 把 baseline.json 里**已存的** bag_equip_sequence 串规范化到与 Format-M3BagEquipScope 同形态。
+332:function ConvertTo-M3BagEquipScope {
+343:# LocalScope 由调用方用 Format-M3BagEquipScope 从**本侧实际开关**算出（canonical）。
+374:  $localCanon = ConvertTo-M3BagEquipScope -Raw $LocalScope
+376:  $peerCanon = ConvertTo-M3BagEquipScope -Raw $peerRaw
+424:  return (ConvertTo-M3BagEquipScope -Raw ([string]$baseline.bag_equip_sequence))
+532:function Get-M3StartPosePinSql {
+659:function Test-M3AttackVictimPostPinHp {
+687:$script:M3AttackPinMap = '0137'
+688:$script:M3AttackPinCX = 17
+689:$script:M3AttackPinCY = 20
+752:function Test-M3MonGenEmpty {
+802:# 要求**所有 ref_rows == 0**（= declared_total 0）。与 `Test-M3MonGenEmpty` 同构：真机启动 fail-closed，
+939:    [string]$MapName = $script:M3AttackPinMap,
+940:    [int]$AX = $script:M3AttackPinCX, [int]$AY = $script:M3AttackPinCY, [int]$Dir = 2,
+941:    [int]$VX = ($script:M3AttackPinCX + 1), [int]$VY = $script:M3AttackPinCY,
+1018:# `-MapName` 缺省 = 无怪场景图 `$script:M3AttackPinMap`（R-1）；`run_pair` 恒显式传 `-PinMapName`。

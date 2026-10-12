@@ -1,0 +1,96 @@
+# MUTATION-B（改坏必红）：把「缺文件 ⇒ None」错改成「缺文件 ⇒ Some(空)」
+# 期望：构造级用例红（缺表与空文件被混为一谈）
+
+$ cargo test --offline -p mir2-data monitems
+   Compiling mir2-data v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\crates\data)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.09s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m3bag-target\debug\deps\mir2_data-aab6798f5c2fe3d9.exe)
+
+running 6 tests
+test monitems::tests::skips_invalid_rows ... ok
+test monitems::tests::quoted_item_name ... ok
+test monitems::tests::parses_typical_lines ... ok
+test monitems::tests::attach_reads_from_monitems_subdir ... FAILED
+test monitems::tests::attach_fails_closed_on_unreadable_file ... ok
+test monitems::tests::attach_resets_then_matches_file_existence ... FAILED
+
+failures:
+
+---- monitems::tests::attach_reads_from_monitems_subdir stdout ----
+
+thread 'monitems::tests::attach_reads_from_monitems_subdir' (32592) panicked at crates\data\src\monitems.rs:263:9:
+assertion `left == right` failed
+  left: 1
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- monitems::tests::attach_resets_then_matches_file_existence stdout ----
+
+thread 'monitems::tests::attach_resets_then_matches_file_existence' (10804) panicked at crates\data\src\monitems.rs:233:9:
+assertion `left == right` failed
+  left: AttachReport { total: 4, attached: 4, entries: 2 }
+ right: AttachReport { total: 4, attached: 2, entries: 2 }
+
+
+failures:
+    monitems::tests::attach_reads_from_monitems_subdir
+    monitems::tests::attach_resets_then_matches_file_existence
+
+test result: FAILED. 4 passed; 2 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-data --lib`
+
+rc=101
+
+$ cargo test --offline -p game-svr --test monitems_attach
+   Compiling mir2-data v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\crates\data)
+   Compiling mir2-formula v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\crates\formula)
+   Compiling mir2-world-bevy v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\crates\world-bevy)
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\crates\world)
+   Compiling mir2-envir v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\crates\envir)
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.34s
+     Running tests\monitems_attach.rs (E:/tmp/openmir2-m3bag-target\debug\deps\monitems_attach-6ab8bafe741e319c.exe)
+
+running 5 tests
+test real_monster_db_every_monster_matches_its_table_on_disk ... ignored, 需要本机 MySQL + E:/MirServer Envir；显式 --ignored 运行
+test attach_only_reads_from_monitems_subdir ... FAILED
+test with_monitems_wrapper_is_fail_closed ... FAILED
+test attach_fails_closed_on_unreadable_table ... ok
+test attach_resets_and_matches_each_table_field_by_field ... FAILED
+
+failures:
+
+---- attach_only_reads_from_monitems_subdir stdout ----
+
+thread 'attach_only_reads_from_monitems_subdir' (32592) panicked at bins\game-svr\tests\monitems_attach.rs:230:5:
+assertion `left == right` failed
+  left: 1
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- with_monitems_wrapper_is_fail_closed stdout ----
+
+thread 'with_monitems_wrapper_is_fail_closed' (10804) panicked at bins\game-svr\tests\monitems_attach.rs:258:5:
+assertion `left == right` failed
+  left: 2
+ right: 1
+
+---- attach_resets_and_matches_each_table_field_by_field stdout ----
+
+thread 'attach_resets_and_matches_each_table_field_by_field' (18536) panicked at bins\game-svr\tests\monitems_attach.rs:75:5:
+assertion `left == right` failed
+  left: AttachReport { total: 4, attached: 4, entries: 2 }
+ right: AttachReport { total: 4, attached: 2, entries: 2 }
+
+
+failures:
+    attach_only_reads_from_monitems_subdir
+    attach_resets_and_matches_each_table_field_by_field
+    with_monitems_wrapper_is_fail_closed
+
+test result: FAILED. 1 passed; 3 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --test monitems_attach`
+
+rc=101

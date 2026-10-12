@@ -1,0 +1,181 @@
+# M3⑥ 任务（quest）oracle 调用链行号锚点 —— 只读 grep -n，逐条可复跑
+# 仓库基线: origin/master @ 1b576172b2e672ed62660589b846edf160268516 (worktree-m3-quest-align)
+# 命令口径: 在仓库根执行下列 grep（行号 = 该 commit 上实测）
+# 生成时间: 2026-10-13
+
+=== [A1] 启动载入面（GameApp）===
+184:            nCode = GameShare.LocalDb.LoadMapQuest();
+192:            nCode = GameShare.LocalDb.LoadQuestDiary();
+
+=== [A2] MapQuest.txt 解析 + QManage/QFunction/Robot NPC 构造（LocalDB）===
+192:        private static void QFunctionNpc()
+236:        private static void QMangeNpc()
+293:        private static void RobotNpc()
+341:        public int LoadMapQuest()
+352:            string sFileName = M2Share.GetEnvirFilePath("MapQuest.txt");
+386:                                if (!GameShare.QuestManager.CreateQuest(n38, n3C, sMonName, sItem, sQuest, boGrouped))
+403:            QMangeNpc();
+404:            QFunctionNpc();
+405:            RobotNpc();
+716:        private static string LoadQuestDiaryList(int nIndex)
+733:        public int LoadQuestDiary()
+740:            //M2Share.QuestDiaryList.Clear();
+744:                string sFileName = M2Share.GetEnvirFilePath("QuestDiary", LoadQuestDiaryList(nC) + ".txt");
+804:                    // M2Share.QuestDiaryList.Add(qdDinfoList);
+808:                    //M2Share.QuestDiaryList.Add(null);
+
+=== [A3] MapQuestManager: CreateQuest / GetQuestNpc ===
+8:        private IList<MapQuestInfo> QuestList = new List<MapQuestInfo>();
+10:        public bool CreateQuest(int nFlag, int nValue, string sMonName, string sItem, string sQuest, bool boGrouped)
+54:            QuestList.Add(mapQuest);
+58:        public Merchant GetQuestNpc(PlayObject baseObject, string sChrName, string itemName, bool boFlag)
+60:            for (int i = 0; i < QuestList.Count; i++)
+62:                MapQuestInfo mapQuestFlag = QuestList[i];
+63:                int nFlagValue = baseObject.GetQuestFalgStatus(mapQuestFlag.Flag);
+
+=== [A4] MapInfo CHECKQUEST 命令 + LoadMapQuest ===
+82:                        Merchant QuestNPC = null;
+134:                            if (HUtil32.CompareLStr(sCommand, "CHECKQUEST"))
+137:                                QuestNPC = LoadMapQuest(sLine);
+342:                        SystemShare.MapMgr.AddMapInfo(sMapName, sMapDesc, nServerIndex, MapFlag, QuestNPC);
+452:        private static Merchant LoadMapQuest(string sName)
+
+=== [A5] AddQuestNpc / SendQuestMsg ===
+1809:        public void SendQuestMsg(string sQuestName)
+1816:                    playObject.NpcGotoLable(SystemShare.ManageNPC, sQuestName, false);
+1924:        public void AddQuestNpc(INormNpc normNpc)
+
+=== [A6] 进世界 @Login 触发（PlayObject）===
+1440:                    SystemShare.ManageNPC.GotoLable(this, "@Login", false);
+
+=== [A7] MapQuest 怪物/物品触发（已注释：死路径）===
+1670:                        //QuestNPC = Envir.GetQuestNpc(groupHuman, ChrName, "", tCheck);
+1677:                //QuestNPC = Envir.GetQuestNpc(this, ChrName, "", false);
+
+=== [A8] 角色任务数组字段 + 初始化 ===
+865:        public byte[] QuestUnitOpen { get; set; }
+866:        public byte[] QuestUnit { get; set; }
+867:        public byte[] QuestFlag { get; set; }
+1038:            QuestUnitOpen = new byte[128];
+1039:            QuestUnit = new byte[128];
+1040:            QuestFlag = new byte[128];
+
+=== [A9] 任务标志位读写（PlayObject）===
+3966:        public int GetQuestFalgStatus(int nFlag)
+3990:        public void SetQuestFlagStatus(int nFlag, int nValue)
+4013:        public int GetQuestUnitOpenStatus(int nFlag)
+4037:        public void SetQuestUnitOpenStatus(int nFlag, int nValue)
+4060:        public int GetQuestUnitStatus(int nFlag)
+4084:        public void SetQuestUnitStatus(int nFlag, int nValue)
+
+=== [B1] 脚本引擎 GotoLable 主循环 + 任务脚本选择门（ScriptEngine）===
+38:        private void GotoLable(INormNpc normNpc, IPlayerActor playerActor, string sLabel, bool boExtJmp, string sMsg)
+76:                        if (CheckGotoLableQuestStatus(playerActor, scriptList[i]))
+98:                        if (GotoLableQuestCheckCondition(normNpc, playerActor, sayingProcedure.ConditionList, ref GotoLabParams))
+101:                            if (!GotoLableQuestActionProcess(normNpc, playerActor, sayingProcedure.ActionList, ref GotoLabParams))
+113:                            if (!GotoLableQuestActionProcess(normNpc, playerActor, sayingProcedure.ElseActionList, ref GotoLabParams))
+146:        private static bool CheckGotoLableQuestStatus(IPlayerActor playerActor, ScriptInfo scriptInfo)
+156:                if ((scriptInfo.QuestInfo[nIndex].nRandRage > 0) && (SystemShare.RandomNumber.Random(scriptInfo.QuestInfo[nIndex].nRandRage) != 0))
+161:                if (playerActor.GetQuestFalgStatus(scriptInfo.QuestInfo[nIndex].wFlag) != scriptInfo.QuestInfo[nIndex].btValue)
+298:        private static void GotoLableQuestCheckConditionSetVal(IPlayerActor playerActor, string sIndex, int nCount)
+389:                    GotoLableQuestCheckConditionSetVal(playerActor, param1, useDay);
+390:                    GotoLableQuestCheckConditionSetVal(playerActor, param2, lastDay);
+397:        private bool GotoLableQuestCheckCondition(INormNpc normNpc, IPlayerActor playerActor, IList<QuestConditionInfo> conditionList, ref GotoLabParams gotoLabParams)
+653:        private void GotoLableTakeItem(IPlayerActor playerActor, string sItemName, int nItemCount, string sC)
+884:        private bool GotoLableQuestActionProcess(INormNpc normNpc, IPlayerActor playerActor, IList<QuestActionInfo> actionList, ref GotoLabParams gotoLabParams)
+987:        private void GotoLableSendMerChantSayMsg(INormNpc normNpc, IPlayerActor playerActor, string sMsg, bool boFlag)
+
+=== [B2] {Quest}/#IF/#RAND 任务脚本头解析（ScriptParsers）===
+631:                            if (line[0] == '#' && (HUtil32.CompareLStr(line, "#IF") || HUtil32.CompareLStr(line, "#ACT") || HUtil32.CompareLStr(line, "#ELSEACT")))
+790:                        if (HUtil32.CompareLStr(line, "{Quest"))
+799:                        if (HUtil32.CompareLStr(line, "{~Quest"))
+804:                    if (scriptType == 1 && Script != null && line.StartsWith("#"))
+807:                        Script.IsQuest = true;
+808:                        if (HUtil32.CompareLStr(line, "#IF"))
+812:                            Script.QuestInfo[nQuestIdx].wFlag = HUtil32.StrToInt16(questFlag, 0);
+819:                            Script.QuestInfo[nQuestIdx].btValue = (byte)n24;
+821:                        if (HUtil32.CompareLStr(line, "#RAND"))
+823:                            Script.QuestInfo[nQuestIdx].nRandRage = HUtil32.StrToInt(s44, 0);
+
+=== [B3] 条件 CHECK / CHECKOPEN / CHECKUNIT（ConditionProcessingSys）===
+48:            _conditionMap[(int)ConditionCode.CHECK] = ConditionOfCheck;
+52:            _conditionMap[(int)ConditionCode.CHECKOPEN] = ConditionOfCheckOpen;
+53:            _conditionMap[(int)ConditionCode.CHECKUNIT] = ConditionCheckUnit;
+199:        private void ConditionOfCheckOpen(INormNpc normNpc, IPlayerActor playerActor, QuestConditionInfo questConditionInfo, ref bool success)
+4104:        private void ConditionCheckUnit(INormNpc normNpc, IPlayerActor playerActor, QuestConditionInfo questConditionInfo, ref bool success)
+4174:        private void ConditionOfCheck(INormNpc normNpc, IPlayerActor playerActor, QuestConditionInfo questConditionInfo, ref bool success)
+
+=== [B4] 动作 SET / RESET / SETOPEN / SETUNIT / RESETUNIT（ExecutionProcessingSys）===
+34:            ProcessExecutionMessage[(int)ExecutionCode.Set] = ActionOfSet;
+35:            ProcessExecutionMessage[(int)ExecutionCode.ReSet] = ActionOfReSet;
+36:            ProcessExecutionMessage[(int)ExecutionCode.SetOpen] = ActionOfSetOpen;
+37:            ProcessExecutionMessage[(int)ExecutionCode.SetUnit] = ActionOfSetUnit;
+38:            ProcessExecutionMessage[(int)ExecutionCode.ResetUnit] = ActionOfResetUnit;
+2036:        private void ActionOfSet(INormNpc normNpc, IPlayerActor playerActor, QuestActionInfo questActionInfo, ref bool Success)
+2043:        private void ActionOfReSet(INormNpc normNpc, IPlayerActor playerActor, QuestActionInfo questActionInfo, ref bool Success)
+2051:        private void ActionOfSetOpen(INormNpc normNpc, IPlayerActor playerActor, QuestActionInfo questActionInfo, ref bool Success)
+2058:        private void ActionOfSetUnit(INormNpc normNpc, IPlayerActor playerActor, QuestActionInfo questActionInfo, ref bool Success)
+2065:        private void ActionOfResetUnit(INormNpc normNpc, IPlayerActor playerActor, QuestActionInfo questActionInfo, ref bool Success)
+
+=== [B5] 任务态命令字（枚举 + ScriptDefName）===
+src/Modules/ScriptEngine/Consts/ExecutionCode.cs:20:        [ScriptDefName("SETOPEN")]
+src/Modules/ScriptEngine/Consts/ExecutionCode.cs:22:        [ScriptDefName("SETUNIT")]
+src/Modules/ScriptEngine/Consts/ExecutionCode.cs:24:        [ScriptDefName("RESETUNIT")]
+src/Modules/ScriptEngine/Consts/ExecutionCode.cs:112:        [ScriptDefName("GOQUEST")]
+src/Modules/ScriptEngine/Consts/ExecutionCode.cs:114:        [ScriptDefName("ENDQUEST")]
+src/Modules/ScriptEngine/Consts/ExecutionCode.cs:148:        [ScriptDefName("SETMISSION")]
+src/Modules/ScriptEngine/Consts/ExecutionCode.cs:150:        [ScriptDefName("CLEARMISSION")]
+src/Modules/ScriptEngine/Consts/ExecutionCode.cs:380:        [ScriptDefName("MISSION")]
+src/Modules/ScriptEngine/Consts/ExecutionCode.cs:660:        [ScriptDefName("ACTMISSION")]
+src/Modules/ScriptEngine/Consts/ConditionCode.cs:8:        [ScriptDefName("CHECK")]
+src/Modules/ScriptEngine/Consts/ConditionCode.cs:16:        [ScriptDefName("CHECKOPEN")]
+src/Modules/ScriptEngine/Consts/ConditionCode.cs:18:        [ScriptDefName("CHECKUNIT")]
+
+=== [B6] Mission（怪物集火，非玩家任务日志）===
+245:        public bool Mission { get; set; }
+432:            Mission = false;
+62:            ProcessExecutionMessage[(int)ExecutionCode.Mission] = ActionOfMission;
+3421:        private void ActionOfMission(INormNpc normNpc, IPlayerActor playerActor, QuestActionInfo questActionInfo, ref bool Success)
+88:                    if (attackObject.Race == ActorRace.Play && !attackObject.Mission)
+96:                    else if (attackObject.Race >= ActorRace.Monster && !attackObject.Mission)
+
+=== [C1] 登录/存档时任务数组的载入与写回（WorldServer）===
+1160:            playObject.QuestUnitOpen = humData.QuestUnitOpen;
+1161:            playObject.QuestUnit = humData.QuestUnit;
+1162:            playObject.QuestFlag = humData.QuestFlag;
+1291:            playerInfo.QuestUnitOpen = playObject.QuestUnitOpen;
+1292:            playerInfo.QuestUnit = playObject.QuestUnit;
+1293:            playerInfo.QuestFlag = playObject.QuestFlag;
+
+=== [C2] 角色记录 CharacterData 任务数组字段（协议 6000 面）===
+101:        public byte[] QuestUnitOpen { get; set; }
+102:        public byte[] QuestUnit { get; set; }
+103:        public byte[] QuestFlag { get; set; }
+112:            QuestUnitOpen = new byte[128];
+113:            QuestUnit = new byte[128];
+114:            QuestFlag = new byte[128];
+
+=== [C3] MySQL 落库：SaveRecord 列清单 + SaveQuest 空壳 + 读档 GetChrRecord ===
+src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Save.cs:45:        private bool SaveRecord(int playerId, ref CharacterDataInfo humanRcd)
+src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Save.cs:59:                SaveAblity(context, playerId, humanRcd.Data.Abil);
+src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Save.cs:62:                SaveStorageItem(context, playerId, humanRcd.Data.StorageItems);
+src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Save.cs:493:        private void SaveQuest(StorageContext context, int id, CharacterDataInfo humanRcd)
+src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Save.cs:495:            const string sSqlStr4 = "DELETE FROM characters_quest WHERE PlayerId=@PlayerId";
+src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Query.cs:31:            const string sSqlString = "SELECT * FROM characters WHERE Deleted=0";
+src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Query.cs:192:        private CharacterData GetChrRecord(int playerId, StorageContext context)
+src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Query.cs:194:            const string sSqlString = "SELECT * FROM characters WHERE ID=@ID";
+src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Query.cs:568:            const string sSql = "SELECT * FROM characters WHERE ID=@Id";
+
+=== [C4] characters_quest 表结构（sql）===
+371934:-- Table structure for characters_quest
+371936:DROP TABLE IF EXISTS `characters_quest`;
+371937:CREATE TABLE `characters_quest`  (
+371940:  `QUESTOPENINDEX` varchar(255) CHARACTER SET utf8 COLLATE utf8_general_ci NULL DEFAULT NULL,
+371941:  `QUESTFININDEX` varchar(255) CHARACTER SET utf8 COLLATE utf8_general_ci NULL DEFAULT NULL,
+371947:-- Records of characters_quest
+
+=== [D1] 帧：脚本说词 RM_MERCHANTSAY → SM_MERCHANTSAY(643) ===
+993:                playerActor.SendPriorityMsg(Messages.RM_MERCHANTSAY, 0, 0, 0, 0, normNpc.ChrName + '/' + sMsg, MessagePriority.High);
+997:                playerActor.SendMsg(normNpc, Messages.RM_MERCHANTSAY, 0, 0, 0, 0, normNpc.ChrName + '/' + sMsg);
+src/M2Server/Player/PlayObject.Message.cs:1724:                            ClientMsg = Messages.MakeMessage(Messages.SM_MERCHANTSAY, processMsg.ActorId, HUtil32.MakeWord((ushort)processMsg.nParam1, (ushort)processMsg.nParam2), 0, 1);
+src/OpenMir2/Messages.cs:304:        public const int SM_MERCHANTSAY = 643;

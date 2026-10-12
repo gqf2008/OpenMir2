@@ -1,0 +1,25 @@
+# oracle anchors (openmir2-m3-monitems-attach)
+# repo: fa82187a  worktree: E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3bag
+
+## MySqlDB.LoadMonsterDB
+168:        public int LoadMonsterDB()
+225:                    monster.ItemList = null;
+226:                    GameShare.LocalDb.LoadMonitems(monster.Name, ref monster.ItemList);
+236:                    SystemShare.WorldEngine.AddMonsterList(monster);
+
+## LocalDB.LoadMonitems
+596:        public void LoadMonitems(string monName, ref IList<MonsterDropItem> itemList)
+599:            string monFileName = M2Share.GetEnvirFilePath("MonItems", $"{monName}.txt");
+600:            if (File.Exists(monFileName))
+638:                            MonsterDropItem monItem = new MonsterDropItem
+640:                                SelPoint = n18 - 1,
+
+## GameApp call site
+131:            nCode = GameShare.DataSource.LoadMonsterDB();
+
+## M2Share.GetEnvirFilePath
+1970:        public static string GetEnvirFilePath(string filePath)
+1979:        public static string GetEnvirFilePath(string dirPath, string filePath)
+
+## MonsterInfo.ItemList
+74:        public IList<MonsterDropItem> ItemList;

@@ -1,0 +1,54 @@
+### oracle: HUtil32.CompareLStr（src/OpenMir2/HUtil32.cs:550-600）
+$ sed -n "550,600p" src/OpenMir2/HUtil32.cs
+
+        public static bool CompareLStr(string src, string targ)
+        {
+            int compn = targ.Length;
+            if (compn <= 0)
+            {
+                return false;
+            }
+
+            if (src.Length < compn)
+            {
+                return false;
+            }
+
+            if (targ.Length < compn)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < compn; i++)
+            {
+                if (char.ToUpper(src[i]) == char.ToUpper(targ[i]))
+                {
+                    continue;
+                }
+
+                return false;
+            }
+            return true;
+        }
+
+        public static bool CompareLStr(string src, string targ, int compn)
+        {
+            if (compn <= 0)
+            {
+                return false;
+            }
+
+            if (src.Length < compn)
+            {
+                return false;
+            }
+
+            if (targ.Length < compn)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < compn; i++)
+            {
+                if (char.ToUpper(src[i]) == char.ToUpper(targ[i]))
+                {

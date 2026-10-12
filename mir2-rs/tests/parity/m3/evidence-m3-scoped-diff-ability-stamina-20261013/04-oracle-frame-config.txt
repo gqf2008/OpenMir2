@@ -1,0 +1,62 @@
+# oracle: HealthSpellChanged / 字段 / 初值 / 配置
+# cmd: sed -n '700,710p' src/M2Server/Actor/BaseObject.cs
+        public void HealthSpellChanged()
+        {
+            if (Race == ActorRace.Play)
+            {
+                SendUpdateMsg(Messages.RM_HEALTHSPELLCHANGED, 0, 0, 0, 0, "");
+            }
+            if (ShowHp)
+            {
+                SendRefMsg(Messages.RM_HEALTHSPELLCHANGED, 0, 0, 0, 0, "");
+            }
+        }
+
+# cmd: sed -n '287,289p;306,307p;445,450p' src/M2Server/Actor/BaseObject.cs
+        public int HealthTick { get; set; }
+        public int SpellTick { get; set; }
+        public IActor TargetCret { get; set; }
+        public int AutoRecoveryTick { get; set; }
+        /// <summary>
+            AutoRecoveryTick = HUtil32.GetTickCount();
+            WalkSpeed = 1400;
+            NextHitTime = 2000;
+            HealthTick = 0;
+            SpellTick = 0;
+            TargetCret = null;
+
+# cmd: sed -n '168,175p;1322,1325p' src/Modules/SystemModule/Conf/Model/GameSvrConf.cs
+        /// 血量恢复间隔
+        /// </summary>
+        public int HealthFillTime;
+        /// <summary>
+        /// 魔法恢复间隔
+        /// </summary>
+        public int SpellFillTime;
+        /// <summary>
+            PayMentPointName = "荣誉值";
+            HealthFillTime = 300;
+            SpellFillTime = 800;
+            MonUpLvNeedKillBase = 100;
+
+# cmd: sed -n '152,153p' src/Modules/SystemModule/Conf/ServerConf.cs
+            SystemShare.Config.HealthFillTime = ReadWriteInteger("Setup", "HealthFillTime", SystemShare.Config.HealthFillTime);
+            SystemShare.Config.SpellFillTime = ReadWriteInteger("Setup", "SpellFillTime", SystemShare.Config.SpellFillTime);
+
+# cmd: grep -in 'HealthFillTime\|SpellFillTime' E:/MirServer/M2GameSvr/Server.conf
+785:HealthFillTime=300
+786:SpellFillTime=800
+
+# cmd: sed -n '1,12p' src/GameSrv/Word/Threads/UserProcessor.cs
+namespace GameSrv.Word.Threads
+{
+    public class UserProcessor : TimerScheduledService
+    {
+
+
+        public UserProcessor() : base(TimeSpan.FromMilliseconds(50), "UserProcessor")
+        {
+
+        }
+
+        public override void Initialize(CancellationToken cancellationToken)

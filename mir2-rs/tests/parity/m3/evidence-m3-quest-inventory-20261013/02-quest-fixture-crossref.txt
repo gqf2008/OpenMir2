@@ -1,0 +1,190 @@
+# M3⑥ 任务：现存脚本任务 接/交 夹具线索 + M4 用例对表
+# 真实语料根: E:/MirServer/M2GameSvr/Envir （GBK；下列片段用 iconv -f gbk -t utf-8 转出）
+# 仓库基线: origin/master @ 1b576172
+
+=== [1] M4 关键 NPC「任务」用例（npc-cases.json，脚本层）===
+{
+  "category": "任务",
+  "name": "任务-地图出矿提示（Q001@main）",
+  "runner": "flow",
+  "script": "E:/MirServer/M2GameSvr/Envir/MapQuest_def/Q001.txt",
+  "label": "@main",
+  "gold": 1000,
+  "items": "金币:1:1",
+  "player_items": "",
+  "expected": [
+    "#gold=1000",
+    "#items="
+  ],
+  "red_criteria": "两侧任一不同即判红（本脚本 `sendmsg 6 提示…` 在两侧 harness 都记为空效果，故只比 gold/items 恒定输出）。"
+}
+
+=== [2] M4 用例实跑结论（evidence/M4/npc-cases.txt）===
+# M4② 关键 NPC 用例（6 类：商店 / 传送 / 修理 / 仓库 / 行会 / 任务）
+
+- 用例定义：`tests/parity/M4/npc-cases.json`
+- 语料：`E:/MirServer/M2GameSvr/Envir`（内容冻结）
+- 可跑（port-free）用例：两侧 harness 同脚本 + 同 label + 同初始状态，逐行 diff。
+- 等窗口用例：无——2026-10-12 owner 裁定 `e808ec99`（路线①）后，商人 3 条也走 port-free；Rust 服务侧 NPC/商人派发属 M3，不在本卡 ②。
+
+## 可跑用例（port-free）
+
+```
+python -I tests/parity/M4/run_npc_cases.py
+# 等价于：python -I tools/flow-diff.py target/m4/npc-cases-flow.json
+```
+
+```
+OK   传送-幻境（金币不足/无物品）: 3 行一致
+       gold -100000
+       #gold=100000
+       #items=
+OK   传送-幻境（背包有名为100000的物品）: 3 行一致
+
+=== [3] 语料用量：Market_Def+MapQuest_def 里 CHECK/SET 等命令的文件数 ===
+(仅统计含该命令词的文件数，用于说明 CHECK/SET 是实际用到的任务态命令；CHECKUNIT/CHECKOPEN/SETUNIT/SETOPEN/RESETUNIT 为 0)
+  CHECK \[ : 12 files
+  set \[ : 18 files
+  CHECKUNIT : 0 files
+  CHECKOPEN : 0 files
+  SETUNIT : 0 files
+  SETOPEN : 0 files
+  RESETUNIT : 0 files
+
+=== [4] MapQuest.txt（原文，GBK→UTF8，前 12 行）===
+Q001     [58]     0      骷髅精灵5     *               Q002
+
+
+
+
+
+
+
+
+
+
+
+  (列: MapName [Flag] Value MonName ItemName Quest [GROUP])
+
+=== [5] MapQuest_def/Q001.txt（全文，M4 任务用例脚本）===
+[@main]
+#if
+#act
+sendmsg 6 提示：为防止挂机挖矿，仅限本地图出矿！
+break
+
+=== [6] 完整可跑任务链（真实数据三文件）===
+--- (6a) 接：Market_Def/任务NPC/任务-3.txt @rw06 / @06rw ---
+[@rw06]
+#IF
+CHECKNAMELIST ..\QuestDiary\神秘洞口名单.txt
+#ACT
+MESSAGEBOX 今天你已经完成此任务
+break
+
+#if
+check [107] 1
+#act
+messagebox 苍月岛的首饰店老板正在找你
+break
+
+#if
+checklevel 45
+#say
+　\ \
+确定开始[神秘洞口]任务吗？\ \
+<[确定]/@06rw>        <[取消]/@exit>
+#elsesay
+45级才可接此任务
+
+[@06rw]
+#act
+set [107] 1
+close
+messagebox 苍月岛的首饰店老板正在找人帮忙
+break
+
+[@rw05]
+--- (6b) 条件判定：Market_Def/苍月岛/首饰店-5.txt @main ---
+[@main]
+#if
+check [107] 1
+#say
+欢迎光临，有什么事情吗？\ \
+<购买/@buy>首饰\
+<出售/@sell>首饰\
+<修理/@repair>首饰\
+<特殊修理/@s_repair>\
+<有求必应/@rw01>\ \
+<关闭/@exit>
+
+#elsesay
+欢迎光临，有什么事情吗？\ \
+<购买/@buy>首饰\
+<出售/@sell>首饰\
+<修理/@repair>首饰\
+<特殊修理/@s_repair>\ \
+<关闭/@exit>
+
+[@rw01]
+--- (6c) 交(中间步)：Market_Def/苍月岛/首饰店-5.txt @rw02 ---
+[@rw02]
+#if
+checkitem 降妖除魔戒指 1
+#act
+take 降妖除魔戒指 1
+give 无字天书 1
+break
+#say
+　\
+谢谢你的戒指，我这有本<无字天书>，你把它带给比奇的〈书店老板〉\
+他能读出书里藏着的惊天秘密！
+
+[@buy]
+--- (6d) 交(完成)：Market_Def/比奇城/书店-0.txt @... around CHECK [107] ---
+是恶魔的巢穴？还是宝藏的藏匿之地？无从考究！
+
+[@rw02]
+#IF
+checkitem 无字天书 1
+#act
+take 无字天书 1
+give 战神油 1
+break
+#say
+　\
+《无字天书》先存放在我这儿，我研究研究，你先帮我把这\
+<战神油>送到白日门〈武器店老板〉那里，他等着急用呢！
+
+[@exit2]
+　\
+抱歉，我已经不能自抑……呜呜呜呜呜……
+
+[@rw03]
+#IF
+check [107] 0
+#ACT
+MESSAGEBOX 好的，让我先哭会儿！
+break
+
+#IF
+CHECKNAMELIST ..\QuestDiary\神秘洞口名单.txt
+#ACT
+MESSAGEBOX 每天只能探察一个神秘洞口
+break
+
+#if
+checkitem 仇人的头颅 1
+#act
+take 仇人的头颅 1
+SET [107] 0
+movr M10 8
+addnamelist ..\QuestDiary\神秘洞口名单.txt
+break
+#say
+　\
+等等……好吧……我们开始……\
+你走的这段时间我已经解读完成了这本《无字天书》\
+并且找到了进入<神秘洞口>的办法\ \
+<进入[神秘洞口]的方法/@rw04>
+
