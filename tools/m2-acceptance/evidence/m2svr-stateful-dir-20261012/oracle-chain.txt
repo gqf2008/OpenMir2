@@ -1,0 +1,61 @@
+== oracle: PlayObject.Attack.cs:24-77 ==
+     1	        protected void AttackDir(IActor targetObject, short wHitMode, byte nDir)
+     2	        {
+     3	            IActor attackTarget = targetObject ?? GetPoseCreate();
+     4	            if (UseItems[ItemLocation.Weapon] != null && (UseItems[ItemLocation.Weapon].Index > 0) && UseItems[ItemLocation.Weapon].Desc[ItemAttr.WeaponUpgrade] > 0)
+     5	            {
+     6	            int nPower = GetAttackPowerHit(wHitMode, GetBaseAttackPoewr(), attackTarget, ref canHit);
+     7	            SkillAttackDamage(wHitMode, nPower);
+     8	            AttackDir(attackTarget, nPower, nDir);
+     9	            SendAttackMsg(GetHitMode(wHitMode), Dir, CurrX, CurrY);
+    10	            AttackSuccess(wHitMode, nPower, canHit, attackTarget);
+
+== oracle: BaseObject.Attack.cs:9-13 ==
+    {
+        protected bool AttackDir(IActor attackTarget, int nPower, byte nDir)
+        {
+            Dir = nDir;
+            if (_Attack(nPower, attackTarget))
+
+== oracle: BaseObject.cs:1253-1262 GetPoseCreate ==
+        public IActor GetPoseCreate()
+        {
+            short nX = 0;
+            short nY = 0;
+            if (GetFrontPosition(ref nX, ref nY))
+            {
+                return Envir.GetMovingObject(nX, nY, true);
+            }
+            return null;
+        }
+
+== oracle: BaseObject.cs:977-1000 GetFrontPosition ==
+        public bool GetFrontPosition(ref short nX, ref short nY)
+        {
+            IEnvirnoment envir = Envir;
+            nX = CurrX;
+            nY = CurrY;
+            switch (Dir)
+            {
+                case Direction.Up:
+                    if (nY > 0)
+                    {
+                        nY -= 1;
+                    }
+                    break;
+                case Direction.UpRight:
+                    if ((nX < (envir.Width - 1)) && (nY > 0))
+                    {
+                        nX++;
+                        nY -= 1;
+                    }
+                    break;
+                case Direction.Right:
+                    if (nX < (envir.Width - 1))
+                    {
+                        nX++;
+
+== oracle: PlayObject.Attack.cs:909-911 CM_HIT dispatch ==
+                        case Messages.CM_HIT:
+                            AttackDir(null, 0, nDir);
+                            break;

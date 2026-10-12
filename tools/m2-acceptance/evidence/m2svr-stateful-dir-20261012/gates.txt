@@ -1,0 +1,11 @@
+四门禁（隔离 CARGO_TARGET_DIR=E:/tmp/m3cs-b1b2-target / --offline）
+base = refs/heads/master = 88661505（本片只动 bins/game-svr，未合 master）
+head = worktree-m2-gamesvr-host tip（本片提交）
+
+fmt          rc=0                                （gate-fmt.txt）
+clippy       rc=0  --workspace --all-targets -D warnings（gate-clippy-full.txt）
+test         rc=0  80 suites / 664 passed / 0 failed / 16 ignored（gate-test-full.txt）
+msgcodegen   rc=0  604 条常量与 C# 源一致           （gate-msgcodegen.txt）
+
+边界：git diff --name-only = mir2-rs/bins/game-svr/src/main.rs（1 源文件）+ 本证据目录
+      src/ sql/ MirClient / crates/world / tests/parity/m3 → 空
