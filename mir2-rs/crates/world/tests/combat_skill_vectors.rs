@@ -23,7 +23,7 @@
 //! 归入唯一确定的分派类别（warr/magicid 拒绝、implemented、context_required、no_effect_case、
 //! no_switch_case）并逐类钉死行数（DoD③「未实装逐条登记，不许静默漏」的机器门禁）。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use mir2_data::models::MagicInfo;
@@ -32,7 +32,7 @@ use mir2_world::magic::{
     can_read_book, get_spell_point, group_melee_damage, magic_attack_interval, power_defence_area,
     power_fire_wall, power_get_power_plus_mc, power_get_power_plus_sc,
     power_heal_get_power_plus_sc2, power_holy_shield, power_lightening, power_poison, power_shield,
-    power_show_hp_interval, power_transparent, power_uenhancer,
+    power_show_hp_interval, power_transparent, power_uenhancer, resolve_magic,
 };
 use mir2_world::{
     attack_with, AttackPowerMode, CombatConfig, Entity, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY,
@@ -277,6 +277,7 @@ struct SkillCase {
 
 struct RegRow {
     magic_id: u16,
+    name: String,
     implemented: bool,
     reason: String,
     dospell_class: String,
@@ -309,6 +310,7 @@ fn load_skills() -> (i32, i32, AttackPowerMode, Vec<SkillCase>, Vec<RegRow>) {
             }
             "reg" => registry.push(RegRow {
                 magic_id: i(fields, 1) as u16,
+                name: fields[2].clone(),
                 implemented: i(fields, 6) != 0,
                 reason: fields[7].clone(),
                 dospell_class: fields[8].clone(),
@@ -716,6 +718,135 @@ fn dospell_classes_are_fully_registered() {
     assert_eq!(counts.get("no_switch_case").copied(), Some(20));
     assert_eq!(counts.get("warr_reject").copied(), Some(8));
     assert_eq!(counts.get("magicid_reject").copied(), Some(35));
+}
+
+/// 判据（DoD③ 的可达性口径）：`WorldServer.FindMagic(int)` 的**首匹配**语义。
+///
+/// 真魔表 108 行里有 13 个 `MagID` 各出现 2 次（`Idx` 序先入表者胜）：`FindMagic` 取首行，
+/// 后一行被遮蔽。本测试把该结构钉成机器门禁（content 冻结 ⇒ 数字稳定），并点名 48。
+#[test]
+fn duplicate_magic_ids_resolve_to_first_row_like_oracle() {
+    let (_, _, _, _, registry) = load_skills();
+    let magics: Vec<MagicInfo> = registry
+        .iter()
+        .map(|r| MagicInfo {
+            magic_id: r.magic_id,
+            magic_name: r.name.clone(),
+            ..Default::default()
+        })
+        .collect();
+    assert_eq!(magics.len(), 108, "真魔表行数（content 冻结）");
+
+    let mut count: BTreeMap<u16, usize> = BTreeMap::new();
+    for m in &magics {
+        *count.entry(m.magic_id).or_insert(0) += 1;
+    }
+    assert_eq!(count.len(), 95, "不同 MagID 数（108 行 − 13 个重复）");
+    let dups: Vec<u16> = count
+        .iter()
+        .filter(|(_, &n)| n > 1)
+        .map(|(&id, _)| id)
+        .collect();
+    assert_eq!(
+        dups,
+        vec![48u16, 66, 71, 88, 89, 90, 91, 92, 93, 94, 96, 97, 98],
+        "重复 MagID 集合（按魔号升序）"
+    );
+    for &id in &dups {
+        assert_eq!(count[&id], 2, "重复 MagID {id} 应恰有 2 行");
+        let first = magics
+            .iter()
+            .find(|m| m.magic_id == id)
+            .expect("重复 MagID 必有首行");
+        let resolved = resolve_magic(&magics, id).expect("按魔号必能解析");
+        assert_eq!(
+            resolved.magic_name, first.magic_name,
+            "MagID {id} 必须解析为先入表的 {}",
+            first.magic_name
+        );
+    }
+    // 点名：48（`MagicConst.SKILL_GROUPAMYOUNSUL = 48`）先入表的是「群体施毒术」，
+    // `Idx=48` 的「气功波」被遮蔽 ⇒ 运行时按魔号永远到不了「气功波」。
+    assert_eq!(
+        resolve_magic(&magics, 48).expect("48").magic_name,
+        "群体施毒术"
+    );
+    let shadowed48: Vec<&str> = magics
+        .iter()
+        .filter(|m| m.magic_id == 48 && m.magic_name != "群体施毒术")
+        .map(|m| m.magic_name.as_str())
+        .collect();
+    assert_eq!(shadowed48, vec!["气功波"], "48 的遮蔽行点名");
+}
+
+/// 判据（DoD③ 的计数口径）：`implemented` 必须按**可达魔号**计。
+///
+/// 探针按真魔表**行**产用例（108 行里 29 行 implemented），其中「48 气功波」是遮蔽行，
+/// 不构成一个独立的已实装技能 ⇒ 可达魔号为 28。遮蔽行必须逐条登记、点名，不许静默漏。
+#[test]
+fn implemented_cases_are_counted_per_reachable_magic_id() {
+    let (_, _, _, cases, registry) = load_skills();
+    // 首行 = 可达；其余 = 遮蔽。
+    let mut seen: BTreeSet<u16> = BTreeSet::new();
+    let mut impl_effective = 0usize;
+    let mut impl_shadowed: Vec<(u16, String)> = Vec::new();
+    for row in &registry {
+        let is_first_for_id = seen.insert(row.magic_id);
+        if row.implemented {
+            if is_first_for_id {
+                impl_effective += 1;
+            } else {
+                impl_shadowed.push((row.magic_id, row.name.clone()));
+            }
+        }
+    }
+    assert_eq!(
+        registry.iter().filter(|r| r.implemented).count(),
+        cases.len(),
+        "implemented 行数 = 用例数（探针按行产用例）"
+    );
+    assert_eq!(impl_effective, 28, "已实装**可达魔号**数");
+    assert_eq!(
+        impl_shadowed,
+        vec![(48u16, "气功波".to_string())],
+        "遮蔽的 implemented 行必须逐条登记且点名"
+    );
+    // 用例侧也点名 phantom，承认它是按行产出、不属于可达魔号。
+    let phantom: Vec<&SkillCase> = cases
+        .iter()
+        .filter(|c| c.magic.magic_id == 48 && c.magic.magic_name == "气功波")
+        .collect();
+    assert_eq!(phantom.len(), 1, "48 的遮蔽行仍有一份按行用例（phantom）");
+}
+
+/// 红检⑨（技能·可达性）：`resolve_magic` 若被改成 **last-wins**（`HashMap` 覆盖 / 逆序取），
+/// `FindMagic(48)` 会变成遮蔽行「气功波」⇒ 与 oracle 首匹配语义不一致。
+/// 本测试把「首匹配 ≠ 末匹配」钉成可判红：若两值相同 ⇒ 首匹配语义没有牙齿。
+#[test]
+fn redcheck_duplicate_resolution_is_order_sensitive_must_fail() {
+    let (_, _, _, _, registry) = load_skills();
+    let magics: Vec<MagicInfo> = registry
+        .iter()
+        .map(|r| MagicInfo {
+            magic_id: r.magic_id,
+            magic_name: r.name.clone(),
+            ..Default::default()
+        })
+        .collect();
+    let first = resolve_magic(&magics, 48).expect("48").magic_name.clone();
+    let last = magics
+        .iter()
+        .rev()
+        .find(|m| m.magic_id == 48)
+        .expect("48")
+        .magic_name
+        .clone();
+    assert_eq!(first, "群体施毒术");
+    assert_eq!(last, "气功波");
+    assert_ne!(
+        first, last,
+        "红检失效：48 的首匹配与末匹配相同 ⇒ 首匹配语义被覆盖（Map/last-wins）"
+    );
 }
 
 /// 判据（登记未接线）：`PlayObject.GetAttackPower` override（Luck/PowerRate/BoPowerItem）

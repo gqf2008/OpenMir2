@@ -113,6 +113,21 @@ pub fn magic_attack_interval(delay_time: i32, magic_hit_interval_time: i32) -> i
     delay_time + magic_hit_interval_time
 }
 
+/// `WorldServer.FindMagic(int nMagIdx)`（`src/GameSrv/Word/WorldServer.cs:1430-1444`）：
+/// 在**装表顺序**里返回第一个 `MagicId == magic_id` 的行；找不到返回 `None`。
+///
+/// 装表顺序 = `MySqlDB.LoadMagicDB`（`src/GameSrv/DB/MySqlDB.cs:105-160`）的
+/// `select * from magics` 行序（InnoDB 按主键 `Idx` 返回）经 `MagicList.Add` 追加后的次序。
+///
+/// **真魔表存在同一 `MagID` 多行**（实测 108 行 / 95 个不同 MagID / 13 个重复 MagID）：
+/// 例如 `Idx=38`（群体施毒术）与 `Idx=48`（气功波）都是 `MagID=48`。
+/// `SkillGroupAmyounsul = 48` 的 `DoSpell` 分支只按魔号分派 ⇒ 运行时 `FindMagic(48)`
+/// 恒取**先入表**的「群体施毒术」，「气功波」一行被遮蔽（shadowed）且不可按魔号到达。
+/// Rust 侧必须复刻该「首匹配」语义，**不能**用 `HashMap`/`last-wins` 覆盖。
+pub fn resolve_magic(magics: &[MagicInfo], magic_id: u16) -> Option<&MagicInfo> {
+    magics.iter().find(|m| m.magic_id == magic_id)
+}
+
 // ---- DoSpell 各分支的威力表达式（只取纯数值部分）--------------------------------------------
 
 /// 火球术/大火球：`GetAttackPower(GetPower(MPow) + Lo(MC), Hi(MC) - Lo(MC) + 1)`。
