@@ -14,7 +14,8 @@
   （`SHA256SUMS.txt`，仓库字节口径；复核命令见 §5）。
 
 > **本报告不得被读成「M3 全部达成」**。① 十项里只有 3 项在本报告口径下算对齐（背包/装备、战斗、技能），
-> NPC/商店 与 拍卖（⑩b，按 SellOff 口径）为 `partial`，邮件（⑩a）为 `oracle_absent`，其余 5 项为 `not_covered`；② 24h 长跑 **未跑**；④ M3 门禁 `scoped_diff` 当前有一处已知 RED
+> NPC/商店 与 拍卖（⑩b，按 SellOff 口径）为 `partial`，邮件（⑩a）为 `oracle_absent`，其余 5 项为 `not_covered`
+> （**计数口径**：`⑩ 邮件/拍卖` 拆成 10a + 10b **两个子行**、合计仍计作**一项** ⇒ 3 covered + 2 partial + 1 oracle_absent + 5 not_covered = **11 子行 = 十项**，⑩ 为**混合行**「10a absent + 10b partial」）；② 24h 长跑 **未跑**；④ M3 门禁 `scoped_diff` 当前有一处已知 RED
 > （已由 follow-up 卡 `openmir2-m3-final-acceptance` 的 F-2 轨承接，见 §4）。
 
 ---
@@ -37,7 +38,7 @@
 
 > 说明：§6 的 M3 判据表把「战斗」与「技能」列为两项；本表的 2/3 与卡 `openmir2-m3-combat-skills-align`
 > 的 ②③ 一一对应。§6「顺序」原文把两者并列写作「战斗/技能」，故十项计数以本表为准。
-> §6「⑩ 邮件/拍卖」原为一项；owner 2026-10-13 06:24 按 §6.0-3 重划口径后拆为 **10a（邮件 = `oracle_absent`）/ 10b（拍卖 = SellOff 口径）** 两行（**计数仍作一项**），
+> §6「⑩ 邮件/拍卖」原为一项；owner 2026-10-13 06:24 按 §6.0-3 重划口径后拆为 **10a（邮件 = `oracle_absent`）/ 10b（拍卖 = SellOff 口径）** 两行（**计数仍作一项**；即 ⑩ 为**混合行** = 10a `oracle_absent` + 10b `partial`，两子行合计计作一项），
 > 其判据与 DB 落库现状见 [`m3/M3⑩邮件拍卖现状盘点报告-20261013.md`](m3/M3⑩邮件拍卖现状盘点报告-20261013.md)、登记见 `whitelist.md` 的 T-36。
 
 ### 1.1 背包 / 装备（covered）
@@ -299,7 +300,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_ru
 | 邮件（§6 顺序 ⑩a） | **`oracle_absent`**（已登记 T-36） | **不开实现卡**；Rust 与 oracle 一致地不实现（oracle 无此功能） |
 | 拍卖（§6 顺序 ⑩b，元宝寄售 SellOff） | `partial`（oracle 链/判据已盘；世界侧派发未实现） | **已有卡** `openmir2-m3-mail-auction-align` + 承接卡 `-selloff-consignment-world` / `-selloff-goldsales-load-wire` / `-selloff-fixture-botsrv` |
 | **300 假人 24h 长跑**（DoD②） | **`not_run`**（等 owner 收拢窗口；方案见 §2） | 本卡（`openmir2-m3-final-acceptance`）自身，窗口发放后开跑 |
-| §6 M3 十项「全绿」总判 | **未达成**（3 covered / 2 partial / 1 oracle_absent / 5 not_covered；⑩ 拆 10a/10b 计作一项） | 上述各承接卡收敛后回本卡复核 |
+| §6 M3 十项「全绿」总判 | **未达成**（3 covered / 2 partial / 1 oracle_absent / 5 not_covered = 11 子行；⑩ 为**混合行** 10a `oracle_absent` + 10b `partial`，两子行合计计作一项 ⇒ 仍为十项） | 上述各承接卡收敛后回本卡复核 |
 
 ## 5. 本片命令与证据四件套
 
