@@ -1,0 +1,17 @@
+# SERVER_STATE 路径的 fail-closed 牙齿（真机件驱动，owner 01:05 第 ② 条：不许静默出表）
+
+## ① dump 行数 < 玩家攻击单元数（5 < 120）⇒ PREREQ rc=2
+$ jointable --csharp-stream mir2-rs/tests/parity/m3/evidence-rng-isolate-attack-twophase-ff-20261013/streams/csharp-cA2-attack-stream.tsv --rust-stream mir2-rs/tests/parity/m3/evidence-rng-isolate-attack-twophase-ff-20261013/streams/rust-rA2-rng-stream.tsv --csharp-server-state mir2-rs/tests/parity/m3/attack-request-sequence/fixtures/rust-server-state-m2svr-sample.tsv --rust-state mir2-rs/tests/parity/m3/evidence-rng-isolate-attack-twophase-ff-20261013/sessions/rust-20261013-005240/attack_state.jsonl --csharp-attacker-id 1 --victim-x 18 --victim-y 20
+PREREQ_MISSING: rust-server-state-m2svr-sample.tsv: SERVER_STATE 行数 5 < 玩家攻击单元数 120（PREREQ）
+rc=2
+
+## ② attacker id 在 dump 里找不到（123）⇒ PREREQ rc=2
+$ jointable --csharp-stream mir2-rs/tests/parity/m3/evidence-rng-isolate-attack-twophase-ff-20261013/streams/csharp-cA2-attack-stream.tsv --rust-stream mir2-rs/tests/parity/m3/evidence-rng-isolate-attack-twophase-ff-20261013/streams/rust-rA2-rng-stream.tsv --csharp-server-state mir2-rs/tests/parity/m3/evidence-rng-isolate-attack-twophase-ff-20261013/sessions/csharp-20261013-005038/server_state_segment.tsv --rust-state mir2-rs/tests/parity/m3/evidence-rng-isolate-attack-twophase-ff-20261013/sessions/rust-20261013-005240/attack_state.jsonl --csharp-attacker-id 123 --victim-x 18 --victim-y 20
+PREREQ_MISSING: server_state_segment.tsv: SERVER_STATE 第 1 行找不到 attacker id=123（PREREQ）
+rc=2
+
+## ③ 给了 server-state 却没给选择参数 ⇒ PREREQ rc=2（fail-closed，不猜）
+$ jointable --csharp-stream mir2-rs/tests/parity/m3/evidence-rng-isolate-attack-twophase-ff-20261013/streams/csharp-cA2-attack-stream.tsv --rust-stream mir2-rs/tests/parity/m3/evidence-rng-isolate-attack-twophase-ff-20261013/streams/rust-rA2-rng-stream.tsv --csharp-server-state mir2-rs/tests/parity/m3/evidence-rng-isolate-attack-twophase-ff-20261013/sessions/csharp-20261013-005038/server_state_segment.tsv --rust-state mir2-rs/tests/parity/m3/evidence-rng-isolate-attack-twophase-ff-20261013/sessions/rust-20261013-005240/attack_state.jsonl
+PREREQ_MISSING: side=csharp 提供 --csharp-server-state 时必须同时给 --csharp-attacker-id 与 --victim-x/--victim-y（服务端 dump 按 id + 格选 attacker/victim）
+rc=2
+

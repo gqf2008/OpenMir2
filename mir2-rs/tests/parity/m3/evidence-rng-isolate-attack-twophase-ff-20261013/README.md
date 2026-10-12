@@ -3,6 +3,23 @@
 卡：`openmir2-m3-combat-skills-align`（issue `a2ef74aa`）· worktree `m3cs` · branch `worktree-m3-combat-skills`
 · lane `m3cs` / principal `openmir2-worker-5`。
 
+## 三条正面结论（复读区；owner 2026-10-13 01:05 第 ① 条，供后来者复用）
+
+1. **F-F 生效**：受害 pin 自洽的 L255（`Hp=MaxHP=20669`）后不再被静默 ghost ⇒ 两侧「玩家有目标击数」
+   **120/120**（对比修复前 C# 3/120 vs Rust 38/120）；目标可用性门真机 `120/120 !ghost && !death`。
+   见 §3、`window/12`、`window/21`、`requests/40-analyze-clean.txt`。
+2. **Rust 逐 k 可复现**：两条独立新栈干净首跑 `diff = 0`、`rng-stream.tsv` 逐字节相同（`cmp` 无输出）。
+   见 §4、`diffs/32`。
+3. **C# 不可复现：专用流按调用点共享（F-N1）**——**事实**：C# 影子 hook 的隔离按**调用点**分流、
+   进程级共享一条 `Random(attack_seed)`，所以流里混进了 **11 次 `atk_power_base`（base unit）** 抽取，
+   第一分歧 `index=0, class=base_unit`。**假设**（m3bag 正在查证）：这 11 次来自**并发非玩家攻方**
+   （同进程其它地图的怪物/守卫）——本片只能证「多出 base_unit 取数 ⇒ 序列分岔」，不能单独证「并发」。
+   见 §5、`requests/40`。⇒ 结构已对齐，分歧在夹具共享流；DoD② 未达成、未放宽（F-N1 已转 m3bag）。
+
+追加（owner 01:05 第 ② 条）：`attack-request-sequence/per_strike_requests.py jointable` 已能直接吃
+**两侧 `SERVER_STATE` 服务端 dump**（C# 真实件 GREEN；Rust 用 m2-svr 待审片真实样件直出）——
+即 m2-svr 的 Rust dump 合入后 **jointable 两侧都能填**（详见该目录 README 的「SERVER_STATE」节）。
+
 ## 0. 口径
 
 - **图/场景**：`0137`（竞技场，零刷怪 / 零 AI 消费者，`source_verified=True`）、`-AttackPinPair`、`-Bots 2`、
@@ -75,7 +92,7 @@
 - 第三栈 `rust-20261013-005240`（rA2）汇总与上两条完全一致（hits 57 / dodges 63 / sum 2425）。
 ⇒ Rust 侧「同种子 ⇒ 逐 k 相同」在本隔离口径下**成立**。
 
-## 5. 根因定位：第一分歧在流水 index=0，class=`base_unit`（C# 专用流被**并发非玩家攻方**污染）
+## 5. 根因定位：第一分歧在流水 index=0，class=`base_unit`（C# 专用流按**调用点**共享）
 
 `requests/40-analyze-clean.txt`（`per_strike_requests.py analyze`，cA2 vs rA2）：
 
@@ -91,11 +108,13 @@ rust  : 攻击取数 651（player unit=120, base unit=0）
   `BaseObject.GetAttackPower`）——即**在玩家攻方第一次出手之前**，进程里另一个实体已经往**同一条专用流**
   抽了一发。
 - 数量上 C# 比 Rust 多：`atk_power_base +11`、`hit_gate +11`（131 vs 120）——同一并发攻方那一族的取数。
-- **机制**：C# 影子 hook 的隔离是**按调用点**分流（`divert-sites.txt` = `attack_sites.tsv` 的
-  `divert=1` 行），**不按攻方实体**；因此 `0137` 以外的实体（同一 `GameSvr` 进程其它地图上的怪物/守卫）
-  一旦走这些站点，就会抽**同一条 `Random(attack_seed)`**，把被测量攻方的流位置整体推移。
-- 这就解释了 C# 侧**不可复现**：并发攻方的抽取时机每次不同 ⇒ 同种子下玩家攻方每一击拿到的 draw 不同
-  ⇒ `cA vs cB = 242`、`c1 vs c2 = 328`。
+- **机制（事实）**：C# 影子 hook 的隔离是**按调用点**分流（`divert-sites.txt` = `attack_sites.tsv` 的
+  `divert=1` 行），**不按攻方实体** ⇒ 进程里任何实体走这些站点都会抽**同一条 `Random(attack_seed)`**。
+  本片能直接证的：**C# 流里混入 11 次 `atk_power_base`（base unit）**，第一分歧即落在 base unit。
+- **并发（假设，未单独证）**：这 11 次来自「同一 `GameSvr` 进程其它地图上的怪物/守卫在测量窗口内出手」，
+ `0137` 本身零刷怪（owner 已核）。m3bag 正在查证那个非玩家攻方是谁；若证伪，则改用「按攻方实体分流」。
+- 这解释了 C# 侧**不可复现**（在「并发非玩家攻方」假设下）：其抽取时机每次不同 ⇒ 同种子下玩家攻方
+  每击拿到的 draw 不同 ⇒ `cA vs cB = 242`、`c1 vs c2 = 328`。
 - 逐击请求**模板形状**两侧一致（`requests/42-jointable-clean.txt` 的 `reqs` 列）：
   miss = `atk_power_a,atk_power_b,hit_gate,attack_success`；hit = `...,hit_struck_damage,hit_struck_damage2,struck_durability,...`。
   即**结构已对齐，分歧是「抽到的值不同 ⇒ 命中/躲闪序列不同」**，不是结构缺站点。

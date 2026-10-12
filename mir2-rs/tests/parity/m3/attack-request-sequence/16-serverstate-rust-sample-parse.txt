@@ -1,0 +1,9 @@
+# jointable 的 SERVER_STATE 解析器**直接吃 Rust 侧真实产出**（m2-svr 待审片 4ba36368 的 rust-server-state.tsv，原样 fixtures/）
+# 驱动：直接调 state_from_server_state(path, attacker_id=1, vx=18, vy=20, nunits=5)
+
+Rust SERVER_STATE 样本解析：k 数 = 5
+k=1 attacker={'x': 17, 'y': 20, 'dir': 2, 'ghost': 0, 'death': 0, 'hp': 19} victim={'x': 18, 'y': 20, 'dir': 0, 'ghost': 0, 'death': 0, 'hp': 19}
+k=2 attacker={'x': 17, 'y': 20, 'dir': 2, 'ghost': 0, 'death': 0, 'hp': 19} victim={'x': 18, 'y': 20, 'dir': 0, 'ghost': 0, 'death': 0, 'hp': 19}
+k=3 attacker={'x': 17, 'y': 20, 'dir': 2, 'ghost': 0, 'death': 0, 'hp': 19} victim={'x': 18, 'y': 20, 'dir': 0, 'ghost': 0, 'death': 0, 'hp': 19}
+k=4 attacker={'x': 17, 'y': 20, 'dir': 2, 'ghost': 0, 'death': 0, 'hp': 19} victim={'x': 18, 'y': 20, 'dir': 0, 'ghost': 0, 'death': 0, 'hp': 19}
+k=5 attacker={'x': 17, 'y': 20, 'dir': 2, 'ghost': 0, 'death': 0, 'hp': 19} victim={'x': 18, 'y': 20, 'dir': 0, 'ghost': 0, 'death': 0, 'hp': 19}
