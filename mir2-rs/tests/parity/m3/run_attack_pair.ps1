@@ -306,6 +306,17 @@ if ($SelfCheckNoStack) {
   if (Test-M3AttackVictimHpRange -VictimHp 100000) { $failures += 'attack_victim_hp_range_guard_not_red' }
   Write-Output ("SELFTEST ⑥c -AttackVictimHp 范围护栏：缺省 {0} 合规（≤32767）；100000 必判红" -f $AttackVictimHp)
 
+  # ⑭ F-E（m3cs tick21）：驱动收尾等待——run_bots.ps1 的攻击序列「等 M3ATTSEQ done」离线自检
+  #    （合成日志计 attack done 2/1/0 + bag done 2/0；改坏计数正则 ⇒ RED）。真机 120/120 由 m3cs 下一轮实跑覆盖。
+  $prevEap = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  $botsSelfOut = (& powershell -ExecutionPolicy Bypass -File (Join-Path $RepoRoot 'tools\botload\run_bots.ps1') -SelfCheckNoStack 2>&1 | Out-String)
+  $botsSelfRc = $LASTEXITCODE
+  $ErrorActionPreference = $prevEap
+  if ($botsSelfRc -ne 0) { $failures += ('attack_wait_selftest_rc=' + $botsSelfRc) }
+  if ($botsSelfOut -notmatch 'SELFTEST_RED GREEN') { $failures += 'attack_wait_selftest_not_green' }
+  Write-Output ("SELFTEST ⑭ 攻击序列收尾等待（run_bots -SelfCheckNoStack）rc={0}" -f $botsSelfRc)
+
   # ⑩ Minor M-1 回归（reviewer-5 76e433f0）：`-AttackSequence` 未配 `-AttackPinPair` ⇒ WARN 必须**真**出现；
   #    配了 `-AttackPinPair` ⇒ 不得出现。旧实现把 WARN 写在 `if ($EmitOpsArgs)` 块内且带 `-not $EmitOpsArgs`
   #    ⇒ 恒 false 死代码，本项必 RED（这就是「改坏必红」：把 WARN 挪回块内 ⇒ m1_warn_missing 必红）。
@@ -461,7 +472,7 @@ if ($SelfCheckNoStack) {
 
   Remove-Item -Recurse -Force $tmpRoot -ErrorAction SilentlyContinue
   if ($failures.Count -eq 0) {
-    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（攻击配置透传/默认关 + run_pair -DisableAutoPlay 耦合两向 + 攻击两相 pin pose/SQL + pin SQL 可执行性（含改坏 a.IncHealth 必红 + 改坏 Hp=100000 越界必红） + 入口/DiffOnly fail-closed + attack_diff selftest + 改坏 dmg/hit 必红 + scoped_diff 14/14 + M-1 WARN 有牙齿 + M-2 attacker 精确选择 selftest + pin SQL 别名/列校验 + 种子注入断言（两侧 fail-closed））'
+    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（攻击配置透传/默认关 + run_pair -DisableAutoPlay 耦合两向 + 攻击两相 pin pose/SQL + pin SQL 可执行性（含改坏 a.IncHealth 必红 + 改坏 Hp=100000 越界必红） + 入口/DiffOnly fail-closed + attack_diff selftest + 改坏 dmg/hit 必红 + scoped_diff 14/14 + M-1 WARN 有牙齿 + M-2 attacker 精确选择 selftest + pin SQL 别名/列校验 + 种子注入断言（两侧 fail-closed）+ 攻击序列收尾等待（F-E））'
     exit 0
   }
   Write-Output ('SELFTEST_RED RED: ' + ($failures -join ', '))

@@ -1,0 +1,6 @@
+# F-E 改坏必红：把收尾计数正则的 "role":"done" 改成 "DONE"（模拟收尾等待失效）
+ts: 2026-10-12T12:59:52+08:00
+
+$ sed/替换 Get-M3SeqDoneCount 的 attack 正则 ... ; powershell -File tools/botload/run_bots.ps1 -SelfCheckNoStack
+SELFTEST_RED RED: attack_done_2, attack_done_1
+rc=1

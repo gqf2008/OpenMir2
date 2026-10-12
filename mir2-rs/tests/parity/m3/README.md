@@ -332,7 +332,17 @@ peer 口径（`attack_sequence`/`attack_pose`/`fixed_new_chr`）与 `scoped_diff
 **30000**（≤32767，且远超 120 次 1 级攻击的累计伤害，防死亡目的一样成立；`attack_pose` 的 `vhp=` 两侧逐字节相同 ⇒ 不改仲裁力）。
 三道护栏（改回 100000 必红）：`Test-M3AttackVictimHpRange`（唯一口径，`run_attack_pair.ps1`/`run_pair.ps1` 启动即
 fail-closed，不等 MySQL）；`-SelfCheckNoStack` **⑥c**（缺省合规 + 越界值必判红）；**⑥b** 的镜像表真执行（`ERROR 1264`）。
-证据 `evidence-attack-pair-fd-range-20261012/**`。
+
+**攻击序列未收尾（F-E，m3cs tick21 真机 finding，2026-10-12 12:54）**：`tools/botload/run_bots.ps1` 的
+`-AttackSequence` 缺「等 `M3ATTSEQ done`」分支 ⇒ 假人在 `login_ok==Count` 处立即被 kill，只到 **12/120、done=0**。
+已按 `-BagEquipSequence` 同口径补齐：`Get-M3SeqDoneCount`（`RobotPlayer.cs:674` 的 `M3ATTSEQ {"role":"done",...}`）
+逐假人等到齐才收工，超时/未 done ⇒ RED 并如实报 `attacks/done`。离线咬合：`run_bots.ps1 -SelfCheckNoStack`
+（attack done 2/1/0 + bag done 2/0）× `run_attack_pair.ps1 -SelfCheckNoStack` **⑭**。
+
+**F-F（未做，单独登记）**：`RecalcLevelAbilitys()` 会把 1 级角色 `MaxHP` 重算为 19 ⇒ pin 抬高失效、约 19 击即死；
+三个修选项都需真机窗口选型/验证（窗口归 m3cs），本片不擅自改判据。
+
+证据 `evidence-attack-pair-fd-fe-fix-20261012/**`。
 
 **种子注入断言（F-C，owner 2026-10-12 11:55）**：两侧同种子是数值可比的**前提**，但此前夹具不校验两侧是否
 真的注入了种子 ⇒ 未设种子只会得到「不可比的红」却看不出来。新增 `gate_guards.ps1::Test-M3SeedInjected`：

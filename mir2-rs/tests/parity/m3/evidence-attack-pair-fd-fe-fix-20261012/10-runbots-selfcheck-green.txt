@@ -1,0 +1,6 @@
+# F-E 离线自检（命令 + 原始输出）
+ts: 2026-10-12T12:59:51+08:00
+
+$ powershell -ExecutionPolicy Bypass -File tools/botload/run_bots.ps1 -SelfCheckNoStack
+SELFTEST_RED GREEN: M3 序列收尾计数离线自检全过（attack done 2/1/0 + bag done 2/0）
+rc=0
