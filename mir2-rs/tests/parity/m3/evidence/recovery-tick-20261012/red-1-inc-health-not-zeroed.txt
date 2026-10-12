@@ -1,0 +1,25 @@
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.59s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-3aa264152417c61e.exe)
+
+running 1 test
+test recover::tests::partial_pool_is_zeroed_and_not_reconsumed ... FAILED
+
+failures:
+
+---- recover::tests::partial_pool_is_zeroed_and_not_reconsumed stdout ----
+
+thread 'recover::tests::partial_pool_is_zeroed_and_not_reconsumed' (8852) panicked at bins\game-svr\src\recover.rs:256:9:
+assertion `left == right` failed
+  left: (3, 3)
+ right: (3, 0)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    recover::tests::partial_pool_is_zeroed_and_not_reconsumed
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 74 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --lib`
+rc=101

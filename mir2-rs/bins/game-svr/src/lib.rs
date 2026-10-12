@@ -18,5 +18,6 @@ pub mod ground;
 pub mod itemwire;
 pub mod movewire;
 pub mod pickwire;
+pub mod recover;
 pub mod smframe;
 pub mod useitem;
