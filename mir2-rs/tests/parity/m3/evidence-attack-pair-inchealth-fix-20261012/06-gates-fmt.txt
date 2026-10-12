@@ -1,0 +1,2 @@
+$ CARGO_TARGET_DIR=E:/tmp/m3bag-attack-fix-target cargo fmt --all -- --check
+rc=0

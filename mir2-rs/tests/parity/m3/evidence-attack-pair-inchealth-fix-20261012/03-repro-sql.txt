@@ -1,0 +1,30 @@
+== F-A 活库复现（MariaDB @127.0.0.1:3306，客户端 D:\mysql\mariadb-10.11.19-winx64\bin\mysql.exe）==
+== 所有 UPDATE 的 WHERE 均指向**不存在**的角色名 '__m3bag_no_such_char__' ⇒ 0 行改动，不触碰任何角色/内容 ==
+== 命令：mysql -h 127.0.0.1 -P 3306 -u root --password= --batch -e "<SQL>" ==
+
+=== 环境 ===
+2026-10-12T12:07:37+08:00
+server_version
+10.11.19-MariaDB
+
+=== ① characters_ablity 是否有 IncHealth/IncSpell（空集 = 无此列）===
+(以上为空即无此列)
+
+=== ② characters 是否有 IncHealth/IncSpell ===
+Field	Type	Null	Key	Default	Extra
+IncHealth	tinyint(3)	YES		0	
+IncSpell	tinyint(3)	YES		0	
+IncHealing	tinyint(3)	YES		0	
+
+=== ③ 历史 bug SQL（a.IncHealth，blob 3587f895 形态）——prepare 期必 ERROR 1054 ===
+UPDATE mir2_db.characters_ablity a JOIN mir2_db.characters c ON a.PlayerId=c.Id SET a.Level=1, a.Hp=100000, a.MaxHP=100000, a.Mp=15, a.MAxMP=15, a.IncHealth=0, a.IncSpell=0 WHERE c.ChrName='__m3bag_no_such_char__'
+--------------
+UPDATE mir2_db.characters_ablity a JOIN mir2_db.characters c ON a.PlayerId=c.Id SET a.Level=1, a.Hp=100000, a.MaxHP=100000, a.Mp=15, a.MAxMP=15, a.IncHealth=0, a.IncSpell=0 WHERE c.ChrName='__m3bag_no_such_char__'
+--------------
+
+ERROR 1054 (42S22) at line 1: Unknown column 'a.IncHealth' in 'SET'
+rc=1
+
+=== ④ 修正 SQL（c.IncHealth，本片修法）——应 rc=0、0 行改动 ===
+UPDATE mir2_db.characters_ablity a JOIN mir2_db.characters c ON a.PlayerId=c.Id SET a.Level=1, a.Hp=100000, a.MaxHP=100000, a.Mp=15, a.MAxMP=15, c.IncHealth=0, c.IncSpell=0 WHERE c.ChrName='__m3bag_no_such_char__'
+rc=0
