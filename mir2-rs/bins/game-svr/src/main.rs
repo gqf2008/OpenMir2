@@ -1763,6 +1763,137 @@ fn handle_move_cmd(
     }
 }
 
+/// `openmir2-m3-attack-magic-wiring`（第一片）——`CM_HIT`/`CM_HEAVYHIT`/`CM_BIGHIT`/
+/// `CM_POWERHIT`/`CM_LONGHIT`/`CM_WIDEHIT`/`CM_FIREHIT`/`CM_CRSHIT`/`CM_TWINHIT` 9 条攻击命令的派发。
+///
+/// 口径（照 oracle，逐行见 [`game_svr::attackwire`] 模块头）：
+/// - 入帧映射与移动同段：`nX = LoWord(Recog)`、`nY = HiWord(Recog)`、`nDir = (byte)Tag`
+///   （`WorldServer.cs:835-844`）；
+/// - `Death` 守卫（`PlayObject.Attack.cs:835`；`STONE` 未移植登记）⇒ 拒绝支不回 `+GD`；
+/// - **成功门** = `nX == CurrX && nY == CurrY`（`PlayObject.Attack.cs:884`）：不满足则不攻击、
+///   不回 ack（oracle 在 `delayTime == 0` 时改发 `RM_MOVEFAIL`，编码器未接 ⇒ 只记日志）；
+/// - 成功 ⇒ `Dir = nDir` + 取目标（`GetPoseCreate` = 前方格首个 `!Ghost && !Death` 对象）⇒
+///   `world.attack_cmd`（下一 world tick 结算）+ 给附近观察者发动作帧（`SM_HIT` 族，排除自己）+ 回 `+GD`。
+///
+/// **登记**（详见 `attackwire` 模块头）：限速/`LateDelivery`/`CheckActionStatus`、`STONE`、
+/// `GetHitMode` 的技能态（无技能 ⇒ 模式 3/4/5/7/8 回落 `SM_HIT`）、目标筛选的安全区/攻击模式、
+/// `GetMovingObject` 的格子 `ObjList` 次序（本片取实体槽位序）、`HealthTick`/`SpellTick` 体力面。
+#[allow(clippy::too_many_arguments)]
+fn handle_hit_cmd(
+    ident: u16,
+    recog: i32,
+    tag: u16,
+    chr_name: &str,
+    socket: i32,
+    online: &OnlineRegistry,
+    world: &mut mir2_world::World,
+    displays: &mut downlink::DisplayTable,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+) {
+    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
+        glog!(
+            "WRN",
+            "攻击命令：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃 ident={ident}"
+        );
+        return;
+    };
+    let actor_id = entry.actor_id;
+    let Some(e) = world.entities.get(actor_id) else {
+        glog!(
+            "WRN",
+            "攻击命令：actor_id={actor_id} 不在世界 ⇒ 丢弃 ident={ident}"
+        );
+        return;
+    };
+    let (cur_x, cur_y, is_dead, map_id) = (e.x, e.y, e.death, e.map_id);
+    if is_dead {
+        // oracle `ClientHitXY` 开头 `if (Death || StatusTimeArr[PoisonState.STONE] != 0) return false;`
+        // （`PlayObject.Attack.cs:835`）。`STONE` 未移植（登记）；拒绝支不回 `+GD`。
+        glog!(
+            "DBG",
+            "攻击：ChrName={chr_name} 已死亡 ⇒ 拒绝（oracle Death 守卫；STONE 未接）ident={ident}"
+        );
+        return;
+    }
+    // `WorldServer.cs:835-844`：`nX = LoWord(Recog)`、`nY = HiWord(Recog)`、`nDir = (byte)Tag`。
+    let nx = i32::from(game_svr::feature::lo_word(recog) as i16);
+    let ny = i32::from(game_svr::feature::hi_word(recog) as i16);
+    if !game_svr::attackwire::at_self(nx, ny, cur_x, cur_y) {
+        glog!(
+            "DBG",
+            "攻击：目标 ({nx},{ny}) != 当前位置 ({cur_x},{cur_y}) ⇒ 不攻击（oracle 回 RM_MOVEFAIL，登记未接）ChrName={chr_name} ident={ident}"
+        );
+        return;
+    }
+    let Some(mode) = game_svr::attackwire::hit_mode(ident) else {
+        return;
+    };
+    let dir = u8::try_from(tag & 0x00FF).unwrap_or(0);
+    // `BaseObject.AttackDir` 开头 `Dir = nDir`（`BaseObject.Attack.cs:12`）。
+    set_display_dir(displays, actor_id, dir);
+    // 取目标：`GetPoseCreate()` = 前方格首个 `!Ghost && !Death` 的对象。
+    let (width, height) = world
+        .maps
+        .get(map_id)
+        .map_or((0, 0), |m| (m.width, m.height));
+    let (fx, fy) = game_svr::attackwire::front_position(dir, cur_x, cur_y, width, height);
+    let target_id = if (fx, fy) == (cur_x, cur_y) {
+        None
+    } else {
+        world
+            .entities
+            .iter()
+            .find(|t| {
+                t.id != actor_id
+                    && t.map_id == map_id
+                    && t.x == fx
+                    && t.y == fy
+                    && !t.ghost
+                    && !t.death
+            })
+            .map(|t| t.id)
+    };
+    if let Some(tid) = target_id {
+        world.attack_cmd(actor_id, tid);
+    } else {
+        glog!(
+            "DBG",
+            "攻击：actor_id={actor_id} 前方格 ({fx},{fy}) 无目标 ⇒ 只播动作帧（oracle `_Attack(null)` 返回 false）"
+        );
+    }
+    // 成功支的体力扣减（`PlayObject.Attack.cs:943-947`：`PerHealth -= 2; PerSpell -= 2`；
+    // `PerHealth`/`PerSpell` 是 `byte` ⇒ oracle 是无符号回绕减。`HealthTick`/`SpellTick` 属体力点面，
+    // 未移植（`movewire` 同源登记）。
+    if let Some(sg) = sessions.get_mut(chr_name) {
+        sg.recovery.per_health = sg.recovery.per_health.wrapping_sub(2);
+        sg.recovery.per_spell = sg.recovery.per_spell.wrapping_sub(2);
+    }
+    // 动作帧：`SendAttackMsg(GetHitMode, Dir, CurrX, CurrY)` → `SendRefMsg` ⇒ 附近观察者（排除自己）。
+    if let Some(d) = displays.get(actor_id) {
+        let sm = game_svr::attackwire::action_sm_ident(
+            mode,
+            game_svr::attackwire::HitSkillState::default(),
+        );
+        let body = game_svr::smframe::sm_action_hit(
+            sm,
+            actor_id,
+            wire_coord(cur_x),
+            wire_coord(cur_y),
+            dir,
+        );
+        broadcast_ref_msg(world, online, gates, actor_id, &[body]);
+        let _ = d;
+    } else {
+        glog!(
+            "WRN",
+            "攻击：actor_id={actor_id} 无展示表 ⇒ 不发动作帧（登记）"
+        );
+    }
+    // `ClientHitXY` 成功 ⇒ 调用方 `SendSocket(GetGoodTick)` 回 `+GD` 短包。
+    send_good_tick(online, gates, chr_name);
+}
+
 /// oracle `SendRefMsg` 的收件人集合 = ±`SendRefMsgRange` 格内 `Race==Play && !Ghost`
 /// （`BaseObject.Message.cs:383-440`，本仓库已有同构实现 `chat::hear_targets`）。
 ///
@@ -1886,6 +2017,94 @@ fn drain_aoi_downlink(
                     body,
                 });
             }
+        }
+    }
+}
+
+/// `openmir2-m3-attack-magic-wiring`（第一片）：本 world tick 的攻击结算 → 客户端下行。
+///
+/// 逐条口径：
+/// - **受击**（`BaseObject.Attack.cs:61-64`）：`_Attack` 对 `Race > Play` 的目标
+///   `SendMsg(target, RM_STRUCK, nPower, HP, MaxHP, ActorId)`，由目标自己的
+///   `RM_STRUCK` 处理器（`PlayObject.Message.cs:1562-1628`）回 `SM_STRUCK`。只有玩家目标有连接
+///   ⇒ 仅对在线玩家发帧；怪物（无连接）不发（登记）。
+/// - **死亡**（`BaseObject.Base.cs:351`）：`Die()` 的 `SendRefMsg(RM_DEATH, Dir, CurrX, CurrY, 1, "")`
+///   ⇒ 观察者（**含自己**，该 `case` 不像 `RM_HIT` 那样过滤 `ActorId`）收 `SM_NOWDEATH`。
+///   怪物 death 帧的 `CharDesc`（`GetFeature`/`CharStatus`）未建模 ⇒ 跳过并登记。
+fn drain_combat_downlink(
+    rec: &mir2_world::TickRecord,
+    world: &mir2_world::World,
+    displays: &downlink::DisplayTable,
+    online: &OnlineRegistry,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+) {
+    // ① 受击帧（发给受击者自己）。
+    for (attacker, target, outcome) in &rec.attacks {
+        if outcome.damage == 0 {
+            continue;
+        }
+        let Some(entry) = online.iter().find(|e| e.actor_id == *target) else {
+            continue;
+        };
+        let Some(d) = displays.get(*target) else {
+            continue;
+        };
+        let max_hp = world
+            .entities
+            .get(*target)
+            .map_or(outcome.target_hp_after, |e| e.max_hp);
+        // 世界实体 HP 是本次结算后的权威值；同步回该会话的 `WAbil.HP`（供 52/752 与后续帧）。
+        if let Some(sg) = sessions.get_mut(&entry.chr_name) {
+            sg.state.wabil.hp = outcome.target_hp_after;
+        }
+        let body = game_svr::smframe::sm_struck(
+            *target,
+            outcome.target_hp_after,
+            max_hp,
+            outcome.damage,
+            d.feature,
+            d.status,
+            *attacker,
+            false,
+        );
+        if let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "受击帧") {
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: entry.socket,
+                body,
+            });
+        }
+    }
+    // ② 死亡广播（含死者自己；展示表只登记玩家 ⇒ 怪物登记跳过）。
+    for death in &rec.deaths {
+        let dead_id = death.0;
+        let Some(d) = displays.get(dead_id) else {
+            glog!(
+                "WRN",
+                "死亡下行：actor={dead_id} 无展示表（怪物 feature/status 未建模）⇒ 跳过（登记）"
+            );
+            continue;
+        };
+        let (x, y) = world.entities.get(dead_id).map_or((0, 0), |e| (e.x, e.y));
+        let body = game_svr::smframe::sm_death(
+            mir2_protocol::messages::SM_NOWDEATH,
+            dead_id,
+            wire_coord(x),
+            wire_coord(y),
+            d.dir,
+            &downlink::char_desc(d.feature, d.status),
+        );
+        for target_id in chat::hear_targets(world, dead_id, chat::SEND_REF_MSG_RANGE) {
+            let Some(t) = online.iter().find(|e| e.actor_id == target_id) else {
+                continue;
+            };
+            let Some(tx) = route_to_gate(gates, t.gate_idx, t.socket, "死亡下行") else {
+                continue;
+            };
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: t.socket,
+                body: body.clone(),
+            });
         }
     }
 }
@@ -2540,6 +2759,21 @@ fn sim_loop(
                             &online,
                             &mut world,
                             &mut displays,
+                            &gates,
+                        );
+                    } else if game_svr::attackwire::is_hit_ident(cmd.ident) {
+                        // `openmir2-m3-attack-magic-wiring`（第一片）：9 条 `CM_*HIT` 派发
+                        // （oracle `PlayObject.Message.cs:1221-1230` → `ClientHitXY`）。
+                        handle_hit_cmd(
+                            cmd.ident,
+                            cmd.recog,
+                            cmd.tag,
+                            &chr_name,
+                            socket,
+                            &online,
+                            &mut world,
+                            &mut displays,
+                            &mut ground_sessions,
                             &gates,
                         );
                     }
@@ -3259,6 +3493,16 @@ fn sim_loop(
             &online,
             &gates,
             enter_cfg.ref_msg_range,
+        );
+        // `openmir2-m3-attack-magic-wiring`（第一片）：本 tick 的攻击结算 → `SM_STRUCK`（受击者自见）
+        // + `SM_NOWDEATH`（死亡广播）。
+        drain_combat_downlink(
+            &rec,
+            &world,
+            &displays,
+            &online,
+            &mut ground_sessions,
+            &gates,
         );
         // S3 后半段（第一格）：世界 tick 的 AOI 结果 → `SM_TURN` + `SM_FEATURECHANGED` 回帧。
         drain_aoi_downlink(&world, &displays, &online, &gates);
@@ -4096,6 +4340,28 @@ mod tests {
             },
             bonus_tick_hit: 20,
             bonus_tick_speed: 35,
+        }
+    }
+
+    /// 测试用的最小 `SessionGround`（攻击/受击用例只需 `wabil` 与 `per_*`）。
+    fn test_session_ground(actor_id: i32) -> SessionGround {
+        SessionGround {
+            state: game_svr::ground::GroundState {
+                item_list: Vec::new(),
+                gold: 0,
+                wabil: test_ability(),
+            },
+            actor_id,
+            game_gold: 0,
+            sys_msg: None,
+            use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
+            sub: game_svr::ability::SubAbility::first_call(),
+            equip: test_equip_inputs(),
+            recovery: game_svr::recover::Recovery::new(0),
+            show_hp: false,
+            user_unlock_durg: false,
+            hunger_status: 0,
+            query_bag_items_tick: None,
         }
     }
 
@@ -6136,6 +6402,287 @@ mod tests {
         assert!(
             matches!(rx0.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
             "空背包不得发 SM_BAGITEMS"
+        );
+    }
+
+    /// **`openmir2-m3-attack-magic-wiring`（第一片）**：`CM_HIT`/`CM_HEAVYHIT` 派发——
+    /// `nX==CurrX && nY==CurrY` 成功门、`Death` 守卫、前方格取目标并 `attack_cmd`、
+    /// 给附近观察者发 `SM_HIT` 族动作帧（无尾，排除自己）、给自己回 `+GD`。
+    ///
+    /// 红检：① `attackwire::at_self` 改成恒 `true` ⇒ 段 ① 的「不回 ack」必红；
+    /// ② `attackwire::hit_mode` 把 `CM_HEAVYHIT` 映射成 0 ⇒ 段 ③ 的 `SM_HEAVYHIT` 断言必红；
+    /// ③ `attackwire::front_position` 的 `DIR_UP` 支改成 `(x, y - 2)`（或
+    /// `smframe::sm_action_hit` 头字段互换）⇒ 段 ② 的「目标被击中」/帧头断言必红。
+    #[test]
+    fn hit_cmd_dispatches_ack_action_frame_and_world_attack() {
+        use mir2_protocol::messages::{CM_HEAVYHIT, CM_HIT, SM_HEAVYHIT, SM_HIT};
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(64, 64);
+        let attacker = {
+            let mut e = mir2_world::Entity::new(0, "atk".to_string(), 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e.dc = 0x0064; // DC 100
+            world.add_entity(e)
+        };
+        let observer = {
+            let mut e = mir2_world::Entity::new(0, "obs".to_string(), 12, 12);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        let monster = {
+            let mut e = mir2_world::Entity::new(0, "mon".to_string(), 10, 9); // 正上方（Dir=0）
+            e.race = mir2_world::ACTOR_RACE_MONSTER;
+            e.hp = 200;
+            e.max_hp = 200;
+            e.hit_point = 0; // `BaseObject.Attack.cs:39` 的命中判定：HitPoint==0 ⇒ 必中
+            e.speed_point = 15;
+            world.add_entity(e)
+        };
+        world.tick(); // Enter 落格
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            attacker,
+            downlink::ActorDisplay::new(4, 0, 111, 0, 0, 255, b"atk".to_vec()),
+        );
+        displays.set(
+            observer,
+            downlink::ActorDisplay::new(4, 0, 222, 0, 0, 255, b"obs".to_vec()),
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "atk".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: attacker,
+            },
+        );
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ub".into(),
+                chr_name: "obs".into(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 902,
+                actor_id: observer,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("atk".into(), test_session_ground(attacker));
+
+        // ① 目标格 != 自身（(11,10)）⇒ 不攻击、不回 ack、不发帧。
+        handle_hit_cmd(
+            CM_HIT,
+            game_svr::feature::make_long(11, 10),
+            0,
+            "atk",
+            901,
+            &online,
+            &mut world,
+            &mut displays,
+            &mut sessions,
+            &gates,
+        );
+        assert!(rx0.try_recv().is_err(), "目标≠自身 ⇒ 不得回 ack / 发帧");
+
+        // ② 目标格 = 自身 ⇒ SM_HIT 动作帧给观察者 + +GD 给自己 + 攻击入队（tick 后结算）。
+        let per_before = sessions["atk"].recovery.per_health;
+        handle_hit_cmd(
+            CM_HIT,
+            game_svr::feature::make_long(10, 10),
+            0,
+            "atk",
+            901,
+            &online,
+            &mut world,
+            &mut displays,
+            &mut sessions,
+            &gates,
+        );
+        let (mut frames, mut ack) = (Vec::new(), None);
+        while let Ok(m) = rx0.try_recv() {
+            match m {
+                SimToGate::SendFrame { socket, body } => {
+                    assert_eq!(socket, 902, "动作帧只给观察者");
+                    frames.push(body);
+                }
+                SimToGate::SendRaw { socket, payload } => {
+                    assert_eq!(socket, 901, "+GD 只给发起者自己");
+                    ack = Some(payload);
+                }
+                other => panic!("意外 sim→gate 命令：{other:?}"),
+            }
+        }
+        assert_eq!(frames.len(), 1, "CM_HIT ⇒ 只一帧 SM_HIT（无尾）");
+        assert_eq!(
+            &frames[0][..12],
+            &smframe::command_header(attacker, SM_HIT, 10, 10, 0)
+        );
+        assert_eq!(frames[0].len(), 12, "SM_HIT 无尾");
+        assert!(ack.expect("+GD").starts_with(b"+GD/"));
+        assert_eq!(
+            sessions["atk"].recovery.per_health,
+            per_before.wrapping_sub(2),
+            "成功支 PerHealth -= 2（oracle 无符号回绕）"
+        );
+        let rec = world.tick();
+        assert!(
+            rec.attacks
+                .iter()
+                .any(|(a, t, _)| *a == attacker && *t == monster),
+            "攻击必须落到正上方怪：{rec:?}"
+        );
+        assert!(
+            world.entities.get(monster).unwrap().hp < 200,
+            "命中应扣血（DC=100 vs AC=0）"
+        );
+
+        // ③ CM_HEAVYHIT ⇒ 观察者收 SM_HEAVYHIT(15)。
+        handle_hit_cmd(
+            CM_HEAVYHIT,
+            game_svr::feature::make_long(10, 10),
+            0,
+            "atk",
+            901,
+            &online,
+            &mut world,
+            &mut displays,
+            &mut sessions,
+            &gates,
+        );
+        let mut heavy = None;
+        while let Ok(m) = rx0.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = m {
+                heavy = Some(body);
+            }
+        }
+        let heavy = heavy.expect("CM_HEAVYHIT ⇒ 观察者收帧");
+        assert_eq!(
+            u16::from_le_bytes([heavy[4], heavy[5]]),
+            SM_HEAVYHIT,
+            "CM_HEAVYHIT ⇒ `GetHitMode(1)` = RM_HEAVYHIT ⇒ SM_HEAVYHIT"
+        );
+
+        // ④ Death 守卫 ⇒ 不发帧/不回 ack。
+        world.entities.get_mut(attacker).unwrap().death = true;
+        handle_hit_cmd(
+            CM_HIT,
+            game_svr::feature::make_long(10, 10),
+            0,
+            "atk",
+            901,
+            &online,
+            &mut world,
+            &mut displays,
+            &mut sessions,
+            &gates,
+        );
+        assert!(rx0.try_recv().is_err(), "Death ⇒ 不得发帧/回 ack");
+    }
+
+    /// **第一片（战斗下行）**：手造一个 tick 记录 ⇒ `drain_combat_downlink` 给受击玩家自己发
+    /// `SM_STRUCK`（头 `HP/MaxHP/伤害` + 16B `MessageBodyWL` 尾）、给同屏（含死者自己）发
+    /// `SM_NOWDEATH`（头 `X/Y/Dir` + 8B `CharDesc` 尾），并把世界实体 HP 同步回会话 `WAbil.HP`。
+    ///
+    /// 红检：① 把 `smframe::sm_struck` 的头 `hp`/`max_hp` 互换 ⇒ 头断言必红；
+    /// ② 把死亡广播改成 `broadcast_ref_msg`（排除自己）⇒ 死者自己收不到 `SM_NOWDEATH` 必红。
+    #[test]
+    fn combat_downlink_sends_struck_and_nowdeath() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(64, 64);
+        let victim = {
+            let mut e = mir2_world::Entity::new(0, "victim".to_string(), 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        let attacker = {
+            let mut e = mir2_world::Entity::new(0, "atk".to_string(), 11, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        world.tick();
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            victim,
+            downlink::ActorDisplay::new(4, 0, 111, 0, 0, 255, b"victim".to_vec()),
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "uv".into(),
+                chr_name: "victim".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: victim,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("victim".into(), test_session_ground(victim));
+
+        let rec = mir2_world::TickRecord {
+            attacks: vec![(
+                attacker,
+                victim,
+                mir2_world::AttackOutcome {
+                    power: 10,
+                    hit: true,
+                    damage: 7,
+                    killed: true,
+                    target_hp_after: 0,
+                },
+            )],
+            deaths: vec![(victim, 0, 0, None, 0)],
+            ..Default::default()
+        };
+        drain_combat_downlink(&rec, &world, &displays, &online, &mut sessions, &gates);
+        let mut bodies = Vec::new();
+        while let Ok(m) = rx0.try_recv() {
+            if let SimToGate::SendFrame { socket, body } = m {
+                assert_eq!(socket, 901);
+                bodies.push(body);
+            }
+        }
+        assert_eq!(bodies.len(), 2, "先受击后死亡两帧");
+        let struck = &bodies[0];
+        assert_eq!(
+            u16::from_le_bytes([struck[4], struck[5]]),
+            mir2_protocol::messages::SM_STRUCK,
+            "第一帧 = SM_STRUCK"
+        );
+        let cm = CommandMessage::from_bytes(struck).expect("12B");
+        assert_eq!(
+            (cm.recog, cm.param, cm.tag, cm.series),
+            (victim, 0, 100, 7),
+            "SM_STRUCK 头 = (受击者, HP, MaxHP, 伤害)"
+        );
+        assert_eq!(
+            sessions["victim"].state.wabil.hp, 0,
+            "受击后世界 HP 同步回会话 WAbil"
+        );
+        let death = &bodies[1];
+        assert_eq!(
+            u16::from_le_bytes([death[4], death[5]]),
+            mir2_protocol::messages::SM_NOWDEATH,
+            "第二帧 = SM_NOWDEATH（nParam3==1）"
+        );
+        let cm = CommandMessage::from_bytes(death).expect("12B");
+        assert_eq!((cm.recog, cm.param, cm.tag, cm.series), (victim, 10, 10, 4));
+        assert_eq!(
+            &death[12..],
+            &mir2_protocol::edcode::encode(&downlink::char_desc(111, 0)),
+            "死亡尾 = Encode(8B CharDesc)"
         );
     }
 }
