@@ -1,0 +1,3 @@
+SEED: 将向 game-svr 注入 MIR2_RNG_SEED=42
+STATE_LOG: 未指定服务端逐击状态 dump（不注入，与改动前行为一致）
+RED: MIR2_RNG_LOG/-RngLog 的父目录不存在: E:\no-such-dir-xyz-rng —— 拒绝在非法 rng 流水路径下起栈（fail-closed）

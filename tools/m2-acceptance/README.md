@@ -146,6 +146,42 @@ powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/check_state_log_plu
 
 ---
 
+### 0b.3 `-RngLog` · Rust 半的 `MIR2_RNG_LOG` 逐次 rng 流水管线（两侧 site/order 账本 diff 的 Rust 半）
+
+RNG 消费者账本（`mir2-rs/tests/parity/m3/attack_rng_ledger.py` / `rng_ledger_diff.py`）要 C# 与 Rust 两侧的
+同名逐次 rng 流水：C# 半由 rng-hook（`mir2-rs/tests/parity/m3/rng-hook/StartupHook.cs`）读 `MIR2_RNG_LOG`
+落 `rng-stream.tsv`（`seq · kind · max/arg · result · site`，头两行 `INJECT_OK <seed>` + `SEED_PROBE`）；
+Rust 半由 `crates/shared/src/rng_trace.rs` 的 `TRACE_ENV` = `MIR2_RNG_LOG`，经 `RandomNumber::with_seed` →
+`enable_from_env()` 开流水（旁路仪器，不改值序列）。起栈时用 `-RngLog <path>`（或先在 shell 里
+`$env:MIR2_RNG_LOG=<path>`）把该变量**注入 game-svr 子进程环境**，脚本会打一行
+`RUST_RNG_LOG_INJECTED=<path>`：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 `
+  -RustBinDir E:\tmp\openmir2-m2svr-target\debug -Seed 42 -RngLog E:\tmp\m2-acceptance\stack\rng-stream.tsv
+# 启动日志出现：RNG_LOG: 将向 game-svr 注入 MIR2_RNG_LOG=… … RUST_RNG_LOG_INJECTED=…
+# 该路径出现：1<TAB>INJECT_OK<TAB>42<TAB>0 / SEED_PROBE …  然后逐次 seq kind arg result site
+```
+
+- **不传路径 ⇒ 不注入、不打该行、不建文件**（与改动前逐字节一致）。
+- **路径父目录不存在 ⇒ fail-closed**：打印 `RED: MIR2_RNG_LOG/-RngLog 的父目录不存在: …` 并 **exit 1**。
+- **交叉 fail-closed**：`rng_trace::enable_from_env` 在 `MIR2_RNG_SEED` 缺失时**关闭流水**（只打 stderr）
+  ⇒ 已给 `-RngLog` 但无 `-Seed` 时脚本**拒绝起栈**（`RED: … 无 MIR2_RNG_SEED/-Seed …`，exit 1），
+  不静默起一个永远不落 rng-stream 的栈（这正是本管线要消灭的“静默空转”）。
+- 管线实现（`Resolve-Mir2RngLog` / `Get-RngLogInjectedLine` / `Start-SeededProcess -RngLog`）在
+  `tools/m2-acceptance/rust_seed_plumb.ps1`，与判据脚本**共用同一份**（与 `-Seed`/`-StateLog` 同文件、互不干扰）。
+- 判红/判绿（不起栈、不占真端口；③ 用真 game-svr + 空闲端口临时 conf）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/check_rng_log_plumb.ps1 `
+  -GameSvrExe E:\tmp\openmir2-m2svr-target\debug\game-svr.exe
+# 15/15 ⇒ RNG_LOG_PLUMB GREEN (rc=0)；删掉 rust_seed_plumb.ps1 的注入行 ⇒ ②a/③a/③b/⑥b 必红 (rc=1)
+```
+
+证据：`tools/m2-acceptance/evidence/m2svr-rust-rng-log-plumb-20261013/`（卡 `openmir2-m2-rust-rng-log-plumb`）。
+
+---
+
 ## 1. ① 端口所有权实拍 —— `check_ports.ps1`
 
 ```powershell
