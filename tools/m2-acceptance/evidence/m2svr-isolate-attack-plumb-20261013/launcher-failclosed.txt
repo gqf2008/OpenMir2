@@ -1,0 +1,3 @@
+SEED: 未指定种子（不注入，与改动前行为一致）
+STATE_LOG: 未指定服务端逐击状态 dump（不注入，与改动前行为一致）
+RED: 已给 -IsolateAttack/MIR2_RNG_ISOLATE_ATTACK 但无 MIR2_RNG_SEED/-Seed —— attack_isolation_seed_from_env 开而无种子会 panic（exit 1，拒绝带 panic 起栈）

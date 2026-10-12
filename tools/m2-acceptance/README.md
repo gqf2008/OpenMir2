@@ -144,6 +144,36 @@ powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/check_state_log_plu
 **接线余量（属夹具写集）**：`run_attack_pair.ps1 -Side rust` 读 Rust 侧 dump 并调同一 gate（`run_attack_pair.ps1:1164`
 的 NOTE 尚未去掉，归 m3bag 夹具）。本管线只保证 "Rust 栈起得来 dump"。
 
+### 0b.3 `-IsolateAttack` · Rust 半的 `MIR2_RNG_ISOLATE_ATTACK` 攻击路径专用种子流（M3②③ 活栈隔离口径）
+
+owner 2026-10-12 21:15 §6.0-3 签字的「活栈隔离口径」要求两侧把**攻击路径取数**接到各自一条专用种子流
+（`attack_seed = MIR2_RNG_SEED + 0x9E37`）：C# 半由 `start-csharp-hook.ps1 -IsolateAttack` 写
+`MIR2_RNG_ISOLATE_ATTACK=1`；Rust 半由 `crates/shared/src/rng.rs::attack_isolation_seed_from_env` 读同一变量、
+`crates/world` 在 `World::with_maps` 构造时分流（`world.rs:161-166`）。起栈时用 `-IsolateAttack`（或先在 shell 里
+`$env:MIR2_RNG_ISOLATE_ATTACK=1`）把该变量**注入 game-svr 子进程环境**，脚本打一行
+`RUST_ISOLATE_ATTACK_INJECTED=1`：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 `
+  -RustBinDir E:\tmp\openmir2-m2svr-target\debug -Seed 42 -IsolateAttack
+# 启动日志出现：ISOLATE_ATTACK: 将向 game-svr 注入 MIR2_RNG_ISOLATE_ATTACK=1 … RUST_ISOLATE_ATTACK_INJECTED=1
+```
+
+- **不传开关 ⇒ 不注入、不打该行**（与改动前逐字节一致）。
+- **取值认不出 ⇒ fail-closed**（`Resolve-Mir2IsolateAttack` 抛错、`start_rust_stack` exit 1），不静默当开/当关。
+- **交叉 fail-closed**：开了隔离但**无 `MIR2_RNG_SEED`** ⇒ 拒绝起栈（`attack_isolation_seed_from_env`
+  开而无种子会 **panic**）⇒ 打印 `RED: … 无 MIR2_RNG_SEED/-Seed …` 并 exit 1，**不起任何进程**。
+- 判红/判绿（不起栈、不占真端口）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/check_isolate_plumb.ps1 `
+  -GameSvrExe E:\tmp\openmir2-m2svr-target\debug\game-svr.exe
+# 17/17 ⇒ ISOLATE_PLUMB GREEN (rc=0)；删注入行 / 非法值静默当关 / 删交叉守卫 / 注入值改 0 ⇒ 必红 (rc=1)
+```
+
+证据：`tools/m2-acceptance/evidence/m2svr-isolate-attack-plumb-20261013/`（卡 `openmir2-m2-rust-isolate-attack-plumb`）。
+与 C# 半对称：Rust 只需 `MIR2_RNG_ISOLATE_ATTACK`（`MIR2_RNG_ISOLATE_SITES` 只有 C# 影子 hook 用）。
+
 ---
 
 ## 1. ① 端口所有权实拍 —— `check_ports.ps1`

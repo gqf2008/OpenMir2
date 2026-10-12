@@ -1,0 +1,37 @@
+ISOLATE_PLUMB 判据：game-svr=E:\Users\gxh\Documents\GitHub\OpenMir2\mir2-rs\target\debug\game-svr.exe  evidence=E:\tmp\m2-acceptance\isolate-plumb-red
+  [OK  ] ①a 未设/空串 ⇒ Present=$false
+        Present=False
+  [OK  ] ①b 显式 -IsolateAttack ⇒ Present=$true
+        Present=True
+  [OK  ] ①c 环境值 YES ⇒ 开
+        Present=True
+  [OK  ] ①d 环境值 off ⇒ 关
+        Present=False
+  [OK  ] ①e 非法值 ⇒ 抛错 fail-closed
+        既不静默当开也不静默当关（同 Rust attack_isolation_seed_from_env 的 panic 口径）
+  [OK  ] ②a 开隔离 ⇒ 子进程环境 MIR2_RNG_ISOLATE_ATTACK=1
+        cmd 读出=[1]
+  [OK  ] ②b 起完还原 ⇒ 调用方 $env:MIR2_RNG_ISOLATE_ATTACK 未被设置
+        has_env=False
+  [OK  ] ②c 关/未给 ⇒ 子进程读到未定义（不注入）
+        cmd 读出=[[%MIR2_RNG_ISOLATE_ATTACK%]]
+  [OK  ] ③a 传种子+隔离 ⇒ 真 game-svr 流水含 ISOLATE_ATTACK 40545
+        file=E:\tmp\m2-acceptance\isolate-plumb-red\work\gs-isolate\rng-stream.tsv
+  [OK  ] ③b 流水同时含 INJECT_OK 42 + SEED_PROBE（同一种子自证，未被隔离路径吞掉）
+        inject_ok=True probe=True
+  [OK  ] ④a 不开隔离 ⇒ 真 game-svr 正常启动 + 流水仍落（只有种子）
+        started=True trace=True
+  [OK  ] ④b 不开隔离 ⇒ 流水不含 ISOLATE_ATTACK 行（零行为差）
+        has_iso_line=False
+  [OK  ] ⑤a 开 ⇒ 行 = RUST_ISOLATE_ATTACK_INJECTED=1
+        line=[RUST_ISOLATE_ATTACK_INJECTED=1]
+  [OK  ] ⑤b 关/未给 ⇒ 行 = $null（不打）
+        line=[]
+  [OK  ] ⑥a start_rust_stack.ps1 点源管线并把 -IsolateAttack $isolateInfo 传给 game-svr
+        结构检查（端到端见证据目录的实栈 run）
+  [OK  ] ⑥b 管线文件含 $env:MIR2_RNG_ISOLATE_ATTACK 注入行
+        删掉该行 ⇒ ②a/③a 必红
+  [FAIL] ⑥c 交叉守卫真值表（开+有种子/开+无种子/未开）+ start_rust_stack 调用本例
+        tt=True called=False；attack_isolation_seed_from_env 开而无种子会 panic ⇒ 开而无关必拦
+SUMMARY total=17 ok=16 fail=1
+ISOLATE_PLUMB FAIL
