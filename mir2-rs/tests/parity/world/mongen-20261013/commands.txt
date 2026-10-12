@@ -5,7 +5,7 @@
 CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test -p mir2-world --offline --lib mongen
 
 # 独立 Python 复刻交叉核对（脚本在本目录，输出见 03-crosscheck-output.json）
-cd tests/parity/world/mongen-20261013 && python -I 02-crosscheck-python-mongen-rng.py
+cd tests/parity/world/mongen-20261013 && python -I 02-crosscheck-python-mongen-rng.py.txt
 
 # --- 四门禁 ---
 CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo fmt --all -- --check

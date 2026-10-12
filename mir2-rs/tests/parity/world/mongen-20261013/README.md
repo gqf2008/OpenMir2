@@ -51,12 +51,16 @@ interleaving 逐调用相同。第 ① 片的解析本身不抽数。
   `GetMonstersZenTime`（含 30min 阈值与 d10 夹 6）、`gen_mod_count`、regen 门/`ActiveCount`/`VentureServer`、
   集中支与普通支位置窗口、`race<=0` 不抽、普通支 `null ⇒ false`、ZenLimit 超时（两支）、轮询与 `StartTick`、
   复活条件与 ghost 过期。
-- **独立 Python 复刻交叉验证**（`02-crosscheck-python-mongen-rng.py` → `03-crosscheck-output.json`）：
+- **独立 Python 复刻交叉验证**（`02-crosscheck-python-mongen-rng.py.txt` → `03-crosscheck-output.json`）：
   用 `DotNetRandom`（与 .NET 实机对拍过的复刻）独立重放两支位置序列，Rust 侧断言逐项相等：
   - `initialize_monster` seed=42/limit=2 ⇒ 抽数序列 `[1,0,0,1,0]`；
   - 普通支 seed=42/range=2/(166,266)/count=4 ⇒ 位置 `[(167,264),(164,265),(164,267),(166,265)]`，
     且尾部下一次 `Random(1000000) = 517451`（同时钉住 create 回调的 interleaving）；
   - 集中支 seed=42/range=3/count=3/MissionGenRate=100 ⇒ `[(163,256),(163,256),(158,263)]`。
+
+> 脚本以 `.py.txt` 入库：`mir2-rs/.gitattributes` 只声明了 `*.txt/*.json/*.md` 为 LF（`*.py` 尚未声明），
+> 用具名 `.txt` 尾巴可保证 `core.autocrlf=true` 的**干净检出**也保持 LF（否则 eolcheck 会因 `.py` 落 CRLF 判红）。
+> 运行：`python -I 02-crosscheck-python-mongen-rng.py.txt`。
 
 ## 4. 改坏必红（4 条，原始件 + 还原核对）
 
