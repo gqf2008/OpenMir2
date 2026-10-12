@@ -148,6 +148,16 @@ impl DisplayTable {
     }
 }
 
+/// `CharDesc`（8B，`PlayObject.Message.cs` 的 `turnmessage`/`walkmessage`）：
+/// `Feature(i32 LE) + Status(i32 LE)`。
+#[must_use]
+pub fn char_desc(feature: i32, status: i32) -> [u8; 8] {
+    let mut d = [0u8; 8];
+    d[0..4].copy_from_slice(&feature.to_le_bytes());
+    d[4..8].copy_from_slice(&status.to_le_bytes());
+    d
+}
+
 /// `RM_TURN` 支产出的**一组两帧**：`SM_TURN` + 紧随的 `SM_FEATURECHANGED`
 /// （`PlayObject.Message.cs:1552-1560`）。
 ///
@@ -158,16 +168,37 @@ impl DisplayTable {
 /// - `SM_FEATURECHANGED` = `(Recog=target, Param=LoWord(feature), Tag=HiWord(feature), Series=feature_ex)`。
 #[must_use]
 pub fn turn_pair(target: i32, x: u16, y: u16, d: &ActorDisplay) -> Vec<Vec<u8>> {
-    let mut char_desc = [0u8; 8];
-    char_desc[0..4].copy_from_slice(&d.feature.to_le_bytes());
-    char_desc[4..8].copy_from_slice(&d.status.to_le_bytes());
+    let desc = char_desc(d.feature, d.status);
     let mut msg = d.show_name.clone();
     msg.push(b'/');
     msg.extend_from_slice(d.name_color.to_string().as_bytes());
     vec![
-        smframe::sm_turn(target, x, y, d.dir, d.light, &char_desc, &msg),
+        smframe::sm_turn(target, x, y, d.dir, d.light, &desc, &msg),
         smframe::sm_featurechanged(target, d.feature, d.feature_ex),
     ]
+}
+
+/// `RM_WALK`/`RM_RUN`/`RM_HORSERUN` 支产出的**单帧**（`PlayObject.Message.cs:1403-1432`）。
+///
+/// 收件人口径与 `turn_pair` 同：oracle 三个 `case` 都带 `if (processMsg.ActorId != ActorId)`
+/// ⇒ **只发给附近观察者，移动者自己不入帧**（自己那条连接靠 `+GD` ack）。
+/// `ident` 非 `SM_WALK`/`SM_RUN`/`SM_HORSERUN` 时返回 `None`（不猜）。
+#[must_use]
+pub fn move_frame(ident: u16, target: i32, x: u16, y: u16, d: &ActorDisplay) -> Option<Vec<u8>> {
+    match ident {
+        mir2_protocol::messages::SM_WALK
+        | mir2_protocol::messages::SM_RUN
+        | mir2_protocol::messages::SM_HORSERUN => Some(smframe::sm_move(
+            ident,
+            target,
+            x,
+            y,
+            d.dir,
+            d.light,
+            &char_desc(d.feature, d.status),
+        )),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -276,6 +307,39 @@ mod tests {
             feat_wire,
             "SM_FEATURECHANGED 必须逐字节等于金标准 ident=41 那条"
         );
+    }
+
+    /// **`openmir2-m3-move-wiring` ③（SM_WALK 的逐字节判据）**：`move_frame` 必须重建 M0 金标准里
+    /// 的 `SM_WALK`(ident 11) —— 输入全部从该帧真字节回读：`x`/`y` 取头 `Param`/`Tag`，
+    /// `Dir`/`Light` 取 `Series` 两个字节，`Feature`/`Status` 取尾 `Encode(8B CharDesc)` 解码。
+    ///
+    /// 红检：把 `sm_move` 的尾从 `Encode(char_desc)` 改成原样拼接（或把 `Series` 改成 `MakeWord(Light,
+    /// Dir)`）⇒ 本用例必红。
+    #[test]
+    fn move_frame_rebuilds_golden_sm_walk() {
+        let (ident, recog, x, y, series, wire) = golden_line("\"ident\":11,");
+        assert_eq!(ident, mir2_protocol::messages::SM_WALK);
+        let (_head, tail) = split_wire(&wire);
+        let desc = mir2_protocol::edcode::decode(&tail);
+        assert_eq!(desc.len(), 8, "SM_WALK 尾必须是 Encode(8B CharDesc)");
+        let d = ActorDisplay {
+            dir: u8::try_from(series & 0xFF).unwrap(),
+            light: u8::try_from(series >> 8).unwrap(),
+            feature: i32::from_le_bytes(desc[0..4].try_into().unwrap()),
+            feature_ex: 0,
+            status: i32::from_le_bytes(desc[4..8].try_into().unwrap()),
+            name_color: 255,
+            show_name: Vec::new(),
+        };
+        let built = move_frame(mir2_protocol::messages::SM_WALK, recog, x, y, &d)
+            .expect("SM_WALK 必须有编码器");
+        assert_eq!(
+            smframe::client_frame(&built),
+            wire,
+            "SM_WALK 必须逐字节等于金标准 ident=11 那条"
+        );
+        // 不猜：非移动 ident 返回 None。
+        assert!(move_frame(mir2_protocol::messages::SM_TURN, recog, x, y, &d).is_none());
     }
 
     /// `GetMyLight` 的三条分支（`PlayObject.cs:5404-5430`）：等级 ≥50 记 1；
