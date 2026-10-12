@@ -9,7 +9,7 @@ export CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-amw-target
 # ── 四门禁 ────────────────────────────────────────────────────────────────
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --offline -- -D warnings
-cargo test --workspace --offline          # 75 suites / 615 passed / 0 failed / 16 ignored
+cargo test --workspace --offline          # 76 suites / 624 passed / 0 failed / 16 ignored
 cargo run -p msgcodegen --offline -- --check   # 604
 
 # ── game-svr 3 连跑（隔离 target，重复可得同一结论） ────────────────────────

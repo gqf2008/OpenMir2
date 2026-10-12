@@ -10,8 +10,8 @@
      `Dir = GetNextDirection(...)`，而 oracle 的 `switch` 有 8 个独立 `case` 不执行该句 ⇒ 按
      **case 集合**门住（只有非这 8 个魔号才改展示方向）+ 单测/进程级用例/红检。
 - 工作树：`E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr`（分支 `worktree-m2-gamesvr-host`）
-- base：`refs/heads/master` = **`bbf63fb0`**（`9753c4d0` + `bbf63fb0` 均已 merge 进本分支，merge 提交
-  `e9ce5e89` / `14f7c46b`；被审 head 见卡上 patch/status）
+- base：`refs/heads/master` = **`ee4de412`**（`9753c4d0` / `bbf63fb0` / `863038ed` / `ee4de412` 均已 merge 进本分支，
+  最后一个 merge 提交 = 本片 head `74f4ce3e`；被审 head 见卡上 patch/status）
 - 身份：`openmir2-worker-11`。**不 merge、不自签 review。**
 
 ## 0. 与同卡其它片的关系
@@ -54,13 +54,14 @@
 | --- | --- | --- |
 | `cargo fmt --all -- --check` | rc=0 | `gates-fmt.txt` |
 | `cargo clippy --workspace --all-targets -- -D warnings` | rc=0 | `gates-clippy.txt` |
-| `cargo test --workspace` | **75 suites / 615 passed / 0 failed / 16 ignored**（rc=0） | `gates-test-workspace.txt` |
+| `cargo test --workspace` | **76 suites / 624 passed / 0 failed / 16 ignored**（rc=0） | `gates-test-workspace.txt` |
 | `cargo run -p msgcodegen -- --check` | rc=0，604 条 | `gates-msgcodegen.txt` |
 | `cargo test -p game-svr` ×3 | 各 **230 passed**（rc=0，可重复） | `gamesvr-3run-1..3.txt` |
 
 > 计数：本片 +1 单测（`magicwire::tests::default_dir_only_for_non_explicit_case_magics`）⇒
-> `-p game-svr` 由上一片 base 的 229 变为 230；`--workspace` 由 `74/609/0/16`（第一片 base）经
-> master `9753c4d0`（m3cs 第八片 +1 suite/+5 passed）与本片 +1 变为 `75/615/0/16`。
+> `-p game-svr` 由 base 的 229 变为 230。`--workspace` 口径沿 master 推进：`74/609/0/16`（第一片 base）
+> → `75/615/0/16`（+m3cs 第八片 `9753c4d0` +本片 +1）→ **`76/624/0/16`**（+m3cs 第九片 `ee4de412`）。
+> 本片自己的新增只有那 1 条单测；其余增量均为已合入 master 的其它片。
 
 ## 3. 牙齿（改坏 ⇒ 必红；原始输出见 `red-*.txt`，改后均 `cp` 还原、`git status` 干净）
 
