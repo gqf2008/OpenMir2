@@ -1,0 +1,129 @@
+# M3⑥ 任务判据夹具可复用性调查（run_pair.ps1 两相 pin + scoped_diff 能否复用）
+# 仓库基线: origin/master @ 1b576172
+
+=== [1] run_pair.ps1 固定起点/两相 pin 入口（参数面）===
+param(
+  [ValidateSet('csharp', 'rust')][string]$Side = 'csharp',
+  [int]$Bots = 5,
+  [string]$Prefix = '',
+  [string]$Address = '127.0.0.1',
+  [int]$Port = 7000,
+  [int]$TimeoutSec = 600,
+  [switch]$SkipBots,
+  [switch]$KeepSnapshots,
+  [switch]$ProvisionSql,
+  [switch]$FixedNewChr,            # M3 固定建角场景（卡 openmir2-m3-botsrv-fixed-newchr）
+  [int]$NewChrJob = 0,             # 仅 -FixedNewChr 时生效
+  [int]$NewChrHair = 2,            # 仅 -FixedNewChr 时生效（2 = 原 Random(1) 恒走的发型）
+  [int]$NewChrSex = 0,             # 仅 -FixedNewChr 时生效
+  [switch]$BagEquipSequence,       # M3 T-14 夹具：BotSrv 进世界后按固定顺序发背包/装备动作（白名单 T-22）
+  [int]$BagEquipStepMs = 1000,     # 仅 -BagEquipSequence 时生效
+  [int]$BagEquipStartDelayMs = 3000, # 仅 -BagEquipSequence 时生效
+  [switch]$AttackSequence,         # M3②③ 夹具：BotSrv 固定攻击序列（白名单 T-22 扩展）
+  [int]$AttackCount = 120,         # 仅 -AttackSequence 时生效：攻击步数
+  [int]$AttackStepMs = 500,        # 仅 -AttackSequence 时生效：每步间隔
+  [int]$AttackStartDelayMs = 3000, # 仅 -AttackSequence 时生效：进世界到第一步的额外等待
+  [switch]$EmitOpsArgs,            # 只打印 run_bots 命令组成（含 -DisableAutoPlay 耦合）后退出；无副作用，供无栈自检
+  [switch]$PinStartPose,           # T-14 固定起点变体（owner 86478c55/d7798370）：预热建角 → SQL pin → BEFORE 快照 → 计分跑（选角；不带 -FixedNewChr/-NewAccount）
+  [string]$PinMapName = '',   # 攻击变体的 pin 地图（R-1 要求整张零刷怪；空 ⇒ -AttackPinPair 取 $script:M3AttackPinMap，否则 '0'）
+  [int]$PinHomeMap = 0,
+  [int]$PinHomeX = 289,
+  [int]$PinHomeY = 618,
+  [int]$PinCX = -1,                # -AttackPinPair 时 <0 ⇒ $script:M3AttackPinCX（0137）；否则 289
+  [int]$PinCY = -1,                # -AttackPinPair 时 <0 ⇒ $script:M3AttackPinCY；否则 618
+  [int]$PinLevel = 1,
+  [int]$PinDir = 0,
+  [int]$PinSettleSeconds = 3,      # 仅 -PinStartPose：每轮 pin 后的 settle 窗口（异步掉线存档落库，见 gate_guards.ps1 ⑥）
+  [int]$PinMaxAttempts = 5,        # 仅 -PinStartPose：settle+hold 最多轮数（仍 hold 不住 ⇒ throw，fail-closed）
+  [switch]$AttackPinPair,          # 攻击变体：两 bot **相邻**固定起点（attacker/victim；配合 -AttackSequence）
+  [int]$AttackPinDir = 2,          # 仅 -AttackPinPair：attacker 朝向（默认 2=RIGHT，victim 在右邻格）
+  [int]$AttackPinDx = 1,           # 仅 -AttackPinPair：victim 相对 attacker 的 X 偏移（默认 +1）
+  [int]$AttackVictimHp = 0,   # 仅 -AttackPinPair：victim（与 attacker）Hp/MaxHP；F-F：0 ⇒ 用 gate_guards 的 oracle 等级派生值（L255/战士=20669）；否则必须与 -AttackVictimLevel 自洽
+  [int]$AttackVictimLevel = 0,   # 仅 -AttackPinPair：victim/attacker 钉的等级（byte 0..255）；0 ⇒ gate_guards 的 $script:M3AttackVictimLevel
+  [switch]$SelfTestRed
+
+=== [2] pin 机制：预热建角 → SQL pin → BEFORE 快照 → 计分跑 ===
+111:  param([switch]$ForPrewarm)  # 固定起点变体的①预热相：强制 -FixedNewChr + -NewAccount
+114:  $newAccount = if ($PinStartPose -and -not $ForPrewarm) { $false } else { $true }
+115:  $fixed = if ($ForPrewarm) { $true } elseif ($PinStartPose) { $false } else { [bool]$FixedNewChr }
+124:  if ($ForPrewarm) {
+139:  if ($BagEquipSequence -and -not $ForPrewarm) {
+146:  if ($AttackSequence -and -not $ForPrewarm) {
+230:    $pre = Get-M3BotOpPlan -ForPrewarm
+339:  $prePlan = Get-M3BotOpPlan -ForPrewarm
+447:python $Dbsnap snap --out $snapBefore | Tee-Object -FilePath (Join-Path $SessionDir 'dbsnap_before.log')
+614:python $Dbsnap snap --out $snapAfter | Tee-Object -FilePath (Join-Path $SessionDir 'dbsnap_after.log')
+631:function Snap-Hashes([string]$Dir) {
+637:$beforeHashes = Snap-Hashes $snapBefore
+638:$afterHashes = Snap-Hashes $snapAfter
+661:  dbsnap_after = $afterHashes
+
+=== [3] scoped_diff.py 作用域表 + canonical 易变列口径 ===
+12:  selftest                                  改坏必红自检
+28:CANON_PLACEHOLDER = "<VOLATILE>"
+31:# 规范化（canonicalize）——M3 正式判据的组成部分（设计文档 §6 / owner 2026-10-11 裁决 A）
+38:# `diff --canonical` 只把**白名单列的列值**替换为占位符，其余列**逐字节比**。
+52:    "mir2_db.characters": [
+61:    "mir2_db.characters_indexes": [
+64:    # ---- 角色族表（PlayerId 外键，行里没有名字 ⇒ 归属判定见 FAMILY_TABLES）----
+66:    "mir2_db.characters_ablity": [
+71:    "mir2_db.characters_item": [
+74:    "mir2_db.characters_bagitem": [
+77:    "mir2_db.characters_storageitem": [
+80:    "mir2_db.characters_bonusability": [
+83:    "mir2_db.characters_status": [
+88:    # 这三张也属 dbsnap `DEFAULT_TABLES`（`tools/dbsnap/dbsnap.py:25-38`）导出的真实快照表。
+90:    "mir2_db.characters_item_attr": [
+95:    "mir2_db.characters_magic": [
+98:    "mir2_db.characters_quest": [
+105:# 归属判定 = `PlayerId ∈ {本次运行建出的 characters.Id}`（由 characters 表的 prefix 匹配先解出）。
+106:FAMILY_TABLES = {
+107:    "mir2_db.characters_ablity": "PlayerId",
+108:    "mir2_db.characters_item": "PlayerId",
+109:    "mir2_db.characters_bagitem": "PlayerId",
+110:    "mir2_db.characters_storageitem": "PlayerId",
+111:    "mir2_db.characters_bonusability": "PLAYERID",
+112:    "mir2_db.characters_status": "PlayerId",
+113:    "mir2_db.characters_item_attr": "PlayerId",
+114:    "mir2_db.characters_magic": "PlayerId",
+115:    "mir2_db.characters_quest": "PLAYERID",
+117:CHARACTER_TABLE = "mir2_db.characters"
+120:VOLATILE_COLUMNS = {
+133:    "mir2_db.characters": {
+146:    "mir2_db.characters_indexes": {
+156:    "mir2_db.characters_ablity": {
+157:        "PlayerId": "FK = characters.Id（自增，每次运行必变）",
+160:    "mir2_db.characters_item": {
+162:        "PlayerId": "FK = characters.Id（自增，每次运行必变）",
+164:    "mir2_db.characters_bagitem": {
+166:        "PlayerId": "FK = characters.Id（自增，每次运行必变）",
+168:    "mir2_db.characters_storageitem": {
+170:        "PlayerId": "FK = characters.Id（自增，每次运行必变）",
+
+=== [4] BotSrv 现有序列（无 NPC 对话/任务动作）===
+src/BotSrv/Player/RobotPlayer.cs:375:        // T-14 步骤参数**在 step=0 一次性快照**（见 SnapshotBagEquipSequence 的说明）：
+src/BotSrv/Player/RobotPlayer.cs:393:        /// <summary>收到本假人 SM_LOGON 后武装固定序列（`MShare.g_boBagEquipSequence` 关闭时是空操作）。
+src/BotSrv/Player/RobotPlayer.cs:396:        private void ArmBagEquipSequence()
+src/BotSrv/Player/RobotPlayer.cs:398:            if (!MShare.g_boBagEquipSequence)
+src/BotSrv/Player/RobotPlayer.cs:421:        private void BagEquipSequenceTick()
+src/BotSrv/Player/RobotPlayer.cs:423:            if (!MShare.g_boBagEquipSequence || _bagSeqStep < 0 || _bagSeqStep > 4)
+src/BotSrv/Player/RobotPlayer.cs:440:                SnapshotBagEquipSequence();
+src/BotSrv/Player/RobotPlayer.cs:471:        private void SnapshotBagEquipSequence()
+src/BotSrv/Player/RobotPlayer.cs:630:        /// <summary>收到本假人 SM_LOGON 后武装固定攻击序列（`MShare.g_boAttackSequence` 关闭或本账号
+src/BotSrv/Player/RobotPlayer.cs:633:        private void ArmAttackSequence()
+src/BotSrv/Player/RobotPlayer.cs:635:            if (!MShare.g_boAttackSequence)
+src/BotSrv/Player/RobotPlayer.cs:653:        private void AttackSequenceTick()
+src/BotSrv/Player/RobotPlayer.cs:655:            if (!MShare.g_boAttackSequence || _attackSeqStep < 0)
+src/BotSrv/Player/RobotPlayer.cs:836:            ArmBagEquipSequence();
+src/BotSrv/Player/RobotPlayer.cs:837:            ArmAttackSequence();
+src/BotSrv/Player/RobotPlayer.cs:866:                BagEquipSequenceTick();
+src/BotSrv/Player/RobotPlayer.cs:867:                AttackSequenceTick();
+src/BotSrv/Player/RobotPlayer.cs:3491:                ClientItem cu = MShare.g_boBagEquipSequence ? ClientItemCodec.Decode(body) : EDCode.DecodeBuffer<ClientItem>(body);
+src/BotSrv/Player/RobotPlayer.cs:3504:                ClientItem cu = MShare.g_boBagEquipSequence ? ClientItemCodec.Decode(body) : EDCode.DecodeBuffer<ClientItem>(body);
+src/BotSrv/Player/RobotPlayer.cs:3543:                ClientItem cu = MShare.g_boBagEquipSequence ? ClientItemCodec.Decode(body) : EDCode.DecodeBuffer<ClientItem>(body);
+--- BotSrv 是否已发 CM_CLICKNPC / CM_MERCHANTDLGSELECT（期望：无）---
+src/BotSrv/Player/RobotPlayer.cs:3048:            CommandMessage msg = Messages.MakeMessage(Messages.CM_MERCHANTDLGSELECT, merchant, 0, 0, 0);
+src/BotSrv/Player/RobotPlayer.cs:3054:            CommandMessage msg = Messages.MakeMessage(Messages.CM_MERCHANTQUERYSELLPRICE, merchant, HUtil32.LoWord(itemindex), HUtil32.HiWord(itemindex), 0);
+src/BotSrv/Player/RobotPlayer.cs:3060:            CommandMessage msg = Messages.MakeMessage(Messages.CM_MERCHANTQUERYREPAIRCOST, merchant, HUtil32.LoWord(itemindex), HUtil32.HiWord(itemindex), 0);
+
+=== [5] Rust 侧脚本派发范围登记（useitem.rs 注释的 T-17）===
