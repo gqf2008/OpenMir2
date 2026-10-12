@@ -1,0 +1,16 @@
+# 本片证据的复现命令（cwd = 仓库根，除非另注）
+
+# 隔离 target；cwd = mir2-rs
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test -p game-svr --lib --offline mongen
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test -p mir2-world --lib --offline
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test --workspace --offline
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo fmt --all -- --check
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo clippy --workspace --all-targets --offline -- -D warnings
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo run -p msgcodegen --offline -- --check
+
+# 边界（base = 交付时 master，见卡上 patch 的 base_full）
+git diff --name-only <base> HEAD -- src sql MirClient      # 必须为空
+
+# 证据 hash（仓库 LF/git-blob 口径 + 目录未列文件牙齿）
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/world/monster-ai-host-20261013
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs

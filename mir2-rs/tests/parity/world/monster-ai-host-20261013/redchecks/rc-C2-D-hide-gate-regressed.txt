@@ -1,0 +1,14 @@
+# 改坏必红 RC-C2-D：SearchTarget 隐藏门退回 FixedHideMode（reviewer-6 Important 回归）
+# 变异点：crates/world/src/monai.rs::search_target
+# 命中用例：mir2-world monai::tests::search_target_hide_gate_reads_hide_mode_not_fixed_hide_mode
+
+$ CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test -p mir2-world --lib --offline search_target_hide_gate
+running 1 test
+test monai::tests::search_target_hide_gate_reads_hide_mode_not_fixed_hide_mode ... FAILED
+thread 'monai::tests::search_target_hide_gate_reads_hide_mode_not_fixed_hide_mode' (31240) panicked at crates\world\src\monai.rs:758:9:
+assertion `left == right` failed: FixedHideMode 不属该门 ⇒ 照选（与 oracle 1:1）
+  left: None
+ right: Some(2)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 49 filtered out; finished in 0.00s
+error: test failed, to rerun pass `-p mir2-world --lib`
