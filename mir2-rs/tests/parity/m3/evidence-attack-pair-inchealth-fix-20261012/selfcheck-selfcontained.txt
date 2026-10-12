@@ -1,0 +1,32 @@
+# 证据包自包含性自检（照 F-1 / 8abd8a0d 口径；卡 openmir2-m3-attack-pair-fixture，本片清 F-A/F-B/F-C）
+# 目标：证据目录里每一个被声明的文件都必须入库、不被 .gitignore 吞，且干净检出可复现。
+# 生成阶段：内容件（01-09 + README，10 件）提交后、meta 件（selfcheck + SHA256SUMS）提交前。
+
+# 命令 1：对每个 tracked 内容件跑 git check-ignore -v（期望：无输出 / rc=1 = 无一被忽略）
+$ git check-ignore -v mir2-rs/tests/parity/m3/evidence-attack-pair-inchealth-fix-20261012/01-selfcheck-nostack-green.txt mir2-rs/tests/parity/m3/evidence-attack-pair-inchealth-fix-20261012/02-mutation-red.txt mir2-rs/tests/parity/m3/evidence-attack-pair-inchealth-fix-20261012/03-repro-sql.txt mir2-rs/tests/parity/m3/evidence-attack-pair-inchealth-fix-20261012/04-selftest-gate-47of47.txt mir2-rs/tests/parity/m3/evidence-attack-pair-inchealth-fix-20261012/05-bagequip-selfcheck-green.txt mir2-rs/tests/parity/m3/evidence-attack-pair-inchealth-fix-20261012/06-gates-fmt.txt mir2-rs/tests/parity/m3/evidence-attack-pair-inchealth-fix-20261012/07-gates-clippy.txt mir2-rs/tests/parity/m3/evidence-attack-pair-inchealth-fix-20261012/08-gates-test.txt mir2-rs/tests/parity/m3/evidence-attack-pair-inchealth-fix-20261012/09-gates-msgcodegen.txt mir2-rs/tests/parity/m3/evidence-attack-pair-inchealth-fix-20261012/README.md 
+  mir2-rs/tests/parity/m3/evidence-attack-pair-inchealth-fix-20261012/01-selfcheck-nostack-green.txt -> rc=1 output=[]
+  mir2-rs/tests/parity/m3/evidence-attack-pair-inchealth-fix-20261012/02-mutation-red.txt -> rc=1 output=[]
+  mir2-rs/tests/parity/m3/evidence-attack-pair-inchealth-fix-20261012/03-repro-sql.txt -> rc=1 output=[]
+  mir2-rs/tests/parity/m3/evidence-attack-pair-inchealth-fix-20261012/04-selftest-gate-47of47.txt -> rc=1 output=[]
+  mir2-rs/tests/parity/m3/evidence-attack-pair-inchealth-fix-20261012/05-bagequip-selfcheck-green.txt -> rc=1 output=[]
+  mir2-rs/tests/parity/m3/evidence-attack-pair-inchealth-fix-20261012/06-gates-fmt.txt -> rc=1 output=[]
+  mir2-rs/tests/parity/m3/evidence-attack-pair-inchealth-fix-20261012/07-gates-clippy.txt -> rc=1 output=[]
+  mir2-rs/tests/parity/m3/evidence-attack-pair-inchealth-fix-20261012/08-gates-test.txt -> rc=1 output=[]
+  mir2-rs/tests/parity/m3/evidence-attack-pair-inchealth-fix-20261012/09-gates-msgcodegen.txt -> rc=1 output=[]
+  mir2-rs/tests/parity/m3/evidence-attack-pair-inchealth-fix-20261012/README.md -> rc=1 output=[]
+check-ignore 命中总数 = 0 字节（0 = 无一被忽略）
+
+# 命令 2：tracked 内容件数 == 盘上内容件数（不含尚未提交的 selfcheck/SHA256SUMS 两个 meta 件）
+$ git ls-tree -r --name-only HEAD mir2-rs/tests/parity/m3/evidence-attack-pair-inchealth-fix-20261012/ | wc -l
+tracked_count = 10
+$ find mir2-rs/tests/parity/m3/evidence-attack-pair-inchealth-fix-20261012 -type f ! -name 'selfcheck-selfcontained.txt' ! -name 'SHA256SUMS.txt' | wc -l
+disk_count    = 10
+
+# 命令 3：目录内不得有 .gitignore 会吞的 *.log（本片一律用 .txt）
+log_count     = 0
+
+VERDICT: PASS（tracked == disk；无被忽略文件；无 .log）
+
+# 最终目录 = 上述 10 个内容件 + selfcheck-selfcontained.txt + SHA256SUMS.txt = 12 件；
+# SHA256SUMS.txt 按仓库字节口径（verify_sha256sums.py）覆盖 11 件（12 - 清单自身）。
+# 干净检出复核结论见 patch body / last-m3bag.md。
