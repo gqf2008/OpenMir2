@@ -1,0 +1,37 @@
+# ①②③ 的读数（两侧活栈账本，来自 evidence-rng-ledger-diff-20261012，本片未重跑窗口）
+
+两侧 canonical（同一套 rng_ledger_diff.py::CANON_RULES）：
+  C# (E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv, 479,028 抽, 窗口=120 击)：
+    atk_power_a=120 atk_power_b=120 hit_gate=9 hit_struck_damage=7
+    atk_power_base=5 attack_success=4 struck_durability=2（其余 70 个非攻击站点占 99.94%）
+  Rust (E:/tmp/m3cs-r2/rust-rng-stream-r1.tsv, 160 抽, 本片 base 之前)：
+    atk_power_a=36 atk_power_b=36 hit_gate=36 hit_struck_damage=19
+    struck_durability=19；**没有** attack_success、**没有** atk_power_base
+
+分段（每击按 atk_power_a 切；rng_ledger_diff.py segments）：
+  C# 120 段：
+    x115  [atk_power_a, atk_power_b]                                  # 有攻击命令、前方格无目标
+    x2    [atk_power_a, atk_power_b, hit_gate, attack_success]        # 有目标、闪避
+    x2    [.., hit_gate, hit_struck_damage, struck_durability, attack_success]  # 有目标、命中
+    x1    [.., atk_power_base, hit_gate, hit_struck_damage]           # 段内混入非玩家消费者（噪声）
+  Rust 36 段：
+    x19   [atk_power_a, atk_power_b, hit_gate, hit_struck_damage, struck_durability]
+    x17   [atk_power_a, atk_power_b, hit_gate]
+
+## 归因
+① hit_gate 9 vs 36：**不是**「一次攻击抽几次」的结构差。
+   - oracle（attack-dir-probe 真身）：有目标且 target.HitPoint>0 ⇒ 每次攻击**恰**抽 1 次
+     `RandomByte(target.SpeedPoint)`（BaseObject.Attack.cs:41）；无目标 ⇒ 0 次。
+   - C# 窗口内只有 5 击带目标（+4 次段外预热），Rust 36 击带目标 ⇒ 计数差 = **带目标的攻击数**不同。
+   - 该「带目标攻击数」面归接线（bins/game-svr 取目标/AOI），本片只给 .rs 侧归因。
+② attack_success（C# 4，Rust 0）：**真缺** —— Rust 攻击路径此前完全没建 `PlayObject.AttackSuccess`
+   的 `Random(5)`（PlayObject.Attack.cs:225）。本片已在 `crates/world` 建模（见报告 §3）。
+   atk_power_base（C# 5，Rust 0）：**不是**玩家攻击路径的站点。它是 `BaseObject.GetAttackPower`
+   基版（BaseObject.Base.cs:892），只被**非玩家**攻方（怪物等，虚调用无 override）走到；
+   C# 窗口里 4 次在首击之前（段外预热）、1 次插在玩家段内 ⇒ 是**别的图的怪物攻击**交错进来的噪声。
+   Rust 已按 `Race` 分派（AttackPowerMode::for_attacker），玩家走 override ⇒ 无实现缺口。
+③ 段数 120 vs 36：C# 的 115/120 段是 [atk_power_a, atk_power_b]——**有攻击命令但无目标时，
+   oracle 仍先算 `GetBaseAttackPoewr()`**（PlayObject.Attack.cs:73，取目标之前）⇒ 每击必抽 2 次；
+   Rust 的 `attack_once` 只在有目标时才跑（无目标时接线只记日志、不抽）⇒ 84 击的 2 抽整段缺失。
+   .rs 侧根因 = 缺「无目标挥砍」原语；本片已加 `World::attack_swing`（只抽攻击力，2 抽）。
+   接线（bins/game-svr 的 `handle_hit_cmd` 无目标支改调该原语）属 m2-svr 写集，本片不改 bins/**。

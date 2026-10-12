@@ -348,6 +348,28 @@ pub enum AttackPowerMode {
     },
 }
 
+impl AttackPowerMode {
+    /// 按攻方 `Race` 分派（oracle：`GetBaseAttackPoewr` 调**虚函数** `GetAttackPower`
+    /// （`BaseObject.Attack.cs:25` → `BaseObject.Base.cs:886` 基版；`PlayObject.cs:2909` 玩家 override））。
+    ///
+    /// `Race == ActorRace.Play` ⇒ [`AttackPowerMode::Player`]；其余（怪物/召唤物/非玩家）⇒
+    /// [`AttackPowerMode::Base`]。两版**取数次数不同**（`Luck <= 0` 时 override 多一次
+    /// `Random(10)`）⇒ 必须按对象分派，不能一律走 `Base`。
+    #[must_use]
+    pub fn for_attacker(attacker: &Entity) -> AttackPowerMode {
+        if attacker.race == ACTOR_RACE_PLAY {
+            AttackPowerMode::Player {
+                luck: attacker.luck,
+                power_rate: attacker.power_rate,
+                bo_power_item: attacker.bo_power_item,
+                power_item: attacker.power_item,
+            }
+        } else {
+            AttackPowerMode::Base
+        }
+    }
+}
+
 // -------------------------------------------------------------------------------------------
 // 攻击合法性（`IsProperTarget` 判定链）
 //
@@ -785,6 +807,75 @@ pub fn attack_with(
         damage,
         killed,
         target_hp_after: target.hp,
+    }
+}
+
+/// `PlayObject.AttackSuccess`（`PlayObject.Attack.cs:215`）里与**取数**有关的那一部分。
+///
+/// oracle 的 `PlayObject.AttackDir` 在 `_Attack`（+`SendAttackMsg`，无取数）之后调
+/// `AttackSuccess(wHitMode, nPower, canHit, attackTarget)`（`:77`）；只要 `attackTarget != null`
+/// 就**无条件**抽一次 `Random(5)`（`:225` `nWeaponDamage = (ushort)(Random(5) + 2 - AddAbil.WeaponStrong)`）
+/// —— 记录站点是 `PlayObject.AttackSuccess@PlayObject.Attack.cs:223`。
+///
+/// **命中/躲闪都抽**（`AttackSuccess` 在 `_Attack` 返回后无条件调用，不看 `canHit`/`nPower`）。
+/// 漏掉这一次会让跨侧取数账本从**第一击**起整体错位（C# 每次有目标的攻击都多 1 抽）。
+///
+/// 其余 `AttackSuccess` 取数（`:221` 麻痹 `Random(AntiPoison + AttackPosionRate)`、
+/// `:254/:261` 技能熟练度 `Random(3)+1`、`TrainCurrentSkill` 的 `Random(3)+1`）都依赖运行态
+/// （`Paralysis` / `SuckupEnemyHealthRate` / `MagicArr`），本骨架未建模 ⇒ **登记**（见模块头），
+/// 不做静默降级。
+///
+/// 返回值 = `nWeaponDamage`（本骨架无武器耐久面，值不使用；只保取数次数与顺序）。
+#[must_use]
+pub fn attack_success_weapon_damage(rng: &mut impl RandomSource) -> u16 {
+    (rng.random_below(5) + 2) as u16
+}
+
+/// `PlayObject.AttackDir(targetObject, wHitMode, nDir)`（`PlayObject.Attack.cs:25`）的**玩家版**
+/// 完整取数口径：`GetAttackPowerHit(GetBaseAttackPoewr(), ...)` → `AttackDir(..., nPower)`（= `_Attack`）
+/// → `SendAttackMsg`（无取数）→ `AttackSuccess`。
+///
+/// 与 [`attack_with`] 的区别**只在末尾**多一次 [`attack_success_weapon_damage`]（`AttackSuccess` 的
+/// `Random(5)`；`Race == Play` 攻方有目标时必有）。
+///
+/// **不能**把它并进 [`attack_with`]：`combat-probe` 的真身向量是直接调 `GetBaseAttackPoewr` +
+/// `_Attack`（**不含** `AttackSuccess`）产出的，[`attack_with`] 必须与那份向量逐字段对得上；
+/// 这里按 oracle 的结构把「攻击入口」补全。
+///
+/// 按攻方 `Race` 自动选 `AttackPowerMode`（oracle 的虚调用分派，见 [`AttackPowerMode::for_attacker`]）；
+/// `AttackSuccess` 只在玩家攻方（`Race == Play`）追加——oracle 里它是 `PlayObject` 的私有方法，
+/// 怪物/召唤物的 `BaseObject` 攻击路径不调它。
+pub fn attack_dir(
+    rng: &mut impl RandomSource,
+    attacker: &mut Entity,
+    target: &mut Entity,
+    last_hitter: Option<LastHitter>,
+    config: &CombatConfig,
+) -> AttackOutcome {
+    let mode = AttackPowerMode::for_attacker(attacker);
+    let outcome = attack_with(rng, attacker, target, last_hitter, config, mode);
+    if matches!(mode, AttackPowerMode::Player { .. }) {
+        // `AttackSuccess(..., targetObject)`：目标非空 ⇒ 抽 `Random(5)`（`PlayObject.Attack.cs:225`）。
+        let _ = attack_success_weapon_damage(rng);
+    }
+    outcome
+}
+
+/// 无目标挥砍（`PlayObject.AttackDir(targetObject = null)`）的**唯一**取数：攻击力。
+///
+/// oracle 在取目标之前先算 `GetBaseAttackPoewr()`（`PlayObject.Attack.cs:73`），所以即使
+/// 前方格无目标也照抽（玩家 `Luck <= 0` 时 2 抽）。之后 `_Attack(null)` 与
+/// `AttackSuccess(…, null)` 都立刻返回 ⇒ 无其它取数。供 [`crate::world::World::attack_swing`] 与
+/// 单测（`CountingRng`）共用。
+pub fn swing_power(rng: &mut impl RandomSource, dc: i32, mode: AttackPowerMode) -> i32 {
+    match mode {
+        AttackPowerMode::Base => get_base_attack_power(rng, dc),
+        AttackPowerMode::Player {
+            luck,
+            power_rate,
+            bo_power_item,
+            power_item,
+        } => get_base_attack_power_player(rng, dc, luck, power_rate, bo_power_item, power_item),
     }
 }
 

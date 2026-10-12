@@ -283,6 +283,20 @@ namespace WorldGolden
             return result;
         }
 
+        // ---------- src/M2Server/Player/PlayObject.Attack.cs:215 `AttackSuccess`（取数子集） ----------
+        /// <summary>
+        /// `PlayObject.AttackSuccess`（`PlayObject.Attack.cs:215`）里与**取数**有关的部分。
+        /// oracle 的 `PlayObject.AttackDir` 在 `_Attack`（+ `SendAttackMsg`，无取数）之后调
+        /// `AttackSuccess(wHitMode, nPower, canHit, attackTarget)`（`:77`）；只要目标非空就
+        /// **无条件**抽一次 `Random(5)`（`:225` `nWeaponDamage = (ushort)(Random(5) + 2 - AddAbil.WeaponStrong)`）。
+        /// 命中/躲闪都抽。其余取数（麻痹 `:221`、技能熟练度 `:254/:261`、`TrainCurrentSkill`）
+        /// 依赖运行态，不在本桩子集。
+        /// </summary>
+        public void AttackSuccess()
+        {
+            _ = ParityGolden.M2Share.RandomNumber.Random(5) + 2;
+        }
+
         /// <summary>攻击合法性子集（与 Rust `is_attack_target` 同口径）。</summary>
         public bool IsProperTarget(ActorStub target)
         {

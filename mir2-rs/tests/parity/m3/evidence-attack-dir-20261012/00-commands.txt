@@ -1,0 +1,19 @@
+# 本片命令（证据留档）
+# 1) oracle 真身探针（不占端口、不连库）：直调 PlayObject.AttackDir 记逐次 RNG
+dotnet run --project mir2-rs/tests/parity/m3/attack-dir-probe -c Release -- mir2-rs/tests/parity/m3/attack-dir-probe/vectors/attack_dir_vectors.json
+# 2) 4 门禁（隔离 target + offline）
+cd mir2-rs
+cargo fmt --all -- --check
+CARGO_TARGET_DIR=E:/tmp/m3cs-r2-target cargo clippy --workspace --all-targets --offline -- -D warnings
+CARGO_TARGET_DIR=E:/tmp/m3cs-r2-target cargo test --workspace --offline
+CARGO_TARGET_DIR=E:/tmp/m3cs-r2-target cargo run -p msgcodegen --offline -- --check
+# 3) 针对本片改动的定向对拍
+CARGO_TARGET_DIR=E:/tmp/m3cs-r2-target cargo test -p mir2-world --offline --test attack_dir_vectors
+CARGO_TARGET_DIR=E:/tmp/m3cs-r2-target cargo test -p mir2-world --offline --test combat_skill_vectors
+CARGO_TARGET_DIR=E:/tmp/m3cs-r2-target cargo test -p mir2-parity-tests --offline --test world_combat_parity
+# 4) WorldGolden 重基准（含 AttackSuccess 的 Random(5)，owner 已批 B-1 同类口径）
+dotnet run --project mir2-rs/tests/parity/csharp/WorldGolden -c Release -- combat
+dotnet run --project mir2-rs/tests/parity/csharp/WorldGolden -c Release -- combat_exp_nofix
+dotnet run --project mir2-rs/tests/parity/csharp/WorldGolden -c Release -- combat_exp_hitter_ghost
+# 5) 账本工具自检
+python mir2-rs/tests/parity/m3/rng-trace-probe/rng_ledger_diff.py selftest

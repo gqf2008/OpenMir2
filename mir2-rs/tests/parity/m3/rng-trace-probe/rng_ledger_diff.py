@@ -37,7 +37,7 @@ CSHARP_ATTACK_RE = re.compile(
     r"BaseObject\.GetHitStruckDamage@|PlayObject\.AttackSuccess@|PlayObject\.AttackDir@|"
     r"BaseObject\.GetAttackPower@)")
 # Rust 站点（世界层调用点）。
-RUST_ATTACK_RE = re.compile(r"combat\.rs:(67|109|111|250|579|587|606|608|736)|magic\.rs:")
+RUST_ATTACK_RE = re.compile(r"combat\.rs:(67|109|111|250|601|609|628|630|758|831)|magic\.rs:")
 
 CSHARP_MARKER = "M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929"
 RUST_MARKER = r"crates\world\src\combat.rs:109"
@@ -56,11 +56,12 @@ CANON_RULES = [
     (re.compile(r"crates/world/src/combat\.rs:109$"), "atk_power_a"),
     (re.compile(r"crates/world/src/combat\.rs:111$"), "atk_power_b"),
     (re.compile(r"crates/world/src/combat\.rs:67$"), "atk_power_base"),
-    (re.compile(r"crates/world/src/combat\.rs:736$"), "hit_gate"),
-    (re.compile(r"crates/world/src/combat\.rs:606$"), "hit_struck_damage"),
-    (re.compile(r"crates/world/src/combat\.rs:608$"), "hit_struck_damage2"),
-    (re.compile(r"crates/world/src/combat\.rs:579$"), "struck_durability"),
-    (re.compile(r"crates/world/src/combat\.rs:587$"), "struck_durability_slot"),
+    (re.compile(r"crates/world/src/combat\.rs:758$"), "hit_gate"),
+    (re.compile(r"crates/world/src/combat\.rs:628$"), "hit_struck_damage"),
+    (re.compile(r"crates/world/src/combat\.rs:630$"), "hit_struck_damage2"),
+    (re.compile(r"crates/world/src/combat\.rs:601$"), "struck_durability"),
+    (re.compile(r"crates/world/src/combat\.rs:609$"), "struck_durability_slot"),
+    (re.compile(r"crates/world/src/combat\.rs:831$"), "attack_success"),
     (re.compile(r"crates/world/src/combat\.rs:250$"), "attack_skill_point_count"),
 ]
 
@@ -339,7 +340,7 @@ def cmd_selftest(args):
          "M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2934",
          "M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41"]
     R = [r"crates\world\src\combat.rs:109", r"crates\world\src\combat.rs:111",
-         r"crates\world\src\combat.rs:736"]
+         r"crates\world\src\combat.rs:758"]
     sites_a = C * 3
     sites_b = R * 3
     ta = os.path.join(tmp, "a.tsv")
@@ -365,11 +366,17 @@ def cmd_selftest(args):
 
     # 逐段：a 段形状 [a,b,hit_gate]，b 段形状 [a,b,hit_gate,hit_struck_damage] ⇒ 第一段即分歧。
     _write_trace(ta, C * 2)
-    _write_trace(tb, (R + [r"crates\world\src\combat.rs:606"]) * 2)
+    _write_trace(tb, (R + [r"crates\world\src\combat.rs:628"]) * 2)
     rc, out = cap(lambda: cmd_segdiff(argparse.Namespace(
         a=ta, b=tb, a_side="csharp", b_side="rust", json="")))
     check("seg-shape-red", rc == 0 and "FIRST_SEG_DIVERGENCE seg=1" in out and "SEG_SHAPE_DIVERGENCE" in out, out[:500])
     check("seg-count", "SEG_COUNT a=2 b=2" in out, out[:500])
+
+    # owner 2026-10-12 19:20 裁决②：`combat.rs:831`（`AttackSuccess` 的 `Random(5)`）必须被
+    # canonical 认成 `attack_success`，且属攻击路径 —— 否则 Rust 侧新加的站点会被当噪声。
+    check("attack-success-mapped",
+          canonical(r"crates\world\src\combat.rs:831") == "attack_success"
+          and is_attack(r"crates\world\src\combat.rs:831", "rust"))
 
     for name in os.listdir(tmp):
         try:
