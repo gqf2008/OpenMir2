@@ -26,10 +26,12 @@
 
   目标接法：`-AttackPinPair` 把 attacker（账号序号 0）钉在 (PinCX,PinCY) 面向 `AttackPinDir`，
   victim（序号 1）钉在 (PinCX+1,PinCY)；victim HP/MaxHP 抬高（防 100+ 次内死亡）。
-  **F-I（m3cs tick22，2026-10-12 13:45）**：pin 落点缺省 = 比奇城东门外空地 `(429,320)`——
-  对 `Envir/MonGen.txt` 里 map-0 全部刷怪圈的最近净距 **99.5 格**（旧缺省 `(289,618)` 仅 6.6 ⇒ 同种子
-  连跑两次 hit 数 2 vs 7）。落点无怪由 `gate_guards.ps1::Test-M3AttackPinNoMonster`（读只读抽取
-  `fixtures/mongen-map0.tsv`）在 `run_pair` 启动时 fail-closed 守卫，`-SelfCheckNoStack` ⑯ 另做两向红检。
+  **R-1（owner 2026-10-12 14:30）**：攻击判定取全局 `M2Share.RandomNumber`，被全图怪 AI 消耗 ⇒
+  对拍场景必须**除攻击路径外零 RNG 消费者**。最简 = **整张图零刷怪**：pin 地图缺省 = `0137`（竞技场，
+  `MonGen.txt` 零行、无 NPC/守卫），落点 `(17,20) dir=2`、victim `(18,20)`（均可走）。不是无怪图就
+  `run_pair` 启动时 **fail-closed 拒绝跑**（`gate_guards.ps1::Test-M3MonGenEmpty` 按地图查冻结提取件
+  `fixtures/mongen-map<map>.tsv` + `fixtures/mongen-provenance.tsv`，要求该图刷怪行数 == 0）；
+  `-PinMapName` 透传给 `run_pair` 的 pin SQL/落点口径，`-SelfCheckNoStack` ⑯ 做四向红检。
   `-AttackSequence` 让 attacker 固定发 N 次 `CM_HIT`（`Recog=MakeLong(自己坐标)`、`Tag=dir`）。
 
   判红口径（逐步；任一不满足即退出码 != 0）：
@@ -71,8 +73,9 @@ param(
   [int]$AttackStepMs = 500,
   [int]$AttackStartDelayMs = 3000,
   [int]$AttackPinDir = 2,
-  [int]$AttackPinCX = -1,          # F-I：attacker 落点 X（<0 ⇒ 用 gate_guards 的 $script:M3AttackPinCX = 429，比奇城东无怪空地）
-  [int]$AttackPinCY = -1,          # F-I：attacker 落点 Y（<0 ⇒ 用 $script:M3AttackPinCY = 320）
+  [string]$PinMapName = '',        # R-1：攻击 pin 地图（必须整张零刷怪）；空 ⇒ gate_guards 的 $script:M3AttackPinMap = '0137'
+  [int]$AttackPinCX = -1,          # R-1：attacker 落点 X（<0 ⇒ 用 gate_guards 的 $script:M3AttackPinCX = 17，0137 竞技场可走空地）
+  [int]$AttackPinCY = -1,          # R-1：attacker 落点 Y（<0 ⇒ 用 $script:M3AttackPinCY = 20）
   [int]$AttackVictimHp = 30000,
   [string]$PeerSession = '',
   [string]$CsharpSession = '',
@@ -105,11 +108,11 @@ $MysqlExe = 'D:\mysql\mariadb-10.11.19-winx64\bin\mysql.exe'
 # 攻击序列/起点口径与 peer 护栏的唯一实现（与 gate_guards 共用，自 dot-source）。
 . (Join-Path $Here 'gate_guards.ps1')
 
-# F-I（m3cs tick22 真机 finding，2026-10-12 13:45）：攻击 pin 落点必须无怪干扰。默认取 gate_guards 的
-# 唯一来源常量（比奇城东门外空地，对 map-0 全部刷怪圈的最近净距 99.5）；调用方可用 -AttackPinCX/-AttackPinCY 覆盖。
+# R-1（owner 2026-10-12 14:30）：攻击对拍必须落在**整张零刷怪**的图上（除攻击路径外零 RNG 消费者）；
+# pin 地图/落点缺省取 gate_guards 的唯一来源常量（0137 竞技场 (17,20)）；调用方可用 -PinMapName/-AttackPinCX/-AttackPinCY 覆盖。
+if ([string]::IsNullOrEmpty($PinMapName)) { $PinMapName = $script:M3AttackPinMap }
 if ($AttackPinCX -lt 0) { $AttackPinCX = $script:M3AttackPinCX }
 if ($AttackPinCY -lt 0) { $AttackPinCY = $script:M3AttackPinCY }
-$AttackPinFixture = Join-Path $Here 'fixtures\mongen-map0.tsv'
 
 function Get-EntryHolders {
   $list = @()
@@ -261,7 +264,7 @@ if ($SelfCheckNoStack) {
   if ($LASTEXITCODE -ne 0) { $failures += 'emit_on_rc=non-zero' }
   else {
     # M-1 修复后「未配 -AttackPinPair」会真打一行 WARN（stdout，JSON 之前）⇒ 解析前先滤掉 WARN 行。
-    $emitOnText = ((@($emitOnRaw) | Where-Object { $_ -notmatch '^\s*(WARN:|PIN_NO_MONSTER)' }) -join "`n").Trim()
+    $emitOnText = ((@($emitOnRaw) | Where-Object { $_ -notmatch '^\s*(WARN:|PIN_NO_MONSTER|MAP_HAS_NO_MONSTER)' }) -join "`n").Trim()
     $emitOn = ($emitOnText | ConvertFrom-Json)
     $has = (@($emitOn.bot_args) -contains '-DisableAutoPlay')
     if (-not $has) { $failures += 'attack_sequence_does_not_pass_disable_autoplay' }
@@ -279,12 +282,13 @@ if ($SelfCheckNoStack) {
   }
 
   # ⑥ 攻击变体两相 pin：-AttackPinPair 的 attack_pose + 每 bot SQL（attacker/victim 相邻）。
-  #    F-I：pin 落点取无怪空地（gate_guards $script:M3AttackPinCX/CY）；本项断言 emit 出的 pose 与该落点逐字节相同。
-  $emitPairRaw = & powershell -ExecutionPolicy Bypass -File $RunPair -EmitOpsArgs -FixedNewChr -PinStartPose -AttackPinPair -AttackSequence -Bots 2 -PinCX $AttackPinCX -PinCY $AttackPinCY
+  #    R-1：pin 地图/落点取无怪图（gate_guards $script:M3AttackPinMap='0137' + CX/CY）；本项断言 emit 出的
+  #    pose 与该落点/map 逐字节相同，且 pin SQL 真把 MapName 落到该图（-PinMapName 透传有牙齿）。
+  $emitPairRaw = & powershell -ExecutionPolicy Bypass -File $RunPair -EmitOpsArgs -FixedNewChr -PinStartPose -AttackPinPair -AttackSequence -Bots 2 -PinMapName $PinMapName -PinCX $AttackPinCX -PinCY $AttackPinCY
   if ($LASTEXITCODE -ne 0) { $failures += 'emit_pair_rc=non-zero' }
   else {
-    $pair = (((@($emitPairRaw) | Where-Object { $_ -notmatch '^\s*(WARN:|PIN_NO_MONSTER)' }) -join "`n").Trim() | ConvertFrom-Json)
-    $wantPose = ('pair map=0 attacker={0},{1},dir=2 victim={2},{1} level=1 vhp=30000' -f $AttackPinCX, $AttackPinCY, ($AttackPinCX + 1))
+    $pair = (((@($emitPairRaw) | Where-Object { $_ -notmatch '^\s*(WARN:|PIN_NO_MONSTER|MAP_HAS_NO_MONSTER)' }) -join "`n").Trim() | ConvertFrom-Json)
+    $wantPose = ('pair map={0} attacker={1},{2},dir=2 victim={3},{2} level=1 vhp=30000' -f $PinMapName, $AttackPinCX, $AttackPinCY, ($AttackPinCX + 1))
     if ($pair.attack_pose -ne $wantPose) { $failures += ('attack_pose=' + $pair.attack_pose) }
     $all = @($pair.attack_pin_sql_all)
     if ($all.Count -lt 4) { $failures += ('attack_pin_sql_all_count=' + $all.Count) }
@@ -294,7 +298,10 @@ if ($SelfCheckNoStack) {
     if ($joined -notmatch 'a\.Hp=30000, a\.MaxHP=30000') { $failures += 'attack_pin_missing_victim_hp' }
     # F-D（m3cs tick21）：探针行真执行才能咬住越界值；旧缺省 100000 > smallint(32767) ⇒ pin 真机必 ERROR 1264。
     if ($joined -match 'a\.Hp=100000') { $failures += 'attack_pin_victim_hp_out_of_range' }
-    Write-Output ("SELFTEST ⑥ -AttackPinPair pose='{0}'；pin_sql_all={1} 条" -f $pair.attack_pose, $all.Count)
+    # R-1：-PinMapName 必须真落进攻击 pin SQL（改坏透传 ⇒ 本项必红）。
+    $mapRe = "MapName='" + [regex]::Escape($PinMapName) + "'"
+    if ($joined -notmatch $mapRe) { $failures += ('attack_pin_missing_map=' + $PinMapName) }
+    Write-Output ("SELFTEST ⑥ -AttackPinPair map={0} pose='{1}'；pin_sql_all={2} 条" -f $PinMapName, $pair.attack_pose, $all.Count)
 
     # ⑥b F-B/F-D：pin SQL 的「可执行性」门（m3cs tick16/tick21 真机 finding）。
     #    字符串匹配永远穿得过「列名挂错表」与「越界值」⇒ 必须真送进 MySQL。
@@ -324,17 +331,38 @@ if ($SelfCheckNoStack) {
   if (Test-M3AttackVictimHpRange -VictimHp 100000) { $failures += 'attack_victim_hp_range_guard_not_red' }
   Write-Output ("SELFTEST ⑥c -AttackVictimHp 范围护栏：缺省 {0} 合规（≤32767）；100000 必判红" -f $AttackVictimHp)
 
-  # ⑯ F-I（m3cs tick22，2026-10-12 13:45）：攻击 pin 落点必须**无怪干扰**——用冻结件
-  #    `Envir/MonGen.txt` 的 map-0 刷怪点清单（fixtures/mongen-map0.tsv）做几何判定：
-  #    生产落点（gate_guards $script:M3AttackPinCX/CY）必须净距 >= 50；
-  #    旧缺省 (289,618) 净距 6.6 ⇒ 必判红（这就是本项的「改坏必红」）。
-  $pinNoMon = Test-M3AttackPinNoMonster -X $script:M3AttackPinCX -Y $script:M3AttackPinCY -SpawnFixture $AttackPinFixture
-  if (-not $pinNoMon.ok) { $failures += ('attack_pin_near_monster=' + ('{0:F1}' -f $pinNoMon.clearance)) }
-  $oldPin = Test-M3AttackPinNoMonster -X 289 -Y 618 -SpawnFixture $AttackPinFixture
-  if ($oldPin.ok) { $failures += 'attack_pin_no_monster_guard_not_red' }
-  if ($oldPin.clearance -gt 10) { $failures += ('old_pin_clearance_unexpected=' + ('{0:F1}' -f $oldPin.clearance)) }
-  Write-Output ("SELFTEST ⑯ 攻击 pin 无怪口径（F-I）：生产 ({0},{1}) 净距={2:F1}（最近圈 {3}，阈值≥50）；旧缺省 (289,618) 净距={4:F1} 必判红" -f `
-    $script:M3AttackPinCX, $script:M3AttackPinCY, $pinNoMon.clearance, $pinNoMon.nearest, $oldPin.clearance)
+  # ⑯ R-1（owner 2026-10-12 14:30）：攻击 pin 场景必须**整张图无怪**——按地图查冻结提取件
+  #    `fixtures/mongen-map<map>.tsv` + `fixtures/mongen-provenance.tsv`，判「该图刷怪行数 == 0」。
+  #    两向红检：① **换回 map 0**（有 53 个刷怪点）必须红；② 合成提取件（0 行/1 行·声明漂移·缺 provenance）
+  #    判定必须有牙齿（改坏 Test-M3MonGenEmpty 的「==0」判断 ⇒ 本项必红）。
+  $pinChk = Test-M3MonGenEmpty -MapName $PinMapName
+  if (-not $pinChk.ok) { $failures += ('attack_pin_map_not_monsterless=' + $PinMapName + ':' + $pinChk.reason) }
+  if ($pinChk.spawns -ne 0) { $failures += ('attack_pin_map_spawns=' + $pinChk.spawns) }
+  $pinChkV = Test-M3MonGenEmpty -MapName $PinMapName -VerifySource
+  if (-not $pinChkV.ok) { $failures += ('attack_pin_map_source_recheck_red=' + $pinChkV.reason) }
+  if (-not $pinChkV.source_verified) { $failures += 'attack_pin_map_source_not_verified' }
+  $map0Chk = Test-M3MonGenEmpty -MapName '0'
+  if ($map0Chk.ok) { $failures += 'attack_pin_map0_not_red' }
+  if ($map0Chk.spawns -ne 53) { $failures += ('map0_spawns_unexpected=' + $map0Chk.spawns) }
+  # 合成牙齿：临时 fixture + provenance，覆盖「0 行=绿 / 1 行=红 / 行数!=声明=红 / 缺 provenance=红」。
+  $synthDir = Join-Path $tmpRoot 'mongen-synth'
+  New-Item -ItemType Directory -Force -Path $synthDir | Out-Null
+  $synthProv = Join-Path $tmpRoot 'mongen-provenance-synth.tsv'
+  [System.IO.File]::WriteAllText((Join-Path $synthDir 'mongen-mapE.tsv'), "# empty`n", (New-Object System.Text.UTF8Encoding($false)))
+  [System.IO.File]::WriteAllText((Join-Path $synthDir 'mongen-mapF.tsv'), "1`t1`t1`n", (New-Object System.Text.UTF8Encoding($false)))
+  [System.IO.File]::WriteAllText((Join-Path $synthDir 'mongen-mapG.tsv'), "2`t2`t2`n", (New-Object System.Text.UTF8Encoding($false)))
+  $synthLines = @("E`tmongen-mapE.tsv`t0`t`t", "F`tmongen-mapF.tsv`t1`t`t", "G`tmongen-mapG.tsv`t0`t`t")
+  [System.IO.File]::WriteAllLines($synthProv, $synthLines, (New-Object System.Text.UTF8Encoding($false)))
+  $synthE = Test-M3MonGenEmpty -MapName 'E' -FixtureDir $synthDir -ProvenancePath $synthProv
+  if (-not $synthE.ok) { $failures += ('synth_empty_not_ok=' + $synthE.reason) }
+  $synthF = Test-M3MonGenEmpty -MapName 'F' -FixtureDir $synthDir -ProvenancePath $synthProv
+  if ($synthF.ok) { $failures += 'synth_nonempty_not_red' }
+  $synthG = Test-M3MonGenEmpty -MapName 'G' -FixtureDir $synthDir -ProvenancePath $synthProv
+  if ($synthG.ok) { $failures += 'synth_rowcount_drift_not_red' }
+  $synthH = Test-M3MonGenEmpty -MapName 'H' -FixtureDir $synthDir -ProvenancePath $synthProv
+  if ($synthH.ok) { $failures += 'synth_missing_provenance_not_red' }
+  Write-Output ("SELFTEST ⑯ 攻击 pin 无怪口径（R-1，按地图查提取件）：生产 map={0} spawns={1} source_verified={2}；map 0 spawns={3} 必红；合成 0/1 行·声明漂移·缺 provenance 四向有牙" -f `
+    $PinMapName, $pinChk.spawns, $pinChkV.source_verified, $map0Chk.spawns)
 
   # ⑭ F-E（m3cs tick21）：驱动收尾等待——run_bots.ps1 的攻击序列「等 M3ATTSEQ done」离线自检
   #    （合成日志计 attack done 2/1/0 + bag done 2/0；改坏计数正则 ⇒ RED）。真机 120/120 由 m3cs 下一轮实跑覆盖。
@@ -535,7 +563,7 @@ if ($SelfCheckNoStack) {
 
   Remove-Item -Recurse -Force $tmpRoot -ErrorAction SilentlyContinue
   if ($failures.Count -eq 0) {
-    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（攻击配置透传/默认关 + run_pair -DisableAutoPlay 耦合两向 + 攻击两相 pin pose/SQL + pin SQL 可执行性（含改坏 a.IncHealth 必红 + 改坏 Hp=100000 越界必红） + 攻击 pin 无怪口径（F-I，含旧缺省 (289,618) 必红） + 入口/DiffOnly fail-closed + attack_diff selftest + 改坏 dmg/hit 必红 + Invoke-AttackAlign 返回值形态两处（F-J：⑧ 生产函数直接断言 + ⑮） + scoped_diff 14/14 + M-1 WARN 有牙齿 + M-2 attacker 精确选择 selftest + pin SQL 别名/列校验 + 种子注入断言（两侧 fail-closed）+ 攻击序列收尾等待（F-E））'
+    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（攻击配置透传/默认关 + run_pair -DisableAutoPlay 耦合两向 + 攻击两相 pin pose/SQL（-PinMapName 透传含 MapName 断言） + pin SQL 可执行性（含改坏 a.IncHealth 必红 + 改坏 Hp=100000 越界必红） + 攻击 pin 无怪口径（R-1，按地图查提取件：生产 0137 绿/source_verified + 换回 map 0 必红 + 合成 0/1 行·声明漂移·缺 provenance 四向有牙） + 入口/DiffOnly fail-closed + attack_diff selftest + 改坏 dmg/hit 必红 + Invoke-AttackAlign 返回值形态两处（F-J：⑧ 生产函数直接断言 + ⑮） + scoped_diff 14/14 + M-1 WARN 有牙齿 + M-2 attacker 精确选择 selftest + pin SQL 别名/列校验 + 种子注入断言（两侧 fail-closed）+ 攻击序列收尾等待（F-E））'
     exit 0
   }
   Write-Output ('SELFTEST_RED RED: ' + ($failures -join ', '))
@@ -649,13 +677,13 @@ Write-Output 'PREFLIGHT MySQL 在听'
 $probeArgs = @('-EmitOpsArgs', '-FixedNewChr', '-PinStartPose', '-AttackPinPair', '-AttackSequence',
                '-Bots', $Bots, '-Prefix', $Prefix, '-AttackCount', $AttackCount, '-AttackStepMs', $AttackStepMs,
                '-AttackStartDelayMs', $AttackStartDelayMs, '-AttackPinDir', $AttackPinDir,
-               '-PinCX', $AttackPinCX, '-PinCY', $AttackPinCY, '-AttackVictimHp', $AttackVictimHp)
+               '-PinMapName', $PinMapName, '-PinCX', $AttackPinCX, '-PinCY', $AttackPinCY, '-AttackVictimHp', $AttackVictimHp)
 $probeRaw = @(& powershell -ExecutionPolicy Bypass -File $RunPair @probeArgs)
 if ($LASTEXITCODE -ne 0) {
   Write-Output 'RED: 取 pin SQL 失败（run_pair -EmitOpsArgs 非 0）——无法做可执行性预检'
   exit 1
 }
-$probeText = ((@($probeRaw) | Where-Object { $_ -notmatch '^\s*(WARN:|PIN_NO_MONSTER)' }) -join "`n").Trim()
+$probeText = ((@($probeRaw) | Where-Object { $_ -notmatch '^\s*(WARN:|PIN_NO_MONSTER|MAP_HAS_NO_MONSTER)' }) -join "`n").Trim()
 $probeObj = $probeText | ConvertFrom-Json
 try { $probeSql = @($probeObj.attack_pin_sql_all) } catch { $probeSql = @() }
 if ($probeSql.Count -lt 1) {
@@ -673,7 +701,7 @@ Write-Output '--- 2) 侧运行（复用 run_pair.ps1；同序列 = -FixedNewChr 
 $pairArgs = @('-Side', $Side, '-Bots', $Bots, '-Prefix', $Prefix, '-Address', $Address, '-Port', $Port,
               '-TimeoutSec', $TimeoutSec, '-FixedNewChr', '-PinStartPose', '-AttackPinPair',
               '-AttackSequence', '-AttackCount', $AttackCount, '-AttackStepMs', $AttackStepMs, '-AttackStartDelayMs', $AttackStartDelayMs,
-              '-AttackPinDir', $AttackPinDir, '-PinCX', $AttackPinCX, '-PinCY', $AttackPinCY, '-AttackVictimHp', $AttackVictimHp)
+              '-AttackPinDir', $AttackPinDir, '-PinMapName', $PinMapName, '-PinCX', $AttackPinCX, '-PinCY', $AttackPinCY, '-AttackVictimHp', $AttackVictimHp)
 & powershell -ExecutionPolicy Bypass -File $RunPair @pairArgs
 $pairExit = $LASTEXITCODE
 if ($pairExit -ne 0) {

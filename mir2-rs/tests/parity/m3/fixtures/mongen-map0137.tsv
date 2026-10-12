@@ -1,0 +1,6 @@
+# map=0137（竞技场）的刷怪点只读抽取（x<TAB>y<TAB>range），来源 = oracle 部署件 Envir/MonGen.txt（内容冻结）。
+# 本图在 MonGen.txt 中**零行** ⇒ 整张图零刷怪（R-1「零 RNG 消费者」攻击对拍场景隔离；来源依据见
+# evidence-attack-pair-r1-nomonster-20261012/README.md）。下方**无数据行**（0 行即无怪）。
+# 生成命令：python mir2-rs/tests/parity/m3/fixtures/extract_mongen.py <MonGen.txt> 0137
+# provenance（源路径 + 源 SHA256 + 行数）：fixtures/mongen-provenance.tsv
+# 机判：gate_guards.ps1::Test-M3MonGenEmpty 要求本文件数据行数 == provenance 声明 == 0。

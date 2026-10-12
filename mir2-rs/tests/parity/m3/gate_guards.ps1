@@ -447,50 +447,129 @@ function Test-M3AttackVictimHpRange {
   param([int]$VictimHp)
   return ($VictimHp -ge 1 -and $VictimHp -le 32767)
 }
-# F-I（m3cs tick22 真机 finding，2026-10-12 13:45）：攻击 pin 的落点必须**无怪干扰**。
-# 旧缺省 (289,618) 落在 `Envir/MonGen.txt` 的 `0 256 572 ... 50`（r=50 刷怪圈）边缘，**最近净距仅 6.6 格**
-# （`hypot(289-256, 618-572)=56.6 - 50 = 6.6`）⇒ 同种子连跑两次 hit 数 2 vs 7（且 attacker/victim 被怪持续打击），
-# 「非平凡门」随机红。
-# 新缺省 (429,320) = 比奇城东门外空地，`MonGen.txt` 中 map 0 全部刷怪圈对它的**最近净距 = 99.2 格**
-# （最近圈 `0 333 268 20 10`：`hypot(429-333, 320-268)=109.2 - 10 = 99.2`）⇒ 攻击序列 20–120 步（≈10–60s）内无怪可及。
-# 唯一来源：`run_pair.ps1` 与 `run_attack_pair.ps1` 都从这里取缺省（见 `-AttackPinCX/-AttackPinCY` 解析）。
-$script:M3AttackPinCX = 429
-$script:M3AttackPinCY = 320
+# R-1（owner 2026-10-12 14:30 裁决；brief 顶部 14:55 片）：攻击判定取全局 `M2Share.RandomNumber`，
+# 被**全图怪 AI**（`AnimalObject.Wondering` 等）持续消耗 ⇒「同种子 ⇒ 逐 k 相同」不成立。**解法 = 让对拍
+# 场景除攻击路径外零 RNG 消费者**，最简 = **整张图零刷怪**。旧口径「离刷怪圈 99.2 格」（map 0 本身有 53 个
+# 刷怪点）**不再**等价于「全图无怪」——本文件改成**按目标地图查对应提取件**并判「该图刷怪行数 == 0」。
+#
+# 选定图 = `0137`（竞技场）：现存（`MapInfo.txt` 有 `[0137 竞技场] FIGHT`、部署件 `Map/0137.map` 在）、
+# `MonGen.txt` 里**零行**、`MerChant.txt`/`GuardList.txt`/`MapQuest.txt` 及其它 Envir 文件均无引用
+# ⇒ 无怪、无 NPC、无守卫（场景内无跑 AI 的实体）。落点 (17,20) dir=2（victim (18,20)），
+# 两格及 7x7 邻域（43 格）均可走（按 `Map/0137.map` 12 字节/格、`k=x*Height+y` 解析）。
+# 唯一来源常量：`run_pair.ps1` 与 `run_attack_pair.ps1` 的缺省都从这里取（见 `-PinMapName`/`-AttackPinCX/CY`）。
+$script:M3AttackPinMap = '0137'
+$script:M3AttackPinCX = 17
+$script:M3AttackPinCY = 20
 
-# F-I 无怪判据（唯一口径，真机启动与无栈自检共用）：把攻击 pin 落点与**冻结内容**
-# `Envir/MonGen.txt` 的 map-0 刷怪圈做几何判定——最近净距 = min over spawns
-# (hypot(px-sx, py-sy) - range) 必须 >= 阈值。只读 `fixtures/mongen-map0.tsv`
-# （内容冻结的只读抽取，见文件头 provenance），不连真机、不起栈。
-# 背景：旧缺省 (289,618) 净距仅 6.6 ⇒ 同种子连跑两次 hit 数 2 vs 7（怪物 AI 打击 attacker/victim）。
-function Test-M3AttackPinNoMonster {
+# MonGen 提取件路径（`fixtures/mongen-map<map>.tsv`）：按 map 查对应提取件（唯一命名口径）。
+function Get-M3MonGenFixturePath {
   param(
-    [Parameter(Mandatory)][int]$X,
-    [Parameter(Mandatory)][int]$Y,
-    [Parameter(Mandatory)][string]$SpawnFixture,
-    [double]$MinClearance = 50.0
+    [Parameter(Mandatory)][string]$MapName,
+    [string]$FixtureDir = (Join-Path $script:M3GuardsHere 'fixtures')
   )
-  if (-not (Test-Path $SpawnFixture)) {
-    return [pscustomobject]@{ ok = $false; clearance = -1.0; nearest = ''; reason = ('缺刷怪点清单: ' + $SpawnFixture) }
-  }
-  $best = [double]::PositiveInfinity
-  $nearest = ''
-  foreach ($line in (Get-Content -Path $SpawnFixture)) {
+  return (Join-Path $FixtureDir ('mongen-map{0}.tsv' -f $MapName))
+}
+
+# provenance manifest（`fixtures/mongen-provenance.tsv`）：map → { fixture; spawn_rows; source; sha256 }。
+# 缺文件/解析不出 ⇒ 空表（调用方 fail-closed）。
+function Get-M3MonGenProvenance {
+  param([string]$ProvenancePath = (Join-Path $script:M3GuardsHere 'fixtures\mongen-provenance.tsv'))
+  $map = @{}
+  if (-not (Test-Path $ProvenancePath)) { return $map }
+  foreach ($line in (Get-Content -Path $ProvenancePath)) {
     if ([string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith('#')) { continue }
-    $parts = $line -split "`t"
-    if ($parts.Count -lt 3) { continue }
-    $sx = [double]$parts[0]; $sy = [double]$parts[1]; $r = [double]$parts[2]
-    $d = [Math]::Sqrt(($X - $sx) * ($X - $sx) + ($Y - $sy) * ($Y - $sy)) - $r
-    if ($d -lt $best) { $best = $d; $nearest = ('{0},{1} r={2}' -f $parts[0], $parts[1], $parts[2]) }
+    $p = $line -split "`t"
+    if ($p.Count -lt 3) { continue }
+    $map[$p[0]] = [pscustomobject]@{
+      fixture    = $p[1]
+      spawn_rows = [int]$p[2]
+      source     = $(if ($p.Count -gt 3) { $p[3] } else { '' })
+      sha256     = $(if ($p.Count -gt 4) { $p[4] } else { '' })
+    }
   }
-  if ([double]::IsPositiveInfinity($best)) {
-    return [pscustomobject]@{ ok = $false; clearance = -1.0; nearest = ''; reason = '刷怪点清单为空' }
+  return $map
+}
+
+# 数一个提取件里的**数据行**（跳过空行/`#` 注释）；文件缺失 ⇒ -1（fail-closed）。
+function Get-M3MonGenSpawnRows {
+  param([Parameter(Mandatory)][string]$FixturePath)
+  if (-not (Test-Path $FixturePath)) { return -1 }
+  $n = 0
+  foreach ($line in (Get-Content -Path $FixturePath)) {
+    if ([string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith('#')) { continue }
+    $n++
   }
-  return [pscustomobject]@{ ok = ($best -ge $MinClearance); clearance = $best; nearest = $nearest; reason = '' }
+  return $n
+}
+
+# 从源 `MonGen.txt` 现数某 map 的刷怪行（`-VerifySource` 的源复算；源缺失 ⇒ -1）。
+function Get-M3MonGenSourceRows {
+  param(
+    [Parameter(Mandatory)][string]$SourcePath,
+    [Parameter(Mandatory)][string]$MapName
+  )
+  if (-not (Test-Path $SourcePath)) { return -1 }
+  $n = 0
+  foreach ($line in (Get-Content -Path $SourcePath -Encoding Default)) {
+    if ([string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith(';')) { continue }
+    $p = $line -split "`t"
+    if ($p.Count -lt 6) { continue }
+    if ($p[0] -eq $MapName) { $n++ }
+  }
+  return $n
+}
+
+# R-1 无怪判据（唯一口径，真机启动与无栈自检共用）：按 map 查冻结提取件 + provenance，要求「该图刷怪行数 == 0」。
+# fail-closed 的四种情形：provenance 无该图 / 提取件缺失 / 提取件行数 != 声明 / （`-VerifySource`）源文件缺失·
+# hash 漂移·现数与提取件不符。返回 { ok; spawns; declared; fixture; source_verified; reason }。
+function Test-M3MonGenEmpty {
+  param(
+    [Parameter(Mandatory)][string]$MapName,
+    [string]$FixtureDir = (Join-Path $script:M3GuardsHere 'fixtures'),
+    [string]$ProvenancePath = (Join-Path $script:M3GuardsHere 'fixtures\mongen-provenance.tsv'),
+    [switch]$VerifySource
+  )
+  $prov = Get-M3MonGenProvenance -ProvenancePath $ProvenancePath
+  if (-not $prov.ContainsKey($MapName)) {
+    return [pscustomobject]@{ ok = $false; spawns = -1; declared = -1; fixture = ''; source_verified = $false; reason = ('provenance 无该图: ' + $MapName) }
+  }
+  $entry = $prov[$MapName]
+  $canon = Split-Path -Leaf (Get-M3MonGenFixturePath -MapName $MapName -FixtureDir $FixtureDir)
+  if ($entry.fixture -ne $canon) {
+    return [pscustomobject]@{ ok = $false; spawns = -1; declared = $entry.spawn_rows; fixture = ''; source_verified = $false; reason = ('provenance fixture 名与地图名不符: {0} != {1}' -f $entry.fixture, $canon) }
+  }
+  $fixture = Join-Path $FixtureDir $entry.fixture
+  $actual = Get-M3MonGenSpawnRows -FixturePath $fixture
+  if ($actual -lt 0) {
+    return [pscustomobject]@{ ok = $false; spawns = -1; declared = $entry.spawn_rows; fixture = $fixture; source_verified = $false; reason = ('缺提取件: ' + $fixture) }
+  }
+  if ($actual -ne $entry.spawn_rows) {
+    return [pscustomobject]@{ ok = $false; spawns = $actual; declared = $entry.spawn_rows; fixture = $fixture; source_verified = $false; reason = ('提取件行数 {0} != provenance 声明 {1}' -f $actual, $entry.spawn_rows) }
+  }
+  $srcVerified = $false
+  if ($VerifySource -and -not [string]::IsNullOrEmpty($entry.source)) {
+    if (-not (Test-Path $entry.source)) {
+      return [pscustomobject]@{ ok = $false; spawns = $actual; declared = $entry.spawn_rows; fixture = $fixture; source_verified = $false; reason = ('源文件不可达: ' + $entry.source) }
+    }
+    if (-not [string]::IsNullOrEmpty($entry.sha256)) {
+      $hash = (Get-FileHash -Path $entry.source -Algorithm SHA256).Hash.ToLower()
+      if ($hash -ne $entry.sha256.ToLower()) {
+        return [pscustomobject]@{ ok = $false; spawns = $actual; declared = $entry.spawn_rows; fixture = $fixture; source_verified = $false; reason = ('源文件 hash 漂移: {0} != {1}' -f $hash, $entry.sha256) }
+      }
+    }
+    $srcRows = Get-M3MonGenSourceRows -SourcePath $entry.source -MapName $MapName
+    if ($srcRows -ne $actual) {
+      return [pscustomobject]@{ ok = $false; spawns = $actual; declared = $entry.spawn_rows; fixture = $fixture; source_verified = $false; reason = ('源文件现数 {0} != 提取件 {1}' -f $srcRows, $actual) }
+    }
+    $srcVerified = $true
+  }
+  $ok = ($entry.spawn_rows -eq 0)
+  return [pscustomobject]@{ ok = $ok; spawns = $actual; declared = $entry.spawn_rows; fixture = $fixture; source_verified = $srcVerified; reason = $(if ($ok) { '' } else { ('该图有 {0} 个刷怪点（非无怪图）' -f $actual) }) }
 }
 
 function Format-M3AttackPose {
   param(
-    [string]$MapName = '0',
+    [string]$MapName = $script:M3AttackPinMap,
     [int]$AX = $script:M3AttackPinCX, [int]$AY = $script:M3AttackPinCY, [int]$Dir = 2,
     [int]$VX = ($script:M3AttackPinCX + 1), [int]$VY = $script:M3AttackPinCY,
     [int]$Level = 1, [int]$VictimHp = 30000
@@ -569,13 +648,14 @@ function Get-M3SessionAttackPose {
 }
 
 # 攻击变体的 pin SQL（按 character 返回多条）：图/坐标/朝向 + Abil（Hp=MaxHP 抬高）。
+# `-MapName` 缺省 = 无怪场景图 `$script:M3AttackPinMap`（R-1）；`run_pair` 恒显式传 `-PinMapName`。
 function Get-M3AttackPinSql {
   param(
     [Parameter(Mandatory)][string]$ChrName,
     [Parameter(Mandatory)][int]$CX,
     [Parameter(Mandatory)][int]$CY,
     [int]$Dir = 0,
-    [string]$MapName = '0',
+    [string]$MapName = $script:M3AttackPinMap,
     [int]$HomeMap = 0, [int]$HomeX = 289, [int]$HomeY = 618,
     [int]$Level = 1,
     [int]$Hp = 30000   # F-D：必须 ≤ 32767（characters_ablity.Hp/MaxHP = smallint 有符号）

@@ -1,0 +1,10 @@
+# MonGen 提取件 provenance（内容冻结；R-1「零 RNG 消费者」场景隔离的唯一来源）。
+# 列：map<TAB>fixture<TAB>spawn_rows<TAB>source_path<TAB>source_sha256
+#   spawn_rows   = 该 map 在源 MonGen.txt 中的刷怪行数（0 = 整张零刷怪，可作攻击对拍场景）。
+#   source_path  = 生成时 oracle 部署件 Envir/MonGen.txt 的绝对路径（机器本地，不在库里）。
+#   source_sha256= 生成时源文件 SHA256（源存在时 Test-M3MonGenEmpty -VerifySource 会复算对账）。
+# 生成命令：python mir2-rs/tests/parity/m3/fixtures/extract_mongen.py <source_path> <map>
+# 机判：gate_guards.ps1::Test-M3MonGenEmpty 按 map 查本表，要求 提取件数据行数 == spawn_rows；
+#       非 0 ⇒ 不是无怪图，run_pair -AttackPinPair fail-closed 拒绝跑。
+0	mongen-map0.tsv	53	E:/MirServer/Mir200/Envir/MonGen.txt	e5c39fb7eda66b70f82a61a5c2cea25df9cf0b6892b916fb6d579f88ff43748f
+0137	mongen-map0137.tsv	0	E:/MirServer/Mir200/Envir/MonGen.txt	e5c39fb7eda66b70f82a61a5c2cea25df9cf0b6892b916fb6d579f88ff43748f

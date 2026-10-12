@@ -298,16 +298,21 @@ powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair
 **攻击 pin 必须无怪（F-I，m3cs tick22 真机 finding，2026-10-12 13:45）**：旧缺省 pin `(289,618)` 与冻结内容
 `Envir/MonGen.txt` 的 map-0 刷怪圈 `256 572 r=50` 最近**净距仅 6.6 格**（`hypot(289-256,618-572)=56.6-50`）
 ⇒ 怪能刷到 attacker/victim 身上；真机会话 `csharp-20261012-130755` 里 29 条 `struck` 有 **27 条来自怪 `1330629693`**
-打在 attacker 身上，同种子两次 hit 数 2 vs 7（m3cs 另有一次 0/20）。⇒ 缺省 pin 改为 **`(429,320)`**（比奇城东门外空地，
-对 map-0 全部刷怪圈**最近净距 99.2 格**，最近圈 `333 268 r=10`）。唯一来源 = `gate_guards.ps1` 的
-`$script:M3AttackPinCX/CY`（`Format-M3AttackPose` 缺省与 `run_attack_pair.ps1 -AttackPinCX/-AttackPinCY` 同源）。
-机判护栏（都改回 `289,618` 必红）：`gate_guards.ps1::Test-M3AttackPinNoMonster` 读只读抽取
-`fixtures/mongen-map0.tsv`（map-0 刷怪点 `x\ty\trange`，内容冻结）要求净距 ≥50，`run_pair.ps1` 在 `-AttackPinPair`
-启动时 **fail-closed**；`run_attack_pair.ps1 -SelfCheckNoStack` **⑯** 两向（生产 99.2 绿 / 旧缺省 6.6 必红）。
-真机同种子连跑 2 次（`csharp-20261012-135416` / `-135539`，seed=42）均 `attacked=20 hits=1 done=1/1`、
-`PIN_NO_MONSTER OK clearance=99.2`、struck 只有 1 个 src（无第三方）；证据 `evidence-attack-pair-fij-20261012/**`。
-**残留**：同种子两次逐 k 仍不同——攻击判定取全局 `M2Share.RandomNumber`，被全图怪 `AnimalObject.Wondering` 等
-持续消耗 ⇒「同种子 ⇒ 逐 k 相同」不成立（详见 whitelist T-29）。
+打在 attacker 身上，同种子两次 hit 数 2 vs 7（m3cs 另有一次 0/20）。⇒ 先改成 `(429,320)`（比奇城东门外空地，净距 99.2）；
+证据 `evidence-attack-pair-fij-20261012/**`。（F-I 只消除了「落点被怪打」，**未**消除全图怪 AI 对全局 RNG 的消耗。）
+
+**攻击 pin 必须整张图无怪（R-1，owner 2026-10-12 14:30 裁决）**：「同种子 ⇒ 逐 k 相同」被全图怪 AI
+（`AnimalObject.Wondering` 等持续消费 `M2Share.RandomNumber`）破坏 ⇒ 解法 = 让对拍场景**除攻击路径外零 RNG 消费者**，
+最简 = **整张图零刷怪**。⇒ 攻击 pin 地图改为 **`0137`（竞技场）**（`MonGen.txt` **零行**、无 NPC/守卫、`Map/0137.map` 在），
+落点 **`(17,20) dir=2`** / victim `(18,20)`（均可走）。唯一来源 = `gate_guards.ps1` 的 `$script:M3AttackPinMap/CX/CY`
+（`Format-M3AttackPose` 缺省 + `run_attack_pair.ps1 -PinMapName/-AttackPinCX/-AttackPinCY` 同源）。
+`-PinMapName` 透传给 `run_pair.ps1`，pin SQL 的 `MapName`/落点跟着走（两侧 `ATTACK_POSE_OK` 逐字节同 pose）。
+**机判护栏**（不再是「离刷怪圈 99.2 格」——那不等于「全图无怪」）：`gate_guards.ps1::Test-M3MonGenEmpty`
+按地图查冻结提取件 `fixtures/mongen-map<map>.tsv` + `fixtures/mongen-provenance.tsv`，要求**该图刷怪行数 == 0**；
+`run_pair.ps1` 在 `-AttackPinPair` 启动时 **fail-closed**（不是无怪图 `throw`，且 `-VerifySource` 复算源 MonGen 行数/hash）。
+`run_attack_pair.ps1 -SelfCheckNoStack` **⑯** 四向（生产 0137 绿 + source_verified / **换回 map 0 必红** /
+合成 0 行=绿·1 行=红·行数≠声明=红·缺 provenance=红）。选图依据与提取命令/源 hash 见
+`evidence-attack-pair-r1-nomonster-20261012/README.md`。**判据不放宽**：`attack_diff.py diff` 仍求逐 k = 0。
 
 与前一条（背包/装备）共用同一批护栏：入口实现识别、两相 pin、`settle+hold`、`-DisableAutoPlay` 耦合、
 peer 口径（`attack_sequence`/`attack_pose`/`fixed_new_chr`）与 `scoped_diff` 作用域判据。

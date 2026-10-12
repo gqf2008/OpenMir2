@@ -1,0 +1,8 @@
+# 0137 图存在性与 MapInfo 口径（离线只读）
+
+MapInfo 行：[0137	竞技场]	FIGHT
+  解析：map=0137	竞技场 flags=FIGHT
+map 文件：E:/MirServer/Mir200/Map/0137.map
+map 文件大小：11932 bytes；SHA256：af987e96cd2b15a5eb3b6297a0465f031a3df63b21e50106d23328d6263c8b33
+文件头 Width=30 Height=33；expected=11932；match=True
+落点可走（bk/fr bit15 均未置）：attacker(17,20)=True victim(18,20)=True（口径 = mapfile.rs，12 bytes/cell，k=x*Height+y）

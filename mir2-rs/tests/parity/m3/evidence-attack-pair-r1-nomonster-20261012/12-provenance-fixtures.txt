@@ -1,0 +1,13 @@
+# MonGen 提取件与 provenance 复核（离线，只读源文件；内容冻结）
+
+源文件：E:/MirServer/Mir200/Envir/MonGen.txt
+源 SHA256：e5c39fb7eda66b70f82a61a5c2cea25df9cf0b6892b916fb6d579f88ff43748f
+提取器：mir2-rs/tests/parity/m3/fixtures/extract_mongen.py
+
+map	源行数	fixture	fixture 数据行	fixture SHA256
+0	53	mongen-map0.tsv	53	ccd227e8d96cc2190f43d9358354745a59c7c0b97a227610ea5a0e697a973443
+0137	0	mongen-map0137.tsv	0	81f0cc3cba35563e96d9052a044d857f99130986d2e1ab514be9675f6c0971db
+
+提取器复现（命令：python extract_mongen.py <MonGen.txt> <map>；stdout 为 LF 字节）：
+  map0 提取器行数=53；既有 fixture 数据行=53；逐字节相同=True
+  map0137 提取器 stdout=''（零行 ⇒ 整张零刷怪）

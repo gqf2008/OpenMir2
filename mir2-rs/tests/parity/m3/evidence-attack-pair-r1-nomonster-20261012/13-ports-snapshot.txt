@@ -1,0 +1,13 @@
+# 十端口实拍（本片零 .rs、本车道**未起也无需**服务端栈；此快照仅记录当时机器状态）
+# 快照时 5000/5100/5500/5600/5700/6000/7000/7100/7200 被**另一车道**的栈占用（本车道未启动/未停止任何服务）。
+# 采集命令：Get-NetTCPConnection -State Listen -LocalPort <p>（+ OwningProcess/ProcessName）
+5000: LISTEN pid=28828 proc=game-svr
+5100: LISTEN pid=26692 proc=DBSrv
+5500: LISTEN pid=30752 proc=LoginSrv
+5600: LISTEN pid=30752 proc=LoginSrv
+5700: LISTEN pid=26692 proc=DBSrv
+6000: LISTEN pid=26692 proc=DBSrv
+7000: LISTEN pid=3800 proc=login-gate
+7100: LISTEN pid=15064 proc=sel-gate
+7200: LISTEN pid=25508 proc=game-gate
+3306: LISTEN pid=29372 proc=mysqld

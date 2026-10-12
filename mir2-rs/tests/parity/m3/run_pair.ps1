@@ -55,12 +55,12 @@ param(
   [int]$AttackStartDelayMs = 3000, # 仅 -AttackSequence 时生效：进世界到第一步的额外等待
   [switch]$EmitOpsArgs,            # 只打印 run_bots 命令组成（含 -DisableAutoPlay 耦合）后退出；无副作用，供无栈自检
   [switch]$PinStartPose,           # T-14 固定起点变体（owner 86478c55/d7798370）：预热建角 → SQL pin → BEFORE 快照 → 计分跑（选角；不带 -FixedNewChr/-NewAccount）
-  [string]$PinMapName = '0',
+  [string]$PinMapName = '',   # 攻击变体的 pin 地图（R-1 要求整张零刷怪；空 ⇒ -AttackPinPair 取 $script:M3AttackPinMap，否则 '0'）
   [int]$PinHomeMap = 0,
   [int]$PinHomeX = 289,
   [int]$PinHomeY = 618,
-  [int]$PinCX = 289,
-  [int]$PinCY = 618,
+  [int]$PinCX = -1,                # -AttackPinPair 时 <0 ⇒ $script:M3AttackPinCX（0137）；否则 289
+  [int]$PinCY = -1,                # -AttackPinPair 时 <0 ⇒ $script:M3AttackPinCY；否则 618
   [int]$PinLevel = 1,
   [int]$PinDir = 0,
   [int]$PinSettleSeconds = 3,      # 仅 -PinStartPose：每轮 pin 后的 settle 窗口（异步掉线存档落库，见 gate_guards.ps1 ⑥）
@@ -81,6 +81,13 @@ $MysqlExe = 'D:\mysql\mariadb-10.11.19-winx64\bin\mysql.exe'
 $Scoped = Join-Path $Here 'scoped_diff.py'
 # 背包/装备序列口径（T-14 复跑：两侧同一组开关）的唯一形态在 gate_guards.ps1（与 run_m3_gate/selftest 共用）。
 . (Join-Path $Here 'gate_guards.ps1')
+
+# R-1（owner 2026-10-12 14:30）：攻击对拍场景必须整张图无怪 ⇒ `-AttackPinPair` 的 pin 地图缺省取
+# `gate_guards` 的唯一来源常量 `$script:M3AttackPinMap`（0137，MonGen 为空）；背包/装备（非攻击）路径仍缺省 map 0。
+if ([string]::IsNullOrEmpty($PinMapName)) { $PinMapName = if ($AttackPinPair) { $script:M3AttackPinMap } else { '0' } }
+# 攻击变体的落点缺省也跟随场景图（仅 -AttackPinPair 生效；背包/装备路径保持 289/618 逐字节不变）。
+if ($PinCX -lt 0) { $PinCX = if ($AttackPinPair) { $script:M3AttackPinCX } else { 289 } }
+if ($PinCY -lt 0) { $PinCY = if ($AttackPinPair) { $script:M3AttackPinCY } else { 618 } }
 
 # F-D（m3cs tick21）：攻击 pin 的抬高值范围守卫——越界就 fail-closed，不等真机 MySQL `ERROR 1264`。
 if ($AttackPinPair -and -not (Test-M3AttackVictimHpRange -VictimHp $AttackVictimHp)) {
@@ -156,17 +163,18 @@ if ($PinStartPose -and -not $FixedNewChr) {
 if ($AttackPinPair -and -not $PinStartPose) {
   throw '-AttackPinPair 必须与 -PinStartPose 同用（攻击变体仍需预热建角 + SQL pin 两相）'
 }
-# F-I（m3cs tick22 真机 finding，2026-10-12 13:45）：攻击 pin 落点必须**无怪干扰**——
-# 旧缺省 (289,618) 落在 map-0 的 `256 572 r=50` 刷怪圈边缘（净距 6.6） ⇒ 同种子连跑两次
-# hit 数 2 vs 7。真机启动即 fail-closed（不等跑出随机红）；无栈自检 ⑯ 另用旧缺省断言必红。
+# R-1（owner 2026-10-12 14:30）：攻击对拍场景必须**整张图无怪**（除攻击路径外零 RNG 消费者）——
+# 按 pin 地图查冻结提取件 + provenance 判「该图刷怪行数 == 0」；**不是无怪图就 fail-closed 拒绝跑**
+# （旧口径「离刷怪圈 99.2 格」不算「全图无怪」）。真机启动即判，不等跑出随机红；
+# 无栈自检 ⑯ 另做「map 0 必红 + 合成 0/1 行·声明漂移·缺 provenance 必红」四向。
 if ($AttackPinPair) {
-  $pinClear = Test-M3AttackPinNoMonster -X $PinCX -Y $PinCY -SpawnFixture (Join-Path $Here 'fixtures\mongen-map0.tsv')
-  if (-not $pinClear.ok) {
-    Write-Output ("RED: -AttackPinPair 落点 ({0},{1}) 靠近刷怪圈（净距 {2:F1} < 50，最近圈 {3}）——见 F-I；请改到无怪空地（缺省 {4},{5}）" -f `
-      $PinCX, $PinCY, $pinClear.clearance, $pinClear.nearest, $script:M3AttackPinCX, $script:M3AttackPinCY)
-    throw ('F-I: attack pin 靠近刷怪圈 clearance={0:F1}' -f $pinClear.clearance)
+  $pinMapChk = Test-M3MonGenEmpty -MapName $PinMapName -VerifySource
+  if (-not $pinMapChk.ok) {
+    Write-Output ("RED: -AttackPinPair 地图 '{0}' 不是整张无怪图（MonGen 刷怪行数 {1}，要求 0）——见 R-1 场景隔离；{2}；请改到 MonGen 为空的地图（缺省 {3}）" -f `
+      $PinMapName, $pinMapChk.spawns, $pinMapChk.reason, $script:M3AttackPinMap)
+    throw ('R-1: attack pin map not monsterless: {0} spawns={1}' -f $PinMapName, $pinMapChk.spawns)
   }
-  Write-Output ("PIN_NO_MONSTER OK pin=({0},{1}) clearance={2:F1} nearest={3}" -f $PinCX, $PinCY, $pinClear.clearance, $pinClear.nearest)
+  Write-Output ("MAP_HAS_NO_MONSTER ok map={0} spawns=0 fixture={1} source_verified={2}" -f $PinMapName, $pinMapChk.fixture, $pinMapChk.source_verified)
 }
 if ($AttackSequence -and $Bots -lt 2) {
   Write-Output ('WARN: -AttackSequence 建议 -Bots 2（attacker+victim）；当前 Bots={0} ⇒ 无目标，struck 恒 0，判据必 RED' -f $Bots)
