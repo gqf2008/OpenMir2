@@ -382,8 +382,19 @@ C# 读 rng-hook `MIR2_RNG_LOG` 的 `INJECT_OK <seed>`；Rust 读 game-svr 启动
 （另校启动器 `RUST_SEED_INJECTED=<n>`）；日志缺失 / 无证据行 / 种子不符 ⇒ **fail-closed RED**。
 `run_attack_pair.ps1` 新增 `-Seed`（默认 42）、`-CsharpSeedLog`、`-RustSeedLog`（缺省 `<RustStackLogDir>\game-svr.out.log`），
 并在 **0.6)** 预检逐侧断言；断言通过后把证据写入会话目录 `attack_seed.json`。`-SelfCheckNoStack` **⑬**（离线两向）
-与 `selftest_gate.ps1` **⑧** 机判（47 项）。
+与 `selftest_gate.ps1` **⑧** 机判（57 项）。
 证据 `evidence-attack-pair-inchealth-fix-20261012/**`。
+
+**pin 重试账本（owner 2026-10-12 16:30）**：`Invoke-M3PinSettleHold` 的重试次数此前**不记账**，
+同侧同种子两次跑若重试次数不同（每次重试多跑一轮 pin+settle+observe，推移攻击序列起始的全局 RNG 位置）
+会逐 k 错位，被误判成「实现差异」。⇒ `run_pair.ps1` 把本轮 pin 记账写进 **`baseline.json.pin_attempts`**
+（`attempts=<n> expected=2 settle_rounds=<m> max_attempts=<k>`，另落 `<会话>/pin_hold.txt` 原始 `PIN_HOLD`/`PIN_RETRY` 行）；
+期望值 = **2**（`Get-M3PinHoldVerdict` 要求「连续两轮 settle」⇒ 最快 hold 也只能在第 2 次尝试）。
+`run_attack_pair.ps1` 在**侧运行后**核本侧、在 `Invoke-AttackCrossSideDiff` 里**两侧一起**核，
+任一超期望 ⇒ **`PREREQ_MISSING`（exit 2，fail-closed，拒绝当「同一序列」继续比）**。
+历史 B-1/B-2 复算：c1=3 / c2=2 / c3=4 / r1=2 / r2=2 ⇒ `c2-vs-c3-differs` 那对被拦、`r1-vs-r2` 放行。
+`attack_diff.py` 增 `pin_attempts <stdout>` 复算子命令；`-SelfCheckNoStack` **⑱** 与 `selftest_gate.ps1` **⑨** 机判，
+改坏（人为让 pin 重试一次）必红。证据 `evidence-pin-retry-20261012/**`。
 
 ## 一次「侧运行」是什么
 

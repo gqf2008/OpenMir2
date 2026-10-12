@@ -1,0 +1,55 @@
+# pin 重试次数复算（owner 2026-10-12 16:30）
+#
+# 来源：m3cs 的 B-1/B-2 真机跑（卡 openmir2-m3-combat-skills-align），原始 stdout 捕获件在
+#   E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3cs/mir2-rs/tests/parity/m3/evidence-b1b2-20261012/commands/*.txt
+# 工具：python mir2-rs/tests/parity/m3/attack_diff.py pin_attempts <stdout.txt>（本片新增子命令）
+# 期望值口径 = 2（Get-M3PinHoldVerdict 的「连续两轮 settle」结构性最小 attempts）；attempts>2 ⇒ extra_retries>0 ⇒ fail-closed。
+
+===== c1  <-  03-csharp-120-c1.txt
+  38:PIN_RETRY attempt=1 settle_rounds=1 prev_match=False pinned=1/2 bag=0/0 abil=1/2（pin_char_mismatch,pin_abil_mismatch）
+  39:PIN_RETRY attempt=2 settle_rounds=2 prev_match=False pinned=2/2 bag=0/0 abil=2/2（pin_hold_needs_consecutive_settle）
+  40:PIN_HOLD attempt=3（连续两轮 settle 复验均 hold 住）
+  41:PIN_START_POSE pair map=0137 attacker=17,20,dir=2 victim=18,20 level=1 vhp=30000
+  --- pin_attempts 复算（rc = python 退出码；0=零额外重试，1=超期望 fail-closed） ---
+  PIN_ATTEMPTS attempts=3 expected=2 settle_rounds=3 max_attempts=5 hold_attempt=3 pin_retry_lines=2 extra_retries=1 ok=False
+  {"attempts": 3, "expected": 2, "hold_attempt": 3, "pin_retry_lines": 2, "max_retry_attempt": 2, "extra_retries": 1, "ok": false, "log": "E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3cs/mir2-rs/tests/parity/m3/evidence-b1b2-20261012/commands/03-csharp-120-c1.txt"}
+  rc=1
+
+===== c2  <-  11-csharp-120-c2.txt
+  38:PIN_RETRY attempt=1 settle_rounds=1 prev_match=False pinned=2/2 bag=0/0 abil=2/2（pin_hold_needs_consecutive_settle）
+  39:PIN_HOLD attempt=2（连续两轮 settle 复验均 hold 住）
+  40:PIN_START_POSE pair map=0137 attacker=17,20,dir=2 victim=18,20 level=1 vhp=30000
+  --- pin_attempts 复算（rc = python 退出码；0=零额外重试，1=超期望 fail-closed） ---
+  PIN_ATTEMPTS attempts=2 expected=2 settle_rounds=2 max_attempts=5 hold_attempt=2 pin_retry_lines=1 extra_retries=0 ok=True
+  {"attempts": 2, "expected": 2, "hold_attempt": 2, "pin_retry_lines": 1, "max_retry_attempt": 1, "extra_retries": 0, "ok": true, "log": "E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3cs/mir2-rs/tests/parity/m3/evidence-b1b2-20261012/commands/11-csharp-120-c2.txt"}
+  rc=0
+
+===== c3  <-  13-csharp-120-c3.txt
+  38:PIN_RETRY attempt=1 settle_rounds=1 prev_match=False pinned=1/2 bag=0/0 abil=1/2（pin_char_mismatch,pin_abil_mismatch）
+  39:PIN_RETRY attempt=2 settle_rounds=2 prev_match=False pinned=1/2 bag=0/0 abil=1/2（pin_char_mismatch,pin_abil_mismatch）
+  40:PIN_RETRY attempt=3 settle_rounds=3 prev_match=False pinned=2/2 bag=0/0 abil=2/2（pin_hold_needs_consecutive_settle）
+  41:PIN_HOLD attempt=4（连续两轮 settle 复验均 hold 住）
+  42:PIN_START_POSE pair map=0137 attacker=17,20,dir=2 victim=18,20 level=1 vhp=30000
+  --- pin_attempts 复算（rc = python 退出码；0=零额外重试，1=超期望 fail-closed） ---
+  PIN_ATTEMPTS attempts=4 expected=2 settle_rounds=4 max_attempts=5 hold_attempt=4 pin_retry_lines=3 extra_retries=2 ok=False
+  {"attempts": 4, "expected": 2, "hold_attempt": 4, "pin_retry_lines": 3, "max_retry_attempt": 3, "extra_retries": 2, "ok": false, "log": "E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3cs/mir2-rs/tests/parity/m3/evidence-b1b2-20261012/commands/13-csharp-120-c3.txt"}
+  rc=1
+
+===== r1  <-  07-rust-120-crossside.txt
+  34:PIN_RETRY attempt=1 settle_rounds=1 prev_match=False pinned=2/2 bag=0/0 abil=2/2（pin_hold_needs_consecutive_settle）
+  35:PIN_HOLD attempt=2（连续两轮 settle 复验均 hold 住）
+  36:PIN_START_POSE pair map=0137 attacker=17,20,dir=2 victim=18,20 level=1 vhp=30000
+  --- pin_attempts 复算（rc = python 退出码；0=零额外重试，1=超期望 fail-closed） ---
+  PIN_ATTEMPTS attempts=2 expected=2 settle_rounds=2 max_attempts=5 hold_attempt=2 pin_retry_lines=1 extra_retries=0 ok=True
+  {"attempts": 2, "expected": 2, "hold_attempt": 2, "pin_retry_lines": 1, "max_retry_attempt": 1, "extra_retries": 0, "ok": true, "log": "E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3cs/mir2-rs/tests/parity/m3/evidence-b1b2-20261012/commands/07-rust-120-crossside.txt"}
+  rc=0
+
+===== r2  <-  08-rust-120-r2.txt
+  34:PIN_RETRY attempt=1 settle_rounds=1 prev_match=False pinned=2/2 bag=0/0 abil=2/2（pin_hold_needs_consecutive_settle）
+  35:PIN_HOLD attempt=2（连续两轮 settle 复验均 hold 住）
+  36:PIN_START_POSE pair map=0137 attacker=17,20,dir=2 victim=18,20 level=1 vhp=30000
+  --- pin_attempts 复算（rc = python 退出码；0=零额外重试，1=超期望 fail-closed） ---
+  PIN_ATTEMPTS attempts=2 expected=2 settle_rounds=2 max_attempts=5 hold_attempt=2 pin_retry_lines=1 extra_retries=0 ok=True
+  {"attempts": 2, "expected": 2, "hold_attempt": 2, "pin_retry_lines": 1, "max_retry_attempt": 1, "extra_retries": 0, "ok": true, "log": "E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3cs/mir2-rs/tests/parity/m3/evidence-b1b2-20261012/commands/08-rust-120-r2.txt"}
+  rc=0
+

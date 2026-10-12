@@ -44,11 +44,18 @@
         (g) align 的窗口归属（struck 落到最近的 k）⇒ 期望逐次结果。
       真跑的是 align/diff 的生产函数；selftest 只喂合成输入（照 run_bag_equip_pair 自检口径）。
 
+  pin_attempts <stdout.txt> [--expected N]
+      从一次侧运行的 stdout 日志复算 pin 重试次数（owner 2026-10-12 16:30）：解析 `PIN_HOLD attempt=N`
+      / `PIN_RETRY attempt=N` 行，输出与 `run_pair.ps1::Format-M3PinAttempts` 同形的记账串 + JSON。
+      `attempts > expected` ⇒ rc=1（fail-closed，该运行与零重试运行不在同一全局 RNG 位置）；
+      日志里无 `PIN_HOLD` ⇒ rc=2（pin 未 hold 住/日志截断）。历史会话（未落结构化字段）可用它复算。
+
 退出码：0 = GREEN；1 = RED（有差异/非平凡门未过）；2 = PREREQ（文件缺失/空）。
 """
 import argparse
 import json
 import os
+import re
 import sys
 
 
@@ -438,6 +445,24 @@ def cmd_selftest(args):
     rc = cmd_diff(argparse.Namespace(a=d_a, b=d_b, max_diffs=20))
     check("j-hp-mismatch-red", rc == 1, "rc=%d" % rc)
 
+    # (k) pin_attempts 复算（owner 2026-10-12 16:30）：干净日志 attempts=2 ⇒ 绿；多一次重试 ⇒ 红；无 PIN_HOLD ⇒ PREREQ
+    clean_log = os.path.join(tmp, "pin-clean.txt")
+    with open(clean_log, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("PIN_RETRY attempt=1 settle_rounds=1 prev_match=False pinned=2/2（pin_hold_needs_consecutive_settle）\n")
+        fh.write("PIN_HOLD attempt=2（连续两轮 settle 复验均 hold 住）\n")
+    rc = cmd_pin_attempts(argparse.Namespace(log=clean_log, expected=2, max_attempts=5))
+    check("k-pin-clean-green", rc == 0, "rc=%d" % rc)
+    retry_log = os.path.join(tmp, "pin-retry.txt")
+    with open(retry_log, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("PIN_RETRY attempt=1 settle_rounds=1 prev_match=False pinned=1/2（pin_char_mismatch）\n")
+        fh.write("PIN_RETRY attempt=2 settle_rounds=2 prev_match=False pinned=1/2（pin_char_mismatch）\n")
+        fh.write("PIN_RETRY attempt=3 settle_rounds=3 prev_match=False pinned=2/2（pin_hold_needs_consecutive_settle）\n")
+        fh.write("PIN_HOLD attempt=4（连续两轮 settle 复验均 hold 住）\n")
+    rc = cmd_pin_attempts(argparse.Namespace(log=retry_log, expected=2, max_attempts=5))
+    check("k-pin-retry-red", rc == 1, "rc=%d" % rc)
+    rc = cmd_pin_attempts(argparse.Namespace(log=os.path.join(tmp, "pin-nope.txt"), expected=2, max_attempts=5))
+    check("k-pin-missing-prereq", rc == 2, "rc=%d" % rc)
+
     # 清理
     for name in os.listdir(tmp):
         try:
@@ -450,8 +475,52 @@ def cmd_selftest(args):
         print("SELFTEST RED: %d/%d 未过: %s" % (len(failures), len(checks), ", ".join(failures)))
         return 1
     print("SELFTEST GREEN: attack_diff selftest %d/%d（align 窗口归属 + 同序列绿 + 改坏 dmg/hit 必红 + "
-          "全 0 非平凡门 + 空序列 + 长度不等 + 死亡容忍/死亡时点/HP 逐项比（F-F option ③））" % (len(checks), len(checks)))
+          "全 0 非平凡门 + 空序列 + 长度不等 + 死亡容忍/死亡时点/HP 逐项比（F-F option ③） + "
+          "pin_attempts 复算（干净=绿 / 多一次重试=红 / 缺 PIN_HOLD=PREREQ））" % (len(checks), len(checks)))
     return 0
+
+
+def cmd_pin_attempts(args):
+    """从一次侧运行的 stdout 日志复算 pin 重试次数（owner 2026-10-12 16:30）。
+
+    日志行形如（run_pair.ps1 的 pin 循环原样打印）：
+        PIN_RETRY attempt=1 settle_rounds=1 prev_match=False pinned=1/2 ...（pin_char_mismatch）
+        PIN_HOLD attempt=2（连续两轮 settle 复验均 hold 住）
+    期望值口径 = 2（`Get-M3PinHoldVerdict` 的「连续两轮 settle」结构性最小 attempts）。
+    每次 `PIN_RETRY` = 多跑一轮 pin+settle+observe ⇒ 推移攻击序列起始的全局 RNG 位置。
+    """
+    if not os.path.exists(args.log):
+        return _die("PREREQ_MISSING: 找不到日志 %s" % args.log)
+    hold_attempt = None
+    retry_lines = 0
+    max_retry_attempt = 0
+    with open(args.log, "r", encoding="utf-8-sig", errors="replace") as fh:
+        for line in fh:
+            m = re.search(r"PIN_HOLD\s+attempt=(\d+)", line)
+            if m:
+                hold_attempt = int(m.group(1))
+                continue
+            m = re.search(r"PIN_RETRY\s+attempt=(\d+)", line)
+            if m:
+                retry_lines += 1
+                max_retry_attempt = max(max_retry_attempt, int(m.group(1)))
+    if hold_attempt is None:
+        print("PREREQ_MISSING: %s 里没有 PIN_HOLD 行（pin 未 hold 住/日志被截断）" % args.log)
+        return 2
+    attempts = hold_attempt
+    expected = args.expected
+    extra = max(0, attempts - expected)
+    ok = (attempts == expected)
+    # 生产 Settle 脚本块恒 return $true ⇒ settle_rounds == attempts（与 run_pair 的 Format-M3PinAttempts 同源）。
+    canonical = "attempts=%d expected=%d settle_rounds=%d max_attempts=%d" % (attempts, expected, attempts, args.max_attempts)
+    print("PIN_ATTEMPTS %s hold_attempt=%d pin_retry_lines=%d extra_retries=%d ok=%s" %
+          (canonical, hold_attempt, retry_lines, extra, ok))
+    print(json.dumps({
+        "attempts": attempts, "expected": expected, "hold_attempt": hold_attempt,
+        "pin_retry_lines": retry_lines, "max_retry_attempt": max_retry_attempt,
+        "extra_retries": extra, "ok": ok, "log": args.log,
+    }, ensure_ascii=False))
+    return 0 if ok else 1
 
 
 def main(argv=None):
@@ -478,6 +547,12 @@ def main(argv=None):
     p_mu.add_argument("--field", required=True)
     p_mu.add_argument("--value", type=int, required=True)
     p_mu.set_defaults(func=cmd_mutate)
+
+    p_pa = sub.add_parser("pin_attempts")
+    p_pa.add_argument("log")
+    p_pa.add_argument("--expected", type=int, default=2)
+    p_pa.add_argument("--max-attempts", type=int, default=5)
+    p_pa.set_defaults(func=cmd_pin_attempts)
 
     args = ap.parse_args(argv)
     return args.func(args)
