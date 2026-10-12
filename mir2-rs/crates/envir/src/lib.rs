@@ -17,6 +17,7 @@ pub mod conf;
 pub mod error;
 pub mod mapfile;
 pub mod mapinfo;
+pub mod mongen;
 pub mod paths;
 pub mod points;
 pub mod registry;
@@ -31,6 +32,9 @@ pub use mapfile::{
 pub use mapinfo::{
     parse_flag_commands, parse_map_info_lines, parse_section_line, parse_section_line_with_state,
     MapInfoEntry, MapInfoFlag, MapInfoParseState,
+};
+pub use mongen::{
+    mon_gen_count, parse_mon_gen_line, MonGenInfo, MON_GEN_THREAD_MON_LIMIT, TEXT_SPLIT_CONST,
 };
 pub use paths::{
     envir_file_path, map_file_path, path_combine, point_file_path, DEFAULT_ENVIR_DIR,

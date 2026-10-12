@@ -1,0 +1,26 @@
+$ cp crates/envir/src/mongen.rs /tmp/bak ; 把 `CompareLStr("loadgen", 行)` 反转成 `CompareLStr(行, "loadgen")`（= 顺手修 oracle 缺陷）
+$ CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test -p mir2-envir --offline --test mongen loader_does_not_expand_loadgen_include
+   Compiling mir2-envir v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\envir)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.61s
+     Running tests\mongen.rs (E:/tmp/openmir2-m2svr-target\debug\deps\mongen-0e054e7c90c63b5b.exe)
+
+running 1 test
+test loader_does_not_expand_loadgen_include ... FAILED
+
+failures:
+
+---- loader_does_not_expand_loadgen_include stdout ----
+
+thread 'loader_does_not_expand_loadgen_include' (6500) panicked at crates\envir\tests\mongen.rs:74:5:
+assertion `left == right` failed: oracle 的 loadgen 判定实参写反 ⇒ 子文件不得被展开；实际 [MonGenInfo { map_name: "A", x: 1, y: 2, mon_name: "甲", range: 0, count: 3, active_count: 0, zen_time: 3600000, mission_gen_rate: 0, race: 0, start_tick: 0 }, MonGenInfo { map_name: "B", x: 7, y: 8, mon_name: "乙", range: 0, count: 4, active_count: 0, zen_time: 1800000, mission_gen_rate: 0, race: 0, start_tick: 0 }]
+  left: 2
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    loader_does_not_expand_loadgen_include
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-envir --test mongen`

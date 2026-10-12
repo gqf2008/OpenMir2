@@ -1,0 +1,118 @@
+### oracle: src/GameSrv/DB/LocalDB.cs:476-590（LoadMapGen + LoadMonGen）
+$ sed -n "476,590p" src/GameSrv/DB/LocalDB.cs
+
+        private static void LoadMapGen(StringList monGenList, string sFileName)
+        {
+            string sFileDir = M2Share.GetEnvirFilePath("MonGen");
+            if (!Directory.Exists(sFileDir))
+            {
+                Directory.CreateDirectory(sFileDir);
+            }
+            string sFilePatchName = sFileDir + sFileName;
+            if (!File.Exists(sFilePatchName))
+            {
+                return;
+            }
+
+            using StringList loadList = new StringList();
+            loadList.LoadFromFile(sFilePatchName);
+            for (int i = 0; i < loadList.Count; i++)
+            {
+                monGenList.Add(loadList[i]);
+            }
+        }
+
+        /// <summary>
+        /// 读取怪物刷新配置信息
+        /// </summary>
+        /// <returns></returns>
+        public int LoadMonGen(out int mongenCount)
+        {
+            string sLineText = string.Empty;
+            string sData = string.Empty;
+            int i;
+            int result = 0;
+            mongenCount = 0;
+            string sFileName = M2Share.GetEnvirFilePath("MonGen.txt");
+            if (File.Exists(sFileName))
+            {
+                using StringList loadList = new StringList();
+                loadList.LoadFromFile(sFileName);
+                i = 0;
+                while (true)
+                {
+                    if (i >= loadList.Count)
+                    {
+                        break;
+                    }
+                    if (HUtil32.CompareLStr("loadgen", loadList[i]))
+                    {
+                        string sMapGenFile = HUtil32.GetValidStr3(loadList[i], ref sLineText, TextSplitConst);
+                        loadList.RemoveAt(i);
+                        if (!string.IsNullOrEmpty(sMapGenFile))
+                        {
+                            LoadMapGen(loadList, sMapGenFile);
+                        }
+                    }
+                    i++;
+                }
+                MonGenInfo monGenInfo = null;
+                for (i = 0; i < loadList.Count; i++)
+                {
+                    sLineText = loadList[i];
+                    if (!string.IsNullOrEmpty(sLineText) && sLineText[0] != ';')
+                    {
+                        monGenInfo = new MonGenInfo();
+                        sLineText = HUtil32.GetValidStr3(sLineText, ref sData, TextSplitConst);
+                        monGenInfo.MapName = sData;
+                        sLineText = HUtil32.GetValidStr3(sLineText, ref sData, TextSplitConst);
+                        monGenInfo.X = (short)HUtil32.StrToInt(sData, 0);
+                        sLineText = HUtil32.GetValidStr3(sLineText, ref sData, TextSplitConst);
+                        monGenInfo.Y = (short)HUtil32.StrToInt(sData, 0);
+                        sLineText = HUtil32.GetValidStrCap(sLineText, ref sData, TextSplitConst);
+                        if (!string.IsNullOrEmpty(sData) && sData[0] == '\"')
+                        {
+                            HUtil32.ArrestStringEx(sData, "\"", "\"", ref sData);
+                        }
+                        monGenInfo.MonName = sData;
+                        sLineText = HUtil32.GetValidStr3(sLineText, ref sData, TextSplitConst);
+                        monGenInfo.Range = (byte)HUtil32.StrToInt(sData, 0);
+                        sLineText = HUtil32.GetValidStr3(sLineText, ref sData, TextSplitConst);
+                        monGenInfo.Count = (ushort)HUtil32.StrToInt(sData, 0);
+                        sLineText = HUtil32.GetValidStr3(sLineText, ref sData, TextSplitConst);
+                        monGenInfo.ZenTime = HUtil32.StrToInt(sData, -1) * 60 * 1000;
+                        sLineText = HUtil32.GetValidStr3(sLineText, ref sData, TextSplitConst);
+                        monGenInfo.MissionGenRate = (byte)HUtil32.StrToInt(sData, 0);// 集中座标刷新机率 1 -100
+                        if (!string.IsNullOrEmpty(monGenInfo.MapName) && !string.IsNullOrEmpty(monGenInfo.MonName) && monGenInfo.ZenTime > 0 && SystemShare.MapMgr.GetMapInfo(M2Share.ServerIndex, monGenInfo.MapName) != null)
+                        {
+                            monGenInfo.CertList = new List<IMonsterActor>();
+                            monGenInfo.Envir = SystemShare.MapMgr.FindMap(monGenInfo.MapName);
+                            if (monGenInfo.Envir != null)
+                            {
+                                SystemShare.WorldEngine.AddMonGenList(monGenInfo);
+                            }
+                            else
+                            {
+                                monGenInfo = null;
+                            }
+                        }
+                    }
+                }
+                monGenInfo = new MonGenInfo
+                {
+                    CertList = new List<IMonsterActor>(),
+                    Envir = null
+                };
+                if (SystemShare.WorldEngine.CheckMonGenInfoThreadMap(0))
+                {
+                    SystemShare.WorldEngine.AddMonGenInfoThreadMap(0, monGenInfo);
+                }
+                else
+                {
+                    SystemShare.WorldEngine.CreateMonGenInfoThreadMap(0, new List<MonGenInfo>() { monGenInfo });
+                }
+                result = 1;
+                mongenCount = SystemShare.WorldEngine.MonGenCount;
+            }
+            return result;
+        }
