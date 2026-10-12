@@ -18,6 +18,9 @@
 //       其余消费者（怪物 AI/掉落/商人/刷新/构造期…）仍走原全局流。
 //     * attack_seed = unchecked(MIR2_RNG_SEED + 0x9E37)（与 Rust 侧同公式）。
 //     * 关闭时行为与现在**逐字节相同**（专用流不构造、不被取数）。
+//     * F-N1（m3cs 2026-10-13）：分流再按**被测量攻方线程**收窄——只有玩家攻击起点所在线程
+//       （`UserProcessor`）的取数进专用流；别图怪物/守卫的独立 MobThread 仍走原全局流，
+//       不再推移被测量攻方的流位置。
 //   MIR2_RNG_ISOLATE_SITES=<路径>  静态分流站点 dump 落盘路径（每行一个 Type.Method@file:line，
 //                                  即 divert-sites.txt 原样字节；供 check_predicates.py 机判）。
 //                                  未设 ⇒ 落在 MIR2_RNG_LOG 同目录的 rng-isolate-sites.txt。
@@ -102,6 +105,80 @@ internal static class StartupHook
             }
         }
         return false;
+    }
+
+    // ---------------------------------------------------------------------
+    // F-N1（m3cs 2026-10-13 定位；owner 2026-10-12 22:15 ①）：攻击路径分流按**攻方实体**收窄。
+    //
+    // 现象：调用点级 divert 不区分攻方实体 ⇒ 同一 GameSvr 进程里**别图的怪物/守卫 AI**走同一批
+    //   站点时也抽 `Random(attack_seed)` ⇒ 被测量玩家攻方的专用流位置被整体推移（C# 不可复现）。
+    // 修法：专用流只服务**被测量玩家攻方所在线程**的取数——玩家攻击由 `UserProcessor` 单线程处理
+    //   （`GameServer.cs` / `WorldServer.ProcessHumans`），怪物 AI 跑在独立 `MobThread`（`WorldServer.MonGen.cs`）；
+    //   每次玩家攻击的**首抽**（`PlayObject.GetAttackPower@PlayObject.cs:2929` / `:2918`）把当前线程
+    //   认领为「攻方线程」，其余线程（MobThread 等）的取数仍走原全局流。
+    // 不变量：首抽自身必须先认领后判定（否则第一击会漏进全局流）；非玩家站点（`atk_power_base`）
+    //   若仍落在攻方线程上，会被下游 `attack_stream_gate.py` 的 fail-closed 门点名（拒比）。
+    // ---------------------------------------------------------------------
+
+    /// <summary>玩家攻击**起点**站点（Luck<=0 首抽 :2929 / Luck>0 首抽 :2918，及其第二抽）——
+    /// 命中即把当前线程认领为「被测量攻方线程」。取数模板见 `attack_sites.tsv`。</summary>
+    private static readonly string[] PlayerAttackStartSites =
+    {
+        "M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929",
+        "M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2934",
+        "M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2918",
+        "M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2924",
+    };
+
+    /// <summary>被测量玩家攻方所在线程 id（-1 = 尚未认领）。</summary>
+    private static int _attackThreadId = -1;
+
+    /// <summary>调用点是否为玩家攻击起点站点（可离线单测）。</summary>
+    internal static bool IsPlayerAttackStartSite(string site)
+    {
+        if (string.IsNullOrEmpty(site))
+        {
+            return false;
+        }
+        foreach (string s in PlayerAttackStartSites)
+        {
+            if (string.Equals(s, site, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// 把某次取数路由到专用流的判定（纯逻辑，可离线单测）。
+    /// 1) 非分流站点 ⇒ 永不进专用流；
+    /// 2) 玩家攻击起点 ⇒ 把当前线程认领为攻方线程；
+    /// 3) 仅当当前线程 == 攻方线程 ⇒ 进专用流（非玩家并发攻方线程仍走全局流）。
+    /// </summary>
+    internal static bool RouteToAttackStream(string site, bool inDivertSet, int threadId)
+    {
+        if (!inDivertSet)
+        {
+            return false;
+        }
+        if (IsPlayerAttackStartSite(site))
+        {
+            _attackThreadId = threadId;
+        }
+        return threadId == _attackThreadId;
+    }
+
+    /// <summary>自检用：重置攻方线程认领（模拟进程起始）。</summary>
+    internal static void ResetAttackThreadForTest()
+    {
+        _attackThreadId = -1;
+    }
+
+    /// <summary>自检用：当前认领的攻方线程 id（-1 = 未认领）。</summary>
+    internal static int AttackThreadIdForTest()
+    {
+        return _attackThreadId;
     }
 
     public static void Initialize()
@@ -486,7 +563,9 @@ internal sealed class RecordingRandom : Random
     private Random Route(out string site, out bool diverted)
     {
         site = _needSite ? StartupHook.Site() : null;
-        diverted = _attack != null && site != null && _divert.Contains(site);
+        // F-N1：按「被测量攻方线程」收窄（非玩家并发攻方仍走全局流）。
+        diverted = _attack != null && site != null
+            && StartupHook.RouteToAttackStream(site, _divert.Contains(site), Environment.CurrentManagedThreadId);
         return diverted ? _attack : _inner;
     }
 

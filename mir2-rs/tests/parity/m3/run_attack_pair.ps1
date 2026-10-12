@@ -67,6 +67,12 @@
                  !ghost && !death 的玩家族对象（允许 1 击起跑竞态）。C# 半 `-CsharpStateLog` /
                  `start-csharp-hook.ps1 -StateLog`；Rust 半 `-RustStateLog` / `start_rust_stack.ps1 -StateLog`。
                  **任一侧缺 dump ⇒ RED（fail-closed）**；改坏（受害 ghost ⇒ 门点名 k）必红，自检 ⑦c。
+    2.7 C# 专用流纯度门（F-N1，owner 22:15 ① / m3cs 2026-10-13）  隔离开启且 `-Side csharp` 时，专用流
+                 （`-AttackStreamLog` / `$env:MIR2_RNG_ATTACK_LOG`）必须**只含被测量玩家攻方单元**：首单元必须是
+                 `atk_power_a`/`luck_a`，player 单元数 == `-AttackCount`，base 单元数 == 0。
+                 调用点级 divert 会把别图怪物/守卫（非玩家攻方）吸进同一条 `Random(attack_seed)` ⇒ 流位置被推移；
+                 `attack_stream_gate.py` 当场判红并**拒比**（fail-closed），缺流文件 ⇒ RED。hook 侧已按「被测量攻方
+                 线程」收窄（`StartupHook.cs`）。自检 22c：干净绿 / 混入 base 单元·player 数不符 必红。
     3 跨侧口径   两侧 baseline.json 的 `attack_sequence` / `attack_pose` / `fixed_new_chr` 必须一致；
                  不一致 ⇒ PREREQ（exit 2）。
     3.1 pin 记账门（owner 2026-10-12 16:30；**19:20 降级为 informational**）  `baseline.json.pin_attempts`
@@ -137,6 +143,7 @@ $RunPair = Join-Path $Here 'run_pair.ps1'
 $Scoped = Join-Path $Here 'scoped_diff.py'
 $AttackDiff = Join-Path $Here 'attack_diff.py'
 $ServerStateGate = Join-Path $Here 'server_state_gate.py'
+$AttackStreamGate = Join-Path $Here 'attack_stream_gate.py'   # F-N1：C# 专用流「只有被测量攻方」fail-closed 门
 $RunBots = Join-Path $RepoRoot 'tools\botload\run_bots.ps1'
 $Sessions = Join-Path $Here 'sessions'
 $MysqlExe = 'D:\mysql\mariadb-10.11.19-winx64\bin\mysql.exe'
@@ -948,9 +955,61 @@ if ($SelfCheckNoStack) {
   if ($ledgerOut -notmatch 'SELFTEST GREEN') { $failures += 'attack_rng_ledger_selftest_not_green' }
   Write-Output ("SELFTEST 22b attack_rng_ledger selftest rc={0}（两侧攻击站点表同表 + 新站点分类有牙）" -f $ledgerRc)
 
+  # 22c. F-N1（owner 2026-10-12 22:15 ① / m3cs 2026-10-13）：C# 专用流的「只有被测量攻方」
+  #      fail-closed 门。合成**干净流** ⇒ 绿；把一条非玩家攻方（`atk_power_base`）单元混进去
+  #      （= 真机实测的污染形态，`evidence-.../provenance/csharp-attack-stream-stack2.tsv` 首条就是它）
+  #      ⇒ 必红且点名；player 单元数 < 期望 ⇒ 必红。自检直接调生产脚本 `attack_stream_gate.py`。
+  $asg = Join-Path $Here 'attack_stream_gate.py'
+  $asgDir = Join-Path $tmpRoot 'asg'
+  New-Item -ItemType Directory -Force -Path $asgDir | Out-Null
+  $asgClean = Join-Path $asgDir 'clean.tsv'
+  $asgPolluted = Join-Path $asgDir 'polluted.tsv'
+  $asgCleanRows = @()
+  for ($i = 0; $i -lt 3; $i++) {
+    $asgCleanRows += "Next(max)`t1`t0`tM2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929"
+    $asgCleanRows += "Next(max)`t10`t3`tM2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2934"
+    $asgCleanRows += "Next(max)`t15`t7`tM2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41"
+    $asgCleanRows += "Next(max)`t5`t2`tM2Server.Player.PlayObject.AttackSuccess@PlayObject.Attack.cs:223"
+  }
+  [System.IO.File]::WriteAllLines($asgClean, $asgCleanRows, (New-Object System.Text.UTF8Encoding($false)))
+  $asgPollutedRows = @("Next(max)`t1`t0`tM2Server.Actor.BaseObject.GetAttackPower@BaseObject.Base.cs:892",
+                       "Next(max)`t8`t3`tM2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41") + $asgCleanRows
+  [System.IO.File]::WriteAllLines($asgPolluted, $asgPollutedRows, (New-Object System.Text.UTF8Encoding($false)))
+  $prevEap = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  $asgCleanOut = (& python $asg gate --stream $asgClean --expected 3 2>&1 | Out-String)
+  $asgCleanRc = $LASTEXITCODE
+  $asgBadOut = (& python $asg gate --stream $asgPolluted --expected 3 2>&1 | Out-String)
+  $asgBadRc = $LASTEXITCODE
+  $asgShortOut = (& python $asg gate --stream $asgClean --expected 4 2>&1 | Out-String)
+  $asgShortRc = $LASTEXITCODE
+  $asgSelfOut = (& python $asg selftest 2>&1 | Out-String)
+  $asgSelfRc = $LASTEXITCODE
+  $ErrorActionPreference = $prevEap
+  if ($asgCleanRc -ne 0) { $failures += ('asg_clean_not_green_rc=' + $asgCleanRc) }
+  if ($asgBadRc -eq 0) { $failures += 'asg_polluted_not_red' }
+  if ($asgBadOut -notmatch 'non_player_attacker_unit') { $failures += 'asg_polluted_no_teeth' }
+  if ($asgShortRc -eq 0) { $failures += 'asg_short_player_count_not_red' }
+  if ($asgSelfRc -ne 0) { $failures += ('asg_selftest_rc=' + $asgSelfRc) }
+  if ($asgSelfOut -notmatch 'SELFTEST GREEN') { $failures += 'asg_selftest_not_green' }
+  Write-Output ("SELFTEST 22c C# 专用流纯度门（F-N1）：干净 rc={0} / 混入 base 单元 rc={1}(点名={2}) / player 数少 rc={3}；selftest rc={4}" -f $asgCleanRc, $asgBadRc, ($asgBadOut -match 'non_player_attacker_unit'), $asgShortRc, $asgSelfRc)
+
+  # 22d. F-N2（m3cs 2026-10-13）：start-csharp-hook.ps1 传 `-Repo` 时 `$Here` 不得为 null
+  #      （回归：F1 修复 44849fa3 把 `$Here` 赋值移进了 `if ($Repo -eq '')`，而它下面用于 dot-source
+  #      `m3hashutil.ps1`）。生产 `-Status` 分支在 dot-source **之后** ⇒ 传 `-Repo` 若能打印端口并 rc=0，
+  #      就证明 `$Here` 已无条件赋值；改回去 ⇒ 必抛 `Cannot bind argument to parameter 'Path'`（rc!=0）。
+  $prevEap = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  $hookStatusOut = (& powershell -ExecutionPolicy Bypass -File (Join-Path $Here 'start-csharp-hook.ps1') -Repo $RepoRoot -Status 2>&1 | Out-String)
+  $hookStatusRc = $LASTEXITCODE
+  $ErrorActionPreference = $prevEap
+  if ($hookStatusRc -ne 0) { $failures += ('f_n2_repo_status_rc=' + $hookStatusRc) }
+  if ($hookStatusOut -match 'Cannot bind argument to parameter') { $failures += 'f_n2_repo_here_null' }
+  Write-Output ("SELFTEST 22d start-csharp-hook -Repo（F-N2）：-Status rc={0}（脚本自身目录 `$Here 已无条件赋值，不再 null 绑定崩溃）" -f $hookStatusRc)
+
   Remove-Item -Recurse -Force $tmpRoot -ErrorAction SilentlyContinue
   if ($failures.Count -eq 0) {
-    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（攻击配置透传/默认关 + run_pair -DisableAutoPlay 耦合两向 + 攻击两相 pin pose/SQL（-PinMapName 透传含 MapName 断言） + pin SQL 可执行性（含改坏 a.IncHealth 必红 + 改坏 Hp=100000 越界必红） + pin 记账门（owner 19:20 降级 informational：attempts=2/3/漂移/旧会话无字段键 绿 + 键在但空/(off)/形态坏 红 + 改坏必红值清空） + 预热相 -StopAfterCharCreated 透传两向 + 攻击 pin 无怪口径（R-1，按地图查提取件：生产 0137 绿/source_verified + 换回 map 0 必红 + 合成 0/1 行·声明漂移·缺 provenance 四向有牙） + 攻击 pin 非 MonGen AI 消费者口径（R-1 refine 15:05：生产 0137 绿/source_verified + 合成 有引用/声明漂移/缺 provenance/缺提取件 四向必红） + 入口/DiffOnly fail-closed + attack_diff selftest + 改坏 dmg/hit 必红 + Invoke-AttackAlign 返回值形态两处（F-J：⑧ 生产函数直接断言 + ⑮） + scoped_diff 14/14 + M-1 WARN 有牙齿 + M-2 attacker 精确选择 selftest + pin SQL 别名/列校验 + 种子注入断言（两侧 fail-closed）+ 攻击序列收尾等待（F-E） + attack 行缺 my 的 fail-closed（残差③） + 活栈隔离口径（owner 21:15：开关 off/on/fail-closed 六向 + attack_seed 公式含 i32 回绕 + 流水头 有/无/缺文件 + C# dump vs Rust 谓词表机判（生产绿 / 删一条红 / 加未登记红）+ C# hook 离线自检 + SHA256 活文件（F1：holder FileShare.ReadWrite 下读=锚 + 旧 ReadAllBytes 必被拒）+ attack_rng_ledger 站点表与决策片同表（F2）+ 目标可用性门两侧接线（owner 00:20：C#/Rust 同一函数，rust good/ghost/missing 三向 fail-closed）））'
+    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（攻击配置透传/默认关 + run_pair -DisableAutoPlay 耦合两向 + 攻击两相 pin pose/SQL（-PinMapName 透传含 MapName 断言） + pin SQL 可执行性（含改坏 a.IncHealth 必红 + 改坏 Hp=100000 越界必红） + pin 记账门（owner 19:20 降级 informational：attempts=2/3/漂移/旧会话无字段键 绿 + 键在但空/(off)/形态坏 红 + 改坏必红值清空） + 预热相 -StopAfterCharCreated 透传两向 + 攻击 pin 无怪口径（R-1，按地图查提取件：生产 0137 绿/source_verified + 换回 map 0 必红 + 合成 0/1 行·声明漂移·缺 provenance 四向有牙） + 攻击 pin 非 MonGen AI 消费者口径（R-1 refine 15:05：生产 0137 绿/source_verified + 合成 有引用/声明漂移/缺 provenance/缺提取件 四向必红） + 入口/DiffOnly fail-closed + attack_diff selftest + 改坏 dmg/hit 必红 + Invoke-AttackAlign 返回值形态两处（F-J：⑧ 生产函数直接断言 + ⑮） + scoped_diff 14/14 + M-1 WARN 有牙齿 + M-2 attacker 精确选择 selftest + pin SQL 别名/列校验 + 种子注入断言（两侧 fail-closed）+ 攻击序列收尾等待（F-E） + attack 行缺 my 的 fail-closed（残差③） + 活栈隔离口径（owner 21:15：开关 off/on/fail-closed 六向 + attack_seed 公式含 i32 回绕 + 流水头 有/无/缺文件 + C# dump vs Rust 谓词表机判（生产绿 / 删一条红 / 加未登记红）+ C# hook 离线自检 + SHA256 活文件（F1：holder FileShare.ReadWrite 下读=锚 + 旧 ReadAllBytes 必被拒）+ attack_rng_ledger 站点表与决策片同表（F2）+ 目标可用性门两侧接线（owner 00:20：C#/Rust 同一函数，rust good/ghost/missing 三向 fail-closed） + C# 专用流纯度门（F-N1：干净绿 / 混入 base 单元·player 数不符·污染首条 三向必红）））'
     exit 0
   }
   Write-Output ('SELFTEST_RED RED: ' + ($failures -join ', '))
@@ -1181,6 +1240,25 @@ $isoMeta = [ordered]@{
 }
 $isoMeta | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $mine.FullName 'attack_isolation.json') -Encoding utf8
 Write-Output ("ISOLATE_EVIDENCE_RECORDED {0} isolate={1} dump_sha256={2} attack_stream_sha256={3}" -f (Join-Path $mine.FullName 'attack_isolation.json'), $isolateOn, $sitesDumpSha, $atkStreamSha)
+
+# F-N1（owner 2026-10-12 22:15 ① / m3cs 2026-10-13）：C# 专用流**纯度** fail-closed 门。
+# 调用点级 divert 会把别图怪物/守卫（非玩家攻方）的取数吸进同一条 `Random(attack_seed)` ⇒ 被测量
+# 攻方的流位置被整体推移（C# 不可复现、跨侧逐 k≠0）。hook 侧已按「被测量攻方线程」收窄；这里再在
+# 下游把「污染流」当场判红、**拒比**（owner 23:50 ③「play 单元数 < 期望 ⇒ 直接拒跑」）。
+# 仅限 C# 侧：Rust 的攻击路径由世界层按实体取数（m3cs 实测 base=0），无此污染面。
+if ($isolateOn -and $Side -eq 'csharp') {
+  $gateStream = $attackStreamPath
+  if ([string]::IsNullOrEmpty($gateStream) -or -not (Test-Path -LiteralPath $gateStream)) {
+    Write-Output 'RED: 隔离开启但 C# 专用流（-AttackStreamLog / $env:MIR2_RNG_ATTACK_LOG）缺失——专用流纯度门无法判；fail-closed'
+    exit 1
+  }
+  & python $AttackStreamGate gate --stream $gateStream --expected $AttackCount --json (Join-Path $mine.FullName 'attack_stream_gate.json')
+  if ($LASTEXITCODE -ne 0) {
+    Write-Output ("RED: C# 专用流纯度门未过（非玩家攻方混入 / player 单元数 != {0}）——两相不可比，**拒比**（fail-closed，不放宽判据）" -f $AttackCount)
+    exit 1
+  }
+  Write-Output ("ATTACK_STREAM_PURITY_OK side=csharp player_units=expected={0} base_units=0 stream={1}" -f $AttackCount, (Split-Path -Leaf $gateStream))
+}
 
 # 同序列判据：baseline.json 的 attack_markers 必须存在（run_pair 已机判完整串）。
 $baseline = Get-Content (Join-Path $mine.FullName 'baseline.json') -Raw | ConvertFrom-Json

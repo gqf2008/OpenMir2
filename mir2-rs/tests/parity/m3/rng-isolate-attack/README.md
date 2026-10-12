@@ -79,3 +79,31 @@ python mir2-rs/tests/parity/m3/rng-isolate-attack/check_predicates.py selftest
 - `atk_power_luck_a/b`、`struck_durability_slot` 在现有夹具（`Luck=0`、无装备）**未触发**；行号待
   隔离口径真机实测校准（本表按源码行给出，C# 侧需按 PWD/JIT 实测值订正）。
 - 本片**未取窗**（C# 半未就绪）；两相真机复跑在 m3bag 的 C# 片合入后进行。
+
+## 6. F-N1/F-N2（m3cs 2026-10-13 定位；m3bag 收口）
+
+### F-N1：C# 专用流被**并发非玩家攻方**污染 ⇒ 按「被测量攻方线程」收窄
+
+真机两相实测（`evidence-rng-isolate-attack-twophase-ff-20261013`）：C# 专用流首抽就是
+`atk_power_base`（非玩家攻方），120 击里多出 `base=11`、`hit_gate 131 vs 120` ⇒ 被测量玩家
+攻方的流位置被整体推移（`cA vs cB=242`、`c1 vs c2=328`，C# 不可复现）。根因：调用点级 divert
+**不按实体**，同一 `GameSvr` 进程里别图怪物/守卫 AI（跑在独立 `MobThread`，`WorldServer.MonGen.cs`）
+走同一批站点时也抽 `Random(attack_seed)`。
+
+**修法（m3bag 写集，不动本目录的谓词表接口）**：
+- `rng-hook/StartupHook.cs`：分流再按「**被测量攻方线程**」收窄——玩家攻击由 `UserProcessor` 单线程
+  处理，每次玩家攻击**首抽**（`PlayObject.GetAttackPower@PlayObject.cs:2929`/`:2918`）认领当前线程；
+  只有该线程的取数进专用流，怪物 `MobThread` 仍走原全局流（`RouteToAttackStream`，离线单测）。
+  谓词表/站点集合**不变**（`check_predicates.py table-vs-csharp` 仍绿）。
+- **下游 fail-closed 牙**：`tests/parity/m3/attack_stream_gate.py`（fixture）——C# 专用流首单元必须是
+  玩家攻方、`player 单元数 == -AttackCount`、`base 单元数 == 0`；否则点名并**拒比**
+  （`run_attack_pair.ps1` 隔离开启且 `-Side csharp` 时强制）。owner 23:50 ③「play 单元数 < 期望 ⇒ 直接拒跑」。
+- 边界：并发的是**玩家**攻方（两个 PlayObject 同进程抢流）时，线程收窄不能区分 ⇒ 交付门会点名；
+  目前夹具只有 1 个 attacker（另一 bot 防御），真机待 m3cs 复核。触发污染的具体怪物/地图未钉死。
+
+### F-N2：`start-csharp-hook.ps1` 传 `-Repo` 时 `$Here=null`（脚本回归）
+
+`. (Join-Path $Here 'm3hashutil.ps1')` 的 `$Here` 历史上只在 `-Repo` 为空时赋值（F1 修复
+`44849fa3` 引入）⇒ 传 `-Repo` 抛 `Cannot bind argument to parameter 'Path' because it is null`。
+**修法**：把 `$Here = Split-Path -Parent $MyInvocation.MyCommand.Path` 移出 `if`（无条件赋值）。
+自检 `run_attack_pair.ps1 -SelfCheckNoStack` ⑫d：`-Repo <repo> -Status` 必须 rc=0。

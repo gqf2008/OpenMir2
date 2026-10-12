@@ -1,0 +1,61 @@
+# F-N1 改坏必红：去掉 StartupHook.RouteToAttackStream 的「被测量攻方线程」过滤（return true）
+# 变异：StartupHook.cs 的 `return threadId == _attackThreadId;` → `return true;`（跑完即还原）
+# 命令：cd mir2-rs/tests/parity/m3/rng-hook/selftest && dotnet build -c Release && dotnet run -c Release --no-build
+# 位置：01-hook-selftest-green.txt 的 ⑤ 段在变异后 5 条必红（rc=1）
+# ---- 原始输出 ----
+PASS parse/null=off
+PASS parse/empty=off
+PASS parse/0=off
+PASS parse/false=off
+PASS parse/OFF=off
+PASS parse/no=off
+PASS parse/1=on
+PASS parse/true=on
+PASS parse/' ON '=on
+PASS parse/yes=on
+PASS parse/maybe=fail-closed
+PASS parse/2=fail-closed
+PASS parse/'on '=on
+PASS seed/42
+PASS seed/0
+PASS seed/int.MaxValue-wrap
+PASS seed/-1
+PASS sites/count=11 (got 11)
+PASS sites/has M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929
+PASS sites/has M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2934
+PASS sites/has M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2918
+PASS sites/has M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2924
+PASS sites/has M2Server.Actor.BaseObject.GetAttackPower@BaseObject.Base.cs:892
+PASS sites/has M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41
+PASS sites/has M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:792
+PASS sites/has M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:793
+PASS sites/has M2Server.Player.PlayObject.StruckDamage@PlayObject.cs:2957
+PASS sites/has M2Server.Player.PlayObject.StruckDamage@PlayObject.cs:3000
+PASS sites/has M2Server.Player.PlayObject.AttackSuccess@PlayObject.Attack.cs:223
+PASS route/atk_power_a
+PASS route/hit_gate
+PASS route/attack_success
+PASS route/attack_paralysis-not-diverted
+PASS route/unknown-line-not-diverted
+PASS route/noise-not-diverted
+PASS route/null-not-diverted
+PASS route/empty-not-diverted
+PASS entity/player-start-2929
+PASS entity/player-start-2918
+PASS entity/hit-gate-not-start
+PASS entity/base-not-start
+PASS entity/null-not-start
+PASS entity/unclaimed-init=-1
+FAIL entity/base-before-player-not-diverted
+FAIL entity/shared-before-player-not-diverted
+PASS entity/player-start-diverted
+PASS entity/claimed-thread=5
+PASS entity/shared-same-thread-diverted
+PASS entity/succ-same-thread-diverted
+FAIL entity/shared-other-thread-not-diverted
+FAIL entity/base-other-thread-not-diverted
+PASS entity/reclaim-thread-9
+PASS entity/reclaimed-thread=9
+FAIL entity/old-thread-no-longer-diverted
+PASS entity/non-divert-site-never
+SELFTEST RED failed=5

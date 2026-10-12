@@ -1,0 +1,71 @@
+# 四门禁（隔离 target=E:/tmp/m3bag-fn-target，--offline；零 .rs）
+## cargo fmt --all -- --check
+fmt_rc=0
+
+## cargo clippy --workspace --all-targets --offline -- -D warnings
+   Compiling bevy_ecs_macros v0.19.1
+    Checking derive_more v2.1.1
+    Checking bevy_tasks v0.19.1
+    Checking regex v1.13.1
+    Checking bevy_ecs v0.19.1
+   Compiling sqlx-macros-core v0.8.6
+    Checking msgcodegen v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\tools\msgcodegen)
+   Compiling sqlx-macros v0.8.6
+    Checking sqlx v0.8.6
+    Checking mir2-data v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\crates\data)
+    Checking mir2-storage v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\crates\storage)
+    Checking db-srv v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\bins\db-srv)
+    Checking login-srv v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\bins\login-srv)
+    Checking mir2-formula v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\crates\formula)
+    Checking mir2-world-bevy v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\crates\world-bevy)
+    Checking mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\crates\world)
+    Checking mir2-parity-tests v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\tests\parity)
+    Checking mir2-envir v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\crates\envir)
+    Checking game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\bins\game-svr)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 35.57s
+clippy_rc=0
+
+## cargo test --workspace --offline
+
+   Doc-tests mir2_shared
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests mir2_storage
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests mir2_world
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests mir2_world_bevy
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+test_rc=0
+
+## cargo run -p msgcodegen --offline -- --check
+   Compiling memchr v2.8.3
+   Compiling aho-corasick v1.1.5
+   Compiling regex-automata v0.4.18
+   Compiling regex v1.13.1
+   Compiling msgcodegen v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\tools\msgcodegen)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.23s
+     Running `E:/tmp/m3bag-fn-target\debug\msgcodegen.exe --check`
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+msgcodegen_rc=0
+
+## cargo test --workspace --offline（完整汇总）
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+GATES_SUMMARY: 84 suites / 682 passed / 0 failed / 16 ignored

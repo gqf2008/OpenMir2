@@ -1,0 +1,48 @@
+# 00-commands.txt —— M3②③ F-N1/F-N2 片（m3bag）原始命令
+
+> 卡：`openmir2-m3-attack-pair-fixture`。owner 2026-10-12 22:15 ① + m3cs 2026-10-13 两片 finding。
+> 全部离线，未起栈、未占端口（403 除外：`start-csharp-hook -Status` 只查端口不监听）。
+
+## 代码/工具改动后的复核
+
+```sh
+# ① C# 影子 hook 离线自检（F-N1 线程过滤；含改坏必红）
+cd mir2-rs/tests/parity/m3/rng-hook/selftest
+dotnet build -c Release --nologo -v q
+dotnet run -c Release --no-build          # → SELFTEST GREEN（55 PASS）；变异后 5 FAIL
+
+# ② C# 专用流纯度门 F-N1（自检 + 真机污染流判红）
+python -I mir2-rs/tests/parity/m3/attack_stream_gate.py selftest
+python -I mir2-rs/tests/parity/m3/attack_stream_gate.py gate \
+  --stream mir2-rs/tests/parity/m3/evidence-rng-isolate-attack-twophase-20261012/provenance/csharp-attack-stream-stack2.tsv \
+  --expected 120
+
+# ③ F-N2：start-csharp-hook.ps1 传 -Repo 时必须不再 null 绑定崩溃（-Status 分支在 dot-source 之后）
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/start-csharp-hook.ps1 -Repo "$(pwd)" -Status
+
+# ④ 夹具无栈自检（22c 专用流纯度门 + 22d F-N2，全 fail-closed）
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 -SelfCheckNoStack
+
+# ⑤ 四门禁（隔离 target；零 .rs）
+cd mir2-rs
+CARGO_TARGET_DIR=E:/tmp/m3bag-fn-target cargo fmt --all -- --check
+CARGO_TARGET_DIR=E:/tmp/m3bag-fn-target cargo clippy --workspace --all-targets --offline -- -D warnings
+CARGO_TARGET_DIR=E:/tmp/m3bag-fn-target cargo test --workspace --offline
+CARGO_TARGET_DIR=E:/tmp/m3bag-fn-target cargo run -p msgcodegen --offline -- --check
+```
+
+## 改坏必红（真跑一遍后还原；原始输出见同目录 02/04）
+
+```sh
+# F-N1 变异：StartupHook.cs `return threadId == _attackThreadId;` → `return true;`
+#   ⇒ 02-hook-mutation-thread-filter-red.txt（5 FAIL / rc=1）
+# F-N2 变异：把 `$Here = Split-Path ...` 移回 `if ($Repo -eq '')` 内（= F1 44849fa3 的回归形态）
+#   ⇒ 04-fn2-mutation-here-null-red.txt（Cannot bind argument to parameter 'Path' ... rc=1）
+```
+
+## 证据清单复算（仓库字节/LF 口径）
+
+```sh
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra \
+  mir2-rs/tests/parity/m3/evidence-m3-attack-stream-purity-20261013
+```

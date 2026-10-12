@@ -1,0 +1,12 @@
+# F-N2 改坏必红：把 start-csharp-hook.ps1 的 `$Here` 赋值移回 `if ($Repo -eq '')` 内（= F1 44849fa3 的回归形态）
+# 命令：powershell -File mir2-rs/tests/parity/m3/start-csharp-hook.ps1 -Repo <repo> -Status
+# ---- 原始输出 ----
+Join-Path : Cannot bind argument to parameter 'Path' because it is null.
+At E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\tests\parity\m3\start-csharp-hook.ps1:54 char
+:14
++ . (Join-Path $Here 'm3hashutil.ps1')
++              ~~~~~
+    + CategoryInfo          : InvalidData: (:) [Join-Path], ParentContainsErrorRecordException
+    + FullyQualifiedErrorId : ParameterArgumentValidationErrorNullNotAllowed,Microsoft.PowerShell.Commands.JoinPathCom 
+   mand
+ 

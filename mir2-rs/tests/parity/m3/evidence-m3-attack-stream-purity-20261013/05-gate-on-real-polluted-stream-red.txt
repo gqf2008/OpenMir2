@@ -1,0 +1,11 @@
+# F-N1 门在**真机实测的污染流**上的判红（原样只读，不改证据件）
+# stream = mir2-rs/tests/parity/m3/evidence-rng-isolate-attack-twophase-20261012/provenance/csharp-attack-stream-stack2.tsv
+# 命令：python -I mir2-rs/tests/parity/m3/attack_stream_gate.py gate --stream <above> --expected 120
+# ---- 原始输出 ----
+=== 专用流纯度（attack_stream_gate）===
+  stream=mir2-rs/tests/parity/m3/evidence-rng-isolate-attack-twophase-20261012/provenance/csharp-attack-stream-stack2.tsv draws=300 units=136 player=120 base=16 unknown=0 expected=120
+  首单元 kind=base site=M2Server.Actor.BaseObject.GetAttackPower@BaseObject.Base.cs:892
+  RED: first_unit_not_player: kind=base line=1 site=M2Server.Actor.BaseObject.GetAttackPower@BaseObject.Base.cs:892（首条不是玩家攻方起点 ⇒ 污染）
+  RED: non_player_attacker_unit: base_units=16 首个 line=1 site=M2Server.Actor.BaseObject.GetAttackPower@BaseObject.Base.cs:892（非玩家并发攻方混入专用流）
+  结论：专用流被非玩家并发攻方污染 / 单元数不符 ⇒ **拒比**（fail-closed，不放宽判据）
+rc=1

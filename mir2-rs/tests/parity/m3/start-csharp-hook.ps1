@@ -34,8 +34,12 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
+# F-N2（m3cs 2026-10-13 定位）：`$Here` 必须**无条件**求值——它下面用于 dot-source `m3hashutil.ps1`；
+# 历史上它只在 `-Repo` 为空时赋值 ⇒ 传 `-Repo` 时 `. (Join-Path $Here ...)` 因 `$Here=null` 抛
+# `Cannot bind argument to parameter 'Path' because it is null`（由 F1 修复 44849fa3 引入）。
+# 修法 = 把赋值移出 `if`（`-Repo` 只覆盖 `$Repo` 值，不影响脚本自身目录）。
+$Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 if ([string]::IsNullOrEmpty($Repo)) {
-  $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
   $Repo = (Resolve-Path (Join-Path $Here '..\..\..\..')).Path
 }
 if ([string]::IsNullOrEmpty($Shadow)) { $Shadow = Join-Path $Pack 'M2GameSvr-hook' }
