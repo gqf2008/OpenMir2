@@ -23,7 +23,9 @@ ALIGN_OK C:\Users\gxh\AppData\Local\Temp\m3attack-selftest-194142230\b\attack_se
 SELFTEST ⑧ 合成两侧 → align/diff：
   [绿] rc=0: GREEN: 跨侧攻击序列 diff = 0（attacked=10 hits=9 dodges=1 sum=197）
   [改坏 dmg] rc=1:   - k=5 dmg 不等: a=20 b=999
+
   [改坏 hit] rc=1:   - k=5 hit 不等: a=True b=False
+
 FAIL_CLOSED: attack 行缺 my 字段（需为 int ActorId）——拒绝静默降级为「不过滤」：{"role": "attack", "k": 1, "op": "CM_HIT", "x": 289, "y": 618, "dir": 2}；历史会话（未落 my）请先用 rebuild_attack_my.py 离线复算归一化再交给 align
 SELFTEST ⑲ attack 行缺 my ⇒ fail-closed（残差③）：rc=2（期望 2）
 SELFTEST ⑨ scoped_diff selftest rc=0（14/14）

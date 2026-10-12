@@ -1,5 +1,5 @@
 fc6417c413ca01e5acc041c517d22942f01d9fc98b56acf1109161de1aae9f8b *01-selftest-gate.txt
-8b118830770e415272678e5cdf3c2bdb9b8af1facf0b3275e3aa9de427d141b8 *02-attack-pair-selftest.txt
+a80be548660a5abc3df1b7b2f7cef99f0684acd3378d77a03dca9c5e0bc21acb *02-attack-pair-selftest.txt
 9cb2dda2091065a563f33229f93bcade21ccbe519293877bfd884f8053cbd08b *03-attack-diff-selftest.txt
 2c592546a05be0666c243345933ba90ddda2221e9e7af61c07f9c58bc08430f9 *04-pin-attempts-real-csharp-185128.txt
 8221cff8e1c753f4872d3384c464a0b516f96a005b2cf72c33f5e17678cb1ec6 *04-pin-attempts-recompute-before-after.txt
