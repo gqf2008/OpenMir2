@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>shop-price-probe</AssemblyName>
+    <RootNamespace>ShopPriceProbe</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    M3⑤-实现 3（卡 openmir2-m3-shop-price-formula）真身向量生成器：
+    引用 oracle **真身**（src/GameSrv/GameSrv.csproj），用反射直调 `GameSrv.Npc.Merchant` 的私有方法：
+      - GetItemPrice(ushort)         Merchant.cs:347
+      - GetUserItemPrice(UserItem)   Merchant.cs:1130
+      - GetUserPrice(IPlayerActor, double) Merchant.cs:765
+      - GetSellItemPrice(double)     Merchant.cs:1358（private static）
+      - ClientQueryRepairCost(IPlayerActor, UserItem) Merchant.cs:1555
+      - ClientRepairItem(IPlayerActor, UserItem)      Merchant.cs:1599
+    产物 = mir2-rs/tests/parity/m3/shop-price-probe/vectors/shop_price_vectors.{json,tsv}
+    Rust 侧用例 `crates/formula/tests/shop_price_vectors.rs` 据 TSV 逐字段核对。
+
+    只读：不连 MySQL、不写任何现网文件、不发起任何 socket、不起栈、不占端口。
+    `IPlayerActor`/`IUserCastle` 用 DispatchProxy 动态替身，`SystemShare.ItemSystem` 换成内存表。
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\..\src\GameSrv\GameSrv.csproj" />
+  </ItemGroup>
+
+</Project>
