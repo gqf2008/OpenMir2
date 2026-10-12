@@ -1,0 +1,8 @@
+row	magic_id	name	effect_entry	oracle_anchor	row_class	missing_prereq
+row	8	抗拒火环	MagPushArround	MagicManager.cs:24-52	a_offline_done	-
+row	37	雷神之怒	MagPushArround	MagicManager.cs:24-52	a_offline_done	-
+row	21	瞬息移动	MagSaceMove	MagicManager.cs:876-891	a_offline_done	探针替身 SystemShare.MapMgr（只 FindMap 字典，见探针头注）
+row	46	分身术	MagMakeClone	MagicManager.cs:1337-1341	a_offline_done	-
+row	17	召唤骷髅	MagMakeSlave	MagicManager.cs:1308-1335	c_real_summon	BaseObject.cs:1185 SystemShare.WorldEngine.RegenMonsterByName（GameSrv 宿主实现，M2Server 探针不可达）+ MonsterInfo 配置
+row	30	召唤神兽	MagMakeSinSuSlave	MagicManager.cs:1269-1306	c_real_summon	BaseObject.cs:1185 SystemShare.WorldEngine.RegenMonsterByName（GameSrv 宿主实现，M2Server 探针不可达）+ SystemShare.Config.Dragon/DragonArray 配置
+row	41	狮子吼	MagMakeAngelSlave	MagicManager.cs:1343-1354	c_real_summon	BaseObject.cs:1185 SystemShare.WorldEngine.RegenMonsterByName（GameSrv 宿主实现，M2Server 探针不可达）+ SystemShare.Config.Angel 配置

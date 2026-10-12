@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>map-effect-probe</AssemblyName>
+    <RootNamespace>MapEffectProbe</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    M3 技能线（卡 openmir2-m3-combat-skills-align）第十片：DoD③ 「map-bound」7 行的离线可行性三分类，
+    并把 (a) 类（只需真 Envir/地图数据）当场做成真身向量：
+      - 8 / 37 `MagPushArround`（`MagicManager.cs:24-52`）
+      - 21 `MagSaceMove`（`:876-891`）
+      - 46 `MagMakeClone`（`:1337-1341`）
+    手法：合成一份**真格式** `.map`（12B/格，与 oracle `Envirnoment.LoadMapData` 同格式）交给真身
+    `LoadMapData` 加载；搭真 `PlayObject`/`MonsterObject`；反射直调私有 static 入口；记录
+    `System.Random` 取数账本。21 的 `SystemShare.MapMgr` 用**最小 `IMapSystem` 替身**（只做
+    `FindMap` 字典；效果路径 `MagSaceMove`→`MapRandomMove`→`SpaceMove` 全真身），探针里显式分栏。
+
+    只读：不连 MySQL、不写任何现网文件、不发起任何 socket、不起栈、不占端口（合成地图写到
+    本机临时目录，运行结束即删）。
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\..\src\M2Server\M2Server.csproj" />
+  </ItemGroup>
+
+</Project>

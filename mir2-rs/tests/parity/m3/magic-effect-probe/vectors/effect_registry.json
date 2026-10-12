@@ -73,7 +73,7 @@
       "implemented": false,
       "effect_entry": "MagPushArround",
       "oracle_anchor": "MagicManager.cs:24-52",
-      "probeability": "map_context"
+      "probeability": "probeable"
     },
     {
       "magic_id": 9,
@@ -190,7 +190,7 @@
       "implemented": false,
       "effect_entry": "MagSaceMove",
       "oracle_anchor": "MagicManager.cs:876-891",
-      "probeability": "map_context"
+      "probeability": "probeable"
     },
     {
       "magic_id": 22,
@@ -325,7 +325,7 @@
       "implemented": false,
       "effect_entry": "MagPushArround",
       "oracle_anchor": "MagicManager.cs:24-52",
-      "probeability": "map_context"
+      "probeability": "probeable"
     },
     {
       "magic_id": 48,
@@ -406,7 +406,7 @@
       "implemented": false,
       "effect_entry": "MagMakeClone",
       "oracle_anchor": "MagicManager.cs:1337-1341",
-      "probeability": "map_context"
+      "probeability": "probeable"
     },
     {
       "magic_id": 47,

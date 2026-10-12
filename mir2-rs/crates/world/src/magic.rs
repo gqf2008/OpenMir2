@@ -27,6 +27,7 @@ use crate::combat::{
     AttackPowerMode,
 };
 use crate::entity::Entity;
+use crate::map::{CellType, MapGrid, MoveRequest};
 
 /// 攻方攻击力口径（`GetAttackPower`）：`DoSpell` 的施法者是 `PlayObject`，
 /// 走 `PlayObject.GetAttackPower` override（`PlayObject.cs:2909`）——**取数次数与 Base 版不同**
@@ -818,4 +819,385 @@ pub fn do_spell_tail(
         out.train.levelup_msg = up.levelup_msg || !up.result;
     }
     out
+}
+
+// ---- map-bound 技能效果（第十片真身向量）------------------------------------------------------
+//
+// 第七片把 7 行 `context_required` 登记为 `map_context`（需真 `Envir`/可见集/召唤）而 deferred；
+// 第十片逐条判「能不能离线做」，把 (a) 类（只需真 `Envir`/地图数据）做成真身向量：
+//   - 8 / 37 `MagPushArround`（`MagicManager.cs:24-52`）
+//   - 21 `MagSaceMove`（`:876-891`）
+//   - 46 `MagMakeClone`（`:1337-1341`）
+// 向量来源 `mir2-rs/tests/parity/m3/map-effect-probe`（真身反射直调 + 合成真格式 `.map` 交给真身
+// `Envirnoment.LoadMapData` + 记录 `System.Random` 取数账本）。
+// 17/30/41（`MagMakeSlave`/`MagMakeSinSuSlave`/`MagMakeAngelSlave`）需 `SystemShare.WorldEngine`
+// 的**真召唤**（GameSrv 宿主实现，M2Server 探针不可达）⇒ 本片只登记、不冒充真身。
+
+/// `src/OpenMir2/Enums/Direction.cs`。
+pub const DIR_UP: u8 = 0;
+pub const DIR_UP_RIGHT: u8 = 1;
+pub const DIR_RIGHT: u8 = 2;
+pub const DIR_DOWN_RIGHT: u8 = 3;
+pub const DIR_DOWN: u8 = 4;
+pub const DIR_DOWN_LEFT: u8 = 5;
+pub const DIR_LEFT: u8 = 6;
+pub const DIR_UP_LEFT: u8 = 7;
+
+/// `M2Share.GetNextDirection`（`src/M2Server/M2Share.cs:299-376`）逐字移植。
+pub fn next_direction(sx: i32, sy: i32, dx: i32, dy: i32) -> u8 {
+    let mut flagx = if sx < dx {
+        1
+    } else if sx == dx {
+        0
+    } else {
+        -1
+    };
+    if (sy - dy).abs() > 2 && sx >= dx - 1 && sx <= dx + 1 {
+        flagx = 0;
+    }
+    let mut flagy = if sy < dy {
+        1
+    } else if sy == dy {
+        0
+    } else {
+        -1
+    };
+    if (sx - dx).abs() > 2 && sy > dy - 1 && sy <= dy + 1 {
+        flagy = 0;
+    }
+    match (flagx, flagy) {
+        (0, -1) => DIR_UP,
+        (1, -1) => DIR_UP_RIGHT,
+        (1, 0) => DIR_RIGHT,
+        (1, 1) => DIR_DOWN_RIGHT,
+        (0, 1) => DIR_DOWN,
+        (-1, 1) => DIR_DOWN_LEFT,
+        (-1, 0) => DIR_LEFT,
+        (-1, -1) => DIR_UP_LEFT,
+        _ => DIR_DOWN,
+    }
+}
+
+/// `BaseObject.GetBackDir`（`src/M2Server/Actor/BaseObject.cs:820-853`）。
+pub fn back_dir(n_dir: u8) -> u8 {
+    match n_dir {
+        DIR_UP => DIR_DOWN,
+        DIR_DOWN => DIR_UP,
+        DIR_LEFT => DIR_RIGHT,
+        DIR_RIGHT => DIR_LEFT,
+        DIR_UP_LEFT => DIR_DOWN_RIGHT,
+        DIR_UP_RIGHT => DIR_DOWN_LEFT,
+        DIR_DOWN_LEFT => DIR_UP_RIGHT,
+        DIR_DOWN_RIGHT => DIR_UP_LEFT,
+        _ => 0,
+    }
+}
+
+/// `BaseObject.GetFrontPosition`（`src/M2Server/Actor/BaseObject.cs:977-1040`）：按 `dir` 取前一格，
+/// **越界时原样保留**（oracle 是 clamp 而非返回 false）。
+pub fn front_position(x: i32, y: i32, dir: u8, width: i32, height: i32) -> (i32, i32) {
+    let (mut nx, mut ny) = (x, y);
+    match dir {
+        DIR_UP if ny > 0 => ny -= 1,
+        DIR_UP_RIGHT if nx < width - 1 && ny > 0 => {
+            nx += 1;
+            ny -= 1;
+        }
+        DIR_RIGHT if nx < width - 1 => nx += 1,
+        DIR_DOWN_RIGHT if nx < width - 1 && ny < height - 1 => {
+            nx += 1;
+            ny += 1;
+        }
+        DIR_DOWN if ny < height - 1 => ny += 1,
+        DIR_DOWN_LEFT if nx > 0 && ny < height - 1 => {
+            nx -= 1;
+            ny += 1;
+        }
+        DIR_LEFT if nx > 0 => nx -= 1,
+        DIR_UP_LEFT if nx > 0 && ny > 0 => {
+            nx -= 1;
+            ny -= 1;
+        }
+        _ => {}
+    }
+    (nx, ny)
+}
+
+/// `Envirnoment.CanWalk(nX, nY, boFlag)`（`src/M2Server/Maps/Envirnoment.cs:442-486`）的
+/// **boFlag=true** 子集：只判 `cellSuccess && Valid`（不查格上对象）。
+fn can_walk_ignore_objects(map: &MapGrid, x: i32, y: i32) -> bool {
+    map.get_cell_info(x, y).1
+}
+
+/// `BaseObject.CharPushed`（`src/M2Server/Actor/BaseObject.cs:854-901`）的**格子簿记等价实现**。
+///
+/// 无 RNG。目标自身不在格上（探针场景），故 `MoveToMovingObject` 的源格摘除不命中；
+/// 目标位置随成功步数前进；`Dir`：`result>0` 取反方向，否则回到初值。
+pub fn char_pushed(
+    map: &mut MapGrid,
+    x: &mut i32,
+    y: &mut i32,
+    dir: &mut u8,
+    n_dir: u8,
+    push_count: u8,
+    actor_id: i32,
+) -> i32 {
+    let old_dir = *dir;
+    *dir = n_dir;
+    let back = back_dir(n_dir);
+    let mut result = 0;
+    for _ in 0..push_count {
+        let (nx, ny) = front_position(*x, *y, *dir, map.width, map.height);
+        // oracle `CharPushed` 先 `CanWalk(nx, ny, false)`：不可走（越界/墙/活体）即 break。
+        // 探针场景目标未注册进 `ActorMgr` ⇒ 活体分支恒不命中，此处 `cellSuccess` 即 CanWalk 结果。
+        if !map.get_cell_info(nx, ny).1 {
+            break;
+        }
+        let moved = map.move_object(
+            MoveRequest {
+                from_x: *x,
+                from_y: *y,
+                actor_id,
+                to_x: nx,
+                to_y: ny,
+                ignore_block: false,
+                add_time: 0,
+            },
+            |_| false,
+        );
+        if moved {
+            *x = nx;
+            *y = ny;
+            result += 1;
+        } else {
+            break;
+        }
+    }
+    *dir = if result == 0 { old_dir } else { back };
+    result
+}
+
+/// `MagPushArround`（`MagicManager.cs:24-52`）的一个可见目标（探针口径：只带该函数读/写的标量）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PushTarget {
+    pub actor_id: i32,
+    pub x: i32,
+    pub y: i32,
+    pub level: u8,
+    pub death: bool,
+    pub stick_mode: bool,
+    /// 由调用方按 oracle `IsProperTarget` 判定的结果（Rust 侧 `crate::combat::is_proper_target` 可算）。
+    pub proper_target: bool,
+    pub dir: u8,
+}
+
+/// [`PushTarget`] 的可观测输出。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PushTargetOutcome {
+    pub pushed: bool,
+    pub push_count: i32,
+    pub x: i32,
+    pub y: i32,
+    pub dir: u8,
+}
+
+/// [`mag_push_arround`] 的入参。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PushAroundInput {
+    pub caster_x: i32,
+    pub caster_y: i32,
+    pub caster_level: u8,
+    /// `MagPushArround(playObject, nPushLevel)` 的 `nPushLevel`（= `userMagic.Level`）。
+    pub push_level: i32,
+    pub targets: Vec<PushTarget>,
+}
+
+/// [`mag_push_arround`] 的输出。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PushAroundOutcome {
+    /// oracle 的 `result`（本函数返回的推进数，成功受推的目标计数）。
+    pub result: i32,
+    pub targets: Vec<PushTargetOutcome>,
+}
+
+/// 见 [`PushAroundInput`]/[`PushAroundOutcome`]（`MagicManager.cs:24-52`）。
+pub fn mag_push_arround(
+    rng: &mut impl RandomSource,
+    map: &mut MapGrid,
+    inp: &PushAroundInput,
+) -> PushAroundOutcome {
+    let mut result = 0;
+    let mut outcomes = Vec::with_capacity(inp.targets.len());
+    for t in &inp.targets {
+        let mut oc = PushTargetOutcome {
+            x: t.x,
+            y: t.y,
+            dir: t.dir,
+            ..Default::default()
+        };
+        let adj = (inp.caster_x - t.x).abs() <= 1 && (inp.caster_y - t.y).abs() <= 1;
+        if adj && !t.death && inp.caster_level > t.level && !t.stick_mode {
+            let levelgap = i32::from(inp.caster_level) - i32::from(t.level);
+            if rng.random_below(20) < 6 + inp.push_level * 3 + levelgap && t.proper_target {
+                let push = 1 + 0.max(inp.push_level - 1) + rng.random_below(2);
+                let n_dir = next_direction(inp.caster_x, inp.caster_y, t.x, t.y);
+                let steps = char_pushed(
+                    map,
+                    &mut oc.x,
+                    &mut oc.y,
+                    &mut oc.dir,
+                    n_dir,
+                    push as u8,
+                    t.actor_id,
+                );
+                oc.push_count = steps;
+                oc.pushed = true;
+                result += 1;
+            }
+        }
+        outcomes.push(oc);
+    }
+    PushAroundOutcome {
+        result,
+        targets: outcomes,
+    }
+}
+
+/// `MagSaceMove`（`MagicManager.cs:876-891`）的入参（探针口径）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SaceMoveInput {
+    /// `MagSaceMove(playObject, nLevel)` 的 `nLevel`（= `userMagic.Level`）。
+    pub level: i32,
+    /// `SystemShare.MapMgr.FindMap(HomeMap) != null`（探针替身只做这一步）。
+    pub map_found: bool,
+    /// `MapMgr.FindMap(HomeMap) == playObject.Envir`（同图同对象）。
+    pub same_envir: bool,
+    /// 目标地图尺寸（`MapRandomMove` 用目标 `envir.Width/Height`）。
+    pub map_width: i32,
+    pub map_height: i32,
+    /// 调用前 `playObject.CurrX/CurrY` 与 `IsTimeRecall`。
+    pub x: i32,
+    pub y: i32,
+    pub is_time_recall: bool,
+}
+
+/// [`mag_sace_move`] 的输出。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SaceMoveOutcome {
+    pub result: bool,
+    pub moved: bool,
+    pub x: i32,
+    pub y: i32,
+    pub space_moved: bool,
+    pub is_time_recall: bool,
+}
+
+/// `BaseObject.SpaceMoveGetRandXY`（`src/M2Server/Actor/BaseObject.cs:1040-1084`）逐字移植。
+fn space_move_get_rand_xy(
+    rng: &mut impl RandomSource,
+    map: &MapGrid,
+    x: &mut i32,
+    y: &mut i32,
+) -> bool {
+    let n18 = if map.width < 80 { 3 } else { 10 };
+    let n1c = if map.height < 150 {
+        if map.height < 50 {
+            2
+        } else {
+            15
+        }
+    } else {
+        50
+    };
+    for _ in 0..201 {
+        if can_walk_ignore_objects(map, *x, *y) {
+            return true;
+        }
+        if *x < map.width - n1c - 1 {
+            *x += n18;
+        } else {
+            *x = rng.random_below(map.width);
+            if *y < map.height - n1c - 1 {
+                *y += n18;
+            } else {
+                *y = rng.random_below(map.height);
+            }
+        }
+    }
+    false
+}
+
+/// 见 [`SaceMoveInput`]/[`SaceMoveOutcome`]（`MagicManager.cs:876-891` + `MapRandomMove` + `SpaceMove`）。
+pub fn mag_sace_move(
+    rng: &mut impl RandomSource,
+    map: &MapGrid,
+    inp: &SaceMoveInput,
+) -> SaceMoveOutcome {
+    let mut out = SaceMoveOutcome {
+        x: inp.x,
+        y: inp.y,
+        is_time_recall: inp.is_time_recall,
+        ..Default::default()
+    };
+    if rng.random_below(11) < inp.level * 2 + 4 {
+        out.result = true;
+        if inp.map_found {
+            // `BaseObject.MapRandomMove`（`BaseObject.cs:1214-1241`）：nEgdey 由目标图高决定。
+            let n_egdey = if inp.map_height < 150 {
+                if inp.map_height < 30 {
+                    2
+                } else {
+                    20
+                }
+            } else {
+                50
+            };
+            let mut nx = rng.random_below(inp.map_width - n_egdey - 1) + n_egdey;
+            let mut ny = rng.random_below(inp.map_height - n_egdey - 1) + n_egdey;
+            // `BaseObject.SpaceMove`（`BaseObject.cs:1103-1168`）同服分支：目标图尺寸即本图尺寸。
+            if space_move_get_rand_xy(rng, map, &mut nx, &mut ny) {
+                out.x = nx;
+                out.y = ny;
+                out.space_moved = true;
+                out.moved = true;
+                if !inp.same_envir {
+                    out.is_time_recall = false;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// `MagMakeClone`（`MagicManager.cs:1337-1341`）的入参：`new PlayCloneObject(playObject)` 的全部效果。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MakeCloneInput {
+    pub x: i32,
+    pub y: i32,
+    pub dir: u8,
+    /// clone 的 `ActorId`（探针由 `Envir.AddMapObject` 的 `CellObjId` 记账）。
+    pub clone_id: i32,
+}
+
+/// [`mag_make_clone`] 的输出。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MakeCloneOutcome {
+    pub created: bool,
+    pub x: i32,
+    pub y: i32,
+    pub dir: u8,
+}
+
+/// `MagMakeClone`（`MagicManager.cs:1337-1341`）：`new PlayCloneObject(playObject)` 只拷
+/// `CurrX/CurrY`、`Dir=GetBackDir(playObject.Dir)`、`Envir`，并 `Envir.AddMapObject(...)`；
+/// oracle 返回恒 `true`。名字固定 `"Clone"`（`PlayCloneObject.cs:9-18`）。
+pub fn mag_make_clone(map: &mut MapGrid, inp: &MakeCloneInput) -> MakeCloneOutcome {
+    let dir = back_dir(inp.dir);
+    let created = map.add_map_object(inp.x, inp.y, CellType::Play, inp.clone_id, 0);
+    MakeCloneOutcome {
+        created,
+        x: inp.x,
+        y: inp.y,
+        dir,
+    }
 }

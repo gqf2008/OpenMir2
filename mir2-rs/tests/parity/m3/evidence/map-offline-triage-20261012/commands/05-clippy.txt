@@ -1,0 +1,5 @@
+# cargo clippy --workspace --all-targets --offline -- -D warnings
+    Checking game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\bins\game-svr)
+    Checking mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\crates\world)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.99s
+clippy rc=0
