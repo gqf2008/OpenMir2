@@ -1,0 +1,32 @@
+# 改坏必红 RC-2：把 `Dir = RandomByte(8)` 抽数去掉（改成常量）
+# 变异点：bins/game-svr/src/mongen.rs::create_monster_oracle —— `let dir = rng.random_byte(8);` → `let dir = 0u8;`
+# 命中用例：mongen::tests::create_monster_chicken_consumes_random_3500_then_dir_drops_cool_eye（少抽一次 ⇒ 后续流位置错位）
+# 命令：CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test -p game-svr --lib --offline create_monster_chicken
+
+
+running 1 test
+test mongen::tests::create_monster_chicken_consumes_random_3500_then_dir_drops_cool_eye ... FAILED
+
+failures:
+
+---- mongen::tests::create_monster_chicken_consumes_random_3500_then_dir_drops_cool_eye stdout ----
+
+thread 'mongen::tests::create_monster_chicken_consumes_random_3500_then_dir_drops_cool_eye' (25848) panicked at bins\game-svr\src\mongen.rs:862:9:
+assertion `left == right` failed: 抽数个数/次序与 oracle 不一致
+  left: 1261463278
+ right: 1683182456
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    mongen::tests::create_monster_chicken_consumes_random_3500_then_dir_drops_cool_eye
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 101 filtered out; finished in 0.00s
+
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.93s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-3aa264152417c61e.exe)
+error: test failed, to rerun pass `-p game-svr --lib`
+
+test rc=101
+# 还原：mongen.rs sha256=29b071aff2ca5511c488211e1efa5a2863779da198efc8d81a1635fe57f408d0（与备份逐字节一致）

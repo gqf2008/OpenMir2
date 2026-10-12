@@ -1,0 +1,54 @@
+# 改坏必红 RC-5：交换 `BaseObject` 两抽的**次序**（抽数个数不变，值错位）
+# 变异点：bins/game-svr/src/mongen.rs::draw_base_and_animal —— `run_tick_delta` 与 `base_search_time` 两行互换
+# 命中用例：mongen::tests::monster_constructor_values_match_oracle_order（逐字段钉死）+ create_monster_chicken_*；
+#   抽数表 `monster_constructor_draw_count_matches_oracle_per_race` 只数个数 ⇒ 本变异**只被值判据捕捉**
+# 命令：CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test -p game-svr --lib --offline mongen
+
+
+running 14 tests
+test mongen::tests::create_monster_missing_map_consumes_nothing ... ok
+test mongen::tests::create_monster_unknown_race_consumes_nothing ... ok
+test mongen::tests::create_monster_cool_eye_threshold ... ok
+test mongen::tests::create_monster_terrain_shift_only_when_cell_unwalkable ... ok
+test mongen::tests::monster_table_lookup_is_ordinal_ignore_case ... ok
+test mongen::tests::create_monster_deer_branch_matches_oracle ... ok
+test mongen::tests::entries_from_envir_field_mapping ... ok
+test mongen::tests::host_venture_server_disables_regen ... ok
+test mongen::tests::host_sentinel_first_slot_is_skipped_by_regen ... ok
+test mongen::tests::host_start_and_step_regen_one_monster ... ok
+test mongen::tests::monster_constructor_draw_count_matches_oracle_per_race ... ok
+test mongen::tests::monster_constructor_values_match_oracle_order ... FAILED
+test mongen::tests::create_monster_chicken_consumes_random_3500_then_dir_drops_cool_eye ... FAILED
+test mongen::tests::mon_gen_config_reads_oracle_keys_with_bom ... ok
+
+failures:
+
+---- mongen::tests::monster_constructor_values_match_oracle_order stdout ----
+
+thread 'mongen::tests::monster_constructor_values_match_oracle_order' (31868) panicked at bins\game-svr\src\mongen.rs:1069:13:
+assertion `left == right` failed
+  left: 1485
+ right: 956
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- mongen::tests::create_monster_chicken_consumes_random_3500_then_dir_drops_cool_eye stdout ----
+
+thread 'mongen::tests::create_monster_chicken_consumes_random_3500_then_dir_drops_cool_eye' (2812) panicked at bins\game-svr\src\mongen.rs:864:9:
+assertion `left == right` failed: 构造链抽值必须逐抽相同
+  left: MonsterCtorDraws { run_tick_delta: 748, base_search_time: 3708, attack_tick_delta: 2625, walk_tick_delta: 2949, search_time: 3817, meat_quality: 5216, bo_fear_fire: false, zil_kill_count: 0 }
+ right: MonsterCtorDraws { run_tick_delta: 1281, base_search_time: 2998, attack_tick_delta: 2625, walk_tick_delta: 2949, search_time: 3817, meat_quality: 5216, bo_fear_fire: false, zil_kill_count: 0 }
+
+
+failures:
+    mongen::tests::create_monster_chicken_consumes_random_3500_then_dir_drops_cool_eye
+    mongen::tests::monster_constructor_values_match_oracle_order
+
+test result: FAILED. 12 passed; 2 failed; 0 ignored; 0 measured; 88 filtered out; finished in 0.00s
+
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.89s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-3aa264152417c61e.exe)
+error: test failed, to rerun pass `-p game-svr --lib`
+
+test rc=101
+# 还原：mongen.rs sha256=29b071aff2ca5511c488211e1efa5a2863779da198efc8d81a1635fe57f408d0（与备份逐字节一致）

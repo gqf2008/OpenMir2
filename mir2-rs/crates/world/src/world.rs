@@ -563,6 +563,97 @@ impl World {
         self.enter_world(id)
     }
 
+    /// **生成期的掉落预算**（`MonGetRandomItems` 的时机）——用**调用方给定的**随机流。
+    ///
+    /// oracle `WorldServer.MonGen.cs:441-488` 的 `MonGetRandomItems` 在 `CreateMonster`
+    /// 内部、即 **Dir 抽之后、CoolEye 抽之前** 发生在同一 `M2Share.RandomNumber` 上。
+    /// 接线层的 `MonsterCreator` 回调（[`crate::mongen::regen_monsters`]）需要在「两次位置抽
+    /// 之间」把这半段插入正确位置；本方法让回调不必碰 `World` 私有字段（`item_catalog` /
+    /// `item_number` / `mon_random_add_value`）就能在**同一条**流上预算。
+    pub fn budget_monster_drops(
+        &mut self,
+        rng: &mut RandomNumber,
+        drop_list: &[MonsterDropItem],
+    ) -> (i32, Vec<crate::combat::DropItem>) {
+        let catalog_items = std::mem::take(&mut self.item_catalog);
+        let (gold, items) = {
+            let catalog = VecItemCatalog {
+                items: &catalog_items,
+            };
+            generate_drops(
+                rng,
+                drop_list,
+                &catalog,
+                self.mon_random_add_value,
+                STRING_GOLD_NAME,
+                &mut self.item_number,
+            )
+        };
+        self.item_catalog = catalog_items;
+        (gold, items)
+    }
+
+    /// 生成**已预算好掉落/朝向**的怪物：**不再取任何随机数**（掉落预算由调用方在
+    /// [`World::budget_monster_drops`] 里按 oracle 次序完成；构造函数链的取数由调用方的
+    /// `CreateMonster` 回调完成）。
+    ///
+    /// 与 [`World::spawn_monster_now`] 的唯一差别是「不自己抽掉落」——用于
+    /// `RegenMonsters` 的 `CreateMonster` 回调（拖到 tick 里再抽会与 oracle 的 interleaving 不同）。
+    /// `ctor` = 构造函数链已抽出的值（[`crate::entity::MonsterCtorDraws`]），随生成结果落实体；
+    /// `dir`/`cool_eye` 属 AOI 实体面（承接卡 `openmir2-m3-monster-ai-tick`），本骨架的
+    /// `Entity` 尚未建模，故**此处登记为不入参与返回值的差值**（接线层已按 oracle 取数）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_monster_precomputed(
+        &mut self,
+        name: &str,
+        x: i32,
+        y: i32,
+        map_id: usize,
+        race: u8,
+        level: u8,
+        exp: i32,
+        hp: u16,
+        dc: u16,
+        ac: u16,
+        undead: u8,
+        hit_point: u8,
+        speed_point: u8,
+        gold: i32,
+        drop_items: Vec<crate::combat::DropItem>,
+        ctor: crate::entity::MonsterCtorDraws,
+    ) -> Option<i32> {
+        if map_id >= self.maps.len() {
+            return None;
+        }
+        let id = self.entities.alloc_id();
+        let mut e = crate::combat::monster_from_row(crate::combat::MonsterRow {
+            id,
+            name,
+            x,
+            y,
+            level,
+            exp,
+            hp,
+            dc,
+            ac,
+            undead,
+            hit_point,
+            speed_point,
+        });
+        e.race = race;
+        e.id = id;
+        e.map_id = map_id;
+        e.gold = gold;
+        e.drop_items = drop_items;
+        e.ctor_draws = ctor;
+        let id = self.entities.insert(e);
+        if !self.enter_world(id) {
+            self.entities.remove(id);
+            return None;
+        }
+        Some(id)
+    }
+
     /// 死亡结算：把预算好的掉落散到地上 + 给击杀者发经验。
     ///
     /// 命中者过期（`LastHiter`/`ExpHitter` 在命中者死亡或隐身后失效）**不在这里**判，
@@ -971,7 +1062,7 @@ pub struct FloorItemView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::{Entity, ACTOR_RACE_PLAY};
+    use crate::entity::{Entity, MonsterCtorDraws, ACTOR_RACE_PLAY};
 
     fn world_with(entities: &[(i32, i32, i32)]) -> World {
         let mut w = World::new(64, 64);
@@ -1416,5 +1507,118 @@ mod tests {
         let second = w.enter_map("hero", e2, 1).unwrap();
         assert_ne!(first, second, "小退再进必须得到新的 ActorId");
         assert_eq!(w.map(1).cell(7, 9).count(), 1);
+    }
+
+    /// `spawn_monster_precomputed`（M3④-实现 B 第 ③ 片的新 API）：掉落/朝向/构造抽已在回调里
+    /// 按 oracle 次序预算完，本方法**不再取任何随机数**；构造抽结果随实体落库。
+    #[test]
+    fn spawn_monster_precomputed_consumes_no_rng() {
+        let mut w = World::new(16, 16);
+        let mut fresh = w.rng.clone();
+        let ctor = MonsterCtorDraws {
+            run_tick_delta: 11,
+            base_search_time: 2222,
+            attack_tick_delta: 33,
+            walk_tick_delta: 44,
+            search_time: 3333,
+            meat_quality: 555,
+            bo_fear_fire: true,
+            zil_kill_count: 6,
+        };
+        let id = w
+            .spawn_monster_precomputed(
+                "鸡",
+                3,
+                3,
+                0,
+                80,
+                2,
+                30,
+                40,
+                0x0A_14,
+                5,
+                0,
+                6,
+                7,
+                99,
+                vec![],
+                ctor,
+            )
+            .expect("生成成功");
+        let e = w.entities.get(id).expect("怪物在仓库");
+        assert_eq!(e.name, "鸡");
+        assert_eq!(e.race, 80);
+        assert_eq!(e.hp, 40);
+        assert_eq!(e.max_hp, 40);
+        assert_eq!(e.dc, 0x0A_14);
+        assert_eq!(e.ac, 5);
+        assert_eq!(e.life_attrib, 0);
+        assert_eq!(e.hit_point, 6);
+        assert_eq!(e.speed_point, 7);
+        assert_eq!(e.mon_exp, 30);
+        assert_eq!(e.gold, 99, "预置金币必须原样落库");
+        assert!(e.drop_items.is_empty());
+        assert_eq!(e.ctor_draws, ctor, "构造抽结果必须原样落实体");
+        assert!(e.add_to_mapped, "生成后必须落图");
+        // `world.rng` 必须一步未动。
+        assert_eq!(w.rng.random(), fresh.random());
+        // 越界地图 ⇒ None（不落库）。
+        assert!(w
+            .spawn_monster_precomputed(
+                "鸡",
+                3,
+                3,
+                9,
+                80,
+                0,
+                0,
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                vec![],
+                MonsterCtorDraws::default(),
+            )
+            .is_none());
+    }
+
+    /// `budget_monster_drops`（新 API）的掉落预算与 `spawn_monster_now`（既有路径）逐字节相同。
+    #[test]
+    fn budget_monster_drops_matches_spawn_monster_now_drop_budget() {
+        let drop_list = vec![MonsterDropItem {
+            max_point: 100,
+            sel_point: 100, // 恒命中
+            item_name: STRING_GOLD_NAME.to_string(),
+            count: 1000,
+        }];
+        let mut a = World::new(16, 16);
+        let mut rng = RandomNumber::with_seed(5);
+        let (gold, items) = a.budget_monster_drops(&mut rng, &drop_list);
+
+        let mut b = World::new(16, 16);
+        b.rng = RandomNumber::with_seed(5);
+        b.spawn_monster(Command::SpawnMonster {
+            id: 2,
+            name: "鸡".into(),
+            x: 1,
+            y: 1,
+            map_id: 0,
+            level: 1,
+            exp: 0,
+            hp: 5,
+            dc: 0,
+            ac: 0,
+            undead: 0,
+            hit_point: 5,
+            speed_point: 15,
+            drop_list: drop_list.clone(),
+        });
+        b.tick();
+        let e = b.entities.get(2).expect("spawned");
+        assert_eq!(e.gold, gold, "预算金币必须与既有生成路径一致");
+        assert_eq!(e.drop_items, items, "预算物品必须一致");
     }
 }

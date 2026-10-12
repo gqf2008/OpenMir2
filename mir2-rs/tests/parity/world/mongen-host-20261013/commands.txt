@@ -1,0 +1,31 @@
+# 本片（M3④-实现 B 分片③：bins/game-svr 宿主接线；含 F-1 构造链取数返工）复现命令
+# 工作目录：<worktree>/mir2-rs ；隔离目标目录 CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target
+
+# --- 判据（构造级，14 条）---
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test -p game-svr --lib --offline mongen
+# crates/world 新增 API 的 2 条
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test -p mir2-world --lib --offline precomputed
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test -p mir2-world --lib --offline budget_monster_drops
+
+# --- F-1 独立复算（从 src/ 解析类继承+ctor；cwd = 仓库根）---
+python -I mir2-rs/tests/parity/world/mongen-host-20261013/40-crosscheck-ctor-draws.py.txt
+# 期望：MISMATCH=0（输出见 41-crosscheck-ctor-draws.txt）
+
+# --- 四门禁（全绿）---
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo fmt --all -- --check
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo clippy --workspace --all-targets --offline -- -D warnings
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo run -q -p msgcodegen --offline -- --check
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test --workspace --offline
+
+# --- 改坏必红（每次：cp mongen.rs/world.rs 备份 -> 变异 -> 跑命中用例 -> 还原并 sha256 核对）---
+# RC-1：删掉 race 51 的 Random(3500)（51 arm 的 meat_quality 改常量）          -> create_monster_chicken_* FAILED
+# RC-2：`let dir = rng.random_byte(8)` 改为常量 `let dir = 0u8`                -> 同一用例 FAILED（RNG 流位置错位）
+# RC-3：在 spawn_monster_precomputed 里加 `let _ = self.rng.random()`          -> spawn_monster_precomputed_consumes_no_rng FAILED
+# RC-4：注释掉 `draw_base_and_animal(rng, &mut d);`（F-1 专测）                 -> monster_constructor_draw_count_* + chicken/deer/terrain/values FAILED
+# RC-5：交换 `draw_base_and_animal` 里两抽的次序（个数不变、值错位）            -> monster_constructor_values_* + chicken FAILED（抽数表只数个数 ⇒ 只被值判据捕捉）
+# 还原后：sha256(mongen.rs)=29b071af…、sha256(world.rs)=291d4c30… 与备份逐字节一致。
+
+# --- 证据 hash（仓库 LF/git-blob 口径）---
+python -I tools/evidence-hash/verify_sha256sums.py write mir2-rs/tests/parity/world/mongen-host-20261013
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/world/mongen-host-20261013
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/world/mongen-host-20261013

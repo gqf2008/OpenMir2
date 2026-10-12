@@ -1,0 +1,112 @@
+# 独立复算（不依赖 Rust 代码）：从 src/ 解析「类继承 + 无参 ctor 的 Random 调用」，
+# 组合出 `CreateMonster` switch 中每条 race 的构造链抽数，与 Rust 实现逐 race 对照。
+#
+# 用法（cwd = <worktree>，即仓库根）：
+#   python -I mir2-rs/tests/parity/world/mongen-host-20261013/40-crosscheck-ctor-draws.py.txt
+#
+# F-1 返工（owner 2026-10-13 06:05 走 (b)）：oracle 的构造函数在 switch 内同步执行、早于
+# `cert.Dir`(`WorldServer.MonGen.cs:740`)，故构造链取数属生成路径 RNG 流。
+import re
+import glob
+import sys
+
+alltxt = [
+    (f, open(f, encoding="utf-8-sig", errors="replace").read())
+    for f in glob.glob("src/**/*.cs", recursive=True)
+]
+
+# class -> base（取第一个声明；BaseObject 是多文件 partial，ctor 解析时遍历所有文件）
+reg = {}
+for f, txt in alltxt:
+    for m in re.finditer(r"\b(?:partial\s+)?class\s+(\w+)\s*(?::\s*([^\{]+))?", txt):
+        base = (m.group(2) or "").strip().split(",")[0].strip()
+        reg.setdefault(m.group(1), base)
+
+
+def ctor_body(cls):
+    """无参 ctor 的 `{...}` 体（跨全部 partial 文件查找）。"""
+    for f, txt in alltxt:
+        for m in re.finditer(
+            r"(public|protected|private|internal)\s+" + re.escape(cls) + r"\s*\(([^)]*)\)\s*(:\s*base\s*\([^)]*\))?\s*\{",
+            txt,
+        ):
+            if m.group(2).strip() != "":
+                continue
+            i = m.end() - 1
+            depth = 0
+            j = i
+            while j < len(txt):
+                if txt[j] == "{":
+                    depth += 1
+                elif txt[j] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                j += 1
+            return txt[i : j + 1]
+    return ""
+
+
+def draws(body):
+    return re.findall(r"Random(?:Byte)?\(\s*([^\s,)]+)", body)
+
+
+memo = {}
+
+
+def chain(cls):
+    if cls in memo:
+        return memo[cls]
+    base = reg.get(cls)
+    res = (chain(base) if base and base != "object" else []) + draws(ctor_body(cls))
+    memo[cls] = res
+    return res
+
+
+# WorldServer.MonGen.cs:504-729 的 race -> 构造类（逐行实读）。
+races = {
+    11: "SuperGuard", 12: "PetSuperGuard", 20: "ArcherPolice", 51: "MonsterObject",
+    52: "ChickenDeer", 53: "AtMonster", 55: "Trainer", 80: "MonsterObject",
+    81: "AtMonster", 82: "SpitSpider", 83: "SlowAtMonster", 84: "Scorpion",
+    85: "StickMonster", 86: "AtMonster", 87: "DualAxeMonster", 88: "AtMonster",
+    89: "AtMonster", 90: "GasAttackMonster", 91: "MagCowMonster", 92: "CowKingMonster",
+    93: "ThornDarkMonster", 94: "LightingZombi", 95: "DigOutZombi", 96: "ZilKinZombi",
+    97: "CowMonster", 100: "WhiteSkeleton", 101: "ScultureMonster", 102: "ScultureKingMonster",
+    103: "BeeQueen", 104: "ArcherMonster", 105: "GasMothMonster", 106: "GasDungMonster",
+    107: "CentipedeKingMonster", 110: "CastleDoor", 111: "WallStructure", 112: "ArcherGuard",
+    113: "ElfMonster", 114: "ElfWarriorMonster", 115: "BigHeartMonster", 116: "SpiderHouseMonster",
+    117: "ExplosionSpider", 118: "HighRiskSpider", 119: "BigPoisionSpider", 120: "SoccerBall",
+    130: "DoubleCriticalMonster", 131: "RonObject", 132: "SandMobObject", 133: "MagicMonObject",
+    134: "BoneKingMonster", 200: "ElectronicScolpionMon", 201: "CloneMonster", 203: "TeleMonster",
+    206: "Khazard", 208: "GreenMonster", 209: "RedMonster", 210: "FrostTiger",
+    214: "FireMonster", 215: "FireballMonster",
+}
+# switch 内联抽（`:522/:532/:541/:550/:604/:612/:620`）；race 52 另加 `:527` 的 Random(30)。
+inline = {51: 1, 52: 1, 53: 1, 95: 1, 96: 1, 97: 1}
+# Rust 侧 `draw_monster_construct` 的断言表（race -> 抽数；96 为条件支，单列）。
+rust_table = {
+    11: 4, 12: 4, 20: 4, 55: 4, 110: 4, 111: 4, 112: 4,
+    51: 6, 52: 7, 53: 7,
+    80: 5, 81: 6, 82: 7, 83: 6, 84: 6, 85: 5, 86: 6, 87: 5, 88: 6, 89: 6,
+    90: 7, 91: 7, 92: 7, 93: 5, 94: 6, 95: 7, 97: 8,
+    100: 6, 101: 6, 102: 6, 103: 5, 104: 5, 105: 7, 106: 7, 107: 5,
+    113: 5, 114: 7, 115: 4, 116: 5, 117: 6, 118: 7, 119: 7, 120: 4,
+    130: 6, 131: 6, 132: 5, 133: 6, 134: 6,
+    200: 6, 201: 6, 203: 6, 206: 6, 208: 6, 209: 6, 210: 6, 214: 6, 215: 7,
+}
+
+bad = 0
+for r in sorted(races):
+    n = len(chain(races[r])) + inline.get(r, 0) + (1 if r == 52 else 0)
+    e = rust_table.get(r)
+    mark = ""
+    if r != 96:
+        if n != e:
+            mark = "  <-- MISMATCH"
+            bad += 1
+    else:
+        mark = "  (条件支：8 或 7+2+1=10)"
+    print(f"race {r:3d} {races[r]:22s} ctor_chain={len(chain(races[r])):2d} inline={inline.get(r,0)} total={n} rust={e}{mark}")
+
+print(f"\nMISMATCH={bad}  (race 96: {len(chain('ZilKinZombi')) + 1} 抽命中 / {len(chain('ZilKinZombi'))} 抽未命中 —— 含 switch 内联)")
+sys.exit(1 if bad else 0)

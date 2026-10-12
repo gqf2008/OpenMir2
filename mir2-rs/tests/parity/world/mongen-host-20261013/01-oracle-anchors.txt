@@ -1,0 +1,117 @@
+# oracle 锚点（M3④-实现 B 第 ③ 片：bins/game-svr 宿主接线）
+#
+# 行号按本 worktree 基线（master f4790571..a96ef0e6 区间对 src/ 无改动；本片未动 src/）。
+# 每一条都在 src/ 原文实读（read 工具），不是转述盘点片。
+
+## 1. 配置（Server.conf → MonGenConfig）
+src/Modules/SystemModule/Conf/ServerConf.cs:21   [Server] VentureServer（ReadWriteString，== "TRUE" OrdinalIgnoreCase）
+src/Modules/SystemModule/Conf/ServerConf.cs:53   [Server] MonLimit（默认 M2Share.MonLimit=30，M2Share.cs:176）
+src/Modules/SystemModule/Conf/ServerConf.cs:54   [Server] ZenLimit（默认 5，M2Share.cs:177）
+src/Modules/SystemModule/Conf/ServerConf.cs:63   [Server] UserFull（默认 GameSvrConf.cs:1263 = 5000）
+src/Modules/SystemModule/Conf/ServerConf.cs:64   [Server] ZenFastStep（默认 GameSvrConf.cs:1264 = 300）
+src/Modules/SystemModule/Conf/ServerConf.cs:66   [Server] RegenMonstersTime（默认 GameSvrConf.cs:1433 = 200）
+src/Modules/SystemModule/Conf/ServerConf.cs:636  [Setup] ProcessMonsterInterval（默认 GameSvrConf.cs:1895 = 2）
+src/Modules/SystemModule/Conf/ServerConf.cs:637  [Setup] ProcessMonsterMultiThreadLimit（ReadWriteByte；默认 GameSvrConf.cs:1896 = 1）
+src/Modules/SystemModule/Conf/ServerConf.cs:560  [Setup] MonsterPowerRate（默认 GameSvrConf.cs:1476 = 10）——monsters 表能力缩放
+src/Modules/SystemModule/Conf/Model/GameSvrConf.cs:334  GenMonRate 字段（[Setup] GenMonRate，部署 Server.conf:780 = 10）
+部署实测 E:/MirServer/M2GameSvr/Server.conf：MonLimit=10(:26) ZenLimit=5(:27) UserFull=3000(:31) ZenFastStep=300(:32)
+  GenMonRate=10(:780) MonsterPowerRate=10(:377)；无 ProcessMonsterMultiThreadLimit / RegenMonstersTime / VentureServer（:9 有 VentureServer=FALSE）
+  ⇒ 本片 mon_gen_config_from_conf 实测读得 mon_limit=10/zen_limit=5/zen_fast_step=300/user_full=3000/mon_gen_rate=10/process_monster_multi_thread_limit=1/regen=200/venture=false。
+
+## 2. 加载 + 末尾哨兵
+src/GameSrv/DB/LocalDB.cs:501        LoadMonGen(out mongenCount)
+src/GameSrv/DB/LocalDB.cs:508        sFileName = M2Share.GetEnvirFilePath("MonGen.txt")
+src/GameSrv/DB/LocalDB.cs:520        HUtil32.CompareLStr("loadgen", line)（实参写反，子文件不可达——分片①保留）
+src/GameSrv/DB/LocalDB.cs:524-526    loadgen 子文件展开路径（load_map_gen_into，路径字符串拼接）
+src/GameSrv/DB/LocalDB.cs:532-557    8 列解析（Range (byte)/Count (ushort)/ZenTime=StrToInt*60000/MissionGenRate (byte)）
+src/GameSrv/DB/LocalDB.cs:558-564    入库校验（MapName&MonName 非空 && ZenTime>0 && GetMapInfo != null）
+src/GameSrv/DB/LocalDB.cs:570-590    文件存在 ⇒ 无条件追加缺省 MonGenInfo 到 MonGenInfoThreadMap[0]（末尾哨兵）并 result=1
+  本片：load_mon_gen_entries 的 Ok(Some(_)) ⇒ MonGenHost::start(sentinel_present=true)。
+
+## 3. 分组/分片（WorldServer.MonGen.cs）
+src/GameSrv/Word/WorldServer.MonGen.cs:30-114   InitializeMonster
+  :34-48  按 MonName 分组（StringComparer.OrdinalIgnoreCase）
+  :50-61  monsterGenMap.Count <= 0 ⇒ 建 0..limit 个空线程表
+  :63-88  每怪名 1 次 Random(ProcessMonsterMultiThreadLimit)（:66）+ MonGenList[i].MonName 错位写 MonsterThreadMap（:84，保留）
+  :91-99  MonsterList.Values 各再抽 1 次（:94）
+  :101-110 回填 Race = GetMonRace(name)
+src/GameSrv/Word/WorldServer.cs:77       MonsterList = new Dictionary<string, MonsterInfo>(StringComparer.OrdinalIgnoreCase)
+src/GameSrv/Word/WorldServer.cs:167-174  GetMonRace（TryGetValue；未命中 -1）
+src/GameSrv/Word/WorldServer.cs:1901     AddMonGenList（MonGenList）
+src/GameSrv/Word/WorldServer.cs:1909-1922 Check/Add/CreateMonGenInfoThreadMap（哨兵落 MonGenInfoThreadMap[0]）
+
+## 4. 每 tick regen 门（WorldServer.MonGen.cs:192-253 的 ProcessMonsters 前半）
+src/GameSrv/Word/WorldServer.MonGen.cs:207 门：(GetTickCount - RegenMonstersTick) > RegenMonstersTime（严格大于）
+src/GameSrv/Word/WorldServer.MonGen.cs:211-230 轮询 CurrMonGenIdx（越界取 0，再推进）
+src/GameSrv/Word/WorldServer.MonGen.cs:174-190 GetMonstersZenTime（<30min 且 d10>0 ⇒ 夹 6 加速）
+src/GameSrv/Word/WorldServer.MonGen.cs:232 genModCount = max(1, Round(max(1,Count)/(MonGenRate/10.0)))
+src/GameSrv/Word/WorldServer.MonGen.cs:235-243 canCreate = !(map==null || (map.Flag.boNOHUMNOMON && map.HumCount<=0))
+src/GameSrv/Word/WorldServer.MonGen.cs:244-252 genModCount>ActiveCount && canCreate ⇒ RegenMonsters；boRegened 才 StartTick=now
+src/GameSrv/Word/WorldServer.MonGen.cs:340 ProcessMonsters 循环尾 Thread.Sleep(20)（本宿主 200ms tick 等效驱动，登记见模块头）
+
+## 5. RegenMonsters（RNG 次序）
+src/GameSrv/Word/WorldServer.MonGen.cs:811-874 RegenMonsters(monGen, nCount)
+  :823     MissionGenRate>0 时先 Random(100)
+  :825-826 集中支：中心 2 次 Random(Range*2+1)
+  :829     集中支：每只 2 次 Random(20)
+  :849-850 普通支：每只 2 次 Random(Range*2+1)
+  :815/:836/:853-855 ZenLimit 闸门（本宿主注入同一 tick 时刻，登记）
+  （分片②已实现这些次序；本片只做宿主驱动与 CreateMonster 回调。）
+
+## 6. CreateMonster（RNG 次序；本片第 ③ 片的回调）
+#
+# ★ 2026-10-13 F-1 返工：oracle 在 switch 内 `new Xxx()`，**构造函数在 switch 内同步执行**
+#   ⇒ 构造链取数全部发生在 `cert.Dir`(:740) **之前**，属生成路径 RNG 流的一部分。
+#   逐层锚点（本片 read 工具实读，非转述）：
+src/M2Server/Actor/BaseObject.cs:439        RunTick   = GetTickCount() + Random(1500)
+src/M2Server/Actor/BaseObject.cs:441        SearchTime = Random(2000) + 2000
+src/M2Server/Actor/AnimalObject.cs:76       AttackTick = GetTickCount() - Random(3000)
+src/M2Server/Actor/AnimalObject.cs:77       WalkTick   = GetTickCount() - Random(3000)
+src/M2Server/Monster/MonsterObject.cs:65    SearchTime = 3000 + Random(2000)
+src/M2Server/Monster/Monsters/ATMonster.cs:10 SearchTime = Random(1500) + 1500
+src/M2Server/Npc/NormNpc.cs:39 / Monsters/GuardUnit.cs:19  守卫链无额外抽
+   派生类 ctor 的 SearchTime 覆盖：StickMonster.cs:17 / BeeQueen.cs:17 / SpiderHouseMonster.cs:17 /
+     DigOutZombi.cs:13 / ExplosionSpider.cs:14 / ScultureMonster.cs:11 / ZilKinZombi.cs:15（+ `Random(3)==0` 支）/…
+     （`Random(1500) + {1500|2500|500}` 型，逐 race 见下表）
+src/GameSrv/Word/WorldServer.MonGen.cs:498-503 FindMap == null ⇒ null（在取数之前）
+src/GameSrv/Word/WorldServer.MonGen.cs:504-729 switch(nMonRace) 的构造 + 内联抽：
+  511/522   AnimalChicken(51)        MeatQuality = Random(3500) + 3000
+  527/532/541 AnimalDeer(52)         `if (Random(30)==0)`（**先于任何 new**）→ Random(20000)+10000 / Random(8000)+8000
+  542/550   AnimalWolf(53)          MeatQuality = Random(8000) + 8000
+  594-598   MonsterDigoutzombi(95)  ctor 后 `Random(2)==0 ⇒ BoFearFire`
+  611-615   MonsterZilkinzombi(96)  ctor 内 `Random(3)==0 ⇒ Random(3)+1`；ctor 后 `Random(4)==0 ⇒ BoFearFire`
+  618-622   case 97 (CowMonster)    ctor 后 `Random(2)==0 ⇒ BoFearFire`
+  不在 switch 内的 race ⇒ cert==null（不抽任何数）
+# 逐 race 构造链总抽数（本片 `draw_monster_construct` 实现；与从 src/ 解析类继承+ctor 的独立 Python 脚本对齐，见 40-crosscheck）：
+#   11/12/20/55/110/111/112 = 4（GuardUnit 链 = BaseObject 2 + AnimalObject 2）
+#   51=6  52=7  53=7
+#   80=5  81=6  82=7  83=6  84=6  85=5  86=6  87=5  88=6  89=6  90=7  91=7  92=7  93=5  94=6  95=7
+#   96=9 或 10（`Random(3)==0` 命中支 +1；含 switch 内联）  97=8
+#   100=6 101=6 102=6 103=5 104=5 105=7 106=7 107=5
+#   113=5 114=7 115=4 116=5 117=6 118=7 119=7 120=4 130=6 131=6 132=5 133=6 134=6
+#   200=6 201=6 203=6 206=6 208=6 209=6 210=6 214=6 215=7
+#   附注：reviewer-6 F-1 的示例（80=1、81=2）只数了 `MonsterObject.cs:65`/`ATMonster.cs:10` 那一次 ctor 抽，
+#     漏计公共链 `BaseObject`(2)/`AnimalObject`(2)；owner 2026-10-13 06:05 要求「逐 race 自己读源码确认」，
+#     故本片按**完整链**实现，并登记该口径订正（同一缺口也在承接卡 C 分片①的 `02-constructor-rng-gap.txt` 记为 5 抽）。
+src/GameSrv/Word/WorldServer.MonGen.cs:731-734 cert==null ⇒ return null
+src/GameSrv/Word/WorldServer.MonGen.cs:735-739 ApplyMonsterAbility(v880-910)（无 RNG；能力字段映射）
+src/GameSrv/Word/WorldServer.MonGen.cs:740 cert.Dir = RandomByte(8)
+src/GameSrv/Word/WorldServer.MonGen.cs:742 MonGetRandomItems(cert)（v441-488 的掉落预算）
+src/GameSrv/Word/WorldServer.MonGen.cs:743-746 Random(100) < cert.CoolEyeCode ⇒ CoolEye
+src/GameSrv/Word/WorldServer.MonGen.cs:747 cert.Initialize()（BaseObject.Base.cs:14：AbilCopyToWAbil + CanWalk(x,y,true)&&AddToMap ⇒ AddtoMapSuccess=false）
+src/GameSrv/Word/WorldServer.MonGen.cs:748-800 地形移位：仅 AddtoMapSuccess 为真时；循环内 CanWalk(x,y,false) 为假才移位
+             （Width<50?2:3 步长；Height<250? (Height<30?2:20) : 50 边距；最多 31 次；Random(Width/2)/Random(Height/2)）
+src/GameSrv/Word/WorldServer.MonGen.cs:801-802 !outofrange ⇒ return null 等价物
+
+# 构造抽值落实体（owner 2026-10-13 06:05 要求②）：`Entity.ctor_draws: MonsterCtorDraws`
+#   （run_tick_delta / base_search_time / attack_tick_delta / walk_tick_delta / search_time /
+#    meat_quality / bo_fear_fire / zil_kill_count），供承接卡 C 的 AI 消费（C 只消费不抽）。
+# 本片仍登记：`dir`/`cool_eye` 只随 `MonsterSpawnRequest` 交给 sink，未入 `Entity`（AOI 面属承接卡 C）。
+
+## 7. 能力字段（ApplyMonsterAbility，v880-910）
+Race / RaceImg / Appr / Abil.Level=Level / LifeAttrib=btLifeAttrib / CoolEyeCode=CoolEye / FightExp=Exp /
+Abil.HP=MaxHP=HP / Abil.MP=0,MaxMP=MP / AC=MakeWord(AC,AC) / MAC=MakeWord(MAC,MAC) /
+DC=MakeWord(DC,MaxDC) / MC=MakeWord(MC,MC) / SC=MakeWord(SC,SC) / MonsterWeapon=LoByte(MP) /
+SpeedPoint=Speed / HitPoint=HitPoint / WalkSpeed/WalkStep/WalkWait / NextHitTime=AttackSpeed /
+NastyMode=boAggro / NoTame=boTame
+本片 WorldMonsterSink 落库子集：level/exp/hp/dc(MakeWord(dc,max_dc))/ac/life_attrib/hit_point/speed_point。

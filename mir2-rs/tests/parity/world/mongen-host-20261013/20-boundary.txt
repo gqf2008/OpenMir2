@@ -1,0 +1,49 @@
+# 边界（oracle 冻结面）：本片改动清单 + src/sql/MirClient 差分
+
+## patch base = refs/heads/master = 4d276812fe82e0c8caa1721e9327e2d76c04f760（交付时 master，已含第②片+R5-1/R5-2、C 分片① monster-ai、m3bag gitattributes/eol、m3cs/m3bag/m3cs 各盘点；本次交付前已 git merge origin/master 消除幻影差量）
+## patch head = refs/heads/mongen-host（本片交付 tip；见线程 patch/status 条目）
+
+## 本片（第 ③ 片 + F-1 返工）改动（git diff --name-status master..HEAD）：
+M	mir2-rs/bins/game-svr/src/config.rs
+M	mir2-rs/bins/game-svr/src/lib.rs
+M	mir2-rs/bins/game-svr/src/main.rs
+A	mir2-rs/bins/game-svr/src/mongen.rs
+M	mir2-rs/crates/world/src/entity.rs
+M	mir2-rs/crates/world/src/lib.rs
+M	mir2-rs/crates/world/src/world.rs
+A	mir2-rs/tests/parity/world/mongen-host-20261013/01-oracle-anchors.txt
+A	mir2-rs/tests/parity/world/mongen-host-20261013/20-boundary.txt
+A	mir2-rs/tests/parity/world/mongen-host-20261013/30-redcheck-rc1-race51-draw.txt
+A	mir2-rs/tests/parity/world/mongen-host-20261013/31-redcheck-rc2-dir-draw.txt
+A	mir2-rs/tests/parity/world/mongen-host-20261013/32-redcheck-rc3-precomputed-rng.txt
+A	mir2-rs/tests/parity/world/mongen-host-20261013/40-crosscheck-ctor-draws.py.txt
+A	mir2-rs/tests/parity/world/mongen-host-20261013/41-crosscheck-ctor-draws.txt
+A	mir2-rs/tests/parity/world/mongen-host-20261013/42-redcheck-rc4-base-draws-dropped.txt
+A	mir2-rs/tests/parity/world/mongen-host-20261013/43-redcheck-rc5-swap-base-order.txt
+A	mir2-rs/tests/parity/world/mongen-host-20261013/README.md
+A	mir2-rs/tests/parity/world/mongen-host-20261013/SHA256SUMS.txt
+A	mir2-rs/tests/parity/world/mongen-host-20261013/commands.txt
+A	mir2-rs/tests/parity/world/mongen-host-20261013/gates/10-fmt.txt
+A	mir2-rs/tests/parity/world/mongen-host-20261013/gates/11-clippy.txt
+A	mir2-rs/tests/parity/world/mongen-host-20261013/gates/12-msgcodegen.txt
+A	mir2-rs/tests/parity/world/mongen-host-20261013/gates/13-workspace-test.txt
+
+## 基线说明
+- 第 ① 片（envir 解析）已合入 master `f4790571`；第 ② 片（world 调度/RNG/哨兵，含 R5-1/R5-2 返工）已合入 master `304126ae`。
+- 上一被审 head = `3144315afacc5f3e6b727575181ce52d7e1dcb24`（reviewer-6 `07444eef` request_changes：F-1/M-1）。
+- 本 tip 相对它只增 F-1 返工 + M-1 订正；第 ①/② 片不重审。
+- 交付期间 C 分片①（`monster-ai`，`12950578`）被 owner 合入 master `eb508a97` ⇒ 已 merge；`entity.rs` 冲突已解（`Entity` 同时含 C 的 `ai: AnimalState` 与本片的 `ctor_draws: MonsterCtorDraws`）。
+
+## git diff --stat master -- src/ sql/ MirClient（必须为空）
+(空 = oracle/客户端/表结构未动)
+
+## 分支已 merge master（`git merge-base --is-ancestor master HEAD` = YES）后重跑四门禁（本目录 gates/）。
+
+## 写集（第 ③ 片 + F-1）
+mir2-rs/crates/world/src/world.rs（budget_monster_drops / spawn_monster_precomputed(含 ctor 参数) + 2 用例）
+mir2-rs/crates/world/src/entity.rs（MonsterCtorDraws + Entity.ctor_draws；与 C 的 AnimalState/Entity.ai 共存）
+mir2-rs/crates/world/src/lib.rs（导出 MonsterCtorDraws）
+mir2-rs/bins/game-svr/src/mongen.rs（宿主接线层 + draw_monster_construct + 14 用例）
+mir2-rs/bins/game-svr/src/lib.rs（注册 pub mod mongen）
+mir2-rs/bins/game-svr/src/config.rs（[Setup] MonsterPowerRate 解析）
+mir2-rs/bins/game-svr/src/main.rs（加载 monsters/MonGen + sim_loop 建宿主 + step_mon_gen）
