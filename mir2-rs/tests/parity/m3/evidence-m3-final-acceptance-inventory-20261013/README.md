@@ -13,7 +13,7 @@
 | ① 背包/装备 | `scoped_diff.py diff --canonical --fixed-newchr` = `GREEN 作用域内 9 张表逐行一致` rc=0 | **covered（diff=0）** |
 | ② 战斗 | 三对 `attack_diff.py diff` 全 `GREEN diff=0（attacked=120 hits=57 dodges=63 sum=2425）` rc=0；`stream_equiv gate` 651/651 | **covered（逐 k=0）** |
 | ③ 技能 | `combat_skill_vectors` 29 passed；registry `implemented=29/108`、cases=29；未实装 79 条逐条登记 | **covered** |
-| 掉落/经验、任务、组队/交易、公会/攻城、英雄/宠物、邮件/拍卖 | 本片未跑 | **not_covered**（逐项给建议承接卡） |
+| 掉落/经验、任务、组队/交易、公会/攻城、英雄/宠物、邮件/拍卖 | 本片未跑 | **not_covered**（逐项承接卡 = ④`openmir2-m3-drop-exp-align` / ⑥`openmir2-m3-quest-align` / ⑦`openmir2-m3-party-trade-align` / ⑧`openmir2-m3-guild-castle-align` / ⑨`openmir2-m3-hero-pet-align` / ⑩`openmir2-m3-mail-auction-align`；均已存在） |
 | NPC/商店 | M4 7/7 脚本层 GREEN（含商店/修理/仓库 3 条）；服务端派发未覆盖 | **partial** |
 | ④ M3 门禁 `scoped_diff --canonical` | 真机隔离两相后 DB 侧 `characters_ablity` 一处 RED（F-2 轨承接） | 未达成（非本片轴） |
 | ② 300 假人 24h 长跑 | **未跑**（等 owner 收拢窗口） | **not_run**（方案见 `M3-report.md` §2） |
@@ -30,6 +30,9 @@
 | `diff/22-stream-equiv.txt` | ② `stream_equiv` selftest 10/10 + gate 651/651 |
 | `diff/23-scope-m3-gate-canonical.txt` | §6 M3 门禁实跑：跨侧 `--canonical` RED 4 行 / `--fixed-newchr` RED 8 行；同侧 C# 自比 GREEN |
 | `inventory/30-skills-combat-registry.txt` | ③ 技能/战斗工件计数（只读；生成脚本内联于 `commands.txt` §4） |
+| `inventory/31-in-world-stability-selftest.txt` | DoD② 判据 (b) 机判器 `tools/botload/in_world_stability.py` 自测 7/7 |
+| `inventory/32-in-world-stability-redcheck.txt` | 判据 (b) 实跑演示：稳态 ⇒ GREEN、改坏一桶 ⇒ RED、缺 `in_world` ⇒ PREREQ（fail-closed） |
+| `inventory/iw_steady.jsonl` / `iw_dropped.jsonl` | 上面演示的合成 `load_stats` fixture（GREEN / RED） |
 | `m4/40-npc-cases.txt` | M4 7/7 port-free NPC 用例 stdout（GREEN） |
 | `m4/41-evidence-hashes.txt` | M4 证据 hash 复核（GREEN 19/19） |
 | `gates/50-fmt.txt` `51-clippy.txt` `52-test-workspace.txt` `53-msgcodegen.txt` | 四门禁（全 rc=0；test 84 suites/687 passed/0 failed/16 ignored） |

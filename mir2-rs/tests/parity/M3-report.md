@@ -26,13 +26,13 @@
 | 1 | 背包 / 装备 | 穿戴/脱下/负重/持久/属性面板逐项相同；边界用例齐 | **covered（diff=0）** | 卡 `openmir2-m3-bag-equip-alignment`（closed，merge `bbf63fb0`） |
 | 2 | 战斗 | 固定种子下 100+ 次攻击伤害序列逐项相同；命中/躲闪统计一致 | **covered（逐 k=0）** | 卡 `openmir2-m3-combat-skills-align`（closed，merge `55a29144`） |
 | 3 | 技能 | 每个已实装技能 ≥1 条用例：前置/MP/效果/冷却 | **covered（29 技能各 1 case）** | 同上 |
-| 4 | 掉落 / 经验 | 固定种子 100 次击杀掉落逐项相同；经验曲线（含英雄）逐级相同、无 i32 截断 | **not_covered（M3 系统级）** | 建议卡 `openmir2-m3-drop-exp-align`（见 §4） |
-| 5 | NPC / 商店 | 买/卖/修理/仓库价格与库存变化一致；失败分支一致 | **partial** | 脚本层 7/7 引 M4；服务端派发 not_covered，建议卡 `openmir2-m3-npc-shop-align` |
-| 6 | 任务 | 接/交/条件判定一致，任务状态落库一致 | **not_covered** | 建议卡 `openmir2-m3-quest-align` |
-| 7 | 组队 / 交易 | 归属/分配/取消/掉线中断结果一致 | **not_covered** | 建议卡 `openmir2-m3-party-trade-align` |
-| 8 | 公会 / 攻城 | 建会/宣战费用时限/城门状态/自动结束逐项一致 | **not_covered** | 建议卡 `openmir2-m3-guild-castle-align` |
-| 9 | 英雄 / 宠物 | 召唤/升级/阵亡/经验分配/上限判定一致 | **not_covered** | 建议卡 `openmir2-m3-hero-pet-align` |
-| 10 | 邮件 / 拍卖 | 发送/到期/成交/退回，DB 落库字段级 diff=0 | **not_covered** | 建议卡 `openmir2-m3-mail-auction-align` |
+| 4 | 掉落 / 经验 | 固定种子 100 次击杀掉落逐项相同；经验曲线（含英雄）逐级相同、无 i32 截断 | **not_covered（M3 系统级）** | **已有卡** `openmir2-m3-drop-exp-align`（owner 已开，见 §4） |
+| 5 | NPC / 商店 | 买/卖/修理/仓库价格与库存变化一致；失败分支一致 | **partial** | 脚本层 7/7 引 M4；服务端派发 not_covered，**已有卡** `openmir2-m3-npc-shop-align` |
+| 6 | 任务 | 接/交/条件判定一致，任务状态落库一致 | **not_covered** | **已有卡** `openmir2-m3-quest-align` |
+| 7 | 组队 / 交易 | 归属/分配/取消/掉线中断结果一致 | **not_covered** | **已有卡** `openmir2-m3-party-trade-align` |
+| 8 | 公会 / 攻城 | 建会/宣战费用时限/城门状态/自动结束逐项一致 | **not_covered** | **已有卡** `openmir2-m3-guild-castle-align` |
+| 9 | 英雄 / 宠物 | 召唤/升级/阵亡/经验分配/上限判定一致 | **not_covered** | **已有卡** `openmir2-m3-hero-pet-align` |
+| 10 | 邮件 / 拍卖 | 发送/到期/成交/退回，DB 落库字段级 diff=0 | **not_covered** | **已有卡** `openmir2-m3-mail-auction-align` |
 
 > 说明：§6 的 M3 判据表把「战斗」与「技能」列为两项；本表的 2/3 与卡 `openmir2-m3-combat-skills-align`
 > 的 ②③ 一一对应。§6「顺序」原文把两者并列写作「战斗/技能」，故十项计数以本表为准。
@@ -123,7 +123,7 @@
   「固定种子 RNG 序列 diff=0 / 经验曲线 1→255 全表 diff=0（含英雄）/ 真实怪 + 合成 17 分支 ×100 杀掉落逐项 diff=0」，
   以及白名单 `D-1..D-6`（掉落相关豁免）。**但那是 D 线离线 golden 口径，不是 M3 的两侧同库同脚本系统级门禁**，
   故本表不据此判 covered。
-- **承接**：建议新卡 `openmir2-m3-drop-exp-align`（判据 = §6 原文 + `run_pair.ps1`/`scoped_diff.py`/RNG 账本口径）。
+- **承接**：**已有卡** `openmir2-m3-drop-exp-align`（owner 已开；判据 = §6 原文 + `run_pair.ps1`/`scoped_diff.py`/RNG 账本口径）。
 - **本片状态**：`not_verified`（本片未跑任何掉落/经验对拍）。
 
 ### 1.5 NPC / 商店（partial）
@@ -147,7 +147,7 @@
     2. **Rust 服务侧 NPC/商人派发（`bins/game-svr`）未覆盖**——M4 README 明写「属 M3 NPC/商店系统对齐」，
        而该服务侧对齐至今没有卡；
     3. **失败分支**（钱不够、负重满）与**库存变化**（买卖后的物品行增减）未被这 7 条用例覆盖。
-- **承接**：建议新卡 `openmir2-m3-npc-shop-align`（判据 = 两侧真栈买/卖/修理/仓库 + `characters_item`/
+- **承接**：**已有卡** `openmir2-m3-npc-shop-align`（判据 = 两侧真栈买/卖/修理/仓库 + `characters_item`/
   `characters_bagitem`/`characters_storageitem` 作用域 diff=0 + 失败分支）。
 - **本片读数文件**：`.../m4/40-npc-cases.txt`、`.../m4/41-evidence-hashes.txt`。
 
@@ -156,33 +156,33 @@
 - **判据（§6 原文）**：用现存脚本任务跑：接/交/条件判定一致，任务状态落库一致。
 - **状态：`not_covered`**。相关先例：M4 的 `Q001@main`（地图出矿提示）只覆盖脚本层恒定输出（gold/items），
   **不覆盖**任务状态落库（`characters_quest` 表）与接/交流程。
-- **承接**：建议卡 `openmir2-m3-quest-align`（判据 = 现存脚本任务 + `characters_quest` 作用域 diff=0）。
+- **承接**：**已有卡** `openmir2-m3-quest-align`（判据 = 现存脚本任务 + `characters_quest` 作用域 diff=0）。
 
 ### 1.7 组队 / 交易（not_covered）
 
 - **判据（§6 原文）**：两人及以上场景：归属、分配、取消、掉线中断的结果一致。
 - **状态：`not_covered`**（本片未跑，仓内未见承接卡）。
-- **承接**：建议卡 `openmir2-m3-party-trade-align`。
+- **承接**：**已有卡** `openmir2-m3-party-trade-align`。
 
 ### 1.8 公会 / 攻城（not_covered）
 
 - **判据（§6 原文）**：建会 / 宣战（费用、时限）/ 城门状态 / 自动结束，逐项一致。
 - **状态：`not_covered`**。相关先例：M4 的行会脚本用例（`@requestcastlewar` 缴金条）只到**脚本层**扣金条/说词，
   **不覆盖**攻城费用/时限/城门状态/自动结束的世界逻辑。
-- **承接**：建议卡 `openmir2-m3-guild-castle-align`。
+- **承接**：**已有卡** `openmir2-m3-guild-castle-align`。
 
 ### 1.9 英雄 / 宠物（not_covered）
 
 - **判据（§6 原文）**：召唤 / 升级 / 阵亡 / 经验分配 / 上限判定一致。
 - **状态：`not_covered`**。M3 技能侧有 3 条 `c_real_summon`（17/30/41）因缺
   `SystemShare.WorldEngine.RegenMonsterByName` / 真栈探针而 deferred，属**技能召唤**而非系统级英雄/宠物对齐。
-- **承接**：建议卡 `openmir2-m3-hero-pet-align`。
+- **承接**：**已有卡** `openmir2-m3-hero-pet-align`。
 
 ### 1.10 邮件 / 拍卖（not_covered）
 
 - **判据（§6 原文）**：发送 / 到期 / 成交 / 退回，DB 落库字段级 diff = 0。
 - **状态：`not_covered`**（本片未跑，仓内未见承接卡）。
-- **承接**：建议卡 `openmir2-m3-mail-auction-align`。
+- **承接**：**已有卡** `openmir2-m3-mail-auction-align`。
 
 ---
 
@@ -226,14 +226,14 @@ python -I tools/botload/load_report.py --stats E:\tmp\m3final\bots\load_stats.nd
 # 5b) 选角成功率 300/300（协议探针，M1⑤ 口径）
 python -I tools/m1-acceptance/probe_m1_chain.py --count 300 --out E:\tmp\m3final\probe.json
 # 5c) in_world 曲线稳态段无跌落（Ramp=1h；5min 桶；判据 = 桶均值 min ≥ 0.95 × 桶均值 max）
-python -I E:\tmp\m3final\in_world_stability.py E:\tmp\m3final\bots\load_stats.ndjson 3600000 300000
+python -I tools/botload/in_world_stability.py E:\tmp\m3final\bots\load_stats.ndjson `
+  --ramp-ms 3600000 --bucket-ms 300000 --tail-ms 300000 --min-ratio 0.95 --json E:\tmp\m3final\in-world-stability.json
 # 6) 收工：停栈 + 十端口实拍 + 卡上写「窗口已释放」
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 -Stop
 ```
 
-> 说明：`5c` 的 `in_world_stability.py`（输入 `load_stats.ndjson` + ramp/桶宽，断言「稳态段 5min 桶均值 min ≥ 0.95 × 桶均值 max」）
-> **开跑前随本卡新增到 `tools/botload/` 并入库**（当前仓内不存在，故本片只列口径）；
-> `5b` 复用 M1⑤ 的 `probe_m1_chain.py`（`--count 300`，口径 = 登录→选服→选角四步的 `select_chr` 计数）。
+> 说明：`5c` 的 `tools/botload/in_world_stability.py` 已随本片入库（`--selftest` 7/7：丢一桶⇒RED、缺 `in_world`/坏 JSON⇒PREREQ、无稳态段⇒PREREQ；
+> 实跑演示见证据包 `inventory/31`/`32`）；`5b` 复用 M1⑤ 的 `probe_m1_chain.py`（`--count 300`，口径 = 登录→选服→选角四步的 `select_chr` 计数）。
 
 ### 2.3 采集窗口登记（§17.1 要求，跑前必写）
 
@@ -263,7 +263,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_ru
 - **本片入库（新增）**：
   - `mir2-rs/tests/parity/M3-report.md`（本报告）；
   - `mir2-rs/tests/parity/m3/evidence-m3-final-acceptance-inventory-20261013/**`
-    （`README.md` + `commands.txt` + `verify/` + `diff/` + `inventory/` + `m4/` + `gates/` + `window/` + `SHA256SUMS.txt`）。
+    （`README.md` + `commands.txt` + `verify/` + `diff/` + `inventory/` + `m4/` + `gates/` + `window/` + `SHA256SUMS.txt`）；
+  - `tools/botload/in_world_stability.py`（owner 87e84b4f 要求「预置」：DoD② 判据 (b) 的 `in_world` 稳态无跌落机判器；
+    `--selftest` 7/7，改坏必红；实跑演示见证据包 `inventory/31`/`32`）。
 - **本片未新增任何临时目录/临时库/进程**；**未起栈、未占端口**（九端口实拍 FREE，见证据包 `window/01-ports-9.txt`）。
 - **仓外临时物**：无（本片所有命令均读仓库内既有件；`run_npc_cases.py` 只写仓库内 `evidence/M4/npc-cases.txt`，
   且重跑字节不变、`git status` 干净）。
@@ -276,14 +278,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_ru
 
 | 未收口项 | 现状 | 承接卡 / 建议卡名 |
 | --- | --- | --- |
-| §6 M3 门禁 `scoped_diff.py diff --canonical` 有一处 RED | **本片实跑确认**：`--canonical` ⇒ `RED 作用域内 4 行不一致`（全在 `mir2_db.characters_ablity`；`rc=1`）；`--canonical --fixed-newchr` ⇒ `RED 8 行`（+ `characters.Hair`，夹具随机输入）；同侧 C# 自比 `--canonical --fixed-newchr` = GREEN 9 表。⇒ 跨侧差异落在 `characters_ablity`（`Ac/MAxMP/MaxWeight/MaxWearWeight/MaxHandWeight/Hp`），疑持久化/断线存档轴；**非** DoD② 攻击 RNG 轴（后者已逐 k=0）。原始件 `diff/23-scope-m3-gate-canonical.txt` | **已有卡** `openmir2-m3-final-acceptance` 的 follow-up 轨（issue：`M3②③ follow-up（F-2）`，待认领） |
-| 掉落 / 经验（§6 第 3 系统） | `not_covered`（D 线离线先例存在，非 M3 系统级） | 建议卡 `openmir2-m3-drop-exp-align` |
-| NPC / 商店（§6 第 4 系统）服务端派发 + 失败分支 | `partial`（脚本层 7/7 引 M4；服务端 not_covered） | 建议卡 `openmir2-m3-npc-shop-align` |
-| 任务（§6 第 5 系统） | `not_covered` | 建议卡 `openmir2-m3-quest-align` |
-| 组队 / 交易（§6 第 6 系统） | `not_covered` | 建议卡 `openmir2-m3-party-trade-align` |
-| 公会 / 攻城（§6 第 7 系统） | `not_covered` | 建议卡 `openmir2-m3-guild-castle-align` |
-| 英雄 / 宠物（§6 第 8 系统） | `not_covered` | 建议卡 `openmir2-m3-hero-pet-align` |
-| 邮件 / 拍卖（§6 第 9 系统） | `not_covered` | 建议卡 `openmir2-m3-mail-auction-align` |
+| §6 M3 门禁 `scoped_diff.py diff --canonical` 有一处 RED | **本片实跑确认**：`--canonical` ⇒ `RED 作用域内 4 行不一致`（全在 `mir2_db.characters_ablity`；`rc=1`）；`--canonical --fixed-newchr` ⇒ `RED 8 行`（+ `characters.Hair`，夹具随机输入）；同侧 C# 自比 `--canonical --fixed-newchr` = GREEN 9 表。⇒ 跨侧差异落在 `characters_ablity`（`Ac/MAxMP/MaxWeight/MaxWearWeight/MaxHandWeight/Hp`），疑持久化/断线存档轴；**非** DoD② 攻击 RNG 轴（后者已逐 k=0）。原始件 `diff/23-scope-m3-gate-canonical.txt` | **已有卡** `openmir2-m3-scoped-diff-ability`（即原 F-2 follow-up） |
+| 掉落 / 经验（§6 顺序 ④） | `not_covered`（D 线离线先例存在，非 M3 系统级） | **已有卡** `openmir2-m3-drop-exp-align` |
+| NPC / 商店（§6 顺序 ⑤）服务端派发 + 失败分支 | `partial`（脚本层 7/7 引 M4；服务端 not_covered） | **已有卡** `openmir2-m3-npc-shop-align` |
+| 任务（§6 顺序 ⑥） | `not_covered` | **已有卡** `openmir2-m3-quest-align` |
+| 组队 / 交易（§6 顺序 ⑦） | `not_covered` | **已有卡** `openmir2-m3-party-trade-align` |
+| 公会 / 攻城（§6 顺序 ⑧） | `not_covered` | **已有卡** `openmir2-m3-guild-castle-align` |
+| 英雄 / 宠物（§6 顺序 ⑨） | `not_covered` | **已有卡** `openmir2-m3-hero-pet-align` |
+| 邮件 / 拍卖（§6 顺序 ⑩） | `not_covered` | **已有卡** `openmir2-m3-mail-auction-align` |
 | **300 假人 24h 长跑**（DoD②） | **`not_run`**（等 owner 收拢窗口；方案见 §2） | 本卡（`openmir2-m3-final-acceptance`）自身，窗口发放后开跑 |
 | §6 M3 十项「全绿」总判 | **未达成**（3 covered / 1 partial / 6 not_covered） | 上述各承接卡收敛后回本卡复核 |
 
@@ -299,7 +301,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_ru
   python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/m3/evidence-m3-final-acceptance-inventory-20261013
   ```
 
-- **四门禁（本片交付树 `da94fcb7` + 本报告，零 `.rs`）**：
+- **四门禁（本片交付树，零 `.rs`）**：
   - `cargo fmt --all -- --check` → `rc=0`（`gates/50-fmt.txt`）
   - `cargo clippy --workspace --all-targets --offline -- -D warnings` → `rc=0`（`gates/51-clippy.txt`）
   - `cargo test --workspace --offline` → `84 suites / 687 passed / 0 failed / 16 ignored`，`rc=0`（`gates/52-test-workspace.txt`）
