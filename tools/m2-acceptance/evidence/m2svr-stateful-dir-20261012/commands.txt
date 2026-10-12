@@ -1,0 +1,49 @@
+# 命令与原始输出（m2-svr / openmir2-worker-11 / 残差② 状态化 Dir 对齐）
+# 工作目录：E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr
+# 隔离 target：CARGO_TARGET_DIR=E:/tmp/m3cs-b1b2-target（--offline）
+
+## 0. oracle 取攻击方向那一段（只读取证）
+grep -n "attackTarget = targetObject ?? GetPoseCreate()\|AttackDir(attackTarget, nPower, nDir)\|SendAttackMsg(GetHitMode" src/M2Server/Player/PlayObject.Attack.cs
+# 26:  IActor attackTarget = targetObject ?? GetPoseCreate();        <= 取目标用「当前 Dir」
+# 75:  AttackDir(attackTarget, nPower, nDir);                        <= 之后才 Dir = nDir
+# 76:  SendAttackMsg(GetHitMode(wHitMode), Dir, CurrX, CurrY);       <= 动作帧用「新 Dir」= nDir
+grep -n "protected bool AttackDir\|Dir = nDir;\|GetPoseCreate\|GetFrontPosition" src/M2Server/Actor/BaseObject.Attack.cs src/M2Server/Actor/BaseObject.cs
+# BaseObject.Attack.cs:10  protected bool AttackDir(IActor attackTarget, int nPower, byte nDir)
+# BaseObject.Attack.cs:12      Dir = nDir;
+# BaseObject.cs:977        public bool GetFrontPosition(ref short nX, ref short nY)   (switch (Dir))
+# BaseObject.cs:1253       public IActor GetPoseCreate()
+# 明细见 oracle-chain.txt
+
+## 1. 定案：该改 Rust 侧（bins/game-svr），不是夹具
+# oracle 取目标用状态化朝向（PlayObject.Attack.cs:26 在 BaseObject.Attack.cs:12 之前）；
+# Rust 原用本帧消息 Tag（tag & 0xFF）求前方格 ⇒ 两侧不一致。修点 = main.rs::handle_hit_cmd。
+
+## 2. 改后（fix）
+# mir2-rs/bins/game-svr/src/main.rs::handle_hit_cmd
+#   let pose_dir = displays.get(actor_id).map_or(dir, |d| d.dir);
+#   let (fx, fy) = attackwire::front_position(pose_dir, cur_x, cur_y, width, height);
+#   set_display_dir(displays, actor_id, dir);   # Dir = nDir 移到取目标之后
+
+## 3. 绿：改后用例
+cd mir2-rs
+CARGO_TARGET_DIR=E:/tmp/m3cs-b1b2-target cargo test --offline -p game-svr --bin game-svr hit_cmd_dispatches
+# test tests::hit_cmd_dispatches_ack_action_frame_and_world_attack ... ok
+# test result: ok. 1 passed; 0 failed; ... finished in 0.00s
+
+## 4. 红检（改坏必红）：把 front_position(pose_dir, ...) 改回 front_position(dir, ...)
+#    原始输出见 redcheck-stateful-vs-message-dir.txt
+# test tests::hit_cmd_dispatches_ack_action_frame_and_world_attack ... FAILED
+#   [DBG] 攻击：actor_id=1 前方格 (10,11) 无目标 ⇒ 只播动作帧
+#   panicked at 攻击必须落到正上方怪：TickRecord { ... attacks: [] ... }
+# 还原后复跑 => ok（见上 §3）
+
+## 5. 四门禁（隔离 target / --offline）
+cd mir2-rs
+cargo fmt --all -- --check                                            # rc=0  -> gate-fmt.txt
+cargo clippy --workspace --all-targets --offline -- -D warnings       # rc=0  -> gate-clippy-full.txt
+cargo test --workspace --offline                                     # 80 suites / 664 passed / 0 failed / 16 ignored -> gate-test-full.txt
+cargo run -p msgcodegen --offline -- --check                          # 604 条一致 rc=0 -> gate-msgcodegen.txt
+
+## 6. 端口（未起栈；只有共享 MySQL 3306）
+Get-NetTCPConnection -State Listen -LocalPort 5000,5100,5500,5600,5700,6000,7000,7100,7200,3306
+# 5000/5100/5500/5600/5700/6000/7000/7100/7200 FREE ; 3306 LISTEN pid=29372 mysqld

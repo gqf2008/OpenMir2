@@ -1,0 +1,33 @@
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+warning: unused variable: `pose_dir`
+    --> bins\game-svr\src\main.rs:1877:9
+     |
+1877 |     let pose_dir = displays.get(actor_id).map_or(dir, |d| d.dir);
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_pose_dir`
+     |
+     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `game-svr` (bin "game-svr" test) generated 1 warning (run `cargo fix --bin "game-svr" -p game-svr --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.75s
+     Running unittests src\main.rs (E:/tmp/m3cs-b1b2-target\debug\deps\game_svr-eb39968088e3f1ec.exe)
+
+running 1 test
+test tests::hit_cmd_dispatches_ack_action_frame_and_world_attack ... FAILED
+
+failures:
+
+---- tests::hit_cmd_dispatches_ack_action_frame_and_world_attack stdout ----
+09:36:55.932 [DBG] 攻击：目标 (11,10) != 当前位置 (10,10) ⇒ 不攻击（oracle 回 RM_MOVEFAIL，登记未接）ChrName=atk ident=3014
+09:36:55.932 [DBG] 攻击：actor_id=1 前方格 (10,11) 无目标 ⇒ 只播动作帧（oracle `_Attack(null)` 返回 false）
+
+thread 'tests::hit_cmd_dispatches_ack_action_frame_and_world_attack' (31508) panicked at bins\game-svr\src\main.rs:7035:9:
+攻击必须落到正上方怪：TickRecord { tick_seq: 2, clock_ms: 400, processed: [], aoi_order: [1, 2, 3], attacks: [], deaths: [] }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::hit_cmd_dispatches_ack_action_frame_and_world_attack
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 146 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`

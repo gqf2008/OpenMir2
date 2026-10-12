@@ -1867,14 +1867,22 @@ fn handle_hit_cmd(
         return;
     };
     let dir = u8::try_from(tag & 0x00FF).unwrap_or(0);
-    // `BaseObject.AttackDir` 开头 `Dir = nDir`（`BaseObject.Attack.cs:12`）。
-    set_display_dir(displays, actor_id, dir);
+    // ⚠ 取目标用的是**状态化朝向**（对象当前 `Dir`），**不是**本帧消息 dir：oracle
+    // `PlayObject.Attack.cs:26` 的 `attackTarget = targetObject ?? GetPoseCreate()` 发生在
+    // `BaseObject.Attack.cs:12` 的 `Dir = nDir` **之前**；`nDir` 只影响此后的动作帧
+    // （`PlayObject.Attack.cs:76` 的 `SendAttackMsg(..., Dir, ...)`）与后续朝向。
+    // `Dir` 由 bin 侧 `DisplayTable` 承载（`crates/world` 的 `Entity` 无 `dir` 字段；
+    // 进世界时用 `record.dir` 初始化，`set_display_dir` 维护）。展示表缺失时退回本帧 dir
+    // （等价旧行为；生产路径进世界必登记展示表）。
+    let pose_dir = displays.get(actor_id).map_or(dir, |d| d.dir);
     // 取目标：`GetPoseCreate()` = 前方格首个 `!Ghost && !Death` 的对象。
     let (width, height) = world
         .maps
         .get(map_id)
         .map_or((0, 0), |m| (m.width, m.height));
-    let (fx, fy) = game_svr::attackwire::front_position(dir, cur_x, cur_y, width, height);
+    let (fx, fy) = game_svr::attackwire::front_position(pose_dir, cur_x, cur_y, width, height);
+    // `BaseObject.AttackDir` 开头 `Dir = nDir`（`BaseObject.Attack.cs:12`）——取目标**之后**才更新。
+    set_display_dir(displays, actor_id, dir);
     let target_id = if (fx, fy) == (cur_x, cur_y) {
         None
     } else {
@@ -6898,7 +6906,10 @@ mod tests {
     /// 红检：① `attackwire::at_self` 改成恒 `true` ⇒ 段 ① 的「不回 ack」必红；
     /// ② `attackwire::hit_mode` 把 `CM_HEAVYHIT` 映射成 0 ⇒ 段 ③ 的 `SM_HEAVYHIT` 断言必红；
     /// ③ `attackwire::front_position` 的 `DIR_UP` 支改成 `(x, y - 2)`（或
-    /// `smframe::sm_action_hit` 头字段互换）⇒ 段 ② 的「目标被击中」/帧头断言必红。
+    /// `smframe::sm_action_hit` 头字段互换）⇒ 段 ② 的「目标被击中」/帧头断言必红；
+    /// ④ 取目标改回用**本帧消息 dir**（`front_position(dir, …)` 而非 `pose_dir`）⇒ 段 ② 必红
+    /// （本帧 dir=4=下 与状态化朝向 0=上 相反，怪在正上方 ⇒ 不再命中；oracle
+    /// `PlayObject.Attack.cs:26` 在 `BaseObject.Attack.cs:12` 的 `Dir = nDir` 之前取目标）。
     #[test]
     fn hit_cmd_dispatches_ack_action_frame_and_world_attack() {
         use mir2_protocol::messages::{CM_HEAVYHIT, CM_HIT, SM_HEAVYHIT, SM_HIT};
@@ -6928,7 +6939,8 @@ mod tests {
         let mut displays = downlink::DisplayTable::new();
         displays.set(
             attacker,
-            downlink::ActorDisplay::new(4, 0, 111, 0, 0, 255, b"atk".to_vec()),
+            // 状态化 `Dir` = 0（上）= 怪物所在方向；本帧消息 dir 段 ② 用 4（下）以区分两者。
+            downlink::ActorDisplay::new(0, 0, 111, 0, 0, 255, b"atk".to_vec()),
         );
         displays.set(
             observer,
@@ -6983,7 +6995,7 @@ mod tests {
         handle_hit_cmd(
             CM_HIT,
             game_svr::feature::make_long(10, 10),
-            0,
+            4, // 本帧消息 dir = 下（与状态化朝向 0=上 相反）⇒ 取目标必须用状态化朝向才击中正上方怪
             "atk",
             901,
             &online,
@@ -7009,7 +7021,8 @@ mod tests {
         assert_eq!(frames.len(), 1, "CM_HIT ⇒ 只一帧 SM_HIT（无尾）");
         assert_eq!(
             &frames[0][..12],
-            &smframe::command_header(attacker, SM_HIT, 10, 10, 0)
+            // 动作帧 `Dir` 用**新** Dir（= 本帧消息 dir=4；`PlayObject.Attack.cs:76`）。
+            &smframe::command_header(attacker, SM_HIT, 10, 10, 4)
         );
         assert_eq!(frames[0].len(), 12, "SM_HIT 无尾");
         assert!(ack.expect("+GD").starts_with(b"+GD/"));
