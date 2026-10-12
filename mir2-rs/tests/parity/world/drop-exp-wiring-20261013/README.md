@@ -2,8 +2,8 @@
 
 > 卡：`openmir2-m3-drop-exp-wiring`（issue `58825bcc`，父级 `openmir2-m3-drop-exp-align` 十项之一）。
 > 本片只做 **经验链** 这一段；**掉落落地 / `SM_ITEMSHOW(610)`** 见 §5「未做（D②）」。
-> base = `origin/master` **`f2aadf25`**（本片开发期间 owner 并入 docs 刷新卡，已 merge 进分支）；
-> head = 分支 `drop-exp-host`（`a6d3cb5f` 本片提交 + `bd8eeab6` merge master）。
+> base = `origin/master` **`a547619a`**（本片开发期间 owner 先后并入 docs 刷新 / ④-C 分片③ / tools-eol 卡，均已 merge 进分支）；
+> head = 分支 `drop-exp-host`（`a6d3cb5f` 本片提交 + 证据更新 + 2 次 merge master）。
 > 工作目录 `<worktree>/mir2-rs`；隔离 `CARGO_TARGET_DIR=E:/tmp/m2svr-d1-target`。
 
 ## 0. 一句话
@@ -12,7 +12,7 @@
 补 **`Envir.Flag.EXPRATE` 地图倍率**，把归属结果经 `TickRecord::exp_awards` 交给宿主，
 宿主发 `SM_WINEXP(44)` 并把世界实体的**经验/等级同步回会话**（否则存档会丢本 tick 的经验）。
 
-> 注：master 在本片开发期间从 `b7fef4a7` 推进到 `f2aadf25`（docs 刷新）。四门禁与基线都在 **`f2aadf25`** 上复跑（`05-gates.txt`）。
+> 注：master 在本片开发期间从 `b7fef4a7` 推进到 `a547619a`（docs 刷新 / ④-C 分片③ / tools-eol）。四门禁与基线都在 **`a547619a`** 上复跑（`05-gates.txt`）。
 
 ## 1. oracle 锚点（原文见 `01-oracle-anchors.txt`）
 
