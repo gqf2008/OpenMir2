@@ -1,0 +1,23 @@
+PASS clean-green
+PASS base-unit-red
+PASS base-unit-names-problem
+PASS leading-base-red
+PASS player-count-short-red
+PASS player-count-long-red
+PASS empty-red
+PASS luck-start-green
+=== 专用流纯度（attack_stream_gate）===
+  stream=C:\Users\gxh\AppData\Local\Temp\tmp5m3rk7my\good.tsv draws=12 units=3 player=3 base=0 unknown=0 expected=3
+  首单元 kind=player site=M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929
+  GREEN: 专用流只含被测量玩家攻方单元（player=3 == expected，base=0）
+=== 专用流纯度（attack_stream_gate）===
+  stream=C:\Users\gxh\AppData\Local\Temp\tmp5m3rk7my\bad.tsv draws=17 units=5 player=4 base=1 unknown=0 expected=2
+  首单元 kind=base site=M2Server.Actor.BaseObject.GetAttackPower@BaseObject.Base.cs:892
+  RED: first_unit_not_player: kind=base line=1 site=M2Server.Actor.BaseObject.GetAttackPower@BaseObject.Base.cs:892（首条不是玩家攻方起点 ⇒ 污染）
+  RED: non_player_attacker_unit: base_units=1 首个 line=1 site=M2Server.Actor.BaseObject.GetAttackPower@BaseObject.Base.cs:892（非玩家并发攻方混入专用流）
+  RED: player_units_mismatch: got=4 expected=2（owner 23:50 ③：play 单元数 < 期望 ⇒ 拒跑）
+  结论：专用流被非玩家并发攻方污染 / 单元数不符 ⇒ **拒比**（fail-closed，不放宽判据）
+PASS cli-good-rc0
+PASS cli-bad-rc1
+PASS cli-missing-rc2
+SELFTEST GREEN

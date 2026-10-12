@@ -38,6 +38,10 @@
     # 把清单**显式修正**到仓库字节口径（改动证据后 / 修历史遗留时用；不自动跑）
     python -I tools/evidence-hash/verify_sha256sums.py write tools/m2-acceptance/evidence/xxx
 
+    # **交付/生产者侧 EOL 门**（2026-10-13）：对**刚写出的**文件查「盘上字节 vs git blob」在 EOL 上是否一致
+    # （不看清单）；盘上 CRLF（text 属性）或 blob 含 CRLF ⇒ 判红并点名。
+    python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-xxx
+
     # 全仓逐目录对账（③）：给出 件数 / 两种口径命中数 / 结论
     python -I tools/evidence-hash/verify_sha256sums.py reconcile --md tools/evidence-hash/RECONCILE.md \
         --json tools/evidence-hash/RECONCILE.json
@@ -215,6 +219,81 @@ def find_eol_traps(entries: list[tuple[str, str]], base: Path, repo: Path,
                           "repo_lf": h_lf, "blob_raw": h_blob, "source": source,
                           "attr": attr})
     return traps
+
+
+def find_eol_offenders(paths: list[Path], repo: Path) -> list[dict]:
+    """交付/生产者侧 EOL 门（2026-10-13，EOL 陷阱同族第 5 次的**根因修**）。
+
+    与 `find_eol_traps`（看清单里记的 hash）不同，本条**不看清单**，直接咬住**刚写出的文件**：
+
+      - 受 git 行尾归一的文本件（`text` 属性非 `unset`、非二进制）：**盘上含 `\r\n` ⇒ 判红**
+        （生产者写了 CRLF，将来提交后与仓库字节不一致）；
+      - 若该路径已有 git blob，而 **blob 自身含 `\r\n`** ⇒ 也判红（仓库里存了 CRLF，仓库字节口径不可复现）。
+
+    `-text` 冻结文件与仓外输入不适用（它们的声明口径就是盘上原始字节）。改回「默认 CRLF 写出」⇒ 本条必红。
+    """
+    offenders: list[dict] = []
+    seen: set[str] = set()
+    for p in paths:
+        if not p.is_file() or not inside_repo(p, repo):
+            continue
+        rel = p.resolve().relative_to(repo.resolve()).as_posix()
+        if rel in seen:
+            continue
+        seen.add(rel)
+        attr = check_attr_text(repo, [rel]).get(rel, "unspecified")
+        if attr == "unset":
+            continue  # `-text` 冻结：按盘上字节是声明口径
+        data = p.read_bytes()
+        if is_binary(data):
+            continue
+        if b"\r\n" in data:
+            offenders.append({"path": str(p), "rel": rel, "reason": "disk_crlf", "attr": attr})
+            continue
+        b = blob_bytes(repo, rel)
+        if b is not None and b"\r\n" in b:
+            offenders.append({"path": str(p), "rel": rel, "reason": "blob_crlf", "attr": attr})
+    return offenders
+
+
+_REASON_TEXT = {
+    "disk_crlf": "盘上是 CRLF",
+    "blob_crlf": "git blob 含 CRLF",
+}
+
+
+def cmd_eolcheck(args) -> int:
+    repo = find_repo(args.repo)
+    targets = [Path(t) for t in args.targets]
+    if not targets:
+        print("用法错误：eolcheck 需要一个或多个文件/目录", file=sys.stderr)
+        return 2
+    for t in targets:
+        if not t.exists():
+            print(f"RED  前置缺失：目标不存在 {t}")
+            return 2
+    files: list[Path] = []
+    for t in targets:
+        if t.is_dir():
+            files.extend(sorted(p for p in t.rglob("*") if p.is_file()))
+        else:
+            files.append(t)
+    offenders = find_eol_offenders(files, repo)
+    if offenders:
+        for o in offenders:
+            why = _REASON_TEXT.get(o["reason"], o["reason"])
+            print(f"EOLCHECK RED {o['path']}  ({why}，text attr={o['attr']}；仓库口径应为 LF)")
+        print(f"EOLCHECK RED {len(offenders)}/{len(files)} 件与仓库口径（LF）在 EOL 上不一致"
+              "（修法：生产者用 LF 写出 / `verify_sha256sums.py write` 重记，"
+              "或对冻结字节目录声明 `.gitattributes * -text`）")
+        if args.json:
+            Path(args.json).write_text(json.dumps(offenders, ensure_ascii=False, indent=2) + "\n",
+                                       encoding="utf-8", newline="\n")
+        return 1
+    print(f"EOLCHECK GREEN {len(files)}/{len(files)} 件文本证据与仓库口径（LF）在 EOL 上一致")
+    if args.json:
+        Path(args.json).write_text("[]\n", encoding="utf-8", newline="\n")
+    return 0
 
 
 def hash_path(path: Path, mode: str, repo: Path, rel: str | None, attr_state: str | None) -> str:
@@ -688,13 +767,24 @@ def cmd_selftest(_args) -> int:
         (ev / "crlf.txt").write_bytes(b"line1\nline2\n")
         _selftest_write_manifest(ev, [(h_lf, "crlf.txt"), (h_raw, "frozen.bin")], style_bin=2)
         r_correct_lf = verify_dir(ev, repo, "repo", False, [])
-        report(r_correct_lf["green"], "10/11 正确的 LF 样例（盘上 LF + 清单 LF）⇒ 绿")
+        report(r_correct_lf["green"], "10/13 正确的 LF 样例（盘上 LF + 清单 LF）⇒ 绿")
+
+        # 11..13) eolcheck（交付/生产者侧 EOL 门，2026-10-13）：不看清单，直接咬住刚写出的文件
+        (ev / "crlf.txt").write_bytes(crlf)
+        off_crlf = find_eol_offenders([ev / "crlf.txt"], repo)
+        report(bool(off_crlf) and any("crlf.txt" in o["path"] for o in off_crlf),
+               "11/13 eolcheck：盘上 CRLF（text 属性）⇒ 必红并点名")
+        (ev / "crlf.txt").write_bytes(b"line1\nline2\n")
+        off_lf = find_eol_offenders([ev / "crlf.txt"], repo)
+        report(not off_lf, "12/13 eolcheck：盘上 LF ⇒ 绿")
+        off_frozen = find_eol_offenders([ev / "frozen.bin"], repo)
+        report(not off_frozen, "13/13 eolcheck：`-text` 冻结件不适用（不误报）")
 
         if fails:
             print(f"RED: verify_sha256sums selftest {fails} 项不过", file=sys.stderr)
             return 2
-        print("GREEN: verify_sha256sums selftest 11/11"
-              "（口径 + 改 hash / 多件 / 少件 / 口径切换 / 冻结声明 / EOL 陷阱×2 / 不误伤）")
+        print("GREEN: verify_sha256sums selftest 13/13"
+              "（口径 + 改 hash / 多件 / 少件 / 口径切换 / 冻结声明 / EOL 陷阱×2 / 不误伤 / eolcheck×3）")
         return 0
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -706,7 +796,7 @@ def main() -> int:
         prog="verify_sha256sums.py",
         description="SHA256SUMS.txt 通用复核器（默认仓库字节口径 = Git blob 内容）")
     ap.add_argument("cmd", nargs="?", default="verify",
-                    help="verify（默认）/ reconcile / selftest")
+                    help="verify（默认）/ reconcile / selftest / eolcheck")
     ap.add_argument("targets", nargs="*", help="verify：清单/目录；reconcile：扫描根（默认仓库根）")
     ap.add_argument("--repo", default=None, help="仓库根（默认自动探测）")
     ap.add_argument("--disk-bytes", action="store_true",
@@ -719,7 +809,7 @@ def main() -> int:
     ap.add_argument("--md", default=None)
     # 允许省略 `verify` 子命令：第一个位置参数不是已知命令时，按 verify 处理
     argv = sys.argv[1:]
-    if not argv or argv[0] not in ("verify", "reconcile", "selftest", "write"):
+    if not argv or argv[0] not in ("verify", "reconcile", "selftest", "write", "eolcheck"):
         argv = ["verify"] + argv
     args = ap.parse_args(argv)
 
@@ -729,6 +819,8 @@ def main() -> int:
         return cmd_reconcile(args)
     if args.cmd == "write":
         return cmd_write(args)
+    if args.cmd == "eolcheck":
+        return cmd_eolcheck(args)
     return cmd_verify(args)
 
 

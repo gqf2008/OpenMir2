@@ -148,6 +148,13 @@ def selftest():
     rc, msg, _ = gate(p, 5, 100, 18, 20, 0)
     checks.append(("tolerance0-first-miss-red", rc == 1, msg))
 
+    # (g) EOL：生产写出件必须 LF（owner 2026-10-13 01:15，EOL 陷阱同族第 5 次的根因修）。
+    #     本文件的落盘一律 `open(..., newline="\n")`；改回默认（Windows 上 CRLF）⇒ 本项必红。
+    with open(p, "rb") as fh:
+        raw = fh.read()
+    checks.append(("writer-lf-no-crlf", b"\r\n" not in raw,
+                   "written bytes contain CRLF" if b"\r\n" in raw else "LF"))
+
     failed = [n for n, ok, _ in checks if not ok]
     for n, ok, msg in checks:
         print("%s %s :: %s" % ("PASS" if ok else "FAIL", n, msg))

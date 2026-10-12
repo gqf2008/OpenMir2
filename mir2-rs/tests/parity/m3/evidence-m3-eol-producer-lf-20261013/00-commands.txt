@@ -1,0 +1,39 @@
+# M3②③ / 夹具 EOL「生产者写 LF」根因修 —— 复现命令（2026-10-13，m3bag）
+#
+# 全部离线：未起服务端栈、未占端口（未碰 5000/7000/7100/7200；MySQL 3306 只被 eolcheck 读文件时无关）。
+# 改动：mir2-rs/tests/parity/m3/{m3hashutil.ps1,run_attack_pair.ps1,server_state_gate.py,attack_stream_gate.py}
+#       tools/evidence-hash/verify_sha256sums.py
+
+# 1) 通用复核器自检（新增 eolcheck 牙）-> 01
+python -I tools/evidence-hash/verify_sha256sums.py selftest
+
+# 2) 两个 Python 夹具的写出 EOL 自检 -> 02 / 03
+python -I mir2-rs/tests/parity/m3/server_state_gate.py --selftest
+python -I mir2-rs/tests/parity/m3/attack_stream_gate.py selftest
+
+# 3) 夹具无栈自检（新增 23a/23b）-> 04
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 -SelfCheckNoStack
+
+# 4) -SelfCheckOut 自落 LF 转录（替代 pwsh `>` 的 CRLF 重定向）-> 06
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1   -SelfCheckNoStack -SelfCheckOut <repo>/mir2-rs/tests/parity/m3/sessions/.eolcheck-selftest/transcript.txt
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck <该转录>
+
+# 5) 改坏必红：把 m3hashutil.ps1 的 Set-Content 覆盖改回默认 cmdlet（CRLF）-> 05
+#    改坏点唯一：m3hashutil.ps1 里 `function Set-Content` 的写出循环
+python <把该行替换为 Microsoft.PowerShell.Management\Set-Content>
+powershell -NoProfile -ExecutionPolicy Bypass -File /e/tmp/m3bag-mut-probe.ps1   # 写 mutated.txt + Test-M3LfWriterSelfTest
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck <mutated.txt>        # 必须 RED 并点名
+
+# 6) 覆盖的参数形态矩阵 -> 07
+powershell -NoProfile -ExecutionPolicy Bypass -File /e/tmp/m3bag-matrix-probe.ps1
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck <probe dir>
+
+# 7) 共用脚本回归 -> 08
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_bag_equip_pair.ps1 -SelfCheckNoStack
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/selftest_gate.ps1 -OutDir E:	mp\m3bag-selftest-gate
+
+# 8) 四门禁 -> 09（隔离 CARGO_TARGET_DIR=E:/tmp/m3bag-eol-target）
+cargo fmt --manifest-path mir2-rs/Cargo.toml --all -- --check
+cargo clippy --manifest-path mir2-rs/Cargo.toml --workspace --all-targets --offline -- -D warnings
+cargo test --manifest-path mir2-rs/Cargo.toml --workspace --offline
+cargo run -q --manifest-path mir2-rs/Cargo.toml -p msgcodegen -- --check
