@@ -1,0 +1,68 @@
+== oracle: PlayObject.Attack.cs:25-77（AttackDir：取目标 → GetBaseAttackPoewr → _Attack → SendAttackMsg → AttackSuccess） ==
+     1	        {
+     2	            IActor attackTarget = targetObject ?? GetPoseCreate();
+     3	            if (UseItems[ItemLocation.Weapon] != null && (UseItems[ItemLocation.Weapon].Index > 0) && UseItems[ItemLocation.Weapon].Desc[ItemAttr.WeaponUpgrade] > 0)
+     4	            {
+     5	                if (attackTarget != null)
+     6	                {
+     7	                    CheckWeaponUpgrade();
+     8	                }
+     9	            }
+    10	
+    11	            switch (wHitMode)
+    12	            {
+    13	                case 5 when (MagicArr[MagicConst.SKILL_BANWOL] != null):
+    14	                    if (WAbil.MP > 0)
+    15	                    {
+    16	                        DamageSpell((ushort)(MagicArr[MagicConst.SKILL_BANWOL].Magic.DefSpell + GetMagicSpell(MagicArr[MagicConst.SKILL_BANWOL])));
+    17	                        HealthSpellChanged();
+    18	                    }
+    19	                    else
+    20	                    {
+    21	                        wHitMode = Messages.RM_HIT;
+    22	                    }
+    23	                    break;
+    24	                case 8 when (MagicArr[MagicConst.SKILL_CROSSMOON] != null):
+    25	                    if (WAbil.MP > 0)
+    26	                    {
+    27	                        DamageSpell((ushort)(MagicArr[MagicConst.SKILL_CROSSMOON].Magic.DefSpell + GetMagicSpell(MagicArr[MagicConst.SKILL_CROSSMOON])));
+    28	                        HealthSpellChanged();
+    29	                    }
+    30	                    else
+    31	                    {
+    32	                        wHitMode = Messages.RM_HIT;
+    33	                    }
+    34	                    break;
+    35	                case 12 when (MagicArr[MagicConst.SKILL_REDBANWOL] != null):
+    36	                    if (WAbil.MP > 0)
+    37	                    {
+    38	                        DamageSpell((ushort)(MagicArr[MagicConst.SKILL_REDBANWOL].Magic.DefSpell + GetMagicSpell(MagicArr[MagicConst.SKILL_REDBANWOL])));
+    39	                        HealthSpellChanged();
+    40	                    }
+    41	                    else
+    42	                    {
+    43	                        wHitMode = Messages.RM_HIT;
+    44	                    }
+    45	                    break;
+    46	            }
+    47	
+    48	            bool canHit = false;
+    49	            int nPower = GetAttackPowerHit(wHitMode, GetBaseAttackPoewr(), attackTarget, ref canHit);
+    50	            SkillAttackDamage(wHitMode, nPower);
+    51	            AttackDir(attackTarget, nPower, nDir);
+    52	            SendAttackMsg(GetHitMode(wHitMode), Dir, CurrX, CurrY);
+    53	            AttackSuccess(wHitMode, nPower, canHit, attackTarget);
+
+== oracle: PlayObject.Attack.cs:215-226（AttackSuccess 目标 null 早退；Random(5)） ==
+     1	        private void AttackSuccess(short wHitMode, int nPower, bool canHit, IActor targetObject)
+     2	        {
+     3	            if (targetObject == null)
+     4	            {
+     5	                return;
+     6	            }
+     7	            if (!targetObject.UnParalysis && Paralysis && (M2Share.RandomNumber.Random(targetObject.AntiPoison + SystemShare.Config.AttackPosionRate) == 0))
+     8	            {
+     9	                targetObject.MakePosion(PoisonState.STONE, SystemShare.Config.AttackPosionTime, 0);
+    10	            }
+    11	            ushort nWeaponDamage = (ushort)(M2Share.RandomNumber.Random(5) + 2 - AddAbil.WeaponStrong);
+    12	            if ((nWeaponDamage > 0) && (UseItems[ItemLocation.Weapon] != null) && (UseItems[ItemLocation.Weapon].Index > 0))

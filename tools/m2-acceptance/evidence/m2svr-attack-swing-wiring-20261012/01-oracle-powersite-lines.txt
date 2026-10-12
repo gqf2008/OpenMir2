@@ -1,0 +1,50 @@
+== oracle: BaseObject.Attack.cs:25-44（GetBaseAttackPoewr 虚调用 / _Attack 命中门） ==
+        internal int GetBaseAttackPoewr()
+        {
+            return GetAttackPower(HUtil32.LoByte(WAbil.DC), (sbyte)(HUtil32.HiByte(WAbil.DC) - HUtil32.LoByte(WAbil.DC)));
+        }
+
+        internal bool _Attack(int nPower, IActor targetObject)
+        {
+            if (targetObject == null)
+            {
+                return false;
+            }
+            bool result = false;
+            if (IsProperTarget(targetObject))
+            {
+                if (targetObject.HitPoint > 0)
+                {
+                    if (HitPoint < M2Share.RandomNumber.RandomByte(targetObject.SpeedPoint))
+                    {
+                        nPower = 0;
+                    }
+
+== oracle: PlayObject.cs:2909-2935（玩家 GetAttackPower override：Luck<=0 多一次 Random(10)） ==
+        public override int GetAttackPower(int nBasePower, int nPower)
+        {
+            if (nPower < 0)
+            {
+                nPower = 0;
+            }
+            int result = 0;
+            if (Luck > 0)
+            {
+                if (M2Share.RandomNumber.Random(10 - HUtil32._MIN(9, Luck)) == 0)
+                {
+                    result = nBasePower + nPower;
+                }
+                else
+                {
+                    result = nBasePower + M2Share.RandomNumber.Random(nPower + 1);
+                }
+            }
+            else
+            {
+                result = nBasePower + M2Share.RandomNumber.Random(nPower + 1);
+                if (Luck <= 0)
+                {
+                    if (M2Share.RandomNumber.Random(10 - HUtil32._MAX(0, -Luck)) == 0)
+                    {
+                        result = nBasePower;
+                    }
