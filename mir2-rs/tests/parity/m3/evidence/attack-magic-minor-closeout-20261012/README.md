@@ -5,7 +5,7 @@
   `tests::combat_downlink_sends_struck_and_nowdeath` 补 `SM_STRUCK` **16B `MessageBodyWL` 尾**的
   逐字节断言（原用例 doc 声称覆盖尾、实测只断言 12B 头，对尾 mutation 抓不到）。
 - 工作树：`E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr`（分支 `worktree-m2-gamesvr-host`）
-- base：`refs/heads/master` = **`9753c4d0`**（已 merge 进本分支，merge 提交 `e9ce5e89`；被审 head 见卡上 patch/status）
+- base：`refs/heads/master` = **`bbf63fb0`**（`9753c4d0` + `bbf63fb0` 均已 merge 进本分支，merge 提交 `e9ce5e89` / `14f7c46b`；被审 head 见卡上 patch/status）
 - 身份：`openmir2-worker-11`。**不 merge、不自签 review。**
 
 ## 0. 与同卡其它片的关系
@@ -49,6 +49,8 @@
 > 计数口径：本片只加断言、不加用例 ⇒ `-p game-svr` 仍 229。`--workspace` 从上一片（merge master 前）
 > 的 `74/609/0/16` 变为 `75/614/0/16`，增量来自本轮 merge 进来的 master `9753c4d0`
 > （m3cs 第八片 `crates/world/tests/attack_skill_vectors.rs`：+1 suite / +5 passed），非本片新增。
+> 门禁均在 **merge `bbf63fb0` 之后**的树上复跑（该 merge 只动 `tests/parity/m3/**` 证据/夹具与
+> `whitelist.md`，无 `.rs` ⇒ 计数不变）。
 
 ## 3. 牙齿（改坏 ⇒ 必红）
 

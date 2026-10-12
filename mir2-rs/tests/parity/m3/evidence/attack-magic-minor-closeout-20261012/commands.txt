@@ -1,6 +1,6 @@
 # 复现命令（卡 openmir2-m3-attack-magic-wiring；本片 = 攻击片 M-1 收口）
 # 工作树：E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr（分支 worktree-m2-gamesvr-host）
-# base：master 9753c4d0（已 merge 进本分支，merge 提交 e9ce5e89；被审 head 见卡上 patch/status）
+# base：master bbf63fb0（已 merge 进本分支，merge 提交 e9ce5e89 / 14f7c46b；被审 head 见卡上 patch/status）
 # 隔离 CARGO_TARGET_DIR，全 --offline。
 
 cd mir2-rs
