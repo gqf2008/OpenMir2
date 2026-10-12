@@ -1,0 +1,154 @@
+15:57:35.774 [DBG] Hosting starting
+15:57:35.794 [INF] 服务器名称:热血传奇 服务器IP:127.0.0.1 服务器端口:7000
+15:57:35.797 [INF] 初始化机器人数量:2 登录机器人总数量:2
+15:57:35.799 [INF] 固定攻击序列: 启用 步数=120 起始等待=3000ms 步间隔=500ms dir=2 attacker序号=0（见 RobotPlayer.AttackSequenceTick）
+15:57:35.801 [INF] 退出路径夹具: 已关闭自动挂机（DisableAutoPlay；见 ClientManager.RunAutoPlay）
+15:57:35.814 [INF] 机器人服务启动...
+15:57:35.827 [INF] 压测采集: 输出目录=E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\tests\botload\bots-20261012-155732 连接错峰=3000ms/个 统计=E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\tests\botload\bots-20261012-155732\load_stats.ndjson
+15:57:35.829 [INF] 动作探针: 启用=False 间隔=1000ms（武装条件 = 收到 SM_LOGON 才发 CM_TURN；见 RobotPlayer.ProbeActionTick）
+15:57:35.830 [INF] 消息处理线程启动...
+15:57:35.831 [DBG] 工作线程开始执行...
+15:57:38.916 [INF] 开始登陆
+15:57:38.952 [INF] 帐号登录成功！
+15:57:38.953 [INF] 选择服务器：热血传奇
+15:57:38.954 [INF] 连接角色网关:[127.0.0.1:7100]
+15:57:39.978 [INF] 查询角色.
+15:57:39.987 [INF] 选择角色 m3cb1r10
+15:57:39.993 [INF] 准备进入游戏
+15:57:39.997 [INF] 机器人:[m3cb1r10] 进入游戏
+15:57:40.389 [INF] 机器人:[m3cb1r10] 确认游戏公告
+15:57:40.463 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"arm","id":"m3cb1r10","count":120,"step_ms":500,"dir":2}
+15:57:40.465 [INF] 机器人:[m3cb1r10] 成功进入游戏
+15:57:40.465 [INF] 机器人:[m3cb1r10] -----------------------------------------------
+15:57:41.854 [INF] 开始登陆
+15:57:41.861 [INF] 帐号登录成功！
+15:57:41.862 [INF] 选择服务器：热血传奇
+15:57:41.866 [INF] 连接角色网关:[127.0.0.1:7100]
+15:57:42.917 [INF] 查询角色.
+15:57:42.920 [INF] 选择角色 m3cb1r11
+15:57:42.922 [INF] 准备进入游戏
+15:57:42.922 [INF] 机器人:[m3cb1r11] 进入游戏
+15:57:43.192 [INF] 机器人:[m3cb1r11] 确认游戏公告
+15:57:43.195 [INF] 机器人:[m3cb1r11] 成功进入游戏
+15:57:43.195 [INF] 机器人:[m3cb1r11] -----------------------------------------------
+15:57:43.485 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":1,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:57:43.986 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":2,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:57:44.483 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":3,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:57:44.985 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":4,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:57:45.488 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":5,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:57:45.986 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":6,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:57:46.485 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":7,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:57:46.984 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":8,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:57:47.483 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":9,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:57:47.981 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":10,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:57:48.479 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":11,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:57:48.980 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":12,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:57:49.478 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":13,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:57:50.038 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":14,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:57:50.542 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":15,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:57:51.042 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":16,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:57:51.541 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":17,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:57:52.041 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":18,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:57:52.539 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":19,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:57:53.040 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":20,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:57:53.599 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":21,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:57:54.099 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":22,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:57:54.602 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":23,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:57:55.103 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":24,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:57:55.604 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":25,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:57:56.103 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":26,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:57:56.664 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":27,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:57:57.225 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":28,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:57:57.726 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":29,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:57:58.286 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":30,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:57:58.789 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":31,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:57:59.286 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":32,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:57:59.787 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":33,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:00.284 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":34,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:00.786 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":35,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:01.287 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":36,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:01.784 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":37,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:02.284 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":38,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:02.786 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":39,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:03.285 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":40,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:03.786 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":41,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:04.284 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":42,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:04.784 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":43,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:05.282 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":44,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:05.781 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":45,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:06.280 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":46,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:06.780 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":47,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:07.279 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":48,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:07.779 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":49,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:08.279 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":50,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:08.777 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":51,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:09.276 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":52,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:09.776 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":53,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:10.275 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":54,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:10.774 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":55,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:11.273 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":56,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:11.831 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":57,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:12.329 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":58,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:12.829 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":59,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:13.328 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":60,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:13.828 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":61,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:14.328 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":62,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:14.828 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":63,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:15.326 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":64,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:15.825 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":65,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:16.325 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":66,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:16.825 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":67,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:17.322 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":68,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:17.821 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":69,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:18.321 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":70,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:18.882 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":71,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:19.383 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":72,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:19.942 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":73,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:20.441 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":74,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:20.942 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":75,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:21.441 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":76,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:21.941 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":77,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:22.442 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":78,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:22.940 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":79,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:23.439 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":80,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:23.939 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":81,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:24.438 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":82,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:24.939 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":83,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:25.438 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":84,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:25.938 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":85,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:26.439 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":86,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:26.937 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":87,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:27.438 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":88,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:27.939 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":89,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:28.439 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":90,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:28.936 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":91,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:29.436 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":92,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:29.934 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":93,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:30.436 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":94,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:30.936 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":95,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:31.437 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":96,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:31.934 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":97,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:32.436 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":98,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:32.936 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":99,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:33.438 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":100,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:33.942 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":101,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:34.442 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":102,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:34.941 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":103,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:35.440 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":104,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:35.939 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":105,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:36.438 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":106,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:36.939 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":107,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:37.439 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":108,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:37.937 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":109,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:38.438 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":110,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:38.934 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":111,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:39.436 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":112,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:39.938 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":113,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:40.439 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":114,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:40.937 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":115,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:41.438 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":116,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:41.937 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":117,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:42.436 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":118,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:42.934 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":119,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:43.435 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"attack","k":120,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1r10"}
+15:58:43.436 [INF] 机器人:[m3cb1r10] M3ATTSEQ {"role":"done","id":"m3cb1r10","attacks":120}

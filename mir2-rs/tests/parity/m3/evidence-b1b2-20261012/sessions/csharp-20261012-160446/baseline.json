@@ -1,0 +1,313 @@
+﻿{
+    "session":  "csharp-20261012-160446",
+    "side":  "csharp",
+    "prefix":  "m3cb1c3",
+    "bots":  2,
+    "entry":  "127.0.0.1:7000",
+    "ops_runner":  "run_bots.ps1 -Count 2 -Prefix m3cb1c3 -Port 7000 -AttackSequence -AttackCount 120 -AttackStepMs 500 -AttackStartDelayMs 3000 -DisableAutoPlay",
+    "ops_exit":  0,
+    "fixed_new_chr":  "Job=0 Hair=2 Sex=0",
+    "start_pose":  "pair map=0137 attacker=17,20,dir=2 victim=18,20 level=1 vhp=30000",
+    "bag_equip_sequence":  "(off)",
+    "bag_equip_markers":  [
+
+                          ],
+    "attack_sequence":  "on count=120 step_ms=500 start_delay_ms=3000 disable_autoplay=True",
+    "attack_pose":  "pair map=0137 attacker=17,20,dir=2 victim=18,20 level=1 vhp=30000",
+    "attack_markers":  [
+                           "M3ATTSEQ {\"role\":\"arm\",\"id\":\"m3cb1c30\",\"count\":120,\"step_ms\":500,\"dir\":2}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":1,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":2,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"struck\",\"dmg\":1,\"hp\":18,\"maxhp\":19,\"src\":1345584985,\"actor\":184091248}",
+                           "M3ATTSEQ {\"role\":\"struck\",\"dmg\":1,\"hp\":18,\"maxhp\":19,\"src\":1345584985,\"actor\":184091248}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":3,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":4,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":5,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":6,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":7,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":8,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":9,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":10,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":11,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":12,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":13,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":14,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":15,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":16,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":17,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":18,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":19,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":20,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":21,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":22,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":23,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":24,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":25,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":26,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":27,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":28,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":29,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":30,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":31,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":32,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":33,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":34,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":35,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":36,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":37,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":38,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":39,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":40,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":41,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":42,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":43,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":44,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":45,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":46,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":47,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":48,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":49,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":50,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":51,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":52,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":53,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":54,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":55,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":56,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":57,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":58,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":59,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":60,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":61,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":62,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":63,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":64,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":65,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":66,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":67,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":68,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":69,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":70,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":71,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":72,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":73,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":74,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":75,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":76,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":77,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":78,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":79,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":80,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":81,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":82,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":83,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":84,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":85,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":86,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":87,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":88,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":89,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":90,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":91,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":92,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":93,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":94,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":95,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":96,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":97,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":98,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":99,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":100,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":101,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":102,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":103,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":104,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":105,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":106,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":107,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":108,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":109,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":110,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":111,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":112,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":113,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":114,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":115,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":116,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":117,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":118,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":119,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":120,\"op\":\"CM_HIT\",\"x\":17,\"y\":20,\"dir\":2,\"id\":\"m3cb1c30\"}",
+                           "M3ATTSEQ {\"role\":\"done\",\"id\":\"m3cb1c30\",\"attacks\":120}"
+                       ],
+    "attack_raw":  "attack_raw.jsonl",
+    "git_rev":  "dedef0d25f20858aeba96f4fbe6ddb08fae2da65",
+    "dbsnap":  {
+                   "mir2_account.account_protection":  {
+                                                           "rows":  7202,
+                                                           "sha256":  "78041207cdac851749b061eece7350a2a35e02a30eb8a01971f4f8d9b6791709"
+                                                       },
+                   "mir2_db.characters_ablity":  {
+                                                     "rows":  7180,
+                                                     "sha256":  "7646580aba53b2cdc3e2e32e2890dcd0535606d7a76c3d4f4bf3306372eb10f3"
+                                                 },
+                   "mir2_db.characters_bonusability":  {
+                                                           "rows":  1,
+                                                           "sha256":  "2a7c7b3966c0dc02e065463974cf094903f37b13bfa126a48167107a171ef4bc"
+                                                       },
+                   "mir2_db.characters_status":  {
+                                                     "rows":  7179,
+                                                     "sha256":  "2dfd274d37065fd26f005ada756fc6d5eea6704b51f950392ce11538509b09f5"
+                                                 },
+                   "mir2_db.characters_item_attr":  {
+                                                        "rows":  0,
+                                                        "sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                                                    },
+                   "mir2_db.characters_quest":  {
+                                                    "rows":  0,
+                                                    "sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                                                },
+                   "mir2_account.account":  {
+                                                "rows":  7314,
+                                                "sha256":  "603434e583cb27f556db01f0361a11538d4d0c96cc554699d27cb1e21ef02c24"
+                                            },
+                   "mir2_db.characters":  {
+                                              "rows":  7177,
+                                              "sha256":  "4cb7a4db86d6f5abac141468a4a5517bf2949c732853f3eaa94ae105a2553789"
+                                          },
+                   "mir2_db.characters_bagitem":  {
+                                                      "rows":  330234,
+                                                      "sha256":  "69932b8f6b8cf450dd2bff3bae7a293e96fb7ea60f1b4bef4f99da329da947f9"
+                                                  },
+                   "mir2_db.characters_indexes":  {
+                                                      "rows":  7179,
+                                                      "sha256":  "a1a40fffc204ca637f9bad42859064a175717e026ea7ca7444c416ba22aecba1"
+                                                  },
+                   "mir2_db.characters_item":  {
+                                                   "rows":  93329,
+                                                   "sha256":  "517293634319f47a2383dc7e30e84038c8d426542a4f68b72741b2957a858e18"
+                                               },
+                   "mir2_db.characters_storageitem":  {
+                                                          "rows":  358950,
+                                                          "sha256":  "20cc0e34be7a8270e9b8867a1a443e6d8db400d6a77f67a49fcd4be548a373ec"
+                                                      },
+                   "mir2_db.characters_magic":  {
+                                                    "rows":  8,
+                                                    "sha256":  "0ac71ebc3756c582ca5e26f8b00e82cc2ff2f294a4206414c657c4d9b5470333"
+                                                }
+               },
+    "dbsnap_after":  {
+                         "mir2_account.account_protection":  {
+                                                                 "rows":  7202,
+                                                                 "sha256":  "78041207cdac851749b061eece7350a2a35e02a30eb8a01971f4f8d9b6791709"
+                                                             },
+                         "mir2_db.characters_ablity":  {
+                                                           "rows":  7180,
+                                                           "sha256":  "490d020c1b1c197dbdfd944fc27cf9965d63720e62a43f005f86945015075b66"
+                                                       },
+                         "mir2_db.characters_bonusability":  {
+                                                                 "rows":  1,
+                                                                 "sha256":  "2a7c7b3966c0dc02e065463974cf094903f37b13bfa126a48167107a171ef4bc"
+                                                             },
+                         "mir2_db.characters_status":  {
+                                                           "rows":  7179,
+                                                           "sha256":  "2dfd274d37065fd26f005ada756fc6d5eea6704b51f950392ce11538509b09f5"
+                                                       },
+                         "mir2_db.characters_item_attr":  {
+                                                              "rows":  0,
+                                                              "sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                                                          },
+                         "mir2_db.characters_quest":  {
+                                                          "rows":  0,
+                                                          "sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                                                      },
+                         "mir2_account.account":  {
+                                                      "rows":  7314,
+                                                      "sha256":  "c8ec4aed7abe1e62332835c4a6f812467fc00f36db8d7fa7cad5f390bfcb7b8e"
+                                                  },
+                         "mir2_db.characters":  {
+                                                    "rows":  7177,
+                                                    "sha256":  "c1c40589cdae89434868f5df951c1b4068509bcb218b4b703d64cd5bb3e16fa3"
+                                                },
+                         "mir2_db.characters_bagitem":  {
+                                                            "rows":  330234,
+                                                            "sha256":  "69932b8f6b8cf450dd2bff3bae7a293e96fb7ea60f1b4bef4f99da329da947f9"
+                                                        },
+                         "mir2_db.characters_indexes":  {
+                                                            "rows":  7179,
+                                                            "sha256":  "2db3aa83a13689bfcf1b2222670e8630a41ba1c6b1701e6bb2920532b8431c5b"
+                                                        },
+                         "mir2_db.characters_item":  {
+                                                         "rows":  93329,
+                                                         "sha256":  "517293634319f47a2383dc7e30e84038c8d426542a4f68b72741b2957a858e18"
+                                                     },
+                         "mir2_db.characters_storageitem":  {
+                                                                "rows":  358950,
+                                                                "sha256":  "20cc0e34be7a8270e9b8867a1a443e6d8db400d6a77f67a49fcd4be548a373ec"
+                                                            },
+                         "mir2_db.characters_magic":  {
+                                                          "rows":  8,
+                                                          "sha256":  "0ac71ebc3756c582ca5e26f8b00e82cc2ff2f294a4206414c657c4d9b5470333"
+                                                      }
+                     },
+    "delta":  {
+                  "mir2_account.account":  {
+                                               "added":  2,
+                                               "removed":  2
+                                           },
+                  "mir2_db.characters":  {
+                                             "added":  2,
+                                             "removed":  2
+                                         },
+                  "mir2_db.characters_ablity":  {
+                                                    "added":  2,
+                                                    "removed":  2
+                                                },
+                  "mir2_db.characters_indexes":  {
+                                                     "added":  2,
+                                                     "removed":  2
+                                                 }
+              },
+    "scoped_rows":  {
+                        "before":  230,
+                        "after":  230
+                    },
+    "runtime_procs":  [
+                          {
+                              "name":  "mysqld",
+                              "path":  "D:\\mysql\\mariadb-10.11.19-winx64\\bin\\mysqld.exe",
+                              "start":  "2026-10-12T11:57:00.1944221+08:00"
+                          },
+                          {
+                              "name":  "DBSrv",
+                              "path":  "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\src\\DBSrv\\bin\\Release\\DBSrv.exe",
+                              "start":  "2026-10-12T16:04:22.5232305+08:00"
+                          },
+                          {
+                              "name":  "LoginSrv",
+                              "path":  "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\src\\LoginSrv\\bin\\Release\\LoginSrv.exe",
+                              "start":  "2026-10-12T16:04:22.8488606+08:00"
+                          },
+                          {
+                              "name":  "GameSrv",
+                              "path":  "E:\\MirServer\\M2GameSvr-hook-m3cs16\\GameSrv.exe",
+                              "start":  "2026-10-12T16:04:23.0665663+08:00"
+                          },
+                          {
+                              "name":  "LoginGate",
+                              "path":  "E:\\MirServer\\LoginGate\\LoginGate.exe",
+                              "start":  "2026-10-12T16:04:23.1964639+08:00"
+                          },
+                          {
+                              "name":  "SelGate",
+                              "path":  "E:\\MirServer\\SelGate\\SelGate.exe",
+                              "start":  "2026-10-12T16:04:23.3584886+08:00"
+                          },
+                          {
+                              "name":  "GameGate",
+                              "path":  "E:\\MirServer\\RunGate\\GameGate.exe",
+                              "start":  "2026-10-12T16:04:23.4779443+08:00"
+                          }
+                      ],
+    "finished_at":  "2026-10-12T16:06:45.8542011+08:00"
+}

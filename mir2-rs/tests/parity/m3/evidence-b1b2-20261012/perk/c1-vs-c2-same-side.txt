@@ -1,0 +1,53 @@
+# 同侧同种子（C# c1(155255) vs c2(160205)）逐 k **不一致** —— 同为 C# oracle、同 seed=42、同 pin 属性
+#
+# 这说明「逐 k 命中/躲闪」不是 seed+属性 的函数（否则同代码同种子必然一致）；
+# 它是「攻击起始 RNG 流位置」的函数 ⇒ k=2 的跨侧差属流位置/属性装载类，不是命中门公式差。
+#
+# 命令（在本目录下）：
+#   diff sessions/csharp-20261012-155255/attack_seq.jsonl sessions/csharp-20261012-160205/attack_seq.jsonl
+#
+$ diff sessions/csharp-20261012-155255/attack_seq.jsonl sessions/csharp-20261012-160205/attack_seq.jsonl
+2c2
+< {"k": 2, "hit": true, "dmg": 2, "hp": 18, "maxhp": 19}
+---
+> {"k": 2, "hit": false, "dmg": 0, "hp": 0, "maxhp": 0}
+8c8
+< {"k": 8, "hit": false, "dmg": 0, "hp": 0, "maxhp": 0}
+---
+> {"k": 8, "hit": true, "dmg": 1, "hp": 15, "maxhp": 19}
+14c14
+< {"k": 14, "hit": false, "dmg": 0, "hp": 0, "maxhp": 0}
+---
+> {"k": 14, "hit": true, "dmg": 2, "hp": 13, "maxhp": 19}
+34c34
+< {"k": 34, "hit": false, "dmg": 0, "hp": 0, "maxhp": 0}
+---
+> {"k": 34, "hit": true, "dmg": 2, "hp": 12, "maxhp": 19}
+41c41
+< {"k": 41, "hit": false, "dmg": 0, "hp": 0, "maxhp": 0}
+---
+> {"k": 41, "hit": true, "dmg": 2, "hp": 10, "maxhp": 19}
+60c60
+< {"k": 60, "hit": false, "dmg": 0, "hp": 0, "maxhp": 0}
+---
+> {"k": 60, "hit": true, "dmg": 2, "hp": 9, "maxhp": 19}
+74c74
+< {"k": 74, "hit": false, "dmg": 0, "hp": 0, "maxhp": 0}
+---
+> {"k": 74, "hit": true, "dmg": 2, "hp": 8, "maxhp": 19}
+87c87
+< {"k": 87, "hit": false, "dmg": 0, "hp": 0, "maxhp": 0}
+---
+> {"k": 87, "hit": true, "dmg": 2, "hp": 7, "maxhp": 19}
+106c106
+< {"k": 106, "hit": false, "dmg": 0, "hp": 0, "maxhp": 0}
+---
+> {"k": 106, "hit": true, "dmg": 1, "hp": 7, "maxhp": 19}
+121c121
+< {"role": "summary", "attacked": 120, "hits": 1, "dodges": 119, "sum": 2, "death_k": null, "min_hp": 18}
+---
+> {"role": "summary", "attacked": 120, "hits": 8, "dodges": 112, "sum": 14, "death_k": null, "min_hp": 7}
+
+# 对照：c1 vs c3(160446) 逐 k 全等（同侧重复性在**本次**成立）：
+#   diff sessions/csharp-20261012-155255/attack_seq.jsonl sessions/csharp-20261012-160446/attack_seq.jsonl
+(no output = identical)

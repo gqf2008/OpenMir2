@@ -1,0 +1,42 @@
+# C# 120 c2(160205) vs c3(160446)：逐 k **不一致**（同种子、同 pin；c2 的 pin 多一次 PIN_RETRY 重试 ⇒ 攻击起始 RNG 位置不同）
+
+2c2
+< {"k": 2, "hit": false, "dmg": 0, "hp": 0, "maxhp": 0}
+---
+> {"k": 2, "hit": true, "dmg": 2, "hp": 18, "maxhp": 19}
+8c8
+< {"k": 8, "hit": true, "dmg": 1, "hp": 15, "maxhp": 19}
+---
+> {"k": 8, "hit": false, "dmg": 0, "hp": 0, "maxhp": 0}
+14c14
+< {"k": 14, "hit": true, "dmg": 2, "hp": 13, "maxhp": 19}
+---
+> {"k": 14, "hit": false, "dmg": 0, "hp": 0, "maxhp": 0}
+34c34
+< {"k": 34, "hit": true, "dmg": 2, "hp": 12, "maxhp": 19}
+---
+> {"k": 34, "hit": false, "dmg": 0, "hp": 0, "maxhp": 0}
+41c41
+< {"k": 41, "hit": true, "dmg": 2, "hp": 10, "maxhp": 19}
+---
+> {"k": 41, "hit": false, "dmg": 0, "hp": 0, "maxhp": 0}
+60c60
+< {"k": 60, "hit": true, "dmg": 2, "hp": 9, "maxhp": 19}
+---
+> {"k": 60, "hit": false, "dmg": 0, "hp": 0, "maxhp": 0}
+74c74
+< {"k": 74, "hit": true, "dmg": 2, "hp": 8, "maxhp": 19}
+---
+> {"k": 74, "hit": false, "dmg": 0, "hp": 0, "maxhp": 0}
+87c87
+< {"k": 87, "hit": true, "dmg": 2, "hp": 7, "maxhp": 19}
+---
+> {"k": 87, "hit": false, "dmg": 0, "hp": 0, "maxhp": 0}
+106c106
+< {"k": 106, "hit": true, "dmg": 1, "hp": 7, "maxhp": 19}
+---
+> {"k": 106, "hit": false, "dmg": 0, "hp": 0, "maxhp": 0}
+121c121
+< {"role": "summary", "attacked": 120, "hits": 8, "dodges": 112, "sum": 14, "death_k": null, "min_hp": 7}
+---
+> {"role": "summary", "attacked": 120, "hits": 1, "dodges": 119, "sum": 2, "death_k": null, "min_hp": 18}

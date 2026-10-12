@@ -1,0 +1,77 @@
+# k=2 定位结论（跨侧 c1(155255) vs r1(155659)：C# 命中 dmg=2 / Rust 躲闪）
+
+**结论：归「属性输入差」类 —— 更精确地说，是「真机 Rust 攻方实体没有装载 pin 的
+`characters_ablity` 属性」⇒ 攻方 `dc=0` ⇒ 攻击力恒 0 ⇒ 无伤害 ⇒ 无 `SM_STRUCK`。**
+**不是命中/躲闪门的公式差（该公式已 1:1 对拍），也不是单纯 PIN_RETRY 次数。**
+**修点在 `bins/game-svr/**`（§1 禁止的 m2-svr 写集），本片只登记、不修。**
+
+## 1. 为什么不是「命中门公式差」
+
+- `crates/world/src/combat.rs:685` 的门
+  `if target.hit_point > 0 && attacker.hit_point < rng.random_byte(target.speed_point)`
+  与 oracle `BaseObject.Attack.cs:39-44`（`if (HitPoint < RandomNumber.RandomByte(targetObject.SpeedPoint)) nPower = 0;`）
+  同形；`combat-probe` 的 `dodge_mix_100`（攻方 `HitPoint=20` / 守方 `SpeedPoint=40`，100 击）
+  逐 k 与 oracle 全等（`../combat-probe/vectors/combat_vectors.tsv` + Rust 用例
+  `crates/world/tests/combat_skill_vectors.rs`）。
+- `RecalcHitSpeed` 的 `HitPoint/SpeedPoint` 派生也由 `../attack-hit-probe`（真身反射直调）钉死。
+  ⇒ 命中门的**公式与派生**都不是 k=2 的候选。
+
+## 2. 真机 Rust 攻方实体是「空实体」（属性差的一阶原因）
+
+生产进图只造空实体、**从不把角色记录/ pin 的 `characters_ablity` 写进世界实体**：
+
+```
+$ rg -n '\.(dc|ac|hit_point|speed_point|luck|power_rate|bo_power_item|power_item)\s*=[^=]' mir2-rs/bins/game-svr/src/*.rs
+mir2-rs/bins/game-svr/src/ability.rs:635:            add.ac = word_add_raw(add.ac, item.ac);     # 写 AddAbil 累加器，不是世界实体
+...
+mir2-rs/bins/game-svr/src/main.rs:5190:            e.dc = 0x0A_14;                            # 在 #[test] 里
+mir2-rs/bins/game-svr/src/main.rs:6812:            e.dc = 0x0064;                             # 在 #[test] 里
+$ sed -n '3301,3306p' mir2-rs/bins/game-svr/src/main.rs
+                                        let ent = mir2_world::Entity::new(     # 只给 id/名字/坐标
+                                            0,
+                                            head.chr_name.clone(),
+                                            i32::from(enter_x),
+                                            i32::from(enter_y),
+                                        );
+```
+
+`crates/world/src/entity.rs` 的 `Entity::new` 默认 `dc=0 / hit_point=0 / speed_point=0 / luck=0`
+（`race` 默认 `ACTOR_RACE_PLAY`，所以 B-1 的 `AttackPowerMode::Player` 分派会走到）。
+`enter.rs:611-626` 用 `recalc_abilitys` 只产出 52/752 帧，**不写世界实体**。
+
+⇒ `world.rs:633-640` 读 `attacker.dc = 0`：
+`get_base_attack_power_player(rng, 0, 0, 100, false, 0)`
+= `0 + Random(0+1)` = **0**（`combat.rs:123-133`）⇒ `n_power = 0` ⇒ `if n_power > 0`
+（`combat.rs:696`）不成立 ⇒ 无 `GetHitStruckDamage`、无 `StruckDamage`、无 `SM_STRUCK`。
+`attack_diff.py` 用 `SM_STRUCK` 判 hit ⇒ Rust 侧 120/120 全记 dodge，`hits=0`。
+
+## 3. 反面/次要证据：逐 k 也不是 seed+属性的函数
+
+同侧同种子（C# c1 vs c2，同代码/同 seed=42/同 pin 属性）逐 k **不一致**（见
+`c1-vs-c2-same-side.txt`：k=2,8,14,34,41,60,74,87,106 差）⇒ 逐 k 还取决于**攻击起始 RNG 流位置**。
+C# `rng-stream.tsv`（本次 c3 栈，341,775 行）里攻击只占 ~120×2 次 `PlayObject.GetAttackPower`，
+其余是**非 0137 图**的 `AnimalObject.Wondering`（112,529）与
+`WorldServer.RegenMonsters`/`MonGetRandomItems`（数千）——即全局流仍被别的图持续消耗。
+⇒ 即使属性补齐，两侧流位置仍需夹具层对齐（本片登记，属 m3bag/夹具面）。
+
+## 4. 复现命令（仓库根）
+
+```sh
+# (a) 门公式已对拍（combat-probe dodge_mix_100）——Rust 用例
+cargo test -p mir2-world --test combat_skill_vectors
+# (b) 生产进图无属性赋值、只造空实体
+rg -n '\.(dc|ac|hit_point|speed_point|luck|power_rate)[[:space:]]*=[^=]' mir2-rs/bins/game-svr/src/*.rs
+sed -n '3298,3308p' mir2-rs/bins/game-svr/src/main.rs
+# (c) 世界结算读 entity.dc（空实体 ⇒ 攻方 power=0）
+sed -n '123,133p;633,652p;683,700p' mir2-rs/crates/world/src/combat.rs  # 与 world.rs:633-652 同看
+# (d) 同侧同种子逐 k 不一致（seed+属性 不决定逐 k）
+cd mir2-rs/tests/parity/m3/evidence-b1b2-20261012
+diff sessions/csharp-20261012-155255/attack_seq.jsonl sessions/csharp-20261012-160205/attack_seq.jsonl
+```
+
+## 5. 承接（本片不做）
+
+- **属性装载**：在 m2-svr 的进图装配里把 `characters_ablity`/`RecalcAbilitys` 的
+  `dc/ac/hit_point/speed_point/luck/...` 写进世界实体（`bins/game-svr/src/main.rs` 进图路径 +
+  `enter.rs`）。⇒ owner 转 **m2-svr** 车道（写集外，未动）。
+- **流位置对齐**：让两侧「非被测 RNG 消费者」为零或把攻击起始 RNG 位置钉住。⇒ m3bag/夹具面。

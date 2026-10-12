@@ -1,0 +1,5 @@
+# 起栈前端口实拍（session 开始时）
+# 命令：cd /e/MirServer && powershell -ExecutionPolicy Bypass -File port-status.ps1
+## 3. 服务端进程 / 端口（基线是否还活着）
+- mysqld      pid=29372   port=3306
+- **缺失端口**: 5000, 5100, 5500, 5600, 5700, 6000, 7000, 7100, 7200

@@ -1,0 +1,62 @@
+15:52:05.486 [DBG] Hosting starting
+15:52:05.530 [INF] 服务器名称:热血传奇 服务器IP:127.0.0.1 服务器端口:7000
+15:52:05.537 [INF] 初始化机器人数量:2 登录机器人总数量:2
+15:52:05.539 [INF] 固定攻击序列: 启用 步数=20 起始等待=3000ms 步间隔=500ms dir=2 attacker序号=0（见 RobotPlayer.AttackSequenceTick）
+15:52:05.541 [INF] 退出路径夹具: 已关闭自动挂机（DisableAutoPlay；见 ClientManager.RunAutoPlay）
+15:52:05.552 [INF] 机器人服务启动...
+15:52:05.561 [INF] 压测采集: 输出目录=E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\tests\botload\bots-20261012-155203 连接错峰=3000ms/个 统计=E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\tests\botload\bots-20261012-155203\load_stats.ndjson
+15:52:05.562 [INF] 动作探针: 启用=False 间隔=1000ms（武装条件 = 收到 SM_LOGON 才发 CM_TURN；见 RobotPlayer.ProbeActionTick）
+15:52:05.563 [INF] 消息处理线程启动...
+15:52:05.564 [DBG] 工作线程开始执行...
+15:52:08.589 [INF] 开始登陆
+15:52:08.621 [INF] 帐号登录成功！
+15:52:08.622 [INF] 选择服务器：热血传奇
+15:52:08.625 [INF] 连接角色网关:[127.0.0.1:7100]
+15:52:09.656 [INF] 查询角色.
+15:52:09.662 [INF] 选择角色 m3cb1sm0
+15:52:09.667 [INF] 准备进入游戏
+15:52:09.670 [INF] 机器人:[m3cb1sm0] 进入游戏
+15:52:11.107 [INF] 机器人:[m3cb1sm0] 确认游戏公告
+15:52:11.594 [INF] 开始登陆
+15:52:11.601 [INF] 帐号登录成功！
+15:52:11.601 [INF] 选择服务器：热血传奇
+15:52:11.605 [INF] 连接角色网关:[127.0.0.1:7100]
+15:52:12.071 [INF] 机器人:[m3cb1sm0] M3ATTSEQ {"role":"arm","id":"m3cb1sm0","count":20,"step_ms":500,"dir":2}
+15:52:12.072 [INF] 机器人:[m3cb1sm0] 成功进入游戏
+15:52:12.073 [INF] 机器人:[m3cb1sm0] -----------------------------------------------
+15:52:12.083 [INF] 欢迎进入记忆传奇(月卡版)-官方网站：www.aresm2.com
+15:52:12.084 [INF] [攻击模式: 全体攻击]
+15:52:12.084 [INF] 禁止使用任何外挂、加速、辅助、脱机，一经发现，封号封IP
+15:52:12.085 [INF] 唯一客服QQ：79311185 唯一担保QQ：79311185
+15:52:12.669 [INF] 查询角色.
+15:52:12.675 [INF] 选择角色 m3cb1sm1
+15:52:12.678 [INF] 准备进入游戏
+15:52:12.679 [INF] 机器人:[m3cb1sm1] 进入游戏
+15:52:14.058 [INF] 机器人:[m3cb1sm1] 确认游戏公告
+15:52:14.964 [INF] 机器人:[m3cb1sm1] 成功进入游戏
+15:52:14.964 [INF] 机器人:[m3cb1sm1] -----------------------------------------------
+15:52:14.966 [INF] 欢迎进入记忆传奇(月卡版)-官方网站：www.aresm2.com
+15:52:14.966 [INF] [攻击模式: 全体攻击]
+15:52:14.966 [INF] 禁止使用任何外挂、加速、辅助、脱机，一经发现，封号封IP
+15:52:14.967 [INF] 唯一客服QQ：79311185 唯一担保QQ：79311185
+15:52:15.101 [INF] 机器人:[m3cb1sm0] M3ATTSEQ {"role":"attack","k":1,"op":"CM_HIT","x":288,"y":618,"dir":2,"id":"m3cb1sm0"}
+15:52:15.603 [INF] 机器人:[m3cb1sm0] M3ATTSEQ {"role":"attack","k":2,"op":"CM_HIT","x":288,"y":618,"dir":2,"id":"m3cb1sm0"}
+15:52:16.107 [INF] 机器人:[m3cb1sm0] M3ATTSEQ {"role":"attack","k":3,"op":"CM_HIT","x":288,"y":618,"dir":2,"id":"m3cb1sm0"}
+15:52:16.604 [INF] 机器人:[m3cb1sm0] M3ATTSEQ {"role":"attack","k":4,"op":"CM_HIT","x":288,"y":618,"dir":2,"id":"m3cb1sm0"}
+15:52:17.105 [INF] 机器人:[m3cb1sm0] M3ATTSEQ {"role":"attack","k":5,"op":"CM_HIT","x":288,"y":618,"dir":2,"id":"m3cb1sm0"}
+15:52:17.607 [INF] 机器人:[m3cb1sm0] M3ATTSEQ {"role":"attack","k":6,"op":"CM_HIT","x":288,"y":618,"dir":2,"id":"m3cb1sm0"}
+15:52:18.109 [INF] 机器人:[m3cb1sm0] M3ATTSEQ {"role":"attack","k":7,"op":"CM_HIT","x":288,"y":618,"dir":2,"id":"m3cb1sm0"}
+15:52:18.606 [INF] 机器人:[m3cb1sm0] M3ATTSEQ {"role":"attack","k":8,"op":"CM_HIT","x":288,"y":618,"dir":2,"id":"m3cb1sm0"}
+15:52:19.106 [INF] 机器人:[m3cb1sm0] M3ATTSEQ {"role":"attack","k":9,"op":"CM_HIT","x":288,"y":618,"dir":2,"id":"m3cb1sm0"}
+15:52:19.602 [INF] 机器人:[m3cb1sm0] M3ATTSEQ {"role":"attack","k":10,"op":"CM_HIT","x":288,"y":618,"dir":2,"id":"m3cb1sm0"}
+15:52:20.102 [INF] 机器人:[m3cb1sm0] M3ATTSEQ {"role":"attack","k":11,"op":"CM_HIT","x":288,"y":618,"dir":2,"id":"m3cb1sm0"}
+15:52:20.602 [INF] 机器人:[m3cb1sm0] M3ATTSEQ {"role":"attack","k":12,"op":"CM_HIT","x":288,"y":618,"dir":2,"id":"m3cb1sm0"}
+15:52:21.163 [INF] 机器人:[m3cb1sm0] M3ATTSEQ {"role":"attack","k":13,"op":"CM_HIT","x":288,"y":618,"dir":2,"id":"m3cb1sm0"}
+15:52:21.662 [INF] 机器人:[m3cb1sm0] M3ATTSEQ {"role":"attack","k":14,"op":"CM_HIT","x":288,"y":618,"dir":2,"id":"m3cb1sm0"}
+15:52:22.159 [INF] 机器人:[m3cb1sm0] M3ATTSEQ {"role":"attack","k":15,"op":"CM_HIT","x":288,"y":618,"dir":2,"id":"m3cb1sm0"}
+15:52:22.661 [INF] 机器人:[m3cb1sm0] M3ATTSEQ {"role":"attack","k":16,"op":"CM_HIT","x":288,"y":618,"dir":2,"id":"m3cb1sm0"}
+15:52:23.160 [INF] 机器人:[m3cb1sm0] M3ATTSEQ {"role":"attack","k":17,"op":"CM_HIT","x":288,"y":618,"dir":2,"id":"m3cb1sm0"}
+15:52:23.662 [INF] 机器人:[m3cb1sm0] M3ATTSEQ {"role":"attack","k":18,"op":"CM_HIT","x":288,"y":618,"dir":2,"id":"m3cb1sm0"}
+15:52:24.161 [INF] 机器人:[m3cb1sm0] M3ATTSEQ {"role":"attack","k":19,"op":"CM_HIT","x":288,"y":618,"dir":2,"id":"m3cb1sm0"}
+15:52:24.665 [INF] 机器人:[m3cb1sm0] M3ATTSEQ {"role":"attack","k":20,"op":"CM_HIT","x":288,"y":618,"dir":2,"id":"m3cb1sm0"}
+15:52:24.666 [INF] 机器人:[m3cb1sm0] M3ATTSEQ {"role":"done","id":"m3cb1sm0","attacks":20}

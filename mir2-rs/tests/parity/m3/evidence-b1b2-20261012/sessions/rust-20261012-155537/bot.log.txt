@@ -1,0 +1,54 @@
+15:56:16.179 [DBG] Hosting starting
+15:56:16.213 [INF] 服务器名称:热血传奇 服务器IP:127.0.0.1 服务器端口:7000
+15:56:16.217 [INF] 初始化机器人数量:2 登录机器人总数量:2
+15:56:16.219 [INF] 固定攻击序列: 启用 步数=20 起始等待=3000ms 步间隔=500ms dir=2 attacker序号=0（见 RobotPlayer.AttackSequenceTick）
+15:56:16.221 [INF] 退出路径夹具: 已关闭自动挂机（DisableAutoPlay；见 ClientManager.RunAutoPlay）
+15:56:16.226 [INF] 机器人服务启动...
+15:56:16.238 [INF] 压测采集: 输出目录=E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\tests\botload\bots-20261012-155613 连接错峰=3000ms/个 统计=E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\tests\botload\bots-20261012-155613\load_stats.ndjson
+15:56:16.239 [INF] 动作探针: 启用=False 间隔=1000ms（武装条件 = 收到 SM_LOGON 才发 CM_TURN；见 RobotPlayer.ProbeActionTick）
+15:56:16.240 [INF] 消息处理线程启动...
+15:56:16.241 [DBG] 工作线程开始执行...
+15:56:19.316 [INF] 开始登陆
+15:56:19.333 [INF] 帐号登录成功！
+15:56:19.334 [INF] 选择服务器：热血传奇
+15:56:19.335 [INF] 连接角色网关:[127.0.0.1:7100]
+15:56:20.372 [INF] 查询角色.
+15:56:20.381 [INF] 选择角色 m3cb1rm0
+15:56:20.388 [INF] 准备进入游戏
+15:56:20.392 [INF] 机器人:[m3cb1rm0] 进入游戏
+15:56:20.784 [INF] 机器人:[m3cb1rm0] 确认游戏公告
+15:56:20.851 [INF] 机器人:[m3cb1rm0] M3ATTSEQ {"role":"arm","id":"m3cb1rm0","count":20,"step_ms":500,"dir":2}
+15:56:20.852 [INF] 机器人:[m3cb1rm0] 成功进入游戏
+15:56:20.852 [INF] 机器人:[m3cb1rm0] -----------------------------------------------
+15:56:22.308 [INF] 开始登陆
+15:56:22.319 [INF] 帐号登录成功！
+15:56:22.320 [INF] 选择服务器：热血传奇
+15:56:22.324 [INF] 连接角色网关:[127.0.0.1:7100]
+15:56:23.375 [INF] 查询角色.
+15:56:23.378 [INF] 选择角色 m3cb1rm1
+15:56:23.379 [INF] 准备进入游戏
+15:56:23.380 [INF] 机器人:[m3cb1rm1] 进入游戏
+15:56:23.589 [INF] 机器人:[m3cb1rm1] 确认游戏公告
+15:56:23.591 [INF] 机器人:[m3cb1rm1] 成功进入游戏
+15:56:23.591 [INF] 机器人:[m3cb1rm1] -----------------------------------------------
+15:56:23.873 [INF] 机器人:[m3cb1rm0] M3ATTSEQ {"role":"attack","k":1,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1rm0"}
+15:56:24.373 [INF] 机器人:[m3cb1rm0] M3ATTSEQ {"role":"attack","k":2,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1rm0"}
+15:56:24.872 [INF] 机器人:[m3cb1rm0] M3ATTSEQ {"role":"attack","k":3,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1rm0"}
+15:56:25.375 [INF] 机器人:[m3cb1rm0] M3ATTSEQ {"role":"attack","k":4,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1rm0"}
+15:56:25.874 [INF] 机器人:[m3cb1rm0] M3ATTSEQ {"role":"attack","k":5,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1rm0"}
+15:56:26.373 [INF] 机器人:[m3cb1rm0] M3ATTSEQ {"role":"attack","k":6,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1rm0"}
+15:56:26.872 [INF] 机器人:[m3cb1rm0] M3ATTSEQ {"role":"attack","k":7,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1rm0"}
+15:56:27.373 [INF] 机器人:[m3cb1rm0] M3ATTSEQ {"role":"attack","k":8,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1rm0"}
+15:56:27.875 [INF] 机器人:[m3cb1rm0] M3ATTSEQ {"role":"attack","k":9,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1rm0"}
+15:56:28.375 [INF] 机器人:[m3cb1rm0] M3ATTSEQ {"role":"attack","k":10,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1rm0"}
+15:56:28.874 [INF] 机器人:[m3cb1rm0] M3ATTSEQ {"role":"attack","k":11,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1rm0"}
+15:56:29.372 [INF] 机器人:[m3cb1rm0] M3ATTSEQ {"role":"attack","k":12,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1rm0"}
+15:56:29.871 [INF] 机器人:[m3cb1rm0] M3ATTSEQ {"role":"attack","k":13,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1rm0"}
+15:56:30.369 [INF] 机器人:[m3cb1rm0] M3ATTSEQ {"role":"attack","k":14,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1rm0"}
+15:56:30.869 [INF] 机器人:[m3cb1rm0] M3ATTSEQ {"role":"attack","k":15,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1rm0"}
+15:56:31.429 [INF] 机器人:[m3cb1rm0] M3ATTSEQ {"role":"attack","k":16,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1rm0"}
+15:56:31.928 [INF] 机器人:[m3cb1rm0] M3ATTSEQ {"role":"attack","k":17,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1rm0"}
+15:56:32.428 [INF] 机器人:[m3cb1rm0] M3ATTSEQ {"role":"attack","k":18,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1rm0"}
+15:56:32.927 [INF] 机器人:[m3cb1rm0] M3ATTSEQ {"role":"attack","k":19,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1rm0"}
+15:56:33.430 [INF] 机器人:[m3cb1rm0] M3ATTSEQ {"role":"attack","k":20,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1rm0"}
+15:56:33.431 [INF] 机器人:[m3cb1rm0] M3ATTSEQ {"role":"done","id":"m3cb1rm0","attacks":20}

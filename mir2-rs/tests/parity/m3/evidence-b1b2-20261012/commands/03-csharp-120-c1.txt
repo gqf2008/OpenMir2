@@ -1,0 +1,115 @@
+--- 0) 入口实现识别护栏 ---
+ENTRY 5000 <- GameSrv [csharp] E:\MirServer\M2GameSvr-hook-m3cs16\GameSrv.exe
+ENTRY 7000 <- LoginGate [csharp] E:\MirServer\LoginGate\LoginGate.exe
+ENTRY 7100 <- SelGate [csharp] E:\MirServer\SelGate\SelGate.exe
+ENTRY 7200 <- GameGate [csharp] E:\MirServer\RunGate\GameGate.exe
+--- 0.5) preflight：Rust 断线存档（T-27） ---
+PREFLIGHT Rust 断线存档：跳过
+--- 0.6) 种子注入断言（F-C，两侧同种子的前提；缺失 ⇒ fail-closed 红） ---
+SEED_INJECT_OK csharp seed=42 <- E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv
+--- 1) 预检：MySQL / 前缀 ---
+PREFLIGHT MySQL 在听
+PREFLIGHT pin SQL 可执行性：4 条 UPDATE 在镜像临时表上以探针行真执行，mysql rc=0（prepare 期 + 范围期）
+--- 2) 侧运行（复用 run_pair.ps1；同序列 = -FixedNewChr + -AttackSequence + -AttackPinPair） ---
+MAP_HAS_NO_MONSTER ok map=0137 spawns=0 fixture=E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\tests\parity\m3\fixtures\mongen-map0137.tsv source_verified=True
+MAP_HAS_NO_AI_CONSUMERS ok map=0137 total_refs=0 fixture=ai-consumer-map0137.tsv source_verified=True
+SESSION E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\tests\parity\m3\sessions\csharp-20261012-155255
+SIDE=csharp PREFIX=m3cb1c1 BOTS=2 ENTRY=127.0.0.1:7000
+PREFLIGHT 入口 127.0.0.1:7000 在听
+RUNTIME mysqld <- D:\mysql\mariadb-10.11.19-winx64\bin\mysqld.exe
+RUNTIME DBSrv <- E:\Users\gxh\Documents\GitHub\OpenMir2\src\DBSrv\bin\Release\DBSrv.exe
+RUNTIME LoginSrv <- E:\Users\gxh\Documents\GitHub\OpenMir2\src\LoginSrv\bin\Release\LoginSrv.exe
+RUNTIME GameSrv <- E:\MirServer\M2GameSvr-hook-m3cs16\GameSrv.exe
+RUNTIME LoginGate <- E:\MirServer\LoginGate\LoginGate.exe
+RUNTIME SelGate <- E:\MirServer\SelGate\SelGate.exe
+RUNTIME GameGate <- E:\MirServer\RunGate\GameGate.exe
+ACCT_LEN_OK 最长账号名 8 字符（上限 10）
+FRESH_CHECK account=0 character=0
+--- 2.5) 固定起点：预热建角 + SQL pin ---
+PREWARM run_bots.ps1 -Count 2 -Prefix m3cb1c1 -NewAccount -Port 7000 -RequireCharCreated -FixedNewChr -NewChrJob 0 -NewChrHair 2 -NewChrSex 0
+BUILD BotSrv...
+CONFIG: 2 bots, prefix=m3cb1c1, target=127.0.0.1:7000, NewAccount=True, FixedNewChr=True
+CONFIG_FIXED_NEWCHR Job=0 Hair=2 Sex=0
+BOTSRV_PID=26720 LOG=E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\tests\botload\bots-20261012-155300.log
+PROGRESS spawned=0 login_ok=0/2 in_world=0/2 (src=load_stats.ndjson)
+PROGRESS spawned=2 login_ok=0/2 in_world=0/2 (src=load_stats.ndjson)
+PROGRESS spawned=2 login_ok=2/2 in_world=0/2 (src=load_stats.ndjson)
+GREEN: 2/2 登录成功 (100%)；char_created=2/2
+PIN_RETRY attempt=1 settle_rounds=1 prev_match=False pinned=1/2 bag=0/0 abil=1/2（pin_char_mismatch,pin_abil_mismatch）
+PIN_RETRY attempt=2 settle_rounds=2 prev_match=False pinned=2/2 bag=0/0 abil=2/2（pin_hold_needs_consecutive_settle）
+PIN_HOLD attempt=3（连续两轮 settle 复验均 hold 住）
+PIN_START_POSE pair map=0137 attacker=17,20,dir=2 victim=18,20 level=1 vhp=30000
+ATTACK_POSE pair map=0137 attacker=17,20,dir=2 victim=18,20 level=1 vhp=30000
+SNAP mir2_account.account: rows=7304 sha256=68e4aaaf54bc3fda…
+SNAP mir2_account.account_protection: rows=7192 sha256=213323fec3f56245…
+SNAP mir2_db.characters: rows=7167 sha256=6ea2802b045abe13…
+SNAP mir2_db.characters_ablity: rows=7170 sha256=070c9769687deb40…
+SNAP mir2_db.characters_bonusability: rows=1 sha256=2a7c7b3966c0dc02…
+SNAP mir2_db.characters_item: rows=93199 sha256=8e124a087e54e4cf…
+SNAP mir2_db.characters_item_attr: rows=0 sha256=e3b0c44298fc1c14…
+SNAP mir2_db.characters_magic: rows=8 sha256=0ac71ebc3756c582…
+SNAP mir2_db.characters_bagitem: rows=329774 sha256=f39f9c48fec0e85a…
+SNAP mir2_db.characters_storageitem: rows=358450 sha256=21368dfc9b8beb2d…
+SNAP mir2_db.characters_status: rows=7169 sha256=1a7c8b931b1468cc…
+SNAP mir2_db.characters_quest: rows=0 sha256=e3b0c44298fc1c14…
+SNAP mir2_db.characters_indexes: rows=7169 sha256=812701e728988608…
+SNAP_OK 13 表 -> E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\tests\parity\m3\sessions\csharp-20261012-155255\snap_before
+OPS_FIXED_NEWCHR Job=0 Hair=2 Sex=0
+OPS_ATTACKSEQ count=120 step_ms=500 start_delay_ms=3000 disable_autoplay=True
+OPS run_bots.ps1 -Count 2 -Prefix m3cb1c1 -Port 7000 -AttackSequence -AttackCount 120 -AttackStepMs 500 -AttackStartDelayMs 3000 -DisableAutoPlay
+BUILD BotSrv...
+CONFIG: 2 bots, prefix=m3cb1c1, target=127.0.0.1:7000, NewAccount=False, FixedNewChr=False
+CONFIG_ATTACKSEQ count=120 step_ms=500 start_delay_ms=3000
+CONFIG_DISABLE_AUTOPLAY on
+BOTSRV_PID=19256 LOG=E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\tests\botload\bots-20261012-155338.log
+PROGRESS spawned=0 login_ok=0/2 in_world=0/2 attack_seq_done=0/1 (src=load_stats.ndjson)
+PROGRESS spawned=2 login_ok=1/2 in_world=0/2 attack_seq_done=0/1 (src=load_stats.ndjson)
+PROGRESS spawned=2 login_ok=2/2 in_world=2/2 attack_seq_done=0/1 (src=load_stats.ndjson)
+PROGRESS spawned=2 login_ok=2/2 in_world=2/2 attack_seq_done=0/1 (src=load_stats.ndjson)
+PROGRESS spawned=2 login_ok=2/2 in_world=2/2 attack_seq_done=0/1 (src=load_stats.ndjson)
+PROGRESS spawned=2 login_ok=2/2 in_world=2/2 attack_seq_done=0/1 (src=load_stats.ndjson)
+PROGRESS spawned=2 login_ok=2/2 in_world=2/2 attack_seq_done=0/1 (src=load_stats.ndjson)
+PROGRESS spawned=2 login_ok=2/2 in_world=2/2 attack_seq_done=0/1 (src=load_stats.ndjson)
+PROGRESS spawned=2 login_ok=2/2 in_world=2/2 attack_seq_done=0/1 (src=load_stats.ndjson)
+PROGRESS spawned=2 login_ok=2/2 in_world=2/2 attack_seq_done=0/1 (src=load_stats.ndjson)
+PROGRESS spawned=2 login_ok=2/2 in_world=2/2 attack_seq_done=0/1 (src=load_stats.ndjson)
+PROGRESS spawned=2 login_ok=2/2 in_world=2/2 attack_seq_done=0/1 (src=load_stats.ndjson)
+PROGRESS spawned=2 login_ok=2/2 in_world=2/2 attack_seq_done=0/1 (src=load_stats.ndjson)
+PROGRESS spawned=2 login_ok=2/2 in_world=2/2 attack_seq_done=1/1 (src=load_stats.ndjson)
+GREEN: 2/2 登录成功 (100%)；attack_seq_done=1/1
+OPS_EXIT 0
+OPS_MARKERS login_ok=2/2 char_created=0/2 enter_world=2/2 bot_log=bots-20261012-155338.log
+OPS_BAGSEQ_MARKERS count=0
+OPS_ATTACKSEQ_MARKERS count=124
+OPS_ATTACKSEQ attacks=120 done=1 raw=attack_raw.jsonl
+SETTLE_SEQ 等掉线存档落库（3s）
+SNAP mir2_account.account: rows=7304 sha256=33fcc7000167ea5f…
+SNAP mir2_account.account_protection: rows=7192 sha256=213323fec3f56245…
+SNAP mir2_db.characters: rows=7167 sha256=fd29aa90927fec30…
+SNAP mir2_db.characters_ablity: rows=7170 sha256=c2d8a4dd45651b5f…
+SNAP mir2_db.characters_bonusability: rows=1 sha256=2a7c7b3966c0dc02…
+SNAP mir2_db.characters_item: rows=93199 sha256=8e124a087e54e4cf…
+SNAP mir2_db.characters_item_attr: rows=0 sha256=e3b0c44298fc1c14…
+SNAP mir2_db.characters_magic: rows=8 sha256=0ac71ebc3756c582…
+SNAP mir2_db.characters_bagitem: rows=329774 sha256=f39f9c48fec0e85a…
+SNAP mir2_db.characters_storageitem: rows=358450 sha256=21368dfc9b8beb2d…
+SNAP mir2_db.characters_status: rows=7169 sha256=1a7c8b931b1468cc…
+SNAP mir2_db.characters_quest: rows=0 sha256=e3b0c44298fc1c14…
+SNAP mir2_db.characters_indexes: rows=7169 sha256=3fbc4e9c79ff2c89…
+SNAP_OK 13 表 -> E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\tests\parity\m3\sessions\csharp-20261012-155255\snap_after
+EXTRACT prefix=m3cb1c1 rows=230 (family_by_playerid=222 player_ids=2) -> E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\tests\parity\m3\sessions\csharp-20261012-155255\scoped_before.jsonl
+EXTRACT prefix=m3cb1c1 rows=230 (family_by_playerid=222 player_ids=2) -> E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\tests\parity\m3\sessions\csharp-20261012-155255\scoped_after.jsonl
+DELTA 改动行合计=16 表数=4 -> E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\tests\parity\m3\sessions\csharp-20261012-155255\delta.json
+  mir2_account.account: +2 -2
+  mir2_db.characters: +2 -2
+  mir2_db.characters_ablity: +2 -2
+  mir2_db.characters_indexes: +2 -2
+SNAPSHOT_TRIMMED 已把 snap_before/snap_after 瘦身为 *.manifest.json（-KeepSnapshots 可保留原始 TSV）
+BASELINE_OK E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\tests\parity\m3\sessions\csharp-20261012-155255\baseline.json
+SNAPSHOT_HASHES_BEFORE tables=13; AFTER tables=13
+SESSION_CSHARP csharp-20261012-155255
+SEED_EVIDENCE_RECORDED E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\tests\parity\m3\sessions\csharp-20261012-155255\attack_seed.json
+ATTACKSEQ_OK markers=124 raw=True
+ALIGN_OK E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\tests\parity\m3\sessions\csharp-20261012-155255\attack_seq.jsonl attacked=120 hits=1 dodges=119 sum=2
+NEXT: 换 Rust 栈后跑  run_attack_pair.ps1 -Side rust -Bots 2 -AttackCount 120 -AttackPinPair -PeerSession csharp-20261012-155255
+GREEN: 侧运行与同序列判据通过

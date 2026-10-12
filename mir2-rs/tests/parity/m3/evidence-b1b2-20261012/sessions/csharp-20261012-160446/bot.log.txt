@@ -1,0 +1,169 @@
+16:05:29.582 [DBG] Hosting starting
+16:05:29.607 [INF] 服务器名称:热血传奇 服务器IP:127.0.0.1 服务器端口:7000
+16:05:29.611 [INF] 初始化机器人数量:2 登录机器人总数量:2
+16:05:29.613 [INF] 固定攻击序列: 启用 步数=120 起始等待=3000ms 步间隔=500ms dir=2 attacker序号=0（见 RobotPlayer.AttackSequenceTick）
+16:05:29.615 [INF] 退出路径夹具: 已关闭自动挂机（DisableAutoPlay；见 ClientManager.RunAutoPlay）
+16:05:29.621 [INF] 机器人服务启动...
+16:05:29.626 [INF] 压测采集: 输出目录=E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\tests\botload\bots-20261012-160528 连接错峰=3000ms/个 统计=E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\tests\botload\bots-20261012-160528\load_stats.ndjson
+16:05:29.627 [INF] 动作探针: 启用=False 间隔=1000ms（武装条件 = 收到 SM_LOGON 才发 CM_TURN；见 RobotPlayer.ProbeActionTick）
+16:05:29.627 [INF] 消息处理线程启动...
+16:05:29.628 [DBG] 工作线程开始执行...
+16:05:32.691 [INF] 开始登陆
+16:05:32.707 [INF] 帐号登录成功！
+16:05:32.707 [INF] 选择服务器：热血传奇
+16:05:32.709 [INF] 连接角色网关:[127.0.0.1:7100]
+16:05:33.746 [INF] 查询角色.
+16:05:33.750 [INF] 选择角色 m3cb1c30
+16:05:33.752 [INF] 准备进入游戏
+16:05:33.753 [INF] 机器人:[m3cb1c30] 进入游戏
+16:05:35.295 [INF] 机器人:[m3cb1c30] 确认游戏公告
+16:05:35.687 [INF] 开始登陆
+16:05:35.691 [INF] 帐号登录成功！
+16:05:35.691 [INF] 选择服务器：热血传奇
+16:05:35.693 [INF] 连接角色网关:[127.0.0.1:7100]
+16:05:36.173 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"arm","id":"m3cb1c30","count":120,"step_ms":500,"dir":2}
+16:05:36.174 [INF] 机器人:[m3cb1c30] 成功进入游戏
+16:05:36.174 [INF] 机器人:[m3cb1c30] -----------------------------------------------
+16:05:36.176 [INF] 欢迎进入记忆传奇(月卡版)-官方网站：www.aresm2.com
+16:05:36.176 [INF] [攻击模式: 全体攻击]
+16:05:36.176 [INF] 禁止使用任何外挂、加速、辅助、脱机，一经发现，封号封IP
+16:05:36.176 [INF] 唯一客服QQ：79311185 唯一担保QQ：79311185
+16:05:36.744 [INF] 查询角色.
+16:05:36.747 [INF] 选择角色 m3cb1c31
+16:05:36.749 [INF] 准备进入游戏
+16:05:36.750 [INF] 机器人:[m3cb1c31] 进入游戏
+16:05:38.199 [INF] 机器人:[m3cb1c31] 确认游戏公告
+16:05:39.090 [INF] 机器人:[m3cb1c31] 成功进入游戏
+16:05:39.091 [INF] 机器人:[m3cb1c31] -----------------------------------------------
+16:05:39.092 [INF] 欢迎进入记忆传奇(月卡版)-官方网站：www.aresm2.com
+16:05:39.092 [INF] 唯一客服QQ：79311185 唯一担保QQ：79311185
+16:05:39.092 [INF] 禁止使用任何外挂、加速、辅助、脱机，一经发现，封号封IP
+16:05:39.092 [INF] [攻击模式: 全体攻击]
+16:05:39.185 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":1,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:39.685 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":2,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:39.701 [INF] 机器人:[m3cb1c31] M3ATTSEQ {"role":"struck","dmg":1,"hp":18,"maxhp":19,"src":1345584985,"actor":184091248}
+16:05:39.748 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"struck","dmg":1,"hp":18,"maxhp":19,"src":1345584985,"actor":184091248}
+16:05:40.000 [ERR] Object reference not set to an instance of an object.
+16:05:40.045 [ERR] Object reference not set to an instance of an object.
+16:05:40.185 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":3,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:40.496 [ERR] Object reference not set to an instance of an object.
+16:05:40.682 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":4,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:41.185 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":5,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:41.682 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":6,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:42.181 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":7,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:42.681 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":8,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:43.182 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":9,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:43.681 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":10,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:44.181 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":11,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:44.679 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":12,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:45.180 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":13,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:45.741 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":14,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:46.240 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":15,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:46.738 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":16,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:47.238 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":17,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:47.738 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":18,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:48.237 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":19,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:48.735 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":20,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:49.236 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":21,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:49.734 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":22,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:50.236 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":23,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:50.734 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":24,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:51.232 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":25,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:51.731 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":26,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:52.230 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":27,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:52.730 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":28,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:53.229 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":29,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:53.728 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":30,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:54.287 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":31,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:54.785 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":32,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:55.284 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":33,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:55.782 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":34,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:56.283 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":35,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:56.783 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":36,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:57.281 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":37,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:57.780 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":38,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:58.279 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":39,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:58.781 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":40,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:59.284 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":41,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:05:59.786 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":42,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:00.283 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":43,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:00.783 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":44,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:01.286 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":45,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:01.786 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":46,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:02.288 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":47,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:02.786 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":48,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:03.291 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":49,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:03.794 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":50,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:04.298 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":51,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:04.803 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":52,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:05.302 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":53,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:05.804 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":54,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:06.303 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":55,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:06.800 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":56,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:07.300 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":57,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:07.800 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":58,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:08.300 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":59,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:08.798 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":60,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:09.298 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":61,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:09.801 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":62,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:10.297 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":63,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:10.797 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":64,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:11.299 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":65,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:11.800 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":66,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:12.299 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":67,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:12.801 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":68,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:13.302 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":69,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:13.801 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":70,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:14.298 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":71,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:14.798 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":72,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:15.298 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":73,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:15.795 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":74,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:16.293 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":75,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:16.793 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":76,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:17.296 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":77,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:17.794 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":78,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:18.297 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":79,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:18.796 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":80,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:19.295 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":81,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:19.794 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":82,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:20.289 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":83,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:20.790 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":84,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:21.291 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":85,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:21.793 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":86,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:22.291 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":87,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:22.789 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":88,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:23.350 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":89,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:23.851 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":90,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:24.352 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":91,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:24.855 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":92,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:25.355 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":93,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:25.854 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":94,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:26.354 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":95,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:26.856 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":96,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:27.358 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":97,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:27.861 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":98,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:28.361 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":99,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:28.859 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":100,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:29.361 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":101,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:29.862 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":102,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:30.360 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":103,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:30.862 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":104,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:31.364 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":105,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:31.867 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":106,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:32.369 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":107,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:32.869 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":108,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:33.370 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":109,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:33.872 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":110,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:34.113 [WRN] 游戏服务器[127.0.0.1:7000]关闭连接...
+16:06:34.374 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":111,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:34.873 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":112,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:35.374 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":113,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:35.874 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":114,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:36.374 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":115,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:36.875 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":116,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:37.139 [WRN] 游戏服务器[127.0.0.1:7000]关闭连接...
+16:06:37.372 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":117,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:37.872 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":118,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:38.371 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":119,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:38.874 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"attack","k":120,"op":"CM_HIT","x":17,"y":20,"dir":2,"id":"m3cb1c30"}
+16:06:38.875 [INF] 机器人:[m3cb1c30] M3ATTSEQ {"role":"done","id":"m3cb1c30","attacks":120}

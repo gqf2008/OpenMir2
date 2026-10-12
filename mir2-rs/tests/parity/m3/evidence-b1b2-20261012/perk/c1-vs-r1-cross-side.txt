@@ -1,0 +1,10 @@
+# 跨侧 c1(155255) vs r1(155659)：逐 k 只差 k=2（C# hit / Rust dodge），其余 119 击一致
+
+2c2
+< {"k": 2, "hit": true, "dmg": 2, "hp": 18, "maxhp": 19}
+---
+> {"k": 2, "hit": false, "dmg": 0, "hp": 0, "maxhp": 0}
+121c121
+< {"role": "summary", "attacked": 120, "hits": 1, "dodges": 119, "sum": 2, "death_k": null, "min_hp": 18}
+---
+> {"role": "summary", "attacked": 120, "hits": 0, "dodges": 120, "sum": 0, "death_k": null, "min_hp": 0}

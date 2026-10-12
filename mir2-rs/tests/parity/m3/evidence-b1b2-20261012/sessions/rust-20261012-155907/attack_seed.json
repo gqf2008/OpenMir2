@@ -1,0 +1,9 @@
+﻿{
+    "side":  "rust",
+    "seed":  42,
+    "ok":  true,
+    "expect_seed":  42,
+    "evidence_log":  "E:\\tmp\\m3cs-b1b2\\rust-stack\\game-svr.out.log",
+    "matched":  "07:55:16.212 [INF] RNG 同种子注入：seed=42 参照序列=SEED_PROBE 1434747710 302596119 269548474 1122627734 361709742 563913476 1555655117 1101493307",
+    "ts":  "2026-10-12T16:00:58.2536935+08:00"
+}

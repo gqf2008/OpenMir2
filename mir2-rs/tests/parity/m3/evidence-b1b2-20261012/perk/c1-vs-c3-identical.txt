@@ -1,0 +1,9 @@
+# 同侧同种子重复性（逐 k 比对 attack_seq.jsonl）
+
+## C# 120 c1(155255) vs c3(160446)：逐 k 完全一致（diff 空）
+$ diff c1/attack_seq.jsonl c3/attack_seq.jsonl
+(no output = identical)
+
+sha256:
+efac987622238a6f27ec82a5af0fd665728f7061a8fdec1040057a69636c77f1 *mir2-rs/tests/parity/m3/evidence-b1b2-20261012/sessions/csharp-20261012-155255/attack_seq.jsonl
+efac987622238a6f27ec82a5af0fd665728f7061a8fdec1040057a69636c77f1 *mir2-rs/tests/parity/m3/evidence-b1b2-20261012/sessions/csharp-20261012-160446/attack_seq.jsonl

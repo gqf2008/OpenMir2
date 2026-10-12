@@ -1,0 +1,6 @@
+# Rust 120 r1(155659) vs r2(155907)：逐 k 完全一致（diff 空）
+
+(no output = identical)
+
+b2bf73e76c099a3968371d4ee1e6503af2a9f171e47232773b9d20154661daa6 *mir2-rs/tests/parity/m3/evidence-b1b2-20261012/sessions/rust-20261012-155659/attack_seq.jsonl
+b2bf73e76c099a3968371d4ee1e6503af2a9f171e47232773b9d20154661daa6 *mir2-rs/tests/parity/m3/evidence-b1b2-20261012/sessions/rust-20261012-155907/attack_seq.jsonl
