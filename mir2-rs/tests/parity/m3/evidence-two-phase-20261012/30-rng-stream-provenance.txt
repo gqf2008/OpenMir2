@@ -1,0 +1,48 @@
+# M3②③ 真机两相 · 两侧 RNG 权威流水留痕（路径 + sha256 + 字节数）
+#
+# 对象：2026-10-12 20:46–20:58 在 0137 / MIR2_RNG_SEED=42 / -AttackPinPair 下跑的
+#       两相窗口（C# 栈 r1、C# 栈 r2、Rust 栈）。原件体量大（C# 上百 MB、且 C# rng-hook 的
+#       默认落点 E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv 会被下一次起栈覆盖），故流水
+#       本身不入库，只入「路径 + sha256 + 字节数」；采集后立即 cp 到不被覆盖的路径，再算 hash。
+#       （LESSON_崩溃复现证据必须当场归档快照再重跑，否则被后续运行覆盖）
+#
+# 口径：sha256 = 盘上原字节（非 git blob），与 sha256sum 一致；行数 = wc -l。
+#
+# --- C# r1（栈起 20:46，覆盖会话 csharp-20261012-204618 / 204722 / 204927） ---
+path   = E:/tmp/m3cs-2phase/csharp-rng-stream.tsv
+backup_of = E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv（rng-hook 默认落点，会被后续起栈覆盖）
+sha256 = 1a9d3ab9f64b319302c35a0b1a22310dadbed9ac02d0de2c0837bc62aea523fe
+bytes  = 109287759
+lines  = 1347601
+ledger = rng_ledger_diff.py summary --side csharp ⇒ total=1347599 attack_path=627 noise=1346972
+         noise_ratio=0.9995 distinct_sites=94
+         canonical: atk_power_a=260 atk_power_b=260 hit_gate=37 attack_success=19
+                    hit_struck_damage=23 atk_power_base=18 struck_durability=5
+#
+# --- C# r2（栈起 20:55，覆盖会话 csharp-20261012-205603 / 205707） ---
+path   = E:/tmp/m3cs-2phase/csharp-rng-stream-r2.tsv
+backup_of = E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv（r2 起栈时覆盖 r1 的落点）
+sha256 = e4add21bff92a865204efe12c978dc63e9159bdbec728ace7aa761d2be041973
+bytes  = 49106025
+lines  = 603993
+#
+# --- Rust（栈起 20:51，覆盖会话 rust-20261012-205150 / 205252） ---
+path   = E:/tmp/m3cs-2phase/rust-rng-stream-bk.tsv
+backup_of = E:/tmp/m3cs-2phase/rust-rng-stream.tsv（start_rust_stack.ps1 经 MIR2_RNG_LOG 继承）
+sha256 = 6d10164a37e64ac15edb320ad70a4e6852838e5235ac54301f1c2cd18cdd9f49
+bytes  = 23351
+lines  = 470
+ledger = rng_ledger_diff.py summary --side rust ⇒ total=468 attack_path=460 noise=8
+         noise_ratio=0.0171 distinct_sites=7
+         canonical: atk_power_a=140 atk_power_b=140 hit_gate=58 attack_success=58
+                    hit_struck_damage=32 struck_durability=32
+#
+# --- 关键对照（本片的归因依据） ---
+# ① 攻击路径段数：Rust 140 击 = 140 段、每段 = atk_power_a → atk_power_b → hit_gate →
+#    [命中: hit_struck_damage → struck_durability] → attack_success
+#    ⇒ 与 oracle PlayObject.Attack.cs:73/BaseObject.Attack.cs:12/41/PlayObject.Attack.cs:225
+#      的取数次序同形；m2-svr 接线（a0d93bcf）后「无目标也抽攻击力」已生效。
+# ② 噪声占比：C# 99.95%（1346972/1347599）vs Rust 1.71%（8/468）
+#    ⇒ 两侧全局随机源消费者数量级差 10^5；攻击窗口的 RNG 起点不可能凭「同种子」对齐。
+# ③ 结论：逐 k 分歧可归因到全局流位置（Claim B），不再是攻击路径取数结构差。
+#    但亦不能仅凭本件排除「攻方命中/敏捷属性输入差」——见报告 §4 的判别实验建议。

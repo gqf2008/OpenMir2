@@ -1,0 +1,9 @@
+RNG_LEDGER E:/tmp/m3cs-2phase/rust-rng-stream-bk.tsv side=rust total=468 attack_path=460 noise=8 noise_ratio=0.0171 distinct_sites=7
+  CANONICAL {'atk_power_a': 140, 'atk_power_b': 140, 'hit_gate': 58, 'attack_success': 58, 'hit_struck_damage': 32, 'struck_durability': 32, 'bins/game-svr/src/main.rs:2884': 8}
+  SITE      140  crates/world/src/combat.rs:109
+  SITE      140  crates/world/src/combat.rs:111
+  SITE       58  crates/world/src/combat.rs:758
+  SITE       58  crates/world/src/combat.rs:831
+  SITE       32  crates/world/src/combat.rs:628
+  SITE       32  crates/world/src/combat.rs:601
+  SITE        8  bins/game-svr/src/main.rs:2884

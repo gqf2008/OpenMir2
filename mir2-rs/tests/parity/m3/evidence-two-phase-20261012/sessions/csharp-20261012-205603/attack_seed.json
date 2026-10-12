@@ -1,0 +1,9 @@
+{
+  "side": "csharp",
+  "seed": 42,
+  "ok": true,
+  "expect_seed": 42,
+  "evidence_log": "E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv",
+  "matched": "1\tINJECT_OK\t42\t0",
+  "ts": "2026-10-12T20:56:57.3353999+08:00"
+}
