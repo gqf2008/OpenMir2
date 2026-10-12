@@ -1,0 +1,63 @@
+# item③：C# 侧 atk_power_base（非玩家攻方）逐单元读数
+
+来源：02/03-analyze-stack1.json 的 csharp.structure 中 kind=base 的单元。
+
+## stack2(cA)：base 单元 16 个（player 单元 120 个）
+  unit 1: atk_power_base(1)->0 hit_gate(8)->3 hit_struck_damage(1)->0
+  unit 2: atk_power_base(1)->0 hit_gate(8)->5 hit_struck_damage(1)->0
+  unit 3: atk_power_base(1)->0 hit_gate(8)->1 hit_struck_damage(1)->0
+  unit 4: atk_power_base(1)->0 hit_gate(15)->0 hit_struck_damage(1)->0 hit_struck_damage2(1)->0
+  unit 5: atk_power_base(1)->0 hit_gate(8)->2 hit_struck_damage(1)->0
+  unit 6: atk_power_base(1)->0 hit_gate(13)->11 hit_struck_damage(1)->0
+  unit 7: atk_power_base(1)->0 hit_gate(13)->0 hit_struck_damage(1)->0
+  unit 8: atk_power_base(1)->0 hit_gate(13)->3 hit_struck_damage(1)->0
+  unit 11: atk_power_base(1)->0 hit_gate(13)->5 hit_struck_damage(1)->0
+  unit 13: atk_power_base(1)->0 hit_gate(13)->6 hit_struck_damage(1)->0
+  unit 22: atk_power_base(1)->0 hit_gate(13)->8 hit_struck_damage(1)->0
+  unit 32: atk_power_base(1)->0 hit_gate(13)->7 hit_struck_damage(1)->0
+  unit 34: atk_power_base(1)->0 hit_gate(13)->12 hit_struck_damage(1)->0
+  unit 43: atk_power_base(1)->0 hit_gate(15)->4 hit_struck_damage(1)->0 hit_struck_damage2(1)->0
+  unit 108: atk_power_base(1)->0 hit_gate(15)->1 hit_struck_damage(1)->0 hit_struck_damage2(1)->0
+  unit 117: atk_power_base(1)->0 hit_gate(15)->4 hit_struck_damage(1)->0 hit_struck_damage2(1)->0
+  base 门 SpeedPoint 集合 = ['8', '13', '15']
+
+## stack1(c1+c2)：base 单元 23 个（player 单元 260 个）
+  unit 1: atk_power_base(1)->0 hit_gate(8)->3 hit_struck_damage(1)->0
+  unit 2: atk_power_base(1)->0 hit_gate(8)->5 hit_struck_damage(1)->0
+  unit 3: atk_power_base(1)->0 hit_gate(8)->1 hit_struck_damage(1)->0
+  unit 4: atk_power_base(1)->0 hit_gate(15)->0 hit_struck_damage(1)->0 hit_struck_damage2(1)->0
+  unit 5: atk_power_base(1)->0 hit_gate(7)->2 hit_struck_damage(1)->0
+  unit 6: atk_power_base(1)->0 hit_gate(8)->6 hit_struck_damage(1)->0
+  unit 7: atk_power_base(1)->0 hit_gate(7)->0 hit_struck_damage(1)->0
+  unit 8: atk_power_base(1)->0 hit_gate(7)->1 hit_struck_damage(1)->0
+  unit 9: atk_power_base(1)->0 hit_gate(13)->1 hit_struck_damage(1)->0
+  unit 10: atk_power_base(1)->0 hit_gate(7)->2 hit_struck_damage(1)->0
+  unit 11: atk_power_base(1)->0 hit_gate(13)->5 hit_struck_damage(1)->0
+  unit 12: atk_power_base(1)->0 hit_gate(15)->13 hit_struck_damage(1)->0
+  unit 13: atk_power_base(1)->0 hit_gate(13)->9 hit_struck_damage(1)->0
+  unit 14: atk_power_base(1)->0 hit_gate(7)->0 hit_struck_damage(1)->0
+  unit 15: atk_power_base(1)->0 hit_gate(12)->8 hit_struck_damage(1)->0
+  unit 16: atk_power_base(1)->0 hit_gate(13)->8 hit_struck_damage(1)->0
+  unit 17: atk_power_base(1)->0 hit_gate(12)->10 hit_struck_damage(1)->0
+  unit 38: atk_power_base(1)->0 hit_gate(15)->11 hit_struck_damage(1)->0 hit_struck_damage2(1)->0
+  unit 39: atk_power_base(1)->0 hit_gate(7)->2 hit_struck_damage(1)->0
+  unit 136: atk_power_base(1)->0 hit_gate(15)->1 hit_struck_damage(1)->0 hit_struck_damage2(1)->0
+  unit 157: atk_power_base(1)->0 hit_gate(8)->0 hit_struck_damage(1)->0
+  unit 174: atk_power_base(1)->0 hit_gate(15)->10 hit_struck_damage(1)->0 hit_struck_damage2(1)->0
+  unit 183: atk_power_base(1)->0 hit_gate(15)->4 hit_struck_damage(1)->0 hit_struck_damage2(1)->0
+  base 门 SpeedPoint 集合 = ['7', '8', '12', '13', '15']
+
+## 判读
+1. `atk_power_base` = `BaseObject.GetAttackPower`（oracle `src/M2Server/Actor/BaseObject.Base.cs:886`，`Random` 在 :892）。
+2. oracle 里 `PlayObject.GetAttackPower` 是 override（`src/M2Server/Player/PlayObject.cs:2909`）⇒ 玩家攻方必走 2929/2934；
+   只有**非 PlayObject 的 actor**（MonsterObject/NPC 等）才会落到基版 892。
+3. 但夹具 0137 只有两个玩家（attacker/victim，均在 `characters`/`characters_ablity`），**无刷怪/无 NPC**（owner 已核）。
+4. base 单元 target SpeedPoint 集合含 {8,13,15}（多目标）、基版攻方 HitPoint>=13（全过门），
+   与玩家路径的 SpeedPoint=15/HitPoint=5 明显不同 ⇒ 不是夹具里的 attacker/victim。
+5. 计数在「同栈/跨栈」间变化（stack2=16、stack1=23；同卡先前 F-1 会话实测 34）
+   ⇒ 是**进程级并发实体的活动**，不是本夹具 120 击的一部分。
+6. 根因：C# 影子 hook 的 divert 谓词是**调用点级、进程级**（`rng-hook/divert-sites.txt`），
+   覆盖 GameSvr 整个生命周期与所有地图；Rust 侧只在空图 0137 上跑两个玩家 ⇒ 无对应消费者。
+   ⇒ 属**夹具/仪器口径**（m3bag 写集）：专用流需要按会话/actor 收敛（或在比对时只取 player 单元）。
+   本工具已按 unit 首站点把 base 单元单列，跨侧比对只用 player 单元即可（见 04）。
+

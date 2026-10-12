@@ -1,0 +1,33 @@
+# owner 22:35 第 ①/② 条：C# base 单元（非玩家攻方）逐单元读数 —— 解释 hit_gate 19 vs attack_success 3
+
+stack2(cA) 专用流：base 单元 16 个，player 单元 120 个（流内总单元 136，合计 300 抽）
+（编号 = 该单元在专用流里的第几个单元，base 与 player 交错出现。）
+
+  [base] 流内 unit   1: atk_power_base hit_gate hit_struck_damage
+  [base] 流内 unit   2: atk_power_base hit_gate hit_struck_damage
+  [base] 流内 unit   3: atk_power_base hit_gate hit_struck_damage
+  [base] 流内 unit   4: atk_power_base hit_gate hit_struck_damage hit_struck_damage2
+  [base] 流内 unit   5: atk_power_base hit_gate hit_struck_damage
+  [base] 流内 unit   6: atk_power_base hit_gate hit_struck_damage
+  [base] 流内 unit   7: atk_power_base hit_gate hit_struck_damage
+  [base] 流内 unit   8: atk_power_base hit_gate hit_struck_damage
+  [base] 流内 unit  11: atk_power_base hit_gate hit_struck_damage
+  [base] 流内 unit  13: atk_power_base hit_gate hit_struck_damage
+  [base] 流内 unit  22: atk_power_base hit_gate hit_struck_damage
+  [base] 流内 unit  32: atk_power_base hit_gate hit_struck_damage
+  [base] 流内 unit  34: atk_power_base hit_gate hit_struck_damage
+  [base] 流内 unit  43: atk_power_base hit_gate hit_struck_damage hit_struck_damage2
+  [base] 流内 unit 108: atk_power_base hit_gate hit_struck_damage hit_struck_damage2
+  [base] 流内 unit 117: atk_power_base hit_gate hit_struck_damage hit_struck_damage2
+
+站点计数：{'atk_power_base': 16, 'hit_gate': 19, 'hit_struck_damage': 17, 'hit_struck_damage2': 4, 'atk_power_a': 120, 'atk_power_b': 120, 'attack_success': 3, 'struck_durability': 1}
+
+归属拆解：
+  atk_power_base=16 ⇒ 每个 base 单元的首抽（= 非玩家攻方的 GetBaseAttackPoewr，oracle BaseObject.Base.cs:886/:892）
+  hit_gate=19 = base 单元 16 + player 单元 3
+  attack_success=3 = player 有目标击数（AttackSuccess 是 PlayObject 私有，base 单元 0）
+  hit_struck_damage=17 = base 16 + player 1；struck_durability=1 = player 命中数
+
+⇒ 玩家侧 hit_gate(3) == attack_success(3)；owner 看到的「19 → 3」是把 base 单元的门算进了玩家门。
+   base 单元来源 = 并发非玩家实体（快照随会话变化：stack2=16、stack1=23；owner 已核 0137 无刷怪/无 NPC）；
+   与上片 evidence-rng-isolate-streamcompare-20261012/05-base-attacker.txt 同结论，本片只做计数归属，不重复定性。

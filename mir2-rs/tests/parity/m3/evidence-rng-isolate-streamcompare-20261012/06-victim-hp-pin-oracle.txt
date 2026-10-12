@@ -1,0 +1,32 @@
+# item④：`-AttackVictimHp 30000` 为何没抬高 maxhp —— oracle 归因
+
+## 读数（真机）
+- C# stack2(cA) 会话 `sessions/csharp-20261012-215606`：attack_seq `maxhp=19`，bot.log `M3ATTSEQ struck` `maxhp:19`。
+- Rust stack2(rA) 会话 `sessions/rust-20261012-215832`：同为 `maxhp=19`。
+- 两侧 `attack_pose` 逐字节相同：`pair map=0137 attacker=17,20,dir=2 victim=18,20 level=1 vhp=30000`
+  ⇒ 参数确实透传到了（`vhp=30000`），但**没有生效**。
+
+## 夹具做了什么（m3bag 写集）
+- `mir2-rs/tests/parity/m3/gate_guards.ps1:807`（`Get-M3AttackPinSql`）：
+    `UPDATE mir2_db.characters_ablity a JOIN mir2_db.characters c ... SET a.Level={0}, a.Hp={1}, a.MaxHP={1}, ...`
+  ⇒ 把 DB 列 `characters_ablity.Hp/MaxHP` 写成 30000（`{1}` = `-Hp` 缺省 30000）。
+
+## oracle 为什么覆盖它（登录序）
+1. 读档把 DB 值放进 `Abil`/`humanRcd`（`src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Query.cs` 一带）。
+2. 进世界：`AbilCopyToWAbil()` → **`RecalcLevelAbilitys()`** → `RecalcAbilitys()`
+   （`ReCalcAbilitys` 调用点：`src/M2Server/Player/PlayObject.cs:1308-1309`、:5245-5246）。
+3. `RecalcLevelAbilitys()` 对战士**无条件重算** `Abil.MaxHP`（`src/M2Server/Player/PlayObject.cs:5295`）：
+     `Abil.MaxHP = min(65535, 14 + Round(((L / nLevelValueOfWarrHP) + nLevelValueOfWarrHPRate + (L/20)) * L))`
+   缺省 `nLevelValueOfWarrHP=4`、`nLevelValueOfWarrHPRate=4.5`（`src/Modules/SystemModule/Conf/Model/GameSvrConf.cs:1893-1894`）
+   ⇒ `L=1`：`14 + Round(0.25 + 4.5 + 0.05) = 14 + 5 = 19`。
+4. 同函数收尾 `if (Abil.HP > Abil.MaxHP) Abil.HP = Abil.MaxHP;`（`PlayObject.cs:5309-5312`）把 DB 的 `Hp=30000` 夹回 19。
+5. `RecalcAbilitys()` 里 `WAbil.MaxHP = Abil.MaxHP + AddAbil.HP`（`src/M2Server/Player/PlayObject.cs:2900`）；
+   本次无装备、`characters_bonusability` 无该角色行 ⇒ `AddAbil.HP = 0` ⇒ `WAbil.MaxHP = 19`。
+
+## 结论（登记，交 m3bag）
+- `-AttackVictimHp` 写的是**会被登录序重算覆盖**的 DB 列 ⇒ 对 L1 角色**恒被改成 19**。
+- 后果：受害者在 **19 点伤害内死亡**，把「有目标窗口」压到约 19 次命中；
+  Rust 侧 38 门/19 中后目标即死（此后不再过门），这会把「目标解析差」与「死亡驱动差」混在一起。
+- 修法（m3bag 定）：要么抬高 `Level`（改变 MaxHP 公式输入），要么经 `AddAbil.HP` 路径（如 `characters_bonusability`）；
+  直接写 `characters_ablity.Hp/MaxHP` 无效。**本片只登记 + 给读数，不改夹具。**
+

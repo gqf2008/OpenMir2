@@ -1,0 +1,46 @@
+{
+ "seed": 40545,
+ "csharp": "mir2-rs\\tests\\parity\\m3\\attack-request-sequence\\provenance\\csharp-attack-stream-stack1.tsv",
+ "rust": "mir2-rs\\tests\\parity\\m3\\attack-request-sequence\\provenance\\rust-rng-stream-stack1.tsv",
+ "counts": {
+  "csharp": {
+   "draws": 618,
+   "site_counts": {
+    "atk_power_base": 23,
+    "hit_gate": 32,
+    "hit_struck_damage": 26,
+    "hit_struck_damage2": 5,
+    "atk_power_a": 260,
+    "atk_power_b": 260,
+    "attack_success": 9,
+    "struck_durability": 3
+   },
+   "player_units": 260,
+   "base_units": 23
+  },
+  "rust": {
+   "draws": 450,
+   "site_counts": {
+    "atk_power_a": 140,
+    "atk_power_b": 140,
+    "hit_gate": 57,
+    "hit_struck_damage": 28,
+    "struck_durability": 28,
+    "attack_success": 57
+   },
+   "player_units": 140,
+   "base_units": 0
+  }
+ },
+ "first_divergence": {
+  "index_0based": 1,
+  "csharp": "hit_gate(8)->3",
+  "rust": "atk_power_b(10)->4",
+  "class": "base_unit"
+ },
+ "template_violations": [],
+ "verdict": "GREEN",
+ "problems": [
+  "info:player_units_mismatch csharp=260 rust=140（--allow-count-mismatch）"
+ ]
+}

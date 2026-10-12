@@ -1,0 +1,13 @@
+=== M3②③ 两侧每击取数请求序列 ===
+--- csharp: 攻击取数 618（player unit=260, base unit=23）
+    站点计数: {"atk_power_a": 260, "atk_power_b": 260, "atk_power_base": 23, "attack_success": 9, "hit_gate": 32, "hit_struck_damage": 26, "hit_struck_damage2": 5, "struck_durability": 3}
+--- rust: 攻击取数 450（player unit=140, base unit=0）
+    站点计数: {"atk_power_a": 140, "atk_power_b": 140, "attack_success": 57, "hit_gate": 57, "hit_struck_damage": 28, "struck_durability": 28}
+--- 第一处请求分歧（原始专用流逐次）
+    index(0based) = 1  class = base_unit
+    csharp: hit_gate(8)->3
+    rust  : atk_power_b(10)->4
+--- 模板校验（每侧自证）: violations=0
+--- 判读: GREEN  info:player_units_mismatch csharp=260 rust=140（--allow-count-mismatch）
+
+[json] mir2-rs/tests/parity/m3/attack-request-sequence/03-analyze-stack1.json

@@ -1,0 +1,71 @@
+# M3②③ 攻方属性判别（隔离口径）—— 命中门 HitPoint vs RandomByte(SpeedPoint)
+
+来源：02-analyze-stack2.json（stack2 = cA/rA 各自「无冒烟首发 120」）。
+判据（owner 22:15-②）：同一 draw 下比两侧攻方 HitPoint 与受害 SpeedPoint，判定命中模式差是『输入差』还是『draw 差』。
+
+--- csharp（mir2-rs\tests\parity\m3\evidence-rng-isolate-streamcompare-20261012\provenance\csharp-attack-stream-stack2.tsv）
+player 攻击单元=120（总单元=136, base=16）; 到达命中门的攻击=3（hit=1, miss=2）
+命中门 oracle：src/M2Server/Actor/BaseObject.Attack.cs:37-44 `_Attack`：
+    if (IsProperTarget(targetObject)) { if (targetObject.HitPoint > 0) { if (HitPoint < M2Server.RandomNumber.RandomByte(targetObject.SpeedPoint)) nPower = 0; } } else nPower = 0;
+  ⇒ 命中 ⇔ draw <= HitPoint；未命中 ⇔ draw > HitPoint
+  SpeedPoint 输入集合 = [15]（两侧相同 ⇒ 输入对齐）
+  逐门读数 (unit, SpeedPoint, draw, hit)：
+    {"speed_point": 15, "draw": 10, "hit": false}
+    {"speed_point": 15, "draw": 4, "hit": true}
+    {"speed_point": 15, "draw": 11, "hit": false}
+  ⇒ HitPoint 一致区间 = [4, 10)  consistent=True
+
+--- rust（mir2-rs\tests\parity\m3\evidence-rng-isolate-streamcompare-20261012\provenance\rust-rng-stream-stack2.tsv）
+player 攻击单元=120（总单元=120, base=0）; 到达命中门的攻击=38（hit=19, miss=19）
+命中门 oracle：src/M2Server/Actor/BaseObject.Attack.cs:37-44 `_Attack`：
+    if (IsProperTarget(targetObject)) { if (targetObject.HitPoint > 0) { if (HitPoint < M2Server.RandomNumber.RandomByte(targetObject.SpeedPoint)) nPower = 0; } } else nPower = 0;
+  ⇒ 命中 ⇔ draw <= HitPoint；未命中 ⇔ draw > HitPoint
+  SpeedPoint 输入集合 = [15]（两侧相同 ⇒ 输入对齐）
+  逐门读数 (unit, SpeedPoint, draw, hit)：
+    {"speed_point": 15, "draw": 3, "hit": true}
+    {"speed_point": 15, "draw": 1, "hit": true}
+    {"speed_point": 15, "draw": 5, "hit": true}
+    {"speed_point": 15, "draw": 0, "hit": true}
+    {"speed_point": 15, "draw": 1, "hit": true}
+    {"speed_point": 15, "draw": 6, "hit": false}
+    {"speed_point": 15, "draw": 6, "hit": false}
+    {"speed_point": 15, "draw": 11, "hit": false}
+    {"speed_point": 15, "draw": 10, "hit": false}
+    {"speed_point": 15, "draw": 2, "hit": true}
+    {"speed_point": 15, "draw": 7, "hit": false}
+    {"speed_point": 15, "draw": 3, "hit": true}
+    {"speed_point": 15, "draw": 11, "hit": false}
+    {"speed_point": 15, "draw": 1, "hit": true}
+    {"speed_point": 15, "draw": 11, "hit": false}
+    {"speed_point": 15, "draw": 8, "hit": false}
+    {"speed_point": 15, "draw": 8, "hit": false}
+    {"speed_point": 15, "draw": 4, "hit": true}
+    {"speed_point": 15, "draw": 7, "hit": false}
+    {"speed_point": 15, "draw": 6, "hit": false}
+    {"speed_point": 15, "draw": 3, "hit": true}
+    {"speed_point": 15, "draw": 3, "hit": true}
+    {"speed_point": 15, "draw": 6, "hit": false}
+    {"speed_point": 15, "draw": 1, "hit": true}
+    {"speed_point": 15, "draw": 13, "hit": false}
+    {"speed_point": 15, "draw": 1, "hit": true}
+    {"speed_point": 15, "draw": 1, "hit": true}
+    {"speed_point": 15, "draw": 4, "hit": true}
+    {"speed_point": 15, "draw": 6, "hit": false}
+    {"speed_point": 15, "draw": 13, "hit": false}
+    {"speed_point": 15, "draw": 13, "hit": false}
+    {"speed_point": 15, "draw": 12, "hit": false}
+    {"speed_point": 15, "draw": 3, "hit": true}
+    {"speed_point": 15, "draw": 4, "hit": true}
+    {"speed_point": 15, "draw": 11, "hit": false}
+    {"speed_point": 15, "draw": 4, "hit": true}
+    {"speed_point": 15, "draw": 11, "hit": false}
+    {"speed_point": 15, "draw": 2, "hit": true}
+  ⇒ HitPoint 一致区间 = [5, 6)  consistent=True
+
+## 结论
+- SpeedPoint 输入：两侧都只有 15（受害 SpeedPoint 相同）⇒ **无输入差**。
+- HitPoint：Rust 严格反解为 [5,6) ⇒ HitPoint=5；C# 只有 3 个门样本，区间 [4,10) 含 5，与 5 不冲突。
+  ⇒ **命中门本身两侧等价**（同公式、同输入、同判定）。
+- 真正的分岔在**到达命中门的攻击数**：Rust 38/120 vs C# 3/120；
+  即「有目标且目标 HP>0」的入口不同（目标解析/Dir 语义），非命中门公式差。
+- stack1 交叉印证：Rust [5,6)（57 门/28 中）、C# [3,7)（9 门/3 中），均含 5。

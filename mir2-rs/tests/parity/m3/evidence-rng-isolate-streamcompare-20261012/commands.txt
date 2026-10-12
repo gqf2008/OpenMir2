@@ -1,0 +1,37 @@
+# M3②③ 隔离流逐次比对 —— 复现命令（2026-10-12，m3cs / openmir2-worker-5）
+
+全部为**离线**命令（零端口、零栈），在一份干净检出上可直接重放。
+
+```sh
+# 0) 工具牙齿（改坏必红：值/请求序列/HitPoint 区间）
+python -I mir2-rs/tests/parity/m3/rng-isolate-attack/compare_dedicated_streams.py selftest
+
+# 1) stack2（干净对照 cA vs rA，各「无冒烟首发 120」）——主口径
+python -I mir2-rs/tests/parity/m3/rng-isolate-attack/compare_dedicated_streams.py analyze \
+  --csharp mir2-rs/tests/parity/m3/evidence-rng-isolate-streamcompare-20261012/provenance/csharp-attack-stream-stack2.tsv \
+  --rust   mir2-rs/tests/parity/m3/evidence-rng-isolate-streamcompare-20261012/provenance/rust-rng-stream-stack2.tsv \
+  --json   mir2-rs/tests/parity/m3/evidence-rng-isolate-streamcompare-20261012/02-analyze-stack2.json
+
+# 2) stack1（含 20 击冒烟，c1+c2 vs r1）——交叉印证
+python -I mir2-rs/tests/parity/m3/rng-isolate-attack/compare_dedicated_streams.py analyze \
+  --csharp mir2-rs/tests/parity/m3/evidence-rng-isolate-streamcompare-20261012/provenance/csharp-attack-stream-stack1.tsv \
+  --rust   mir2-rs/tests/parity/m3/evidence-rng-isolate-streamcompare-20261012/provenance/rust-rng-stream-stack1.tsv \
+  --json   mir2-rs/tests/parity/m3/evidence-rng-isolate-streamcompare-20261012/03-analyze-stack1.json
+
+# 3) 证据 hash 复核（仓库字节口径）
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra \
+  mir2-rs/tests/parity/m3/evidence-rng-isolate-streamcompare-20261012
+```
+
+## 原始件来源（两个真机栈，2026-10-12 晚，C# 半 = 夹具 commit 7d3fb333）
+
+- C# stack1 专用流 = `E:/tmp/m3cs-iso2/csharp/rng-attack-stream.tsv`
+  （bytes=47488，sha256=`dcee2da7e91724351e7395e36a3177faa1ead88c7fd88a7228365f866848300d`）
+- C# stack2 专用流 = `E:/tmp/m3cs-iso2/csharp2/rng-attack-stream.tsv`
+  （bytes=23091，sha256=`2de967615d9cf4152ae4d24524d3403f9c9cb6460c8db9bb9891fc22d34f9c61`）
+- Rust stack1 流水 = `E:/tmp/m3cs-iso2/rust/rng-stream.tsv`
+  （bytes=22862，sha256=`5c2fb03629710922d26c863195de7c64b1010381b4d07c65d1fc424d63791ece`）
+- Rust stack2 流水 = `E:/tmp/m3cs-iso2/rust2/rng-stream.tsv`
+  （bytes=18070，sha256=`ffd50c5ac2396b0a6242ada41a23a7a9f4651bd2a0f3d5d184cedf66c8dbff23`）
+
+四个原件**都已在 `provenance/` 入库**（小文件），可脱离 `E:/tmp` 复算。

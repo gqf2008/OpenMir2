@@ -1,0 +1,5 @@
+=== fmt ===
+fmt rc=0
+=== clippy ===
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.43s
+clippy rc=0

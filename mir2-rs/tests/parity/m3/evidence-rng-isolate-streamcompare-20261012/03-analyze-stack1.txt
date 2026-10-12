@@ -1,0 +1,21 @@
+=== M3 隔离口径 · 两侧攻击路径专用流逐次比对 ===
+attack_seed = 40545
+
+--- csharp: mir2-rs\tests\parity\m3\evidence-rng-isolate-streamcompare-20261012\provenance\csharp-attack-stream-stack1.tsv
+  取数条数 = 618（站点计数：{'atk_power_base': 23, 'hit_gate': 32, 'hit_struck_damage': 26, 'hit_struck_damage2': 5, 'atk_power_a': 260, 'atk_power_b': 260, 'attack_success': 9, 'struck_durability': 3}）
+  自复算 mismatch = 0（>0 ⇒ 该侧流水不是 Random(40545) 的忠实记录）
+  攻击单元 = 283（player=260, base=23）
+  player 命中门：gates=9 hits=3 misses=6；SpeedPoint=[15]；HitPoint ∈ [3, 7)
+
+--- rust: mir2-rs\tests\parity\m3\evidence-rng-isolate-streamcompare-20261012\provenance\rust-rng-stream-stack1.tsv
+  取数条数 = 450（站点计数：{'atk_power_a': 140, 'atk_power_b': 140, 'hit_gate': 57, 'hit_struck_damage': 28, 'struck_durability': 28, 'attack_success': 57}）
+  自复算 mismatch = 0（>0 ⇒ 该侧流水不是 Random(40545) 的忠实记录）
+  攻击单元 = 140（player=140, base=0）
+  player 命中门：gates=57 hits=28 misses=29；SpeedPoint=[15]；HitPoint ∈ [5, 6)
+
+--- 请求序列第一处分歧
+  index = 2
+  csharp: Entry(Next(max),8->3,hit_gate)
+  rust  : Entry(Next(max),10->4,atk_power_b)
+
+[json] mir2-rs/tests/parity/m3/evidence-rng-isolate-streamcompare-20261012/03-analyze-stack1.json
