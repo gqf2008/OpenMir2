@@ -309,7 +309,7 @@ namespace BotSrv.Player
                     //SendClientMessage(Messages.CM_HIDEDEATHBODY, MShare.g_MySelf.m_nRecogId, (int)MShare.g_gcGeneral[8], 0, 0);
                     // SM_LOGON = 服务端确认进世界 ⇒ 武装动作探针（并计入 tick 覆盖率分子）；
                     // x/y 取这条消息里的落点（PlayScene 的 SM_LOGON 分支用的就是 msg.Param/msg.Tag）。
-                    MarkInWorld(msg.Param, msg.Tag);
+                    MarkInWorld(msg.Recog, msg.Param, msg.Tag);
                     MainOutMessage("成功进入游戏");
                     MainOutMessage("-----------------------------------------------");
                     break;
@@ -650,7 +650,7 @@ namespace BotSrv.Player
                     // ActorId, HP, MaxHP, wParam) 的 series），`Tag1`=命中者 ActorId。默认关时空转。
                     if (MShare.g_boAttackSequence)
                     {
-                        MainOutMessage($"M3ATTSEQ {{\"role\":\"struck\",\"dmg\":{msg.Series},\"hp\":{msg.Param},\"maxhp\":{msg.Tag},\"src\":{wl.Tag1},\"actor\":{msg.Recog}}}");
+                        MainOutMessage($"M3ATTSEQ {{\"role\":\"struck\",\"dmg\":{msg.Series},\"hp\":{msg.Param},\"maxhp\":{msg.Tag},\"src\":{wl.Tag1},\"actor\":{msg.Recog},\"my\":{_myActorId}}}");
                     }
                     Actor = PlayScene.FindActor(msg.Recog);
                     if (Actor != null)

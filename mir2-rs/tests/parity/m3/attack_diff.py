@@ -20,10 +20,13 @@
 
   align <raw.jsonl> --out <seq.jsonl>
       把一条侧运行的原始事件流**按「第 k 次」对齐**成逐次结果：
-      遍历事件流，`role=attack` 更新 `current_k`；`role=struck` 且 `src == my` 归到最近一次
-      尚未消费的 `k`（= hit，记 `dmg`）。`k` 无 struck ⇒ dodge（`dmg=0`）。
-      输出每行 `{"k":k,"hit":bool,"dmg":int,"hp":int,"maxhp":int}`。
-      末尾附一行 `{"role":"summary","attacked":N,"hits":H,"dodges":D,"sum":S}`。
+      遍历事件流，`role=attack` 更新 `current_k`；`role=struck` 归到最近一次 `k`（= hit，记 `dmg`），
+      但**必须** `struck.src == attack.my`（命中者 = 攻击方），且同一 `(src,actor,dmg,hp,maxhp)`
+      事件键只消费一次（同一击被多视角/多次投递重复落库 ⇒ 去重，不累加）。`k` 无 struck ⇒
+      dodge（`dmg=0`）。输出每行 `{"k":k,"hit":bool,"dmg":int,"hp":int,"maxhp":int}`。
+      末尾附一行 `{"role":"summary",...}`（含计数 filtered_foreign/other_observer/deduped）。
+      **fail-closed（owner 2026-10-12 17:35，残差③）**：`attack` 行缺 `my` ⇒ 直接 rc=2 报错，
+      **绝不**静默降级成「不过滤」（旧实现就是这么把同一击算两次的）。
 
   diff <a_seq.jsonl> <b_seq.jsonl>
       跨侧逐项比对（**判据本体**）：
@@ -88,12 +91,40 @@ def read_raw(path):
     return events
 
 
+class FailClosed(Exception):
+    """判据层的 fail-closed（**不许**把缺字段静默降级成「不过滤」）。
+
+    背景（owner 2026-10-12 17:35，残差③）：夹具的 `role=attack` 行曾缺 `my` 字段，
+    旧实现 `my = ev.get("my", my)` 得到 `None` 后 `src == my` 这层过滤**静默失效**，
+    align 会把「别人打我的」`SM_STRUCK` 也算成我方命中，并因 victim/attacker 两个假人
+    各落一遍而产生重复计数。⇒ 缺字段直接报错，不再静默继续。
+    """
+
+
+def _require_actor_id(ev, role, key):
+    val = ev.get(key)
+    if not isinstance(val, int):
+        raise FailClosed(
+            "%s 行缺 %s 字段（需为 int ActorId）——拒绝静默降级为「不过滤」：%s"
+            % (role, key, json.dumps(ev, ensure_ascii=False)))
+    return int(val)
+
+
 def align_events(events):
-    """把事件流对齐成逐次结果 + 统计。返回 (rows, summary)。
+    """把事件流对齐成逐次结果 + 统计。返回 (rows, summary)；缺关键字段抛 FailClosed（rc=2）。
 
     归属规则（唯一口径，写进报告）：按**文件序**消费——`role=attack` 推进 `current_k`；
-    `role=struck` 归给当前 `current_k`（且只认 `src == my`，即本假人自己打出的）。
-    `current_k` 为 None（还没发第一步）时出现的 struck 丢弃（不计入任何 k）。
+    `role=struck` 归给当前 `current_k`，且必须同时满足：
+
+      * `struck.src == attack.my`：**命中者就是攻击方**（排除怪/别人打我这名 attacker 的帧）。
+      * 同一 `(src, actor, dmg, hp, maxhp)` 只消费一次：同一击会被**多个视角**/多次投递重复落库——
+        C# 栈向 attacker 与 victim 两个假人都发、还各发两遍（真机 `bots-*.log` 的 `机器人:[id]`
+        前缀可证），Rust 栈只向 victim 发一遍。⇒ 按事件键全局去重，不按观察者过滤
+        （否则 Rust 侧会被全滤掉）。`struck.my`（观察者自身 ActorId）只用于统计
+        `other_observer`（victim 视角帧数），不参与过滤。
+
+    `attack` 行缺 `my` ⇒ **FailClosed**（rc=2），绝不静默放行；`struck` 缺 `src` 同样报错。
+    `current_k` 为 None（还没发第一步）时出现的 struck 丢弃并计数（不计入任何 k）。
 
     F-F（option ③）：`death_k` = 首个命中后 `hp<=0` 的 k（受害者死亡）；两侧必须死在同一个 k，
     死亡后的步（无 struck）算 dodge（hit=False/dmg=0），同样逐项比对 ⇒ 死亡被**显式建模**而非忽略。
@@ -101,29 +132,51 @@ def align_events(events):
     by_k = {}
     current_k = None
     my = None
+    seen_frames = set()
+    stats = {"foreign": 0, "other_observer": 0, "dedup": 0, "unattributed": 0}
     for ev in events:
         role = ev.get("role")
         if role == "attack":
             k = ev.get("k")
             if not isinstance(k, int) or k <= 0:
                 continue
+            here = _require_actor_id(ev, "attack", "my")
+            if my is None:
+                my = here
+            elif here != my:
+                raise FailClosed("attack 行的 my 不一致（先 %s 后 %s）——同一序列只能有一个施击者" % (my, here))
             current_k = k
-            my = ev.get("my", my)
             by_k.setdefault(k, {"k": k, "hit": False, "dmg": 0, "hp": 0, "maxhp": 0})
         elif role == "struck":
             if current_k is None:
+                stats["unattributed"] += 1
                 continue
-            if my is not None and ev.get("src") is not None and ev.get("src") != my:
-                # 别人打的（不是本假人发出的攻击）——不计入本次序列。
+            src = _require_actor_id(ev, "struck", "src")
+            if src != my:
+                # 别人打的（怪/第三方打我这名 attacker）——不计入本次序列。
+                stats["foreign"] += 1
                 continue
-            row = by_k.setdefault(current_k, {"k": current_k, "hit": False, "dmg": 0, "hp": 0, "maxhp": 0})
+            obs = ev.get("my")
+            if isinstance(obs, int) and obs != my:
+                # victim 假人视角的同一击（观察者不是攻击方）——仅统计，随后由事件键去重归并。
+                stats["other_observer"] += 1
             dmg = ev.get("dmg")
             dmg = int(dmg) if isinstance(dmg, (int, float)) else 0
-            # 同一个 k 收到多帧 struck（罕见）：累加伤害，取最后一帧的 HP。
+            hp = int(ev.get("hp", 0) or 0)
+            maxhp = int(ev.get("maxhp", 0) or 0)
+            key = (src, ev.get("actor"), dmg, hp, maxhp)
+            if key in seen_frames:
+                # 同一击的重复投递/多视角帧 —— 精确重复，去重不累加。
+                stats["dedup"] += 1
+                continue
+            seen_frames.add(key)
+            row = by_k.setdefault(current_k, {"k": current_k, "hit": False, "dmg": 0, "hp": 0, "maxhp": 0})
             row["dmg"] += dmg
             row["hit"] = True
-            row["hp"] = int(ev.get("hp", 0) or 0)
-            row["maxhp"] = int(ev.get("maxhp", 0) or 0)
+            row["hp"] = hp
+            row["maxhp"] = maxhp
+    if my is None:
+        raise FailClosed("事件流里没有任何可用的 role=attack 行（无法确定施击者 my）")
     rows = [by_k[k] for k in sorted(by_k.keys())]
     hits = sum(1 for r in rows if r["hit"])
     death_k, min_hp = death_stats(rows)
@@ -135,6 +188,10 @@ def align_events(events):
         "sum": sum(r["dmg"] for r in rows),
         "death_k": death_k,
         "min_hp": min_hp,
+        "filtered_foreign": stats["foreign"],
+        "other_observer": stats["other_observer"],
+        "deduped": stats["dedup"],
+        "unattributed": stats["unattributed"],
     }
     return rows, summary
 
@@ -210,14 +267,20 @@ def cmd_align(args):
     events = read_raw(args.raw)
     if not events:
         return _die("PREREQ_MISSING: %s 里没有 M3ATTSEQ 事件（驱动没跑/开关没开）" % args.raw)
-    rows, summary = align_events(events)
+    try:
+        rows, summary = align_events(events)
+    except FailClosed as exc:
+        return _die("FAIL_CLOSED: %s" % exc)
     out = args.out or (os.path.splitext(args.raw)[0] + ".seq.jsonl")
     with open(out, "w", encoding="utf-8", newline="\n") as fh:
         for r in rows:
             fh.write(json.dumps(r, ensure_ascii=False) + "\n")
         fh.write(json.dumps(summary, ensure_ascii=False) + "\n")
-    print("ALIGN_OK %s attacked=%d hits=%d dodges=%d sum=%d" %
-          (out, summary["attacked"], summary["hits"], summary["dodges"], summary["sum"]))
+    print("ALIGN_OK %s attacked=%d hits=%d dodges=%d sum=%d "
+          "(filtered_foreign=%d other_observer=%d deduped=%d unattributed=%d)" %
+          (out, summary["attacked"], summary["hits"], summary["dodges"], summary["sum"],
+           summary["filtered_foreign"], summary["other_observer"], summary["deduped"],
+           summary["unattributed"]))
     return 0
 
 
@@ -318,7 +381,7 @@ def _mk_events(n, my, base_dmg):
         events.append({"role": "attack", "k": k, "op": "CM_HIT", "x": 289, "y": 618, "dir": 2, "my": my})
         # 第 3 次故意 miss（无 struck），其余命中。
         if k != 3:
-            events.append({"role": "struck", "dmg": base_dmg + (k % 5), "hp": 100 - k, "maxhp": 100, "src": my, "actor": 55})
+            events.append({"role": "struck", "dmg": base_dmg + (k % 5), "hp": 100 - k, "maxhp": 100, "src": my, "actor": 55, "my": my})
     events.append({"role": "done", "attacks": n})
     return events
 
@@ -412,7 +475,7 @@ def cmd_selftest(args):
     for k in range(1, 11):
         death_events.append({"role": "attack", "k": k, "op": "CM_HIT", "x": 1, "y": 1, "dir": 2, "my": 101})
         if k <= 7:
-            death_events.append({"role": "struck", "dmg": 3, "hp": max(0, 21 - 3 * k), "maxhp": 19, "src": 101, "actor": 55})
+            death_events.append({"role": "struck", "dmg": 3, "hp": max(0, 21 - 3 * k), "maxhp": 19, "src": 101, "actor": 55, "my": 101})
     death_events.append({"role": "done", "attacks": 10})
     draw = os.path.join(tmp, "death.raw.jsonl")
     _write_raw(draw, death_events)
@@ -463,6 +526,65 @@ def cmd_selftest(args):
     rc = cmd_pin_attempts(argparse.Namespace(log=os.path.join(tmp, "pin-nope.txt"), expected=2, max_attempts=5))
     check("k-pin-missing-prereq", rc == 2, "rc=%d" % rc)
 
+    # (l) 残差③ fail-closed：attack 行缺 `my` ⇒ align 必须报错（rc=2），不许静默降级成「不过滤」
+    raw_nomy = os.path.join(tmp, "nomy.raw.jsonl")
+    _write_raw(raw_nomy, [
+        {"role": "attack", "k": 1, "op": "CM_HIT", "x": 1, "y": 1, "dir": 2},
+        {"role": "struck", "dmg": 5, "hp": 10, "maxhp": 20, "src": 101, "actor": 202, "my": 101},
+    ])
+    try:
+        align_events(read_raw(raw_nomy))
+        rc_l = 0
+    except FailClosed:
+        rc_l = 2
+    check("l-attack-missing-my-failclosed", rc_l == 2, "rc=%d" % rc_l)
+    # 生产入口 status-code 口径：cmd_align 也必须 rc=2（不是 0/1）
+    rc_lc = cmd_align(argparse.Namespace(raw=raw_nomy, out=os.path.join(tmp, "nomy.seq.jsonl")))
+    check("l-attack-missing-my-cmdalign-rc2", rc_lc == 2, "rc=%d" % rc_lc)
+
+    # (n) struck 行缺 `my`（观察者身份）**不是**错误：去重靠事件键，不靠观察者身份
+    #     （Rust 栈只向 victim 发帧、其 attacker 永远收不到 struck ⇒ 不能按 obs==my 过滤）。
+    raw_nomy2 = os.path.join(tmp, "nomy2.raw.jsonl")
+    _write_raw(raw_nomy2, [
+        {"role": "attack", "k": 1, "op": "CM_HIT", "x": 1, "y": 1, "dir": 2, "my": 101},
+        {"role": "struck", "dmg": 5, "hp": 10, "maxhp": 20, "src": 101, "actor": 202},
+    ])
+    n_rows, n_sum = align_events(read_raw(raw_nomy2))
+    check("n-struck-no-my-still-aligns", n_sum["hits"] == 1 and n_sum["sum"] == 5, str(n_sum))
+
+    # (o) 没有任何 attack 行 ⇒ fail-closed（无法确定施击者 my）
+    raw_onlystruck = os.path.join(tmp, "onlystruck.raw.jsonl")
+    _write_raw(raw_onlystruck, [
+        {"role": "struck", "dmg": 5, "hp": 10, "maxhp": 20, "src": 101, "actor": 202, "my": 101},
+    ])
+    try:
+        align_events(read_raw(raw_onlystruck))
+        rc_o = 0
+    except FailClosed:
+        rc_o = 2
+    check("o-no-attack-row-failclosed", rc_o == 2, "rc=%d" % rc_o)
+
+    # (m) `my` 口径：外来(怪)帧被过滤 + victim/attacker 多视角与重复投递的同帧按事件键去重
+    raw_my = os.path.join(tmp, "my.raw.jsonl")
+    _write_raw(raw_my, [
+        {"role": "attack", "k": 1, "op": "CM_HIT", "x": 1, "y": 1, "dir": 2, "my": 101},
+        {"role": "struck", "dmg": 5, "hp": 10, "maxhp": 20, "src": 101, "actor": 202, "my": 202},  # victim 视角
+        {"role": "struck", "dmg": 5, "hp": 10, "maxhp": 20, "src": 101, "actor": 202, "my": 101},  # attacker 视角
+        {"role": "struck", "dmg": 5, "hp": 10, "maxhp": 20, "src": 101, "actor": 202, "my": 101},  # 同帧重复投递
+        {"role": "struck", "dmg": 2, "hp": 8, "maxhp": 20, "src": 999, "actor": 101, "my": 101},   # 怪打 attacker
+        {"role": "attack", "k": 2, "op": "CM_HIT", "x": 1, "y": 1, "dir": 2, "my": 101},
+        {"role": "struck", "dmg": 5, "hp": 5, "maxhp": 20, "src": 101, "actor": 202, "my": 101},
+    ])
+    m_rows, m_sum = align_events(read_raw(raw_my))
+    check("m-my-hits-sum", m_sum["hits"] == 2 and m_sum["sum"] == 10, str(m_sum))
+    check("m-victim-view-counted-not-filtered", m_sum["other_observer"] == 1, str(m_sum))
+    check("m-foreign-hit-filtered", m_sum["filtered_foreign"] == 1, str(m_sum))
+    check("m-duplicate-frames-deduped", m_sum["deduped"] == 2, str(m_sum))
+    check("m-hp-tracks-event", m_rows[0]["hp"] == 10 and m_rows[1]["hp"] == 5, str(m_rows))
+
+    # (l2) 旧实现回归反例：若把「不过滤」写回来（my 缺失时继续累计），m 用例会多算
+    #      —— 这里直接断言「同一击在两视角+重复帧下 hits 必须 == 2（不是 3/4）」，已由 m 覆盖。
+
     # 清理
     for name in os.listdir(tmp):
         try:
@@ -476,6 +598,8 @@ def cmd_selftest(args):
         return 1
     print("SELFTEST GREEN: attack_diff selftest %d/%d（align 窗口归属 + 同序列绿 + 改坏 dmg/hit 必红 + "
           "全 0 非平凡门 + 空序列 + 长度不等 + 死亡容忍/死亡时点/HP 逐项比（F-F option ③） + "
+          "my 口径（残差③：attack 行缺 my ⇒ fail-closed rc=2；外来命中过滤；"
+          "多视角/重复投递同帧按事件键去重） + "
           "pin_attempts 复算（干净=绿 / 多一次重试=红 / 缺 PIN_HOLD=PREREQ））" % (len(checks), len(checks)))
     return 0
 

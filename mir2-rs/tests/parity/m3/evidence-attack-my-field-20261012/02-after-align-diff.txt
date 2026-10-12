@@ -1,0 +1,97 @@
+# 修后（本 patch 的 attack_diff.py，含 my：attack 行 fail-closed + src==my 过滤 + 事件键去重）
+# 原始件 = rebuild_attack_my.py 从 BotSrv 合并日志（带 机器人:[id] 前缀）还原 my 后的 attack_raw.jsonl
+$ python rebuild_attack_my.py src-logs/bots-20261012-170149-csharp.txt sessions/csharp-20261012-170110/attack_raw.jsonl
+$ python rebuild_attack_my.py src-logs/bots-20261012-172029-rust.txt sessions/rust-20261012-171957/attack_raw.jsonl
+REBUILD_OK mir2-rs/tests/parity/m3/evidence-attack-my-field-20261012/sessions/csharp-20261012-170110/attack_raw.jsonl attacker_login=m2svrk2c10 attacker_actor=1808018587 observers={"m2svrk2c10": 1808018587, "m2svrk2c11": 1081367641} attacks=120 struck=4
+REBUILD_OK mir2-rs/tests/parity/m3/evidence-attack-my-field-20261012/sessions/rust-20261012-171957/attack_raw.jsonl attacker_login=m2svrk2r20 attacker_actor=3 observers={"m2svrk2r20": 3, "m2svrk2r21": 4} attacks=120 struck=19
+$ python attack_diff.py align .../csharp-20261012-170110/attack_raw.jsonl --out .../attack_seq.jsonl
+$ python attack_diff.py align .../rust-20261012-171957/attack_raw.jsonl --out .../attack_seq.jsonl
+ALIGN_OK mir2-rs/tests/parity/m3/evidence-attack-my-field-20261012/sessions/csharp-20261012-170110/attack_seq.jsonl attacked=120 hits=1 dodges=119 sum=1 (filtered_foreign=0 other_observer=2 deduped=3 unattributed=0)
+ALIGN_OK mir2-rs/tests/parity/m3/evidence-attack-my-field-20261012/sessions/rust-20261012-171957/attack_seq.jsonl attacked=120 hits=19 dodges=101 sum=19 (filtered_foreign=0 other_observer=19 deduped=0 unattributed=0)
+$ python attack_diff.py diff .../csharp.../attack_seq.jsonl .../rust.../attack_seq.jsonl --max-diffs 200
+NONTRIVIAL a=True() b=True()
+RED: 跨侧攻击序列差异 83 项（差异要么修到 0，要么按 §6.0-3 登记 tests/parity/whitelist.md）
+  - k=1 hit 不等: a=False b=True
+  - k=1 dmg 不等: a=0 b=1
+  - k=1 hp 不等: a=0 b=18
+  - k=1 maxhp 不等: a=0 b=19
+  - k=2 hit 不等: a=False b=True
+  - k=2 dmg 不等: a=0 b=1
+  - k=2 hp 不等: a=0 b=17
+  - k=2 maxhp 不等: a=0 b=19
+  - k=3 hit 不等: a=True b=False
+  - k=3 dmg 不等: a=1 b=0
+  - k=3 hp 不等: a=17 b=0
+  - k=3 maxhp 不等: a=19 b=0
+  - k=4 hit 不等: a=False b=True
+  - k=4 dmg 不等: a=0 b=1
+  - k=4 hp 不等: a=0 b=16
+  - k=4 maxhp 不等: a=0 b=19
+  - k=5 hit 不等: a=False b=True
+  - k=5 dmg 不等: a=0 b=1
+  - k=5 hp 不等: a=0 b=15
+  - k=5 maxhp 不等: a=0 b=19
+  - k=7 hit 不等: a=False b=True
+  - k=7 dmg 不等: a=0 b=1
+  - k=7 hp 不等: a=0 b=14
+  - k=7 maxhp 不等: a=0 b=19
+  - k=9 hit 不等: a=False b=True
+  - k=9 dmg 不等: a=0 b=1
+  - k=9 hp 不等: a=0 b=13
+  - k=9 maxhp 不等: a=0 b=19
+  - k=10 hit 不等: a=False b=True
+  - k=10 dmg 不等: a=0 b=1
+  - k=10 hp 不等: a=0 b=12
+  - k=10 maxhp 不等: a=0 b=19
+  - k=11 hit 不等: a=False b=True
+  - k=11 dmg 不等: a=0 b=1
+  - k=11 hp 不等: a=0 b=11
+  - k=11 maxhp 不等: a=0 b=19
+  - k=13 hit 不等: a=False b=True
+  - k=13 dmg 不等: a=0 b=1
+  - k=13 hp 不等: a=0 b=10
+  - k=13 maxhp 不等: a=0 b=19
+  - k=15 hit 不等: a=False b=True
+  - k=15 dmg 不等: a=0 b=1
+  - k=15 hp 不等: a=0 b=9
+  - k=15 maxhp 不等: a=0 b=19
+  - k=16 hit 不等: a=False b=True
+  - k=16 dmg 不等: a=0 b=1
+  - k=16 hp 不等: a=0 b=8
+  - k=16 maxhp 不等: a=0 b=19
+  - k=20 hit 不等: a=False b=True
+  - k=20 dmg 不等: a=0 b=1
+  - k=20 hp 不等: a=0 b=7
+  - k=20 maxhp 不等: a=0 b=19
+  - k=21 hit 不等: a=False b=True
+  - k=21 dmg 不等: a=0 b=1
+  - k=21 hp 不等: a=0 b=6
+  - k=21 maxhp 不等: a=0 b=19
+  - k=25 hit 不等: a=False b=True
+  - k=25 dmg 不等: a=0 b=1
+  - k=25 hp 不等: a=0 b=5
+  - k=25 maxhp 不等: a=0 b=19
+  - k=29 hit 不等: a=False b=True
+  - k=29 dmg 不等: a=0 b=1
+  - k=29 hp 不等: a=0 b=4
+  - k=29 maxhp 不等: a=0 b=19
+  - k=30 hit 不等: a=False b=True
+  - k=30 dmg 不等: a=0 b=1
+  - k=30 hp 不等: a=0 b=3
+  - k=30 maxhp 不等: a=0 b=19
+  - k=32 hit 不等: a=False b=True
+  - k=32 dmg 不等: a=0 b=1
+  - k=32 hp 不等: a=0 b=2
+  - k=32 maxhp 不等: a=0 b=19
+  - k=33 hit 不等: a=False b=True
+  - k=33 dmg 不等: a=0 b=1
+  - k=33 hp 不等: a=0 b=1
+  - k=33 maxhp 不等: a=0 b=19
+  - k=36 hit 不等: a=False b=True
+  - k=36 dmg 不等: a=0 b=1
+  - k=36 maxhp 不等: a=0 b=19
+  - 统计 hits 不等: a=1 b=19
+  - 统计 dodges 不等: a=119 b=101
+  - 统计 sum 不等: a=1 b=19
+  - 统计 death_k 不等: a=None b=36
+AFTER_RC=1

@@ -1,0 +1,41 @@
+# M3②③ 攻击对拍：my 字段（残差③）+ 同种子抽数账本（残差①）· 命令留档
+# base = refs/heads/master 324a182b1c6061ac2f7a42f85752bba6fd6ea426
+# 本片零 .rs、默认关路径不变；未起栈、未占端口。
+
+## 0) 环境说明
+# 本机 Windows PowerShell 5.1 缺 Get-FileHash（Test-M3MonGenEmpty 会抛 CommandNotFoundException）；
+# 自检用 PowerShell 7（pwsh）跑。
+"C:\Program Files\PowerShell\7\pwsh" -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 -SelfCheckNoStack   # -> 05-...
+
+## 1) 残差③ 修前（旧 align，HEAD 版 attack_diff.py）
+git show 324a182b:mir2-rs/tests/parity/m3/attack_diff.py > before-attack_diff.py.txt
+python before-attack_diff.py.txt align sessions/csharp-20261012-170110/attack_raw.orig.jsonl --out /tmp/before-csharp.seq.jsonl
+python before-attack_diff.py.txt align sessions/rust-20261012-171957/attack_raw.orig.jsonl    --out /tmp/before-rust.seq.jsonl
+python before-attack_diff.py.txt diff /tmp/before-csharp.seq.jsonl /tmp/before-rust.seq.jsonl --max-diffs 200   # -> 01-...（80 项）
+
+## 2) 残差③ 修后（rebuild my + 新 align/diff）
+python mir2-rs/tests/parity/m3/rebuild_attack_my.py src-logs/bots-20261012-170149-csharp.txt sessions/csharp-20261012-170110/attack_raw.jsonl
+python mir2-rs/tests/parity/m3/rebuild_attack_my.py src-logs/bots-20261012-172029-rust.txt   sessions/rust-20261012-171957/attack_raw.jsonl
+python mir2-rs/tests/parity/m3/attack_diff.py align sessions/csharp-20261012-170110/attack_raw.jsonl --out sessions/csharp-20261012-170110/attack_seq.jsonl
+python mir2-rs/tests/parity/m3/attack_diff.py align sessions/rust-20261012-171957/attack_raw.jsonl   --out sessions/rust-20261012-171957/attack_seq.jsonl
+python mir2-rs/tests/parity/m3/attack_diff.py diff sessions/csharp-20261012-170110/attack_seq.jsonl sessions/rust-20261012-171957/attack_seq.jsonl --max-diffs 200   # -> 02-...（83 项）
+
+## 3) 残差③ 改坏必红（删 attack 行的 my -> fail-closed rc=2）
+python mir2-rs/tests/parity/m3/attack_diff.py align sessions/mutation-attack-missing-my.jsonl --out /tmp/mut.seq.jsonl   # -> 03-...
+
+## 4) 自检
+python mir2-rs/tests/parity/m3/attack_diff.py selftest          # -> 04-...（28/28）
+python mir2-rs/tests/parity/m3/attack_rng_ledger.py selftest    # -> 08-...（8/8）
+
+## 5) 残差① 抽数账本（C# 半；源 = m3cs C# 影子栈 rng-stream.tsv，MIR2_RNG_SEED=42/SITE=1）
+python mir2-rs/tests/parity/m3/attack_rng_ledger.py summary E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv --top 12   # -> 06-...
+python mir2-rs/tests/parity/m3/attack_rng_ledger.py segment E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv \
+  --marker "M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929" --json csharp-170110.rng-segments.jsonl   # -> 07-...
+# 注：Rust 生产路径无 per-call RNG trace（只有 SEED_PROBE）⇒ 两侧账本 diff 待 m2-svr/m3cs 补同形 trace。
+
+## 6) 四门禁（隔离 target）
+cd mir2-rs; export CARGO_TARGET_DIR=E:/tmp/m3bag-myfield-target
+cargo fmt --all -- --check                                            # -> 10-...
+cargo clippy --workspace --all-targets --offline -- -D warnings       # -> 11-...
+cargo test --workspace --offline                                      # -> 12-...
+cargo run -p msgcodegen --offline -- --check                          # -> 13-...
