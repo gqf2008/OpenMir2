@@ -217,6 +217,8 @@ if ($EmitOpsArgs) {
     $obj['pin_sql_all'] = @(Get-M3StartPosePinSql -ChrName "${Prefix}0")
     # pin 仪器形态（owner 2026-10-12 08:20）：无栈自检据此机判生产接线是否被削弱（settle_seconds>=1、consecutive>=2）。
     $obj['pin_instrument'] = (Format-M3PinInstrument -SettleSeconds $PinSettleSeconds -MaxAttempts $PinMaxAttempts -Consecutive 2)
+    # pin 重试账本的期望值（owner 2026-10-12 16:30）：自检断言它与仪器 consecutive 同源（均为 2）。
+    $obj['pin_attempts_expected'] = (Get-M3PinExpectedAttempts)
     if ($AttackPinPair) {
       $attackSql = New-Object System.Collections.Generic.List[string]
       foreach ($st in (Get-M3AttackPinSql -ChrName "${Prefix}0" -CX $PinCX -CY $PinCY -Dir $AttackPinDir -MapName $PinMapName -HomeMap $PinHomeMap -HomeX $PinHomeX -HomeY $PinHomeY -Level $PinLevel -Hp $AttackVictimHp)) { $attackSql.Add($st) }
@@ -304,6 +306,13 @@ if ([int]$accHits -ne 0 -or [int]$chrHits -ne 0) {
 # ---- 2.5 固定起点变体（T-14，owner 86478c55/d7798370）：预热建角 → SQL pin → 再取 BEFORE 快照 ----
 #   注：本机的 ORACLE C# 侧是冻结部署件（不能注入种子）⇒ 只关挂机仍不够；这一相把角色的
 #   MapName/HomeMap/HomeX/Y/CX/CY 钉成固定值，使两侧走「记录里有图有坐标」的路径。
+# pin 重试账本（owner 2026-10-12 16:30）：把本轮 pin 的 attempts/settle_rounds 落成结构化字段
+# `baseline.json.pin_attempts`（判据层据此 fail-closed 拒绝「重试次数不同」的两次运行，见
+# `gate_guards.ps1` ⑥b）。未走 pin 的运行保持 `(off)`，逐字节等价旧路径。
+$pinAttempts = 0
+$pinSettleRounds = 0
+$pinAttemptsExpected = Get-M3PinExpectedAttempts
+$pinHoldLines = @()
 if ($PinStartPose) {
   Write-Output '--- 2.5) 固定起点：预热建角 + SQL pin ---'
   if ($SkipBots) { throw '-PinStartPose 不能与 -SkipBots 同用' }
@@ -371,10 +380,18 @@ if ($PinStartPose) {
       $abilPinned = Invoke-Mysql ("SELECT COUNT(*) FROM mir2_db.characters_ablity a JOIN mir2_db.characters c ON a.PlayerId=c.Id WHERE c.ChrName LIKE '{0}%' AND a.Level={1}" -f $ctx.Prefix, $M3PinAbilLevel)
       return [pscustomobject]@{ Pinned = [int]$pinned; BagPinned = [int]$bagPinned; AbilPinned = [int]$abilPinned }
     }
+  $pinAttempts = [int]$pinResult.Attempts
+  $pinSettleRounds = [int]$pinResult.SettleRounds
+  $pinHoldLines = @()
   foreach ($v in $pinResult.Verdicts) {
-    if ($v.hold) { Write-Output ("PIN_HOLD attempt={0}（连续两轮 settle 复验均 hold 住）" -f $v.attempt) }
-    else { Write-Output ("PIN_RETRY attempt={0} {1}（{2}）" -f $v.attempt, $v.detail, (@($v.failed) -join ',')) }
+    $line = if ($v.hold) { "PIN_HOLD attempt={0}（连续两轮 settle 复验均 hold 住）" -f $v.attempt }
+            else { "PIN_RETRY attempt={0} {1}（{2}）" -f $v.attempt, $v.detail, (@($v.failed) -join ',') }
+    $pinHoldLines += $line
+    Write-Output $line
   }
+  # 原始 pin 记账落会话目录（自包含，便于事后复算 attempts；与 baseline.json 的结构化字段互证）。
+  Set-Content -Path (Join-Path $SessionDir 'pin_hold.txt') -Value $pinHoldLines -Encoding utf8
+  Write-Output ('PIN_ATTEMPTS ' + (Format-M3PinAttempts -Attempts $pinAttempts -Expected $pinAttemptsExpected -SettleRounds $pinSettleRounds -MaxAttempts $PinMaxAttempts))
   if (-not $pinResult.Hold) {
     $lastV = @($pinResult.Verdicts)[-1]
     throw ("pin 未 hold 住（跳过 settle 或预热掉线存档反复覆盖）：{0}" -f $lastV.detail)
@@ -561,6 +578,7 @@ $baseline = [pscustomobject]@{
   bag_equip_markers = $bagSeqMarkers
   attack_sequence = (Format-M3AttackScope -AttackSequence ([bool]$AttackSequence) -AttackCount $AttackCount -AttackStepMs $AttackStepMs -AttackStartDelayMs $AttackStartDelayMs -DisableAutoPlay ([bool]$AttackSequence))
   attack_pose = (Get-M3AttackPoseLabel)
+  pin_attempts = $(if ($pinAttempts -ge 1) { Format-M3PinAttempts -Attempts $pinAttempts -Expected $pinAttemptsExpected -SettleRounds $pinSettleRounds -MaxAttempts $PinMaxAttempts } else { '(off)' })
   attack_markers = $attackMarkers
   attack_raw = $(if (Test-Path $attackRawPath) { (Split-Path $attackRawPath -Leaf) } else { '' })
   git_rev      = (Git-Rev)

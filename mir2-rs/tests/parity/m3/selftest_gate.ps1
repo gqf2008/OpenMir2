@@ -37,6 +37,11 @@
     ⑧ Test-M3SeedInjected（F-C：两侧种子注入证据断言，离线）：C# 读 `INJECT_OK <seed>`；Rust 读 `SEED_PROBE`
        行（另校 `RUST_SEED_INJECTED`）；缺失/种子不符/空路径 ⇒ ok=$false（fail-closed）。
 
+    ⑨ Get-M3PinAttemptsGuard / Test-M3PinAttemptsComparable（pin 重试账本；owner 2026-10-12 16:30）：
+       两侧 `baseline.json.pin_attempts` 的重试次数必须均为期望值（零额外重试，期望 = 2 =
+       「连续两轮 settle」的结构性最小 attempts）；超出 ⇒ pin_attempts_retried；缺字段/形态坏/
+       期望漂移/低于期望都 fail-closed。attempts=2 ⇒ 绿。
+
   「改坏必红 / 还原必绿」：把 `gate_guards.ps1` 对应护栏改回旧行为（放行）再跑本脚本，
   必须 exit 1；还原后必须 exit 0。原始输出落 `E:\tmp\openmir2-watch\`。
 
@@ -79,12 +84,13 @@ function Test-EntryGuard([string]$Desc, [object[]]$Holders, [string]$Side, [int]
   Test-Case ("entry/{0}" -f $Desc) $ok ("side={0} failed=[{1}]" -f $Side, ($codes -join ','))
 }
 
-function New-Baseline([string]$Dir, [string]$FixedNewChr, [switch]$OmitField, [string]$BagEquipSequence = '', [string]$StartPose = '') {
+function New-Baseline([string]$Dir, [string]$FixedNewChr, [switch]$OmitField, [string]$BagEquipSequence = '', [string]$StartPose = '', [string]$PinAttempts = '') {
   New-Item -ItemType Directory -Force -Path $Dir | Out-Null
   $obj = [ordered]@{ session = (Split-Path $Dir -Leaf); side = 'csharp' }
   if (-not $OmitField) { $obj['fixed_new_chr'] = $FixedNewChr }
   if (-not [string]::IsNullOrEmpty($BagEquipSequence)) { $obj['bag_equip_sequence'] = $BagEquipSequence }
   if (-not [string]::IsNullOrEmpty($StartPose)) { $obj['start_pose'] = $StartPose }
+  if (-not [string]::IsNullOrEmpty($PinAttempts)) { $obj['pin_attempts'] = $PinAttempts }
   $obj | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $Dir 'baseline.json') -Encoding utf8
 }
 
@@ -341,6 +347,43 @@ Test-Case 'seed/rust SEED_PROBE 42=绿' ($rsGoodR.ok -and $rsGoodR.seed -eq 42) 
 Test-Case 'seed/rust 无 SEED_PROBE=红' (-not $rsBadR.ok) ("reason={0}" -f $rsBadR.reason)
 Test-Case 'seed/rust 启动器行 7!=42=红' (-not $rsMismatchR.ok) ("reason={0}" -f $rsMismatchR.reason)
 
+# ---------------------------------------------------------------- ⑨ pin 重试账本（owner 2026-10-12 16:30）
+Write-Output '⑨ Get-M3PinAttemptsGuard / Test-M3PinAttemptsComparable（pin 重试账本；owner 2026-10-12 16:30）'
+Test-Case 'pinacct/期望 attempts=2（与仪器 consecutive 同源）' ((Get-M3PinExpectedAttempts) -eq 2) ("expected={0}" -f (Get-M3PinExpectedAttempts))
+Test-Case 'pinacct/形态 attempts=2 expected=2 settle_rounds=2 max_attempts=5' `
+  ((Format-M3PinAttempts -Attempts 2 -SettleRounds 2 -MaxAttempts 5) -eq 'attempts=2 expected=2 settle_rounds=2 max_attempts=5') ''
+$paOk = Join-Path $Work 'pin-ok'
+New-Baseline $paOk '(off)' -PinAttempts (Format-M3PinAttempts -Attempts 2 -SettleRounds 2 -MaxAttempts 5)
+$g = Get-M3PinAttemptsGuard -PlayerDir $paOk
+Test-Case 'pinacct/attempts=2=绿' (@($g.failed).Count -eq 0) ("failed=[{0}]" -f (@($g.failed) -join ','))
+$paRetry = Join-Path $Work 'pin-retry'
+New-Baseline $paRetry '(off)' -PinAttempts (Format-M3PinAttempts -Attempts 4 -SettleRounds 4 -MaxAttempts 5)
+$g = Get-M3PinAttemptsGuard -PlayerDir $paRetry
+Test-Case 'pinacct/attempts=4=红(retried)' ((@($g.failed) -contains 'pin_attempts_retried') -and $g.retried) ("failed=[{0}]" -f (@($g.failed) -join ','))
+$g = Test-M3PinAttemptsComparable -Dirs @($paOk, $paRetry)
+Test-Case 'pinacct/两侧一侧重试=红' (@($g.failed) -contains 'pin_attempts_retried') ("failed=[{0}]" -f (@($g.failed) -join ','))
+$paMissing = Join-Path $Work 'pin-missing'
+New-Baseline $paMissing '(off)'
+$g = Get-M3PinAttemptsGuard -PlayerDir $paMissing
+Test-Case 'pinacct/缺字段=红(missing)' (@($g.failed) -contains 'pin_attempts_missing') ("failed=[{0}]" -f (@($g.failed) -join ','))
+$paInvalid = Join-Path $Work 'pin-invalid'
+New-Baseline $paInvalid '(off)' -PinAttempts 'attempts=x'
+$g = Get-M3PinAttemptsGuard -PlayerDir $paInvalid
+Test-Case 'pinacct/形态认不出=红(invalid)' (@($g.failed) -contains 'pin_attempts_invalid') ("failed=[{0}]" -f (@($g.failed) -join ','))
+$paUnder = Join-Path $Work 'pin-under'
+New-Baseline $paUnder '(off)' -PinAttempts (Format-M3PinAttempts -Attempts 1 -SettleRounds 1 -MaxAttempts 5)
+$g = Get-M3PinAttemptsGuard -PlayerDir $paUnder
+Test-Case 'pinacct/attempts=1=红(under/仪器被削弱)' (@($g.failed) -contains 'pin_attempts_under_expected') ("failed=[{0}]" -f (@($g.failed) -join ','))
+$paDrift = Join-Path $Work 'pin-drift'
+New-Baseline $paDrift '(off)' -PinAttempts (Format-M3PinAttempts -Attempts 2 -Expected 3 -SettleRounds 2 -MaxAttempts 5)
+$g = Get-M3PinAttemptsGuard -PlayerDir $paDrift
+Test-Case 'pinacct/期望漂移=红(expected_mismatch)' (@($g.failed) -contains 'pin_attempts_expected_mismatch') ("failed=[{0}]" -f (@($g.failed) -join ','))
+$paBad = Join-Path $Work 'pin-badjson'
+New-Item -ItemType Directory -Force -Path $paBad | Out-Null
+Set-Content -Path (Join-Path $paBad 'baseline.json') -Encoding utf8 -Value '{ "pin_attempts": "attempts=2'
+$g = Get-M3PinAttemptsGuard -PlayerDir $paBad
+Test-Case 'pinacct/baseline 坏 JSON=红(不中断)' (@($g.failed) -contains 'pin_attempts_baseline_invalid') ("failed=[{0}]" -f (@($g.failed) -join ','))
+
 # ---------------------------------------------------------------- 汇总
 $report = [ordered]@{
   tool = 'mir2-rs/tests/parity/m3/selftest_gate.ps1'
@@ -356,7 +399,7 @@ $report | ConvertTo-Json -Depth 6 | Set-Content -Path $reportPath -Encoding utf8
 Write-Output ('SELFTEST_REPORT ' + $reportPath)
 Write-Output ('SUMMARY total={0} failed={1}' -f $script:Total, $script:Failed)
 if ($script:Failed -eq 0) {
-  Write-Output 'GREEN: 八条机判护栏的判红/判绿口径都经构造输入验证'
+  Write-Output 'GREEN: 九条机判护栏的判红/判绿口径都经构造输入验证'
   exit 0
 }
 Write-Output 'SELFTEST FAIL: 有护栏口径与实现不符（见上面 FAIL 行）'
