@@ -109,7 +109,7 @@ m3bag 的 `attack_rng_ledger.py` 的 `is_attack` 正则是 **C# 站点名**，`s
 - 仓外原始输入（未入库，可复算）：`E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv`
   （135 MB，sha256 `718c23df…`，源自 m3bag 会话 `csharp-20261012-170110`，seed=42）；
   `E:/tmp/m3cs-trace-single.tsv`（本片 Rust 离线 trace，可复算）。
-- m3bag 账本脚本（未合入 master，本片只读执行）：`E:/tmp/attack_rng_ledger.py`
-  （sha256 `70b0620d…`，= m3bag commit `40166a82` 的 `attack_rng_ledger.py`）。
+- m3bag 账本脚本（本片只读执行；交付时已随 master `40166a82` 合入，`git blob` sha256 = `70b0620d8e1678e4d3cf8540d08036babb0d44ccfeecd62d73c88ab5fbdd94b7`，
+  与本片执行的 `E:/tmp/attack_rng_ledger.py` 逐字节相同）：本片执行副本 `E:/tmp/attack_rng_ledger.py`。
 - 隔离 target：`E:/tmp/m3cs-rng-trace-target/`。
 - 未起栈、未占端口（收工十端口实拍见 patch body）。

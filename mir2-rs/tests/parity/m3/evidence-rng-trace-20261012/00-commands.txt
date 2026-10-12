@@ -6,9 +6,10 @@
 # C# 半抽数流水 = m3bag 会话 csharp-20261012-170110 的 rng-stream.tsv（seed=42, MIR2_RNG_SITE=1）
 sha256sum E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv
 #   -> 718c23dfaf3b05ef2acdf5eb4ff20478ceaf6f314a863e25bd62a324804e1b31
-# m3bag 账本脚本（本片只读执行；尚未合入 master）
+# m3bag 账本脚本（本片只读执行；交付时已随 master 40166a82 合入，git blob = 70b0620d… 与本片副本逐字节相同）
 sha256sum E:/tmp/attack_rng_ledger.py
 #   -> 70b0620d8e1678e4d3cf8540d08036babb0d44ccfeecd62d73c88ab5fbdd94b7
+sha256sum mir2-rs/tests/parity/m3/attack_rng_ledger.py   # master 上的同名文件（盘上 CRLF，repo blob 同上）
 
 ## 1) C# 半账本（m3bag 仪器，只读）
 python E:/tmp/attack_rng_ledger.py summary E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv --top 12   # -> 01-...
