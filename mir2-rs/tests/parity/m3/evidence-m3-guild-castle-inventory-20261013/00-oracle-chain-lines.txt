@@ -1,0 +1,758 @@
+# 00 oracle 调用链行号锚点（M3⑧ 公会/攻城）
+# 生成：2026-10-12T21:20:38Z  仓库 = f2eb43d693305a02c73f745236c9f87f6391db76
+# 命令：rg -n '<pattern>' src/ ...（在仓库根执行；行号为当刻实测）
+
+===== [A] 建会：NPC 触发 / 费用 / 名称门 / 重名 / 成员初始化 =====
+src/Modules/GameCommand/Commands/AddGuildCommand.cs:42:                if (SystemShare.GuildMgr.AddGuild(sGuildName, sGuildChief))
+src/Modules/SystemModule/Conf/Model/GameSvrConf.cs:162:        public string WomaHorn;
+src/Modules/SystemModule/Conf/Model/GameSvrConf.cs:351:        public int BuildGuildPrice;
+src/Modules/SystemModule/Conf/Model/GameSvrConf.cs:1318:            WomaHorn = "沃玛号角";
+src/Modules/SystemModule/Conf/Model/GameSvrConf.cs:1448:            BuildGuildPrice = 1000000;
+src/GameSrv/Npc/GuildOfficial.cs:70:                    if (string.Compare(sLabel, ScriptFlagConst.sBUILDGUILDNOW, StringComparison.OrdinalIgnoreCase) == 0)
+src/GameSrv/Npc/GuildOfficial.cs:72:                        ReQuestBuildGuild(PlayObject, sMsg);
+src/GameSrv/Npc/GuildOfficial.cs:112:        private int ReQuestBuildGuild(IPlayerActor PlayObject, string sGuildName)
+src/GameSrv/Npc/GuildOfficial.cs:123:                if (PlayObject.Gold >= SystemShare.Config.BuildGuildPrice)
+src/GameSrv/Npc/GuildOfficial.cs:125:                    UserItem = PlayObject.CheckItems(SystemShare.Config.WomaHorn);
+src/GameSrv/Npc/GuildOfficial.cs:142:                if (SystemShare.GuildMgr.AddGuild(sGuildName, PlayObject.ChrName))
+src/GameSrv/Npc/GuildOfficial.cs:146:                    PlayObject.DelBagItem(UserItem.MakeIndex, SystemShare.Config.WomaHorn);
+src/GameSrv/Npc/GuildOfficial.cs:147:                    PlayObject.DecGold(SystemShare.Config.BuildGuildPrice);
+src/M2Server/M2Share.cs:529:        public static bool CheckGuildName(string sGuildName)
+src/M2Server/Guild/GuildManager.cs:19:        public bool AddGuild(string sGuildName, string sChief)
+src/M2Server/Guild/GuildManager.cs:22:            if (M2Share.CheckGuildName(sGuildName) && FindGuild(sGuildName) == null)
+
+----- GuildManager.AddGuild / FindGuild / SaveGuildList / Run（行会战超时） -----
+19:        public bool AddGuild(string sGuildName, string sChief)
+34:        public bool DelGuild(string sGuildName)
+57:        public void ClearGuildInf()
+66:        public IGuild FindGuild(string sGuildName)
+112:        public IGuild MemberOfGuild(string sName)
+124:        private void SaveGuildList()
+145:        public void Run()
+156:                        guild.EndGuildWar(warGuild.Guild);
+165:                guild.CheckSaveGuildFile();
+
+----- GuildInfo.SetGuildInfo / AddMember / DelMember / CancelGuld（成员关系；rank 1=掌门 99=成员） -----
+129:        public bool DelAllyGuild(IGuild guild)
+146:        public bool IsAllyGuild(IGuild guild)
+161:        public bool IsMember(string sName)
+181:        public bool IsWarGuild(IGuild guild)
+463:        public bool SetGuildInfo(string sChief)
+485:        public string GetRankName(IPlayerActor playObject, ref short nRankNo)
+511:        public string GetChiefName()
+623:        public void AddMember(IPlayerActor playObject)
+653:        public bool DelMember(string sHumName)
+680:        public bool CancelGuld(string sHumName)
+708:        public int UpdateRank(string sRankData)
+1070:            return Count >= SystemShare.Config.GuildMemberMaxLimit;
+
+===== [B] 收包派发（PlayObject.Message.cs Run 主 switch） =====
+975:                case Messages.CM_OPENGUILDDLG:
+978:                case Messages.CM_GUILDHOME:
+981:                case Messages.CM_GUILDMEMBERLIST:
+984:                case Messages.CM_GUILDADDMEMBER:
+987:                case Messages.CM_GUILDDELMEMBER:
+990:                case Messages.CM_GUILDUPDATENOTICE:
+993:                case Messages.CM_GUILDUPDATERANKINFO:
+1002:                case Messages.CM_GUILDALLY:
+1005:                case Messages.CM_GUILDBREAKALLY:
+
+===== [C] 行会客户端操作（PlayObject.Operate.cs） =====
+1229:        private void ClientOpenGuildDlg()
+1278:        private void ClientGuildHome()
+1283:        private void ClientGuildMemberList()
+1307:        private void ClientGuildAddMember(string sHumName)
+1369:        private void ClientGuildDelMember(string sHumName)
+1426:        private void ClientGuildUpdateNotice(string sNotict)
+1444:        private void ClientGuildUpdateRankInfo(string sRankInfo)
+1465:        public void ClientGuildAlly()
+1525:        public void ClientGuildBreakAlly(string sGuildName)
+
+===== [D] 行会战：申请 / 时间门 / 结束 =====
+src/GameSrv/Npc/GuildOfficial.cs:74:                    else if (string.Compare(sLabel, ScriptFlagConst.sSCL_GUILDWAR, StringComparison.OrdinalIgnoreCase) == 0)
+src/GameSrv/Npc/GuildOfficial.cs:76:                        ReQuestGuildWar(PlayObject, sMsg);
+src/GameSrv/Npc/GuildOfficial.cs:180:        private static void ReQuestGuildWar(IPlayerActor PlayObject, string sGuildName)
+src/GameSrv/Npc/GuildOfficial.cs:188:                    PlayObject.ReQuestGuildWar(sGuildName);
+src/Modules/SystemModule/Conf/Model/GameSvrConf.cs:347:        public int GuildWarTime;
+src/Modules/SystemModule/Conf/Model/GameSvrConf.cs:1447:            GuildWarTime = 3 * 60 * 60 * 1000;
+src/M2Server/Guild/GuildManager.cs:151:                for (int j = guild.GuildWarList.Count - 1; j >= 0; j--)
+src/M2Server/Guild/GuildManager.cs:153:                    SystemModule.Data.WarGuild warGuild = guild.GuildWarList[j];
+src/M2Server/Guild/GuildManager.cs:156:                        guild.EndGuildWar(warGuild.Guild);
+src/M2Server/Guild/GuildManager.cs:157:                        guild.GuildWarList.RemoveAt(j);
+src/M2Server/Guild/GuildInfo.cs:59:        public IList<WarGuild> GuildWarList { get; set; }
+src/M2Server/Guild/GuildInfo.cs:110:            GuildWarList = new List<WarGuild>();
+src/M2Server/Guild/GuildInfo.cs:181:        public bool IsWarGuild(IGuild guild)
+src/M2Server/Guild/GuildInfo.cs:184:            for (int i = 0; i < GuildWarList.Count; i++)
+src/M2Server/Guild/GuildInfo.cs:186:                if (GuildWarList[i].Guild == guild)
+src/M2Server/Guild/GuildInfo.cs:221:            for (int i = 0; i < GuildWarList.Count; i++)
+src/M2Server/Guild/GuildInfo.cs:223:                GuildWarList[i] = default(WarGuild);
+src/M2Server/Guild/GuildInfo.cs:225:            GuildWarList.Clear();
+src/M2Server/Guild/GuildInfo.cs:289:                                GuildWarList.Add(guildWar);
+src/M2Server/Guild/GuildInfo.cs:394:            for (int i = 0; i < GuildWarList.Count; i++)
+src/M2Server/Guild/GuildInfo.cs:396:                WarGuild warGuild = GuildWarList[i];
+src/M2Server/Guild/GuildInfo.cs:402:                saveList.Add("+" + GuildWarList[i].Guild.GuildName + ' ' + n14);
+src/M2Server/Guild/GuildInfo.cs:614:            for (int i = 0; i < GuildWarList.Count; i++)
+src/M2Server/Guild/GuildInfo.cs:616:                GuildWarList[i] = default(WarGuild);
+src/M2Server/Guild/GuildInfo.cs:618:            GuildWarList.Clear();
+src/M2Server/Guild/GuildInfo.cs:995:        public bool IsNotWarGuild(IGuild guild)
+src/M2Server/Guild/GuildInfo.cs:997:            for (int i = 0; i < GuildWarList.Count; i++)
+src/M2Server/Guild/GuildInfo.cs:999:                if (GuildWarList[i].Guild == guild)
+src/M2Server/Guild/GuildInfo.cs:1020:        public WarGuild AddWarGuild(IGuild guild)
+src/M2Server/Guild/GuildInfo.cs:1028:                    for (int i = 0; i < GuildWarList.Count; i++)
+src/M2Server/Guild/GuildInfo.cs:1030:                        if (GuildWarList[i].Guild == guild)
+src/M2Server/Guild/GuildInfo.cs:1032:                            warGuild = GuildWarList[i];
+src/M2Server/Guild/GuildInfo.cs:1034:                            warGuild.WarTime = SystemShare.Config.GuildWarTime;// 10800000
+src/M2Server/Guild/GuildInfo.cs:1045:                            WarTime = SystemShare.Config.GuildWarTime// 10800000
+src/M2Server/Guild/GuildInfo.cs:1047:                        GuildWarList.Add(warGuild);
+src/M2Server/Guild/GuildInfo.cs:1058:        public void EndGuildWar(IGuild guild)
+src/M2Server/Player/PlayObject.Base.cs:3349:        public void ReQuestGuildWar(string sGuildName)
+src/M2Server/Player/PlayObject.Base.cs:3368:            WarGuild warGuild = MyGuild.AddWarGuild(guild);
+src/M2Server/Player/PlayObject.Base.cs:3371:                if (guild.AddWarGuild(MyGuild).Guild != null)
+src/M2Server/Player/PlayObject.Base.cs:3540:            if (play.MyGuild.GuildWarList.Count <= 0)
+src/M2Server/Player/PlayObject.Base.cs:3546:            if (play.MyGuild.IsWarGuild(target.MyGuild) && target.MyGuild.IsWarGuild(play.MyGuild))
+
+===== [E] 攻城：申请 / 登记（NPC 路径） =====
+src/M2Server/Castle/CastleConst.cs:18:        public const string AttackSabukWallList = "AttackSabukWall.txt";
+src/Modules/SystemModule/Conf/Model/GameSvrConf.cs:163:        public string ZumaPiece;
+src/Modules/SystemModule/Conf/Model/GameSvrConf.cs:1319:            ZumaPiece = "祖玛头像";
+src/M2Server/Castle/UserCastle.cs:42:            AttackWarList = new List<AttackerInfo>();
+src/M2Server/Castle/UserCastle.cs:66:        public IList<AttackerInfo> AttackWarList { get; set; }
+src/M2Server/Castle/UserCastle.cs:112:            LoadAttackSabukWall();
+src/M2Server/Castle/UserCastle.cs:242:        private void LoadAttackSabukWall()
+src/M2Server/Castle/UserCastle.cs:251:            string sFileName = Path.Combine(sabukwallPath, CastleConst.AttackSabukWallList);
+src/M2Server/Castle/UserCastle.cs:259:            for (int i = 0; i < AttackWarList.Count; i++)
+src/M2Server/Castle/UserCastle.cs:261:                AttackWarList[i] = default;
+src/M2Server/Castle/UserCastle.cs:263:            AttackWarList.Clear();
+src/M2Server/Castle/UserCastle.cs:286:                AttackWarList.Add(attackerInfo);
+src/M2Server/Castle/UserCastle.cs:293:        private void SaveAttackSabukWall()
+src/M2Server/Castle/UserCastle.cs:301:            string sFileName = Path.Combine(sabukwallPath, CastleConst.AttackSabukWallList);
+src/M2Server/Castle/UserCastle.cs:302:            using StringList loadLis = new StringList(AttackWarList.Count);
+src/M2Server/Castle/UserCastle.cs:303:            for (int i = 0; i < AttackWarList.Count; i++)
+src/M2Server/Castle/UserCastle.cs:305:                AttackerInfo attackerInfo = AttackWarList[i];
+src/M2Server/Castle/UserCastle.cs:347:                        for (int i = AttackWarList.Count - 1; i >= 0; i--)
+src/M2Server/Castle/UserCastle.cs:349:                            AttackerInfo attackerInfo = AttackWarList[i];
+src/M2Server/Castle/UserCastle.cs:360:                                AttackWarList.RemoveAt(i);
+src/M2Server/Castle/UserCastle.cs:367:                            SaveAttackSabukWall();
+src/M2Server/Castle/UserCastle.cs:451:            SaveAttackSabukWall();
+src/M2Server/Castle/UserCastle.cs:670:        public bool AddAttackerInfo(IGuild Guild)
+src/M2Server/Castle/UserCastle.cs:716:            if (AttackWarList.Count <= 0)
+src/M2Server/Castle/UserCastle.cs:721:            AttackerInfo AttackerInfo = AttackWarList[0];
+src/M2Server/Castle/UserCastle.cs:728:        public string GetAttackWarList()
+src/M2Server/Castle/UserCastle.cs:735:            for (int i = 0; i < AttackWarList.Count; i++)
+src/M2Server/Castle/UserCastle.cs:737:                AttackerInfo AttackerInfo = AttackWarList[i];
+src/M2Server/Castle/UserCastle.cs:998:        public bool AddAttackerInfo(GuildInfo Guild)
+src/M2Server/Castle/UserCastle.cs:1000:            if (InAttackerList(Guild))
+src/M2Server/Castle/UserCastle.cs:1006:            AttackerInfo.AttackDate = M2Share.AddDateTimeOfDay(DateTime.Now, SystemShare.Config.StartCastleWarDays);
+src/M2Server/Castle/UserCastle.cs:1009:            AttackWarList.Add(AttackerInfo);
+src/M2Server/Castle/UserCastle.cs:1010:            SaveAttackSabukWall();
+src/M2Server/Castle/UserCastle.cs:1016:        private bool InAttackerList(GuildInfo Guild)
+src/M2Server/Castle/UserCastle.cs:1019:            for (int i = 0; i < AttackWarList.Count; i++)
+src/M2Server/Castle/UserCastle.cs:1021:                if (AttackWarList[i].Guild == Guild)
+src/GameSrv/Npc/GuildOfficial.cs:82:                    else if (HUtil32.CompareLStr(sLabel, ScriptFlagConst.sREQUESTCASTLEWAR))
+src/GameSrv/Npc/GuildOfficial.cs:84:                        ReQuestCastleWar(PlayObject, sLabel[ScriptFlagConst.sREQUESTCASTLEWAR.Length..]);
+src/GameSrv/Npc/GuildOfficial.cs:206:        private void ReQuestCastleWar(IPlayerActor PlayObject, string sIndex)
+src/GameSrv/Npc/GuildOfficial.cs:216:                UserItem UserItem = PlayObject.CheckItems(SystemShare.Config.ZumaPiece);
+src/GameSrv/Npc/GuildOfficial.cs:219:                    if (Castle.AddAttackerInfo(PlayObject.MyGuild))
+src/GameSrv/Npc/GuildOfficial.cs:222:                        PlayObject.DelBagItem(UserItem.MakeIndex, SystemShare.Config.ZumaPiece);
+src/GameSrv/Npc/GuildOfficial.cs:232:                    PlayObject.SysMsg("你没有" + SystemShare.Config.ZumaPiece + "!!!", MsgColor.Red, MsgType.Hint);
+
+===== [F] 攻城：状态机 / 时间门（UserCastle.Run） =====
+src/M2Server/Castle/CastleManager.cs:127:        public void Run()
+src/M2Server/Castle/UserCastle.cs:39:            IsStartWar = false;
+src/M2Server/Castle/UserCastle.cs:40:            UnderWar = false;
+src/M2Server/Castle/UserCastle.cs:41:            ShowOverMsg = false;
+src/M2Server/Castle/UserCastle.cs:67:        public bool ShowOverMsg { get; set; }
+src/M2Server/Castle/UserCastle.cs:68:        public bool IsStartWar { get; set; }
+src/M2Server/Castle/UserCastle.cs:69:        public bool UnderWar { get; set; }
+src/M2Server/Castle/UserCastle.cs:74:        public int StartCastleWarTick { get; set; }
+src/M2Server/Castle/UserCastle.cs:100:        public DateTime WarDate { get; set; }
+src/M2Server/Castle/UserCastle.cs:311:        public void Run()
+src/M2Server/Castle/UserCastle.cs:338:                    IsStartWar = false;
+src/M2Server/Castle/UserCastle.cs:340:                if (!IsStartWar && !UnderWar)
+src/M2Server/Castle/UserCastle.cs:343:                    if (hour == SystemShare.Config.StartCastlewarTime) // 20
+src/M2Server/Castle/UserCastle.cs:345:                        IsStartWar = true;
+src/M2Server/Castle/UserCastle.cs:355:                                UnderWar = true;
+src/M2Server/Castle/UserCastle.cs:356:                                ShowOverMsg = false;
+src/M2Server/Castle/UserCastle.cs:357:                                WarDate = DateTime.Now;
+src/M2Server/Castle/UserCastle.cs:358:                                StartCastleWarTick = HUtil32.GetTickCount();
+src/M2Server/Castle/UserCastle.cs:363:                        if (UnderWar)
+src/M2Server/Castle/UserCastle.cs:366:                            StartWallconquestWar();
+src/M2Server/Castle/UserCastle.cs:391:                if (UnderWar)
+src/M2Server/Castle/UserCastle.cs:408:                    if (!ShowOverMsg)
+src/M2Server/Castle/UserCastle.cs:410:                        if ((HUtil32.GetTickCount() - StartCastleWarTick) > (SystemShare.Config.CastleWarTime - SystemShare.Config.ShowCastleWarEndMsgTime)) // 3 * 60 * 60 * 1000 - 10 * 60 * 1000
+src/M2Server/Castle/UserCastle.cs:412:                            ShowOverMsg = true;
+src/M2Server/Castle/UserCastle.cs:413:                            string s20 = string.Format(sWarStopTimeMsg, sName, SystemShare.Config.ShowCastleWarEndMsgTime / (60 * 1000));
+src/M2Server/Castle/UserCastle.cs:419:                    if ((HUtil32.GetTickCount() - StartCastleWarTick) > SystemShare.Config.CastleWarTime)
+src/M2Server/Castle/UserCastle.cs:421:                        StopWallconquestWar();
+src/M2Server/Castle/UserCastle.cs:519:            if ((HUtil32.GetTickCount() - StartCastleWarTick) <= SystemShare.Config.GetCastleTime)
+src/M2Server/Castle/UserCastle.cs:564:        public void StartWallconquestWar()
+src/M2Server/Castle/UserCastle.cs:577:        public void StopWallconquestWar()
+src/M2Server/Castle/UserCastle.cs:580:            UnderWar = false;
+src/M2Server/Castle/UserCastle.cs:616:            if (!UnderWar)
+src/M2Server/Castle/UserCastle.cs:631:            if (!UnderWar)
+src/M2Server/Castle/UserCastle.cs:712:        public string GetWarDate()
+src/M2Server/Castle/UserCastle.cs:714:            const string WarDateMsg = "{0}年{1}月{2}日";
+src/M2Server/Castle/UserCastle.cs:725:            return string.Format(WarDateMsg, Year, Month, Day);
+src/M2Server/Castle/UserCastle.cs:924:            if (castleDoor.BaseObject == null || UnderWar || castleDoor.BaseObject.WAbil.HP >= castleDoor.BaseObject.WAbil.MaxHP)
+src/M2Server/Castle/UserCastle.cs:972:            if (Wall == null || UnderWar || Wall.WAbil.HP >= Wall.WAbil.MaxHP)
+src/M2Server/Castle/UserCastle.cs:1006:            AttackerInfo.AttackDate = M2Share.AddDateTimeOfDay(DateTime.Now, SystemShare.Config.StartCastleWarDays);
+
+===== [G] 城池归属 / 自动结束结算（每 tick） =====
+286:                IUserCastle castle = SystemShare.CastleMgr.InCastleWarArea(this);
+289:                    ChangePkStatus(true);
+321:                        if (Envir == castle.PalaceEnvir && MyGuild != null)
+325:                                if (castle.IsAttackGuild(MyGuild))
+327:                                    if (castle.CanGetCastle(MyGuild))
+329:                                        castle.GetCastle(MyGuild);
+330:                                        SystemShare.WorldEngine.SendServerGroupMsg(Messages.SS_211, M2Share.ServerIndex, MyGuild.GuildName);
+331:                                        if (castle.InPalaceGuildCount() <= 1)
+342:                        ChangePkStatus(false);
+
+----- ChangeSabukLord / ForcedWallconquestWar（GM 命令，绕过每日钟点） -----
+src/Modules/GameCommand/Commands/ForcedWallconquestWarCommand.cs:30:                castle.UnderWar = !castle.UnderWar;
+src/Modules/GameCommand/Commands/ForcedWallconquestWarCommand.cs:31:                if (castle.UnderWar)
+src/Modules/GameCommand/Commands/ForcedWallconquestWarCommand.cs:35:                    castle.StartCastleWarTick = HUtil32.GetTickCount();
+src/Modules/GameCommand/Commands/ForcedWallconquestWarCommand.cs:36:                    castle.StartWallconquestWar();
+src/Modules/GameCommand/Commands/ForcedWallconquestWarCommand.cs:45:                    castle.StopWallconquestWar();
+src/Modules/GameCommand/Commands/ChangeSabukLordCommand.cs:39:                castle.GetCastle(guild);
+
+===== [H] 城门 / 城墙状态（CastleDoor + 控制/修理） =====
+9:    public class CastleDoor : GuardUnit
+11:        public bool IsOpened;
+12:        public bool HoldPlace;
+23:        private void SetMapXyFlag(int nFlag)
+25:            Envir.SetMapXyFlag(CurrX, CurrY - 2, true);
+26:            Envir.SetMapXyFlag(CurrX + 1, CurrY - 1, true);
+27:            Envir.SetMapXyFlag(CurrX + 1, CurrY - 2, true);
+29:            Envir.SetMapXyFlag(CurrX, CurrY, boFlag);
+30:            Envir.SetMapXyFlag(CurrX, CurrY - 1, boFlag);
+31:            Envir.SetMapXyFlag(CurrX, CurrY - 2, boFlag);
+32:            Envir.SetMapXyFlag(CurrX + 1, CurrY - 1, boFlag);
+33:            Envir.SetMapXyFlag(CurrX + 1, CurrY - 2, boFlag);
+34:            Envir.SetMapXyFlag(CurrX - 1, CurrY, boFlag);
+35:            Envir.SetMapXyFlag(CurrX - 2, CurrY, boFlag);
+36:            Envir.SetMapXyFlag(CurrX - 1, CurrY - 1, boFlag);
+37:            Envir.SetMapXyFlag(CurrX - 1, CurrY + 1, boFlag);
+40:                Envir.SetMapXyFlag(CurrX, CurrY - 2, false);
+41:                Envir.SetMapXyFlag(CurrX + 1, CurrY - 1, false);
+42:                Envir.SetMapXyFlag(CurrX + 1, CurrY - 2, false);
+46:        public void Open()
+56:            SetMapXyFlag(0);
+60:        public void Close()
+74:            SetMapXyFlag(1);
+78:        public override void Die()
+81:            SetMapXyFlag(2);
+84:        public override void Run()
+106:        public void RefStatus()
+108:        public void Initialize()
+130:                    MainDoor.BaseObject = SystemShare.WorldEngine.RegenMonsterByName(MapName, MainDoor.nX, MainDoor.nY, MainDoor.sName);
+131:                    if (MainDoor.BaseObject != null)
+133:                        MainDoor.BaseObject.WAbil.HP = MainDoor.nHP;
+134:                        MainDoor.BaseObject.Castle = this;
+137:                            ((CastleDoor)MainDoor.BaseObject).Open();
+144:                    LeftWall.BaseObject = SystemShare.WorldEngine.RegenMonsterByName(MapName, LeftWall.nX, LeftWall.nY, LeftWall.sName);
+145:                    if (LeftWall.BaseObject != null)
+147:                        LeftWall.BaseObject.WAbil.HP = LeftWall.nHP;
+148:                        LeftWall.BaseObject.Castle = this;
+154:                    CenterWall.BaseObject = SystemShare.WorldEngine.RegenMonsterByName(MapName, CenterWall.nX, CenterWall.nY, CenterWall.sName);
+155:                    if (CenterWall.BaseObject != null)
+157:                        CenterWall.BaseObject.WAbil.HP = CenterWall.nHP;
+158:                        CenterWall.BaseObject.Castle = this;
+164:                    RightWall.BaseObject = SystemShare.WorldEngine.RegenMonsterByName(MapName, RightWall.nX, RightWall.nY, RightWall.sName);
+165:                    if (RightWall.BaseObject != null)
+167:                        RightWall.BaseObject.WAbil.HP = RightWall.nHP;
+168:                        RightWall.BaseObject.Castle = this;
+182:                        ObjUnit.BaseObject = SystemShare.WorldEngine.RegenMonsterByName(MapName, ObjUnit.nX, ObjUnit.nY, ObjUnit.sName);
+185:                            ObjUnit.BaseObject.WAbil.HP = Archers[i].nHP;
+202:                        ObjUnit.BaseObject = SystemShare.WorldEngine.RegenMonsterByName(MapName, ObjUnit.nX, ObjUnit.nY, ObjUnit.sName);
+205:                            ObjUnit.BaseObject.WAbil.HP = Guards[i].nHP;
+393:                    if (LeftWall.BaseObject != null)
+395:                        LeftWall.BaseObject.StoneMode = false;
+398:                    if (CenterWall.BaseObject != null)
+400:                        CenterWall.BaseObject.StoneMode = false;
+403:                    if (RightWall.BaseObject != null)
+405:                        RightWall.BaseObject.StoneMode = false;
+426:                    if (LeftWall.BaseObject != null)
+428:                        LeftWall.BaseObject.StoneMode = true;
+431:                    if (CenterWall.BaseObject != null)
+433:                        CenterWall.BaseObject.StoneMode = true;
+436:                    if (RightWall.BaseObject != null)
+438:                        RightWall.BaseObject.StoneMode = true;
+890:        public void MainDoorControl(bool boClose)
+892:            if (MainDoor.BaseObject != null && !MainDoor.BaseObject.Ghost)
+896:                    if (((CastleDoor)MainDoor.BaseObject).IsOpened)
+898:                        ((CastleDoor)MainDoor.BaseObject).Close();
+903:                    if (!((CastleDoor)MainDoor.BaseObject).IsOpened)
+905:                        ((CastleDoor)MainDoor.BaseObject).Open();
+920:        public bool RepairDoor()
+932:                    castleDoor.BaseObject.WAbil.HP = castleDoor.BaseObject.WAbil.MaxHP;
+941:                    castleDoor.BaseObject.WAbil.HP = castleDoor.BaseObject.WAbil.MaxHP;
+956:        public bool RepairWall(int nWallIndex)
+963:                    Wall = LeftWall.BaseObject;
+966:                    Wall = CenterWall.BaseObject;
+969:                    Wall = RightWall.BaseObject;
+980:                    Wall.WAbil.HP = Wall.WAbil.MaxHP;
+989:                    Wall.WAbil.HP = Wall.WAbil.MaxHP;
+src/Modules/SystemModule/Const/ScriptFlagConst.cs:75:        public const string sOPENMAINDOOR = "@openmaindoor";
+src/Modules/SystemModule/Const/ScriptFlagConst.cs:76:        public const string sCLOSEMAINDOOR = "@closemaindoor";
+src/Modules/SystemModule/Const/ScriptFlagConst.cs:77:        public const string sREPAIRDOORNOW = "@repairdoornow";
+src/Modules/SystemModule/Const/ScriptFlagConst.cs:78:        public const string sREPAIRWALLNOW1 = "@repairwallnow1";
+src/Modules/SystemModule/Const/ScriptFlagConst.cs:79:        public const string sREPAIRWALLNOW2 = "@repairwallnow2";
+src/Modules/SystemModule/Const/ScriptFlagConst.cs:80:        public const string sREPAIRWALLNOW3 = "@repairwallnow3";
+src/Modules/SystemModule/Const/ScriptFlagConst.cs:81:        public const string sHIREARCHERNOW = "@hirearchernow";
+src/Modules/SystemModule/Const/ScriptFlagConst.cs:82:        public const string sHIREGUARDNOW = "@hireguardnow";
+src/GameSrv/Npc/CastleOfficial.cs:79:                    sText = SystemShare.Config.HireGuardPrice.ToString();
+src/GameSrv/Npc/CastleOfficial.cs:83:                    sText = SystemShare.Config.HireArcherPrice.ToString();
+src/GameSrv/Npc/CastleOfficial.cs:199:                        else if (string.Compare(sLabel, ScriptFlagConst.sOPENMAINDOOR, StringComparison.OrdinalIgnoreCase) == 0)
+src/GameSrv/Npc/CastleOfficial.cs:201:                            Castle.MainDoorControl(false);
+src/GameSrv/Npc/CastleOfficial.cs:203:                        else if (string.Compare(sLabel, ScriptFlagConst.sCLOSEMAINDOOR, StringComparison.OrdinalIgnoreCase) == 0)
+src/GameSrv/Npc/CastleOfficial.cs:205:                            Castle.MainDoorControl(true);
+src/GameSrv/Npc/CastleOfficial.cs:207:                        else if (string.Compare(sLabel, ScriptFlagConst.sREPAIRDOORNOW, StringComparison.OrdinalIgnoreCase) == 0)
+src/GameSrv/Npc/CastleOfficial.cs:209:                            RepairDoor(PlayObject);
+src/GameSrv/Npc/CastleOfficial.cs:212:                        else if (string.Compare(sLabel, ScriptFlagConst.sREPAIRWALLNOW1, StringComparison.OrdinalIgnoreCase) == 0)
+src/GameSrv/Npc/CastleOfficial.cs:214:                            RepairWallNow(1, PlayObject);
+src/GameSrv/Npc/CastleOfficial.cs:217:                        else if (string.Compare(sLabel, ScriptFlagConst.sREPAIRWALLNOW2, StringComparison.OrdinalIgnoreCase) == 0)
+src/GameSrv/Npc/CastleOfficial.cs:219:                            RepairWallNow(2, PlayObject);
+src/GameSrv/Npc/CastleOfficial.cs:222:                        else if (string.Compare(sLabel, ScriptFlagConst.sREPAIRWALLNOW3, StringComparison.OrdinalIgnoreCase) == 0)
+src/GameSrv/Npc/CastleOfficial.cs:224:                            RepairWallNow(3, PlayObject);
+src/GameSrv/Npc/CastleOfficial.cs:227:                        else if (HUtil32.CompareLStr(sLabel, ScriptFlagConst.sHIREGUARDNOW))
+src/GameSrv/Npc/CastleOfficial.cs:229:                            s20 = sLabel.Substring(ScriptFlagConst.sHIREGUARDNOW.Length, sLabel.Length);
+src/GameSrv/Npc/CastleOfficial.cs:230:                            HireGuard(s20, PlayObject);
+src/GameSrv/Npc/CastleOfficial.cs:233:                        else if (HUtil32.CompareLStr(sLabel, ScriptFlagConst.sHIREARCHERNOW))
+src/GameSrv/Npc/CastleOfficial.cs:235:                            s20 = sLabel.Substring(ScriptFlagConst.sHIREARCHERNOW.Length, sLabel.Length);
+src/GameSrv/Npc/CastleOfficial.cs:236:                            HireArcher(s20, PlayObject);
+src/GameSrv/Npc/CastleOfficial.cs:264:        private void HireGuard(string sIndex, IPlayerActor PlayObject)
+src/GameSrv/Npc/CastleOfficial.cs:271:            if (Castle.TotalGold >= SystemShare.Config.HireGuardPrice)
+src/GameSrv/Npc/CastleOfficial.cs:284:                                Castle.TotalGold -= SystemShare.Config.HireGuardPrice;
+src/GameSrv/Npc/CastleOfficial.cs:311:        private void HireArcher(string sIndex, IPlayerActor PlayObject)
+src/GameSrv/Npc/CastleOfficial.cs:318:            if (Castle.TotalGold >= SystemShare.Config.HireArcherPrice)
+src/GameSrv/Npc/CastleOfficial.cs:331:                                Castle.TotalGold -= SystemShare.Config.HireArcherPrice;
+src/GameSrv/Npc/CastleOfficial.cs:358:        private void RepairDoor(IPlayerActor PlayObject)
+src/GameSrv/Npc/CastleOfficial.cs:367:                if (Castle.RepairDoor())
+src/GameSrv/Npc/CastleOfficial.cs:383:        private void RepairWallNow(int nWallIndex, IPlayerActor PlayObject)
+
+===== [I] 税收 / 金库（IncRateGold / 提取 / 上缴 / 商人税） =====
+88:        public int TodayIncome { get; set; }
+89:        public int TotalGold { get; set; }
+336:                    TodayIncome = 0;
+599:        public int WithDrawalGolds(IPlayerActor PlayObject, int nGold)
+768:        public void IncRateGold(int nGold)
+770:            int nInGold = HUtil32.Round(nGold * (SystemShare.Config.CastleTaxRate / 100.0));
+771:            if (TodayIncome + nInGold <= SystemShare.Config.CastleOneDayGold)
+773:                TodayIncome += nInGold;
+777:                if (TodayIncome >= SystemShare.Config.CastleOneDayGold)
+783:                    nInGold = SystemShare.Config.CastleOneDayGold - TodayIncome;
+784:                    TodayIncome = SystemShare.Config.CastleOneDayGold;
+789:                if (TotalGold + nInGold < SystemShare.Config.CastleGoldMax)
+791:                    TotalGold += nInGold;
+795:                    TotalGold = SystemShare.Config.CastleGoldMax;
+803:                    //  M2Share.EventSource.AddEventLog(GameEventLogType.CastleTodayIncome, '0' + "\t" + '0' + "\t" + '0' + "\t" + "autosave" + "\t" + Grobal2.StringGoldName + "\t" + TotalGold + "\t" + '1' + "\t" + '0');
+814:        public int WithDrawalGolds(PlayObject PlayObject, int nGold)
+824:                if (nGold <= TotalGold)
+828:                        TotalGold -= nGold;
+850:        public int ReceiptGolds(PlayObject PlayObject, int nGold)
+862:                    if (TotalGold + nGold <= SystemShare.Config.CastleGoldMax)
+865:                        TotalGold += nGold;
+911:        public int ReceiptGolds(IPlayerActor PlayObject, int nGold)
+29:        public bool CastleMerchant { get; set; }
+87:            CastleMerchant = false;
+143:                if (CastleMerchant && Castle != null && Castle.UnderWar)
+544:                if (CastleMerchant || SystemShare.Config.GetAllNpcTax)
+548:                        Castle.IncRateGold(SystemShare.Config.UpgradeWeaponPrice);
+550:                    else if (SystemShare.Config.GetAllNpcTax)
+552:                        SystemShare.CastleMgr.IncRateGold(SystemShare.Config.UpgradeWeaponPrice);
+768:            if (CastleMerchant)
+772:                    int n14 = HUtil32._MAX(60, HUtil32.Round(PriceRate * (SystemShare.Config.CastleMemberPriceRate / 100.0)));//80%
+794:                if (!CastleMerchant || !(Castle != null && Castle.UnderWar))
+1250:                                            if (CastleMerchant || SystemShare.Config.GetAllNpcTax)
+1254:                                                    Castle.IncRateGold(nPrice);
+1256:                                                else if (SystemShare.Config.GetAllNpcTax)
+1258:                                                    SystemShare.CastleMgr.IncRateGold(SystemShare.Config.UpgradeWeaponPrice);
+1385:                    if (CastleMerchant || SystemShare.Config.GetAllNpcTax)
+1389:                            Castle.IncRateGold(nPrice);
+1391:                        else if (SystemShare.Config.GetAllNpcTax)
+1393:                            SystemShare.CastleMgr.IncRateGold(SystemShare.Config.UpgradeWeaponPrice);
+1637:                        if (CastleMerchant || SystemShare.Config.GetAllNpcTax)
+1641:                                Castle.IncRateGold(nRepairPrice);
+1643:                            else if (SystemShare.Config.GetAllNpcTax)
+1645:                                SystemShare.CastleMgr.IncRateGold(SystemShare.Config.UpgradeWeaponPrice);
+
+===== [J] 攻城区域 / 进出图 / 皇宫（InCastleWarArea / CheckInPalace / HomeX,Y） =====
+250:                    if (string.IsNullOrEmpty(playObject.HomeMap))
+254:                        playObject.HomeMap = GetHomeInfo(playObject.Job, ref homeX, ref homeY);
+257:                        playObject.MapName = playObject.HomeMap;
+299:                    IUserCastle userCastle = SystemShare.CastleMgr.InCastleWarArea(envir, playObject.CurrX, playObject.CurrY);
+300:                    if (envir != null && userCastle != null && (userCastle.PalaceEnvir == envir || userCastle.UnderWar))
+302:                        userCastle = SystemShare.CastleMgr.IsCastleMember(playObject);
+305:                            playObject.MapName = playObject.HomeMap;
+311:                            if (userCastle.PalaceEnvir == envir)
+313:                                playObject.MapName = userCastle.GetMapName();
+314:                                playObject.CurrX = userCastle.GetHomeX();
+315:                                playObject.CurrY = userCastle.GetHomeY();
+329:                            userCastle = SystemShare.CastleMgr.IsCastleMember(playObject);
+330:                            if (userCastle != null && userCastle.UnderWar)
+332:                                playObject.MapName = userCastle.HomeMap;
+333:                                playObject.CurrX = userCastle.GetHomeX();
+334:                                playObject.CurrY = userCastle.GetHomeY();
+338:                                playObject.MapName = playObject.HomeMap;
+345:                            playObject.MapName = SystemShare.Config.RedDieHomeMap;// '3'
+391:                        playObject.MapName = SystemShare.Config.HomeMap;
+392:                        envir = SystemShare.MapMgr.FindMap(SystemShare.Config.HomeMap);
+424:                        playObject.MapName = SystemShare.Config.HomeMap;
+425:                        envir = SystemShare.MapMgr.FindMap(SystemShare.Config.HomeMap);
+434:                            playObject.MapName = SystemShare.Config.HomeMap;
+435:                            envir = SystemShare.MapMgr.FindMap(SystemShare.Config.HomeMap);
+1127:            playObject.HomeMap = humData.HomeMap;
+1262:            playerInfo.HomeMap = playObject.HomeMap;
+1403:                result = SystemShare.Config.HomeMap;
+1802:                result = SystemShare.Config.HomeMap;
+80:        public IEnvirnoment CastleEnvir { get; set; }
+81:        public IEnvirnoment PalaceEnvir { get; set; }
+454:        public bool InCastleWarArea(IEnvirnoment envir, int nX, int nY)
+480:        public bool IsMember(PlayObject member)
+486:        public bool IsAttackAllyGuild(GuildInfo Guild)
+502:        public bool IsAttackGuild(GuildInfo Guild)
+609:        public bool IsMember(IPlayerActor member)
+614:        public bool IsDefenseAllyGuild(GuildInfo guild)
+629:        public bool IsDefenseGuild(GuildInfo guild)
+639:        public bool IsMasterGuild(IGuild guild)
+649:        public short GetHomeX()
+654:        public short GetHomeY()
+664:        public bool CheckInPalace(int nX, int nY, PlayObject targetObject)
+680:        public bool CheckInPalace(int nX, int nY)
+707:        public bool CheckInPalace(int nX, int nY, IPlayerActor targetObject)
+1040:        public bool IsAttackAllyGuild(IGuild Guild)
+1045:        public bool IsAttackGuild(IGuild Guild)
+1050:        public bool IsDefenseAllyGuild(IGuild guild)
+1055:        public bool IsDefenseGuild(IGuild guild)
+809:                            Castle = SystemShare.CastleMgr.GetCastle(0);
+1679:            Castle = SystemShare.CastleMgr.InCastleWarArea(this);
+
+===== [K] 行会 / 攻城 帧常量（C# Messages.cs） =====
+93:        public const int CM_OPENGUILDDLG = 1035;
+94:        public const int CM_GUILDHOME = 1036;
+95:        public const int CM_GUILDMEMBERLIST = 1037;
+96:        public const int CM_GUILDADDMEMBER = 1038;
+97:        public const int CM_GUILDDELMEMBER = 1039;
+98:        public const int CM_GUILDUPDATENOTICE = 1040;
+99:        public const int CM_GUILDUPDATERANKINFO = 1041;
+102:        public const int CM_GUILDALLY = 1044;
+103:        public const int CM_GUILDBREAKALLY = 1045;
+219:        public const int SM_GUILDMESSAGE = 104;
+364:        public const int SM_CHANGEGUILDNAME = 750;
+367:        public const int SM_OPENGUILDDLG = 753;
+368:        public const int SM_OPENGUILDDLG_FAIL = 754;
+369:        public const int SM_SENDGUILDMEMBERLIST = 756;
+370:        public const int SM_GUILDADDMEMBER_OK = 757;
+371:        public const int SM_GUILDADDMEMBER_FAIL = 758;
+372:        public const int SM_GUILDDELMEMBER_OK = 759;
+373:        public const int SM_GUILDDELMEMBER_FAIL = 760;
+374:        public const int SM_GUILDRANKUPDATE_FAIL = 761;
+375:        public const int SM_BUILDGUILD_OK = 762;
+376:        public const int SM_BUILDGUILD_FAIL = 763;
+380:        public const int SM_GUILDMAKEALLY_OK = 768;
+381:        public const int SM_GUILDMAKEALLY_FAIL = 769;
+382:        public const int SM_GUILDBREAKALLY_OK = 770;
+383:        public const int SM_GUILDBREAKALLY_FAIL = 771;
+453:        public const int SS_204 = 204;
+454:        public const int SS_205 = 205;
+455:        public const int SS_206 = 206;
+456:        public const int SS_207 = 207;
+460:        public const int SS_211 = 211;
+461:        public const int SS_212 = 212;
+619:        public const int RM_CHANGEGUILDNAME = 10301;
+621:        public const int RM_BUILDGUILD_OK = 10303;
+622:        public const int RM_BUILDGUILD_FAIL = 10304;
+649:        public const int RM_GUILDMESSAGE = 11007;
+721:        public const int ISM_ADDGUILD = 205;
+722:        public const int ISM_DELGUILD = 206;
+723:        public const int ISM_RELOADGUILD = 207;
+724:        public const int ISM_GUILDMSG = 208;
+727:        public const int ISM_CHANGECASTLEOWNER = 211;
+728:        public const int ISM_RELOADCASTLEINFO = 212;
+745:        public const int ISM_GUILDMEMBER_RECALL = 228;
+746:        public const int ISM_RELOADGUILDAGIT = 229;
+758:        public const int ISM_GUILDWAR = 241;
+
+===== [L] 落库：行会/攻城在 oracle 里【不落库】，全部走文件 =====
+----- sql/ 全量 CREATE TABLE（无 guild / guildmember / castle 任何表） -----
+sql/mir2_account.sql:24:CREATE TABLE `account`  (
+sql/mir2_account.sql:6163:CREATE TABLE `account_friend`  (
+sql/mir2_account.sql:6183:CREATE TABLE `account_protection`  (
+sql/mir2_account.sql:12214:CREATE TABLE `tbl_conncheckuser`  (
+sql/mir2_account.sql:12227:CREATE TABLE `tbl_connectlogs`  (
+sql/mir2_account.sql:15267:CREATE TABLE `tbl_countlogs`  (
+sql/mir2_account.sql:21015:CREATE TABLE `tbl_gmip`  (
+sql/mir2_account.sql:21030:CREATE TABLE `tbl_itemgive`  (
+sql/mir2_account.sql:21051:CREATE TABLE `tbl_m2premiumuser`  (
+sql/mir2_account.sql:21070:CREATE TABLE `tbl_pubips`  (
+sql/mir2_account.sql:21085:CREATE TABLE `tbl_selectgateips`  (
+sql/mir2_account.sql:21101:CREATE TABLE `tbl_serverinfo`  (
+sql/mir2_account.sql:21117:CREATE TABLE `tbl_usercount`  (
+sql/mir2_data.sql:24:CREATE TABLE `goldsales`  (
+sql/mir2_data.sql:43:CREATE TABLE `magics`  (
+sql/mir2_data.sql:183:CREATE TABLE `monsters`  (
+sql/mir2_data.sql:936:CREATE TABLE `stditems`  (
+sql/mir2_data.sql:1996:CREATE TABLE `upgradeinfo`  (
+sql/mir2_data.sql:2019:CREATE TABLE `upgradeinfo_item`  (
+sql/mir2_data.sql:2037:CREATE TABLE `upgradeinfo_item_attr`  (
+sql/mir2_db.sql:24:CREATE TABLE `characters`  (
+sql/mir2_db.sql:6073:CREATE TABLE `characters_ablity`  (
+sql/mir2_db.sql:12100:CREATE TABLE `characters_bagitem`  (
+sql/mir2_db.sql:287889:CREATE TABLE `characters_bonusability`  (
+sql/mir2_db.sql:287912:CREATE TABLE `characters_indexes`  (
+sql/mir2_db.sql:293929:CREATE TABLE `characters_item`  (
+sql/mir2_db.sql:371883:CREATE TABLE `characters_item_attr`  (
+sql/mir2_db.sql:371912:CREATE TABLE `characters_magic`  (
+sql/mir2_db.sql:371937:CREATE TABLE `characters_quest`  (
+sql/mir2_db.sql:371954:CREATE TABLE `characters_status`  (
+sql/mir2_db.sql:377977:CREATE TABLE `characters_storageitem`  (
+----- sql/ 里唯一与行会相关的列 -----
+sql/mir2_db.sql:59:  `AllowGuildReCall` tinyint(1) NULL DEFAULT 0 COMMENT '是否允许行会传送',
+----- 落库写入路径里与行会相关的全部命中（仅 AllowGuildReCall 一列） -----
+src/Storeages/DBSvr.Storage.MySQL\PlayDataStorage.Save.cs:88:            strSql.AppendLine("GroupRcallTime = @GroupRcallTime, AllowGuildReCall = @AllowGuildReCall, IsMaster = @IsMaster, MasterName = @MasterName, DearName = @DearName, StoragePwd = @StoragePwd, Deleted = @Deleted,LASTUPDATE = now() WHERE ID = @ID;");
+src/Storeages/DBSvr.Storage.MySQL\PlayDataStorage.Save.cs:123:            command.Parameters.AddWithValue("@AllowGuildReCall", hd.AllowGuildReCall);
+src/Storeages/DBSvr.Storage.MySQL\PlayDataStorage.Query.cs:251:                    humInfoData.AllowGuildReCall = dr.GetBoolean("AllowGuildReCall");
+src/Storeages/DBSvr.Storage.MySQL\PlayDataStorage.Add.cs:96:            strSql.AppendLine("HungerStatus, PayMentPoint, LockLogon, MarryCount, AllowGroupReCall, GroupRcallTime, AllowGuildReCall, IsMaster, MasterName, DearName");
+src/Storeages/DBSvr.Storage.MySQL\PlayDataStorage.Add.cs:100:            strSql.AppendLine("@HungerStatus, @PayMentPoint, @LockLogon, @MarryCount, @AllowGroupReCall, @GroupRcallTime, @AllowGuildReCall, @IsMaster, @MasterName, @DearName");
+src/Storeages/DBSvr.Storage.MySQL\PlayDataStorage.Add.cs:137:            command.Parameters.AddWithValue("@AllowGuildReCall", hd.AllowGuildReCall);
+----- 行会落盘：GuildManager.LoadGuildInfo / SaveGuildList -----
+src/M2Server/Guild/GuildInfo.cs:125:            string sFileName = Path.Combine(SystemShare.Config.GuildDir, string.Concat(sName + ".ini"));
+src/M2Server/Guild/GuildInfo.cs:199:            return LoadGuildFile(sFileName);
+src/M2Server/Guild/GuildInfo.cs:209:        public bool LoadGuildFile(string sGuildFileName)
+src/M2Server/Guild/GuildInfo.cs:214:            string sFileName = Path.Combine(SystemShare.Config.GuildDir, sGuildFileName);
+src/M2Server/Guild/GuildInfo.cs:370:                SaveGuildFile(Path.Combine(SystemShare.Config.GuildDir, string.Concat(GuildName, ".txt")));
+src/M2Server/Guild/GuildInfo.cs:375:                SaveGuildFile(Path.Combine(SystemShare.Config.GuildDir, GuildName, ".", M2Share.ServerIndex.ToString()));
+src/M2Server/Guild/GuildInfo.cs:384:        private void SaveGuildFile(string sFileName)
+src/M2Server/Guild/GuildInfo.cs:525:        public void CheckSaveGuildFile()
+src/M2Server/Guild/GuildInfo.cs:536:            CheckSaveGuildFile();
+src/M2Server/Guild/GuildInfo.cs:584:        public void UpdateGuildFile()
+src/M2Server/Guild/GuildInfo.cs:591:        public void BackupGuildFile()
+src/M2Server/Guild/GuildInfo.cs:595:                SaveGuildFile(Path.Combine(SystemShare.Config.GuildDir, GuildName, '.' + HUtil32.GetTickCount() + ".bak"));
+src/M2Server/Guild/GuildInfo.cs:650:            UpdateGuildFile();
+src/M2Server/Guild/GuildInfo.cs:675:                UpdateGuildFile();
+src/M2Server/Guild/GuildInfo.cs:693:                BackupGuildFile();
+src/M2Server/Guild/GuildInfo.cs:986:                UpdateGuildFile();
+src/M2Server/Guild/GuildInfo.cs:1054:            UpdateGuildFile();
+src/M2Server/Guild/GuildManager.cs:27:                SaveGuildList();
+src/M2Server/Guild/GuildManager.cs:46:                    guild.BackupGuildFile();
+src/M2Server/Guild/GuildManager.cs:48:                    SaveGuildList();
+src/M2Server/Guild/GuildManager.cs:78:        public void LoadGuildInfo()
+src/M2Server/Guild/GuildManager.cs:81:            if (File.Exists(SystemShare.Config.GuildFile))
+src/M2Server/Guild/GuildManager.cs:84:                loadList.LoadFromFile(SystemShare.Config.GuildFile);
+src/M2Server/Guild/GuildManager.cs:101:                        SaveGuildList();
+src/M2Server/Guild/GuildManager.cs:124:        private void SaveGuildList()
+src/M2Server/Guild/GuildManager.cs:137:                saveList.SaveToFile(SystemShare.Config.GuildFile);
+src/M2Server/Guild/GuildManager.cs:163:                    guild.UpdateGuildFile();
+src/M2Server/Guild/GuildManager.cs:165:                guild.CheckSaveGuildFile();
+----- 攻城落盘：CastleDir/CastleFile/SabukW.txt/AttackSabukWall.txt -----
+src/M2Server/Castle/CastleConf.cs:15:        public void LoadConfig(UserCastle userCastle)
+src/M2Server/Castle/CastleConf.cs:98:            string filePath = Path.Combine(M2Share.BasePath, SystemShare.Config.CastleDir, userCastle.ConfigDir);
+src/M2Server/Castle/UserCastle.cs:27:        public UserCastle(string sCastleDir)
+src/M2Server/Castle/UserCastle.cs:34:            ConfigDir = sCastleDir;
+src/M2Server/Castle/UserCastle.cs:50:            string filePath = Path.Combine(M2Share.BasePath, SystemShare.Config.CastleDir, ConfigDir);
+src/M2Server/Castle/UserCastle.cs:55:            castleConf = new CastleConf(Path.Combine(filePath, CastleConst.SabukWFileName));
+src/M2Server/Castle/UserCastle.cs:93:        public string ConfigDir { get; set; }
+src/M2Server/Castle/UserCastle.cs:111:            LoadConfig();
+src/M2Server/Castle/UserCastle.cs:228:        private void LoadConfig()
+src/M2Server/Castle/UserCastle.cs:230:            castleConf.LoadConfig(this);
+src/M2Server/Castle/UserCastle.cs:234:        private void SaveConfigFile()
+src/M2Server/Castle/UserCastle.cs:244:            string sabukwallPath = Path.Combine(M2Share.BasePath, SystemShare.Config.CastleDir, ConfigDir);
+src/M2Server/Castle/UserCastle.cs:251:            string sFileName = Path.Combine(sabukwallPath, CastleConst.AttackSabukWallList);
+src/M2Server/Castle/UserCastle.cs:295:            string sabukwallPath = Path.Combine(M2Share.BasePath, SystemShare.Config.CastleDir, ConfigDir);
+src/M2Server/Castle/UserCastle.cs:301:            string sFileName = Path.Combine(sabukwallPath, CastleConst.AttackSabukWallList);
+src/M2Server/Castle/UserCastle.cs:450:            SaveConfigFile();
+src/M2Server/Castle/UserCastle.cs:546:            SaveConfigFile();
+src/M2Server/Castle/CastleManager.cs:67:                IUserCastle castle = new UserCastle(SystemShare.Config.CastleDir);
+src/M2Server/Castle/CastleManager.cs:69:                castle.ConfigDir = "0";
+src/M2Server/Castle/CastleManager.cs:156:            string castleFile = Path.Combine(M2Share.BasePath, SystemShare.Config.CastleFile);
+src/M2Server/Castle/CastleManager.cs:163:                    string sCastleDir = loadList[i].Trim();
+src/M2Server/Castle/CastleManager.cs:164:                    if (!string.IsNullOrEmpty(sCastleDir))
+src/M2Server/Castle/CastleManager.cs:166:                        UserCastle castle = new UserCastle(sCastleDir);
+src/M2Server/Castle/CastleManager.cs:180:            string castleDirPath = Path.Combine(M2Share.BasePath, SystemShare.Config.CastleDir);
+src/M2Server/Castle/CastleManager.cs:190:            string savePath = Path.Combine(M2Share.BasePath, SystemShare.Config.CastleFile);
+----- 现网数据（冻结）：GuildBase / Castle 目录实测 -----
+GuildBase/GuildList.txt = 0 字节（空）；Guilds/ 目录不存在
+  Castle/0
+  Castle/1
+  Castle/Castle
+  Castle/List.txt
+  Castle/List.txt 内容 = 0
+  Castle/0/AttackSabukWall.txt = 0 字节（空 ⇒ 无已登记的攻城方）
+
+===== [M] 配置（GameSvrConf.cs 默认 / ServerConf.cs 读法 / 现网 Server.conf） =====
+162:        public string WomaHorn;
+163:        public string ZumaPiece;
+342:        public byte StartCastleWarDays;
+343:        public int StartCastlewarTime;
+344:        public int ShowCastleWarEndMsgTime;
+345:        public int CastleWarTime;
+346:        public int GetCastleTime;
+347:        public int GuildWarTime;
+351:        public int BuildGuildPrice;
+355:        public int GuildWarPrice;
+789:        public byte GuildRankNameLen;
+790:        public int GuildMemberMaxLimit;
+791:        public byte GuildNameLen;
+792:        public byte CastleNameLen;
+936:        public string CastleName;
+960:        public int CastleTaxRate;
+961:        public bool GetAllNpcTax;
+962:        public int HireGuardPrice;
+963:        public int HireArcherPrice;
+964:        public int CastleGoldMax;
+965:        public int CastleOneDayGold;
+966:        public int RepairDoorPrice;
+967:        public int RepairWallPrice;
+968:        public int CastleMemberPriceRate;
+1318:            WomaHorn = "沃玛号角";
+1319:            ZumaPiece = "祖玛头像";
+1442:            StartCastleWarDays = 4;
+1443:            StartCastlewarTime = 20;
+1444:            ShowCastleWarEndMsgTime = 10 * 60 * 1000;
+1445:            CastleWarTime = 3 * 60 * 60 * 1000;
+1446:            GetCastleTime = 10 * 60 * 1000;
+1447:            GuildWarTime = 3 * 60 * 60 * 1000;
+1448:            BuildGuildPrice = 1000000;
+1449:            GuildWarPrice = 30000;
+1720:            GuildRankNameLen = 16;
+1721:            GuildMemberMaxLimit = 200;
+1722:            GuildNameLen = 16;
+1782:            CastleName = "沙巴克";
+1788:            CastleTaxRate = 5;
+1789:            GetAllNpcTax = false;
+1790:            HireGuardPrice = 300000;
+1791:            HireArcherPrice = 300000;
+1792:            CastleGoldMax = 10000000;
+1793:            CastleOneDayGold = 2000000;
+1794:            RepairDoorPrice = 2000000;
+1795:            RepairWallPrice = 500000;
+1796:            CastleMemberPriceRate = 80;
+----- 现网 Server.conf 实测值 -----
+94:WomaHorn=沃玛号角
+95:ZumaPiece=祖玛头像
+303:BuildGuild=1000000
+305:GuildWarFee=30000
+306:HireGuard=300000
+307:HireArcher=300000
+308:RepairDoor=2000000
+309:RepairWall=500000
+310:CastleGoldMax=5000000
+337:CastleOneDayGold=2000000
+338:CastleName=沙巴克
+344:CastleTaxRate=5
+345:CastleGetAllNpcTax=0
+348:StartCastleWarDays=2
+349:ShowCastleWarEndMsgTime=600000
+350:CastleWarTime=7200000
+351:GetCastleTime=600000
+380:StartCastlewarTime=20
+574:CastleMemberPriceRate=80
+767:GuildWarTime=7200000
+768:GuildNameLen=15
+769:GuildMemberMaxLimit=500
+876:CastleNameLen=16
+
+===== [N] oracle 侧断点/隐患（行为等价必须逐条面对：或照搬、或 owner 签字登记白名单） =====
+----- N1 IUserCastle 接口用 IGuild/IPlayerActor 形参，而 UserCastle 的同名实现体是 NotImplementedException -----
+601:            throw new NotImplementedException();
+646:            throw new NotImplementedException();
+672:            throw new NotImplementedException();
+677:            throw new NotImplementedException();
+709:            throw new NotImplementedException();
+913:            throw new NotImplementedException();
+1042:            throw new NotImplementedException();
+1047:            throw new NotImplementedException();
+1052:            throw new NotImplementedException();
+1057:            throw new NotImplementedException();
+----- N1 调用点（静态类型 IUserCastle/IPlayerActor ⇒ 命中抛异常重载） -----
+src/M2Server/Player/PlayObject.Operate.cs:371:            if (castle == null || castle.DoorStatus != door.Status || Race != ActorRace.Play || castle.CheckInPalace(CurrX, CurrY, this))
+src/Modules/GameCommand/Commands/ChangeSabukLordCommand.cs:39:                castle.GetCastle(guild);
+src/GameSrv/Npc/CastleOfficial.cs:157:                            switch (Castle.WithDrawalGolds(PlayObject, HUtil32.StrToInt(sMsg, 0)))
+src/GameSrv/Npc/CastleOfficial.cs:179:                            switch (Castle.ReceiptGolds(PlayObject, HUtil32.StrToInt(sMsg, 0)))
+src/GameSrv/Npc/GuildOfficial.cs:219:                    if (Castle.AddAttackerInfo(PlayObject.MyGuild))
+src/M2Server/Player/PlayObject.Message.cs:325:                                if (castle.IsAttackGuild(MyGuild))
+src/M2Server/Player/PlayObject.Message.cs:327:                                    if (castle.CanGetCastle(MyGuild))
+src/M2Server/Player/PlayObject.Message.cs:329:                                        castle.GetCastle(MyGuild);
+----- N2 AddWarGuild 条件反置（未在战中无法宣战；已在战中会重复追加一条） -----
+       1	        public WarGuild AddWarGuild(IGuild guild)
+       2	        {
+       3	            WarGuild result = default;
+       4	            WarGuild warGuild = default;
+       5	            if (guild != null)
+       6	            {
+       7	                if (!IsAllyGuild(guild))
+       8	                {
+       9	                    for (int i = 0; i < GuildWarList.Count; i++)
+      10	                    {
+      11	                        if (GuildWarList[i].Guild == guild)
+      12	                        {
+      13	                            warGuild = GuildWarList[i];
+      14	                            warGuild.WarTick = HUtil32.GetTickCount();
+      15	                            warGuild.WarTime = SystemShare.Config.GuildWarTime;// 10800000
+      16	                            SendGuildMsg("***" + guild.GuildName + "行会战争将持续三个小时。");
+      17	                            break;
+      18	                        }
+      19	                    }
+      20	                    if (warGuild.WarTime > 0)
+      21	                    {
+      22	                        warGuild = new WarGuild
+      23	                        {
+      24	                            Guild = guild,
+      25	                            WarTick = HUtil32.GetTickCount(),
+      26	                            WarTime = SystemShare.Config.GuildWarTime// 10800000
+      27	                        };
+      28	                        GuildWarList.Add(warGuild);
+      29	                        SendGuildMsg("***" + guild.GuildName + "行会战争开始(三个小时)");
+      30	                    }
+      31	                    result = warGuild;
+      32	                }
+      33	            }
+      34	            RefMemberName();
+      35	            UpdateGuildFile();
+      36	            return result;
+      37	        }
+----- N3 UpdateRank 成功路径把 RankList 换成空表（成员表被清空） -----
+       1	            if (result == 0)
+       2	            {
+       3	                IList<GuildRank> rankListTmp = new List<GuildRank>();
+       4	                ClearRankList(ref rankListTmp);
+       5	                //RankList = guildRankList;// 更新在线人物职位表
+       6	                RankList = rankListTmp;
+       7	                for (int i = 0; i < RankList.Count; i++)
+       8	                {
+       9	                    guildRank = RankList[i];
+      10	                    for (int j = 0; j < guildRank.MemberList.Count; j++)
+----- N4 CheckGuildName 校验循环少比最后一个字符（Length-1） -----
+       1	        public static bool CheckGuildName(string sGuildName)
+       2	        {
+       3	            bool result = true;
+       4	            if (sGuildName.Length > SystemShare.Config.GuildNameLen)
+       5	            {
+       6	                return false;
+       7	            }
+       8	            for (int i = 0; i < sGuildName.Length - 1; i++)
+       9	            {
+      10	                if (sGuildName[i] < '0' || sGuildName[i] == '/' || sGuildName[i] == '\\' || sGuildName[i] == ':' || sGuildName[i] == '*' || sGuildName[i] == ' '
+      11	                    || sGuildName[i] == '\"' || sGuildName[i] == '\'' || sGuildName[i] == '<' || sGuildName[i] == '|' || sGuildName[i] == '?' || sGuildName[i] == '>')
+      12	                {
+      13	                    result = false;
+      14	                }
+      15	            }
+      16	            return result;
+      17	        }
+----- N5 HireGuard/HireArcher 的 Substring(start, sLabel.Length) 越界 -----
+       1	                        }
+       2	                        else if (HUtil32.CompareLStr(sLabel, ScriptFlagConst.sHIREGUARDNOW))
+       3	                        {
+       4	                            s20 = sLabel.Substring(ScriptFlagConst.sHIREGUARDNOW.Length, sLabel.Length);
+       5	                            HireGuard(s20, PlayObject);
+       6	                            PlayObject.SendMsg(this, Messages.RM_MENU_OK, 0, ActorId, 0, 0);
+       7	                        }
+       8	                        else if (HUtil32.CompareLStr(sLabel, ScriptFlagConst.sHIREARCHERNOW))
+       9	                        {
+      10	                            s20 = sLabel.Substring(ScriptFlagConst.sHIREARCHERNOW.Length, sLabel.Length);
+      11	                            HireArcher(s20, PlayObject);
+      12	                            PlayObject.SendMsg(this, Messages.RM_MENU_OK, 0, ActorId, 0, 0);
+      13	                        }
+      14	                        else if (string.Compare(sLabel, ScriptFlagConst.sEXIT, StringComparison.OrdinalIgnoreCase) == 0)
+      15	                        {
