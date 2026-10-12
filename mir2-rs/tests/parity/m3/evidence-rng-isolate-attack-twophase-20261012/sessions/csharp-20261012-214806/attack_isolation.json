@@ -1,0 +1,17 @@
+{
+  "side": "csharp",
+  "isolate_attack": true,
+  "attack_seed": 40545,
+  "trace": "E:/tmp/m3cs-iso2/csharp/rng-stream.tsv",
+  "trace_isolate": true,
+  "trace_isolate_seed": 40545,
+  "sites_dump": "E:\\tmp\\m3cs-iso2\\csharp\\rng-isolate-sites.txt",
+  "sites_dump_sha256": "47061e1b24b41d192a6efb6988c24c849f48fdb08105aa40b5c852803a531d99",
+  "sites_cursor": "E:\\tmp\\m3cs-iso-wt\\mir2-rs\\tests\\parity\\m3\\rng-hook\\divert-sites.txt",
+  "sites_cursor_sha256": "47061e1b24b41d192a6efb6988c24c849f48fdb08105aa40b5c852803a531d99",
+  "attack_stream": "",
+  "attack_stream_sha256": "",
+  "predicates_table": "E:\\tmp\\m3cs-iso-wt\\mir2-rs\\tests\\parity\\m3\\rng-isolate-attack\\attack_sites.tsv",
+  "predicates_table_sha256": "c47e81c6321517e9a13a25a5ea9e003cb80f281db71eb23b333e9fb2c79b3a32",
+  "ts": "2026-10-12T21:49:50.9455165+08:00"
+}

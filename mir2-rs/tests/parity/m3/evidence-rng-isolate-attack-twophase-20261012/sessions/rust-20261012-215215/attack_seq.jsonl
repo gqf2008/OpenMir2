@@ -1,0 +1,21 @@
+{"k": 1, "hit": true, "dmg": 1, "hp": 18, "maxhp": 19}
+{"k": 2, "hit": true, "dmg": 1, "hp": 17, "maxhp": 19}
+{"k": 3, "hit": true, "dmg": 1, "hp": 16, "maxhp": 19}
+{"k": 4, "hit": true, "dmg": 1, "hp": 15, "maxhp": 19}
+{"k": 5, "hit": true, "dmg": 1, "hp": 14, "maxhp": 19}
+{"k": 6, "hit": false, "dmg": 0, "hp": 0, "maxhp": 0}
+{"k": 7, "hit": false, "dmg": 0, "hp": 0, "maxhp": 0}
+{"k": 8, "hit": false, "dmg": 0, "hp": 0, "maxhp": 0}
+{"k": 9, "hit": false, "dmg": 0, "hp": 0, "maxhp": 0}
+{"k": 10, "hit": true, "dmg": 1, "hp": 13, "maxhp": 19}
+{"k": 11, "hit": false, "dmg": 0, "hp": 0, "maxhp": 0}
+{"k": 12, "hit": true, "dmg": 1, "hp": 12, "maxhp": 19}
+{"k": 13, "hit": false, "dmg": 0, "hp": 0, "maxhp": 0}
+{"k": 14, "hit": true, "dmg": 1, "hp": 11, "maxhp": 19}
+{"k": 15, "hit": false, "dmg": 0, "hp": 0, "maxhp": 0}
+{"k": 16, "hit": false, "dmg": 0, "hp": 0, "maxhp": 0}
+{"k": 17, "hit": false, "dmg": 0, "hp": 0, "maxhp": 0}
+{"k": 18, "hit": true, "dmg": 1, "hp": 10, "maxhp": 19}
+{"k": 19, "hit": false, "dmg": 0, "hp": 0, "maxhp": 0}
+{"k": 20, "hit": false, "dmg": 0, "hp": 0, "maxhp": 0}
+{"role": "summary", "attacked": 20, "hits": 9, "dodges": 11, "sum": 9, "death_k": null, "min_hp": 10, "filtered_foreign": 0, "other_observer": 9, "deduped": 0, "unattributed": 0}
