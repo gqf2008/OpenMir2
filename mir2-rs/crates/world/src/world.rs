@@ -637,6 +637,58 @@ impl World {
         Some(outcome)
     }
 
+    /// **同步移动**（`openmir2-m3-move-wiring` 的接线入口）：`steps` = 走 / 跑 / 骑跑的格数（1/2/3）。
+    ///
+    /// oracle 的 `ClientWalkXY`/`ClientRunXY`/`ClientHorseRunXY` 在**消息处理线程上立即**改坐标
+    /// （`WalkTo`/`RunTo`/`HorseRunTo` → `Envir.MoveToMovingObject`），不等 tick；本方法对应
+    /// `Command::Walk` 的**同一套** `try_step` 判据（阻挡/格子校验逐字节同构），只是不入队。
+    ///
+    /// `steps > 1` 时照 oracle 的写法**先逐格判可走、再一次性移动**（`RunTo` 的
+    /// `CanWalkEx(cur+1) && CanWalkEx(cur+2) && MoveToMovingObject(cur, cur+2)`；
+    /// `HorseRunTo` 为 3 格）：中途任一格不可走 ⇒ 一格都不动（不是走一段再失败）。
+    #[must_use]
+    pub fn try_step_now(&mut self, actor_id: i32, dx: i32, dy: i32, steps: i32) -> bool {
+        if steps <= 0 || (dx == 0 && dy == 0) {
+            return false;
+        }
+        let Some(e) = self.entities.get(actor_id) else {
+            return false;
+        };
+        let (fx, fy, map_id) = (e.x, e.y, e.map_id);
+        for k in 1..=steps {
+            if !self.cell_free(map_id, fx + dx * k, fy + dy * k, actor_id) {
+                return false;
+            }
+        }
+        self.try_step(actor_id, dx * steps, dy * steps)
+    }
+
+    /// 目标格是否可站（与 `try_step` 的阻挡口径同源：`cell_match` + `valid()/is_available()` +
+    /// 阻挡 actor 的 `!Ghost && !Death && !FixedHideMode && !ObMode`；`self_id` 自己不算阻挡）。
+    fn cell_free(&self, map_id: usize, tx: i32, ty: i32, self_id: i32) -> bool {
+        let Some(map) = self.maps.get(map_id) else {
+            return false;
+        };
+        if !map.cell_match(tx, ty) {
+            return false;
+        }
+        let (cell, ok) = map.get_cell_info(tx, ty);
+        if !ok {
+            return false;
+        }
+        if !(cell.valid() && cell.is_available()) {
+            return true;
+        }
+        !cell.obj_list.iter().any(|o| {
+            o.actor_object
+                && o.cell_obj_id != self_id
+                && self
+                    .entities
+                    .get(o.cell_obj_id)
+                    .is_some_and(|e| !e.ghost && !e.death && !e.fixed_hide_mode && !e.ob_mode)
+        })
+    }
+
     /// 单步移动：格子校验 → 更新坐标。
     fn try_step(&mut self, actor_id: i32, dx: i32, dy: i32) -> bool {
         let Some(e) = self.entities.get(actor_id) else {
@@ -848,6 +900,46 @@ mod tests {
         let r2 = w2.tick();
         assert_eq!(r.processed, r2.processed);
         assert_eq!(r.aoi_order, r2.aoi_order);
+    }
+
+    /// `openmir2-m3-move-wiring`：同步移动（`ClientWalkXY`/`RunTo`/`HorseRunTo` 口径）。
+    /// - 1/2/3 格的 `steps` 语义；
+    /// - `steps > 1` 时**任一中间格不可走 ⇒ 一格都不动**（oracle `RunTo` 先 `CanWalkEx(cur+1) &&
+    ///   CanWalkEx(cur+2)` 再 `MoveToMovingObject`，不是走一段再失败）；
+    /// - `(0,0)` / `steps <= 0` 拒绝。
+    #[test]
+    fn try_step_now_is_synchronous_and_atomic() {
+        let mut w = world_with(&[(1, 5, 5)]);
+        w.tick(); // Enter 落格
+        assert!(w.try_step_now(1, 1, 0, 1));
+        assert_eq!(
+            (w.entities.get(1).unwrap().x, w.entities.get(1).unwrap().y),
+            (6, 5),
+            "走 1 格"
+        );
+        assert!(w.try_step_now(1, 1, 0, 2));
+        assert_eq!(
+            (w.entities.get(1).unwrap().x, w.entities.get(1).unwrap().y),
+            (8, 5),
+            "跑 2 格"
+        );
+        assert!(w.try_step_now(1, 0, 1, 3));
+        assert_eq!(
+            (w.entities.get(1).unwrap().x, w.entities.get(1).unwrap().y),
+            (8, 8),
+            "骑跑 3 格"
+        );
+        assert!(!w.try_step_now(1, 0, 0, 1), "(0,0) 拒绝");
+        assert!(!w.try_step_now(1, 1, 0, 0), "steps<=0 拒绝");
+
+        // 中间格被另一个 actor 占住 ⇒ 2 格跑一格都不动（整段原子）。
+        let mut w2 = world_with(&[(1, 5, 5), (2, 6, 5)]);
+        w2.tick();
+        assert!(!w2.try_step_now(1, 1, 0, 2), "第 1 格被占 ⇒ 整段不动");
+        assert_eq!(
+            (w2.entities.get(1).unwrap().x, w2.entities.get(1).unwrap().y),
+            (5, 5)
+        );
     }
 
     #[test]

@@ -148,26 +148,82 @@ impl DisplayTable {
     }
 }
 
-/// `RM_TURN` 支产出的**一组两帧**：`SM_TURN` + 紧随的 `SM_FEATURECHANGED`
-/// （`PlayObject.Message.cs:1552-1560`）。
+/// `CharDesc`（8B，`PlayObject.Message.cs` 的 `turnmessage`/`walkmessage`）：
+/// `Feature(i32 LE) + Status(i32 LE)`。
+#[must_use]
+pub fn char_desc(feature: i32, status: i32) -> [u8; 8] {
+    let mut d = [0u8; 8];
+    d[0..4].copy_from_slice(&feature.to_le_bytes());
+    d[4..8].copy_from_slice(&status.to_le_bytes());
+    d
+}
+
+/// **出现帧**路径（`PlayObject.Run` 的 `Show` 支）产出的**一组两帧**：`SM_TURN` + 紧随的
+/// `SM_FEATURECHANGED`（`PlayObject.Message.cs:1552-1560`）。
+///
+/// 该路径的 oracle `SendMsg(baseObject, RM_TURN, Dir, CurrX, CurrY, 0, baseObject.GetShowName())`
+/// （`PlayObject.cs:3240`）**带非空 `Msg`** ⇒ `PlayObject.Message.cs:1549-1555` 追加
+/// `EncodeString($"{Msg}/{nObjCount}")` **名尾**。
 ///
 /// - `target` = 被看见对象的 `ActorId`（命令头 `Recog`）；
 /// - `x`/`y` = 该对象的 `CurrX`/`CurrY`（oracle 的 `processMsg.nParam1/nParam2`）；
 /// - `SM_TURN` 的 `Series` = `MakeWord(Dir, Light)`，尾 = `Encode(CharDesc(Feature,Status))`，
 ///   非空 `ShowName` 时再直接相接 `Encode("ShowName/Color")`；
 /// - `SM_FEATURECHANGED` = `(Recog=target, Param=LoWord(feature), Tag=HiWord(feature), Series=feature_ex)`。
+///
+/// ⚠️ **`CM_TURN` 路径不要用本函数**（`Msg` 恒空、无名尾）——见 [`turn_pair_nameless`]。
 #[must_use]
 pub fn turn_pair(target: i32, x: u16, y: u16, d: &ActorDisplay) -> Vec<Vec<u8>> {
-    let mut char_desc = [0u8; 8];
-    char_desc[0..4].copy_from_slice(&d.feature.to_le_bytes());
-    char_desc[4..8].copy_from_slice(&d.status.to_le_bytes());
+    let desc = char_desc(d.feature, d.status);
     let mut msg = d.show_name.clone();
     msg.push(b'/');
     msg.extend_from_slice(d.name_color.to_string().as_bytes());
     vec![
-        smframe::sm_turn(target, x, y, d.dir, d.light, &char_desc, &msg),
+        smframe::sm_turn(target, x, y, d.dir, d.light, &desc, &msg),
         smframe::sm_featurechanged(target, d.feature, d.feature_ex),
     ]
+}
+
+/// **`CM_TURN` 下行**路径产出的**一组两帧**：`SM_TURN` + 紧随的 `SM_FEATURECHANGED`（`RM_TURN` 支）。
+///
+/// oracle 路径：`CM_TURN` → `ClientChangeDir` 成功 → `Walk(RM_TURN)`（`PlayObject.Operate.cs:334`）
+/// → `SendRefMsg(RM_TURN, Dir, CurrX, CurrY, 0, "")`（`PlayObject.cs:1922`；`sMsg` 空原样透传）
+/// ⇒ `processMsg.Msg` **恒空** ⇒ `PlayObject.Message.cs:1549-1555` 的 `if (!string.IsNullOrEmpty(Msg))`
+/// **不成立**，帧尾只有 `Encode(8B CharDesc)`，**没有** `Encode("ShowName/Color")` 名尾。
+/// `SM_FEATURECHANGED` 照发（同一 `case` 里 `wIdent == RM_TURN` 支无条件发）。
+///
+/// 名尾**只属于**「出现帧」路径（[`turn_pair`]，`PlayObject.cs:3240`）；`RM_WALK`/`RM_RUN`
+/// 同样不带名尾（见 [`move_frame`]）。
+#[must_use]
+pub fn turn_pair_nameless(target: i32, x: u16, y: u16, d: &ActorDisplay) -> Vec<Vec<u8>> {
+    let desc = char_desc(d.feature, d.status);
+    vec![
+        smframe::sm_turn(target, x, y, d.dir, d.light, &desc, &[]),
+        smframe::sm_featurechanged(target, d.feature, d.feature_ex),
+    ]
+}
+
+/// `RM_WALK`/`RM_RUN`/`RM_HORSERUN` 支产出的**单帧**（`PlayObject.Message.cs:1403-1432`）。
+///
+/// 收件人口径与 `turn_pair` 同：oracle 三个 `case` 都带 `if (processMsg.ActorId != ActorId)`
+/// ⇒ **只发给附近观察者，移动者自己不入帧**（自己那条连接靠 `+GD` ack）。
+/// `ident` 非 `SM_WALK`/`SM_RUN`/`SM_HORSERUN` 时返回 `None`（不猜）。
+#[must_use]
+pub fn move_frame(ident: u16, target: i32, x: u16, y: u16, d: &ActorDisplay) -> Option<Vec<u8>> {
+    match ident {
+        mir2_protocol::messages::SM_WALK
+        | mir2_protocol::messages::SM_RUN
+        | mir2_protocol::messages::SM_HORSERUN => Some(smframe::sm_move(
+            ident,
+            target,
+            x,
+            y,
+            d.dir,
+            d.light,
+            &char_desc(d.feature, d.status),
+        )),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -276,6 +332,67 @@ mod tests {
             feat_wire,
             "SM_FEATURECHANGED 必须逐字节等于金标准 ident=41 那条"
         );
+    }
+
+    /// **F-1 判据（`openmir2-m3-move-wiring` 返工）**：`CM_TURN` 下行走 [`turn_pair_nameless`]，
+    /// 即便展示表里有名字，`SM_TURN` 尾也**只能**是 `Encode(8B CharDesc)`，**不得**含
+    /// `Encode("ShowName/Color")` 名尾（oracle `PlayObject.Message.cs:1549-1555`：`CM_TURN` 的
+    /// `processMsg.Msg` 恒空）。
+    ///
+    /// 红检：把本函数改回 [`turn_pair`]（或给 `sm_turn` 传非空 `msg`）⇒ 尾长度/内容断言必红。
+    #[test]
+    fn turn_pair_nameless_has_no_show_name_tail() {
+        let d = ActorDisplay::new(2, 3, 111, 7, 0, 255, b"mover".to_vec());
+        let pair = turn_pair_nameless(42, 11, 10, &d);
+        assert_eq!(pair.len(), 2, "RM_TURN 支 = SM_TURN + SM_FEATURECHANGED");
+        let desc = char_desc(d.feature, d.status);
+        assert_eq!(
+            &pair[0][12..],
+            &mir2_protocol::edcode::encode(&desc),
+            "CM_TURN 的 SM_TURN 尾必须只有 Encode(8B CharDesc)，无名尾"
+        );
+        assert_eq!(pair[0].len(), 12 + 11, "尾 = Encode(8B) = 11 字符");
+        assert!(
+            !pair[0].windows(d.show_name.len()).any(|w| w == d.show_name),
+            "CM_TURN 的 SM_TURN 不得把 GetShowName() 拼进尾"
+        );
+        assert_eq!(
+            u16::from_le_bytes([pair[1][4], pair[1][5]]),
+            mir2_protocol::messages::SM_FEATURECHANGED
+        );
+    }
+
+    /// **`openmir2-m3-move-wiring` ③（SM_WALK 的逐字节判据）**：`move_frame` 必须重建 M0 金标准里
+    /// 的 `SM_WALK`(ident 11) —— 输入全部从该帧真字节回读：`x`/`y` 取头 `Param`/`Tag`，
+    /// `Dir`/`Light` 取 `Series` 两个字节，`Feature`/`Status` 取尾 `Encode(8B CharDesc)` 解码。
+    ///
+    /// 红检：把 `sm_move` 的尾从 `Encode(char_desc)` 改成原样拼接（或把 `Series` 改成 `MakeWord(Light,
+    /// Dir)`）⇒ 本用例必红。
+    #[test]
+    fn move_frame_rebuilds_golden_sm_walk() {
+        let (ident, recog, x, y, series, wire) = golden_line("\"ident\":11,");
+        assert_eq!(ident, mir2_protocol::messages::SM_WALK);
+        let (_head, tail) = split_wire(&wire);
+        let desc = mir2_protocol::edcode::decode(&tail);
+        assert_eq!(desc.len(), 8, "SM_WALK 尾必须是 Encode(8B CharDesc)");
+        let d = ActorDisplay {
+            dir: u8::try_from(series & 0xFF).unwrap(),
+            light: u8::try_from(series >> 8).unwrap(),
+            feature: i32::from_le_bytes(desc[0..4].try_into().unwrap()),
+            feature_ex: 0,
+            status: i32::from_le_bytes(desc[4..8].try_into().unwrap()),
+            name_color: 255,
+            show_name: Vec::new(),
+        };
+        let built = move_frame(mir2_protocol::messages::SM_WALK, recog, x, y, &d)
+            .expect("SM_WALK 必须有编码器");
+        assert_eq!(
+            smframe::client_frame(&built),
+            wire,
+            "SM_WALK 必须逐字节等于金标准 ident=11 那条"
+        );
+        // 不猜：非移动 ident 返回 None。
+        assert!(move_frame(mir2_protocol::messages::SM_TURN, recog, x, y, &d).is_none());
     }
 
     /// `GetMyLight` 的三条分支（`PlayObject.cs:5404-5430`）：等级 ≥50 记 1；

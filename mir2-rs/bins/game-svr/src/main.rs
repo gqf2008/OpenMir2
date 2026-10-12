@@ -42,6 +42,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use game_svr::chat;
 use game_svr::downlink;
+use game_svr::movewire;
 use game_svr::smframe;
 use mir2_protocol::frame::ServerMessage;
 use mir2_protocol::messages::grobal2;
@@ -82,6 +83,10 @@ enum SimToGate {
     /// S2b-4 续：世界 → 客户端的一条 `SM_*` 帧（`body` = 12B 命令头 + 尾）。
     /// gate 侧按 oracle `ClientSession.cs:897-920` 变成 `'#' + Encode(头12B) + 尾 + '!'` 发客户端。
     SendFrame { socket: i32, body: Vec<u8> },
+    /// `openmir2-m3-move-wiring`：`SendSocket(string)` 的**短包**支（oracle `PlayObject.Socket.cs:48-71`
+    /// 把 `PackLength` 置为 `-len`、正文原样）。网关端 `client_frame(pack_length < 0)` 变成
+    /// `'#' + 正文 + '!'` —— 真机观测到的 `#+GD/<tick>!`（`M2Share.GetGoodTick`）就是这条。
+    SendRaw { socket: i32, payload: Vec<u8> },
 }
 
 /// I/O 侧 → sim 侧的事件（sim 线程是唯一碰 `World` 的地方）。
@@ -1618,6 +1623,208 @@ fn save_human_rcd(
     }
 }
 
+/// `CM_TURN`(3010) / `CM_WALK`(3011) / `CM_RUN`(3013) / `CM_HORSERUN`(3035) 的派发
+/// （`openmir2-m3-move-wiring`）。
+///
+/// 口径（照 oracle，逐行见 `game_svr::movewire` 模块头）：
+/// - 四者共用 `WorldServer.cs:831-838` 的入帧映射 ⇒ `nX/nY = LoWord/HiWord(Recog)`、`nDir = (byte)Tag`；
+/// - `CM_TURN`：`ClientChangeDir`（`PlayObject.Operate.cs:310-348`）**只在 `nX == CurrX && nY == CurrY`**
+///   时改朝向 + `Walk(RM_TURN)`，由调用方 `SendSocket(GetGoodTick)` 回 `+GD`；下行 `SM_TURN`
+///   **名尾为空**（`SendRefMsg(..., "")` ⇒ `processMsg.Msg` 恒空）⇒ 用 `turn_pair_nameless`；
+/// - `CM_WALK/RUN/HORSERUN`：`M2Share.GetNextDirection` 求方向后各走 1/2/3 格；移动帧广播不受
+///   result 门影响，**但 `+GD` 只在 `movewire::move_result_ok`（oracle `SpaceMoved || CurrX==nX &&
+///   CurrY==nY`，本仓库无 `SpaceMoved` ⇒ 退化为 `at_target`）为真时回**；
+/// - **`Death` 守卫**：四支开头 oracle 都有 `if (Death || StatusTimeArr[PoisonState.STONE] != 0)
+///   return false`（`PlayObject.Operate.cs:312` / `PlayObject.Attack.cs:1373/1297/980`）；
+///   本片已接 `Entity.death`，**`STONE` 未移植（登记）**；
+/// - `RM_TURN`/`RM_WALK`/`RM_RUN`/`RM_HORSERUN` 都经 `SendRefMsg`（±`SendRefMsgRange` 格内
+///   `Race==Play && !Ghost`）广播，而收件人处理器排除自己（`processMsg.ActorId != ActorId`）
+///   ⇒ **转折/移动帧只发给附近观察者**，自己那条连接只收 `+GD` ack。
+///
+/// 未接（登记，见 `movewire` 模块头）：限速/超速、`HealthTick` 扣减、失败支 `RM_MOVEFAIL`。
+#[allow(clippy::too_many_arguments)]
+fn handle_move_cmd(
+    ident: u16,
+    recog: i32,
+    tag: u16,
+    chr_name: &str,
+    socket: i32,
+    online: &OnlineRegistry,
+    world: &mut mir2_world::World,
+    displays: &mut downlink::DisplayTable,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+) {
+    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
+        glog!(
+            "WRN",
+            "移动命令：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃 ident={ident}"
+        );
+        return;
+    };
+    let actor_id = entry.actor_id;
+    let Some(e) = world.entities.get(actor_id) else {
+        glog!(
+            "WRN",
+            "移动命令：actor_id={actor_id} 不在世界 ⇒ 丢弃 ident={ident}"
+        );
+        return;
+    };
+    let (cur_x, cur_y, is_dead) = (e.x, e.y, e.death);
+    if is_dead {
+        // oracle `ClientChangeDir`/`ClientWalkXY`/`ClientRunXY`/`ClientHorseRunXY` 开头的
+        // `if (Death || StatusTimeArr[PoisonState.STONE] != 0) return false`。`Entity.death` 已接；
+        // `STONE`（麻痹状态位）未移植 ⇒ 登记（movewire 模块头）。拒绝支不回 `+GD`，
+        // `delayTime == 0` 时 oracle 改发 `RM_MOVEFAIL`（未接，只记日志）。
+        glog!(
+            "DBG",
+            "移动命令：ChrName={chr_name} 已死亡 ⇒ 拒绝（oracle Death 守卫；STONE 未接）ident={ident}"
+        );
+        return;
+    }
+    // `WorldServer.cs:831-838`：`nX = (short)LoWord(Recog)`、`nY = (short)HiWord(Recog)`、`wParam = Tag`。
+    let nx = i32::from(game_svr::feature::lo_word(recog) as i16);
+    let ny = i32::from(game_svr::feature::hi_word(recog) as i16);
+
+    match ident {
+        mir2_protocol::messages::CM_TURN => {
+            let n_dir = u8::try_from(tag & 0x00FF).unwrap_or(0);
+            if !movewire::turn_is_at_target(nx, ny, cur_x, cur_y) {
+                // oracle `ClientChangeDir` 返回 false；`delayTime == 0` 时调用方发 `RM_MOVEFAIL`
+                // （未接 ⇒ 只记日志，不静默）。
+                glog!(
+                    "DBG",
+                    "CM_TURN：目标 ({nx},{ny}) != 当前位置 ({cur_x},{cur_y}) ⇒ 不转身（oracle 回 RM_MOVEFAIL，登记未接）ChrName={chr_name}"
+                );
+                return;
+            }
+            set_display_dir(displays, actor_id, n_dir);
+            match displays.get(actor_id) {
+                Some(d) => {
+                    // `CM_TURN` 的 `Msg` 恒空 ⇒ 无名尾（见 `downlink::turn_pair_nameless`）。
+                    let bodies = downlink::turn_pair_nameless(
+                        actor_id,
+                        wire_coord(cur_x),
+                        wire_coord(cur_y),
+                        d,
+                    );
+                    broadcast_ref_msg(world, online, gates, actor_id, &bodies);
+                }
+                None => glog!(
+                    "WRN",
+                    "CM_TURN：actor_id={actor_id} 无展示表 ⇒ 不发 SM_TURN（登记）"
+                ),
+            }
+            send_good_tick(online, gates, chr_name);
+        }
+        mir2_protocol::messages::CM_WALK
+        | mir2_protocol::messages::CM_RUN
+        | mir2_protocol::messages::CM_HORSERUN => {
+            let dir = movewire::next_direction(cur_x, cur_y, nx, ny);
+            let (ddx, ddy) = movewire::direction_delta(dir);
+            let steps = movewire::steps_for(ident);
+            if !world.try_step_now(actor_id, ddx, ddy, steps) {
+                glog!(
+                    "DBG",
+                    "移动：actor_id={actor_id} 方向={dir} {steps} 格被挡/越界 ⇒ 不动（oracle 回 RM_MOVEFAIL，登记未接）ChrName={chr_name}"
+                );
+                return;
+            }
+            set_display_dir(displays, actor_id, dir);
+            let (px, py) = world
+                .entities
+                .get(actor_id)
+                .map_or((cur_x, cur_y), |e| (e.x, e.y));
+            let sm_id = movewire::sm_ident_for(ident);
+            match displays.get(actor_id) {
+                Some(d) => {
+                    match downlink::move_frame(sm_id, actor_id, wire_coord(px), wire_coord(py), d) {
+                        Some(body) => broadcast_ref_msg(world, online, gates, actor_id, &[body]),
+                        None => glog!("WRN", "移动：ident={sm_id} 无编码器 ⇒ 不发"),
+                    }
+                }
+                None => glog!(
+                    "WRN",
+                    "移动：actor_id={actor_id} 无展示表 ⇒ 不发 {sm_id}（登记）"
+                ),
+            }
+            // F-2：oracle `ClientWalkXY`/`RunTo`/`HorseRunTo` 的 result 门 = `SpaceMoved ||
+            // (CurrX == nX && CurrY == nY)`；移动帧广播已在 `Walk()` 内发出（与本门无关），
+            // **只有 result 为真才回 `+GD`**。本仓库无 `SpaceMoved` ⇒ 门退化 `at_target`（登记）。
+            if movewire::move_result_ok(px, py, nx, ny) {
+                send_good_tick(online, gates, chr_name);
+            } else {
+                glog!(
+                    "DBG",
+                    "移动：actor_id={actor_id} 方向={dir} {steps} 格后 ({px},{py}) != 目标 ({nx},{ny}) ⇒ 不回 +GD（oracle 回 RM_MOVEFAIL，登记未接）ChrName={chr_name}"
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+/// oracle `SendRefMsg` 的收件人集合 = ±`SendRefMsgRange` 格内 `Race==Play && !Ghost`
+/// （`BaseObject.Message.cs:383-440`，本仓库已有同构实现 `chat::hear_targets`）。
+///
+/// 各收件人的 `GetMessage` 对 `RM_TURN`/`RM_WALK`/`RM_RUN`/`RM_HORSERUN` 都带
+/// `if (processMsg.ActorId != ActorId)` ⇒ **广播集合去掉自己**（自己那条连接只收 `+GD` ack）。
+fn broadcast_ref_msg(
+    world: &mir2_world::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    actor_id: i32,
+    bodies: &[Vec<u8>],
+) {
+    for target_id in chat::hear_targets(world, actor_id, chat::SEND_REF_MSG_RANGE) {
+        if target_id == actor_id {
+            continue;
+        }
+        let Some(t) = online.iter().find(|e| e.actor_id == target_id) else {
+            continue;
+        };
+        let Some(tx) = route_to_gate(gates, t.gate_idx, t.socket, "移动/转身下行") else {
+            continue;
+        };
+        for body in bodies {
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: t.socket,
+                body: body.clone(),
+            });
+        }
+    }
+}
+
+/// 帮 `ActorDisplay.dir` 随转向/走步更新（展示字段在 `bins/game-svr` 的展示表里，不进 `crates/world`）。
+fn set_display_dir(displays: &mut downlink::DisplayTable, actor_id: i32, dir: u8) {
+    if let Some(mut d) = displays.get(actor_id).cloned() {
+        d.dir = dir;
+        displays.set(actor_id, d);
+    }
+}
+
+/// 坐标进帧的 u16 写法与 `drain_aoi_downlink` 一致（保留 `i16` 位模式）。
+fn wire_coord(v: i32) -> u16 {
+    u16::from_ne_bytes(i16::try_from(v).unwrap_or(0).to_ne_bytes())
+}
+
+/// `SendSocket(M2Share.GetGoodTick)`：给**动作发起者自己**回一条 `+GD/<tick>` 短包。
+fn send_good_tick(
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    chr_name: &str,
+) {
+    let Some(me) = online.iter().find(|e| e.chr_name == chr_name) else {
+        return;
+    };
+    let Some(tx) = route_to_gate(gates, me.gate_idx, me.socket, "回 +GD") else {
+        return;
+    };
+    let _ = tx.send(SimToGate::SendRaw {
+        socket: me.socket,
+        payload: movewire::good_tick_payload(now_ms()),
+    });
+}
+
 /// **S3 后半段（第一格）**：把世界 tick 的 AOI 结果（观察者实体 `VisibleActors` 里
 /// `VisibleFlag::Show` 的对象）翻成 `SM_TURN` + `SM_FEATURECHANGED` 回帧，
 /// 按该观察者的 `[GateIdx, Socket]` 路由回**它自己那条**网关线。
@@ -2224,6 +2431,26 @@ fn sim_loop(
                             &gates,
                             &enter_cfg.catalog,
                             &world,
+                        );
+                    } else if matches!(
+                        cmd.ident,
+                        mir2_protocol::messages::CM_TURN
+                            | mir2_protocol::messages::CM_WALK
+                            | mir2_protocol::messages::CM_RUN
+                            | mir2_protocol::messages::CM_HORSERUN
+                    ) {
+                        // `openmir2-m3-move-wiring`：`CM_TURN/WALK/RUN/HORSERUN` 派发
+                        // （oracle `PlayObject.Message.cs:1008-1210`）。
+                        handle_move_cmd(
+                            cmd.ident,
+                            cmd.recog,
+                            cmd.tag,
+                            &chr_name,
+                            socket,
+                            &online,
+                            &mut world,
+                            &mut displays,
+                            &gates,
                         );
                     }
                 }
@@ -3077,7 +3304,7 @@ fn apply_sim_cmd(cmd: SimToGate, users: &mut UserList) {
             }
         }
         // 异步发包，不在纯槽操作里处理。
-        SimToGate::SendFrame { .. } => {}
+        SimToGate::SendFrame { .. } | SimToGate::SendRaw { .. } => {}
     }
 }
 
@@ -3115,11 +3342,45 @@ async fn apply_sim_cmd_async(
             wire.extend_from_slice(&body);
             send_gate_msg(tx, state, check_block, &wire).await
         }
+        SimToGate::SendRaw { socket, payload } => {
+            apply_sim_send_raw(socket, &payload, users, tx, state, check_block).await
+        }
         other => {
             apply_sim_cmd(other, users);
             Ok(())
         }
     }
+}
+
+/// `SendRaw`（`SendSocket(string)` 的短包支）：`PackLength = -len`，网关端产出 `'#' + 正文 + '!'`。
+async fn apply_sim_send_raw(
+    socket: i32,
+    payload: &[u8],
+    users: &mut UserList,
+    tx: &Arc<Mutex<OwnedWriteHalf>>,
+    state: &mut KeepAlive,
+    check_block: usize,
+) -> Result<()> {
+    // `PlayObject.Socket.cs:63-64`：`Socket = SocketId`、`SessionId = SocketIdx`。
+    let Some(u) = users.find(0, socket) else {
+        glog!(
+            "WRN",
+            "下发短包时 socket={socket} 的槽不存在，丢弃 {} 字节",
+            payload.len()
+        );
+        return Ok(());
+    };
+    let head = ServerMessage {
+        packet_code: grobal2::PacketCode,
+        socket: u.socket,
+        session_id: u.session_id,
+        ident: u16::from(grobal2::GM_DATA),
+        session_index: 0,
+        pack_length: -i32::try_from(payload.len()).unwrap_or(i32::MAX),
+    };
+    let mut wire = head.to_bytes().to_vec();
+    wire.extend_from_slice(payload);
+    send_gate_msg(tx, state, check_block, &wire).await
 }
 
 /// 保活/阻塞计数（C# `GateInfo.SendKeepAlive/SendChecked/SendBlockCount/SendCheckTick`）。
@@ -3884,6 +4145,262 @@ mod tests {
         assert!(
             !engine.in_save_rcd_list("HERO"),
             "DBR_SAVEHUMANRCD(1102) 应答后必须复位"
+        );
+    }
+
+    /// **`openmir2-m3-move-wiring` ①–③（移动接线）**：`CM_TURN` **只在**目标=当前位置时改朝向、
+    /// 给附近观察者发 `SM_TURN`+`SM_FEATURECHANGED`、给自己回 `+GD` 短包；目标≠当前位置时既不改
+    /// 朝向也不回 ack。`CM_WALK` 走一格、给观察者发 `SM_WALK`（ident 11、移动后坐标、
+    /// `MakeWord(Dir, Light)`）、给自己回 `+GD`。
+    ///
+    /// 返工（reviewer-5 F-1/F-2/F-3）：
+    /// - **F-1**：`CM_TURN` 下行 `SM_TURN` 尾**只有** `Encode(8B CharDesc)`（无名尾）；
+    /// - **F-2**：移动帧广播与 result 门分离——非相邻目标仍广播 `SM_WALK`，但**不回** `+GD`；
+    /// - **F-3**：`Entity.death` ⇒ 四支全拒（不改朝向/不移动/不发帧/不回 ack）。
+    ///
+    /// 红检：① `movewire::turn_is_at_target` 改成恒 `true` ⇒ 第 ① 段（目标≠自身不得回 ack）必红；
+    /// ② `movewire::sm_ident_for` 的 `CM_WALK` 支改成 `SM_RUN`（或 `next_direction` 改坏）
+    /// ⇒ 帧头 ident / 坐标断言必红；③ `handle_move_cmd` 的 CM_TURN 支改回 `turn_pair` ⇒
+    /// F-1 尾断言必红；④ 去掉 `movewire::move_result_ok` 门（恒回 ack）⇒ ④ 段必红；
+    /// ⑤ 去掉 `is_dead` 守卫 ⇒ ⑤ 段必红。
+    #[test]
+    fn move_cmd_dispatches_turn_walk_ack_and_aoi() {
+        use mir2_protocol::messages::{CM_TURN, CM_WALK, SM_TURN, SM_WALK};
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(64, 64);
+        let mover = {
+            let mut e = mir2_world::Entity::new(0, "mover".to_string(), 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        let observer = {
+            let mut e = mir2_world::Entity::new(0, "obs".to_string(), 12, 12);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        world.tick(); // Enter 落格（`try_step` 要从源格里摘除）
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            mover,
+            downlink::ActorDisplay::new(0, 0, 111, 0, 0, 255, b"mover".to_vec()),
+        );
+        displays.set(
+            observer,
+            downlink::ActorDisplay::new(0, 0, 222, 0, 0, 255, b"obs".to_vec()),
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "mover".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: mover,
+            },
+        );
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ub".into(),
+                chr_name: "obs".into(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 902,
+                actor_id: observer,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        // ① 目标 != 当前位置：不转身、不回 ack、不发帧。
+        handle_move_cmd(
+            CM_TURN,
+            game_svr::feature::make_long(15, 10),
+            2,
+            "mover",
+            901,
+            &online,
+            &mut world,
+            &mut displays,
+            &gates,
+        );
+        assert!(rx0.try_recv().is_err(), "目标≠当前位置 ⇒ 不得回 ack / 发帧");
+        assert_eq!(
+            displays.get(mover).unwrap().dir,
+            0,
+            "目标≠当前位置 ⇒ 朝向不变"
+        );
+
+        // ② 目标 = 自身：改朝向 + SM_TURN 给 obs + +GD 给自己。
+        handle_move_cmd(
+            CM_TURN,
+            game_svr::feature::make_long(10, 10),
+            2,
+            "mover",
+            901,
+            &online,
+            &mut world,
+            &mut displays,
+            &gates,
+        );
+        assert_eq!(
+            displays.get(mover).unwrap().dir,
+            2,
+            "目标=自身 ⇒ Dir = (byte)Tag"
+        );
+        let (mut turn, mut ack) = (Vec::new(), None);
+        while let Ok(m) = rx0.try_recv() {
+            match m {
+                SimToGate::SendFrame { socket, body } => {
+                    assert_eq!(socket, 902, "转身帧只给观察者");
+                    turn.push(body);
+                }
+                SimToGate::SendRaw { socket, payload } => {
+                    assert_eq!(socket, 901, "+GD 只给发起者自己");
+                    ack = Some(payload);
+                }
+                other => panic!("意外 sim→gate 命令：{other:?}"),
+            }
+        }
+        assert_eq!(
+            turn.len(),
+            2,
+            "`RM_TURN` 支 = SM_TURN + SM_FEATURECHANGED 两帧"
+        );
+        assert_eq!(
+            &turn[0][..12],
+            &smframe::command_header(mover, SM_TURN, 10, 10, game_svr::feature::make_word(2, 0))
+        );
+        // F-1：`CM_TURN` 的 `processMsg.Msg` 恒空 ⇒ `SM_TURN` 尾**只有** `Encode(8B CharDesc)`，
+        // 无名尾。若改回 `downlink::turn_pair`（出现帧路径）会多出 `Encode("ShowName/Color")`
+        // ⇒ 下面两条断言必红。
+        assert_eq!(
+            &turn[0][12..],
+            &mir2_protocol::edcode::encode(&downlink::char_desc(111, 0)),
+            "CM_TURN 的 SM_TURN 尾必须只有 Encode(8B CharDesc)，不得含 ShowName/Color 名尾"
+        );
+        assert_eq!(turn[0].len(), 12 + 11, "SM_TURN 尾 = Encode(8B) = 11 字符");
+        assert_eq!(
+            u16::from_le_bytes([turn[1][4], turn[1][5]]),
+            mir2_protocol::messages::SM_FEATURECHANGED
+        );
+        let ack = ack.expect("发起者应收 +GD");
+        assert!(
+            ack.starts_with(b"+GD/"),
+            "ack 形状必须是 +GD/<tick>：{ack:?}"
+        );
+
+        // ③ CM_WALK 往右走一格：坐标 10,10 → 11,10；SM_WALK 给 obs；+GD 给自己。
+        handle_move_cmd(
+            CM_WALK,
+            game_svr::feature::make_long(11, 10),
+            0,
+            "mover",
+            901,
+            &online,
+            &mut world,
+            &mut displays,
+            &gates,
+        );
+        {
+            let e = world.entities.get(mover).unwrap();
+            assert_eq!((e.x, e.y), (11, 10), "走一步后坐标");
+        }
+        assert_eq!(
+            displays.get(mover).unwrap().dir,
+            2,
+            "方向由 GetNextDirection 求出 = Right"
+        );
+        let (mut walk, mut ack2) = (None, None);
+        while let Ok(m) = rx0.try_recv() {
+            match m {
+                SimToGate::SendFrame { socket, body } => {
+                    assert_eq!(socket, 902);
+                    walk = Some(body);
+                }
+                SimToGate::SendRaw { socket, payload } => {
+                    assert_eq!(socket, 901);
+                    ack2 = Some(payload);
+                }
+                other => panic!("意外 sim→gate 命令：{other:?}"),
+            }
+        }
+        let walk = walk.expect("观察者应收 SM_WALK");
+        assert_eq!(
+            &walk[..12],
+            &smframe::command_header(mover, SM_WALK, 11, 10, game_svr::feature::make_word(2, 0))
+        );
+        assert!(ack2.expect("+GD").starts_with(b"+GD/"));
+
+        // ④ F-2：`CM_WALK` 目标非相邻（(14,10)，走 1 格只能到 (12,10)）⇒ 仍广播 `SM_WALK`
+        //    （oracle `WalkTo` 内 `Walk(RM_WALK)` 与 result 门无关），但 result 门
+        //    `SpaceMoved || at_target` 为假 ⇒ **不回** `+GD`。
+        handle_move_cmd(
+            CM_WALK,
+            game_svr::feature::make_long(14, 10),
+            0,
+            "mover",
+            901,
+            &online,
+            &mut world,
+            &mut displays,
+            &gates,
+        );
+        {
+            let e = world.entities.get(mover).unwrap();
+            assert_eq!((e.x, e.y), (12, 10), "目标非相邻时仍按方向走 1 格");
+        }
+        let (mut walk2, mut ack3) = (None, None);
+        while let Ok(m) = rx0.try_recv() {
+            match m {
+                SimToGate::SendFrame { socket, body } => {
+                    assert_eq!(socket, 902);
+                    walk2 = Some(body);
+                }
+                SimToGate::SendRaw { payload, .. } => ack3 = Some(payload),
+                other => panic!("意外 sim→gate 命令：{other:?}"),
+            }
+        }
+        let walk2 = walk2.expect("移动已发生 ⇒ 观察者仍收 SM_WALK");
+        assert_eq!(
+            &walk2[..12],
+            &smframe::command_header(mover, SM_WALK, 12, 10, game_svr::feature::make_word(2, 0))
+        );
+        assert!(
+            ack3.is_none(),
+            "F-2：移动后 (12,10) != 目标 (14,10) ⇒ 不得回 +GD（oracle result 门）：{ack3:?}"
+        );
+
+        // ⑤ F-3：`Death` 守卫——四支都要在开头拒绝（不改朝向、不移动、不发帧、不回 ack）。
+        world.entities.get_mut(mover).unwrap().death = true;
+        for (ident, target) in [(CM_TURN, (12, 10)), (CM_WALK, (13, 10))] {
+            handle_move_cmd(
+                ident,
+                game_svr::feature::make_long(target.0, target.1),
+                3,
+                "mover",
+                901,
+                &online,
+                &mut world,
+                &mut displays,
+                &gates,
+            );
+            assert!(
+                rx0.try_recv().is_err(),
+                "F-3：death=true ⇒ ident={ident} 不得发帧/回 ack"
+            );
+        }
+        {
+            let e = world.entities.get(mover).unwrap();
+            assert_eq!((e.x, e.y), (12, 10), "F-3：死亡后不得移动");
+        }
+        assert_eq!(
+            displays.get(mover).unwrap().dir,
+            2,
+            "F-3：死亡后不得改朝向（tag=3 未被采纳）"
         );
     }
 

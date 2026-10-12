@@ -1,0 +1,32 @@
+# 红检①：movewire::turn_is_at_target 改成恒 true（无条件回 ack）
+# 期望：tests::move_cmd_dispatches_turn_walk_ack_and_aoi FAILED（第①段「目标≠当前位置 ⇒ 不得回 ack」）
+$ cargo test -p game-svr --offline move_cmd_dispatches
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.78s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-3aa264152417c61e.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 66 filtered out; finished in 0.00s
+
+     Running unittests src\main.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-eb39968088e3f1ec.exe)
+
+running 1 test
+test tests::move_cmd_dispatches_turn_walk_ack_and_aoi ... FAILED
+
+failures:
+
+---- tests::move_cmd_dispatches_turn_walk_ack_and_aoi stdout ----
+
+thread 'tests::move_cmd_dispatches_turn_walk_ack_and_aoi' (31112) panicked at bins\game-svr\src\main.rs:4191:9:
+目标≠当前位置 ⇒ 不得回 ack / 发帧
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::move_cmd_dispatches_turn_walk_ack_and_aoi
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 125 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`
+rc=101

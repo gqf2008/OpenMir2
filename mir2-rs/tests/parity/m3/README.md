@@ -254,6 +254,14 @@ powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_bag_equip_p
   - `run_bots.ps1 -RequireCharCreated` 的收工条件加 `login_ok`（`load_stats` 每 5s 采样 vs 建角标记即时落日志 ⇒ 旧条件恒假红）；
   - `run_pair.ps1 -PinStartPose` 的 pin 加 **settle + hold 循环**（预热断线存档异步，实测晚于 pin 落库并把 pin 覆盖；
     pin → 等 3s → 复验 → 被覆盖则重 pin，最多 5 轮）。
+    ⚙ **2026-10-12 08:20 补强（owner 要求的可判红自检）**：settle+hold 判据抽到
+    `gate_guards.ps1::Get-M3PinHoldVerdict` / `Invoke-M3PinSettleHold`（唯一口径，`run_pair.ps1` 真实 pin 循环与
+    自检共用），并把 hold 条件从「某轮三项到位」收紧为「**至少一轮真实 settle + 连续两轮** settle 复验都到位」——
+    单次观测挡不住「pin 早于异步落库、存档随后静默覆盖」的假 GREEN。`run_bag_equip_pair.ps1 -SelfCheckNoStack`
+    新增 **⑩**（故障注入驱动同一函数）：跳过 settle、pin 早于落库、存档反复覆盖均 ⇒ 必判红；正常路径 ⇒ attempt=2；
+    并机判 `run_pair -EmitOpsArgs` 的 `pin_instrument`（`settle_seconds>=1` 且 `consecutive>=2`）证明生产接线未被削弱。
+    原始输出与三条变异红检：`evidence-t14-pinhold-20261012/**`（`SHA256SUMS.txt` 8/8 GREEN）。
+    注：判据轮跑在补强前，故报告里是 `PIN_HOLD attempt=1`；T-28 修好后的重跑会因连续两轮要求显示 `attempt>=2`（预期）。
   ⚠ **当前唯一剩余跨侧差异 = `characters.IncHealth`**（C#=0 / Rust=20），根因 = Rust 未建模 oracle 周期
   `HealthSpellChanged` 恢复 tick（把吃药得到的 `IncHealth` 消费回 HP，满血时归零）；登记 **T-28**，待 owner 裁决。
   报告 `T14-对照报告-20261012.md`；判据会话 `sessions/{csharp-20261012-080312,rust-20261012-080417}`。

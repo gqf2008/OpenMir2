@@ -422,3 +422,88 @@ function Format-M3StartPoseSql {
   return ("UPDATE mir2_db.characters SET MapName='{0}', CX={1}, CY={2}, HomeMap={3}, HomeX={4}, HomeY={5}, Level={6}, Dir={7} WHERE ChrName='{8}'" -f `
     $MapName, $CX, $CY, $HomeMap, $HomeX, $HomeY, $Level, $Dir, $safe)
 }
+
+# ⑥ pin settle+hold 判据（T-14 两相固定起点；owner 2026-10-12 08:20 要求的「可判红自检」）。
+#
+# 失败模式（第十四格实跑踩到）：预热相的掉线存档（BotSrv 被杀 ⇒ GameSvr `SaveHumanRcd` ⇒ FrontEngine）
+# 是**异步**的，落库时间**晚于** pin。若 pin 后**不做 settle 就立刻复验**，会读到刚写进去的 pin 值
+# ⇒ **假 GREEN**；存档随后落库覆盖 pin ⇒ BEFORE/AFTER 快照拿到预热末态（实测 C# `CX/CY=285,622`）。
+# ⇒「起点守卫」的 hold 不能只看某一瞬间三项计数到位，必须同时满足：
+#   ① 至少一轮**真实 settle**（`SettleRounds >= 1`）；settle 脚本块必须报告自己**确实等了**
+#      （返回 `$false` 的 settle 不计入轮数 ⇒ 跳过 settle 必被判 `pin_settle_skipped`）；
+#   ② **连续两轮** settle 后的复验都到位（`PreviousMatch && Match`）——单次观测不足以证明
+#      「异步存档不会随后覆盖 pin」（这正是「pin 早于落库静默」的防线）。
+# 返回：hold / match / failed（诊断码）/ detail。本函数是 `run_pair.ps1` 真实 pin 循环与自检共用的唯一口径。
+
+# 仪器的形态标签（写进 `-EmitOpsArgs` ⇒ 无栈自检可机判生产接线有没有被削弱）。
+function Format-M3PinInstrument {
+  param([int]$SettleSeconds = 3, [int]$MaxAttempts = 5, [int]$Consecutive = 2)
+  return ("settle_seconds={0} max_attempts={1} consecutive={2}" -f $SettleSeconds, $MaxAttempts, $Consecutive)
+}
+
+function Get-M3PinHoldVerdict {
+  param(
+    [int]$SettleRounds = 0,
+    [bool]$PreviousMatch = $false,
+    [int]$Pinned = 0,
+    [int]$BagPinned = 0,
+    [int]$AbilPinned = 0,
+    [Parameter(Mandatory)][int]$Bots,
+    [int]$BagPerBot = 4
+  )
+  $match = ($Pinned -eq $Bots) -and ($BagPinned -eq ($BagPerBot * $Bots)) -and ($AbilPinned -eq $Bots)
+  $failed = New-Object System.Collections.Generic.List[string]
+  if ($SettleRounds -lt 1) { $failed.Add('pin_settle_skipped') }
+  if (-not $match) {
+    if ($Pinned -ne $Bots) { $failed.Add('pin_char_mismatch') }
+    if ($BagPinned -ne ($BagPerBot * $Bots)) { $failed.Add('pin_bag_mismatch') }
+    if ($AbilPinned -ne $Bots) { $failed.Add('pin_abil_mismatch') }
+  } elseif (-not $PreviousMatch) {
+    $failed.Add('pin_hold_needs_consecutive_settle')
+  }
+  $hold = ($match -and $PreviousMatch -and ($SettleRounds -ge 1))
+  return [pscustomobject]@{
+    hold   = $hold
+    match  = $match
+    failed = @($failed)
+    detail = ("settle_rounds={0} prev_match={1} pinned={2}/{3} bag={4}/{5} abil={6}/{7}" -f `
+        $SettleRounds, $PreviousMatch, $Pinned, $Bots, $BagPinned, ($BagPerBot * $Bots), $AbilPinned, $Bots)
+  }
+}
+
+# settle+hold 循环本体（唯一口径）：`run_pair.ps1` 的真实 pin 路径与 `-SelfCheckNoStack` 的故障注入
+# 共用同一函数（改坏本函数即可让自检变红 ⇒ 「仪器有没有被削弱」有牙齿）。
+#   $Pin($ctx,$attempt)     执行一次 pin（写 SQL）
+#   $Settle($ctx,$attempt)  等一个 settle 窗口；**返回 $true 表示确实等了**（否则该轮不计入 settle 轮数）
+#   $Observe($ctx,$attempt) 返回 @{ Pinned=..; BagPinned=..; AbilPinned=.. } 的三项复验
+# 返回 @{ Hold; Attempts; SettleRounds; Verdicts }。hold 不住 ⇒ Hold=$false（调用方 throw，fail-closed）。
+function Invoke-M3PinSettleHold {
+  param(
+    [Parameter(Mandatory)][scriptblock]$Pin,
+    [Parameter(Mandatory)][scriptblock]$Settle,
+    [Parameter(Mandatory)][scriptblock]$Observe,
+    [Parameter(Mandatory)][int]$Bots,
+    [int]$BagPerBot = 4,
+    [int]$MaxAttempts = 5,
+    [object]$Context = $null
+  )
+  $prevMatch = $false
+  $settleRounds = 0
+  # 注：不要用 `New-Object System.Collections.Generic.List[object]` + `@(...)` —— PS 5.1 下对该实例
+  # 取 `@()` 会抛「Argument types do not match」（实测）；普通数组追加即可（MaxAttempts ≤ 5）。
+  $verdicts = @()
+  for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+    & $Pin $Context $attempt
+    if (& $Settle $Context $attempt) { $settleRounds++ }
+    $o = & $Observe $Context $attempt
+    $v = Get-M3PinHoldVerdict -SettleRounds $settleRounds -PreviousMatch $prevMatch `
+      -Pinned ([int]$o.Pinned) -BagPinned ([int]$o.BagPinned) -AbilPinned ([int]$o.AbilPinned) -Bots $Bots -BagPerBot $BagPerBot
+    $v | Add-Member -NotePropertyName attempt -NotePropertyValue $attempt -Force
+    $verdicts += $v
+    if ($v.hold) {
+      return [pscustomobject]@{ Hold = $true; Attempts = $attempt; SettleRounds = $settleRounds; Verdicts = @($verdicts) }
+    }
+    $prevMatch = $v.match
+  }
+  return [pscustomobject]@{ Hold = $false; Attempts = $MaxAttempts; SettleRounds = $settleRounds; Verdicts = @($verdicts) }
+}

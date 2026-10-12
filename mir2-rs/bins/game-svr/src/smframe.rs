@@ -459,6 +459,50 @@ pub fn sm_turn(
     gm_data_body(header, &tail)
 }
 
+/// `SM_WALK`(11) / `SM_RUN`(13) / `SM_HORSERUN`(5010)（`PlayObject.Message.cs:1403-1432` 的
+/// `RM_WALK`/`RM_RUN`/`RM_HORSERUN` 支）：
+///
+/// ```text
+/// ClientMsg = MakeMessage(SM_*, processMsg.ActorId, nParam1 /*=x*/, nParam2 /*=y*/,
+///                         MakeWord((ushort)processMsg.wParam /*=Dir*/, baseObject.Light))
+/// SendSocket(ClientMsg, EDCode.EncodePacket(CharDesc))   // = Encode(8B Feature+Status)
+/// ```
+///
+/// **与 `SM_TURN` 的差别**：没有紧随的 `SM_FEATURECHANGED`，尾也没有 `ShowName/Color`（只有
+/// `Encode(CharDesc)`）；`x`/`y` 是**移动后**的 `CurrX/CurrY`（oracle `SendRefMsg(RM_*, Dir, CurrX,
+/// CurrY, 0, "")` 在 `CurrX/CurrY` 更新之后）。
+#[must_use]
+pub fn sm_move(
+    ident: u16,
+    actor_id: i32,
+    x: u16,
+    y: u16,
+    dir: u8,
+    light: u8,
+    char_desc: &[u8],
+) -> Vec<u8> {
+    let header = command_header(actor_id, ident, x, y, make_word(dir, light));
+    gm_data_body(header, &edcode::encode(char_desc))
+}
+
+/// `SM_WALK`(11)：见 [`sm_move`]。
+#[must_use]
+pub fn sm_walk(actor_id: i32, x: u16, y: u16, dir: u8, light: u8, char_desc: &[u8]) -> Vec<u8> {
+    sm_move(messages::SM_WALK, actor_id, x, y, dir, light, char_desc)
+}
+
+/// `SM_RUN`(13)：见 [`sm_move`]。
+#[must_use]
+pub fn sm_run(actor_id: i32, x: u16, y: u16, dir: u8, light: u8, char_desc: &[u8]) -> Vec<u8> {
+    sm_move(messages::SM_RUN, actor_id, x, y, dir, light, char_desc)
+}
+
+/// `SM_HORSERUN`(5010)：见 [`sm_move`]。
+#[must_use]
+pub fn sm_horserun(actor_id: i32, x: u16, y: u16, dir: u8, light: u8, char_desc: &[u8]) -> Vec<u8> {
+    sm_move(messages::SM_HORSERUN, actor_id, x, y, dir, light, char_desc)
+}
+
 /// `SM_ADJUST_BONUS`(811) 的三段能力模板 `(BonusPoint, A, B, C)`（各自 `EncodeMessage` 后用 `/` 拼）。
 pub type AdjustBonusParts = (i32, Vec<u8>, Vec<u8>, Vec<u8>);
 

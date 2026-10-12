@@ -1,0 +1,2 @@
+# cargo fmt --all -- --check（隔离 CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target）
+rc=0

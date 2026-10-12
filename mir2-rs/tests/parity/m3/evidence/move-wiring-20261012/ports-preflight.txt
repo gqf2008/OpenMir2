@@ -1,0 +1,13 @@
+﻿# 端口实拍（本片 DoD⑥：不起栈、不占端口——只跑离线单测/门禁）
+# 时间：2026-10-12 08:19:53
+# 说明：本线未起任何 game-svr/gate/DBSrv/LoginSrv/MySQL 进程（只跑 cargo 单测/门禁）；下表 LISTENING 若存在即属别的车道。
+port 5000: (free)
+port 5100: (free)
+port 5500: (free)
+port 5600: (free)
+port 5700: (free)
+port 6000: (free)
+port 7000: (free)
+port 7100: (free)
+port 7200: (free)
+port 3306: 127.0.0.1 LISTENING pid=22624 => mysqld

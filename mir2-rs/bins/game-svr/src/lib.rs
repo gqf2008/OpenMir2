@@ -16,6 +16,7 @@ pub mod downlink;
 pub mod feature;
 pub mod ground;
 pub mod itemwire;
+pub mod movewire;
 pub mod pickwire;
 pub mod smframe;
 pub mod useitem;
