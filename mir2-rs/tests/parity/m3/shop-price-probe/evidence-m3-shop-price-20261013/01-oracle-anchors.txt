@@ -1,0 +1,44 @@
+# M3⑤-实现 3 商店价格/修理公式 —— oracle 锚点（grep -n 实测，仓库 src/ 内）
+# 生成：2026-10-12T23:31:27Z  cwd=/e/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3bag
+# 命令：grep -n '<符号>' src/GameSrv/Npc/Merchant.cs src/OpenMir2/HUtil32.cs src/Modules/SystemModule/Conf/Model/GameSvrConf.cs
+
+## Merchant.cs 定价 / 修理函数
+333:        private bool CheckItemType(int nStdMode)
+347:        private double GetItemPrice(ushort nIndex)
+765:        private int GetUserPrice(IPlayerActor playObject, double nPrice)
+1130:        private double GetUserItemPrice(UserItem userItem)
+1358:        private static int GetSellItemPrice(double nPrice)
+1555:        public void ClientQueryRepairCost(IPlayerActor playObject, UserItem userItem)
+1599:        public void ClientRepairItem(IPlayerActor playObject, UserItem userItem)
+
+## 关键公式行（取整 / 副作用）
+1145:                                    n20 = itemPrice / 2.0 / userItem.DuraMax * (userItem.DuraMax - userItem.Dura);
+1158:                                    userItem.DuraMax = 10000;
+1162:                                    n20 = itemPrice / 2.0 / userItem.DuraMax * (userItem.DuraMax - userItem.Dura);
+1179:                                        if (nC != 4 || nC != 9)
+1206:                                    itemPrice = itemPrice / 5 * n14;
+1209:                                n20 = itemPrice / 2.0 / userItem.DuraMax * (userItem.DuraMax - userItem.Dura);
+1563:                    nRepairPrice = HUtil32.Round((nPrice / 3.0) / userItem.DuraMax * (userItem.DuraMax - userItem.Dura));
+1573:                        nRepairPrice = nRepairPrice * SystemShare.Config.SuperRepairPriceRate;
+1619:                nPrice = nPrice * SystemShare.Config.SuperRepairPriceRate;
+1629:                        nRepairPrice = HUtil32.Round(nPrice / 3.0 / userItem.DuraMax * (userItem.DuraMax - userItem.Dura));
+1656:                            userItem.DuraMax -= (ushort)((userItem.DuraMax - userItem.Dura) / SystemShare.Config.RepairItemDecDura);
+
+## HUtil32 取整 / 上限语义
+131:        public static int Round(double r)
+674:        public static int _MAX(int n1, int n2)
+
+## SystemShare.Config 默认值
+1709:            SuperRepairPriceRate = 3; //特修价格倍数
+1710:            RepairItemDecDura = 30; //普通修理掉持久数(特持久上限减下限再除以此数为减的数值)
+1796:            CastleMemberPriceRate = 80;
+
+## ItemPrice 结构
+﻿namespace SystemModule.Data
+{
+    public struct ItemPrice
+    {
+        public ushort wIndex;
+        public double nPrice;
+    }
+}
