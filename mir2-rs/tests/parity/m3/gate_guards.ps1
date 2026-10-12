@@ -30,6 +30,151 @@ $script:M3GuardsHere = $PSScriptRoot
 $script:M3GuardsRepoRoot = (Resolve-Path (Join-Path $script:M3GuardsHere '..\..\..\..')).Path
 . (Join-Path $script:M3GuardsRepoRoot 'tools\m2-acceptance\portclassify.ps1')
 
+# ---------------------------------------------------------------------------------------------------
+# 环境无关 SHA256（.NET）——统一取代 `Get-FileHash`。
+#
+# 为什么不用 `Get-FileHash`：它属于 `Microsoft.PowerShell.Utility`；本机 PS 5.1 在 PSModulePath 被
+# PS7 污染时不导出该 cmdlet ⇒ 脚本在 `$ErrorActionPreference='Stop'` 下 `CommandNotFoundException`
+# 崩溃（m3cs 首跑走 `Test-M3MonGenEmpty -VerifySource` 已复现）。与 tools/oracle/hashutil.ps1、
+# tools/m2-acceptance/preflight.ps1 同一修法（.NET SHA256 不依赖模块解析，结果与 Get-FileHash 逐字节相同）。
+function Get-M3Sha256Hex([string]$Path) {
+  if ([string]::IsNullOrEmpty($Path)) { throw 'Get-M3Sha256Hex: 路径为空' }
+  if (-not (Test-Path -LiteralPath $Path)) { throw "Get-M3Sha256Hex: 文件不存在: $Path" }
+  $alg = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    return ([System.BitConverter]::ToString($alg.ComputeHash($bytes)) -replace '-', '').ToLowerInvariant()
+  } finally { $alg.Dispose() }
+}
+
+# ---------------------------------------------------------------------------------------------------
+# M3②③ 活栈隔离口径（owner 2026-10-12 21:15，§6.0-3 owner 签字）——夹具侧唯一口径。
+# 唯一事实源 = `rng-isolate-attack/attack_sites.tsv`（谓词表）+ `check_predicates.py`（机判）。
+# ---------------------------------------------------------------------------------------------------
+function Get-M3IsolateSitesTablePath { return (Join-Path $script:M3GuardsHere 'rng-isolate-attack\attack_sites.tsv') }
+function Get-M3IsolateSitesJudgePath { return (Join-Path $script:M3GuardsHere 'rng-isolate-attack\check_predicates.py') }
+function Get-M3IsolateSitesCursorPath { return (Join-Path $script:M3GuardsHere 'rng-hook\divert-sites.txt') }
+
+# MIR2_RNG_ISOLATE_ATTACK 语义（与 C# StartupHook / Rust attack_isolation_seed_from_env 同）：
+# 空/0/false/off/no ⇒ 关；1/true/on/yes ⇒ 开；其它非空 ⇒ 非法（fail-closed）。
+# 返回：ok / on / value。
+function Test-M3IsolateAttackValue {
+  param([AllowNull()][AllowEmptyString()][string]$Value)
+  if ([string]::IsNullOrEmpty($Value)) { return [pscustomobject]@{ ok = $true; on = $false; value = $Value } }
+  switch ($Value.Trim().ToLowerInvariant()) {
+    '0'     { return [pscustomobject]@{ ok = $true; on = $false; value = $Value } }
+    'false' { return [pscustomobject]@{ ok = $true; on = $false; value = $Value } }
+    'off'   { return [pscustomobject]@{ ok = $true; on = $false; value = $Value } }
+    'no'    { return [pscustomobject]@{ ok = $true; on = $false; value = $Value } }
+    '1'     { return [pscustomobject]@{ ok = $true; on = $true;  value = $Value } }
+    'true'  { return [pscustomobject]@{ ok = $true; on = $true;  value = $Value } }
+    'on'    { return [pscustomobject]@{ ok = $true; on = $true;  value = $Value } }
+    'yes'   { return [pscustomobject]@{ ok = $true; on = $true;  value = $Value } }
+    default { return [pscustomobject]@{ ok = $false; on = $false; value = $Value } }
+  }
+}
+
+# attack_seed = (Seed + 0x9E37) 的 i32 回绕加法（与 C# unchecked / Rust wrapping_add 同）。
+# 注：不用 `0x80000000` / `0x100000000` 这类字面量——PS 5.1 会把超出 Int32 的十六进制字面量
+# 折叠成 Int32 补码，导致比较恒真（本片实跳）。用十进制 Int64 常量。
+function Get-M3AttackSeed([int]$Seed) {
+  $sum = [int64]$Seed + [int64]40503
+  $rev = $sum -band [int64]4294967295
+  if ($rev -ge [int64]2147483648) { $rev -= [int64]4294967296 }
+  return [int]$rev
+}
+
+# 从 rng 流水头部读 `ISOLATE_ATTACK <attack_seed> [isolate_sites=<path>]`（C#/Rust 同形；缺省无此行）。
+# 返回：present / seed / sites_path / matched / reason。
+function Get-M3TraceIsolate {
+  param([AllowEmptyString()][string]$LogPath)
+  if ([string]::IsNullOrWhiteSpace($LogPath) -or -not (Test-Path -LiteralPath $LogPath)) {
+    return [pscustomobject]@{ present = $false; seed = $null; sites_path = ''; matched = ''; reason = ('日志不可达: ' + $LogPath) }
+  }
+  $prevEap = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    $hit = Select-String -LiteralPath $LogPath -Pattern '^ISOLATE_ATTACK\s+(-?\d+)(?:\s+isolate_sites=(.+))?\s*$' -List -ErrorAction SilentlyContinue
+    if (-not $hit) {
+      return [pscustomobject]@{ present = $false; seed = $null; sites_path = ''; matched = ''; reason = '无 ISOLATE_ATTACK 行（隔离未生效 / 非隔离口径）' }
+    }
+    $g = $hit.Matches[0].Groups
+    $sp = if ($g[2].Success) { $g[2].Value.Trim() } else { '' }
+    return [pscustomobject]@{ present = $true; seed = [int]$g[1].Value; sites_path = $sp; matched = $hit.Line; reason = '' }
+  } finally { $ErrorActionPreference = $prevEap }
+}
+
+# 机判：C# 静态分流站点 dump vs Rust 谓词表（缺一条 / 有未登记 site ⇒ RED，fail-closed）。
+# 返回：rc / output。
+function Test-M3IsolatePredicates {
+  param([Parameter(Mandatory)][string]$CsharpDump, [string]$TablePath = '', [string]$JudgePath = '')
+  if ([string]::IsNullOrEmpty($TablePath)) { $TablePath = Get-M3IsolateSitesTablePath }
+  if ([string]::IsNullOrEmpty($JudgePath)) { $JudgePath = Get-M3IsolateSitesJudgePath }
+  if (-not (Test-Path -LiteralPath $JudgePath)) { return [pscustomobject]@{ rc = 2; output = ('PREREQ_MISSING: 缺 check_predicates.py: ' + $JudgePath) } }
+  if (-not (Test-Path -LiteralPath $TablePath)) { return [pscustomobject]@{ rc = 2; output = ('PREREQ_MISSING: 缺 attack_sites.tsv: ' + $TablePath) } }
+  if (-not (Test-Path -LiteralPath $CsharpDump)) { return [pscustomobject]@{ rc = 2; output = ('PREREQ_MISSING: 缺 C# 分流站点 dump: ' + $CsharpDump) } }
+  $prevEap = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    $outStatic = (& python $JudgePath static --table $TablePath 2>&1 | Out-String)
+    $rcStatic = $LASTEXITCODE
+    if ($rcStatic -ne 0) { return [pscustomobject]@{ rc = $rcStatic; output = $outStatic } }
+    $outPair = (& python $JudgePath table-vs-csharp --table $TablePath --csharp $CsharpDump 2>&1 | Out-String)
+    $rcPair = $LASTEXITCODE
+    return [pscustomobject]@{ rc = $rcPair; output = ($outStatic + $outPair) }
+  } finally { $ErrorActionPreference = $prevEap }
+}
+
+# 读会话产物里的隔离记账（<session>/attack_isolation.json）；缺文件 ⇒ isolate_attack=false（旧会话）。
+function Get-M3SessionAttackIsolation {
+  param([Parameter(Mandatory)][string]$Dir)
+  $p = Join-Path $Dir 'attack_isolation.json'
+  if (-not (Test-Path -LiteralPath $p)) {
+    return [pscustomobject]@{ present = $false; isolate_attack = $false; attack_seed = $null; sites_dump = ''; sites_dump_sha256 = ''; attack_stream = ''; attack_stream_sha256 = '' }
+  }
+  try {
+    $o = Get-Content -LiteralPath $p -Raw -ErrorAction Stop | ConvertFrom-Json
+  } catch {
+    return $null
+  }
+  return [pscustomobject]@{
+    present = $true
+    isolate_attack = [bool]$o.isolate_attack
+    attack_seed = $o.attack_seed
+    sites_dump = [string]$o.sites_dump
+    sites_dump_sha256 = [string]$o.sites_dump_sha256
+    attack_stream = [string]$o.attack_stream
+    attack_stream_sha256 = [string]$o.attack_stream_sha256
+  }
+}
+
+# 跨侧隔离口径护栏：两侧 attack_isolation.json 的 isolate_attack 必须一致；开启时 attack_seed 必须一致。
+# 返回：failed / messages / peer / local。
+function Get-M3PeerIsolationGuard {
+  param([Parameter(Mandatory)][string]$PeerDir, [Parameter(Mandatory)][string]$LocalDir)
+  $failed = @(); $messages = @()
+  $peer = Get-M3SessionAttackIsolation -Dir $PeerDir
+  $local = Get-M3SessionAttackIsolation -Dir $LocalDir
+  if ($null -eq $peer)  { $failed += 'peer_isolation_unreadable' }
+  if ($null -eq $local) { $failed += 'local_isolation_unreadable' }
+  if ($null -ne $peer -and $null -ne $local) {
+    if ($peer.isolate_attack -ne $local.isolate_attack) {
+      $failed += ('isolation_mismatch peer={0} local={1}' -f $peer.isolate_attack, $local.isolate_attack)
+    }
+    if ($peer.isolate_attack -and $local.isolate_attack -and ($peer.attack_seed -ne $local.attack_seed)) {
+      $failed += ('attack_seed_mismatch peer={0} local={1}' -f $peer.attack_seed, $local.attack_seed)
+    }
+  }
+  $messages += ('ISOLATION_PEER peer={0} local={1}' -f (Format-M3IsolateSummary $peer), (Format-M3IsolateSummary $local))
+  return [pscustomobject]@{ failed = $failed; messages = $messages; peer = $peer; local = $local }
+}
+
+function Format-M3IsolateSummary($iso) {
+  if ($null -eq $iso) { return '(不可读)' }
+  if (-not $iso.isolate_attack) { return 'off' }
+  return ('on seed={0} dump_sha256={1}' -f $iso.attack_seed, (($iso.sites_dump_sha256 + '________________') -replace '^(.{16}).*', '$1'))
+}
+
 # 场景标签：与 run_pair.ps1 / run_m3_gate.ps1 写进 baseline.json 的 fixed_new_chr 同形态。
 function Format-M3Scenario {
   param(
@@ -552,7 +697,7 @@ function Test-M3MonGenEmpty {
       return [pscustomobject]@{ ok = $false; spawns = $actual; declared = $entry.spawn_rows; fixture = $fixture; source_verified = $false; reason = ('源文件不可达: ' + $entry.source) }
     }
     if (-not [string]::IsNullOrEmpty($entry.sha256)) {
-      $hash = (Get-FileHash -Path $entry.source -Algorithm SHA256).Hash.ToLower()
+      $hash = Get-M3Sha256Hex -Path $entry.source
       if ($hash -ne $entry.sha256.ToLower()) {
         return [pscustomobject]@{ ok = $false; spawns = $actual; declared = $entry.spawn_rows; fixture = $fixture; source_verified = $false; reason = ('源文件 hash 漂移: {0} != {1}' -f $hash, $entry.sha256) }
       }
@@ -691,7 +836,7 @@ function Test-M3MapNoAiConsumers {
         return [pscustomobject]@{ ok = $false; total = $total; declared = $entry.declared_total; fixture = $fixture; source_verified = $false; reason = ('源文件不可达: ' + $r.file) }
       }
       if ($entry.hashes.ContainsKey($r.file)) {
-        $h = (Get-FileHash -Path $fp -Algorithm SHA256).Hash.ToLower()
+        $h = Get-M3Sha256Hex -Path $fp
         if ($h -ne $entry.hashes[$r.file].ToLower()) {
           return [pscustomobject]@{ ok = $false; total = $total; declared = $entry.declared_total; fixture = $fixture; source_verified = $false; reason = ('源文件 hash 漂移: ' + $r.file) }
         }

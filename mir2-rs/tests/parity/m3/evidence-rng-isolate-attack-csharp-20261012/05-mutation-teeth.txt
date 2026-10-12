@@ -1,0 +1,25 @@
+# 05 —— 改坏必红（真跑 + 还原）：C# 静态分流站点清单删一条 ⇒ hook 自检 + 谓词机判都必红
+
+## 改前（生产）
+hook selftest rc=0
+table-vs-csharp rc=0
+
+## 改坏：删掉 hit_gate 行（M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41）
+$ dotnet run ... RngIsolateSelftest
+FAIL sites/count=11 (got 10)
+FAIL sites/has M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41
+FAIL route/hit_gate
+SELFTEST RED failed=3
+hook selftest rc=1
+$ python ... check_predicates.py table-vs-csharp --csharp rng-hook/divert-sites.txt
+TABLE_VS_CSHARP table=E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\tests\parity\m3\rng-isolate-attack\attack_sites.tsv csharp=mir2-rs/tests/parity/m3/rng-hook/divert-sites.txt draws=10 canon=10
+RED: C# 未分流表内站点（缺一条 ⇒ fail-closed）: ['hit_gate']
+table-vs-csharp rc=1
+
+## 还原
+hook selftest rc=0
+table-vs-csharp rc=0
+$ cmp E:/tmp/m3bag-iso/divert-sites.txt.bak mir2-rs/tests/parity/m3/rng-hook/divert-sites.txt && echo RESTORED_IDENTICAL
+RESTORED_IDENTICAL
+$ sha256(retored) = 47061e1b24b41d192a6efb6988c24c849f48fdb08105aa40b5c852803a531d99
+（本清单是新文件，故 git status 显示 ?? 属正常；还原以「cmp 逐字节相同 + 两个判据 rc=0」为准）

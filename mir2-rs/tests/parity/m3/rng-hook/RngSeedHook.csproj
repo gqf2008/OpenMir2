@@ -7,4 +7,15 @@
     <RootNamespace>RngSeedHook</RootNamespace>
     <!-- 启动钩子要求：程序集内必须存在 internal class StartupHook { public static void Initialize() } -->
   </PropertyGroup>
+  <ItemGroup>
+    <!-- 攻击路径静态分流站点清单（唯一事实源；运行期同时用于路由与落盘 dump）。
+         改它 ⇒ check_predicates.py table-vs-csharp 必红（若与 attack_sites.tsv 漂移）。 -->
+    <EmbeddedResource Include="divert-sites.txt" />
+    <!-- selftest/ 是**独立项目**（引用本项目的源与清单）。它的 obj/ 不在本项目的默认排除内
+         （默认只排 <项目目录>/obj、bin）⇒ 会误收它的 AssemblyInfo.cs 导致 CS0579 重复特性。
+         这里显式排除。 -->
+    <Compile Remove="selftest/**" />
+    <EmbeddedResource Remove="selftest/**" />
+    <None Remove="selftest/**" />
+  </ItemGroup>
 </Project>

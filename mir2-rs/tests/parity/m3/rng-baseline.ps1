@@ -42,7 +42,16 @@ New-Item -ItemType Directory -Force -Path $SessionDir | Out-Null
 Write-Output ("SESSION " + $SessionDir)
 
 function Get-Sha256([string]$Path) {
-  return (Get-FileHash -Algorithm SHA256 -Path $Path).Hash.ToLower()
+  # 环境无关：.NET SHA256 取代 `Get-FileHash`（本机 PS 5.1 在 PSModulePath 被 PS7 污染时不导出
+  # Get-FileHash ⇒ `$ErrorActionPreference='Stop'` 下 CommandNotFoundException 崩溃）。
+  # 与 tools/oracle/hashutil.ps1、tools/m2-acceptance/preflight.ps1 同一修法，结果逐字节相同。
+  if ([string]::IsNullOrEmpty($Path)) { throw 'Get-Sha256: 路径为空' }
+  if (-not (Test-Path -LiteralPath $Path)) { throw "Get-Sha256: 文件不存在: $Path" }
+  $alg = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    return ([System.BitConverter]::ToString($alg.ComputeHash($bytes)) -replace '-', '').ToLowerInvariant()
+  } finally { $alg.Dispose() }
 }
 
 function Get-TextSha256([string]$Text) {

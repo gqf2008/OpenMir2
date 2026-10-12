@@ -44,6 +44,13 @@
     0.6 种子注入断言（F-C）  -Side csharp 读 `MIR2_RNG_LOG` 的 `INJECT_OK <seed>`；-Side rust 读 game-svr
                  启动日志的 `SEED_PROBE`（另校 `RUST_SEED_INJECTED`）；未注入/种子不符 ⇒ RED（fail-closed），
                  使「没设种子的不可比红」不再隐身。
+    0.7 活栈隔离口径（owner 2026-10-12 21:15，§6.0-3 签字）  `-IsolateAttack` / `$env:MIR2_RNG_ISOLATE_ATTACK`
+                 开启时：本侧 rng 流水头必须有 `ISOLATE_ATTACK <attack_seed>`（attack_seed = Seed + 0x9E37，
+                 i32 回绕）；C# 侧另机判 `rng-hook/divert-sites.txt` vs `rng-isolate-attack/attack_sites.tsv`
+                 （check_predicates.py static + table-vs-csharp，缺一条/有未登记 site ⇒ RED）。会话产物写
+                 `attack_isolation.json`（隔离开关 + attack_seed + dump sha256 + 专用流 sha256）；跨侧比前
+                 另有护栏：两侧 `isolate_attack` 必须一致（开启时 attack_seed 一致），否则 PREREQ。
+                 **默认关**：不构造专用流、RNG 行为逐字节不变（只多写一份 isolate_attack=false 的记账）。
     1 预检       入口端口不全在听 / MySQL 3306 不可读 ⇒ PREREQ（exit 2），不静默通过。
     1.5 pin SQL 可执行性（F-B + F-D）  在会话内建 `TEMPORARY TABLE ... LIKE` 并把每条 `UPDATE` 重写到镜像表、
                  以固定探针行真执行一次 ⇒ mysql rc 必须 0；列挂错表（如历史 `a.IncHealth` = ERROR 1054）
@@ -96,8 +103,12 @@ param(
   [int]$Seed = 42,                 # F-C：两侧必须注入的同一个种子（`MIR2_RNG_SEED`）
   [string]$CsharpSeedLog = '',     # F-C：C# rng-hook 的 `MIR2_RNG_LOG` 文件（含 `INJECT_OK <seed>`）；缺省读 $env:MIR2_RNG_LOG
   [string]$RustSeedLog = '',       # F-C：Rust game-svr 启动日志（含 `SEED_PROBE`）；缺省 <RustStackLogDir>\game-svr.out.log
+  [string]$RustRngLog = '',        # 隔离口径：Rust 侧 rng 流水（含 `ISOLATE_ATTACK <seed>`）；缺省 $env:MIR2_RNG_LOG / <RustStackLogDir>\rng-stream.tsv
   [string]$RustStackLogDir = 'E:\tmp\m2-acceptance\stack',  # T-30/`openmir2-m3-rust-stack-seed-plumb` 的默认 -LogDir
   [switch]$SkipSavePreflight,      # 仅供调试：跳过「Rust 侧断线存档未实现」前置
+  [switch]$IsolateAttack,          # owner 2026-10-12 21:15：攻击路径专用种子流（C# 栈须以 MIR2_RNG_ISOLATE_ATTACK=1 起）
+  [string]$IsolateSites = '',      # C# 静态分流站点 dump（缺省读 $env:MIR2_RNG_ISOLATE_SITES，再由流水头补）
+  [string]$AttackStreamLog = '',   # 专用流流水（缺省读 $env:MIR2_RNG_ATTACK_LOG）；夹具记其 sha256
   [switch]$DiffOnly,
   [switch]$SelfCheckNoStack
 )
@@ -220,6 +231,13 @@ function Invoke-AttackCrossSideDiff([string]$csharpDir, [string]$rustDir, [strin
   foreach ($m in @($pinGuard.informational)) { Write-Output $m }
   $pinInfos = @($pinGuard.infos | ForEach-Object { ("{0}:attempts={1}/expected={2}{3}" -f $_.dir, $_.attempts, $_.expected, $(if ($_.retried) { '(informational:retried)' } else { '' })) })
   Write-Output ("PIN_ATTEMPTS_INFO {0}（informational：attempts 数值不拒比）" -f ($pinInfos -join ' '))
+  # ①.6 隔离口径护栏（owner 2026-10-12 21:15）：两侧必须同一隔离口径（同开/同关；开启时同 attack_seed）。
+  $isoGuard = Get-M3PeerIsolationGuard -PeerDir $csharpDir -LocalDir $rustDir
+  foreach ($m in @($isoGuard.messages)) { Write-Output $m }
+  if (@($isoGuard.failed).Count -gt 0) {
+    Write-Output ("PREREQ_MISSING: 两侧隔离口径不一致（{0}）——两相不可比" -f (@($isoGuard.failed) -join ','))
+    return
+  }
   # ② 两侧各自 align（若尚未生成）。
   foreach ($d in @($csharpDir, $rustDir)) {
     $rc = Invoke-AttackAlign $d
@@ -707,9 +725,62 @@ if ($SelfCheckNoStack) {
   }
   Write-Output ("SELFTEST ⑬ 种子注入断言（离线）：{0}/{1} 向符合预期（csharp INJECT_OK / rust SEED_PROBE / 种子不符必红 / 空路径 fail-closed）" -f (@($evChecks | Where-Object { $_.o.ok -eq $_.want }).Count), $evChecks.Count)
 
+  # 21. owner 2026-10-12 21:15 活栈隔离口径（夹具 + C# 影子 hook 半）：默认关语义、attack_seed 公式、
+  #    流水头解析、C# 分流站点 dump vs Rust 谓词表机判（缺一条/未登记 ⇒ 必红）、C# hook 离线自检。
+  $isoOff = Test-M3IsolateAttackValue -Value ''
+  $isoOff0 = Test-M3IsolateAttackValue -Value '0'
+  $isoOffFalse = Test-M3IsolateAttackValue -Value 'false'
+  $isoOn1 = Test-M3IsolateAttackValue -Value '1'
+  $isoOnYes = Test-M3IsolateAttackValue -Value 'YES'
+  $isoBad = Test-M3IsolateAttackValue -Value 'maybe'
+  if (-not ($isoOff.ok -and -not $isoOff.on)) { $failures += 'iso_parse_empty_not_off' }
+  if (-not ($isoOff0.ok -and -not $isoOff0.on)) { $failures += 'iso_parse_0_not_off' }
+  if (-not ($isoOffFalse.ok -and -not $isoOffFalse.on)) { $failures += 'iso_parse_false_not_off' }
+  if (-not ($isoOn1.ok -and $isoOn1.on)) { $failures += 'iso_parse_1_not_on' }
+  if (-not ($isoOnYes.ok -and $isoOnYes.on)) { $failures += 'iso_parse_YES_not_on' }
+  if ($isoBad.ok) { $failures += 'iso_parse_bad_not_red' }
+  if ((Get-M3AttackSeed -Seed 42) -ne (42 + 0x9E37)) { $failures += 'iso_attack_seed_42' }
+  if ((Get-M3AttackSeed -Seed 0) -ne 0x9E37) { $failures += 'iso_attack_seed_0' }
+  if ((Get-M3AttackSeed -Seed 2147483647) -ne -2147443146) { $failures += ('iso_attack_seed_wrap=' + (Get-M3AttackSeed -Seed 2147483647)) }
+  # 流水头解析：有 / 无 / 文件缺失 三向。
+  $isoTrace = Join-Path $tmpRoot 'iso-trace.tsv'
+  [System.IO.File]::WriteAllText($isoTrace, "1`tINJECT_OK`t42`t0`nSEED_PROBE 1 2 3`nISOLATE_ATTACK 40545 isolate_sites=C:\x\dump.txt`n", (New-Object System.Text.UTF8Encoding($false)))
+  $isoTracePlain = Join-Path $tmpRoot 'iso-trace-plain.tsv'
+  [System.IO.File]::WriteAllText($isoTracePlain, "1`tINJECT_OK`t42`t0`nSEED_PROBE 1 2 3`n", (New-Object System.Text.UTF8Encoding($false)))
+  $ti = Get-M3TraceIsolate -LogPath $isoTrace
+  if (-not $ti.present -or $ti.seed -ne 40545 -or $ti.sites_path -ne 'C:\x\dump.txt') { $failures += 'iso_trace_parse' }
+  if ((Get-M3TraceIsolate -LogPath $isoTracePlain).present) { $failures += 'iso_trace_plain_not_absent' }
+  if ((Get-M3TraceIsolate -LogPath (Join-Path $tmpRoot 'nope.tsv')).present) { $failures += 'iso_trace_missing_not_absent' }
+  # C# dump vs Rust 谓词表机判（生产文件）：绿；删一条 / 加一条未登记 ⇒ 红。
+  $cursor = Get-M3IsolateSitesCursorPath
+  $predOk = Test-M3IsolatePredicates -CsharpDump $cursor
+  if ($predOk.rc -ne 0) { $failures += ('iso_predicates_prod_rc=' + $predOk.rc) }
+  $curLines = @(Get-Content -LiteralPath $cursor | Where-Object { $_ -notmatch '^\s*#' -and $_.Trim().Length -gt 0 })
+  $mutDir = Join-Path $tmpRoot 'iso-mut'
+  New-Item -ItemType Directory -Force -Path $mutDir | Out-Null
+  $mutDrop = Join-Path $mutDir 'drop-one.txt'
+  [System.IO.File]::WriteAllLines($mutDrop, @($curLines | Select-Object -Skip 1), (New-Object System.Text.UTF8Encoding($false)))
+  $mutExtra = Join-Path $mutDir 'extra.txt'
+  [System.IO.File]::WriteAllLines($mutExtra, @($curLines + 'M2Server.Player.PlayObject.Bogus@PlayObject.cs:1'), (New-Object System.Text.UTF8Encoding($false)))
+  $predDrop = Test-M3IsolatePredicates -CsharpDump $mutDrop
+  if ($predDrop.rc -eq 0) { $failures += 'iso_predicates_drop_not_red' }
+  $predExtra = Test-M3IsolatePredicates -CsharpDump $mutExtra
+  if ($predExtra.rc -eq 0) { $failures += 'iso_predicates_extra_not_red' }
+  # C# hook 离线自检（解析/公式/站点/路由；编译进同一份 StartupHook.cs + divert-sites.txt）。
+  $isoSelftestProj = Join-Path $Here 'rng-hook\selftest\RngIsolateSelftest.csproj'
+  $prevEap = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  $isoSelfOut = (& dotnet run --project $isoSelftestProj -c Release 2>&1 | Out-String)
+  $isoSelfRc = $LASTEXITCODE
+  $ErrorActionPreference = $prevEap
+  if ($isoSelfRc -ne 0) { $failures += ('iso_hook_selftest_rc=' + $isoSelfRc) }
+  if ($isoSelfOut -notmatch 'SELFTEST GREEN') { $failures += 'iso_hook_selftest_not_green' }
+  Write-Output ("SELFTEST 21 活栈隔离口径（owner 21:15）：开关解析 off/on/fail-closed 六向；attack_seed(42)=40545 / wrap=-2147443146；流水头 有/无/缺文件 三向；C# dump vs Rust 谓词表 生产 rc={0} / 删一条 rc={1} / 加未登记 rc={2}；hook 离线自检 rc={3}" -f `
+    $predOk.rc, $predDrop.rc, $predExtra.rc, $isoSelfRc)
+
   Remove-Item -Recurse -Force $tmpRoot -ErrorAction SilentlyContinue
   if ($failures.Count -eq 0) {
-    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（攻击配置透传/默认关 + run_pair -DisableAutoPlay 耦合两向 + 攻击两相 pin pose/SQL（-PinMapName 透传含 MapName 断言） + pin SQL 可执行性（含改坏 a.IncHealth 必红 + 改坏 Hp=100000 越界必红） + pin 记账门（owner 19:20 降级 informational：attempts=2/3/漂移/旧会话无字段键 绿 + 键在但空/(off)/形态坏 红 + 改坏必红值清空） + 预热相 -StopAfterCharCreated 透传两向 + 攻击 pin 无怪口径（R-1，按地图查提取件：生产 0137 绿/source_verified + 换回 map 0 必红 + 合成 0/1 行·声明漂移·缺 provenance 四向有牙） + 攻击 pin 非 MonGen AI 消费者口径（R-1 refine 15:05：生产 0137 绿/source_verified + 合成 有引用/声明漂移/缺 provenance/缺提取件 四向必红） + 入口/DiffOnly fail-closed + attack_diff selftest + 改坏 dmg/hit 必红 + Invoke-AttackAlign 返回值形态两处（F-J：⑧ 生产函数直接断言 + ⑮） + scoped_diff 14/14 + M-1 WARN 有牙齿 + M-2 attacker 精确选择 selftest + pin SQL 别名/列校验 + 种子注入断言（两侧 fail-closed）+ 攻击序列收尾等待（F-E） + attack 行缺 my 的 fail-closed（残差③））'
+    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（攻击配置透传/默认关 + run_pair -DisableAutoPlay 耦合两向 + 攻击两相 pin pose/SQL（-PinMapName 透传含 MapName 断言） + pin SQL 可执行性（含改坏 a.IncHealth 必红 + 改坏 Hp=100000 越界必红） + pin 记账门（owner 19:20 降级 informational：attempts=2/3/漂移/旧会话无字段键 绿 + 键在但空/(off)/形态坏 红 + 改坏必红值清空） + 预热相 -StopAfterCharCreated 透传两向 + 攻击 pin 无怪口径（R-1，按地图查提取件：生产 0137 绿/source_verified + 换回 map 0 必红 + 合成 0/1 行·声明漂移·缺 provenance 四向有牙） + 攻击 pin 非 MonGen AI 消费者口径（R-1 refine 15:05：生产 0137 绿/source_verified + 合成 有引用/声明漂移/缺 provenance/缺提取件 四向必红） + 入口/DiffOnly fail-closed + attack_diff selftest + 改坏 dmg/hit 必红 + Invoke-AttackAlign 返回值形态两处（F-J：⑧ 生产函数直接断言 + ⑮） + scoped_diff 14/14 + M-1 WARN 有牙齿 + M-2 attacker 精确选择 selftest + pin SQL 别名/列校验 + 种子注入断言（两侧 fail-closed）+ 攻击序列收尾等待（F-E） + attack 行缺 my 的 fail-closed（残差③） + 活栈隔离口径（owner 21:15：开关 off/on/fail-closed 六向 + attack_seed 公式含 i32 回绕 + 流水头 有/无/缺文件 + C# dump vs Rust 谓词表机判（生产绿 / 删一条红 / 加未登记红）+ C# hook 离线自检））'
     exit 0
   }
   Write-Output ('SELFTEST_RED RED: ' + ($failures -join ', '))
@@ -811,6 +882,20 @@ if ($Side -eq 'csharp') {
   Write-Output ("SEED_INJECT_OK rust seed={0} <- {1}" -f $seedEv.seed, $rustSeedLogResolved)
 }
 
+Write-Output '--- 0.7) 活栈隔离口径（owner 2026-10-12 21:15；缺省关，行为不变） ---'
+$isoEnv = Test-M3IsolateAttackValue -Value $env:MIR2_RNG_ISOLATE_ATTACK
+if (-not $isoEnv.ok) {
+  Write-Output ("RED: `$env:MIR2_RNG_ISOLATE_ATTACK='{0}' 非法（合法：空/0/false/off/no 或 1/true/on/yes）" -f $env:MIR2_RNG_ISOLATE_ATTACK)
+  exit 1
+}
+$isolateOn = ([bool]$IsolateAttack) -or ([bool]$isoEnv.on)
+$attackSeed = Get-M3AttackSeed -Seed $Seed
+if ($isolateOn) {
+  Write-Output ("ISOLATE_ATTACK_REQUESTED on=true attack_seed={0}（流水头应为 ISOLATE_ATTACK {0}）" -f $attackSeed)
+} else {
+  Write-Output 'ISOLATE_ATTACK_REQUESTED on=false（默认关；RNG 逐字节行为不变）'
+}
+
 Write-Output '--- 1) 预检：MySQL / 前缀 ---'
 if (-not (Test-MysqlTcp)) {
   Write-Output 'PREREQ_MISSING: MySQL 127.0.0.1:3306 不可达'
@@ -870,6 +955,61 @@ $seedMeta = [ordered]@{
 }
 $seedMeta | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $mine.FullName 'attack_seed.json') -Encoding utf8
 Write-Output ("SEED_EVIDENCE_RECORDED {0}" -f (Join-Path $mine.FullName 'attack_seed.json'))
+
+# --- 隔离记账（夹具侧）：会话产物记「隔离是否开启 + 专用流 seed + dump/专用流 sha256」---
+# 缺省关时也写（isolate_attack=false），供跨侧护栏判「两侧同一隔离口径」；旧会话无此文件视为 off。
+# C# 侧 `ISOLATE_ATTACK` 在 MIR2_RNG_LOG 流水（= -CsharpSeedLog）；Rust 侧在 Rust 侧的同名 rng 流水。
+$rustRngLogResolved = if (-not [string]::IsNullOrEmpty($RustRngLog)) { $RustRngLog }
+  elseif (-not [string]::IsNullOrEmpty($env:MIR2_RNG_LOG)) { $env:MIR2_RNG_LOG }
+  elseif (Test-Path -LiteralPath (Join-Path $RustStackLogDir 'rng-stream.tsv')) { Join-Path $RustStackLogDir 'rng-stream.tsv' }
+  else { '' }
+$traceForIso = if ($Side -eq 'csharp') { $csharpSeedLogResolved } else { $rustRngLogResolved }
+$traceIso = Get-M3TraceIsolate -LogPath $traceForIso
+$sitesDumpPath = if (-not [string]::IsNullOrEmpty($IsolateSites)) { $IsolateSites }
+  elseif (-not [string]::IsNullOrEmpty($env:MIR2_RNG_ISOLATE_SITES)) { $env:MIR2_RNG_ISOLATE_SITES }
+  elseif ($traceIso.present -and -not [string]::IsNullOrEmpty($traceIso.sites_path)) { $traceIso.sites_path }
+  else { '' }
+$attackStreamPath = if (-not [string]::IsNullOrEmpty($AttackStreamLog)) { $AttackStreamLog }
+  elseif (-not [string]::IsNullOrEmpty($env:MIR2_RNG_ATTACK_LOG)) { $env:MIR2_RNG_ATTACK_LOG }
+  else { '' }
+if ($isolateOn) {
+  if (-not $traceIso.present) {
+    Write-Output ("RED: 期望隔离口径但流水无 ISOLATE_ATTACK 行（{0}）——栈未开 MIR2_RNG_ISOLATE_ATTACK 或影子 hook 非新版" -f $traceForIso)
+    exit 1
+  }
+  if ($traceIso.seed -ne $attackSeed) {
+    Write-Output ("RED: 流水 ISOLATE_ATTACK seed={0} != 期望 {1}（MIR2_RNG_SEED 与 -Seed 不同口径？）" -f $traceIso.seed, $attackSeed)
+    exit 1
+  }
+  if ($Side -eq 'csharp') {
+    if ([string]::IsNullOrEmpty($sitesDumpPath)) {
+      Write-Output 'RED: 隔离开启但缺 C# 分流站点 dump 路径（-IsolateSites / $env:MIR2_RNG_ISOLATE_SITES / 流水头 isolate_sites=）'
+      exit 1
+    }
+    $pred = Test-M3IsolatePredicates -CsharpDump $sitesDumpPath
+    if ($pred.rc -ne 0) {
+      Write-Output 'RED: C# 分流站点 vs Rust 谓词表机判失败（缺一条 / 有未登记 site ⇒ fail-closed）'
+      Write-Output $pred.output
+      exit 1
+    }
+    Write-Output ("ISOLATE_PREDICATES_OK table-vs-csharp GREEN（dump={0}）" -f $sitesDumpPath)
+  }
+}
+$sitesDumpSha = if (-not [string]::IsNullOrEmpty($sitesDumpPath) -and (Test-Path -LiteralPath $sitesDumpPath)) { Get-M3Sha256Hex -Path $sitesDumpPath } else { '' }
+$atkStreamSha = if (-not [string]::IsNullOrEmpty($attackStreamPath) -and (Test-Path -LiteralPath $attackStreamPath)) { Get-M3Sha256Hex -Path $attackStreamPath } else { '' }
+$tablePath = Get-M3IsolateSitesTablePath
+$cursorPath = Get-M3IsolateSitesCursorPath
+$isoMeta = [ordered]@{
+  side = $Side; isolate_attack = $isolateOn; attack_seed = $(if ($isolateOn) { $attackSeed } else { $null })
+  trace = $traceForIso; trace_isolate = $traceIso.present; trace_isolate_seed = $traceIso.seed
+  sites_dump = $sitesDumpPath; sites_dump_sha256 = $sitesDumpSha
+  sites_cursor = $cursorPath; sites_cursor_sha256 = $(if (Test-Path -LiteralPath $cursorPath) { Get-M3Sha256Hex -Path $cursorPath } else { '' })
+  attack_stream = $attackStreamPath; attack_stream_sha256 = $atkStreamSha
+  predicates_table = $tablePath; predicates_table_sha256 = $(if (Test-Path -LiteralPath $tablePath) { Get-M3Sha256Hex -Path $tablePath } else { '' })
+  ts = (Get-Date).ToString('o')
+}
+$isoMeta | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $mine.FullName 'attack_isolation.json') -Encoding utf8
+Write-Output ("ISOLATE_EVIDENCE_RECORDED {0} isolate={1} dump_sha256={2} attack_stream_sha256={3}" -f (Join-Path $mine.FullName 'attack_isolation.json'), $isolateOn, $sitesDumpSha, $atkStreamSha)
 
 # 同序列判据：baseline.json 的 attack_markers 必须存在（run_pair 已机判完整串）。
 $baseline = Get-Content (Join-Path $mine.FullName 'baseline.json') -Raw | ConvertFrom-Json
