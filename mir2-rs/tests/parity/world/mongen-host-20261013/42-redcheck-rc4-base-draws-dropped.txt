@@ -1,0 +1,88 @@
+# 改坏必红 RC-4（F-1 专测）：删掉构造链公共部分 `draw_base_and_animal`（BaseObject 2 抽 + AnimalObject 2 抽）
+# 变异点：bins/game-svr/src/mongen.rs::draw_monster_construct —— `draw_base_and_animal(rng, &mut d);` 注释掉
+# 命中用例：mongen::tests::monster_constructor_draw_count_matches_oracle_per_race（逐 race 抽数）+ create_monster_chicken_* + deer/terrain + values
+# 命令：CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test -p game-svr --lib --offline mongen
+
+
+running 14 tests
+test mongen::tests::create_monster_missing_map_consumes_nothing ... ok
+test mongen::tests::create_monster_unknown_race_consumes_nothing ... ok
+test mongen::tests::entries_from_envir_field_mapping ... ok
+test mongen::tests::create_monster_cool_eye_threshold ... ok
+test mongen::tests::host_venture_server_disables_regen ... ok
+test mongen::tests::host_sentinel_first_slot_is_skipped_by_regen ... ok
+test mongen::tests::host_start_and_step_regen_one_monster ... ok
+test mongen::tests::create_monster_chicken_consumes_random_3500_then_dir_drops_cool_eye ... FAILED
+test mongen::tests::monster_constructor_draw_count_matches_oracle_per_race ... FAILED
+test mongen::tests::monster_constructor_values_match_oracle_order ... FAILED
+test mongen::tests::create_monster_terrain_shift_only_when_cell_unwalkable ... FAILED
+test mongen::tests::create_monster_deer_branch_matches_oracle ... FAILED
+test mongen::tests::monster_table_lookup_is_ordinal_ignore_case ... ok
+test mongen::tests::mon_gen_config_reads_oracle_keys_with_bom ... ok
+
+failures:
+
+---- mongen::tests::create_monster_chicken_consumes_random_3500_then_dir_drops_cool_eye stdout ----
+
+thread 'mongen::tests::create_monster_chicken_consumes_random_3500_then_dir_drops_cool_eye' (10836) panicked at bins\game-svr\src\mongen.rs:862:9:
+assertion `left == right` failed: 抽数个数/次序与 oracle 不一致
+  left: 877335630
+ right: 1683182456
+
+---- mongen::tests::monster_constructor_draw_count_matches_oracle_per_race stdout ----
+
+thread 'mongen::tests::monster_constructor_draw_count_matches_oracle_per_race' (15508) panicked at bins\game-svr\src\mongen.rs:1035:13:
+assertion `left == right` failed: race 11 构造抽数应为 4
+  left: 1588245929
+ right: 1999078416
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- mongen::tests::monster_constructor_values_match_oracle_order stdout ----
+
+thread 'mongen::tests::monster_constructor_values_match_oracle_order' (19340) panicked at bins\game-svr\src\mongen.rs:1068:13:
+assertion `left == right` failed
+  left: 0
+ right: 956
+
+---- mongen::tests::create_monster_terrain_shift_only_when_cell_unwalkable stdout ----
+
+thread 'mongen::tests::create_monster_terrain_shift_only_when_cell_unwalkable' (30840) panicked at bins\game-svr\src\mongen.rs:958:9:
+assertion `left == right` failed
+  left: 426253993
+ right: 2034163258
+
+---- mongen::tests::create_monster_deer_branch_matches_oracle stdout ----
+
+thread 'mongen::tests::create_monster_deer_branch_matches_oracle' (32348) panicked at bins\game-svr\src\mongen.rs:893:9:
+assertion `left == right` failed
+  left: 1452062818
+ right: 1836017217
+
+
+failures:
+    mongen::tests::create_monster_chicken_consumes_random_3500_then_dir_drops_cool_eye
+    mongen::tests::create_monster_deer_branch_matches_oracle
+    mongen::tests::create_monster_terrain_shift_only_when_cell_unwalkable
+    mongen::tests::monster_constructor_draw_count_matches_oracle_per_race
+    mongen::tests::monster_constructor_values_match_oracle_order
+
+test result: FAILED. 9 passed; 5 failed; 0 ignored; 0 measured; 88 filtered out; finished in 0.00s
+
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\world)
+   Compiling mir2-envir v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\envir)
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+warning: function `draw_base_and_animal` is never used
+   --> bins\game-svr\src\mongen.rs:274:4
+    |
+274 | fn draw_base_and_animal(rng: &mut RandomNumber, d: &mut MonsterCtorDraws) {
+    |    ^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `game-svr` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.45s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-3aa264152417c61e.exe)
+error: test failed, to rerun pass `-p game-svr --lib`
+
+test rc=101
+# 还原：mongen.rs sha256=29b071aff2ca5511c488211e1efa5a2863779da198efc8d81a1635fe57f408d0（与备份逐字节一致）

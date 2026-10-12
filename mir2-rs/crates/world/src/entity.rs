@@ -45,6 +45,37 @@ pub struct VisibleBaseObject {
     pub flag: VisibleFlag,
 }
 
+/// oracle 实体**构造函数链**里抽出的随机数结果（生成路径，卡
+/// `openmir2-m3-mongen-load-spawn` 抽取；卡 `openmir2-m3-monster-ai-tick` 的 AI 只消费不抽）。
+///
+/// oracle `CreateMonster`（`WorldServer.MonGen.cs:498-810`）在 `cert.Dir`（`:740`）之前先
+/// `new Xxx()`，而构造链 `BaseObject` → `AnimalObject` → `MonsterObject`/`AtMonster`/… →
+/// 派生类会**连续抽随机数**（每层 ctor 一个 `Random(...)`），这些取数发生在
+/// `MonGen.rs` 的 `CreateMonster` 回调里、是生成期 RNG 流的一部分；抽出的值必须随生成结果
+/// 落到实体上，否则取数完成后无法复算（流位置已前移）。
+///
+/// 三个 `*_tick_delta` 是 oracle `HUtil32.GetTickCount() ± Random(...)` 里的 `Random(...)` 项
+/// （绝对值依赖读取时刻，故只存随机分量，绝对值由消费方用自己的时钟合成）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MonsterCtorDraws {
+    /// `BaseObject.RunTick = GetTickCount() + Random(1500)` 的 `Random(1500)`（`BaseObject.cs:439`）。
+    pub run_tick_delta: i32,
+    /// `BaseObject.SearchTime = Random(2000) + 2000`（`BaseObject.cs:441`）——被派生类覆盖前的中间值。
+    pub base_search_time: i32,
+    /// `AnimalObject.AttackTick = GetTickCount() - Random(3000)` 的 `Random(3000)`（`AnimalObject.cs:76`）。
+    pub attack_tick_delta: i32,
+    /// `AnimalObject.WalkTick = GetTickCount() - Random(3000)` 的 `Random(3000)`（`AnimalObject.cs:77`）。
+    pub walk_tick_delta: i32,
+    /// 构造函数链**最终生效**的 `SearchTime`（最派生类 ctor 的最后一次赋值）。
+    pub search_time: i32,
+    /// `AnimalObject.MeatQuality`（race 51/52/53 的 `new X {...}` 初始化式；其余 race = 0）。
+    pub meat_quality: u16,
+    /// `MonsterObject.BoFearFire`（race 95/96/97 ctor 后的 `Random(n)==0`；race 101 初始化式恒 `true`）。
+    pub bo_fear_fire: bool,
+    /// `ZilKinZombi.ZilKillCount`（race 96 ctor 的 `Random(3)==0 ⇒ Random(3)+1`；未命中 = 0）。
+    pub zil_kill_count: i32,
+}
+
 /// `BaseObject` 中参与本骨架（tick / AOI / 移动）的字段子集。
 ///
 /// S1 起 `Entity` 直接就是 bevy 的**组件**（每个实体一个组件），由
@@ -147,6 +178,8 @@ pub struct Entity {
     pub drop_items: Vec<crate::combat::DropItem>,
     /// 死亡结算是否已做（避免重复发经验/重复掉落）
     pub death_settled: bool,
+    /// 构造函数链抽出的随机数结果（见 [`MonsterCtorDraws`]）；玩家/非 MonGen 路径实体为缺省全零。
+    pub ctor_draws: MonsterCtorDraws,
 }
 
 impl Entity {
@@ -206,6 +239,7 @@ impl Entity {
             gold: 0,
             drop_items: Vec::new(),
             death_settled: false,
+            ctor_draws: MonsterCtorDraws::default(),
         }
     }
 

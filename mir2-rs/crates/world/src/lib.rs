@@ -33,7 +33,9 @@ pub use combat::{
     ACTOR_RACE_PEACE_NPC, ATTACK_MODE_HAM_ALL, ATTACK_MODE_HAM_DEAR, ATTACK_MODE_HAM_GROUP,
     ATTACK_MODE_HAM_GUILD, ATTACK_MODE_HAM_MASTER, ATTACK_MODE_HAM_PEACE, ATTACK_MODE_HAM_PKATTACK,
 };
-pub use entity::{Entity, EntityStore, VisibleFlag, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY};
+pub use entity::{
+    Entity, EntityStore, MonsterCtorDraws, VisibleFlag, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY,
+};
 pub use magic::{
     can_read_book, get_power, get_power13, get_rpow, get_spell_point, magic_attack_interval, mpow,
 };

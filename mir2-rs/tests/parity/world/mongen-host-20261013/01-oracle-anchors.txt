@@ -59,24 +59,54 @@ src/GameSrv/Word/WorldServer.MonGen.cs:811-874 RegenMonsters(monGen, nCount)
   （分片②已实现这些次序；本片只做宿主驱动与 CreateMonster 回调。）
 
 ## 6. CreateMonster（RNG 次序；本片第 ③ 片的回调）
+#
+# ★ 2026-10-13 F-1 返工：oracle 在 switch 内 `new Xxx()`，**构造函数在 switch 内同步执行**
+#   ⇒ 构造链取数全部发生在 `cert.Dir`(:740) **之前**，属生成路径 RNG 流的一部分。
+#   逐层锚点（本片 read 工具实读，非转述）：
+src/M2Server/Actor/BaseObject.cs:439        RunTick   = GetTickCount() + Random(1500)
+src/M2Server/Actor/BaseObject.cs:441        SearchTime = Random(2000) + 2000
+src/M2Server/Actor/AnimalObject.cs:76       AttackTick = GetTickCount() - Random(3000)
+src/M2Server/Actor/AnimalObject.cs:77       WalkTick   = GetTickCount() - Random(3000)
+src/M2Server/Monster/MonsterObject.cs:65    SearchTime = 3000 + Random(2000)
+src/M2Server/Monster/Monsters/ATMonster.cs:10 SearchTime = Random(1500) + 1500
+src/M2Server/Npc/NormNpc.cs:39 / Monsters/GuardUnit.cs:19  守卫链无额外抽
+   派生类 ctor 的 SearchTime 覆盖：StickMonster.cs:17 / BeeQueen.cs:17 / SpiderHouseMonster.cs:17 /
+     DigOutZombi.cs:13 / ExplosionSpider.cs:14 / ScultureMonster.cs:11 / ZilKinZombi.cs:15（+ `Random(3)==0` 支）/…
+     （`Random(1500) + {1500|2500|500}` 型，逐 race 见下表）
 src/GameSrv/Word/WorldServer.MonGen.cs:498-503 FindMap == null ⇒ null（在取数之前）
-src/GameSrv/Word/WorldServer.MonGen.cs:504-729 switch(nMonRace) 构造 cert：
-  511   AnimalChicken(51)        Random(3500)
-  520-539 AnimalDeer(52)         Random(30)==0 ? Random(20000) : Random(8000)
-  542   AnimalWolf(53)          Random(8000)
-  594-598 MonsterDigoutzombi(95) Random(2)
-  611-615 MonsterZilkinzombi(96) Random(4)
-  618-622 case 97 (CowMonster)   Random(2)
+src/GameSrv/Word/WorldServer.MonGen.cs:504-729 switch(nMonRace) 的构造 + 内联抽：
+  511/522   AnimalChicken(51)        MeatQuality = Random(3500) + 3000
+  527/532/541 AnimalDeer(52)         `if (Random(30)==0)`（**先于任何 new**）→ Random(20000)+10000 / Random(8000)+8000
+  542/550   AnimalWolf(53)          MeatQuality = Random(8000) + 8000
+  594-598   MonsterDigoutzombi(95)  ctor 后 `Random(2)==0 ⇒ BoFearFire`
+  611-615   MonsterZilkinzombi(96)  ctor 内 `Random(3)==0 ⇒ Random(3)+1`；ctor 后 `Random(4)==0 ⇒ BoFearFire`
+  618-622   case 97 (CowMonster)    ctor 后 `Random(2)==0 ⇒ BoFearFire`
   不在 switch 内的 race ⇒ cert==null（不抽任何数）
+# 逐 race 构造链总抽数（本片 `draw_monster_construct` 实现；与从 src/ 解析类继承+ctor 的独立 Python 脚本对齐，见 40-crosscheck）：
+#   11/12/20/55/110/111/112 = 4（GuardUnit 链 = BaseObject 2 + AnimalObject 2）
+#   51=6  52=7  53=7
+#   80=5  81=6  82=7  83=6  84=6  85=5  86=6  87=5  88=6  89=6  90=7  91=7  92=7  93=5  94=6  95=7
+#   96=9 或 10（`Random(3)==0` 命中支 +1；含 switch 内联）  97=8
+#   100=6 101=6 102=6 103=5 104=5 105=7 106=7 107=5
+#   113=5 114=7 115=4 116=5 117=6 118=7 119=7 120=4 130=6 131=6 132=5 133=6 134=6
+#   200=6 201=6 203=6 206=6 208=6 209=6 210=6 214=6 215=7
+#   附注：reviewer-6 F-1 的示例（80=1、81=2）只数了 `MonsterObject.cs:65`/`ATMonster.cs:10` 那一次 ctor 抽，
+#     漏计公共链 `BaseObject`(2)/`AnimalObject`(2)；owner 2026-10-13 06:05 要求「逐 race 自己读源码确认」，
+#     故本片按**完整链**实现，并登记该口径订正（同一缺口也在承接卡 C 分片①的 `02-constructor-rng-gap.txt` 记为 5 抽）。
 src/GameSrv/Word/WorldServer.MonGen.cs:731-734 cert==null ⇒ return null
-src/GameSrv/Word/WorldServer.MonGen.cs:735 ApplyMonsterAbility(v880-910)（无 RNG；能力字段映射）
+src/GameSrv/Word/WorldServer.MonGen.cs:735-739 ApplyMonsterAbility(v880-910)（无 RNG；能力字段映射）
 src/GameSrv/Word/WorldServer.MonGen.cs:740 cert.Dir = RandomByte(8)
 src/GameSrv/Word/WorldServer.MonGen.cs:742 MonGetRandomItems(cert)（v441-488 的掉落预算）
 src/GameSrv/Word/WorldServer.MonGen.cs:743-746 Random(100) < cert.CoolEyeCode ⇒ CoolEye
 src/GameSrv/Word/WorldServer.MonGen.cs:747 cert.Initialize()（BaseObject.Base.cs:14：AbilCopyToWAbil + CanWalk(x,y,true)&&AddToMap ⇒ AddtoMapSuccess=false）
 src/GameSrv/Word/WorldServer.MonGen.cs:748-800 地形移位：仅 AddtoMapSuccess 为真时；循环内 CanWalk(x,y,false) 为假才移位
-              （Width<50?2:3 步长；Height<250? (Height<30?2:20) : 50 边距；最多 31 次；Random(Width/2)/Random(Height/2)）
+             （Width<50?2:3 步长；Height<250? (Height<30?2:20) : 50 边距；最多 31 次；Random(Width/2)/Random(Height/2)）
 src/GameSrv/Word/WorldServer.MonGen.cs:801-802 !outofrange ⇒ return null 等价物
+
+# 构造抽值落实体（owner 2026-10-13 06:05 要求②）：`Entity.ctor_draws: MonsterCtorDraws`
+#   （run_tick_delta / base_search_time / attack_tick_delta / walk_tick_delta / search_time /
+#    meat_quality / bo_fear_fire / zil_kill_count），供承接卡 C 的 AI 消费（C 只消费不抽）。
+# 本片仍登记：`dir`/`cool_eye` 只随 `MonsterSpawnRequest` 交给 sink，未入 `Entity`（AOI 面属承接卡 C）。
 
 ## 7. 能力字段（ApplyMonsterAbility，v880-910）
 Race / RaceImg / Appr / Abil.Level=Level / LifeAttrib=btLifeAttrib / CoolEyeCode=CoolEye / FightExp=Exp /

@@ -9,10 +9,9 @@
 //!    （`LocalDB.cs:570-590`，`Some(_) ⇒ sentinel_present = true`）；
 //! 3. **分组/分片**：`initialize_monster`（`WorldServer.MonGen.cs:30-114`）；
 //! 4. **每 tick 驱动**：`step_threads`（`WorldServer.MonGen.cs:192-253` 的单线程串行版）；
-//! 5. **`CreateMonster` 回调**（`WorldServer.MonGen.cs:498-810`）的 **RNG 取数次序**：
-//!    per-race 抽 → `Dir = RandomByte(8)` → `MonGetRandomItems`（掉落预算）→ `Random(100) < CoolEyeCode`
-//!    → 地形移位。**实体类的行为面**（`ChickenDeer`/`AtMonster`/守卫…的 AI）属承接卡
-//!    `openmir2-m3-monster-ai-tick`；本层只负责「取数次序 + 落到世界」。
+//! 5. **`CreateMonster` 回调**（`WorldServer.MonGen.cs:498-810`）的 **RNG 取数次序**：**构造链取数**（`draw_monster_construct`：`BaseObject`/`AnimalObject`/`MonsterObject`/… 各层 ctor + switch 内联 51/52/53/95/96/97）→ `Dir = RandomByte(8)` → `MonGetRandomItems`（掉落预算）→ `Random(100) < CoolEyeCode` → 地形移位。
+//!
+//! **实体类的行为面**（`ChickenDeer`/`AtMonster`/守卫…的 AI）属承接卡 `openmir2-m3-monster-ai-tick`；本层负责「取数次序 + 构造抽落实体 + 落到世界」。
 //!
 //! ## 与 oracle 的建模差异（登记）
 //!
@@ -23,6 +22,8 @@
 //!   第 ② 片登记，Claim B 的 site/order 账本据此对齐。
 //! - **`dir`/`cool_eye`**：本层按 oracle 取数并随 [`MonsterSpawnRequest`] 交给 sink；world 的
 //!   `Entity` 尚未建模这两个字段（AOI 面属承接卡），故 `WorldMonsterSink` 落库时**不入实体内存**。
+//! - **构造链抽值**：本层按 oracle 逐 race 抽完（含公共链 `BaseObject`/`AnimalObject` ctor），并作为
+//!   [`MonsterCtorDraws`] 随生成结果落到 `Entity.ctor_draws`（供承接卡 C 的 AI 消费，C 不再重抽）。
 //! - **`Envir.FindMap` 已并入 `MapRegistry::id_of`**（部署态 `ServerIndex` 全 0，与
 //!   `crates/envir` 的合并口径一致）。
 //!
@@ -42,6 +43,7 @@ use mir2_world::mongen::{
     initialize_monster, step_threads, InitializeMonsterRecord, MapCanCreate, MonGenConfig,
     MonGenEntry, MonGenState, RegenDecision, TickClockFn,
 };
+use mir2_world::MonsterCtorDraws;
 
 /// `Server.conf` 缺省：`[Server] VentureServer`（`ServerConf.cs:21`，`"FALSE"` ⇒ false）。
 pub const VENTURE_SERVER_DEFAULT: &str = "FALSE";
@@ -198,6 +200,9 @@ pub struct MonsterSpawnRequest {
     pub gold: i32,
     /// `MonGetRandomItems` 预算的物品（`mon.ItemList`）。
     pub drop_items: Vec<DropItem>,
+    /// 构造函数链抽出的值（oracle `BaseObject`/`AnimalObject`/`MonsterObject`/… ctor；
+    /// 见 [`draw_monster_construct`]）——随实体落库（供承接卡 C 的 AI 消费，C 不再重抽）。
+    pub ctor: MonsterCtorDraws,
 }
 
 /// `CreateMonster` 里「实体落地 + 地图查询」的那一半（承接卡 `openmir2-m3-monster-ai-tick` 填实体类）。
@@ -260,39 +265,180 @@ pub fn race_is_spawnable(race: i16) -> bool {
     )
 }
 
-/// switch 内**带额外抽数**的 race（其余 race 无此段）。
-fn draw_race_specific(rng: &mut RandomNumber, race: i16) {
+/// `BaseObject` + `AnimalObject` 两层 ctor 的公共取数（怪物/守卫/练功师都走这条链）。
+///
+/// - `BaseObject.cs:439` `RunTick = GetTickCount() + Random(1500)`；
+/// - `BaseObject.cs:441` `SearchTime = Random(2000) + 2000`；
+/// - `AnimalObject.cs:76` `AttackTick = GetTickCount() - Random(3000)`；
+/// - `AnimalObject.cs:77` `WalkTick = GetTickCount() - Random(3000)`。
+fn draw_base_and_animal(rng: &mut RandomNumber, d: &mut MonsterCtorDraws) {
+    d.run_tick_delta = rng.random_below(1500);
+    d.base_search_time = rng.random_below(2000) + 2000;
+    d.search_time = d.base_search_time;
+    d.attack_tick_delta = rng.random_below(3000);
+    d.walk_tick_delta = rng.random_below(3000);
+}
+
+/// `MonsterObject` ctor（`MonsterObject.cs:65`）：`SearchTime = 3000 + Random(2000)`。
+fn draw_monster_object(rng: &mut RandomNumber, d: &mut MonsterCtorDraws) {
+    d.search_time = 3000 + rng.random_below(2000);
+}
+
+/// `AtMonster` ctor（`ATMonster.cs:10`）：`SearchTime = Random(1500) + 1500`。
+fn draw_at_monster(rng: &mut RandomNumber, d: &mut MonsterCtorDraws) {
+    d.search_time = rng.random_below(1500) + 1500;
+}
+
+/// 派生类 ctor 里的 `SearchTime = Random(1500) + base`（`StickMonster.cs:17` 等 8 处同型）。
+fn draw_search_over(rng: &mut RandomNumber, d: &mut MonsterCtorDraws, base: i32) {
+    d.search_time = rng.random_below(1500) + base;
+}
+
+/// `CreateMonster` switch 内 **race → 构造链** 的全部取数（`WorldServer.MonGen.cs:504-729`）。
+///
+/// **为什么在这里**：oracle 里 `cert = new Xxx()` 的构造函数在 switch 内同步执行，早于
+/// `cert.Dir`（`:740`）。构造链 `BaseObject` → `AnimalObject` → `MonsterObject`/`AtMonster`/… →
+/// 派生类**每层都会抽随机数**，因此这些取数属**生成路径**的 RNG 流，不能留给每 tick 的 AI
+/// （承接卡 C）。本函数按 oracle 次序抽完，并返回抽出的值（[`MonsterCtorDraws`]）供落实体。
+///
+/// 次序与行号（逐 race 实读 `src/`）：
+/// - `:527` race 52 的 `if (Random(30) == 0)` 在**所有构造函数之前**求值；
+/// - 公共链 `BaseObject.cs:439/441` + `AnimalObject.cs:76/77`；
+/// - `MonsterObject.cs:65` / `ATMonster.cs:10` / 各派生类 ctor；
+/// - switch 内联 `:522`(51) / `:532`(52) / `:541`(52) / `:550`(53) / `:604`(95) / `:612`(96) / `:620`(97)。
+///
+/// 不在 switch 内的 race ⇒ 不抽任何数（与 [`race_is_spawnable`] 一致）。
+#[must_use]
+pub fn draw_monster_construct(rng: &mut RandomNumber, race: i16) -> MonsterCtorDraws {
+    let mut d = MonsterCtorDraws::default();
+    // `:527`：race 52 的 `if (Random(30) == 0)` 早于任何 `new`。
+    let deer_zero = if race == 52 {
+        Some(rng.random_below(30) == 0)
+    } else {
+        None
+    };
+    if !race_is_spawnable(race) {
+        return d;
+    }
+    // `AnimalObject` 链公共部分（`MonsterObject` 与 `GuardUnit` 都经 `AnimalObject`）。
+    draw_base_and_animal(rng, &mut d);
     match race {
-        // `:511` `AnimalChicken`：`Random(3500) + 3000` 的 `MeatQuality`。
-        51 => {
-            let _ = rng.random_below(3500);
+        // `GuardUnit`/`NormNpc`（守卫/练功师/门/墙）：无额外抽。
+        11 | 12 | 20 | 55 | 110 | 111 | 112 => {}
+        // `MonsterObject` 本体 + 无 ctor 抽的派生（`DualAxeMonster`/`ThornDarkMonster`/
+        // `ArcherMonster`/`ElfMonster`）。
+        80 | 87 | 93 | 104 | 113 => draw_monster_object(rng, &mut d),
+        // `AnimalObject` 直派生、无额外抽（`BigHeartMonster`/`SoccerBall`）：`SearchTime` 停在 Base 值。
+        115 | 120 => {}
+        // `AnimalObject` 直派生 + `SearchTime = Random(1500) + 2500`（`StickMonster`/`BeeQueen`/
+        // `SpiderHouseMonster`；`CentipedeKingMonster`/`SandMobObject` 继承 `StickMonster`）。
+        85 | 103 | 107 | 116 | 132 => draw_search_over(rng, &mut d, 2500),
+        // `MonsterObject` + `SearchTime = Random(1500) + 1500`（`RonObject`/`MagicMonObject`/
+        // `BoneKingMonster`/`ElectronicScolpionMon`/`CloneMonster`/`TeleMonster`/`Khazard`/
+        // `GreenMonster`/`RedMonster`/`FrostTiger`/`FireMonster`/`LightingZombi`/`ScultureKingMonster`）。
+        94 | 102 | 131 | 133 | 134 | 200 | 201 | 203 | 206 | 208 | 209 | 210 | 214 => {
+            draw_monster_object(rng, &mut d);
+            draw_search_over(rng, &mut d, 1500);
         }
-        // `:520-539` `AnimalDeer`：`Random(30) == 0` 时 `Random(20000)`，否则 `Random(8000)`。
-        52 => {
-            if rng.random_below(30) == 0 {
-                let _ = rng.random_below(20000);
-            } else {
-                let _ = rng.random_below(8000);
-            }
+        // `ScultureMonster`：MonsterObject + `Random(1500) + 1500`，且初始化式 `BoFearFire = true`（无抽）。
+        101 => {
+            draw_monster_object(rng, &mut d);
+            draw_search_over(rng, &mut d, 1500);
+            d.bo_fear_fire = true;
         }
-        // `:542` `AnimalWolf`：`Random(8000)`。
-        53 => {
-            let _ = rng.random_below(8000);
+        // `ExplosionSpider`：MonsterObject + `Random(1500) + 2500`。
+        117 => {
+            draw_monster_object(rng, &mut d);
+            draw_search_over(rng, &mut d, 2500);
         }
-        // `:594-598` `MonsterDigoutzombi`：`Random(2) == 0 ⇒ BoFearFire`。
+        // `DigOutZombi`：MonsterObject + 2500，后接 switch 内联 `Random(2)` ⇒ `BoFearFire`（`:604`）。
         95 => {
-            let _ = rng.random_below(2);
+            draw_monster_object(rng, &mut d);
+            draw_search_over(rng, &mut d, 2500);
+            d.bo_fear_fire = rng.random_below(2) == 0;
         }
-        // `:611-615` `MonsterZilkinzombi`：`Random(4) == 0 ⇒ BoFearFire`。
-        96 => {
-            let _ = rng.random_below(4);
+        // `AtMonster` 本体 + 无 ctor 抽的派生（`SlowAtMonster`/`Scorpion`/`WhiteSkeleton`/
+        // `DoubleCriticalMonster`）。
+        81 | 83 | 84 | 86 | 88 | 89 | 100 | 130 => {
+            draw_monster_object(rng, &mut d);
+            draw_at_monster(rng, &mut d);
         }
-        // `:618-622` `case 97`（`CowMonster`）：`Random(2) == 0 ⇒ BoFearFire`。
+        // `SpitSpider` 系（`ElfWarriorMonster`/`HighRiskSpider`/`BigPoisionSpider`）：
+        // AtMonster + `Random(1500) + 1500`（`SpitSpider.cs:14`）。
+        82 | 114 | 118 | 119 => {
+            draw_monster_object(rng, &mut d);
+            draw_at_monster(rng, &mut d);
+            draw_search_over(rng, &mut d, 1500);
+        }
+        // `GasAttackMonster` 系（`GasMothMonster`/`GasDungMonster`）：AtMonster + 1500。
+        90 | 105 | 106 => {
+            draw_monster_object(rng, &mut d);
+            draw_at_monster(rng, &mut d);
+            draw_search_over(rng, &mut d, 1500);
+        }
+        // `MagCowMonster`：AtMonster + 1500。
+        91 => {
+            draw_monster_object(rng, &mut d);
+            draw_at_monster(rng, &mut d);
+            draw_search_over(rng, &mut d, 1500);
+        }
+        // `CowKingMonster`：AtMonster + `Random(1500) + 500`（`CowKingMonster.cs:19`）。
+        92 => {
+            draw_monster_object(rng, &mut d);
+            draw_at_monster(rng, &mut d);
+            draw_search_over(rng, &mut d, 500);
+        }
+        // `CowMonster`：AtMonster + 1500，后接 switch 内联 `Random(2)` ⇒ `BoFearFire`（`:620`）。
         97 => {
-            let _ = rng.random_below(2);
+            draw_monster_object(rng, &mut d);
+            draw_at_monster(rng, &mut d);
+            draw_search_over(rng, &mut d, 1500);
+            d.bo_fear_fire = rng.random_below(2) == 0;
         }
+        // `ZilKinZombi`：AtMonster + `Random(1500) + 2500`；ctor 内 `if (Random(3)==0)
+        // ZilKillCount = Random(3)+1`（`:18-20`）；再 switch 内联 `Random(4)` ⇒ `BoFearFire`（`:612`）。
+        96 => {
+            draw_monster_object(rng, &mut d);
+            draw_at_monster(rng, &mut d);
+            draw_search_over(rng, &mut d, 2500);
+            if rng.random_below(3) == 0 {
+                d.zil_kill_count = rng.random_below(3) + 1;
+            }
+            d.bo_fear_fire = rng.random_below(4) == 0;
+        }
+        // `AnimalChicken`：MonsterObject ctor → 初始化式 `MeatQuality = Random(3500) + 3000`（`:522`）。
+        51 => {
+            draw_monster_object(rng, &mut d);
+            d.meat_quality = (rng.random_below(3500) + 3000) as u16;
+        }
+        // `AnimalDeer`：先 `Random(30)`（已抽），再 `new ChickenDeer`/`new MonsterObject`（同 5 抽），
+        // 再 `MeatQuality = Random(20000)+10000` 或 `Random(8000)+8000`（`:532`/`:541`）。
+        52 => {
+            draw_monster_object(rng, &mut d);
+            let zero = deer_zero.unwrap_or(false);
+            d.meat_quality = if zero {
+                (rng.random_below(20000) + 10000) as u16
+            } else {
+                (rng.random_below(8000) + 8000) as u16
+            };
+        }
+        // `AnimalWolf`：`new AtMonster` + `MeatQuality = Random(8000) + 8000`（`:550`）。
+        53 => {
+            draw_monster_object(rng, &mut d);
+            draw_at_monster(rng, &mut d);
+            d.meat_quality = (rng.random_below(8000) + 8000) as u16;
+        }
+        // `FireballMonster : MagicMonster : MonsterObject`：两层 ctor 各 1 抽
+        //（`MagicMonster.cs:13` 3000+Random(2000)，`FireballMonster.cs:11` Random(1500)+1500）。
+        215 => {
+            draw_monster_object(rng, &mut d);
+            d.search_time = 3000 + rng.random_below(2000);
+            draw_search_over(rng, &mut d, 1500);
+        }
+        // 其余可生成 race 已在上面覆盖；不可生成 race 在函数开头已返回。
         _ => {}
     }
+    d
 }
 
 /// [`MonsterCreator`] 回调的生产实现：`WorldServer.MonGen.cs:498-810` 的**取数次序**。
@@ -300,7 +446,7 @@ fn draw_race_specific(rng: &mut RandomNumber, race: i16) {
 /// 次序（判据逐抽钉死）：
 /// 1. `Envir.FindMap(sMapName) == null` ⇒ `None`（**不抽**）；
 /// 2. race 不在 switch 内 ⇒ `None`（**不抽**）；
-/// 3. per-race 抽（[`draw_race_specific`]，仅 51/52/53/95/96/97）；
+/// 3. **构造链取数**（[`draw_monster_construct`]，含 switch 内联 51/52/53/95/96/97）；
 /// 4. `Dir = RandomByte(8)`（`:740`）；
 /// 5. `MonGetRandomItems`（`:742` → `:441-488`）；
 /// 6. `Random(100) < CoolEyeCode`（`:743-746`）；
@@ -325,7 +471,7 @@ pub fn create_monster_oracle<S: MonsterSink>(
     if !race_is_spawnable(race) {
         return None;
     }
-    draw_race_specific(rng, race);
+    let ctor = draw_monster_construct(rng, race);
 
     let dir = rng.random_byte(8);
     let (gold, drop_items) = sink.budget_drops(rng, mon_name);
@@ -386,6 +532,7 @@ pub fn create_monster_oracle<S: MonsterSink>(
         cool_eye,
         gold,
         drop_items,
+        ctor,
     })
 }
 
@@ -574,6 +721,7 @@ impl MonsterSink for WorldMonsterSink<'_> {
             speed_point,
             req.gold,
             req.drop_items.clone(),
+            req.ctor,
         )
     }
 }
@@ -664,12 +812,16 @@ mod tests {
         }
     }
 
-    /// **判据 1（per-race 抽数次序）**：race 51 的 `create_monster_oracle` 之后，
-    /// 随机流的下一抽必须与「手工按 oracle 次序复算」完全一致。
+    /// **判据 1（构造链 + 内联抽的完整次序）**：race 51 的 `create_monster_oracle` 之后，
+    /// 随机流的下一抽必须与「按 oracle 真次序（含构造链）手工复算」完全一致，且构造抽值逐抽相等。
+    ///
+    /// oracle 次序（`WorldServer.MonGen.cs:511-513` + 构造链）：
+    /// `new MonsterObject()` = `BaseObject.cs:439/441` → `AnimalObject.cs:76/77` → `MonsterObject.cs:65`
+    /// ⇒ 5 抽；再初始化式 `MeatQuality = Random(3500)+3000`。
     #[test]
     fn create_monster_chicken_consumes_random_3500_then_dir_drops_cool_eye() {
         let table = MonsterTable::new(vec![
-            info("鸡", 51, 0, None),
+            info("鸡", 51, 50, None),
             info("鹿", 52, 0, None),
             info("稻草人", 80, 0, None),
         ]);
@@ -689,18 +841,32 @@ mod tests {
         assert_eq!(sink.spawns[0].x, 10);
         assert_eq!(sink.spawns[0].y, 10);
 
-        // 手工复算（oracle 次序）：Random(3500) → RandomByte(8) → Random(100)。
+        // 手工复算（oracle 真次序，含构造链）：
+        //   RunTick Random(1500) → BaseObject.SearchTime Random(2000)+2000 →
+        //   AttackTick Random(3000) → WalkTick Random(3000) → MonsterObject.SearchTime Random(2000)+3000 →
+        //   MeatQuality Random(3500)+3000 → Dir RandomByte(8) → CoolEye Random(100)。
         let mut b = RandomNumber::with_seed(4242);
-        let _ = b.random_below(3500);
+        let exp = MonsterCtorDraws {
+            run_tick_delta: b.random_below(1500),
+            base_search_time: b.random_below(2000) + 2000,
+            attack_tick_delta: b.random_below(3000),
+            walk_tick_delta: b.random_below(3000),
+            search_time: b.random_below(2000) + 3000,
+            meat_quality: (b.random_below(3500) + 3000) as u16,
+            bo_fear_fire: false,
+            zil_kill_count: 0,
+        };
         let exp_dir = b.random_byte(8);
         let exp_cool = b.random_below(100);
         // 随机流位置对齐：下一抽两侧相同。
         assert_eq!(a.random(), b.random(), "抽数个数/次序与 oracle 不一致");
+        assert_eq!(sink.spawns[0].ctor, exp, "构造链抽值必须逐抽相同");
         assert_eq!(sink.spawns[0].dir, exp_dir);
-        assert_eq!(sink.spawns[0].cool_eye, exp_cool < 0);
+        assert_eq!(sink.spawns[0].cool_eye, exp_cool < 50);
     }
 
-    /// 判据 2：race 52 的 `Random(30) == 0` 分支决定后续是 `Random(20000)` 还是 `Random(8000)`。
+    /// 判据 2：race 52 的 `Random(30) == 0` 分支决定后续是 `Random(20000)` 还是 `Random(8000)`，
+    /// 且 `Random(30)`（`:527`）在构造函数**之前**抽——构造链总抽数两支都是 7。
     #[test]
     fn create_monster_deer_branch_matches_oracle() {
         let table = MonsterTable::new(vec![info("鹿", 52, 0, None)]);
@@ -710,8 +876,13 @@ mod tests {
         let mut sink = RecordingSink::with_size(100, 100);
         sink.set_cell(0, 0, true, true);
         let _ = create_monster_oracle(&mut a, &mut sink, &table, "0", 0, 0, 52, "鹿");
-        // 手工：Random(30) 若为 0 ⇒ Random(20000)，否则 Random(8000)。
+        // 手工复算（oracle 真次序）：Random(30) → 构造链 5 抽 → Random(20000)/Random(8000)。
         let first = b.random_below(30);
+        let _ = b.random_below(1500);
+        let _ = b.random_below(2000);
+        let _ = b.random_below(3000);
+        let _ = b.random_below(3000);
+        let _ = b.random_below(2000);
         if first == 0 {
             let _ = b.random_below(20000);
         } else {
@@ -776,10 +947,163 @@ mod tests {
         assert_eq!(sink.spawns[0].x, 7, "n20 = 2（Width < 50）");
         assert_eq!(sink.spawns[0].y, 5);
         // 移位分支**不抽数**（`(width-n24-1) > cx` 成立时走 `cx += n20`）；
-        // 手工序列 = Dir + CoolEye。
+        // 手工序列 = 构造链 5 抽（`new MonsterObject()`）+ Dir + CoolEye。
+        let _ = b.random_below(1500);
+        let _ = b.random_below(2000);
+        let _ = b.random_below(3000);
+        let _ = b.random_below(3000);
+        let _ = b.random_below(2000);
         let _ = b.random_byte(8);
         let _ = b.random_below(100);
         assert_eq!(a.random(), b.random());
+    }
+
+    /// **判据 13（逐 race 构造抽数）**：每条 race 的构造链总抽数（含公共链
+    /// `BaseObject`+`AnimalObject`）与 oracle 逐行数出的一致；不在 switch 内的 race 不抽任何数。
+    /// （race 96 因 ctor 内条件抽数（`Random(3)==0`）不在此表，由判据 14 的两支覆盖。）
+    #[test]
+    fn monster_constructor_draw_count_matches_oracle_per_race() {
+        let table: &[(i16, usize)] = &[
+            // `GuardUnit`/`NormNpc` 链：`BaseObject`(2)+`AnimalObject`(2)。
+            (11, 4),
+            (12, 4),
+            (20, 4),
+            (55, 4),
+            (110, 4),
+            (111, 4),
+            (112, 4),
+            // switch 内联 + 构造链（`:522`/`:532`/`:541`/`:550`）。
+            (51, 6),
+            (52, 7),
+            (53, 7),
+            // `MonsterObject`/`AtMonster`/各派生（逐 ctor 实读 `src/M2Server/Monster/**`）。
+            (80, 5),
+            (81, 6),
+            (82, 7),
+            (83, 6),
+            (84, 6),
+            (85, 5),
+            (86, 6),
+            (87, 5),
+            (88, 6),
+            (89, 6),
+            (90, 7),
+            (91, 7),
+            (92, 7),
+            (93, 5),
+            (94, 6),
+            (95, 7),
+            (97, 8),
+            (100, 6),
+            (101, 6),
+            (102, 6),
+            (103, 5),
+            (104, 5),
+            (105, 7),
+            (106, 7),
+            (107, 5),
+            (113, 5),
+            (114, 7),
+            (115, 4),
+            (116, 5),
+            (117, 6),
+            (118, 7),
+            (119, 7),
+            (120, 4),
+            (130, 6),
+            (131, 6),
+            (132, 5),
+            (133, 6),
+            (134, 6),
+            (200, 6),
+            (201, 6),
+            (203, 6),
+            (206, 6),
+            (208, 6),
+            (209, 6),
+            (210, 6),
+            (214, 6),
+            (215, 7),
+        ];
+        for &(race, n) in table {
+            let mut a = RandomNumber::with_seed(13579);
+            let _ = draw_monster_construct(&mut a, race);
+            let mut b = RandomNumber::with_seed(13579);
+            for _ in 0..n {
+                let _ = b.random_below(1_000_000);
+            }
+            assert_eq!(a.random(), b.random(), "race {race} 构造抽数应为 {n}");
+        }
+        // 不在 switch 内的 race ⇒ 0 抽（`cert == null`，`WorldServer.MonGen.cs:731-734`）。
+        for race in [
+            0i16, 1, 2, 3, 10, 13, 50, 54, 108, 109, 121, 129, 135, 153, 199, 202, 204, 205, 207,
+            211, 212, 213, 216, 255,
+        ] {
+            let mut a = RandomNumber::with_seed(24680);
+            let _ = draw_monster_construct(&mut a, race);
+            let mut b = RandomNumber::with_seed(24680);
+            assert_eq!(a.random(), b.random(), "race {race} 不应抽任何数");
+        }
+    }
+
+    /// **判据 14（构造抽值逐抽钉死）**：`MonsterCtorDraws` 的每个字段都对应 oracle 具体 ctor 的那一抽。
+    /// 覆盖守卫链（`SearchTime` 停在 `BaseObject` 值）与 race 96 的条件支（`Random(3)==0`）。
+    #[test]
+    fn monster_constructor_values_match_oracle_order() {
+        // race 11 守卫：BaseObject→AnimalObject→NormNpc→GuardUnit，无派生 ctor 抽。
+        {
+            let table = MonsterTable::new(vec![info("守卫", 11, 0, None)]);
+            let mut sink = RecordingSink::with_size(100, 100);
+            sink.set_cell(0, 0, true, true);
+            let mut a = RandomNumber::with_seed(2025);
+            let _ = create_monster_oracle(&mut a, &mut sink, &table, "0", 0, 0, 11, "守卫");
+            let mut b = RandomNumber::with_seed(2025);
+            let run = b.random_below(1500);
+            let base = b.random_below(2000) + 2000;
+            let atk = b.random_below(3000);
+            let walk = b.random_below(3000);
+            let _ = b.random_byte(8);
+            let _ = b.random_below(100);
+            let c = sink.spawns[0].ctor;
+            assert_eq!(c.run_tick_delta, run);
+            assert_eq!(c.base_search_time, base);
+            assert_eq!(c.attack_tick_delta, atk);
+            assert_eq!(c.walk_tick_delta, walk);
+            assert_eq!(c.search_time, base, "守卫的 SearchTime 停在 BaseObject 值");
+            assert_eq!(c.meat_quality, 0);
+            assert!(!c.bo_fear_fire);
+            assert_eq!(c.zil_kill_count, 0);
+            assert_eq!(a.random(), b.random());
+        }
+        // race 96 ZilKinZombi：构造链 7 抽 + ctor 条件支（`Random(3)==0 ⇒ Random(3)+1`）+ 内联 `Random(4)`。
+        for seed in [1i32, 2, 3, 4, 5, 6] {
+            let table = MonsterTable::new(vec![info("僵尸", 96, 0, None)]);
+            let mut sink = RecordingSink::with_size(100, 100);
+            sink.set_cell(0, 0, true, true);
+            let mut a = RandomNumber::with_seed(seed);
+            let _ = create_monster_oracle(&mut a, &mut sink, &table, "0", 0, 0, 96, "僵尸");
+            let mut b = RandomNumber::with_seed(seed);
+            let _ = b.random_below(1500);
+            let _ = b.random_below(2000);
+            let _ = b.random_below(3000);
+            let _ = b.random_below(3000);
+            let _ = b.random_below(2000);
+            let _ = b.random_below(1500);
+            let exp_search = b.random_below(1500) + 2500;
+            let exp_zil = if b.random_below(3) == 0 {
+                b.random_below(3) + 1
+            } else {
+                0
+            };
+            let exp_fear = b.random_below(4) == 0;
+            let _ = b.random_byte(8);
+            let _ = b.random_below(100);
+            let c = sink.spawns[0].ctor;
+            assert_eq!(c.search_time, exp_search, "seed {seed} SearchTime");
+            assert_eq!(c.zil_kill_count, exp_zil, "seed {seed} ZilKillCount");
+            assert_eq!(c.bo_fear_fire, exp_fear, "seed {seed} BoFearFire");
+            assert_eq!(a.random(), b.random(), "seed {seed} 流位置");
+        }
     }
 
     /// 判据 7：`entries_from_envir` 逐字段搬运 + 运行时列清零。
