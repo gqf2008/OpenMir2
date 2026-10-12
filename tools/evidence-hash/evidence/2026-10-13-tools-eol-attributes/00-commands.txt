@@ -1,0 +1,61 @@
+# 卡 openmir2-tools-eol-attributes —— 复现命令（Windows + git core.autocrlf=true + Python 3）
+#
+# base       = 363c0bd1（origin/master @ 2026-10-13 07:0x）
+# code commit= c75e6486（只含 tools/.gitattributes）
+# 证据 commit= 本目录（head，见 patch 条目）
+#
+# 所有读数都在 E:/tmp 的一次性 clone 上取（不弄脏任何车道 worktree，也不动共享主检出）。
+
+# ---- 0. 全新检出（属性只影响新检出）----------------------------------------
+rm -rf E:/tmp/m3bag-toolseol/base E:/tmp/m3bag-toolseol/fix1 E:/tmp/m3bag-toolseol/fix2
+REPO=E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3bag
+
+# ---- 1. baseline（判据①：base 无 tools/.gitattributes ⇒ RED 500/539）-------
+git clone --local --quiet --no-checkout "$REPO" E:/tmp/m3bag-toolseol/base
+cd E:/tmp/m3bag-toolseol/base
+git checkout -q 363c0bd1f31d6982119553010baab10bd0220b45
+git check-attr text -- tools/README.md tools/botload/run_bots.ps1   # => unspecified
+git ls-files --eol tools | awk '{print $1}' | sort | uniq -c        # => 22 i/-text / 507 i/lf / 10 i/none
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck tools   # => EOLCHECK RED 500/539, rc=1
+#   -> 01-baseline-clean-clone-eolcheck.txt / 01b-baseline-breakdown.txt
+
+# ---- 2. fix（判据②③：只加属性；新检出 GREEN）------------------------------
+#   在交付 worktree 里新建 tools/.gitattributes（32 行，见 code commit c75e6486）
+cd "$REPO" && git add tools/.gitattributes && git commit -m "..."   # => c75e6486
+git diff --stat 363c0bd1 c75e6486                                   # => 只有 tools/.gitattributes
+git diff --stat 363c0bd1 c75e6486 -- ':!.gitattributes' ':!**/.gitattributes'   # => 空
+#   -> 04-only-attributes-no-blob-change.txt
+
+git clone --local --quiet --no-checkout "$REPO" E:/tmp/m3bag-toolseol/fix1
+cd E:/tmp/m3bag-toolseol/fix1 && git checkout -q c75e6486
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck tools   # => EOLCHECK GREEN 540/540, rc=0
+git ls-files --eol tools | awk '{print $1" "$2}' | sort | uniq -c  # => 508 i/lf w/lf
+git status --short                                                  # => 空（新检出无归一脏）
+#   -> 02-fixed-clean-clone-eolcheck.txt / 02b-fixed-breakdown.txt
+
+# ---- 3. 改坏必红（判据③：故意漏一个扩展名 ⇒ 仍点名）---------------------
+#   在 fix1 里：从 tools/.gitattributes 删掉 `*.ps1` 一行 → 提交 → 重检 .ps1
+cd E:/tmp/m3bag-toolseol/fix1
+python - <<'PY'
+p='tools/.gitattributes'
+open(p,'w',encoding='utf-8',newline='\n').write('\n'.join(l for l in open(p,encoding='utf-8').read().split('\n') if not l.startswith('*.ps1')))
+PY
+git checkout -q -b mutation && git add tools/.gitattributes && git commit -m "mutation: drop *.ps1"
+find tools -name '*.ps1' -delete && git checkout -q -- tools
+git ls-files --eol tools | awk '$4 ~ /\.ps1$/' | head -3                # => w/crlf attr/(空)
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck tools       # => RED 34/540，点名 *.ps1
+#   -> 03-mutation-red-drop-ps1.txt
+
+# ---- 4. 四门禁（cwd = <worktree>/mir2-rs，隔离 target，--offline）--------
+cd "$REPO/mir2-rs"
+export CARGO_TARGET_DIR=E:/tmp/m3bag-eol-target
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --offline -- -D warnings
+cargo test  --workspace --offline --no-fail-fast
+cargo run -q -p msgcodegen --offline -- --check
+#   -> 06-gates.txt（86 suites / 771 passed / 0 failed / 18 ignored；604 常量）
+
+# ---- 5. 证据自检 -----------------------------------------------------------
+cd "$REPO"
+python -I tools/evidence-hash/verify_sha256sums.py tools/evidence-hash/evidence/2026-10-13-tools-eol-attributes --check-extra
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck tools/evidence-hash/evidence/2026-10-13-tools-eol-attributes
