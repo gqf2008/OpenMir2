@@ -118,6 +118,32 @@ m2-svr 待审片（`bins/game-svr/src/state_log.rs`）**两侧同形**：每行
   两侧都能填**（不需要再改本工具）。
 * 牙齿：`selftest` **24/24**（新增 SERVER_STATE 两侧 / ghost 列 / 客户端 vs 服务端 / 缺选择器/短/缺 id/坏 JSON）。
 
+## stream_equiv.py：攻击路径专用流逐次取数**语义等价**判据（可复用件，owner 2026-10-13 02:15）
+
+**为什么单独做**：`per_strike_requests.py analyze` 的 `first_divergence` 按 `(kind, arg)` 比，而 Rust 侧
+`random_range(0, n)` 记的 kind 是 `Next(min,max)`（packed `min<<32|max`，`min==0`），C# 侧对应 `Random(n)`
+记的是 `Next(max)`——**语义相同**（都是 [0,n) 均匀取数），实测 651/651 次 `(canon, arg, result)` 全等，
+却在 index=3 起被判「分歧」。这是**仪器口径假阳性**（不是实现差异）。
+
+`stream_equiv.py` 把这条判据做**独立、可复用、fail-closed** 的机判（**不改任何既有仪器**）：
+
+    python -I mir2-rs/tests/parity/m3/attack-request-sequence/stream_equiv.py gate \
+      --csharp <csharp-attack-stream.tsv> --rust <rust-rng-stream.tsv> \
+      [--json out.json] [--min-draws N]
+    python -I mir2-rs/tests/parity/m3/attack-request-sequence/stream_equiv.py selftest
+
+* **口径**：`Next(min,max)` 的无符号 packed 高 32 位（min）== 0 ⇒ 归一为 `Next(max)`；真 `min>0` ⇒ 不归一、
+  继续判差。判据 = 两侧 `(canon, 归一 kind, arg, result)` **逐 index 全等** ⇒ GREEN（rc=0）。
+* **退出码**：`0` = GREEN / SELFTEST GREEN；`1` = 判据 RED（含两侧抽数不等）；`2` = PREREQ
+  （缺件 / 空件 / C# 专用流出现站点表无法归一的行 / `--min-draws` 不满足）——**绝不静默出绿**。
+* **证据**：`22-stream-equiv-reusable-gate.txt`（复用 2026-10-13 两相真机原始件重跑，**GREEN 651/651**，
+  json 见 `22-...json`）、`23-stream-equiv-reusable-selftest.txt`（牙齿 **10/10**）、
+  `24-stream-equiv-reusable-failclosed.txt`（缺件 / 空件 / 陈旧站点表 / `--min-draws` ⇒ PREREQ rc=2 真跑）、
+  `25-stream-equiv-reusable-gates.txt`（四门禁：fmt 0 / clippy 0 / 84 suites 686 passed 0 failed 16 ignored / msgcodegen 604）。
+* **边界（不许越界）**：本件是**补充判据**，**不替代** DoD② 的真机 `attack_diff.py diff` 逐 k=0；
+  它**不**构成新的计分口径（§6.0-3 登记只有 owner 能签）。owner 2026-10-13 02:15 已裁决：**不登记
+  「流级等价」**，先修 m3bag 的观测对齐仪器；m3bag 片合入后用本命令吃新一轮两相原始件即可。
+
 ## 文件
 
 | 文件 | 内容 |
@@ -142,8 +168,13 @@ m2-svr 待审片（`bins/game-svr/src/state_log.rs`）**两侧同形**：每行
 | `19-serverstate-gates.txt` | 本片四门禁（零 .rs）：fmt 0 / clippy 0 / 84 suites 682 passed 0 failed 16 ignored / 604 |
 | `20-e1-verify-green.txt` | owner 01:15 E-1 返工：`window/00-selfcheck-nostack.txt` 清单按仓库字节重记 ⇒ verify **RED 81/82 → GREEN 82/82** |
 | `21-cleancheck-verify.txt` | E-1 的**干净检出**复核（`git worktree add --detach`）：两包 verify GREEN 82/82 + 32/32、selftest 24/24 |
+| `22-stream-equiv-reusable-gate.txt` / `.json` | owner 02:15 可复用件：`stream_equiv.py gate` 复用两相真机原始件 ⇒ **GREEN 651/651** |
+| `23-stream-equiv-reusable-selftest.txt` | `stream_equiv.py selftest` 牙齿 **10/10**（含 min=0 归一 / min>0 不抹平 / 改坏必红 / 4 条 fail-closed） |
+| `24-stream-equiv-reusable-failclosed.txt` | `stream_equiv.py` fail-closed 真跑：缺件 / 空件 / 陈旧站点表 / `--min-draws` ⇒ PREREQ rc=2 |
+| `25-stream-equiv-reusable-gates.txt` | 本片四门禁（零 .rs）：fmt 0 / clippy 0 / 84 suites 686 passed 0 failed 16 ignored / 604 |
 | `fixtures/rust-server-state-m2svr-sample.tsv` | m2-svr 待审片 `4ba36368` 的 Rust `SERVER_STATE` 原样样本（5 行） |
 | `per_strike_requests.py` | ③/① 的机判工具（`analyze` / `table` / `jointable` / `selftest`） |
+| `stream_equiv.py` | **可复用件**：攻击路径专用流逐次取数**语义等价**判据（`gate` / `selftest`；fail-closed） |
 | `session_target_availability.py` | ② 的会话件读数工具 |
 | `provenance/` | 四条流水副本（C# 专用流 ×2、Rust trace ×2）+ 溯源 |
 | `commands.txt` | 全部命令 |
