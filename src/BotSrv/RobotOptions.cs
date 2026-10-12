@@ -79,6 +79,25 @@ namespace BotSrv
         public int BagEquipStartDelayMs { get; set; } = 3000;
 
         /// <summary>
+        /// M3②③ 真机同种子对拍夹具（卡 openmir2-m3-attack-pair-fixture；白名单 T-22 扩展）。
+        /// 默认 false = 原行为（不新增任何发送）。置 true 时，**assigned attacker**（`AttackRole`
+        /// 指定的账号序号）在进世界后每隔 `AttackStepMs` 发一条 `CM_HIT`（Recog=MakeLong(自己的
+        /// CurrX,CurrY)，Tag=`AttackDir`），共 `AttackCount` 步；受害者侧只收 `SM_STRUCK`。
+        /// 每步/每帧落 `M3ATTSEQ {json}` 标记（供 attack_diff.py 对齐）。
+        /// </summary>
+        public bool AttackSequence { get; set; }
+        /// <summary>仅 AttackSequence=true 时生效：攻击步数。默认 120（DoD ≥100）。</summary>
+        public int AttackCount { get; set; } = 120;
+        /// <summary>仅 AttackSequence=true 时生效：每步间隔（ms）。默认 500。</summary>
+        public int AttackStepMs { get; set; } = 500;
+        /// <summary>仅 AttackSequence=true 时生效：进世界到第一步的额外等待（ms）。默认 3000。</summary>
+        public int AttackStartDelayMs { get; set; } = 3000;
+        /// <summary>仅 AttackSequence=true 时生效：CM_HIT 的 Tag（方向）。默认 2=RIGHT（victim 在右邻格）。</summary>
+        public int AttackDir { get; set; } = 2;
+        /// <summary>仅 AttackSequence=true 时生效：哪个账号序号当 attacker（默认 0；其余只当 victim）。</summary>
+        public int AttackRole { get; set; } = 0;
+
+        /// <summary>
         /// M1③ 退出路径夹具（卡 openmir2-m1-dbsrv-6000-face；白名单 M1-EXIT）：默认 0 = 关
         /// （不新增任何发送）。&gt;0 时，本假人收到自己的 SM_LOGON（真进世界）后等这么久，
         /// 按 C# 客户端 AppLogout 的线上形状发一条 CM_SOFTCLOSE(1009)（= “小退”，服务端据此

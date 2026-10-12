@@ -38,6 +38,13 @@ namespace BotSrv
             MShare.g_boBagEquipSequence = _options.BagEquipSequence;
             MShare.g_nBagEquipStepMs = _options.BagEquipStepMs;
             MShare.g_nBagEquipStartDelayMs = _options.BagEquipStartDelayMs;
+            // M3②③ 夹具（白名单 T-22 扩展）：固定攻击序列；默认 false = 原行为
+            MShare.g_boAttackSequence = _options.AttackSequence;
+            MShare.g_nAttackCount = _options.AttackCount;
+            MShare.g_nAttackStepMs = _options.AttackStepMs;
+            MShare.g_nAttackStartDelayMs = _options.AttackStartDelayMs;
+            MShare.g_nAttackDir = _options.AttackDir;
+            MShare.g_nAttackRole = _options.AttackRole;
             // M1③ 退出路径夹具（白名单 M1-EXIT）：进世界后发 CM_SOFTCLOSE；默认 0 = 原行为
             MShare.g_nSoftCloseAfterWorldMs = _options.SoftCloseAfterWorldMs;
             MShare.g_boDisableAutoPlay = _options.DisableAutoPlay;
@@ -52,6 +59,11 @@ namespace BotSrv
             {
                 LogService.Info("固定背包/装备序列: 启用 起始等待={0}ms 步间隔={1}ms（拾取→装备→卸下→丢弃→用药；见 RobotPlayer.BagEquipSequenceTick）",
                     _options.BagEquipStartDelayMs, _options.BagEquipStepMs);
+            }
+            if (_options.AttackSequence)
+            {
+                LogService.Info("固定攻击序列: 启用 步数={0} 起始等待={1}ms 步间隔={2}ms dir={3} attacker序号={4}（见 RobotPlayer.AttackSequenceTick）",
+                    _options.AttackCount, _options.AttackStartDelayMs, _options.AttackStepMs, _options.AttackDir, _options.AttackRole);
             }
             if (_options.SoftCloseAfterWorldMs > 0)
             {

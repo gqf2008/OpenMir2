@@ -49,6 +49,10 @@ param(
   [switch]$BagEquipSequence,       # M3 T-14 夹具：BotSrv 进世界后按固定顺序发背包/装备动作（白名单 T-22）
   [int]$BagEquipStepMs = 1000,     # 仅 -BagEquipSequence 时生效
   [int]$BagEquipStartDelayMs = 3000, # 仅 -BagEquipSequence 时生效
+  [switch]$AttackSequence,         # M3②③ 夹具：BotSrv 固定攻击序列（白名单 T-22 扩展）
+  [int]$AttackCount = 120,         # 仅 -AttackSequence 时生效：攻击步数
+  [int]$AttackStepMs = 500,        # 仅 -AttackSequence 时生效：每步间隔
+  [int]$AttackStartDelayMs = 3000, # 仅 -AttackSequence 时生效：进世界到第一步的额外等待
   [switch]$EmitOpsArgs,            # 只打印 run_bots 命令组成（含 -DisableAutoPlay 耦合）后退出；无副作用，供无栈自检
   [switch]$PinStartPose,           # T-14 固定起点变体（owner 86478c55/d7798370）：预热建角 → SQL pin → BEFORE 快照 → 计分跑（选角；不带 -FixedNewChr/-NewAccount）
   [string]$PinMapName = '0',
@@ -61,6 +65,10 @@ param(
   [int]$PinDir = 0,
   [int]$PinSettleSeconds = 3,      # 仅 -PinStartPose：每轮 pin 后的 settle 窗口（异步掉线存档落库，见 gate_guards.ps1 ⑥）
   [int]$PinMaxAttempts = 5,        # 仅 -PinStartPose：settle+hold 最多轮数（仍 hold 不住 ⇒ throw，fail-closed）
+  [switch]$AttackPinPair,          # 攻击变体：两 bot **相邻**固定起点（attacker/victim；配合 -AttackSequence）
+  [int]$AttackPinDir = 2,          # 仅 -AttackPinPair：attacker 朝向（默认 2=RIGHT，victim 在右邻格）
+  [int]$AttackPinDx = 1,           # 仅 -AttackPinPair：victim 相对 attacker 的 X 偏移（默认 +1）
+  [int]$AttackVictimHp = 100000,   # 仅 -AttackPinPair：victim（与 attacker）Hp/MaxHP 抬高（防序列中死亡）
   [switch]$SelfTestRed
 )
 
@@ -104,13 +112,26 @@ function Get-M3BotOpPlan {
     $runner += " -BagEquipSequence -BagEquipStepMs $BagEquipStepMs -BagEquipStartDelayMs $BagEquipStartDelayMs -DisableAutoPlay"
     $planArgs += @('-BagEquipSequence', '-BagEquipStepMs', $BagEquipStepMs, '-BagEquipStartDelayMs', $BagEquipStartDelayMs, '-DisableAutoPlay')
   }
+  if ($AttackSequence -and -not $ForPrewarm) {
+    # M3②③ 夹具（卡 openmir2-m3-attack-pair-fixture）：固定攻击序列**必须**一并关挂机
+    # （同 T-14 理由：挂机 = 无种子 RNG 随机走位，会改目标/坐标 ⇒ 两侧不可比）。两侧同开关。
+    $runner += " -AttackSequence -AttackCount $AttackCount -AttackStepMs $AttackStepMs -AttackStartDelayMs $AttackStartDelayMs -DisableAutoPlay"
+    $planArgs += @('-AttackSequence', '-AttackCount', $AttackCount, '-AttackStepMs', $AttackStepMs, '-AttackStartDelayMs', $AttackStartDelayMs, '-DisableAutoPlay')
+  }
   return [pscustomobject]@{ runner = $runner; botArgs = $planArgs }
 }
 
 function Get-M3StartPoseLabel {
   if (-not $PinStartPose) { return 'none' }
+  if ($AttackPinPair) { return (Get-M3AttackPoseLabel) }
   return (Format-M3StartPose -MapName $PinMapName -HomeMap $PinHomeMap -HomeX $PinHomeX -HomeY $PinHomeY `
     -CX $PinCX -CY $PinCY -Level $PinLevel -Dir $PinDir)
+}
+
+function Get-M3AttackPoseLabel {
+  if (-not $AttackPinPair) { return 'none' }
+  return (Format-M3AttackPose -MapName $PinMapName -AX $PinCX -AY $PinCY -Dir $AttackPinDir `
+    -VX ($PinCX + $AttackPinDx) -VY $PinCY -Level $PinLevel -VictimHp $AttackVictimHp)
 }
 
 if ($SelfTestRed) {
@@ -126,6 +147,12 @@ if ([string]::IsNullOrEmpty($Prefix)) {
 if ($PinStartPose -and -not $FixedNewChr) {
   throw '-PinStartPose 必须与 -FixedNewChr 同用（预热建角用固定输入；计分跑仍标为固定建角场景以便 --fixed-newchr 比 Job/Hair/Sex）'
 }
+if ($AttackPinPair -and -not $PinStartPose) {
+  throw '-AttackPinPair 必须与 -PinStartPose 同用（攻击变体仍需预热建角 + SQL pin 两相）'
+}
+if ($AttackSequence -and $Bots -lt 2) {
+  Write-Output ('WARN: -AttackSequence 建议 -Bots 2（attacker+victim）；当前 Bots={0} ⇒ 无目标，struck 恒 0，判据必 RED' -f $Bots)
+}
 
 # -EmitOpsArgs：只把 run_bots 的命令组成打印成 JSON 供无栈自检核（-DisableAutoPlay 是否随
 # -BagEquipSequence 一并传下去；固定起点变体的预热/计分两相），**不建会话目录/不预检/不取快照**。
@@ -135,7 +162,12 @@ if ($EmitOpsArgs) {
     ops_runner        = $plan.runner
     bot_args          = $plan.botArgs
     bag_equip_scope   = Format-M3BagEquipScope -BagEquipSequence ([bool]$BagEquipSequence) -BagEquipStepMs $BagEquipStepMs -BagEquipStartDelayMs $BagEquipStartDelayMs -DisableAutoPlay ([bool]$BagEquipSequence)
+    attack_sequence   = Format-M3AttackScope -AttackSequence ([bool]$AttackSequence) -AttackCount $AttackCount -AttackStepMs $AttackStepMs -AttackStartDelayMs $AttackStartDelayMs -DisableAutoPlay ([bool]$AttackSequence)
     start_pose        = (Get-M3StartPoseLabel)
+    attack_pose       = (Get-M3AttackPoseLabel)
+  }
+  if ($AttackSequence -and -not $AttackPinPair -and -not $EmitOpsArgs) {
+    Write-Output 'WARN: -AttackSequence 未配 -AttackPinPair ⇒ attacker/victim 可能重叠/无目标（真机请配 -PinStartPose -AttackPinPair）'
   }
   if ($PinStartPose) {
     $pre = Get-M3BotOpPlan -ForPrewarm
@@ -146,6 +178,12 @@ if ($EmitOpsArgs) {
     $obj['pin_sql_all'] = @(Get-M3StartPosePinSql -ChrName "${Prefix}0")
     # pin 仪器形态（owner 2026-10-12 08:20）：无栈自检据此机判生产接线是否被削弱（settle_seconds>=1、consecutive>=2）。
     $obj['pin_instrument'] = (Format-M3PinInstrument -SettleSeconds $PinSettleSeconds -MaxAttempts $PinMaxAttempts -Consecutive 2)
+    if ($AttackPinPair) {
+      $attackSql = New-Object System.Collections.Generic.List[string]
+      foreach ($st in (Get-M3AttackPinSql -ChrName "${Prefix}0" -CX $PinCX -CY $PinCY -Dir $AttackPinDir -MapName $PinMapName -HomeMap $PinHomeMap -HomeX $PinHomeX -HomeY $PinHomeY -Level $PinLevel -Hp $AttackVictimHp)) { $attackSql.Add($st) }
+      foreach ($st in (Get-M3AttackPinSql -ChrName "${Prefix}1" -CX ($PinCX + $AttackPinDx) -CY $PinCY -Dir 6 -MapName $PinMapName -HomeMap $PinHomeMap -HomeX $PinHomeX -HomeY $PinHomeY -Level $PinLevel -Hp $AttackVictimHp)) { $attackSql.Add($st) }
+      $obj['attack_pin_sql_all'] = $attackSql.ToArray()
+    }
   }
   [pscustomobject]$obj | ConvertTo-Json -Depth 4
   exit 0
@@ -251,21 +289,43 @@ if ($PinStartPose) {
     MapName = $PinMapName; HomeMap = $PinHomeMap; HomeX = $PinHomeX; HomeY = $PinHomeY
     CX = $PinCX; CY = $PinCY; Level = $PinLevel; Dir = $PinDir
   }
-  $pinResult = Invoke-M3PinSettleHold -Bots $Bots -MaxAttempts $PinMaxAttempts -Context $pinCtx `
+  $pinResult = Invoke-M3PinSettleHold -Bots $Bots -MaxAttempts $PinMaxAttempts -Context $pinCtx -BagPerBot $(if ($AttackPinPair) { 0 } else { 4 }) `
     -Pin {
       param($ctx, $attempt)
-      for ($i = 0; $i -lt $ctx.Bots; $i++) {
-        $pinChar = Format-M3StartPoseSql -ChrName "$($ctx.Prefix)$i" -MapName $ctx.MapName -HomeMap $ctx.HomeMap -HomeX $ctx.HomeX -HomeY $ctx.HomeY `
-          -CX $ctx.CX -CY $ctx.CY -Level $ctx.Level -Dir $ctx.Dir
-        Invoke-Mysql $pinChar | Out-Null
-        # 连「初始背包 + Abil」一起 provision（owner 643459a7）：否则五步无对象可操作。
-        foreach ($st in (Get-M3StartPosePinSql -ChrName "$($ctx.Prefix)$i")) { Invoke-Mysql $st | Out-Null }
-        Write-Output ('PIN_CHAR ' + $pinChar)
+      if ($AttackPinPair) {
+        # 攻击变体：attacker=bot0 @ (CX,CY) 面向 AttackPinDir；victim=bot1 @ (CX+Dx,CY) 面向左(6)。
+        $specs = @(
+          @{ i = 0; x = [int]$ctx.CX; y = [int]$ctx.CY; dir = [int]$AttackPinDir },
+          @{ i = 1; x = [int]$ctx.CX + [int]$AttackPinDx; y = [int]$ctx.CY; dir = 6 }
+        )
+        foreach ($spec in $specs) {
+          foreach ($st in (Get-M3AttackPinSql -ChrName "$($ctx.Prefix)$($spec.i)" -CX $spec.x -CY $spec.y -Dir $spec.dir -MapName $ctx.MapName -HomeMap $ctx.HomeMap -HomeX $ctx.HomeX -HomeY $ctx.HomeY -Level $ctx.Level -Hp $AttackVictimHp)) {
+            Invoke-Mysql $st | Out-Null
+            Write-Output ('PIN_CHAR ' + $st)
+          }
+        }
+      } else {
+        for ($i = 0; $i -lt $ctx.Bots; $i++) {
+          $pinChar = Format-M3StartPoseSql -ChrName "$($ctx.Prefix)$i" -MapName $ctx.MapName -HomeMap $ctx.HomeMap -HomeX $ctx.HomeX -HomeY $ctx.HomeY `
+            -CX $ctx.CX -CY $ctx.CY -Level $ctx.Level -Dir $ctx.Dir
+          Invoke-Mysql $pinChar | Out-Null
+          # 连「初始背包 + Abil」一起 provision（owner 643459a7）：否则五步无对象可操作。
+          foreach ($st in (Get-M3StartPosePinSql -ChrName "$($ctx.Prefix)$i")) { Invoke-Mysql $st | Out-Null }
+          Write-Output ('PIN_CHAR ' + $pinChar)
+        }
       }
     } `
     -Settle { param($ctx, $attempt) Start-Sleep -Seconds ([int]$ctx.SettleSeconds); return $true } `
     -Observe {
       param($ctx, $attempt)
+      if ($AttackPinPair) {
+        # 攻击变体：两个 bot 各自在自己格子（attacker 面向 AttackPinDir；victim 面向 6）+ Abil Hp 抬高。
+        $pinnedA = Invoke-Mysql ("SELECT COUNT(*) FROM mir2_db.characters WHERE ChrName='{0}0' AND MapName='{1}' AND CX={2} AND CY={3} AND Level={4} AND Dir={5}" -f $ctx.Prefix, $ctx.MapName, $ctx.CX, $ctx.CY, $ctx.Level, $AttackPinDir)
+        $pinnedV = Invoke-Mysql ("SELECT COUNT(*) FROM mir2_db.characters WHERE ChrName='{0}1' AND MapName='{1}' AND CX={2} AND CY={3} AND Level={4} AND Dir=6" -f $ctx.Prefix, $ctx.MapName, ([int]$ctx.CX + [int]$AttackPinDx), $ctx.CY, $ctx.Level)
+        $pinned = [int]$pinnedA + [int]$pinnedV
+        $abilPinned = Invoke-Mysql ("SELECT COUNT(*) FROM mir2_db.characters_ablity a JOIN mir2_db.characters c ON a.PlayerId=c.Id WHERE c.ChrName LIKE '{0}%' AND a.Hp={1} AND a.MaxHP={1}" -f $ctx.Prefix, $AttackVictimHp)
+        return [pscustomobject]@{ Pinned = $pinned; BagPinned = 0; AbilPinned = [int]$abilPinned }
+      }
       # pin 后复验：图/坐标/Level + 4 件初始物品 + Abil Level（三项都到位才算本轮 match）。
       $pinned = Invoke-Mysql ("SELECT COUNT(*) FROM mir2_db.characters WHERE ChrName LIKE '{0}%' AND MapName='{1}' AND CX={2} AND CY={3} AND Level={4}" -f $ctx.Prefix, $ctx.MapName, $ctx.CX, $ctx.CY, $ctx.Level)
       $bagPinned = Invoke-Mysql ("SELECT COUNT(*) FROM mir2_db.characters_bagitem b JOIN mir2_db.characters c ON b.PlayerId=c.Id WHERE c.ChrName LIKE '{0}%' AND b.StdIndex<>0" -f $ctx.Prefix)
@@ -281,6 +341,7 @@ if ($PinStartPose) {
     throw ("pin 未 hold 住（跳过 settle 或预热掉线存档反复覆盖）：{0}" -f $lastV.detail)
   }
   Write-Output ('PIN_START_POSE ' + (Get-M3StartPoseLabel))
+  if ($AttackPinPair) { Write-Output ('ATTACK_POSE ' + (Get-M3AttackPoseLabel)) }
 }
 
 # ---- 3. 快照 BEFORE ----
@@ -315,6 +376,8 @@ $opsLog = Join-Path $SessionDir 'ops.log'
 $opsRunner = 'none'
 $opsExit = 0
 $bagSeqMarkers = @()
+$attackMarkers = @()
+$attackRawPath = Join-Path $SessionDir 'attack_raw.jsonl'
 if (-not $SkipBots) {
   $plan = Get-M3BotOpPlan
   $opsRunner = $plan.runner
@@ -324,6 +387,9 @@ if (-not $SkipBots) {
   }
   if ($BagEquipSequence) {
     Write-Output ("OPS_BAGEQUIPSEQ step_ms={0} start_delay_ms={1} disable_autoplay=True" -f $BagEquipStepMs, $BagEquipStartDelayMs)
+  }
+  if ($AttackSequence) {
+    Write-Output ("OPS_ATTACKSEQ count={0} step_ms={1} start_delay_ms={2} disable_autoplay=True" -f $AttackCount, $AttackStepMs, $AttackStartDelayMs)
   }
   Write-Output ("OPS " + $opsRunner)
   & powershell -ExecutionPolicy Bypass -File $Botload @botArgs 2>&1 |
@@ -362,6 +428,35 @@ if (-not $SkipBots) {
       exit 1
     }
   }
+  # M3②③（T-22 扩展）：固定攻击序列的执行证据（每步一条 `M3ATTSEQ {json}` 标记，落 bot.log）。
+  # 判据：开了 -AttackSequence 就必须看到 `role=attack` 从 k=1 到 k=AttackCount（每侧至少一个假人跑完整串）。
+  $attackMarkers = @([regex]::Matches($botText, 'M3ATTSEQ [^\r\n]*') | ForEach-Object { $_.Value })
+  Write-Output ("OPS_ATTACKSEQ_MARKERS count={0}" -f $attackMarkers.Count)
+  if ($AttackSequence) {
+    $jsonObjs = @([regex]::Matches($botText, 'M3ATTSEQ (\{[^{}]*\})') | ForEach-Object { $_.Groups[1].Value })
+    if ($jsonObjs.Count -eq 0) {
+      Write-Output 'RED: -AttackSequence 开了但 bot.log 里一条 M3ATTSEQ 标记都没有 —— 固定攻击序列没跑（驱动未生效/假人未进世界）'
+      exit 1
+    }
+    # 落自包含原始事件流（每行一个 JSON 对象），供 attack_diff.py align/diff。
+    Set-Content -Path $attackRawPath -Value $jsonObjs -Encoding utf8
+    $attackSteps = @($jsonObjs | Where-Object { $_ -match '"role"\s*:\s*"attack"' }).Count
+    $doneCount = @($jsonObjs | Where-Object { $_ -match '"role"\s*:\s*"done"' }).Count
+    Write-Output ("OPS_ATTACKSEQ attacks={0} done={1} raw={2}" -f $attackSteps, $doneCount, (Split-Path $attackRawPath -Leaf))
+    if ($doneCount -lt 1) {
+      Write-Output 'RED: -AttackSequence 开了但没有 `M3ATTSEQ done` —— 序列未收尾（驱动中途断了）'
+      exit 1
+    }
+    # 每个假人应发 AttackCount 步；至少一个假人跑满（多假人时只要求 max == AttackCount）。
+    $maxAttack = 0
+    foreach ($g in ($jsonObjs | Where-Object { $_ -match '"role"\s*:\s*"done"' })) {
+      if ($g -match '"attacks"\s*:\s*(\d+)') { $maxAttack = [Math]::Max($maxAttack, [int]$Matches[1]) }
+    }
+    if ($maxAttack -lt $AttackCount) {
+      Write-Output ("RED: -AttackSequence 只跑了 {0} 步 < -AttackCount {1} —— 序列不完整" -f $maxAttack, $AttackCount)
+      exit 1
+    }
+  }
   # 判据取"可靠段"：账号创建 + 登录成功 = N（实测稳定）。
   # 进世界之后的段位今日不可靠：BotSrv 会在 `TMap.CanMove` 崩溃并带走整个进程
   #（工具侧已知阻塞，见 m3/README.md「已知阻塞」），崩溃点与时序相关（有时停在"确认游戏公告"）。
@@ -381,8 +476,8 @@ if (-not $SkipBots) {
 # M3 T-14：run_bots 收工时 kill BotSrv ⇒ 服务端从掉线路径走 `SaveHumanRcd`（WorldServer 的非活跃分支），
 # 把本段 in-world 改动（装备/卸下/用药）落库。给保存线程一点时间再取 AFTER 快照，否则会漏掉刚发生的改动。
 # 仅 -BagEquipSequence 时等待；其余路径逐字节不变（不加额外等待）。
-if ($BagEquipSequence) {
-  Write-Output 'SETTLE_BAGSEQ 等掉线存档落库（3s）'
+if ($BagEquipSequence -or $AttackSequence) {
+  Write-Output 'SETTLE_SEQ 等掉线存档落库（3s）'
   Start-Sleep -Seconds 3
 }
 $snapAfter = Join-Path $SessionDir 'snap_after'
@@ -425,6 +520,10 @@ $baseline = [pscustomobject]@{
   start_pose = (Get-M3StartPoseLabel)
   bag_equip_sequence = (Format-M3BagEquipScope -BagEquipSequence ([bool]$BagEquipSequence) -BagEquipStepMs $BagEquipStepMs -BagEquipStartDelayMs $BagEquipStartDelayMs -DisableAutoPlay ([bool]$BagEquipSequence))
   bag_equip_markers = $bagSeqMarkers
+  attack_sequence = (Format-M3AttackScope -AttackSequence ([bool]$AttackSequence) -AttackCount $AttackCount -AttackStepMs $AttackStepMs -AttackStartDelayMs $AttackStartDelayMs -DisableAutoPlay ([bool]$AttackSequence))
+  attack_pose = (Get-M3AttackPoseLabel)
+  attack_markers = $attackMarkers
+  attack_raw = $(if (Test-Path $attackRawPath) { (Split-Path $attackRawPath -Leaf) } else { '' })
   git_rev      = (Git-Rev)
   dbsnap       = $beforeHashes
   dbsnap_after = $afterHashes

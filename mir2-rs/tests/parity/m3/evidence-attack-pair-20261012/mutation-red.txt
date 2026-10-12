@@ -1,0 +1,36 @@
+# M3②③ 攻击对拍夹具：改坏必红（生产函数级，改坏任一侧某一次伤害/命中数 ⇒ 判据必红）
+# 复现：见 README「改坏必红」一节（合成两侧 raw → align → diff）。
+
+$ python mir2-rs/tests/parity/m3/attack_diff.py align E:/tmp/m3bag-attack-mutation/a.raw.jsonl --out E:/tmp/m3bag-attack-mutation/a.seq.jsonl
+ALIGN_OK E:/tmp/m3bag-attack-mutation/a.seq.jsonl attacked=10 hits=9 dodges=1 sum=197
+
+$ python mir2-rs/tests/parity/m3/attack_diff.py align E:/tmp/m3bag-attack-mutation/b.raw.jsonl --out E:/tmp/m3bag-attack-mutation/b.seq.jsonl
+ALIGN_OK E:/tmp/m3bag-attack-mutation/b.seq.jsonl attacked=10 hits=9 dodges=1 sum=197
+
+$ python mir2-rs/tests/parity/m3/attack_diff.py diff E:/tmp/m3bag-attack-mutation/a.seq.jsonl E:/tmp/m3bag-attack-mutation/b.seq.jsonl   # 期望 GREEN rc=0
+NONTRIVIAL a=True() b=True()
+GREEN: 跨侧攻击序列 diff = 0（attacked=10 hits=9 dodges=1 sum=197）
+rc=0
+
+$ python mir2-rs/tests/parity/m3/attack_diff.py mutate E:/tmp/m3bag-attack-mutation/b.seq.jsonl --k 5 --field dmg --value 999
+MUTATE_OK E:/tmp/m3bag-attack-mutation/b.seq.jsonl k=5 field=dmg value=999
+$ python mir2-rs/tests/parity/m3/attack_diff.py diff E:/tmp/m3bag-attack-mutation/a.seq.jsonl E:/tmp/m3bag-attack-mutation/b.seq.jsonl   # 改坏 dmg ⇒ 期望 RED rc=1
+NONTRIVIAL a=True() b=True()
+RED: 跨侧攻击序列差异 2 项（差异要么修到 0，要么按 §6.0-3 登记 tests/parity/whitelist.md）
+  - k=5 dmg 不等: a=20 b=999
+  - 统计 sum 不等: a=197 b=1176
+rc=1
+
+$ python mir2-rs/tests/parity/m3/attack_diff.py align E:/tmp/m3bag-attack-mutation/b.raw.jsonl --out E:/tmp/m3bag-attack-mutation/b.seq.jsonl   # 还原
+ALIGN_OK E:/tmp/m3bag-attack-mutation/b.seq.jsonl attacked=10 hits=9 dodges=1 sum=197
+$ python mir2-rs/tests/parity/m3/attack_diff.py mutate E:/tmp/m3bag-attack-mutation/b.seq.jsonl --k 5 --field hit --value 0
+MUTATE_OK E:/tmp/m3bag-attack-mutation/b.seq.jsonl k=5 field=hit value=0
+$ python mir2-rs/tests/parity/m3/attack_diff.py diff E:/tmp/m3bag-attack-mutation/a.seq.jsonl E:/tmp/m3bag-attack-mutation/b.seq.jsonl   # 改坏 hit ⇒ 期望 RED rc=1
+NONTRIVIAL a=True() b=True()
+RED: 跨侧攻击序列差异 5 项（差异要么修到 0，要么按 §6.0-3 登记 tests/parity/whitelist.md）
+  - k=5 hit 不等: a=True b=False
+  - k=5 dmg 不等: a=20 b=0
+  - 统计 hits 不等: a=9 b=8
+  - 统计 dodges 不等: a=1 b=2
+  - 统计 sum 不等: a=197 b=177
+rc=1

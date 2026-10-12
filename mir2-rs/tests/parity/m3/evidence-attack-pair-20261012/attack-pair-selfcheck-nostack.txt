@@ -1,0 +1,17 @@
+SELFTEST_NO_STACK: 无栈自检——所有路径都必须 fail-closed（缺失绝不静默 GREEN）
+SELFTEST ① 配置透传 on=true? AttackSequence=True AttackCount=120 StepMs=500
+SELFTEST ② 默认关 off=false? AttackSequence=False
+SELFTEST ③ 无栈入口护栏 rc=2（期望 2=PREREQ）
+SELFTEST ④ -DiffOnly 缺会话 rc=2（期望 2=PREREQ）
+SELFTEST ⑤a run_pair -AttackSequence 传 -DisableAutoPlay? True（scope=on count=120 step_ms=500 start_delay_ms=3000 disable_autoplay=True）
+SELFTEST ⑤b 默认路径不带 -DisableAutoPlay 且 scope=(off)：(off)
+SELFTEST ⑥ -AttackPinPair pose='pair map=0 attacker=289,618,dir=2 victim=290,618 level=1 vhp=100000'；pin_sql_all=4 条
+SELFTEST ⑦ attack_diff selftest rc=0
+SELFTEST ⑧ 合成两侧 → align/diff：
+  [绿] rc=0: GREEN: 跨侧攻击序列 diff = 0（attacked=10 hits=9 dodges=1 sum=197）
+  [改坏 dmg] rc=1:   - k=5 dmg 不等: a=20 b=999
+
+  [改坏 hit] rc=1:   - k=5 hit 不等: a=True b=False
+
+SELFTEST ⑨ scoped_diff selftest rc=0（14/14）
+SELFTEST_RED GREEN: 无栈自检全过（攻击配置透传/默认关 + run_pair -DisableAutoPlay 耦合两向 + 攻击两相 pin pose/SQL + 入口/DiffOnly fail-closed + attack_diff selftest + 改坏 dmg/hit 必红 + scoped_diff 14/14）
