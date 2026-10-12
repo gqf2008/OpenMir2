@@ -1,0 +1,100 @@
+# M3⑥ 任务 Rust 现状只读 grep（仓库基线 origin/master @ 1b576172）
+# 口径：所有 grep 均在仓库根执行，命中为空 = 缺件；逐条可复跑
+
+=== [1] 角色记录任务数组已解析（M2 record-fields stage6）===
+--- crates/storage/src/playerdata.rs（6000 面 CharacterData 解码/编码）---
+669:    pub quest_unit_open: Option<Vec<u8>>,
+670:    pub quest_unit: Option<Vec<u8>>,
+671:    pub quest_flag: Option<Vec<u8>>,
+728:            quest_unit_open: Some(vec![0; 128]),
+729:            quest_unit: Some(vec![0; 128]),
+730:            quest_flag: Some(vec![0; 128]),
+789:        w.bytes(self.quest_unit_open.as_deref());
+791:        w.bytes(self.quest_flag.as_deref());
+844:            quest_unit_open: r.bytes()?,
+845:            quest_unit: r.bytes()?,
+--- bins/game-svr/src/record.rs（M2 入图记录 52 成员 decode/encode）---
+508:    pub quest_unit_open: Option<Vec<u8>>,
+509:    pub quest_unit: Option<Vec<u8>>,
+510:    pub quest_flag: Option<Vec<u8>>,
+609:            quest_unit_open: decode_u8_vec(r)?,
+610:            quest_unit: decode_u8_vec(r)?,
+611:            quest_flag: decode_u8_vec(r)?,
+666:        w.byte_array(self.quest_unit_open.as_deref());
+667:        w.byte_array(self.quest_unit.as_deref());
+668:        w.byte_array(self.quest_flag.as_deref());
+--- stage6 用例 ---
+mir2-rs/crates/storage/tests/playerdatainfo_vectors.rs:186:    cd.quest_unit_open.as_mut().unwrap()[0] = 1;
+
+=== [2] 脚本引擎任务态动作已实现（crates/script）===
+113:            "ActionOfResetUnit" => {
+137:            "ActionOfSet" => {
+144:            "ActionOfReSet" => {
+150:            "ActionOfSetOpen" => {
+155:            "ActionOfSetUnit" => {
+
+=== [3] 脚本引擎任务态条件：CHECK 已实现，CHECKOPEN/CHECKUNIT 无分支 ===
+41:            "ConditionOfCheck" => self.cond_check(info, result),
+--- CHECKOPEN/CHECKUNIT 在 run_condition 的分支（期望：无命中）---
+(no match in conditions.rs => 未实现分支)
+--- 注册表/已实现清单（handlers.rs 有名字，dispatch IMPLEMENTED_CONDITIONS 无名字）---
+13:    (5, "ConditionOfCheckOpen"),
+14:    (6, "ConditionCheckUnit"),
+(no match in dispatch.rs IMPLEMENTED_CONDITIONS => 覆盖口径计为未实现)
+
+=== [4] 脚本引擎 GotoLable / 任务脚本选择门 ===
+690:    pub fn goto_label(&mut self, label: &str, bo_ext_jmp: bool) {
+765:    fn check_quest_status(player: &dyn ScriptPlayer, script: &ScriptInfo) -> bool {
+1174:    pub fn check_conditions(&mut self, list: &[QuestConditionInfo]) -> bool {
+1203:    pub fn run_actions(&mut self, list: &[QuestActionInfo]) -> bool {
+
+=== [5] crates/envir：MapQuest.txt / NPC 加载（期望：无）===
+mir2-rs/crates/envir/src/mapinfo.rs:308:            // `QuestNPC = LoadMapQuest(sLine)`：本层不建 NPC（集成点由 M2 车道做）。
+--- mapinfo.rs CHECKQUEST 处理点（只置位，不建 NPC）---
+306:        if mir2_shared::hutil32::compare_lstr(&command, "CHECKQUEST") {
+
+=== [6] crates/data：任务/MapQuest 载入（期望：无）===
+(no quest loader in crates/data)
+
+=== [7] bins/game-svr：脚本引擎接线 / @Login / QManage / MapQuest（期望：无）===
+mir2-rs/bins/game-svr/src/ground.rs:36://!   ├─ Config.InSafeDisableDrop && InSafeZone() ⇒ SendMsg(ManageNPC,RM_MENU_OK,…,ActorId,…) return false
+#     （下列命中项均为文档注释 //! / ///，说明 oracle 行为；无实际脚本运行时接线）
+mir2-rs/bins/game-svr/src/ground.rs:37://!   ├─ !IsCanDrop || Envir.Flag.NoThrowItem     ⇒ SendMsg(ManageNPC,RM_MENU_OK,…,ActorId,…) return false
+mir2-rs/bins/game-svr/src/useitem.rs:8://!     ├─ if (BoCanUseItem)                          // false ⇒ SendMsg(ManageNPC, RM_MENU_OK, …, ActorId,…)
+mir2-rs/bins/game-svr/src/useitem.rs:33://!   └─ if (SystemShare.FunctionNPC != null) { GotoLable("@StdModeFunc"+AniCount); return true }
+mir2-rs/bins/game-svr/src/useitem.rs:134:    /// `PlayObject.Operate.cs:685`：`SendMsg(SystemShare.ManageNPC, RM_MENU_OK, 0, ActorId, 0, 0, msg)`。
+mir2-rs/bins/game-svr/src/useitem.rs:356:                            //     `if (SystemShare.FunctionNPC != null) { GotoLable("@StdModeFunc"+AniCount); return true; }`
+mir2-rs/bins/game-svr/src/useitem.rs:357:                            //     ——`GotoLable` 的脚本派发本身不在本接缝作用域（登记 T-17），但**是否吃掉**
+--- game-svr Cargo 依赖（无 mir2-script）---
+15:mir2-protocol = { path = "../../crates/protocol" }
+16:mir2-shared = { path = "../../crates/shared" }   # HUtil32.GetValidStr3 的既有 Rust 实现（别重复造）
+17:mir2-world = { path = "../../crates/world" }
+18:mir2-data = { path = "../../crates/data" }   # StdItem 模板（Index → StdItem）：帧 50/41 的 StdItem.Shape 输入 + 52/752 能力接缝（与 envir 同源）
+19:mir2-formula = { path = "../../crates/formula" }   # `RecalcLevelAbilitys` 的逐行移植（登录时先算等级派生 Abil，见 ability.rs §14）
+20:mir2-envir = { path = "../../crates/envir" }   # Envir *.map 真地图加载 + 逻辑名→map_id（集成点 ④）
+21:mir2-storage = { path = "../../crates/storage" } # `LegacyDsn`：`[DataBase] ConnctionString` → sqlx URL（勿再手写一份）
+22:sqlx = { version = "0.8", features = ["runtime-tokio", "mysql"] }   # 建池读 stditems（与 mir2-data 同源）
+
+=== [8] bins/db-srv：任务落库（期望：无 quest 引用）===
+(占位：见下方重跑)
+
+=== [9] 协议：任务相关 SM/RM 常量 ===
+279:pub const SM_MERCHANTSAY: u16 = 643;
+354:pub const SM_MENU_OK: u16 = 767;
+486:pub const RM_MENU_OK: u16 = 10309;
+508:pub const RM_MERCHANTSAY: u16 = 11009;
+895:        643 => &["SM_MERCHANTSAY"],
+969:        767 => &["SM_MENU_OK"],
+1198:        10309 => &["RM_MENU_OK"],
+1219:        11009 => &["RM_MERCHANTSAY"],
+--- grep -rniw 'quest' mir2-rs/bins/db-srv/src/ ---
+(no word 'quest' in db-srv => 未持久任务态，与 oracle MySQL 同)
+--- characters_quest / QUESTOPENINDEX / QUESTFININDEX ---
+(no quest-table SQL in any .rs)
+--- db-srv save_record 的列清单（有无 quest 列）---
+396:const SAVE_CHARACTERS_SQL: &str = "UPDATE characters SET ServerIndex = ?, LoginID = ?, MapName = ?, CX = ?, CY = ?, Level = ?, Dir = ?, Hair = ?, Sex = ?, Job = Job, Gold = ?, \
+397-     GamePoint = ?, HomeMap = ?, HomeX = ?, HomeY = ?, PkPoint = ?, ReLevel = ?, AttatckMode = ?, FightZoneDieCount = ?, BodyLuck = ?, IncHealth = ?, IncSpell = ?, \
+398-     IncHealing = ?, CreditPoint = ?, BonusPoint = ?, HungerStatus = ?, PayMentPoint = ?, LockLogon = ?, MarryCount = ?, AllowGroupReCall = ?, \
+--
+408:    sqlx::query(SAVE_CHARACTERS_SQL)
+409-        .bind(i32::from(d.server_index))
