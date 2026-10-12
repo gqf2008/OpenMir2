@@ -49,3 +49,40 @@ S = `mir2-rs/tests/parity/m3/evidence-rng-isolate-attack-twophase-20261012/sessi
 
     # 本片全部输入 = 上一步已入库的两相真机原始件；未起栈、未占端口。
     # 端口实拍沿用 evidence-rng-isolate-attack-twophase-20261012/window/19-ports-after.txt（十端口 free）。
+
+## 6) jointable：逐击请求序列 × 夹具逐击状态记录（owner 23:50 第 ① 条）
+
+    # 自检（16/16；jointable 新增 8 项：夹具状态/两侧同表/present-absent/缺状态/缺字段/k 洞/计数不等/derived）
+    python -I $D/per_strike_requests.py selftest
+    # -> 01-selftest.txt
+
+    # fail-closed：缺夹具状态记录且未 --derive-state ⇒ PREREQ rc=2（绝不静默出表）
+    python -I $D/per_strike_requests.py jointable \
+      --csharp-stream $D/provenance/csharp-attack-stream-stack2.tsv \
+      --rust-stream   $D/provenance/rust-rng-stream-stack2.tsv \
+      --csharp-seq $S/csharp-20261012-215606/attack_seq.jsonl \
+      --rust-seq   $S/rust-20261012-215832/attack_seq.jsonl
+    # -> 12-jointable-prereq-failclosed.txt（rc=2）
+
+    # 夹具状态记录就位前的离线预览（列内 state=derived；权威记录到位后换 --*-state 同命令出权威表）
+    python -I $D/per_strike_requests.py jointable \
+      --csharp-stream $D/provenance/csharp-attack-stream-stack2.tsv \
+      --rust-stream   $D/provenance/rust-rng-stream-stack2.tsv \
+      --csharp-seq $S/csharp-20261012-215606/attack_seq.jsonl \
+      --rust-seq   $S/rust-20261012-215832/attack_seq.jsonl \
+      --derive-state \
+      --csharp-raw $S/csharp-20261012-215606/attack_raw.jsonl \
+      --rust-raw   $S/rust-20261012-215832/attack_raw.jsonl \
+      --out $D/11-jointable-twophase-derived.txt
+    # -> 11-jointable-twophase-derived.txt（240 行 = 两侧各 120）；stdout [info] align_vs_rng_hit_mismatch side=csharp ks=[3]
+
+    # 需要的夹具接口（owner 转 m3bag）：每侧会话目录 attack_state.jsonl，一行一击
+    # {"role":"state","k":N,"attacker":{x,y,dir,ghost,death,hp},"victim":{...}|null}；k 与 M3ATTSEQ role=attack 一一对应。
+
+## 7) 四门禁（本片零 .rs；CARGO_TARGET_DIR=E:/tmp/m3cs-r2-target；工作目录 mir2-rs/）
+
+    cargo fmt --all -- --check
+    cargo clippy --workspace --all-targets --offline -- -D warnings
+    cargo run -p msgcodegen --offline -- --check
+    cargo test --workspace --offline
+    # -> 13-gates-jointable.txt（fmt 0 / clippy 0 / 84 suites 682 passed 0 failed 16 ignored / 604）

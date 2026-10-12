@@ -56,7 +56,36 @@ internal bool _Attack(int nPower, IActor targetObject)                   # BaseO
     python -I per_strike_requests.py analyze \
         --csharp <csharp-attack-stream.tsv> --rust <rust-global-trace.tsv> \
         [--seed 40545] [--json out.json] [--csharp-kind csharp|rust] [--rust-kind rust]
+    python -I per_strike_requests.py table \
+        --csharp <csharp-attack-stream.tsv> --rust <rust-global-trace.tsv>
+    python -I per_strike_requests.py jointable \
+        --csharp-stream <csharp-attack-stream.tsv> --rust-stream <rust-global-trace.tsv> \
+        [--csharp-seq <attack_seq.jsonl>] [--rust-seq <attack_seq.jsonl>] \
+        ( --csharp-state <state.jsonl> --rust-state <state.jsonl> \
+          | --derive-state --csharp-raw <attack_raw.jsonl> --rust-raw <attack_raw.jsonl> )
     python -I per_strike_requests.py selftest
+
+## jointable（owner 2026-10-12 23:50 第 ① 条）
+
+把**每击的取数请求序列**（本工具切出的玩家单元）与夹具的**逐击状态记录**
+（`attacker`/`victim` 的 `CurrX/CurrY/Dir/Ghost/Death/Hp`；m3bag 夹具写集）接在**同一张表**上
+（长表：一行 = 一侧的一击，列两侧完全同名），并**机判两侧**：
+
+* 状态记录必须覆盖 RNG 流水切出的**每一个**玩家单元（击数），`k` 不得有洞 ⇒ 否则 RED；
+* 状态记录缺字段 / 缺键 / 不是 JSON ⇒ **PREREQ 点名**（`k` + 字段），**绝不**静默丢；
+* `victim` 允许为 `null`（该击目标格为空，正是要看的「(18,20) 为什么空」）。
+
+**夹具状态记录规范（唯一真源；m3bag 按此产出）**：每侧一个 JSONL，一行一击，
+`{"role":"state","k":<int>,"attacker":{"x","y","dir","ghost","death","hp"},
+"victim":{...}|null}`（6 字段齐全；攻方别名 `attacker|atk`、受害别名 `victim|vic`；
+同文件里 `arm/attack/struck/done` 等其它 role 自动跳过）。
+
+`--derive-state` 是**夹具状态记录就位前的离线预览**：从既有 `attack_raw.jsonl` 反推可得子集
+（攻方 `x/y/dir` ← `role=attack`；受害 `present/hp` ← `role=struck`；其余字段写 `-`，
+列内 `state=derived` 明示），**不替代**权威夹具记录。
+
+退出码：`0` = 表已出且两侧覆盖/计数/无洞全过；`1` = RED（覆盖不全 / 计数不等）；
+`2` = PREREQ（流水缺失 / 状态记录缺失或格式坏）。
 
 站点表（canon ↔ 正则）唯一事实源 = 同卡 `../rng-isolate-attack/attack_sites.tsv`。
 
@@ -149,6 +178,129 @@ def parse_rust(path: Path, smap) -> list[Entry]:
         if canon is None:
             continue
         out.append(Entry(p[1], p[2], p[3], canon))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# 夹具「逐击状态记录」（owner 2026-10-12 23:50 第 ① 条）
+# ---------------------------------------------------------------------------
+# 规范（唯一真源，见模块 docstring / README）：每侧一个 JSONL，一行一击：
+#   {"role":"state","k":1,"attacker":{"x":17,"y":20,"dir":2,"ghost":0,"death":0,"hp":80},
+#    "victim":{"x":18,"y":20,"dir":6,"ghost":0,"death":0,"hp":18}}   # victim 可 null
+STATE_FIELDS = ("x", "y", "dir", "ghost", "death", "hp")
+STATE_ROLES = {"state", "strike_state", "perhit", "perhit_state", ""}
+ATK_KEYS = ("attacker", "atk")
+VIC_KEYS = ("victim", "vic")
+
+
+class StateError(Exception):
+    """夹具逐击状态记录缺失 / 格式坏（PREREQ，点名 k + 字段）。"""
+
+
+class MissingError(Exception):
+    """夹具逐击状态记录未提供（PREREQ）。"""
+
+
+def _pick(d: dict, keys):
+    for k in keys:
+        if k in d:
+            return k, d[k]
+    return None, None
+
+
+def _require_actor(obj, name: str, lineno: int, k: int, who: str) -> dict:
+    if not isinstance(obj, dict):
+        raise StateError("%s:%d k=%d %s 不是对象" % (name, lineno, k, who))
+    missing = [f for f in STATE_FIELDS if f not in obj]
+    if missing:
+        raise StateError("%s:%d k=%d %s 缺字段 %s" % (name, lineno, k, who, ",".join(missing)))
+    return {f: int(obj[f]) for f in STATE_FIELDS}
+
+
+def parse_state(path: Path) -> dict:
+    """读夹具逐击状态记录 JSONL → {k: {"attacker": {...}, "victim": {...}|None}}。
+
+    **fail-closed**：缺 `k` / 缺攻方或受害键 / actor 缺字段 / 非法 JSON ⇒ StateError（点名）。
+    同文件里非状态 role（arm/attack/struck/done）跳过；文件里一条状态记录都没有 ⇒ StateError。
+    """
+    out: dict = {}
+    for lineno, raw in enumerate(path.read_text(encoding="utf-8-sig", errors="replace").splitlines(), 1):
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            d = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise StateError("%s:%d 非法 JSON: %s" % (path.name, lineno, exc))
+        if not isinstance(d, dict):
+            raise StateError("%s:%d 不是 JSON 对象" % (path.name, lineno))
+        if str(d.get("role", "")) not in STATE_ROLES:
+            continue
+        if "k" not in d:
+            raise StateError("%s:%d 状态记录缺 `k`" % (path.name, lineno))
+        k = int(d["k"])
+        _akey, atk = _pick(d, ATK_KEYS)
+        vkey, vic = _pick(d, VIC_KEYS)
+        if atk is None:
+            raise StateError("%s:%d k=%d 缺攻方键（attacker|atk）" % (path.name, lineno, k))
+        if vkey is None:
+            raise StateError("%s:%d k=%d 缺受害键（victim|vic；无目标写 null）" % (path.name, lineno, k))
+        out[k] = {"attacker": _require_actor(atk, path.name, lineno, k, "attacker"),
+                  "victim": None if vic is None else _require_actor(vic, path.name, lineno, k, "victim")}
+    if not out:
+        raise StateError("%s 无任何状态记录（role=state）" % path.name)
+    return out
+
+
+def derive_state_from_raw(path: Path) -> dict:
+    """夹具状态记录就位前的**离线预览**：从 `attack_raw.jsonl` 反推可得子集。
+
+    攻方 `x/y/dir` ← `role=attack`；受害 `present/hp` ← `role=struck`（归到最近一次 `k`）。
+    其余字段（ghost/death/受害 x/y/dir、攻方 hp）不可得 ⇒ `None`（列内渲染为 `-`）。
+    产出与 `parse_state` 同形（`attacker`/`victim`），并标 `state=derived`——**不替代**夹具记录。
+    """
+    out: dict = {}
+    cur = None
+    for raw in path.read_text(encoding="utf-8-sig", errors="replace").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("M3ATTSEQ "):
+            line = line[len("M3ATTSEQ "):]
+        try:
+            d = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        role = d.get("role")
+        if role == "attack":
+            cur = int(d["k"])
+            rec = out.setdefault(cur, {"attacker": None, "victim": None})
+            rec["attacker"] = {"x": d.get("x"), "y": d.get("y"), "dir": d.get("dir"),
+                               "ghost": None, "death": None, "hp": None}
+        elif role == "struck" and cur is not None:
+            rec = out.setdefault(cur, {"attacker": None, "victim": None})
+            rec["victim"] = {"x": None, "y": None, "dir": None,
+                             "ghost": None, "death": None, "hp": d.get("hp")}
+    if not out:
+        raise MissingError("%s 无 role=attack/struck 行" % path.name)
+    return out
+
+
+def parse_attack_seq(path: Path) -> dict:
+    """读 `attack_seq.jsonl` → {k: {"hit":bool,"dmg":int,...}}（summary 行忽略；缺文件 ⇒ {}）。"""
+    out: dict = {}
+    if not path or not Path(path).exists():
+        return out
+    for raw in Path(path).read_text(encoding="utf-8-sig", errors="replace").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            d = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(d, dict) and d.get("role") != "summary" and "k" in d:
+            out[int(d["k"])] = d
     return out
 
 
@@ -344,6 +496,125 @@ def cmd_table(args) -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
+# jointable：逐击请求序列 × 夹具逐击状态记录（两侧同表）
+# ---------------------------------------------------------------------------
+JOINT_COLS = (["side", "k", "state", "hit", "rng", "dmg", "reqs"]
+              + ["atk_" + f for f in STATE_FIELDS]
+              + ["vic"] + ["vic_" + f for f in STATE_FIELDS])
+
+
+def _fmt(v):
+    return "-" if v is None else str(v)
+
+
+def _yn(v):
+    if v is None:
+        return "-"
+    return "hit" if v else "dodge"
+
+
+def _load_attack_units(side: str, stream: Path, smap):
+    seq = parse_csharp(stream, smap) if side == "csharp" else parse_rust(stream, smap)
+    return [u for _s, kind, u in segment_units(seq) if kind == "player"]
+
+
+def _load_state_side(side, state_path, raw_path, derive):
+    if state_path:
+        return parse_state(Path(state_path)), "fixture"
+    if derive and raw_path:
+        return derive_state_from_raw(Path(raw_path)), "derived"
+    raise MissingError(
+        "side=%s 缺夹具逐击状态记录（--%s-state）；"
+        "或显式 --derive-state --%s-raw <attack_raw.jsonl> 用可得子集预览" % (side, side, side))
+
+
+def _check_state_coverage(state, nunits, side, problems):
+    ks = sorted(state)
+    if ks and ks != list(range(1, ks[-1] + 1)):
+        problems.append("state_k_gap side=%s ks=%s" % (side, ks))
+    if len(ks) != nunits:
+        problems.append("state_vs_stream_count_mismatch side=%s state=%d player_units=%d"
+                        % (side, len(ks), nunits))
+
+
+def jointable(csharp_stream, rust_stream, csharp_seq="", rust_seq="",
+              csharp_state="", rust_state="", csharp_raw="", rust_raw="",
+              derive=False):
+    """产出两侧同表的逐击行 → (rc, text, problems)。rc：0=GREEN / 1=RED / 2=PREREQ。"""
+    smap = load_site_map()
+    sides = (("csharp", csharp_stream, csharp_seq, csharp_state, csharp_raw),
+             ("rust", rust_stream, rust_seq, rust_state, rust_raw))
+    data: dict = {}
+    problems: list = []
+    try:
+        for side, stream, seqp, statep, rawp in sides:
+            if not stream or not Path(stream).exists():
+                return 2, "", ["PREREQ_MISSING side=%s RNG 流水 %s" % (side, stream)]
+            units = _load_attack_units(side, Path(stream), smap)
+            state, src = _load_state_side(side, statep, rawp, derive)
+            _check_state_coverage(state, len(units), side, problems)
+            data[side] = {"units": units, "state": state, "src": src,
+                          "seq": parse_attack_seq(Path(seqp)) if seqp else {}}
+    except (StateError, MissingError) as exc:
+        return 2, "", [str(exc)]
+    lines = ["\t".join(JOINT_COLS)]
+    mismatch: dict = {"csharp": [], "rust": []}
+    for side in ("csharp", "rust"):
+        d = data[side]
+        ks = sorted(set(list(d["state"]) + list(range(1, len(d["units"]) + 1))))
+        for k in ks:
+            u = d["units"][k - 1] if k - 1 < len(d["units"]) else None
+            s = d["seq"].get(k, {})
+            rec = d["state"].get(k) or {}
+            atk = rec.get("attacker")
+            vic = rec.get("victim")
+            canons = [e.canon for e in u] if u else []
+            rng_hit = None if not canons else ("hit_struck_damage" in canons)
+            if s.get("hit") is not None and rng_hit is not None and bool(s["hit"]) != rng_hit:
+                mismatch[side].append(k)
+            row = [side, k, d["src"], _yn(s.get("hit")), _yn(rng_hit), _fmt(s.get("dmg")),
+                   ",".join(canons) if canons else "-"]
+            row += [_fmt(atk.get(f)) if atk else "-" for f in STATE_FIELDS]
+            row.append("present" if vic else "absent")
+            row += [_fmt(vic.get(f)) if vic else "-" for f in STATE_FIELDS]
+            lines.append("\t".join(str(x) for x in row))
+    for side in ("csharp", "rust"):
+        if mismatch[side]:
+            problems.append("info:align_vs_rng_hit_mismatch side=%s ks=%s" % (side, mismatch[side]))
+    blocking = [p for p in problems if not p.startswith("info:")]
+    return (1 if blocking else 0), "\n".join(lines), problems
+
+
+def cmd_jointable(args) -> int:
+    for p in (args.csharp_stream, args.rust_stream):
+        if not p or not Path(p).exists():
+            print("PREREQ_MISSING: 找不到 RNG 流水 %s" % p, file=sys.stderr)
+            return 2
+    rc, text, problems = jointable(args.csharp_stream, args.rust_stream,
+                                   args.csharp_seq, args.rust_seq,
+                                   args.csharp_state, args.rust_state,
+                                   args.csharp_raw, args.rust_raw, args.derive_state)
+    if rc == 2:
+        print("PREREQ_MISSING: %s" % "; ".join(problems), file=sys.stderr)
+        return 2
+    print(text)
+    if args.out:
+        Path(args.out).write_text(text + "\n", encoding="utf-8", newline="\n")
+        print("\n[out] %s" % args.out)
+    blocking = [p for p in problems if not p.startswith("info:")]
+    info = [p for p in problems if p.startswith("info:")]
+    if blocking:
+        print("\nJOINTABLE RED: %s" % "; ".join(blocking), file=sys.stderr)
+        return 1
+    for p in info:
+        print("[info] %s" % p)
+    print("\nJOINTABLE GREEN: 两侧逐击表已出（state 来源 = %s%s）" % (
+        "fixture" if (args.csharp_state or args.rust_state) else "derived",
+        "；%d 条 informational" % len(info) if info else ""))
+    return 0
+
+
 def cmd_analyze(args) -> int:
     for p in (args.csharp, args.rust):
         if not Path(p).exists():
@@ -414,6 +685,29 @@ def _mk_rust(unit_ops, tmp, name):
     return p
 
 
+def _mk_jsonl(path, rows):
+    path.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n",
+                    encoding="utf-8", newline="\n")
+    return path
+
+
+def _mk_state(path, recs):
+    return _mk_jsonl(path, [{"role": "state", "k": k, "attacker": a, "victim": v} for k, a, v in recs])
+
+
+def _mk_raw(path, recs):
+    rows = []
+    for k, x, y, dr, hp in recs:
+        rows.append({"role": "attack", "k": k, "op": "CM_HIT", "x": x, "y": y, "dir": dr, "my": 1, "id": "bot"})
+        if hp is not None:
+            rows.append({"role": "struck", "dmg": 1, "hp": hp, "maxhp": 19, "src": 1, "actor": 2, "my": 2})
+    return _mk_jsonl(path, rows)
+
+
+ACT6 = {"x": 17, "y": 20, "dir": 2, "ghost": 0, "death": 0, "hp": 80}
+VIC18 = {"x": 18, "y": 20, "dir": 6, "ghost": 0, "death": 0, "hp": 18}
+
+
 def cmd_selftest(args) -> int:
     import tempfile
 
@@ -459,14 +753,56 @@ def cmd_selftest(args) -> int:
     check("player-unit-count-red", r5["verdict"] == "RED" and any("player_units_mismatch" in p for p in r5["problems"]),
           str(r5["problems"]))
 
+    # jointable：夹具逐击状态记录（两侧同表）——owner 23:50 第 ① 条的权威路径
+    st_cs = _mk_state(tmp / "state-cs.jsonl", [(1, dict(ACT6), None), (2, dict(ACT6), dict(VIC18))])
+    st_rt = _mk_state(tmp / "state-rt.jsonl", [(1, dict(ACT6), dict(VIC18)), (2, dict(ACT6), None)])
+    seq_cs = _mk_jsonl(tmp / "seq-cs.jsonl", [{"k": 1, "hit": False, "dmg": 0},
+                                               {"k": 2, "hit": True, "dmg": 1}])
+    seq_rt = _mk_jsonl(tmp / "seq-rt.jsonl", [{"k": 1, "hit": True, "dmg": 1},
+                                               {"k": 2, "hit": False, "dmg": 0}])
+    rc, text, probs = jointable(cs, rt, seq_cs, seq_rt, st_cs, st_rt)
+    tl = text.splitlines()
+    check("jointable-fixture-green", rc == 0, str(probs))
+    check("jointable-both-sides-one-table",
+          any(l.startswith("csharp\t") for l in tl) and any(l.startswith("rust\t") for l in tl)
+          and "atk_hp" in text and "vic_x" in text)
+    check("jointable-victim-present-absent", "present" in text and "absent" in text)
+
+    # 缺状态记录 ⇒ PREREQ（rc=2），绝不静默出表
+    rc, _t, probs = jointable(cs, rt)
+    check("jointable-missing-state-prereq", rc == 2, str(probs))
+
+    # 状态记录缺字段（victim 缺 ghost）⇒ PREREQ 点名
+    bad = dict(VIC18)
+    bad.pop("ghost")
+    st_bad = _mk_state(tmp / "state-bad.jsonl", [(1, dict(ACT6), None), (2, dict(ACT6), bad)])
+    rc, _t, probs = jointable(cs, rt, "", "", st_bad, st_rt)
+    check("jointable-missing-field-prereq", rc == 2 and any("ghost" in p for p in probs), str(probs))
+
+    # k 有洞（1,3）⇒ RED
+    st_gap = _mk_state(tmp / "state-gap.jsonl", [(1, dict(ACT6), None), (3, dict(ACT6), None)])
+    rc, _t, probs = jointable(cs, rt, "", "", st_gap, st_rt)
+    check("jointable-k-gap-red", rc == 1 and any("state_k_gap" in p for p in probs), str(probs))
+
+    # 状态记录数与 RNG 玩家单元数不等 ⇒ RED
+    st_few = _mk_state(tmp / "state-few.jsonl", [(1, dict(ACT6), None)])
+    rc, _t, probs = jointable(cs, rt, "", "", st_few, st_rt)
+    check("jointable-count-mismatch-red", rc == 1 and any("count_mismatch" in p for p in probs), str(probs))
+
+    # --derive-state：夹具记录就位前的预览，可从 attack_raw 反推（明示 derived）
+    raw_cs = _mk_raw(tmp / "raw-cs.jsonl", [(1, 17, 20, 2, None), (2, 17, 20, 2, 18)])
+    raw_rt = _mk_raw(tmp / "raw-rt.jsonl", [(1, 17, 20, 2, 18), (2, 17, 20, 2, None)])
+    rc, text, probs = jointable(cs, rt, seq_cs, seq_rt, "", "", raw_cs, raw_rt, derive=True)
+    check("jointable-derived-green", rc == 0 and "derived" in text, str(probs))
+
     for f in tmp.iterdir():
         f.unlink()
     tmp.rmdir()
     if failures:
         print("SELFTEST RED: %d/%d 未过: %s" % (len(failures), len(checks), ", ".join(failures)))
         return 1
-    print("SELFTEST GREEN: per_strike_requests %d/%d（同形态绿 + base 单元分类 + 玩家路径多抽/次序/计数必红）"
-          % (len(checks), len(checks)))
+    print("SELFTEST GREEN: per_strike_requests %d/%d（同形态绿 + base 单元分类 + 玩家路径多抽/次序/计数必红"
+          " + jointable 夹具状态/缺字段/缺口/计数/derived）" % (len(checks), len(checks)))
     return 0
 
 
@@ -485,6 +821,19 @@ def main(argv=None) -> int:
     t.add_argument("--csharp", required=True)
     t.add_argument("--rust", required=True)
     t.set_defaults(func=cmd_table)
+    j = sub.add_parser("jointable")
+    j.add_argument("--csharp-stream", required=True)
+    j.add_argument("--rust-stream", required=True)
+    j.add_argument("--csharp-seq", default="")
+    j.add_argument("--rust-seq", default="")
+    j.add_argument("--csharp-state", default="")
+    j.add_argument("--rust-state", default="")
+    j.add_argument("--csharp-raw", default="")
+    j.add_argument("--rust-raw", default="")
+    j.add_argument("--derive-state", action="store_true",
+                   help="无权威夹具状态记录时，用 attack_raw.jsonl 反推可得子集（明示 state=derived）")
+    j.add_argument("--out", default="")
+    j.set_defaults(func=cmd_jointable)
     s = sub.add_parser("selftest")
     s.set_defaults(func=cmd_selftest)
     args = ap.parse_args(argv)

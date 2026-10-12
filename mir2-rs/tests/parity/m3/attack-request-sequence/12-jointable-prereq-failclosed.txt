@@ -1,0 +1,5 @@
+# 12-jointable-prereq-failclosed.txt — 缺夹具逐击状态记录 + 未给 --derive-state 时
+# jointable 必须 PREREQ（rc=2），绝不静默出表：
+# python -I $D/per_strike_requests.py jointable --csharp-stream <...> --rust-stream <...> --csharp-seq <...> --rust-seq <...>
+# rc=2
+PREREQ_MISSING: side=csharp 缺夹具逐击状态记录（--csharp-state）；或显式 --derive-state --csharp-raw <attack_raw.jsonl> 用可得子集预览

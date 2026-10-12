@@ -1,1 +1,1 @@
-SELFTEST GREEN: per_strike_requests 8/8（同形态绿 + base 单元分类 + 玩家路径多抽/次序/计数必红）
+SELFTEST GREEN: per_strike_requests 16/16（同形态绿 + base 单元分类 + 玩家路径多抽/次序/计数必红 + jointable 夹具状态/缺字段/缺口/计数/derived）
