@@ -1,0 +1,39 @@
+### T-14 两相 pin 对拍复跑（T-28 修好后，owner 2026-10-12 08:50 条件式 GO）——十端口实拍
+### 采集命令（每次）：
+###   powershell -NoProfile -Command "Get-NetTCPConnection -State Listen |
+###     Where-Object { $_.LocalPort -in 3306,5000,5100,5500,5600,5700,6000,7000,7100,7200 } |
+###     ForEach-Object { $p=Get-Process -Id $_.OwningProcess -EA SilentlyContinue; '{0} {1} {2}' -f $_.LocalPort,$_.OwningProcess,$p.Path }"
+### 判定：非 3306 的游戏端口应全空；起栈前若被占 ⇒ 不抢窗口。
+
+=== 1) 起栈前（2026-10-12 08:5x，实拍）===
+3306 22624 D:\mysql\mariadb-10.11.19-winx64\bin\mysqld.exe
+（其余 5000/5100/5500/5600/5700/6000/7000/7100/7200 全空）⇒ 窗口空闲，本轮归 m3bag
+
+=== 2) C# 栈运行中（E:\MirServer\start-all.ps1，run-csharp 前）===
+3306 22624 D:\mysql\mariadb-10.11.19-winx64\bin\mysqld.exe
+5000  9096 E:\MirServer\M2GameSvr\GameSrv.exe
+5100 16088 E:\Users\gxh\Documents\GitHub\OpenMir2\src\DBSrv\bin\Release\DBSrv.exe
+5500 25092 E:\Users\gxh\Documents\GitHub\OpenMir2\src\LoginSrv\bin\Release\LoginSrv.exe
+5600 25092 E:\Users\gxh\Documents\GitHub\OpenMir2\src\LoginSrv\bin\Release\LoginSrv.exe
+5700 16088 E:\Users\gxh\Documents\GitHub\OpenMir2\src\DBSrv\bin\Release\DBSrv.exe
+6000 16088 E:\Users\gxh\Documents\GitHub\OpenMir2\src\DBSrv\bin\Release\DBSrv.exe
+7000  7316 E:\MirServer\LoginGate\LoginGate.exe
+7100 14860 E:\MirServer\SelGate\SelGate.exe
+7200 11668 E:\MirServer\RunGate\GameGate.exe
+
+=== 3) Rust 栈运行中（tools/m2-acceptance/start_rust_stack.ps1 -RustBinDir E:\tmp\openmir2-m3bag-target\debug）===
+3306 10912 D:\mysql\mariadb-10.11.19-winx64\bin\mysqld.exe
+5000 28264 E:\tmp\openmir2-m3bag-target\debug\game-svr.exe      (HEAD 376ea004 重建，含 T-28 recover.rs)
+5100  6660 E:\Users\gxh\Documents\GitHub\OpenMir2\src\DBSrv\bin\Release\DBSrv.exe
+5500  3672 E:\Users\gxh\Documents\GitHub\OpenMir2\src\LoginSrv\bin\Release\LoginSrv.exe
+5600  3672 E:\Users\gxh\Documents\GitHub\OpenMir2\src\LoginSrv\bin\Release\LoginSrv.exe
+5700  6660 E:\Users\gxh\Documents\GitHub\OpenMir2\src\DBSrv\bin\Release\DBSrv.exe
+6000  6660 E:\Users\gxh\Documents\GitHub\OpenMir2\src\DBSrv\bin\Release\DBSrv.exe
+7000  3840 E:\tmp\openmir2-m3bag-target\debug\login-gate.exe
+7100 30656 E:\tmp\openmir2-m3bag-target\debug\sel-gate.exe
+7200 26804 E:\tmp\openmir2-m3bag-target\debug\game-gate.exe
+
+=== 4) 收工后（start_rust_stack.ps1 -Stop + 重启共享 MySQL；十端口实拍）===
+3306 26652 D:\mysql\mariadb-10.11.19-winx64\bin\mysqld.exe
+（其余 5000/5100/5500/5600/5700/6000/7000/7100/7200 全空）
+进程实拍：Get-Process 匹配 BotSrv|GameSrv|GameGate|LoginGate|SelGate|DBSrv|LoginSrv|game-svr|game-gate|login-gate|sel-gate ⇒ 无

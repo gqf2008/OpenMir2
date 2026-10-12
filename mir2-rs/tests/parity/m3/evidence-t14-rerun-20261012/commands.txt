@@ -1,0 +1,49 @@
+# T-14 两相 pin 对拍复跑（T-28 修好后）——原始命令清单
+# 卡 openmir2-m3-bag-equip-alignment；owner 2026-10-12 08:50 条件式 GO（T28_MERGED 成立）
+# 作者 worktree：E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag（分支 worktree-m3-bag-equip）
+# 被对拍 head：376ea0042c0636e724dabf5b6c978f8a7923c091（= master tip，含 T-28 505f8d16）
+# 纪律：所有起栈命令一律重定向到文件（禁止 | tee / tail / head / grep —— owner 2026-10-12 07:55）
+
+# 0) 条件判定 + 窗口实拍（不占窗口）
+git fetch walgit && git merge master
+git merge-base --is-ancestor 505f8d1674559ca2bfc2578fbdb34f58302771e4 master   # => T28_MERGED
+powershell -NoProfile -Command "Get-NetTCPConnection -State Listen | Where-Object { $_.LocalPort -in 3306,5000,5100,5500,5600,5700,6000,7000,7100,7200 } | ..."   # 只剩 3306
+
+# 1) 重建 Rust 入口（含 T-28 recover.rs；CARGO_TARGET_DIR 隔离）
+cd mir2-rs
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target cargo build -p game-svr -p login-gate -p sel-gate -p game-gate
+
+# 2) C# 栈（oracle 冻结部署件）
+powershell -ExecutionPolicy Bypass -File E:/MirServer/start-all.ps1 > E:/tmp/m3bag4-csharp-start.log 2>&1
+
+# 3) C# 基线（两相 pin：预热建角 → SQL pin → BEFORE 快照 → 计分跑）
+cd E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3bag
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_bag_equip_pair.ps1 -Side csharp -Bots 1 -Prefix m3cbag4 -PinStartPose > E:/tmp/m3bag4-csharp-run.log 2>&1
+#  => SESSION_CSHARP csharp-20261012-085856（PIN_HOLD attempt=3）
+
+# 4) 停 C# 栈
+powershell -ExecutionPolicy Bypass -File E:/MirServer/start-all.ps1 -Stop > E:/tmp/m3bag4-csharp-stop.log 2>&1
+
+# 5) Rust 栈（Rust GameSvr/三网关 + C# DBSrv/LoginSrv + MySQL）
+powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 -RustBinDir E:/tmp/openmir2-m3bag-target/debug > E:/tmp/m3bag4-rust-start.log 2>&1
+
+# 6) Rust 侧同序列 + 跨侧 diff（判据）
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_bag_equip_pair.ps1 -Side rust -Bots 1 -Prefix m3rbag4 -PinStartPose -PeerSession csharp-20261012-085856 > E:/tmp/m3bag4-rust-run.log 2>&1
+#  => SESSION_RUST rust-20261012-090020（PIN_HOLD attempt=2）；GREEN: 跨侧作用域内字段级 diff = 0
+
+# 7) 判据显式重放（等价于 run_bag_equip_pair 内部那一步）
+cd mir2-rs/tests/parity/m3
+python scoped_diff.py diff --canonical --fixed-newchr sessions/csharp-20261012-085856/scoped_after_norm.jsonl sessions/rust-20261012-090020/scoped_after_norm.jsonl
+#  => GREEN: 作用域内 9 张表逐行一致  (RC=0)
+
+# 8) 收工：停 Rust 栈 + 重启共享 MySQL + 十端口实拍
+powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 -Stop > E:/tmp/m3bag4-rust-stop.log 2>&1
+powershell -NoProfile -Command "Start-Process D:\mysql\...\mysqld.exe -ArgumentList '--datadir=D:\mysql\data','--port=3306','--bind-address=127.0.0.1','--console' ..."
+#  => 十端口实拍只剩 3306；无 BotSrv/GameSrv/网关残留进程
+
+# 9) 四门禁（本片零 .rs 改动 ⇒ 回归确认；head 376ea004）
+cd mir2-rs
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target cargo fmt --all -- --check                                  # rc=0
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target cargo clippy --workspace --all-targets --offline -- -D warnings  # rc=0
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target cargo run -q --offline -p msgcodegen -- --check             # 604 条一致
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target cargo test --workspace --offline                             # 73 suites / 589 passed / 0 failed / 16 ignored

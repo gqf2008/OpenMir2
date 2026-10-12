@@ -1,0 +1,5 @@
+mir2_db.characters 列序（scoped_diff.TABLE_COLUMNS，唯一口径）:
+  22=IncHealth 23=IncSpell 24=IncHealing
+
+C#   csharp-20261012-085856  MapName=0 CX=289 CY=618 Level=1 IncHealth=0 IncSpell=0 IncHealing=0  (第22/23/24列)
+Rust rust-20261012-090020  MapName=0 CX=289 CY=618 Level=1 IncHealth=0 IncSpell=0 IncHealing=0  (第22/23/24列)

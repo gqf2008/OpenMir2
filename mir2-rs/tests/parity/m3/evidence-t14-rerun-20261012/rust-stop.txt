@@ -1,0 +1,18 @@
+STOPPED login-gate pid=3840
+STOPPED sel-gate pid=30656
+STOPPED game-gate pid=26804
+STOPPED game-svr pid=28264
+STOPPED LoginSrv pid=3672
+STOPPED DBSrv pid=6660
+STOPPED MySQL pid=10912
+=== M2 验收栈 端口实况 ===
+  3306  DOWN
+  6000  DOWN
+  5100  DOWN
+  5700  DOWN
+  5500  DOWN
+  5600  DOWN
+  5000  DOWN
+  7000  DOWN
+  7100  DOWN
+  7200  DOWN

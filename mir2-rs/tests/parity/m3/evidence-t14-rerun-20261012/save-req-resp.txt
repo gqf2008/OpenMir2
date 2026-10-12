@@ -1,0 +1,7 @@
+### Rust game-svr 存档请求/应答（E:\tmp\m2-acceptance\stack\game-svr.out.log，本片实跑）
+46:01:00:37.634 [INF] 存档请求已发（DB_SAVEHUMANRCD）ChrName:m3rbag40 queryId=2 记录 6146 字节
+47:01:00:37.634 [INF] 断线清世界 ChrName:m3rbag40 socket=336 index=1（FrontEngine.DeleteHuman + WorldEngine 摘除）
+49:01:00:38.034 [INF] 存档应答 queryId=2 ChrName=m3rbag40 Ident=1102 Recog=1
+84:01:01:03.889 [INF] 存档请求已发（DB_SAVEHUMANRCD）ChrName:m3rbag40 queryId=4 记录 6146 字节
+85:01:01:03.889 [INF] 断线清世界 ChrName:m3rbag40 socket=244 index=1（FrontEngine.DeleteHuman + WorldEngine 摘除）
+87:01:01:04.289 [INF] 存档应答 queryId=4 ChrName=m3rbag40 Ident=1102 Recog=1

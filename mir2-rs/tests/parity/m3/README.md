@@ -260,11 +260,18 @@ powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_bag_equip_p
     单次观测挡不住「pin 早于异步落库、存档随后静默覆盖」的假 GREEN。`run_bag_equip_pair.ps1 -SelfCheckNoStack`
     新增 **⑩**（故障注入驱动同一函数）：跳过 settle、pin 早于落库、存档反复覆盖均 ⇒ 必判红；正常路径 ⇒ attempt=2；
     并机判 `run_pair -EmitOpsArgs` 的 `pin_instrument`（`settle_seconds>=1` 且 `consecutive>=2`）证明生产接线未被削弱。
-    原始输出与三条变异红检：`evidence-t14-pinhold-20261012/**`（`SHA256SUMS.txt` 8/8 GREEN）。
+    原始输出与三条变异红检：`evidence-t14-pinhold-20261012/**`（`SHA256SUMS.txt` 12/12 GREEN）。
     注：判据轮跑在补强前，故报告里是 `PIN_HOLD attempt=1`；T-28 修好后的重跑会因连续两轮要求显示 `attempt>=2`（预期）。
-  ⚠ **当前唯一剩余跨侧差异 = `characters.IncHealth`**（C#=0 / Rust=20），根因 = Rust 未建模 oracle 周期
-  `HealthSpellChanged` 恢复 tick（把吃药得到的 `IncHealth` 消费回 HP，满血时归零）；登记 **T-28**，待 owner 裁决。
-  报告 `T14-对照报告-20261012.md`；判据会话 `sessions/{csharp-20261012-080312,rust-20261012-080417}`。
+    该目录 `gates-test-workspace.txt` 的 `73/566/0/16` 采于**早于 `0d3b733a` 的树**（本片零 `.rs`，不是 158f8101 head 计数）；
+    head 上 reviewer-5 独立复跑 = `73 suites / 571 passed / 0 failed / 16 ignored`（条目 `e55a9485`）——见该目录 `commands.txt` 顶部注释。
+  ✅ **T-28 修好并合入 master（`505f8d16` → `376ea004`）后重跑两相 pin：跨侧作用域内字段级 diff = 0**
+  （2026-10-12 09:0x，判据 head `376ea004`；`scoped_diff.py diff --canonical --fixed-newchr` = **GREEN 9 表逐行一致**，
+  两侧 `characters.IncHealth` 均 **0**；C# 会话 `csharp-20261012-085856` / Rust 会话 `rust-20261012-090020`；
+  C# `PIN_HOLD attempt=3`、Rust `PIN_HOLD attempt=2` ⇒ 连续两轮 settle 判据在真机生效）。证据 `evidence-t14-rerun-20261012/**`。
+  此前（第十四格）唯一剩余差异 = `characters.IncHealth`（C#=0 / Rust=20），根因 = Rust 未建模 oracle 周期
+  `HealthSpellChanged` 恢复 tick（把吃药得到的 `IncHealth` 消费回 HP，满血时归零）；由 **T-28** 修复。
+  ⇒ **T-28 已退役**（`tests/parity/whitelist.md` T-28 改为「已修/退役」口径、保留留痕，不再作为差异豁免）。
+  报告 `T14-对照报告-20261012.md`；第十四格判据会话 `sessions/{csharp-20261012-080312,rust-20261012-080417}`。
 
 ## 一次「侧运行」是什么
 
