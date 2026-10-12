@@ -1,0 +1,35 @@
+cfg	20261012	20	35	25	35	30	30
+recalc	warr_naked	0	40	70	20	35	0	0		7	17	0	0	0	0	
+recalc	warr_basic3	0	40	70	20	35	0	0	3:3	16	17	0	0	0	0	
+recalc	warr_ilkwang2	0	40	70	20	35	0	0	4:2	12	17	0	0	0	0	
+recalc	warr_yedo_lv1	0	40	70	20	35	0	0	7:1	8	17	6	0	6	1	1|Next(max)|6|1|max
+recalc	warr_yedo_lv3	0	40	70	20	35	0	0	7:3	10	17	8	0	4	1	1|Next(max)|4|1|max
+recalc	warr_firesword_lv3	0	40	70	20	35	0	0	26:3	7	17	0	16	0	0	
+recalc	warr_all_four	0	40	70	20	35	0	0	3:3;4:2;7:2;26:1	23	17	7	8	5	1	1|Next(max)|5|1|max
+recalc	wizard_hit	1	50	70	25	35	0	0		7	17	0	0	0	0	
+recalc	taos_speed	2	50	60	30	30	0	0		0	20	0	0	0	0	
+recalc	taos_init_hp_kept	2	50	60	30	30	7	9		7	20	0	0	0	0	
+aph	mode3_powerhit_t	3	25	1	9	0	1	0	0	34	1	0	0	0
+aph	mode3_nopowerhit_t	3	25	1	9	0	0	0	0	25	0	0	0	0
+aph	mode7_fire_low_t	7	25	1	0	8	0	1	0	25	1	0	0	0
+aph	mode7_fire_high_t	7	250	1	0	8	0	1	0	410	1	0	0	0
+aph	mode7_nofire_t	7	250	1	0	8	0	0	0	250	0	0	0	0
+aph	mode9_twin_high_t	9	333	1	0	12	0	0	1	693	1	0	0	0
+aph	mode9_notwin_t	9	333	1	0	12	0	0	0	333	0	0	0	0
+aph	mode0_default_t	0	77	1	5	6	1	1	1	77	0	1	1	1
+aph	mode3_powerhit_n	3	25	0	9	0	1	0	0	34	1	0	0	0
+aph	mode3_nopowerhit_n	3	25	0	9	0	0	0	0	25	0	0	0	0
+aph	mode7_fire_low_n	7	25	0	0	8	0	1	0	25	0	0	0	0
+aph	mode7_fire_high_n	7	250	0	0	8	0	1	0	250	0	0	0	0
+aph	mode7_nofire_n	7	250	0	0	8	0	0	0	250	0	0	0	0
+aph	mode9_twin_high_n	9	333	0	0	12	0	0	1	333	0	0	0	0
+aph	mode9_notwin_n	9	333	0	0	12	0	0	0	333	0	0	0	0
+aph	mode0_default_n	0	77	0	5	6	1	1	1	77	0	1	1	1
+reach	3	基本剑术	RecalcHitSpeed	probeable	PlayObject.cs:3659-3713（:3687 SKILL_ONESWORD 分支）
+reach	4	精神力战法	RecalcHitSpeed	probeable	PlayObject.cs:3659-3713（:3693 SKILL_ILKWANG 分支）
+reach	7	攻杀剑术	RecalcHitSpeed+GetAttackPowerHit	probeable	PlayObject.cs:3659-3713（:3698 SKILL_YEDO）+ PlayObject.Attack.cs:579-625（mode 3）
+reach	12	刺杀剑术	SkillAttackDamage	map_context	PlayObject.Attack.cs:141-199（mode 4 ⇒ SwordLongAttack ⇒ Envir）
+reach	25	半月弯刀	SkillAttackDamage	map_context	PlayObject.Attack.cs:141-199（mode 5 ⇒ SwordWideAttack ⇒ Envir）
+reach	26	烈火剑法	RecalcHitSpeed+GetAttackPowerHit	probeable	PlayObject.cs:3659-3713（:3708 SKILL_FIRESWORD）+ PlayObject.Attack.cs:579-625（mode 7）
+reach	27	野蛮冲撞	DoMotaebo	map_context	PlayObject.Attack.cs:1187 DoMotaebo（⇒ Envir 位移）
+reach	34	解毒术	SkillAttackDamage	map_context	PlayObject.Attack.cs:141-199（mode 8 ⇒ CrsWideAttack ⇒ Envir；`MagicConst.SKILL_CROSSMOON=34`）

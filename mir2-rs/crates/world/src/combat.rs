@@ -132,6 +132,208 @@ pub fn get_base_attack_power_player(
     get_attack_power_player(rng, lo, diff, luck, power_rate, bo_power_item, power_item)
 }
 
+// -------------------------------------------------------------------------------------------
+// DoSpell 之外的战士近战技能路径（`PlayObject.Attack.cs` / `PlayObject.cs`）
+//
+// 真魔表里 `IsWarrSkill`（`MagicManager.cs:82-100`）命中的 8 行，`DoSpell` 前置就 `return false`
+// （见 `skill-probe` 的 `warr_reject` 登记）；它们的「效果」实际由 `PlayObject` 的近战路径施加。
+// 本段移植其中**可独立反射直调**的两个入口（真身向量见 `tests/parity/m3/attack-hit-probe`）：
+//   - [`recalc_hit_speed`]      ← `PlayObject.cs:3659-3713` `RecalcHitSpeed`（被动技能效果）
+//   - [`get_attack_power_hit`]  ← `PlayObject.Attack.cs:579-625` `GetAttackPowerHit`（主动倍率）
+// 其余 4 行（12/25/27/34）尾调走 `Envir`/地图目标集，只登记可达性，不在本段。
+// -------------------------------------------------------------------------------------------
+
+/// `MessageSettings.DEFHIT`（`MessageSettings.cs:10`）。
+pub const DEFHIT: u16 = 5;
+/// `MessageSettings.DEFSPEED`（`MessageSettings.cs:11`）。
+pub const DEFSPEED: i32 = 15;
+
+/// `MagicConst.SKILL_ONESWORD`（基本剑术）。
+pub const SKILL_ONESWORD: u16 = 3;
+/// `MagicConst.SKILL_ILKWANG`（精神力战法）。
+pub const SKILL_ILKWANG: u16 = 4;
+/// `MagicConst.SKILL_YEDO`（攻杀剑术）。
+pub const SKILL_YEDO: u16 = 7;
+/// `MagicConst.SKILL_FIRESWORD`（烈火剑法）。
+pub const SKILL_FIRESWORD: u16 = 26;
+
+/// `PlayObject.RecalcHitSpeed`（`PlayObject.cs:3659-3713`）的输入。
+///
+/// `tick_hit` / `tick_speed` = `SystemShare.Config.BonusAbilof{Job}.Hit/Speed`（oracle 按 `Job` 选表）。
+/// `hit_point` / `speed_point` 是**初始值**：oracle 只在 Warrior/Wizard 分支写 `HitPoint`，
+/// 道士分支保持原值，故这里显式带进带出（不是「从 0 开始」的纯函数）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HitSpeedInput {
+    pub job: u8,
+    pub bonus_hit: u8,
+    pub bonus_speed: i32,
+    pub tick_hit: u8,
+    pub tick_speed: i32,
+    pub hit_point: u8,
+    pub speed_point: u8,
+    /// `MagicList` 顺序的 `(MagIdx, Level)`（顺序是契约：同一魔号出现两次会被处理两次）。
+    pub magics: Vec<(u16, u8)>,
+}
+
+/// `PlayObject.RecalcHitSpeed` 的可观测输出。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HitSpeedOutcome {
+    pub hit_point: u8,
+    pub speed_point: u8,
+    pub hit_plus: u16,
+    pub hit_double: u16,
+    pub attack_skill_count: u8,
+    pub attack_skill_point_count: u8,
+}
+
+/// `PlayObject.RecalcHitSpeed`（`PlayObject.cs:3659-3713`）逐行移植。
+///
+/// 口径提醒（照抄 oracle，含 `byte` 截断与 `byte/byte` 整除）：
+/// - `HitPoint += HUtil32.Round(...)` 是 `byte += int` ⇒ 隐式 `(byte)` 截断；
+/// - `HitPlus = (byte)(DEFHIT + Level)`、`HitDouble = (byte)(4 + Level*4)` 同样先过 `byte`；
+/// - 攻杀剑术分支**无论 Level 是否为 0 都会** `RandomByte(AttackSkillCount)`（取数不能少）。
+// oracle 里攻杀剑术那行是 `HUtil32.Round(3 / 3.0 * userMagic.Level)`（`3 / 3.0` 为常量 1.0），
+// 为保持 1:1 转写照抄字面式；clippy 的 `eq_op` 对此是误报，故显式放行。
+#[allow(clippy::eq_op)]
+pub fn recalc_hit_speed(rng: &mut impl RandomSource, input: &HitSpeedInput) -> HitSpeedOutcome {
+    const JOB_WARRIOR: u8 = 0;
+    const JOB_WIZARD: u8 = 1;
+
+    let mut hit_point = input.hit_point;
+    let mut speed_point = input.speed_point;
+    // `HitPlus = 0; HitDouble = 0;`
+    let mut hit_plus: u16 = 0;
+    let mut hit_double: u16 = 0;
+    let mut attack_skill_count: u8 = 0;
+    let mut attack_skill_point_count: u8 = 0;
+
+    match input.job {
+        JOB_WARRIOR | JOB_WIZARD => {
+            // HitPoint = (byte)(DEFHIT + BonusAbil.Hit / bonusTick.Hit)
+            hit_point =
+                (i32::from(DEFHIT) + i32::from(input.bonus_hit) / i32::from(input.tick_hit)) as u8;
+            // SpeedPoint = (byte)(DEFSPEED + BonusAbil.Speed / bonusTick.Speed)
+            speed_point = (DEFSPEED + input.bonus_speed / input.tick_speed) as u8;
+        }
+        // 道士：只算 SpeedPoint（`+ 3`），`HitPoint` 保持原值
+        2 => {
+            speed_point = (DEFSPEED + input.bonus_speed / input.tick_speed + 3) as u8;
+        }
+        // `PlayerJob` 只有 0/1/2；未知值 oracle 的 switch 落空 ⇒ 两项都不改（不是“当道士算”）。
+        _ => {}
+    }
+
+    for &(mag_idx, level) in &input.magics {
+        match mag_idx {
+            SKILL_ONESWORD => {
+                if level > 0 {
+                    // HitPoint += (byte)Round(9 / 3.0 * Level)
+                    hit_point =
+                        (i32::from(hit_point) + hutil::round(9.0 / 3.0 * f64::from(level))) as u8;
+                }
+            }
+            SKILL_ILKWANG => {
+                if level > 0 {
+                    hit_point =
+                        (i32::from(hit_point) + hutil::round(8.0 / 3.0 * f64::from(level))) as u8;
+                }
+            }
+            SKILL_YEDO => {
+                if level > 0 {
+                    hit_point =
+                        (i32::from(hit_point) + hutil::round(3.0 / 3.0 * f64::from(level))) as u8;
+                }
+                // HitPlus = (byte)(DEFHIT + Level)
+                hit_plus = u16::from((i32::from(DEFHIT) + i32::from(level)) as u8);
+                // AttackSkillCount = (byte)(7 - Level); 无论 Level 是否为 0 都取数
+                attack_skill_count = (7i32 - i32::from(level)) as u8;
+                attack_skill_point_count = rng.random_byte(attack_skill_count);
+            }
+            SKILL_FIRESWORD => {
+                // HitDouble = (byte)(4 + Level * 4)
+                hit_double = u16::from((4 + i32::from(level) * 4) as u8);
+            }
+            _ => {}
+        }
+    }
+
+    HitSpeedOutcome {
+        hit_point,
+        speed_point,
+        hit_plus,
+        hit_double,
+        attack_skill_count,
+        attack_skill_point_count,
+    }
+}
+
+/// `PlayObject.GetAttackPowerHit`（`PlayObject.Attack.cs:579-625`）用到的对象状态。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AttackHitState {
+    pub power_hit: bool,
+    pub fire_hit_skill: bool,
+    pub twin_hit_skill: bool,
+    pub hit_plus: u16,
+    pub hit_double: u16,
+}
+
+/// `nPower = (ushort)(nPower + HUtil32.Round(nPower / 100 * HitDouble * 10.0))`
+/// （`PlayObject.Attack.cs:594` / `:600`）——注意 `nPower / 100` 是**整除**，末段 `(ushort)` 截断。
+fn hit_double_power(power: i32, hit_double: u16) -> i32 {
+    let inc = hutil::round((power / 100 * i32::from(hit_double)) as f64 * 10.0);
+    i32::from((power + inc) as u16)
+}
+
+/// `PlayObject.GetAttackPowerHit`（`PlayObject.Attack.cs:579-625`）逐行移植。
+///
+/// 返回 `(nPower, canHit)`，并**原地**清 `power_hit`/`fire_hit_skill`/`twin_hit_skill`。
+/// `has_target == false` 时，mode 7/9 只清标志、不改威力、不置 `canHit`（oracle 的 null 分支）。
+pub fn get_attack_power_hit(
+    hit_mode: i16,
+    power: i32,
+    has_target: bool,
+    state: &mut AttackHitState,
+) -> (i32, bool) {
+    let mut can_hit = false;
+    let mut power = power;
+    if has_target {
+        match hit_mode {
+            3 if state.power_hit => {
+                state.power_hit = false;
+                power += i32::from(state.hit_plus);
+                can_hit = true;
+            }
+            7 if state.fire_hit_skill => {
+                state.fire_hit_skill = false;
+                power = hit_double_power(power, state.hit_double);
+                can_hit = true;
+            }
+            9 if state.twin_hit_skill => {
+                state.twin_hit_skill = false;
+                power = hit_double_power(power, state.hit_double);
+                can_hit = true;
+            }
+            _ => {}
+        }
+    } else {
+        match hit_mode {
+            3 if state.power_hit => {
+                state.power_hit = false;
+                power += i32::from(state.hit_plus);
+                can_hit = true;
+            }
+            7 if state.fire_hit_skill => {
+                state.fire_hit_skill = false;
+            }
+            9 if state.twin_hit_skill => {
+                state.twin_hit_skill = false;
+            }
+            _ => {}
+        }
+    }
+    (power, can_hit)
+}
+
 /// 攻方攻击力的建模口径（`_Attack` 的调用方：`GetBaseAttackPoewr`）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AttackPowerMode {
