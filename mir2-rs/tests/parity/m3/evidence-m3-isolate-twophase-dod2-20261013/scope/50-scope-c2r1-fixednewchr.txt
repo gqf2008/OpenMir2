@@ -1,0 +1,5 @@
+DIFF mir2_db.characters: rows A=2 B=2 仅A=2 仅B=2
+    A: <VOLATILE>	0	<RUN>0	<RUN>0	0137	17	20	255	2	2	0	0	0	0	0	289	618	0	0	0	0	0.000	0	0	0	0	0	0	0	0	0	0	0	0	0	0	NULL	NULL	NULL	0	<VOLATILE>	<VOLATILE>
+    B: <VOLATILE>	0	<RUN>0	<RUN>0	0137	17	20	255	2	1	0	0	0	0	0	289	618	0	0	0	0	0.000	0	0	0	0	0	0	0	0	0	0	0	0	0	0	NULL	NULL	NULL	0	<VOLATILE>	<VOLATILE>
+DIFF mir2_db.characters_ablity: rows A=2 B=2 仅A=2 仅B=2
+RED: 作用域内 8 行不一致
