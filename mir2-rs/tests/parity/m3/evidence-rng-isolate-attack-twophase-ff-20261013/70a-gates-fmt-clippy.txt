@@ -1,0 +1,6 @@
+cargo fmt --all -- --check
+rc=0 (no diff)
+---
+cargo clippy --workspace --all-targets --offline -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.61s
+clippy rc=0

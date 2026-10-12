@@ -1,0 +1,17 @@
+﻿{
+    "side":  "csharp",
+    "isolate_attack":  true,
+    "attack_seed":  40545,
+    "trace":  "E:/tmp/m3cs-2phase2/csharp/rng-stream.tsv",
+    "trace_isolate":  true,
+    "trace_isolate_seed":  40545,
+    "sites_dump":  "E:\\tmp\\m3cs-2phase2\\csharp\\rng-isolate-sites.txt",
+    "sites_dump_sha256":  "47061e1b24b41d192a6efb6988c24c849f48fdb08105aa40b5c852803a531d99",
+    "sites_cursor":  "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\.claude\\worktrees\\m3cs\\mir2-rs\\tests\\parity\\m3\\rng-hook\\divert-sites.txt",
+    "sites_cursor_sha256":  "47061e1b24b41d192a6efb6988c24c849f48fdb08105aa40b5c852803a531d99",
+    "attack_stream":  "E:/tmp/m3cs-2phase2/csharp/rng-attack-stream.tsv",
+    "attack_stream_sha256":  "933b3c096f8f966bc14da7571ea8d92a24134b2a91dad91442fd37456821d86d",
+    "predicates_table":  "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\.claude\\worktrees\\m3cs\\mir2-rs\\tests\\parity\\m3\\rng-isolate-attack\\attack_sites.tsv",
+    "predicates_table_sha256":  "8392f7287971b53fcdd2fb1e3e63cfa1d6a925fb5ae37a86a11be2100ce9727f",
+    "ts":  "2026-10-13T00:12:00.9411270+08:00"
+}

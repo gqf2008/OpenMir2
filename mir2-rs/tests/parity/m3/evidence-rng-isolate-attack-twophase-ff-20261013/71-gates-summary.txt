@@ -1,0 +1,7 @@
+M3②③ 活栈隔离口径两相实跑（F-F 后）——四门禁（零 .rs；CARGO_TARGET_DIR=E:/tmp/m3cs-r2-target，--offline）
+树：worktree-m3-combat-skills @ 0f4e141b（= master 0f4e141b，含 m3bag owner 23:50 夹具）
+
+1) cargo fmt --all -- --check                 rc=0
+2) cargo clippy --workspace --all-targets -D warnings   rc=0（Finished dev profile，0 warning）
+3) cargo test --workspace                     rc=0（见下汇总；0 failed）
+4) cargo run -p msgcodegen -- --check         rc=0（604 条常量与 C# 源一致）

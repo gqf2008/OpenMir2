@@ -1,0 +1,7 @@
+cargo test --workspace --offline
+SUMMARY suites=84 passed=682 failed=0 ignored=16
+rc=0
+---
+cargo run -p msgcodegen -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+rc=0

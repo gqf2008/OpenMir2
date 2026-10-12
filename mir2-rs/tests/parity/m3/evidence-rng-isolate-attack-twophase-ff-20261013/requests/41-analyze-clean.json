@@ -1,0 +1,45 @@
+{
+ "seed": 42,
+ "csharp": "E:\\tmp\\m3cs-2phase2\\csharp3\\rng-attack-stream.tsv",
+ "rust": "E:\\tmp\\m3cs-2phase2\\rust3\\rng-stream.tsv",
+ "counts": {
+  "csharp": {
+   "draws": 676,
+   "site_counts": {
+    "atk_power_base": 11,
+    "hit_gate": 131,
+    "hit_struck_damage": 66,
+    "atk_power_a": 120,
+    "atk_power_b": 120,
+    "struck_durability": 55,
+    "attack_success": 120,
+    "hit_struck_damage2": 53
+   },
+   "player_units": 120,
+   "base_units": 11
+  },
+  "rust": {
+   "draws": 651,
+   "site_counts": {
+    "atk_power_a": 120,
+    "atk_power_b": 120,
+    "hit_gate": 120,
+    "hit_struck_damage": 57,
+    "hit_struck_damage2": 57,
+    "struck_durability": 57,
+    "attack_success": 120
+   },
+   "player_units": 120,
+   "base_units": 0
+  }
+ },
+ "first_divergence": {
+  "index_0based": 0,
+  "csharp": "atk_power_base(1)->0",
+  "rust": "atk_power_a(2)->0",
+  "class": "base_unit"
+ },
+ "template_violations": [],
+ "verdict": "GREEN",
+ "problems": []
+}

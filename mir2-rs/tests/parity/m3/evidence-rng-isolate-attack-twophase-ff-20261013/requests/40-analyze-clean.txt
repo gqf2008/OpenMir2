@@ -1,0 +1,13 @@
+=== M3②③ 两侧每击取数请求序列 ===
+--- csharp: 攻击取数 676（player unit=120, base unit=11）
+    站点计数: {"atk_power_a": 120, "atk_power_b": 120, "atk_power_base": 11, "attack_success": 120, "hit_gate": 131, "hit_struck_damage": 66, "hit_struck_damage2": 53, "struck_durability": 55}
+--- rust: 攻击取数 651（player unit=120, base unit=0）
+    站点计数: {"atk_power_a": 120, "atk_power_b": 120, "attack_success": 120, "hit_gate": 120, "hit_struck_damage": 57, "hit_struck_damage2": 57, "struck_durability": 57}
+--- 第一处请求分歧（原始专用流逐次）
+    index(0based) = 0  class = base_unit
+    csharp: atk_power_base(1)->0
+    rust  : atk_power_a(2)->0
+--- 模板校验（每侧自证）: violations=0
+--- 判读: GREEN  no problem
+
+[json] E:/tmp/m3cs-2phase2/window/52-analyze-clean.json
