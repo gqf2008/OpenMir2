@@ -1,0 +1,4 @@
+command: cmp /e/tmp/m3cs12/residual_case.json mir2-rs/tests/parity/m3/residual-case-probe/vectors/residual_case.json
+exit: 0 (json byte-identical)
+command: cmp /e/tmp/m3cs12/residual_case.tsv mir2-rs/tests/parity/m3/residual-case-probe/vectors/residual_case.tsv
+exit: 0 (tsv byte-identical)

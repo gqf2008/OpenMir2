@@ -153,6 +153,12 @@ if ($AttackPinPair -and -not $PinStartPose) {
 if ($AttackSequence -and $Bots -lt 2) {
   Write-Output ('WARN: -AttackSequence 建议 -Bots 2（attacker+victim）；当前 Bots={0} ⇒ 无目标，struck 恒 0，判据必 RED' -f $Bots)
 }
+# M-1（reviewer-5 76e433f0，清登记 Minor）：本 WARN 原写在 `if ($EmitOpsArgs)` 块内**且**带
+# `-not $EmitOpsArgs` ⇒ 条件恒 false（死代码，任何路径都不触发）。移出该块并去掉自否条件，
+# 使「-AttackSequence 未配 -AttackPinPair」在**真实跑与自检**两条路径都可见。
+if ($AttackSequence -and -not $AttackPinPair) {
+  Write-Output 'WARN: -AttackSequence 未配 -AttackPinPair ⇒ attacker/victim 可能重叠/无目标（真机请配 -PinStartPose -AttackPinPair）'
+}
 
 # -EmitOpsArgs：只把 run_bots 的命令组成打印成 JSON 供无栈自检核（-DisableAutoPlay 是否随
 # -BagEquipSequence 一并传下去；固定起点变体的预热/计分两相），**不建会话目录/不预检/不取快照**。
@@ -165,9 +171,6 @@ if ($EmitOpsArgs) {
     attack_sequence   = Format-M3AttackScope -AttackSequence ([bool]$AttackSequence) -AttackCount $AttackCount -AttackStepMs $AttackStepMs -AttackStartDelayMs $AttackStartDelayMs -DisableAutoPlay ([bool]$AttackSequence)
     start_pose        = (Get-M3StartPoseLabel)
     attack_pose       = (Get-M3AttackPoseLabel)
-  }
-  if ($AttackSequence -and -not $AttackPinPair -and -not $EmitOpsArgs) {
-    Write-Output 'WARN: -AttackSequence 未配 -AttackPinPair ⇒ attacker/victim 可能重叠/无目标（真机请配 -PinStartPose -AttackPinPair）'
   }
   if ($PinStartPose) {
     $pre = Get-M3BotOpPlan -ForPrewarm

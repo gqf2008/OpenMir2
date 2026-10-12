@@ -1,0 +1,9 @@
+ATTACKROLE PASS login='winplay0' attacker='winplay0' got=True want=True
+ATTACKROLE PASS login='winplay1' attacker='winplay1' got=True want=True
+ATTACKROLE PASS login='winplay10' attacker='winplay0' got=False want=False
+ATTACKROLE PASS login='winplay20' attacker='winplay0' got=False want=False
+ATTACKROLE PASS login='winplay1' attacker='winplay10' got=False want=False
+ATTACKROLE PASS login='winplay10' attacker='winplay10' got=True want=True
+ATTACKROLE PASS login='winplay0' attacker='' got=False want=False
+ATTACKROLE PASS login='' attacker='winplay0' got=False want=False
+ATTACKROLE SELFTEST GREEN

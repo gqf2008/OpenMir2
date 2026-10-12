@@ -1,0 +1,4 @@
+command: cmp /e/tmp/m3cs12/dispatch_audit.json mir2-rs/tests/parity/m3/dispatch-audit-probe/vectors/dispatch_audit.json
+exit: 0 (json byte-identical)
+command: cmp /e/tmp/m3cs12/dispatch_audit.tsv mir2-rs/tests/parity/m3/dispatch-audit-probe/vectors/dispatch_audit.tsv
+exit: 0 (tsv byte-identical)

@@ -1,0 +1,2 @@
+$ CARGO_TARGET_DIR=E:/tmp/m3bag-minors-target cargo fmt --all -- --check
+rc=0（无输出 = 无格式差异）

@@ -40,6 +40,21 @@ namespace BotSrv
         public static int g_nAttackDir = 2;
         public static int g_nAttackRole = 0;
         /// <summary>
+        /// M3②③ 夹具：attacker 的**精确** LoginId（= `LoginAccount + AttackRole`；空 = 未配置）。
+        /// reviewer-5 `76e433f0` Minor 2：旧实现用 `LoginId.EndsWith(AttackRole)` 选 attacker，
+        /// `-Bots&gt;10` 时序号 10/20… 也以 attacker 序号结尾 ⇒ 会被误武装成多个 attacker，
+        /// 污染「第 k 次」对齐。改为与 LoginId 精确相等（见 IsAttackAttacker）。
+        /// </summary>
+        public static string g_sAttackRoleLoginId = string.Empty;
+
+        /// <summary>M3②③ 夹具：LoginId 是否就是唯一 attacker。精确相等（非 EndsWith），
+        /// 空配置/空入参一律 false。纯函数，供 `--selftest-attackrole` 与 ArmAttackSequence 共用。</summary>
+        public static bool IsAttackAttacker(string loginId, string attackerLoginId)
+        {
+            return !string.IsNullOrEmpty(attackerLoginId)
+                && string.Equals(loginId, attackerLoginId, StringComparison.Ordinal);
+        }
+        /// <summary>
         /// M1③ 退出路径夹具（卡 openmir2-m1-dbsrv-6000-face；白名单 M1-EXIT）：
         /// 收到本假人 SM_LOGON 后等这么久，按客户端 AppLogout 的线上形状发一条
         /// CM_SOFTCLOSE(1009)（= “小退”）。默认 0 = 关（不新增任何发送）。

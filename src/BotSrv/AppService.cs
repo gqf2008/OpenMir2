@@ -45,6 +45,9 @@ namespace BotSrv
             MShare.g_nAttackStartDelayMs = _options.AttackStartDelayMs;
             MShare.g_nAttackDir = _options.AttackDir;
             MShare.g_nAttackRole = _options.AttackRole;
+            // M-2（reviewer-5 76e433f0）：attacker 判定改为与 LoginId 精确相等。
+            // LoginId = LoginAccount + 序号（AppService.Run），故 attacker 的精确 LoginId = LoginAccount + AttackRole。
+            MShare.g_sAttackRoleLoginId = string.Concat(_options.LoginAccount ?? string.Empty, _options.AttackRole);
             // M1③ 退出路径夹具（白名单 M1-EXIT）：进世界后发 CM_SOFTCLOSE；默认 0 = 原行为
             MShare.g_nSoftCloseAfterWorldMs = _options.SoftCloseAfterWorldMs;
             MShare.g_boDisableAutoPlay = _options.DisableAutoPlay;

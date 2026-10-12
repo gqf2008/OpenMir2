@@ -155,8 +155,16 @@ internal static class Program
     }
 
     // ---- 锚点自检（防 F-1 同族的行号漂移）------------------------------------------------------
+    //
+    // 条数断言（第十二片）：`VerifyAnchors` 跑完必须恰为 `ExpectedAnchorCount` 条。
+    // 防的是「探针增删锚点、报告/清单的条数没跟着改」这类证据计数漂移——本片即因此把
+    // 报告的「26 个锚点」订正为 **28**（reviewer-5 `0b222072` 的 Minor）。改锚点行数必须同步改这里。
+    private const int ExpectedAnchorCount = 28;
+    private static int s_anchorCount;
+
     private static void VerifyAnchors(string repoRoot)
     {
+        s_anchorCount = 0;
         const string mm = "src/M2Server/Magic/MagicManager.cs";
         CheckLine(repoRoot, mm, 82, "public static bool IsWarrSkill(int wMagIdx)");
         CheckLine(repoRoot, mm, 145, "public static bool DoSpell(PlayObject playObject, UserMagic userMagic, short nTargetX, short nTargetY, IActor targetObject)");
@@ -191,6 +199,12 @@ internal static class Program
         CheckLine(repoRoot, pb, 1512, "ushort nSpellPoint = GetSpellPoint(userMagic);");
         CheckLine(repoRoot, pb, 1522, "result = MagicManager.DoSpell(this, userMagic, targetX, targetY, targetObject);");
         CheckLine(repoRoot, pb, 1369, "protected static ushort GetSpellPoint(UserMagic userMagic)");
+
+        if (s_anchorCount != ExpectedAnchorCount)
+        {
+            throw new InvalidOperationException(
+                $"锚点自检条数漂移：实跑 {s_anchorCount} != 期望 {ExpectedAnchorCount}（改锚点行数必须同步 ExpectedAnchorCount）");
+        }
     }
 
     private static void CheckLine(string repoRoot, string rel, int line, string needle)
@@ -204,6 +218,7 @@ internal static class Program
         {
             throw new InvalidOperationException($"{rel}:{line} 锚点不符:\n  needle: {needle}\n  got   : {lines[line - 1].Trim()}");
         }
+        s_anchorCount++;
     }
 
     private static string[] ReadOracle(string repoRoot, string rel)

@@ -629,7 +629,8 @@ namespace BotSrv.Player
             {
                 return;
             }
-            if (!LoginId.EndsWith(MShare.g_nAttackRole.ToString(), StringComparison.Ordinal))
+            // M-2（reviewer-5 76e433f0）：精确比较，不用 EndsWith（`-Bots>10` 时 10/20… 会误武装）。
+            if (!MShare.IsAttackAttacker(LoginId, MShare.g_sAttackRoleLoginId))
             {
                 return;
             }
