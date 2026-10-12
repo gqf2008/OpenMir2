@@ -1,0 +1,15 @@
+# F-H 最小复现（离线、不连网、不占端口）
+# 命令: powershell -ExecutionPolicy Bypass -File E:/tmp/m3cs25/fh-repro.ps1
+# 被测代码（仓库字节）: tools/botload/run_bots.ps1:236 (break) / :279 (attackDone 采样) / :292 (RED)
+# 事实源: src/BotSrv/Player/RobotPlayer.cs:633 IsAttackAttacker；AppService.cs:68 attacker序号=0
+
+=== A) 生产判据（run_bots.ps1:236 break 条件 / :292 RED 判据）===
+success=2 attackDone=1 Count=2 => break=False
+RED(@:292 attackDone -lt Count) = True
+=> 永不 break（每轮白等满 TimeoutSec）且恒 RED
+
+=== B) 正确阈值 = 被武装的 attacker 数（-AttackPinPair 下 armed=1）===
+success=2 attackDone=1 armed=1 => break=True
+=> 收工且不 RED
+
+# 进程退出码 = 0

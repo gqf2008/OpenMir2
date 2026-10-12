@@ -1,0 +1,32 @@
+# F-J 代码锚点（仓库字节；行号以本 head 为准）
+# 文件: mir2-rs/tests/parity/m3/run_attack_pair.ps1
+# 问题: Invoke-AttackAlign 把 python stdout 混进返回值 => Object[]；调用点 -ne 0 恒真
+
+## :148-155 生产函数（stdout 未收走）
+   148	function Invoke-AttackAlign([string]$Dir) {
+   149	  $raw = Join-Path $Dir 'attack_raw.jsonl'
+   150	  if (-not (Test-Path $raw)) { Write-Output ("PREREQ_MISSING: 会话缺 attack_raw.jsonl -> {0}" -f $raw); return 2 }
+   151	  $seq = Join-Path $Dir 'attack_seq.jsonl'
+   152	  & python $AttackDiff align $raw --out $seq
+   153	  return $LASTEXITCODE
+   154	}
+   155	
+
+## :182-183 跨侧 align 调用（PREREQ_MISSING 恒触发）
+   182	    $rc = Invoke-AttackAlign $d
+   183	    if ($rc -ne 0) { Write-Output ("PREREQ_MISSING: align 失败（rc={0}）: {1}" -f $rc, $d); return }
+
+## :645-649 本侧 align 调用（C# 侧恒 RED）
+   645	$alignRc = Invoke-AttackAlign $mine.FullName
+   646	if ($alignRc -ne 0) {
+   647	  Write-Output ("RED: attack_diff align 失败（rc={0}）" -f $alignRc)
+   648	  exit 1
+   649	}
+
+## :377-379 无栈自检 ⑧ 用 | Out-Null，绕过了生产函数 => 该 bug 隐身在自检里
+   375	  $seqB = Join-Path $tmpRoot 'b.seq.jsonl'
+   376	  & python $AttackDiff align $rawA --out $seqA | Out-Null
+   377	  $alignRc = $LASTEXITCODE
+   378	  & python $AttackDiff align $rawB --out $seqB | Out-Null
+   379	  if ($alignRc -ne 0) { $failures += ('align_synthetic_rc=' + $alignRc) }
+   380	  $prevEap = $ErrorActionPreference

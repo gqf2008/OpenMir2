@@ -1,0 +1,24 @@
+# F-I 命中/躲闪跨运行不可复现（离线分析；不占端口）
+# 口径: 同一配置（-Side csharp -Bots 2 -AttackPinPair -AttackCount 20，seed=42，
+#       attacker=(289,618) dir=2、victim=(290,618)）+ 同一 master 0889ccf7。
+# 数据源:
+#   (a) m3cs tick24 会话: <repo>/mir2-rs/tests/parity/m3/sessions/csharp-20261012-132228/attack_raw.jsonl
+#   (b) m3bag 会话 A:      .claude/worktrees/m3bag/mir2-rs/tests/parity/m3/sessions/csharp-20261012-130755/attack_raw.jsonl
+#   (c) m3bag 会话 B:      .claude/worktrees/m3bag/mir2-rs/tests/parity/m3/sessions/csharp-20261012-133630/attack_raw.jsonl
+# 分析命令: python mir2-rs/tests/parity/m3/attack_diff.py align <attack_raw.jsonl> --out <seq.jsonl>；并统计 role/src。
+#
+# run                        arm attack struck done | strike_by_src                  | align(summary)
+# csharp-20261012-132228(m3cs)  1    20      0    1 | {}                              | attacked=20 hits=0  dodges=20 sum=0   death_k=null min_hp=0
+# csharp-20261012-130755(m3bag) 1    20     29    1 | {820185470:2, 1330629693:27}    | attacked=20 hits=2  dodges=18 sum=44  death_k=20   min_hp=0
+# csharp-20261012-133630(m3bag) 1    20      8    1 | {550648224:7, 500250934:1}      | attacked=20 hits=7  dodges=13 sum=9   death_k=null min_hp=17
+#
+# 结论:
+# 1) 同种子同配置下 attacker 命中的 struck 条数 0 / 2 / 7 三档不同 ⇒ DoD②「命中/躲闪统计两侧一致」在
+#    当前夹具上无仲裁力：同一栈实例内先自证可复现都做不到。
+# 2) align 的 summary hits/dodges 不是「attacker 打中几次」：attack 事件没有 my 字段（F-G，
+#    RobotPlayer.cs:667 只落 id），attack_diff.py:104/109 的 `my` 取值与 `src==my` 过滤恒被跳过 ⇒ 受击格里
+#    第三方（怪物）对 victim 的 SM_STRUCK 也会被计入当前 k（本例 src 1330629693 / 500250934 即非 attacker）。
+# 3) 钉点 (289,618) 位于怪物活动区：m3bag 会话 A 的 29 条 struck 里 27 条来自非 attacker src，
+#    死等 600s 期间 attacker/victim 持续被怪打（m3bag bot.log 13:11+ 有 hp 18→0 记录）⇒ 世界态随时间漂移。
+# 4) 与 owner 的 rng_note 一致：同种子只保证「同抽数账本」下可比；怪物 AI/生成等系统也在同一
+#    RandomNumber 上抽数，抽数账本不一致 ⇒ 伤害/命中序列不可复现（F-I 的根因）。
