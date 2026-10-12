@@ -1,0 +1,13 @@
+# 红检还原后复跑（green-after-red）：两条改坏均已 git checkout 还原，种子片全部用例复绿
+# 命令：CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test -p game-svr --offline --test seed_inject
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
+     Running tests\seed_inject.rs (E:/tmp/openmir2-m2svr-target\debug\deps\seed_inject-18e212843fab4fdb.exe)
+
+running 3 tests
+test invalid_seed_env_exits_nonzero ... ok
+test seed_env_injection_logs_csharp_probe ... ok
+test unset_seed_env_is_inert ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
+

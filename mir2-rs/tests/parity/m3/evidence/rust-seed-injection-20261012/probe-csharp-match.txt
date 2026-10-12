@@ -1,0 +1,14 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s
+     Running unittests src\main.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-eb39968088e3f1ec.exe)
+
+running 7 tests
+test seed::tests::parse_seed_accepts_decimal_with_sign_and_whitespace ... ok
+test seed::tests::parse_seed_rejects_non_integer ... ok
+test seed::tests::probe_matches_csharp_seed42 ... ok
+test seed::tests::probe_is_deterministic_and_seed_sensitive ... ok
+test seed::tests::parse_seed_unset_or_empty_is_disabled ... ok
+test seed::tests::unset_seed_keeps_existing_world_rng ... ok
+test seed::tests::injected_world_rng_matches_csharp_probe ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 139 filtered out; finished in 0.00s
+
