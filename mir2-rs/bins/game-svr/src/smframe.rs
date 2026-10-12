@@ -503,6 +503,58 @@ pub fn sm_horserun(actor_id: i32, x: u16, y: u16, dir: u8, light: u8, char_desc:
     sm_move(messages::SM_HORSERUN, actor_id, x, y, dir, light, char_desc)
 }
 
+/// **`openmir2-m3-attack-magic-wiring`（攻击回帧）**：`RM_HIT` 族（`PlayObject.Message.cs:1433-1521`）
+/// 的动作帧编码。
+///
+/// `SM_HIT`(14)/`SM_HEAVYHIT`(15)/`SM_BIGHIT`(16)/`SM_POWERHIT`(18)/`SM_LONGHIT`(19)/
+/// `SM_WIDEHIT`(24)/`SM_CRSHIT`(25)/`SM_TWINHIT`(26)/`SM_FIREHIT`(8) 共用一条形状：
+/// `MakeMessage(SM_*, processMsg.ActorId, nParam1 /*= 攻方 CurrX */, nParam2 /*= 攻方 CurrY */, wParam /*= Dir */)`，
+/// **无尾**（`SendSocket(ClientMsg)`；`SM_HEAVYHIT` 的尾 = `processMsg.Msg`，而攻击路径的
+/// `SendRefMsg(..., "")` 恒空 ⇒ 本函数不产尾）。
+#[must_use]
+pub fn sm_action_hit(ident: u16, actor_id: i32, x: u16, y: u16, dir: u8) -> Vec<u8> {
+    let header = command_header(actor_id, ident, x, y, u16::from(dir));
+    gm_data_body(header, &[])
+}
+
+/// `SM_STRUCK`(31)/`SM_STRUCK_MAG`：受击者**自己**收到的受击帧
+/// （`PlayObject.Message.cs:1562-1628` 的 `RM_STRUCK` 支）。
+///
+/// 头 = `MakeMessage(SM_STRUCK, ActorId /*= 受击者*/, WAbil.HP, WAbil.MaxHP, wParam /*= 本次伤害*/)`；
+/// 尾 = `EDCode.EncodePacket(MessageBodyWL{ Param1=GetFeature(), Param2=CharStatus, Tag1=nParam3 /*= 命中者*/, Tag2=(RM_STRUCK_MAG?1:0) })`。
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+pub fn sm_struck(
+    actor_id: i32,
+    hp: u16,
+    max_hp: u16,
+    damage: u16,
+    feature: i32,
+    status: i32,
+    hitter_id: i32,
+    mag: bool,
+) -> Vec<u8> {
+    let header = command_header(actor_id, messages::SM_STRUCK, hp, max_hp, damage);
+    let mut wl = [0u8; 16];
+    wl[0..4].copy_from_slice(&feature.to_le_bytes());
+    wl[4..8].copy_from_slice(&status.to_le_bytes());
+    wl[8..12].copy_from_slice(&hitter_id.to_le_bytes());
+    wl[12..16].copy_from_slice(&i32::from(mag).to_le_bytes());
+    gm_data_body(header, &edcode::encode(&wl))
+}
+
+/// `SM_NOWDEATH`(34)/`SM_DEATH`(32)：死亡广播
+/// （`BaseObject.Base.cs:351` 的 `SendRefMsg(RM_DEATH, Dir, CurrX, CurrY, 1, "")` ⇒ 观察者 34；
+/// `PlayObject.cs:3235` 的 `SendMsg(..., RM_DEATH, Dir, CurrX, CurrY, 0)` ⇒ 观察者 32）。
+///
+/// 头 = `MakeMessage(SM_*DEATH, ActorId /*= 死者*/, nParam1 /*= CurrX */, nParam2 /*= CurrY */, wParam /*= Dir */)`；
+/// 尾 = `EDCode.EncodePacket(CharDesc)`（`Feature + Status`，8B）。
+#[must_use]
+pub fn sm_death(ident: u16, actor_id: i32, x: u16, y: u16, dir: u8, char_desc: &[u8]) -> Vec<u8> {
+    let header = command_header(actor_id, ident, x, y, u16::from(dir));
+    gm_data_body(header, &edcode::encode(char_desc))
+}
+
 /// `SM_ADJUST_BONUS`(811) 的三段能力模板 `(BonusPoint, A, B, C)`（各自 `EncodeMessage` 后用 `/` 拼）。
 pub type AdjustBonusParts = (i32, Vec<u8>, Vec<u8>, Vec<u8>);
 

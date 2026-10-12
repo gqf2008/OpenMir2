@@ -10,6 +10,7 @@
 #![allow(clippy::doc_markdown)]
 
 pub mod ability;
+pub mod attackwire;
 pub mod bag;
 pub mod chat;
 pub mod downlink;
