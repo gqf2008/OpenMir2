@@ -1,0 +1,25 @@
+== 复算时钉住的版本/源码 ==
+branch              : worktree-m3-combat-skills
+head                : de0ea5927a263fd052140216d2621c6f1bf65fd1
+master              : de0ea5927a263fd052140216d2621c6f1bf65fd1
+origin/master       : de0ea5927a263fd052140216d2621c6f1bf65fd1
+walgit/master       : de0ea5927a263fd052140216d2621c6f1bf65fd1
+
+== WorldGolden 桩与场景（git blob 仓库字节口径） ==
+9069bd6b42c01594c10ba70b7ec25e555717b643 mir2-rs/tests/parity/csharp/WorldGolden/Program.cs
+1fd6072bb1d4511526f4a198023cee6a0ea540c1 mir2-rs/tests/parity/csharp/WorldGolden/Stubs.cs
+49d745dd18220aaf1ebf43b6ea3888d457bf30af mir2-rs/tests/parity/csharp/WorldGolden/StubsCombat.cs
+b8075f8e209dab19c7502c09ef6a1f608c7feb40 mir2-rs/tests/parity/world/scenarios/basic.json
+e519caa533b57865edc94586de5ec9aac2969484 mir2-rs/tests/parity/world/scenarios/session.json
+4fd0be091a3fe2b9cd5b3fb9df67eddc4f440ec4 mir2-rs/tests/parity/world/scenarios/combat.json
+5129e1080f0eec5abd4e534ae90b416368d78dae mir2-rs/tests/parity/world/scenarios/combat_exp_nofix.json
+1fe0076e9b18a10b6034abe9110b7d67a31a8c2d mir2-rs/tests/parity/world/scenarios/combat_exp_hitter_ghost.json
+65136780a925abb575222a7a9fe2ccee93b06f67 mir2-rs/tests/parity/csharp/ParityGolden/Stubs.cs
+282556b85679977a9aa8bf7ce1dc90006fa900a0 mir2-rs/tests/parity/csharp/ParityGolden/VerbatimCopies.cs
+
+== .gitattributes text 属性（决定 SHA256SUMS 口径） ==
+mir2-rs/tests/parity/world/golden/combat.txt: text: set
+mir2-rs/tests/parity/world/golden/basic.txt: text: set
+
+== 复算前 git status（应干净） ==
+?? mir2-rs/tests/parity/m3/evidence-worldgolden-regen-20261012/

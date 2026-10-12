@@ -1,0 +1,13 @@
+# 改坏必红：把重产的 combat.txt 改一个字节 ⇒ 与仓库内 golden 必 DIFFER（证明比对非平凡）
+$ cp $OUT/combat.txt $OUT/combat.tampered.txt
+$ sed -i '1s/^/X/' $OUT/combat.tampered.txt
+$ cmp -s $OUT/combat.tampered.txt mir2-rs/tests/parity/world/golden/combat.txt ...
+combat.tampered -> DIFFER (红检成立)
+
+# 还原（删临时件，不动仓库 golden）
+$ ls $OUT
+basic.txt
+combat.txt
+combat_exp_hitter_ghost.txt
+combat_exp_nofix.txt
+session.txt

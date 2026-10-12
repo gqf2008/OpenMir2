@@ -1,0 +1,10 @@
+== dotnet build (fresh, --no-incremental) ==
+  正在确定要还原的项目…
+  所有项目均是最新的，无法还原。
+  WorldGolden -> E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\tests\parity\csharp\WorldGolden\bin\Release\net8.0\WorldGolden.dll
+
+已成功生成。
+    0 个警告
+    0 个错误
+
+已用时间 00:00:00.86

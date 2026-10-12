@@ -1,0 +1,14 @@
+== sha256 / bytes：重产文件 vs 仓库内 golden（盘上原始字节） ==
+scenario                       regen_B  regen_sha256                                                     | committed_B committed_sha256                                                
+basic                          5953     b6c22bf858680ff6abea64adc5dfe19f3903b8b7f929c2027dc0cfcda51565f8 | 5953     b6c22bf858680ff6abea64adc5dfe19f3903b8b7f929c2027dc0cfcda51565f8
+session                        861      048eb5312e16daa83c445ec6432c1eb13020a9db69a9cc8c92db8486996437ca | 861      048eb5312e16daa83c445ec6432c1eb13020a9db69a9cc8c92db8486996437ca
+combat                         6056     dd5bc8b33c975f8634f6b05d1916dfe2298e72031b9ac260969a22c18502cc5e | 6056     dd5bc8b33c975f8634f6b05d1916dfe2298e72031b9ac260969a22c18502cc5e
+combat_exp_nofix               303      5317bd54e7b1ed2323ba94dbe568cb38c9571c2eac9fb6e57de0ad90e412f092 | 303      5317bd54e7b1ed2323ba94dbe568cb38c9571c2eac9fb6e57de0ad90e412f092
+combat_exp_hitter_ghost        521      669aa341caffc0034030add441b18b93222e783a876bf21912050216edb3b221 | 521      669aa341caffc0034030add441b18b93222e783a876bf21912050216edb3b221
+
+== 仓库内 golden 的 git blob（仓库字节口径）sha256 ==
+basic git_blob=64807b2cd4ba2547921a1333de58e0b32694656b
+session git_blob=ac8e2cfae4af9fc8b0c6343164f89d3b4fbe8882
+combat git_blob=31886cb6fbe38eda9d6df0c11ff87a7ef3385a6c
+combat_exp_nofix git_blob=cdec1cf76e7d9009c86162425fe37803d1ef3acf
+combat_exp_hitter_ghost git_blob=f8d5f0cbb71e249b6483765754389f77718bfaad

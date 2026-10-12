@@ -1,0 +1,51 @@
+# 复算命令（WorldGolden 生成器重跑 / 收口卡片登记的「生成器未重跑」未核项）
+# worktree : .claude/worktrees/m3cs   branch: worktree-m3-combat-skills
+# head     : de0ea5927a263fd052140216d2621c6f1bf65fd1 (== master / origin/master / walgit/master)
+
+# 0) 前置：确认审计树干净、版本钉住（见 05-git-and-source-pins.txt）
+git rev-parse HEAD
+git status --short
+
+# 1) fresh build（--no-incremental，排除陈旧 bin/obj 影响）
+dotnet build mir2-rs/tests/parity/csharp/WorldGolden/WorldGolden.csproj -c Release --no-incremental
+#   -> 输出: 01-dotnet-build-fresh.txt
+
+# 2) 用当前桩重产全部 5 份 golden 到仓外临时目录，与仓库内 golden 逐字节 cmp
+for s in basic session combat combat_exp_nofix combat_exp_hitter_ghost; do
+  dotnet mir2-rs/tests/parity/csharp/WorldGolden/bin/Release/net8.0/WorldGolden.dll \
+    "$s" "E:/tmp/m3cs-wg-regen-evidence/$s.txt"
+done
+for s in basic session combat combat_exp_nofix combat_exp_hitter_ghost; do
+  cmp -s "E:/tmp/m3cs-wg-regen-evidence/$s.txt" "mir2-rs/tests/parity/world/golden/$s.txt" \
+    && echo "$s IDENTICAL" || echo "$s DIFFER"
+done
+#   -> 输出: 02-regen-and-cmp.txt   （5/5 IDENTICAL）
+#   -> 红检: 02a-redcheck-tamper.txt（改一个字节 ⇒ DIFFER，比对非平凡）
+
+# 3) sha256 / bytes / git blob（仓库字节口径）
+sha256sum E:/tmp/m3cs-wg-regen-evidence/*.txt
+sha256sum mir2-rs/tests/parity/world/golden/*.txt
+git hash-object mir2-rs/tests/parity/world/golden/*.txt
+#   -> 输出: 03-sha256-regen-vs-committed.txt
+
+# 4) 判据：Rust 世界模拟 vs 仓库内 golden（= 上一步重产的同字节件）
+cd mir2-rs
+CARGO_TARGET_DIR=E:/tmp/m3cs-golden-verify-target cargo test -p mir2-parity-tests \
+  --test world_combat_parity --offline
+#   -> 输出: 04-cargo-combat-parity.txt   （7 passed; 0 failed）
+
+# 5) 四门禁（隔离 CARGO_TARGET_DIR + --offline）
+cd mir2-rs
+export CARGO_TARGET_DIR=E:/tmp/m3cs-golden-verify-target
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --offline -- -D warnings
+cargo test --workspace --offline
+cargo run --offline -p msgcodegen -- --check
+#   -> 输出: 06-gates-fmt.txt / 07-gates-clippy.txt / 08-gates-test.txt / 09-gates-msgcodegen.txt
+#      fmt rc=0 / clippy rc=0 / test 83 suites 674 passed 0 failed 16 ignored / msgcodegen 604+rc=0
+
+# 6) 证据清单（仓库字节口径）写盘 + 复核
+python -I tools/evidence-hash/verify_sha256sums.py write \
+  mir2-rs/tests/parity/m3/evidence-worldgolden-regen-20261012
+python -I tools/evidence-hash/verify_sha256sums.py \
+  mir2-rs/tests/parity/m3/evidence-worldgolden-regen-20261012 --check-extra

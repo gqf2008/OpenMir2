@@ -1,0 +1,16 @@
+# 判据：Rust 世界模拟 vs 仓库内 golden（= 上一步重产的同字节件）
+$ CARGO_TARGET_DIR=E:/tmp/m3cs-golden-verify-target cargo test -p mir2-parity-tests --test world_combat_parity --offline
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.27s
+     Running tests\world_combat_parity.rs (E:/tmp/m3cs-golden-verify-target\debug\deps\world_combat_parity-2475c8e47e95985c.exe)
+
+running 7 tests
+test exp_goes_to_first_hitter_not_last ... ok
+test golden_covers_dodge_and_no_hit_roll_branch ... ok
+test kill_exp_does_not_decay_even_when_fix_off ... ok
+test ghosted_hitter_loses_exp_credit_in_same_tick ... ok
+test combat_attacks_and_exp_match_csharp ... ok
+test redcheck_hit_point_zero_branch_consumes_no_rng ... ok
+test redcheck_speed_point_change_must_alter_attacks ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

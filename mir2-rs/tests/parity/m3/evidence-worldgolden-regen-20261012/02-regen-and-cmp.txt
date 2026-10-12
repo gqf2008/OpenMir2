@@ -1,0 +1,16 @@
+# 复算：用当前 WorldGolden 桩（fresh build）重产出全部 5 份 golden，与仓库内 golden 逐字节比对
+# 产物目录（仓外临时）: E:/tmp/m3cs-wg-regen-evidence
+
+$ for s in basic session combat combat_exp_nofix combat_exp_hitter_ghost; do dotnet mir2-rs/tests/parity/csharp/WorldGolden/bin/Release/net8.0/WorldGolden.dll "$s" "E:/tmp/m3cs-wg-regen-evidence/$s.txt"; done
+world golden: 13 实体 × 10 tick -> E:/tmp/m3cs-wg-regen-evidence/basic.txt
+world golden: 2 实体 × 10 tick -> E:/tmp/m3cs-wg-regen-evidence/session.txt
+world golden: 6 实体 × 26 tick -> E:/tmp/m3cs-wg-regen-evidence/combat.txt
+world golden: 2 实体 × 4 tick -> E:/tmp/m3cs-wg-regen-evidence/combat_exp_nofix.txt
+world golden: 3 实体 × 5 tick -> E:/tmp/m3cs-wg-regen-evidence/combat_exp_hitter_ghost.txt
+
+$ for s in ...; do cmp -s "E:/tmp/m3cs-wg-regen-evidence/$s.txt" mir2-rs/tests/parity/world/golden/$s.txt && echo "$s IDENTICAL" || echo "$s DIFFER"; done
+basic IDENTICAL
+session IDENTICAL
+combat IDENTICAL
+combat_exp_nofix IDENTICAL
+combat_exp_hitter_ghost IDENTICAL
