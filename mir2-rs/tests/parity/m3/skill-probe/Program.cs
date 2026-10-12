@@ -319,12 +319,16 @@ internal static class Program
     }
 
     /// <summary>每个分派类别的承接说明（DoD③「未实装逐条登记并给承接」）。</summary>
-    private static string DospellClassReason(string dospellClass) => dospellClass switch
+    /// <para>`no_switch_case` 的 56 `SKILL_REDBANWOL` 有**第二分派器**（攻击路径开关
+    /// `PlayObject.Attack.cs:1152`，见 `dispatch-audit-probe`）⇒ 单行特判，不把例外混进通用描述。</para>
+    private static string DospellClassReason(ushort magId, string dospellClass) => dospellClass switch
     {
         "warr_reject" => "DoSpell 前置：IsWarrSkill(MagIdx) ⇒ return false（MagicManager.cs:82-100,151）；承接 = 战士技能走 ClientHit/Attack 路径（M3 攻击接线）",
-        "magicid_reject" => "DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）",
+        "magicid_reject" => "DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 已审计无第二分派器（dispatch-audit-probe：M2Server `case` 集合 ∩ {>80} = ∅）；效果 = MP 扣减 + RM_SPELL 广播后 false",
         "no_effect_case" => "DoSpell case 体无副作用（43 `break`；49/51/52/53/54 只置 boTrain）；承接 = 无行为可对拍",
-        "no_switch_case" => "DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器",
+        "no_switch_case" => magId == 56
+            ? "DoSpell switch 无此魔号 case（MagicManager.cs:172-640 无分支）；但第二分派器**存在**：PlayObject.Attack.cs:1152 `case SKILL_REDBANWOL(56)` ⇒ RedHalfMoonOnOff + SendSocket(\"+WID\")（攻击路径开关）；承接 = M3 攻击接线（同 warr_reject 口径）"
+            : "DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 已审计 DoSpell 之外无第二分派器（dispatch-audit-probe）",
         "context_required" => "DoSpell 有 case，但效果需要地图/目标/可见集/召唤/状态等上下文（如 MagPushArround/MagSaceMove/MagTurnUndead/MagMakeSlave/MagGroupDeDing 的遍历与施加）；承接 = M3 攻击/魔法接线后的批次",
         _ => "未分类：登记器缺陷",
     };
@@ -512,7 +516,7 @@ internal static class Program
             string dospellClass = DospellClass(row.MagId);
             string reason = implemented
                 ? "本片已实装：施法前置 + MP 消耗 + 效果威力 + 冷却（见 crates/world/src/magic.rs）"
-                : DospellClassReason(dospellClass);
+                : DospellClassReason(row.MagId, dospellClass);
             registry.Add(new
             {
                 magic_id = (int)row.MagId,

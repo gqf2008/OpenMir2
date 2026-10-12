@@ -541,7 +541,7 @@
       "delay_time": 40,
       "implemented": false,
       "dospell_class": "no_switch_case",
-      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5F85\u786E\u8BA4\u662F\u5426\u6709\u7B2C\u4E8C\u5206\u6D3E\u5668"
+      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1 DoSpell \u4E4B\u5916\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF09"
     },
     {
       "magic_id": 56,
@@ -551,7 +551,7 @@
       "delay_time": 30,
       "implemented": false,
       "dospell_class": "no_switch_case",
-      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5F85\u786E\u8BA4\u662F\u5426\u6709\u7B2C\u4E8C\u5206\u6D3E\u5668"
+      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u4F46\u7B2C\u4E8C\u5206\u6D3E\u5668**\u5B58\u5728**\uFF1APlayObject.Attack.cs:1152 \u0060case SKILL_REDBANWOL(56)\u0060 \u21D2 RedHalfMoonOnOff \u002B SendSocket(\u0022\u002BWID\u0022)\uFF08\u653B\u51FB\u8DEF\u5F84\u5F00\u5173\uFF09\uFF1B\u627F\u63A5 = M3 \u653B\u51FB\u63A5\u7EBF\uFF08\u540C warr_reject \u53E3\u5F84\uFF09"
     },
     {
       "magic_id": 57,
@@ -561,7 +561,7 @@
       "delay_time": 30,
       "implemented": false,
       "dospell_class": "no_switch_case",
-      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5F85\u786E\u8BA4\u662F\u5426\u6709\u7B2C\u4E8C\u5206\u6D3E\u5668"
+      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1 DoSpell \u4E4B\u5916\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF09"
     },
     {
       "magic_id": 58,
@@ -571,7 +571,7 @@
       "delay_time": 60,
       "implemented": false,
       "dospell_class": "no_switch_case",
-      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5F85\u786E\u8BA4\u662F\u5426\u6709\u7B2C\u4E8C\u5206\u6D3E\u5668"
+      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1 DoSpell \u4E4B\u5916\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF09"
     },
     {
       "magic_id": 59,
@@ -581,7 +581,7 @@
       "delay_time": 60,
       "implemented": false,
       "dospell_class": "no_switch_case",
-      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5F85\u786E\u8BA4\u662F\u5426\u6709\u7B2C\u4E8C\u5206\u6D3E\u5668"
+      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1 DoSpell \u4E4B\u5916\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF09"
     },
     {
       "magic_id": 66,
@@ -591,7 +591,7 @@
       "delay_time": 0,
       "implemented": false,
       "dospell_class": "no_switch_case",
-      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5F85\u786E\u8BA4\u662F\u5426\u6709\u7B2C\u4E8C\u5206\u6D3E\u5668"
+      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1 DoSpell \u4E4B\u5916\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF09"
     },
     {
       "magic_id": 66,
@@ -601,7 +601,7 @@
       "delay_time": 0,
       "implemented": false,
       "dospell_class": "no_switch_case",
-      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5F85\u786E\u8BA4\u662F\u5426\u6709\u7B2C\u4E8C\u5206\u6D3E\u5668"
+      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1 DoSpell \u4E4B\u5916\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF09"
     },
     {
       "magic_id": 67,
@@ -611,7 +611,7 @@
       "delay_time": 0,
       "implemented": false,
       "dospell_class": "no_switch_case",
-      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5F85\u786E\u8BA4\u662F\u5426\u6709\u7B2C\u4E8C\u5206\u6D3E\u5668"
+      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1 DoSpell \u4E4B\u5916\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF09"
     },
     {
       "magic_id": 68,
@@ -621,7 +621,7 @@
       "delay_time": 0,
       "implemented": false,
       "dospell_class": "no_switch_case",
-      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5F85\u786E\u8BA4\u662F\u5426\u6709\u7B2C\u4E8C\u5206\u6D3E\u5668"
+      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1 DoSpell \u4E4B\u5916\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF09"
     },
     {
       "magic_id": 69,
@@ -631,7 +631,7 @@
       "delay_time": 60,
       "implemented": false,
       "dospell_class": "no_switch_case",
-      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5F85\u786E\u8BA4\u662F\u5426\u6709\u7B2C\u4E8C\u5206\u6D3E\u5668"
+      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1 DoSpell \u4E4B\u5916\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF09"
     },
     {
       "magic_id": 71,
@@ -641,7 +641,7 @@
       "delay_time": 120,
       "implemented": false,
       "dospell_class": "no_switch_case",
-      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5F85\u786E\u8BA4\u662F\u5426\u6709\u7B2C\u4E8C\u5206\u6D3E\u5668"
+      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1 DoSpell \u4E4B\u5916\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF09"
     },
     {
       "magic_id": 71,
@@ -651,7 +651,7 @@
       "delay_time": 120,
       "implemented": false,
       "dospell_class": "no_switch_case",
-      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5F85\u786E\u8BA4\u662F\u5426\u6709\u7B2C\u4E8C\u5206\u6D3E\u5668"
+      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1 DoSpell \u4E4B\u5916\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF09"
     },
     {
       "magic_id": 72,
@@ -661,7 +661,7 @@
       "delay_time": 60,
       "implemented": false,
       "dospell_class": "no_switch_case",
-      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5F85\u786E\u8BA4\u662F\u5426\u6709\u7B2C\u4E8C\u5206\u6D3E\u5668"
+      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1 DoSpell \u4E4B\u5916\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF09"
     },
     {
       "magic_id": 74,
@@ -671,7 +671,7 @@
       "delay_time": 0,
       "implemented": false,
       "dospell_class": "no_switch_case",
-      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5F85\u786E\u8BA4\u662F\u5426\u6709\u7B2C\u4E8C\u5206\u6D3E\u5668"
+      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1 DoSpell \u4E4B\u5916\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF09"
     },
     {
       "magic_id": 75,
@@ -681,7 +681,7 @@
       "delay_time": 60,
       "implemented": false,
       "dospell_class": "no_switch_case",
-      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5F85\u786E\u8BA4\u662F\u5426\u6709\u7B2C\u4E8C\u5206\u6D3E\u5668"
+      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1 DoSpell \u4E4B\u5916\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF09"
     },
     {
       "magic_id": 76,
@@ -691,7 +691,7 @@
       "delay_time": 60,
       "implemented": false,
       "dospell_class": "no_switch_case",
-      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5F85\u786E\u8BA4\u662F\u5426\u6709\u7B2C\u4E8C\u5206\u6D3E\u5668"
+      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1 DoSpell \u4E4B\u5916\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF09"
     },
     {
       "magic_id": 77,
@@ -701,7 +701,7 @@
       "delay_time": 60,
       "implemented": false,
       "dospell_class": "no_switch_case",
-      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5F85\u786E\u8BA4\u662F\u5426\u6709\u7B2C\u4E8C\u5206\u6D3E\u5668"
+      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1 DoSpell \u4E4B\u5916\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF09"
     },
     {
       "magic_id": 78,
@@ -711,7 +711,7 @@
       "delay_time": 60,
       "implemented": false,
       "dospell_class": "no_switch_case",
-      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5F85\u786E\u8BA4\u662F\u5426\u6709\u7B2C\u4E8C\u5206\u6D3E\u5668"
+      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1 DoSpell \u4E4B\u5916\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF09"
     },
     {
       "magic_id": 79,
@@ -721,7 +721,7 @@
       "delay_time": 60,
       "implemented": false,
       "dospell_class": "no_switch_case",
-      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5F85\u786E\u8BA4\u662F\u5426\u6709\u7B2C\u4E8C\u5206\u6D3E\u5668"
+      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1 DoSpell \u4E4B\u5916\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF09"
     },
     {
       "magic_id": 80,
@@ -731,7 +731,7 @@
       "delay_time": 60,
       "implemented": false,
       "dospell_class": "no_switch_case",
-      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5F85\u786E\u8BA4\u662F\u5426\u6709\u7B2C\u4E8C\u5206\u6D3E\u5668"
+      "reason": "DoSpell switch \u65E0\u6B64\u9B54\u53F7 case \u21D2 \u53EA\u8D70\u901A\u7528 RM_MAGICFIRE/train\uFF08MagicManager.cs:172-640 \u65E0\u5206\u652F\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1 DoSpell \u4E4B\u5916\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF09"
     },
     {
       "magic_id": 81,
@@ -741,7 +741,7 @@
       "delay_time": 60,
       "implemented": false,
       "dospell_class": "magicid_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u9700\u5148\u786E\u8BA4 oracle \u662F\u5426\u53E6\u6709\u5206\u6D3E\u5668\uFF08\u672C\u8868\u5185\u65E0 case\uFF0CDoSpell \u4E0D\u53EF\u8FBE\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF1AM2Server \u0060case\u0060 \u96C6\u5408 \u2229 {\u003E80} = \u2205\uFF09\uFF1B\u6548\u679C = MP \u6263\u51CF \u002B RM_SPELL \u5E7F\u64AD\u540E false"
     },
     {
       "magic_id": 82,
@@ -751,7 +751,7 @@
       "delay_time": 60,
       "implemented": false,
       "dospell_class": "magicid_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u9700\u5148\u786E\u8BA4 oracle \u662F\u5426\u53E6\u6709\u5206\u6D3E\u5668\uFF08\u672C\u8868\u5185\u65E0 case\uFF0CDoSpell \u4E0D\u53EF\u8FBE\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF1AM2Server \u0060case\u0060 \u96C6\u5408 \u2229 {\u003E80} = \u2205\uFF09\uFF1B\u6548\u679C = MP \u6263\u51CF \u002B RM_SPELL \u5E7F\u64AD\u540E false"
     },
     {
       "magic_id": 83,
@@ -761,7 +761,7 @@
       "delay_time": 60,
       "implemented": false,
       "dospell_class": "magicid_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u9700\u5148\u786E\u8BA4 oracle \u662F\u5426\u53E6\u6709\u5206\u6D3E\u5668\uFF08\u672C\u8868\u5185\u65E0 case\uFF0CDoSpell \u4E0D\u53EF\u8FBE\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF1AM2Server \u0060case\u0060 \u96C6\u5408 \u2229 {\u003E80} = \u2205\uFF09\uFF1B\u6548\u679C = MP \u6263\u51CF \u002B RM_SPELL \u5E7F\u64AD\u540E false"
     },
     {
       "magic_id": 84,
@@ -771,7 +771,7 @@
       "delay_time": 60,
       "implemented": false,
       "dospell_class": "magicid_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u9700\u5148\u786E\u8BA4 oracle \u662F\u5426\u53E6\u6709\u5206\u6D3E\u5668\uFF08\u672C\u8868\u5185\u65E0 case\uFF0CDoSpell \u4E0D\u53EF\u8FBE\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF1AM2Server \u0060case\u0060 \u96C6\u5408 \u2229 {\u003E80} = \u2205\uFF09\uFF1B\u6548\u679C = MP \u6263\u51CF \u002B RM_SPELL \u5E7F\u64AD\u540E false"
     },
     {
       "magic_id": 85,
@@ -781,7 +781,7 @@
       "delay_time": 60,
       "implemented": false,
       "dospell_class": "magicid_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u9700\u5148\u786E\u8BA4 oracle \u662F\u5426\u53E6\u6709\u5206\u6D3E\u5668\uFF08\u672C\u8868\u5185\u65E0 case\uFF0CDoSpell \u4E0D\u53EF\u8FBE\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF1AM2Server \u0060case\u0060 \u96C6\u5408 \u2229 {\u003E80} = \u2205\uFF09\uFF1B\u6548\u679C = MP \u6263\u51CF \u002B RM_SPELL \u5E7F\u64AD\u540E false"
     },
     {
       "magic_id": 86,
@@ -791,7 +791,7 @@
       "delay_time": 60,
       "implemented": false,
       "dospell_class": "magicid_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u9700\u5148\u786E\u8BA4 oracle \u662F\u5426\u53E6\u6709\u5206\u6D3E\u5668\uFF08\u672C\u8868\u5185\u65E0 case\uFF0CDoSpell \u4E0D\u53EF\u8FBE\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF1AM2Server \u0060case\u0060 \u96C6\u5408 \u2229 {\u003E80} = \u2205\uFF09\uFF1B\u6548\u679C = MP \u6263\u51CF \u002B RM_SPELL \u5E7F\u64AD\u540E false"
     },
     {
       "magic_id": 87,
@@ -801,7 +801,7 @@
       "delay_time": 60,
       "implemented": false,
       "dospell_class": "magicid_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u9700\u5148\u786E\u8BA4 oracle \u662F\u5426\u53E6\u6709\u5206\u6D3E\u5668\uFF08\u672C\u8868\u5185\u65E0 case\uFF0CDoSpell \u4E0D\u53EF\u8FBE\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF1AM2Server \u0060case\u0060 \u96C6\u5408 \u2229 {\u003E80} = \u2205\uFF09\uFF1B\u6548\u679C = MP \u6263\u51CF \u002B RM_SPELL \u5E7F\u64AD\u540E false"
     },
     {
       "magic_id": 88,
@@ -811,7 +811,7 @@
       "delay_time": 0,
       "implemented": false,
       "dospell_class": "magicid_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u9700\u5148\u786E\u8BA4 oracle \u662F\u5426\u53E6\u6709\u5206\u6D3E\u5668\uFF08\u672C\u8868\u5185\u65E0 case\uFF0CDoSpell \u4E0D\u53EF\u8FBE\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF1AM2Server \u0060case\u0060 \u96C6\u5408 \u2229 {\u003E80} = \u2205\uFF09\uFF1B\u6548\u679C = MP \u6263\u51CF \u002B RM_SPELL \u5E7F\u64AD\u540E false"
     },
     {
       "magic_id": 88,
@@ -821,7 +821,7 @@
       "delay_time": 0,
       "implemented": false,
       "dospell_class": "magicid_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u9700\u5148\u786E\u8BA4 oracle \u662F\u5426\u53E6\u6709\u5206\u6D3E\u5668\uFF08\u672C\u8868\u5185\u65E0 case\uFF0CDoSpell \u4E0D\u53EF\u8FBE\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF1AM2Server \u0060case\u0060 \u96C6\u5408 \u2229 {\u003E80} = \u2205\uFF09\uFF1B\u6548\u679C = MP \u6263\u51CF \u002B RM_SPELL \u5E7F\u64AD\u540E false"
     },
     {
       "magic_id": 89,
@@ -831,7 +831,7 @@
       "delay_time": 0,
       "implemented": false,
       "dospell_class": "magicid_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u9700\u5148\u786E\u8BA4 oracle \u662F\u5426\u53E6\u6709\u5206\u6D3E\u5668\uFF08\u672C\u8868\u5185\u65E0 case\uFF0CDoSpell \u4E0D\u53EF\u8FBE\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF1AM2Server \u0060case\u0060 \u96C6\u5408 \u2229 {\u003E80} = \u2205\uFF09\uFF1B\u6548\u679C = MP \u6263\u51CF \u002B RM_SPELL \u5E7F\u64AD\u540E false"
     },
     {
       "magic_id": 89,
@@ -841,7 +841,7 @@
       "delay_time": 0,
       "implemented": false,
       "dospell_class": "magicid_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u9700\u5148\u786E\u8BA4 oracle \u662F\u5426\u53E6\u6709\u5206\u6D3E\u5668\uFF08\u672C\u8868\u5185\u65E0 case\uFF0CDoSpell \u4E0D\u53EF\u8FBE\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF1AM2Server \u0060case\u0060 \u96C6\u5408 \u2229 {\u003E80} = \u2205\uFF09\uFF1B\u6548\u679C = MP \u6263\u51CF \u002B RM_SPELL \u5E7F\u64AD\u540E false"
     },
     {
       "magic_id": 90,
@@ -851,7 +851,7 @@
       "delay_time": 0,
       "implemented": false,
       "dospell_class": "magicid_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u9700\u5148\u786E\u8BA4 oracle \u662F\u5426\u53E6\u6709\u5206\u6D3E\u5668\uFF08\u672C\u8868\u5185\u65E0 case\uFF0CDoSpell \u4E0D\u53EF\u8FBE\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF1AM2Server \u0060case\u0060 \u96C6\u5408 \u2229 {\u003E80} = \u2205\uFF09\uFF1B\u6548\u679C = MP \u6263\u51CF \u002B RM_SPELL \u5E7F\u64AD\u540E false"
     },
     {
       "magic_id": 90,
@@ -861,7 +861,7 @@
       "delay_time": 0,
       "implemented": false,
       "dospell_class": "magicid_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u9700\u5148\u786E\u8BA4 oracle \u662F\u5426\u53E6\u6709\u5206\u6D3E\u5668\uFF08\u672C\u8868\u5185\u65E0 case\uFF0CDoSpell \u4E0D\u53EF\u8FBE\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF1AM2Server \u0060case\u0060 \u96C6\u5408 \u2229 {\u003E80} = \u2205\uFF09\uFF1B\u6548\u679C = MP \u6263\u51CF \u002B RM_SPELL \u5E7F\u64AD\u540E false"
     },
     {
       "magic_id": 91,
@@ -871,7 +871,7 @@
       "delay_time": 100,
       "implemented": false,
       "dospell_class": "magicid_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u9700\u5148\u786E\u8BA4 oracle \u662F\u5426\u53E6\u6709\u5206\u6D3E\u5668\uFF08\u672C\u8868\u5185\u65E0 case\uFF0CDoSpell \u4E0D\u53EF\u8FBE\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF1AM2Server \u0060case\u0060 \u96C6\u5408 \u2229 {\u003E80} = \u2205\uFF09\uFF1B\u6548\u679C = MP \u6263\u51CF \u002B RM_SPELL \u5E7F\u64AD\u540E false"
     },
     {
       "magic_id": 91,
@@ -881,7 +881,7 @@
       "delay_time": 100,
       "implemented": false,
       "dospell_class": "magicid_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u9700\u5148\u786E\u8BA4 oracle \u662F\u5426\u53E6\u6709\u5206\u6D3E\u5668\uFF08\u672C\u8868\u5185\u65E0 case\uFF0CDoSpell \u4E0D\u53EF\u8FBE\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF1AM2Server \u0060case\u0060 \u96C6\u5408 \u2229 {\u003E80} = \u2205\uFF09\uFF1B\u6548\u679C = MP \u6263\u51CF \u002B RM_SPELL \u5E7F\u64AD\u540E false"
     },
     {
       "magic_id": 92,
@@ -891,7 +891,7 @@
       "delay_time": 30,
       "implemented": false,
       "dospell_class": "magicid_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u9700\u5148\u786E\u8BA4 oracle \u662F\u5426\u53E6\u6709\u5206\u6D3E\u5668\uFF08\u672C\u8868\u5185\u65E0 case\uFF0CDoSpell \u4E0D\u53EF\u8FBE\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF1AM2Server \u0060case\u0060 \u96C6\u5408 \u2229 {\u003E80} = \u2205\uFF09\uFF1B\u6548\u679C = MP \u6263\u51CF \u002B RM_SPELL \u5E7F\u64AD\u540E false"
     },
     {
       "magic_id": 92,
@@ -901,7 +901,7 @@
       "delay_time": 30,
       "implemented": false,
       "dospell_class": "magicid_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u9700\u5148\u786E\u8BA4 oracle \u662F\u5426\u53E6\u6709\u5206\u6D3E\u5668\uFF08\u672C\u8868\u5185\u65E0 case\uFF0CDoSpell \u4E0D\u53EF\u8FBE\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF1AM2Server \u0060case\u0060 \u96C6\u5408 \u2229 {\u003E80} = \u2205\uFF09\uFF1B\u6548\u679C = MP \u6263\u51CF \u002B RM_SPELL \u5E7F\u64AD\u540E false"
     },
     {
       "magic_id": 93,
@@ -911,7 +911,7 @@
       "delay_time": 40,
       "implemented": false,
       "dospell_class": "magicid_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u9700\u5148\u786E\u8BA4 oracle \u662F\u5426\u53E6\u6709\u5206\u6D3E\u5668\uFF08\u672C\u8868\u5185\u65E0 case\uFF0CDoSpell \u4E0D\u53EF\u8FBE\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF1AM2Server \u0060case\u0060 \u96C6\u5408 \u2229 {\u003E80} = \u2205\uFF09\uFF1B\u6548\u679C = MP \u6263\u51CF \u002B RM_SPELL \u5E7F\u64AD\u540E false"
     },
     {
       "magic_id": 93,
@@ -921,7 +921,7 @@
       "delay_time": 40,
       "implemented": false,
       "dospell_class": "magicid_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u9700\u5148\u786E\u8BA4 oracle \u662F\u5426\u53E6\u6709\u5206\u6D3E\u5668\uFF08\u672C\u8868\u5185\u65E0 case\uFF0CDoSpell \u4E0D\u53EF\u8FBE\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF1AM2Server \u0060case\u0060 \u96C6\u5408 \u2229 {\u003E80} = \u2205\uFF09\uFF1B\u6548\u679C = MP \u6263\u51CF \u002B RM_SPELL \u5E7F\u64AD\u540E false"
     },
     {
       "magic_id": 94,
@@ -931,7 +931,7 @@
       "delay_time": 60,
       "implemented": false,
       "dospell_class": "magicid_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u9700\u5148\u786E\u8BA4 oracle \u662F\u5426\u53E6\u6709\u5206\u6D3E\u5668\uFF08\u672C\u8868\u5185\u65E0 case\uFF0CDoSpell \u4E0D\u53EF\u8FBE\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF1AM2Server \u0060case\u0060 \u96C6\u5408 \u2229 {\u003E80} = \u2205\uFF09\uFF1B\u6548\u679C = MP \u6263\u51CF \u002B RM_SPELL \u5E7F\u64AD\u540E false"
     },
     {
       "magic_id": 94,
@@ -941,7 +941,7 @@
       "delay_time": 60,
       "implemented": false,
       "dospell_class": "magicid_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u9700\u5148\u786E\u8BA4 oracle \u662F\u5426\u53E6\u6709\u5206\u6D3E\u5668\uFF08\u672C\u8868\u5185\u65E0 case\uFF0CDoSpell \u4E0D\u53EF\u8FBE\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF1AM2Server \u0060case\u0060 \u96C6\u5408 \u2229 {\u003E80} = \u2205\uFF09\uFF1B\u6548\u679C = MP \u6263\u51CF \u002B RM_SPELL \u5E7F\u64AD\u540E false"
     },
     {
       "magic_id": 95,
@@ -951,7 +951,7 @@
       "delay_time": 0,
       "implemented": false,
       "dospell_class": "magicid_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u9700\u5148\u786E\u8BA4 oracle \u662F\u5426\u53E6\u6709\u5206\u6D3E\u5668\uFF08\u672C\u8868\u5185\u65E0 case\uFF0CDoSpell \u4E0D\u53EF\u8FBE\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF1AM2Server \u0060case\u0060 \u96C6\u5408 \u2229 {\u003E80} = \u2205\uFF09\uFF1B\u6548\u679C = MP \u6263\u51CF \u002B RM_SPELL \u5E7F\u64AD\u540E false"
     },
     {
       "magic_id": 96,
@@ -961,7 +961,7 @@
       "delay_time": 0,
       "implemented": false,
       "dospell_class": "magicid_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u9700\u5148\u786E\u8BA4 oracle \u662F\u5426\u53E6\u6709\u5206\u6D3E\u5668\uFF08\u672C\u8868\u5185\u65E0 case\uFF0CDoSpell \u4E0D\u53EF\u8FBE\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF1AM2Server \u0060case\u0060 \u96C6\u5408 \u2229 {\u003E80} = \u2205\uFF09\uFF1B\u6548\u679C = MP \u6263\u51CF \u002B RM_SPELL \u5E7F\u64AD\u540E false"
     },
     {
       "magic_id": 96,
@@ -971,7 +971,7 @@
       "delay_time": 0,
       "implemented": false,
       "dospell_class": "magicid_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u9700\u5148\u786E\u8BA4 oracle \u662F\u5426\u53E6\u6709\u5206\u6D3E\u5668\uFF08\u672C\u8868\u5185\u65E0 case\uFF0CDoSpell \u4E0D\u53EF\u8FBE\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF1AM2Server \u0060case\u0060 \u96C6\u5408 \u2229 {\u003E80} = \u2205\uFF09\uFF1B\u6548\u679C = MP \u6263\u51CF \u002B RM_SPELL \u5E7F\u64AD\u540E false"
     },
     {
       "magic_id": 97,
@@ -981,7 +981,7 @@
       "delay_time": 30,
       "implemented": false,
       "dospell_class": "magicid_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u9700\u5148\u786E\u8BA4 oracle \u662F\u5426\u53E6\u6709\u5206\u6D3E\u5668\uFF08\u672C\u8868\u5185\u65E0 case\uFF0CDoSpell \u4E0D\u53EF\u8FBE\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF1AM2Server \u0060case\u0060 \u96C6\u5408 \u2229 {\u003E80} = \u2205\uFF09\uFF1B\u6548\u679C = MP \u6263\u51CF \u002B RM_SPELL \u5E7F\u64AD\u540E false"
     },
     {
       "magic_id": 97,
@@ -991,7 +991,7 @@
       "delay_time": 30,
       "implemented": false,
       "dospell_class": "magicid_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u9700\u5148\u786E\u8BA4 oracle \u662F\u5426\u53E6\u6709\u5206\u6D3E\u5668\uFF08\u672C\u8868\u5185\u65E0 case\uFF0CDoSpell \u4E0D\u53EF\u8FBE\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF1AM2Server \u0060case\u0060 \u96C6\u5408 \u2229 {\u003E80} = \u2205\uFF09\uFF1B\u6548\u679C = MP \u6263\u51CF \u002B RM_SPELL \u5E7F\u64AD\u540E false"
     },
     {
       "magic_id": 98,
@@ -1001,7 +1001,7 @@
       "delay_time": 40,
       "implemented": false,
       "dospell_class": "magicid_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u9700\u5148\u786E\u8BA4 oracle \u662F\u5426\u53E6\u6709\u5206\u6D3E\u5668\uFF08\u672C\u8868\u5185\u65E0 case\uFF0CDoSpell \u4E0D\u53EF\u8FBE\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF1AM2Server \u0060case\u0060 \u96C6\u5408 \u2229 {\u003E80} = \u2205\uFF09\uFF1B\u6548\u679C = MP \u6263\u51CF \u002B RM_SPELL \u5E7F\u64AD\u540E false"
     },
     {
       "magic_id": 98,
@@ -1011,7 +1011,7 @@
       "delay_time": 40,
       "implemented": false,
       "dospell_class": "magicid_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u9700\u5148\u786E\u8BA4 oracle \u662F\u5426\u53E6\u6709\u5206\u6D3E\u5668\uFF08\u672C\u8868\u5185\u65E0 case\uFF0CDoSpell \u4E0D\u53EF\u8FBE\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF1AM2Server \u0060case\u0060 \u96C6\u5408 \u2229 {\u003E80} = \u2205\uFF09\uFF1B\u6548\u679C = MP \u6263\u51CF \u002B RM_SPELL \u5E7F\u64AD\u540E false"
     },
     {
       "magic_id": 99,
@@ -1021,7 +1021,7 @@
       "delay_time": 0,
       "implemented": false,
       "dospell_class": "magicid_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u9700\u5148\u786E\u8BA4 oracle \u662F\u5426\u53E6\u6709\u5206\u6D3E\u5668\uFF08\u672C\u8868\u5185\u65E0 case\uFF0CDoSpell \u4E0D\u53EF\u8FBE\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF1AM2Server \u0060case\u0060 \u96C6\u5408 \u2229 {\u003E80} = \u2205\uFF09\uFF1B\u6548\u679C = MP \u6263\u51CF \u002B RM_SPELL \u5E7F\u64AD\u540E false"
     },
     {
       "magic_id": 100,
@@ -1031,7 +1031,7 @@
       "delay_time": 0,
       "implemented": false,
       "dospell_class": "magicid_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u9700\u5148\u786E\u8BA4 oracle \u662F\u5426\u53E6\u6709\u5206\u6D3E\u5668\uFF08\u672C\u8868\u5185\u65E0 case\uFF0CDoSpell \u4E0D\u53EF\u8FBE\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF1AM2Server \u0060case\u0060 \u96C6\u5408 \u2229 {\u003E80} = \u2205\uFF09\uFF1B\u6548\u679C = MP \u6263\u51CF \u002B RM_SPELL \u5E7F\u64AD\u540E false"
     },
     {
       "magic_id": 101,
@@ -1041,7 +1041,7 @@
       "delay_time": 0,
       "implemented": false,
       "dospell_class": "magicid_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u9700\u5148\u786E\u8BA4 oracle \u662F\u5426\u53E6\u6709\u5206\u6D3E\u5668\uFF08\u672C\u8868\u5185\u65E0 case\uFF0CDoSpell \u4E0D\u53EF\u8FBE\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF1AM2Server \u0060case\u0060 \u96C6\u5408 \u2229 {\u003E80} = \u2205\uFF09\uFF1B\u6548\u679C = MP \u6263\u51CF \u002B RM_SPELL \u5E7F\u64AD\u540E false"
     },
     {
       "magic_id": 102,
@@ -1051,7 +1051,7 @@
       "delay_time": 0,
       "implemented": false,
       "dospell_class": "magicid_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u9700\u5148\u786E\u8BA4 oracle \u662F\u5426\u53E6\u6709\u5206\u6D3E\u5668\uFF08\u672C\u8868\u5185\u65E0 case\uFF0CDoSpell \u4E0D\u53EF\u8FBE\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF1AM2Server \u0060case\u0060 \u96C6\u5408 \u2229 {\u003E80} = \u2205\uFF09\uFF1B\u6548\u679C = MP \u6263\u51CF \u002B RM_SPELL \u5E7F\u64AD\u540E false"
     },
     {
       "magic_id": 103,
@@ -1061,7 +1061,7 @@
       "delay_time": 0,
       "implemented": false,
       "dospell_class": "magicid_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u9700\u5148\u786E\u8BA4 oracle \u662F\u5426\u53E6\u6709\u5206\u6D3E\u5668\uFF08\u672C\u8868\u5185\u65E0 case\uFF0CDoSpell \u4E0D\u53EF\u8FBE\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF1AM2Server \u0060case\u0060 \u96C6\u5408 \u2229 {\u003E80} = \u2205\uFF09\uFF1B\u6548\u679C = MP \u6263\u51CF \u002B RM_SPELL \u5E7F\u64AD\u540E false"
     },
     {
       "magic_id": 500,
@@ -1071,7 +1071,7 @@
       "delay_time": 0,
       "implemented": false,
       "dospell_class": "magicid_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u9700\u5148\u786E\u8BA4 oracle \u662F\u5426\u53E6\u6709\u5206\u6D3E\u5668\uFF08\u672C\u8868\u5185\u65E0 case\uFF0CDoSpell \u4E0D\u53EF\u8FBE\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF1AM2Server \u0060case\u0060 \u96C6\u5408 \u2229 {\u003E80} = \u2205\uFF09\uFF1B\u6548\u679C = MP \u6263\u51CF \u002B RM_SPELL \u5E7F\u64AD\u540E false"
     },
     {
       "magic_id": 501,
@@ -1081,7 +1081,7 @@
       "delay_time": 0,
       "implemented": false,
       "dospell_class": "magicid_reject",
-      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u9700\u5148\u786E\u8BA4 oracle \u662F\u5426\u53E6\u6709\u5206\u6D3E\u5668\uFF08\u672C\u8868\u5185\u65E0 case\uFF0CDoSpell \u4E0D\u53EF\u8FBE\uFF09"
+      "reason": "DoSpell \u524D\u7F6E\uFF1AMagicId \u003E 80 \u21D2 return false\uFF08MagicManager.cs:167\uFF09\uFF1B\u627F\u63A5 = \u5DF2\u5BA1\u8BA1\u65E0\u7B2C\u4E8C\u5206\u6D3E\u5668\uFF08dispatch-audit-probe\uFF1AM2Server \u0060case\u0060 \u96C6\u5408 \u2229 {\u003E80} = \u2205\uFF09\uFF1B\u6548\u679C = MP \u6263\u51CF \u002B RM_SPELL \u5E7F\u64AD\u540E false"
     }
   ]
 }

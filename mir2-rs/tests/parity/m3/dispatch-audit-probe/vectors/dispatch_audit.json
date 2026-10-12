@@ -1,0 +1,1501 @@
+{
+  "generated_by": "mir2-rs/tests/parity/m3/dispatch-audit-probe",
+  "oracle": {
+    "dispatch_surface_scan": "src/M2Server/**/*.cs \u7684 \u0060switch (\u2026MagicId|MagIdx\u2026)\u0060 \u4E0E \u0060case MagicConst.\u003Cname\u003E\u0060\uFF08source-cited\uFF09",
+    "play_object_dospell": "M2Server.Player.PlayObject.DoSpell(UserMagic, short, short, IActor)\uFF08private\uFF0C\u53CD\u5C04\u76F4\u8C03\uFF1B\u542B GetSpellPoint \u6263 MP\uFF09",
+    "magic_manager_dospell": "M2Server.Magic.MagicManager.DoSpell(PlayObject, UserMagic, short, short, IActor)\uFF08public static\uFF0C\u76F4\u8C03\uFF09",
+    "source": "MagicManager.cs:82-100/:145-671\uFF1BPlayObject.Base.cs:1505-1529\uFF1BPlayObject.Attack.cs:1118\uFF1BPlayObject.cs:3685",
+    "envir": "\u7A7A Envirnoment\uFF08\u65E0\u5730\u56FE/\u65E0 socket\uFF09\u002B \u65B0\u6784\u9020 PlayObject \u7684\u9690\u85CF\u6A21\u5F0F\uFF08PlayObject.cs:993 FixedHideMode=true\uFF09\u21D2 SendRefMsg \u8D70 BaseObject.Message.cs:390 \u81EA\u8EAB\u5206\u652F\uFF0C\u5E27\u843D\u81EA\u8EAB MsgQueue\uFF1B\u6536\u4EF6\u4EBA\u96C6\u5408\u4E0D\u5728\u5224\u636E\u5185",
+    "rng": "\u672C\u8DEF\u5F84\u4E0D\u53D6 RNG\uFF08IsWarrSkill/\u8DDD\u79BB\u95E8/\u7248\u672C\u95E8/\u7A7A case \u5C3E\u65E0 Random\uFF09\u21D2 \u9010\u5B57\u8282\u786E\u5B9A"
+  },
+  "pinned_sites": [
+    {
+      "kind": "gate_is_warr_skill",
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 85,
+      "case_count": 9
+    },
+    {
+      "kind": "effect_dospell_main",
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 172,
+      "case_count": 45
+    },
+    {
+      "kind": "effect_dospell_inner_amulet",
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 326,
+      "case_count": 7
+    },
+    {
+      "kind": "attack_skill_toggle",
+      "file": "src/M2Server/Player/PlayObject.Attack.cs",
+      "line": 1118,
+      "case_count": 8
+    },
+    {
+      "kind": "passive_recalc_hitspeed",
+      "file": "src/M2Server/Player/PlayObject.cs",
+      "line": 3685,
+      "case_count": 4
+    }
+  ],
+  "sites": [
+    {
+      "kind": "gate_is_warr_skill",
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 85,
+      "case_count": 9,
+      "subject": "switch (wMagIdx)"
+    },
+    {
+      "kind": "effect_dospell_main",
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 172,
+      "case_count": 45,
+      "subject": "switch (userMagic.Magic.MagicId)"
+    },
+    {
+      "kind": "effect_dospell_inner_amulet",
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 326,
+      "case_count": 7,
+      "subject": "switch (userMagic.Magic.MagicId)"
+    },
+    {
+      "kind": "attack_skill_toggle",
+      "file": "src/M2Server/Player/PlayObject.Attack.cs",
+      "line": 1118,
+      "case_count": 8,
+      "subject": "switch (UserMagic.MagIdx)"
+    },
+    {
+      "kind": "passive_recalc_hitspeed",
+      "file": "src/M2Server/Player/PlayObject.cs",
+      "line": 3685,
+      "case_count": 4,
+      "subject": "switch (userMagic.MagIdx)"
+    }
+  ],
+  "id_cmp_sites": [
+    {
+      "kind": "lookup_attack_magic",
+      "file": "src/M2Server/Player/PlayObject.Attack.cs",
+      "line": 345,
+      "subject": "if ((userMagic != null) \u0026\u0026 (userMagic.MagIdx == nIndex))"
+    },
+    {
+      "kind": "lookup_change_magic_key",
+      "file": "src/M2Server/Player/PlayObject.Operate.cs",
+      "line": 779,
+      "subject": "if (userMagic.Magic.MagicId == nSkillIdx)"
+    },
+    {
+      "kind": "lookup_get_magic_info",
+      "file": "src/M2Server/Player/PlayObject.cs",
+      "line": 4179,
+      "subject": "if (userMagic.Magic.MagicId == nMagicId)"
+    },
+    {
+      "kind": "cond_see_heal_gauge",
+      "file": "src/M2Server/Player/PlayObject.cs",
+      "line": 5233,
+      "subject": "if (magic.Magic.MagicId == 28)"
+    }
+  ],
+  "case_ids": [
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 87,
+      "name": "SKILL_ONESWORD",
+      "value": 3
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 88,
+      "name": "SKILL_ILKWANG",
+      "value": 4
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 89,
+      "name": "SKILL_YEDO",
+      "value": 7
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 90,
+      "name": "SKILL_ERGUM",
+      "value": 12
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 91,
+      "name": "SKILL_BANWOL",
+      "value": 25
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 92,
+      "name": "SKILL_FIRESWORD",
+      "value": 26
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 93,
+      "name": "SKILL_MOOTEBO",
+      "value": 27
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 94,
+      "name": "SKILL_CROSSMOON",
+      "value": 34
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 95,
+      "name": "SKILL_TWINBLADE",
+      "value": 38
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 174,
+      "name": "SKILL_FIREBALL",
+      "value": 1
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 175,
+      "name": "SKILL_FIREBALL2",
+      "value": 5
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 204,
+      "name": "SKILL_HEALLING",
+      "value": 2
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 225,
+      "name": "SKILL_AMYOUNSUL",
+      "value": 6
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 259,
+      "name": "SKILL_FIREWIND",
+      "value": 8
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 265,
+      "name": "SKILL_FIRE",
+      "value": 9
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 277,
+      "name": "SKILL_SHOOTLIGHTEN",
+      "value": 10
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 289,
+      "name": "SKILL_LIGHTENING",
+      "value": 11
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 315,
+      "name": "SKILL_FIRECHARM",
+      "value": 13
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 316,
+      "name": "SKILL_HANGMAJINBUB",
+      "value": 14
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 317,
+      "name": "SKILL_DEJIWONHO",
+      "value": 15
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 318,
+      "name": "SKILL_HOLYSHIELD",
+      "value": 16
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 319,
+      "name": "SKILL_SKELLETON",
+      "value": 17
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 320,
+      "name": "SKILL_CLOAK",
+      "value": 18
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 321,
+      "name": "SKILL_BIGCLOAK",
+      "value": 19
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 328,
+      "name": "SKILL_FIRECHARM",
+      "value": 13
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 352,
+      "name": "SKILL_HANGMAJINBUB",
+      "value": 14
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 359,
+      "name": "SKILL_DEJIWONHO",
+      "value": 15
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 366,
+      "name": "SKILL_HOLYSHIELD",
+      "value": 16
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 372,
+      "name": "SKILL_SKELLETON",
+      "value": 17
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 378,
+      "name": "SKILL_CLOAK",
+      "value": 18
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 384,
+      "name": "SKILL_BIGCLOAK",
+      "value": 19
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 394,
+      "name": "SKILL_TAMMING",
+      "value": 20
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 403,
+      "name": "SKILL_SPACEMOVE",
+      "value": 21
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 412,
+      "name": "SKILL_EARTHFIRE",
+      "value": 22
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 418,
+      "name": "SKILL_FIREBOOM",
+      "value": 23
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 424,
+      "name": "SKILL_LIGHTFLOWER",
+      "value": 24
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 431,
+      "name": "SKILL_SHOWHP",
+      "value": 28
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 443,
+      "name": "SKILL_BIGHEALLING",
+      "value": 29
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 450,
+      "name": "SKILL_SINSU",
+      "value": 30
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 462,
+      "name": "SKILL_ANGEL",
+      "value": 41
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 474,
+      "name": "SKILL_SHIELD",
+      "value": 31
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 480,
+      "name": "SKILL_KILLUNDEAD",
+      "value": 32
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 489,
+      "name": "SKILL_SNOWWIND",
+      "value": 33
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 495,
+      "name": "SKILL_UNAMYOUNSUL",
+      "value": 40
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 524,
+      "name": "SKILL_WINDTEBO",
+      "value": 35
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 530,
+      "name": "SKILL_MABE",
+      "value": 50
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 537,
+      "name": "SKILL_GROUPLIGHTENING",
+      "value": 42
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 543,
+      "name": "SKILL_GROUPAMYOUNSUL",
+      "value": 48
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 549,
+      "name": "SKILL_GROUPDEDING",
+      "value": 39
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 555,
+      "name": "SKILL_43",
+      "value": 43
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 557,
+      "name": "SKILL_44",
+      "value": 44
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 563,
+      "name": "SKILL_45",
+      "value": 45
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 589,
+      "name": "SKILL_46",
+      "value": 46
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 595,
+      "name": "SKILL_47",
+      "value": 47
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 601,
+      "name": "SKILL_ENERGYREPULSOR",
+      "value": 37
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 607,
+      "name": "SKILL_49",
+      "value": 49
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 610,
+      "name": "SKILL_UENHANCER",
+      "value": 36
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 631,
+      "name": "SKILL_51",
+      "value": 51
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 634,
+      "name": "SKILL_52",
+      "value": 52
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 637,
+      "name": "SKILL_53",
+      "value": 53
+    },
+    {
+      "file": "src/M2Server/Magic/MagicManager.cs",
+      "line": 640,
+      "name": "SKILL_54",
+      "value": 54
+    },
+    {
+      "file": "src/M2Server/Player/PlayObject.Attack.cs",
+      "line": 1120,
+      "name": "SKILL_ERGUM",
+      "value": 12
+    },
+    {
+      "file": "src/M2Server/Player/PlayObject.Attack.cs",
+      "line": 1136,
+      "name": "SKILL_BANWOL",
+      "value": 25
+    },
+    {
+      "file": "src/M2Server/Player/PlayObject.Attack.cs",
+      "line": 1152,
+      "name": "SKILL_REDBANWOL",
+      "value": 56
+    },
+    {
+      "file": "src/M2Server/Player/PlayObject.Attack.cs",
+      "line": 1168,
+      "name": "SKILL_FIRESWORD",
+      "value": 26
+    },
+    {
+      "file": "src/M2Server/Player/PlayObject.Attack.cs",
+      "line": 1187,
+      "name": "SKILL_MOOTEBO",
+      "value": 27
+    },
+    {
+      "file": "src/M2Server/Player/PlayObject.Attack.cs",
+      "line": 1218,
+      "name": "SKILL_CROSSMOON",
+      "value": 34
+    },
+    {
+      "file": "src/M2Server/Player/PlayObject.Attack.cs",
+      "line": 1234,
+      "name": "SKILL_TWINBLADE",
+      "value": 38
+    },
+    {
+      "file": "src/M2Server/Player/PlayObject.Attack.cs",
+      "line": 1253,
+      "name": "SKILL_43",
+      "value": 43
+    },
+    {
+      "file": "src/M2Server/Player/PlayObject.cs",
+      "line": 3687,
+      "name": "SKILL_ONESWORD",
+      "value": 3
+    },
+    {
+      "file": "src/M2Server/Player/PlayObject.cs",
+      "line": 3693,
+      "name": "SKILL_ILKWANG",
+      "value": 4
+    },
+    {
+      "file": "src/M2Server/Player/PlayObject.cs",
+      "line": 3699,
+      "name": "SKILL_YEDO",
+      "value": 7
+    },
+    {
+      "file": "src/M2Server/Player/PlayObject.cs",
+      "line": 3708,
+      "name": "SKILL_FIRESWORD",
+      "value": 26
+    }
+  ],
+  "bucket_case_hits": [
+    {
+      "file": "src/M2Server/Player/PlayObject.Attack.cs",
+      "line": 1152,
+      "name": "SKILL_REDBANWOL",
+      "value": 56
+    }
+  ],
+  "generic_rows": [
+    {
+      "row_index": 3,
+      "magic_id": 3,
+      "name": "\u57FA\u672C\u5251\u672F",
+      "dospell_class": "warr_reject",
+      "is_warr": true,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 500,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 0,
+      "msg": ""
+    },
+    {
+      "row_index": 4,
+      "magic_id": 4,
+      "name": "\u7CBE\u795E\u529B\u6218\u6CD5",
+      "dospell_class": "warr_reject",
+      "is_warr": true,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 500,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 0,
+      "msg": ""
+    },
+    {
+      "row_index": 7,
+      "magic_id": 7,
+      "name": "\u653B\u6740\u5251\u672F",
+      "dospell_class": "warr_reject",
+      "is_warr": true,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 500,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 0,
+      "msg": ""
+    },
+    {
+      "row_index": 12,
+      "magic_id": 12,
+      "name": "\u523A\u6740\u5251\u672F",
+      "dospell_class": "warr_reject",
+      "is_warr": true,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 500,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 0,
+      "msg": ""
+    },
+    {
+      "row_index": 25,
+      "magic_id": 25,
+      "name": "\u534A\u6708\u5F2F\u5200",
+      "dospell_class": "warr_reject",
+      "is_warr": true,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 500,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 0,
+      "msg": ""
+    },
+    {
+      "row_index": 26,
+      "magic_id": 26,
+      "name": "\u70C8\u706B\u5251\u6CD5",
+      "dospell_class": "warr_reject",
+      "is_warr": true,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 500,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 0,
+      "msg": ""
+    },
+    {
+      "row_index": 27,
+      "magic_id": 27,
+      "name": "\u91CE\u86EE\u51B2\u649E",
+      "dospell_class": "warr_reject",
+      "is_warr": true,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 500,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 0,
+      "msg": ""
+    },
+    {
+      "row_index": 34,
+      "magic_id": 34,
+      "name": "\u89E3\u6BD2\u672F",
+      "dospell_class": "warr_reject",
+      "is_warr": true,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 500,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 0,
+      "msg": ""
+    },
+    {
+      "row_index": 54,
+      "magic_id": 55,
+      "name": "\u5438\u661F\u72C2\u6740",
+      "dospell_class": "no_switch_case",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": true,
+      "direct_result": true,
+      "direct_exception": "",
+      "msg_count": 3,
+      "msg": "10008:0:0:55;10052:0:0:0;10120:257:0:0"
+    },
+    {
+      "row_index": 55,
+      "magic_id": 56,
+      "name": "\u5F02\u5F62\u6362\u4F4D",
+      "dospell_class": "no_switch_case",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": true,
+      "direct_result": true,
+      "direct_exception": "",
+      "msg_count": 3,
+      "msg": "10008:0:0:56;10052:0:0:0;10120:257:0:0"
+    },
+    {
+      "row_index": 56,
+      "magic_id": 57,
+      "name": "\u56DE\u751F\u672F",
+      "dospell_class": "no_switch_case",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": true,
+      "direct_result": true,
+      "direct_exception": "",
+      "msg_count": 3,
+      "msg": "10008:0:0:57;10052:0:0:0;10120:257:0:0"
+    },
+    {
+      "row_index": 57,
+      "magic_id": 58,
+      "name": "\u6D41\u661F\u706B\u96E8",
+      "dospell_class": "no_switch_case",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": true,
+      "direct_result": true,
+      "direct_exception": "",
+      "msg_count": 3,
+      "msg": "10008:0:0:58;10052:0:0:0;10120:257:0:0"
+    },
+    {
+      "row_index": 58,
+      "magic_id": 59,
+      "name": "\u566C\u8840\u672F",
+      "dospell_class": "no_switch_case",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": true,
+      "direct_result": true,
+      "direct_exception": "",
+      "msg_count": 3,
+      "msg": "10008:0:0:59;10052:0:0:0;10120:257:0:0"
+    },
+    {
+      "row_index": 59,
+      "magic_id": 66,
+      "name": "\u56DB\u7EA7\u9B54\u6CD5\u76FE",
+      "dospell_class": "no_switch_case",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": true,
+      "direct_result": true,
+      "direct_exception": "",
+      "msg_count": 3,
+      "msg": "10008:0:0:66;10052:0:0:0;10120:257:0:0"
+    },
+    {
+      "row_index": 60,
+      "magic_id": 66,
+      "name": "\u767D\u65E5\u95E8\u56DB\u7EA7\u6CD5\u76FE",
+      "dospell_class": "no_switch_case",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": true,
+      "direct_result": true,
+      "direct_exception": "",
+      "msg_count": 3,
+      "msg": "10008:0:0:66;10052:0:0:0;10120:257:0:0"
+    },
+    {
+      "row_index": 61,
+      "magic_id": 67,
+      "name": "\u5148\u5929\u5143\u529B",
+      "dospell_class": "no_switch_case",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": true,
+      "direct_result": true,
+      "direct_exception": "",
+      "msg_count": 3,
+      "msg": "10008:0:0:67;10052:0:0:0;10120:257:0:0"
+    },
+    {
+      "row_index": 62,
+      "magic_id": 68,
+      "name": "\u9152\u6C14\u62A4\u4F53",
+      "dospell_class": "no_switch_case",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": true,
+      "direct_result": true,
+      "direct_exception": "",
+      "msg_count": 3,
+      "msg": "10008:0:0:68;10052:0:0:0;10120:257:0:0"
+    },
+    {
+      "row_index": 63,
+      "magic_id": 69,
+      "name": "\u501A\u5929\u8F9F\u5730",
+      "dospell_class": "no_switch_case",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": true,
+      "direct_result": true,
+      "direct_exception": "",
+      "msg_count": 3,
+      "msg": "10008:0:0:69;10052:0:0:0;10120:257:0:0"
+    },
+    {
+      "row_index": 64,
+      "magic_id": 71,
+      "name": "\u56DB\u7EA7\u53EC\u5524\u795E\u517D",
+      "dospell_class": "no_switch_case",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": true,
+      "direct_result": true,
+      "direct_exception": "",
+      "msg_count": 3,
+      "msg": "10008:0:0:71;10052:0:0:0;10120:257:0:0"
+    },
+    {
+      "row_index": 65,
+      "magic_id": 71,
+      "name": "\u56DB\u7EA7\u82F1\u96C4\u795E\u517D",
+      "dospell_class": "no_switch_case",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": true,
+      "direct_result": true,
+      "direct_exception": "",
+      "msg_count": 3,
+      "msg": "10008:0:0:71;10052:0:0:0;10120:257:0:0"
+    },
+    {
+      "row_index": 66,
+      "magic_id": 72,
+      "name": "\u53EC\u5524\u6708\u7075",
+      "dospell_class": "no_switch_case",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": true,
+      "direct_result": true,
+      "direct_exception": "",
+      "msg_count": 3,
+      "msg": "10008:0:0:72;10052:0:0:0;10120:257:0:0"
+    },
+    {
+      "row_index": 67,
+      "magic_id": 74,
+      "name": "\u9010\u65E5\u5251\u6CD5",
+      "dospell_class": "no_switch_case",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": true,
+      "direct_result": true,
+      "direct_exception": "",
+      "msg_count": 3,
+      "msg": "10008:0:0:74;10052:0:0:0;10120:257:0:0"
+    },
+    {
+      "row_index": 68,
+      "magic_id": 75,
+      "name": "\u62A4\u4F53\u795E\u76FE",
+      "dospell_class": "no_switch_case",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": true,
+      "direct_result": true,
+      "direct_exception": "",
+      "msg_count": 3,
+      "msg": "10008:0:0:75;10052:0:0:0;10120:257:0:0"
+    },
+    {
+      "row_index": 69,
+      "magic_id": 76,
+      "name": "\u4E09\u7EDD\u6740",
+      "dospell_class": "no_switch_case",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": true,
+      "direct_result": true,
+      "direct_exception": "",
+      "msg_count": 3,
+      "msg": "10008:0:0:76;10052:0:0:0;10120:257:0:0"
+    },
+    {
+      "row_index": 70,
+      "magic_id": 77,
+      "name": "\u53CC\u9F99\u7834",
+      "dospell_class": "no_switch_case",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": true,
+      "direct_result": true,
+      "direct_exception": "",
+      "msg_count": 3,
+      "msg": "10008:0:0:77;10052:0:0:0;10120:257:0:0"
+    },
+    {
+      "row_index": 71,
+      "magic_id": 78,
+      "name": "\u864E\u5578\u8BC0",
+      "dospell_class": "no_switch_case",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": true,
+      "direct_result": true,
+      "direct_exception": "",
+      "msg_count": 3,
+      "msg": "10008:0:0:78;10052:0:0:0;10120:257:0:0"
+    },
+    {
+      "row_index": 72,
+      "magic_id": 79,
+      "name": "\u8FFD\u5FC3\u523A",
+      "dospell_class": "no_switch_case",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": true,
+      "direct_result": true,
+      "direct_exception": "",
+      "msg_count": 3,
+      "msg": "10008:0:0:79;10052:0:0:0;10120:257:0:0"
+    },
+    {
+      "row_index": 73,
+      "magic_id": 80,
+      "name": "\u51E4\u821E\u796D",
+      "dospell_class": "no_switch_case",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": true,
+      "direct_result": true,
+      "direct_exception": "",
+      "msg_count": 3,
+      "msg": "10008:0:0:80;10052:0:0:0;10120:257:0:0"
+    },
+    {
+      "row_index": 74,
+      "magic_id": 81,
+      "name": "\u516B\u5366\u638C",
+      "dospell_class": "magicid_reject",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 2,
+      "msg": "10008:0:0:81;10052:0:0:0"
+    },
+    {
+      "row_index": 75,
+      "magic_id": 82,
+      "name": "\u65AD\u5CB3\u65A9",
+      "dospell_class": "magicid_reject",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 2,
+      "msg": "10008:0:0:82;10052:0:0:0"
+    },
+    {
+      "row_index": 76,
+      "magic_id": 83,
+      "name": "\u60CA\u96F7\u7206",
+      "dospell_class": "magicid_reject",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 2,
+      "msg": "10008:0:0:83;10052:0:0:0"
+    },
+    {
+      "row_index": 77,
+      "magic_id": 84,
+      "name": "\u4E09\u7130\u5492",
+      "dospell_class": "magicid_reject",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 2,
+      "msg": "10008:0:0:84;10052:0:0:0"
+    },
+    {
+      "row_index": 78,
+      "magic_id": 85,
+      "name": "\u6A2A\u626B\u5343\u519B",
+      "dospell_class": "magicid_reject",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 2,
+      "msg": "10008:0:0:85;10052:0:0:0"
+    },
+    {
+      "row_index": 79,
+      "magic_id": 86,
+      "name": "\u51B0\u5929\u96EA\u5730",
+      "dospell_class": "magicid_reject",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 2,
+      "msg": "10008:0:0:86;10052:0:0:0"
+    },
+    {
+      "row_index": 80,
+      "magic_id": 87,
+      "name": "\u4E07\u5251\u5F52\u5B97",
+      "dospell_class": "magicid_reject",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 2,
+      "msg": "10008:0:0:87;10052:0:0:0"
+    },
+    {
+      "row_index": 81,
+      "magic_id": 88,
+      "name": "\u56DB\u7EA7\u57FA\u672C\u5251\u672F",
+      "dospell_class": "magicid_reject",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 2,
+      "msg": "10008:0:0:88;10052:0:0:0"
+    },
+    {
+      "row_index": 82,
+      "magic_id": 88,
+      "name": "\u56DB\u7EA7\u82F1\u96C4\u5251\u672F",
+      "dospell_class": "magicid_reject",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 2,
+      "msg": "10008:0:0:88;10052:0:0:0"
+    },
+    {
+      "row_index": 83,
+      "magic_id": 89,
+      "name": "\u56DB\u7EA7\u523A\u6740\u5251\u672F",
+      "dospell_class": "magicid_reject",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 2,
+      "msg": "10008:0:0:89;10052:0:0:0"
+    },
+    {
+      "row_index": 84,
+      "magic_id": 89,
+      "name": "\u56DB\u7EA7\u82F1\u96C4\u523A\u6740",
+      "dospell_class": "magicid_reject",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 2,
+      "msg": "10008:0:0:89;10052:0:0:0"
+    },
+    {
+      "row_index": 85,
+      "magic_id": 90,
+      "name": "\u56DB\u7EA7\u534A\u6708\u5F2F\u5200",
+      "dospell_class": "magicid_reject",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 2,
+      "msg": "10008:0:0:90;10052:0:0:0"
+    },
+    {
+      "row_index": 86,
+      "magic_id": 90,
+      "name": "\u56DB\u7EA7\u82F1\u96C4\u534A\u6708",
+      "dospell_class": "magicid_reject",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 2,
+      "msg": "10008:0:0:90;10052:0:0:0"
+    },
+    {
+      "row_index": 87,
+      "magic_id": 91,
+      "name": "\u56DB\u7EA7\u96F7\u7535\u672F",
+      "dospell_class": "magicid_reject",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 2,
+      "msg": "10008:0:0:91;10052:0:0:0"
+    },
+    {
+      "row_index": 88,
+      "magic_id": 91,
+      "name": "\u56DB\u7EA7\u82F1\u96C4\u96F7\u7535\u672F",
+      "dospell_class": "magicid_reject",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 2,
+      "msg": "10008:0:0:91;10052:0:0:0"
+    },
+    {
+      "row_index": 89,
+      "magic_id": 92,
+      "name": "\u56DB\u7EA7\u6D41\u661F\u706B\u96E8",
+      "dospell_class": "magicid_reject",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 2,
+      "msg": "10008:0:0:92;10052:0:0:0"
+    },
+    {
+      "row_index": 90,
+      "magic_id": 92,
+      "name": "\u56DB\u7EA7\u82F1\u96C4\u706B\u96E8",
+      "dospell_class": "magicid_reject",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 2,
+      "msg": "10008:0:0:92;10052:0:0:0"
+    },
+    {
+      "row_index": 91,
+      "magic_id": 93,
+      "name": "\u56DB\u7EA7\u65BD\u6BD2\u672F",
+      "dospell_class": "magicid_reject",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 2,
+      "msg": "10008:0:0:93;10052:0:0:0"
+    },
+    {
+      "row_index": 92,
+      "magic_id": 93,
+      "name": "\u56DB\u7EA7\u82F1\u96C4\u65BD\u6BD2\u672F",
+      "dospell_class": "magicid_reject",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 2,
+      "msg": "10008:0:0:93;10052:0:0:0"
+    },
+    {
+      "row_index": 93,
+      "magic_id": 94,
+      "name": "\u56DB\u7EA7\u566C\u8840\u672F",
+      "dospell_class": "magicid_reject",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 2,
+      "msg": "10008:0:0:94;10052:0:0:0"
+    },
+    {
+      "row_index": 94,
+      "magic_id": 94,
+      "name": "\u56DB\u7EA7\u82F1\u96C4\u566C\u8840\u672F",
+      "dospell_class": "magicid_reject",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 2,
+      "msg": "10008:0:0:94;10052:0:0:0"
+    },
+    {
+      "row_index": 95,
+      "magic_id": 95,
+      "name": "\u6597\u8F6C\u661F\u79FB",
+      "dospell_class": "magicid_reject",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 2,
+      "msg": "10008:0:0:95;10052:0:0:0"
+    },
+    {
+      "row_index": 96,
+      "magic_id": 96,
+      "name": "\u8840\u9B44\u4E00\u51FB(\u6218)",
+      "dospell_class": "magicid_reject",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 2,
+      "msg": "10008:0:0:96;10052:0:0:0"
+    },
+    {
+      "row_index": 97,
+      "magic_id": 96,
+      "name": "\u767D\u65E5\u95E8\u8840\u9B44(\u6218)",
+      "dospell_class": "magicid_reject",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 2,
+      "msg": "10008:0:0:96;10052:0:0:0"
+    },
+    {
+      "row_index": 98,
+      "magic_id": 97,
+      "name": "\u8840\u9B44\u4E00\u51FB(\u6CD5)",
+      "dospell_class": "magicid_reject",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 2,
+      "msg": "10008:0:0:97;10052:0:0:0"
+    },
+    {
+      "row_index": 99,
+      "magic_id": 97,
+      "name": "\u767D\u65E5\u95E8\u8840\u9B44(\u6CD5)",
+      "dospell_class": "magicid_reject",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 2,
+      "msg": "10008:0:0:97;10052:0:0:0"
+    },
+    {
+      "row_index": 100,
+      "magic_id": 98,
+      "name": "\u8840\u9B44\u4E00\u51FB(\u9053)",
+      "dospell_class": "magicid_reject",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 2,
+      "msg": "10008:0:0:98;10052:0:0:0"
+    },
+    {
+      "row_index": 101,
+      "magic_id": 98,
+      "name": "\u767D\u65E5\u95E8\u8840\u9B44(\u9053)",
+      "dospell_class": "magicid_reject",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 2,
+      "msg": "10008:0:0:98;10052:0:0:0"
+    },
+    {
+      "row_index": 102,
+      "magic_id": 99,
+      "name": "\u767D\u65E5\u95E8\u5F3A\u8EAB\u672F",
+      "dospell_class": "magicid_reject",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 2,
+      "msg": "10008:0:0:99;10052:0:0:0"
+    },
+    {
+      "row_index": 103,
+      "magic_id": 100,
+      "name": "\u795E\u79D8\u89E3\u8BFB",
+      "dospell_class": "magicid_reject",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 2,
+      "msg": "10008:0:0:100;10052:0:0:0"
+    },
+    {
+      "row_index": 104,
+      "magic_id": 101,
+      "name": "\u795E\u9F99\u9644\u4F53",
+      "dospell_class": "magicid_reject",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 2,
+      "msg": "10008:0:0:101;10052:0:0:0"
+    },
+    {
+      "row_index": 105,
+      "magic_id": 102,
+      "name": "\u552F\u6211\u72EC\u5C0A",
+      "dospell_class": "magicid_reject",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 2,
+      "msg": "10008:0:0:102;10052:0:0:0"
+    },
+    {
+      "row_index": 106,
+      "magic_id": 103,
+      "name": "\u53EC\u5524\u5DE8\u9B54",
+      "dospell_class": "magicid_reject",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 2,
+      "msg": "10008:0:0:103;10052:0:0:0"
+    },
+    {
+      "row_index": 107,
+      "magic_id": 500,
+      "name": "\u7834\u8840\u72C2\u6740",
+      "dospell_class": "magicid_reject",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 2,
+      "msg": "10008:0:0:500;10052:0:0:0"
+    },
+    {
+      "row_index": 108,
+      "magic_id": 501,
+      "name": "\u8FC5\u5F71\u79BB\u9B42",
+      "dospell_class": "magicid_reject",
+      "is_warr": false,
+      "spell_point": 5,
+      "mp_before": 500,
+      "mp_after": 495,
+      "out_result": false,
+      "direct_result": false,
+      "direct_exception": "",
+      "msg_count": 2,
+      "msg": "10008:0:0:501;10052:0:0:0"
+    }
+  ]
+}

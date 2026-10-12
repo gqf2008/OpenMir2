@@ -1,0 +1,147 @@
+cfg	no_rng_drawn
+site	gate_is_warr_skill	src/M2Server/Magic/MagicManager.cs	85	9	switch (wMagIdx)
+site	effect_dospell_main	src/M2Server/Magic/MagicManager.cs	172	45	switch (userMagic.Magic.MagicId)
+site	effect_dospell_inner_amulet	src/M2Server/Magic/MagicManager.cs	326	7	switch (userMagic.Magic.MagicId)
+site	attack_skill_toggle	src/M2Server/Player/PlayObject.Attack.cs	1118	8	switch (UserMagic.MagIdx)
+site	passive_recalc_hitspeed	src/M2Server/Player/PlayObject.cs	3685	4	switch (userMagic.MagIdx)
+caseid	src/M2Server/Magic/MagicManager.cs	87	SKILL_ONESWORD	3
+caseid	src/M2Server/Magic/MagicManager.cs	88	SKILL_ILKWANG	4
+caseid	src/M2Server/Magic/MagicManager.cs	89	SKILL_YEDO	7
+caseid	src/M2Server/Magic/MagicManager.cs	90	SKILL_ERGUM	12
+caseid	src/M2Server/Magic/MagicManager.cs	91	SKILL_BANWOL	25
+caseid	src/M2Server/Magic/MagicManager.cs	92	SKILL_FIRESWORD	26
+caseid	src/M2Server/Magic/MagicManager.cs	93	SKILL_MOOTEBO	27
+caseid	src/M2Server/Magic/MagicManager.cs	94	SKILL_CROSSMOON	34
+caseid	src/M2Server/Magic/MagicManager.cs	95	SKILL_TWINBLADE	38
+caseid	src/M2Server/Magic/MagicManager.cs	174	SKILL_FIREBALL	1
+caseid	src/M2Server/Magic/MagicManager.cs	175	SKILL_FIREBALL2	5
+caseid	src/M2Server/Magic/MagicManager.cs	204	SKILL_HEALLING	2
+caseid	src/M2Server/Magic/MagicManager.cs	225	SKILL_AMYOUNSUL	6
+caseid	src/M2Server/Magic/MagicManager.cs	259	SKILL_FIREWIND	8
+caseid	src/M2Server/Magic/MagicManager.cs	265	SKILL_FIRE	9
+caseid	src/M2Server/Magic/MagicManager.cs	277	SKILL_SHOOTLIGHTEN	10
+caseid	src/M2Server/Magic/MagicManager.cs	289	SKILL_LIGHTENING	11
+caseid	src/M2Server/Magic/MagicManager.cs	315	SKILL_FIRECHARM	13
+caseid	src/M2Server/Magic/MagicManager.cs	316	SKILL_HANGMAJINBUB	14
+caseid	src/M2Server/Magic/MagicManager.cs	317	SKILL_DEJIWONHO	15
+caseid	src/M2Server/Magic/MagicManager.cs	318	SKILL_HOLYSHIELD	16
+caseid	src/M2Server/Magic/MagicManager.cs	319	SKILL_SKELLETON	17
+caseid	src/M2Server/Magic/MagicManager.cs	320	SKILL_CLOAK	18
+caseid	src/M2Server/Magic/MagicManager.cs	321	SKILL_BIGCLOAK	19
+caseid	src/M2Server/Magic/MagicManager.cs	328	SKILL_FIRECHARM	13
+caseid	src/M2Server/Magic/MagicManager.cs	352	SKILL_HANGMAJINBUB	14
+caseid	src/M2Server/Magic/MagicManager.cs	359	SKILL_DEJIWONHO	15
+caseid	src/M2Server/Magic/MagicManager.cs	366	SKILL_HOLYSHIELD	16
+caseid	src/M2Server/Magic/MagicManager.cs	372	SKILL_SKELLETON	17
+caseid	src/M2Server/Magic/MagicManager.cs	378	SKILL_CLOAK	18
+caseid	src/M2Server/Magic/MagicManager.cs	384	SKILL_BIGCLOAK	19
+caseid	src/M2Server/Magic/MagicManager.cs	394	SKILL_TAMMING	20
+caseid	src/M2Server/Magic/MagicManager.cs	403	SKILL_SPACEMOVE	21
+caseid	src/M2Server/Magic/MagicManager.cs	412	SKILL_EARTHFIRE	22
+caseid	src/M2Server/Magic/MagicManager.cs	418	SKILL_FIREBOOM	23
+caseid	src/M2Server/Magic/MagicManager.cs	424	SKILL_LIGHTFLOWER	24
+caseid	src/M2Server/Magic/MagicManager.cs	431	SKILL_SHOWHP	28
+caseid	src/M2Server/Magic/MagicManager.cs	443	SKILL_BIGHEALLING	29
+caseid	src/M2Server/Magic/MagicManager.cs	450	SKILL_SINSU	30
+caseid	src/M2Server/Magic/MagicManager.cs	462	SKILL_ANGEL	41
+caseid	src/M2Server/Magic/MagicManager.cs	474	SKILL_SHIELD	31
+caseid	src/M2Server/Magic/MagicManager.cs	480	SKILL_KILLUNDEAD	32
+caseid	src/M2Server/Magic/MagicManager.cs	489	SKILL_SNOWWIND	33
+caseid	src/M2Server/Magic/MagicManager.cs	495	SKILL_UNAMYOUNSUL	40
+caseid	src/M2Server/Magic/MagicManager.cs	524	SKILL_WINDTEBO	35
+caseid	src/M2Server/Magic/MagicManager.cs	530	SKILL_MABE	50
+caseid	src/M2Server/Magic/MagicManager.cs	537	SKILL_GROUPLIGHTENING	42
+caseid	src/M2Server/Magic/MagicManager.cs	543	SKILL_GROUPAMYOUNSUL	48
+caseid	src/M2Server/Magic/MagicManager.cs	549	SKILL_GROUPDEDING	39
+caseid	src/M2Server/Magic/MagicManager.cs	555	SKILL_43	43
+caseid	src/M2Server/Magic/MagicManager.cs	557	SKILL_44	44
+caseid	src/M2Server/Magic/MagicManager.cs	563	SKILL_45	45
+caseid	src/M2Server/Magic/MagicManager.cs	589	SKILL_46	46
+caseid	src/M2Server/Magic/MagicManager.cs	595	SKILL_47	47
+caseid	src/M2Server/Magic/MagicManager.cs	601	SKILL_ENERGYREPULSOR	37
+caseid	src/M2Server/Magic/MagicManager.cs	607	SKILL_49	49
+caseid	src/M2Server/Magic/MagicManager.cs	610	SKILL_UENHANCER	36
+caseid	src/M2Server/Magic/MagicManager.cs	631	SKILL_51	51
+caseid	src/M2Server/Magic/MagicManager.cs	634	SKILL_52	52
+caseid	src/M2Server/Magic/MagicManager.cs	637	SKILL_53	53
+caseid	src/M2Server/Magic/MagicManager.cs	640	SKILL_54	54
+caseid	src/M2Server/Player/PlayObject.Attack.cs	1120	SKILL_ERGUM	12
+caseid	src/M2Server/Player/PlayObject.Attack.cs	1136	SKILL_BANWOL	25
+caseid	src/M2Server/Player/PlayObject.Attack.cs	1152	SKILL_REDBANWOL	56
+caseid	src/M2Server/Player/PlayObject.Attack.cs	1168	SKILL_FIRESWORD	26
+caseid	src/M2Server/Player/PlayObject.Attack.cs	1187	SKILL_MOOTEBO	27
+caseid	src/M2Server/Player/PlayObject.Attack.cs	1218	SKILL_CROSSMOON	34
+caseid	src/M2Server/Player/PlayObject.Attack.cs	1234	SKILL_TWINBLADE	38
+caseid	src/M2Server/Player/PlayObject.Attack.cs	1253	SKILL_43	43
+caseid	src/M2Server/Player/PlayObject.cs	3687	SKILL_ONESWORD	3
+caseid	src/M2Server/Player/PlayObject.cs	3693	SKILL_ILKWANG	4
+caseid	src/M2Server/Player/PlayObject.cs	3699	SKILL_YEDO	7
+caseid	src/M2Server/Player/PlayObject.cs	3708	SKILL_FIRESWORD	26
+idcmp	lookup_attack_magic	src/M2Server/Player/PlayObject.Attack.cs	345	if ((userMagic != null) && (userMagic.MagIdx == nIndex))
+idcmp	lookup_change_magic_key	src/M2Server/Player/PlayObject.Operate.cs	779	if (userMagic.Magic.MagicId == nSkillIdx)
+idcmp	lookup_get_magic_info	src/M2Server/Player/PlayObject.cs	4179	if (userMagic.Magic.MagicId == nMagicId)
+idcmp	cond_see_heal_gauge	src/M2Server/Player/PlayObject.cs	5233	if (magic.Magic.MagicId == 28)
+bucketcase	src/M2Server/Player/PlayObject.Attack.cs	1152	SKILL_REDBANWOL	56
+generic	3	3	基本剑术	warr_reject	1	5	500	500	0	0		0	
+generic	4	4	精神力战法	warr_reject	1	5	500	500	0	0		0	
+generic	7	7	攻杀剑术	warr_reject	1	5	500	500	0	0		0	
+generic	12	12	刺杀剑术	warr_reject	1	5	500	500	0	0		0	
+generic	25	25	半月弯刀	warr_reject	1	5	500	500	0	0		0	
+generic	26	26	烈火剑法	warr_reject	1	5	500	500	0	0		0	
+generic	27	27	野蛮冲撞	warr_reject	1	5	500	500	0	0		0	
+generic	34	34	解毒术	warr_reject	1	5	500	500	0	0		0	
+generic	54	55	吸星狂杀	no_switch_case	0	5	500	495	1	1		3	10008:0:0:55;10052:0:0:0;10120:257:0:0
+generic	55	56	异形换位	no_switch_case	0	5	500	495	1	1		3	10008:0:0:56;10052:0:0:0;10120:257:0:0
+generic	56	57	回生术	no_switch_case	0	5	500	495	1	1		3	10008:0:0:57;10052:0:0:0;10120:257:0:0
+generic	57	58	流星火雨	no_switch_case	0	5	500	495	1	1		3	10008:0:0:58;10052:0:0:0;10120:257:0:0
+generic	58	59	噬血术	no_switch_case	0	5	500	495	1	1		3	10008:0:0:59;10052:0:0:0;10120:257:0:0
+generic	59	66	四级魔法盾	no_switch_case	0	5	500	495	1	1		3	10008:0:0:66;10052:0:0:0;10120:257:0:0
+generic	60	66	白日门四级法盾	no_switch_case	0	5	500	495	1	1		3	10008:0:0:66;10052:0:0:0;10120:257:0:0
+generic	61	67	先天元力	no_switch_case	0	5	500	495	1	1		3	10008:0:0:67;10052:0:0:0;10120:257:0:0
+generic	62	68	酒气护体	no_switch_case	0	5	500	495	1	1		3	10008:0:0:68;10052:0:0:0;10120:257:0:0
+generic	63	69	倚天辟地	no_switch_case	0	5	500	495	1	1		3	10008:0:0:69;10052:0:0:0;10120:257:0:0
+generic	64	71	四级召唤神兽	no_switch_case	0	5	500	495	1	1		3	10008:0:0:71;10052:0:0:0;10120:257:0:0
+generic	65	71	四级英雄神兽	no_switch_case	0	5	500	495	1	1		3	10008:0:0:71;10052:0:0:0;10120:257:0:0
+generic	66	72	召唤月灵	no_switch_case	0	5	500	495	1	1		3	10008:0:0:72;10052:0:0:0;10120:257:0:0
+generic	67	74	逐日剑法	no_switch_case	0	5	500	495	1	1		3	10008:0:0:74;10052:0:0:0;10120:257:0:0
+generic	68	75	护体神盾	no_switch_case	0	5	500	495	1	1		3	10008:0:0:75;10052:0:0:0;10120:257:0:0
+generic	69	76	三绝杀	no_switch_case	0	5	500	495	1	1		3	10008:0:0:76;10052:0:0:0;10120:257:0:0
+generic	70	77	双龙破	no_switch_case	0	5	500	495	1	1		3	10008:0:0:77;10052:0:0:0;10120:257:0:0
+generic	71	78	虎啸诀	no_switch_case	0	5	500	495	1	1		3	10008:0:0:78;10052:0:0:0;10120:257:0:0
+generic	72	79	追心刺	no_switch_case	0	5	500	495	1	1		3	10008:0:0:79;10052:0:0:0;10120:257:0:0
+generic	73	80	凤舞祭	no_switch_case	0	5	500	495	1	1		3	10008:0:0:80;10052:0:0:0;10120:257:0:0
+generic	74	81	八卦掌	magicid_reject	0	5	500	495	0	0		2	10008:0:0:81;10052:0:0:0
+generic	75	82	断岳斩	magicid_reject	0	5	500	495	0	0		2	10008:0:0:82;10052:0:0:0
+generic	76	83	惊雷爆	magicid_reject	0	5	500	495	0	0		2	10008:0:0:83;10052:0:0:0
+generic	77	84	三焰咒	magicid_reject	0	5	500	495	0	0		2	10008:0:0:84;10052:0:0:0
+generic	78	85	横扫千军	magicid_reject	0	5	500	495	0	0		2	10008:0:0:85;10052:0:0:0
+generic	79	86	冰天雪地	magicid_reject	0	5	500	495	0	0		2	10008:0:0:86;10052:0:0:0
+generic	80	87	万剑归宗	magicid_reject	0	5	500	495	0	0		2	10008:0:0:87;10052:0:0:0
+generic	81	88	四级基本剑术	magicid_reject	0	5	500	495	0	0		2	10008:0:0:88;10052:0:0:0
+generic	82	88	四级英雄剑术	magicid_reject	0	5	500	495	0	0		2	10008:0:0:88;10052:0:0:0
+generic	83	89	四级刺杀剑术	magicid_reject	0	5	500	495	0	0		2	10008:0:0:89;10052:0:0:0
+generic	84	89	四级英雄刺杀	magicid_reject	0	5	500	495	0	0		2	10008:0:0:89;10052:0:0:0
+generic	85	90	四级半月弯刀	magicid_reject	0	5	500	495	0	0		2	10008:0:0:90;10052:0:0:0
+generic	86	90	四级英雄半月	magicid_reject	0	5	500	495	0	0		2	10008:0:0:90;10052:0:0:0
+generic	87	91	四级雷电术	magicid_reject	0	5	500	495	0	0		2	10008:0:0:91;10052:0:0:0
+generic	88	91	四级英雄雷电术	magicid_reject	0	5	500	495	0	0		2	10008:0:0:91;10052:0:0:0
+generic	89	92	四级流星火雨	magicid_reject	0	5	500	495	0	0		2	10008:0:0:92;10052:0:0:0
+generic	90	92	四级英雄火雨	magicid_reject	0	5	500	495	0	0		2	10008:0:0:92;10052:0:0:0
+generic	91	93	四级施毒术	magicid_reject	0	5	500	495	0	0		2	10008:0:0:93;10052:0:0:0
+generic	92	93	四级英雄施毒术	magicid_reject	0	5	500	495	0	0		2	10008:0:0:93;10052:0:0:0
+generic	93	94	四级噬血术	magicid_reject	0	5	500	495	0	0		2	10008:0:0:94;10052:0:0:0
+generic	94	94	四级英雄噬血术	magicid_reject	0	5	500	495	0	0		2	10008:0:0:94;10052:0:0:0
+generic	95	95	斗转星移	magicid_reject	0	5	500	495	0	0		2	10008:0:0:95;10052:0:0:0
+generic	96	96	血魄一击(战)	magicid_reject	0	5	500	495	0	0		2	10008:0:0:96;10052:0:0:0
+generic	97	96	白日门血魄(战)	magicid_reject	0	5	500	495	0	0		2	10008:0:0:96;10052:0:0:0
+generic	98	97	血魄一击(法)	magicid_reject	0	5	500	495	0	0		2	10008:0:0:97;10052:0:0:0
+generic	99	97	白日门血魄(法)	magicid_reject	0	5	500	495	0	0		2	10008:0:0:97;10052:0:0:0
+generic	100	98	血魄一击(道)	magicid_reject	0	5	500	495	0	0		2	10008:0:0:98;10052:0:0:0
+generic	101	98	白日门血魄(道)	magicid_reject	0	5	500	495	0	0		2	10008:0:0:98;10052:0:0:0
+generic	102	99	白日门强身术	magicid_reject	0	5	500	495	0	0		2	10008:0:0:99;10052:0:0:0
+generic	103	100	神秘解读	magicid_reject	0	5	500	495	0	0		2	10008:0:0:100;10052:0:0:0
+generic	104	101	神龙附体	magicid_reject	0	5	500	495	0	0		2	10008:0:0:101;10052:0:0:0
+generic	105	102	唯我独尊	magicid_reject	0	5	500	495	0	0		2	10008:0:0:102;10052:0:0:0
+generic	106	103	召唤巨魔	magicid_reject	0	5	500	495	0	0		2	10008:0:0:103;10052:0:0:0
+generic	107	500	破血狂杀	magicid_reject	0	5	500	495	0	0		2	10008:0:0:500;10052:0:0:0
+generic	108	501	迅影离魂	magicid_reject	0	5	500	495	0	0		2	10008:0:0:501;10052:0:0:0

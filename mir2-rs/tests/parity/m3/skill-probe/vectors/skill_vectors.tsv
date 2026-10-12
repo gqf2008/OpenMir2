@@ -81,58 +81,58 @@ reg	51	月魂风暴	2	50	30	0	DoSpell case 体无副作用（43 `break`；49/51/
 reg	52	神之诅咒	2	48	30	0	DoSpell case 体无副作用（43 `break`；49/51/52/53/54 只置 boTrain）；承接 = 无行为可对拍	no_effect_case
 reg	53	嗜血魔咒(保留)	2	50	30	0	DoSpell case 体无副作用（43 `break`；49/51/52/53/54 只置 boTrain）；承接 = 无行为可对拍	no_effect_case
 reg	54	召妖降魔	2	18	30	0	DoSpell case 体无副作用（43 `break`；49/51/52/53/54 只置 boTrain）；承接 = 无行为可对拍	no_effect_case
-reg	55	吸星狂杀	0	50	40	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
-reg	56	异形换位	1	48	30	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
-reg	57	回生术	2	48	30	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
-reg	58	流星火雨	1	46	60	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
-reg	59	噬血术	2	46	60	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
-reg	66	四级魔法盾	1	40	0	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
-reg	66	白日门四级法盾	1	40	0	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
-reg	67	先天元力	99	50	0	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
-reg	68	酒气护体	99	50	0	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
-reg	69	倚天辟地	99	38	60	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
-reg	71	四级召唤神兽	2	50	120	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
-reg	71	四级英雄神兽	2	50	120	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
-reg	72	召唤月灵	2	45	60	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
-reg	74	逐日剑法	0	46	0	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
-reg	75	护体神盾	99	39	60	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
-reg	76	三绝杀	0	15	60	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
-reg	77	双龙破	1	15	60	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
-reg	78	虎啸诀	2	15	60	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
-reg	79	追心刺	0	33	60	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
-reg	80	凤舞祭	1	33	60	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 待确认是否有第二分派器	no_switch_case
-reg	81	八卦掌	2	33	60	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
-reg	82	断岳斩	0	50	60	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
-reg	83	惊雷爆	1	50	60	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
-reg	84	三焰咒	2	50	60	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
-reg	85	横扫千军	0	53	60	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
-reg	86	冰天雪地	1	53	60	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
-reg	87	万剑归宗	2	53	60	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
-reg	88	四级基本剑术	0	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
-reg	88	四级英雄剑术	0	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
-reg	89	四级刺杀剑术	0	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
-reg	89	四级英雄刺杀	0	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
-reg	90	四级半月弯刀	0	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
-reg	90	四级英雄半月	0	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
-reg	91	四级雷电术	1	50	100	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
-reg	91	四级英雄雷电术	1	50	100	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
-reg	92	四级流星火雨	1	50	30	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
-reg	92	四级英雄火雨	1	50	30	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
-reg	93	四级施毒术	2	50	40	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
-reg	93	四级英雄施毒术	2	50	40	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
-reg	94	四级噬血术	2	50	60	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
-reg	94	四级英雄噬血术	2	50	60	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
-reg	95	斗转星移	99	0	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
-reg	96	血魄一击(战)	0	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
-reg	96	白日门血魄(战)	0	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
-reg	97	血魄一击(法)	1	50	30	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
-reg	97	白日门血魄(法)	1	50	30	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
-reg	98	血魄一击(道)	2	50	40	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
-reg	98	白日门血魄(道)	2	50	40	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
-reg	99	白日门强身术	99	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
-reg	100	神秘解读	99	28	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
-reg	101	神龙附体	99	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
-reg	102	唯我独尊	99	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
-reg	103	召唤巨魔	99	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
-reg	500	破血狂杀	0	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
-reg	501	迅影离魂	0	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 需先确认 oracle 是否另有分派器（本表内无 case，DoSpell 不可达）	magicid_reject
+reg	55	吸星狂杀	0	50	40	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 已审计 DoSpell 之外无第二分派器（dispatch-audit-probe）	no_switch_case
+reg	56	异形换位	1	48	30	0	DoSpell switch 无此魔号 case（MagicManager.cs:172-640 无分支）；但第二分派器**存在**：PlayObject.Attack.cs:1152 `case SKILL_REDBANWOL(56)` ⇒ RedHalfMoonOnOff + SendSocket("+WID")（攻击路径开关）；承接 = M3 攻击接线（同 warr_reject 口径）	no_switch_case
+reg	57	回生术	2	48	30	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 已审计 DoSpell 之外无第二分派器（dispatch-audit-probe）	no_switch_case
+reg	58	流星火雨	1	46	60	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 已审计 DoSpell 之外无第二分派器（dispatch-audit-probe）	no_switch_case
+reg	59	噬血术	2	46	60	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 已审计 DoSpell 之外无第二分派器（dispatch-audit-probe）	no_switch_case
+reg	66	四级魔法盾	1	40	0	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 已审计 DoSpell 之外无第二分派器（dispatch-audit-probe）	no_switch_case
+reg	66	白日门四级法盾	1	40	0	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 已审计 DoSpell 之外无第二分派器（dispatch-audit-probe）	no_switch_case
+reg	67	先天元力	99	50	0	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 已审计 DoSpell 之外无第二分派器（dispatch-audit-probe）	no_switch_case
+reg	68	酒气护体	99	50	0	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 已审计 DoSpell 之外无第二分派器（dispatch-audit-probe）	no_switch_case
+reg	69	倚天辟地	99	38	60	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 已审计 DoSpell 之外无第二分派器（dispatch-audit-probe）	no_switch_case
+reg	71	四级召唤神兽	2	50	120	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 已审计 DoSpell 之外无第二分派器（dispatch-audit-probe）	no_switch_case
+reg	71	四级英雄神兽	2	50	120	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 已审计 DoSpell 之外无第二分派器（dispatch-audit-probe）	no_switch_case
+reg	72	召唤月灵	2	45	60	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 已审计 DoSpell 之外无第二分派器（dispatch-audit-probe）	no_switch_case
+reg	74	逐日剑法	0	46	0	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 已审计 DoSpell 之外无第二分派器（dispatch-audit-probe）	no_switch_case
+reg	75	护体神盾	99	39	60	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 已审计 DoSpell 之外无第二分派器（dispatch-audit-probe）	no_switch_case
+reg	76	三绝杀	0	15	60	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 已审计 DoSpell 之外无第二分派器（dispatch-audit-probe）	no_switch_case
+reg	77	双龙破	1	15	60	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 已审计 DoSpell 之外无第二分派器（dispatch-audit-probe）	no_switch_case
+reg	78	虎啸诀	2	15	60	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 已审计 DoSpell 之外无第二分派器（dispatch-audit-probe）	no_switch_case
+reg	79	追心刺	0	33	60	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 已审计 DoSpell 之外无第二分派器（dispatch-audit-probe）	no_switch_case
+reg	80	凤舞祭	1	33	60	0	DoSpell switch 无此魔号 case ⇒ 只走通用 RM_MAGICFIRE/train（MagicManager.cs:172-640 无分支）；承接 = 已审计 DoSpell 之外无第二分派器（dispatch-audit-probe）	no_switch_case
+reg	81	八卦掌	2	33	60	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 已审计无第二分派器（dispatch-audit-probe：M2Server `case` 集合 ∩ {>80} = ∅）；效果 = MP 扣减 + RM_SPELL 广播后 false	magicid_reject
+reg	82	断岳斩	0	50	60	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 已审计无第二分派器（dispatch-audit-probe：M2Server `case` 集合 ∩ {>80} = ∅）；效果 = MP 扣减 + RM_SPELL 广播后 false	magicid_reject
+reg	83	惊雷爆	1	50	60	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 已审计无第二分派器（dispatch-audit-probe：M2Server `case` 集合 ∩ {>80} = ∅）；效果 = MP 扣减 + RM_SPELL 广播后 false	magicid_reject
+reg	84	三焰咒	2	50	60	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 已审计无第二分派器（dispatch-audit-probe：M2Server `case` 集合 ∩ {>80} = ∅）；效果 = MP 扣减 + RM_SPELL 广播后 false	magicid_reject
+reg	85	横扫千军	0	53	60	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 已审计无第二分派器（dispatch-audit-probe：M2Server `case` 集合 ∩ {>80} = ∅）；效果 = MP 扣减 + RM_SPELL 广播后 false	magicid_reject
+reg	86	冰天雪地	1	53	60	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 已审计无第二分派器（dispatch-audit-probe：M2Server `case` 集合 ∩ {>80} = ∅）；效果 = MP 扣减 + RM_SPELL 广播后 false	magicid_reject
+reg	87	万剑归宗	2	53	60	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 已审计无第二分派器（dispatch-audit-probe：M2Server `case` 集合 ∩ {>80} = ∅）；效果 = MP 扣减 + RM_SPELL 广播后 false	magicid_reject
+reg	88	四级基本剑术	0	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 已审计无第二分派器（dispatch-audit-probe：M2Server `case` 集合 ∩ {>80} = ∅）；效果 = MP 扣减 + RM_SPELL 广播后 false	magicid_reject
+reg	88	四级英雄剑术	0	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 已审计无第二分派器（dispatch-audit-probe：M2Server `case` 集合 ∩ {>80} = ∅）；效果 = MP 扣减 + RM_SPELL 广播后 false	magicid_reject
+reg	89	四级刺杀剑术	0	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 已审计无第二分派器（dispatch-audit-probe：M2Server `case` 集合 ∩ {>80} = ∅）；效果 = MP 扣减 + RM_SPELL 广播后 false	magicid_reject
+reg	89	四级英雄刺杀	0	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 已审计无第二分派器（dispatch-audit-probe：M2Server `case` 集合 ∩ {>80} = ∅）；效果 = MP 扣减 + RM_SPELL 广播后 false	magicid_reject
+reg	90	四级半月弯刀	0	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 已审计无第二分派器（dispatch-audit-probe：M2Server `case` 集合 ∩ {>80} = ∅）；效果 = MP 扣减 + RM_SPELL 广播后 false	magicid_reject
+reg	90	四级英雄半月	0	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 已审计无第二分派器（dispatch-audit-probe：M2Server `case` 集合 ∩ {>80} = ∅）；效果 = MP 扣减 + RM_SPELL 广播后 false	magicid_reject
+reg	91	四级雷电术	1	50	100	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 已审计无第二分派器（dispatch-audit-probe：M2Server `case` 集合 ∩ {>80} = ∅）；效果 = MP 扣减 + RM_SPELL 广播后 false	magicid_reject
+reg	91	四级英雄雷电术	1	50	100	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 已审计无第二分派器（dispatch-audit-probe：M2Server `case` 集合 ∩ {>80} = ∅）；效果 = MP 扣减 + RM_SPELL 广播后 false	magicid_reject
+reg	92	四级流星火雨	1	50	30	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 已审计无第二分派器（dispatch-audit-probe：M2Server `case` 集合 ∩ {>80} = ∅）；效果 = MP 扣减 + RM_SPELL 广播后 false	magicid_reject
+reg	92	四级英雄火雨	1	50	30	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 已审计无第二分派器（dispatch-audit-probe：M2Server `case` 集合 ∩ {>80} = ∅）；效果 = MP 扣减 + RM_SPELL 广播后 false	magicid_reject
+reg	93	四级施毒术	2	50	40	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 已审计无第二分派器（dispatch-audit-probe：M2Server `case` 集合 ∩ {>80} = ∅）；效果 = MP 扣减 + RM_SPELL 广播后 false	magicid_reject
+reg	93	四级英雄施毒术	2	50	40	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 已审计无第二分派器（dispatch-audit-probe：M2Server `case` 集合 ∩ {>80} = ∅）；效果 = MP 扣减 + RM_SPELL 广播后 false	magicid_reject
+reg	94	四级噬血术	2	50	60	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 已审计无第二分派器（dispatch-audit-probe：M2Server `case` 集合 ∩ {>80} = ∅）；效果 = MP 扣减 + RM_SPELL 广播后 false	magicid_reject
+reg	94	四级英雄噬血术	2	50	60	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 已审计无第二分派器（dispatch-audit-probe：M2Server `case` 集合 ∩ {>80} = ∅）；效果 = MP 扣减 + RM_SPELL 广播后 false	magicid_reject
+reg	95	斗转星移	99	0	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 已审计无第二分派器（dispatch-audit-probe：M2Server `case` 集合 ∩ {>80} = ∅）；效果 = MP 扣减 + RM_SPELL 广播后 false	magicid_reject
+reg	96	血魄一击(战)	0	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 已审计无第二分派器（dispatch-audit-probe：M2Server `case` 集合 ∩ {>80} = ∅）；效果 = MP 扣减 + RM_SPELL 广播后 false	magicid_reject
+reg	96	白日门血魄(战)	0	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 已审计无第二分派器（dispatch-audit-probe：M2Server `case` 集合 ∩ {>80} = ∅）；效果 = MP 扣减 + RM_SPELL 广播后 false	magicid_reject
+reg	97	血魄一击(法)	1	50	30	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 已审计无第二分派器（dispatch-audit-probe：M2Server `case` 集合 ∩ {>80} = ∅）；效果 = MP 扣减 + RM_SPELL 广播后 false	magicid_reject
+reg	97	白日门血魄(法)	1	50	30	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 已审计无第二分派器（dispatch-audit-probe：M2Server `case` 集合 ∩ {>80} = ∅）；效果 = MP 扣减 + RM_SPELL 广播后 false	magicid_reject
+reg	98	血魄一击(道)	2	50	40	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 已审计无第二分派器（dispatch-audit-probe：M2Server `case` 集合 ∩ {>80} = ∅）；效果 = MP 扣减 + RM_SPELL 广播后 false	magicid_reject
+reg	98	白日门血魄(道)	2	50	40	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 已审计无第二分派器（dispatch-audit-probe：M2Server `case` 集合 ∩ {>80} = ∅）；效果 = MP 扣减 + RM_SPELL 广播后 false	magicid_reject
+reg	99	白日门强身术	99	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 已审计无第二分派器（dispatch-audit-probe：M2Server `case` 集合 ∩ {>80} = ∅）；效果 = MP 扣减 + RM_SPELL 广播后 false	magicid_reject
+reg	100	神秘解读	99	28	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 已审计无第二分派器（dispatch-audit-probe：M2Server `case` 集合 ∩ {>80} = ∅）；效果 = MP 扣减 + RM_SPELL 广播后 false	magicid_reject
+reg	101	神龙附体	99	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 已审计无第二分派器（dispatch-audit-probe：M2Server `case` 集合 ∩ {>80} = ∅）；效果 = MP 扣减 + RM_SPELL 广播后 false	magicid_reject
+reg	102	唯我独尊	99	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 已审计无第二分派器（dispatch-audit-probe：M2Server `case` 集合 ∩ {>80} = ∅）；效果 = MP 扣减 + RM_SPELL 广播后 false	magicid_reject
+reg	103	召唤巨魔	99	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 已审计无第二分派器（dispatch-audit-probe：M2Server `case` 集合 ∩ {>80} = ∅）；效果 = MP 扣减 + RM_SPELL 广播后 false	magicid_reject
+reg	500	破血狂杀	0	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 已审计无第二分派器（dispatch-audit-probe：M2Server `case` 集合 ∩ {>80} = ∅）；效果 = MP 扣减 + RM_SPELL 广播后 false	magicid_reject
+reg	501	迅影离魂	0	50	0	0	DoSpell 前置：MagicId > 80 ⇒ return false（MagicManager.cs:167）；承接 = 已审计无第二分派器（dispatch-audit-probe：M2Server `case` 集合 ∩ {>80} = ∅）；效果 = MP 扣减 + RM_SPELL 广播后 false	magicid_reject
