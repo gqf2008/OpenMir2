@@ -1,0 +1,7 @@
+$ python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/m3/evidence-m3-isolate-twophase-fn1-20261013
+GREEN mir2-rs\tests\parity\m3\evidence-m3-isolate-twophase-fn1-20261013\SHA256SUMS.txt  [repo 口径]  OK 54/54
+rc=0
+
+$ python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/m3/attack-request-sequence
+GREEN mir2-rs\tests\parity\m3\attack-request-sequence\SHA256SUMS.txt  [repo 口径]  OK 33/33
+rc=0

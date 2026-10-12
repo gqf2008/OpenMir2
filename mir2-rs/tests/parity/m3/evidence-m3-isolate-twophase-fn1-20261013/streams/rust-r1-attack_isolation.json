@@ -1,0 +1,17 @@
+﻿{
+    "side":  "rust",
+    "isolate_attack":  true,
+    "attack_seed":  40545,
+    "trace":  "E:/tmp/m3cs-fn1/rust2/rng-stream.tsv",
+    "trace_isolate":  true,
+    "trace_isolate_seed":  40545,
+    "sites_dump":  "",
+    "sites_dump_sha256":  "",
+    "sites_cursor":  "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\.claude\\worktrees\\m3cs\\mir2-rs\\tests\\parity\\m3\\rng-hook\\divert-sites.txt",
+    "sites_cursor_sha256":  "47061e1b24b41d192a6efb6988c24c849f48fdb08105aa40b5c852803a531d99",
+    "attack_stream":  "",
+    "attack_stream_sha256":  "",
+    "predicates_table":  "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\.claude\\worktrees\\m3cs\\mir2-rs\\tests\\parity\\m3\\rng-isolate-attack\\attack_sites.tsv",
+    "predicates_table_sha256":  "8392f7287971b53fcdd2fb1e3e63cfa1d6a925fb5ae37a86a11be2100ce9727f",
+    "ts":  "2026-10-13T01:57:20.8347048+08:00"
+}

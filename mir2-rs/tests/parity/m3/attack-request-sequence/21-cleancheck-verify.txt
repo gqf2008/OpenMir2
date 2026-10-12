@@ -1,5 +1,7 @@
 # E-1 的**干净检出**复核（reviewer 的判据环境；模拟：git worktree add --detach <head>）
-# head = b6befecd6be84e8aca31d2f2e23d4c2e28d7cb06（本片最终 head）；worktree = E:/tmp/cleancheck-m3cs（本文件即在该 worktree 上实跑采集）
+# head = b6befecd6be84e8aca31d2f2e23d4c2e28d7cb06（采集该件的**干净检出**所用树）；worktree = E:/tmp/cleancheck-m3cs（本文件即在该 worktree 上实跑采集）
+# 注（O-1）：本件**不自述“本片最终 head”**——head 会随后续交付移动（本件采集后依次到 1e1f967d 及以后）；
+#   以本包 `SHA256SUMS.txt` 记的树为准。下面 33/33 是 b6befecd 树上的原样实跑输出。
 
 $ python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/m3/evidence-rng-isolate-attack-twophase-ff-20261013
 GREEN mir2-rs\tests\parity\m3\evidence-rng-isolate-attack-twophase-ff-20261013\SHA256SUMS.txt  [repo 口径]  OK 82/82
