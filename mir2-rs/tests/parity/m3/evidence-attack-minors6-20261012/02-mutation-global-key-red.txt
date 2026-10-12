@@ -1,0 +1,6 @@
+mutation: attack_diff.py::align_events key = (src, actor, dmg, hp, maxhp)   # 旧全局键
+expect: attack_diff.py selftest RED（p-perk-key-no-cross-k-fold / p-same-k-still-deduped 必红）
+command: python mir2-rs/tests/parity/m3/attack_diff.py selftest
+exit=1
+
+SELFTEST RED: 2/30 未过: p-perk-key-no-cross-k-fold ({'role': 'summary', 'attacked': 2, 'hits': 1, 'dodges': 1, 'sum': 5, 'death_k': None, 'min_hp': 10, 'filtered_foreign': 0, 'other_observer': 1, 'deduped': 2, 'unattributed': 0}), p-same-k-still-deduped ({'role': 'summary', 'attacked': 2, 'hits': 1, 'dodges': 1, 'sum': 5, 'death_k': None, 'min_hp': 10, 'filtered_foreign': 0, 'other_observer': 1, 'deduped': 2, 'unattributed': 0})

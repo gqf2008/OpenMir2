@@ -21,12 +21,14 @@
   align <raw.jsonl> --out <seq.jsonl>
       把一条侧运行的原始事件流**按「第 k 次」对齐**成逐次结果：
       遍历事件流，`role=attack` 更新 `current_k`；`role=struck` 归到最近一次 `k`（= hit，记 `dmg`），
-      但**必须** `struck.src == attack.my`（命中者 = 攻击方），且同一 `(src,actor,dmg,hp,maxhp)`
-      事件键只消费一次（同一击被多视角/多次投递重复落库 ⇒ 去重，不累加）。`k` 无 struck ⇒
+      但**必须** `struck.src == attack.my`（命中者 = 攻击方），且同一 `(k,src,actor,dmg,hp,maxhp)`
+      事件键只消费一次（同一击被多视角/多次投递重复落库 ⇒ 去重，不累加；键带 `k` ⇒ HP 回满后
+      不同 `k` 的同一击不会被误折叠）。`k` 无 struck ⇒
       dodge（`dmg=0`）。输出每行 `{"k":k,"hit":bool,"dmg":int,"hp":int,"maxhp":int}`。
       末尾附一行 `{"role":"summary",...}`（含计数 filtered_foreign/other_observer/deduped）。
       **fail-closed（owner 2026-10-12 17:35，残差③）**：`attack` 行缺 `my` ⇒ 直接 rc=2 报错，
-      **绝不**静默降级成「不过滤」（旧实现就是这么把同一击算两次的）。
+      **绝不**静默降级成「不过滤」（旧实现就是这么把同一击算两次的）。历史会话（未落 `my`）
+      先跑 `rebuild_attack_my.py` 离线复算归一化（见其文档），**没有**任何「缺字段也继续」的旁路。
 
   diff <a_seq.jsonl> <b_seq.jsonl>
       跨侧逐项比对（**判据本体**）：
@@ -101,12 +103,12 @@ class FailClosed(Exception):
     """
 
 
-def _require_actor_id(ev, role, key):
+def _require_actor_id(ev, role, key, hint=""):
     val = ev.get(key)
     if not isinstance(val, int):
         raise FailClosed(
-            "%s 行缺 %s 字段（需为 int ActorId）——拒绝静默降级为「不过滤」：%s"
-            % (role, key, json.dumps(ev, ensure_ascii=False)))
+            "%s 行缺 %s 字段（需为 int ActorId）——拒绝静默降级为「不过滤」：%s%s"
+            % (role, key, json.dumps(ev, ensure_ascii=False), hint))
     return int(val)
 
 
@@ -117,11 +119,12 @@ def align_events(events):
     `role=struck` 归给当前 `current_k`，且必须同时满足：
 
       * `struck.src == attack.my`：**命中者就是攻击方**（排除怪/别人打我这名 attacker 的帧）。
-      * 同一 `(src, actor, dmg, hp, maxhp)` 只消费一次：同一击会被**多个视角**/多次投递重复落库——
-        C# 栈向 attacker 与 victim 两个假人都发、还各发两遍（真机 `bots-*.log` 的 `机器人:[id]`
-        前缀可证），Rust 栈只向 victim 发一遍。⇒ 按事件键全局去重，不按观察者过滤
-        （否则 Rust 侧会被全滤掉）。`struck.my`（观察者自身 ActorId）只用于统计
-        `other_observer`（victim 视角帧数），不参与过滤。
+      * 同一 `(current_k, src, actor, dmg, hp, maxhp)` 只消费一次：同一击会被**多个视角**/多次投递
+        重复落库——C# 栈向 attacker 与 victim 两个假人都发、还各发两遍（真机 `bots-*.log` 的
+        `机器人:[id]` 前缀可证），Rust 栈只向 victim 发一遍。⇒ 按**按 k 分段**的事件键去重，
+        不按观察者过滤（否则 Rust 侧会被全滤掉）。键带 `k` 是 2026-10-12 清 reviewer-5 Minor：
+        全局键在受害者 HP 被回满后，会把**不同 k 的同一击**误折叠（现序列无治疗未触发，但语义错）。
+        `struck.my`（观察者自身 ActorId）只用于统计 `other_observer`（victim 视角帧数），不参与过滤。
 
     `attack` 行缺 `my` ⇒ **FailClosed**（rc=2），绝不静默放行；`struck` 缺 `src` 同样报错。
     `current_k` 为 None（还没发第一步）时出现的 struck 丢弃并计数（不计入任何 k）。
@@ -140,7 +143,9 @@ def align_events(events):
             k = ev.get("k")
             if not isinstance(k, int) or k <= 0:
                 continue
-            here = _require_actor_id(ev, "attack", "my")
+            here = _require_actor_id(
+                ev, "attack", "my",
+                hint="；历史会话（未落 my）请先用 rebuild_attack_my.py 离线复算归一化再交给 align")
             if my is None:
                 my = here
             elif here != my:
@@ -164,7 +169,10 @@ def align_events(events):
             dmg = int(dmg) if isinstance(dmg, (int, float)) else 0
             hp = int(ev.get("hp", 0) or 0)
             maxhp = int(ev.get("maxhp", 0) or 0)
-            key = (src, ev.get("actor"), dmg, hp, maxhp)
+            # 事件键**按 k 分段**（2026-10-12 清 reviewer-5 Minor）：旧的全局键
+            # (src,actor,dmg,hp,maxhp) 在受害者 HP 被回满后会把不同 k 的同一击误折叠；
+            # 同一 k 内的多视角/重复投递仍精确去重。
+            key = (current_k, src, ev.get("actor"), dmg, hp, maxhp)
             if key in seen_frames:
                 # 同一击的重复投递/多视角帧 —— 精确重复，去重不累加。
                 stats["dedup"] += 1
@@ -582,6 +590,21 @@ def cmd_selftest(args):
     check("m-duplicate-frames-deduped", m_sum["deduped"] == 2, str(m_sum))
     check("m-hp-tracks-event", m_rows[0]["hp"] == 10 and m_rows[1]["hp"] == 5, str(m_rows))
 
+    # (p) 事件键按 k 分段（2026-10-12 清 reviewer-5 Minor：全局键在 HP 回满后会误折叠不同 k 的同一击）。
+    #     k=1 与 k=2 的 (src,actor,dmg,hp,maxhp) 完全相同（模拟受害者被回满）⇒ 必须是 2 次命中、不是 1 次；
+    #     同一 k 内多视角重复投递仍必须去重。（改回全局键 ⇒ p-perk-key-no-cross-k-fold 必红。）
+    raw_repeat = os.path.join(tmp, "repeat.raw.jsonl")
+    _write_raw(raw_repeat, [
+        {"role": "attack", "k": 1, "op": "CM_HIT", "x": 1, "y": 1, "dir": 2, "my": 101},
+        {"role": "struck", "dmg": 5, "hp": 10, "maxhp": 20, "src": 101, "actor": 202, "my": 101},
+        {"role": "struck", "dmg": 5, "hp": 10, "maxhp": 20, "src": 101, "actor": 202, "my": 202},  # 同 k 多视角 ⇒ 去重
+        {"role": "attack", "k": 2, "op": "CM_HIT", "x": 1, "y": 1, "dir": 2, "my": 101},
+        {"role": "struck", "dmg": 5, "hp": 10, "maxhp": 20, "src": 101, "actor": 202, "my": 101},  # HP 回满 ⇒ 与 k=1 同值
+    ])
+    p_rows, p_sum = align_events(read_raw(raw_repeat))
+    check("p-perk-key-no-cross-k-fold", p_sum["hits"] == 2 and p_sum["sum"] == 10, str(p_sum))
+    check("p-same-k-still-deduped", p_sum["deduped"] == 1, str(p_sum))
+
     # (l2) 旧实现回归反例：若把「不过滤」写回来（my 缺失时继续累计），m 用例会多算
     #      —— 这里直接断言「同一击在两视角+重复帧下 hits 必须 == 2（不是 3/4）」，已由 m 覆盖。
 
@@ -599,7 +622,7 @@ def cmd_selftest(args):
     print("SELFTEST GREEN: attack_diff selftest %d/%d（align 窗口归属 + 同序列绿 + 改坏 dmg/hit 必红 + "
           "全 0 非平凡门 + 空序列 + 长度不等 + 死亡容忍/死亡时点/HP 逐项比（F-F option ③） + "
           "my 口径（残差③：attack 行缺 my ⇒ fail-closed rc=2；外来命中过滤；"
-          "多视角/重复投递同帧按事件键去重） + "
+          "多视角/重复投递同帧按**按 k 分段**事件键去重） + "
           "pin_attempts 复算（干净=绿 / 多一次重试=红 / 缺 PIN_HOLD=PREREQ））" % (len(checks), len(checks)))
     return 0
 

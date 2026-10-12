@@ -1,0 +1,13 @@
+documented legacy path: rebuild_attack_my.py (offline my reconstruction) then align
+command1: python mir2-rs/tests/parity/m3/rebuild_attack_my.py E:/tmp/m3bag-minors6\bots-merged-legacy.txt E:/tmp/m3bag-minors6\legacy.rebuilt.attack_raw.jsonl  # exit=0
+command2: python mir2-rs/tests/parity/m3/attack_diff.py align E:/tmp/m3bag-minors6\legacy.rebuilt.attack_raw.jsonl  # exit=0
+
+rebuilt rows:
+{"role": "arm", "id": "winplay0"}
+{"role": "attack", "k": 1, "op": "CM_HIT", "x": 1, "y": 1, "dir": 2, "my": 101}
+{"role": "struck", "dmg": 5, "hp": 10, "maxhp": 20, "src": 101, "actor": 202, "my": 202}
+{"role": "struck", "dmg": 5, "hp": 10, "maxhp": 20, "src": 101, "actor": 202, "my": 101}
+{"role": "done", "attacks": 1}
+
+align stdout:
+ALIGN_OK E:/tmp/m3bag-minors6\legacy.seq.jsonl attacked=1 hits=1 dodges=0 sum=5 (filtered_foreign=0 other_observer=1 deduped=1 unattributed=0)

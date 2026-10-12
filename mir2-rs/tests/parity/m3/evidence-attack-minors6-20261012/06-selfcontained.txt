@@ -1,0 +1,23 @@
+证据自包含复核（仓库字节 / LF 口径，照 8abd8a0d 与 F-1 先行口径）
+
+目录：mir2-rs/tests/parity/m3/evidence-attack-minors6-20261012
+（本文件 + SHA256SUMS.txt 计入后为最终态：盘上文件 = 跟踪文件 = 13）
+
+命令①（受 .gitignore 吞掉的文件必须为空）：
+    git check-ignore -v mir2-rs/tests/parity/m3/evidence-attack-minors6-20261012/*
+输出（无输出 = 全部可入库）：
+    <empty>   (rc=1)
+
+命令②（跟踪文件数 == 盘上文件数）：
+    git ls-tree -r --name-only HEAD mir2-rs/tests/parity/m3/evidence-attack-minors6-20261012 | wc -l
+    find mir2-rs/tests/parity/m3/evidence-attack-minors6-20261012 -type f | wc -l
+输出：
+    13
+    13
+
+命令③（仓库字节口径，在全新检出上复核）：
+    python -I tools/evidence-hash/verify_sha256sums.py mir2-rs/tests/parity/m3/evidence-attack-minors6-20261012 --check-extra
+输出：
+    git clone --local --no-hardlinks . E:/tmp/m3bag-minors6-clone && git -C E:/tmp/m3bag-minors6-clone checkout <本片 head，见 patch body>
+    （在 clone 内）python -I tools/evidence-hash/verify_sha256sums.py <证据目录> --check-extra
+    GREEN mir2-rs	ests\parity\m3\evidence-attack-minors6-20261012\SHA256SUMS.txt  [repo 口径]  OK 12/12   (rc=0)

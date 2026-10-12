@@ -1160,7 +1160,10 @@ fn world_attack_swing_draws_power_without_target() {
     );
     assert_eq!(rng.count(11), 1, "Random(power+1)=Random(11)");
     assert_eq!(rng.count(10), 1, "Luck=0 的 Random(10)");
-    assert!((20..=30).contains(&p), "DC=0x1E14 ⇒ power ∈ [20,30]，实际 {p}");
+    assert!(
+        (20..=30).contains(&p),
+        "DC=0x1E14 ⇒ power ∈ [20,30]，实际 {p}"
+    );
 
     // `World::attack_swing` 同口径、同取数次数。
     let mut world = World::new(32, 32);

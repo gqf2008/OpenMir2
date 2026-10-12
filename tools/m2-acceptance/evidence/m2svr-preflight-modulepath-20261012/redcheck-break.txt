@@ -1,0 +1,19 @@
+# 改坏必红：把 .NET 算出的 sha 置成常量（相对修后 preflight.ps1）
+# 目的：证明「golden sha 身份」检查真的使用该值、且必须正确（不是死代码）。
+
+--- tools/m2-acceptance/preflight.ps1   （redcheck 临时改法）
+@@
+-    $sha = ([System.BitConverter]::ToString($shaAlg.ComputeHash([System.IO.File]::ReadAllBytes($GoldenPath))) -replace '-', '').ToLowerInvariant()
++    $sha = "0000000000000000000000000000000000000000000000000000000000000000"
+
+# 运行：
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/selftest.ps1 -OutDir E:/tmp/m2acc-preflight-fix/selftest-redcheck -SkipLivePorts
+# EXIT=1
+#   [FAIL] preflight/在库前置齐备=GREEN  expect_rc=0 actual_rc=1 out~/GREEN: 前置齐备/  rc
+#   [FAIL] preflight/缺工具=PREREQ       expect_rc=2 actual_rc=1 ...（preflight 对空哈希先判 RED）
+#   [FAIL] preflight/缺客户端入口=PREREQ  expect_rc=2 actual_rc=1 ...
+#   [OK  ] preflight/金标准 schema 坏=RED expect_rc=1 actual_rc=1 ...
+# SUMMARY total=46 failed=4
+# SELFTEST FAIL
+# 原始件：selftest-redcheck.txt
+# 还原（cp 回 .NET 版本）后直跑 preflight rc=0（preflight-after.txt），selftest 46/46（selftest-after.txt）。
