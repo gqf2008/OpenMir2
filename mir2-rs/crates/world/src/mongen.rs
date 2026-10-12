@@ -181,6 +181,15 @@ impl MonGenEntry {
         }
     }
 
+    /// 尾部哨兵（`LocalDB.cs:572-587`）：`LoadMonGen` 在文件存在时无条件向
+    /// `WorldEngine.MonGenInfoThreadMap[0]` 追加的缺省 `MonGenInfo`——空怪名、`Count=0`、
+    /// `CertList` 空表、`Envir=null`。它不在 `MonGenList` 里，因此不计入 `MonGenCount`；
+    /// 但会占用线程列表的一个轮询槽位（`ProcessMonsters` 对空怪名直接跳过）。
+    #[must_use]
+    pub fn sentinel() -> Self {
+        Self::new("", 0, 0, "", 0, 0, 0, 0)
+    }
+
     /// `MonGenInfo.TryAdd` 的闸门语义（`MonGenInfo.cs:41-57`）：未满则登记并返回 `true`。
     ///
     /// oracle 用 `>`（不是 `>=`）。注意 oracle **不看返回值**就 `ActiveCount++`，
@@ -231,6 +240,8 @@ pub struct MonGenState {
 /// [`initialize_monster`] 的结果读数（判据/日志用）。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct InitializeMonsterRecord {
+    /// `LocalDB.cs:572-587` 的末尾哨兵是否已预置在 `MonGenInfoThreadMap[0]`。
+    pub sentinel_present: bool,
     /// `monsterGenMap.Count`（不同怪名数，大小写不敏感）。
     pub distinct_mon_names: usize,
     /// `MonsterList.Count`（第二次补抽的怪名数）。
@@ -248,7 +259,10 @@ pub struct InitializeMonsterRecord {
 ///   `MonGenList.Clear()`）；
 /// - `monster_list_names`：`MonsterList.Values` 的顺序（`MonsterInfo.Name`），用于第二次补抽
 ///   （`WorldServer.MonGen.cs:91-99`）；
-/// - `race_of`：`GetMonRace`（`WorldServer.cs:167-174`），未命中返回 `-1`。
+/// - `race_of`：`GetMonRace`（`WorldServer.cs:167-174`），未命中返回 `-1`；
+/// - `sentinel_present`：`LocalDB.LoadMonGen`（`:572-587`）是否已在 `MonGenInfoThreadMap[0]`
+///   预置末尾哨兵（文件存在 ⇒ `true`，即 `crates/envir` `load_mon_gen` 返回 `Ok(Some(_))`）。
+///   哨兵会在分片前占住 `thread 0` 的首个轮询槽位（与 oracle 逐 tick 节奏一致）。
 ///
 /// RNG：先按**怪名**（`monsterGenMap` 的插入序）每名 1 次 `Random(limit)`，再对
 /// `monster_list_names` 各 1 次 `Random(limit)`。这与 `:66` / `:94` 两处逐行对应。
@@ -257,6 +271,7 @@ pub struct InitializeMonsterRecord {
 pub fn initialize_monster(
     entries: Vec<MonGenEntry>,
     monster_list_names: &[String],
+    sentinel_present: bool,
     config: &MonGenConfig,
     rng: &mut RandomNumber,
     race_of: &dyn Fn(&str) -> i16,
@@ -282,6 +297,18 @@ pub fn initialize_monster(
         }
     }
     record.distinct_mon_names = monster_gen_map.len();
+
+    // `LocalDB.cs:572-587`：`LoadMonGen` 在分片**之前**已把末尾哨兵写进 `MonGenInfoThreadMap[0]`。
+    // 先建 `monsterGenMap`（只看解析出的 `MonGenList`）再把哨兵插进去，保证它不参与分组、
+    // 也不被 `:83-86` 的 `MonGenList[i]` 错位逻辑看到。
+    if sentinel_present {
+        let idx = state.entries.len();
+        state.entries.push(MonGenEntry::sentinel());
+        let thread = state.threads.entry(0).or_default();
+        thread.id = 0;
+        thread.entries.push(idx);
+    }
+    record.sentinel_present = sentinel_present;
 
     if monster_gen_map.is_empty() {
         // `:50-61`：`monsterGenMap.Count <= 0` ⇒ 为 0..limit 各建一个空线程表。
@@ -682,7 +709,7 @@ mod tests {
         ];
         let list = vec!["A".to_string(), "C".to_string()];
         let mut rng = RandomNumber::with_seed(42);
-        let (state, rec) = initialize_monster(entries, &list, &cfg(), &mut rng, &no_race);
+        let (state, rec) = initialize_monster(entries, &list, false, &cfg(), &mut rng, &no_race);
         // distinct = A / B / C = 3；list = 2 ⇒ 5 次抽数
         assert_eq!(rec.distinct_mon_names, 3);
         assert_eq!(rec.drawn_thread_ids.len(), 5);
@@ -699,7 +726,7 @@ mod tests {
         let list: Vec<String> = vec![];
         let race_of = |n: &str| if n == "A" { 80 } else { -1 };
         let mut rng = RandomNumber::with_seed(7);
-        let (state, _) = initialize_monster(entries, &list, &cfg(), &mut rng, &race_of);
+        let (state, _) = initialize_monster(entries, &list, false, &cfg(), &mut rng, &race_of);
         assert_eq!(state.entries[0].race, 80);
         assert_eq!(state.entries[1].race, -1);
     }
@@ -717,7 +744,7 @@ mod tests {
             entry("B", 1, 0, 0, 0, 0),
         ];
         let mut rng = RandomNumber::with_seed(1);
-        let (state, _) = initialize_monster(entries, &[], &cfg(), &mut rng, &no_race);
+        let (state, _) = initialize_monster(entries, &[], false, &cfg(), &mut rng, &no_race);
         // thread map 里第一条是 A（i=0），第二条 key 用 entries[1].MonName = A ⇒ 已存在不覆盖
         // ⇒ B 不会进 MonsterThreadMap（这就是 oracle 的错位缺陷，1:1 保留）。
         assert!(state.monster_thread_map.contains_key("A"));
@@ -725,6 +752,57 @@ mod tests {
             !state.monster_thread_map.contains_key("B"),
             "oracle 的 MonGenList[i] 错位：B 不写入 MonsterThreadMap"
         );
+    }
+
+    #[test]
+    fn initialize_monster_sentinel_is_first_round_robin_slot() {
+        // `LocalDB.cs:572-587`：文件存在时末尾哨兵先占 `MonGenInfoThreadMap[0]` 的首槽。
+        let entries = vec![entry("A", 5, 0, 0, 10, 10), entry("B", 5, 0, 0, 20, 20)];
+        let mut rng = RandomNumber::with_seed(42);
+        let race_of = |_: &str| 80;
+        let (mut state, rec) = initialize_monster(entries, &[], true, &cfg(), &mut rng, &race_of);
+        assert!(rec.sentinel_present);
+        // 哨兵不计入分组（distinct 只看解析出的怪名）。
+        assert_eq!(rec.distinct_mon_names, 2);
+        // 解析条目 0/1 + 哨兵 = 3 条；哨兵在 entries 末尾（构造顺序）。
+        assert_eq!(state.entries.len(), 3);
+        let t0 = &state.threads[&0];
+        assert_eq!(t0.entries.len(), 3);
+        let sentinel_idx = t0.entries[0];
+        assert_eq!(state.entries[sentinel_idx].mon_name, "");
+        assert_eq!(state.entries[sentinel_idx].count, 0);
+        assert_eq!(state.entries[sentinel_idx].zen_time, 0);
+        assert!(state.entries[sentinel_idx].cert_list.is_empty());
+
+        // 首个 regen 门选中哨兵：空怪名 ⇒ 不刷怪、不回写 StartTick（与 oracle 同支）。
+        let mut clk = || 100;
+        let mut can = |_: &str| true;
+        let mut created = 0;
+        let d = regen_gate(
+            &mut state,
+            0,
+            1000,
+            5000,
+            &cfg(),
+            &mut rng,
+            &mut clk,
+            &mut can,
+            &mut |_rng, _, _, _, _, _| {
+                created += 1;
+                Some(1)
+            },
+        );
+        assert!(d.gate_due);
+        assert_eq!(d.entry_index, sentinel_idx);
+        assert!(!d.regened, "哨兵空怪名 ⇒ 不调 RegenMonsters");
+        assert!(!d.start_tick_updated);
+        assert_eq!(created, 0);
+
+        // 无哨兵时不会多出条目。
+        let entries2 = vec![entry("A", 5, 0, 0, 10, 10)];
+        let (state2, rec2) = initialize_monster(entries2, &[], false, &cfg(), &mut rng, &race_of);
+        assert!(!rec2.sentinel_present);
+        assert_eq!(state2.entries.len(), 1);
     }
 
     #[test]
@@ -1074,7 +1152,7 @@ mod tests {
         ];
         let list = vec!["A".to_string(), "C".to_string()];
         let mut rng = RandomNumber::with_seed(42);
-        let (_state, rec) = initialize_monster(entries, &list, &c, &mut rng, &no_race);
+        let (_state, rec) = initialize_monster(entries, &list, false, &c, &mut rng, &no_race);
         assert_eq!(rec.distinct_mon_names, 3);
         assert_eq!(rec.drawn_thread_ids, vec![1, 0, 0, 1, 0]);
     }

@@ -1,4 +1,4 @@
-### oracle anchors (master 1b576172; C# 源冻结)
+### oracle anchors (master f4790571; C# 源冻结)
 ### --- src/GameSrv/Word/WorldServer.MonGen.cs:63-99 (InitializeMonster 分片抽数) ---
                 string[] monsterNames = monsterGenMap.Keys.ToArray();
                 for (int i = 0; i < monsterNames.Length; i++)
@@ -216,6 +216,45 @@
             cert.Initialize();
             if (cert.AddtoMapSuccess)
             {
+
+### --- src/GameSrv/DB/LocalDB.cs:570-590 (LoadMonGen 收尾：末尾哨兵 -> MonGenInfoThreadMap[0]) ---
+                        }
+                    }
+                }
+                monGenInfo = new MonGenInfo
+                {
+                    CertList = new List<IMonsterActor>(),
+                    Envir = null
+                };
+                if (SystemShare.WorldEngine.CheckMonGenInfoThreadMap(0))
+                {
+                    SystemShare.WorldEngine.AddMonGenInfoThreadMap(0, monGenInfo);
+                }
+                else
+                {
+                    SystemShare.WorldEngine.CreateMonGenInfoThreadMap(0, new List<MonGenInfo>() { monGenInfo });
+                }
+                result = 1;
+                mongenCount = SystemShare.WorldEngine.MonGenCount;
+            }
+            return result;
+        }
+
+### --- src/GameSrv/Word/WorldServer.cs:1909-1922 (Check/Add/CreateMonGenInfoThreadMap) ---
+        }
+
+        public void AddMonGenInfoThreadMap(int threadId, MonGenInfo monGenInfo)
+        {
+            if (MonGenInfoThreadMap.ContainsKey(threadId))
+            {
+                MonGenInfoThreadMap[threadId].Add(monGenInfo);
+            }
+        }
+
+        public void CreateMonGenInfoThreadMap(int threadId, IList<MonGenInfo> monGenInfo)
+        {
+            MonGenInfoThreadMap.Add(threadId, monGenInfo);
+        }
 
 ### --- src/Modules/SystemModule/Data/MonGenInfo.cs:41-68 (TryAdd + ThreadMonLimit) ---
         public int StartTick;

@@ -18,6 +18,7 @@ CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test --workspace --offline
 # RC-2：`if mission > 0 && Random(100) < mission` 恒假 -> regen_positions_match_independent_python_mission FAILED
 # RC-3：GetMonstersZenTime 去掉 d10 夹 6             -> get_monsters_zen_time_matches_oracle FAILED
 # RC-4：复活边界 `>` 改 `>=`                          -> monster_due_for_revive_and_ghost_expiry FAILED
+# RC-5：去掉末尾哨兵插入（`if sentinel_present` → `if false`）-> initialize_monster_sentinel_is_first_round_robin_slot FAILED
 
 # --- 证据 hash（仓库 LF/git-blob 口径）---
 python -I tools/evidence-hash/verify_sha256sums.py write mir2-rs/tests/parity/world/mongen-20261013

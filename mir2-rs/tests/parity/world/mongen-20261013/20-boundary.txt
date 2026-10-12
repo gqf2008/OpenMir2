@@ -2,10 +2,20 @@
 (empty above = zero changes)
 
 ### worktree status (author side)
- M mir2-rs/crates/world/src/lib.rs
-?? mir2-rs/crates/world/src/mongen.rs
-?? mir2-rs/tests/parity/world/mongen-20261013/
+ M mir2-rs/crates/world/src/mongen.rs
+ M mir2-rs/tests/parity/world/mongen-20261013/01-oracle-anchors.txt
+ M mir2-rs/tests/parity/world/mongen-20261013/20-boundary.txt
+ M mir2-rs/tests/parity/world/mongen-20261013/30-redcheck-mut1-swap-xy.txt
+ M mir2-rs/tests/parity/world/mongen-20261013/31-redcheck-mut2-mission-gate.txt
+ M mir2-rs/tests/parity/world/mongen-20261013/32-redcheck-mut3-zen-clamp.txt
+ M mir2-rs/tests/parity/world/mongen-20261013/33-redcheck-mut4-revive-boundary.txt
+ M mir2-rs/tests/parity/world/mongen-20261013/README.md
+ M mir2-rs/tests/parity/world/mongen-20261013/commands.txt
+ M mir2-rs/tests/parity/world/mongen-20261013/gates/11-clippy.txt
+ M mir2-rs/tests/parity/world/mongen-20261013/gates/12-workspace-test.txt
+?? mir2-rs/tests/parity/world/mongen-20261013/34-redcheck-mut5-sentinel.txt
 
-### this shard's surface: git diff --stat 56cbd896 -- mir2-rs/crates mir2-rs/bins
- mir2-rs/crates/world/src/lib.rs | 7 +++++++
- 1 file changed, 7 insertions(+)
+### this shard's surface: git diff --stat master -- mir2-rs/crates mir2-rs/bins
+ mir2-rs/crates/world/src/lib.rs    |    7 +
+ mir2-rs/crates/world/src/mongen.rs | 1214 ++++++++++++++++++++++++++++++++++++
+ 2 files changed, 1221 insertions(+)
