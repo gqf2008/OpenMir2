@@ -1,0 +1,11 @@
+# 「非 MonGen AI 消费者」提取件 provenance（内容冻结；R-1「零 RNG 消费者」场景隔离的补充判据）。
+# 列：map<TAB>fixture<TAB>declared_total<TAB>envir_dir<TAB>source_hashes
+#   declared_total = 该图在 5 个受检文件里的引用行数合计（0 = 除 MonGen 外无 AI 消费者）。
+#   envir_dir      = 生成时 oracle 部署件 Envir 目录的绝对路径（机器本地，不在库里）。
+#   source_hashes  = `file=sha256;file=sha256;...`（逐源文件的 SHA256；源存在时
+#                    Test-M3MapNoAiConsumers -VerifySource 会复算 hash 并对账逐文件现数）。
+# 生成命令：python mir2-rs/tests/parity/m3/fixtures/extract_map_ai_consumers.py <envir_dir> <map>
+# 受检文件（顺序即 fixture 行序）：GuardList.txt MerChant.txt Npcs.txt MapEvent.txt MapQuest.txt
+# 机判：gate_guards.ps1::Test-M3MapNoAiConsumers 按 map 查本表，要求 提取件逐文件 ref_rows == 0
+#       且合计 == declared_total；非 0 ⇒ run_pair -AttackPinPair fail-closed 拒绝跑。
+0137	ai-consumer-map0137.tsv	0	E:/MirServer/Mir200/Envir	GuardList.txt=746d5d907097ef76f8511748bc1c018589699f26b63e04ff615adc04e47c74ba;MerChant.txt=5e9c1274de6bd2586bfd2c26c1314595387a1d2dae06048855d3e1ae0191b3ad;Npcs.txt=19c5f83f91fc902b0e0c7bc01b402a45833cffff5cd54a82afb6d6e3b7f16d23;MapEvent.txt=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855;MapQuest.txt=b7288620ab95406fa905f3b49f630a0525a1e9d65de813fdca9f150c229ce2a1

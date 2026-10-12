@@ -175,6 +175,16 @@ if ($AttackPinPair) {
     throw ('R-1: attack pin map not monsterless: {0} spawns={1}' -f $PinMapName, $pinMapChk.spawns)
   }
   Write-Output ("MAP_HAS_NO_MONSTER ok map={0} spawns=0 fixture={1} source_verified={2}" -f $PinMapName, $pinMapChk.fixture, $pinMapChk.source_verified)
+  # R-1 refine（owner 2026-10-12 15:05）："严格说不能只看 MonGen"——守卫/NPC/地图事件/任务触发器也可能跑 AI、
+  # 消耗全局 RNG ⇒ 除「MonGen 零行」外，还要求 pin 图在 GuardList/MerChant/Npcs/MapEvent/MapQuest 里**零引用**。
+  # 同测试件（`fixtures/ai-consumer-map<map>.tsv` + `ai-consumer-provenance.tsv`），非零 ⇒ **fail-closed 拒绝跑**。
+  $pinAiChk = Test-M3MapNoAiConsumers -MapName $PinMapName -VerifySource
+  if (-not $pinAiChk.ok) {
+    Write-Output ("RED: -AttackPinPair 地图 '{0}' 仍有非 MonGen 的 AI 消费者引用（守卫/NPC/地图事件/任务；refs={1}，要求 0）——见 R-1 场景隔离；{2}；请换到无 AI 消费者的图（缺省 {3}）" -f `
+      $PinMapName, $pinAiChk.total, $pinAiChk.reason, $script:M3AttackPinMap)
+    throw ('R-1: attack pin map has non-mongen AI consumers: {0} refs={1}' -f $PinMapName, $pinAiChk.total)
+  }
+  Write-Output ("MAP_HAS_NO_AI_CONSUMERS ok map={0} total_refs=0 fixture={1} source_verified={2}" -f $PinMapName, (Split-Path -Leaf $pinAiChk.fixture), $pinAiChk.source_verified)
 }
 if ($AttackSequence -and $Bots -lt 2) {
   Write-Output ('WARN: -AttackSequence 建议 -Bots 2（attacker+victim）；当前 Bots={0} ⇒ 无目标，struck 恒 0，判据必 RED' -f $Bots)

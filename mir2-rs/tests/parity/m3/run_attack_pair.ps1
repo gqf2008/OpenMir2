@@ -31,7 +31,10 @@
   `MonGen.txt` 零行、无 NPC/守卫），落点 `(17,20) dir=2`、victim `(18,20)`（均可走）。不是无怪图就
   `run_pair` 启动时 **fail-closed 拒绝跑**（`gate_guards.ps1::Test-M3MonGenEmpty` 按地图查冻结提取件
   `fixtures/mongen-map<map>.tsv` + `fixtures/mongen-provenance.tsv`，要求该图刷怪行数 == 0）；
-  `-PinMapName` 透传给 `run_pair` 的 pin SQL/落点口径，`-SelfCheckNoStack` ⑯ 做四向红检。
+  **R-1 refine（owner 2026-10-12 15:05）**：MonGen 之外，守卫/NPC/地图事件/任务触发也可能跑 AI ⇒ 另按
+  `fixtures/ai-consumer-map<map>.tsv` + `fixtures/ai-consumer-provenance.tsv` 要求该图在
+  GuardList/MerChant/Npcs/MapEvent/MapQuest 里**零引用**（`Test-M3MapNoAiConsumers`，同样 fail-closed）。
+  `-PinMapName` 透传给 `run_pair` 的 pin SQL/落点口径，`-SelfCheckNoStack` ⑯/⑰ 做四向红检。
   `-AttackSequence` 让 attacker 固定发 N 次 `CM_HIT`（`Recog=MakeLong(自己坐标)`、`Tag=dir`）。
 
   判红口径（逐步；任一不满足即退出码 != 0）：
@@ -264,7 +267,7 @@ if ($SelfCheckNoStack) {
   if ($LASTEXITCODE -ne 0) { $failures += 'emit_on_rc=non-zero' }
   else {
     # M-1 修复后「未配 -AttackPinPair」会真打一行 WARN（stdout，JSON 之前）⇒ 解析前先滤掉 WARN 行。
-    $emitOnText = ((@($emitOnRaw) | Where-Object { $_ -notmatch '^\s*(WARN:|PIN_NO_MONSTER|MAP_HAS_NO_MONSTER)' }) -join "`n").Trim()
+    $emitOnText = ((@($emitOnRaw) | Where-Object { $_ -notmatch '^\s*(WARN:|PIN_NO_MONSTER|MAP_HAS_NO_MONSTER|MAP_HAS_NO_AI_CONSUMERS)' }) -join "`n").Trim()
     $emitOn = ($emitOnText | ConvertFrom-Json)
     $has = (@($emitOn.bot_args) -contains '-DisableAutoPlay')
     if (-not $has) { $failures += 'attack_sequence_does_not_pass_disable_autoplay' }
@@ -287,7 +290,7 @@ if ($SelfCheckNoStack) {
   $emitPairRaw = & powershell -ExecutionPolicy Bypass -File $RunPair -EmitOpsArgs -FixedNewChr -PinStartPose -AttackPinPair -AttackSequence -Bots 2 -PinMapName $PinMapName -PinCX $AttackPinCX -PinCY $AttackPinCY
   if ($LASTEXITCODE -ne 0) { $failures += 'emit_pair_rc=non-zero' }
   else {
-    $pair = (((@($emitPairRaw) | Where-Object { $_ -notmatch '^\s*(WARN:|PIN_NO_MONSTER|MAP_HAS_NO_MONSTER)' }) -join "`n").Trim() | ConvertFrom-Json)
+    $pair = (((@($emitPairRaw) | Where-Object { $_ -notmatch '^\s*(WARN:|PIN_NO_MONSTER|MAP_HAS_NO_MONSTER|MAP_HAS_NO_AI_CONSUMERS)' }) -join "`n").Trim() | ConvertFrom-Json)
     $wantPose = ('pair map={0} attacker={1},{2},dir=2 victim={3},{2} level=1 vhp=30000' -f $PinMapName, $AttackPinCX, $AttackPinCY, ($AttackPinCX + 1))
     if ($pair.attack_pose -ne $wantPose) { $failures += ('attack_pose=' + $pair.attack_pose) }
     $all = @($pair.attack_pin_sql_all)
@@ -363,6 +366,40 @@ if ($SelfCheckNoStack) {
   if ($synthH.ok) { $failures += 'synth_missing_provenance_not_red' }
   Write-Output ("SELFTEST ⑯ 攻击 pin 无怪口径（R-1，按地图查提取件）：生产 map={0} spawns={1} source_verified={2}；map 0 spawns={3} 必红；合成 0/1 行·声明漂移·缺 provenance 四向有牙" -f `
     $PinMapName, $pinChk.spawns, $pinChkV.source_verified, $map0Chk.spawns)
+
+  # ⑰ R-1 refine（owner 2026-10-12 15:05）："严格说不能只看 MonGen" —— 守卫/NPC/地图事件/任务触发
+  #    也可能跑 AI、消耗全局 RNG ⇒ 按 pin 地图查冻结提取件 `fixtures/ai-consumer-map<map>.tsv` +
+  #    `fixtures/ai-consumer-provenance.tsv`，要求该图在 GuardList/MerChant/Npcs/MapEvent/MapQuest
+  #    里的引用行数**全为 0**。红检：合成「有 1 行引用 / 声明漂移 / 缺 provenance / 缺提取件」四向必红；
+  #    改坏 Test-M3MapNoAiConsumers 的「declared_total == 0」判断 ⇒ 本项必红。
+  $aiChk = Test-M3MapNoAiConsumers -MapName $PinMapName
+  if (-not $aiChk.ok) { $failures += ('attack_pin_ai_consumers_not_zero=' + $PinMapName + ':' + $aiChk.reason) }
+  if ($aiChk.total -ne 0) { $failures += ('attack_pin_ai_consumers_total=' + $aiChk.total) }
+  $aiChkV = Test-M3MapNoAiConsumers -MapName $PinMapName -VerifySource
+  if (-not $aiChkV.ok) { $failures += ('attack_pin_ai_consumers_source_recheck_red=' + $aiChkV.reason) }
+  if (-not $aiChkV.source_verified) { $failures += 'attack_pin_ai_consumers_source_not_verified' }
+  $aiSynthDir = Join-Path $tmpRoot 'ai-consumer-synth'
+  New-Item -ItemType Directory -Force -Path $aiSynthDir | Out-Null
+  $aiSynthProv = Join-Path $tmpRoot 'ai-consumer-provenance-synth.tsv'
+  $aiZero = "GuardList.txt`t0`nMerChant.txt`t0`nNpcs.txt`t0`nMapEvent.txt`t0`nMapQuest.txt`t0`n"
+  $aiOneG = "GuardList.txt`t1`nMerChant.txt`t0`nNpcs.txt`t0`nMapEvent.txt`t0`nMapQuest.txt`t0`n"
+  [System.IO.File]::WriteAllText((Join-Path $aiSynthDir 'ai-consumer-mapA.tsv'), $aiZero, (New-Object System.Text.UTF8Encoding($false)))
+  [System.IO.File]::WriteAllText((Join-Path $aiSynthDir 'ai-consumer-mapB.tsv'), $aiOneG, (New-Object System.Text.UTF8Encoding($false)))
+  [System.IO.File]::WriteAllText((Join-Path $aiSynthDir 'ai-consumer-mapC.tsv'), $aiOneG, (New-Object System.Text.UTF8Encoding($false)))
+  $aiSynthLines = @("A`tai-consumer-mapA.tsv`t0`t`t", "B`tai-consumer-mapB.tsv`t1`t`t", "C`tai-consumer-mapC.tsv`t0`t`t", "E`tai-consumer-mapE.tsv`t0`t`t")
+  [System.IO.File]::WriteAllLines($aiSynthProv, $aiSynthLines, (New-Object System.Text.UTF8Encoding($false)))
+  $aiSynthA = Test-M3MapNoAiConsumers -MapName 'A' -FixtureDir $aiSynthDir -ProvenancePath $aiSynthProv
+  if (-not $aiSynthA.ok) { $failures += ('synth_ai_empty_not_ok=' + $aiSynthA.reason) }
+  $aiSynthB = Test-M3MapNoAiConsumers -MapName 'B' -FixtureDir $aiSynthDir -ProvenancePath $aiSynthProv
+  if ($aiSynthB.ok) { $failures += 'synth_ai_ref_not_red' }
+  $aiSynthC = Test-M3MapNoAiConsumers -MapName 'C' -FixtureDir $aiSynthDir -ProvenancePath $aiSynthProv
+  if ($aiSynthC.ok) { $failures += 'synth_ai_declared_drift_not_red' }
+  $aiSynthD = Test-M3MapNoAiConsumers -MapName 'D' -FixtureDir $aiSynthDir -ProvenancePath $aiSynthProv
+  if ($aiSynthD.ok) { $failures += 'synth_ai_missing_provenance_not_red' }
+  $aiSynthE = Test-M3MapNoAiConsumers -MapName 'E' -FixtureDir $aiSynthDir -ProvenancePath $aiSynthProv
+  if ($aiSynthE.ok) { $failures += 'synth_ai_missing_fixture_not_red' }
+  Write-Output ("SELFTEST ⑰ 攻击 pin 非 MonGen AI 消费者口径（R-1 refine 15:05）：生产 map={0} total={1} source_verified={2}；合成 有引用/声明漂移/缺 provenance/缺提取件 四向必红" -f `
+    $PinMapName, $aiChk.total, $aiChkV.source_verified)
 
   # ⑭ F-E（m3cs tick21）：驱动收尾等待——run_bots.ps1 的攻击序列「等 M3ATTSEQ done」离线自检
   #    （合成日志计 attack done 2/1/0 + bag done 2/0；改坏计数正则 ⇒ RED）。真机 120/120 由 m3cs 下一轮实跑覆盖。
@@ -563,7 +600,7 @@ if ($SelfCheckNoStack) {
 
   Remove-Item -Recurse -Force $tmpRoot -ErrorAction SilentlyContinue
   if ($failures.Count -eq 0) {
-    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（攻击配置透传/默认关 + run_pair -DisableAutoPlay 耦合两向 + 攻击两相 pin pose/SQL（-PinMapName 透传含 MapName 断言） + pin SQL 可执行性（含改坏 a.IncHealth 必红 + 改坏 Hp=100000 越界必红） + 攻击 pin 无怪口径（R-1，按地图查提取件：生产 0137 绿/source_verified + 换回 map 0 必红 + 合成 0/1 行·声明漂移·缺 provenance 四向有牙） + 入口/DiffOnly fail-closed + attack_diff selftest + 改坏 dmg/hit 必红 + Invoke-AttackAlign 返回值形态两处（F-J：⑧ 生产函数直接断言 + ⑮） + scoped_diff 14/14 + M-1 WARN 有牙齿 + M-2 attacker 精确选择 selftest + pin SQL 别名/列校验 + 种子注入断言（两侧 fail-closed）+ 攻击序列收尾等待（F-E））'
+    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（攻击配置透传/默认关 + run_pair -DisableAutoPlay 耦合两向 + 攻击两相 pin pose/SQL（-PinMapName 透传含 MapName 断言） + pin SQL 可执行性（含改坏 a.IncHealth 必红 + 改坏 Hp=100000 越界必红） + 攻击 pin 无怪口径（R-1，按地图查提取件：生产 0137 绿/source_verified + 换回 map 0 必红 + 合成 0/1 行·声明漂移·缺 provenance 四向有牙） + 攻击 pin 非 MonGen AI 消费者口径（R-1 refine 15:05：生产 0137 绿/source_verified + 合成 有引用/声明漂移/缺 provenance/缺提取件 四向必红） + 入口/DiffOnly fail-closed + attack_diff selftest + 改坏 dmg/hit 必红 + Invoke-AttackAlign 返回值形态两处（F-J：⑧ 生产函数直接断言 + ⑮） + scoped_diff 14/14 + M-1 WARN 有牙齿 + M-2 attacker 精确选择 selftest + pin SQL 别名/列校验 + 种子注入断言（两侧 fail-closed）+ 攻击序列收尾等待（F-E））'
     exit 0
   }
   Write-Output ('SELFTEST_RED RED: ' + ($failures -join ', '))
@@ -683,7 +720,7 @@ if ($LASTEXITCODE -ne 0) {
   Write-Output 'RED: 取 pin SQL 失败（run_pair -EmitOpsArgs 非 0）——无法做可执行性预检'
   exit 1
 }
-$probeText = ((@($probeRaw) | Where-Object { $_ -notmatch '^\s*(WARN:|PIN_NO_MONSTER|MAP_HAS_NO_MONSTER)' }) -join "`n").Trim()
+$probeText = ((@($probeRaw) | Where-Object { $_ -notmatch '^\s*(WARN:|PIN_NO_MONSTER|MAP_HAS_NO_MONSTER|MAP_HAS_NO_AI_CONSUMERS)' }) -join "`n").Trim()
 $probeObj = $probeText | ConvertFrom-Json
 try { $probeSql = @($probeObj.attack_pin_sql_all) } catch { $probeSql = @() }
 if ($probeSql.Count -lt 1) {

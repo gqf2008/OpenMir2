@@ -1,0 +1,13 @@
+# map=0137（竞技场）的「非 MonGen AI 消费者」只读抽取（file<TAB>ref_rows），来源 = oracle 部署件
+# Envir/{GuardList,MerChant,Npcs,MapEvent,MapQuest}.txt（内容冻结；owner brief 2026-10-12 15:05 refine）。
+# 本图在这些文件中**全部零引用** ⇒ 除「MonGen 零行」外没有守卫/商人/NPC/地图事件/任务触发器
+# 这类跑 AI 的实体（R-1「零 RNG 消费者」场景隔离）。
+# 生成命令：python mir2-rs/tests/parity/m3/fixtures/extract_map_ai_consumers.py E:/MirServer/Mir200/Envir 0137
+# provenance（源目录 + 逐源 SHA256 + 引用合计）：fixtures/ai-consumer-provenance.tsv
+# 机判：gate_guards.ps1::Test-M3MapNoAiConsumers 要求本文件数据行数 == 5 个受检文件
+#       且所有 ref_rows == 0 == provenance 声明的 declared_total。
+GuardList.txt	0
+MerChant.txt	0
+Npcs.txt	0
+MapEvent.txt	0
+MapQuest.txt	0

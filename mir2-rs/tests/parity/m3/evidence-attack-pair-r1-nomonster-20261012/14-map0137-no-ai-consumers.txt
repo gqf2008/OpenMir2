@@ -1,0 +1,43 @@
+# 为什么「0137 除 MonGen 外也无 AI 消费者」（离线只读证明；R-1 refine，owner brief 2026-10-12 15:05）
+
+owner 2026-10-12 15:05：严格说不能只看 MonGen —— 守卫（GuardList.txt）、商人/NPC（MerChant.txt/Npcs.txt）、
+地图事件（MapEvent.txt）、任务触发（MapQuest.txt）都可能生成跑 AI 的实体、消耗全局 M2Share.RandomNumber。
+本文件给出「0137 在这些文件里零引用」的可复现原始输出；逐源 SHA256 冻结在 fixtures/ai-consumer-provenance.tsv。
+**内容冻结**：全部为只读命令，未改 E:/MirServer 一行。
+
+## 1) 受检文件源 SHA256（生成时；gate -VerifySource 复算对账）
+命令：sha256sum E:/MirServer/Mir200/Envir/{GuardList,MerChant,Npcs,MapEvent,MapQuest}.txt
+746d5d907097ef76f8511748bc1c018589699f26b63e04ff615adc04e47c74ba *GuardList.txt
+5e9c1274de6bd2586bfd2c26c1314595387a1d2dae06048855d3e1ae0191b3ad *MerChant.txt
+19c5f83f91fc902b0e0c7bc01b402a45833cffff5cd54a82afb6d6e3b7f16d23 *Npcs.txt
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 *MapEvent.txt
+b7288620ab95406fa905f3b49f630a0525a1e9d65de813fdca9f150c229ce2a1 *MapQuest.txt
+
+## 2) 提取器输出（0137）：逐文件 ref_rows，全 0
+命令：python mir2-rs/tests/parity/m3/fixtures/extract_map_ai_consumers.py E:/MirServer/Mir200/Envir 0137
+GuardList.txt	0
+MerChant.txt	0
+Npcs.txt	0
+MapEvent.txt	0
+MapQuest.txt	0
+
+## 3) 与冻结提取件逐字节对账（fixtures/ai-consumer-map0137.tsv，去掉 # 注释头）
+命令：diff <(提取器) <(grep -v "^#" fixtures/ai-consumer-map0137.tsv)
+BYTE_IDENTICAL 提取器输出 == 冻结提取件数据行
+
+## 4) 反向对照：map 0 在这些文件里**有**引用（证明判据不是恒绿）
+命令：python .../extract_map_ai_consumers.py E:/MirServer/Mir200/Envir 0
+GuardList.txt	22
+MerChant.txt	131
+Npcs.txt	3
+MapEvent.txt	0
+MapQuest.txt	1
+
+## 5) 全 Envir 扫描（证明 0137 只在 MapInfo 出现；MapInfo 是地图注册表，不是 AI 消费者）
+命令：grep -rlI --include=*.txt 0137 E:/MirServer/Mir200/Envir
+./MapInfo.txt
+（MapInfo.txt = 地图注册表行 [0137 竞技场] FIGHT；不生成跑 AI 的实体。）
+
+## 结论
+0137 在 GuardList/MerChant/Npcs/MapEvent/MapQuest 中引用行数全为 0 ⇒ 除「MonGen 整张零刷怪」外，
+该图没有守卫/商人/NPC/地图事件/任务触发器这类 AI 消费者；对拍场景「除攻击路径外零 RNG 消费者」成立。

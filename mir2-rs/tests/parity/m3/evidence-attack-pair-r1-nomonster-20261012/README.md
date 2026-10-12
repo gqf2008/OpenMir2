@@ -15,6 +15,11 @@ owner 裁决：同种子「逐 k 完全一致」当前不成立，因为攻击�
 
 本片只做**夹具支持**（不起真栈、不跑正式判据——正式跑由 `m3cs` 执行）。
 
+**第二轮补强（owner 2026-10-12 15:05 refine）**：MonGen 之外，守卫（`GuardList.txt`）、商人/NPC
+（`MerChant.txt`/`Npcs.txt`）、地图事件（`MapEvent.txt`）、任务触发（`MapQuest.txt`）都可能跑 AI、
+消耗全局 RNG ⇒ 除「MonGen 零行」外，另加**机器可判**口径 `Test-M3MapNoAiConsumers`（该图在这 5 个文件里
+零引用）+ 逐源 SHA256 冻结，并给出可复现原始输出（`14`/`15` 两件）。
+
 ## 2. `-PinMapName` 透传（brief ①）
 
 - `run_attack_pair.ps1` 新增 `-PinMapName`（缺省 = `gate_guards.ps1` 的 `$script:M3AttackPinMap`），
@@ -44,7 +49,8 @@ owner 裁决：同种子「逐 k 完全一致」当前不成立，因为攻击�
 | MapInfo | `[0137\t竞技场]\tFIGHT`（允许 PvP；无 SAFE） |
 | map 文件 | `E:/MirServer/Mir200/Map/0137.map`（11932 B，30×33，`SHA256 af987e96cd2b15a5eb3b6297a0465f031a3df63b21e50106d23328d6263c8b33`） |
 | MonGen | 在 `Envir/MonGen.txt` 中**零行**（整张零刷怪） |
-| NPC/守卫/任务 | `MerChant.txt`/`GuardList.txt`/`MapQuest.txt` 及 Envir 其它文件均**无引用**（无跑 AI 的实体） |
+| NPC/守卫/任务 | `MerChant.txt`/`GuardList.txt`/`MapQuest.txt` 及 Envir 其它文件均**无引用**（无跑 AI 的实体；原始输出见 `14-map0137-no-ai-consumers.txt`） |
+| 非 MonGen AI 消费者 | GuardList/MerChant/Npcs/MapEvent/MapQuest 对 0137 **逐文件引用行数全为 0**（`ai-consumer-map0137.tsv`，逐源 hash 见 `ai-consumer-provenance.tsv`） |
 | 落点 | attacker `(17,20) dir=2` / victim `(18,20)`，两格均 walkable，7×7 邻域 43 格可走 |
 
 存在其它同族无怪候选（`0110/0102/0100/0137/0138/...` 等 36+ 张，见 `10-map0137-not-in-mongen.txt`）；
@@ -62,6 +68,19 @@ owner 裁决：同种子「逐 k 完全一致」当前不成立，因为攻击�
   对 map 0137 输出为空。`10-map0137-not-in-mongen.txt` 给出「0137 不在 MonGen 的 96 张图中」。
 - **为什么这张图无怪**：MonGen 是刷怪点表的唯一来源，`0137` 在该表零行，且无 NPC/守卫/任务触发实体。
 
+### 「非 MonGen AI 消费者」机器可判（owner 2026-10-12 15:05 refine）
+
+「MonGen 零行」只排除**刷怪点**；守卫/商人/NPC/地图事件/任务触发器仍可能生成跑 AI 的实体。⇒ 新增：
+
+- 提取器：`fixtures/extract_map_ai_consumers.py <EnvirDir> <map>`（按整词/整字段匹配，非子串；stdout = `file<TAB>ref_rows`）。
+- 冻结件：`fixtures/ai-consumer-map0137.tsv`（5 个受检文件逐文件 0 行）+ `fixtures/ai-consumer-provenance.tsv`
+  （源目录 `E:/MirServer/Mir200/Envir` + 逐源 SHA256 + `declared_total=0`）。
+- 机判：`gate_guards.ps1::Test-M3MapNoAiConsumers` 要求全为 0；`run_pair.ps1 -AttackPinPair` 启动时**同样
+  fail-closed**（`MAP_HAS_NO_AI_CONSUMERS ok`；`-VerifySource` 复算逐源 SHA256 与现数）。
+- 反向对照：map 0 有引用（GuardList 22 / MerChant 131 / Npcs 3 / MapQuest 1）⇒ 判据不是恒绿。
+- 原始输出：`14-map0137-no-ai-consumers.txt`（逐源 hash + 提取器输出 + 逐字节对账 + 全 Envir 扫描）；
+  改坏必红：`15-mutation-ai-consumers-red.txt`。
+
 ## 4. 自检与牙齿（brief ⑤）
 
 | 件 | 命令 | 结果 |
@@ -72,6 +91,9 @@ owner 裁决：同种子「逐 k 完全一致」当前不成立，因为攻击�
 | `04-selftest-gate-47of47.txt` | `selftest_gate.ps1` | `SUMMARY total=47 failed=0` GREEN |
 | `05-bagpair-selfcheck-green.txt` | `run_bag_equip_pair.ps1 -SelfCheckNoStack` | rc=0（pin settle+hold / pin SQL 列校验两向 / 旧 peer 必红仍在） |
 | `11/12/10` | 见 §3 | 离线只读证明 |
+| `14-map0137-no-ai-consumers.txt` | 提取器 + `sha256sum` + `grep -rlI` | 0137 逐文件 0；map 0 非 0；全 Envir 仅 MapInfo 引用 |
+| `15-mutation-ai-consumers-red.txt` | 把 `$ok=($entry.declared_total -eq 0)` 改成 `$ok=$true` 后 `-SelfCheckNoStack` | **rc=1**；`RED: synth_ai_ref_not_red` |
+| `01/04/05`（本轮重跑） | `-SelfCheckNoStack` / `selftest_gate.ps1` / `bagpair -SelfCheckNoStack` | rc=0 / 47-0 / rc=0（含新门 **⑰**） |
 
 两处 mutation 均已**逐字节还原**（`gate_guards.ps1`/`run_attack_pair.ps1`/`run_pair.ps1` 与 green 备份 `diff` 为空）。
 
@@ -93,6 +115,8 @@ powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/selftest_gate.p
 powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_bag_equip_pair.ps1 -SelfCheckNoStack
 # 单点复核（离线；map 0137 应 ok、map 0 应 red）
 powershell -NoProfile -Command ". mir2-rs/tests/parity/m3/gate_guards.ps1; Test-M3MonGenEmpty -MapName 0137 -VerifySource; Test-M3MonGenEmpty -MapName 0"
+# 单点复核（非 MonGen AI 消费者；0137 应 ok + source_verified；map 0 无冻结件 ⇒ fail-closed red）
+powershell -NoProfile -Command ". mir2-rs/tests/parity/m3/gate_guards.ps1; Test-M3MapNoAiConsumers -MapName 0137 -VerifySource; Test-M3MapNoAiConsumers -MapName 0"
 # 真机正式跑（由 m3cs 执行；本片不起栈）：两侧同种子 + -AttackPinPair（缺省 map=0137）
 #   run_attack_pair.ps1 -Side csharp -Bots 2 -AttackCount 120 -AttackPinPair -Prefix <p>
 #   换 Rust 栈：-Side rust ... -PeerSession <csharp 会话>
@@ -101,7 +125,7 @@ python mir2-rs/tests/parity/m3/attack_diff.py align <各侧 raw> --out <seq>; py
 
 ## 7. 残留物清单
 
-- 入库：本目录 + `fixtures/{extract_mongen.py,mongen-map0137.tsv,mongen-provenance.tsv}`
+- 入库：本目录 + `fixtures/{extract_mongen.py,mongen-map0137.tsv,mongen-provenance.tsv,extract_map_ai_consumers.py,ai-consumer-map0137.tsv,ai-consumer-provenance.tsv}`
   + `gate_guards.ps1` / `run_pair.ps1` / `run_attack_pair.ps1` / `m3/README.md`。
 - 仓外临时物（可删）：`E:/tmp/m3bag-r1/**`（green/mutation 原始输出 + 三份 green 备份 + gates 日志）。
 - 端口/进程：本车道**未起也未停**任何服务端栈；快照时十端口被**另一车道**的栈占用（`13-ports-snapshot.txt`，如实记录）。

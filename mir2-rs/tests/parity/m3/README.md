@@ -314,6 +314,15 @@ powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair
 合成 0 行=绿·1 行=红·行数≠声明=红·缺 provenance=红）。选图依据与提取命令/源 hash 见
 `evidence-attack-pair-r1-nomonster-20261012/README.md`。**判据不放宽**：`attack_diff.py diff` 仍求逐 k = 0。
 
+**攻击 pin 必须无「非 MonGen 的 AI 消费者」（R-1 refine，owner 2026-10-12 15:05）**：严格说不能只看 MonGen ——
+守卫（`GuardList.txt`）、商人/NPC（`MerChant.txt`/`Npcs.txt`）、地图事件（`MapEvent.txt`）、任务触发（`MapQuest.txt`）
+都可能生成跑 AI 的实体、消耗全局 RNG。⇒ `gate_guards.ps1::Test-M3MapNoAiConsumers` 按地图查冻结提取件
+`fixtures/ai-consumer-map<map>.tsv`（5 个受检文件逐文件 `ref_rows`）+ `fixtures/ai-consumer-provenance.tsv`，
+要求**全为 0**；`run_pair.ps1` 在 `-AttackPinPair` 启动时**同样 fail-closed**（打 `MAP_HAS_NO_AI_CONSUMERS ok`，
+`-VerifySource` 复算逐源 SHA256 与现数）。提取器 = `fixtures/extract_map_ai_consumers.py`（按整词/整字段匹配，非子串）。
+`run_attack_pair.ps1 -SelfCheckNoStack` **⑰** 五向（生产 0137 绿 + source_verified / 合成 有引用·声明漂移·
+缺 provenance·缺提取件 必红）。选图依据与逐源 hash 见 `evidence-attack-pair-r1-nomonster-20261012/README.md`。
+
 与前一条（背包/装备）共用同一批护栏：入口实现识别、两相 pin、`settle+hold`、`-DisableAutoPlay` 耦合、
 peer 口径（`attack_sequence`/`attack_pose`/`fixed_new_chr`）与 `scoped_diff` 作用域判据。
 **前置**：真机两侧需注入**同一个种子**（C# 用 `m3/rng-hook`；Rust T-30 生产路径已支持，`start_rust_stack.ps1` 的透传管线见 `openmir2-m3-rust-stack-seed-plumb`）；夹具在 **0.6)** 预检**断言两侧确实注入**（F-C，未注入 ⇒ fail-closed RED；见 whitelist T-30）。

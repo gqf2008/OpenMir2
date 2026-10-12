@@ -1,0 +1,11 @@
+# 改坏必红原始输出（R-1 refine 15:05 新门 ⑰：非 MonGen AI 消费者口径）
+
+变异：gate_guards.ps1::Test-M3MapNoAiConsumers 的「$ok = ($entry.declared_total -eq 0)」改成「$ok = $true」
+      （即：即使提取件里某文件 ref_rows=1 也判绿）⇒ 合成「有 1 行引用」的用例必须变红。
+命令：powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 -SelfCheckNoStack
+结果：rc=1；RED 行列出 synth_ai_ref_not_red（生产 0137 本身 total=0 仍绿 ⇒ 靠**合成用例**咬住，非恒绿）。
+还原：mutation 后与 green 备份 diff 为空（逐字节还原）。
+
+=== 原始输出（节选：含 ⑰ 与最终 RED 行） ===
+SELFTEST ⑰ 攻击 pin 非 MonGen AI 消费者口径（R-1 refine 15:05）：生产 map=0137 total=0 source_verified=True；合成 有引用/声明漂移/缺 provenance/缺提取件 四向必红
+SELFTEST_RED RED: synth_ai_ref_not_red

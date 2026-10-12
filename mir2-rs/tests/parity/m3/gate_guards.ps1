@@ -567,6 +567,146 @@ function Test-M3MonGenEmpty {
   return [pscustomobject]@{ ok = $ok; spawns = $actual; declared = $entry.spawn_rows; fixture = $fixture; source_verified = $srcVerified; reason = $(if ($ok) { '' } else { ('该图有 {0} 个刷怪点（非无怪图）' -f $actual) }) }
 }
 
+# ---------------------------------------------------------------------------------------------------
+# R-1 refine（owner brief 2026-10-12 15:05）：**严格说不能只看 MonGen** —— 守卫（`GuardList.txt`）、
+# 商人/NPC（`MerChant.txt` / `Npcs.txt`）、地图事件（`MapEvent.txt`）、任务触发（`MapQuest.txt`）
+# 都可能生成跑 AI 的实体、消耗全局 RNG。⇒ 攻击 pin 的图除「MonGen 零行」外，还要求这些文件对**该图**零引用。
+# 口径 = 按地图查冻结提取件 `fixtures/ai-consumer-map<map>.tsv`（逐文件 ref_rows）+ `fixtures/ai-consumer-provenance.tsv`，
+# 要求**所有 ref_rows == 0**（= declared_total 0）。与 `Test-M3MonGenEmpty` 同构：真机启动 fail-closed，
+# `-VerifySource` 复算逐源 SHA256 与现数。
+# ---------------------------------------------------------------------------------------------------
+# 受检文件全集（顺序即 fixture 行序，与 `fixtures/extract_map_ai_consumers.py::FILES` 必须一致）。
+$script:M3AiConsumerFiles = @('GuardList.txt', 'MerChant.txt', 'Npcs.txt', 'MapEvent.txt', 'MapQuest.txt')
+
+# AI-consumer 提取件路径（`fixtures/ai-consumer-map<map>.tsv`）：按 map 查对应提取件（唯一命名口径）。
+function Get-M3AiConsumerFixturePath {
+  param(
+    [Parameter(Mandatory)][string]$MapName,
+    [string]$FixtureDir = (Join-Path $script:M3GuardsHere 'fixtures')
+  )
+  return (Join-Path $FixtureDir ('ai-consumer-map{0}.tsv' -f $MapName))
+}
+
+# provenance manifest（`fixtures/ai-consumer-provenance.tsv`）：map → { fixture; declared_total; envir_dir; hashes }。
+# 缺文件/解析不出 ⇒ 空表（调用方 fail-closed）。`hashes` = file → sha256。
+function Get-M3AiConsumerProvenance {
+  param([string]$ProvenancePath = (Join-Path $script:M3GuardsHere 'fixtures\ai-consumer-provenance.tsv'))
+  $map = @{}
+  if (-not (Test-Path $ProvenancePath)) { return $map }
+  foreach ($line in (Get-Content -Path $ProvenancePath)) {
+    if ([string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith('#')) { continue }
+    $p = $line -split "`t"
+    if ($p.Count -lt 3) { continue }
+    $hashes = @{}
+    if ($p.Count -gt 4 -and -not [string]::IsNullOrEmpty($p[4])) {
+      foreach ($kv in ($p[4] -split ';')) {
+        $q = $kv -split '=', 2
+        if ($q.Count -eq 2) { $hashes[$q[0]] = $q[1] }
+      }
+    }
+    $map[$p[0]] = [pscustomobject]@{
+      fixture        = $p[1]
+      declared_total = [int]$p[2]
+      envir_dir      = $(if ($p.Count -gt 3) { $p[3] } else { '' })
+      hashes         = $hashes
+    }
+  }
+  return $map
+}
+
+# 解析一个 AI-consumer 提取件 → { found; rows }（rows = [{ file; ref_rows }]）；文件缺失 ⇒ found=$false。
+function Get-M3AiConsumerFixtureRows {
+  param([Parameter(Mandatory)][string]$FixturePath)
+  if (-not (Test-Path $FixturePath)) { return [pscustomobject]@{ found = $false; rows = @() } }
+  $rows = New-Object System.Collections.Generic.List[object]
+  foreach ($line in (Get-Content -Path $FixturePath)) {
+    if ([string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith('#')) { continue }
+    $p = $line -split "`t"
+    if ($p.Count -lt 2) { continue }
+    $rows.Add([pscustomobject]@{ file = $p[0]; ref_rows = [int]$p[1] })
+  }
+  return [pscustomobject]@{ found = $true; rows = $rows.ToArray() }
+}
+
+# 现数一个源文件里把 `$MapName` 作为**整词/整字段**出现的行数（跳过空行/`;` 注释）；源缺失 ⇒ -1。
+function Get-M3AiConsumerRefRows {
+  param(
+    [Parameter(Mandatory)][string]$FilePath,
+    [Parameter(Mandatory)][string]$MapName
+  )
+  if (-not (Test-Path $FilePath)) { return -1 }
+  $n = 0
+  foreach ($line in (Get-Content -Path $FilePath -Encoding Default)) {
+    if ([string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith(';')) { continue }
+    $tokens = @([regex]::Split($line, '[\s\[\],]+') | Where-Object { $_ -ne '' })
+    if ($tokens -contains $MapName) { $n++ }
+  }
+  return $n
+}
+
+# R-1 refine 判据（唯一口径，真机启动与无栈自检共用）：按 map 查冻结提取件 + provenance，要求
+# 「该图在 5 个受检文件里的引用行数全为 0」。fail-closed：provenance 无该图 / 提取件缺失 / 受检文件集不全 /
+# 逐文件或合计与声明不符 / （`-VerifySource`）源目录或文件不可达·hash 漂移·现数不符。
+# 返回 { ok; total; declared; fixture; source_verified; reason }。
+function Test-M3MapNoAiConsumers {
+  param(
+    [Parameter(Mandatory)][string]$MapName,
+    [string]$FixtureDir = (Join-Path $script:M3GuardsHere 'fixtures'),
+    [string]$ProvenancePath = (Join-Path $script:M3GuardsHere 'fixtures\ai-consumer-provenance.tsv'),
+    [switch]$VerifySource
+  )
+  $prov = Get-M3AiConsumerProvenance -ProvenancePath $ProvenancePath
+  if (-not $prov.ContainsKey($MapName)) {
+    return [pscustomobject]@{ ok = $false; total = -1; declared = -1; fixture = ''; source_verified = $false; reason = ('provenance 无该图: ' + $MapName) }
+  }
+  $entry = $prov[$MapName]
+  $canon = Split-Path -Leaf (Get-M3AiConsumerFixturePath -MapName $MapName -FixtureDir $FixtureDir)
+  if ($entry.fixture -ne $canon) {
+    return [pscustomobject]@{ ok = $false; total = -1; declared = $entry.declared_total; fixture = ''; source_verified = $false; reason = ('provenance fixture 名与地图名不符: {0} != {1}' -f $entry.fixture, $canon) }
+  }
+  $fixture = Join-Path $FixtureDir $entry.fixture
+  $parsed = Get-M3AiConsumerFixtureRows -FixturePath $fixture
+  if (-not $parsed.found) {
+    return [pscustomobject]@{ ok = $false; total = -1; declared = $entry.declared_total; fixture = $fixture; source_verified = $false; reason = ('缺提取件: ' + $fixture) }
+  }
+  $rows = @($parsed.rows)
+  foreach ($want in $script:M3AiConsumerFiles) {
+    if (@($rows | Where-Object { $_.file -eq $want }).Count -ne 1) {
+      return [pscustomobject]@{ ok = $false; total = -1; declared = $entry.declared_total; fixture = $fixture; source_verified = $false; reason = ('提取件受检文件集不全/重复: ' + $want) }
+    }
+  }
+  $total = 0
+  foreach ($r in $rows) { if ($r.ref_rows -lt 0) { return [pscustomobject]@{ ok = $false; total = -1; declared = $entry.declared_total; fixture = $fixture; source_verified = $false; reason = ('提取件引用数为负: ' + $r.file) } }; $total += $r.ref_rows }
+  if ($total -ne $entry.declared_total) {
+    return [pscustomobject]@{ ok = $false; total = $total; declared = $entry.declared_total; fixture = $fixture; source_verified = $false; reason = ('提取件引用合计 {0} != provenance 声明 {1}' -f $total, $entry.declared_total) }
+  }
+  $srcVerified = $false
+  if ($VerifySource -and -not [string]::IsNullOrEmpty($entry.envir_dir)) {
+    if (-not (Test-Path $entry.envir_dir)) {
+      return [pscustomobject]@{ ok = $false; total = $total; declared = $entry.declared_total; fixture = $fixture; source_verified = $false; reason = ('源目录不可达: ' + $entry.envir_dir) }
+    }
+    foreach ($r in $rows) {
+      $fp = Join-Path $entry.envir_dir $r.file
+      if (-not (Test-Path $fp)) {
+        return [pscustomobject]@{ ok = $false; total = $total; declared = $entry.declared_total; fixture = $fixture; source_verified = $false; reason = ('源文件不可达: ' + $r.file) }
+      }
+      if ($entry.hashes.ContainsKey($r.file)) {
+        $h = (Get-FileHash -Path $fp -Algorithm SHA256).Hash.ToLower()
+        if ($h -ne $entry.hashes[$r.file].ToLower()) {
+          return [pscustomobject]@{ ok = $false; total = $total; declared = $entry.declared_total; fixture = $fixture; source_verified = $false; reason = ('源文件 hash 漂移: ' + $r.file) }
+        }
+      }
+      $live = Get-M3AiConsumerRefRows -FilePath $fp -MapName $MapName
+      if ($live -ne $r.ref_rows) {
+        return [pscustomobject]@{ ok = $false; total = $total; declared = $entry.declared_total; fixture = $fixture; source_verified = $false; reason = ('源文件现数 {0} != 提取件 {1}（{2}）' -f $live, $r.ref_rows, $r.file) }
+      }
+    }
+    $srcVerified = $true
+  }
+  $ok = ($entry.declared_total -eq 0)
+  return [pscustomobject]@{ ok = $ok; total = $total; declared = $entry.declared_total; fixture = $fixture; source_verified = $srcVerified; reason = $(if ($ok) { '' } else { ('该图仍有 {0} 处非 MonGen AI 消费者引用（守卫/NPC/地图事件/任务）' -f $total) }) }
+}
+
 function Format-M3AttackPose {
   param(
     [string]$MapName = $script:M3AttackPinMap,
