@@ -13,7 +13,7 @@
 | ① 背包/装备 | `scoped_diff.py diff --canonical --fixed-newchr` = `GREEN 作用域内 9 张表逐行一致` rc=0 | **covered（diff=0）** |
 | ② 战斗 | 三对 `attack_diff.py diff` 全 `GREEN diff=0（attacked=120 hits=57 dodges=63 sum=2425）` rc=0；`stream_equiv gate` 651/651 | **covered（逐 k=0）** |
 | ③ 技能 | `combat_skill_vectors` 29 passed；registry `implemented=29/108`、cases=29；未实装 79 条逐条登记 | **covered** |
-| 掉落/经验、任务、组队/交易、公会/攻城、英雄/宠物、邮件/拍卖 | 本片未跑 | **not_covered**（逐项给建议承接卡） |
+| 掉落/经验、任务、组队/交易、公会/攻城、英雄/宠物、邮件/拍卖 | 本片未跑 | **not_covered**（逐项给承接卡：掉落/经验·NPC/商店·组队/交易·公会/攻城·英雄/宠物·邮件/拍卖 = owner 已开卡；任务 = 建议卡） |
 | NPC/商店 | M4 7/7 脚本层 GREEN（含商店/修理/仓库 3 条）；服务端派发未覆盖 | **partial** |
 | ④ M3 门禁 `scoped_diff --canonical` | 真机隔离两相后 DB 侧 `characters_ablity` 一处 RED（F-2 轨承接） | 未达成（非本片轴） |
 | ② 300 假人 24h 长跑 | **未跑**（等 owner 收拢窗口） | **not_run**（方案见 `M3-report.md` §2） |
