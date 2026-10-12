@@ -1,22 +1,22 @@
-# 四门禁（从 mir2-rs/ 跑；隔离 CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target；--offline）
-# 本片零 .rs（只动 tools/evidence-hash/**），仍按门禁复跑。
+# 四门禁（合并树：master ba8ca1c6 + 本片；从 mir2-rs/ 跑；隔离 CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target；--offline）
+# 本片零 .rs（只动 tools/evidence-hash/**），仍按门禁在合并树上复跑。
 
 ## 1) cargo fmt --all -- --check
 fmt_rc=0
 
 ## 2) cargo run -p msgcodegen --offline -- --check
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.13s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.09s
      Running `E:/tmp/openmir2-m3bag-target\debug\msgcodegen.exe --check`
 msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
 msgcodegen_rc=0
 
 ## 3) cargo clippy --workspace --all-targets --offline -- -D warnings
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.46s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.40s
 clippy_rc=0
 
 ### cargo test --workspace --offline
 test_rc=0  suites=84  passed=682  failed=0  ignored=16
 
-> 注：首跑（并发口径下）`game-svr --test relay ids_notification_enables_login_certification`
+> 首跑（未合 master 前，并发口径下）`game-svr --test relay ids_notification_enables_login_certification`
 > 曾 flaky 红一次（无 DB 链路分支与端口/时序相关，与本片零 `.rs` 无关）；单跑复绿、
-> 全量重跑 `84 suites / 682 passed / 0 failed / 16 ignored` rc=0。
+> 合并树全量重跑 rc=0。

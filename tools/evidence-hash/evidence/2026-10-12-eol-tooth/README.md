@@ -29,7 +29,7 @@
 | `00-commands.txt` | 全部命令（自检 / 夹具 / 对账 / 历史复现 / 四门禁） |
 | `01-selftest.txt` | `selftest` **11/11**（含 EOL 陷阱×2 + 不误伤；原 6/6 已扩为 11/11） |
 | `02-fixture-demo.txt` | 夹具：样例1「盘上 CRLF / blob LF」与样例2「blob 含 CRLF / 盘上 LF」各红→绿；`--disk-bytes` 也红 |
-| `03-reconcile-after.txt` | 回归：全仓逐目录对账仍 **72/72 GREEN**（新牙未误伤任何现有目录） |
+| `03-reconcile-after.txt` | 回归：全仓逐目录对账仍 **74/74 GREEN**（合 master `ba8ca1c6` 后；新牙未误伤任何现有目录） |
 | `04-historical-170a51b9.txt` | 历史先例复现：m3cs 片提交 `170a51b9` 上判 **RED 74/75** 并点名 `window/00-selfcheck-nostack.txt` |
 | `05-gates.txt` | 四门禁：fmt / clippy / test（84 suites/682 passed/0 failed/16 ignored）/ msgcodegen=604 |
 

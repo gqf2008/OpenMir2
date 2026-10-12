@@ -13,6 +13,7 @@ mir2-rs/tests/parity/m1-boundary-load/evidence                            26    
 mir2-rs/tests/parity/m3/amulet-probe                                       4     4     3   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
 mir2-rs/tests/parity/m3/attack-dir-probe                                   4     4     3   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
 mir2-rs/tests/parity/m3/attack-hit-probe                                   4     4     3   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
+mir2-rs/tests/parity/m3/attack-request-sequence                           21    21    15   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
 mir2-rs/tests/parity/m3/combat-probe                                       4     4     3   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
 mir2-rs/tests/parity/m3/dispatch-audit-probe                               4     4     3   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
 mir2-rs/tests/parity/m3/evidence/anchor-count-fix-20261012                10    10    10   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
@@ -53,6 +54,7 @@ mir2-rs/tests/parity/m3/evidence-prewarm-marker-n1-20261012                7    
 mir2-rs/tests/parity/m3/evidence-rng-isolate-attack-20261012              19    19    18   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
 mir2-rs/tests/parity/m3/evidence-rng-isolate-attack-csharp-20261012        7     7     7   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
 mir2-rs/tests/parity/m3/evidence-rng-isolate-attack-twophase-20261012     75    75    73   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
+mir2-rs/tests/parity/m3/evidence-rng-isolate-streamcompare-20261012       31    31    27   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
 mir2-rs/tests/parity/m3/evidence-rng-ledger-diff-20261012                 74    74    74   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
 mir2-rs/tests/parity/m3/evidence-rng-trace-20261012                       17    17    17   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
 mir2-rs/tests/parity/m3/evidence-t14-20261012                              9     9     2   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
@@ -80,4 +82,4 @@ tools/m2-acceptance/evidence/session-lifecycle-rerun-20261012             11    
 tools/m2-acceptance/evidence/session-lifecycle-selftest-20261012           6     6     0   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
 tools/oracle/evidence/m2svr-hash-unify-20261012                           15    15     1   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
 
-reconcile: 72/72 GREEN
+reconcile: 74/74 GREEN
