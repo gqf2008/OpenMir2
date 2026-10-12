@@ -270,6 +270,7 @@ powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_bag_equip_p
   C# `PIN_HOLD attempt=3`、Rust `PIN_HOLD attempt=2` ⇒ 连续两轮 settle 判据在真机生效）。证据 `evidence-t14-rerun-20261012/**`。
   此前（第十四格）唯一剩余差异 = `characters.IncHealth`（C#=0 / Rust=20），根因 = Rust 未建模 oracle 周期
   `HealthSpellChanged` 恢复 tick（把吃药得到的 `IncHealth` 消费回 HP，满血时归零）；由 **T-28** 修复。
+  ⇒ **T-28 已退役**（`tests/parity/whitelist.md` T-28 改为「已修/退役」口径、保留留痕，不再作为差异豁免）。
   报告 `T14-对照报告-20261012.md`；第十四格判据会话 `sessions/{csharp-20261012-080312,rust-20261012-080417}`。
 
 ## 一次「侧运行」是什么

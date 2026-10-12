@@ -33,7 +33,7 @@ RC=0
 | `inc-health.txt` | 两侧 `characters` 行（按 `scoped_diff.TABLE_COLUMNS` 唯一列序）的 `IncHealth/IncSpell/IncHealing`，均 0 |
 | `ports.txt` | 起栈前 / C# 栈中 / Rust 栈中 / 收工后 四段十端口实拍 |
 | `save-req-resp.txt` | Rust game-svr 存档请求/应答（`DB_SAVEHUMANRCD` → `Ident=1102`）两相各一次 |
-| `rust-game-svr.out.log` | Rust game-svr 运行日志全量（含进世界 / CM_QUERYBAGITEMS / 五步 CM_* / 恢复 tick） |
+| `rust-game-svr.out.txt` | Rust game-svr 运行日志全量（含进世界 / CM_QUERYBAGITEMS / 五步 CM_* / 恢复 tick）。原名 `rust-game-svr.out.log`，被 `.gitignore:92 (*.log)` 吞掉 ⇒ F-1 返工改名入库（见 `selfcheck-f1-selfcontained.txt`） |
 | `gates-fmt.txt` / `gates-clippy.txt` / `gates-msgcodegen.txt` / `gates-test-workspace.txt` | 四门禁在 head `376ea004` 的回归输出（本片零 `.rs`）：fmt/clippy/msgcodegen rc=0；test = 73 suites / 589 passed / 0 failed / 16 ignored |
 | `csharp-start.txt` / `csharp-stop.txt` | `E:\MirServer\start-all.ps1` 起停输出 |
 | `rust-start.txt` / `rust-stop.txt` | `tools/m2-acceptance/start_rust_stack.ps1` 起停输出 |
@@ -44,11 +44,21 @@ RC=0
 （`CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target cargo build -p game-svr -p login-gate -p sel-gate -p game-gate`）。
 存档 preflight 判 `DB_SAVEHUMANRCD` 已实现（T-27 已由存档片收敛）。
 
+## 证据包自包含性自检（F-1 返工，reviewer-5 `42711647`）
+
+- **F-1（Important，已收口）**：原 SHA256SUMS 声明 `rust-game-svr.out.log`，而 `*.log` 被 `.gitignore:92` 挡住、未入库
+  ⇒ 作者 worktree 里 GREEN，干净检出/合并后缺件 RED。修法 = **选项①改名**：`rust-game-svr.out.log` → `rust-game-svr.out.txt`（受跟踪、不被忽略）后入库，并重算 `SHA256SUMS.txt`（现 **18 行** = 目录内 19 件减去清单自身；含本自检件）。
+- 自检原始输出见 `selfcheck-f1-selfcontained.txt`：对清单声明的**每一件**跑 `git check-ignore -v`（**无输出** = 未忽略）且
+  `git ls-tree -r --name-only HEAD <本目录> | wc -l` == 盘上文件数；自检件本身也在 `SHA256SUMS.txt` 里。
+- 复核（干净检出）：`git clone --local <repo> E:/tmp/<tmp> && cd <tmp> && python -I tools/evidence-hash/verify_sha256sums.py mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012` ⇒ GREEN 18/18（rc=0）。
+
 ## 残留物清单
 
 - 入库：`mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012/**` +
-  `mir2-rs/tests/parity/m3/README.md`（T-14 段：8/8→12/12 + O-2 树对应注释 + T-28 复跑 GREEN）+ 
+  `mir2-rs/tests/parity/m3/README.md`（T-14 段：8/8→12/12 + O-2 树对应注释 + T-28 复跑 GREEN + T-28 已退役）+
+  `tests/parity/whitelist.md`（T-28 改「已修/退役」口径、T-22 追加第十五格复跑）+ 
   `evidence-t14-pinhold-20261012/{commands.txt,SHA256SUMS.txt}`（O-2 注释 / 清单重算 12/12）。
+- **F-1 返工件**：`rust-game-svr.out.log` → `.txt` 改名入库、`SHA256SUMS.txt` 重算（18 行）、新增自检 `selfcheck-f1-selfcontained.txt`。
 - 会话目录（按 `.gitignore`，`*.log` 不入库；`sessions/{csharp-20261012-085856,rust-20261012-090020}/` 保留本机供复查）。
 - 临时物（保留，证据）：`E:/tmp/m3bag4-*.log`（起栈/侧运行/停止）、`E:/tmp/m3bag4-scoped-diff.txt`；
   Rust 栈日志 `E:/tmp/m2-acceptance/stack/**`。
