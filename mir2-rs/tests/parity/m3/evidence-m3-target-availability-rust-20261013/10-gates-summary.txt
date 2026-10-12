@@ -1,0 +1,14 @@
+四门禁（隔离 target；workspace 根 = mir2-rs/，CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target）
+本片改动为 PowerShell + Python + 文档（零 .rs），门禁用于确认无回归。
+
+- 06-gate-fmt.txt        : cargo fmt --all -- --check                 ⇒ rc=0
+- 07-gate-clippy.txt     : cargo clippy --workspace --all-targets --offline -- -D warnings ⇒ rc=0
+- 08-gate-test.txt       : cargo test --workspace --offline          ⇒ rc=0
+                           聚合：72 Running 段 / 682 passed / 0 failed / 16 ignored
+- 09-gate-msgcodegen.txt : cargo run -p msgcodegen --offline -- --check ⇒ rc=0（604 常量）
+
+变更边界（相对 master 0f4e141b）：
+  mir2-rs/tests/parity/m3/run_attack_pair.ps1   （+ -RustStateLog、Invoke-M3TargetAvailabilityGate、两侧门 + 自检 ⑦c）
+  mir2-rs/tests/parity/m3/server_state_gate.py  （docstring：两侧同形输入）
+  mir2-rs/tests/parity/m3/evidence-m3-target-availability-rust-20261013/**（本证据包）
+零 .rs / 零 src/ / 零 sql/ / 零 crates/ / 零 bins/。

@@ -1,0 +1,7 @@
+### good dump (expect rc=0)
+GREEN: 目标可用性门通过（5 击里 5 击受害在场且 !ghost && !death，tolerance=1）
+rc=0
+
+### ghost-from-k4 dump (expect rc=1 naming #4)
+RED: 目标在 2/5 击不可用（> tolerance 1）——受害不在 (18,20) 或 ghost/death=1；前几处：#4(seq=4), #5(seq=5)
+rc=1

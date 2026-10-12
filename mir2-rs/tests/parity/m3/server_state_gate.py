@@ -2,9 +2,11 @@
 # -*- coding: utf-8 -*-
 """server_state_gate.py — M3②③ 夹具的**目标可用性 fail-closed 门**（owner 2026-10-12 23:50 第 ③ 条）。
 
-卡：`openmir2-m3-attack-pair-fixture`。输入 = C# 影子 hook 的**服务端权威逐击状态 dump**
-（`MIR2_RNG_STATE_LOG` → `SERVER_STATE <seq> <json 数组>`，每个玩家攻击起点一行；见
-`rng-hook/StartupHook.cs::DumpActors`）。
+卡：`openmir2-m3-attack-pair-fixture`。输入 = **两侧同形**的**服务端权威逐击状态 dump**
+（`MIR2_RNG_STATE_LOG` → `SERVER_STATE <seq> <json 数组>`，每个玩家攻击起点一行）：
+C# 半见 `rng-hook/StartupHook.cs::DumpActors`；Rust 半见 `mir2-rs/bins/game-svr/src/state_log.rs`
+（m2-svr 的 `start_rust_stack.ps1 -StateLog` 管线）。夹具侧两侧都由
+`run_attack_pair.ps1::Invoke-M3TargetAvailabilityGate` 强制（任一侧缺 dump ⇒ RED）。
 
 **为什么需要它（本片定位出的真因）**：C# 侧「目标格 (18,20) 从 k=4 起为空」**不是格子空了**——
 服务端 dump 证明受害者一直站在 `(18,20)`、map `0137`，只是它的 `Ghost` 标志从 k=4 起被某条
