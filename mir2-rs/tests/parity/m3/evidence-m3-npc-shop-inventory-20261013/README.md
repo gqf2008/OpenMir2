@@ -1,6 +1,6 @@
 # evidence-m3-npc-shop-inventory-20261013
 
-卡 `openmir2-m3-npc-shop-align` 的 DoD① 现状盘点证据（在 `worktree-m3-npc-shop-align`，base = `origin/master fa82187a`）。
+卡 `openmir2-m3-npc-shop-align` 的 DoD① 现状盘点证据（在 `worktree-m3-npc-shop-align`，base = `origin/master 384379fb`）。
 
 **本片只做盘点**（不占窗口、零 `.rs`、未起栈、未占端口）。报告：
 [`../M3⑤NPC商店现状盘点报告-20261013.md`](../M3⑤NPC商店现状盘点报告-20261013.md)。
@@ -15,20 +15,20 @@
 | `03-fixture-reuse-survey.txt` | `run_pair.ps1` 参数面 / `scoped_diff.py` / `gate_guards.ps1` 的夹具可复用性调查 | 见文件内 `sed/grep` 命令 |
 | `04-gate-fmt.txt` | 门禁：`cargo fmt --all -- --check` | rc=0 |
 | `05-gate-clippy.txt` | 门禁：`cargo clippy --offline --workspace --all-targets -- -D warnings` | rc=0 |
-| `06-gate-test.txt` | 门禁：`cargo test --offline --workspace` = 84 suites / 690 passed / 0 failed / 16 ignored | rc=0 |
+| `06-gate-test.txt` | 门禁：`cargo test --offline --workspace` = 84 suites / 687 passed / 0 failed / 16 ignored | rc=0 |
 | `07-gate-msgcodegen.txt` | 门禁：`cargo run --offline -p msgcodegen -- --check` = 604 条 | rc=0 |
 
 ## 复现（离线，零端口）
 
 ```bash
 # 四门禁（隔离 target，--offline）
-CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target cargo fmt --all -- --check
-CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target cargo clippy --offline --workspace --all-targets -- -D warnings
-CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target cargo test --offline --workspace
-CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target cargo run --offline -p msgcodegen -- --check
+CARGO_TARGET_DIR=E:/tmp/m3cs-target cargo fmt --all -- --check
+CARGO_TARGET_DIR=E:/tmp/m3cs-target cargo clippy --offline --workspace --all-targets -- -D warnings
+CARGO_TARGET_DIR=E:/tmp/m3cs-target cargo test --offline --workspace
+CARGO_TARGET_DIR=E:/tmp/m3cs-target cargo run --offline -p msgcodegen -- --check
 
-# 证据清单（仓库字节口径 / LF 归一 / git blob）
-python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/m3/evidence-m3-npc-shop-inventory-20261013
+# 证据清单（仓库字节口径 / LF 归一 / git blob；README.md 本身不列入清单 ⇒ --check-extra 需 --exclude 排除它）
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra --exclude README.md mir2-rs/tests/parity/m3/evidence-m3-npc-shop-inventory-20261013
 python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-npc-shop-inventory-20261013
 ```
 

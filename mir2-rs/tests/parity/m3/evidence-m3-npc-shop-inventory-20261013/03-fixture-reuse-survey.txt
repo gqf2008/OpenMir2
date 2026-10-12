@@ -1,5 +1,5 @@
 # 夹具可复用性调查（只读；评估 run_pair.ps1 的两相固定起点口径能否用于 M3⑤ NPC/商店）
-# 仓库 = origin/master fa82187a
+# 仓库 = origin/master 384379fb
 
 == [1] run_pair.ps1 参数面（pin 两相固定起点 + 会话入库 + 无栈自检）==
 param(

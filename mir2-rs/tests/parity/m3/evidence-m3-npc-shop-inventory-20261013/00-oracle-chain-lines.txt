@@ -1,5 +1,5 @@
 # oracle（C#）侧 NPC/商店（买/卖/修理/仓库）调用链行号锚点（只读 grep -n；命令逐条可复跑）
-# 仓库 = origin/master fa82187a（本片分支 base）
+# 仓库 = origin/master 384379fb（本片分支 base）
 # 生成：bash，输出 LF
 
 == [A] 消息号（src/OpenMir2/Messages.cs）==

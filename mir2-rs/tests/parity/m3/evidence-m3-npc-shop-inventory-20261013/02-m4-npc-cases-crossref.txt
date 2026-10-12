@@ -1,5 +1,5 @@
 # M4 已交付的 7 条 NPC 用例 = 「脚本层」口径（与 M3⑤ 服务端派发面对表）
-# 仓库 = origin/master fa82187a
+# 仓库 = origin/master 384379fb
 
 == M4② 7 条用例（tests/parity/M4/npc-cases.json；类别/名称/runner/脚本）==
    传送 | 传送-幻境（金币不足/无物品） | runner=flow | E:/MirServer/M2GameSvr/Envir/Market_Def/传送员/比奇省传送员-0.txt

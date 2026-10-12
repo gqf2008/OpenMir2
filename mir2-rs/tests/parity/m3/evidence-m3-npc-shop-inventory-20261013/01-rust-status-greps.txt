@@ -1,5 +1,5 @@
 # Rust 侧现状证据（只读 grep；命令在本文件内，逐条可复跑）
-# 分支 worktree-m3-npc-shop-align，base = origin/master fa82187a
+# 分支 worktree-m3-npc-shop-align，base = origin/master 384379fb
 # 生成：bash，输出 LF
 
 == [1] bins/game-svr 是否派发 NPC/商店 CM_*（1011/1012/1013/1014/1023/1024/1031/1032）==
