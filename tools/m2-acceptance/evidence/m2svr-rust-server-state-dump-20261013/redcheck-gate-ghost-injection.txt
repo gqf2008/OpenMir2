@@ -1,0 +1,1 @@
+RED: 目标在 2/5 击不可用（> tolerance 1）——受害不在 (18,20) 或 ghost/death=1；前几处：#4(seq=4), #5(seq=5)

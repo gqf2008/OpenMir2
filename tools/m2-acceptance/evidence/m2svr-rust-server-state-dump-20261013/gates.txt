@@ -1,0 +1,20 @@
+# 四门禁读数（m2-svr / 无目标一击之后的 M3②③ Rust 侧状态 dump 片）
+# target = E:/tmp/openmir2-m2svr-target（隔离）；base = master 0f4e141b（本分支 FF 后）
+# 生成时间：2026-10-13（UTC+8）
+
+[1] cargo fmt --all -- --check
+    rc=0（输出空）—— 原始：gate-fmt.txt
+
+[2] cargo clippy --workspace --all-targets --offline -- -D warnings
+    rc=0（Finished `dev` profile）—— 原始：gate-clippy-full.txt
+
+[3] cargo test --workspace --offline
+    rc=0
+    摘要：84 suites / 686 passed / 0 failed / 16 ignored
+    —— 原始：gate-test-full.txt
+    # game-svr bin 单独：153 passed / 0 failed / 0 ignored（含本片新增 4 条 state_log 用例）
+
+[4] cargo run -p msgcodegen --offline -- --check
+    rc=0
+    msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+    —— 原始：gate-msgcodegen.txt

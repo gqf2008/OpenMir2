@@ -1,0 +1,2 @@
+GREEN: 目标可用性门通过（5 击里 5 击受害在场且 !ghost && !death，tolerance=1）
+rc=0

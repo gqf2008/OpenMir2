@@ -1,0 +1,49 @@
+# 确切命令（cwd：worktree m2-svr；TARGET=E:/tmp/openmir2-m2svr-target；base master 0f4e141b）
+# 行尾 LF。所有 python 均为 `python`（Windows）。
+
+## 0. 真 gate 自检（夹具侧 fail-closed 门本身）
+python mir2-rs/tests/parity/m3/server_state_gate.py --selftest
+#   => SELFTEST GREEN 6/6 ; rc=0            -> gate-selftest.txt
+
+## 1. 生成 Rust 真实产出（由 state_log 单测写出，非手写样例）
+M2SVR_STATE_LOG_OUT="E:/tmp/openmir2-watch/m2svr-state-dump-evidence/rust-server-state.tsv" \
+  CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target \
+  cargo test -p game-svr --bin game-svr --offline emit_evidence_file_when_requested -- --nocapture
+#   => 写出 5 行 SERVER_STATE ...              -> rust-server-state.tsv
+
+## 2. 真 gate 判 Rust 产出（期望 GREEN rc=0）
+python mir2-rs/tests/parity/m3/server_state_gate.py \
+  --state tools/m2-acceptance/evidence/m2svr-rust-server-state-dump-20261013/rust-server-state.tsv \
+  --attacks 5 --attacker-id 1 --victim-x 18 --victim-y 20 --tolerance 1
+#   => GREEN: 5 击里 5 击受害在场且 !ghost && !death ; rc=0   -> gate-on-rust-output.txt
+
+## 3. 改坏必红①：删掉玩家族过滤（怪物也落）
+#   把 state_log.rs 的 `if e.race != mir2_world::ACTOR_RACE_PLAY {` 改成 `if false {`
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test -p game-svr --bin game-svr --offline \
+  record_emits_player_actors_only_and_matches_gate_semantics
+#   => FAILED: 必须只含 2 个玩家（怪物被过滤）… [Actor{…mon…}] left:3 right:2
+#   -> redcheck-monster-not-filtered.txt ；随后从备份还原
+
+## 4. 改坏必红②：handle_hit_cmd 恒返回 false（撤掉状态 dump 的桥）
+#   把 main.rs 里 handle_hit_cmd 末尾的 `true` 改成 `false`
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test -p game-svr --bin game-svr --offline \
+  hit_cmd_dispatches_ack_action_frame_and_world_attack
+#   => FAILED: 进入攻击路径的一击必须返回 true（…SERVER_STATE dump 行…）
+#   -> redcheck-return-false.txt ；随后从备份还原
+
+## 5. 改坏必红③：对 Rust 产出做「受害从 k=4 起 ghost=1」注入 ⇒ 真 gate 必须 RED
+python mir2-rs/tests/parity/m3/server_state_gate.py \
+  --state tools/m2-acceptance/evidence/m2svr-rust-server-state-dump-20261013/rust-server-state-ghost-from-k4.tsv \
+  --attacks 5 --attacker-id 1 --victim-x 18 --victim-y 20 --tolerance 1
+#   => RED: 目标在 2/5 击不可用（> tolerance 1）… 前几处：#4(seq=4), #5(seq=5) ; rc=1
+#   -> redcheck-gate-ghost-injection.txt
+
+## 6. 四门禁（见 gates.txt 与 gate-*.txt）
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo fmt --all -- --check
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo clippy --workspace --all-targets --offline -- -D warnings
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo test --workspace --offline
+CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target cargo run -p msgcodegen --offline -- --check
+
+## 7. 证据清单复核（仓库字节口径 = LF 归一/git blob）
+python tools/evidence-hash/verify_sha256sums.py verify \
+  tools/m2-acceptance/evidence/m2svr-rust-server-state-dump-20261013 --check-extra
