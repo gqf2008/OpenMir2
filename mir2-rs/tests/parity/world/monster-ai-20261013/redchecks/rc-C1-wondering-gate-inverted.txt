@@ -1,0 +1,42 @@
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\world)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.74s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m2svr-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 3 tests
+test monai::tests::wondering_gate_nonzero_consumes_exactly_one_draw_no_move ... FAILED
+test monai::tests::wondering_walk_branch_moves_and_keeps_dir ... FAILED
+test monai::tests::wondering_turn_branch_matches_oracle_draw_order ... FAILED
+
+failures:
+
+---- monai::tests::wondering_gate_nonzero_consumes_exactly_one_draw_no_move stdout ----
+
+thread 'monai::tests::wondering_gate_nonzero_consumes_exactly_one_draw_no_move' (23204) panicked at crates\world\src\monai.rs:622:9:
+assertion `left == right` failed: 非 0 支不应移动/转向
+  left: (10, 10, 0)
+ right: (10, 9, 0)
+
+---- monai::tests::wondering_walk_branch_moves_and_keeps_dir stdout ----
+
+thread 'monai::tests::wondering_walk_branch_moves_and_keeps_dir' (26924) panicked at crates\world\src\monai.rs:672:9:
+assertion `left == right` failed: WalkTo(Up) 应向北走一格
+  left: (10, 10)
+ right: (10, 9)
+
+---- monai::tests::wondering_turn_branch_matches_oracle_draw_order stdout ----
+
+thread 'monai::tests::wondering_turn_branch_matches_oracle_draw_order' (31736) panicked at crates\world\src\monai.rs:648:9:
+assertion `left == right` failed: 应 TurnTo(RandomByte(8))
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    monai::tests::wondering_gate_nonzero_consumes_exactly_one_draw_no_move
+    monai::tests::wondering_turn_branch_matches_oracle_draw_order
+    monai::tests::wondering_walk_branch_moves_and_keeps_dir
+
+test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 44 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-world --lib`

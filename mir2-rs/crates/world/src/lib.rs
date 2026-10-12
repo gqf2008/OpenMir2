@@ -19,6 +19,7 @@ pub mod combat;
 pub mod entity;
 pub mod magic;
 pub mod map;
+pub mod monai;
 pub mod mongen;
 pub mod session;
 pub mod world;
@@ -39,6 +40,11 @@ pub use magic::{
 };
 pub use map::{
     CellAttribute, CellObject, CellType, FloorItemKind, FloorItemMeta, MapCellInfo, MapGrid,
+};
+pub use monai::{
+    attack_target, can_move, del_target_creature, dir_delta, get_attack_dir, goto_target_xy,
+    monster_ai_tick, monster_run, search_target, set_target_creature, think, turn_to, walk_to,
+    wondering,
 };
 pub use mongen::{
     gen_mod_count, get_monsters_zen_time, initialize_monster, monster_due_for_revive,
