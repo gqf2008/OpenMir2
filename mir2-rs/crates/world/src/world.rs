@@ -87,6 +87,14 @@ pub struct World {
     pub tick_seq: u64,
     /// 随机源（同种子 = 与 C# 可对拍）
     pub rng: RandomNumber,
+    /// **M3②③ 活栈隔离口径（owner 2026-10-12 21:15）**：攻击路径**专用**随机流。
+    ///
+    /// 与 `rng` 同源但独立推进：种子 = [`mir2_shared::rng::attack_seed`]`(MIR2_RNG_SEED)`。
+    /// 仅在 [`World::attack_isolation_enabled`] 时被攻击路径取数；关闭时（缺省）**一次都不会被取数**，
+    /// 行为与改动前逐字节相同。
+    pub rng_attack: RandomNumber,
+    /// 是否把攻击路径取数路由到 [`World::rng_attack`]。缺省 `false`（生产/既有 golden 路径不变）。
+    isolate_attack: bool,
     /// 物品目录（掉落生成按名查 `StdItem`）
     pub item_catalog: Vec<StdItem>,
     /// 怪物极品掉落几率（`Config.MonRandomAddValue`）
@@ -129,13 +137,15 @@ impl World {
             .insert_resource(TickOwnerThread::default());
         let mut clock_runner = TickRunner::new();
         clock_runner.add_systems(advance_clock_system);
-        World {
+        let mut world = World {
             maps,
             entities,
             sessions: SessionRegistry::new(),
             clock_ms: 0,
             tick_seq: 0,
             rng: RandomNumber::with_seed(42),
+            rng_attack: RandomNumber::with_seed(42),
+            isolate_attack: false,
             item_catalog: Vec::new(),
             mon_random_add_value: 40,
             need_exps: vec![0; 1000],
@@ -147,6 +157,40 @@ impl World {
             item_number: ItemNumberCounter::default(),
             last_tick: TickRecord::default(),
             by_map_scratch: Vec::new(),
+        };
+        // **M3②③ 隔离口径**：`MIR2_RNG_ISOLATE_ATTACK` 开启时按 `MIR2_RNG_SEED` 派生专用流
+        // （缺省未设 ⇒ `None`，`isolate_attack` 保持 `false`，一字不改）。读 env 的 fail-closed
+        // 语义见 [`mir2_shared::rng::attack_isolation_seed_from_env`]。
+        if let Some(seed) = mir2_shared::rng::attack_isolation_seed_from_env() {
+            world.enable_attack_isolation(seed);
+        }
+        world
+    }
+
+    /// 显式开启攻击路径专用流（种子由调用方按两侧同口径给出）。
+    ///
+    /// 幂等：重复调用只重播专用流。测试与真机接线（经 [`World::with_maps`] 的环境入口）共用本方法。
+    pub fn enable_attack_isolation(&mut self, attack_seed: i32) {
+        self.rng_attack = RandomNumber::with_seed(attack_seed);
+        self.isolate_attack = true;
+    }
+
+    /// 攻击路径专用流是否开启（隔离口径的真机自证）。
+    #[must_use]
+    pub fn attack_isolation_enabled(&self) -> bool {
+        self.isolate_attack
+    }
+
+    /// 攻击路径取数的统一入口：按隔离开关选流。
+    ///
+    /// **只把攻击路径的取数**（[`crate::combat::attack_dir`] / [`crate::combat::swing_power`] 及其
+    /// 全部下取：`atk_power_a/b`、`hit_gate`、`hit_struck_damage`、`struck_durability`、
+    /// `attack_success`）路由到专用流；其余消费者仍走全局 `rng`。
+    fn attack_rng(&mut self) -> &mut RandomNumber {
+        if self.isolate_attack {
+            &mut self.rng_attack
+        } else {
+            &mut self.rng
         }
     }
 
@@ -201,7 +245,7 @@ impl World {
             let attacker = self.entities.get(actor_id)?;
             (attacker.dc, AttackPowerMode::for_attacker(attacker))
         };
-        let power = swing_power(&mut self.rng, dc, mode);
+        let power = swing_power(self.attack_rng(), dc, mode);
         Some(power)
     }
 
@@ -656,7 +700,13 @@ impl World {
         // 玩家攻方还要走完整的 `PlayObject.AttackDir`：`_Attack` 之后 `AttackSuccess` 再抽一次
         // `Random(5)`（`PlayObject.Attack.cs:225`）—— 由 [`crate::combat::attack_dir`] 统一补上；
         // 怪物攻方无这条（`AttackSuccess` 是 `PlayObject` 私有方法）。
-        let outcome = attack_dir(&mut self.rng, &mut attacker, &mut target, last_hitter, &cfg);
+        let outcome = attack_dir(
+            self.attack_rng(),
+            &mut attacker,
+            &mut target,
+            last_hitter,
+            &cfg,
+        );
         if let Some(e) = self.entities.get_mut(target_id) {
             e.hp = target.hp;
             // 命中者登记的**折叠**：C# 在 `_Attack` 里对 `Race > ActorRace.Play` 的目标

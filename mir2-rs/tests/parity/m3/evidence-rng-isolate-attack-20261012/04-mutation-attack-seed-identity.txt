@@ -1,0 +1,39 @@
+   Compiling mir2-shared v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\crates\shared)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.77s
+     Running unittests src\lib.rs (E:/tmp/m3cs-r3-target\debug\deps\mir2_shared-4a55dd2e25033d8d.exe)
+
+running 8 tests
+test rng::tests::dotnet_random_seed42_smoke ... ok
+test rng::tests::large_range_matches_dotnet ... ok
+test rng::tests::get_random_number_is_inclusive ... ok
+test rng::tests::next_max_zero_returns_zero ... ok
+test rng::tests::random_select_removes_from_source ... ok
+test rng::tests::attack_seed_derivation_is_stable ... FAILED
+test rng::tests::attack_stream_is_a_distinct_reproducible_sequence ... FAILED
+test rng::tests::small_and_large_range_sequences ... ok
+
+failures:
+
+---- rng::tests::attack_seed_derivation_is_stable stdout ----
+
+thread 'rng::tests::attack_seed_derivation_is_stable' (26820) panicked at crates\shared\src\rng.rs:498:9:
+assertion `left == right` failed
+  left: 42
+ right: 40545
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- rng::tests::attack_stream_is_a_distinct_reproducible_sequence stdout ----
+
+thread 'rng::tests::attack_stream_is_a_distinct_reproducible_sequence' (13204) panicked at crates\shared\src\rng.rs:516:9:
+assertion `left != right` failed: 专用流种子必须与全局种子不同源
+  left: [1434747710, 302596119, 269548474, 1122627734]
+ right: [1434747710, 302596119, 269548474, 1122627734]
+
+
+failures:
+    rng::tests::attack_seed_derivation_is_stable
+    rng::tests::attack_stream_is_a_distinct_reproducible_sequence
+
+test result: FAILED. 6 passed; 2 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-shared --lib`

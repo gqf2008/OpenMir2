@@ -1,0 +1,12 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.30s
+     Running tests\rng_attack_isolation.rs (E:/tmp/m3cs-r3-target\debug\deps\rng_attack_isolation-97b5214e8716bc96.exe)
+
+running 5 tests
+test attack_swing_is_routed_to_dedicated_stream ... ok
+test dedicated_stream_seed_matches_two_sided_formula ... ok
+test isolation_on_routes_attacks_to_dedicated_stream ... ok
+test isolation_off_routes_attacks_to_global_stream ... ok
+test isolation_on_is_reproducible_across_worlds ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

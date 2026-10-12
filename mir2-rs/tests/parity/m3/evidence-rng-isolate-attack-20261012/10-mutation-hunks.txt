@@ -1,0 +1,50 @@
+# 改坏必红 —— 两次变异的精确改动（跑完即还原；git status 干净）
+
+## 变异 1（workspace 红=2）：`World::attack_rng` 恒走全局流
+文件：mir2-rs/crates/world/src/world.rs
+
+改前（正确）：
+```rust
+    fn attack_rng(&mut self) -> &mut RandomNumber {
+        if self.isolate_attack {
+            &mut self.rng_attack
+        } else {
+            &mut self.rng
+        }
+    }
+```
+
+改后（变异）：
+```rust
+    fn attack_rng(&mut self) -> &mut RandomNumber {
+        &mut self.rng // MUTATION(改坏必红临时): 恒走全局流
+    }
+```
+
+复算 → `03-mutation-attack-rng-global.txt`：
+`isolation_on_routes_attacks_to_dedicated_stream` FAILED（专用流值不符）、
+`attack_swing_is_routed_to_dedicated_stream` FAILED（`left=[23,29] right=[20,30]`）；
+`isolation_off_*` 与 `isolation_on_is_reproducible_*` 仍 ok（符合「关时不变」）。
+还原后 5/5 绿（见 `02-new-tests.txt`）。
+
+## 变异 2（workspace 红=2）：`attack_seed` 恒等（专用流种子 = 全局种子）
+文件：mir2-rs/crates/shared/src/rng.rs
+
+改前（正确）：
+```rust
+pub fn attack_seed(base_seed: i32) -> i32 {
+    base_seed.wrapping_add(ATTACK_SEED_DELTA)
+}
+```
+
+改后（变异）：
+```rust
+pub fn attack_seed(base_seed: i32) -> i32 {
+    base_seed // MUTATION(改坏必红临时): 专用流与全局流同种子
+}
+```
+
+复算 → `04-mutation-attack-seed-identity.txt`：
+`attack_seed_derivation_is_stable` FAILED（`left: 42 right: 40545`）、
+`attack_stream_is_a_distinct_reproducible_sequence` FAILED（专用流与全局流首 4 项相同）。
+还原后 `rng::tests` 全绿（见 `02b-shared-rng-tests.txt`）。

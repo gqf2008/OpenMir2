@@ -1,0 +1,44 @@
+# M3②③ 活栈隔离口径 —— 攻击路径**分流站点表**（owner 2026-10-12 21:15，§6.0-3 owner 签字）
+#
+# 两侧（C# 影子 hook / Rust crates/world）必须按本表把**攻击路径**的取数分流到各自的
+# **专用种子流**；本表是唯一事实源。契约（见 README.md）：
+#   开关：env MIR2_RNG_ISOLATE_ATTACK（非空且 1/true/on/yes ⇒ 开；空/0/false/off/no ⇒ 关）
+#   种子：attack_seed = (MIR2_RNG_SEED + 0x9E37) 的 i32 回绕和（两侧同公式）
+#   关闭时行为逐字节不变；开启时站点集合/次序/次数必须与本表逐条一致。
+#
+# 列：
+#   canon         两侧共用的规范化站点名（顺序敏感比对的 vocabulary）
+#   side          csharp | rust
+#   pattern       正则（匹配前把 site 的 `\` 归一成 `/`）；命中即该侧的该站点
+#   draw          取数形态（oracle 侧）
+#   oracle_ref    oracle 源码引用（行号 = 运行期 PDB 归因值，见备注）
+#   divert        1 = 必须分流到专用流
+#   note          备注（行号归因差异 / 未在夹具触发 等）
+#
+# 行号归因说明：C# hook 记录的是「游戏侧调用帧的当前 PDB 行」，JIT 可能把调用归到相邻行
+#   （实测：GetAttackPower 的 Luck<=0 两抽 = PlayObject.cs:2929/2934；源码写作 2929/2932）。
+#   Rust 记录的是 `#[track_caller]` 的世界层调用点（combat.rs 行号）。
+canon	side	pattern	draw	oracle_ref	divert	note
+atk_power_a	csharp	M2Server\.Player\.PlayObject\.GetAttackPower@PlayObject\.cs:2929$	Random(power+1)	PlayObject.cs:2929 (Luck<=0)	1	F-1 权威流水实测 120/120
+atk_power_a	rust	crates/world/src/combat\.rs:109$	random_below(power+1)	PlayObject.cs:2929	1	玩家攻方 Luck<=0 第一抽
+atk_power_b	csharp	M2Server\.Player\.PlayObject\.GetAttackPower@PlayObject\.cs:2934$	Random(10-max(0,-Luck))	PlayObject.cs:2932 (Luck<=0)	1	PDB 归因到 2934（F-1 实测 120/120）
+atk_power_b	rust	crates/world/src/combat\.rs:111$	random_below(10-max(0,-Luck))	PlayObject.cs:2932	1	玩家攻方 Luck<=0 第二抽
+atk_power_luck_a	csharp	M2Server\.Player\.PlayObject\.GetAttackPower@PlayObject\.cs:2918$	Random(10-min(9,Luck))	PlayObject.cs:2918 (Luck>0)	1	夹具 Luck=0 未触发；行号待隔离口径实测校准
+atk_power_luck_a	rust	crates/world/src/combat\.rs:103$	random_below(10-min(9,luck))	PlayObject.cs:2918	1	夹具 Luck=0 未触发
+atk_power_luck_b	csharp	M2Server\.Player\.PlayObject\.GetAttackPower@PlayObject\.cs:2924$	Random(power+1)	PlayObject.cs:2924 (Luck>0)	1	夹具 Luck=0 未触发；行号待校准
+atk_power_luck_b	rust	crates/world/src/combat\.rs:106$	random_below(power+1)	PlayObject.cs:2924	1	夹具 Luck=0 未触发
+atk_power_base	csharp	M2Server\.Actor\.BaseObject\.GetAttackPower@BaseObject\.Base\.cs:892$	Random(power+1)	BaseObject.Base.cs:886	1	非玩家攻方（怪物）；F-1 实测 34
+atk_power_base	rust	crates/world/src/combat\.rs:67$	random_range(0,power+1)	BaseObject.Base.cs:886	1	非玩家攻方（怪物）
+hit_gate	csharp	M2Server\.Actor\.BaseObject\._Attack@BaseObject\.Attack\.cs:41$	RandomByte(SpeedPoint)	BaseObject.Attack.cs:41	1	F-1 实测 36
+hit_gate	rust	crates/world/src/combat\.rs:758$	random_byte(speed_point)	BaseObject.Attack.cs:41	1	有目标且 HP>0 才抽
+hit_struck_damage	csharp	M2Server\.Actor\.BaseObject\.GetHitStruckDamage@BaseObject\.Base\.cs:792$	Random(|dAC|+1)	BaseObject.Base.cs:792	1	F-1 实测 35
+hit_struck_damage	rust	crates/world/src/combat\.rs:628$	random_range(0,|dAC|+1)	BaseObject.Base.cs:792	1	护甲减免第一抽
+hit_struck_damage2	csharp	M2Server\.Actor\.BaseObject\.GetHitStruckDamage@BaseObject\.Base\.cs:793$	Random(nRnd)	BaseObject.Base.cs:795	1	PDB 归因到 793（F-1 实测 2）
+hit_struck_damage2	rust	crates/world/src/combat\.rs:630$	random_range(0,n_rnd)	BaseObject.Base.cs:795	1	nRnd>0 才抽
+struck_durability	csharp	M2Server\.Player\.PlayObject\.StruckDamage@PlayObject\.cs:2957$	Random(10)	PlayObject.cs:2957	1	F-1 实测 3（仅命中玩家目标时）
+struck_durability	rust	crates/world/src/combat\.rs:601$	random_below(10)	PlayObject.cs:2957	1	目标为玩家才抽
+struck_durability_slot	csharp	M2Server\.Player\.PlayObject\.StruckDamage@PlayObject\.cs:3000$	Random(8)	PlayObject.cs:3000	1	每件 Index>0 装备一格；夹具无装备未触发
+struck_durability_slot	rust	crates/world/src/combat\.rs:609$	random_below(8)	PlayObject.cs:3000	1	每件已装备物品各抽一次
+attack_success	csharp	M2Server\.Player\.PlayObject\.AttackSuccess@PlayObject\.Attack\.cs:223$	Random(5)	PlayObject.Attack.cs:225	1	PDB 归因到 223（F-1 实测 2）
+attack_success	rust	crates/world/src/combat\.rs:831$	random_below(5)	PlayObject.Attack.cs:225	1	玩家攻方有目标时无条件一次
+attack_paralysis	csharp	M2Server\.Player\.PlayObject\.AttackSuccess@PlayObject\.Attack\.cs:221$	Random(AntiPoison+AttackPosionRate)	PlayObject.Attack.cs:221	0	依赖 Paralysis 状态；Rust 未建模（登记）⇒ **不分流**（仍走全局流，夹具无麻痹不触发；若 hook 分流了它，机判会报未登记 site fail-closed）

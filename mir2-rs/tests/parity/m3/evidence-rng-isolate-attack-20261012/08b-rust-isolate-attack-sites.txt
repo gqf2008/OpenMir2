@@ -1,0 +1,4 @@
+      4 crates\world\src\combat.rs:831
+      4 crates\world\src\combat.rs:628
+      4 crates\world\src\combat.rs:111
+      4 crates\world\src\combat.rs:109

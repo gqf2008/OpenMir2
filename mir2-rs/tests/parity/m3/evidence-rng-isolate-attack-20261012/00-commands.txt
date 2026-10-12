@@ -1,0 +1,47 @@
+# M3②③ 活栈隔离口径（Rust 侧）—— 证据复算命令（2026-10-12）
+#
+# 交付树 = master e2470c9d（= 2700d709 + ed0c4c64 合并）+ 本片工作树改动。
+# 隔离 CARGO_TARGET_DIR=E:/tmp/m3cs-r3-target；全部 --offline；未起任何服务端/客户端栈。
+
+## 1. 本片改动（工作树 diff）
+cd mir2-rs
+git diff --stat e2470c9d -- crates/shared/src/rng.rs crates/shared/src/rng_trace.rs crates/world/src/world.rs
+# 新增：crates/world/tests/rng_attack_isolation.rs
+# 新增：tests/parity/m3/rng-isolate-attack/{attack_sites.tsv,check_predicates.py,csharp_predicate_dump.example.txt,README.md}
+
+## 2. 四门禁
+cargo fmt --all -- --check
+CARGO_TARGET_DIR=E:/tmp/m3cs-r3-target cargo clippy --workspace --all-targets --offline -- -D warnings
+CARGO_TARGET_DIR=E:/tmp/m3cs-r3-target cargo test --workspace --offline
+CARGO_TARGET_DIR=E:/tmp/m3cs-r3-target cargo run -p msgcodegen --offline -- --check
+
+## 3. 新用例（Rust 侧路由判据）
+CARGO_TARGET_DIR=E:/tmp/m3cs-r3-target cargo test -p mir2-world --test rng_attack_isolation --offline
+CARGO_TARGET_DIR=E:/tmp/m3cs-r3-target cargo test -p mir2-shared --lib rng::tests --offline
+
+## 4. 分流谓词机判
+cd tests/parity/m3/rng-isolate-attack
+python check_predicates.py selftest
+python check_predicates.py static
+python check_predicates.py table-vs-csharp --csharp csharp_predicate_dump.example.txt
+
+## 5. 真机同形 trace（离线，只为证明 ISOLATE_ATTACK 头部 + 攻击路径落专用流）
+#   注：只跑单条用例（`--exact`），env 的 MIR2_RNG_SEED 与用例 SEED 同值 ⇒ 两侧派生一致。
+MIR2_RNG_SEED=20261012 MIR2_RNG_ISOLATE_ATTACK=1 \
+  MIR2_RNG_LOG=E:/tmp/m3cs-iso/rust-isolate-on.tsv \
+  CARGO_TARGET_DIR=E:/tmp/m3cs-r3-target \
+  cargo test -p mir2-world --test rng_attack_isolation \
+  isolation_on_routes_attacks_to_dedicated_stream --offline -- --exact
+python tests/parity/m3/rng-trace-probe/rng_ledger_diff.py summary \
+  E:/tmp/m3cs-iso/rust-isolate-on.tsv --side rust
+
+## 6. 改坏必红（两次变异，跑完即还原；输出见 03/04）
+#  变异 1：World::attack_rng() 恒返回 &mut self.rng（= 不隔离）
+#    改题：crates/world/src/world.rs `fn attack_rng` 体
+#    复算：CARGO_TARGET_DIR=E:/tmp/m3cs-r3-target cargo test -p mir2-world --test rng_attack_isolation --offline
+#  变异 2：attack_seed(base) 恒返回 base（专用流与全局流同种子）
+#    改题：crates/shared/src/rng.rs `pub fn attack_seed`
+#    复算：CARGO_TARGET_DIR=E:/tmp/m3cs-r3-target cargo test -p mir2-shared --lib rng::tests --offline
+
+## 7. 端口（本片未起栈；实拍确认九端口空）
+powershell -ExecutionPolicy Bypass -File E:/MirServer/port-status.ps1

@@ -1,0 +1,26 @@
+# 示例：C# 影子 hook 的**静态分流站点 dump**（每行一个 `Type.Method@file:line`）。
+#
+# 这是**手写示例**（按 attack_sites.tsv 的 side=csharp, divert=1 行生成），用来演示机判格式；
+# m3bag 的 hook 开启隔离时必须落**它自己登记的全部分流站点**到同格式文件（缺一条 fail-closed）。
+# 机判：
+#   python mir2-rs/tests/parity/m3/rng-isolate-attack/check_predicates.py table-vs-csharp \
+#     --csharp mir2-rs/tests/parity/m3/rng-isolate-attack/csharp_predicate_dump.example.txt
+#
+# atk_power_a / atk_power_b（玩家攻方 Luck<=0；PDB 归因 2929/2934）
+M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929
+M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2934
+# atk_power_luck_a / atk_power_luck_b（玩家攻方 Luck>0；源码行，夹具未触发，待实测校准）
+M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2918
+M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2924
+# atk_power_base（非玩家攻方基版）
+M2Server.Actor.BaseObject.GetAttackPower@BaseObject.Base.cs:892
+# hit_gate（_Attack 命中门）
+M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41
+# hit_struck_damage / hit_struck_damage2（护甲减免两抽；PDB 归因 792/793）
+M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:792
+M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:793
+# struck_durability / struck_durability_slot（玩家目标受击；slot 夹具无装备未触发）
+M2Server.Player.PlayObject.StruckDamage@PlayObject.cs:2957
+M2Server.Player.PlayObject.StruckDamage@PlayObject.cs:3000
+# attack_success（PDB 归因 223）
+M2Server.Player.PlayObject.AttackSuccess@PlayObject.Attack.cs:223
