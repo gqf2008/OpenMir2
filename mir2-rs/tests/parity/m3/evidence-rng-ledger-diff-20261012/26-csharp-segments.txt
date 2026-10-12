@@ -1,8 +1,7 @@
-RNG_SEGMENTS E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv side=csharp segments=120
-  SHAPE x115  ['atk_power_a', 'atk_power_b']
-  SHAPE x2    ['atk_power_a', 'atk_power_b', 'hit_gate', 'attack_success']
+RNG_SEGMENTS E:/tmp/m3cs-f1/csharp-rng-stream-f1-20261012.tsv side=csharp segments=120
+  SHAPE x116  ['atk_power_a', 'atk_power_b']
   SHAPE x2    ['atk_power_a', 'atk_power_b', 'hit_gate', 'hit_struck_damage', 'struck_durability', 'attack_success']
-  SHAPE x1    ['atk_power_a', 'atk_power_b', 'atk_power_base', 'hit_gate', 'hit_struck_damage']
-  SEG k=1 ['atk_power_a', 'atk_power_b', 'hit_gate', 'attack_success']
-  SEG k=2 ['atk_power_a', 'atk_power_b', 'hit_gate', 'attack_success']
-  SEG k=3 ['atk_power_a', 'atk_power_b', 'hit_gate', 'hit_struck_damage', 'struck_durability', 'attack_success']
+  SHAPE x2    ['atk_power_a', 'atk_power_b', 'atk_power_base', 'hit_gate', 'hit_struck_damage']
+  SEG k=1 ['atk_power_a', 'atk_power_b', 'hit_gate', 'hit_struck_damage', 'struck_durability', 'attack_success']
+  SEG k=2 ['atk_power_a', 'atk_power_b', 'hit_gate', 'hit_struck_damage', 'struck_durability', 'attack_success']
+  SEG k=3 ['atk_power_a', 'atk_power_b']

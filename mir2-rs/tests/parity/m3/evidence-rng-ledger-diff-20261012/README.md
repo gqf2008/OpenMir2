@@ -5,6 +5,12 @@
 - base = `refs/heads/master` `6eec1e2e`；head 见 patch 条
 - 检索：本目录 `00-commands.txt`（**命令留档，先读它**）；报告 `../M3RNG两侧账本diff与活栈消费者缺口报告-20261012.md`
 
+> **⚠ 2026-10-12 F-1 更正（owner 19:40 / reviewer-5 `068b4e3d`）**：下面 §一.2/§三 的 C# 读数（`479,028 / 267 / 99.94% / hit_gate 9 / atk_power_base 5 / attack_success 4`）来自
+> `E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv` 的**旧快照**（会话 `csharp-20261012-185128`，38,667,923 B），**该原件已被后续运行覆盖、不可独立复算** ⇒ **旧数字作废**。
+> 本片已**重采一次**并备份到不可覆盖路径，C# 侧入库件（`22/23/25/26/28/32`）已按新件重出。新权威件与读数见 **`09-f1-csharp-trace-ref.txt`**：
+> sha256 `a7df711624e6f3d9651c2b6731b946a0fa9a3fcbf7732c33b2ffc81c1788f7fa`、`416,513,542 B`、会话 `csharp-20261012-195722`、`total=5,090,894 / attack_path=352 / noise=5,090,542（99.99%）`。
+> Rust 侧 `rust-rng-stream-r1.tsv`（sha256 `4963e9f6…`）**未重采**且是**本片 .rs 改动之前**的 trace（旧行号、无 `attack_success`）⇒ `25/28/32` 的 B 侧仍受此限制。
+
 ## 一、结论（如实登记，不声明 DoD② 达成）
 
 1. **Rust 活栈账本从空白变有读数**：总取数 **160**、攻击路径 146、噪声 **14**（8.75%）、distinct site 9。

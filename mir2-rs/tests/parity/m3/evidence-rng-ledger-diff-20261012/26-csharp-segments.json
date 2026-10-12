@@ -1,12 +1,11 @@
 {
-  "trace": "E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv",
+  "trace": "E:/tmp/m3cs-f1/csharp-rng-stream-f1-20261012.tsv",
   "side": "csharp",
   "segments": 120,
   "shapes": {
-    "atk_power_a|atk_power_b|hit_gate|attack_success": 2,
     "atk_power_a|atk_power_b|hit_gate|hit_struck_damage|struck_durability|attack_success": 2,
-    "atk_power_a|atk_power_b": 115,
-    "atk_power_a|atk_power_b|atk_power_base|hit_gate|hit_struck_damage": 1
+    "atk_power_a|atk_power_b": 116,
+    "atk_power_a|atk_power_b|atk_power_base|hit_gate|hit_struck_damage": 2
   },
   "per_seg": [
     {
@@ -15,6 +14,8 @@
         "atk_power_a",
         "atk_power_b",
         "hit_gate",
+        "hit_struck_damage",
+        "struck_durability",
         "attack_success"
       ]
     },
@@ -24,6 +25,8 @@
         "atk_power_a",
         "atk_power_b",
         "hit_gate",
+        "hit_struck_damage",
+        "struck_durability",
         "attack_success"
       ]
     },
@@ -31,22 +34,14 @@
       "k": 3,
       "shape": [
         "atk_power_a",
-        "atk_power_b",
-        "hit_gate",
-        "hit_struck_damage",
-        "struck_durability",
-        "attack_success"
+        "atk_power_b"
       ]
     },
     {
       "k": 4,
       "shape": [
         "atk_power_a",
-        "atk_power_b",
-        "hit_gate",
-        "hit_struck_damage",
-        "struck_durability",
-        "attack_success"
+        "atk_power_b"
       ]
     },
     {
@@ -144,7 +139,10 @@
       "k": 18,
       "shape": [
         "atk_power_a",
-        "atk_power_b"
+        "atk_power_b",
+        "atk_power_base",
+        "hit_gate",
+        "hit_struck_damage"
       ]
     },
     {
@@ -305,7 +303,10 @@
       "k": 41,
       "shape": [
         "atk_power_a",
-        "atk_power_b"
+        "atk_power_b",
+        "atk_power_base",
+        "hit_gate",
+        "hit_struck_damage"
       ]
     },
     {
@@ -648,10 +649,7 @@
       "k": 90,
       "shape": [
         "atk_power_a",
-        "atk_power_b",
-        "atk_power_base",
-        "hit_gate",
-        "hit_struck_damage"
+        "atk_power_b"
       ]
     },
     {

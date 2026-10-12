@@ -1,0 +1,5 @@
+﻿PIN_RETRY attempt=1 settle_rounds=1 prev_match=False pinned=2/2 bag=0/0 abil=1/2（pin_abil_mismatch）
+PIN_RETRY attempt=2 settle_rounds=2 prev_match=False pinned=2/2 bag=0/0 abil=2/2（pin_hold_needs_consecutive_settle）
+PIN_RETRY attempt=3 settle_rounds=3 prev_match=True pinned=1/2 bag=0/0 abil=2/2（pin_char_mismatch）
+PIN_RETRY attempt=4 settle_rounds=4 prev_match=False pinned=2/2 bag=0/0 abil=2/2（pin_hold_needs_consecutive_settle）
+PIN_HOLD attempt=5（连续两轮 settle 复验均 hold 住）
