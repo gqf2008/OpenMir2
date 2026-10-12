@@ -1,6 +1,6 @@
 # 边界（oracle 冻结面）：本片改动清单 + src/sql/MirClient 差分
 
-## patch base = refs/heads/master = 031ff37e2ba2de261c2206ffb72ff5967617e53c（交付时 master，已含第②片+R5-1/R5-2、m3bag gitattributes/eol、m3cs/m3bag 各盘点；本次交付前已 git merge origin/master 消除幻影差量）
+## patch base = refs/heads/master = 4d276812fe82e0c8caa1721e9327e2d76c04f760（交付时 master，已含第②片+R5-1/R5-2、C 分片① monster-ai、m3bag gitattributes/eol、m3cs/m3bag/m3cs 各盘点；本次交付前已 git merge origin/master 消除幻影差量）
 ## patch head = refs/heads/mongen-host（本片交付 tip；见线程 patch/status 条目）
 
 ## 本片（第 ③ 片 + F-1 返工）改动（git diff --name-status master..HEAD）：
@@ -32,6 +32,7 @@ A	mir2-rs/tests/parity/world/mongen-host-20261013/gates/13-workspace-test.txt
 - 第 ① 片（envir 解析）已合入 master `f4790571`；第 ② 片（world 调度/RNG/哨兵，含 R5-1/R5-2 返工）已合入 master `304126ae`。
 - 上一被审 head = `3144315afacc5f3e6b727575181ce52d7e1dcb24`（reviewer-6 `07444eef` request_changes：F-1/M-1）。
 - 本 tip 相对它只增 F-1 返工 + M-1 订正；第 ①/② 片不重审。
+- 交付期间 C 分片①（`monster-ai`，`12950578`）被 owner 合入 master `eb508a97` ⇒ 已 merge；`entity.rs` 冲突已解（`Entity` 同时含 C 的 `ai: AnimalState` 与本片的 `ctor_draws: MonsterCtorDraws`）。
 
 ## git diff --stat master -- src/ sql/ MirClient（必须为空）
 (空 = oracle/客户端/表结构未动)
@@ -40,7 +41,7 @@ A	mir2-rs/tests/parity/world/mongen-host-20261013/gates/13-workspace-test.txt
 
 ## 写集（第 ③ 片 + F-1）
 mir2-rs/crates/world/src/world.rs（budget_monster_drops / spawn_monster_precomputed(含 ctor 参数) + 2 用例）
-mir2-rs/crates/world/src/entity.rs（MonsterCtorDraws + Entity.ctor_draws）
+mir2-rs/crates/world/src/entity.rs（MonsterCtorDraws + Entity.ctor_draws；与 C 的 AnimalState/Entity.ai 共存）
 mir2-rs/crates/world/src/lib.rs（导出 MonsterCtorDraws）
 mir2-rs/bins/game-svr/src/mongen.rs（宿主接线层 + draw_monster_construct + 14 用例）
 mir2-rs/bins/game-svr/src/lib.rs（注册 pub mod mongen）

@@ -53,20 +53,20 @@
 - `cargo test -p game-svr --lib mongen`：**14 passed**（RNG 次序 ×7、表/转换 ×2、配置解析 ×1、宿主 start/step ×3；
   含 F-1 新增的 `monster_constructor_draw_count_matches_oracle_per_race` 与
   `monster_constructor_values_match_oracle_order`）。
-- `cargo test -p mir2-world --lib`：41 passed（含本片新增 2 条；第 ② 片 R5 的 3 条也在此计数内）。
+- `cargo test -p mir2-world --lib`：49 passed（含本片新增 2 条；第 ② 片 R5 的 3 条 + C 分片①的 8 条也在此计数内）。
 - **独立 Python 复算**（`40-*.py.txt` / `41-*.txt`）：从 `src/` 解析类继承 + ctor 的 `Random` 调用，
   组合出逐 race 构造链抽数，与 Rust 实现逐 race 对齐 ⇒ **MISMATCH=0**（race 96 的条件支单列：命中 10 / 未命中 9）。
 - **改坏必红 5 条**（`30/31/32/42/43-redcheck-*.txt`，均 rc=101）：RC-1 删 race-51 内联抽、RC-2 删 Dir 抽、
   RC-3 给 `spawn_monster_precomputed` 加取数、**RC-4 删构造链公共 `draw_base_and_animal`（F-1 专测）**、
   **RC-5 交换 BaseObject 两抽次序（只被值判据捕捉）**；每次还原后 sha256 与备份逐字节一致。
 - 四门禁：`fmt rc=0`；`clippy rc=0`；`msgcodegen --check rc=0`（604）；
-  `test --workspace --offline rc=0`（**86 suites / 751 passed / 0 failed / 18 ignored**）。
+  `test --workspace --offline rc=0`（**86 suites / 759 passed / 0 failed / 18 ignored**）。
 - 边界：`git diff --stat master -- src/ sql/ MirClient` **空**（`20-boundary.txt`）。
 
-## 交付基线（base = master `031ff37e`）
+## 交付基线（base = master `4d276812`）
 
-本 patch 的 base 是 **master `031ff37e`**（已含第 ② 片 + R5-1/R5-2 返工；本次交付前已 `git merge origin/master`
-消除幻影差量），head 是 `refs/heads/mongen-host`。
+本 patch 的 base 是 **master `4d276812`**（已含第 ② 片 + R5-1/R5-2 返工、C 分片①、m3bag gitattributes/eol、
+各盘点；本次交付前已 `git merge origin/master` 消除幻影差量），head 是 `refs/heads/mongen-host`。
 ⇒ `git diff master..HEAD` **只含第 ③ 片**：`bins/game-svr/{mongen.rs,lib.rs,config.rs,main.rs}` +
 `crates/world/src/{world.rs,entity.rs,lib.rs}` + 本目录证据。R5 的口径见已合入的
 `tests/parity/world/mongen-20261013/README.md` §8.1（**不在本 patch 差量内**）。
