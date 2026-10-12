@@ -1,0 +1,83 @@
+目录                                                                         件    仓库    盘上   缺  结论
+------------------------------------------------------------------------------------------------
+mir2-rs/tests/parity/envir-2026-10-10                                      6     6     6   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/envir-2026-10-11                                     11    11    11   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+                                                                         未列入(信息，非判据): .gitattributes
+                                                                         仓外输入(按盘上字节): E:/MirServer/M2GameSvr/Envir/MapInfo.txt, E:/MirServer/M2GameSvr/Server.conf
+mir2-rs/tests/parity/evidence/M1/s4b-slice4-crossread                     51    51    51   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+                                                                         未列入(信息，非判据): .gitattributes
+mir2-rs/tests/parity/evidence/M1/s4b-slice5-exitpaths                     25    25    25   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+                                                                         未列入(信息，非判据): .gitattributes
+mir2-rs/tests/parity/m1-boundary-load/evidence                            26    26    26   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+                                                                         未列入(信息，非判据): .gitattributes
+mir2-rs/tests/parity/m3/amulet-probe                                       4     4     3   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
+mir2-rs/tests/parity/m3/attack-dir-probe                                   4     4     3   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
+mir2-rs/tests/parity/m3/attack-hit-probe                                   4     4     3   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
+mir2-rs/tests/parity/m3/combat-probe                                       4     4     3   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
+mir2-rs/tests/parity/m3/dispatch-audit-probe                               4     4     3   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
+mir2-rs/tests/parity/m3/evidence/anchor-count-fix-20261012                10    10    10   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+                                                                         未列入(信息，非判据): README.md
+mir2-rs/tests/parity/m3/evidence/attack-magic-minor-closeout-20261012     12    12    12   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/m3/evidence/attack-wiring-20261012                   14    14    14   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/m3/evidence/cloth-durability-20261012                10    10    10   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/m3/evidence/gamesvr-save-20261012                    16    16    16   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/m3/evidence/magic-wiring-20261012                    12    12    12   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/m3/evidence/map-offline-triage-20261012               9     9     9   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/m3/evidence/move-wiring-20261012                     15    15    15   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/m3/evidence/periodic-save-20261012                   16    16    16   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/m3/evidence/recovery-tick-20261012                   13    13    13   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/m3/evidence/rust-seed-injection-20261012             21    21    21   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/m3/evidence-attack-atkbase-victimhp-20261012          7     7     7   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/m3/evidence-attack-dir-20261012                      11    11    11   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/m3/evidence-attack-fk-20261012                       38    38    38   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/m3/evidence-attack-ledger-twoside-20261012           15    15    15   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/m3/evidence-attack-minors6-20261012                  12    12    11   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
+mir2-rs/tests/parity/m3/evidence-attack-my-field-20261012                 29    29    29   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/m3/evidence-attack-pair-20261012                     11    11    11   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/m3/evidence-attack-pair-blocker-20261012             10    10    10   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/m3/evidence-attack-pair-blocker2-20261012            15    15    15   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/m3/evidence-attack-pair-blocker2-fix-20261012        14    14    14   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/m3/evidence-attack-pair-blocker3-20261012            16    16    16   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/m3/evidence-attack-pair-feh-20261012                  6     6     6   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/m3/evidence-attack-pair-fij-20261012                 24    24    24   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/m3/evidence-attack-pair-inchealth-fix-20261012       11    11    11   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/m3/evidence-attack-pair-minors-20261012              11    11    11   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/m3/evidence-attack-pair-r1-nomonster-20261012        16    16    15   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
+mir2-rs/tests/parity/m3/evidence-attack-parity-window-20261012            40    40    40   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/m3/evidence-b1b2-20261012                            59    59    59   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/m3/evidence-hashutil-hotfile-ledger-20261012          9     9     9   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/m3/evidence-pin-attempts-info-20261012                9     9     9   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/m3/evidence-pin-retry-20261012                       10    10    10   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/m3/evidence-prewarm-marker-20261012                   7     7     7   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/m3/evidence-prewarm-marker-n1-20261012                7     7     7   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/m3/evidence-rng-isolate-attack-20261012              19    19    18   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
+mir2-rs/tests/parity/m3/evidence-rng-isolate-attack-csharp-20261012        7     7     7   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/m3/evidence-rng-isolate-attack-twophase-20261012     75    75    73   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
+mir2-rs/tests/parity/m3/evidence-rng-ledger-diff-20261012                 74    74    74   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/m3/evidence-rng-trace-20261012                       17    17    17   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/m3/evidence-t14-20261012                              9     9     2   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
+mir2-rs/tests/parity/m3/evidence-t14-pinhold-20261012                     12    12    12   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/m3/evidence-t14-rerun-20261012                       18    18    10   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
+mir2-rs/tests/parity/m3/evidence-two-phase-20261012                       61    61    61   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/m3/evidence-worldgolden-regen-20261012               12    12    12   0  [GREEN] 仓库字节 == 盘上字节（两种口径一致）
+mir2-rs/tests/parity/m3/magic-effect-probe                                 6     6     4   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
+mir2-rs/tests/parity/m3/map-effect-probe                                   5     5     3   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
+mir2-rs/tests/parity/m3/proper-target-probe                                4     4     3   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
+mir2-rs/tests/parity/m3/residual-case-probe                                4     4     3   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
+mir2-rs/tests/parity/m3/skill-probe                                        5     5     4   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
+mir2-rs/tests/parity/m3/spell-tail-probe                                   4     4     3   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
+mir2-rs/tests/parity/m3/struck-durability-probe                            4     4     3   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
+tools/m2-acceptance/evidence/m2svr-attack-empty-target-20261012            9     9     0   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
+tools/m2-acceptance/evidence/m2svr-attack-swing-wiring-20261012           11    11     0   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
+tools/m2-acceptance/evidence/m2svr-attacker-attr-20261012                 22    22     0   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
+tools/m2-acceptance/evidence/m2svr-enter-eat-20261012                     27    27     0   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
+tools/m2-acceptance/evidence/m2svr-o3-pergateway-kick-20261012             4     4     0   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
+tools/m2-acceptance/evidence/m2svr-preflight-modulepath-20261012          13    13     1   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
+tools/m2-acceptance/evidence/m2svr-stateful-dir-20261012                   9     9     0   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
+tools/m2-acceptance/evidence/rust-stack-seed-plumb-20261012               13    13     1   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
+tools/m2-acceptance/evidence/session-lifecycle-rerun-20261012             11    11     0   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
+                                                                         未列入(信息，非判据): README.md
+tools/m2-acceptance/evidence/session-lifecycle-selftest-20261012           6     6     0   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
+tools/oracle/evidence/m2svr-hash-unify-20261012                           15    15     1   0  [GREEN] 仓库字节口径（盘上 CRLF ≠ blob，复核器默认口径）
+
+reconcile: 72/72 GREEN

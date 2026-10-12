@@ -1,0 +1,45 @@
+== 样例 1：盘上 CRLF / blob LF；清单记盘上原始字节(CRLF) ==
+$ verify（仓库口径，陷阱清单）
+RED   C:\Users\gxh\AppData\Local\Temp\eol-trap-demo-rrw_z_20\trap-repo\evidence\SHA256SUMS.txt  [repo 口径]  OK 0/1
+       mismatch: C:\Users\gxh\AppData\Local\Temp\eol-trap-demo-rrw_z_20\trap-repo\evidence\a.txt
+         清单 4ad3ef64dfb83f7a8f789bce6f30cc1f8d18491b14db4c875309b150d2a7d213
+         实算 2751a3a2f303ad21752038085e2b8c5f98ecff61a2e4ebbd43506a941725be80  (text attr=set)
+       EOL 陷阱: C:\Users\gxh\AppData\Local\Temp\eol-trap-demo-rrw_z_20\trap-repo\evidence\a.txt
+         清单按工作树原始字节(CRLF)记 4ad3ef64dfb83f7a8f789bce6f30cc1f8d18491b14db4c875309b150d2a7d213
+         仓库口径(LF 归一/git blob)应为 2751a3a2f303ad21752038085e2b8c5f98ecff61a2e4ebbd43506a941725be80  (text attr=set)
+         ⇒ 该清单在工作树/提交物自洽、在仓库字节口径/干净检出不可复现（用 `write` 改写）
+[exit=1]
+
+PASS 样例1 仓库口径：必红且点名 a.txt
+$ verify --disk-bytes（同陷阱清单）
+RED   C:\Users\gxh\AppData\Local\Temp\eol-trap-demo-rrw_z_20\trap-repo\evidence\SHA256SUMS.txt  [disk 口径]  OK 1/1
+       EOL 陷阱: C:\Users\gxh\AppData\Local\Temp\eol-trap-demo-rrw_z_20\trap-repo\evidence\a.txt
+         清单按工作树原始字节(CRLF)记 4ad3ef64dfb83f7a8f789bce6f30cc1f8d18491b14db4c875309b150d2a7d213
+         仓库口径(LF 归一/git blob)应为 2751a3a2f303ad21752038085e2b8c5f98ecff61a2e4ebbd43506a941725be80  (text attr=set)
+         ⇒ 该清单在工作树/提交物自洽、在仓库字节口径/干净检出不可复现（用 `write` 改写）
+[exit=1]
+
+PASS 样例1 --disk-bytes：也必红（不许靠清单自洽拿假绿）
+$ verify（清单改写为仓库口径 LF）
+GREEN C:\Users\gxh\AppData\Local\Temp\eol-trap-demo-rrw_z_20\trap-repo\evidence\SHA256SUMS.txt  [repo 口径]  OK 1/1
+[exit=0]
+
+PASS 样例1 修法：清单按仓库口径(LF)记 ⇒ 绿
+== 样例 2：blob 含 CRLF / 盘上 LF；清单记 blob 原始字节（m3cs 真实先例） ==
+$ verify（仓库口径，陷阱清单）
+RED   C:\Users\gxh\AppData\Local\Temp\eol-trap-demo-rrw_z_20\trap-repo\evidence\SHA256SUMS.txt  [repo 口径]  OK 1/2
+       mismatch: C:\Users\gxh\AppData\Local\Temp\eol-trap-demo-rrw_z_20\trap-repo\evidence\b.txt
+         清单 4ad3ef64dfb83f7a8f789bce6f30cc1f8d18491b14db4c875309b150d2a7d213
+         实算 2751a3a2f303ad21752038085e2b8c5f98ecff61a2e4ebbd43506a941725be80  (text attr=set)
+       EOL 陷阱: C:\Users\gxh\AppData\Local\Temp\eol-trap-demo-rrw_z_20\trap-repo\evidence\b.txt
+         清单按git blob 原始字节(含 CRLF)记 4ad3ef64dfb83f7a8f789bce6f30cc1f8d18491b14db4c875309b150d2a7d213
+         仓库口径(LF 归一/git blob)应为 2751a3a2f303ad21752038085e2b8c5f98ecff61a2e4ebbd43506a941725be80  (text attr=set)
+         ⇒ 该清单在工作树/提交物自洽、在仓库字节口径/干净检出不可复现（用 `write` 改写）
+[exit=1]
+
+PASS 样例2 仓库口径：必红且点名 b.txt（source=git blob 原始字节）
+$ verify（清单改写为仓库口径 LF）
+GREEN C:\Users\gxh\AppData\Local\Temp\eol-trap-demo-rrw_z_20\trap-repo\evidence\SHA256SUMS.txt  [repo 口径]  OK 2/2
+[exit=0]
+
+PASS 样例2 修法：清单按仓库口径(LF)记 ⇒ 绿

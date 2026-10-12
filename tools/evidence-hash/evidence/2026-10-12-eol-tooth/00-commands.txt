@@ -1,0 +1,23 @@
+# 00 命令（EOL 陷阱牙片，owner 2026-10-12 23:30；卡 openmir2-m3-attack-pair-fixture）
+#
+# 全部离线，零 .rs，不起栈、不占端口（仅共享 3306）。所有输出按 LF 归一入库。
+
+## 牙（工具自检，11 项：口径 + 改 hash / 多件 / 少件 / 口径切换 / 冻结声明 / EOL 陷阱×2 / 不误伤）
+python -I tools/evidence-hash/verify_sha256sums.py selftest
+
+## EOL 陷阱夹具（临时 git 仓库：盘上 CRLF/blob LF、blob 含 CRLF 两种样例，红→绿）
+python -I tools/evidence-hash/fixtures/eol-trap/demo.py
+
+## 全仓逐目录对账（回归：不得把 72 个现有 GREEN 判红）
+python -I tools/evidence-hash/verify_sha256sums.py reconcile
+
+## 历史先例（同族第 4 次）复现：m3cs 片提交 170a51b9
+git worktree add -q E:/tmp/eol-hist-170a51b9 170a51b9 --detach
+python -I tools/evidence-hash/verify_sha256sums.py --repo E:/tmp/eol-hist-170a51b9   E:/tmp/eol-hist-170a51b9/mir2-rs/tests/parity/m3/evidence-rng-isolate-attack-twophase-20261012
+git worktree remove --force E:/tmp/eol-hist-170a51b9 && git worktree prune
+
+## 四门禁（从 mir2-rs/ 跑；隔离 CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target；--offline）
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --offline -- -D warnings
+cargo test --workspace --offline
+cargo run -p msgcodegen --offline -- --check

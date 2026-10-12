@@ -51,7 +51,11 @@
 设计原则（照 `mir2-rs/tests/parity/M4/evidence_hashes.py`）：
 - **不静默通过**：清单不存在、路径缺失、`git` 不可用一律非零退出；
 - **口径只有一个**：默认仓库字节；切口径要显式 `--disk-bytes`；
-- **多件/少件是牙齿**：`--check-extra` 打开后目录里未列入清单的文件也判红。
+- **多件/少件是牙齿**：`--check-extra` 打开后目录里未列入清单的文件也判红；
+- **EOL 陷阱是牙齿（2026-10-12 追加，同族坑第 4 次）**：对清单里每个**受跟踪、会被 git 行尾归一**的
+  文本文件，若**清单记的是工作树原始字节（CRLF）**而仓库字节（LF 归一 / git blob）是另一个值 ⇒
+  直接判红并点名。这类清单在作者自己的工作树里可能「自洽」（尤其 `--disk-bytes` 时）却在**仓库字节口径下
+  不可复现**（m3cs 片：`verify GREEN 75/75` 在钉住 head 上实为 `RED 74/75`）。**不许靠清单自洽拿到假绿。**
 """
 
 from __future__ import annotations
@@ -146,6 +150,73 @@ def resolve_entry(base: Path, name: str) -> Path:
     return (base / name).resolve()
 
 
+def blob_bytes(repo: Path, rel: str) -> bytes | None:
+    """取某路径在仓库里的 blob 原始字节（HEAD 优先，其次 index）；未跟踪返回 None。"""
+    for rev in (f"HEAD:{rel}", f":{rel}"):
+        try:
+            proc = subprocess.run(["git", "-C", str(repo), "cat-file", "blob", rev],
+                                  capture_output=True, check=True)
+        except (subprocess.CalledProcessError, OSError):
+            continue
+        return proc.stdout
+    return None
+
+
+def find_eol_traps(entries: list[tuple[str, str]], base: Path, repo: Path,
+                   attrs: dict[str, str]) -> list[dict]:
+    """EOL 陷阱（fail-closed，2026-10-12；同族坑第 4 次）。
+
+    对清单里**在仓库内、会被 git 做行尾归一**（`text` 属性非 `-text`、且非二进制）的每个文件：
+
+      - 盘上原始字节 / 该文件的 git blob 原始字节，同一存储内容在 EOL 上与仓库口径（LF 归一）不一致，**且**
+      - 清单里记的正是**原始字节**（盘上的 CRLF，或 blob 自己就带 CRLF）的 sha256，而不是 LF 归一后的值
+
+      ⇒ 这条清单只在作者自己的工作树/提交物里自洽（`--disk-bytes` 更是直接判绿），在**仓库字节口径 /
+      干净检出**上不可复现 ⇒ **判红并点名**。修法：`write` 改写成仓库字节口径；若确实要按盘上字节记，
+      目录必须声明 `.gitattributes * -text` 冻结字节（那时 `attr == unset`，本条不适用，也不该适用）。
+
+    `-text` 冻结文件与仓外输入**不适用**本条（按盘上字节就是它们声明的口径）。
+    真实先例（第 4 次）：m3cs 的 `evidence-rng-isolate-attack-twophase-20261012`——`window/00-selfcheck-nostack.txt`
+    的 blob 自己就带 CRLF（`a9ca0b7c…`），清单也记了该值，而 `mir2-rs/.gitattributes` 的 `*.txt text eol=lf`
+    在仓库口径下是 LF 归一值 ⇒ 该片声明的 `verify GREEN 75/75` 在钉住 head 上实为 `RED 74/75`。
+    """
+    traps: list[dict] = []
+    for want, name in entries:
+        path = resolve_entry(base, name)
+        if not path.is_file():
+            continue
+        if not inside_repo(path, repo):
+            continue  # 仓外输入：按盘上字节是声明口径
+        try:
+            rel = path.resolve().relative_to(repo.resolve()).as_posix()
+        except ValueError:  # pragma: no cover - inside_repo 已保证
+            continue
+        attr = attrs.get(rel)
+        if attr == "unset":
+            continue  # `-text` 冻结：盘上字节 == 仓库字节，按盘上记是对的
+        data = path.read_bytes()
+        if is_binary(data):
+            continue  # 二进制不做行尾归一
+        h_lf = sha256_bytes(normalize_lf(data))
+        if want == h_lf:
+            continue  # 清单就是仓库口径，无陷阱
+        h_raw = sha256_bytes(data)
+        h_blob: str | None = None
+        b = blob_bytes(repo, rel)
+        if b is not None:
+            h_blob = sha256_bytes(b)
+        source = None
+        if h_raw != h_lf and want == h_raw:
+            source = "工作树原始字节(CRLF)"
+        elif h_blob is not None and h_blob != h_lf and want == h_blob:
+            source = "git blob 原始字节(含 CRLF)"
+        if source is not None:
+            traps.append({"path": str(path), "listed": want, "disk_raw": h_raw,
+                          "repo_lf": h_lf, "blob_raw": h_blob, "source": source,
+                          "attr": attr})
+    return traps
+
+
 def hash_path(path: Path, mode: str, repo: Path, rel: str | None, attr_state: str | None) -> str:
     data = path.read_bytes()
     if mode == "disk":
@@ -214,6 +285,9 @@ def verify_dir(base: Path, repo: Path, mode: str, check_extra: bool,
             mismatch.append({"path": str(path), "listed": want, "computed": got,
                              "attr": attrs.get(rel) if rel else "outside"})
 
+    # EOL 陷阱：与 mode 无关——`--disk-bytes` 也不能拿「清单自洽」换假绿。
+    eol_traps = find_eol_traps(entries, base, repo, attrs)
+
     extra: list[str] = []
     listed_names = {name.replace("\\", "/").lstrip("./") for _, name in entries}
     if check_extra:
@@ -227,7 +301,7 @@ def verify_dir(base: Path, repo: Path, mode: str, check_extra: bool,
                 continue
             extra.append(rel)
 
-    green = not mismatch and not missing and not extra
+    green = not mismatch and not missing and not extra and not eol_traps
     return {
         "dir": str(base),
         "manifest": str(manifest),
@@ -237,6 +311,7 @@ def verify_dir(base: Path, repo: Path, mode: str, check_extra: bool,
         "mismatch": mismatch,
         "missing": missing,
         "extra": extra,
+        "eol_trap": eol_traps,
         "green": green,
     }
 
@@ -250,6 +325,10 @@ def print_result(res: dict) -> None:
     for m in res["mismatch"]:
         print(f"       mismatch: {m['path']}\n         清单 {m['listed']}\n         实算 {m['computed']}"
               f"  (text attr={m['attr']})")
+    for t in res.get("eol_trap", []):
+        print(f"       EOL 陷阱: {t['path']}\n         清单按{t.get('source', '原始字节')}记 {t['listed']}\n"
+              f"         仓库口径(LF 归一/git blob)应为 {t['repo_lf']}  (text attr={t['attr']})\n"
+              f"         ⇒ 该清单在工作树/提交物自洽、在仓库字节口径/干净检出不可复现（用 `write` 改写）")
     for p in res["missing"]:
         print(f"       缺件: {p}")
     for p in res["extra"]:
@@ -314,6 +393,11 @@ def classify(res_repo: dict, res_disk: dict, freeze_all: bool) -> dict:
     missing = res_repo.get("missing", [])
     repo_ok = res_repo.get("ok", 0)
     disk_ok = res_disk.get("ok", 0)
+    traps = res_repo.get("eol_trap", [])
+    if traps:
+        names = ", ".join(Path(t["path"]).name for t in traps[:3])
+        return {"verdict": "RED",
+                "why": f"EOL 陷阱 {len(traps)} 件（清单按工作树 CRLF 记，仓库口径为 LF）：{names}"}
     if missing:
         return {"verdict": "RED", "why": f"清单引用文件缺失 {len(missing)} 个"}
     if repo_ok == listed and disk_ok == listed:
@@ -496,6 +580,8 @@ def cmd_selftest(_args) -> int:
         (repo / "evidence").mkdir(parents=True)
         subprocess.run(["git", "init", "-q", str(repo)], check=True)
         subprocess.run(["git", "-C", str(repo), "config", "core.autocrlf", "true"], check=True)
+        subprocess.run(["git", "-C", str(repo), "config", "user.email", "selftest@example.invalid"], check=True)
+        subprocess.run(["git", "-C", str(repo), "config", "user.name", "selftest"], check=True)
         (repo / ".gitattributes").write_text("*.txt text eol=lf\n", encoding="utf-8", newline="\n")
 
         ev = repo / "evidence"
@@ -512,40 +598,40 @@ def cmd_selftest(_args) -> int:
         got_lf = hash_path(ev / "crlf.txt", "repo", repo, "evidence/crlf.txt", "set")
         got_frozen = hash_path(ev / "frozen.bin", "repo", repo, "evidence/frozen.bin", "unset")
         report(got_lf == h_lf and got_frozen == h_raw and h_lf != h_raw,
-               "0/6 口径：text 文件按 LF 归一、-text 文件按原始字节（两者不同）")
+               "0/11 口径：text 文件按 LF 归一、-text 文件按原始字节（两者不同）")
 
         # 1) 仓库字节口径（默认）→ 绿
         _selftest_write_manifest(ev, [(h_lf, "crlf.txt"), (h_raw, "frozen.bin")], style_bin=2)
         r_repo = verify_dir(ev, repo, "repo", False, [])
-        report(r_repo["green"], "1/6 仓库字节口径：清单与仓库字节一致 → 绿",
+        report(r_repo["green"], "1/11 仓库字节口径：清单与仓库字节一致 → 绿",
                f"OK {r_repo['ok']}/{r_repo['listed']}")
 
         # 2) 改 1 位 hash → 必红
         _selftest_write_manifest(ev, [("0" * 64, "crlf.txt"), (h_raw, "frozen.bin")], style_bin=2)
         r_bad = verify_dir(ev, repo, "repo", False, [])
         report(not r_bad["green"] and any("crlf.txt" in m["path"] for m in r_bad["mismatch"]),
-               "2/6 改 1 位 hash → 必红")
+               "2/11 改 1 位 hash → 必红")
 
         # 3) 多件（--check-extra）→ 必红
         _selftest_write_manifest(ev, [(h_lf, "crlf.txt"), (h_raw, "frozen.bin")], style_bin=2)
         (ev / "ghost.txt").write_bytes(b"x\n")
         r_extra = verify_dir(ev, repo, "repo", True, [])
         report(not r_extra["green"] and "ghost.txt" in r_extra["extra"],
-               "3/6 多件（--check-extra）→ 必红")
+               "3/11 多件（--check-extra）→ 必红")
         (ev / "ghost.txt").unlink()
 
         # 4) 少件（清单引用但不存在的文件）→ 必红
         _selftest_write_manifest(ev, [(h_lf, "crlf.txt"), (h_raw, "missing.bin")], style_bin=2)
         r_missing = verify_dir(ev, repo, "repo", False, [])
         report(not r_missing["green"] and len(r_missing["missing"]) == 1,
-               "4/6 少件（清单引用缺失文件）→ 必红")
+               "4/11 少件（清单引用缺失文件）→ 必红")
 
-        # 5) 口径切换：把 CRLF 值当清单（盘上字节口径）→ 默认仓库字节必红、--disk-bytes 才绿
-        _selftest_write_manifest(ev, [(h_raw, "crlf.txt"), (h_raw, "frozen.bin")], style_bin=2)
-        r_wrong = verify_dir(ev, repo, "repo", False, [])
+        # 5) 口径只有一个：text 文件盘上 CRLF 时，仓库口径(LF)绿、--disk-bytes 红（盘上字节对不上 LF 清单）
+        _selftest_write_manifest(ev, [(h_lf, "crlf.txt"), (h_raw, "frozen.bin")], style_bin=2)
+        r_correct = verify_dir(ev, repo, "repo", False, [])
         r_disk = verify_dir(ev, repo, "disk", False, [])
-        report(not r_wrong["green"] and r_disk["green"],
-               "5/6 口径切换：记盘上 CRLF 值时默认口径必红、--disk-bytes 才绿")
+        report(r_correct["green"] and not r_disk["green"],
+               "5/11 口径只有一个：text 文件盘上 CRLF ⇒ 默认仓库口径(LF)绿、--disk-bytes 红")
 
         # 6) 声明 `* -text` 的目录：盘上恢复为原始字节后两种口径一致 → 绿
         (ev / "crlf.txt").write_bytes(crlf)
@@ -554,12 +640,61 @@ def cmd_selftest(_args) -> int:
         r_decl_repo = verify_dir(ev, repo, "repo", False, [])
         r_decl_disk = verify_dir(ev, repo, "disk", False, [])
         report(r_decl_repo["green"] and r_decl_disk["green"],
-               "6/6 已声明 * -text：仓库字节 == 盘上字节，两种口径都绿")
+               "6/11 已声明 * -text：仓库字节 == 盘上字节，两种口径都绿")
+
+        # 7..10) EOL 陷阱（2026-10-12，同族坑第 4 次）：
+        #   先建一个「受跟踪 blob = LF」的文件，再把盘上改回 CRLF。
+        ga.write_text("frozen.bin -text\n", encoding="utf-8", newline="\n")
+        (ev / "crlf.txt").write_bytes(b"line1\nline2\n")
+        subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "selftest base"], check=True)
+        (ev / "crlf.txt").write_bytes(crlf)          # 盘上 CRLF，blob 仍为 LF
+
+        # 7) 清单按盘上 CRLF 记 ⇒ 必须红且点名（默认口径与 --disk-bytes 都要红，不许自洽假绿）
+        _selftest_write_manifest(ev, [(h_raw, "crlf.txt"), (h_raw, "frozen.bin")], style_bin=2)
+        r_trap = verify_dir(ev, repo, "repo", False, [])
+        r_trap_disk = verify_dir(ev, repo, "disk", False, [])
+        trapped = any("crlf.txt" in t["path"] for t in r_trap.get("eol_trap", []))
+        report(not r_trap["green"] and trapped and not r_trap_disk["green"],
+               "7/11 EOL 陷阱(盘上 CRLF / blob LF)：清单按盘上字节记 ⇒ 必红且点名（--disk-bytes 也红）",
+               f"trap={len(r_trap.get('eol_trap', []))} disk_rc_trap={not r_trap_disk['green']}")
+
+        # 8) EOL 陷阱(blob 自己也带 CRLF，即 m3cs 真实先例)：即使盘上已是 LF，记 blob 原始字节也必红
+        (ev / "crlf.txt").write_bytes(b"line1\nline2\n")
+        crlf_oid = subprocess.run(
+            ["git", "-C", str(repo), "hash-object", "-w", "--stdin", "--no-filters"],
+            input=crlf, capture_output=True, check=True).stdout.strip().decode()
+        subprocess.run(["git", "-C", str(repo), "update-index", "--add", "--cacheinfo",
+                        f"100644,{crlf_oid},evidence/blobcrlf.txt"], check=True)
+        (ev / "blobcrlf.txt").write_bytes(b"line1\nline2\n")   # 盘上 LF
+        subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "blob crlf"], check=True)
+        _selftest_write_manifest(
+            ev, [(h_raw, "blobcrlf.txt"), (h_lf, "crlf.txt"), (h_raw, "frozen.bin")], style_bin=2)
+        r_trap_blob = verify_dir(ev, repo, "repo", False, [])
+        blob_trapped = any("blobcrlf.txt" in t["path"] and "blob" in t.get("source", "")
+                           for t in r_trap_blob.get("eol_trap", []))
+        report(not r_trap_blob["green"] and blob_trapped,
+               "8/11 EOL 陷阱(blob 含 CRLF)：盘上 LF 但清单按 blob 原始字节记 ⇒ 必红且点名",
+               f"trap={len(r_trap_blob.get('eol_trap', []))}")
+
+        # 9) 不误伤：盘上 CRLF 但清单按仓库口径(LF)记 ⇒ 绿（现存 72 个目录就是这个形态）
+        (ev / "crlf.txt").write_bytes(crlf)
+        _selftest_write_manifest(ev, [(h_lf, "crlf.txt"), (h_raw, "frozen.bin")], style_bin=2)
+        r_correct_crlf_disk = verify_dir(ev, repo, "repo", False, [])
+        report(r_correct_crlf_disk["green"] and not r_correct_crlf_disk.get("eol_trap"),
+               "9/11 不误伤：盘上 CRLF 但清单按仓库口径(LF)记 ⇒ 绿")
+
+        # 10) 正确的 LF 样例：盘上 LF + 清单 LF ⇒ 绿
+        (ev / "crlf.txt").write_bytes(b"line1\nline2\n")
+        _selftest_write_manifest(ev, [(h_lf, "crlf.txt"), (h_raw, "frozen.bin")], style_bin=2)
+        r_correct_lf = verify_dir(ev, repo, "repo", False, [])
+        report(r_correct_lf["green"], "10/11 正确的 LF 样例（盘上 LF + 清单 LF）⇒ 绿")
 
         if fails:
             print(f"RED: verify_sha256sums selftest {fails} 项不过", file=sys.stderr)
             return 2
-        print("GREEN: verify_sha256sums selftest 6/6（口径 + 改 hash / 多件 / 少件 / 口径切换 / 冻结声明）")
+        print("GREEN: verify_sha256sums selftest 11/11"
+              "（口径 + 改 hash / 多件 / 少件 / 口径切换 / 冻结声明 / EOL 陷阱×2 / 不误伤）")
         return 0
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

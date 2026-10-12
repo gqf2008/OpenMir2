@@ -1,0 +1,13 @@
+# 历史先例（同族第 4 次）复现：在 m3cs 片提交 170a51b9 上跑本牙
+# 命令：python -I tools/evidence-hash/verify_sha256sums.py --repo E:/tmp/eol-hist-170a51b9 <该证据目录>
+# 该片随后被 owner/reviewer 判定：声明 GREEN 75/75、钉住 head 上实为 RED 74/75。
+
+RED   E:\tmp\eol-hist-170a51b9\mir2-rs\tests\parity\m3\evidence-rng-isolate-attack-twophase-20261012\SHA256SUMS.txt  [repo 口径]  OK 74/75
+       mismatch: E:\tmp\eol-hist-170a51b9\mir2-rs\tests\parity\m3\evidence-rng-isolate-attack-twophase-20261012\window\00-selfcheck-nostack.txt
+         清单 a9ca0b7c2f8db1437f5294321339c80563854715eb972da0eca06b4bb76865b6
+         实算 685937474eea81b54504e287ad7d1c9151860cf09516034c76e81e246748d5bf  (text attr=set)
+       EOL 陷阱: E:\tmp\eol-hist-170a51b9\mir2-rs\tests\parity\m3\evidence-rng-isolate-attack-twophase-20261012\window\00-selfcheck-nostack.txt
+         清单按工作树原始字节(CRLF)记 a9ca0b7c2f8db1437f5294321339c80563854715eb972da0eca06b4bb76865b6
+         仓库口径(LF 归一/git blob)应为 685937474eea81b54504e287ad7d1c9151860cf09516034c76e81e246748d5bf  (text attr=set)
+         ⇒ 该清单在工作树/提交物自洽、在仓库字节口径/干净检出不可复现（用 `write` 改写）
+[exit=1]

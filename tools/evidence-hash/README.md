@@ -15,6 +15,7 @@
 | 2 | M4 **N-1** `tests/parity/evidence/M4/**` | 声明 LF(blob)，裸 `sha256sum` 对不上 | 已用 LF 归一清单 + 复核器修 |
 | 3 | M2 会话生命周期 **N-1** `tools/m2-acceptance/evidence/session-lifecycle-{rerun,selftest}-20261012/**` | 清单按盘上 CRLF ⇒ 对仓库字节复核 8/11、5/6 mismatch | **本片改为仓库字节口径** |
 | 4 | M2 envir `mir2-rs/tests/parity/envir-2026-10-10/parse-stats-cs.json` | 记的是 CRLF 值（该文件 `text eol=lf`，仓库字节是 LF）⇒ 两种口径都对不上 | **本片改为 LF 归一值** |
+| 5 | m3cs `mir2-rs/tests/parity/m3/evidence-rng-isolate-attack-twophase-20261012/window/00-selfcheck-nostack.txt` | 清单记的是 **CRLF 字节**（`a9ca0b7c…`，blob 自己就带 CRLF），而 `mir2-rs/.gitattributes` 的 `*.txt text eol=lf` ⇒ 仓库字节是 **LF 归一值**（`68593747…`）；该片声明的 `verify GREEN 75/75` 在钉住 head 上实为 **RED 74/75** | **本片加「EOL 陷阱」fail-closed 牙**（见下；历史先例在 `170a51b9` 上可复现） |
 
 ## ③ 存量对账与逐条处置（2026-10-12）
 
@@ -56,6 +57,27 @@ SHA-256( Git blob 内容 )
 **同时**放 `.gitattributes` 的 `* -text` 冻结字节，复核时显式 `--disk-bytes`。
 先例：`tests/loadgate/.gitattributes`、`mir2-rs/tests/parity/m1-boundary-load/evidence/.gitattributes`。
 
+## EOL 陷阱牙（2026-10-12，同族坑第 4/5 次）
+
+「仓库字节口径能算出正确值」还不够——**作者手抄清单时仍会用工作树原始字节**，于是得到一条只在自己
+工作树/提交物里自洽、在干净检出上不可复现的清单。本工具因此加了一条**主动咬住 EOL 陷阱**的 fail-closed
+判据（`find_eol_traps`）：
+
+对清单里每个**在仓库内、会被 git 做行尾归一**（`text` 属性非 `-text`、且非二进制）的文件：
+
+- 若清单里记的 hash 等于**工作树原始字节**的 sha256（盘上 CRLF），而仓库口径（LF 归一 / git blob）是另一个值；**或**
+- 若清单里记的 hash 等于**该文件 git blob 的原始字节**（blob 自己就带 CRLF），而仓库口径是 LF 归一值
+
+⇒ **直接判红并点名**（`EOL 陷阱: <path>`，列出「清单记的原始字节」与「仓库口径应为」两个值），
+**在默认口径与 `--disk-bytes` 下都判红**——不许靠「清单自洽」拿到假绿（m3cs 片正是 `--disk-bytes`/
+本地 `-text` 自洽而声明的 GREEN 在钉住 head 上不成立）。`-text` 冻结文件与仓外输入不适用本条
+（按盘上字节就是它们声明的口径），所以**不会误伤** `reconcile` 里「盘上 CRLF ≠ blob」那批合规目录
+（清单已按 LF 记，`reconcile` 仍全绿）。
+
+修法：`write` 把清单改写成仓库字节口径；若确实要按盘上字节记，目录必须声明 `.gitattributes * -text`。
+夹具与原始件：`tools/evidence-hash/fixtures/eol-trap/demo.py`（`python -I tools/evidence-hash/fixtures/eol-trap/demo.py`）
+与 `tools/evidence-hash/evidence/2026-10-12-eol-tooth/`。
+
 ## 用法
 
 ```bash
@@ -75,11 +97,14 @@ python -I tools/evidence-hash/verify_sha256sums.py reconcile \
 # 改了口径 / 修历史遗留后，显式把清单改写到仓库字节口径
 python -I tools/evidence-hash/verify_sha256sums.py write <目录> [<目录> ...]
 
-# 牙齿：改 hash / 多件 / 少件 / 口径切换 / 冻结声明 各必红
+# 牙齿：改 hash / 多件 / 少件 / 口径切换 / 冻结声明 / EOL 陷阱×2 / 不误伤 各必红
 python -I tools/evidence-hash/verify_sha256sums.py selftest
+
+# EOL 陷阱夹具（临时 git 仓库里构造「盘上 CRLF / blob LF」与「blob 含 CRLF」两种样例，红→绿）
+python -I tools/evidence-hash/fixtures/eol-trap/demo.py
 ```
 
-**退出码**：`0` = 绿；`1` = 红（mismatch / 缺件 / 未声明的盘上字节口径）；`2` = 用法或前置错误
+**退出码**：`0` = 绿；`1` = 红（mismatch / 缺件 / 未声明的盘上字节口径 / **EOL 陷阱**）；`2` = 用法或前置错误
 （目标或清单不存在、清单无法解析、`git` 不可用）。**任何前置缺失都非零退出，绝不静默通过。**
 
 `write` 是**显式**动作（改动证据后才跑），不会在 `verify`/`reconcile` 里被自动调用——
@@ -87,10 +112,10 @@ python -I tools/evidence-hash/verify_sha256sums.py selftest
 
 ## 结果字段（`--json`）
 
-`verify` 输出数组，每项：`dir/manifest/mode/listed/ok/mismatch/missing/extra/green`。
+`verify` 输出数组，每项：`dir/manifest/mode/listed/ok/mismatch/missing/extra/eol_trap/green`。
 `reconcile` 输出数组，每项：`manifest/dir/listed/repo_ok/disk_ok/missing/extra/external/
 gitattributes/freeze_attr/verdict/why`。`repo_ok` = 仓库字节命中数，`disk_ok` = 盘上字节命中数，
-`verdict` = `GREEN`/`RED`。
+`verdict` = `GREEN`/`RED`（有 EOL 陷阱时直接 `RED` 并点名）。
 
 ## 原始输出（证据四件套）
 
@@ -107,6 +132,8 @@ gitattributes/freeze_attr/verdict/why`。`repo_ok` = 仓库字节命中数，`di
 
 以上原始件**不另附 `SHA256SUMS.txt`**：`04-reconcile-after.txt` 是本工具自己的输出，若列入清单再复核
 会自引用（清单验证的输出文件正是输出本身）；它们以**交付 patch / 合并提交号**锚定（证据四件套的第四项）。
+
+同一约定也适用于 `evidence/2026-10-12-eol-tooth/`（EOL 陷阱牙的原始件，同样不附 `SHA256SUMS.txt`）。
 
 ## 边界
 
