@@ -1,51 +1,18 @@
-# 四门禁（本片零 .rs，作回归）；cwd=mir2-rs/ CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target
+# 四门禁（本片零 .rs，作回归）；合 master bf628fdb 后的交付树；cwd=mir2-rs/ CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target
 
 ## cargo fmt --all -- --check
 fmt_rc=0
 
 ## cargo clippy --workspace --all-targets --offline -- -D warnings
-    Checking game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\bins\game-svr)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.78s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.57s
 clippy_rc=0
 
 ## cargo test --workspace --offline
-   Doc-tests mir2_script_tool
 
-running 0 tests
-
-test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-
-   Doc-tests mir2_shared
-
-running 0 tests
-
-test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-
-   Doc-tests mir2_storage
-
-running 0 tests
-
-test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-
-   Doc-tests mir2_world
-
-running 0 tests
-
-test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-
-   Doc-tests mir2_world_bevy
-
-running 0 tests
-
-test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-
-test_rc=0
+test_rc=0; suites(ok)=82 suites(FAILED)=0; total_passed=670 total_failed=0
 
 ## cargo run -p msgcodegen -- --check
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.37s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.14s
      Running `E:/tmp/openmir2-m3bag-target\debug\msgcodegen.exe --check`
 msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
 msgcodegen_rc=0
-
-## cargo test --workspace --offline（全量复跑取汇总，E:/tmp/m3bag-m1/gates-test-full.txt）
-test_rc=0; suites(ok)=82 suites(FAILED)=0; total_passed=670 total_failed=0
