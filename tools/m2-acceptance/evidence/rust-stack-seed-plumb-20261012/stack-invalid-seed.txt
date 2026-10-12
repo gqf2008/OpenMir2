@@ -1,0 +1,4 @@
+=== invalid -Seed abc (rc=1 expected) ===
+RED: MIR2_RNG_SEED/-Seed 不是合法 int: abc —— 拒绝在非法种子下起栈（fail-closed）
+=== invalid env MIR2_RNG_SEED=not-an-int (rc=1 expected) ===
+RED: MIR2_RNG_SEED/-Seed 不是合法 int: not-an-int —— 拒绝在非法种子下起栈（fail-closed）
