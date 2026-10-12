@@ -56,5 +56,5 @@
 ## hash 口径
 
 `SHA256SUMS.txt` 用仓库字节口径（LF 归一 / git blob 字节）计算。验证方式（干净 clone 或本目录）：
-`python mir2-rs/tests/parity/m3/verify_sha256sums.py ...` 或
+`python tools/evidence-hash/verify_sha256sums.py ...` 或
 `sha256sum -c SHA256SUMS.txt`（本目录）。

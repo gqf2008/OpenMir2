@@ -20,6 +20,13 @@ rm -f mir2-rs/tests/parity/m3/.tmp-base-gate_guards.ps1
 ## 3) 改坏必红（牙齿）：把正证改回裸子串 '创建角色'
 #   见 03-mutation-teeth.txt：改坏后 ⑩ 第 5 向 FAIL ⇒ SUMMARY total=65 failed=1；
 #   还原后 cmp 与原件逐字节相同 ⇒ selftest 回 GREEN。
+#   M-2 可读性收口：diff 用 --strip-trailing-cr（.orig 是 LF、工作树是 CRLF），只留单行 hunk。
+cp mir2-rs/tests/parity/m3/gate_guards.ps1 E:/tmp/m3bag-cleanup/gate_guards.ps1.pristine
+# 把 gate_guards.ps1 里 `@('创建角色 '` 改成 `@('创建角色'`（保持 CRLF），再跑：
+pwsh -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/selftest_gate.ps1 -OutDir E:/tmp/m3bag-cleanup/selftest-mut
+diff -u --strip-trailing-cr E:/tmp/m3bag-cleanup/gate_guards.ps1.pristine mir2-rs/tests/parity/m3/gate_guards.ps1
+cp E:/tmp/m3bag-cleanup/gate_guards.ps1.pristine mir2-rs/tests/parity/m3/gate_guards.ps1 && cmp E:/tmp/m3bag-cleanup/gate_guards.ps1.pristine mir2-rs/tests/parity/m3/gate_guards.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/selftest_gate.ps1 -OutDir E:/tmp/m3bag-cleanup/selftest-green
 
 ## 4) 无栈自检（run_attack_pair.ps1）
 pwsh -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 -SelfCheckNoStack
