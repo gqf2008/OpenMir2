@@ -396,6 +396,22 @@ C# 读 rng-hook `MIR2_RNG_LOG` 的 `INJECT_OK <seed>`；Rust 读 game-svr 启动
 `attack_diff.py` 增 `pin_attempts <stdout>` 复算子命令；`-SelfCheckNoStack` **⑱** 与 `selftest_gate.ps1` **⑨** 机判，
 改坏（人为让 pin 重试一次）必红。证据 `evidence-pin-retry-20261012/**`。
 
+**残差③ `my` 字段 + 残差① 抽数账本（owner 2026-10-12 17:35）**：`M3ATTSEQ role=attack/struck` 行落 `my`
+（本假人自身 ActorId = `SM_LOGON.Recog`），`attack_diff.py::align` 对 `attack` 行缺 `my` **fail-closed（rc=2）**、
+`struck.src == my` 过滤 + 事件键去重（同一击被 victim/attacker 两视角、C# 还各投递两次 ⇒ 去重）；
+**历史会话**（未落 `my`）用 `rebuild_attack_my.py` 离线复算归一化（从 `机器人:[id]` 前缀还原；**没有**
+「缺字段也继续」的旁路）。`attack_rng_ledger.py`（D2 口径）按 `GetAttackPower@PlayObject.cs:2929` 站点把
+`rng-stream.tsv` 逐 k 分段并跨侧 `diff`（`--side csharp|rust`，Rust 站点表与 m3cs `analyze_rng_trace.py --attack-re` 同表）。
+证据 `evidence-attack-my-field-20261012/**`、`evidence-attack-ledger-twoside-20261012/**`。
+
+**残差① 的口径（owner 2026-10-12 18:25 纠正）**：C# 全局流里攻击路径仅 **275/1,670,754** 次抽数、噪声占 **99.98%**
+（`AnimalObject.Wondering` 等）⇒ **主因 = 非攻击 RNG 消费者/起点未隔离**（R-1 只隔离了 pin 图），
+**Rust 生产路径尚未排除**（真机活栈两侧账本 diff 待 m3cs 产出）。
+
+**清三条非阻塞 minor（2026-10-12 18:45）**：`align` 去重键由全局改为**按 k 分段** `(k,src,actor,dmg,hp,maxhp)`
+（修「HP 回满后不同 k 同一击被误折叠」；`attack_diff.py selftest` 28→**30/30**，改回全局键必红）；历史会话
+口径写清（见上，fail-closed 不降级）；残差① 措辞订正（见上）。证据 `evidence-attack-minors6-20261012/**`。
+
 ## 一次「侧运行」是什么
 
 

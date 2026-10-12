@@ -1,0 +1,5 @@
+legacy attack row without my (fail-closed + actionable hint; NO silent fallback)
+command: python mir2-rs/tests/parity/m3/attack_diff.py align E:/tmp/m3bag-minors6\legacy-nomy.raw.jsonl
+exit=2
+stderr:
+FAIL_CLOSED: attack 行缺 my 字段（需为 int ActorId）——拒绝静默降级为「不过滤」：{"role": "attack", "k": 1, "op": "CM_HIT", "x": 1, "y": 1, "dir": 2}；历史会话（未落 my）请先用 rebuild_attack_my.py 离线复算归一化再交给 align

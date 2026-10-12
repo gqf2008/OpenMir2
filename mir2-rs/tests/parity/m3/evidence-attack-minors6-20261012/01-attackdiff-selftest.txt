@@ -1,0 +1,40 @@
+PREREQ_MISSING: 找不到日志 C:\Users\gxh\AppData\Local\Temp\attack-diff-selftest-upf4rmle\pin-nope.txt
+FAIL_CLOSED: attack 行缺 my 字段（需为 int ActorId）——拒绝静默降级为「不过滤」：{"role": "attack", "k": 1, "op": "CM_HIT", "x": 1, "y": 1, "dir": 2}；历史会话（未落 my）请先用 rebuild_attack_my.py 离线复算归一化再交给 align
+NONTRIVIAL a=True() b=True()
+GREEN: 跨侧攻击序列 diff = 0（attacked=10 hits=9 dodges=1 sum=197）
+NONTRIVIAL a=True() b=True()
+RED: 跨侧攻击序列差异 1 项（差异要么修到 0，要么按 §6.0-3 登记 tests/parity/whitelist.md）
+  - k=5 dmg 不等: a=20 b=21
+NONTRIVIAL a=True() b=True()
+RED: 跨侧攻击序列差异 5 项（差异要么修到 0，要么按 §6.0-3 登记 tests/parity/whitelist.md）
+  - k=5 hit 不等: a=True b=False
+  - k=5 dmg 不等: a=20 b=0
+  - 统计 hits 不等: a=9 b=8
+  - 统计 dodges 不等: a=1 b=2
+  - 统计 sum 不等: a=197 b=177
+NONTRIVIAL a=False(hits=0（一次都没命中；无法区分实现与空序列）) b=False(hits=0（一次都没命中；无法区分实现与空序列）)
+RED: 非平凡门未过——不容许用恒 0/恒绿比较器（hits=0（一次都没命中；无法区分实现与空序列） / hits=0（一次都没命中；无法区分实现与空序列））
+RED: 空序列（a=0 b=10）
+NONTRIVIAL a=True() b=True()
+RED: 跨侧攻击序列差异 5 项（差异要么修到 0，要么按 §6.0-3 登记 tests/parity/whitelist.md）
+  - 长度不等: a=10 b=5
+  - 统计 attacked 不等: a=10 b=5
+  - 统计 hits 不等: a=9 b=5
+  - 统计 dodges 不等: a=1 b=0
+  - 统计 sum 不等: a=197 b=99
+NONTRIVIAL a=True() b=True()
+GREEN: 跨侧攻击序列 diff = 0（attacked=10 hits=7 dodges=3 sum=21）
+MUTATE_OK C:\Users\gxh\AppData\Local\Temp\attack-diff-selftest-upf4rmle\death-b.seq.jsonl k=7 field=death_k value=8
+NONTRIVIAL a=True() b=True()
+RED: 跨侧攻击序列差异 1 项（差异要么修到 0，要么按 §6.0-3 登记 tests/parity/whitelist.md）
+  - 统计 death_k 不等: a=7 b=8
+MUTATE_OK C:\Users\gxh\AppData\Local\Temp\attack-diff-selftest-upf4rmle\death-b.seq.jsonl k=3 field=hp value=999
+NONTRIVIAL a=True() b=True()
+RED: 跨侧攻击序列差异 1 项（差异要么修到 0，要么按 §6.0-3 登记 tests/parity/whitelist.md）
+  - k=3 hp 不等: a=12 b=999
+PIN_ATTEMPTS attempts=2 expected=2 settle_rounds=2 max_attempts=5 hold_attempt=2 pin_retry_lines=1 extra_retries=0 ok=True
+{"attempts": 2, "expected": 2, "hold_attempt": 2, "pin_retry_lines": 1, "max_retry_attempt": 1, "extra_retries": 0, "ok": true, "log": "C:\\Users\\gxh\\AppData\\Local\\Temp\\attack-diff-selftest-upf4rmle\\pin-clean.txt"}
+PIN_ATTEMPTS attempts=4 expected=2 settle_rounds=4 max_attempts=5 hold_attempt=4 pin_retry_lines=3 extra_retries=2 ok=False
+{"attempts": 4, "expected": 2, "hold_attempt": 4, "pin_retry_lines": 3, "max_retry_attempt": 3, "extra_retries": 2, "ok": false, "log": "C:\\Users\\gxh\\AppData\\Local\\Temp\\attack-diff-selftest-upf4rmle\\pin-retry.txt"}
+SELFTEST GREEN: attack_diff selftest 30/30（align 窗口归属 + 同序列绿 + 改坏 dmg/hit 必红 + 全 0 非平凡门 + 空序列 + 长度不等 + 死亡容忍/死亡时点/HP 逐项比（F-F option ③） + my 口径（残差③：attack 行缺 my ⇒ fail-closed rc=2；外来命中过滤；多视角/重复投递同帧按**按 k 分段**事件键去重） + pin_attempts 复算（干净=绿 / 多一次重试=红 / 缺 PIN_HOLD=PREREQ））
+rc=0
