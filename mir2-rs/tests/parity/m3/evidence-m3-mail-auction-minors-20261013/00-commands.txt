@@ -1,0 +1,38 @@
+卡 openmir2-m3-mail-auction-align（issue 4125cc72）：清 reviewer-5 在 approve（review oid a4825e35 @ head 5cd950a6）
+里给的两条**非阻塞 Minor**（M-1 计数口径易误算、M-2 T-36 取证括注不严谨）。纯文档措辞片，**零 .rs / 零 src / 零 sql / 零 MirClient**，
+未起栈、未占端口。
+
+工作目录：E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3cs（本车道 worktree；共享主检出未触碰）
+
+# 0) 同步 + 合并当时 master（owner「patch base 跟随 master」纪律）
+git fetch origin
+git merge origin/master            # base = e2b94234（= 5cd950a6 的 master 合并提交）
+
+# 1) 仅两条 Minor 的措辞订正（写集：tests/parity/**）
+#    a) tests/parity/M3-report.md —— M-1：顶部口径句 / ⑩ 拆栏说明 / §4 索引行 三处补「⑩ 为混合行 10a absent + 10b partial，两子行合计计作一项」
+#    b) tests/parity/whitelist.md —— M-2：T-36 取证句 `rg -i 'mail' src/ --glob '*.cs'（仅配置开关）`
+#       改为「（无游戏邮件实体；命中仅客户端界面开关 ShowMail/boShowMail + 账号保护 EMail，后者归 sql/account_protection、非游戏邮件）」
+
+# 2) 四门禁（隔离 CARGO_TARGET_DIR + --offline；在 mir2-rs/ 下）
+export CARGO_TARGET_DIR=E:/tmp/m3cs-mailauction-target
+cargo fmt --all -- --check                                       # -> 01-gate-fmt.txt (rc=0)
+cargo clippy --workspace --all-targets --offline -- -D warnings  # -> 02-gate-clippy.txt (rc=0)
+cargo test --workspace --offline                                 # -> 03-gate-test.txt (86 suites/759 passed/0 failed/18 ignored, rc=0)
+cargo run --offline -p msgcodegen -- --check                     # -> 04-gate-msgcodegen.txt (604 条常量, rc=0)
+
+# 3) 边界与差量
+git diff --stat
+git diff --name-only -- src sql MirClient mir2-rs/crates mir2-rs/bins   # -> 05-boundary-and-diff.txt（空 = 通过）
+
+# 4) 证据包 hash（仓库字节 = LF 归一 / git blob 口径）
+python -I tools/evidence-hash/verify_sha256sums.py write mir2-rs/tests/parity/m3/evidence-m3-mail-auction-minors-20261013
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/m3/evidence-m3-mail-auction-minors-20261013
+
+# 5) 交付
+git add mir2-rs/tests/parity/M3-report.md mir2-rs/tests/parity/whitelist.md mir2-rs/tests/parity/m3/evidence-m3-mail-auction-minors-20261013
+git commit -m '...'
+git push walgit HEAD:refs/heads/worktree-m3-mail-auction
+walgit collab entry --repo . --kind patch --id openmir2-m3-mail-auction-align --parent <重读 oid> \
+  --body '{"base":"e2b94234","head":"<新 tip>",...}'
+walgit collab entry --repo . --kind status --id openmir2-m3-mail-auction-align --parent <patch oid> \
+  --body '{"status":"needs-review",...}'

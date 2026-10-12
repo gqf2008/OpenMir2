@@ -1,0 +1,73 @@
+# reviewer-5 在 approve（review oid a4825e35 @ head 5cd950a6）里给的两条**非阻塞 Minor** 与逐条处置
+
+来源：thread `openmir2-m3-mail-auction-align` 的 review entry `a4825e35`（reviewer-5，decision=approve，
+reviewed_head=5cd950a6f794cec067f42ea5fb1b16d73a48fa64）。原文摘录：
+
+## M-1（Minor）
+> M3-report 总判计数「3 covered / 2 partial / 1 oracle_absent / 5 not_covered（⑩ 拆 10a/10b 计作一项）」
+> 四数与「十项」相差 1（按子行分类：1/2/3 covered + 5/10b partial + 10a absent + 4/6/7/8/9 not_covered = 11），
+> 顶部口径句与 §4 索引两处互洽但读者易误算；建议补一句「⑩ 为混合行：10a absent + 10b partial」。
+
+**处置（本片）**：在 `mir2-rs/tests/parity/M3-report.md` **三处**补明计数口径——
+① 顶部口径句（第 17 行一带）：补「⑩ 邮件/拍卖 拆成 10a + 10b 两个子行、合计仍计作一项 ⇒ 3+2+1+5 = 11 子行 = 十项，⑩ 为混合行 10a absent + 10b partial」；
+② ⑩ 拆栏说明（第 40 行一带）：「计数仍作一项」后补「即 ⑩ 为混合行 = 10a `oracle_absent` + 10b `partial`，两子行合计计作一项」；
+③ §4 未收口项索引的「总判」行：四数后补「= 11 子行；⑩ 为混合行 10a `oracle_absent` + 10b `partial`，两子行合计计作一项 ⇒ 仍为十项」。
+
+数据未变（3 covered / 2 partial / 1 oracle_absent / 5 not_covered），仅补口径说明，消除「四数和 ≠ 10」的误读。
+
+## M-2（Minor）
+> whitelist T-36 取证句「`rg -i 'mail' src/ --glob '*.cs'`（仅配置开关）」不严谨——该命令同时命中账号保护 `EMail`
+> （LoginSrv/UserEntry/WebApi）；正文已另述 sql 的 `account_protection.EMail`，建议该括注改为「无游戏邮件实体；命中为客户端开关 + 账号保护 EMail」。
+
+**处置（本片）**：`mir2-rs/tests/parity/whitelist.md` T-36 的取证句，把「（仅配置开关）」改为
+「（**无游戏邮件实体**；命中仅客户端界面开关 `ShowMail`/`boShowMail` + 账号保护 `EMail`，后者归 `sql/account_protection`、非游戏邮件）」，
+与同格正文及盘点报告 §1.A 的口径一致（报告 §1.A 已写明「排除 EMail/email」）。
+
+---
+
+# 本片实际改动（unified diff，base = origin/master e2b94234）
+diff --git a/mir2-rs/tests/parity/M3-report.md b/mir2-rs/tests/parity/M3-report.md
+index 7c03d61e..18d67932 100644
+--- a/mir2-rs/tests/parity/M3-report.md
++++ b/mir2-rs/tests/parity/M3-report.md
+@@ -14,7 +14,8 @@
+   （`SHA256SUMS.txt`，仓库字节口径；复核命令见 §5）。
+ 
+ > **本报告不得被读成「M3 全部达成」**。① 十项里只有 3 项在本报告口径下算对齐（背包/装备、战斗、技能），
+-> NPC/商店 与 拍卖（⑩b，按 SellOff 口径）为 `partial`，邮件（⑩a）为 `oracle_absent`，其余 5 项为 `not_covered`；② 24h 长跑 **未跑**；④ M3 门禁 `scoped_diff` 当前有一处已知 RED
++> NPC/商店 与 拍卖（⑩b，按 SellOff 口径）为 `partial`，邮件（⑩a）为 `oracle_absent`，其余 5 项为 `not_covered`
++> （**计数口径**：`⑩ 邮件/拍卖` 拆成 10a + 10b **两个子行**、合计仍计作**一项** ⇒ 3 covered + 2 partial + 1 oracle_absent + 5 not_covered = **11 子行 = 十项**，⑩ 为**混合行**「10a absent + 10b partial」）；② 24h 长跑 **未跑**；④ M3 门禁 `scoped_diff` 当前有一处已知 RED
+ > （已由 follow-up 卡 `openmir2-m3-final-acceptance` 的 F-2 轨承接，见 §4）。
+ 
+ ---
+@@ -37,7 +38,7 @@
+ 
+ > 说明：§6 的 M3 判据表把「战斗」与「技能」列为两项；本表的 2/3 与卡 `openmir2-m3-combat-skills-align`
+ > 的 ②③ 一一对应。§6「顺序」原文把两者并列写作「战斗/技能」，故十项计数以本表为准。
+-> §6「⑩ 邮件/拍卖」原为一项；owner 2026-10-13 06:24 按 §6.0-3 重划口径后拆为 **10a（邮件 = `oracle_absent`）/ 10b（拍卖 = SellOff 口径）** 两行（**计数仍作一项**），
++> §6「⑩ 邮件/拍卖」原为一项；owner 2026-10-13 06:24 按 §6.0-3 重划口径后拆为 **10a（邮件 = `oracle_absent`）/ 10b（拍卖 = SellOff 口径）** 两行（**计数仍作一项**；即 ⑩ 为**混合行** = 10a `oracle_absent` + 10b `partial`，两子行合计计作一项），
+ > 其判据与 DB 落库现状见 [`m3/M3⑩邮件拍卖现状盘点报告-20261013.md`](m3/M3⑩邮件拍卖现状盘点报告-20261013.md)、登记见 `whitelist.md` 的 T-36。
+ 
+ ### 1.1 背包 / 装备（covered）
+@@ -299,7 +300,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_ru
+ | 邮件（§6 顺序 ⑩a） | **`oracle_absent`**（已登记 T-36） | **不开实现卡**；Rust 与 oracle 一致地不实现（oracle 无此功能） |
+ | 拍卖（§6 顺序 ⑩b，元宝寄售 SellOff） | `partial`（oracle 链/判据已盘；世界侧派发未实现） | **已有卡** `openmir2-m3-mail-auction-align` + 承接卡 `-selloff-consignment-world` / `-selloff-goldsales-load-wire` / `-selloff-fixture-botsrv` |
+ | **300 假人 24h 长跑**（DoD②） | **`not_run`**（等 owner 收拢窗口；方案见 §2） | 本卡（`openmir2-m3-final-acceptance`）自身，窗口发放后开跑 |
+-| §6 M3 十项「全绿」总判 | **未达成**（3 covered / 2 partial / 1 oracle_absent / 5 not_covered；⑩ 拆 10a/10b 计作一项） | 上述各承接卡收敛后回本卡复核 |
++| §6 M3 十项「全绿」总判 | **未达成**（3 covered / 2 partial / 1 oracle_absent / 5 not_covered = 11 子行；⑩ 为**混合行** 10a `oracle_absent` + 10b `partial`，两子行合计计作一项 ⇒ 仍为十项） | 上述各承接卡收敛后回本卡复核 |
+ 
+ ## 5. 本片命令与证据四件套
+ 
+diff --git a/mir2-rs/tests/parity/whitelist.md b/mir2-rs/tests/parity/whitelist.md
+index a26e63ad..a31a88fb 100644
+--- a/mir2-rs/tests/parity/whitelist.md
++++ b/mir2-rs/tests/parity/whitelist.md
+@@ -184,7 +184,7 @@ M0 金标准验收状态（2026-10-10）：① 逐字节回放 0 差异、② 
+ 
+ | 编号 | 差异/豁免点 | 为什么无害 / 处置 | 谁审的 |
+ | --- | --- | --- | --- |
+-| T-36 | **邮件 = `oracle_absent`（§6.0-3 owner 裁决）**：oracle 全仓**没有任何邮件实现**——`src/` 里与 mail 相关的只有客户端界面开关（`GameSettingConf.cs:74/77/138` 的 `ShowMail`、`OpenMir2/Packets/ClientPackets/ClientConf.cs:20` 的 `boShowMail`），**无邮件实体、无 `CM_*`/`SM_*`、无表、无调用链**；`sql/` 里命中的 `account_protection.EMail` 是账号保护邮箱（非游戏邮件）；`rg 'CM_MAIL|SM_MAIL|MAIL' src/OpenMir2/Packets/` = no match。⇒ §6 的「发送 / 到期 / 退回」**没有 oracle 行为可对齐**。**处置**：① **不开任何 `openmir2-m3-mail-*` 实现卡**（开卡 = 自行发明一套邮件，违反「行为等价优先」）；② Rust 侧与 oracle **一致地不实现**（客户端若发相关包 ⇒ 与 C# 同样无响应/忽略，且要有断言钉住）；③ M3 计分按 `oracle_absent` 记。 | **不是差异，是「无物可对」**：两侧都不存在该功能，不存在可登记的行为差。**取证**：`rg -i 'mail' src/ --glob '*.cs'`（仅配置开关）、`rg '邮件' src/ --glob '*.cs'`（仅 `MarketSystem/Services/MarketService.cs:387` 一条 TODO）、`grep -i mail sql/`（仅账号保护邮箱）。原始件见盘点报告 §1.A 与证据包 `evidence-m3-mail-auction-inventory-20261013/00-oracle-chain-lines.txt`/`01-rust-status-greps.txt`。 | owner §6.0-3 裁决（`1bd1361c`，2026-10-13 06:24）；报告盘点片 approve reviewer-5 `10aeeae0`、合入 master `4d276812`；**待独立 principal 复核本登记行** |
++| T-36 | **邮件 = `oracle_absent`（§6.0-3 owner 裁决）**：oracle 全仓**没有任何邮件实现**——`src/` 里与 mail 相关的只有客户端界面开关（`GameSettingConf.cs:74/77/138` 的 `ShowMail`、`OpenMir2/Packets/ClientPackets/ClientConf.cs:20` 的 `boShowMail`），**无邮件实体、无 `CM_*`/`SM_*`、无表、无调用链**；`sql/` 里命中的 `account_protection.EMail` 是账号保护邮箱（非游戏邮件）；`rg 'CM_MAIL|SM_MAIL|MAIL' src/OpenMir2/Packets/` = no match。⇒ §6 的「发送 / 到期 / 退回」**没有 oracle 行为可对齐**。**处置**：① **不开任何 `openmir2-m3-mail-*` 实现卡**（开卡 = 自行发明一套邮件，违反「行为等价优先」）；② Rust 侧与 oracle **一致地不实现**（客户端若发相关包 ⇒ 与 C# 同样无响应/忽略，且要有断言钉住）；③ M3 计分按 `oracle_absent` 记。 | **不是差异，是「无物可对」**：两侧都不存在该功能，不存在可登记的行为差。**取证**：`rg -i 'mail' src/ --glob '*.cs'`（**无游戏邮件实体**；命中仅客户端界面开关 `ShowMail`/`boShowMail` + 账号保护 `EMail`，后者归 `sql/account_protection`、非游戏邮件）、`rg '邮件' src/ --glob '*.cs'`（仅 `MarketSystem/Services/MarketService.cs:387` 一条 TODO）、`grep -i mail sql/`（仅账号保护邮箱）。原始件见盘点报告 §1.A 与证据包 `evidence-m3-mail-auction-inventory-20261013/00-oracle-chain-lines.txt`/`01-rust-status-greps.txt`。 | owner §6.0-3 裁决（`1bd1361c`，2026-10-13 06:24）；报告盘点片 approve reviewer-5 `10aeeae0`、合入 master `4d276812`；**待独立 principal 复核本登记行** |
+ 
+ > 拍卖（元宝寄售 SellOff）本批**不登记 T-***：它是有 oracle 实现的活路径（世界侧派发/世界态/帧在 Rust 未实现，属**未实现**而非行为差异），
+ > 承接卡 `openmir2-m3-selloff-consignment-world` / `-selloff-goldsales-load-wire` / `-selloff-fixture-botsrv` 落地前，

@@ -1,0 +1,30 @@
+卡：openmir2-m2-flaky-relay-testports（门禁卫生：relay free_port() TOCTOU）
+车道：m3bag / principal openmir2-worker-4 / worktree E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3bag
+分支：worktree-m2-relay-testports（base = master 4d276812；开工时 origin/master=518a9ad9，工作期间前进两次（031ff37e / 4d276812），已在交付前 forward-merge 消除回退假差量）
+隔离 target：CARGO_TARGET_DIR=E:/tmp/m3bag-relay-target（全部 cargo 命令 --offline）
+
+# --- 受影响 target 连跑（默认线程） ---
+cargo test --offline -p game-gate --test relay        # 11 用例 + 3 条 teeth = 14
+cargo test --offline -p game-svr  --test relay        # 13 用例 + 3 条 teeth = 16
+cargo test --offline -p game-svr  --test seed_inject  # 同 crate 同源 free_port
+
+# --- 拉高 --test-threads ---
+cargo test --offline -p game-gate --test relay -- --test-threads=32
+cargo test --offline -p game-svr  --test relay -- --test-threads=32
+
+# --- 两个 test binary 并发（16 线程 / 各 6 轮）---
+#   E:/tmp/m3bag-relay-target/debug/deps/relay-6a598fbef552edc3.exe  = game-gate
+#   E:/tmp/m3bag-relay-target/debug/deps/relay-280172755705bc2a.exe  = game-svr
+./relay-280172755705bc2a.exe --test-threads=16 & ./relay-6a598fbef552edc3.exe --test-threads=16 & wait
+
+# --- workspace 级（合并树四门禁的 test 项）---
+cargo test --offline --workspace                      # ×3
+cargo fmt --all -- --check
+cargo clippy --offline --workspace --all-targets -- -D warnings
+cargo run --offline -p msgcodegen -- --check
+
+# --- 改坏必红：把 support::next_port() 退回旧口径（bind :0 -> 取值 -> drop）---
+#   见 04-mutation-red.txt（含改前/改后 sha256）
+
+# --- 证据自检（仓库 LF/git-blob 口径） ---
+python -I tools/evidence-hash/verify_sha256sums.py tools/evidence-hash/evidence/2026-10-13-relay-freeport-race --check-extra

@@ -1,0 +1,26 @@
+# 改坏必红：`support::next_port()` 退回旧口径（`bind :0` → 取值 → drop）
+
+- `bins/game-svr/tests/support/mod.rs`
+  - 改前（最终提交件）sha256：`cf0274350b895aea47369c2426c5ef950639ccb29002256826ed28899fdec5fb`
+  - 改坏后          sha256：`002e65b3af5886b9b5dcc08e47010bdcbddc226b71ab78fb4ec11cc08517e2eb`
+  - 还原后          sha256：`cf0274350b895aea47369c2426c5ef950639ccb29002256826ed28899fdec5fb`（与改前逐字节一致）
+
+命令：`cargo test --offline -p game-gate --test relay teeth`
+
+```
+### mutation: next_port() 退回旧口径 (bind :0 -> 取值 -> drop)
+改前（最终提交件）sha256：cf0274350b895aea47369c2426c5ef950639ccb29002256826ed28899fdec5fb
+mutated     sha256: 002e65b3af5886b9b5dcc08e47010bdcbddc226b71ab78fb4ec11cc08517e2eb
+
+### teeth under mutation (expect RED)
+thread 'support::teeth::ports_live_outside_the_os_dynamic_range' (25728) panicked at bins\game-gate\tests\..\..\game-svr\tests\support\mod.rs:138:13:
+候选端口 57676 必须落在与动态段不相交的 [20000,32000)，否则并行用例的 bind(:0) 会把它抢走
+thread 'support::teeth::legacy_probe_release_port_is_left_unprotected' (28412) panicked at bins\game-gate\tests\..\..\game-svr\tests\support\mod.rs:195:9:
+新候选 57720 不应落在 Windows 动态段
+test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.01s
+
+```
+
+（另：把同一 mutation 的完整 target 在两进程并发 / 16 线程下跑 20 轮，本机**未**复现整片假红——
+旧口径的交叉连线是时序相关的，概率受机器负载影响；卡上接受「改坏必红 **或** 旧口径可复现失败」，
+这里有前者 + 上面那条确定性机制用例。）
