@@ -1210,39 +1210,49 @@ function Test-M3PinAttemptsComparable {
 #
 # 修法：预热相带 `-StopAfterCharCreated`（BotSrv `SelectChrScene` 在 `SendSelChr` 前短路，永不进世界）
 #   ⇒ GameSvr 里根本没有该角色的 PlayObject ⇒ 断线不触发 `SaveHumanRcd` ⇒ pin 不再被覆盖。
-# 本门（reviewer-6 M-1 起含正向断言）：读预热相 BotSrv 日志
+# 本门（reviewer-6 M-1 正向断言 + reviewer-5 N-1 收紧）：读预热相 BotSrv 日志
 #   反证（不得进世界）：出现任何进世界标记（`进入游戏`/`成功进入游戏`/`准备进入游戏`）⇒ fail-closed；
-#   正证（确实建了角）：出现 `创建角色`（`SelectChrScene.SelectChrCreateNewChr` 落）或
+#   正证（确实建了角）：出现生产整行 `创建角色 <name>`（`SelectChrScene.cs:200`；**锚到「创建角色」后带空格**，
+#     与建角失败串 `创建角色名称已被其他人使用！`/`创建角色时出现错误！`/`创建角色时出现未知错误！`
+#     逐字互斥——旧版裸子串 `创建角色` 会命中这些失败串，属 fail-open，reviewer-5 N-1）或
 #     `预热建角完成`（短路点 `ClientGetReceiveChrs` 落）⇒ 预热相确实走到了建角里程碑。
 #   日志存在但**零 marker**（空日志 / 只有噪声）⇒ `prewarm_marker_missing` fail-closed
-#     ——否则「预热压根没跑到建角」会被误当合格（reviewer-6 M-1；日志缺失/不可读同族）。
+#     ——否则「预热压根没跑到建角」会被误当合格（reviewer-6 M-1；日志缺失/不可读同族）；
+#   只见建角失败串、无成功正证 ⇒ `prewarm_char_create_failed` fail-closed（reviewer-5 N-1）。
 # 注：日志是 UTF-8（`LogService`），用 `[IO.File]::ReadAllText` 避免 PS 5.1 默认 ANSI 把中文读碎。
 function Test-M3PrewarmNoWorldEntry {
   param([Parameter(Mandatory)][AllowEmptyString()][string]$LogPath)
   $markers = @()
   $positive = @()
+  $failures = @()
   if ([string]::IsNullOrWhiteSpace($LogPath) -or -not (Test-Path $LogPath)) {
-    return [pscustomobject]@{ ok = $false; reason = 'log_missing'; markers = @(); positive = @(); log = $LogPath; preview = '' }
+    return [pscustomobject]@{ ok = $false; reason = 'log_missing'; markers = @(); positive = @(); failures = @(); log = $LogPath; preview = '' }
   }
   $text = ''
-  try { $text = [System.IO.File]::ReadAllText($LogPath) } catch { return [pscustomobject]@{ ok = $false; reason = 'log_unreadable'; markers = @(); positive = @(); log = $LogPath; preview = '' } }
+  try { $text = [System.IO.File]::ReadAllText($LogPath) } catch { return [pscustomobject]@{ ok = $false; reason = 'log_unreadable'; markers = @(); positive = @(); failures = @(); log = $LogPath; preview = '' } }
   # 逐字面匹配（不用正则元字符）；`进入游戏` 会同时命中 `成功进入游戏`，两份都记。
   foreach ($p in @('准备进入游戏', '进入游戏', '成功进入游戏')) {
     if ($text.Contains($p)) { $markers += $p }
   }
-  # 正证 marker（任一即可）：`创建角色` = 新建角色分支落；`预热建角完成` = StopAfterCharCreated 短路点落。
-  foreach ($p in @('创建角色', '预热建角完成')) {
+  # 正证 marker（任一即可）：生产整行 `创建角色 <name>`（**带尾空格**，与下面失败串互斥）或
+  #   `预热建角完成`（StopAfterCharCreated 短路点落）。
+  foreach ($p in @('创建角色 ', '预热建角完成')) {
     if ($text.Contains($p)) { $positive += $p }
+  }
+  # 建角失败串（reviewer-5 N-1）：只在**没有**成功正证时据此 fail-closed，给出更准确的 reason。
+  foreach ($f in @('创建角色名称已被其他人使用', '创建角色时出现错误', '创建角色时出现未知错误')) {
+    if ($text.Contains($f)) { $failures += $f }
   }
   if ($markers.Count -gt 0) {
     $line = @($text -split "`n" | Where-Object { $_.Contains('进入游戏') } | Select-Object -First 1)
     $preview = if ($line.Count -gt 0) { $line[0].Trim() } else { '' }
-    return [pscustomobject]@{ ok = $false; reason = 'prewarm_entered_world'; markers = $markers; positive = $positive; log = $LogPath; preview = $preview }
+    return [pscustomobject]@{ ok = $false; reason = 'prewarm_entered_world'; markers = $markers; positive = $positive; failures = $failures; log = $LogPath; preview = $preview }
   }
   if ($positive.Count -eq 0) {
-    return [pscustomobject]@{ ok = $false; reason = 'prewarm_marker_missing'; markers = @(); positive = @(); log = $LogPath; preview = '' }
+    $reason = if ($failures.Count -gt 0) { 'prewarm_char_create_failed' } else { 'prewarm_marker_missing' }
+    return [pscustomobject]@{ ok = $false; reason = $reason; markers = @(); positive = @(); failures = $failures; log = $LogPath; preview = '' }
   }
-  return [pscustomobject]@{ ok = $true; reason = ''; markers = @(); positive = $positive; log = $LogPath; preview = '' }
+  return [pscustomobject]@{ ok = $true; reason = ''; markers = @(); positive = $positive; failures = $failures; log = $LogPath; preview = '' }
 }
 
 function Get-M3PinHoldVerdict {

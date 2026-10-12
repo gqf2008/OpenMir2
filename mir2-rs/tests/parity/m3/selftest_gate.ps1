@@ -41,10 +41,12 @@
        **19:20 降级为 informational**）：只对「键在但值空/`(off)`、形态认不出、baseline 坏 JSON、会话缺失」
        fail-closed；attempts=2/4/1、expected 漂移、**旧会话（根本没有 pin_attempts 键）均绿**（只进 informational）。
 
-    ⑩ Test-M3PrewarmNoWorldEntry（预热相不进世界；owner 2026-10-12 19:20 根因修；reviewer-6 M-1 正向断言）：
+    ⑩ Test-M3PrewarmNoWorldEntry（预热相不进世界；owner 2026-10-12 19:20 根因修；reviewer-6 M-1 正向断言；reviewer-5 N-1 收紧）：
        读预热相 BotSrv 日志：出现 `进入游戏`/`成功进入游戏`/`准备进入游戏` ⇒ fail-closed；日志缺失/不可读也 fail-closed；
-       **日志存在但零 marker（既无进世界标记、也无 `创建角色`/`预热建角完成` 正证）⇒ `prewarm_marker_missing` fail-closed**
+       **日志存在但零 marker（既无进世界标记、也无 `创建角色 <name>`/`预热建角完成` 正证）⇒ `prewarm_marker_missing` fail-closed**
        （M-1：否则「预热压根没跑到建角」会被误当合格）。
+       **N-1：正证锚到生产整行 `创建角色 <name>`（带尾空格）⇒ 只看建角失败串（重名/出错）而无成功正证 ⇒ `prewarm_char_create_failed` fail-closed**
+       （旧版裸子串 `创建角色` 会命中失败串，属 fail-open）。
        （根因：预热假人进世界 → 被 Stop-Process ⇒ GameSvr `SaveHumanRcd` 异步落库覆盖 pin，
        见 `src/GameSrv/Word/WorldServer.cs:711-713` + `:1077-1091`。）
 
@@ -422,14 +424,19 @@ Set-Content -Path $pwWorld -Encoding utf8 -Value "15:01:16 [INF] 创建角色 m3
 # reviewer-6 M-1：日志存在但零 marker（既无进世界标记、也无建角正证）⇒ 必须红（fail-closed）。
 $pwEmpty = Join-Path $Work 'prewarm-empty.log'
 Set-Content -Path $pwEmpty -Encoding utf8 -Value "15:01:16 [INF] 登录成功`n15:01:16 [INF] 正在查询角色"
+# reviewer-5 N-1：只有建角失败串（重名/出错）、无成功正证 ⇒ 必须红（旧版裸子串 `创建角色` 会误绿）。
+$pwFail = Join-Path $Work 'prewarm-create-failed.log'
+Set-Content -Path $pwFail -Encoding utf8 -Value "15:01:16 [INF] 机器人:[m3x0] [错误信息] 创建角色名称已被其他人使用！ 错误代码 = 2`n15:01:16 [INF] 正在查询角色"
 $pwNoWorldR = Test-M3PrewarmNoWorldEntry -LogPath $pwNoWorld
 $pwWorldR = Test-M3PrewarmNoWorldEntry -LogPath $pwWorld
 $pwMissingR = Test-M3PrewarmNoWorldEntry -LogPath (Join-Path $Work 'prewarm-none.log')
 $pwEmptyR = Test-M3PrewarmNoWorldEntry -LogPath $pwEmpty
+$pwFailR = Test-M3PrewarmNoWorldEntry -LogPath $pwFail
 Test-Case 'prewarm/无进世界标记+有建角正证=绿' ($pwNoWorldR.ok -and $pwNoWorldR.markers.Count -eq 0 -and $pwNoWorldR.positive.Count -gt 0) ("ok={0} positive=[{1}]" -f $pwNoWorldR.ok, (@($pwNoWorldR.positive) -join ','))
 Test-Case 'prewarm/有进世界标记=红(fail-closed)' ((-not $pwWorldR.ok) -and $pwWorldR.reason -eq 'prewarm_entered_world') ("reason={0} markers=[{1}]" -f $pwWorldR.reason, (@($pwWorldR.markers) -join ','))
 Test-Case 'prewarm/日志缺失=红(fail-closed)' ((-not $pwMissingR.ok) -and $pwMissingR.reason -eq 'log_missing') ("reason={0}" -f $pwMissingR.reason)
 Test-Case 'prewarm/日志存在但零 marker=红(fail-closed；M-1)' ((-not $pwEmptyR.ok) -and $pwEmptyR.reason -eq 'prewarm_marker_missing') ("reason={0} markers=[{1}] positive=[{2}]" -f $pwEmptyR.reason, (@($pwEmptyR.markers) -join ','), (@($pwEmptyR.positive) -join ','))
+Test-Case 'prewarm/仅有建角失败串=红(fail-closed；N-1)' ((-not $pwFailR.ok) -and $pwFailR.reason -eq 'prewarm_char_create_failed') ("reason={0} positive=[{1}] failures=[{2}]" -f $pwFailR.reason, (@($pwFailR.positive) -join ','), (@($pwFailR.failures) -join ','))
 
 # ---------------------------------------------------------------- 汇总
 $report = [ordered]@{
