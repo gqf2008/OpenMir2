@@ -1,0 +1,60 @@
+# M3②③ 残差①：同种子抽数账本两侧化（--side csharp|rust）· 命令留档
+# base = refs/heads/master 40166a82dc6772a7b8e5dd160c934b516774b94a
+# 本片零 .rs（只动 attack_rng_ledger.py + 本目录）；未起栈、未占端口。
+
+## 0) 输入（仓外原始件）+ 口径锚
+sha256sum E:/tmp/m3cs-trace-single.tsv
+#   -> d9bf1a5fae95c31a1b06339377254f9ca035ff40bc18fb7f39ed5736c5d79791  (m3cs 离线单线程 Rust trace)
+sha256sum E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv
+#   -> 01ad1779838152dd4109e978888e90edade92b4a428e275acc420cf3403abc98  (17:01 C# 活栈 rng-hook 流水)
+# Rust 站点表 = m3cs 决策片同表（evidence-rng-trace-20261012/00-commands.txt §5）：
+#   combat\.rs:(67|109|111|579|587|606|608|736)|magic\.rs:   ；缺省锚 = crates\world\src\combat.rs:109
+# 夹具来源：git show origin/worktree-m3-combat-skills:mir2-rs/tests/parity/m3/evidence-rng-trace-20261012/09-rust-trace-shape.txt
+#   -> rust-trace-shape-14.tsv（去注释/空行，LF）；rust-trace-shape-14-mut.tsv = 删掉 seq=5 那一行
+
+## 1) Rust 侧账本（--side rust）
+python mir2-rs/tests/parity/m3/attack_rng_ledger.py summary E:/tmp/m3cs-trace-single.tsv --side rust --top 5   # -> 01-...
+python mir2-rs/tests/parity/m3/attack_rng_ledger.py segment E:/tmp/m3cs-trace-single.tsv --side rust \
+  --json E:/tmp/m3bag-ledger2/rust-single.seg.jsonl                                                          # -> 02-...（2996 段）
+
+## 2) 缺省路径回归（不给 --side = 旧行为，必须逐字节不变）
+python mir2-rs/tests/parity/m3/attack_rng_ledger.py summary E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv --top 5   # -> 03-... 3a
+python mir2-rs/tests/parity/m3/attack_rng_ledger.py segment E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv \
+  --marker "M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929" \
+  --json E:/tmp/m3bag-ledger2/csharp-oldcmd.seg.jsonl                                                        # -> 03-... 3b（120 段）
+python mir2-rs/tests/parity/m3/attack_rng_ledger.py segment E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv \
+  --side csharp --json E:/tmp/m3bag-ledger2/csharp-sidecmd.seg.jsonl                                         # -> 03-... 3c
+cmp E:/tmp/m3bag-ledger2/csharp-oldcmd.seg.jsonl \
+  mir2-rs/tests/parity/m3/evidence-attack-my-field-20261012/csharp-170110.rng-segments.jsonl                 # -> 03-... 3d: DEFAULT_PATH_IDENTICAL
+cmp E:/tmp/m3bag-ledger2/csharp-sidecmd.seg.jsonl E:/tmp/m3bag-ledger2/csharp-oldcmd.seg.jsonl               # -> 03-... 3d: SIDE_CSHARP_EQUALS_OLD_CMD
+
+## 3) selftest（C#+Rust 两侧 18/18）
+python -W error::SyntaxWarning mir2-rs/tests/parity/m3/attack_rng_ledger.py selftest                          # -> 04-...
+
+## 4) 改坏必红（14 行 Rust 夹具删 seq=5 ⇒ k=2 b 少抽 1）
+python mir2-rs/tests/parity/m3/attack_rng_ledger.py segment rust-trace-shape-14.tsv --side rust \
+  --json E:/tmp/m3bag-ledger2/fixture-base.seg.jsonl
+python mir2-rs/tests/parity/m3/attack_rng_ledger.py segment rust-trace-shape-14-mut.tsv --side rust \
+  --json E:/tmp/m3bag-ledger2/fixture-mut.seg.jsonl
+python mir2-rs/tests/parity/m3/attack_rng_ledger.py diff \
+  E:/tmp/m3bag-ledger2/fixture-base.seg.jsonl E:/tmp/m3bag-ledger2/fixture-mut.seg.jsonl                      # -> 05-...（RED）
+
+## 5) 两侧账本 diff 现在同一工具可跑（当前态：C# 120 击 vs Rust 离线探针 2996 击）
+python mir2-rs/tests/parity/m3/attack_rng_ledger.py diff \
+  E:/tmp/m3bag-ledger2/csharp-oldcmd.seg.jsonl E:/tmp/m3bag-ledger2/rust-single.seg.jsonl --max-diffs 6        # -> 06-...（RED：段数不等；真实同会话 diff 待 Rust 活栈 trace）
+
+## 6) 自检 + 四门禁（隔离 target）
+"C:\Program Files\PowerShell\7\pwsh" -NoProfile -ExecutionPolicy Bypass -File \
+  mir2-rs/tests/parity/m3/run_attack_pair.ps1 -SelfCheckNoStack                                               # -> 11-...（rc=0）
+cd mir2-rs; export CARGO_TARGET_DIR=E:/tmp/m3bag-myfield-target
+cargo fmt --all -- --check                                          # -> 07-... (rc=0)
+cargo clippy --workspace --all-targets --offline -- -D warnings     # -> 08-... (rc=0)
+cargo test --workspace --offline                                    # -> 09-... (81 suites / 668 passed / 0 failed)
+cargo run -p msgcodegen --offline -- --check                        # -> 10-... (604)
+
+## 7) 干净 clone 复验（F-1 口径：不许只在作者 worktree 里验）
+rm -rf E:/tmp/m3bag-ledger-clone
+git clone --local -q <本 worktree> E:/tmp/m3bag-ledger-clone
+cd E:/tmp/m3bag-ledger-clone && git checkout -q <head>
+python tools/evidence-hash/verify_sha256sums.py mir2-rs/tests/parity/m3/evidence-attack-ledger-twoside-20261012 --check-extra
+#   -> GREEN 15/15（首版 11-selfcheck-nostack.txt 混入 2 个 lone CR ⇒ 干净 clone 假 mismatch；本片 LF 归一后重记）

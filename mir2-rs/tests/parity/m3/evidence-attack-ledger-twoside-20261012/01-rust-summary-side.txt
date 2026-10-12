@@ -1,0 +1,4 @@
+# 01) Rust 侧 summary（--side rust；源 = m3cs 决策片离线单线程 trace）
+# 输入: E:/tmp/m3cs-trace-single.tsv
+RNG_LEDGER_SUMMARY E:/tmp/m3cs-trace-single.tsv total=14946 attack_path=14946 noise=0 noise_ratio=0.0000
+RC=0

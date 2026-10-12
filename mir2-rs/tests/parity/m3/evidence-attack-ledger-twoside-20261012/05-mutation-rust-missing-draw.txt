@@ -1,0 +1,16 @@
+# 05) 改坏必红：Rust 段删一次取数（14 行夹具，删 seq=5）
+# 5a) base segments
+{"seg": 1, "draws_total": 3, "draws_attack": 3, "draws_noise": 0, "first_seq": 1, "last_seq": 3, "top_noise": ""}
+{"seg": 2, "draws_total": 5, "draws_attack": 5, "draws_noise": 0, "first_seq": 4, "last_seq": 8, "top_noise": ""}
+{"seg": 3, "draws_total": 5, "draws_attack": 5, "draws_noise": 0, "first_seq": 9, "last_seq": 13, "top_noise": ""}
+{"seg": 4, "draws_total": 1, "draws_attack": 1, "draws_noise": 0, "first_seq": 14, "last_seq": 14, "top_noise": ""}
+# 5b) mut segments
+{"seg": 1, "draws_total": 3, "draws_attack": 3, "draws_noise": 0, "first_seq": 1, "last_seq": 3, "top_noise": ""}
+{"seg": 2, "draws_total": 4, "draws_attack": 4, "draws_noise": 0, "first_seq": 4, "last_seq": 8, "top_noise": ""}
+{"seg": 3, "draws_total": 5, "draws_attack": 5, "draws_noise": 0, "first_seq": 9, "last_seq": 13, "top_noise": ""}
+{"seg": 4, "draws_total": 1, "draws_attack": 1, "draws_noise": 0, "first_seq": 14, "last_seq": 14, "top_noise": ""}
+# 5c) diff base(a) vs mut(b) ⇒ 必红且定位「k=2 b 少抽 1」
+RED: 跨侧抽数账本差异 2 项（定位到「第几步 / 多抽还是少抽」）
+  - k=2 draws_total 不等: a=5 b=4（b 少抽 1）
+  - k=2 draws_attack 不等: a=5 b=4（b 少抽 1）
+RC=1

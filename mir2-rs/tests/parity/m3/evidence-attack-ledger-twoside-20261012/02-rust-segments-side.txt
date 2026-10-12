@@ -1,0 +1,8 @@
+# 02) Rust 侧 segment（--side rust，缺省 marker = crates\world\src\combat.rs:109）
+RNG_LEDGER_SEGMENTS E:/tmp/m3bag-ledger2/rust-single.seg.jsonl marker=crates\world\src\combat.rs:109 segments=2996
+  SEG k=1 total=3 attack=3 noise=0 first_seq=1
+  SEG k=2 total=5 attack=5 noise=0 first_seq=4
+  SEG k=3 total=5 attack=5 noise=0 first_seq=9
+RC=0
+# jsonl 行数:
+2996 E:/tmp/m3bag-ledger2/rust-single.seg.jsonl

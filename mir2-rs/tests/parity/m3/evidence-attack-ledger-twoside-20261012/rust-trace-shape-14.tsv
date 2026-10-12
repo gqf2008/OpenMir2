@@ -1,0 +1,16 @@
+1	INJECT_OK	42	0
+SEED_PROBE 1434747710 302596119 269548474 1122627734 361709742 563913476 1555655117 1101493307
+1	Next(max)	11	3	crates\world\src\combat.rs:109
+2	Next(max)	10	9	crates\world\src\combat.rs:111
+3	Next(max)	40	33	crates\world\src\combat.rs:736
+4	Next(max)	11	3	crates\world\src\combat.rs:109
+5	Next(max)	10	1	crates\world\src\combat.rs:111
+6	Next(max)	40	20	crates\world\src\combat.rs:736
+7	Next(min,max)	6	0	crates\world\src\combat.rs:606
+8	Next(min,max)	5	0	crates\world\src\combat.rs:608
+9	Next(max)	11	5	crates\world\src\combat.rs:109
+10	Next(max)	10	6	crates\world\src\combat.rs:111
+11	Next(max)	40	14	crates\world\src\combat.rs:736
+12	Next(min,max)	6	1	crates\world\src\combat.rs:606
+13	Next(min,max)	6	4	crates\world\src\combat.rs:608
+14	Next(max)	11	7	crates\world\src\combat.rs:109
