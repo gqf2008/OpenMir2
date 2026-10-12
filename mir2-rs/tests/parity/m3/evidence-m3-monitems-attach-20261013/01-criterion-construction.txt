@@ -1,0 +1,37 @@
+$ cargo test --offline -p mir2-data monitems   # (CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target)
+   Compiling mir2-data v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\crates\data)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.99s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m3bag-target\debug\deps\mir2_data-aab6798f5c2fe3d9.exe)
+
+running 6 tests
+test monitems::tests::skips_invalid_rows ... ok
+test monitems::tests::quoted_item_name ... ok
+test monitems::tests::parses_typical_lines ... ok
+test monitems::tests::attach_fails_closed_on_unreadable_file ... ok
+test monitems::tests::attach_reads_from_monitems_subdir ... ok
+test monitems::tests::attach_resets_then_matches_file_existence ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+rc=0
+
+$ cargo test --offline -p game-svr --test monitems_attach
+   Compiling mir2-data v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\crates\data)
+   Compiling mir2-formula v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\crates\formula)
+   Compiling mir2-world-bevy v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\crates\world-bevy)
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\crates\world)
+   Compiling mir2-envir v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\crates\envir)
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.96s
+     Running tests\monitems_attach.rs (E:/tmp/openmir2-m3bag-target\debug\deps\monitems_attach-6ab8bafe741e319c.exe)
+
+running 5 tests
+test real_monster_db_every_monster_matches_its_table_on_disk ... ignored, 需要本机 MySQL + E:/MirServer Envir；显式 --ignored 运行
+test attach_fails_closed_on_unreadable_table ... ok
+test attach_only_reads_from_monitems_subdir ... ok
+test with_monitems_wrapper_is_fail_closed ... ok
+test attach_resets_and_matches_each_table_field_by_field ... ok
+
+test result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+rc=0
