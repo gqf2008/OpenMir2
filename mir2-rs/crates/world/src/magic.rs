@@ -650,3 +650,172 @@ pub fn mag_tamming(rng: &mut impl RandomSource, inp: &TammingInput) -> TammingOu
     }
     out
 }
+
+// ---- DoSpell 共享尾 + 技能熟练度/升级（第九片真身向量）----------------------------------------
+//
+// 第五片把 108 行魔表按 `DoSpell` 控制流分成 6 类；其中两类**没有任何效果体**：
+// - `no_effect_case`（6 行）：case 体是 `break`（43 `SKILL_43`）或只置 `boTrain = true`
+//   （49 `SKILL_49` / 51 `SKILL_51` / 52 `SKILL_52` / 53 `SKILL_53` / 54 `SKILL_54`）；
+// - `no_switch_case`（20 行）：`DoSpell` 的 `switch` 里根本没有这些魔号的 case。
+// 它们**唯一的运行时可观测行为**都在 `DoSpell` 的**共享尾**（`MagicManager.cs:644-670`）：
+//   ① `if (boSpellFail) return false;`（`:644-647`）
+//   ② `if (boSpellFire) SendRefMsg(RM_MAGICFIRE, …)`（`:648-658`）
+//   ③ `if (userMagic.Level < 3 && boTrain) { if (TrainLevel[Level] <= Abil.Level) { TrainSkill(…, Random(3)+1);
+//        if (!CheckMagicLevelUp(…)) SendSelfDelayMsg(RM_MAGIC_LVEXP, …); } }`（`:659-669`）
+//   ④ `return true;`（`:670`）
+//
+// 本片把这套尾逻辑与它调用的两个**独立可反射直调**的真身方法——`PlayObject.TrainSkill`
+// （`PlayObject.cs:4393-4400`）与 `PlayObject.CheckMagicLevelUp`（`PlayObject.cs:5198-5226`）——
+// 做成可逐字段对拍的实现；攻击路径的同类入口 `PlayObject.CheckSkillProficiency`
+// （`PlayObject.Attack.cs:200-213`）也一并覆盖。向量来源 `mir2-rs/tests/parity/m3/spell-tail-probe`
+// （真身反射直调，记录 `System.Random` 取数账本）。
+
+/// `PlayObject.TrainSkill`（`src/M2Server/Player/PlayObject.cs:4393-4400`）：
+/// `if (FastTrain) nTranPoint *= 3; userMagic.TranPoint += nTranPoint;`。
+///
+/// 返回**本次实际增加**的熟练点（`FastTrain` 时 ×3）；调用方负责累加到 `TranPoint`。
+pub fn train_skill(fast_train: bool, n_tran_point: i32) -> i32 {
+    if fast_train {
+        n_tran_point * 3
+    } else {
+        n_tran_point
+    }
+}
+
+/// `PlayObject.CheckMagicLevelUp`（`PlayObject.cs:5198-5226`）读/写的标量子集。
+///
+/// 字段对应 oracle 同名属性：`MagicList[i].Level` / `.TranPoint` / `.Magic.{MagicId,TrainLv,TrainLevel,MaxTrain}`。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SkillTrainState {
+    pub magic_id: u16,
+    pub level: u8,
+    pub tran_point: i32,
+    pub train_lv: u8,
+    /// `MagicInfo.TrainLevel[0..4]`（学该级所需角色等级）。
+    pub train_level: [u8; 4],
+    /// `MagicInfo.MaxTrain[0..4]`（该级升下一级所需熟练点）。
+    pub max_train: [i32; 4],
+}
+
+/// `PlayObject.CheckMagicLevelUp`（`PlayObject.cs:5198-5226`）的返回值与副作用。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MagicLevelUpOutcome {
+    /// oracle 的 `bool result`（是否发生了升级）。
+    pub result: bool,
+    /// `CheckSeeHealGauge`（`:5231-5240`）：`MagicId == 28 && Level >= 2` ⇒ `AbilSeeHealGauge = true`。
+    pub see_heal_gauge: bool,
+    /// 是否发出了 `RM_MAGIC_LVEXP` 升级帧（`:5216 UpdateDelayMsg`）。
+    pub levelup_msg: bool,
+}
+
+/// `PlayObject.CheckMagicLevelUp`（`src/M2Server/Player/PlayObject.cs:5198-5226`）。
+///
+/// 逐行：
+/// 1. `nLevel = (Level < 4 && TrainLv >= Level) ? Level : 0`（`:5202-5209`）；
+/// 2. `if (TrainLv > Level && MaxTrain[nLevel] <= TranPoint)` ⇒
+///    `TranPoint -= MaxTrain[nLevel]; Level++; UpdateDelayMsg(RM_MAGIC_LVEXP, …); CheckSeeHealGauge(…)`；`result = true`（`:5210-5224`）。
+///
+/// **死代码**：`:5212` 内层 `if (TrainLv > Level)` 在外层已成立时恒为真 ⇒ `:5219-5222` 的
+/// `else { TranPoint = MaxTrain[nLevel]; }` **永不执行**（连 bug 一起搬：保留结构但结果不变）。
+pub fn check_magic_level_up(state: &mut SkillTrainState) -> MagicLevelUpOutcome {
+    let mut out = MagicLevelUpOutcome::default();
+    let n_level = if state.level < 4 && state.train_lv >= state.level {
+        state.level
+    } else {
+        0
+    };
+    if state.train_lv > state.level && state.max_train[n_level as usize] <= state.tran_point {
+        // oracle :5214-5215：先扣点、再升级；`Level`/`TranPoint` 的读取都在此之后。
+        state.tran_point -= state.max_train[n_level as usize];
+        state.level += 1;
+        out.levelup_msg = true;
+        // oracle :5217 `CheckSeeHealGauge`（只对 28 心灵启示、且 Level >= 2 置真）。
+        out.see_heal_gauge = state.magic_id == 28 && state.level >= 2;
+        out.result = true;
+    }
+    out
+}
+
+/// `PlayObject.CheckSkillProficiency`（`src/M2Server/Player/PlayObject.Attack.cs:200-213`）的返回/副作用。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SkillProficiencyOutcome {
+    /// 是否真的调了 `TrainSkill`（= 通过 `Level < 3 && TrainLevel[Level] <= Abil.Level` 门）。
+    pub trained: bool,
+    /// `CheckMagicLevelUp` 的 `result`。
+    pub level_up: bool,
+    /// 是否发出了 `RM_MAGIC_LVEXP` 帧（成功走 `CheckMagicLevelUp` 内的 `UpdateDelayMsg`；
+    /// 失败由调用方 `if (!result) SendSelfDelayMsg(…)` 补发，延迟不同但**内容都是调用后的 `Level`/`TranPoint`**）。
+    pub levelup_msg: bool,
+    pub see_heal_gauge: bool,
+}
+
+/// `PlayObject.CheckSkillProficiency`（`src/M2Server/Player/PlayObject.Attack.cs:200-213`）：
+/// 攻击路径的熟练度入口（与 DoSpell 尾部同一段逻辑，差别在**调用方先抽 `Random(3)+1`**）。
+///
+/// `n_tran_point` 是调用方已抽好的熟练点（`AttackSuccess` 的 `Random(3)+1` 或常量 `1`）。
+pub fn check_skill_proficiency(
+    fast_train: bool,
+    abil_level: u8,
+    n_tran_point: i32,
+    state: &mut SkillTrainState,
+) -> SkillProficiencyOutcome {
+    let mut out = SkillProficiencyOutcome::default();
+    if state.level < 3 && state.train_level[state.level as usize] <= abil_level {
+        state.tran_point += train_skill(fast_train, n_tran_point);
+        out.trained = true;
+        let up = check_magic_level_up(state);
+        out.level_up = up.result;
+        out.see_heal_gauge = up.see_heal_gauge;
+        out.levelup_msg = up.levelup_msg || !up.result;
+    }
+    out
+}
+
+/// `MagicManager.DoSpell` 共享尾（`src/M2Server/Magic/MagicManager.cs:644-670`）的返回/副作用。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DoSpellTailOutcome {
+    /// oracle 的返回值：`boSpellFail` ⇒ `false`，否则 `true`。
+    pub returned: bool,
+    /// `boSpellFire` ⇒ 发一帧 `RM_MAGICFIRE`。
+    pub magic_fire: bool,
+    /// `boTrain` 门内的熟练度结算结果。
+    pub train: SkillProficiencyOutcome,
+}
+
+/// `MagicManager.DoSpell` 共享尾（`src/M2Server/Magic/MagicManager.cs:644-670`）。
+///
+/// 取数顺序（**与攻击路径不同，勿混**）：先判 `:659` 的 `Level < 3 && boTrain`、再判
+/// `:661` 的 `TrainLevel[Level] <= Abil.Level`，**两者都过才**在 `:663` 抽 `Random(3)+1`。
+/// ⇒ 门未过时**不取数**。返回 `returned=false` 等价于 oracle `:646 return false`。
+///
+/// 本函数是**内联块**（不是独立方法）⇒ 只 source-cited（锚点见探针 `VerifyAnchors`），
+/// 不冒充真身向量。
+pub fn do_spell_tail(
+    bo_spell_fail: bool,
+    bo_spell_fire: bool,
+    bo_train: bool,
+    fast_train: bool,
+    abil_level: u8,
+    rng: &mut impl RandomSource,
+    state: &mut SkillTrainState,
+) -> DoSpellTailOutcome {
+    let mut out = DoSpellTailOutcome::default();
+    if bo_spell_fail {
+        // oracle :644-647
+        return out;
+    }
+    out.returned = true;
+    // oracle :648-658
+    out.magic_fire = bo_spell_fire;
+    if bo_train && state.level < 3 && state.train_level[state.level as usize] <= abil_level {
+        // oracle :663 `Random(3) + 1`（门内才抽）。
+        let n_tran_point = rng.random_below(3) + 1;
+        state.tran_point += train_skill(fast_train, n_tran_point);
+        out.train.trained = true;
+        let up = check_magic_level_up(state);
+        out.train.level_up = up.result;
+        out.train.see_heal_gauge = up.see_heal_gauge;
+        out.train.levelup_msg = up.levelup_msg || !up.result;
+    }
+    out
+}

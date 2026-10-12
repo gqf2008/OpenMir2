@@ -1,0 +1,604 @@
+{
+  "generated_by": "mir2-rs/tests/parity/m3/spell-tail-probe",
+  "oracle": {
+    "train_skill": "M2Server.Player.PlayObject.TrainSkill (public, \u76F4\u8C03)",
+    "check_magic_level_up": "M2Server.Player.PlayObject.CheckMagicLevelUp (public, \u76F4\u8C03)",
+    "check_skill_proficiency": "M2Server.Player.PlayObject.CheckSkillProficiency (private, \u53CD\u5C04\u8C03\u7528)",
+    "source": "src/M2Server/Player/PlayObject.cs:4393-4400 / :5198-5226\uFF1BPlayObject.Attack.cs:200-213\uFF1BMagicManager.cs:644-670",
+    "rng": "OpenMir2.RandomNumber.GetInstance().Random(3)\uFF08\u79C1\u6709\u9759\u6001 System.Random \u53CD\u5C04\u8986\u76D6\u4E3A RecordingRandom(seed)\uFF09",
+    "note": "DoSpell \u5171\u4EAB\u5C3E\u662F\u5185\u8054\u5757 \u21D2 \u53EA source-cited\uFF08\u951A\u70B9\u89C1 VerifyAnchors\uFF09\uFF0C\u672C\u63A2\u9488\u4E0D\u5192\u5145\u5176\u771F\u8EAB\u5411\u91CF\u3002"
+  },
+  "seed": 20261012,
+  "train_cases": [
+    {
+      "name": "train_plain_1",
+      "fast_train": false,
+      "n_tran_point": 1,
+      "init_tp": 100,
+      "out_tp": 101
+    },
+    {
+      "name": "train_plain_3",
+      "fast_train": false,
+      "n_tran_point": 3,
+      "init_tp": 100,
+      "out_tp": 103
+    },
+    {
+      "name": "train_fast_1",
+      "fast_train": true,
+      "n_tran_point": 1,
+      "init_tp": 100,
+      "out_tp": 103
+    },
+    {
+      "name": "train_fast_3",
+      "fast_train": true,
+      "n_tran_point": 3,
+      "init_tp": 100,
+      "out_tp": 109
+    },
+    {
+      "name": "train_fast_0",
+      "fast_train": true,
+      "n_tran_point": 0,
+      "init_tp": 100,
+      "out_tp": 100
+    }
+  ],
+  "chklv_cases": [
+    {
+      "name": "chklv_below",
+      "magic_id": 1,
+      "train_lv": 3,
+      "max_train": [
+        100,
+        200,
+        300,
+        400
+      ],
+      "train_level": "BwkLAA==",
+      "init_level": 0,
+      "init_tp": 99,
+      "out_result": false,
+      "out_level": 0,
+      "out_tp": 99,
+      "see_heal_gauge": false,
+      "msg_count": 0,
+      "msg": ""
+    },
+    {
+      "name": "chklv_exact_lv0",
+      "magic_id": 1,
+      "train_lv": 3,
+      "max_train": [
+        100,
+        200,
+        300,
+        400
+      ],
+      "train_level": "BwkLAA==",
+      "init_level": 0,
+      "init_tp": 100,
+      "out_result": true,
+      "out_level": 1,
+      "out_tp": 0,
+      "see_heal_gauge": false,
+      "msg_count": 1,
+      "msg": "10123:1:1:0"
+    },
+    {
+      "name": "chklv_lv1_partial",
+      "magic_id": 1,
+      "train_lv": 3,
+      "max_train": [
+        100,
+        200,
+        300,
+        400
+      ],
+      "train_level": "BwkLAA==",
+      "init_level": 1,
+      "init_tp": 250,
+      "out_result": true,
+      "out_level": 2,
+      "out_tp": 50,
+      "see_heal_gauge": false,
+      "msg_count": 1,
+      "msg": "10123:1:2:50"
+    },
+    {
+      "name": "chklv_one_level_only",
+      "magic_id": 1,
+      "train_lv": 3,
+      "max_train": [
+        100,
+        200,
+        300,
+        400
+      ],
+      "train_level": "BwkLAA==",
+      "init_level": 0,
+      "init_tp": 500,
+      "out_result": true,
+      "out_level": 1,
+      "out_tp": 400,
+      "see_heal_gauge": false,
+      "msg_count": 1,
+      "msg": "10123:1:1:400"
+    },
+    {
+      "name": "chklv_maxlevel3",
+      "magic_id": 1,
+      "train_lv": 3,
+      "max_train": [
+        100,
+        200,
+        300,
+        400
+      ],
+      "train_level": "BwkLAA==",
+      "init_level": 3,
+      "init_tp": 9999,
+      "out_result": false,
+      "out_level": 3,
+      "out_tp": 9999,
+      "see_heal_gauge": false,
+      "msg_count": 0,
+      "msg": ""
+    },
+    {
+      "name": "chklv_level4_gate",
+      "magic_id": 1,
+      "train_lv": 3,
+      "max_train": [
+        100,
+        200,
+        300,
+        400
+      ],
+      "train_level": "BwkLAA==",
+      "init_level": 4,
+      "init_tp": 9999,
+      "out_result": false,
+      "out_level": 4,
+      "out_tp": 9999,
+      "see_heal_gauge": false,
+      "msg_count": 0,
+      "msg": ""
+    },
+    {
+      "name": "chklv_trainlv_lt_level",
+      "magic_id": 50,
+      "train_lv": 1,
+      "max_train": [
+        80,
+        160,
+        240,
+        320
+      ],
+      "train_level": "BQAAAA==",
+      "init_level": 2,
+      "init_tp": 9999,
+      "out_result": false,
+      "out_level": 2,
+      "out_tp": 9999,
+      "see_heal_gauge": false,
+      "msg_count": 0,
+      "msg": ""
+    },
+    {
+      "name": "chklv_showhp_lv1_to_2",
+      "magic_id": 28,
+      "train_lv": 3,
+      "max_train": [
+        100,
+        200,
+        300,
+        400
+      ],
+      "train_level": "BwkLAA==",
+      "init_level": 1,
+      "init_tp": 200,
+      "out_result": true,
+      "out_level": 2,
+      "out_tp": 0,
+      "see_heal_gauge": true,
+      "msg_count": 1,
+      "msg": "10123:28:2:0"
+    },
+    {
+      "name": "chklv_showhp_lv0_to_1",
+      "magic_id": 28,
+      "train_lv": 3,
+      "max_train": [
+        100,
+        200,
+        300,
+        400
+      ],
+      "train_level": "BwkLAA==",
+      "init_level": 0,
+      "init_tp": 100,
+      "out_result": true,
+      "out_level": 1,
+      "out_tp": 0,
+      "see_heal_gauge": false,
+      "msg_count": 1,
+      "msg": "10123:28:1:0"
+    }
+  ],
+  "prof_cases": [
+    {
+      "name": "prof_gate_level3",
+      "fast_train": false,
+      "abil_level": 40,
+      "magic_id": 1,
+      "train_lv": 3,
+      "max_train": [
+        100,
+        200,
+        300,
+        400
+      ],
+      "train_level": "BwkLAA==",
+      "init_level": 3,
+      "init_tp": 0,
+      "n_tran_point": 0,
+      "out_level": 3,
+      "out_tp": 0,
+      "see_heal_gauge": false,
+      "msg_count": 0,
+      "msg": "",
+      "draws": ""
+    },
+    {
+      "name": "prof_gate_charlevel_low",
+      "fast_train": false,
+      "abil_level": 6,
+      "magic_id": 1,
+      "train_lv": 3,
+      "max_train": [
+        100,
+        200,
+        300,
+        400
+      ],
+      "train_level": "BwkLAA==",
+      "init_level": 0,
+      "init_tp": 0,
+      "n_tran_point": 3,
+      "out_level": 0,
+      "out_tp": 0,
+      "see_heal_gauge": false,
+      "msg_count": 0,
+      "msg": "",
+      "draws": "1|Next(max)|3|2|max"
+    },
+    {
+      "name": "prof_train_no_levelup",
+      "fast_train": false,
+      "abil_level": 40,
+      "magic_id": 1,
+      "train_lv": 3,
+      "max_train": [
+        100,
+        200,
+        300,
+        400
+      ],
+      "train_level": "BwkLAA==",
+      "init_level": 0,
+      "init_tp": 0,
+      "n_tran_point": 3,
+      "out_level": 0,
+      "out_tp": 3,
+      "see_heal_gauge": false,
+      "msg_count": 1,
+      "msg": "10123:1:0:3",
+      "draws": "1|Next(max)|3|2|max"
+    },
+    {
+      "name": "prof_train_levelup",
+      "fast_train": false,
+      "abil_level": 40,
+      "magic_id": 1,
+      "train_lv": 3,
+      "max_train": [
+        100,
+        200,
+        300,
+        400
+      ],
+      "train_level": "BwkLAA==",
+      "init_level": 0,
+      "init_tp": 99,
+      "n_tran_point": 3,
+      "out_level": 1,
+      "out_tp": 2,
+      "see_heal_gauge": false,
+      "msg_count": 1,
+      "msg": "10123:1:1:2",
+      "draws": "1|Next(max)|3|2|max"
+    },
+    {
+      "name": "prof_fast_train_levelup",
+      "fast_train": true,
+      "abil_level": 40,
+      "magic_id": 1,
+      "train_lv": 3,
+      "max_train": [
+        100,
+        200,
+        300,
+        400
+      ],
+      "train_level": "BwkLAA==",
+      "init_level": 0,
+      "init_tp": 97,
+      "n_tran_point": 3,
+      "out_level": 1,
+      "out_tp": 6,
+      "see_heal_gauge": false,
+      "msg_count": 1,
+      "msg": "10123:1:1:6",
+      "draws": "1|Next(max)|3|2|max"
+    },
+    {
+      "name": "prof_showhp_see_gauge",
+      "fast_train": false,
+      "abil_level": 40,
+      "magic_id": 28,
+      "train_lv": 3,
+      "max_train": [
+        100,
+        200,
+        300,
+        400
+      ],
+      "train_level": "BwkLAA==",
+      "init_level": 1,
+      "init_tp": 199,
+      "n_tran_point": 2,
+      "out_level": 2,
+      "out_tp": 1,
+      "see_heal_gauge": true,
+      "msg_count": 1,
+      "msg": "10123:28:2:1",
+      "draws": "1|Next(max)|3|1|max"
+    },
+    {
+      "name": "prof_lowtrainlv",
+      "fast_train": false,
+      "abil_level": 40,
+      "magic_id": 50,
+      "train_lv": 1,
+      "max_train": [
+        80,
+        160,
+        240,
+        320
+      ],
+      "train_level": "BQAAAA==",
+      "init_level": 1,
+      "init_tp": 79,
+      "n_tran_point": 1,
+      "out_level": 1,
+      "out_tp": 80,
+      "see_heal_gauge": false,
+      "msg_count": 1,
+      "msg": "10123:50:1:80",
+      "draws": "1|Next(max)|3|0|max"
+    }
+  ],
+  "reach_registry": [
+    {
+      "row_index": 42,
+      "magic_id": 43,
+      "name": "\u5F00\u5929\u65A9",
+      "dospell_class": "no_effect_case",
+      "tail_effect": "case_break_no_train",
+      "anchor": "MagicManager.cs:555-556\uFF08case SKILL_43: break;\uFF09"
+    },
+    {
+      "row_index": 48,
+      "magic_id": 49,
+      "name": "\u4E91\u5BC2\u672F",
+      "dospell_class": "no_effect_case",
+      "tail_effect": "case_train",
+      "anchor": "MagicManager.cs:607-609\uFF08case SKILL_49: boTrain = true; break;\uFF09"
+    },
+    {
+      "row_index": 50,
+      "magic_id": 51,
+      "name": "\u6708\u9B42\u98CE\u66B4",
+      "dospell_class": "no_effect_case",
+      "tail_effect": "case_train",
+      "anchor": "MagicManager.cs:631-633\uFF08case SKILL_51: boTrain = true; break;\uFF09"
+    },
+    {
+      "row_index": 51,
+      "magic_id": 52,
+      "name": "\u795E\u4E4B\u8BC5\u5492",
+      "dospell_class": "no_effect_case",
+      "tail_effect": "case_train",
+      "anchor": "MagicManager.cs:634-636\uFF08case SKILL_52: boTrain = true; break;\uFF09"
+    },
+    {
+      "row_index": 52,
+      "magic_id": 53,
+      "name": "\u55DC\u8840\u9B54\u5492(\u4FDD\u7559)",
+      "dospell_class": "no_effect_case",
+      "tail_effect": "case_train",
+      "anchor": "MagicManager.cs:637-639\uFF08case SKILL_53: boTrain = true; break;\uFF09"
+    },
+    {
+      "row_index": 53,
+      "magic_id": 54,
+      "name": "\u53EC\u5996\u964D\u9B54",
+      "dospell_class": "no_effect_case",
+      "tail_effect": "case_train",
+      "anchor": "MagicManager.cs:640-642\uFF08case SKILL_54: boTrain = true; break;\uFF09"
+    },
+    {
+      "row_index": 54,
+      "magic_id": 55,
+      "name": "\u5438\u661F\u72C2\u6740",
+      "dospell_class": "no_switch_case",
+      "tail_effect": "no_case_no_train",
+      "anchor": "MagicManager.cs:172-641 \u7684 switch \u65E0\u6B64\u9B54\u53F7 case\uFF08\u21D2 :648 RM_MAGICFIRE\uFF0C\u65E0\u8BAD\u7EC3\uFF09"
+    },
+    {
+      "row_index": 55,
+      "magic_id": 56,
+      "name": "\u5F02\u5F62\u6362\u4F4D",
+      "dospell_class": "no_switch_case",
+      "tail_effect": "no_case_no_train",
+      "anchor": "MagicManager.cs:172-641 \u7684 switch \u65E0\u6B64\u9B54\u53F7 case\uFF08\u21D2 :648 RM_MAGICFIRE\uFF0C\u65E0\u8BAD\u7EC3\uFF09"
+    },
+    {
+      "row_index": 56,
+      "magic_id": 57,
+      "name": "\u56DE\u751F\u672F",
+      "dospell_class": "no_switch_case",
+      "tail_effect": "no_case_no_train",
+      "anchor": "MagicManager.cs:172-641 \u7684 switch \u65E0\u6B64\u9B54\u53F7 case\uFF08\u21D2 :648 RM_MAGICFIRE\uFF0C\u65E0\u8BAD\u7EC3\uFF09"
+    },
+    {
+      "row_index": 57,
+      "magic_id": 58,
+      "name": "\u6D41\u661F\u706B\u96E8",
+      "dospell_class": "no_switch_case",
+      "tail_effect": "no_case_no_train",
+      "anchor": "MagicManager.cs:172-641 \u7684 switch \u65E0\u6B64\u9B54\u53F7 case\uFF08\u21D2 :648 RM_MAGICFIRE\uFF0C\u65E0\u8BAD\u7EC3\uFF09"
+    },
+    {
+      "row_index": 58,
+      "magic_id": 59,
+      "name": "\u566C\u8840\u672F",
+      "dospell_class": "no_switch_case",
+      "tail_effect": "no_case_no_train",
+      "anchor": "MagicManager.cs:172-641 \u7684 switch \u65E0\u6B64\u9B54\u53F7 case\uFF08\u21D2 :648 RM_MAGICFIRE\uFF0C\u65E0\u8BAD\u7EC3\uFF09"
+    },
+    {
+      "row_index": 59,
+      "magic_id": 66,
+      "name": "\u56DB\u7EA7\u9B54\u6CD5\u76FE",
+      "dospell_class": "no_switch_case",
+      "tail_effect": "no_case_no_train",
+      "anchor": "MagicManager.cs:172-641 \u7684 switch \u65E0\u6B64\u9B54\u53F7 case\uFF08\u21D2 :648 RM_MAGICFIRE\uFF0C\u65E0\u8BAD\u7EC3\uFF09"
+    },
+    {
+      "row_index": 60,
+      "magic_id": 66,
+      "name": "\u767D\u65E5\u95E8\u56DB\u7EA7\u6CD5\u76FE",
+      "dospell_class": "no_switch_case",
+      "tail_effect": "no_case_no_train",
+      "anchor": "MagicManager.cs:172-641 \u7684 switch \u65E0\u6B64\u9B54\u53F7 case\uFF08\u21D2 :648 RM_MAGICFIRE\uFF0C\u65E0\u8BAD\u7EC3\uFF09"
+    },
+    {
+      "row_index": 61,
+      "magic_id": 67,
+      "name": "\u5148\u5929\u5143\u529B",
+      "dospell_class": "no_switch_case",
+      "tail_effect": "no_case_no_train",
+      "anchor": "MagicManager.cs:172-641 \u7684 switch \u65E0\u6B64\u9B54\u53F7 case\uFF08\u21D2 :648 RM_MAGICFIRE\uFF0C\u65E0\u8BAD\u7EC3\uFF09"
+    },
+    {
+      "row_index": 62,
+      "magic_id": 68,
+      "name": "\u9152\u6C14\u62A4\u4F53",
+      "dospell_class": "no_switch_case",
+      "tail_effect": "no_case_no_train",
+      "anchor": "MagicManager.cs:172-641 \u7684 switch \u65E0\u6B64\u9B54\u53F7 case\uFF08\u21D2 :648 RM_MAGICFIRE\uFF0C\u65E0\u8BAD\u7EC3\uFF09"
+    },
+    {
+      "row_index": 63,
+      "magic_id": 69,
+      "name": "\u501A\u5929\u8F9F\u5730",
+      "dospell_class": "no_switch_case",
+      "tail_effect": "no_case_no_train",
+      "anchor": "MagicManager.cs:172-641 \u7684 switch \u65E0\u6B64\u9B54\u53F7 case\uFF08\u21D2 :648 RM_MAGICFIRE\uFF0C\u65E0\u8BAD\u7EC3\uFF09"
+    },
+    {
+      "row_index": 64,
+      "magic_id": 71,
+      "name": "\u56DB\u7EA7\u53EC\u5524\u795E\u517D",
+      "dospell_class": "no_switch_case",
+      "tail_effect": "no_case_no_train",
+      "anchor": "MagicManager.cs:172-641 \u7684 switch \u65E0\u6B64\u9B54\u53F7 case\uFF08\u21D2 :648 RM_MAGICFIRE\uFF0C\u65E0\u8BAD\u7EC3\uFF09"
+    },
+    {
+      "row_index": 65,
+      "magic_id": 71,
+      "name": "\u56DB\u7EA7\u82F1\u96C4\u795E\u517D",
+      "dospell_class": "no_switch_case",
+      "tail_effect": "no_case_no_train",
+      "anchor": "MagicManager.cs:172-641 \u7684 switch \u65E0\u6B64\u9B54\u53F7 case\uFF08\u21D2 :648 RM_MAGICFIRE\uFF0C\u65E0\u8BAD\u7EC3\uFF09"
+    },
+    {
+      "row_index": 66,
+      "magic_id": 72,
+      "name": "\u53EC\u5524\u6708\u7075",
+      "dospell_class": "no_switch_case",
+      "tail_effect": "no_case_no_train",
+      "anchor": "MagicManager.cs:172-641 \u7684 switch \u65E0\u6B64\u9B54\u53F7 case\uFF08\u21D2 :648 RM_MAGICFIRE\uFF0C\u65E0\u8BAD\u7EC3\uFF09"
+    },
+    {
+      "row_index": 67,
+      "magic_id": 74,
+      "name": "\u9010\u65E5\u5251\u6CD5",
+      "dospell_class": "no_switch_case",
+      "tail_effect": "no_case_no_train",
+      "anchor": "MagicManager.cs:172-641 \u7684 switch \u65E0\u6B64\u9B54\u53F7 case\uFF08\u21D2 :648 RM_MAGICFIRE\uFF0C\u65E0\u8BAD\u7EC3\uFF09"
+    },
+    {
+      "row_index": 68,
+      "magic_id": 75,
+      "name": "\u62A4\u4F53\u795E\u76FE",
+      "dospell_class": "no_switch_case",
+      "tail_effect": "no_case_no_train",
+      "anchor": "MagicManager.cs:172-641 \u7684 switch \u65E0\u6B64\u9B54\u53F7 case\uFF08\u21D2 :648 RM_MAGICFIRE\uFF0C\u65E0\u8BAD\u7EC3\uFF09"
+    },
+    {
+      "row_index": 69,
+      "magic_id": 76,
+      "name": "\u4E09\u7EDD\u6740",
+      "dospell_class": "no_switch_case",
+      "tail_effect": "no_case_no_train",
+      "anchor": "MagicManager.cs:172-641 \u7684 switch \u65E0\u6B64\u9B54\u53F7 case\uFF08\u21D2 :648 RM_MAGICFIRE\uFF0C\u65E0\u8BAD\u7EC3\uFF09"
+    },
+    {
+      "row_index": 70,
+      "magic_id": 77,
+      "name": "\u53CC\u9F99\u7834",
+      "dospell_class": "no_switch_case",
+      "tail_effect": "no_case_no_train",
+      "anchor": "MagicManager.cs:172-641 \u7684 switch \u65E0\u6B64\u9B54\u53F7 case\uFF08\u21D2 :648 RM_MAGICFIRE\uFF0C\u65E0\u8BAD\u7EC3\uFF09"
+    },
+    {
+      "row_index": 71,
+      "magic_id": 78,
+      "name": "\u864E\u5578\u8BC0",
+      "dospell_class": "no_switch_case",
+      "tail_effect": "no_case_no_train",
+      "anchor": "MagicManager.cs:172-641 \u7684 switch \u65E0\u6B64\u9B54\u53F7 case\uFF08\u21D2 :648 RM_MAGICFIRE\uFF0C\u65E0\u8BAD\u7EC3\uFF09"
+    },
+    {
+      "row_index": 72,
+      "magic_id": 79,
+      "name": "\u8FFD\u5FC3\u523A",
+      "dospell_class": "no_switch_case",
+      "tail_effect": "no_case_no_train",
+      "anchor": "MagicManager.cs:172-641 \u7684 switch \u65E0\u6B64\u9B54\u53F7 case\uFF08\u21D2 :648 RM_MAGICFIRE\uFF0C\u65E0\u8BAD\u7EC3\uFF09"
+    },
+    {
+      "row_index": 73,
+      "magic_id": 80,
+      "name": "\u51E4\u821E\u796D",
+      "dospell_class": "no_switch_case",
+      "tail_effect": "no_case_no_train",
+      "anchor": "MagicManager.cs:172-641 \u7684 switch \u65E0\u6B64\u9B54\u53F7 case\uFF08\u21D2 :648 RM_MAGICFIRE\uFF0C\u65E0\u8BAD\u7EC3\uFF09"
+    }
+  ]
+}

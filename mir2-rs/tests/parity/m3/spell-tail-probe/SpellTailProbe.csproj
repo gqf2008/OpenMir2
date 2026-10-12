@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>spell-tail-probe</AssemblyName>
+    <RootNamespace>SpellTailProbe</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    M3 战斗/技能线（卡 openmir2-m3-combat-skills-align）第九片：
+    DoD③ 的**第四轴**——`DoSpell` 效果体之后的**共享尾**（施法帧 + 技能熟练度/升级）。
+
+    `skill-probe` 把 `no_effect_case`（6 行：43 `break`；49/51/52/53/54 只置 boTrain）与
+    `no_switch_case`（20 行：`DoSpell` switch 无此魔号 case）登记为「效果体为空」。它们**唯一的
+    运行时可观测行为**都在共享尾（`src/M2Server/Magic/MagicManager.cs:644-670`）里，尾逻辑调用
+    两个**可独立反射直调**的真身方法：
+
+      - `PlayObject.TrainSkill`（`src/M2Server/Player/PlayObject.cs:4393-4400`，public）
+      - `PlayObject.CheckMagicLevelUp`（`src/M2Server/Player/PlayObject.cs:5198-5226`，public）
+      - `PlayObject.CheckSkillProficiency`（`src/M2Server/Player/PlayObject.Attack.cs:200-213`，private 反射）
+
+    种子注入 + 取数账本（`RecordingRandom : System.Random`，`ReplayRandom` 行式格式），产出
+      mir2-rs/tests/parity/m3/spell-tail-probe/vectors/spell_tail_vectors.{json,tsv}
+        （`train` = TrainSkill；`chklv` = CheckMagicLevelUp；`prof` = CheckSkillProficiency；
+          `reach` = no_effect_case/no_switch_case 26 行的尾部行为登记）
+
+    只读：不连 MySQL、不写任何现网文件、不发起任何 socket、不起栈、不占端口。
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\..\src\M2Server\M2Server.csproj" />
+  </ItemGroup>
+
+</Project>
