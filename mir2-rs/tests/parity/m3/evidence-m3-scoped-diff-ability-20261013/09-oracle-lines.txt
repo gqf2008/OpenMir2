@@ -1,0 +1,35 @@
+# oracle 行号：characters_ablity 各列的写者，以及攻方 Hp 变化点的候选路径
+
+## A. 存档链（写 characters_ablity 的完整链路）
+ 1) src/Storeages/DBSrv.Storage.MySQL/PlayDataStorage.Save.cs:60  SaveAblity(context, playerId, humanRcd.Data.Abil)
+ 2) src/Storeages/DBSrv.Storage.MySQL/PlayDataStorage.Save.cs:139-169 SaveAblity -> UPDATE characters_ablity SET ..., ModifyTime=now() WHERE PlayerId=@PlayerId
+    - 关键 bug（oracle 原文）: Save.cs:146  command.Parameters.AddWithValue("@Ac", Abil.Level);   // @Ac 绑的是 Level 不是 AC
+      ⇒ Ac 落库 = Level = 255（本证据两侧都是 255，一致）
+ 3) src/DBSrv/Services/Impl/DataService.cs:207 SaveHumanRcd(queryId,nRecog,sMsg,connectionId)（DB_SAVEHUMANRCD(101) 的服务端入口，:136-137 派发）
+ 4) src/GameSrv/Word/WorldServer.cs:1077-1091 WorldServer.SaveHumanRcd -> MakeSaveRcd + FrontEngine.AddToSaveRcdList
+ 5) src/GameSrv/Word/WorldServer.cs:1231-1360 MakeSaveRcd；其中 HP 取值 WorldServer.cs:1247（WAbil.HP）
+ 6) 触发点（断线）: src/GameSrv/Word/WorldServer.cs:713（ProcessPlayObjectData 的 Ghost 支）-> SaveHumanRcd；
+    Ghost 由 src/M2Server/Player/PlayObject.Message.cs:369-373（BoEmergencyClose/BoKickFlag/BoSoftClose 支）-> MakeGhost 置起
+ 7) 周期存档（另一触发）: WorldServer.cs:698-703（SaveHumanRcdTime 缺省 10 分钟，本 run 远不到）
+
+## B. Rust 侧对应
+ 1) mir2-rs/bins/game-svr/src/main.rs:1592-1637 save_human_rcd（发 DB_SAVEHUMANRCD；注释即 oracle 行号）
+ 2) mir2-rs/bins/game-svr/src/record.rs:843 起 encode_save_character_data（MakeSaveRcd 逐字段）
+ 3) 断线调用点：main.rs 的断线清世界前调用 save_human_rcd（见 16-*.txt 的 Rust 日志两行「存档请求已发」）
+ 4) 周期存档：main.rs:2359-2440 drain_periodic_save
+
+## C. 攻方 Hp 的 1 点差：候选写入路径（本轮未在 C# 侧插桩定位，需窗口）
+ oracle 里能改 WAbil.HP 的路径（grep WAbil.HP）只有少数几条，逐个排除：
+ - BaseObject.cs:775-822 DamageHealth(nDamage)：唯一的通用扣血；调用者如下
+ - BaseObject.Base.cs:829-857 StruckDamage -> DamageHealth（被击）
+ - ActorBuffSystem.cs:225-258 绿毒 buff -> DamageHealth(GreenPoisoningPoint+1)（每 PosionDecHealthTime 一次）
+ - PlayObject.Attack.cs:231-238 吸血（SuckupEnemyHealthRate>0）-> DamageHealth((ushort)-n20)（是加血分支）
+ - PlayObject.Message.cs:569-578 地图 DECHP（需 MapFlag.boDECHP；0137 的 MapInfo 只有 FIGHT，且 Envir 脚本无 DECHP/SETMAPMODE）⇒ 排除
+ - PlayObject.Message.cs:597-632 饥饿 HungerDecHP（部署 Server.conf: HungerSystem=0 / HungerDecHP=0）⇒ 排除
+ - PlayObject.Message.cs:71-135 IncHealthSpell（只会加血）；BaseObject.cs:952-975 IncHealthSpell 同样只会加血 ⇒ 排除
+ - PlayObject.cs:2803-2815 RecalcAbilitys 里 HP>MaxHP 时夹到 MaxHP（只会向下夹一截，且 MaxHP 全程 20669）
+
+## D. 结论
+ 5 个能力列 + ModifyTime + 受害方 Hp = 夹具 snap_after 早于 C# 异步断线存档（见 15/16-*.txt）；
+ 唯一残留 = 攻方 characters_ablity.Hp（C# 20668 / Rust 20669，见 17/18/12/21/22-*.txt）；
+ 该 -1 发生在 run 内 tick 86（服务端权威 dump），不是存档路径的差，属世界 tick 的扣血效果，需在 C# 侧插桩定位具体路径。

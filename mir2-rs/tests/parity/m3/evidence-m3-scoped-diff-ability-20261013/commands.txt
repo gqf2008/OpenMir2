@@ -1,0 +1,53 @@
+# 命令（M3②③ follow-up F-2：scoped_diff RED 归因；2026-10-13，m2-svr lane）
+# 工作目录 = E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr
+# base = master da94fcb7（含 m3cs 两相证据 55a29144 + m2-svr RNG_LOG e134497a）
+# 本片：零 .rs、零夹具改动；不起栈、不占端口（只读共享 MySQL 3306）。
+
+## 0) 只读 MySQL 可达性（不占游戏端口）
+D:/mysql/mariadb-10.11.19-winx64/bin/mysql.exe -h127.0.0.1 -uroot -N -e "select 1"   # 1
+
+## 1) 取活库终态快照（两侧断线存档都落库之后）
+python tools/dbsnap/dbsnap.py snap --out E:/tmp/m2svr-scopediff/postsavesnap
+#   -> 03-postsavesnap.txt
+#   characters sha=0803f291a14bccc0… / characters_ablity sha=19a9242097c1bfed…
+#   == 上游 21-rust-120-r1.txt 的 snap_after 两个 sha ⇒ 现活库即两侧存档都落库的终态
+
+## 2) 两侧作用域抽取 + post-save diff
+EV=mir2-rs/tests/parity/m3/evidence-m3-scoped-diff-ability-20261013
+python -I mir2-rs/tests/parity/m3/scoped_diff.py extract E:/tmp/m2svr-scopediff/postsavesnap m3finc2 $EV/19-c2-scoped.jsonl --normalize   # -> 10-extract-c2-live.txt
+python -I mir2-rs/tests/parity/m3/scoped_diff.py extract E:/tmp/m2svr-scopediff/postsavesnap m3finr1 $EV/20-r1-scoped.jsonl --normalize   # -> 11-extract-r1-live.txt
+python -I mir2-rs/tests/parity/m3/scoped_diff.py diff $EV/19-c2-scoped.jsonl $EV/20-r1-scoped.jsonl --canonical --fixed-newchr   # -> 12-*.txt  RED 2 行（仅 characters_ablity 攻方 Hp）
+python -I mir2-rs/tests/parity/m3/scoped_diff.py diff $EV/19-c2-scoped.jsonl $EV/20-r1-scoped.jsonl --canonical                     # -> 13-*.txt  同上
+
+## 3) 活库原始行（C# 落库时间戳）+ 逐击 HP 轨迹
+D:/mysql/mariadb-10.11.19-winx64/bin/mysql.exe -h127.0.0.1 -uroot -N -e \
+  "select PlayerId,Level,Ac,...,Hp,...,ModifyTime from mir2_db.characters_ablity where PlayerId in (13549,13550,13551,13552,13555,13556) order by PlayerId"   # -> 14-live-db-rows.txt
+#   13551(C# c2 攻方) ModifyTime=02:44:34 / 13552(受害)=02:44:30 / 13555(Rust 攻方)=02:47:42
+# 逐击服务端权威 HP 轨迹（输入取上游证据包 streams/*-server-state.tsv）  # -> 17/18-*-trajectory.txt
+#   C# c2: tick 86 攻方 20669->20668；Rust r1: 攻方全程 20669
+
+## 4) 时刻轴原始件
+grep -n "断开链接" E:/tmp/m3cs-fin/csharp/RunGate.out.log     # 02:44:26.306（C# c2）    -> 15-*.txt
+grep -n "SETTLE_SEQ\|SNAP mir2_db.characters\|DELTA 改动行合计" \
+  mir2-rs/tests/parity/m3/evidence-m3-isolate-twophase-dod2-20261013/window/15-csharp-120-c2.txt
+grep -n "断开链接" E:/tmp/m3cs-fin/rust/game-gate.out.log       # 18:47:41.959（Rust r1）  -> 16-*.txt
+grep -n "存档请求已发\|存档应答" E:/tmp/m3cs-fin/rust/game-svr.out.log   # +0.19s / +0.39s
+
+## 5) 红检（改坏必红 / 对齐即绿）——由 19-c2-scoped.jsonl 单字段替换得到变异件
+# 变异件落 E:/tmp/m2svr-scopediff/redcheck/
+python -I mir2-rs/tests/parity/m3/scoped_diff.py diff E:/tmp/m2svr-scopediff/redcheck/c2-attacker-hp-20669.jsonl $EV/20-r1-scoped.jsonl --canonical --fixed-newchr  # -> 21-*.txt GREEN 9 表
+python -I mir2-rs/tests/parity/m3/scoped_diff.py diff E:/tmp/m2svr-scopediff/redcheck/c2-attacker-hp-20670.jsonl $EV/20-r1-scoped.jsonl --canonical --fixed-newchr  # -> 22-*.txt RED
+python -I mir2-rs/tests/parity/m3/scoped_diff.py diff E:/tmp/m2svr-scopediff/redcheck/c2-victim-hp-18245.jsonl   $EV/20-r1-scoped.jsonl --canonical --fixed-newchr  # -> 23-*.txt RED
+
+## 6) 四门禁（无 .rs 改动，仍照跑）
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --offline
+cargo run -p msgcodegen -- --check
+#   -> 31-four-gates.txt
+
+## 7) 证据 hash 复核（仓库字节 = LF 归一口径）
+python -I tools/evidence-hash/verify_sha256sums.py mir2-rs/tests/parity/m3/evidence-m3-scoped-diff-ability-20261013
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/m3/evidence-m3-scoped-diff-ability-20261013
+python -I tools/evidence-hash/verify_sha256sums.py selftest
+#   -> 32-verify.txt
