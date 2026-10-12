@@ -1,0 +1,23 @@
+$ pwsh -NoProfile -ExecutionPolicy Bypass -File E:/tmp/m3bag-n1/harness.ps1 -Guards <gate_guards.ps1> -LogDir E:/tmp/m3bag-n1/logs
+(BEFORE 用 master de0ea592 的 .tmp-base-gate_guards.ps1，AFTER 用工作树 gate_guards.ps1；harness 只 dot-source 后调生产函数 Test-M3PrewarmNoWorldEntry)
+
+构造日志（三份，逐字节）：
+--- logs/create-failed.log（只有建角失败串，无成功正证）---
+15:01:16 [INF] 机器人:[m3x0] [错误信息] 创建角色名称已被其他人使用！ 错误代码 = 2
+15:01:16 [INF] 正在查询角色
+--- logs/noworld.log（成功建角正证，无进世界）---
+15:01:16 [INF] 创建角色 m3x0
+15:01:16 [INF] 预热建角完成（StopAfterCharCreated；不进世界） m3x0
+--- logs/world.log（建角 + 进世界）---
+15:01:16 [INF] 创建角色 m3x0
+15:01:16 [INF] 机器人:[m3x0] 进入游戏
+
+===== BEFORE = master de0ea592 的 gate_guards.ps1（正证是裸子串 '创建角色'）=====
+only-create-failed: ok=True reason= positive=[创建角色] failures=[]
+noworld-positive: ok=True reason= positive=[创建角色,预热建角完成] failures=[]
+entered-world: ok=False reason=prewarm_entered_world positive=[创建角色] failures=[]
+
+===== AFTER = 本片工作树 gate_guards.ps1（正证锚 '创建角色 ' 带尾空格 + 失败串互斥）=====
+only-create-failed: ok=False reason=prewarm_char_create_failed positive=[] failures=[创建角色名称已被其他人使用]
+noworld-positive: ok=True reason= positive=[创建角色 ,预热建角完成] failures=[]
+entered-world: ok=False reason=prewarm_entered_world positive=[创建角色 ] failures=[]

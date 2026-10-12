@@ -1,0 +1,34 @@
+# reviewer-5 N-1：预热相门正证收紧（裸子串 '创建角色' → 生产整行 '创建角色 <name>' 带尾空格 + 失败串互斥）
+# 全部离线可判，零 .rs，未起栈、未占端口。Windows 上须用 pwsh 7（PS 5.1 的 m3 脚本 Get-FileHash 环境问题见
+# reviewer-5 N-2，非本片差量）。
+
+## 1) 门禁自检（判绿 + 五向预热用例）
+pwsh -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/selftest_gate.ps1 -OutDir E:/tmp/openmir2-m3gs/selftest-n1
+# ⇒ 01-selftest-gate.txt：SUMMARY total=65 failed=0；⑩ 含 5 向（绿/进世界红/缺失红/零 marker 红/仅有失败串红）。
+
+## 2) 改前（master de0ea592 的 gate_guards.ps1）/ 改后（本片工作树）
+# 构造三份日志：create-failed.log（只有失败串）/ noworld.log（成功正证）/ world.log（建角+进世界）
+git show master:mir2-rs/tests/parity/m3/gate_guards.ps1 > mir2-rs/tests/parity/m3/.tmp-base-gate_guards.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File E:/tmp/m3bag-n1/harness.ps1 -Guards mir2-rs/tests/parity/m3/.tmp-base-gate_guards.ps1 -LogDir E:/tmp/m3bag-n1/logs
+pwsh -NoProfile -ExecutionPolicy Bypass -File E:/tmp/m3bag-n1/harness.ps1 -Guards mir2-rs/tests/parity/m3/gate_guards.ps1 -LogDir E:/tmp/m3bag-n1/logs
+rm -f mir2-rs/tests/parity/m3/.tmp-base-gate_guards.ps1
+# ⇒ 02-prewarm-gate-before-after.txt：
+#   BEFORE only-create-failed: ok=True  （fail-open，N-1 缺陷）
+#   AFTER  only-create-failed: ok=False reason=prewarm_char_create_failed
+#   noworld / entered-world 的行为两版一致（绿 / prewarm_entered_world）。
+
+## 3) 改坏必红（牙齿）：把正证改回裸子串 '创建角色'
+#   见 03-mutation-teeth.txt：改坏后 ⑩ 第 5 向 FAIL ⇒ SUMMARY total=65 failed=1；
+#   还原后 cmp 与原件逐字节相同 ⇒ selftest 回 GREEN。
+
+## 4) 无栈自检（run_attack_pair.ps1）
+pwsh -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 -SelfCheckNoStack
+# ⇒ 05-attack-pair-selfcheck.txt：SELFTEST_RED GREEN，rc=0。
+
+## 5) 四门禁（隔离 target；本片零 .rs）
+#   CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --offline -- -D warnings
+cargo test --workspace --offline
+cargo run -p msgcodegen -- --check
+# ⇒ 06-four-gates.txt（fmt/clippy rc=0；test 计数；msgcodegen 604）。
