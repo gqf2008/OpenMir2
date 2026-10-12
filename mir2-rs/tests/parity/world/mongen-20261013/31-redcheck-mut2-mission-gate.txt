@@ -1,0 +1,49 @@
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\world)
+warning: unused variable: `mission`
+   --> crates\world\src\mongen.rs:588:9
+    |
+588 |     let mission = entry.mission_gen_rate;
+    |         ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_mission`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `mir2-world` (lib test) generated 1 warning (run `cargo fix --lib -p mir2-world --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.50s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m2svr-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 17 tests
+test mongen::tests::get_monsters_zen_time_matches_oracle ... ok
+test mongen::tests::gen_mod_count_matches_oracle ... ok
+test mongen::tests::monster_due_for_revive_and_ghost_expiry ... ok
+test mongen::tests::regen_monsters_normal_branch_null_returns_false ... ok
+test mongen::tests::regen_monsters_mission_branch_draws_center_and_20_window ... ok
+test mongen::tests::regen_monsters_normal_branch_draws_two_per_monster_and_interleaves_create ... ok
+test mongen::tests::regen_monsters_race_le_zero_draws_nothing ... ok
+test mongen::tests::regen_gate_round_robin_and_start_tick ... ok
+test mongen::tests::initialize_monster_thread_map_uses_gen_list_index_not_name_index ... ok
+test mongen::tests::initialize_monster_race_backfill_and_unknown_is_minus_one ... ok
+test mongen::tests::initialize_monster_draw_order_matches_independent_python ... ok
+test mongen::tests::initialize_monster_draw_count_matches_oracle ... ok
+test mongen::tests::regen_monsters_zen_limit_breaks_mission_branch ... ok
+test mongen::tests::regen_monsters_zen_limit_breaks_normal_branch ... ok
+test mongen::tests::regen_positions_match_independent_python_normal ... ok
+test mongen::tests::should_regen_gate_and_zen_time ... ok
+test mongen::tests::regen_positions_match_independent_python_mission ... FAILED
+
+failures:
+
+---- mongen::tests::regen_positions_match_independent_python_mission stdout ----
+
+thread 'mongen::tests::regen_positions_match_independent_python_mission' (15188) panicked at crates\world\src\mongen.rs:1134:9:
+assertion `left == right` failed
+  left: [(167, 263), (164, 264), (164, 268)]
+ right: [(163, 256), (163, 256), (158, 263)]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    mongen::tests::regen_positions_match_independent_python_mission
+
+test result: FAILED. 16 passed; 1 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-world --lib`

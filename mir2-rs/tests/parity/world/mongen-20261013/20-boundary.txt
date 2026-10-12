@@ -1,0 +1,11 @@
+### boundary check (frozen oracle / client / schema): git diff --stat master -- src/ sql/ MirClient
+(empty above = zero changes)
+
+### worktree status (author side)
+ M mir2-rs/crates/world/src/lib.rs
+?? mir2-rs/crates/world/src/mongen.rs
+?? mir2-rs/tests/parity/world/mongen-20261013/
+
+### this shard's surface: git diff --stat 56cbd896 -- mir2-rs/crates mir2-rs/bins
+ mir2-rs/crates/world/src/lib.rs | 7 +++++++
+ 1 file changed, 7 insertions(+)

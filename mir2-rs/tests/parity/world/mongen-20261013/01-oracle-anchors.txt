@@ -1,0 +1,292 @@
+### oracle anchors (master 1b576172; C# 源冻结)
+### --- src/GameSrv/Word/WorldServer.MonGen.cs:63-99 (InitializeMonster 分片抽数) ---
+                string[] monsterNames = monsterGenMap.Keys.ToArray();
+                for (int i = 0; i < monsterNames.Length; i++)
+                {
+                    int threadId = M2Share.RandomNumber.Random(SystemShare.Config.ProcessMonsterMultiThreadLimit);
+                    string monName = monsterNames[i];
+                    if (MonGenInfoThreadMap.ContainsKey(threadId))
+                    {
+                        for (int j = 0; j < monsterGenMap[monName].Count; j++)
+                        {
+                            MonGenInfoThreadMap[threadId].Add(monsterGenMap[monName][j]);
+                        }
+                    }
+                    else
+                    {
+                        List<MonGenInfo> monsterList = new List<MonGenInfo>();
+                        for (int j = 0; j < monsterGenMap[monName].Count; j++)
+                        {
+                            monsterList.Add(monsterGenMap[monName][j]);
+                        }
+                        MonGenInfoThreadMap.Add(threadId, monsterList);
+                    }
+                    if (!MonsterThreadMap.ContainsKey(MonGenList[i].MonName))
+                    {
+                        MonsterThreadMap.Add(MonGenList[i].MonName, threadId);
+                    }
+                }
+            }
+
+            List<MonsterInfo> monsterName = MonsterList.Values.ToList();
+            for (int i = 0; i < monsterName.Count; i++)
+            {
+                int threadId = M2Share.RandomNumber.Random(SystemShare.Config.ProcessMonsterMultiThreadLimit);
+                if (!MonsterThreadMap.ContainsKey(MonsterList[monsterName[i].Name].Name))
+                {
+                    MonsterThreadMap.Add(MonsterList[monsterName[i].Name].Name, threadId);
+                }
+            }
+
+### --- src/GameSrv/Word/WorldServer.MonGen.cs:112 (MonGenList.Clear) ---
+                    }
+
+### --- src/GameSrv/Word/WorldServer.MonGen.cs:168-190 (GetMonstersZenTime) ---
+        public int GetMonstersZenTime(int dwTime)
+        {
+            if (dwTime < 30 * 60 * 1000)
+            {
+                int d10 = (PlayObjectCount - SystemShare.Config.UserFull) / HUtil32._MAX(1, SystemShare.Config.ZenFastStep);
+                if (d10 > 0)
+                {
+                    if (d10 > 6)
+                    {
+                        d10 = 6;
+                    }
+                    return dwTime - HUtil32.Round((dwTime / 10.0) * d10);
+                }
+                else
+                {
+                    return dwTime;
+                }
+            }
+            return dwTime;
+        }
+
+        /// <summary>
+        /// 刷新怪物和怪物行动
+
+### --- src/GameSrv/Word/WorldServer.MonGen.cs:207-253 (regen 门 + genModCount) ---
+                if ((HUtil32.GetTickCount() - monsterThread.RegenMonstersTick) > SystemShare.Config.RegenMonstersTime)
+                {
+                    monsterThread.RegenMonstersTick = HUtil32.GetTickCount();
+                    if (monsterThread.CurrMonGenIdx < mongenList.Count)
+                    {
+                        monGen = mongenList[monsterThread.CurrMonGenIdx];
+                    }
+                    else if (mongenList.Count > 0)
+                    {
+                        monGen = mongenList[0];
+                    }
+                    if (monsterThread.CurrMonGenIdx < mongenList.Count - 1)
+                    {
+                        monsterThread.CurrMonGenIdx++;
+                    }
+                    else
+                    {
+                        monsterThread.CurrMonGenIdx = 0;
+                    }
+                    if (monGen != null && !string.IsNullOrEmpty(monGen.MonName) && !SystemShare.Config.VentureServer)
+                    {
+                        if (monGen.StartTick == 0 || ((HUtil32.GetTickCount() - monGen.StartTick) > GetMonstersZenTime(monGen.ZenTime)))
+                        {
+                            ushort nGenCount = monGen.ActiveCount; //取已刷出来的怪数量
+                            bool boRegened = true;
+                            int genModCount = HUtil32._MAX(1, HUtil32.Round(HUtil32._MAX(1, monGen.Count) / (SystemShare.Config.MonGenRate / 10.0)));//所需刷的怪总数
+                            SystemModule.Maps.IEnvirnoment map = SystemShare.MapMgr.FindMap(monGen.MapName);
+                            bool canCreate;
+                            if (map == null || map.Flag.boNOHUMNOMON && map.HumCount <= 0)
+                            {
+                                canCreate = false;
+                            }
+                            else
+                            {
+                                canCreate = true;
+                            }
+
+                            if (genModCount > nGenCount && canCreate)// 增加 控制刷怪数量比例
+                            {
+                                boRegened = RegenMonsters(monGen, genModCount - nGenCount);
+                            }
+                            if (boRegened)
+                            {
+                                monGen.StartTick = HUtil32.GetTickCount();
+                            }
+                        }
+                    }
+
+### --- src/GameSrv/Word/WorldServer.MonGen.cs:283-291 (复活 tick) ---
+                                        if (monster.Death && monster.CanReAlive && monster.Invisible && (monster.MonGen != null))
+                                        {
+                                            if ((HUtil32.GetTickCount() - monster.ReAliveTick) > GetMonstersZenTime(monster.MonGen.ZenTime))
+                                            {
+                                                if (monster.ReAliveEx(monster.MonGen))
+                                                {
+                                                    monster.ProcessRunCount = 0;
+                                                    monster.ReAliveTick = HUtil32.GetTickCount();
+                                                }
+
+### --- src/GameSrv/Word/WorldServer.MonGen.cs:298-305 (ghost 5min) ---
+                                        else
+                                        {
+                                            if (monster.IsSlave || (monster.Race is ActorRace.Guard or ActorRace.ArcherGuard or ActorRace.SlaveMonster))// 守卫和下属主动搜索附近的精灵
+                                            {
+                                                if ((currentTick - monster.SearchTick) > monster.SearchTime)
+                                                {
+                                                    monster.SearchTick = HUtil32.GetTickCount();
+                                                    //怪物主动搜索视觉范围，修改为人物视野被动激活，从而大幅度降低CPU使用率
+
+### --- src/GameSrv/Word/WorldServer.MonGen.cs:811-874 (RegenMonsters) ---
+        private bool RegenMonsters(MonGenInfo monGen, int nCount)
+        {
+            IMonsterActor cert;
+            const string sExceptionMsg = "[Exception] WorldEngine::RegenMonsters";
+            bool result = true;
+            int dwStartTick = HUtil32.GetTickCount();
+            try
+            {
+                if (monGen.Race > 0)
+                {
+                    short nX;
+                    short nY;
+                    if (monGen.MissionGenRate > 0 && M2Share.RandomNumber.Random(100) < monGen.MissionGenRate)
+                    {
+                        nX = (short)(monGen.X - monGen.Range + M2Share.RandomNumber.Random(monGen.Range * 2 + 1));
+                        nY = (short)(monGen.Y - monGen.Range + M2Share.RandomNumber.Random(monGen.Range * 2 + 1));
+                        for (int i = 0; i < nCount; i++)
+                        {
+                            cert = CreateMonster(monGen.MapName, (short)(nX - 10 + M2Share.RandomNumber.Random(20)), (short)(nY - 10 + M2Share.RandomNumber.Random(20)), monGen.Race, monGen.MonName);
+                            if (cert != null)
+                            {
+                                cert.CanReAlive = true;
+                                cert.ReAliveTick = HUtil32.GetTickCount();
+                                cert.MonGen = monGen;
+                                monGen.ActiveCount++;
+                                monGen.TryAdd(cert);
+                            }
+                            if ((HUtil32.GetTickCount() - dwStartTick) > M2Share.ZenLimit)
+                            {
+                                result = false;
+                                break;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        for (int i = 0; i < nCount; i++)
+                        {
+                            nX = (short)((monGen.X - monGen.Range) + M2Share.RandomNumber.Random(monGen.Range * 2 + 1));
+                            nY = (short)((monGen.Y - monGen.Range) + M2Share.RandomNumber.Random(monGen.Range * 2 + 1));
+                            cert = CreateMonster(monGen.MapName, nX, nY, monGen.Race, monGen.MonName);
+                            if (cert != null)
+                            {
+                                cert.CanReAlive = true;
+                                cert.ReAliveTick = HUtil32.GetTickCount();
+                                cert.MonGen = monGen;
+                                monGen.ActiveCount++;
+                                monGen.TryAdd(cert);
+                            }
+                            else
+                            {
+                                return false;
+                            }
+                            if (HUtil32.GetTickCount() - dwStartTick > M2Share.ZenLimit)
+                            {
+                                result = false;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            catch
+            {
+
+### --- src/GameSrv/Word/WorldServer.MonGen.cs:740-752 (CreateMonster RNG: Dir/items/CoolEye) ---
+            cert.Dir = M2Share.RandomNumber.RandomByte(8);
+            cert.ChrName = sMonName;
+            cert.WAbil = cert.Abil;
+            cert.OnEnvirnomentChanged();
+            MonGetRandomItems(cert);
+            if (M2Share.RandomNumber.Random(100) < cert.CoolEyeCode)
+            {
+                cert.CoolEye = true;
+            }
+
+            cert.Initialize();
+            if (cert.AddtoMapSuccess)
+            {
+
+### --- src/Modules/SystemModule/Data/MonGenInfo.cs:41-68 (TryAdd + ThreadMonLimit) ---
+        public int StartTick;
+
+        /// <summary>
+        /// 添加对象到列表
+        /// 返回true则当前线程怪物列表未满
+        /// 返回false则表示当前线程怪物列表已经满了
+        /// </summary>
+        /// <param name="baseObject"></param>
+        /// <returns></returns>
+        public bool TryAdd(IMonsterActor baseObject)
+        {
+            if (CertList.Count > MonGenConst.ThreadMonLimit)
+            {
+                return false;
+            }
+            CertList.Add(baseObject);
+            return true;
+        }
+
+        public MonGenInfo Clone()
+        {
+            return (MonGenInfo)this.MemberwiseClone();
+        }
+    }
+
+    public class MonGenConst
+    {
+        public const int ThreadMonLimit = 40000;
+
+### --- src/GameSrv/Word/WorldServer.cs:167-180 (GetMonRace/GetMonsterThreadId) ---
+        private int GetMonRace(string sMonName)
+        {
+            if (MonsterList.TryGetValue(sMonName, out MonsterInfo value))
+            {
+                return value.Race;
+            }
+            return -1;
+        }
+
+        private int GetMonsterThreadId(string sMonName)
+        {
+            if (MonsterThreadMap.TryGetValue(sMonName, out int threadId))
+            {
+                return threadId;
+
+### --- config defaults: GameSvrConf.cs ---
+1251:            VentureServer = false;
+1263:            UserFull = 5000;
+1264:            ZenFastStep = 300;
+1433:            RegenMonstersTime = 200;
+1434:            MonGenRate = 10;
+1550:            MonRandomAddValue = 10;
+1895:            ProcessMonsterInterval = 2;
+1896:            ProcessMonsterMultiThreadLimit = 1;
+
+### --- M2Share.cs:176-177 (MonLimit/ZenLimit) ---
+        public static int MonLimit = 30;
+        public static int ZenLimit = 5;
+
+### --- deployed Server.conf keys (read-only E:/MirServer) ---
+9:VentureServer=FALSE
+26:MonLimit=10
+27:ZenLimit=5
+31:UserFull=3000
+32:ZenFastStep=300
+50:RegenMonstersTime=200
+55:ProcessMonsterInterval=2
+612:MonRandomAddValue=40
+780:GenMonRate=10
+782:ProcessMonLimitCount=5
+872:ProcessMonsterInterval=2
+### (ProcessMonsterMultiThreadLimit absent => GameSvrConf default 1)

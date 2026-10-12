@@ -1,0 +1,46 @@
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\world)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.14s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m2svr-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 17 tests
+test mongen::tests::gen_mod_count_matches_oracle ... ok
+test mongen::tests::get_monsters_zen_time_matches_oracle ... ok
+test mongen::tests::regen_monsters_normal_branch_null_returns_false ... ok
+test mongen::tests::regen_monsters_mission_branch_draws_center_and_20_window ... ok
+test mongen::tests::regen_gate_round_robin_and_start_tick ... ok
+test mongen::tests::monster_due_for_revive_and_ghost_expiry ... ok
+test mongen::tests::initialize_monster_thread_map_uses_gen_list_index_not_name_index ... ok
+test mongen::tests::initialize_monster_race_backfill_and_unknown_is_minus_one ... ok
+test mongen::tests::initialize_monster_draw_order_matches_independent_python ... ok
+test mongen::tests::initialize_monster_draw_count_matches_oracle ... ok
+test mongen::tests::regen_monsters_race_le_zero_draws_nothing ... ok
+test mongen::tests::regen_monsters_zen_limit_breaks_mission_branch ... ok
+test mongen::tests::regen_monsters_normal_branch_draws_two_per_monster_and_interleaves_create ... FAILED
+test mongen::tests::regen_monsters_zen_limit_breaks_normal_branch ... ok
+test mongen::tests::regen_positions_match_independent_python_mission ... ok
+test mongen::tests::should_regen_gate_and_zen_time ... ok
+test mongen::tests::regen_positions_match_independent_python_normal ... FAILED
+
+failures:
+
+---- mongen::tests::regen_monsters_normal_branch_draws_two_per_monster_and_interleaves_create stdout ----
+
+thread 'mongen::tests::regen_monsters_normal_branch_draws_two_per_monster_and_interleaves_create' (28228) panicked at crates\world\src\mongen.rs:839:13:
+x=267 in [164,168]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- mongen::tests::regen_positions_match_independent_python_normal stdout ----
+
+thread 'mongen::tests::regen_positions_match_independent_python_normal' (27948) panicked at crates\world\src\mongen.rs:1106:9:
+assertion `left == right` failed
+  left: [(267, 164), (264, 165), (264, 167), (266, 165)]
+ right: [(167, 264), (164, 265), (164, 267), (166, 265)]
+
+
+failures:
+    mongen::tests::regen_monsters_normal_branch_draws_two_per_monster_and_interleaves_create
+    mongen::tests::regen_positions_match_independent_python_normal
+
+test result: FAILED. 15 passed; 2 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-world --lib`
