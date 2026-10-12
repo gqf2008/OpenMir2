@@ -1,12 +1,68 @@
 # 本片改动清单（drop-exp-wiring 分片 D①：击杀经验链）
 
-## base = origin/master b7fef4a7 ; head = drop-exp-host（本片单提交）
+## base = origin/master f2aadf25 ; head = drop-exp-host（本片 = a6d3cb5f + merge bd8eeab6）
 
- mir2-rs/bins/game-svr/src/main.rs    | 110 ++++++++++++++++++++++++++++++
- mir2-rs/bins/game-svr/src/smframe.rs |  18 +++++
- mir2-rs/crates/world/src/combat.rs   |   6 ++
- mir2-rs/crates/world/src/world.rs    | 127 +++++++++++++++++++++++++++++++++--
- 4 files changed, 254 insertions(+), 7 deletions(-)
+ mir2-rs/bins/game-svr/src/downlink.rs              |  165 ---
+ mir2-rs/bins/game-svr/src/enter.rs                 |    3 +-
+ mir2-rs/bins/game-svr/src/feature.rs               |   28 -
+ mir2-rs/bins/game-svr/src/main.rs                  |  250 ++--
+ mir2-rs/bins/game-svr/src/mongen.rs                |   97 +-
+ mir2-rs/bins/game-svr/src/smframe.rs               |   18 +
+ mir2-rs/crates/world/src/combat.rs                 |    6 +
+ mir2-rs/crates/world/src/world.rs                  |  127 +-
+ .../drop-exp-wiring-20261013/01-oracle-anchors.txt |  415 ++++++
+ .../drop-exp-wiring-20261013/02-change-summary.txt |   12 +
+ .../world/drop-exp-wiring-20261013/03-tests.txt    |   12 +
+ .../drop-exp-wiring-20261013/04-redchecks.txt      |   28 +
+ .../world/drop-exp-wiring-20261013/05-gates.txt    |    7 +
+ .../world/drop-exp-wiring-20261013/06-boundary.txt |    2 +
+ .../40-redcheck-rc-d1-a-master-branch-dropped.txt  |   25 +
+ .../41-redcheck-rc-d1-b-exprate-dropped.txt        |   25 +
+ .../42-redcheck-rc-d1-c-param-tag-swapped.txt      |   27 +
+ .../43-redcheck-restore-sha256.txt                 |    3 +
+ .../world/drop-exp-wiring-20261013/README.md       |  107 ++
+ .../world/drop-exp-wiring-20261013/SHA256SUMS.txt  |   17 +
+ .../world/drop-exp-wiring-20261013/commands.txt    |   30 +
+ .../drop-exp-wiring-20261013/gates/10-fmt.txt      |    0
+ .../drop-exp-wiring-20261013/gates/11-clippy.txt   |    5 +
+ .../gates/12-msgcodegen.txt                        |    1 +
+ .../gates/13-workspace-test.txt                    |  858 ++++++-----
+ .../gates/14-baseline-master-b7fef4a7.txt          | 1515 ++++++++++++++++++++
+ .../01-oracle-anchors.txt                          |   78 -
+ .../02-change-summary.txt                          |   33 -
+ .../world/monster-ai-frames-20261013/03-tests.txt  |   34 -
+ .../monster-ai-frames-20261013/20-boundary.txt     |   26 -
+ .../world/monster-ai-frames-20261013/README.md     |   60 -
+ .../monster-ai-frames-20261013/SHA256SUMS.txt      |   15 -
+ .../world/monster-ai-frames-20261013/commands.txt  |   27 -
+ .../monster-ai-frames-20261013/gates/10-fmt.txt    |    4 -
+ .../monster-ai-frames-20261013/gates/11-clippy.txt |    6 -
+ .../gates/12-msgcodegen.txt                        |    6 -
+ .../monster-ai-frames-20261013/redchecks/README.md |   18 -
+ .../redchecks/rc-C3-A-display-not-registered.txt   |   26 -
+ .../rc-C3-B-lobyte-instead-of-highbyte.txt         |   28 -
+ .../redchecks/rc-C3-C-monster-dir-stale.txt        |   39 -
+ .../redchecks/rc-C3-D-wantrefmsg-not-set.txt       |   26 -
+ .../monster-ai-host-20261013/01-oracle-anchors.txt |    6 +-
+ .../world/monster-ai-host-20261013/SHA256SUMS.txt  |    6 +-
+ tools/.gitattributes                               |   32 -
+ .../00-commands.txt                                |   61 -
+ .../01-baseline-clean-clone-eolcheck.txt           |  501 -------
+ .../01b-baseline-breakdown.txt                     |   42 -
+ .../02-fixed-clean-clone-eolcheck.txt              |    1 -
+ .../02b-fixed-breakdown.txt                        |   13 -
+ .../03-mutation-red-drop-ps1.txt                   |   35 -
+ .../04-only-attributes-no-blob-change.txt          |   23 -
+ .../05-worktree-status.txt                         |   23 -
+ .../2026-10-13-tools-eol-attributes/06-gates.txt   |   82 --
+ .../2026-10-13-tools-eol-attributes/README.md      |   84 --
+ .../2026-10-13-tools-eol-attributes/SHA256SUMS.txt |   10 -
+ 55 files changed, 2931 insertions(+), 2197 deletions(-)
 
 ## 新增文件（证据目录）
-?? mir2-rs/tests/parity/world/drop-exp-wiring-20261013/
+ M mir2-rs/tests/parity/world/drop-exp-wiring-20261013/02-change-summary.txt
+ M mir2-rs/tests/parity/world/drop-exp-wiring-20261013/05-gates.txt
+ M mir2-rs/tests/parity/world/drop-exp-wiring-20261013/gates/11-clippy.txt
+ M mir2-rs/tests/parity/world/drop-exp-wiring-20261013/gates/13-workspace-test.txt
+D  mir2-rs/tests/parity/world/drop-exp-wiring-20261013/gates/14-baseline-master-b7fef4a7.txt
+?? mir2-rs/tests/parity/world/drop-exp-wiring-20261013/gates/14-baseline-master-f2aadf25.txt
