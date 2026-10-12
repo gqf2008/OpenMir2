@@ -1,0 +1,3 @@
+$ python -I tools/evidence-hash/verify_sha256sums.py --check-extra tools/m2-acceptance/evidence/m2svr-rng-trace-probe-purity-20261013
+# 干净检出（detached worktree @ 本片 head，与提交物逐字节相同；不影响 hash 口径）
+GREEN tools\m2-acceptance\evidence\m2svr-rng-trace-probe-purity-20261013\SHA256SUMS.txt  [repo 口径]  OK 15/15

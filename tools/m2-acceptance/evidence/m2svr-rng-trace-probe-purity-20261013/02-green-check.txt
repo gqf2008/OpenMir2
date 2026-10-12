@@ -1,0 +1,19 @@
+RNG_TRACE_PURITY 判据：game-svr=E:/tmp/openmir2-m2svr-target/debug/game-svr.exe  evidence=E:/tmp/m2svr-rngtrace-purity-green  seed=42
+  [OK  ] ①a 传种子+路径 ⇒ 真 game-svr 在指定路径建出 rng 流水
+        file=E:\tmp\m2svr-rngtrace-purity-green\work\gs-rng-trace\rng-stream.tsv
+  [OK  ] ①b 流水头部第 1 行 = INJECT_OK <seed> 0
+        line1=[1	INJECT_OK	42	0]
+  [OK  ] ①c 流水头部第 2 行 = SEED_PROBE <8 项>
+        line2=[SEED_PROBE 1434747710 302596119 269548474 1122627734 361709742 563913476 1555655117 1101493307]
+  [OK  ] ② 流水头部 SEED_PROBE 与 C# 钩子 seed=42 序列逐项一致
+        header=[1434747710 302596119 269548474 1122627734 361709742 563913476 1555655117 1101493307]
+  [OK  ] ③ 流水记录行不含启动期自证站点 bins\game-svr\src\main.rs
+        records=0 main_records=0
+  [OK  ] ③b `SEED_PROBE` 自证已发生（门的前提：那 8 项确实取过数）
+        stdout_seed_probe=True
+  [OK  ] ④ stdout 的 SEED_PROBE 与流水头部逐项相同（两处独立实例一致）
+        stdout=[1434747710 302596119 269548474 1122627734 361709742 563913476 1555655117 1101493307]
+  [OK  ] ⑤a 只传种子、不传路径 ⇒ 真 game-svr 正常启动且不建流水文件
+        started=True leaked=False
+SUMMARY total=8 ok=8 fail=0
+RNG_TRACE_PURITY GREEN

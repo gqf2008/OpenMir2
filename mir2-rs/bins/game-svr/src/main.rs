@@ -2871,6 +2871,28 @@ struct EnterConfig {
     rng_seed: Option<i32>,
 }
 
+/// `SEED_PROBE` 的 8 项参照序列（`new Random(seed).Next()` 前 `seed::PROBE_LEN` 项）。
+///
+/// **用独立实例且不经 `RandomNumber`**（[`mir2_shared::rng::DotNetRandom::new`] +
+/// [`mir2_shared::rng::DotNetRandom::next_value`]）——与 C# 钩子（`rng-hook/StartupHook.cs` 的独立
+/// `reference` 实例）以及 `crates/shared/src/rng_trace.rs::enable` 写进流水头部的 `SEED_PROBE`
+/// 同口径：
+/// - **不消耗**游戏随机流（独立实例）；
+/// - **不进** `MIR2_RNG_LOG` 逐次流水。`RandomNumber::random()` 在 trace 开启时会记一条
+///   `bins/game-svr/src/main.rs` 记录，而那 8 条是仪器自证、不是游戏消费者，C# 侧也不存在
+///   ⇒ 会把两侧 `site/order` 账本的第一处分歧钉到 index 0（真机实测：Rust 独有站点
+///   `main.rs:2856` × 8，见 `mir2-rs/tests/parity/m3/evidence-rng-ledger-diff-20261012/32-diff-full.txt`）。
+///
+/// 序列与 `RandomNumber::with_seed(seed)` 逐项相同（后者内层就是 `DotNetRandom::new(seed)`），
+/// 单测 `seed_probe_text_matches_csharp_seed42_and_random_number` 把这层等价关系锁死。
+fn seed_probe_text(seed: i32) -> String {
+    let mut rng = mir2_shared::rng::DotNetRandom::new(seed);
+    (0..seed::PROBE_LEN)
+        .map(|_| rng.next_value().to_string())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn sim_loop(
     map_sizes: Vec<(i32, i32)>,
     registry: Option<mir2_envir::MapRegistry>,
@@ -2885,15 +2907,12 @@ fn sim_loop(
     let mut world = mir2_world::World::with_maps(map_sizes);
     // **M3 T-30**：种子注入只在设了 `MIR2_RNG_SEED` 时覆盖随机源（未设 ⇒ 保持 `World::with_maps`
     // 的既有随机源，`crates/world` 行为一字不改）。发一条与 C# 钩子同形的 `SEED_PROBE` 自证行：
-    // 取**注入后世界随机源的克隆** 8 项（比 C# 钩子的独立 reference 实例更强 —— 它直接证明被
-    // 替换的游戏随机源就是该序列），且不消耗游戏流。
+    // 参考序列走**独立实例**（[`seed_probe_text`]）——与 C# 钩子 / `rng_trace` 头部同口径，
+    // 不消耗游戏流，也**不进** `MIR2_RNG_LOG` 逐次流水（经 `RandomNumber` 取那 8 项会把两侧
+    // `site/order` 账本的第一分歧钉到 index 0）。
     if let Some(seed) = enter_cfg.rng_seed {
         world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
-        let mut probe_rng = world.rng.clone();
-        let probe_text = (0..seed::PROBE_LEN)
-            .map(|_| probe_rng.random().to_string())
-            .collect::<Vec<_>>()
-            .join(" ");
+        let probe_text = seed_probe_text(seed);
         glog!(
             "INF",
             "RNG 同种子注入：seed={seed} 参照序列=SEED_PROBE {probe_text}"
@@ -4402,6 +4421,34 @@ async fn send_raw(tx: &Arc<Mutex<OwnedWriteHalf>>, wire: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **M2 RNG trace 纯度**：`seed_probe_text` 必须
+    /// ① 与 C# 钩子实测的 seed=42 参照序列逐项相同（自我标尺）；
+    /// ② 与生产注入的 `RandomNumber::with_seed(seed)` 前 `PROBE_LEN` 项逐项相同（换独立实例不改自证值）。
+    ///
+    /// 红检：把 `seed_probe_text` 改回经 `RandomNumber`（被 trace 的入口）取数 ⇒ 进程级
+    /// `tools/m2-acceptance/check_rng_trace_purity.ps1` 的「流水不得含 `main.rs` 记录」门必红；
+    /// 本用例锁的是「换实例后值不变」，是那道门的前置。
+    #[test]
+    fn seed_probe_text_matches_csharp_seed42_and_random_number() {
+        let expected =
+            "1434747710 302596119 269548474 1122627734 361709742 563913476 1555655117 1101493307";
+        assert_eq!(
+            seed_probe_text(42),
+            expected,
+            "与 C# 钩子 seed=42 参照序列不一致"
+        );
+        let mut world_rng = mir2_shared::rng::RandomNumber::with_seed(42);
+        let via_random_number = (0..seed::PROBE_LEN)
+            .map(|_| world_rng.random().to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(
+            seed_probe_text(42),
+            via_random_number,
+            "独立实例与 RandomNumber 序列不一致（说明不再是同一算法）"
+        );
+    }
 
     /// M3②③ k=2 收口红检：`apply_ability_to_entity` 必须把 `WAbil`/`SubAbility` **真写进世界实体**。
     ///

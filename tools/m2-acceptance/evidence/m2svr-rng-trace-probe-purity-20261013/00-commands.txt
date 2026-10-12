@@ -1,0 +1,53 @@
+M2 RNG trace 纯度片（openmir2-m2-rng-trace-seed-probe-purity）— 命令留档
+worktree: E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr
+branch  : worktree-m2-rngtrace-purity (base refs/heads/master @ 17f55b2d)
+target  : CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target  (cargo 一律 --offline)
+
+-- 0. 分支与基线 --
+git switch -c worktree-m2-rngtrace-purity refs/heads/master     # 不动 worktree-m2-gamesvr-host(仍 @e134497a)
+
+-- 1. 复现（改前形态；最短进程级复现，看流水头部）--
+mkdir -p E:/tmp/m2svr-probe-repro
+# Server.conf: [Server] GatePort/IDSPort/DBPort=空闲端口, WorldMaps=64x64
+MIR2_RNG_SEED=42 MIR2_RNG_LOG=E:/tmp/m2svr-probe-repro/rng-stream.tsv \
+  E:/tmp/openmir2-m2svr-target/debug/game-svr.exe E:/tmp/m2svr-probe-repro/Server.conf &
+# ~6s 后 taskkill /T /F；流水头两行后 = 8 条 Next()，site=bins\game-svr\src\main.rs:2856
+# -> tools/m2-acceptance/evidence/m2svr-rng-trace-probe-purity-20261013/01-repro-before-fix-tsv.txt
+
+-- 2. 判据（GREEN）--
+powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/check_rng_trace_purity.ps1 \
+  -GameSvrExe E:/tmp/openmir2-m2svr-target/debug/game-svr.exe \
+  -OutDir E:/tmp/m2svr-rngtrace-purity-green
+# -> SUMMARY total=8 ok=8 fail=0 / RNG_TRACE_PURITY GREEN  rc=0
+# -> 02-green-check.txt, 03-green-tsv.txt
+
+-- 3. 改坏必红（把 seed_probe_text 改回经 RandomNumber 取数后重编）--
+# (mutation: mir2-rs/bins/game-svr/src/main.rs 的 seed_probe_text 用 RandomNumber::with_seed(seed).random())
+cargo build -p game-svr --offline
+powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/check_rng_trace_purity.ps1 \
+  -GameSvrExe E:/tmp/openmir2-m2svr-target/debug/game-svr.exe \
+  -OutDir E:/tmp/m2svr-rngtrace-purity-red
+# -> [FAIL] ③ records=8 main_records=8 first=[1 Next() 0 1434747710 bins\game-svr\src\main.rs:2892]
+# -> SUMMARY total=8 ok=7 fail=1 / RNG_TRACE_PURITY FAIL  rc=1
+# -> 04-red-check.txt, 05-red-tsv.txt
+
+-- 4. 还原 + 复跑 --
+# (restore mir2-rs/bins/game-svr/src/main.rs -> DotNetRandom::new(seed); cargo build -p game-svr)
+powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/check_rng_trace_purity.ps1 \
+  -GameSvrExe E:/tmp/openmir2-m2svr-target/debug/game-svr.exe \
+  -OutDir E:/tmp/m2svr-rngtrace-purity-restored
+# -> RNG_TRACE_PURITY GREEN rc=0  -> 06-green-after-restore.txt
+
+-- 5. 构造层单测 --
+cargo test -p game-svr --offline seed_probe_text_matches_csharp_seed42_and_random_number
+# -> test tests::seed_probe_text_matches_csharp_seed42_and_random_number ... ok (1 passed) -> 11-unit-test.txt
+
+-- 6. 四门禁（隔离 target，--offline）--
+cargo fmt --all -- --check                              # rc=0 -> 07-gates-fmt.txt
+cargo clippy --workspace --all-targets --offline -- -D warnings   # rc=0 -> 08-gates-clippy.txt
+cargo test --workspace --offline                        # 84 suites / 687 passed / 0 failed / 16 ignored -> 09-gates-test.txt
+cargo run -p msgcodegen --offline -- --check            # 604 条一致 -> 10-gates-msgcodegen.txt
+
+-- 7. 证据 hash（仓库字节口径：LF 归一 / git blob）--
+python -I tools/evidence-hash/verify_sha256sums.py write tools/m2-acceptance/evidence/m2svr-rng-trace-probe-purity-20261013
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra tools/m2-acceptance/evidence/m2svr-rng-trace-probe-purity-20261013
