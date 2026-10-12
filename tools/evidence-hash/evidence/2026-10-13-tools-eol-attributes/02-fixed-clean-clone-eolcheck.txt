@@ -1,0 +1,1 @@
+EOLCHECK GREEN 540/540 件文本证据与仓库口径（LF）在 EOL 上一致
