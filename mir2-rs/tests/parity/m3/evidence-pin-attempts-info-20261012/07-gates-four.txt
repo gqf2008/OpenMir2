@@ -1,19 +1,18 @@
-# 四门禁（本片零 .rs 改动；CARGO_TARGET_DIR=E:\tmp\openmir2-m3bag-target，cwd=mir2-rs/）
+# 四门禁（合并 master 677347d4 后的树；本片零 .rs 改动；CARGO_TARGET_DIR=E:\tmp\openmir2-m3bag-target，cwd=mir2-rs/）
 
 $ cargo fmt --all -- --check
 rc=0
 
 $ cargo clippy --workspace --all-targets -- -D warnings
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.83s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.50s
 rc=0
 
 $ cargo run -p msgcodegen -- --check
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.19s
      Running `E:\tmp\openmir2-m3bag-target\debug\msgcodegen.exe --check`
 msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
 rc=0
 
 $ cargo test --workspace
 82
-(上面 = 通过 'test result: ok' 的数)
+(上面 = 'test result: ok' 的行数)
 rc=0（无 FAILED/error 行）
