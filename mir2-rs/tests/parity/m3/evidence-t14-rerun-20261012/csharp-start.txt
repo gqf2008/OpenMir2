@@ -1,0 +1,27 @@
+=== 启动 Legend of Mir 2 服务端 ===
+  MySQL         已在运行（3306）
+  DBSrv      pid=16088  端口 6000 OK 端口 5100 OK 端口 5700 OK
+  LoginSrv   pid=25092  端口 5500 OK 端口 5600 OK
+  GameSvr    pid=9096  端口 5000 OK
+  LoginGate  pid=7316  端口 7000 OK
+  SelGate    pid=14860  端口 7100 OK
+  RunGate    pid=11668  端口 7200 OK
+
+=== Legend of Mir 2 服务端状态 ===
+
+Component   PID Ports                  
+---------   --- -----                  
+MySQL     22624 3306 OK                
+DBSrv     16088 6000 OK 5100 OK 5700 OK
+LoginSrv  25092 5500 OK 5600 OK        
+GameSvr    9096 5000 OK                
+LoginGate  7316 7000 OK                
+SelGate   14860 7100 OK                
+RunGate   11668 7200 OK                
+客户端           - 未连接                    
+
+
+日志目录: E:\MirServer\logs
+
+账号: mir2test / mir2pass
+客户端: D:\MirClient-run\run-release.cmd（指向 127.0.0.1:7000；登录后自动选服进角色界面，选角色点「开始」进游戏）
