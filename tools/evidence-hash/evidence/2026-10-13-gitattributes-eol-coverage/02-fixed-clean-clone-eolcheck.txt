@@ -1,0 +1,10 @@
+# 修复后 clean clone = 0dc48618（本片 code commit，只含 mir2-rs/.gitattributes）
+# $ cd E:/tmp/eol-fix4   # git checkout -q 0dc48618
+
+$ python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3
+EOLCHECK GREEN 1706/1706 件文本证据与仓库口径（LF）在 EOL 上一致
+rc=0
+
+$ python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs
+EOLCHECK GREEN 2278/2278 件文本证据与仓库口径（LF）在 EOL 上一致
+rc=0
