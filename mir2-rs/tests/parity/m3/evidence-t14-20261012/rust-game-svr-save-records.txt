@@ -1,0 +1,4 @@
+47:00:04:34.812 [INF] 存档请求已发（DB_SAVEHUMANRCD）ChrName:m3rbag30 queryId=2 记录 6146 字节
+50:00:04:35.012 [INF] 存档应答 queryId=2 ChrName=m3rbag30 Ident=1102 Recog=1
+84:00:04:56.660 [INF] 存档请求已发（DB_SAVEHUMANRCD）ChrName:m3rbag30 queryId=4 记录 6146 字节
+87:00:04:57.060 [INF] 存档应答 queryId=4 ChrName=m3rbag30 Ident=1102 Recog=1

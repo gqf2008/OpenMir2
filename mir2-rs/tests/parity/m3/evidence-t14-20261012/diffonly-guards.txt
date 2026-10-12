@@ -1,0 +1,10 @@
+### -DiffOnly 跨侧口径护栏（不碰端口）
+BAGEQUIP_SCOPE_OK peer='on step_ms=1000 start_delay_ms=3000 disable_autoplay=True' local='on step_ms=1000 start_delay_ms=3000 disable_autoplay=True'
+STARTPOSE_OK peer='map=0 home=0,289,618 pos=289,618 level=1 dir=0 bag=48@0,97@1,207@2,3@3 abil=1' local='map=0 home=0,289,618 pos=289,618 level=1 dir=0 bag=48@0,97@1,207@2,3@3 abil=1'
+--- 跨侧作用域字段级 diff（--canonical --fixed-newchr） ---
+DIFF mir2_db.characters: rows A=1 B=1 仅A=1 仅B=1
+    A: <VOLATILE>	0	<RUN>0	<RUN>0	0	289	618	1	0	1	0	0	0	0	0	289	618	0	0	0	0	0.000	0	0	0	0	0	0	0	0	0	0	0	0	0	0	NULL	NULL	NULL	0	<VOLATILE>	<VOLATILE>
+    B: <VOLATILE>	0	<RUN>0	<RUN>0	0	289	618	1	0	1	0	0	0	0	0	289	618	0	0	0	0	0.000	20	0	0	0	0	0	0	0	0	0	0	0	0	0	NULL	NULL	NULL	0	<VOLATILE>	<VOLATILE>
+RED: 作用域内 2 行不一致
+RED: 跨侧 diff != 0（差异要么修到 0，要么按 §6.0-3 登记 tests/parity/whitelist.md）
+RC=1

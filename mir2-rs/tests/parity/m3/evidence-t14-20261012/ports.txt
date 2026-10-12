@@ -1,0 +1,11 @@
+=== 开工前（2026-10-12 07:5x，起栈前实拍）===
+TCP 127.0.0.1:3306 LISTENING (仅共享 MySQL)
+
+=== C# 栈运行中（start-all.ps1）===
+5000/6000/5100/5700/5500/5600/7000/7100/7200 + 3306 LISTENING (E:\MirServer\* C#)
+
+=== Rust 栈运行中（start_rust_stack.ps1）===
+5000=game-svr(rust) 7000=login-gate(rust) 7100=sel-gate(rust) 7200=game-gate(rust) 6000/5100/5700=C# DBSrv 5500/5600=C# LoginSrv 3306=MySQL
+
+=== 收工后（2026-10-12 08:1x，-Stop + 十端口实拍）===
+  TCP    127.0.0.1:3306         0.0.0.0:0              LISTENING       22624

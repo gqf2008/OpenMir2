@@ -1,0 +1,39 @@
+--- 0) 入口实现识别护栏 ---
+ENTRY 5000 <- GameSrv [csharp] E:\MirServer\M2GameSvr\GameSrv.exe
+ENTRY 7000 <- LoginGate [csharp] E:\MirServer\LoginGate\LoginGate.exe
+ENTRY 7100 <- SelGate [csharp] E:\MirServer\SelGate\SelGate.exe
+ENTRY 7200 <- GameGate [csharp] E:\MirServer\RunGate\GameGate.exe
+--- 0.5) preflight：Rust 断线存档（T-27） ---
+PREFLIGHT Rust 断线存档：跳过（-Side csharp 或 -SkipSavePreflight）
+--- 1) 预检：MySQL / 前缀 ---
+PREFLIGHT MySQL 在听
+--- 2) 侧运行（复用 run_pair.ps1；同序列 = -FixedNewChr + -BagEquipSequence） ---
+SESSION E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\tests\parity\m3\sessions\csharp-20261012-075507
+SIDE=csharp PREFIX=m3cbag1 BOTS=1 ENTRY=127.0.0.1:7000
+PREFLIGHT 入口 127.0.0.1:7000 在听
+RUNTIME mysqld <- D:\mysql\mariadb-10.11.19-winx64\bin\mysqld.exe
+RUNTIME DBSrv <- E:\Users\gxh\Documents\GitHub\OpenMir2\src\DBSrv\bin\Release\DBSrv.exe
+RUNTIME LoginSrv <- E:\Users\gxh\Documents\GitHub\OpenMir2\src\LoginSrv\bin\Release\LoginSrv.exe
+RUNTIME GameSrv <- E:\MirServer\M2GameSvr\GameSrv.exe
+RUNTIME LoginGate <- E:\MirServer\LoginGate\LoginGate.exe
+RUNTIME SelGate <- E:\MirServer\SelGate\SelGate.exe
+RUNTIME GameGate <- E:\MirServer\RunGate\GameGate.exe
+ACCT_LEN_OK 最长账号名 8 字符（上限 10）
+FRESH_CHECK account=0 character=0
+--- 2.5) 固定起点：预热建角 + SQL pin ---
+PREWARM run_bots.ps1 -Count 1 -Prefix m3cbag1 -NewAccount -Port 7000 -RequireCharCreated -FixedNewChr -NewChrJob 0 -NewChrHair 2 -NewChrSex 0
+BUILD BotSrv...
+CONFIG: 1 bots, prefix=m3cbag1, target=127.0.0.1:7000, NewAccount=True, FixedNewChr=True
+CONFIG_FIXED_NEWCHR Job=0 Hair=2 Sex=0
+BOTSRV_PID=12484 LOG=E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\tests\botload\bots-20261012-075508.log
+PROGRESS spawned=0 login_ok=0/1 in_world=0/1 (src=load_stats.ndjson)
+PROGRESS spawned=1 login_ok=0/1 in_world=0/1 (src=load_stats.ndjson)
+RED: 登录成功 0/1 (0%) 未达标
+预热建角失败（run_bots -RequireCharCreated 非 0）
+At E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3bag\mir2-rs\tests\parity\m3\run_pair.ps1:233 char:30
++ ... TEXITCODE -ne 0) { throw '预热建角失败（run_bots -RequireCharCreated 非 0）' }
++                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : OperationStopped: (预热建角失败（run_bots -RequireCharCreated 非 0）:String) [], RuntimeException
+    + FullyQualifiedErrorId : 预热建角失败（run_bots -RequireCharCreated 非 0）
+ 
+RED: run_pair（csharp 侧）未通过（rc=1）——同序列/快照/抽取未成立
