@@ -423,6 +423,118 @@ function Format-M3StartPoseSql {
     $MapName, $CX, $CY, $HomeMap, $HomeX, $HomeY, $Level, $Dir, $safe)
 }
 
+# ===========================================================
+# 攻击对拍夹具（M3②③；卡 openmir2-m3-attack-pair-fixture）
+# ===========================================================
+# 目标：两个固定起点 bot，attacker 在 (X,Y) 面向 Dir，victim 在相邻格 (X+1,Y)；
+# attacker 固定发 N 次 CM_HIT（方向固定 = 指向 victim 格），victim 被打；伤害从**双方都能读到**的
+# 下行解读（victim 自己收 SM_STRUCK；attacker 作为 AOI 观察者也收）。两侧同种子 + 同起点 + 同序列
+# ⇒ 逐次伤害序列（按「第 k 次」）与 hits/dodges 应相等。
+#
+# 与单起点 pin 分开的原因：`run_pair` 的既有 pin 把所有 bot 钉在同一点（供背包/装备序列），
+# 攻击需要 attacker/victim **相邻但不重叠**。victim 的 HP/MaxHP 抬高（防 100+ 次内死亡后无 struck）。
+$script:M3AttackVictimHp = 100000
+function Format-M3AttackPose {
+  param(
+    [string]$MapName = '0',
+    [int]$AX = 289, [int]$AY = 618, [int]$Dir = 2,
+    [int]$VX = 290, [int]$VY = 618,
+    [int]$Level = 1, [int]$VictimHp = 100000
+  )
+  return ("pair map={0} attacker={1},{2},dir={3} victim={4},{5} level={6} vhp={7}" -f `
+    $MapName, $AX, $AY, $Dir, $VX, $VY, $Level, $VictimHp)
+}
+
+function ConvertTo-M3AttackPose {
+  param([AllowEmptyString()][string]$Raw)
+  if ([string]::IsNullOrWhiteSpace($Raw) -or $Raw.Trim() -eq 'none') { return 'none' }
+  if ($Raw -notmatch '^pair map=(\S+) attacker=(-?\d+),(-?\d+),dir=(-?\d+) victim=(-?\d+),(-?\d+) level=(-?\d+) vhp=(-?\d+)$') {
+    return $null
+  }
+  return ("pair map={0} attacker={1},{2},dir={3} victim={4},{5} level={6} vhp={7}" -f `
+    $Matches[1], $Matches[2], $Matches[3], $Matches[4], $Matches[5], $Matches[6], $Matches[7], $Matches[8])
+}
+
+function Get-M3PeerAttackPoseGuard {
+  param(
+    [Parameter(Mandatory)][string]$PeerDir,
+    [Parameter(Mandatory)][AllowEmptyString()][string]$LocalPose
+  )
+  $failed = New-Object System.Collections.Generic.List[string]
+  $messages = New-Object System.Collections.Generic.List[string]
+  $peerPose = $null
+  $baselinePath = Join-Path $PeerDir 'baseline.json'
+  if (-not (Test-Path $baselinePath)) {
+    $messages.Add(("RED: 参照会话缺 baseline.json: {0}" -f $baselinePath))
+    $failed.Add('peer_baseline_missing')
+    return [pscustomobject]@{ failed = @($failed); messages = @($messages); peer_pose = $peerPose }
+  }
+  $baseline = $null
+  $parseError = $null
+  try {
+    $baseline = Get-Content -Path $baselinePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+  } catch { $parseError = $_.Exception.Message }
+  if ($null -eq $baseline) {
+    if ([string]::IsNullOrWhiteSpace($parseError)) { $parseError = '内容为空或不是 JSON 对象（半写/截断）' }
+    $messages.Add(("RED: 参照会话 baseline.json 解析失败: {0} —— {1}" -f $baselinePath, $parseError))
+    $failed.Add('peer_baseline_invalid')
+    return [pscustomobject]@{ failed = @($failed); messages = @($messages); peer_pose = $peerPose }
+  }
+  $localCanon = ConvertTo-M3AttackPose -Raw $LocalPose
+  $peerRaw = [string]$baseline.attack_pose
+  $peerPose = ConvertTo-M3AttackPose -Raw $peerRaw
+  if ($null -eq $peerPose) {
+    $messages.Add(("RED: 参照会话 attack_pose 形态认不出: '{0}'（{1}）" -f $peerRaw, $baselinePath))
+    $failed.Add('peer_attack_pose_invalid')
+    return [pscustomobject]@{ failed = @($failed); messages = @($messages); peer_pose = $peerPose }
+  }
+  if ([string]::IsNullOrEmpty($peerRaw) -and $localCanon -ne 'none') {
+    $peerPose = '(missing)'
+    $messages.Add(("RED: 参照会话 baseline.json 缺 attack_pose（旧产物）: {0}" -f $baselinePath))
+    $failed.Add('peer_attack_pose_missing')
+    return [pscustomobject]@{ failed = @($failed); messages = @($messages); peer_pose = $peerPose }
+  }
+  if ($peerPose -ne $localCanon) {
+    $messages.Add(("-PeerSession 攻击起点与本侧不一致——peer='{0}' vs local='{1}'；两侧不是同一初始状态，攻击序列 diff 无仲裁力（pair pin 值必须逐字节相同）") -f $peerPose, $localCanon)
+    $messages.Insert(0, 'RED: 参照会话攻击起点与本侧不一致')
+    $failed.Add('peer_attack_pose_mismatch')
+  }
+  return [pscustomobject]@{ failed = @($failed); messages = @($messages); peer_pose = $peerPose }
+}
+
+function Get-M3SessionAttackPose {
+  param([Parameter(Mandatory)][string]$Dir)
+  $baselinePath = Join-Path $Dir 'baseline.json'
+  if (-not (Test-Path $baselinePath)) { return $null }
+  $baseline = $null
+  try {
+    $baseline = Get-Content -Path $baselinePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+  } catch { return $null }
+  if ($null -eq $baseline) { return $null }
+  return (ConvertTo-M3AttackPose -Raw ([string]$baseline.attack_pose))
+}
+
+# 攻击变体的 pin SQL（按 character 返回多条）：图/坐标/朝向 + Abil（Hp=MaxHP 抬高）。
+function Get-M3AttackPinSql {
+  param(
+    [Parameter(Mandatory)][string]$ChrName,
+    [Parameter(Mandatory)][int]$CX,
+    [Parameter(Mandatory)][int]$CY,
+    [int]$Dir = 0,
+    [string]$MapName = '0',
+    [int]$HomeMap = 0, [int]$HomeX = 289, [int]$HomeY = 618,
+    [int]$Level = 1,
+    [int]$Hp = 100000
+  )
+  $safe = $ChrName.Replace("'", "''")
+  $sql = New-Object System.Collections.Generic.List[string]
+  $sql.Add(("UPDATE mir2_db.characters SET MapName='{0}', CX={1}, CY={2}, HomeMap={3}, HomeX={4}, HomeY={5}, Level={6}, Dir={7} WHERE ChrName='{8}'" -f `
+    $MapName, $CX, $CY, $HomeMap, $HomeX, $HomeY, $Level, $Dir, $safe))
+  $sql.Add(("UPDATE mir2_db.characters_ablity a JOIN mir2_db.characters c ON a.PlayerId=c.Id SET a.Level={0}, a.Hp={1}, a.MaxHP={1}, a.Mp=15, a.MAxMP=15, a.IncHealth=0, a.IncSpell=0 WHERE c.ChrName='{2}'" -f `
+    $Level, $Hp, $safe))
+  return $sql.ToArray()
+}
+
 # ⑥ pin settle+hold 判据（T-14 两相固定起点；owner 2026-10-12 08:20 要求的「可判红自检」）。
 #
 # 失败模式（第十四格实跑踩到）：预热相的掉线存档（BotSrv 被杀 ⇒ GameSvr `SaveHumanRcd` ⇒ FrontEngine）
@@ -477,6 +589,105 @@ function Get-M3PinHoldVerdict {
 #   $Settle($ctx,$attempt)  等一个 settle 窗口；**返回 $true 表示确实等了**（否则该轮不计入 settle 轮数）
 #   $Observe($ctx,$attempt) 返回 @{ Pinned=..; BagPinned=..; AbilPinned=.. } 的三项复验
 # 返回 @{ Hold; Attempts; SettleRounds; Verdicts }。hold 不住 ⇒ Hold=$false（调用方 throw，fail-closed）。
+# ⑦ 攻击序列口径（M3②③ 真机对拍夹具，卡 openmir2-m3-attack-pair-fixture）。
+#
+# 与 ④ 同形：`(off)` 或 `on count=<int> step_ms=<int> start_delay_ms=<int> disable_autoplay=<True|False>`。
+# 攻击序列**必须**一并关挂机（同 T-14 理由：挂机是无种子 RNG 随机走位），两侧同开关才有仲裁力。
+function Format-M3AttackScope {
+  param(
+    [bool]$AttackSequence = $false,
+    [int]$AttackCount = 120,
+    [int]$AttackStepMs = 500,
+    [int]$AttackStartDelayMs = 3000,
+    [bool]$DisableAutoPlay = $false
+  )
+  if (-not $AttackSequence) { return '(off)' }
+  $ap = if ($DisableAutoPlay) { 'True' } else { 'False' }
+  return ("on count={0} step_ms={1} start_delay_ms={2} disable_autoplay={3}" -f $AttackCount, $AttackStepMs, $AttackStartDelayMs, $ap)
+}
+
+# baseline.json 里已存的 attack_sequence 串 → canonical。旧产物缺 `disable_autoplay=` ⇒ False。
+function ConvertTo-M3AttackScope {
+  param([AllowEmptyString()][string]$Raw)
+  if ([string]::IsNullOrWhiteSpace($Raw) -or $Raw.Trim() -eq '(off)') { return '(off)' }
+  if ($Raw -notmatch '^on\b') { return $null }
+  $count = if ($Raw -match 'count=(\d+)') { [int]$Matches[1] } else { 120 }
+  $step = if ($Raw -match 'step_ms=(\d+)') { [int]$Matches[1] } else { 500 }
+  $sd = if ($Raw -match 'start_delay_ms=(\d+)') { [int]$Matches[1] } else { 3000 }
+  $ap = if ($Raw -match 'disable_autoplay=(True|False)') { $Matches[1] } else { 'False' }
+  return ("on count={0} step_ms={1} start_delay_ms={2} disable_autoplay={3}" -f $count, $step, $sd, $ap)
+}
+
+# 参照会话攻击序列开关一致性（机判；含 peer baseline.json 解析失败防线，同 P-1）。
+function Get-M3PeerAttackScopeGuard {
+  param(
+    [Parameter(Mandatory)][string]$PeerDir,
+    [Parameter(Mandatory)][AllowEmptyString()][string]$LocalScope
+  )
+  $failed = New-Object System.Collections.Generic.List[string]
+  $messages = New-Object System.Collections.Generic.List[string]
+  $peerScope = $null
+  $baselinePath = Join-Path $PeerDir 'baseline.json'
+  if (-not (Test-Path $baselinePath)) {
+    $messages.Add(("RED: 参照会话缺 baseline.json: {0}" -f $baselinePath))
+    $failed.Add('peer_baseline_missing')
+    return [pscustomobject]@{ failed = @($failed); messages = @($messages); peer_scope = $peerScope }
+  }
+  $baseline = $null
+  $parseError = $null
+  try {
+    $baseline = Get-Content -Path $baselinePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+  } catch { $parseError = $_.Exception.Message }
+  if ($null -eq $baseline) {
+    if ([string]::IsNullOrWhiteSpace($parseError)) { $parseError = '内容为空或不是 JSON 对象（半写/截断）' }
+    $messages.Add(("RED: 参照会话 baseline.json 解析失败: {0} —— {1}" -f $baselinePath, $parseError))
+    $failed.Add('peer_baseline_invalid')
+    return [pscustomobject]@{ failed = @($failed); messages = @($messages); peer_scope = $peerScope }
+  }
+  $localCanon = ConvertTo-M3AttackScope -Raw $LocalScope
+  $peerRaw = [string]$baseline.attack_sequence
+  $peerCanon = ConvertTo-M3AttackScope -Raw $peerRaw
+  $peerScope = $peerCanon
+  if ($null -eq $peerCanon) {
+    $messages.Add(("RED: 参照会话 attack_sequence 形态认不出: '{0}'（{1}）" -f $peerRaw, $baselinePath))
+    $failed.Add('peer_attack_scope_invalid')
+    return [pscustomobject]@{ failed = @($failed); messages = @($messages); peer_scope = $peerScope }
+  }
+  if ([string]::IsNullOrEmpty($peerRaw)) {
+    if ($localCanon -eq '(off)') { $peerCanon = '(off)'; $peerScope = '(off)' }
+    else {
+      $peerScope = '(missing)'
+      $messages.Add(("RED: 参照会话 baseline.json 缺 attack_sequence（旧产物/被裁剪）: {0}" -f $baselinePath))
+      $failed.Add('peer_attack_scope_missing')
+      return [pscustomobject]@{ failed = @($failed); messages = @($messages); peer_scope = $peerScope }
+    }
+  }
+  if ($peerCanon -ne $localCanon) {
+    $messages.Add(("-PeerSession 攻击序列开关与本侧不一致——peer='{0}' vs local='{1}'；两侧不是同一组夹具开关，跨侧 diff 无仲裁力（count/step_ms/start_delay_ms/disable_autoplay 必须一致）") -f $peerCanon, $localCanon)
+    if (($localCanon -match 'disable_autoplay=True') -and ($peerCanon -match 'disable_autoplay=False') -and ($peerRaw -notmatch 'disable_autoplay=')) {
+      $messages.Add('RED: 参照会话是「开着挂机」跑的旧产物（无 disable_autoplay 记录）——挂机随机走位会让目标/坐标必然出 diff；C# 基线必须按新开关重跑一次')
+      $failed.Add('peer_attack_autoplay_on')
+    } else {
+      $failed.Add('peer_attack_scope_mismatch')
+    }
+    $messages.Insert(0, 'RED: 参照会话攻击序列开关与本侧不一致')
+  }
+  return [pscustomobject]@{ failed = @($failed); messages = @($messages); peer_scope = $peerScope }
+}
+
+# 从会话目录 baseline.json 读攻击序列开关（canonical）；缺/坏 ⇒ $null。
+function Get-M3SessionAttackScope {
+  param([Parameter(Mandatory)][string]$Dir)
+  $baselinePath = Join-Path $Dir 'baseline.json'
+  if (-not (Test-Path $baselinePath)) { return $null }
+  $baseline = $null
+  try {
+    $baseline = Get-Content -Path $baselinePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+  } catch { return $null }
+  if ($null -eq $baseline) { return $null }
+  return (ConvertTo-M3AttackScope -Raw ([string]$baseline.attack_sequence))
+}
+
 function Invoke-M3PinSettleHold {
   param(
     [Parameter(Mandatory)][scriptblock]$Pin,

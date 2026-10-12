@@ -1,0 +1,23 @@
+NONTRIVIAL a=True() b=True()
+GREEN: 跨侧攻击序列 diff = 0（attacked=10 hits=9 dodges=1 sum=197）
+NONTRIVIAL a=True() b=True()
+RED: 跨侧攻击序列差异 1 项（差异要么修到 0，要么按 §6.0-3 登记 tests/parity/whitelist.md）
+  - k=5 dmg 不等: a=20 b=21
+NONTRIVIAL a=True() b=True()
+RED: 跨侧攻击序列差异 5 项（差异要么修到 0，要么按 §6.0-3 登记 tests/parity/whitelist.md）
+  - k=5 hit 不等: a=True b=False
+  - k=5 dmg 不等: a=20 b=0
+  - 统计 hits 不等: a=9 b=8
+  - 统计 dodges 不等: a=1 b=2
+  - 统计 sum 不等: a=197 b=177
+NONTRIVIAL a=False(hits=0（一次都没命中；无法区分实现与空序列）) b=False(hits=0（一次都没命中；无法区分实现与空序列）)
+RED: 非平凡门未过——不容许用恒 0/恒绿比较器（hits=0（一次都没命中；无法区分实现与空序列） / hits=0（一次都没命中；无法区分实现与空序列））
+RED: 空序列（a=0 b=10）
+NONTRIVIAL a=True() b=True()
+RED: 跨侧攻击序列差异 5 项（差异要么修到 0，要么按 §6.0-3 登记 tests/parity/whitelist.md）
+  - 长度不等: a=10 b=5
+  - 统计 attacked 不等: a=10 b=5
+  - 统计 hits 不等: a=9 b=5
+  - 统计 dodges 不等: a=1 b=0
+  - 统计 sum 不等: a=197 b=99
+SELFTEST GREEN: attack_diff selftest 10/10（align 窗口归属 + 同序列绿 + 改坏 dmg/hit 必红 + 全 0 非平凡门 + 空序列 + 长度不等）

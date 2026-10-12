@@ -39,6 +39,10 @@ param(
   [switch]$BagEquipSequence,      # M3 T-14 夹具：进世界后按固定顺序发背包/装备动作（拾取→装备→卸下→丢弃→用药）
   [int]$BagEquipStepMs = 1000,    # 仅 -BagEquipSequence 时生效：每步间隔
   [int]$BagEquipStartDelayMs = 3000, # 仅 -BagEquipSequence 时生效：进世界到第一步的额外等待
+  [switch]$AttackSequence,           # M3②③ 夹具：进世界后按固定攻击序列发 CM_HIT（T-22 扩展）
+  [int]$AttackCount = 120,           # 仅 -AttackSequence 时生效：攻击步数
+  [int]$AttackStepMs = 500,          # 仅 -AttackSequence 时生效：每步间隔
+  [int]$AttackStartDelayMs = 3000,   # 仅 -AttackSequence 时生效：进世界到第一步的额外等待
   [int]$SoftCloseAfterWorldMs = 0,   # M1③ 退出路径夹具：进世界后发 CM_SOFTCLOSE(1009)；0=关（默认）
   [switch]$DisableAutoPlay,          # M1③ 退出路径夹具：关掉自动挂机（默认关=原行为）；见 ClientManager.RunAutoPlay
   [switch]$WriteConfigOnly,       # 只写 AppSetting.json 并退出（不构建/不起进程；供无栈自检与红检用）
@@ -104,6 +108,10 @@ $cfg = @{
     BagEquipSequence    = [bool]$BagEquipSequence
     BagEquipStepMs      = $BagEquipStepMs
     BagEquipStartDelayMs = $BagEquipStartDelayMs
+    AttackSequence      = [bool]$AttackSequence
+    AttackCount         = $AttackCount
+    AttackStepMs        = $AttackStepMs
+    AttackStartDelayMs  = $AttackStartDelayMs
     SoftCloseAfterWorldMs = $SoftCloseAfterWorldMs
     DisableAutoPlay     = [bool]$DisableAutoPlay
   }
@@ -116,6 +124,9 @@ if ($FixedNewChr) {
 }
 if ($BagEquipSequence) {
     Write-Output "CONFIG_BAGEQUIPSEQ step_ms=$BagEquipStepMs start_delay_ms=$BagEquipStartDelayMs"
+}
+if ($AttackSequence) {
+    Write-Output "CONFIG_ATTACKSEQ count=$AttackCount step_ms=$AttackStepMs start_delay_ms=$AttackStartDelayMs"
 }
 if ($SoftCloseAfterWorldMs -gt 0) {
     Write-Output "CONFIG_SOFTCLOSE after_world_ms=$SoftCloseAfterWorldMs"
