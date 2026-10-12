@@ -947,6 +947,7 @@ pub fn award_kill_exp(
     mon_exp: i32,
     need_exps: &[i32],
     config: &CombatConfig,
+    map_exp_rate: Option<i32>,
 ) -> (i32, bool, u8) {
     // KillTargetTrigger: monsterExp = CalcGetExp(WAbil.Level, fightExp)
     let monster_exp = calc_get_exp(
@@ -961,6 +962,11 @@ pub fn award_kill_exp(
         dw_exp *= config.kill_mon_exp_multiple;
         dw_exp *= config.mn_kill_mon_exp_multiple;
         dw_exp = hutil::round(f64::from(config.kill_mon_exp_rate) / 100.0 * f64::from(dw_exp));
+        // `Envir.Flag.boEXPRATE` ⇒ 地图级经验倍率（`PlayObject.Base.cs:143-146`）。
+        // `map_exp_rate = Some(rate)` 对应 `boEXPRATE==true` 时的 `Envir.Flag.ExpRate`。
+        if let Some(rate) = map_exp_rate {
+            dw_exp = hutil::round(f64::from(rate) / 100.0 * f64::from(dw_exp));
+        }
     }
     // GetExp：加经验；`if (Abil.Exp >= Abil.MaxExp)` 单步升级（C# 就是 if 而非 while）
     killer.exp += dw_exp;

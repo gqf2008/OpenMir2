@@ -1,0 +1,25 @@
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\world)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.49s
+     Running unittests src\lib.rs (E:/tmp/m2svr-d1-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 1 test
+test world::tests::pet_kill_awards_exp_to_master ... FAILED
+
+failures:
+
+---- world::tests::pet_kill_awards_exp_to_master stdout ----
+
+thread 'world::tests::pet_kill_awards_exp_to_master' (30172) panicked at crates\world\src\world.rs:1356:9:
+assertion `left == right` failed: 只有 master 一支: TickRecord { tick_seq: 1, clock_ms: 200, processed: [(1, true), (2, true), (3, true)], aoi_order: [1, 2, 3], attacks: [], deaths: [(3, 0, 0, Some(2), 0)], exp_awards: [] }
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    world::tests::pet_kill_awards_exp_to_master
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 51 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-world --lib`
+cargo_test_rc=101

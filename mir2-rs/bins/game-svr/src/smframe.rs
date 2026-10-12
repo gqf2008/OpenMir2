@@ -209,6 +209,24 @@ pub fn sm_healthspellchanged(recog: i32, hp: u16, mp: u16, max_hp: u16) -> Vec<u
     gm_data_body(header, &[])
 }
 
+/// `SM_WINEXP`（`PlayObject.Message.cs:1666-1669` 的 `case RM_WINEXP`）：
+/// `MakeMessage(SM_WINEXP, Abil.Exp, LoWord(processMsg.nParam1), HiWord(processMsg.nParam1), 0)`
+/// + `SendSocket`（无尾）。发点是 `PlayObject.Base.cs:153` 的 `GetExp`（`SendMsg(RM_WINEXP,0,dwExp,0,0)`）。
+///
+/// ⇒ `Recog = 加完后的 Abil.Exp`（**总量**，不是本次增量）、`Param = LoWord(dwExp)`、
+/// `Tag = HiWord(dwExp)`、`Series = 0`。
+#[must_use]
+pub fn sm_winexp(total_exp: i32, delta: i32) -> Vec<u8> {
+    let header = command_header(
+        total_exp,
+        messages::SM_WINEXP,
+        lo_word(delta),
+        hi_word(delta),
+        0,
+    );
+    gm_data_body(header, &[])
+}
+
 /// 见 [`sm_additem`] 段的口径表。
 #[must_use]
 pub fn sm_goldchanged(gold: i32, game_gold: i32) -> Vec<u8> {

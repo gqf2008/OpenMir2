@@ -1,0 +1,30 @@
+# 本片（M3④-实现 D 分片 D①：击杀经验链）复现命令
+# 工作目录：<worktree>/mir2-rs ；隔离目标目录 CARGO_TARGET_DIR=E:/tmp/m2svr-d1-target
+
+# --- 判据（3 条，构造级）---
+CARGO_TARGET_DIR=E:/tmp/m2svr-d1-target cargo test -p mir2-world --lib --offline pet_kill_awards_exp_to_master
+CARGO_TARGET_DIR=E:/tmp/m2svr-d1-target cargo test -p mir2-world --lib --offline map_exp_rate_multiplies_kill_exp
+CARGO_TARGET_DIR=E:/tmp/m2svr-d1-target cargo test -p game-svr --bin game-svr --offline exp_downlink
+
+# --- 四门禁 ---
+CARGO_TARGET_DIR=E:/tmp/m2svr-d1-target cargo fmt --all -- --check
+CARGO_TARGET_DIR=E:/tmp/m2svr-d1-target cargo clippy --workspace --all-targets --offline -- -D warnings
+CARGO_TARGET_DIR=E:/tmp/m2svr-d1-target cargo run -q -p msgcodegen --offline -- --check
+CARGO_TARGET_DIR=E:/tmp/m2svr-d1-target cargo test --workspace --offline --no-fail-fast
+
+# --- 独立基线（master b7fef4a7，独立 worktree，不碰共享主检出）---
+git worktree add --detach E:/tmp/m2svr-d1-base b7fef4a7
+cd E:/tmp/m2svr-d1-base/mir2-rs
+CARGO_TARGET_DIR=E:/tmp/m2svr-d1-baseline-target cargo test --workspace --offline --no-fail-fast
+# 期望 86 suites / 771 passed / 0 failed / 18 ignored（本片树 = 774 ⇒ +3）
+
+# --- 改坏必红（每次：备份 -> 变异 -> 跑命中用例 -> 还原 -> sha256 核对）---
+# RC-D1-A：删掉 settle_deaths 的 `if let Some(m) = hitter_master { winners.push(m); }`   -> pet_kill_awards_exp_to_master FAILED
+# RC-D1-B：award_kill_exp 里 `f64::from(rate) / 100.0` 改成 `f64::from(rate) * 0.0 / 100.0` -> map_exp_rate_multiplies_kill_exp FAILED
+# RC-D1-C：sm_winexp 的 `lo_word(delta)`/`hi_word(delta)` 互换                              -> exp_downlink_sends_sm_winexp_and_syncs_session FAILED
+# 还原后 sha256(crates/world/src/world.rs)=50ff042d…、(combat.rs)=baea81bb…、(smframe.rs)=4c9bcb6e… 与备份逐字节一致。
+
+# --- 证据 hash（仓库 LF/git-blob 口径）---
+python -I tools/evidence-hash/verify_sha256sums.py write mir2-rs/tests/parity/world/drop-exp-wiring-20261013
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/world/drop-exp-wiring-20261013
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/world/drop-exp-wiring-20261013

@@ -1,0 +1,12 @@
+# 本片改动清单（drop-exp-wiring 分片 D①：击杀经验链）
+
+## base = origin/master b7fef4a7 ; head = drop-exp-host（本片单提交）
+
+ mir2-rs/bins/game-svr/src/main.rs    | 110 ++++++++++++++++++++++++++++++
+ mir2-rs/bins/game-svr/src/smframe.rs |  18 +++++
+ mir2-rs/crates/world/src/combat.rs   |   6 ++
+ mir2-rs/crates/world/src/world.rs    | 127 +++++++++++++++++++++++++++++++++--
+ 4 files changed, 254 insertions(+), 7 deletions(-)
+
+## 新增文件（证据目录）
+?? mir2-rs/tests/parity/world/drop-exp-wiring-20261013/

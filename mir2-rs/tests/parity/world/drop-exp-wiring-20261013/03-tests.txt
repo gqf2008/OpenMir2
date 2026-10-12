@@ -1,0 +1,12 @@
+# 新增/受影响用例（本片 +3）
+
+## mir2-world（2 条）
+test world::tests::pet_kill_awards_exp_to_master ... ok
+test world::tests::map_exp_rate_multiplies_kill_exp ... ok
+
+## game-svr bin（1 条）
+test tests::exp_downlink_sends_sm_winexp_and_syncs_session ... ok
+
+## 汇总（本片树 vs master 基线）
+本片: 774 passed / 0 failed / 18 ignored / 86 suites
+基线 b7fef4a7: 771 passed / 0 failed / 18 ignored / 86 suites

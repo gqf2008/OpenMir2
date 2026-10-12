@@ -75,6 +75,12 @@ pub struct TickRecord {
     /// 本 tick 的死亡结算：`(死者 id, 掉落物品数, 金币, 经验归属者, 获得经验)`
     /// —— 归属者取 C# `ExpHitter`（不是 `LastHiter`），见 `Entity::exp_hitter`
     pub deaths: Vec<(i32, usize, i32, Option<i32>, i32)>,
+    /// 本 tick 的**经验归属**（oracle `BaseObject.cs:2429 KillFunc` → `RM_PLAYERKILLMONSTER`
+    /// → `PlayObject.cs:1632 KillTargetTrigger`）：`(获得者 id, 本次获得, 是否升级, 升级后等级)`。
+    /// 与 `deaths` 的 5 元组不同，这里把 `ExpHitter.Master`（宠物/下属击杀给主人）与
+    /// `ExpHitter` 本人**都**列出——oracle 对二者**各发一条** `RM_PLAYERKILLMONSTER`
+    /// （`BaseObject.cs:2434-2444`）。供宿主出 `SM_WINEXP(44)`。
+    pub exp_awards: Vec<(i32, i32, bool, u8)>,
 }
 
 pub struct World {
@@ -112,6 +118,10 @@ pub struct World {
     pub combat_config: CombatConfig,
     /// C# `Config.ClearDropOnFloorItemTime`
     pub clear_drop_on_floor_item_time: i64,
+    /// 每张地图的 `Envir.Flag.boEXPRATE`/`ExpRate`（`PlayObject.Base.cs:143-146`）：
+    /// `None` = 该图无 `EXPRATE` 行（不加倍）；`Some(rate)` = 杀怪经验 × `rate/100`。
+    /// 由接线层按 `MapRegistry::flag_of(map_id)` 逐图灌入（缺省全 `None` ⇒ 行为与改动前逐字节相同）。
+    pub map_exp_rate: Vec<Option<i32>>,
     /// 帧内待处理命令（FIFO）
     pending: VecDeque<Command>,
     /// 判据③：tick 必须始终跑在同一个线程上
@@ -134,7 +144,8 @@ impl World {
 
     /// 多地图世界（切图用）；`map_id` = 下标。
     pub fn with_maps(sizes: Vec<(i32, i32)>) -> Self {
-        let maps = sizes.into_iter().map(|(w, h)| MapGrid::new(w, h)).collect();
+        let maps: Vec<MapGrid> = sizes.into_iter().map(|(w, h)| MapGrid::new(w, h)).collect();
+        let maps_len = maps.len();
         // S1：实体存储是 bevy_ecs 内核；时钟/线程断言/顺序收集都走它的单线程骨架。
         let mut entities = EntityStore::new();
         entities
@@ -160,6 +171,7 @@ impl World {
             need_exps: vec![0; 1000],
             combat_config: CombatConfig::default(),
             clear_drop_on_floor_item_time: 5 * 60 * 1000,
+            map_exp_rate: vec![None; maps_len],
             pending: VecDeque::new(),
             owner_thread: None,
             clock_runner,
@@ -202,6 +214,14 @@ impl World {
     #[must_use]
     pub fn monster_ai_enabled(&self) -> bool {
         self.ai_enabled
+    }
+
+    /// 设置某张地图的 `Envir.Flag.boEXPRATE`/`ExpRate`（see [`World::map_exp_rate`]）。
+    /// 越界 `map_id` 静默忽略（接线层的图下标来自同一注册表）。幂等。
+    pub fn set_map_exp_rate(&mut self, map_id: usize, rate: Option<i32>) {
+        if let Some(slot) = self.map_exp_rate.get_mut(map_id) {
+            *slot = rate;
+        }
     }
 
     /// 攻击路径取数的统一入口：按隔离开关选流。
@@ -314,6 +334,7 @@ impl World {
             aoi_order: Vec::new(),
             attacks: Vec::new(),
             deaths: Vec::new(),
+            exp_awards: Vec::new(),
         };
 
         // 命令 FIFO
@@ -752,18 +773,40 @@ impl World {
             // 子集口径：`ExpHitter.Master != null`（宝宝击杀）不在本骨架；30s/6s 的**墙钟**过期也不做。
             let mut gained = 0;
             if let Some(hitter_id) = exp_hitter {
-                let is_player = self
+                let hitter_master = self.entities.get(hitter_id).and_then(|k| k.master);
+                let hitter_is_player = self
                     .entities
                     .get(hitter_id)
                     .is_some_and(|k| k.race == crate::entity::ACTOR_RACE_PLAY);
-                if is_player {
+                // oracle `KillFunc`（`BaseObject.cs:2434-2444`）：`ExpHitter.Master != null` ⇒
+                // 给 master；`ExpHitter.Race == Play` ⇒ 再给 `ExpHitter` 本人（两支照抄，
+                // 真实实体上互斥）。`deaths` 的 5 元组口径仍取「主获得者」= master 优先。
+                let mut winners: Vec<i32> = Vec::new();
+                if let Some(m) = hitter_master {
+                    winners.push(m);
+                }
+                if hitter_is_player {
+                    winners.push(hitter_id);
+                }
+                let primary = hitter_master.unwrap_or(hitter_id);
+                let map_rate = self.map_exp_rate.get(map_id).copied().flatten();
+                for winner in winners {
                     let need_exps = std::mem::take(&mut self.need_exps);
                     let cfg = self.combat_config;
-                    if let Some(k) = self.entities.get_mut(hitter_id) {
-                        let (g, _, _) = award_kill_exp(k, mon_exp, &need_exps, &cfg);
-                        gained = g;
+                    let mut amount = 0;
+                    let mut leveled = false;
+                    let mut new_level = 0;
+                    if let Some(k) = self.entities.get_mut(winner) {
+                        let (g, l, lvl) = award_kill_exp(k, mon_exp, &need_exps, &cfg, map_rate);
+                        amount = g;
+                        leveled = l;
+                        new_level = lvl;
                     }
                     self.need_exps = need_exps;
+                    if winner == primary {
+                        gained = amount;
+                    }
+                    record.exp_awards.push((winner, amount, leveled, new_level));
                 }
             }
             record.deaths.push((id, placed, gold, exp_hitter, gained));
@@ -1067,7 +1110,7 @@ pub struct FloorItemView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::{Entity, MonsterCtorDraws, ACTOR_RACE_PLAY};
+    use crate::entity::{Entity, MonsterCtorDraws, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY};
 
     fn world_with(entities: &[(i32, i32, i32)]) -> World {
         let mut w = World::new(64, 64);
@@ -1285,6 +1328,76 @@ mod tests {
         // 再 tick 不重复结算
         let rec2 = w.tick();
         assert!(rec2.deaths.is_empty(), "死亡只能结算一次: {rec2:?}");
+    }
+
+    /// `KillFunc` 的 `ExpHitter.Master != null` 支（`BaseObject.cs:2434-2437`）：宠物/下属击杀 ⇒
+    /// 经验给**主人**；`TickRecord::exp_awards` 列出获得者（供宿主出 `SM_WINEXP(44)`）。
+    /// 改坏必红：删掉 master 支（只给 `ExpHitter` 本人）⇒ 主人 `exp` 不变、`exp_awards` 空。
+    #[test]
+    fn pet_kill_awards_exp_to_master() {
+        let mut w = World::new(32, 32);
+        w.need_exps[1] = 1000;
+        let master = w.add_entity(player(1, "hero", 10, 10, 5));
+        let pet = {
+            let mut e = Entity::new(0, "pet", 11, 10);
+            e.race = ACTOR_RACE_MONSTER; // 非 Play ⇒ `KillFunc` 只走 master 支
+            e.master = Some(master);
+            w.add_entity(e)
+        };
+        // 直接造一只 `hp=0`、`ExpHitter = 宠物` 的怪（本用例只测经验归属，不走攻击路径）。
+        let mon = {
+            let mut e = Entity::new(0, "鸡", 12, 10);
+            e.race = ACTOR_RACE_MONSTER;
+            e.mon_exp = 400;
+            e.exp_hitter = Some(pet);
+            w.add_entity(e)
+        };
+        w.entities.get_mut(mon).unwrap().hp = 0;
+        let exp_before = w.entities.get(master).unwrap().exp;
+        let pet_exp_before = w.entities.get(pet).unwrap().exp;
+        let rec = w.tick();
+        assert_eq!(rec.exp_awards.len(), 1, "只有 master 一支: {rec:?}");
+        let (winner, amount, _leveled, _level) = rec.exp_awards[0];
+        assert_eq!(winner, master, "经验归属者 = ExpHitter.Master");
+        assert!(amount > 0, "master 应获得经验");
+        assert_eq!(w.entities.get(master).unwrap().exp, exp_before + amount);
+        assert_eq!(
+            w.entities.get(pet).unwrap().exp,
+            pet_exp_before,
+            "宠物本人（非 Play race）不获得经验"
+        );
+        assert_eq!(rec.deaths[0].4, amount, "deaths 的 5 元组口径 = 主获得者");
+    }
+
+    /// `Envir.Flag.boEXPRATE`/`ExpRate`（`PlayObject.Base.cs:143-146`）：地图倍率在
+    /// `KillMonExpRate` 之后、`GetExp` 之前施加。
+    /// 改坏必红：不乘地图倍率（或乘错次序）⇒ 本用例的 `rate_amt` 断言必红。
+    #[test]
+    fn map_exp_rate_multiplies_kill_exp() {
+        let build = |rate: Option<i32>| {
+            let mut w = World::new(32, 32);
+            w.need_exps[1] = 1_000_000; // 不升级，只看单次经验
+            w.set_map_exp_rate(0, rate);
+            let p = w.add_entity(player(1, "hero", 10, 10, 5));
+            let mon = {
+                let mut e = Entity::new(0, "鸡", 11, 10);
+                e.race = ACTOR_RACE_MONSTER;
+                e.mon_exp = 400;
+                e.exp_hitter = Some(p);
+                w.add_entity(e)
+            };
+            w.entities.get_mut(mon).unwrap().hp = 0;
+            let rec = w.tick();
+            (rec.exp_awards[0].1, w.entities.get(p).unwrap().exp)
+        };
+        let (base_amt, base_total) = build(None);
+        let (rate_amt, rate_total) = build(Some(200));
+        assert_eq!(
+            base_amt, 400,
+            "无 EXPRATE 时 = mon_exp（KillMonExpRate=100）"
+        );
+        assert_eq!(rate_amt, 800, "EXPRATE=200 ⇒ 单次经验 ×2");
+        assert_eq!(rate_total, base_total * 2, "累计经验同样 ×2");
     }
 
     /// 只读分片（owner §25.1 裁决 (A)）：掉落落地后 `floor_items_view_sorted` 的
