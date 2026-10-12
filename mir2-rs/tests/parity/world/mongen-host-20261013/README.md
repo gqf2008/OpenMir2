@@ -63,9 +63,9 @@
   `test --workspace --offline rc=0`（**86 suites / 751 passed / 0 failed / 18 ignored**）。
 - 边界：`git diff --stat master -- src/ sql/ MirClient` **空**（`20-boundary.txt`）。
 
-## 交付基线（base = master `670a009b`）
+## 交付基线（base = master `031ff37e`）
 
-本 patch 的 base 是 **master `670a009b`**（已含第 ② 片 + R5-1/R5-2 返工；本次交付前已 `git merge origin/master`
+本 patch 的 base 是 **master `031ff37e`**（已含第 ② 片 + R5-1/R5-2 返工；本次交付前已 `git merge origin/master`
 消除幻影差量），head 是 `refs/heads/mongen-host`。
 ⇒ `git diff master..HEAD` **只含第 ③ 片**：`bins/game-svr/{mongen.rs,lib.rs,config.rs,main.rs}` +
 `crates/world/src/{world.rs,entity.rs,lib.rs}` + 本目录证据。R5 的口径见已合入的
