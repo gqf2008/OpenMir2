@@ -53,6 +53,9 @@
                  且 `role=done attacks=N`；缺 ⇒ RED。
     3 跨侧口径   两侧 baseline.json 的 `attack_sequence` / `attack_pose` / `fixed_new_chr` 必须一致；
                  不一致 ⇒ PREREQ（exit 2）。
+    3.1 pin 重试账本（owner 2026-10-12 16:30）  两侧 `baseline.json.pin_attempts` 的重试次数必须均为期望值
+                 （零额外重试，期望=2 = 「连续两轮 settle」的结构性最小 attempts）；任一侧超出 ⇒
+                 PREREQ（exit 2，fail-closed）——重试会推移攻击序列起始的全局 RNG 位置，逐 k 不可比。
     4 逐次对拍   `attack_diff.py align` 两侧 ⇒ `attack_diff.py diff`；非 0 即 RED。
                  另 `scoped_diff.py diff --canonical --fixed-newchr`（DB 侧）非 0 即 RED。
 
@@ -200,6 +203,17 @@ function Invoke-AttackCrossSideDiff([string]$csharpDir, [string]$rustDir, [strin
     return
   }
   Write-Output ("ATTACK_POSE_OK peer='{0}' local='{1}'" -f $poseGuard.peer_pose, $LocalPose)
+  # ①.5 pin 重试账本护栏（owner 2026-10-12 16:30）：两侧的运行 pin 重试次数必须都是期望值（零额外重试），
+  #    否则攻击序列起始的全局 RNG 位置不同 ⇒ 逐 k 不可比（c2-vs-c3 那次即被误判为「实现差异」）。
+  #    fail-closed（PREREQ，exit 2）：拒绝把它当「同一序列」继续比，而不是静默继续。
+  $pinGuard = Test-M3PinAttemptsComparable -Dirs @($csharpDir, $rustDir)
+  foreach ($m in @($pinGuard.messages)) { Write-Output $m }
+  if (@($pinGuard.failed).Count -gt 0) {
+    Write-Output ("PREREQ_MISSING: 两侧 pin 重试账本不可比（{0}）——拒绝把它当「同一序列」继续比" -f (@($pinGuard.failed) -join ','))
+    return
+  }
+  $pinInfos = @($pinGuard.infos | ForEach-Object { ("{0}:attempts={1}/expected={2}" -f $_.dir, $_.attempts, $_.expected) })
+  Write-Output ("PIN_ATTEMPTS_OK {0}（两侧均为零额外重试）" -f ($pinInfos -join ' '))
   # ② 两侧各自 align（若尚未生成）。
   foreach ($d in @($csharpDir, $rustDir)) {
     $rc = Invoke-AttackAlign $d
@@ -401,6 +415,56 @@ if ($SelfCheckNoStack) {
   Write-Output ("SELFTEST ⑰ 攻击 pin 非 MonGen AI 消费者口径（R-1 refine 15:05）：生产 map={0} total={1} source_verified={2}；合成 有引用/声明漂移/缺 provenance/缺提取件 四向必红" -f `
     $PinMapName, $aiChk.total, $aiChkV.source_verified)
 
+  # ⑱ pin 重试账本（owner 2026-10-12 16:30）：会话产物必须把本轮 pin 的 attempts 落成结构化字段；
+  #    判据层对「attempts 超过期望」fail-closed（拒绝把重试过的运行当「同一序列」继续比）。
+  #    期望值口径 = 2（`Get-M3PinHoldVerdict` 的「连续两轮 settle」结构性最小 attempts；见 gate_guards ⑥b）。
+  #    本项：① 断言仪器/常量同源；② 五向构造输入（retried/missing/invalid/expected漂移/嵌套对象兼容）；
+  #    ③ **改坏必红（真跑后还原）**：同一会话 attempts=2 ⇒ 绿；写成 attempts=3（= 人为多一次重试）⇒ 必红；还原 ⇒ 绿。
+  $pinExpected = Get-M3PinExpectedAttempts
+  if ($pinExpected -ne 2) { $failures += ('pin_expected_attempts=' + $pinExpected) }
+  if ($null -ne $pair) {
+    if ($pair.pin_attempts_expected -ne 2) { $failures += ('emit_pin_attempts_expected=' + $pair.pin_attempts_expected) }
+    if ([string]$pair.pin_instrument -notmatch 'consecutive=2') { $failures += ('pin_instrument_not_consecutive2=' + $pair.pin_instrument) }
+  }
+  function New-M3PinSession([string]$Tag, $PinAttemptsValue) {
+    $d = Join-Path $tmpRoot ('pin-' + $Tag)
+    New-Item -ItemType Directory -Force -Path $d | Out-Null
+    $obj = [ordered]@{ session = (Split-Path $d -Leaf); side = 'csharp' }
+    if ($null -ne $PinAttemptsValue) { $obj['pin_attempts'] = $PinAttemptsValue }
+    ([pscustomobject]$obj | ConvertTo-Json -Depth 4) | Set-Content -Path (Join-Path $d 'baseline.json') -Encoding utf8
+    return $d
+  }
+  $pinOkA = New-M3PinSession 'ok-a' (Format-M3PinAttempts -Attempts 2 -SettleRounds 2 -MaxAttempts 5)
+  $pinOkB = New-M3PinSession 'ok-b' (Format-M3PinAttempts -Attempts 2 -SettleRounds 2 -MaxAttempts 5)
+  $cmpOk = Test-M3PinAttemptsComparable -Dirs @($pinOkA, $pinOkB)
+  if (@($cmpOk.failed).Count -ne 0) { $failures += ('pin_attempts_ok_not_green=' + (@($cmpOk.failed) -join ';')) }
+  $pinRetry = New-M3PinSession 'retry-b' (Format-M3PinAttempts -Attempts 3 -SettleRounds 3 -MaxAttempts 5)
+  $cmpRetry = Test-M3PinAttemptsComparable -Dirs @($pinOkA, $pinRetry)
+  if (-not (@($cmpRetry.failed) -contains 'pin_attempts_retried')) { $failures += 'pin_attempts_retry_not_red' }
+  $pinMissing = New-M3PinSession 'missing' $null
+  if (-not (@((Get-M3PinAttemptsGuard -PlayerDir $pinMissing).failed) -contains 'pin_attempts_missing')) { $failures += 'pin_attempts_missing_not_red' }
+  $pinInvalid = New-M3PinSession 'invalid' 'attempts=garbage'
+  if (-not (@((Get-M3PinAttemptsGuard -PlayerDir $pinInvalid).failed) -contains 'pin_attempts_invalid')) { $failures += 'pin_attempts_invalid_not_red' }
+  $pinDrift = New-M3PinSession 'drift' (Format-M3PinAttempts -Attempts 2 -Expected 3 -SettleRounds 2 -MaxAttempts 5)
+  if (-not (@((Get-M3PinAttemptsGuard -PlayerDir $pinDrift).failed) -contains 'pin_attempts_expected_mismatch')) { $failures += 'pin_attempts_expected_drift_not_red' }
+  $pinNested = New-M3PinSession 'nested' ([pscustomobject]@{ attempts = 2; expected = 2; settle_rounds = 2; max_attempts = 5 })
+  if (@((Get-M3PinAttemptsGuard -PlayerDir $pinNested).failed).Count -ne 0) { $failures += ('pin_attempts_nested_not_green=' + (@((Get-M3PinAttemptsGuard -PlayerDir $pinNested).failed) -join ';')) }
+  # 改坏必红（真跑 + 还原）：把同一会话的 attempts 从 2 改成 3 ⇒ 必红；还原 ⇒ 绿。
+  $pinMutFile = Join-Path $pinOkA 'baseline.json'
+  $pinOrigJson = Get-Content $pinMutFile -Raw
+  $pinPreGreen = (@((Get-M3PinAttemptsGuard -PlayerDir $pinOkA).failed).Count -eq 0)
+  Set-Content -Path $pinMutFile -Encoding utf8 -Value '{ "session": "pin-ok-a", "side": "csharp", "pin_attempts": "attempts=3 expected=2 settle_rounds=3 max_attempts=5" }'
+  $pinMutRed = $false
+  $pinMutInfo = Get-M3PinAttemptsGuard -PlayerDir $pinOkA
+  $pinMutRed = (@($pinMutInfo.failed) -contains 'pin_attempts_retried')
+  Set-Content -Path $pinMutFile -Encoding utf8 -Value $pinOrigJson
+  $pinRestoredGreen = (@((Get-M3PinAttemptsGuard -PlayerDir $pinOkA).failed).Count -eq 0)
+  if (-not $pinPreGreen) { $failures += 'pin_mutation_pre_not_green' }
+  if (-not $pinMutRed) { $failures += 'pin_mutation_retry_not_red' }
+  if (-not $pinRestoredGreen) { $failures += 'pin_mutation_restore_not_green' }
+  Write-Output ("SELFTEST ⑱ pin 重试账本（owner 16:30）：期望 attempts={0}（已与仪器 consecutive 同源）；五向构造输入 + 改坏必红真跑（attempts=2 绿 / 改成 3 红[{1}] / 还原 绿[{2}]）" -f `
+    $pinExpected, (@($pinMutInfo.failed) -join ','), $pinRestoredGreen)
+
   # ⑭ F-E（m3cs tick21）：驱动收尾等待——run_bots.ps1 的攻击序列「等 M3ATTSEQ done」离线自检
   #    （合成日志计 attack done 2/1/0 + bag done 2/0；改坏计数正则 ⇒ RED）。真机 120/120 由 m3cs 下一轮实跑覆盖。
   $prevEap = $ErrorActionPreference
@@ -600,7 +664,7 @@ if ($SelfCheckNoStack) {
 
   Remove-Item -Recurse -Force $tmpRoot -ErrorAction SilentlyContinue
   if ($failures.Count -eq 0) {
-    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（攻击配置透传/默认关 + run_pair -DisableAutoPlay 耦合两向 + 攻击两相 pin pose/SQL（-PinMapName 透传含 MapName 断言） + pin SQL 可执行性（含改坏 a.IncHealth 必红 + 改坏 Hp=100000 越界必红） + 攻击 pin 无怪口径（R-1，按地图查提取件：生产 0137 绿/source_verified + 换回 map 0 必红 + 合成 0/1 行·声明漂移·缺 provenance 四向有牙） + 攻击 pin 非 MonGen AI 消费者口径（R-1 refine 15:05：生产 0137 绿/source_verified + 合成 有引用/声明漂移/缺 provenance/缺提取件 四向必红） + 入口/DiffOnly fail-closed + attack_diff selftest + 改坏 dmg/hit 必红 + Invoke-AttackAlign 返回值形态两处（F-J：⑧ 生产函数直接断言 + ⑮） + scoped_diff 14/14 + M-1 WARN 有牙齿 + M-2 attacker 精确选择 selftest + pin SQL 别名/列校验 + 种子注入断言（两侧 fail-closed）+ 攻击序列收尾等待（F-E））'
+    Write-Output 'SELFTEST_RED GREEN: 无栈自检全过（攻击配置透传/默认关 + run_pair -DisableAutoPlay 耦合两向 + 攻击两相 pin pose/SQL（-PinMapName 透传含 MapName 断言） + pin SQL 可执行性（含改坏 a.IncHealth 必红 + 改坏 Hp=100000 越界必红） + pin 重试账本（owner 16:30：期望 attempts=2 与仪器同源 + 五向构造输入 + 改坏必红真跑还原） + 攻击 pin 无怪口径（R-1，按地图查提取件：生产 0137 绿/source_verified + 换回 map 0 必红 + 合成 0/1 行·声明漂移·缺 provenance 四向有牙） + 攻击 pin 非 MonGen AI 消费者口径（R-1 refine 15:05：生产 0137 绿/source_verified + 合成 有引用/声明漂移/缺 provenance/缺提取件 四向必红） + 入口/DiffOnly fail-closed + attack_diff selftest + 改坏 dmg/hit 必红 + Invoke-AttackAlign 返回值形态两处（F-J：⑧ 生产函数直接断言 + ⑮） + scoped_diff 14/14 + M-1 WARN 有牙齿 + M-2 attacker 精确选择 selftest + pin SQL 别名/列校验 + 种子注入断言（两侧 fail-closed）+ 攻击序列收尾等待（F-E））'
     exit 0
   }
   Write-Output ('SELFTEST_RED RED: ' + ($failures -join ', '))
@@ -770,6 +834,16 @@ if ($markers.Count -eq 0 -or -not (Test-Path (Join-Path $mine.FullName 'attack_r
   exit 1
 }
 Write-Output ("ATTACKSEQ_OK markers={0} raw=True" -f $markers.Count)
+
+# pin 重试账本（owner 2026-10-12 16:30）：本侧自己的运行也必须零额外重试，否则这份基线不可比
+# （即使 C# 侧尚未跑）。fail-closed（PREREQ，exit 2）——拒绝把被重试污染的运行当「同一序列」。
+$localPin = Get-M3PinAttemptsGuard -PlayerDir $mine.FullName
+foreach ($m in @($localPin.messages)) { Write-Output $m }
+if (@($localPin.failed).Count -gt 0) {
+  Write-Output ("PREREQ_MISSING: 本侧 pin 重试超期望（{0}）——本基线不可比，需重跑至零额外重试" -f (@($localPin.failed) -join ','))
+  exit 2
+}
+Write-Output ("PIN_ATTEMPTS_OK local attempts={0}/expected={1}" -f $localPin.info.attempts, $localPin.info.expected)
 
 $alignRc = Invoke-AttackAlign $mine.FullName
 if ($alignRc -ne 0) {

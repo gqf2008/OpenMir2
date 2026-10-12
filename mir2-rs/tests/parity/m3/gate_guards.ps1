@@ -1043,6 +1043,140 @@ function Format-M3PinInstrument {
   return ("settle_seconds={0} max_attempts={1} consecutive={2}" -f $SettleSeconds, $MaxAttempts, $Consecutive)
 }
 
+# ⑥b pin 重试账本（owner 2026-10-12 16:30，卡 `openmir2-m3-attack-pair-fixture`）。
+#
+# 现象（m3cs 在零刷怪图 0137 跑 B-1/B-2）：**同一侧、同种子、同 pin 起点**的两次跑仍可能逐 k 不一致；
+# 差异只出现在 `Invoke-M3PinSettleHold` 的重试次数不同的那两次（原件 `evidence-b1b2-20261012/perk/`：
+# c1 PIN_HOLD attempt=3 / c2 attempt=2 / c3 attempt=4；`c2-vs-c3-differs.txt` 逐 k 错位）。每次重试都会
+# 多跑一轮 pin SQL + settle（异步掉线存档落库窗口）+ observe，并改变攻击序列开始前的全局 RNG 位置
+# ⇒ 逐 k 错位。若判据不把重试次数记账，「重试」会被误判成「实现差异」。
+#
+# 期望值口径（唯一来源，不猜）：`Get-M3PinHoldVerdict` 要求「**连续两轮** settle 后复验都 match」
+# （`Consecutive=2`）⇒ 第 1 轮的 `PreviousMatch` 必为 False，最快 hold 也只能出现在**第 2 次**尝试
+# ⇒ 生产口径下「零额外重试」的期望 `attempts == 2`（`selftest_gate.ps1` ⑥ 断言正常路径 `attempt=2`）。
+# `attempts > expected` ⇒ 至少多跑了一轮 = 额外重试 ⇒ 该运行与零重试运行**不在同一全局 RNG 位置** ⇒ fail-closed。
+$script:M3PinExpectedAttempts = 2
+
+function Get-M3PinExpectedAttempts { return [int]$script:M3PinExpectedAttempts }
+
+# 会话产物里的结构化记账（写进 baseline.json.pin_attempts，两侧逐字节可比）。
+function Format-M3PinAttempts {
+  param(
+    [Parameter(Mandatory)][int]$Attempts,
+    [int]$Expected = $script:M3PinExpectedAttempts,
+    [int]$SettleRounds = 0,
+    [int]$MaxAttempts = 5
+  )
+  if ($Attempts -lt 1) { return '(off)' }
+  return ("attempts={0} expected={1} settle_rounds={2} max_attempts={3}" -f $Attempts, $Expected, $SettleRounds, $MaxAttempts)
+}
+
+# 解析 pin_attempts 记账串 → 结构化对象。缺/空 ⇒ reason='missing'；形态认不出 ⇒ reason='invalid'。
+function ConvertTo-M3PinAttempts {
+  param([AllowEmptyString()][string]$Raw)
+  if ([string]::IsNullOrWhiteSpace($Raw) -or $Raw.Trim() -eq '(off)') {
+    return [pscustomobject]@{ ok = $false; reason = 'missing'; attempts = $null; expected = $null; settle_rounds = $null; max_attempts = $null; raw = $Raw }
+  }
+  if ($Raw.Trim() -notmatch '^attempts=(\d+)\s+expected=(\d+)\s+settle_rounds=(\d+)\s+max_attempts=(\d+)$') {
+    return [pscustomobject]@{ ok = $false; reason = 'invalid'; attempts = $null; expected = $null; settle_rounds = $null; max_attempts = $null; raw = $Raw }
+  }
+  return [pscustomobject]@{
+    ok = $true; reason = ''
+    attempts = [int]$Matches[1]; expected = [int]$Matches[2]; settle_rounds = [int]$Matches[3]; max_attempts = [int]$Matches[4]
+    raw = $Raw.Trim()
+    canonical = ("attempts={0} expected={1} settle_rounds={2} max_attempts={3}" -f $Matches[1], $Matches[2], $Matches[3], $Matches[4])
+  }
+}
+
+# 从会话目录读 pin_attempts（baseline.json）。缺目录/缺 baseline/坏 JSON 都结构化返回，不抛异常。
+function Get-M3SessionPinAttempts {
+  param([Parameter(Mandatory)][string]$Dir)
+  if (-not (Test-Path $Dir)) {
+    return [pscustomobject]@{ ok = $false; reason = 'session_missing'; attempts = $null; expected = $null; settle_rounds = $null; max_attempts = $null; raw = '' }
+  }
+  $baselinePath = Join-Path $Dir 'baseline.json'
+  if (-not (Test-Path $baselinePath)) {
+    return [pscustomobject]@{ ok = $false; reason = 'baseline_missing'; attempts = $null; expected = $null; settle_rounds = $null; max_attempts = $null; raw = '' }
+  }
+  $baseline = $null
+  try {
+    $baseline = Get-Content -Path $baselinePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+  } catch {
+    return [pscustomobject]@{ ok = $false; reason = 'baseline_invalid'; attempts = $null; expected = $null; settle_rounds = $null; max_attempts = $null; raw = '' }
+  }
+  if ($null -eq $baseline) {
+    return [pscustomobject]@{ ok = $false; reason = 'baseline_invalid'; attempts = $null; expected = $null; settle_rounds = $null; max_attempts = $null; raw = '' }
+  }
+  # baseline.json 里若写成嵌套对象（{attempts,expected,...}）也认（结构化字段的两种形态都兼容）。
+  if ($null -ne $baseline.pin_attempts -and $baseline.pin_attempts -isnot [string]) {
+    $pa = $baseline.pin_attempts
+    if ($null -ne $pa.attempts) {
+      return (ConvertTo-M3PinAttempts -Raw ("attempts={0} expected={1} settle_rounds={2} max_attempts={3}" -f $pa.attempts, $pa.expected, $pa.settle_rounds, $pa.max_attempts))
+    }
+  }
+  return (ConvertTo-M3PinAttempts -Raw ([string]$baseline.pin_attempts))
+}
+
+# 判据：一次可比运行的 pin 重试次数必须等于期望值（零额外重试）。
+#   attempts > expected ⇒ pin_attempts_retried（额外重试）；attempts < expected ⇒ pin_attempts_under_expected
+#   （结构性不可能，说明仪器被削弱）；expected 漂移 ⇒ pin_attempts_expected_mismatch。全部 fail-closed。
+function Get-M3PinAttemptsGuard {
+  param(
+    [Parameter(Mandatory)][string]$PlayerDir,
+    [int]$Expected = $script:M3PinExpectedAttempts
+  )
+  $failed = New-Object System.Collections.Generic.List[string]
+  $messages = New-Object System.Collections.Generic.List[string]
+  $leaf = Split-Path $PlayerDir -Leaf
+  $info = Get-M3SessionPinAttempts -Dir $PlayerDir
+  if (-not $info.ok) {
+    if ($info.reason -eq 'missing') {
+      $messages.Add(("RED: 会话 {0} 缺 baseline.json.pin_attempts 记账（旧产物/未接线）——无法证明它与其它运行在同一全局 RNG 位置，拒绝比对" -f $leaf))
+      $failed.Add('pin_attempts_missing')
+    } elseif ($info.reason -eq 'invalid') {
+      $messages.Add(("RED: 会话 {0} 的 pin_attempts 形态认不出: '{1}'" -f $leaf, $info.raw))
+      $failed.Add('pin_attempts_invalid')
+    } elseif ($info.reason -eq 'baseline_invalid') {
+      $messages.Add(("RED: 会话 {0} 的 baseline.json 解析失败（半写/截断）" -f $leaf))
+      $failed.Add('pin_attempts_baseline_invalid')
+    } else {
+      $messages.Add(("RED: 会话 {0} 缺 baseline.json（{1}）" -f $leaf, $info.reason))
+      $failed.Add('pin_attempts_session_missing')
+    }
+    return [pscustomobject]@{ failed = @($failed); messages = @($messages); info = $info; retried = $false }
+  }
+  if ($info.expected -ne $Expected) {
+    $messages.Add(("RED: 会话 {0} 记录的期望 attempts={1} 与判据口径 {2} 不一致——仪器/口径漂移" -f $leaf, $info.expected, $Expected))
+    $failed.Add('pin_attempts_expected_mismatch')
+  }
+  if ($info.attempts -gt $Expected) {
+    $messages.Add(("RED: 会话 {0} 的 pin 重试超期望：attempts={1} > expected={2}（额外重试 {3} 轮）——每次重试多跑 pin+settle，攻击序列起始的全局 RNG 位置被推移，两次运行逐 k 不可比" -f $leaf, $info.attempts, $Expected, ($info.attempts - $Expected)))
+    $failed.Add('pin_attempts_retried')
+  } elseif ($info.attempts -lt $Expected) {
+    $messages.Add(("RED: 会话 {0} 的 attempts={1} < expected={2}——结构性不可能（hold 至少需两轮），仪器已被削弱" -f $leaf, $info.attempts, $Expected))
+    $failed.Add('pin_attempts_under_expected')
+  }
+  return [pscustomobject]@{ failed = @($failed); messages = @($messages); info = $info; retried = ($info.attempts -gt $Expected) }
+}
+
+# 两侧（或多会话）一起核：任一不达期望即 fail-closed（拒绝当「同一序列」继续比）。
+function Test-M3PinAttemptsComparable {
+  param(
+    [Parameter(Mandatory)][string[]]$Dirs,
+    [int]$Expected = $script:M3PinExpectedAttempts
+  )
+  $failed = New-Object System.Collections.Generic.List[string]
+  $messages = New-Object System.Collections.Generic.List[string]
+  $infos = @()
+  foreach ($d in $Dirs) {
+    $g = Get-M3PinAttemptsGuard -PlayerDir $d -Expected $Expected
+    foreach ($m in @($g.messages)) { $messages.Add($m) }
+    foreach ($f in @($g.failed)) { $failed.Add($f) }
+    $infos += [pscustomobject]@{ dir = (Split-Path $d -Leaf); attempts = $g.info.attempts; expected = $g.info.expected }
+  }
+  return [pscustomobject]@{ failed = @($failed); messages = @($messages); infos = @($infos) }
+}
+
 function Get-M3PinHoldVerdict {
   param(
     [int]$SettleRounds = 0,
