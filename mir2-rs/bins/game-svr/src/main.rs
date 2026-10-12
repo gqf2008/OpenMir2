@@ -1835,7 +1835,11 @@ fn front_target(
 /// - **成功门** = `nX == CurrX && nY == CurrY`（`PlayObject.Attack.cs:884`）：不满足则不攻击、
 ///   不回 ack（oracle 在 `delayTime == 0` 时改发 `RM_MOVEFAIL`，编码器未接 ⇒ 只记日志）；
 /// - 成功 ⇒ `Dir = nDir` + 取目标（`GetPoseCreate` = 前方格首个 `!Ghost && !Death` 对象）⇒
-///   `world.attack_cmd`（下一 world tick 结算）+ 给附近观察者发动作帧（`SM_HIT` 族，排除自己）+ 回 `+GD`。
+///   `world.attack_cmd`（下一 world tick 结算）+ 给附近观察者发动作帧（`SM_HIT` 族，排除自己）+ 回 `+GD`；
+/// - **无目标支**（前方格无 `!Ghost && !Death` 目标）⇒ 仍走 oracle 的「抽攻击力」一击语义
+///   （`world.attack_swing`），而不是什么都不抽。oracle 把 `GetBaseAttackPoewr()` 放在
+///   **取目标之后、`_Attack` 之前**求值（`PlayObject.Attack.cs:73`），所以 `GetPoseCreate()==null`
+///   时攻击力照抽；`_Attack(null)` / `AttackSuccess(…, null)` 才早退（无其它取数）。
 ///
 /// **登记**（详见 `attackwire` 模块头）：限速/`LateDelivery`/`CheckActionStatus`、`STONE`、
 /// `GetHitMode` 的技能态（无技能 ⇒ 模式 3/4/5/7/8 回落 `SM_HIT`）、目标筛选的安全区/攻击模式、
@@ -1916,9 +1920,19 @@ fn handle_hit_cmd(
     if let Some(tid) = target_id {
         world.attack_cmd(actor_id, tid);
     } else {
+        // oracle `PlayObject.AttackDir(targetObject = null)`（`PlayObject.Attack.cs:25`）：
+        //   `attackTarget = targetObject ?? GetPoseCreate()`（`:26`，前方格无目标 ⇒ null）；
+        //   随后 `GetAttackPowerHit(wHitMode, GetBaseAttackPoewr(), attackTarget, ref canHit)`（`:73`）
+        //   ⇒ **攻击力照抽**（玩家 `Luck <= 0` ⇒ `Random(LoByte(DC)+1)` + `Random(10)` 共 2 抽，
+        //   `PlayObject.cs:2929/2932`）；
+        //   之后 `_Attack(null)`（`BaseObject.Attack.cs:32`）与 `AttackSuccess(…, null)`
+        //   （`PlayObject.Attack.cs:215-218` 开头 `return`）都不再取数。
+        // 接线到 m3cs 的 `World::attack_swing`（`crates/world/src/world.rs:199`，owner 20:10 裁决）：
+        // 缺这一段 ⇒ 真机「有攻击命令、无目标」的 84 击取数整段缺失（C# 120 段 vs Rust 36 段）。
+        let _ = world.attack_swing(actor_id);
         glog!(
             "DBG",
-            "攻击：actor_id={actor_id} 前方格 ({fx},{fy}) 无目标 ⇒ 只播动作帧（oracle `_Attack(null)` 返回 false）"
+            "攻击：actor_id={actor_id} 前方格 ({fx},{fy}) 无目标 ⇒ 仍按 oracle 抽攻击力（attack_swing）+ 只播动作帧（`_Attack(null)` 返回 false）"
         );
     }
     // 成功支的体力扣减（`PlayObject.Attack.cs:943-947`：`PerHealth -= 2; PerSpell -= 2`；
@@ -7144,6 +7158,143 @@ mod tests {
             &gates,
         );
         assert!(rx0.try_recv().is_err(), "Death ⇒ 不得发帧/回 ack");
+    }
+
+    /// 数出两次 RNG 快照之间消耗的**内部采样次数**：`RandomNumber` 的完整 state 由 `Debug` 暴露，
+    /// 同一 seed 的参照流走 k 步后 state 必然相同 ⇒ 直接线性求解 k。
+    /// 无目标一击（小范围 `random_below`）每次恰 1 个内部采样 ⇒ 该值即「抽数」（= 账本的一段）。
+    fn draws_between(
+        before: &mir2_shared::rng::RandomNumber,
+        after: &mir2_shared::rng::RandomNumber,
+    ) -> usize {
+        let after_state = format!("{after:?}");
+        let mut probe = before.clone();
+        for k in 0..100_000 {
+            if format!("{probe:?}") == after_state {
+                return k;
+            }
+            let _ = probe.random();
+        }
+        panic!("参照流 100000 步内未匹配到目标状态（seed 不同或状态被外部改写）");
+    }
+
+    /// **owner 2026-10-12 20:10（M3②③ 关键路径）**：`handle_hit_cmd` 的**无目标支**必须仍走
+    /// oracle 的「一击抽攻击力」语义（`World::attack_swing`），否则真机 84/120 空打的取数整段缺失
+    /// （C# 120 段 vs Rust 36 段）。
+    ///
+    /// oracle 锚（逐行）：
+    /// - `PlayObject.AttackDir(targetObject = null)`（`PlayObject.Attack.cs:25`）先取目标
+    ///   `attackTarget = targetObject ?? GetPoseCreate()`（`:26`）⇒ 前方格无目标 = null；
+    /// - 随后 `GetBaseAttackPoewr()` 作为 `GetAttackPowerHit(...)` 的实参被求值（`:73`）⇒
+    ///   **攻击力照抽**：玩家 `Luck <= 0` ⇒ `Random(LoByte(DC)+1)` + `Random(10)` 共 2 抽
+    ///   （`PlayObject.cs:2929/2932`）；
+    /// - `_Attack(null)`（`BaseObject.Attack.cs:32`）与 `AttackSuccess(…, null)`
+    ///   （`PlayObject.Attack.cs:215-218` 开头 `return`）都早退 ⇒ 无其它取数。
+    ///
+    /// 红检：把无目标支的 `world.attack_swing(actor_id)` 删掉（改回「只记日志」）⇒ 世界 RNG 停在
+    /// 原位、下面的逐采样状态比对必红。
+    #[test]
+    fn hit_cmd_without_target_still_draws_attack_power() {
+        use mir2_protocol::messages::CM_HIT;
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(64, 64);
+        let attacker = {
+            let mut e = mir2_world::Entity::new(0, "atk".to_string(), 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e.dc = 0x1E14; // LoByte=0x14=20、HiByte=0x1E=30 ⇒ (base=20, power=10)
+            e.luck = 0;
+            e.power_rate = 100;
+            world.add_entity(e)
+        };
+        world.tick();
+        // 前方格（dir=2 ⇒ (11,10)）**故意留空** ⇒ `front_target` = None。
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            attacker,
+            downlink::ActorDisplay::new(2, 0, 111, 0, 0, 255, b"atk".to_vec()),
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "atk".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: attacker,
+            },
+        );
+        let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("atk".into(), test_session_ground(attacker));
+
+        const SEED: i32 = 20261012;
+        world.rng = mir2_shared::rng::RandomNumber::with_seed(SEED);
+        // oracle 期望值：玩家 `GetBaseAttackPoewr` 版（`Random(LoByte(DC)+1)` + `Luck<=0` 的
+        // `Random(10)`）。用**独立**参照流手推，不由生产 `attack_swing` 反推。
+        let mut expected = mir2_shared::rng::RandomNumber::with_seed(SEED);
+        let expected_power = mir2_world::combat::get_base_attack_power_player(
+            &mut expected,
+            0x1E14,
+            0,
+            100,
+            false,
+            0,
+        );
+        assert!(
+            (20..=30).contains(&expected_power),
+            "DC=0x1E14 ⇒ 攻击力 ∈ [20,30]，实际 {expected_power}"
+        );
+
+        let before_one = world.rng.clone();
+        handle_hit_cmd(
+            CM_HIT,
+            game_svr::feature::make_long(10, 10),
+            2, // 本帧消息 dir=2（右）⇒ 前方格 (11,10) 无目标
+            "atk",
+            901,
+            &online,
+            &mut world,
+            &mut displays,
+            &mut sessions,
+            &gates,
+        );
+        // 改后读数：无目标一击 = 玩家 `GetBaseAttackPoewr` **恰 2 抽**（= 账本的一段）；
+        // 改回「只记日志」⇒ 此值为 0（红检实测见证据 `05-redcheck-remove-swing.txt`）。
+        let one = draws_between(&before_one, &world.rng);
+        println!("ATTACK_SWING_DRAWS_PER_EMPTY_HIT={one}");
+        assert_eq!(
+            one, 2,
+            "无目标一击必须抽 2 次（oracle `PlayObject.Attack.cs:73` 的玩家 GetBaseAttackPoewr）"
+        );
+
+        // 同一读数的 84 击外推（真机形态：受害者 36 击后 `death=true` ⇒ 余 84 击空打）：
+        // 改后 84 × 2 = 168 抽 / 84 段；改前 0 抽 / 0 段 ⇒ 攻击路径段数 36 → 36 + 84 = 120。
+        let before_seq = world.rng.clone();
+        for _ in 0..84 {
+            handle_hit_cmd(
+                CM_HIT,
+                game_svr::feature::make_long(10, 10),
+                2,
+                "atk",
+                901,
+                &online,
+                &mut world,
+                &mut displays,
+                &mut sessions,
+                &gates,
+            );
+        }
+        let seq = draws_between(&before_seq, &world.rng);
+        println!("ATTACK_SWING_DRAWS_84_EMPTY_HITS={seq}");
+        assert_eq!(
+            seq,
+            84 * 2,
+            "84 击空打必须每击抽 2 次（= 84 段，补回 C# 120 vs Rust 36 的缺口）"
+        );
     }
 
     /// **`openmir2-m3-attack-magic-wiring`（第二片）**：`CM_SPELL`/`CM_MAGICKEYCHANGE` 派发——
