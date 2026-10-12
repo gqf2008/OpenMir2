@@ -37,10 +37,14 @@
     ⑧ Test-M3SeedInjected（F-C：两侧种子注入证据断言，离线）：C# 读 `INJECT_OK <seed>`；Rust 读 `SEED_PROBE`
        行（另校 `RUST_SEED_INJECTED`）；缺失/种子不符/空路径 ⇒ ok=$false（fail-closed）。
 
-    ⑨ Get-M3PinAttemptsGuard / Test-M3PinAttemptsComparable（pin 重试账本；owner 2026-10-12 16:30）：
-       两侧 `baseline.json.pin_attempts` 的重试次数必须均为期望值（零额外重试，期望 = 2 =
-       「连续两轮 settle」的结构性最小 attempts）；超出 ⇒ pin_attempts_retried；缺字段/形态坏/
-       期望漂移/低于期望都 fail-closed。attempts=2 ⇒ 绿。
+    ⑨ Get-M3PinAttemptsGuard / Test-M3PinAttemptsComparable（pin 重试账本；owner 2026-10-12 16:30；
+       **19:20 降级为 informational**）：只对「字段缺失/形态认不出/baseline 坏 JSON/会话缺失」fail-closed；
+       attempts=2/4/1、expected 漂移均**绿**（只进 informational）。attempts=2 ⇒ 绿。
+
+    ⑩ Test-M3PrewarmNoWorldEntry（预热相不进世界；owner 2026-10-12 19:20 根因修）：读预热相 BotSrv 日志，
+       出现 `进入游戏`/`成功进入游戏`/`准备进入游戏` ⇒ fail-closed；日志缺失也 fail-closed。
+       （根因：预热假人进世界 → 被 Stop-Process ⇒ GameSvr `SaveHumanRcd` 异步落库覆盖 pin，
+       见 `src/GameSrv/Word/WorldServer.cs:711-713` + `:1077-1091`。）
 
   「改坏必红 / 还原必绿」：把 `gate_guards.ps1` 对应护栏改回旧行为（放行）再跑本脚本，
   必须 exit 1；还原后必须 exit 0。原始输出落 `E:\tmp\openmir2-watch\`。
@@ -347,9 +351,9 @@ Test-Case 'seed/rust SEED_PROBE 42=绿' ($rsGoodR.ok -and $rsGoodR.seed -eq 42) 
 Test-Case 'seed/rust 无 SEED_PROBE=红' (-not $rsBadR.ok) ("reason={0}" -f $rsBadR.reason)
 Test-Case 'seed/rust 启动器行 7!=42=红' (-not $rsMismatchR.ok) ("reason={0}" -f $rsMismatchR.reason)
 
-# ---------------------------------------------------------------- ⑨ pin 重试账本（owner 2026-10-12 16:30）
-Write-Output '⑨ Get-M3PinAttemptsGuard / Test-M3PinAttemptsComparable（pin 重试账本；owner 2026-10-12 16:30）'
-Test-Case 'pinacct/期望 attempts=2（与仪器 consecutive 同源）' ((Get-M3PinExpectedAttempts) -eq 2) ("expected={0}" -f (Get-M3PinExpectedAttempts))
+# ---------------------------------------------------------------- ⑨ pin 重试账本（owner 2026-10-12 16:30；19:20 降级 informational）
+Write-Output '⑨ Get-M3PinAttemptsGuard / Test-M3PinAttemptsComparable（pin 重试账本；informational，owner 19:20）'
+Test-Case 'pinacct/informational 基准常量 >= 1' ((Get-M3PinExpectedAttempts) -ge 1) ("expected={0}" -f (Get-M3PinExpectedAttempts))
 Test-Case 'pinacct/形态 attempts=2 expected=2 settle_rounds=2 max_attempts=5' `
   ((Format-M3PinAttempts -Attempts 2 -SettleRounds 2 -MaxAttempts 5) -eq 'attempts=2 expected=2 settle_rounds=2 max_attempts=5') ''
 $paOk = Join-Path $Work 'pin-ok'
@@ -359,13 +363,14 @@ Test-Case 'pinacct/attempts=2=绿' (@($g.failed).Count -eq 0) ("failed=[{0}]" -f
 $paRetry = Join-Path $Work 'pin-retry'
 New-Baseline $paRetry '(off)' -PinAttempts (Format-M3PinAttempts -Attempts 4 -SettleRounds 4 -MaxAttempts 5)
 $g = Get-M3PinAttemptsGuard -PlayerDir $paRetry
-Test-Case 'pinacct/attempts=4=红(retried)' ((@($g.failed) -contains 'pin_attempts_retried') -and $g.retried) ("failed=[{0}]" -f (@($g.failed) -join ','))
+Test-Case 'pinacct/attempts=4=绿(informational，不再拒比)' `
+  ((@($g.failed).Count -eq 0) -and $g.retried -and (@($g.informational) -match 'retried|重试').Count -gt 0) ("failed=[{0}] info=[{1}]" -f (@($g.failed) -join ','), (@($g.informational) -join ';'))
 $g = Test-M3PinAttemptsComparable -Dirs @($paOk, $paRetry)
-Test-Case 'pinacct/两侧一侧重试=红' (@($g.failed) -contains 'pin_attempts_retried') ("failed=[{0}]" -f (@($g.failed) -join ','))
+Test-Case 'pinacct/两侧一侧重试=绿(informational)' (@($g.failed).Count -eq 0) ("failed=[{0}] info=[{1}]" -f (@($g.failed) -join ','), (@($g.informational) -join ';'))
 $paMissing = Join-Path $Work 'pin-missing'
 New-Baseline $paMissing '(off)'
 $g = Get-M3PinAttemptsGuard -PlayerDir $paMissing
-Test-Case 'pinacct/缺字段=红(missing)' (@($g.failed) -contains 'pin_attempts_missing') ("failed=[{0}]" -f (@($g.failed) -join ','))
+Test-Case 'pinacct/缺字段=红(missing=唯一保留的牙)' (@($g.failed) -contains 'pin_attempts_missing') ("failed=[{0}]" -f (@($g.failed) -join ','))
 $paInvalid = Join-Path $Work 'pin-invalid'
 New-Baseline $paInvalid '(off)' -PinAttempts 'attempts=x'
 $g = Get-M3PinAttemptsGuard -PlayerDir $paInvalid
@@ -373,16 +378,38 @@ Test-Case 'pinacct/形态认不出=红(invalid)' (@($g.failed) -contains 'pin_at
 $paUnder = Join-Path $Work 'pin-under'
 New-Baseline $paUnder '(off)' -PinAttempts (Format-M3PinAttempts -Attempts 1 -SettleRounds 1 -MaxAttempts 5)
 $g = Get-M3PinAttemptsGuard -PlayerDir $paUnder
-Test-Case 'pinacct/attempts=1=红(under/仪器被削弱)' (@($g.failed) -contains 'pin_attempts_under_expected') ("failed=[{0}]" -f (@($g.failed) -join ','))
+Test-Case 'pinacct/attempts=1=绿(informational)' ((@($g.failed).Count -eq 0) -and (@($g.informational).Count -gt 0)) ("failed=[{0}]" -f (@($g.failed) -join ','))
 $paDrift = Join-Path $Work 'pin-drift'
 New-Baseline $paDrift '(off)' -PinAttempts (Format-M3PinAttempts -Attempts 2 -Expected 3 -SettleRounds 2 -MaxAttempts 5)
 $g = Get-M3PinAttemptsGuard -PlayerDir $paDrift
-Test-Case 'pinacct/期望漂移=红(expected_mismatch)' (@($g.failed) -contains 'pin_attempts_expected_mismatch') ("failed=[{0}]" -f (@($g.failed) -join ','))
+Test-Case 'pinacct/期望漂移=绿(informational)' ((@($g.failed).Count -eq 0) -and (@($g.informational).Count -gt 0)) ("failed=[{0}]" -f (@($g.failed) -join ','))
 $paBad = Join-Path $Work 'pin-badjson'
 New-Item -ItemType Directory -Force -Path $paBad | Out-Null
 Set-Content -Path (Join-Path $paBad 'baseline.json') -Encoding utf8 -Value '{ "pin_attempts": "attempts=2'
 $g = Get-M3PinAttemptsGuard -PlayerDir $paBad
 Test-Case 'pinacct/baseline 坏 JSON=红(不中断)' (@($g.failed) -contains 'pin_attempts_baseline_invalid') ("failed=[{0}]" -f (@($g.failed) -join ','))
+# 改坏必红：把 attempts=2 会话的 pin_attempts 字段删掉（=记账没落盘）⇒ 必红；还原 ⇒ 绿。
+$paMutFile = Join-Path $paOk 'baseline.json'
+$paMutOrig = Get-Content $paMutFile -Raw
+$paPreGreen = (@((Get-M3PinAttemptsGuard -PlayerDir $paOk).failed).Count -eq 0)
+Set-Content -Path $paMutFile -Encoding utf8 -Value '{ "session": "pin-ok", "side": "csharp" }'
+$paMutRed = (@((Get-M3PinAttemptsGuard -PlayerDir $paOk).failed) -contains 'pin_attempts_missing')
+Set-Content -Path $paMutFile -Encoding utf8 -Value $paMutOrig
+$paRestoredGreen = (@((Get-M3PinAttemptsGuard -PlayerDir $paOk).failed).Count -eq 0)
+Test-Case 'pinacct/改坏必红：删字段=红，还原=绿' ($paPreGreen -and $paMutRed -and $paRestoredGreen) ("pre={0} mutRed={1} restored={2}" -f $paPreGreen, $paMutRed, $paRestoredGreen)
+
+# ---------------------------------------------------------------- ⑩ 预热相不进世界（owner 2026-10-12 19:20 根因修）
+Write-Output '⑩ Test-M3PrewarmNoWorldEntry（预热相 bot 不得进世界——防 GameSvr 异步存档覆盖 pin）'
+$pwNoWorld = Join-Path $Work 'prewarm-noworld.log'
+Set-Content -Path $pwNoWorld -Encoding utf8 -Value "15:01:16 [INF] 创建角色 m3x0`n15:01:16 [INF] 预热建角完成（StopAfterCharCreated；不进世界）"
+$pwWorld = Join-Path $Work 'prewarm-world.log'
+Set-Content -Path $pwWorld -Encoding utf8 -Value "15:01:16 [INF] 创建角色 m3x0`n15:01:16 [INF] 选择角色 m3x0`n15:01:16 [INF] 准备进入游戏`n15:01:16 [INF] 机器人:[m3x0] 进入游戏`n15:01:18 [INF] 机器人:[m3x0] 成功进入游戏"
+$pwNoWorldR = Test-M3PrewarmNoWorldEntry -LogPath $pwNoWorld
+$pwWorldR = Test-M3PrewarmNoWorldEntry -LogPath $pwWorld
+$pwMissingR = Test-M3PrewarmNoWorldEntry -LogPath (Join-Path $Work 'prewarm-none.log')
+Test-Case 'prewarm/无进世界标记=绿' ($pwNoWorldR.ok -and $pwNoWorldR.markers.Count -eq 0) ("ok={0}" -f $pwNoWorldR.ok)
+Test-Case 'prewarm/有进世界标记=红(fail-closed)' ((-not $pwWorldR.ok) -and $pwWorldR.reason -eq 'prewarm_entered_world') ("reason={0} markers=[{1}]" -f $pwWorldR.reason, (@($pwWorldR.markers) -join ','))
+Test-Case 'prewarm/日志缺失=红(fail-closed)' ((-not $pwMissingR.ok) -and $pwMissingR.reason -eq 'log_missing') ("reason={0}" -f $pwMissingR.reason)
 
 # ---------------------------------------------------------------- 汇总
 $report = [ordered]@{
@@ -399,7 +426,7 @@ $report | ConvertTo-Json -Depth 6 | Set-Content -Path $reportPath -Encoding utf8
 Write-Output ('SELFTEST_REPORT ' + $reportPath)
 Write-Output ('SUMMARY total={0} failed={1}' -f $script:Total, $script:Failed)
 if ($script:Failed -eq 0) {
-  Write-Output 'GREEN: 九条机判护栏的判红/判绿口径都经构造输入验证'
+  Write-Output 'GREEN: 十条机判护栏的判红/判绿口径都经构造输入验证'
   exit 0
 }
 Write-Output 'SELFTEST FAIL: 有护栏口径与实现不符（见上面 FAIL 行）'

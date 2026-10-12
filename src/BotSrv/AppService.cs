@@ -51,6 +51,8 @@ namespace BotSrv
             // M1③ 退出路径夹具（白名单 M1-EXIT）：进世界后发 CM_SOFTCLOSE；默认 0 = 原行为
             MShare.g_nSoftCloseAfterWorldMs = _options.SoftCloseAfterWorldMs;
             MShare.g_boDisableAutoPlay = _options.DisableAutoPlay;
+            // M3 预建角夹具（白名单 T-29 扩展）：预热相只建号不进世界；默认 false = 原行为
+            MShare.g_boStopAfterCharCreated = _options.StopAfterCharCreated;
             runThread = new Thread(Run) { IsBackground = true };
             LogService.Info("服务器名称:{0} 服务器IP:{1} 服务器端口:{2}", _options.ServerName, _options.Address, _options.Port);
             LogService.Info("初始化机器人数量:{0} 登录机器人总数量:{1}", _options.ChrCount, _options.TotalChrCount);
@@ -76,6 +78,10 @@ namespace BotSrv
             if (_options.DisableAutoPlay)
             {
                 LogService.Info("退出路径夹具: 已关闭自动挂机（DisableAutoPlay；见 ClientManager.RunAutoPlay）");
+            }
+            if (_options.StopAfterCharCreated)
+            {
+                LogService.Info("预建角夹具: 建角后停在选角界面、不进世界（StopAfterCharCreated；见 SelectChrScene.ClientGetReceiveChrs）");
             }
         }
 

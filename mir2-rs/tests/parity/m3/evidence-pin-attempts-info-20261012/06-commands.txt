@@ -1,0 +1,31 @@
+# 本片（owner 2026-10-12 19:20：pin 账本降级 informational + 预热相不进世界根因修）
+# 命令留档。全部离线，未起服务端栈（端口未占用）。
+# 注：本机 PowerShell 5.1 的 $env:PSModulePath 被 PowerShell 7 目录污染时 Get-FileHash 会消失
+#     （影响 gate_guards 的 -VerifySource 复算）⇒ 跑 5.1 脚本前先清成 5.1 的模块路径。
+
+## 0) 环境（bash → powershell 5.1）
+export PSModulePath='C:\Users\gxh\Documents\WindowsPowerShell\Modules;C:\Program Files\WindowsPowerShell\Modules;C:\Windows\system32\WindowsPowerShell\v1.0\Modules'
+
+## 1) 门禁/自检（本目录 01..03）
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/selftest_gate.ps1                          # -> 01-selftest-gate.txt（total=61 failed=0）
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 -SelfCheckNoStack       # -> 02-attack-pair-selftest.txt（SELFTEST_RED GREEN）
+python -I mir2-rs/tests/parity/m3/attack_diff.py selftest                                                    # -> 03-attack-diff-selftest.txt（SELFTEST GREEN 30/30）
+
+## 2) pin_attempts 改前/改后（本目录 04-*）
+# 输入 = C# 侧 pin_hold.txt 原文（PIN_HOLD attempt=4）
+git show HEAD:mir2-rs/tests/parity/m3/attack_diff.py > E:/tmp/attack_diff_old.py
+python -I E:/tmp/attack_diff_old.py pin_attempts mir2-rs/tests/parity/m3/evidence-pin-attempts-info-20261012/04-pin-attempts-real-csharp-185128.txt  # 改前 rc=1
+python -I mir2-rs/tests/parity/m3/attack_diff.py  pin_attempts mir2-rs/tests/parity/m3/evidence-pin-attempts-info-20261012/04-pin-attempts-real-csharp-185128.txt  # 改后 rc=0
+python -I mir2-rs/tests/parity/m3/attack_diff.py  pin_attempts E:/tmp/pin-no-hold.txt                                                                              # 无 PIN_HOLD rc=2
+
+## 3) 根因原件（本目录 05-*）
+# 预热相 BotSrv 日志（m3cs worktree，T-14 会话 csharp-20261012-150100 的 prewarm LOG= 指向）：
+sha256sum E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3cs/tests/botload/bots-20261012-150104.log
+# 374f28f090afa89c5b8b45ba80508eec6fa03ae87b2ed515ccfc8b5818fac788
+grep -nE '创建角色|选择角色|准备进入游戏|进入游戏|成功进入游戏' <该日志>
+
+## 4) C# 侧可编译性（本片动了 src/BotSrv/**）
+dotnet build src/BotSrv/BotSrv.csproj -c Release --nologo -v q      # 0 error
+
+## 5) 未起栈
+# 本片零端口占用；5000/5100/5500/5600/5700/6000/7000/7100/7200 未起监听（仅共享 3306）。

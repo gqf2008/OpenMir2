@@ -113,6 +113,12 @@ function Get-M3BotOpPlan {
     # 预热相只需建号：等「创建角色」标记再收工（否则 run_bots 在 login_ok 就到、char 未建）。
     $planArgs += '-RequireCharCreated'
     $runner += ' -RequireCharCreated'
+    # 根因修（owner 2026-10-12 19:20）：预热假人若进世界，被 Stop-Process 后 GameSvr
+    # `SaveHumanRcd`（WorldServer.cs:711-713 → :1077-1091 异步）会把预热末态写回，覆盖随后的 pin
+    # ⇒「首轮只 pin 1/2」的真根因。令 BotSrv 建角后**不进世界**（SelectChrScene 短路 SendSelChr）
+    # ⇒ GameSvr 无该 PlayObject ⇒ 断线不触发存档。默认只影响预热相。
+    $planArgs += '-StopAfterCharCreated'
+    $runner += ' -StopAfterCharCreated'
   }
   if ($fixed) {
     $runner += " -FixedNewChr -NewChrJob $NewChrJob -NewChrHair $NewChrHair -NewChrSex $NewChrSex"
@@ -313,20 +319,37 @@ $pinAttempts = 0
 $pinSettleRounds = 0
 $pinAttemptsExpected = Get-M3PinExpectedAttempts
 $pinHoldLines = @()
+# 预热相「不进世界」门的结果（owner 2026-10-12 19:20 根因修）：写入 baseline 供跨侧/事后核查。
+$prewarmNoWorldEntry = $null
 if ($PinStartPose) {
   Write-Output '--- 2.5) 固定起点：预热建角 + SQL pin ---'
   if ($SkipBots) { throw '-PinStartPose 不能与 -SkipBots 同用' }
   $prePlan = Get-M3BotOpPlan -ForPrewarm
   Write-Output ('PREWARM ' + $prePlan.runner)
-  & powershell -ExecutionPolicy Bypass -File $Botload @($prePlan.botArgs) 2>&1 |
+  # BotSrv 日志显式落会话目录（run_bots -LogFile）⇒ 可直接机判「预热相有没有进世界」。
+  $prewarmBotLog = Join-Path $SessionDir 'prewarm-bot.log'
+  & powershell -ExecutionPolicy Bypass -File $Botload @($prePlan.botArgs) -LogFile $prewarmBotLog 2>&1 |
     Tee-Object -FilePath (Join-Path $SessionDir 'prewarm.log')
   if ($LASTEXITCODE -ne 0) { throw '预热建角失败（run_bots -RequireCharCreated 非 0）' }
   $chrCnt = Invoke-Mysql ("SELECT COUNT(*) FROM mir2_db.characters WHERE ChrName LIKE '{0}%'" -f $Prefix)
   if ([int]$chrCnt -ne $Bots) { throw ("预热后 characters 行数={0}，期望 {1}——预热建角没成功，pin 无目标" -f $chrCnt, $Bots) }
+  # ⑥c 根因门（owner 2026-10-12 19:20）：预热相假人不得进世界。
+  #   进世界 ⇒ Stop-Process 会被 GameSvr 当成真实下线 ⇒ `WorldServer.SaveHumanRcd` 异步落库
+  #   （src/GameSrv/Word/WorldServer.cs:711-713 → :1077-1091）覆盖随后的 pin（真机原件：
+  #   `bots-20261012-150104.log` 里 选择角色/进入游戏/成功进入游戏）⇒「首轮只 pin 1/2」的真根因。
+  #   BotSrv `-StopAfterCharCreated` 在建角后短路 SendSelChr ⇒ 永不进世界。
+  $prewarmNoWorld = Test-M3PrewarmNoWorldEntry -LogPath $prewarmBotLog
+  if (-not $prewarmNoWorld.ok) {
+    throw ("预热相违规：BotSrv 日志 {0} 出现进世界标记 [{1}]（{2}）——GameSvr 会在断线时异步 SaveHumanRcd 覆盖 pin；请确认 -StopAfterCharCreated 接线（owner 19:20 根因修）" -f $prewarmBotLog, (@($prewarmNoWorld.markers) -join ','), $prewarmNoWorld.reason)
+  }
+  $prewarmNoWorldEntry = $true
+  Write-Output ("PREWARM_NO_WORLD_ENTRY ok log={0} markers=0" -f $prewarmBotLog)
   # 预热相的掉线存档是**异步**的（BotSrv 被杀 ⇒ GameSvr `SaveHumanRcd` → FrontEngine 异步落库）：
   # 实测（2026-10-12 T-14 复跑）pin 后立刻进图，C# 侧拿到的是**预热末态**（`CX/CY=285,622`、
   # 物品 `MakeIndex=36685073…`）而不是 pin 的 `289,618`/`90000001…`——预热存档晚于 pin 才落库、把 pin
   # 覆盖了（与 §5 AFTER 快照前的 settle 同因，注释见下）。
+  # 注（owner 2026-10-12 19:20）：上面 ⑥c 已用 `-StopAfterCharCreated` 从**上游根除**这个竞态
+  # （预热假人不再进世界 ⇒ 无断线存档）；下面这套 settle+hold 仍保留作**防御**（仍能咬住任何残留写者）。
   # 判据统一到 `gate_guards.ps1::Invoke-M3PinSettleHold`（唯一口径，owner 2026-10-12 08:20）：
   #   ① 每轮 pin 后必须**真实 settle**（`Start-Sleep` 后返回 $true，计入 settle 轮数）；
   #   ② **连续两轮** settle 后的复验都到位才算 hold（单次观测挡不住「存档随后覆盖」的假 GREEN）。
@@ -579,6 +602,7 @@ $baseline = [pscustomobject]@{
   attack_sequence = (Format-M3AttackScope -AttackSequence ([bool]$AttackSequence) -AttackCount $AttackCount -AttackStepMs $AttackStepMs -AttackStartDelayMs $AttackStartDelayMs -DisableAutoPlay ([bool]$AttackSequence))
   attack_pose = (Get-M3AttackPoseLabel)
   pin_attempts = $(if ($pinAttempts -ge 1) { Format-M3PinAttempts -Attempts $pinAttempts -Expected $pinAttemptsExpected -SettleRounds $pinSettleRounds -MaxAttempts $PinMaxAttempts } else { '(off)' })
+  prewarm_no_world_entry = $prewarmNoWorldEntry
   attack_markers = $attackMarkers
   attack_raw = $(if (Test-Path $attackRawPath) { (Split-Path $attackRawPath -Leaf) } else { '' })
   git_rev      = (Git-Rev)

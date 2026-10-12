@@ -1043,18 +1043,25 @@ function Format-M3PinInstrument {
   return ("settle_seconds={0} max_attempts={1} consecutive={2}" -f $SettleSeconds, $MaxAttempts, $Consecutive)
 }
 
-# ⑥b pin 重试账本（owner 2026-10-12 16:30，卡 `openmir2-m3-attack-pair-fixture`）。
+# ⑥b pin 重试账本（owner 2026-10-12 16:30；**owner 2026-10-12 19:20 降级为 informational**，
+# 卡 `openmir2-m3-attack-pair-fixture`）。
 #
-# 现象（m3cs 在零刷怪图 0137 跑 B-1/B-2）：**同一侧、同种子、同 pin 起点**的两次跑仍可能逐 k 不一致；
-# 差异只出现在 `Invoke-M3PinSettleHold` 的重试次数不同的那两次（原件 `evidence-b1b2-20261012/perk/`：
-# c1 PIN_HOLD attempt=3 / c2 attempt=2 / c3 attempt=4；`c2-vs-c3-differs.txt` 逐 k 错位）。每次重试都会
-# 多跑一轮 pin SQL + settle（异步掉线存档落库窗口）+ observe，并改变攻击序列开始前的全局 RNG 位置
-# ⇒ 逐 k 错位。若判据不把重试次数记账，「重试」会被误判成「实现差异」。
+# 起因（16:30）：m3cs 在零刷怪图 0137 跑 B-1/B-2 时发现「同一侧、同种子、同 pin 起点」的两次跑仍可能逐 k
+# 不一致，且差异只出现在 `Invoke-M3PinSettleHold` 重试次数不同的那两次（原件 `evidence-b1b2-20261012/perk/`：
+# c1 attempt=3 / c2 attempt=2 / c3 attempt=4）⇒ 当时把「attempts 必须等于期望值」做成了 fail-closed 数值门。
 #
-# 期望值口径（唯一来源，不猜）：`Get-M3PinHoldVerdict` 要求「**连续两轮** settle 后复验都 match」
-# （`Consecutive=2`）⇒ 第 1 轮的 `PreviousMatch` 必为 False，最快 hold 也只能出现在**第 2 次**尝试
-# ⇒ 生产口径下「零额外重试」的期望 `attempts == 2`（`selftest_gate.ps1` ⑥ 断言正常路径 `attempt=2`）。
-# `attempts > expected` ⇒ 至少多跑了一轮 = 额外重试 ⇒ 该运行与零重试运行**不在同一全局 RNG 位置** ⇒ fail-closed。
+# **owner 19:20 判决性实验（证据 `evidence-rng-ledger-diff-20261012/41-pin-experiment.txt` + `42-exp-runs.txt`）**：
+# 3 次 C# 基线各自新起栈、独立 trace、**不筛选 attempts** ⇒ attempts=4/5/5；**attempts 不同（4↔5）与相同（5↔5）
+# 时，`attack_seq` 与攻击路径取数值序列都不同**，取数条数也变（275/275/273）；结合旧证 **c1≡c3（attempts 3 与 4
+# 逐字节全等）** ⇒ attempts **既不能保证可比、也不是不可比的充分原因**，只是一个**观测到的协变量**。
+# 根因是全局 `M2Share.RandomNumber` 被并发噪声消费者共享（C# 活栈 479,028 抽里噪声 99.94%，76 站点），
+# 本窗口 C# **同侧 3/3 各不同**。
+#
+# ⇒ 本账本**降级为 informational**：仍结构化记录 attempts / 原始 `PIN_HOLD`/`PIN_RETRY`（保留可观测性），
+#   但**不再因 `attempts ≠ expected` 判 PREREQ/拒绝比对**（数值门 → 字段存在性门）。
+#   **唯一保留的牙** = `pin_attempts` **缺失 / 形态认不出 / baseline 坏 JSON / 会话目录缺失** ⇒ fail-closed：
+#   这属于「仪器接线断裂（记账没落盘）」，不是数值口径，无法证明该运行至少记录过 pin。
+#   （顺带收掉旧登记 Minor：无 `pin_attempts` 字段的老会话在降级后仍按「缺失」拒比，行为不变。）
 $script:M3PinExpectedAttempts = 2
 
 function Get-M3PinExpectedAttempts { return [int]$script:M3PinExpectedAttempts }
@@ -1117,9 +1124,11 @@ function Get-M3SessionPinAttempts {
   return (ConvertTo-M3PinAttempts -Raw ([string]$baseline.pin_attempts))
 }
 
-# 判据：一次可比运行的 pin 重试次数必须等于期望值（零额外重试）。
-#   attempts > expected ⇒ pin_attempts_retried（额外重试）；attempts < expected ⇒ pin_attempts_under_expected
-#   （结构性不可能，说明仪器被削弱）；expected 漂移 ⇒ pin_attempts_expected_mismatch。全部 fail-closed。
+# 字段存在性门（唯一 fail-closed 口径，owner 19:20）：只拒绝「记账没落盘/认不出」的会话。
+#   缺失 ⇒ pin_attempts_missing；形态认不出 ⇒ pin_attempts_invalid；baseline 坏 JSON ⇒ pin_attempts_baseline_invalid；
+#   会话目录缺失 ⇒ pin_attempts_session_missing。
+# **informational（不再判红）**：attempts > expected（重试）/ attempts < expected / expected 漂移 —— 只进
+#   `informational` 列表由报告打印（保留可观测性）；`retried` 字段仍保留供汇总统计。
 function Get-M3PinAttemptsGuard {
   param(
     [Parameter(Mandatory)][string]$PlayerDir,
@@ -1127,11 +1136,12 @@ function Get-M3PinAttemptsGuard {
   )
   $failed = New-Object System.Collections.Generic.List[string]
   $messages = New-Object System.Collections.Generic.List[string]
+  $informational = New-Object System.Collections.Generic.List[string]
   $leaf = Split-Path $PlayerDir -Leaf
   $info = Get-M3SessionPinAttempts -Dir $PlayerDir
   if (-not $info.ok) {
     if ($info.reason -eq 'missing') {
-      $messages.Add(("RED: 会话 {0} 缺 baseline.json.pin_attempts 记账（旧产物/未接线）——无法证明它与其它运行在同一全局 RNG 位置，拒绝比对" -f $leaf))
+      $messages.Add(("RED: 会话 {0} 缺 baseline.json.pin_attempts 记账（旧产物/未接线）——仪器接线断裂，无法证明该运行记录过 pin，拒绝比对" -f $leaf))
       $failed.Add('pin_attempts_missing')
     } elseif ($info.reason -eq 'invalid') {
       $messages.Add(("RED: 会话 {0} 的 pin_attempts 形态认不出: '{1}'" -f $leaf, $info.raw))
@@ -1143,23 +1153,21 @@ function Get-M3PinAttemptsGuard {
       $messages.Add(("RED: 会话 {0} 缺 baseline.json（{1}）" -f $leaf, $info.reason))
       $failed.Add('pin_attempts_session_missing')
     }
-    return [pscustomobject]@{ failed = @($failed); messages = @($messages); info = $info; retried = $false }
+    return [pscustomobject]@{ failed = @($failed); messages = @($messages); informational = @($informational); info = $info; retried = $false }
   }
   if ($info.expected -ne $Expected) {
-    $messages.Add(("RED: 会话 {0} 记录的期望 attempts={1} 与判据口径 {2} 不一致——仪器/口径漂移" -f $leaf, $info.expected, $Expected))
-    $failed.Add('pin_attempts_expected_mismatch')
+    $informational.Add(("INFO: 会话 {0} 记录的期望 attempts={1} 与 informational 基准 {2} 不一致（口径漂移，不判红）" -f $leaf, $info.expected, $Expected))
   }
   if ($info.attempts -gt $Expected) {
-    $messages.Add(("RED: 会话 {0} 的 pin 重试超期望：attempts={1} > expected={2}（额外重试 {3} 轮）——每次重试多跑 pin+settle，攻击序列起始的全局 RNG 位置被推移，两次运行逐 k 不可比" -f $leaf, $info.attempts, $Expected, ($info.attempts - $Expected)))
-    $failed.Add('pin_attempts_retried')
+    $informational.Add(("INFO: 会话 {0} 的 pin 重试超基准：attempts={1} > expected={2}（额外 {3} 轮）——informational（owner 19:20：attempts 既不充分也不必要，不再拒绝比对）" -f $leaf, $info.attempts, $Expected, ($info.attempts - $Expected)))
   } elseif ($info.attempts -lt $Expected) {
-    $messages.Add(("RED: 会话 {0} 的 attempts={1} < expected={2}——结构性不可能（hold 至少需两轮），仪器已被削弱" -f $leaf, $info.attempts, $Expected))
-    $failed.Add('pin_attempts_under_expected')
+    $informational.Add(("INFO: 会话 {0} 的 attempts={1} < expected={2}——informational（结构异常但不再是数值门）" -f $leaf, $info.attempts, $Expected))
   }
-  return [pscustomobject]@{ failed = @($failed); messages = @($messages); info = $info; retried = ($info.attempts -gt $Expected) }
+  return [pscustomobject]@{ failed = @($failed); messages = @($messages); informational = @($informational); info = $info; retried = ($info.attempts -gt $Expected) }
 }
 
-# 两侧（或多会话）一起核：任一不达期望即 fail-closed（拒绝当「同一序列」继续比）。
+# 两侧（或多会话）一起核：**只**对「记账字段缺失/不可解析」fail-closed（拒绝当「同一序列」继续比）；
+# attempts 数值差异只汇总进 `informational`（owner 19:20 降级）。
 function Test-M3PinAttemptsComparable {
   param(
     [Parameter(Mandatory)][string[]]$Dirs,
@@ -1167,14 +1175,50 @@ function Test-M3PinAttemptsComparable {
   )
   $failed = New-Object System.Collections.Generic.List[string]
   $messages = New-Object System.Collections.Generic.List[string]
+  $informational = New-Object System.Collections.Generic.List[string]
   $infos = @()
   foreach ($d in $Dirs) {
     $g = Get-M3PinAttemptsGuard -PlayerDir $d -Expected $Expected
     foreach ($m in @($g.messages)) { $messages.Add($m) }
     foreach ($f in @($g.failed)) { $failed.Add($f) }
-    $infos += [pscustomobject]@{ dir = (Split-Path $d -Leaf); attempts = $g.info.attempts; expected = $g.info.expected }
+    foreach ($m in @($g.informational)) { $informational.Add($m) }
+    $infos += [pscustomobject]@{ dir = (Split-Path $d -Leaf); attempts = $g.info.attempts; expected = $g.info.expected; retried = $g.retried }
   }
-  return [pscustomobject]@{ failed = @($failed); messages = @($messages); infos = @($infos) }
+  return [pscustomobject]@{ failed = @($failed); messages = @($messages); informational = @($informational); infos = @($infos) }
+}
+
+# ⑥c 预热相「不进世界」门（owner 2026-10-12 19:20 根因修的机判面）。
+#
+# 根因（证据 `evidence-pin-attempts-info-20261012/05-prewarm-world-entry-root-cause.txt`）：
+#   固定起点变体的预热相（`run_bots -NewAccount -FixedNewChr -RequireCharCreated`）在等「建角」标记期间，
+#   假人会继续 `CM_SELCHR` → 进世界（真机原件：`bots-20261012-150104.log` 里 `选择角色/进入游戏/成功进入游戏`）。
+#   `run_bots` 一看到建角标记就 `Stop-Process` ⇒ GameSvr 把断线当真实下线，走
+#   `WorldServer.SaveHumanRcd`（`src/GameSrv/Word/WorldServer.cs:711-713`）→ `MShare.FrontEngine.AddToSaveRcdList`
+#   （`WorldServer.cs:1077-1091`，**异步**由 FrontEngine/DBSrv 落库）⇒ 预热末态（随机挂机坐标 + 重算后的 MaxHP=19）
+#   落在 pin 之后，把 pin 覆盖。这正是「首轮只 pin 1/2、12 轮从未到 attempts==2」的根因（竞态，不是实现缺口）。
+#
+# 修法：预热相带 `-StopAfterCharCreated`（BotSrv `SelectChrScene` 在 `SendSelChr` 前短路，永不进世界）
+#   ⇒ GameSvr 里根本没有该角色的 PlayObject ⇒ 断线不触发 `SaveHumanRcd` ⇒ pin 不再被覆盖。
+# 本门：读预热相 BotSrv 日志，出现任何进世界标记（`进入游戏`/`成功进入游戏`/`准备进入游戏`）⇒ fail-closed。
+# 注：日志是 UTF-8（`LogService`），用 `[IO.File]::ReadAllText` 避免 PS 5.1 默认 ANSI 把中文读碎。
+function Test-M3PrewarmNoWorldEntry {
+  param([Parameter(Mandatory)][AllowEmptyString()][string]$LogPath)
+  $markers = @()
+  if ([string]::IsNullOrWhiteSpace($LogPath) -or -not (Test-Path $LogPath)) {
+    return [pscustomobject]@{ ok = $false; reason = 'log_missing'; markers = @(); log = $LogPath; preview = '' }
+  }
+  $text = ''
+  try { $text = [System.IO.File]::ReadAllText($LogPath) } catch { return [pscustomobject]@{ ok = $false; reason = 'log_unreadable'; markers = @(); log = $LogPath; preview = '' } }
+  # 逐字面匹配（不用正则元字符）；`进入游戏` 会同时命中 `成功进入游戏`，两份都记。
+  foreach ($p in @('准备进入游戏', '进入游戏', '成功进入游戏')) {
+    if ($text.Contains($p)) { $markers += $p }
+  }
+  if ($markers.Count -gt 0) {
+    $line = @($text -split "`n" | Where-Object { $_.Contains('进入游戏') } | Select-Object -First 1)
+    $preview = if ($line.Count -gt 0) { $line[0].Trim() } else { '' }
+    return [pscustomobject]@{ ok = $false; reason = 'prewarm_entered_world'; markers = $markers; log = $LogPath; preview = $preview }
+  }
+  return [pscustomobject]@{ ok = $true; reason = ''; markers = @(); log = $LogPath; preview = '' }
 }
 
 function Get-M3PinHoldVerdict {

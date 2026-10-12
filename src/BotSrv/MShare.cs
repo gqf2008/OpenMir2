@@ -68,6 +68,11 @@ namespace BotSrv
         /// </summary>
         public static bool g_boDisableAutoPlay = false;
         /// <summary>
+        /// M3 预建角夹具（白名单 T-29 扩展）：建角后停在选角界面、不发 CM_SELCHR（默认 false = 原行为）。
+        /// 见 SelectChrScene.ClientGetReceiveChrs；根因见 RobotOptions.StopAfterCharCreated。
+        /// </summary>
+        public static bool g_boStopAfterCharCreated = false;
+        /// <summary>
         /// 是否自动捡取物品
         /// </summary>
         public static bool AutoPickUp = true;
