@@ -166,6 +166,12 @@ impl DbLinkState {
     pub fn is_connected(&self) -> bool {
         self.0.load(Ordering::SeqCst)
     }
+
+    /// 测试用：把链路标成已连（生产只有 [`run_db_link`] 在 TCP 连上时置位）。
+    #[cfg(test)]
+    pub(crate) fn mark_connected(&self) {
+        self.set(true);
+    }
 }
 
 impl Default for DbLinkState {

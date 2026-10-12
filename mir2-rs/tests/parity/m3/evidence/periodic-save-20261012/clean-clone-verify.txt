@@ -1,0 +1,8 @@
+# 干净 clone 上复核证据 hash（'清单只含会入库的文件' + LF 归一口径在任何检出都成立）
+# 命令（在本片 head 的 worktree 上克隆到空目录后）：
+#   git clone --single-branch -b worktree-m2-gamesvr-host <本片 head 的 worktree> E:/tmp/openmir2-m2svr-cleanclone2
+#   python -I tools/evidence-hash/verify_sha256sums.py verify mir2-rs/tests/parity/m3/evidence/periodic-save-20261012 --check-extra
+# clone 里 core.autocrlf = true（Windows 默认 true ⇒ 盘上 CRLF，仍按 LF blob 口径复核）
+
+GREEN mir2-rs\tests\parity\m3\evidence\periodic-save-20261012\SHA256SUMS.txt  [repo 口径]  OK 16/16
+rc=0

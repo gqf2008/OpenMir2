@@ -1,0 +1,22 @@
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.98s
+     Running unittests src\main.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-eb39968088e3f1ec.exe)
+
+running 1 test
+test tests::periodic_save_due_is_strict_gt_and_resets_on_fire ... FAILED
+
+failures:
+
+---- tests::periodic_save_due_is_strict_gt_and_resets_on_fire stdout ----
+
+thread 'tests::periodic_save_due_is_strict_gt_and_resets_on_fire' (4540) panicked at bins\game-svr\src\main.rs:4777:9:
+assertion failed: !periodic_save_due(&mut tick, save_time, 6_000)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::periodic_save_due_is_strict_gt_and_resets_on_fire
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 138 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`

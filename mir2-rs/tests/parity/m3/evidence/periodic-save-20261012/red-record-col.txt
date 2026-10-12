@@ -1,0 +1,28 @@
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.47s
+     Running unittests src\main.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-eb39968088e3f1ec.exe)
+
+running 1 test
+test tests::periodic_save_fires_repeatedly_and_record_is_well_formed ... FAILED
+
+failures:
+
+---- tests::periodic_save_fires_repeatedly_and_record_is_well_formed stdout ----
+02:06:42.884 [INF] 存档请求已发（DB_SAVEHUMANRCD）ChrName:hero queryId=1 记录 6202 字节
+02:06:42.884 [INF] 周期存档触发（SaveHumanRcdTime=5000ms）ChrName=hero
+02:06:42.884 [INF] 存档请求已发（DB_SAVEHUMANRCD）ChrName:hero queryId=2 记录 6202 字节
+02:06:42.884 [INF] 周期存档触发（SaveHumanRcdTime=5000ms）ChrName=hero
+
+thread 'tests::periodic_save_fires_repeatedly_and_record_is_well_formed' (31264) panicked at bins\game-svr\src\main.rs:4877:13:
+assertion `left == right` failed: 落库记录必须带实时 Gold（改坏某列 ⇒ 必红）
+  left: 0
+ right: 649
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::periodic_save_fires_repeatedly_and_record_is_well_formed
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 138 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`

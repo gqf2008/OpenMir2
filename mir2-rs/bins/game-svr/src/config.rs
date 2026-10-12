@@ -119,6 +119,10 @@ pub struct GateConfig {
     pub cloths_woman: String,
     /// `[Setup] ItemNumber`（oracle `GameSvrConf.cs:1699`，缺省 `0`）——`M2Share.GetItemNumber()` 的计数器初值。
     pub item_number: i32,
+    /// `[Setup] SaveHumanRcdTime`（oracle `GameSvrConf.cs:423/1484`，缺省 `10*60*1000`，**毫秒**；
+    /// `ServerConf.cs:566` 的 `ReadWriteInteger("Setup", "SaveHumanRcdTime", …)`）——
+    /// `WorldServer.ProcessPlayObjectData`（`WorldServer.cs:698-703`）的**周期存档**间隔。
+    pub save_human_rcd_time: i32,
 }
 
 /// 默认配置文件：可执行文件同目录的 `Server.conf`（与 C# `AppContext.BaseDirectory` 一致）。
@@ -178,6 +182,7 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut cloths_man: Option<String> = None;
     let mut cloths_woman: Option<String> = None;
     let mut item_number: Option<i32> = None;
+    let mut save_human_rcd_time: Option<i32> = None;
     let mut ids_addr: Option<String> = None;
     let mut ids_port: Option<u16> = None;
     let mut db_addr: Option<String> = None;
@@ -351,6 +356,13 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                             .with_context(|| format!("ItemNumber 不是合法整数：{v:?}"))?,
                     );
                 }
+                // 周期存档（`ServerConf.cs:566`；现网 `Server.conf` 未写 ⇒ 缺省 10 分钟）。
+                "SAVEHUMANRCDTIME" => {
+                    save_human_rcd_time = Some(
+                        v.parse()
+                            .with_context(|| format!("SaveHumanRcdTime 不是合法整数：{v:?}"))?,
+                    );
+                }
                 _ => {}
             },
             _ => {}
@@ -422,6 +434,8 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         cloths_man: cloths_man.unwrap_or_else(|| "布衣(男)".to_string()),
         cloths_woman: cloths_woman.unwrap_or_else(|| "布衣(女)".to_string()),
         item_number: item_number.unwrap_or(0),
+        // oracle 缺省值（`GameSvrConf.cs:1484` 的 `SaveHumanRcdTime = 10 * 60 * 1000`）。
+        save_human_rcd_time: save_human_rcd_time.unwrap_or(10 * 60 * 1000),
         ids_addr,
         ids_port,
         db_addr,
@@ -524,7 +538,7 @@ mod tests {
         let p = write(
             &dir,
             &format!(
-                "{base}[Setup]\nHumanMaxGold=10000000\nFloorItemCanPickUpTime=120000\nControlDropItem=1\nInSafeDisableDrop=0\nCanDropPrice=500\nDropItemRage=3\nSendRefMsgRange=15\n"
+                "{base}[Setup]\nHumanMaxGold=10000000\nFloorItemCanPickUpTime=120000\nControlDropItem=1\nInSafeDisableDrop=0\nCanDropPrice=500\nDropItemRage=3\nSendRefMsgRange=15\nSaveHumanRcdTime=1200000\n"
             ),
         );
         let c = load(&p).unwrap();
@@ -535,6 +549,10 @@ mod tests {
         assert_eq!(c.can_drop_price, 500);
         assert_eq!(c.drop_item_rage, 3);
         assert_eq!(c.send_ref_msg_range, 15, "[Setup] SendRefMsgRange 实值");
+        assert_eq!(
+            c.save_human_rcd_time, 1_200_000,
+            "[Setup] SaveHumanRcdTime 实值（毫秒）"
+        );
 
         // 缺键 ⇒ oracle 缺省（`SendRefMsgRange` 缺省 12，`GameSvrConf.cs:1503`）。
         let p2 = write(&dir, base);
@@ -546,6 +564,10 @@ mod tests {
         assert_eq!(c2.can_drop_price, 500);
         assert_eq!(c2.drop_item_rage, 3);
         assert_eq!(c2.send_ref_msg_range, 12, "缺键 ⇒ SendRefMsgRange 缺省 12");
+        assert_eq!(
+            c2.save_human_rcd_time, 600_000,
+            "缺键 ⇒ SaveHumanRcdTime 缺省 10*60*1000（GameSvrConf.cs:1484）"
+        );
 
         // 写了但非法 ⇒ 必须报错（不静默截断）。
         let p3 = write(&dir, &format!("{base}[Setup]\nDropItemRage=300\n"));

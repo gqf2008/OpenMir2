@@ -1,0 +1,31 @@
+# 卡 openmir2-m3-periodic-save —— oracle 周期存档逐行来源（只读核对）
+# 生成（git-bash）：rg -n '...' src/GameSrv/Word/WorldServer.cs src/M2Server/Player/PlayObject.cs ...
+
+## SaveHumanRcdTime 缺省与读法
+src/Modules/SystemModule/Conf/Model/GameSvrConf.cs:423:        public int SaveHumanRcdTime;
+src/Modules/SystemModule/Conf/Model/GameSvrConf.cs:1484:            SaveHumanRcdTime = 10 * 60 * 1000;
+src/Modules/SystemModule/Conf/ServerConf.cs:566:            SystemShare.Config.SaveHumanRcdTime = ReadWriteInteger("Setup", "SaveHumanRcdTime", SystemShare.Config.SaveHumanRcdTime);
+
+## SaveRcdTick 起算/门/重置 + SaveHumanRcd
+src/M2Server/Player/PlayObject.cs:601:        public int SaveRcdTick { get; set; }
+src/M2Server/Player/PlayObject.cs:886:            SaveRcdTick = HUtil32.GetTickCount();
+src/GameSrv/Word/WorldServer.cs:698:                                    if (!M2Share.FrontEngine.IsFull() && (HUtil32.GetTickCount() - playObject.SaveRcdTick) > SystemShare.Config.SaveHumanRcdTime)
+src/GameSrv/Word/WorldServer.cs:700:                                        playObject.SaveRcdTick = HUtil32.GetTickCount();
+src/GameSrv/Word/WorldServer.cs:702:                                        SaveHumanRcd(playObject);
+src/GameSrv/Word/WorldServer.cs:713:                            SaveHumanRcd(playObject);
+src/GameSrv/Word/WorldServer.cs:1077:        public static void SaveHumanRcd(IPlayerActor playObject)
+
+## FrontEngine.IsFull / InSaveRcdList / AddToSaveRcdList
+120:        public bool IsFull()
+156:        public bool InSaveRcdList(string sChrName)
+195:        public void AddToSaveRcdList(SavePlayerRcd SaveRcd)
+
+## new PlayObject（每次登入新建、不复用 free list）
+234:                playObject = new PlayObject();
+
+## DealCancelA（登记：交易层未移植）
+748:        public void DealCancelA()
+749-        {
+750-            Abil.HP = WAbil.HP;
+751-            DealCancel();
+752-        }
