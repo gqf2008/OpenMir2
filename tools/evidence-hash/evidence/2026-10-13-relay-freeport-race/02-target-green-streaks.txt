@@ -1,22 +1,24 @@
 # 受影响 target 连跑（最终 head）——默认线程 ×3 + --test-threads=32 ×3 + 并发 ×6
-# 被测代码 head = f55911f0（本分支 merge 当前 master 031ff37e 后）；base = 031ff37e。
+# 被测代码 head = 5e8767cc（本分支 merge 当前 master 4d276812 后）；base = 4d276812。
+# 开工时 origin/master=518a9ad9；工作期间 master 前进两次（031ff37e gitattributes/英雄宠物、4d276812 怪物 AI），
+# 交付前 forward-merge 到 4d276812 以消除「base 未含 master ⇒ 回退假差量」。
 
 [gate default 1] test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.77s
-[svr  default 1] test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.19s
-[gate t32 1] test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.75s
-[svr  t32 1] test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.03s
-[gate default 2] test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.72s
-[svr  default 2] test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.10s
-[gate t32 2] test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.67s
-[svr  t32 2] test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.36s
-[gate default 3] test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.83s
-[svr  default 3] test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.18s
-[gate t32 3] test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.69s
-[svr  t32 3] test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.07s
-[seed_inject] test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.00s
+[svr  default 1] test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.44s
+[gate t32 1] test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.69s
+[svr  t32 1] test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.09s
+[gate default 2] test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.68s
+[svr  default 2] test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.99s
+[gate t32 2] test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.71s
+[svr  t32 2] test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.09s
+[gate default 3] test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.71s
+[svr  default 3] test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.14s
+[gate t32 3] test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.74s
+[svr  t32 3] test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.02s
+[seed_inject] test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.04s
 
-# 两个 test binary 并发 ×6（各 --test-threads=16，--skip teeth 以隔离继电器用例）
-#   game-gate = relay-6a598fbef552edc3.exe / game-svr = relay-280172755705bc2a.exe
+# 两个 test binary 并发 ×6（各 --test-threads=16，--skip teeth 以隔离 relay 用例本身）
+#   game-gate = relay-6a598fbef552edc3.exe (14 tests) / game-svr = relay-280172755705bc2a.exe (16 tests)
 iter 1: svr rc=0 test result: ok. 13 passed; 0 failed | gate rc=0 test result: ok. 11 passed; 0 failed
 iter 2: svr rc=0 test result: ok. 13 passed; 0 failed | gate rc=0 test result: ok. 11 passed; 0 failed
 iter 3: svr rc=0 test result: ok. 13 passed; 0 failed | gate rc=0 test result: ok. 11 passed; 0 failed

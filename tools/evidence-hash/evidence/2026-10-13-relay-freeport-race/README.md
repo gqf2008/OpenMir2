@@ -2,9 +2,9 @@
 
 - 卡：`openmir2-m2-flaky-relay-testports`（issue `3d6c83c1`）。
 - 车道：`m3bag` / principal `openmir2-worker-4` / 分支 `worktree-m2-relay-testports`。
-  **base = master `031ff37e`**（开工时 `origin/master` 从 `518a9ad9` 前进到 `031ff37e`（含 gitattributes 收尾、英雄/宠物盘点等），
+  **base = master `4d276812`**（开工时 `origin/master` = `518a9ad9`，工作期间前进两次：`031ff37e`（gitattributes 收尾、英雄/宠物盘点）、`4d276812`（怪物 AI），
   已在交付前 `git merge origin/master` 消除「base 未含 master ⇒ 回退假差量」；`git merge-base master HEAD` = `031ff37e`）。
-  **被测代码 head = `f55911f0`**（merge 后的树；本条证据更新提交只改本目录）。
+  **被测代码 head = `5e8767cc`**（merge 后、证据更新提交前的树；证据更新提交只改本目录）。
 - 写集：`mir2-rs/bins/game-svr/tests/**` + `mir2-rs/bins/game-gate/tests/**`（共用 helper 放在
   `bins/game-svr/tests/support/mod.rs`，game-gate 用 `#[path]` 引入同一份）。
   **零 `.rs` 生产代码、零 `src/ sql/ MirClient`、未起任何服务端栈、未占 5000/7000/7100/7200。**
@@ -40,7 +40,7 @@ owner 在 master `f2eb43d6` 的**合并树**上跑 `cargo test --workspace --off
 | 文件 | 判据 | 结果 |
 | --- | --- | --- |
 | `01-root-cause-and-mechanism.txt` | owner 实拍 + 机制 + 本机动态段抽样 | 定性成立（见文件） |
-| `02-target-green-streaks.txt` | 两个 target **各 3 连跑**（默认线程）+ `--test-threads=32` 各 3 连跑 + 两个 test binary **并发** 6 轮（各 16 线程）+ `seed_inject` | 全 GREEN（gate 14/14、svr 16/16、seed_inject 6/6） || `03-workspace-gates.txt` | `cargo test --workspace` **×3** + 四门禁 | **86 suites / 744 passed / 0 failed** ×3；fmt/clippy/msgcodegen(604) rc=0 |
+| `02-target-green-streaks.txt` | 两个 target **各 3 连跑**（默认线程）+ `--test-threads=32` 各 3 连跑 + 两个 test binary **并发** 6 轮（各 16 线程）+ `seed_inject` | 全 GREEN（gate 14/14、svr 16/16、seed_inject 6/6） || `03-workspace-gates.txt` | `cargo test --workspace` **×3** + 四门禁 | **86 suites / 752 passed / 0 failed** ×3；fmt/clippy/msgcodegen(604) rc=0 |
 | `04-mutation-red.txt` | 改坏必红：`next_port()` 退回旧口径 ⇒ teeth 必红；还原后逐字节相同 | **RED 2/3**，还原 sha256 一致 |
 | 本文件 | — | — |
 
