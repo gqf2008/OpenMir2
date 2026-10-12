@@ -1,0 +1,35 @@
+{
+  "canon": "m3-drop-exp-v1",
+  "status": "skeleton-window-pending",
+  "kills": 100,
+  "seed": 42,
+  "map": "0137",
+  "monster": "稻草人",
+  "attacker": {
+    "x": 17,
+    "y": 20,
+    "dir": 2,
+    "level": 255,
+    "job": 0,
+    "hp": 20669
+  },
+  "isolation": {
+    "comment": "固定图 = 0137 竞技场（MonGen 0 行、GuardList/MerChant/Npcs/MapEvent/MapQuest 零引用 ⇒ 地图自身不刷怪、不跑 AI）；夹具在该图上**只** spawn 固定的一只固定怪（承接卡 2 落地后由 MonGen 驱动 + -PinMonster 控制），故除本夹具的 spawn/掉落/击杀路径外零 RNG 消费者。real-run 前由 gate_guards.ps1::Test-M3MonGenEmpty / Test-M3MapNoAiConsumers 复核「地图自身无消费者」。",
+    "map_self_no_monster": true,
+    "map_self_no_ai_consumers": true,
+    "fixture_single_monster": true
+  },
+  "artifact": {
+    "raw": "drop_exp_raw.jsonl",
+    "comparator": "python -I drop-exp/drop_exp_diff.py diff <csharp_raw> <rust_raw>",
+    "runner": "run_drop_exp_pair.ps1"
+  },
+  "record_required_fields": ["k", "gold", "drops", "exp_delta", "exp_total", "level"],
+  "record_optional_fields": ["monster", "x", "y", "hero_exp_delta"],
+  "drop_key_fields": ["name", "index", "count", "dura", "dura_max"],
+  "notes": [
+    "掉落列表按多重集/计数式比较（multiset），逐槽位定位到「第 k 次击杀 / 第几个掉落槽」；不许 set 差集。",
+    "金额/经验保持原宽度比较，比较器不得做 i32 截断（selftest 有 i32-truncation-red 用例钉住）。",
+    "oracle 侧本代码库没有独立的英雄经验表；「英雄」路径 = 下属/宠物击杀走 ExpHitter.Master（BaseObject.cs:2434），本场景单 attacker 不覆盖，登记为承接项。"
+  ]
+}

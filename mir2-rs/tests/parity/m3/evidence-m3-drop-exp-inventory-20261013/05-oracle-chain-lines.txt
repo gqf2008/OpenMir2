@@ -1,0 +1,68 @@
+# oracle（C#）侧掉落/经验调用链行号锚点（只读 grep -n；命令逐条可复跑）
+# 仓库 = 2313a2b8
+
+== [加载] MonItems / MonGen / monsters ==
+src/GameSrv/GameApp.cs:131:            nCode = GameShare.DataSource.LoadMonsterDB();
+src/GameSrv/GameApp.cs:147:            nCode = GameShare.LocalDb.LoadMonGen(out int mongenCount);
+src/GameSrv/GameApp.cs:155:            SystemShare.WorldEngine.InitializeMonster();
+src/GameSrv/GameApp.cs:238:                SystemShare.WorldEngine.InitializationMonsterThread();
+src/GameSrv/DB/LocalDB.cs:501:        public int LoadMonGen(out int mongenCount)
+src/GameSrv/DB/LocalDB.cs:564:                                SystemShare.WorldEngine.AddMonGenList(monGenInfo);
+src/GameSrv/DB/LocalDB.cs:596:        public void LoadMonitems(string monName, ref IList<MonsterDropItem> itemList)
+src/GameSrv/DB/MySqlDB.cs:168:        public int LoadMonsterDB()
+src/GameSrv/DB/MySqlDB.cs:226:                    GameShare.LocalDb.LoadMonitems(monster.Name, ref monster.ItemList);
+src/GameSrv/Word/WorldServer.cs:1901:        public void AddMonGenList(MonGenInfo monGenInfo)
+
+== [刷怪/复活] WorldServer.MonGen.cs ==
+30:        public void InitializeMonster()
+138:        public void InitializationMonsterThread()
+192:        private void ProcessMonsters(MonsterThread monsterThread)
+287:                                                if (monster.ReAliveEx(monster.MonGen))
+315:                                            monster.Run();
+439:        private void MonGetRandomItems(IMonsterActor mon)
+498:        private IMonsterActor CreateMonster(string sMapName, short nX, short nY, int nMonRace, string sMonName)
+811:        private bool RegenMonsters(MonGenInfo monGen, int nCount)
+880:        private void ApplyMonsterAbility(IMonsterActor monsterActor, string sMonName)
+
+== [怪物 AI tick] ==
+src/M2Server/Actor/BaseObject.Base.cs:25:        public virtual void Run()
+src/M2Server/Actor/BaseObject.Base.cs:70:                if (WAbil.HP == 0)
+src/M2Server/Actor/BaseObject.Base.cs:123:                    LastHiter = null;
+src/M2Server/Actor/BaseObject.Base.cs:130:                    ExpHitter = null;
+src/M2Server/Actor/BaseObject.Base.cs:328:                ExpHitter = null;
+src/M2Server/Actor/BaseObject.Base.cs:329:                LastHiter = null;
+src/M2Server/Actor/AnimalObject.cs:142:        public override void Run()
+src/M2Server/Actor/AnimalObject.cs:388:        protected virtual void SearchTarget()
+src/M2Server/Actor/AnimalObject.cs:425:        protected virtual void Wondering()
+src/M2Server/Monster/MonsterObject.cs:251:        public override void Run()
+
+== [被击杀 + 掉落生成] ==
+src/M2Server/Actor/BaseObject.Base.cs:318:        public virtual void Die()
+src/M2Server/Actor/BaseObject.Base.cs:343:            KillFunc();
+src/M2Server/Actor/BaseObject.Base.cs:501:        public virtual void ScatterBagItems(int itemOfCreat)
+src/M2Server/Actor/BaseObject.Base.cs:766:                    case Messages.RM_DIEDROPITEM:
+src/M2Server/Actor/BaseObject.cs:529:        public bool DropItemDown(UserItem userItem, int nScatterRange, bool boDieDrop, int itemOfCreat, int dropCreat)
+src/M2Server/Actor/BaseObject.cs:1711:        public void ScatterGolds(int goldOfCreat)
+src/M2Server/Actor/BaseObject.cs:2429:        private void KillFunc()
+src/M2Server/Actor/BaseObject.cs:2436:                    ExpHitter.Master.SendMsg(Messages.RM_PLAYERKILLMONSTER, this.ActorId, fightExp, 0, 0);
+src/M2Server/Actor/BaseObject.cs:2437:                    SendMsg(Messages.RM_DIEDROPITEM, ExpHitter.Master.ActorId, 0, 0, 0);
+src/M2Server/Actor/BaseObject.cs:2441:                    ExpHitter.SendMsg(Messages.RM_PLAYERKILLMONSTER, this.ActorId, fightExp, 0, 0);
+src/M2Server/Actor/BaseObject.cs:2442:                    SendMsg(Messages.RM_DIEDROPITEM, ExpHitter.ActorId, 0, 0, 0);
+src/M2Server/Actor/BaseObject.cs:2450:        private void DieDropItems(int actorId)
+src/M2Server/Player/PlayObject.Message.cs:2110:                case Messages.RM_PLAYERKILLMONSTER:
+
+== [经验] ==
+src/M2Server/Player/PlayObject.cs:1632:        private void KillTargetTrigger(int actorId, int fightExp)
+src/M2Server/Player/PlayObject.cs:1643:            int monsterExp = CalcGetExp(WAbil.Level, fightExp);
+src/M2Server/Player/PlayObject.cs:1648:                    // ((IRobotPlayer)ExpHitter).GainExp(monsterExp);
+src/M2Server/Player/PlayObject.cs:1652:                    GainExp(monsterExp);
+src/M2Server/Player/PlayObject.Base.cs:129:        public void WinExp(int dwExp)
+src/M2Server/Player/PlayObject.Base.cs:149:        private void GetExp(int dwExp)
+src/M2Server/Player/PlayObject.Base.cs:153:            SendMsg(Messages.RM_WINEXP, 0, dwExp, 0, 0);
+src/M2Server/Player/PlayObject.Base.cs:764:        public void GainExp(int dwExp)
+
+== [帧常量] ==
+205:        public const int SM_WINEXP = 44;
+279:        public const int SM_ITEMSHOW = 610;
+678:        public const int RM_WINEXP = 8075;
+683:        public const int RM_ITEMSHOW = 8082;
