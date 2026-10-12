@@ -1,0 +1,14 @@
+# 干净 clone 上复核证据 hash（'清单只含会入库的文件' + repo 字节口径在任何检出都成立）
+# 命令（在本片 head 的 worktree 上克隆到空目录后）：
+#   git clone --single-branch -b worktree-m2-gamesvr-host <本片 head 的 worktree> <tmp>
+#   cd <tmp> && python -I tools/evidence-hash/verify_sha256sums.py verify \
+#       mir2-rs/tests/parity/m3/evidence/rust-seed-injection-20261012 --check-extra
+# clone 里 core.autocrlf = true（Windows 默认 true ⇒ 盘上 CRLF，仍按 repo 字节口径复核）
+
+# 1) finding 返工 head f4661bb2（有界超时 + 因子进程树 kill + 不残留断言；诊断证据补齐）
+GREEN mir2-rs\tests\parity\m3\evidence\rust-seed-injection-20261012\SHA256SUMS.txt  [repo 口径]  OK 21/21
+
+# 2) merge master 12a1ef50（master 自 9456ed6f 起只动 src/BotSrv/** 与 m3 证据，无 .rs）+ 四门禁刷新 head 0247d7ca
+#    （79 suites / 648 passed / 0 failed / 16 ignored + msgcodegen 604）
+GREEN mir2-rs\tests\parity\m3\evidence\rust-seed-injection-20261012\SHA256SUMS.txt  [repo 口径]  OK 21/21
+rc=0

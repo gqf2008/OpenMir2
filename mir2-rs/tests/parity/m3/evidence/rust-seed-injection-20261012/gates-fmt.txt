@@ -1,0 +1,2 @@
+# $ cargo fmt --all -- --check   (cwd=mir2-rs; CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target)
+# cargo exit=0

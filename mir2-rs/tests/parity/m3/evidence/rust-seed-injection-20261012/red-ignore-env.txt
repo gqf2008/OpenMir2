@@ -1,0 +1,77 @@
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+warning: constant `RNG_SEED_ENV` is never used
+  --> bins\game-svr\src\seed.rs:21:11
+   |
+21 | pub const RNG_SEED_ENV: &str = "MIR2_RNG_SEED";
+   |           ^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: struct `SeedError` is never constructed
+  --> bins\game-svr\src\seed.rs:28:12
+   |
+28 | pub struct SeedError {
+   |            ^^^^^^^^^
+
+warning: associated function `new` is never used
+  --> bins\game-svr\src\seed.rs:33:8
+   |
+32 | impl SeedError {
+   | -------------- associated function in this implementation
+33 |     fn new(message: impl Into<String>) -> Self {
+   |        ^^^
+
+warning: function `parse_seed` is never used
+  --> bins\game-svr\src\seed.rs:56:8
+   |
+56 | pub fn parse_seed(raw: Option<&str>) -> Result<Option<i32>, SeedError> {
+   |        ^^^^^^^^^^
+
+warning: function `env_seed` is never used
+  --> bins\game-svr\src\seed.rs:71:8
+   |
+71 | pub fn env_seed() -> Result<Option<i32>, SeedError> {
+   |        ^^^^^^^^
+
+warning: `game-svr` (bin "game-svr") generated 5 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.99s
+     Running tests\seed_inject.rs (E:/tmp/openmir2-m2svr-target\debug\deps\seed_inject-18e212843fab4fdb.exe)
+
+running 1 test
+test seed_env_injection_logs_csharp_probe ... FAILED
+
+failures:
+
+---- seed_env_injection_logs_csharp_probe stdout ----
+
+thread 'seed_env_injection_logs_csharp_probe' (6108) panicked at bins\game-svr\tests\seed_inject.rs:82:5:
+应有同种子注入行；实得日志：
+02:23:05.295 [INF] 游戏服务启动：监听 127.0.0.1:55017（CheckBlock=12288，1 张地图占位，config=C:\Users\gxh\AppData\Local\Temp\gs-seed-set-32748-0\Server.conf）
+02:23:05.296 [WRN] 未找到 Envir/MapInfo.txt（base=C:\Users\gxh\AppData\Local\Temp\gs-seed-set-32748-0 EnvirDir=Envir MapDir=Map）⇒ 地图尺寸用 WorldMaps 占位、CurMap 不校验（开发/测试形态，登记：真机验收后删占位键）
+02:23:05.296 [INF] 配置层已载入：[Names] GameGold=元宝 GamePoint=游戏点（帧 5008）/ [Setup] BonusAbilofWarr/NakedAbilofWarr 等（帧 811）
+02:23:05.296 [WRN] 公告为空/缺失（base=C:\Users\gxh\AppData\Local\Temp\gs-seed-set-32748-0 NoticeDir=Notice）⇒ 仍发 header-only 658（照 oracle）
+02:23:05.298 [INF] 出生点回落已载入：StartPoint.txt 0 条，StartPointSize=2，Config.HomeMap=0 (289,618)（空 HomeMap 的新角色用它；RNG 抽数照 oracle）
+02:23:05.299 [WRN] 读 stditems 失败（连接 MySQL 失败（读 stditems）：error returned from database: 1049 (42000): Unknown database 'mir2'）⇒ 装备形态按 `GetStdItem == null` 计 0（oracle 空物品系统分支）
+02:23:05.299 [WRN] 读取 Exps.conf 失败（系统找不到指定的文件。 (os error 2)）⇒ NeedExps 全 0（存档 MaxExp / 击杀经验登记）
+02:23:05.300 [INF] 游戏服务[127.0.0.1:55017]已启动...
+02:23:05.302 [INF] sim 线程就绪：tick=200ms，地图 1 张（WorldMaps 占位）
+02:23:07.345 [ERR] 链接登录服务器[127.0.0.1:55018]失败...（由于目标计算机积极拒绝，无法连接。 (os error 10061)）
+02:23:07.345 [ERR] 链接数据库服务器[127.0.0.1:55019]失败...（由于目标计算机积极拒绝，无法连接。 (os error 10061)）
+02:23:12.391 [ERR] 链接数据库服务器[127.0.0.1:55019]失败...（由于目标计算机积极拒绝，无法连接。 (os error 10061)）
+02:23:12.391 [ERR] 链接登录服务器[127.0.0.1:55018]失败...（由于目标计算机积极拒绝，无法连接。 (os error 10061)）
+02:23:15.123 [DBG] sim: tick #50 clock=10000ms 处理 0 项（本地第 50 次）
+02:23:17.442 [ERR] 链接登录服务器[127.0.0.1:55018]失败...（由于目标计算机积极拒绝，无法连接。 (os error 10061)）
+02:23:17.443 [ERR] 链接数据库服务器[127.0.0.1:55019]失败...（由于目标计算机积极拒绝，无法连接。 (os error 10061)）
+02:23:22.471 [ERR] 链接登录服务器[127.0.0.1:55018]失败...（由于目标计算机积极拒绝，无法连接。 (os error 10061)）
+02:23:22.471 [ERR] 链接数据库服务器[127.0.0.1:55019]失败...（由于目标计算机积极拒绝，无法连接。 (os error 10061)）
+02:23:25.142 [DBG] sim: tick #100 clock=20000ms 处理 0 项（本地第 100 次）
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    seed_env_injection_logs_csharp_probe
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 21.21s
+
+error: test failed, to rerun pass `-p game-svr --test seed_inject`

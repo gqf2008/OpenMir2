@@ -1,0 +1,29 @@
+# C# 侧同种子注入点（本片对齐的唯一口径来源）
+# 文件：mir2-rs/tests/parity/m3/rng-hook/StartupHook.cs（.NET Startup Hook，只放影子副本，不碰冻结基线）
+
+9://   MIR2_RNG_SEED=<int>   固定种子（不设则完全不动 oracle 行为）
+41:        string seedText = Environment.GetEnvironmentVariable("MIR2_RNG_SEED");
+42:        if (string.IsNullOrEmpty(seedText))
+46:        if (!int.TryParse(seedText, out int seed))
+48:            Fail($"MIR2_RNG_SEED 不是合法 int: {seedText}");
+50:        string logPath = Environment.GetEnvironmentVariable("MIR2_RNG_LOG");
+53:            _logSite = Environment.GetEnvironmentVariable("MIR2_RNG_SITE") == "1";
+54:            if (!string.IsNullOrEmpty(logPath))
+73:                Fail("找不到 OpenMir2.RandomNumber.random 私有静态字段（被 trim？）");
+82:                Fail("注入失败：字段未被替换");
+86:                Fail("GetInstance 返回 null");
+88:            var reference = new Random(seed);
+89:            var sb = new StringBuilder("SEED_PROBE");
+104:            Fail($"RngSeedHook 注入异常: {ex}");
+158:    private static void Fail(string message)
+166:        Environment.Exit(97);
+178:        _inner = new Random(seed);
+
+# 方案文档 §二（实测证据 SEED_PROBE）：mir2-rs/tests/parity/m3/RNG同种子与记录回放方案.md
+33:set MIR2_RNG_SEED=42
+41:- 影子副本的 `GameSrv.runtimeconfig.json` 里 `System.StartupHookProvider.IsSupported` 是
+43:- 钩子类型必须叫**全局命名空间的 `StartupHook`**（带命名空间报 `TypeLoadException`）；
+50:实测证据（`MIR2_RNG_SEED=42`）：
+53:SEED_PROBE 1434747710 302596119 269548474 1122627734 361709742 563913476 1555655117 1101493307
+130:#    改影子 runtimeconfig: System.StartupHookProvider.IsSupported -> true
+137:set MIR2_RNG_SEED=42 & set MIR2_RNG_LOG=E:\tmp\m3-rng-shadow\rng.log & set MIR2_RNG_SITE=1

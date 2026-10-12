@@ -1,0 +1,73 @@
+# 卡 openmir2-m3-rust-seed-injection（T-30）—— 本片跑过的确切命令（证据四件套之「命令」）
+# 主机 shell = git-bash（Windows）；cargo 隔离 target = E:\tmp\openmir2-m2svr-target；全部 --offline
+# 工作区 = E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs
+# base = refs/heads/master（交付时已 merge 到 9456ed6f；master 已含周期存档 e4a18ca8）
+
+# --- 0) oracle 侧注入点（只读核对：变数名/格式/失败处置/时机/SEED_PROBE）---
+rg -n "MIR2_RNG_SEED|GetEnvironmentVariable|IsNullOrEmpty|int.TryParse|Fail\(|Environment.Exit|new Random\(seed\)|SEED_PROBE" \
+   mir2-rs/tests/parity/m3/rng-hook/StartupHook.cs
+rg -n "MIR2_RNG_SEED|SEED_PROBE|int.TryParse|StartupHook" \
+   mir2-rs/tests/parity/m3/RNG同种子与记录回放方案.md
+#                                                                            -> oracle-injection-point.txt
+
+# --- 0b) 前置：端口实拍（本片不起栈、不占端口；只记录窗口未被本线占用）---
+powershell -NoProfile -Command "foreach (\$p in 5000,5100,5500,5600,5700,6000,7000,7100,7200,3306) { Get-NetTCPConnection -State Listen -LocalPort \$p -ErrorAction SilentlyContinue ... }"
+# 输出：5000..7200 全 free；3306 LISTEN pid=26652 mysqld（共享 MySQL）        -> ports-preflight.txt
+# 未起栈 ⇒ 无 -Stop；收工端口与开工一致。
+
+# --- 1) merge master（交付前把 master 合进分支，别拿旧 base 交）---
+git fetch origin && git merge origin/master --no-edit
+#   base 9456ed6f：含 M3②③ 第十一片 + 周期存档 e4a18ca8；本片只追加 seed 相关文件
+
+# --- 2) 门禁（隔离 CARGO_TARGET_DIR；全 --offline）---
+export CARGO_TARGET_DIR=E:/tmp/openmir2-m2svr-target
+cargo fmt --all -- --check                                        # rc=0（0 字节 = 无 diff）-> gates-fmt.txt
+cargo clippy --workspace --all-targets --offline -- -D warnings   # rc=0                    -> gates-clippy.txt
+cargo test --workspace --offline                                  # rc=0；79 suites / 648 passed / 0 failed / 16 ignored
+#                                                                   -> gates-test-workspace.txt
+cargo run -p msgcodegen --offline -- --check                      # rc=0；604 条             -> gates-msgcodegen.txt
+
+# --- 3) 用例（本片新增 7 条单元 + 3 条进程级）---
+cargo test -p game-svr --offline --bin game-svr seed              # 7 passed; 0 failed  -> probe-csharp-match.txt
+cargo test -p game-svr --offline --test seed_inject               # 3 passed; 0 failed  -> green-after-red.txt
+
+# --- 4) 新增/改动用例 3 连跑（同一命令三次同结论）---
+for i in 1 2 3; do cargo test -p game-svr --offline > gamesvr-3run-$i.txt 2>&1; done
+# 每次：242 passed / 0 failed
+
+# --- 5) 红检（改坏 ⇒ 必红；每步跑完立即 `git checkout -- mir2-rs/bins/game-svr/src/main.rs` 还原）---
+# A) 忽略环境变数：main.rs 的 `let rng_seed = seed::env_seed()?;` -> `let rng_seed: Option<i32> = None;`
+cargo test -p game-svr --offline --test seed_inject seed_env_injection_logs_csharp_probe
+#   exit 101；FAILED（日志无 SEED_PROBE）                                        -> red-ignore-env.txt
+# B) 把种子常量写死：main.rs 的 `world.rng = ...with_seed(seed)` -> `with_seed(7)`
+cargo test -p game-svr --offline --test seed_inject seed_env_injection_logs_csharp_probe
+#   exit 101；FAILED；日志 seed=42 ... SEED_PROBE 822959691 1871007331 ...（种子 7 的序列）
+#                                                                                 -> red-hardcoded-seed.txt
+# 还原后复跑：cargo test -p game-svr --offline --test seed_inject  # 3 passed     -> green-after-red.txt
+
+# --- 6) 证据 hash（仓库字节 = Git blob 口径；LF 归一）---
+python -I tools/evidence-hash/verify_sha256sums.py write  mir2-rs/tests/parity/m3/evidence/rust-seed-injection-20261012
+python -I tools/evidence-hash/verify_sha256sums.py verify mir2-rs/tests/parity/m3/evidence/rust-seed-injection-20261012 --check-extra
+# 干净 clone 上复跑（证明清单只含会入库的文件、且 LF 口径在任何检出上都成立）：
+#   git clone --single-branch -b worktree-m2-gamesvr-host <worktree> <tmp> \
+#     && python -I tools/evidence-hash/verify_sha256sums.py <tmp>/mir2-rs/tests/parity/m3/evidence/rust-seed-injection-20261012 --check-extra
+#                                                                                 -> clean-clone-verify.txt
+
+# ============================================================================
+# --- 7) finding 返工（owner ad34af10）：诊断 + 有界兜底 + 可重复判据 ---
+# ============================================================================
+# 诊断 A：(b)「拿到非法种子但没 fail-closed」证伪 —— 直探生产路径（不经用例）：
+MIR2_RNG_SEED=not-an-int E:/tmp/openmir2-m2svr-target/debug/game-svr.exe <conf>
+#   exit_code=1 elapsed_ms=61；stderr: Error: MIR2_RNG_SEED 不是合法 int: not-an-int
+#                                                                                 -> owner-t30-hang-diagnosis.txt
+# 诊断 B：把「忽略环境变数」变异挂上（main.rs:179 -> None）+ 旧 head 的无界 .output() 跑整组
+#   ⇒ 用例挂死 >60s 并泄漏 game-svr（conf=gs-seed-bad-<pid>-<seq>）——精确复现 owner 的签名。
+#   （复现见 owner-t30-hang-diagnosis.txt 证据 B）
+# 判据 ③（可重复）：非法种子用例连跑 3 次全绿（同一命令同结论、每次 exit=Some(1)、≤10s、零残留）
+for i in 1 2 3; do cargo test -p game-svr --offline --test seed_inject invalid_seed_env_exits_nonzero -- --nocapture; done
+#                                                                                 -> invalid-seed-3run-1..3.txt
+# 红检（有界版）：同变异下整组 seed_inject 必须 ≤N 到界判红 + 因子进程树 kill + 零残留：
+#   cargo test -p game-svr --offline --test seed_inject -- --nocapture
+#   rc=101 / 20s / wmic 复查无 game-svr                                              -> red-ignore-env-bounded-timeout.txt
+# 还原后复跑：cargo test -p game-svr --offline --test seed_inject -- --nocapture   -> green-after-red.txt
+# package 3 连跑（新 head）：cargo test -p game-svr --offline  x3 = 242/0    -> gamesvr-3run-1..3.txt
