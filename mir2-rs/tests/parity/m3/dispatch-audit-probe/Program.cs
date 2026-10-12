@@ -92,8 +92,17 @@ internal static class Program
     };
 
     // ---- 锚点自检（防 F-1 同族的行号漂移）------------------------------------------------------
+    //
+    // 条数断言（第十二片）：`VerifyAnchors` 跑完必须恰为 `ExpectedAnchorCount` 条。
+    // 防的是「探针增删锚点、报告/清单的条数没跟着改」这类证据计数漂移——本片即因此把报告的
+    // 「4 处锚点自检」订正为 **19 条**（实测 `CheckLine` 调用 19：MagicManager 11 +
+    // PlayObject.Base 4 + PlayObject.Attack 1 + PlayObject 2 + BaseObject.Message 1）。
+    private const int ExpectedAnchorCount = 19;
+    private static int s_anchorCount;
+
     private static void VerifyAnchors(string repoRoot)
     {
+        s_anchorCount = 0;
         const string mm = "src/M2Server/Magic/MagicManager.cs";
         CheckLine(repoRoot, mm, 82, "public static bool IsWarrSkill(int wMagIdx)");
         CheckLine(repoRoot, mm, 85, "switch (wMagIdx)");
@@ -120,6 +129,12 @@ internal static class Program
         // ⇒ `SendRefMsg` 走 `BaseObject.Message.cs:390` 的自身分支，出帧落自身 MsgQueue。
         CheckLine(repoRoot, "src/M2Server/Player/PlayObject.cs", 993, "FixedHideMode = true;");
         CheckLine(repoRoot, "src/M2Server/Actor/BaseObject.Message.cs", 390, "if (ObMode || FixedHideMode)");
+
+        if (s_anchorCount != ExpectedAnchorCount)
+        {
+            throw new InvalidOperationException(
+                $"锚点自检条数漂移：实跑 {s_anchorCount} != 期望 {ExpectedAnchorCount}（改锚点行数必须同步 ExpectedAnchorCount）");
+        }
     }
 
     private static void CheckLine(string repoRoot, string rel, int line, string needle)
@@ -133,6 +148,7 @@ internal static class Program
         {
             throw new InvalidOperationException($"{rel}:{line} 锚点不符:\n  needle: {needle}\n  got   : {lines[line - 1].Trim()}");
         }
+        s_anchorCount++;
     }
 
     private static string[] ReadOracle(string repoRoot, string rel)
