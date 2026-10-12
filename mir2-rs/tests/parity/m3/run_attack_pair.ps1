@@ -145,12 +145,17 @@ function Test-RustDisconnectSaveImplemented {
 }
 
 # 把会话的 attack_raw.jsonl 对齐成 attack_seq.jsonl（幂等；不连网）。
+# F-H（m3bag 2026-10-12，第二轮 `-AttackCount 20` 真机冒烟）：函数体里 `& python …` 的 stdout 会混进
+# **返回值** ⇒ `$rc = Invoke-AttackAlign` 拿到 @(<python 输出>, $LASTEXITCODE)、`$rc -ne 0` 恒真
+# ⇒ C# 侧在 `ATTLIGN_OK` 成功后仍报 `RED: attack_diff align 失败（rc=ALTTIGN_OK …）`。
+# 唯一口径：python 输出走 host（不回流），返回值只留 [int]$LASTEXITCODE；离线自检 ⑮ 钉住。
 function Invoke-AttackAlign([string]$Dir) {
   $raw = Join-Path $Dir 'attack_raw.jsonl'
   if (-not (Test-Path $raw)) { Write-Output ("PREREQ_MISSING: 会话缺 attack_raw.jsonl -> {0}" -f $raw); return 2 }
   $seq = Join-Path $Dir 'attack_seq.jsonl'
-  & python $AttackDiff align $raw --out $seq
-  return $LASTEXITCODE
+  $out = & python $AttackDiff align $raw --out $seq 2>&1
+  foreach ($line in @($out)) { Write-Host $line }
+  return [int]$LASTEXITCODE
 }
 
 $script:AttackDiffRc = 2
@@ -316,6 +321,27 @@ if ($SelfCheckNoStack) {
   if ($botsSelfRc -ne 0) { $failures += ('attack_wait_selftest_rc=' + $botsSelfRc) }
   if ($botsSelfOut -notmatch 'SELFTEST_RED GREEN') { $failures += 'attack_wait_selftest_not_green' }
   Write-Output ("SELFTEST ⑭ 攻击序列收尾等待（run_bots -SelfCheckNoStack）rc={0}" -f $botsSelfRc)
+
+  # ⑮ F-H（m3bag 2026-10-12）：`Invoke-AttackAlign` 的**返回值类型**必须是 int（只含退出码），
+  #    不得混入 python stdout（否则 `-ne 0` 恒真 ⇒ C# 侧 align 成功后仍报 RED）。真跑生产函数。
+  #    改坏（把函数体改回 `& python …; return $LASTEXITCODE`）⇒ `attack_align_rc_not_int=Object[]` 必红。
+  $alignDir = Join-Path $tmpRoot 'f-h-align'
+  New-Item -ItemType Directory -Force -Path $alignDir | Out-Null
+  $fRaw = Join-Path $alignDir 'attack_raw.jsonl'
+  $fLines = @(
+    'M3ATTSEQ {"role":"attack","k":1,"op":"CM_HIT","x":1,"y":1,"dir":2,"my":11}',
+    'M3ATTSEQ {"role":"struck","dmg":3,"hp":7,"maxhp":10,"src":11,"actor":22}',
+    'M3ATTSEQ {"role":"done","attacks":1}'
+  )
+  [System.IO.File]::WriteAllLines($fRaw, $fLines, (New-Object System.Text.UTF8Encoding($false)))
+  $prevEap = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  $alignRc2 = Invoke-AttackAlign $alignDir
+  $ErrorActionPreference = $prevEap
+  if ($alignRc2 -isnot [int]) { $failures += ('attack_align_rc_not_int=' + $(if ($null -ne $alignRc2) { $alignRc2.GetType().Name } else { 'null' })) }
+  elseif ($alignRc2 -ne 0) { $failures += ('attack_align_rc=' + $alignRc2) }
+  if (-not (Test-Path (Join-Path $alignDir 'attack_seq.jsonl'))) { $failures += 'attack_align_seq_missing' }
+  Write-Output ("SELFTEST ⑮ Invoke-AttackAlign 返回值类型/退出码（F-H）：rc={0} type={1}" -f (@($alignRc2) -join '|'), $(if ($null -ne $alignRc2) { $alignRc2.GetType().Name } else { 'null' }))
 
   # ⑩ Minor M-1 回归（reviewer-5 76e433f0）：`-AttackSequence` 未配 `-AttackPinPair` ⇒ WARN 必须**真**出现；
   #    配了 `-AttackPinPair` ⇒ 不得出现。旧实现把 WARN 写在 `if ($EmitOpsArgs)` 块内且带 `-not $EmitOpsArgs`
