@@ -81,11 +81,48 @@ owner 已把「查清 C# 目标格 (18,20) 从 k=4 起为空」转 m3bag（加**
 夹具记录就位前，`--derive-state` 从既有 `attack_raw.jsonl` 反推可得子集（攻方 `x/y/dir` ← `role=attack`；
 受害 `present/hp` ← `role=struck`；其余 `-`），列内 `state=derived` 明示——**不替代**权威记录。
 
+## SERVER_STATE：jointable 直接吃**服务端权威 dump**（owner 2026-10-13 01:05 第 ② 条）
+
+**背景**：m3bag 已定位「客户端夹具记录**看不到 victim 的服务端 `Ghost`**」（受害被 ghost 后观察者仍保留
+actor）⇒ 目标可用性只能由**服务端权威 dump** 咬住。C# 影子 hook（`StartupHook.cs::DumpActors`）与
+m2-svr 待审片（`bins/game-svr/src/state_log.rs`）**两侧同形**：每行
+`SERVER_STATE <seq> <json 数组>`，一**玩家攻击单元**一行，数组元素 = 全部玩家族对象的
+`{id,name,x,y,dir,ghost,death,hp,maxhp,map}`。
+
+⇒ 本工具 `jointable` 新增侧别参数，**两侧都能吃**（C#/Rust 走同一解析器）：
+
+    python -I per_strike_requests.py jointable \
+      --csharp-stream <csharp-attack-stream.tsv> --rust-stream <rust-rng-stream.tsv> \
+      --csharp-server-state <SERVER_STATE.tsv> --rust-server-state <SERVER_STATE.tsv> \
+      --csharp-attacker-id <id> --rust-attacker-id <id> --victim-x 18 --victim-y 20
+
+口径（与夹具侧 `server_state_gate.py` 一致）：
+
+* 每侧取该 dump 的**最后 N 行**（N = 本侧 RNG 流水切出的**玩家攻击单元数**）；
+* `attacker` = 该行 `id == --<side>-attacker-id` 的玩家族对象（`attack_raw.jsonl` 的 `role=attack.my`）；
+* `victim` = 该行站在 `(--victim-x,--victim-y)` 的**另一个**玩家族对象（**不筛 `ghost/death`**——
+  正是要列出来看见的那一列 `vic_ghost`/`vic_death`；`victim:null` = 该格无人）；
+* 两侧同时给 `--*-server-state` 与 `--*-state` ⇒ 额外记 `info:client_vs_server_state_diff`
+  （客户端说在场且 `ghost=0`，服务端同 k `ghost=1` ⇒ 点名 `k:ghost(client=…,server=…)`，不判红）。
+
+**fail-closed（真机件驱动，原始件 `18-serverstate-failclosed.txt`）**：dump 行数 < 玩家单元数 /
+行非法 JSON / 找不到 attacker id ⇒ **PREREQ rc=2**；给了 `--*-server-state` 却缺选择参数
+（`attacker-id`/`victim-x`/`victim-y`）⇒ PREREQ（不猜）。**绝不静默出表。**
+
+**验证（非合成）**：
+
+* C# 真实产出：`sessions/csharp-20261013-005038/server_state_segment.tsv`（120 行）+ cA2 流水 ⇒
+  `jointable` **GREEN**，`state=server`，120 行 `vic_ghost=0`（`15-serverstate-jointable-csharp-real.txt`）。
+* Rust 真实产出：m2-svr 待审片 `4ba36368` 的 `rust-server-state.tsv` 原样存 `fixtures/`，本解析器
+  对其直出 5 个 `k` 的 attacker/victim（`16-serverstate-rust-sample-parse.txt`）⇒ **Rust 侧 dump 合入后
+  两侧都能填**（不需要再改本工具）。
+* 牙齿：`selftest` **24/24**（新增 SERVER_STATE 两侧 / ghost 列 / 客户端 vs 服务端 / 缺选择器/短/缺 id/坏 JSON）。
+
 ## 文件
 
 | 文件 | 内容 |
 |---|---|
-| `01-selftest.txt` | `per_strike_requests.py selftest`（16/16 牙齿，含 jointable 8 项） |
+| `01-selftest.txt` | `per_strike_requests.py selftest`（原 16/16 牙齿；SERVER_STATE 后 **24/24**） |
 | `02-analyze-stack2.txt` / `.json` | cA(120) vs rA(120)：站点计数 / player 单元模板 / 第一分歧 class=base_unit |
 | `03-analyze-stack1.txt` / `.json` | 交叉印证（含 20 冒烟 + 两次 120；`--allow-count-mismatch` 因两侧会话构成不同） |
 | `04-per-strike-table-stack2.txt` | 120 击逐 k 的**每击取数请求序列**（C#/Rust 并排，带 hit/dodge） |
@@ -98,6 +135,14 @@ owner 已把「查清 C# 目标格 (18,20) 从 k=4 起为空」转 m3bag（加**
 | `11-jointable-twophase-derived.txt` | `jointable --derive-state` 真机预览（两侧同表 240 行）：C# 受害 `present` 只在 k=2,3、Rust 到 k=38；C# `k=3` 的 `hit≠rng`（观察者重复计数，登记） |
 | `12-jointable-prereq-failclosed.txt` | 缺状态记录且未 `--derive-state` ⇒ `PREREQ`（rc=2）原始件：**绝不静默出表** |
 | `13-gates-jointable.txt` | 本片四门禁（零 .rs；`CARGO_TARGET_DIR=E:/tmp/m3cs-r2-target`）：fmt 0 / clippy 0 / 84 suites 682 passed 0 failed 16 ignored / msgcodegen 604 |
+| `15-serverstate-jointable-csharp-real.txt` | owner 01:05 ②：`jointable` 吃 C# 真实 `SERVER_STATE`（120 行）⇒ GREEN（`state=server`） |
+| `16-serverstate-rust-sample-parse.txt` | owner 01:05 ②：本解析器对**Rust 真实产出**（m2-svr `rust-server-state.tsv`）直出 5 个 k |
+| `17-serverstate-selftest.txt` | SERVER_STATE 后 `selftest` **24/24** 原始件 |
+| `18-serverstate-failclosed.txt` | 真机件驱动的 fail-closed：短 dump / 缺 attacker id / 缺选择器 ⇒ PREREQ rc=2 |
+| `19-serverstate-gates.txt` | 本片四门禁（零 .rs）：fmt 0 / clippy 0 / 84 suites 682 passed 0 failed 16 ignored / 604 |
+| `20-e1-verify-green.txt` | owner 01:15 E-1 返工：`window/00-selfcheck-nostack.txt` 清单按仓库字节重记 ⇒ verify **RED 81/82 → GREEN 82/82** |
+| `21-cleancheck-verify.txt` | E-1 的**干净检出**复核（`git worktree add --detach`）：两包 verify GREEN 82/82 + 32/32、selftest 24/24 |
+| `fixtures/rust-server-state-m2svr-sample.tsv` | m2-svr 待审片 `4ba36368` 的 Rust `SERVER_STATE` 原样样本（5 行） |
 | `per_strike_requests.py` | ③/① 的机判工具（`analyze` / `table` / `jointable` / `selftest`） |
 | `session_target_availability.py` | ② 的会话件读数工具 |
 | `provenance/` | 四条流水副本（C# 专用流 ×2、Rust trace ×2）+ 溯源 |

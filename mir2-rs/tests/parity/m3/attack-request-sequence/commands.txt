@@ -86,3 +86,30 @@ S = `mir2-rs/tests/parity/m3/evidence-rng-isolate-attack-twophase-20261012/sessi
     cargo run -p msgcodegen --offline -- --check
     cargo test --workspace --offline
     # -> 13-gates-jointable.txt（fmt 0 / clippy 0 / 84 suites 682 passed 0 failed 16 ignored / 604）
+
+## 8) SERVER_STATE：jointable 吃服务端权威 dump（owner 2026-10-13 01:05 第 ② 条；本片零 .rs）
+
+    # 8.1 真机件（C# 真实产出；Rust 侧本例用夹具记录）：sessions/csharp-20261013-005038 = cA2
+    P=$D/../evidence-rng-isolate-attack-twophase-ff-20261013
+    python -I $D/per_strike_requests.py jointable \
+      --csharp-stream $P/streams/csharp-cA2-attack-stream.tsv \
+      --rust-stream   $P/streams/rust-rA2-rng-stream.tsv \
+      --csharp-server-state $P/sessions/csharp-20261013-005038/server_state_segment.tsv \
+      --rust-state   $P/sessions/rust-20261013-005240/attack_state.jsonl \
+      --csharp-attacker-id 1591331302 --victim-x 18 --victim-y 20 \
+      --out $D/15-serverstate-jointable-csharp-real.txt
+    # -> JOINTABLE GREEN，state 来源 = server；120 行 vic_ghost=0
+
+    # 8.2 Rust 侧真实产出（m2-svr 待审片 4ba36368）直出（原样存 fixtures/）
+    python -I -c "import sys; sys.path.insert(0, '$D'); import per_strike_requests as p; from pathlib import Path; \
+      st=p.state_from_server_state(Path('$D/fixtures/rust-server-state-m2svr-sample.tsv'),1,18,20,5); \
+      print('k 数 =', len(st)); [print(k, st[k]) for k in sorted(st)]"
+    # -> 16-serverstate-rust-sample-parse.txt（5 个 k 的 attacker/victim）
+
+    # 8.3 fail-closed（真机件驱动，全部 rc=2 PREREQ）
+    #  ① dump 行数 5 < 玩家单元数 120；② attacker id=123 找不到；③ 给了 server-state 缺选择器
+    # -> 18-serverstate-failclosed.txt
+
+    # 8.4 牙齿
+    python -I $D/per_strike_requests.py selftest
+    # -> 17-serverstate-selftest.txt（24/24）

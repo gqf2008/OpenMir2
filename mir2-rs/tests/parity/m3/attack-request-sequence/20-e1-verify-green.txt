@@ -1,0 +1,26 @@
+# owner 2026-10-13 01:15 第 E-1 条：证据 hash 口径返工（reviewer-5 判 request_changes @ head 540ef7c0）
+# 文件 = window/00-selfcheck-nostack.txt；口径 = tools/evidence-hash 的仓库字节（LF 归一/git blob）
+# 干净检出复现 = 盘上文件为提交物形态（LF 归一后 99725b0a），清单按作者盘上 CRLF 记（c684ce0f）
+
+## 改前（复现 reviewer 的干净检出）：RED 81/82 rc=1
+$ python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/m3/evidence-rng-isolate-attack-twophase-ff-20261013
+RED   mir2-rs\tests\parity\m3\evidence-rng-isolate-attack-twophase-ff-20261013\SHA256SUMS.txt  [repo 口径]  OK 81/82
+       mismatch: E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\tests\parity\m3\evidence-rng-isolate-attack-twophase-ff-20261013\window\00-selfcheck-nostack.txt
+         清单 c684ce0f70fddc8bcf768f7f397e119585c41241985d6128e0b6603dbb833c1c
+         实算 99725b0a7677fad2636127cca99579414cc70ad6f6a75dbbfee3af47b06e735f  (text attr=set)
+       EOL 陷阱: E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\tests\parity\m3\evidence-rng-isolate-attack-twophase-ff-20261013\window\00-selfcheck-nostack.txt
+         清单按工作树原始字节(CRLF)记 c684ce0f70fddc8bcf768f7f397e119585c41241985d6128e0b6603dbb833c1c
+         仓库口径(LF 归一/git blob)应为 99725b0a7677fad2636127cca99579414cc70ad6f6a75dbbfee3af47b06e735f  (text attr=set)
+         ⇒ 该清单在工作树/提交物自洽、在仓库字节口径/干净检出不可复现（用 `write` 改写）
+rc=1
+
+## 改后：`write` 按仓库字节口径重记清单 ⇒ GREEN 82/82 rc=0
+$ python -I tools/evidence-hash/verify_sha256sums.py write mir2-rs/tests/parity/m3/evidence-rng-isolate-attack-twophase-ff-20261013
+写入 mir2-rs\tests\parity\m3\evidence-rng-isolate-attack-twophase-ff-20261013\SHA256SUMS.txt（82 行，repo 口径）
+GREEN: write 完成（1 行 hash 变更，mode=repo）
+$ python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/m3/evidence-rng-isolate-attack-twophase-ff-20261013
+GREEN mir2-rs\tests\parity\m3\evidence-rng-isolate-attack-twophase-ff-20261013\SHA256SUMS.txt  [repo 口径]  OK 82/82
+rc=0
+
+# 结论：window/00 清单 c684ce0f…（盘上 CRLF）→ 99725b0a…（仓库口径 LF 归一）⇒ verify --check-extra GREEN 82/82。
+# 根因（owner 01:15 提示）：该文件是自检脚本在 Windows 默认 CRLF 下写的；同族坑第 5 次（前 4：C6 F9-1 / M4 N-1 / lifecycle N-1 / 前一片 170a51b9）。

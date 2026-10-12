@@ -1,0 +1,21 @@
+HOOK_DEPLOYED E:\MirServer\M2GameSvr-hook\RngSeedHook.dll sha256=3f4fb29d7ba46a75fb4acfeeac40f0da693a905f253a530274eb575d90847313
+START DBSrv pid=416 ports=6000,5100,5700 exe=E:\Users\gxh\Documents\GitHub\OpenMir2\src\DBSrv\bin\Release\DBSrv.exe
+START LoginSrv pid=25380 ports=5500,5600 exe=E:\Users\gxh\Documents\GitHub\OpenMir2\src\LoginSrv\bin\Release\LoginSrv.exe
+ISOLATE_ATTACK on=true seed=42 sites=E:\tmp\m3cs-2phase2\csharp2\rng-isolate-sites.txt attack_stream=E:\tmp\m3cs-2phase2\csharp2\rng-attack-stream.tsv state_log=E:\tmp\m3cs-2phase2\csharp2\rng-server-state.tsv
+START GameSvr pid=14132 ports=5000 exe=E:\MirServer\M2GameSvr-hook\GameSrv.exe
+START LoginGate pid=11180 ports=7000 exe=E:\MirServer\LoginGate\LoginGate.exe
+START SelGate pid=13968 ports=7100 exe=E:\MirServer\SelGate\SelGate.exe
+START RunGate pid=7616 ports=7200 exe=E:\MirServer\RunGate\GameGate.exe
+PIDFILE E:\tmp\m3cs-2phase2\csharp2\csharp-stack.pid.json
+ISOLATION_RECORDED E:\tmp\m3cs-2phase2\csharp2\csharp_isolation.json isolate=True attack_seed=40545 sites_sha256=47061e1b24b41d192a6efb6988c24c849f48fdb08105aa40b5c852803a531d99
+CSHARP_STACK_GREEN
+  3306  LISTEN
+  6000  LISTEN
+  5100  LISTEN
+  5700  LISTEN
+  5500  LISTEN
+  5600  LISTEN
+  5000  LISTEN
+  7000  LISTEN
+  7100  LISTEN
+  7200  LISTEN

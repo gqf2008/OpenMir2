@@ -1,0 +1,14 @@
+# E-1 的**干净检出**复核（reviewer 的判据环境；模拟：git worktree add --detach <head>）
+# head = b6befecd6be84e8aca31d2f2e23d4c2e28d7cb06（本片最终 head）；worktree = E:/tmp/cleancheck-m3cs（本文件即在该 worktree 上实跑采集）
+
+$ python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/m3/evidence-rng-isolate-attack-twophase-ff-20261013
+GREEN mir2-rs\tests\parity\m3\evidence-rng-isolate-attack-twophase-ff-20261013\SHA256SUMS.txt  [repo 口径]  OK 82/82
+rc=0
+
+$ python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/m3/attack-request-sequence
+GREEN mir2-rs\tests\parity\m3\attack-request-sequence\SHA256SUMS.txt  [repo 口径]  OK 33/33
+rc=0
+
+$ python -I mir2-rs/tests/parity/m3/attack-request-sequence/per_strike_requests.py selftest
+SELFTEST GREEN: per_strike_requests 24/24（同形态绿 + base 单元分类 + 玩家路径多抽/次序/计数必红 + jointable 夹具状态/缺字段/缺口/计数/derived/SERVER_STATE 两侧/ghost 列/客户端 vs 服务端/缺选择器必红）
+rc=0

@@ -62,6 +62,8 @@ internal bool _Attack(int nPower, IActor targetObject)                   # BaseO
         --csharp-stream <csharp-attack-stream.tsv> --rust-stream <rust-global-trace.tsv> \
         [--csharp-seq <attack_seq.jsonl>] [--rust-seq <attack_seq.jsonl>] \
         ( --csharp-state <state.jsonl> --rust-state <state.jsonl> \
+          | --csharp-server-state <SERVER_STATE.tsv> --rust-server-state <SERVER_STATE.tsv> \
+            --csharp-attacker-id <id> --rust-attacker-id <id> --victim-x <x> --victim-y <y> \
           | --derive-state --csharp-raw <attack_raw.jsonl> --rust-raw <attack_raw.jsonl> )
     python -I per_strike_requests.py selftest
 
@@ -284,6 +286,110 @@ def derive_state_from_raw(path: Path) -> dict:
     if not out:
         raise MissingError("%s 无 role=attack/struck 行" % path.name)
     return out
+
+
+# ---------------------------------------------------------------------------
+# 服务端权威状态 dump（SERVER_STATE）——owner 2026-10-13 01:05 第 ② 条
+# ---------------------------------------------------------------------------
+# 两侧同形（C# `rng-hook/StartupHook.cs::DumpActors`、Rust `bins/game-svr/src/state_log.rs`）：
+#   每行 `SERVER_STATE <seq> <json 数组>`，一个**玩家攻击单元**一行，数组元素 = 全部玩家族对象
+#   `{id,name,x,y,dir,ghost,death,hp,maxhp,map}`。
+# 为什么 jointable 要吃它：客户端夹具记录（`attack_state.jsonl`）**看不到 victim 的服务端 Ghost**
+# （m3bag 已定位：受害被 ghost 后观察者仍保留 actor）⇒ 目标可用性只能由服务端 dump 咬住。
+SERVER_STATE_PREFIX = "SERVER_STATE "
+
+
+def parse_server_state(path: Path) -> list:
+    """读 `SERVER_STATE <seq> <json 数组>` → [(seq, actors | None)]；坏 JSON ⇒ actors=None。
+
+    非本格式行忽略；整文件一条都没有 ⇒ StateError（PREREQ，绝不静默出空表）。
+    """
+    rows = []
+    for lineno, raw in enumerate(path.read_text(encoding="utf-8-sig", errors="replace").splitlines(), 1):
+        line = raw.strip()
+        if not line.startswith(SERVER_STATE_PREFIX):
+            continue
+        rest = line[len(SERVER_STATE_PREFIX):]
+        sp = rest.find(" ")
+        if sp < 0:
+            rows.append((int(rest or 0), None))
+            continue
+        try:
+            seq = int(rest[:sp])
+        except ValueError:
+            raise StateError("%s:%d SERVER_STATE seq 非法: %s" % (path.name, lineno, rest[:sp]))
+        payload = rest[sp + 1:].strip()
+        try:
+            actors = json.loads(payload)
+        except json.JSONDecodeError:
+            actors = None
+        rows.append((seq, actors))
+    if not rows:
+        raise StateError("%s 无任何 SERVER_STATE 行" % path.name)
+    return rows
+
+
+def _server_actor(obj: dict, name: str, k: int, who: str) -> dict:
+    if not isinstance(obj, dict):
+        raise StateError("%s: SERVER_STATE k=%d %s 不是对象" % (name, k, who))
+    missing = [f for f in STATE_FIELDS if f not in obj]
+    if missing:
+        raise StateError("%s: SERVER_STATE k=%d %s 缺字段 %s" % (name, k, who, ",".join(missing)))
+    return {f: int(obj[f]) for f in STATE_FIELDS}
+
+
+def state_from_server_state(path: Path, attacker_id: int, vx: int, vy: int, nunits: int) -> dict:
+    """服务端 dump → 与 `parse_state` 同形的 {k: {"attacker":…, "victim":…|None}}。
+
+    * 取**最后 `nunits` 行**（与 `server_state_gate.py` 同口径：N = 本侧玩家攻击单元数）；
+    * `attacker` = 该行里 `id == attacker_id` 的玩家族对象；找不到 ⇒ StateError（PREREQ 点名 k）；
+    * `victim` = 该行里站在 `(vx,vy)` 的**另一个**玩家族对象（**不筛 ghost/death**——正是要被看见的那一列）；
+    * 行数 < `nunits` / 行非法 JSON / 缺字段 ⇒ StateError。
+    """
+    rows = parse_server_state(path)
+    if nunits and len(rows) < nunits:
+        raise StateError("%s: SERVER_STATE 行数 %d < 玩家攻击单元数 %d（PREREQ）"
+                         % (path.name, len(rows), nunits))
+    seg = rows[-nunits:] if nunits else rows
+    out: dict = {}
+    for k, (seq, actors) in enumerate(seg, 1):
+        if not isinstance(actors, list):
+            raise StateError("%s: SERVER_STATE 第 %d 行（seq=%s）非法 JSON 数组" % (path.name, k, seq))
+        atk = None
+        vic = None
+        for a in actors:
+            if not isinstance(a, dict):
+                continue
+            if a.get("id") == attacker_id:
+                atk = a
+            elif vic is None and int(a.get("x", -1)) == vx and int(a.get("y", -1)) == vy:
+                vic = a
+        if atk is None:
+            raise StateError("%s: SERVER_STATE 第 %d 行找不到 attacker id=%s（PREREQ）"
+                             % (path.name, k, attacker_id))
+        out[k] = {"attacker": _server_actor(atk, path.name, k, "attacker"),
+                  "victim": None if vic is None else _server_actor(vic, path.name, k, "victim")}
+    return out
+
+
+def compare_client_server(fixture: dict, server: dict, side: str, problems: list) -> None:
+    """夹具客户端记录 vs 服务端 dump 的 victim 一致性 → informational（两条都给了才有意义）。
+
+    这是「客户端视图看不到 ghost」的可判据点：客户端 `victim` 在场且 `ghost=0`，而服务端同一 k
+    `ghost=1` ⇒ 记 `info:client_vs_server_state_diff`（不判红；判红由夹具侧 `server_state_gate.py` 负责）。
+    """
+    diffs = []
+    for k in sorted(set(fixture) & set(server)):
+        fv = (fixture.get(k) or {}).get("victim")
+        sv = (server.get(k) or {}).get("victim")
+        if bool(fv) != bool(sv):
+            diffs.append("%d:%s" % (k, "client_present_server_absent" if fv else "client_absent_server_present"))
+        elif fv and sv:
+            for f in ("ghost", "death"):
+                if fv.get(f) is not None and int(fv[f]) != int(sv.get(f, 0)):
+                    diffs.append("%d:%s(client=%s,server=%s)" % (k, f, fv[f], sv.get(f)))
+    if diffs:
+        problems.append("info:client_vs_server_state_diff side=%s ks=%s" % (side, ",".join(diffs[:20])))
 
 
 def parse_attack_seq(path: Path) -> dict:
@@ -519,14 +625,23 @@ def _load_attack_units(side: str, stream: Path, smap):
     return [u for _s, kind, u in segment_units(seq) if kind == "player"]
 
 
-def _load_state_side(side, state_path, raw_path, derive):
+def _load_state_side(side, state_path, raw_path, derive, server_state="", attacker_id=None,
+                     victim_x=None, victim_y=None, nunits=0):
+    if server_state:
+        if attacker_id is None or victim_x is None or victim_y is None:
+            raise MissingError(
+                "side=%s 提供 --%s-server-state 时必须同时给 --%s-attacker-id 与 --victim-x/--victim-y"
+                "（服务端 dump 按 id + 格选 attacker/victim）" % (side, side, side))
+        if not Path(server_state).exists():
+            raise MissingError("side=%s 找不到服务端状态 dump %s" % (side, server_state))
+        return state_from_server_state(Path(server_state), attacker_id, victim_x, victim_y, nunits), "server"
     if state_path:
         return parse_state(Path(state_path)), "fixture"
     if derive and raw_path:
         return derive_state_from_raw(Path(raw_path)), "derived"
     raise MissingError(
-        "side=%s 缺夹具逐击状态记录（--%s-state）；"
-        "或显式 --derive-state --%s-raw <attack_raw.jsonl> 用可得子集预览" % (side, side, side))
+        "side=%s 缺夹具逐击状态记录（--%s-state 或 --%s-server-state）；"
+        "或显式 --derive-state --%s-raw <attack_raw.jsonl> 用可得子集预览" % (side, side, side, side))
 
 
 def _check_state_coverage(state, nunits, side, problems):
@@ -540,19 +655,34 @@ def _check_state_coverage(state, nunits, side, problems):
 
 def jointable(csharp_stream, rust_stream, csharp_seq="", rust_seq="",
               csharp_state="", rust_state="", csharp_raw="", rust_raw="",
-              derive=False):
-    """产出两侧同表的逐击行 → (rc, text, problems)。rc：0=GREEN / 1=RED / 2=PREREQ。"""
+              derive=False, csharp_server_state="", rust_server_state="",
+              csharp_attacker_id=None, rust_attacker_id=None,
+              victim_x=None, victim_y=None):
+    """产出两侧同表的逐击行 → (rc, text, problems)。rc：0=GREEN / 1=RED / 2=PREREQ。
+
+    state 来源三选一（每侧独立）：
+      * `--<side>-server-state`（**服务端权威** `SERVER_STATE`，两侧同形）⇒ `state=server`；
+      * `--<side>-state`（夹具客户端 JSONL）⇒ `state=fixture`；
+      * `--derive-state --<side>-raw`（预览）⇒ `state=derived`。
+    两侧都给 server-state+state ⇒ 额外记 `info:client_vs_server_state_diff`（客户端看不到 ghost 的据点）。
+    """
     smap = load_site_map()
-    sides = (("csharp", csharp_stream, csharp_seq, csharp_state, csharp_raw),
-             ("rust", rust_stream, rust_seq, rust_state, rust_raw))
+    sides = (("csharp", csharp_stream, csharp_seq, csharp_state, csharp_raw, csharp_server_state, csharp_attacker_id),
+             ("rust", rust_stream, rust_seq, rust_state, rust_raw, rust_server_state, rust_attacker_id))
     data: dict = {}
     problems: list = []
     try:
-        for side, stream, seqp, statep, rawp in sides:
+        for side, stream, seqp, statep, rawp, srvp, atkid in sides:
             if not stream or not Path(stream).exists():
                 return 2, "", ["PREREQ_MISSING side=%s RNG 流水 %s" % (side, stream)]
             units = _load_attack_units(side, Path(stream), smap)
-            state, src = _load_state_side(side, statep, rawp, derive)
+            state, src = _load_state_side(side, statep, rawp, derive, srvp, atkid,
+                                          victim_x, victim_y, len(units))
+            if srvp and statep:
+                try:
+                    compare_client_server(parse_state(Path(statep)), state, side, problems)
+                except StateError:
+                    pass  # 客户端记录本身坏 ⇒ 只比服务端
             _check_state_coverage(state, len(units), side, problems)
             data[side] = {"units": units, "state": state, "src": src,
                           "seq": parse_attack_seq(Path(seqp)) if seqp else {}}
@@ -594,7 +724,10 @@ def cmd_jointable(args) -> int:
     rc, text, problems = jointable(args.csharp_stream, args.rust_stream,
                                    args.csharp_seq, args.rust_seq,
                                    args.csharp_state, args.rust_state,
-                                   args.csharp_raw, args.rust_raw, args.derive_state)
+                                   args.csharp_raw, args.rust_raw, args.derive_state,
+                                   args.csharp_server_state, args.rust_server_state,
+                                   args.csharp_attacker_id, args.rust_attacker_id,
+                                   args.victim_x, args.victim_y)
     if rc == 2:
         print("PREREQ_MISSING: %s" % "; ".join(problems), file=sys.stderr)
         return 2
@@ -609,9 +742,14 @@ def cmd_jointable(args) -> int:
         return 1
     for p in info:
         print("[info] %s" % p)
+    if args.csharp_server_state or args.rust_server_state:
+        src_tag = "server"
+    elif args.csharp_state or args.rust_state:
+        src_tag = "fixture"
+    else:
+        src_tag = "derived"
     print("\nJOINTABLE GREEN: 两侧逐击表已出（state 来源 = %s%s）" % (
-        "fixture" if (args.csharp_state or args.rust_state) else "derived",
-        "；%d 条 informational" % len(info) if info else ""))
+        src_tag, "；%d 条 informational" % len(info) if info else ""))
     return 0
 
 
@@ -702,6 +840,21 @@ def _mk_raw(path, recs):
         if hp is not None:
             rows.append({"role": "struck", "dmg": 1, "hp": hp, "maxhp": 19, "src": 1, "actor": 2, "my": 2})
     return _mk_jsonl(path, rows)
+
+
+# 服务端 SERVER_STATE dump 夹具（与 server_state_gate.py 的 _mk_line 同形，含 id/name/map）
+SRV_ATK = {"id": 1, "name": "a", "x": 17, "y": 20, "dir": 2, "ghost": 0, "death": 0, "hp": 80, "map": "0137"}
+SRV_VIC = {"id": 2, "name": "v", "x": 18, "y": 20, "dir": 6, "ghost": 0, "death": 0, "hp": 18, "map": "0137"}
+
+
+def _mk_server_state(path, vic_ghost_from=None, n=2):
+    lines = []
+    for k in range(1, n + 1):
+        vic = dict(SRV_VIC)
+        vic["ghost"] = 1 if (vic_ghost_from is not None and k >= vic_ghost_from) else 0
+        lines.append("SERVER_STATE %d %s" % (k, json.dumps([dict(SRV_ATK), vic], ensure_ascii=False)))
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+    return path
 
 
 ACT6 = {"x": 17, "y": 20, "dir": 2, "ghost": 0, "death": 0, "hp": 80}
@@ -795,6 +948,61 @@ def cmd_selftest(args) -> int:
     rc, text, probs = jointable(cs, rt, seq_cs, seq_rt, "", "", raw_cs, raw_rt, derive=True)
     check("jointable-derived-green", rc == 0 and "derived" in text, str(probs))
 
+    # ---- owner 2026-10-13 01:05 第 ② 条：jointable 直接吃两侧 SERVER_STATE 服务端 dump ----
+    ss_cs = _mk_server_state(tmp / "ss-cs.tsv", vic_ghost_from=None)
+    ss_rt = _mk_server_state(tmp / "ss-rt.tsv", vic_ghost_from=None)
+    rc, text, probs = jointable(cs, rt, seq_cs, seq_rt, "", "", "", "", derive=False,
+                                csharp_server_state=ss_cs, rust_server_state=ss_rt,
+                                csharp_attacker_id=1, rust_attacker_id=1, victim_x=18, victim_y=20)
+    check("jointable-server-state-green", rc == 0 and "server" in text, str(probs))
+    check("jointable-server-state-both-sides",
+          any(l.startswith("csharp\t") for l in text.splitlines())
+          and any(l.startswith("rust\t") for l in text.splitlines())
+          and "vic_ghost" in text and "atk_hp" in text)
+
+    # 服务端 victim ghost=1（从 k=2 起）⇒ 不入列地丢为 present/absent，而是 vic_ghost 列出 1
+    ss_ghost = _mk_server_state(tmp / "ss-ghost.tsv", vic_ghost_from=2)
+    rc, text, probs = jointable(cs, rt, "", "", "", "", "", "", derive=False,
+                                csharp_server_state=ss_ghost, rust_server_state=ss_rt,
+                                csharp_attacker_id=1, rust_attacker_id=1, victim_x=18, victim_y=20)
+    check("jointable-server-state-ghost-column", rc == 0 and "\t1\t" in text and "present" in text, str(probs))
+
+    # 客户端 fixture 全 ghost=0 vs 服务端 k=2 ghost=1 ⇒ info（不判红）：客户端看不到 ghost
+    st_cs2 = _mk_state(tmp / "state-cs2.jsonl", [(1, dict(ACT6), dict(VIC18)), (2, dict(ACT6), dict(VIC18))])
+    rc, text, probs = jointable(cs, rt, seq_cs, seq_rt, st_cs2, st_cs2, "", "", derive=False,
+                                csharp_server_state=ss_ghost, rust_server_state=ss_rt,
+                                csharp_attacker_id=1, rust_attacker_id=1, victim_x=18, victim_y=20)
+    check("jointable-client-vs-server-info",
+          rc == 0 and any(p.startswith("info:client_vs_server_state_diff") and "2:ghost" in p for p in probs),
+          str(probs))
+
+    # 服务端 dump 行数 < 玩家单元数 ⇒ PREREQ（rc=2）
+    ss_short = _mk_server_state(tmp / "ss-short.tsv", n=1)
+    rc, _t, probs = jointable(cs, rt, "", "", "", "", "", "", derive=False,
+                              csharp_server_state=ss_short, rust_server_state=ss_rt,
+                              csharp_attacker_id=1, rust_attacker_id=1, victim_x=18, victim_y=20)
+    check("jointable-server-state-short-prereq", rc == 2 and any("行数" in p for p in probs), str(probs))
+
+    # 找不到 attacker id ⇒ PREREQ（点名）
+    rc, _t, probs = jointable(cs, rt, "", "", "", "", "", "", derive=False,
+                              csharp_server_state=ss_cs, rust_server_state=ss_rt,
+                              csharp_attacker_id=99, rust_attacker_id=1, victim_x=18, victim_y=20)
+    check("jointable-server-state-missing-attacker-prereq",
+          rc == 2 and any("attacker id=99" in p for p in probs), str(probs))
+
+    # 非法 JSON 行 ⇒ PREREQ
+    (tmp / "ss-bad.tsv").write_text("SERVER_STATE 1 [oops\nSERVER_STATE 2 []\n", encoding="utf-8", newline="\n")
+    rc, _t, probs = jointable(cs, rt, "", "", "", "", "", "", derive=False,
+                              csharp_server_state=tmp / "ss-bad.tsv", rust_server_state=ss_rt,
+                              csharp_attacker_id=1, rust_attacker_id=1, victim_x=18, victim_y=20)
+    check("jointable-server-state-badjson-prereq", rc == 2 and any("非法 JSON" in p for p in probs), str(probs))
+
+    # 给了 server-state 却没给选择参数 ⇒ PREREQ（fail-closed，不猜）
+    rc, _t, probs = jointable(cs, rt, "", "", "", "", "", "", derive=False,
+                              csharp_server_state=ss_cs, rust_server_state=ss_rt)
+    check("jointable-server-state-needs-selector-prereq",
+          rc == 2 and any("attacker-id" in p for p in probs), str(probs))
+
     for f in tmp.iterdir():
         f.unlink()
     tmp.rmdir()
@@ -802,7 +1010,8 @@ def cmd_selftest(args) -> int:
         print("SELFTEST RED: %d/%d 未过: %s" % (len(failures), len(checks), ", ".join(failures)))
         return 1
     print("SELFTEST GREEN: per_strike_requests %d/%d（同形态绿 + base 单元分类 + 玩家路径多抽/次序/计数必红"
-          " + jointable 夹具状态/缺字段/缺口/计数/derived）" % (len(checks), len(checks)))
+          " + jointable 夹具状态/缺字段/缺口/计数/derived/SERVER_STATE 两侧/ghost 列/客户端 vs 服务端/缺选择器必红）"
+          % (len(checks), len(checks)))
     return 0
 
 
@@ -828,6 +1037,14 @@ def main(argv=None) -> int:
     j.add_argument("--rust-seq", default="")
     j.add_argument("--csharp-state", default="")
     j.add_argument("--rust-state", default="")
+    j.add_argument("--csharp-server-state", default="",
+                   help="服务端权威 SERVER_STATE dump（C# StartupHook.DumpActors / Rust state_log.rs 同形）")
+    j.add_argument("--rust-server-state", default="")
+    j.add_argument("--csharp-attacker-id", type=int, default=None,
+                   help="--csharp-server-state 时：攻方 ActorId（attack_raw.jsonl role=attack.my）")
+    j.add_argument("--rust-attacker-id", type=int, default=None)
+    j.add_argument("--victim-x", type=int, default=None, help="受害应在的格 X（= 攻方前方格；两侧共用一个 pin）")
+    j.add_argument("--victim-y", type=int, default=None)
     j.add_argument("--csharp-raw", default="")
     j.add_argument("--rust-raw", default="")
     j.add_argument("--derive-state", action="store_true",

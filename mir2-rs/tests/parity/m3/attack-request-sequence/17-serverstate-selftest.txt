@@ -1,0 +1,1 @@
+SELFTEST GREEN: per_strike_requests 24/24（同形态绿 + base 单元分类 + 玩家路径多抽/次序/计数必红 + jointable 夹具状态/缺字段/缺口/计数/derived/SERVER_STATE 两侧/ghost 列/客户端 vs 服务端/缺选择器必红）

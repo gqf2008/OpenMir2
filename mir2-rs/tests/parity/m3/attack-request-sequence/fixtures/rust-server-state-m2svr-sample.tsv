@@ -1,0 +1,7 @@
+# 原样取自 m2-svr 待审片 4ba36368（tools/m2-acceptance/evidence/m2svr-rust-server-state-dump-20261013/rust-server-state.tsv）
+# 用途：证明 jointable 的 SERVER_STATE 解析器**直接吃 Rust 侧真实产出**（与 C# 同形）。
+SERVER_STATE 1 [{"id":1,"name":"m3sd0","x":17,"y":20,"dir":2,"ghost":0,"death":0,"hp":19,"maxhp":19,"map":""},{"id":2,"name":"m3sd1","x":18,"y":20,"dir":0,"ghost":0,"death":0,"hp":19,"maxhp":19,"map":""}]
+SERVER_STATE 2 [{"id":1,"name":"m3sd0","x":17,"y":20,"dir":2,"ghost":0,"death":0,"hp":19,"maxhp":19,"map":""},{"id":2,"name":"m3sd1","x":18,"y":20,"dir":0,"ghost":0,"death":0,"hp":19,"maxhp":19,"map":""}]
+SERVER_STATE 3 [{"id":1,"name":"m3sd0","x":17,"y":20,"dir":2,"ghost":0,"death":0,"hp":19,"maxhp":19,"map":""},{"id":2,"name":"m3sd1","x":18,"y":20,"dir":0,"ghost":0,"death":0,"hp":19,"maxhp":19,"map":""}]
+SERVER_STATE 4 [{"id":1,"name":"m3sd0","x":17,"y":20,"dir":2,"ghost":0,"death":0,"hp":19,"maxhp":19,"map":""},{"id":2,"name":"m3sd1","x":18,"y":20,"dir":0,"ghost":0,"death":0,"hp":19,"maxhp":19,"map":""}]
+SERVER_STATE 5 [{"id":1,"name":"m3sd0","x":17,"y":20,"dir":2,"ghost":0,"death":0,"hp":19,"maxhp":19,"map":""},{"id":2,"name":"m3sd1","x":18,"y":20,"dir":0,"ghost":0,"death":0,"hp":19,"maxhp":19,"map":""}]
