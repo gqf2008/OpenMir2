@@ -53,6 +53,8 @@
 | `06-oracle-attack-success.md` | ① 的 oracle 逐行 + Rust 同形核对 + 「19→3」正确读法 |
 | `07-first-divergence.txt` | ③ 的第一处分歧站点 + 触发条件 |
 | `08-base-unit-attribution.txt` | ② `hit_gate=19 = base 16 + player 3` 的逐单元归属 |
+| `09-gates.txt` | 四门禁（fmt 0 / clippy 0 / 84 suites 682 passed 0 failed 16 ignored / msgcodegen 604） |
+| `10-i1-twophase-verify.txt` | I-1 返工原始件：merge master `4408868d` 后 twophase `GREEN 75/75`、streamcompare `GREEN 31/31`（改前/改后写清） |
 | `per_strike_requests.py` | ③/① 的机判工具（`analyze` / `table` / `selftest`） |
 | `session_target_availability.py` | ② 的会话件读数工具 |
 | `provenance/` | 四条流水副本（C# 专用流 ×2、Rust trace ×2）+ 溯源 |
@@ -62,7 +64,14 @@
 
 - 四条流水 sha256/字节见 `provenance/00-provenance.txt`（与
   `evidence-rng-isolate-attack-streamcompare-20261012/provenance/` 同源同值）。
-- `SHA256SUMS.txt` 按**仓库字节**（LF 归一）口径；`verify_sha256sums.py --check-extra` GREEN。
+- `SHA256SUMS.txt` 按**仓库字节**（LF 归一）口径；`verify_sha256sums.py --check-extra` GREEN 21/21。
+
+## I-1 返工（owner 23:30）
+
+reviewer-5 对①–④离线段判 `request_changes` 的 **I-1**：twophase 包清单记了**原始 CRLF 字节**哈希
+`a9ca0b7c…` 而仓库口径（LF 归一）实算 `68593747…` ⇒ `RED 74/75`。本片按 owner 裁决 (a)：`merge master`
+（`4408868d`，含该 CRLF→LF 修复）后 `window/00` blob 已 LF（`== 4408868d`），重算清单 ⇒ **GREEN 75/75**
+（原件 `10-i1-twophase-verify.txt`）。**M-1**：twophase 包的 hash 判据**依赖 `4408868d` 的 CRLF→LF 修复**（现已在 base 内）。
 
 ## 残留物 / 转出
 

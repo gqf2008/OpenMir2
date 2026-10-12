@@ -1,0 +1,16 @@
+# I-1 返工原始件：owner 23:30 第 1 条（merge master 4408868d 后重跑 verify）
+# 树 = d860fd25（= master 4408868d + 本卡两片），工作树干净。
+
+$ python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/m3/evidence-rng-isolate-attack-twophase-20261012
+GREEN mir2-rs\tests\parity\m3\evidence-rng-isolate-attack-twophase-20261012\SHA256SUMS.txt  [repo 口径]  OK 75/75
+rc=0
+
+$ python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/m3/evidence-rng-isolate-streamcompare-20261012
+GREEN mir2-rs\tests\parity\m3\evidence-rng-isolate-streamcompare-20261012\SHA256SUMS.txt  [repo 口径]  OK 31/31
+rc=0
+
+# 本包（attack-request-sequence）自身 verify：见 01-selftest/09-gates 与 SHA256SUMS（20/20；本文件为第 21 件，见清单）。
+
+# 改前/改后（I-1）
+# 改前（c0cc7682，不含 4408868d）：window/00 清单记原始 CRLF 哈希 a9ca0b7c…65b6，仓库口径实算 68593747…d5bf ⇒ RED 74/75
+# 改后（本 head）：window/00 blob LF（== 4408868d 的 68593747…d5bf），清单重算 ⇒ GREEN 75/75
