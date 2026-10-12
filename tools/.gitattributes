@@ -1,0 +1,32 @@
+# tools/** EOL 覆盖（卡 openmir2-tools-eol-attributes；同族第二片，第一片 = mir2-rs/.gitattributes 的
+# openmir2-gitattributes-eol-coverage）。本机 `core.autocrlf=true`：**未声明**的文本扩展名在**新检出**上落 CRLF，
+# 而 tools/** 承载证据/夹具/判据脚本（逐行/逐字节比对、按 git blob 算 hash）⇒ `verify_sha256sums.py eolcheck tools`
+# 在干净检出上恒假红（下例 base 实测 RED 500/539，全为 text attr=unspecified）。
+# 属性只影响**新检出**，**不改任何被跟踪文件的 blob 内容**（本组扩展名的 blob 本已是 LF）。
+# 判据：clean checkout 上 `python -I tools/evidence-hash/verify_sha256sums.py eolcheck tools` RED→GREEN；
+# 证据：tools/evidence-hash/evidence/2026-10-13-tools-eol-attributes/
+#
+# 更深目录里的 `.gitattributes` 优先级更高（如
+# tools/m2-acceptance/evidence/m2svr-featurechanged-20261012/.gitattributes 的 `* -text` 冻结 GBK/原始字节），
+# 本文件不会改变那些冻结目录的口径。二进制扩展名（*.png 等）**故意不声明**：git 的二进制检测已按字节处理。
+
+# 证据 / 快照 / 清单文本
+*.md      text eol=lf
+*.txt     text eol=lf
+*.log     text eol=lf
+*.json    text eol=lf
+*.jsonl   text eol=lf
+*.ndjson  text eol=lf
+*.tsv     text eol=lf
+*.conf    text eol=lf
+*.sha256  text eol=lf
+*.patch   text eol=lf
+# 判据脚本 / 驱动
+*.py      text eol=lf
+*.ps1     text eol=lf
+*.sh      text eol=lf
+# 探针源码（tools/oracle、tools/capture 的 C#/Delphi 小工具）
+*.cs      text eol=lf
+*.csproj  text eol=lf
+*.dpr     text eol=lf
+.gitattributes text eol=lf

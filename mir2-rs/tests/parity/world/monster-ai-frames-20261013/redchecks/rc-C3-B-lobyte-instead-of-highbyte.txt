@@ -1,0 +1,28 @@
+# RC-C3-B — 变异点：bins/game-svr/src/downlink.rs::monster_display 用 mp 高字节代替 HUtil32.LoByte(mp)
+# 期望：downlink::tests::monster_display_matches_oracle_fields FAILED (rc=101)
+# 命令：cargo test -p game-svr --lib monster_display_matches_oracle_fields --offline
+
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.91s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m2svr-target\debug\deps\game_svr-3aa264152417c61e.exe)
+
+running 1 test
+test downlink::tests::monster_display_matches_oracle_fields ... FAILED
+
+failures:
+
+---- downlink::tests::monster_display_matches_oracle_fields stdout ----
+
+thread 'downlink::tests::monster_display_matches_oracle_fields' (28960) panicked at bins\game-svr\src\downlink.rs:519:9:
+assertion `left == right` failed: MakeLong(MakeWord(raceImg, LoByte(mp)), appr)
+  left: 860103178
+ right: 860098826
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    downlink::tests::monster_display_matches_oracle_fields
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 108 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --lib`
