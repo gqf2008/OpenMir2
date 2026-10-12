@@ -1,0 +1,6 @@
+STOPPED DBSrv pid=28344
+STOPPED LoginSrv pid=28688
+STOPPED GameSvr pid=9832
+STOPPED LoginGate pid=14520
+STOPPED SelGate pid=25720
+STOPPED RunGate pid=29872

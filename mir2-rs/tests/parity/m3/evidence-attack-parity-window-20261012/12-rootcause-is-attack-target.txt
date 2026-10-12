@@ -1,0 +1,55 @@
+=== F-K 根因（Rust 侧）：PvP 攻击被 is_attack_target 归零 ⇒ 无 SM_STRUCK ===
+
+--- [R1] crates/world/src/combat.rs:355-372 is_attack_target()：人打人落到最后 return false ---
+355: pub fn is_attack_target(attacker: &Entity, target: &Entity) -> bool {
+356:     if attacker.id == target.id {
+357:         return false;
+358:     }
+359:     if target.death || target.ghost || target.invisible {
+360:         return false;
+361:     }
+362:     if target.master == Some(attacker.id) {
+363:         return false; // 自己的宝宝
+364:     }
+365:     if attacker.race == ACTOR_RACE_PLAY && target.race != ACTOR_RACE_PLAY {
+366:         return true; // 人打怪
+367:     }
+368:     if attacker.race != ACTOR_RACE_PLAY && target.race == ACTOR_RACE_PLAY {
+369:         return true; // 怪打人
+370:     }
+371:     false
+372: }
+
+--- [R2] crates/world/src/combat.rs:514-522：is_attack_target 为假 ⇒ n_power = 0（不命中） ---
+514: 
+515:     if is_attack_target(attacker, target) {
+516:         // `if (targetObject.HitPoint > 0) { if (HitPoint < RandomByte(targetObject.SpeedPoint)) nPower = 0; }`
+517:         if target.hit_point > 0 && attacker.hit_point < rng.random_byte(target.speed_point) {
+518:             n_power = 0;
+519:         } else {
+520:             hit = true;
+521:         }
+522:     } else {
+
+--- [R3] bins/game-svr/src/main.rs:2150-2162：damage==0 ⇒ 跳过受击帧（所以 120 击 0 条 SM_STRUCK） ---
+2150:     displays: &downlink::DisplayTable,
+2151:     online: &OnlineRegistry,
+2152:     sessions: &mut std::collections::HashMap<String, SessionGround>,
+2153:     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+2154: ) {
+2155:     // ① 受击帧（发给受击者自己）。
+2156:     for (attacker, target, outcome) in &rec.attacks {
+2157:         if outcome.damage == 0 {
+2158:             continue;
+2159:         }
+2160:         let Some(entry) = online.iter().find(|e| e.actor_id == *target) else {
+2161:             continue;
+2162:         };
+
+--- [R4] 目标确实是另一个玩家：handle_hit_cmd 取前方格首个 !Ghost&&!Death 实体并 attack_cmd ---
+4:1849:     let (fx, fy) = game_svr::attackwire::front_position(dir, cur_x, cur_y, width, height);
+11:1856:             .find(|t| {
+22:1867:         world.attack_cmd(actor_id, tid);
+
+口径：R1 对人打人（attacker.race==PLAY && target.race==PLAY）两分支都不命中 ⇒ 返回 false；
+      R2 据此把 n_power 归零；R3 因 damage==0 不发 SM_STRUCK ⇒ 真机上 120 次 CM_HIT 一条受击都收不到。

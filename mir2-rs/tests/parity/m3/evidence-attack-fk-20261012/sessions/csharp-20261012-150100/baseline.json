@@ -1,0 +1,313 @@
+﻿{
+    "session":  "csharp-20261012-150100",
+    "side":  "csharp",
+    "prefix":  "m3cfk1502",
+    "bots":  2,
+    "entry":  "127.0.0.1:7000",
+    "ops_runner":  "run_bots.ps1 -Count 2 -Prefix m3cfk1502 -Port 7000 -AttackSequence -AttackCount 120 -AttackStepMs 500 -AttackStartDelayMs 3000 -DisableAutoPlay",
+    "ops_exit":  0,
+    "fixed_new_chr":  "Job=0 Hair=2 Sex=0",
+    "start_pose":  "pair map=0 attacker=429,320,dir=2 victim=430,320 level=1 vhp=30000",
+    "bag_equip_sequence":  "(off)",
+    "bag_equip_markers":  [
+
+                          ],
+    "attack_sequence":  "on count=120 step_ms=500 start_delay_ms=3000 disable_autoplay=True",
+    "attack_pose":  "pair map=0 attacker=429,320,dir=2 victim=430,320 level=1 vhp=30000",
+    "attack_markers":  [
+                           "M3ATTSEQ {\"role\":\"arm\",\"id\":\"m3cfk15020\",\"count\":120,\"step_ms\":500,\"dir\":2}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":1,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"struck\",\"dmg\":1,\"hp\":18,\"maxhp\":19,\"src\":808621370,\"actor\":2041160395}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":2,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"struck\",\"dmg\":1,\"hp\":18,\"maxhp\":19,\"src\":808621370,\"actor\":2041160395}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":3,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":4,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":5,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":6,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":7,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":8,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":9,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":10,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":11,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":12,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":13,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":14,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":15,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":16,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":17,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":18,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":19,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":20,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":21,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":22,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":23,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":24,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":25,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":26,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":27,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":28,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":29,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":30,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":31,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":32,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":33,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":34,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":35,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":36,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":37,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":38,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":39,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":40,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":41,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":42,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":43,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":44,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":45,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":46,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":47,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":48,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":49,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":50,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":51,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":52,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":53,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":54,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":55,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":56,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":57,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":58,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":59,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":60,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":61,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":62,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":63,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":64,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":65,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":66,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":67,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":68,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":69,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":70,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":71,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":72,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":73,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":74,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":75,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":76,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":77,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":78,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":79,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":80,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":81,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":82,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":83,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":84,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":85,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":86,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":87,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":88,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":89,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":90,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":91,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":92,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":93,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":94,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":95,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":96,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":97,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":98,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":99,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":100,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":101,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":102,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":103,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":104,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":105,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":106,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":107,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":108,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":109,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":110,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":111,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":112,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":113,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":114,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":115,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":116,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":117,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":118,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":119,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"attack\",\"k\":120,\"op\":\"CM_HIT\",\"x\":429,\"y\":320,\"dir\":2,\"id\":\"m3cfk15020\"}",
+                           "M3ATTSEQ {\"role\":\"done\",\"id\":\"m3cfk15020\",\"attacks\":120}"
+                       ],
+    "attack_raw":  "attack_raw.jsonl",
+    "git_rev":  "564b3213096c5ff4a10713603d7c8b1d37b00739",
+    "dbsnap":  {
+                   "mir2_account.account_protection":  {
+                                                           "rows":  7184,
+                                                           "sha256":  "716c2194ea977f48f1ddc5cd96e20d4680e73ee8592b65661950a1ce296f1148"
+                                                       },
+                   "mir2_db.characters_ablity":  {
+                                                     "rows":  7162,
+                                                     "sha256":  "2d07088c7b9ab8e74443c1102dc2fc5d7cfc29eb127ea52138ad026f9404902e"
+                                                 },
+                   "mir2_db.characters_bonusability":  {
+                                                           "rows":  1,
+                                                           "sha256":  "2a7c7b3966c0dc02e065463974cf094903f37b13bfa126a48167107a171ef4bc"
+                                                       },
+                   "mir2_db.characters_status":  {
+                                                     "rows":  7161,
+                                                     "sha256":  "abfee49472aaf8af06a8d22b472425c9bb8f3f375f635dfb58317bcfeccc9254"
+                                                 },
+                   "mir2_db.characters_item_attr":  {
+                                                        "rows":  0,
+                                                        "sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                                                    },
+                   "mir2_db.characters_quest":  {
+                                                    "rows":  0,
+                                                    "sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                                                },
+                   "mir2_account.account":  {
+                                                "rows":  7296,
+                                                "sha256":  "4ce1e54a06e698e2eec51c5c8af3d7955bc26cf37b03e70bb46b6b59e22ab1d5"
+                                            },
+                   "mir2_db.characters":  {
+                                              "rows":  7159,
+                                              "sha256":  "3b61c3489da21842e5aeef45ba67019ca68e9a7912a079cc6a3b0d3a9add0ac9"
+                                          },
+                   "mir2_db.characters_bagitem":  {
+                                                      "rows":  329406,
+                                                      "sha256":  "e459b8edc32fa8e9aba72c063b8936ecc1e64289deecf8dbcb7f6801823b9e23"
+                                                  },
+                   "mir2_db.characters_indexes":  {
+                                                      "rows":  7161,
+                                                      "sha256":  "4d5cabd798fc6350e9c40f0731c61595f195107df850da519bad7e206f52ccad"
+                                                  },
+                   "mir2_db.characters_item":  {
+                                                   "rows":  93095,
+                                                   "sha256":  "48159d09d7ee31d2183a5103ee7303f3b0490c648f972c7b582a46f0e8b51b98"
+                                               },
+                   "mir2_db.characters_storageitem":  {
+                                                          "rows":  358050,
+                                                          "sha256":  "5b768d83a886ae89c0777251f92b2be360bde7e088ce3eb64b2cb7a4bc0694f7"
+                                                      },
+                   "mir2_db.characters_magic":  {
+                                                    "rows":  8,
+                                                    "sha256":  "0ac71ebc3756c582ca5e26f8b00e82cc2ff2f294a4206414c657c4d9b5470333"
+                                                }
+               },
+    "dbsnap_after":  {
+                         "mir2_account.account_protection":  {
+                                                                 "rows":  7184,
+                                                                 "sha256":  "716c2194ea977f48f1ddc5cd96e20d4680e73ee8592b65661950a1ce296f1148"
+                                                             },
+                         "mir2_db.characters_ablity":  {
+                                                           "rows":  7162,
+                                                           "sha256":  "436856e11649af0fad91d8cfd24332b582a74554df9104b91ddf81fad2a4880f"
+                                                       },
+                         "mir2_db.characters_bonusability":  {
+                                                                 "rows":  1,
+                                                                 "sha256":  "2a7c7b3966c0dc02e065463974cf094903f37b13bfa126a48167107a171ef4bc"
+                                                             },
+                         "mir2_db.characters_status":  {
+                                                           "rows":  7161,
+                                                           "sha256":  "abfee49472aaf8af06a8d22b472425c9bb8f3f375f635dfb58317bcfeccc9254"
+                                                       },
+                         "mir2_db.characters_item_attr":  {
+                                                              "rows":  0,
+                                                              "sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                                                          },
+                         "mir2_db.characters_quest":  {
+                                                          "rows":  0,
+                                                          "sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                                                      },
+                         "mir2_account.account":  {
+                                                      "rows":  7296,
+                                                      "sha256":  "bc975586224a3643c7631146309dbaf83874e32c3add8e74bec8f90571ba82d4"
+                                                  },
+                         "mir2_db.characters":  {
+                                                    "rows":  7159,
+                                                    "sha256":  "7e9dcd7d66df55b105d29d00c76840063783d112b7d7f54c033184f0f0bd7cf3"
+                                                },
+                         "mir2_db.characters_bagitem":  {
+                                                            "rows":  329406,
+                                                            "sha256":  "e459b8edc32fa8e9aba72c063b8936ecc1e64289deecf8dbcb7f6801823b9e23"
+                                                        },
+                         "mir2_db.characters_indexes":  {
+                                                            "rows":  7161,
+                                                            "sha256":  "edfb0f1d2a96f1b7a65582ad55a944d4b3c864df8240ed715ea06513a033d1da"
+                                                        },
+                         "mir2_db.characters_item":  {
+                                                         "rows":  93095,
+                                                         "sha256":  "48159d09d7ee31d2183a5103ee7303f3b0490c648f972c7b582a46f0e8b51b98"
+                                                     },
+                         "mir2_db.characters_storageitem":  {
+                                                                "rows":  358050,
+                                                                "sha256":  "5b768d83a886ae89c0777251f92b2be360bde7e088ce3eb64b2cb7a4bc0694f7"
+                                                            },
+                         "mir2_db.characters_magic":  {
+                                                          "rows":  8,
+                                                          "sha256":  "0ac71ebc3756c582ca5e26f8b00e82cc2ff2f294a4206414c657c4d9b5470333"
+                                                      }
+                     },
+    "delta":  {
+                  "mir2_account.account":  {
+                                               "added":  2,
+                                               "removed":  2
+                                           },
+                  "mir2_db.characters":  {
+                                             "added":  1,
+                                             "removed":  1
+                                         },
+                  "mir2_db.characters_ablity":  {
+                                                    "added":  1,
+                                                    "removed":  1
+                                                },
+                  "mir2_db.characters_indexes":  {
+                                                     "added":  2,
+                                                     "removed":  2
+                                                 }
+              },
+    "scoped_rows":  {
+                        "before":  230,
+                        "after":  230
+                    },
+    "runtime_procs":  [
+                          {
+                              "name":  "mysqld",
+                              "path":  "D:\\mysql\\mariadb-10.11.19-winx64\\bin\\mysqld.exe",
+                              "start":  "2026-10-12T11:57:00.1944221+08:00"
+                          },
+                          {
+                              "name":  "DBSrv",
+                              "path":  "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\src\\DBSrv\\bin\\Release\\DBSrv.exe",
+                              "start":  "2026-10-12T14:59:06.0778161+08:00"
+                          },
+                          {
+                              "name":  "LoginSrv",
+                              "path":  "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\src\\LoginSrv\\bin\\Release\\LoginSrv.exe",
+                              "start":  "2026-10-12T14:59:06.2813791+08:00"
+                          },
+                          {
+                              "name":  "GameSrv",
+                              "path":  "E:\\MirServer\\M2GameSvr-hook-m3cs16\\GameSrv.exe",
+                              "start":  "2026-10-12T14:59:06.4070668+08:00"
+                          },
+                          {
+                              "name":  "LoginGate",
+                              "path":  "E:\\MirServer\\LoginGate\\LoginGate.exe",
+                              "start":  "2026-10-12T14:59:06.4544308+08:00"
+                          },
+                          {
+                              "name":  "SelGate",
+                              "path":  "E:\\MirServer\\SelGate\\SelGate.exe",
+                              "start":  "2026-10-12T14:59:06.4866161+08:00"
+                          },
+                          {
+                              "name":  "GameGate",
+                              "path":  "E:\\MirServer\\RunGate\\GameGate.exe",
+                              "start":  "2026-10-12T14:59:06.6058655+08:00"
+                          }
+                      ],
+    "finished_at":  "2026-10-12T15:03:09.2775089+08:00"
+}

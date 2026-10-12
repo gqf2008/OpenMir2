@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>proper-target-probe</AssemblyName>
+    <RootNamespace>ProperTargetProbe</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    M3②③ 战斗线（卡 openmir2-m3-combat-skills-align）F-K / R-1 真身探针。
+
+    引用**真身**（同一份 src/M2Server）并直调 oracle 的公开入口 `PlayObject.IsProperTarget`
+    （`src/M2Server/Player/PlayObject.cs:1929` override）与 `BaseObject.IsProperTarget`
+    （`src/M2Server/Actor/BaseObject.Base.cs:470`），把 `IsAttackTarget` 判定链（攻击模式 /
+    安全区 / 主人-召唤者）与 PvP 固定种子攻击序列产成向量：
+
+      - `pt`  行：`IsProperTarget` 的边界向量（HAM_ALL / 安全区 / 自己宝宝 / 攻击模式 / 种族）；
+      - `pvp` 行：两个真 `PlayObject` 的**零 RNG 消费者**攻击序列（同种子逐 k）；
+      - `pvpstats` 行：汇总。
+
+    产物 = mir2-rs/tests/parity/m3/proper-target-probe/vectors/proper_target_vectors.{json,tsv}
+    （Rust 侧 `crates/world/tests/combat_skill_vectors.rs` 逐字段核对）。
+
+    只读：不连 MySQL、不写任何现网文件、不发起任何 socket。
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\..\src\M2Server\M2Server.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1164,26 +1164,88 @@ mod tests {
         assert!(view.iter().all(|v| v.can_pick_up_tick >= 0));
     }
 
-    /// 攻击目标判定子集：不打自己/自己宝宝/已死者。
+    /// 攻击目标判定（`is_proper_target`）：F-K 修复后按 oracle `IsProperTarget` 忠实建模。
+    ///
+    /// 关键变化（原 `is_attack_target` 子集 ⇒ oracle）：**`HAM_ALL`（新角色默认 `AttatckMode=0`）
+    /// 下允许 PvP**（`PlayObject.Attack.cs:632-640` 对 `Race=Play` 目标 `result=true`，再经
+    /// `IsProtectTarget` 安全区门）；自己宝宝在 `HAM_ALL` 下也被允许（`PlayObject.cs:1944-1948`），
+    /// 非 `HAM_ALL` 才拒。
     #[test]
-    fn attack_target_rules_subset() {
-        let mut w = World::new(32, 32);
-        let p = w.add_entity(player(1, "hero", 10, 10, 10));
+    fn attack_target_rules_follow_oracle_proper_target() {
+        use crate::combat::{is_proper_target, ATTACK_MODE_HAM_ALL, ATTACK_MODE_HAM_PEACE};
+
+        let mut attacker = player(1, "hero", 10, 10, 10);
+        let other = player(2, "rival", 11, 10, 10);
+        // 新角色 `PlayObject.cs:908`：HAM_ALL。
+        assert_eq!(attacker.attack_mode, ATTACK_MODE_HAM_ALL);
+        // PvP：HAM_ALL 且非安全区 ⇒ 允许（旧子集恒 false，F-K 的真实缺口）。
+        assert!(
+            is_proper_target(&attacker, &other),
+            "HAM_ALL 非安全区应允许 PvP"
+        );
+        // 自己：恒拒。
+        assert!(!is_proper_target(&attacker, &attacker));
+        // 安全区：PvP 拒；怪仍可打（安全区只挡 Play 目标）。
+        let mut safe = attacker.clone();
+        safe.in_safe_zone = true;
+        assert!(!is_proper_target(&safe, &other), "任一方在安全区应拒绝 PvP");
+
+        // 自己宝宝（非玩、Master==自己）：HAM_ALL 允许，HAM_PEACE 拒。
         let mut pet = player(3, "pet", 11, 10, 1);
         pet.race = 80;
-        pet.master = Some(p);
-        w.add_entity(pet);
+        pet.master = Some(attacker.id);
+        assert!(
+            is_proper_target(&attacker, &pet),
+            "HAM_ALL 下自己宝宝允许（oracle）"
+        );
+        attacker.attack_mode = ATTACK_MODE_HAM_PEACE;
+        assert!(
+            !is_proper_target(&attacker, &pet),
+            "非 HAM_ALL 下自己宝宝拒绝"
+        );
+        attacker.attack_mode = ATTACK_MODE_HAM_ALL;
+
+        // 已死/幽灵/隐身：不可被选为目标（折入的目标可见性门）。
+        let mut dead = other.clone();
+        dead.death = true;
+        assert!(!is_proper_target(&attacker, &dead));
+        let mut ghost = other.clone();
+        ghost.ghost = true;
+        assert!(!is_proper_target(&attacker, &ghost));
+
+        // 世界路径仍能把拒绝转成「无伤害」（`World::attack_cmd` 走同一函数）。
+        let mut w = World::new(32, 32);
+        let p = w.add_entity(player(1, "hero", 10, 10, 10));
         w.tick();
         w.attack_cmd(p, p); // 自己
-        w.attack_cmd(p, 3); // 自己宝宝
         let rec = w.tick();
-        let hits: Vec<bool> = rec.processed.iter().map(|(_, ok)| *ok).collect();
         assert!(
             rec.attacks.iter().all(|(_, _, o)| o.damage == 0),
-            "打自己/自己宝宝不应造成伤害: {:?}",
+            "打自己不应造成伤害: {:?}",
             rec.attacks
         );
-        assert!(hits.contains(&false));
+        assert!(rec.processed.iter().any(|(_, ok)| !*ok));
+    }
+
+    /// F-K 真机根因的正向回归：**两个玩家**在 `World::attack_cmd` 生产路径上能真的造成伤害
+    /// （旧 `is_attack_target` 对人打人恒 false ⇒ 恒无 `SM_STRUCK`）。
+    #[test]
+    fn pvp_attack_lands_damage_in_world_path() {
+        let mut w = World::new(32, 32);
+        let a = w.add_entity(player(1, "hero", 10, 10, 10));
+        let b = w.add_entity(player(2, "rival", 11, 10, 10));
+        // `player()` 的 HitPoint=10 / SpeedPoint=0 ⇒ 命中判定必中（`10 < RandomByte(0)=0` 为假）。
+        w.tick();
+        w.attack_cmd(a, b);
+        let rec = w.tick();
+        let out = rec
+            .attacks
+            .iter()
+            .find(|(atk, tgt, _)| *atk == a && *tgt == b)
+            .map(|(_, _, o)| *o)
+            .expect("PvP 攻击必须产生结算记录");
+        assert!(out.damage > 0, "HAM_ALL 下 PvP 应造成伤害，实际 {out:?}");
+        assert!(w.entities.get(b).unwrap().hp < 200, "目标 HP 应下降");
     }
 
     /// 掉线：离开世界、会话留在 `Left`（与"小退"的区别：不计数 softclose、语义上不可再进同一会话实例）。

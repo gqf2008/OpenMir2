@@ -54,6 +54,25 @@ pub struct Entity {
     pub ob_mode: bool,
     /// C# `NastyMode`（PK 模式等）
     pub nasty_mode: bool,
+    /// C# `PlayObject.AttatckMode`（`AttackMode` 枚举，`src/OpenMir2/Enums/AttackMode.cs`）：
+    /// `HAM_ALL=0 / HAM_PEACE=1 / HAM_DEAR=2 / HAM_MASTER=3 / HAM_GROUP=4 / HAM_GUILD=5 / HAM_PKATTACK=6`。
+    /// 新角色 `PlayObject.cs:908` 置 `0`（`HAM_ALL`）；`ChangeAttackModeCommand.cs:26` 按 Ctrl-H 循环。
+    pub attack_mode: u8,
+    /// C# `BaseObject.InSafeZone()`（`BaseObject.cs:1777`）的结果折叠。
+    ///
+    /// oracle 的 `IsProtectTarget`（`BaseObject.Base.cs:360`）用它做 PvP 门槛；本骨架未建模
+    /// 地图 Flag/StartPoint 安全区，由接线层在入图/换图时按 `Envir` 算好后写入；默认 `false`
+    /// （= 非安全区，写清了才允许 PvP，与真机 pin 到比奇城东空地一致）。
+    pub in_safe_zone: bool,
+    /// C# `BaseObject.AdminMode`（`BaseObject.IsAttackTarget` 首判：管理员不可被攻击）。
+    pub admin_mode: bool,
+    /// C# `BaseObject.StoneMode`（同上，石化不可被攻击）。
+    pub stone_mode: bool,
+    /// C# `PlayObject.DearHuman`（`PlayObject.IsAttackTarget` 的 `HAM_DEAR` 支：只保护配偶）。
+    pub dear_human: Option<i32>,
+    /// C# `PlayObject.PkPoint`——`PlayObject.PvpLevel()`（`PlayObject.cs:4352`）= `PkPoint / 100`。
+    /// `HAM_PKATTACK` 支用它做红名/白名判定。
+    pub pk_point: i32,
     /// C# `WantRefMsg`
     pub want_ref_msg: bool,
     /// C# `AddToMaped`（首次入图标记）
@@ -119,6 +138,13 @@ impl Entity {
             fixed_hide_mode: false,
             ob_mode: false,
             nasty_mode: false,
+            // `PlayObject.cs:908` 新角色 `AttatckMode = 0 = HAM_ALL`；未接 `CM_ATTACKMODE` 前恒为 0。
+            attack_mode: 0,
+            in_safe_zone: false,
+            admin_mode: false,
+            stone_mode: false,
+            dear_human: None,
+            pk_point: 0,
             want_ref_msg: false,
             add_to_mapped: false,
             visible_actors: Vec::new(),
