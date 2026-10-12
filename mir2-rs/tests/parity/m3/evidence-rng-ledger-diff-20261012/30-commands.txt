@@ -1,0 +1,37 @@
+# M3②③ 活栈两侧账本 diff（owner 2026-10-12 18:25 片）· 命令留档
+# base = refs/heads/master 40166a82（决策片 da6d5128 @1921baf2 已 approve、待 merge，本片在其上）
+
+## 0) 起栈前端口实拍
+cd E:/MirServer && powershell -ExecutionPolicy Bypass -File port-status.ps1   # -> 00-ports-before.txt
+
+## 1) C# 栈（start-csharp-hook.ps1 -Seed 42，MIR2_RNG_SITE=1）
+cd E:/tmp/m3cs-tick && powershell -ExecutionPolicy Bypass -File start-csharp-hook.ps1 -Seed 42   # -> 01-csharp-stack-start.txt
+MIR2_RNG_LOG=E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 -Side csharp -Bots 2 -AttackCount 120 -AttackPinPair -Prefix m3csr2c12 -CsharpSeedLog E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv   # -> 03-csharp-120.txt
+cd E:/tmp/m3cs-tick && powershell -ExecutionPolicy Bypass -File start-csharp-hook.ps1 -Stop   # -> 04-csharp-stack-stop.txt
+
+## 2) Rust 栈（start_rust_stack.ps1 -Seed 42 -RustBinDir E:/tmp/m3cs-r2-target/debug；MIR2_RNG_LOG 经子进程环境继承）
+MIR2_RNG_LOG=E:/tmp/m3cs-r2/rust-rng-stream.tsv powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 -RustBinDir E:/tmp/m3cs-r2-target/debug -Seed 42 -LogDir E:/tmp/m3cs-r2/rust-stack   # -> 05-rust-stack-start.txt
+MIR2_RNG_LOG=E:/tmp/m3cs-r2/rust-rng-stream.tsv powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 -Side rust -Bots 2 -AttackCount 20 -AttackPinPair -Prefix m3csr2rsm -RustSeedLog E:/tmp/m3cs-r2/rust-stack/game-svr.out.log   # -> 06-rust-smoke-20.txt
+# r1（权威，-PeerSession 指向 C# 会话）：
+MIR2_RNG_LOG=E:/tmp/m3cs-r2/rust-rng-stream.tsv powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_attack_pair.ps1 -Side rust -Bots 2 -AttackCount 120 -AttackPinPair -Prefix m3csr2r1 -PeerSession csharp-20261012-185128 -RustSeedLog E:/tmp/m3cs-r2/rust-stack/game-svr.out.log   # -> 07-rust-120-crossside.txt
+# r2（同侧重跑）：
+MIR2_RNG_LOG=E:/tmp/m3cs-r2/rust-rng-stream-r2.tsv ... -Prefix m3csr2r2 ...   # -> 07b-rust-120-r2.txt
+powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 -Stop -LogDir E:/tmp/m3cs-r2/rust-stack   # -> 09-rust-stack-stop.txt
+
+## 3) 两侧账本机判（rng_ledger_diff.py，本片新增，在 rng-trace-probe/）
+python -I mir2-rs/tests/parity/m3/rng-trace-probe/rng_ledger_diff.py selftest   # -> 20-...
+python -I .../rng_ledger_diff.py summary E:/tmp/m3cs-r2/rust-rng-stream-r1.tsv --side rust --top 20   # -> 21-...
+python -I .../rng_ledger_diff.py summary E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv --side csharp --top 20   # -> 22-...
+python -I .../rng_ledger_diff.py order E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv --side csharp --attack-only --out 23-csharp-attack-order.txt
+python -I .../rng_ledger_diff.py order E:/tmp/m3cs-r2/rust-rng-stream-r1.tsv --side rust --attack-only --out 24-rust-attack-order.txt
+python -I .../rng_ledger_diff.py diff <csharp> <rust> --attack-only   # -> 25-...
+python -I .../rng_ledger_diff.py segments <csharp> --side csharp   # -> 26-...
+python -I .../rng_ledger_diff.py segments <rust> --side rust   # -> 27-...
+python -I .../rng_ledger_diff.py segdiff <csharp> <rust>   # -> 28-...
+
+## 4) Rust 活栈同侧可复现（r1 vs r2 逐字节）
+sha256sum E:/tmp/m3cs-r2/rust-rng-stream-r1.tsv E:/tmp/m3cs-r2/rust-rng-stream-r2.tsv   # -> 29-...
+diff rust-rng-stream-r1.tsv rust-rng-stream-r2.tsv   # 空（IDENTICAL）
+
+## 5) 夹具读数（pin 重试 / Rust 活栈 84 次「无目标」）
+grep -c 无目标 E:/tmp/m3cs-r2/rust-stack/game-svr.out.log   # -> 84

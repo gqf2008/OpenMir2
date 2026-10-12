@@ -1,0 +1,11 @@
+# Rust 活栈 84 次「前方格无目标」（= 120 击中 36 击有目标，84 击只播动作帧、不抽 RNG）
+\$ grep -c 无目标 E:/tmp/m3cs-r2/rust-stack/game-svr.out.log
+84
+
+\$ grep -o "攻击：actor_id=[0-9]* 前方格 ([0-9,]*)" ... | sort | uniq -c
+     84 攻击：actor_id=3 前方格 (18,20)
+
+样例（前 3 条）：
+11:00:31.923 [DBG] 攻击：actor_id=3 前方格 (18,20) 无目标 ⇒ 只播动作帧（oracle `_Attack(null)` 返回 false）
+11:00:50.562 [DBG] 攻击：actor_id=3 前方格 (18,20) 无目标 ⇒ 只播动作帧（oracle `_Attack(null)` 返回 false）
+11:00:50.970 [DBG] 攻击：actor_id=3 前方格 (18,20) 无目标 ⇒ 只播动作帧（oracle `_Attack(null)` 返回 false）

@@ -1,0 +1,868 @@
+{
+  "trace": "E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv",
+  "side": "csharp",
+  "segments": 120,
+  "shapes": {
+    "atk_power_a|atk_power_b|hit_gate|attack_success": 2,
+    "atk_power_a|atk_power_b|hit_gate|hit_struck_damage|struck_durability|attack_success": 2,
+    "atk_power_a|atk_power_b": 115,
+    "atk_power_a|atk_power_b|atk_power_base|hit_gate|hit_struck_damage": 1
+  },
+  "per_seg": [
+    {
+      "k": 1,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate",
+        "attack_success"
+      ]
+    },
+    {
+      "k": 2,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate",
+        "attack_success"
+      ]
+    },
+    {
+      "k": 3,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate",
+        "hit_struck_damage",
+        "struck_durability",
+        "attack_success"
+      ]
+    },
+    {
+      "k": 4,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "hit_gate",
+        "hit_struck_damage",
+        "struck_durability",
+        "attack_success"
+      ]
+    },
+    {
+      "k": 5,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 6,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 7,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 8,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 9,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 10,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 11,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 12,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 13,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 14,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 15,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 16,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 17,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 18,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 19,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 20,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 21,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 22,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 23,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 24,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 25,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 26,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 27,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 28,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 29,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 30,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 31,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 32,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 33,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 34,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 35,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 36,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 37,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 38,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 39,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 40,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 41,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 42,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 43,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 44,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 45,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 46,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 47,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 48,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 49,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 50,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 51,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 52,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 53,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 54,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 55,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 56,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 57,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 58,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 59,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 60,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 61,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 62,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 63,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 64,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 65,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 66,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 67,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 68,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 69,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 70,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 71,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 72,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 73,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 74,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 75,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 76,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 77,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 78,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 79,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 80,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 81,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 82,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 83,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 84,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 85,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 86,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 87,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 88,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 89,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 90,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b",
+        "atk_power_base",
+        "hit_gate",
+        "hit_struck_damage"
+      ]
+    },
+    {
+      "k": 91,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 92,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 93,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 94,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 95,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 96,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 97,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 98,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 99,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 100,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 101,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 102,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 103,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 104,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 105,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 106,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 107,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 108,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 109,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 110,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 111,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 112,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 113,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 114,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 115,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 116,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 117,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 118,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 119,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    },
+    {
+      "k": 120,
+      "shape": [
+        "atk_power_a",
+        "atk_power_b"
+      ]
+    }
+  ]
+}

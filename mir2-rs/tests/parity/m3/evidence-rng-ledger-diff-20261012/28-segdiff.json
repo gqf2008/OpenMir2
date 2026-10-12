@@ -1,0 +1,28 @@
+{
+  "a": "E:/tmp/m3cs-tick/csharp-stack/rng-stream.tsv",
+  "b": "E:/tmp/m3cs-r2/rust-rng-stream-r1.tsv",
+  "a_segments": 120,
+  "b_segments": 36,
+  "first_seg_divergence": 0,
+  "a_shapes": {
+    "atk_power_a|atk_power_b|hit_gate|attack_success": 2,
+    "atk_power_a|atk_power_b|hit_gate|hit_struck_damage|struck_durability|attack_success": 2,
+    "atk_power_a|atk_power_b": 115,
+    "atk_power_a|atk_power_b|atk_power_base|hit_gate|hit_struck_damage": 1
+  },
+  "b_shapes": {
+    "atk_power_a|atk_power_b|hit_gate|hit_struck_damage|struck_durability": 19,
+    "atk_power_a|atk_power_b|hit_gate": 17
+  },
+  "shapes_only_in_a": {
+    "atk_power_a|atk_power_b|hit_gate|attack_success": 2,
+    "atk_power_a|atk_power_b|hit_gate|hit_struck_damage|struck_durability|attack_success": 2,
+    "atk_power_a|atk_power_b": 115,
+    "atk_power_a|atk_power_b|atk_power_base|hit_gate|hit_struck_damage": 1
+  },
+  "shapes_only_in_b": {
+    "atk_power_a|atk_power_b|hit_gate|hit_struck_damage|struck_durability": 19,
+    "atk_power_a|atk_power_b|hit_gate": 17
+  },
+  "verdict": "SEG_SHAPE_DIVERGENCE"
+}
