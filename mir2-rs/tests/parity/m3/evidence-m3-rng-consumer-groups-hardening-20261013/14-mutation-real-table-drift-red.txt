@@ -1,0 +1,24 @@
+RNG_CONSUMER_GROUPS E:/tmp/m3cs-f1/csharp-rng-stream-f1-20261012.tsv side=csharp rows_total=5090894 rows_dropped=0 kept=5090894 include_attack=True groups=10
+  GROUP   4028939  monster_ai
+  GROUP    500838  merchant
+  GROUP    410383  other
+  GROUP     82840  construct
+  GROUP     63705  spawn
+  GROUP      3770  npc_ai
+  GROUP       352  attack
+  GROUP        60  revive
+  GROUP         6  homemap
+  GROUP         1  startup
+  GROUP_COVERAGE DRIFT unclassified=410383
+  UNCLASSIFIED  383318  GameSrv.Word.WorldServer.MonGetRandomItems@WorldServer.MonGen.cs:451
+  UNCLASSIFIED   22368  GameSrv.Word.WorldServer.MonGetRandomItems@WorldServer.MonGen.cs:467
+  UNCLASSIFIED    2343  GameSrv.Word.WorldServer.MonGetRandomItems@WorldServer.MonGen.cs:453
+  UNCLASSIFIED    2145  GameSrv.Word.WorldServer.MonGetRandomItems@WorldServer.MonGen.cs:474
+  UNCLASSIFIED     113  M2Server.Items.GameItemSystem.GetUpgrade@GameItemSystem.cs:147
+  UNCLASSIFIED       5  M2Server.Items.GameItemSystem.UpgradeRandomNecklace@GameItemSystem.cs:273
+  UNCLASSIFIED       5  M2Server.Items.GameItemSystem.UpgradeRandomNecklace@GameItemSystem.cs:278
+  UNCLASSIFIED       5  M2Server.Items.GameItemSystem.UpgradeRandomNecklace@GameItemSystem.cs:283
+  UNCLASSIFIED       5  M2Server.Items.GameItemSystem.UpgradeRandomNecklace@GameItemSystem.cs:288
+  UNCLASSIFIED       5  M2Server.Items.GameItemSystem.UpgradeRandomNecklace@GameItemSystem.cs:293
+  ROW_COVERAGE closed rows_dropped=0
+RED: 有 410383 个未归类站点 ⇒ 组表漂移（--require-closed 拒给假绿）

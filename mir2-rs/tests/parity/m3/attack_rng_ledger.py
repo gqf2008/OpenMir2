@@ -366,6 +366,19 @@ def cmd_selftest(args):
         trace=tg, side="rust", groups_table="", no_attack=False, require_closed=True,
         top=5, json="")))
     check("groups-rust-drift-red", out[0] == 1 and "UNCLASSIFIED" in out[1], out[1][:400])
+    # reviewer-5 O-1（委派同一实现）：解析不了的行 ⇒ rows_dropped 计入且 require-closed 判红
+    tdrop = os.path.join(tmp, "grp-drop.tsv")
+    with open(tdrop, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("1\tINJECT_OK\t42\t0\n")
+        fh.write("SEED_PROBE 1 2 3 4 5 6 7 8\n")
+        fh.write("5\tNext(max)\t10\t0\t%s\n" % RW)
+        fh.write("oops\tNext(max)\t10\t0\tcrates/foo.rs:1\n")
+    out = _capture(lambda: cmd_groups(argparse.Namespace(
+        trace=tdrop, side="rust", groups_table="", no_attack=False, require_closed=True,
+        top=5, json="")))
+    check("groups-rust-rowcoverage-red",
+          out[0] == 1 and "rows_dropped=1" in out[1] and "ROW_COVERAGE DRIFT" in out[1],
+          out[1][:500])
 
     for name in os.listdir(tmp):
         try:
@@ -376,7 +389,7 @@ def cmd_selftest(args):
     if failures:
         print("SELFTEST RED: %d/%d 未过: %s" % (len(failures), len(checks), ", ".join(failures)))
         return 1
-    print("SELFTEST GREEN: attack_rng_ledger selftest %d/%d（C#+Rust 两侧：同账本绿 + 多抽/少抽必红且定位 + 段数不等必红 + 未知 side fail-closed + F2 站点表同表：新站点分类为 attack / 非站点为 noise + Claim B 站点组：closed 绿 / 未归类必红）"
+    print("SELFTEST GREEN: attack_rng_ledger selftest %d/%d（C#+Rust 两侧：同账本绿 + 多抽/少抽必红且定位 + 段数不等必红 + 未知 side fail-closed + F2 站点表同表：新站点分类为 attack / 非站点为 noise + Claim B 站点组：closed 绿 / 未归类必红 / 行级覆盖 rows_dropped fail-closed（O-1））"
           % (len(checks), len(checks)))
     return 0
 

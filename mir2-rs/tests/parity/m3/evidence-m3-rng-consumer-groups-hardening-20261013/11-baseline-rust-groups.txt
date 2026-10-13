@@ -1,0 +1,6 @@
+RNG_CONSUMER_GROUPS E:/tmp/m3cs-r2/rust-rng-stream-r1.tsv side=rust rows_total=160 rows_dropped=0 kept=160 include_attack=True groups=3
+  GROUP       146  attack
+  GROUP         8  startup
+  GROUP         6  homemap
+  GROUP_COVERAGE closed
+  ROW_COVERAGE closed rows_dropped=0

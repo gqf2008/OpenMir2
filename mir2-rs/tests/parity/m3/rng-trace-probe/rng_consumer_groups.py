@@ -10,7 +10,16 @@ r"""rng_consumer_groups.py — Claim B「全服 RNG 消费者站点组」的**�
     未命中再按本表 `pattern`（对归一化后的 `\` → `/` site 做 `re.search`）归组；
     仍未命中 ⇒ `other`（**表漂移信号**，`--require-closed` 下判红，拒给假绿）。
   * 组 vocabulary 两侧共用 ⇒「site 集合 + 相对次序 diff」才有仲裁力。
-  * `validate()` 是离线可跑的**表自检**（未知组/side、缺 pattern、CORE 组两侧空缺等）。
+  * `validate()` 是离线可跑的**表自检**（未知组/side、缺 pattern、CORE/AUX 组空缺等）。
+
+判据口径（reviewer-5 O-2）：**组内 draw 计数本身不是判据**——只有「组集合」与「共享组的
+相对次序」是。多抽一次只有在它改变了共享组序列长度/相对位置时才会被 `SHARED_REL_ORDER_DIFF`
+抓到；不要把它当计数门。
+
+行级覆盖（reviewer-5 O-1）：`iter_sites(path, stats=...)` 会把**解析不了的行**（列<4 或首列非整数）
+计入 `stats["rows_dropped"]`。`GROUP_COVERAGE closed` 只证明「已解析行 100% 归类」；只有
+`rows_dropped == 0` 才证明「文件里没有被静默吞掉的行」。调用方（`groups --require-closed` /
+`groupdiff --strict`）据此 fail-closed。
 """
 import os
 import re
@@ -80,11 +89,18 @@ class GroupsTable(object):
                 problems.append("%s: 重复行（同 group/side/pattern）" % tag)
             seen.add((group, side, rx.pattern))
         for side in KNOWN_SIDES:
+            if side != "csharp":
+                # rust 侧 merchant/construct/npc_ai/revive 等暂时**真实缺位** ⇒ 不作表级强制；
+                # 由真实 trace 的 `groups --require-closed` / `groupdiff` 如实报 GROUP_SET/DRIFT。
+                continue
             for group in CORE_GROUPS:
                 if group not in self.groups_for_side(side):
-                    # rust 侧 merchant 等暂时真实缺位，本项只对 csharp 强制（oracle 全组齐备）。
-                    if side == "csharp":
-                        problems.append("CORE 组 %s 在 side=%s 无 pattern（oracle 侧必须齐备）" % (group, side))
+                    problems.append("CORE 组 %s 在 side=%s 无 pattern（oracle 侧必须齐备）" % (group, side))
+            # reviewer-5 O-3：AUX 组**整组被删**也要能被 validate 咬住（不只 CORE）。
+            for group in AUX_GROUPS:
+                if group not in self.groups_for_side(side):
+                    problems.append("AUX 组 %s 在 side=%s 无 pattern（oracle 同族组必须齐备；"
+                                    "整组被删要能被 validate 咬住）" % (group, side))
         return problems
 
 
@@ -119,12 +135,21 @@ def load(path=None):
 # trace 读取 / 归组（两侧 TSV 同形：`seq \t kind \t max \t result \t site`）
 # ---------------------------------------------------------------------------
 
-def iter_sites(path):
-    """逐行 yield 站点字符串；跳过空行 / `INJECT_OK` / `SEED_PROBE` / 非法行。
+def iter_sites(path, stats=None):
+    """逐行 yield 站点字符串；跳过空行 / `INJECT_OK` / `SEED_PROBE`。
 
     与 `rng_ledger_diff.parse_trace`、`attack_rng_ledger.parse_trace` 同取舍，但**流式**，
     不在内存里留全量 row（C# 活栈 trace 可达 5M 行 / 数百 MB）。
+
+    **行级覆盖（reviewer-5 O-1）**：`stats`（dict，可选）就地累加——
+      * `rows_kept`    = 成功解析并 yield 的行数；
+      * `rows_dropped` = 非空、非已知 marker、但**解析不了**的行数（列<4 或首列非整数）。
+    `GROUP_COVERAGE closed` 只证明「已解析行 100% 归类」；只有 `rows_dropped == 0` 才证明
+    「文件里没有被吞掉的行」。
     """
+    if stats is not None:
+        stats.setdefault("rows_kept", 0)
+        stats.setdefault("rows_dropped", 0)
     with open(path, "r", encoding="utf-8-sig", errors="replace") as fh:
         for line in fh:
             line = line.rstrip("\r\n")
@@ -132,11 +157,17 @@ def iter_sites(path):
                 continue
             parts = line.split("\t")
             if len(parts) < 4:
+                if stats is not None:
+                    stats["rows_dropped"] += 1
                 continue
             try:
                 int(parts[0])
             except ValueError:
+                if stats is not None:
+                    stats["rows_dropped"] += 1
                 continue
+            if stats is not None:
+                stats["rows_kept"] += 1
             yield parts[4] if len(parts) >= 5 else ""
 
 
@@ -147,10 +178,13 @@ def classify(site, side, table, is_attack):
     return table.group_of(site, side) or OTHER_GROUP
 
 
-def sequence(path, side, table, is_attack, include_attack=True):
-    """按 trace 顺序返回组标签列表；`include_attack=False` 时剔掉攻击组。"""
+def sequence(path, side, table, is_attack, include_attack=True, stats=None):
+    """按 trace 顺序返回组标签列表；`include_attack=False` 时剔掉攻击组。
+
+    `stats`（dict，可选）透传给 `iter_sites` 以累加行级覆盖计数（`rows_kept`/`rows_dropped`）。
+    """
     out = []
-    for site in iter_sites(path):
+    for site in iter_sites(path, stats):
         g = classify(site, side, table, is_attack)
         if not include_attack and g == ATTACK_GROUP:
             continue
@@ -158,12 +192,15 @@ def sequence(path, side, table, is_attack, include_attack=True):
     return out
 
 
-def summarize(path, side, table, is_attack, require_closed=False, include_attack=True):
-    """返回 `(counts, unclassified, total)`；`counts` 是 `Counter(group -> n)`。"""
+def summarize(path, side, table, is_attack, require_closed=False, include_attack=True, stats=None):
+    """返回 `(counts, unclassified, total)`；`counts` 是 `Counter(group -> n)`。
+
+    `stats`（dict，可选）透传给 `iter_sites` 以累加行级覆盖计数（`rows_kept`/`rows_dropped`）。
+    """
     counts = Counter()
     unclassified = Counter()
     total = 0
-    for site in iter_sites(path):
+    for site in iter_sites(path, stats):
         total += 1
         g = classify(site, side, table, is_attack)
         if not include_attack and g == ATTACK_GROUP:

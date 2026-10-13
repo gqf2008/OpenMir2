@@ -15,6 +15,12 @@ r"""rng_ledger_diff.py — M3②③ 真机**两侧 RNG 账本**的站点 + 顺�
       顺序敏感：按 canonical 序列**逐位**比，报**第一处分歧**（第几位、两侧各是什么 site；
       `--attack-only` 时两侧 vocabulary 同表，可直接判「缺消费者 / 次序不同」）；
       另报两侧 per-canonical 计数、只在 A / 只在 B 的 canonical（= 缺消费者的点名清单）。
+      按站点组汇总（Claim B）：组集合 + 未归类 + **行级覆盖**（`rows_dropped`）。
+      `--require-closed` = 未归类站点 **或** 解析不了的行 > 0 即 fail-closed（表/格式漂移不给假绿）。
+  groupdiff <a.tsv> <b.tsv> [--include-attack] [--strict] [--json out]
+      两侧组账本：组集合 diff + **共享组相对次序** diff（仅两侧共有的组参与）+ run 序。
+      `--strict` 下三种任一即红：GROUP_SET_DIFF / SHARED_REL_ORDER_DIFF / ROW_COVERAGE_DRIFT。
+      口径：**组内 draw 计数本身不是判据**，只有组集合与共享组相对次序是。
   selftest
       合成件：同序 ⇒ 绿；插入一次取数（次序漂移）⇒ 必红且定位到第几位；缺一个站点 ⇒ 必红且点名。
 
@@ -333,11 +339,13 @@ def cmd_groups(args):
     table = _load_groups(args.groups_table)
     if table is None:
         return 2
+    row_stats = {}
     counts, unclassified, rows_total = rcg.summarize(
-        args.trace, args.side, table, is_attack, include_attack=not args.no_attack)
+        args.trace, args.side, table, is_attack, include_attack=not args.no_attack, stats=row_stats)
+    rows_dropped = row_stats.get("rows_dropped", 0)
     kept = sum(counts.values())
-    print("RNG_CONSUMER_GROUPS %s side=%s rows_total=%d kept=%d include_attack=%s groups=%d"
-          % (args.trace, args.side, rows_total, kept, not args.no_attack, len(counts)))
+    print("RNG_CONSUMER_GROUPS %s side=%s rows_total=%d rows_dropped=%d kept=%d include_attack=%s groups=%d"
+          % (args.trace, args.side, rows_total, rows_dropped, kept, not args.no_attack, len(counts)))
     for g, n in counts.most_common():
         print("  GROUP %9d  %s" % (n, g))
     if unclassified:
@@ -346,15 +354,25 @@ def cmd_groups(args):
             print("  UNCLASSIFIED %7d  %s" % (n, site))
     else:
         print("  GROUP_COVERAGE closed")
+    # reviewer-5 O-1：`closed` 只证明「已解析行全归类」；行级覆盖必须单独报。
+    if rows_dropped:
+        print("  ROW_COVERAGE DRIFT rows_dropped=%d（非空、非已知 marker、但解析不了 ⇒ 行级覆盖 fail-closed）"
+              % rows_dropped)
+    else:
+        print("  ROW_COVERAGE closed rows_dropped=0")
     if args.json:
         with open(args.json, "w", encoding="utf-8", newline="\n") as fh:
             json.dump({"trace": args.trace, "side": args.side, "rows_total": rows_total,
+                       "rows_dropped": rows_dropped,
                        "kept": kept, "include_attack": not args.no_attack,
                        "groups": dict(counts), "unclassified": dict(unclassified),
                        "table": table.path}, fh, ensure_ascii=False, indent=2)
             fh.write("\n")
-    if args.require_closed and unclassified:
-        print("RED: 有 %d 个未归类站点 ⇒ 组表漂移（--require-closed 拒给假绿）" % sum(unclassified.values()))
+    if args.require_closed and (unclassified or rows_dropped):
+        if unclassified:
+            print("RED: 有 %d 个未归类站点 ⇒ 组表漂移（--require-closed 拒给假绿）" % sum(unclassified.values()))
+        if rows_dropped:
+            print("RED: 有 %d 行解析不了（既非站点也非已知 marker）⇒ 行级覆盖 fail-closed" % rows_dropped)
         return 1
     return 0
 
@@ -367,8 +385,11 @@ def cmd_groupdiff(args):
     if table is None:
         return 2
     include_attack = bool(args.include_attack)
-    a = rcg.sequence(args.a, args.a_side, table, is_attack, include_attack=include_attack)
-    b = rcg.sequence(args.b, args.b_side, table, is_attack, include_attack=include_attack)
+    stats_a, stats_b = {}, {}
+    a = rcg.sequence(args.a, args.a_side, table, is_attack, include_attack=include_attack, stats=stats_a)
+    b = rcg.sequence(args.b, args.b_side, table, is_attack, include_attack=include_attack, stats=stats_b)
+    dropped_a = stats_a.get("rows_dropped", 0)
+    dropped_b = stats_b.get("rows_dropped", 0)
     if not a or not b:
         print("RED: 空组账本（a=%d b=%d）" % (len(a), len(b)))
         return 1
@@ -391,6 +412,9 @@ def cmd_groupdiff(args):
         flags.append("GROUP_SET_DIFF")
     if not order_ok:
         flags.append("SHARED_REL_ORDER_DIFF")
+    # reviewer-5 O-1：行级覆盖也是结构判据的一部分（解析不了的行 = 被吞掉的消费者）。
+    if dropped_a or dropped_b:
+        flags.append("ROW_COVERAGE_DRIFT")
     verdict = "IDENTICAL" if not flags else "+".join(flags)
     print("RNG_CONSUMER_GROUPDIFF include_attack=%s a=%s(%d) b=%s(%d)"
           % (include_attack, args.a, len(a), args.b, len(b)))
@@ -406,6 +430,7 @@ def cmd_groupdiff(args):
               % (first_shared, fa[first_shared] if first_shared is not None else "(len差)",
                  fb[first_shared] if first_shared is not None else "(len差)"))
     print("  RUNS a=%d b=%d" % (len(ra), len(rb)))
+    print("  ROW_COVERAGE a_dropped=%d b_dropped=%d" % (dropped_a, dropped_b))
     if first_run is None and len(runs_a) == len(runs_b):
         print("  FIRST_RUN_DIVERGENCE none（组 run 序逐位全等）")
     else:
@@ -417,6 +442,7 @@ def cmd_groupdiff(args):
         with open(args.json, "w", encoding="utf-8", newline="\n") as fh:
             json.dump({"include_attack": include_attack, "a": args.a, "b": args.b,
                        "a_len": len(a), "b_len": len(b),
+                       "a_dropped": dropped_a, "b_dropped": dropped_b,
                        "a_groups": dict(ca), "b_groups": dict(cb),
                        "only_in_a": only_a, "only_in_b": only_b,
                        "shared_groups": sorted(shared),
@@ -527,6 +553,10 @@ def cmd_selftest(args):
     bad = [r for r in tbl.rows if not (r[0] == "drop" and r[1] == "csharp")]
     check("groups-table-mutation-red", bool(rcg.GroupsTable(bad, "mem").validate()),
           "drop/csharp removal must be flagged")
+    # reviewer-5 O-3：AUX 组整组被删也必须被 validate 咬住（不只 CORE）
+    bad_aux = [r for r in tbl.rows if not (r[0] == "revive" and r[1] == "csharp")]
+    check("groups-table-aux-mutation-red", bool(rcg.GroupsTable(bad_aux, "mem").validate()),
+          "revive/csharp removal must be flagged")
 
     # groups：合成 C# trace ⇒ 分组正确 + 全集 closed
     tg = os.path.join(tmp, "cg.tsv")
@@ -545,6 +575,27 @@ def cmd_selftest(args):
         top=5, json="")))
     check("groups-drift-red", out[0] == 1 and "UNCLASSIFIED" in out[1] and "DRIFT" in out[1],
           out[1][:400])
+    # reviewer-5 O-1：行级覆盖 —— 非空但解析不了的行必须被计数，且在 --require-closed 下 fail-closed；
+    # 即使可解析站点已全部归类（GROUP_COVERAGE closed），rows_dropped>0 也必须红。
+    tdrop = os.path.join(tmp, "cg-drop.tsv")
+    with open(tdrop, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("1\tINJECT_OK\t42\t0\n")
+        fh.write("SEED_PROBE 1 2 3 4 5 6 7 8\n")
+        fh.write("3\tNext(max)\t10\t0\t%s\n" % W)
+        fh.write("not-an-int\tNext(max)\t10\t0\tcrates/foo.rs:1\n")  # 首列非整数 ⇒ dropped
+        fh.write("9\tNext(max)\n")                                   # 列<4 ⇒ dropped
+    out = cap(lambda: cmd_groups(argparse.Namespace(
+        trace=tdrop, side="csharp", groups_table="", no_attack=False, require_closed=True,
+        top=5, json="")))
+    check("groups-rowcoverage-red",
+          out[0] == 1 and "rows_dropped=2" in out[1] and "ROW_COVERAGE DRIFT" in out[1],
+          out[1][:500])
+    check("groups-rowcoverage-classified",
+          "GROUP_COVERAGE closed" in out[1] and "1  monster_ai" in out[1], out[1][:500])
+    out = cap(lambda: cmd_groups(argparse.Namespace(
+        trace=tdrop, side="csharp", groups_table="", no_attack=False, require_closed=False,
+        top=5, json="")))
+    check("groups-rowcoverage-informational", out[0] == 0 and "rows_dropped=2" in out[1], out[1][:400])
 
     # groupdiff：同组序 ⇒ 绿；改坏（多抽/换序/缺组）⇒ 必红且定位
     ga = os.path.join(tmp, "ga.tsv")
@@ -568,6 +619,18 @@ def cmd_selftest(args):
     _write_trace(gb, [RST, RHM, RSP, RW, RW, RDR, RMR])
     out = gdiff()
     check("groupdiff-set-red", out[0] == 1 and "GROUP_SET_DIFF" in out[1] and "merchant" in out[1], out[1][:400])
+    # reviewer-5 O-1：组序完全相同，但一侧有解析不了的行 ⇒ --strict 必红（ROW_COVERAGE_DRIFT）
+    gbad = os.path.join(tmp, "gb-drop.tsv")
+    _write_trace(ga, [RST, RHM, RSP, RW, RW, RDR])
+    _write_trace(gbad, [RST, RHM, RSP, RW, RW, RDR])
+    with open(gbad, "a", encoding="utf-8", newline="\n") as fh:
+        fh.write("bad\tNext(max)\t10\t0\n")
+    out = cap(lambda: cmd_groupdiff(argparse.Namespace(
+        a=ga, b=gbad, a_side="rust", b_side="rust", include_attack=False, strict=True,
+        groups_table="", json="")))
+    check("groupdiff-rowcoverage-red",
+          out[0] == 1 and "ROW_COVERAGE_DRIFT" in out[1]
+          and "ROW_COVERAGE a_dropped=0 b_dropped=1" in out[1], out[1][:500])
 
     for name in os.listdir(tmp):
         try:
@@ -578,7 +641,7 @@ def cmd_selftest(args):
     if failures:
         print("SELFTEST RED: %d/%d 未过: %s" % (len(failures), len(checks), ", ".join(failures)))
         return 1
-    print("SELFTEST GREEN: rng_ledger_diff selftest %d/%d（同序绿 + 次序漂移必红且定位 + 缺消费者必红且点名 + Claim B 站点组：同组序绿 / 多抽·换序·缺组必红且定位 / 组表改坏必红 / 未归类 fail-closed）"
+    print("SELFTEST GREEN: rng_ledger_diff selftest %d/%d（同序绿 + 次序漂移必红且定位 + 缺消费者必红且点名 + Claim B 站点组：同组序绿 / 多抽·换序·缺组必红且定位 / 组表改坏必红 / 未归类 fail-closed / 行级覆盖 rows_dropped fail-closed（O-1）+ AUX 组改坏必红（O-3））"
           % (len(checks), len(checks)))
     return 0
 

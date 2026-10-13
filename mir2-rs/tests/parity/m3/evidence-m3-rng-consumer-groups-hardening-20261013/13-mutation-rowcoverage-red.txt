@@ -1,0 +1,5 @@
+RNG_CONSUMER_GROUPS E:/tmp/m3bag-grp/hardening/syn-rowcoverage.tsv side=csharp rows_total=1 rows_dropped=2 kept=1 include_attack=True groups=1
+  GROUP         1  monster_ai
+  GROUP_COVERAGE closed
+  ROW_COVERAGE DRIFT rows_dropped=2（非空、非已知 marker、但解析不了 ⇒ 行级覆盖 fail-closed）
+RED: 有 2 行解析不了（既非站点也非已知 marker）⇒ 行级覆盖 fail-closed

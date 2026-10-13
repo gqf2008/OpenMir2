@@ -1,0 +1,1 @@
+SELFTEST GREEN: rng_ledger_diff selftest 25/25（同序绿 + 次序漂移必红且定位 + 缺消费者必红且点名 + Claim B 站点组：同组序绿 / 多抽·换序·缺组必红且定位 / 组表改坏必红 / 未归类 fail-closed / 行级覆盖 rows_dropped fail-closed（O-1）+ AUX 组改坏必红（O-3））

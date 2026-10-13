@@ -1,0 +1,44 @@
+{
+  "include_attack": false,
+  "a": "E:/tmp/m3cs-f1/csharp-rng-stream-f1-20261012.tsv",
+  "b": "E:/tmp/m3cs-r2/rust-rng-stream-r1.tsv",
+  "a_len": 5090542,
+  "b_len": 14,
+  "a_dropped": 0,
+  "b_dropped": 0,
+  "a_groups": {
+    "construct": 82840,
+    "startup": 1,
+    "spawn": 63705,
+    "merchant": 500838,
+    "npc_ai": 3770,
+    "drop": 410383,
+    "monster_ai": 4028939,
+    "revive": 60,
+    "homemap": 6
+  },
+  "b_groups": {
+    "startup": 8,
+    "homemap": 6
+  },
+  "only_in_a": {
+    "construct": 82840,
+    "spawn": 63705,
+    "merchant": 500838,
+    "npc_ai": 3770,
+    "drop": 410383,
+    "monster_ai": 4028939,
+    "revive": 60
+  },
+  "only_in_b": {},
+  "shared_groups": [
+    "homemap",
+    "startup"
+  ],
+  "first_shared_order_divergence": 1,
+  "a_runs": 76374,
+  "b_runs": 2,
+  "first_run_divergence": 0,
+  "verdict": "GROUP_SET_DIFF+SHARED_REL_ORDER_DIFF",
+  "table": "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\.claude\\worktrees\\m3bag\\mir2-rs\\tests\\parity\\m3\\rng-trace-probe\\consumer_groups.tsv"
+}

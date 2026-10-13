@@ -1,0 +1,49 @@
+# 证据包命令（可复算）— openmir2-rng-consumer-structure-parity：reviewer-5 O-1/O-2/O-3 收口
+# 车道 m3bag / principal openmir2-worker-4 / 分支 worktree-m3-rng-consumers
+# base = refs/heads/master d778ac30（已 git merge origin/master；8afb97fe 为上一被审 head）
+# cwd = mir2-rs/；CARGO_TARGET_DIR=E:/tmp/m3bag-target；全部 --offline；未起栈、未占端口。
+
+# ① 工具自检（含新增 O-1 行级覆盖 / O-3 AUX 组牙齿）
+python tests/parity/m3/rng-trace-probe/rng_ledger_diff.py selftest      # -> 25/25 GREEN rc=0  (01)
+python tests/parity/m3/attack_rng_ledger.py selftest                    # -> 32/32 GREEN rc=0  (02)
+
+# ② 当前分歧基线（现存唯一一对同种子两侧活栈 trace；外部原始件按 sha256 引用）
+#    C#   E:/tmp/m3cs-f1/csharp-rng-stream-f1-20261012.tsv  sha256 a7df7116… (416,513,542 B)
+#    Rust E:/tmp/m3cs-r2/rust-rng-stream-r1.tsv             sha256 4963e9f6… (8,078 B)
+python tests/parity/m3/rng-trace-probe/rng_ledger_diff.py groups \
+  E:/tmp/m3cs-f1/csharp-rng-stream-f1-20261012.tsv --side csharp --require-closed \
+  --json 10-baseline-csharp-groups.json                                 # rc=0 rows_dropped=0 (10)
+python tests/parity/m3/rng-trace-probe/rng_ledger_diff.py groups \
+  E:/tmp/m3cs-r2/rust-rng-stream-r1.tsv --side rust --require-closed \
+  --json 11-baseline-rust-groups.json                                   # rc=0 rows_dropped=0 (11)
+python tests/parity/m3/rng-trace-probe/rng_ledger_diff.py groupdiff \
+  E:/tmp/m3cs-f1/csharp-rng-stream-f1-20261012.tsv E:/tmp/m3cs-r2/rust-rng-stream-r1.tsv \
+  --a-side csharp --b-side rust --json 12-baseline-groupdiff.json       # rc=0 (非 strict) (12)
+
+# ③ 改坏必红（本次新增：O-1 行级覆盖 + O-3 AUX 组）
+python tests/parity/m3/rng-trace-probe/rng_ledger_diff.py groups \
+  fixtures/syn-rowcoverage.tsv --side csharp --require-closed           # rc=1 ROW_COVERAGE DRIFT (13)
+python tests/parity/m3/rng-trace-probe/rng_ledger_diff.py groups \
+  E:/tmp/m3cs-f1/csharp-rng-stream-f1-20261012.tsv --side csharp --require-closed \
+  --groups-table ../evidence-m3-rng-consumer-groups-20261013/fixtures/consumer_groups.drop-removed.tsv
+                                                                        # rc=1 unclassified=410383 (14)
+python -                                                                 # rc=0 validate() 点名 revive/csharp (15)
+#   （脚本：load() 后删 revive/csharp 行 -> GroupsTable(bad).validate() 非空）
+
+# ④ 四门禁（隔离 target、--offline）
+cargo fmt --all -- --check                                              # rc=0 (20)
+cargo clippy --workspace --all-targets --offline -- -D warnings         # rc=0 (21)
+cargo test --workspace --offline                                        # 93 suites 847 passed 0 failed 20 ignored (22)
+cargo run -p msgcodegen --offline -- --check                            # rc=0 / 604 (23)
+
+# ⑤ 边界（零 crates/bins/src；零 .rs）
+#   git diff --name-only origin/master -- src sql MirClient                -> 空
+#   git diff --name-only origin/master -- mir2-rs/crates mir2-rs/bins     -> 空
+#   git diff --name-only origin/master -- 'mir2-rs/**/*.rs'                -> 空
+#   git diff --name-only origin/master -- mir2-rs/tests/parity/world       -> 空       (24)
+
+# ⑥ 证据包复核（仓库字节 = LF/git blob 口径）
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra \
+  mir2-rs/tests/parity/m3/evidence-m3-rng-consumer-groups-hardening-20261013
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck \
+  mir2-rs/tests/parity/m3/evidence-m3-rng-consumer-groups-hardening-20261013

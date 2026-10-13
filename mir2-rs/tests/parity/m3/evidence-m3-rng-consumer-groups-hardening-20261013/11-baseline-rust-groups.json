@@ -1,0 +1,15 @@
+{
+  "trace": "E:/tmp/m3cs-r2/rust-rng-stream-r1.tsv",
+  "side": "rust",
+  "rows_total": 160,
+  "rows_dropped": 0,
+  "kept": 160,
+  "include_attack": true,
+  "groups": {
+    "startup": 8,
+    "homemap": 6,
+    "attack": 146
+  },
+  "unclassified": {},
+  "table": "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\.claude\\worktrees\\m3bag\\mir2-rs\\tests\\parity\\m3\\rng-trace-probe\\consumer_groups.tsv"
+}

@@ -1,0 +1,4 @@
+baseline validate() = []
+revive/csharp removed -> validate() problems=1
+   AUX 组 revive 在 side=csharp 无 pattern（oracle 同族组必须齐备；整组被删要能被 validate 咬住）
+VERDICT RED(named)
