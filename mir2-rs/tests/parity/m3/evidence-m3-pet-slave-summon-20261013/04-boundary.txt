@@ -1,7 +1,8 @@
 M3⑨-实现 2（宝宝召唤）边界核对
 ==============================
-base = refs/heads/master d4d5b89c73e77ed995188c2668dc3eda9a926dc0
-patch     = 单个提交（本清单随它入库）
+base = refs/heads/master 9edfe4b722155a9eb172d5fab1c1641b3f567885
+head = 3863c475b（本片 e99f49a4 + merge origin/master 9edfe4b72；唯一冲突 bins/game-svr/src/lib.rs 按并集解：master `pub mod shop;` 与本片 `pub mod slave;` 并存）
+patch = refs/heads/master..HEAD（净 diff = 本片 5 个代码路径 + 本证据目录）
 
 [1] git diff --name-only master HEAD -- src sql MirClient
     （空 = oracle/表结构/客户端零改动）

@@ -89,4 +89,19 @@ RC3 HP 补半 `/3`（2 红）、RC4 回召改从头找（1 红）。还原后 `s
 ## 8. 残留物清单
 - `E:/tmp/openmir2-m3hp-target`（隔离 CARGO_TARGET_DIR，保留复用）。
 - `/tmp/slave.bak`、`/tmp/slave.good.rs`（红检备份，与还原后文件逐字节相同，可随时清）。
-- 本 worktree 干净；共享主检出未写/未编译；未起栈、未占端口；未 merge、未自签。
+- 本 worktree 干净；共享主检出未写/未编译；未起栈；未占端口；未 merge、未自签。
+
+## 9. 重交记录（merge `origin/master`，2026-10-13）
+
+合并检查点（`comment 6364fabb`）判本片与 master `7febf884` 在
+`mir2-rs/bins/game-svr/src/lib.rs` 真冲突（master 的 `pub mod shop;` 与本片 `pub mod slave;`
+同插入位）⇒ 作者按并集解（保留 `party`/`shop`/`slave`/`trade` 全量）后重交。
+
+- 新 base = `refs/heads/master 9edfe4b722155a9eb172d5fab1c1641b3f567885`；head = 合并提交
+  `3863c475b`（= `e99f49a4` + merge `origin/master` `9edfe4b72`）。净 diff 仍只有本片 5 个代码路径。
+- 门禁重跑（隔离 `CARGO_TARGET_DIR`，merge 树）：fmt rc=0 / clippy rc=0 /
+  `cargo test --offline --workspace --no-fail-fast` = **95 suites / 966 passed / 0 failed / 21 ignored** rc=0 /
+  msgcodegen 604 rc=0。
+- 本证据 `gates/10..14`、`04-boundary.txt` 已按 merge 树刷新；`SHA256SUMS.txt` 用
+  `verify_sha256sums.py write` 重记（仓库字节口径）。源码（`slave.rs` 等）与红检读数不变。
+- head 变化 ⇒ 需新的非作者 `review` 覆盖 `3863c475b`。
