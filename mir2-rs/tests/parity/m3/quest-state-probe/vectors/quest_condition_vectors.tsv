@@ -1,0 +1,9 @@
+# handler	flag	value	status	success
+ConditionCheckUnit	5	0	0	1
+ConditionCheckUnit	5	1	0	0
+ConditionCheckUnit	5	0	1	0
+ConditionCheckUnit	5	1	1	1
+ConditionOfCheckOpen	5	0	0	0
+ConditionOfCheckOpen	5	1	0	0
+ConditionOfCheckOpen	5	0	1	0
+ConditionOfCheckOpen	5	1	1	0

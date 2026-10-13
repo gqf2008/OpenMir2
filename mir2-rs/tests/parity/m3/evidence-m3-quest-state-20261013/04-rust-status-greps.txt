@@ -1,0 +1,28 @@
+== 改前状态（origin/master 5461c1b1）：conditions.rs 无 CHECKOPEN/CHECKUNIT 分支、dispatch 未列 ==
+(no match)
+
+== 本片工作树状态（新增分支与派发登记）==
+mir2-rs/crates/script/src/engine/conditions.rs:42:            "ConditionOfCheckOpen" => self.cond_check_open(info, result),
+mir2-rs/crates/script/src/engine/conditions.rs:43:            "ConditionCheckUnit" => self.cond_check_unit(info, result),
+mir2-rs/crates/script/src/engine/conditions.rs:392:    /// `ConditionOfCheckOpen`（`ConditionProcessingSys.cs:199`）：开图标记（`QuestUnitOpen`）比较。
+mir2-rs/crates/script/src/engine/conditions.rs:395:    /// `ConditionCheckUnit` 都写 `true`），且三个分支都不改回 `true` ⇒ **CHECKOPEN 恒假**。
+mir2-rs/crates/script/src/engine/conditions.rs:398:        // C#: success = false;  ← 与 ConditionCheckUnit 的 success = true 不对称
+mir2-rs/crates/script/src/engine/conditions.rs:412:    /// `ConditionCheckUnit`（`ConditionProcessingSys.cs:4104`）：任务单元（`QuestUnit`）比较。
+mir2-rs/crates/script/src/engine/dispatch.rs:100:    "ConditionOfCheckOpen",
+mir2-rs/crates/script/src/engine/dispatch.rs:101:    "ConditionCheckUnit",
+
+== 玩家态 trait 实现点（本片新增 getters 后）==
+mir2-rs/crates/script/src/engine/actions.rs:116:                    self.player.set_quest_unit_status(info.n_param1 + k, 0);
+mir2-rs/crates/script/src/engine/actions.rs:153:                self.player.set_quest_unit_open_status(n28, n2c);
+mir2-rs/crates/script/src/engine/actions.rs:158:                self.player.set_quest_unit_status(n28, n2c);
+mir2-rs/crates/script/src/engine/conditions.rs:402:        let n10 = self.player.quest_unit_open_status(n14 as i16);
+mir2-rs/crates/script/src/engine/conditions.rs:419:        let n10 = self.player.quest_unit_status(n14 as i16);
+mir2-rs/crates/script/src/engine/mod.rs:64:    fn quest_unit_status(&self, _flag: i16) -> u8 {
+mir2-rs/crates/script/src/engine/mod.rs:68:    fn quest_unit_open_status(&self, _flag: i16) -> u8 {
+mir2-rs/crates/script/src/engine/mod.rs:113:    fn set_quest_unit_status(&mut self, index: i32, value: i32);
+mir2-rs/crates/script/src/engine/mod.rs:117:    fn set_quest_unit_open_status(&mut self, index: i32, value: i32);
+mir2-rs/crates/script/tests/engine_tests.rs:252:    fn quest_unit_status(&self, flag: i16) -> u8 {
+mir2-rs/crates/script/tests/engine_tests.rs:256:    fn quest_unit_open_status(&self, flag: i16) -> u8 {
+mir2-rs/crates/script/tests/engine_tests.rs:454:    fn set_quest_unit_status(&mut self, index: i32, value: i32) {
+mir2-rs/crates/script/tests/engine_tests.rs:461:    fn set_quest_unit_open_status(&mut self, index: i32, value: i32) {
+mir2-rs/crates/script/tests/engine_tests.rs:2271:fn checkunit_matches_quest_unit_status() {

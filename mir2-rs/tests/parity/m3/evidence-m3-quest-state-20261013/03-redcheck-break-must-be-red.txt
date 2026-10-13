@@ -1,0 +1,43 @@
+== 命令 ==
+sed -i 's/128u8 >> (n14 as u32)/1u8 << (n14 as u32)/g' mir2-rs/crates/script/src/engine/quest_state.rs
+cargo test -p mir2-script --test quest_state_vectors    # 期望 RED
+
+== 改坏（位方向 128>>n → 1<<n）后实测 ==
+   Compiling mir2-script v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\crates\script)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.22s
+     Running tests\quest_state_vectors.rs (E:/tmp/m3cs-target\debug\deps\quest_state_vectors-e106019af2275108.exe)
+
+running 3 tests
+test redcheck_comparator_detects_mutated_vector ... ok
+test quest_bitmap_matches_oracle_byte_for_byte ... FAILED
+test redcheck_bit_direction ... ok
+
+failures:
+
+---- quest_bitmap_matches_oracle_byte_for_byte stdout ----
+
+thread 'quest_bitmap_matches_oracle_byte_for_byte' (29584) panicked at crates\script\tests\quest_state_vectors.rs:112:19:
+任务态位向量应逐 op 逐字节与 oracle 一致: "第 1 行 quest_flag set 128 字节不符：\n  oracle=8000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\n  rust  =0100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    quest_bitmap_matches_oracle_byte_for_byte
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-script --test quest_state_vectors`
+
+== 还原后（git-blob 口径与原文件同）实测 ==
+cargo test -p mir2-script --test quest_state_vectors    # 期望 GREEN
+   Compiling mir2-script v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\crates\script)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.09s
+     Running tests\quest_state_vectors.rs (E:/tmp/m3cs-target\debug\deps\quest_state_vectors-e106019af2275108.exe)
+
+running 3 tests
+test redcheck_comparator_detects_mutated_vector ... ok
+test redcheck_bit_direction ... ok
+test quest_bitmap_matches_oracle_byte_for_byte ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
