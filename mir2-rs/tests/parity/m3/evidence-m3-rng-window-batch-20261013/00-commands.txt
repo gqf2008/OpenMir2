@@ -1,0 +1,51 @@
+本片执行命令与工作目录（全部离线；未起栈、未占端口）
+==========================================================
+
+cwd = E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3bag （worktree）
+分支 = wip/m3bag-window-batch-premise   base = origin/master 56d397865
+
+# 0) 同步与基线
+git fetch origin
+git merge --ff-only origin/master
+
+# 1) 新增工具 + 场景声明 + README
+#    rng-trace-scene/check_window_batch.py（新）
+#    rng-trace-scene/rng_trace_scenario.json（增 window_batch 字段）
+#    rng-trace-scene/README.md（§4.1 + §6 命令）
+#    M3RNG同窗口批次前提机判报告-20261013.md（新）
+
+# 2) 工具自检 + 真件（cwd = mir2-rs/tests/parity/m3）
+python -I rng-trace-scene/check_window_batch.py selftest
+python -I rng-trace-scene/check_window_batch.py check \
+  --rng-scenario  rng-trace-scene/rng_trace_scenario.json \
+  --drop-scenario drop-exp/drop_exp_scenario.json
+
+# 3) 改坏必红（scratch 变异件在 E:/tmp/m3bag-wb-scratch/；五例各 rc=1 点名）
+#    换图 map='0137'->'0100' / 换种子 42->43 / 挪 x 17->18 / 挪 y 20->21 / 挪 dir 2->0
+#    （原始输出见 03-mutations-red.txt）
+
+# 4) PREREQ fail-closed（原始输出见 04-prereq-fail-closed.txt）
+#    缺 drop 件 / 坏 JSON / 缺 attacker.dir / 自比 / 传错件 canon / map 类型漂移
+
+# 5) 回归（新增 window_batch 字段后；cwd = mir2-rs/tests/parity/m3）
+python -I rng-trace-scene/rng_scene_gate.py scenario --scenario rng-trace-scene/rng_trace_scenario.json
+python -I rng-trace-probe/rng_ledger_diff.py selftest
+python -I rng-trace-scene/rng_scene_gate.py selftest
+
+# 6) 四门禁（cwd = mir2-rs；隔离 target；离线）
+CARGO_TARGET_DIR=E:/tmp/m3bag-target cargo fmt --all -- --check
+CARGO_TARGET_DIR=E:/tmp/m3bag-target cargo clippy --workspace --all-targets --offline -- -D warnings
+CARGO_TARGET_DIR=E:/tmp/m3bag-target cargo test --workspace --offline --no-fail-fast
+CARGO_TARGET_DIR=E:/tmp/m3bag-target cargo run -q -p msgcodegen --offline -- --check
+
+# 7) 边界（cwd = worktree 根）
+git diff --name-only 56d397865 HEAD
+git diff --name-only 56d397865 HEAD -- src sql MirClient mir2-rs/crates mir2-rs/bins
+git diff --name-only 56d397865 HEAD -- '*.rs'
+
+# 8) 证据复核（cwd = worktree 根；仓库 LF/git-blob 口径）
+python -I tools/evidence-hash/verify_sha256sums.py verify --check-extra mir2-rs/tests/parity/m3/evidence-m3-rng-window-batch-20261013
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-rng-window-batch-20261013
+python -I mir2-rs/tests/parity/m3/rng-trace-scene/check_evidence_counts.py check \
+  --report "mir2-rs/tests/parity/m3/M3RNG同窗口批次前提机判报告-20261013.md" \
+  --dir    mir2-rs/tests/parity/m3/evidence-m3-rng-window-batch-20261013

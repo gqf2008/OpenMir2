@@ -1,0 +1,15 @@
+SELFTEST ok real-pair-green (rc=0 want=0 needle='VERDICT GREEN')
+SELFTEST ok map-drift-red (rc=1 want=1 needle='MISMATCH map')
+SELFTEST ok seed-drift-red (rc=1 want=1 needle='MISMATCH seed')
+SELFTEST ok x-drift-red (rc=1 want=1 needle='MISMATCH x')
+SELFTEST ok y-drift-red (rc=1 want=1 needle='MISMATCH y')
+SELFTEST ok dir-drift-red (rc=1 want=1 needle='MISMATCH dir')
+SELFTEST ok missing-rng-prereq (rc=2 want=2 needle='PREREQ_MISSING')
+SELFTEST ok missing-drop-prereq (rc=2 want=2 needle='PREREQ_MISSING')
+SELFTEST ok bad-json-prereq (rc=2 want=2 needle='不可解析')
+SELFTEST ok missing-pose-field-prereq (rc=2 want=2 needle='缺字段 attacker.dir')
+SELFTEST ok self-compare-prereq (rc=2 want=2 needle='同一文件')
+SELFTEST ok canon-mismatch-prereq (rc=2 want=2 needle='canon')
+SELFTEST ok map-type-prereq (rc=2 want=2 needle='应为字符串')
+SELFTEST GREEN: check_window_batch selftest 13/13（真件绿 + 换图/换种子/挪 x/y/dir 必红且点名 + 缺件/坏 JSON/缺字段/自比/传错件 PREREQ fail-closed）
+selftest rc=0
