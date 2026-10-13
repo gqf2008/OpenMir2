@@ -316,3 +316,29 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
 - **零生产代码改动**（仅新增一个 `.py` 判据 + 两份文档）；本片**未起栈、未占端口**；真机两侧同框读数仍归 owner 窗口。
 - 证据：`81-mongen-dense-points-checker.txt`（工具 selftest 10/10 + 真 MonGen 读数 + 两条改坏必红）、
   `82-two-side-window-runbook.md`（两侧窗口照抄步骤 + C# 抓包拓扑风险与降级）、`83-gates.txt`、`84-boundary.txt`。
+
+## ⑭ 片⑭：③「C# 侧抓包拓扑」旧归因**订正** + 离线前置门（2026-10-14）—— `85`/`86`
+
+- **背景**：片⑬ 的手册 §4 把「C# 世界数据下不来」登记为**唯一未证环节**，沿用的是 C 线（2026-10-10）
+  「影子网关端口被挪 ⇒ GameSvr 按端口对齐」的归因。本片按**当前源码**逐路径复核，推翻该归因。
+- **订正（`85-csharp-capture-topology-rootcause.md`）**：`!servertable.txt` 只在**多机转移**路径被消费
+  （`GameShare.GetMultiServerAddrPort` → `AppService.cs:221` / `WorldServer.cs:1063-1074` `SM_RECONNECT`），
+  单机进世界不读；GameSvr 对网关按**槽位**寻址（`TCPNetChannel._gateSlotByConnection`/`_gameGates`），
+  世界侧 `GateIdx` = 网关认证串里自报的 `ServiceId`（`ClientSession.cs:1203`），**与端口无关**。
+  同症状的确定根因是 **S1 缺陷①**（槽位按 accept 序 + `CloseGate` 不释放槽位，
+  `evidence/S1/S1-报告.md` §1），修复 `607e9b773`（2026-10-10 17:01）**已进部署件**
+  （`!deployed-from.json` `git_head=628d8024`，2026-10-10 23:54，`merge-base --is-ancestor` = YES）。
+- **新工具 `check_csharp_capture_preflight.py`**（只读、零端口）：起 C# 栈前机判五条前置 —— 部署件含
+  `607e9b773`；真实与影子 `ServerWorkThread=1`（S1 §2.1 多网关错配边界；本部署本就为 1）；
+  真实 `GatePort1=7200`；`!servertable.txt` GameGate 端口 `=7200`；上游 `127.0.0.1:5000`；
+  另可 `--shadow-config` 检查影子配置。`--selftest` 12/12；**五条改坏必红**（GatePort1→7201、
+  `ServerWorkThread→3`、servertable 端口→7201、fix 提交换非祖先、影子多网关）后还原复绿。
+- **手册 `82` §4 重写**：加入 `§4.0 前置门`（命令 + 退出码）与 `§4.1 影子 RunGate 配置`
+  （只改 `GatePort1=7600`；不要引入第 2/3 个活动网关）；保留降级判据与「不要现造 oracle 配置」。
+- **仍未证（不静默）**：本片只做静态复核，**世界数据能否经代理下来仍须窗口实拍**；三处过期注释
+  （`capture_baseline.ps1:75-83`、`tools/README.md:213-225`、`C线-交付说明.md`「已知缺口」）**未改**
+  （非本卡写集）⇒ 登记待订正。
+- **零生产代码改动**（仅一个 `.py` 判据 + 两份文档）；本片**未起栈、未占端口**。
+- 证据：`85-csharp-capture-topology-rootcause.md`（源码锚点 + 部署件包含关系）、
+  `86-csharp-capture-preflight.txt`（selftest 12/12 + 真实 GREEN + 五条改坏必红 + 还原复绿）、
+  `87-gates.txt`、`88-boundary.txt`。

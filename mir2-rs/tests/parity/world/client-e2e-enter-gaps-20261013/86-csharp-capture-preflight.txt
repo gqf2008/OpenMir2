@@ -1,0 +1,111 @@
+86-csharp-capture-preflight.txt — C# 侧抓包拓扑离线前置门（check_csharp_capture_preflight.py）
+卡 openmir2-client-e2e-enter-gaps / m2-svr(openmir2-worker-11) / 2026-10-14 02:57:22 / 零端口零起栈
+
+== 0. selftest（合成件，12 例）==
+[PASS] selftest green: rc=0 (want 0)
+[PASS] selftest no-fix: rc=1 (want 1)
+[PASS] selftest multi-gate: rc=1 (want 1)
+[PASS] selftest multi-gate-allowed: rc=0 (want 0)
+[PASS] selftest wrong-port: rc=1 (want 1)
+[PASS] selftest wrong-upstream: rc=1 (want 1)
+[PASS] selftest fix-unknown-prereq: rc=2 (want 2)
+[PASS] selftest empty-routes-prereq: rc=2 (want 2)
+[PASS] selftest shadow-green: rc=0 (want 0)
+[PASS] selftest shadow-multi-gate: rc=1 (want 1)
+[PASS] selftest shadow-wrong-port: rc=1 (want 1)
+[PASS] selftest missing-workthread-prereq: rc=2 (want 2)
+SELFTEST OK (12/12)
+rc=0
+
+== 1. 真实部署（E:/MirServer）+ 影子 config（ServerWorkThread=1, GatePort1=7600）⇒ GREEN ==
+INFO deployed git_head=628d8024ab85 fix=607e9b77347f ancestor=True (ok)
+INFO mirserver=E:/MirServer proxy_port=7200 shadow_port=7600
+OK  部署件 git_head 含修复提交 607e9b773（S1 缺陷①）
+OK  真实 RunGate ServerWorkThread=1（ServiceId 0 ↔ GameSvr 槽位 0，无多网关错配）
+OK  真实 GatePort1=7200 == 代理端口
+OK  真实上游 127.0.0.1:5000 == GameSvr 监听
+OK  !servertable.txt GameGate 端口 [7200] == 代理端口
+OK  影子 RunGate ServerWorkThread=1
+OK  影子 GatePort1=7600 == 影子端口
+OK  影子上游 127.0.0.1:5000 == GameSvr 监听
+OK  C# 侧抓包拓扑前置全部满足
+RESULT: GREEN
+rc=0
+
+== 2. 改坏必红① 真实 GatePort1 7200->7201（其余不动）⇒ RED ==
+$ sed 's/^GatePort1=7200/GatePort1=7201/' RunGate/config.conf
+INFO deployed git_head=628d8024ab85 fix=607e9b77347f ancestor=True (ok)
+INFO mirserver=E:/tmp/m2svr-preflight-mut proxy_port=7200 shadow_port=7600
+OK  部署件 git_head 含修复提交 607e9b773（S1 缺陷①）
+OK  真实 RunGate ServerWorkThread=1（ServiceId 0 ↔ GameSvr 槽位 0，无多网关错配）
+RED 真实 GatePort1=7201 != 代理端口 7200（代理会绑不上/客户端连不上）
+OK  真实上游 127.0.0.1:5000 == GameSvr 监听
+OK  !servertable.txt GameGate 端口 [7200] == 代理端口
+RED 1 条前置不符
+RESULT: RED
+rc=1
+
+== 3. 改坏必红② 真实 ServerWorkThread 1->3 ⇒ RED ==
+$ sed 's/^ServerWorkThread=1/ServerWorkThread=3/' RunGate/config.conf
+INFO deployed git_head=628d8024ab85 fix=607e9b77347f ancestor=True (ok)
+INFO mirserver=E:/tmp/m2svr-preflight-mut proxy_port=7200 shadow_port=7600
+OK  部署件 git_head 含修复提交 607e9b773（S1 缺陷①）
+RED 真实 RunGate ServerWorkThread=3（>1）⇒ 多网关重连可错配槽位（S1 §2.1/§8）；抓包窗口须单活动网关
+OK  真实 GatePort1=7200 == 代理端口
+OK  真实上游 127.0.0.1:5000 == GameSvr 监听
+OK  !servertable.txt GameGate 端口 [7200] == 代理端口
+RED 1 条前置不符
+RESULT: RED
+rc=1
+
+== 4. 改坏必红③ !servertable 端口 7200->7201 ⇒ RED ==
+$ sed 's/7200/7201/' M2GameSvr/!servertable.txt
+INFO deployed git_head=628d8024ab85 fix=607e9b77347f ancestor=True (ok)
+INFO mirserver=E:/tmp/m2svr-preflight-mut proxy_port=7200 shadow_port=7600
+OK  部署件 git_head 含修复提交 607e9b773（S1 缺陷①）
+OK  真实 RunGate ServerWorkThread=1（ServiceId 0 ↔ GameSvr 槽位 0，无多网关错配）
+OK  真实 GatePort1=7200 == 代理端口
+OK  真实上游 127.0.0.1:5000 == GameSvr 监听
+RED !servertable.txt GameGate 端口 [7201] != {代理端口 7200}
+RED 1 条前置不符
+RESULT: RED
+rc=1
+
+== 5. 改坏必红④ fix 提交换成非祖先 75998a2e1 ⇒ RED ==
+INFO deployed git_head=628d8024ab85 fix=75998a2e1f3d ancestor=False (75998a2e1f3d 不是 628d8024ab85 的祖先)
+INFO mirserver=E:/tmp/m2svr-preflight-mut proxy_port=7200 shadow_port=7600
+RED 部署件 git_head 不含修复提交 607e9b773 ⇒ 历史黑屏会复现，先按 tools/oracle/deploy_gamesvr.ps1 重铺
+OK  真实 RunGate ServerWorkThread=1（ServiceId 0 ↔ GameSvr 槽位 0，无多网关错配）
+OK  真实 GatePort1=7200 == 代理端口
+OK  真实上游 127.0.0.1:5000 == GameSvr 监听
+OK  !servertable.txt GameGate 端口 [7200] == 代理端口
+RED 1 条前置不符
+RESULT: RED
+rc=1
+
+== 6. 改坏必红⑤ 影子 ServerWorkThread=3 ⇒ RED ==
+INFO deployed git_head=628d8024ab85 fix=607e9b77347f ancestor=True (ok)
+INFO mirserver=E:/tmp/m2svr-preflight-mut proxy_port=7200 shadow_port=7600
+OK  部署件 git_head 含修复提交 607e9b773（S1 缺陷①）
+OK  真实 RunGate ServerWorkThread=1（ServiceId 0 ↔ GameSvr 槽位 0，无多网关错配）
+OK  真实 GatePort1=7200 == 代理端口
+OK  真实上游 127.0.0.1:5000 == GameSvr 监听
+OK  !servertable.txt GameGate 端口 [7200] == 代理端口
+RED 影子 RunGate ServerWorkThread=3（>1）⇒ 影子也必须单活动网关
+OK  影子 GatePort1=7600 == 影子端口
+OK  影子上游 127.0.0.1:5000 == GameSvr 监听
+RED 1 条前置不符
+RESULT: RED
+rc=1
+
+== 7. 还原 → 再次 GREEN（证明上面每条红是变异引起的，不是工具恒红）==
+INFO deployed git_head=628d8024ab85 fix=607e9b77347f ancestor=True (ok)
+INFO mirserver=E:/tmp/m2svr-preflight-mut proxy_port=7200 shadow_port=7600
+OK  部署件 git_head 含修复提交 607e9b773（S1 缺陷①）
+OK  真实 RunGate ServerWorkThread=1（ServiceId 0 ↔ GameSvr 槽位 0，无多网关错配）
+OK  真实 GatePort1=7200 == 代理端口
+OK  真实上游 127.0.0.1:5000 == GameSvr 监听
+OK  !servertable.txt GameGate 端口 [7200] == 代理端口
+OK  C# 侧抓包拓扑前置全部满足
+RESULT: GREEN
+rc=0
