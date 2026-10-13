@@ -1,0 +1,39 @@
+M3⑦-实现 2 改前 / 改后 —— 卡 openmir2-m3-party-group-state
+base = origin/master d4d5b89c73e77ed995188c2668dc3eda9a926dc0
+
+== 改前（base 上的现状）==
+- crates/world：无任何组队结构（rg "GroupOwner|GroupMembers|allow_group" ⇒ 无命中）。
+- bins/game-svr：对 CM_GROUPMODE(1019)/CM_CREATEGROUP(1020)/CM_ADDGROUPMEMBER(1021)/
+  CM_DELGROUPMEMBER(1022) **no match**（派发层无分支）；无任何 SM_GROUP* 帧编码。
+- config.rs：无 GroupMembersMax/GroupMsgFColor/GroupMsgBColor。
+- 常量表（crates/protocol/messages.rs）两侧 35/35 已在（本片不改）。
+
+== 改后（本片）==
+文件                                              改动
+crates/world/src/entity.rs          + Entity.allow_group / allow_group_re_call / group_owner /
+                                      group_members（构造初值照 PlayObject.cs:902/224/583/1042）
+crates/world/src/party.rs（新）      组队状态机：party_group_mode / party_create_group /
+                                      party_add_group_member（严格大于 Max）/ party_del_group_member /
+                                      party_del_member / party_group_close / party_is_group_member /
+                                      party_run_tick + PartyEvent/PartyConfig/Emitter（立即/排队两桶）
+crates/world/src/lib.rs             + pub mod party; + re-export
+crates/world/tests/party_vectors.rs（新） 12 条边界向量（事件序 + 出队序 + 失败码 + tick 清理）
+bins/game-svr/src/smframe.rs        + 9 条组队帧编码器（659/660/661/662/663/664/665/666/667）
+bins/game-svr/src/party.rs（新）     事件 → (收件人 ActorId, GM_DATA body) 纯映射 + world_config 装配
+bins/game-svr/src/lib.rs            + pub mod party;
+bins/game-svr/src/config.rs         + [Setup] GroupMembersMax / GroupMsgFColor / GroupMsgBColor
+                                      （缺省 10 / 0xC4 / 0xFF，照 GameSvrConf.cs:1402/1544/1545）
+bins/game-svr/src/main.rs           + sim_loop 参数 party_cfg；4 条 CM_* 派发 handle_party_cmd；
+                                      world.tick() 后 world.party_run_tick()；
+                                      GateEvent::Closed 的 Disappear→DelMember（离线退组）
+tests/parity/world/party-group-state-20261013/**  本证据目录
+
+== 等价性要点 ==
+1. 严格大于：`GroupMembers.Count > GroupMembersMax`（Operate.cs:855）⇒ 组内实际可到 Max+1。
+2. 出队序：立即帧（源码调用序）先发；RM_* 帧入队后在同一 Run 按 (byte)wIdent 升序出队。
+   LeaveGroup 的 RM_GROUPMESSAGE(253) 与 RM_GROUPCANCEL(156) 同落退出者 ⇒ 线上序为
+   SM_GROUPCANCEL(666) 先、SM_SYSMESSAGE(100) 后（最易错的一处，已用整条事件向量钉死）。
+3. JoinGroup 两次（团长 + 新成员）各发一条「已加入小组」组队说词（CreateGroup 场景）。
+4. CancelGroup 的「你的小组被解散了.」用**团长自己**的 GroupOwner 找成员表；团长自己也已退组时
+   GroupOwner==0 ⇒ 无该文案（DelMember(团长自己) 路径）。
+5. SysMsg(Red) 走 RM_SYSMESSAGE（优先级 252，排队）⇒ 与「立即帧之后」的出队序一致。

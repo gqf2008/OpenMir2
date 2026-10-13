@@ -1,0 +1,68 @@
+# M3④-实现 C 余下支：改动摘要（改前 / 改后）
+
+本片是卡 `openmir2-m3-monster-ai-tick` 的第 4 片（前三片：① 世界实体 AI 核心 `eb508a97`、
+② 宿主接线 `363c0bd1`、③ 怪物帧面 `a547619a`，均已合入 master）。
+base = 交付时 `refs/heads/master`；写集 = `crates/world/**` + `bins/game-svr/**`。
+
+## 1. 恢复段（`BaseObject.Base.cs:39-66`）——全新
+- 改前：`monai` 模块头称恢复段「已由 World 的 expire_hitters/settle_deaths 建模」，
+  实际 `crates/world` 里**没有任何 HealthTick/SpellTick/AutoRecoveryTick 字段与回血逻辑**
+  ⇒ 怪物永不自愈（与 oracle 的 `ProcessMonsters → monster.Run() → base.Run()` 不等价）。
+- 改后：
+  - `Entity` 增 `health_tick: i32` / `spell_tick: i32` / `auto_recovery_tick: i64`
+    （`BaseObject.cs:287-306` 同名；ctor 初值见 `:445/448/449`）。
+  - `monai::base_object_run_monster`：`recovery=(now-auto)/20`；`HP<MaxHP && HealthTick>=HealthFillTime
+    ⇒ HP += MaxHP/75+1`（截断）；`MP<MaxMP && SpellTick>=SpellFillTime ⇒ MP += MaxMP/18+1`；到点归零。
+  - `World` 增 `health_fill_time`（缺省 300）/`spell_fill_time`（缺省 800）+ `set_recovery_fill_times`；
+    `bins/game-svr/src/main.rs` 用 `[Setup] HealthFillTime/SpellFillTime`（`enter_cfg`）灌入 + 一行可判读日志。
+
+## 2. 体力点段（`BaseObject.Base.cs:105-110`）——全新
+- 改前：无。
+- 改后：`HealthTick < -HealthFillTime && HP > 1 ⇒ HP -= 1; HealthTick += HealthFillTime`。
+  （普通怪 `HealthTick` 只增不减 ⇒ 对怪物不可达；照抄以保持同一份 `BaseObject.Run` 语义。）
+
+## 3. `TargetCret` 清理段（`BaseObject.Base.cs:111-118`）——全新
+- 改前：`BaseObject.Run` 的 30s/异图/15 格清理缺失（`SearchTarget` 只清**候选**，不是当前 `TargetCret`）。
+- 改后：`target_cret_cleanup`：`(now-TargetFocusTick)>30000 || TargetCret.Death || Ghost || 异图
+  || |Δx|>15 || |Δy|>15 ⇒ clear_target_creature`。
+  - **返工（reviewer-6 `M-1`）**：oracle 调的是 `ClearTargetCreat`（`BaseObject.Base.cs:568-585`），
+    它除 `DelTargetCreat()` 外还把目标从 `VisibleActors` 移除；原片只调 `del_target_creature`（= `DelTargetCreat`）。
+    补 `clear_target_creature`（首个 `v.target == target_id` 匹配项 `remove`，再清 `TargetCret/TargetX/Y`），
+    `target_cret_cleanup` 改调它。用例如 `target_cret_cleanup_also_removes_visible_actor`（RC-M1b）。
+    （`del_target_creature` 保持不动，供其它 oracle `DelTargetCreat` 路径使用。）
+
+## 4. `LastHiter` 30s / `ExpHitter` 6s 过期（`BaseObject.Base.cs:119-132`）——补全
+- 改前：`World::expire_hitters` 只做「命中者死亡/隐身」的结构清理（whitelist T-32 的 ② 项）。
+- 改后：并联两只 **sim 时钟**门（30s / 6s）；`Entity::set_last_hiter(hitter, now)` 按
+  `BaseObject.cs:1753-1770` 刷新 `last_hiter_tick`/`exp_hitter_tick`（`ExpHitter` 仅空时认领、同人续期）。
+  不消费 RNG。whitelist T-32 的 ② 项随之收窄。
+
+## 5. 怪物 MP 上限装载（`WorldServer.MonGen.cs:896-897`）——补全
+- 改前：`Entity` 无 `mp`/`max_mp`，怪物 `MaxMP` 未装载。
+- 改后：`Entity` 增 `mp: u16`/`max_mp: u16`；`WorldMonsterSink::spawn_monster` 按 `MonsterInfo.MP`
+  置 `mp=0; max_mp=mon.mp`（缺表 ⇒ 保持 0，与 `ApplyMonsterAbility` 的 `TryGetValue` 假分支一致）。
+
+## 6. 恢复段加法按 oracle 的 `int` 语义（返工·reviewer-6 `I-1`）
+- 改前：`hp + n` / `mp + n` 在 `u16` 上相加。oracle（`BaseObject.Base.cs:47-55/57-65`）里
+  `WAbil.HP`/`n18` 虽是 `ushort`，但 `+` 提升到 `int`，不会在 65536 处回绕。
+- 问题：`hp+n > 65535` ⇒ debug `attempt to add with overflow` panic、release 回绕为 0（HP 归 0
+  ⇒ 被 `settle_deaths` 判死，相当于「一次恢复把 boss 秒杀」）。可达性：`MonsterPowerRate`（`[Setup]`
+  配置）> 10 时载入 `max_hp` 可 > 65000（reviewer-6 复算 705 行 monsters：MPR=18/26/27/36/54/65…
+  共 351 个 `(MPR,怪)` 命中溢出带）。
+- 改后：HP/MP 两支都在 `i32` 上算 `sum = i32::from(hp) + n`，`sum < i32::from(max_hp)` 才取
+  `sum as u16`（此分支下 `sum < max_hp <= 65535`，强转安全），否则取 `max_hp`。
+- 判据：`base_recovery_high_max_hp_does_not_overflow_u16`（`max_hp=max_mp=65535`、`hp=mp=65500`
+  ⇒ 断言两边都截断到 65535 且不 panic）；改坏必红 RC-I1（退回 `hp + n` ⇒ panic @`monai.rs:617`）。
+
+## 未建模（登记，见 `01-oracle-anchors.txt` 与 `monai.rs` 模块头）
+`SuperMan`（`:35-38`）、`HP==0⇒Die`（`:70-73`，**非等价登记**：oracle 在恢复段之后才判 `HP==0`，
+本片由 `settle_deaths` 在同一 tick 的死亡结算里先处理 `hp==0` ⇒ 「0 HP 且恢复到点的怪先回血而存活」
+这段罕见次序不等价，见 `01` 的 O-1）、死亡分支 `MakeGhost`（`:86-101`，需 `MonGen.ZenTime`/
+`Config.MakeGhostTime`）、`Master`/`SlaveList`（`:133-215`，归 ⑨-3）、`ShowHp`/`VerifyTick`（`:217-256`）。
+其余在「普通怪、无 master、无任务」的 oracle 路径上不改变可观测行为。
+
+## 行为边界（不回归）
+- 恢复/`TargetCret` 清理只在 `World::ai_enabled`（生产宿主 `enable_monster_ai`）时经 `monster_ai_tick` 生效
+  ⇒ 合成 golden 场景（`ai_enabled=false`）**逐字节不变**。
+- `expire_hitters` 的墙钟门用 `clock_ms`（确定性 sim 时钟）；既有 parity 场景 tick 数少（<6s）⇒ golden 不变。
+- 本片零 `src/**`/`sql/**`/`MirClient` 改动。

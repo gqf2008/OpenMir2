@@ -1,0 +1,17 @@
+# command: sed -n '226,236p' src/GameSrv/Npc/CastleOfficial.cs
+# command: grep -n sHIREGUARDNOW src/Modules/SystemModule/Const/ScriptFlagConst.cs
+--- CastleOfficial.cs:226-236 ---
+                        }
+                        else if (HUtil32.CompareLStr(sLabel, ScriptFlagConst.sHIREGUARDNOW))
+                        {
+                            s20 = sLabel.Substring(ScriptFlagConst.sHIREGUARDNOW.Length, sLabel.Length);
+                            HireGuard(s20, PlayObject);
+                            PlayObject.SendMsg(this, Messages.RM_MENU_OK, 0, ActorId, 0, 0);
+                        }
+                        else if (HUtil32.CompareLStr(sLabel, ScriptFlagConst.sHIREARCHERNOW))
+                        {
+                            s20 = sLabel.Substring(ScriptFlagConst.sHIREARCHERNOW.Length, sLabel.Length);
+                            HireArcher(s20, PlayObject);
+--- ScriptFlagConst.cs ---
+81:        public const string sHIREARCHERNOW = "@hirearchernow";
+82:        public const string sHIREGUARDNOW = "@hireguardnow";

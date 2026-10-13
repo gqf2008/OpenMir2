@@ -1,0 +1,32 @@
+base = 9edfe4b72（master；本片最终 head oid 见线程 patch 条目）
+
+$ git diff --name-status 9edfe4b72
+A  mir2-rs/tests/parity/m3/M3RNG场景folded声明同口径机判报告-20261013.md
+A  mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenariofold/00-commands.txt
+A  mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenariofold/01-selftest-nostack.txt
+A  mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenariofold/02-selftest-scene-gate.txt
+A  mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenariofold/03-scenario-mode-green.txt
+A  mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenariofold/04-mutation-fold-drift-red.txt
+A  mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenariofold/05-mutation-groups-unknown-red.txt
+A  mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenariofold/06-mutation-fold-missing-red.txt
+A  mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenariofold/07-selftest-rng-ledger-diff.txt
+A  mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenariofold/08-selftest-attack-rng-ledger.txt
+A  mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenariofold/09-gates-four.txt
+A  mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenariofold/10-boundary.txt
+A  mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenariofold/README.md
+A  mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenariofold/SHA256SUMS.txt
+M  mir2-rs/tests/parity/m3/rng-trace-scene/README.md
+M  mir2-rs/tests/parity/m3/rng-trace-scene/rng_scene_gate.py
+M  mir2-rs/tests/parity/m3/rng-trace-scene/run_rng_trace_pair.ps1
+
+$ git diff --name-only 9edfe4b72 -- src sql MirClient mir2-rs/crates mir2-rs/bins
+(空 ⇒ 零 .rs 生产码 / 零 crates / 零 bins / 零 src / 零 sql / 零 MirClient)
+
+$ git diff --stat 9edfe4b72
+ mir2-rs/tests/parity/m3/rng-trace-scene/README.md         |  18 +-
+ mir2-rs/tests/parity/m3/rng-trace-scene/rng_scene_gate.py | 155 ++++++++++++++++-
+ mir2-rs/tests/parity/m3/rng-trace-scene/run_rng_trace_pair.ps1 | 33 ++++-
+ + 新增证据包 12 件 + 报告 1 件
+
+# 备注：本 worktree 另有 8 个他线残留的未跟踪目录 mir2-rs/tests/parity/m3/sessions/csharp-20261012-2323..2346
+# （非本片改动、未纳入本 patch、未清）；除它们外 git status 干净。

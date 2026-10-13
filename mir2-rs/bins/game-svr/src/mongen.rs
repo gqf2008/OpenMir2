@@ -748,6 +748,13 @@ impl MonsterSink for WorldMonsterSink<'_> {
         // `ApplyMonsterAbility` 不做任何事（`WorldServer.MonGen.cs:880-882`），`cert` 仍被构造；
         // 本仓缺表 ⇒ 无 feature 输入，保持不登记（与玩家的“无展示表 ⇒ 跳过”同口径）。
         if let Some(mon) = info {
+            // `ApplyMonsterAbility`（`WorldServer.MonGen.cs:896-897`）：`Abil.MP = 0`、
+            // `Abil.MaxMP = monster.MP`。HP 已在生成路径写入，这里补齐 MP 上限
+            // （缺表时 oracle 不动能力⇒保持 0）。
+            if let Some(e) = self.world.entities.get_mut(id) {
+                e.mp = 0;
+                e.max_mp = mon.mp;
+            }
             self.displays
                 .set(id, downlink::monster_display(req.dir, mon));
         }

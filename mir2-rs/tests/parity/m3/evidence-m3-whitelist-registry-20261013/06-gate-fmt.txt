@@ -1,0 +1,2 @@
+# command (cwd=mir2-rs): cargo fmt --all -- --check
+rc=0

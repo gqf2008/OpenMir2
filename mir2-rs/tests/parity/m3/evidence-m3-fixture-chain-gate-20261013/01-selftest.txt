@@ -1,0 +1,22 @@
+  SELFTEST ok  classify_runner(0) ⇒ RUN-OK
+  SELFTEST ok  classify_runner(2) ⇒ PREREQ
+  SELFTEST ok  classify_runner(1) ⇒ RED
+  SELFTEST ok  classify_runner(127) ⇒ RED
+  SELFTEST ok  A READY + RUN-OK
+  SELFTEST ok  B PENDING（runner SKIP）
+  SELFTEST ok  C READY + PREREQ（默认不红）
+  SELFTEST ok  D runner rc=1 ⇒ RED
+  SELFTEST ok  E comparator rc=1 ⇒ RED
+  SELFTEST ok  默认 RED 仅 2 条（D runner + E comparator）
+  SELFTEST ok  默认 PENDING / PREREQ 不判红
+  SELFTEST ok  require-all 把 PENDING 判红
+  SELFTEST ok  require-all 把 runner PREREQ 判红
+  SELFTEST ok  共享管线 rc=3 ⇒ 判红
+  SELFTEST ok  共享管线缺件默认不红
+  SELFTEST ok  共享管线缺件 require-all 判红
+  SELFTEST ok  删 runner ⇒ INCONSISTENT（改坏必红）
+  SELFTEST ok  MATRIX runner 命名合规
+  SELFTEST ok  MATRIX comparator 命名合规
+  SELFTEST ok  共享管线登记项 ≥2
+  SELFTEST ok  共享管线件在本仓库树内可解析（REPO_ROOT 口径）
+SELFTEST GREEN: fixture_chain_gate selftest 21/21

@@ -1,0 +1,15 @@
+# RC-3: sm_groupmembers 尾去掉 edcode::encode（bins/game-svr/src/smframe.rs）
+# 期望：party_cm_dispatch_emits_oracle_frames_on_both_connections 必红（rc=101）
+assertion `left == right` failed: SM_GROUPMEMBERS 尾必须是 EncodeString("L/T/")
+  left: [236, 99, 116]
+ right: [76, 47, 84, 47]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::party_cm_dispatch_emits_oracle_frames_on_both_connections
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 177 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`
+rc=101

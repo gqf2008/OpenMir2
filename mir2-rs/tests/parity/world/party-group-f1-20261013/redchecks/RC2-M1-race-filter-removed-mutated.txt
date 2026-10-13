@@ -1,0 +1,38 @@
+# RC-2（M-1 牙齿）：去掉 party_play_object_by_name 的 race==Play 过滤（回到旧 head 的「扫全部实体」口径）
+mutation: crates/world/src/party.rs  .find(|e| e.race == ACTOR_RACE_PLAY && e.name == name)  ->  .find(|e| e.name == name)
+
+$ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test -p mir2-world --test party_vectors --offline -- play_object_by_name_ignores_non_player_entities
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\world)
+warning: unused import: `ACTOR_RACE_PLAY`
+  --> crates\world\src\party.rs:54:29
+   |
+54 | use crate::entity::{Entity, ACTOR_RACE_PLAY};
+   |                             ^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `mir2-world` (lib) generated 1 warning (run `cargo fix --lib -p mir2-world` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.28s
+     Running tests\party_vectors.rs (E:/tmp/m2svr-target\debug\deps\party_vectors-4e85706017691498.exe)
+
+running 1 test
+test play_object_by_name_ignores_non_player_entities ... FAILED
+
+failures:
+
+---- play_object_by_name_ignores_non_player_entities stdout ----
+
+thread 'play_object_by_name_ignores_non_player_entities' (25900) panicked at crates\world\tests\party_vectors.rs:511:5:
+assertion `left == right` failed
+  left: Some(50)
+ right: None
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    play_object_by_name_ignores_non_player_entities
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-world --test party_vectors`
+rc=101

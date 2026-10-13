@@ -1,0 +1,29 @@
+$ cd mir2-rs && cargo test -p mir2-world --lib --offline merchant_add_item_to_goods_list
+# --- mutated: crates/world/src/merchant.rs
+#     Some(group) => group.insert(0, item),
+#  -> Some(group) => group.push(item),
+
+
+running 1 test
+test merchant::tests::merchant_add_item_to_goods_list_inserts_front ... FAILED
+
+failures:
+
+---- merchant::tests::merchant_add_item_to_goods_list_inserts_front stdout ----
+
+thread 'merchant::tests::merchant_add_item_to_goods_list_inserts_front' (27632) panicked at crates\world\src\merchant.rs:1233:9:
+assertion `left == right` failed: Insert(0) ⇒ 后加的在前
+  left: 10
+ right: 11
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    merchant::tests::merchant_add_item_to_goods_list_inserts_front
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 68 filtered out; finished in 0.00s
+
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\world)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.02s
+     Running unittests src\lib.rs (E:/tmp/m2svr-target\debug\deps\mir2_world-b447abe76269f045.exe)
+error: test failed, to rerun pass `-p mir2-world --lib`

@@ -52,8 +52,9 @@
 子命令：
   assemble <markers.jsonl> --out <raw.jsonl>
       把 BotSrv 的 `M3SHOPSEQ {json}` 事件流（phase=arm/send/frame/end/done）合并成上面的记录。
-  diff <csharp_raw.jsonl> <rust_raw.jsonl>
-      逐 k 比较两侧记录。
+  diff <csharp_raw.jsonl> <rust_raw.jsonl> [--scenario <scenario.json>]
+      逐 k 比较两侧记录。`--scenario` 给定时，标量帧参数表由场景的
+      `frame_scalar_fields` 定义（单一真源；缺键/非法 ⇒ PREREQ）。
   selftest
       fail-closed + 改坏必红（离线）。
 """
@@ -92,9 +93,9 @@ FRAME_FIELDS = ("sm", "a", "b", "c", "d")
 # 请求参数里**参与判据**的键（其余键如 make_index/index 是动态 id，不作判据）。
 REQ_COMPARE_KEYS = ("item", "n", "label")
 
-# 场景声明的**标量帧参数**：只有这些 (sm, 参数名) 参与判据。
+# 内建的**标量帧参数**表（无 `--scenario` 时的回退值；runner 总是传 `--scenario` ⇒ 以场景为准）。
 # 依据盘点报告 §1.H 的 RM_*→SM_* 映射（参数语义为价格/金币/耐久/失败码，跨运行稳定）；
-# 动态 id（如 merchant actor / make index）一律不列。窗口期可按真机实测补/删（改场景即改判据）。
+# 动态 id（如 merchant actor / make index）一律不列。窗口期按真机实测补/删应改**场景**（`--scenario`）。
 DEFAULT_FRAME_SCALAR_FIELDS = {
     647: ["a"],          # SM_SENDBUYPRICE  : a = 卖价
     649: ["a"],          # SM_USERSELLITEM_FAIL
@@ -111,6 +112,44 @@ class Prereq(Exception):
 
 def _is_int(v):
     return isinstance(v, int) and not isinstance(v, bool)
+
+
+# 场景声明的判据键（单一真源；`--scenario` 给定后必须存在，否则 PREREQ）。
+SCENARIO_SCALAR_KEY = "frame_scalar_fields"
+
+
+def load_scenario_frame_scalars(path):
+    """从 `*_scenario.json` 读**声明的标量帧参数表**（单一真源，fail-closed）。
+
+    reviewer-6 的 M-3：标量表曾在 `npc_shop_scenario.json` 与
+    `DEFAULT_FRAME_SCALAR_FIELDS` 各存一份，runner 又不透传 ⇒「改场景即改判据」是**假**的。
+    这里让比较器显式读场景，缺文件 / 非 JSON / 缺键 / 类型错一律 Prereq（rc=2），绝不静默退回内建表。
+    """
+    if not os.path.isfile(path):
+        raise Prereq("缺场景文件: %s" % path)
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except json.JSONDecodeError as exc:
+        raise Prereq("场景非法 JSON %s: %s" % (path, exc))
+    if not isinstance(data, dict):
+        raise Prereq("场景应为对象: %s" % path)
+    if SCENARIO_SCALAR_KEY not in data:
+        raise Prereq("场景缺 `%s`（判据真源必须显式声明）: %s" % (SCENARIO_SCALAR_KEY, path))
+    raw_fs = data[SCENARIO_SCALAR_KEY]
+    if not isinstance(raw_fs, dict):
+        raise Prereq("场景 `%s` 应为对象: %s" % (SCENARIO_SCALAR_KEY, path))
+    scalars = {}
+    for key, val in raw_fs.items():
+        try:
+            sm = int(key)
+        except (TypeError, ValueError):
+            raise Prereq("场景 `%s` 键非整数: %r (%s)" % (SCENARIO_SCALAR_KEY, key, path))
+        if not isinstance(val, list) or not all(isinstance(x, str) for x in val):
+            raise Prereq("场景 `%s[%s]` 应为字符串数组: %r (%s)"
+                         % (SCENARIO_SCALAR_KEY, key, val, path))
+        scalars[sm] = list(val)
+    return scalars
 
 
 def load_raw(path):
@@ -405,9 +444,21 @@ def render(diffs, stats, cs_path, rs_path):
 
 def cmd_diff(args):
     scalars = DEFAULT_FRAME_SCALAR_FIELDS
-    if args.frame_scalars:
+    frame_scalars_arg = getattr(args, "frame_scalars", "")
+    scenario = getattr(args, "scenario", None)
+    if scenario:
+        # 判据真源只能有一个：场景 vs 显式 JSON 同时给 ⇒ fail-closed（不猜）。
+        if frame_scalars_arg:
+            sys.stdout.write("RED: PREREQ_RED --scenario 与 --frame-scalars 互斥（判据真源只能一个）\n")
+            return 2
         try:
-            raw = json.loads(args.frame_scalars)
+            scalars = load_scenario_frame_scalars(scenario)
+        except Prereq as exc:
+            sys.stdout.write("RED: PREREQ_RED %s\n" % exc)
+            return 2
+    elif frame_scalars_arg:
+        try:
+            raw = json.loads(frame_scalars_arg)
             scalars = {int(k): list(v) for k, v in raw.items()}
         except (ValueError, TypeError) as exc:
             sys.stdout.write("RED: PREREQ_RED --frame-scalars 非法: %s\n" % exc)
@@ -480,7 +531,12 @@ def _base_records():
 
 
 def _run_diff(cs_path, rs_path):
-    return cmd_diff(argparse.Namespace(csharp=cs_path, rust=rs_path, frame_scalars=None))
+    return cmd_diff(argparse.Namespace(csharp=cs_path, rust=rs_path, frame_scalars=None, scenario=None))
+
+
+def _run_diff_scenario(cs_path, rs_path, scenario_path):
+    return cmd_diff(argparse.Namespace(csharp=cs_path, rust=rs_path, frame_scalars=None,
+                                       scenario=scenario_path))
 
 
 def cmd_selftest(args):
@@ -587,6 +643,49 @@ def cmd_selftest(args):
         rec2 = _base_records(); rec2[0]["gold_after"] = 3000000000 + (1 << 32)
         _write_jsonl(rs_big, rec2)
         case("i32-truncation-red", 1, lambda: _run_diff(cs_big, rs_big))
+
+        # ---- 场景判据真源（reviewer-6 M-3：改场景即改判据）----
+        # rs_scalar2 只把 k=1 的 651.a 从 3 改成 2（其余逐字节同 cs0）。
+        p_scalar2 = os.path.join(tmp, "rs_scalar2.jsonl")
+        rec = _base_records(); rec[1]["frames"][0]["a"] = 2
+        _write_jsonl(p_scalar2, rec)
+
+        scen_full = os.path.join(tmp, "scen_full.json")
+        with open(scen_full, "w", encoding="utf-8", newline="\n") as fh:
+            json.dump({"frame_scalar_fields": {str(k): list(v)
+                                                for k, v in DEFAULT_FRAME_SCALAR_FIELDS.items()}},
+                      fh, ensure_ascii=False)
+        # 场景声明 651.a ⇒ 该差异是判据 ⇒ 红。
+        case("scenario-declared-scalar-red", 1,
+             lambda: _run_diff_scenario(cs0, p_scalar2, scen_full))
+
+        # 场景**不声明** 651.a ⇒ 该差异不再参与判据 ⇒ 绿（证明场景真的改判据）。
+        scen_narrow = os.path.join(tmp, "scen_narrow.json")
+        with open(scen_narrow, "w", encoding="utf-8", newline="\n") as fh:
+            json.dump({"frame_scalar_fields": {"647": ["a"], "649": ["a"]}},
+                      fh, ensure_ascii=False)
+        case("scenario-authority-green", 0,
+             lambda: _run_diff_scenario(cs0, p_scalar2, scen_narrow))
+
+        # PREREQ：场景缺 frame_scalar_fields（不得静默退回内建表）
+        scen_nokey = os.path.join(tmp, "scen_nokey.json")
+        with open(scen_nokey, "w", encoding="utf-8", newline="\n") as fh:
+            json.dump({"cases": {}}, fh, ensure_ascii=False)
+        case("scenario-missing-key-prereq", 2,
+             lambda: _run_diff_scenario(cs0, rs0, scen_nokey))
+
+        # PREREQ：场景非法 JSON
+        scen_bad = os.path.join(tmp, "scen_bad.json")
+        with open(scen_bad, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write("{not json\n")
+        case("scenario-bad-json-prereq", 2,
+             lambda: _run_diff_scenario(cs0, rs0, scen_bad))
+
+        # PREREQ：场景与 --frame-scalars 互斥
+        case("scenario-mutex-prereq", 2,
+             lambda: cmd_diff(argparse.Namespace(csharp=cs0, rust=rs0,
+                                                 frame_scalars='{"651":["a"]}',
+                                                 scenario=scen_full)))
 
         # PREREQ：缺文件
         case("missing-file-prereq", 2,
@@ -716,7 +815,10 @@ def main(argv=None):
     d.add_argument("csharp")
     d.add_argument("rust")
     d.add_argument("--frame-scalars", default="",
-                   help='可选 JSON: {"647":["a"],...} 覆盖默认标量帧参数表')
+                   help='可选 JSON: {"647":["a"],...} 覆盖默认标量帧参数表'
+                        '（与 --scenario 互斥）')
+    d.add_argument("--scenario", default="",
+                   help="场景 JSON；其 `frame_scalar_fields` 为判据单一真源（缺键 ⇒ PREREQ）")
     d.set_defaults(func=cmd_diff)
     s = sub.add_parser("selftest", help="fail-closed + 改坏必红自检")
     s.set_defaults(func=cmd_selftest)

@@ -1,0 +1,75 @@
+M3⑦-实现 2（组队会话状态机）oracle 锚点 —— 行号均在本仓库 src/ 实测（2026-10-13）
+卡：openmir2-m3-party-group-state（issue f64af246）
+base = origin/master d4d5b89c
+
+== A. 收包派发（PlayObject.Message.cs）==
+CM_GROUPMODE(1019)   :914-929    nParam2==0 ⇒ ClientGroupClose()；否则 AllowGroup=true；
+                                 随后按 AllowGroup 发 SM_GROUPMODECHANGED(659)，param=1/0
+CM_CREATEGROUP(1020) :930-931    ClientCreateGroup(Msg.Trim())
+CM_ADDGROUPMEMBER    :932-933    ClientAddGroupMember(Msg.Trim())
+CM_DELGROUPMEMBER    :934-935    ClientDelGroupMember(Msg.Trim())
+（12B 头映射：Recog=nParam1 / Param=nParam2 / Tag=nParam3，见 Messages.MakeMessage :846-857）
+
+== B. 客户端操作（PlayObject.Operate.cs）==
+ClientGroupClose     :787-808    GroupOwner==0 ⇒ AllowGroup=false 返回；
+                                 非团长 ⇒ 团长.DelMember(this) + AllowGroup=false；
+                                 团长自己 ⇒ SysMsg("如果你想退出，使用编组功能（删除按钮）", Red, Hint)
+                                 [FunctionNPC.GotoLable("@GroupClose") :806]
+ClientCreateGroup    :810-845    守卫 -1/-2/-3/-4；成功：Clear → Add(this) → Add(对方) →
+                                 JoinGroup(this) → 对方.JoinGroup(this) → AllowGroup=true →
+                                 SM_CREATEGROUP_OK(660) → SendGroupMembers() [GotoLable "@GroupCreate" :843]
+ClientAddGroupMember :847-883    -1(非团长) / -5(Count > Max 严格大于 :855) / -2 / -3 / -4；
+                                 成功：Add → 对方.JoinGroup(this) → SM_GROUPADDMEM_OK(662) →
+                                 SendGroupMembers() [GotoLable "@GroupAddMember" :881]
+ClientDelGroupMember :885-909    -1 / -2 / -3；成功：DelMember(对方) → SM_GROUPDELMEM_OK(663, name)
+                                 [GotoLable "@GroupDelMember" :907]
+
+== C. 成员移除 / 解散 / 退组（PlayObject.cs + PlayObject.Base.cs）==
+DelMember            PlayObject.cs:5126-5156
+                     if (GroupOwner != baseObject.ActorId) { 找到该成员 LeaveGroup()+RemoveAt }
+                     else { 从尾到头逐成员 LeaveGroup()+RemoveAt }
+                     if (!CancelGroup()) SendDefMessage(SM_GROUPCANCEL(666)) else SendGroupMembers()
+IsGroupMember        PlayObject.cs:5158-5175  GroupOwner==0⇒false；团长成员表逐个引用比对
+LeaveGroup           PlayObject.cs:5177-5183  SendGroupText("{0} 已经退出了本组.") → GroupOwner=0 →
+                                              SendMsg(RM_GROUPCANCEL(10140))
+CancelGroup          PlayObject.Base.cs:1339-1352  Count<=1 ⇒ SendGroupText("你的小组被解散了.")
+                                              + Clear() + GroupOwner=0 + return false
+SendGroupMembers     PlayObject.Base.cs:1353-1369  拼 ChrName+'/' ⇒ 逐成员 SendDefMessage(SM_GROUPMEMBERS(667))
+JoinGroup            PlayObject.Base.cs:2418-2422  GroupOwner=团长.ActorId；
+                                              SendGroupText(Format(MessageSettings.JoinGroup, 本名))
+SendGroupText        PlayObject.cs:5185-5197  sMsg=GroupMsgPreFix+sMsg；GroupOwner!=0 ⇒
+                                              逐成员 SendMsg(this, RM_GROUPMESSAGE(11005), 0, FColor, BColor, 0, sMsg)
+
+== D. 每 tick 清理（PlayObject.Run()）==
+PlayObject.Message.cs:704-719  GroupOwner!=0 且团长 Death||Ghost ⇒ 本侧 GroupOwner=0；
+                               GroupOwner==ActorId ⇒ 从尾到头移除 Death||Ghost 成员
+（PlayObject.Run() :19 起；base.Run() 在 :765 —— 组队段在消息处理与恢复段之前）
+
+== E. 死亡 / 掉线退组 ==
+OnDie（Death 分支）  PlayObject.cs:1974-1978      groupOwnerPlay.DelMember(this)
+Disappear            PlayObject.Message.cs:2138-2142  groupOwnerPlay.DelMember(this)
+
+== F. 帧常量与出队映射（src/OpenMir2/Messages.cs + PlayObject.Message.cs）==
+SM_GROUPMODECHANGED 659 / SM_CREATEGROUP_OK 660 / FAIL 661 / SM_GROUPADDMEM_OK 662 /
+SM_GROUPDELMEM_OK 663 / SM_GROUPADDMEM_FAIL 664 / SM_GROUPDELMEM_FAIL 665 /
+SM_GROUPCANCEL 666 / SM_GROUPMEMBERS 667 / RM_GROUPCANCEL 10140 / RM_GROUPMESSAGE 11005 /
+RM_SYSMESSAGE 11004 / SM_SYSMESSAGE 100（Messages.cs:215/321-329/576/600/646-647）
+SendDefMessage(ident,recog,param,tag,series[,sMsg])  PlayObject.Socket.cs:17-41
+  ⇒ 12B 头 +（sMsg 非空时）尾 = EDCode.EncodeString(sMsg)
+BaseObject.Run()   BaseObject.Base.cs:25-31  while(GetMessage) Operate  ⇒ 同 Run 内按 (byte)wIdent 升序出队
+MsgQueue.Enqueue(sendMessage,(byte)wIdent)  BaseObject.Message.cs:94
+出队映射：RM_GROUPMESSAGE ⇒ SM_SYSMESSAGE(ActorId, MakeWord(f,b), 0, 1)  PlayObject.Message.cs:1717-1718
+          RM_GROUPCANCEL   ⇒ SM_GROUPCANCEL(nParam1=0)                   PlayObject.Message.cs:1848-1850
+          RM_SYSMESSAGE    ⇒ SM_SYSMESSAGE(ActorId, MakeWord(f,b), 0, 1) PlayObject.Message.cs:1715-1716
+优先级字节：RM_GROUPCANCEL=156 < RM_SYSMESSAGE=252 < RM_GROUPMESSAGE=253
+
+== G. 配置 ==
+GroupMembersMax   GameSvrConf.cs:238/1402（10）  ServerConf.cs:225  部署 Server.conf:292=10
+GroupMsgFColor    GameSvrConf.cs:559/1544（0xC4）ServerConf.cs:337  部署 Server.conf:608=196
+GroupMsgBColor    GameSvrConf.cs:560/1545（0xFF）ServerConf.cs:338  部署 Server.conf:609=255
+GroupMsgPreFix    GameSvrConf.cs:1058/1844（〖组队〗）StringConf.cs:39  部署未覆盖 ⇒ 缺省
+JoinGroupMsg      MessageSettings.cs:215（{0} 已加入小组.）StringConf.cs:223  部署未覆盖 ⇒ 缺省
+RedMsgFColor/BColor GameSvrConf.cs:555-556/1540-1541（0xFF/0x38）ServerConf.cs:333-334
+                    SysMsg(.., Red, ..) ⇒ SendMsg(RM_SYSMESSAGE, 0, RedF, RedB, 0, sMsg)  BaseObject.cs:1678-1682
+AllowGroup/AllowGroupReCall/GroupOwner/GroupMembers  PlayObject.cs:106/224/583/587
+  构造初值：AllowGroup=false :902；AllowGroupReCall bool 缺省 false；GroupOwner=0；GroupMembers=new List :1042

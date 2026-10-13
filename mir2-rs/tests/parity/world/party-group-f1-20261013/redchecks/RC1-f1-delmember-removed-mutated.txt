@@ -1,0 +1,67 @@
+# RC-1（F-1 牙齿）：把 settle_deaths 里 oracle Die()->DelMember 的调用守卫改为 false（等价于「删掉本次 DelMember」）
+mutation: crates/world/src/world.rs  if group_owner != 0  ->  if false && group_owner != 0
+
+$ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test -p mir2-world --test party_vectors --offline -- die_member_triggers die_leader_disbands
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\world)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.73s
+     Running tests\party_vectors.rs (E:/tmp/m2svr-target\debug\deps\party_vectors-4e85706017691498.exe)
+
+running 2 tests
+test die_leader_disbands_group ... FAILED
+test die_member_triggers_oracle_del_member_and_group_survives ... FAILED
+
+failures:
+
+---- die_leader_disbands_group stdout ----
+
+thread 'die_leader_disbands_group' (17244) panicked at crates\world\tests\party_vectors.rs:472:9:
+团长死亡 ⇒ 全组 GroupOwner 清 0（id=1）
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- die_member_triggers_oracle_del_member_and_group_survives stdout ----
+
+thread 'die_member_triggers_oracle_del_member_and_group_survives' (29044) panicked at crates\world\tests\party_vectors.rs:401:5:
+assertion `left == right` failed: Die→DelMember→LeaveGroup 必须清死亡者 GroupOwner（reviewer 探针的根因）
+  left: 1
+ right: 0
+
+
+failures:
+    die_leader_disbands_group
+    die_member_triggers_oracle_del_member_and_group_survives
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-world --test party_vectors`
+rc=101
+
+$ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test -p game-svr --offline --bin game-svr die_triggers
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\world)
+   Compiling mir2-envir v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\envir)
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.29s
+     Running unittests src\main.rs (E:/tmp/m2svr-target\debug\deps\game_svr-1f4431beb89ebeb6.exe)
+
+running 1 test
+test tests::die_triggers_del_member_frames_on_production_path ... FAILED
+
+failures:
+
+---- tests::die_triggers_del_member_frames_on_production_path stdout ----
+07:44:37.489 [INF] 组队 ChrName=T ActorId=2 ident=1019 param=1 target="" → 1 帧（事件 1 条）
+07:44:37.489 [INF] 组队 ChrName=L ActorId=1 ident=1020 param=0 target="T" → 7 帧（事件 7 条）
+
+thread 'tests::die_triggers_del_member_frames_on_production_path' (24516) panicked at bins\game-svr\src\main.rs:6363:9:
+assertion `left == right` failed: Die→DelMember 必须在 tick 内清死亡者 GroupOwner
+  left: 1
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::die_triggers_del_member_frames_on_production_path
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 180 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`
+rc=101

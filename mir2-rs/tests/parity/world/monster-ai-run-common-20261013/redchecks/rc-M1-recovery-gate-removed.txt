@@ -1,0 +1,6 @@
+=== RC-M1: mutation -> base_recovery_heals_hp_at_fill_time_and_resets_tick ===
+mutation: if hp < max_hp && health_tick >= health_fill_time {  ==>  if hp < max_hp {
+exit=101 verdict=RED (FAILED as expected)
+  thread 'monai::tests::base_recovery_heals_hp_at_fill_time_and_resets_tick' (5628) panicked at crates\world\src\monai.rs:1002:9:
+  assertion `left == right` failed: 未到 HealthFillTime 不得回血
+  test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 61 filtered out; finished in 0.01s

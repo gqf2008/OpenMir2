@@ -1,0 +1,74 @@
+# oracle 锚（src/ 实测行号；只读，不改 oracle）
+
+## Save.cs 存档列清单（无任务列）
+     1	        }
+     2	
+     3	        private void SaveRecord(StorageContext context, int playerId, CharacterData hd)
+     4	        {
+     5	            StringBuilder strSql = new StringBuilder();
+     6	            strSql.AppendLine("UPDATE characters SET ServerIndex = @ServerIndex, LoginID = @LoginID,MapName = @MapName, CX = @CX, CY = @CY, Level = @Level, Dir = @Dir, Hair = @Hair, Sex = @Sex, Job = Job, Gold = @Gold, ");
+     7	            strSql.AppendLine("GamePoint = @GamePoint, HomeMap = @HomeMap, HomeX = @HomeX, HomeY = @HomeY, PkPoint = @PkPoint, ReLevel = @ReLevel, AttatckMode = @AttatckMode, FightZoneDieCount = @FightZoneDieCount, BodyLuck = @BodyLuck, IncHealth = @IncHealth, IncSpell = @IncSpell,");
+     8	            strSql.AppendLine("IncHealing = @IncHealing, CreditPoint = @CreditPoint, BonusPoint =@BonusPoint, HungerStatus =@HungerStatus, PayMentPoint = @PayMentPoint, LockLogon = @LockLogon, MarryCount = @MarryCount, AllowGroupReCall = @AllowGroupReCall, ");
+
+## SaveQuest 空壳（只 DELETE，无 INSERT）+ 无调用点
+     1	        private void SaveQuest(StorageContext context, int id, CharacterDataInfo humanRcd)
+     2	        {
+     3	            const string sSqlStr4 = "DELETE FROM characters_quest WHERE PlayerId=@PlayerId";
+     4	            try
+     5	            {
+     6	                MySqlConnector.MySqlCommand command = context.CreateCommand();
+     7	                command.CommandText = sSqlStr4;
+     8	                command.Parameters.AddWithValue("@PlayerId", id);
+     9	                command.ExecuteNonQuery();
+    10	            }
+    11	            catch
+    12	            {
+    13	                LogService.Error("[Exception] PlayDataStorage.SaveQuest");
+    14	            }
+    15	        }
+
+## Query.cs GetChrRecord（SELECT * 不读任务数组）
+     1	        private CharacterData GetChrRecord(int playerId, StorageContext context)
+     2	        {
+     3	            const string sSqlString = "SELECT * FROM characters WHERE ID=@ID";
+     4	            try
+     5	            {
+
+## PlayerDataInfo 会话任务数组（6000 面，byte[128]x3）
+     1	        public byte[] QuestUnitOpen { get; set; }
+     2	        public byte[] QuestUnit { get; set; }
+     3	        public byte[] QuestFlag { get; set; }
+     4	        public byte MarryCount { get; set; }
+     5	        public ServerUserItem[] HumItems;
+     6	        public ServerUserItem[] BagItems;
+     7	        public ServerUserItem[] StorageItems;
+     8	        public MagicRcd[] Magic { get; set; }
+     9	
+    10	        public CharacterData()
+    11	        {
+    12	            QuestUnitOpen = new byte[128];
+    13	            QuestUnit = new byte[128];
+    14	            QuestFlag = new byte[128];
+    15	            HumItems = new ServerUserItem[13];
+    16	            BagItems = new ServerUserItem[46];
+
+## sql DDL
+     1	-- Table structure for characters_quest
+     2	-- ----------------------------
+     3	DROP TABLE IF EXISTS `characters_quest`;
+     4	CREATE TABLE `characters_quest`  (
+     5	  `Id` bigint(20) NOT NULL AUTO_INCREMENT,
+     6	  `PLAYERID` int(11) NULL DEFAULT NULL,
+     7	  `QUESTOPENINDEX` varchar(255) CHARACTER SET utf8 COLLATE utf8_general_ci NULL DEFAULT NULL,
+     8	  `QUESTFININDEX` varchar(255) CHARACTER SET utf8 COLLATE utf8_general_ci NULL DEFAULT NULL,
+     9	  `QUEST` varchar(255) CHARACTER SET utf8 COLLATE utf8_general_ci NULL DEFAULT NULL,
+    10	  PRIMARY KEY (`Id`) USING BTREE
+    11	) ENGINE = InnoDB AUTO_INCREMENT = 1 CHARACTER SET = utf8 COLLATE = utf8_general_ci COMMENT = '任务标志' ROW_FORMAT = Dynamic;
+    12	
+
+## SaveQuest 全仓调用点（grep -rn 只命中定义与自身异常日志）
+  src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Save.cs:493:        private void SaveQuest(StorageContext context, int id, CharacterDataInfo humanRcd)
+  src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Save.cs:505:                LogService.Error("[Exception] PlayDataStorage.SaveQuest");
+
+## characters_quest 全仓引用（src/）
+  src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Save.cs:495:            const string sSqlStr4 = "DELETE FROM characters_quest WHERE PlayerId=@PlayerId";
