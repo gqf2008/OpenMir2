@@ -1,5 +1,5 @@
 == M3⑥-实现 3（第①片 F-1/F-2 返工 + 第②片接线）：四门禁（隔离 CARGO_TARGET_DIR=E:/tmp/m2svr-target，--offline）==
-时间：2026-10-13T03:26:42Z  head=f103e600d9a05b434dd072fb3e8e7c46e00af3d5（工作树含本次返工，尚未提交）
+时间：2026-10-13T03:26:42Z  code_commit=744c5596（F-1/F-2 返工；证据提交在其后）
 
 ---- ① cargo fmt --all -- --check ----
 rc=0
