@@ -2692,6 +2692,7 @@ fn drain_recovery(
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     range: i32,
+    superseded_healthspell: &std::collections::HashSet<i32>,
 ) {
     let now = now_ms();
     let mut names: Vec<String> = sessions.keys().cloned().collect();
@@ -2702,6 +2703,17 @@ fn drain_recovery(
         };
         let death = world.entities.get(sg.actor_id).is_some_and(|e| e.death);
         if !game_svr::recover::recovery_tick(&mut sg.recovery, &mut sg.state.wabil, death, now) {
+            continue;
+        }
+        // **F-1 的同 tick 去重**：oracle `SendUpdateMsg(RM_HEALTHSPELLCHANGED)`
+        // （`BaseObject.Message.cs:275-304`）先移除 `MsgQueue` 里同 ident 的旧消息再入队。恢复段在
+        // `PlayObject.Run()` 里**先**入队 53，随后 `BaseObject.Run()` 的消息段处理击杀/升级
+        // （触发消息优先级 `MessagePriority.Normal=1` / `RM_HIT=20` 均 < `(byte)RM_HEALTHSPELLCHANGED=68`
+        // ⇒ 先出队）⇒ 升级段的 `IncHealthSpell(2000,2000)→HealthSpellChanged()` 会把恢复段的 53 替换掉。
+        // 因此若本 tick 该对象进升级块，这里**不回帧**（由 [`drain_levelup_healthspell`] 出唯一一条）。
+        // HP/MP/`Inc*` 的状态变更仍照常发生。
+        // 登记：由**最低优先级**（255）延时消息驱动的击杀（恢复段 53 先出队）不在此模型内。
+        if superseded_healthspell.contains(&sg.actor_id) {
             continue;
         }
         let Some(entry) = online.iter().find(|e| e.chr_name == name) else {
@@ -4471,12 +4483,20 @@ fn sim_loop(
         ticks += 1;
         // T-28：周期恢复 tick（oracle `PlayObject.Run` 的 `:70-141`）——同一 world tick 后处理，
         // 把 `IncHealth/IncSpell/IncHealing` 按 oracle 节奏消费回 `WAbil.HP/MP` 并回帧。
+        // F-1：本 tick 进升级块的获得者集合 ⇒ 其恢复段的 53 被升级段的 53 取代（`SendUpdateMsg` 去重）。
+        let leveled_this_tick: std::collections::HashSet<i32> = rec
+            .exp_awards
+            .iter()
+            .filter(|(_, _, leveled, _)| *leveled)
+            .map(|(actor, _, _, _)| *actor)
+            .collect();
         drain_recovery(
             &mut ground_sessions,
             &world,
             &online,
             &gates,
             enter_cfg.ref_msg_range,
+            &leveled_this_tick,
         );
         // 体力/魔力点段（oracle `BaseObject.Run()` `:26-109`）：同一 `Run()` 里紧接
         // `PlayObject` 的恢复段之后；命中会回写 `Entity.hp` ⇒ 必须在周期存档之前。
@@ -7557,7 +7577,14 @@ mod tests {
         assert_eq!(sessions["hero"].recovery.inc_health, 20);
 
         // 2) 周期恢复 tick：tick 初值 0、now = 真实时钟 ⇒ 远超 1 级阈值 590ms ⇒ 首轮命中。
-        drain_recovery(&mut sessions, &world, &online, &gates, 12);
+        drain_recovery(
+            &mut sessions,
+            &world,
+            &online,
+            &gates,
+            12,
+            &std::collections::HashSet::new(),
+        );
         let mut frames = Vec::new();
         while let Ok(SimToGate::SendFrame { body, socket }) = rx0.try_recv() {
             let cm = CommandMessage::from_bytes(&body).expect("SM_* body 至少 12B");
@@ -8812,6 +8839,75 @@ mod tests {
         assert_eq!(e.level, 11);
         assert!(e.max_hp > 0 && e.hp == e.max_hp, "实体 HP/MaxHP 同步");
         assert_eq!(e.max_hp, sg.state.wabil.max_hp);
+    }
+
+    /// **F-1（同 tick 去重）**：恢复段已产生 53 的对象，若本 tick 进升级块，
+    /// `SendUpdateMsg(RM_HEALTHSPELLCHANGED)`（`BaseObject.Message.cs:275-304`）会把恢复段入队的 53
+    /// 移除 ⇒ `drain_recovery` 不得回帧（升级段由 `drain_levelup_healthspell` 出唯一一条）。
+    ///
+    /// 红检：删掉 `drain_recovery` 的 `superseded_healthspell.contains(...)` 分支 ⇒ 本用例必红（① 收到帧）。
+    #[test]
+    fn recovery_healthspell_is_superseded_by_levelup_in_same_tick() {
+        use std::collections::{HashMap, HashSet};
+        let mut world = mir2_world::World::new(32, 32);
+        let hid = {
+            let mut e = mir2_world::Entity::new(0, "hero".to_string(), 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        world.tick();
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hid,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        // 「恢复段必命中」的会话：池里 20 点 IncHealth、HP 未满、tick 初值 0（真实时钟远超阈值）。
+        let mk = || {
+            let mut sg = test_session_ground(hid);
+            sg.state.wabil.hp = 10;
+            sg.state.wabil.max_hp = 100;
+            sg.recovery = game_svr::recover::Recovery::new(0);
+            sg.recovery.inc_health = 20;
+            sg
+        };
+
+        // ① 在「本 tick 进升级块」集合里 ⇒ 不回帧（被升级段的 53 取代），但状态照常消费。
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("hero".into(), mk());
+        let superseded: HashSet<i32> = [hid].into_iter().collect();
+        drain_recovery(&mut sessions, &world, &online, &gates, 12, &superseded);
+        assert!(
+            rx0.try_recv().is_err(),
+            "升级块取代恢复段 53 ⇒ 本段不得回帧"
+        );
+        assert_eq!(
+            sessions["hero"].recovery.inc_health, 15,
+            "HP/MP 与 Inc* 的状态变更仍照常发生（20 - PerHealth 5）"
+        );
+
+        // ② 不在集合里 ⇒ 照常回帧（自见一条）。
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("hero".into(), mk());
+        drain_recovery(&mut sessions, &world, &online, &gates, 12, &HashSet::new());
+        let cm = match rx0.try_recv() {
+            Ok(SimToGate::SendFrame { body, socket }) => {
+                assert_eq!(socket, 901);
+                CommandMessage::from_bytes(&body).expect("12B")
+            }
+            _ => panic!("未取代时必须有 53 帧"),
+        };
+        assert_eq!(cm.ident, mir2_protocol::messages::SM_HEALTHSPELLCHANGED);
     }
 
     /// **F-2（`AddBodyLuck`）**：`PlayObject.AddBodyLuck`（`PlayObject.cs:4304-4323`）的纯函数口径——

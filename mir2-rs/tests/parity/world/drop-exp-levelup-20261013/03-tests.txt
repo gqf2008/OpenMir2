@@ -31,11 +31,18 @@ M3④-D② 判据（构造级）
 [D] world::tests::kill_exp_marks_levelup_block_even_at_max_level   (crates/world/src/world.rs) —— 上一 head 已有，未变
     钉住 award_kill_exp 的 `leveled` 口径（进块；满级 255 仍置位）。
 
+[E] tests::recovery_healthspell_is_superseded_by_levelup_in_same_tick   (bins/game-svr/src/main.rs) —— F-1 同 tick 去重
+    ① 会话进「本 tick 升级块」集合 ⇒ `drain_recovery` **不回帧**（被升级段的 53 取代），但 `inc_health` 仍消费（20→15）；
+    ② 不在集合 ⇒ 照常回 1 条 `SM_HEALTHSPELLCHANGED(53)`。
+    依据：`SendUpdateMsg(RM_HEALTHSPELLCHANGED)`（`BaseObject.Message.cs:275-304`）移除同 ident 旧消息；
+    击杀触发消息优先级 Normal=1 / RM_HIT=20 均 < 53 的 68 ⇒ 恢复段的 53 被升级段替换（见 01-oracle-anchors.txt [8]）。
+
 命令（工作目录 <worktree>/mir2-rs，CARGO_TARGET_DIR=E:/tmp/m2svr-f2-target，--offline）：
   cargo test -p game-svr --bin game-svr --offline levelup_downlink
   cargo test -p game-svr --bin game-svr --offline add_body_luck_matches_oracle_vectors
   cargo test -p game-svr --bin game-svr --offline body_luck_accumulates_on_getexp_and_persists
+  cargo test -p game-svr --bin game-svr --offline recovery_healthspell_is_superseded_by_levelup_in_same_tick
   cargo test -p mir2-world --lib --offline kill_exp_marks_levelup_block
 
-结果：全 ok；未改坏任一既有用例（全量见 gates/13-workspace-test.txt = 91/819/0/18；
-      基线（同树去本片）= gates/14-baseline-merged-a443296e.txt = 91/817/0/18 ⇒ **+2**）。
+结果：全 ok；未改坏任一既有用例（全量见 gates/13-workspace-test.txt = 91/820/0/18；
+      基线（同树去本片改动）= gates/14-baseline-merged-a443296e.txt = 91/817/0/18 ⇒ **+3**）。

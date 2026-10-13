@@ -15,6 +15,12 @@ M3④-实现 D 分片 D②「升级链」+ F-1/F-2 返工 —— 改动清单
    - 依据：oracle `GetExp` 的 `RM_WINEXP(139)` / `RM_LEVELUP(150)` / `RM_HEALTHSPELLCHANGED(68)` 入同一
      `MsgQueue`、按优先级字节升序出队 ⇒ 线上序 **53 → 44 → 45 → 52 → 752**（见 01-oracle-anchors.txt [8]）。
      上一 head 的 `44→45→52→752→53` 及其「与 oracle 一致」表述**作废并订正**。
+   - **同 tick 去重**：若本 tick 该对象进升级块，恢复段的 53 会被升级段的 53 取代
+     （`SendUpdateMsg` 移除同 ident 旧消息；击杀触发消息优先级 Normal=1 / RM_HIT=20 < 53 的 68）。
+     `sim_loop` 先算 `leveled_this_tick: HashSet<i32>` 传给 `drain_recovery`，命中者本段不回帧
+     （HP/MP/`Inc*` 状态变更仍发生）；由 `drain_levelup_healthspell` 出唯一一条 53。
+     新用例 `recovery_healthspell_is_superseded_by_levelup_in_same_tick` + 红检 RC-D2-H。
+     登记：由最低优先级（255）延时消息驱动的升级不在本模型内。
 
 6) bins/game-svr/src/main.rs —— **F-2：AddBodyLuck 建模（撤销「死字段」结论）**
    - `const BODYLUCK_UNIT = 5000`（`MessageSettings.cs:9`）；

@@ -46,6 +46,8 @@ D① 只把经验发出去（`SM_WINEXP(44)` + 会话同步），但 oracle `Get
     * `drain_combat_downlink`：受击/死亡 + 44；
     * `drain_levelup_downlink`：45 → 52 → 752；
     * `drain_kill_exp_chain`：把三段按 **53 → 44 → 45/52/752** 固定在一处，`sim_loop` 与用例共用；
+    * **同 tick 去重**：本 tick 进升级块的对象，恢复段的 53 被升级段的 53 取代（`SendUpdateMsg` 去重），
+      `sim_loop` 算 `leveled_this_tick` 集传给 `drain_recovery`（状态仍消费、不回帧）；
   - **F-2**：`add_body_luck`（`PlayObject.cs:4304-4323`，含 `round_ties_even` 银行家舍入 + clamp）、
     `body_luck_level_of`（`Initialize()` 的 `AddBodyLuck(0)`）；`EquipInputs` 新增 `body_luck`/`body_luck_level`，
     进世界从记录装载；`drain_combat_downlink` 经验循环按 oracle 次序落账（`dwExp*0.002` 先、升级 `+100` 后）；
@@ -58,9 +60,10 @@ D① 只把经验发出去（`SM_WINEXP(44)` + 会话同步），但 oracle `Get
 | `levelup_downlink_sends_levelup_frames_heals_and_syncs_entity` | `bins/game-svr/src/main.rs` | 帧序 **53→44→45→52→752**（经 `drain_kill_exp_chain`）、`SM_LEVELUP` 头、`MaxHP` 等级派生、回血满额、实体同步、`body_luck==101.0` |
 | `add_body_luck_matches_oracle_vectors` | 同上 | 10 组向量：银行家舍入、`±5*unit` 累加门、`[-10,5]` clamp |
 | `body_luck_accumulates_on_getexp_and_persists` | 同上 | 非升级击杀 `body_luck=5000`/level=1，且 `build_save_record` 带出 |
+| `recovery_healthspell_is_superseded_by_levelup_in_same_tick` | 同上 | 升级块 tick 的恢复段 53 被取代（不回帧，状态仍消费）；不在集合则照回 |
 | `kill_exp_marks_levelup_block_even_at_max_level` | `crates/world/src/world.rs` | `leveled` = 进升级块；满级 255 仍置位 |
 
-## 4. 改坏必红（7 条，原始件 `40..47`；还原核对 `43`）
+## 4. 改坏必红（8 条，原始件 `40..48`；还原核对 `43`）
 
 | 编号 | 变异 | 必红用例 | rc |
 | --- | --- | --- | --- |
@@ -71,6 +74,7 @@ D① 只把经验发出去（`SM_WINEXP(44)` + 会话同步），但 oracle `Get
 | **RC-D2-E** | **`round_ties_even()` → `round()`** | `add_body_luck_...` | 101 |
 | **RC-D2-F** | **删 `rec.data.body_luck = sg.equip.body_luck`** | `body_luck_accumulates_...` | 101 |
 | **RC-D2-G** | **删升级块 `AddBodyLuck(100)`** | `levelup_downlink_...` | 101 |
+| **RC-D2-H** | **删 `drain_recovery` 的去重分支** | `recovery_healthspell_is_superseded_...` | 101 |
 
 ## 5. 未做 / 登记（交 owner）
 
@@ -88,7 +92,7 @@ D① 只把经验发出去（`SM_WINEXP(44)` + 会话同步），但 oracle `Get
 ## 6. 门禁 / 证据
 
 - 四门禁（隔离 `E:/tmp/m2svr-f2-target`，`--offline`）：fmt rc=0 / clippy `-D warnings` rc=0 / msgcodegen rc=0（604）/
-  workspace **91 suites / 819 passed / 0 failed / 18 ignored**；同树去本片改动基线 **91/817/0/18** ⇒ **+2**。
+  workspace **91 suites / 820 passed / 0 failed / 18 ignored**；同树去本片改动基线 **91/817/0/18** ⇒ **+3**。
 - 证据 hash：`verify_sha256sums.py --check-extra` + `eolcheck`。
 - 边界：`git diff origin/master..HEAD -- src sql MirClient` 空（oracle 冻结）。
 - 未起栈 / 未占端口 / 未连 MySQL（本片判据全在构造层）。
@@ -99,6 +103,8 @@ D① 只把经验发出去（`SM_WINEXP(44)` + 会话同步），但 oracle `Get
   reviewer-6 的 `PriorityQueue` 实拍亦在卡上）。实现：升级链拆 `drain_levelup_healthspell`（53，先于 44）+
   `drain_levelup_downlink`（45/52/752），由 `drain_kill_exp_chain` 定序；用例 ident 断言改为
   `[53,44,45,52,752]`；新增 RC-D2-D（交换定序 ⇒ 必红）。代码注释/证据里「入队序 = oracle 帧序」的表述已订正。
-  同 tick 内恢复/体力点段的 53 走 `SendUpdateMsg` 去重语义：本段把 HP/MP 补满后后段不再命中 ⇒ 等价（登记）。
+  同 tick 内恢复/体力点段的 53 已按 `SendUpdateMsg` 去重建模：`sim_loop` 把`leveled_this_tick` 集传给 `drain_recovery`，
+  命中者本段不回帧（状态仍消费），由 `drain_levelup_healthspell` 出唯一一条（新用例 + RC-D2-H）。
+  登记：由最低优先级（255）延时消息驱动的升级不在本模型内。
 - **F-2（Important，BodyLuck）**：**采纳 (a)**，撤销「死字段」结论。实现见 §2；读取点/落库行号见
   `01-oracle-anchors.txt` [7](a)/[9]。新增 RC-D2-E/F/G 三条红检。`characters.BodyLuck` 现随会话实时落库。

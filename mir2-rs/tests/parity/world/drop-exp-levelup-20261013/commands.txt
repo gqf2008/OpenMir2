@@ -5,6 +5,7 @@
 CARGO_TARGET_DIR=E:/tmp/m2svr-f2-target cargo test -p game-svr --bin game-svr --offline levelup_downlink
 CARGO_TARGET_DIR=E:/tmp/m2svr-f2-target cargo test -p game-svr --bin game-svr --offline add_body_luck_matches_oracle_vectors
 CARGO_TARGET_DIR=E:/tmp/m2svr-f2-target cargo test -p game-svr --bin game-svr --offline body_luck_accumulates_on_getexp_and_persists
+CARGO_TARGET_DIR=E:/tmp/m2svr-f2-target cargo test -p game-svr --bin game-svr --offline recovery_healthspell_is_superseded_by_levelup_in_same_tick
 CARGO_TARGET_DIR=E:/tmp/m2svr-f2-target cargo test -p mir2-world --lib --offline kill_exp_marks_levelup_block
 
 # --- 四门禁 ---
@@ -28,6 +29,7 @@ git stash pop
 # RC-D2-E：add_body_luck 的 round_ties_even() 改成 round()                         -> add_body_luck FAILED
 # RC-D2-F：build_save_record 删掉 rec.data.body_luck = sg.equip.body_luck          -> body_luck_accumulates FAILED
 # RC-D2-G：删掉升级块 AddBodyLuck(100)                                             -> levelup_downlink FAILED
+# RC-D2-H：删掉 drain_recovery 的 superseded_healthspell.contains(...) 分支      -> recovery_healthspell_is_superseded FAILED
 # 还原后 bins/game-svr/src/{main,smframe}.rs 与备份逐字节一致（cmp → 43-...txt）。
 
 # --- 证据 hash（仓库 LF/git-blob 口径）---

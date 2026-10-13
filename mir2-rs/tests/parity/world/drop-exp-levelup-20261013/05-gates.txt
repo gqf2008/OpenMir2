@@ -7,11 +7,12 @@
 fmt:        rc=0（gates/10-fmt.txt 为空输出）
 clippy:     rc=0  -D warnings（gates/11-clippy.txt）
 msgcodegen: rc=0  604 条常量与 C# 源一致（gates/12-msgcodegen.txt）
-workspace:  rc=0  91 suites / 819 passed / 0 failed / 18 ignored（gates/13-workspace-test.txt）
+workspace:  rc=0  91 suites / 820 passed / 0 failed / 18 ignored（gates/13-workspace-test.txt）
 
 基线（同一棵合并树、临时 `git stash push -- mir2-rs/bins/game-svr/src/main.rs` 去掉本片改动、
 同一隔离 target 重跑；gates/14-baseline-merged-a443296e.txt）：
             91 suites / 817 passed / 0 failed / 18 ignored
-⇒ 本片 F-1/F-2 **+2**（`add_body_luck_matches_oracle_vectors` + `body_luck_accumulates_on_getexp_and_persists`）。
+⇒ 本片 F-1/F-2 **+3**（`add_body_luck_matches_oracle_vectors` + `body_luck_accumulates_on_getexp_and_persists`
+   + `recovery_healthspell_is_superseded_by_levelup_in_same_tick`）。
 
 参照：reviewer-6 在上一 head `14b26f0b`（base 90fab5c0）实测 90 suites / 807 passed。

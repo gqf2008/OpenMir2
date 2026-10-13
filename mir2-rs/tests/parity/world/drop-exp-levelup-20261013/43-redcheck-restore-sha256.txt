@@ -1,22 +1,22 @@
 M3④-D② F-1/F-2 返工：改坏必红后「还原逐字节一致」核对
 
-# 每条红检都是：cp 备份 → 变异 → 跑命中用例（原始输出落 40..47）→ cp 备份还原。
+# 每条红检都是：cp 备份 → 变异 → 跑命中用例（原始输出落 40..48）→ cp 备份还原。
 # 还原后（本轮交付树）：
 $ sha256sum mir2-rs/bins/game-svr/src/main.rs mir2-rs/bins/game-svr/src/smframe.rs
-3656c9aff444615d68cb386658695ef4192d46f46089daa530ef0288427e7d6b  mir2-rs/bins/game-svr/src/main.rs
+0606c9c5a068682dfdcb9a276e26c20cd9397c66736cd388ffc902f901456ef3  mir2-rs/bins/game-svr/src/main.rs
 2c69f7d86d1ec6ab2bb9c27e4fb7221ae48143aa8f53970654763604a09df544  mir2-rs/bins/game-svr/src/smframe.rs
 
-# 与变异前备份逐字节一致：
-$ cmp /tmp/main.rs.bak mir2-rs/bins/game-svr/src/main.rs && echo main.rs IDENTICAL
-main.rs IDENTICAL
+# smframe.rs 与变异前备份逐字节一致：
 $ cmp /tmp/smframe.rs.bak mir2-rs/bins/game-svr/src/smframe.rs && echo smframe.rs IDENTICAL
 smframe.rs IDENTICAL
 
-# 还原后三条命中用例重跑：
+# 还原后命中用例重跑（F-1/F-2 + 去重 4 条）：
 $ CARGO_TARGET_DIR=E:/tmp/m2svr-f2-target cargo test -p game-svr --offline --bin game-svr -- \
     levelup_downlink_sends_levelup_frames_heals_and_syncs_entity add_body_luck_matches_oracle_vectors \
-    body_luck_accumulates_on_getexp_and_persists
+    body_luck_accumulates_on_getexp_and_persists recovery_healthspell_is_superseded_by_levelup_in_same_tick
+（全 ok；全量见 gates/13-workspace-test.txt = 91 suites / 820 passed / 0 failed / 18 ignored）
 test tests::add_body_luck_matches_oracle_vectors ... ok
+test tests::recovery_healthspell_is_superseded_by_levelup_in_same_tick ... ok
 test tests::levelup_downlink_sends_levelup_frames_heals_and_syncs_entity ... ok
 test tests::body_luck_accumulates_on_getexp_and_persists ... ok
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 160 filtered out; finished in 0.01s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 160 filtered out; finished in 0.00s
