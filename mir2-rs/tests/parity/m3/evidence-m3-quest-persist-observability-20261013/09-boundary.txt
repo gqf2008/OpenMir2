@@ -1,0 +1,24 @@
+M3⑥-实现 4 边界检查（base=65602bf862b873402fe2281b2b687506f95d6cb8 = refs/heads/master(walgit)，head=54ed466cbc6417d221f0167997b9dbf396eff12a）
+
+命令：git diff --name-only 65602bf862b873402fe2281b2b687506f95d6cb8 54ed466cbc6417d221f0167997b9dbf396eff12a -- src sql MirClient
+输出（应为空）：
+rc=0
+
+命令：git diff --name-only 65602bf862b873402fe2281b2b687506f95d6cb8 54ed466cbc6417d221f0167997b9dbf396eff12a
+全部改动文件（仅本片写集：bins/db-srv + tests/parity/m3 证据）：
+mir2-rs/Cargo.lock
+mir2-rs/bins/db-srv/Cargo.toml
+mir2-rs/bins/db-srv/tests/quest_no_persist.rs
+mir2-rs/tests/parity/m3/evidence-m3-quest-persist-observability-20261013/00-commands.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-persist-observability-20261013/01-oracle-anchors.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-persist-observability-20261013/02-rust-status-greps.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-persist-observability-20261013/03-gate-quest-no-persist.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-persist-observability-20261013/04-redcheck-break-must-be-red.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-persist-observability-20261013/05-gate-fmt.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-persist-observability-20261013/06-gate-clippy.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-persist-observability-20261013/07-gate-test.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-persist-observability-20261013/08-gate-msgcodegen.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-persist-observability-20261013/README.md
+
+并入最新 master 的 3-way 可合性：git merge-tree --write-tree refs/remotes/walgit/master 54ed466cbc6417d221f0167997b9dbf396eff12a
+merge-tree rc=0（0=无冲突）
