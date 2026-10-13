@@ -1,0 +1,18 @@
+== repo: mir2-rs (worktree .claude/worktrees/m2-svr) ==
+== head: 6d8cc6a23a8b8d5d3598c5abfe3f8866a32947fd  base: 171741498fadc1c0667acdbaf32241fb551e5d7c ==
+
+== 1) cargo fmt --all -- --check ==
+fmt rc=0
+
+== 2) cargo clippy --workspace --all-targets --offline -- -D warnings ==
+    Checking mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\world)
+    Checking mir2-envir v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\envir)
+    Checking mir2-parity-tests v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\tests\parity)
+    Checking game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.27s
+clippy rc=0
+
+== 4) cargo run -p msgcodegen --offline -- --check ==
+     Running `E:/tmp/m2svr-merchant-target\debug\msgcodegen.exe --check`
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+msgcodegen rc=0

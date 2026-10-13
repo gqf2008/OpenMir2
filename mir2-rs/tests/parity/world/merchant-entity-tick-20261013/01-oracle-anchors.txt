@@ -1,0 +1,67 @@
+M3⑤-实现 2 第①片 —— oracle 锚点（冻结 src/，行号按本仓库实读）
+================================================================
+
+[1] 商人记录装载（LocalDB.LoadMerchant）
+    src/GameSrv/DB/LocalDB.cs:412-473
+    - `:424` 主文件名 M2Share.GetEnvirFilePath("Merchant.txt")
+    - `:431-433` Trim() + 空行/`;` 跳过
+    - `:434-446` 10 列 ScriptName/MapName/X/Y/Name/Flag/Appr/IsCastle/CanMove/MoveTime
+    - `:450-469` 逐条 `new Merchant()`（ctor 见 [4]）→ SystemShare.WorldEngine.AddMerchant
+
+[2] 挂图 Initialize（本片实现的挂图段）
+    src/M2Server/Actor/BaseObject.Base.cs:14-21
+      public virtual void Initialize() {
+          AbilCopyToWAbil();
+          AddtoMapSuccess = true;
+          if (Envir.CanWalk(CurrX, CurrY, true) && AddToMap()) {
+              AddtoMapSuccess = false;
+          }
+          CharStatus = GetCharStatus();
+      }
+    ⇒ AddtoMapSuccess == true 表示“落图失败”。
+
+[3] MerchantInitialize（FindMap 门 + 失败移除）
+    src/GameSvr/Word/WorldServer.Merchant.cs:8-34
+      for (i = MerchantList.Count-1; i >= 0; i--) {
+          merchant.Envir = SystemShare.MapMgr.FindMap(merchant.MapName);
+          if (merchant.Envir != null) {
+              merchant.OnEnvirnomentChanged();
+              merchant.Initialize();
+              if (merchant.AddtoMapSuccess && !merchant.IsHide) { Warn(); RemoveAt(i); }
+              else { merchant.LoadMerchantScript(); merchant.LoadNpcData(); }
+          } else { Error(); RemoveAt(i); }   // ← 本片 O-1 的门
+      }
+
+    FindMap 真口径：src/GameSrv/Maps/MapManager.cs:146-149
+      public IEnvirnoment FindMap(string sMapName)
+          => _mapList.TryGetValue(sMapName, ...) ? map : null;   // 按“逻辑名”，不是 .map 文件名
+    AddMapInfo（落 _mapList[逻辑名] 的唯一条件）：MapManager.cs:63-99
+      sMapName = '[' 段 `|` 前；sMapFileName = `|` 后；LoadMapData(<file>.map) 成功才 _mapList.Add(sMapName)
+      ⇒ 本部署 `[jiaren|0150]` / `[ZM6|D5071]` / `[DB|DM011]` 三段的 .map 都在 ⇒ 4 条 merchant 全命中
+        （owner 26efc51d 的“丢 4 条 ⇒ 127”前提不成立，见 02-real-deployment-vector.txt）
+
+[4] Merchant 字段与 ctor
+    src/GameSrv/Npc/Merchant.cs:10-106
+      - 属性：ScriptName/PriceRate/CastleMerchant/RefillGoodsTick/ClearExpreUpgradeTick/
+        ItemTypeList/RefillGoodsList/GoodsList/ItemPriceList/BoCanMove/MoveTime/MoveTick/IsBuy…
+      - ctor：RaceImg=ActorRace.Merchant(=50)、Appr=0、PriceRate=100、MoveTick=GetTickCount()、
+        RefillGoodsTick=GetTickCount()、ClearExpreUpgradeTick=GetTickCount()、CellType=Merchant
+    BaseObject ctor：src/M2Server/Actor/BaseObject.cs:439-447
+      RunTick = GetTickCount() + Random(1500); RunTime = 250; …      ← 本片不抽（登记）
+
+[5] O-2 rename_rand
+    src/Modules/ScriptEngine/ScriptParsers.cs:857
+      SayingRecord.sLabel += SystemShare.RandomNumber.GetRandomNumber(1, 200);
+    ⇒ 本片宿主用共享 `world.rng.get_random_number(1, 200)` 注入 MapLoader::load_merchants。
+
+[6] ActorRace.Merchant == ActorRace.Animal == 50
+    src/OpenMir2/Enums/Race.cs（Merchant = 50 / Animal = 50）
+    ⇒ crates/world 的怪物 AI 过滤不能只看 race（会把商人当 Animal 跑 monster_run）；
+      本片改 monster_ai_tick 显式排除 `Entity.merchant.is_some()`。
+
+[7] 未建模（登记，留给本卡 tick 分片）
+    - Merchant.Run（Merchant.cs:112-170）/ RefillGoods（:209-276）
+    - ProcessMerchants 分片 tick（WorldServer.Merchant.cs:65-110；M2Share.NpcLimit=5ms）
+    - 构造 Random(1500)（BaseObject.cs:439）
+    - ProcessRefillIndex（ScriptParsers.cs:838，全局 CurrentMerchantIndex++；⑤-1 未随记录暴露）
+    - GoodsList/ItemPriceList 库存与 LocalDB.SaveGoodRecord 持久化（接缝 ⑤-5）

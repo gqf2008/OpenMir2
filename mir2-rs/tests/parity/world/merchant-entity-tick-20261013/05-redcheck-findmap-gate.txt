@@ -1,0 +1,18 @@
+== 改坏必红：去掉 O-1 FindMap 门（None 支改成照收 map_id=0）⇒ 合成用例必红 ==
+-- 变异（bins/game-svr/src/merchant.rs，临时，之后已还原）--
+113:            None => spawns.push(to_spawn(record, 0)), // REDCHECK: drop FindMap gate
+
+$ cargo test -p game-svr --lib merchant::tests::find_map_gate_drops_unknown_map
+test merchant::tests::find_map_gate_drops_unknown_map ... FAILED
+assertion `left == right` failed: 过 FindMap 门留 2 条
+  left: 3
+ right: 2
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 112 filtered out; finished in 0.00s
+
+== 还原后（绿）==
+$ cargo test -p game-svr --lib merchant::tests
+test merchant::tests::real_deployment_find_map_gate ... ignored, 真机部署件向量：需 E:/MirServer/M2GameSvr（证据/owner 跑）
+test merchant::tests::missing_merchant_txt_is_empty ... ok
+test merchant::tests::find_map_gate_drops_unknown_map ... ok
+test merchant::tests::gated_spawns_attach_to_world ... ok
+test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 109 filtered out; finished in 0.01s
