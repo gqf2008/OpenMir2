@@ -1,0 +1,43 @@
+# evidence-m3-tiered-acceptance-20261013 — 命令与口径
+
+卡：`openmir2-tiered-acceptance-policy`（issue `2732dfc96f38`）
+车道：principal `openmir2-worker-5` / worktree `.claude/worktrees/m3cs` / branch `worktree-m3-tiered-acceptance`
+base：`origin/master bdc508ef131b504e7b801204a6b0ec23c413b773`
+写集：`AGENTS.md` + `docs/Rust重写设计文档.md` + `mir2-rs/tests/parity/M3-report.md` + 本证据目录。**零 `.rs` / 零 `src/**` / 零表结构·脚本语法·数据格式改动**。
+
+## 验收①-⑤ 对应的采集命令
+
+```sh
+# ①③④ 运行时 tier 字段：从 refs/collab/* 只读采集（git cat-file --batch，不联网/不起栈/不占端口）
+python -I mir2-rs/tests/parity/m3/evidence-m3-tiered-acceptance-20261013/collect.py
+#   => 01-runtime-tier-fields.txt     全部带 tier/tier_why 的条目（review/merge_result/status）
+#   => 02-r-tier-merge-not-closed.txt R 级卡已合并但 status != closed（acceptance②）
+#   => 04-l-tier-smoke-sample.txt     3 张 L 级卡的 approve(tier_why) + merge gates（acceptance①④）
+
+# ③ 规则原文（owner 侧 runtime briefs，只读）
+sed -n '67,69p' E:/tmp/openmir2-watch/brief-merge.md
+sed -n '1,12p'  E:/tmp/openmir2-watch/brief-review.md
+#   => 03-missing-tier-rule.txt
+
+# ⑤ 三处文本落地后 grep 'tier' 命中
+grep -n -i tier AGENTS.md docs/Rust重写设计文档.md mir2-rs/tests/parity/M3-report.md
+#   => 05-grep-tier-hits.txt
+
+# 四门禁（隔离 CARGO_TARGET_DIR，--offline；docs-only 片无 .rs 增量）
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo fmt --all -- --check
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo clippy --workspace --all-targets --offline -- -D warnings
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo test --workspace --offline
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo run -q -p msgcodegen --offline -- --check
+#   => 06-gates.txt
+
+# 证据包自检（仓库 LF/git-blob 口径）
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/m3/evidence-m3-tiered-acceptance-20261013
+```
+
+## 口径与边界
+
+- 本片**零起栈、零端口**；采集只读 `refs/collab/*`（git object 库）与 owner 侧 runtime briefs，**不改其它 lane 的写集**。
+- 证据 hash 按**仓库字节**（LF 归一 = git blob）记，`SHA256SUMS.txt` 由
+  `tools/evidence-hash/verify_sha256sums.py`（`--check-extra`）复核。
+- 提交内容：`AGENTS.md`（新增「判据分级」节 + 顶注指针）、`docs/Rust重写设计文档.md`（§17.1 新增分级段 +
+  §6 M3/M5 判据表分级标注）、`mir2-rs/tests/parity/M3-report.md`（§2 顶部与 §2.5 标注 R 级窗口项 / L 级不占窗口）。

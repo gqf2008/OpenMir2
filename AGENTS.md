@@ -23,6 +23,7 @@
 3. **行为等价优先于修 bug**：先 1:1 连 bug 一起搬，对拍全绿后再单开批次修。
 
 > 完整判据、里程碑与门禁见 `docs/Rust重写设计文档.md` §1（目标与硬约束）、§6（里程碑与验收）、§7（测试与门禁）。
+> **验收判据分级（tiered）**：哪条判据必须真机全量对拍、哪条只需「等价 + 抽样冒烟」，见本文件「判据分级」节与 §17.1。
 
 ---
 
@@ -208,6 +209,29 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo run -p msgcodegen -- --check   # 消息号表与 C# 源漂移门禁
 ```
+
+### 判据分级（tiered acceptance，owner 2026-10-13 裁决，卡 `openmir2-tiered-acceptance-policy`）
+
+「逐字节/逐字段等价」仍是**质量下限**，但**哪些片必须占用独占窗口**按级判定；**判级在审查时显式写进 `review`**，
+据此决定是否必须等窗口。**判不准 ⇒ 按 R（保守）**。
+
+- **R 级 = 必须真机全量对拍（占窗口）**：任何触及 ① **RNG 抽数序列 / 随机播种**；② **时序**（tick 顺序、出队序、
+  `settle`/延迟、竞态）；③ **持久化落库**（DB 写入 / 存档 / 字段级 diff）；④ **战斗数值**（伤害、命中、躲闪、
+  经验曲线、属性重算、负重上限）的片。真机判据**未跑/未绿**时，`review` 写 `request_changes`，或 `approve` 但
+  必须显式写 `"window_required": true` + 缺什么证据；**绝不许**用「语义等价 / 代码看起来一样 / 与 oracle 同构」
+  盖掉这类差异。
+- **L 级 = 等价即放行，真机只做小比例抽样冒烟（不占窗口）**：纯逻辑分支、纯重构、文档、夹具与工具、
+  编译期常量与配置项等**不可能**只在真机暴露差异的片。审查者在**钉住的 commit** 上自证逐行/语义等价
+  （写清方法：逐行比 oracle 行号 / 等价替换证明 / selftest + 单测覆盖），再补**至少 1 条抽样冒烟**
+  （构造级或进程级，抽 1 个场景跑通即可）⇒ 可 `approve`。
+- **记录与收口**：`review` 必带 `tier` + `tier_why`；缺 `tier` 的旧 `approve` 按 **R** 处理。`merge_result` 之后
+  **R 级卡 `status ≠ closed`**（保持 `in-progress` 并在 `work` 写明待窗口项），**L 级可 `closed`**。
+- 反例（明确不许）：把 `characters_ablity.Hp` 这类数值列差、RNG 逐次流水的 `site`/`order` 差、落库字段差
+  说成「语义等价」。
+
+> 判据正文存档见 `TIER-POLICY.md`（owner 侧 `E:/tmp/openmir2-watch/`）；运行时落地在 `brief-review.md` /
+> `brief-review2.md` / `brief-merge.md`；里程碑判据表的分级标注见 `docs/Rust重写设计文档.md` §6 / §17.1 与
+> `mir2-rs/tests/parity/M3-report.md` §2。
 
 ### 编码约定
 

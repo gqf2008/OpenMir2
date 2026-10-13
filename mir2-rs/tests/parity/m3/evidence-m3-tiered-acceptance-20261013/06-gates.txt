@@ -1,0 +1,36 @@
+# 四门禁原始读数（隔离 CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target，--offline，cwd=mir2-rs/）
+
+## 命令
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --offline -- -D warnings
+cargo test --workspace --offline
+cargo run -q -p msgcodegen --offline -- --check
+
+## 读数
+=== fmt ===
+fmt rc=0
+=== clippy ===
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.62s
+clippy rc=0
+=== test ===
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.45s
+test rc=0
+=== msgcodegen ===
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+msgcodegen rc=0
+
+## test 汇总
+suites_ok=99
+passed=1159 failed=0 ignored=22
+
+## 全量 log 摘要（前 3 + 后 6 行）
+=== fmt ===
+fmt rc=0
+=== clippy ===
+...
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+test rc=0
+=== msgcodegen ===
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+msgcodegen rc=0

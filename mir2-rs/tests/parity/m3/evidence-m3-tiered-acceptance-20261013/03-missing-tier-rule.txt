@@ -1,0 +1,29 @@
+# acceptance③ — 「review 缺 tier ⇒ 按 R 处理」规则原文 + 实跑核查
+
+## A. 规则原文（owner 侧 runtime briefs，只读取自 E:/tmp/openmir2-watch/）
+
+### brief-merge.md:67-69
+- **tier 尊重（owner 2026-10-13，ABB TIER3 CHECK）**：`merge_result` 与 `status` 里都带 `tier`（取自该卡的 `review`）。
+  **R 级卡：`status` 一律不得 `closed`** —— 保持 `in-progress`，并在 `work` 写明"待真机判据（窗口）"，同时也**不许**把这类卡判成"合了就算完"。
+  **L 级卡**：只要无非窗口剩余 DoD，可 `closed`。**review 缺 `tier` 字段 ⇒ 按 R 处理**（保守），并在卡上 `comment` 说明。
+### brief-review.md:1-12
+## 🔴 tier 分级判据（owner 2026-10-13 经 jev 决策：tiered 分级放宽，置信度 1.00）
+
+你的**每条 `review` 都必须在 body 里带**：`"tier":"L"|"R"` + `"tier_why":"<判定依据>"`，并据此给结论：
+
+- **R 级 = 必须真机全量对拍（占窗口）**：任何触及 ① **RNG 抽数序列/随机播种**；② **时序**（tick 顺序、出队序、settle/延迟、竞态）；
+  ③ **持久化落库**（DB 写入/存档/字段级 diff）；④ **战斗数值**（伤害/命中/躲闪/经验曲线/属性重算/负重上限）的片。
+  ⇒ 真机判据**未跑/未绿**时：写 `request_changes`，或 `approve` 但必须显式写 `"window_required":true` + 缺什么证据；
+  **绝不许**用"语义等价 / 代码看起来一样 / 与 oracle 同构"作为放行理由盖掉这类差异。
+- **L 级 = 等价即放行，真机只做小比例抽样冒烟**：纯逻辑分支、纯重构、文档、夹具与工具、编译期常量与配置项等
+  **不可能**只在真机暴露差异的片。⇒ 审查者在**钉住的 commit** 上自证逐行或语义等价（写清方法：逐行比 oracle 行号 / 等价替换证明 / selftest+单测覆盖），
+  再补**至少 1 条抽样冒烟**（构造级或进程级，抽 1 个场景跑通即可，**不占独占窗口**）⇒ 可 `approve`。
+- **判不准 ⇒ 一律按 R 处理**（保守侧），并在 `tier_why` 里写明为什么判不准。
+
+## B. 实测核查（grep 全部 refs/collab/inbox/*；命令见 00-commands.txt）
+
+结论：tier 政策 2026-10-13 08:37(UTC) 随卡 openmir2-tiered-acceptance-policy 发布后，
+所有 review 均带 tier（01-runtime-tier-fields.txt 逐条可见），merge 侧对每个已合片的 merge_result/status
+均带 tier；**post-policy 尚无「缺 tier 的旧 approve」被提交**，故本条的『按 R 处理』只有规则落地、
+暂无实测实例（not_verified，不伪造）。pre-policy（<08:37）的 merge_result 无 tier 字段是政策发布前行为，
+不属本口径。
