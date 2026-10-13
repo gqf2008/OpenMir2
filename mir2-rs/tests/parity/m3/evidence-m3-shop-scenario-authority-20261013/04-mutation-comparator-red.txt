@@ -1,122 +1,122 @@
 STATS ops=2 frames=2 ok=1 fail=1
-CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\cs0.jsonl
-RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\rs0.jsonl
+CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\rs0.jsonl
 DIFF 0
 GREEN: NPC/商店逐项相同（ops=2 帧=2 失败分支=1）
 SHOP k=1 RED op csharp='buy' rust='storage'
 STATS ops=2 frames=2 ok=1 fail=1
-CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\cs0.jsonl
-RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\rs_op.jsonl
+CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\rs_op.jsonl
 DIFF 1
 RED: NPC/商店跨侧差异 1 项（定位见上）
 SHOP k=0 RED npc csharp='卫家店' rust='仓库保管员'
 STATS ops=2 frames=2 ok=1 fail=1
-CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\cs0.jsonl
-RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\rs_npc.jsonl
+CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\rs_npc.jsonl
 DIFF 1
 RED: NPC/商店跨侧差异 1 项（定位见上）
 SHOP k=0 RED req csharp={'item': '金创药(小量)', 'n': 1} rust={'item': '木剑', 'n': 1}
 STATS ops=2 frames=2 ok=1 fail=1
-CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\cs0.jsonl
-RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\rs_req.jsonl
+CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\rs_req.jsonl
 DIFF 1
 RED: NPC/商店跨侧差异 1 项（定位见上）
 STATS ops=2 frames=2 ok=1 fail=1
-CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\cs0.jsonl
-RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\rs_req_dyn.jsonl
+CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\rs_req_dyn.jsonl
 DIFF 0
 GREEN: NPC/商店逐项相同（ops=2 帧=2 失败分支=1）
 SHOP k=1 RED frames.sm csharp=[651] rust=[650]
 SHOP k=1 RED frames.scalar[651] csharp={'651.a': 3} rust={}
 STATS ops=2 frames=2 ok=1 fail=1
-CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\cs0.jsonl
-RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\rs_sm.jsonl
+CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\rs_sm.jsonl
 DIFF 2
 RED: NPC/商店跨侧差异 2 项（定位见上）
 SHOP k=1 RED frames.scalar[651] csharp={'651.a': 3} rust={'651.a': 2}
 STATS ops=2 frames=2 ok=1 fail=1
-CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\cs0.jsonl
-RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\rs_scalar.jsonl
+CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\rs_scalar.jsonl
 DIFF 1
 RED: NPC/商店跨侧差异 1 项（定位见上）
 SHOP k=0 RED price csharp=10 rust=11
 STATS ops=2 frames=2 ok=1 fail=1
-CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\cs0.jsonl
-RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\rs_price.jsonl
+CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\rs_price.jsonl
 DIFF 1
 RED: NPC/商店跨侧差异 1 项（定位见上）
 SHOP k=0 RED gold_after csharp=1010 rust=1011
 STATS ops=2 frames=2 ok=1 fail=1
-CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\cs0.jsonl
-RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\rs_gold.jsonl
+CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\rs_gold.jsonl
 DIFF 1
 RED: NPC/商店跨侧差异 1 项（定位见上）
 SHOP k=0 RED bag_after.multiset csharp={} rust={'木剑#43': 1}
 STATS ops=2 frames=2 ok=1 fail=1
-CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\cs0.jsonl
-RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\rs_bag.jsonl
+CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\rs_bag.jsonl
 DIFF 1
 RED: NPC/商店跨侧差异 1 项（定位见上）
 SHOP k=0 RED storage_after.multiset csharp={} rust={'木剑#43': 1}
 STATS ops=2 frames=2 ok=1 fail=1
-CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\cs0.jsonl
-RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\rs_storage.jsonl
+CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\rs_storage.jsonl
 DIFF 1
 RED: NPC/商店跨侧差异 1 项（定位见上）
 SHOP k=0 RED goods_after.multiset csharp={'金创药(小量)#42': 1} rust={}
 STATS ops=2 frames=2 ok=1 fail=1
-CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\cs0.jsonl
-RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\rs_goods.jsonl
+CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\rs_goods.jsonl
 DIFF 1
 RED: NPC/商店跨侧差异 1 项（定位见上）
 SHOP k=1 RED branch csharp='fail_nomoney' rust='ok'
 STATS ops=2 frames=2 ok=1 fail=1
-CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\cs0.jsonl
-RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\rs_branch.jsonl
+CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\rs_branch.jsonl
 DIFF 1
 RED: NPC/商店跨侧差异 1 项（定位见上）
 SHOP k=- RED 记录条数 csharp='csharp=2' rust='rust=1'
 STATS ops=2 frames=0 ok=0 fail=0
-CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\cs0.jsonl
-RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\rs_len.jsonl
+CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\rs_len.jsonl
 DIFF 1
 RED: NPC/商店跨侧差异 1 项（定位见上）
 SHOP k=0 RED gold_after csharp=3000000000 rust=7294967296
 STATS ops=2 frames=2 ok=1 fail=1
-CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\cs_big.jsonl
-RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\rs_big.jsonl
+CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\cs_big.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\rs_big.jsonl
 DIFF 1
 RED: NPC/商店跨侧差异 1 项（定位见上）
 SHOP k=1 RED frames.scalar[651] csharp={'651.a': 3} rust={'651.a': 2}
 STATS ops=2 frames=2 ok=1 fail=1
-CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\cs0.jsonl
-RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\rs_scalar2.jsonl
+CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\rs_scalar2.jsonl
 DIFF 1
 RED: NPC/商店跨侧差异 1 项（定位见上）
 STATS ops=2 frames=2 ok=1 fail=1
-CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\cs0.jsonl
-RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\rs_scalar2.jsonl
+CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\rs_scalar2.jsonl
 DIFF 0
 GREEN: NPC/商店逐项相同（ops=2 帧=2 失败分支=1）
 STATS ops=2 frames=2 ok=1 fail=1
-CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\cs0.jsonl
-RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\rs0.jsonl
+CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\rs0.jsonl
 DIFF 0
 GREEN: NPC/商店逐项相同（ops=2 帧=2 失败分支=1）
-RED: PREREQ_RED 场景非法 JSON C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\scen_bad.json: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+RED: PREREQ_RED 场景非法 JSON C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\scen_bad.json: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
 RED: PREREQ_RED --scenario 与 --frame-scalars 互斥（判据真源只能一个）
-RED: PREREQ_RED 缺文件: C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\nope.jsonl
-RED: PREREQ_RED rust: k=0 缺字段 branch (C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\rs_missing.jsonl)
-RED: PREREQ_RED 非法 JSON C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\rs_bad.jsonl:1: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
-RED: PREREQ_RED rust: k 不连续/非 0 起（第 1 条 k=5）(C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\rs_gap.jsonl)
-RED: PREREQ_RED rust: k=0 op 非法 'teleport'（允许 buy/sell/repair/query_sell_price/query_repair_cost/storage/takeback）(C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\rs_badop.jsonl)
-RED: PREREQ_RED rust: k=0 frames 非数组 (C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\rs_badframes.jsonl)
-RED: PREREQ_RED 无记录: C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\rs_empty.jsonl
-ASSEMBLED ok ops=2 out=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\assembled.jsonl
-ASSEMBLED ok ops=2 out=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\assembled.jsonl
+RED: PREREQ_RED 缺文件: C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\nope.jsonl
+RED: PREREQ_RED rust: k=0 缺字段 branch (C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\rs_missing.jsonl)
+RED: PREREQ_RED 非法 JSON C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\rs_bad.jsonl:1: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+RED: PREREQ_RED rust: k 不连续/非 0 起（第 1 条 k=5）(C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\rs_gap.jsonl)
+RED: PREREQ_RED rust: k=0 op 非法 'teleport'（允许 buy/sell/repair/query_sell_price/query_repair_cost/storage/takeback）(C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\rs_badop.jsonl)
+RED: PREREQ_RED rust: k=0 frames 非数组 (C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\rs_badframes.jsonl)
+RED: PREREQ_RED 无记录: C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\rs_empty.jsonl
+ASSEMBLED ok ops=2 out=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\assembled.jsonl
+ASSEMBLED ok ops=2 out=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\assembled.jsonl
 STATS ops=2 frames=2 ok=1 fail=1
-CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\cs0.jsonl
-RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-ktbsk_8d\assembled.jsonl
+CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-7r9ct7j4\assembled.jsonl
 DIFF 0
 GREEN: NPC/商店逐项相同（ops=2 帧=2 失败分支=1）
 RED: PREREQ_RED csharp: k=1 有 send 无 end（交互未收尾）—— fail-closed

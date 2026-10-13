@@ -1,0 +1,5 @@
+=== RC-M4: mutation -> target_cret_cleanup_covers_age_death_map_and_distance ===
+mutation: target_cret_cleanup(world, actor_id, now);  ==>  let _ = now;
+exit=101 verdict=RED (FAILED as expected)
+  thread 'monai::tests::target_cret_cleanup_covers_age_death_map_and_distance' (30832) panicked at crates\world\src\monai.rs:1102:9:
+  test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 61 filtered out; finished in 0.01s

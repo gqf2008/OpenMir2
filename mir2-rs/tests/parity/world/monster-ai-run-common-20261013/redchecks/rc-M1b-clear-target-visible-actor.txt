@@ -1,0 +1,23 @@
+=== RC-M1b: mutation (ClearTargetCreat ⇒ DelTargetCreat) -> target_cret_cleanup_also_removes_visible_actor ===
+mutation: crates/world/src/monai.rs  target_cret_cleanup  'clear_target_creature(world, actor_id, target_id)'  ==>  'del_target_creature(world, actor_id)'
+     Running unittests src\lib.rs (E:/tmp/m2svr-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 1 test
+test monai::tests::target_cret_cleanup_also_removes_visible_actor ... FAILED
+
+failures:
+
+---- monai::tests::target_cret_cleanup_also_removes_visible_actor stdout ----
+
+thread 'monai::tests::target_cret_cleanup_also_removes_visible_actor' (15212) panicked at crates\world\src\monai.rs:1200:9:
+目标应从 VisibleActors 移除（ClearTargetCreat）
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    monai::tests::target_cret_cleanup_also_removes_visible_actor
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 72 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-world --lib`
+exit=101 verdict=RED
