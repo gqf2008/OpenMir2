@@ -299,161 +299,165 @@ pub fn load(path: &Path) -> Result<GateConfig> {
             }
             // 消息颜色（`SystemShare.Config.RedMsgFColor/BColor`，`ServerConf.cs:333-334` 的 `ReadWriteByte`）。
             // 缺键不是错误（oracle 读不到就沿用 `GameSvrConf` 的缺省 0xFF/0x38）；写了但非法才报错。
-            "SETUP" => {
-                match k.as_str() {
-                    "REDMSGFCOLOR" => {
-                        red_msg_f_color = Some(
-                            v.parse()
-                                .with_context(|| format!("RedMsgFColor 不是合法字节：{v:?}"))?,
-                        );
-                    }
-                    "REDMSGBCOLOR" => {
-                        red_msg_b_color = Some(
-                            v.parse()
-                                .with_context(|| format!("RedMsgBColor 不是合法字节：{v:?}"))?,
-                        );
-                    }
-                    "HEARMSGFCOLOR" => {
-                        hear_msg_f_color = Some(
-                            v.parse()
-                                .with_context(|| format!("HearMsgFColor 不是合法字节：{v:?}"))?,
-                        );
-                    }
-                    "HEARMSGBCOLOR" => {
-                        hear_msg_b_color = Some(
-                            v.parse()
-                                .with_context(|| format!("HearMsgBColor 不是合法字节：{v:?}"))?,
-                        );
-                    }
-                    // `ServerConf.cs:271` 的 `ReadWriteBool("Setup", ...)`：现网 `0/1`。
-                    "SHOWRANKLEVELNAME" => {
-                        show_rank_level_name = Some(parse_bool(v, "ShowRankLevelName")?);
-                    }
-                    // `ServerConf.cs:264` 的 `ReadWriteInteger("Setup", "HumanMaxGold", ...)`。
-                    "HUMANMAXGOLD" => {
-                        human_max_gold = Some(
-                            v.parse()
-                                .with_context(|| format!("HumanMaxGold 不是合法整数：{v:?}"))?,
-                        );
-                    }
-                    // `ServerConf.cs:439` 的 `ReadWriteInteger("Setup", "FloorItemCanPickUpTime", ...)`。
-                    "FLOORITEMCANPICKUPTIME" => {
-                        floor_item_can_pick_up_time = Some(v.parse().with_context(|| {
+            "SETUP" => match k.as_str() {
+                "REDMSGFCOLOR" => {
+                    red_msg_f_color = Some(
+                        v.parse()
+                            .with_context(|| format!("RedMsgFColor 不是合法字节：{v:?}"))?,
+                    );
+                }
+                "REDMSGBCOLOR" => {
+                    red_msg_b_color = Some(
+                        v.parse()
+                            .with_context(|| format!("RedMsgBColor 不是合法字节：{v:?}"))?,
+                    );
+                }
+                "HEARMSGFCOLOR" => {
+                    hear_msg_f_color = Some(
+                        v.parse()
+                            .with_context(|| format!("HearMsgFColor 不是合法字节：{v:?}"))?,
+                    );
+                }
+                "HEARMSGBCOLOR" => {
+                    hear_msg_b_color = Some(
+                        v.parse()
+                            .with_context(|| format!("HearMsgBColor 不是合法字节：{v:?}"))?,
+                    );
+                }
+                // `ServerConf.cs:271` 的 `ReadWriteBool("Setup", ...)`：现网 `0/1`。
+                "SHOWRANKLEVELNAME" => {
+                    show_rank_level_name = Some(parse_bool(v, "ShowRankLevelName")?);
+                }
+                // `ServerConf.cs:264` 的 `ReadWriteInteger("Setup", "HumanMaxGold", ...)`。
+                "HUMANMAXGOLD" => {
+                    human_max_gold = Some(
+                        v.parse()
+                            .with_context(|| format!("HumanMaxGold 不是合法整数：{v:?}"))?,
+                    );
+                }
+                // `ServerConf.cs:439` 的 `ReadWriteInteger("Setup", "FloorItemCanPickUpTime", ...)`。
+                "FLOORITEMCANPICKUPTIME" => {
+                    floor_item_can_pick_up_time =
+                        Some(v.parse().with_context(|| {
                             format!("FloorItemCanPickUpTime 不是合法整数：{v:?}")
                         })?);
-                    }
-                    // `ServerConf.cs:481-482/484` 的三条 `ReadWriteBool/Integer("Setup", ...)`。
-                    "CONTROLDROPITEM" => {
-                        control_drop_item = Some(parse_bool(v, "ControlDropItem")?);
-                    }
-                    "INSAFEDISABLEDROP" => {
-                        in_safe_disable_drop = Some(parse_bool(v, "InSafeDisableDrop")?);
-                    }
-                    "CANDROPPRICE" => {
-                        can_drop_price = Some(
-                            v.parse()
-                                .with_context(|| format!("CanDropPrice 不是合法整数：{v:?}"))?,
-                        );
-                    }
-                    // `GameSvrConf.DropItemRage` 是 `byte`（`GameSvrConf.cs:878`）；`Server.conf` 现网未写。
-                    "DROPITEMRAGE" => {
-                        drop_item_rage = Some(
-                            v.parse()
-                                .with_context(|| format!("DropItemRage 不是合法字节：{v:?}"))?,
-                        );
-                    }
-                    // `GameSvrConf.SendRefMsgRange` 是 `byte`（`GameSvrConf.cs:499`）；`Server.conf` 现网未写。
-                    "SENDREFMSGRANGE" => {
-                        send_ref_msg_range = Some(
-                            v.parse()
-                                .with_context(|| format!("SendRefMsgRange 不是合法字节：{v:?}"))?,
-                        );
-                    }
-                    // 商店定价/修理/税（`ServerConf.cs:250/260/487/488`）。
-                    "SUPERREPAIRPRICERATE" => {
-                        super_repair_price_rate = Some(v.parse().with_context(|| {
-                            format!("SuperRepairPriceRate 不是合法整数：{v:?}")
-                        })?);
-                    }
-                    "REPAIRITEMDECDURE" => {
-                        repair_item_dec_dura =
-                            Some(v.parse().with_context(|| {
+                }
+                // `ServerConf.cs:481-482/484` 的三条 `ReadWriteBool/Integer("Setup", ...)`。
+                "CONTROLDROPITEM" => {
+                    control_drop_item = Some(parse_bool(v, "ControlDropItem")?);
+                }
+                "INSAFEDISABLEDROP" => {
+                    in_safe_disable_drop = Some(parse_bool(v, "InSafeDisableDrop")?);
+                }
+                "CANDROPPRICE" => {
+                    can_drop_price = Some(
+                        v.parse()
+                            .with_context(|| format!("CanDropPrice 不是合法整数：{v:?}"))?,
+                    );
+                }
+                // `GameSvrConf.DropItemRage` 是 `byte`（`GameSvrConf.cs:878`）；`Server.conf` 现网未写。
+                "DROPITEMRAGE" => {
+                    drop_item_rage = Some(
+                        v.parse()
+                            .with_context(|| format!("DropItemRage 不是合法字节：{v:?}"))?,
+                    );
+                }
+                // `GameSvrConf.SendRefMsgRange` 是 `byte`（`GameSvrConf.cs:499`）；`Server.conf` 现网未写。
+                "SENDREFMSGRANGE" => {
+                    send_ref_msg_range = Some(
+                        v.parse()
+                            .with_context(|| format!("SendRefMsgRange 不是合法字节：{v:?}"))?,
+                    );
+                }
+                // 出生点回落（`WorldServer.cs:250-260` 的 `GetHomeInfo`）：现网 `Server.conf`
+                // 写 `HomeMap=3`/`HomeX=839`/`HomeY=668`/`StartPointSize=2`。
+                "STARTPOINTSIZE" => {
+                    start_point_size = Some(
+                        v.parse()
+                            .with_context(|| format!("StartPointSize 不是合法字节：{v:?}"))?,
+                    );
+                }
+                "HOMEMAP" => home_map = Some(v.to_string()),
+                "HOMEX" => {
+                    home_x = Some(
+                        v.parse()
+                            .with_context(|| format!("HomeX 不是合法整数：{v:?}"))?,
+                    );
+                }
+                "HOMEY" => {
+                    home_y = Some(
+                        v.parse()
+                            .with_context(|| format!("HomeY 不是合法整数：{v:?}"))?,
+                    );
+                }
+                // 新角色 `IsNewHuman` 的 4 件新手物品（`PlayObject.cs:1205-1245`）+ `GetItemNumber` 初值。
+                "CANDLE" => candle = Some(v.to_string()),
+                "BASICDRUG" => basic_drug = Some(v.to_string()),
+                "WOODENSWORD" => wooden_sword = Some(v.to_string()),
+                "CLOTHSMAN" => cloths_man = Some(v.to_string()),
+                "CLOTHSWOMAN" => cloths_woman = Some(v.to_string()),
+                "ITEMNUMBER" => {
+                    item_number = Some(
+                        v.parse()
+                            .with_context(|| format!("ItemNumber 不是合法整数：{v:?}"))?,
+                    );
+                }
+                // 周期存档（`ServerConf.cs:566`；现网 `Server.conf` 未写 ⇒ 缺省 10 分钟）。
+                "SAVEHUMANRCDTIME" => {
+                    save_human_rcd_time = Some(
+                        v.parse()
+                            .with_context(|| format!("SaveHumanRcdTime 不是合法整数：{v:?}"))?,
+                    );
+                }
+                // 体力/魔力点阈值（`ServerConf.cs:152-153`）：现网 `Server.conf:785-786` 写了
+                // `HealthFillTime=300` / `SpellFillTime=800`；缺键时 oracle 用
+                // `GameSvrConf.cs:1323-1324` 的源码缺省 `300`/`800`。
+                "HEALTHFILLTIME" => {
+                    health_fill_time = Some(
+                        v.parse()
+                            .with_context(|| format!("HealthFillTime 不是合法整数：{v:?}"))?,
+                    );
+                }
+                "SPELLFILLTIME" => {
+                    spell_fill_time = Some(
+                        v.parse()
+                            .with_context(|| format!("SpellFillTime 不是合法整数：{v:?}"))?,
+                    );
+                }
+                // 怪物能力缩放（`ServerConf.cs:560`；现网 `Server.conf:377` 写 `=10`）。
+                "MONSTERPOWERRATE" => {
+                    monster_power_rate = Some(
+                        v.parse()
+                            .with_context(|| format!("MonsterPowerRate 不是合法整数：{v:?}"))?,
+                    );
+                }
+                _ => {
+                    // 商店定价/修理/税（`ServerConf.cs:250/260/487/488`）。单独一层，避免改动
+                    // 上面共享 `[Setup]` 大 match 的既有臂（rustfmt 会因臂数增长把整臂折成块 ⇒
+                    // 在共享文件里制造无谓 diff）。
+                    match k.as_str() {
+                        "SUPERREPAIRPRICERATE" => {
+                            super_repair_price_rate = Some(v.parse().with_context(|| {
+                                format!("SuperRepairPriceRate 不是合法整数：{v:?}")
+                            })?);
+                        }
+                        "REPAIRITEMDECDURE" => {
+                            repair_item_dec_dura = Some(v.parse().with_context(|| {
                                 format!("RepairItemDecDura 不是合法整数：{v:?}")
                             })?);
-                    }
-                    "CASTLEMEMBERPRICERATE" => {
-                        castle_member_price_rate = Some(v.parse().with_context(|| {
-                            format!("CastleMemberPriceRate 不是合法整数：{v:?}")
-                        })?);
-                    }
-                    "CASTLEGETALLNPCTAX" => {
-                        castle_get_all_npc_tax = Some(parse_bool(v, "CastleGetAllNpcTax")?);
-                    }
-                    // 出生点回落（`WorldServer.cs:250-260` 的 `GetHomeInfo`）：现网 `Server.conf`
-                    // 写 `HomeMap=3`/`HomeX=839`/`HomeY=668`/`StartPointSize=2`。
-                    "STARTPOINTSIZE" => {
-                        start_point_size = Some(
-                            v.parse()
-                                .with_context(|| format!("StartPointSize 不是合法字节：{v:?}"))?,
-                        );
-                    }
-                    "HOMEMAP" => home_map = Some(v.to_string()),
-                    "HOMEX" => {
-                        home_x = Some(
-                            v.parse()
-                                .with_context(|| format!("HomeX 不是合法整数：{v:?}"))?,
-                        );
-                    }
-                    "HOMEY" => {
-                        home_y = Some(
-                            v.parse()
-                                .with_context(|| format!("HomeY 不是合法整数：{v:?}"))?,
-                        );
-                    }
-                    // 新角色 `IsNewHuman` 的 4 件新手物品（`PlayObject.cs:1205-1245`）+ `GetItemNumber` 初值。
-                    "CANDLE" => candle = Some(v.to_string()),
-                    "BASICDRUG" => basic_drug = Some(v.to_string()),
-                    "WOODENSWORD" => wooden_sword = Some(v.to_string()),
-                    "CLOTHSMAN" => cloths_man = Some(v.to_string()),
-                    "CLOTHSWOMAN" => cloths_woman = Some(v.to_string()),
-                    "ITEMNUMBER" => {
-                        item_number = Some(
-                            v.parse()
-                                .with_context(|| format!("ItemNumber 不是合法整数：{v:?}"))?,
-                        );
-                    }
-                    // 周期存档（`ServerConf.cs:566`；现网 `Server.conf` 未写 ⇒ 缺省 10 分钟）。
-                    "SAVEHUMANRCDTIME" => {
-                        save_human_rcd_time =
-                            Some(v.parse().with_context(|| {
-                                format!("SaveHumanRcdTime 不是合法整数：{v:?}")
+                        }
+                        "CASTLEMEMBERPRICERATE" => {
+                            castle_member_price_rate = Some(v.parse().with_context(|| {
+                                format!("CastleMemberPriceRate 不是合法整数：{v:?}")
                             })?);
+                        }
+                        "CASTLEGETALLNPCTAX" => {
+                            castle_get_all_npc_tax = Some(parse_bool(v, "CastleGetAllNpcTax")?);
+                        }
+                        _ => {}
                     }
-                    // 体力/魔力点阈值（`ServerConf.cs:152-153`）：现网 `Server.conf:785-786` 写了
-                    // `HealthFillTime=300` / `SpellFillTime=800`；缺键时 oracle 用
-                    // `GameSvrConf.cs:1323-1324` 的源码缺省 `300`/`800`。
-                    "HEALTHFILLTIME" => {
-                        health_fill_time = Some(
-                            v.parse()
-                                .with_context(|| format!("HealthFillTime 不是合法整数：{v:?}"))?,
-                        );
-                    }
-                    "SPELLFILLTIME" => {
-                        spell_fill_time = Some(
-                            v.parse()
-                                .with_context(|| format!("SpellFillTime 不是合法整数：{v:?}"))?,
-                        );
-                    }
-                    // 怪物能力缩放（`ServerConf.cs:560`；现网 `Server.conf:377` 写 `=10`）。
-                    "MONSTERPOWERRATE" => {
-                        monster_power_rate =
-                            Some(v.parse().with_context(|| {
-                                format!("MonsterPowerRate 不是合法整数：{v:?}")
-                            })?);
-                    }
-                    _ => {}
                 }
-            }
+            },
             _ => {}
         }
     }
