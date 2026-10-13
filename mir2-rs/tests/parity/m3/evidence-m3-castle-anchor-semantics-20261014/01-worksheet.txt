@@ -1,0 +1,669 @@
+$ python -I mir2-rs/tests/parity/m3/castle_oracle_anchor_gate.py worksheet
+ANCHOR CastleConf.cs:39  [src/M2Server/Castle/CastleConf.cs]
+  prose castle.rs:619: /// `CastleConf.LoadConfig`（`src/M2Server/Castle/CastleConf.cs:39-93`）填好，`UserCastle.Initialize`
+  prose castle.rs:645: /// `[Defense] CastleMap`（`CastleConf.cs:39`，缺省 `"3"`）。
+  prose castle.rs:972: // `LoadConfig()`：`MapName = ReadWriteString("Defense", "CastleMap", "3")`（`CastleConf.cs:39`）。
+  prose castle.rs:2514: /// 一份与 `CastleConf` 默认值等价的规格（`CastleConf.cs:39-93`）：弓手/守卫 `nHP=2000`>0。
+  CastleConf.cs:39 => userCastle.MapName = ReadWriteString("Defense", "CastleMap", "3");
+ANCHOR CastleConf.cs:45  [src/M2Server/Castle/CastleConf.cs]
+  prose castle.rs:647: /// `[Defense] CastlePlaceMap`（皇宫地图，`CastleConf.cs:45`）。
+  CastleConf.cs:45 => userCastle.PalaceMap = ReadWriteString("Defense", "CastlePlaceMap", userCastle.PalaceMap);
+ANCHOR CastleConf.cs:46  [src/M2Server/Castle/CastleConf.cs]
+  prose castle.rs:649: /// `[Defense] CastleSecretMap`（密道地图，`CastleConf.cs:46`）。
+  CastleConf.cs:46 => userCastle.SecretMap = ReadWriteString("Defense", "CastleSecretMap", userCastle.SecretMap);
+ANCHOR CastleConf.cs:49-55  [src/M2Server/Castle/CastleConf.cs]
+  prose castle.rs:651: /// `MainDoor`（`CastleConf.cs:49-55`）。
+  CastleConf.cs:49 => userCastle.MainDoor = new ArcherUnit();
+  CastleConf.cs:53 => userCastle.MainDoor.nStatus = ReadWriteBool("Defense", "MainDoorOpen", true);
+  CastleConf.cs:55 => userCastle.MainDoor.BaseObject = null;
+ANCHOR CastleConf.cs:56-61  [src/M2Server/Castle/CastleConf.cs]
+  prose castle.rs:653: /// `LeftWall`（`CastleConf.cs:56-61`）。
+  CastleConf.cs:56 => userCastle.LeftWall = new ArcherUnit();
+  CastleConf.cs:61 => userCastle.LeftWall.BaseObject = null;
+ANCHOR CastleConf.cs:62-67  [src/M2Server/Castle/CastleConf.cs]
+  prose castle.rs:655: /// `CenterWall`（`CastleConf.cs:62-67`）。
+  CastleConf.cs:62 => userCastle.CenterWall = new ArcherUnit();
+  CastleConf.cs:67 => userCastle.CenterWall.BaseObject = null;
+ANCHOR CastleConf.cs:68-73  [src/M2Server/Castle/CastleConf.cs]
+  prose castle.rs:657: /// `RightWall`（`CastleConf.cs:68-73`）。
+  CastleConf.cs:68 => userCastle.RightWall = new ArcherUnit();
+  CastleConf.cs:73 => userCastle.RightWall.BaseObject = null;
+ANCHOR CastleConf.cs:74-83  [src/M2Server/Castle/CastleConf.cs]
+  prose castle.rs:659: /// `Archers[12]`（`CastleConf.cs:74-83`）。
+  CastleConf.cs:74 => for (int i = 0; i < userCastle.Archers.Length; i++)
+  CastleConf.cs:82 => userCastle.Archers[i] = objUnit;
+ANCHOR CastleConf.cs:84-93  [src/M2Server/Castle/CastleConf.cs]
+  prose castle.rs:661: /// `Guards[12]`（`CastleConf.cs:84-93`）。
+  CastleConf.cs:84 => for (int i = 0; i < userCastle.Guards.Length; i++)
+  CastleConf.cs:92 => userCastle.Guards[i] = objUnit;
+ANCHOR CastleConf.cs:53  [src/M2Server/Castle/CastleConf.cs]
+  prose castle.rs:630: /// `CastleConf.cs:53`；三面墙的 `nStatus` 从不赋值 ⇒ 恒 `false`）；`Initialize` 里
+  CastleConf.cs:53 => userCastle.MainDoor.nStatus = ReadWriteBool("Defense", "MainDoorOpen", true);
+ANCHOR CastleConf.cs:39-93  [src/M2Server/Castle/CastleConf.cs]
+  prose castle.rs:619: /// `CastleConf.LoadConfig`（`src/M2Server/Castle/CastleConf.cs:39-93`）填好，`UserCastle.Initialize`
+  prose castle.rs:2514: /// 一份与 `CastleConf` 默认值等价的规格（`CastleConf.cs:39-93`）：弓手/守卫 `nHP=2000`>0。
+  CastleConf.cs:39 => userCastle.MapName = ReadWriteString("Defense", "CastleMap", "3");
+ANCHOR UserCastle.cs:108-226  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:620: /// （`src/M2Server/Castle/UserCastle.cs:108-226`）消费。
+  prose castle.rs:709: /// `UserCastle.Initialize`（`UserCastle.cs:108-226`）的宿主面：地图存在性 + 按名造怪 + 告警。
+  prose castle.rs:945: /// oracle `UserCastle.Initialize()`（`src/M2Server/Castle/UserCastle.cs:108-226`）+ 其
+  prose README.md:14: 按 oracle `UserCastle.Initialize()`（`src/M2Server/Castle/UserCastle.cs:108-226`）在
+  UserCastle.cs:108 => public void Initialize()
+ANCHOR UserCastle.cs:113  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:715: /// `SystemShare.MapMgr.GetMapOfServerIndex(MapName) == M2Share.ServerIndex`（`UserCastle.cs:113`）。
+  prose castle.rs:949: /// 1. `UserCastle.cs:113` `GetMapOfServerIndex(MapName) == M2Share.ServerIndex` 门；
+  prose castle.rs:977: // `UserCastle.cs:113`：`if (SystemShare.MapMgr.GetMapOfServerIndex(MapName) == M2Share.ServerIndex)`。
+  prose README.md:17: 1. `UserCastle.cs:113` `GetMapOfServerIndex(MapName) == M2Share.ServerIndex` 门（宿主 trait `map_owner_is_self`）；
+  prose README.md:62: GREEN + 改坏必红（把 `UserCastle.cs:113` 写回 `:111` ⇒ RED）。
+  UserCastle.cs:113 => if (SystemShare.MapMgr.GetMapOfServerIndex(MapName) == M2Share.ServerIndex)
+ANCHOR UserCastle.cs:115-125  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:950: /// 2. `UserCastle.cs:115-125` 皇宫 / 密道 `FindMap` 失败告警（**不**影响后续）；
+  prose castle.rs:982: // `UserCastle.cs:115-125`：皇宫 / 密道地图告警（找不到只告警，不阻断）。
+  prose README.md:18: 2. `UserCastle.cs:115-125` 皇宫 / 密道 `FindMap` 失败告警（不阻断）；
+  UserCastle.cs:115 => PalaceEnvir = SystemShare.MapMgr.FindMap(PalaceMap);
+  UserCastle.cs:121 => SecretEnvir = SystemShare.MapMgr.FindMap(SecretMap);
+ANCHOR UserCastle.cs:127-128  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:951: /// 3. `UserCastle.cs:127-128` `CastleEnvir == null` ⇒ 告警「城堡所在地图不存在」并整体跳过；
+  prose castle.rs:990: // `UserCastle.cs:127-128`：`CastleEnvir == null` ⇒ 告警并整体跳过。
+  prose README.md:19: 3. `UserCastle.cs:127-128` `CastleEnvir == null` ⇒ 告警「城堡所在地图不存在」并整体跳过；
+  UserCastle.cs:127 => CastleEnvir = SystemShare.MapMgr.FindMap(MapName);
+  UserCastle.cs:128 => if (CastleEnvir != null)
+ANCHOR UserCastle.cs:130-138  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:952: /// 4. `UserCastle.cs:130-138` 主门 ⇒ `RegenMonsterByName` → `WAbil.HP=nHP` → `Castle=this` →
+  prose castle.rs:998: // `UserCastle.cs:130-138` 主门（成功后 `MainDoor.nStatus` ⇒ `Open()`）。
+  prose README.md:20: 4. `UserCastle.cs:130-138` 主门 `RegenMonsterByName` → `WAbil.HP=nHP` → `Castle=this` → `MainDoor.nStatus && Open()`；
+  UserCastle.cs:130 => MainDoor.BaseObject = SystemShare.WorldEngine.RegenMonsterByName(MapName, MainDoor.nX, MainDoor.nY, MainDoor.sName);
+  UserCastle.cs:135 => if (MainDoor.nStatus)
+  UserCastle.cs:137 => ((CastleDoor)MainDoor.BaseObject).Open();
+ANCHOR UserCastle.cs:135-138  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:631: /// `if (MainDoor.nStatus) ((CastleDoor)MainDoor.BaseObject).Open();`（`UserCastle.cs:135-138`）。
+  prose castle.rs:762: // `UserCastle.cs:135-138`：`if (MainDoor.nStatus) ((CastleDoor)BaseObject).Open();`
+  UserCastle.cs:135 => if (MainDoor.nStatus)
+  UserCastle.cs:137 => ((CastleDoor)MainDoor.BaseObject).Open();
+ANCHOR UserCastle.cs:133-211  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:667: /// `UserCastle.Initialize` 只覆盖 `WAbil.HP = nHP`，**不改** `MaxHP`（`UserCastle.cs:133-211`）
+  UserCastle.cs:133 => MainDoor.BaseObject.WAbil.HP = MainDoor.nHP;
+  UserCastle.cs:205 => ObjUnit.BaseObject.WAbil.HP = Guards[i].nHP;
+ANCHOR UserCastle.cs:142  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:961: /// - 主门造怪失败用英文文案 `[Error] UserCastle.Initialize MainDoor.UnitObj = nil`（`UserCastle.cs:142`）。
+  prose README.md:36: - 主门造怪失败用英文文案 `[Error] UserCastle.Initialize MainDoor.UnitObj = nil`（`UserCastle.cs:142`）；
+  UserCastle.cs:142 => LogService.Warn("[Error] UserCastle.Initialize MainDoor.UnitObj = nil");
+ANCHOR UserCastle.cs:144-173  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:954: /// 5. `UserCastle.cs:144-173` 左/中/右墙（各写 `HP` + `Castle`）；
+  prose README.md:21: 5. `UserCastle.cs:144-173` 左/中/右墙（写 `HP` + `Castle`）；
+  UserCastle.cs:144 => LeftWall.BaseObject = SystemShare.WorldEngine.RegenMonsterByName(MapName, LeftWall.nX, LeftWall.nY, LeftWall.sName);
+  UserCastle.cs:154 => CenterWall.BaseObject = SystemShare.WorldEngine.RegenMonsterByName(MapName, CenterWall.nX, CenterWall.nY, CenterWall.sName);
+  UserCastle.cs:164 => RightWall.BaseObject = SystemShare.WorldEngine.RegenMonsterByName(MapName, RightWall.nX, RightWall.nY, RightWall.sName);
+ANCHOR UserCastle.cs:152/162/172  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:959: /// - **墙的失败告警引用上一单元的名字**（copy-paste 怪癖，`UserCastle.cs:152/162/172`）：
+  prose castle.rs:2766: // oracle copy-paste 怪癖（`UserCastle.cs:152/162/172`）：
+  prose README.md:34: - **墙的失败告警引用上一单元的名字**（`UserCastle.cs:152/162/172` 的 copy-paste 怪癖）：
+  UserCastle.cs:152 => LogService.Warn("[错误信息] 城堡初始化城门失败，检查怪物数据库里有没城门的设置: " + MainDoor.sName);
+  UserCastle.cs:162 => LogService.Warn("[错误信息] 城堡初始化左城墙失败，检查怪物数据库里有没左城墙的设置: " + LeftWall.sName);
+  UserCastle.cs:172 => LogService.Warn("[错误信息] 城堡初始化中城墙失败，检查怪物数据库里有没中城墙的设置: " + CenterWall.sName);
+ANCHOR UserCastle.cs:144-153  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:1012: // `UserCastle.cs:144-153` 左墙（失败告警引用**主门**名）。
+  UserCastle.cs:144 => LeftWall.BaseObject = SystemShare.WorldEngine.RegenMonsterByName(MapName, LeftWall.nX, LeftWall.nY, LeftWall.sName);
+ANCHOR UserCastle.cs:154-163  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:1029: // `UserCastle.cs:154-163` 中墙（失败告警引用**左墙**名）。
+  UserCastle.cs:154 => CenterWall.BaseObject = SystemShare.WorldEngine.RegenMonsterByName(MapName, CenterWall.nX, CenterWall.nY, CenterWall.sName);
+ANCHOR UserCastle.cs:164-173  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:1046: // `UserCastle.cs:164-173` 右墙（失败告警引用**中墙**名）。
+  UserCastle.cs:164 => RightWall.BaseObject = SystemShare.WorldEngine.RegenMonsterByName(MapName, RightWall.nX, RightWall.nY, RightWall.sName);
+ANCHOR UserCastle.cs:174-193  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:955: /// 6. `UserCastle.cs:174-193` 弓手 `i=0..12`：`nHP <= 0` 跳过；成功 ⇒ `HP` + `Castle` + `GuardDirection=3`；
+  prose castle.rs:1063: // `UserCastle.cs:174-193` 弓手：`nHP <= 0` 跳过；成功 ⇒ `HP` + `Castle` + `GuardDirection=3`。
+  prose README.md:22: 6. `UserCastle.cs:174-193` 弓手 `i=0..12`：`nHP<=0` 跳过；成功 ⇒ `HP` + `Castle` + `GuardDirection=3`；
+  UserCastle.cs:174 => for (int i = 0; i < Archers.Length; i++)
+  UserCastle.cs:177 => if (ObjUnit.nHP <= 0)
+  UserCastle.cs:187 => ((GuardUnit)ObjUnit.BaseObject).GuardDirection = 3;
+ANCHOR UserCastle.cs:177/197  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:634: /// （`UserCastle.cs:177/197`）。
+  UserCastle.cs:177 => if (ObjUnit.nHP <= 0)
+  UserCastle.cs:197 => if (ObjUnit.nHP <= 0)
+ANCHOR UserCastle.cs:186  [src/M2Server/Castle/UserCastle.cs]
+  prose README.md:119: 同族两处（`06-redcheck.txt` RC1/RC3 的引用）一并订正：`:181`→`UserCastle.cs:186`、`:164`→`UserCastle.cs:177`。
+  UserCastle.cs:186 => ObjUnit.BaseObject.Castle = this;
+ANCHOR UserCastle.cs:187  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:705: /// 弓手 `((GuardUnit)BaseObject).GuardDirection = 3`（`UserCastle.cs:187`）；其余恒 `None`。
+  prose castle.rs:2645: // 弓手 `GuardDirection=3`（`UserCastle.cs:187`），其余无。
+  UserCastle.cs:187 => ((GuardUnit)ObjUnit.BaseObject).GuardDirection = 3;
+ANCHOR UserCastle.cs:194-211  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:956: /// 7. `UserCastle.cs:194-211` 守卫 `i=0..12`：`nHP <= 0` 跳过；成功 ⇒ **只**写 `HP`（oracle 不设 `Castle`）。
+  prose castle.rs:1088: // `UserCastle.cs:194-211` 守卫：`nHP <= 0` 跳过；成功 ⇒ 只写 `HP`（不设 `Castle`）。
+  prose README.md:23: 7. `UserCastle.cs:194-211` 守卫 `i=0..12`：`nHP<=0` 跳过；成功 ⇒ **只**写 `HP`（oracle 不设 `Castle`）。
+  prose README.md:37: - 守卫造怪**不**绑 `Castle`（`UserCastle.cs:194-211` 内无 `Castle = this`），与门/墙/弓手不同。
+  UserCastle.cs:194 => for (int i = 0; i < Guards.Length; i++)
+  UserCastle.cs:205 => ObjUnit.BaseObject.WAbil.HP = Guards[i].nHP;
+ANCHOR UserCastle.cs:134/148/158/168/186  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:703: /// （`UserCastle.cs:134/148/158/168/186` 设，`UserCastle.cs:202-206` 守卫生成后**不设**）。
+  prose castle.rs:2639: // 门/墙/弓手绑定 `Castle`；守卫不绑（`UserCastle.cs:134/148/158/168/186` vs `UserCastle.cs:202-206`）。
+  UserCastle.cs:134 => MainDoor.BaseObject.Castle = this;
+  UserCastle.cs:148 => LeftWall.BaseObject.Castle = this;
+  UserCastle.cs:158 => CenterWall.BaseObject.Castle = this;
+  UserCastle.cs:168 => RightWall.BaseObject.Castle = this;
+  UserCastle.cs:186 => ObjUnit.BaseObject.Castle = this;
+ANCHOR UserCastle.cs:202-206  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:703: /// （`UserCastle.cs:134/148/158/168/186` 设，`UserCastle.cs:202-206` 守卫生成后**不设**）。
+  prose castle.rs:2639: // 门/墙/弓手绑定 `Castle`；守卫不绑（`UserCastle.cs:134/148/158/168/186` vs `UserCastle.cs:202-206`）。
+  UserCastle.cs:202 => ObjUnit.BaseObject = SystemShare.WorldEngine.RegenMonsterByName(MapName, ObjUnit.nX, ObjUnit.nY, ObjUnit.sName);
+ANCHOR UserCastle.cs:228-232  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:946: /// `LoadConfig()`（`UserCastle.cs:228-232`）的 `MapName` 部分——**⑧-6 第②片「实体挂图」**。
+  UserCastle.cs:228 => private void LoadConfig()
+  UserCastle.cs:230 => castleConf.LoadConfig(this);
+ANCHOR UserCastle.cs:328-330  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:80: /// 只到「日」粒度的日历（`DateTime.Now.Year/Month/Day` 口径，`UserCastle.cs:328-330`）。
+  UserCastle.cs:328 => int Year = DateTime.Now.Year;
+ANCHOR ArcherUnit.cs:8-16  [src/Modules/SystemModule/Data/ArcherUnit.cs]
+  prose castle.rs:617: /// `SystemModule.Data.ArcherUnit` 的一条配置（`src/Modules/SystemModule/Data/ArcherUnit.cs:8-16`）。
+  ArcherUnit.cs:8 => public class ArcherUnit
+ANCHOR GameSvrConf.cs:1786-1787  [src/Modules/SystemModule/Conf/Model/GameSvrConf.cs]
+  prose castle.rs:69: /// `CastleWarRangeX` / `CastleWarRangeY` 的 `InCastleWarArea` 默认（`GameSvrConf.cs:1786-1787`）。
+  GameSvrConf.cs:1786 => CastleWarRangeX = 100;
+  GameSvrConf.cs:1787 => CastleWarRangeY = 100;
+ANCHOR UserCastle.cs:311-446  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:9: //! | [`UserCastle::run`] | `src/M2Server/Castle/UserCastle.cs:311-446`（每 tick；跨天重置 `UserCastle.cs:328-339`、每日开战 `UserCastle.cs:340-376`、回收 Ghost `UserCastle.cs:377-389`、围墙 `StoneMode` `UserCastle.cs:391-440`） |
+  prose castle.rs:1113: /// oracle `UserCastle.Run()`（`UserCastle.cs:311-446`）。
+  UserCastle.cs:311 => public void Run()
+  UserCastle.cs:373 => MainDoorControl(true);
+  UserCastle.cs:446 => }
+ANCHOR UserCastle.cs:328-339  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:9: //! | [`UserCastle::run`] | `src/M2Server/Castle/UserCastle.cs:311-446`（每 tick；跨天重置 `UserCastle.cs:328-339`、每日开战 `UserCastle.cs:340-376`、回收 Ghost `UserCastle.cs:377-389`、围墙 `StoneMode` `UserCastle.cs:391-440`） |
+  prose castle.rs:1131: // `UserCastle.cs:328-339`：跨天重置 `TodayIncome=0; IncomeToday=Now; IsStartWar=false`。
+  UserCastle.cs:328 => int Year = DateTime.Now.Year;
+  UserCastle.cs:336 => TodayIncome = 0;
+  UserCastle.cs:339 => }
+ANCHOR UserCastle.cs:340-376  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:9: //! | [`UserCastle::run`] | `src/M2Server/Castle/UserCastle.cs:311-446`（每 tick；跨天重置 `UserCastle.cs:328-339`、每日开战 `UserCastle.cs:340-376`、回收 Ghost `UserCastle.cs:377-389`、围墙 `StoneMode` `UserCastle.cs:391-440`） |
+  prose castle.rs:1139: // `UserCastle.cs:340-376`：每日开战。
+  UserCastle.cs:340 => if (!IsStartWar && !UnderWar)
+  UserCastle.cs:343 => if (hour == SystemShare.Config.StartCastlewarTime) // 20
+  UserCastle.cs:376 => }
+ANCHOR UserCastle.cs:377-389  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:9: //! | [`UserCastle::run`] | `src/M2Server/Castle/UserCastle.cs:311-446`（每 tick；跨天重置 `UserCastle.cs:328-339`、每日开战 `UserCastle.cs:340-376`、回收 Ghost `UserCastle.cs:377-389`、围墙 `StoneMode` `UserCastle.cs:391-440`） |
+  prose castle.rs:1186: // `UserCastle.cs:377-389`：回收 Ghost 的守卫 → 弓手（数组下标升序，`Guards` 在前）。
+  UserCastle.cs:377 => for (int i = 0; i < Guards.Length; i++)
+  UserCastle.cs:384 => for (int i = 0; i < Archers.Length; i++)
+  UserCastle.cs:389 => }
+ANCHOR UserCastle.cs:391-440  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:9: //! | [`UserCastle::run`] | `src/M2Server/Castle/UserCastle.cs:311-446`（每 tick；跨天重置 `UserCastle.cs:328-339`、每日开战 `UserCastle.cs:340-376`、回收 Ghost `UserCastle.cs:377-389`、围墙 `StoneMode` `UserCastle.cs:391-440`） |
+  UserCastle.cs:391 => if (UnderWar)
+  UserCastle.cs:440 => }
+ANCHOR UserCastle.cs:564-572  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:10: //! | [`UserCastle::start_wallconquest_war`] | `UserCastle.cs:564-572`（刷皇宫 100 范围内玩家 `RefShowName`） |
+  prose castle.rs:1233: /// oracle `StartWallconquestWar()`（`UserCastle.cs:564-572`）：刷皇宫 100 范围内玩家 `RefShowName`。
+  UserCastle.cs:564 => public void StartWallconquestWar()
+  UserCastle.cs:567 => SystemShare.WorldEngine.GetMapRageHuman(PalaceEnvir, HomeX, HomeY, 100, ref playObjectList);
+  UserCastle.cs:570 => playObjectList[i].RefShowName();
+  UserCastle.cs:572 => }
+ANCHOR UserCastle.cs:577-597  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:11: //! | [`UserCastle::stop_wallconquest_war`] | `UserCastle.cs:577-597`（`UnderWar=false` + 清 `AttackGuildList` + 广播） |
+  prose castle.rs:1245: /// oracle `StopWallconquestWar()`（`UserCastle.cs:577-597`）。
+  UserCastle.cs:577 => public void StopWallconquestWar()
+  UserCastle.cs:580 => UnderWar = false;
+  UserCastle.cs:581 => AttackGuildList.Clear();
+  UserCastle.cs:597 => }
+ANCHOR UserCastle.cs:890-909  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:12: //! | [`UserCastle::main_door_control`] | `UserCastle.cs:890-909`（幂等：只在 `IsOpened` 与入参不符时动） |
+  prose castle.rs:1263: /// oracle `MainDoorControl(bool boClose)`（`UserCastle.cs:890-909`）：幂等开关主门。
+  UserCastle.cs:890 => public void MainDoorControl(bool boClose)
+  UserCastle.cs:905 => ((CastleDoor)MainDoor.BaseObject).Open();
+  UserCastle.cs:909 => }
+ANCHOR UserCastle.cs:998-1014  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:13: //! | [`UserCastle::add_attacker_info`] | `UserCastle.cs:998-1014`（`InAttackerList` 查重 + `AddDateTimeOfDay` + `SaveAttackSabukWall` + `SS_212`） |
+  prose castle.rs:1343: /// oracle `AddAttackerInfo(GuildInfo)`（`UserCastle.cs:998-1014`）。
+  UserCastle.cs:998 => public bool AddAttackerInfo(GuildInfo Guild)
+  UserCastle.cs:1011 => SystemShare.WorldEngine.SendServerGroupMsg(Messages.SS_212, M2Share.ServerIndex, "");
+  UserCastle.cs:1014 => }
+ANCHOR UserCastle.cs:639-642  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:14: //! | [`UserCastle::is_master_guild`] / [`UserCastle::is_member`] | `UserCastle.cs:639-642` / `UserCastle.cs:480-483` |
+  prose castle.rs:1376: /// oracle `IsMasterGuild(IGuild)`（`UserCastle.cs:639-642`）。
+  UserCastle.cs:639 => public bool IsMasterGuild(IGuild guild)
+  UserCastle.cs:641 => return MasterGuild != null && MasterGuild == guild;
+ANCHOR UserCastle.cs:480-483  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:14: //! | [`UserCastle::is_master_guild`] / [`UserCastle::is_member`] | `UserCastle.cs:639-642` / `UserCastle.cs:480-483` |
+  prose castle.rs:1382: /// oracle `IsMember(PlayObject)`（`UserCastle.cs:480-483`）/ `IsMember(IPlayerActor)`（`UserCastle.cs:609-612`）
+  UserCastle.cs:480 => public bool IsMember(PlayObject member)
+  UserCastle.cs:482 => return IsMasterGuild(member.MyGuild);
+ANCHOR UserCastle.cs:604-607  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:15: //! | [`UserCastle::in_palace_guild_count`] | `UserCastle.cs:604-607`（**返回值 = `AttackGuildList.Count`**，语义是「攻城行会数」，不是皇宫内玩家数） |
+  prose castle.rs:1389: /// oracle `InPalaceGuildCount()`（`UserCastle.cs:604-607`）= `AttackGuildList.Count`。
+  UserCastle.cs:604 => public int InPalaceGuildCount()
+  UserCastle.cs:606 => return AttackGuildList.Count;
+ANCHOR UserCastle.cs:680-705  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:16: //! | [`UserCastle::check_in_palace`] | `UserCastle.cs:680-705`（任一城墙格死亡且坐标命中） |
+  prose castle.rs:1397: /// oracle `CheckInPalace(int nX, int nY)`（`UserCastle.cs:680-705`）：
+  UserCastle.cs:680 => public bool CheckInPalace(int nX, int nY)
+  UserCastle.cs:704 => return result;
+ANCHOR UserCastle.cs:601  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:28: //! | [`UserCastle::with_drawal_golds_n1`] | `UserCastle.cs:601` | `CastleOfficial.cs:157`（金库提取，⑧-9 面） |
+  prose castle.rs:1411: /// N1：`UserCastle.cs:601`（`WithDrawalGolds(IPlayerActor,int)`）抛异常被吞 ⇒ no-op。
+  UserCastle.cs:601 => throw new NotImplementedException();
+ANCHOR CastleOfficial.cs:157  [src/GameSrv/Npc/CastleOfficial.cs]
+  prose castle.rs:28: //! | [`UserCastle::with_drawal_golds_n1`] | `UserCastle.cs:601` | `CastleOfficial.cs:157`（金库提取，⑧-9 面） |
+  CastleOfficial.cs:157 => switch (Castle.WithDrawalGolds(PlayObject, HUtil32.StrToInt(sMsg, 0)))
+ANCHOR UserCastle.cs:646  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:29: //! | [`UserCastle::get_castle_n1`] | `UserCastle.cs:646` | `PlayObject.Message.cs:329`、`ChangeSabukLordCommand.cs:39` |
+  prose castle.rs:1418: /// N1：`UserCastle.cs:646`（`GetCastle(IGuild)`）抛异常被吞 ⇒ no-op（**不**改归属）。
+  UserCastle.cs:646 => throw new NotImplementedException();
+ANCHOR PlayObject.Message.cs:329  [src/M2Server/Player/PlayObject.Message.cs]
+  prose castle.rs:29: //! | [`UserCastle::get_castle_n1`] | `UserCastle.cs:646` | `PlayObject.Message.cs:329`、`ChangeSabukLordCommand.cs:39` |
+  PlayObject.Message.cs:329 => castle.GetCastle(MyGuild);
+ANCHOR ChangeSabukLordCommand.cs:39  [src/Modules/GameCommand/Commands/ChangeSabukLordCommand.cs]
+  prose castle.rs:29: //! | [`UserCastle::get_castle_n1`] | `UserCastle.cs:646` | `PlayObject.Message.cs:329`、`ChangeSabukLordCommand.cs:39` |
+  ChangeSabukLordCommand.cs:39 => castle.GetCastle(guild);
+ANCHOR UserCastle.cs:672  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:30: //! | [`UserCastle::add_attacker_info_n1`] | `UserCastle.cs:672` | `GuildOfficial.cs:219`（NPC 申请攻城） |
+  prose castle.rs:1421: /// N1：`UserCastle.cs:672`（`AddAttackerInfo(IGuild)`）抛异常被吞 ⇒ no-op（**不**登记）。
+  UserCastle.cs:672 => throw new NotImplementedException();
+ANCHOR GuildOfficial.cs:219  [src/GameSrv/Npc/GuildOfficial.cs]
+  prose castle.rs:30: //! | [`UserCastle::add_attacker_info_n1`] | `UserCastle.cs:672` | `GuildOfficial.cs:219`（NPC 申请攻城） |
+  GuildOfficial.cs:219 => if (Castle.AddAttackerInfo(PlayObject.MyGuild))
+ANCHOR UserCastle.cs:677  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:31: //! | [`UserCastle::can_get_castle_n1`] | `UserCastle.cs:677` | `PlayObject.Message.cs:327` |
+  prose castle.rs:1426: /// N1：`UserCastle.cs:677`（`CanGetCastle(IGuild)`）抛异常被吞 ⇒ no-op ⇒ `false`。
+  UserCastle.cs:677 => throw new NotImplementedException();
+ANCHOR PlayObject.Message.cs:327  [src/M2Server/Player/PlayObject.Message.cs]
+  prose castle.rs:31: //! | [`UserCastle::can_get_castle_n1`] | `UserCastle.cs:677` | `PlayObject.Message.cs:327` |
+  PlayObject.Message.cs:327 => if (castle.CanGetCastle(MyGuild))
+ANCHOR UserCastle.cs:709  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:32: //! | [`UserCastle::check_in_palace_player_n1`] | `UserCastle.cs:709` | `PlayObject.Operate.cs:371`（开城门前的皇宫判定） |
+  prose castle.rs:1432: /// N1：`UserCastle.cs:709`（`CheckInPalace(int,int,IPlayerActor)`）抛异常被吞 ⇒ no-op ⇒ `false`。
+  UserCastle.cs:709 => throw new NotImplementedException();
+ANCHOR PlayObject.Operate.cs:371  [src/M2Server/Player/PlayObject.Operate.cs]
+  prose castle.rs:32: //! | [`UserCastle::check_in_palace_player_n1`] | `UserCastle.cs:709` | `PlayObject.Operate.cs:371`（开城门前的皇宫判定） |
+  PlayObject.Operate.cs:371 => if (castle == null || castle.DoorStatus != door.Status || Race != ActorRace.Play || castle.CheckInPalace(CurrX, CurrY, this))
+ANCHOR UserCastle.cs:913  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:33: //! | [`UserCastle::receipt_golds_n1`] | `UserCastle.cs:913` | `CastleOfficial.cs:179`（金库上缴，⑧-9 面） |
+  prose castle.rs:1438: /// N1：`UserCastle.cs:913`（`ReceiptGolds(IPlayerActor,int)`）抛异常被吞 ⇒ no-op。
+  UserCastle.cs:913 => throw new NotImplementedException();
+ANCHOR CastleOfficial.cs:179  [src/GameSrv/Npc/CastleOfficial.cs]
+  prose castle.rs:33: //! | [`UserCastle::receipt_golds_n1`] | `UserCastle.cs:913` | `CastleOfficial.cs:179`（金库上缴，⑧-9 面） |
+  CastleOfficial.cs:179 => switch (Castle.ReceiptGolds(PlayObject, HUtil32.StrToInt(sMsg, 0)))
+ANCHOR UserCastle.cs:1042  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:34: //! | [`UserCastle::is_attack_ally_guild_n1`] | `UserCastle.cs:1042` | — |
+  prose castle.rs:1443: /// N1：`UserCastle.cs:1042`（`IsAttackAllyGuild(IGuild)`）抛异常被吞 ⇒ no-op ⇒ `false`。
+  UserCastle.cs:1042 => throw new NotImplementedException();
+ANCHOR UserCastle.cs:1047  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:35: //! | [`UserCastle::is_attack_guild_n1`] | `UserCastle.cs:1047` | `PlayObject.Message.cs:325` |
+  prose castle.rs:1449: /// N1：`UserCastle.cs:1047`（`IsAttackGuild(IGuild)`）抛异常被吞 ⇒ no-op ⇒ `false`。
+  UserCastle.cs:1047 => throw new NotImplementedException();
+ANCHOR PlayObject.Message.cs:325  [src/M2Server/Player/PlayObject.Message.cs]
+  prose castle.rs:35: //! | [`UserCastle::is_attack_guild_n1`] | `UserCastle.cs:1047` | `PlayObject.Message.cs:325` |
+  PlayObject.Message.cs:325 => if (castle.IsAttackGuild(MyGuild))
+ANCHOR UserCastle.cs:1052  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:36: //! | [`UserCastle::is_defense_ally_guild_n1`] | `UserCastle.cs:1052` | — |
+  prose castle.rs:1455: /// N1：`UserCastle.cs:1052`（`IsDefenseAllyGuild(IGuild)`）抛异常被吞 ⇒ no-op ⇒ `false`。
+  UserCastle.cs:1052 => throw new NotImplementedException();
+ANCHOR UserCastle.cs:1057  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:37: //! | [`UserCastle::is_defense_guild_n1`] | `UserCastle.cs:1057` | — |
+  prose castle.rs:1461: /// N1：`UserCastle.cs:1057`（`IsDefenseGuild(IGuild)`）抛异常被吞 ⇒ no-op ⇒ `false`。
+  UserCastle.cs:1057 => throw new NotImplementedException();
+ANCHOR PlayObject.Message.cs:324-334  [src/M2Server/Player/PlayObject.Message.cs]
+  prose castle.rs:39: //! [`UserCastle::try_auto_occupy_n1`] 把 `PlayObject.Message.cs:324-334` 的**自动占领整链**建模为 no-op
+  prose castle.rs:1467: /// N1：`PlayObject.Message.cs:324-334` 的**自动占领整链**（`IsAttackGuild` → `CanGetCastle`
+  PlayObject.Message.cs:325 => if (castle.IsAttackGuild(MyGuild))
+  PlayObject.Message.cs:329 => castle.GetCastle(MyGuild);
+  PlayObject.Message.cs:333 => castle.StopWallconquestWar();
+ANCHOR M2Share.cs:458-493  [src/M2Server/M2Share.cs]
+  prose castle.rs:45: //! 1. **`AddDateTimeOfDay` 忽略天数**：`M2Share.cs:458-493` 的函数体整段被注释，最后只有
+  M2Share.cs:458 => public static DateTime AddDateTimeOfDay(DateTime DateTime, int nDay)
+  M2Share.cs:460 => DateTime result = DateTime.Now;
+ANCHOR UserCastle.cs:582-584  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:48: //! 2. **`StopWallconquestWar` 的玩家处理不可达**：`UserCastle.cs:582-584` 的
+  prose castle.rs:1247: /// **照搬 oracle 怪行为**：`UserCastle.cs:582-584` 的 `GetMapOfRangeHumanCount` **丢弃返回值**，
+  UserCastle.cs:582 => IList<PlayObject> ListC = new List<PlayObject>();
+  UserCastle.cs:583 => SystemShare.WorldEngine.GetMapOfRangeHumanCount(CastleEnvir, HomeX, HomeY, 100);
+  UserCastle.cs:584 => for (int i = 0; i < ListC.Count; i++)
+ANCHOR UserCastle.cs:48  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:14: //! | [`UserCastle::is_master_guild`] / [`UserCastle::is_member`] | `UserCastle.cs:639-642` / `UserCastle.cs:480-483` |
+  prose castle.rs:63: /// `UserCastle.Archers = new ArcherUnit[12]`（`UserCastle.cs:48`）与 `CastleConst.MaxCastleArcher`
+  prose castle.rs:1382: /// oracle `IsMember(PlayObject)`（`UserCastle.cs:480-483`）/ `IsMember(IPlayerActor)`（`UserCastle.cs:609-612`）
+  UserCastle.cs:48 => Archers = new ArcherUnit[12];
+ANCHOR CastleConst.cs:10  [src/M2Server/Castle/CastleConst.cs]
+  prose castle.rs:64: /// （`CastleConst.cs:10`）。`Guards` 数组长度同为 12（`UserCastle.cs:49`），
+  CastleConst.cs:10 => public const int MaxCastleArcher = 12;
+ANCHOR UserCastle.cs:49  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:64: /// （`CastleConst.cs:10`）。`Guards` 数组长度同为 12（`UserCastle.cs:49`），
+  prose castle.rs:67: /// `Guards` 数组长度（`UserCastle.cs:49`）。
+  UserCastle.cs:49 => Guards = new ArcherUnit[12];
+ANCHOR GameSvrConf.cs:1782  [src/Modules/SystemModule/Conf/Model/GameSvrConf.cs]
+  prose castle.rs:136: /// `GameSvrConf` 初值（`GameSvrConf.cs:1442-1446` 与 `GameSvrConf.cs:1782`）。
+  GameSvrConf.cs:1782 => CastleName = "沙巴克";
+ANCHOR Messages.cs:453  [src/OpenMir2/Messages.cs]
+  prose castle.rs:71: /// `Messages.cs:453` 的 `SS_204`（跨服系统消息）。
+  Messages.cs:453 => public const int SS_204 = 204;
+ANCHOR Messages.cs:461  [src/OpenMir2/Messages.cs]
+  prose castle.rs:73: /// `Messages.cs:461` 的 `SS_212`（跨服 `RELOADCASTLEINFO`）。
+  Messages.cs:461 => public const int SS_212 = 212;
+ANCHOR ServerConf.cs:639  [src/Modules/SystemModule/Conf/ServerConf.cs]
+  prose castle.rs:121: /// `[Setup] StartCastlewarTime`（`ServerConf.cs:639`，每日开战小时）。
+  ServerConf.cs:639 => SystemShare.Config.StartCastlewarTime = ReadWriteInteger("Setup", "StartCastlewarTime", SystemShare.Config.StartCastlewarTime);
+ANCHOR ServerConf.cs:642  [src/Modules/SystemModule/Conf/ServerConf.cs]
+  prose castle.rs:123: /// `[Setup] CastleWarTime`（`ServerConf.cs:642`，攻城时长 ms）。
+  ServerConf.cs:642 => SystemShare.Config.CastleWarTime = ReadWriteInteger("Setup", "CastleWarTime", SystemShare.Config.CastleWarTime);
+ANCHOR ServerConf.cs:640  [src/Modules/SystemModule/Conf/ServerConf.cs]
+  prose castle.rs:125: /// `[Setup] ShowCastleWarEndMsgTime`（`ServerConf.cs:640`，结束前预告窗口 ms）。
+  ServerConf.cs:640 => SystemShare.Config.ShowCastleWarEndMsgTime = ReadWriteInteger("Setup", "ShowCastleWarEndMsgTime", SystemShare.Config.ShowCastleWarEndMsgTime);
+ANCHOR ServerConf.cs:643  [src/Modules/SystemModule/Conf/ServerConf.cs]
+  prose castle.rs:127: /// `[Setup] GetCastleTime`（`ServerConf.cs:643`，可占领最短时长 ms）。
+  ServerConf.cs:643 => SystemShare.Config.GetCastleTime = ReadWriteInteger("Setup", "GetCastleTime", SystemShare.Config.GetCastleTime);
+ANCHOR ServerConf.cs:638  [src/Modules/SystemModule/Conf/ServerConf.cs]
+  prose castle.rs:129: /// `[Setup] StartCastleWarDays`（`ServerConf.cs:638`，申请日 +N 天；`AddDateTimeOfDay` 实际忽略）。
+  ServerConf.cs:638 => SystemShare.Config.StartCastleWarDays = ReadWriteByte("Setup", "StartCastleWarDays", SystemShare.Config.StartCastleWarDays);
+ANCHOR ServerConf.cs:253  [src/Modules/SystemModule/Conf/ServerConf.cs]
+  prose castle.rs:131: /// `[Setup] CastleName`（`ServerConf.cs:253`，广播文案里的城堡名）。
+  ServerConf.cs:253 => SystemShare.Config.CastleName = ReadWriteString("Setup", "CastleName", SystemShare.Config.CastleName);
+ANCHOR GameSvrConf.cs:1442-1446  [src/Modules/SystemModule/Conf/Model/GameSvrConf.cs]
+  prose castle.rs:136: /// `GameSvrConf` 初值（`GameSvrConf.cs:1442-1446` 与 `GameSvrConf.cs:1782`）。
+  GameSvrConf.cs:1442 => StartCastleWarDays = 4;
+  GameSvrConf.cs:1443 => StartCastlewarTime = 20;
+  GameSvrConf.cs:1446 => GetCastleTime = 10 * 60 * 1000;
+ANCHOR CastleDoor.cs:12/57/75  [src/M2Server/Monster/Monsters/CastleDoor.cs]
+  prose castle.rs:184: /// `CastleDoor.HoldPlace`（`CastleDoor.cs:12/57/75`）。
+  CastleDoor.cs:12 => public bool HoldPlace;
+  CastleDoor.cs:57 => HoldPlace = false;
+  CastleDoor.cs:75 => HoldPlace = true;
+ANCHOR WallStructure.cs:7/53-66  [src/M2Server/Monster/Monsters/WallStructure.cs]
+  prose castle.rs:186: /// `WallStructure.SetMapFlaged`（`WallStructure.cs:7/53-66`）。
+  WallStructure.cs:7 => internal bool SetMapFlaged;
+  WallStructure.cs:53 => if (SetMapFlaged)
+  WallStructure.cs:65 => SetMapFlaged = true;
+ANCHOR CastleDoor.cs:66/96/108  [src/M2Server/Monster/Monsters/CastleDoor.cs]
+  prose castle.rs:205: /// `3 - Round(HP / MaxHP * 3.0)`（`CastleDoor.cs:66/96/108`、`WallStructure.cs:28/70`）。
+  CastleDoor.cs:66 => Dir = (byte)(3 - HUtil32.Round(WAbil.HP / (double)WAbil.MaxHP * 3.0));
+  CastleDoor.cs:96 => int n08 = 3 - HUtil32.Round(WAbil.HP / (double)WAbil.MaxHP * 3.0);
+  CastleDoor.cs:108 => int n08 = 3 - HUtil32.Round(WAbil.HP / (double)WAbil.MaxHP * 3.0);
+ANCHOR WallStructure.cs:28/70  [src/M2Server/Monster/Monsters/WallStructure.cs]
+  prose castle.rs:205: /// `3 - Round(HP / MaxHP * 3.0)`（`CastleDoor.cs:66/96/108`、`WallStructure.cs:28/70`）。
+  WallStructure.cs:28 => n08 = (byte)(3 - HUtil32.Round(this.WAbil.HP / this.WAbil.MaxHP * 3.0));
+  WallStructure.cs:70 => n08 = 3 - HUtil32.Round(this.WAbil.HP / this.WAbil.MaxHP * 3.0);
+ANCHOR CastleDoor.cs:46-58  [src/M2Server/Monster/Monsters/CastleDoor.cs]
+  prose castle.rs:224: /// oracle `CastleDoor.Open()`（`CastleDoor.cs:46-58`）。
+  prose castle.rs:1983: // `CastleDoor.cs:46-58`。
+  CastleDoor.cs:46 => public void Open()
+  CastleDoor.cs:57 => HoldPlace = false;
+ANCHOR CastleDoor.cs:60-76  [src/M2Server/Monster/Monsters/CastleDoor.cs]
+  prose castle.rs:245: /// oracle `CastleDoor.Close()`（`CastleDoor.cs:60-76`）。
+  prose castle.rs:1999: // `CastleDoor.cs:60-76`：`Dir = 3 - Round(10000/10000*3) = 0`。
+  CastleDoor.cs:60 => public void Close()
+  CastleDoor.cs:75 => HoldPlace = true;
+ANCHOR CastleDoor.cs:78-82  [src/M2Server/Monster/Monsters/CastleDoor.cs]
+  prose castle.rs:270: /// oracle `CastleDoor.Die()`（`CastleDoor.cs:78-82`）：`base.Die()` 后 `SetMapXyFlag(2)`。
+  prose castle.rs:2042: // `Die()` 本身仍 `SetMapXyFlag(2)`（`CastleDoor.cs:78-82`）。
+  CastleDoor.cs:78 => public override void Die()
+  CastleDoor.cs:81 => SetMapXyFlag(2);
+ANCHOR CastleDoor.cs:84-104  [src/M2Server/Monster/Monsters/CastleDoor.cs]
+  prose castle.rs:278: /// oracle `CastleDoor.Run()`（`CastleDoor.cs:84-104`）。
+  CastleDoor.cs:84 => public override void Run()
+  CastleDoor.cs:103 => base.Run();
+ANCHOR CastleDoor.cs:106-115  [src/M2Server/Monster/Monsters/CastleDoor.cs]
+  prose castle.rs:303: /// oracle `CastleDoor.RefStatus()`（`CastleDoor.cs:106-115`）：重置 `Dir` 并发 `RM_ALIVE`。
+  prose castle.rs:2105: // `CastleDoor.cs:106-115`。
+  CastleDoor.cs:106 => public void RefStatus()
+  CastleDoor.cs:114 => SendRefMsg(Messages.RM_ALIVE, Dir, CurrX, CurrY, 0, "");
+ANCHOR WallStructure.cs:17-21  [src/M2Server/Monster/Monsters/WallStructure.cs]
+  prose castle.rs:317: /// oracle `WallStructure.Initialize()`（`WallStructure.cs:17-21`）：`Dir = 0` 后 `base.Initialize()`。
+  WallStructure.cs:17 => public override void Initialize()
+  WallStructure.cs:20 => base.Initialize();
+ANCHOR WallStructure.cs:23-40  [src/M2Server/Monster/Monsters/WallStructure.cs]
+  prose castle.rs:322: /// oracle `WallStructure.RefStatus()`（`WallStructure.cs:23-40`）。
+  prose castle.rs:2121: // `WallStructure.cs:23-40`：`HP>0 ⇒ 3-Round(...)`，否则 4。
+  WallStructure.cs:23 => public void RefStatus()
+  WallStructure.cs:39 => this.SendRefMsg(Messages.RM_ALIVE, this.Dir, this.CurrX, this.CurrY, 0, "");
+ANCHOR WallStructure.cs:47-82  [src/M2Server/Monster/Monsters/WallStructure.cs]
+  prose castle.rs:338: /// oracle `WallStructure.Run()`（`WallStructure.cs:47-82`）。
+  prose castle.rs:2148: // `WallStructure.cs:47-82`。
+  WallStructure.cs:47 => public override void Run()
+  WallStructure.cs:81 => base.Run();
+ANCHOR HUtil32.cs:131-134  [src/OpenMir2/HUtil32.cs]
+  prose castle.rs:379: /// 复刻 `HUtil32.Round`（`src/OpenMir2/HUtil32.cs:131-134`）：
+  HUtil32.cs:131 => public static int Round(double r)
+  HUtil32.cs:133 => return (int)Math.Round(r, MidpointRounding.AwayFromZero);
+ANCHOR CastleDoor.cs:23-44  [src/M2Server/Monster/Monsters/CastleDoor.cs]
+  prose castle.rs:389: /// `CastleDoor.SetMapXyFlag(int nFlag)`（`CastleDoor.cs:23-44`）的**有序**格子掩码。
+  CastleDoor.cs:23 => private void SetMapXyFlag(int nFlag)
+  CastleDoor.cs:42 => Envir.SetMapXyFlag(CurrX + 1, CurrY - 2, false);
+ANCHOR CastleDoor.cs:25-27  [src/M2Server/Monster/Monsters/CastleDoor.cs]
+  prose castle.rs:396: // `CastleDoor.cs:25-27`：三格先无条件置 `true`。
+  prose castle.rs:1601: // `SetMapXyFlag(1)`：`nFlag != 1` 为 false ⇒ 三格（`CastleDoor.cs:25-27`）先 true、
+  CastleDoor.cs:25 => Envir.SetMapXyFlag(CurrX, CurrY - 2, true);
+  CastleDoor.cs:27 => Envir.SetMapXyFlag(CurrX + 1, CurrY - 2, true);
+ANCHOR CastleDoor.cs:28  [src/M2Server/Monster/Monsters/CastleDoor.cs]
+  prose castle.rs:398: // `CastleDoor.cs:28`：`boFlag = nFlag != 1`。
+  CastleDoor.cs:28 => bool boFlag = nFlag != 1;
+ANCHOR CastleDoor.cs:29-37  [src/M2Server/Monster/Monsters/CastleDoor.cs]
+  prose castle.rs:400: // `CastleDoor.cs:29-37`：九格置 `boFlag`。
+  prose castle.rs:1602: // 九格（`CastleDoor.cs:29-37`）全 false（9 个不重复格）。
+  prose castle.rs:2211: // 关门：9 个不重复格全 `LowWall`（`CastleDoor.cs:29-37`）。
+  CastleDoor.cs:29 => Envir.SetMapXyFlag(CurrX, CurrY, boFlag);
+  CastleDoor.cs:37 => Envir.SetMapXyFlag(CurrX - 1, CurrY + 1, boFlag);
+ANCHOR CastleDoor.cs:38-43  [src/M2Server/Monster/Monsters/CastleDoor.cs]
+  prose castle.rs:410: // `CastleDoor.cs:38-43`：`nFlag == 0` 时再把那三格置 `false`。
+  CastleDoor.cs:38 => if (nFlag == 0)
+  CastleDoor.cs:42 => Envir.SetMapXyFlag(CurrX + 1, CurrY - 2, false);
+ANCHOR CastleOfficial.cs:52-67  [src/GameSrv/Npc/CastleOfficial.cs]
+  prose castle.rs:419: /// `CastleOfficial.cs:52-67` 的 `$CASTLEDOORSTATE` 文本。
+  prose castle.rs:792: /// `CastleOfficial` 的城门文本（`CastleOfficial.cs:52-67` 的 `$CASTLEDOORSTATE`）。
+  prose castle.rs:2485: // `CastleOfficial.cs:52-67`：先 `Death`，再 `IsOpened`。
+  CastleOfficial.cs:52 => case "$CASTLEDOORSTATE":
+  CastleOfficial.cs:67 => sMsg = ReplaceVariableText(sMsg, "<$CASTLEDOORSTATE>", sText);
+ANCHOR HUtil32.cs:550-576  [src/OpenMir2/HUtil32.cs]
+  prose castle.rs:435: /// `HUtil32.CompareLStr(src, targ)`（`src/OpenMir2/HUtil32.cs:550-576`）：大小写不敏感的前缀匹配。
+  prose castle.rs:2458: /// （`src/OpenMir2/HUtil32.cs:550-576`）同语义，**且对任意 UTF-8 输入都不 panic**。
+  HUtil32.cs:550 => public static bool CompareLStr(string src, string targ)
+  HUtil32.cs:575 => return false;
+ANCHOR CastleOfficial.cs:199-238  [src/GameSrv/Npc/CastleOfficial.cs]
+  prose castle.rs:466: /// `CastleOfficial.UserSelect` 的标签派发（`CastleOfficial.cs:199-238`）。
+  prose castle.rs:821: /// `CastleOfficial.UserSelect` 的城门/城墙标签动作（`CastleOfficial.cs:199-238`）。
+  CastleOfficial.cs:199 => else if (string.Compare(sLabel, ScriptFlagConst.sOPENMAINDOOR, StringComparison.OrdinalIgnoreCase) == 0)
+  CastleOfficial.cs:237 => PlayObject.SendMsg(this, Messages.RM_MENU_OK, 0, ActorId, 0, 0);
+ANCHOR CastleOfficial.cs:229/235  [src/GameSrv/Npc/CastleOfficial.cs]
+  prose castle.rs:492: /// **N5（白名单 T-40）**：`CastleOfficial.cs:229/235` 的
+  prose castle.rs:2432: // `CastleOfficial.cs:229/235`：length 实参用整串长度 ⇒ `13 + len > len` 恒真。
+  CastleOfficial.cs:229 => s20 = sLabel.Substring(ScriptFlagConst.sHIREGUARDNOW.Length, sLabel.Length);
+  CastleOfficial.cs:235 => s20 = sLabel.Substring(ScriptFlagConst.sHIREARCHERNOW.Length, sLabel.Length);
+ANCHOR CastleOfficial.cs:358-381  [src/GameSrv/Npc/CastleOfficial.cs]
+  prose castle.rs:510: /// `CastleOfficial.RepairDoor(PlayObject)`（`CastleOfficial.cs:358-381`）。
+  CastleOfficial.cs:358 => private void RepairDoor(IPlayerActor PlayObject)
+  CastleOfficial.cs:379 => PlayObject.SysMsg("城内资金不足!!!", MsgColor.Red, MsgType.Hint);
+ANCHOR CastleOfficial.cs:383-406  [src/GameSrv/Npc/CastleOfficial.cs]
+  prose castle.rs:547: /// `CastleOfficial.RepairWallNow(nWallIndex, PlayObject)`（`CastleOfficial.cs:383-406`）。
+  CastleOfficial.cs:383 => private void RepairWallNow(int nWallIndex, IPlayerActor PlayObject)
+  CastleOfficial.cs:404 => PlayObject.SysMsg("城内资金不足!!!", MsgColor.Red, MsgType.Hint);
+ANCHOR UserCastle.cs:115/121/127  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:717: /// `SystemShare.MapMgr.FindMap(name) != null`（`UserCastle.cs:115/121/127`）。
+  UserCastle.cs:115 => PalaceEnvir = SystemShare.MapMgr.FindMap(PalaceMap);
+  UserCastle.cs:121 => SecretEnvir = SystemShare.MapMgr.FindMap(SecretMap);
+  UserCastle.cs:127 => CastleEnvir = SystemShare.MapMgr.FindMap(MapName);
+ANCHOR UserCastle.cs:920/956  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:772: /// `UserCastle.RepairDoor`/`RepairWall` 的 60s `StruckTick` 门（`UserCastle.cs:920/956`）。
+  UserCastle.cs:920 => public bool RepairDoor()
+  UserCastle.cs:956 => public bool RepairWall(int nWallIndex)
+ANCHOR ScriptFlagConst.cs:75  [src/Modules/SystemModule/Const/ScriptFlagConst.cs]
+  prose castle.rs:775: /// `ScriptFlagConst.sOPENMAINDOOR`（`ScriptFlagConst.cs:75`）。
+  ScriptFlagConst.cs:75 => public const string sOPENMAINDOOR = "@openmaindoor";
+ANCHOR ScriptFlagConst.cs:76  [src/Modules/SystemModule/Const/ScriptFlagConst.cs]
+  prose castle.rs:777: /// `ScriptFlagConst.sCLOSEMAINDOOR`（`ScriptFlagConst.cs:76`）。
+  ScriptFlagConst.cs:76 => public const string sCLOSEMAINDOOR = "@closemaindoor";
+ANCHOR ScriptFlagConst.cs:77  [src/Modules/SystemModule/Const/ScriptFlagConst.cs]
+  prose castle.rs:779: /// `ScriptFlagConst.sREPAIRDOORNOW`（`ScriptFlagConst.cs:77`）。
+  ScriptFlagConst.cs:77 => public const string sREPAIRDOORNOW = "@repairdoornow";
+ANCHOR ScriptFlagConst.cs:78  [src/Modules/SystemModule/Const/ScriptFlagConst.cs]
+  prose castle.rs:781: /// `ScriptFlagConst.sREPAIRWALLNOW1`（`ScriptFlagConst.cs:78`）。
+  ScriptFlagConst.cs:78 => public const string sREPAIRWALLNOW1 = "@repairwallnow1";
+ANCHOR ScriptFlagConst.cs:79  [src/Modules/SystemModule/Const/ScriptFlagConst.cs]
+  prose castle.rs:783: /// `ScriptFlagConst.sREPAIRWALLNOW2`（`ScriptFlagConst.cs:79`）。
+  ScriptFlagConst.cs:79 => public const string sREPAIRWALLNOW2 = "@repairwallnow2";
+ANCHOR ScriptFlagConst.cs:80  [src/Modules/SystemModule/Const/ScriptFlagConst.cs]
+  prose castle.rs:785: /// `ScriptFlagConst.sREPAIRWALLNOW3`（`ScriptFlagConst.cs:80`）。
+  ScriptFlagConst.cs:80 => public const string sREPAIRWALLNOW3 = "@repairwallnow3";
+ANCHOR ScriptFlagConst.cs:81  [src/Modules/SystemModule/Const/ScriptFlagConst.cs]
+  prose castle.rs:787: /// `ScriptFlagConst.sHIREARCHERNOW`（`ScriptFlagConst.cs:81`）。
+  ScriptFlagConst.cs:81 => public const string sHIREARCHERNOW = "@hirearchernow";
+ANCHOR ScriptFlagConst.cs:82  [src/Modules/SystemModule/Const/ScriptFlagConst.cs]
+  prose castle.rs:789: /// `ScriptFlagConst.sHIREGUARDNOW`（`ScriptFlagConst.cs:82`）。
+  ScriptFlagConst.cs:82 => public const string sHIREGUARDNOW = "@hireguardnow";
+ANCHOR CastleOfficial.cs:59-61  [src/GameSrv/Npc/CastleOfficial.cs]
+  prose castle.rs:794: /// `CastleOfficial.cs:59-61`：`IsOpened` ⇒ `"opened"`。
+  CastleOfficial.cs:59 => else if (castleDoor.IsOpened)
+  CastleOfficial.cs:61 => sText = "opened";
+ANCHOR CastleOfficial.cs:63-65  [src/GameSrv/Npc/CastleOfficial.cs]
+  prose castle.rs:796: /// `CastleOfficial.cs:63-65`：否则 `"closed"`。
+  CastleOfficial.cs:63 => else
+  CastleOfficial.cs:65 => sText = "closed";
+ANCHOR CastleOfficial.cs:358-406  [src/GameSrv/Npc/CastleOfficial.cs]
+  prose castle.rs:799: /// `CastleOfficial` 修门/修墙的提示文案（`CastleOfficial.cs:358-406`）。
+  prose castle.rs:837: /// `CastleOfficial.RepairDoor`/`RepairWallNow` 的结果（`CastleOfficial.cs:358-406`）。
+  CastleOfficial.cs:358 => private void RepairDoor(IPlayerActor PlayObject)
+  CastleOfficial.cs:404 => PlayObject.SysMsg("城内资金不足!!!", MsgColor.Red, MsgType.Hint);
+ANCHOR CastleOfficial.cs:374/399  [src/GameSrv/Npc/CastleOfficial.cs]
+  prose castle.rs:801: /// `CastleOfficial.cs:374/399`：修理未生效（HP 满 / `UnderWar` / 60s 门未过）。
+  CastleOfficial.cs:374 => PlayObject.SysMsg("城门不需要修理!!!", MsgColor.Green, MsgType.Hint);
+  CastleOfficial.cs:399 => PlayObject.SysMsg("城门不需要修理!!!", MsgColor.Green, MsgType.Hint);
+ANCHOR CastleOfficial.cs:379/404  [src/GameSrv/Npc/CastleOfficial.cs]
+  prose castle.rs:803: /// `CastleOfficial.cs:379/404`：`TotalGold` 不足。
+  CastleOfficial.cs:379 => PlayObject.SysMsg("城内资金不足!!!", MsgColor.Red, MsgType.Hint);
+  CastleOfficial.cs:404 => PlayObject.SysMsg("城内资金不足!!!", MsgColor.Red, MsgType.Hint);
+ANCHOR UserCastle.cs:73  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:886: /// `SaveTick`（`UserCastle.cs:73`）：`IncRateGold` 的 10 分钟落盘节流口（⑧-9）。
+  UserCastle.cs:73 => public int SaveTick { get; set; }
+ANCHOR UserCastle.cs:23-59  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:912: /// 按 oracle `UserCastle` 构造函数（`UserCastle.cs:23-59`）+ `CastleConf` 默认建一座空城。
+  UserCastle.cs:23 => private int _techLevel;
+  UserCastle.cs:58 => public int TechLevel
+ANCHOR UserCastle.cs:318-321  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:1120: // `UserCastle.cs:318-321`：`string.IsNullOrEmpty(MapName)` ⇒ return。
+  UserCastle.cs:318 => if (string.IsNullOrEmpty(MapName))
+  UserCastle.cs:320 => return;
+ANCHOR UserCastle.cs:323-326  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:1126: // `UserCastle.cs:323-326`：非本服归属 ⇒ return。
+  UserCastle.cs:323 => if (M2Share.ServerIndex != SystemShare.MapMgr.GetMapOfServerIndex(MapName))
+  UserCastle.cs:325 => return;
+ANCHOR UserCastle.cs:347-362  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:1143: // `UserCastle.cs:347-362`：**倒序**遍历申请表；命中今天者移入攻方列表（`RemoveAt(i)`）。
+  UserCastle.cs:347 => for (int i = AttackWarList.Count - 1; i >= 0; i--)
+  UserCastle.cs:360 => AttackWarList.RemoveAt(i);
+ANCHOR UserCastle.cs:358  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:1153: // `UserCastle.cs:358` `StartCastleWarTick = HUtil32.GetTickCount()`。
+  UserCastle.cs:358 => StartCastleWarTick = HUtil32.GetTickCount();
+ANCHOR UserCastle.cs:365  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:1161: // `UserCastle.cs:365`：守方（可能为 `None`，oracle `MasterGuild` 为 null 时 `Add(null)` 是 no-op 效果）。
+  UserCastle.cs:365 => AttackGuildList.Add(MasterGuild);
+ANCHOR UserCastle.cs:366  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:1165: // `UserCastle.cs:366` StartWallconquestWar()。
+  prose castle.rs:1576: // 事件顺序 = oracle UserCastle.cs:366-373（⑧-8 起 `MainDoorControl(true)` 带 `CastleDoor.Close` 帧/掩码）。
+  UserCastle.cs:366 => StartWallconquestWar();
+ANCHOR UserCastle.cs:367  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:1167: // `UserCastle.cs:367` SaveAttackSabukWall()。
+  UserCastle.cs:367 => SaveAttackSabukWall();
+ANCHOR UserCastle.cs:368  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:1169: // `UserCastle.cs:368` SS_212。
+  UserCastle.cs:368 => SystemShare.WorldEngine.SendServerGroupMsg(Messages.SS_212, M2Share.ServerIndex, "");
+ANCHOR UserCastle.cs:369-371  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:1174: // `UserCastle.cs:369-371` 开战广播。
+  UserCastle.cs:369 => string s20 = string.Format(sWarStartMsg, sName);
+  UserCastle.cs:371 => SystemShare.WorldEngine.SendServerGroupMsg(Messages.SS_204, M2Share.ServerIndex, s20);
+ANCHOR UserCastle.cs:373  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:1181: // `UserCastle.cs:373` MainDoorControl(true)（幂等关闭主门；⑧-8 起带 `CastleDoor.Close` 帧/掩码）。
+  UserCastle.cs:373 => MainDoorControl(true);
+ANCHOR UserCastle.cs:393-406  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:1199: // `UserCastle.cs:393-406`：战时三面墙 `StoneMode=false`。
+  UserCastle.cs:393 => if (LeftWall.BaseObject != null)
+  UserCastle.cs:405 => RightWall.BaseObject.StoneMode = false;
+ANCHOR UserCastle.cs:408-418  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:1203: // `UserCastle.cs:408-418`：结束预告（只播一次）。
+  UserCastle.cs:408 => if (!ShowOverMsg)
+  UserCastle.cs:416 => LogService.Warn(s20);
+ANCHOR UserCastle.cs:419-422  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:1219: // `UserCastle.cs:419-422`：超时停战（**严格大于**）。
+  UserCastle.cs:419 => if ((HUtil32.GetTickCount() - StartCastleWarTick) > SystemShare.Config.CastleWarTime)
+  UserCastle.cs:421 => StopWallconquestWar();
+ANCHOR UserCastle.cs:424-440  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:1224: // `UserCastle.cs:424-440`：非战时三面墙 `StoneMode=true`。
+  UserCastle.cs:424 => else
+  UserCastle.cs:438 => RightWall.BaseObject.StoneMode = true;
+ANCHOR UserCastle.cs:584-593  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:1248: /// `ListC` 恒空 ⇒ `UserCastle.cs:584-593` 的 `ChangePkStatus(false)` / 非守方 `MapRandomMove` **从不执行**。
+  UserCastle.cs:584 => for (int i = 0; i < ListC.Count; i++)
+  UserCastle.cs:593 => string stopMessage = string.Format(sWallWarStop, sName);
+ANCHOR UserCastle.cs:920-955  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:1289: /// oracle `RepairDoor()`（`UserCastle.cs:920-955`）。
+  UserCastle.cs:920 => public bool RepairDoor()
+  UserCastle.cs:948 => return result;
+ANCHOR UserCastle.cs:956-997  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:1314: /// oracle `RepairWall(int nWallIndex)`（`UserCastle.cs:956-997`）。
+  UserCastle.cs:956 => public bool RepairWall(int nWallIndex)
+  UserCastle.cs:995 => return result;
+ANCHOR UserCastle.cs:1016-1030  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:1370: /// oracle `InAttackerList(GuildInfo)`（`UserCastle.cs:1016-1030`）。
+  UserCastle.cs:1016 => private bool InAttackerList(GuildInfo Guild)
+  UserCastle.cs:1030 => private void SetPower(int nPower)
+ANCHOR UserCastle.cs:609-612  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:1382: /// oracle `IsMember(PlayObject)`（`UserCastle.cs:480-483`）/ `IsMember(IPlayerActor)`（`UserCastle.cs:609-612`）
+  UserCastle.cs:609 => public bool IsMember(IPlayerActor member)
+  UserCastle.cs:611 => return IsMasterGuild(member.MyGuild);
+ANCHOR UserCastle.cs:366-373  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:1576: // 事件顺序 = oracle UserCastle.cs:366-373（⑧-8 起 `MainDoorControl(true)` 带 `CastleDoor.Close` 帧/掩码）。
+  UserCastle.cs:366 => StartWallconquestWar();
+  UserCastle.cs:373 => MainDoorControl(true);
+ANCHOR UserCastle.cs:345  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:1685: // IsStartWar 仍置 true（oracle UserCastle.cs:345，进了钟点分支就置位）。
+  UserCastle.cs:345 => IsStartWar = true;
+ANCHOR UserCastle.cs:391-406  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:1770: // （`UserCastle.cs:391-406` 先置 false，`UserCastle.cs:421` 才停战，本 tick 不再走 `else`）。
+  UserCastle.cs:391 => if (UnderWar)
+  UserCastle.cs:405 => RightWall.BaseObject.StoneMode = false;
+ANCHOR UserCastle.cs:421  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:1770: // （`UserCastle.cs:391-406` 先置 false，`UserCastle.cs:421` 才停战，本 tick 不再走 `else`）。
+  UserCastle.cs:421 => StopWallconquestWar();
+ANCHOR CastleDoor.cs:66-70  [src/M2Server/Monster/Monsters/CastleDoor.cs]
+  prose castle.rs:2018: // `3 - Round(hp/max*3)`，`Dir-3>=0 ⇒ 0`（`CastleDoor.cs:66-70`）。
+  CastleDoor.cs:66 => Dir = (byte)(3 - HUtil32.Round(WAbil.HP / (double)WAbil.MaxHP * 3.0));
+  CastleDoor.cs:69 => Dir = 0;
+ANCHOR CastleDoor.cs:86-93  [src/M2Server/Monster/Monsters/CastleDoor.cs]
+  prose castle.rs:2061: // `CastleDoor.cs:86-93`：`Death && Castle != null` ⇒ `DeathTick`；否则 `HealthTick=0`。
+  CastleDoor.cs:86 => if (Death && Castle != null)
+  CastleDoor.cs:92 => HealthTick = 0;
+ANCHOR CastleDoor.cs:94-102  [src/M2Server/Monster/Monsters/CastleDoor.cs]
+  prose castle.rs:2077: // `CastleDoor.cs:94-102`：未开门且 `n08 < 3` 才刷 `RM_TURN`。
+  CastleDoor.cs:94 => if (!IsOpened)
+  CastleDoor.cs:100 => SendRefMsg(Messages.RM_TURN, Dir, CurrX, CurrY, 0, "");
+ANCHOR Envirnoment.cs:1362-1369  [src/M2Server/Maps/Envirnoment.cs]
+  prose castle.rs:2199: // `Envir.SetMapXyFlag` 只在格子当前 `Valid` 时才改属性（`Envirnoment.cs:1362-1369`）。
+  Envirnoment.cs:1362 => public void SetMapXyFlag(int nX, int nY, bool boFlag)
+  Envirnoment.cs:1367 => cellInfo.SetAttribute(boFlag ? CellAttribute.Walk : CellAttribute.LowWall);
+ANCHOR CastleDoor.cs:25-43  [src/M2Server/Monster/Monsters/CastleDoor.cs]
+  prose castle.rs:2231: // `CastleDoor.cs:25-43` 的调用序（含重复格）。
+  CastleDoor.cs:25 => Envir.SetMapXyFlag(CurrX, CurrY - 2, true);
+  CastleDoor.cs:42 => Envir.SetMapXyFlag(CurrX + 1, CurrY - 2, false);
+ANCHOR UserCastle.cs:920-927  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:2255: // `UnderWar` ⇒ 拒（`UserCastle.cs:920-927`：签名 920、`UnderWar` 守卫 924、返回 926）。
+  UserCastle.cs:920 => public bool RepairDoor()
+  UserCastle.cs:926 => return false;
+ANCHOR UserCastle.cs:930  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:2259: // 60s 门：`>` 严格大于（`UserCastle.cs:930` 活门 / `UserCastle.cs:939` 死门）。
+  UserCastle.cs:930 => if ((HUtil32.GetTickCount() - castleDoor.BaseObject.StruckTick) > 60 * 1000)
+ANCHOR UserCastle.cs:939  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:2259: // 60s 门：`>` 严格大于（`UserCastle.cs:930` 活门 / `UserCastle.cs:939` 死门）。
+  UserCastle.cs:939 => if ((HUtil32.GetTickCount() - castleDoor.BaseObject.StruckTick) > 60 * 1000)
+ANCHOR UserCastle.cs:924  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:2272: // 已满 ⇒ 拒（`UserCastle.cs:924` 的 `HP >= MaxHP` 守卫），不产生帧。
+  UserCastle.cs:924 => if (castleDoor.BaseObject == null || UnderWar || castleDoor.BaseObject.WAbil.HP >= castleDoor.BaseObject.WAbil.MaxHP)
+ANCHOR UserCastle.cs:958-992  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:2311: // `nWallIndex` 1/2/3 ⇒ 左/中/右；其它 ⇒ `Wall = null`（`UserCastle.cs:958-992`）。
+  UserCastle.cs:958 => bool result = false;
+  UserCastle.cs:992 => result = true;
+ANCHOR CastleOfficial.cs:365-380  [src/GameSrv/Npc/CastleOfficial.cs]
+  prose castle.rs:2333: // `TotalGold < RepairDoorPrice` ⇒ 只回文案（`CastleOfficial.cs:365-380`）。
+  CastleOfficial.cs:365 => if (Castle.TotalGold >= SystemShare.Config.RepairDoorPrice)
+  CastleOfficial.cs:379 => PlayObject.SysMsg("城内资金不足!!!", MsgColor.Red, MsgType.Hint);
+ANCHOR CastleOfficial.cs:365  [src/GameSrv/Npc/CastleOfficial.cs]
+  prose castle.rs:2333: // `TotalGold < RepairDoorPrice` ⇒ 只回文案（`CastleOfficial.cs:365-380`）。
+  prose castle.rs:2350: // 注意：oracle 先判 `TotalGold >= RepairDoorPrice`（`CastleOfficial.cs:365`）⇒ 先把钱补回。
+  CastleOfficial.cs:365 => if (Castle.TotalGold >= SystemShare.Config.RepairDoorPrice)
+ANCHOR UserCastle.cs:128-220  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:2621: // 调用序 = `UserCastle.cs:128-220`：主门 → 左/中/右墙 → 弓手 0..12 → 守卫 0..12。
+  UserCastle.cs:128 => if (CastleEnvir != null)
+  UserCastle.cs:209 => LogService.Warn("[错误信息] 城堡初始化守卫失败(检查怪物数据库里有没守卫怪物)");
+WORKSHEET 159 锚（散文落点缺失 0）——对照 `check` 的写侧/读侧判据逐条核对

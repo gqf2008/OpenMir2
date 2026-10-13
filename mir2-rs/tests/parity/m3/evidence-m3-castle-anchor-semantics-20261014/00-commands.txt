@@ -1,0 +1,28 @@
+cwd = mir2-rs/tests/parity/m3 （除四门禁外；四门禁 cwd = mir2-rs，CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target）
+
+# ① 语义级核对材料（本片新增子命令）
+python -I mir2-rs/tests/parity/m3/castle_oracle_anchor_gate.py worksheet            > <ev>/01-worksheet.txt
+python -I mir2-rs/tests/parity/m3/castle_oracle_anchor_gate.py worksheet --json <ev>/01b-worksheet.json
+
+# ② 逐条复核 77 条补登锚（基线 ANCHORS 差集 + worksheet 材料）
+git show 30c52f85d:mir2-rs/tests/parity/m3/castle_oracle_anchor_gate.py > <old>/old_gate.py
+#   差集：old=82 / new=159 ⇒ added=77 / removed=0；逐条裁定写入 03-semantic-audit.txt
+
+# ③ 判据门
+python -I mir2-rs/tests/parity/m3/castle_oracle_anchor_gate.py check               > <ev>/04-gate-check.txt
+python -I mir2-rs/tests/parity/m3/castle_oracle_anchor_gate.py selftest            > <ev>/05-gate-selftest.txt
+python -I mir2-rs/tests/parity/m3/castle_oracle_anchor_gate.py mutation            > <ev>/06-gate-mutation.txt
+python -I mir2-rs/tests/parity/m3/castle_oracle_anchor_gate.py audit               > <ev>/07-gate-audit.txt
+#   外部改坏（08）：castle.rs 的 `UserCastle.cs:930`→`:931` ⇒ check RED + worksheet prose NOT FOUND；git checkout 还原
+
+# ④ 四门禁（cwd=mir2-rs）
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --offline -- -D warnings
+cargo test --workspace --no-fail-fast --offline
+cargo run -p msgcodegen -- --check
+
+# ⑤ 边界 + 证据 hash（仓库 LF/git-blob 口径）
+git diff --name-status origin/master HEAD                                        > <ev>/13-boundary.txt
+python -I tools/evidence-hash/verify_sha256sums.py write <ev>
+python -I tools/evidence-hash/verify_sha256sums.py verify --check-extra <ev>     > <ev>/14-hash-check.txt
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck <ev>                 >> <ev>/14-hash-check.txt

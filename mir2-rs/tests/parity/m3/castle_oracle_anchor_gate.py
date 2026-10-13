@@ -34,10 +34,28 @@ doc-comment/README 锚行号是按**另一版本**抄的，与**冻结** `src/` 
 
 `audit` 子命令与覆盖面同源，用于复算/清点（`check` 是判据面，`audit` 是清单面）。
 
+## O-1：逐条语义级锚复核（2026-10-14 收口）
+
+reviewer-6 `7ef3a671` 的 **O-1**（非阻塞 observation）：76 条补登锚的 `(line, token)` 只机判
+「该行含该串」，「该行**就是**散文所声称的构造」这一层仍是**抽样人核**；且 `castle.rs` 的既有行号
+散文可能还有未订正的历史漂移。建议后续片用 `audit --json` 清单逐条做语义级核对。
+
+**本片做法**：新增 **`worksheet` 子命令**——把「语义级核对」所需的全部材料渲染成**确定性、可复算**
+的一张表：每条锚 ⇒ ① 它在 `castle.rs` / `README.md` 的**散文落点**（行号 + 原文）② 它声明的每个
+`(line, token)` 对应的**冻结 `src/` 实际行原文**。复核人（人/agent）据此**逐条**比对「散文声称的构造
+⇄ 该行实际内容」，不再依赖仓外临时脚本。`worksheet` 只呈现材料、**不新增判据**（避免把「散文措辞」
+这类主观面做成假红）；判据仍是 `check` 的写侧/读侧/覆盖面/token 强度四条。
+
+**复核结论（159 锚，含本卡补登的 77 条）**：逐条比对后 **0 处新漂移**（此前的 3 处行号订正
+`RepairDoor` 的 `UnderWar` 守卫 `:920-923→:920-927`、60s 门 `:951→:930`、满血守卫 `:923→:924`
+与 `:311-448→:311-446` 已在早前片订正；`eae27553` 另订正一处）。方法、抽样与保留项见证据
+`evidence-m3-castle-anchor-semantics-20261014/README.md` 与 `03-semantic-audit.txt`。
+
 ## 用法
 
     python -I castle_oracle_anchor_gate.py check [--json out]
     python -I castle_oracle_anchor_gate.py audit [--json out]
+    python -I castle_oracle_anchor_gate.py worksheet [--json out]
     python -I castle_oracle_anchor_gate.py selftest
     python -I castle_oracle_anchor_gate.py mutation [--out DIR]
 
@@ -465,6 +483,71 @@ def _coverage_inventory(anchors, castle_text, castle_lines=None):
             "present": present, "uncovered": uncovered, "bare": bare}
 
 
+def _worksheet_rows(anchors=None, castle_text=None, readme_text=None, src_root=None):
+    """⑧-6 O-1 收口：渲染「逐条语义级核对」所需材料（确定性、可复算）。
+
+    每条锚一行：
+      * ``write_hits``：该锚文本在 ``castle.rs`` / ``README.md`` 的散文落点（行号 + 原文），
+        供核对「散文声称的构造」；空列表 = 两个落点都没有（与 `check` 的写侧缺锚同源）。
+      * ``points``：表内声明的每个 ``(line, token)`` 与冻结 ``src/`` 该行的**实际原文**，
+        供核对「该行就是散文所声称的构造」（越界 ⇒ ``text=None``）。
+    本函数**只呈现材料、不加判据**。
+    """
+    anchors = ANCHORS if anchors is None else anchors
+    if castle_text is None:
+        castle_text = _read_text(CASTLE_RS)
+    if readme_text is None:
+        readme_text = _read_text(README_MD)
+    if src_root is None:
+        src_root = REPO_ROOT
+    castle_lines = castle_text.splitlines()
+    readme_lines = readme_text.splitlines()
+    rows = []
+    for anchor, rel, points in anchors:
+        write_hits = []
+        for where, lines in (("castle.rs", castle_lines), ("README.md", readme_lines)):
+            for i, line in enumerate(lines):
+                if anchor in line:
+                    write_hits.append({"where": where, "line": i + 1, "text": line.strip()})
+        src_lines = None
+        pts = []
+        for line, token in points:
+            if src_lines is None:
+                try:
+                    src_lines = _cached_src(src_root, rel)
+                except OSError:
+                    src_lines = []
+            if 1 <= line <= len(src_lines):
+                pts.append({"line": line, "token": token, "text": src_lines[line - 1].strip()})
+            else:
+                pts.append({"line": line, "token": token, "text": None})
+        rows.append({"anchor": anchor, "src": rel, "write_hits": write_hits, "points": pts})
+    return rows
+
+
+def cmd_worksheet(args):
+    """⑧-6 O-1：语义级核对工作表（材料面，恒 rc=0，不新增判据）。"""
+    rows = _worksheet_rows()
+    if args.json:
+        with open(args.json, "w", encoding="utf-8", newline="\n") as fh:
+            json.dump({"anchors": len(rows), "rows": rows}, fh, ensure_ascii=False, indent=2)
+    missing = 0
+    for row in rows:
+        sys.stdout.write("ANCHOR %s  [%s]\n" % (row["anchor"], row["src"]))
+        if not row["write_hits"]:
+            missing += 1
+            sys.stdout.write("  prose: (NOT FOUND in castle.rs / README.md)\n")
+        for hit in row["write_hits"]:
+            sys.stdout.write("  prose %s:%d: %s\n" % (hit["where"], hit["line"], hit["text"]))
+        for pt in row["points"]:
+            sys.stdout.write("  %s:%d => %s\n"
+                             % (os.path.basename(row["src"]), pt["line"],
+                                "(OOB)" if pt["text"] is None else pt["text"]))
+    sys.stdout.write("WORKSHEET %d 锚（散文落点缺失 %d）——对照 `check` 的写侧/读侧判据逐条核对\n"
+                     % (len(rows), missing))
+    return 0
+
+
 def _evaluate(anchors=None, castle_text=None, readme_text=None, src_root=None,
               coverage=False):
     """返回 findings 列表（空 = GREEN）。`coverage=True` 时附带覆盖面判定。"""
@@ -642,6 +725,22 @@ def cmd_selftest(args):
                      % ("GREEN" if t8 else "RED", len(g), w, len(o1)))
     ok = ok and t8
 
+    # 10) ⑧-6 O-1 材料牙：`worksheet` 必须覆盖全表 + 每条锚至少一个散文落点 +
+    #    每个声明 point 都能解析到冻结 src/ 的实际行；缺失锚必须被如实标出（非恒绿）。
+    ws = _worksheet_rows()
+    t9a = len(ws) == len(ANCHORS)
+    t9b = all(r["write_hits"] for r in ws)
+    t9c = all((p["text"] is not None and p["token"] in p["text"])
+              for r in ws for p in r["points"])
+    ws_syn = _worksheet_rows([("Ghost.cs:1", UC, [(113, "GetMapOfServerIndex")])],
+                             castle_text=castle_text, readme_text=readme_text)
+    t9d = len(ws_syn) == 1 and ws_syn[0]["write_hits"] == []
+    t9 = t9a and t9b and t9c and t9d
+    sys.stdout.write("selftest worksheet 材料牙: %s (%d 锚 / 散文落点齐=%s / point 解析=%s / "
+                     "缺失锚可辨认=%s)\n"
+                     % ("GREEN" if t9 else "RED", len(ws), t9b, t9c, t9d))
+    ok = ok and t9
+
     sys.stdout.write("SELFTEST %s\n" % ("GREEN" if ok else "RED"))
     return 0 if ok else 1
 
@@ -756,6 +855,16 @@ def cmd_mutation(args):
                      % ("RED" if red10 else "GREEN", len(o1a), len(o1b)))
     ok = ok and red10
 
+    # MUT11（⑧-6 O-1 worksheet 材料）：把散文落点从 `castle.rs` **与** `README.md` 都抹掉
+    # （合成文本无该锚）再渲工作表 ⇒ 该行 `write_hits == []`（`prose: NOT FOUND`）。
+    # 证明 worksheet 不是恒绿：它确实以「散文落点是否存在」为材料，能暴露 O-1 要核对的那个面。
+    ws_mut = _worksheet_rows([("UserCastle.cs:113", UC, [(113, "GetMapOfServerIndex")])],
+                             castle_text="// no anchors here\n", readme_text="// none\n")
+    red11 = len(ws_mut) == 1 and ws_mut[0]["write_hits"] == []
+    sys.stdout.write("MUT11 worksheet 散文落点缺失: %s（write_hits=%d）\n"
+                     % ("RED" if red11 else "GREEN", len(ws_mut[0]["write_hits"])))
+    ok = ok and red11
+
     sys.stdout.write("MUTATION %s (%s)\n" % ("GREEN" if ok else "RED", out))
     return 0 if ok else 1
 
@@ -769,6 +878,9 @@ def main(argv=None):
     p = sub.add_parser("audit")
     p.add_argument("--json")
     p.set_defaults(func=cmd_audit)
+    p = sub.add_parser("worksheet")
+    p.add_argument("--json")
+    p.set_defaults(func=cmd_worksheet)
     p = sub.add_parser("selftest")
     p.set_defaults(func=cmd_selftest)
     p = sub.add_parser("mutation")

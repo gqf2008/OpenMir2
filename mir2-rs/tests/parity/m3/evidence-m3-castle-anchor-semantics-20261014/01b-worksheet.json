@@ -1,0 +1,3817 @@
+{
+  "anchors": 159,
+  "rows": [
+    {
+      "anchor": "CastleConf.cs:39",
+      "src": "src/M2Server/Castle/CastleConf.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 619,
+          "text": "/// `CastleConf.LoadConfig`（`src/M2Server/Castle/CastleConf.cs:39-93`）填好，`UserCastle.Initialize`"
+        },
+        {
+          "where": "castle.rs",
+          "line": 645,
+          "text": "/// `[Defense] CastleMap`（`CastleConf.cs:39`，缺省 `\"3\"`）。"
+        },
+        {
+          "where": "castle.rs",
+          "line": 972,
+          "text": "// `LoadConfig()`：`MapName = ReadWriteString(\"Defense\", \"CastleMap\", \"3\")`（`CastleConf.cs:39`）。"
+        },
+        {
+          "where": "castle.rs",
+          "line": 2514,
+          "text": "/// 一份与 `CastleConf` 默认值等价的规格（`CastleConf.cs:39-93`）：弓手/守卫 `nHP=2000`>0。"
+        }
+      ],
+      "points": [
+        {
+          "line": 39,
+          "token": "ReadWriteString(\"Defense\", \"CastleMap\", \"3\")",
+          "text": "userCastle.MapName = ReadWriteString(\"Defense\", \"CastleMap\", \"3\");"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleConf.cs:45",
+      "src": "src/M2Server/Castle/CastleConf.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 647,
+          "text": "/// `[Defense] CastlePlaceMap`（皇宫地图，`CastleConf.cs:45`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 45,
+          "token": "ReadWriteString(\"Defense\", \"CastlePlaceMap\"",
+          "text": "userCastle.PalaceMap = ReadWriteString(\"Defense\", \"CastlePlaceMap\", userCastle.PalaceMap);"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleConf.cs:46",
+      "src": "src/M2Server/Castle/CastleConf.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 649,
+          "text": "/// `[Defense] CastleSecretMap`（密道地图，`CastleConf.cs:46`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 46,
+          "token": "ReadWriteString(\"Defense\", \"CastleSecretMap\"",
+          "text": "userCastle.SecretMap = ReadWriteString(\"Defense\", \"CastleSecretMap\", userCastle.SecretMap);"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleConf.cs:49-55",
+      "src": "src/M2Server/Castle/CastleConf.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 651,
+          "text": "/// `MainDoor`（`CastleConf.cs:49-55`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 49,
+          "token": "userCastle.MainDoor = new ArcherUnit();",
+          "text": "userCastle.MainDoor = new ArcherUnit();"
+        },
+        {
+          "line": 53,
+          "token": "ReadWriteBool(\"Defense\", \"MainDoorOpen\", true)",
+          "text": "userCastle.MainDoor.nStatus = ReadWriteBool(\"Defense\", \"MainDoorOpen\", true);"
+        },
+        {
+          "line": 55,
+          "token": "userCastle.MainDoor.BaseObject = null;",
+          "text": "userCastle.MainDoor.BaseObject = null;"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleConf.cs:56-61",
+      "src": "src/M2Server/Castle/CastleConf.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 653,
+          "text": "/// `LeftWall`（`CastleConf.cs:56-61`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 56,
+          "token": "userCastle.LeftWall = new ArcherUnit();",
+          "text": "userCastle.LeftWall = new ArcherUnit();"
+        },
+        {
+          "line": 61,
+          "token": "userCastle.LeftWall.BaseObject = null;",
+          "text": "userCastle.LeftWall.BaseObject = null;"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleConf.cs:62-67",
+      "src": "src/M2Server/Castle/CastleConf.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 655,
+          "text": "/// `CenterWall`（`CastleConf.cs:62-67`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 62,
+          "token": "userCastle.CenterWall = new ArcherUnit();",
+          "text": "userCastle.CenterWall = new ArcherUnit();"
+        },
+        {
+          "line": 67,
+          "token": "userCastle.CenterWall.BaseObject = null;",
+          "text": "userCastle.CenterWall.BaseObject = null;"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleConf.cs:68-73",
+      "src": "src/M2Server/Castle/CastleConf.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 657,
+          "text": "/// `RightWall`（`CastleConf.cs:68-73`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 68,
+          "token": "userCastle.RightWall = new ArcherUnit();",
+          "text": "userCastle.RightWall = new ArcherUnit();"
+        },
+        {
+          "line": 73,
+          "token": "userCastle.RightWall.BaseObject = null;",
+          "text": "userCastle.RightWall.BaseObject = null;"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleConf.cs:74-83",
+      "src": "src/M2Server/Castle/CastleConf.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 659,
+          "text": "/// `Archers[12]`（`CastleConf.cs:74-83`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 74,
+          "token": "for (int i = 0; i < userCastle.Archers.Length; i++)",
+          "text": "for (int i = 0; i < userCastle.Archers.Length; i++)"
+        },
+        {
+          "line": 82,
+          "token": "userCastle.Archers[i] = objUnit;",
+          "text": "userCastle.Archers[i] = objUnit;"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleConf.cs:84-93",
+      "src": "src/M2Server/Castle/CastleConf.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 661,
+          "text": "/// `Guards[12]`（`CastleConf.cs:84-93`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 84,
+          "token": "for (int i = 0; i < userCastle.Guards.Length; i++)",
+          "text": "for (int i = 0; i < userCastle.Guards.Length; i++)"
+        },
+        {
+          "line": 92,
+          "token": "userCastle.Guards[i] = objUnit;",
+          "text": "userCastle.Guards[i] = objUnit;"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleConf.cs:53",
+      "src": "src/M2Server/Castle/CastleConf.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 630,
+          "text": "/// `CastleConf.cs:53`；三面墙的 `nStatus` 从不赋值 ⇒ 恒 `false`）；`Initialize` 里"
+        }
+      ],
+      "points": [
+        {
+          "line": 53,
+          "token": "\"MainDoorOpen\"",
+          "text": "userCastle.MainDoor.nStatus = ReadWriteBool(\"Defense\", \"MainDoorOpen\", true);"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleConf.cs:39-93",
+      "src": "src/M2Server/Castle/CastleConf.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 619,
+          "text": "/// `CastleConf.LoadConfig`（`src/M2Server/Castle/CastleConf.cs:39-93`）填好，`UserCastle.Initialize`"
+        },
+        {
+          "where": "castle.rs",
+          "line": 2514,
+          "text": "/// 一份与 `CastleConf` 默认值等价的规格（`CastleConf.cs:39-93`）：弓手/守卫 `nHP=2000`>0。"
+        }
+      ],
+      "points": [
+        {
+          "line": 39,
+          "token": "\"CastleMap\"",
+          "text": "userCastle.MapName = ReadWriteString(\"Defense\", \"CastleMap\", \"3\");"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:108-226",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 620,
+          "text": "/// （`src/M2Server/Castle/UserCastle.cs:108-226`）消费。"
+        },
+        {
+          "where": "castle.rs",
+          "line": 709,
+          "text": "/// `UserCastle.Initialize`（`UserCastle.cs:108-226`）的宿主面：地图存在性 + 按名造怪 + 告警。"
+        },
+        {
+          "where": "castle.rs",
+          "line": 945,
+          "text": "/// oracle `UserCastle.Initialize()`（`src/M2Server/Castle/UserCastle.cs:108-226`）+ 其"
+        },
+        {
+          "where": "README.md",
+          "line": 14,
+          "text": "按 oracle `UserCastle.Initialize()`（`src/M2Server/Castle/UserCastle.cs:108-226`）在"
+        }
+      ],
+      "points": [
+        {
+          "line": 108,
+          "token": "public void Initialize()",
+          "text": "public void Initialize()"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:113",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 715,
+          "text": "/// `SystemShare.MapMgr.GetMapOfServerIndex(MapName) == M2Share.ServerIndex`（`UserCastle.cs:113`）。"
+        },
+        {
+          "where": "castle.rs",
+          "line": 949,
+          "text": "/// 1. `UserCastle.cs:113` `GetMapOfServerIndex(MapName) == M2Share.ServerIndex` 门；"
+        },
+        {
+          "where": "castle.rs",
+          "line": 977,
+          "text": "// `UserCastle.cs:113`：`if (SystemShare.MapMgr.GetMapOfServerIndex(MapName) == M2Share.ServerIndex)`。"
+        },
+        {
+          "where": "README.md",
+          "line": 17,
+          "text": "1. `UserCastle.cs:113` `GetMapOfServerIndex(MapName) == M2Share.ServerIndex` 门（宿主 trait `map_owner_is_self`）；"
+        },
+        {
+          "where": "README.md",
+          "line": 62,
+          "text": "GREEN + 改坏必红（把 `UserCastle.cs:113` 写回 `:111` ⇒ RED）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 113,
+          "token": "GetMapOfServerIndex(MapName) == M2Share.ServerIndex",
+          "text": "if (SystemShare.MapMgr.GetMapOfServerIndex(MapName) == M2Share.ServerIndex)"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:115-125",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 950,
+          "text": "/// 2. `UserCastle.cs:115-125` 皇宫 / 密道 `FindMap` 失败告警（**不**影响后续）；"
+        },
+        {
+          "where": "castle.rs",
+          "line": 982,
+          "text": "// `UserCastle.cs:115-125`：皇宫 / 密道地图告警（找不到只告警，不阻断）。"
+        },
+        {
+          "where": "README.md",
+          "line": 18,
+          "text": "2. `UserCastle.cs:115-125` 皇宫 / 密道 `FindMap` 失败告警（不阻断）；"
+        }
+      ],
+      "points": [
+        {
+          "line": 115,
+          "token": "SystemShare.MapMgr.FindMap(PalaceMap)",
+          "text": "PalaceEnvir = SystemShare.MapMgr.FindMap(PalaceMap);"
+        },
+        {
+          "line": 121,
+          "token": "SystemShare.MapMgr.FindMap(SecretMap)",
+          "text": "SecretEnvir = SystemShare.MapMgr.FindMap(SecretMap);"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:127-128",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 951,
+          "text": "/// 3. `UserCastle.cs:127-128` `CastleEnvir == null` ⇒ 告警「城堡所在地图不存在」并整体跳过；"
+        },
+        {
+          "where": "castle.rs",
+          "line": 990,
+          "text": "// `UserCastle.cs:127-128`：`CastleEnvir == null` ⇒ 告警并整体跳过。"
+        },
+        {
+          "where": "README.md",
+          "line": 19,
+          "text": "3. `UserCastle.cs:127-128` `CastleEnvir == null` ⇒ 告警「城堡所在地图不存在」并整体跳过；"
+        }
+      ],
+      "points": [
+        {
+          "line": 127,
+          "token": "CastleEnvir = SystemShare.MapMgr.FindMap(MapName)",
+          "text": "CastleEnvir = SystemShare.MapMgr.FindMap(MapName);"
+        },
+        {
+          "line": 128,
+          "token": "if (CastleEnvir != null)",
+          "text": "if (CastleEnvir != null)"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:130-138",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 952,
+          "text": "/// 4. `UserCastle.cs:130-138` 主门 ⇒ `RegenMonsterByName` → `WAbil.HP=nHP` → `Castle=this` →"
+        },
+        {
+          "where": "castle.rs",
+          "line": 998,
+          "text": "// `UserCastle.cs:130-138` 主门（成功后 `MainDoor.nStatus` ⇒ `Open()`）。"
+        },
+        {
+          "where": "README.md",
+          "line": 20,
+          "text": "4. `UserCastle.cs:130-138` 主门 `RegenMonsterByName` → `WAbil.HP=nHP` → `Castle=this` → `MainDoor.nStatus && Open()`；"
+        }
+      ],
+      "points": [
+        {
+          "line": 130,
+          "token": "MainDoor.BaseObject = SystemShare.WorldEngine.RegenMonsterByName",
+          "text": "MainDoor.BaseObject = SystemShare.WorldEngine.RegenMonsterByName(MapName, MainDoor.nX, MainDoor.nY, MainDoor.sName);"
+        },
+        {
+          "line": 135,
+          "token": "if (MainDoor.nStatus)",
+          "text": "if (MainDoor.nStatus)"
+        },
+        {
+          "line": 137,
+          "token": "((CastleDoor)MainDoor.BaseObject).Open();",
+          "text": "((CastleDoor)MainDoor.BaseObject).Open();"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:135-138",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 631,
+          "text": "/// `if (MainDoor.nStatus) ((CastleDoor)MainDoor.BaseObject).Open();`（`UserCastle.cs:135-138`）。"
+        },
+        {
+          "where": "castle.rs",
+          "line": 762,
+          "text": "// `UserCastle.cs:135-138`：`if (MainDoor.nStatus) ((CastleDoor)BaseObject).Open();`"
+        }
+      ],
+      "points": [
+        {
+          "line": 135,
+          "token": "if (MainDoor.nStatus)",
+          "text": "if (MainDoor.nStatus)"
+        },
+        {
+          "line": 137,
+          "token": "((CastleDoor)MainDoor.BaseObject).Open();",
+          "text": "((CastleDoor)MainDoor.BaseObject).Open();"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:133-211",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 667,
+          "text": "/// `UserCastle.Initialize` 只覆盖 `WAbil.HP = nHP`，**不改** `MaxHP`（`UserCastle.cs:133-211`）"
+        }
+      ],
+      "points": [
+        {
+          "line": 133,
+          "token": "MainDoor.BaseObject.WAbil.HP = MainDoor.nHP;",
+          "text": "MainDoor.BaseObject.WAbil.HP = MainDoor.nHP;"
+        },
+        {
+          "line": 205,
+          "token": "ObjUnit.BaseObject.WAbil.HP = Guards[i].nHP;",
+          "text": "ObjUnit.BaseObject.WAbil.HP = Guards[i].nHP;"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:142",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 961,
+          "text": "/// - 主门造怪失败用英文文案 `[Error] UserCastle.Initialize MainDoor.UnitObj = nil`（`UserCastle.cs:142`）。"
+        },
+        {
+          "where": "README.md",
+          "line": 36,
+          "text": "- 主门造怪失败用英文文案 `[Error] UserCastle.Initialize MainDoor.UnitObj = nil`（`UserCastle.cs:142`）；"
+        }
+      ],
+      "points": [
+        {
+          "line": 142,
+          "token": "MainDoor.UnitObj = nil",
+          "text": "LogService.Warn(\"[Error] UserCastle.Initialize MainDoor.UnitObj = nil\");"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:144-173",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 954,
+          "text": "/// 5. `UserCastle.cs:144-173` 左/中/右墙（各写 `HP` + `Castle`）；"
+        },
+        {
+          "where": "README.md",
+          "line": 21,
+          "text": "5. `UserCastle.cs:144-173` 左/中/右墙（写 `HP` + `Castle`）；"
+        }
+      ],
+      "points": [
+        {
+          "line": 144,
+          "token": "LeftWall.BaseObject = SystemShare.WorldEngine.RegenMonsterByName",
+          "text": "LeftWall.BaseObject = SystemShare.WorldEngine.RegenMonsterByName(MapName, LeftWall.nX, LeftWall.nY, LeftWall.sName);"
+        },
+        {
+          "line": 154,
+          "token": "CenterWall.BaseObject = SystemShare.WorldEngine.RegenMonsterByName",
+          "text": "CenterWall.BaseObject = SystemShare.WorldEngine.RegenMonsterByName(MapName, CenterWall.nX, CenterWall.nY, CenterWall.sName);"
+        },
+        {
+          "line": 164,
+          "token": "RightWall.BaseObject = SystemShare.WorldEngine.RegenMonsterByName",
+          "text": "RightWall.BaseObject = SystemShare.WorldEngine.RegenMonsterByName(MapName, RightWall.nX, RightWall.nY, RightWall.sName);"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:152/162/172",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 959,
+          "text": "/// - **墙的失败告警引用上一单元的名字**（copy-paste 怪癖，`UserCastle.cs:152/162/172`）："
+        },
+        {
+          "where": "castle.rs",
+          "line": 2766,
+          "text": "// oracle copy-paste 怪癖（`UserCastle.cs:152/162/172`）："
+        },
+        {
+          "where": "README.md",
+          "line": 34,
+          "text": "- **墙的失败告警引用上一单元的名字**（`UserCastle.cs:152/162/172` 的 copy-paste 怪癖）："
+        }
+      ],
+      "points": [
+        {
+          "line": 152,
+          "token": "MainDoor.sName",
+          "text": "LogService.Warn(\"[错误信息] 城堡初始化城门失败，检查怪物数据库里有没城门的设置: \" + MainDoor.sName);"
+        },
+        {
+          "line": 162,
+          "token": "LeftWall.sName",
+          "text": "LogService.Warn(\"[错误信息] 城堡初始化左城墙失败，检查怪物数据库里有没左城墙的设置: \" + LeftWall.sName);"
+        },
+        {
+          "line": 172,
+          "token": "CenterWall.sName",
+          "text": "LogService.Warn(\"[错误信息] 城堡初始化中城墙失败，检查怪物数据库里有没中城墙的设置: \" + CenterWall.sName);"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:144-153",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 1012,
+          "text": "// `UserCastle.cs:144-153` 左墙（失败告警引用**主门**名）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 144,
+          "token": "LeftWall.BaseObject = SystemShare.WorldEngine",
+          "text": "LeftWall.BaseObject = SystemShare.WorldEngine.RegenMonsterByName(MapName, LeftWall.nX, LeftWall.nY, LeftWall.sName);"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:154-163",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 1029,
+          "text": "// `UserCastle.cs:154-163` 中墙（失败告警引用**左墙**名）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 154,
+          "token": "CenterWall.BaseObject = SystemShare.WorldEngine",
+          "text": "CenterWall.BaseObject = SystemShare.WorldEngine.RegenMonsterByName(MapName, CenterWall.nX, CenterWall.nY, CenterWall.sName);"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:164-173",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 1046,
+          "text": "// `UserCastle.cs:164-173` 右墙（失败告警引用**中墙**名）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 164,
+          "token": "RightWall.BaseObject = SystemShare.WorldEngine",
+          "text": "RightWall.BaseObject = SystemShare.WorldEngine.RegenMonsterByName(MapName, RightWall.nX, RightWall.nY, RightWall.sName);"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:174-193",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 955,
+          "text": "/// 6. `UserCastle.cs:174-193` 弓手 `i=0..12`：`nHP <= 0` 跳过；成功 ⇒ `HP` + `Castle` + `GuardDirection=3`；"
+        },
+        {
+          "where": "castle.rs",
+          "line": 1063,
+          "text": "// `UserCastle.cs:174-193` 弓手：`nHP <= 0` 跳过；成功 ⇒ `HP` + `Castle` + `GuardDirection=3`。"
+        },
+        {
+          "where": "README.md",
+          "line": 22,
+          "text": "6. `UserCastle.cs:174-193` 弓手 `i=0..12`：`nHP<=0` 跳过；成功 ⇒ `HP` + `Castle` + `GuardDirection=3`；"
+        }
+      ],
+      "points": [
+        {
+          "line": 174,
+          "token": "for (int i = 0; i < Archers.Length; i++)",
+          "text": "for (int i = 0; i < Archers.Length; i++)"
+        },
+        {
+          "line": 177,
+          "token": "if (ObjUnit.nHP <= 0)",
+          "text": "if (ObjUnit.nHP <= 0)"
+        },
+        {
+          "line": 187,
+          "token": "((GuardUnit)ObjUnit.BaseObject).GuardDirection = 3;",
+          "text": "((GuardUnit)ObjUnit.BaseObject).GuardDirection = 3;"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:177/197",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 634,
+          "text": "/// （`UserCastle.cs:177/197`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 177,
+          "token": "if (ObjUnit.nHP <= 0)",
+          "text": "if (ObjUnit.nHP <= 0)"
+        },
+        {
+          "line": 197,
+          "token": "if (ObjUnit.nHP <= 0)",
+          "text": "if (ObjUnit.nHP <= 0)"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:186",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "README.md",
+          "line": 119,
+          "text": "同族两处（`06-redcheck.txt` RC1/RC3 的引用）一并订正：`:181`→`UserCastle.cs:186`、`:164`→`UserCastle.cs:177`。"
+        }
+      ],
+      "points": [
+        {
+          "line": 186,
+          "token": "ObjUnit.BaseObject.Castle = this;",
+          "text": "ObjUnit.BaseObject.Castle = this;"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:187",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 705,
+          "text": "/// 弓手 `((GuardUnit)BaseObject).GuardDirection = 3`（`UserCastle.cs:187`）；其余恒 `None`。"
+        },
+        {
+          "where": "castle.rs",
+          "line": 2645,
+          "text": "// 弓手 `GuardDirection=3`（`UserCastle.cs:187`），其余无。"
+        }
+      ],
+      "points": [
+        {
+          "line": 187,
+          "token": "GuardDirection = 3;",
+          "text": "((GuardUnit)ObjUnit.BaseObject).GuardDirection = 3;"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:194-211",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 956,
+          "text": "/// 7. `UserCastle.cs:194-211` 守卫 `i=0..12`：`nHP <= 0` 跳过；成功 ⇒ **只**写 `HP`（oracle 不设 `Castle`）。"
+        },
+        {
+          "where": "castle.rs",
+          "line": 1088,
+          "text": "// `UserCastle.cs:194-211` 守卫：`nHP <= 0` 跳过；成功 ⇒ 只写 `HP`（不设 `Castle`）。"
+        },
+        {
+          "where": "README.md",
+          "line": 23,
+          "text": "7. `UserCastle.cs:194-211` 守卫 `i=0..12`：`nHP<=0` 跳过；成功 ⇒ **只**写 `HP`（oracle 不设 `Castle`）。"
+        },
+        {
+          "where": "README.md",
+          "line": 37,
+          "text": "- 守卫造怪**不**绑 `Castle`（`UserCastle.cs:194-211` 内无 `Castle = this`），与门/墙/弓手不同。"
+        }
+      ],
+      "points": [
+        {
+          "line": 194,
+          "token": "for (int i = 0; i < Guards.Length; i++)",
+          "text": "for (int i = 0; i < Guards.Length; i++)"
+        },
+        {
+          "line": 205,
+          "token": "ObjUnit.BaseObject.WAbil.HP = Guards[i].nHP;",
+          "text": "ObjUnit.BaseObject.WAbil.HP = Guards[i].nHP;"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:134/148/158/168/186",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 703,
+          "text": "/// （`UserCastle.cs:134/148/158/168/186` 设，`UserCastle.cs:202-206` 守卫生成后**不设**）。"
+        },
+        {
+          "where": "castle.rs",
+          "line": 2639,
+          "text": "// 门/墙/弓手绑定 `Castle`；守卫不绑（`UserCastle.cs:134/148/158/168/186` vs `UserCastle.cs:202-206`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 134,
+          "token": "MainDoor.BaseObject.Castle = this;",
+          "text": "MainDoor.BaseObject.Castle = this;"
+        },
+        {
+          "line": 148,
+          "token": "LeftWall.BaseObject.Castle = this;",
+          "text": "LeftWall.BaseObject.Castle = this;"
+        },
+        {
+          "line": 158,
+          "token": "CenterWall.BaseObject.Castle = this;",
+          "text": "CenterWall.BaseObject.Castle = this;"
+        },
+        {
+          "line": 168,
+          "token": "RightWall.BaseObject.Castle = this;",
+          "text": "RightWall.BaseObject.Castle = this;"
+        },
+        {
+          "line": 186,
+          "token": "ObjUnit.BaseObject.Castle = this;",
+          "text": "ObjUnit.BaseObject.Castle = this;"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:202-206",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 703,
+          "text": "/// （`UserCastle.cs:134/148/158/168/186` 设，`UserCastle.cs:202-206` 守卫生成后**不设**）。"
+        },
+        {
+          "where": "castle.rs",
+          "line": 2639,
+          "text": "// 门/墙/弓手绑定 `Castle`；守卫不绑（`UserCastle.cs:134/148/158/168/186` vs `UserCastle.cs:202-206`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 202,
+          "token": "ObjUnit.BaseObject = SystemShare.WorldEngine.RegenMonsterByName",
+          "text": "ObjUnit.BaseObject = SystemShare.WorldEngine.RegenMonsterByName(MapName, ObjUnit.nX, ObjUnit.nY, ObjUnit.sName);"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:228-232",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 946,
+          "text": "/// `LoadConfig()`（`UserCastle.cs:228-232`）的 `MapName` 部分——**⑧-6 第②片「实体挂图」**。"
+        }
+      ],
+      "points": [
+        {
+          "line": 228,
+          "token": "private void LoadConfig()",
+          "text": "private void LoadConfig()"
+        },
+        {
+          "line": 230,
+          "token": "castleConf.LoadConfig(this);",
+          "text": "castleConf.LoadConfig(this);"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:328-330",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 80,
+          "text": "/// 只到「日」粒度的日历（`DateTime.Now.Year/Month/Day` 口径，`UserCastle.cs:328-330`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 328,
+          "token": "DateTime.Now.Year",
+          "text": "int Year = DateTime.Now.Year;"
+        }
+      ]
+    },
+    {
+      "anchor": "ArcherUnit.cs:8-16",
+      "src": "src/Modules/SystemModule/Data/ArcherUnit.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 617,
+          "text": "/// `SystemModule.Data.ArcherUnit` 的一条配置（`src/Modules/SystemModule/Data/ArcherUnit.cs:8-16`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 8,
+          "token": "public class ArcherUnit",
+          "text": "public class ArcherUnit"
+        }
+      ]
+    },
+    {
+      "anchor": "GameSvrConf.cs:1786-1787",
+      "src": "src/Modules/SystemModule/Conf/Model/GameSvrConf.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 69,
+          "text": "/// `CastleWarRangeX` / `CastleWarRangeY` 的 `InCastleWarArea` 默认（`GameSvrConf.cs:1786-1787`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 1786,
+          "token": "CastleWarRangeX = 100",
+          "text": "CastleWarRangeX = 100;"
+        },
+        {
+          "line": 1787,
+          "token": "CastleWarRangeY = 100",
+          "text": "CastleWarRangeY = 100;"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:311-446",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 9,
+          "text": "//! | [`UserCastle::run`] | `src/M2Server/Castle/UserCastle.cs:311-446`（每 tick；跨天重置 `UserCastle.cs:328-339`、每日开战 `UserCastle.cs:340-376`、回收 Ghost `UserCastle.cs:377-389`、围墙 `StoneMode` `UserCastle.cs:391-440`） |"
+        },
+        {
+          "where": "castle.rs",
+          "line": 1113,
+          "text": "/// oracle `UserCastle.Run()`（`UserCastle.cs:311-446`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 311,
+          "token": "public void Run()",
+          "text": "public void Run()"
+        },
+        {
+          "line": 373,
+          "token": "MainDoorControl(true);",
+          "text": "MainDoorControl(true);"
+        },
+        {
+          "line": 446,
+          "token": "}",
+          "text": "}"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:328-339",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 9,
+          "text": "//! | [`UserCastle::run`] | `src/M2Server/Castle/UserCastle.cs:311-446`（每 tick；跨天重置 `UserCastle.cs:328-339`、每日开战 `UserCastle.cs:340-376`、回收 Ghost `UserCastle.cs:377-389`、围墙 `StoneMode` `UserCastle.cs:391-440`） |"
+        },
+        {
+          "where": "castle.rs",
+          "line": 1131,
+          "text": "// `UserCastle.cs:328-339`：跨天重置 `TodayIncome=0; IncomeToday=Now; IsStartWar=false`。"
+        }
+      ],
+      "points": [
+        {
+          "line": 328,
+          "token": "int Year = DateTime.Now.Year;",
+          "text": "int Year = DateTime.Now.Year;"
+        },
+        {
+          "line": 336,
+          "token": "TodayIncome = 0;",
+          "text": "TodayIncome = 0;"
+        },
+        {
+          "line": 339,
+          "token": "}",
+          "text": "}"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:340-376",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 9,
+          "text": "//! | [`UserCastle::run`] | `src/M2Server/Castle/UserCastle.cs:311-446`（每 tick；跨天重置 `UserCastle.cs:328-339`、每日开战 `UserCastle.cs:340-376`、回收 Ghost `UserCastle.cs:377-389`、围墙 `StoneMode` `UserCastle.cs:391-440`） |"
+        },
+        {
+          "where": "castle.rs",
+          "line": 1139,
+          "text": "// `UserCastle.cs:340-376`：每日开战。"
+        }
+      ],
+      "points": [
+        {
+          "line": 340,
+          "token": "if (!IsStartWar && !UnderWar)",
+          "text": "if (!IsStartWar && !UnderWar)"
+        },
+        {
+          "line": 343,
+          "token": "SystemShare.Config.StartCastlewarTime",
+          "text": "if (hour == SystemShare.Config.StartCastlewarTime) // 20"
+        },
+        {
+          "line": 376,
+          "token": "}",
+          "text": "}"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:377-389",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 9,
+          "text": "//! | [`UserCastle::run`] | `src/M2Server/Castle/UserCastle.cs:311-446`（每 tick；跨天重置 `UserCastle.cs:328-339`、每日开战 `UserCastle.cs:340-376`、回收 Ghost `UserCastle.cs:377-389`、围墙 `StoneMode` `UserCastle.cs:391-440`） |"
+        },
+        {
+          "where": "castle.rs",
+          "line": 1186,
+          "text": "// `UserCastle.cs:377-389`：回收 Ghost 的守卫 → 弓手（数组下标升序，`Guards` 在前）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 377,
+          "token": "for (int i = 0; i < Guards.Length; i++)",
+          "text": "for (int i = 0; i < Guards.Length; i++)"
+        },
+        {
+          "line": 384,
+          "token": "for (int i = 0; i < Archers.Length; i++)",
+          "text": "for (int i = 0; i < Archers.Length; i++)"
+        },
+        {
+          "line": 389,
+          "token": "}",
+          "text": "}"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:391-440",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 9,
+          "text": "//! | [`UserCastle::run`] | `src/M2Server/Castle/UserCastle.cs:311-446`（每 tick；跨天重置 `UserCastle.cs:328-339`、每日开战 `UserCastle.cs:340-376`、回收 Ghost `UserCastle.cs:377-389`、围墙 `StoneMode` `UserCastle.cs:391-440`） |"
+        }
+      ],
+      "points": [
+        {
+          "line": 391,
+          "token": "if (UnderWar)",
+          "text": "if (UnderWar)"
+        },
+        {
+          "line": 440,
+          "token": "}",
+          "text": "}"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:564-572",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 10,
+          "text": "//! | [`UserCastle::start_wallconquest_war`] | `UserCastle.cs:564-572`（刷皇宫 100 范围内玩家 `RefShowName`） |"
+        },
+        {
+          "where": "castle.rs",
+          "line": 1233,
+          "text": "/// oracle `StartWallconquestWar()`（`UserCastle.cs:564-572`）：刷皇宫 100 范围内玩家 `RefShowName`。"
+        }
+      ],
+      "points": [
+        {
+          "line": 564,
+          "token": "public void StartWallconquestWar()",
+          "text": "public void StartWallconquestWar()"
+        },
+        {
+          "line": 567,
+          "token": "GetMapRageHuman(PalaceEnvir",
+          "text": "SystemShare.WorldEngine.GetMapRageHuman(PalaceEnvir, HomeX, HomeY, 100, ref playObjectList);"
+        },
+        {
+          "line": 570,
+          "token": "playObjectList[i].RefShowName();",
+          "text": "playObjectList[i].RefShowName();"
+        },
+        {
+          "line": 572,
+          "token": "}",
+          "text": "}"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:577-597",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 11,
+          "text": "//! | [`UserCastle::stop_wallconquest_war`] | `UserCastle.cs:577-597`（`UnderWar=false` + 清 `AttackGuildList` + 广播） |"
+        },
+        {
+          "where": "castle.rs",
+          "line": 1245,
+          "text": "/// oracle `StopWallconquestWar()`（`UserCastle.cs:577-597`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 577,
+          "token": "public void StopWallconquestWar()",
+          "text": "public void StopWallconquestWar()"
+        },
+        {
+          "line": 580,
+          "token": "UnderWar = false;",
+          "text": "UnderWar = false;"
+        },
+        {
+          "line": 581,
+          "token": "AttackGuildList.Clear();",
+          "text": "AttackGuildList.Clear();"
+        },
+        {
+          "line": 597,
+          "token": "}",
+          "text": "}"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:890-909",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 12,
+          "text": "//! | [`UserCastle::main_door_control`] | `UserCastle.cs:890-909`（幂等：只在 `IsOpened` 与入参不符时动） |"
+        },
+        {
+          "where": "castle.rs",
+          "line": 1263,
+          "text": "/// oracle `MainDoorControl(bool boClose)`（`UserCastle.cs:890-909`）：幂等开关主门。"
+        }
+      ],
+      "points": [
+        {
+          "line": 890,
+          "token": "public void MainDoorControl(bool boClose)",
+          "text": "public void MainDoorControl(bool boClose)"
+        },
+        {
+          "line": 905,
+          "token": "((CastleDoor)MainDoor.BaseObject).Open();",
+          "text": "((CastleDoor)MainDoor.BaseObject).Open();"
+        },
+        {
+          "line": 909,
+          "token": "}",
+          "text": "}"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:998-1014",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 13,
+          "text": "//! | [`UserCastle::add_attacker_info`] | `UserCastle.cs:998-1014`（`InAttackerList` 查重 + `AddDateTimeOfDay` + `SaveAttackSabukWall` + `SS_212`） |"
+        },
+        {
+          "where": "castle.rs",
+          "line": 1343,
+          "text": "/// oracle `AddAttackerInfo(GuildInfo)`（`UserCastle.cs:998-1014`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 998,
+          "token": "public bool AddAttackerInfo(GuildInfo Guild)",
+          "text": "public bool AddAttackerInfo(GuildInfo Guild)"
+        },
+        {
+          "line": 1011,
+          "token": "Messages.SS_212",
+          "text": "SystemShare.WorldEngine.SendServerGroupMsg(Messages.SS_212, M2Share.ServerIndex, \"\");"
+        },
+        {
+          "line": 1014,
+          "token": "}",
+          "text": "}"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:639-642",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 14,
+          "text": "//! | [`UserCastle::is_master_guild`] / [`UserCastle::is_member`] | `UserCastle.cs:639-642` / `UserCastle.cs:480-483` |"
+        },
+        {
+          "where": "castle.rs",
+          "line": 1376,
+          "text": "/// oracle `IsMasterGuild(IGuild)`（`UserCastle.cs:639-642`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 639,
+          "token": "public bool IsMasterGuild(IGuild guild)",
+          "text": "public bool IsMasterGuild(IGuild guild)"
+        },
+        {
+          "line": 641,
+          "token": "MasterGuild != null && MasterGuild == guild",
+          "text": "return MasterGuild != null && MasterGuild == guild;"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:480-483",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 14,
+          "text": "//! | [`UserCastle::is_master_guild`] / [`UserCastle::is_member`] | `UserCastle.cs:639-642` / `UserCastle.cs:480-483` |"
+        },
+        {
+          "where": "castle.rs",
+          "line": 1382,
+          "text": "/// oracle `IsMember(PlayObject)`（`UserCastle.cs:480-483`）/ `IsMember(IPlayerActor)`（`UserCastle.cs:609-612`）"
+        }
+      ],
+      "points": [
+        {
+          "line": 480,
+          "token": "public bool IsMember(PlayObject member)",
+          "text": "public bool IsMember(PlayObject member)"
+        },
+        {
+          "line": 482,
+          "token": "IsMasterGuild(member.MyGuild)",
+          "text": "return IsMasterGuild(member.MyGuild);"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:604-607",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 15,
+          "text": "//! | [`UserCastle::in_palace_guild_count`] | `UserCastle.cs:604-607`（**返回值 = `AttackGuildList.Count`**，语义是「攻城行会数」，不是皇宫内玩家数） |"
+        },
+        {
+          "where": "castle.rs",
+          "line": 1389,
+          "text": "/// oracle `InPalaceGuildCount()`（`UserCastle.cs:604-607`）= `AttackGuildList.Count`。"
+        }
+      ],
+      "points": [
+        {
+          "line": 604,
+          "token": "public int InPalaceGuildCount()",
+          "text": "public int InPalaceGuildCount()"
+        },
+        {
+          "line": 606,
+          "token": "return AttackGuildList.Count;",
+          "text": "return AttackGuildList.Count;"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:680-705",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 16,
+          "text": "//! | [`UserCastle::check_in_palace`] | `UserCastle.cs:680-705`（任一城墙格死亡且坐标命中） |"
+        },
+        {
+          "where": "castle.rs",
+          "line": 1397,
+          "text": "/// oracle `CheckInPalace(int nX, int nY)`（`UserCastle.cs:680-705`）："
+        }
+      ],
+      "points": [
+        {
+          "line": 680,
+          "token": "public bool CheckInPalace(int nX, int nY)",
+          "text": "public bool CheckInPalace(int nX, int nY)"
+        },
+        {
+          "line": 704,
+          "token": "return result;",
+          "text": "return result;"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:601",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 28,
+          "text": "//! | [`UserCastle::with_drawal_golds_n1`] | `UserCastle.cs:601` | `CastleOfficial.cs:157`（金库提取，⑧-9 面） |"
+        },
+        {
+          "where": "castle.rs",
+          "line": 1411,
+          "text": "/// N1：`UserCastle.cs:601`（`WithDrawalGolds(IPlayerActor,int)`）抛异常被吞 ⇒ no-op。"
+        }
+      ],
+      "points": [
+        {
+          "line": 601,
+          "token": "throw new NotImplementedException();",
+          "text": "throw new NotImplementedException();"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleOfficial.cs:157",
+      "src": "src/GameSrv/Npc/CastleOfficial.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 28,
+          "text": "//! | [`UserCastle::with_drawal_golds_n1`] | `UserCastle.cs:601` | `CastleOfficial.cs:157`（金库提取，⑧-9 面） |"
+        }
+      ],
+      "points": [
+        {
+          "line": 157,
+          "token": "Castle.WithDrawalGolds(PlayObject",
+          "text": "switch (Castle.WithDrawalGolds(PlayObject, HUtil32.StrToInt(sMsg, 0)))"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:646",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 29,
+          "text": "//! | [`UserCastle::get_castle_n1`] | `UserCastle.cs:646` | `PlayObject.Message.cs:329`、`ChangeSabukLordCommand.cs:39` |"
+        },
+        {
+          "where": "castle.rs",
+          "line": 1418,
+          "text": "/// N1：`UserCastle.cs:646`（`GetCastle(IGuild)`）抛异常被吞 ⇒ no-op（**不**改归属）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 646,
+          "token": "throw new NotImplementedException();",
+          "text": "throw new NotImplementedException();"
+        }
+      ]
+    },
+    {
+      "anchor": "PlayObject.Message.cs:329",
+      "src": "src/M2Server/Player/PlayObject.Message.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 29,
+          "text": "//! | [`UserCastle::get_castle_n1`] | `UserCastle.cs:646` | `PlayObject.Message.cs:329`、`ChangeSabukLordCommand.cs:39` |"
+        }
+      ],
+      "points": [
+        {
+          "line": 329,
+          "token": "castle.GetCastle(MyGuild);",
+          "text": "castle.GetCastle(MyGuild);"
+        }
+      ]
+    },
+    {
+      "anchor": "ChangeSabukLordCommand.cs:39",
+      "src": "src/Modules/GameCommand/Commands/ChangeSabukLordCommand.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 29,
+          "text": "//! | [`UserCastle::get_castle_n1`] | `UserCastle.cs:646` | `PlayObject.Message.cs:329`、`ChangeSabukLordCommand.cs:39` |"
+        }
+      ],
+      "points": [
+        {
+          "line": 39,
+          "token": "castle.GetCastle(guild);",
+          "text": "castle.GetCastle(guild);"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:672",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 30,
+          "text": "//! | [`UserCastle::add_attacker_info_n1`] | `UserCastle.cs:672` | `GuildOfficial.cs:219`（NPC 申请攻城） |"
+        },
+        {
+          "where": "castle.rs",
+          "line": 1421,
+          "text": "/// N1：`UserCastle.cs:672`（`AddAttackerInfo(IGuild)`）抛异常被吞 ⇒ no-op（**不**登记）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 672,
+          "token": "throw new NotImplementedException();",
+          "text": "throw new NotImplementedException();"
+        }
+      ]
+    },
+    {
+      "anchor": "GuildOfficial.cs:219",
+      "src": "src/GameSrv/Npc/GuildOfficial.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 30,
+          "text": "//! | [`UserCastle::add_attacker_info_n1`] | `UserCastle.cs:672` | `GuildOfficial.cs:219`（NPC 申请攻城） |"
+        }
+      ],
+      "points": [
+        {
+          "line": 219,
+          "token": "Castle.AddAttackerInfo(PlayObject.MyGuild)",
+          "text": "if (Castle.AddAttackerInfo(PlayObject.MyGuild))"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:677",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 31,
+          "text": "//! | [`UserCastle::can_get_castle_n1`] | `UserCastle.cs:677` | `PlayObject.Message.cs:327` |"
+        },
+        {
+          "where": "castle.rs",
+          "line": 1426,
+          "text": "/// N1：`UserCastle.cs:677`（`CanGetCastle(IGuild)`）抛异常被吞 ⇒ no-op ⇒ `false`。"
+        }
+      ],
+      "points": [
+        {
+          "line": 677,
+          "token": "throw new NotImplementedException();",
+          "text": "throw new NotImplementedException();"
+        }
+      ]
+    },
+    {
+      "anchor": "PlayObject.Message.cs:327",
+      "src": "src/M2Server/Player/PlayObject.Message.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 31,
+          "text": "//! | [`UserCastle::can_get_castle_n1`] | `UserCastle.cs:677` | `PlayObject.Message.cs:327` |"
+        }
+      ],
+      "points": [
+        {
+          "line": 327,
+          "token": "castle.CanGetCastle(MyGuild)",
+          "text": "if (castle.CanGetCastle(MyGuild))"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:709",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 32,
+          "text": "//! | [`UserCastle::check_in_palace_player_n1`] | `UserCastle.cs:709` | `PlayObject.Operate.cs:371`（开城门前的皇宫判定） |"
+        },
+        {
+          "where": "castle.rs",
+          "line": 1432,
+          "text": "/// N1：`UserCastle.cs:709`（`CheckInPalace(int,int,IPlayerActor)`）抛异常被吞 ⇒ no-op ⇒ `false`。"
+        }
+      ],
+      "points": [
+        {
+          "line": 709,
+          "token": "throw new NotImplementedException();",
+          "text": "throw new NotImplementedException();"
+        }
+      ]
+    },
+    {
+      "anchor": "PlayObject.Operate.cs:371",
+      "src": "src/M2Server/Player/PlayObject.Operate.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 32,
+          "text": "//! | [`UserCastle::check_in_palace_player_n1`] | `UserCastle.cs:709` | `PlayObject.Operate.cs:371`（开城门前的皇宫判定） |"
+        }
+      ],
+      "points": [
+        {
+          "line": 371,
+          "token": "castle.CheckInPalace(CurrX, CurrY, this)",
+          "text": "if (castle == null || castle.DoorStatus != door.Status || Race != ActorRace.Play || castle.CheckInPalace(CurrX, CurrY, this))"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:913",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 33,
+          "text": "//! | [`UserCastle::receipt_golds_n1`] | `UserCastle.cs:913` | `CastleOfficial.cs:179`（金库上缴，⑧-9 面） |"
+        },
+        {
+          "where": "castle.rs",
+          "line": 1438,
+          "text": "/// N1：`UserCastle.cs:913`（`ReceiptGolds(IPlayerActor,int)`）抛异常被吞 ⇒ no-op。"
+        }
+      ],
+      "points": [
+        {
+          "line": 913,
+          "token": "throw new NotImplementedException();",
+          "text": "throw new NotImplementedException();"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleOfficial.cs:179",
+      "src": "src/GameSrv/Npc/CastleOfficial.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 33,
+          "text": "//! | [`UserCastle::receipt_golds_n1`] | `UserCastle.cs:913` | `CastleOfficial.cs:179`（金库上缴，⑧-9 面） |"
+        }
+      ],
+      "points": [
+        {
+          "line": 179,
+          "token": "Castle.ReceiptGolds(PlayObject",
+          "text": "switch (Castle.ReceiptGolds(PlayObject, HUtil32.StrToInt(sMsg, 0)))"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:1042",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 34,
+          "text": "//! | [`UserCastle::is_attack_ally_guild_n1`] | `UserCastle.cs:1042` | — |"
+        },
+        {
+          "where": "castle.rs",
+          "line": 1443,
+          "text": "/// N1：`UserCastle.cs:1042`（`IsAttackAllyGuild(IGuild)`）抛异常被吞 ⇒ no-op ⇒ `false`。"
+        }
+      ],
+      "points": [
+        {
+          "line": 1042,
+          "token": "throw new NotImplementedException();",
+          "text": "throw new NotImplementedException();"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:1047",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 35,
+          "text": "//! | [`UserCastle::is_attack_guild_n1`] | `UserCastle.cs:1047` | `PlayObject.Message.cs:325` |"
+        },
+        {
+          "where": "castle.rs",
+          "line": 1449,
+          "text": "/// N1：`UserCastle.cs:1047`（`IsAttackGuild(IGuild)`）抛异常被吞 ⇒ no-op ⇒ `false`。"
+        }
+      ],
+      "points": [
+        {
+          "line": 1047,
+          "token": "throw new NotImplementedException();",
+          "text": "throw new NotImplementedException();"
+        }
+      ]
+    },
+    {
+      "anchor": "PlayObject.Message.cs:325",
+      "src": "src/M2Server/Player/PlayObject.Message.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 35,
+          "text": "//! | [`UserCastle::is_attack_guild_n1`] | `UserCastle.cs:1047` | `PlayObject.Message.cs:325` |"
+        }
+      ],
+      "points": [
+        {
+          "line": 325,
+          "token": "castle.IsAttackGuild(MyGuild)",
+          "text": "if (castle.IsAttackGuild(MyGuild))"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:1052",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 36,
+          "text": "//! | [`UserCastle::is_defense_ally_guild_n1`] | `UserCastle.cs:1052` | — |"
+        },
+        {
+          "where": "castle.rs",
+          "line": 1455,
+          "text": "/// N1：`UserCastle.cs:1052`（`IsDefenseAllyGuild(IGuild)`）抛异常被吞 ⇒ no-op ⇒ `false`。"
+        }
+      ],
+      "points": [
+        {
+          "line": 1052,
+          "token": "throw new NotImplementedException();",
+          "text": "throw new NotImplementedException();"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:1057",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 37,
+          "text": "//! | [`UserCastle::is_defense_guild_n1`] | `UserCastle.cs:1057` | — |"
+        },
+        {
+          "where": "castle.rs",
+          "line": 1461,
+          "text": "/// N1：`UserCastle.cs:1057`（`IsDefenseGuild(IGuild)`）抛异常被吞 ⇒ no-op ⇒ `false`。"
+        }
+      ],
+      "points": [
+        {
+          "line": 1057,
+          "token": "throw new NotImplementedException();",
+          "text": "throw new NotImplementedException();"
+        }
+      ]
+    },
+    {
+      "anchor": "PlayObject.Message.cs:324-334",
+      "src": "src/M2Server/Player/PlayObject.Message.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 39,
+          "text": "//! [`UserCastle::try_auto_occupy_n1`] 把 `PlayObject.Message.cs:324-334` 的**自动占领整链**建模为 no-op"
+        },
+        {
+          "where": "castle.rs",
+          "line": 1467,
+          "text": "/// N1：`PlayObject.Message.cs:324-334` 的**自动占领整链**（`IsAttackGuild` → `CanGetCastle`"
+        }
+      ],
+      "points": [
+        {
+          "line": 325,
+          "token": "castle.IsAttackGuild(MyGuild)",
+          "text": "if (castle.IsAttackGuild(MyGuild))"
+        },
+        {
+          "line": 329,
+          "token": "castle.GetCastle(MyGuild);",
+          "text": "castle.GetCastle(MyGuild);"
+        },
+        {
+          "line": 333,
+          "token": "castle.StopWallconquestWar();",
+          "text": "castle.StopWallconquestWar();"
+        }
+      ]
+    },
+    {
+      "anchor": "M2Share.cs:458-493",
+      "src": "src/M2Server/M2Share.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 45,
+          "text": "//! 1. **`AddDateTimeOfDay` 忽略天数**：`M2Share.cs:458-493` 的函数体整段被注释，最后只有"
+        }
+      ],
+      "points": [
+        {
+          "line": 458,
+          "token": "public static DateTime AddDateTimeOfDay",
+          "text": "public static DateTime AddDateTimeOfDay(DateTime DateTime, int nDay)"
+        },
+        {
+          "line": 460,
+          "token": "DateTime result = DateTime.Now;",
+          "text": "DateTime result = DateTime.Now;"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:582-584",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 48,
+          "text": "//! 2. **`StopWallconquestWar` 的玩家处理不可达**：`UserCastle.cs:582-584` 的"
+        },
+        {
+          "where": "castle.rs",
+          "line": 1247,
+          "text": "/// **照搬 oracle 怪行为**：`UserCastle.cs:582-584` 的 `GetMapOfRangeHumanCount` **丢弃返回值**，"
+        }
+      ],
+      "points": [
+        {
+          "line": 582,
+          "token": "IList<PlayObject> ListC = new List<PlayObject>();",
+          "text": "IList<PlayObject> ListC = new List<PlayObject>();"
+        },
+        {
+          "line": 583,
+          "token": "GetMapOfRangeHumanCount(CastleEnvir, HomeX, HomeY, 100);",
+          "text": "SystemShare.WorldEngine.GetMapOfRangeHumanCount(CastleEnvir, HomeX, HomeY, 100);"
+        },
+        {
+          "line": 584,
+          "token": "for (int i = 0; i < ListC.Count; i++)",
+          "text": "for (int i = 0; i < ListC.Count; i++)"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:48",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 14,
+          "text": "//! | [`UserCastle::is_master_guild`] / [`UserCastle::is_member`] | `UserCastle.cs:639-642` / `UserCastle.cs:480-483` |"
+        },
+        {
+          "where": "castle.rs",
+          "line": 63,
+          "text": "/// `UserCastle.Archers = new ArcherUnit[12]`（`UserCastle.cs:48`）与 `CastleConst.MaxCastleArcher`"
+        },
+        {
+          "where": "castle.rs",
+          "line": 1382,
+          "text": "/// oracle `IsMember(PlayObject)`（`UserCastle.cs:480-483`）/ `IsMember(IPlayerActor)`（`UserCastle.cs:609-612`）"
+        }
+      ],
+      "points": [
+        {
+          "line": 48,
+          "token": "Archers = new ArcherUnit[12];",
+          "text": "Archers = new ArcherUnit[12];"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleConst.cs:10",
+      "src": "src/M2Server/Castle/CastleConst.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 64,
+          "text": "/// （`CastleConst.cs:10`）。`Guards` 数组长度同为 12（`UserCastle.cs:49`），"
+        }
+      ],
+      "points": [
+        {
+          "line": 10,
+          "token": "public const int MaxCastleArcher = 12;",
+          "text": "public const int MaxCastleArcher = 12;"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:49",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 64,
+          "text": "/// （`CastleConst.cs:10`）。`Guards` 数组长度同为 12（`UserCastle.cs:49`），"
+        },
+        {
+          "where": "castle.rs",
+          "line": 67,
+          "text": "/// `Guards` 数组长度（`UserCastle.cs:49`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 49,
+          "token": "Guards = new ArcherUnit[12];",
+          "text": "Guards = new ArcherUnit[12];"
+        }
+      ]
+    },
+    {
+      "anchor": "GameSvrConf.cs:1782",
+      "src": "src/Modules/SystemModule/Conf/Model/GameSvrConf.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 136,
+          "text": "/// `GameSvrConf` 初值（`GameSvrConf.cs:1442-1446` 与 `GameSvrConf.cs:1782`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 1782,
+          "token": "CastleName = \"沙巴克\";",
+          "text": "CastleName = \"沙巴克\";"
+        }
+      ]
+    },
+    {
+      "anchor": "Messages.cs:453",
+      "src": "src/OpenMir2/Messages.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 71,
+          "text": "/// `Messages.cs:453` 的 `SS_204`（跨服系统消息）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 453,
+          "token": "public const int SS_204 = 204;",
+          "text": "public const int SS_204 = 204;"
+        }
+      ]
+    },
+    {
+      "anchor": "Messages.cs:461",
+      "src": "src/OpenMir2/Messages.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 73,
+          "text": "/// `Messages.cs:461` 的 `SS_212`（跨服 `RELOADCASTLEINFO`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 461,
+          "token": "public const int SS_212 = 212;",
+          "text": "public const int SS_212 = 212;"
+        }
+      ]
+    },
+    {
+      "anchor": "ServerConf.cs:639",
+      "src": "src/Modules/SystemModule/Conf/ServerConf.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 121,
+          "text": "/// `[Setup] StartCastlewarTime`（`ServerConf.cs:639`，每日开战小时）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 639,
+          "token": "StartCastlewarTime = ReadWriteInteger(\"Setup\", \"StartCastlewarTime\"",
+          "text": "SystemShare.Config.StartCastlewarTime = ReadWriteInteger(\"Setup\", \"StartCastlewarTime\", SystemShare.Config.StartCastlewarTime);"
+        }
+      ]
+    },
+    {
+      "anchor": "ServerConf.cs:642",
+      "src": "src/Modules/SystemModule/Conf/ServerConf.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 123,
+          "text": "/// `[Setup] CastleWarTime`（`ServerConf.cs:642`，攻城时长 ms）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 642,
+          "token": "CastleWarTime = ReadWriteInteger(\"Setup\", \"CastleWarTime\"",
+          "text": "SystemShare.Config.CastleWarTime = ReadWriteInteger(\"Setup\", \"CastleWarTime\", SystemShare.Config.CastleWarTime);"
+        }
+      ]
+    },
+    {
+      "anchor": "ServerConf.cs:640",
+      "src": "src/Modules/SystemModule/Conf/ServerConf.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 125,
+          "text": "/// `[Setup] ShowCastleWarEndMsgTime`（`ServerConf.cs:640`，结束前预告窗口 ms）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 640,
+          "token": "ShowCastleWarEndMsgTime = ReadWriteInteger(\"Setup\", \"ShowCastleWarEndMsgTime\"",
+          "text": "SystemShare.Config.ShowCastleWarEndMsgTime = ReadWriteInteger(\"Setup\", \"ShowCastleWarEndMsgTime\", SystemShare.Config.ShowCastleWarEndMsgTime);"
+        }
+      ]
+    },
+    {
+      "anchor": "ServerConf.cs:643",
+      "src": "src/Modules/SystemModule/Conf/ServerConf.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 127,
+          "text": "/// `[Setup] GetCastleTime`（`ServerConf.cs:643`，可占领最短时长 ms）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 643,
+          "token": "GetCastleTime = ReadWriteInteger(\"Setup\", \"GetCastleTime\"",
+          "text": "SystemShare.Config.GetCastleTime = ReadWriteInteger(\"Setup\", \"GetCastleTime\", SystemShare.Config.GetCastleTime);"
+        }
+      ]
+    },
+    {
+      "anchor": "ServerConf.cs:638",
+      "src": "src/Modules/SystemModule/Conf/ServerConf.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 129,
+          "text": "/// `[Setup] StartCastleWarDays`（`ServerConf.cs:638`，申请日 +N 天；`AddDateTimeOfDay` 实际忽略）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 638,
+          "token": "StartCastleWarDays = ReadWriteByte(\"Setup\", \"StartCastleWarDays\"",
+          "text": "SystemShare.Config.StartCastleWarDays = ReadWriteByte(\"Setup\", \"StartCastleWarDays\", SystemShare.Config.StartCastleWarDays);"
+        }
+      ]
+    },
+    {
+      "anchor": "ServerConf.cs:253",
+      "src": "src/Modules/SystemModule/Conf/ServerConf.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 131,
+          "text": "/// `[Setup] CastleName`（`ServerConf.cs:253`，广播文案里的城堡名）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 253,
+          "token": "CastleName = ReadWriteString(\"Setup\", \"CastleName\"",
+          "text": "SystemShare.Config.CastleName = ReadWriteString(\"Setup\", \"CastleName\", SystemShare.Config.CastleName);"
+        }
+      ]
+    },
+    {
+      "anchor": "GameSvrConf.cs:1442-1446",
+      "src": "src/Modules/SystemModule/Conf/Model/GameSvrConf.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 136,
+          "text": "/// `GameSvrConf` 初值（`GameSvrConf.cs:1442-1446` 与 `GameSvrConf.cs:1782`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 1442,
+          "token": "StartCastleWarDays = 4;",
+          "text": "StartCastleWarDays = 4;"
+        },
+        {
+          "line": 1443,
+          "token": "StartCastlewarTime = 20;",
+          "text": "StartCastlewarTime = 20;"
+        },
+        {
+          "line": 1446,
+          "token": "GetCastleTime = 10 * 60 * 1000;",
+          "text": "GetCastleTime = 10 * 60 * 1000;"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleDoor.cs:12/57/75",
+      "src": "src/M2Server/Monster/Monsters/CastleDoor.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 184,
+          "text": "/// `CastleDoor.HoldPlace`（`CastleDoor.cs:12/57/75`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 12,
+          "token": "public bool HoldPlace;",
+          "text": "public bool HoldPlace;"
+        },
+        {
+          "line": 57,
+          "token": "HoldPlace = false;",
+          "text": "HoldPlace = false;"
+        },
+        {
+          "line": 75,
+          "token": "HoldPlace = true;",
+          "text": "HoldPlace = true;"
+        }
+      ]
+    },
+    {
+      "anchor": "WallStructure.cs:7/53-66",
+      "src": "src/M2Server/Monster/Monsters/WallStructure.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 186,
+          "text": "/// `WallStructure.SetMapFlaged`（`WallStructure.cs:7/53-66`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 7,
+          "token": "internal bool SetMapFlaged;",
+          "text": "internal bool SetMapFlaged;"
+        },
+        {
+          "line": 53,
+          "token": "if (SetMapFlaged)",
+          "text": "if (SetMapFlaged)"
+        },
+        {
+          "line": 65,
+          "token": "SetMapFlaged = true;",
+          "text": "SetMapFlaged = true;"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleDoor.cs:66/96/108",
+      "src": "src/M2Server/Monster/Monsters/CastleDoor.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 205,
+          "text": "/// `3 - Round(HP / MaxHP * 3.0)`（`CastleDoor.cs:66/96/108`、`WallStructure.cs:28/70`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 66,
+          "token": "Dir = (byte)(3 - HUtil32.Round(WAbil.HP / (double)WAbil.MaxHP * 3.0));",
+          "text": "Dir = (byte)(3 - HUtil32.Round(WAbil.HP / (double)WAbil.MaxHP * 3.0));"
+        },
+        {
+          "line": 96,
+          "token": "int n08 = 3 - HUtil32.Round(WAbil.HP / (double)WAbil.MaxHP * 3.0);",
+          "text": "int n08 = 3 - HUtil32.Round(WAbil.HP / (double)WAbil.MaxHP * 3.0);"
+        },
+        {
+          "line": 108,
+          "token": "int n08 = 3 - HUtil32.Round(WAbil.HP / (double)WAbil.MaxHP * 3.0);",
+          "text": "int n08 = 3 - HUtil32.Round(WAbil.HP / (double)WAbil.MaxHP * 3.0);"
+        }
+      ]
+    },
+    {
+      "anchor": "WallStructure.cs:28/70",
+      "src": "src/M2Server/Monster/Monsters/WallStructure.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 205,
+          "text": "/// `3 - Round(HP / MaxHP * 3.0)`（`CastleDoor.cs:66/96/108`、`WallStructure.cs:28/70`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 28,
+          "token": "n08 = (byte)(3 - HUtil32.Round(this.WAbil.HP / this.WAbil.MaxHP * 3.0));",
+          "text": "n08 = (byte)(3 - HUtil32.Round(this.WAbil.HP / this.WAbil.MaxHP * 3.0));"
+        },
+        {
+          "line": 70,
+          "token": "n08 = 3 - HUtil32.Round(this.WAbil.HP / this.WAbil.MaxHP * 3.0);",
+          "text": "n08 = 3 - HUtil32.Round(this.WAbil.HP / this.WAbil.MaxHP * 3.0);"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleDoor.cs:46-58",
+      "src": "src/M2Server/Monster/Monsters/CastleDoor.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 224,
+          "text": "/// oracle `CastleDoor.Open()`（`CastleDoor.cs:46-58`）。"
+        },
+        {
+          "where": "castle.rs",
+          "line": 1983,
+          "text": "// `CastleDoor.cs:46-58`。"
+        }
+      ],
+      "points": [
+        {
+          "line": 46,
+          "token": "public void Open()",
+          "text": "public void Open()"
+        },
+        {
+          "line": 57,
+          "token": "HoldPlace = false;",
+          "text": "HoldPlace = false;"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleDoor.cs:60-76",
+      "src": "src/M2Server/Monster/Monsters/CastleDoor.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 245,
+          "text": "/// oracle `CastleDoor.Close()`（`CastleDoor.cs:60-76`）。"
+        },
+        {
+          "where": "castle.rs",
+          "line": 1999,
+          "text": "// `CastleDoor.cs:60-76`：`Dir = 3 - Round(10000/10000*3) = 0`。"
+        }
+      ],
+      "points": [
+        {
+          "line": 60,
+          "token": "public void Close()",
+          "text": "public void Close()"
+        },
+        {
+          "line": 75,
+          "token": "HoldPlace = true;",
+          "text": "HoldPlace = true;"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleDoor.cs:78-82",
+      "src": "src/M2Server/Monster/Monsters/CastleDoor.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 270,
+          "text": "/// oracle `CastleDoor.Die()`（`CastleDoor.cs:78-82`）：`base.Die()` 后 `SetMapXyFlag(2)`。"
+        },
+        {
+          "where": "castle.rs",
+          "line": 2042,
+          "text": "// `Die()` 本身仍 `SetMapXyFlag(2)`（`CastleDoor.cs:78-82`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 78,
+          "token": "public override void Die()",
+          "text": "public override void Die()"
+        },
+        {
+          "line": 81,
+          "token": "SetMapXyFlag(2);",
+          "text": "SetMapXyFlag(2);"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleDoor.cs:84-104",
+      "src": "src/M2Server/Monster/Monsters/CastleDoor.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 278,
+          "text": "/// oracle `CastleDoor.Run()`（`CastleDoor.cs:84-104`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 84,
+          "token": "public override void Run()",
+          "text": "public override void Run()"
+        },
+        {
+          "line": 103,
+          "token": "base.Run();",
+          "text": "base.Run();"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleDoor.cs:106-115",
+      "src": "src/M2Server/Monster/Monsters/CastleDoor.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 303,
+          "text": "/// oracle `CastleDoor.RefStatus()`（`CastleDoor.cs:106-115`）：重置 `Dir` 并发 `RM_ALIVE`。"
+        },
+        {
+          "where": "castle.rs",
+          "line": 2105,
+          "text": "// `CastleDoor.cs:106-115`。"
+        }
+      ],
+      "points": [
+        {
+          "line": 106,
+          "token": "public void RefStatus()",
+          "text": "public void RefStatus()"
+        },
+        {
+          "line": 114,
+          "token": "SendRefMsg(Messages.RM_ALIVE, Dir, CurrX, CurrY, 0, \"\");",
+          "text": "SendRefMsg(Messages.RM_ALIVE, Dir, CurrX, CurrY, 0, \"\");"
+        }
+      ]
+    },
+    {
+      "anchor": "WallStructure.cs:17-21",
+      "src": "src/M2Server/Monster/Monsters/WallStructure.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 317,
+          "text": "/// oracle `WallStructure.Initialize()`（`WallStructure.cs:17-21`）：`Dir = 0` 后 `base.Initialize()`。"
+        }
+      ],
+      "points": [
+        {
+          "line": 17,
+          "token": "public override void Initialize()",
+          "text": "public override void Initialize()"
+        },
+        {
+          "line": 20,
+          "token": "base.Initialize();",
+          "text": "base.Initialize();"
+        }
+      ]
+    },
+    {
+      "anchor": "WallStructure.cs:23-40",
+      "src": "src/M2Server/Monster/Monsters/WallStructure.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 322,
+          "text": "/// oracle `WallStructure.RefStatus()`（`WallStructure.cs:23-40`）。"
+        },
+        {
+          "where": "castle.rs",
+          "line": 2121,
+          "text": "// `WallStructure.cs:23-40`：`HP>0 ⇒ 3-Round(...)`，否则 4。"
+        }
+      ],
+      "points": [
+        {
+          "line": 23,
+          "token": "public void RefStatus()",
+          "text": "public void RefStatus()"
+        },
+        {
+          "line": 39,
+          "token": "this.SendRefMsg(Messages.RM_ALIVE, this.Dir, this.CurrX, this.CurrY, 0, \"\");",
+          "text": "this.SendRefMsg(Messages.RM_ALIVE, this.Dir, this.CurrX, this.CurrY, 0, \"\");"
+        }
+      ]
+    },
+    {
+      "anchor": "WallStructure.cs:47-82",
+      "src": "src/M2Server/Monster/Monsters/WallStructure.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 338,
+          "text": "/// oracle `WallStructure.Run()`（`WallStructure.cs:47-82`）。"
+        },
+        {
+          "where": "castle.rs",
+          "line": 2148,
+          "text": "// `WallStructure.cs:47-82`。"
+        }
+      ],
+      "points": [
+        {
+          "line": 47,
+          "token": "public override void Run()",
+          "text": "public override void Run()"
+        },
+        {
+          "line": 81,
+          "token": "base.Run();",
+          "text": "base.Run();"
+        }
+      ]
+    },
+    {
+      "anchor": "HUtil32.cs:131-134",
+      "src": "src/OpenMir2/HUtil32.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 379,
+          "text": "/// 复刻 `HUtil32.Round`（`src/OpenMir2/HUtil32.cs:131-134`）："
+        }
+      ],
+      "points": [
+        {
+          "line": 131,
+          "token": "public static int Round(double r)",
+          "text": "public static int Round(double r)"
+        },
+        {
+          "line": 133,
+          "token": "return (int)Math.Round(r, MidpointRounding.AwayFromZero);",
+          "text": "return (int)Math.Round(r, MidpointRounding.AwayFromZero);"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleDoor.cs:23-44",
+      "src": "src/M2Server/Monster/Monsters/CastleDoor.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 389,
+          "text": "/// `CastleDoor.SetMapXyFlag(int nFlag)`（`CastleDoor.cs:23-44`）的**有序**格子掩码。"
+        }
+      ],
+      "points": [
+        {
+          "line": 23,
+          "token": "private void SetMapXyFlag(int nFlag)",
+          "text": "private void SetMapXyFlag(int nFlag)"
+        },
+        {
+          "line": 42,
+          "token": "Envir.SetMapXyFlag(CurrX + 1, CurrY - 2, false);",
+          "text": "Envir.SetMapXyFlag(CurrX + 1, CurrY - 2, false);"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleDoor.cs:25-27",
+      "src": "src/M2Server/Monster/Monsters/CastleDoor.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 396,
+          "text": "// `CastleDoor.cs:25-27`：三格先无条件置 `true`。"
+        },
+        {
+          "where": "castle.rs",
+          "line": 1601,
+          "text": "// `SetMapXyFlag(1)`：`nFlag != 1` 为 false ⇒ 三格（`CastleDoor.cs:25-27`）先 true、"
+        }
+      ],
+      "points": [
+        {
+          "line": 25,
+          "token": "Envir.SetMapXyFlag(CurrX, CurrY - 2, true);",
+          "text": "Envir.SetMapXyFlag(CurrX, CurrY - 2, true);"
+        },
+        {
+          "line": 27,
+          "token": "Envir.SetMapXyFlag(CurrX + 1, CurrY - 2, true);",
+          "text": "Envir.SetMapXyFlag(CurrX + 1, CurrY - 2, true);"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleDoor.cs:28",
+      "src": "src/M2Server/Monster/Monsters/CastleDoor.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 398,
+          "text": "// `CastleDoor.cs:28`：`boFlag = nFlag != 1`。"
+        }
+      ],
+      "points": [
+        {
+          "line": 28,
+          "token": "bool boFlag = nFlag != 1;",
+          "text": "bool boFlag = nFlag != 1;"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleDoor.cs:29-37",
+      "src": "src/M2Server/Monster/Monsters/CastleDoor.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 400,
+          "text": "// `CastleDoor.cs:29-37`：九格置 `boFlag`。"
+        },
+        {
+          "where": "castle.rs",
+          "line": 1602,
+          "text": "// 九格（`CastleDoor.cs:29-37`）全 false（9 个不重复格）。"
+        },
+        {
+          "where": "castle.rs",
+          "line": 2211,
+          "text": "// 关门：9 个不重复格全 `LowWall`（`CastleDoor.cs:29-37`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 29,
+          "token": "Envir.SetMapXyFlag(CurrX, CurrY, boFlag);",
+          "text": "Envir.SetMapXyFlag(CurrX, CurrY, boFlag);"
+        },
+        {
+          "line": 37,
+          "token": "Envir.SetMapXyFlag(CurrX - 1, CurrY + 1, boFlag);",
+          "text": "Envir.SetMapXyFlag(CurrX - 1, CurrY + 1, boFlag);"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleDoor.cs:38-43",
+      "src": "src/M2Server/Monster/Monsters/CastleDoor.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 410,
+          "text": "// `CastleDoor.cs:38-43`：`nFlag == 0` 时再把那三格置 `false`。"
+        }
+      ],
+      "points": [
+        {
+          "line": 38,
+          "token": "if (nFlag == 0)",
+          "text": "if (nFlag == 0)"
+        },
+        {
+          "line": 42,
+          "token": "Envir.SetMapXyFlag(CurrX + 1, CurrY - 2, false);",
+          "text": "Envir.SetMapXyFlag(CurrX + 1, CurrY - 2, false);"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleOfficial.cs:52-67",
+      "src": "src/GameSrv/Npc/CastleOfficial.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 419,
+          "text": "/// `CastleOfficial.cs:52-67` 的 `$CASTLEDOORSTATE` 文本。"
+        },
+        {
+          "where": "castle.rs",
+          "line": 792,
+          "text": "/// `CastleOfficial` 的城门文本（`CastleOfficial.cs:52-67` 的 `$CASTLEDOORSTATE`）。"
+        },
+        {
+          "where": "castle.rs",
+          "line": 2485,
+          "text": "// `CastleOfficial.cs:52-67`：先 `Death`，再 `IsOpened`。"
+        }
+      ],
+      "points": [
+        {
+          "line": 52,
+          "token": "case \"$CASTLEDOORSTATE\":",
+          "text": "case \"$CASTLEDOORSTATE\":"
+        },
+        {
+          "line": 67,
+          "token": "sMsg = ReplaceVariableText(sMsg, \"<$CASTLEDOORSTATE>\", sText);",
+          "text": "sMsg = ReplaceVariableText(sMsg, \"<$CASTLEDOORSTATE>\", sText);"
+        }
+      ]
+    },
+    {
+      "anchor": "HUtil32.cs:550-576",
+      "src": "src/OpenMir2/HUtil32.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 435,
+          "text": "/// `HUtil32.CompareLStr(src, targ)`（`src/OpenMir2/HUtil32.cs:550-576`）：大小写不敏感的前缀匹配。"
+        },
+        {
+          "where": "castle.rs",
+          "line": 2458,
+          "text": "/// （`src/OpenMir2/HUtil32.cs:550-576`）同语义，**且对任意 UTF-8 输入都不 panic**。"
+        }
+      ],
+      "points": [
+        {
+          "line": 550,
+          "token": "public static bool CompareLStr(string src, string targ)",
+          "text": "public static bool CompareLStr(string src, string targ)"
+        },
+        {
+          "line": 575,
+          "token": "return false;",
+          "text": "return false;"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleOfficial.cs:199-238",
+      "src": "src/GameSrv/Npc/CastleOfficial.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 466,
+          "text": "/// `CastleOfficial.UserSelect` 的标签派发（`CastleOfficial.cs:199-238`）。"
+        },
+        {
+          "where": "castle.rs",
+          "line": 821,
+          "text": "/// `CastleOfficial.UserSelect` 的城门/城墙标签动作（`CastleOfficial.cs:199-238`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 199,
+          "token": "else if (string.Compare(sLabel, ScriptFlagConst.sOPENMAINDOOR, StringComparison.OrdinalIgnoreCase) == 0)",
+          "text": "else if (string.Compare(sLabel, ScriptFlagConst.sOPENMAINDOOR, StringComparison.OrdinalIgnoreCase) == 0)"
+        },
+        {
+          "line": 237,
+          "token": "PlayObject.SendMsg(this, Messages.RM_MENU_OK, 0, ActorId, 0, 0);",
+          "text": "PlayObject.SendMsg(this, Messages.RM_MENU_OK, 0, ActorId, 0, 0);"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleOfficial.cs:229/235",
+      "src": "src/GameSrv/Npc/CastleOfficial.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 492,
+          "text": "/// **N5（白名单 T-40）**：`CastleOfficial.cs:229/235` 的"
+        },
+        {
+          "where": "castle.rs",
+          "line": 2432,
+          "text": "// `CastleOfficial.cs:229/235`：length 实参用整串长度 ⇒ `13 + len > len` 恒真。"
+        }
+      ],
+      "points": [
+        {
+          "line": 229,
+          "token": "s20 = sLabel.Substring(ScriptFlagConst.sHIREGUARDNOW.Length, sLabel.Length);",
+          "text": "s20 = sLabel.Substring(ScriptFlagConst.sHIREGUARDNOW.Length, sLabel.Length);"
+        },
+        {
+          "line": 235,
+          "token": "s20 = sLabel.Substring(ScriptFlagConst.sHIREARCHERNOW.Length, sLabel.Length);",
+          "text": "s20 = sLabel.Substring(ScriptFlagConst.sHIREARCHERNOW.Length, sLabel.Length);"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleOfficial.cs:358-381",
+      "src": "src/GameSrv/Npc/CastleOfficial.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 510,
+          "text": "/// `CastleOfficial.RepairDoor(PlayObject)`（`CastleOfficial.cs:358-381`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 358,
+          "token": "private void RepairDoor(IPlayerActor PlayObject)",
+          "text": "private void RepairDoor(IPlayerActor PlayObject)"
+        },
+        {
+          "line": 379,
+          "token": "PlayObject.SysMsg(\"城内资金不足!!!\", MsgColor.Red, MsgType.Hint);",
+          "text": "PlayObject.SysMsg(\"城内资金不足!!!\", MsgColor.Red, MsgType.Hint);"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleOfficial.cs:383-406",
+      "src": "src/GameSrv/Npc/CastleOfficial.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 547,
+          "text": "/// `CastleOfficial.RepairWallNow(nWallIndex, PlayObject)`（`CastleOfficial.cs:383-406`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 383,
+          "token": "private void RepairWallNow(int nWallIndex, IPlayerActor PlayObject)",
+          "text": "private void RepairWallNow(int nWallIndex, IPlayerActor PlayObject)"
+        },
+        {
+          "line": 404,
+          "token": "PlayObject.SysMsg(\"城内资金不足!!!\", MsgColor.Red, MsgType.Hint);",
+          "text": "PlayObject.SysMsg(\"城内资金不足!!!\", MsgColor.Red, MsgType.Hint);"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:115/121/127",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 717,
+          "text": "/// `SystemShare.MapMgr.FindMap(name) != null`（`UserCastle.cs:115/121/127`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 115,
+          "token": "PalaceEnvir = SystemShare.MapMgr.FindMap(PalaceMap);",
+          "text": "PalaceEnvir = SystemShare.MapMgr.FindMap(PalaceMap);"
+        },
+        {
+          "line": 121,
+          "token": "SecretEnvir = SystemShare.MapMgr.FindMap(SecretMap);",
+          "text": "SecretEnvir = SystemShare.MapMgr.FindMap(SecretMap);"
+        },
+        {
+          "line": 127,
+          "token": "CastleEnvir = SystemShare.MapMgr.FindMap(MapName);",
+          "text": "CastleEnvir = SystemShare.MapMgr.FindMap(MapName);"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:920/956",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 772,
+          "text": "/// `UserCastle.RepairDoor`/`RepairWall` 的 60s `StruckTick` 门（`UserCastle.cs:920/956`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 920,
+          "token": "public bool RepairDoor()",
+          "text": "public bool RepairDoor()"
+        },
+        {
+          "line": 956,
+          "token": "public bool RepairWall(int nWallIndex)",
+          "text": "public bool RepairWall(int nWallIndex)"
+        }
+      ]
+    },
+    {
+      "anchor": "ScriptFlagConst.cs:75",
+      "src": "src/Modules/SystemModule/Const/ScriptFlagConst.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 775,
+          "text": "/// `ScriptFlagConst.sOPENMAINDOOR`（`ScriptFlagConst.cs:75`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 75,
+          "token": "public const string sOPENMAINDOOR = \"@openmaindoor\";",
+          "text": "public const string sOPENMAINDOOR = \"@openmaindoor\";"
+        }
+      ]
+    },
+    {
+      "anchor": "ScriptFlagConst.cs:76",
+      "src": "src/Modules/SystemModule/Const/ScriptFlagConst.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 777,
+          "text": "/// `ScriptFlagConst.sCLOSEMAINDOOR`（`ScriptFlagConst.cs:76`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 76,
+          "token": "public const string sCLOSEMAINDOOR = \"@closemaindoor\";",
+          "text": "public const string sCLOSEMAINDOOR = \"@closemaindoor\";"
+        }
+      ]
+    },
+    {
+      "anchor": "ScriptFlagConst.cs:77",
+      "src": "src/Modules/SystemModule/Const/ScriptFlagConst.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 779,
+          "text": "/// `ScriptFlagConst.sREPAIRDOORNOW`（`ScriptFlagConst.cs:77`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 77,
+          "token": "public const string sREPAIRDOORNOW = \"@repairdoornow\";",
+          "text": "public const string sREPAIRDOORNOW = \"@repairdoornow\";"
+        }
+      ]
+    },
+    {
+      "anchor": "ScriptFlagConst.cs:78",
+      "src": "src/Modules/SystemModule/Const/ScriptFlagConst.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 781,
+          "text": "/// `ScriptFlagConst.sREPAIRWALLNOW1`（`ScriptFlagConst.cs:78`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 78,
+          "token": "public const string sREPAIRWALLNOW1 = \"@repairwallnow1\";",
+          "text": "public const string sREPAIRWALLNOW1 = \"@repairwallnow1\";"
+        }
+      ]
+    },
+    {
+      "anchor": "ScriptFlagConst.cs:79",
+      "src": "src/Modules/SystemModule/Const/ScriptFlagConst.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 783,
+          "text": "/// `ScriptFlagConst.sREPAIRWALLNOW2`（`ScriptFlagConst.cs:79`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 79,
+          "token": "public const string sREPAIRWALLNOW2 = \"@repairwallnow2\";",
+          "text": "public const string sREPAIRWALLNOW2 = \"@repairwallnow2\";"
+        }
+      ]
+    },
+    {
+      "anchor": "ScriptFlagConst.cs:80",
+      "src": "src/Modules/SystemModule/Const/ScriptFlagConst.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 785,
+          "text": "/// `ScriptFlagConst.sREPAIRWALLNOW3`（`ScriptFlagConst.cs:80`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 80,
+          "token": "public const string sREPAIRWALLNOW3 = \"@repairwallnow3\";",
+          "text": "public const string sREPAIRWALLNOW3 = \"@repairwallnow3\";"
+        }
+      ]
+    },
+    {
+      "anchor": "ScriptFlagConst.cs:81",
+      "src": "src/Modules/SystemModule/Const/ScriptFlagConst.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 787,
+          "text": "/// `ScriptFlagConst.sHIREARCHERNOW`（`ScriptFlagConst.cs:81`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 81,
+          "token": "public const string sHIREARCHERNOW = \"@hirearchernow\";",
+          "text": "public const string sHIREARCHERNOW = \"@hirearchernow\";"
+        }
+      ]
+    },
+    {
+      "anchor": "ScriptFlagConst.cs:82",
+      "src": "src/Modules/SystemModule/Const/ScriptFlagConst.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 789,
+          "text": "/// `ScriptFlagConst.sHIREGUARDNOW`（`ScriptFlagConst.cs:82`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 82,
+          "token": "public const string sHIREGUARDNOW = \"@hireguardnow\";",
+          "text": "public const string sHIREGUARDNOW = \"@hireguardnow\";"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleOfficial.cs:59-61",
+      "src": "src/GameSrv/Npc/CastleOfficial.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 794,
+          "text": "/// `CastleOfficial.cs:59-61`：`IsOpened` ⇒ `\"opened\"`。"
+        }
+      ],
+      "points": [
+        {
+          "line": 59,
+          "token": "else if (castleDoor.IsOpened)",
+          "text": "else if (castleDoor.IsOpened)"
+        },
+        {
+          "line": 61,
+          "token": "sText = \"opened\";",
+          "text": "sText = \"opened\";"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleOfficial.cs:63-65",
+      "src": "src/GameSrv/Npc/CastleOfficial.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 796,
+          "text": "/// `CastleOfficial.cs:63-65`：否则 `\"closed\"`。"
+        }
+      ],
+      "points": [
+        {
+          "line": 63,
+          "token": "else",
+          "text": "else"
+        },
+        {
+          "line": 65,
+          "token": "sText = \"closed\";",
+          "text": "sText = \"closed\";"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleOfficial.cs:358-406",
+      "src": "src/GameSrv/Npc/CastleOfficial.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 799,
+          "text": "/// `CastleOfficial` 修门/修墙的提示文案（`CastleOfficial.cs:358-406`）。"
+        },
+        {
+          "where": "castle.rs",
+          "line": 837,
+          "text": "/// `CastleOfficial.RepairDoor`/`RepairWallNow` 的结果（`CastleOfficial.cs:358-406`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 358,
+          "token": "private void RepairDoor(IPlayerActor PlayObject)",
+          "text": "private void RepairDoor(IPlayerActor PlayObject)"
+        },
+        {
+          "line": 404,
+          "token": "PlayObject.SysMsg(\"城内资金不足!!!\", MsgColor.Red, MsgType.Hint);",
+          "text": "PlayObject.SysMsg(\"城内资金不足!!!\", MsgColor.Red, MsgType.Hint);"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleOfficial.cs:374/399",
+      "src": "src/GameSrv/Npc/CastleOfficial.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 801,
+          "text": "/// `CastleOfficial.cs:374/399`：修理未生效（HP 满 / `UnderWar` / 60s 门未过）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 374,
+          "token": "PlayObject.SysMsg(\"城门不需要修理!!!\", MsgColor.Green, MsgType.Hint);",
+          "text": "PlayObject.SysMsg(\"城门不需要修理!!!\", MsgColor.Green, MsgType.Hint);"
+        },
+        {
+          "line": 399,
+          "token": "PlayObject.SysMsg(\"城门不需要修理!!!\", MsgColor.Green, MsgType.Hint);",
+          "text": "PlayObject.SysMsg(\"城门不需要修理!!!\", MsgColor.Green, MsgType.Hint);"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleOfficial.cs:379/404",
+      "src": "src/GameSrv/Npc/CastleOfficial.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 803,
+          "text": "/// `CastleOfficial.cs:379/404`：`TotalGold` 不足。"
+        }
+      ],
+      "points": [
+        {
+          "line": 379,
+          "token": "PlayObject.SysMsg(\"城内资金不足!!!\", MsgColor.Red, MsgType.Hint);",
+          "text": "PlayObject.SysMsg(\"城内资金不足!!!\", MsgColor.Red, MsgType.Hint);"
+        },
+        {
+          "line": 404,
+          "token": "PlayObject.SysMsg(\"城内资金不足!!!\", MsgColor.Red, MsgType.Hint);",
+          "text": "PlayObject.SysMsg(\"城内资金不足!!!\", MsgColor.Red, MsgType.Hint);"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:73",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 886,
+          "text": "/// `SaveTick`（`UserCastle.cs:73`）：`IncRateGold` 的 10 分钟落盘节流口（⑧-9）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 73,
+          "token": "public int SaveTick { get; set; }",
+          "text": "public int SaveTick { get; set; }"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:23-59",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 912,
+          "text": "/// 按 oracle `UserCastle` 构造函数（`UserCastle.cs:23-59`）+ `CastleConf` 默认建一座空城。"
+        }
+      ],
+      "points": [
+        {
+          "line": 23,
+          "token": "private int _techLevel;",
+          "text": "private int _techLevel;"
+        },
+        {
+          "line": 58,
+          "token": "public int TechLevel",
+          "text": "public int TechLevel"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:318-321",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 1120,
+          "text": "// `UserCastle.cs:318-321`：`string.IsNullOrEmpty(MapName)` ⇒ return。"
+        }
+      ],
+      "points": [
+        {
+          "line": 318,
+          "token": "if (string.IsNullOrEmpty(MapName))",
+          "text": "if (string.IsNullOrEmpty(MapName))"
+        },
+        {
+          "line": 320,
+          "token": "return;",
+          "text": "return;"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:323-326",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 1126,
+          "text": "// `UserCastle.cs:323-326`：非本服归属 ⇒ return。"
+        }
+      ],
+      "points": [
+        {
+          "line": 323,
+          "token": "if (M2Share.ServerIndex != SystemShare.MapMgr.GetMapOfServerIndex(MapName))",
+          "text": "if (M2Share.ServerIndex != SystemShare.MapMgr.GetMapOfServerIndex(MapName))"
+        },
+        {
+          "line": 325,
+          "token": "return;",
+          "text": "return;"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:347-362",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 1143,
+          "text": "// `UserCastle.cs:347-362`：**倒序**遍历申请表；命中今天者移入攻方列表（`RemoveAt(i)`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 347,
+          "token": "for (int i = AttackWarList.Count - 1; i >= 0; i--)",
+          "text": "for (int i = AttackWarList.Count - 1; i >= 0; i--)"
+        },
+        {
+          "line": 360,
+          "token": "AttackWarList.RemoveAt(i);",
+          "text": "AttackWarList.RemoveAt(i);"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:358",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 1153,
+          "text": "// `UserCastle.cs:358` `StartCastleWarTick = HUtil32.GetTickCount()`。"
+        }
+      ],
+      "points": [
+        {
+          "line": 358,
+          "token": "StartCastleWarTick = HUtil32.GetTickCount();",
+          "text": "StartCastleWarTick = HUtil32.GetTickCount();"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:365",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 1161,
+          "text": "// `UserCastle.cs:365`：守方（可能为 `None`，oracle `MasterGuild` 为 null 时 `Add(null)` 是 no-op 效果）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 365,
+          "token": "AttackGuildList.Add(MasterGuild);",
+          "text": "AttackGuildList.Add(MasterGuild);"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:366",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 1165,
+          "text": "// `UserCastle.cs:366` StartWallconquestWar()。"
+        },
+        {
+          "where": "castle.rs",
+          "line": 1576,
+          "text": "// 事件顺序 = oracle UserCastle.cs:366-373（⑧-8 起 `MainDoorControl(true)` 带 `CastleDoor.Close` 帧/掩码）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 366,
+          "token": "StartWallconquestWar();",
+          "text": "StartWallconquestWar();"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:367",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 1167,
+          "text": "// `UserCastle.cs:367` SaveAttackSabukWall()。"
+        }
+      ],
+      "points": [
+        {
+          "line": 367,
+          "token": "SaveAttackSabukWall();",
+          "text": "SaveAttackSabukWall();"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:368",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 1169,
+          "text": "// `UserCastle.cs:368` SS_212。"
+        }
+      ],
+      "points": [
+        {
+          "line": 368,
+          "token": "SystemShare.WorldEngine.SendServerGroupMsg(Messages.SS_212, M2Share.ServerIndex, \"\");",
+          "text": "SystemShare.WorldEngine.SendServerGroupMsg(Messages.SS_212, M2Share.ServerIndex, \"\");"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:369-371",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 1174,
+          "text": "// `UserCastle.cs:369-371` 开战广播。"
+        }
+      ],
+      "points": [
+        {
+          "line": 369,
+          "token": "string s20 = string.Format(sWarStartMsg, sName);",
+          "text": "string s20 = string.Format(sWarStartMsg, sName);"
+        },
+        {
+          "line": 371,
+          "token": "SystemShare.WorldEngine.SendServerGroupMsg(Messages.SS_204, M2Share.ServerIndex, s20);",
+          "text": "SystemShare.WorldEngine.SendServerGroupMsg(Messages.SS_204, M2Share.ServerIndex, s20);"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:373",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 1181,
+          "text": "// `UserCastle.cs:373` MainDoorControl(true)（幂等关闭主门；⑧-8 起带 `CastleDoor.Close` 帧/掩码）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 373,
+          "token": "MainDoorControl(true);",
+          "text": "MainDoorControl(true);"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:393-406",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 1199,
+          "text": "// `UserCastle.cs:393-406`：战时三面墙 `StoneMode=false`。"
+        }
+      ],
+      "points": [
+        {
+          "line": 393,
+          "token": "if (LeftWall.BaseObject != null)",
+          "text": "if (LeftWall.BaseObject != null)"
+        },
+        {
+          "line": 405,
+          "token": "RightWall.BaseObject.StoneMode = false;",
+          "text": "RightWall.BaseObject.StoneMode = false;"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:408-418",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 1203,
+          "text": "// `UserCastle.cs:408-418`：结束预告（只播一次）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 408,
+          "token": "if (!ShowOverMsg)",
+          "text": "if (!ShowOverMsg)"
+        },
+        {
+          "line": 416,
+          "token": "LogService.Warn(s20);",
+          "text": "LogService.Warn(s20);"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:419-422",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 1219,
+          "text": "// `UserCastle.cs:419-422`：超时停战（**严格大于**）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 419,
+          "token": "if ((HUtil32.GetTickCount() - StartCastleWarTick) > SystemShare.Config.CastleWarTime)",
+          "text": "if ((HUtil32.GetTickCount() - StartCastleWarTick) > SystemShare.Config.CastleWarTime)"
+        },
+        {
+          "line": 421,
+          "token": "StopWallconquestWar();",
+          "text": "StopWallconquestWar();"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:424-440",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 1224,
+          "text": "// `UserCastle.cs:424-440`：非战时三面墙 `StoneMode=true`。"
+        }
+      ],
+      "points": [
+        {
+          "line": 424,
+          "token": "else",
+          "text": "else"
+        },
+        {
+          "line": 438,
+          "token": "RightWall.BaseObject.StoneMode = true;",
+          "text": "RightWall.BaseObject.StoneMode = true;"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:584-593",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 1248,
+          "text": "/// `ListC` 恒空 ⇒ `UserCastle.cs:584-593` 的 `ChangePkStatus(false)` / 非守方 `MapRandomMove` **从不执行**。"
+        }
+      ],
+      "points": [
+        {
+          "line": 584,
+          "token": "for (int i = 0; i < ListC.Count; i++)",
+          "text": "for (int i = 0; i < ListC.Count; i++)"
+        },
+        {
+          "line": 593,
+          "token": "string stopMessage = string.Format(sWallWarStop, sName);",
+          "text": "string stopMessage = string.Format(sWallWarStop, sName);"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:920-955",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 1289,
+          "text": "/// oracle `RepairDoor()`（`UserCastle.cs:920-955`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 920,
+          "token": "public bool RepairDoor()",
+          "text": "public bool RepairDoor()"
+        },
+        {
+          "line": 948,
+          "token": "return result;",
+          "text": "return result;"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:956-997",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 1314,
+          "text": "/// oracle `RepairWall(int nWallIndex)`（`UserCastle.cs:956-997`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 956,
+          "token": "public bool RepairWall(int nWallIndex)",
+          "text": "public bool RepairWall(int nWallIndex)"
+        },
+        {
+          "line": 995,
+          "token": "return result;",
+          "text": "return result;"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:1016-1030",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 1370,
+          "text": "/// oracle `InAttackerList(GuildInfo)`（`UserCastle.cs:1016-1030`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 1016,
+          "token": "private bool InAttackerList(GuildInfo Guild)",
+          "text": "private bool InAttackerList(GuildInfo Guild)"
+        },
+        {
+          "line": 1030,
+          "token": "private void SetPower(int nPower)",
+          "text": "private void SetPower(int nPower)"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:609-612",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 1382,
+          "text": "/// oracle `IsMember(PlayObject)`（`UserCastle.cs:480-483`）/ `IsMember(IPlayerActor)`（`UserCastle.cs:609-612`）"
+        }
+      ],
+      "points": [
+        {
+          "line": 609,
+          "token": "public bool IsMember(IPlayerActor member)",
+          "text": "public bool IsMember(IPlayerActor member)"
+        },
+        {
+          "line": 611,
+          "token": "return IsMasterGuild(member.MyGuild);",
+          "text": "return IsMasterGuild(member.MyGuild);"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:366-373",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 1576,
+          "text": "// 事件顺序 = oracle UserCastle.cs:366-373（⑧-8 起 `MainDoorControl(true)` 带 `CastleDoor.Close` 帧/掩码）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 366,
+          "token": "StartWallconquestWar();",
+          "text": "StartWallconquestWar();"
+        },
+        {
+          "line": 373,
+          "token": "MainDoorControl(true);",
+          "text": "MainDoorControl(true);"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:345",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 1685,
+          "text": "// IsStartWar 仍置 true（oracle UserCastle.cs:345，进了钟点分支就置位）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 345,
+          "token": "IsStartWar = true;",
+          "text": "IsStartWar = true;"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:391-406",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 1770,
+          "text": "// （`UserCastle.cs:391-406` 先置 false，`UserCastle.cs:421` 才停战，本 tick 不再走 `else`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 391,
+          "token": "if (UnderWar)",
+          "text": "if (UnderWar)"
+        },
+        {
+          "line": 405,
+          "token": "RightWall.BaseObject.StoneMode = false;",
+          "text": "RightWall.BaseObject.StoneMode = false;"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:421",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 1770,
+          "text": "// （`UserCastle.cs:391-406` 先置 false，`UserCastle.cs:421` 才停战，本 tick 不再走 `else`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 421,
+          "token": "StopWallconquestWar();",
+          "text": "StopWallconquestWar();"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleDoor.cs:66-70",
+      "src": "src/M2Server/Monster/Monsters/CastleDoor.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 2018,
+          "text": "// `3 - Round(hp/max*3)`，`Dir-3>=0 ⇒ 0`（`CastleDoor.cs:66-70`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 66,
+          "token": "Dir = (byte)(3 - HUtil32.Round(WAbil.HP / (double)WAbil.MaxHP * 3.0));",
+          "text": "Dir = (byte)(3 - HUtil32.Round(WAbil.HP / (double)WAbil.MaxHP * 3.0));"
+        },
+        {
+          "line": 69,
+          "token": "Dir = 0;",
+          "text": "Dir = 0;"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleDoor.cs:86-93",
+      "src": "src/M2Server/Monster/Monsters/CastleDoor.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 2061,
+          "text": "// `CastleDoor.cs:86-93`：`Death && Castle != null` ⇒ `DeathTick`；否则 `HealthTick=0`。"
+        }
+      ],
+      "points": [
+        {
+          "line": 86,
+          "token": "if (Death && Castle != null)",
+          "text": "if (Death && Castle != null)"
+        },
+        {
+          "line": 92,
+          "token": "HealthTick = 0;",
+          "text": "HealthTick = 0;"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleDoor.cs:94-102",
+      "src": "src/M2Server/Monster/Monsters/CastleDoor.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 2077,
+          "text": "// `CastleDoor.cs:94-102`：未开门且 `n08 < 3` 才刷 `RM_TURN`。"
+        }
+      ],
+      "points": [
+        {
+          "line": 94,
+          "token": "if (!IsOpened)",
+          "text": "if (!IsOpened)"
+        },
+        {
+          "line": 100,
+          "token": "SendRefMsg(Messages.RM_TURN, Dir, CurrX, CurrY, 0, \"\");",
+          "text": "SendRefMsg(Messages.RM_TURN, Dir, CurrX, CurrY, 0, \"\");"
+        }
+      ]
+    },
+    {
+      "anchor": "Envirnoment.cs:1362-1369",
+      "src": "src/M2Server/Maps/Envirnoment.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 2199,
+          "text": "// `Envir.SetMapXyFlag` 只在格子当前 `Valid` 时才改属性（`Envirnoment.cs:1362-1369`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 1362,
+          "token": "public void SetMapXyFlag(int nX, int nY, bool boFlag)",
+          "text": "public void SetMapXyFlag(int nX, int nY, bool boFlag)"
+        },
+        {
+          "line": 1367,
+          "token": "cellInfo.SetAttribute(boFlag ? CellAttribute.Walk : CellAttribute.LowWall);",
+          "text": "cellInfo.SetAttribute(boFlag ? CellAttribute.Walk : CellAttribute.LowWall);"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleDoor.cs:25-43",
+      "src": "src/M2Server/Monster/Monsters/CastleDoor.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 2231,
+          "text": "// `CastleDoor.cs:25-43` 的调用序（含重复格）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 25,
+          "token": "Envir.SetMapXyFlag(CurrX, CurrY - 2, true);",
+          "text": "Envir.SetMapXyFlag(CurrX, CurrY - 2, true);"
+        },
+        {
+          "line": 42,
+          "token": "Envir.SetMapXyFlag(CurrX + 1, CurrY - 2, false);",
+          "text": "Envir.SetMapXyFlag(CurrX + 1, CurrY - 2, false);"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:920-927",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 2255,
+          "text": "// `UnderWar` ⇒ 拒（`UserCastle.cs:920-927`：签名 920、`UnderWar` 守卫 924、返回 926）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 920,
+          "token": "public bool RepairDoor()",
+          "text": "public bool RepairDoor()"
+        },
+        {
+          "line": 926,
+          "token": "return false;",
+          "text": "return false;"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:930",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 2259,
+          "text": "// 60s 门：`>` 严格大于（`UserCastle.cs:930` 活门 / `UserCastle.cs:939` 死门）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 930,
+          "token": "if ((HUtil32.GetTickCount() - castleDoor.BaseObject.StruckTick) > 60 * 1000)",
+          "text": "if ((HUtil32.GetTickCount() - castleDoor.BaseObject.StruckTick) > 60 * 1000)"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:939",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 2259,
+          "text": "// 60s 门：`>` 严格大于（`UserCastle.cs:930` 活门 / `UserCastle.cs:939` 死门）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 939,
+          "token": "if ((HUtil32.GetTickCount() - castleDoor.BaseObject.StruckTick) > 60 * 1000)",
+          "text": "if ((HUtil32.GetTickCount() - castleDoor.BaseObject.StruckTick) > 60 * 1000)"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:924",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 2272,
+          "text": "// 已满 ⇒ 拒（`UserCastle.cs:924` 的 `HP >= MaxHP` 守卫），不产生帧。"
+        }
+      ],
+      "points": [
+        {
+          "line": 924,
+          "token": "if (castleDoor.BaseObject == null || UnderWar || castleDoor.BaseObject.WAbil.HP >= castleDoor.BaseObject.WAbil",
+          "text": "if (castleDoor.BaseObject == null || UnderWar || castleDoor.BaseObject.WAbil.HP >= castleDoor.BaseObject.WAbil.MaxHP)"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:958-992",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 2311,
+          "text": "// `nWallIndex` 1/2/3 ⇒ 左/中/右；其它 ⇒ `Wall = null`（`UserCastle.cs:958-992`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 958,
+          "token": "bool result = false;",
+          "text": "bool result = false;"
+        },
+        {
+          "line": 992,
+          "token": "result = true;",
+          "text": "result = true;"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleOfficial.cs:365-380",
+      "src": "src/GameSrv/Npc/CastleOfficial.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 2333,
+          "text": "// `TotalGold < RepairDoorPrice` ⇒ 只回文案（`CastleOfficial.cs:365-380`）。"
+        }
+      ],
+      "points": [
+        {
+          "line": 365,
+          "token": "if (Castle.TotalGold >= SystemShare.Config.RepairDoorPrice)",
+          "text": "if (Castle.TotalGold >= SystemShare.Config.RepairDoorPrice)"
+        },
+        {
+          "line": 379,
+          "token": "PlayObject.SysMsg(\"城内资金不足!!!\", MsgColor.Red, MsgType.Hint);",
+          "text": "PlayObject.SysMsg(\"城内资金不足!!!\", MsgColor.Red, MsgType.Hint);"
+        }
+      ]
+    },
+    {
+      "anchor": "CastleOfficial.cs:365",
+      "src": "src/GameSrv/Npc/CastleOfficial.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 2333,
+          "text": "// `TotalGold < RepairDoorPrice` ⇒ 只回文案（`CastleOfficial.cs:365-380`）。"
+        },
+        {
+          "where": "castle.rs",
+          "line": 2350,
+          "text": "// 注意：oracle 先判 `TotalGold >= RepairDoorPrice`（`CastleOfficial.cs:365`）⇒ 先把钱补回。"
+        }
+      ],
+      "points": [
+        {
+          "line": 365,
+          "token": "if (Castle.TotalGold >= SystemShare.Config.RepairDoorPrice)",
+          "text": "if (Castle.TotalGold >= SystemShare.Config.RepairDoorPrice)"
+        }
+      ]
+    },
+    {
+      "anchor": "UserCastle.cs:128-220",
+      "src": "src/M2Server/Castle/UserCastle.cs",
+      "write_hits": [
+        {
+          "where": "castle.rs",
+          "line": 2621,
+          "text": "// 调用序 = `UserCastle.cs:128-220`：主门 → 左/中/右墙 → 弓手 0..12 → 守卫 0..12。"
+        }
+      ],
+      "points": [
+        {
+          "line": 128,
+          "token": "if (CastleEnvir != null)",
+          "text": "if (CastleEnvir != null)"
+        },
+        {
+          "line": 209,
+          "token": "LogService.Warn(\"[错误信息] 城堡初始化守卫失败(检查怪物数据库里有没守卫怪物)\");",
+          "text": "LogService.Warn(\"[错误信息] 城堡初始化守卫失败(检查怪物数据库里有没守卫怪物)\");"
+        }
+      ]
+    }
+  ]
+}

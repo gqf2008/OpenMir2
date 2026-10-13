@@ -1,0 +1,25 @@
+# 外部改坏（不复用门内 mutation 表）：把 castle.rs 散文中唯一一处 `UserCastle.cs:930` 改成 `:931`
+# 预期：check RED（写侧缺锚 + 覆盖面未登记锚）；worksheet 对 `:930` 报 prose NOT FOUND。
+
+## 改前（真身）
+GREEN: castle oracle 锚门通过（159 锚命中冻结 src/ + 写侧在位 + 覆盖区间无未登记/裸锚）
+
+## 改坏：sed s/UserCastle.cs:930/UserCastle.cs:931/
+replaced 1 occurrence
+
+## 改坏后 check
+RED: castle oracle 锚门失败（2 项 / 共 159 锚）
+  - 写侧缺锚 UserCastle.cs:930（不在 castle.rs / README.md）
+  - 覆盖面：未登记锚 UserCastle.cs:931（覆盖区间 castle.rs:1-2807）
+check rc=1
+
+## 改坏后 worksheet（`:930` 行）
+ANCHOR UserCastle.cs:930  [src/M2Server/Castle/UserCastle.cs]
+  prose: (NOT FOUND in castle.rs / README.md)
+  UserCastle.cs:930 => if ((HUtil32.GetTickCount() - castleDoor.BaseObject.StruckTick) > 60 * 1000)
+ANCHOR UserCastle.cs:939  [src/M2Server/Castle/UserCastle.cs]
+  prose castle.rs:2259: // 60s 门：`>` 严格大于（`UserCastle.cs:931` 活门 / `UserCastle.cs:939` 死门）。
+
+## 还原（git checkout）后 check
+GREEN: castle oracle 锚门通过（159 锚命中冻结 src/ + 写侧在位 + 覆盖区间无未登记/裸锚）
+git status --short castle.rs = []
