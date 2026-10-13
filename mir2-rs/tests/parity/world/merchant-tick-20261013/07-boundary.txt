@@ -27,5 +27,5 @@ $ git diff --name-only master..HEAD -- src sql MirClient
   mir2-rs/tests/parity/world/merchant-tick-20261013/README.md
   mir2-rs/tests/parity/world/merchant-tick-20261013/SHA256SUMS.txt
 
-# HEAD = fc29ffef59c2be651ecb1617c3473f6d4787a6e6
+# HEAD = 5ef9c4f8143c99cbd0cc74ce20fbd5d7b33cc6de
 # master = 0dde01b7b7691c00a5c61ec4b14b87eaae8dac10

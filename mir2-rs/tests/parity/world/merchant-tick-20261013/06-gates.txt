@@ -5,11 +5,14 @@ $ cargo fmt --all -- --check
 fmt rc=0
 
 $ cargo clippy --workspace --all-targets --offline -- -D warnings
-clippy rc=0（Finished dev profile）
+    Checking game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.60s
+clippy rc=0
 
 $ cargo run -p msgcodegen --offline -- --check
-msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。 rc=0
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+msgcodegen rc=0
 
 $ cargo test --workspace --offline --no-fail-fast   （完整件见 06b-workspace-test.txt）
-suites=94 passed=863 failed=0 ignored=21
+suites=94 passed=864 failed=0 ignored=21
 workspace test rc=0（0 条 FAILED/error）

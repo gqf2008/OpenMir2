@@ -31,7 +31,7 @@
 
 | # | 判据 | 落点 / 证据 |
 | --- | --- | --- |
-| ① | 200ms 节奏门：同一窗口 `Run` 只一次 | `merchant_pass_cadence_blocks_second_pass_in_same_window`；红检见 `05`（去门 ⇒ FAILED） |
+| ① | 200ms 节奏门：同一窗口 `Run` 只一次 | `merchant_pass_cadence_blocks_second_pass_in_same_window`；红检见 `05`（去门 ⇒ FAILED；含 256 条规模版） |
 | ② | `RunTime` 门：未到期不 Run、到期才 Run | `merchant_run_time_gate_not_due_then_due`；红检（`>RunTime`→`true` ⇒ FAILED） |
 | ③ | Ghost 60s 移除用 **sim 时钟** | `merchant_ghost_expires_after_60s_sim_clock`；红检（60000→120000 ⇒ FAILED） |
 | ④ | Claim B 合成件：两个商人次序对调 ⇒ `groupdiff` 必红 | `04-claimb-groupdiff.txt`（`SHARED_REL_ORDER_DIFF` rc=1；缺组 `GROUP_SET_DIFF` rc=1） |
@@ -62,9 +62,9 @@
   `id=0` 碰撞、`merchant_ids_sorted` 返回重复 0、tick 会反复 Run 同一实体。改用
   `EntityStore::alloc_id()`；`monster_ai_tick` M-2 用例与反序用例共同钉住。
 
-## 5. 改坏必红（7 条，原始读数见 `05-redchecks.txt`）
+## 5. 改坏必红（8 条，原始读数见 `05-redchecks.txt`）
 
-节奏门 / `RunTime` 门 / Ghost 窗口 / `Merchant.Run` 的两处 RNG 取数 / 唯一 id /
+节奏门（单条 + 256 条规模版）/ `RunTime` 门 / Ghost 窗口 / `Merchant.Run` 的两处 RNG 取数 / 唯一 id /
 `monster_ai_tick` 的 `merchant.is_none()` 守卫 / `spawn_merchants` 的 `.rev()` ——
 每条「改坏 ⇒ 目标用例 FAILED，`git checkout` 还原 ⇒ ok」。
 
@@ -72,7 +72,7 @@
 
 - 四门禁（隔离 `CARGO_TARGET_DIR=E:/tmp/m2svr-target`，`--offline`）：fmt rc=0；
   clippy `--workspace --all-targets -D warnings` rc=0；msgcodegen rc=0（604）；
-  `test --workspace --no-fail-fast` **94 suites · 863 passed · 0 failed · 21 ignored**
+  `test --workspace --no-fail-fast` **94 suites · 864 passed · 0 failed · 21 ignored**
   （见 `06-gates.txt` / `06b-workspace-test.txt`）。
 - 边界：`git diff --name-only master..HEAD -- src sql MirClient` **空**。
 - **未起栈 / 未占端口**（全离线判据；真机两侧对拍要窗口，登记等 owner）。
