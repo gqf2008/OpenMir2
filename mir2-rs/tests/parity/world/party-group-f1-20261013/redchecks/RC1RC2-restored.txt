@@ -1,0 +1,32 @@
+# 改坏测试后还原（git checkout -- <file>）⇒ 全部相关用例重新变绿；git status 干净
+
+$ git status --porcelain crates/world/src/world.rs crates/world/src/party.rs
+(空 = 已还原)
+
+$ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test -p mir2-world --test party_vectors --offline -- die_member_triggers die_leader_disbands play_object_by_name
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\world)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.04s
+     Running tests\party_vectors.rs (E:/tmp/m2svr-target\debug\deps\party_vectors-4e85706017691498.exe)
+
+running 3 tests
+test die_leader_disbands_group ... ok
+test play_object_by_name_ignores_non_player_entities ... ok
+test die_member_triggers_oracle_del_member_and_group_survives ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s
+
+rc=0
+
+$ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test -p game-svr --offline --bin game-svr die_triggers
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\world)
+   Compiling mir2-envir v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\envir)
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.79s
+     Running unittests src\main.rs (E:/tmp/m2svr-target\debug\deps\game_svr-1f4431beb89ebeb6.exe)
+
+running 1 test
+test tests::die_triggers_del_member_frames_on_production_path ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 180 filtered out; finished in 0.00s
+
+rc=0

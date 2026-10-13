@@ -1,0 +1,22 @@
+SELFTEST_NO_STACK: 无栈自检——所有路径都必须 fail-closed（缺失绝不静默 GREEN）
+SELFTEST ok scenario-fixed-input (canon/cases/buy_sell_repair/storage)
+SELFTEST ok comparator-selftest (rc=0)
+SELFTEST ok identical-green (rc=0)
+SELFTEST ok mutate-branch-red (rc=1)
+SELFTEST ok missing-file-prereq (rc=2)
+SELFTEST ok scenario-scalar-red (rc=1)
+SELFTEST FAIL scenario-authority-green (rc=1)
+SELFTEST FAIL scenario-authority-prereq (rc=1)
+SELFTEST ok emit-on-coupling (scope=on ops=sell,buy step_ms=1000 start_delay_ms=3000 npc=卫家店 item=木剑 make=0 n=1 disable_autoplay=True)
+SELFTEST ok emit-off-default (scope=(off))
+SELFTEST ok peer-scope-red (codes=peer_shop_scope_mismatch)
+SELFTEST ok peer-scope-green (codes=)
+SELFTEST ok no-stack-port-guard (rc=2)
+SELFTEST ok diffonly-missing-prereq (rc=2)
+SELFTEST ok assembleonly-missing-prereq (rc=2)
+SELFTEST ok rust-preflight-teeth (empty=false hit=true)
+SELFTEST ok no-go-realrun-prereq (rc=2)
+SELFTEST ok botsrv-shopseq-selftest (rc=0)
+SELFTEST ok lf-writer-selftest
+SELFTEST ok no-port-touched (offline-only)
+SELFTEST ok=18/20 failures=scenario-authority-green,scenario-authority-prereq

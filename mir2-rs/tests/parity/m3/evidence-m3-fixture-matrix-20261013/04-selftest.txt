@@ -1,0 +1,20 @@
+$ python -I fixture_matrix.py selftest
+  SELFTEST ok  A READY + comparator rc=0
+  SELFTEST ok  B PENDING
+  SELFTEST ok  C INCONSISTENT
+  SELFTEST ok  D RED（比较器坏）
+  SELFTEST ok  E READY
+  SELFTEST ok  默认无 RED：只有 D + C ⇒ 2 条
+  SELFTEST ok  默认 PENDING 不判红
+  SELFTEST ok  require-all 把 B 判红
+  SELFTEST ok  require-all + whitelist 缺 T-99 ⇒ 判红
+  SELFTEST ok  whitelist 有 T-99 ⇒ 不判红
+  SELFTEST ok  删 A 的 scenario ⇒ INCONSISTENT（改坏必红）
+  SELFTEST ok  注册表 key 无重复
+  SELFTEST ok  注册表覆盖 §6 十项（1..10）
+  SELFTEST ok  注册表含 Claim B 场景账本
+  SELFTEST ok  每项都有 runner/comparator/card
+  SELFTEST ok  runner 命名合规
+  SELFTEST ok  comparator 命名合规
+SELFTEST GREEN: fixture_matrix selftest 17/17
+rc=0

@@ -1,0 +1,26 @@
+# 改坏①：mv npc_shop_diff.py npc_shop_diff.py.bak（⑤ 三件套缺比较器）
+$ python -I fixture_matrix.py check
+== M3 夹具矩阵 ==
+#     系统                     状态           T       卡
+1     背包 / 装备                READY        -       openmir2-m3-bag-equip-alignment
+       比较器 selftest rc=0 :: GREEN: scoped_diff selftest 14/14（含规范化前后 + 固定建角不置占位 + 改坏必红 + 多重集重复行 + fail-closed + 族表 PlayerId 
+2/3   战斗 / 技能                READY        -       openmir2-m3-attack-pair-fixture
+       比较器 selftest rc=0 :: SELFTEST GREEN: attack_diff selftest 41/41（align 窗口归属 + 同序列绿 + 改坏 dmg/hit 必红 + 全 0 非平凡门 + 空序列 + 
+4     掉落 / 经验                READY        -       openmir2-m3-drop-exp-align
+       比较器 selftest rc=0 :: SELFTEST ok=12/12
+5     NPC / 商店               INCONSISTENT T-41    openmir2-m3-shop-fixture-botsrv
+       缺件: npc_shop_diff.py
+6     任务                     READY        T-42    openmir2-m3-quest-fixture-botsrv
+       比较器 selftest rc=0 :: SELFTEST ok=36/36
+7     组队 / 交易                READY        T-43    openmir2-m3-party-trade-fixture-botsrv
+       比较器 selftest rc=0 :: SELFTEST ok=27/27
+8     公会 / 攻城                PENDING      T-46    openmir2-m3-guild-castle-fixture-botsrv
+9     英雄 / 宠物                PENDING      T-45    openmir2-m3-hero-pet-fixture-botsrv
+10    拍卖（元宝寄售 SellOff）       READY        T-44    openmir2-m3-selloff-fixture-botsrv
+       比较器 selftest rc=0 :: SELFTEST ok=33/33
+B     全服 RNG 消费者账本（Claim B）  READY        -       openmir2-m3-rng-trace-scene-groups
+       比较器 selftest rc=0 :: GREEN: 场景前置门 selftest 全绿（同场景绿 + seed/怪集合/起点/map/MonGen 漂移必红 + 缺件/坏 JSON PREREQ fail-closed）
+FIXTURE_MATRIX RED: ready=7 pending=2 red=1
+  RED 5 NPC / 商店：三件套部分在场（缺 npc_shop_diff.py）⇒ 半拉子合并，绝不当绿
+rc=1
+# 还原

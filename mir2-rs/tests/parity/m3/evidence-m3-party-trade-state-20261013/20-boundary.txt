@@ -1,0 +1,31 @@
+M3⑦-实现 3 边界检查（base=9ff7ff064d900215b564b67ff70a1fbae6d39488，head=c59cf147370916389d19f43e9eedb9a4ea3aeb64）
+
+命令：git diff --name-only 9ff7ff064d900215b564b67ff70a1fbae6d39488 c59cf147370916389d19f43e9eedb9a4ea3aeb64 -- src sql MirClient
+输出（应为空）：
+rc=0
+
+命令：git diff --name-only 9ff7ff064d900215b564b67ff70a1fbae6d39488 c59cf147370916389d19f43e9eedb9a4ea3aeb64
+全部改动文件（仅本片写集）：
+mir2-rs/bins/game-svr/src/ability.rs
+mir2-rs/bins/game-svr/src/config.rs
+mir2-rs/bins/game-svr/src/lib.rs
+mir2-rs/bins/game-svr/src/main.rs
+mir2-rs/bins/game-svr/src/trade.rs
+mir2-rs/tests/parity/m3/evidence-m3-party-trade-state-20261013/01-oracle-anchors.txt
+mir2-rs/tests/parity/m3/evidence-m3-party-trade-state-20261013/02-change-summary.txt
+mir2-rs/tests/parity/m3/evidence-m3-party-trade-state-20261013/03-tests.txt
+mir2-rs/tests/parity/m3/evidence-m3-party-trade-state-20261013/20-boundary.txt
+mir2-rs/tests/parity/m3/evidence-m3-party-trade-state-20261013/README.md
+mir2-rs/tests/parity/m3/evidence-m3-party-trade-state-20261013/SHA256SUMS.txt
+mir2-rs/tests/parity/m3/evidence-m3-party-trade-state-20261013/gates/10-fmt.txt
+mir2-rs/tests/parity/m3/evidence-m3-party-trade-state-20261013/gates/11-clippy.txt
+mir2-rs/tests/parity/m3/evidence-m3-party-trade-state-20261013/gates/12-msgcodegen.txt
+mir2-rs/tests/parity/m3/evidence-m3-party-trade-state-20261013/gates/13-workspace-test.txt
+mir2-rs/tests/parity/m3/evidence-m3-party-trade-state-20261013/redchecks/RC1-capacity-check-red.txt
+mir2-rs/tests/parity/m3/evidence-m3-party-trade-state-20261013/redchecks/RC2-oracle-bug-frame-red.txt
+mir2-rs/tests/parity/m3/evidence-m3-party-trade-state-20261013/redchecks/RC3-bilateral-lock-red.txt
+mir2-rs/tests/parity/m3/evidence-m3-party-trade-state-20261013/redchecks/README.md
+
+并入最新 master 的 3-way 可合性：git merge-tree --write-tree origin/master <head>
+merge-tree rc=0（0=无冲突）
+3103d55af0af8bd5bfe8d2ee8c3007a080943f1b

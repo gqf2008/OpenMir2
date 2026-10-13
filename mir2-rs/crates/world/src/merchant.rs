@@ -11,7 +11,7 @@
 //! | `FindMap(MapName) == null ⇒ 丢弃` | `WorldServer.Merchant.cs:24-31`（**门在宿主侧按 `MapRegistry::id_of` 施加**，见 [`crate::merchant`] 模块尾与 `bins/game-svr/src/merchant.rs`） |
 //! | [`World::merchant_tick`] | `WorldServer.Merchant.cs:65-110` + `MerchantProcessor.cs:8`（200ms 定时） |
 //! | [`merchant_run`] | `Merchant.cs:112-170`（RNG/显隐/`MapRandomMove`）+ `BaseObject.cs:1214-1237` |
-//! | `refill_goods` 计时态 | `Merchant.cs:209-276`（库存/落库属 ⑤-5） |
+//! | `refill_goods` 计时态 | `Merchant.cs:209-276`（`GoodsList` 库存已建模，见下；`SaveGoodRecord` 在 oracle 是空壳） |
 //!
 //! ## 为什么门在宿主侧
 //! `SystemShare.MapMgr.FindMap(MapName)` 的部署态等价物是 `MapRegistry::id_of`（同 `MapInfo` +
@@ -19,9 +19,10 @@
 //! ⇒ 名字→`map_id` 的解析归宿主；本模块只负责「拿到 `map_id` 后的挂图/落格」。
 //!
 //! ## 未建模（登记）
-//! - `GoodsList`/`ItemPriceList` 的库存与 `SaveGoodRecord` 持久化 —— 接缝归 ⑤-5；
-//!   `refill_goods` 因此恒走 `goods.Count > 0` 分支（`GetRefillList` 取不到库存）⇒ 一次 Run
-//!   最多补一件（oracle quirk 照搬）。
+//! - `GoodsList`（在售库存，`Merchant.cs:34`）**已建模**（⑤-4 第①片）：`RefillGoods` 按实际
+//!   库存量补/删、`AddItemToGoodsList` 由玩家卖出回收。剩下的 `ItemPriceList` 覆盖价与
+//!   `SaveGoodRecord/SaveGoodPriceRecord` 在 oracle 本身就是空壳（`LocalDB.cs:916/1111/954/1162`）
+//!   ⇒ 无行为可搬，不另登记。
 //! - `ClearExpreUpgradeListData`（`Merchant.cs:1076`）：oracle 用墙钟 `DateTime.Now` + 升级表持久化
 //!   （⑤-5）⇒ 本片只推进 `clear_expre_upgrade_tick` 计时态，无可观测效果。
 //! - `ProcessRefillIndex`（`ScriptParsers.cs:838`）：⑤-1 未随记录暴露 ⇒ 置 0（补货延时门）。
@@ -107,6 +108,12 @@ pub struct MerchantFlags {
     pub is_yb_deal: bool,
 }
 
+/// `IMerchant.GoodsList` 里的一件：oracle `UserItem`（`Item`/`MakeIndex`/`Dura`/`DuraMax` + `Desc`）。
+///
+/// 与 `crates/world` 已有的掉落/定价口径同型（`mir2_formula::drop::UserItem`）⇒ ⑤-4 的买/卖
+/// 直接复用公式层（`mir2_formula::shop`）的取价函数，宿主只做 `BagItem` ↔ `MerchantItem` 互转。
+pub use mir2_formula::drop::UserItem as MerchantItem;
+
 /// `[goods]` 区补货条目（`Goods`，`crates/script::Goods` 同形）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MerchantGoods {
@@ -137,6 +144,12 @@ pub struct MerchantState {
     pub item_type_list: Vec<i32>,
     /// `IMerchant.RefillGoodsList`（脚本 `[goods]`）。
     pub refill_goods: Vec<MerchantGoods>,
+    /// `IMerchant.GoodsList`（`IList<IList<UserItem>>`，`Merchant.cs:34`）——在售库存。
+    ///
+    /// 由 `Merchant.RefillGoods`（脚本 `[goods]` 补货）与 `Merchant.AddItemToGoodsList`
+    /// （玩家卖出回收，`Merchant.cs:1417`）写入；`Merchant.ClientBuyItem` 从这里取件。
+    /// **组内顺序敏感**：写入用 `Insert(0)`（新件在前），组序 = 首次出现序。
+    pub goods_list: Vec<Vec<MerchantItem>>,
     /// `IMerchant.CastleMerchant`（`LocalDB.cs:461-464`）。
     pub castle_merchant: bool,
     /// `IMerchant.BoCanMove`（`LocalDB.cs:465-468`）。
@@ -197,6 +210,7 @@ impl MerchantState {
             price_rate,
             item_type_list,
             refill_goods,
+            goods_list: Vec::new(),
             castle_merchant,
             can_move,
             move_time,
@@ -350,6 +364,122 @@ impl World {
             .filter(|e| e.merchant.is_some())
             .map(|e| e.id)
             .collect()
+    }
+
+    /// `Merchant.GetRefillList(int nIndex)`（`Merchant.cs:278`）：按 `goods[0].Index` 找同 `Index`
+    /// 的库存组，返回其在 `GoodsList` 里的下标（无 ⇒ `None`）。
+    #[must_use]
+    pub fn merchant_goods_group(&self, id: i32, index: u16) -> Option<usize> {
+        let st = self.entities.get(id)?.merchant.as_ref()?;
+        st.goods_list
+            .iter()
+            .position(|g| g.first().is_some_and(|it| it.index == index))
+    }
+
+    /// `GoodsList` 的只读视图（`IList<IList<UserItem>>`）；供宿主出 `SM_SENDGOODSLIST` 与买/卖取件。
+    ///
+    /// 组序 = 首次出现序；组内序 = `Insert(0)` 后的新件在前（与 oracle 同，**顺序敏感**）。
+    #[must_use]
+    pub fn merchant_goods_groups(&self, id: i32) -> Option<&[Vec<MerchantItem>]> {
+        Some(&self.entities.get(id)?.merchant.as_ref()?.goods_list)
+    }
+
+    /// [`World::merchant_goods_groups`] 的可变版（⑤-4 买/卖直接改在售库存）。
+    #[must_use]
+    pub fn merchant_goods_groups_mut(&mut self, id: i32) -> Option<&mut Vec<Vec<MerchantItem>>> {
+        Some(&mut self.entities.get_mut(id)?.merchant.as_mut()?.goods_list)
+    }
+
+    /// `Merchant.AddItemToGoodsList`（`Merchant.cs:1417`）：`Dura <= 0` 不收；否则
+    /// `GetRefillList(Index)` 命中就 `Insert(0)`，未命中就新建组（组序 = 首次出现序）。
+    pub fn merchant_add_item_to_goods_list(&mut self, id: i32, item: MerchantItem) {
+        // oracle `if (userItem.Dura <= 0) return;`（`Merchant.cs:1419`）；`Dura` 是 `ushort` ⇒ `<= 0` ≡ `== 0`。
+        if item.dura == 0 {
+            return;
+        }
+        let Some(st) = self.entities.get_mut(id).and_then(|e| e.merchant.as_mut()) else {
+            return;
+        };
+        match st
+            .goods_list
+            .iter_mut()
+            .find(|g| g.first().is_some_and(|it| it.index == item.index))
+        {
+            Some(group) => group.insert(0, item),
+            None => st.goods_list.push(vec![item]),
+        }
+    }
+
+    /// `ClientBuyItem` 的取件：`list20.RemoveAt(j)`，空组再 `GoodsList.RemoveAt(i)`
+    /// （`Merchant.cs:1269-1273`）。返回被取走的库存件；`group`/`item` 越界 ⇒ `None`。
+    pub fn merchant_take_goods_item(
+        &mut self,
+        id: i32,
+        group: usize,
+        item: usize,
+    ) -> Option<MerchantItem> {
+        let st = self.entities.get_mut(id)?.merchant.as_mut()?;
+        let g = st.goods_list.get_mut(group)?;
+        if item >= g.len() {
+            return None;
+        }
+        let taken = g.remove(item);
+        if g.is_empty() {
+            st.goods_list.remove(group);
+        }
+        Some(taken)
+    }
+
+    /// `GameItemSystem.CopyToUserItemFromName`（`GameItemSystem.cs:113`）的 `Merchant.RefillGoodsItems`
+    /// 口径：按名（`OrdinalIgnoreCase`，同 [`World::std_item_idx_by_name`]）取模板首条 ⇒
+    /// `Index = 下标+1`、`Dura = DuraMax = tpl.DuraMax`、`MakeIndex = M2Share.GetItemNumber()`。
+    #[must_use]
+    pub fn make_merchant_item_by_name(&mut self, name: &str) -> Option<MerchantItem> {
+        let idx = self.std_item_idx_by_name(name);
+        if idx == 0 {
+            return None;
+        }
+        let tpl = self.std_item_by_idx(idx)?;
+        let (dura, dura_max) = (tpl.dura_max, tpl.dura_max);
+        let make_index = self.item_number.next_value();
+        Some(MerchantItem {
+            make_index,
+            index: u16::try_from(idx).unwrap_or(u16::MAX),
+            dura,
+            dura_max,
+            desc: [0; 14],
+        })
+    }
+
+    /// `GetRefillList(nIndex)?.Count`（`Merchant.cs:286`）：同 `Index` 库存组的件数（无 ⇒ 0）。
+    #[must_use]
+    pub fn merchant_goods_count(&self, id: i32, index: u16) -> usize {
+        self.merchant_goods_group(id, index)
+            .and_then(|gi| self.merchant_goods_groups(id).map(|gs| gs[gi].len()))
+            .unwrap_or(0)
+    }
+
+    /// `Merchant.RefillDelReFillItem`（`Merchant.cs:317`）：同 `Index` 组从**尾部**删 `n` 件。
+    pub fn merchant_del_items_from_end(&mut self, id: i32, index: u16, n: usize) {
+        let Some(st) = self.entities.get_mut(id).and_then(|e| e.merchant.as_mut()) else {
+            return;
+        };
+        let Some(gi) = st
+            .goods_list
+            .iter()
+            .position(|g| g.first().is_some_and(|it| it.index == index))
+        else {
+            return;
+        };
+        let g = &mut st.goods_list[gi];
+        let mut left = n;
+        while left > 0 && !g.is_empty() {
+            g.pop();
+            left -= 1;
+        }
+        if g.is_empty() {
+            st.goods_list.remove(gi);
+        }
     }
 
     /// 物品名 → 1-based 序号（oracle `GameItemSystem.GetStdItemIdx`，`GameItemSystem.cs:93-111`：
@@ -609,14 +739,16 @@ pub fn merchant_run(world: &mut World, actor_id: i32) -> MerchantRunOutcome {
     outcome
 }
 
-/// `Merchant.RefillGoods`（`Merchant.cs:209-276`）的**计时态**部分。
+/// `Merchant.RefillGoods`（`Merchant.cs:209-276`）。
 ///
-/// `GoodsList`（在售库存，`IList<IList<UserItem>>`）与 `LocalDb.SaveGoodRecord`/
-/// `SaveGoodPriceRecord` 落库是 ⑤-5 接缝 ⇒ 本片 `GetRefillList` 取不到库存
-/// （`nRefillCount = 0`），于是 oracle 的 `goods.Count > nRefillCount` 分支命中：
-/// 置 `RefillTick` + （oracle 的 `return`）⇒ **一次 Run 最多补一件**（oracle quirk 照搬）。
+/// 完整对齐 oracle：补货门 `(now - RefillTick) > RefillTime*60*1000` ⇒ 置 `RefillTick`，
+/// `GetStdItemIdx(name) > 0` 时按 `GetRefillList` 的实际库存量走
+/// `goodCout > nRefillCount`（`RefillGoodsItems` 新建 `delta` 件 + oracle `return`）或
+/// `goodCout < nRefillCount`（`RefillDelReFillItem` 从尾删）分支；`GoodsList` 超 1000 的收缩
+/// （脚本 `[goods]` 内保留 5000，否则 1000）。`LocalDb.SaveGoodRecord/SaveGoodPriceRecord`
+/// 在 oracle 是**空壳**（`LocalDB.cs:916/1111`）⇒ 不落库。
 ///
-/// 返回本趟是否命中补货分支。
+/// 返回本趟是否命中 `>` 分支（oracle 的 `return`）。
 #[must_use]
 fn refill_goods(world: &mut World, actor_id: i32) -> bool {
     let now = world.clock_ms;
@@ -647,15 +779,51 @@ fn refill_goods(world: &mut World, actor_id: i32) -> bool {
             }
             let n_index = world.std_item_idx_by_name(&item_name);
             if n_index > 0 {
-                // `GetRefillList(nIndex)`：`GoodsList` 未建模 ⇒ 库存恒 0（登记 ⑤-5）。
-                let n_refill_count = 0usize;
-                if count as usize > n_refill_count {
-                    // oracle `CheckItemPrice + RefillGoodsItems + SaveGoodRecord + return`。
+                let index = u16::try_from(n_index).unwrap_or(u16::MAX);
+                let n_refill_count = world.merchant_goods_count(actor_id, index);
+                let target = usize::try_from(count).unwrap_or(0);
+                if target > n_refill_count {
+                    // `CheckItemPrice(nIndex)`（`ItemPriceList` 空 ⇒ no-op）。
+                    for _ in 0..(target - n_refill_count) {
+                        if let Some(item) = world.make_merchant_item_by_name(&item_name) {
+                            world.merchant_add_item_to_goods_list(actor_id, item);
+                        }
+                    }
+                    // oracle `return`（一次 Run 最多处理一条 `[goods]`）。
                     return true;
                 }
-                if (count as usize) < n_refill_count {
-                    // oracle `RefillDelReFillItem + SaveGoodRecord`（无 return，继续循环）。
+                if target < n_refill_count {
+                    world.merchant_del_items_from_end(actor_id, index, n_refill_count - target);
                 }
+            }
+        }
+    }
+    // `GoodsList` 上限收缩（`Merchant.cs:248-274`）。
+    let group_count = world
+        .merchant_goods_groups(actor_id)
+        .map_or(0, <[Vec<MerchantItem>]>::len);
+    for i in 0..group_count {
+        let Some((index, g_len)) = world
+            .merchant_goods_groups(actor_id)
+            .and_then(|gs| gs.get(i))
+            .and_then(|g| g.first().map(|it| (it.index, g.len())))
+        else {
+            continue;
+        };
+        if g_len > 1000 {
+            let in_refill = world
+                .entities
+                .get(actor_id)
+                .and_then(|e| e.merchant.as_ref())
+                .is_some_and(|st| {
+                    st.refill_goods.iter().any(|g| {
+                        let n = world.std_item_idx_by_name(&g.item_name);
+                        n > 0 && u16::try_from(n).ok() == Some(index)
+                    })
+                });
+            let keep = if in_refill { 5000 } else { 1000 };
+            if g_len > keep {
+                world.merchant_del_items_from_end(actor_id, index, g_len - keep);
             }
         }
     }
@@ -1036,5 +1204,101 @@ mod tests {
         assert_eq!(e.ai.walk_tick, 0, "商人不得被 AI 推进 walk_tick");
         let mut expect = rng_before;
         assert_eq!(w.rng.random(), expect.random(), "跳过商人 ⇒ 不消耗 AI 取数");
+    }
+
+    fn item(index: u16, make_index: i32, dura: u16) -> MerchantItem {
+        MerchantItem {
+            make_index,
+            index,
+            dura,
+            dura_max: 10,
+            desc: [0; 14],
+        }
+    }
+
+    /// `Merchant.AddItemToGoodsList`（`Merchant.cs:1417`）：同 `Index` 组 `Insert(0)`、
+    /// `Dura <= 0` 不收、无组则新建（组序 = 首次出现序）。红检：改成 `push` ⇒ 顺序断言必红。
+    #[test]
+    fn merchant_add_item_to_goods_list_inserts_front() {
+        let mut w = World::new(16, 16);
+        w.clock_ms = 0;
+        let id = w.spawn_merchant(spawn_at(1, 1)).expect("挂图成功");
+        w.merchant_add_item_to_goods_list(id, item(1, 10, 5));
+        w.merchant_add_item_to_goods_list(id, item(2, 20, 5));
+        w.merchant_add_item_to_goods_list(id, item(1, 11, 5));
+        // `Dura <= 0` 不收。
+        w.merchant_add_item_to_goods_list(id, item(1, 12, 0));
+        let groups = w.merchant_goods_groups(id).expect("商人还在");
+        assert_eq!(groups.len(), 2, "两个 Index ⇒ 两组");
+        assert_eq!(groups[0][0].make_index, 11, "Insert(0) ⇒ 后加的在前");
+        assert_eq!(groups[0][1].make_index, 10);
+        assert_eq!(groups[1][0].index, 2, "组序 = 首次出现序");
+        assert_eq!(w.merchant_goods_count(id, 1), 2);
+        assert_eq!(w.merchant_goods_count(id, 9), 0);
+    }
+
+    /// `ClientBuyItem` 的取件：`RemoveAt(j)`，空组 `GoodsList.RemoveAt(i)`（`Merchant.cs:1269-1273`）。
+    #[test]
+    fn merchant_take_goods_item_removes_empty_group() {
+        let mut w = World::new(16, 16);
+        w.clock_ms = 0;
+        let id = w.spawn_merchant(spawn_at(1, 1)).expect("挂图成功");
+        w.merchant_add_item_to_goods_list(id, item(1, 10, 5));
+        let taken = w.merchant_take_goods_item(id, 0, 0).expect("取件");
+        assert_eq!(taken.make_index, 10);
+        assert!(w.merchant_goods_groups(id).unwrap().is_empty(), "空组移除");
+        assert!(w.merchant_take_goods_item(id, 0, 0).is_none());
+    }
+
+    /// `RefillGoods`（`Merchant.cs:209`）：到期后按 `[goods]` 目标件数 **建出对应数量** 的实例
+    /// （`CopyToUserItemFromName`：`Index` 1-based、`Dura = DuraMax = 模板 DuraMax`、
+    /// `MakeIndex = M2Share.GetItemNumber()`），并置 `RefillTick`（oracle `return`）。
+    #[test]
+    fn merchant_refill_creates_goods_items_from_script_entries() {
+        let mut w = World::new(16, 16);
+        w.rng = RandomNumber::with_seed(13);
+        w.clock_ms = 0;
+        w.item_catalog = vec![StdItem {
+            name: "金创药(小量)".to_string(),
+            price: 100,
+            dura_max: 10,
+            ..StdItem::default()
+        }];
+        let id = w.spawn_merchant(spawn_at(2, 2)).expect("挂图成功");
+        w.clock_ms = MERCHANT_REFILL_GOODS_INTERVAL_MS + 1;
+        set_run_tick_stale(&mut w, id);
+        let out = merchant_run(&mut w, id);
+        assert!(out.refilled, "到期应补货");
+        let groups = w.merchant_goods_groups(id).expect("商人还在");
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].len(), 5, "[goods] Count=5 ⇒ 建 5 件");
+        assert_eq!(groups[0][0].index, 1);
+        assert_eq!(groups[0][0].dura, 10);
+        assert_eq!(groups[0][0].dura_max, 10);
+        assert!(groups[0][0].make_index > 0, "MakeIndex 由计数器分配");
+    }
+
+    /// 红检牙齿：`RefillGoods` 的 `goodCout < nRefillCount` 支（库存多于 `[goods]` 目标）
+    /// 从**尾部**删到目标数（`RefillDelReFillItem`，`Merchant.cs:317`）。
+    #[test]
+    fn merchant_refill_trims_excess_from_end() {
+        let mut w = World::new(16, 16);
+        w.rng = RandomNumber::with_seed(17);
+        w.clock_ms = 0;
+        w.item_catalog = vec![StdItem {
+            name: "金创药(小量)".to_string(),
+            dura_max: 10,
+            ..StdItem::default()
+        }];
+        let id = w.spawn_merchant(spawn_at(3, 3)).expect("挂图成功");
+        // 目标 5，库存已 7 ⇒ 删 2（尾部）。
+        for i in 0..7 {
+            w.merchant_add_item_to_goods_list(id, item(1, 100 + i, 5));
+        }
+        w.clock_ms = MERCHANT_REFILL_GOODS_INTERVAL_MS + 1;
+        set_run_tick_stale(&mut w, id);
+        // oracle `<` 支不 `return`（继续循环）⇒ `refilled` 为 false，库存被删到目标 5。
+        let _ = merchant_run(&mut w, id);
+        assert_eq!(w.merchant_goods_count(id, 1), 5, "删到目标 5 件");
     }
 }

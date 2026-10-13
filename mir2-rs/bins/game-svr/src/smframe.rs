@@ -750,6 +750,88 @@ impl EnterWorldInputs {
     }
 }
 
+/// 组队帧编码 —— M3⑦-实现 2（卡 `openmir2-m3-party-group-state`）。
+///
+/// 全部走 oracle `PlayObject.Socket.cs:17-25` 的 `SendDefMessage(ident, recog, param, tag, series)`：
+/// 12B 命令头 +（带 `sMsg` 时）尾 = `EDCode.EncodeString(sMsg)`。
+/// 组队帧的 `tag`/`series` 恒 0（唯一例外 `SM_SYSMESSAGE` 的 `series=1`，见 [`sm_sysmessage`]）。
+///
+/// `SM_GROUPMODECHANGED(659)`（`PlayObject.Message.cs:926/929`）：`SendDefMessage(659, 0, param, 0, 0)`，
+/// `param` = 1（开组）/0（关组），无尾。
+#[must_use]
+pub fn sm_groupmodechanged(param: u16) -> Vec<u8> {
+    gm_data_body(
+        command_header(0, messages::SM_GROUPMODECHANGED, param, 0, 0),
+        &[],
+    )
+}
+
+/// `SM_CREATEGROUP_OK(660)`（`PlayObject.Operate.cs:840`），无尾。
+#[must_use]
+pub fn sm_creategroup_ok() -> Vec<u8> {
+    gm_data_body(command_header(0, messages::SM_CREATEGROUP_OK, 0, 0, 0), &[])
+}
+
+/// `SM_CREATEGROUP_FAIL(661)`（`PlayObject.Operate.cs:816/820/825/830`；`recog ∈ {-1,-2,-3,-4}`），无尾。
+#[must_use]
+pub fn sm_creategroup_fail(recog: i32) -> Vec<u8> {
+    gm_data_body(
+        command_header(recog, messages::SM_CREATEGROUP_FAIL, 0, 0, 0),
+        &[],
+    )
+}
+
+/// `SM_GROUPADDMEM_OK(662)`（`PlayObject.Operate.cs:878`），无尾。
+#[must_use]
+pub fn sm_groupaddmem_ok() -> Vec<u8> {
+    gm_data_body(command_header(0, messages::SM_GROUPADDMEM_OK, 0, 0, 0), &[])
+}
+
+/// `SM_GROUPADDMEM_FAIL(664)`（`PlayObject.Operate.cs:852/857/861/866/871`；`recog ∈ {-1,-5,-2,-3,-4}`），无尾。
+#[must_use]
+pub fn sm_groupaddmem_fail(recog: i32) -> Vec<u8> {
+    gm_data_body(
+        command_header(recog, messages::SM_GROUPADDMEM_FAIL, 0, 0, 0),
+        &[],
+    )
+}
+
+/// `SM_GROUPDELMEM_OK(663)`（`PlayObject.Operate.cs:904`）：`SendDefMessage(663, 0,0,0,0, name)`
+/// ⇒ 尾 = `EncodeString(name)`。
+#[must_use]
+pub fn sm_groupdelmem_ok(name: &[u8]) -> Vec<u8> {
+    gm_data_body(
+        command_header(0, messages::SM_GROUPDELMEM_OK, 0, 0, 0),
+        &edcode::encode(name),
+    )
+}
+
+/// `SM_GROUPDELMEM_FAIL(665)`（`PlayObject.Operate.cs:890/894/900`；`recog ∈ {-1,-2,-3}`），无尾。
+#[must_use]
+pub fn sm_groupdelmem_fail(recog: i32) -> Vec<u8> {
+    gm_data_body(
+        command_header(recog, messages::SM_GROUPDELMEM_FAIL, 0, 0, 0),
+        &[],
+    )
+}
+
+/// `SM_GROUPCANCEL(666)`（`PlayObject.cs:5150` 的立即路径 / `PlayObject.Message.cs:1848-1850` 的
+/// `RM_GROUPCANCEL` 出队路径），无尾。
+#[must_use]
+pub fn sm_groupcancel() -> Vec<u8> {
+    gm_data_body(command_header(0, messages::SM_GROUPCANCEL, 0, 0, 0), &[])
+}
+
+/// `SM_GROUPMEMBERS(667)`（`PlayObject.Base.cs:1361-1366`）：`SendDefMessage(667, 0,0,0,0, sSendMsg)`
+/// ⇒ 尾 = `EncodeString("a/b/c/")`（逐成员 `ChrName + '/'` 拼接）。
+#[must_use]
+pub fn sm_groupmembers(members_text: &[u8]) -> Vec<u8> {
+    gm_data_body(
+        command_header(0, messages::SM_GROUPMEMBERS, 0, 0, 0),
+        &edcode::encode(members_text),
+    )
+}
+
 /// `HUtil32.LoWord`（低 16 位）。
 #[must_use]
 pub fn lo_word(v: i32) -> u16 {

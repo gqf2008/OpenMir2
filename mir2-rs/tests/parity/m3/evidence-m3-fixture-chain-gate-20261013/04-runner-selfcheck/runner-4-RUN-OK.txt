@@ -1,0 +1,2 @@
+key=4 system=掉落 / 经验 runner_status=RUN-OK rc=0
+GREEN: 无栈自检全绿（比较器 + 纯度门 fail-closed + 改坏必红 + LF 写出 + 零端口）

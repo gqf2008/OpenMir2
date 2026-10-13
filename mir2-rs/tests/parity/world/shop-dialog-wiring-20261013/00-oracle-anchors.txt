@@ -1,0 +1,63 @@
+# ⑤-4 第①片 oracle 行号锚点（grep -n，逐条可复跑）
+# oracle 根 = E:/Users/gxh/Documents/GitHub/OpenMir2/src
+
+## CM_* 收包派发（PlayObject.Message.cs）
+888:                case Messages.CM_MERCHANTDLGSELECT:
+891:                case Messages.CM_MERCHANTQUERYSELLPRICE:
+894:                case Messages.CM_USERSELLITEM:
+897:                case Messages.CM_USERBUYITEM:
+900:                case Messages.CM_USERGETDETAILITEM:
+939:                case Messages.CM_USERREPAIRITEM:
+942:                case Messages.CM_MERCHANTQUERYREPAIRCOST:
+963:                case Messages.CM_USERSTORAGEITEM:
+966:                case Messages.CM_USERTAKEBACKSTORAGEITEM:
+
+## 判定/状态迁移（PlayObject.Operate.cs）
+114:        private void ClientMerchantDlgSelect(int nParam1, string sMsg)
+131:        private void ClientMerchantQuerySellPrice(int nParam1, int nMakeIndex, string sMsg)
+162:        private void ClientUserSellItem(int nParam1, int nMakeIndex, string sMsg)
+192:        private void ClientUserBuyItem(int nIdent, int nParam1, int nInt, int nZz, string sMsg)
+1558:        private void ClientQueryRepairCost(int actorId, int nInt, string sMsg)
+1585:        private void ClientRepairItem(int actorId, int nInt, string sMsg)
+1715:        private bool IsWithinSight(IActor merchant)
+
+## Merchant.cs（UserSelect / ClientBuyItem / ClientQuerySellPrice / ClientSellItem / AddItemToGoodsList / ClientQueryRepairCost / ClientRepairItem / RefillGoods / GetRefillList / RefillGoodsItems / RefillDelReFillItem）
+209:        private void RefillGoods()
+278:        private IList<UserItem> GetRefillList(int nIndex)
+298:        private void RefillGoodsItems(ref IList<UserItem> list, string sItemName, int nInt)
+319:        private static void RefillDelReFillItem(ref IList<UserItem> list, int nInt)
+787:        public override void UserSelect(IPlayerActor playObject, string sData)
+1219:        public void ClientBuyItem(IPlayerActor playObject, string sItemName, int nInt)
+1304:        public void ClientGetDetailGoodsList(IPlayerActor playObject, string sItemName, int nInt)
+1345:        public void ClientQuerySellPrice(IPlayerActor playObject, UserItem userItem)
+1358:        private static int GetSellItemPrice(double nPrice)
+1377:        public bool ClientSellItem(IPlayerActor playObject, UserItem userItem)
+1417:        private void AddItemToGoodsList(UserItem userItem)
+1555:        public void ClientQueryRepairCost(IPlayerActor playObject, UserItem userItem)
+1599:        public void ClientRepairItem(IPlayerActor playObject, UserItem userItem)
+
+## 物品/金币原语
+E:/Users/gxh/Documents/GitHub/OpenMir2/src/M2Server/Player/PlayObject.Base.cs:168:        public bool IncGold(int tGold)
+E:/Users/gxh/Documents/GitHub/OpenMir2/src/M2Server/Player/PlayObject.Base.cs:193:        public bool IsAddWeightAvailable(int nWeight)
+E:/Users/gxh/Documents/GitHub/OpenMir2/src/M2Server/Player/PlayObject.Base.cs:754:        public bool DecGold(int nGold)
+E:/Users/gxh/Documents/GitHub/OpenMir2/src/M2Server/Actor/BaseObject.cs:1241:        public bool AddItemToBag(UserItem userItem)
+E:/Users/gxh/Documents/GitHub/OpenMir2/src/M2Server/Actor/BaseObject.cs:1771:        protected void WeightChanged()
+
+## 配置键读取（ServerConf.cs）
+250:            SystemShare.Config.CastleMemberPriceRate = ReadWriteInteger("Setup", "CastleMemberPriceRate", SystemShare.Config.CastleMemberPriceRate);
+260:            SystemShare.Config.GetAllNpcTax = ReadWriteBool("Setup", "CastleGetAllNpcTax", SystemShare.Config.GetAllNpcTax);
+487:            SystemShare.Config.SuperRepairPriceRate = ReadWriteInteger("Setup", "SuperRepairPriceRate", SystemShare.Config.SuperRepairPriceRate);
+488:            SystemShare.Config.RepairItemDecDura = ReadWriteInteger("Setup", "RepairItemDecDura", SystemShare.Config.RepairItemDecDura);
+
+## 脚本标签常量（ScriptFlagConst.cs）
+38:        public const string SuperRepair = "@s_repair";
+39:        public const string sSUPERREPAIROK = "~@s_repair";
+43:        public const string Superrepairfail = "@fail_s_repair";
+44:        public const string sREPAIR = "@repair";
+45:        public const string sREPAIROK = "~@repair";
+46:        public const string sBUY = "@buy";
+47:        public const string sSELL = "@sell";
+77:        public const string sREPAIRDOORNOW = "@repairdoornow";
+78:        public const string sREPAIRWALLNOW1 = "@repairwallnow1";
+79:        public const string sREPAIRWALLNOW2 = "@repairwallnow2";
+80:        public const string sREPAIRWALLNOW3 = "@repairwallnow3";

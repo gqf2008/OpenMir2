@@ -94,6 +94,13 @@ pub struct TickRecord {
     pub merchant_space_moves: Vec<i32>,
     /// 本 tick 被 Ghost 60s 门移除的商人 id。
     pub merchant_removed: Vec<i32>,
+    /// **M3⑦-实现 2 F-1**：本 tick 死亡触发的组队帧。
+    ///
+    /// oracle `PlayObject.Die()`（`src/M2Server/Player/PlayObject.cs:1964-1978`）在置 `Death` 之后、
+    /// `base.Die()` 之前判 `if (GroupOwner != 0) groupOwnerPlay.DelMember(this)`（`:1975-1977`）
+    /// ⇒ 死亡者立即退组（团长死亡 ⇒ 整组散）。事件序 = [`crate::party::PartyEvent`] 的
+    /// 「立即帧 → `MsgQueue` 出队序」，由宿主（`bins/game-svr`）逐条回帧。
+    pub party_events: Vec<crate::party::PartyEvent>,
 }
 
 pub struct World {
@@ -142,6 +149,11 @@ pub struct World {
     /// 经验表（`Exps.conf` 的 `NeedExps`）
     pub need_exps: Vec<i32>,
     pub combat_config: CombatConfig,
+    /// **M3⑦-实现 2 F-1**：死亡退组（oracle `Die()` 的 `DelMember`）所用配置。
+    ///
+    /// 由宿主在起世界时用与 4 条 `CM_*` 组队派发**同一份** [`crate::party::PartyConfig`] 灌入
+    /// （缺省 = 常量默认值，与 `Server.conf` 缺键口径一致）。
+    pub party_cfg: crate::party::PartyConfig,
     /// `SystemShare.Config.HealthFillTime` / `SpellFillTime`（`GameSvrConf.cs:1323-1324` 缺省
     /// `300` / `800`；`ServerConf.cs:152-153` 可覆盖）。
     ///
@@ -163,7 +175,7 @@ pub struct World {
     /// S1 tick 骨架：时钟推进 + 线程断言（单线程 `Schedule`）。
     clock_runner: TickRunner,
     /// 掉落物品的 `MakeIndex` 计数器（`M2Share.GetItemNumber`）
-    item_number: ItemNumberCounter,
+    pub(crate) item_number: ItemNumberCounter,
     /// 最近一次 tick 的记录
     pub last_tick: TickRecord,
     /// AOI 分组的复用缓冲（避免每 tick 分配；P99 回归即由那次分配量出）
@@ -207,6 +219,7 @@ impl World {
             mon_random_add_value: 40,
             need_exps: vec![0; 1000],
             combat_config: CombatConfig::default(),
+            party_cfg: crate::party::PartyConfig::default(),
             health_fill_time: 300,
             spell_fill_time: 800,
             clear_drop_on_floor_item_time: 5 * 60 * 1000,
@@ -402,6 +415,7 @@ impl World {
             merchant_hits: Vec::new(),
             merchant_space_moves: Vec::new(),
             merchant_removed: Vec::new(),
+            party_events: Vec::new(),
         };
 
         // 命令 FIFO
@@ -805,11 +819,21 @@ impl World {
             let Some(e) = self.entities.get(id) else {
                 continue;
             };
-            let (map_id, gold, mon_exp, exp_hitter) = (e.map_id, e.gold, e.mon_exp, e.exp_hitter);
+            let (map_id, gold, mon_exp, exp_hitter, group_owner) =
+                (e.map_id, e.gold, e.mon_exp, e.exp_hitter, e.group_owner);
             // 死亡标记（C# `Die()` 的 `Death = true`）
             if let Some(e) = self.entities.get_mut(id) {
                 e.death = true;
                 e.death_settled = true;
+            }
+            // **M3⑦-实现 2 F-1**：oracle `Die()`（`PlayObject.cs:1964-1978`）在置 `Death` 之后、
+            // `base.Die()`（掉落）之前判 `if (GroupOwner != 0) groupOwnerPlay.DelMember(this)`
+            // （`:1975-1977`）⇒ 死亡者立即退组；团长死亡 ⇒ 逐成员 `LeaveGroup` 后整组散。
+            // 与断线路径（`Disappear()`）的差别：死亡者**仍在线**，它自己的回帧照发（由宿主决定）。
+            if group_owner != 0 {
+                let cfg = self.party_cfg.clone();
+                let events = self.party_del_member(group_owner, id, &cfg);
+                record.party_events.extend(events);
             }
             // 掉落结算（oracle `DieDropItems`，`BaseObject.cs:2450-2464`）：
             // `ScatterBagItems`（`BaseObject.Base.cs:501-550`，**倒序**遍历 `ItemList`）

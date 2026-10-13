@@ -1,0 +1,5 @@
+命令: powershell -NoProfile -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 -Go -Side csharp
+期望: real-run 显式要求 -PinScene；只给 -Go ⇒ fail-closed exit 2（不给第二道驱动未接线消息）。
+---- 原始输出 ----
+PREREQ_MISSING: 真机两相 trace 需显式 -PinScene（按 scenario 钉住含怪场景；只给 -Go 不钉场景一律拒跑）
+RC=2

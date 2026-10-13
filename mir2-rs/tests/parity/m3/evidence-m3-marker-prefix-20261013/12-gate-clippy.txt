@@ -1,0 +1,3 @@
+$ CARGO_TARGET_DIR=E:/tmp/m3cs-marker-target cargo clippy --offline --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.93s
+rc=0

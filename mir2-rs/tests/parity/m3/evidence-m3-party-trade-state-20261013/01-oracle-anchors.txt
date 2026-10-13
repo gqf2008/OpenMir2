@@ -1,0 +1,71 @@
+M3⑦-实现 3「交易会话状态机 + 6 个 CM_DEAL* 派发 + 交易 SM_* 帧」oracle 锚点
+（行号均在本仓库 src/ 内实测；基线 origin/master d4d5b89c）
+
+—— 状态字段（PlayObject）——
+PlayObject.cs:90      public bool AllowDeal            （构造 :1008 = true）
+PlayObject.cs:114     DealCreat                        （对手 ActorId）
+PlayObject.cs:118     Dealing
+PlayObject.cs:122     DealLastTick
+PlayObject.cs:126     DealGolds                        （构造 :876 = 0）
+PlayObject.cs:130     DealSuccess
+PlayObject.cs:203     DealItemList                     （构造 :877 = new List）
+PlayObject.cs:739     IsCanDeal                        （构造 :954 = true）
+PlayObject.cs:1037    GoldMax = Config.HumanMaxGold
+
+—— 收包派发（PlayObject.Message.cs 主 switch）——
+:946-947  CM_DEALTRY  ⇒ ClientDealTry(Msg.Trim())
+:948-949  CM_DEALADDITEM ⇒ ClientAddDealItem(nParam1, Msg)
+:950-951  CM_DEALDELITEM ⇒ ClientDelDealItem(nParam1, Msg)
+:953-954  CM_DEALCANCEL  ⇒ ClientCancelDeal()
+:956-957  CM_DEALCHGGOLD ⇒ ClientChangeDealGold(nParam1)
+:959-960  CM_DEALEND     ⇒ ClientDealEnd()
+入帧映射（WorldServer.cs:820/857 的 default 支）：
+  SendMsg(playObject, ident, defMsg.Series, defMsg.Recog, defMsg.Param, defMsg.Tag, sMsg)
+  ⇒ ProcessMessage.nParam1 = defMsg.Recog（32 位）⇒ nItemIdx / nGold 取 Recog
+
+—— 发起 / 打开 ——
+PlayObject.Operate.cs:911-962  ClientDealTry：DisableDeal(:913) → Dealing(:919) →
+  TryDealTime 门(:922) → IsCanDeal(:927) → GetPoseCreate(:931)/Race==Play(:933)/
+  target!=this(:935)/GetPoseCreate()==this && !Dealing(:937)/AllowDeal&&IsCanDeal(:939)
+  ⇒ 双向 SysMsg(OpenedDealMsg)(:942-943) + OpenDealDlg 双向(:944-945)；否则 SM_DEALTRY_FAIL(:952,957)
+PlayObject.Base.cs:2405-2416  OpenDealDlg：DealCreat/Dealing=true/GetBackDealItems/
+  SM_DEALMENU(尾 ChrName)/DealLastTick=now
+
+—— 放入 / 取回 / 金币 ——
+PlayObject.Operate.cs:964-999   ClientAddDealItem（含空格 GetValidStr3、DealCreat.DealSuccess 门、
+  MakeIndex+GetItemName 忽略大小写、DealItemList.Count<12）
+PlayObject.Base.cs:2383-2403    SendAddDealItem（SM_DEALADDITEM_OK 给自己 + SM_DEALREMOTEADDITEM 给对手，Series=1）
+PlayObject.Operate.cs:1001-1042 ClientDelDealItem（CanNotGetBackDeal 先于 Dealing 门，回 RM_MENU_OK + SM_DEALDELITEM_FAIL）
+PlayObject.Base.cs:2357-2381    SendDelDealItem（SM_DEALREMOTEDELITEM + SM_DEALDELITEM_OK）
+PlayObject.Operate.cs:1049-1083 ClientChangeDealGold（DealGolds>0&&CanNotGetBackDeal 回 **SM_DEALDELITEM_FAIL**；
+  nGold<0；DealCreat 在位且 !DealSuccess 且 Gold+DealGolds>=nGold ⇒ 扣增 + OK + REMOTECHGGOLD + 双方 DealLastTick）
+
+—— 锁定（确认）/ 结算 ——
+PlayObject.Operate.cs:1085-1203 ClientDealEnd：DealSuccess=true(:1087) → DealCreat==null 早退(:1089) →
+  DealOKTime 门(双方, :1092) → 双向锁定(DealCreat.DealSuccess, :1096) → 容量四检(:1102/1106/1112/1116) →
+  搬运物品(:1132-1170)/金币(:1172-1186)/SM_DEALSUCCESS+DealSuccessMsg(:1177-1185)/清态(:1179-1195) ||
+  单侧确认提示 YouDealOKMsg/PoseDealOKMsg(:1199-1200)
+
+—— 取消 / 掉线中断 ——
+PlayObject.Operate.cs:1044-1047 ClientCancelDeal ⇒ DealCancel
+PlayObject.Base.cs:730-746      DealCancel（!Dealing 早退 / SM_DEALCANCEL / 递归对手 / GetBackDealItems / SysMsg + DealLastTick）
+PlayObject.Base.cs:833-845      GetBackDealItems（DealItemList→ItemList、Gold+=DealGolds、DealSuccess=false）
+PlayObject.Base.cs:748-752      DealCancelA（Abil.HP = WAbil.HP + DealCancel）
+PlayObject.Message.cs:30-36     Run() 每 tick：Dealing 且 (GetPoseCreate()!=DealCreat || DealCreat==this || DealCreat==null) ⇒ DealCancel
+WorldServer.cs:712              断线路径 DealCancelA（PlayObjectList.Remove→Disappear→…）
+WorldServer.cs:701              周期存档前 DealCancelA
+
+—— 帧数送达 / 优先级 ——
+PlayObject.Message.cs:1952-1954 RM_MENU_OK   ⇒ SM_MENU_OK(767)    recog=nParam1, 尾=Msg
+PlayObject.Message.cs:1715-1718 RM_SYSMESSAGE⇒ SM_SYSMESSAGE(100) recog=ActorId, param=MakeWord(f,b), series=1
+PlayObject.Message.cs:1760      RM_WEIGHTCHANGED ⇒ SM_WEIGHTCHANGED(622)（用当下 WAbil）
+PlayObject.Message.cs:1834      RM_GOLDCHANGED   ⇒ SM_GOLDCHANGED(653)（用当下 Gold/GameGold）
+BaseObject.Message.cs:283-306   SendUpdateMsg 先去重同 wIdent 再入队（每个 PlayObject 独立 MsgQueue）
+排队优先级字节：(byte)wIdent ⇒ RM_MENU_OK(10309)=69 < RM_WEIGHTCHANGED(10115)=131 <
+  RM_GOLDCHANGED(10136)=152 < RM_SYSMESSAGE(11004)=252
+
+—— 未建模（登记）——
+PlayObject.Base.cs:198-227 SendAddItem 的 ClientItem 构造里 GetUpgradeStdItem 的 desc 升级差量
+  与 CustomItemSystem.GetItemName 自定义名：与既有 T-24 同源（SM_ADDITEM 展示层缺口）。
+PlayObject.Base.cs:750 DealCancelA 的 Abil.HP = WAbil.HP：本仓 Abil.HP（基础能力）不参与任何
+  可观测路径（真 HP 是 WAbil.HP / crates/world Entity::hp）⇒ 无可观测差异。
