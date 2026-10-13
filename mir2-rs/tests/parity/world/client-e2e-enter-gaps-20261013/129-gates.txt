@@ -1,0 +1,32 @@
+129-gates.txt —— 片㉕ 四门禁 + 工具自检（卡 openmir2-client-e2e-enter-gaps）
+构建源/base = e222a9385e8ef6f9b5bfcf8b3788532a32cba535（origin/master；片㉔ 已由 805499105 合入；本片开工时 git merge origin/master）
+cwd = mir2-rs/，CARGO_TARGET_DIR=E:/tmp/m2svr-target
+被测件 window_handoff.py sha256 = 45824eca64ef1c45a51adc15be873b720d9fe3e9e90945c73acbceca4f5dc9f9
+====================================================================================================
+1) cargo fmt --all -- --check
+   rc=0（无输出）
+
+2) cargo clippy --workspace --all-targets -- -D warnings
+       Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.34s
+   rc=0
+
+3) cargo test --workspace
+   套件=101  passed=1200  failed=0  ignored=22
+   rc=0
+
+4) cargo run -p msgcodegen -- --check
+   msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+   rc=0
+
+5) 判据工具自检（window_handoff.py --selftest）
+   SELFTEST OK (63/63)
+
+6) 就绪门 + 计划 G4（window_handoff.py --repo <本 worktree> --ref HEAD --plan --best-site）
+   OK   G1 Rust 窗口前置门 GREEN（R1..R5）
+   PLAN_CONFORMANCE=GREEN
+   WINDOW_READY=YES
+   RESULT: GREEN
+   rc=0
+
+7) 计划（--plan-only）G4 单跑
+   PLAN_CONFORMANCE=GREEN

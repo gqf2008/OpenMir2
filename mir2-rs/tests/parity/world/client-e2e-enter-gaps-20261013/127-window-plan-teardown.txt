@@ -1,0 +1,118 @@
+127-window-plan-teardown.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片㉕ 判定书
+③ 窗口计划：**两趟之间/收工时不清端口**（+ 清栈脚本不存在）+ 计划↔工具面 **G4 机判**
+m2-svr / openmir2-worker-11 / 2026-10-14（回应 brief-m2svr-next 顶部 root 2026-10-14 00:4x ③「判据/capture 工具你准备」）
+本片零起栈、零占端口（仅共享 MySQL 3306 未动）、零生产代码改动；只在自身 worktree 写。
+被测件 `window_handoff.py` base = origin/master（本片开工时 `git merge origin/master` 的 tip）
+====================================================================================================
+
+一句话
+----------------------------------------------------------------------------------------------------
+片㉔ 把「**起**代理前的抓包拓扑」（停标准 gate → 起影子 gate(7600) → 代理占 7200）补进了计划，
+但**没有补「收」**：手工起的影子 game-gate(7600) 和常驻代理(7200) 都不在 `start_rust_stack.ps1`
+的 pid 文件里 ⇒ `-Stop` 收不走它们 ⇒ 下一趟（C# 趟 / ③a 反向趟）起栈预检直接 RED / C# 影子绑不上
+7600，**一次性窗口再次白烧**；C# 趟收栈还写了一个**不存在**的 `{mirserver}/stop-all.ps1`。
+本片补齐 teardown/清端口段，并把「计划里每个被调脚本必须存在、只用它声明的参数、必须含 teardown 段」
+做成一条**静态机判 G4**（零起栈），防止同类烧窗写法再漂回来。
+
+A. 缺陷（源码实读；可复算的锚点）
+====================================================================================================
+[A1] `{mirserver}/stop-all.ps1` **不存在**（计划第 53 行 C# 收栈写的就是它）：
+```
+$ test -f E:/MirServer/stop-all.ps1 && echo YES || echo NO
+NO
+$ ls E:/MirServer/*.ps1
+E:/MirServer/build-client-104.ps1
+E:/MirServer/port-status.ps1
+E:/MirServer/restart-gamesvr.ps1
+E:/MirServer/start-all.ps1
+```
+并且**不能**用 `start-all.ps1 -Stop` 顶替：它的 `Stop-Stack` 目标表含 `mysqld`
+（`E:/MirServer/start-all.ps1:117` = `$order = @('LoginGate','SelGate','GameGate','GameSrv','LoginSrv','DBSrv','mysqld')`）
+⇒ 连**共享 MySQL 3306** 一起停，与开工前『仅 3306 UP』不一致。
+
+[A2] 手工起的**影子 game-gate(7600)** 不在 pid 文件里 ⇒ `start_rust_stack.ps1 -Stop` 收不走：
+`tools/m2-acceptance/start_rust_stack.ps1:150-157` 只遍历 pid 文件里的 `entries` 停进程
+（`if (-not (Test-Path $PidFile)) { 'NOTHING_TO_STOP' }`；`$saved = Get-Content $PidFile`）。
+影子 gate 是计划 §2a 用 `Start-Process` 手工起的，**未登记** ⇒ 留占 7600 ⇒ C# 影子 gate 绑不上。
+
+[A3] 代理 `mir2_proxy.py` 常驻、不自停：
+`tools/capture/mir2_proxy.py:145` 只把 pid 写进 `<out>/ready.flag`；`:148` `serve_forever()`
+无限服务（仅 Ctrl-C/KeyboardInterrupt 才退）。计划未收它 ⇒ 占 7200 ⇒ 下一趟 §0 预检
+`tools/m2-acceptance/start_rust_stack.ps1:171-177`（`$wanted = @(6000,5100,5700,5500,5600,5000,7000,7100,7200)`）
+直接 `RED: 目标端口已被监听 7200 … exit 1`。
+
+[A4] 计划里 §2a 的两条命令还把 `'<bin_dir>\\game-gate.exe'` 写成**字面占位**（虽然同一计划的
+`(本计划 <bin_dir> = …)` 注里已经知道实际目录）⇒ 粘贴后要人工替换，易错。
+
+B. 本片改动（`window_handoff.py`，只读规划器；不新造第二份判据）
+====================================================================================================
+[B1] **§2b 清端口段（Rust 趟跑完 · 进 C# 趟/③a 前必做）**：a. 用 `ready.flag` 里的 pid 停代理；
+     b. 按绝对路径停影子 game-gate（标准 gate 已由 §2a.a 让出）；c. `start_rust_stack.ps1 -Stop`
+     停 pid 文件里其余；d. `port-status.ps1` 断言 7200/7600 都 DOWN。
+[B2] **§2b 清端口段（C# 趟跑完必做）**：a. 停代理；b. 按绝对路径停 C# 影子 gate
+     （`{mirserver}/RunGate/GameGate.exe`）；c. `Get-Process GameSvr,DBSrv,LoginSrv,LoginGate,SelGate,GameGate | Stop-Process -Force`
+     —— **保留 MySQL 3306**（同 `tools/m2-acceptance/evidence/session-lifecycle-rerun-20261012` 的收工口径）；
+     d. 断言 7200/7600 都 DOWN。并**删掉不存在的 `{mirserver}/stop-all.ps1`**，写明**不要**用
+     `start-all.ps1 -Stop`（会停 3306）的理由。
+[B3] **占位替换**：§2a 两条命令里的 `<bin_dir>` 代入实际 `-RustBinDir`（`bin_dir_w`），
+     并把 §2a.c 的 `E:/MirServer/port-status.ps1` 改为 `{mirserver}/port-status.ps1`（随部署根走）。
+[B4] **G4 机判 `plan_conformance(plan, repo_root, check_dir, mirserver)`**（静态、零起栈/零端口）：
+     ① 计划里每个被调 `.ps1/.py` 必须存在（绝对路径 / 仓根 / 判据目录 / 部署根 / `tools/*` 五处解析）；
+     ② 每个命令里出现在脚本路径**之后**的 `-Flag`/`--flag` 必须在该脚本的声明集合里
+        （`.ps1` 取 `param(...)` 的 `$name`；`.py` 取 `add_argument('--x')`）；宿主 powershell 开关
+        （`-ExecutionPolicy/-File/-NoProfile/-Command/-EA/-ErrorAction`）排除；
+     ③ 计划必须含 6 条 teardown/清端口标记（§2b 段、`proxy/ready.flag`、两个影子 gate 精确停、
+        `断言 7200/7600 都 DOWN`、`保留 MySQL 3306`）；
+     ④ 不得出现 `stop-all.ps1`；⑤ 不得残留 `<bin_dir>`。
+     `--plan`/`--plan-only` 打印 `PLAN_CONFORMANCE=GREEN|RED`，RED 时逐条打 `RED <问题>` 并把 rc 抬红
+     （fail-closed；`--plan-only` RED ⇒ rc=1）。
+
+C. 真读数（本片自跑，命令 + 原始输出）
+====================================================================================================
+C-1 计划 before/after（C# 收栈 + 清端口段），`--plan-only --repo <本 worktree>`：
+```
+[BEFORE]
+40:#     powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 -Stop
+53:#     powershell -ExecutionPolicy Bypass -File E:/MirServer/stop-all.ps1   # 收 C# 栈（或等价 -Stop）
+74:# 5) 收工：start_rust_stack.ps1 -Stop / C# -Stop；还原 aaa；实拍十端口；SHA256SUMS 按 LF/git-blob 口径
+
+[AFTER]
+40:#     # 2b) 【本趟跑完必做 · 进 C# 趟/③a 前必做】清端口：
+44:#     #   a. 停代理（ready.flag 里就是它的 pid）：
+45:#     #        $pp = Get-Content 'E:/tmp/window/cliente2e/rust/proxy/ready.flag' -EA SilentlyContinue; if ($pp) { Stop-Process -Id ([int]$pp) -Force -EA SilentlyContinue }
+50:#     #        powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 -Stop
+51:#     #   d. 断言 7200/7600 都 DOWN 再往下：E:/MirServer/port-status.ps1
+64:#     # 2b) 【C# 趟跑完必做】清端口并收栈：
+68:#     #        $pp = Get-Content 'E:/tmp/window/cliente2e/csharp/proxy/ready.flag' -EA SilentlyContinue; if ($pp) { Stop-Process -Id ([int]$pp) -Force -EA SilentlyContinue }
+72:#     #   c. 停 6 个 C# 组件、**保留 MySQL 3306**（同 tools/m2-acceptance/evidence/session-lifecycle-rerun-20261012）：
+74:#     #   d. 断言 7200/7600 都 DOWN 再往下：E:/MirServer/port-status.ps1
+```
+（`stop-all.ps1` 在 AFTER 计划里 **0 命中**；`<bin_dir>` 占位 0 命中。）
+
+C-2 G4 机判：真计划（`repo` = 本 worktree，`mirserver` = `E:/MirServer`）⇒ GREEN：
+```
+$ python -I -B window_handoff.py --plan-only --best-site --repo "$PWD"; echo rc=$?
+...
+PLAN_CONFORMANCE=GREEN
+rc=0
+$ python -I -B window_handoff.py --plan-only --repo "$PWD" --json
+{"plan_conformance": "GREEN", "problems": [], "rc": 0}
+```
+
+C-3 工具自检：`window_handoff.py --selftest` **53/53 → 63/63**（新增 10 条：6 条 teardown 结构
++ `plan-conf-green` + 3 条 G4 改坏必红；既有 53 条逐条不动）。
+
+D. 改坏必红（`128-redcheck-window-plan-teardown.txt`）
+====================================================================================================
+MUT-A 把 C# 收栈写回不存在的 `{mirserver}/stop-all.ps1` ⇒ `SELFTEST FAILED (61/63)`（`plan-csharp-keep-mysql`
++ `plan-conf-green` 点名引用不存在的 `stop-all.ps1`）；MUT-B 删 §2b 清端口段首行 ⇒ `(61/63)`；
+MUT-C 让 `plan_conformance` 恒绿 ⇒ `(60/63)`（三条 G4 红检同时红）。变异只在 `E:/tmp/m2svr-burst12/mut/`
+复制件、仓内 `window_handoff.py` sha256 前后一致。
+
+E. 边界 / 残留（不静默）
+====================================================================================================
+* 本片只改**规划器与判据**（零生产代码、零 `.rs`/`.toml`/`.ps1` 改动）；**未起栈、未占任何游戏端口**。
+* G4 只能机判「脚本存在 + 参数名声明 + teardown 段在」；**不判**命令在真机是否语义正确
+  （那由 §2 的已证步骤 + 真机窗口负责）。`<影子 conf>`/`<conf 目录>` 是部署侧未知量，仍留占位。
+* 仍未闭环（归 root 独占窗口，不因本片收卡）：DoD③ 的 R 级「③b/③a 两趟真机同框对照」+
+  「屏幕见怪并能攻击造成伤害」。
