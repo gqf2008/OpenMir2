@@ -53,3 +53,43 @@
 
 - 交付 head 已 `git merge origin/master`（`0f9fe999`）⇒ `git merge-base --is-ancestor refs/heads/master HEAD` 成立。
 - 边界（见 `20-boundary.txt`）：`src/ sql/ MirClient / crates/protocol / crates/storage` = **空**。
+
+## F-1 返工（reviewer-5 `request_changes`，Important）
+
+**改前（被审 head `438fbd163`）**：`selloff.rs::client_buy_sell_off_item` 的 `Some(tpl)` 支多了一条 oracle 没有的负重守卫：
+
+```rust
+Some(tpl) => {
+    if is_enough_bag(me.items, cfg.max_bag_item) {
+        if weight_available(me, i32::from(tpl.weight)) {
+            ...add_item_to_bag + em.now(AddItem)...
+        }
+        // 负重不足：静默跳过（物品不入包、无 SM_ADDITEM / RM_WEIGHTCHANGED）
+    } else {
+        drop_item_down(item.clone());
+    }
+}
+```
+
+**改后（本 head）**：删除内层负重守卫，恢复 oracle `PlayObject.Sale.cs:333-361` 形状（锚见 `01-oracle-anchors.txt` §3.1）：
+
+```rust
+Some(_) => {
+    if is_enough_bag(me.items, cfg.max_bag_item) {
+        let item = item.clone();
+        if add_item_to_bag(me, item.clone(), cfg, &mut em) {
+            em.now(SellOffEvent::AddItem { target: me.id, item });
+        }
+    } else {
+        drop_item_down(item.clone());
+    }
+}
+```
+
+- **新增 F-1 回归向量**：`buy_enters_bag_even_when_weight_insufficient`（背包未满 0/46 + `weight=0/max_weight=1` + 元宝够 ⇒ 照扣 `500+10000`、卖方 `+500`、物品仍入包、产立即 `SM_ADDITEM`）。
+- **未改**：`client_cancel_sell_off_ing`（`selloff.rs:685`）的 `weight_available` —— oracle `CancelSellOffIng`（`PlayObject.Sale.cs:217`）确有 `IsAddWeightAvailable`。
+- **判据读数**：lib selloff `24 passed / 0 failed`（旧 23 + F-1 新增 1）；进程级 `2 passed`。
+- **RC-3 改坏必红**：把负重守卫加回去 ⇒ `buy_enters_bag_even_when_weight_insufficient` FAILED（rc=101），还原后 ok（`redchecks/RC3-*.txt` + `redchecks/RC-restored-ok.txt`）。
+
+**F-1 交付的 base/head**：base = 交付时 `refs/remotes/origin/master`（`67e9f6c3e097da834ef5769eff1c5415e97bb458`，本仓 `refs/heads/master` 本地快照为 `d4d5b89c7`）；
+head = 本片交付 commit（交付时记录于 patch entry）。

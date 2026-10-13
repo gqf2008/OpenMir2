@@ -795,16 +795,18 @@ pub fn client_buy_sell_off_item(
                 return em.finish();
             };
             match catalog.get(item.index) {
-                Some(tpl) => {
+                // oracle 成功支只判 `IsEnoughBag()`（`PlayObject.Base.cs:183-186`），
+                // **不判负重**：`IsAddWeightAvailable` 在 oracle 只出现在拾取（`Base.cs:103`）、
+                // `CancelSellOffIng`（`Sale.cs:217`）与 `Operate.cs:1680`，买/卖成交路径没有。
+                // ⇒ 背包未满但负重不足时仍入包 + `SendAddItem`（立即）。
+                Some(_) => {
                     if is_enough_bag(me.items, cfg.max_bag_item) {
-                        if weight_available(me, i32::from(tpl.weight)) {
-                            let item = item.clone();
-                            if add_item_to_bag(me, item.clone(), cfg, &mut em) {
-                                em.now(SellOffEvent::AddItem {
-                                    target: me.id,
-                                    item,
-                                });
-                            }
+                        let item = item.clone();
+                        if add_item_to_bag(me, item.clone(), cfg, &mut em) {
+                            em.now(SellOffEvent::AddItem {
+                                target: me.id,
+                                item,
+                            });
                         }
                     } else {
                         drop_item_down(item.clone());
@@ -1459,6 +1461,44 @@ mod tests {
         );
         assert!(!has_menu_ok(&evs, "[成功] 系统已经成功接受您的申请"));
         assert!(matches!(evs.first(), Some(SellOffEvent::AddItem { .. })));
+    }
+
+    /// F-1 回归：oracle 成交成功支**只判 `IsEnoughBag()`、不判负重** ⇒ 「背包未满 +
+    /// 负重不足 + 元宝够」时物品仍入包并产立即 `SM_ADDITEM`。
+    /// 若在 `client_buy_sell_off_item` 里加回负重守卫（本片 F-1 的原始缺陷），本用例必红。
+    #[test]
+    fn buy_enters_bag_even_when_weight_insufficient() {
+        let cat = catalog();
+        let cfg = SellOffConfig::default();
+        let mut book = SellOffBook::default();
+        book.entries
+            .push(entry("seller", "buyer", 500, 0, slots(Some(bag(1, 100)))));
+        let mut buyer = P::new(2, "buyer");
+        buyer.game_gold = 100_000;
+        // 木剑 weight=3；背包未满（0/46）但负重不足（0+3 > 1）。
+        buyer.weight = 0;
+        buyer.max_weight = 1;
+        let mut seller = P::new(1, "seller");
+        let evs = client_buy_sell_off_item(
+            &mut side(&mut buyer),
+            Some(&mut side(&mut seller)),
+            &mut book,
+            &cat,
+            &cfg,
+            "seller",
+        );
+        assert_eq!(buyer.game_gold, 89_500, "买方照扣 500+10000");
+        assert_eq!(seller.game_gold, 500, "卖方 +500");
+        assert_eq!(
+            buyer.items.len(),
+            1,
+            "负重不足也必须入包（oracle 成功支只判 IsEnoughBag）"
+        );
+        assert!(
+            matches!(evs.first(), Some(SellOffEvent::AddItem { .. })),
+            "应立即产出 SM_ADDITEM，实得 {:?}",
+            evs
+        );
     }
 
     #[test]

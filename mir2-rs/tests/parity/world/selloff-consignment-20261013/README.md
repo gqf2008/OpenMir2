@@ -19,9 +19,10 @@
 3. **oracle 缺陷照搬**（`01-oracle-anchors.txt` §5）：① `ClientBuySellOffItme` 首个空槽中止 ⇒
    `SM_SELLOFFBUY_OK` 恒不可达；② 金刚石标记写 65535/判 32767；③ 金刚石扣款帧错位；④ 取消退回的静默丢失分支；
    ⑤ `goldsales` 写面 oracle 调用点全注释 ⇒ 不实现。
-4. **判据**：构造级 **23** + 进程级 **2** + 配置键 **1**；`cargo test --workspace --offline --no-fail-fast`
-   = **95 suites · 992 passed · 0 failed · 21 ignored**（+ msgcodegen 604）。
-5. **改坏必红 2 条**（RC-1 派发 / RC-2 缺陷①照搬），逐条 rc=101、还原后 ok（见 `redchecks/README.md`）。
+4. **判据**：构造级 **24** + 进程级 **2** + 配置键 **1**；`cargo test --workspace --offline --no-fail-fast`
+   = **96 suites · 998 passed · 0 failed · 21 ignored**（+ msgcodegen 604）。
+5. **改坏必红 3 条**（RC-1 派发 / RC-2 缺陷①照搬 / **RC-3 F-1 成交支负重守卫**），逐条 rc=101、还原后 ok
+   （见 `redchecks/README.md`）。
 
 ## 1. 证据清单（SHA256 见 [`SHA256SUMS.txt`](SHA256SUMS.txt)）
 
@@ -32,7 +33,7 @@
 | `03-tests.txt` | 判据清单、命令与读数、未做项 |
 | `20-boundary.txt` | 冻结面零改动（`src/ sql/ MirClient/ protocol/ storage` 空） |
 | `gates/10-fmt.txt` `11-clippy.txt` `12-msgcodegen.txt` `13-workspace-test.txt` | 四门禁原始件 |
-| `redchecks/` | RC-1 / RC-2 变异红件 + 还原 ok + README |
+| `redchecks/` | RC-1 / RC-2 / **RC-3（F-1）** 变异红件 + 还原 ok + README |
 | `README.md` | 本文件 |
 
 ## 2. 为什么 `crates/world` 零改动（写集申报的说明）
@@ -44,6 +45,14 @@
 同形）⇒ 不把进程级全局或会话散字段塞进 `bevy_ecs` World（服务器端架构规范 §4.2.2「不得塞进 ECS」）。
 ⇒ `crates/world` 无改动是**设计结果**，非遗漏；若 reviewer 认为应改放 world，请给出与 `trade`/`party`
 不一致的理由，owner 裁决。
+
+## 2b. F-1 返工（reviewer-5 `request_changes`，Important）
+
+- 旧 head `438fbd163` 在 `client_buy_sell_off_item` 的成交成功支多了一条 oracle 没有的负重守卫
+  （`if weight_available(...)`）⇒ 「元宝已扣、背包未满但负重不足」时物品被静默丢包（少 `SM_ADDITEM` +
+  `RM_WEIGHTCHANGED`）——违反硬约束③。本片已删除（锚见 `01-oracle-anchors.txt` §3.1）。
+- `client_cancel_sell_off_ing`（`selloff.rs:685`）的 `weight_available` **保留**（oracle `Sale.cs:217` 确有）。
+- 新增回归向量 `buy_enters_bag_even_when_weight_insufficient` + RC-3 改坏必红（加了守卫 ⇒ 必红）。
 
 ## 3. 未做 / 待窗口（如实登记）
 
@@ -61,9 +70,9 @@ cd mir2-rs
 export CARGO_TARGET_DIR=E:/tmp/m2svr-target
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --offline -- -D warnings
-cargo test --workspace --offline --no-fail-fast          # 95 suites · 992 passed · 0 failed · 21 ignored
+cargo test --workspace --offline --no-fail-fast          # 96 suites · 998 passed · 0 failed · 21 ignored
 cargo run --offline -p msgcodegen -- --check             # 604 条一致
-cargo test -p game-svr --offline --lib selloff           # 23 passed
+cargo test -p game-svr --offline --lib selloff           # 24 passed
 cargo test -p game-svr --offline --bin game-svr selloff  # 2 passed
 ```
 

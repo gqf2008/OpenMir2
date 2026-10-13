@@ -1,0 +1,40 @@
+# RC-3 改坏必红（F-1 返工）：把 `client_buy_sell_off_item` 的负重守卫重新加回
+#
+# reviewer-5 F-1（Important）钉的原始缺陷：oracle `ClientBuySellOffItme`
+# （`src/M2Server/Player/PlayObject.Sale.cs:333-361`）成交成功支**只判 `IsEnoughBag()`、不判负重**
+# （`IsEnoughBag()` = `ItemList.Count < Grobal2.MaxBagItem`，`PlayObject.Base.cs:183-186`；
+#  `AddItemToBag` = `BaseObject.cs:1241-1251` 也只判 `ItemList.Count >= MaxBagItem`）。
+# `IsAddWeightAvailable` 在 oracle 只出现在拾取（`Base.cs:103`）、`CancelSellOffIng`（`Sale.cs:217`）、
+# `Operate.cs:1680`，买/卖**成交路径没有**。
+#
+# mutation（精确单次替换，Python 断言命中数 = 1，跑完 `git restore` 反向替换还原，不提交）：
+#   `Some(_) => { if is_enough_bag(me.items, cfg.max_bag_item) {`
+#   → `Some(tpl) => { if is_enough_bag(me.items, cfg.max_bag_item) && weight_available(me, i32::from(tpl.weight)) {`
+# 语义等价于把 F-1 的缺陷守卫加回去（负重不足 ⇒ 走 else ⇒ DropItemDown，物品不入包、无 SM_ADDITEM）。
+#
+# 命令：cargo test -p game-svr --offline --lib selloff
+# 期望：F-1 新增向量 `buy_enters_bag_even_when_weight_insufficient` FAILED（rc=101），
+#       其余 23 条仍 ok。
+
+== mutated (rc=101) ==
+failures:
+
+---- selloff::tests::buy_enters_bag_even_when_weight_insufficient stdout ----
+
+thread 'selloff::tests::buy_enters_bag_even_when_weight_insufficient' (25308) panicked at bins\game-svr\src\selloff.rs:1494:9:
+assertion `left == right` failed: 负重不足也必须入包（oracle 成功支只判 IsEnoughBag）
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    selloff::tests::buy_enters_bag_even_when_weight_insufficient
+
+test result: FAILED. 23 passed; 1 failed; 0 ignored; 0 measured; 153 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --lib`
+
+rc = 101
+
+# 还原（反向替换同一 mutation；工作树回到 F-1 修复态）后：见 RC-restored-ok.txt。

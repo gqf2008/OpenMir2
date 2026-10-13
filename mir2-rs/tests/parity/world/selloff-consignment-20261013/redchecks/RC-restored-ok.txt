@@ -1,26 +1,32 @@
-# 改坏还原后复核（RC-1/RC-2 的 'after' 态）：两处变异均 `git restore --source=HEAD` 还原 + 门禁② 的 doc 续行修复后
+# 改坏还原后复核（RC-1/RC-2/RC-3 的 'after' 态）：变异均反向替换 / `git restore --source=HEAD` 还原后
 # 命令①：cargo test -p game-svr --offline --lib selloff
 # 命令②：cargo test -p game-svr --offline --bin game-svr selloff
-# 期望：两命令均 rc=0（23 + 2 passed / 0 failed）
+# 期望：两命令均 rc=0（24 + 2 passed / 0 failed；24 = F-1 新增 1 条）
 
-== [1] 构造级 ==
+== [1] 构造级（lib selloff，原始输出末尾） ==
+test selloff::tests::sell_off_cancel_returns_temp_in_reverse ... ok
 test selloff::tests::sell_off_end_rejects_self_and_returns_items ... ok
 test selloff::tests::sell_off_end_rejects_sell_gold_out_of_range ... ok
 test selloff::tests::sell_off_end_success_lists_and_charges_fee ... ok
+test selloff::tests::sell_off_in_time_variants ... ok
+test selloff::tests::update_sell_off_info_is_case_sensitive ... ok
 
-test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 153 filtered out; finished in 0.01s
-
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 153 filtered out; finished in 0.00s
 
 rc1=0
 
-== [2] 进程级 ==
+== [2] 进程级（bin game-svr selloff，原始输出末尾） ==
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.00s
      Running unittests src\main.rs (E:/tmp/m2svr-target\debug\deps\game_svr-1f4431beb89ebeb6.exe)
 
 running 2 tests
-test tests::selloff_cancel_paths_dispatch_and_mutate_global_book ... ok
 test tests::selloff_cm_dispatch_emits_oracle_frames_on_both_connections ... ok
+test tests::selloff_cancel_paths_dispatch_and_mutate_global_book ... ok
 
 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 182 filtered out; finished in 0.00s
 
-
 rc2=0
+
+== 还原后 git status ==
+# 相对 HEAD 只剩 F-1 修复自身的 diff：selloff.rs（删负重守卫 + 新增 1 条 F-1 回归用例）；无 mutation 残留。
