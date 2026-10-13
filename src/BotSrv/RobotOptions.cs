@@ -136,6 +136,26 @@ namespace BotSrv
         public int ShopCount { get; set; } = 1;
 
         /// <summary>
+        /// M3⑥ 真机对拍夹具（卡 openmir2-m3-quest-fixture-botsrv；白名单 T-41 家族扩展）。
+        /// 默认 false = 原行为（不新增任何发送）。置 true 时，本假人在收到自己的 SM_LOGON 后按
+        /// `QuestSteps` 给出的固定步骤串「点任务 NPC / 选标签 / 核对说词」，逐 step 落
+        /// `M3QUESTSEQ {json}` 标记（send/frame/end），供 `quest_diff.py` 对齐。
+        /// 只作夹具驱动、只写本假人自己的 socket；默认关时 BotSrv 行为逐字节不变。
+        /// </summary>
+        public bool QuestSequence { get; set; }
+        /// <summary>仅 QuestSequence=true 时生效：每步间隔（ms）。默认 1000。</summary>
+        public int QuestStepMs { get; set; } = 1000;
+        /// <summary>仅 QuestSequence=true 时生效：进世界到第一步的额外等待（ms）。默认 3000。</summary>
+        public int QuestStartDelayMs { get; set; } = 3000;
+        /// <summary>
+        /// 仅 QuestSequence=true 时生效：分号分隔的步骤串，每步 = `op|npc|label`。
+        /// 允许 op：click_npc（发 CM_CLICKNPC(1010)，隐式 @main） / dialog_select（发
+        /// CM_MERCHANTDLGSELECT + label） / take / give / set / check（后四者本轮仅登记，未实发）。
+        /// 顺序即发信顺序（每步 = 一次交互）。
+        /// </summary>
+        public string QuestSteps { get; set; } = "";
+
+        /// <summary>
         /// M1③ 退出路径夹具（卡 openmir2-m1-dbsrv-6000-face；白名单 M1-EXIT）：默认 0 = 关
         /// （不新增任何发送）。&gt;0 时，本假人收到自己的 SM_LOGON（真进世界）后等这么久，
         /// 按 C# 客户端 AppLogout 的线上形状发一条 CM_SOFTCLOSE(1009)（= “小退”，服务端据此

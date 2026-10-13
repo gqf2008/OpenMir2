@@ -1840,3 +1840,102 @@ function Get-M3SessionShopScope {
   if ($null -eq $baseline) { return $null }
   return (ConvertTo-M3ShopScope -Raw ([string]$baseline.shop_sequence))
 }
+
+#
+# M3⑥ 任务夹具开关的规范标签（卡 openmir2-m3-quest-fixture-botsrv；与 ⑤ 同款口径）。
+# 形态：`(off)` 或
+#   `on steps=<op|npc|label;...> step_ms=<int> start_delay_ms=<int> disable_autoplay=<True|False>`。
+# 语义：两侧必须**同一组开关**（同样的 steps 串 + 同样的 step/delay + 关挂机）——否则无仲裁力。
+function Format-M3QuestScope {
+  param(
+    [bool]$QuestSequence = $false,
+    [string]$QuestSteps = '',
+    [int]$QuestStepMs = 1000,
+    [int]$QuestStartDelayMs = 3000,
+    [bool]$DisableAutoPlay = $false
+  )
+  if (-not $QuestSequence) { return '(off)' }
+  $ap = if ($DisableAutoPlay) { 'True' } else { 'False' }
+  $steps = if ([string]::IsNullOrEmpty($QuestSteps)) { '' } else { $QuestSteps }
+  return ("on steps={0} step_ms={1} start_delay_ms={2} disable_autoplay={3}" -f `
+    $steps, $QuestStepMs, $QuestStartDelayMs, $ap)
+}
+
+# baseline.json 里已存的 quest_sequence 串 → canonical。缺 `disable_autoplay=` 位按 False 还原（旧产物）。
+# 返回 $null = 形态认不出（非空但不是本函数认识的标签）。
+function ConvertTo-M3QuestScope {
+  param([AllowEmptyString()][string]$Raw)
+  if ([string]::IsNullOrWhiteSpace($Raw) -or $Raw.Trim() -eq '(off)') { return '(off)' }
+  if ($Raw -notmatch '^on\b') { return $null }
+  $m = [regex]::Match($Raw, '^on steps=(?<steps>.*?) step_ms=(?<step>\d+) start_delay_ms=(?<sd>\d+) disable_autoplay=(?<ap>True|False)$')
+  if (-not $m.Success) { return $null }
+  return ("on steps={0} step_ms={1} start_delay_ms={2} disable_autoplay={3}" -f `
+    $m.Groups['steps'].Value, $m.Groups['step'].Value, $m.Groups['sd'].Value, $m.Groups['ap'].Value)
+}
+
+# 参照会话任务开关一致性（机判；含 peer baseline.json 解析失败防线，同 P-1）。
+function Get-M3PeerQuestScopeGuard {
+  param(
+    [Parameter(Mandatory)][string]$PeerDir,
+    [Parameter(Mandatory)][AllowEmptyString()][string]$LocalScope
+  )
+  $failed = New-Object System.Collections.Generic.List[string]
+  $messages = New-Object System.Collections.Generic.List[string]
+  $peerScope = $null
+  $baselinePath = Join-Path $PeerDir 'baseline.json'
+  if (-not (Test-Path $baselinePath)) {
+    $messages.Add(("RED: 参照会话缺 baseline.json: {0}" -f $baselinePath))
+    $failed.Add('peer_baseline_missing')
+    return [pscustomobject]@{ failed = @($failed); messages = @($messages); peer_scope = $peerScope }
+  }
+  $baseline = $null
+  $parseError = $null
+  try {
+    $baseline = Get-Content -Path $baselinePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+  } catch { $parseError = $_.Exception.Message }
+  if ($null -eq $baseline) {
+    if ([string]::IsNullOrWhiteSpace($parseError)) { $parseError = '内容为空或不是 JSON 对象（半写/截断）' }
+    $messages.Add(("RED: 参照会话 baseline.json 解析失败: {0} —— {1}" -f $baselinePath, $parseError))
+    $failed.Add('peer_baseline_invalid')
+    return [pscustomobject]@{ failed = @($failed); messages = @($messages); peer_scope = $peerScope }
+  }
+  $localCanon = ConvertTo-M3QuestScope -Raw $LocalScope
+  $peerRaw = [string]$baseline.quest_sequence
+  $peerCanon = ConvertTo-M3QuestScope -Raw $peerRaw
+  $peerScope = $peerCanon
+  if ($null -eq $peerCanon) {
+    $messages.Add(("RED: 参照会话 quest_sequence 形态认不出: '{0}'（{1}）" -f $peerRaw, $baselinePath))
+    $failed.Add('peer_quest_scope_invalid')
+    return [pscustomobject]@{ failed = @($failed); messages = @($messages); peer_scope = $peerScope }
+  }
+  if ([string]::IsNullOrEmpty($peerRaw)) {
+    if ($localCanon -eq '(off)') { $peerCanon = '(off)'; $peerScope = '(off)' }
+    else {
+      $peerScope = '(missing)'
+      $messages.Add(("RED: 参照会话 baseline.json 缺 quest_sequence（旧产物/被裁剪）: {0}" -f $baselinePath))
+      $failed.Add('peer_quest_scope_missing')
+      return [pscustomobject]@{ failed = @($failed); messages = @($messages); peer_scope = $peerScope }
+    }
+  }
+  if ($peerCanon -ne $localCanon) {
+    $messages.Add((("-PeerSession 任务序列开关与本侧不一致——peer='{0}' vs local='{1}'；" +
+        "两侧不是同一组夹具开关，跨侧 diff 无仲裁力（steps/step/delay/关挂机 必须一致）") -f $peerCanon, $localCanon))
+    $failed.Add('peer_quest_scope_mismatch')
+    $messages.Insert(0, 'RED: 参照会话任务序列开关与本侧不一致')
+  }
+  return [pscustomobject]@{ failed = @($failed); messages = @($messages); peer_scope = $peerScope }
+}
+
+# 从会话目录的 baseline.json 读出任务序列开关标签（canonical）。
+# 缺 baseline.json / 解析失败 ⇒ $null（调用方当 PREREQ）；字段缺失 ⇒ '(off)'（旧产物默认关）。
+function Get-M3SessionQuestScope {
+  param([Parameter(Mandatory)][string]$Dir)
+  $baselinePath = Join-Path $Dir 'baseline.json'
+  if (-not (Test-Path $baselinePath)) { return $null }
+  $baseline = $null
+  try {
+    $baseline = Get-Content -Path $baselinePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+  } catch { return $null }
+  if ($null -eq $baseline) { return $null }
+  return (ConvertTo-M3QuestScope -Raw ([string]$baseline.quest_sequence))
+}
