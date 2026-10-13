@@ -1,0 +1,44 @@
+M3⑥-实现 3 第①片 — oracle 锚点（逐行，`文件:行`）
+=================================================
+
+[@Login] 进世界（QManage）：
+  src/M2Server/Player/PlayObject.cs:1440
+    if (SystemShare.ManageNPC != null) SystemShare.ManageNPC.GotoLable(this, "@Login", false);
+  src/M2Server/Player/PlayObject.cs:4880  NpcGotoLable
+    ScriptGotoCount = 0; actor.GotoLable(this, sLable, false);
+  src/M2Server/Npc/NormNpc.cs:1889       INormNpc.GotoLable
+  src/Modules/ScriptEngine/ScriptEngine.cs:38   ScriptEngine.GotoLable
+
+[@StdModeFunc*] 用物品（QFunction）：
+  src/M2Server/Player/PlayObject.Base.cs:1072  UseStdModeFunItem
+    if (SystemShare.FunctionNPC != null)
+        { FunctionNPC.GotoLable(this, "@StdModeFunc" + stdItem.AniCount, false); result = true; }
+
+说词帧（RM_MERCHANTSAY → SM_MERCHANTSAY）：
+  src/Modules/ScriptEngine/ScriptEngine.cs:987-998  GotoLableSendMerChantSayMsg
+    :989  sMsg = normNpc.GetLineVariableText(playerActor, sMsg);
+    :990  playerActor.GetScriptLabel(sMsg);
+    :993  SendPriorityMsg(RM_MERCHANTSAY, 0,0,0,0, normNpc.ChrName + '/' + sMsg, High)   // priority=true
+    :997  SendMsg(normNpc, RM_MERCHANTSAY, 0,0,0,0, normNpc.ChrName + '/' + sMsg)        // priority=false
+  src/M2Server/Player/PlayObject.Message.cs:1722-1724  case RM_MERCHANTSAY
+    ClientMsg = MakeMessage(SM_MERCHANTSAY, processMsg.ActorId, MakeWord(nParam1,nParam2), 0, 1);
+    SendSocket(ClientMsg, EDCode.EncodeString(processMsg.Msg));
+  src/OpenMir2/Messages.cs:304  SM_MERCHANTSAY = 643
+
+脚本装载：
+  src/M2Server/Npc/NormNpc.cs:1591  LoadNPCScript
+    :1596  IsQuest ⇒ FilePath="Npc_def"; LoadScript(this, FilePath, ChrName + '-' + MapName)
+    :1600  否则   ⇒ LoadScript(this, FilePath, ChrName)
+  src/Modules/ScriptEngine/ScriptParsers.cs:65-72  LoadScript ⇒ LoadScriptFile(..., boFlag = false)
+  src/GameSrv/Npc/Merchant.cs:1094  LoadScriptFile(this, "Market_Def", scriptPath, true) ⇒ boFlag = true（QFunction）
+
+本片**已对齐**（判据锚在上面的行）：
+  - 隐藏 NPC 的装载顺序（QuestNpcList 先、MerchantList 后）与 `boFlag`（ScriptName 非空 ⇒ true）。
+  - `@Login`/`@StdModeFunc<N>` 的 label 字面量与 `bo_ext_jmp=false`。
+  - 说词行 `ChrName + '/' + sMsg`（`merchant_say_text` / `merchant_say_wire`，GBK 原文）。
+  - 优先级标志（`@Login` 走 SendMsg ⇒ priority=false）。
+
+本片**未接（登记，第②片）**：
+  - `playerActor.GetScriptLabel(sMsg)`（`ScriptEngine.cs:990`）未建模。
+  - `main.rs` 的 `SessionGround`/`World` → `NpcPlayer` 快照/回写 + socket 下发（`SM_MERCHANTSAY` 落帧）。
+  - `RM_MERCHANTSAY` 经 `MsgQueue` 的**出队序**（优先级字节）落帧。
