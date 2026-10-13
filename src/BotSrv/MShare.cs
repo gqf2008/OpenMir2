@@ -7,6 +7,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
+using System.Text;
 
 namespace BotSrv
 {
@@ -170,6 +171,142 @@ namespace BotSrv
                 {
                     return val;
                 }
+            }
+            return null;
+        }
+        /// <summary>
+        /// M3⑥ 夹具（卡 openmir2-m3-quest-fixture-botsrv；白名单 T-41 家族扩展）：
+        /// 进世界后按固定步骤串「点任务 NPC / 选标签 / 核对说词」。
+        /// 默认 false = 原行为（不新增任何发送/日志）。见 RobotPlayer.QuestSequenceTick。
+        /// </summary>
+        public static bool g_boQuestSequence = false;
+        public static int g_nQuestStepMs = 1000;
+        public static int g_nQuestStartDelayMs = 3000;
+        public static string g_sQuestSteps = "";
+
+        private static readonly string[] QuestAllowedOps =
+        {
+            "click_npc", "dialog_select", "take", "give", "set", "check"
+        };
+
+        /// <summary>M3⑥ 夹具：解析步骤串 `op|npc|label;op|npc|label;...`（保留顺序）。
+        /// 纯函数（不依赖实例），供 `--selftest-questseq` 与 ArmQuestSequence 共用；
+        /// 未知 op / 字段数 != 3 / 空 npc ⇒ 一律丢弃（fail-closed：宁可少发，也不发不认识的动作）。
+        /// label 为空 ⇒ 补 `@main`（click_npc 的隐式标签）。</summary>
+        public static string[] ParseQuestSteps(string raw)
+        {
+            var outList = new List<string>();
+            if (string.IsNullOrEmpty(raw))
+            {
+                return outList.ToArray();
+            }
+            foreach (string part in raw.Split(';'))
+            {
+                string step = part.Trim();
+                if (step.Length == 0)
+                {
+                    continue;
+                }
+                string[] f = step.Split('|');
+                if (f.Length != 3)
+                {
+                    continue;
+                }
+                string op = f[0].Trim().ToLowerInvariant();
+                string npc = f[1].Trim();
+                string label = f[2].Trim();
+                if (op.Length == 0 || npc.Length == 0)
+                {
+                    continue;
+                }
+                if (Array.IndexOf(QuestAllowedOps, op) < 0)
+                {
+                    continue;
+                }
+                if (label.Length == 0)
+                {
+                    label = "@main";
+                }
+                outList.Add(op + "|" + npc + "|" + label);
+            }
+            return outList.ToArray();
+        }
+
+        /// <summary>M3⑥ 夹具：把本步收到的帧 JSON 串（`{"sm":..,"text":..}` / `{"sm":..,"a":..}`）
+        /// 归类成 branch。纯函数（不依赖实例），唯一口径 = 本函数。
+        /// 口径：无帧 ⇒ fail_no_frame；出现 `SM_MENU_OK(767)`（脚本 MESSAGEBOX）⇒ ok_messagebox；
+        /// 出现 `SM_MERCHANTSAY(643)`（脚本说词）⇒ ok_say；其余 ⇒ frames_unclassified。
+        /// 失败分支（等级不足/名单已列/物品不齐）由 643 说词文本 + 帧种类序列逐字节区分（比较器负责），
+        /// 本字段只作粗归类，不承载强判据。</summary>
+        public static string ClassifyQuestFrames(IList<string> frames)
+        {
+            if (frames == null)
+            {
+                return "fail_no_frame";
+            }
+            bool sawSay = false;
+            foreach (string fr in frames)
+            {
+                if (fr == null)
+                {
+                    continue;
+                }
+                if (fr.IndexOf("\"sm\":643", StringComparison.Ordinal) >= 0)
+                {
+                    sawSay = true;
+                    continue;
+                }
+                if (fr.IndexOf("\"sm\":767", StringComparison.Ordinal) >= 0)
+                {
+                    return "ok_messagebox";
+                }
+            }
+            if (sawSay)
+            {
+                return "ok_say";
+            }
+            return frames.Count > 0 ? "frames_unclassified" : "fail_no_frame";
+        }
+
+        /// <summary>M3⑥ 夹具：取第一条 `sm=643` 说词帧的 `text` 值（无 ⇒ null）。纯函数（不依赖实例）。</summary>
+        public static string ExtractQuestSay(IList<string> frames)
+        {
+            if (frames == null)
+            {
+                return null;
+            }
+            foreach (string fr in frames)
+            {
+                if (fr == null)
+                {
+                    continue;
+                }
+                if (fr.IndexOf("\"sm\":643", StringComparison.Ordinal) < 0)
+                {
+                    continue;
+                }
+                int idx = fr.IndexOf("\"text\":\"", StringComparison.Ordinal);
+                if (idx < 0)
+                {
+                    continue;
+                }
+                int start = idx + 8;
+                var sb = new StringBuilder();
+                for (int i = start; i < fr.Length; i++)
+                {
+                    char c = fr[i];
+                    if (c == '\\' && i + 1 < fr.Length)
+                    {
+                        char n = fr[i + 1];
+                        if (n == '"' || n == '\\') { sb.Append(n); i++; continue; }
+                        if (n == 'n') { sb.Append('\n'); i++; continue; }
+                        if (n == 'r') { sb.Append('\r'); i++; continue; }
+                        if (n == 't') { sb.Append('\t'); i++; continue; }
+                    }
+                    if (c == '"') { break; }
+                    sb.Append(c);
+                }
+                return sb.ToString();
             }
             return null;
         }

@@ -208,6 +208,18 @@ M0 金标准验收状态（2026-10-10）：① 逐字节回放 0 差异、② �
 
 > **编号连号**：T-41（M3⑤ NPC/商店夹具；T-22/T-29 的同族扩展）。
 
+## M3⑥ 登记（任务动作序列夹具；卡片 `openmir2-m3-quest-fixture-botsrv`，2026-10-13）
+
+> 盘点报告：[`m3/M3⑥任务现状盘点报告-20261013.md`](m3/M3⑥任务现状盘点报告-20261013.md)；本卡父卡 `openmir2-m3-quest-align`。
+> 本片交付 = **夹具骨架**（比较器 + 入口 + 无栈自检 + BotSrv 最小驱动）；真机两侧同序列跑等承接卡
+> `openmir2-m3-quest-dialog-wiring`（⑥-3）/ `-quest-persist-observability`（⑥-4）落地 + owner 发窗口。
+
+| 编号 | 差异/豁免点 | 为什么无害 / 处置 | 谁审的 |
+| --- | --- | --- | --- |
+| T-42 | **夹具口径 + BotSrv 工具侧例外（本片交付）**：改动 `src/BotSrv/**`（`RobotOptions`/`MShare`/`AppService`/`Player/RobotPlayer.cs`/`Player/RobotPlayer.Operate.cs`/`Program.cs` + 新 `QuestSeqSelfCheck.cs`）+ `tools/botload/run_bots.ps1` + `mir2-rs/tests/parity/m3/{run_pair.ps1,gate_guards.ps1}` + 新 `mir2-rs/tests/parity/m3/{run_quest_pair.ps1,quest_diff.py,quest_scenario.json}`：① BotSrv 增 `QuestSequence`（默认 false）/`QuestSteps`/`QuestStepMs`/`QuestStartDelayMs`，收到本假人 `SM_LOGON` 后按固定步骤串 `op\|npc\|label` 发 `CM_CLICKNPC(1010)`（click_npc）/ `CM_MERCHANTDLGSELECT` + label（dialog_select），逐 step 落 `M3QUESTSEQ {json}` 的 send/frame/end/done 事件；单一收包钩子 `QuestOnServerMessage` 在开关打开且本步待收尾时只读地记 `SM_MERCHANTSAY(643)`/`SM_MENU_OK(767)`/`SM_DLGMSG(772)`（含说词文本）。② `quest_diff.py`（`assemble` 事件流 + **服务端会话任务态 dump** → 记录 / `diff` 逐 step 字段级 + 帧种类 + 643 说词逐字节 + **quest_flag/unit/open 逐字节** + 多重集 + fail-closed / `selftest` **36/36**）；③ `run_quest_pair.ps1`（复用 `run_pair.ps1` 两相 pin + `-StopAfterCharCreated` 预热 + 收尾 save-settle 仪器；入口护栏 + `M3QUESTSEQ` 完整性 + 跨侧 `quest_diff` + `scoped_diff`；`-SelfCheckNoStack` **19/19**；未给 `-Go` ⇒ real-run fail-closed）。 | BotSrv **不在 oracle 七进程内**（T-1）。默认（`QuestSequence=false`）⇒ **不新增任何发送、不新增任何日志、原路径逐字节不变**（`run_bots.ps1 -WriteConfigOnly` 两向自检 + `run_pair -EmitOpsArgs` 两向自检钉住：默认 `(off)`、开启时必传 `-DisableAutoPlay`）。打开时只写**本假人自己的 socket**、只读本假人自己的视图（`PlayScene.ActorList`/`MShare.ItemArr`），不读不写跨假人共享世界态（同 T-22/T-29 纪律）；不改 oracle/协议/上线字节语义。**任务态位**由服务端会话 dump 补入（客户端看不到任务数组，盘点报告 §4.1 第 2 条）；缺它 ⇒ diff 一律 PREREQ。**判据本体（比较器 + 夹具骨架）已完整、离线可复跑**；真机两侧同序列跑要窗口。证据 `m3/evidence-m3-quest-fixture-botsrv-20261013/**`。 | 作者登记（`openmir2-worker-5`）；**待独立 principal 复核** |
+
+> **编号连号**：T-42（M3⑥ 任务夹具；T-22/T-29/T-41 的同族扩展）。
+
 ## M1 S4b 登记（DBSrv 6000 `DataService` 面 + 5700 `MarketService` 面 + `TimedService` 缓存回写，2026-10-12）
 
 > 卡 `openmir2-m1-dbsrv-6000-face`；交付说明 `docs/M1-S4b-DBSrv-6000-交付说明.md`。

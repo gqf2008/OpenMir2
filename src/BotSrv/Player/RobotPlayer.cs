@@ -1086,6 +1086,233 @@ namespace BotSrv.Player
 
         #endregion
 
+        #region M3⑥ 固定任务动作序列（夹具专用，默认关；白名单 T-41 家族扩展）
+
+        // 口径（卡 openmir2-m3-quest-fixture-botsrv）：收到本假人 SM_LOGON 后，按 `g_sQuestSteps` 的
+        // 固定步骤串（`op|npc|label`）「点任务 NPC（CM_CLICKNPC 1010）/ 选脚本标签（CM_MERCHANTDLGSELECT）/
+        // 核对说词（SM_MERCHANTSAY 643 / SM_MENU_OK 767）」，逐 step 落 `M3QUESTSEQ {json}` 的
+        // send/frame/end/done 事件（供 `quest_diff.py assemble` 合并成记录）。只读本假人自己的视图
+        // （`PlayScene.ActorList` / `MShare.ItemArr`）、只写本假人自己的 socket（同 T-22/T-29 纪律）；
+        // 默认关时本 region 全部空转、不新增任何发送与日志。
+
+        private string[] _questSeqSteps;
+        private int _questSeqStep = -1;
+        private int _questSeqNextTick;
+        private int _questSeqPendingK = -1;
+        private readonly List<string> _questSeqFrames = new List<string>();
+        private int _questSeqNpcActor;
+        private string _questSeqOp = string.Empty;
+        private string _questSeqNpcName = string.Empty;
+        private string _questSeqLabel = string.Empty;
+
+        /// <summary>收到本假人 SM_LOGON 后武装固定任务序列（`g_boQuestSequence` 关闭时是空操作）。</summary>
+        private void ArmQuestSequence()
+        {
+            if (!MShare.g_boQuestSequence)
+            {
+                return;
+            }
+            _questSeqSteps = MShare.ParseQuestSteps(MShare.g_sQuestSteps);
+            _questSeqStep = 0;
+            _questSeqPendingK = -1;
+            _questSeqFrames.Clear();
+            _questSeqNextTick = MShare.GetTickCount() + MShare.g_nQuestStartDelayMs;
+            MainOutMessage("M3QUESTSEQ {\"phase\":\"arm\",\"steps\":" + QuestJsonArray(_questSeqSteps)
+                + ",\"step_ms\":" + MShare.g_nQuestStepMs + "}");
+        }
+
+        /// <summary>M3⑥ 固定任务序列（步进式）：每 `g_nQuestStepMs` 处理一步；上一步先收尾（`phase=end`，
+        /// 聚合本步收到的帧 + 金币/背包前后态 + branch），再发下一步；全部发完发 `phase=done`。默认关时空转。</summary>
+        private void QuestSequenceTick()
+        {
+            if (!MShare.g_boQuestSequence || _questSeqSteps == null || _questSeqStep < 0)
+            {
+                return;
+            }
+            if (!_inWorld || ClientSocket == null || !ClientSocket.IsConnected)
+            {
+                return;
+            }
+            int now = MShare.GetTickCount();
+            if (now < _questSeqNextTick)
+            {
+                return;
+            }
+            if (_questSeqPendingK >= 0)
+            {
+                EmitQuestEnd(_questSeqPendingK);
+                _questSeqPendingK = -1;
+            }
+            if (_questSeqStep >= _questSeqSteps.Length)
+            {
+                _questSeqStep = -1;
+                MainOutMessage("M3QUESTSEQ {\"phase\":\"done\",\"steps\":" + _questSeqSteps.Length + "}");
+                return;
+            }
+            int k = _questSeqStep;
+            string step = _questSeqSteps[k];
+            _questSeqStep++;
+            _questSeqFrames.Clear();
+            ResolveQuestStep(step);
+            EmitQuestSend(k);
+            SendQuestStep();
+            _questSeqPendingK = k;
+            _questSeqNextTick = now + MShare.g_nQuestStepMs;
+        }
+
+        /// <summary>解析一步 `op|npc|label`，并在本假人视图里找 NPC。</summary>
+        private void ResolveQuestStep(string step)
+        {
+            string[] f = step.Split('|');
+            _questSeqOp = f.Length == 3 ? f[0] : "click_npc";
+            string want = f.Length >= 2 ? f[1] : string.Empty;
+            _questSeqLabel = f.Length == 3 ? f[2] : "@main";
+            Actor npc = FindQuestNpc(want);
+            _questSeqNpcActor = npc != null ? npc.RecogId : 0;
+            _questSeqNpcName = npc != null ? npc.UserName : want;
+        }
+
+        private void EmitQuestSend(int k)
+        {
+            MainOutMessage("M3QUESTSEQ {\"phase\":\"send\",\"k\":" + k
+                + ",\"op\":\"" + QuestEsc(_questSeqOp)
+                + "\",\"npc\":\"" + QuestEsc(_questSeqNpcName)
+                + "\",\"npc_actor\":" + _questSeqNpcActor
+                + ",\"map\":\"" + QuestEsc(QuestMapName()) + "\""
+                + ",\"label\":\"" + QuestEsc(_questSeqLabel) + "\""
+                + ",\"req\":{\"item\":\"\",\"n\":0}"
+                + ",\"gold_before\":" + ShopGold()
+                + ",\"bag_before\":" + ShopBagJson() + "}");
+        }
+
+        private void EmitQuestEnd(int k)
+        {
+            MainOutMessage("M3QUESTSEQ {\"phase\":\"end\",\"k\":" + k
+                + ",\"gold_after\":" + ShopGold()
+                + ",\"bag_after\":" + ShopBagJson()
+                + ",\"branch\":\"" + MShare.ClassifyQuestFrames(_questSeqFrames) + "\"}");
+        }
+
+        /// <summary>发本步的 CM_*（click_npc ⇒ CM_CLICKNPC；dialog_select ⇒ CM_MERCHANTDLGSELECT + label）。
+        /// npc 不在视图里 ⇒ 只记 skip，不发。take/give/set/check 本轮仅登记、不实发。</summary>
+        private void SendQuestStep()
+        {
+            if (_questSeqNpcActor == 0)
+            {
+                MainOutMessage("M3QUESTSEQ skip=no_npc_in_view step=" + QuestEsc(_questSeqOp + "|" + _questSeqNpcName + "|" + _questSeqLabel));
+                return;
+            }
+            switch (_questSeqOp)
+            {
+                case "click_npc":
+                    SendClickNpc(_questSeqNpcActor);
+                    break;
+                case "dialog_select":
+                    SendMerchantDlgSelect(_questSeqNpcActor, _questSeqLabel);
+                    break;
+                default:
+                    MainOutMessage("M3QUESTSEQ skip=op_not_implemented step=" + QuestEsc(_questSeqOp));
+                    break;
+            }
+        }
+
+        /// <summary>发 CM_CLICKNPC(1010)（= 点 NPC；服务端 `ClientClickNpc` → `GotoLable("@main")`）。
+        /// 夹具用；默认关时不会被调用。</summary>
+        private void SendClickNpc(int actorId)
+        {
+            CommandMessage msg = Messages.MakeMessage(Messages.CM_CLICKNPC, actorId, 0, 0, 0);
+            SendSocket(EDCode.EncodeMessage(msg));
+        }
+
+        /// <summary>本假人视图里按名（或第一个）找 NPC/商人。只用本假人自己的 `PlayScene.ActorList`。</summary>
+        private Actor FindQuestNpc(string want)
+        {
+            if (PlayScene == null || PlayScene.ActorList == null)
+            {
+                return null;
+            }
+            Actor fallback = null;
+            for (int i = 0; i < PlayScene.ActorList.Count; i++)
+            {
+                Actor a = PlayScene.ActorList[i];
+                if (a == null || a.RecogId == _myActorId)
+                {
+                    continue;
+                }
+                bool isNpc = a.Race == ActorRace.NPC || a.Race == ActorRace.Guard
+                    || a.Race == ActorRace.PeaceNpc || a.Race == ActorRace.Merchant
+                    || a.Race == ActorRace.Exercise;
+                if (!isNpc)
+                {
+                    continue;
+                }
+                if (!string.IsNullOrEmpty(want))
+                {
+                    if (string.Equals(a.UserName, want, StringComparison.Ordinal))
+                    {
+                        return a;
+                    }
+                    continue;
+                }
+                if (fallback == null)
+                {
+                    fallback = a;
+                }
+            }
+            return fallback;
+        }
+
+        private string QuestMapName()
+        {
+            return MShare.MapTitle ?? string.Empty;
+        }
+
+        /// <summary>收帧钩子（单一收包点）：`SM_MERCHANTSAY(643)` / `SM_MENU_OK(767)` / `SM_DLGMSG(772)`
+        /// 在 `g_boQuestSequence` 打开且本步待收尾时落 `phase=frame` 事件（含说词文本）。
+        /// **只读不写世界态**（同 T-29 纪律）；默认关时空转。</summary>
+        public void QuestOnServerMessage(int sm, int merchant, int face, int tag, int series, string body)
+        {
+            if (!MShare.g_boQuestSequence || _questSeqPendingK < 0)
+            {
+                return;
+            }
+            if (sm != 643 && sm != 767 && sm != 772)
+            {
+                return;
+            }
+            string text = string.IsNullOrEmpty(body) ? string.Empty : EDCode.DeCodeString(body);
+            string fr = "{\"sm\":" + sm + ",\"merchant\":" + merchant + ",\"face\":" + face
+                + ",\"tag\":" + tag + ",\"series\":" + series
+                + ",\"text\":\"" + QuestEsc(text) + "\"}";
+            _questSeqFrames.Add(fr);
+            MainOutMessage("M3QUESTSEQ {\"phase\":\"frame\",\"k\":" + _questSeqPendingK + ",\"frame\":" + fr + "}");
+        }
+
+        private static string QuestJsonArray(string[] steps)
+        {
+            var parts = new List<string>();
+            if (steps != null)
+            {
+                foreach (string s in steps)
+                {
+                    parts.Add("\"" + QuestEsc(s) + "\"");
+                }
+            }
+            return "[" + string.Join(",", parts) + "]";
+        }
+
+        private static string QuestEsc(string s)
+        {
+            if (string.IsNullOrEmpty(s))
+            {
+                return string.Empty;
+            }
+            return s.Replace("\\", "\\\\").Replace("\"", "\\\"")
+                .Replace("\r", "\\r").Replace("\n", "\\n").Replace("\t", "\\t");
+        }
+
+        #endregion
+
         #region M1③ 退出路径夹具：进世界后发 CM_SOFTCLOSE（小退；默认关；白名单 M1-EXIT）
 
         /// <summary>发送时刻（MShare.GetTickCount），-1=未武装。</summary>
@@ -1144,6 +1371,7 @@ namespace BotSrv.Player
             ArmBagEquipSequence();
             ArmAttackSequence();
             ArmShopSequence();
+            ArmQuestSequence();
             ArmSoftClose();
             if (LoadMetrics.ShouldSuppressInWorld(LoginId))
             {
@@ -1175,6 +1403,7 @@ namespace BotSrv.Player
                 BagEquipSequenceTick();
                 AttackSequenceTick();
                 ShopSequenceTick();
+                QuestSequenceTick();
                 SoftCloseTick();
                 if (DScreen.CurrentScene == PlayScene)
                 {

@@ -57,6 +57,11 @@ namespace BotSrv
             MShare.g_sShopItemName = _options.ShopItemName ?? string.Empty;
             MShare.g_nShopItemMake = _options.ShopItemMake;
             MShare.g_nShopCount = _options.ShopCount;
+            // M3⑥ 夹具（白名单 T-41 家族扩展）：固定任务动作序列；默认 false = 原行为
+            MShare.g_boQuestSequence = _options.QuestSequence;
+            MShare.g_nQuestStepMs = _options.QuestStepMs;
+            MShare.g_nQuestStartDelayMs = _options.QuestStartDelayMs;
+            MShare.g_sQuestSteps = _options.QuestSteps ?? string.Empty;
             // M1③ 退出路径夹具（白名单 M1-EXIT）：进世界后发 CM_SOFTCLOSE；默认 0 = 原行为
             MShare.g_nSoftCloseAfterWorldMs = _options.SoftCloseAfterWorldMs;
             MShare.g_boDisableAutoPlay = _options.DisableAutoPlay;
@@ -96,6 +101,11 @@ namespace BotSrv
             {
                 LogService.Info("固定 NPC/商店序列: 启用 ops={0} 起始等待={1}ms 步间隔={2}ms npc={3} item={4}（开面板/买/卖/修理/存取；见 RobotPlayer.ShopSequenceTick）",
                     _options.ShopOps, _options.ShopStartDelayMs, _options.ShopStepMs, _options.ShopNpcName, _options.ShopItemName);
+            }
+            if (_options.QuestSequence)
+            {
+                LogService.Info("固定任务序列: 启用 steps={0} 起始等待={1}ms 步间隔={2}ms（点任务 NPC/选标签/核对说词；见 RobotPlayer.QuestSequenceTick）",
+                    _options.QuestSteps, _options.QuestStartDelayMs, _options.QuestStepMs);
             }
         }
 
