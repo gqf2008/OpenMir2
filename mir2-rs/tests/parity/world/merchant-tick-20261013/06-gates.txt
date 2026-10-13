@@ -1,0 +1,22 @@
+# M3⑤-实现 2 第②片 四门禁（隔离 CARGO_TARGET_DIR=E:/tmp/m2svr-target，--offline）
+# base = master 12a3bb5f（已 merge 进分支 merchant-entity-host）
+
+$ cargo fmt --all -- --check
+fmt rc=0
+
+$ cargo clippy --workspace --all-targets --offline -- -D warnings
+    Checking mir2-parity-tests v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\tests\parity)
+    Checking game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.74s
+clippy rc=0
+
+$ cargo run -p msgcodegen --offline -- --check
+     Running `E:/tmp/m2svr-target\debug\msgcodegen.exe --check`
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+msgcodegen rc=0
+
+$ cargo test --workspace --offline --no-fail-fast
+（输出摘要；完整件见 06b-workspace-test.txt）
+suites=94 passed=861 failed=0 ignored=21
+workspace test rc=0（无 error/FAILED）
+FAILED-or-error lines: 0

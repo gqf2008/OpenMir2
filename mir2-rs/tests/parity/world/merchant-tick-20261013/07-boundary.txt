@@ -1,0 +1,16 @@
+# M3⑤-实现 2 第②片 边界
+
+$ git diff --name-only master..HEAD -- src sql MirClient
+（空 ⇒ oracle/C#/客户端/表结构零改动）
+
+$ git diff --name-only master..HEAD
+  mir2-rs/bins/game-svr/src/main.rs
+  mir2-rs/bins/game-svr/src/merchant.rs
+  mir2-rs/bins/game-svr/tests/merchant_rng_trace.rs
+  mir2-rs/crates/world/src/merchant.rs
+  mir2-rs/crates/world/src/world.rs
+  mir2-rs/tests/parity/m3/drop-exp/drop_exp_consumers.tsv
+  mir2-rs/tests/parity/whitelist.md
+
+# 本片 HEAD: 097fbb6612d115c54048b5b776ef1af307c8c74d
+# base master: 0dde01b7b7691c00a5c61ec4b14b87eaae8dac10

@@ -1,0 +1,77 @@
+M3⑤-实现 2 第②片 —— ProcessMerchants tick + Merchant.Run/RefillGoods + merchant 组 RNG 站点
+oracle 锚点（逐条在本 worktree 复核行号；与 owner `eb3bf42f` 的口径一致）
+
+[1] 商人 tick 的宿主节奏（200ms 定时器）
+    src/GameSrv/Word/Threads/MerchantProcessor.cs:8
+      TimerScheduledService(TimeSpan.FromMilliseconds(200))
+    ⇒ 本片用世界 sim 时钟的整数毫秒（`MERCHANT_PASS_INTERVAL_MS = 200`）替代墙钟定时器；
+      `World::tick` 步长恰为 200ms ⇒ 每 tick 一趟；同一 200ms 窗口内第二次调用是 no-op。
+
+[2] ProcessMerchants（分片 tick）
+    src/GameSrv/Word/WorldServer.Merchant.cs:65-110
+      :66  int dwRunTick = HUtil32.GetTickCount();
+      :68  for (int i = MerchantPosition; i < MerchantList.Count; i++)
+      :74  if ((dwCurrTick - merchantNpc.RunTick) > merchantNpc.RunTime) { RunTick = now; Run(); }
+      :84  else if ((HUtil32.GetTickCount() - merchantNpc.GhostTick) > 60 * 1000) { RemoveAt(i); break; }
+      :95  if ((HUtil32.GetTickCount() - dwRunTick) > M2Share.NpcLimit) { MerchantPosition = i; ... break; }
+      :100 if (!boProcessLimit) MerchantPosition = 0;
+    ⇒ 本片：丢掉 :95 的墙钟预算（`NpcLimit`），一趟扫到底、扫完 `merchant_position = 0`
+      （登记 whitelist T-42）。
+
+[3] NpcLimit = 5（被丢的墙钟预算值）
+    src/M2Server/M2Share.cs:178     public static int NpcLimit = 5;
+    src/GameSrv/GameApp.cs:67       SystemShare.NpcLimit = 5;
+
+[4] Merchant.Run（RNG 站点）
+    src/GameSrv/Npc/Merchant.cs:112-170
+      :117 int dwDelayTick = ProcessRefillIndex * 500;  :119 if (now < dwDelayTick) dwDelayTick = 0;
+      :119 if (now - RefillGoodsTick > 5*60*1000 + dwDelayTick) { RefillGoodsTick = now + dwDelayTick; RefillGoods(); }
+      :126 if (now - ClearExpreUpgradeTick > 10*60*1000) { ClearExpreUpgradeTick = now; ClearExpreUpgradeListData(); }
+      :132 if (M2Share.RandomNumber.Random(50) == 0) TurnTo(M2Share.RandomNumber.RandomByte(8));
+      :138 else if (M2Share.RandomNumber.Random(50) == 0) SendRefMsg(RM_HIT, ...);
+      :143 if (CastleMerchant && Castle != null && Castle.UnderWar) { if (!FixedHideMode) { SendRefMsg(RM_DISAPPEAR,...); FixedHideMode = true; } }
+      :151 else { if (FixedHideMode) { FixedHideMode = false; SendRefMsg(RM_HIT, ...); } }
+      :161 if (BoCanMove && (GetTickCount() - MoveTick) > MoveTime*1000) { MoveTick = GetTickCount(); SendRefMsg(RM_SPACEMOVE_FIRE,...); MapRandomMove(MapName, 0); }
+    ⇒ 取数次序（本片在 crates/world/src/merchant.rs 复刻，站点归 `merchant` 组）：
+      Random(50) → [命中] RandomByte(8) → [未命中] Random(50)；BoCanMove 到点再 2 次 Random。
+
+[5] RefillGoods（补货计时态）
+    src/GameSrv/Npc/Merchant.cs:209-276
+      :220 if ((GetTickCount() - goods.RefillTick) > goods.RefillTime * 60 * 1000) {
+      :222   goods.RefillTick = GetTickCount();
+      :223   nIndex = GetStdItemIdx(goods.ItemName); if (nIndex > 0) {
+      :227     nRefillCount = GetRefillList(nIndex)?.Count ?? 0;
+      :230     if (goodCout > nRefillCount) { CheckItemPrice; RefillGoodsItems; SaveGoodRecord; SaveGoodPriceRecord; return; }
+      :238     if (goodCout < nRefillCount) { RefillDelReFillItem; SaveGoodRecord; SaveGoodPriceRecord; }
+    Goods.RefillTick 初值：src/Modules/SystemModule/Data/Goods.cs:8；脚本解析置 0（ScriptParsers.cs:965）。
+    ⇒ 本片 `GoodsList`（在售库存）与 `SaveGoodRecord` 落库属 ⑤-5 接缝 ⇒ `nRefillCount = 0`，
+      `goodCout > 0` 分支命中并 `return` ⇒ **一次 Run 最多补一件**（oracle quirk 照搬）。
+
+[6] 商人构造抽（RunTick）
+    src/M2Server/Actor/BaseObject.cs:439-440
+      RunTick = HUtil32.GetTickCount() + M2Share.RandomNumber.Random(1500);   // ctor
+      RunTime = 250;
+    ⇒ 每条商人 1 次取数；本片在 `World::spawn_merchant` 里落（站点归 world/merchant.rs）。
+      ⚠ 与 oracle 的**相对次序**（`LocalDB.LoadMerchant` 先逐条 ctor 抽，`MerchantInitialize` 后
+      `rename_rand` 抽）在 Rust 装载结构下为「先 rename_rand 后 ctor 抽」——属构造期折叠，
+      groupdiff 只看组集合与共享组相对次序、不看组内计数（登记，窗口期真机 trace 复核）。
+
+[7] MapRandomMove（2 次取数）
+    src/M2Server/Actor/BaseObject.cs:1214-1237
+      nEgdey: Height<150 ⇒ (Height<30 ? 2 : 20) else 50；
+      nX = Random(envir.Width - nEgdey - 1) + nEgdey; nY = Random(envir.Height - nEgdey - 1) + nEgdey;
+      SpaceMove(sMapName, nX, nY, nInt);
+
+[8] TurnTo
+    src/M2Server/Actor/BaseObject.cs:1582-1586  Dir = nDir; SendRefMsg(RM_TURN, nDir, CurrX, CurrY, 0, "");
+
+[9] O-2 rename_rand（⑤-1 转交；站点规整）
+    src/Modules/ScriptEngine/ScriptParsers.cs:857
+      SayingRecord.sLabel += SystemShare.RandomNumber.GetRandomNumber(1, 200);
+    ⇒ 本片经 `crates/world::merchant::merchant_rename_rand` 转发 ⇒ `#[track_caller]` 站点落
+      `crates/world/src/merchant.rs`（`merchant` 组），宿主不产生未归类站点。
+
+[10] ProcessRefillIndex（补货延时序号）
+    src/Modules/ScriptEngine/ScriptParsers.cs:838
+      NPC.ProcessRefillIndex = SystemShare.CurrentMerchantIndex;
+    ⇒ ⑤-1 未随记录暴露该列 ⇒ 本片置 0（只影响 `dwDelayTick`，登记随 ⑤-5）。

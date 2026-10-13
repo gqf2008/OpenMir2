@@ -1,0 +1,20 @@
+# 命令（真实 Rust trace 采集）
+$ M2_MERCHANT_TRACE_PATH=tests/parity/world/merchant-tick-20261013/00-rust-rng-trace.tsv \
+    CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test -p game-svr --offline --test merchant_rng_trace -- --nocapture
+
+==== 真实 trace（00-rust-rng-trace.tsv）====
+1	INJECT_OK	2024	0
+SEED_PROBE 247130676 1495952918 1116080357 1216877399 28283303 704472390 1659538823 1828387271
+1	Next(max)	1500	172	crates\world\src\merchant.rs:231
+2	Next(max)	50	34	crates\world\src\merchant.rs:467
+3	Next(max)	50	25	crates\world\src\merchant.rs:473
+4	Next(min,max)	4294967497	24	crates\world\src\merchant.rs:421
+
+# 命令（Claim B 站点组归类，fail-closed）
+$ python tests/parity/m3/rng-trace-probe/rng_ledger_diff.py groups \
+    tests/parity/world/merchant-tick-20261013/00-rust-rng-trace.tsv --side rust --require-closed
+RNG_CONSUMER_GROUPS tests/parity/world/merchant-tick-20261013/00-rust-rng-trace.tsv side=rust rows_total=4 rows_dropped=0 kept=4 include_attack=True groups=1
+  GROUP         4  merchant
+  GROUP_COVERAGE closed
+  ROW_COVERAGE closed rows_dropped=0
+groups rc=0

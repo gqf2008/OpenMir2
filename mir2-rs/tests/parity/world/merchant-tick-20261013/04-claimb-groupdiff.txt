@@ -1,0 +1,35 @@
+# M3⑤ 第②片 Claim B 合成件（owner eb3bf42f ④）：同批内两个商人相对次序对调 ⇒ groupdiff 必红
+
+# 合成件（site 取真实 Rust 站点：merchant=04-swap-a/b.tsv 的两条，homemap=另一组）
+  04-swap-a.tsv: merchant(467) , homemap       , merchant(473)
+  04-swap-b.tsv: merchant(467) , merchant(473) , homemap
+  $ python tests/parity/m3/rng-trace-probe/rng_ledger_diff.py groupdiff \
+      <a> <b> --a-side rust --b-side rust --strict
+RNG_CONSUMER_GROUPDIFF include_attack=False a=tests/parity/world/merchant-tick-20261013/04-swap-a.tsv(3) b=tests/parity/world/merchant-tick-20261013/04-swap-b.tsv(3)
+  A_GROUPS {'merchant': 2, 'homemap': 1}
+  B_GROUPS {'merchant': 2, 'homemap': 1}
+  ONLY_IN_A(missing_in_B) {}
+  ONLY_IN_B(extra_in_B)   {}
+  SHARED_GROUPS ['homemap', 'merchant']
+  FIRST_SHARED_ORDER_DIVERGENCE index=1 a=homemap b=merchant
+  RUNS a=3 b=2
+  ROW_COVERAGE a_dropped=0 b_dropped=0
+  FIRST_RUN_DIVERGENCE run=None a=(len差) b=(len差)
+  VERDICT SHARED_REL_ORDER_DIFF
+RED: 组结构不一致 ⇒ SHARED_REL_ORDER_DIFF（--strict）
+swap groupdiff rc=1
+
+# 缺组合成件（B 多一组 merchant）⇒ GROUP_SET_DIFF 必红
+RNG_CONSUMER_GROUPDIFF include_attack=False a=tests/parity/world/merchant-tick-20261013/04-set-a.tsv(2) b=tests/parity/world/merchant-tick-20261013/04-set-b.tsv(3)
+  A_GROUPS {'homemap': 2}
+  B_GROUPS {'homemap': 2, 'merchant': 1}
+  ONLY_IN_A(missing_in_B) {}
+  ONLY_IN_B(extra_in_B)   {'merchant': 1}
+  SHARED_GROUPS ['homemap']
+  FIRST_SHARED_ORDER_DIVERGENCE none（共享组相对次序逐位全等，len=2）
+  RUNS a=1 b=3
+  ROW_COVERAGE a_dropped=0 b_dropped=0
+  FIRST_RUN_DIVERGENCE run=None a=(len差) b=(len差)
+  VERDICT GROUP_SET_DIFF
+RED: 组结构不一致 ⇒ GROUP_SET_DIFF（--strict）
+set groupdiff rc=1

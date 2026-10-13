@@ -1,0 +1,44 @@
+===================================================================
+改坏必红：去掉 200ms 节奏门（改 const 为 always-run 条件）
+===================================================================
+--- [改坏后] cargo test -p mir2-world --lib merchant_pass_cadence ---
+test merchant::tests::merchant_pass_cadence_blocks_second_pass_in_same_window ... FAILED
+thread 'merchant::tests::merchant_pass_cadence_blocks_second_pass_in_same_window' (26508) panicked at crates\world\src\merchant.rs:761:9:
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 62 filtered out; finished in 0.00s
+--- [还原后] 同命令 ---
+test merchant::tests::merchant_pass_cadence_blocks_second_pass_in_same_window ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 62 filtered out; finished in 0.00s
+
+===================================================================
+改坏必红：去掉 RunTime 门（-> if true）
+===================================================================
+--- [改坏后] cargo test -p mir2-world --lib merchant_run_time_gate ---
+test merchant::tests::merchant_run_time_gate_not_due_then_due ... FAILED
+thread 'merchant::tests::merchant_run_time_gate_not_due_then_due' (10224) panicked at crates\world\src\merchant.rs:777:9:
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 62 filtered out; finished in 0.00s
+--- [还原后] 同命令 ---
+test merchant::tests::merchant_run_time_gate_not_due_then_due ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 62 filtered out; finished in 0.00s
+
+===================================================================
+改坏必红：Ghost 窗口 60s -> 120s
+===================================================================
+--- [改坏后] cargo test -p mir2-world --lib merchant_ghost_expires ---
+test merchant::tests::merchant_ghost_expires_after_60s_sim_clock ... FAILED
+thread 'merchant::tests::merchant_ghost_expires_after_60s_sim_clock' (14940) panicked at crates\world\src\merchant.rs:798:9:
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 62 filtered out; finished in 0.00s
+--- [还原后] 同命令 ---
+test merchant::tests::merchant_ghost_expires_after_60s_sim_clock ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 62 filtered out; finished in 0.00s
+
+===================================================================
+改坏必红：去掉 Merchant.Run 的两处 RNG 取数
+===================================================================
+--- [改坏后] cargo test -p mir2-world --lib merchant_run_rng_stream ---
+test merchant::tests::merchant_run_rng_stream_matches_oracle_order ... FAILED
+thread 'merchant::tests::merchant_run_rng_stream_matches_oracle_order' (25228) panicked at crates\world\src\merchant.rs:825:9:
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 62 filtered out; finished in 0.00s
+--- [还原后] 同命令 ---
+test merchant::tests::merchant_run_rng_stream_matches_oracle_order ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 62 filtered out; finished in 0.00s
+

@@ -1,4 +1,4 @@
-//! 商人（`Merchant`）世界实体 + 挂图 `Initialize` —— M3⑤-实现 2 的**第①片**。
+//! 商人（`Merchant`）世界实体 + 挂图 `Initialize` + `ProcessMerchants` tick —— M3⑤-实现 2 第①/②片。
 //!
 //! oracle 锚点（逐条复核于本片）：
 //!
@@ -8,21 +8,28 @@
 //! | [`World::spawn_merchant`] 的 `Initialize`/`AddtoMapSuccess` | `src/M2Server/Actor/BaseObject.Base.cs:14-21` |
 //! | 挂图失败移除（`!IsHide` 例外） | `src/GameSvr/Word/WorldServer.Merchant.cs:8-25` |
 //! | `FindMap(MapName) == null ⇒ 丢弃` | `WorldServer.Merchant.cs:24-31`（**门在宿主侧按 `MapRegistry::id_of` 施加**，见 [`crate::merchant`] 模块尾与 `bins/game-svr/src/merchant.rs`） |
+//! | [`World::merchant_tick`] | `WorldServer.Merchant.cs:65-110` + `MerchantProcessor.cs:8`（200ms 定时） |
+//! | [`merchant_run`] | `Merchant.cs:112-170`（RNG/显隐/`MapRandomMove`）+ `BaseObject.cs:1214-1237` |
+//! | `refill_goods` 计时态 | `Merchant.cs:209-276`（库存/落库属 ⑤-5） |
 //!
 //! ## 为什么门在宿主侧
 //! `SystemShare.MapMgr.FindMap(MapName)` 的部署态等价物是 `MapRegistry::id_of`（同 `MapInfo` +
 //! `Map/*.map` 合并口径，见 `crates/envir`）。`crates/world` 只持有**下标式**地图表、不含逻辑名
 //! ⇒ 名字→`map_id` 的解析归宿主；本模块只负责「拿到 `map_id` 后的挂图/落格」。
 //!
-//! ## 未建模（登记，留给本卡后续分片）
-//! - `Merchant.Run`（`Merchant.cs:112-170`）、`RefillGoods`（`:209-276`）、
-//!   `ProcessMerchants` 分片 tick（`WorldServer.Merchant.cs:65-110`）：本片**不驱动**。
-//!   分片预算（`M2Share.NpcLimit = 5ms`）在单线程确定性 tick 下的等价物需 owner 拍板
-//!   （其直接影响 Claim B 的 site/order，见卡 `openmir2-m3-merchant-entity-tick` comment）。
-//! - `BaseObject` ctor 的 `RunTick = GetTickCount() + Random(1500)`（`BaseObject.cs:439`）本片
-//!   **不抽随机数**（避免把构造抽落在错的分片；与 tick 分片一起按 oracle 次序接）。
-//! - `GoodsList`/`ItemPriceList` 的库存与 `SaveGoodRecord` 持久化 —— 接缝归 ⑤-5。
-//! - `NormNpc.Initialize` 的脚本/说词加载（`NormNpc.cs:1676`）—— ⑤-4/⑤-6 接缝。
+//! ## 未建模（登记）
+//! - `GoodsList`/`ItemPriceList` 的库存与 `SaveGoodRecord` 持久化 —— 接缝归 ⑤-5；
+//!   `refill_goods` 因此恒走 `goods.Count > 0` 分支（`GetRefillList` 取不到库存）⇒ 一次 Run
+//!   最多补一件（oracle quirk 照搬）。
+//! - `ClearExpreUpgradeListData`（`Merchant.cs:1076`）：oracle 用墙钟 `DateTime.Now` + 升级表持久化
+//!   （⑤-5）⇒ 本片只推进 `clear_expre_upgrade_tick` 计时态，无可观测效果。
+//! - `ProcessRefillIndex`（`ScriptParsers.cs:838`）：⑤-1 未随记录暴露 ⇒ 置 0（补货延时门）。
+//! - `NormNpc.Initialize` 的脚本/说词加载（`NormNpc.cs:1676`）—— ⑤-4/⑤-6 接缝；商人 `RM_TURN`/
+//!   `RM_HIT`/`RM_DISAPPEAR`/`RM_SPACEMOVE_FIRE` 的**帧面**（`SM_*`）也归接线层（⑤-4）。
+//! - `MerchantState.is_hide` 当前恒 `false` 且 [`MerchantSpawn`] 无该入参（reviewer-6 M-3）：
+//!   oracle `MerchantInitialize` 在 `LoadMerchantScript` **之前**读 `IsHide`（`WorldServer.Merchant.cs:16`）
+//!   ⇒ 此刻确为默认 `false`，当前 1:1；将来若要注入（脚本置位）必须点明消费方。
+//! - `MerchantState.castle_under_war` 缺省 `false`（沙巴克攻城层属 ⑧；`Merchant.cs:143` 同「不在战中」支）。
 
 use mir2_data::models::StdItem;
 use mir2_shared::rng::RandomNumber;
@@ -55,6 +62,11 @@ pub const MERCHANT_GHOST_EXPIRE_MS: i64 = 60 * 1000;
 
 /// `BaseObject` ctor 的 `RunTick = GetTickCount() + Random(1500)`（`BaseObject.cs:439`）。
 pub const MERCHANT_RUN_DELAY_MAX: i32 = 1500;
+
+/// `MerchantState::run_tick` 的「未抽」哨兵：构造抽需按 oracle 次序在**独立一步**落定
+/// （`LocalDB.LoadMerchant` 正序构造抽 → `MerchantInitialize` 倒序挂图），
+/// 故 [`MerchantState::new`] 置该值，[`World::spawn_merchant`] 见它才抽。
+pub const MERCHANT_RUN_TICK_UNSET: i64 = i64::MIN;
 
 /// `Merchant.Run` 的补货间隔基数：`5 * 60 * 1000` ms（`Merchant.cs:119`）。
 pub const MERCHANT_REFILL_GOODS_INTERVAL_MS: i64 = 5 * 60 * 1000;
@@ -188,7 +200,7 @@ impl MerchantState {
             refill_goods_tick: 0,
             clear_expre_upgrade_tick: 0,
             move_tick: 0,
-            run_tick: 0,
+            run_tick: MERCHANT_RUN_TICK_UNSET,
             ghost_tick: 0,
             castle_under_war: false,
         }
@@ -217,7 +229,9 @@ impl World {
     /// 返回 `Some(id)` = 商人留在世界；`None` = 挂图失败被移除（oracle `RemoveAt`）。
     ///
     /// **构造抽**：按 oracle `BaseObject` ctor 的 `RunTick = now + Random(1500)`
-    /// （`BaseObject.cs:439`）从**共享 `world.rng`** 取一次数（站点归 `merchant` 组）。
+    /// （`BaseObject.cs:439`）从**共享 `world.rng`** 取一次数（站点归 `merchant` 组）——
+    /// **仅当** [`MerchantState::run_tick`] 仍为 [`MERCHANT_RUN_TICK_UNSET`]（宿主已用
+    /// [`World::merchant_ctor_run_delay`] 按 `LocalDB.LoadMerchant` 正序预抽时不再重复抽）。
     /// `refill_goods_tick`/`clear_expre_upgrade_tick`/`move_tick` 置为本刻 `clock_ms`（oracle ctor
     /// 的 `GetTickCount()` 同口径；`Goods.RefillTick` 由脚本解析置 0，见 [`MerchantGoods`]）。
     pub fn spawn_merchant(&mut self, spawn: MerchantSpawn) -> Option<i32> {
@@ -228,7 +242,9 @@ impl World {
         let map_id = spawn.map_id;
         let (x, y) = (spawn.x, spawn.y);
         let mut state = spawn.state;
-        state.run_tick = now + i64::from(self.rng.random_below(MERCHANT_RUN_DELAY_MAX));
+        if state.run_tick == MERCHANT_RUN_TICK_UNSET {
+            state.run_tick = now + i64::from(self.rng.random_below(MERCHANT_RUN_DELAY_MAX));
+        }
         state.refill_goods_tick = now;
         state.clear_expre_upgrade_tick = now;
         state.move_tick = now;
@@ -236,6 +252,10 @@ impl World {
         let is_hide = state.is_hide;
 
         let mut e = Entity::new(0, spawn.name, x, y);
+        // `Entity::new(0, …)` 的占位 id 必须换成**唯一** id（照 `World::add_entity` 的口径）：
+        // 否则所有商人 `id == 0`、`EntityStore::insert` 的 `index.insert(0, …)` 互相覆盖，
+        // `merchant_ids_sorted` 返回一串 0、`merchant_tick` 会反复 Run 同一个实体。
+        e.id = self.entities.alloc_id();
         e.race = ACTOR_RACE_MERCHANT;
         e.map_id = map_id;
         e.merchant = Some(state);
@@ -263,6 +283,9 @@ impl World {
     }
 
     /// 按**槽位顺序**列出所有商人实体 id（`MerchantList` 的确定性等价物；供 ⑤-4 取列表）。
+    ///
+    /// 返回的 id 由 [`World::spawn_merchant`] 用 `EntityStore::alloc_id` 分配 ⇒ **唯一**
+    /// （`merchant_tick` 直接以它为键；`merchant_ids_sorted` 不再返回重复占位 id）。
     #[must_use]
     pub fn merchant_ids_sorted(&self) -> Vec<i32> {
         self.entities
@@ -298,6 +321,16 @@ impl World {
         }
         let i = idx - 1;
         self.item_catalog.get(i)
+    }
+
+    /// `BaseObject` ctor 的构造抽（`RunTick = now + Random(1500)`，`BaseObject.cs:439`），
+    /// 单独成步以便宿主按 oracle 次序落定：`LocalDB.LoadMerchant` **正序**逐条抽（本函数），
+    /// 再到 `MerchantInitialize` **倒序**挂图（[`World::spawn_merchant`]）。
+    ///
+    /// 取数走共享 `world.rng`，站点落 `crates/world/src/merchant.rs`（`merchant` 组）。
+    #[must_use]
+    pub fn merchant_ctor_run_delay(&mut self) -> i64 {
+        self.clock_ms + i64::from(self.rng.random_below(MERCHANT_RUN_DELAY_MAX))
     }
 
     /// **M3⑤-实现 2 第②片**：`ProcessMerchants`（`WorldServer.Merchant.cs:65-110`）的单线程等价物。
@@ -880,5 +913,34 @@ mod tests {
         let e = w.entities.get(a).unwrap();
         assert_eq!((e.x, e.y), (nx, ny), "落点坐标 = oracle 两次取数");
         assert_eq!(w.rng.random(), exp.random(), "两组取数后两流仍同源");
+    }
+
+    /// reviewer-6 **M-2**：`ActorRace.Merchant == Animal == 50` ⇒ `monster_ai_tick` 的
+    /// `merchant.is_none()` 过滤（`crates/world/src/monai.rs:549`）是行为关键：商人不得被
+    /// `monster_run` 当怪跑（置 `target_x = -1` / 消耗 AI 取数）。删掉该守卫 ⇒ 必红。
+    #[test]
+    fn monster_ai_tick_skips_merchants_race_is_animal() {
+        let mut w = World::new(64, 64);
+        w.rng = RandomNumber::with_seed(5);
+        w.clock_ms = 10_000;
+        let a = w.spawn_merchant(spawn_at(7, 7)).expect("挂图成功");
+        // 让「若被当怪跑」必然产生可观测副作用：walk 到点 + 无目标 ⇒ `monster_run` 置 `target_x=-1`
+        // 并在无目标分支调 `wondering`（消耗 RNG）。
+        if let Some(e) = w.entities.get_mut(a) {
+            e.ai.walk_speed = -1;
+            e.ai.walk_tick = 0;
+            e.ai.target_creature = None;
+            e.ai.target_x = 42; // 哨兵
+        }
+        let rng_before = w.rng.clone();
+        crate::monai::monster_ai_tick(&mut w);
+        let e = w.entities.get(a).unwrap();
+        assert_eq!(
+            e.ai.target_x, 42,
+            "商人不得被 monster_run 当怪跑（race 50 == Animal 50）"
+        );
+        assert_eq!(e.ai.walk_tick, 0, "商人不得被 AI 推进 walk_tick");
+        let mut expect = rng_before;
+        assert_eq!(w.rng.random(), expect.random(), "跳过商人 ⇒ 不消耗 AI 取数");
     }
 }
