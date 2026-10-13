@@ -229,6 +229,21 @@ pub struct Entity {
     pub race: u8,
     /// C# `Master`（宝宝的主人）
     pub master: Option<i32>,
+    /// C# `BaseObject.SlaveList`（`BaseObject.cs:141`，懒建于 `:1183`）——主人的宝宝列表（actor id，保序）。
+    ///
+    /// 归 `openmir2-m3-pet-slave-summon`（⑨-2）建立、`openmir2-m3-pet-slave-lifecycle`（⑨-3）清理。
+    pub slave_list: Vec<i32>,
+    /// C# `AnimalObject.IsSlave`（`AnimalObject.cs:54`）。
+    pub is_slave: bool,
+    /// C# `AnimalObject.SlaveExpLevel`（`AnimalObject.cs:27`）——宝宝等级（召唤时/跨服时设定；
+    /// `MonsterObject.GainSlaveExp` 是死代码，击杀不涨，见盘点报告 §1.C）。
+    pub slave_exp_level: u8,
+    /// C# `MonsterObject.SlaveMakeLevel`（`MonsterObject.cs:21`）——召唤时的技能等级。
+    pub slave_make_level: u8,
+    /// C# `MonsterObject.MasterRoyaltyTick`（`MonsterObject.cs:37`）——叛变时刻。
+    pub master_royalty_tick: i64,
+    /// C# `MonsterObject.MasterTick`（`MonsterObject.cs:41`）——诱惑到期的起算时刻。
+    pub master_tick: i64,
     pub death: bool,
     pub invisible: bool,
     pub ghost: bool,
@@ -362,6 +377,12 @@ impl Entity {
             view_range: 5, // BaseObject.cs:383
             race: ACTOR_RACE_PLAY,
             master: None,
+            slave_list: Vec::new(),
+            is_slave: false,
+            slave_exp_level: 0,
+            slave_make_level: 0,
+            master_royalty_tick: 0,
+            master_tick: 0,
             death: false,
             invisible: false,
             hide_mode: false,

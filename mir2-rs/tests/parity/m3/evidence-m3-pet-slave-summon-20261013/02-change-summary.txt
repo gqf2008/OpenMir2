@@ -1,0 +1,102 @@
+M3⑨-实现 2（宝宝召唤）改前/改后摘要（base=refs/heads/master d4d5b89c；本 patch 为单个提交，证据随它入库）
+================================================================================
+
+[0] 新增/修改文件（相对 master，仅代码；证据目录另计）
+  mir2-rs/bins/game-svr/src/lib.rs   |   1 +
+  mir2-rs/bins/game-svr/src/slave.rs | 160 ++++++
+  mir2-rs/crates/world/src/entity.rs |  21 +
+  mir2-rs/crates/world/src/lib.rs    |   7 +
+  mir2-rs/crates/world/src/slave.rs  | 991 +++++++++++++++++++++++++++++++++++++
+  5 files changed, 1180 insertions(+)
+
+[1] 新增：mir2-rs/crates/world/src/slave.rs（991 行）
+    - 技能常量 SKILL_SKELLETON/TAMMING/SINSU/ANGEL/46
+    - mag_make_slave_plan / mag_make_sinsu_slave_plan / mag_make_angel_slave_plan（选型，逐行锚 MagicManager.cs:1269-1352）
+    - make_slave_gate / check_server_make_slave（BaseObject.cs:1185 / 1979-1994）
+    - recall_slave_target / space_move_get_rand_xy（BaseObject.cs:1850-1876 / 1040-1096）
+    - World::slave_count / make_slave_adopt（MakeSlave 落尾 BaseObject.cs:1179-1209）/ recall_slave
+    - summon_slave（完整编排，caster_dir 显式传入）+ trait SlaveSpawner（RegenMonsterByName 宿主接缝）
+
+[2] 修改：crates/world/src/entity.rs（+21 行，纯新增字段，不删不改既有字段/初值）
+diff --git a/mir2-rs/crates/world/src/entity.rs b/mir2-rs/crates/world/src/entity.rs
+index dc42db0aa..e3e7f66a9 100644
+--- a/mir2-rs/crates/world/src/entity.rs
++++ b/mir2-rs/crates/world/src/entity.rs
+@@ -229,6 +229,21 @@ pub struct Entity {
+     pub race: u8,
+     /// C# `Master`（宝宝的主人）
+     pub master: Option<i32>,
++    /// C# `BaseObject.SlaveList`（`BaseObject.cs:141`，懒建于 `:1183`）——主人的宝宝列表（actor id，保序）。
++    ///
++    /// 归 `openmir2-m3-pet-slave-summon`（⑨-2）建立、`openmir2-m3-pet-slave-lifecycle`（⑨-3）清理。
++    pub slave_list: Vec<i32>,
++    /// C# `AnimalObject.IsSlave`（`AnimalObject.cs:54`）。
++    pub is_slave: bool,
++    /// C# `AnimalObject.SlaveExpLevel`（`AnimalObject.cs:27`）——宝宝等级（召唤时/跨服时设定；
++    /// `MonsterObject.GainSlaveExp` 是死代码，击杀不涨，见盘点报告 §1.C）。
++    pub slave_exp_level: u8,
++    /// C# `MonsterObject.SlaveMakeLevel`（`MonsterObject.cs:21`）——召唤时的技能等级。
++    pub slave_make_level: u8,
++    /// C# `MonsterObject.MasterRoyaltyTick`（`MonsterObject.cs:37`）——叛变时刻。
++    pub master_royalty_tick: i64,
++    /// C# `MonsterObject.MasterTick`（`MonsterObject.cs:41`）——诱惑到期的起算时刻。
++    pub master_tick: i64,
+     pub death: bool,
+     pub invisible: bool,
+     pub ghost: bool,
+@@ -362,6 +377,12 @@ impl Entity {
+             view_range: 5, // BaseObject.cs:383
+             race: ACTOR_RACE_PLAY,
+             master: None,
++            slave_list: Vec::new(),
++            is_slave: false,
++            slave_exp_level: 0,
++            slave_make_level: 0,
++            master_royalty_tick: 0,
++            master_tick: 0,
+             death: false,
+             invisible: false,
+             hide_mode: false,
+
+[3] 修改：crates/world/src/lib.rs（+7 行：pub mod slave + pub use）
+diff --git a/mir2-rs/crates/world/src/lib.rs b/mir2-rs/crates/world/src/lib.rs
+index 32ad1273a..ec998d3d0 100644
+--- a/mir2-rs/crates/world/src/lib.rs
++++ b/mir2-rs/crates/world/src/lib.rs
+@@ -23,6 +23,7 @@ pub mod merchant;
+ pub mod monai;
+ pub mod mongen;
+ pub mod session;
++pub mod slave;
+ pub mod world;
+ 
+ pub use aoi::{search_view_range, search_view_range_death, update_visible_gay, visible_snapshot};
+@@ -60,4 +61,10 @@ pub use mongen::{
+     MON_GEN_THREAD_MON_LIMIT,
+ };
+ pub use session::{Session, SessionError, WorldStage};
++pub use slave::{
++    check_server_make_slave, is_slave, mag_make_angel_slave_plan, mag_make_sinsu_slave_plan,
++    mag_make_slave_plan, make_slave_gate, recall_slave_target, space_move_get_rand_xy,
++    summon_slave, MakeSlavePlan, SlaveSpawner, SummonOutcome, CLONE_DEFERRED, SKILL_46,
++    SKILL_ANGEL, SKILL_SINSU, SKILL_SKELLETON, SKILL_TAMMING,
++};
+ pub use world::{Command, EntitySnapshot, FloorItemView, TickRecord, World, TICK_INTERVAL_MS};
+
+[4] 新增：mir2-rs/bins/game-svr/src/slave.rs（160 行）
+    - pet_slave_config_from_conf（Server.conf → PetSlaveConfig，BOM 口径）
+    - MonsterTableSpawner：SlaveSpawner 的生产实现，内部走 create_monster_oracle（同一条 world.rng）
+    - summon_from_spell：一次调用的粘合（caster_dir 显式传入）
+
+[5] 修改：mir2-rs/bins/game-svr/src/lib.rs（+1 行：pub mod slave）
+
+[6] oracle 缺陷照搬（BUG-REPLICA，未顺手修）
+    B-1 MagicManager.cs:1316-1327 骷髅选型无 break（slave.rs::mag_make_slave_plan 注释 + 无 break）
+    B-2 MagicManager.cs:1274     神兽 nMakeLevel 算了不传（_n_make_level）
+
+[7] 未实现（登记，见 README §6）
+    - CM_SPELL 效果体派发（17/30/41 的 CheckAmulet/UseAmulet + RM_SPELL/boTrain 尾）
+    - 诱惑(20) 成功后的受奴落尾（master/royalty/封顶）
+    - RecalcAbilitys 派生类速度改写 + RefNameColor 色彩（⑨-3）
+    - 46 分身（PlayCloneObject）
+    - RecallSlave 的出帧（RM_CLEAROBJECTS/RM_CHANGEMAP/RM_SPACEMOVE_SHOW2）

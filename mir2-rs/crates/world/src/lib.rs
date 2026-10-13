@@ -23,6 +23,7 @@ pub mod merchant;
 pub mod monai;
 pub mod mongen;
 pub mod session;
+pub mod slave;
 pub mod world;
 
 pub use aoi::{search_view_range, search_view_range_death, update_visible_gay, visible_snapshot};
@@ -60,4 +61,10 @@ pub use mongen::{
     MON_GEN_THREAD_MON_LIMIT,
 };
 pub use session::{Session, SessionError, WorldStage};
+pub use slave::{
+    check_server_make_slave, is_slave, mag_make_angel_slave_plan, mag_make_sinsu_slave_plan,
+    mag_make_slave_plan, make_slave_gate, recall_slave_target, space_move_get_rand_xy,
+    summon_slave, MakeSlavePlan, SlaveSpawner, SummonOutcome, CLONE_DEFERRED, SKILL_46,
+    SKILL_ANGEL, SKILL_SINSU, SKILL_SKELLETON, SKILL_TAMMING,
+};
 pub use world::{Command, EntitySnapshot, FloorItemView, TickRecord, World, TICK_INTERVAL_MS};

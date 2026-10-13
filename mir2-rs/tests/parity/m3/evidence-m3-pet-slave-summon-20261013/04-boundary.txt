@@ -1,0 +1,18 @@
+M3⑨-实现 2（宝宝召唤）边界核对
+==============================
+base = refs/heads/master d4d5b89c73e77ed995188c2668dc3eda9a926dc0
+patch     = 单个提交（本清单随它入库）
+
+[1] git diff --name-only master HEAD -- src sql MirClient
+    （空 = oracle/表结构/客户端零改动）
+
+[2] 本片全部改动路径
+mir2-rs/bins/game-svr/src/lib.rs
+mir2-rs/bins/game-svr/src/slave.rs
+mir2-rs/crates/world/src/entity.rs
+mir2-rs/crates/world/src/lib.rs
+mir2-rs/crates/world/src/slave.rs
+
+[3] 客户端/表结构/脚本/数据格式：本片未触碰（上述 [1] 为空）
+
+[4] 写集核对：crates/world::slave/entity/lib + bins/game-svr::slave/lib + tests/parity/m3 证据
