@@ -1,0 +1,17 @@
+$ groupdiff … --fold --strict（折叠不是豁免：FOLDED_COUNT_DIFF，spawn a=146545 b=0）
+RNG_CONSUMER_GROUPDIFF include_attack=False fold=True a=E:/tmp/m3cs-f1/csharp-rng-stream-f1-20261012.tsv(5090542) b=E:/tmp/m3cs-r2/rust-rng-stream-r1.tsv(14)
+  FOLD_MAP {'construct': 'spawn'}（R-6：C# construct 折叠到 Rust spawn；折叠后计数+相对次序必须相等）
+  A_GROUPS {'monster_ai': 4028939, 'merchant': 500838, 'drop': 410383, 'spawn': 146545, 'npc_ai': 3770, 'revive': 60, 'homemap': 6, 'startup': 1}
+  B_GROUPS {'startup': 8, 'homemap': 6}
+  ONLY_IN_A(missing_in_B) {'monster_ai': 4028939, 'merchant': 500838, 'drop': 410383, 'spawn': 146545, 'npc_ai': 3770, 'revive': 60}
+  ONLY_IN_B(extra_in_B)   {}
+  SHARED_GROUPS ['homemap', 'startup']
+  FOLDED_COUNT_DIFF {'drop': {'a': 410383, 'b': 0}, 'merchant': {'a': 500838, 'b': 0}, 'monster_ai': {'a': 4028939, 'b': 0}, 'npc_ai': {'a': 3770, 'b': 0}, 'revive': {'a': 60, 'b': 0}, 'spawn': {'a': 146545, 'b': 0}, 'startup': {'a': 1, 'b': 8}}（折叠后逐组计数必须相等；不等 ⇒ 折叠不成立）
+  FIRST_SHARED_ORDER_DIVERGENCE index=1 a=homemap b=startup
+  RUNS a=50237 b=2
+  ROW_COVERAGE a_dropped=0 b_dropped=0
+  FIRST_RUN_DIVERGENCE run=0 a=spawn b=startup
+  VERDICT GROUP_SET_DIFF+SHARED_REL_ORDER_DIFF+FOLDED_COUNT_DIFF
+RED: 组结构不一致 ⇒ GROUP_SET_DIFF+SHARED_REL_ORDER_DIFF+FOLDED_COUNT_DIFF（--strict）
+
+[rc=1]

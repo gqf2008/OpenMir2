@@ -1,0 +1,76 @@
+{
+  "include_attack": false,
+  "fold": true,
+  "fold_rules": {
+    "construct": "spawn"
+  },
+  "folded_count_diff": {
+    "drop": {
+      "a": 410383,
+      "b": 0
+    },
+    "merchant": {
+      "a": 500838,
+      "b": 0
+    },
+    "monster_ai": {
+      "a": 4028939,
+      "b": 0
+    },
+    "npc_ai": {
+      "a": 3770,
+      "b": 0
+    },
+    "revive": {
+      "a": 60,
+      "b": 0
+    },
+    "spawn": {
+      "a": 146545,
+      "b": 0
+    },
+    "startup": {
+      "a": 1,
+      "b": 8
+    }
+  },
+  "a": "E:/tmp/m3cs-f1/csharp-rng-stream-f1-20261012.tsv",
+  "b": "E:/tmp/m3cs-r2/rust-rng-stream-r1.tsv",
+  "a_len": 5090542,
+  "b_len": 14,
+  "a_dropped": 0,
+  "b_dropped": 0,
+  "a_groups": {
+    "spawn": 146545,
+    "startup": 1,
+    "merchant": 500838,
+    "npc_ai": 3770,
+    "drop": 410383,
+    "monster_ai": 4028939,
+    "revive": 60,
+    "homemap": 6
+  },
+  "b_groups": {
+    "startup": 8,
+    "homemap": 6
+  },
+  "only_in_a": {
+    "spawn": 146545,
+    "merchant": 500838,
+    "npc_ai": 3770,
+    "drop": 410383,
+    "monster_ai": 4028939,
+    "revive": 60
+  },
+  "only_in_b": {},
+  "shared_groups": [
+    "homemap",
+    "startup"
+  ],
+  "first_shared_order_divergence": 1,
+  "a_runs": 50237,
+  "b_runs": 2,
+  "first_run_divergence": 0,
+  "verdict": "GROUP_SET_DIFF+SHARED_REL_ORDER_DIFF+FOLDED_COUNT_DIFF",
+  "table": "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\.claude\\worktrees\\m3bag\\mir2-rs\\tests\\parity\\m3\\rng-trace-probe\\consumer_groups.tsv"
+}

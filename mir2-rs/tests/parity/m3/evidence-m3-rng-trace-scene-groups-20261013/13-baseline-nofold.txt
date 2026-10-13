@@ -1,0 +1,15 @@
+$ groupdiff <csharp a7df7116…> <rust 4963e9f6…> --strict（不同场景基线：GROUP_SET_DIFF）
+RNG_CONSUMER_GROUPDIFF include_attack=False fold=False a=E:/tmp/m3cs-f1/csharp-rng-stream-f1-20261012.tsv(5090542) b=E:/tmp/m3cs-r2/rust-rng-stream-r1.tsv(14)
+  A_GROUPS {'monster_ai': 4028939, 'merchant': 500838, 'drop': 410383, 'construct': 82840, 'spawn': 63705, 'npc_ai': 3770, 'revive': 60, 'homemap': 6, 'startup': 1}
+  B_GROUPS {'startup': 8, 'homemap': 6}
+  ONLY_IN_A(missing_in_B) {'monster_ai': 4028939, 'merchant': 500838, 'drop': 410383, 'construct': 82840, 'spawn': 63705, 'npc_ai': 3770, 'revive': 60}
+  ONLY_IN_B(extra_in_B)   {}
+  SHARED_GROUPS ['homemap', 'startup']
+  FIRST_SHARED_ORDER_DIVERGENCE index=1 a=homemap b=startup
+  RUNS a=76374 b=2
+  ROW_COVERAGE a_dropped=0 b_dropped=0
+  FIRST_RUN_DIVERGENCE run=0 a=construct b=startup
+  VERDICT GROUP_SET_DIFF+SHARED_REL_ORDER_DIFF
+RED: 组结构不一致 ⇒ GROUP_SET_DIFF+SHARED_REL_ORDER_DIFF（--strict）
+
+[rc=1]

@@ -1,0 +1,8 @@
+$ rng_scene_gate.py gate … --b nope.json（缺件）
+RNG_SCENE_GATE scenario=C:\Users\gxh\AppData\Local\Temp\rngscene-evid-4syt8pm8\scenario.json a=C:\Users\gxh\AppData\Local\Temp\rngscene-evid-4syt8pm8\csharp-scene.json b=C:\Users\gxh\AppData\Local\Temp\rngscene-evid-4syt8pm8\nope.json checks=1 failed=1
+  SCENE {}
+  CHECK file-exists:b                      FAIL (找不到 C:\Users\gxh\AppData\Local\Temp\rngscene-evid-4syt8pm8\nope.json)
+  PREREQ_MISSING file-exists:b: 找不到 C:\Users\gxh\AppData\Local\Temp\rngscene-evid-4syt8pm8\nope.json
+  VERDICT RED: 场景不一致 ⇒ groupdiff 次序结论不得采信（fail-closed）：file-exists:b
+
+[rc=2]

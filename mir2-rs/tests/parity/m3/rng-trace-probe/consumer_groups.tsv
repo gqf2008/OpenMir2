@@ -31,7 +31,9 @@
 #
 # 注意：Rust 侧 ④-D 把构造期抽数折叠在刷怪路径内（`crates/world/src/mongen.rs` 的
 #   `AnimalState::from_spawn_draws`），因此 Rust 的 `construct` 组暂无独立站点；
-#   oracle 侧 `BaseObject..ctor` 等是独立站点。这条差异由 groupdiff 的 GROUP_SET 如实报出。
+#   oracle 侧 `BaseObject..ctor` 等是独立站点。**R-6 裁决（owner 2026-10-13）**：把这个折叠
+#   登记为建模差异，但要求**机判等价** —— `rng_consumer_groups.FOLD_RULES = {construct: spawn}`，
+#   `groupdiff --fold` 在折叠后的序列上重算组集合/计数/相对次序（折叠计数不等 ⇒ `FOLDED_COUNT_DIFF`）。
 #
 # group	side	pattern	oracle_ref	note
 monster_ai	csharp	AnimalObject\.Wondering@AnimalObject\.cs:	src/M2Server/Actor/AnimalObject.cs:427	Wondering 的 Random(20)/Random(4)/RandomByte(8)

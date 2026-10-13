@@ -1,0 +1,46 @@
+{
+  "canon": "m3-rng-trace-scene-v1",
+  "status": "skeleton-window-pending",
+  "card": "openmir2-m3-rng-trace-scene-groups",
+  "seed": 42,
+  "map": "0137",
+  "start_pose": { "x": 17, "y": 20, "dir": 2 },
+  "monsters": [
+    { "name": "稻草人", "x": 18, "y": 20, "dir": 0, "count": 1 }
+  ],
+  "mongen_fixture": "../fixtures/mongen-map0137.tsv",
+  "trace": {
+    "canon": "m3-rng-trace-v1",
+    "stream_artifact": {
+      "csharp": "MIR2_RNG_LOG（m3/rng-hook + MIR2_RNG_SITE=1 的全场景 5 列 TSV）",
+      "rust": "<rust stack log dir>/rng-stream.tsv"
+    },
+    "scene_descriptor_artifact": "<side>-scene.json（canon = m3-rng-scene-descriptor-v1）",
+    "ticks": 600,
+    "min_monster_ai_draws": 1,
+    "groups_expected": ["monster_ai", "spawn", "drop"],
+    "fold": { "construct": "spawn" },
+    "criterion": "① 场景一致性前置门 GREEN（rng_scene_gate.py gate：map/seed/start_pose + MonGen 冻结件 + Monster 集合两侧同口径）② groupdiff --fold --strict VERDICT IDENTICAL（R-6：C# construct 折叠到 Rust spawn 后，组集合 + 折叠计数 + 共享组相对次序全等）",
+    "runner": "run_rng_trace_pair.ps1 -Go -Side <csharp|rust> -PinScene -PeerSession <session>（窗口期）"
+  },
+  "isolation": {
+    "comment": "固定图 = 0137 竞技场（MonGen 0 行、GuardList/MerChant/Npcs/MapEvent/MapQuest 零引用 ⇒ 地图自身不刷怪/无 NPC AI）；夹具在该图上只 spawn 固定的一只固定怪（稻草人 @ (18,20) div 0）。与 ④ 的 drop-exp 100 杀**同图同起点同种子**，故可与它排在**同一窗口批次**（串行，不并行起栈）。本卡**要** monster_ai（Wondering 游走）出现 ⇒ **不得**沿用 ④ 纯度门的 pin 抑制；两套判据的兼容性见 README.md §4。",
+    "map_self_no_ambient_spawn": true,
+    "map_self_no_ai_consumers": true,
+    "fixture_pinned_monster": true,
+    "wallclock_ai_expected": "monster_ai（AnimalObject.Wondering）出现且两侧集合/次序一致；本卡不要求把它压到 0（那是 ④ 的纯度门口径）"
+  },
+  "artifact": {
+    "scene_descriptor": "<side>-scene.json",
+    "stream": "<side>-rng-stream.tsv",
+    "gate": "python -I rng-trace-scene/rng_scene_gate.py gate --scenario rng-trace-scene/rng_trace_scenario.json --a <csharp-scene.json> --b <rust-scene.json>",
+    "groupdiff": "python -I rng-trace-probe/rng_ledger_diff.py groupdiff <csharp-stream.tsv> <rust-stream.tsv> --a-side csharp --b-side rust --fold --strict",
+    "runner": "rng-trace-scene/run_rng_trace_pair.ps1"
+  },
+  "notes": [
+    "MonGen/Monster 集合同口径由 rng_scene_gate.py 机判：两侧 mongen_rows 必须逐行多重集等于冻结件 fixtures/mongen-map0137.tsv（0 行），monsters 多重集必须两侧相等且等于本 scenario 的声明。任一项不等 ⇒ 门 fail-closed RED，groupdiff 相对次序结论不得采信。",
+    "R-6 folded 映射：C# construct（BaseObject/AnimalObject/MonsterObject/Monsters.*/PlayObject ..ctor）折叠到 Rust spawn（crates/world/src/mongen.rs 的 AnimalState::from_spawn_draws）；折叠后**计数与相对次序必须相等**（groupdiff --fold：FOLDED_COUNT_DIFF / SHARED_REL_ORDER_DIFF）。",
+    "本场景与 ④「死亡掉落不落地」口径兼容：drop 组比的是**取数账本**（MonGetRandomItems 的逐次取数），④-D 之后 oracle 仍抽 RNG 只是不落地（无地面物 / 无 RM_ITEMSHOW / 无 SM_ITEMSHOW(610)）⇒ 两者同窗口同跑不互相打架（README.md §4）。",
+    "真机两相 trace 需要独占窗口（起栈禁接管道）；-Go 未给 ⇒ run_rng_trace_pair.ps1 的 real-run 分支 fail-closed（exit 2），本片只交骨架。"
+  ]
+}
