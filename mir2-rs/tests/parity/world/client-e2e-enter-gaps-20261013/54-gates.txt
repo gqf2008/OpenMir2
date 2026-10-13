@@ -1,0 +1,23 @@
+54-gates.txt — 四门禁（片⑥：跑键真机证据 + 判据脚本）
+卡 openmir2-client-e2e-enter-gaps；交付树 = merge tree d8c02fd86c474ecce010a2c162e0117081c718bb
+（= 本片 head 合并 origin/master 95291257c01badb26d6d47183558220f6a01e72e）
+环境：cwd = mir2-rs/；CARGO_TARGET_DIR = E:/tmp/m2svr-target；--offline
+
+$ cargo fmt --all -- --check
+fmt rc=0
+
+$ cargo clippy --workspace --all-targets --offline -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.65s
+clippy rc=0
+
+$ cargo test --workspace --offline --no-fail-fast
+test rc=0
+  99 suites · 1159 passed · 0 failed · 22 ignored
+（逐 suite 的 "test result: ok" 汇总；原始件 E:/tmp/m2svr-run2/gates-test3.txt）
+
+$ cargo run -p msgcodegen --offline -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+msgcodegen rc=0
+
+备注：本片**零生产代码改动**（只加 `tools/client/mir_flow.ps1` 的 `-RunHoldMs` 探针段 +
+`tests/parity/world/client-e2e-enter-gaps-20261013/**` 证据/判据脚本），门禁与 ①..⑤ 片同树同形。

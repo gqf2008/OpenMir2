@@ -1,0 +1,36 @@
+50-runkey-five-runs-summary.txt — 冻结客户端「跑键」真机实测汇总（7 份 capture）
+卡 openmir2-client-e2e-enter-gaps / owner 2026-10-13 17:1x DoD②「能跑」/ reviewer-6 not_verified③
+采集：tools/capture/mir2_proxy.py 7200 透明代理 → 影子 game-gate(7600) → game-svr(5000)；
+      tools/m2-acceptance/export_s2c.ps1(segment_frames+GoldenExport) 解码；replay 自洽 GREEN。
+客户端 D:\MirClient-run\MirClinet.exe；账号 mir2test / 角色 aaa。MIR2_CLIENT_ABILITY_LAYOUT=1 时 52 尾长=58。
+
+生成时间(UTC): 2026-10-13T12:48:48Z
+
+run  口径                                 c2s 3011 c2s 3010 c2s 3013   52 尾长  s2c 10  capture sha256
+--------------------------------------------------------------------------------------------------
+R1   片⑤ RunA 默认(oracle 40B) 单击/自动             10        0        0    [40]      12  2ada5f74da2fae4bdf7512de073c1e96f395974ec1215dc76e0f5191ace8371b
+R2   片⑤ RunB switch58 自动挂机                    10        1        0    [58]       1  31f4127c3e5527b6fb861a4a1490c137889f204a52c837e3ec288eb79f4bd426
+R3   本片 flow-after 远点单击x7                      6        1        0    [58]       0  98e570ddb08f3c536d5cb2595c22ca3b4603d7886794eef9478ea9a8a561cdef
+R4   本片 run2 按住拖动x2                            8        1        0    [58]       0  59a72eec27720e1d44860df7a4fc1773cf74a6c8e947d08e2e9224f4e6721b23
+R5   本片 run3 8方向远点按住                          19        1        0    [58]       0  403413ef823d074cd5325da6583146706709f4823e223a7c2cd6cf41c77c3d75
+R6   本片 run4 双圈(110/210px)x8方向按住              19        4        0    [58]       0  030a312aa322edc78349378aa176666c504f7522adb694daef23c9342b6dc829
+R7   本片 run5 渐变扫动按住x16(头条)                    24       15        0    [58]       0  7f59762ec7b06f452fa377ea3c353279e0b95108c4ef9e73430a07ec80f1d330
+
+结论：**7 份真机 capture 里 CM_RUN(3013) 恒为 0**；R2..R7 的 52 尾长=58（客户端 HP=19≥10 ⇒ CanRun 允许跑），
+      仍只发 CM_WALK(3011)/CM_TURN(3010) ⇒「跑不动」不是 52 布局造成的（对比 R1 尾长=40、HUD 0/0）。
+
+附：R1（ViewRange=12 = 现状 master）客户端收到的怪出现帧（10 SM_TURN）逐只 Chebyshev 距离：
+    角色位置(50 SM_LOGON) = (287,620)
+    recog=789   monster=(275,618)  chebyshev=12
+    recog=326   monster=(275,620)  chebyshev=12
+    recog=408   monster=(280,612)  chebyshev=8
+    recog=801   monster=(287,614)  chebyshev=6
+    recog=300   monster=(288,608)  chebyshev=12
+    recog=296   monster=(288,615)  chebyshev=5
+    recog=791   monster=(288,619)  chebyshev=1
+    recog=897   monster=(290,614)  chebyshev=6
+    recog=776   monster=(292,611)  chebyshev=9
+    recog=809   monster=(297,610)  chebyshev=10
+    recog=782   monster=(298,609)  chebyshev=11
+    recog=817   monster=(298,618)  chebyshev=11
+    共 12 只；距离 6..12 的 = 10 只（窗口 5 只会是 0 只）；距离<=5 的 = 2 只。

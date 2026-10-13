@@ -27,6 +27,14 @@ param(
   [int]$WalkX       = 902,
   [int]$WalkY       = 650,
   [string]$WalkPath = "",          # 形如 "900,300;900,300;..." 的走位序列（每步截图）
+  # ---- 跑键（CM_RUN 3013）探针：按住左键拖动 ----------------
+  # 冻结客户端 ClMain.pas:2193 的跑门 = `g_boCanStartRun or (g_nRunReadyCount>=1)`：
+  #   · `g_boCanStartRun` 来自 11029 解到 TClientConf.boCanStartRun（Grobal2.pas:2989），
+  #     其偏移 >17（oracle ClientConf 只有 17 个 bool）⇒ 落在未初始化栈里，实测恒假；
+  #   · `g_nRunReadyCount` 在 FormMouseDown（ClMain.pas:4740）每次按下被清 0。
+  # `$RunHoldMs>0` 时按住左键 + 渐变 WM_MOUSEMOVE（试图走「计数>=1」支）。
+  # **实测（片⑥）即使这样也从不发 CM_RUN**：见 50/51 证据；本段是探针，不是「能跑」的驱动。
+  [int]$RunHoldMs = 0,             # >0 = 绕角色中心两圈 8 方向各按住拖动这么多毫秒并截图
   [int]$LoginSubmitClicks = 1,     # 提交按钮补点次数（偶发被吞；建角探测时可给 3）
   [int]$CharSlot = 1,              # 选角界面选第几个角色（1=左，2=右）
   [switch]$SkipReenter,
@@ -190,6 +198,35 @@ function Send-RealClick([int]$x, [int]$y) {
   Start-Sleep -Milliseconds 90
   [MirFlow]::mouse_event(0x04, 0, 0, 0, [IntPtr]0)   # LEFTUP
   Start-Sleep -Milliseconds 250
+}
+
+function Send-HoldRun([int]$x, [int]$y, [int]$ms) {
+  # 按住左键 + **渐变** MOUSEMOVE（wParam=MK_LBUTTON）：
+  # ClMain.pas:4735 的鼠标处理在按住 >300ms 时会重调 _DXDrawMouseDown ⇒ 重设
+  # g_ChrAction:=caRun；位置不变时可能不被当拖动，故从中心向目标逐步插值。
+  [void][MirFlow]::SetForegroundWindow($script:hwnd)
+  Start-Sleep -Milliseconds 200
+  $sx = 512; $sy = 384
+  [void][MirFlow]::SetCursorPos(($pt.X + $sx), ($pt.Y + $sy))
+  $lp0 = [IntPtr](($sy -shl 16) -bor ($sx -band 0xFFFF))
+  [void][MirFlow]::PostMessage($script:hwnd, 0x0200, [IntPtr]0, $lp0)
+  Start-Sleep -Milliseconds 150
+  [void][MirFlow]::PostMessage($script:hwnd, 0x0201, [IntPtr]1, $lp0)   # lbdown at centre
+  for ($s = 1; $s -le 8; $s++) {
+    $ix = [int]($sx + ($x - $sx) * $s / 8.0)
+    $iy = [int]($sy + ($y - $sy) * $s / 8.0)
+    $lp = [IntPtr](($iy -shl 16) -bor ($ix -band 0xFFFF))
+    [void][MirFlow]::PostMessage($script:hwnd, 0x0200, [IntPtr]1, $lp)
+    Start-Sleep -Milliseconds 70
+  }
+  $lp = [IntPtr](($y -shl 16) -bor ($x -band 0xFFFF))
+  $end = (Get-Date).AddMilliseconds($ms)
+  while ((Get-Date) -lt $end) {
+    [void][MirFlow]::PostMessage($script:hwnd, 0x0200, [IntPtr]1, $lp)
+    Start-Sleep -Milliseconds 80
+  }
+  [void][MirFlow]::PostMessage($script:hwnd, 0x0202, [IntPtr]0, $lp)   # lbup
+  Start-Sleep -Milliseconds 300
 }
 
 function Send-Text([string]$text) {
@@ -411,6 +448,24 @@ if ($WalkPath) {
     Send-Click $xy[0] $xy[1] 1
     Start-Sleep -Seconds 3
     Shot ("06path_" + $step + ".png")
+  }
+}
+
+# ---- 跑键（CM_RUN 3013）：按住左键拖动（见 param 注释）----
+if ($RunHoldMs -gt 0) {
+  # 绕角色中心两圈 8 方向各拖一次（PlayScn.pas:3101 CanRun 还会检**全目标格**
+  # CanWalkEx(ex,ey)：远点落在墙/房时必回退走 ⇒ 用近点 2~4 格重复）
+  $ri = 0
+  foreach ($rad in (110, 210)) {
+    foreach ($ang in (0, 45, 90, 135, 180, 225, 270, 315)) {
+      $rr = $ang * [Math]::PI / 180.0
+      $px = [int](512 + $rad * [Math]::Cos($rr))
+      $py = [int](384 + $rad * [Math]::Sin($rr))
+      $ri++
+      Stage ("run_hold_" + $ri)
+      Send-HoldRun $px $py $RunHoldMs
+      Shot ("06run_" + $ri + ".png")
+    }
   }
 }
 

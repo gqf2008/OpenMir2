@@ -155,3 +155,30 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
 - `E:\tmp\m2svr-gaps\`（两侧截图/日志/门禁原始件，部分已入库到本目录）；`E:\tmp\m2svr-target`（本片构建目标）。
 - `E:\tmp\m2-acceptance\stack\`（最近一次 Rust 栈日志/pid 文件；进程已 `-Stop`）。
 - MySQL 3306 常驻（开工前即有）；`mir2_db.characters.aaa` 的位置已还原为 `(291,666)`。
+
+## ⑥ 片⑥：跑键 CM_RUN(3013) 真机判读（DoD②「能跑」/ reviewer not_verified③）
+
+- **采集**：`mir2_proxy.py` 7200 透明代理 → 影子 `game-gate`(7600) → game-svr(5000)；
+  `export_s2c.ps1`(segment_frames + GoldenExport) 解码；客户端 `D:\MirClient-run`，账号 `mir2test`/角色 `aaa`。
+  共 **7 份真机 capture**（`50-runkey-five-runs-summary.txt`）：片⑤ RunA/RunB + 本片 5 次（单击 / 按住拖动×2 /
+  8 方向远点按住 / 双圈(110/210px)按住 / 渐变扫动按住×16）。
+- **读数**：7 份 capture 里 `CM_RUN(3013)` **恒为 0**；R2..R7 的 `52` 尾长 = **58**（客户端 HP=19 ≥
+  `Actor.pas RUN_MINHEALTH=10`）⇒ 仍只发 `CM_WALK(3011)`/`CM_TURN(3010)` ⇒ **「跑不动」不是 52 布局造成的**
+  （对比 R1 尾长 40、HUD `0/0`）。
+- **成因（文件锚见 `51-client-run-gate-anchors.txt`）**：唯一发 `CM_RUN` 的支 `ClMain.pas:2193`
+  门 = `g_boCanStartRun or (g_nRunReadyCount >= 1)`；而 `g_boCanStartRun ← ClientConf.boCanStartRun`
+  （`:15034`），该字段在客户端 `TClientConf`（`Grobal2.pas:2978-3013`，**30 字段**、含 5 个 Integer）
+  的偏移 **> 17**，oracle 的 11029 只给 **17 字节**（`ClientConf.cs` 17 bool；本仓 `smframe.rs:341-344` 照搬）
+  ⇒ `DecodeBuffer`（`EDcode.pas:894-903`）拷贝未初始化栈 ⇒ 实测恒假；且 `FormMouseDown`（`:4740`）每次都清
+  `g_nRunReadyCount := 0`。⇒ **客户端构件与 oracle 的既有不兼容**，Rust 侧多发几字节是错的（客户端冻结 +
+  行为等价）⇒ 归 owner 按 §6.0-3 裁决。
+- **判据脚本**：`check_client_run_frames.py`（`--capture` ① c2s 有 3011 ② 52 尾长==58 ③ CM_RUN 条数==期望；
+  `--selftest` 5/5；缺件 `PREREQ rc=2`）。改坏必红与绿/红原始件见 `53-redcheck-runframes.txt`
+  （`--expect-run-count 1` ⇒ RED）。头条 capture：`capture-client-run5.jsonl`。
+- **缺口② before/after（`52-before-after-viewrange12.txt`）**：**after** = RunA 真机 capture 逐只怪
+  Chebyshev 距离，**12 只里 10 只落在 6..12**（窗口 5 只会是 0 只）⇒ 「同屏出现 6..12 的怪」达成；
+  **before** 的真机尝试（回缺省 5 重建起栈）**没抓到客户端连接**（代理 dump 空）⇒ 如实登记为 remaining，
+  before 侧以窗口模型（`PlayObject.cs:904` / `BaseObject.cs:383` / `ViewRange.cs:57-74`）与已审构造级用例为准。
+- **门禁**（merge tree `d8c02fd8`）：`fmt 0` / `clippy 0` / `99 suites · 1159 passed · 0 failed · 22 ignored` /
+  `msgcodegen 604`（`54-gates.txt`）。**本片零生产代码改动**（仅 `tools/client/mir_flow.ps1` 驱动段 + 本目录证据/判据）；
+  `55-boundary.txt`：冻结面 `src/ sql/ MirClient` + `crates/protocol` + `crates/storage` = 空。
