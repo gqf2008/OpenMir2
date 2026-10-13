@@ -1,6 +1,10 @@
 # M3⑧ 公会/攻城动作序列夹具骨架 —— 命令与原始件索引
 # 卡 openmir2-m3-guild-castle-fixture-botsrv（父卡 openmir2-m3-guild-castle-align）
-# 基线 base = origin/master 0dde01b7；分支 worktree-m3-guild-castle-fixture-botsrv
+# 基线 base = origin/master 15510a47；head = e095734d（分支 worktree-m3-guild-castle-fixture-botsrv）
+# 本片为**解冲突重交**：reviewer-5 root comment 指出本分支基于 0dde01b7，与已合入 master 的
+# ⑥-5/⑦-5/⑩-3 在 9 处共享 BotSrv/管线文件真冲突 ⇒ 已 `git merge origin/master` 按并集解
+# （保留 master 的 Quest/PairTrade/SellOff 驱动与管线，叠加本片 GuildCastle；条件式合并两侧项），
+# 并在合并树上**重跑**本目录全部读数（01–10 均为新 head 上实测）。
 # 全部命令在本 worktree（.claude/worktrees/m3cs）内执行；编译隔离 CARGO_TARGET_DIR=E:/tmp/m3cs-gc-target；
 # 未起栈、未占端口。
 

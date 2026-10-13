@@ -2,7 +2,13 @@
 
 卡：`openmir2-m3-guild-castle-fixture-botsrv`（M3 逐系统对齐 ⑧ 的承接卡 10；父卡 `openmir2-m3-guild-castle-align`）。
 交付 = **夹具骨架**（比较器 + 入口 + 无栈自检 + BotSrv 最小驱动），**真机两侧同序列未跑**（等 ⑧ 实现卡 +
-`openmir2-m3-clock-injection` 时间门 + owner 发窗口）。基线 `origin/master 0dde01b7`。
+`openmir2-m3-clock-injection` 时间门 + owner 发窗口）。基线 `origin/master 15510a47`；head `e095734d`。
+
+> **重交（解冲突）**：原 head `37dda4ee` 基于 `0dde01b7`，与已合入 master 的 ⑥-5/⑦-5/⑩-3 在 9 处共享文件
+> （`src/BotSrv/**` + `tools/botload/run_bots.ps1` + `m3/{run_pair,gate_guards}.ps1` + `whitelist.md`）真冲突。
+> 已 `git merge origin/master`，按**并集**解（保留 master 的 Quest/PairTrade/SellOff 驱动与管线，叠加本片
+> GuildCastle；条件式 save-settle 门/Green 判据/`ValidateSet` 合并两侧项），BotSrv `dotnet build` 0 error、
+> 四副入口 PowerShell 解析 PASS，并在合并树上**重跑本目录全部读数**。旧 approve 随 head 变化失效。
 
 ## 文件
 
@@ -15,7 +21,7 @@
 | `04-run-bots-selfcheck.txt` | `run_bots.ps1 -SelfCheckNoStack` | rc=0（含 guildcastle done/expected/完备性两向） |
 | `05-gate-fmt.txt` | `cargo fmt --all -- --check` | rc=0（空） |
 | `06-gate-clippy.txt` | `cargo clippy --offline --workspace --all-targets -- -D warnings` | rc=0 |
-| `07-gate-test.txt` | `cargo test --offline --workspace` | `93 suites / 853 passed / 0 failed / 21 ignored` |
+| `07-gate-test.txt` | `cargo test --offline --workspace` | `94 suites / 878 passed / 0 failed / 21 ignored` |
 | `08-gate-msgcodegen.txt` | `cargo run --offline -p msgcodegen -- --check` | `604 条常量` 一致 |
 | `09-boundary.txt` | `git diff --name-only` | `src sql MirClient` 仅 `src/BotSrv/**`（T-46 例外）；总差量为实现件 + 证据 |
 | `10-external-break-comparator.txt` | 外部删掉 `compare()` 的 `branch` 比较后跑 selftest | `SELFTEST ok=35/36`，rc=1 |

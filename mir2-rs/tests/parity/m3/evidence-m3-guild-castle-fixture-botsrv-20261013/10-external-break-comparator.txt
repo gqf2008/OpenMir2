@@ -1,11 +1,13 @@
+# 外部改坏必红：把 compare() 的逐字段比较列表里的 "branch" 去掉（其余不动）
+# cmd: cp guild_castle_diff.py <tmp>/gc.py && python -I <tmp>/gc.py selftest
 STATS records=2 bots=2 frames=0 texts=0 members=0 ok=2 fail=0
-CROSS csharp=C:\Users\gxh\AppData\Local\Temp\guildc-selftest-8pxf4kof\csharp.jsonl rust=C:\Users\gxh\AppData\Local\Temp\guildc-selftest-8pxf4kof\rust.jsonl
+CROSS csharp=C:\Users\gxh\AppData\Local\Temp\guildc-selftest-w0ugdvhp\csharp.jsonl rust=C:\Users\gxh\AppData\Local\Temp\guildc-selftest-w0ugdvhp\rust.jsonl
 GUILDC GREEN diff=0
 GUILDC bot=m3gc0 k=0 RED op csharp='open_dlg' rust='observe'
 STATS records=2 bots=2 frames=0 texts=0 members=0 ok=2 fail=0
-CROSS csharp=C:\Users\gxh\AppData\Local\Temp\guildc-selftest-8pxf4kof\csharp.jsonl rust=C:\Users\gxh\AppData\Local\Temp\guildc-selftest-8pxf4kof\rust.jsonl
+CROSS csharp=C:\Users\gxh\AppData\Local\Temp\guildc-selftest-w0ugdvhp\csharp.jsonl rust=C:\Users\gxh\AppData\Local\Temp\guildc-selftest-w0ugdvhp\rust.jsonl
 GUILDC RED diff=1
-RED: PREREQ_RED 缺文件: C:\Users\gxh\AppData\Local\Temp\guildc-selftest-8pxf4kof\nope.jsonl
+RED: PREREQ_RED 缺文件: C:\Users\gxh\AppData\Local\Temp\guildc-selftest-w0ugdvhp\nope.jsonl
 ok identical-green
 ok mutate-op-red
 ok mutate-role-red
@@ -43,3 +45,4 @@ ok cli-diff-green
 ok cli-diff-red
 ok cli-diff-missing-prereq
 SELFTEST ok=35/36
+rc=1
