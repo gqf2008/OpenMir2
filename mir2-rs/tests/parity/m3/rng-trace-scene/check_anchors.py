@@ -20,7 +20,11 @@ client-e2e 两次合并而行号增长，`enable_production_monster_ai` 调用�
 1. 文档里 `` `<literal>:<line>` `` **缺失 / 重复 / 行号非数字** ⇒ `ANCHOR_MISSING` / `ANCHOR_AMBIGUOUS`；
 2. 解析出的源文件不存在 ⇒ `ANCHOR_FILE_MISSING`；
 3. 期望符号在文件里**不存在** ⇒ `ANCHOR_SYMBOL_MISSING`；
-4. 期望符号的**首个**匹配行 ≠ 文档写的行号 ⇒ `ANCHOR_DRIFT`（点名实际行，即要改成的值）。
+4. 期望符号的**首个**匹配行 ≠ 文档写的行号 ⇒ `ANCHOR_DRIFT`（点名实际行，即要改成的值）；
+5. **闭世界**：文档里出现的**每个** `<path>.<ext>:<line>` 引用都必须有对应锚点
+   （`ANCHORS` 登记），否则 ⇒ `UNGUARDED_ANCHOR`（新增引用不登记 ⇒ 行号会静默漂移，
+   正是本工具自身在 2026-10-13 踩到的：`rng_consumer_groups.py` 的 `FOLD_RULES` 定义
+   因同片 +5 行从 `:52` 漂到 `:57`，而旧锚点表只硬编码了 5 条、不含它）。
 
 ## 用法
 
@@ -70,6 +74,14 @@ ANCHORS = (
          path="src/M2Server/Actor/AnimalObject.cs",
          rx=r"protected virtual void Wondering",
          why="oracle Wondering 锚（冻结面，仅防误抄）"),
+    dict(literal="rng-trace-probe/rng_consumer_groups.py",
+         path="mir2-rs/tests/parity/m3/rng-trace-probe/rng_consumer_groups.py",
+         rx=r"^FOLD_RULES = ",
+         why="R-6 折叠映射定义（文档用 :line 指向 FOLD_RULES；本片真身：同片 +5 行使它从 :52 漂到 :57）"),
+    dict(literal="rng-trace-probe/consumer_groups.tsv",
+         path="mir2-rs/tests/parity/m3/rng-trace-probe/consumer_groups.tsv",
+         rx=r"FOLD_RULES = \{construct: spawn\}",
+         why="站点表的 R-6 折叠理由行"),
 )
 
 
@@ -81,6 +93,22 @@ def _anchor_re(literal):
 def _read_lines(path):
     with open(path, "r", encoding="utf-8", errors="replace") as fh:
         return fh.read().splitlines()
+
+
+# 闭世界：文档里每个 `<path>.<ext>:<line>` 引用（前缀负向环视防止命中更长路径的尾部）。
+_DOC_REF_RE = re.compile(
+    r"(?<![A-Za-z0-9_./\\-])"
+    r"([A-Za-z0-9_][A-Za-z0-9_./\\-]*\.(?:rs|cs|py|ps1|json|tsv|md)):(\d+)"
+)
+
+
+def _anchor_covers(token, anchors):
+    """该文档引用是否被某个锚点覆盖（literal 全等，或 literal 是路径的 basename 段）。"""
+    for a in anchors:
+        lit = a["literal"]
+        if token == lit or token.endswith("/" + lit):
+            return True
+    return False
 
 
 def check_doc_text(doc_text, root=REPO_ROOT, anchors=ANCHORS):
@@ -114,6 +142,12 @@ def check_doc_text(doc_text, root=REPO_ROOT, anchors=ANCHORS):
         elif first != cited:
             problems.append("ANCHOR_DRIFT %s：文档写 %s:%d，但 /%s/ 的首个匹配在 :%d"
                             % (a["why"], a["path"], cited, a["rx"], first))
+    # 闭世界：未被任何锚点覆盖的 `path:line` 引用 ⇒ 新引用不登记 = 会静默漂移。
+    for m in _DOC_REF_RE.finditer(doc_text):
+        if not _anchor_covers(m.group(1), anchors):
+            problems.append("UNGUARDED_ANCHOR 文档引用 `%s:%s` 没有保鲜锚点 —— "
+                            "新增 `path:line` 必须在 ANCHORS 登记（否则行号会静默漂移）"
+                            % (m.group(1), m.group(2)))
     return problems
 
 
@@ -177,6 +211,21 @@ def selftest():
                any("ANCHOR_AMBIGUOUS" in p for p in bad3),
                "; ".join(bad3))
 
+    # ⑤ 改坏必红④：文档新增一个**未登记**的 `path:line` 引用 ⇒ `UNGUARDED_ANCHOR` 必红。
+    unguarded = text + "\n（另见 `crates/world/src/merchant.rs:999`）\n"
+    bad4 = check_doc_text(unguarded)
+    check_case("mutation-unguarded-anchor-red",
+               any("UNGUARDED_ANCHOR" in p and "merchant.rs" in p for p in bad4),
+               "; ".join(bad4))
+
+    # ⑥ 改坏必红⑤：把 R-6 折叠映射定义行号改回历史值 `:52`（本片真身漂移）⇒ `ANCHOR_DRIFT` 必红。
+    fold_drifted = _anchor_re("rng-trace-probe/rng_consumer_groups.py").sub(
+        "rng-trace-probe/rng_consumer_groups.py:52", text, count=1)
+    bad5 = check_doc_text(fold_drifted)
+    check_case("mutation-fold-def-drift-red",
+               any("ANCHOR_DRIFT" in p and "FOLD_RULES" in p for p in bad5),
+               "; ".join(bad5))
+
     total = len(checks)
     badn = [(n, d) for n, ok, d in checks if not ok]
     for n, ok, d in checks:
@@ -184,7 +233,7 @@ def selftest():
     if badn:
         print("SELFTEST RED: check_anchors selftest %d/%d" % (total - len(badn), total))
         return 1
-    print("SELFTEST GREEN: check_anchors selftest %d/%d（含 3 条改坏必红）" % (total, total))
+    print("SELFTEST GREEN: check_anchors selftest %d/%d（含 5 条改坏必红）" % (total, total))
     return 0
 
 

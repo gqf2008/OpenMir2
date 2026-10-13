@@ -1,0 +1,3 @@
+old doc + old tool (旧口径，应漏报 GREEN 5/5):
+GREEN: check_anchors 5/5 锚点保鲜（文档行号 == 当前源码首个匹配行）
+rc=0

@@ -1,0 +1,9 @@
+check_anchors selftest (6/6, 5 mutation-red):
+  ok  real-doc-fresh
+  ok  mutation-line-drift-red（ANCHOR_DRIFT 宿主无条件开怪 AI 调用点（本卡要 AI 开）：文档写 mir2-rs/bins/game-svr/src/main.rs:5229，但 /enable_production_monster_ai\(&mut world\)/ 的首个匹配在 :5440）
+  ok  mutation-anchor-removed-red（ANCHOR_MISSING 宿主 AI 开关接缝：文档里找不到 `mongen.rs:<line>`）
+  ok  mutation-anchor-ambiguous-red（ANCHOR_AMBIGUOUS Wondering 的 Random(20) 抽数入口：`monai.rs:<line>` 出现 2 次（171,171）⇒ 无法判定）
+  ok  mutation-unguarded-anchor-red（UNGUARDED_ANCHOR 文档引用 `crates/world/src/merchant.rs:999` 没有保鲜锚点 —— 新增 `path:line` 必须在 ANCHORS 登记（否则行号会静默漂移））
+  ok  mutation-fold-def-drift-red（ANCHOR_DRIFT R-6 折叠映射定义（文档用 :line 指向 FOLD_RULES；本片真身：同片 +5 行使它从 :52 漂到 :57）：文档写 mir2-rs/tests/parity/m3/rng-trace-probe/rng_consumer_groups.py:52，但 /^FOLD_RULES = / 的首个匹配在 :57）
+SELFTEST GREEN: check_anchors selftest 6/6（含 5 条改坏必红）
+rc=0
