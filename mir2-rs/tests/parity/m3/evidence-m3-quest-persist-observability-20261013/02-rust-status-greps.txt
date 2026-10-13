@@ -1,0 +1,21 @@
+# Rust 侧任务态落库现状（HEAD=master 65602bf8 + 本片）
+
+## [A] 全仓 .rs 是否引用 characters_quest
+  NO_MATCH（0 引用，与 oracle 一致）
+
+## [B] db-srv 源码是否有任务列/表（精确 token，避开 request/问句等假阳性）
+  NO_MATCH（db-srv 源码无任务列/表字样）
+
+## [C] 会话任务态建模仍在（不落库 != 删会话态）
+  mir2-rs/crates/script/src/engine/quest_state.rs:36:pub const QUEST_ARRAY_LEN: usize = 128;
+  mir2-rs/crates/script/src/engine/quest_state.rs:43:pub struct QuestBitmap {
+  mir2-rs/crates/script/src/engine/quest_state.rs:44:    bytes: [u8; QUEST_ARRAY_LEN],
+  mir2-rs/crates/storage/src/playerdata.rs:669:    pub quest_unit_open: Option<Vec<u8>>,
+  mir2-rs/crates/storage/src/playerdata.rs:670:    pub quest_unit: Option<Vec<u8>>,
+  mir2-rs/crates/storage/src/playerdata.rs:671:    pub quest_flag: Option<Vec<u8>>,
+  mir2-rs/bins/game-svr/src/npc.rs:45:use mir2_script::engine::quest_state::QuestBitmap;
+  mir2-rs/bins/game-svr/src/npc.rs:340:    /// 不是按字节下标直存。本仓库的权威移植 = `crates/script::engine::quest_state::QuestBitmap`
+
+## [D] 已捕获的两侧基线 characters_quest 行数（M1 跨读，真机两相）
+  csharp characters_quest.rows=0 sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  rust   characters_quest.rows=0 sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

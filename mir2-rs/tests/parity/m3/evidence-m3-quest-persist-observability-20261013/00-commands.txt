@@ -1,0 +1,15 @@
+worktree=/e/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3pt
+branch=worktree-m3-quest-persist-observability
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3pt-target
+
+# 门禁（本片新增）
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3pt-target cargo test -p db-srv --test quest_no_persist
+# 改坏必红
+#   RC1: db-srv/src/playdata.rs 的 SAVE_CHARACTERS_SQL 注入 `QuestFlag = ?,`
+#   RC2: playdata.rs 注入 `characters_quest` 写路径
+#   RC3: csharp 基线 characters_quest.rows 0 -> 1
+# 四门禁
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3pt-target cargo fmt --all -- --check
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3pt-target cargo clippy --workspace --all-targets -- -D warnings
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3pt-target cargo test --workspace
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3pt-target cargo run -p msgcodegen -- --check

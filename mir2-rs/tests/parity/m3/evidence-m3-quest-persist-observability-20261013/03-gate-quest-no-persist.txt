@@ -1,0 +1,15 @@
+# 门禁：cargo test -p db-srv --test quest_no_persist（fmt 后复跑；CARGO_TARGET_DIR=E:/tmp/openmir2-m3pt-target）
+
+   Compiling db-srv v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3pt\mir2-rs\bins\db-srv)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.62s
+     Running tests\quest_no_persist.rs (E:/tmp/openmir2-m3pt-target\debug\deps\quest_no_persist-21ddaa74cab9a78d.exe)
+
+running 5 tests
+test redcheck_scanner_bites_injected_quest_persistence ... ok
+test session_quest_state_model_is_still_present ... ok
+test captured_cross_side_baselines_show_zero_characters_quest_rows ... ok
+test db_srv_save_and_load_sql_have_no_quest_columns ... ok
+test workspace_rust_sources_never_reference_characters_quest ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+
