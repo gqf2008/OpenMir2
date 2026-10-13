@@ -1,0 +1,34 @@
+# M3⑨-2 第②片 命令（隔离 CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target，--offline）
+
+# 0) 开工前
+git fetch origin
+git merge --ff-only origin/master            # 6f0bca48e
+# 实现后提交，再合并当时 origin/master
+git merge --no-edit origin/master            # 无冲突
+
+# 1) 四门禁（gates/）
+cargo fmt --all -- --check                   # rc=0
+cargo clippy --workspace --all-targets -- -D warnings   # rc=0
+cargo test --workspace --no-fail-fast        # 97 suites 994 passed 0 failed 21 ignored
+cargo run -p msgcodegen -- --check           # 604 条
+
+# 2) 判据（gates/14-slave-tests.txt）
+cargo test -p mir2-world --lib amulet_use
+cargo test -p game-svr --lib slave
+cargo test -p game-svr --lib smframe
+cargo test -p game-svr --bin game-svr spell_cmd
+cargo test -p mir2-world --test magic_effect_vectors
+
+# 3) 改坏必红（redchecks/，逐条：改 → 跑 → git checkout -- 还原 → 重跑）
+cargo test -p mir2-world --lib amulet_use                                     # RC1
+cargo test -p game-svr  --lib smframe::tests::spell_and_magicfire_field_layout # RC2
+cargo test -p game-svr  --lib slave::tests::cast_with_amulet_consumes_and_reaches_summon # RC3
+cargo test -p game-svr  --bin game-svr spell_cmd_summon_wires_amulet_and_frames # RC4
+
+# 4) 边界
+git diff --name-only 6f0bca48e HEAD -- src sql MirClient          # 空
+git diff --name-only 6f0bca48e HEAD -- mir2-rs/crates/protocol mir2-rs/crates/storage  # 空
+
+# 5) 证据清单
+python -I tools/evidence-hash/verify_sha256sums.py verify <本目录> --check-extra
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck <本目录>
