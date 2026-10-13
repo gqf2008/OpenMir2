@@ -350,6 +350,17 @@ pub struct Entity {
     /// [`crate::monai::monster_ai_tick`] 显式跳过它（race 50 与 `ActorRace.Animal` 同值，
     /// 靠 race 会误跑 `monster_run`）。
     pub merchant: Option<crate::merchant::MerchantState>,
+    /// C# `PlayObject.AllowGroup`（`PlayObject.cs:106` 声明、`:902` 构造初值 `false`）——
+    /// 是否允许被拉进小组（`ClientCreateGroup`/`ClientAddGroupMember` 的门）。
+    pub allow_group: bool,
+    /// C# `PlayObject.AllowGroupReCall`（`PlayObject.cs:224`）——是否允许被组队传送（`@GroupRecall`）。
+    /// 构造未显式赋值 ⇒ `bool` 缺省 `false`。[`crate::party`] 不消费它；扩展面（⑦-可选）接线用。
+    pub allow_group_re_call: bool,
+    /// C# `PlayObject.GroupOwner`（`PlayObject.cs:583`，构造默认 `0` = 无组）——**团长** `ActorId`。
+    pub group_owner: i32,
+    /// C# `PlayObject.GroupMembers`（`PlayObject.cs:587`，构造 `:1042` `new List`）——
+    /// 组内成员 `ActorId` 列表（**含团长自己**，与 oracle 一致）。顺序 = 加入序（oracle 的 `IList`）。
+    pub group_members: Vec<i32>,
 }
 
 impl Entity {
@@ -420,6 +431,12 @@ impl Entity {
             ctor_draws: MonsterCtorDraws::default(),
             ai: AnimalState::default(),
             merchant: None,
+            // 组队态构造初值：`PlayObject.cs:902` `AllowGroup=false`、`:583` `GroupOwner=0`、
+            // `:1042` `GroupMembers=new List()`、`AllowGroupReCall`（`:224`）bool 缺省 `false`。
+            allow_group: false,
+            allow_group_re_call: false,
+            group_owner: 0,
+            group_members: Vec::new(),
         }
     }
 

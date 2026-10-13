@@ -47,6 +47,7 @@ use anyhow::{Context, Result};
 use game_svr::chat;
 use game_svr::downlink;
 use game_svr::movewire;
+use game_svr::party as partywire;
 use game_svr::smframe;
 use mir2_protocol::frame::ServerMessage;
 use mir2_protocol::messages::grobal2;
@@ -505,6 +506,13 @@ async fn main() -> Result<()> {
                 },
                 notice,
                 colors,
+                partywire::world_config(
+                    cfg.group_members_max,
+                    cfg.group_msg_f_color,
+                    cfg.group_msg_b_color,
+                    cfg.red_msg_f_color,
+                    cfg.red_msg_b_color,
+                ),
                 ev_rx,
                 Some(db),
             )
@@ -706,6 +714,73 @@ fn handle_say(
         speaker.actor_id,
         delivered,
         line
+    );
+}
+
+/// `openmir2-m3-party-group-state`：4 条组队 `CM_*` 的派发 + 帧路由。
+///
+/// oracle：`PlayObject.Message.cs:914-935` 的 `CM_GROUPMODE(1019)` / `CM_CREATEGROUP(1020)` /
+/// `CM_ADDGROUPMEMBER(1021)` / `CM_DELGROUPMEMBER(1022)` 支；后三条把 `processMsg.Msg.Trim()`
+/// 交给 `ClientCreateGroup`/`ClientAddGroupMember`/`ClientDelGroupMember`。
+///
+/// **收包字段口径**：`CM_GROUPMODE` 判的是 `processMsg.nParam2`（12B 头的 `Param` 字段）；
+/// 其余三条用尾 `Msg`（`Recog`/`Tag` 不参与）。
+///
+/// 世界侧状态机在 `crates/world/src/party.rs`；本函数只负责「找会话 → 调状态机 → 把事件按
+/// `[GateIdx, Socket]` 回帧」（事件顺序已按 oracle 的「立即帧 / `MsgQueue` 出队序」排好，别重排）。
+#[allow(clippy::too_many_arguments)]
+fn handle_party_cmd(
+    ident: u16,
+    param: u16,
+    tail: Option<&str>,
+    chr_name: &str,
+    socket: i32,
+    online: &OnlineRegistry,
+    world: &mut mir2_world::World,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    party_cfg: &mir2_world::PartyConfig,
+) {
+    let Some(sender) = online.iter().find(|e| e.chr_name == chr_name) else {
+        glog!(
+            "WRN",
+            "组队 CM：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃 ident={ident}"
+        );
+        return;
+    };
+    let actor = sender.actor_id;
+    let target = tail.unwrap_or("").trim();
+    let events = match ident {
+        mir2_protocol::messages::CM_GROUPMODE => world.party_group_mode(actor, param, party_cfg),
+        mir2_protocol::messages::CM_CREATEGROUP => {
+            world.party_create_group(actor, target, party_cfg)
+        }
+        mir2_protocol::messages::CM_ADDGROUPMEMBER => {
+            world.party_add_group_member(actor, target, party_cfg)
+        }
+        mir2_protocol::messages::CM_DELGROUPMEMBER => {
+            world.party_del_group_member(actor, target, party_cfg)
+        }
+        _ => return,
+    };
+    let mut delivered = 0usize;
+    for ev in &events {
+        let (to, body) = partywire::event_body(ev);
+        let Some(t) = online.iter().find(|e| e.actor_id == to) else {
+            continue;
+        };
+        let Some(tx) = route_to_gate(gates, t.gate_idx, t.socket, "组队回帧") else {
+            continue;
+        };
+        let _ = tx.send(SimToGate::SendFrame {
+            socket: t.socket,
+            body,
+        });
+        delivered += 1;
+    }
+    glog!(
+        "INF",
+        "组队 ChrName={chr_name} ActorId={actor} ident={ident} param={param} target={target:?} → {delivered} 帧（事件 {} 条）",
+        events.len()
     );
 }
 
@@ -3530,12 +3605,14 @@ fn step_mon_gen(
     world.rng = rng;
 }
 
+#[allow(clippy::too_many_arguments)]
 fn sim_loop(
     map_sizes: Vec<(i32, i32)>,
     registry: Option<mir2_envir::MapRegistry>,
     mut enter_cfg: EnterConfig,
     notice: Vec<u8>,
     colors: MsgColors,
+    party_cfg: mir2_world::PartyConfig,
     ev_rx: std::sync::mpsc::Receiver<GateEvent>,
     mut db: Option<DbWiring>,
 ) {
@@ -3866,6 +3943,26 @@ fn sim_loop(
                             &mut displays,
                             &gates,
                         );
+                    } else if matches!(
+                        cmd.ident,
+                        mir2_protocol::messages::CM_GROUPMODE
+                            | mir2_protocol::messages::CM_CREATEGROUP
+                            | mir2_protocol::messages::CM_ADDGROUPMEMBER
+                            | mir2_protocol::messages::CM_DELGROUPMEMBER
+                    ) {
+                        // `openmir2-m3-party-group-state`：4 条组队 `CM_*` 派发
+                        // （oracle `PlayObject.Message.cs:914-935`）。
+                        handle_party_cmd(
+                            cmd.ident,
+                            cmd.param,
+                            tail.as_deref(),
+                            &chr_name,
+                            socket,
+                            &online,
+                            &mut world,
+                            &gates,
+                            &party_cfg,
+                        );
                     } else if game_svr::attackwire::is_hit_ident(cmd.ident) {
                         // `openmir2-m3-attack-magic-wiring`（第一片）：9 条 `CM_*HIT` 派发
                         // （oracle `PlayObject.Message.cs:1221-1230` → `ClientHitXY`）。
@@ -3952,6 +4049,29 @@ fn sim_loop(
                         // 同屏展示表随实体一并摘除（ActorId 槽位会被内核回收复用，避免旧展示值残留）。
                         if let Some(aid) = world.session(&chr_name).and_then(|s| s.actor_id) {
                             displays.remove(aid);
+                            // `openmir2-m3-party-group-state`：oracle `Disappear()`
+                            // （`PlayObject.Message.cs:2138-2142`）在 `MakeGhost` 里调
+                            // `groupOwnerPlay.DelMember(this)`（离线即退组 / 团长离线整组散）。
+                            // 断线者已从 `online` 摘除 ⇒ 它自己的回帧按 oracle `OffLineFlag`
+                            // 丢弃；其余成员正常收帧。
+                            let owner = world.entities.get(aid).map(|e| e.group_owner).unwrap_or(0);
+                            if owner != 0 {
+                                for ev in world.party_del_member(owner, aid, &party_cfg) {
+                                    let (to, body) = partywire::event_body(&ev);
+                                    let Some(t) = online.iter().find(|e| e.actor_id == to) else {
+                                        continue;
+                                    };
+                                    let Some(tx) =
+                                        route_to_gate(&gates, t.gate_idx, t.socket, "断线组队清组")
+                                    else {
+                                        continue;
+                                    };
+                                    let _ = tx.send(SimToGate::SendFrame {
+                                        socket: t.socket,
+                                        body,
+                                    });
+                                }
+                            }
                         }
                         match world.disconnect(&chr_name) {
                             Ok(()) => glog!(
@@ -4731,6 +4851,9 @@ fn sim_loop(
             }
         }
         let rec = world.tick();
+        // `openmir2-m3-party-group-state`：`PlayObject.Run()` 的组队段（`PlayObject.Message.cs:704-719`）
+        // 在同一 tick 的恢复段之前（`base.Run()` 在 `:765`，晚于组队段）。
+        world.party_run_tick();
         ticks += 1;
         // T-28：周期恢复 tick（oracle `PlayObject.Run` 的 `:70-141`）——同一 world tick 后处理，
         // 把 `IncHealth/IncSpell/IncHealing` 按 oracle 节奏消费回 `WAbil.HP/MP` 并回帧。
@@ -5546,6 +5669,169 @@ mod tests {
         assert!(
             !users0.find(1, 5).unwrap().in_world,
             "0 号线的同号 socket **不得**被标（N1 的错标场景）"
+        );
+    }
+
+    /// **`openmir2-m3-party-group-state` 进程级判据**：走**生产路径** `handle_party_cmd`，让一条
+    /// 连接（gate 0 / socket 5 = L）与另一条（gate 0 / socket 6 = T）完成
+    /// `CM_GROUPMODE(T 开组) → CM_CREATEGROUP(L,T) → CM_DELGROUPMEMBER(L,T)` 的派发，断言：
+    /// ① 帧按 `[gate_idx, socket]` 路由到正确连接；
+    /// ② `SM_GROUPMEMBERS(667)` 尾 = `EncodeString("L/T/")`；
+    /// ③ `SM_GROUPDELMEM_OK(663)` 的 `Recog=0`、尾 = `EncodeString("T")`；
+    /// ④ `SM_SYSMESSAGE(100)` 用组队颜色（`Param=MakeWord(0xC4,0xFF)`、`series=1`）。
+    ///
+    /// 红检：把 `sm_groupmembers` 的尾 `edcode::encode` 删掉、或把 `handle_party_cmd` 的帧序
+    /// 打乱 ⇒ 本用例必 FAILED。
+    #[test]
+    fn party_cm_dispatch_emits_oracle_frames_on_both_connections() {
+        use mir2_world::{Entity, PartyConfig};
+        use std::collections::HashMap;
+
+        fn drain(rx: &mut mpsc::UnboundedReceiver<SimToGate>) -> Vec<Vec<u8>> {
+            let mut out = Vec::new();
+            while let Ok(ev) = rx.try_recv() {
+                match ev {
+                    SimToGate::SendFrame { body, .. } => out.push(body),
+                    other => panic!("组队路径不得发 SendFrame 以外的命令，实得 {other:?}"),
+                }
+            }
+            out
+        }
+        fn ident(body: &[u8]) -> u16 {
+            u16::from_le_bytes([body[4], body[5]])
+        }
+        fn recog(body: &[u8]) -> i32 {
+            i32::from_le_bytes([body[0], body[1], body[2], body[3]])
+        }
+
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        let mut world = mir2_world::World::new(32, 32);
+        let l = world.add_entity(Entity::new(1, "L", 10, 10));
+        let t = world.add_entity(Entity::new(2, "T", 11, 10));
+
+        let online: OnlineRegistry = vec![
+            OnlineEntry {
+                account: "a".into(),
+                chr_name: "L".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 5,
+                actor_id: l,
+            },
+            OnlineEntry {
+                account: "b".into(),
+                chr_name: "T".into(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 6,
+                actor_id: t,
+            },
+        ];
+
+        let cfg = PartyConfig::default();
+
+        // ① T 开 AllowGroup（`CM_GROUPMODE` 的 `param != 0`）
+        handle_party_cmd(
+            mir2_protocol::messages::CM_GROUPMODE,
+            1,
+            None,
+            "T",
+            6,
+            &online,
+            &mut world,
+            &gates,
+            &cfg,
+        );
+        let t_mode = drain(&mut rx0);
+        assert_eq!(t_mode.len(), 1, "T 只收到一条 SM_GROUPMODECHANGED");
+        assert_eq!(
+            ident(&t_mode[0]),
+            mir2_protocol::messages::SM_GROUPMODECHANGED
+        );
+        assert_eq!(u16::from_le_bytes([t_mode[0][6], t_mode[0][7]]), 1);
+
+        // ② L 建组（T 已在 AllowGroup）
+        handle_party_cmd(
+            mir2_protocol::messages::CM_CREATEGROUP,
+            0,
+            Some("T"),
+            "L",
+            5,
+            &online,
+            &mut world,
+            &gates,
+            &cfg,
+        );
+        let frames = drain(&mut rx0);
+        // 事件表的**全局次序**（两 socket 共用一条 channel）：立即帧先、排队帧后；
+        // 667 两条（L/T 各一），join 说词四条（join(L) 给 L/T，join(T) 给 L/T）。
+        let idents: Vec<u16> = frames.iter().map(|b| ident(b)).collect();
+        assert_eq!(
+            idents,
+            vec![
+                mir2_protocol::messages::SM_CREATEGROUP_OK,
+                mir2_protocol::messages::SM_GROUPMEMBERS,
+                mir2_protocol::messages::SM_GROUPMEMBERS,
+                mir2_protocol::messages::SM_SYSMESSAGE,
+                mir2_protocol::messages::SM_SYSMESSAGE,
+                mir2_protocol::messages::SM_SYSMESSAGE,
+                mir2_protocol::messages::SM_SYSMESSAGE,
+            ]
+        );
+        // 667 尾 = EncodeString("L/T/")
+        let gm = frames
+            .iter()
+            .find(|b| ident(b) == mir2_protocol::messages::SM_GROUPMEMBERS)
+            .unwrap();
+        assert_eq!(
+            mir2_protocol::edcode::decode(&gm[12..]),
+            gbk_encode("L/T/"),
+            "SM_GROUPMEMBERS 尾必须是 EncodeString(\"L/T/\")"
+        );
+        // 100 的颜色：Param = MakeWord(0xC4, 0xFF) = 0xFFC4，series=1
+        let sm = frames
+            .iter()
+            .find(|b| ident(b) == mir2_protocol::messages::SM_SYSMESSAGE)
+            .unwrap();
+        assert_eq!(u16::from_le_bytes([sm[6], sm[7]]), 0xFFC4, "组队色 Param");
+        assert_eq!(u16::from_le_bytes([sm[10], sm[11]]), 1, "series=1");
+
+        // ③ L 把 T 移出组
+        handle_party_cmd(
+            mir2_protocol::messages::CM_DELGROUPMEMBER,
+            0,
+            Some("T"),
+            "L",
+            5,
+            &online,
+            &mut world,
+            &gates,
+            &cfg,
+        );
+        let frames = drain(&mut rx0);
+        // 全局事件次序：GCANCEL(L,立即), DELMEM_OK(L), GCANCEL(T,排队156),
+        // SYSMESSAGE(T 退出→L), SYSMESSAGE(T 退出→T), SYSMESSAGE(解散→L)。
+        let idents: Vec<u16> = frames.iter().map(|b| ident(b)).collect();
+        assert_eq!(
+            idents,
+            vec![
+                mir2_protocol::messages::SM_GROUPCANCEL,
+                mir2_protocol::messages::SM_GROUPDELMEM_OK,
+                mir2_protocol::messages::SM_GROUPCANCEL,
+                mir2_protocol::messages::SM_SYSMESSAGE,
+                mir2_protocol::messages::SM_SYSMESSAGE,
+                mir2_protocol::messages::SM_SYSMESSAGE,
+            ]
+        );
+        let delok = &frames[1];
+        assert_eq!(recog(delok), 0, "SM_GROUPDELMEM_OK 的 Recog=0");
+        assert_eq!(
+            mir2_protocol::edcode::decode(&delok[12..]),
+            gbk_encode("T"),
+            "SM_GROUPDELMEM_OK 尾 = EncodeString(被删者名)"
         );
     }
 

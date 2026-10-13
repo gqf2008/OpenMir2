@@ -22,6 +22,7 @@ pub mod mongen;
 pub mod monitems;
 pub mod movewire;
 pub mod npc;
+pub mod party;
 pub mod pickwire;
 pub mod recover;
 pub mod smframe;
