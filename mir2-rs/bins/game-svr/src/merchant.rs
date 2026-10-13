@@ -1,20 +1,28 @@
-//! 商人**宿主装载层**（卡 `openmir2-m3-merchant-entity-tick`，M3⑤-实现 2 第①片）。
+//! 商人**宿主装载层**（卡 `openmir2-m3-merchant-entity-tick`，M3⑤-实现 2 第①/②片）。
 //!
-//! 本片把 ⑤-1 的 `crates/envir` 商人记录接到世界实体，并落 owner 转交的两条必做项：
+//! 本层把 ⑤-1 的 `crates/envir` 商人记录接到世界实体，并落 owner 转交的必做项：
 //!
 //! - **O-1（FindMap 门）**：`WorldServer.Merchant.cs:8-25` 的 `SystemShare.MapMgr.FindMap(MapName)
-//!   != null` —— 不满足则**丢弃该记录**（oracle `Error + RemoveAt`）。部署件上有 4 条 map 名不存在
-//!   （`DB`×1 / `ZM6`×1 / `jiaren`×2）⇒ 131 → ~127。宿主侧等价物 = `MapRegistry::id_of`。
+//!   != null` —— 不满足则**丢弃该记录**（oracle `Error + RemoveAt`）。部署件读数（两 reviewer +
+//!   真机向量）：**131 → 131（门不触发，`dropped=[]`）** —— `FindMap`（`MapManager.cs:146`）按
+//!   **逻辑名**（`|` 前）查表，不看 `.map` 文件名，而 `MapInfo.txt:1/:10/:21` 三段俱在。宿主侧
+//!   等价物 = `MapRegistry::id_of`（合成用例 `find_map_gate_drops_unknown_map` 才是门的牙齿）。
 //! - **O-2（`rename_rand` 注入）**：`ScriptParsers.cs:857` 的重名 label 改名走
 //!   `SystemShare.RandomNumber.GetRandomNumber(1, 200)` —— 由本层把**共享 `world.rng`** 的
-//!   `get_random_number(1, 200)` 注入 `MapLoader::load_merchants`（不另开私有流）。
+//!   `get_random_number(1, 200)` 注入 `MapLoader::load_merchants`（不另开私有流；站点经
+//!   `crates/world::merchant::merchant_rename_rand` 归 `merchant` 组）。
 //!
-//! ## 与 oracle 的建模差异（登记，留给本卡 tick 分片）
-//! - `BaseObject` ctor 的 `RunTick = GetTickCount() + Random(1500)`（`BaseObject.cs:439`）本片
-//!   **不抽**（构造抽的落点须与 tick 分片一起按 oracle 次序定；见 `crates/world::merchant` 模块头）。
+//! ## 与 oracle 的建模差异（登记）
 //! - `ProcessRefillIndex`（`ScriptParsers.cs:838`，全局 `CurrentMerchantIndex++`）⑤-1 未随记录暴露
-//!   ⇒ 本片置 0（只影响 `Merchant.Run` 的补货延时门，属 tick 分片）。
-//! - `merchant_tick`（`ProcessMerchants`）本片**不驱动**（分片预算 5ms 的确定性等价物待 owner 拍板）。
+//!   ⇒ 置 0（只影响 `Merchant.Run` 的补货延时门，见 `crates/world::merchant`）。
+//! - 次序：oracle `LocalDB.LoadMerchant` 正序构造抽、`MerchantList` 正序（倒序 `Initialize`
+//!   **不**重排它）、`MerchantInitialize` 只把 `AddToMap` 的 `obj_list` 追加序倒过来。⇒ 本层
+//!   **正序** [`mir2_world::World::merchant_ctor_run_delay`] + **正序**
+//!   [`mir2_world::World::insert_merchant`] 建实体（槽位序 = 文件序 = tick 序），仅
+//!   **倒序** [`mir2_world::World::attach_merchant_to_map`] 落格（`obj_list` 反序）；
+//!   见 [`spawn_merchants`]（reviewer-5 `0f220cac` F-1 返工）。
+//! - `is_hide` 当前恒 `false` 且不可注入；oracle `MerchantInitialize` 在 `LoadMerchantScript` 之前
+//!   ⇒ 此刻确为默认 `false`，1:1 成立（详见 `crates/world::merchant` 模块头）。
 
 use mir2_envir::MapLoader;
 use mir2_shared::rng::RandomNumber;
@@ -25,9 +33,9 @@ use mir2_world::merchant::{MerchantFlags, MerchantGoods, MerchantSpawn, Merchant
 pub struct MerchantLoadReport {
     /// `LocalDB.LoadMerchant` 入库的记录数（部署件 = 131）。
     pub records: usize,
-    /// 过 `FindMap` 门后留在世界里的记录数（部署件 = 127）。
+    /// 过 `FindMap` 门后留在世界里的记录数（部署件 = 131，门不触发）。
     pub kept: usize,
-    /// 被 `FindMap` 门丢弃的 `(ChrName, MapName)`（部署件 4 条）。
+    /// 被 `FindMap` 门丢弃的 `(ChrName, MapName)`（部署件 = 空；合成用例才触发门）。
     pub dropped_unknown_map: Vec<(String, String)>,
 }
 
@@ -42,6 +50,8 @@ pub fn to_spawn(record: mir2_envir::MerchantRecord, map_id: usize) -> MerchantSp
             item_name: g.item_name,
             count: g.count,
             refill_time: g.refill_time,
+            // `Goods.RefillTick` 由脚本解析置 0（`ScriptParsers.cs:965`）。
+            refill_tick: 0,
         })
         .collect();
     let f = record.flags;
@@ -98,7 +108,10 @@ pub fn load_merchant_spawns(
     rng: &mut RandomNumber,
 ) -> Result<(Vec<MerchantSpawn>, MerchantLoadReport), String> {
     // O-2：`SystemShare.RandomNumber.GetRandomNumber(1, 200)`（`ScriptParsers.cs:857`）。
-    let mut rename_rand = |min: i32, max: i32| rng.get_random_number(min, max);
+    // 经 `crates/world::merchant::merchant_rename_rand` 转发 ⇒ `#[track_caller]` 记到的站点是
+    // `crates/world/src/merchant.rs`（`merchant` 组），**不**在宿主产生未归类站点。
+    let mut rename_rand =
+        |min: i32, max: i32| mir2_world::merchant::merchant_rename_rand(rng, min, max);
     let records = loader
         .load_merchants(&mut rename_rand)
         .map_err(|e| e.to_string())?
@@ -121,22 +134,48 @@ pub fn load_merchant_spawns(
     Ok((spawns, report))
 }
 
-/// 把装载好的商人逐条挂图（oracle `MerchantInitialize` 的 `Initialize()` 段）。
+/// 把装载好的商人逐条挂图，**按 oracle 的两个独立次序**（owner `b311a876b1` 裁决 +
+/// reviewer-5 `0f220cac` F-1 返工）：
+///
+/// 1. `LocalDB.LoadMerchant` 是**正序**逐条 `new Merchant()`（ctor 抽 `RunTick`，
+///    `BaseObject.cs:439`）⇒ 先正序 [`mir2_world::World::merchant_ctor_run_delay`] 把每条构造抽
+///    落定（取数次序 = 文件行序）；
+/// 2. `MerchantList` 由 `AddMerchant` **正序**追加，`MerchantInitialize`
+///    （`WorldServer.Merchant.cs:8`）的 `for (i = Count-1; i >= 0; i--)` **不重排它**，
+///    `ProcessMerchants`（`:68`）又从 `MerchantPosition` 起**正序**遍历 ⇒ **实体槽位序
+///    （[`mir2_world::World::merchant_ids_sorted`] / `merchant_tick` 的 pass 内次序）必须是文件正序**；
+/// 3. 倒序只作用于 `Initialize()` 里 `AddToMap` 对 map cell `obj_list` 的**追加次序**
+///    ⇒ **只有挂图这一步倒序**。
+///
+/// ⇒ 先**正序** [`mir2_world::World::insert_merchant`] 建实体（槽位序 = 文件序）、再**倒序**
+/// [`mir2_world::World::attach_merchant_to_map`] 落格（`obj_list` 追加 = 反序）。两个次序解耦，
+/// **不可**把整个 spawn 循环一起 `rev()`（那会把 tick 次序也反过来；reviewer-5 F-1 自复现过）。
 ///
 /// 返回 `(挂图成功数, 挂图失败被移除的 ChrName)`。
 #[must_use]
 pub fn spawn_merchants(
     world: &mut mir2_world::World,
-    spawns: Vec<MerchantSpawn>,
+    mut spawns: Vec<MerchantSpawn>,
 ) -> (usize, Vec<String>) {
+    // ① `LocalDB.LoadMerchant` 正序构造抽（每条 1 次；站点归 `merchant` 组）。
+    for spawn in spawns.iter_mut() {
+        spawn.state.run_tick = world.merchant_ctor_run_delay();
+    }
+    // ② `MerchantList` 正序建实体：实体槽位序 = 文件序 ⇒ `merchant_ids_sorted`/`merchant_tick` 正序。
+    let pending: Vec<(Option<i32>, String)> = spawns
+        .into_iter()
+        .map(|spawn| {
+            let name = spawn.name.clone();
+            (world.insert_merchant(spawn), name)
+        })
+        .collect();
+    // ③ `MerchantInitialize` 倒序挂图：只有 `AddToMap` 的 `obj_list` 追加序是反序。
     let mut kept = 0;
     let mut failed = Vec::new();
-    for spawn in spawns {
-        let name = spawn.name.clone();
-        if world.spawn_merchant(spawn).is_some() {
-            kept += 1;
-        } else {
-            failed.push(name);
+    for (id, name) in pending.into_iter().rev() {
+        match id {
+            Some(id) if world.attach_merchant_to_map(id) => kept += 1,
+            _ => failed.push(name),
         }
     }
     (kept, failed)
@@ -273,5 +312,66 @@ DB/script jiaren 1 1 dummy 0 3 0\n";
             "FindMap 门在本部署无命中：131 全保留（见函数头实测）"
         );
         assert!(report.dropped_unknown_map.is_empty());
+    }
+
+    /// reviewer-5 `0f220cac` F-1 返工 + owner `b311a876b1` 倒序裁决：**两个次序必须解耦**。
+    ///
+    /// oracle `WorldServer.Merchant.cs:8` 的 `for (i = Count-1; i >= 0; i--)` 只让 `AddToMap`
+    /// 对 map cell `obj_list` 的**追加次序是反序**；`MerchantList` 本身仍是 `LocalDB.LoadMerchant`
+    /// 的**正序**（`ProcessMerchants` 从 `MerchantPosition` 起正序 `Run`）⇒ 实体槽位序
+    /// （`merchant_ids_sorted`）必须是文件正序。
+    ///
+    /// 牙齿：把整个 spawn 循环一起 `rev()`（正序抽 + 倒序建实体/挂图）⇒ `merchant_ids_sorted`
+    /// 断言必红；改成全正序 ⇒ `obj_list[0]` 断言必红。
+    #[test]
+    fn spawn_merchants_decouples_tick_order_from_obj_list_order() {
+        fn spawn_named(name: &str) -> MerchantSpawn {
+            MerchantSpawn {
+                name: name.to_string(),
+                x: 5,
+                y: 5,
+                map_id: 0,
+                state: MerchantState::new(
+                    "m/script".to_string(),
+                    "0".to_string(),
+                    0,
+                    9,
+                    100,
+                    false,
+                    false,
+                    0,
+                    MerchantFlags::default(),
+                    vec![],
+                    vec![],
+                    0,
+                ),
+            }
+        }
+        let mut world = mir2_world::World::new(32, 32);
+        let (kept, failed) = spawn_merchants(&mut world, vec![spawn_named("A"), spawn_named("B")]);
+        assert_eq!(kept, 2);
+        assert!(failed.is_empty());
+
+        // ① tick 序（实体槽位序 = `MerchantList` 序）必须是文件正序。
+        let tick_names: Vec<String> = world
+            .merchant_ids_sorted()
+            .into_iter()
+            .map(|id| world.entities.get(id).expect("实体在").name.clone())
+            .collect();
+        assert_eq!(
+            tick_names,
+            vec!["A".to_string(), "B".to_string()],
+            "MerchantList/tick 序 = LocalDB 文件正序（入实体正序）；把 spawn 循环整体 rev() ⇒ 必红"
+        );
+
+        // ② `obj_list` 追加序仍是 `MerchantInitialize` 倒序。
+        let (cell, ok) = world.map(0).get_cell_info(5, 5);
+        assert!(ok);
+        let first = cell.obj_list[0].cell_obj_id;
+        let first_name = world.entities.get(first).expect("实体在").name.clone();
+        assert_eq!(
+            first_name, "B",
+            "倒序 MerchantInitialize ⇒ 后加载的 B 先 AddToMap（obj_list[0] 是 B）；改回正序 ⇒ 必红"
+        );
     }
 }
