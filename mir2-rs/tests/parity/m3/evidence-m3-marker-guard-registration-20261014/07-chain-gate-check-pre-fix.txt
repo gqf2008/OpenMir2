@@ -1,0 +1,5 @@
+# base = 266bdbd17，本片两文件回退到 origin/master 版（= 修前）
+# 结论：链深检门 check 仍 GREEN runner_ok=10，且没有任何 marker_prefix 条目 ⇒ 该 bug 对链深检门完全不可见（正是它逃逸的原因）
+$ python -I fixture_chain_gate.py check --require-all
+FIXTURE_CHAIN GREEN: runner_ok=10 prereq_or_skip=0 red=0（--require-all）
+rc=0

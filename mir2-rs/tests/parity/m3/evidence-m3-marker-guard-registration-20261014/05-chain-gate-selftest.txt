@@ -1,4 +1,4 @@
-$ python -I fixture_chain_gate.py selftest    # 32/32
+$ python -I fixture_chain_gate.py selftest
   SELFTEST ok  classify_runner(0) ⇒ RUN-OK
   SELFTEST ok  classify_runner(2) ⇒ PREREQ
   SELFTEST ok  classify_runner(1) ⇒ RED

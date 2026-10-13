@@ -1,8 +1,9 @@
-$ python -I marker_prefix_gate.py check    # post-fix (master 4c0762c83 + 本片)
+# base = 266bdbd17 + 本片
+$ python -I marker_prefix_gate.py check
 GREEN: markers 前缀口径一致（run_pair 无去前缀截断 + 7 生产牙（含 1 个 guard-only 例外）+ 6 比较器按前缀扫描；BotSrv 已迁 7 族无裸前缀 skip 诊断；teeth bare=2 prefixed=0 empty=2 skip_prefixed=0 skip_bare=2）
 rc=0
 
-$ python -I marker_prefix_gate.py selftest    # post-fix
+$ python -I marker_prefix_gate.py selftest
 SELFTEST ok scan-good-clean
 SELFTEST ok scan-catches-strip
 SELFTEST ok scan-ignores-comment
@@ -32,8 +33,8 @@ SELFTEST ok mutation-bareskip-red
 SELFTEST ok=26/26
 rc=0
 
-$ python -I marker_prefix_gate.py mutation    # post-fix（PS 真身牙 + 三条变异体）
+$ python -I marker_prefix_gate.py mutation
 ps-assert good: rc=0 GREEN: 带前缀 markers 通过 Assert-M3MarkerPrefix
-ps-assert bad: rc=1 RED: C:\Users\gxh\AppData\Local\Temp\marker-prefix-mut-uat_2zkk\helper-bad.jsonl 有 1 行缺前缀 'M3SHOPSEQ '（比较器 assemble 会 PREREQ_RED）——卡 openmir2-m3-fixture-marker-prefix-bug
-MUTATION GREEN (C:\Users\gxh\AppData\Local\Temp\marker-prefix-mut-uat_2zkk\ps-assert-teeth.ps1)
+ps-assert bad: rc=1 RED: C:\Users\gxh\AppData\Local\Temp\marker-prefix-mut-sl_vcq1p\helper-bad.jsonl 有 1 行缺前缀 'M3SHOPSEQ '（比较器 assemble 会 PREREQ_RED）——卡 openmir2-m3-fixture-marker-prefix-bug
+MUTATION GREEN (C:\Users\gxh\AppData\Local\Temp\marker-prefix-mut-sl_vcq1p\ps-assert-teeth.ps1)
 rc=0

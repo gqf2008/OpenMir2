@@ -1,4 +1,4 @@
-改坏 B：给 run_pair.ps1 追加一个未登记的新族生产牙（M3FUTURESEQ）
+# 改坏 B：给 run_pair.ps1 追加一个未登记的新族生产牙（M3FUTURESEQ）
 $ python -I marker_prefix_gate.py check
 RED: markers 前缀口径门失败（1 项）
   - run_pair.ps1 生产牙 Marker 'M3FUTURESEQ'（$futureMarkersPath）未登记：新增夹具族必须加进 COMPARATORS 或 GUARD_ONLY_MARKERS
