@@ -1,0 +1,5 @@
+# 门禁①：cargo fmt --all -- --check
+# 命令：cargo fmt --all -- --check
+# 期望：rc=0（无输出）
+
+rc=0

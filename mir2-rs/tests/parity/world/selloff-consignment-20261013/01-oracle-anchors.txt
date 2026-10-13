@@ -1,0 +1,87 @@
+# 01 — oracle 锚点（M3⑩-实现 1 / 世界侧元宝寄售）
+
+卡：`openmir2-m3-selloff-consignment-world`（写集 `mir2-rs/crates/world/**` + `mir2-rs/bins/game-svr/**`）。
+输入 = `openmir2-m3-mail-auction-align` 的盘点片 `mir2-rs/tests/parity/m3/M3⑩邮件拍卖现状盘点报告-20261013.md`
+（行号见其 §B 表，`src/` 实读复核）。
+
+## 1. 盘子（oracle 事实）
+
+- 邮件在 oracle **无实现**（盘点 §C）⇒ 本卡不含邮件。
+- 「拍卖」按 oracle 实义 = 5700 `MarketSystem`（死接线，Rust M1 S4b 已 1:1）+ `goldsales` 元宝寄售（活）。
+  本卡只做世界侧元宝寄售；`goldsales` **只读加载接线**归 `openmir2-m3-selloff-goldsales-load-wire`，
+  夹具归 `openmir2-m3-selloff-fixture-botsrv`。
+
+## 2. 派发（7 个 `CM_SELLOFF*`）
+
+| 本仓 | oracle |
+| --- | --- |
+| `main.rs::handle_selloff_cmd` | `src/M2Server/Player/PlayObject.Message.cs:2057-2077`：`CM_SELLOFFADDITEM(2057)`/`CM_SELLOFFDELITEM(2060)`/`CM_SELLOFFCANCEL(2063)`/`CM_SELLOFFEND(2066)`/`CM_CANCELSELLOFFITEMING(2069)`/`CM_SELLOFFBUYCANCEL(2072)`/`CM_SELLOFFBUY(2075)` |
+| `RM_SENDDEALOFFFORM` 成功支 | `src/GameSrv/Npc/Merchant.cs:1038-1045`（`SellOffInTime(0)` 门 + `user.SendMsg(RM_SENDDEALOFFFORM,0,ActorId,0,0)`）→ `PlayObject.Message.cs:2046-2048` 映射 `SM_SENDDEALOFFFORM(23001)` |
+| `CM_SELLOFFBUY` 尾 = 卖方名 | `WorldServer.cs:820` 的 `nParam1 = defMsg.Recog`（本仓 `recog` = `MakeIndex`），`Msg` = 名字；本卡派发层取尾（`first_token`） |
+
+## 3. 世界侧逻辑（逐行照 `src/M2Server/Player/PlayObject.Sale.cs`）
+
+| 本仓纯函数 | oracle |
+| --- | --- |
+| `update_sell_off_info` | `:19-56` |
+| `client_add_sell_off_item` | `:60-125` |
+| `client_del_sell_off_item` | `:127-183` |
+| `client_cancel_sell_off_ing` | `:185-252` |
+| `client_buy_cancel_sell_off` | `:254-279` |
+| `client_buy_sell_off_item`（**成交**） | `:281-385` |
+| `get_sell_off_gold`（**出售者取款**） | `:387-429` |
+| `sell_off_cancel` / `client_cancel_sell_off` | `:431-438` / `:516-591`（本仓 `client_cancel_sell_off` 取上架面） |
+| `select_sell_date`（**无活调用点**） | `:440-473`（`NormNpc.cs:465/1388` 调用点均被注释） |
+| `sell_off_in_time` | `:475-514` |
+| `client_sell_off_end`（**上架**） | `:516-591` |
+| `get_back_sell_off_items`（退回） | `:602-617` |
+| `SellOffBook` | `M2Server/M2Share.cs:79`（`SellOffItemList` **进程级静态列表**） |
+| `SellOffState` | `M2Server/Player/PlayObject.cs:856/864`（`SaleDeal` / `SellOffItemList`）+ `PlayObject.Sale.cs` 的 `SellOffConfirm`，构造 `PlayObject.cs:937` |
+
+契约：`crates/world` **未改动**——`M2Share.SellOffItemList` 是进程级全局列表、`SaleDeal`/`SellOffConfirm`
+是玩家会话散字段，oracle 不在地图/场景 ECS 内；本仓与 ⑦-2/⑦-3（party/trade）同口径落在 `bins/game-svr`
+会话态（`SellOffBook` 由宿主持有一个实例，所有会话共享；零 `static`，确定性硬约束 §4.2.2）。
+
+## 4. 队列/出队口径（帧序判据的依据）
+
+`SendAddItem`（`PlayObject.Base.cs:198`）是**立即**帧（`SendSocket(SM_ADDITEM)`，`Series=1`）；
+其余 `SendMsg`/`SendUpdateMsg` 入 `MsgQueue`，同一 `Run()` 内按 `(byte)wIdent` **升序**出队（`BaseObject.Message.cs:94`、
+`BaseObject.Base.cs:28`），出队时 `RM_*` → `SM_*`。优先级字节：
+
+`RM_SELLOFFADDITEM_OK(23004)=220` / `RM_SellOffADDITEM_FAIL(23006)=222` / `RM_SELLOFFDELITEM_OK(23009)=225` /
+`RM_SELLOFFDELITEM_FAIL(23011)=227` / `RM_SELLOFFCANCEL(23013)=229` / `RM_SELLOFFEND_OK(23017)=233` /
+`RM_SELLOFFEND_FAIL(23019)=235` / `RM_SELLOFFBUY_OK(23028)=244` / `RM_MENU_OK(10309)=69` /
+`RM_GAMEGOLDCHANGED(8084)=148` / `RM_WEIGHTCHANGED(10115)=131` / `RM_SYSMESSAGE(11004)=252` /
+`RM_SENDDEALOFFFORM(23000)=152`。
+
+## 5. oracle 缺陷照搬（§1 硬约束③）
+
+| # | 缺陷 | oracle 行 | 本仓 |
+| --- | --- | --- | --- |
+| ① | `ClientBuySellOffItme` 物品循环 `for (int j = 0; j <= 9; j++)` 对长度 9 的 `UseItems[]` **越界**、且不判空就 `.Index` ⇒ 首个空槽/下标 9 抛异常被 `catch` 吞 ⇒ `RM_SELLOFFBUY_OK`/`RM_MENU_OK` **恒不可达**（物品 0..空槽已入包、元宝已扣/已付） | `PlayObject.Sale.cs:333-361` | `client_buy_sell_off_item` 遇 `None` **中止**（`return em.finish()`） |
+| ② | 金刚石标记自相矛盾：写 `Index/Dura/DuraMax = ushort.MaxValue(65535)`，判 `short.MaxValue(32767)` ⇒ 会话内建金刚石在买/卖方**永不被识别为金刚石**（丢失） | 写 `:537-558`，判 `:343` | 写 65535（`USHRT_MAX`）、判 32767（`SHORT_MAX`） |
+| ③ | 金刚石扣款帧错位：改 `Gold`（实物金币）却调 `GameGoldChanged()`（元宝帧） | `:221` / `:570` | `game_gold_changed` 照调 |
+| ④ | `ClientCancelSellOffIng` 的「背包够但不满足负重 / `AddItemToBag` 失败」分支**既不回包也不落地**（`if(IsEnoughBag()){ if(IsAddWeightAvailable()){ if(AddItemToBag)…} }` 无 `else`）⇒ 物品静默丢失 | `:203-212` | 无 else 分支，照搬 |
+| ⑤ | `save` 调用点全被注释（`:240/332/577`）⇒ 永不写库；`goldsales` 读列名错（D-5/B-5） | `:240/332/577` | 本卡不实现写面（照搬）；只读接线归 ⑩-2 |
+
+## 6. 未建模 / 残差（登记，不假造）
+
+1. `CustomItemMgr.GetCustomItemName`（`Desc[13]==1` 自定义物品名）：与 `T-24` 同源，本仓
+   `bag::item_display_name` 对 `Desc[13]==1` 返回空串 ⇒ 自定义名物品的名字比对走空串。
+2. `GameGoldChanged()` → `SendGoldInfo(false)` 的 `SoftVersionDateEx == 0` 门（`BaseObject.Base.cs:930`）：
+   本仓由 `SellOffSide::send_game_gold_info` 表示。
+3. `WeightChanged()` 的 `WAbil.Weight` 重算仍归 `crate::bag`（本模块只回帧，帧值可能与 oracle 不同）
+   —— 与 ⑦-3 `crate::trade` 同口径。
+4. `DropItemDown`（`PlayObject.Base.cs:529`）：oracle 因 `MapItem.ItemId` 恒 0 而**恒落地失败**（`T-19`/`T-25`）
+   ⇒ `drop_item_down` 只「消耗」、不产帧。
+5. `select_sell_date` 无活调用点 ⇒ 实现纯逻辑但不接线；`dSellDateTime` 的本地时区
+   `ToString("yyyy年mm月dd日 hh时ss分")` 格式化为占位（`format_sell_date` 返回空串）。
+6. `GetSellOffGlod()` 的登录调用点（`PlayObject.cs:1486`）：`SaleDeal` 的 setter 来自脚本
+   `OPENYBDEAL`/`ActionOfOpenSaleDeal`（`crates/script` 未移植，`handlers.rs:250`）⇒ 恒 `false` ⇒
+   该函数恒 no-op，登录路径**不接线**（行为等价：都不动）。
+7. 触发点「脚本 label `@dealybme`/`sDealYBme` → 开窗」（`Merchant.cs:930-934`）：脚本层在
+   `crates/script`（不在本卡写集）⇒ `open_deal_off_form` 只落纯逻辑 + 帧，待 ⑩-2/脚本层接线。
+
+> 白名单条目：本卡**未新增**（残差全部登记在证据与本文件；按纪律白名单条目需 owner 签字）。
+> `goldsales` 写面「oracle 调用点全注释 ⇒ Rust 不实现」建议由 owner 决定是否补 `whitelist.md` 一条
+> （盘点 §N3 已给建议）。

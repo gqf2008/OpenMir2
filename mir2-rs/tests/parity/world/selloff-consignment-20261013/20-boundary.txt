@@ -1,0 +1,12 @@
+# 20 — 边界（冻结面零改动）
+# 命令：git diff --name-only origin/master HEAD -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+# 期望：空
+
+--- rc=0 (diff 自身 rc，空 = 无差异) ---
+
+# 本片完整写集（git diff --name-only origin/master HEAD）：
+mir2-rs/bins/game-svr/src/config.rs
+mir2-rs/bins/game-svr/src/lib.rs
+mir2-rs/bins/game-svr/src/main.rs
+mir2-rs/bins/game-svr/src/selloff.rs
+mir2-rs/bins/game-svr/src/trade.rs
