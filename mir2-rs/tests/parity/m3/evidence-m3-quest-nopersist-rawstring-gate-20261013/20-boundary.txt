@@ -1,0 +1,17 @@
+== 20 边界（HEAD=bfa9be9cf97fe5ec014ee571c2385ad177f5fe78  base=origin/master=8b2466b9cca94b504d79b3039780e8d485127d47） ==
+
+$ git diff --name-only origin/master HEAD -- src sql MirClient
+(空 = 冻结面零改动)
+
+$ git diff --name-only origin/master HEAD -- mir2-rs/crates/protocol mir2-rs/crates/storage
+(空 = 接口冻结线零改动)
+
+$ git diff --name-only origin/master HEAD（全量）
+mir2-rs/bins/db-srv/tests/quest_no_persist.rs
+
+$ git merge-base --is-ancestor origin/master HEAD
+YES（base 是 head 祖先）
+
+$ git merge-tree --write-tree origin/master HEAD
+de9d8ac91725cf6f2f34742cc2b3bcbeeb0fd0e4
+merge-tree rc=0
