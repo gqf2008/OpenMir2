@@ -38,7 +38,10 @@
 //!   （`WAbil.DC`/`WAbil.MaxHP`，`BaseObject.Abil.cs:133-170`，`Race >= Animal` 门 + 三类支）
 //!   再跑三个派生类的速度覆写（`WhiteSkeleton.cs:21-27` / `ElfMonster.cs:31-41` /
 //!   `ElfWarriorMonster.cs:35-39,105-110`）；`RefNameColor` 色彩仍归帧面接线片。
-//! - **46 分身**（`MagMakeClone`）：见 `crates/world::slave` 的 `CLONE_DEFERRED`。
+//! - **46 分身**（`MagMakeClone`）：已接 —— [`CloneCastInput`] / [`cast_clone_spell`] 造玩家型
+//!   克隆体（`crates/world::slave::spawn_clone`）并走共享尾；帧面（`RM_SPELL`/克隆 `RM_TURN`/
+//!   `RM_MAGICFIRE`/`RM_MAGIC_LVEXP`）在宿主 `handle_spell_cmd` 的 46 支。克隆体的 tick/AI
+//!   生命周期未建模（登记白名单 `T-51`）。
 //! - **20 的 `RM_MAKEHOLYSEIZEMODE` 帧**（`MagicManager.cs:712/812`）与 **`OpenCrazyMode` 狂暴态/
 //!   时长**（`:797/805`）：前者无编码器、后者本骨架无 `CrazyMode` 字段（对应抽数已在
 //!   `mag_tamming` 消费，账本不变）⇒ 帧面/状态登记未接。
@@ -56,7 +59,9 @@ use mir2_data::MagicInfo;
 use mir2_envir::MapRegistry;
 use mir2_shared::rng::RandomNumber;
 use mir2_world::magic::{self, AmuletSlot, AmuletUse, SkillTrainState};
-use mir2_world::slave::{SKILL_ANGEL, SKILL_SINSU, SKILL_SKELLETON, SKILL_TAMMING};
+use mir2_world::slave::{
+    spawn_clone, CloneSpawn, SKILL_ANGEL, SKILL_SINSU, SKILL_SKELLETON, SKILL_TAMMING,
+};
 use mir2_world::{SlaveSpawner, SummonOutcome, World};
 
 use crate::downlink::DisplayTable;
@@ -436,6 +441,72 @@ pub fn cast_tamming_spell(
     }
 }
 
+/// **⑨-2 残余（46 分身）**：`DoSpell` 分身面（46）效果体的宿主输入。
+#[derive(Clone, Copy, Debug)]
+pub struct CloneCastInput {
+    pub caster_id: i32,
+    /// 主人 `PlayObject.Dir`（展示层字段；宿主从 `downlink::DisplayTable` 取，与召唤/诱惑面同口径）。
+    pub caster_dir: u8,
+    /// `PlayObject.Abil.Level`（熟练度尾门 `TrainLevel[Level] <= Abil.Level`）。
+    pub caster_abil_level: u8,
+    /// `PlayObject.FastTrain`（oracle 由「快速修炼项链」置位，`PlayObject.cs:2168`；
+    /// 本仓未装载该面 ⇒ 宿主恒传 `false`，登记）。
+    pub fast_train: bool,
+}
+
+/// [`cast_clone_spell`] 的结果（帧面参数由宿主据此构造）。
+#[derive(Clone, Copy, Debug)]
+pub struct CloneCastOutcome {
+    /// oracle `DoSpell` 的返回值（46 没有 `boSpellFail` 支 ⇒ 恒 `true`）。
+    pub accepted: bool,
+    /// `boSpellFire`（46 恒 `true` ⇒ 宿主发 `RM_MAGICFIRE`）。
+    pub magic_fire: bool,
+    /// 本次造出的克隆体（主人不在世界/地图 id 越界 ⇒ `None`，宿主已先行校验主人在地）。
+    pub clone: Option<CloneSpawn>,
+    /// 熟练度尾结算（[`SkillTrainState`] 已就地更新）。
+    pub train: magic::SkillProficiencyOutcome,
+}
+
+/// **⑨-2 残余（46 分身）**：`SKILL_46` 的 `DoSpell` 效果体 + 共享尾。
+///
+/// 逐行锚 oracle：
+/// - `case SKILL_46`（`MagicManager.cs:589-592`）：`if (MagMakeClone(playObject, userMagic)) { boTrain = true; }`
+///   —— `MagMakeClone`（`:1337-1341`）恒返回 `true`；实体构造见
+///   [`mir2_world::slave::spawn_clone`]（`PlayCloneObject.cs:5-23`）。
+/// - 尾（`:644-669`）：46 没有置 `boSpellFail` 的分支 ⇒ `boSpellFail=false`、`boSpellFire=true`；
+///   `boTrain=true` ⇒ `userMagic.Level < 3` 时走 `TrainSkill(Random(3)+1)` + `CheckMagicLevelUp`。
+///
+/// 取数次序：`MagMakeClone` 不抽数；尾部的 `Random(3)+1` 走**主人这条** `world.rng`
+/// （与召唤/诱惑面同一条流，中间不插入其它取数）。**不许为「好测」改次序。**
+pub fn cast_clone_spell(
+    world: &mut World,
+    input: &CloneCastInput,
+    train: &mut SkillTrainState,
+) -> CloneCastOutcome {
+    // `new PlayCloneObject(playObject)`：实体 + `Envir.AddMapObject`（RNG 中立）。
+    let clone = spawn_clone(world, input.caster_id, input.caster_dir);
+    // oracle `if (MagMakeClone(...)) { boTrain = true; }` —— `MagMakeClone` **恒** `true`
+    // （不看 `AddMapObject` 的返回）。`clone` 为 `None` 仅在主人不在世界/地图 id 越界时可达，
+    // 而宿主 `handle_spell_cmd` 已先校验主人在地 ⇒ 生产路径恒 `Some`。
+    let mut rng = std::mem::replace(&mut world.rng, RandomNumber::with_seed(0));
+    let tail = magic::do_spell_tail(
+        false,
+        true,
+        true,
+        input.fast_train,
+        input.caster_abil_level,
+        &mut rng,
+        train,
+    );
+    world.rng = rng;
+    CloneCastOutcome {
+        accepted: tail.returned,
+        magic_fire: tail.magic_fire,
+        clone,
+        train: tail.train,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -732,5 +803,63 @@ mod tests {
             }
         }
         assert!(hit, "5000 个种子里应至少有一次进入早退支");
+    }
+
+    /// **⑨-2 残余判据（46 分身）**：`cast_clone_spell` 造克隆体 + 走共享尾（`boTrain=true`）。
+    ///
+    /// 红检：把 `do_spell_tail` 的 `bo_train` 真值改成 `false` —— `level < 3` 时不再抽
+    /// `Random(3)+1` ⇒ 本用例末句的 RNG 序列断言必红。
+    #[test]
+    fn cast_clone_spawns_and_runs_train_tail() {
+        let mut w = World::new(32, 32);
+        let caster = {
+            let mut e = mir2_world::Entity::new(0, "主人".to_string(), 5, 5);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e.level = 40;
+            w.add_entity(e)
+        };
+        w.tick();
+        let mk_train = || SkillTrainState {
+            magic_id: mir2_world::SKILL_46,
+            level: 1,
+            tran_point: 0,
+            train_lv: 3,
+            train_level: [0; 4],
+            max_train: [100; 4],
+        };
+        // 期望的尾：同一条 RNG 上跑一次 `do_spell_tail(boSpellFail=false, magic_fire=true, boTrain=true, …)`。
+        let mut expect_rng = w.rng.clone();
+        let mut expect_train = mk_train();
+        let _ = magic::do_spell_tail(
+            false,
+            true,
+            true,
+            false,
+            40,
+            &mut expect_rng,
+            &mut expect_train,
+        );
+
+        let mut train = mk_train();
+        let input = CloneCastInput {
+            caster_id: caster,
+            caster_dir: 2,
+            caster_abil_level: 40,
+            fast_train: false,
+        };
+        let out = cast_clone_spell(&mut w, &input, &mut train);
+        assert!(out.accepted, "46 无 boSpellFail ⇒ DoSpell true");
+        assert!(out.magic_fire, "boSpellFire 恒 true");
+        let c = out.clone.expect("应造出克隆体");
+        assert_eq!(c.dir, 6, "Dir = GetBackDir(2)");
+        assert_eq!(w.entities.get(c.clone_id).unwrap().name, "Clone");
+        // 尾账本一致（`boTrain=true` 的 `Random(3)+1` 已按 oracle 位置消费）。
+        assert_eq!(train.level, expect_train.level);
+        assert_eq!(train.tran_point, expect_train.tran_point);
+        assert_eq!(
+            w.rng.random(),
+            expect_rng.random(),
+            "尾部取数次序与 do_spell_tail 一致"
+        );
     }
 }

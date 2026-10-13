@@ -28,7 +28,7 @@
 //!   无行会/PK 时 oracle 的结果就是 `NameColor`（`PlayObject.cs:3585-3595` 的非战斗支）。
 
 use crate::ability::ItemCatalog;
-use crate::feature::make_monster_feature;
+use crate::feature::{make_human_feature, make_monster_feature};
 use crate::smframe;
 use mir2_data::models::MonsterInfo;
 
@@ -109,6 +109,41 @@ pub fn monster_display(dir: u8, info: &MonsterInfo) -> ActorDisplay {
         0,
         MONSTER_NAME_COLOR,
         gbk(filter_show_name(&info.name)),
+    )
+}
+
+/// 玩家缺省名色（`enter::PLAY_NAME_COLOR` = 255，`src/M2Server/Player/PlayObject.cs` 的
+/// `NameColor` 缺省）。`bins/game-svr` 的 bin 模块 `enter` 不在 lib 里 ⇒ 此处复写常量值。
+pub const PLAYER_NAME_COLOR: u8 = 255;
+
+/// **⑨-2 残余（46 分身）**：`PlayCloneObject` 的展示层 [`ActorDisplay`]。
+///
+/// oracle `PlayCloneObject` 只从主人处拷 `Gender`/`Hair`（`PlayCloneObject.cs:14-15`），
+/// `Dress`/`Weapon` 是其自身 `PlayObject` 构造器的缺省 `0` ⇒
+/// `GetFeatureToLong()` = `MakeHumanFeature(0, gender, gender, hair*2+gender)`
+/// （`M2Share.cs:1965`：`dress*2+gender` 里 `dress=0`、`gender+weapon*2` 里 `weapon=0`）。
+///
+/// 骨架 `Entity` 不存 Gender/Hair（见 `crates/world::slave::spawn_clone`），它们无损编码在
+/// `caster.feature` 的位域 `[raceImg:8][weapon':8][hair':8][dress':8]` 里：
+/// `weapon' = gender + weapon*2` ⇒ `gender = byte1 & 1`；
+/// `hair' = hair*2 + gender` ⇒ `hair = byte2 >> 1`。
+///
+/// `status = 0`（无 buff）、`feature_ex = 0`（未骑马/无斗篷特效）、`light = 0`
+/// （`PlayObject` 构造器 `Light` 缺省 `0`，`BaseObject.cs:384`）、`name_color` =
+/// [`PLAYER_NAME_COLOR`]、`show_name` = GBK `"Clone"`（`crates/world::CLONE_NAME`）。
+#[must_use]
+pub fn clone_display(dir: u8, caster: &ActorDisplay) -> ActorDisplay {
+    let f = caster.feature as u32;
+    let gender = ((f >> 8) & 1) as u8;
+    let hair = (((f >> 16) & 0xFF) as u8) >> 1;
+    ActorDisplay::new(
+        dir,
+        0,
+        make_human_feature(0, gender, gender, hair * 2 + gender),
+        0,
+        0,
+        PLAYER_NAME_COLOR,
+        gbk(mir2_world::CLONE_NAME),
     )
 }
 
@@ -590,6 +625,36 @@ mod tests {
             u16::from_le_bytes([feat[10], feat[11]]),
             0,
             "GetFeatureEx() = 0"
+        );
+    }
+
+    /// **⑨-2 残余（46 分身）**：`clone_display` 从主人 `feature` 反解 Gender/Hair，并按
+    /// `PlayCloneObject` 的缺省 Dress/Weapon=0 重算 feature。
+    ///
+    /// 红检：把 `hair` 的位移从 `>> 1` 改成 `& 1`（或把 gender 取 byte2）⇒ feature 断言必红。
+    #[test]
+    fn clone_display_copies_gender_and_hair_only() {
+        // 主人：gender=1、weapon=2、dress=3、hair=5。
+        let caster = ActorDisplay::new(
+            4,
+            0,
+            make_human_feature(0, 3 * 2 + 1, 1 + 2 * 2, 5 * 2 + 1),
+            0,
+            0,
+            PLAYER_NAME_COLOR,
+            gbk("caster"),
+        );
+        let d = clone_display(6, &caster);
+        assert_eq!(d.dir, 6);
+        assert_eq!(d.light, 0);
+        assert_eq!(d.status, 0);
+        assert_eq!(d.name_color, PLAYER_NAME_COLOR);
+        assert_eq!(d.show_name, gbk(mir2_world::CLONE_NAME));
+        // 克隆体 Dress=0/Weapon=0 ⇒ feature = MakeHumanFeature(0, gender, gender, hair*2+gender)。
+        assert_eq!(
+            d.feature,
+            make_human_feature(0, 1, 1, 5 * 2 + 1),
+            "Gender/Hair 照抄、Dress/Weapon 归 0"
         );
     }
 }

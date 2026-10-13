@@ -1,0 +1,29 @@
+# 边界（base `refs/heads/master` = 083dc1d6d；代码提交 = 8c4e0fc49）
+
+$ git diff --name-only 083dc1d6d 8c4e0fc49 -- src sql MirClient
+(空)
+
+$ git diff --name-only 083dc1d6d 8c4e0fc49 -- mir2-rs/crates/protocol mir2-rs/crates/storage
+(空)
+
+# 本片净改动（只在卡写集内：crates/world + bins/game-svr + tests/parity 登记）
+$ git diff --name-status 083dc1d6d 8c4e0fc49        # 代码提交（6 文件）
+M	mir2-rs/bins/game-svr/src/downlink.rs
+M	mir2-rs/bins/game-svr/src/main.rs
+M	mir2-rs/bins/game-svr/src/slave.rs
+M	mir2-rs/crates/world/src/lib.rs
+M	mir2-rs/crates/world/src/slave.rs
+M	mir2-rs/tests/parity/whitelist.md
+
+# 证据提交内另加 1 件（锚点刷新；仍在 tests/parity/m3/** 写集内）：
+M	mir2-rs/tests/parity/m3/rng-trace-scene/DRIVER-CONTRACT.md   # §4 宿主 AI 调用点 main.rs:5488 → :5598
+
+# 交付 head（证据提交）对 base 的冻结面复核：
+$ git diff --name-only 083dc1d6d HEAD -- src sql MirClient
+(空)
+$ git diff --name-only 083dc1d6d HEAD -- mir2-rs/crates/protocol mir2-rs/crates/storage
+(空)
+
+结论：oracle（`src/`）、表结构（`sql/`）、客户端（`MirClient`）零改动；`crates/protocol` /
+`crates/storage` 零改动。写集 = 卡声明的
+`mir2-rs/crates/world/**` + `mir2-rs/bins/game-svr/**` + `mir2-rs/tests/parity/m3/**`（证据/登记）。

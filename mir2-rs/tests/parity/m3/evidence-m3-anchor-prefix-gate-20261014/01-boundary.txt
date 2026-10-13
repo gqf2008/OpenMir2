@@ -1,0 +1,39 @@
+$ git diff --name-status origin/master
+A	mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-gate-20261014/01-boundary.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-gate-20261014/10-guild_castle-check.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-gate-20261014/10-guild_castle-mutation.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-gate-20261014/10-guild_castle-selftest.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-gate-20261014/10-hero_pet-check.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-gate-20261014/10-hero_pet-mutation.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-gate-20261014/10-hero_pet-selftest.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-gate-20261014/10-party_trade-check.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-gate-20261014/10-party_trade-mutation.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-gate-20261014/10-party_trade-selftest.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-gate-20261014/10-quest-check.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-gate-20261014/10-quest-mutation.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-gate-20261014/10-quest-selftest.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-gate-20261014/10-selloff-check.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-gate-20261014/10-selloff-mutation.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-gate-20261014/10-selloff-selftest.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-gate-20261014/20-scenario-badprefix-red.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-gate-20261014/21-tool-neutered-mutation-red.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-gate-20261014/30-chain-gate-require-all.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-gate-20261014/31-fixture-matrix-require-all.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-gate-20261014/32-chain-gate-selftest.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-gate-20261014/40-fmt.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-gate-20261014/41-clippy.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-gate-20261014/43-test-summary.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-gate-20261014/44-msgcodegen.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-gate-20261014/50-whitelist-diff.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-gate-20261014/README.md
+A	mir2-rs/tests/parity/m3/evidence-m3-anchor-prefix-gate-20261014/SHA256SUMS.txt
+M	mir2-rs/tests/parity/m3/guild_castle_anchor_gate.py
+M	mir2-rs/tests/parity/m3/hero_pet_anchor_gate.py
+M	mir2-rs/tests/parity/m3/party_trade_anchor_gate.py
+M	mir2-rs/tests/parity/m3/quest_anchor_gate.py
+M	mir2-rs/tests/parity/m3/selloff_anchor_gate.py
+M	mir2-rs/tests/parity/whitelist.md
+$ git diff --name-only origin/master -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins src/BotSrv
+[]
+$ git diff --name-only origin/master -- '*.rs' '*.toml' '*.ps1'
+[]

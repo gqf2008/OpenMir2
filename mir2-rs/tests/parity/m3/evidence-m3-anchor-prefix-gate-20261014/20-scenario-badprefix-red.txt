@@ -1,0 +1,10 @@
+# 改坏必红：把真场景 quest_scenario.json 的一条锚前缀改成错误目录（src/OpenMir2/ -> src/Evil/）
+# 期望：check RED 且点名为「锚路径前缀」（覆盖面/读侧不变，因为基名仍登记）。
+$ python -I -c "p='quest_scenario.json'; t=open(p,encoding='utf-8').read(); open(p,'w',encoding='utf-8',newline='
+').write(t.replace('src/OpenMir2/Messages.cs:62','src/Evil/Messages.cs:62'))"
+$ python -I quest_anchor_gate.py check
+rc=1
+RED: quest 场景锚门失败（1 项 / 共 14 锚）
+  - 锚路径前缀：src/Evil/Messages.cs 的目录前缀 'src/Evil' 与登记路径 'src/OpenMir2/Messages.cs' 不符（须为路径后缀）
+
+# 还原后 sha256：before=1a863f9a6e457a4b988866c7e2fd4d4ba55180af581576138a58eaef50c7bf93 after=1a863f9a6e457a4b988866c7e2fd4d4ba55180af581576138a58eaef50c7bf93 一致=True

@@ -1,0 +1,10 @@
+$ python -I hero_pet_anchor_gate.py mutation
+rc=0
+MUT1 行漂移(:361-371→:360-370): RED（2 项）
+MUT2 消息号冒充行号: RED（2 项）
+MUT3 读侧 token 漂移: RED（1 项）
+MUT4 真身 check: GREEN（0 项）
+MUT5 token 强度(整组只剩 `}`): RED（1 项）
+MUT6 token 强度(O-1 纯标点 `]);`/`]`/`//{`): RED（1+2 项）
+MUT-O1 路径前缀(错前缀必红/正确·裸基名不误伤): RED（1 项）
+MUTATION GREEN (C:\Users\gxh\AppData\Local\Temp\hp-anchor-mut-bt44ub_v)
