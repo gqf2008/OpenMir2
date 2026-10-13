@@ -1,0 +1,33 @@
+# 证据包复算命令：M3 RNG 站点组同场景两相 trace 夹具（卡 openmir2-m3-rng-trace-scene-groups）
+# cwd = mir2-rs/tests/parity/m3
+
+## 工具自检
+python -I rng-trace-probe/rng_ledger_diff.py selftest        # → 32/32 GREEN（含 R-6 folded）
+python -I rng-trace-scene/rng_scene_gate.py selftest         # → 11/11 GREEN
+python -I attack_rng_ledger.py selftest                      # → 32/32 GREEN（未改语义，回归对照）
+
+## 无栈自检（零端口；LF 转录由脚本自己落盘）
+powershell -NoProfile -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 \
+  -SelfCheckNoStack -SelfCheckOut mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013/04-selftest-nostack.txt
+
+## 场景一致性前置门（合成件；正样本绿 / 怪集合漂移红 / 缺件 PREREQ）
+# 合成 scenario.json + csharp-scene.json + rust-scene.json + mongen-map0137.tsv（0 行）见 08-… 对应的
+# 生成脚本逻辑（临时目录）；门命令：
+python -I rng-trace-scene/rng_scene_gate.py gate --scenario <scenario.json> --a <csharp-scene.json> --b <rust-scene.json>
+
+## groupdiff --fold --strict（R-6 folded 映射；合成 trace）
+python -I rng-trace-probe/rng_ledger_diff.py groupdiff <a.tsv> <b.tsv> --a-side csharp --b-side rust --fold --strict
+
+## 折叠表改坏必红
+python -I -c "import sys; sys.path.insert(0,'rng-trace-probe'); import rng_consumer_groups as r; print(r.validate_folds()); r.FOLD_RULES['construct']='no_such_group'; print(r.validate_folds())"
+
+## 基线（现存唯一一对不同场景活栈 trace；仅作「折叠不是豁免」对照）
+# C# = a7df711624e6f3d9651c2b6731b946a0fa9a3fcbf7732c33b2ffc81c1788f7fa  (416,513,542 B)
+# Rust = 4963e9f6f5012a74f9cf59984bd33098895ab21d35b63204cc7588376cd4d12d  (8,078 B)
+python -I rng-trace-probe/rng_ledger_diff.py groupdiff <csharp.tsv> <rust.tsv> --a-side csharp --b-side rust --strict            # 13-
+python -I rng-trace-probe/rng_ledger_diff.py groupdiff <csharp.tsv> <rust.tsv> --a-side csharp --b-side rust --fold --strict     # 14-
+# 仓外原始件路径（本机）：E:/tmp/m3cs-f1/csharp-rng-stream-f1-20261012.tsv、E:/tmp/m3cs-r2/rust-rng-stream-r1.tsv
+
+## 证据包复核（仓库 LF/git-blob 口径）
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013

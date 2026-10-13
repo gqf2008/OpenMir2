@@ -37,6 +37,55 @@ KNOWN_SIDES = ("csharp", "rust")
 ATTACK_GROUP = "attack"
 OTHER_GROUP = "other"
 
+# ---------------------------------------------------------------------------
+# R-6 folded 映射（owner 2026-10-13 裁决）
+#
+# C# oracle 在**实体构造期**（`BaseObject..ctor` / `AnimalObject..ctor` / `MonsterObject..ctor` /
+# `Monsters.*..ctor` / `PlayObject..ctor`）独立抽数 ⇒ 独立 `construct` 组；而 Rust 把构造期抽数
+# **折叠进刷怪路径**（`crates/world/src/mongen.rs` 的 `AnimalState::from_spawn_draws`）⇒ Rust 侧
+# 暂无独立 `construct` 站点。owner 裁决：**接受这个折叠为「登记建模差异」**，但要求**机判等价**——
+# 「C# `construct` 折叠到 Rust `spawn` 后，**折叠计数与相对次序必须相等**；**只写白名单不校验不算达成**」。
+#
+# 因此：`construct` 归一到 `spawn`（两侧同一条规则），`groupdiff --fold` 在**折叠后的序列**上
+# 重新算「组集合 + 组计数 + 共享组相对次序」，并且把「计数不相等」显式判成 `FOLDED_COUNT_DIFF`。
+# 折叠不是豁免：计数/次序不等 ⇒ 照样 RED。
+FOLD_RULES = {"construct": "spawn"}
+
+
+def fold_group(group):
+    """把一个组名归一到**折叠 vocabulary**（无规则则原样返回）。"""
+    return FOLD_RULES.get(group, group)
+
+
+def folded(seq):
+    """组序列 → 折叠组序列（逐元素 `fold_group`）。"""
+    return [fold_group(g) for g in seq]
+
+
+def folded_counts(counts):
+    """`Counter(group -> n)` → 折叠后的 `Counter(folded_group -> n)`（计数相加）。"""
+    out = Counter()
+    for g, n in (counts or {}).items():
+        out[fold_group(g)] += n
+    return out
+
+
+def validate_folds():
+    """折叠规则的**表自检**（空 = 自洽）。离线可跑。
+
+    只允许「已知组 → 已知组、且源≠目标」；`construct → spawn` 是 owner 点名的 R-6 裁决。
+    """
+    problems = []
+    for src, dst in sorted(FOLD_RULES.items()):
+        tag = "fold %s->%s" % (src, dst)
+        if src not in KNOWN_GROUPS:
+            problems.append("%s: 源组 %r 不是已知组" % (tag, src))
+        if dst not in KNOWN_GROUPS:
+            problems.append("%s: 目标组 %r 不是已知组" % (tag, dst))
+        if src == dst:
+            problems.append("%s: 源与目标相同（无意义折叠）" % tag)
+    return problems
+
 
 def norm(site):
     return (site or "").replace("\\", "/")
@@ -101,6 +150,8 @@ class GroupsTable(object):
                 if group not in self.groups_for_side(side):
                     problems.append("AUX 组 %s 在 side=%s 无 pattern（oracle 同族组必须齐备；"
                                     "整组被删要能被 validate 咬住）" % (group, side))
+        # R-6 folded 映射也纳入同一处表自检（源/目标都必须是已知组）。
+        problems.extend(validate_folds())
         return problems
 
 
