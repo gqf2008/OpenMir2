@@ -51,10 +51,15 @@ REPO_ROOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir, 
 
 import fixture_matrix as fm  # noqa: E402  （单一真源：MATRIX / evaluate / _default_run_comparator）
 
-# 共享管线自检（跨夹具卡反复扩展的接缝；任一红即「链被踩坏」）。
+# 共享管线 + 主机门自检（跨夹具卡反复扩展的接缝；任一红即「链被踩坏」）。
+# `.py` 项按扩展名走 `python -I`（见 `_tool_argv`）。
 SHARED_CHECKS = [
     ("run_bots", "tools/botload/run_bots.ps1", ["-SelfCheckNoStack"]),
     ("selftest_gate", "mir2-rs/tests/parity/m3/selftest_gate.ps1", []),
+    # 主机门（reviewer-5 ⑧-6 O-1）：castle 锚门不再只是「手工读数」，接入 runner 常跑。
+    #   selftest = 门自身表结构/牙齿；check = 真身锚 + 覆盖面（未登记/裸锚）。
+    ("castle_anchor_selftest", "mir2-rs/tests/parity/m3/castle_oracle_anchor_gate.py", ["selftest"]),
+    ("castle_anchor_check", "mir2-rs/tests/parity/m3/castle_oracle_anchor_gate.py", ["check"]),
 ]
 
 RUNNER_PREREQ_RC = 2  # 各驱动约定的「前置未到，fail-closed」退出码
@@ -75,12 +80,19 @@ def _ps_argv(script, extra):
     return [_powershell(), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script] + list(extra)
 
 
-def _run_ps(script, extra, cwd, timeout):
-    """跑一个 PowerShell 件 ⇒ (rc, tail, stdout+stderr)。缺文件 ⇒ (127, ...)。"""
+def _tool_argv(script, extra):
+    """按扩展名分派：`.py` ⇒ `python -I`；其它 ⇒ powershell `-File`。"""
+    if script.lower().endswith(".py"):
+        return [sys.executable, "-I", script] + list(extra)
+    return _ps_argv(script, extra)
+
+
+def _run_tool(script, extra, cwd, timeout):
+    """跑一个主机工具（`.py` / `.ps1`）⇒ (rc, tail, stdout+stderr)。缺文件 ⇒ (127, ...)。"""
     if not os.path.isfile(script):
         return 127, "missing: " + script, ""
     try:
-        p = subprocess.run(_ps_argv(script, extra), cwd=cwd, capture_output=True,
+        p = subprocess.run(_tool_argv(script, extra), cwd=cwd, capture_output=True,
                            text=True, encoding="utf-8", errors="replace", timeout=timeout)
     except (OSError, subprocess.SubprocessError) as exc:  # pragma: no cover - 环境异常
         return 127, "无法运行 {0}: {1}".format(script, exc), ""
@@ -91,7 +103,7 @@ def _run_ps(script, extra, cwd, timeout):
 def make_run_runner(timeout):
     """默认 runner 执行器（可注入：selftest 用 stub 替换）。⇒ (rc, tail, blob)。"""
     def _run(root, entry):
-        return _run_ps(os.path.join(root, entry["runner"]), ["-SelfCheckNoStack"], root, timeout)
+        return _run_tool(os.path.join(root, entry["runner"]), ["-SelfCheckNoStack"], root, timeout)
     return _run
 
 
@@ -103,7 +115,7 @@ def make_run_shared(timeout):
             path = os.path.join(REPO_ROOT, rel)
             present = os.path.isfile(path)
             if present:
-                rc, tail, blob = _run_ps(path, extra, REPO_ROOT, timeout)
+                rc, tail, blob = _run_tool(path, extra, REPO_ROOT, timeout)
             else:
                 rc, tail, blob = None, "", ""
             out.append({"name": name, "file": rel, "present": present,
@@ -271,6 +283,19 @@ def cmd_selftest(_args):
     expect("共享管线登记项 ≥2", len(SHARED_CHECKS) >= 2)
     expect("共享管线件在本仓库树内可解析（REPO_ROOT 口径）",
            all(os.path.isfile(os.path.join(REPO_ROOT, rel)) for _n, rel, _e in SHARED_CHECKS))
+    expect("主机门（.py）登记项 ≥1",
+           any(rel.endswith(".py") for _n, rel, _e in SHARED_CHECKS))
+    expect("_tool_argv(.py) ⇒ python -I",
+           _tool_argv("x.py", ["selftest"])[:3] == [sys.executable, "-I", "x.py"])
+    expect("_tool_argv(.ps1) ⇒ powershell -File",
+           _tool_argv("x.ps1", [])[0] != sys.executable and "-File" in _tool_argv("x.ps1", []))
+    pyfile = os.path.join(tmp, "probe.py")
+    with open(pyfile, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("import sys\nsys.exit(0)\n")
+    rc_probe, _t, _b = _run_tool(pyfile, [], tmp, 60)
+    expect("_run_tool(.py) 真跑 rc=0", rc_probe == 0)
+    rc_miss, _t2, _b2 = _run_tool(os.path.join(tmp, "nope.py"), [], tmp, 60)
+    expect("_run_tool 缺件 ⇒ 127", rc_miss == 127)
 
     print("SELFTEST {0}: fixture_chain_gate selftest {1}/{2}".format(
         "GREEN" if ok == total else "RED", ok, total))
@@ -289,7 +314,7 @@ def _print_table(receipts, shared):
         if r["runner_status"] in ("RUN-OK", "PREREQ", "RED"):
             print("       runner -SelfCheckNoStack rc={0} :: {1}".format(
                 r["runner_rc"], (r["runner_tail"] or "")[:96]))
-    print("-- 共享管线 --")
+    print("-- 共享管线 / 主机门 --")
     for s in shared:
         print("{0:<16} {1:<10} rc={2} :: {3}".format(
             s["name"], "present" if s["present"] else "MISSING",

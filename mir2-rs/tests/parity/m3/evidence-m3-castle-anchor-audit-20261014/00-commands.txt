@@ -1,0 +1,37 @@
+# ⑧ castle oracle 锚横向体检 + castle 锚门接入夹具链深检门 —— 证据包命令
+# 全部在隔离 worktree / 隔离 target 内跑；零起栈、零占端口、共享主检出只读。
+
+worktree: E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3cs
+branch:   worktree-m3-castle-anchor-audit
+base:     origin/master ad0592b19（已含 ⑧-6 片 9e3a9bc32 = merge b5f07621d）
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target（本机唯一，未与其它车道争用）
+
+## 门禁（四件；cwd = mir2-rs）
+cargo fmt --all -- --check                                        # 04-gate-fmt.txt
+cargo clippy --offline --workspace --all-targets -- -D warnings   # 05-gate-clippy.txt
+cargo test  --offline --workspace                                 # 06-gate-test.txt
+cargo run   --offline -p msgcodegen -- --check                    # 07-gate-msgcodegen.txt
+
+## 本片主题①：⑧ 家族 castle.rs 锚横向体检（覆盖区间 castle.rs:1-175）
+# 锚 → 冻结 src/ 实际行（49 条 distinct，全部命中；见 10-anchor-audit.txt）
+python -I E:/tmp/m3cs-work/anchor_audit.py                        # 10-anchor-audit.txt
+
+## 本片主题②：castle 锚门（castle_oracle_anchor_gate.py）
+cd mir2-rs/tests/parity/m3
+python -I castle_oracle_anchor_gate.py check                      # 01-castle-anchor-gate.txt
+python -I castle_oracle_anchor_gate.py selftest
+python -I castle_oracle_anchor_gate.py mutation --out E:/tmp/m3cs-work/anchor-mut-evi
+
+## 本片主题③：把 castle 锚门接入夹具链深检门（reviewer-5 ⑧-6 O-1 收口）
+python -I fixture_chain_gate.py selftest                          # 02-fixture-chain-gate.txt
+python -I fixture_chain_gate.py check                             # 02（含 -- 共享管线 / 主机门 --）
+
+## 改坏必红（castle.rs 锚 → 门 RED → 链深检门 RED）
+见 03-redcheck.txt：把 ⑧-7 模块头 `UserCastle.cs:311-446` 改回历史漂移值 `:311-448`
+⇒ ① castle 锚门 check rc=1（写侧缺锚 + 覆盖面未登记锚）
+⇒ ② fixture_chain_gate check rc=1（castle_anchor_check / castle_anchor_selftest 判红，red=2）
+⇒ cp 还原后 `git diff --stat origin/master` 回到本片净差量 3 路径。
+
+## 证据 hash（仓库 LF/git-blob 口径）
+python -I tools/evidence-hash/verify_sha256sums.py verify --check-extra <本目录>   # 09-hash-check.txt
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck <本目录>               # 09-hash-check.txt

@@ -1,0 +1,9 @@
+# 证据包 hash 复核（仓库 LF/git-blob 口径）
+
+$ python -I tools/evidence-hash/verify_sha256sums.py verify --check-extra mir2-rs/tests/parity/m3/evidence-m3-castle-anchor-audit-20261014
+GREEN mir2-rs\tests\parity\m3\evidence-m3-castle-anchor-audit-20261014\SHA256SUMS.txt  [repo 口径]  OK 12/12
+rc=0
+
+$ python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-castle-anchor-audit-20261014
+EOLCHECK GREEN 13/13 件文本证据与仓库口径（LF）在 EOL 上一致
+rc=0
