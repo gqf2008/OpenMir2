@@ -23,3 +23,11 @@ Cargo.lock    text eol=lf
 *.patch  text eol=lf
 *.ndjson text eol=lf
 *.js     text eol=lf
+
+# 证据 red-check 的退出码标记（M3⑨-2 M-3 收口，2026-10-13）：`.rc` 在本仓**仅**用于
+# `tests/parity/m3/**/redchecks/RC*.rc`（一行 `mutated/restored rc=<n>`）。未声明时
+# `core.autocrlf=true` 的**新检出**恒落 CRLF ⇒ `verify_sha256sums.py eolcheck <证据目录>` 假红 2/19
+# （同族坑第 5 次；先例卡 `openmir2-gitattributes-eol-coverage` 覆盖 `*.py/*.tsv/*.ps1/*.patch/*.ndjson/*.js` 时漏掉此扩展名）。
+# 判据：新鲜检出 `verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-pet-slave-f1-rework-20261013` RED→GREEN；
+# 且 `*.rc` 在本仓无其他用途（全树仅 `git ls-tree -r HEAD | grep '\.rc$'` 的 2 件，均在该证据目录）。
+*.rc     text eol=lf

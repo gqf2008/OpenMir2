@@ -1,0 +1,22 @@
+# 04-boundary.txt —— 边界（code base=8aebbcb85，code head=bc2118446；本证据目录为 head 的子提交，无代码）
+
+$ git diff --name-only 8aebbcb85 bc2118446 -- src sql MirClient
+(空)
+
+$ git diff --name-only 8aebbcb85 bc2118446 -- mir2-rs/crates mir2-rs/bins mir2-rs/tools
+(空)
+
+$ git diff --stat 8aebbcb85 bc2118446
+ mir2-rs/.gitattributes | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+$ git diff --name-only 8aebbcb85 bc2118446
+mir2-rs/.gitattributes
+
+$ git check-attr text eol -- <finding 证据目录>/redchecks/RC5-magicfire-self-frame-mutated.rc
+mir2-rs/tests/parity/m3/evidence-m3-pet-slave-f1-rework-20261013/redchecks/RC5-magicfire-self-frame-mutated.rc: text: set
+mir2-rs/tests/parity/m3/evidence-m3-pet-slave-f1-rework-20261013/redchecks/RC5-magicfire-self-frame-mutated.rc: eol: lf
+
+$ git ls-tree -r --name-only bc2118446 | grep '\.rc$'   # 全树 .rc 仅此 2 件（均证据）
+mir2-rs/tests/parity/m3/evidence-m3-pet-slave-f1-rework-20261013/redchecks/RC5-magicfire-self-frame-mutated.rc
+mir2-rs/tests/parity/m3/evidence-m3-pet-slave-f1-rework-20261013/redchecks/RC5-magicfire-self-frame-restored.rc

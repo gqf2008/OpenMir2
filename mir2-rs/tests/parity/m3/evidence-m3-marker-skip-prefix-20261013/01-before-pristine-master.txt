@@ -1,0 +1,22 @@
+# 『改前』pristine origin/master（9c776129c）：marker_prefix_gate.py check + defect_2 现状
+
+$ python -I marker_prefix_gate.py check
+GREEN: markers 前缀口径一致（run_pair 无去前缀截断 + 6 生产牙 + 6 比较器按前缀扫描；teeth bare=2 prefixed=0 empty=2）
+rc=0
+
+$ rg -n 'MainOutMessage\("M3[A-Z]*SEQ [^"]*skip=' ../../../../src/BotSrv/Player/RobotPlayer.cs  # defect_2：裸前缀诊断（本门当时未扫）
+563:                MainOutMessage("M3BAGSEQ step=1 op=CM_TAKEONITEM skip=no_equippable_bag_item");
+581:                MainOutMessage("M3BAGSEQ step=2 op=CM_TAKEOFFITEM skip=no_equipped_item");
+598:                MainOutMessage("M3BAGSEQ step=3 op=CM_DROPITEM skip=no_bag_item");
+610:                MainOutMessage("M3BAGSEQ step=4 op=CM_EAT skip=no_drug_in_bag");
+1202:                MainOutMessage("M3QUESTSEQ skip=no_npc_in_view step=" + QuestEsc(_questSeqOp + "|" + _questSeqNpcName + "|" + _questSeqLabel));
+1214:                    MainOutMessage("M3QUESTSEQ skip=op_not_implemented step=" + QuestEsc(_questSeqOp));
+1484:                        else { MainOutMessage("M3PAIRTRADESEQ skip=no_item_in_bag op=deal_add_item"); }
+1491:                        else { MainOutMessage("M3PAIRTRADESEQ skip=no_item_in_bag op=deal_del_item"); }
+1511:                    MainOutMessage("M3PAIRTRADESEQ skip=op_not_implemented step=" + QuestEsc(_ptSeqOp));
+1740:                            MainOutMessage("M3SELLOFFSEQ skip=no_item_in_bag op=" + QuestEsc(_soSeqOp));
+1777:                    MainOutMessage("M3SELLOFFSEQ skip=op_not_implemented step=" + QuestEsc(_soSeqOp));
+1982:                        MainOutMessage("M3GUILDCSEQ skip=no_npc_in_view op=" + ShopEsc(_gcSeqOp));
+1996:                    MainOutMessage("M3GUILDCSEQ skip=op_not_implemented step=" + ShopEsc(_gcSeqOp));
+2223:                            MainOutMessage("M3HEROPETSEQ skip=bad_skill step=" + ShopEsc(_hpSeqParam));
+2245:                    MainOutMessage("M3HEROPETSEQ skip=op_not_implemented step=" + ShopEsc(_hpSeqOp));
