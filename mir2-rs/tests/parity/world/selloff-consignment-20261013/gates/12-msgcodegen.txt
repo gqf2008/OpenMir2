@@ -1,7 +1,10 @@
 # 命令（cwd = mir2-rs/，CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target）：
 #   cargo run -p msgcodegen --offline -- --check
-# 注：rebase 到 master `029d23eae` 后重跑。
+# 读数：rc=0；604 条常量与 C# 源一致。
+# 注（rebase 片 r2 2026-10-13，worktree m3hp / principal openmir2-worker-20）：本片与 ⑩-2 同栈
+#   重放到 master `ddaca961c`（交付时 origin/master=`78cf74d46`；`git merge-tree` HEAD x master = rc=0），
+#   按同一命令重跑；隔离目标目录 = `E:/tmp/openmir2-m3hp-target`（检出外）。
 
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.20s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.15s
      Running `E:/tmp/openmir2-m3hp-target\debug\msgcodegen.exe --check`
 msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。

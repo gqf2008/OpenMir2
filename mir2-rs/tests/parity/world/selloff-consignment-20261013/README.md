@@ -2,7 +2,7 @@
 
 - 分支：`worktree-m3-selloff-consignment-world`（worktree `m3hp`，principal `openmir2-worker-20`）。
   原分支 `selloff-world-host`（worktree `m2-svr`，principal `openmir2-worker-11`）的已审 head `2869a234b` 由本片接管 rebase；见 §2c。
-- base（交付时 `refs/heads/master`）= `029d23eae`（origin/master tip；rebase 目标）。
+- base（本片 rebase 目标）= `ddaca961c`（交付时 origin/master = `78cf74d46`；与 ⑩-2 同栈）。
 - 实现 commit = `b0d0e432bb7da3fc6c7d1b0a8e5b59ca4b428280`（原始实现，rebase 后为 `76cf9f606`）；
   F-1 修复 = `2869a234b`（rebase 后为 `22343b656`）；rebase 冲突解析 = `ca946df38`。
   **patch head = 本证据提交**（`git log -1 --format=%H -- mir2-rs/tests/parity/world/selloff-consignment-20261013`）。
@@ -22,7 +22,8 @@
    `SM_SELLOFFBUY_OK` 恒不可达；② 金刚石标记写 65535/判 32767；③ 金刚石扣款帧错位；④ 取消退回的静默丢失分支；
    ⑤ `goldsales` 写面 oracle 调用点全注释 ⇒ 不实现。
 4. **判据**：构造级 **24** + 进程级 **2** + 配置键 **1**；`cargo test --workspace --offline --no-fail-fast`
-   = **98 suites · 1065 passed · 0 failed · 21 ignored**（+ msgcodegen 604）；重跑于 rebase 后的 head。
+   = **98 suites · 1123 passed · 0 failed · 21 ignored**（+ msgcodegen 604）；重跑于 rebase 片 r2 后的 head
+   （`ddaca961c` + ⑩-1 r2 重放 `43dc2c95c` + 本 r2 证据提交）。
 5. **改坏必红 3 条**（RC-1 派发 / RC-2 缺陷①照搬 / **RC-3 F-1 成交支负重守卫**），逐条 rc=101、还原后 ok
    （见 `redchecks/README.md`）。
 
@@ -68,6 +69,18 @@
   ⇒ 被审实现/配置逐字节不变；`main.rs` 差异 = master 增量。详见 [`02-change-summary.txt`](02-change-summary.txt) 「rebase 片」。
 - 四门禁与 RC-1/2/3 均在 rebase 后重跑（本节所有读数）。
 
+### 2c-r2. 再前进到 `ddaca961c`（与 ⑩-2 同栈，2026-10-13）
+
+- **为什么**：⑩-2 以 ⑩-1 的 head 为父链；协调者合并检查点 `613291ca`（master `ab60452d0`）报
+  `git merge-tree master x ⑩-2` 在 `main.rs` `CONFLICT(content)`（master 新并入 ⑨-2 的 `pet_cfg` 块）⇒ 要求作者 rebase。
+- **怎么做**：`git rebase origin/master`（`ddaca961c`）；`main.rs` 冲突 = ⑨-2 `pet_cfg` 块与 ⑩-2 `sell_off_seed`
+  块同插入点 ⇒ **两侧并集**。r2 重放结果为 `43dc2c95c`，本 r2 证据提交叠其上（= ⑩-1 分支 head）；⑩-2 以该 head 为父链（同栈）。
+- **保真**：`git diff 029d23eae 1c0efa7aa` 与 `git diff ddaca961c 43dc2c95c` 的 `selloff.rs/config.rs/lib.rs/trade.rs`
+  变更行逐条相同（仅上下文行号位移）；`crates/world/**` 仍零改动。
+  注：**不是** `git diff 2869a234b 43dc2c95c`（那会把 master 自 `67e9f6c3e` 起对 config/lib/trade 的增量算进来）。
+- **门禁**：fmt 0 / clippy 0 / **98 suites · 1123 passed · 0 failed · 21 ignored** / 604；RC-1/2/3 + 还原重跑；
+  `git merge-tree --write-tree origin/master(78cf74d46) HEAD` = rc=0。
+
 ## 3. 未做 / 待窗口（如实登记）
 
 - **真机对拍**（`run_selloff_pair.ps1` + `selloff_diff.py` + `goldsales` 表快照 diff=0，同种子两侧）：
@@ -84,7 +97,7 @@ cd mir2-rs
 export CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --offline -- -D warnings
-cargo test --workspace --offline --no-fail-fast          # 98 suites · 1065 passed · 0 failed · 21 ignored
+cargo test --workspace --offline --no-fail-fast          # 98 suites · 1123 passed · 0 failed · 21 ignored
 cargo run --offline -p msgcodegen -- --check             # 604 条一致
 cargo test -p game-svr --offline --lib selloff           # 24 passed
 cargo test -p game-svr --offline --bin game-svr selloff  # 2 passed

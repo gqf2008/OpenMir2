@@ -1,5 +1,6 @@
 # 命令（cwd = mir2-rs/，CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target）：
 #   cargo fmt --all -- --check
 # 读数：rc=0；stdout/stderr 为空（无格式差异）。
-# 注（rebase 片 2026-10-13，worktree m3hp / principal openmir2-worker-20）：本片 rebase 到
-#   master `029d23eae` 后按同一命令重跑。
+# 注（rebase 片 r2 2026-10-13，worktree m3hp / principal openmir2-worker-20）：本片与 ⑩-2 同栈
+#   重放到 master `ddaca961c`（交付时 origin/master=`78cf74d46`；`git merge-tree` HEAD x master = rc=0），
+#   按同一命令重跑；隔离目标目录 = `E:/tmp/openmir2-m3hp-target`（检出外）。

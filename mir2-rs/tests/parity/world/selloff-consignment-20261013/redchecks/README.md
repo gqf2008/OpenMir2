@@ -3,10 +3,11 @@
 口径：精确 mutation（Python 单次替换，命中数断言为 1）→ 跑命中用例（必 FAILED rc=101）→
 `git restore --source=HEAD -- <file>` 还原 → 重跑（必 ok）。每条给原始件；还原后 `git status` 干净。
 
-> 注（2026-10-13 rebase 片）：RC-1/RC-2/RC-3 与还原复核均在 **rebase 到 master `029d23eae` 后的 head** 上重跑
-> （worktree `m3hp` / `CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target`）。原始件内的 panic 行号随 rebase 位移
-> （如 RC-1 的 `main.rs:11670/11888`、RC-3 的 `selloff.rs:1492`），**语义与断言不变**；被审实现文件
-> 相对 `2869a234b` 逐字节不变（见 `README.md` §2c）。
+> 注（rebase 片 r2 2026-10-13，worktree `m3hp` / principal `openmir2-worker-20`）：RC-1/RC-2/RC-3 与还原复核均在
+> **与 ⑩-2 同栈重放到 master `ddaca961c` 后的 head**（r2 重放结果 `43dc2c95c`，本 r2 证据提交叠其上）上重跑；
+> `CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target`（检出外）。原始件内的 panic 行号随 rebase 位移
+> （如 RC-1 的 `main.rs`、RC-3 的 `selloff.rs:1492` 附近），**语义与断言不变**；被审实现文件
+> 相对 rebase 前的 ⑩-1 内容逐字节不变（见 `20-boundary.txt` 末尾注）。
 
 | # | 针对 | mutation | 命中用例（必红） | 原始件 |
 |---|------|----------|------------------|--------|

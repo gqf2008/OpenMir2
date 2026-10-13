@@ -1,7 +1,7 @@
 # 02 — 改前 / 改后
 
-卡：`openmir2-m3-selloff-consignment-world`。base（交付时 `refs/heads/master`）= `029d23eae`（rebase 片；原 0f9fe999 的 head 见末尾 F-1 节）。
-交付 head 的父链已含 `origin/master`（见末尾「rebase 片」）。
+卡：`openmir2-m3-selloff-consignment-world`。base（本片 rebase 目标）= `ddaca961c`（rebase 片 r2；交付时 origin/master = `78cf74d46`，见末尾「rebase 片 r2」）。
+交付 head 的父链已含 `origin/master` 当时的 tip（`git merge-base --is-ancestor origin/master HEAD` 成立）。
 
 ## 写集（`git diff --stat refs/heads/master HEAD`）
 
@@ -117,3 +117,23 @@ head = 本片交付 commit（交付时记录于 patch entry）。
 **保真校验**：`git diff 2869a234b HEAD -- mir2-rs/bins/game-svr/src/{selloff,config,lib,trade}.rs` = **空**
 （⑩-1 的实现/配置文件逐字节不变）；`main.rs` 相对 `2869a234b` 的差异 = master 自 `67e9f6c3e` 起的增量。
 `crates/world/**` 仍零改动。
+
+
+## rebase 片 r2（2026-10-13，与 ⑩-2 同栈重放到 master `ddaca961c`；worktree `m3hp` / principal `openmir2-worker-20`）
+
+**为什么**：⑩-2（`goldsales` 只读接线）以 ⑩-1 的 head 为父链；协调者合并检查点（`613291ca` @master
+`ab60452d0`）报 `git merge-tree master x ⑩-2` 于 `mir2-rs/bins/game-svr/src/main.rs` `CONFLICT(content)`
+（master 前进到 `ab60452d0` 后 ⑨-2 的 `pet_cfg` 块与 ⑩-1/⑩-2 的 `main.rs` 追加冲突），要求**作者 rebase**。
+为保持 ⑩-1 与 ⑩-2 同栈（⑩-2 的 approve 须覆盖同一 ⑩-1 前缀），⑩-1 一并重放。
+
+**怎么做**：`git rebase origin/master`（`ddaca961c`）重放 ⑩-1 全部 commit；`main.rs` 唯一冲突 = ⑨-2 的
+`pet_cfg` 块（master 侧）与 ⑩-2 的 `sell_off_seed` 启动块（本侧）在同一插入点 ⇒ **两侧并集**（各补自己的
+闭合括号），不改被审语义。r2 重放结果为 `43dc2c95c`，本 r2 证据提交叠其上（= ⑩-1 分支 head；⑩-2 以该 head 为父链）。
+
+**保真校验**：`git diff 029d23eae 1c0efa7aa`（旧 ⑩-1 delta）与 `git diff ddaca961c 43dc2c95c`（新 ⑩-1 delta）
+逐文件比对，`selloff.rs/config.rs/lib.rs/trade.rs` 的**变更行逐条相同**（仅上下文行号位移）；
+`crates/world/**` 仍零改动。
+
+**门禁（本片 r2 树，隔离 `CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target`）**：fmt 0 / clippy 0 /
+workspace **98 suites · 1123 passed · 0 failed · 21 ignored** / msgcodegen 604；RC-1/RC-2/RC-3 + 还原全部重跑
+（见 `redchecks/`）。`git merge-tree --write-tree origin/master(78cf74d46) HEAD` = rc=0。
