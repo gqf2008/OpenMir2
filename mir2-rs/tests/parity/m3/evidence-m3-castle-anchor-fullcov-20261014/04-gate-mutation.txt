@@ -1,0 +1,11 @@
+MUT1 写侧漂移(:113→:111): RED（1 项；E:/tmp/m3cs-fullcov-mut2）
+MUT2 读侧漂移(表 39→36): RED（1 项）
+  - 读侧不匹配 src/M2Server/Castle/CastleConf.cs:36 期望含 '"CastleMap"'，实际 'userCastle.EnvirList.Add(sMap);'
+MUT3 真身 check: GREEN（0 项）
+MUT4 覆盖面未登记锚: RED（1 项）
+MUT5 ⑧-7 范围漂移(:311-446→:311-448): RED（3 项）
+MUT6 ⑧-7 裸锚回归(:480-483): RED（3 项）
+MUT7 全文覆盖面(尾部未登记锚): RED（1 项）
+MUT8 audit 清点器(删表项 UserCastle.cs:930): RED（uncovered=1）
+MUTATION GREEN (E:/tmp/m3cs-fullcov-mut2)
+mutation rc=0
