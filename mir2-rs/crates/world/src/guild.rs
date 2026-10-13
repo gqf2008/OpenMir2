@@ -23,6 +23,12 @@
 //! | [`GuildManager`] | `GuildManager.cs:19-167`（`AddGuild`/`DelGuild`/`FindGuild`/`MemberOfGuild`/`LoadGuildInfo`/`Run`） |
 //! | [`check_guild_name`] | `M2Share.cs:529-545`（**N4**：循环 `i < Length-1` ⇒ 末字符不比黑名单） |
 //! | [`GuildState::member_list_text`] | `PlayObject.Operate.cs:1283-1306`（`#RankNo/*RankName/` + 逐成员 + `/`，`>5000` 截断） |
+//! | [`GuildState::ref_member_name`] | `GuildInfo.cs:348-364`（逐 rank/成员，仅在线成员 `RefShowName`） |
+//! | [`GuildManager::request_guild_war`] | `GuildOfficial.cs:180-199` + `PlayObject.Base.cs:3349-3385`（宣战全链；**N2** 叠加 + 先扣钱后判掌门） |
+//!
+//! M3⑧-实现 5（卡 `openmir2-m3-guild-war`）在本模块上追加：`ref_member_name`、
+//! `GuildWarEvent`/`GuildWarRequest`/`GuildWarOutcome` 与 [`GuildManager::request_guild_war`]
+//! （NPC 层 + `PlayObject` 层宣战链）；⑧-4 已落的 N2 `add_war_guild` / `run` / `end_guild_war` 原样复用。
 //!
 //! ## 照搬的 oracle 怪行为（硬约束 3，不是差异）
 //!
@@ -175,6 +181,59 @@ pub struct GuildWarEnded {
     pub enemy: String,
     /// `EndGuildWar` 文案（`SendGuildMsg`）。
     pub message: String,
+}
+
+/// 行会战宣战请求的输入（M3⑧-实现 5；NPC 层 + `PlayObject` 层）。
+///
+/// 分两层：
+/// - **NPC 层** `GuildOfficial.ReQuestGuildWar`（`GuildOfficial.cs:180-199`）：目标存在 + `GuildWarPrice` 门 + 扣金币；
+/// - **PlayObject 层** `PlayObject.ReQuestGuildWar`（`PlayObject.Base.cs:3349-3385`）：掌门人 / 区号 / 目标 /
+///   双向 `AddWarGuild` / `SS_207`。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GuildWarRequest<'a> {
+    /// `PlayObject.MyGuild?.GuildName`（`None` ⇒ `IsGuildMaster()==false`）。
+    pub requester_guild: Option<&'a str>,
+    /// `PlayObject.GuildRankNo`（`1` = 掌门，`PlayObject.cs:4402-4405`）。
+    pub requester_rank_no: i16,
+    /// `M2Share.ServerIndex`（`!= 0` ⇒ 非 0 区拒绝开行会战）。
+    pub server_index: i32,
+    /// `sGuildName`（宣战目标会名）。
+    pub target_guild: &'a str,
+    /// `PlayObject.Gold`（NPC 层价格门输入）。
+    pub gold: i32,
+    /// `SystemShare.Config.GuildWarPrice`（`crates/data` 的 `GuildCastleConfig::guild_war_price`）。
+    pub war_price: i32,
+}
+
+/// 宣战请求链产生的**帧面副作用**（顺序 = oracle 调用序）。
+///
+/// | 事件 | oracle |
+/// | --- | --- |
+/// | [`GuildWarEvent::GuildMsg`] | `GuildInfo.SendGuildMsg`（`GuildInfo.cs:431-449`）——`AddWarGuild` 两处（`:1035` / `:1049`） |
+/// | [`GuildWarEvent::RefShowName`] | `GuildInfo.RefMemberName` ⇒ `BaseObject.RefShowName`（`GuildInfo.cs:348-364` / `BaseObject.cs:1174-1177`；逐**在线**成员） |
+/// | [`GuildWarEvent::ServerGroupMsg`] | `WorldEngine.SendServerGroupMsg(SS_207, ServerIndex, guildName)`（`PlayObject.Base.cs:3382-3383`） |
+/// | [`GuildWarEvent::SysMsg`] | `SysMsg(..., Red, Hint)`（`GuildOfficial.cs:192/197`、`PlayObject.Base.cs:3353/3358/3364`） |
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GuildWarEvent {
+    /// `SendGuildMsg`（`text` = 入参原文；`GuildMsgPreFix` 前缀由 `SendGuildMsg` 内部加，属帧层 ②片）。
+    GuildMsg { guild: String, text: String },
+    /// `RefShowName`（逐在线成员，`RM_USERNAME`）。
+    RefShowName { guild: String, member: String },
+    /// `SS_207` 跨服消息（payload = 会名）。
+    ServerGroupMsg { guild: String },
+    /// `SysMsg`（`Red` / `Hint`）。
+    SysMsg { text: String },
+}
+
+/// [`GuildManager::request_guild_war`] 的结果。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GuildWarOutcome {
+    /// 帧面副作用（顺序 = oracle 调用序）。
+    pub events: Vec<GuildWarEvent>,
+    /// `DecGold(GuildWarPrice)` 的扣减额（`0` = 未扣；调用方负责从 `Gold` 扣除）。
+    pub gold_spent: i32,
+    /// `boReQuestOk`（`PlayObject.Base.cs:3367/3377`）：`true` 时发出两条 `SS_207`。
+    pub request_ok: bool,
 }
 
 /// 一个行会的会话态（`GuildInfo` 的内存字段子集）。
@@ -552,6 +611,23 @@ impl GuildState {
         format!("***{guild_name}行会战争结束")
     }
 
+    /// `GuildInfo.cs:348-364` 的 `RefMemberName`：逐 rank / 成员，仅对**在线**成员 `RefShowName()`
+    /// （`BaseObject.cs:1174-1177` ⇒ `RM_USERNAME`）；返回被刷新的成员名（顺序 = oracle rank/member 序遍历）。
+    ///
+    /// `online(name)` = oracle 的 `MemberList[j].PlayObject != null`。
+    #[must_use]
+    pub fn ref_member_name(&self, online: impl Fn(&str) -> bool) -> Vec<String> {
+        let mut out = Vec::new();
+        for rank in &self.ranks {
+            for member in &rank.members {
+                if online(member) {
+                    out.push(member.clone());
+                }
+            }
+        }
+        out
+    }
+
     /// `PlayObject.Operate.cs:1283-1306` 的成员列表文本（`SM_SENDGUILDMEMBERLIST` 的 payload）。
     #[must_use]
     pub fn member_list_text(&self) -> String {
@@ -878,6 +954,148 @@ impl GuildManager {
             guild.check_save_guild_file(now_tick);
         }
         ended
+    }
+
+    /// 行会战宣战全链（NPC 层 + `PlayObject` 层；`GuildOfficial.cs:180-199` + `PlayObject.Base.cs:3349-3385`）。
+    ///
+    /// **顺序**：先 NPC 层（目标存在 ⇒ `GuildWarPrice` 门 ⇒ 扣金币），**再** `PlayObject` 层
+    /// （`IsGuildMaster` ⇒ `ServerIndex` ⇒ `FindGuild` ⇒ `MyGuild.AddWarGuild` ⇒ 反向 `AddWarGuild` ⇒ `SS_207`）。
+    ///
+    /// **照搬的 oracle 怪行为**：金币在**掌门人判定之前**就扣（`GuildOfficial.cs:186` 先于
+    /// `PlayObject.Base.cs:3351` 的 `IsGuildMaster`）⇒ 非掌门 / 非 0 区 / 目标缺失也会白扣 `GuildWarPrice`。
+    /// 与 ⑧-4 的 **N2** `AddWarGuild` 反逻辑叠加后，只有「本会与目标已处于战态、但目标未把本会列入战表」
+    /// 这一种非对称态才会令 `boReQuestOk = true`（发出 `SS_207`）。
+    ///
+    /// `online(name)` 供 `RefMemberName` 判定在线；`gold_spent` 由调用方从 `Gold` 扣除。
+    pub fn request_guild_war(
+        &mut self,
+        req: &GuildWarRequest<'_>,
+        cfg: &GuildConfig,
+        now_tick: i32,
+        online: impl Fn(&str) -> bool,
+    ) -> GuildWarOutcome {
+        let mut events = Vec::new();
+        // ---- 第 1 层：NPC `GuildOfficial.ReQuestGuildWar`（`GuildOfficial.cs:180-199`）----
+        if self.find_guild(req.target_guild).is_none() {
+            events.push(GuildWarEvent::SysMsg {
+                text: format!("行会 {} 不存在!!!", req.target_guild),
+            });
+            return GuildWarOutcome {
+                events,
+                gold_spent: 0,
+                request_ok: false,
+            };
+        }
+        if req.gold < req.war_price {
+            events.push(GuildWarEvent::SysMsg {
+                text: "你没有足够的金币!!!".to_string(),
+            });
+            return GuildWarOutcome {
+                events,
+                gold_spent: 0,
+                request_ok: false,
+            };
+        }
+        // `DecGold(GuildWarPrice); GoldChanged();`（`:186-187`）先于掌门人判定。
+        let gold_spent = req.war_price;
+
+        // ---- 第 2 层：`PlayObject.ReQuestGuildWar`（`PlayObject.Base.cs:3349-3385`）----
+        if req.requester_guild.is_none() || req.requester_rank_no != 1 {
+            events.push(GuildWarEvent::SysMsg {
+                text: "只有行会掌门人才能申请!!!".to_string(),
+            });
+            return GuildWarOutcome {
+                events,
+                gold_spent,
+                request_ok: false,
+            };
+        }
+        if req.server_index != 0 {
+            events.push(GuildWarEvent::SysMsg {
+                text: "这个命令不能在本服务器上使用!!!".to_string(),
+            });
+            return GuildWarOutcome {
+                events,
+                gold_spent,
+                request_ok: false,
+            };
+        }
+        // `IGuild guild = FindGuild(sGuildName)`（`:3361`）——NPC 层已查过一次，此处 oracle 再查。
+        if self.find_guild(req.target_guild).is_none() {
+            events.push(GuildWarEvent::SysMsg {
+                text: "行会不存在!!!".to_string(),
+            });
+            return GuildWarOutcome {
+                events,
+                gold_spent,
+                request_ok: false,
+            };
+        }
+        // 掌门人必然 `MyGuild != null`；本会须在会表内（生产路径 = `MemberOfGuild` 结果）。
+        let my_name = req.requester_guild.unwrap_or_default();
+        let Some(my_idx) = self.guilds.iter().position(|g| g.name == my_name) else {
+            return GuildWarOutcome {
+                events,
+                gold_spent,
+                request_ok: false,
+            };
+        };
+        let target_idx = self
+            .guilds
+            .iter()
+            .position(|g| g.name == req.target_guild)
+            .expect("target checked above");
+
+        // `MyGuild.AddWarGuild(guild)`（`:3368`）；其内无条件 `RefMemberName()` + `UpdateGuildFile()`。
+        let first = self.guilds[my_idx].add_war_guild(req.target_guild, cfg, now_tick);
+        for text in &first.messages {
+            events.push(GuildWarEvent::GuildMsg {
+                guild: my_name.to_string(),
+                text: text.clone(),
+            });
+        }
+        for member in self.guilds[my_idx].ref_member_name(&online) {
+            events.push(GuildWarEvent::RefShowName {
+                guild: my_name.to_string(),
+                member,
+            });
+        }
+
+        // `if (warGuild.WarTick > 0)`（`:3369`）——只有 N2 的「已战追加重复」路径会给非 0 `WarTick`。
+        let mut request_ok = false;
+        if first.result.war_tick > 0 {
+            let second = self.guilds[target_idx].add_war_guild(my_name, cfg, now_tick);
+            for text in &second.messages {
+                events.push(GuildWarEvent::GuildMsg {
+                    guild: req.target_guild.to_string(),
+                    text: text.clone(),
+                });
+            }
+            for member in self.guilds[target_idx].ref_member_name(&online) {
+                events.push(GuildWarEvent::RefShowName {
+                    guild: req.target_guild.to_string(),
+                    member,
+                });
+            }
+            if second.result.guild_name.is_empty() {
+                request_ok = true;
+            }
+            // else：oracle `warGuild.WarTick = 0;`（`:3373`）是对 **本地副本** 赋值
+            //（`WarGuild` 是 record struct）⇒ 列表零副作用，仅令 `boReQuestOk` 保持 false。
+        }
+        if request_ok {
+            events.push(GuildWarEvent::ServerGroupMsg {
+                guild: my_name.to_string(),
+            });
+            events.push(GuildWarEvent::ServerGroupMsg {
+                guild: req.target_guild.to_string(),
+            });
+        }
+        GuildWarOutcome {
+            events,
+            gold_spent,
+            request_ok,
+        }
     }
 }
 
@@ -1304,5 +1522,339 @@ mod tests {
         assert_eq!(g.wars.len(), 1);
         let back = g.to_body();
         assert_eq!(back, rec.body);
+    }
+
+    // ---- ⑧-5 宣战全链（NPC 层 + `PlayObject` 层） ----
+
+    fn guild_with_chief(name: &str, chief: &str) -> GuildState {
+        let mut g = GuildState::new(name);
+        g.set_guild_info(chief, &cfg());
+        g
+    }
+
+    fn war_req<'a>(
+        my: Option<&'a str>,
+        rank: i16,
+        server: i32,
+        target: &'a str,
+        gold: i32,
+        price: i32,
+    ) -> GuildWarRequest<'a> {
+        GuildWarRequest {
+            requester_guild: my,
+            requester_rank_no: rank,
+            server_index: server,
+            target_guild: target,
+            gold,
+            war_price: price,
+        }
+    }
+
+    #[test]
+    fn request_guild_war_target_missing() {
+        let mut mgr = GuildManager::new();
+        mgr.guilds.push(guild_with_chief("会A", "A1"));
+        let out = mgr.request_guild_war(
+            &war_req(Some("会A"), 1, 0, "无此会", 50_000, 30_000),
+            &cfg(),
+            1_000,
+            |_| true,
+        );
+        assert_eq!(
+            out.events,
+            vec![GuildWarEvent::SysMsg {
+                text: "行会 无此会 不存在!!!".into()
+            }]
+        );
+        assert_eq!(out.gold_spent, 0);
+        assert!(!out.request_ok);
+    }
+
+    #[test]
+    fn request_guild_war_insufficient_gold() {
+        let mut mgr = GuildManager::new();
+        mgr.guilds.push(guild_with_chief("会A", "A1"));
+        mgr.guilds.push(guild_with_chief("会B", "B1"));
+        let out = mgr.request_guild_war(
+            &war_req(Some("会A"), 1, 0, "会B", 29_999, 30_000),
+            &cfg(),
+            1_000,
+            |_| true,
+        );
+        assert_eq!(
+            out.events,
+            vec![GuildWarEvent::SysMsg {
+                text: "你没有足够的金币!!!".into()
+            }]
+        );
+        assert_eq!(out.gold_spent, 0);
+        assert!(!out.request_ok);
+    }
+
+    #[test]
+    fn request_guild_war_non_master_still_pays_gold() {
+        // oracle 怪行为：`GuildOfficial.cs:186` 先扣钱，`:188` 才判掌门 ⇒ 非掌门也白扣。
+        let mut mgr = GuildManager::new();
+        mgr.guilds.push(guild_with_chief("会A", "A1"));
+        mgr.guilds.push(guild_with_chief("会B", "B1"));
+        let out = mgr.request_guild_war(
+            &war_req(Some("会A"), 99, 0, "会B", 30_000, 30_000),
+            &cfg(),
+            1_000,
+            |_| true,
+        );
+        assert_eq!(
+            out.events,
+            vec![GuildWarEvent::SysMsg {
+                text: "只有行会掌门人才能申请!!!".into()
+            }]
+        );
+        assert_eq!(out.gold_spent, 30_000, "非掌门也扣 GuildWarPrice");
+        assert!(!out.request_ok);
+        assert!(mgr.guilds[0].wars.is_empty());
+    }
+
+    #[test]
+    fn request_guild_war_no_guild_still_pays_gold() {
+        let mut mgr = GuildManager::new();
+        mgr.guilds.push(guild_with_chief("会B", "B1"));
+        let out = mgr.request_guild_war(
+            &war_req(None, 1, 0, "会B", 30_000, 30_000),
+            &cfg(),
+            1_000,
+            |_| true,
+        );
+        assert_eq!(
+            out.events,
+            vec![GuildWarEvent::SysMsg {
+                text: "只有行会掌门人才能申请!!!".into()
+            }]
+        );
+        assert_eq!(out.gold_spent, 30_000);
+    }
+
+    #[test]
+    fn request_guild_war_non_zero_server_still_pays_gold() {
+        let mut mgr = GuildManager::new();
+        mgr.guilds.push(guild_with_chief("会A", "A1"));
+        mgr.guilds.push(guild_with_chief("会B", "B1"));
+        let out = mgr.request_guild_war(
+            &war_req(Some("会A"), 1, 3, "会B", 30_000, 30_000),
+            &cfg(),
+            1_000,
+            |_| true,
+        );
+        assert_eq!(
+            out.events,
+            vec![GuildWarEvent::SysMsg {
+                text: "这个命令不能在本服务器上使用!!!".into()
+            }]
+        );
+        assert_eq!(out.gold_spent, 30_000);
+    }
+
+    #[test]
+    fn request_guild_war_not_at_war_is_n2_noop() {
+        // N2 反逻辑：未在战 ⇒ `AddWarGuild` 返回 `default`（`WarTick=0`）⇒ 宣战不生效。
+        let mut mgr = GuildManager::new();
+        let mut a = guild_with_chief("会A", "A1");
+        a.ranks[0].members.push("A2".into());
+        mgr.guilds.push(a);
+        mgr.guilds.push(guild_with_chief("会B", "B1"));
+        let out = mgr.request_guild_war(
+            &war_req(Some("会A"), 1, 0, "会B", 30_000, 30_000),
+            &cfg(),
+            1_000,
+            |_| true,
+        );
+        assert!(!out.request_ok);
+        assert_eq!(out.gold_spent, 30_000);
+        assert!(mgr.guilds[0].wars.is_empty(), "N2：未战宣战不生效");
+        assert!(mgr.guilds[1].wars.is_empty());
+        assert!(!out
+            .events
+            .iter()
+            .any(|e| matches!(e, GuildWarEvent::GuildMsg { .. })));
+        assert!(!out
+            .events
+            .iter()
+            .any(|e| matches!(e, GuildWarEvent::ServerGroupMsg { .. })));
+        // `AddWarGuild` 无条件调 `RefMemberName` ⇒ 本会在线成员各一条 `RefShowName`。
+        assert_eq!(
+            out.events,
+            vec![
+                GuildWarEvent::RefShowName {
+                    guild: "会A".into(),
+                    member: "A1".into()
+                },
+                GuildWarEvent::RefShowName {
+                    guild: "会A".into(),
+                    member: "A2".into()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn request_guild_war_asymmetric_duplicates_and_broadcasts_ss207() {
+        // 非对称态（本会已战、目标未列本会）⇒ N2 追加重复 + `warGuild.WarTick>0` ⇒ 反向默认值 ⇒ `boReQuestOk`。
+        let mut mgr = GuildManager::new();
+        mgr.guilds.push(guild_with_chief("会A", "A1"));
+        mgr.guilds.push(guild_with_chief("会B", "B1"));
+        mgr.guilds[0].wars.push(WarGuild {
+            guild_name: "会B".into(),
+            war_tick: 100,
+            war_time: 10_800_000,
+        });
+        let out = mgr.request_guild_war(
+            &war_req(Some("会A"), 1, 0, "会B", 30_000, 30_000),
+            &cfg(),
+            2_000,
+            |_| true,
+        );
+        assert!(out.request_ok);
+        assert_eq!(mgr.guilds[0].wars.len(), 2, "N2：已战 ⇒ 追加重复条目");
+        assert_eq!(mgr.guilds[0].wars[1].war_tick, 2_000);
+        assert_eq!(mgr.guilds[0].wars[1].war_time, GUILD_WAR_TIME_DEFAULT);
+        assert!(
+            mgr.guilds[1].wars.is_empty(),
+            "目标未在战 ⇒ 反向默认值，不追加"
+        );
+        assert_eq!(
+            out.events,
+            vec![
+                GuildWarEvent::GuildMsg {
+                    guild: "会A".into(),
+                    text: "***会B行会战争将持续三个小时。".into()
+                },
+                GuildWarEvent::GuildMsg {
+                    guild: "会A".into(),
+                    text: "***会B行会战争开始(三个小时)".into()
+                },
+                GuildWarEvent::RefShowName {
+                    guild: "会A".into(),
+                    member: "A1".into()
+                },
+                GuildWarEvent::RefShowName {
+                    guild: "会B".into(),
+                    member: "B1".into()
+                },
+                GuildWarEvent::ServerGroupMsg {
+                    guild: "会A".into()
+                },
+                GuildWarEvent::ServerGroupMsg {
+                    guild: "会B".into()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn request_guild_war_both_at_war_duplicates_without_ss207() {
+        // 对称战态 ⇒ 反向 `AddWarGuild` 命中 ⇒ `result.Guild != null` ⇒ `WarTick=0`（副本）⇒ 不发 `SS_207`。
+        let mut mgr = GuildManager::new();
+        mgr.guilds.push(guild_with_chief("会A", "A1"));
+        mgr.guilds.push(guild_with_chief("会B", "B1"));
+        mgr.guilds[0].wars.push(WarGuild {
+            guild_name: "会B".into(),
+            war_tick: 100,
+            war_time: 10_800_000,
+        });
+        mgr.guilds[1].wars.push(WarGuild {
+            guild_name: "会A".into(),
+            war_tick: 100,
+            war_time: 10_800_000,
+        });
+        let out = mgr.request_guild_war(
+            &war_req(Some("会A"), 1, 0, "会B", 30_000, 30_000),
+            &cfg(),
+            2_000,
+            |_| true,
+        );
+        assert!(!out.request_ok, "反向命中 ⇒ boReQuestOk 保持 false");
+        assert_eq!(mgr.guilds[0].wars.len(), 2);
+        assert_eq!(mgr.guilds[1].wars.len(), 2);
+        assert_eq!(
+            out.events
+                .iter()
+                .filter(|e| matches!(e, GuildWarEvent::GuildMsg { .. }))
+                .count(),
+            4,
+            "两次 AddWarGuild 各两条"
+        );
+        assert!(!out
+            .events
+            .iter()
+            .any(|e| matches!(e, GuildWarEvent::ServerGroupMsg { .. })));
+    }
+
+    #[test]
+    fn request_guild_war_ally_is_skipped_by_add_war_guild() {
+        let mut mgr = GuildManager::new();
+        let mut a = guild_with_chief("会A", "A1");
+        a.allies.push("会B".into());
+        mgr.guilds.push(a);
+        mgr.guilds.push(guild_with_chief("会B", "B1"));
+        let out = mgr.request_guild_war(
+            &war_req(Some("会A"), 1, 0, "会B", 30_000, 30_000),
+            &cfg(),
+            1_000,
+            |_| true,
+        );
+        assert!(!out.request_ok);
+        assert_eq!(out.gold_spent, 30_000);
+        assert!(
+            mgr.guilds[0].wars.is_empty(),
+            "盟友 ⇒ AddWarGuild body 跳过"
+        );
+        assert_eq!(
+            out.events,
+            vec![GuildWarEvent::RefShowName {
+                guild: "会A".into(),
+                member: "A1".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn request_then_run_expires_war_n2() {
+        let mut conf = cfg();
+        conf.guild_war_time = 1_000;
+        let mut mgr = GuildManager::new();
+        let mut a = guild_with_chief("会A", "A1");
+        a.wars.push(WarGuild {
+            guild_name: "会B".into(),
+            war_tick: 2_000,
+            war_time: 1_000,
+        });
+        mgr.guilds.push(a);
+        mgr.guilds.push(guild_with_chief("会B", "B1"));
+        let out = mgr.request_guild_war(
+            &war_req(Some("会A"), 1, 0, "会B", 30_000, 30_000),
+            &conf,
+            2_000,
+            |_| true,
+        );
+        assert!(out.request_ok);
+        assert_eq!(mgr.guilds[0].wars.len(), 2);
+        // 原始 + 重复两条 `war_tick == 2000` ⇒ 同刻到期。
+        assert!(mgr.run(3_000).is_empty(), "差 == WarTime 不过期");
+        assert_eq!(mgr.guilds[0].wars.len(), 2);
+        let ended = mgr.run(3_001);
+        assert_eq!(ended.len(), 2);
+        assert_eq!(ended[0].guild, "会A");
+        assert_eq!(ended[0].enemy, "会B");
+        assert_eq!(ended[0].message, "***会B行会战争结束");
+        assert!(mgr.guilds[0].wars.is_empty());
+        assert!(mgr.guilds[0].bo_changed, "Run 到期 ⇒ UpdateGuildFile 置脏");
+    }
+
+    #[test]
+    fn ref_member_name_only_online() {
+        let mut g = guild_with_chief("会A", "A1");
+        g.ranks[0].members.push("A2".into());
+        g.ranks[0].members.push("A3".into());
+        let out = g.ref_member_name(|n| n == "A1" || n == "A3");
+        assert_eq!(out, vec!["A1".to_string(), "A3".to_string()]);
     }
 }
