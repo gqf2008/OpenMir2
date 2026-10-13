@@ -1,0 +1,64 @@
+90-redcheck-rust-window-preflight.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片⑮ 改坏必红
+`check_rust_window_preflight.py`：7 条牙齿（每条给出命令 + 观测 rc + 还原后基准 sha256 不变）
+====================================================================================================
+牙齿覆盖：R1（构建源含修复提交，两条：非祖先后代 / 坏 ref）、R2（源码读数标记）、
+R3（map_id↔逻辑名，两条：值错 / 名不存在）、R4（坐标与生成框不符）、R5（判据工具缺失）。
+每条改动后**逐字节还原**（sha256 与基准一致）再复绿。
+
+基准 sha256 = 7bcb3d15c66d7cbf626a2b0aa3c262e9c9a0784ffdf822c7598812f0563b7ddd
+基准 GOOD(GREEN) 期望 rc=0 : 0
+基准 MAIN(RED)   期望 rc=1 : 1
+
+--- M1 把 map_id 26 改成 27（真机读到 26）
+$ python -I -B check_rust_window_preflight.py --repo E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr --map-id 27
+    RED R3: MapInfo 第 26 个 section 才是 '0'，但真机周期行 map_id=27 ⇒ MonGen 判据可能判错图
+    RESULT: RED
+    rc=1
+
+--- M2 把逻辑名 0 改成不存在的 9
+$ python -I -B check_rust_window_preflight.py --repo E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr --map-name 9
+    PREREQ_RED R3: 逻辑名 '9' 不在 MapInfo（section 数 322）
+    PREREQ_RED R4 (291,666) rc=2: RESULT: PREREQ_RED
+    PREREQ_RED R4 (291,651) rc=2: RESULT: PREREQ_RED
+    PREREQ_RED R4 (289,618) rc=2: RESULT: PREREQ_RED
+    PREREQ_RED R4 (287,620) rc=2: RESULT: PREREQ_RED
+    RESULT: PREREQ_RED
+    rc=2
+
+--- M3 把框内点 289,618 误标 outside
+$ python -I -B check_rust_window_preflight.py --repo E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr --points 289,618:outside
+    RED R4 (289,618) --expect outside 不符: RESULT: RED
+    RESULT: RED
+    rc=1
+
+--- M4 fix-commit 换成 origin/master tip（在 HEAD 上非祖先）
+$ python -I -B check_rust_window_preflight.py --repo E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr --fix-commit 4c0762c83bd3faaa731d3175fe2551c0732611d8
+    RED R1: E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr 的 HEAD=7a41ad294e8b68e6b7d415abbb6e7ee04082faca 不含 4c0762c83b（旧诊断版式 ⇒ 窗口判据 PREREQ_RED）
+    RESULT: RED
+    rc=1
+
+--- M7 --ref 指向不存在的 ref
+$ python -I -B check_rust_window_preflight.py --repo E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr --ref no-such-ref-xyz
+    PREREQ_RED R1: 判不了（fatal: Not a valid object name no-such-ref-xyz）
+    RESULT: PREREQ_RED
+    rc=2
+
+--- M5 改源码：删掉版式标记常量（模拟旧树）
+$ python -I -B check_rust_window_preflight.py --repo E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr
+    RED R2: E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr\mir2-rs\bins\game-svr\src\main.rs 缺标记 (format=False filter=True); 当前版式行 = " [{}({}) map={} vr={} vis={} new={} af={} same_map={} nearest={}]",
+    RESULT: RED
+    rc=1
+
+M5 还原复绿 sha256 == 基准 : True | GOOD rc = 0
+
+--- M6 改源码：判据工具名写错（模拟工具缺失）
+$ python -I -B check_rust_window_preflight.py --repo E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr
+    PREREQ_RED R5: 证据目录缺判据工具 ['aoi_visibility_pair.py.bak']
+    RESULT: PREREQ_RED
+    rc=2
+
+M6 还原复绿 sha256 == 基准 : True | GOOD rc = 0
+
+最终工具 sha256 = 7bcb3d15c66d7cbf626a2b0aa3c262e9c9a0784ffdf822c7598812f0563b7ddd (== 基准) True
+ALL REDCHECKS OK (7/7 复原逐字节一致)
+driver rc=0

@@ -1,0 +1,36 @@
+87-gates.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片⑭ 四门禁
+====================================================================================================
+head = c43ca7bad3e4d9ec7ef83de4fbb503d6298f0420（片⑭ 交付）
+base = `refs/heads/master` = 382eef5dec9d639965b0c0835b3500ba412734f2
+cwd = `mir2-rs`，`CARGO_TARGET_DIR=E:/tmp/m2svr-target`（检出外）。
+
+```
+== fmt ==
+$ cargo fmt --all -- --check
+fmt rc=0
+
+== clippy ==
+$ cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.77s
+clippy rc=0
+
+== test ==
+$ cargo test --workspace --no-fail-fast
+   rc=0
+   suites=101 passed=1200 failed=0 ignored=22
+   （全文：E:/tmp/m2svr-gate-test.txt；`grep -c '^test result:'` = 101，无 FAILED）
+
+== msgcodegen ==
+$ cargo run -p msgcodegen -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+msgcodegen rc=0
+```
+
+判据工具自证（离线，`python -I -B`）：
+```
+$ python -I -B check_csharp_capture_preflight.py --selftest
+SELFTEST OK (12/12)   rc=0
+```
+
+本片**零 .rs / 零生产代码改动**（仅新增一个 `.py` 判据工具 + 两份文档 + README/手册/清单），
+四门禁读数与 base master `382eef5de` 的合并树（101 suites / 1200 passed / 0 failed / 22 ignored）一致 ⇒ 无回归。

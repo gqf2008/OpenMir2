@@ -1,0 +1,19 @@
+91-gates.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片⑮ 四门禁（本地门禁，合并前全绿）
+cwd = mir2-rs/，CARGO_TARGET_DIR = E:/tmp/m2svr-target（隔离，暖 target）
+本片零 .rs（只增离线 python 判据 + 证据文档）⇒ 门禁用于确认未破坏基线。
+====================================================================================================
+[1] cargo fmt --all -- --check
+    fmt rc=0
+
+[2] cargo clippy --workspace --all-targets -- -D warnings
+        Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.53s
+    clippy rc=0
+
+[3] cargo test --workspace --no-fail-fast
+    101 suites · passed=1200 · failed=0 · ignored=22
+    FAILED 行数 = 0；cargo test rc=0
+
+[4] cargo run -p msgcodegen -- --check
+         Running `E:/tmp/m2svr-target\debug\msgcodegen.exe --check`
+    msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+    msgcodegen rc=0

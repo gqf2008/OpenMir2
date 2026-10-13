@@ -80,16 +80,41 @@ python -I -B check_client_s2c_frames.py --capture E:/tmp/window/cliente2e/rust/s
 # 截图留证（屏幕上要能看到怪）
 ```
 
-## 4. C# 侧（⚠ 唯一未证环节——先读这段再动手）
+## 4. C# 侧（先读 `85-csharp-capture-topology-rootcause.md` 再动手）
 
-`tools/README.md`「抓包拓扑的代价」+ `mir2-rs/tests/golden/C线-交付说明.md`「解除判据」记录：
-C# 抓包历史上**只拿到「进世界（公告确认）」为止**——影子网关挪到 +10000 后，`CM_LOGINNOTICEOK`
-之后的世界数据到不了客户端（`!servertable.txt` 发给客户端的是 7200，GameSvr 侧进世界路由按网关端口对齐）。
+C 线（2026-10-10）把「`CM_LOGINNOTICEOK` 之后世界数据下不来」归因于**影子网关端口被挪**；
+`85-…md` 按当前源码逐路径复核**推翻了该归因**：
+
+- `!servertable.txt` 只在**多机转移**路径被消费（`GameShare.GetMultiServerAddrPort` →
+  `AppService.cs:221` 关机转移 / `WorldServer.cs:1063-1074` `SM_RECONNECT`）；单机进世界不读它。
+- GameSvr 对网关按**槽位**寻址（`TCPNetChannel` 的 `_gateSlotByConnection`/`_gameGates`），
+  世界侧 `GateIdx` = 网关在认证串里自报的 `ServiceId`（`ClientSession.cs:1203`），**与端口无关**。
+- 同症状的确定根因是 **S1 缺陷①**（槽位按 accept 序 + `CloseGate` 不释放槽位），
+  修复 `607e9b773`（2026-10-10 17:01）**已进部署件**（`!deployed-from.json` = master `628d8024`）。
+
+### 4.0 前置门（起 C# 栈之前先跑；离线、零端口、fail-closed）
+
+```powershell
+cd mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
+python -I -B check_csharp_capture_preflight.py `
+  --repo E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr `
+  --mirserver E:/MirServer --shadow-config <影子 RunGate/config.conf>
+```
+
+退出码 `0`=GREEN / `1`=RED / `2`=PREREQ_RED。它咬五条：部署件含 `607e9b773`；真实与影子
+`ServerWorkThread=1`（S1 §2.1 多网关错配边界）；真实 `GatePort1=7200`；`!servertable.txt`
+GameGate 端口 `=7200`；上游 `127.0.0.1:5000`。**红灯先修，不要带着红灯起栈。**
+
+### 4.1 影子 RunGate 配置
+
+拷 `E:/MirServer/RunGate/config.conf` 一份，**只改 `GatePort1=7600`**（绑定地址、上游地址、
+`ServerWorkThread` 一律不动）；**不要**引入第 2/3 个活动网关（本部署本就 `ServerWorkThread=1`）。
 
 - **首选（需现场验证）**：照 §3 **只挪 game-gate**（真 LoginGate/SelGate 保持 7000/7100 不代理，
-  game-gate 影子挪到一个非 7200 端口，代理占 7200）。Rust 侧同拓扑能拿到世界数据（§3 已证），
-  C# 侧是否同样可行**必须在窗口里实拍确认**（看代理 `chunks.ndjson` 里 7200 跳在公告之后是否还有 s2c 字节）。
-- **若 C# 世界数据仍下不来**（=`C线-交付说明.md` 的老现象复现）⇒ 按 `C线-交付说明.md`「解除判据」#1：
+  game-gate 影子挪到 7600，代理占 7200）。Rust 侧同拓扑能拿到世界数据（§3 已证），
+  C# 侧**仍须在窗口里实拍确认**（看代理 `chunks.ndjson` 里 7200 跳在公告之后是否还有 s2c 字节）——
+  本片只把「端口=根因」这个旧归因订正掉，**不把「应该能」写成「已经能」**。
+- **若 C# 世界数据仍下不来**（老现象复现，且 §4.0 前置门已 GREEN）⇒ 按 `C线-交付说明.md`「解除判据」#1：
   让 C# 自己把网关挂在可插桩端口，并把 `!servertable.txt` 与 LoginSrv `AddrTable.txt` 一起指向该端口。
   **不要在窗口里现造**——这是 oracle 侧配置改动，属 §6.0-3 登记项，先记 `comment` 请 owner 裁决。
 - **降级判据（不依赖抓包）**：C# 与 Rust 各在**同一坐标**起一次真客户端，各留 `mir_flow.ps1` 截图
@@ -127,7 +152,8 @@ python -I -B aoi_visibility_pair.py `
 
 ## 7. 登记的风险 / 未做
 
-- **C# 抓包拓扑**（§4）：唯一未证环节；未证前不得写「两侧帧级一致」。
+- **C# 抓包拓扑**：旧归因（端口被挪）已由 `85-…md` 订正为 S1 缺陷①（已修 + 已部署）；
+  §4.0 前置门可离线机判。**但世界数据能否经代理下来仍须窗口实拍**；未实拍前不得写「两侧帧级一致」。
 - `RM_DISAPPEAR(48)` 无编码器（怪离视野无消失帧，`bins/game-svr/src/downlink.rs` 已登记）与 ③ 无因果，
   本手册不含；归属见 `70-…txt` §F（等 owner 指派）。
-- 本手册**零生产代码改动**；只补判据工具（`check_mongen_dense_points.py`）与运行步骤。
+- 本手册**零生产代码改动**；只补判据工具（`check_mongen_dense_points.py`、`check_csharp_capture_preflight.py`）与运行步骤。

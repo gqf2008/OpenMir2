@@ -1,0 +1,28 @@
+88-boundary.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片⑭ 边界（冻结面空）
+====================================================================================================
+base = `refs/heads/master` = 382eef5dec9d639965b0c0835b3500ba412734f2
+head = cfd05f8512f1a3302587d6c5d40a1fb9e5196dc8（= 片⑭ 代码/文档 c43ca7bad + 证据/清单刷新）
+
+```
+$ git diff --name-only 382eef5de cfd05f851
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/82-two-side-window-runbook.md
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/85-csharp-capture-topology-rootcause.md
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/86-csharp-capture-preflight.txt
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/87-gates.txt
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/88-boundary.txt
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_csharp_capture_preflight.py
+（= 8 路径；其中 5 条为片⑭ 代码/文档，3 条为本片清单刷新）
+
+$ git diff --name-only 382eef5de cfd05f851 -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+（空 = 冻结面 GREEN）
+
+$ git diff --name-only 382eef5de cfd05f851 | grep -c '\.rs$'
+0
+```
+
+- 全部 8 路径都在本卡证据目录 `mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/**`；
+  `src/`（oracle）/`sql/`/`MirClient`/`mir2-rs/crates/protocol`/`mir2-rs/crates/storage` 未触碰；
+  `*.rs` = 0（本片零生产代码改动）。
+- 写集不碰 `tests/parity/m3/**`（m3bag/m3cs）、不碰他人卡。
