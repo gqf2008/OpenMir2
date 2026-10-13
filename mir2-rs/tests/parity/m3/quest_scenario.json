@@ -46,9 +46,9 @@
     "cm_click_npc": "src/OpenMir2/Messages.cs:62 = CM_CLICKNPC(1010) → src/M2Server/Player/PlayObject.Base.cs:674 ClientClickNpc → NormNpc.Click(src/M2Server/Npc/NormNpc.cs:68) → GotoLable(\"@main\")",
     "cm_dialog_select": "CM_MERCHANTDLGSELECT → NormNpc → ScriptEngine（与 ⑤ 同一条器）",
     "say_frame": "src/Modules/ScriptEngine/ScriptEngine.cs:987-998 RM_MERCHANTSAY(11009) → SM_MERCHANTSAY(643)（src/M2Server/Player/PlayObject.Message.cs:1702-1724）",
-    "quest_bits": "PlayObject.cs:3966-4110 GetQuestFalgStatus/SetQuestFlagStatus/GetQuestUnit*/SetQuestUnit*；`nFlag-=1; idx=nFlag/8; bit=128>>(nFlag%8)`",
+    "quest_bits": "PlayObject.cs:3966-4105 GetQuestFalgStatus/SetQuestFlagStatus/GetQuestUnit*/SetQuestUnit*；`nFlag-=1; idx=nFlag/8; bit=128>>(nFlag%8)`",
     "session_day": "登录载入 WorldServer.cs:1160-1162；存档写回 WorldServer.cs:1291-1293",
-    "no_persist": "oracle MySQL 不持久任务态：PlayDataStorage.Save.cs:45/:84-86（characters 无任务列）、Query.cs:192/:194（不读任务数组）、Save.cs:493（SaveQuest 空壳只 DELETE）、sql/mir2_db.sql:371936（characters_quest 从不被读写）"
+    "no_persist": "oracle MySQL 不持久任务态：PlayDataStorage.Save.cs:45/:84-86（characters 无任务列）、PlayDataStorage.Query.cs:192/:194（不读任务数组）、PlayDataStorage.Save.cs:493（SaveQuest 空壳只 DELETE）、sql/mir2_db.sql:371936（characters_quest 从不被读写）"
   },
   "frame_text_sms": [643],
   "frame_scalar_fields": {},

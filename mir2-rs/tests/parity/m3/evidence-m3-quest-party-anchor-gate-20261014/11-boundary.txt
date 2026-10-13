@@ -1,0 +1,35 @@
+base = origin/master = 4244cb69503cbbccec8803f6332c49facd9861d3（本片交付时的 master tip；含 ⑧-6 O-1 片 5ffd215b 与 enter-gaps 片 6d13a4df 的合入）
+branch = worktree-m3-fixture-anchor-quest-party tip（本片交付提交；确切 oid 见 walgit patch body，不在此处固化以免 amend 后自指失效）
+
+=== 净差量（工作树 vs origin/master；tracked diff + 未跟踪）===
+M	mir2-rs/tests/parity/m3/fixture_chain_gate.py
+M	mir2-rs/tests/parity/m3/party_trade_scenario.json
+M	mir2-rs/tests/parity/m3/quest_scenario.json
+M	mir2-rs/tests/parity/m3/run_party_trade_pair.ps1
+M	mir2-rs/tests/parity/m3/run_quest_pair.ps1
+M	mir2-rs/tests/parity/whitelist.md
+--- 未跟踪（本片新增）---
+mir2-rs/tests/parity/m3/evidence-m3-quest-party-anchor-gate-20261014/00-commands.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-party-anchor-gate-20261014/01-anchor-gates-check-selftest-mutation.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-party-anchor-gate-20261014/02-before-old-scenario-red.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-party-anchor-gate-20261014/03-run-quest-selfcheck.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-party-anchor-gate-20261014/04-run-party-trade-selfcheck.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-party-anchor-gate-20261014/05-chain-gate-check.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-party-anchor-gate-20261014/06-chain-gate-selftest.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-party-anchor-gate-20261014/07-gate-fmt.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-party-anchor-gate-20261014/08-gate-clippy.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-party-anchor-gate-20261014/09-gate-test.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-party-anchor-gate-20261014/10-gate-msgcodegen.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-party-anchor-gate-20261014/11-boundary.txt
+mir2-rs/tests/parity/m3/party_trade_anchor_gate.py
+mir2-rs/tests/parity/m3/quest_anchor_gate.py
+
+=== 冻结面（必须空）===
+cmd: git diff --name-only origin/master -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins
+(空)
+
+=== '*.rs' 计数（本片零 .rs）===
+0
+
+=== '*.toml' 计数 ===
+0

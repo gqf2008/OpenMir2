@@ -80,6 +80,14 @@ SHARED_CHECKS = [
     #   （在场却坏 ⇒ 恒 RED）。
     ("selloff_anchor_selftest", "mir2-rs/tests/parity/m3/selloff_anchor_gate.py", ["selftest"]),
     ("selloff_anchor_check", "mir2-rs/tests/parity/m3/selloff_anchor_gate.py", ["check"]),
+    # 主机门（⑥-5 / ⑦-5 锚门族覆盖面收口片，与上面四族同形）：任务（⑥-5）与组队/交易（⑦-5）
+    #   两个场景件同样带 `oracle_anchors`，但此前从未有行级门 —— 锚可静默漂移 / 写错文件基名
+    #   （`Query.cs`/`Save.cs`/`Base.cs` 都不在树里）而不被发现。登记进共享管线后不看矩阵状态、
+    #   独立常跑（在场却坏 ⇒ 恒 RED），把“谁被 reviewer 点名谁补”的锚门族补成 ⑥⑦⑧⑨⑩ 全覆盖。
+    ("quest_anchor_selftest", "mir2-rs/tests/parity/m3/quest_anchor_gate.py", ["selftest"]),
+    ("quest_anchor_check", "mir2-rs/tests/parity/m3/quest_anchor_gate.py", ["check"]),
+    ("party_trade_anchor_selftest", "mir2-rs/tests/parity/m3/party_trade_anchor_gate.py", ["selftest"]),
+    ("party_trade_anchor_check", "mir2-rs/tests/parity/m3/party_trade_anchor_gate.py", ["check"]),
     # 共享管线门（本片新增，与上面三组主机门同形）：markers 前缀口径门。它判的正是
     #   「多张夹具卡反复扩展 `run_pair.ps1` / BotSrv 后有没有互相踩坏」：run_pair 去前缀截断 +
     #   每个新夹具族的 `Assert-M3MarkerPrefix` 牙必须登记（COMPARATORS / GUARD_ONLY_MARKERS）+
@@ -342,6 +350,15 @@ def cmd_selftest(_args):
     _so_gate = [e for _n, rel, e in SHARED_CHECKS if rel.endswith("selloff_anchor_gate.py")]
     expect("元宝寄售锚门已接入共享管线（⑩-3 残余 Minor，防回退）",
            ["selftest"] in _so_gate and ["check"] in _so_gate)
+    # ⑥-5 / ⑦-5 锚门族覆盖面收口片的防回退牙：任务与组队/交易锚门必须常驻共享管线
+    #   （selftest + check 两向）。它们此前完全不存在（⑥/⑦ 场景锚无人行级复核）⇒
+    #   缺行/漂移/写错文件基名都会静默。
+    _q_gate = [e for _n, rel, e in SHARED_CHECKS if rel.endswith("quest_anchor_gate.py")]
+    expect("任务锚门已接入共享管线（⑥ 锚门族覆盖面收口，防回退）",
+           ["selftest"] in _q_gate and ["check"] in _q_gate)
+    _pt_gate = [e for _n, rel, e in SHARED_CHECKS if rel.endswith("party_trade_anchor_gate.py")]
+    expect("组队/交易锚门已接入共享管线（⑦ 锚门族覆盖面收口，防回退）",
+           ["selftest"] in _pt_gate and ["check"] in _pt_gate)
     # 本片防回退牙：markers 前缀门必须常驻共享管线（selftest + check 两向）。它当前是
     #   ④/⑤/⑥/⑦/⑧/⑨/⑩ 共享 `run_pair.ps1` 扩展面的唯一机判门，不能只靠手工跑。
     _mp_gate = [e for _n, rel, e in SHARED_CHECKS if rel.endswith("marker_prefix_gate.py")]
@@ -357,8 +374,8 @@ def cmd_selftest(_args):
     #   （selftest 向）。它此前零调用方（reviewer-6 `4f5d3eeb1` O-1）⇒ 工具自身逻辑回归会静默。
     _wl_gate = [e for _n, rel, e in SHARED_CHECKS if rel.endswith("m3_whitelist_registry_audit.py")]
     expect("白名单登记号审计门 selftest 已接入共享管线（防回退）", ["selftest"] in _wl_gate)
-    expect("主机门（.py）登记项 ≥13（castle + 行会/攻城 + 英雄/宠物 + 元宝寄售 + markers 前缀 + 宝宝登记 + 白名单审计 各 selftest[/check]）",
-           sum(1 for _n, rel, _e in SHARED_CHECKS if rel.endswith(".py")) >= 13)
+    expect("主机门（.py）登记项 ≥17（castle + 行会/攻城 + 英雄/宠物 + 元宝寄售 + 任务 + 组队/交易 + markers 前缀 + 宝宝登记 + 白名单审计 各 selftest[/check]）",
+           sum(1 for _n, rel, _e in SHARED_CHECKS if rel.endswith(".py")) >= 17)
     expect("共享管线登记名唯一（防重复注册偷懒）",
            len({n for n, _r, _e in SHARED_CHECKS}) == len(SHARED_CHECKS))
     expect("共享管线 (file,args) 登记唯一",

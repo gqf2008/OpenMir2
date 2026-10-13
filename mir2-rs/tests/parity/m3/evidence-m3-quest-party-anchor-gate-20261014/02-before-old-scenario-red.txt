@@ -1,0 +1,50 @@
+# 02-A 修前 RED 复现：用 origin/master (4244cb695) 版本的 ⑥/⑦ 场景件对新锚门跑 _evaluate（只读 git，不改工作树）
+
+##### quest_anchor_gate（origin/master:quest_scenario.json）⇒ findings=8
+  - 覆盖面：场景锚未登记 PlayObject.cs:3966-4110（新增锚必须补进 REGISTERED）
+  - 覆盖面：场景锚未登记 Query.cs:192（新增锚必须补进 REGISTERED）
+  - 覆盖面：场景锚未登记 Query.cs:194（新增锚必须补进 REGISTERED）
+  - 覆盖面：场景锚未登记 Save.cs:493（新增锚必须补进 REGISTERED）
+  - 覆盖面：REGISTERED 有而场景锚里没有 PlayDataStorage.Query.cs:192（锚被删/改形 ⇒ 表过期）
+  - 覆盖面：REGISTERED 有而场景锚里没有 PlayDataStorage.Query.cs:194（锚被删/改形 ⇒ 表过期）
+  - 覆盖面：REGISTERED 有而场景锚里没有 PlayDataStorage.Save.cs:493（锚被删/改形 ⇒ 表过期）
+  - 覆盖面：REGISTERED 有而场景锚里没有 PlayObject.cs:3966-4105（锚被删/改形 ⇒ 表过期）
+
+##### party_trade_anchor_gate（origin/master:party_trade_scenario.json）⇒ findings=12
+  - 覆盖面：场景锚未登记 Base.cs:1339-1369（新增锚必须补进 REGISTERED）
+  - 覆盖面：场景锚未登记 Base.cs:730-752（新增锚必须补进 REGISTERED）
+  - 覆盖面：场景锚未登记 Base.cs:833-845（新增锚必须补进 REGISTERED）
+  - 覆盖面：场景锚未登记 PlayObject.Operate.cs:911-1203（新增锚必须补进 REGISTERED）
+  - 覆盖面：场景锚未登记 PlayObject.cs:106（新增锚必须补进 REGISTERED）
+  - 覆盖面：场景锚未登记 PlayObject.cs:114（新增锚必须补进 REGISTERED）
+  - 覆盖面：REGISTERED 有而场景锚里没有 PlayObject.Base.cs:1339-1367（锚被删/改形 ⇒ 表过期）
+  - 覆盖面：REGISTERED 有而场景锚里没有 PlayObject.Base.cs:730-752（锚被删/改形 ⇒ 表过期）
+  - 覆盖面：REGISTERED 有而场景锚里没有 PlayObject.Base.cs:833-845（锚被删/改形 ⇒ 表过期）
+  - 覆盖面：REGISTERED 有而场景锚里没有 PlayObject.Operate.cs:911-1202（锚被删/改形 ⇒ 表过期）
+  - 覆盖面：REGISTERED 有而场景锚里没有 PlayObject.cs:106/583/587（锚被删/改形 ⇒ 表过期）
+  - 覆盖面：REGISTERED 有而场景锚里没有 PlayObject.cs:90/114/118/122/126/130/203/739（锚被删/改形 ⇒ 表过期）
+
+（『未登记』= 旧场景引用在 REGISTERED 表里没有；『表过期』= 新表条目在旧场景里解析不出：即本片订正的漂移点）
+
+================================================================================
+# 02-B 外部改坏必红（临时改盘上场景件 → check RED → 从 /tmp 备份还原 → check GREEN）
+
+##### quest_scenario.json：PlayObject.cs:3966-4105 ⇒ :3966-4110
+--- 改坏后 ---
+RED: quest 场景锚门失败（2 项 / 共 14 锚）
+  - 覆盖面：场景锚未登记 PlayObject.cs:3966-4110（新增锚必须补进 REGISTERED）
+  - 覆盖面：REGISTERED 有而场景锚里没有 PlayObject.cs:3966-4105（锚被删/改形 ⇒ 表过期）
+rc=1（期望 1）
+--- 还原后 ---
+GREEN: quest 场景锚门通过（14 锚 / 20 行点全部命中冻结 src/ 且覆盖面闭合）
+rc=0（期望 0）
+
+##### party_trade_scenario.json：PlayObject.Base.cs:1339-1367 ⇒ :1339-1369
+--- 改坏后 ---
+RED: party/trade 场景锚门失败（2 项 / 共 22 锚）
+  - 覆盖面：场景锚未登记 PlayObject.Base.cs:1339-1369（新增锚必须补进 REGISTERED）
+  - 覆盖面：REGISTERED 有而场景锚里没有 PlayObject.Base.cs:1339-1367（锚被删/改形 ⇒ 表过期）
+rc=1（期望 1）
+--- 还原后 ---
+GREEN: party/trade 场景锚门通过（22 锚 / 47 行点全部命中冻结 src/ 且覆盖面闭合）
+rc=0（期望 0）
