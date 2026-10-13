@@ -11,7 +11,7 @@
 | # | 目标 | 改动 |
 | --- | --- | --- |
 | 1 | `AGENTS.md` 补「判据分级」节 | 新增 `### 判据分级（tiered acceptance …）`：R/L 定义、`review` 必带 `tier`/`tier_why`、缺 `tier` 按 R、R 级卡合并后不得 `closed`；顶部目标段加一行指针。 |
-| 2 | `docs/Rust重写设计文档.md` §17.1 + §6 判据表 | §17.1 新增分级段（窗口要求只对 R 级生效）；§6 M3 判据表后加分级标注；§6 M5 加「①72h/③P99/⑤快照 = R 级占窗，②④可按 L 级推进」。 |
+| 2 | `docs/Rust重写设计文档.md` §17.1 + §6 判据表 | §17.1 新增分级段（窗口要求只对 R 级生效）；§6 M3 判据表后加分级标注；§6 M5 加「**①72h 长跑 / ②`mem-probe` 内存斜率 / ③压测 P99 / ④灰度-回滚演练 / ⑤DB 快照 五项 = R 级占窗**」（**F-1 订正**：初版误把 ②④ 列为 L 级，与政策 L 定义及本节 §17.1 的「M5 需独占窗口」冲突，现改回 R）。 |
 | 3 | `mir2-rs/tests/parity/M3-report.md` §2 | §2 顶部与 §2.5 标注：24h 长跑与逐系统对拍 = **R 级窗口项**，**L 级片不再占用窗口**。 |
 
 ## 验收 ①-⑤ 自证（逐条 → 原始件）
@@ -30,6 +30,14 @@
 **fmt rc=0 / clippy rc=0(-D warnings) / test 99 suites 1159 passed 0 failed 22 ignored rc=0 / msgcodegen 604 rc=0**。
 
 ## 清单与复核
+
+> **F-1/O-1/O-2 返工（reviewer-6 review `4126a17a` @ `76bd2ceb8`）**：
+> - **F-1（Important）**：§6 M5 把 ②`mem-probe` 内存斜率 / ④灰度-回滚演练 判成 L —— 已**改为 R**（见上表 #2；
+>   ② 只能真机测得且并发编译/压测会污染斜率、④ 写回存档/DB 命中「持久化落库」，均不满足 L「不可能只在真机暴露差异」的定义）。
+> - **O-1**：§6 M3 分级段原把「经验曲线」归入「持久化落库」桶 —— 已**移到「RNG 序列」桶**（本文件行 316）。
+> - **O-2**：`AGENTS.md` 顶注「见本文件「判据分级」节与 §17.1」易误读为 `AGENTS.md` 自身节 —— 已写成
+>   `docs/Rust重写设计文档.md` §17.1。
+> - 三条均属文本订正，**本片仍为零 `.rs`**，上表 `#2` 的落地文本与 `05-grep-tier-hits.txt` 已按订正后重采。
 
 - `SHA256SUMS.txt`：按**仓库字节（LF 归一 = git blob）**口径记。
 - 复核：`python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/m3/evidence-m3-tiered-acceptance-20261013`。

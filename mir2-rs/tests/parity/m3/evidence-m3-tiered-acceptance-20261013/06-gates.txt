@@ -10,27 +10,17 @@ cargo run -q -p msgcodegen --offline -- --check
 === fmt ===
 fmt rc=0
 === clippy ===
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.62s
 clippy rc=0
 === test ===
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.45s
 test rc=0
 === msgcodegen ===
 msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
 msgcodegen rc=0
 
 ## test 汇总
-suites_ok=99
-passed=1159 failed=0 ignored=22
+suites_ok=100
+passed=1160 failed=0 ignored=22
 
-## 全量 log 摘要（前 3 + 后 6 行）
-=== fmt ===
-fmt rc=0
-=== clippy ===
-...
-test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-
-test rc=0
-=== msgcodegen ===
-msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
-msgcodegen rc=0
+## 口径
+本片为零 .rs 文档/证据片（F-1 订正后重跑）；树 = 本 branch tip（含 origin/master c127ae9a4 合并）；
+读数与合并车道在 c127ae9a4 的四门禁读数一致（100 suites 1160 passed 0 failed 22 ignored + 604）。
