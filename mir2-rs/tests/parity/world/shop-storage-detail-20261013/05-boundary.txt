@@ -1,0 +1,13 @@
+# 边界：oracle 冻结（src / sql / MirClient）+ 接口冻结层零改动
+
+$ git diff --name-only 793d3e71e -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+（空 = 通过）
+
+# base = refs/heads/master @ 793d3e71e（⑤-4 第①片合并后）
+# code head = 本 patch entry 的 head（代码与证据在同一 head）
+# 本片工作树改动（相对 base）：
+mir2-rs/bins/game-svr/src/shop.rs
+mir2-rs/bins/game-svr/src/main.rs
+mir2-rs/tests/parity/world/shop-storage-detail-20261013/**
+
+# 说明：写集只有 bins/game-svr/**（第①片的 crates/world 库存面本片只读复用）。

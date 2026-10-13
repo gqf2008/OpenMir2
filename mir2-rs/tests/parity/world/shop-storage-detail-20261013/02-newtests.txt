@@ -1,0 +1,18 @@
+# 新增/重钉用例（全绿）
+
+## 构造级（game-svr lib；cargo test -p game-svr --lib shop）
+| 用例 | 钉住 |
+| --- | --- |
+| detail_goods_list_encodes_last_ten_items_and_page_offset | 组尾往前取 **10 件**；param=nItemCount、tag=nInt；tail_encoded=false（再 EncodeString）；nInt 超界夹到 max(0,Count-10)；名 ordinal 不符 ⇒ header-only |
+| back_item_list_pages_fifty_and_tags_series | 51 件 ⇒ 2 页；Tag=p、Series=page-1；tail_encoded=true；每页件数；空仓库 ⇒ 0 帧 |
+| storage_item_moves_to_storage_and_reports_full_or_fail | SM_STORAGE_OK + 背包移除 + 负重重算；满 ⇒ SM_STORAGE_FULL（ok=true 照 oracle bo19）；无 IsStorage/名不符 ⇒ SM_STORAGE_FAIL |
+| take_back_storage_item_adds_to_bag_and_weight_denies | SM_ADDITEM → SM_TAKEBACKSTORAGEITEM_OK(Recog=nItemIdx) 次序 + 背包/仓库/负重；负重不足 ⇒ SM_SYSMESSAGE(Recog=玩家,Param=MakeWord(0xFF,0x38),尾=CanotGetItems) + _FAIL；背包满 ⇒ _FULLBAG；无 IsGetback ⇒ 仅 _FAIL |
+| user_select_storage_and_getback_panels | @storage⇒SM_SENDUSERSTORAGEITEM(700)；@getback⇒SM_SAVEITEMLIST(704)；flag 不满足 ⇒ 无帧 |
+
+## 进程级（game-svr bin；cargo test -p game-svr --bin game-svr emit_shop_frames）
+| 用例 | 钉住 |
+| --- | --- |
+| emit_shop_frames_keeps_pre_encoded_tail | tail_encoded=true 的帧（SM_SAVEITEMLIST/SM_ADDITEM 直连尾）**原样**下发、不再 EncodeString |
+| emit_shop_frames_edcodes_tail_like_send_def_message（①片既有，仍绿） | tail_encoded=false 的帧走 EncodeString；空尾 header-only 不变 |
+
+读数：lib shop **12 passed / 0 failed**（①片 8 + 本片 4）；bin emit_shop_frames **2 passed / 0 failed**（①片 1 + 本片 1）。

@@ -1,0 +1,14 @@
+# 四门禁（隔离 CARGO_TARGET_DIR=E:/tmp/m2svr-target；cwd = mir2-rs/）
+
+## 1) cargo fmt --all -- --check
+rc=0（无输出；原始件 04a-fmt.txt 为空 = pass）
+
+## 2) cargo clippy --workspace --all-targets --offline -- -D warnings
+rc=0（原始件 04b-clippy.txt）
+
+## 3) cargo run -p msgcodegen --offline -- --check
+rc=0 / msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。（04d）
+
+## 4) cargo test --workspace --offline（原始件 04c-workspace-test.txt）
+suites=94 passed=915 failed=0 ignored=21  rc=0
+（本片新增 5 条：lib shop +4 / bin emit_shop_frames +1；①片 base 下为 94/910/0/21）
