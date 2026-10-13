@@ -314,6 +314,10 @@ powershell -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 
 ## 8. 未做 / 边界（如实登记）
 
 - **真机两相 trace 未跑**：需窗口 + 两侧「场景描述件 + 全场景抽数流水」驱动接线（承接卡，本片外）。
+  承接卡的**完整规格（卡名 / 一句话 DoD / 两侧制品 / 场景 / 宿主 AI 模式 / 写集 / 机判验收）**
+  已落地到仓内文件 [`DRIVER-CONTRACT.md`](DRIVER-CONTRACT.md)（来源 = owner thread 条目
+  `222bffe3` 的 `missing_driver` + `4ca2854c` 的 `driver_card_spec_delta`；依据 `AGENTS.md` §5
+  「面向人的报告作为文件进仓库」）。承接卡落地前该文件 §7 的阻塞不变。
 - **Rust 侧 `monster_ai`/`spawn`/`drop` 站点在含怪场景的实跑读数**尚未取得 ⇒ 基线 §2.1 的 Rust 侧
   「0」是窗口/场景缺，不是代码没写（`crates/world/src/monai.rs` / `mongen.rs`、`crates/formula/src/drop.rs` 已在 master）。
 - `merchant` / `npc_ai` / `revive` 组仍缺 Rust 实现（R-4/R-7），本卡不覆盖，随各自系统卡收拢。
