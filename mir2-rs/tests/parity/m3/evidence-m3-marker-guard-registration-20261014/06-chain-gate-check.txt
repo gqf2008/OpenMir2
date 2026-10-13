@@ -1,4 +1,4 @@
-# base = 266bdbd17 + 本片（markers 门已接入 fixture_chain 常跑）
+# base = ea4cd8c65 + 本片（markers 门已接入 fixture_chain 常跑）
 $ python -I fixture_chain_gate.py check --require-all
 marker_prefix_selftest present    rc=0 :: SELFTEST ok=26/26
 marker_prefix_check present    rc=0 :: GREEN: markers 前缀口径一致（run_pair 无去前缀截断 + 7 生产牙（含 1 个 guard-only 例外）+ 6 比较器按前缀扫描；B
