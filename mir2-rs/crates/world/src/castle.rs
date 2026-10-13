@@ -227,8 +227,10 @@ pub struct UserCastle {
     pub start_castle_war_tick: i64,
     /// `TodayIncome`。
     pub today_income: i32,
-    /// `TotalGold`（⑧-9 税收面；本卡只随状态机保留）。
+    /// `TotalGold`（⑧-9 税收面；写入/封顶在 [`crate::castle_tax::UserCastle::inc_rate_gold`]）。
     pub total_gold: i32,
+    /// `SaveTick`（`UserCastle.cs:73`）：`IncRateGold` 的 10 分钟落盘节流口（⑧-9）。
+    pub save_gold_tick: i64,
     /// `IncomeToday`（跨天判定用）。
     pub income_today: CastleDate,
     /// `AttackWarList`（申请登记表）。
@@ -270,6 +272,7 @@ impl UserCastle {
             start_castle_war_tick: 0,
             today_income: 0,
             total_gold: 0,
+            save_gold_tick: 0,
             income_today: CastleDate::default(),
             attack_war_list: Vec::new(),
             attack_guild_list: Vec::new(),

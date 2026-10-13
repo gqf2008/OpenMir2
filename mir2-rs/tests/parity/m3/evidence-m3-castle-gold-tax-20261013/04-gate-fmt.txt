@@ -1,0 +1,3 @@
+# M3⑧-实现 9 门禁 ①fmt（base = origin/master db400e869）
+$ (cd mir2-rs && CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo fmt --all -- --check)
+
