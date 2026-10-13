@@ -14,7 +14,7 @@ selftest token 强度牙齿: GREEN (good=0 weak=["读侧 token 强度：锚 User
 SELFTEST GREEN
 rc=0
 === python -I castle_oracle_anchor_gate.py mutation ===
-MUT1 写侧漂移(:113→:111): RED（1 项；C:\Users\gxh\AppData\Local\Temp\castle-anchor-mut-7vy3o_r7）
+MUT1 写侧漂移(:113→:111): RED（1 项；C:\Users\gxh\AppData\Local\Temp\castle-anchor-mut-mg55mqhk）
 MUT2 读侧漂移(表 39→36): RED（1 项）
   - 读侧不匹配 src/M2Server/Castle/CastleConf.cs:36 期望含 '"CastleMap"'，实际 'userCastle.EnvirList.Add(sMap);'
 MUT3 真身 check: GREEN（0 项）
@@ -24,5 +24,5 @@ MUT6 ⑧-7 裸锚回归(:480-483): RED（3 项）
 MUT7 全文覆盖面(尾部未登记锚): RED（1 项）
 MUT8 audit 清点器(删表项 UserCastle.cs:930): RED（uncovered=1）
 MUT9 token 强度(整组只剩 `}`): RED（1 项）
-MUTATION GREEN (C:\Users\gxh\AppData\Local\Temp\castle-anchor-mut-7vy3o_r7)
+MUTATION GREEN (C:\Users\gxh\AppData\Local\Temp\castle-anchor-mut-mg55mqhk)
 rc=0

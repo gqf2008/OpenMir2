@@ -20,5 +20,5 @@ MUT4 真身 check: GREEN（0 项）
 MUT5 token 强度(整组只剩 `}`): RED（1 项）
 MUT6 工具侧名字锚(改坏符号): RED（1 项）
 MUT7 工具侧真身名字锚: GREEN（0 项）
-MUTATION GREEN (C:\Users\gxh\AppData\Local\Temp\gc-anchor-mut-fmruft7r)
+MUTATION GREEN (C:\Users\gxh\AppData\Local\Temp\gc-anchor-mut-6o0zt0ik)
 rc=0

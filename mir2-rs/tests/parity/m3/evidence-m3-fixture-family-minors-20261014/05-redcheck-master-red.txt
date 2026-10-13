@@ -1,3 +1,4 @@
+=== 修前（origin/master 版本的锚门+场景，对当前 src/）===
 RED: guild/castle 场景锚门失败（4 项 / 共 34 锚）
   - 读侧不匹配 RobotPlayer.cs:4708-4809:4708 期望含 'public void SendGuildDlg()'，实际 '}'
   - 读侧不匹配 RobotPlayer.cs:4708-4809:4809 期望含 '}'，实际 'MShare.MySelf.m_nTagY = 0;'
