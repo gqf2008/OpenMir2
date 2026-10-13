@@ -1,0 +1,4 @@
+1	INJECT_OK	42	0
+SEED_PROBE 42
+1	Next(max)	100	7	GameSrv.Word.WorldServer.MonGetRandomItems@WorldServer.MonGen.cs:451
+2	Next(max)	100	7	GameSrv.Word.WorldServer.MonGetRandomItems@WorldServer.MonGen.cs:451

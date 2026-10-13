@@ -1,0 +1,5 @@
+# 门禁 ① cargo fmt --all -- --check
+# cmd: cargo fmt --all -- --check   (cwd = mir2-rs/)
+# 空输出 = 无差异（fmt 干净）
+$ cargo fmt --all -- --check
+rc=0

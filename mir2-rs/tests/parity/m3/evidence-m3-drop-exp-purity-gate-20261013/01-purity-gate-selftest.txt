@@ -1,0 +1,33 @@
+# 场景纯度门 selftest（fail-closed + 改坏必红）
+# cmd: python -I mir2-rs/tests/parity/m3/drop-exp/drop_exp_purity_gate.py selftest
+$ python -I mir2-rs/tests/parity/m3/drop-exp/drop_exp_purity_gate.py selftest
+PREREQ_MISSING: consumers 表里 side=rust 没有 `measured` 行 ⇒ 认不出被测量路径，拒跑（不许假绿；实现卡落地后按实测站点补表）
+PREREQ_MISSING: 找不到抽数流水 C:\Users\gxh\AppData\Local\Temp\drop-exp-purity-selftest-4rhtcs0t\nope.tsv
+RED: PREREQ_RED k 不连续/非 0 起（第 1 条 k=2）(C:\Users\gxh\AppData\Local\Temp\drop-exp-purity-selftest-4rhtcs0t\badraw.jsonl)
+PREREQ_MISSING: consumers 表里 side=csharp 没有 `measured` 行 ⇒ 认不出被测量路径，拒跑（不许假绿；实现卡落地后按实测站点补表）
+=== 场景纯度（drop_exp_purity_gate）===
+  side=csharp stream=C:\Users\gxh\AppData\Local\Temp\drop-exp-purity-selftest-4rhtcs0t\wall.tsv
+  draws=2 measured=1 setup=0 wallclock=1 other=0 unknown=0 missing_site=0 ambiguous=0
+  --- 逐消费者清单（site 计数，降序）---
+         1  Measured.Drop@Measured.cs:10
+         1  Noise.Wondering@Noise.cs:20
+  RED: wallclock_consumer: 1 处墙钟驱动抽数（首个 line=4 site=Noise.Wondering@Noise.cs:20）⇒ pin 抑制未生效；需 (a) 把怪钉住（不游走/不搜索目标）或 (b) 接专用流（实现卡）
+  结论：场景不纯 / 认不出 ⇒ **拒比**（fail-closed，不放宽判据）
+SELFTEST ok clean-green expect='GREEN' got='GREEN'
+SELFTEST ok wallclock-red expect='RED' got='RED'
+SELFTEST ok wallclock-names-problem expect=True got=True
+SELFTEST ok other-red expect='RED' got='RED'
+SELFTEST ok other-names-problem expect=True got=True
+SELFTEST ok unknown-red expect='RED' got='RED'
+SELFTEST ok unknown-names-problem expect=True got=True
+SELFTEST ok ambiguous-class-red expect='RED' got='RED'
+SELFTEST ok empty-red expect='RED' got='RED'
+SELFTEST ok missing-site-red expect='RED' got='RED'
+SELFTEST ok no-measured-row-prereq expect=2 got=2
+SELFTEST ok missing-stream-prereq expect=2 got=2
+SELFTEST ok kill-count-mismatch-red expect='RED' got='RED'
+SELFTEST ok raw-k-gap-prereq expect=2 got=2
+SELFTEST ok table-measured-removed-red expect=2 got=2
+SELFTEST ok cli-wallclock-rc1 expect=1 got=1
+SELFTEST ok=16/16
+rc=0

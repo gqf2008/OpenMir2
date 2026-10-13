@@ -1,0 +1,10 @@
+# 正样本：流水只含被测量路径（MonGetRandomItems 掉落取数）⇒ GREEN + 逐消费者清单
+# cmd: python -I mir2-rs/tests/parity/m3/drop-exp/drop_exp_purity_gate.py gate --side csharp --stream mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/repro/purity-clean.tsv --table mir2-rs/tests/parity/m3/drop-exp/drop_exp_consumers.tsv --expected-kills 100 --raw mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/repro/raw.jsonl --json mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/07-purity-clean.json
+=== 场景纯度（drop_exp_purity_gate）===
+  side=csharp stream=mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/repro/purity-clean.tsv
+  draws=2 measured=2 setup=0 wallclock=0 other=0 unknown=0 missing_site=0 ambiguous=0
+  expected_kills=100 raw_kills=100
+  --- 逐消费者清单（site 计数，降序）---
+         2  GameSrv.Word.WorldServer.MonGetRandomItems@WorldServer.MonGen.cs:451
+  GREEN: 除被测量路径外 RNG 消费者 = 0（wallclock=0 / other=0 / unknown=0）
+rc=0
