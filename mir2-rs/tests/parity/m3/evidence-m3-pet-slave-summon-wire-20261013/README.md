@@ -4,7 +4,8 @@
 - principal：`openmir2-worker-20`；worktree `m3hp`；分支 `worktree-m3-pet-slave-summon`。
 - base：`refs/heads/master` = `6f0bca48ee0f759dc66d17b352188ed2410c3523`（开工前 `git fetch` 后与
   `origin/master` 同点；交付 head 的父链含 origin/master）。
-- head：`06c383b2024be6cc0bb609ba8490e11d1396432b`（= 本地提交 `a6d64adb` + merge `origin/master`）。
+- head：**被审 head** = `8cd88909063c4ac06c47f6f81ec6467b2ae34716`（只在代码提交 `06c383b2` 之上加本证据目录）；
+  `06c383b2` = 本地提交 `a6d64adb` + merge `origin/master`（M-2 订正：head 字段钉被审 head）。
 - 写集：`mir2-rs/crates/world/**` + `mir2-rs/bins/game-svr/**` + `mir2-rs/tests/parity/m3/**`（证据）。
 - 边界：`git diff --name-only 6f0bca48e HEAD -- src sql MirClient` = **空**（见 `04-boundary.txt`）。
 - 未起栈、未占端口、未 merge、未自签。
@@ -55,9 +56,10 @@ UseAmulet/四帧/配置）。
 
 ## 6. 未接（登记，别按常识补）
 1. **20 诱惑**：`MagTamming` 的受奴尾（`MagicManager.cs:704-825` 的 `Master=…; MasterRoyaltyTick=…;
-   SlaveMakeLevel=…; SlaveList.Add`）落在 ⑨-3 的 `World::tame_adopt`（待审）。本片已把该尾要用的
-   `Random(caster.Lv*2)` **表面积化**（`TammingOutcome.royalty_draw`）并登记 `SKILL_TAMMING`；
-   ⑨-3 合入后本片补一行派发即可（登记在卡上）。
+   SlaveMakeLevel=…; SlaveList.Add`）落在 ⑨-3 的 `World::tame_adopt`。本片已把该尾要用的
+   `Random(caster.Lv*2)` **表面积化**（`TammingOutcome.royalty_draw`）并登记 `SKILL_TAMMING`。
+   **2026-10-13 状态更新**：⑨-3 已合入 master `d5be14f40`，20 已在**同支第③片**
+   （head `43cf89554`，证据 `evidence-m3-pet-slave-taming-20261013/`）接上 ⇒ 本条历史登记已收口。
 2. **46 分身**：`MagMakeClone` = `new PlayCloneObject(PlayObject)`；见 `crates/world::slave::CLONE_DEFERRED`。
 3. **护身符扣光支的 `SM_DELITEMS` 帧**：`UseAmulet` else 支（`MagicBase.cs:124-126`）无编码器 ⇒
    状态照改（`UseItems[slot]=None`）、帧面未发（登记）。

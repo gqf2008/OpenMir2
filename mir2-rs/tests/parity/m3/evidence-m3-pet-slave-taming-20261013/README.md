@@ -4,6 +4,9 @@
 - principal：`openmir2-worker-20`；worktree `m3hp`；分支 `worktree-m3-pet-slave-summon`（本片把该支推进到新 head）。
 - base：`refs/heads/master` = `d5be14f40eea1ab4e408b5aa055ba02ae3b367da`（⑨-3 已合入；开工前 `git fetch` 后同点）。
 - 代码提交：`c6c9f0928e97fdedbd857548346893cb468cd5cd`（证据提交在其上，交付 `--head` 见 patch entry）。
+- **F-1 返工**（reviewer-6 `7724b9e441` request_changes）：由 `11c98bf84ef9413…` 收口
+  （`evidence-m3-pet-slave-f1-rework-20261013/`）；本目录的 `gates/*` 读数与 `SHA256SUMS.txt`
+  已按返工后树重记（其余证据件不变）。
 - 写集：`mir2-rs/crates/world/**` + `mir2-rs/bins/game-svr/**` + `mir2-rs/tests/parity/m3/**`（证据）。
 - 边界：`git diff --name-only d5be14f40 HEAD -- src sql MirClient` = **空**（见 `04-boundary.txt`）。
 - 未起栈、未占端口、未 merge、未自签。

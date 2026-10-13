@@ -1,0 +1,18 @@
+M3⑨-2 F-1 返工判据（全离线；零起栈/零端口）
+================================================================================
+
+F-1 修复的判据（既有用例增断言，见 gates/13-summon-wire-test.txt）：
+- `game_svr` bin `tests::spell_cmd_summon_wires_amulet_and_frames`：
+  - 施法者自身（socket 911）**收** `SM_MAGICFIRE`（F-1 断言，`PlayObject.Message.cs:1788-1794` 无守卫）；
+  - 施法者自身**不收** `SM_SPELL`（`PlayObject.Message.cs:1454-1460` 有守卫）；
+  - 观察者（socket 912）`SM_SPELL` + `SM_MAGICFIRE` 均收（不变）；
+  - 自身 `SM_DURACHANGE` + `+GD/`、护身符 450→350（不变）。
+
+改坏必红（见 redchecks/）：RC5 把 `broadcast_ref_msg_with_self` 的 `include_self` 由 `true` 改回
+`false` ⇒ `spell_cmd_summon_wires_amulet_and_frames` FAILED（rc=101）；`git checkout --` 还原后 rc=0、
+`git status --porcelain` 空。
+
+回归（返工后合并树）：
+- `cargo test -p game-svr --offline slave` = 7 passed（20 片 3 条 + 召唤面 4 条）；
+- `cargo test -p mir2-world --lib combat::tests::animal` = 1 passed；
+- `cargo test --workspace --no-fail-fast` = **98 suites · 1024 passed · 0 failed · 21 ignored**。

@@ -1,0 +1,31 @@
+M3⑨-2 F-1 返工变更摘要
+================================================================================
+
+返工代码提交：`11c98bf84ef941329fb1f6cd4f5cc48179a821cc`（在 20 片的 `c6c9f0928` 之上）。
+响应：reviewer-6 `7724b9e441`（request_changes @ head `8cd889090`）。
+
+对上一代码提交的净改动：
+
+  mir2-rs/bins/game-svr/src/main.rs   | 51 +++++++++++++++++++++++---   （F-1）
+  mir2-rs/bins/game-svr/src/magics.rs |  6 +++---                      （M-1 文档）
+  2 files changed, 50 insertions(+), 7 deletions(-)
+
+（`git diff --stat c6c9f0928 11c98bf8 -- mir2-rs/bins/game-svr/src`；证据文件另计。）
+
+1. **F-1（Important）**：把 `broadcast_ref_msg` 拆成公共体 `broadcast_ref_msg_opt(..., include_self: bool)`：
+   - `broadcast_ref_msg`（`include_self=false`）= `RM_SPELL` 口径（`PlayObject.Message.cs:1454-1460` 有守卫）；
+   - 新增 `broadcast_ref_msg_with_self`（`include_self=true`）= `RM_MAGICFIRE` 口径
+     （`PlayObject.Message.cs:1788-1794` 无守卫）⇒ 施法者自己也收 `SM_MAGICFIRE`。
+   - 召唤面（17/30/41）与诱惑面（20）的 `outcome.magic_fire` 广播都改用 `broadcast_ref_msg_with_self`。
+   - `spell_cmd_summon_wires_amulet_and_frames` 增两条断言（改坏必红）：施法者自身**收** `SM_MAGICFIRE`、
+     **不收** `SM_SPELL`。
+
+2. **M-1（Minor，文档）**：`magics.rs::MagicTable::new` 的文档从「oracle 也按表序后者覆盖内存槽」
+   订正为「oracle `GetMagicInfo`（`PlayObject.cs:4174-4185`）线性**首匹配**；表内唯一时与键查等价；
+   真造重复行则有分歧（HashMap 后者覆盖）——不可达，登记」。
+
+3. **M-2（Minor，证据）**：`evidence-m3-pet-slave-summon-wire-20261013/README.md` 的 `head` 字段钉
+   被审 head `8cd889090`（并注明 `06c383b2` 是代码提交）；该目录 `SHA256SUMS.txt` 随之重记。
+
+4. 同步：`evidence-m3-pet-slave-taming-20261013/` 的 gate 日志（10/11/12/13/14/15）按返工后树重跑并更新
+   其 `SHA256SUMS.txt`（其余 20 片文件未变）。

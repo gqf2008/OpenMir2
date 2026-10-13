@@ -1,0 +1,19 @@
+# M3⑨-2 F-1 返工 boundary（base=master d5be14f40；head=返工代码提交 11c98bf84；证据提交在其上）
+$ git diff --name-only d5be14f40 11c98bf84 -- src sql MirClient
+[空]
+
+$ git diff --name-only d5be14f40 11c98bf84 -- mir2-rs/crates/protocol mir2-rs/crates/storage
+[空]
+
+$ git diff --name-only d5be14f40 11c98bf84 | grep -v '^mir2-rs/tests/parity/m3/'
+mir2-rs/bins/game-svr/src/config.rs
+mir2-rs/bins/game-svr/src/lib.rs
+mir2-rs/bins/game-svr/src/magics.rs
+mir2-rs/bins/game-svr/src/main.rs
+mir2-rs/bins/game-svr/src/slave.rs
+mir2-rs/bins/game-svr/src/smframe.rs
+mir2-rs/crates/world/src/combat.rs
+mir2-rs/crates/world/src/magic.rs
+mir2-rs/crates/world/tests/magic_effect_vectors.rs
+
+# 说明：净改动 = 20 片 3 源码文件（main.rs/slave.rs/combat.rs）+ F-1 返工（main.rs[magics.rs 同批]）
