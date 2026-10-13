@@ -567,3 +567,38 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
 - **仍未闭环（归 root 独占窗口，不因本片收卡）**：DoD③ 的 R 级「③b/③a 两趟真机同框对照」+「屏幕见怪并
   能攻击造成伤害」；C# 侧世界数据能否经代理下来须窗口实拍（`85-…md` §E）。
 - 证据：`123-window-plan-capture-topology.txt`、`124-redcheck-window-plan-capture-topology.txt`、`125-gates.txt`、`126-boundary.txt`。
+
+## ㉕ 片㉕：③ 窗口计划补 **teardown/清端口段** + 计划↔工具面 **G4 机判**（2026-10-14）—— `127`
+
+- **背景（源码实读，与片㉔ 同类的烧窗路径）**：片㉔ 把「**起**代理前的抓包拓扑」补全后，计划仍**没有补「收」**：
+  ① C# 趟收栈写的是**不存在**的 `{mirserver}/stop-all.ps1`（实测 `E:/MirServer` 只有
+  `start-all.ps1`/`port-status.ps1`/`restart-gamesvr.ps1`/`build-client-104.ps1`）；② 手工起的
+  **影子 game-gate(7600)** 不在 `start_rust_stack.ps1` 的 pid 文件里 ⇒ `-Stop` 只停 pid 文件 entries
+  （`start_rust_stack.ps1:150-157`），影子不收；③ 代理 `mir2_proxy.py` 常驻（`:148 serve_forever()`、pid 只在
+  `ready.flag`），计划不收 ⇒ 下一趟 §0 预检 `RED: 目标端口已被监听 7200`（`:171-177`，`$wanted` 含 7200）。
+  三者都会让下一趟（C# 趟 / ③a 反向趟）起不来 ⇒ **一次性窗口再白烧**。另 `start-all.ps1 -Stop` 的 targets
+  含 `mysqld`（`start-all.ps1:117`）⇒ **不能**拿它收 C# 栈（会停共享 3306）。
+- **本片改动（`window_handoff.py`，只读规划器；不新造第二份判据）**：
+  1. **§2b 清端口段（Rust 趟）**：用 `<out>/ready.flag` 的 pid 停代理 → 按绝对路径停影子 game-gate →
+     `start_rust_stack.ps1 -Stop` 停 pid 文件其余 → `port-status.ps1` 断言 7200/7600 都 DOWN。
+  2. **§2b 清端口段（C# 趟）**：同法停代理 + 按绝对路径停 C# 影子（`{mirserver}/RunGate/GameGate.exe`）+
+     `Get-Process GameSvr,DBSrv,LoginSrv,LoginGate,SelGate,GameGate | Stop-Process -Force`（**保留 3306**）；
+     删除不存在的 `stop-all.ps1`，写明**不要**用 `start-all.ps1 -Stop` 的理由。
+  3. **占位替换**：§2a 的 `<bin_dir>` 代入实际 `-RustBinDir`；`port-status.ps1` 改随 `{mirserver}` 走。
+  4. **G4 `plan_conformance`**（静态、零起栈/零端口）：计划里每个被调 `.ps1/.py` 必须存在；每个命令里
+     **脚本路径之后**的 `-Flag`/`--flag` 必须在该脚本的声明集合里（`.ps1` 取 `param(...)` 的 `$name`、
+     `.py` 取 `add_argument('--x')`；宿主 powershell 开关排除）；必须含 6 条 teardown/清端口标记；
+     不得出现 `stop-all.ps1`、不得残留 `<bin_dir>`。`--plan`/`--plan-only` 打印 `PLAN_CONFORMANCE=`，
+     RED 逐条点名并把 rc 抬红（fail-closed）。
+- **真读数**：
+  - 计划 before/after：C# 收栈 `E:/MirServer/stop-all.ps1` → **消失**；新增 Rust/C# 两段 §2b；`<bin_dir>` 占位 0 命中（`127` §C-1）。
+  - 真计划 G4：`PLAN_CONFORMANCE=GREEN` rc=0（`--json`：`{"plan_conformance": "GREEN", "problems": [], "rc": 0}`）；
+    就绪门 `--repo <本 worktree> --ref HEAD --plan --best-site` ⇒ `WINDOW_READY=YES` / `RESULT: GREEN` rc=0（`127` §C-2）。
+  - `--selftest` **53/53 → 63/63**（6 条 teardown 结构 + `plan-conf-green` + 3 条 G4 改坏必红；既有 53 条不动）。
+- **改坏必红**（`128`，3 颗牙，变异只在 `E:/tmp/m2svr-burst12/mut/` 复制件、仓内 sha256 前后一致）：
+  MUT-A 写回 `stop-all.ps1` ⇒ `SELFTEST FAILED (61/63)`；MUT-B 删 §2b 首行 ⇒ `(61/63)`；
+  MUT-C `plan_conformance` 恒绿 ⇒ `(60/63)`。
+- **零生产代码改动**（仅一个 `.py` + 四份证据 + README/清单）；**未起栈、未占任何游戏端口**，未动共享主检出。
+- **仍未闭环（归 root 独占窗口，不因本片收卡）**：DoD③ 的 R 级「③b/③a 两趟真机同框对照」+「屏幕见怪并
+  能攻击造成伤害」。
+- 证据：`127-window-plan-teardown.txt`、`128-redcheck-window-plan-teardown.txt`、`129-gates.txt`、`130-boundary.txt`。

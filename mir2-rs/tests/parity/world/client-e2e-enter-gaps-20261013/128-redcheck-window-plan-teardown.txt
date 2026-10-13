@@ -1,0 +1,49 @@
+128-redcheck-window-plan-teardown.txt —— 片㉕ 改坏必红（卡 `openmir2-client-e2e-enter-gaps`）
+被测件：`window_handoff.py`  sha256 = 45824eca64ef1c45a51adc15be873b720d9fe3e9e90945c73acbceca4f5dc9f9
+变异只在 `E:/tmp/m2svr-burst12/mut/` 的**复制件**上进行；仓内文件 sha256 前后一致（见文末）。
+基线（仓内真件）：`window_handoff.py --selftest` = **SELFTEST OK (63/63)**（片㉔ 为 53/53）。
+====================================================================================================
+
+MUT-A：把 C# 收栈写回不存在的 `{mirserver}/stop-all.ps1`（还原片㉕ 修前的烧窗写法）
+----------------------------------------------------------------------------------------------------
+```
+$ python -I -B /tmp/m2svr-burst12/mut/wh-A.py --selftest
+[FAIL] selftest plan-csharp-keep-mysql
+[FAIL] selftest plan-conf-green 计划引用不存在的脚本：C:\...\wh-conf-...\MirServer/stop-all.ps1;
+       计划引用不存在的 {mirserver}/stop-all.ps1（应改为确定性清栈：6 组件 Stop-Process + 保留 3306）
+SELFTEST FAILED (61/63)
+```
+⇒ 计划里又出现不存在的脚本 ⇒ G4 与结构检查同时红（`plan-conf-green` 的 `stop-all.ps1` 存在性红线
+即本片修前的缺陷本体）。
+
+MUT-B：只删 `plan_text` 里的 §2b 清端口段首行（不动 `TEARDOWN_MARKERS` 常量/自检）
+----------------------------------------------------------------------------------------------------
+```
+$ python -I -B /tmp/m2svr-burst12/mut/wh-B.py --selftest
+[FAIL] selftest plan-teardown-before-csharp
+[FAIL] selftest plan-conf-green 计划缺 teardown/清端口段：'2b) 【本趟跑完必做'
+SELFTEST FAILED (61/63)
+```
+⇒ 清端口段被删 ⇒ ① 结构检查（「清端口段必须在 C# 趟之前」）红；② G4 缺 teardown 标记红。
+（注：本变体只改 `plan_text` 一行；若把常量与自检一起改名，会得到自洽的**假绿**——那不是被测代码的缺口，
+是变异方法问题，故本表用行级替换。）
+
+MUT-C：让 `plan_conformance` 恒绿（`return []`）
+----------------------------------------------------------------------------------------------------
+```
+$ python -I -B /tmp/m2svr-burst12/mut/wh-C.py --selftest
+[FAIL] selftest plan-conf-red-no-teardown
+[FAIL] selftest plan-conf-red-missing-script
+[FAIL] selftest plan-conf-red-unknown-flag
+SELFTEST FAILED (60/63)
+```
+⇒ 吞掉问题 ⇒ 三条 G4 改坏必红同时红（`plan-conf-green` 仍绿，因为真件本就该绿；但红检已证明
+G4 会拒绝坏计划）。
+
+仓内文件未被变异污染
+----------------------------------------------------------------------------------------------------
+```
+$ sha256sum mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py
+45824eca64ef1c45a51adc15be873b720d9fe3e9e90945c73acbceca4f5dc9f9  .../window_handoff.py
+```
+（A/B/C 之后重算一致；变异件在 `/tmp/m2svr-burst12/mut/wh-{A,B,C}.py`，不入库。）

@@ -15,6 +15,10 @@
      这是 2026-10-14 实测到的真缺陷（共享主检出停在 `ad0592b19`）。
   G2 **聚合判据工具自检**：证据目录 6 件判据脚本的 `--selftest` 必须全 `SELFTEST OK`（缺一件 ⇒ PREREQ）。
   G3（可选）**聚合 C# 侧抓包前置门**：调片⑭ `check_csharp_capture_preflight.py --shadow-config ...`。
+  G4（`--plan`/`--plan-only`）**计划 ↔ 工具面机判**（片㉕）：计划里每个被调脚本必须存在、只用它声明
+     的参数，且必须含「代理(7200)/影子 gate(7600) 清端口 + 7200/7600 回落断言 + C# 清栈保留 3306」的
+     teardown 段 —— 手工起的影子 gate 与代理**不在** `start_rust_stack.ps1` 的 pid 文件里 ⇒ `-Stop`
+     不会收它们，留着会让下一趟起栈预检 RED / C# 影子绑不上 7600，白烧一次性窗口。
   J1（`--judge`）**聚合 ③b/③a 两趟窗口产物的五条 AOI 判据**（只消费既有 capture/log，不起栈）：
      ③a 第二趟必须用**独立目录**（默认 `<work-dir>-a`）——`start_rust_stack.ps1` 每次起栈都会删掉
      旧 `game-svr.out.log`（`Start-One` 的 `Remove-Item $out, $err`），共用一个目录会把 ③b 读数覆盖掉。
@@ -53,6 +57,8 @@ import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# 仓根（含 `tools/` 与 `mir2-rs/`）：HERE = <repo>/mir2-rs/tests/parity/world/<this-dir> ⇒ 上溯 5 级。
+DEFAULT_REPO_ROOT = os.path.abspath(os.path.join(HERE, "..", "..", "..", "..", ".."))
 
 RUST_PREFLIGHT = "check_rust_window_preflight.py"
 CSHARP_PREFLIGHT = "check_csharp_capture_preflight.py"
@@ -353,6 +359,8 @@ def plan_text(
     rust_a = f"{w_a}/rust"
     csh_a = f"{w_a}/csharp"
     bin_dir = f"{target_dir.rstrip('/\\')}/debug"
+    bin_dir_w = bin_dir.replace("/", "\\")
+    cs_gate_w = (mirserver.rstrip("/\\") + "/RunGate/GameGate.exe").replace("/", "\\")
     tgt_win = target_dir.rstrip("/\\").replace("/", chr(92))
     lines: list[str] = []
     A = lines.append
@@ -398,34 +406,55 @@ def plan_text(
     A("#     # 2a) 【起代理前必做】抓包拓扑：代理占官方 7200 转发到**影子** game-gate(7600)；")
     A("#     #     不先做 ⇒ mir2_proxy.py 绑不上 7200 ⇒ 无 capture ⇒ ③b 客户端 pairs=0/PREREQ，白烧窗口。")
     A("#     #     已证步骤：tools/m2-acceptance/evidence/m2svr-whitelist-rerun-20261012/README.md §4。")
-    A(f"#     #   (本计划 <bin_dir> = {bin_dir})")
+    A(f"#     #   (本计划 bin_dir = {bin_dir})")
     A("#     #   a. 停本栈标准 game-gate 让出 7200/7201/7202（按绝对路径精确停，勿误伤同名进程）：")
-    A("#     #        Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq '<bin_dir>\\game-gate.exe' } |")
+    A(f"#     #        Get-CimInstance Win32_Process | Where-Object {{ $_.ExecutablePath -eq '{bin_dir_w}\\game-gate.exe' }} |")
     A("#     #          ForEach-Object { Stop-Process -Id $_.ProcessId -Force }")
     A("#     #   b. 起影子 game-gate 于 7600（Rust 读法 `game-gate.exe <conf>`；conf 最小集 = 下面 5 键）：")
     A("#     #        [GameGate] Count=1 / ServerAddr1=127.0.0.1 / ServerPort1=5000 / GateAddress1=127.0.0.1 / GatePort1=7600")
-    A("#     #        Start-Process -FilePath '<bin_dir>\\game-gate.exe' -ArgumentList '<影子 conf>' -WorkingDirectory '<conf 目录>'")
-    A("#     #   c. 确认 7200 DOWN、7600 UP（start_rust_stack.ps1 -Status / E:/MirServer/port-status.ps1）后才起代理：")
+    A(f"#     #        Start-Process -FilePath '{bin_dir_w}\\game-gate.exe' -ArgumentList '<影子 conf>' -WorkingDirectory '<conf 目录>'")
+    A(f"#     #   c. 确认 7200 DOWN、7600 UP（tools/m2-acceptance/start_rust_stack.ps1 -Status / {mirserver}/port-status.ps1）后才起代理：")
     A(f"#     python tools/capture/mir2_proxy.py --out {rust}/proxy --map 7200=127.0.0.1:7600")
     A(f"#     powershell -ExecutionPolicy Bypass -File tools/client/mir_flow.ps1 ^")
     A(f"#       -Account mir2test -Password mir2pass -OutDir {rust}/shots -WalkClicks 0 -AutoPlaySec 12 ^")
     A(f"#       -SkipReenter -SkipLogout -SkipTalk")
     A(f"#     powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/export_s2c.ps1 ^")
     A(f"#       -ProxyDir {rust}/proxy -OutDir {rust}/s2c")
-    A(f"#     powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 -Stop")
+    A("#     # 2b) 【本趟跑完必做 · 进 C# 趟/③a 前必做】清端口：")
+    A("#     #     代理(7200) 与**手工起的**影子 game-gate(7600) **都不在** start_rust_stack 的 pid 文件里")
+    A("#     #     ⇒ 它的 -Stop 不会收它们；留着 ⇒ 下一趟起栈预检报『目标端口已被监听 7200』rc=1、")
+    A("#     #     C# 影子也绑不上 7600 ⇒ 再次白烧窗口。")
+    A("#     #   a. 停代理（ready.flag 里就是它的 pid）：")
+    A(f"#     #        $pp = Get-Content '{rust}/proxy/ready.flag' -EA SilentlyContinue; if ($pp) {{ Stop-Process -Id ([int]$pp) -Force -EA SilentlyContinue }}")
+    A("#     #   b. 停影子 game-gate（按绝对路径精确停；标准 gate 已由 §2a.a 让出）：")
+    A(f"#     #        Get-CimInstance Win32_Process | Where-Object {{ $_.ExecutablePath -eq '{bin_dir_w}\\game-gate.exe' }} |")
+    A("#     #          ForEach-Object { Stop-Process -Id $_.ProcessId -Force }")
+    A("#     #   c. 停本栈其余（只停 pid 文件记录的）：")
+    A(f"#     #        powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 -Stop")
+    A(f"#     #   d. 断言 7200/7600 都 DOWN 再往下：{mirserver}/port-status.ps1")
     A("#   [③b] C#（先读 85-csharp-capture-topology-rootcause.md；同一条 capture 管线）：")
     A(f"#     python -I -B {CSHARP_PREFLIGHT} --repo {repo or '<检出>'} --mirserver {mirserver} ^")
     A(f"#       --shadow-config <影子 RunGate/config.conf>        # 必须 GREEN 再起栈")
     A(f"#     powershell -ExecutionPolicy Bypass -File {mirserver}/start-all.ps1")
     A("#     # 2a) 【起代理前必做】抓包拓扑（同 Rust）：停标准 RunGate(7200) → 起影子 game-gate(7600)")
-    A("#     #     （拷 E:/MirServer/RunGate/config.conf、只改 GatePort1=7600、保留 ServerWorkThread=1，")
+    A(f"#     #     （拷 {mirserver}/RunGate/config.conf、只改 GatePort1=7600、保留 ServerWorkThread=1，")
     A("#     #      见 82-two-side-window-runbook.md §4.1）→ 确认 7200 DOWN/7600 UP 后再起代理占 7200")
     A(f"#     python tools/capture/mir2_proxy.py --out {csh}/proxy --map 7200=127.0.0.1:7600")
     A(f"#     powershell -ExecutionPolicy Bypass -File tools/client/mir_flow.ps1 -Account mir2test ^")
     A(f"#       -Password mir2pass -OutDir {csh}/shots -WalkClicks 0 -AutoPlaySec 12 -SkipReenter -SkipLogout -SkipTalk")
     A(f"#     powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/export_s2c.ps1 ^")
     A(f"#       -ProxyDir {csh}/proxy -OutDir {csh}/s2c")
-    A(f"#     powershell -ExecutionPolicy Bypass -File {mirserver}/stop-all.ps1   # 收 C# 栈（或等价 -Stop）")
+    A("#     # 2b) 【C# 趟跑完必做】清端口并收栈：")
+    A(f"#     #     ⚠ **不要**用 `{mirserver}/start-all.ps1 -Stop` 收 C# 栈 —— 它连**共享 MySQL 3306** 一起停")
+    A("#     #       （Start-Stack 的 targets 含 mysqld）⇒ 与开工前『仅 3306 UP』不一致。")
+    A("#     #   a. 停代理（同 §2b.a）：")
+    A(f"#     #        $pp = Get-Content '{csh}/proxy/ready.flag' -EA SilentlyContinue; if ($pp) {{ Stop-Process -Id ([int]$pp) -Force -EA SilentlyContinue }}")
+    A("#     #   b. 停影子 gate（C# 侧 exe = RunGate 目录下 GameGate.exe，按绝对路径精确停）：")
+    A(f"#     #        Get-CimInstance Win32_Process | Where-Object {{ $_.ExecutablePath -eq '{cs_gate_w}' }} |")
+    A("#     #          ForEach-Object { Stop-Process -Id $_.ProcessId -Force }")
+    A("#     #   c. 停 6 个 C# 组件、**保留 MySQL 3306**（同 tools/m2-acceptance/evidence/session-lifecycle-rerun-20261012）：")
+    A("#     #        Get-Process GameSvr,DBSrv,LoginSrv,LoginGate,SelGate,GameGate -EA SilentlyContinue | Stop-Process -Force")
+    A(f"#     #   d. 断言 7200/7600 都 DOWN 再往下：{mirserver}/port-status.ps1")
     A("")
     A(f"# 3) ③b 判据（一键：python -I -B window_handoff.py --judge --work-dir {w}）")
     A(f"#   服务端（Rust，新读数 vr/new/af）：python -I -B check_aoi_visibility_diag.py \\")
@@ -437,6 +466,8 @@ def plan_text(
     A("")
     A(f"# 4) ③a 反向第二趟：把 §1 的 aaa 改到 site_none={site_none} 后重跑 §2，**独立目录**")
     A(f"#    （③a 根 = {w_a}；start_rust_stack.ps1 每次起栈删旧 game-svr.out.log ⇒ 不独立就覆盖 ③b 读数）")
+    A("#    ⚠ 重跑前先按 §2b/§2b(C#) 清 7200/7600：代理与影子 gate 不在 start_rust_stack 的 pid 文件里，")
+    A("#      `-Stop` 收不走它们（片㉕ 源码实测，见 127-window-plan-teardown.txt）")
     A(f"#    ③a Rust：§2 的 [③b] Rust 命令，把 -LogDir/--out/-OutDir 的 {rust} 换成 {rust_a}")
     A(f"#    ③a C#  ：§2 的 [③b] C# 命令，把 --out/-OutDir 的 {csh} 换成 {csh_a}")
     A(f"#   判据（一键：python -I -B window_handoff.py --judge --work-dir {w} --pass-a-dir {w_a}）")
@@ -446,9 +477,141 @@ def plan_text(
     A(f"#     --right {csh_a}/s2c/capture.jsonl --expect none")
     A(f"#   （③a 两侧都必须 0 对出现帧 + 服务端 vis==0 且 af==0）")
     A("")
-    A("# 5) 收工：start_rust_stack.ps1 -Stop / C# -Stop；还原 aaa；实拍十端口；SHA256SUMS 按 LF/git-blob 口径")
+    A("# 5) 收工：§2b / §2b(C#) 清代理+影子 gate；start_rust_stack 的 -Stop；6 个 C# 组件 Stop-Process（保留 3306）；")
+    A("#     还原 aaa；实拍十端口；SHA256SUMS 按 LF/git-blob 口径")
     A("")
     return "\n".join(lines) + "\n"
+
+
+# ---------------------------------------------------------------- G4：计划 ↔ 工具面 机判
+
+_SCRIPT_TOKEN_RE = re.compile(r"(?:[A-Za-z]:)?[A-Za-z0-9_./\\:-]*\.(?:ps1|py)\b")
+_PS_FLAG_RE = re.compile(r"(?<![\w-])-([A-Za-z][A-Za-z0-9_]*)")
+_PY_FLAG_RE = re.compile(r"(?<![\w-])--([a-z][a-z0-9-]*)")
+_PS_DECL_RE = re.compile(r"\$(\w+)")
+_PY_DECL_RE = re.compile(r"add_argument\(\s*['\"](--[A-Za-z0-9-]+)")
+# 调用宿主 powershell 自身的开关，不属于被调脚本
+_PS_HOST_FLAGS = {
+    "-ExecutionPolicy", "-File", "-NoProfile", "-Command", "-EA", "-ErrorAction",
+}
+# 计划里必须出现的 teardown / 清端口标记（缺一 ⇒ RED，片㉕）
+TEARDOWN_MARKERS = (
+    "2b) 【本趟跑完必做",                                  # Rust 趟清端口段存在
+    "proxy/ready.flag",                                   # 代理 pid 回收
+    "停影子 game-gate（按绝对路径精确停",                 # Rust 影子 gate 回收
+    "停影子 gate（C# 侧 exe",                             # C# 影子 gate 回收
+    "断言 7200/7600 都 DOWN",                              # 端口回落断言
+    "保留 MySQL 3306",                                    # C# 清栈不动共享 DB
+)
+_TOOL_DIRS = ("tools/m2-acceptance", "tools/client", "tools/capture", "tools/oracle")
+
+
+def _plan_command_lines(plan: str) -> list[str]:
+    """把计划文本（全注释）拆成「去 # + 拼接续行（^ / \\）」后的命令串。"""
+    out: list[str] = []
+    buf = ""
+    for raw in plan.splitlines():
+        line = raw.strip()
+        while line.startswith("#"):
+            line = line[1:].strip()
+        if buf:
+            line = (buf + " " + line).strip()
+            buf = ""
+        if line.endswith("^") or line.endswith("\\"):
+            buf = line[:-1].rstrip()
+            continue
+        if line:
+            out.append(line)
+    if buf:
+        out.append(buf)
+    return out
+
+
+def _resolve_tool(token: str, repo_root: str, check_dir: str, mirserver: str) -> str | None:
+    cands: list[str] = []
+    if os.path.isabs(token):
+        cands.append(token)
+    else:
+        for base in (repo_root, check_dir, mirserver):
+            if base:
+                cands.append(os.path.join(base, token.replace("\\", "/")))
+    base_name = os.path.basename(token.replace("\\", "/"))
+    cands.append(os.path.join(check_dir, base_name))
+    if mirserver:
+        cands.append(os.path.join(mirserver, base_name))
+    for d in _TOOL_DIRS:
+        if repo_root:
+            cands.append(os.path.join(repo_root, d, base_name))
+    for c in cands:
+        if c and os.path.isfile(c):
+            return c
+    return None
+
+
+def _declared_flags(path: str) -> set[str]:
+    """读出脚本声明的参数：.ps1 取 param(...) 里的 `$name`；.py 取 add_argument 的长选项。"""
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        src = fh.read()
+    if path.endswith(".py"):
+        return set(_PY_DECL_RE.findall(src))
+    m = re.search(r"param\s*\(", src, re.IGNORECASE)
+    if not m:
+        return set()
+    depth = 0
+    i = m.end() - 1
+    while i < len(src):
+        if src[i] == "(":
+            depth += 1
+        elif src[i] == ")":
+            depth -= 1
+            if depth == 0:
+                break
+        i += 1
+    return {"-" + n for n in _PS_DECL_RE.findall(src[m.end():i])}
+
+
+def plan_conformance(plan: str, repo_root: str = "", check_dir: str = HERE,
+                     mirserver: str = "") -> list[str]:
+    """机判计划与工具面一致：脚本必须存在、参数必须被声明、teardown/清端口段必须齐。
+
+    不复制任何其它门的逻辑；只做「字符串 → 脚本 → 声明集合」的静态对账（零起栈/零端口）。
+    """
+    problems: list[str] = []
+    repo_root = repo_root or DEFAULT_REPO_ROOT
+    declared_cache: dict[str, set[str]] = {}
+    for line in _plan_command_lines(plan):
+        for m in _SCRIPT_TOKEN_RE.finditer(line):
+            token = m.group(0)
+            base = os.path.basename(token)
+            resolved = _resolve_tool(token, repo_root, check_dir, mirserver)
+            if resolved is None:
+                problems.append(f"计划引用不存在的脚本：{token}")
+                continue
+            if resolved not in declared_cache:
+                declared_cache[resolved] = _declared_flags(resolved)
+            declared = declared_cache[resolved]
+            rest = line[m.end():]
+            if base.endswith(".py"):
+                used = {"--" + f for f in _PY_FLAG_RE.findall(rest)}
+            else:
+                used = {"-" + f for f in _PS_FLAG_RE.findall(rest)} - _PS_HOST_FLAGS
+            for f in sorted(used):
+                if f not in declared:
+                    problems.append(f"{base} 未声明的参数：{f}")
+    for marker in TEARDOWN_MARKERS:
+        if marker not in plan:
+            problems.append(f"计划缺 teardown/清端口段：{marker!r}")
+    if "stop-all.ps1" in plan:
+        problems.append("计划引用不存在的 {mirserver}/stop-all.ps1（应改为确定性清栈：6 组件 Stop-Process + 保留 3306）")
+    if "<bin_dir>" in plan:
+        problems.append("计划残留未替换占位 <bin_dir>（应代入 -RustBinDir 的实际目录）")
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for p in problems:
+        if p not in seen:
+            seen.add(p)
+            uniq.append(p)
+    return uniq
 
 
 # ---------------------------------------------------------------- selftest
@@ -500,6 +663,53 @@ def _write_fake_artifacts(root: str) -> None:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as fh:
             fh.write("x\n")
+
+
+def _write_fake_plan_tree(tmp: str) -> tuple[str, str, str]:
+    """造一棵位置无关的「仓 + 判据目录 + 部署根」假树，供 plan_conformance 自证绿/红。
+
+    这样 G4 的自检不依赖脚本自身所在目录（在 /tmp 复制件上跑变异时仍能得到真红/真绿）。
+    """
+    repo = os.path.join(tmp, "repo")
+    check = os.path.join(tmp, "check")
+    ms = os.path.join(tmp, "MirServer")
+
+    def write(path: str, text: str) -> None:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+
+    write(os.path.join(repo, "tools/m2-acceptance/start_rust_stack.ps1"),
+          "param([string]$RustBinDir,[string]$Seed,[string]$LogDir,[switch]$Stop,[switch]$Status)\n")
+    write(os.path.join(repo, "tools/m2-acceptance/export_s2c.ps1"),
+          "param([string]$ProxyDir,[string]$OutDir)\n")
+    write(os.path.join(repo, "tools/client/mir_flow.ps1"),
+          "param([string]$Account,[string]$Password,[string]$OutDir,[int]$WalkClicks,"
+          "[int]$AutoPlaySec,[switch]$SkipReenter,[switch]$SkipLogout,[switch]$SkipTalk)\n")
+    write(os.path.join(repo, "tools/capture/mir2_proxy.py"),
+          "import argparse\nap=argparse.ArgumentParser()\n"
+          "ap.add_argument('--out')\nap.add_argument('--map')\n")
+    write(os.path.join(check, "window_handoff.py"),
+          "import argparse\nap=argparse.ArgumentParser()\n"
+          "ap.add_argument('--repo')\nap.add_argument('--ref')\n"
+          "ap.add_argument('--judge', action='store_true')\n"
+          "ap.add_argument('--work-dir')\nap.add_argument('--pass-a-dir')\n")
+    write(os.path.join(check, "check_csharp_capture_preflight.py"),
+          "import argparse\nap=argparse.ArgumentParser()\n"
+          "ap.add_argument('--repo')\nap.add_argument('--mirserver')\nap.add_argument('--shadow-config')\n")
+    write(os.path.join(check, "check_aoi_visibility_diag.py"),
+          "import argparse\nap=argparse.ArgumentParser()\n"
+          "ap.add_argument('--log')\nap.add_argument('--expect')\nap.add_argument('--min-vis', type=int)\n")
+    write(os.path.join(check, "check_client_s2c_frames.py"),
+          "import argparse\nap=argparse.ArgumentParser()\n"
+          "ap.add_argument('--capture')\nap.add_argument('--min-appearance-pairs', type=int)\n")
+    write(os.path.join(check, "aoi_visibility_pair.py"),
+          "import argparse\nap=argparse.ArgumentParser()\n"
+          "ap.add_argument('--left')\nap.add_argument('--right')\nap.add_argument('--expect')\n"
+          "ap.add_argument('--min-pairs', type=int)\n")
+    for stub in ("start-all.ps1", "port-status.ps1"):
+        write(os.path.join(ms, stub), "param([switch]$Stop)\n")
+    return repo, check, ms
 
 
 def selftest() -> int:
@@ -679,6 +889,38 @@ def selftest() -> int:
         chk("judge-missing-names-pair",
             any("③b 两侧" in p for p in rep.prereq), "; ".join(rep.prereq))
 
+    # --- G4：计划 ↔ 工具面 机判 + teardown 清端口段（片㉕） ---
+    _fresh = plan_text("R", "HEAD", "M", "605,578", "291,666", "E:/tmp/w", "E:/tmp/tgt",
+                       "42", 12, stale=False)
+    chk("plan-has-teardown-proxy",
+        "proxy/ready.flag" in _fresh and "Stop-Process -Id ([int]$pp)" in _fresh)
+    chk("plan-has-teardown-shadow-gate",
+        "停影子 game-gate（按绝对路径精确停" in _fresh and "停影子 gate（C# 侧 exe" in _fresh)
+    chk("plan-has-port-assert", "断言 7200/7600 都 DOWN" in _fresh)
+    chk("plan-csharp-keep-mysql",
+        "保留 MySQL 3306" in _fresh and "stop-all.ps1" not in _fresh
+        and "Get-Process GameSvr,DBSrv,LoginSrv,LoginGate,SelGate,GameGate" in _fresh)
+    chk("plan-no-bin-dir-placeholder", "<bin_dir>" not in _fresh)
+    chk("plan-teardown-before-csharp",
+        0 <= _fresh.find("2b) 【本趟跑完必做") < _fresh.find("[③b] C#"))
+
+    with tempfile.TemporaryDirectory(prefix="wh-conf-") as tmp:
+        _repo, _chk, _ms = _write_fake_plan_tree(tmp)
+        _conf_plan = plan_text(_repo, "HEAD", _ms, "605,578", "291,666",
+                               "E:/tmp/w", "E:/tmp/tgt", "42", 12, stale=False)
+        _probs = plan_conformance(_conf_plan, _repo, _chk, _ms)
+        chk("plan-conf-green", _probs == [], "; ".join(_probs))
+        _bad_no_teardown = _conf_plan.replace("proxy/ready.flag", "PROXY_READY").replace(
+            "断言 7200/7600 都 DOWN", "略")
+        chk("plan-conf-red-no-teardown",
+            any("teardown" in p for p in plan_conformance(_bad_no_teardown, _repo, _chk, _ms)))
+        _bad_stop_all = _conf_plan.replace("/start-all.ps1", "/stop-all.ps1")
+        chk("plan-conf-red-missing-script",
+            any("stop-all.ps1" in p for p in plan_conformance(_bad_stop_all, _repo, _chk, _ms)))
+        _bad_flag = _conf_plan.replace("--min-vis 1", "--min-visibility 1")
+        chk("plan-conf-red-unknown-flag",
+            any("min-visibility" in p for p in plan_conformance(_bad_flag, _repo, _chk, _ms)))
+
     print(f"SELFTEST {'OK' if ok == total else 'FAILED'} ({ok}/{total})")
     return 0 if ok == total else 1
 
@@ -751,11 +993,21 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.plan_only:
         bin_missing = not os.path.isfile(os.path.join(args.target_dir, "debug", "game-svr.exe"))
-        print(plan_text(args.repo, args.ref, args.mirserver, site, args.site_none,
-                        args.work_dir, args.target_dir, args.seed, args.view_range,
-                        stale=False, site_note=site_note, pass_a_dir=args.pass_a_dir,
-                        bin_missing=bin_missing))
-        return 0
+        plan = plan_text(args.repo, args.ref, args.mirserver, site, args.site_none,
+                         args.work_dir, args.target_dir, args.seed, args.view_range,
+                         stale=False, site_note=site_note, pass_a_dir=args.pass_a_dir,
+                         bin_missing=bin_missing)
+        print(plan)
+        _conf = plan_conformance(plan, args.repo, args.check_dir, args.mirserver)
+        for p in _conf:
+            print("RED " + p)
+        _label = "RED" if _conf else "GREEN"
+        if args.json:
+            print(json.dumps({"plan_conformance": _label, "problems": _conf,
+                              "rc": 1 if _conf else 0}, ensure_ascii=False))
+        else:
+            print(f"PLAN_CONFORMANCE={_label}")
+        return 1 if _conf else 0
 
     rep = run_checks(args.check_dir, args.repo, args.ref, args.mirserver,
                      args.shadow_config, args.with_csharp, args.rank, args.view_range, args.map_name)
@@ -767,15 +1019,24 @@ def main(argv: list[str] | None = None) -> int:
     for line in rep.prereq:
         print("PREREQ " + line)
 
-    rc = rep.rc()
-    ready = "YES" if rc == 0 else "NO"
+    conf_label = ""
     if args.plan:
         print("")
         bin_missing = not os.path.isfile(os.path.join(args.target_dir, "debug", "game-svr.exe"))
-        print(plan_text(args.repo, args.ref, args.mirserver, site, args.site_none,
-                        args.work_dir, args.target_dir, args.seed, args.view_range,
-                        stale=rep.build_source_stale, site_note=site_note, pass_a_dir=args.pass_a_dir,
-                        bin_missing=bin_missing))
+        plan = plan_text(args.repo, args.ref, args.mirserver, site, args.site_none,
+                         args.work_dir, args.target_dir, args.seed, args.view_range,
+                         stale=rep.build_source_stale, site_note=site_note, pass_a_dir=args.pass_a_dir,
+                         bin_missing=bin_missing)
+        print(plan)
+        conf_probs = plan_conformance(plan, args.repo, args.check_dir, args.mirserver)
+        for p in conf_probs:
+            print("RED " + p)
+        conf_label = "RED" if conf_probs else "GREEN"
+        print(f"PLAN_CONFORMANCE={conf_label}")
+        rep.problems.extend(conf_probs)
+
+    rc = rep.rc()
+    ready = "YES" if rc == 0 else "NO"
     if args.json:
         print(json.dumps({
             "window_ready": ready,
@@ -785,6 +1046,7 @@ def main(argv: list[str] | None = None) -> int:
             "problems": rep.problems,
             "prereq": rep.prereq,
             "info": rep.info,
+            "plan_conformance": conf_label or None,
         }, ensure_ascii=False))
     else:
         print(f"WINDOW_READY={ready}")
