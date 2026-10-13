@@ -1,0 +1,36 @@
+== RC-A：工作区级改坏 —— 在 mir2-rs 下落一个把任务列写进**别的表**的 .rs 夹具 ==
+夹具: mir2-rs/crates/world/src/__m3pt_redcheck_quest_sql.rs
+命令: CARGO_TARGET_DIR=E:/tmp/openmir2-m3pt-target cargo test --offline -p db-srv --test quest_no_persist
+预期: 工作区级 SQL 扫描用例 FAILED 且点名该夹具；旧 characters_quest 全文件扫描恒绿
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running tests\quest_no_persist.rs (E:/tmp/openmir2-m3pt-target\debug\deps\quest_no_persist-21ddaa74cab9a78d.exe)
+
+running 7 tests
+test redcheck_scanner_bites_injected_quest_persistence ... ok
+test redcheck_sql_scanner_bites_injected_quest_columns ... ok
+test session_quest_state_model_is_still_present ... ok
+test captured_cross_side_baselines_show_zero_characters_quest_rows ... ok
+test db_srv_save_and_load_sql_have_no_quest_columns ... ok
+test workspace_rust_sources_never_reference_characters_quest ... ok
+test workspace_sql_literals_never_mention_quest_columns ... FAILED
+
+failures:
+
+---- workspace_sql_literals_never_mention_quest_columns stdout ----
+
+thread 'workspace_sql_literals_never_mention_quest_columns' (29396) panicked at bins\db-srv\tests\quest_no_persist.rs:316:5:
+工作区任何 SQL 字面量都不得提及任务列/表（oracle 只把任务态放在会话内 6000 面，落库属规格变更，需 owner 另立卡）；命中: [
+    "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\.claude\\worktrees\\m3pt\\mir2-rs\\bins\\db-srv\\..\\..\\crates\\world\\src\\__m3pt_redcheck_quest_sql.rs :: `UPDATE some_other_table SET QuestFlag = ?, Gold = ? WHERE ID = ?`（token `questflag`）",
+]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    workspace_sql_literals_never_mention_quest_columns
+
+test result: FAILED. 6 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.54s
+
+error: test failed, to rerun pass `-p db-srv --test quest_no_persist`
+
+rc=101
