@@ -5,32 +5,35 @@
 //! 盘点依据：`mir2-rs/tests/parity/m3/M3⑧公会攻城现状盘点报告-20261013.md` §1.D / §1.F / §2。
 //!
 //! oracle 锚（行号按本仓库 `src/` 实读）：
-//! - 名单读取 `CastleManager.LoadCastleList`：`src/M2Server/Castle/CastleManager.cs:162-185`
+//! - 名单读取 `CastleManager.LoadCastleList`：`src/M2Server/Castle/CastleManager.cs:154-176`
 //!   （`Path.Combine(BasePath, Config.CastleFile)`，逐行 `Trim()`，空行跳过，`new UserCastle(dir)`）；
-//! - 名单落盘 `CastleManager.SaveCastleList`：`CastleManager.cs:187-201`
+//! - 名单落盘 `CastleManager.SaveCastleList`：`CastleManager.cs:178-192`
 //!   （**写的是下标 `i.ToString()`，不是目录名**）；
-//! - 空列表兜底 `CastleManager.Initialize`：`CastleManager.cs:53-86`
+//! - 空列表兜底 `CastleManager.Initialize`：`CastleManager.cs:62-87`
 //!   （造一个 `ConfigDir="0"` + `EnvirList=0151..0156` + `Save()` 的城堡）；
-//! - `UserCastle` 构造默认：`src/M2Server/Castle/UserCastle.cs:23-59`
+//! - `UserCastle` 构造默认：`src/M2Server/Castle/UserCastle.cs:27-56`
 //!   （`HomeMap/HomeX/HomeY/sName/PalaceMap/SecretMap/WarRangeX/Y`，`Archers[12]` / `Guards[12]`）；
-//! - `CastleConf.LoadConfig`（`[Setup]`/`[Defense]` 全键与默认值）：`src/M2Server/Castle/CastleConf.cs:15-107`；
-//! - `LoadAttackSabukWall` / `SaveAttackSabukWall`：`UserCastle.cs:242-286` / `:291-309`；
+//! - `CastleConf.LoadConfig`（`[Setup]`/`[Defense]` 全键与默认值）：`src/M2Server/Castle/CastleConf.cs:15-94`；
+//! - `LoadAttackSabukWall` / `SaveAttackSabukWall`：`UserCastle.cs:242-288` / `:291-309`；
 //! - 守卫数组长度 12：`UserCastle.cs:49`（`CastleConst.MaxCalsteGuard = 4` 只是**雇佣上限**，
-//!   见 `CastleConst.cs:11-14`，不是配置数组长度）。
+//!   见 `CastleConst.cs:10-14`，不是配置数组长度）。
 //!
 //! ## 建模说明（登记）
 //!
-//! - **实体挂图不在本片**：`UserCastle.Initialize`（`UserCastle.cs:118-227`）用
+//! - **实体挂图不在本片**：`UserCastle.Initialize`（`UserCastle.cs:108-226`）用
 //!   `WorldEngine.RegenMonsterByName` 造门/墙/弓手/守卫并把 `WAbil.HP` 写成配置值；这依赖
 //!   `CastleDoor` / `WallStructure` / `ArcherGuard` 三个实体类型（Rust `crates/world` 尚无，盘点 §2 #7/#22）
 //!   ⇒ 留给 ⑧-7 / ⑧-8 片。本片交付**防御单元规格**（名字 / 坐标 / HP），HP 已按配置就位。
 //! - **race 110/111 不缩放**已由 `crates/data/src/loaders.rs:259` 实现（非本片）。
-//! - **不写 `SabukW.txt`**：`CastleConf.SaveConfig`（`CastleConf.cs:109+`）的「缺键写回 / `MainDoorOpen`・`HP`
+//! - **不写 `SabukW.txt`**：`CastleConf.SaveConfig`（`CastleConf.cs:96+`）的「缺键写回 / `MainDoorOpen`・`HP`
 //!   只在 `BaseObject != null` 时写 / 只在 `MapName` 归属本服时写」等条件属攻城状态机（⑧-7 / ⑧-8）
-//!   ⇒ 本片只读 `SabukW.txt`。`List.txt` 与 `AttackSabukWall.txt` 的落盘按 oracle 实现。
-//! - **日期**：`ReadWriteDate` 的缺键默认是 `DateTime.Now`（`ConfigFile.cs:105-113 / :155-168`），
+//!   ⇒ 本片只读 `SabukW.txt`。`List.txt` 与 `AttackSabukWall.txt` 的落盘按 oracle 实现；
+//!   oracle 走 `StringList.SaveToFile` ⇒ `StreamWriter.WriteLine` ⇒ `Environment.NewLine`
+//!   （Windows = **CRLF** `\r\n`，`src/OpenMir2/Common/StringList.cs:266`；部署件 `Castle/List.txt`
+//!   实为 `30 0D 0A`）⇒ 本片两个 `serialize_*` 也产出 CRLF，与 oracle 逐字节一致。
+//! - **日期**：`ReadWriteDate` 的缺键默认是 `DateTime.Now`（`ConfigFile.cs:115-123 / :155-168`），
 //!   确定性用例无法复现 ⇒ 以**原始字符串** [`Option<String>`] 暴露，缺键 = `None`；本片不比较「Now」。
-//! - **`Convert.ChangeType` 口径**：`ConfigFile.Read<ushort>`（`ConfigFile.cs:113-127`）对非法值抛异常；
+//! - **`Convert.ChangeType` 口径**：`ConfigFile.Read<ushort>`（`ConfigFile.cs:125-138`）对非法值抛异常；
 //!   本片用 `parse::<u16>().unwrap_or(def)` 的宽松口径（与 `IniFile::read_integer` 已有的宽松口径一致），
 //!   在此登记。
 //! - **`AttackSabukWall` 的日期归一**：oracle `DateTime.TryParse` 命中后存 `DateTime`，
@@ -52,7 +55,7 @@ pub const CASTLE_TEXT_SPLIT: [char; 2] = [' ', '\t'];
 pub const SABUK_W_FILE_NAME: &str = "SabukW.txt";
 /// `CastleConst.AttackSabukWallList`（`CastleConst.cs:18`）。
 pub const ATTACK_SABUK_WALL_FILE_NAME: &str = "AttackSabukWall.txt";
-/// `CastleConst.MaxCastleArcher`（`CastleConst.cs:11`）——也是 `UserCastle.Archers` 数组长度。
+/// `CastleConst.MaxCastleArcher`（`CastleConst.cs:10`）——也是 `UserCastle.Archers` 数组长度。
 pub const MAX_CASTLE_ARCHER: usize = 12;
 /// `CastleConst.MaxCalsteGuard`（`CastleConst.cs:14`）——**雇佣上限**（`CastleOfficial.cs:274`），
 /// 与 `UserCastle.Guards` 数组长度（12，`UserCastle.cs:49`）不同，别混用。
@@ -60,13 +63,13 @@ pub const MAX_CASTLE_GUARD: usize = 4;
 /// `UserCastle.Guards = new ArcherUnit[12]`（`UserCastle.cs:49`）——`CastleConf.LoadConfig` 按此长度读 `Guard_{i+1}_*`。
 pub const GUARD_ARRAY_LEN: usize = 12;
 
-// ---- `CastleConf.LoadConfig` 的默认值（`CastleConf.cs:15-107`）+ `UserCastle` 构造默认（`UserCastle.cs:23-59`）。----
+// ---- `CastleConf.LoadConfig` 的默认值（`CastleConf.cs:15-94`）+ `UserCastle` 构造默认（`UserCastle.cs:27-56`）。----
 
-/// `[Setup] CastleName` 默认 = `UserCastle.sName` = `SystemShare.Config.CastleName`（`GameSvrConf.cs:338`）。
+/// `[Setup] CastleName` 默认 = `UserCastle.sName` = `SystemShare.Config.CastleName`（`src/Modules/SystemModule/Conf/Model/GameSvrConf.cs:1782`）。
 pub const DEFAULT_CASTLE_NAME: &str = "沙巴克";
-/// `[Defense] CastleMap` 默认（`CastleConf.cs:44`）。
+/// `[Defense] CastleMap` 默认（`CastleConf.cs:39`）。
 pub const DEFAULT_CASTLE_MAP: &str = "3";
-/// `[Defense] CastleHomeMap` 默认 = `UserCastle.HomeMap`（`CastleConf.cs:45`）。
+/// `[Defense] CastleHomeMap` 默认 = `UserCastle.HomeMap`（`CastleConf.cs:40`）。
 pub const DEFAULT_CASTLE_HOME_MAP: &str = "3";
 /// `[Defense] CastleHomeX` 默认 = `UserCastle.HomeX`。
 pub const DEFAULT_CASTLE_HOME_X: i32 = 644;
@@ -80,49 +83,49 @@ pub const DEFAULT_CASTLE_WAR_RANGE_Y: i32 = 100;
 pub const DEFAULT_PALACE_MAP: &str = "0150";
 /// `[Defense] CastleSecretMap` 默认 = `UserCastle.SecretMap`（`UserCastle.cs:36`）。
 pub const DEFAULT_SECRET_MAP: &str = "D701";
-/// `[Defense] CastlePalaceDoorX` 默认（`CastleConf.cs:56`）。
+/// `[Defense] CastlePalaceDoorX` 默认（`CastleConf.cs:47`）。
 pub const DEFAULT_PALACE_DOOR_X: i32 = 631;
-/// `[Defense] CastlePalaceDoorY` 默认（`CastleConf.cs:57`）。
+/// `[Defense] CastlePalaceDoorY` 默认（`CastleConf.cs:48`）。
 pub const DEFAULT_PALACE_DOOR_Y: i32 = 274;
 
-/// `[Defense] MainDoorX` 默认（`CastleConf.cs:59`）。
+/// `[Defense] MainDoorX` 默认（`CastleConf.cs:50`）。
 pub const DEFAULT_MAIN_DOOR_X: i16 = 672;
-/// `[Defense] MainDoorY` 默认（`CastleConf.cs:60`）。
+/// `[Defense] MainDoorY` 默认（`CastleConf.cs:51`）。
 pub const DEFAULT_MAIN_DOOR_Y: i16 = 330;
-/// `[Defense] MainDoorName` 默认（`CastleConf.cs:61`）。
+/// `[Defense] MainDoorName` 默认（`CastleConf.cs:52`）。
 pub const DEFAULT_MAIN_DOOR_NAME: &str = "MainDoor";
-/// `[Defense] MainDoorOpen` 默认（`CastleConf.cs:62`，`true`）。
+/// `[Defense] MainDoorOpen` 默认（`CastleConf.cs:53`，`true`）。
 pub const DEFAULT_MAIN_DOOR_OPEN: bool = true;
-/// `[Defense] MainDoorHP` 默认（`CastleConf.cs:63`）。
+/// `[Defense] MainDoorHP` 默认（`CastleConf.cs:54`）。
 pub const DEFAULT_MAIN_DOOR_HP: u16 = 2000;
 
-/// `[Defense] LeftWallX` 默认（`CastleConf.cs:65`）。
+/// `[Defense] LeftWallX` 默认（`CastleConf.cs:57`）。
 pub const DEFAULT_LEFT_WALL_X: i16 = 624;
-/// `[Defense] LeftWallY` 默认（`CastleConf.cs:66`）。
+/// `[Defense] LeftWallY` 默认（`CastleConf.cs:58`）。
 pub const DEFAULT_LEFT_WALL_Y: i16 = 278;
-/// `[Defense] LeftWallName` 默认（`CastleConf.cs:67`）。
+/// `[Defense] LeftWallName` 默认（`CastleConf.cs:59`）。
 pub const DEFAULT_LEFT_WALL_NAME: &str = "LeftWall";
-/// `[Defense] CenterWallX` 默认（`CastleConf.cs:70`）。
+/// `[Defense] CenterWallX` 默认（`CastleConf.cs:63`）。
 pub const DEFAULT_CENTER_WALL_X: i16 = 627;
-/// `[Defense] CenterWallY` 默认（`CastleConf.cs:71`）。
+/// `[Defense] CenterWallY` 默认（`CastleConf.cs:64`）。
 pub const DEFAULT_CENTER_WALL_Y: i16 = 278;
-/// `[Defense] CenterWallName` 默认（`CastleConf.cs:72`）。
+/// `[Defense] CenterWallName` 默认（`CastleConf.cs:65`）。
 pub const DEFAULT_CENTER_WALL_NAME: &str = "CenterWall";
-/// `[Defense] RightWallX` 默认（`CastleConf.cs:75`）。
+/// `[Defense] RightWallX` 默认（`CastleConf.cs:69`）。
 pub const DEFAULT_RIGHT_WALL_X: i16 = 634;
-/// `[Defense] RightWallY` 默认（`CastleConf.cs:76`）。
+/// `[Defense] RightWallY` 默认（`CastleConf.cs:70`）。
 pub const DEFAULT_RIGHT_WALL_Y: i16 = 271;
-/// `[Defense] RightWallName` 默认（`CastleConf.cs:77`）。
+/// `[Defense] RightWallName` 默认（`CastleConf.cs:71`）。
 pub const DEFAULT_RIGHT_WALL_NAME: &str = "RightWall";
-/// 三面墙的 `*WallHP` 默认（`CastleConf.cs:68/73/78`）。
+/// 三面墙的 `*WallHP` 默认（`CastleConf.cs:60/66/72`）。
 pub const DEFAULT_WALL_HP: u16 = 2000;
-/// `Archer_{i}_Name` 默认（`CastleConf.cs:85`）。
+/// `Archer_{i}_Name` 默认（`CastleConf.cs:79`）。
 pub const DEFAULT_ARCHER_NAME: &str = "弓箭手";
-/// `Guard_{i}_Name` 默认（`CastleConf.cs:96`）。
+/// `Guard_{i}_Name` 默认（`CastleConf.cs:89`）。
 pub const DEFAULT_GUARD_NAME: &str = "守卫";
-/// `Archer_{i}_HP` 默认（`CastleConf.cs:86`）。
+/// `Archer_{i}_HP` 默认（`CastleConf.cs:80`）。
 pub const DEFAULT_ARCHER_HP: u16 = 2000;
-/// `Guard_{i}_HP` 默认（`CastleConf.cs:97`）。
+/// `Guard_{i}_HP` 默认（`CastleConf.cs:90`）。
 pub const DEFAULT_GUARD_HP: u16 = 2000;
 
 /// 一个防御单元（门 / 墙 / 弓手 / 守卫）的配置规格。
@@ -133,12 +136,12 @@ pub const DEFAULT_GUARD_HP: u16 = 2000;
 pub struct DefenseUnit {
     /// `ArcherUnit.sName`（喂 `RegenMonsterByName`）。
     pub name: String,
-    /// `ArcherUnit.nX`（`ReadWriteInt16`，`CastleConf.cs:59/65/70/75/82/93`）。
+    /// `ArcherUnit.nX`（`ReadWriteInt16`，`CastleConf.cs:50/57/63/69/77/87`）。
     pub x: i16,
     /// `ArcherUnit.nY`。
     pub y: i16,
-    /// `ArcherUnit.nHP`（`ReadWriteUInt16`，`CastleConf.cs:63/68/73/78/86/97`）。
-    /// `Initialize` 把它写进 `BaseObject.WAbil.HP`（`UserCastle.cs:135/148/161/174/198/215`）。
+    /// `ArcherUnit.nHP`（`ReadWriteUInt16`，`CastleConf.cs:54/60/66/72/80/90`）。
+    /// `Initialize` 把它写进 `BaseObject.WAbil.HP`（`UserCastle.cs:133/147/157/167/185/205`）。
     pub hp: u16,
 }
 
@@ -161,7 +164,7 @@ pub struct SabukWConfig {
     /// `[Setup] TodayIncome`（缺键 = 0）。
     pub today_income: i32,
 
-    // ---- [Defense]（`CastleConf.cs:24-107`）----
+    // ---- [Defense]（`CastleConf.cs:24-94`）----
     /// `[Defense] CastleMapList`（逗号分隔；`GetValidStr3` 循环，遇空段 `break`）。
     pub envir_list: Vec<String>,
     /// `[Defense] CastleMap`。
@@ -187,7 +190,7 @@ pub struct SabukWConfig {
 
     /// `[Defense] MainDoor*` 规格。
     pub main_door: DefenseUnit,
-    /// `[Defense] MainDoorOpen`（`ReadWriteBool`，`CastleConf.cs:62`）。
+    /// `[Defense] MainDoorOpen`（`ReadWriteBool`，`CastleConf.cs:53`）。
     pub main_door_open: bool,
     /// `[Defense] LeftWall*` 规格。
     pub left_wall: DefenseUnit,
@@ -268,7 +271,7 @@ impl Default for SabukWConfig {
 }
 
 impl SabukWConfig {
-    /// `CastleConf.LoadConfig` 的读侧 1:1 移植（`CastleConf.cs:15-107`）。
+    /// `CastleConf.LoadConfig` 的读侧 1:1 移植（`CastleConf.cs:15-94`）。
     #[must_use]
     #[allow(clippy::field_reassign_with_default)]
     pub fn from_ini(ini: &IniFile) -> Self {
@@ -341,7 +344,7 @@ impl SabukWConfig {
             hp: read_uint16(ini, "Defense", "RightWallHP", DEFAULT_WALL_HP),
         };
 
-        // `for (int i = 0; i < userCastle.Archers.Length; i++)`（`CastleConf.cs:80-90`）。
+        // `for (int i = 0; i < userCastle.Archers.Length; i++)`（`CastleConf.cs:74-83`）。
         cfg.archers = (0..MAX_CASTLE_ARCHER)
             .map(|i| {
                 let n = i + 1;
@@ -355,7 +358,7 @@ impl SabukWConfig {
                 }
             })
             .collect();
-        // `for (int i = 0; i < userCastle.Guards.Length; i++)`（`CastleConf.cs:91-101`）——长度 12，不是 4。
+        // `for (int i = 0; i < userCastle.Guards.Length; i++)`（`CastleConf.cs:84-93`）——长度 12，不是 4。
         cfg.guards = (0..GUARD_ARRAY_LEN)
             .map(|i| {
                 let n = i + 1;
@@ -408,7 +411,7 @@ fn optional_string(s: &str) -> Option<String> {
     }
 }
 
-/// `CastleConf.cs:26-41`：`CastleMapList` 按 `','` 用 `GetValidStr3` 循环切段，**空段即 `break`**。
+/// `CastleConf.cs:24-38`：`CastleMapList` 按 `','` 用 `GetValidStr3` 循环切段，**空段即 `break`**。
 #[must_use]
 pub fn parse_castle_map_list(s: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -424,7 +427,7 @@ pub fn parse_castle_map_list(s: &str) -> Vec<String> {
     out
 }
 
-/// `CastleManager.LoadCastleList` 的逐行解析（`CastleManager.cs:162-185`）：
+/// `CastleManager.LoadCastleList` 的逐行解析（`CastleManager.cs:154-176`）：
 /// 逐行 `Trim()`，空行跳过；每行是一个城堡目录名（`new UserCastle(dir)` 的 `ConfigDir`）。
 #[must_use]
 pub fn parse_castle_list(text: &str) -> Vec<String> {
@@ -435,21 +438,22 @@ pub fn parse_castle_list(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// `CastleManager.SaveCastleList`（`CastleManager.cs:187-201`）：**写的是下标 `i.ToString()`**，
-/// 不是 `CastleList[i].ConfigDir`。返回 `StringList.SaveToFile` 的行（每行一条 + 结尾换行）。
+/// `CastleManager.SaveCastleList`（`CastleManager.cs:178-192`）：**写的是下标 `i.ToString()`**，
+/// 不是 `CastleList[i].ConfigDir`。返回 `StringList.SaveToFile` 的行（每行一条 + **CRLF** 结尾，
+/// 见模块头「落盘 CRLF」：oracle `StreamWriter.WriteLine` ⇒ `Environment.NewLine`）。
 #[must_use]
 pub fn serialize_castle_list(count: usize) -> String {
     let mut out = String::new();
     for i in 0..count {
         out.push_str(&i.to_string());
-        out.push('\n');
+        out.push_str("\r\n");
     }
     out
 }
 
-/// `Castle/<N>/AttackSabukWall.txt` 的一行（`UserCastle.LoadAttackSabukWall`，`UserCastle.cs:242-286`）。
+/// `Castle/<N>/AttackSabukWall.txt` 的一行（`UserCastle.LoadAttackSabukWall`，`UserCastle.cs:242-288`）。
 ///
-/// 行格式为 `行会名<空白>"日期"`（`SaveAttackSabukWall` 用 7 个空格，`UserCastle.cs:305`）。
+/// 行格式为 `行会名<空白>"日期"`（`SaveAttackSabukWall` 用 7 个空格，`UserCastle.cs:306`）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AttackSabukWallEntry {
     /// `AttackerInfo.sGuildName`（`GetValidStr3` 的首个非空白 token）。
@@ -460,7 +464,7 @@ pub struct AttackSabukWallEntry {
     pub attack_date_parsed: bool,
 }
 
-/// `LoadAttackSabukWall` 的逐行解析（`UserCastle.cs:242-286`）。
+/// `LoadAttackSabukWall` 的逐行解析（`UserCastle.cs:242-288`）。
 ///
 /// 只做「行 → `(guild_name, attack_date_raw)`」的**语法**解析；oracle 的
 /// `SystemShare.GuildMgr.FindGuild(guildName) == null ⇒ continue` 依赖行会存活集，
@@ -483,13 +487,13 @@ pub fn parse_attack_sabuk_wall_line(line: &str) -> Option<AttackSabukWallEntry> 
     })
 }
 
-/// `SaveAttackSabukWall`（`UserCastle.cs:291-309`）：`sGuildName + "       \"" + AttackDate + '"'`。
-/// 返回逐行文本（每行一条 + 结尾换行）。
+/// `SaveAttackSabukWall`（`UserCastle.cs:293-309`）：`sGuildName + "       \"" + AttackDate + '"'`。
+/// 返回逐行文本（每行一条 + **CRLF** 结尾，同 [`serialize_castle_list`]）。
 #[must_use]
 pub fn serialize_attack_sabuk_wall(entries: &[AttackSabukWallEntry]) -> String {
     let mut out = String::new();
     for e in entries {
-        out.push_str(&format!("{}       \"{}\"\n", e.guild_name, e.attack_date));
+        out.push_str(&format!("{}       \"{}\"\r\n", e.guild_name, e.attack_date));
     }
     out
 }
@@ -519,13 +523,13 @@ pub fn is_parseable_datetime(s: &str) -> bool {
 
 // ---- 路径 + 文件加载（`MapLoader` 集成）。----
 
-/// `Path.Combine(BasePath, Config.CastleDir, ConfigDir)`（`UserCastle.cs:52`）。
+/// `Path.Combine(BasePath, Config.CastleDir, ConfigDir)`（`UserCastle.cs:50`）。
 #[must_use]
 pub fn castle_config_dir(base_path: &Path, castle_dir: &str, config_dir: &str) -> PathBuf {
     crate::paths::path_combine(&[base_path, Path::new(castle_dir), Path::new(config_dir)])
 }
 
-/// `Path.Combine(BasePath, Config.CastleFile)`（`CastleManager.cs:164`）。
+/// `Path.Combine(BasePath, Config.CastleFile)`（`CastleManager.cs:156/190`）。
 #[must_use]
 pub fn castle_list_path(base_path: &Path, castle_file: &str) -> PathBuf {
     crate::paths::path_combine(&[base_path, Path::new(castle_file)])
@@ -550,7 +554,7 @@ pub fn parse_sabuk_w_bytes(bytes: &[u8]) -> SabukWConfig {
 }
 
 impl crate::registry::MapLoader {
-    /// `CastleManager.LoadCastleList`（`CastleManager.cs:162-185`）：`File.Exists` 为假 ⇒ `Ok(None)`。
+    /// `CastleManager.LoadCastleList`（`CastleManager.cs:154-176`）：`File.Exists` 为假 ⇒ `Ok(None)`。
     ///
     /// # Errors
     /// 文件存在但读取失败。
@@ -564,7 +568,7 @@ impl crate::registry::MapLoader {
         Ok(Some(parse_castle_list(&decode_text(&bytes))))
     }
 
-    /// `UserCastle.Initialize` 的 `LoadConfig`（`UserCastle.cs:229-233`）：读 `Castle/<N>/SabukW.txt`。
+    /// `UserCastle.Initialize` 的 `LoadConfig`（`UserCastle.cs:228-232`）：读 `Castle/<N>/SabukW.txt`。
     ///
     /// `IniFile` 是「缺键/空值/非法值都给默认」的宽松读取（`ConfigFile.ReadWrite*` 的读侧口径）
     /// ⇒ 本加载器唯一的失败面是文件 IO，不存在「解析失败」分支。
@@ -584,7 +588,7 @@ impl crate::registry::MapLoader {
         Ok(parse_sabuk_w_bytes(&bytes))
     }
 
-    /// `UserCastle.LoadAttackSabukWall`（`UserCastle.cs:242-286`）：文件不存在 ⇒ `Ok(None)`
+    /// `UserCastle.LoadAttackSabukWall`（`UserCastle.cs:242-288`）：文件不存在 ⇒ `Ok(None)`
     /// （oracle 直接 `return`，`AttackWarList` 保持空）。
     ///
     /// # Errors
@@ -717,7 +721,7 @@ MainDoorHP=9999
         assert_eq!(cfg.palace_map, "0150");
         assert_eq!(cfg.secret_map, "D701");
         assert_eq!((cfg.palace_door_x, cfg.palace_door_y), (631, 274));
-        assert!(cfg.main_door_open); // 缺键默认 true（`CastleConf.cs:62`）
+        assert!(cfg.main_door_open); // 缺键默认 true（`CastleConf.cs:53`）
         assert_eq!(cfg.main_door, d.main_door);
         assert_eq!(cfg.left_wall, d.left_wall);
         assert_eq!(cfg.center_wall, d.center_wall);
@@ -747,7 +751,7 @@ MainDoorHP=9999
         assert_eq!(cfg.castle_name, DEFAULT_CASTLE_NAME);
     }
 
-    /// `CastleMapList` 的 `GetValidStr3` 循环语义（`CastleConf.cs:26-41`）。
+    /// `CastleMapList` 的 `GetValidStr3` 循环语义（`CastleConf.cs:24-38`）。
     #[test]
     fn castle_map_list_splitting() {
         assert_eq!(parse_castle_map_list(""), Vec::<String>::new());
@@ -760,15 +764,17 @@ MainDoorHP=9999
         assert_eq!(parse_castle_map_list(","), Vec::<String>::new());
     }
 
-    /// `Castle/List.txt` 的逐行读取（`CastleManager.cs:162-185`）。
+    /// `Castle/List.txt` 的逐行读取（`CastleManager.cs:154-176`）。
     #[test]
     fn castle_list_parse_and_serialize() {
         assert_eq!(parse_castle_list("0\n1\n"), vec!["0", "1"]);
         assert_eq!(parse_castle_list("  0  \r\n\r\n 1 \r\n"), vec!["0", "1"]);
         assert_eq!(parse_castle_list(""), Vec::<String>::new());
-        // `SaveCastleList` 写的是下标，不是目录名（`CastleManager.cs:196`）。
-        assert_eq!(serialize_castle_list(2), "0\n1\n");
+        // `SaveCastleList` 写的是下标，不是目录名（`CastleManager.cs:188`）。
+        assert_eq!(serialize_castle_list(2), "0\r\n1\r\n");
         assert_eq!(serialize_castle_list(0), "");
+        // 部署件 `Castle/List.txt` 实为 3 字节 `30 0D 0A`（"0\r\n"）⇒ oracle 落盘是 CRLF（reviewer-6 F-2）。
+        assert_eq!(serialize_castle_list(1).as_bytes(), &[0x30, 0x0D, 0x0A]);
     }
 
     /// `AttackSabukWall.txt` 的读写往返（`UserCastle.cs:242-309`）：7 个空格 + 引号日期。
@@ -781,7 +787,7 @@ MainDoorHP=9999
         assert!(e.attack_date_parsed);
         assert_eq!(
             serialize_attack_sabuk_wall(&[e]),
-            "同盟会       \"2026-10-15\"\n"
+            "同盟会       \"2026-10-15\"\r\n"
         );
         // 制表符分隔（`CASTLE_TEXT_SPLIT` 含 `\t`）。
         let e2 = parse_attack_sabuk_wall_line("乙会\t\"2026/10/16\"").unwrap();
@@ -791,6 +797,17 @@ MainDoorHP=9999
         // 空行 / 无行会名 ⇒ None。
         assert!(parse_attack_sabuk_wall_line("").is_none());
         assert!(parse_attack_sabuk_wall_line("   ").is_none());
+    }
+
+    /// 畸形行（未闭合引号）：oracle `ArrestStringEx` 走 `Unchanged` 分支把 remainder 写回（`ref s20`，
+    /// `UserCastle.cs:242-288`），本片同形保留 remainder（含前导 `"`）。仅畸形行可达的前导空白细微差异
+    /// 已在 README §2 登记（reviewer-6 M-3）。
+    #[test]
+    fn attack_sabuk_wall_unclosed_quote_keeps_remainder() {
+        let e = parse_attack_sabuk_wall_line("甲会   \"2026-10-15").unwrap();
+        assert_eq!(e.guild_name, "甲会");
+        assert_eq!(e.attack_date, "\"2026-10-15");
+        assert!(!e.attack_date_parsed);
     }
 
     /// `DateTime.TryParse` 轻量判定：非法日期 ⇒ `attack_date_parsed=false`（oracle 会退回 `Now`）。

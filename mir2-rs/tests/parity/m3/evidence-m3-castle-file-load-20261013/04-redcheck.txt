@@ -1,28 +1,27 @@
-# 改坏必红：把 GUARD_ARRAY_LEN 由 12 改成 4（模拟把「雇佣上限」误当配置数组长度）
+# 改坏必红（1/2）：牙齿 GUARD_ARRAY_LEN 12 → 4（把「雇佣上限」误当配置数组长度）
 # 命令: cargo test -p mir2-envir --offline --lib castle
-   Compiling mir2-envir v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\crates\envir)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.49s
      Running unittests src\lib.rs (E:/tmp/openmir2-m3cs-target\debug\deps\mir2_envir-5897bb03a1b70418.exe)
 
-running 12 tests
-test castle::tests::castle_map_list_splitting ... ok
-test castle::tests::castle_list_parse_and_serialize ... ok
+running 13 tests
+test castle::tests::attack_sabuk_wall_unclosed_quote_keeps_remainder ... ok
 test castle::tests::attack_date_parse_flag ... ok
 test castle::tests::attack_sabuk_wall_roundtrip ... ok
-test merchant::tests::castle_and_move_flags ... ok
-test castle::tests::guard_array_len_is_twelve_not_hire_cap ... FAILED
-test castle::tests::gbk_decoding_of_castle_name ... ok
-test castle::tests::missing_keys_use_oracle_defaults ... ok
+test castle::tests::castle_map_list_splitting ... ok
+test castle::tests::castle_list_parse_and_serialize ... ok
 test castle::tests::empty_string_value_falls_back_to_default ... ok
-test castle::tests::parses_deployed_sabuk_w ... ok
+test castle::tests::guard_array_len_is_twelve_not_hire_cap ... FAILED
+test castle::tests::missing_keys_use_oracle_defaults ... ok
+test castle::tests::gbk_decoding_of_castle_name ... ok
+test merchant::tests::castle_and_move_flags ... ok
 test castle::tests::defense_units_order_and_count ... ok
+test castle::tests::parses_deployed_sabuk_w ... ok
 test castle::tests::loader_reads_files_from_disk ... ok
 
 failures:
 
 ---- castle::tests::guard_array_len_is_twelve_not_hire_cap stdout ----
 
-thread 'castle::tests::guard_array_len_is_twelve_not_hire_cap' (15532) panicked at crates\envir\src\castle.rs:698:9:
+thread 'castle::tests::guard_array_len_is_twelve_not_hire_cap' (11188) panicked at crates\envir\src\castle.rs:702:9:
 assertion `left == right` failed
   left: 4
  right: 12
@@ -32,31 +31,89 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 failures:
     castle::tests::guard_array_len_is_twelve_not_hire_cap
 
-test result: FAILED. 11 passed; 1 failed; 0 ignored; 0 measured; 39 filtered out; finished in 0.01s
+test result: FAILED. 12 passed; 1 failed; 0 ignored; 0 measured; 39 filtered out; finished in 0.01s
 
 error: test failed, to rerun pass `-p mir2-envir --lib`
-exit=101
 
-# 还原（GUARD_ARRAY_LEN 12）后
+# 还原（GUARD_ARRAY_LEN = 12）后
 # 命令: cargo test -p mir2-envir --offline --lib castle
-   Compiling mir2-envir v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\crates\envir)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.50s
      Running unittests src\lib.rs (E:/tmp/openmir2-m3cs-target\debug\deps\mir2_envir-5897bb03a1b70418.exe)
 
-running 12 tests
+running 13 tests
 test castle::tests::castle_map_list_splitting ... ok
 test castle::tests::castle_list_parse_and_serialize ... ok
+test castle::tests::attack_sabuk_wall_unclosed_quote_keeps_remainder ... ok
 test castle::tests::attack_date_parse_flag ... ok
-test merchant::tests::castle_and_move_flags ... ok
+test castle::tests::attack_sabuk_wall_roundtrip ... ok
 test castle::tests::empty_string_value_falls_back_to_default ... ok
 test castle::tests::gbk_decoding_of_castle_name ... ok
-test castle::tests::attack_sabuk_wall_roundtrip ... ok
 test castle::tests::missing_keys_use_oracle_defaults ... ok
+test merchant::tests::castle_and_move_flags ... ok
 test castle::tests::defense_units_order_and_count ... ok
 test castle::tests::guard_array_len_is_twelve_not_hire_cap ... ok
 test castle::tests::parses_deployed_sabuk_w ... ok
 test castle::tests::loader_reads_files_from_disk ... ok
 
-test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 39 filtered out; finished in 0.01s
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 39 filtered out; finished in 0.01s
 
-exit=0
+
+# 改坏必红（2/2，F-2 返工）：serialize_castle_list 的 CRLF 改回 LF（out.push_str("\r\n") → out.push('\n')）
+# 命令: cargo test -p mir2-envir --offline --lib castle
+     Running unittests src\lib.rs (E:/tmp/openmir2-m3cs-target\debug\deps\mir2_envir-5897bb03a1b70418.exe)
+
+running 13 tests
+test castle::tests::attack_date_parse_flag ... ok
+test castle::tests::attack_sabuk_wall_unclosed_quote_keeps_remainder ... ok
+test castle::tests::attack_sabuk_wall_roundtrip ... ok
+test castle::tests::castle_map_list_splitting ... ok
+test castle::tests::castle_list_parse_and_serialize ... FAILED
+test castle::tests::gbk_decoding_of_castle_name ... ok
+test castle::tests::empty_string_value_falls_back_to_default ... ok
+test castle::tests::missing_keys_use_oracle_defaults ... ok
+test merchant::tests::castle_and_move_flags ... ok
+test castle::tests::guard_array_len_is_twelve_not_hire_cap ... ok
+test castle::tests::defense_units_order_and_count ... ok
+test castle::tests::parses_deployed_sabuk_w ... ok
+test castle::tests::loader_reads_files_from_disk ... ok
+
+failures:
+
+---- castle::tests::castle_list_parse_and_serialize stdout ----
+
+thread 'castle::tests::castle_list_parse_and_serialize' (5604) panicked at crates\envir\src\castle.rs:774:9:
+assertion `left == right` failed
+  left: "0\n1\n"
+ right: "0\r\n1\r\n"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    castle::tests::castle_list_parse_and_serialize
+
+test result: FAILED. 12 passed; 1 failed; 0 ignored; 0 measured; 39 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-envir --lib`
+
+# 还原（CRLF）后
+# 命令: cargo test -p mir2-envir --offline --lib castle
+     Running unittests src\lib.rs (E:/tmp/openmir2-m3cs-target\debug\deps\mir2_envir-5897bb03a1b70418.exe)
+
+running 13 tests
+test castle::tests::castle_map_list_splitting ... ok
+test castle::tests::castle_list_parse_and_serialize ... ok
+test castle::tests::attack_date_parse_flag ... ok
+test castle::tests::attack_sabuk_wall_unclosed_quote_keeps_remainder ... ok
+test castle::tests::attack_sabuk_wall_roundtrip ... ok
+test castle::tests::gbk_decoding_of_castle_name ... ok
+test castle::tests::empty_string_value_falls_back_to_default ... ok
+test castle::tests::missing_keys_use_oracle_defaults ... ok
+test merchant::tests::castle_and_move_flags ... ok
+test castle::tests::parses_deployed_sabuk_w ... ok
+test castle::tests::defense_units_order_and_count ... ok
+test castle::tests::guard_array_len_is_twelve_not_hire_cap ... ok
+test castle::tests::loader_reads_files_from_disk ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 39 filtered out; finished in 0.00s
+
+
+# 还原后源码 sha256 = 288eae6dec370322ba75b63e196e4ac00584cb28b8b170bbc1be3597edbf3df1（与备份相同；git status 仅 castle.rs 为预期改动）
