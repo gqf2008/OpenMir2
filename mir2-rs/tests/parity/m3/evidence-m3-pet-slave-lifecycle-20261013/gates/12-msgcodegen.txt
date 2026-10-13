@@ -1,0 +1,5 @@
+
+thread 'main' (29548) panicked at tools\msgcodegen\src\main.rs:50:10:
+repo root must exist: Os { code: 2, kind: NotFound, message: "系统找不到指定的文件。" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+msgcodegen rc=101

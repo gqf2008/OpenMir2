@@ -1,0 +1,36 @@
+M3⑨-实现 3（宝宝生命周期）判据
+=================================
+
+判据全部落在 `crates/world` 单测（`cargo test -p mir2-world --lib slave`）+ 进程级 tick 集成。
+本片新增 15 条用例（⑨-2 基线 slave::tests 19 + 本片 15 = 34；workspace 由 966 → 981 passed）。
+
+新增用例（`crates/world/src/slave.rs::tests`）
+1. check_royalty_removes_and_halves_hp            —— 到期：出主人表 + Master=null + HP/10
+2. check_royalty_respects_interval                —— 10s 门未到 ⇒ 不动（也不刷 CheckRoyaltyTick）
+3. check_royalty_spirit_window_forces_zero_deadline —— SpiritMutinyTick 未过期且等级<5 ⇒ 立即叛变
+4. check_royalty_spirit_window_gated_by_level     —— 等级>=5 ⇒ 不置零（`< 5` 门）
+5. check_royalty_master_tick_12h_kills            —— MasterTick>12h ⇒ HP=0 且主人不变
+6. slave_list_cleanup_removes_dead_ghost_and_mismaster —— 清表删死亡/幽灵/换主，保序保留合法
+7. tick_cleanup_drops_dead_slave                  —— tick 集成：死亡结算后清表移除死亡宝宝
+8. process_slave_mutiny_mutinies_on_zero_roll     —— Random(rate)==0 ⇒ 叛变（exp=色表长 / DC×power / 速度/speed）
+9. process_slave_mutiny_no_rng_without_last_hiter —— LastHiter==null 短路 ⇒ 不抽数（与对照 world 下一抽相同）
+10. process_slave_mutiny_early_return             —— !Death / 开关关 ⇒ 不抽数、不置 HP
+11. process_slave_ghost_marks_all                 —— 主人 Ghost ⇒ 逐宝宝 MakeGhost（末尾往前）
+12. tame_adopt_writes_oracle_tail                 —— 受奴尾：Master/royalty/MasterTick/封顶/不入 IsSlave/入表
+13. tame_adopt_halves_hp_and_keeps_master_tick    —— 已有主 ⇒ HP/10；MasterTick 非 0 ⇒ 不覆盖
+14. tame_royalty_tick_formula                     —— (draw + magicLevel*20 + 20)*60000 + now
+15. get_chr_color_branches                        —— NPC / 宝宝色表 / 兜底 / 越界不 panic
+
+取数次序（Claim B 账本输入，不许改序）
+- `ProcessSlaveMutiny`：每宝宝恰 1 次 `Random(MasterDieMutinyRate)`，仅在 `Master.LastHiter != null` 时（C# `&&` 短路）；
+  用例 9 专门钉「无 LastHiter ⇒ 零取数」。
+- `CheckRoyalty` / 清表 / `ProcessSlaveGhost` / `tame_adopt` / `get_chr_color`：**零取数**。
+- 诱惑诱饵到期的 `Random(caster.Level*2)` 仍在 `mag_tamming` 原位（⑨-2 既有向量钉住），本片只消费其值。
+
+改坏必红（4 条，见 redchecks/；均由作者实跑，mutated rc=101 / 1 failed，restored rc=0）
+- RC1 去 `SpiritMutinyTick` 支的 `SlaveExpLevel < 5` 门 ⇒ check_royalty_spirit_window_gated_by_level FAILED
+- RC2 清表去 `Master != this` 支 ⇒ slave_list_cleanup_removes_dead_ghost_and_mismaster FAILED
+- RC3 `ProcessSlaveMutiny` 去掉 `LastHiter` 短路（无脑抽数）⇒ process_slave_mutiny_no_rng_without_last_hiter FAILED
+- RC4 `MasterRoyaltyTick` 公式 `*60000` 改 `*1000` ⇒ tame_royalty_tick_formula FAILED
+
+复现命令见 commands.txt。

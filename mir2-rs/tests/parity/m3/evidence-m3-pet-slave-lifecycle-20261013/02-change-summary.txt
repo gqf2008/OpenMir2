@@ -1,0 +1,47 @@
+M3⑨-实现 3（宝宝生命周期）变更摘要
+====================================
+
+卡：openmir2-m3-pet-slave-lifecycle（M3⑨-实现 3），依赖 ⑨-2（openmir2-m3-pet-slave-summon）。
+本片在 ⑨-2 的 slave.rs 上**叠加生命周期**（同写集串行）；不动 ⑨-2 已有函数。
+
+改动路径（净 diff vs refs/heads/master）
+- mir2-rs/crates/world/src/slave.rs    （+ 生命周期层：清表 / CheckRoyalty / 主人死幽灵 / 诱惑受奴尾 / 色彩）
+- mir2-rs/crates/world/src/entity.rs   （AnimalState + check_royalty_tick；Entity + name_color；新常量 ACTOR_RACE_NPC）
+- mir2-rs/crates/world/src/world.rs    （+ World.spirit_mutiny_tick 字段与 activate_spirit_mutiny()；tick 里接清表）
+- mir2-rs/crates/world/src/monai.rs    （monster_run 在 oracle 三个提前返回口之外调 check_royalty；模块头订正）
+- mir2-rs/tests/parity/m3/evidence-m3-pet-slave-lifecycle-20261013/**（本证据）
+
+新增 API（crates/world::slave）
+- `CHECK_ROYALTY_INTERVAL` / `MASTER_MUTINY_DEATH_MS`
+- `World::slave_list_cleanup(master_id)` + `slave_list_cleanup_all(world)`
+- `check_royalty(world, mon_id)`
+- `process_slave_mutiny(world, master_id, cfg) -> Vec<i32>`
+- `process_slave_ghost(world, master_id) -> Vec<i32>`
+- `World::tame_adopt(caster_id, target_id, magic_level, royalty_draw)`
+- `tame_royalty_tick(caster_level, magic_level, draw, now)`
+- `get_chr_color(e, slave_color, npc_name_color)`
+- `World::activate_spirit_mutiny(duration_ms)`
+
+tick / 调用点接线
+- `World::tick()`：`settle_deaths` 之后跑 `slave::slave_list_cleanup_all(self)`（空表零动作；golden 逐字节不变）。
+- `monai::monster_run`：在 oracle `MonsterObject.Run` 的两个「落到 CheckRoyalty」口（外层 `CanMove` 假、`WalkWait`/`WalkSpeed` 门假）
+  与函数尾各调一次 `slave::check_royalty`；`Think()`/`AttackTarget()` 的提前返回处**不调**（与 oracle `:255-258/:277-283` 同）。
+- `World::tick()` 的怪物 AI 步（`ai_enabled`）驱动 `CheckRoyalty`；缺省 `ai_enabled=false` 时 AI 与 CheckRoyalty 都不跑（既有口径）。
+
+照搬的 oracle 缺陷（`BUG-REPLICA`；本仓约定：⑨-2 同款在代码模块头 + 本 README 登记，T-* 编号归属待 owner 裁决）
+1. 色表越界门：`GetChrColor` 用 `<= SlaveMaxLevel(50)` 索引 15 项 `SlaveColor` ⇒ 15..=50 latent `IndexOutOfRange`；
+   Rust 用 `slice::get` 落 `GetNameColor` 兜底（正常数据不可达：召唤等级 ≤ `SlaveMakeLevel*2+1`；`ProcessSlaveMutiny` 置 15 但同置 `Master=null`）。
+2. `MasterDieMutinySpeed == 0` 除零：oracle `WalkSpeed / Config.MasterDieMutinySpeed` 在配置缺陷（读 `MasterDieMutinyPower` 键）
+   下若 Power=0 会抛除零；Rust `speed != 0` 才除（不可达分支，登记）。
+3. `GainSlaveExp` 死代码：全仓无调用点 ⇒ 击杀不涨 `SlaveExpLevel`，本片不实现。
+4. `DC` 缩放截断：`WAbil.DC = (ushort)MakeLong((short)(LoByte*Power),(short)(HiByte*Power))` 的外层 `(ushort)`
+   丢掉高 16 位 ⇒ `DC` 实际只等于 `(ushort)(short)(LoByte*Power)`，高字节归零。Rust 逐位保留（专测钉住）。
+
+未接 / 登记（不冒充已实现）
+- 帧面：`RefNameColor`(RM_CHANGENAMECOLOR) / `RefShowName`(RM_USERNAME) / `MakeGhost` 的 `DisappearA` /
+  `RM_MASTERDIEMUTINY` / `RM_MASTERDIEGHOST` / `RM_SPIRITSUITE` 的自投递队列 —— 归 `CM_SPELL`/宿主接线片。
+- `MakeGhost` 的 `CanReAlive ⇒ Invisible=true` 变体未建模（需 `MonGen` 字段）。
+- `CrazyMode` 字段不在骨架 ⇒ `OpenCrazyMode`/`BreakCrazyMode` 与 `MonsterObject.GetChrColor` 的狂暴/困魔色支未接。
+- 诱惑诱饵到期抽数：`mag_tamming` 已按 oracle 位置消费 `Random(caster.Level*2)`（RNG 账本不变），
+  但该值未随 `TammingOutcome` 返回 ⇒ `tame_adopt` 由调用方传 `royalty_draw`；表面化归 ⑨-2 第②片（CM_SPELL 接线）。
+- 真机对拍：需窗口（`run_hero_pet_pair.ps1`），本片零起栈、零占端口。

@@ -450,8 +450,24 @@ pub fn is_attack_target_base(attacker: &Entity, target: &Entity) -> bool {
 /// `PlayObject.IsAttackTarget`（`PlayObject.Attack.cs:627`）——按 `AttatckMode` 分派的**玩家版**。
 ///
 /// 未建模分支（报告登记）：`PveServer`（现网 `Server.conf NonPKServer=FALSE` ⇒ 默认不触发）、
-/// `IsGroupMember`/`MyGuild`/`MasterList`（师徒）——本骨架世界无组队/行会/师徒，`result` 不被剔除。
+/// `MyGuild`/`MasterList`（行会/师徒）。无组队注册表 ⇒ 等价于传空成员表（见
+/// [`is_attack_target_player_grouped`]）。
 pub fn is_attack_target_player(attacker: &Entity, target: &Entity) -> bool {
+    is_attack_target_player_grouped(attacker, target, &[])
+}
+
+/// 带组队注册表的 [`is_attack_target_player`]（M3⑦-实现 4）。
+///
+/// `attacker_group_members` = **攻方所在组团长**的成员表（`attacker.GroupOwner == 0` 时传空表）；
+/// oracle `PlayObject.IsGroupMember(target)`（`PlayObject.cs:5158-5175`）：`GroupOwner == 0` ⇒
+/// `false`，否则遍历团长 `GroupMembers` 逐个引用比对。`HAM_GROUP` 支（`PlayObject.Attack.cs:667-673`）：
+/// 先按 `Race` 置 `result`，再 `if (target.Race == ActorRace.Play) if (IsGroupMember(target)) result = false;`
+/// ⇒ **同组玩家被剔除**（不同组/无组照旧可打）。
+pub fn is_attack_target_player_grouped(
+    attacker: &Entity,
+    target: &Entity,
+    attacker_group_members: &[i32],
+) -> bool {
     let mut result = false;
     match attacker.attack_mode {
         ATTACK_MODE_HAM_ALL => {
@@ -482,7 +498,14 @@ pub fn is_attack_target_player(attacker: &Entity, target: &Entity) -> bool {
             if target.race < ACTOR_RACE_NPC || target.race > ACTOR_RACE_PEACE_NPC {
                 result = true;
             }
-            // `IsGroupMember` 未建模（无组队）⇒ 不剔除。
+            // `if (targetObject.Race == ActorRace.Play) { if (IsGroupMember(targetObject)) result = false; }`
+            // （`PlayObject.Attack.cs:671-677`）——`IsGroupMember` 的第一步是 `GroupOwner == 0 ⇒ false`。
+            if target.race == ACTOR_RACE_PLAY
+                && attacker.group_owner != 0
+                && attacker_group_members.contains(&target.id)
+            {
+                result = false;
+            }
         }
         ATTACK_MODE_HAM_GUILD => {
             if target.race < ACTOR_RACE_NPC || target.race > ACTOR_RACE_PEACE_NPC {
@@ -510,8 +533,13 @@ pub fn is_attack_target_player(attacker: &Entity, target: &Entity) -> bool {
 }
 
 /// `PlayObject.IsProperTarget`（`PlayObject.cs:1929`）——**玩家攻方**的判定链。
-fn is_proper_target_play(attacker: &Entity, target: &Entity) -> bool {
-    let mut result = is_attack_target_player(attacker, target);
+/// 带组队注册表的 [`is_proper_target_play`]（M3⑦-实现 4）。
+fn is_proper_target_play_grouped(
+    attacker: &Entity,
+    target: &Entity,
+    attacker_group_members: &[i32],
+) -> bool {
+    let mut result = is_attack_target_player_grouped(attacker, target, attacker_group_members);
     if result {
         if target.race == ACTOR_RACE_PLAY {
             // `if (baseObject.Race == ActorRace.Play) return IsProtectTarget(baseObject);`
@@ -544,6 +572,16 @@ fn is_proper_target_play(attacker: &Entity, target: &Entity) -> bool {
 ///
 /// 顶部折入「已死/幽灵/隐身不可被选为目标」（见本节注释）；其余逐行照 oracle。
 pub fn is_proper_target(attacker: &Entity, target: &Entity) -> bool {
+    is_proper_target_grouped(attacker, target, &[])
+}
+
+/// 带组队注册表的 [`is_proper_target`]（M3⑦-实现 4）：`attacker_group_members` 供
+/// `HAM_GROUP` 的 `IsGroupMember` 剔除用（其它攻击模式忽略它）。
+pub fn is_proper_target_grouped(
+    attacker: &Entity,
+    target: &Entity,
+    attacker_group_members: &[i32],
+) -> bool {
     if attacker.id == target.id {
         return false;
     }
@@ -551,7 +589,7 @@ pub fn is_proper_target(attacker: &Entity, target: &Entity) -> bool {
         return false;
     }
     if attacker.race == ACTOR_RACE_PLAY {
-        return is_proper_target_play(attacker, target);
+        return is_proper_target_play_grouped(attacker, target, attacker_group_members);
     }
     is_attack_target_base(attacker, target)
 }
@@ -726,6 +764,8 @@ pub fn attack(
 }
 
 /// [`attack`] 的带攻方口径版本（M3 战斗线：玩家攻方走 `PlayObject.GetAttackPower` override）。
+///
+/// 无组队注册表 ⇒ 等价于 [`attack_with_grouped`] 传空成员表。
 pub fn attack_with(
     rng: &mut impl RandomSource,
     attacker: &mut Entity,
@@ -733,6 +773,20 @@ pub fn attack_with(
     last_hitter: Option<LastHitter>,
     config: &CombatConfig,
     power_mode: AttackPowerMode,
+) -> AttackOutcome {
+    attack_with_grouped(rng, attacker, target, last_hitter, config, power_mode, &[])
+}
+
+/// [`attack_with`] 的组队感知版本（M3⑦-实现 4）：`attacker_group_members` = 攻方所在组团长的成员表，
+/// 供 `HAM_GROUP` 的 `IsGroupMember` 剔除用（见 [`is_proper_target_grouped`]）。
+pub fn attack_with_grouped(
+    rng: &mut impl RandomSource,
+    attacker: &mut Entity,
+    target: &mut Entity,
+    last_hitter: Option<LastHitter>,
+    config: &CombatConfig,
+    power_mode: AttackPowerMode,
+    attacker_group_members: &[i32],
 ) -> AttackOutcome {
     let power = match power_mode {
         AttackPowerMode::Base => get_base_attack_power(rng, attacker.dc),
@@ -753,7 +807,7 @@ pub fn attack_with(
     let mut n_power = power;
     let mut hit = false;
 
-    if is_proper_target(attacker, target) {
+    if is_proper_target_grouped(attacker, target, attacker_group_members) {
         // `if (targetObject.HitPoint > 0) { if (HitPoint < RandomByte(targetObject.SpeedPoint)) nPower = 0; }`
         if target.hit_point > 0 && attacker.hit_point < rng.random_byte(target.speed_point) {
             n_power = 0;
@@ -852,8 +906,29 @@ pub fn attack_dir(
     last_hitter: Option<LastHitter>,
     config: &CombatConfig,
 ) -> AttackOutcome {
+    attack_dir_grouped(rng, attacker, target, last_hitter, config, &[])
+}
+
+/// [`attack_dir`] 的组队感知版本（M3⑦-实现 4）：`attacker_group_members` 供 `HAM_GROUP` 的
+/// `IsGroupMember` 剔除用（`PlayObject.Attack.cs:667-673`）；其余口径与 [`attack_dir`] 相同。
+pub fn attack_dir_grouped(
+    rng: &mut impl RandomSource,
+    attacker: &mut Entity,
+    target: &mut Entity,
+    last_hitter: Option<LastHitter>,
+    config: &CombatConfig,
+    attacker_group_members: &[i32],
+) -> AttackOutcome {
     let mode = AttackPowerMode::for_attacker(attacker);
-    let outcome = attack_with(rng, attacker, target, last_hitter, config, mode);
+    let outcome = attack_with_grouped(
+        rng,
+        attacker,
+        target,
+        last_hitter,
+        config,
+        mode,
+        attacker_group_members,
+    );
     if matches!(mode, AttackPowerMode::Player { .. }) {
         // `AttackSuccess(..., targetObject)`：目标非空 ⇒ 抽 `Random(5)`（`PlayObject.Attack.cs:225`）。
         let _ = attack_success_weapon_damage(rng);
@@ -961,8 +1036,24 @@ pub fn award_kill_exp(
         mon_exp,
         config.high_level_kill_mon_fix_exp,
     );
+    win_exp(killer, monster_exp, need_exps, config, map_exp_rate)
+}
+
+/// `PlayObject.WinExp(int dwExp)`（`PlayObject.Base.cs:129-147`）+ `GetExp`（`:149-165`）
+/// 的乘法 + 升级段（M3⑦-实现 4 从 [`award_kill_exp`] 拆出，供组队分配逐成员调用）。
+///
+/// 入参 `dw_exp` = **乘倍率之前**的值（oracle `GainExp` 传给每个成员的
+/// `HUtil32.Round(dwExp/n)` 就是原值；`KillTargetTrigger` 传给 `GainExp` 的是
+/// `CalcGetExp` 的结果）。返回 `(乘完倍率后的实际加值, 是否进升级块, 升级后等级)`。
+pub fn win_exp(
+    killer: &mut Entity,
+    dw_exp: i32,
+    need_exps: &[i32],
+    config: &CombatConfig,
+    map_exp_rate: Option<i32>,
+) -> (i32, bool, u8) {
     // WinExp：等级超过 LimitExpLevel 时给固定值（本骨架 LimitExpLevel=1000，实际不触发）
-    let mut dw_exp = monster_exp;
+    let mut dw_exp = dw_exp;
     if dw_exp > 0 {
         dw_exp *= config.kill_mon_exp_multiple;
         dw_exp *= config.mn_kill_mon_exp_multiple;
