@@ -64,4 +64,5 @@ python -I tools/evidence-hash/verify_sha256sums.py --check-extra --exclude READM
 | `09`–`12-gate-*.txt` | 四门禁（fmt0 / clippy0 / 92 suites 832 passed 0 failed 19 ignored / msgcodegen 604） |
 | `13-eolcheck.txt` | 仓库 LF 口径 EOL 检查 |
 | `14-boundary.txt` | 写集边界（零 `.rs`/零 `src sql MirClient`） |
+| `15-clean-checkout-repro.txt` | 干净检出（detached worktree @ patch head）上复核 `verify`/`eolcheck`/`--check-extra` 全绿 |
 | `repro/*` | 门正/负样本的可复跑输入（tsv/jsonl） |
