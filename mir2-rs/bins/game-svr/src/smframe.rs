@@ -227,6 +227,17 @@ pub fn sm_winexp(total_exp: i32, delta: i32) -> Vec<u8> {
     gm_data_body(header, &[])
 }
 
+/// `SM_LEVELUP`（`PlayObject.Message.cs:1670-1671` 的 `case RM_LEVELUP`）：
+/// `MakeMessage(SM_LEVELUP, Abil.Exp, Abil.Level, 0, 0)` + `SendSocket`（无尾）。
+/// 发点 = `PlayObject.cs:5247` 的 `HasLevelUp`（`SendMsg(RM_LEVELUP, 0, Abil.Exp, 0, 0)`）。
+///
+/// ⇒ `Recog = 加完后的 Abil.Exp`（**总量**）、`Param = Abil.Level`、`Tag/Series = 0`、无尾。
+#[must_use]
+pub fn sm_levelup(exp: i32, level: u8) -> Vec<u8> {
+    let header = command_header(exp, messages::SM_LEVELUP, u16::from(level), 0, 0);
+    gm_data_body(header, &[])
+}
+
 /// 见 [`sm_additem`] 段的口径表。
 #[must_use]
 pub fn sm_goldchanged(gold: i32, game_gold: i32) -> Vec<u8> {

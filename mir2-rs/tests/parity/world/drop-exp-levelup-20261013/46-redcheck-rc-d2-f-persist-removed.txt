@@ -1,0 +1,27 @@
+# RC-D2-F（F-2 落库红检）：build_save_record 删掉 rec.data.body_luck = sg.equip.body_luck
+# 命令：cargo test -p game-svr --offline --bin game-svr -- body_luck_accumulates_on_getexp_and_persists
+
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.09s
+     Running unittests src\main.rs (E:/tmp/m2svr-d2-target\debug\deps\game_svr-eb39968088e3f1ec.exe)
+
+running 1 test
+test tests::body_luck_accumulates_on_getexp_and_persists ... FAILED
+
+failures:
+
+---- tests::body_luck_accumulates_on_getexp_and_persists stdout ----
+
+thread 'tests::body_luck_accumulates_on_getexp_and_persists' (13692) panicked at bins\game-svr\src\main.rs:8904:9:
+assertion `left == right` failed: characters.BodyLuck 必须带出会话的实时 BodyLuck
+  left: 3.141592653589793
+ right: 5000.0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::body_luck_accumulates_on_getexp_and_persists
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 162 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`

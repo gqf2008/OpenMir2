@@ -1,0 +1,351 @@
+# 01-oracle-anchors.txt — 冻结 src/ 的死亡掉落链（只读证据，逐行）
+
+## A. ItemId 赋值点：全仓唯一，且被注释
+$ rg -n "ItemId" src --include=*.cs
+src/GameSrv/Npc/Merchant.cs:223:                        nIndex = SystemShare.ItemSystem.GetStdItemIdx(goods.ItemName);
+src/GameSrv/Npc/Merchant.cs:254:                            nIndex = SystemShare.ItemSystem.GetStdItemIdx(goods.ItemName);
+src/M2Server/Actor/BaseObject.cs:570:                    SendRefMsg(Messages.RM_ITEMSHOW, mapItem.Looks, mapItem.ItemId, dx, dy, mapItem.Name);
+src/M2Server/Actor/BaseObject.cs:752:                SendRefMsg(Messages.RM_ITEMSHOW, mapItem.Looks, mapItem.ItemId, nX, nY, mapItem.Name);
+src/M2Server/Items/GameItemSystem.cs:20:        public StdItem GetStdItem(ushort nItemIdx)
+src/M2Server/Items/GameItemSystem.cs:23:            nItemIdx -= 1;
+src/M2Server/Items/GameItemSystem.cs:24:            if (nItemIdx >= 0 && StdItemList.Count > nItemIdx)
+src/M2Server/Items/GameItemSystem.cs:26:                result = StdItemList[nItemIdx];
+src/M2Server/Items/GameItemSystem.cs:55:        public int GetStdItemWeight(int nItemIdx)
+src/M2Server/Items/GameItemSystem.cs:58:            nItemIdx -= 1;
+src/M2Server/Items/GameItemSystem.cs:59:            if (nItemIdx >= 0 && StdItemList.Count > nItemIdx)
+src/M2Server/Items/GameItemSystem.cs:61:                result = StdItemList[nItemIdx].Weight;
+src/M2Server/Items/GameItemSystem.cs:82:        public string GetStdItemName(int nItemIdx)
+src/M2Server/Items/GameItemSystem.cs:85:            nItemIdx -= 1;
+src/M2Server/Items/GameItemSystem.cs:86:            if (nItemIdx >= 0 && StdItemList.Count > nItemIdx)
+src/M2Server/Items/GameItemSystem.cs:88:                result = StdItemList[nItemIdx].Name;
+src/M2Server/Items/GameItemSystem.cs:93:        public ushort GetStdItemIdx(string sItemName)
+src/M2Server/M2Share.cs:977:                            nItemIdx = nItemIndex,
+src/M2Server/M2Share.cs:1000:            //        SaveList.Add((ItemBind.nItemIdx).ToString() + "\t" + (ItemBind.nMakeIdex).ToString() + "\t" + ItemBind.sBindName);
+src/M2Server/M2Share.cs:1042:                            nItemIdx = nItemIndex,
+src/M2Server/M2Share.cs:1066:            //        SaveList.Add((ItemBind.nItemIdx).ToString() + "\t" + (ItemBind.nMakeIdex).ToString() + "\t" + ItemBind.sBindName);
+src/M2Server/M2Share.cs:1110:                            nItemIdx = nItemIndex,
+src/M2Server/M2Share.cs:1134:            //        SaveList.Add((ItemBind.nItemIdx).ToString() + "\t" + (ItemBind.nMakeIdex).ToString() + "\t" + ItemBind.sBindName);
+src/M2Server/M2Share.cs:1437:            string sItemIdx = string.Empty;
+src/M2Server/M2Share.cs:1453:                    sLineText = HUtil32.GetValidStr3(sLineText, ref sItemIdx, new[] { ' ', '/', ',', '\t' });
+src/M2Server/M2Share.cs:1454:                    int nItemIdx = HUtil32.StrToInt(sItemIdx, -1);
+src/M2Server/M2Share.cs:1455:                    if ((!string.IsNullOrEmpty(sItemName)) && (nItemIdx >= 0))
+src/M2Server/M2Share.cs:1457:                        DisableTakeOffList.Add(nItemIdx, sItemName);
+src/M2Server/M2Share.cs:1482:        public static bool InDisableTakeOffList(int nItemIdx)
+src/M2Server/M2Share.cs:1484:            return DisableTakeOffList.ContainsKey(nItemIdx - 1);
+src/M2Server/Maps/Envirnoment.cs:90:            if (mapItem.ItemId == 0)
+src/M2Server/Maps/Envirnoment.cs:120:                                    if (cellItem.ItemId == 0)
+src/M2Server/Maps/Envirnoment.cs:152:                            CellObjId = mapItem.ItemId,
+src/M2Server/Player/PlayObject.Base.cs:78:                if (Envir.DeleteFromMap(CurrX, CurrY, CellType.Item, mapItem.ItemId, null) == 1)
+src/M2Server/Player/PlayObject.Base.cs:82:                        SendRefMsg(Messages.RM_ITEMHIDE, 0, mapItem.ItemId, CurrX, CurrY, "");
+src/M2Server/Player/PlayObject.Base.cs:99:                if (Envir.DeleteFromMap(CurrX, CurrY, CellType.Item, mapItem.ItemId, null) == 1)
+src/M2Server/Player/PlayObject.Base.cs:105:                        SendMsg(Messages.RM_ITEMHIDE, 0, mapItem.ItemId, CurrX, CurrY);
+src/M2Server/Player/PlayObject.Base.cs:3139:                if (itemBind.nMakeIdex == userItem.MakeIndex && itemBind.nItemIdx == userItem.Index)
+src/M2Server/Player/PlayObject.Base.cs:3156:                if (itemBind.nMakeIdex == userItem.MakeIndex && itemBind.nItemIdx == userItem.Index)
+src/M2Server/Player/PlayObject.Base.cs:3173:                if (itemBind.nMakeIdex == userItem.MakeIndex && itemBind.nItemIdx == userItem.Index)
+src/M2Server/Player/PlayObject.cs:3155:                                        if (mapItem.ItemId == 0)
+src/M2Server/Player/PlayObject.cs:3257:                        SendMsg(Messages.RM_ITEMHIDE, 0, visibleMapItem.MapItem.ItemId, visibleMapItem.nX, visibleMapItem.nY);
+src/M2Server/Player/PlayObject.cs:3264:                        SendMsg(Messages.RM_ITEMSHOW, visibleMapItem.wLooks, visibleMapItem.MapItem.ItemId, visibleMapItem.nX, visibleMapItem.nY, visibleMapItem.sName);
+src/M2Server/Player/PlayObject.Operate.cs:251:        private bool ClientDropItem(string sItemName, int nItemIdx)
+src/M2Server/Player/PlayObject.Operate.cs:274:                    if (userItem != null && userItem.MakeIndex == nItemIdx)
+src/M2Server/Player/PlayObject.Operate.cs:377:        private void ClientTakeOnItems(byte btWhere, int nItemIdx, string sItemName)
+src/M2Server/Player/PlayObject.Operate.cs:387:                if (userItem != null && userItem.MakeIndex == nItemIdx)
+src/M2Server/Player/PlayObject.Operate.cs:499:        private void ClientTakeOffItems(byte btWhere, int nItemIdx, string sItemName)
+src/M2Server/Player/PlayObject.Operate.cs:506:                    if (UseItems[btWhere].MakeIndex == nItemIdx)
+src/M2Server/Player/PlayObject.Operate.cs:601:        private void ClientUseItems(int nItemIdx, string sItemName)
+src/M2Server/Player/PlayObject.Operate.cs:613:                        if (userItem != null && userItem.MakeIndex == nItemIdx)
+src/M2Server/Player/PlayObject.Operate.cs:964:        private void ClientAddDealItem(int nItemIdx, string sItemName)
+src/M2Server/Player/PlayObject.Operate.cs:981:                    if (userItem.MakeIndex == nItemIdx)
+src/M2Server/Player/PlayObject.Operate.cs:1001:        private void ClientDelDealItem(int nItemIdx, string sItemName)
+src/M2Server/Player/PlayObject.Operate.cs:1024:                    if (userItem.MakeIndex == nItemIdx)
+src/M2Server/Player/PlayObject.Operate.cs:1608:        private void ClientStorageItem(int actorId, int nItemIdx, string sMsg)
+src/M2Server/Player/PlayObject.Operate.cs:1625:                if (userItem.MakeIndex == nItemIdx && string.Compare(sUserItemName, sMsg, StringComparison.OrdinalIgnoreCase) == 0) // 检查NPC是否允许存物品
+src/M2Server/Player/PlayObject.Operate.cs:1656:        private void ClientTakeBackStorageItem(int actorId, int nItemIdx, string sMsg)
+src/M2Server/Player/PlayObject.Operate.cs:1678:                if (userItem.MakeIndex == nItemIdx && string.Compare(sUserItemName, sMsg, StringComparison.OrdinalIgnoreCase) == 0)
+src/M2Server/Player/PlayObject.Operate.cs:1688:                                SendDefMessage(Messages.SM_TAKEBACKSTORAGEITEM_OK, nItemIdx, 0, 0, 0);
+src/M2Server/Player/PlayObject.Sale.cs:60:        private void ClientAddSellOffItem(int nItemIdx, string sItemName)
+src/M2Server/Player/PlayObject.Sale.cs:62:            if (nItemIdx <= 0 || string.IsNullOrEmpty(sItemName))
+src/M2Server/Player/PlayObject.Sale.cs:87:                    if (userItem.MakeIndex == nItemIdx)
+src/M2Server/Player/PlayObject.Sale.cs:127:        private void ClientDelSellOffItem(int nItemIdx, string sItemName)
+src/M2Server/Player/PlayObject.Sale.cs:129:            if (nItemIdx <= 0 || string.IsNullOrEmpty(sItemName))
+src/M2Server/Player/PlayObject.Sale.cs:154:                    if (userItem.MakeIndex == nItemIdx)
+src/Modules/GameCommand/Commands/BindUseItemCommand.cs:24:            int nItem = SystemShare.GetUseItemIdx(sItem);
+src/Modules/GameCommand/Commands/BindUseItemCommand.cs:59:            int nItemIdx = userItem.Index;
+src/Modules/GameCommand/Commands/BindUseItemCommand.cs:75:                            if (itemBind.nItemIdx == nItemIdx && itemBind.nMakeIdex == nMakeIdex)
+src/Modules/GameCommand/Commands/BindUseItemCommand.cs:85:                            itemBind.nItemIdx = nItemIdx;
+src/Modules/GameCommand/Commands/BindUseItemCommand.cs:113:                            if (itemBind.nItemIdx == nItemIdx && itemBind.nMakeIdex == nMakeIdex)
+src/Modules/GameCommand/Commands/BindUseItemCommand.cs:123:                            itemBind.nItemIdx = nItemIdx;
+src/Modules/GameCommand/Commands/BindUseItemCommand.cs:152:                            if (itemBind.nItemIdx == nItemIdx && itemBind.nMakeIdex == nMakeIdex)
+src/Modules/GameCommand/Commands/BindUseItemCommand.cs:162:                            itemBind.nItemIdx = nItemIdx;
+src/Modules/GameCommand/Commands/BindUseItemCommand.cs:187:                        //if ((ItemBind.nItemIdx == nItemIdx) && (ItemBind.sBindName == sBindName))
+src/Modules/GameCommand/Commands/BindUseItemCommand.cs:195:                        nItemIdx = nItemIdx,
+src/Modules/GameCommand/Commands/UnBindUseItemCommand.cs:24:            //int nItem = M2Share.GetUseItemIdx(sItem);
+src/Modules/GameCommand/Commands/UnBindUseItemCommand.cs:27:            //int nItemIdx;
+src/Modules/GameCommand/Commands/UnBindUseItemCommand.cs:66:            //nItemIdx = UserItem.Index;
+src/Modules/GameCommand/Commands/UnBindUseItemCommand.cs:80:            //                    if ((ItemBind.nItemIdx == nItemIdx) && (ItemBind.nMakeIdex == nMakeIdex))
+src/Modules/GameCommand/Commands/UnBindUseItemCommand.cs:88:            //            ItemBind.nItemIdx = nItemIdx;
+src/Modules/GameCommand/Commands/UnBindUseItemCommand.cs:111:            //                    //if ((ItemBind.nItemIdx == nItemIdx) && (ItemBind.nMakeIdex == nMakeIdex))
+src/Modules/GameCommand/Commands/UnBindUseItemCommand.cs:119:            //            ItemBind.nItemIdx = nItemIdx;
+src/Modules/GameCommand/Commands/UnBindUseItemCommand.cs:142:            //                    //if ((ItemBind.nItemIdx == nItemIdx) && (ItemBind.nMakeIdex == nMakeIdex))
+src/Modules/GameCommand/Commands/UnBindUseItemCommand.cs:150:            //            ItemBind.nItemIdx = nItemIdx;
+src/Modules/GameCommand/Commands/UnBindUseItemCommand.cs:173:            //                    //if ((ItemBind.nItemIdx == nItemIdx) && (ItemBind.sBindName == sBindName))
+src/Modules/GameCommand/Commands/UnBindUseItemCommand.cs:181:            //            ItemBind.nItemIdx = nItemIdx;
+src/Modules/GoldDealSystem/Service/GoldDealService.cs:57:        private void ClientAddSellOffItem(IPlayerActor playerActor, int nItemIdx, string sItemName)
+src/Modules/GoldDealSystem/Service/GoldDealService.cs:59:            if (nItemIdx <= 0 || string.IsNullOrEmpty(sItemName))
+src/Modules/GoldDealSystem/Service/GoldDealService.cs:84:                    if (userItem.MakeIndex == nItemIdx)
+src/Modules/GoldDealSystem/Service/GoldDealService.cs:124:        private void ClientDelSellOffItem(IPlayerActor playerActor, int nItemIdx, string sItemName)
+src/Modules/GoldDealSystem/Service/GoldDealService.cs:126:            if (nItemIdx <= 0 || string.IsNullOrEmpty(sItemName))
+src/Modules/GoldDealSystem/Service/GoldDealService.cs:151:                    if (userItem.MakeIndex == nItemIdx)
+src/Modules/RobotSystem/Services/RobotPlayer.Base.cs:547:                                                if (mapItem.ItemId == 0)
+src/Modules/RobotSystem/Services/RobotPlayer.cs:496:                if (Envir.DeleteFromMap(nX, nY, CellType.Item, mapItem.ItemId, null) == 1)
+src/Modules/RobotSystem/Services/RobotPlayer.cs:500:                        SendRefMsg(Messages.RM_ITEMHIDE, 0, mapItem.ItemId, nX, nY, "");
+src/Modules/RobotSystem/Services/RobotPlayer.cs:523:                    if (Envir.DeleteFromMap(nX, nY, CellType.Item, mapItem.ItemId, null) == 1)
+src/Modules/RobotSystem/Services/RobotPlayer.cs:537:                                SendRefMsg(Messages.RM_ITEMHIDE, 0, mapItem.ItemId, nX, nY, "");
+src/Modules/RobotSystem/Services/RobotPlayer.cs:580:                    if (SelMapItem.ItemId > 0)
+src/Modules/RobotSystem/Services/RobotPlayer.cs:600:                    if (SelMapItem.ItemId > 0)
+src/Modules/RobotSystem/Services/RobotPlayer.cs:611:                    if (SelMapItem.ItemId > 0)
+src/Modules/RobotSystem/Services/RobotPlayer.cs:637:                                    if (mapItem.ItemId > 0)
+src/Modules/RobotSystem/Services/RobotPlayer.cs:662:                        if (SelMapItem.ItemId > 0)
+src/Modules/ScriptEngine/Processings/ExecutionProcessingSys.cs:4878:            if (SystemShare.ItemSystem.GetStdItemIdx(sItemName) > 0)
+src/Modules/ScriptEngine/Processings/ExecutionProcessingSys.cs:5703:                            normNpc.SendRefMsg(Messages.RM_ITEMSHOW, mapItem.Looks, mapItem.ItemId, dX, dY, mapItem.Name + "@0");
+src/Modules/ScriptEngine/Processings/ExecutionProcessingSys.cs:5756:                                    // normNpc.SendRefMsg(Messages.RM_ITEMSHOW, mapItem.Looks, mapItem.ItemId, dX, dY, mapItem.Name + nameCorlr);
+src/Modules/ScriptEngine/ScriptEngine.cs:704:            if (SystemShare.ItemSystem.GetStdItemIdx(sItemName) > 0)
+src/Modules/SystemModule/Data/MapItem.cs:10:        public int ItemId;
+src/Modules/SystemModule/Data/MapItem.cs:41:            // this.ItemId = M2Share.ActorMgr.GetNextIdentity();
+src/Modules/SystemModule/SubSystem/IItemSystem.cs:16:        ushort GetStdItemIdx(string itemName);
+src/Modules/SystemModule/SubSystem/IItemSystem.cs:22:        StdItem GetStdItem(ushort nItemIdx);
+src/Modules/SystemModule/SubSystem/IItemSystem.cs:24:        int GetStdItemWeight(int nItemIdx);
+src/Modules/SystemModule/SystemShare.cs:889:                            nItemIdx = nItemIndex,
+src/Modules/SystemModule/SystemShare.cs:912:            //        SaveList.Add((ItemBind.nItemIdx).ToString() + "\t" + (ItemBind.nMakeIdex).ToString() + "\t" + ItemBind.sBindName);
+src/Modules/SystemModule/SystemShare.cs:954:                            nItemIdx = nItemIndex,
+src/Modules/SystemModule/SystemShare.cs:978:            //        SaveList.Add((ItemBind.nItemIdx).ToString() + "\t" + (ItemBind.nMakeIdex).ToString() + "\t" + ItemBind.sBindName);
+src/Modules/SystemModule/SystemShare.cs:1022:                            nItemIdx = nItemIndex,
+src/Modules/SystemModule/SystemShare.cs:1046:            //        SaveList.Add((ItemBind.nItemIdx).ToString() + "\t" + (ItemBind.nMakeIdex).ToString() + "\t" + ItemBind.sBindName);
+src/Modules/SystemModule/SystemShare.cs:1349:            string sItemIdx = string.Empty;
+src/Modules/SystemModule/SystemShare.cs:1365:                    sLineText = HUtil32.GetValidStr3(sLineText, ref sItemIdx, new[] { ' ', '/', ',', '\t' });
+src/Modules/SystemModule/SystemShare.cs:1366:                    int nItemIdx = HUtil32.StrToInt(sItemIdx, -1);
+src/Modules/SystemModule/SystemShare.cs:1367:                    if ((!string.IsNullOrEmpty(sItemName)) && (nItemIdx >= 0))
+src/Modules/SystemModule/SystemShare.cs:1369:                        DisableTakeOffList.Add(nItemIdx, sItemName);
+src/Modules/SystemModule/SystemShare.cs:1394:        public static bool InDisableTakeOffList(int nItemIdx)
+src/Modules/SystemModule/SystemShare.cs:1396:            return DisableTakeOffList.ContainsKey(nItemIdx - 1);
+src/Modules/SystemModule/SystemShare.cs:1834:        public static int GetUseItemIdx(string sName)
+src/OpenMir2/Data/ItemBind.cs:6:        public int nItemIdx;
+
+## B. AddItemToMap 首行门
+$ sed -n "85,95p" src/M2Server/Maps/Envirnoment.cs
+            return true;
+        }
+
+        public bool AddItemToMap(int nX, int nY, MapItem mapItem)
+        {
+            if (mapItem.ItemId == 0)
+            {
+                return false;
+            }
+            if (!CellMatch(nX, nY))
+            {
+
+## C. DropItemDown（物品）
+$ sed -n "522,580p" src/M2Server/Actor/BaseObject.cs
+                    pX = nOrgX;
+                    pY = nOrgY;
+                }
+            }
+            return result;
+        }
+
+        public bool DropItemDown(UserItem userItem, int nScatterRange, bool boDieDrop, int itemOfCreat, int dropCreat)
+        {
+            if (userItem == null)
+            {
+                return false;
+            }
+            bool result = false;
+            short dx = 0;
+            short dy = 0;
+            StdItem stdItem = SystemShare.ItemSystem.GetStdItem(userItem.Index);
+            if (stdItem != null)
+            {
+                if (stdItem.StdMode == 40)
+                {
+                    ushort idura = userItem.Dura;
+                    idura = (ushort)(idura - 2000);
+                    if (idura <= 0)
+                    {
+                        idura = 0;
+                    }
+                    userItem.Dura = idura;
+                }
+                MapItem mapItem = new MapItem
+                {
+                    UserItem = new UserItem(userItem),
+                    Name = CustomItemSystem.GetItemName(userItem),// 取自定义物品名称
+                    Looks = stdItem.Looks
+                };
+                if (stdItem.StdMode == 45)
+                {
+                    mapItem.Looks = (ushort)M2Share.GetRandomLook(mapItem.Looks, stdItem.Shape);
+                }
+                mapItem.AniCount = stdItem.AniCount;
+                mapItem.Reserved = 0;
+                mapItem.Count = 1;
+                mapItem.OfBaseObject = itemOfCreat;
+                mapItem.CanPickUpTick = HUtil32.GetTickCount();
+                mapItem.DropBaseObject = dropCreat;
+                GetDropPosition(CurrX, CurrY, nScatterRange, ref dx, ref dy);
+                if (Envir.AddItemToMap(dx, dy, mapItem))
+                {
+                    SendRefMsg(Messages.RM_ITEMSHOW, mapItem.Looks, mapItem.ItemId, dx, dy, mapItem.Name);
+                    int logcap = boDieDrop ? 15 : 7;
+                    if (!M2Share.IsCheapStuff(stdItem.StdMode))
+                    {
+                        if (stdItem.NeedIdentify == 1)
+                        {
+                            // M2Share.EventSource.AddEventLog(logcap, MapName + "\t" + CurrX + "\t" + CurrY + "\t" + ChrName + "\t" + stdItem.Name + "\t" + userItem.MakeIndex + "\t" +HUtil32.BoolToIntStr(Race == ActorRace.Play) + "\t" + '0');
+                        }
+                    }
+                    result = true;
+                }
+
+## D. DropGoldDown（金币）
+$ sed -n "730,768p" src/M2Server/Actor/BaseObject.cs
+        public void RefNameColor()
+        {
+            SendRefMsg(Messages.RM_CHANGENAMECOLOR, 0, 0, 0, 0, "");
+        }
+
+        protected bool DropGoldDown(int nGold, bool boFalg, int goldOfCreat, int dropGoldCreat)
+        {
+            bool result = false;
+            short nX = 0;
+            short nY = 0;
+            MapItem mapItem = new MapItem
+            {
+                Name = Grobal2.StringGoldName,
+                Count = nGold,
+                Looks = M2Share.GetGoldShape(nGold),
+                OfBaseObject = goldOfCreat,
+                CanPickUpTick = HUtil32.GetTickCount(),
+                DropBaseObject = dropGoldCreat
+            };
+            GetDropPosition(CurrX, CurrY, 3, ref nX, ref nY);
+            if (Envir.AddItemToMap(nX, nY, mapItem))
+            {
+                SendRefMsg(Messages.RM_ITEMSHOW, mapItem.Looks, mapItem.ItemId, nX, nY, mapItem.Name);
+                if (Race == ActorRace.Play)
+                {
+                    if (boFalg)
+                    {
+                    }
+                    else
+                    {
+                    }
+                    if (M2Share.GameLogGold)
+                    {
+                        //  M2Share.EventSource.AddEventLog(s20, MapName + "\t" + CurrX + "\t" + CurrY + "\t" + ChrName + "\t" + Grobal2.StringGoldName + "\t" + nGold + "\t" + HUtil32.BoolToIntStr(Race == ActorRace.Play) + "\t" + '0');
+                    }
+                }
+                result = true;
+            }
+            return result;
+
+## E. DieDropItems + RM_DIEDROPITEM 分发
+$ sed -n "2450,2464p" src/M2Server/Actor/BaseObject.cs
+        private void DieDropItems(int actorId)
+        {
+            if (!Envir.Flag.FightZone && !Envir.Flag.Fight3Zone && !this.Animal)
+            {
+                this.DropUseItems(actorId);
+                if (Master == null && (!NoItem || !Envir.Flag.NoDropItem))
+                {
+                    this.ScatterBagItems(actorId);
+                }
+                if (this.Race >= ActorRace.Animal && Master == null && (!NoItem || !Envir.Flag.NoDropItem))
+                {
+                    this.ScatterGolds(actorId);
+                }
+            }
+        }
+$ sed -n "764,768p" src/M2Server/Actor/BaseObject.Base.cs
+                        MakeOpenHealth();
+                        break;
+                    case Messages.RM_DIEDROPITEM:
+                        DieDropItems(processMsg.wParam);
+                        break;
+
+## F. RM_ITEMSHOW -> SM_ITEMSHOW（仅在 AddItemToMap 成功支）
+$ sed -n "1742,1747p" src/M2Server/Player/PlayObject.Message.cs
+                    SendSocket(ClientMsg);
+                    break;
+                case Messages.RM_ITEMSHOW:
+                    SendDefMessage(Messages.SM_ITEMSHOW, processMsg.nParam1, processMsg.nParam2, processMsg.nParam3, processMsg.wParam, processMsg.Msg);
+                    break;
+                case Messages.RM_ITEMHIDE:
+
+## G. GetDropPosition 是纯格子扫描（返回前无随机数调用）
+$ sed -n "459,524p" src/M2Server/Actor/BaseObject.cs
+            FixColorIdx = 0;
+            FixStatus = -1;
+            FastParalysis = false;
+            NastyMode = false;
+            SystemShare.ActorMgr.Add(this);
+        }
+
+        /// <summary>
+        /// 获取物品掉落位置
+        /// </summary>
+        /// <returns></returns>
+        private bool GetDropPosition(short nOrgX, short nOrgY, int nRange, ref short pX, ref short pY)
+        {
+            bool result = false;
+            int nItemCount = 0;
+            int n24 = 999;
+            short n28 = 0;
+            short n2C = 0;
+            for (int i = 0; i < nRange; i++)
+            {
+                for (int ii = -i; ii <= i; ii++)
+                {
+                    for (int iii = -i; iii <= i; iii++)
+                    {
+                        pX = (short)(nOrgX + iii + 1);
+                        pY = (short)(nOrgY + ii + 1);
+                        if (Envir.GetItemEx(pX, pY, ref nItemCount) == 0)
+                        {
+                            if (Envir.ChFlag)
+                            {
+                                result = true;
+                                break;
+                            }
+                        }
+                        else
+                        {
+                            if (Envir.ChFlag && n24 > nItemCount)
+                            {
+                                n24 = nItemCount;
+                                n28 = pX;
+                                n2C = pY;
+                            }
+                        }
+                    }
+                    if (result)
+                    {
+                        break;
+                    }
+                }
+                if (result)
+                {
+                    break;
+                }
+            }
+            if (!result)
+            {
+                if (n24 < 8)
+                {
+                    pX = n28;
+                    pY = n2C;
+                }
+                else
+                {
+                    pX = nOrgX;
+                    pY = nOrgY;
+                }

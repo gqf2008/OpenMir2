@@ -1,0 +1,25 @@
+# 边界：oracle（src/ sql/ MirClient）冻结 —— 本片零改动
+
+$ git diff origin/master..HEAD --stat -- src sql MirClient
+
+(空 = 冻结)
+
+# 交付树相对 origin/master（a443296e）的全部差异 = 分支 drop-exp-host 上的 D①/D②/掉落侧 + 本片 F-1/F-2
+#   代码：mir2-rs/bins/game-svr/src/{main,smframe}.rs + mir2-rs/crates/world/src/{combat,world}.rs
+#          （其中 main.rs 含本片 F-1/F-2；smframe/combat/world 为 D② 既有）
+#   证据：mir2-rs/tests/parity/world/drop-exp-levelup-20261013/**（本片）
+#         + mir2-rs/tests/parity/world/drop-exp-drop-side-20261013/**（上一片掉落侧锚定，零 .rs）
+
+$ git diff origin/master..HEAD --name-only -- mir2-rs/bins mir2-rs/crates
+mir2-rs/bins/game-svr/src/main.rs
+mir2-rs/bins/game-svr/src/smframe.rs
+mir2-rs/crates/world/src/combat.rs
+mir2-rs/crates/world/src/world.rs
+
+# 本片（F-1/F-2）代码提交：
+$ git show --stat --oneline 5087625c
+5087625c fix(m3-drop-exp): F-1 补同 tick 53 去重（SendUpdateMsg 语义）+ 证据/红检
+ mir2-rs/bins/game-svr/src/main.rs                  | …（升级链两段 + drain_kill_exp_chain + drain_recovery 去重参数 + AddBodyLuck）
+# 上一笔：0efd8ddc fix(m3-drop-exp): F-1 升级链帧序… + F-2 AddBodyLuck 建模
+# 交付前 merge：$ git log --oneline -1 bdc53848
+bdc53848 Merge remote-tracking branch 'origin/master' into drop-exp-host

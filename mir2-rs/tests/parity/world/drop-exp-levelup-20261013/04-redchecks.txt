@@ -1,0 +1,16 @@
+M3④-D② 改坏必红（8 条；原始件 40/41/42 = D② 三条，44/45/46/47 = F-1/F-2 四条，48 = F-1 同 tick 去重）
+每次：备份 → 变异 → 跑命中用例（输出原样落对应文件）→ 还原 → sha256 核对。
+
+| 编号 | 变异（文件） | 必红用例 | rc |
+| --- | --- | --- | --- |
+| RC-D2-A | `sm_levelup` 头 recog/param 交换：`command_header(exp, SM_LEVELUP, u16::from(level), …)` → `command_header(i32::from(level), SM_LEVELUP, exp as u16, …)`（smframe.rs） | `levelup_downlink_sends_levelup_frames_heals_and_syncs_entity` | 101（FAILED） |
+| RC-D2-B | 删掉 `drain_levelup_healthspell` 的 `IncHealthSpell(2000,2000)` 段（main.rs） | 同上（`hp == max_hp` 断言） | 101（FAILED） |
+| RC-D2-C | 删掉 `drain_levelup_healthspell` 的 `recalc_session_ability(sg, catalog)`（main.rs） | 同上（`max_hp > 0` 断言） | 101（FAILED） |
+| **RC-D2-D** | **F-1**：交换 `drain_kill_exp_chain` 前两行（`drain_combat_downlink` ↔ `drain_levelup_healthspell`）⇒ 53 落到 44 之后（main.rs） | `levelup_downlink_sends_levelup_frames_heals_and_syncs_entity`（idents 序断言） | 101（FAILED） |
+| **RC-D2-E** | **F-2**：`add_body_luck` 的 `round_ties_even()` → `round()`（main.rs） | `add_body_luck_matches_oracle_vectors`（2500/5000=0.5 ⇒ 期望 level 0，实得 1） | 101（FAILED） |
+| **RC-D2-F** | **F-2**：`build_save_record` 删掉 `rec.data.body_luck = sg.equip.body_luck;`（main.rs） | `body_luck_accumulates_on_getexp_and_persists`（存档断言：left=π(3.14159…) / right=5000.0） | 101（FAILED） |
+| **RC-D2-G** | **F-2**：删掉升级块 `AddBodyLuck(100)`（main.rs） | `levelup_downlink_sends_levelup_frames_heals_and_syncs_entity`（left=1.0 / right=101.0） | 101（FAILED） |
+| **RC-D2-H** | **F-1 去重**：删掉 `drain_recovery` 的 `superseded_healthspell.contains(...)` 分支（main.rs） | `recovery_healthspell_is_superseded_by_levelup_in_same_tick`（① 断言「不得回帧」红） | 101（FAILED） |
+
+还原后 `bins/game-svr/src/main.rs`（sha256 0606c9c5…）与 `bins/game-svr/src/smframe.rs`（sha256 2c69f7d8…）
+与变异前**逐字节一致**（43-redcheck-restore-sha256.txt），4 条命中用例重跑全 ok。

@@ -1,0 +1,33 @@
+# 03-options-impact.txt — 两条路的影响面 + 方案 A 的 diffstat（本卡写集内那半）
+
+## 方案 A：死亡掉落不落地（对齐 src/ + T-19/T-25）
+$ git apply --stat optionA-no-landing-align.patch
+ mir2-rs/bins/game-svr/src/main.rs |   63 +++++---------
+ mir2-rs/crates/world/src/world.rs |  170 +++++++++++++++++--------------------
+ 2 files changed, 104 insertions(+), 129 deletions(-)
+
+### 文件级影响
+- 写集内（本卡）：
+  - crates/world/src/world.rs      : settle_deaths 去掉落格；删 place_floor_item；
+                                     新增/改写 2 条测试（不落地 + 读分片机制）
+  - bins/game-svr/src/main.rs      : pickup_gold_dispatches_and_updates_session 改为显式落格注入
+- 写集外（必须同改，否则判据 RED）：
+  - mir2-rs/tests/parity/csharp/WorldGolden/Program.cs:344-366  建模 AddItemToMap 门（跳过 AddMapObject）
+  - mir2-rs/tests/parity/world/golden/combat.txt   （重新生成：death 2 1 -> death 2 0，删 floor 行）
+  - mir2-rs/tests/parity/world/golden/session.txt  （重新生成：death 2 2 -> death 2 0，删 floor 行）
+
+## 方案 B：保留 Rust 落地（= 探针意图），登记为偏差
+- 写集内：0 行生产码改动。
+- 写集外：mir2-rs/tests/parity/whitelist.md 新增一条 T-*（需 owner 签字）=
+  「Rust 死亡掉落落地，与冻结 src/（MapItem.ItemId 被注释 => 恒不落地）有意偏离；
+   理由：world golden 合同 + 探针意图」；并同步订正 T-19/T-25 的措辞（二者现写「Rust 1:1 复刻不落地」）。
+- 后续：卡标题的 SM_ITEMSHOW(610) 可在「Rust 落地」模型下实现，但无 oracle golden，只能自证帧编码。
+
+## 裁决建议（供 owner）
+A：src/ 是冻结 oracle，AGENTS 红线③「行为等价优先于修 bug」+ T-19/T-25 均指向「不落地」；
+   WorldGolden 是 synthetic 探针（非 src/），其桩绕过门属于探针自身的失真，应单独开卡修正探针+重生成 golden。
+   => 建议：批 A，并把「修正 WorldGolden + 重生成 2 份 golden」开成一张小卡（写集 tests/parity/**）。
+
+## 硬约束提醒
+本卡写集 = crates/world/** + bins/game-svr/** + crates/protocol/**；
+WorldGolden/**、world/golden/**、whitelist.md 均不在其中 => 本片不擅改（卡 DoD①「由 owner 修订本卡」）。

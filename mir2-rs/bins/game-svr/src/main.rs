@@ -939,32 +939,7 @@ fn handle_bag_cmd(
     sg.state.item_list = state.item_list;
 
     if out.recalc {
-        let bag: Vec<u16> = sg.state.item_list.iter().map(|i| i.index).collect();
-        let mut use_inst: Vec<Option<game_svr::ability::ItemInstance>> =
-            vec![None; game_svr::ability::USE_ITEMS_LEN];
-        for (i, cell) in sg.use_items.iter().enumerate() {
-            if let Some(it) = cell {
-                use_inst[i] = Some(game_svr::ability::ItemInstance {
-                    index: it.index,
-                    dura: it.dura,
-                });
-            }
-        }
-        let inputs = game_svr::ability::RecalcInputs {
-            job: sg.equip.job,
-            abil: &sg.equip.abil,
-            bonus_abil: &sg.equip.bonus_abil,
-            bonus_tick_hit: sg.equip.bonus_tick_hit,
-            bonus_tick_speed: sg.equip.bonus_tick_speed,
-            cur_hp: sg.state.wabil.hp,
-            cur_mp: sg.state.wabil.mp,
-            use_items: &use_inst,
-            bag: &bag,
-        };
-        // T-18：传**调用前的** `SubAbility`（`sg.sub`），**不是** `SubAbility::first_call()`。
-        let recalc = game_svr::ability::recalc_abilitys_with_prior(catalog, &inputs, &sg.sub);
-        sg.state.wabil = recalc.wabil;
-        sg.sub = recalc.sub;
+        recalc_session_ability(sg, catalog);
     }
 
     let Some(tx) = route_to_gate(gates, gate_idx, socket, "装备/卸下回帧") else {
@@ -1606,6 +1581,8 @@ fn build_save_record(
     rec.data.inc_health = u8::try_from(sg.recovery.inc_health & 0x00FF).unwrap_or(0);
     rec.data.inc_spell = u8::try_from(sg.recovery.inc_spell & 0x00FF).unwrap_or(0);
     rec.data.hunger_status = sg.hunger_status;
+    // `PlayObject.BodyLuck`（`PlayObject.cs:520`）⇒ `characters.BodyLuck`（`MakeSaveRcd` 读 `BodyLuck`）。
+    rec.data.body_luck = sg.equip.body_luck;
     let base = &sg.equip.abil;
     let w = &sg.state.wabil;
     rec.data.abil = Some(record::Ability {
@@ -1888,6 +1865,43 @@ fn apply_ability_to_entity(
     e.hp = wabil.hp;
     e.max_hp = wabil.max_hp;
     e.level = wabil.level;
+}
+
+/// `RecalcLevelAbilitys()` + `RecalcAbilitys()` 的**单一实现**（登录/升级/装备/卸下四处共用）：
+/// 从 `sg.use_items`/`sg.state.item_list`/`sg.equip` 组装 [`game_svr::ability::RecalcInputs`]，
+/// 调 [`game_svr::ability::recalc_abilitys_with_prior`]（`prior = sg.sub`，T-18 的显式状态），
+/// 写回 `sg.state.wabil` 与 `sg.sub`。
+///
+/// 调用点：① 装备/卸下成功分支；② 升级（`PlayObject.cs:5245-5246` 的 `HasLevelUp`——oracle 先
+/// `RecalcLevelAbilitys()` 再 `RecalcAbilitys()`，本函数内部 `level_ability_base` 已按该序覆盖
+/// `MaxHP/MaxMP/MaxWeight/DC/MC/SC/AC/MAC` 等等级派生字段）。
+fn recalc_session_ability(sg: &mut SessionGround, catalog: &dyn game_svr::ability::ItemCatalog) {
+    let bag: Vec<u16> = sg.state.item_list.iter().map(|i| i.index).collect();
+    let mut use_inst: Vec<Option<game_svr::ability::ItemInstance>> =
+        vec![None; game_svr::ability::USE_ITEMS_LEN];
+    for (i, cell) in sg.use_items.iter().enumerate() {
+        if let Some(it) = cell {
+            use_inst[i] = Some(game_svr::ability::ItemInstance {
+                index: it.index,
+                dura: it.dura,
+            });
+        }
+    }
+    let inputs = game_svr::ability::RecalcInputs {
+        job: sg.equip.job,
+        abil: &sg.equip.abil,
+        bonus_abil: &sg.equip.bonus_abil,
+        bonus_tick_hit: sg.equip.bonus_tick_hit,
+        bonus_tick_speed: sg.equip.bonus_tick_speed,
+        cur_hp: sg.state.wabil.hp,
+        cur_mp: sg.state.wabil.mp,
+        use_items: &use_inst,
+        bag: &bag,
+    };
+    // T-18：传**调用前的** `SubAbility`（`sg.sub`），**不是** `SubAbility::first_call()`。
+    let recalc = game_svr::ability::recalc_abilitys_with_prior(catalog, &inputs, &sg.sub);
+    sg.state.wabil = recalc.wabil;
+    sg.sub = recalc.sub;
 }
 
 /// `Envir.GetMovingObject(frontX, frontY, true)`（`Envirnoment.cs:1203-1234`）的**接线面最小等价物**：
@@ -2315,6 +2329,38 @@ fn drain_aoi_downlink(
     }
 }
 
+/// `MessageSettings.BODYLUCKUNIT`（`MessageSettings.cs:9`）。
+const BODYLUCK_UNIT: f64 = 5000.0;
+
+/// `PlayObject.AddBodyLuck(double)`（`PlayObject.cs:4304-4323`）的纯函数形式。
+///
+/// 逐行：
+/// - `if (dLuck > 0 && BodyLuck < 5 * BODYLUCKUNIT) BodyLuck = BodyLuck + dLuck;`
+/// - `if (dLuck < 0 && BodyLuck > -(5 * BODYLUCKUNIT)) BodyLuck = BodyLuck + dLuck;`
+/// - `BodyLuckLevel = clamp(Convert.ToInt32(BodyLuck / BODYLUCKUNIT), -10, 5)`。
+///
+/// `Convert.ToInt32(double)` 是 .NET 的**银行家舍入**（`Math.Round`，midpoint-to-even）
+/// ⇒ 这里用 `f64::round_ties_even()`（**不是** Rust `round()` 的 half-away-from-zero）。
+/// `BodyLuck` 落 `characters.BodyLuck double(10,3)`（`sql/mir2_db.sql:46`）且被 `scoped_diff`
+/// 逐字节比对 ⇒ 累积必须与 oracle 同序（`GetExp` 的 `dwExp*0.002` 先于升级块 `+100`）。
+fn add_body_luck(body_luck: &mut f64, body_luck_level: &mut i32, d_luck: f64) {
+    if d_luck > 0.0 && *body_luck < 5.0 * BODYLUCK_UNIT {
+        *body_luck += d_luck;
+    }
+    if d_luck < 0.0 && *body_luck > -(5.0 * BODYLUCK_UNIT) {
+        *body_luck += d_luck;
+    }
+    let n = (*body_luck / BODYLUCK_UNIT).round_ties_even();
+    *body_luck_level = (n as i32).clamp(-10, 5);
+}
+
+/// `PlayObject.Initialize()` 的 `AddBodyLuck(0)`（`PlayObject.cs:1060`）：登录/进世界时由
+/// 已落库的 `BodyLuck` 重算 `BodyLuckLevel`（`dLuck == 0` 时两个累加支都不进，只重算等级）。
+fn body_luck_level_of(body_luck: f64) -> i32 {
+    let n = (body_luck / BODYLUCK_UNIT).round_ties_even();
+    (n as i32).clamp(-10, 5)
+}
+
 /// `openmir2-m3-attack-magic-wiring`（第一片）：本 world tick 的攻击结算 → 客户端下行。
 ///
 /// 逐条口径：
@@ -2423,7 +2469,7 @@ fn drain_combat_downlink(
     // ③ 经验帧（`GetExp` → `SendMsg(RM_WINEXP,0,dwExp,0,0)` → `SM_WINEXP`）。
     // 归属已由 world 按 `KillFunc` 算好（`ExpHitter.Master` 优先）；这里只做「找到在线会话 ⇒
     // 同步世界权威值 + 回帧」。未在线（怪物/NPC 获得者）跳过。
-    for (winner, amount, _leveled, level) in &rec.exp_awards {
+    for (winner, amount, leveled, level) in &rec.exp_awards {
         let Some(entry) = online.iter().find(|e| e.actor_id == *winner) else {
             continue;
         };
@@ -2440,6 +2486,20 @@ fn drain_combat_downlink(
             sg.state.wabil.exp = total_exp;
             sg.state.wabil.level = *level;
             sg.state.wabil.max_exp = max_exp;
+            // oracle `GetExp`（`PlayObject.Base.cs:151-162`）的两处 `AddBodyLuck`，**次序不可换**：
+            // `AddBodyLuck(dwExp * 0.002)` 在 `Abil.Exp += dwExp` 之后、升级块 `AddBodyLuck(100)` 之前。
+            add_body_luck(
+                &mut sg.equip.body_luck,
+                &mut sg.equip.body_luck_level,
+                f64::from(*amount) * 0.002,
+            );
+            if *leveled {
+                add_body_luck(
+                    &mut sg.equip.body_luck,
+                    &mut sg.equip.body_luck_level,
+                    100.0,
+                );
+            }
         }
         let body = game_svr::smframe::sm_winexp(total_exp, *amount);
         if let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "经验帧") {
@@ -2449,6 +2509,168 @@ fn drain_combat_downlink(
             });
         }
     }
+}
+
+/// **D②（升级链下行 · 第 1 段 = `SM_HEALTHSPELLCHANGED(53)`）**：`TickRecord::exp_awards` 中
+/// `leveled == true` 的获得者（= oracle `GetExp` 进了 `Abil.Exp >= Abil.MaxExp` 块）先补
+/// `HasLevelUp` 的**能力重算**与 `GetExp` 尾的 `IncHealthSpell(2000,2000)` **回血**，再把升级块的
+/// `SM_HEALTHSPELLCHANGED(53)` 发出去。
+///
+/// **为什么 53 必须在 `drain_combat_downlink` 的 `SM_WINEXP(44)` 之前**
+/// （reviewer-6 `c5a90bf4` F-1，owner 裁决 `b2851a44`）：
+/// oracle `GetExp`（`PlayObject.Base.cs:149-166`）把 `RM_WINEXP(8075)`、`RM_LEVELUP(8086)`、
+/// `RM_HEALTHSPELLCHANGED(10052)` 全部 `MsgQueue.Enqueue(…, (byte)wIdent)`
+/// （`BaseObject.Message.cs:26-95`；`RM_HEALTHSPELLCHANGED` 经 `SendUpdateMsg`，`:275-304`，按同 ident
+/// 去重）；`BaseObject.Run()` 的 `while (GetMessage(…)) Operate(…)`（`BaseObject.Base.cs:26-30`）
+/// 按**优先级字节升序出队**，且 `GetMessage` 每次取当前最小值 ⇒
+/// `(byte)RM_HEALTHSPELLCHANGED=68 < (byte)RM_WINEXP=139 < (byte)RM_LEVELUP=150`
+/// ⇒ 同一 socket 上的真实线上序 = `53 → 44 → 45 → 52 → 752`（`RM_LEVELUP` 处理器内的 45/52/752
+/// 是即时 `SendSocket`，见 [`drain_levelup_downlink`]）。源码里的**入队序**（`44 → 45 → 53`）
+/// **不是**线上序。
+///
+/// 因此本函数必须在 [`drain_combat_downlink`]（发 44）**之前**调用；同 tick 内恢复/体力点段若也产生
+/// 53，`SendUpdateMsg` 只保留最后一条（本函数把 HP/MP 补满后，后段不再命中 ⇒ 等价）。
+///
+/// **登记**：`ShowHp` 的 `SendRefMsg` 广播支恒 false（技能「心灵启示」未移植），与
+/// `drain_recovery`/`drain_stamina` 同口径；`WinExp` 的 `LimitExpLevel` 支生产不可达
+/// （`GameSvrConf.cs:1838` 默认 `LimitExpLevel = 1000 > 255`）。
+#[allow(clippy::too_many_arguments)]
+fn drain_levelup_healthspell(
+    rec: &mir2_world::TickRecord,
+    world: &mut mir2_world::World,
+    online: &OnlineRegistry,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    range: i32,
+) {
+    for (winner, _amount, leveled, level) in &rec.exp_awards {
+        if !*leveled {
+            continue;
+        }
+        let Some(entry) = online.iter().find(|e| e.actor_id == *winner) else {
+            continue;
+        };
+        let Some(sg) = sessions.get_mut(&entry.chr_name) else {
+            continue;
+        };
+        // `GetExp` 已把 `Abil.Exp/Level/MaxExp` 更新到世界实体（战斗权威值）⇒ 先同步进会话，
+        // 否则 `RecalcLevelAbilitys()` 会按旧等级算 MaxHP/MaxMP（`PlayObject.Base.cs:151-159`）。
+        if let Some(entity) = world.entities.get(*winner) {
+            sg.equip.abil.exp = entity.exp;
+            sg.equip.abil.level = *level;
+            sg.equip.abil.max_exp = entity.max_exp;
+            sg.state.wabil.exp = entity.exp;
+            sg.state.wabil.level = *level;
+            sg.state.wabil.max_exp = entity.max_exp;
+        }
+        // ① HasLevelUp：RecalcLevelAbilitys() + RecalcAbilitys()
+        recalc_session_ability(sg, catalog);
+        // ② GetExp 尾：IncHealthSpell(2000, 2000)（`BaseObject.cs:952-975`）
+        let hp = u32::from(sg.state.wabil.hp) + 2000;
+        let mp = u32::from(sg.state.wabil.mp) + 2000;
+        sg.state.wabil.hp = if hp >= u32::from(sg.state.wabil.max_hp) {
+            sg.state.wabil.max_hp
+        } else {
+            hp as u16
+        };
+        sg.state.wabil.mp = if mp >= u32::from(sg.state.wabil.max_mp) {
+            sg.state.wabil.max_mp
+        } else {
+            mp as u16
+        };
+        // ③ 世界实体（战斗权威值）同步
+        if let Some(e) = world.entities.get_mut(*winner) {
+            apply_ability_to_entity(e, &sg.state.wabil, &sg.sub);
+        }
+        // ④ `RM_HEALTHSPELLCHANGED` 入队后按优先级 68 出队 ⇒ 线上**先于** 44
+        let hb = game_svr::smframe::sm_healthspellchanged(
+            sg.actor_id,
+            sg.state.wabil.hp,
+            sg.state.wabil.mp,
+            sg.state.wabil.max_hp,
+        );
+        if let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "升级回帧(53)") {
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: entry.socket,
+                body: hb.clone(),
+            });
+        }
+        if sg.show_hp {
+            broadcast_healthspellchanged(world, online, gates, sg.actor_id, &hb, range);
+        }
+    }
+}
+
+/// **D②（升级链下行 · 第 2 段 = `SM_LEVELUP(45)` / `SM_ABILITY(52)` / `SM_SUBABILITY(752)`）**：
+/// oracle `RM_LEVELUP` 处理器（`PlayObject.Message.cs:1670-1676`）在**出队到 `RM_LEVELUP` 时**
+/// 即时 `SendSocket` 三条 ⇒ 线上序固定在 44 **之后**、53 **之后**
+/// （入队/出队序见 [`drain_levelup_healthspell`] 的模块头）。必须在 [`drain_combat_downlink`] 之后调用。
+///
+/// **登记**：`HasLevelUp` 末尾的 `FunctionNPC.GotoLable(this, "@LevelUp", false)` 在 oracle 里
+/// 已被注释（`PlayObject.cs:5249-5252`）⇒ 不发；`AddBodyLuck(100)` 已在
+/// [`drain_combat_downlink`] 的经验循环里按 oracle 次序（`dwExp*0.002` 之后）落账。
+fn drain_levelup_downlink(
+    rec: &mir2_world::TickRecord,
+    online: &OnlineRegistry,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+) {
+    for (winner, _amount, leveled, _level) in &rec.exp_awards {
+        if !*leveled {
+            continue;
+        }
+        let Some(entry) = online.iter().find(|e| e.actor_id == *winner) else {
+            continue;
+        };
+        let Some(sg) = sessions.get_mut(&entry.chr_name) else {
+            continue;
+        };
+        let send = |body: Vec<u8>| {
+            if let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "升级回帧") {
+                let _ = tx.send(SimToGate::SendFrame {
+                    socket: entry.socket,
+                    body,
+                });
+            }
+        };
+        send(game_svr::smframe::sm_levelup(
+            sg.state.wabil.exp,
+            sg.state.wabil.level,
+        ));
+        send(game_svr::smframe::sm_ability(
+            sg.state.gold,
+            sg.equip.job,
+            sg.game_gold,
+            &record::encode_ability(&sg.state.wabil),
+        ));
+        let sb = sg.sub.to_frame_bytes();
+        send(game_svr::smframe::sm_subability(
+            sb[0], sb[1], sb[2], sb[3], sb[4], sb[5], sb[6],
+        ));
+    }
+}
+
+/// **D①+D② 击杀经验下行链**：把 `GetExp` 产生的四类帧按 oracle `MsgQueue` **出队序**固定在
+/// 一处：`SM_HEALTHSPELLCHANGED(53, 优先级 68) → SM_WINEXP(44, 139) → 45/52/752（`RM_LEVELUP`
+/// 处理器内即时 SendSocket）`；顺带在同一处发出受击/死亡帧（同一 tick 的 `attacks/deaths`）。
+///
+/// `sim_loop` 与升级帧序用例都经本函数 ⇒ **顺序本身可被用例钉住**（红检 = 交换前两行 ⇒ 用例必红）。
+#[allow(clippy::too_many_arguments)]
+fn drain_kill_exp_chain(
+    rec: &mir2_world::TickRecord,
+    world: &mut mir2_world::World,
+    displays: &downlink::DisplayTable,
+    online: &OnlineRegistry,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    range: i32,
+) {
+    // 53（= `GetExp` 尾的 `IncHealthSpell(2000,2000)`）先于 44（`SendMsg(RM_WINEXP)`）。
+    drain_levelup_healthspell(rec, world, online, sessions, gates, catalog, range);
+    drain_combat_downlink(rec, world, displays, online, sessions, gates);
+    drain_levelup_downlink(rec, online, sessions, gates);
 }
 
 /// 每 tick 的**周期恢复**（oracle `PlayObject.Run` 的 `:70-141` 段，见 [`game_svr::recover`] 模块头）。
@@ -2470,6 +2692,7 @@ fn drain_recovery(
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     range: i32,
+    superseded_healthspell: &std::collections::HashSet<i32>,
 ) {
     let now = now_ms();
     let mut names: Vec<String> = sessions.keys().cloned().collect();
@@ -2480,6 +2703,17 @@ fn drain_recovery(
         };
         let death = world.entities.get(sg.actor_id).is_some_and(|e| e.death);
         if !game_svr::recover::recovery_tick(&mut sg.recovery, &mut sg.state.wabil, death, now) {
+            continue;
+        }
+        // **F-1 的同 tick 去重**：oracle `SendUpdateMsg(RM_HEALTHSPELLCHANGED)`
+        // （`BaseObject.Message.cs:275-304`）先移除 `MsgQueue` 里同 ident 的旧消息再入队。恢复段在
+        // `PlayObject.Run()` 里**先**入队 53，随后 `BaseObject.Run()` 的消息段处理击杀/升级
+        // （触发消息优先级 `MessagePriority.Normal=1` / `RM_HIT=20` 均 < `(byte)RM_HEALTHSPELLCHANGED=68`
+        // ⇒ 先出队）⇒ 升级段的 `IncHealthSpell(2000,2000)→HealthSpellChanged()` 会把恢复段的 53 替换掉。
+        // 因此若本 tick 该对象进升级块，这里**不回帧**（由 [`drain_levelup_healthspell`] 出唯一一条）。
+        // HP/MP/`Inc*` 的状态变更仍照常发生。
+        // 登记：由**最低优先级**（255）延时消息驱动的击杀（恢复段 53 先出队）不在此模型内。
+        if superseded_healthspell.contains(&sg.actor_id) {
             continue;
         }
         let Some(entry) = online.iter().find(|e| e.chr_name == name) else {
@@ -3069,6 +3303,12 @@ struct EquipInputs {
     bonus_tick_hit: u8,
     /// `Config.BonusAbilofXxx.Speed`。
     bonus_tick_speed: i32,
+    /// `PlayObject.BodyLuck`（`PlayObject.cs:520`；`characters.BodyLuck double(10,3)`）——
+    /// 随 `GetExp` 的 `AddBodyLuck(dwExp*0.002)` / 升级 `AddBodyLuck(100)` 累积，
+    /// 存档时由 [`build_save_record`] 写回。
+    body_luck: f64,
+    /// `PlayObject.BodyLuckLevel`（`PlayObject.cs:521`）——由 `BodyLuck` 派生（`AddBodyLuck` 末段）。
+    body_luck_level: i32,
 }
 
 /// `IsNewHuman` 四件新手物品的名字 + `GetItemNumber` 初值（`Server.conf [Setup]`；`PlayObject.cs:1205-1245`）。
@@ -3992,6 +4232,10 @@ fn sim_loop(
                                                                 bonus_abil: a.bonus_abil.clone(),
                                                                 bonus_tick_hit: a.bonus_tick_hit,
                                                                 bonus_tick_speed: a.bonus_tick_speed,
+                                                                // `PlayObject.Initialize()` 的 `AddBodyLuck(0)`
+                                                                // （`PlayObject.cs:1060`）：从落库的 `BodyLuck` 重算 `BodyLuckLevel`。
+                                                                body_luck: d.body_luck,
+                                                                body_luck_level: body_luck_level_of(d.body_luck),
                                                             },
                                                             recovery: game_svr::recover::Recovery {
                                                                 inc_health: u16::from(d.inc_health),
@@ -4239,12 +4483,20 @@ fn sim_loop(
         ticks += 1;
         // T-28：周期恢复 tick（oracle `PlayObject.Run` 的 `:70-141`）——同一 world tick 后处理，
         // 把 `IncHealth/IncSpell/IncHealing` 按 oracle 节奏消费回 `WAbil.HP/MP` 并回帧。
+        // F-1：本 tick 进升级块的获得者集合 ⇒ 其恢复段的 53 被升级段的 53 取代（`SendUpdateMsg` 去重）。
+        let leveled_this_tick: std::collections::HashSet<i32> = rec
+            .exp_awards
+            .iter()
+            .filter(|(_, _, leveled, _)| *leveled)
+            .map(|(actor, _, _, _)| *actor)
+            .collect();
         drain_recovery(
             &mut ground_sessions,
             &world,
             &online,
             &gates,
             enter_cfg.ref_msg_range,
+            &leveled_this_tick,
         );
         // 体力/魔力点段（oracle `BaseObject.Run()` `:26-109`）：同一 `Run()` 里紧接
         // `PlayObject` 的恢复段之后；命中会回写 `Entity.hp` ⇒ 必须在周期存档之前。
@@ -4270,14 +4522,18 @@ fn sim_loop(
             now_ms(),
         );
         // `openmir2-m3-attack-magic-wiring`（第一片）：本 tick 的攻击结算 → `SM_STRUCK`（受击者自见）
-        // + `SM_NOWDEATH`（死亡广播）。
-        drain_combat_downlink(
+        // + `SM_NOWDEATH`（死亡广播）；D①/D② 的经验/升级链也在此发出。
+        // 顺序（升级链 53 → 经验 44 → 升级链 45/52/752）由 `drain_kill_exp_chain` 集中固定
+        // （reviewer-6 `c5a90bf4` F-1 的 oracle `MsgQueue` 出队序，见该函数文档）。
+        drain_kill_exp_chain(
             &rec,
-            &world,
+            &mut world,
             &displays,
             &online,
             &mut ground_sessions,
             &gates,
+            &enter_cfg.catalog,
+            enter_cfg.ref_msg_range,
         );
         // S3 后半段（第一格）：世界 tick 的 AOI 结果 → `SM_TURN` + `SM_FEATURECHANGED` 回帧。
         drain_aoi_downlink(&world, &displays, &online, &gates);
@@ -5342,6 +5598,8 @@ mod tests {
             },
             bonus_tick_hit: 20,
             bonus_tick_speed: 35,
+            body_luck: 0.0,
+            body_luck_level: 0,
         }
     }
 
@@ -7319,7 +7577,14 @@ mod tests {
         assert_eq!(sessions["hero"].recovery.inc_health, 20);
 
         // 2) 周期恢复 tick：tick 初值 0、now = 真实时钟 ⇒ 远超 1 级阈值 590ms ⇒ 首轮命中。
-        drain_recovery(&mut sessions, &world, &online, &gates, 12);
+        drain_recovery(
+            &mut sessions,
+            &world,
+            &online,
+            &gates,
+            12,
+            &std::collections::HashSet::new(),
+        );
         let mut frames = Vec::new();
         while let Ok(SimToGate::SendFrame { body, socket }) = rx0.try_recv() {
             let cm = CommandMessage::from_bytes(&body).expect("SM_* body 至少 12B");
@@ -8451,5 +8716,291 @@ mod tests {
         assert_eq!(sg.equip.abil.level, 9);
         assert_eq!(sg.state.wabil.exp, 1234);
         assert_eq!(sg.state.wabil.level, 9);
+    }
+
+    /// **D②（升级链下行）**：一条 `leveled=true` 的 `exp_awards` ⇒ 帧序按 oracle `MsgQueue`
+    /// **出队序**（优先级字节升序）
+    /// `SM_HEALTHSPELLCHANGED(53) → SM_WINEXP(44) → SM_LEVELUP(45) → SM_ABILITY(52) → SM_SUBABILITY(752)`
+    /// （reviewer-6 `c5a90bf4` F-1：53 的优先级字节 68 < 44 的 139 < 45 的 150），
+    /// 不是源码入队序 44→45→53。`SM_LEVELUP` 头 = `(total_exp, new_level, 0, 0)`；
+    /// `RecalcLevelAbilitys()+RecalcAbilitys()` 把 `MaxHP/MaxMP` 从 0 提到等级派生值，然后
+    /// `IncHealthSpell(2000,2000)` 按**新** `MaxHP/MaxMP` 截断 ⇒ 满血满蓝；世界实体同步到同一 `WAbil`。
+    ///
+    /// 红检：① 交换 `sm_levelup` 的 `recog`/`param` ⇒ `SM_LEVELUP` 头断言必红；
+    /// ② 删 `drain_levelup_healthspell` 的 `IncHealthSpell(2000,2000)` ⇒ `hp == max_hp` 必红；
+    /// ③ 不调 `recalc_session_ability` ⇒ `max_hp == 0` 必红；
+    /// ④（F-1 红检）交换 `drain_kill_exp_chain` 的前两行（把 53 落到 44 之后）
+    ///   ⇒ `idents` 序断言必红。
+    #[test]
+    fn levelup_downlink_sends_levelup_frames_heals_and_syncs_entity() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(64, 64);
+        let killer = {
+            let mut e = mir2_world::Entity::new(0, "killer".to_string(), 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        world.tick();
+        {
+            let e = world.entities.get_mut(killer).unwrap();
+            e.exp = 500;
+            e.level = 11;
+            e.max_exp = 1000;
+            e.hp = 10;
+            e.max_hp = 20;
+        }
+        let displays = downlink::DisplayTable::new();
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "uk".into(),
+                chr_name: "killer".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 903,
+                actor_id: killer,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(killer);
+        sg.equip.abil.level = 10; // drain_combat_downlink 会把它同步成 11
+        sg.state.wabil.level = 10;
+        sg.state.wabil.hp = 10; // 升级前残血
+        sg.state.wabil.mp = 5;
+        sessions.insert("killer".into(), sg);
+
+        let rec = mir2_world::TickRecord {
+            exp_awards: vec![(killer, 500, true, 11)],
+            ..Default::default()
+        };
+        // 与 `sim_loop` 同一条链：oracle 出队序 53(68) → 44(139) → 45(150)/52/752。
+        drain_kill_exp_chain(
+            &rec,
+            &mut world,
+            &displays,
+            &online,
+            &mut sessions,
+            &gates,
+            &game_svr::ability::StdItemCatalog::new(),
+            12,
+        );
+        let mut bodies: Vec<Vec<u8>> = Vec::new();
+        let mut frames = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            assert_eq!(socket, 903);
+            frames.push(CommandMessage::from_bytes(&body).expect("12B"));
+            bodies.push(body);
+        }
+        let idents: Vec<u16> = frames.iter().map(|cm| cm.ident).collect();
+        assert_eq!(
+            idents,
+            vec![
+                mir2_protocol::messages::SM_HEALTHSPELLCHANGED,
+                mir2_protocol::messages::SM_WINEXP,
+                mir2_protocol::messages::SM_LEVELUP,
+                mir2_protocol::messages::SM_ABILITY,
+                mir2_protocol::messages::SM_SUBABILITY,
+            ],
+            "升级帧序 = HEALTHSPELLCHANGED(53) → WINEXP(44) → LEVELUP(45) → ABILITY(52) → SUBABILITY(752)"
+        );
+        let lv = &frames[2];
+        assert_eq!((lv.recog, lv.param, lv.tag, lv.series), (500, 11, 0, 0));
+        let sg = &sessions["killer"];
+        assert!(
+            sg.state.wabil.max_hp > 0,
+            "RecalcLevelAbilitys+RecalcAbilitys 必须给 MaxHP 等级派生值（非 0）"
+        );
+        assert!(
+            sg.state.wabil.hp == sg.state.wabil.max_hp,
+            "IncHealthSpell(2000,2000) 应按升级后的 MaxHP 截断 ⇒ 满血: {:?}",
+            sg.state.wabil
+        );
+        assert_eq!(sg.state.wabil.mp, sg.state.wabil.max_mp, "MP 同样满额");
+        assert_eq!(sg.equip.abil.level, 11, "会话基能力等级 = 升级后");
+        // F-2：`GetExp` 的两处 `AddBodyLuck` 按 oracle 次序落账：500*0.002 + 100 = 101.0；
+        // `BodyLuckLevel = Convert.ToInt32(101/5000) = 0`。
+        assert_eq!(
+            sg.equip.body_luck, 101.0,
+            "GetExp: dwExp*0.002（1.0）与升级 +100 均须累加"
+        );
+        assert_eq!(sg.equip.body_luck_level, 0);
+        // 52 的尾 = Encode(WAbil)（升级重算后的值）。bodies = [53,44,45,52,752] ⇒ 52 在 index 3。
+        assert_eq!(
+            &bodies[3][12..],
+            &mir2_protocol::edcode::encode(&record::encode_ability(&sg.state.wabil)),
+            "SM_ABILITY 尾 = Encode(WAbil)"
+        );
+        // 世界实体（战斗权威值）同步。
+        let e = world.entities.get(killer).unwrap();
+        assert_eq!(e.level, 11);
+        assert!(e.max_hp > 0 && e.hp == e.max_hp, "实体 HP/MaxHP 同步");
+        assert_eq!(e.max_hp, sg.state.wabil.max_hp);
+    }
+
+    /// **F-1（同 tick 去重）**：恢复段已产生 53 的对象，若本 tick 进升级块，
+    /// `SendUpdateMsg(RM_HEALTHSPELLCHANGED)`（`BaseObject.Message.cs:275-304`）会把恢复段入队的 53
+    /// 移除 ⇒ `drain_recovery` 不得回帧（升级段由 `drain_levelup_healthspell` 出唯一一条）。
+    ///
+    /// 红检：删掉 `drain_recovery` 的 `superseded_healthspell.contains(...)` 分支 ⇒ 本用例必红（① 收到帧）。
+    #[test]
+    fn recovery_healthspell_is_superseded_by_levelup_in_same_tick() {
+        use std::collections::{HashMap, HashSet};
+        let mut world = mir2_world::World::new(32, 32);
+        let hid = {
+            let mut e = mir2_world::Entity::new(0, "hero".to_string(), 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        world.tick();
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hid,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        // 「恢复段必命中」的会话：池里 20 点 IncHealth、HP 未满、tick 初值 0（真实时钟远超阈值）。
+        let mk = || {
+            let mut sg = test_session_ground(hid);
+            sg.state.wabil.hp = 10;
+            sg.state.wabil.max_hp = 100;
+            sg.recovery = game_svr::recover::Recovery::new(0);
+            sg.recovery.inc_health = 20;
+            sg
+        };
+
+        // ① 在「本 tick 进升级块」集合里 ⇒ 不回帧（被升级段的 53 取代），但状态照常消费。
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("hero".into(), mk());
+        let superseded: HashSet<i32> = [hid].into_iter().collect();
+        drain_recovery(&mut sessions, &world, &online, &gates, 12, &superseded);
+        assert!(
+            rx0.try_recv().is_err(),
+            "升级块取代恢复段 53 ⇒ 本段不得回帧"
+        );
+        assert_eq!(
+            sessions["hero"].recovery.inc_health, 15,
+            "HP/MP 与 Inc* 的状态变更仍照常发生（20 - PerHealth 5）"
+        );
+
+        // ② 不在集合里 ⇒ 照常回帧（自见一条）。
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("hero".into(), mk());
+        drain_recovery(&mut sessions, &world, &online, &gates, 12, &HashSet::new());
+        let cm = match rx0.try_recv() {
+            Ok(SimToGate::SendFrame { body, socket }) => {
+                assert_eq!(socket, 901);
+                CommandMessage::from_bytes(&body).expect("12B")
+            }
+            _ => panic!("未取代时必须有 53 帧"),
+        };
+        assert_eq!(cm.ident, mir2_protocol::messages::SM_HEALTHSPELLCHANGED);
+    }
+
+    /// **F-2（`AddBodyLuck`）**：`PlayObject.AddBodyLuck`（`PlayObject.cs:4304-4323`）的纯函数口径——
+    /// 两个 `±5*BODYLUCKUNIT` 累加门 + `Convert.ToInt32`（**银行家舍入**）派生 `BodyLuckLevel`
+    /// （clamp `[-10,5]`）。`BodyLuck` 是 `characters.BodyLuck double(10,3)`，被 `scoped_diff` 逐字节比。
+    ///
+    /// 红检：把 `round_ties_even()` 换成 `round()` ⇒ `2500/5000=0.5` 的用例必红（期望 0，实得 1）。
+    #[test]
+    fn add_body_luck_matches_oracle_vectors() {
+        // (初值, dLuck, 期望 BodyLuck, 期望 BodyLuckLevel)
+        let cases: &[(f64, f64, f64, i32)] = &[
+            (0.0, 0.0, 0.0, 0),
+            (2500.0, 0.0, 2500.0, 0), // Convert.ToInt32(0.5) = 0（midpoint-to-even）
+            (7500.0, 0.0, 7500.0, 2), // 1.5 → 2
+            (-2500.0, 0.0, -2500.0, 0), // -0.5 → 0
+            (24950.0, 100.0, 25050.0, 5), // 5.01 → clamp 5
+            (25000.0, 100.0, 25000.0, 5), // 正门：>= 5*unit ⇒ 不加
+            (25050.0, -100.0, 24950.0, 5), // 负向可加（> -5*unit）
+            (-24950.0, -100.0, -25050.0, -5), // -5.01 → -5
+            (-25000.0, -100.0, -25000.0, -5), // 负门：<= -5*unit ⇒ 不加
+            (0.0, 24999.0, 24999.0, 5), // 4.9998 → 5
+        ];
+        for (init, d, exp_luck, exp_level) in cases {
+            let mut luck = *init;
+            let mut level = 0;
+            add_body_luck(&mut luck, &mut level, *d);
+            assert_eq!(luck, *exp_luck, "BodyLuck: init={init} d={d}");
+            assert_eq!(level, *exp_level, "BodyLuckLevel: init={init} d={d}");
+        }
+    }
+
+    /// **F-2（落库）**：击杀后会话的 `BodyLuck` 必须写进 `characters.BodyLuck`（`MakeSaveRcd` 口径）。
+    /// `drain_combat_downlink` 按 oracle 次序（`dwExp*0.002` 然后升级 `+100`）累加 ⇒
+    /// `build_save_record` 原样带出（`WorldServer.cs:1290 save playerInfo.BodyLuck = playObject.BodyLuck`）。
+    ///
+    /// 红检：把 `rec.data.body_luck = sg.equip.body_luck` 删掉 ⇒ 存档断言必红（保留加载值）。
+    #[test]
+    fn body_luck_accumulates_on_getexp_and_persists() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(64, 64);
+        let killer = {
+            let mut e = mir2_world::Entity::new(0, "killer".to_string(), 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        world.tick();
+        {
+            let e = world.entities.get_mut(killer).unwrap();
+            e.exp = 100;
+            e.level = 11;
+            e.max_exp = 1000;
+        }
+        let displays = downlink::DisplayTable::new();
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "uk".into(),
+                chr_name: "killer".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 905,
+                actor_id: killer,
+            },
+        );
+        let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(killer);
+        sg.equip.abil.level = 10;
+        sg.state.wabil.level = 10;
+        sessions.insert("killer".into(), sg);
+
+        // 非升级（`leveled=false`）⇒ 只加 `dwExp*0.002 = 5000`；`BodyLuckLevel = 1`。
+        let rec = mir2_world::TickRecord {
+            exp_awards: vec![(killer, 2_500_000, false, 11)],
+            ..Default::default()
+        };
+        drain_combat_downlink(&rec, &world, &displays, &online, &mut sessions, &gates);
+        let sg = sessions.get("killer").unwrap();
+        assert_eq!(sg.equip.body_luck, 5000.0, "dwExp*0.002 累加");
+        assert_eq!(sg.equip.body_luck_level, 1, "Convert.ToInt32(5000/5000)=1");
+
+        let saved = SavedHuman {
+            account: "acct".into(),
+            record: stage6_record(),
+            enter_map: "0".into(),
+        };
+        let out = build_save_record(&saved, "killer", &world, sg, None);
+        assert_eq!(
+            out.data.body_luck, 5000.0,
+            "characters.BodyLuck 必须带出会话的实时 BodyLuck"
+        );
     }
 }

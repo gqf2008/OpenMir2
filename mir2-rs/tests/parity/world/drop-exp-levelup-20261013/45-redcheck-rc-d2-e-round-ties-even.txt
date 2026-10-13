@@ -1,0 +1,27 @@
+# RC-D2-E（F-2 红检）：add_body_luck 的 round_ties_even() 改成 round()（非银行家舍入）
+# 命令：cargo test -p game-svr --offline --bin game-svr -- add_body_luck_matches_oracle_vectors
+
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.58s
+     Running unittests src\main.rs (E:/tmp/m2svr-d2-target\debug\deps\game_svr-eb39968088e3f1ec.exe)
+
+running 1 test
+test tests::add_body_luck_matches_oracle_vectors ... FAILED
+
+failures:
+
+---- tests::add_body_luck_matches_oracle_vectors stdout ----
+
+thread 'tests::add_body_luck_matches_oracle_vectors' (26780) panicked at bins\game-svr\src\main.rs:8842:13:
+assertion `left == right` failed: BodyLuckLevel: init=2500 d=0
+  left: 1
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::add_body_luck_matches_oracle_vectors
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 162 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`

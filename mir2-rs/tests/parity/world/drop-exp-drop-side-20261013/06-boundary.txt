@@ -1,0 +1,48 @@
+# 06-boundary.txt — 边界（oracle 冻结）
+
+$ git diff --name-only origin/master..HEAD -- src sql MirClient
+（空 => 冻结 oracle 零改动）
+
+$ git diff --name-only origin/master..HEAD
+mir2-rs/bins/game-svr/src/main.rs
+mir2-rs/bins/game-svr/src/smframe.rs
+mir2-rs/crates/world/src/combat.rs
+mir2-rs/crates/world/src/world.rs
+mir2-rs/tests/parity/M3-report.md
+mir2-rs/tests/parity/m3/evidence-m3-final-acceptance-tenitem-20261013/00-boundary.txt
+mir2-rs/tests/parity/m3/evidence-m3-final-acceptance-tenitem-20261013/01-gates.txt
+mir2-rs/tests/parity/m3/evidence-m3-final-acceptance-tenitem-20261013/README.md
+mir2-rs/tests/parity/m3/evidence-m3-final-acceptance-tenitem-20261013/SHA256SUMS.txt
+mir2-rs/tests/parity/whitelist.md
+mir2-rs/tests/parity/world/drop-exp-drop-side-20261013/01-oracle-anchors.txt
+mir2-rs/tests/parity/world/drop-exp-drop-side-20261013/02-golden-probe-evidence.txt
+mir2-rs/tests/parity/world/drop-exp-drop-side-20261013/03-options-impact.txt
+mir2-rs/tests/parity/world/drop-exp-drop-side-20261013/04-reproduction.txt
+mir2-rs/tests/parity/world/drop-exp-drop-side-20261013/05-gates.txt
+mir2-rs/tests/parity/world/drop-exp-drop-side-20261013/06-boundary.txt
+mir2-rs/tests/parity/world/drop-exp-drop-side-20261013/README.md
+mir2-rs/tests/parity/world/drop-exp-drop-side-20261013/SHA256SUMS.txt
+mir2-rs/tests/parity/world/drop-exp-drop-side-20261013/commands.txt
+mir2-rs/tests/parity/world/drop-exp-drop-side-20261013/gates/10-fmt.txt
+mir2-rs/tests/parity/world/drop-exp-drop-side-20261013/gates/11-clippy.txt
+mir2-rs/tests/parity/world/drop-exp-drop-side-20261013/gates/12-msgcodegen.txt
+mir2-rs/tests/parity/world/drop-exp-drop-side-20261013/gates/13-workspace-test.txt
+mir2-rs/tests/parity/world/drop-exp-drop-side-20261013/optionA-no-landing-align.patch
+mir2-rs/tests/parity/world/drop-exp-levelup-20261013/01-oracle-anchors.txt
+mir2-rs/tests/parity/world/drop-exp-levelup-20261013/02-change-summary.txt
+mir2-rs/tests/parity/world/drop-exp-levelup-20261013/03-tests.txt
+mir2-rs/tests/parity/world/drop-exp-levelup-20261013/04-redchecks.txt
+mir2-rs/tests/parity/world/drop-exp-levelup-20261013/05-gates.txt
+mir2-rs/tests/parity/world/drop-exp-levelup-20261013/06-boundary.txt
+mir2-rs/tests/parity/world/drop-exp-levelup-20261013/40-redcheck-rc-d2-a-levelup-header-swapped.txt
+mir2-rs/tests/parity/world/drop-exp-levelup-20261013/41-redcheck-rc-d2-b-heal-removed.txt
+mir2-rs/tests/parity/world/drop-exp-levelup-20261013/42-redcheck-rc-d2-c-recalc-removed.txt
+mir2-rs/tests/parity/world/drop-exp-levelup-20261013/43-redcheck-restore-sha256.txt
+mir2-rs/tests/parity/world/drop-exp-levelup-20261013/README.md
+mir2-rs/tests/parity/world/drop-exp-levelup-20261013/SHA256SUMS.txt
+mir2-rs/tests/parity/world/drop-exp-levelup-20261013/commands.txt
+mir2-rs/tests/parity/world/drop-exp-levelup-20261013/gates/10-fmt.txt
+mir2-rs/tests/parity/world/drop-exp-levelup-20261013/gates/11-clippy.txt
+mir2-rs/tests/parity/world/drop-exp-levelup-20261013/gates/12-msgcodegen.txt
+mir2-rs/tests/parity/world/drop-exp-levelup-20261013/gates/13-workspace-test.txt
+mir2-rs/tests/parity/world/drop-exp-levelup-20261013/gates/14-baseline-master-5461c1b1.txt

@@ -941,7 +941,12 @@ pub fn generate_drops<C: ItemCatalog>(
 /// **击杀经验不按等级差衰减**（哪怕 `HighLevelKillMonFixExp = false`）。
 /// 所以这里 `n_level` 传的是**击杀者自己的等级**，不是怪物等级（照抄 oracle，包括这个无效分支）。
 ///
-/// 返回 `(获得经验, 是否升级, 升级后等级)`。
+/// 返回 `(获得经验, 是否进入升级块, 升级后等级)`。
+///
+/// 第 2 项口径：oracle `GetExp`（`PlayObject.Base.cs:149-165`）里 `Abil.Level++` 受
+/// `Abil.Level < MAXUPLEVEL(255)` 门控，但**只要** `Abil.Exp >= Abil.MaxExp` 就进该块，
+/// 块内 `HasLevelUp`/`AddBodyLuck(100)`/`IncHealthSpell(2000,2000)` **无条件**执行 ⇒ 宿主用
+/// 这一位决定是否出 `SM_LEVELUP(45)`/`SM_ABILITY(52)`/`SM_SUBABILITY(752)`/`SM_HEALTHSPELLCHANGED(53)`。
 pub fn award_kill_exp(
     killer: &mut Entity,
     mon_exp: i32,
@@ -968,15 +973,16 @@ pub fn award_kill_exp(
             dw_exp = hutil::round(f64::from(rate) / 100.0 * f64::from(dw_exp));
         }
     }
-    // GetExp：加经验；`if (Abil.Exp >= Abil.MaxExp)` 单步升级（C# 就是 if 而非 while）
+    // GetExp：加经验；`if (Abil.Exp >= Abil.MaxExp)` 单步升级（C# 就是 if 而非 while）。
+    // `leveled` = **进了这个块**（不是"等级真的 +1"）：`Abil.Level++` 才有 `< MAXUPLEVEL` 门，
+    // 而块内的 `HasLevelUp`/`IncHealthSpell` 无条件执行（255 级仍会重算/回血/出帧）。
     killer.exp += dw_exp;
-    let mut leveled = false;
-    if killer.exp >= killer.max_exp {
+    let leveled = killer.exp >= killer.max_exp;
+    if leveled {
         killer.exp -= killer.max_exp;
-        if killer.level < 255 {
-            killer.level += 1;
-            leveled = true;
-        }
+        // oracle：`if (Abil.Level < MessageSettings.MAXUPLEVEL) Abil.Level++;`
+        // （`MAXUPLEVEL = byte.MaxValue = 255`，`MessageSettings.cs:7`）⇒ u8 饱和自增。
+        killer.level = killer.level.saturating_add(1);
         killer.max_exp = get_level_exp(need_exps, 255, i32::from(killer.level));
     }
     (dw_exp, leveled, killer.level)

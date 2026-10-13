@@ -1,0 +1,38 @@
+# M3④-实现 D 分片 D②「升级链」+ F-1/F-2 返工 复现命令
+# 工作目录：<worktree>/mir2-rs ; 隔离目标目录 CARGO_TARGET_DIR=E:/tmp/m2svr-f2-target ; --offline
+
+# --- 判据（构造级）---
+CARGO_TARGET_DIR=E:/tmp/m2svr-f2-target cargo test -p game-svr --bin game-svr --offline levelup_downlink
+CARGO_TARGET_DIR=E:/tmp/m2svr-f2-target cargo test -p game-svr --bin game-svr --offline add_body_luck_matches_oracle_vectors
+CARGO_TARGET_DIR=E:/tmp/m2svr-f2-target cargo test -p game-svr --bin game-svr --offline body_luck_accumulates_on_getexp_and_persists
+CARGO_TARGET_DIR=E:/tmp/m2svr-f2-target cargo test -p game-svr --bin game-svr --offline recovery_healthspell_is_superseded_by_levelup_in_same_tick
+CARGO_TARGET_DIR=E:/tmp/m2svr-f2-target cargo test -p mir2-world --lib --offline kill_exp_marks_levelup_block
+
+# --- 四门禁 ---
+CARGO_TARGET_DIR=E:/tmp/m2svr-f2-target cargo fmt --all -- --check
+CARGO_TARGET_DIR=E:/tmp/m2svr-f2-target cargo clippy --workspace --all-targets --offline -- -D warnings
+CARGO_TARGET_DIR=E:/tmp/m2svr-f2-target cargo run -q -p msgcodegen --offline -- --check
+CARGO_TARGET_DIR=E:/tmp/m2svr-f2-target cargo test --workspace --offline --no-fail-fast
+
+# --- 独立基线（同一合并树去掉本片改动；不碰共享主检出）---
+git stash push -- mir2-rs/bins/game-svr/src/main.rs
+CARGO_TARGET_DIR=E:/tmp/m2svr-f2-target cargo test --workspace --offline --no-fail-fast   # 91/817/0/18
+git stash pop
+# 交付树 = 91/819/0/18 ⇒ F-1/F-2 +2
+
+# --- 改坏必红（每次：备份 -> 变异 -> 跑命中用例 -> 还原 -> cmp 核对）---
+# RC-D2-A：sm_levelup 的 `command_header(exp, SM_LEVELUP, u16::from(level), 0, 0)`
+#          改成 `command_header(i32::from(level), SM_LEVELUP, exp as u16, 0, 0)`  -> levelup_downlink FAILED
+# RC-D2-B：删掉 drain_levelup_healthspell 的 IncHealthSpell(2000,2000) 段          -> levelup_downlink FAILED
+# RC-D2-C：删掉 drain_levelup_healthspell 的 recalc_session_ability(sg, catalog)   -> levelup_downlink FAILED
+# RC-D2-D：交换 drain_kill_exp_chain 前两行（53 落到 44 之后）                     -> levelup_downlink FAILED
+# RC-D2-E：add_body_luck 的 round_ties_even() 改成 round()                         -> add_body_luck FAILED
+# RC-D2-F：build_save_record 删掉 rec.data.body_luck = sg.equip.body_luck          -> body_luck_accumulates FAILED
+# RC-D2-G：删掉升级块 AddBodyLuck(100)                                             -> levelup_downlink FAILED
+# RC-D2-H：删掉 drain_recovery 的 superseded_healthspell.contains(...) 分支      -> recovery_healthspell_is_superseded FAILED
+# 还原后 bins/game-svr/src/{main,smframe}.rs 与备份逐字节一致（cmp → 43-...txt）。
+
+# --- 证据 hash（仓库 LF/git-blob 口径）---
+python -I tools/evidence-hash/verify_sha256sums.py write mir2-rs/tests/parity/world/drop-exp-levelup-20261013
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/world/drop-exp-levelup-20261013
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/world/drop-exp-levelup-20261013
