@@ -1,0 +1,39 @@
+本证据包的原始命令（cwd = worktree 根 `E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3cs`；
+编译隔离 `CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target`，全部 `--offline`）。
+base = origin/master `cf3f81c35`（见 09-boundary.txt）。
+
+1. 构造级向量（第①片 22 条）：
+   cd mir2-rs && CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target \
+     cargo test -p mir2-world --lib guild:: --offline
+   ⇒ 02-rust-vectors.txt
+
+2. 改坏必红（改前/改后 + 还原后 sha256 一致）：
+   RC1：`guild.rs` 的 `check_guild_name` 循环上界 `take(cs.len()-1)` → `take(cs.len())`
+        （即「修好」N4 漏比末字符）
+        CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target \
+          cargo test -p mir2-world --lib guild::tests::check_guild_name_rejects_forbidden_chars_except_last --offline
+        ⇒ 03-mutation-1-n4-last-char-RED.txt（rc≠0）
+   RC2：`del_human_obj` 的 `== Ordering::Greater` → `!= Ordering::Equal`
+        （即「修好」oracle 的 `Compare(...)==1`）
+        CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target \
+          cargo test -p mir2-world --lib guild::tests::del_human_obj_compare_equals_one_quirk --offline
+        ⇒ 04-mutation-2-del-human-obj-RED.txt（rc≠0）
+   还原：`cp /tmp/m3cs-guild.rs.bak crates/world/src/guild.rs`
+        ⇒ 源码 sha256 与改前一致（见 02/03/04 头部的 sha256 行）
+
+3. 四门禁（workspace）：
+   CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo fmt --all -- --check          ⇒ 05-gate-fmt.txt
+   CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo clippy --workspace --all-targets --offline -- -D warnings
+                                                                                     ⇒ 06-gate-clippy.txt
+   CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo test --workspace --offline    ⇒ 07-gate-test.txt
+   CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo run -q -p msgcodegen --offline -- --check
+                                                                                     ⇒ 08-gate-msgcodegen.txt
+
+4. 边界：
+   git diff --name-only cf3f81c35 -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage   ⇒ 空
+   git status / diff 见 09-boundary.txt
+
+5. 清单（仓库字节口径 = LF 归一 / git blob）：
+   python -I tools/evidence-hash/verify_sha256sums.py write mir2-rs/tests/parity/m3/evidence-m3-guild-state-20261013
+   python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/m3/evidence-m3-guild-state-20261013
+   python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-guild-state-20261013

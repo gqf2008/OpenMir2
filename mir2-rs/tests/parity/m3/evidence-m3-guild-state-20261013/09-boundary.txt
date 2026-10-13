@@ -1,0 +1,20 @@
+# boundary base = origin/master cf3f81c35
+
+## git status --short
+ M mir2-rs/crates/world/src/lib.rs
+?? mir2-rs/crates/world/src/guild.rs
+?? mir2-rs/tests/parity/m3/evidence-m3-guild-state-20261013/
+
+## git diff --name-only cf3f81c35 (tracked modifications)
+mir2-rs/crates/world/src/lib.rs
+
+## untracked new files
+mir2-rs/crates/world/src/guild.rs
+mir2-rs/tests/parity/m3/evidence-m3-guild-state-20261013/
+
+## frozen boundary (must be empty): git diff --name-only cf3f81c35 -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+(end)
+
+## git diff --stat cf3f81c35 -- mir2-rs/crates/world
+ mir2-rs/crates/world/src/lib.rs | 5 +++++
+ 1 file changed, 5 insertions(+)

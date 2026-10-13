@@ -18,6 +18,7 @@ pub mod bevy_bridge;
 pub mod castle;
 pub mod combat;
 pub mod entity;
+pub mod guild;
 pub mod magic;
 pub mod map;
 pub mod merchant;
@@ -46,6 +47,10 @@ pub use combat::{
 };
 pub use entity::{
     Entity, EntityStore, MonsterCtorDraws, VisibleFlag, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY,
+};
+pub use guild::{
+    check_guild_name, AddWarGuildOutcome, GuildConfig, GuildManager, GuildRank, GuildState,
+    GuildWarEnded, WarGuild,
 };
 pub use magic::{
     can_read_book, get_power, get_power13, get_rpow, get_spell_point, magic_attack_interval, mpow,

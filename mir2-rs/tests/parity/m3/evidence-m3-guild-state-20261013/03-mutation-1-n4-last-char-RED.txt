@@ -1,0 +1,26 @@
+### RC1 mutation: check_guild_name loop upper bound take(len-1) -> take(len)
+### mutated-file sha256 = 9ff4a7307062e8432cbd1316c1932b530674b15ea16776a3d6663952ac642cbb
+### cmd: cargo test -p mir2-world --lib guild::tests::check_guild_name_rejects_forbidden_chars_except_last --offline
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\crates\world)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.28s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m3cs-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 1 test
+test guild::tests::check_guild_name_rejects_forbidden_chars_except_last ... FAILED
+
+failures:
+
+---- guild::tests::check_guild_name_rejects_forbidden_chars_except_last stdout ----
+
+thread 'guild::tests::check_guild_name_rejects_forbidden_chars_except_last' (32624) panicked at crates\world\src\guild.rs:922:9:
+assertion failed: check_guild_name("会名>", 15)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    guild::tests::check_guild_name_rejects_forbidden_chars_except_last
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 143 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-world --lib`
+### restored sha256 = ee996f699e5928902aa41df73f110327c8d688ca0242e382a18453ced7f11d76
