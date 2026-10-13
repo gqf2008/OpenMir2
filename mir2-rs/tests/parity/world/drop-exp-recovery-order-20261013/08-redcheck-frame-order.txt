@@ -1,0 +1,32 @@
+# reviewer-5 O-1 红检：把 drain_run_downlinks 里的 drain_stamina 挪到 drain_kill_exp_chain 之前
+$ python - <<'PY'  # mutate: swap drain_stamina before drain_kill_exp_chain
+$ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test --offline -p game-svr --bin game-svr tick_frame_order_puts_stamina_after_kill_exp_chain
+     Running unittests src\main.rs (E:/tmp/m2svr-target\debug\deps\game_svr-d40510517c77a420.exe)
+
+running 1 test
+test tests::tick_frame_order_puts_stamina_after_kill_exp_chain ... FAILED
+
+failures:
+
+---- tests::tick_frame_order_puts_stamina_after_kill_exp_chain stdout ----
+
+thread 'tests::tick_frame_order_puts_stamina_after_kill_exp_chain' (29048) panicked at bins\game-svr\src\main.rs:10740:9:
+assertion `left == right` failed: 升级链（53→44→45→52→752）之后才是体力点段（53）
+  left: [53, 53, 44, 45, 52, 752]
+ right: [53, 44, 45, 52, 752, 53]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::tick_frame_order_puts_stamina_after_kill_exp_chain
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 202 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`
+test RC=101（期望 101 = 必红）
+
+running 1 test
+test tests::tick_frame_order_puts_stamina_after_kill_exp_chain ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 202 filtered out; finished in 0.00s
+
