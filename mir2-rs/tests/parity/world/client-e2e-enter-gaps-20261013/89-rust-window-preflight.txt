@@ -1,0 +1,104 @@
+89-rust-window-preflight.txt —— 卡 `openmir2-client-e2e-enter-gaps` DoD③
+Rust 侧窗口前置门 `check_rust_window_preflight.py`（片⑮ / openmir2-worker-11，2026-10-14）
+====================================================================================================
+一句话：root 的窗口脚本 `E:/tmp/openmir2-watch/client-e2e-window.sh` 从**共享主检出**
+（`repo=/e/Users/gxh/Documents/GitHub/OpenMir2`）构建 Rust 二进制；实测该检出停在
+`ad0592b19`（**不含**片⑪ `d16b5199d` 的 AOI 诊断修复）⇒ `main.rs` 仍是旧版式
+`map={} vis={} same_map={} nearest={}`，而 `check_aoi_visibility_diag.py` 的版式门要求
+`vr=/new=/af=` ⇒ 直接开窗口会 `PREREQ_RED`，白烧一个独占窗口。本片给出对称件
+（C# 侧 = 片⑭ `check_csharp_capture_preflight.py`）把这条静态前置做成机判。
+
+A. 判据工具与自检
+----------------------------------------------------------------------------------------------------
+$ python -I -B check_rust_window_preflight.py --selftest
+
+[PASS] selftest mapinfo-names ['jiaren', 'DB', 'G002', '0']
+[PASS] selftest mapinfo-index 3
+[PASS] selftest mapinfo-missing
+[PASS] selftest mapinfo-26-is-0 0
+[PASS] selftest mapinfo-count-27 27
+[PASS] selftest marker-good
+[PASS] selftest marker-old-red
+[PASS] selftest format-line-finder
+[PASS] selftest points-spec [(291, 666, 'outside'), (289, 618, 'inside')]
+[PASS] selftest points-spec-bad
+[PASS] selftest git-init 76fab337fbab2820322198c97cd0a106f138533b
+[PASS] selftest git-ancestor-yes True
+[PASS] selftest git-ancestor-unknown-prereq None
+[PASS] selftest git-not-a-repo-prereq None
+[PASS] selftest mongen-wire-green 0
+[PASS] selftest mongen-wire-red 1
+[PASS] selftest mongen-wire-prereq 2
+SELFTEST OK (17/17)
+rc=0
+
+B. 真机读数①：构建源**正确**的检出（本车道 worktree，含片⑪）⇒ GREEN
+----------------------------------------------------------------------------------------------------
+$ python -I -B check_rust_window_preflight.py --repo <m2-svr worktree> --ref HEAD
+
+[OK] R1 构建源 E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr 的 HEAD 含修复提交 d16b5199d9（--is-ancestor=YES）
+[OK] R2 源码含 ③ 读数标记（版式 `vr={} vis={} new={} af={}` + 可见集判据）
+     main.rs 版式行 = " [{}({}) map={} vr={} vis={} new={} af={} same_map={} nearest={}]",
+[OK] R3 MapInfo 第 26 个 section 的逻辑名 == '0'（= 真机 map_id 26）
+[OK] R4 (291,666) --expect outside → rc=0
+[OK] R4 (291,651) --expect outside → rc=0
+[OK] R4 (289,618) --expect inside → rc=0
+[OK] R4 (287,620) --expect inside → rc=0
+[OK] R5 判据工具齐备（4 件）
+RESULT: GREEN
+rc=0
+
+C. 真机读数②：root 窗口**实际会用**的共享主检出 ⇒ RED（R1 + R2 双点名）
+----------------------------------------------------------------------------------------------------
+$ python -I -B check_rust_window_preflight.py --repo E:/Users/gxh/Documents/GitHub/OpenMir2 --ref HEAD
+
+     main.rs 版式行 = " [{}({}) map={} vis={} same_map={} nearest={}]",
+[OK] R3 MapInfo 第 26 个 section 的逻辑名 == '0'（= 真机 map_id 26）
+[OK] R4 (291,666) --expect outside → rc=0
+[OK] R4 (291,651) --expect outside → rc=0
+[OK] R4 (289,618) --expect inside → rc=0
+[OK] R4 (287,620) --expect inside → rc=0
+[OK] R5 判据工具齐备（4 件）
+RED R1: E:/Users/gxh/Documents/GitHub/OpenMir2 的 HEAD=ad0592b1912b2c740aea01f83265370aa7d94139 不含 d16b5199d9（旧诊断版式 ⇒ 窗口判据 PREREQ_RED）
+RED R2: E:/Users/gxh/Documents/GitHub/OpenMir2\mir2-rs\bins\game-svr\src\main.rs 缺标记 (format=False filter=False); 当前版式行 = " [{}({}) map={} vis={} same_map={} nearest={}]",
+RESULT: RED
+rc=1
+
+D. 两侧版式/提交逐字段对照（原始命令 + 输出）
+----------------------------------------------------------------------------------------------------
+$ git -C <m2-svr worktree> rev-parse HEAD; git -C <main> rev-parse HEAD; git -C <main> rev-parse origin/master
+7a41ad294e8b68e6b7d415abbb6e7ee04082faca
+ad0592b1912b2c740aea01f83265370aa7d94139
+4c0762c83bd3faaa731d3175fe2551c0732611d8
+
+$ git -C <main> merge-base --is-ancestor d16b5199d98029081daccd9252f81b94a9596eaf HEAD ; echo rc=$?
+rc=1
+
+$ grep -n "vr={} vis={} new={} af={}" <worktree>/mir2-rs/bins/game-svr/src/main.rs
+4039:                " [{}({}) map={} vr={} vis={} new={} af={} same_map={} nearest={}]",
+
+$ grep -n "vis={} same_map={} nearest={}" <main>/mir2-rs/bins/game-svr/src/main.rs
+4027:                " [{}({}) map={} vis={} same_map={} nearest={}]",
+
+E. map_id ↔ MapInfo 逻辑名（本片补的第三组判据；钉住「真机 `map=26` == MonGen 的逻辑名 `0`」）
+----------------------------------------------------------------------------------------------------
+真机周期行的 `map=26`（`main.rs::SessionAoiDiag.map_id` = `MapInfo.txt` 的 section 序，
+`crates/envir/src/registry.rs` / oracle `Maps.LoadMapInfo`），而 MonGen/StartPoint 按**逻辑名** `0`。
+本工具解析 `E:/MirServer/M2GameSvr/Envir/MapInfo.txt`（GBK，322 section）判定第 26 个是否为 `0`：
+  [OK] R3 MapInfo 第 26 个 section 的逻辑名 == '0'（= 真机 map_id 26）
+（判据见 B/C 两段输出；改坏必红 M1/M2 见 `90-redcheck-rust-window-preflight.txt`。）
+
+F. 窗口坐标与生成框（R4，调用既有 `check_mongen_dense_points.py`，不复制几何）
+----------------------------------------------------------------------------------------------------
+  291,666 → outside（root verify1 站位；③a 反向对照）
+  291,651 → outside（root 复跑站位）
+  289,618 → inside （③b 有怪点，oracle StartPoint）
+  287,620 → inside （③b 备选，片⑦ AFTER 已证客户端实收 13 对出现帧）
+以上默认写进工具 `--points` 默认值，B 段输出逐条 `[OK] R4`。
+
+G. 工具 SHA256 与复现口径
+----------------------------------------------------------------------------------------------------
+  check_rust_window_preflight.py sha256 = 7bcb3d15c66d7cbf626a2b0aa3c262e9c9a0784ffdf822c7598812f0563b7ddd
+  （基准 sha256 的**盘上字节**；该文件受 `.gitattributes` 文本属性，仓库字节 = LF 归一，见 SHA256SUMS.txt）
+  复现：`python -I -B check_rust_window_preflight.py --repo <检出> [--ref HEAD] --selftest`
+  退出码：`0` GREEN / `1` RED（判据不符）/ `2` PREREQ_RED（缺输入/解析不到 git）。

@@ -342,3 +342,26 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
 - 证据：`85-csharp-capture-topology-rootcause.md`（源码锚点 + 部署件包含关系）、
   `86-csharp-capture-preflight.txt`（selftest 12/12 + 真实 GREEN + 五条改坏必红 + 还原复绿）、
   `87-gates.txt`、`88-boundary.txt`。
+
+## ⑮ 片⑮：③ 窗口 **Rust 侧前置门** —— 构建源/读数标记/map_id 对齐（2026-10-14）—— `89`/`90`
+
+- **背景（实测到的真缺陷）**：root 的窗口脚本 `E:/tmp/openmir2-watch/client-e2e-window.sh`
+  里 `repo=/e/Users/gxh/Documents/GitHub/OpenMir2`，即**构建源 = 共享主检出**。2026-10-14 实测该检出
+  停在 `ad0592b19`（`origin/master` 的祖先，但**不含**片⑪ `d16b5199d`）⇒ `main.rs` 仍是旧版式
+  `[{name}({aid}) map={} vis={} same_map={} nearest={}]`，而片⑪ 的 `check_aoi_visibility_diag.py`
+  ① 版式门**要求** `vr=/new=/af=` ⇒ 直接开 ③ 窗口会 `PREREQ_RED`，白烧一个独占窗口。
+- **新工具 `check_rust_window_preflight.py`**（只读、零端口、零起栈）—— 片⑭ C# 侧前置门的对称件。
+  五组机判（fail-closed，`0` GREEN / `1` RED / `2` PREREQ_RED）：
+  R1 构建源含 `d16b5199d`（`git merge-base --is-ancestor`）；R2 源码含版式字面量
+  `vr={} vis={} new={} af={}` 与可见集判据 `!= VisibleFlag::Hidden`（旧 `== Show` 只数「本轮新增」，
+  是 root 误读的根因）；R3 `Envir/MapInfo.txt` 第 26 个 section 的逻辑名 == `0`
+  （钉住真机周期行 `map=26` ↔ MonGen 判据用的逻辑名 `0`；**本片新补的判据**）；
+  R4 窗口坐标与 `MonGen.txt` 生成框一致（调既有 `check_mongen_dense_points.py`，不复制几何）；
+  R5 四个判据工具齐备。`--selftest` 17/17。
+- **真机读数**：构建源 = 本车道 worktree（含片⑪）⇒ **GREEN rc=0**；
+  构建源 = 共享主检出 ⇒ **RED rc=1**，R1 + R2 同时点名（`89` §C 原文）。
+- **7 条改坏必红**（`90`）：map_id 26→27、逻辑名 0→9、框内点误标 outside、
+  fix-commit 换非祖先、坏 ref、删源码版式标记、判据工具名写错；每条还原后 sha256 逐字节一致。
+- **零生产代码改动**（仅一个 `.py` 判据 + 三份文档）；本片**未起栈、未占端口**，未动共享主检出。
+- 证据：`89-rust-window-preflight.txt`、`90-redcheck-rust-window-preflight.txt`、
+  `91-gates.txt`、`92-boundary.txt`。

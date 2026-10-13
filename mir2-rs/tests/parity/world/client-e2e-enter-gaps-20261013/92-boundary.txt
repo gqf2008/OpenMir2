@@ -1,0 +1,26 @@
+92-boundary.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片⑮ 边界
+base = 7a41ad294（片⑭ head = 本片父提交）；head = 本片提交（交付时以 tip 为准）
+====================================================================================================
+$ git diff --name-status 7a41ad294 HEAD -- mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/89-rust-window-preflight.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/90-redcheck-rust-window-preflight.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/91-gates.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/92-boundary.txt
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_rust_window_preflight.py
+（本文件 92-boundary.txt 自身也在其中；上表来自暂存后的真实最终差量。）
+
+冻结面检查（必须为空）：
+$ git diff --name-only 7a41ad294 -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+  （空 = 冻结面零改动）
+
+后缀统计：
+  *.rs 改动 = 0（本片零生产代码改动）
+  *.py = 1（check_rust_window_preflight.py，新增离线判据）
+  证据 .txt = 89 / 90 / 91 + 本文件 92
+  文档 = README.md §⑮、SHA256SUMS.txt（90 行，repo LF/git-blob 口径）
+
+证据复核（本文件最终内容确定后重跑；SHA256SUMS 含本文件）：
+  GREEN mir2-rs\tests\parity\world\client-e2e-enter-gaps-20261013\SHA256SUMS.txt  [repo 口径]  OK 90/90
+  EOLCHECK GREEN 91/91 件文本证据与仓库口径（LF）在 EOL 上一致
