@@ -1,0 +1,10 @@
+# boundary（base=6f0bca48e）
+
+$ git diff --name-only 6f0bca48e HEAD -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+(工作树未提交，故按工作树 diff)
+$ git diff --name-only 6f0bca48e -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+  <空>
+
+本片改树：
+   M mir2-rs/bins/game-svr/src/main.rs
+  ?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/

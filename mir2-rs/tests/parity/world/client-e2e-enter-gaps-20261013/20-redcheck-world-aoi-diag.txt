@@ -1,0 +1,29 @@
+## 改坏必红：world_aoi_diag nearest 由 Chebyshev(max) 改成 min
+$ sed -i 's/let d = (o.x - e.x).abs().max((o.y - e.y).abs());/let d = (o.x - e.x).abs().min((o.y - e.y).abs());/' bins/game-svr/src/main.rs
+
+failures:
+
+---- tests::world_aoi_diag_reports_visible_and_nearest stdout ----
+
+thread 'tests::world_aoi_diag_reports_visible_and_nearest' (15824) panicked at bins\game-svr\src\main.rs:7268:9:
+assertion `left == right` failed: 最近 Chebyshev 距离 = 2（近怪）
+  left: 0
+ right: 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::world_aoi_diag_reports_visible_and_nearest
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 181 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`
+
+## 还原后
+$ cp /tmp/m2svr-main-backup2.rs bins/game-svr/src/main.rs
+
+running 1 test
+test tests::world_aoi_diag_reports_visible_and_nearest ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 181 filtered out; finished in 0.00s
+
