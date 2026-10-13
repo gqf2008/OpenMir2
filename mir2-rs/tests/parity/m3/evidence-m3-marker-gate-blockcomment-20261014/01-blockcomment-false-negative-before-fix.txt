@@ -1,0 +1,30 @@
+### O-1' 根因复现：块注释里的生产牙被旧实现当成真牙（fail-open）
+
+$ git show HEAD:mir2-rs/tests/parity/m3/marker_prefix_gate.py  # 旧实现（base 7caf97454..HEAD 0992ac70 = 上片 head）
+$ python -I probe.py <old_gate.py> <new marker_prefix_gate.py>
+
+牙片段："Assert-M3MarkerPrefix -Path $shopMarkersPath -Marker 'M3SHOPSEQ'"
+期望：块注释/整行 # 注释里的牙 => 扫到 []；块注释闭合后的真实牙 => 扫到 [('M3SHOPSEQ', 'shopMarkersPath')]
+
+用例：整行 # 注释的牙（O-1，已收口）
+  expect                = []
+  旧 _code_lines 实得   = []  ⇒ PASS
+  新 _code_lines 实得   = []  ⇒ PASS
+用例：块注释 <# ... #>（同行）
+  expect                = []
+  旧 _code_lines 实得   = [('M3SHOPSEQ', 'shopMarkersPath')]  ⇒ FAIL（fail-open：注释牙被当真牙 ⇒ 门保持 GREEN）
+  新 _code_lines 实得   = []  ⇒ PASS（fail-closed：注释牙=缺牙 ⇒ RED）
+用例：块注释 <# ... #>（跨行）
+  expect                = []
+  旧 _code_lines 实得   = [('M3SHOPSEQ', 'shopMarkersPath')]  ⇒ FAIL（fail-open：注释牙被当真牙 ⇒ 门保持 GREEN）
+  新 _code_lines 实得   = []  ⇒ PASS（fail-closed：注释牙=缺牙 ⇒ RED）
+用例：块注释嵌套
+  expect                = []
+  旧 _code_lines 实得   = [('M3SHOPSEQ', 'shopMarkersPath')]  ⇒ FAIL（fail-open：注释牙被当真牙 ⇒ 门保持 GREEN）
+  新 _code_lines 实得   = []  ⇒ PASS（fail-closed：注释牙=缺牙 ⇒ RED）
+用例：块注释闭合后同行真实牙（不应误杀）
+  expect                = [('M3SHOPSEQ', 'shopMarkersPath')]
+  旧 _code_lines 实得   = [('M3SHOPSEQ', 'shopMarkersPath')]  ⇒ PASS
+  新 _code_lines 实得   = [('M3SHOPSEQ', 'shopMarkersPath')]  ⇒ PASS
+
+汇总：旧实现 3/5 用例判错（含 3 类块注释形态的 fail-open）；新实现 0/5 判错。

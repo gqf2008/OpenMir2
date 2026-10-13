@@ -12,7 +12,9 @@ A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-scan-guards-20261014/14-chain-
 A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-scan-guards-20261014/31-code-diff.txt
 A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-scan-guards-20261014/README.md
 M	mir2-rs/tests/parity/m3/marker_prefix_gate.py
-### 本证据目录内、于本提交新增的清单/边界件：
+### 说明（reviewer-5 `d853bd1a` 的 O-2' 订正，2026-10-14）：
+### 上面的 `git diff --name-status` 输出是在 30-boundary.txt / SHA256SUMS.txt 落盘前捕获的，
+### 故只列 11 个 A；本目录最终共 13 个 A = 上面 11 件 + 下面 2 件（本清单/边界件本身）：
 A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-scan-guards-20261014/30-boundary.txt
 A	mir2-rs/tests/parity/m3/evidence-m3-marker-gate-scan-guards-20261014/SHA256SUMS.txt
 

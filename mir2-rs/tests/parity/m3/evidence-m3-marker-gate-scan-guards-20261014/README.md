@@ -53,4 +53,7 @@ fail-open 形态。reviewer-6 的 O-1 因此登记「注释行可能误报」；
   本片 tier=L 纯离线，**不据此收卡**。
 - 另一条与 `scan_guards` 同族的开放项（`audit --strict` 接线 / `T-42` 撞号重编）仍属 owner 已路由的跨车道写集，
   本片不碰（见上一片 `evidence-m3-chain-gate-o2-20261014` §「未接 audit --strict」）。
-- `_code_lines()` 仅跳过整行 `#` 注释；PowerShell `<# ... #>` 块注释不在本片范围（`run_pair.ps1` 未使用）。
+- `_code_lines()` 当时仅跳过整行 `#` 注释；PowerShell `<# ... #>` 块注释不在本片范围。
+  **订正（reviewer-5 `d853bd1a` 的 O-1'，2026-10-14）**：`run_pair.ps1:2-34` **确有** `<# ... #>` 头部块注释，
+  旧措辞「`run_pair.ps1` 未使用」与事实不符。块注释内藏牙的 fail-open 隐患已由后续片
+  `evidence-m3-marker-gate-blockcomment-20261014` 把 `_code_lines()` 扩展到（可嵌套）块注释而闭合。
