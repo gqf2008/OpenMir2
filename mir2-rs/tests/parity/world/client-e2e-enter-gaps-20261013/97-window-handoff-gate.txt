@@ -1,0 +1,184 @@
+97-window-handoff-gate.txt —— 卡 `openmir2-client-e2e-enter-gaps` ③「同屏没怪」收口
+窗口就绪聚合门 + 一键两侧 capture 计划（片⑰ / openmir2-worker-11，2026-10-14）
+====================================================================================================
+一句话：③ 的离线判决（`70-aoi-visibility-verdict.txt`：root verify1 的 (291,666) 在 map 0 全部
+MonGen 生成框之外 ⇒ `vis=0` 正确；同图框内点 (287,620) 客户端实收 13 对出现帧 ⇒ AOI 有算有下发）
+之后，**唯一未闭环的 R 级判据 = 两侧同框真机对照**，归 root 独占窗口。本片把「开窗前确认
+工具/构建源/落点/命令」做成**一条机判的 GO/NO-GO**（`window_handoff.py`），避免再出现
+「开了窗口才发现构建源过旧、判据 PREREQ_RED」的烧窗（2026-10-14 实测的真缺陷）。
+
+工具不改任何判据，只聚合三组已有门并生成计划：
+  G1 = 片⑮ `check_rust_window_preflight.py`（R1..R5；R1/R2 点住窗口脚本 repo= 是否含片⑪）
+  G2 = 证据目录 6 件判据脚本的 `--selftest` 必须全过（缺一件 ⇒ PREREQ）
+  G3 = 片⑭ `check_csharp_capture_preflight.py`（可选，--with-csharp）
+  INFO = `check_mongen_dense_points.py --rank`（窗口内期望出生怪数排行，选点用）
+  `--plan` = ③a/③b 两侧对照的可粘贴命令序列（Rust 起栈/代理/客户端/解码 + C# 侧 + 三条判据 + 收工）
+             ；G1 RED 时附「改用专用 worktree 从 origin/master 构建」修复块。
+
+退出码：0=GREEN/GO、1=RED/NO-GO、2=PREREQ_RED。所有读数为**只读、零起栈、零端口**。
+
+A. 工具自检（`python -I -B window_handoff.py --selftest`，27/27）
+----------------------------------------------------------------------------------------------------
+[PASS] selftest parse-result-green
+[PASS] selftest parse-result-red
+[PASS] selftest parse-result-prereq
+[PASS] selftest parse-result-suffix
+[PASS] selftest parse-result-missing
+[PASS] selftest parse-result-last-wins
+[PASS] selftest parse-selftest-ok
+[PASS] selftest parse-selftest-green
+[PASS] selftest parse-selftest-failed
+[PASS] selftest parse-selftest-red
+[PASS] selftest parse-selftest-missing
+[PASS] selftest agg-allgreen-rc0 0
+[PASS] selftest agg-allgreen-rust-ok
+[PASS] selftest agg-stale-rc1 1
+[PASS] selftest agg-stale-flag
+[PASS] selftest agg-stale-reason G1 Rust 窗口前置门 RED（构建源/读数标记不符；窗口会 PREREQ_RED）—— 见下方修复块
+[PASS] selftest plan-stale-remediation
+[PASS] selftest plan-fresh-no-remediation
+[PASS] selftest plan-has-comparators
+[PASS] selftest plan-has-sites
+[PASS] selftest plan-has-pipeline
+[PASS] selftest agg-badtool-rc1 1
+[PASS] selftest agg-badtool-reason G2 aoi_visibility_pair.py --selftest FAILED（rc=1）
+[PASS] selftest agg-missing-prereq-rc2 2
+[PASS] selftest agg-missing-reason G2 缺判据工具 ['check_client_s2c_frames.py']（--check-dir=C:\Users\gxh\AppData\Local\Temp\wh-missing-kf_8oayi）
+[PASS] selftest agg-rust-prereq-rc2 2
+[PASS] selftest agg-norepo-prereq 2
+SELFTEST OK (27/27)
+
+B. 真机读数①：构建源**正确**的检出（m2-svr worktree，含片⑪ d16b5199d）⇒ GREEN/GO
+----------------------------------------------------------------------------------------------------
+$ python -I -B window_handoff.py --repo E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr --ref HEAD --rank 5
+OK   G2 check_mongen_dense_points.py --selftest
+OK   G2 check_aoi_visibility_diag.py --selftest
+OK   G2 aoi_visibility_pair.py --selftest
+OK   G2 check_client_s2c_frames.py --selftest
+OK   G2 check_rust_window_preflight.py --selftest
+OK   G2 check_csharp_capture_preflight.py --selftest
+OK   G1 Rust 窗口前置门 GREEN（R1..R5）
+INFO RANK (605,578) E=12.681 box=(605,578) range=30 count=10 name=半兽人
+INFO RANK (211,629) E=12.225 box=(211,629) range=30 count=10 name=半兽人
+INFO RANK (256,572) E=12.225 box=(256,572) range=30 count=10 name=半兽人
+INFO RANK (513,585) E=11.682 box=(513,585) range=30 count=10 name=半兽人
+INFO RANK (164,141) E=11.166 box=(164,141) range=30 count=10 name=半兽人
+WINDOW_READY=YES
+RESULT: GREEN
+rc=0（rc=0）
+
+C. 真机读数②：root 窗口脚本**实际会**用的共享主检出（停在 ad0592b19）⇒ RED/NO-GO
+----------------------------------------------------------------------------------------------------
+$ python -I -B window_handoff.py --repo E:/Users/gxh/Documents/GitHub/OpenMir2 --ref HEAD
+OK   G2 check_mongen_dense_points.py --selftest
+OK   G2 check_aoi_visibility_diag.py --selftest
+OK   G2 aoi_visibility_pair.py --selftest
+OK   G2 check_client_s2c_frames.py --selftest
+OK   G2 check_rust_window_preflight.py --selftest
+OK   G2 check_csharp_capture_preflight.py --selftest
+RED G1 Rust 窗口前置门 RED（构建源/读数标记不符；窗口会 PREREQ_RED）—— 见下方修复块
+WINDOW_READY=NO
+RESULT: RED
+rc=1（rc=1）
+  ⇒ 这就是 2026-10-14 实测的真缺陷：`client-e2e-window.sh` 的 `repo=/e/Users/gxh/Documents/GitHub/OpenMir2`
+    （共享主检出，rev 车道工作区，HEAD=ad0592b1912b2c740aea01f83265370aa7d94139）**不含片⑪**，
+    其 `main.rs` 版式仍是旧的 `map={} vis={} same_map={} nearest={}` ⇒ 开窗后
+    `check_aoi_visibility_diag.py` 必 `PREREQ_RED`。**本门在开窗前把它挡下（fail-closed）**。
+
+D. 可选：同时跑 C# 侧抓包拓扑前置门（G3）
+----------------------------------------------------------------------------------------------------
+$ python -I -B window_handoff.py --repo <m2-svr worktree> --with-csharp
+OK   G2 check_mongen_dense_points.py --selftest
+OK   G2 check_aoi_visibility_diag.py --selftest
+OK   G2 aoi_visibility_pair.py --selftest
+OK   G2 check_client_s2c_frames.py --selftest
+OK   G2 check_rust_window_preflight.py --selftest
+OK   G2 check_csharp_capture_preflight.py --selftest
+OK   G1 Rust 窗口前置门 GREEN（R1..R5）
+OK   G3 C# 抓包拓扑前置门 GREEN
+WINDOW_READY=YES
+RESULT: GREEN
+rc=0
+
+E. 修复块与一键计划（`--plan`，G1 RED 时自动附）
+----------------------------------------------------------------------------------------------------
+$ python -I -B window_handoff.py --repo E:/Users/gxh/Documents/GitHub/OpenMir2 --plan
+OK   G2 check_mongen_dense_points.py --selftest
+OK   G2 check_aoi_visibility_diag.py --selftest
+OK   G2 aoi_visibility_pair.py --selftest
+OK   G2 check_client_s2c_frames.py --selftest
+OK   G2 check_rust_window_preflight.py --selftest
+OK   G2 check_csharp_capture_preflight.py --selftest
+RED G1 Rust 窗口前置门 RED（构建源/读数标记不符；窗口会 PREREQ_RED）—— 见下方修复块
+
+# ③ 两侧同框对照窗口计划（卡 openmir2-client-e2e-enter-gaps）
+# 构建源 repo=E:/Users/gxh/Documents/GitHub/OpenMir2 ref=HEAD
+# ③b 有怪点 site=287,620 / ③a 反向点 site_none=291,666 / view_range=12
+
+# ==== 修复块：G1 RED（构建源过旧）⇒ 窗口脚本的 repo= 必须换树（勿动共享主检出） ====
+# root 的 client-e2e-window.sh 默认 repo=/e/Users/gxh/Documents/GitHub/OpenMir2（共享主检出，
+# rev 车道工作区，实测停在 ad0592b19 ⇒ 无 vr/new/af 读数）。用专用 worktree 从 origin/master 构建：
+#   git -C <任一检出> worktree add --detach E:/tmp/m2svr-window-origin origin/master
+#   git -C E:/tmp/m2svr-window-origin rev-parse HEAD   # 记进证据
+# 再把窗口脚本 2 行指向它：
+#   repo=/e/tmp/m2svr-window-origin
+#   tgt='E:\tmp\m2svr-window-target'
+# 开窗前复跑本门至 GREEN：
+#   python -I -B window_handoff.py --repo E:/tmp/m2svr-window-origin --ref HEAD
+
+# 0) 前置：端口/进程（5000/5100/5500/5600/5700/6000/7000/7100/7200 全 DOWN；仅共享 3306 可 UP）
+#    起栈禁接管道（禁 | tee/tail/head/grep，会把调用挂死）；一律 > <log> 2>&1
+
+# 1) 站位：两侧必须逐字节同坐标（跑完还原并记录 before/after）
+#   mysql> UPDATE characters SET x=287, y=620 WHERE chrname='aaa';  -- ③b 有怪
+#   mysql> UPDATE characters SET x=291, y=666 WHERE chrname='aaa';  -- ③a 反向
+
+# 2) Rust 侧
+#   powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 ^
+#     -RustBinDir E:/tmp/m2svr-window-target/debug -Seed 42 -LogDir E:/tmp/window/cliente2e/rust/stack
+#   python tools/capture/mir2_proxy.py --out E:/tmp/window/cliente2e/rust/proxy --map 7200=127.0.0.1:7600
+#   powershell -ExecutionPolicy Bypass -File tools/client/mir_flow.ps1 ^
+#     -Account mir2test -Password mir2pass -OutDir E:/tmp/window/cliente2e/rust/shots -WalkClicks 0 -AutoPlaySec 12 ^
+#     -SkipReenter -SkipLogout -SkipTalk
+#   powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/export_s2c.ps1 ^
+#     -ProxyDir E:/tmp/window/cliente2e/rust/proxy -OutDir E:/tmp/window/cliente2e/rust/s2c
+
+# 3) C# 侧（先读 85-csharp-capture-topology-rootcause.md；同一条 capture 管线，与阵营无关）
+#   python -I -B check_csharp_capture_preflight.py --repo E:/Users/gxh/Documents/GitHub/OpenMir2 --mirserver E:/MirServer ^
+#     --shadow-config <影子 RunGate/config.conf>        # 必须 GREEN 再起栈
+#   powershell -ExecutionPolicy Bypass -File E:/MirServer/start-all.ps1   # C# 栈
+#   # 影子 game-gate(7600) + 代理占 7200，同 §2；再到 C# 侧客户端与解码：
+#   powershell -ExecutionPolicy Bypass -File tools/client/mir_flow.ps1 -Account mir2test ^
+#     -Password mir2pass -OutDir E:/tmp/window/cliente2e/csharp/shots -WalkClicks 0 -AutoPlaySec 12 -SkipReenter -SkipLogout -SkipTalk
+#   powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/export_s2c.ps1 ^
+#     -ProxyDir E:/tmp/window/cliente2e/csharp/proxy -OutDir E:/tmp/window/cliente2e/csharp/s2c
+
+# 4) 判据（本目录）
+#   服务端（Rust，新读数 vr/new/af）：python -I -B check_aoi_visibility_diag.py \
+#     --log E:/tmp/window/cliente2e/rust/stack/game-svr.out.log --expect visible --min-vis 1
+#   客户端（Rust）：python -I -B check_client_s2c_frames.py \
+#     --capture E:/tmp/window/cliente2e/rust/s2c/capture.jsonl --min-appearance-pairs 1
+#   ③b 两侧：python -I -B aoi_visibility_pair.py --left E:/tmp/window/cliente2e/rust/s2c/capture.jsonl \
+#     --right E:/tmp/window/cliente2e/csharp/s2c/capture.jsonl --expect visible --min-pairs 1
+#   ③a 反向：同上加 --expect none（两侧都必须是 0 对）
+
+# 5) 收工：start_rust_stack.ps1 -Stop / C# -Stop；还原 aaa；实拍十端口；SHA256SUMS 按 LF/git-blob 口径
+
+
+WINDOW_READY=NO
+RESULT: RED
+  ⇒ 修复块给的是「专用 worktree 从 origin/master 构建」：**不动共享主检出**（它是 rev 车道的
+    工作区），只把窗口脚本 2 行（`repo=` / `tgt=`）指向新树；开窗前用本门复跑至 GREEN。
+    计划正文（§0..§5）与 `82-two-side-window-runbook.md` 同口径，且把 ③a(`--expect none`) /
+    ③b(`--expect visible --min-pairs 1`) 两条判据都列上。
+
+F. 判据脚本引用（不复制几何/取数口径）
+----------------------------------------------------------------------------------------------------
+  `check_rust_window_preflight.py` / `check_csharp_capture_preflight.py` / `check_mongen_dense_points.py`
+  / `check_aoi_visibility_diag.py` / `aoi_visibility_pair.py` / `check_client_s2c_frames.py`（同目录）
+  ⇒ G2 任一 `--selftest` FAILED 即 RED（改坏必红见 `98-redcheck-window-handoff.txt`）。
+
+G. 涉及文件
+----------------------------------------------------------------------------------------------------
+  工具: `window_handoff.py`（本目录）
+  证据: 本文件 + `98-redcheck-window-handoff.txt` + `99-gates.txt` + `100-boundary.txt`

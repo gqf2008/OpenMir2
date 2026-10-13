@@ -1,0 +1,111 @@
+98-redcheck-window-handoff.txt —— 片⑰ `window_handoff.py` 改坏必红（三条熔断各造一次假绿）
+====================================================================================================
+口径：把工具复制到 `E:/tmp/wh-rc2/mut/`（**不动仓内文件**；`--check-dir` 指向真证据目录，
+所以 G2 仍跑真工具），每条只改一处“熔断”，验证 ① 该熔断确实让**伪输入**出现假绿（WINDOW_READY=YES
+rc=0），且 ② 工具自身的 `--selftest` 同时判红（内建断言有牙齿）。恢复 = sha256 与仓内文件逐字节一致。
+
+被测真值（必须 NO-GO，`--check-dir=<证据目录>`）：
+  §0 构建源过旧（共享主检出）⇒ RED/NO-GO；§0b 一件判据脚本自检坏 ⇒ RED/NO-GO。
+
+0. 真值（未改坏，仓内文件）
+----------------------------------------------------------------------------------------------------
+$ python -I -B window_handoff.py --repo E:/Users/gxh/Documents/GitHub/OpenMir2 --check-dir <证据目录>
+--
+OK   G2 check_mongen_dense_points.py --selftest
+OK   G2 check_aoi_visibility_diag.py --selftest
+OK   G2 aoi_visibility_pair.py --selftest
+OK   G2 check_client_s2c_frames.py --selftest
+OK   G2 check_rust_window_preflight.py --selftest
+OK   G2 check_csharp_capture_preflight.py --selftest
+RED G1 Rust 窗口前置门 RED（构建源/读数标记不符；窗口会 PREREQ_RED）—— 见下方修复块
+WINDOW_READY=NO
+RESULT: RED
+rc=1
+
+$ python -I -B window_handoff.py --repo <m2-svr worktree> --check-dir E:/tmp/wh-rc2/brokendir
+--
+OK   G2 check_mongen_dense_points.py --selftest
+OK   G2 check_aoi_visibility_diag.py --selftest
+OK   G2 check_client_s2c_frames.py --selftest
+OK   G2 check_rust_window_preflight.py --selftest
+OK   G2 check_csharp_capture_preflight.py --selftest
+OK   G1 Rust 窗口前置门 GREEN（R1..R5）
+RED G2 aoi_visibility_pair.py --selftest FAILED（rc=1）
+WINDOW_READY=NO
+RESULT: RED
+rc=1
+  brokendir = 真判据脚本 5 件 + 一件 `aoi_visibility_pair.py` 替换为 `SELFTEST FAILED`/rc=1 的桩。
+
+MUT-M1：G1 的 RED 熔断被吞（`rep.problems.append` + `build_source_stale` 改为 no-op）
+----------------------------------------------------------------------------------------------------
+$ python -I -B m1.py --repo E:/Users/gxh/Documents/GitHub/OpenMir2 --check-dir <证据目录>
+OK   G2 check_mongen_dense_points.py --selftest
+OK   G2 check_aoi_visibility_diag.py --selftest
+OK   G2 aoi_visibility_pair.py --selftest
+OK   G2 check_client_s2c_frames.py --selftest
+OK   G2 check_rust_window_preflight.py --selftest
+OK   G2 check_csharp_capture_preflight.py --selftest
+MUT-M1: G1 RED swallowed
+WINDOW_READY=YES
+RESULT: GREEN
+rc=0  ⇒ 假绿（真值 NO-GO）
+$ python -I -B m1.py --selftest
+SELFTEST FAILED (24/27)
+rc=1  ⇒ 内建断言抓到
+
+MUT-M2：G2 的「某工具 selftest FAILED」熔断被吞（整段 if/elif/else 改为恒 info）
+----------------------------------------------------------------------------------------------------
+$ python -I -B m2.py --repo <m2-svr worktree> --check-dir E:/tmp/wh-rc2/brokendir
+MUT-M2: G2 check_mongen_dense_points.py rc=0 state=OK swallowed
+MUT-M2: G2 check_aoi_visibility_diag.py rc=0 state=OK swallowed
+MUT-M2: G2 aoi_visibility_pair.py rc=1 state=FAILED swallowed
+MUT-M2: G2 check_client_s2c_frames.py rc=0 state=GREEN swallowed
+MUT-M2: G2 check_rust_window_preflight.py rc=0 state=OK swallowed
+MUT-M2: G2 check_csharp_capture_preflight.py rc=0 state=OK swallowed
+OK   G1 Rust 窗口前置门 GREEN（R1..R5）
+WINDOW_READY=YES
+RESULT: GREEN
+rc=0  ⇒ 假绿（真值 NO-GO）
+$ python -I -B m2.py --selftest
+SELFTEST FAILED (25/27)
+rc=1  ⇒ 内建断言抓到
+
+MUT-M3：总判决熔断被吞（`Report.rc()` 恒 0）
+----------------------------------------------------------------------------------------------------
+$ python -I -B m3.py --repo E:/Users/gxh/Documents/GitHub/OpenMir2 --check-dir <证据目录>
+OK   G2 check_mongen_dense_points.py --selftest
+OK   G2 check_aoi_visibility_diag.py --selftest
+OK   G2 aoi_visibility_pair.py --selftest
+OK   G2 check_client_s2c_frames.py --selftest
+OK   G2 check_rust_window_preflight.py --selftest
+OK   G2 check_csharp_capture_preflight.py --selftest
+RED G1 Rust 窗口前置门 RED（构建源/读数标记不符；窗口会 PREREQ_RED）—— 见下方修复块
+WINDOW_READY=YES
+RESULT: GREEN
+rc=0  ⇒ 假绿（真值 NO-GO）
+$ python -I -B m3.py --selftest
+SELFTEST FAILED (22/27)
+rc=1  ⇒ 内建断言抓到
+
+4. 恢复（base 副本 = 仓内文件；sha256 逐字节一致）
+----------------------------------------------------------------------------------------------------
+$ python -I -B base.py --repo E:/Users/gxh/Documents/GitHub/OpenMir2 --check-dir <证据目录>
+OK   G2 check_mongen_dense_points.py --selftest
+OK   G2 check_aoi_visibility_diag.py --selftest
+OK   G2 aoi_visibility_pair.py --selftest
+OK   G2 check_client_s2c_frames.py --selftest
+OK   G2 check_rust_window_preflight.py --selftest
+OK   G2 check_csharp_capture_preflight.py --selftest
+RED G1 Rust 窗口前置门 RED（构建源/读数标记不符；窗口会 PREREQ_RED）—— 见下方修复块
+WINDOW_READY=NO
+RESULT: RED
+rc=1  ⇒ 真值恢复
+$ sha256sum <证据目录>/window_handoff.py E:/tmp/wh-rc2/mut/base.py
+168931b7f52772bb218d742552889ef9de9cc8bfcfe3f45b47c5561432eee470 *E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr/mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py
+168931b7f52772bb218d742552889ef9de9cc8bfcfe3f45b47c5561432eee470 *E:/tmp/wh-rc2/mut/base.py
+  ⇒ 三处 sha256 相同（168931b7f52772bb218d742552889ef9de9cc8bfcfe3f45b47c5561432eee470）。
+
+5. 结论
+----------------------------------------------------------------------------------------------------
+三条熔断（G1 RED / G2 selftest FAILED / 总判决）各自被吞后都会产出**假绿**，且都被工具内建
+`--selftest` 判红 ⇒ 齿在。窗口前必须用本工具的原件（非改写件）跑出 `WINDOW_READY=YES` 才开窗。
