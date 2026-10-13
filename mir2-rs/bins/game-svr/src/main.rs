@@ -2974,8 +2974,10 @@ fn handle_hit_cmd(
 /// 守卫 + 成功后 `+GD` ack 沿用第二片；**第②片**接上 `DoSpell` 的**召唤面**（17/30/41）
 /// 效果体：`default` 支的 `CretInNearXy` 目标修正 → `MagicAttackRage` 距离门 →
 /// `SendRefMsg(RM_SPELL,…)` → 护身符门/消耗 → `summon_from_spell` → `boSpellFire` 的
-/// `RM_MAGICFIRE` → `boTrain` 熟练度尾 `RM_MAGIC_LVEXP`。20（诱惑，需 ⑨-3 的 `tame_adopt`）
-/// 与 46（分身）登记见 `game_svr::slave` 模块头 + `crates/world::slave::CLONE_DEFERRED`。
+/// `RM_MAGICFIRE` → `boTrain` 熟练度尾 `RM_MAGIC_LVEXP`。**第③片**接 **20（诱惑）**：
+/// `SKILL_TAMMING` 支（`MagicManager.cs:394-397`）的 `IsProperTarget && !Animal` 门 →
+/// `cast_tamming_spell`（`MagTamming` 账本 + `World::tame_adopt` 落尾）。46（分身）登记见
+/// `game_svr::slave` 模块头 + `crates/world::slave::CLONE_DEFERRED`。
 /// 效果体限速 / `SpellTick -= 450` / MP 消耗仍按 `magicwire` 模块头登记未接。
 #[allow(clippy::too_many_arguments)]
 fn handle_spell_cmd(
@@ -3173,6 +3175,99 @@ fn handle_spell_cmd(
                 "DBG",
                 "CM_SPELL：召唤魔号 {} 无 MagicInfo/无地图注册表 ⇒ 效果体不接（登记）",
                 req.magic_id
+            );
+        }
+    }
+    // **⑨-2 第③片（20 诱惑）**：`SKILL_TAMMING` 效果体
+    // （`PlayObject.Attack.cs:1268-1278` → `MagicManager.cs:394-397` → `MagTamming` `:704-825`）。
+    if req.magic_id == mir2_world::slave::SKILL_TAMMING {
+        if let Some(magic) = magic_table.get(req.magic_id) {
+            // `CretInNearXy(targetObject, nTargetX, nTargetY)`：与召唤面同口径，
+            // 目标在 1×1 邻域内 ⇒ 修正到目标实际坐标并作为 `spellObject`。
+            let (mut tx, mut ty) = (req.target_x, req.target_y);
+            let target_id = match world.entities.get(req.target_actor_id) {
+                Some(t) if !t.ghost && (t.x - tx).abs() <= 1 && (t.y - ty).abs() <= 1 => {
+                    tx = t.x;
+                    ty = t.y;
+                    Some(req.target_actor_id)
+                }
+                _ => None,
+            };
+            // `DoSpell` 的距离门（`MagicManager.cs:154`）。
+            if magic::spell_in_range(
+                i16::try_from(cur_x).unwrap_or(0),
+                i16::try_from(cur_y).unwrap_or(0),
+                i16::try_from(tx).unwrap_or(0),
+                i16::try_from(ty).unwrap_or(0),
+                magic_attack_rage,
+            ) {
+                // `DoSpell` 顶部的 `SendRefMsg(RM_SPELL, Effect, nTargetX, nTargetY, MagicId, "")`（`:159`）。
+                let rm = smframe::sm_spell(
+                    actor_id,
+                    wire_coord(tx),
+                    wire_coord(ty),
+                    magic.effect,
+                    req.magic_id,
+                );
+                broadcast_ref_msg(world, online, gates, actor_id, &[rm]);
+                // `UserMagic` 的内存态（尾里用；与召唤面同一口径）。
+                let mut train = magic::SkillTrainState {
+                    magic_id: req.magic_id,
+                    level: matched.as_ref().map_or(0, |m| m.level),
+                    tran_point: matched.as_ref().map_or(0, |m| m.tran_point),
+                    train_lv: magic.train_lv,
+                    train_level: magic.train_level,
+                    max_train: magic.max_train,
+                };
+                let input = game_svr::slave::TammingCastInput {
+                    magic_level: train.level,
+                    caster_id: actor_id,
+                    caster_abil_level,
+                    target_id,
+                    // `FastTrain` 未装载 ⇒ false（登记，同召唤面）。
+                    fast_train: false,
+                    cfg: pet_cfg,
+                    magic,
+                };
+                let outcome = game_svr::slave::cast_tamming_spell(world, &input, &mut train);
+                // 熟练度回写存档记录（`MakeSaveRcd` 的 `MagicList` 同源）。
+                if let Some(rcd) = saves
+                    .get_mut(chr_name)
+                    .and_then(|s| s.record.data.magic.as_mut())
+                    .and_then(|list| {
+                        list.iter_mut()
+                            .flatten()
+                            .find(|m| m.mag_idx == req.magic_id)
+                    })
+                {
+                    rcd.level = train.level;
+                    rcd.tran_point = train.tran_point;
+                }
+                // `boSpellFire` ⇒ `RM_MAGICFIRE`（`:648-658`）。
+                if outcome.magic_fire {
+                    let body = smframe::sm_magicfire(
+                        actor_id,
+                        wire_coord(tx),
+                        wire_coord(ty),
+                        magic.effect_type,
+                        magic.effect,
+                        target_id.unwrap_or(0),
+                    );
+                    broadcast_ref_msg(world, online, gates, actor_id, &[body]);
+                }
+                // 熟练度尾帧（`:659-669`）。
+                if outcome.train.levelup_msg {
+                    let body = smframe::sm_magic_lvexp(req.magic_id, train.level, train.tran_point);
+                    send_self_frame(online, gates, chr_name, body);
+                }
+                // 帧面未接（登记）：`RM_MAKEHOLYSEIZEMODE`（`:712/797`）无编码器；
+                // 狂暴态/时长（`OpenCrazyMode`）本骨架无字段。状态落尾已由 `cast_tamming_spell` 完成。
+                let _ = outcome.accepted;
+            }
+        } else {
+            glog!(
+                "DBG",
+                "CM_SPELL：诱惑魔号 20 无 MagicInfo ⇒ 效果体不接（登记）"
             );
         }
     }

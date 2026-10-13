@@ -22,14 +22,25 @@
 //!   帧面（`RM_SPELL`/`RM_MAGICFIRE`/`RM_MAGIC_LVEXP`/`RM_DURACHANGE` 的 `SM_*` 编码）在
 //!   [`crate::smframe`]，由宿主 `handle_spell_cmd` 发。
 //!
+//! ## 第③片（⑨-2 接线，20 诱惑）
+//!
+//! - [`TammingCastInput`] / [`cast_tamming_spell`]：`SKILL_TAMMING`（20）效果体 ——
+//!   `IsProperTarget && !Animal` 门 → `mag_tamming`（取数账本在 `crates/world::magic`）→
+//!   `TargetCret = null` → 受奴时 [`World::tame_adopt`] 落尾（Master/MasterRoyaltyTick/
+//!   SlaveMakeLevel/MasterTick/WalkSpeed/NextHitTime/BreakHolySeizeMode/SlaveList.Add）→
+//!   非受奴支 `HP = 0` → 共享尾。`Animal` 用构造期等价物
+//!   [`mir2_world::combat::race_is_animal`]（race 51/52/53/82/84/85/90）。
+//!
 //! ## 未接（登记，别按常识补）
 //!
 //! - **`MakeSlave` 的 `RecalcAbilitys` 派生类速度改写**（`WhiteSkeleton`/`ElfMonster`）与
 //!   `RefNameColor` 色彩：归 `openmir2-m3-pet-slave-lifecycle`（⑨-3）。
 //! - **46 分身**（`MagMakeClone`）：见 `crates/world::slave` 的 `CLONE_DEFERRED`。
-//! - **20 诱惑**（`MagTamming` 受奴尾）需要 `World::tame_adopt`，而该尾在
-//!   `openmir2-m3-pet-slave-lifecycle`（⑨-3，待审）里落；本片只接 17/30/41 召唤面，
-//!   20 由 ⑨-3 合入后的补片接（登记在卡上，别在此重复实现）。
+//! - **20 的 `RM_MAKEHOLYSEIZEMODE` 帧**（`MagicManager.cs:712/812`）与 **`OpenCrazyMode` 狂暴态/
+//!   时长**（`:797/805`）：前者无编码器、后者本骨架无 `CrazyMode` 字段（对应抽数已在
+//!   `mag_tamming` 消费，账本不变）⇒ 帧面/状态登记未接。
+//! - **race 54 的 `Animal = true`**（`BaseObject.ReAliveEx` `:2601-2603`）：复活路径未建模（⑨-3 登记）
+//!   ⇒ [`mir2_world::combat::race_is_animal`] 不计入。
 //! - **护身符扣光分支的 `SM_DELITEMS` 帧**：oracle `UseAmulet` 的 `else` 支
 //!   （`MagicBase.cs:124-126`）`SendDelItems` 尚无编码器 ⇒ 状态照改（`Dura=0`/清槽），
 //!   帧面登记。
@@ -248,12 +259,176 @@ pub fn cast_slave_spell(
         train,
     );
     world.rng = rng;
-    let _ = SKILL_TAMMING; // 20 由 ⑨-3 合入后的补片接（模块头登记）；引用以固定常量来源。
+    let _ = SKILL_TAMMING; // 20 见 [`cast_tamming_spell`]（同片第③面）。
     SlaveCastOutcome {
         accepted: tail.returned,
         magic_fire: tail.magic_fire,
         amulet,
         effect,
+        train: tail.train,
+    }
+}
+
+/// **⑨-2 第③片（20 诱惑）**：`SKILL_TAMMING` 效果体的宿主输入。
+///
+/// `target_id` = `PlayObject.Attack.cs:1271-1277` 的 `CretInNearXy` 命中结果
+/// （`None` ⇒ oracle `DoSpell` 收到 `null` ⇒ `IsProperTarget(null)` 假）。
+#[derive(Clone, Copy, Debug)]
+pub struct TammingCastInput<'a> {
+    /// `UserMagic.Level`（`MagTamming` 的 `magicLevel`）。
+    pub magic_level: u8,
+    pub caster_id: i32,
+    /// `PlayObject.Abil.Level`（熟练度尾门）。
+    pub caster_abil_level: u8,
+    pub target_id: Option<i32>,
+    /// `PlayObject.FastTrain`（本仓未装载该面 ⇒ 宿主恒传 `false`，登记）。
+    pub fast_train: bool,
+    pub cfg: &'a PetSlaveConfig,
+    /// `UserMagic.Magic`（调用方用 `MagicTable` 查到本魔号；无命中 ⇒ 不调本函数）。
+    pub magic: &'a MagicInfo,
+}
+
+/// [`cast_tamming_spell`] 的结果（帧面参数由宿主据此构造）。
+#[derive(Clone, Copy, Debug)]
+pub struct TammingCastOutcome {
+    /// oracle `DoSpell` 的返回值（20 没有 `boSpellFail` 支 ⇒ 恒 `true`）。
+    pub accepted: bool,
+    /// `boSpellFire`（20 恒 `true` ⇒ 宿主发 `RM_MAGICFIRE`）。
+    pub magic_fire: bool,
+    /// 本次成功受奴（oracle `targetObject.Master = playObject` + 落尾）。
+    pub tamed: bool,
+    /// 本次**非受奴支**改写到的目标 HP（`None` = 未改；受奴支的 `/10` 由
+    /// [`World::tame_adopt`] 落，不在本字段重复）。
+    pub target_hp: Option<u16>,
+    /// `OpenCrazyMode(Random(20)+10)` 支（`MagicManager.cs:795/802`）——抽数已在
+    /// [`magic::mag_tamming`] 内消费，**狂暴态/时长未建模**（本骨架无 `CrazyMode` 字段，登记）。
+    pub crazy_mode: bool,
+    /// 熟练度尾结算（[`SkillTrainState`] 已就地更新）。
+    pub train: magic::SkillProficiencyOutcome,
+}
+
+/// `MagTamming` 的入参装配（门不过 ⇒ `None`，oracle 不进入 `MagTamming`，也就**不抽任何数**）。
+///
+/// 两道门逐字对应 `MagicManager.cs:395`：`playObject.IsProperTarget(targetObject)`
+/// （`PlayObject.cs:1929`，含 M3⑦-4 的 `HAM_GROUP` 组剔除）与 `!targetObject.Animal`
+/// （[`mir2_world::combat::race_is_animal`] 的构造期等价物）。
+fn tamming_input(world: &World, input: &TammingCastInput<'_>) -> Option<magic::TammingInput> {
+    let target_id = input.target_id?;
+    let caster = world.entities.get(input.caster_id)?;
+    let target = world.entities.get(target_id)?;
+    if !mir2_world::combat::is_proper_target_grouped(caster, target, &caster.group_members) {
+        return None;
+    }
+    if mir2_world::combat::race_is_animal(target.race) {
+        return None;
+    }
+    Some(magic::TammingInput {
+        magic_level: input.magic_level,
+        caster_level: i32::from(caster.level),
+        target_race: target.race,
+        target_level: i32::from(target.level),
+        target_abil_max_hp: i32::from(target.max_hp),
+        target_life_attrib: target.life_attrib,
+        // `NoTame = monster.boTame`（`WorldServer.MonGen.cs:911`），而 `MonsterInfo.boTame`
+        // 全仓无赋值点（DB `monsters` 无该列）⇒ oracle 恒 `false`；照搬为常量（登记）。
+        target_no_tame: false,
+        target_master_is_caster: target.master == Some(input.caster_id),
+        target_master_present: target.master.is_some(),
+        target_hp: i32::from(target.hp),
+        walk_speed: i32::try_from(target.ai.walk_speed).unwrap_or(i32::MAX),
+        next_hit_time: i32::try_from(target.ai.next_hit_time).unwrap_or(i32::MAX),
+        caster_slave_count: i32::try_from(caster.slave_list.len()).unwrap_or(i32::MAX),
+        cfg_target_level: input.cfg.mag_tamming_target_level,
+        cfg_tamming_level: input.cfg.mag_tamming_level,
+        cfg_tamming_count: i32::from(input.cfg.mag_tamming_count),
+        cfg_hp_rate: input.cfg.mag_tamming_hp_rate,
+    })
+}
+
+/// **⑨-2 第③片（20 诱惑）**：`SKILL_TAMMING` 的 `DoSpell` 效果体 + 共享尾。
+///
+/// 逐行锚 oracle：
+/// - `case SKILL_TAMMING`（`MagicManager.cs:394-397`）：`IsProperTarget && !Animal` ⇒
+///   `MagTamming(playObject, (MonsterObject)target, nTargetX, nTargetY, userMagic.Level)`，
+///   返回 `true` ⇒ `boTrain = true`。
+/// - `MagTamming`（`:704-825`）：取数账本由 [`magic::mag_tamming`] 逐字保留（Claim B 输入）；
+///   本函数只做**状态落尾**：`TargetCret = null`（`:708`）、受奴（`Master`/`MasterRoyaltyTick`/
+///   `SlaveMakeLevel`/`MasterTick`/`WalkSpeed`/`NextHitTime`/`BreakHolySeizeMode`/`SlaveList.Add`）
+///   交给 [`World::tame_adopt`]（⑨-3），非受奴支的 `WAbil.HP = 0` 就地写。
+/// - 尾（`:644-669`）：20 没有置 `boSpellFail` 的分支 ⇒ `boSpellFail=false`、`boSpellFire=true`。
+///
+/// 取数次序：`MagTamming` 的抽数（`Random(4-Level)` / `Random(2)` / … / `Random(caster.Lv*2)`）
+/// 先走 `world.rng`，随后尾部的 `Random(3)+1` 走**同一条**流（中间不插入其它取数）。
+///
+/// # 未建模（登记，别按常识补）
+/// - `SendMsg(RM_MAKEHOLYSEIZEMODE, …)`（`:712/797` 两支：调用前 `Master == 施法者`；
+///   `Random(2) != 0`）——该帧无编码器，登记；状态面无副作用。
+/// - `BreakCrazyMode()` / `OpenCrazyMode()` 的狂暴态与时长（`:754/796/803`）：本骨架无 `CrazyMode`
+///   字段；`mag_tamming` 已把对应抽数消费掉（账本不变），状态登记不实现。
+/// - `CanReAlive` / `MonGen.ActiveCount`（`:761-770`）：同 ⑨-3 登记（`MonGen` 未建模）。
+pub fn cast_tamming_spell(
+    world: &mut World,
+    input: &TammingCastInput<'_>,
+    train: &mut SkillTrainState,
+) -> TammingCastOutcome {
+    let mut bo_train = false;
+    let mut tamed = false;
+    let mut target_hp = None;
+    let mut crazy_mode = false;
+    // oracle `if (IsProperTarget(targetObject) && !targetObject.Animal) { if (MagTamming(...)) boTrain = true; }`
+    // —— 门不过 ⇒ 连 `MagTamming` 都不进（`boTrain=false`、不抽数），但尾仍跑（`boSpellFire=true`）。
+    if let Some(tin) = tamming_input(world, input) {
+        let target_id = input.target_id.expect("门过 ⇒ target_id 必为 Some");
+        let mut rng = std::mem::replace(&mut world.rng, RandomNumber::with_seed(0));
+        let out = magic::mag_tamming(&mut rng, &tin);
+        world.rng = rng;
+        // `targetObject.TargetCret = null;`（`:708`，进入外层支即无条件清）。
+        if out.target_creature_cleared {
+            if let Some(t) = world.entities.get_mut(target_id) {
+                t.ai.target_creature = None;
+            }
+        }
+        // 受奴支：调用前 `Master != 施法者` 而结果 `Master == 施法者` ⇒ 本次受奴。
+        // （调用前 `Master == 施法者` 的早退支也把该输出置真，故必须与输入合判。）
+        tamed = out.target_master_is_caster && !tin.target_master_is_caster;
+        if tamed {
+            // 落尾（⑨-3）：`Master`/`MasterRoyaltyTick`/`SlaveMakeLevel`/`MasterTick`/
+            // `WalkSpeed`/`NextHitTime`/`BreakHolySeizeMode`/`SlaveList.Add`（`MagicManager.cs:753-770`）。
+            world.tame_adopt(
+                input.caster_id,
+                target_id,
+                input.magic_level,
+                out.royalty_draw,
+            );
+        } else if out.target_hp != tin.target_hp {
+            // 非受奴支的 `targetObject.WAbil.HP = 0`（`:783/790`）。
+            let hp = u16::try_from(out.target_hp.max(0)).unwrap_or(0);
+            if let Some(t) = world.entities.get_mut(target_id) {
+                t.hp = hp;
+            }
+            target_hp = Some(hp);
+        }
+        crazy_mode = out.crazy_mode;
+        bo_train = out.result;
+    }
+    // 共享尾（`MagicManager.cs:644-669`）。
+    let mut rng = std::mem::replace(&mut world.rng, RandomNumber::with_seed(0));
+    let tail = magic::do_spell_tail(
+        false,
+        true,
+        bo_train,
+        input.fast_train,
+        input.caster_abil_level,
+        &mut rng,
+        train,
+    );
+    world.rng = rng;
+    TammingCastOutcome {
+        accepted: tail.returned,
+        magic_fire: tail.magic_fire,
+        tamed,
+        target_hp,
+        crazy_mode,
         train: tail.train,
     }
 }
@@ -392,5 +567,167 @@ mod tests {
             !out.train.trained,
             "召唤未成功 ⇒ boTrain=false ⇒ 不练级、不抽 Random(3)"
         );
+    }
+
+    // ---- ⑨-2 第③片：20 诱惑（SKILL_TAMMING）宿主接线 ------------------------------------------
+
+    /// 诱惑用世界：主人 Lv40 + 一只怪（`target_race`/`target_hp`/`target_level` 可调）。
+    fn tamming_world(
+        seed: i32,
+        target_race: u8,
+        target_hp: u16,
+        target_level: u8,
+    ) -> (World, i32, i32) {
+        let mut w = World::new(32, 32);
+        let caster = {
+            let mut e = mir2_world::Entity::new(0, "主人".to_string(), 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e.level = 40;
+            w.add_entity(e)
+        };
+        let target = {
+            let mut e = mir2_world::Entity::new(0, "怪".to_string(), 11, 10);
+            e.race = target_race;
+            e.level = target_level;
+            e.hp = target_hp;
+            e.max_hp = target_hp;
+            w.add_entity(e)
+        };
+        w.rng = RandomNumber::with_seed(seed);
+        w.clock_ms = 5_000;
+        (w, caster, target)
+    }
+
+    fn tamming_magic() -> MagicInfo {
+        MagicInfo {
+            magic_id: SKILL_TAMMING,
+            train_lv: 3,
+            train_level: [0; 4],
+            max_train: [100; 4],
+            ..MagicInfo::default()
+        }
+    }
+
+    fn tamming_train() -> SkillTrainState {
+        SkillTrainState {
+            magic_id: SKILL_TAMMING,
+            level: 1,
+            tran_point: 0,
+            train_lv: 3,
+            train_level: [0; 4],
+            max_train: [100; 4],
+        }
+    }
+
+    fn tamming_cast<'a>(
+        caster: i32,
+        target: Option<i32>,
+        cfg: &'a PetSlaveConfig,
+        magic: &'a MagicInfo,
+    ) -> TammingCastInput<'a> {
+        TammingCastInput {
+            magic_level: 1,
+            caster_id: caster,
+            caster_abil_level: 40,
+            target_id: target,
+            fast_train: false,
+            cfg,
+            magic,
+        }
+    }
+
+    /// **⑨-2 第③片判据 ①（`!Animal` 门）**：动物（race 51）⇒ oracle 连 `MagTamming` 都不进
+    /// ⇒ **零取数**、`boTrain=false`（`MagicManager.cs:395`）。尾仍发 `RM_MAGICFIRE`。
+    #[test]
+    fn tamming_animal_gate_blocks_and_consumes_no_draw() {
+        let seed = 12_345;
+        let (mut w, caster, target) = tamming_world(seed, 51, 30, 1);
+        let cfg = PetSlaveConfig::default();
+        let magic = tamming_magic();
+        let mut train = tamming_train();
+        let input = tamming_cast(caster, Some(target), &cfg, &magic);
+        let out = cast_tamming_spell(&mut w, &input, &mut train);
+        assert!(!out.tamed, "Animal（race 51）⇒ 门不过");
+        assert!(out.magic_fire, "尾仍发 RM_MAGICFIRE");
+        assert!(!out.train.trained, "boTrain=false ⇒ 不练级");
+        // 门不过 ⇒ 不抽任何数：把世界流的下一次抽取与同种子独立流比对。
+        let mut fresh = RandomNumber::with_seed(seed);
+        assert_eq!(
+            w.rng.random_below(1_000_000),
+            fresh.random_below(1_000_000),
+            "`!Animal` 门不过 ⇒ MagTamming 不进、不消费 RNG"
+        );
+    }
+
+    /// **⑨-2 第③片判据 ②（受奴落尾）**：非动物怪 + 足够高的主人等级 ⇒ 某些种子下受奴成立；
+    /// 落尾 = `Master`/`SlaveList`/`SlaveMakeLevel`/`MasterRoyaltyTick`（经 [`World::tame_adopt`]），
+    /// 且 `TargetCret` 被清（`MagicManager.cs:708`）。
+    #[test]
+    fn tamming_adopts_slave_and_clears_target_creature() {
+        let cfg = PetSlaveConfig::default();
+        let magic = tamming_magic();
+        let mut adopted = None;
+        for seed in 0..5_000 {
+            let (mut w, caster, target) =
+                tamming_world(seed, mir2_world::ACTOR_RACE_MONSTER, 30, 1);
+            w.entities.get_mut(target).unwrap().ai.target_creature = Some(999);
+            let mut train = tamming_train();
+            let input = tamming_cast(caster, Some(target), &cfg, &magic);
+            let out = cast_tamming_spell(&mut w, &input, &mut train);
+            if out.tamed {
+                adopted = Some((w, caster, target, out));
+                break;
+            }
+        }
+        let (w, caster, target, out) = adopted.expect("5000 个种子里应至少有一次受奴");
+        assert!(out.magic_fire, "尾发 RM_MAGICFIRE");
+        let c = w.entities.get(caster).unwrap();
+        let t = w.entities.get(target).unwrap();
+        assert_eq!(t.master, Some(caster), "受奴 ⇒ Master = 施法者");
+        assert!(c.slave_list.contains(&target), "SlaveList.Add");
+        assert_eq!(t.slave_make_level, 1, "SlaveMakeLevel = magicLevel");
+        assert!(
+            t.master_royalty_tick >= (20 * 60 * 1000) + 5_000,
+            "MasterRoyaltyTick = (draw + (Level<<2)*5 + 20)*60_000 + now"
+        );
+        assert_eq!(t.hp, 30, "调用前 Master=None ⇒ 不 /10");
+        assert_eq!(t.ai.target_creature, None, "TargetCret = null");
+    }
+
+    /// **⑨-2 第③片判据 ③（不重复受奴）**：调用前 `Master == 施法者` ⇒ oracle 走
+    /// `RM_MAKEHOLYSEIZEMODE` 早退支（`:710-715`），**不再**落一次受奴尾（不重复 `/10`、不重复入表）。
+    #[test]
+    fn tamming_does_not_re_adopt_existing_slave() {
+        let cfg = PetSlaveConfig::default();
+        let magic = tamming_magic();
+        let mut hit = false;
+        for seed in 0..5_000 {
+            let (mut w, caster, target) =
+                tamming_world(seed, mir2_world::ACTOR_RACE_MONSTER, 30, 1);
+            {
+                let t = w.entities.get_mut(target).unwrap();
+                t.master = Some(caster);
+                t.is_slave = true;
+                t.ai.target_creature = Some(999);
+            }
+            w.entities.get_mut(caster).unwrap().slave_list.push(target);
+            let mut train = tamming_train();
+            let input = tamming_cast(caster, Some(target), &cfg, &magic);
+            let out = cast_tamming_spell(&mut w, &input, &mut train);
+            // 早退支进入过（`TargetCret` 被清）即为命中样本。
+            if w.entities.get(target).unwrap().ai.target_creature.is_none() {
+                hit = true;
+                assert!(!out.tamed, "已受奴 ⇒ 不重复受奴");
+                let t = w.entities.get(target).unwrap();
+                assert_eq!(t.hp, 30, "早退支不改 HP（不 /10）");
+                assert_eq!(
+                    w.entities.get(caster).unwrap().slave_list,
+                    vec![target],
+                    "不重复入表"
+                );
+                break;
+            }
+        }
+        assert!(hit, "5000 个种子里应至少有一次进入早退支");
     }
 }
