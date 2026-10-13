@@ -3109,6 +3109,151 @@ fn send_good_tick(
     });
 }
 
+/// 进图时把本会话写入 52/752 的**输入值**与 52 的 40B 尾打进日志（只读；卡 `openmir2-client-e2e-enter-gaps`）。
+///
+/// 用途：真机上“客户端血/负重为 0”时，先看这行就能区分「服务端没发/值错」与「客户端解析」。
+/// 不参与任何模拟/出帧语义（与 oracle `RecalcAbilitys` 输出同源，不额外取数）。
+fn log_enter_ability(chr_name: &str, out: &game_svr::ability::RecalcOutput) {
+    let w = &out.wabil;
+    let tail: String = record::encode_ability(w)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let s = &out.sub;
+    glog!(
+        "DBG",
+        "52/752 入图输入 ChrName={chr_name} WAbil[level={} ac={} mac={} dc={} mc={} sc={} hp={} mp={} \
+         max_hp={} max_mp={} exp={} max_exp={} weight={} max_weight={} wear_weight={} \
+         max_wear_weight={} hand_weight={} max_hand_weight={}] SubAbility[anti_magic={} \
+         hit_point={} speed_point={} anti_poison={} poison_recover={} health_recover={} \
+         spell_recover={}] ability_tail_hex={tail}",
+        w.level,
+        w.ac,
+        w.mac,
+        w.dc,
+        w.mc,
+        w.sc,
+        w.hp,
+        w.mp,
+        w.max_hp,
+        w.max_mp,
+        w.exp,
+        w.max_exp,
+        w.weight,
+        w.max_weight,
+        w.wear_weight,
+        w.max_wear_weight,
+        w.hand_weight,
+        w.max_hand_weight,
+        s.anti_magic,
+        s.hit_point,
+        s.speed_point,
+        s.anti_poison,
+        s.poison_recover,
+        s.health_recover,
+        s.spell_recover
+    );
+}
+
+/// 一个在世界内的会话的 AOI 观测读数（只读；卡 `openmir2-client-e2e-enter-gaps`）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SessionAoiDiag {
+    chr_name: String,
+    actor_id: i32,
+    map_id: usize,
+    /// `visible_actors` 里 `Show` 的条数（`drain_aoi_downlink` 真正会下发的那批）。
+    vis: usize,
+    /// 同图（除自己）的实体数。
+    same_map: usize,
+    /// 同图（除自己）最近的 Chebyshev 距离；无他者 ⇒ `i32::MAX`。
+    nearest: i32,
+}
+
+/// 周期日志的世界/AOI 观测快照（只读；不改模拟语义）。
+///
+/// 直接回应 `openmir2-client-e2e-enter-gaps` 的误读：`sim: … 处理 N 项` 的 N 是**世界命令队列**
+/// 长度（[[TickRecord::processed]]），不是实体数；实体/怪物/展示表与 AOI 可见数必须另看本快照。
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WorldDiag {
+    entities: usize,
+    displays: usize,
+    sessions: Vec<SessionAoiDiag>,
+}
+
+impl WorldDiag {
+    fn summary(&self) -> String {
+        format!(
+            "实体内 {} 展示表 {} 在世界会话 {}",
+            self.entities,
+            self.displays,
+            self.sessions.len()
+        )
+    }
+
+    fn session_summary(&self) -> String {
+        let mut out = String::new();
+        for s in &self.sessions {
+            out.push_str(&format!(
+                " [{}({}) map={} vis={} same_map={} nearest={}]",
+                s.chr_name,
+                s.actor_id,
+                s.map_id,
+                s.vis,
+                s.same_map,
+                if s.nearest == i32::MAX { -1 } else { s.nearest }
+            ));
+        }
+        out
+    }
+}
+
+/// 按会话表顺序算出世界/AOI 观测快照（确定性：会话表是 `Vec`，实体遍历按槽位）。
+fn world_aoi_diag(world: &mir2_world::World, displays: &downlink::DisplayTable) -> WorldDiag {
+    let entities: Vec<&mir2_world::Entity> = world.entities.iter().collect();
+    let mut sessions = Vec::new();
+    for sess in world.sessions.iter() {
+        if sess.stage != mir2_world::WorldStage::InWorld {
+            continue;
+        }
+        let Some(actor_id) = sess.actor_id else {
+            continue;
+        };
+        let Some(e) = world.entities.get(actor_id) else {
+            continue;
+        };
+        let vis = e
+            .visible_actors
+            .iter()
+            .filter(|v| v.flag == mir2_world::VisibleFlag::Show)
+            .count();
+        let mut same_map = 0usize;
+        let mut nearest = i32::MAX;
+        for o in &entities {
+            if o.id == actor_id || o.map_id != e.map_id {
+                continue;
+            }
+            same_map += 1;
+            let d = (o.x - e.x).abs().max((o.y - e.y).abs());
+            if d < nearest {
+                nearest = d;
+            }
+        }
+        sessions.push(SessionAoiDiag {
+            chr_name: sess.chr_name.clone(),
+            actor_id,
+            map_id: e.map_id,
+            vis,
+            same_map,
+            nearest,
+        });
+    }
+    WorldDiag {
+        entities: entities.len(),
+        displays: displays.len(),
+        sessions,
+    }
+}
+
 /// **S3 后半段（第一格）**：把世界 tick 的 AOI 结果（观察者实体 `VisibleActors` 里
 /// `VisibleFlag::Show` 的对象）翻成 `SM_TURN` + `SM_FEATURECHANGED` 回帧，
 /// 按该观察者的 `[GateIdx, Socket]` 路由回**它自己那条**网关线。
@@ -5299,6 +5444,11 @@ fn sim_loop(
                                                 // GBK 原文（oracle `MessageSettings.CanotPickUpItem`）。
                                                 if let (Some(d), Some(a)) = (data, ability_inputs.as_ref()) {
                                                     let out = enter::recalc_for_session(a, d.job);
+                                                    // 进图可观测性（`openmir2-client-e2e-enter-gaps`）：把本会话**实际写入
+                                                    // 52/752 帧的输入值**与 40B 尾（`record::encode_ability`）打进日志，便于
+                                                    // “客户端血条/负重为 0 是服务端没发/发错，还是客户端解析”一类的真机定位——
+                                                    // 只读日志，不改任何模拟/出帧语义。
+                                                    log_enter_ability(&head.chr_name, &out);
                                                     // M3②③ k=2 收口：同一份 `RecalcAbilitys` 输出**同时**写进世界实体
                                                     // （此前只喂 52/752 帧，实体属性仍是 `Entity::new` 的空值）。
                                                     if let Some(e) = world.entities.get_mut(id) {
@@ -5778,12 +5928,15 @@ fn sim_loop(
         // S3 后半段（第一格）：世界 tick 的 AOI 结果 → `SM_TURN` + `SM_FEATURECHANGED` 回帧。
         drain_aoi_downlink(&world, &displays, &online, &gates);
         if ticks.is_multiple_of(50) {
+            let diag = world_aoi_diag(&world, &displays);
             glog!(
                 "DBG",
-                "sim: tick #{} clock={}ms 处理 {} 项（本地第 {ticks} 次）",
+                "sim: tick #{} clock={}ms 处理 {} 项（本地第 {ticks} 次）{}{}",
                 rec.tick_seq,
                 rec.clock_ms,
-                rec.processed.len()
+                rec.processed.len(),
+                diag.summary(),
+                diag.session_summary()
             );
         }
         if let Some(d) = next.checked_duration_since(std::time::Instant::now()) {
@@ -7101,6 +7254,45 @@ mod tests {
         );
         assert_eq!(frames[1].0, mon_id, "SM_FEATURECHANGED 的 Recog 同怪物");
         assert_eq!(frames[1].1, mir2_protocol::messages::SM_FEATURECHANGED);
+    }
+
+    /// `openmir2-client-e2e-enter-gaps`：周期观测的快照必须反映「世界有实体」「AOI 真可见」——
+    /// 这正是那张卡把 `sim: … 处理 0 项` 误读成「世界 tick 无实体」的反例。
+    ///
+    /// 红检：把 `same_map`/`nearest` 的 `o.id == actor_id` 自身排除删掉、或把 `map_id` 比较写反 ⇒ 必红。
+    #[test]
+    fn world_aoi_diag_reports_visible_and_nearest() {
+        let mut world = mir2_world::World::new(100, 100);
+        world.open_session("p");
+        let p = world
+            .enter_map("p", mir2_world::Entity::new(0, "p", 10, 10), 0)
+            .expect("玩家进图");
+        // 玩家靠 `WantRefMsg=true` 才能把怪物纳入可见集（`BaseObject.ViewRange.cs:112`）。
+        world.entities.get_mut(p).unwrap().want_ref_msg = true;
+        let mut near = mir2_world::Entity::new(0, "near", 12, 10);
+        near.race = mir2_world::ACTOR_RACE_MONSTER;
+        let near_id = world.add_entity(near);
+        let mut far = mir2_world::Entity::new(0, "far", 30, 30);
+        far.race = mir2_world::ACTOR_RACE_MONSTER;
+        let far_id = world.add_entity(far);
+        world.tick();
+
+        let info = mir2_data::models::MonsterInfo::default();
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(near_id, downlink::monster_display(0, &info));
+        displays.set(far_id, downlink::monster_display(0, &info));
+
+        let diag = world_aoi_diag(&world, &displays);
+        assert_eq!(diag.entities, 3, "玩家 + 两只怪");
+        assert_eq!(diag.displays, 2, "展示表只登记了怪物");
+        let s = diag
+            .sessions
+            .iter()
+            .find(|s| s.actor_id == p)
+            .expect("玩家会话应在快照里");
+        assert!(s.vis >= 1, "近怪（距离 2 ≤ view_range）必须在可见集：{s:?}");
+        assert_eq!(s.same_map, 2, "同图除自己外 2 只");
+        assert_eq!(s.nearest, 2, "最近 Chebyshev 距离 = 2（近怪）");
     }
 
     /// 测试用的 `WAbil`（金币分支不使用 `wabil`；字段值不影响本例断言）。
