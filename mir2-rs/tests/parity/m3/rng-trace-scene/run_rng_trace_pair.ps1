@@ -14,6 +14,8 @@
   本片交付的是**夹具骨架**（不占窗口）：门 + 比较器 + `-SelfCheckNoStack` 已完整、可离线复跑；
   真机两相 trace 需要窗口（起栈禁接管道），故 real-run 分支 **fail-closed 拒跑**（exit 2），
   绝不静默起栈。owner 会把它与 ④ 真机 100 杀编排在**同一窗口批次**（串行）。
+  真机命令里的每个参数名（`-Go`/`-Side`/`-PinScene`/`-PeerSession`）都是**本脚本已声明**的参数，
+  且由无栈自检 `scenario-runner-params-declared` 对 scenario JSON 的 `trace.runner` 做机判（M-1）。
 
   用法：
     # 离线自检（门 + 账本 + folded 映射全跑一遍；零 .rs、不占端口）
@@ -38,12 +40,18 @@ param(
   [switch]$GateOnly,
   [switch]$GroupDiffOnly,
   [switch]$Go,                     # owner 发放窗口的显式授权；未给 ⇒ real-run fail-closed（exit 2）
+  # 真机两相 trace 必须**显式**请求「按 scenario 钉住含怪场景」（承接卡接线后生效）。
+  # 只给 -Go 不给 -PinScene ⇒ 仍 fail-closed（防止误跑未钉场景）。
+  # 该参数名同时被 scenario JSON 的 trace.runner 引用；两者由机判「scenario-runner-params-declared」对齐（M-1）。
+  [switch]$PinScene,
   [switch]$SelfCheckNoStack,
   [string]$SelfCheckOut = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
+# 本脚本**已声明**的参数名（供「scenario runner 参数名必须已声明」机判用；见 Test-RngScenarioRunnerParams）。
+$script:RngDeclaredParams = @($MyInvocation.MyCommand.Parameters.Keys)
 $SceneGate = Join-Path $Here 'rng_scene_gate.py'
 $LedgerDiff = Join-Path (Split-Path -Parent $Here) 'rng-trace-probe/rng_ledger_diff.py'
 . (Join-Path (Split-Path -Parent $Here) 'm3hashutil.ps1')
@@ -134,6 +142,40 @@ $Script:SiteSpawnC = 'GameSrv.Word.WorldServer.CreateMonster@WorldServer.MonGen.
 $Script:SiteAiC = 'M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427'
 $Script:SiteSpawnR = 'crates\world\src\mongen.rs:624'
 $Script:SiteAiR = 'crates\world\src\monai.rs:164'
+
+# 场景件里 `trace.runner` / `artifact.runner` 引用的 PowerShell 参数名，必须都是**本脚本已声明**的参数
+# （M-1：`-PinScene` 曾只写在 scenario JSON、脚本未声明 ⇒ 照文档字面执行会在参数绑定阶段就报错，
+#  永远到不了 -Go 的 fail-closed 分支）。返回 @{ ok; tokens; missing; detail }，不抛异常、不写 stdout。
+function Test-RngScenarioRunnerParams {
+  param([Parameter(Mandatory = $true)][string]$Path)
+  $res = [ordered]@{ ok = $false; tokens = @(); missing = @(); detail = '' }
+  if (-not (Test-Path -LiteralPath $Path)) { $res.detail = "scenario 不存在: $Path"; return [pscustomobject]$res }
+  $sc = $null
+  try { $sc = (Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json) }
+  catch { $res.detail = "scenario 解析失败: $($_.Exception.Message)"; return [pscustomobject]$res }
+  $runnerTexts = @()
+  foreach ($v in @($sc.trace.runner, $sc.artifact.runner)) {
+    if ($v -is [string] -and -not [string]::IsNullOrEmpty($v)) { $runnerTexts += $v }
+  }
+  if ($runnerTexts.Count -eq 0) {
+    $res.detail = 'scenario 未声明 trace.runner/artifact.runner（机判无从下手 ⇒ 判红，不许静默绿）'
+    return [pscustomobject]$res
+  }
+  $tokens = @()
+  foreach ($t in $runnerTexts) {
+    # 只取「前面不是标识符字符」的单横线参数名 ⇒ 不会把路径里的 `rng-trace-scene` 错读成 `-trace`/`-scene`。
+    foreach ($m in [regex]::Matches($t, '(?<![A-Za-z0-9_])-([A-Za-z][A-Za-z0-9_]*)')) { $tokens += $m.Groups[1].Value }
+  }
+  $tokens = @($tokens | Sort-Object -Unique)
+  $declared = @($script:RngDeclaredParams)
+  $missing = @($tokens | Where-Object { $declared -notcontains $_ })
+  $res.tokens = $tokens
+  $res.missing = $missing
+  # 非空（否则机判空转）+ 无缺项 ⇒ 绿。
+  $res.ok = ($tokens.Count -ge 1) -and ($missing.Count -eq 0)
+  $res.detail = ("tokens=[{0}] missing=[{1}]" -f ($tokens -join ','), ($missing -join ','))
+  return [pscustomobject]$res
+}
 
 # =========================================================================== #
 # Mode: SelfCheckOut —— 把无栈自检转录**由脚本自己**以 LF 落盘
@@ -255,7 +297,18 @@ if ($SelfCheckNoStack) {
     $lf = Test-M3LfWriterSelfTest
     Add-Result 'lf-writer-selftest' ($lf.ok) ($lf.reason)
 
-    # ⑫ 本脚本从未触碰端口（自检/门/比较全离线）
+    # ⑫ 场景件 runner 参数名必须是**本脚本已声明**的参数（M-1：doc-vs-code 漂移机判）。
+    $rp = Test-RngScenarioRunnerParams -Path $ScenarioFile
+    Add-Result 'scenario-runner-params-declared' ($rp.ok) ($rp.detail)
+    # 改坏必红：把 scenario 的 runner 文本塞一个未声明参数 ⇒ 必须点名该参数。
+    $badScen = Join-Path $tmpRoot 'scenario-runner-drift.json'
+    $rawScen = Get-Content -LiteralPath $ScenarioFile -Raw
+    Write-M3LfText -Path $badScen -Text ($rawScen -replace '-PinScene', '-PinScene -NotARealParam')
+    $rpBad = Test-RngScenarioRunnerParams -Path $badScen
+    Add-Result 'scenario-runner-param-drift-red' ((-not $rpBad.ok) -and ($rpBad.missing -contains 'NotARealParam')) `
+      ("missing=" + ($rpBad.missing -join ','))
+
+    # ⑬ 本脚本从未触碰端口（自检/门/比较全离线）
     Add-Result 'no-port-touched' (-not $script:RngSceneTouchedPorts) 'offline-only'
   } finally {
     Remove-Item -Recurse -Force $tmpRoot -ErrorAction SilentlyContinue
@@ -304,6 +357,15 @@ if ($GroupDiffOnly) {
 if (-not $Go) {
   Write-Output 'PREREQ_MISSING: 真机两相 trace 需 owner 发放窗口（起栈禁接管道；本片只交夹具骨架，不占端口）'
   Write-Output ("NEXT: 获窗口后跑 -Side csharp 基线 → -Side rust -PeerSession <csharp 会话> → -GateOnly → -GroupDiffOnly")
+  exit 2
+}
+$rpRun = Test-RngScenarioRunnerParams -Path $ScenarioFile
+if (-not $rpRun.ok) {
+  Write-Output ("PREREQ_MISSING: scenario runner 参数名漂移（$($rpRun.detail)）—— 先让文档与脚本对齐再起真机")
+  exit 2
+}
+if (-not $PinScene) {
+  Write-Output 'PREREQ_MISSING: 真机两相 trace 需显式 -PinScene（按 scenario 钉住含怪场景；只给 -Go 不钉场景一律拒跑）'
   exit 2
 }
 Write-Output 'PREREQ_MISSING: 两侧「场景描述件 + 全场景抽数流水」驱动尚未接线（承接卡见报告），真机序列无法产生可判原始件'
