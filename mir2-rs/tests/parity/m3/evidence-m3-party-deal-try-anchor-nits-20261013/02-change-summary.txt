@@ -1,0 +1,237 @@
+== 变更摘要（代码 + 新测试；base = origin/master 95291257c） ==
+
+head = a72b2554df617b865c9e34df021e354fa8045766
+docs(m3-party-deal-try): M3⑦-3 M-1 收口——deal_try 内联 oracle 锚订正（:929→:933 等）+ 锚漂移门
+
+ mir2-rs/bins/game-svr/src/main.rs                  | 29 ++++----
+ mir2-rs/bins/game-svr/src/trade.rs                 | 23 +++---
+ .../bins/game-svr/tests/deal_try_oracle_anchors.rs | 82 ++++++++++++++++++++++
+ 3 files changed, 109 insertions(+), 25 deletions(-)
+
+== 全量 diff（git show HEAD） ==
+
+diff --git a/mir2-rs/bins/game-svr/src/main.rs b/mir2-rs/bins/game-svr/src/main.rs
+index e1c183c1f..3dd4aa116 100644
+--- a/mir2-rs/bins/game-svr/src/main.rs
++++ b/mir2-rs/bins/game-svr/src/main.rs
+@@ -1117,14 +1117,15 @@ fn pose_create(
+     front_target(world, actor_id, e.map_id, fx, fy)
+ }
+ 
+-/// `ClientDealTry` 的 `GetPoseCreate()` 目标判定（`PlayObject.Operate.cs:928-958`）。
++/// `ClientDealTry` 的 `GetPoseCreate()` 目标判定（`PlayObject.Operate.cs:932-960`）。
+ ///
+-/// oracle 在 `:929` 对 `GetPoseCreate()` 的结果直接取 `poseObject.Race`：
+-/// - `null` ⇒ NullReferenceException，被 `WorldServer.ProcessPlayObjectData` 的
+-///   `catch`（`WorldServer.cs:734`）吞掉 ⇒ **一个帧都不发**（不是 `SM_DEALTRY_FAIL`）；
+-/// - 非玩家 ⇒ `:955-958` 的 `else` ⇒ `SM_DEALTRY_FAIL`；
+-/// - 玩家且 `== this` ⇒ `:934` 内层 `if (targetPlayObject != this)` 无 `else` ⇒ **不发帧**；
+-/// - 玩家且 `!= this` ⇒ `:933` 取对方 `GetPoseCreate()` 是否回指自己（`faces_me`）。
++/// oracle 在 `:932` 取 `GetPoseCreate()`、`:933` 对结果直接取 `poseObject.Race`：
++/// - `null` ⇒ NullReferenceException，被 `WorldServer.ProcessPlayObjectData`（方法体
++///   `:625-737`）的 `catch`（`WorldServer.cs:732-735`；该 catch 的日志串写作
++///   `WorldServer::ProcessHumans`，与包围方法名不符）吞掉 ⇒ **一个帧都不发**（不是 `SM_DEALTRY_FAIL`）；
++/// - 非玩家 ⇒ `:958-960` 的 `else` ⇒ `SM_DEALTRY_FAIL`；
++/// - 玩家且 `== this` ⇒ `:936` 内层 `if (targetPlayObject != this)` 无 `else` ⇒ **不发帧**；
++/// - 玩家且 `!= this` ⇒ `:938` 取对方 `GetPoseCreate()` 是否回指自己（`faces_me`）。
+ fn deal_try_target_of(
+     world: &mir2_world::World,
+     displays: &downlink::DisplayTable,
+@@ -7324,10 +7325,10 @@ mod tests {
+ 
+     /// **M3⑦-3 · M-1 收口判据**：`ClientDealTry` 的目标判定必须区分「无前排对象」与「前排不是玩家」。
+     ///
+-    /// oracle `PlayObject.Operate.cs:928-929` 先取 `GetPoseCreate()` 再直接读 `poseObject.Race`：
++    /// oracle `PlayObject.Operate.cs:932-933` 先取 `GetPoseCreate()` 再直接读 `poseObject.Race`：
+     /// 无前排（`null`）⇒ NullReferenceException，被 `WorldServer.ProcessPlayObjectData` 的
+-    /// `catch`（`WorldServer.cs:734`）吞掉 ⇒ **一个帧都不发**（不是 `SM_DEALTRY_FAIL`）；
+-    /// 前排非玩家 ⇒ `:955-958` 的 `else` ⇒ `SM_DEALTRY_FAIL`。
++    /// `catch`（`WorldServer.cs:732-735`）吞掉 ⇒ **一个帧都不发**（不是 `SM_DEALTRY_FAIL`）；
++    /// 前排非玩家 ⇒ `:958-960` 的 `else` ⇒ `SM_DEALTRY_FAIL`。
+     ///
+     /// 旧实现把两者都归 `DealTryTarget::NotPlayer` ⇒ 空打也回 FAIL（与 oracle 不等）。
+     ///
+@@ -7365,10 +7366,10 @@ mod tests {
+         assert_eq!(
+             probe(None),
+             (None, game_svr::trade::DealTryTarget::Absent),
+-            "无前排对象 ⇒ Absent（oracle Operate.cs:929 NRE 被吞），不是 NotPlayer"
++            "无前排对象 ⇒ Absent（oracle Operate.cs:932-933 NRE 被吞），不是 NotPlayer"
+         );
+ 
+-        // ② 前方格是怪（非玩家）⇒ `:955-958` else ⇒ `SM_DEALTRY_FAIL`。
++        // ② 前方格是怪（非玩家）⇒ `:958-960` else ⇒ `SM_DEALTRY_FAIL`。
+         assert_eq!(
+             probe(Some((ACTOR_RACE_MONSTER, 6))),
+             (None, game_svr::trade::DealTryTarget::NotPlayer),
+@@ -7398,7 +7399,7 @@ mod tests {
+ 
+     /// **M3⑦-3 · M-1 收口（进程级）**：走**生产函数** `handle_deal_cmd` 的 `CM_DEALTRY` 支
+     /// （oracle `PlayObject.Message.cs:946` ⇒ `ClientDealTry`）：无前排对象时**一个帧都不发**
+-    /// （oracle `Operate.cs:929` 的 NRE 被 `WorldServer.cs:734` 吞掉），前排为怪时发
++    /// （oracle `Operate.cs:932-933` 的 NRE 被 `WorldServer.cs:732-735` 吞掉），前排为怪时发
+     /// `SM_DEALTRY_FAIL`（非空转对照）。
+     ///
+     /// 红检：把 `deal_try_target_of` 的 `None` 支改回 `DealTryTarget::NotPlayer` ⇒ ① 的
+@@ -7472,7 +7473,7 @@ mod tests {
+             "无前排对象 ⇒ oracle 静默（不得发 SM_DEALTRY_FAIL）"
+         );
+ 
+-        // ② 非空转对照：前方格放一只怪（非玩家）⇒ `:955-958` else ⇒ `SM_DEALTRY_FAIL`。
++        // ② 非空转对照：前方格放一只怪（非玩家）⇒ `:958-960` else ⇒ `SM_DEALTRY_FAIL`。
+         world.add_entity({
+             let mut e = mir2_world::Entity::new(2, "mon", 11, 10);
+             e.race = mir2_world::ACTOR_RACE_MONSTER;
+diff --git a/mir2-rs/bins/game-svr/src/trade.rs b/mir2-rs/bins/game-svr/src/trade.rs
+index e4faf9f4a..a1ba7c539 100644
+--- a/mir2-rs/bins/game-svr/src/trade.rs
++++ b/mir2-rs/bins/game-svr/src/trade.rs
+@@ -434,7 +434,7 @@ fn defn(target: i32, ident: u16, recog: i32, param: u16, tag: u16, series: u16)
+ ///
+ /// `target` = 宿主解析出的 `GetPoseCreate()` 结果（`Absent` = 无前排/前排为自身；`NotPlayer` = 前排不是玩家）；
+ /// 前置守卫（`DisableDeal`/`Dealing`/`TryDealTime`/`IsCanDeal`）**先于**目标判定，与 oracle 同序
+-/// （`Operate.cs:913-926` 四条守卫在 `:928` 的 `GetPoseCreate()` 之前）。
++/// （`Operate.cs:913-926` 四条守卫在 `:932` 的 `GetPoseCreate()` 之前）。
+ pub fn deal_try(
+     me: &mut DealSide<'_>,
+     other: &mut DealSide<'_>,
+@@ -480,10 +480,10 @@ pub fn deal_try(
+         return em.finish();
+     }
+     match target {
+-        // oracle `Operate.cs:929` 的 `poseObject.Race`：
++        // oracle `Operate.cs:933` 的 `poseObject.Race`（`:932` 取 `GetPoseCreate()`）：
+         // ① `GetPoseCreate() == null` ⇒ 对 null 解引用 ⇒ NRE，被
+-        //    `WorldServer.ProcessPlayObjectData` 的 `catch`（`WorldServer.cs:734`）吞掉 ⇒ 一个帧都不发；
+-        // ② `poseObject == this` ⇒ `:934` 的内层 `if (targetPlayObject != this)` 无 `else` ⇒ 也不发帧。
++        //    `WorldServer.ProcessPlayObjectData` 的 `catch`（`WorldServer.cs:732-735`）吞掉 ⇒ 一个帧都不发；
++        // ② `poseObject == this` ⇒ `:936` 的内层 `if (targetPlayObject != this)` 无 `else` ⇒ 也不发帧。
+         // 两态在 oracle 里都「静默」，Rust 不得发 `SM_DEALTRY_FAIL`（那不是 oracle 行为）。
+         DealTryTarget::Absent => {}
+         DealTryTarget::NotPlayer => em.now(def0(me.id, messages::SM_DEALTRY_FAIL)),
+@@ -514,12 +514,13 @@ pub fn deal_try(
+ pub enum DealTryTarget {
+     /// 无前排对象（`GetPoseCreate() == null`）或前排为自身（`poseObject == this`）。
+     ///
+-    /// oracle 两态都**不发任何帧**：前者在 `Operate.cs:929` 的 `poseObject.Race` 处 NRE
+-    /// （被 `WorldServer.cs:734` 的 `catch` 吞），后者走 `:934` 内层 `if` 的无 `else` 静默支。
++    /// oracle 两态都**不发任何帧**：前者在 `Operate.cs:933` 的 `poseObject.Race` 处 NRE
++    /// （`:932` 取 `GetPoseCreate()`；被 `WorldServer.cs:732-735` 的 `catch` 吞），后者走
++    /// `:936` 内层 `if` 的无 `else` 静默支。
+     Absent,
+-    /// 前排不是玩家（`Operate.cs:955-958` 的 `else` ⇒ `SM_DEALTRY_FAIL`）。
++    /// 前排不是玩家（`Operate.cs:958-960` 的 `else` ⇒ `SM_DEALTRY_FAIL`）。
+     NotPlayer,
+-    /// 前排是另一个玩家；`faces_me` = 对方 `GetPoseCreate() == this`。
++    /// 前排是另一个玩家（`Operate.cs:938`）；`faces_me` = 对方 `GetPoseCreate() == this`。
+     Other { faces_me: bool },
+ }
+ 
+@@ -1580,8 +1581,8 @@ mod tests {
+         assert!(!a.state.dealing && !b.state.dealing);
+     }
+ 
+-    /// `DealTryTarget::Absent`：无前排对象（oracle `GetPoseCreate() == null` ⇒ `Operate.cs:929`
+-    /// 对 null 解引用 ⇒ NRE 被 `WorldServer.cs:734` 吞）或前排为自身（`:934` 内层 `if` 无 `else`）
++    /// `DealTryTarget::Absent`：无前排对象（oracle `GetPoseCreate() == null` ⇒ `Operate.cs:932-933`
++    /// 对 null 解引用 ⇒ NRE 被 `WorldServer.cs:732-735` 吞）或前排为自身（`:936` 内层 `if` 无 `else`）
+     /// ⇒ oracle **一个帧都不发**；Rust 不得发 `SM_DEALTRY_FAIL`。
+     #[test]
+     fn deal_try_absent_pose_emits_nothing() {
+@@ -1603,7 +1604,7 @@ mod tests {
+         assert_eq!(a.state.deal_last_tick, 0);
+     }
+ 
+-    /// 前置守卫**先于**目标判定（oracle `Operate.cs:913-926` 四条守卫在 `:928` 的
++    /// 前置守卫**先于**目标判定（oracle `Operate.cs:913-926` 四条守卫在 `:932` 的
+     /// `GetPoseCreate()` 之前）：`Absent` 也要先吃 `DisableDeal`/`Dealing`/`TryDealTime`/`IsCanDeal`。
+     #[test]
+     fn deal_try_absent_pose_still_obeys_guards_first() {
+diff --git a/mir2-rs/bins/game-svr/tests/deal_try_oracle_anchors.rs b/mir2-rs/bins/game-svr/tests/deal_try_oracle_anchors.rs
+new file mode 100644
+index 000000000..717ba5b98
+--- /dev/null
++++ b/mir2-rs/bins/game-svr/tests/deal_try_oracle_anchors.rs
+@@ -0,0 +1,82 @@
++//! oracle 锚漂移门（M3⑦-3 · M-1 收口 doc-Nit，卡 `openmir2-m3-party-deal-try-null-pose`）。
++//!
++//! `ClientDealTry` 路径的内联注释行号必须与 `src/M2Server/Player/PlayObject.Operate.cs`
++//! 实测行一致，且 catch 归属 = `ProcessPlayObjectData`。
++//!
++//! 来源：reviewer-5 `3eb4a6a05` 的 M-1（注释写 `:929`/`:934`/`:955-958`，实为
++//! `:933`/`:936`/`:958-960`）与 M-2（catch 归属措辞）。M-2 经复核为**误判**：
++//! `WorldServer.cs` 的 `ProcessPlayObjectData` 方法体为 `:625-737`、其 `catch` 在
++//! `:732-735`；`:734` 的日志串写作 `WorldServer::ProcessHumans` 是 oracle 自身的复制粘贴
++//! 痕迹，不改变包围方法名。本门同时锁死这两点。
++
++use std::fs;
++use std::path::PathBuf;
++
++/// 仓库根（本测试 = `<repo>/mir2-rs/bins/game-svr/tests/deal_try_oracle_anchors.rs`）。
++fn repo_root() -> PathBuf {
++    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
++        .join("..")
++        .join("..")
++        .join("..")
++}
++
++fn read(rel: &str) -> String {
++    let p = repo_root().join(rel);
++    fs::read_to_string(&p).unwrap_or_else(|e| panic!("读 {} 失败: {e}", p.display()))
++}
++
++#[test]
++fn deal_try_oracle_anchors_match_source() {
++    // ① oracle 侧：注释声称的每个行号都指向声称的语句（oracle 冻结，行号即契约）。
++    let oracle = read("src/M2Server/Player/PlayObject.Operate.cs");
++    let lines: Vec<&str> = oracle.lines().collect();
++    let at = |n: usize| -> String {
++        lines
++            .get(n - 1)
++            .unwrap_or_else(|| panic!("oracle PlayObject.Operate.cs 第 {n} 行不存在"))
++            .trim()
++            .to_string()
++    };
++    for (n, needle) in [
++        (932usize, "GetPoseCreate()"),
++        (933, "poseObject.Race"),
++        (936, "targetPlayObject != this"),
++        (938, "GetPoseCreate() == this"),
++        (954, "SM_DEALTRY_FAIL"),
++        (958, "else"),
++        (960, "SM_DEALTRY_FAIL"),
++    ] {
++        assert!(
++            at(n).contains(needle),
++            "oracle `PlayObject.Operate.cs:{n}` 应为含 `{needle}` 的语句，实得 `{}`",
++            at(n)
++        );
++    }
++
++    // ② Rust 侧：deal_try 注释必须引用 ① 的行号，且不得回退到旧漂移号码。
++    let trade = read("mir2-rs/bins/game-svr/src/trade.rs");
++    let main = read("mir2-rs/bins/game-svr/src/main.rs");
++    for (name, src) in [("trade.rs", &trade), ("main.rs", &main)] {
++        for good in [":932", ":933", ":936", ":938", ":958-960"] {
++            assert!(
++                src.contains(good),
++                "{name} 的 deal_try 注释缺 oracle 锚 `{good}`（reviewer-5 M-1 doc 漂移回归）"
++            );
++        }
++        for bad in [":929", ":928-929", ":934", ":955-958"] {
++            assert!(
++                !src.contains(bad),
++                "{name} 仍残留旧漂移锚 `{bad}`（应为 :932/:933/:936/:938/:958-960）"
++            );
++        }
++        assert!(
++            src.contains("WorldServer.cs:732-735"),
++            "{name} 的 deal_try 注释应引 `WorldServer.cs:732-735`（catch 站点）"
++        );
++        // ③ M-2 归属：catch 属 `ProcessPlayObjectData`（方法体 :625-737），不是 `ProcessHumans`。
++        assert!(
++            src.contains("WorldServer.ProcessPlayObjectData"),
++            "{name} 的 deal_try 注释应把 catch 归属写为 `WorldServer.ProcessPlayObjectData`"
++        );
++    }
++}

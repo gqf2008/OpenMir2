@@ -1,0 +1,26 @@
+命令: CARGO_TARGET_DIR=E:/tmp/openmir2-m3pt-target cargo test -p game-svr --test deal_try_oracle_anchors
+改坏 RC2：trade.rs 的 catch 归属措辞改成 reviewer-5 M-2 误判的 `WorldServer.ProcessHumans`
+== 原始输出 ==
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3pt\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.43s
+     Running tests\deal_try_oracle_anchors.rs (E:/tmp/openmir2-m3pt-target\debug\deps\deal_try_oracle_anchors-b25b1e4975fe3cbb.exe)
+
+running 1 test
+test deal_try_oracle_anchors_match_source ... FAILED
+
+failures:
+
+---- deal_try_oracle_anchors_match_source stdout ----
+
+thread 'deal_try_oracle_anchors_match_source' (32916) panicked at bins\game-svr\tests\deal_try_oracle_anchors.rs:77:9:
+trade.rs 的 deal_try 注释应把 catch 归属写为 `WorldServer.ProcessPlayObjectData`
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    deal_try_oracle_anchors_match_source
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --test deal_try_oracle_anchors`
+rc=101
