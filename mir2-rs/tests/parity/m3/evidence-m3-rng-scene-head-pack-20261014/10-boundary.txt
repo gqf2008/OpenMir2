@@ -1,8 +1,9 @@
 ### 10 边界（base = origin/master 61f613702 = check-pack 的显式 since 锚）
 ### head = c9d7731645979894fbd441ffeb37ef00c3cabedf（= 本片「读数所在」head；其后提交只追加本证据包的 boundary / check-pack 自检 / SHA256SUMS，仍全在证据侧）
-### git diff --name-only base..HEAD（共 18 路径）
+### git diff --name-only base..HEAD（共 19 路径；含本文件与 SHA256SUMS.txt 自身）
 mir2-rs/tests/parity/m3/evidence-m3-rng-scene-head-o1-20261014/10-boundary.txt
 mir2-rs/tests/parity/m3/evidence-m3-rng-scene-head-o1-20261014/README.md
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-head-o1-20261014/SHA256SUMS.txt
 mir2-rs/tests/parity/m3/evidence-m3-rng-scene-head-pack-20261014/00-commands.txt
 mir2-rs/tests/parity/m3/evidence-m3-rng-scene-head-pack-20261014/01-observation-o1.txt
 mir2-rs/tests/parity/m3/evidence-m3-rng-scene-head-pack-20261014/02-gate-selftest.txt
