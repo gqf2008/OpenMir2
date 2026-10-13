@@ -1,0 +1,35 @@
+reviewer-6 `fbbabbe60348` F-1 收口（Important，证据自洽性破裂）
+================================================================
+reviewer 实测（本人也在 head 上复现过）：
+
+  $ python -I tools/evidence-hash/verify_sha256sums.py verify \
+        mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-trace-seed-gate --check-extra
+  base 6afa37636 ⇒ GREEN 14/14 rc=0
+  head 9a9d93e8 ⇒ RED 13/14 rc=1，点名 mismatch README.md：
+    清单 4cbda09ec8a85ebc7c9f9776c3acf6bd6390861ab740f13ec42dd3c589f5b0ab
+    实算 c4f94bb31b985668c9588943cfd92bbc8eb120f4d8a8634acf3838f7716fdcf1（text attr=set，仓库 LF 口径）
+
+根因：本片改了该 pack 的 `README.md`（表格行 `10-mutation-a-…` 补「改坏力度说明」），
+上一轮只重算了 `10-mutation-a-…` 条目（`d227b104…` → `4ed2e2eb…`），漏重算 `README.md` 条目。
+⇒ 该 pack 的 verify 牙在作者自己最后一笔上不咬，status 里「该 pack SHA256SUMS 重生成」不成立。
+
+修法（照 reviewer F-1 建议的最小改法；`write` 只重算既有条目）：
+  $ python -I tools/evidence-hash/verify_sha256sums.py write \
+        mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-trace-seed-gate
+  write 完成（1 行 hash 变更，mode=repo）
+  SHA256SUMS.txt 第 14 行：4cbda09e… → c4f94bb31b985668c9588943cfd92bbc8eb120f4d8a8634acf3838f7716fdcf1 *README.md
+
+复跑（全绿收口）：
+  $ python -I tools/evidence-hash/verify_sha256sums.py verify --check-extra <该 pack>
+  GREEN ... OK 14/14 rc=0
+  $ python -I tools/evidence-hash/verify_sha256sums.py eolcheck <该 pack>
+  EOLCHECK GREEN 15/15 件文本证据与仓库口径（LF）在 EOL 上一致
+
+reviewer observations 处置
+----------------------------------------------------------------
+- O-1（非阻塞，声明口径）：本 pack `00-commands.txt` / `README.md` 已改用
+  **`code_head` + `evidence_head`** 两个字段（不再只写一个模糊的 `head`）：
+  `code_head = 8c38c0fcd3c20fca59fcc0055c86404a95b18e02`（内容/工具提交），
+  `evidence_head = 本 pack 所在提交`（= walgit `patch` 条目的 `head`，落笔后由 patch 条目钉全 oid）。
+- O-2（非阻塞，信息）：`check_evidence_counts.py` 的 `RE_DECL_OID` 无词边界匹配 ⇒ 登记备查，
+  当前无可观测误判，本片不改（改了会动到刚被 reviewer-6 复核过的 37/37 自检口径）。
