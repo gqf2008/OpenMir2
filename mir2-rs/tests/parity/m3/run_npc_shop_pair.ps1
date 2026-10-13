@@ -170,8 +170,17 @@ function Invoke-ShopRawDiff([string]$csharpPath, [string]$rustPath) {
   if (-not (Test-Path -LiteralPath $csharpPath)) { Write-Output ("PREREQ_MISSING: C# 原始件缺失 -> {0}" -f $csharpPath); return }
   if (-not (Test-Path -LiteralPath $rustPath)) { Write-Output ("PREREQ_MISSING: Rust 原始件缺失 -> {0}" -f $rustPath); return }
   Write-Output '--- npc_shop_diff.py diff（NPC/商店逐 op 字段级） ---'
-  & python -I $ShopDiff diff $csharpPath $rustPath
+  # 标量帧参数表以场景为**单一真源**（reviewer-6 M-3）：透传 `--scenario`；
+  # 场景缺 `frame_scalar_fields` / 非法 ⇒ 比较器 fail-closed（rc=2），不静默用内建表。
+  & python -I $ShopDiff diff $csharpPath $rustPath --scenario $ScenarioFile
   if ($LASTEXITCODE -eq 0) { Write-Output 'GREEN: NPC/商店跨侧逐 op diff = 0'; $script:ShopDiffRc = 0; return }
+  if ($LASTEXITCODE -eq 2) {
+    # 比较器的缺件/坏件（缺字段/坏 JSON/场景缺帧标量真源）必须**保留 PREREQ**，
+    # 不得被压成 RED=1 —— 否则上游分不清「有差异」与「判据缺件」。
+    Write-Output 'PREREQ: NPC/商店比较器缺件/坏件（fail-closed，绝不静默 GREEN）'
+    $script:ShopDiffRc = 2
+    return
+  }
   Write-Output 'RED: NPC/商店跨侧 diff != 0（差异要么修到 0，要么按 §6.0-3 登记 tests/parity/whitelist.md）'
   $script:ShopDiffRc = 1
 }
@@ -278,6 +287,33 @@ if ($SelfCheckNoStack) {
     # ⑤ 缺文件 ⇒ PREREQ fail-closed（rc=2）
     $null = Invoke-ShopRawDiff -csharpPath (Join-Path $tmpRoot 'nope.jsonl') -rustPath $rsGood
     Add-Result 'missing-file-prereq' ($script:ShopDiffRc -eq 2) ("rc=$($script:ShopDiffRc)")
+
+    # ⑤b 场景真源透传（reviewer-6 M-3）：runner 必须把场景传给比较器——
+    #   (a) 真场景声明 651.a ⇒ 只改该标量必红；
+    #   (b) 换一个**不声明** 651.a 的场景 ⇒ 同一差异不再参与判据 ⇒ 绿（「改场景即改判据」）；
+    #   (c) 换一个**缺 `frame_scalar_fields`** 的场景 ⇒ PREREQ（若 runner 没透传，就会退回内建表而
+    #       得 0/1，而不是 2）
+    $csScalar = Join-Path $tmpRoot 'cs-scalar.jsonl'
+    $rsScalar = Join-Path $tmpRoot 'rs-scalar.jsonl'
+    New-ShopRaw -Path $csScalar -Branch 'ok' -FrameSm 651 -FrameA 3
+    New-ShopRaw -Path $rsScalar -Branch 'ok' -FrameSm 651 -FrameA 2
+    $null = Invoke-ShopRawDiff -csharpPath $csScalar -rustPath $rsScalar
+    Add-Result 'scenario-scalar-red' ($script:ShopDiffRc -eq 1) ("rc=$($script:ShopDiffRc)")
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    $savedScenario = $ScenarioFile
+    $narrowScen = Join-Path $tmpRoot 'scen-narrow.json'
+    [System.IO.File]::WriteAllText($narrowScen, '{"frame_scalar_fields":{"647":["a"],"649":["a"]}}', $utf8NoBom)
+    $ScenarioFile = $narrowScen
+    $null = Invoke-ShopRawDiff -csharpPath $csScalar -rustPath $rsScalar
+    Add-Result 'scenario-authority-green' ($script:ShopDiffRc -eq 0) ("rc=$($script:ShopDiffRc)")
+
+    $badScen = Join-Path $tmpRoot 'scen-nokey.json'
+    [System.IO.File]::WriteAllText($badScen, '{"cases":{}}', $utf8NoBom)
+    $ScenarioFile = $badScen
+    $null = Invoke-ShopRawDiff -csharpPath $csScalar -rustPath $rsScalar
+    Add-Result 'scenario-authority-prereq' ($script:ShopDiffRc -eq 2) ("rc=$($script:ShopDiffRc)")
+    $ScenarioFile = $savedScenario
 
     # ⑥ run_pair 的开关耦合：-ShopSequence 必须**一并传 -DisableAutoPlay**；默认路径不得出现。
     $emitOnRaw = & powershell -ExecutionPolicy Bypass -File $RunPair -EmitOpsArgs -ShopSequence -ShopOps 'sell,buy' -ShopStepMs 1000 -ShopStartDelayMs 3000 -ShopNpcName '卫家店' -ShopItemName '木剑' -ShopItemMake 0 -ShopCount 1
