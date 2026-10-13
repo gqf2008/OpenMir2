@@ -1045,6 +1045,7 @@ version = "0.1.0"
 dependencies = [
  "encoding_rs",
  "mir2-data",
+ "mir2-script",
  "mir2-shared",
  "mir2-world",
  "serde_json",

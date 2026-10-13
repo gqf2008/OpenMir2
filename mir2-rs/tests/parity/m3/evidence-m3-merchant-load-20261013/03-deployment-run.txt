@@ -1,0 +1,10 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.31s
+     Running tests\merchant.rs (E:/tmp/m3cs-merchant-target\debug\deps\merchant-ee6d43329ddf3e42.exe)
+
+running 1 test
+部署件商人数: 131
+商人数=131 有 [goods] 的商人=63 goods 总条目=582 有 +StdMode 的商人=67
+test deployment_merchant_load_matches_oracle ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 1.08s
+

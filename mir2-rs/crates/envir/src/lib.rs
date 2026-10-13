@@ -17,6 +17,7 @@ pub mod conf;
 pub mod error;
 pub mod mapfile;
 pub mod mapinfo;
+pub mod merchant;
 pub mod mongen;
 pub mod paths;
 pub mod points;
@@ -32,6 +33,10 @@ pub use mapfile::{
 pub use mapinfo::{
     parse_flag_commands, parse_map_info_lines, parse_section_line, parse_section_line_with_state,
     MapInfoEntry, MapInfoFlag, MapInfoParseState,
+};
+pub use merchant::{
+    parse_merchant_line, MerchantRecord, MERCHANT_DEFAULT_PRICE_RATE, MERCHANT_PRICE_RATE_MIN,
+    MERCHANT_SCRIPT_DIR, MERCHANT_TEXT_SPLIT,
 };
 pub use mongen::{
     mon_gen_count, parse_mon_gen_line, MonGenInfo, MON_GEN_THREAD_MON_LIMIT, TEXT_SPLIT_CONST,

@@ -1,0 +1,38 @@
+# M3⑤-实现 1 Rust 侧现状/新增面（只读 grep）
+
+## 新增/改动文件（git status --short 过滤本片写集）
+   M mir2-rs/crates/envir/Cargo.toml
+   M mir2-rs/crates/envir/src/error.rs
+   M mir2-rs/crates/envir/src/lib.rs
+  ?? mir2-rs/crates/envir/src/merchant.rs
+  ?? mir2-rs/crates/envir/tests/merchant.rs
+  ?? mir2-rs/tests/parity/m3/evidence-m3-merchant-load-20261013/
+
+## 公开 API
+  62:pub const MERCHANT_SCRIPT_DIR: &str = "Market_Def";
+  66:pub const MERCHANT_DEFAULT_PRICE_RATE: i32 = 100;
+  77:pub struct MerchantRecord {
+  121:pub fn parse_merchant_line(line: &str) -> Option<MerchantRecord> {
+  173:        price_rate: MERCHANT_DEFAULT_PRICE_RATE,
+  185:    pub fn merchant_path(&self) -> PathBuf {
+  203:    pub fn load_merchants(
+  229:                MERCHANT_SCRIPT_DIR,
+  236:                    record.price_rate = outcome.price_rate.unwrap_or(MERCHANT_DEFAULT_PRICE_RATE);
+  274:        assert_eq!(r.price_rate, MERCHANT_DEFAULT_PRICE_RATE);
+
+## crates/envir 依赖新增 mir2-script
+  12:mir2-script = { path = "../script" }
+
+## crates/envir/src/lib.rs 模块与重导出
+  20:pub mod merchant;
+  37:pub use merchant::{
+
+## EnvirError 新变体
+  53:    MerchantScriptLoad { script: String, reason: String },
+
+## oracle CanSellItem 常量 true（故不额外过滤 [goods]）
+  src/Modules/SystemModule/SystemShare.cs:841:        public static bool CanSellItem(string sItemName)
+
+## 本片未动：crates/world / bins / src / sql / MirClient
+  git diff --stat -- src sql MirClient        => (见 06 门禁/边界输出，空)
+  git diff --stat -- mir2-rs/crates/world mir2-rs/bins => 空
