@@ -1,0 +1,17 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.33s
+     Running unittests src\main.rs (E:/tmp/m2svr-target\debug\deps\game_svr-1f4431beb89ebeb6.exe)
+
+running 10 tests
+test storage::tests::load_null_array_is_empty ... ok
+test storage::tests::can_store_boundary_is_thirty_nine ... ok
+test storage::tests::new_state_is_empty_and_unlocked ... ok
+test storage::tests::loaded_item_carries_identity_and_durability ... ok
+test storage::tests::load_skips_null_and_zero_index_keeps_order ... ok
+test storage::tests::save_is_fixed_fifty_slots_with_default_filler ... ok
+test storage::tests::round_trip_load_then_save_preserves_items ... ok
+test storage::tests::save_length_is_independent_of_item_count ... ok
+test tests::enter_loads_storage_items_from_record ... ok
+test tests::save_record_persists_storage_items_as_fifty_slots ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 167 filtered out; finished in 0.00s
+
