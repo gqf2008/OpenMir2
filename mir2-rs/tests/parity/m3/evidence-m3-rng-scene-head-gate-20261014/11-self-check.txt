@@ -1,0 +1,5 @@
+### 对本片自己的证据包跑 check-pack（declared head = 本片读数 head da32346a2，since = base 266bdbd17）
+$ python -I -B rng-trace-scene/check_evidence_head.py check-pack --dir evidence-m3-rng-scene-head-gate-20261014 --since 266bdbd17
+EVIDENCE_HEAD_PACK dir=mir2-rs/tests/parity/m3/evidence-m3-rng-scene-head-gate-20261014 decl=10-boundary.txt(line 2) declared=da32346a2df26a32bd9fbd2ef8fed8121d76d095 since=266bdbd1758e5d266c1522c27786f5da50767d46 changed=13 allow_prefixes=['mir2-rs/tests/parity/m3']
+  OK 包内声明 head 可解析、since 锚 ≤ 声明 head ≤ HEAD，且 since..声明 head 全在证据侧
+rc=0
