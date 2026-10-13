@@ -222,7 +222,7 @@ powershell -ExecutionPolicy Bypass -File run_rng_trace_pair.ps1 -SelfCheckNoStac
 powershell -ExecutionPolicy Bypass -File run_rng_trace_pair.ps1 -SelfCheckNoStack -SelfCheckOut <path.txt>
 ```
 
-自检覆盖（34 项；全离线）：scenario 固定输入、MonGen 冻结件零行、场景门 selftest（22/22）、
+自检覆盖（37 项；全离线）：scenario 固定输入、MonGen 冻结件零行、场景门 selftest（22/22）、
 场景门进程内正/负样本（同场景绿 / 怪集合漂移红）、账本 selftest（37/37，含 R-6 folded 与 DoD② scenario 声明）、
 folded 等价绿 / 折叠计数不等红 / 折叠次序不等红、缺件 PREREQ、LF 写出、
 `scenario-fold-group-consistency-green`（已入库 scenario 与代码同口径）、
@@ -243,7 +243,10 @@ folded 等价绿 / 折叠计数不等红 / 折叠次序不等红、缺件 PREREQ
 `scene-groupdiff-min-monster-ai-red`（三组都在但 `monster_ai` 抽数 0 < scenario 声明 1 ⇒ rc=1 点名 `MIN_GROUP_DRAWS`）、
 **证据包书证 head 机判接线三项（本片新增，reviewer-5 O-1 收口）**：`evidence-head-selftest`（`check_evidence_head.py selftest` 19/19 GREEN）、
 `evidence-head-pack-real-green`（四份已入库真件按各自 `--since` 锚 `check-pack` rc=0；缺包/声明读不到 ⇒ rc≠0 同判红，不静默跳过）、
-`evidence-head-pack-mutation-red`（改坏必红：副本包声明 head 改不可解析 oid ⇒ rc=1 点名 `HEAD_UNRESOLVABLE`），零端口。
+`evidence-head-pack-mutation-red`（改坏必红：副本包声明 head 改不可解析 oid ⇒ rc=1 点名 `HEAD_UNRESOLVABLE`）、
+**报告 §0 书证 head/base 全 oid 机判接线三项（本片新增，reviewer-5 O-1 收口）**：`evidence-counts-selftest`（`check_evidence_counts.py selftest` 10/10 GREEN）、
+`evidence-counts-real-green`（真报告按真实证据包 check rc=0；head/base 必须 40 位全 oid 且可在本仓解析）、
+`evidence-counts-head-mutation-red`（改坏必红：副本报告 §0 head 改 7 位短 oid ⇒ rc=1 点名 `declared_head`），零端口。
 real-run 分支在 `-Go` 未给时 **fail-closed exit 2**（不静默起栈）。
 
 ### 5.1 证据报告「声明计数 vs 真实包」机判（`check_evidence_counts.py`）
@@ -257,17 +260,24 @@ reviewer-6 在本卡携带的 M-1）。`check_evidence_counts.py` 把这条收�
 python -I rng-trace-scene/check_evidence_counts.py check \
   --report "M3RNG场景DoD②组清单机判组必须真出现报告-20261013.md" \
   --dir    evidence-m3-rng-trace-scene-groups-20261013-groups-expected   # GREEN rc=0
-python -I rng-trace-scene/check_evidence_counts.py selftest               # 7/7 GREEN
+python -I rng-trace-scene/check_evidence_counts.py selftest               # 10/10 GREEN
 ```
 
 - 口径（唯一真源 = 证据包）：`N 件` 与 `eolcheck` 对**目录文件总数**（含 `SHA256SUMS.txt`/`README.md`）；
   `verify N/N` 对 `SHA256SUMS.txt` **条目数**；
 - 不一致 ⇒ rc=1 **逐个点名**；报告**未硬编码计数**（只写计数规则、以 `SHA256SUMS.txt` 为真源）⇒ rc=0；
   缺报告/目录/坏读取 ⇒ rc=2；
-- 改坏必红：`selftest` 覆盖件数漂移 / verify 漂移 / eolcheck 漂移 / **交付后证据包长大**，真咬。
+- 改坏必红：`selftest` 覆盖件数漂移 / verify 漂移 / eolcheck 漂移 / **交付后证据包长大** / **§0 head·base 短 oid** /
+  **仓内不可解析 oid**，真咬；
+- **§0 书证 head/base 全 oid 机判（reviewer-5 `c3fef2fd` O-1 收口，2026-10-14）**：报告「- 状态：」行此前写
+  `head = `15e774e91` 之上的交付头`（`15e774e91` 是更早批准片 `72c9258dc` 的旧头，非本片事实）⇒ doc-vs-事实。
+  现把该行收成 fail-closed：声明了 oid 就必须是 **40 位全 oid**（禁「xxx 之上的交付头」这类模糊指针）；
+  传 `--repo` 时还须在仓内可解析。不写 oid（只写计数规则）仍允许。
 
-> 本工具是证据包的**自洽牙**，不是 DoD 判据本体、不进任何判据阈值；**不改** `run_rng_trace_pair.ps1`
-> 的自检项数（故本仓历史报告里记的 `29/29` 等**片时读数**不受影响）。
+> 本工具是证据包的**自洽牙**，不是 DoD 判据本体、不进任何判据阈值。**本片已把它接入
+> `run_rng_trace_pair.ps1 -SelfCheckNoStack`**（`evidence-counts-selftest` / `evidence-counts-real-green` /
+> `evidence-counts-head-mutation-red`）⇒ **自检项数由 34 增至 37**（同 reviewer-5 O-1 口径：把「文档约定」
+> 升为门禁；本仓历史报告里记的 `29/29`/`34/34` 等**片时读数**不受影响）。
 
 ### 5.2 承接卡规格「源码锚点保鲜」机判（`check_anchors.py`）
 
@@ -414,7 +424,7 @@ cd mir2-rs/tests/parity/m3
 # 工具自检
 python -I rng-trace-probe/rng_ledger_diff.py selftest          # 37/37 GREEN（含 R-6 folded + DoD② scenario 声明）
 python -I rng-trace-scene/rng_scene_gate.py selftest           # 22/22 GREEN（含 scenario 声明 vs 代码 + 半给流水 PREREQ）
-python -I rng-trace-scene/check_evidence_counts.py selftest    # 7/7 GREEN（报告证据头行计数 vs 真实包：声明/真实）
+python -I rng-trace-scene/check_evidence_counts.py selftest    # 10/10 GREEN（报告证据头行计数 + §0 head/base 全 oid vs 真实包）
 python -I rng-trace-scene/check_anchors.py selftest             # 13/13 GREEN（承接卡规格锚点保鲜；含 12 条改坏必红：行号漂移/缺失/歧义/未登记引用/折叠定义回退/同名目录串台/裸续引用未登记/裸续内容漂移/未识别扩展名/裸续引用归属未登记/裸续引用归属文件缺失/裸续引用登记行越界）
 python -I rng-trace-scene/check_evidence_head.py selftest       # 19/19 GREEN（证据包声明 head：check 对 HEAD + check-pack 对书证 head；含改坏必红 + PREREQ + 多处声明 fail-closed）
 python -I rng-trace-probe/rng_consumer_groups.py selftest       # 15/15 GREEN（站点表 oracle_ref 可解析性；含坏路径/越界行 2 条改坏必红）

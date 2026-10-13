@@ -523,7 +523,7 @@ if ($SelfCheckNoStack) {
     Add-Result 'anchors-freshness-selftest' (($ancRc -eq 0) -and $ancMatch.Success -and
       ($ancMatch.Groups[1].Value -eq $ancMatch.Groups[2].Value)) ("rc=$ancRc")
 
-    # ㉚ 站点表 `oracle_ref` 可解析性（2026-10-13 窗口前置审计 #2）：`consumer_groups.tsv` 的
+    # ㉚ 站点表 `oracle_ref` 可解析性（2026-10-13 窗口前置审计 #3；reviewer-6 `37c322a9` M-1 编号订正）：`consumer_groups.tsv` 的
     #    `oracle_ref` 必须指向**存在的源码文件**且行号在范围内（真身缺陷：`ServerConf.LoadConfig`
     #    的 ref 曾写 `src/SystemModule/Conf/ServerConf.cs`，实际在 `src/Modules/SystemModule/...`）。
     #    `rng_consumer_groups.py selftest` 现含 2 条改坏必红（坏路径 / 越界行）。
@@ -588,18 +588,53 @@ if ($SelfCheckNoStack) {
     Remove-Item -Recurse -Force $ehMut -ErrorAction SilentlyContinue
     Add-Result 'evidence-head-pack-mutation-red' (($mutRc -eq 1) -and ($mutOut -match 'HEAD_UNRESOLVABLE')) ("rc=$mutRc")
 
+    # ㉜ 报告 §0 书证 head/base 全 oid 机判**接线**（reviewer-5 对 head `c4dd70086` 的 observation O-1 收口，2026-10-14）：
+    #    `check_evidence_counts.py check` 此前只机判件数/verify/eolcheck，不校验 §0 的 `head/base` 行
+    #    （实测该行写成「head = `15e774e91` 之上的交付头」⇒ doc-vs-事实）。现接入标准无栈回归：
+    #      ① 工具 selftest 必须 GREEN（含 §0 短 oid 必红 / 全 oid 绿 / 仓内不可解析必红）；
+    #      ② 真报告按真实证据包 check rc=0（head/base 必须 40 位全 oid 且可在本仓解析）；
+    #      ③ 改坏必红：把副本报告 §0 的 head 改成 7 位短 oid ⇒ 必红点名 `declared_head`。
+    $ec = Join-Path $Here 'check_evidence_counts.py'
+    $ecRaw = & python -I $ec selftest 2>&1
+    $ecOut = ($ecRaw | Out-String)
+    $ecRc = [int]$LASTEXITCODE
+    $ecMatch = [regex]::Match($ecOut, 'SELFTEST GREEN: check_evidence_counts selftest (\d+)/(\d+)')
+    Add-Result 'evidence-counts-selftest' (($ecRc -eq 0) -and $ecMatch.Success -and
+      ($ecMatch.Groups[1].Value -eq $ecMatch.Groups[2].Value)) ("rc=$ecRc")
+
+    $ecRepo = (& git -C $m3Root rev-parse --show-toplevel 2>$null | Out-String).Trim()
+    $ecReport = Join-Path $m3Root 'M3RNG场景DoD②组清单机判组必须真出现报告-20261013.md'
+    $ecDir = Join-Path $m3Root 'evidence-m3-rng-trace-scene-groups-20261013-groups-expected'
+    $ecRealRaw = & python -I $ec check --report $ecReport --dir $ecDir --repo $ecRepo 2>&1
+    $ecRealOut = ($ecRealRaw | Out-String)
+    $ecRealRc = [int]$LASTEXITCODE
+    Add-Result 'evidence-counts-real-green' (($ecRealRc -eq 0) -and ($ecRealOut -match 'EVIDENCE_COUNTS') -and
+      ($ecRealOut -match 'OK 声明计数与真实证据包一致')) ("rc=$ecRealRc")
+
+    # 改坏必红：副本报告放**仓内**（跨盘会让相对路径解析出问题），把 §0 的 40 位 head 改成 7 位短
+    # oid ⇒ §0 全 oid 牙必红点名 declared_head（证明上面那条真件门不是恒真）。
+    $ecMut = Join-Path $Here '.selftest-evcounts-mut.md'
+    $ecMutText = (Get-Content -LiteralPath $ecReport -Raw) -replace '(head\s*=\s*`?)[0-9a-fA-F]{40}', '${1}15e774e91'
+    [IO.File]::WriteAllText($ecMut, $ecMutText)
+    $ecMutRaw = & python -I $ec check --report $ecMut --dir $ecDir --repo $ecRepo 2>&1
+    $ecMutOut = ($ecMutRaw | Out-String)
+    $ecMutRc = [int]$LASTEXITCODE
+    Remove-Item -Force $ecMut -ErrorAction SilentlyContinue
+    Add-Result 'evidence-counts-head-mutation-red' (($ecMutRc -eq 1) -and ($ecMutOut -match 'declared_head')) ("rc=$ecMutRc")
+
     # ⑯ 本脚本从未触碰端口（自检/门/比较全离线）
     Add-Result 'no-port-touched' (-not $script:RngSceneTouchedPorts) 'offline-only'
   } finally {
     Remove-Item -Recurse -Force $tmpRoot -ErrorAction SilentlyContinue
-    # 仓内临时变异目录兜底清理（正常路径已在 ㉛ 块内删除）
+    # 仓内临时变异目录兜底清理（正常路径已在 ㉛/㉜ 块内删除）
     Remove-Item -Recurse -Force (Join-Path $Here '.selftest-headpack-mut') -ErrorAction SilentlyContinue
+    Remove-Item -Force (Join-Path $Here '.selftest-evcounts-mut.md') -ErrorAction SilentlyContinue
   }
 
   $total = $script:RngPass + $script:RngFail.Count
   Write-Output ("SELFTEST ok={0}/{1} failures={2}" -f $script:RngPass, $total, ($script:RngFail -join ','))
   if ($script:RngFail.Count -gt 0) { exit 1 }
-  Write-Output 'GREEN: 无栈自检全绿（场景前置门 fail-closed + **流水头同种子**制品级门（同种子绿 / 异种子·缺 INJECT_OK 必红 / 拒绝比）+ DoD① 单一入口 -SceneGroupDiff 场景门/拒比/结论传播 + **DoD② scenario 声明组必须真的出现（缺组 / monster_ai 抽数不足必红且点名）** + scenario 声明/folded 映射与代码同口径 + folded 等价绿/计数·次序必红 + **承接卡规格锚点保鲜（check_anchors：文档 `path:line` 必须 == 当前源码首个匹配行）** + **站点表 `oracle_ref` 可解析性（文件存在 + 行号在范围内）** + **证据包书证 head 机判接线（check_evidence_head check-pack：真件四包 rc=0 + 改坏必红 HEAD_UNRESOLVABLE）** + LF 写出 + 零端口）'
+  Write-Output 'GREEN: 无栈自检全绿（场景前置门 fail-closed + **流水头同种子**制品级门（同种子绿 / 异种子·缺 INJECT_OK 必红 / 拒绝比）+ DoD① 单一入口 -SceneGroupDiff 场景门/拒比/结论传播 + **DoD② scenario 声明组必须真的出现（缺组 / monster_ai 抽数不足必红且点名）** + scenario 声明/folded 映射与代码同口径 + folded 等价绿/计数·次序必红 + **承接卡规格锚点保鲜（check_anchors：文档 `path:line` 必须 == 当前源码首个匹配行）** + **站点表 `oracle_ref` 可解析性（文件存在 + 行号在范围内）** + **证据包书证 head 机判接线（check_evidence_head check-pack：真件四包 rc=0 + 改坏必红 HEAD_UNRESOLVABLE）** + **报告 §0 书证 head/base 全 oid 机判接线（check_evidence_counts：真报告 rc=0 + 短 oid 改坏必红）** + LF 写出 + 零端口）'
   exit 0
 }
 

@@ -8,7 +8,7 @@ eabb8e7da2db189ac866ad1e5d2e262619b10a8a9f9cb62cfc1fcf79c2f34807 *05-gate-no-str
 264e7081b002aca16551558e517ba7fde3c0f378c0e4f5f8d0a1ab3621bec29d *07-gate-only-stream-seed-green.txt
 0b4ae1e9dbbdd2db1d1ee8be5833cbac6a214acdcc10a3e954fe7c6bd0fe3648 *08-scene-groupdiff-stream-seed-refused.txt
 fc62f72b08d340b8029f47dce1431d1403afa7b3d01af4c0d6704af5a4de39c9 *09-regression.txt
-d227b1043b8ed1b1752cd4f8332896d8324ce1ae84c39c24f98bd991168c88b1 *10-mutation-a-gate-ignores-stream-seed.txt
+4ed2e2eb73056ba33b60975b2b67249b38219ee8553e53fe4310a9b45af3d3b0 *10-mutation-a-gate-ignores-stream-seed.txt
 b97b752fd55985f663b0e69097c0345bc8a251323adbaefee91cf620405d0890 *11-mutation-b-core-not-passing-streams.txt
 97a4438ece69f9602ba5d91ad65a8f4e13b9aa6de28fd2129ffc8a940c2cb421 *12-boundary-yuan-rs.txt
 4cbda09ec8a85ebc7c9f9776c3acf6bd6390861ab740f13ec42dd3c589f5b0ab *README.md
