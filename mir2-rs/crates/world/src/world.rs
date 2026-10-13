@@ -168,6 +168,13 @@ pub struct World {
     /// `None` = 该图无 `EXPRATE` 行（不加倍）；`Some(rate)` = 杀怪经验 × `rate/100`。
     /// 由接线层按 `MapRegistry::flag_of(map_id)` 逐图灌入（缺省全 `None` ⇒ 行为与改动前逐字节相同）。
     pub map_exp_rate: Vec<Option<i32>>,
+    /// C# `M2Share.SpiritMutinyTick`（`M2Share.cs:185`）：神之祈祷的全服窗口到期时刻。
+    ///
+    /// `ProcessSpiritSuite`（`PlayObject.Base.cs:326`）置 `GetTickCount() + Config.SpiritMutinyTime`；
+    /// `MonsterObject.CheckRoyalty`（`MonsterObject.cs:370-372`）读它：窗口未过期且
+    /// `SlaveExpLevel < 5` ⇒ `MasterRoyaltyTick = 0`（立即叛变）。归 `openmir2-m3-pet-slave-lifecycle`（⑨-3）。
+    /// 缺省 `0`（= 无窗口）⇒ 既有 golden 路径一字不改。
+    pub spirit_mutiny_tick: i64,
     /// 帧内待处理命令（FIFO）
     pending: VecDeque<Command>,
     /// 判据③：tick 必须始终跑在同一个线程上
@@ -224,6 +231,7 @@ impl World {
             spell_fill_time: 800,
             clear_drop_on_floor_item_time: 5 * 60 * 1000,
             map_exp_rate: vec![None; maps_len],
+            spirit_mutiny_tick: 0,
             pending: VecDeque::new(),
             owner_thread: None,
             clock_runner,
@@ -275,6 +283,16 @@ impl World {
     pub fn set_recovery_fill_times(&mut self, health_fill_time: i32, spell_fill_time: i32) {
         self.health_fill_time = health_fill_time;
         self.spell_fill_time = spell_fill_time;
+    }
+
+    /// `ProcessSpiritSuite`（`PlayObject.Base.cs:322-330`）的尾：把全服宝宝叛变窗口
+    /// `M2Share.SpiritMutinyTick` 置为 `now + Config.SpiritMutinyTime`。
+    ///
+    /// oracle 的完整 `ProcessSpiritSuite` 还要校验 `IsSpirit` + 拆卸祈祷套装物品
+    /// （`UseItems` 的 `SpiritItem1..4`）——那部分归 `CM_SPELL`/物品面接线片；本函数只落
+    /// 被 `CheckRoyalty` 消费的那个全局量。
+    pub fn activate_spirit_mutiny(&mut self, duration_ms: i32) {
+        self.spirit_mutiny_tick = self.clock_ms + i64::from(duration_ms);
     }
 
     /// 开启商人 tick 驱动（缺省关闭；见 `merchant_enabled` 字段说明）。
@@ -498,6 +516,11 @@ impl World {
         // 死亡结算（C# 在实体下一次 `Run()` 里发现 `HP == 0` 才 `Die()`；
         // 这里同一 tick 内先跑命令、再统一结算死亡，语义等价且顺序确定）
         self.settle_deaths(&mut record);
+
+        // **M3⑨-实现 3**：`BaseObject.Run` 的宝宝列表清理（`BaseObject.Base.cs:208-217`）。
+        // oracle 里这跑在每个主人（玩家）自己的 `Run()` 里；本骨架玩家无 `Run` ⇒ 在死亡结算后
+        // 按槽位顺序对每个**持有宝宝**的实体跑一次。空表 ⇒ 零动作（golden 逐字节不变）。
+        crate::slave::slave_list_cleanup_all(self);
 
         // M3④-实现 C：怪物 AI 一步（oracle `ProcessMonsters` → 每只 `monster.Run()`）。
         // **缺省关闭**：合成 golden 场景不含 oracle 的怪物线程，开 AI 会把 RNG 序列整体移位；

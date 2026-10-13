@@ -35,8 +35,10 @@
 //!   - [`crate::world::World`]：`HP==0 ⇒ Die()`（`:70-73`，由 `settle_deaths` 死亡结算等价）、
 //!     `LastHiter` 30s / `ExpHiter` 6s 过期（`:119-132`，由 `expire_hitters`）。
 //! - **仍未建模**（登记）：`SuperMan`（`:35-38`）、死亡分支 `MakeGhost`（`:86-101`，需
-//!   `MonGen.ZenTime`/`Config.MakeGhostTime`）、`Master`/`SlaveList`（`:133-215`，归 ⑨-3）、
-//!   `ShowHp`/`VerifyTick`（`:217-256`）。
+//!   `MonGen.ZenTime`/`Config.MakeGhostTime`）、`Master` 跟随/`SlaveRelax` 分支（`:133-215`）、
+//!   `ShowHp`/`VerifyTick`（`:217-256`）。**⑨-3 已接**：`CheckRoyalty()`（`MonsterObject.cs:352`）
+//!   在 [`monster_run`] 的两个提前返回口之外复刻调用；宝宝列表清表（`BaseObject.Base.cs:208-217`）
+//!   在 [`crate::world::World::tick`] 里集中跑（见 [`crate::slave`]）。
 //! - **构造期 RNG**：oracle 在 `new MonsterObject()` 时先抽 `BaseObject` 的 `Random(1500)`+
 //!   `Random(2000)`、`AnimalObject` 的 `Random(3000)`×2、`MonsterObject` 的 `Random(2000)`
 //!   （`BaseObject.cs:439/441`、`AnimalObject.cs:76/77`、`MonsterObject.cs:65`），**再**由
@@ -469,9 +471,12 @@ pub fn monster_run(world: &mut World, actor_id: i32) {
         return;
     };
     if !(can_move(e) && !e.fixed_hide_mode && !e.stone_mode) {
+        // oracle：外层 `if (CanMove() && ...)` 为假 ⇒ 落到函数尾的 `CheckRoyalty()`（`MonsterObject.cs:352`）。
+        crate::slave::check_royalty(world, actor_id);
         return;
     }
     if think(world, actor_id) {
+        // oracle `:255-258`：`if (Think()) { base.Run(); return; }` ⇒ **跳过** `CheckRoyalty`。
         return;
     }
     let now = world.clock_ms;
@@ -494,6 +499,8 @@ pub fn monster_run(world: &mut World, actor_id: i32) {
         .get(actor_id)
         .is_some_and(|e| !e.ai.walk_wait_locked && (now - e.ai.walk_tick) > e.ai.walk_speed);
     if !walk_due {
+        // oracle：`if (!WalkWaitLocked && (now - WalkTick) > WalkSpeed)` 为假 ⇒ 落到 `CheckRoyalty()`。
+        crate::slave::check_royalty(world, actor_id);
         return;
     }
     if let Some(e) = world.entities.get_mut(actor_id) {
@@ -560,6 +567,11 @@ pub fn monster_run(world: &mut World, actor_id: i32) {
             wondering(world, actor_id);
         }
     }
+    // `MonsterObject.Run` 尾的 `CheckRoyalty()`（`MonsterObject.cs:352`）。
+    // 注：oracle 的 `AttackTarget()` 命中支（`:277-283`）与 `Master.SlaveRelax` 支（`:333-338`）
+    // 会 `base.Run(); return;` 跳过本调用；本骨架未建模 `Master.SlaveRelax` 分支
+    // （见模块头「未建模」），攻击支的提前返回保持跳过（与 oracle 同）。
+    crate::slave::check_royalty(world, actor_id);
 }
 
 /// `BaseObject.Run()`（`BaseObject.Base.cs:24-316`）的**怪侧公共段**：恢复 / 体力点 / `TargetCret` 清理。
@@ -585,8 +597,8 @@ pub fn monster_run(world: &mut World, actor_id: i32) {
 /// **未建模（登记，见模块头/证据）**：`SuperMan`（`:35-38`）、`HP == 0 ⇒ Die()`（`:70-73`，
 /// 由 [`crate::world::World`] 的 `settle_deaths` 在同一 tick 的死亡结算里等价处理；本段的恢复
 /// 只增 HP、体力点段有 `HP > 1` 门⇒此处 `HP == 0` 不可达）、`MakeGhost`（`:86-101`，需
-/// `MonGen.ZenTime`/`Config.MakeGhostTime`）、`Master`/`SlaveList`（`:133-215`，归 ⑨-3）、
-/// `ShowHp`/`VerifyTick`（`:217-256`）。
+/// `MonGen.ZenTime`/`Config.MakeGhostTime`）、`Master` 跟随/`SlaveRelax`（`:133-215`）、
+/// `ShowHp`/`VerifyTick`（`:217-256`）。**⑨-3 已接**：宝宝列表清表（`:208-217`）。
 ///
 /// 锚点复核于 2026-10-13。
 /// 改坏必红：把 `HealthFillTime` 门（或 `HP > 1` 门）拆掉⇒`base_recovery_*`/
