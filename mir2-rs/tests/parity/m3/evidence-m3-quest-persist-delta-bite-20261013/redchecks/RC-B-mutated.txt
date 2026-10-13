@@ -1,0 +1,29 @@
+== RC-B（改坏必红）· 把 fail-closed 的 absence 检查拔掉 ==
+变异: 顶层
+    let delta = v.get("delta").ok_or_else(|| "基线缺顶层 `delta`（写集差分）字段".TO_STRING())?;
+改为
+    let Some(delta) = v.get("delta") else { return Ok(()); };
+（缺 `delta` 的基线被放行 ⇒ 退回恒绿）
+期望/实测: redcheck_quest_delta_subassertion_bites **FAILED**（[4] no_delta 子断言）
+
+test captured_cross_side_baselines_show_zero_characters_quest_rows ... ok
+test db_srv_save_and_load_sql_have_no_quest_columns ... ok
+test workspace_rust_sources_never_reference_characters_quest ... ok
+test workspace_sql_literals_never_mention_quest_columns ... ok
+
+failures:
+
+---- redcheck_quest_delta_subassertion_bites stdout ----
+
+thread 'redcheck_quest_delta_subassertion_bites' (29928) panicked at bins\db-srv\tests\quest_no_persist.rs:490:5:
+fail-closed 失效：缺顶层 `delta` 的基线被放行（恒绿漏洞未堵）
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    redcheck_quest_delta_subassertion_bites
+
+test result: FAILED. 7 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s
+
+error: test failed, to rerun pass `-p db-srv --test quest_no_persist`
+

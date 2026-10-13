@@ -1,0 +1,18 @@
+== RC-B·还原后复跑（交付 head 原样） ==
+还原: `git checkout --`/cp 还原顶层 `delta` fail-closed 原实现
+期望/实测: 8 passed / 0 failed，且 `git status` 只剩本片文件（见 20-boundary.txt）
+     Running tests\quest_no_persist.rs (E:/tmp/openmir2-m3pt-target\debug\deps\quest_no_persist-21ddaa74cab9a78d.exe)
+
+running 8 tests
+test redcheck_quest_delta_subassertion_bites ... ok
+test redcheck_scanner_bites_injected_quest_persistence ... ok
+test redcheck_sql_scanner_bites_injected_quest_columns ... ok
+test session_quest_state_model_is_still_present ... ok
+test captured_cross_side_baselines_show_zero_characters_quest_rows ... ok
+test db_srv_save_and_load_sql_have_no_quest_columns ... ok
+test workspace_rust_sources_never_reference_characters_quest ... ok
+test workspace_sql_literals_never_mention_quest_columns ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.38s
+
+

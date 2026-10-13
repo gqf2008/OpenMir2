@@ -1,0 +1,3 @@
+== 四门禁 · ① fmt --all -- --check ==
+命令: CARGO_TARGET_DIR=E:/tmp/openmir2-m3pt-target cargo fmt --all -- --check
+rc=0
