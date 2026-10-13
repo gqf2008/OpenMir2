@@ -1,0 +1,108 @@
+   Compiling mir2-envir v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\crates\envir)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.31s
+     Running unittests src\lib.rs (E:/tmp/m3cs-merchant-target\debug\deps\mir2_envir-5897bb03a1b70418.exe)
+
+running 25 tests
+test conf::tests::client_conf_serializes_to_17_declaration_order_bytes ... ok
+test conf::tests::naked_ability_serializes_to_20_bytes ... ok
+test mapinfo::tests::flag_defaults_match_maps_cs ... ok
+test mapinfo::tests::quoted_desc_and_map_name_split ... ok
+test mapinfo::tests::dechp_point_and_time_are_swapped ... ok
+test mapinfo::tests::nohorse_sets_nopositionmove_not_nohorse ... ok
+test mapinfo::tests::l_prefix_and_unknown_commands ... ok
+test mapinfo::tests::arrest_unchanged_leaks_across_sections ... ok
+test merchant::tests::castle_and_move_flags ... ok
+test merchant::tests::parses_deployed_space_shape ... ok
+test conf::tests::missing_keys_fall_back_to_game_svr_conf_defaults ... ok
+test conf::tests::utf8_bom_server_conf_is_decoded_as_utf8 ... ok
+test conf::tests::reads_deployed_shaped_keys ... ok
+test merchant::tests::parses_extra_trailing_columns ... ok
+test merchant::tests::quoted_name_with_space_is_split_like_oracle ... ok
+test merchant::tests::skips_blank_comment_and_incomplete_rows ... ok
+test merchant::tests::unquotes_single_token_name ... ok
+test mongen::tests::drops_rows_failing_oracle_validation ... ok
+test mongen::tests::loadgen_compare_lstr_operands_are_reversed_in_oracle ... ok
+test mongen::tests::parses_deployed_shape ... ok
+test mongen::tests::quoted_name_keeps_oracle_capture_string_quirk ... ok
+test mongen::tests::skips_blank_and_comment_rows ... ok
+test mongen::tests::truncation_casts_match_csharp_unchecked ... ok
+test mongen::tests::load_map_gen_concatenates_without_separator ... ok
+test mongen::tests::loader_returns_none_when_file_missing_and_parses_when_present ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\csharp_parity.rs (E:/tmp/m3cs-merchant-target\debug\deps\csharp_parity-12271df36efc591a.exe)
+
+running 5 tests
+test real_mapinfo_matches_csharp_probe ... ignored, 读真机 E:\MirServer（仓外）；MIR2_REAL_MAPINFO 可覆盖路径
+test real_server_conf_matches_csharp_probe ... ignored, 读真机 E:\MirServer（仓外）；MIR2_REAL_SERVERCONF 可覆盖路径
+test client_conf_bytes_match_csharp_probe ... ok
+test synthetic_server_conf_matches_csharp_probe ... ok
+test synthetic_mapinfo_matches_csharp_probe ... ok
+
+test result: ok. 3 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\merchant.rs (E:/tmp/m3cs-merchant-target\debug\deps\merchant-ee6d43329ddf3e42.exe)
+
+running 5 tests
+test deployment_merchant_load_matches_oracle ... ignored, 读真机 E:\MirServer（仓外）；MIR2_GAMESVR_DIR 显式跑
+test missing_file_is_none ... ok
+test rows_without_appr_are_dropped ... ok
+test can_move_requires_positive_move_time ... ok
+test loader_assembles_script_header_and_goods ... ok
+
+test result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\mongen.rs (E:/tmp/m3cs-merchant-target\debug\deps\mongen-e5d66e1c9994009f.exe)
+
+running 2 tests
+test real_deployment_mongen_reading ... ignored, 读真机 E:\MirServer（仓外）；MIR2_MONGEN_DIR 显式跑
+test loader_does_not_expand_loadgen_include ... ok
+
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\real_maps.rs (E:/tmp/m3cs-merchant-target\debug\deps\real_maps-5232836b05ce9d5a.exe)
+
+running 4 tests
+test map_0100_matches_deployment ... ignored, 读真机 E:\MirServer（仓外）；MIR2_MAP_DIR 显式跑
+test map_0129_matches_deployment ... ignored, 读真机 E:\MirServer（仓外）；MIR2_MAP_DIR 显式跑
+test map_0_cell_zero_attribute_is_consistent ... ignored, 读真机 E:\MirServer（仓外）；MIR2_MAP_DIR 显式跑
+test map_0_matches_deployment ... ignored, 读真机 E:\MirServer（仓外）；MIR2_MAP_DIR 显式跑
+
+test result: ok. 0 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\registry.rs (E:/tmp/m3cs-merchant-target\debug\deps\registry-a1792a8e1141f1ed.exe)
+
+running 7 tests
+test path_conventions ... ok
+test parse_lines_keeps_order ... ok
+test section_line_parsing_matches_maps_cs ... ok
+test registry_reads_point_file_next_to_map ... ok
+test registry_assigns_ids_in_map_info_order ... ok
+test registry_exposes_flag_and_map_desc ... ok
+test registry_skips_duplicates_and_missing_files ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\synthetic.rs (E:/tmp/m3cs-merchant-target\debug\deps\synthetic-ab02cc87c5d742a1.exe)
+
+running 10 tests
+test rejects_malformed_maps ... ok
+test to_grid_preserves_attributes ... ok
+test red_check_coverage_order_and_mid_are_detected ... ok
+test pattern_words_and_override ... ok
+test onehot_pins_file_order_to_coordinates ... ok
+test door_status_merge ... ok
+test obj_list_allocation_before_first_wall ... ok
+test red_check_flip_bit15_changes_walkability ... ok
+test door_byte_scan ... ok
+test points_table_parsing ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests mir2_envir
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

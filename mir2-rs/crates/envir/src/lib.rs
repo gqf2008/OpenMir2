@@ -18,6 +18,7 @@ pub mod error;
 pub mod mapfile;
 pub mod mapinfo;
 pub mod mapquest;
+pub mod merchant;
 pub mod mongen;
 pub mod paths;
 pub mod points;
@@ -37,6 +38,10 @@ pub use mapinfo::{
 pub use mapquest::{
     create_quest, parse_map_quest_line, HiddenFileCreation, HiddenNpcTarget, MapQuestInfo,
     MapQuestLine, MapQuestLoad, QuestNpcRecord, TEXT_SPLIT_CONST as MAP_QUEST_TEXT_SPLIT_CONST,
+};
+pub use merchant::{
+    parse_merchant_line, MerchantRecord, MERCHANT_DEFAULT_PRICE_RATE, MERCHANT_PRICE_RATE_MIN,
+    MERCHANT_SCRIPT_DIR, MERCHANT_TEXT_SPLIT,
 };
 pub use mongen::{
     mon_gen_count, parse_mon_gen_line, MonGenInfo, MON_GEN_THREAD_MON_LIMIT, TEXT_SPLIT_CONST,

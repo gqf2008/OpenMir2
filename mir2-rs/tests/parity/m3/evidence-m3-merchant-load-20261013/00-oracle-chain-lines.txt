@@ -1,0 +1,141 @@
+# M3⑤-实现 1 商人加载 — oracle 调用链行号锚（本仓库 src/ 实读）
+# 生成于 master a443296e（本片 base）；复现命令即各行注释。
+
+## LocalDB.cs — LoadMerchant（MerChant.txt 解析/入库）
+LocalDB.cs:12:        private static readonly char[] TextSplitConst = { ' ', '\t' };
+LocalDB.cs:179:                            sLine = HUtil32.GetValidStr3(sLine, ref sSubName, TextSplitConst);
+LocalDB.cs:223:                    SystemShare.WorldEngine.AddMerchant(SystemShare.FunctionNPC);
+LocalDB.cs:362:                        tStr = HUtil32.GetValidStr3(tStr, ref sMap, TextSplitConst);
+LocalDB.cs:363:                        tStr = HUtil32.GetValidStr3(tStr, ref s1C, TextSplitConst);
+LocalDB.cs:364:                        tStr = HUtil32.GetValidStr3(tStr, ref s20, TextSplitConst);
+LocalDB.cs:365:                        tStr = HUtil32.GetValidStr3(tStr, ref sMonName, TextSplitConst);
+LocalDB.cs:370:                        tStr = HUtil32.GetValidStr3(tStr, ref sItem, TextSplitConst);
+LocalDB.cs:375:                        tStr = HUtil32.GetValidStr3(tStr, ref sQuest, TextSplitConst);
+LocalDB.cs:376:                        tStr = HUtil32.GetValidStr3(tStr, ref s30, TextSplitConst);
+LocalDB.cs:412:        public void LoadMerchant()
+LocalDB.cs:424:            string sFileName = M2Share.GetEnvirFilePath("Merchant.txt");
+LocalDB.cs:434:                        sLineText = HUtil32.GetValidStr3(sLineText, ref sScript, TextSplitConst);
+LocalDB.cs:435:                        sLineText = HUtil32.GetValidStr3(sLineText, ref sMapName, TextSplitConst);
+LocalDB.cs:436:                        sLineText = HUtil32.GetValidStr3(sLineText, ref sX, TextSplitConst);
+LocalDB.cs:437:                        sLineText = HUtil32.GetValidStr3(sLineText, ref sY, TextSplitConst);
+LocalDB.cs:438:                        sLineText = HUtil32.GetValidStr3(sLineText, ref sName, TextSplitConst);
+LocalDB.cs:443:                        sLineText = HUtil32.GetValidStr3(sLineText, ref sFlag, TextSplitConst);
+LocalDB.cs:444:                        sLineText = HUtil32.GetValidStr3(sLineText, ref sAppr, TextSplitConst);
+LocalDB.cs:445:                        sLineText = HUtil32.GetValidStr3(sLineText, ref sIsCalste, TextSplitConst);
+LocalDB.cs:446:                        sLineText = HUtil32.GetValidStr3(sLineText, ref sCanMove, TextSplitConst);
+LocalDB.cs:447:                        sLineText = HUtil32.GetValidStr3(sLineText, ref sMoveTime, TextSplitConst);
+LocalDB.cs:448:                        if (!string.IsNullOrEmpty(sScript) && !string.IsNullOrEmpty(sMapName) && !string.IsNullOrEmpty(sAppr))
+LocalDB.cs:463:                                merchantOldNpc.CastleMerchant = true;
+LocalDB.cs:467:                                merchantOldNpc.BoCanMove = true;
+LocalDB.cs:469:                            SystemShare.WorldEngine.AddMerchant(merchantOldNpc);
+LocalDB.cs:522:                        string sMapGenFile = HUtil32.GetValidStr3(loadList[i], ref sLineText, TextSplitConst);
+LocalDB.cs:538:                        sLineText = HUtil32.GetValidStr3(sLineText, ref sData, TextSplitConst);
+LocalDB.cs:540:                        sLineText = HUtil32.GetValidStr3(sLineText, ref sData, TextSplitConst);
+LocalDB.cs:542:                        sLineText = HUtil32.GetValidStr3(sLineText, ref sData, TextSplitConst);
+LocalDB.cs:544:                        sLineText = HUtil32.GetValidStrCap(sLineText, ref sData, TextSplitConst);
+LocalDB.cs:550:                        sLineText = HUtil32.GetValidStr3(sLineText, ref sData, TextSplitConst);
+LocalDB.cs:552:                        sLineText = HUtil32.GetValidStr3(sLineText, ref sData, TextSplitConst);
+LocalDB.cs:554:                        sLineText = HUtil32.GetValidStr3(sLineText, ref sData, TextSplitConst);
+LocalDB.cs:556:                        sLineText = HUtil32.GetValidStr3(sLineText, ref sData, TextSplitConst);
+LocalDB.cs:625:                        s28 = HUtil32.GetValidStr3(s28, ref sData, TextSplitConst);
+LocalDB.cs:634:                        s28 = HUtil32.GetValidStr3(s28, ref sData, TextSplitConst);
+LocalDB.cs:674:                        sData = HUtil32.GetValidStrCap(sData, ref chrName, TextSplitConst);
+LocalDB.cs:679:                        sData = HUtil32.GetValidStr3(sData, ref type, TextSplitConst);
+LocalDB.cs:680:                        sData = HUtil32.GetValidStr3(sData, ref mapName, TextSplitConst);
+LocalDB.cs:681:                        sData = HUtil32.GetValidStr3(sData, ref cX, TextSplitConst);
+LocalDB.cs:682:                        sData = HUtil32.GetValidStr3(sData, ref cY, TextSplitConst);
+LocalDB.cs:683:                        sData = HUtil32.GetValidStr3(sData, ref flag, TextSplitConst);
+LocalDB.cs:684:                        sData = HUtil32.GetValidStr3(sData, ref appr, TextSplitConst);
+LocalDB.cs:775:                                        s1C = HUtil32.GetValidStr3(s1C, ref s20, TextSplitConst);
+LocalDB.cs:843:                        sLine = HUtil32.GetValidStr3(sLine, ref mapName, TextSplitConst);
+LocalDB.cs:844:                        sLine = HUtil32.GetValidStr3(sLine, ref cX, TextSplitConst);
+LocalDB.cs:845:                        sLine = HUtil32.GetValidStr3(sLine, ref cY, TextSplitConst);
+LocalDB.cs:846:                        sLine = HUtil32.GetValidStr3(sLine, ref allSay, TextSplitConst);
+LocalDB.cs:847:                        sLine = HUtil32.GetValidStr3(sLine, ref range, TextSplitConst);
+LocalDB.cs:848:                        sLine = HUtil32.GetValidStr3(sLine, ref type, TextSplitConst);
+LocalDB.cs:849:                        sLine = HUtil32.GetValidStr3(sLine, ref zone, TextSplitConst);
+LocalDB.cs:850:                        sLine = HUtil32.GetValidStr3(sLine, ref fire, TextSplitConst);
+LocalDB.cs:890:                        readLine = HUtil32.GetValidStr3(readLine, ref sData, TextSplitConst);
+LocalDB.cs:891:                        readLine = HUtil32.GetValidStrCap(readLine, ref sItemName, TextSplitConst);
+LocalDB.cs:1002:            string sFileName = M2Share.GetEnvirFilePath("Merchant.txt");
+LocalDB.cs:1022:                    sLineText = HUtil32.GetValidStr3(sLineText, ref sScript, TextSplitConst);
+LocalDB.cs:1023:                    sLineText = HUtil32.GetValidStr3(sLineText, ref sMapName, TextSplitConst);
+LocalDB.cs:1024:                    sLineText = HUtil32.GetValidStr3(sLineText, ref sX, TextSplitConst);
+LocalDB.cs:1025:                    sLineText = HUtil32.GetValidStr3(sLineText, ref sY, TextSplitConst);
+LocalDB.cs:1026:                    sLineText = HUtil32.GetValidStr3(sLineText, ref sChrName, TextSplitConst);
+LocalDB.cs:1031:                    sLineText = HUtil32.GetValidStr3(sLineText, ref sFlag, TextSplitConst);
+LocalDB.cs:1032:                    sLineText = HUtil32.GetValidStr3(sLineText, ref sAppr, TextSplitConst);
+LocalDB.cs:1033:                    sLineText = HUtil32.GetValidStr3(sLineText, ref sCastle, TextSplitConst);
+LocalDB.cs:1034:                    sLineText = HUtil32.GetValidStr3(sLineText, ref sCanMove, TextSplitConst);
+LocalDB.cs:1035:                    sLineText = HUtil32.GetValidStr3(sLineText, ref sMoveTime, TextSplitConst);
+LocalDB.cs:1052:                                merchant.CastleMerchant = true;
+LocalDB.cs:1060:                                merchant.BoCanMove = true;
+LocalDB.cs:1083:                                merchant.CastleMerchant = true;
+LocalDB.cs:1091:                                merchant.BoCanMove = true;
+
+## ScriptParsers.cs — 商人脚本头 / [goods]
+ScriptParsers.cs:683:                        if (line.StartsWith("%"))// 物品价格倍率
+ScriptParsers.cs:693:                        if (line.StartsWith("+"))// 物品交易类型
+ScriptParsers.cs:703:                        if (line.StartsWith("("))// 增加处理NPC可执行命令设置
+ScriptParsers.cs:835:                        if (line.Equals("[goods]", StringComparison.OrdinalIgnoreCase))
+ScriptParsers.cs:838:                            NPC.ProcessRefillIndex = SystemShare.CurrentMerchantIndex;
+ScriptParsers.cs:967:                            if (SystemShare.CanSellItem(sItemName))
+ScriptParsers.cs:969:                                ((IMerchant)NPC).RefillGoodsList.Add(goods);
+
+## Merchant.cs — 脚本加载入口 + 构造默认值
+Merchant.cs:25:        public int PriceRate { get; set; }
+Merchant.cs:86:            PriceRate = 100;
+Merchant.cs:1089:        public void LoadMerchantScript()
+
+## WorldServer.Merchant.cs — MerchantInitialize（挂图后 LoadMerchantScript）
+WorldServer.Merchant.cs:8:        private void MerchantInitialize()
+WorldServer.Merchant.cs:21:                        MerchantList.RemoveAt(i);
+WorldServer.Merchant.cs:25:                        merchant.LoadMerchantScript();
+WorldServer.Merchant.cs:32:                    MerchantList.RemoveAt(i);
+WorldServer.Merchant.cs:89:                            MerchantList.RemoveAt(i);
+WorldServer.Merchant.cs:204:                    merchant.LoadMerchantScript();
+
+## SystemShare.cs — CanSellItem 是常量 true（DisableSellOffList 检查整段注释）
+SystemShare.cs:223:            return result;
+SystemShare.cs:251:            return result;
+SystemShare.cs:280:            return result;
+SystemShare.cs:397:            return result;
+SystemShare.cs:419:            return result;
+SystemShare.cs:446:            return result;
+SystemShare.cs:494:            return result;
+SystemShare.cs:731:            return result;
+SystemShare.cs:758:            return result;
+SystemShare.cs:795:            //            return result;
+SystemShare.cs:814:            return result;
+SystemShare.cs:833:            return result;
+SystemShare.cs:841:        public static bool CanSellItem(string sItemName)
+SystemShare.cs:852:            return result;
+SystemShare.cs:901:            return result;
+SystemShare.cs:966:            return result;
+SystemShare.cs:986:            return result;
+SystemShare.cs:1034:            return result;
+SystemShare.cs:1054:            return result;
+SystemShare.cs:1082:            return result;
+SystemShare.cs:1117:            return result;
+SystemShare.cs:1146:            return result;
+SystemShare.cs:1180:            return result;
+SystemShare.cs:1209:            return result;
+SystemShare.cs:1238:            return result;
+SystemShare.cs:1329:            return result;
+SystemShare.cs:1378:            return result;
+SystemShare.cs:1421:            return result;
+SystemShare.cs:1448:            return result;
+SystemShare.cs:1466:            return result;
+SystemShare.cs:1500:            return result;
+SystemShare.cs:1514:            return result;
+SystemShare.cs:1563:            return result;
+SystemShare.cs:1577:            return result;
+SystemShare.cs:1620:            return result;
+SystemShare.cs:1634:            return result;
+SystemShare.cs:1677:            return result;
+SystemShare.cs:1691:            return result;
+SystemShare.cs:1705:            return result;
+SystemShare.cs:1831:            return result;
+SystemShare.cs:1889:            return result;
+SystemShare.cs:1937:            return result;
+SystemShare.cs:1976:            return result;

@@ -1,0 +1,4 @@
+# 仓库 LF 口径 EOL 检查（cmd: python -I tools/evidence-hash/verify_sha256sums.py eolcheck <dir>）
+# 初次（SHA256SUMS.txt 尚未生成）：EOLCHECK GREEN 21/21
+# 最终（含本目录 SHA256SUMS.txt）：
+EOLCHECK GREEN 22/22 件文本证据与仓库口径（LF）在 EOL 上一致

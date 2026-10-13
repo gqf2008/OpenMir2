@@ -1,0 +1,38 @@
+# 改坏必红 A —— crates/script/src/parser.rs 的 %PRICERATE 阈值 55 -> 0
+# 预期：loader_assembles_script_header_and_goods 必红（%20 被当成生效 ⇒ price_rate=20 != 100）
+# 还原口径：git checkout -- crates/script/src/parser.rs（文件受跟踪，还原后 sha256 一致）
+
+## 改前 sha256(parser.rs) = 3626a96ac155137b9f78060454fa09286051573438f60d66e7c215d78cd0aca9
+
+## 变异命令：sed -i 's/if n_price_rate >= 55 {/if n_price_rate >= 0 {/' crates/script/src/parser.rs
+312:                    if n_price_rate >= 0 {
+
+## cargo test -p mir2-envir --test merchant loader_assembles_script_header_and_goods
+   Compiling mir2-script v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\crates\script)
+   Compiling mir2-envir v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\crates\envir)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.33s
+     Running tests\merchant.rs (E:/tmp/m3cs-merchant-target\debug\deps\merchant-ee6d43329ddf3e42.exe)
+
+running 1 test
+test loader_assembles_script_header_and_goods ... FAILED
+
+failures:
+
+---- loader_assembles_script_header_and_goods stdout ----
+
+thread 'loader_assembles_script_header_and_goods' (7780) panicked at crates\envir\tests\merchant.rs:94:5:
+assertion `left == right` failed: %20 低于阈值 55 ⇒ PriceRate 保持默认 100（oracle ScriptParsers.cs:687）
+  left: 20
+ right: 100
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    loader_assembles_script_header_and_goods
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-envir --test merchant`
+
+## 还原后 sha256(parser.rs) = 3626a96ac155137b9f78060454fa09286051573438f60d66e7c215d78cd0aca9  restored=YES
+## git status --short crates/script/src/parser.rs = []

@@ -1,0 +1,25 @@
+{
+ "counts": {
+  "ambiguous": 0,
+  "draws": 2,
+  "measured": 2,
+  "missing_site": 0,
+  "other": 0,
+  "setup": 0,
+  "setup_unbounded_rows": 0,
+  "unknown": 0,
+  "wallclock": 0
+ },
+ "expected_kills": 100,
+ "per_site": {
+  "GameSrv.Word.WorldServer.MonGetRandomItems@WorldServer.MonGen.cs:451": 2
+ },
+ "problems": [],
+ "raw_kills": 100,
+ "schema": "m3-drop-exp-purity-v1",
+ "side": "csharp",
+ "stream": "mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/repro/purity-clean.tsv",
+ "table": "mir2-rs/tests/parity/m3/drop-exp/drop_exp_consumers.tsv",
+ "verdict": "GREEN",
+ "wallclock_policy": "pinned"
+}

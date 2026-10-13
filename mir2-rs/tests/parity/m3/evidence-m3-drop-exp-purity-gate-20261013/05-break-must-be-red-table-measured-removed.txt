@@ -1,0 +1,5 @@
+# 改坏必红 C：把消费者表的 measured 行删掉（表是承重的）⇒ 门必须 PREREQ 拒跑（不许因“流水本身干净”而假绿）
+# cmd: python -I mir2-rs/tests/parity/m3/drop-exp/drop_exp_purity_gate.py gate --side csharp --stream mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/repro/purity-clean.tsv --table mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/repro/consumers-no-measured.tsv
+$ python -I mir2-rs/tests/parity/m3/drop-exp/drop_exp_purity_gate.py gate --side csharp --stream mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/repro/purity-clean.tsv --table mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013/repro/consumers-no-measured.tsv
+PREREQ_MISSING: consumers 表里 side=csharp 没有 `measured` 行 ⇒ 认不出被测量路径，拒跑（不许假绿；实现卡落地后按实测站点补表）
+rc=2

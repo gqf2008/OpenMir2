@@ -14,14 +14,36 @@
     "hp": 20669
   },
   "isolation": {
-    "comment": "固定图 = 0137 竞技场（MonGen 0 行、GuardList/MerChant/Npcs/MapEvent/MapQuest 零引用 ⇒ 地图自身不刷怪、不跑 AI）；夹具在该图上**只** spawn 固定的一只固定怪（承接卡 2 落地后由 MonGen 驱动 + -PinMonster 控制），故除本夹具的 spawn/掉落/击杀路径外零 RNG 消费者。real-run 前由 gate_guards.ps1::Test-M3MonGenEmpty / Test-M3MapNoAiConsumers 复核「地图自身无消费者」。",
+    "comment": "固定图 = 0137 竞技场（MonGen 0 行、GuardList/MerChant/Npcs/MapEvent/MapQuest 零引用 ⇒ 地图自身不刷怪、不跑 AI）；夹具在该图上**只** spawn 固定的一只固定怪（承接卡 2 落地后由 MonGen 驱动 + -PinMonster 控制）。owner 2026-10-13（T-35 有条件批准，comment c78bd13f）裁定：**不许**把「离刷怪圈远 / 图里 MonGen 零行 / 只 spawn 一只」任何一条单独当可比性充分条件 ⇒ 隔离必须由 `drop_exp_purity_gate.py` 按**实测抽数流水**证明（见下 `purity`）。",
     "map_self_no_monster": true,
     "map_self_no_ai_consumers": true,
     "fixture_single_monster": true
   },
+  "purity": {
+    "canon": "m3-drop-exp-purity-v1",
+    "gate": "python -I drop-exp/drop_exp_purity_gate.py gate --side <csharp|rust> --stream <full-scene rng stream> --expected-kills 100 --raw <drop_exp_raw.jsonl>",
+    "runner": "run_drop_exp_pair.ps1 -PurityOnly -PuritySide <csharp|rust> -PurityStream <f> -PurityRaw <f>",
+    "table": "drop_exp_consumers.tsv",
+    "criterion": "场景内除被测量路径（1 只 pin 怪 + 击杀→掉落/经验取数）外 RNG 消费者数 = 0；逐消费者清单 + 计数由门产出。",
+    "classes": ["measured", "setup", "wallclock", "other"],
+    "fail_closed": "认不出 / 缺 site 列 / 表里该 side 无 measured 行 / 同 site 命中互斥 class ⇒ 点名 RED/PREREQ，拒比，不静默 GREEN。",
+    "wallclock_policy": "pinned",
+    "wallclock_policy_note": "owner 二选一：本夹具取 (a) pin 抑制（AnimalObject.Wondering 等墙钟站点必须为 0）；(b) 专用流要落实现卡，门对 --wallclock-policy dedicated 暂 PREREQ 拒跑。",
+    "wallclock_sites_named_by_owner": [
+      "M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427",
+      "M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:432",
+      "M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:434"
+    ],
+    "stream_artifact": {
+      "csharp": "MIR2_RNG_LOG（m3/rng-hook + MIR2_RNG_SITE=1 的全场景 5 列 TSV）",
+      "rust": "<rust stack log dir>/rng-stream.tsv"
+    },
+    "status": "offline-gate-ready-window-pending"
+  },
   "artifact": {
     "raw": "drop_exp_raw.jsonl",
     "comparator": "python -I drop-exp/drop_exp_diff.py diff <csharp_raw> <rust_raw>",
+    "purity_gate": "python -I drop-exp/drop_exp_purity_gate.py gate --side <side> --stream <stream> [--raw <raw>] --expected-kills 100",
     "runner": "run_drop_exp_pair.ps1"
   },
   "record_required_fields": ["k", "gold", "drops", "exp_delta", "exp_total", "level"],
@@ -30,6 +52,7 @@
   "notes": [
     "掉落列表按多重集/计数式比较（multiset），逐槽位定位到「第 k 次击杀 / 第几个掉落槽」；不许 set 差集。",
     "金额/经验保持原宽度比较，比较器不得做 i32 截断（selftest 有 i32-truncation-red 用例钉住）。",
-    "oracle 侧本代码库没有独立的英雄经验表；「英雄」路径 = 下属/宠物击杀走 ExpHitter.Master（BaseObject.cs:2434），本场景单 attacker 不覆盖，登记为承接项。"
+    "oracle 侧本代码库没有独立的英雄经验表；「英雄」路径 = 下属/宠物击杀走 ExpHitter.Master（BaseObject.cs:2434），本场景单 attacker 不覆盖，登记为承接项。",
+    "纯度：除被测量路径（MonGetRandomItems 掉落取数）外的 RNG 消费者必须为 0；墙钟消费者（AnimalObject.Wondering/RegenMonsters/Merchant.Run）按 (a) pin 抑制压到 0，逐消费者计数见 drop_exp_purity_gate.py --json。"
   ]
 }

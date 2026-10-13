@@ -1,0 +1,35 @@
+# 改坏必红 B —— crates/envir/src/merchant.rs 的 BoCanMove 去掉 '&& move_time > 0'
+# 预期：can_move_requires_positive_move_time 必红（CanMove=1/MoveTime=0 被当成可移动）
+# 还原口径：从备份逐字节还原（本文件为本卡新增，尚未入仓；还原后 sha256 一致）
+
+## 改前 sha256(merchant.rs) = ce3cdbef7943678ba6402ffedd2d0000fb83c4f638bb89561f15e14b078a11bc
+
+## 变异命令：sed -i 's/!= 0 && move_time > 0;/!= 0;/' crates/envir/src/merchant.rs
+159:    let can_move = str_to_int(&s_can_move, 0) != 0;
+
+## cargo test -p mir2-envir --test merchant can_move_requires_positive_move_time
+   Compiling mir2-script v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\crates\script)
+   Compiling mir2-envir v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\crates\envir)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.93s
+     Running tests\merchant.rs (E:/tmp/m3cs-merchant-target\debug\deps\merchant-ee6d43329ddf3e42.exe)
+
+running 1 test
+test can_move_requires_positive_move_time ... FAILED
+
+failures:
+
+---- can_move_requires_positive_move_time stdout ----
+
+thread 'can_move_requires_positive_move_time' (7284) panicked at crates\envir\tests\merchant.rs:124:5:
+CanMove=1 但 MoveTime=0 ⇒ 不可移动（oracle 的 `&& MoveTime > 0`）
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    can_move_requires_positive_move_time
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-envir --test merchant`
+
+## 还原后 sha256(merchant.rs) = ce3cdbef7943678ba6402ffedd2d0000fb83c4f638bb89561f15e14b078a11bc  restored=YES

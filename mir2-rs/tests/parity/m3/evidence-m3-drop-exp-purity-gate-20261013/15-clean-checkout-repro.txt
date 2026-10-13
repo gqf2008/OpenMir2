@@ -1,0 +1,18 @@
+# 干净检出可复现（不做任何本地配置/归一；直接对提交树跑复核器）
+# cmd: git worktree add --detach E:/tmp/m3bag-verify-head 099eae2aaf15836a7abe9da6c494cf0f697a3254
+#      cd E:/tmp/m3bag-verify-head
+#      python -I tools/evidence-hash/verify_sha256sums.py <证据目录>
+$ git -C E:/tmp/m3bag-verify-head rev-parse HEAD
+099eae2aaf15836a7abe9da6c494cf0f697a3254
+
+$ python -I tools/evidence-hash/verify_sha256sums.py mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013
+GREEN mir2-rs\tests\parity\m3\evidence-m3-drop-exp-purity-gate-20261013\SHA256SUMS.txt  [repo 口径]  OK 20/20
+rc=0
+
+$ python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013
+EOLCHECK GREEN 22/22 件文本证据与仓库口径（LF）在 EOL 上一致
+rc=0
+
+$ python -I tools/evidence-hash/verify_sha256sums.py --check-extra --exclude README.md mir2-rs/tests/parity/m3/evidence-m3-drop-exp-purity-gate-20261013
+GREEN mir2-rs\tests\parity\m3\evidence-m3-drop-exp-purity-gate-20261013\SHA256SUMS.txt  [repo 口径]  OK 20/20
+rc=0
