@@ -3,7 +3,7 @@
 $ git diff --name-only master..HEAD -- src sql MirClient
 （空 ⇒ oracle/C#/客户端/表结构零改动）
 
-$ git diff --name-only master..HEAD
+# 本片改动清单（base master..HEAD）
   mir2-rs/bins/game-svr/src/main.rs
   mir2-rs/bins/game-svr/src/merchant.rs
   mir2-rs/bins/game-svr/tests/merchant_rng_trace.rs
@@ -11,6 +11,18 @@ $ git diff --name-only master..HEAD
   mir2-rs/crates/world/src/world.rs
   mir2-rs/tests/parity/m3/drop-exp/drop_exp_consumers.tsv
   mir2-rs/tests/parity/whitelist.md
+  mir2-rs/tests/parity/world/merchant-tick-20261013/00-rust-rng-trace.tsv
+  mir2-rs/tests/parity/world/merchant-tick-20261013/01-oracle-anchors.txt
+  mir2-rs/tests/parity/world/merchant-tick-20261013/03-merchant-rng-trace.txt
+  mir2-rs/tests/parity/world/merchant-tick-20261013/04-claimb-groupdiff.txt
+  mir2-rs/tests/parity/world/merchant-tick-20261013/04-set-a.tsv
+  mir2-rs/tests/parity/world/merchant-tick-20261013/04-set-b.tsv
+  mir2-rs/tests/parity/world/merchant-tick-20261013/04-swap-a.tsv
+  mir2-rs/tests/parity/world/merchant-tick-20261013/04-swap-b.tsv
+  mir2-rs/tests/parity/world/merchant-tick-20261013/05-redchecks.txt
+  mir2-rs/tests/parity/world/merchant-tick-20261013/06-gates.txt
+  mir2-rs/tests/parity/world/merchant-tick-20261013/06b-workspace-test.txt
+  mir2-rs/tests/parity/world/merchant-tick-20261013/07-boundary.txt
 
-# 本片 HEAD: 097fbb6612d115c54048b5b776ef1af307c8c74d
-# base master: 0dde01b7b7691c00a5c61ec4b14b87eaae8dac10
+# HEAD = ce24fd1be40c17a4bf11057b9ed12a59c8f8ab71
+# master = 0dde01b7b7691c00a5c61ec4b14b87eaae8dac10

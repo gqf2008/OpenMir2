@@ -1,6 +1,6 @@
 1	INJECT_OK	2024	0
 SEED_PROBE 247130676 1495952918 1116080357 1216877399 28283303 704472390 1659538823 1828387271
-1	Next(max)	1500	172	crates\world\src\merchant.rs:231
-2	Next(max)	50	34	crates\world\src\merchant.rs:467
-3	Next(max)	50	25	crates\world\src\merchant.rs:473
-4	Next(min,max)	4294967497	24	crates\world\src\merchant.rs:421
+1	Next(max)	1500	172	crates\world\src\merchant.rs:246
+2	Next(max)	50	34	crates\world\src\merchant.rs:508
+3	Next(max)	50	25	crates\world\src\merchant.rs:514
+4	Next(min,max)	4294967497	24	crates\world\src\merchant.rs:450

@@ -1,10 +1,8 @@
 # M3⑤ 第②片 Claim B 合成件（owner eb3bf42f ④）：同批内两个商人相对次序对调 ⇒ groupdiff 必红
 
-# 合成件（site 取真实 Rust 站点：merchant=04-swap-a/b.tsv 的两条，homemap=另一组）
-  04-swap-a.tsv: merchant(467) , homemap       , merchant(473)
-  04-swap-b.tsv: merchant(467) , merchant(473) , homemap
-  $ python tests/parity/m3/rng-trace-probe/rng_ledger_diff.py groupdiff \
-      <a> <b> --a-side rust --b-side rust --strict
+  04-swap-a.tsv: merchant(508) , homemap       , merchant(514)
+  04-swap-b.tsv: merchant(508) , merchant(514) , homemap
+
 RNG_CONSUMER_GROUPDIFF include_attack=False a=tests/parity/world/merchant-tick-20261013/04-swap-a.tsv(3) b=tests/parity/world/merchant-tick-20261013/04-swap-b.tsv(3)
   A_GROUPS {'merchant': 2, 'homemap': 1}
   B_GROUPS {'merchant': 2, 'homemap': 1}
