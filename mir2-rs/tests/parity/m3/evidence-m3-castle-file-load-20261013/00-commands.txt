@@ -3,7 +3,7 @@ M3⑧-实现 6（openmir2-m3-castle-file-load）第①片 —— 命令流水（
 工作目录: E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3cs/mir2-rs
 隔离构建: CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target
 分支: worktree-m3-castle-file-load
-base: 本片最终 head 的 merge-base(origin/master, head)；本刻 origin/master = d5be14f40
+base: 本片最终 head 的 merge-base(origin/master, head)；本刻 origin/master = 5d499cd9c
       （返工片先把 origin/master 合进分支再改；见 09-boundary.txt 的 merge-base 实测）
 
 [0] 取基线与同步

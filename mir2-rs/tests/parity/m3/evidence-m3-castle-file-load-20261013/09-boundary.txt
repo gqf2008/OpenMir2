@@ -1,5 +1,5 @@
 # 交付 head = 本片最终提交（见 patch --head；此文件随该提交入库）
-# merge-base(origin/master, patch head) = d5be14f40eea1ab4e408b5aa055ba02ae3b367da
+# merge-base(origin/master, patch head) = 5d499cd9c8bacf9b5119093780b0be4b29166cb1
 
 === git diff --name-only BLOCK -- src sql MirClient
 (空 = 0 件)
@@ -17,9 +17,9 @@
  .../03-rust-vectors.txt                            |   48 +
  .../04-redcheck.txt                                |  119 ++
  .../05-gate-fmt.txt                                |    2 +
- .../06-gate-clippy.txt                             |    5 +
- .../07-gate-test.txt                               | 1656 ++++++++++++++++++++
- .../08-gate-msgcodegen.txt                         |    5 +
+ .../06-gate-clippy.txt                             |    6 +
+ .../07-gate-test.txt                               | 1660 ++++++++++++++++++++
+ .../08-gate-msgcodegen.txt                         |    4 +
  .../09-boundary.txt                                |   30 +
  .../10-vectors-inventory.txt                       |   34 +
  .../11-serialize-crlf.txt                          |   25 +
@@ -27,4 +27,4 @@
  .../README.md                                      |   68 +
  .../SHA256SUMS.txt                                 |   15 +
  .../fixtures/SabukW-0.hex                          |    1 +
- 19 files changed, 3105 insertions(+)
+ 19 files changed, 3109 insertions(+)

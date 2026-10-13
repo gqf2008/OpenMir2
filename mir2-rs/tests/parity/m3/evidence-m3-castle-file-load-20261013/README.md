@@ -56,7 +56,7 @@
 - **构造级判据**：13 条离线用例（`cargo test -p mir2-envir --lib castle`；castle 模块 12 条 + `merchant` 1 条）逐字段/逐字节核对部署件与 oracle 默认值。
 - **落盘行尾**：两个 `serialize_*` 产出 CRLF，`serialize_castle_list(1)` 逐字节 == 部署件 `List.txt`（`30 0D 0A`）。
 - **改坏必红 x2**：`04-redcheck.txt`。
-- **四门禁**：fmt 0 / clippy 0 / `cargo test --workspace --no-fail-fast` 0（98 suites / 1025 passed / 0 failed / 21 ignored）/ msgcodegen 604 OK。
+- **四门禁**：fmt 0 / clippy 0 / `cargo test --workspace --no-fail-fast` 0（98 suites / 1036 passed / 0 failed / 21 ignored）/ msgcodegen 604 OK。
 - **边界**：`src sql MirClient` 与 `crates/protocol` `crates/storage` 空。
 - **证据 hash**：`python -I tools/evidence-hash/verify_sha256sums.py --check-extra <本目录>` ⇒ `GREEN OK 14/14`（仓库字节 / LF 归一口径）；`eolcheck <本目录>` ⇒ 见 `12-hash-check.txt`（原始输出）。
 
