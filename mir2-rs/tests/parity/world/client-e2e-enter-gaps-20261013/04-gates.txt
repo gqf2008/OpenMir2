@@ -1,19 +1,16 @@
-# 四门禁（隔离 CARGO_TARGET_DIR=E:/tmp/m2svr-target；cwd=mir2-rs/）
+# 四门禁（合并 master 后重跑；隔离 CARGO_TARGET_DIR=E:/tmp/m2svr-target；cwd=mir2-rs/）
+base(master)=cf3f81c35
 
 ## cargo fmt --all -- --check
 rc=0
 
 ## cargo clippy --workspace --all-targets --offline -- -D warnings
 rc=0
-    Checking mir2-parity-tests v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\tests\parity)
-    Checking game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.95s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.61s
 
 ## cargo test --workspace --offline --no-fail-fast
-rc=0 （97 suites · 988 passed · 0 failed · 21 ignored）
+rc=0 （98 suites · 1025 passed · 0 failed · 21 ignored）
 FAILED_LINES=0
-SUITES=97
 
 ## cargo run -p msgcodegen --offline -- --check
-     Running `E:/tmp/m2svr-target\debug\msgcodegen.exe --check`
 msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
