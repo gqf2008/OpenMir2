@@ -1,0 +1,136 @@
+# M3⑩-实现 2 oracle 锚点：goldsales 只读加载接线
+# 卡 openmir2-m3-selloff-goldsales-load-wire
+# 生成：2026-10-13T10:15:35Z  worktree=.claude/worktrees/m3hp  branch=worktree-m3-selloff-goldsales-load-wire
+# base=refs/remotes/walgit/selloff-world-host 2869a234bc2f947ed268f61f635e32594468a1a1 (⑩-1 head；⑩-2 依赖其 SellOffBook)
+# ============================================================================
+
+## [1] 启动建表 + 加载调用点（src/GameSrv/GameApp.cs）
+     1	            //M2Share.QuestDiaryList = new List<IList<TQDDinfo>>();
+     2	            M2Share.AbuseTextList = new StringList();
+     3	            M2Share.SellOffItemList = new List<DealOffInfo>();
+     4	            M2Share.UnbindList = new Dictionary<int, string>();
+  ---
+     1	            LogService.Info("加载捆装物品信息成功...");
+     2	            LogService.Info("加载物品寄售系统...");
+     3	            GameShare.DataSource.LoadSellOffItemList();
+     4	            LogService.Info("正在加载任务地图信息...");
+
+## [2] 加载实现（src/GameSrv/DB/MySqlDB.cs:251-291）
+        public void LoadSellOffItemList()
+        {
+            if (!Open())
+            {
+                LogService.Error("读取物品寄售列表失败.");
+                return;
+            }
+            try
+            {
+                const string sSQLString = "select * from goldsales";
+                using IDataReader dr = Query(sSQLString);
+                while (dr.Read())
+                {
+                    string sDealChrName = dr.GetString("DealChrName");
+                    string sBuyChrName = dr.GetString("BuyChrName");
+                    DateTime dSellDateTime = dr.GetDateTime("SellDateTime");
+                    byte nState = dr.GetByte("State");
+                    short nSellGold = dr.GetInt16("SellGold");
+                    string sUseItems = dr.GetString("UseItems");
+                    if ((!string.IsNullOrEmpty(sDealChrName)) && (!string.IsNullOrEmpty(sBuyChrName)) && (nState < 4))
+                    {
+                        DealOffInfo DealOffInfo = new DealOffInfo();
+                        DealOffInfo.sDealChrName = sDealChrName;
+                        DealOffInfo.sBuyChrName = sBuyChrName;
+                        DealOffInfo.dSellDateTime = dSellDateTime;
+                        DealOffInfo.nSellGold = nSellGold;
+                        DealOffInfo.UseItems = JsonSerializer.Deserialize<UserItem[]>(sUseItems);
+                        DealOffInfo.Flag = nState;
+                        M2Share.SellOffItemList.Add(DealOffInfo);
+                    }
+                }
+                LogService.Info($"读取物品寄售列表成功...[{M2Share.SellOffItemList.Count}]");
+            }
+            finally
+            {
+                Close();
+            }
+        }
+
+        private const string SaveSellItemSql = "INSERT INTO goldsales (DealChrName, BuyChrName, SellDateTime, State, SellGold,UseItems) values (@DealChrName, @BuyChrName, @SellDateTime, @State, @SellGold,@UseItems))";
+
+
+## [3] DDL（sql/mir2_data.sql:21-38）：列名 DealCharName/BuyCharName（加载器读 DealChrName/BuyChrName）
+-- Table structure for goldsales
+-- ----------------------------
+DROP TABLE IF EXISTS `goldsales`;
+CREATE TABLE `goldsales`  (
+  `Id` bigint(20) NOT NULL AUTO_INCREMENT,
+  `DealCharName` varchar(50) CHARACTER SET utf8 COLLATE utf8_general_ci NULL DEFAULT NULL,
+  `BuyCharName` varchar(50) CHARACTER SET utf8 COLLATE utf8_general_ci NULL DEFAULT NULL,
+  `SellDateTime` datetime NULL DEFAULT NULL,
+  `State` tinyint(1) NULL DEFAULT NULL,
+  `SellGold` int(11) NULL DEFAULT NULL,
+  `UseItems` json NULL,
+  PRIMARY KEY (`Id`) USING BTREE
+) ENGINE = InnoDB AUTO_INCREMENT = 1 CHARACTER SET = utf8 COLLATE = utf8_general_ci COMMENT = '金币寄售' ROW_FORMAT = DYNAMIC;
+
+-- ----------------------------
+-- Records of goldsales
+-- ----------------------------
+
+
+## [4] DealOffInfo（src/OpenMir2/Data/DealOffInfo.cs）
+    public class DealOffInfo
+    {
+        /// <summary>
+        /// 寄售人
+        /// </summary>
+        public string sDealChrName;
+        /// <summary>
+        /// 购买人
+        /// </summary>        
+        public string sBuyChrName;
+        /// <summary>
+        /// 寄售时间
+        /// </summary>        
+        public DateTime dSellDateTime;
+        /// <summary>
+        /// 交易的元宝数
+        /// </summary>        
+        public int nSellGold;
+        /// <summary>
+        /// 物品
+        /// </summary>        
+        public UserItem[] UseItems;
+        public byte Flag;
+    }
+}
+## [5] save 调用点全被注释（`SaveSellOffItemList`）
+src/GameSrv/DB/MySqlDB.cs:295:        public void SaveSellOffItemList()
+src/M2Server/IDataSource.cs:33:        void SaveSellOffItemList();
+  --- PlayObject.Sale.cs 调用点（全部在注释行内）---
+240:                            // M2Share.CommonDb.SaveSellOffItemList();//保存元宝寄售列表
+332:                                //M2Share.CommonDb.SaveSellOffItemList();//保存元宝寄售列表
+577:                //M2Share.CommonDb.SaveSellOffItemList();//保存元宝寄售列表 
+
+## [6] UserItem JSON 形态（System.Text.Json：byte[] Desc ⇒ base64 字符串）
+        public int MakeIndex { get; set; }
+        /// <summary>
+        /// 物品ID
+        /// </summary>
+        public ushort Index { get; set; }
+        /// <summary>
+        /// 当前持久值
+        /// </summary>
+        public ushort Dura { get; set; }
+        /// <summary>
+        /// 最大持久值
+        /// </summary>
+        public ushort DuraMax { get; set; }
+        public byte[] Desc { get; set; }
+        public byte ColorR { get; set; }
+        public byte ColorG { get; set; }
+        public byte ColorB { get; set; }
+        public char[] Prefix { get; set; }
+
+        public UserItem()
+        {

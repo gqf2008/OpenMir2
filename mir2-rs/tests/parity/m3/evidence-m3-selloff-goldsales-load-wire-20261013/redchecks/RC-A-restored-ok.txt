@@ -1,0 +1,23 @@
+# RC-A 还原后复核：git restore --source=HEAD -- mir2-rs/crates/data/src/loaders.rs
+# 命令：cargo test -p game-svr --offline --test goldsales_load -- --ignored --nocapture
+# 期望/实测：rc=0（表里 1 行、加载器仍 0 行）。
+# 注（rebase 片 r2 2026-10-13，worktree m3hp / principal openmir2-worker-20）：本片与 ⑩-1 同栈重放到
+#   master `ddaca961c`（⑩-1 前缀 oid `515540139`；交付时 origin/master = `78cf74d46`；
+#   `git merge-tree --write-tree origin/master HEAD` = rc=0），按同一命令重跑；目标目录在检出外。
+
+
+running 1 test
+遮蔽会话里 goldsales 行数 = 1
+load_sell_off_item_list 返回行数 = 0
+test table_has_data_but_loader_still_reads_zero_rows ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+   Compiling mir2-data v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\crates\data)
+   Compiling mir2-formula v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\crates\formula)
+   Compiling mir2-world-bevy v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\crates\world-bevy)
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\crates\world)
+   Compiling mir2-envir v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\crates\envir)
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.50s
+     Running tests\goldsales_load.rs (E:/tmp/openmir2-m3hp-target\debug\deps\goldsales_load-ec66d2446415a18f.exe)
