@@ -17,6 +17,16 @@
 
 口径：**只读**（只读 `whitelist.md` + 对 `fixture_matrix.MATRIX` 的 token 做解析核对，
 不写仓库文件、不起栈、不占端口）。`selftest` 用合成文本 + 注入式 classify，含「改坏必红」。
+
+## 接入（2026-10-14，卡 `openmir2-m3-fixture-chain-gate`）
+
+本件交付后**无任何调用方**（只在证据 README 里手工跑）⇒ 与 markers 前缀门 / 宝宝登记门同类的
+「在场却坏无声」隐患（reviewer-6 `4f5d3eeb1` O-1）。现已接入 `fixture_chain_gate.py` 的
+`SHARED_CHECKS`**（仅 `selftest` 向）**，不看矩阵状态、独立常跑；链门 `selftest` 内含防回退牙。
+
+⚠ **未接 `audit --strict`**：`whitelist.md` 现存两行 `| T-42 |`，该撞号的去重是 owner 已路由的
+跨车道登记号重编（⑤-2 那行及其证据 README 同在 `tests/parity/world/**`，非本车道写集）⇒
+`--strict` 现为 RED。等 owner 裁决重编后，把 `audit --strict` 补登记为链门的 `check`。
 """
 from __future__ import annotations
 

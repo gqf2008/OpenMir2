@@ -89,6 +89,14 @@ SHARED_CHECKS = [
     #   不看矩阵状态、独立常跑（在场却坏 ⇒ 恒 RED，绝不判绿）。
     ("pet_slave_registry_selftest", "mir2-rs/tests/parity/m3/m3_pet_slave_registry_gate.py", ["selftest"]),
     ("pet_slave_registry_check", "mir2-rs/tests/parity/m3/m3_pet_slave_registry_gate.py", ["check"]),
+    # 白名单登记号审计门（`m3_whitelist_registry_audit.py`，卡 `openmir2-m3-whitelist-registry-integrity`）
+    #   此前**无任何调用方**（reviewer-6 `4f5d3eeb1` O-1：纯审计、非 fail-closed 门仍零调用方）——
+    #   与宝宝登记门同类的「在场却坏无声」隐患。本片接入其 **selftest**（工具自身逻辑 + 改坏必红）。
+    #   ⚠ 未接 `audit --strict`：`whitelist.md` 现存**两行 `| T-42 |`**（⑤-2 商人 tick vs ⑥-5 任务夹具），
+    #   该撞号是 owner 已路由的跨车道登记号重编（⑤-2 证据 README 在 `tests/parity/world/**`，
+    #   非本车道写集）⇒ `--strict` 现为 RED。等 owner 裁决重编后，把 `audit --strict` 补登记为 `check`
+    #   （届时本段注释一并更新）。
+    ("whitelist_registry_selftest", "mir2-rs/tests/parity/m3/m3_whitelist_registry_audit.py", ["selftest"]),
 ]
 
 RUNNER_PREREQ_RC = 2  # 各驱动约定的「前置未到，fail-closed」退出码
@@ -334,8 +342,12 @@ def cmd_selftest(_args):
     _pet_gate = [e for _n, rel, e in SHARED_CHECKS if rel.endswith("m3_pet_slave_registry_gate.py")]
     expect("宝宝登记门已接入共享管线（防回退）",
            ["selftest"] in _pet_gate and ["check"] in _pet_gate)
-    expect("主机门（.py）登记项 ≥10（castle + 行会/攻城 + 英雄/宠物 + markers 前缀 + 宝宝登记 各 selftest/check）",
-           sum(1 for _n, rel, _e in SHARED_CHECKS if rel.endswith(".py")) >= 10)
+    # 本片防回退牙：白名单登记号审计门（`m3_whitelist_registry_audit.py`）必须常驻共享管线
+    #   （selftest 向）。它此前零调用方（reviewer-6 `4f5d3eeb1` O-1）⇒ 工具自身逻辑回归会静默。
+    _wl_gate = [e for _n, rel, e in SHARED_CHECKS if rel.endswith("m3_whitelist_registry_audit.py")]
+    expect("白名单登记号审计门 selftest 已接入共享管线（防回退）", ["selftest"] in _wl_gate)
+    expect("主机门（.py）登记项 ≥11（castle + 行会/攻城 + 英雄/宠物 + markers 前缀 + 宝宝登记 + 白名单审计 各 selftest[/check]）",
+           sum(1 for _n, rel, _e in SHARED_CHECKS if rel.endswith(".py")) >= 11)
     expect("共享管线登记名唯一（防重复注册偷懒）",
            len({n for n, _r, _e in SHARED_CHECKS}) == len(SHARED_CHECKS))
     expect("共享管线 (file,args) 登记唯一",

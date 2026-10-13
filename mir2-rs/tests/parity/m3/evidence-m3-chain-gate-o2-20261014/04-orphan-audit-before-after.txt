@@ -1,0 +1,18 @@
+# 接入前：审计门在 origin/master 上零调用方（reviewer-6 O-1 事实核）
+$ git grep -n m3_whitelist_registry_audit origin/master -- '*.ps1' '*.py'
+origin/master:mir2-rs/tests/parity/m3/m3_pet_slave_registry_gate.py:13:它不是通用的 whitelist 审计（那是 `m3_whitelist_registry_audit.py`，审 T-* 唯一性 / 夹具 token 解析）：
+origin/master:mir2-rs/tests/parity/m3/m3_pet_slave_registry_gate.py:107:    # ② B 段全局编号唯一（T 段唯一性归 m3_whitelist_registry_audit.py；T-42 撞号是已路由 owner 的历史问题）。
+origin/master:mir2-rs/tests/parity/m3/m3_whitelist_registry_audit.py:2:"""M3 白名单 T-* 登记号审计（`m3_whitelist_registry_audit.py`）——只读、零端口。
+origin/master:mir2-rs/tests/parity/m3/m3_whitelist_registry_audit.py:15:  python -I m3_whitelist_registry_audit.py audit [--strict] [--json OUT]
+origin/master:mir2-rs/tests/parity/m3/m3_whitelist_registry_audit.py:16:  python -I m3_whitelist_registry_audit.py selftest
+
+# 本 HEAD：链门已登记 whitelist_registry_selftest
+mir2-rs/tests/parity/m3/fixture_chain_gate.py:92:    # 白名单登记号审计门（`m3_whitelist_registry_audit.py`，卡 `openmir2-m3-whitelist-registry-integrity`）
+mir2-rs/tests/parity/m3/fixture_chain_gate.py:99:    ("whitelist_registry_selftest", "mir2-rs/tests/parity/m3/m3_whitelist_registry_audit.py", ["selftest"]),
+mir2-rs/tests/parity/m3/fixture_chain_gate.py:345:    # 本片防回退牙：白名单登记号审计门（`m3_whitelist_registry_audit.py`）必须常驻共享管线
+mir2-rs/tests/parity/m3/fixture_chain_gate.py:347:    _wl_gate = [e for _n, rel, e in SHARED_CHECKS if rel.endswith("m3_whitelist_registry_audit.py")]
+mir2-rs/tests/parity/m3/m3_pet_slave_registry_gate.py:13:它不是通用的 whitelist 审计（那是 `m3_whitelist_registry_audit.py`，审 T-* 唯一性 / 夹具 token 解析）：
+mir2-rs/tests/parity/m3/m3_pet_slave_registry_gate.py:107:    # ② B 段全局编号唯一（T 段唯一性归 m3_whitelist_registry_audit.py；T-42 撞号是已路由 owner 的历史问题）。
+mir2-rs/tests/parity/m3/m3_whitelist_registry_audit.py:2:"""M3 白名单 T-* 登记号审计（`m3_whitelist_registry_audit.py`）——只读、零端口。
+mir2-rs/tests/parity/m3/m3_whitelist_registry_audit.py:15:  python -I m3_whitelist_registry_audit.py audit [--strict] [--json OUT]
+mir2-rs/tests/parity/m3/m3_whitelist_registry_audit.py:16:  python -I m3_whitelist_registry_audit.py selftest
