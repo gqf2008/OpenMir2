@@ -1,0 +1,25 @@
+88-boundary.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片⑭ 边界（冻结面空）
+====================================================================================================
+base = `refs/heads/master` = 382eef5dec9d639965b0c0835b3500ba412734f2
+head = c43ca7bad3e4d9ec7ef83de4fbb503d6298f0420
+
+```
+$ git diff --name-only 382eef5de c43ca7bad
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/82-two-side-window-runbook.md
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/85-csharp-capture-topology-rootcause.md
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/86-csharp-capture-preflight.txt
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_csharp_capture_preflight.py
+
+$ git diff --name-only 382eef5de c43ca7bad -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+（空 = 冻结面 GREEN）
+
+$ git diff --name-only 382eef5de c43ca7bad | grep -c '\.rs$'
+0
+```
+
+- 全部 5 路径都在本卡证据目录 `mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/**`；
+  `src/`（oracle）/`sql/`/`MirClient`/`mir2-rs/crates/protocol`/`mir2-rs/crates/storage` 未触碰；
+  `*.rs` = 0（本片零生产代码改动）。
+- 写集不碰 `tests/parity/m3/**`（m3bag/m3cs）、不碰他人卡。
+- 后续清单刷新（`87`/`88`/`SHA256SUMS.txt`）同目录，不扩大边界。
