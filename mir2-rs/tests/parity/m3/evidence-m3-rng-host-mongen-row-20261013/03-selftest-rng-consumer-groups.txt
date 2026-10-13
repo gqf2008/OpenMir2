@@ -1,0 +1,14 @@
+  ok  table-validate
+  ok  classify bins/game-svr/src/mongen.rs:289 -> spawn（got=spawn）
+  ok  classify bins\game-svr\src\mongen.rs:434 -> spawn（got=spawn）
+  ok  classify crates/world/src/mongen.rs:321 -> spawn（got=spawn）
+  ok  classify crates/world/src/monai.rs:171 -> monster_ai（got=monster_ai）
+  ok  classify crates/formula/src/drop.rs:100 -> drop（got=drop）
+  ok  classify bins/game-svr/src/main.rs:2884 -> startup（got=startup）
+  ok  classify crates/world/src/combat.rs:758 -> attack（got=attack）
+  ok  classify bins/game-svr/src/not_in_table.rs:1 -> other（got=other）
+  ok  mutation-host-row-removed（删掉 1 行）
+  ok  mutation-host-site-becomes-other（got=other）
+  ok  mutation-core-group-validate-red（期望 validate 点名 merchant）
+SELFTEST GREEN: rng_consumer_groups selftest 12/12
+EXIT=0

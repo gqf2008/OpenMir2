@@ -1,0 +1,9 @@
+RNG_CONSUMER_GROUPS evidence-m3-rng-host-mongen-row-20261013/fixtures/probe-rust-stream.tsv side=rust rows_total=3 rows_dropped=0 kept=3 include_attack=False groups=2
+  GROUP         2  other
+  GROUP         1  spawn
+  GROUP_COVERAGE DRIFT unclassified=2
+  UNCLASSIFIED       1  bins/game-svr/src/mongen.rs:289
+  UNCLASSIFIED       1  bins/game-svr/src/mongen.rs:290
+  ROW_COVERAGE closed rows_dropped=0
+RED: 有 2 个未归类站点 ⇒ 组表漂移（--require-closed 拒给假绿）
+EXIT=1

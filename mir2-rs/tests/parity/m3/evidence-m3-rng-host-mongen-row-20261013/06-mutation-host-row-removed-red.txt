@@ -1,0 +1,18 @@
+RNG_CONSUMER_GROUPDIFF include_attack=False fold=True a=evidence-m3-rng-host-mongen-row-20261013/fixtures/csharp-scene-like.tsv(5) b=evidence-m3-rng-host-mongen-row-20261013/fixtures/rust-scene-like.tsv(5)
+  FOLD_MAP {'construct': 'spawn'}（R-6：C# construct 折叠到 Rust spawn；折叠后计数+相对次序必须相等）
+  A_GROUPS {'spawn': 3, 'drop': 1, 'monster_ai': 1}
+  B_GROUPS {'other': 2, 'spawn': 1, 'drop': 1, 'monster_ai': 1}
+  ONLY_IN_A(missing_in_B) {}
+  ONLY_IN_B(extra_in_B)   {'other': 2}
+  SHARED_GROUPS ['drop', 'monster_ai', 'spawn']
+  FOLDED_COUNT_DIFF {'other': {'a': 0, 'b': 2}, 'spawn': {'a': 3, 'b': 1}}（折叠后逐组计数必须相等；不等 ⇒ 折叠不成立）
+  FIRST_SHARED_ORDER_DIVERGENCE index=1 a=spawn b=drop
+  RUNS a=3 b=4
+  ROW_COVERAGE a_dropped=0 b_dropped=0
+  EXPECTED_GROUPS ['monster_ai', 'spawn', 'drop']（scenario 声明；DoD② 要求两侧都出现）
+  EXPECTED_GROUPS_PRESENT both ['monster_ai', 'spawn', 'drop']
+  MIN_GROUP_DRAWS_OK {'monster_ai': {'want': 1, 'a': 1, 'b': 1}}
+  FIRST_RUN_DIVERGENCE run=0 a=spawn b=other
+  VERDICT GROUP_SET_DIFF+SHARED_REL_ORDER_DIFF+FOLDED_COUNT_DIFF
+RED: 组结构不一致 ⇒ GROUP_SET_DIFF+SHARED_REL_ORDER_DIFF+FOLDED_COUNT_DIFF（--strict）
+EXIT=1

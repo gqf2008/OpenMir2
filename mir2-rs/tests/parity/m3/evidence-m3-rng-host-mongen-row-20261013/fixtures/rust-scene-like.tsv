@@ -1,0 +1,6 @@
+INJECT_OK	42	0
+1	Next(max)	1500	1	bins/game-svr/src/mongen.rs:289
+2	Next(max)	3000	2	bins/game-svr/src/mongen.rs:293
+3	Next(max)	100	3	crates/world/src/mongen.rs:624
+4	Next(max)	100	4	crates/formula/src/drop.rs:120
+5	Next(max)	20	5	crates/world/src/monai.rs:171

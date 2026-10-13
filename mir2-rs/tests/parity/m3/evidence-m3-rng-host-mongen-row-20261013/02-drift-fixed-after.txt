@@ -1,0 +1,5 @@
+RNG_CONSUMER_GROUPS evidence-m3-rng-host-mongen-row-20261013/fixtures/probe-rust-stream.tsv side=rust rows_total=3 rows_dropped=0 kept=3 include_attack=False groups=1
+  GROUP         3  spawn
+  GROUP_COVERAGE closed
+  ROW_COVERAGE closed rows_dropped=0
+EXIT=0

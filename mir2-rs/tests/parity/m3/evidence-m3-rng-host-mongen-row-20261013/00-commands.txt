@@ -1,0 +1,19 @@
+cwd = mir2-rs/tests/parity/m3
+本片 = 窗口前置审计：Claim B 组表（consumer_groups.tsv）漏登宿主 bins/game-svr/src/mongen.rs 的构造期抽数
+日期 = 2026-10-13（owner 独占窗口发放前；离线可判，零起栈/零端口）
+
+## 输入（fixtures/）
+  probe-rust-stream.tsv             = 3 行：宿主 mongen 构造抽数 x2 + crates/world mongen x1
+  consumer_groups.host-row-removed.tsv = 去掉本片新增行的表（改坏用）
+  csharp-scene-like.tsv / rust-scene-like.tsv = 场景形合成对（4+ 抽，同折叠计数）
+
+## 判据命令与期望
+  ① 改前（表缺行）: python -I rng-trace-probe/rng_ledger_diff.py groups <probe> --side rust --no-attack --require-closed --groups-table <mutated>
+       期望 rc=1，点名 bins/game-svr/src/mongen.rs:289/290 为 UNCLASSIFIED
+  ② 改后（表含行）: 同命令，缺省表
+       期望 rc=0，GROUP_COVERAGE closed（3/3 spawn）
+  ③ 机判: python -I rng-trace-probe/rng_consumer_groups.py selftest  期望 12/12 GREEN
+  ④ 回归: python -I rng-trace-probe/rng_ledger_diff.py selftest       期望 37/37 GREEN
+  ⑤ 端到端（场景形合成对）: groupdiff <csharp> <rust> --a-side csharp --b-side rust --fold --strict --scenario rng-trace-scene/rng_trace_scenario.json
+       期望 VERDICT IDENTICAL
+  ⑥ 改坏必红: ⑤ 加 --groups-table <mutated> ⇒ 期望 rc=1 + GROUP_SET_DIFF/SHARED_REL_ORDER_DIFF/FOLDED_COUNT_DIFF
