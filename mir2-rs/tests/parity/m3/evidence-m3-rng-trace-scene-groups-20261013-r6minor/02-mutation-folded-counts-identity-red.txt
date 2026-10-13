@@ -1,0 +1,24 @@
+# 改坏必红（运行时把 rcg.folded_counts 替换成恒等，不落盘改动）：
+# 期望 = 装载该辅助函数的 folded 用例失败（rc=1）。
+$ python -I -c '<monkeypatch rcg.folded_counts := identity; m.main(["selftest"])>'
+rc=1
+--- 关键行 ---
+SELFTEST RED: 2/32 未过: folded-equivalent-green (RNG_CONSUMER_GROUPDIFF include_attack=False fold=True a=C:\Users\gxh\AppData\Local\Temp\rng-ledger-diff-selftest-0b0fjdjc\ga.tsv(3) b=C:\Users\gxh\AppData\Local\Temp\rng-ledger-diff-selftest-0b0fjdjc\gb.tsv(3)
+  FOLDED_COUNT_DIFF {'construct': {'a': 1, 'b': 0}, 'spawn': {'a': 1, 'b': 2}}（折叠后逐组计数必须相等；不等 ⇒ 折叠), folded-order-red (RNG_CONSUMER_GROUPDIFF include_attack=False fold=True a=C:\Users\gxh\AppData\Local\Temp\rng-ledger-diff-selftest-0b0fjdjc\ga.tsv(3) b=C:\Users\gxh\AppData\Local\Temp\rng-ledger-diff-selftest-0b0fjdjc\gb.tsv(3)
+  FOLDED_COUNT_DIFF {'construct': {'a': 1, 'b': 0}, 'spawn': {'a': 1, 'b': 2}}（折叠后逐组计数必须相等；不等 ⇒ 折叠)
+--- 完整输出 ---
+SELFTEST RED: 2/32 未过: folded-equivalent-green (RNG_CONSUMER_GROUPDIFF include_attack=False fold=True a=C:\Users\gxh\AppData\Local\Temp\rng-ledger-diff-selftest-0b0fjdjc\ga.tsv(3) b=C:\Users\gxh\AppData\Local\Temp\rng-ledger-diff-selftest-0b0fjdjc\gb.tsv(3)
+  FOLD_MAP {'construct': 'spawn'}（R-6：C# construct 折叠到 Rust spawn；折叠后计数+相对次序必须相等）
+  A_GROUPS {'construct': 1, 'spawn': 1, 'monster_ai': 1}
+  B_GROUPS {'spawn': 2, 'monster_ai': 1}
+  ONLY_IN_A(missing_in_B) {'construct': 1}
+  ONLY_IN_B(extra_in_B)   {}
+  SHARED_GROUPS ['monster_ai', 'spawn']
+  FOLDED_COUNT_DIFF {'construct': {'a': 1, 'b': 0}, 'spawn': {'a': 1, 'b': 2}}（折叠后逐组计数必须相等；不等 ⇒ 折叠), folded-order-red (RNG_CONSUMER_GROUPDIFF include_attack=False fold=True a=C:\Users\gxh\AppData\Local\Temp\rng-ledger-diff-selftest-0b0fjdjc\ga.tsv(3) b=C:\Users\gxh\AppData\Local\Temp\rng-ledger-diff-selftest-0b0fjdjc\gb.tsv(3)
+  FOLD_MAP {'construct': 'spawn'}（R-6：C# construct 折叠到 Rust spawn；折叠后计数+相对次序必须相等）
+  A_GROUPS {'construct': 1, 'monster_ai': 1, 'spawn': 1}
+  B_GROUPS {'spawn': 2, 'monster_ai': 1}
+  ONLY_IN_A(missing_in_B) {'construct': 1}
+  ONLY_IN_B(extra_in_B)   {}
+  SHARED_GROUPS ['monster_ai', 'spawn']
+  FOLDED_COUNT_DIFF {'construct': {'a': 1, 'b': 0}, 'spawn': {'a': 1, 'b': 2}}（折叠后逐组计数必须相等；不等 ⇒ 折叠)
