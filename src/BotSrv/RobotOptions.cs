@@ -158,6 +158,73 @@ namespace BotSrv
         public int GuildCastleMasterRole { get; set; } = 0;
         /// <summary>仅 GuildCastleSequence=true 时生效：peer 的账号序号（默认 1）。</summary>
         public int GuildCastlePeerRole { get; set; } = 1;
+        /// M3⑥ 真机对拍夹具（卡 openmir2-m3-quest-fixture-botsrv；白名单 T-41 家族扩展）。
+        /// 默认 false = 原行为（不新增任何发送）。置 true 时，本假人在收到自己的 SM_LOGON 后按
+        /// `QuestSteps` 给出的固定步骤串「点任务 NPC / 选标签 / 核对说词」，逐 step 落
+        /// `M3QUESTSEQ {json}` 标记（send/frame/end），供 `quest_diff.py` 对齐。
+        /// 只作夹具驱动、只写本假人自己的 socket；默认关时 BotSrv 行为逐字节不变。
+        /// </summary>
+        public bool QuestSequence { get; set; }
+        /// <summary>仅 QuestSequence=true 时生效：每步间隔（ms）。默认 1000。</summary>
+        public int QuestStepMs { get; set; } = 1000;
+        /// <summary>仅 QuestSequence=true 时生效：进世界到第一步的额外等待（ms）。默认 3000。</summary>
+        public int QuestStartDelayMs { get; set; } = 3000;
+        /// <summary>
+        /// 仅 QuestSequence=true 时生效：分号分隔的步骤串，每步 = `op|npc|label`。
+        /// 允许 op：click_npc（发 CM_CLICKNPC(1010)，隐式 @main） / dialog_select（发
+        /// CM_MERCHANTDLGSELECT + label） / take / give / set / check（后四者本轮仅登记，未实发）。
+        /// 顺序即发信顺序（每步 = 一次交互）。
+        /// </summary>
+        public string QuestSteps { get; set; } = "";
+
+        /// <summary>
+        /// M3⑦ 真机对拍夹具（卡 openmir2-m3-party-trade-fixture-botsrv；白名单 T-43 家族扩展）。
+        /// 默认 false = 原行为（不新增任何发送）。置 true 时，**两个**假人按 `PairTradeSteps`
+        /// 给出的固定步骤串（`role|op|param;...`）发组队/交易动作（role=a 只由 actor、b 只由 peer、
+        /// x 由两者）；逐 step 落 `M3PAIRTRADESEQ {json}` 标记（send/frame/end，含 bot 字段）。
+        /// 只作夹具驱动、只写本假人自己的 socket；默认关时 BotSrv 行为逐字节不变。
+        /// </summary>
+        public bool PairTradeSequence { get; set; }
+        /// <summary>仅 PairTradeSequence=true 时生效：每步间隔（ms）。默认 1000。</summary>
+        public int PairTradeStepMs { get; set; } = 1000;
+        /// <summary>仅 PairTradeSequence=true 时生效：进世界到第一步的额外等待（ms）。默认 3000。</summary>
+        public int PairTradeStartDelayMs { get; set; } = 3000;
+        /// <summary>
+        /// 仅 PairTradeSequence=true 时生效：分号分隔的步骤串，每步 = `role|op|param`。
+        /// role：a=actor（本批的 PairTradeRole 序号）/ b=peer（PairTradePeerRole 序号）/ x=两者。
+        /// op：组队 group_mode_on/group_mode_off/create_group/add_member/del_member；
+        ///     交易 deal_try/deal_add_item/deal_del_item/deal_chg_gold/deal_end/deal_cancel；
+        ///     掉线 softclose。param：队友名记号 `peer` / 金币数 / 物品名（可空）。
+        /// </summary>
+        public string PairTradeSteps { get; set; } = "";
+        /// <summary>仅 PairTradeSequence=true 时生效：actor 的账号序号（默认 0）。</summary>
+        public int PairTradeRole { get; set; } = 0;
+        /// <summary>仅 PairTradeSequence=true 时生效：peer 的账号序号（默认 1）。</summary>
+        public int PairTradePeerRole { get; set; } = 1;
+
+        /// <summary>
+        /// M3⑩ 真机对拍夹具（卡 openmir2-m3-selloff-fixture-botsrv；白名单 T-44 家族扩展）。
+        /// 默认 false = 原行为（不新增任何发送）。置 true 时，**两个**假人（卖方 / 买方）按
+        /// `SellOffSteps` 给出的固定步骤串（`role|op|param;...`）发元宝寄售动作（role=a 只由卖方、
+        /// b 只由买方、x 由两者）；逐 step 落 `M3SELLOFFSEQ {json}` 标记（send/frame/end，含 bot 字段）。
+        /// 只作夹具驱动、只写本假人自己的 socket；默认关时 BotSrv 行为逐字节不变。
+        /// </summary>
+        public bool SellOffSequence { get; set; }
+        /// <summary>仅 SellOffSequence=true 时生效：每步间隔（ms）。默认 1000。</summary>
+        public int SellOffStepMs { get; set; } = 1000;
+        /// <summary>仅 SellOffSequence=true 时生效：进世界到第一步的额外等待（ms）。默认 3000。</summary>
+        public int SellOffStartDelayMs { get; set; } = 3000;
+        /// <summary>
+        /// 仅 SellOffSequence=true 时生效：分号分隔的步骤串，每步 = `role|op|param`。
+        /// role：a=卖方（本批的 SellOffSellerRole 序号）/ b=买方（SellOffBuyerRole 序号）/ x=两者。
+        /// op：seller_add_item/seller_del_item/seller_cancel/seller_end/seller_cancel_ing/
+        ///     buyer_buy_cancel/buyer_buy/softclose。param：买方名记号 `peer` / 元宝数（可空）。
+        /// </summary>
+        public string SellOffSteps { get; set; } = "";
+        /// <summary>仅 SellOffSequence=true 时生效：卖方的账号序号（默认 0）。</summary>
+        public int SellOffSellerRole { get; set; } = 0;
+        /// <summary>仅 SellOffSequence=true 时生效：买方的账号序号（默认 1）。</summary>
+        public int SellOffBuyerRole { get; set; } = 1;
 
         /// <summary>
         /// M1③ 退出路径夹具（卡 openmir2-m1-dbsrv-6000-face；白名单 M1-EXIT）：默认 0 = 关

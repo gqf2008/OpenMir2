@@ -1,0 +1,27 @@
+$ rng_scene_gate.py gate … --b rust-scene-drift.json（怪集合多一只）
+RNG_SCENE_GATE scenario=C:\Users\gxh\AppData\Local\Temp\rngscene-evid-4syt8pm8\scenario.json a=C:\Users\gxh\AppData\Local\Temp\rngscene-evid-4syt8pm8\csharp-scene.json b=C:\Users\gxh\AppData\Local\Temp\rngscene-evid-4syt8pm8\rust-scene-drift.json checks=21 failed=2
+  SCENE {"a_monsters": {"稻草人|18|20|0": 1}, "a_side": "csharp", "b_monsters": {"稻草人|18|20|0": 1, "鸡|19|20|0": 1}, "b_side": "rust", "map": "0137", "mongen_fixture": "mongen-map0137.tsv", "mongen_rows": 0, "monsters": {"稻草人|18|20|0": 1}, "seed": 42, "start_pose": [17, 20, 2]}
+  CHECK scenario-canon                     ok
+  CHECK scenario-fields                    ok
+  CHECK descriptor-canon:a                 ok
+  CHECK descriptor-side:a                  ok
+  CHECK descriptor-canon:b                 ok
+  CHECK descriptor-side:b                  ok
+  CHECK sides-distinct                     ok
+  CHECK map-equal:a                        ok
+  CHECK seed-equal:a                       ok
+  CHECK pose-equal:a                       ok
+  CHECK map-equal:b                        ok
+  CHECK seed-equal:b                       ok
+  CHECK pose-equal:b                       ok
+  CHECK monsters-parseable                 ok
+  CHECK monsters-equal:scenario-vs-a       ok
+  CHECK monsters-equal:scenario-vs-b       FAIL (b={('稻草人', 18, 20, 0): 1, ('鸡', 19, 20, 0): 1} scenario={('稻草人', 18, 20, 0): 1})
+  CHECK monsters-equal:a-vs-b              FAIL (a={('稻草人', 18, 20, 0): 1} b={('稻草人', 18, 20, 0): 1, ('鸡', 19, 20, 0): 1})
+  CHECK mongen-parseable                   ok
+  CHECK mongen-equal:a-vs-fixture          ok
+  CHECK mongen-equal:b-vs-fixture          ok
+  CHECK mongen-equal:a-vs-b                ok
+  VERDICT RED: 场景不一致 ⇒ groupdiff 次序结论不得采信（fail-closed）：monsters-equal:scenario-vs-b, monsters-equal:a-vs-b
+
+[rc=1]

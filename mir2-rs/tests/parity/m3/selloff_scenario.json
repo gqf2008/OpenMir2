@@ -1,0 +1,98 @@
+{
+  "canon": "m3-selloff-v1",
+  "status": "skeleton-window-pending",
+  "card": "openmir2-m3-selloff-fixture-botsrv",
+  "parent_card": "openmir2-m3-mail-auction-align",
+  "bots": 2,
+  "actor_role": 0,
+  "peer_role": 1,
+  "default_case": "sell_list_and_buy",
+  "map": "0137",
+  "home_map": 0,
+  "home_x": 289,
+  "home_y": 618,
+  "player_x": 17,
+  "player_y": 20,
+  "player_dir": 2,
+  "peer_dx": 1,
+  "pin_level": 45,
+  "cases": {
+    "sell_list_and_buy": {
+      "steps": [
+        {"role": "a", "op": "seller_add_item", "param": ""},
+        {"role": "a", "op": "seller_end", "param": "peer/1000"},
+        {"role": "b", "op": "buyer_buy", "param": "peer"}
+      ],
+      "note": "卖方加一件背包物品进窗（CM_SELLOFFADDITEM ⇒ SM_SELLOFFADDITEM_OK(23003)），上架给 peer=买方（CM_SELLOFFEND gold=1000 ⇒ SM_SELLOFFEND_OK(23016) + SM_MENU_OK 767 '[成功] 系统已经成功接受您的申请'，并 GameGold -= DecUserGameGold(10000)），买方成交（CM_SELLOFFBUY 卖方名 ⇒ GameGold -= nSellGold+10000 + 卖方 GameGold += 1000 + 物品进买方背包 ⇒ SM_SELLOFFBUY_OK(23027)）。oracle 链见 §B。"
+    },
+    "sell_cancel_ing": {
+      "steps": [
+        {"role": "a", "op": "seller_add_item", "param": ""},
+        {"role": "a", "op": "seller_end", "param": "peer/1000"},
+        {"role": "a", "op": "seller_cancel_ing", "param": ""}
+      ],
+      "note": "卖方加物品 → 上架 → 卖方取消正在寄售（CM_CANCELSELLOFFITEMING ⇒ 退回窗内物品）。覆盖 CancelSellOffIng 路径。"
+    },
+    "buy_cancel": {
+      "steps": [
+        {"role": "a", "op": "seller_add_item", "param": ""},
+        {"role": "a", "op": "seller_end", "param": "peer/1000"},
+        {"role": "b", "op": "buyer_buy_cancel", "param": "peer"}
+      ],
+      "note": "卖方上架 → 买方取消购买（CM_SELLOFFBUYCANCEL 卖方名；匹配 sDealChrName==卖方 + sBuyChrName==this + Flag==0 ⇒ Flag=3 + SM_MENU_OK 767 '取消交易成功!'）。"
+    },
+    "end_fail_self_buy": {
+      "steps": [
+        {"role": "a", "op": "seller_add_item", "param": ""},
+        {"role": "a", "op": "seller_end", "param": "self/1000"}
+      ],
+      "note": "卖方上架给**自己**（不能自己寄售给自己）⇒ 走 ClientSellOffEnd 失败支：SM_SELLOFFEND_FAIL(23018) + SM_MENU_OK 767 '[错误:] 寄售物品失败' + GetBackSellOffItems 退回物品。"
+    },
+    "buy_insufficient_gamegold": {
+      "steps": [
+        {"role": "a", "op": "seller_add_item", "param": ""},
+        {"role": "a", "op": "seller_end", "param": "peer/1000"},
+        {"role": "b", "op": "buyer_buy", "param": "peer"}
+      ],
+      "note": "同 sell_list_and_buy，但窗口期用 SQL pin 把买方 GameGold 钉 0 ⇒ GameGold < nSellGold+DecUserGameGold ⇒ 不成交、物品保留（帧面与成功档不同）。"
+    }
+  },
+  "step_ms": 1000,
+  "start_delay_ms": 3000,
+  "oracle_anchors": {
+    "dispatch": "PlayObject.Message.cs:2046-2108（RM_SENDDEALOFFFORM/CM_SELLOFFADDITEM/CM_SELLOFFDELITEM/CM_SELLOFFCANCEL/CM_SELLOFFEND/CM_CANCELSELLOFFITEMING/CM_SELLOFFBUYCANCEL/CM_SELLOFFBUY + RM_* 回帧）",
+    "add_item": "PlayObject.Sale.cs:60 ClientAddSellOffItem（nItemIdx<=0/名字空 ⇒ FAIL；SellOffItemList.Count<9 才放；成功 ⇒ RM_SELLOFFADDITEM_OK）",
+    "del_item": "PlayObject.Sale.cs:127 ClientDelSellOffItem",
+    "seller_end": "PlayObject.Sale.cs:516 ClientSellOffEnd（Count<10、sBuyChrName.Length<20、0<nSellGold<100000000、不能自己买自己 ⇒ OK + '[成功]…' + GameGold-=DecUserGameGold；否则 FAIL + '[错误:]…' + 退回）",
+    "seller_cancel": "PlayObject.Sale.cs:431 ClientCancelSellOff → SellOffCancel:593",
+    "cancel_ing": "PlayObject.Sale.cs:185 ClientCancelSellOffIng",
+    "buy_cancel": "PlayObject.Sale.cs:254 ClientBuyCancelSellOff（Flag=3 + '取消交易成功!'）",
+    "buy": "PlayObject.Sale.cs:281 ClientBuySellOffItme（GameGold>=nSellGold+DecUserGameGold；卖方在线 Flag=2 + 卖方 += nSellGold；离线 Flag=1；缺陷照搬 for j<=9 越界）",
+    "world_state": "M2Share.cs:79 SellOffItemList（进程级静态）；PlayObject.cs:856 SaleDeal / :864 SellOffItemList",
+    "db_read": "MySqlDB.cs:251-291 LoadSellOffItemList（列名写错 ⇒ 恒加载 0 行）；GameApp.cs:181-182",
+    "db_write": "MySqlDB.cs:293-330 SaveSellOffItemList；调用点 PlayObject.Sale.cs:240/332/577 全部被注释 ⇒ 永不执行",
+    "ddl": "sql/mir2_data.sql:24-36 goldsales(Id, DealCharName, BuyCharName, SellDateTime, State, SellGold, UseItems json)",
+    "config": "GameSvrConf.cs:1217/1919 DecUserGameGold=10000（硬编码，无配置键）",
+    "frames": "Messages.cs:769-828（CM 23002/23007/23012/23015/23024/23025/23026；SM 23003/23005/23008/23010/23014/23016/23018/23027；RM 23000/23004/23006/23009/23011/23013/23017/23019/23028）+ SM_MENU_OK(767)"
+  },
+  "frame_text_sms": [767],
+  "frame_scalar_fields": {},
+  "artifact": {
+    "markers": "M3SELLOFFSEQ（BotSrv stdout / bot.log 内嵌事件，含 bot 字段）",
+    "raw": "selloff_raw.jsonl",
+    "comparator": "python -I selloff_diff.py diff <csharp_raw> <rust_raw>",
+    "assembler": "python -I selloff_diff.py assemble <markers.jsonl> --out <raw.jsonl>",
+    "runner": "run_selloff_pair.ps1"
+  },
+  "record_required_fields": ["bot", "k", "op", "ran", "frames", "gamegold_before", "gamegold_after", "gold_before", "gold_after", "branch"],
+  "record_optional_fields": ["role", "param", "map", "bag_before", "bag_after"],
+  "notes": [
+    "判据 = 逐 (bot,k)：op / role / ran / param / 帧种类序列 / 声明标量帧参数 / 文本帧(SM_MENU_OK 767)逐字节 / gamegold_before/after / gold_before/after / bag 多重集 / branch 全部相同；两侧必须有同一组 bot、每个 bot 同一串 k。",
+    "动态 id（actor / make index / 帧 a/b/c/d）不作判据（跨运行本来不同）；只在原始件里留审计。",
+    "失败分支靠帧种类序列 + branch 字段双钉；branch=fail_reject 只表示『有失败帧』，具体失败码由完整 sm 序列 + 声明标量承载，不用 JSON 子串硬匹配。",
+    "落库口径 = oracle『寄售不落库』：SaveSellOffItemList 调用点全注释、读列名写错 ⇒ 两侧都不写、都加载 0 行；DB 侧由 run_selloff_pair.ps1 调 scoped_diff --canonical + `goldsales` 表快照（增量=0）承担。",
+    "真机两侧同序列跑等 ⑩-1 openmir2-m3-selloff-consignment-world 世界侧派发落地 + 独占窗口；本片只交夹具骨架（比较器 selftest + 无栈自检）。",
+    "Rust 侧 game-svr 未接元宝寄售派发（盘点报告 §2）⇒ run_selloff_pair -Side rust 会 fail-closed PREREQ（同 T-27 口径），不白占窗口。",
+    "两假人相邻固定起点复用 run_pair.ps1 -PinStartPose -AttackPinPair（卖方 (17,20) 朝向 2、买方右邻 (18,20)）；元宝/金刚石窗口期用 SQL pin（类似既有等级/HP pin）。"
+  ]
+}

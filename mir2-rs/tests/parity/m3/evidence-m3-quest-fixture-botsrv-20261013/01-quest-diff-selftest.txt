@@ -1,0 +1,170 @@
+STATS ops=3 frames=3 quotes=3 ok=3 fail=0
+CSHARP=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\rs0.jsonl
+DIFF 0
+GREEN: 任务逐项相同（ops=3 帧=3 说词=3 失败分支=0 任务态位逐字节相同）
+QUEST k=1 RED op csharp='dialog_select' rust='take'
+STATS ops=3 frames=3 quotes=3 ok=3 fail=0
+CSHARP=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\rs_op.jsonl
+DIFF 1
+RED: 任务跨侧差异 1 项（定位见上）
+QUEST k=0 RED npc csharp='任务管理' rust='首饰店老板'
+STATS ops=3 frames=3 quotes=3 ok=3 fail=0
+CSHARP=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\rs_npc.jsonl
+DIFF 1
+RED: 任务跨侧差异 1 项（定位见上）
+QUEST k=1 RED label csharp='@rw06' rust='@05rw'
+STATS ops=3 frames=3 quotes=3 ok=3 fail=0
+CSHARP=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\rs_label.jsonl
+DIFF 1
+RED: 任务跨侧差异 1 项（定位见上）
+QUEST k=0 RED map csharp='3' rust='0'
+STATS ops=3 frames=3 quotes=3 ok=3 fail=0
+CSHARP=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\rs_map.jsonl
+DIFF 1
+RED: 任务跨侧差异 1 项（定位见上）
+STATS ops=3 frames=3 quotes=3 ok=3 fail=0
+CSHARP=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\rs_dyn.jsonl
+DIFF 0
+GREEN: 任务逐项相同（ops=3 帧=3 说词=3 失败分支=0 任务态位逐字节相同）
+QUEST k=1 RED frames.sm csharp=[643] rust=[644]
+QUEST k=1 RED frames.text[643] csharp=['任务管理/确定开始[神秘洞口]任务吗？'] rust=[]
+STATS ops=3 frames=3 quotes=3 ok=3 fail=0
+CSHARP=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\rs_sm.jsonl
+DIFF 2
+RED: 任务跨侧差异 2 项（定位见上）
+QUEST k=2 RED frames.text[643] csharp=['任务管理/苍月岛的首饰店老板正在找人帮忙'] rust=['任务管理/苍月岛的首饰店老板正在找人帮忙 ']
+STATS ops=3 frames=3 quotes=3 ok=3 fail=0
+CSHARP=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\rs_text.jsonl
+DIFF 1
+RED: 任务跨侧差异 1 项（定位见上）
+QUEST k=0 RED frames.scalar[643] csharp={} rust={'643.a': 7}
+STATS ops=3 frames=3 quotes=3 ok=3 fail=0
+CSHARP=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\rs_scalar.jsonl
+DIFF 1
+RED: 任务跨侧差异 1 项（定位见上）
+QUEST k=0 RED price csharp=None rust=11
+STATS ops=3 frames=3 quotes=3 ok=3 fail=0
+CSHARP=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\rs_price.jsonl
+DIFF 1
+RED: 任务跨侧差异 1 项（定位见上）
+QUEST k=0 RED gold_after csharp=1000 rust=1001
+STATS ops=3 frames=3 quotes=3 ok=3 fail=0
+CSHARP=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\rs_gold.jsonl
+DIFF 1
+RED: 任务跨侧差异 1 项（定位见上）
+QUEST k=0 RED bag_after.multiset csharp={} rust={'木剑#43': 1}
+STATS ops=3 frames=3 quotes=3 ok=3 fail=0
+CSHARP=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\rs_bag.jsonl
+DIFF 1
+RED: 任务跨侧差异 1 项（定位见上）
+QUEST k=2 RED quest_flag_after csharp='0000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000' rust='0000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+STATS ops=3 frames=3 quotes=3 ok=3 fail=0
+CSHARP=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\rs_qflag.jsonl
+DIFF 1
+RED: 任务跨侧差异 1 项（定位见上）
+STATS ops=3 frames=3 quotes=3 ok=3 fail=0
+CSHARP=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\rs_qflag_case.jsonl
+DIFF 0
+GREEN: 任务逐项相同（ops=3 帧=3 说词=3 失败分支=0 任务态位逐字节相同）
+QUEST k=0 RED quest_unit_before csharp=None rust='0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+QUEST k=0 RED quest_unit_after csharp=None rust='0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+STATS ops=3 frames=3 quotes=3 ok=3 fail=0
+CSHARP=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\rs_qunit.jsonl
+DIFF 2
+RED: 任务跨侧差异 2 项（定位见上）
+QUEST k=2 RED branch csharp='ok' rust='fail_level'
+STATS ops=3 frames=3 quotes=3 ok=3 fail=0
+CSHARP=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\rs_branch.jsonl
+DIFF 1
+RED: 任务跨侧差异 1 项（定位见上）
+QUEST k=- RED 记录条数 csharp='csharp=3' rust='rust=2'
+STATS ops=3 frames=0 quotes=0 ok=0 fail=0
+CSHARP=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\rs_len.jsonl
+DIFF 1
+RED: 任务跨侧差异 1 项（定位见上）
+QUEST k=0 RED gold_after csharp=3000000000 rust=7294967296
+STATS ops=3 frames=3 quotes=3 ok=3 fail=0
+CSHARP=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\cs_big.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\rs_big.jsonl
+DIFF 1
+RED: 任务跨侧差异 1 项（定位见上）
+RED: PREREQ_RED 缺文件: C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\nope.jsonl
+RED: PREREQ_RED rust: k=0 缺字段 branch (C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\rs_missing.jsonl)
+RED: PREREQ_RED rust: k=1 缺任务态字段 quest_flag_before —— 没有服务端会话 dump（assemble --state）就不能判『任务态一致』（盘点报告 §4.1 第 2 条；绝不静默 GREEN）(C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\rs_nostate.jsonl)
+RED: PREREQ_RED rust: k=0 字段 quest_flag_after 非法 hex: invalid literal for int() with base 16: 'zz' (C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\rs_badhex.jsonl)
+RED: PREREQ_RED 非法 JSON C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\rs_bad.jsonl:1: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+RED: PREREQ_RED rust: k 不连续/非 0 起（第 1 条 k=5）(C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\rs_gap.jsonl)
+RED: PREREQ_RED rust: k=0 op 非法 'teleport'（允许 click_npc/dialog_select/take/give/set/check）(C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\rs_badop.jsonl)
+RED: PREREQ_RED rust: k=0 frames 非数组 (C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\rs_badframes.jsonl)
+RED: PREREQ_RED rust: k=0 frame[0] sm=643 是文本帧但缺 text (C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\rs_notext.jsonl)
+RED: PREREQ_RED 无记录: C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\rs_empty.jsonl
+ASSEMBLED ok ops=3 out=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\assembled.jsonl state=yes
+ASSEMBLED ok ops=3 out=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\assembled.jsonl state=yes
+STATS ops=3 frames=3 quotes=3 ok=3 fail=0
+CSHARP=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\assembled.jsonl
+DIFF 0
+GREEN: 任务逐项相同（ops=3 帧=3 说词=3 失败分支=0 任务态位逐字节相同）
+ASSEMBLED ok ops=3 out=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\assembled_nostate.jsonl state=no
+NOTE: 3/3 条记录缺任务态（未给 --state）—— diff 阶段会 PREREQ
+ASSEMBLED ok ops=3 out=C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\assembled_nostate.jsonl state=no
+NOTE: 3/3 条记录缺任务态（未给 --state）—— diff 阶段会 PREREQ
+RED: PREREQ_RED rust: k=0 缺任务态字段 quest_flag_before —— 没有服务端会话 dump（assemble --state）就不能判『任务态一致』（盘点报告 §4.1 第 2 条；绝不静默 GREEN）(C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\assembled_nostate.jsonl)
+RED: PREREQ_RED csharp: k=2 有 send 无 end（交互未收尾）—— fail-closed
+RED: PREREQ_RED 无 M3QUESTSEQ 事件（驱动未生效/日志未含标记）
+RED: PREREQ_RED csharp: done.steps=9 与 send 事件数 3 不一致
+RED: PREREQ_RED 缺任务态 dump: C:\Users\gxh\AppData\Local\Temp\quest-selftest-dg52bw5u\nope-state.jsonl
+SELFTEST ok identical-green expect=GREEN got=GREEN
+SELFTEST ok mutate-op-red expect=RED got=RED
+SELFTEST ok mutate-npc-red expect=RED got=RED
+SELFTEST ok mutate-label-red expect=RED got=RED
+SELFTEST ok mutate-map-red expect=RED got=RED
+SELFTEST ok dynamic-id-ignored-green expect=GREEN got=GREEN
+SELFTEST ok mutate-frame-kind-red expect=RED got=RED
+SELFTEST ok mutate-frame-text-red expect=RED got=RED
+SELFTEST ok mutate-frame-scalar-red expect=RED got=RED
+SELFTEST ok mutate-price-red expect=RED got=RED
+SELFTEST ok mutate-gold-red expect=RED got=RED
+SELFTEST ok mutate-bag-multiset-red expect=RED got=RED
+SELFTEST ok mutate-quest-flag-bit-red expect=RED got=RED
+SELFTEST ok quest-flag-case-insensitive-green expect=GREEN got=GREEN
+SELFTEST ok mutate-quest-unit-presence-red expect=RED got=RED
+SELFTEST ok mutate-branch-red expect=RED got=RED
+SELFTEST ok mutate-op-count-red expect=RED got=RED
+SELFTEST ok i32-truncation-red expect=RED got=RED
+SELFTEST ok missing-file-prereq expect=PREREQ got=PREREQ
+SELFTEST ok missing-field-prereq expect=PREREQ got=PREREQ
+SELFTEST ok missing-quest-state-prereq expect=PREREQ got=PREREQ
+SELFTEST ok invalid-state-hex-prereq expect=PREREQ got=PREREQ
+SELFTEST ok invalid-json-prereq expect=PREREQ got=PREREQ
+SELFTEST ok k-gap-prereq expect=PREREQ got=PREREQ
+SELFTEST ok invalid-op-prereq expect=PREREQ got=PREREQ
+SELFTEST ok invalid-frames-prereq expect=PREREQ got=PREREQ
+SELFTEST ok missing-frame-text-prereq expect=PREREQ got=PREREQ
+SELFTEST ok empty-file-prereq expect=PREREQ got=PREREQ
+SELFTEST ok assemble-ok expect=GREEN got=GREEN
+SELFTEST ok assemble-then-diff-green expect=GREEN got=GREEN
+SELFTEST ok assemble-without-state-ok expect=GREEN got=GREEN
+SELFTEST ok assemble-without-state-then-diff-prereq expect=PREREQ got=PREREQ
+SELFTEST ok assemble-missing-end-prereq expect=PREREQ got=PREREQ
+SELFTEST ok assemble-no-events-prereq expect=PREREQ got=PREREQ
+SELFTEST ok assemble-done-count-prereq expect=PREREQ got=PREREQ
+SELFTEST ok assemble-missing-state-prereq expect=PREREQ got=PREREQ
+SELFTEST ok=36/36

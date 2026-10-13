@@ -66,6 +66,30 @@ namespace BotSrv
             MShare.g_nGuildCastlePeerRole = _options.GuildCastlePeerRole;
             MShare.g_sGuildCastleMasterLoginId = string.Concat(_options.LoginAccount ?? string.Empty, _options.GuildCastleMasterRole);
             MShare.g_sGuildCastlePeerLoginId = string.Concat(_options.LoginAccount ?? string.Empty, _options.GuildCastlePeerRole);
+            // M3⑥ 夹具（白名单 T-41 家族扩展）：固定任务动作序列；默认 false = 原行为
+            MShare.g_boQuestSequence = _options.QuestSequence;
+            MShare.g_nQuestStepMs = _options.QuestStepMs;
+            MShare.g_nQuestStartDelayMs = _options.QuestStartDelayMs;
+            MShare.g_sQuestSteps = _options.QuestSteps ?? string.Empty;
+            // M3⑦ 夹具（白名单 T-43 家族扩展）：固定组队/交易动作序列；默认 false = 原行为
+            MShare.g_boPairTradeSequence = _options.PairTradeSequence;
+            MShare.g_nPairTradeStepMs = _options.PairTradeStepMs;
+            MShare.g_nPairTradeStartDelayMs = _options.PairTradeStartDelayMs;
+            MShare.g_sPairTradeSteps = _options.PairTradeSteps ?? string.Empty;
+            MShare.g_nPairTradeRole = _options.PairTradeRole;
+            MShare.g_nPairTradePeerRole = _options.PairTradePeerRole;
+            // actor/peer 的精确 LoginId = LoginAccount + 序号（AppService.Run：LoginId = ChrName）。
+            MShare.g_sPairTradeActorLoginId = string.Concat(_options.LoginAccount ?? string.Empty, _options.PairTradeRole);
+            MShare.g_sPairTradePeerLoginId = string.Concat(_options.LoginAccount ?? string.Empty, _options.PairTradePeerRole);
+            // M3⑩ 夹具（白名单 T-44 家族扩展）：固定元宝寄售动作序列；默认 false = 原行为
+            MShare.g_boSellOffSequence = _options.SellOffSequence;
+            MShare.g_nSellOffStepMs = _options.SellOffStepMs;
+            MShare.g_nSellOffStartDelayMs = _options.SellOffStartDelayMs;
+            MShare.g_sSellOffSteps = _options.SellOffSteps ?? string.Empty;
+            MShare.g_nSellOffSellerRole = _options.SellOffSellerRole;
+            MShare.g_nSellOffBuyerRole = _options.SellOffBuyerRole;
+            MShare.g_sSellOffSellerLoginId = string.Concat(_options.LoginAccount ?? string.Empty, _options.SellOffSellerRole);
+            MShare.g_sSellOffBuyerLoginId = string.Concat(_options.LoginAccount ?? string.Empty, _options.SellOffBuyerRole);
             // M1③ 退出路径夹具（白名单 M1-EXIT）：进世界后发 CM_SOFTCLOSE；默认 0 = 原行为
             MShare.g_nSoftCloseAfterWorldMs = _options.SoftCloseAfterWorldMs;
             MShare.g_boDisableAutoPlay = _options.DisableAutoPlay;
@@ -110,6 +134,21 @@ namespace BotSrv
             {
                 LogService.Info("固定行会/攻城序列: 启用 steps={0} 起始等待={1}ms 步间隔={2}ms 会长序号={3} peer序号={4}（见 RobotPlayer.GuildCastleSequenceTick）",
                     _options.GuildCastleSteps, _options.GuildCastleStartDelayMs, _options.GuildCastleStepMs, _options.GuildCastleMasterRole, _options.GuildCastlePeerRole);
+            }
+            if (_options.QuestSequence)
+            {
+                LogService.Info("固定任务序列: 启用 steps={0} 起始等待={1}ms 步间隔={2}ms（点任务 NPC/选标签/核对说词；见 RobotPlayer.QuestSequenceTick）",
+                    _options.QuestSteps, _options.QuestStartDelayMs, _options.QuestStepMs);
+            }
+            if (_options.PairTradeSequence)
+            {
+                LogService.Info("固定组队/交易序列: 启用 steps={0} 起始等待={1}ms 步间隔={2}ms actor序号={3} peer序号={4}（见 RobotPlayer.PairTradeSequenceTick）",
+                    _options.PairTradeSteps, _options.PairTradeStartDelayMs, _options.PairTradeStepMs, _options.PairTradeRole, _options.PairTradePeerRole);
+            }
+            if (_options.SellOffSequence)
+            {
+                LogService.Info("固定元宝寄售序列: 启用 steps={0} 起始等待={1}ms 步间隔={2}ms 卖方序号={3} 买方序号={4}（见 RobotPlayer.SellOffSequenceTick）",
+                    _options.SellOffSteps, _options.SellOffStartDelayMs, _options.SellOffStepMs, _options.SellOffSellerRole, _options.SellOffBuyerRole);
             }
         }
 

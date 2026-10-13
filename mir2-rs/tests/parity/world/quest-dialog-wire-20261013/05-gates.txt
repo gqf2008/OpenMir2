@@ -1,0 +1,19 @@
+== M3⑥-实现 3（第①片 F-1/F-2 返工 + 第②片接线）：四门禁（隔离 CARGO_TARGET_DIR=E:/tmp/m2svr-target，--offline）==
+时间：2026-10-13T03:26:42Z  code_commit=744c5596（F-1/F-2 返工；证据提交在其后）
+
+---- ① cargo fmt --all -- --check ----
+rc=0
+
+---- ② cargo clippy --workspace --all-targets --offline -- -D warnings ----
+    Checking game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.35s
+rc=0
+
+---- ③ cargo test --workspace --offline --no-fail-fast ----
+rc=0
+合计 suites=93 passed=867 failed=0 ignored=21
+
+---- ④ cargo run -p msgcodegen --offline -- --check ----
+     Running `E:/tmp/m2svr-target\debug\msgcodegen.exe --check`
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+rc=0

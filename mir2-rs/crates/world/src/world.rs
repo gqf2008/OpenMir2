@@ -84,6 +84,16 @@ pub struct TickRecord {
     /// （`PlayObject.Base.cs:149-165`）是否进了 `Abil.Exp >= Abil.MaxExp` 块（满级也置位），
     /// 宿主据此出升级链（`SM_LEVELUP(45)`/`SM_ABILITY(52)`/`SM_SUBABILITY(752)`/`SM_HEALTHSPELLCHANGED(53)`）。
     pub exp_awards: Vec<(i32, i32, bool, u8)>,
+    /// **M3⑤-实现 2 第②片**：本 tick 的商人 `ProcessMerchants` 结果。
+    pub merchants_run: Vec<i32>,
+    /// 本 tick `Merchant.Run` 的 `TurnTo`：`(merchant_id, dir)`（`RM_TURN`；帧面归 ⑤-4）。
+    pub merchant_turns: Vec<(i32, u8)>,
+    /// 本 tick 商人 `RM_HIT` 的 id。
+    pub merchant_hits: Vec<i32>,
+    /// 本 tick 商人 `MapRandomMove` 的 id。
+    pub merchant_space_moves: Vec<i32>,
+    /// 本 tick 被 Ghost 60s 门移除的商人 id。
+    pub merchant_removed: Vec<i32>,
 }
 
 pub struct World {
@@ -112,6 +122,19 @@ pub struct World {
     /// 把 golden 的 RNG 序列整体移位）。接线层（`bins/game-svr` 的 sim 循环）在起世界时显式
     /// [`World::enable_monster_ai`]；`openmir2-m3-monster-ai-tick` 的宿主接线为后续分片。
     ai_enabled: bool,
+    /// **M3⑤-实现 2 第②片**：是否在 [`World::tick`] 里驱动商人 tick
+    /// （[`crate::merchant::World::merchant_tick`]，oracle `MerchantProcessor` 的单线程等价物）。
+    ///
+    /// **缺省 `false`**：合成 golden 场景不含 oracle 的商人 200ms 线程；由 `bins/game-svr` 的 sim
+    /// 循环在起世界时 `enable_merchant_tick()`（生产路径）。
+    merchant_enabled: bool,
+    /// `MerchantPosition`（`WorldServer.Merchant.cs:66`）：本 pass 的起始索引。
+    ///
+    /// 本片丢掉墙钟预算（`NpcLimit`）分支 ⇒ 一趟扫到底、扫完归 0；保留字段与循环起点以与 oracle 同形
+    /// （将来若恢复预算断点续跑，语义不变）。
+    pub merchant_position: usize,
+    /// 上一趟 `ProcessMerchants` 的 sim 时钟（200ms 节奏门）。
+    pub merchant_pass_tick: i64,
     /// 物品目录（掉落生成按名查 `StdItem`）
     pub item_catalog: Vec<StdItem>,
     /// 怪物极品掉落几率（`Config.MonRandomAddValue`）
@@ -169,6 +192,9 @@ impl World {
             rng_attack: RandomNumber::with_seed(42),
             isolate_attack: false,
             ai_enabled: false,
+            merchant_enabled: false,
+            merchant_position: 0,
+            merchant_pass_tick: i64::MIN,
             item_catalog: Vec::new(),
             mon_random_add_value: 40,
             need_exps: vec![0; 1000],
@@ -217,6 +243,20 @@ impl World {
     #[must_use]
     pub fn monster_ai_enabled(&self) -> bool {
         self.ai_enabled
+    }
+
+    /// 开启商人 tick 驱动（缺省关闭；见 `merchant_enabled` 字段说明）。
+    ///
+    /// 幂等：生产路径由 `bins/game-svr` 的 sim 循环在起世界时调用；合成 golden 场景保持关闭
+    /// ⇒ 既有 `tests/parity/world` 逐字节不变。
+    pub fn enable_merchant_tick(&mut self) {
+        self.merchant_enabled = true;
+    }
+
+    /// 商人 tick 驱动是否开启（自证/测试用）。
+    #[must_use]
+    pub fn merchant_tick_enabled(&self) -> bool {
+        self.merchant_enabled
     }
 
     /// 设置某张地图的 `Envir.Flag.boEXPRATE`/`ExpRate`（see [`World::map_exp_rate`]）。
@@ -338,6 +378,11 @@ impl World {
             attacks: Vec::new(),
             deaths: Vec::new(),
             exp_awards: Vec::new(),
+            merchants_run: Vec::new(),
+            merchant_turns: Vec::new(),
+            merchant_hits: Vec::new(),
+            merchant_space_moves: Vec::new(),
+            merchant_removed: Vec::new(),
         };
 
         // 命令 FIFO
@@ -427,6 +472,18 @@ impl World {
         // 单线程串行：按实体槽位顺序（`EntityStore` 显式索引），在死亡结算之后、AOI 之前。
         if self.ai_enabled {
             crate::monai::monster_ai_tick(self);
+        }
+
+        // **M3⑤-实现 2 第②片**：商人 tick（oracle `MerchantProcessor` 的 200ms 线程单线程等价物）。
+        // 单线程串行：在怪物 AI 之后、AOI 刷新之前（与 oracle 同 tick 内的显式定序；oracle 里是两个
+        // 独立 200ms 线程，跨系统交错不可复现 ⇒ 由 owner 裁决不在判据内）。
+        if self.merchant_enabled {
+            let m = self.merchant_tick();
+            record.merchants_run = m.ran;
+            record.merchant_turns = m.turns;
+            record.merchant_hits = m.hits;
+            record.merchant_space_moves = m.space_moves;
+            record.merchant_removed = m.removed;
         }
 
         // AOI 刷新：按地图、地图内按槽位顺序（顺序来自 ECS 内核的**显式槽位索引**，

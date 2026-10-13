@@ -17,10 +17,15 @@ r"""rng_ledger_diff.py — M3②③ 真机**两侧 RNG 账本**的站点 + 顺�
       另报两侧 per-canonical 计数、只在 A / 只在 B 的 canonical（= 缺消费者的点名清单）。
       按站点组汇总（Claim B）：组集合 + 未归类 + **行级覆盖**（`rows_dropped`）。
       `--require-closed` = 未归类站点 **或** 解析不了的行 > 0 即 fail-closed（表/格式漂移不给假绿）。
-  groupdiff <a.tsv> <b.tsv> [--include-attack] [--strict] [--json out]
+  groupdiff <a.tsv> <b.tsv> [--include-attack] [--strict] [--fold] [--json out]
       两侧组账本：组集合 diff + **共享组相对次序** diff（仅两侧共有的组参与）+ run 序。
       `--strict` 下三种任一即红：GROUP_SET_DIFF / SHARED_REL_ORDER_DIFF / ROW_COVERAGE_DRIFT。
       口径：**组内 draw 计数本身不是判据**，只有组集合与共享组相对次序是。
+  `--fold`（R-6，owner 2026-10-13 裁决）：先把两侧组序列经 `rng_consumer_groups.FOLD_RULES`
+      折叠（现为 `construct -> spawn`，对应 Rust 把构造期抽数折叠进 `AnimalState::from_spawn_draws`），
+      **在折叠后的序列上**重算组集合 + 组计数 + 共享组相对次序；折叠后**计数不等** ⇒ `FOLDED_COUNT_DIFF`。
+      折叠不是豁免：只写白名单不校验、或折叠后计数/次序不等 ⇒ 照样 RED。缺省（不传 `--fold`）
+      行为与既有逐字节相同（`construct` vs `spawn` 仍如实报 `GROUP_SET_DIFF`）。
   selftest
       合成件：同序 ⇒ 绿；插入一次取数（次序漂移）⇒ 必红且定位到第几位；缺一个站点 ⇒ 必红且点名。
 
@@ -393,6 +398,11 @@ def cmd_groupdiff(args):
     if not a or not b:
         print("RED: 空组账本（a=%d b=%d）" % (len(a), len(b)))
         return 1
+    # R-6 folded 映射（owner 2026-10-13）：显式开关；关时逐字节保持既有行为。
+    fold = bool(getattr(args, "fold", False))
+    if fold:
+        a = rcg.folded(a)
+        b = rcg.folded(b)
     ca, cb = collections.Counter(a), collections.Counter(b)
     only_a = {k: v for k, v in ca.items() if k not in cb}
     only_b = {k: v for k, v in cb.items() if k not in ca}
@@ -405,6 +415,13 @@ def cmd_groupdiff(args):
     runs_a = [g for g, _n in ra]
     runs_b = [g for g, _n in rb]
     first_run = rcg.first_divergence(runs_a, runs_b)
+    # R-6 要求的「折叠计数」：折叠后逐组计数必须相等（白名单豁免不算达成）。
+    folded_count_diff = {}
+    if fold:
+        for g in sorted(set(ca) | set(cb)):
+            na, nb = ca.get(g, 0), cb.get(g, 0)
+            if na != nb:
+                folded_count_diff[g] = (na, nb)
     set_ok = not only_a and not only_b
     order_ok = (len(fa) == len(fb)) and first_shared is None
     flags = []
@@ -412,17 +429,28 @@ def cmd_groupdiff(args):
         flags.append("GROUP_SET_DIFF")
     if not order_ok:
         flags.append("SHARED_REL_ORDER_DIFF")
+    if folded_count_diff:
+        flags.append("FOLDED_COUNT_DIFF")
     # reviewer-5 O-1：行级覆盖也是结构判据的一部分（解析不了的行 = 被吞掉的消费者）。
     if dropped_a or dropped_b:
         flags.append("ROW_COVERAGE_DRIFT")
     verdict = "IDENTICAL" if not flags else "+".join(flags)
-    print("RNG_CONSUMER_GROUPDIFF include_attack=%s a=%s(%d) b=%s(%d)"
-          % (include_attack, args.a, len(a), args.b, len(b)))
+    print("RNG_CONSUMER_GROUPDIFF include_attack=%s fold=%s a=%s(%d) b=%s(%d)"
+          % (include_attack, fold, args.a, len(a), args.b, len(b)))
+    if fold:
+        print("  FOLD_MAP %s（R-6：C# construct 折叠到 Rust spawn；折叠后计数+相对次序必须相等）"
+              % dict(sorted(rcg.FOLD_RULES.items())))
     print("  A_GROUPS %s" % dict(sorted(ca.items(), key=lambda kv: -kv[1])))
     print("  B_GROUPS %s" % dict(sorted(cb.items(), key=lambda kv: -kv[1])))
     print("  ONLY_IN_A(missing_in_B) %s" % dict(sorted(only_a.items(), key=lambda kv: -kv[1])))
     print("  ONLY_IN_B(extra_in_B)   %s" % dict(sorted(only_b.items(), key=lambda kv: -kv[1])))
     print("  SHARED_GROUPS %s" % sorted(shared))
+    if fold:
+        if folded_count_diff:
+            print("  FOLDED_COUNT_DIFF %s（折叠后逐组计数必须相等；不等 ⇒ 折叠不成立）"
+                  % {g: {"a": na, "b": nb} for g, (na, nb) in folded_count_diff.items()})
+        else:
+            print("  FOLDED_COUNT_EQUAL %s" % dict(sorted(ca.items(), key=lambda kv: -kv[1])))
     if first_shared is None and len(fa) == len(fb):
         print("  FIRST_SHARED_ORDER_DIVERGENCE none（共享组相对次序逐位全等，len=%d）" % len(fa))
     else:
@@ -440,7 +468,11 @@ def cmd_groupdiff(args):
     print("  VERDICT %s" % verdict)
     if args.json:
         with open(args.json, "w", encoding="utf-8", newline="\n") as fh:
-            json.dump({"include_attack": include_attack, "a": args.a, "b": args.b,
+            json.dump({"include_attack": include_attack, "fold": fold,
+                       "fold_rules": dict(sorted(rcg.FOLD_RULES.items())),
+                       "folded_count_diff": {g: {"a": v[0], "b": v[1]}
+                                             for g, v in folded_count_diff.items()},
+                       "a": args.a, "b": args.b,
                        "a_len": len(a), "b_len": len(b),
                        "a_dropped": dropped_a, "b_dropped": dropped_b,
                        "a_groups": dict(ca), "b_groups": dict(cb),
@@ -632,6 +664,50 @@ def cmd_selftest(args):
           out[0] == 1 and "ROW_COVERAGE_DRIFT" in out[1]
           and "ROW_COVERAGE a_dropped=0 b_dropped=1" in out[1], out[1][:500])
 
+    # ---- R-6 folded 映射（owner 2026-10-13 裁决）----
+    # 规则完整性 + `construct -> spawn` 语义。
+    check("fold-rule-valid", rcg.validate_folds() == [], str(rcg.validate_folds()))
+    check("fold-map-construct-spawn",
+          rcg.fold_group("construct") == "spawn" and rcg.fold_group("drop") == "drop")
+    # 改坏必红：折叠目标改成未知组 ⇒ `validate_folds` 必须点名（改完恢复原规则）。
+    saved_folds = dict(rcg.FOLD_RULES)
+    rcg.FOLD_RULES["construct"] = "no_such_group"
+    try:
+        bad_folds = rcg.validate_folds()
+    finally:
+        rcg.FOLD_RULES.clear()
+        rcg.FOLD_RULES.update(saved_folds)
+    check("fold-table-mutation-red", bool(bad_folds), "unknown fold target must be flagged")
+
+    def fold_gdiff(a_sites, b_sites, strict=True):
+        _write_trace(ga, a_sites)
+        _write_trace(gb, b_sites)
+        return cap(lambda: cmd_groupdiff(argparse.Namespace(
+            a=ga, b=gb, a_side="csharp", b_side="rust", include_attack=False, strict=strict,
+            groups_table="", json="", fold=True)))
+
+    # 折叠等价：C# [construct, spawn, monster_ai] → [spawn, spawn, monster_ai]；Rust 同序 ⇒ 绿。
+    out = fold_gdiff([CT, SP, W], [RSP, RSP, RW])
+    check("folded-equivalent-green",
+          out[0] == 0 and "VERDICT IDENTICAL" in out[1] and "FOLDED_COUNT_EQUAL" in out[1],
+          out[1][:600])
+    # 折叠计数不等（C# construct+spawn = 2 vs Rust spawn = 1）⇒ 必红且点名 FOLDED_COUNT_DIFF。
+    out = fold_gdiff([CT, SP], [RSP])
+    check("folded-count-red",
+          out[0] == 1 and "FOLDED_COUNT_DIFF" in out[1] and "spawn" in out[1], out[1][:600])
+    # 折叠后相对次序不等（计数相等）⇒ 必红且定位（且不是计数差）。
+    out = fold_gdiff([CT, W, SP], [RSP, RSP, RW])
+    check("folded-order-red",
+          out[0] == 1 and "SHARED_REL_ORDER_DIFF" in out[1]
+          and "FOLDED_COUNT_DIFF" not in out[1], out[1][:600])
+    # 显式开关：不传 `--fold` 时 construct vs spawn 仍如实 GROUP_SET_DIFF（折叠不是全局豁免）。
+    _write_trace(ga, [CT])
+    _write_trace(gb, [RSP])
+    out = cap(lambda: cmd_groupdiff(argparse.Namespace(
+        a=ga, b=gb, a_side="csharp", b_side="rust", include_attack=False, strict=True,
+        groups_table="", json="", fold=False)))
+    check("fold-off-still-red", out[0] == 1 and "GROUP_SET_DIFF" in out[1], out[1][:400])
+
     for name in os.listdir(tmp):
         try:
             os.remove(os.path.join(tmp, name))
@@ -641,7 +717,7 @@ def cmd_selftest(args):
     if failures:
         print("SELFTEST RED: %d/%d 未过: %s" % (len(failures), len(checks), ", ".join(failures)))
         return 1
-    print("SELFTEST GREEN: rng_ledger_diff selftest %d/%d（同序绿 + 次序漂移必红且定位 + 缺消费者必红且点名 + Claim B 站点组：同组序绿 / 多抽·换序·缺组必红且定位 / 组表改坏必红 / 未归类 fail-closed / 行级覆盖 rows_dropped fail-closed（O-1）+ AUX 组改坏必红（O-3））"
+    print("SELFTEST GREEN: rng_ledger_diff selftest %d/%d（同序绿 + 次序漂移必红且定位 + 缺消费者必红且点名 + Claim B 站点组：同组序绿 / 多抽·换序·缺组必红且定位 / 组表改坏必红 / 未归类 fail-closed / 行级覆盖 rows_dropped fail-closed（O-1）+ AUX 组改坏必红（O-3）+ R-6 folded：等价绿 / 折叠计数不等·次序不等必红且定位 / 关时仍 GROUP_SET_DIFF）"
           % (len(checks), len(checks)))
     return 0
 
@@ -711,6 +787,8 @@ def main(argv=None):
     p.add_argument("--include-attack", action="store_true", help="把攻击组也纳入组序（缺省只看非攻击消费者）")
     p.add_argument("--groups-table", default="")
     p.add_argument("--strict", action="store_true", help="组集/相对次序不一致 ⇒ 判红")
+    p.add_argument("--fold", action="store_true",
+                   help="R-6 folded 映射：construct->spawn 后比组集合/计数/相对次序（缺省关，行为不变）")
     p.add_argument("--json", default="")
     p.set_defaults(func=cmd_groupdiff)
 
