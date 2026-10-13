@@ -5,7 +5,12 @@
   mir2-rs/crates/world/**    （merchant.rs 在售库存 goods_list + world.rs 计数器可见性）
   mir2-rs/tests/parity/whitelist.md （T-47 登记，1 段）
 
-## 实际改动文件（git diff --name-only --stat）
+## 实际改动文件（git diff --stat master..HEAD，限本片写集）
+
+## config.rs 的共享文件纪律
+只加自己的 4 个 [Setup] 键（嵌在 SETUP 臂的 catch-all 里）；未触碰该臂既有分支。
+$ git diff --numstat master..HEAD -- mir2-rs/bins/game-svr/src/config.rs
+（46/1；无整臂 rustfmt 折块）
 
 ## 边界（oracle 冻结：src/sql/MirClient 必须空）
 $ git diff --name-only master..HEAD -- src sql MirClient
