@@ -153,7 +153,9 @@ pub struct MerchantState {
     pub move_tick: i64,
     /// `RunTick`（`BaseObject.cs:439`；ctor = `GetTickCount() + Random(1500)`）。
     ///
-    /// 构造抽在 [`World::spawn_merchant`] 里按 oracle 次序落盘（走共享 `world.rng`，站点归 `merchant` 组）。
+    /// 缺省 = [`MERCHANT_RUN_TICK_UNSET`]（未抽）；构造抽由 [`World::merchant_ctor_run_delay`]
+    /// （宿主**正序**预抽，`LocalDB.LoadMerchant` 口径）或 [`World::spawn_merchant`]（无预抽时）
+    /// 从共享 `world.rng` 落定（站点归 `merchant` 组）。
     pub run_tick: i64,
     /// `GhostTick`（`BaseObject`；`ProcessMerchants` 的 60s 过期门）。
     pub ghost_tick: i64,
@@ -166,7 +168,8 @@ pub struct MerchantState {
 
 impl MerchantState {
     /// 按 oracle ctor 的**非随机**初值构造（`Merchant.cs:70-106`）；随机项（`RunTick` 的
-    /// `Random(1500)`）由调用方在挂图时按 oracle 次序填入（本片置 spawn 时刻）。
+    /// `Random(1500)`）留作 [`MERCHANT_RUN_TICK_UNSET`]，由调用方按 oracle 次序落定
+    /// （[`World::merchant_ctor_run_delay`] 正序，或 [`World::spawn_merchant`] 兜底）。
     #[allow(clippy::too_many_arguments)]
     #[must_use]
     pub fn new(
