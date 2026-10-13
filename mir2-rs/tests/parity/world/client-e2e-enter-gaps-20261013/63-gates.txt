@@ -1,0 +1,30 @@
+63-gates.txt — 片⑩ 四门禁读数（cwd = mir2-rs，CARGO_TARGET_DIR=E:/tmp/m2svr-target，合并 origin/master 后的树）
+卡 openmir2-client-e2e-enter-gaps / base = refs/heads/master @ ad0592b1912b2c740aea01f83265370aa7d94139
+================================================================================================================
+
+[1] cargo fmt --all -- --check
+    rc=0（无输出）
+
+[2] cargo clippy --workspace --all-targets -- -D warnings
+    rc=0
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.63s
+    （本片零 .rs 改动 ⇒ 与上一轮同一编译单元；无 warning/error）
+
+[3] cargo test --workspace --no-fail-fast
+    rc=0
+    101 suites · 1199 passed · 0 failed · 22 ignored
+    （逐 suite 的 `test result:` 行汇聚，无 FAILED、无 error[E…]）
+
+[4] cargo run -q -p msgcodegen -- --check
+    rc=0
+    msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+
+附：本片判据（不起栈、只读仓内 capture）
+    $ python check_client_run_frames.py --selftest
+    SELFTEST OK (6/6) + SELFTEST_PAIR OK (7/7) ⇒ rc=0
+    $ python check_client_run_frames.py --pair-before capture-run-ability-before-oracle40.jsonl \
+                                        --pair-after  capture-run-ability-after-client58.jsonl
+    RESULT: GREEN rc=0
+    $ python check_client_run_frames.py --capture capture-run-ability-before-oracle40.jsonl
+    RESULT: RED rc=1（= root 判据「改回 40B ⇒ CM_RUN 归 0」）
+    原文见 62-run-ability-pair-inrepo.txt。

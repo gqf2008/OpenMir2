@@ -1,0 +1,25 @@
+64-boundary.txt — 片⑩ 边界与净差量（base = refs/heads/master @ ad0592b19，head = 本片 tip）
+卡 openmir2-client-e2e-enter-gaps
+================================================================================================================
+
+[1] 冻结面（必须为空）
+    $ git diff --name-only <base> -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+    （空）
+
+[2] 净差量（全部在证据目录 mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/**；.rs 计数 = 0）
+    M  README.md                          （追加 §⑩）
+    M  check_client_run_frames.py         （新增 --pair-before/--pair-after 配对模式 + 配对自检）
+    M  SHA256SUMS.txt                     （随本片重算）
+    A  62-run-ability-pair-inrepo.txt     （配对原始件入库说明 + 命令/读数/改坏必红）
+    A  63-gates.txt                       （四门禁读数）
+    A  64-boundary.txt                    （本文件）
+    A  capture-run-ability-before-oracle40.jsonl （8d140852647af4c72a4ca9281985d3095d897d928186da6608ab4c0d419d4e2b）
+    A  capture-run-ability-after-client58.jsonl  （753a756630815e5633b486e82b8f71cf916a0b02af57ae15ced7c833b6d8f48e）
+
+[3] 生产面
+    本片**零生产代码改动**：不改 bins/、crates/、src/、sql/、MirClient；唯一代码改动是证据目录内的判据脚本
+    （纯消费者：读 capture.jsonl 断言，不参与生产路径）。
+
+[4] 兼容性
+    两份 capture 的 sha256 与 `61-client-run-ability-layout-fix.txt` §F 所记盘上读数**逐字节相同** ⇒ 本片只是
+    移入仓内，未重采、未改字节。

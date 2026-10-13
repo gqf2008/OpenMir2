@@ -1,0 +1,100 @@
+62-run-ability-pair-inrepo.txt — 「跑」真机配对原始件入库 + 配对判据可离线复跑（片⑩）
+卡 openmir2-client-e2e-enter-gaps / 回应 brief-m2svr-next 顶部 root 2026-10-14 00:2x「把『跑』修完」（真机 capture 出现
+CM_RUN(3013) >= 1 + 面板能跑；改坏必红 = 改回 40B ⇒ CM_RUN 归 0）
+================================================================================================================
+
+A. 本片的目的（收口 reviewer not_verified③「真机中央读数未在检出内复算」）
+----------------------------------------------------------------------------------------------------------------
+片⑨（head `439951cb3`，已合入 master `0f38d642d`）用真机配对把「跑不动」根因钉在**帧 52 能力布局**，并已把生产默认翻为
+client-58。但**配对的两份原始 capture 只落在 `E:/tmp/m2svr-run4/**`（未入库）**，reviewer 明示「无法在检出内独立复算中央
+读数」。本片把这两份原始件**逐字节入库**（sha256 与 `61-*` F 节所记完全相同），并把配对读数做成一条**不需要起栈**的判据
+（`check_client_run_frames.py --pair-before/--pair-after`）⇒ root/owner 在窗口里可直接复跑，不再依赖盘外文件。
+
+B. 入库原始件（仓内路径 + sha256；与 `61-*` §F 的盘上读数逐字节一致）
+----------------------------------------------------------------------------------------------------------------
+  8d140852647af4c72a4ca9281985d3095d897d928186da6608ab4c0d419d4e2b  capture-run-ability-before-oracle40.jsonl
+      （= 61 §F 的 `E:/tmp/m2svr-run4/before/s2c/capture.jsonl`；154 行）
+  753a756630815e5633b486e82b8f71cf916a0b02af57ae15ced7c833b6d8f48e  capture-run-ability-after-client58.jsonl
+      （= 61 §F 的 `E:/tmp/m2svr-run4/after/s2c/capture.jsonl`；158 行）
+
+  采集口径（与片⑨完全同一次 run，未重跑、未改字节）：`mir2_proxy.py` 7200 透明代理 + 影子 game-gate(7600) ⇒
+  `export_s2c.ps1` 解出客户端实收 s2c / 实发 c2s。唯一变量 = `MIR2_CLIENT_ABILITY_LAYOUT`（BEFORE 显式 `0`=oracle-40，
+  AFTER 不设=client-58）。两侧均 `aaa@(256,584)`（比奇省开阔地）、同探针（目标点按下）、同 `-Seed 42`。
+
+C. 配对读数（判据输出原文，`python check_client_run_frames.py --pair-before ... --pair-after ...`）
+----------------------------------------------------------------------------------------------------------------
+  A) `11029 SM_SERVERCONFIG` 两侧 `body_len=23`、`body_sha256=bc2a1f661a5d42b4c08fb95377a7c8b143bb3889b35b3310fe896f31c88a3615`、
+     `raw_hex=236464686b6469436a6464686b6464686b6d6d41766f6c45726d6f45716c6c43756c6c40766f6c44726c6f45716c774521`
+     **逐字节相同** ⇒ 本配对的唯一变量确实只有 52 尾布局，ClientConf 一字未动 ⇒ 「按冻结客户端布局编码 ClientConf 体」
+     不可能是 `CM_RUN` 的开关（片⑧/片⑨的口径在此判据里变成机器可判）。
+  B) BEFORE（oracle-40）：52 `body_len=40`（`body_sha256=80ac78a1…`）、c2s `CM_WALK=32`、**`CM_RUN=0`**。
+  C) AFTER （client-58）：52 `body_len=58`（`body_sha256=39622730…`）、c2s `CM_WALK=25`、**`CM_RUN=3`**。
+
+  命令与输出（本机实跑，2026-10-14；cwd = 本证据目录）：
+
+    $ python check_client_run_frames.py --pair-before capture-run-ability-before-oracle40.jsonl \
+                                        --pair-after  capture-run-ability-after-client58.jsonl
+    OK  A 11029 body 两侧逐字节相同（49B）⇒ ClientConf 未动
+    --  BEFORE(oracle-40): CM_WALK=32 52=[40] CM_RUN=0
+    --  AFTER (client-58): CM_WALK=25 52=[58] CM_RUN=3
+    OK  B BEFORE 52 尾=40 + CM_RUN=0（oracle-40 ⇒ CanRun 拒跑）
+    OK  C AFTER 52 尾=58 + CM_RUN=3 >= 1（client-58 ⇒ CanRun 放行）
+    RESULT: GREEN
+    rc=0
+
+D. 改坏必红（三条，均本机实跑；不需要起栈）
+----------------------------------------------------------------------------------------------------------------
+  1) 单件默认判据（= 本卡 DoD③）：AFTER capture ⇒ GREEN（③ `CM_RUN=3 >= 1`）；
+     **BEFORE capture（改回 40B 的基线）⇒ RED rc=1**（② `52 尾长=[40]，期望 [58]`、③ `CM_RUN=0，期望 >= 1`）
+     —— 即 root 判据里的「改回 ⇒ CM_RUN 归 0」已机判。
+  2) 配对判据对调（`--pair-before <after> --pair-after <before>`）⇒ **RED rc=1**
+     （B/C 四条 simultaneously 报红）。
+  3) 判据自身牙齿：`--selftest` = 单件 **6/6**（含 `run-0-red` / `52-len-40-red` / `no-walk-red`）
+     + 配对 **7/7**（含 `pair-swapped-red` / `pair-11029-changed-red` / `pair-missing-11029-red` /
+     `pair-before-has-run-red` / `pair-after-40-red` / `pair-minrun-4-red`）。
+
+  原文（本机实跑）：
+
+    $ python check_client_run_frames.py --capture capture-run-ability-after-client58.jsonl
+    OK  ① c2s CM_WALK(3011)=25
+    OK  ② 52 尾长=58（客户端 58B TAbility ⇒ HP>0，可跑）
+    OK  ③ CM_RUN(3013)=3 >= 1（客户端真的发跑位）
+    RESULT: GREEN
+    rc=0
+
+    $ python check_client_run_frames.py --capture capture-run-ability-before-oracle40.jsonl
+    OK  ① c2s CM_WALK(3011)=32
+    RED ② 52 尾长=[40]，期望 [58]
+    RED ③ CM_RUN(3013)=0，期望 >= 1
+    RESULT: RED
+    rc=1
+
+    $ python check_client_run_frames.py --pair-before capture-run-ability-after-client58.jsonl \
+                                        --pair-after  capture-run-ability-before-oracle40.jsonl
+    OK  A 11029 body 两侧逐字节相同（49B）⇒ ClientConf 未动
+    --  BEFORE(oracle-40): CM_WALK=25 52=[58] CM_RUN=3
+    --  AFTER (client-58): CM_WALK=32 52=[40] CM_RUN=0
+    RED B BEFORE 52 尾长=[58]，期望 [40]
+    RED B BEFORE CM_RUN=3，期望 0（oracle-40 基线必须跑不动）
+    RED C AFTER 52 尾长=[40]，期望 [58]
+    RED C AFTER CM_RUN=0，期望 >= 1
+    RESULT: RED
+    rc=1
+
+E. 门禁 / 边界
+----------------------------------------------------------------------------------------------------------------
+  - 本片**零生产代码改动**：delta = 本目录新增 2 份 capture + 1 份本文 + `check_client_run_frames.py`（新增
+    `--pair-before/--pair-after` 配对模式与配对自检）+ `README.md`（§⑩）+ `SHA256SUMS.txt` 重算。
+  - 冻结面：`git diff --name-only <base> -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage` = 空。
+  - 四门禁读数见 `63-gates.txt`；边界见 `64-boundary.txt`。
+  - 本片**未起栈 / 未占端口**（配对判据只读仓内 capture）；未 merge、未自签 review。
+
+F. 诚实登记（仍归 owner / 窗口，不因本片收卡）
+----------------------------------------------------------------------------------------------------------------
+  - 本片**不新增真机读数**，只是把片⑨的原始件入库并判据化；`CM_RUN=3` 仍是片⑨那一次真机的产物（hash 锚在 B 节）。
+    root 若要「本轮新采一次」，需走 ⑨ 的 §C 起栈配对（本车道等 root 排窗口）。
+  - 58B 能力布局的 **§6.0-3 故意偏离 + 默认值**仍待 owner 签字（片⑨ owner_actions ④），本片不自加白名单条目。
+  - 「客户端**完整接受**服务端配置」= 另案 `SM_SERVERCONFIG id 20002 + 52B TClientConf 体`（对 golden #6 的故意偏离）；
+    片⑧ + 本片 A 节判据已证其与 `CM_RUN` 无关，非本卡 DoD。
+  - 副作用提示（交 owner 裁）：默认翻 client-58 后，任何**跨侧 s2c 逐字节对拍**（Rust client-58 vs C# oracle-40）都会在
+    帧 52 尾上发散；M3 各线的对拍若含帧 52，需在 Rust 侧显式 `MIR2_CLIENT_ABILITY_LAYOUT=0`（本片未改各线夹具）。
