@@ -1,0 +1,15 @@
+# 改坏必红：把本片新增的 `_path_prefix_findings` 首行插 `return []`（等于删掉该判据）
+# 期望：mutation RED，且 MUT-O1 行显示 GREEN（牙齿证明自己是可失败向）。
+$ python -I -c "...insert '    return []' after 'def _path_prefix_findings(anchor_text, pather=PATHS):'..."
+$ python -I quest_anchor_gate.py mutation
+rc=1
+MUT1 范围漂移(:3966-4105→:3966-4110): RED（2 项）
+MUT2 基名漂移(PlayDataStorage.Query.cs→Query.cs): RED（4 项）
+MUT3 读侧 token 漂移: RED（1 项）
+MUT4 真身 check: GREEN（0 项）
+MUT5 token 强度(整组只剩 `}`): RED（1 项）
+MUT6 token 强度(纯标点 `]);`/`]`/`//{`): RED（1+2 项）
+MUT-O1 路径前缀(错前缀必红/正确·裸基名不误伤): GREEN（0 项）
+MUTATION RED (C:\Users\gxh\AppData\Local\Temp\quest-anchor-mut-o87xdzl2)
+
+# 还原后 sha256：before=e09137e7921a1e2dbe92887a71bdafb4591f1f7e81cf98c14219ec14940ab7a9 after=e09137e7921a1e2dbe92887a71bdafb4591f1f7e81cf98c14219ec14940ab7a9 一致=True
