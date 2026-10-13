@@ -23,6 +23,7 @@ pub use mir2_shared::hutil32;
 pub use digest::{
     structure_digest, structure_digest_full, MerchantDigestInput, StructureCounts, StructureDigest,
 };
+pub use engine::quest_state::{QuestBitmap, QUEST_ARRAY_LEN};
 pub use model::{
     Goods, MerchantFlags, QuestActionInfo, QuestConditionInfo, SayingProcedure, SayingRecord,
     ScriptInfo, ScriptQuestInfo,

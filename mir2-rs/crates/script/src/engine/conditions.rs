@@ -39,6 +39,8 @@ impl Engine<'_, '_> {
         let handler = crate::engine::dispatch::condition_handler(code).unwrap_or("");
         match handler {
             "ConditionOfCheck" => self.cond_check(info, result),
+            "ConditionOfCheckOpen" => self.cond_check_open(info, result),
+            "ConditionCheckUnit" => self.cond_check_unit(info, result),
             "ConditionOfCheckGold" => self.cond_check_gold(info, result),
             "ConditionOfCheckLevel" => self.cond_check_level(info, result),
             "ConditionOfEqual" => self.cond_var_cmp(info, result, std::cmp::Ordering::Equal),
@@ -379,6 +381,43 @@ impl Engine<'_, '_> {
         let n18 = mir2_shared::hutil32::str_to_int(&info.s_param2, 0);
         let status = self.player.quest_flag_status(n14 as i16);
         if status == 0 {
+            if n18 != 0 {
+                *result = false;
+            }
+        } else if n18 == 0 {
+            *result = false;
+        }
+    }
+
+    /// `ConditionOfCheckOpen`（`ConditionProcessingSys.cs:199`）：开图标记（`QuestUnitOpen`）比较。
+    ///
+    /// **oracle 缺陷照搬**：函数起始写的是 `success = false`（同族的 `ConditionOfCheck` /
+    /// `ConditionCheckUnit` 都写 `true`），且三个分支都不改回 `true` ⇒ **CHECKOPEN 恒假**。
+    /// 现网语料用量 0（盘点 §1.D），本批按「行为等价优先于修 bug」保留；登记 `whitelist.md` **T-37**。
+    fn cond_check_open(&mut self, info: &QuestConditionInfo, result: &mut bool) {
+        // C#: success = false;  ← 与 ConditionCheckUnit 的 success = true 不对称
+        *result = false;
+        let n14 = mir2_shared::hutil32::str_to_int(&info.s_param1, 0);
+        let n18 = mir2_shared::hutil32::str_to_int(&info.s_param2, 0);
+        let n10 = self.player.quest_unit_open_status(n14 as i16);
+        if n10 == 0 {
+            if n18 != 0 {
+                *result = false;
+            }
+        } else if n18 == 0 {
+            *result = false;
+        }
+    }
+
+    /// `ConditionCheckUnit`（`ConditionProcessingSys.cs:4104`）：任务单元（`QuestUnit`）比较。
+    ///
+    /// 与 `cond_check` 同形，只是取数口换成 `GetQuestUnitStatus`。
+    fn cond_check_unit(&mut self, info: &QuestConditionInfo, result: &mut bool) {
+        *result = true;
+        let n14 = mir2_shared::hutil32::str_to_int(&info.s_param1, 0);
+        let n18 = mir2_shared::hutil32::str_to_int(&info.s_param2, 0);
+        let n10 = self.player.quest_unit_status(n14 as i16);
+        if n10 == 0 {
             if n18 != 0 {
                 *result = false;
             }
