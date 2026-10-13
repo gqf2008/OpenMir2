@@ -1,0 +1,31 @@
+=== fix: git diff origin/master -- .walgit/board.toml ===
+diff --git a/.walgit/board.toml b/.walgit/board.toml
+index cedb7a51d..1a7561721 100644
+--- a/.walgit/board.toml
++++ b/.walgit/board.toml
+@@ -30,7 +30,7 @@ status = "needs-human"
+ 
+ [[column]]
+ name = "受阻"
+-merge = "blocked"
++status = "blocked"
+ 
+ [[column]]
+ name = "已完成"
+
+=== net stat vs origin/master (.walgit + tools/collab) ===
+ .walgit/board.toml                                 |    2 +-
+ .../01-board-before.json                           |    1 +
+ .../02-board-blocked-head-board.json               |    1 +
+ .../03-board-blocked-fixed-board.json              |    1 +
+ .../04-board-mutation-red.json                     |    1 +
+ .../05-commands.txt                                |   44 +
+ .../06-diff.txt                                    |   16 +
+ .../07-gate-clippy.txt                             |    2 +
+ .../07-gate-fmt.txt                                |    0
+ .../07-gate-msgcodegen.txt                         |    1 +
+ .../07-gate-test.txt                               | 1792 ++++++++++++++++++++
+ .../07-gates.txt                                   |    7 +
+ .../README.md                                      |   47 +
+ .../SHA256SUMS.txt                                 |   11 +
+ 14 files changed, 1925 insertions(+), 1 deletion(-)
