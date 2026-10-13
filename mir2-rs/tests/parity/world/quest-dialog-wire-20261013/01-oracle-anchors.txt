@@ -22,7 +22,8 @@ M3⑥-实现 3 第②片（openmir2-m3-quest-dialog-wiring）—— oracle 锚�
                                         normNpc.ChrName + '/' + sMsg, MessagePriority.High);
       :997  else        playerActor.SendMsg(normNpc, RM_MERCHANTSAY, 0,0,0,0,
                                         normNpc.ChrName + '/' + sMsg);
-    ⇒ 说词行 = normNpc.ChrName + '/' + sMsg（本片 merchant_say_text / merchant_say_wire，GBK 原文）。
+    ⇒ 说词行 = normNpc.ChrName + '/' + sMsg（本片 merchant_say_text / merchant_say_gbk，GBK 原文；
+      线上尾 = edcode::encode，见 smframe::sm_merchantsay）。
 [6] PlayObject.Message.cs:1722-1726  RM_MERCHANTSAY 支
       :1722  ClientMsg = Messages.MakeMessage(Messages.SM_MERCHANTSAY, processMsg.ActorId,
                                      HUtil32.MakeWord((ushort)processMsg.nParam1,(ushort)processMsg.nParam2), 0, 1);
