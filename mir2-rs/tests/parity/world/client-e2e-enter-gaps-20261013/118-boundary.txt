@@ -1,0 +1,42 @@
+118-boundary.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片㉒ 边界
+base = origin/master a2d8eaf32205c720613ae8817073bf8d2fdaaae2；head = 本片提交
+m2-svr / openmir2-worker-11 / 2026-10-14（本 burst = 片㉒；开工时 `git merge origin/master` 为 fast-forward）
+====================================================================================================
+命令：`git diff --name-only origin/master | sort`（cwd = 本车道 worktree）
+
+本片差量（6 路径，全在卡证据目录）
+----------------------------------------------------------------------------------------------------
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/115-aoi-gap3-window-judge.txt   (A 判定书)
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/116-redcheck-window-judge.txt   (A 改坏必红 4 牙)
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/117-gates.txt                   (A 门禁)
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/118-boundary.txt                (A 本文件)
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md                       (M §㉒)
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt                   (M 重生成)
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py                (M ③a 独立目录 + --judge)
+
+冻结面复核
+----------------------------------------------------------------------------------------------------
+* `git diff --name-only origin/master | grep -E '^(src/|sql/|MirClient/|mir2-rs/crates/protocol/|mir2-rs/crates/storage/|mir2-rs/bins/)'`
+  ⇒ **空**（生产代码/协议/存储/网关未动）。
+* `git diff --name-only origin/master | grep -E '\.(rs|toml|ps1)$'` ⇒ **空**（零 Rust/TOML/PowerShell）。
+* `.py` 只有 `window_handoff.py` 一件；其余六件判据脚本与 `check_mongen_dense_points.py` 未动。
+* `src/BotSrv` 空；`mir2-rs/tests/parity/m3/**`（m3bag/m3cs/driver 写集）未触碰；
+  root 的 `E:/tmp/openmir2-watch/client-e2e-window.sh` 未触碰。
+
+证据 hash 口径
+----------------------------------------------------------------------------------------------------
+`SHA256SUMS.txt` 按**仓库字节（Git blob / LF 归一）**记（`tools/evidence-hash/verify_sha256sums.py` 默认口径）：
+```
+$ python -I -B tools/evidence-hash/verify_sha256sums.py verify <本目录>
+  ⇒ GREEN OK 120/120
+$ python -I -B tools/evidence-hash/verify_sha256sums.py verify <本目录> --check-extra
+  ⇒ GREEN OK 120/120（无未列清单的多件）
+$ python -I -B tools/evidence-hash/verify_sha256sums.py eolcheck <本目录>
+  ⇒ EOLCHECK GREEN 121/121
+```
+（件数以本文件提交后的清单为准；`write` 重生成命令见 `117-gates.txt`。）
+
+零起栈 / 零端口
+----------------------------------------------------------------------------------------------------
+本片未起任何栈；十端口仅共享 MySQL 3306 UP。未动共享主检出
+（`git -C E:/Users/gxh/Documents/GitHub/OpenMir2 status --porcelain` 空）；不 merge、未自签 review。

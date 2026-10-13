@@ -1,0 +1,58 @@
+117-gates.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片㉒ 门禁与复跑证据
+m2-svr / openmir2-worker-11 / 2026-10-14；零起栈、零占端口（仅共享 MySQL 3306）、零生产代码改动。
+工作目录 = 本车道 worktree（分支 `enter-gaps-window-dense-menu`）；隔离 `CARGO_TARGET_DIR=E:/tmp/m2svr-target`。
+====================================================================================================
+
+A. 四门禁（cwd = mir2-rs；base = origin/master a2d8eaf32）
+----------------------------------------------------------------------------------------------------
+```
+$ cargo fmt --all -- --check
+  rc=0                                   # 空输出
+$ cargo clippy --workspace --all-targets -- -D warnings
+  Finished `dev` profile [unoptimized + debuginfo] target(s)
+  rc=0
+$ cargo test --workspace
+  101 suites / 1200 passed / 0 failed / 22 ignored     rc=0
+$ cargo run -p msgcodegen -- --check
+  msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+  rc=0
+```
+
+B. 被测件复跑（离线；不降口径）
+----------------------------------------------------------------------------------------------------
+被测件 = `window_handoff.py`
+sha256 = be19760472abd7b459d88a9a8223b0f3ee09f1e52ceaccb171a675b6940429bd
+
+```
+$ python -I -B window_handoff.py --selftest | tail -1
+  SELFTEST OK (45/45)                    rc=0      # 片⑰ 为 35/35，本片新增 10 例
+$ python -I -B window_handoff.py --plan-only --best-site --repo <本 worktree>
+  # ③b 有怪点 site=605,578 / ③a 反向点 site_none=291,666 / view_range=12
+  # ③b 最密点自动选取 BEST=605,578 E=12.681 （check_mongen_dense_points.py --best-point，root ③①「换怪密点」）
+  ...③a 独立目录树 `<work-dir>-a` 出现在 §4 判据命令与 `--judge --pass-a-dir`（见 `115` §B 全文）   rc=0
+$ python -I -B window_handoff.py --judge --work-dir E:/tmp/m2svr-judge-demo
+== GREEN demo (real judge tools, synthetic ③b/③a artifacts) ==
+OK   ③b 服务端 vis>=1（RESULT: GREEN）
+OK   ③b 客户端 pairs>=1（RESULT: GREEN）
+OK   ③b 两侧 visible（RESULT: GREEN）
+OK   ③a 服务端 vis==0（RESULT: GREEN）
+OK   ③a 两侧 none（RESULT: GREEN）
+AOI_GAP3=GREEN
+rc=0
+```
+
+C. 同目录其余判据工具复跑（无回归）
+----------------------------------------------------------------------------------------------------
+```
+$ for t in check_mongen_dense_points.py check_aoi_visibility_diag.py aoi_visibility_pair.py            check_client_s2c_frames.py check_rust_window_preflight.py check_csharp_capture_preflight.py; do
+    python -I -B $t --selftest | tail -1
+  done
+check_mongen_dense_points.py           SELFTEST OK (30/30)
+check_aoi_visibility_diag.py           SELFTEST OK (9/9)
+aoi_visibility_pair.py                 SELFTEST OK (11/11)
+check_client_s2c_frames.py             SELFTEST GREEN
+check_rust_window_preflight.py         SELFTEST OK (17/17)
+check_csharp_capture_preflight.py      SELFTEST OK (12/12)
+```
+⇒ 六件判据 `--selftest` 全绿；本片未改这六件（`git diff --name-only origin/master | grep -E '\.py$'`
+只有 `window_handoff.py`，见 `118`）。

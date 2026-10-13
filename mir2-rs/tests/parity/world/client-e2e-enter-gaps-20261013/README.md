@@ -491,3 +491,30 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
 - **边界**：只判「图在 MapInfo 里」（= oracle `FindMap != null`），不判 MapInfo 属性（`NORECONNECT`/`SAFE`…）、
   坐标阻挡、Rust 侧该图是否已加载；换图窗口仍按 runbook §1/§4 实拍。**未起栈、未占端口**，未动共享主检出。
 - 证据：`112-mapinfo-enterability.txt`、`113-gates.txt`、`114-boundary.txt`。
+
+## ㉒ 片㉒：③ 窗口两趟证据不互相覆盖 + `--judge` 五条判据一键聚合（root ③「判据/capture 工具你准备」）（2026-10-14）—— `115`
+
+- **背景（root 2026-10-14 00:4x ③）**：③ 的离线判决已成立、工具已备，但片⑰ 的窗口计划把 **③a 反向第二趟**
+  指到**与 ③b 同一批路径**；而 `tools/m2-acceptance/start_rust_stack.ps1` 的 `Start-One` 每次起栈先
+  `Remove-Item $out, $err`（`:276-278`）⇒ `game-svr.out.log` 每次被删重建 ⇒ **③a 一开跑就覆盖 ③b 读数**，
+  一次性窗口事后不可复核。
+- **本片改动（`window_handoff.py`，只读、零起栈、零端口；不新增第二份判据）**：
+  1. **③a 独立目录树** `w_a = <work-dir>-a`（③b 的 `<work-dir>/{rust,csharp}` 路径逐字节不变）；
+     `--plan` 的 §4 给出 ③a 的目录替换与两条完整判据命令，并显式写「不独立就覆盖 ③b 读数」。
+  2. **`--judge`（J1）**：把 ③ 的**五条**判据（③b 服务端 `vis>=1` / ③b 客户端 `pairs>=1` /
+     ③b 两侧 `visible` / ③a 服务端 `vis==0 && af==0` / ③a 两侧 `none`）聚合为一个 rc + 一行 `AOI_GAP3=`；
+     **只调既有判据脚本，不复制判据逻辑**（同片⑰「只聚合不复制」）。fail-closed：任一证据缺失 ⇒
+     `PREREQ_RED`（rc=2），**绝不静默当绿**。
+- **真读数**：
+  - `--selftest` **35/35 → 45/45**（计划 4 条：③a 独立目录 / ③a 判据参数 / `--judge` 命令 / 覆盖注；
+    judge 6 条：全绿 rc0 / 五条 / 一条 RED rc1 / 2 红 3 绿 / 缺证据 PREREQ / 缺件点名）。
+  - `--judge` 用**本目录真判据脚本** + 合成产物：全绿相 ⇒ `AOI_GAP3=GREEN` rc=0；③a 被 ③b 产物污染 ⇒
+    `③a 服务端`/`③a 两侧` 双 RED、`AOI_GAP3=RED` rc=1；证据不存在 ⇒ 五条全 PREREQ、rc=2（`115` §C）。
+  - `--plan-only --best-site` 仍 `BEST=605,578 E=12.681`；③a 判据命令改读 `<work-dir>-a/**`（`115` §B）。
+- **4 颗改坏必红**（`116`）：MUT-A（去掉 ③a 独立目录）⇒ `SELFTEST FAILED (42/45)`；MUT-B（`run_window_judges`
+  把 rc=1 当绿）⇒ `(43/45)`；③a 污染 ⇒ 双 RED；缺证据 ⇒ 五条 PREREQ。变异只在 `E:/tmp` 复制件、仓内
+  `window_handoff.py` sha256 前后一致。
+- **零生产代码改动**（仅一个 `.py` + 四份证据 + README/清单）；**未起栈、未占端口**，未动共享主检出。
+- **仍未闭环（归 root 独占窗口，不因本片收卡）**：DoD③ 的 R 级「③b/③a 两趟真机同框对照」+「屏幕见怪并
+  能攻击造成伤害」。
+- 证据：`115-aoi-gap3-window-judge.txt`、`116-redcheck-window-judge.txt`、`117-gates.txt`、`118-boundary.txt`。

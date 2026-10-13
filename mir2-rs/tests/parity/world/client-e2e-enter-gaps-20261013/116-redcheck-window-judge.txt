@@ -1,0 +1,76 @@
+116-redcheck-window-judge.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片㉒ 改坏必红（4 颗牙）
+被测件：`window_handoff.py`  sha256 = be19760472abd7b459d88a9a8223b0f3ee09f1e52ceaccb171a675b6940429bd
+m2-svr / openmir2-worker-11 / 2026-10-14；零起栈、零端口、零生产代码改动
+口径：变异一律在 `E:/tmp` 的**复制件**上做，仓内 sha256 前后一致（末节给出核对）。
+====================================================================================================
+
+牙① MUT-A：去掉 ③a 独立目录（`w_a = w`）⇒ 计划断言必红
+----------------------------------------------------------------------------------------------------
+```
+$ cd E:/tmp/m2svr-burst8 && cp <repo>/window_handoff.py mut-a.py
+$ python - <<'PY'
+old = '    w_a = pass_a_dir.rstrip("/\\\\") if pass_a_dir else (w + "-a")\n'
+s = open('mut-a.py').read().replace(old, '    w_a = w  # MUT-A\n')
+open('mut-a.py','w').write(s)
+PY
+$ python -I -B E:/tmp/m2svr-burst8/mut-a.py --selftest | grep -E '\[FAIL\]|SELFTEST'
+[FAIL] selftest plan-pass-a-separate-dirs
+[FAIL] selftest plan-pass-a-judge-args
+[FAIL] selftest plan-judge-command
+SELFTEST FAILED (42/45)          rc=1
+```
+判读：把 ③a 退回「与 ③b 同目录」正是本片要修的缺陷形态；三条计划断言同时红 ⇒ 缺口被钉死。
+
+牙② MUT-B：`run_window_judges` 把 rc=1 当绿 ⇒ judge 断言必红
+----------------------------------------------------------------------------------------------------
+```
+$ python - <<'PY'
+old = '        else:\n            rep.problems.append(f"{name} RED（末行={last_line(out)}）")\n'
+s = open('mut-b.py').read().replace(old,
+        '        else:\n            rep.info.append(f"MUT-B {name}（末行={last_line(out)}）")\n')
+open('mut-b.py','w').write(s)
+PY
+$ python -I -B E:/tmp/m2svr-burst8/mut-b.py --selftest | grep -E '\[FAIL\]|SELFTEST'
+[FAIL] selftest judge-red-rc1 0
+[FAIL] selftest judge-red-two 0/5
+SELFTEST FAILED (43/45)          rc=1
+```
+判读：吞掉 RED（把 rc=1 当绿）会让 `AOI_GAP3` 假绿 ⇒ 两条 judge 断言必红。
+
+牙③ 真判据红相：③a 被 ③b 的有怪 capture/log 污染 ⇒ ③a 两判据必红
+----------------------------------------------------------------------------------------------------
+```
+$ # ③a 目录里放 ③b 的 capture-client-viewrange12-seed42.jsonl + vis=2 的 game-svr.out.log
+$ python -I -B window_handoff.py --judge --work-dir E:/tmp/m2svr-judge-demo
+OK   ③b 服务端 vis>=1（RESULT: GREEN）
+OK   ③b 客户端 pairs>=1（RESULT: GREEN）
+OK   ③b 两侧 visible（RESULT: GREEN）
+RED ③a 服务端 vis==0 RED（末行=RESULT: RED）
+RED ③a 两侧 none RED（末行=RESULT: RED）
+AOI_GAP3=RED
+rc=1
+```
+判读：若 ③a 不再独立目录（缺陷形态），③a 判据会读到 ③b 的产物 ⇒ 本片让这两条**能红**（可判），
+而不是相反——即 `--expect none` 真能识破「该点其实有怪」。
+
+牙④ fail-closed：证据不存在 ⇒ 五条全 PREREQ（rc=2，绝不静默绿）
+----------------------------------------------------------------------------------------------------
+```
+$ python -I -B window_handoff.py --judge --work-dir E:/tmp/no-such-window-xyz
+PREREQ ③b 服务端 vis>=1：缺窗口证据 ['E:/tmp/no-such-window-xyz/rust/stack/game-svr.out.log']
+PREREQ ③b 客户端 pairs>=1：缺窗口证据 ['E:/tmp/no-such-window-xyz/rust/s2c/capture.jsonl']
+PREREQ ③b 两侧 visible：缺窗口证据 ['E:/tmp/no-such-window-xyz/rust/s2c/capture.jsonl', 'E:/tmp/no-such-window-xyz/csharp/s2c/capture.jsonl']
+PREREQ ③a 服务端 vis==0：缺窗口证据 ['E:/tmp/no-such-window-xyz-a/rust/stack/game-svr.out.log']
+PREREQ ③a 两侧 none：缺窗口证据 ['E:/tmp/no-such-window-xyz-a/rust/s2c/capture.jsonl', 'E:/tmp/no-such-window-xyz-a/csharp/s2c/capture.jsonl']
+AOI_GAP3=PREREQ_RED
+rc=2
+```
+
+还原核对（仓内文件未被变异污染）
+----------------------------------------------------------------------------------------------------
+```
+$ sha256sum -c E:/tmp/m2svr-burst8/base.sha256
+window_handoff.py: OK
+$ sha256sum window_handoff.py
+be19760472abd7b459d88a9a8223b0f3ee09f1e52ceaccb171a675b6940429bd  window_handoff.py
+```
