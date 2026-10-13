@@ -1,0 +1,74 @@
+# 11 — reviewer-6 O-1（carried Minor）: half-stream PREREQ must early-return
+
+## (a) BEFORE (early-return removed in scratch copy E:/tmp/m3bag-o1-before): redundant stream-seed-equal:a still runs
+$ python E:/tmp/_m3bag_o1_demo.py E:/tmp/m3bag-o1-before
+ONLY --a-stream (half-stream) => rc=2
+RNG_SCENE_GATE scenario=E:/tmp/m3bag-o1-demo\scenario.json a=E:/tmp/m3bag-o1-demo\a-scene.json b=E:/tmp/m3bag-o1-demo\b-scene.json checks=29 failed=1
+  SCENE {"a_monsters": {"稻草人|18|20|0": 1}, "a_side": "csharp", "a_stream": "E:/tmp/m3bag-o1-demo\\a-rng-stream.tsv", "a_stream_seed": 42, "b_monsters": {"稻草人|18|20|0": 1}, "b_side": "rust", "map": "0137", "mongen_fixture": "..\\..\\m3bag-o1-demo\\mongen-map0137.tsv", "mongen_rows": 0, "monsters": {"稻草人|18|20|0": 1}, "seed": 42, "start_pose": [17, 20, 2]}
+  CHECK scenario-canon                     ok
+  CHECK scenario-fields                    ok
+  CHECK scenario-trace-present             ok
+  CHECK scenario-fold-code-valid           ok
+  CHECK scenario-fold-declared             ok
+  CHECK scenario-fold-matches-code         ok
+  CHECK scenario-groups-declared           ok
+  CHECK scenario-groups-known              ok
+  CHECK descriptor-canon:a                 ok
+  CHECK descriptor-side:a                  ok
+  CHECK descriptor-canon:b                 ok
+  CHECK descriptor-side:b                  ok
+  CHECK sides-distinct                     ok
+  CHECK map-equal:a                        ok
+  CHECK seed-equal:a                       ok
+  CHECK pose-equal:a                       ok
+  CHECK map-equal:b                        ok
+  CHECK seed-equal:b                       ok
+  CHECK pose-equal:b                       ok
+  CHECK monsters-parseable                 ok
+  CHECK monsters-equal:scenario-vs-a       ok
+  CHECK monsters-equal:scenario-vs-b       ok
+  CHECK monsters-equal:a-vs-b              ok
+  CHECK mongen-parseable                   ok
+  CHECK mongen-equal:a-vs-fixture          ok
+  CHECK mongen-equal:b-vs-fixture          ok
+  CHECK mongen-equal:a-vs-b                ok
+  CHECK stream-pair-required               FAIL (制品级同种子门要求两侧流水齐备或都不给；只给了 a='E:/tmp/m3bag-o1-demo\\a-rng-stream.tsv' b=''（缺 b 侧）)
+  CHECK stream-seed-equal:a                ok
+  PREREQ_MISSING stream-pair-required: 制品级同种子门要求两侧流水齐备或都不给；只给了 a='E:/tmp/m3bag-o1-demo\\a-rng-stream.tsv' b=''（缺 b 侧）
+  VERDICT RED: 场景不一致 ⇒ groupdiff 次序结论不得采信（fail-closed）：stream-pair-required
+
+## (b) AFTER (this patch): early-return => only the PREREQ, no seed check for the half side
+$ python E:/tmp/_m3bag_o1_demo.py E:/tmp/m3bag-wip/mir2-rs/tests/parity/m3
+ONLY --a-stream (half-stream) => rc=2
+RNG_SCENE_GATE scenario=E:/tmp/m3bag-o1-demo\scenario.json a=E:/tmp/m3bag-o1-demo\a-scene.json b=E:/tmp/m3bag-o1-demo\b-scene.json checks=28 failed=1
+  SCENE {"a_monsters": {"稻草人|18|20|0": 1}, "a_side": "csharp", "b_monsters": {"稻草人|18|20|0": 1}, "b_side": "rust", "map": "0137", "mongen_fixture": "..\\..\\..\\..\\..\\..\\m3bag-o1-demo\\mongen-map0137.tsv", "mongen_rows": 0, "monsters": {"稻草人|18|20|0": 1}, "seed": 42, "start_pose": [17, 20, 2]}
+  CHECK scenario-canon                     ok
+  CHECK scenario-fields                    ok
+  CHECK scenario-trace-present             ok
+  CHECK scenario-fold-code-valid           ok
+  CHECK scenario-fold-declared             ok
+  CHECK scenario-fold-matches-code         ok
+  CHECK scenario-groups-declared           ok
+  CHECK scenario-groups-known              ok
+  CHECK descriptor-canon:a                 ok
+  CHECK descriptor-side:a                  ok
+  CHECK descriptor-canon:b                 ok
+  CHECK descriptor-side:b                  ok
+  CHECK sides-distinct                     ok
+  CHECK map-equal:a                        ok
+  CHECK seed-equal:a                       ok
+  CHECK pose-equal:a                       ok
+  CHECK map-equal:b                        ok
+  CHECK seed-equal:b                       ok
+  CHECK pose-equal:b                       ok
+  CHECK monsters-parseable                 ok
+  CHECK monsters-equal:scenario-vs-a       ok
+  CHECK monsters-equal:scenario-vs-b       ok
+  CHECK monsters-equal:a-vs-b              ok
+  CHECK mongen-parseable                   ok
+  CHECK mongen-equal:a-vs-fixture          ok
+  CHECK mongen-equal:b-vs-fixture          ok
+  CHECK mongen-equal:a-vs-b                ok
+  CHECK stream-pair-required               FAIL (制品级同种子门要求两侧流水齐备或都不给；只给了 a='E:/tmp/m3bag-o1-demo\\a-rng-stream.tsv' b=''（缺 b 侧）)
+  PREREQ_MISSING stream-pair-required: 制品级同种子门要求两侧流水齐备或都不给；只给了 a='E:/tmp/m3bag-o1-demo\\a-rng-stream.tsv' b=''（缺 b 侧）
+  VERDICT RED: 场景不一致 ⇒ groupdiff 次序结论不得采信（fail-closed）：stream-pair-required

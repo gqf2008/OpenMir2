@@ -1,8 +1,8 @@
 # evidence — M3 RNG 场景 DoD② 组清单机判（2026-10-13）
 
 卡：`openmir2-m3-rng-trace-scene-groups`（issue `d9d03f47`）。
-状态：**WIP / 未交付**（pending 片 `409a0aa84` 已被 reviewer-6 `8fe6970e` approve，作者不叠改动、
-不移动 head；本证据待该片合入后作为下一片交付，届时会重跑四门禁并补合并树读数）。
+状态：本片（DoD② 组清单机判 + reviewer-6 O-1 早退）已交 `patch` + `status: needs-review`；
+base = merge-base(origin/master, HEAD) = `c127ae9a4`（前片 `409a0aa84` 已合入 master `c127ae9a4`）。
 写集：`mir2-rs/tests/parity/m3/**`，零 `.rs`。
 
 ## 1. 缺口（可复现的假绿）
@@ -41,6 +41,9 @@
   `10` scenario GREEN。
 - **改坏必红**（`05`）：scratch 副本去掉两个 flag ⇒ ledger selftest **rc=1 RED**，点名
   `scenario-expected-missing-red` / `scenario-min-monster-ai-red`；同一假绿场景回到 `IDENTICAL`。
+- **O-1（`11`，reviewer-6 carried Minor）**：半给流水 PREREQ 早退 —— 前 `checks=29 failed=1`（多跑一条
+  `stream-seed-equal:a`），后 `checks=28 failed=1`（只留 `stream-pair-required`）；rc 始终 2（fail-closed）。
+  gate selftest 的 `stream-pair-prereq-red` 同步加牙：半给流水的输出不得含 `stream-seed-equal:a`。
 
 ## 4. 牙齿（selftest 内置，非仅本证据）
 

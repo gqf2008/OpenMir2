@@ -337,6 +337,10 @@ def run_gate(scenario_path, a_path, b_path, a_stream=None, b_stream=None):
                 "stream-pair-required",
                 "制品级同种子门要求两侧流水齐备或都不给；只给了 a=%r b=%r（缺 %s 侧）"
                 % (a_stream, b_stream, missing))
+            # reviewer-6 O-1（Minor）：PREREQ 已成立 ⇒ 早退，不再对已给的那一侧跑 seed 检查
+            # （否则输出里会多一条无意义的 `stream-seed-equal:*`，`failed=1 checks=29`）。
+            # rc/终局 VERDICT 本就是 fail-closed，这里只去掉冗余。
+            return res
         seeds = {}
         for label, stream in (("a", a_stream), ("b", b_stream)):
             if not stream:
@@ -661,7 +665,8 @@ def cmd_selftest(_args):
         # 守卫 ⇒ 本用例 rc 变 0，selftest 立即点名 FAIL）。
         rc, out = run(scen, a1, b1, sa)
         check("stream-pair-prereq-red",
-              rc == 2 and "stream-pair-required" in out and "PREREQ_MISSING" in out, out[:400])
+              rc == 2 and "stream-pair-required" in out and "PREREQ_MISSING" in out
+              and "stream-seed-equal:a" not in out, out[:400])
 
         # `scenario` 模式（离线锁住已入库 scenario）：正样本绿 / 缺件 PREREQ。
         rc, out = run_scen(scen)
