@@ -17,10 +17,16 @@
 python -I -B mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_mongen_dense_points.py `
   --mongen E:/MirServer/M2GameSvr/Envir/MonGen.txt --map 0 --view-range 12 `
   --points "291,666;291,651;289,618;287,620;650,631;330,266"
+# 选点：窗口内期望出生怪数排行（片⑯；只算出生，不含游走）
+python -I -B mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_mongen_dense_points.py `
+  --mongen E:/MirServer/M2GameSvr/Envir/MonGen.txt --map 0 --view-range 12 --rank 10
 ```
 
-- **用哪个「框内」点**：`(289,618)`（= `Envir/StartPoint.txt` 的 oracle 出生点，框内，也是新角色默认体验）
-  或 `(287,620)`（片⑦ AFTER 已证客户端实收 13 对）。`(330,266)` 也框内（另一出生点）。
+- **用哪个「框内」点**：
+  - 想一次拿**最多同屏怪** ⇒ `(605,578)`（片⑯ 实测 E=12.681，5 个重叠框中心；次密 `(211,629)`/`(256,572)` E=12.225）；
+  - 想复用**既有证据** ⇒ `(289,618)`（= `Envir/StartPoint.txt` 的 oracle 出生点，E=6.754，也是新角色默认体验）
+    或 `(287,620)`（片⑦ AFTER 已证客户端实收 13 对，E=5.617）；`(330,266)` 也框内（另一出生点）。
+  - 两侧对照的**反向** ③a 点仍用 `(291,666)`（E=0.000，机判 `--max-expected 0`）。
 - **不要再用 `(291,666)` / `(291,651)` 当「有怪点」**：二者在 map "0" 的 **76 个生成框之外**
   （最近框 Chebyshev=30 / 29 > `ViewRange=12`）⇒ 该点同屏无怪是正确行为（见 `81-…txt` §B/§C）。
   `(291,666)` 只用来做 ③a 的**反向对照**。
@@ -38,7 +44,9 @@ python -I -B mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_mon
 逐相位改：
 
 ```sql
--- 有怪点
+-- 有怪点（片⑯ 最密）
+UPDATE characters SET x=605, y=578 WHERE chrname='aaa';
+-- 有怪点（保守：oracle 出生点 / 片⑦ 已证点）
 UPDATE characters SET x=289, y=618 WHERE chrname='aaa';   -- 或 287,620
 -- 无怪点（反向）
 UPDATE characters SET x=291, y=666 WHERE chrname='aaa';

@@ -365,3 +365,23 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
 - **零生产代码改动**（仅一个 `.py` 判据 + 三份文档）；本片**未起栈、未占端口**，未动共享主检出。
 - 证据：`89-rust-window-preflight.txt`、`90-redcheck-rust-window-preflight.txt`、
   `91-gates.txt`、`92-boundary.txt`。
+
+## ⑯ 片⑯：③①「换怪密点」**选点判据** —— MonGen 窗口内期望出生怪数排行（2026-10-14）—— `93`/`94`
+
+- **背景**：root 00:4x 的 ③① 要「换怪密点（比奇省郊外 / MonGen 里密度高的图）复测」。片⑬ 只给了
+  「框内/框外 + 到最近框距离」；选点仍靠人工在若干个已知点里挑。本片把「密」变成**可排行、可机判**的定量读数。
+- **工具扩展 `check_mongen_dense_points.py`**（只读、零端口；在片⑬ 既有工具上加，不新造第二份几何）：
+  - `expected_in_window(boxes,x,y,vr)` = `Σ_box Count * |窗口∩框| / |框|`（整数格点，纯几何无 RNG；
+    窗口 = 半径 `view_range` 的方格）。**只算出生**（游走怪另算，`70` §C 已登记）。
+  - `--rank N` / `--best-point`：候选 = 去重后的生成框中心，按 E 降序（并列按 x,y 升序，确定性）。
+  - `--min-expected X` / `--max-expected X`：逐点机判 E ≥ / ≤ X（缺 `--view-range` ⇒ `PREREQ_RED`）。
+    旧 `--expect inside|outside`、`--point/--points/--start-point` 口径**未动**（片⑮ R4 同款 args 仍 GREEN，`93` §E）。
+  - `--selftest` 10 → **19/19**（新增 E 的 4 条解析解 + rank 序 + min/max 绿红 + 缺 vr 的 PREREQ）。
+- **本次测算（map 0，vr=12）**：root verify1 `(291,666)` **E=0.000**（③a 定量成立；改判 `--min-expected 1` ⇒ RED）；
+  `(289,618)` E=6.754、`(287,620)` E=5.617（③b 框内点）；**最密 `(605,578)` E=12.681**
+  （5 个重叠框中心：`鹿/稻草人` r=50 count=50 ×2 + `半兽人/多钩猫/钉耙猫` r=30 count=10 ×3），
+  次密 `(211,629)`/`(256,572)` E=12.225。⇒ 想一次拿最多同屏怪用 `(605,578)`；想复用既有新角色出生点证据用 `(289,618)`。
+- **5 条改坏必红**（`94`）：去格点 `+1` / 忽略 `Count` / 忽略重叠比 / `min` 写成 `<=` / `max` 写成 `>=`；
+  每条 rc=1 + 还原后 sha256 逐字节一致。
+- **零 .rs、零生产语义改动**（仅判据工具 + 一份手册引用 + 文档/证据）；本片**未起栈、未占端口**，未动共享主检出。
+- 证据：`93-mongen-dense-rank.txt`、`94-redcheck-mongen-dense-rank.txt`、`95-gates.txt`、`96-boundary.txt`。

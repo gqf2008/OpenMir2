@@ -1,0 +1,32 @@
+96-boundary.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片⑯ 边界
+base = ea4cd8c65（origin/master = 片⑮ 合并点 = 本片父提交）；head = 本片提交（交付时以 tip 为准）
+====================================================================================================
+$ git diff --cached --name-status ea4cd8c65 HEAD -- mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/82-two-side-window-runbook.md
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/93-mongen-dense-rank.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/94-redcheck-mongen-dense-rank.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/95-gates.txt
+A	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/96-boundary.txt
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_mongen_dense_points.py
+（本文件 96-boundary.txt 自身也在其中；上表来自暂存后的真实最终差量。）
+
+冻结面检查（必须为空）：
+$ git diff --cached --name-only ea4cd8c65 -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+  （空 = 冻结面零改动）
+
+后缀统计：
+  *.rs 改动 = 0（本片零生产代码改动；只改 .py 判据 + 文档/证据）
+  *.py = 1（check_mongen_dense_points.py 增补 `--rank`/`--best-point`/`--min/max-expected`）
+  证据 .txt = 93 / 94 / 95 + 本文件 96
+  文档 = 82-two-side-window-runbook.md §0/§2（选点引用新排行）、README.md §⑯、SHA256SUMS.txt
+  SHA256SUMS.txt = 94 行（repo LF/git-blob 口径；含本文件 96）
+
+证据复核：
+  GREEN mir2-rs\tests\parity\world\client-e2e-enter-gaps-20261013\SHA256SUMS.txt  [repo 口径]  OK 94/94（--check-extra）
+  EOLCHECK GREEN 95/95 件文本证据与仓库口径（LF）在 EOL 上一致
+  改坏必红：94 五条（去格点 +1 / 忽略 Count / 忽略重叠比 / min 写 <= / max 写 >=），每条 rc=1 + 还原 sha256 逐字节一致
+  复用方回归：89 的 R4（check_rust_window_preflight.py 调本片被改工具）仍 GREEN rc=0（95 §回归）
+
+远端 tip（交付时）：origin = walgit = refs/heads/client-e2e-mongen-dense-rank（ls-remote 实拍见 patch body）
