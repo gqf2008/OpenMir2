@@ -1,0 +1,12 @@
+RNG_CONSUMER_GROUPS E:/tmp/m3cs-f1/csharp-rng-stream-f1-20261012.tsv side=csharp rows_total=5090894 kept=5090894 include_attack=True groups=10
+  GROUP   4028939  monster_ai
+  GROUP    500838  merchant
+  GROUP    410383  drop
+  GROUP     82840  construct
+  GROUP     63705  spawn
+  GROUP      3770  npc_ai
+  GROUP       352  attack
+  GROUP        60  revive
+  GROUP         6  homemap
+  GROUP         1  startup
+  GROUP_COVERAGE closed

@@ -39,6 +39,9 @@ import os
 import re
 import sys
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "rng-trace-probe"))
+import rng_ledger_diff as rld  # noqa: E402
+
 # 攻击路径站点（C# 分类用；命中即「有仲裁力的取数」）。与 oracle 攻击链一一对应。
 CSHARP_ATTACK_RE = re.compile(
     r"(PlayObject\.GetAttackPower@|BaseObject\._Attack@|PlayObject\.StruckDamage@|"
@@ -224,6 +227,19 @@ def cmd_diff(args):
     return 1
 
 
+def cmd_groups(args):
+    """Claim B（owner 2026-10-13 09:35）：按**站点组**汇总两侧非攻击 RNG 消费者。
+
+    口径与 `rng-trace-probe/rng_ledger_diff.py groups` **逐字节同源**（直接委派，不另抄一份）。
+    消费者组表 = `rng-trace-probe/consumer_groups.tsv`（唯一真源）。
+    """
+    ns = argparse.Namespace(
+        trace=args.trace, side=args.side, groups_table=args.groups_table,
+        no_attack=args.no_attack, require_closed=args.require_closed,
+        top=args.top, json=args.json)
+    return rld.cmd_groups(ns)
+
+
 def _write_trace(path, sites):
     with open(path, "w", encoding="utf-8", newline="\n") as fh:
         fh.write("1\tINJECT_OK\t42\t0\n")
@@ -331,6 +347,39 @@ def cmd_selftest(args):
           bool(CSHARP_ATTACK_RE.search(
               "M2Server.Actor.BaseObject.GetAttackPower@BaseObject.Base.cs:892")))
 
+    # ---- Claim B（owner 2026-10-13 09:35）：非攻击站点组口径（groups 子命令，与 rng_ledger_diff 同源）----
+    RW = r"crates\world\src\monai.rs:164"
+    RSP = r"crates\world\src\mongen.rs:624"
+    RDR = r"crates\formula\src\drop.rs:109"
+    RST = r"bins\game-svr\src\main.rs:2856"
+    tg = os.path.join(tmp, "grp.tsv")
+    _write_trace(tg, [RST, RSP, RW, RW, RDR])
+    out = _capture(lambda: cmd_groups(argparse.Namespace(
+        trace=tg, side="rust", groups_table="", no_attack=False, require_closed=True,
+        top=5, json="")))
+    check("groups-rust-rc", out[0] == 0, out[1][:300])
+    check("groups-rust-closed", "GROUP_COVERAGE closed" in out[1], out[1][:400])
+    check("groups-rust-monster_ai", "2  monster_ai" in out[1], out[1][:400])
+    # 改坏必红：未归类站点 ⇒ UNCLASSIFIED + require-closed rc=1
+    _write_trace(tg, [RST, "crates/foo.rs:1"])
+    out = _capture(lambda: cmd_groups(argparse.Namespace(
+        trace=tg, side="rust", groups_table="", no_attack=False, require_closed=True,
+        top=5, json="")))
+    check("groups-rust-drift-red", out[0] == 1 and "UNCLASSIFIED" in out[1], out[1][:400])
+    # reviewer-5 O-1（委派同一实现）：解析不了的行 ⇒ rows_dropped 计入且 require-closed 判红
+    tdrop = os.path.join(tmp, "grp-drop.tsv")
+    with open(tdrop, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("1\tINJECT_OK\t42\t0\n")
+        fh.write("SEED_PROBE 1 2 3 4 5 6 7 8\n")
+        fh.write("5\tNext(max)\t10\t0\t%s\n" % RW)
+        fh.write("oops\tNext(max)\t10\t0\tcrates/foo.rs:1\n")
+    out = _capture(lambda: cmd_groups(argparse.Namespace(
+        trace=tdrop, side="rust", groups_table="", no_attack=False, require_closed=True,
+        top=5, json="")))
+    check("groups-rust-rowcoverage-red",
+          out[0] == 1 and "rows_dropped=1" in out[1] and "ROW_COVERAGE DRIFT" in out[1],
+          out[1][:500])
+
     for name in os.listdir(tmp):
         try:
             os.remove(os.path.join(tmp, name))
@@ -340,7 +389,7 @@ def cmd_selftest(args):
     if failures:
         print("SELFTEST RED: %d/%d 未过: %s" % (len(failures), len(checks), ", ".join(failures)))
         return 1
-    print("SELFTEST GREEN: attack_rng_ledger selftest %d/%d（C#+Rust 两侧：同账本绿 + 多抽/少抽必红且定位 + 段数不等必红 + 未知 side fail-closed + F2 站点表同表：新站点分类为 attack / 非站点为 noise）"
+    print("SELFTEST GREEN: attack_rng_ledger selftest %d/%d（C#+Rust 两侧：同账本绿 + 多抽/少抽必红且定位 + 段数不等必红 + 未知 side fail-closed + F2 站点表同表：新站点分类为 attack / 非站点为 noise + Claim B 站点组：closed 绿 / 未归类必红 / 行级覆盖 rows_dropped fail-closed（O-1））"
           % (len(checks), len(checks)))
     return 0
 
@@ -387,6 +436,17 @@ def main(argv=None):
 
     p_st = sub.add_parser("selftest")
     p_st.set_defaults(func=cmd_selftest)
+
+    p_grp = sub.add_parser("groups")
+    p_grp.add_argument("trace")
+    p_grp.add_argument("--side", choices=("csharp", "rust"), default="csharp",
+                       help="站点表口径（缺省 csharp）")
+    p_grp.add_argument("--groups-table", default="")
+    p_grp.add_argument("--no-attack", action="store_true")
+    p_grp.add_argument("--require-closed", action="store_true")
+    p_grp.add_argument("--top", type=int, default=10)
+    p_grp.add_argument("--json", default="")
+    p_grp.set_defaults(func=cmd_groups)
 
     args = ap.parse_args(argv)
     return args.func(args)

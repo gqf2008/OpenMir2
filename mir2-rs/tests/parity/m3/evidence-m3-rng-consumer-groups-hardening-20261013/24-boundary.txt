@@ -1,0 +1,22 @@
+# boundary evidence — m3bag / openmir2-rng-consumer-structure-parity (O-1/O-2/O-3 hardening)
+# generated: 2026-10-13T01:49:13Z
+
+$ git rev-parse origin/master   # base
+d778ac30987d1f11bfad632ee56d5876a8c9dddd
+
+$ git diff --name-only origin/master -- src sql MirClient   # must be empty
+(rc=0)
+
+$ git diff --name-only origin/master -- mir2-rs/crates mir2-rs/bins   # must be empty
+(rc=0)
+
+$ git diff --name-only origin/master -- 'mir2-rs/**/*.rs'   # must be empty
+(rc=0)
+
+$ git diff --name-only origin/master -- mir2-rs/tests/parity/world   # must be empty
+(rc=0)
+
+$ git status --short -- mir2-rs/tests/parity/m3/rng-trace-probe mir2-rs/tests/parity/m3/attack_rng_ledger.py
+ M mir2-rs/tests/parity/m3/attack_rng_ledger.py
+ M mir2-rs/tests/parity/m3/rng-trace-probe/rng_consumer_groups.py
+ M mir2-rs/tests/parity/m3/rng-trace-probe/rng_ledger_diff.py

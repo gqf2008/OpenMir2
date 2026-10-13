@@ -1,0 +1,9 @@
+1	INJECT_OK	42	0
+SEED_PROBE 1 2 3 4 5 6 7 8
+1	Next(max)	10	1	M2Server.Actor.BaseObject..ctor@BaseObject.cs:438
+2	Next(max)	10	2	GameSrv.Word.WorldServer.CreateMonster@WorldServer.MonGen.cs:740
+3	Next(max)	10	3	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+4	Next(max)	10	4	M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427
+5	Next(max)	10	5	GameSrv.Word.WorldServer.MonGetRandomItems@WorldServer.MonGen.cs:451
+6	Next(max)	10	6	GameSrv.Npc.Merchant.Run@Merchant.cs:132
+7	Next(max)	10	7	GameSrv.Word.WorldServer.GetHomeInfo@WorldServer.cs:1392

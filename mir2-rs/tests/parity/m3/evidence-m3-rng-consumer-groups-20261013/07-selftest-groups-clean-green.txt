@@ -1,0 +1,10 @@
+$ python rng-trace-probe/rng_ledger_diff.py groups evidence-m3-rng-consumer-groups-20261013/fixtures/syn-csharp-clean.tsv --side csharp --require-closed
+RNG_CONSUMER_GROUPS evidence-m3-rng-consumer-groups-20261013/fixtures/syn-csharp-clean.tsv side=csharp rows_total=7 kept=7 include_attack=True groups=6
+  GROUP         2  monster_ai
+  GROUP         1  construct
+  GROUP         1  spawn
+  GROUP         1  drop
+  GROUP         1  merchant
+  GROUP         1  homemap
+  GROUP_COVERAGE closed
+rc=0

@@ -1,0 +1,9 @@
+1	INJECT_OK	42	0
+SEED_PROBE 1 2 3 4 5 6 7 8
+1	Next(max)	10	1	bins\game-svr\src\main.rs:2856
+2	Next(max)	10	2	bins\game-svr\src\homemap.rs:130
+3	Next(max)	10	3	crates\world\src\mongen.rs:624
+4	Next(max)	10	4	crates\world\src\monai.rs:164
+5	Next(max)	10	5	crates\world\src\monai.rs:164
+6	Next(max)	10	6	crates\formula\src\drop.rs:109
+7	Next(max)	10	7	crates\world\src\merchant.rs:1
