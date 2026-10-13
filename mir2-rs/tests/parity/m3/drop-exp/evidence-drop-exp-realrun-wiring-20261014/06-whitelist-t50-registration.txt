@@ -1,22 +1,16 @@
 06 —— whitelist T-50 登记（回应 merge lane 准入③：src/BotSrv/** 例外须有 T-* 登记）
 卡              = openmir2-m3-drop-exp-fixture-botsrv（本卡，openmir2-worker-11）
-base            = origin/master = 1cf88f6ad1d7d300ab31072bdfa025585c140bd3
-上一 head       = 540d312a44e03c6bf2818c4b7ccfc7f6ba7e8b26（reviewer-6 approve 9ec5fac7；merge lane 以准入③不过跳过，comment 2b7a2d877c）
+base（merge-base(master, head)）= origin/master = 10f0daa93ebeaf220581a3239cce6f7e7a522b85
+上一 head       = 540d312a44e03c6bf2818c4b7ccfc7f6ba7e8b26（reviewer-6 approve 9ec5fac7；merge lane 以准入③不过跳过，comment 2b7a2d877c / 96dec3f985）
 本 head         = 见 walgit patch 条目 --head（提交后冻结，= git rev-parse HEAD）
+本 tree         = 540d312a4 之上「新增 T-50 登记」+ 把 origin/master(10f0daa93) 合并进来（merge-tree 无冲突，已实跑四门禁见 07）
 
-=== 1) 为什么需要本行（merge lane comment 2b7a2d87 的准入③原文） ===
+=== 1) 为什么需要本行（merge lane comment 2b7a2d87 / 96dec3f985 的准入③原文） ===
 被审 head 原始 src/ 非空项 = 7 件（全 src/BotSrv/**），但 whitelist.md 无本卡 T-* 登记 ⇒ 按准入③ fail-closed 跳过。
 惯例：每个 M3 夹具卡各自新增 T-* 行登记本卡 src/BotSrv/** 文件清单（T-22/T-29/T-41/T-42/T-43/T-44/T-45/T-46 同）。
 
-=== 2) 本增量（whitelist.md，vs 上一 head 540d312a4） ===
-diff --git a/mir2-rs/tests/parity/whitelist.md b/mir2-rs/tests/parity/whitelist.md
-index 0514d791c..fed8a6903 100644
---- a/mir2-rs/tests/parity/whitelist.md
-+++ b/mir2-rs/tests/parity/whitelist.md
-@@ -181,6 +181,17 @@ M0 金标准验收状态（2026-10-10）：① 逐字节回放 0 差异、② 
- | T-34 | **夹具口径（本片交付）**：`mir2-rs/tests/parity/m3/drop-exp/` —— 比较器 `drop_exp_diff.py`（`diff` 多重集/逐槽位 + **不 i32 截断**；`selftest` 12/12 含 fail-closed 与改坏必红）＋ 入口 `run_drop_exp_pair.ps1`（`-SelfCheckNoStack` 12/12（含纯度门 5 项）、零端口；real-run fail-closed）。场景 `drop_exp_scenario.json`：`kills=100`、`seed=42`、`map=0137`、`monster=稻草人`、attacker pose `(17,20) dir=2`。 | 判据本体已完整、离线可复跑；**真机 100 杀等 owner 发窗口**，且需 T-31 的承接卡落地后才能产生可判原始件（BotSrv 驱动亦未建）。证据 `m3/evidence-m3-drop-exp-inventory-20261013/**`（含 `02` 外部改坏必红：把比较器截成 i32 ⇒ `i32-truncation-red` FAIL、rc=1）。 | 作者登记（worker-4）；**待独立 principal 复核** |
- | T-35 | **隔离口径（owner 有条件批准 → 离线纯度门已实现）**：M3②③ 的 R-1 门 `Test-M3MonGenEmpty`/`Test-M3MapNoAiConsumers` 只证「**地图自身**无消费者」，**不**等价于「全场景无 RNG 消费者」——本卡恰恰要刷怪。owner 裁决（comment `c78bd13f`，2026-10-13）：新口径必须写成「场景内除被测量路径（1 只 pin 怪 + 击杀→掉落/经验取数）外 **RNG 消费者数 = 0**」并给**逐消费者清单 + 计数**；**必须带纯度门**（同族 `attack_stream_gate.py`）+ **改坏必红**；**必须处理墙钟消费者**（`AnimalObject.Wondering`），二选一 —— 本夹具取 **(a) pin 抑制**；**不许**拿「离刷怪圈远」「图里 MonGen 零行」「只 spawn 一只」任何一条单独当充分条件。 | **已实现（离线部分）**：新 `drop-exp/drop_exp_purity_gate.py`（`gate`/`selftest`）+ 唯一真源 `drop-exp/drop_exp_consumers.tsv`（class = `measured`/`setup`/`wallclock`/`other`）；**认不出 / 缺 site 列 / 同 site 命中互斥 class / 该 side 无 `measured` 行 ⇒ 点名 RED/PREREQ，fail-closed 拒比**。`run_drop_exp_pair.ps1` 增 `-PurityOnly` 与无栈自检 ⑧–⑫（门 selftest **16/16** + 绿/墙钟红/未知红/待落地 PREREQ 四向），`-SelfCheckNoStack` **7/7 → 12/12**。表里只填 oracle/真机确认的行（C# `MonGetRandomItems` 掉落取数 = `measured`；`Wondering`/`RegenMonsters`/`Merchant.Run` = 墙钟须 0）；场景 spawn/构造抽数与 **Rust 侧站点**留到窗口期按**实测清单**补入（补之前即 `unknown` ⇒ 门判红，**拒给假绿**）。属**夹具/场景口径**（不是实现差异）：门保证「同种子 ⇒ 逐 k 相同」的前提**可判、可证伪**。**真机 100 杀两侧流水过门的读数待 owner 发窗口**。 | 作者登记（worker-4）；owner 有条件批准 `c78bd13f`；**待独立 principal 复核** |
- 
+=== 2) 本卡相对 base(origin/master) 的 whitelist 增量（= 仅 T-50 段；上下文行较长，只取 + 行与段头） ===
+$ git diff origin/master -- mir2-rs/tests/parity/whitelist.md | grep -E '^[+-]' | grep -vE '^[+-]{3} '
 +## M3④ 掉落/经验动作序列夹具（BotSrv）登记（卡片 `openmir2-m3-drop-exp-fixture-botsrv`，2026-10-14）
 +
 +> 本卡为 M3④ 的夹具承接片，交付 = `drop_exp_diff.py` 的 real-run 驱动器（前一夹具卡 `openmir2-m3-drop-exp-align` 的 T-34 只交了比较器骨架、未建 BotSrv 驱动）。
@@ -28,34 +22,27 @@ index 0514d791c..fed8a6903 100644
 +
 +> **编号连号**：T-49（M3⑨）→ **T-50**（M3④ 掉落/经验夹具，T-41..T-46 同族扩展）；T-48 仍按本文件末段说明留给「T-42 撞号去重」待 owner 路由。
 +
- ## M3⑩ 登记（邮件 / 拍卖；卡片 `openmir2-m3-mail-auction-align`，issue `4125cc72`，2026-10-13）
- 
- > 盘点报告：[`m3/M3⑩邮件拍卖现状盘点报告-20261013.md`](m3/M3⑩邮件拍卖现状盘点报告-20261013.md)。
+（- 行 = 0；本卡只新增，不删改既有行）
+$ git diff --numstat origin/master -- mir2-rs/tests/parity/whitelist.md
+11	0	mir2-rs/tests/parity/whitelist.md
 
 === 3) 机判：T-50 唯一（grep 计数 = 1） ===
 $ grep -c '^| T-50 |' mir2-rs/tests/parity/whitelist.md
 1
 
 === 4) 机判：编号唯一性审计（m3_whitelist_registry_audit.py audit；scope=T-36+） ===
-$ python -I mir2-rs/tests/parity/m3/m3_whitelist_registry_audit.py audit
+$ python -I mir2-rs/tests/parity/m3/m3_whitelist_registry_audit.py audit | head -1
 WHITELIST_REGISTRY scope=T-36+ entries=15 duplicates=[42] strict=False tokens=10
-  token T-41   <- 5 NPC / 商店  rows=[225] fixture=READY
-  token T-42   <- 6 任务  rows=[227, 240] fixture=READY
-  token T-43   <- 7 组队 / 交易  rows=[242] fixture=READY
-  token T-46   <- 8 公会 / 攻城  rows=[272] fixture=READY
-  token T-45   <- 9 英雄 / 宠物  rows=[285] fixture=READY
-  token T-44   <- 10 拍卖（元宝寄售 SellOff）  rows=[246] fixture=READY
-  FINDING DUPLICATE T-42 × 2 @ L227,L240（全局唯一编号约定被破坏）
-  FINDING TOKEN_MULTI 6 任务：token T-42 解析到 2 行（L227,240）
-WHITELIST_REGISTRY GREEN（无重复编号；夹具 token 解析唯一或不可用）
-⇒ 本增量把 entries 14→15，duplicates 仍 = [42]（预存在，非本片引入；T-48 已按 whitelist.md:283 预留「T-42 撞号去重」）。
+⇒ entries 14→15；duplicates=[42] 为**预存在**（M3⑤ T-42 vs M3⑥ T-42，非本片引入；T-48 已按 whitelist.md:283 预留「T-42 撞号去重」）。
+   T-50 不在 duplicates 里 ⇒ 本增量不新增重号（T-50 仅 1 行，见 §3）。
 
 === 5) 机判：冻结面（排除已登记例外 src/BotSrv/**，必须空） ===
-$ git diff --name-only 1cf88f6ad HEAD -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage ':!src/BotSrv'
+$ git diff --name-only origin/master HEAD -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage ':!src/BotSrv'
+(以上应空；下方直接给出无排除的原始面)
 (空)
 
-=== 6) 机判：src/ 原始非空项 = 7 件，全部落在 T-50 登记清单 ===
-$ git diff --name-only 1cf88f6ad HEAD -- src sql MirClient
+=== 6) 机判：src/ 原始非空项 = 7 件，与 T-50 行登记清单逐件一致 ===
+$ git diff --name-only origin/master HEAD -- src sql MirClient
 src/BotSrv/AppService.cs
 src/BotSrv/DropExpSeqSelfCheck.cs
 src/BotSrv/MShare.cs
@@ -63,13 +50,14 @@ src/BotSrv/Player/RobotPlayer.Operate.cs
 src/BotSrv/Player/RobotPlayer.cs
 src/BotSrv/Program.cs
 src/BotSrv/RobotOptions.cs
--- T-50 行内列出的 src/BotSrv 文件（whitelist.md） --
-src/BotSrv/ClientItemCodec.cs
-src/BotSrv/ClientItemCodec.cs
-src/BotSrv/AttackRoleSelfCheck.cs
-src/BotSrv/Player/RobotPlayer.cs
-src/BotSrv/Player/RobotPlayer.cs
+-- T-50 行登记的 src/BotSrv 清单（whitelist.md 原文） --
+src/BotSrv/**（`RobotOptions`/`MShare`/`AppService`/`Program.cs`/`Player/RobotPlayer.cs`/`Player/RobotPlayer.Operate.cs` + 新 `DropExpSeqSelfCheck.cs`）
+
+=== 7) 机判：净差量零 .rs ===
+$ git diff --name-only origin/master HEAD | grep -c '\.rs$'
+0
+⇒ 本卡不触碰任何 Rust 生产路径；src/ 仅 BotSrv（T-1 工具侧，不在 oracle 七进程内）。
 
 === 结论 ===
 T-50 登记了本卡 src/BotSrv/** 7 件（RobotOptions / MShare / AppService / Program / Player/RobotPlayer.cs / Player/RobotPlayer.Operate.cs + 新 DropExpSeqSelfCheck.cs）+ 默认关口径 + 证据指针；
-编号唯一（T-50 仅 1 行，审计 duplicates 不变）；冻结面排除 BotSrv 后为空。请 merge lane 据此重判准入③。
+编号唯一（T-50 仅 1 行；审计 duplicates 仍 = [42] 预存在）；冻结面排除 BotSrv 后为空。请 merge lane 据此重判准入③。

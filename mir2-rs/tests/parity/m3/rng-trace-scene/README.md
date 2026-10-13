@@ -272,12 +272,14 @@ python -I rng-trace-scene/check_evidence_counts.py selftest               # 7/7 
 锚点（宿主 AI 调用点 / 世界层 tick / oracle Wondering）。master 一直在动 ⇒ 行号会**静默漂移**：
 2026-10-13 实测 `bins/game-svr/src/main.rs` 因 ④-D 与 client-e2e 两次合并行长，
 `enable_production_monster_ai(&mut world)` 从 `:5229` 漂到 `:5440`，而文档仍写 `:5229`
-（承接卡按旧行号找代码会找错，且没人拦）。`check_anchors.py` 把「文档写的行号 == 该符号在**当前
+（承接卡按旧行号找代码会找错，且没人拦）；2026-10-14 合 `f51849a0b`/`1cf88f6ad`（⑧-10 + client-e2e
+AOI 诊断）后又漂到 `:5488`，由本片在**合并树的** `-SelfCheckNoStack` 里当场咬住（`ANCHOR_DRIFT`，
+文档已订正 `:5440`→`:5488`）——即“工具最先在用它的人身上生效”的实例。`check_anchors.py` 把「文档写的行号 == 该符号在**当前
 源码**里的**首个**匹配行」钉成 fail-closed 机判：
 
 ```sh
 python -I rng-trace-scene/check_anchors.py check      # GREEN：7/7 锚点保鲜
-python -I rng-trace-scene/check_anchors.py selftest   # 6/6 GREEN（含 5 条改坏必红）
+python -I rng-trace-scene/check_anchors.py selftest   # 10/10 GREEN（含 9 条改坏必红）
 ```
 
 - 锚点缺失 / **重复**（歧义）/ 文件缺失 / 符号缺失 / 行号漂移 ⇒ rc=1 **逐个点名**（漂移还报出正确的
@@ -293,6 +295,22 @@ python -I rng-trace-scene/check_anchors.py selftest   # 6/6 GREEN（含 5 条改
   `consumer_groups.tsv:35`（折叠理由行）纳入锚点表，`:52` → `:57` 已订正。
 - 已接入 `run_rng_trace_pair.ps1 -SelfCheckNoStack`（`anchors-freshness-selftest`）⇒ **自检项数
   由 29 增至 30**（本片之前的报告里的 `29/29` 是片时读数，不受影响）。
+
+#### 5.2.1 锚点覆盖面的两处同族漏报（2026-10-14 reviewer Minor 收口）
+
+reviewer-5（M-1）与 reviewer-6（M-1/M-2）就 `a173eba89` 那片各记了一条**同族非阻塞 Minor**：闭世界
+牙把「引用→锚点」的匹配写得太松、又把一类引用整个漏掉 ⇒ 仍有两处**静默漂移通道**。本片收口：
+
+| 漏报 | 旧口径为什么静默 | 新口径（fail-closed） |
+| --- | --- | --- |
+| **同名 basename 串台**：`foo/monai.rs:5` 被算 COVERED（`token.endswith("/" + literal)`），而 `_anchor_re` 的负向环视又排除 `/` ⇒ 两套口径都不管它 | `_anchor_covers` 用 `endswith` 判覆盖 | 带目录的引用必须与锚点的 `literal`/`path` **全等**；裸 basename 仅接受显式 `basename_ok=True` 的锚点 ⇒ `UNGUARDED_ANCHOR` 必红 |
+| **同行裸续引用**：`…consumer_groups.tsv:35`（折叠理由）、`:53`（spawn 行）里的 `:53` 不被 `_DOC_REF_RE` 认（它只认 `<path>.<ext>:<line>`） | 裸 `:NN` 完全不入判 | 同行裸续引用归到**同一物理行里前一个**完整引用，按锚点 `also`（`line`+`rx`）校验**行内容** ⇒ 未登记 `BARE_REF_UNDECLARED` / 越界 `BARE_REF_OUT_OF_RANGE` / 内容不符 `BARE_REF_DRIFT` |
+| **未识别扩展名**：`m.yaml:3` 之类非 6 个硬编码扩展名的引用被静默跳过 | `_DOC_REF_RE` 的扩展名硬枚举 | 扩展名白名单 `KNOWN_EXTS`，不在其中 ⇒ `UNKNOWN_REF_EXT` 必红（要扩充白名单得显式改代码+评审） |
+
+- 裸续引用的**归属口径**：只把「与同一物理行里前一个完整引用同行」的 `:NN` 当续引用；**同行无
+  前置完整引用**的 `:NN` 视为散文（文档里记历史值的 `:5229`/`:5440` 即此），不误伤。
+- 新增 4 条改坏必红（同名目录串台 / 裸续引用未登记 / 裸续**内容**漂移 / 未识别扩展名），连同原有
+  5 条共 **9 条**；`selftest` 总数 10/10。**不改** `run_rng_trace_pair.ps1` 的自检项数（仍 31）。
 
 ### 5.3 站点表 `oracle_ref` 可解析性机判（`rng_consumer_groups.py`）
 
@@ -323,7 +341,7 @@ cd mir2-rs/tests/parity/m3
 python -I rng-trace-probe/rng_ledger_diff.py selftest          # 37/37 GREEN（含 R-6 folded + DoD② scenario 声明）
 python -I rng-trace-scene/rng_scene_gate.py selftest           # 22/22 GREEN（含 scenario 声明 vs 代码 + 半给流水 PREREQ）
 python -I rng-trace-scene/check_evidence_counts.py selftest    # 7/7 GREEN（报告证据头行计数 vs 真实包：声明/真实）
-python -I rng-trace-scene/check_anchors.py selftest             # 6/6 GREEN（承接卡规格锚点保鲜；含行号漂移/缺失/歧义/未登记引用/折叠定义回退 5 条改坏必红）
+python -I rng-trace-scene/check_anchors.py selftest             # 10/10 GREEN（承接卡规格锚点保鲜；含 9 条改坏必红：行号漂移/缺失/歧义/未登记引用/折叠定义回退/同名目录串台/裸续引用未登记/裸续内容漂移/未识别扩展名）
 python -I rng-trace-probe/rng_consumer_groups.py selftest       # 15/15 GREEN（站点表 oracle_ref 可解析性；含坏路径/越界行 2 条改坏必红）
 python -I rng-trace-scene/check_window_batch.py selftest        # 13/13 GREEN（本卡 vs ④ 场景件：同图/同种子/同起点）
 

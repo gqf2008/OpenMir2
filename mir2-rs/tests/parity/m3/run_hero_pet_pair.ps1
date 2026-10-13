@@ -258,7 +258,8 @@ if ($SelfCheckNoStack) {
       $scOk = ($sc.canon -eq 'm3-hero-pet-v1') -and ($null -ne $case) -and
               (@($case.steps).Count -ge 1) -and ($sc.bots -eq 2) -and
               ($sc.master_role -eq 0) -and ($sc.peer_role -eq 1) -and
-              ($null -ne $sc.cases.summon_dragon) -and ($null -ne $sc.cases.cap_one)
+              ($null -ne $sc.cases.summon_dragon) -and ($null -ne $sc.cases.cap_one) -and
+              ($null -ne $sc.cases.make_clone)
     } catch { $scOk = $false }
     Add-Result 'scenario-fixed-input' $scOk 'canon/cases/summon_skeleton/summon_dragon/cap_one'
 
@@ -273,6 +274,27 @@ if ($SelfCheckNoStack) {
     $stOk = ($stRc -eq 0) -and $stMatch.Success -and ($stMatch.Groups[1].Value -eq $stMatch.Groups[2].Value)
     Add-Result 'comparator-selftest' $stOk ("rc=$stRc")
     if (-not $stOk) { Write-Output $stOut }
+
+    # ②′ 场景锚门（hero_pet_anchor_gate.py）：oracle_anchors 覆盖面 + 每条冻结 oracle 锚的
+    # 起点/终点行对冻结 src/（reviewer-5 M-1 锚行号收口；工具侧 BotSrv 只锚函数名，不入行号表）。
+    $AnchorGate = Join-Path $Here 'hero_pet_anchor_gate.py'
+    $ErrorActionPreference = 'Continue'
+    $agOut = (& python -I $AnchorGate check 2>&1 | Out-String)
+    $agRc = $LASTEXITCODE
+    $agOk = ($agRc -eq 0) -and ($agOut -match '(?m)^GREEN:')
+    Add-Result 'anchor-gate-check' $agOk ("rc=$agRc")
+    if (-not $agOk) { Write-Output $agOut }
+    $agsOut = (& python -I $AnchorGate selftest 2>&1 | Out-String)
+    $agsRc = $LASTEXITCODE
+    $agsOk = ($agsRc -eq 0) -and ($agsOut -match '(?m)^SELFTEST GREEN')
+    Add-Result 'anchor-gate-selftest' $agsOk ("rc=$agsRc")
+    if (-not $agsOk) { Write-Output $agsOut }
+    $agmOut = (& python -I $AnchorGate mutation 2>&1 | Out-String)
+    $agmRc = $LASTEXITCODE
+    $agmOk = ($agmRc -eq 0) -and ($agmOut -match '(?m)^MUTATION GREEN')
+    Add-Result 'anchor-gate-mutation-red' $agmOk ("rc=$agmRc")
+    if (-not $agmOk) { Write-Output $agmOut }
+    $ErrorActionPreference = $prevEap
 
     # ③ 逐项相同 ⇒ 绿（进程内集成，走生产 diff 函数）
     $csGood = Join-Path $tmpRoot 'cs-good.jsonl'
@@ -332,6 +354,14 @@ if ($SelfCheckNoStack) {
     Add-Result 'peer-scope-red' ((@($g.failed) -contains 'peer_hero_pet_scope_mismatch')) ("codes=" + (@($g.failed) -join ','))
     $g2 = Get-M3PeerHeroPetScopeGuard -PeerDir $legacyDir -LocalScope $peerBaseline.hero_pet_sequence
     Add-Result 'peer-scope-green' (@($g2.failed).Count -eq 0) ("codes=" + (@($g2.failed) -join ','))
+
+    # ⑧b peer 护栏 baseline 坏 JSON 分支（reviewer-6 M-1）：半写/截断的 baseline.json 必须落
+    # `peer_baseline_invalid` 结构化失败（fail-closed 不异常中断），不能静默当绿。
+    $badPeerDir = Join-Path $tmpRoot 'peer-bad'
+    New-Item -ItemType Directory -Force -Path $badPeerDir | Out-Null
+    Write-M3LfText -Path (Join-Path $badPeerDir 'baseline.json') -Text '{ "hero_pet_sequence": "on steps='
+    $g3 = Get-M3PeerHeroPetScopeGuard -PeerDir $badPeerDir -LocalScope $peerBaseline.hero_pet_sequence
+    Add-Result 'peer-baseline-invalid-red' ((@($g3.failed) -contains 'peer_baseline_invalid') -and (@($g3.messages).Count -ge 1)) ("codes=" + (@($g3.failed) -join ','))
 
     # ⑨ 入口护栏 fail-closed：一列空闲端口（无监听）⇒ 必须 PREREQ（exit 2），不能静默 GREEN。
     $portProbeOut = & powershell -ExecutionPolicy Bypass -File $PSCommandPath -Side rust -PortsCsv 17981,17982,17983,17984 -Go 2>&1
@@ -404,7 +434,7 @@ if ($SelfCheckNoStack) {
   $total = $script:PtPass + $script:PtFail.Count
   Write-Output ("SELFTEST ok={0}/{1} failures={2}" -f $script:PtPass, $total, ($script:PtFail -join ','))
   if ($script:PtFail.Count -gt 0) { exit 1 }
-  Write-Output 'GREEN: 无栈自检全绿（比较器 fail-closed + 改坏必红 + bot 集合 + 开关耦合两向 + peer 护栏两向 + BotSrv 生产函数 selftest + run_bots 计数 + 入口/DiffOnly/AssembleOnly/preflight/no-Go fail-closed + LF + 零端口）'
+  Write-Output 'GREEN: 无栈自检全绿（比较器 fail-closed + 改坏必红 + 场景锚门 check/selftest/mutation + bot 集合 + 开关耦合两向 + peer 护栏两向 + peer baseline-invalid + BotSrv 生产函数 selftest + run_bots 计数 + 入口/DiffOnly/AssembleOnly/preflight/no-Go fail-closed + LF + 零端口）'
   exit 0
 }
 

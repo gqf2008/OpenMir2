@@ -1,0 +1,28 @@
+### 本片净差量：git diff --name-only origin/master..HEAD（origin/master=1cf88f6ad；共 18 路径）
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-closure-20261014/11-boundary.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-closure-20261014/SHA256SUMS.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-coverage-20261014/01-before-old-tool-silent.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-coverage-20261014/02-before-new-tool-red.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-coverage-20261014/03-after-green.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-coverage-20261014/04-check-anchors-selftest.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-coverage-20261014/05-selfcheck-nostack.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-coverage-20261014/06-offline-regression.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-coverage-20261014/07-gates-fmt.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-coverage-20261014/08-gates-clippy.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-coverage-20261014/09-gates-workspace-test.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-coverage-20261014/10-gates-msgcodegen.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-coverage-20261014/11-boundary.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-coverage-20261014/README.md
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-coverage-20261014/SHA256SUMS.txt
+mir2-rs/tests/parity/m3/rng-trace-scene/DRIVER-CONTRACT.md
+mir2-rs/tests/parity/m3/rng-trace-scene/README.md
+mir2-rs/tests/parity/m3/rng-trace-scene/check_anchors.py
+
+--- 冻结面检查（src/ sql/ MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins；应为空）
+(空 = 冻结面零改动)
+
+--- *.rs 计数（应为 0）
+0
+
+> 注：本文件只声明「净差量路径 / 冻结面 / 零 .rs」；工作树 `git status` 不属边界主张，
+> 按上一片 reviewer-6 M-3 的口径**不再记入**（拍摄时的 in-flight 状态会误导读者）。
