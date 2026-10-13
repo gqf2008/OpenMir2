@@ -1,48 +1,43 @@
-# M3⑨ 英雄/宠物夹具骨架 —— 写集边界（base = origin/master 0dde01b7）
-# 生成：git diff --name-status origin/master HEAD（本片提交后）；证据包内文件单列。
+## base = origin/master 15510a47  head = 2ffc350f
 
-## 1) 允许写集内的改动/新增（卡 write_set = mir2-rs/tests/parity/m3/** + src/BotSrv/**）
+## git diff --name-status origin/master HEAD -- src sql MirClient mir2-rs/crates mir2-rs/bins
 M	src/BotSrv/AppService.cs
+A	src/BotSrv/HeroPetSeqSelfCheck.cs
 M	src/BotSrv/MShare.cs
 M	src/BotSrv/Player/RobotPlayer.Operate.cs
 M	src/BotSrv/Player/RobotPlayer.cs
 M	src/BotSrv/Program.cs
 M	src/BotSrv/RobotOptions.cs
-A	src/BotSrv/HeroPetSeqSelfCheck.cs
-M	mir2-rs/tests/parity/m3/gate_guards.ps1
-M	mir2-rs/tests/parity/m3/run_pair.ps1
-A	mir2-rs/tests/parity/m3/hero_pet_diff.py
-A	mir2-rs/tests/parity/m3/hero_pet_scenario.json
-A	mir2-rs/tests/parity/m3/run_hero_pet_pair.ps1
-A	mir2-rs/tests/parity/m3/M3⑨英雄宠物动作序列夹具骨架报告-20261013.md
-M	mir2-rs/tests/parity/whitelist.md
-M	tools/botload/run_bots.ps1
 
-## 2) 证据包 mir2-rs/tests/parity/m3/evidence-m3-hero-pet-fixture-botsrv-20261013/
-A	00-commands.txt
-A	01-heropet-diff-selftest.txt
-A	02-run-heropet-pair-selfcheck.txt
-A	03-botsrv-heropetseq-selftest.txt
-A	04-run-bots-selfcheck.txt
-A	05-selftest-gate.txt
-A	06-reg-run-npc-shop-selfcheck.txt
-A	07-reg-run-bag-equip-selfcheck.txt
-A	10-external-break-comparator.txt
-A	11-gate-fmt.txt
-A	12-gate-clippy.txt
-A	13-gate-test.txt
-A	14-gate-msgcodegen.txt
-A	15-boundary.txt
-A	README.md
-A	SHA256SUMS.txt
-
-## 3) 边界断言（必须为空）
-- git diff --name-status origin/master HEAD -- src sql MirClient   （除本片 src/BotSrv/** 外，sql/ 与 MirClient 零改动）
-- git diff --name-status origin/master HEAD -- mir2-rs/crates mir2-rs/bins   （零改动；宝宝召唤/生命周期属 ⑨-2/⑨-3 承接卡）
-- git diff --name-status origin/master HEAD -- mir2-rs/tests/parity/world mir2-rs/tests/parity/m3/drop-exp   （零改动）
-
-## 4) 结论
-- 本片 = 夹具骨架（比较器 + 入口 + 无栈自检 + BotSrv 最小驱动）+ T-45 登记；零 `.rs` 生产逻辑改动、
-  零 `crates/**`/`bins/**`/`sql/**`/`MirClient/**` 改动。
-- src/BotSrv/** 属已登记工具侧例外（T-45；同 T-29/T-41 家族），默认关 ⇒ 不新增任何发送/日志、原路径逐字节不变。
-- 真机两侧同序列跑要窗口 + ⑨-2/⑨-3/⑨-4 + 时钟注入；本片未起栈、未占端口。
+## git diff --name-only origin/master（全量）
+"mir2-rs/tests/parity/m3/M3\342\221\250\350\213\261\351\233\204\345\256\240\347\211\251\345\212\250\344\275\234\345\272\217\345\210\227\345\244\271\345\205\267\351\252\250\346\236\266\346\212\245\345\221\212-20261013.md"
+mir2-rs/tests/parity/m3/evidence-m3-hero-pet-fixture-botsrv-20261013/00-commands.txt
+mir2-rs/tests/parity/m3/evidence-m3-hero-pet-fixture-botsrv-20261013/01-heropet-diff-selftest.txt
+mir2-rs/tests/parity/m3/evidence-m3-hero-pet-fixture-botsrv-20261013/02-run-heropet-pair-selfcheck.txt
+mir2-rs/tests/parity/m3/evidence-m3-hero-pet-fixture-botsrv-20261013/03-botsrv-heropetseq-selftest.txt
+mir2-rs/tests/parity/m3/evidence-m3-hero-pet-fixture-botsrv-20261013/04-run-bots-selfcheck.txt
+mir2-rs/tests/parity/m3/evidence-m3-hero-pet-fixture-botsrv-20261013/05-selftest-gate.txt
+mir2-rs/tests/parity/m3/evidence-m3-hero-pet-fixture-botsrv-20261013/06-reg-run-npc-shop-selfcheck.txt
+mir2-rs/tests/parity/m3/evidence-m3-hero-pet-fixture-botsrv-20261013/07-reg-run-bag-equip-selfcheck.txt
+mir2-rs/tests/parity/m3/evidence-m3-hero-pet-fixture-botsrv-20261013/10-external-break-comparator.txt
+mir2-rs/tests/parity/m3/evidence-m3-hero-pet-fixture-botsrv-20261013/11-gate-fmt.txt
+mir2-rs/tests/parity/m3/evidence-m3-hero-pet-fixture-botsrv-20261013/12-gate-clippy.txt
+mir2-rs/tests/parity/m3/evidence-m3-hero-pet-fixture-botsrv-20261013/13-gate-test.txt
+mir2-rs/tests/parity/m3/evidence-m3-hero-pet-fixture-botsrv-20261013/14-gate-msgcodegen.txt
+mir2-rs/tests/parity/m3/evidence-m3-hero-pet-fixture-botsrv-20261013/15-boundary.txt
+mir2-rs/tests/parity/m3/evidence-m3-hero-pet-fixture-botsrv-20261013/README.md
+mir2-rs/tests/parity/m3/evidence-m3-hero-pet-fixture-botsrv-20261013/SHA256SUMS.txt
+mir2-rs/tests/parity/m3/gate_guards.ps1
+mir2-rs/tests/parity/m3/hero_pet_diff.py
+mir2-rs/tests/parity/m3/hero_pet_scenario.json
+mir2-rs/tests/parity/m3/run_hero_pet_pair.ps1
+mir2-rs/tests/parity/m3/run_pair.ps1
+mir2-rs/tests/parity/whitelist.md
+src/BotSrv/AppService.cs
+src/BotSrv/HeroPetSeqSelfCheck.cs
+src/BotSrv/MShare.cs
+src/BotSrv/Player/RobotPlayer.Operate.cs
+src/BotSrv/Player/RobotPlayer.cs
+src/BotSrv/Program.cs
+src/BotSrv/RobotOptions.cs
+tools/botload/run_bots.ps1

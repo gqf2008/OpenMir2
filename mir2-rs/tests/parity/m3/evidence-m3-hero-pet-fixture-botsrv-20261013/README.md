@@ -2,7 +2,13 @@
 
 卡 `openmir2-m3-hero-pet-fixture-botsrv`（父卡 `openmir2-m3-hero-pet-align`）；报告
 [`../M3⑨英雄宠物动作序列夹具骨架报告-20261013.md`](../M3⑨英雄宠物动作序列夹具骨架报告-20261013.md)。
-分支 `worktree-m3-hero-pet-fixture-botsrv`；base `origin/master` `0dde01b7`。
+分支 `worktree-m3-hero-pet-fixture-botsrv`；base `origin/master` `15510a47`；head `2ffc350f`。
+
+> **重交（解冲突）**：原 head `e4d5fbb7` 基于 `0dde01b7`，与已合入 master 的 ⑥-5/⑦-5/⑩-3 在 9 处共享文件
+> （`src/BotSrv/**` + `tools/botload/run_bots.ps1` + `m3/{run_pair,gate_guards}.ps1`）真冲突。已 `git merge origin/master`，
+> 按**并集**解（保留 master 的 Quest/PairTrade/SellOff 驱动与管线，叠加本片 HeroPet；条件式 save-settle 门/
+> Green 判据/`ValidateSet`/PROGRESS·GREEN 消息合并两侧项），BotSrv `dotnet build` 0 error、四副入口 PowerShell 解析 PASS，
+> 并在合并树上**重跑本目录全部读数**。旧 approve 随 head 变化失效。
 
 | 件 | 内容 | 期望 |
 | --- | --- | --- |
@@ -17,7 +23,7 @@
 | `10-external-break-comparator.txt` | 外部改坏：去掉 `branch` 比较 | `FAIL mutate-branch-red` + `SELFTEST ok=35/36` rc=1 |
 | `11-gate-fmt.txt` | `cargo fmt --all -- --check` | `FMT_RC=0` |
 | `12-gate-clippy.txt` | `cargo clippy --offline --workspace --all-targets -- -D warnings` | `CLIPPY_RC=0` |
-| `13-gate-test.txt` | `cargo test --offline --workspace --no-fail-fast` | 93 suites / 853 passed / 0 failed / 21 ignored，`TEST_RC=0` |
+| `13-gate-test.txt` | `cargo test --offline --workspace --no-fail-fast` | 94 suites / 878 passed / 0 failed / 21 ignored，`TEST_RC=0` |
 | `14-gate-msgcodegen.txt` | `cargo run -p msgcodegen -- --check` | 604 条，`MSGCODEGEN_RC=0` |
 | `15-boundary.txt` | 写集边界（`src/sql/MirClient` + `crates/bins` 零改动） | 见文件 |
 | `SHA256SUMS.txt` | 本目录全部文件（仓库 LF/git-blob 口径） | `--check-extra` GREEN；`eolcheck` GREEN |

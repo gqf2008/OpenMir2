@@ -1,5 +1,4 @@
-=== selftest_gate.ps1 -SelfCheckNoStack ===
-M3 门禁护栏自检  evidence=E:\tmp\openmir2-m3gs\selftest-20261013-112951
+M3 门禁护栏自检  evidence=E:\tmp\openmir2-m3gs\selftest-20261013-123609
 ③ Format-M3Scenario（两侧 baseline.json 的 fixed_new_chr 同形态）
   [OK  ] scenario/固定=Job=1 Hair=2 Sex=0                       
   [OK  ] scenario/默认=(off)                                    
@@ -50,11 +49,11 @@ M3 门禁护栏自检  evidence=E:\tmp\openmir2-m3gs\selftest-20261013-112951
   [OK  ] pin/改坏 a.IncHealth=红                                 violations=[列不存在: a.IncHealth（characters_ablity 无此列）;列不存在: a.IncSpell（characters_ablity 无此列）]
 ⑧ Test-M3SeedInjected（两侧种子注入证据；不连库；owner 2026-10-12 11:55 F-C）
   [OK  ] seed/csharp INJECT_OK 42=绿                           
-  [OK  ] seed/csharp 无 INJECT_OK=红                            reason=C# 种子日志无 INJECT_OK 行（hooked GameSvr 未注入种子？）: E:\tmp\openmir2-m3gs\selftest-20261013-112951\work\f-c-cs-bad.tsv
+  [OK  ] seed/csharp 无 INJECT_OK=红                            reason=C# 种子日志无 INJECT_OK 行（hooked GameSvr 未注入种子？）: E:\tmp\openmir2-m3gs\selftest-20261013-123609\work\f-c-cs-bad.tsv
   [OK  ] seed/csharp 种子 7!=42=红                               reason=C# 注入种子 7 != 期望 42
   [OK  ] seed/csharp 空路径=红(fail-closed)                       reason=未提供种子日志路径（-CsharpSeedLog / $env:MIR2_RNG_LOG 或 -RustSeedLog）
   [OK  ] seed/rust SEED_PROBE 42=绿                            
-  [OK  ] seed/rust 无 SEED_PROBE=红                             reason=Rust 启动日志无 SEED_PROBE 行（game-svr 未注入 MIR2_RNG_SEED？）: E:\tmp\openmir2-m3gs\selftest-20261013-112951\work\f-c-rs-bad.log
+  [OK  ] seed/rust 无 SEED_PROBE=红                             reason=Rust 启动日志无 SEED_PROBE 行（game-svr 未注入 MIR2_RNG_SEED？）: E:\tmp\openmir2-m3gs\selftest-20261013-123609\work\f-c-rs-bad.log
   [OK  ] seed/rust 启动器行 7!=42=红                               reason=RUST_SEED_INJECTED=7 != 期望 42
 ⑨ Get-M3PinAttemptsGuard / Test-M3PinAttemptsComparable（pin 重试账本；informational，owner 19:20）
   [OK  ] pinacct/informational 基准常量 >= 1                      expected=2
@@ -76,7 +75,6 @@ M3 门禁护栏自检  evidence=E:\tmp\openmir2-m3gs\selftest-20261013-112951
   [OK  ] prewarm/日志缺失=红(fail-closed)                          reason=log_missing
   [OK  ] prewarm/日志存在但零 marker=红(fail-closed；M-1)             reason=prewarm_marker_missing markers=[] positive=[]
   [OK  ] prewarm/仅有建角失败串=红(fail-closed；N-1)                   reason=prewarm_char_create_failed positive=[] failures=[创建角色名称已被其他人使用]
-SELFTEST_REPORT E:\tmp\openmir2-m3gs\selftest-20261013-112951\selftest.json
+SELFTEST_REPORT E:\tmp\openmir2-m3gs\selftest-20261013-123609\selftest.json
 SUMMARY total=65 failed=0
 GREEN: 十条机判护栏的判红/判绿口径都经构造输入验证
-rc=0

@@ -3,7 +3,12 @@
 卡片：openmir2-m3-hero-pet-fixture-botsrv（M3 逐系统对齐 ⑨ 的承接卡 5；父卡 openmir2-m3-hero-pet-align）
 worktree：E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3cs
 branch：worktree-m3-hero-pet-fixture-botsrv
-编译器/解释器：Rust（CARGO_TARGET_DIR=E:/tmp/m3cs-hp-target，--offline）；Python 3.12（-I）；.NET 8；Windows PowerShell 5
+base = origin/master 15510a47；head = 2ffc350f
+本片为**解冲突重交**：reviewer-5 root comment 指出本分支基于 0dde01b7，与已合入 master 的
+⑥-5/⑦-5/⑩-3 在 9 处共享 BotSrv/管线文件真冲突 ⇒ 已 `git merge origin/master` 按并集解
+（保留 master 的 Quest/PairTrade/SellOff 驱动与管线，叠加本片 HeroPet；条件式合并两侧项），
+并在合并树上重跑本目录全部读数。
+编译器/解释器：Rust（CARGO_TARGET_DIR=C:/tmp/m3cs-hp-target，--offline）；Python 3.12（-I）；.NET 8；Windows PowerShell 5
 
 ## 0) 交付件（本片新增/改动）
 - 新增：mir2-rs/tests/parity/m3/hero_pet_diff.py（比较器；assemble/diff/selftest）

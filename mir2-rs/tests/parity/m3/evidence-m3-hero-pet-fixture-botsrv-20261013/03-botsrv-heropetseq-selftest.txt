@@ -1,4 +1,3 @@
-=== BotSrv --selftest-heropet ===
 HEROPETSEQ PASS parse-order-and-filter got=[x|summon|17,a|observe|,b|attack|2,b|wait|]
 HEROPETSEQ PASS parse-empty empty
 HEROPETSEQ PASS parse-null null
@@ -35,4 +34,3 @@ HEROPETSEQ PASS branch-unclassified 999
 HEROPETSEQ PASS branch-fail-priority ok-then-fail
 HEROPETSEQ PASS branch-no-prefix-collision 170
 HEROPETSEQ SELFTEST GREEN
-rc=0

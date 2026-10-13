@@ -1,12 +1,11 @@
-=== comparator selftest (36/36) ===
 STATS records=2 bots=2 frames=0 texts=0 slaves=0 ok=2 fail=0
-CROSS csharp=C:\Users\gxh\AppData\Local\Temp\heropet-selftest-6ux3w6lu\csharp.jsonl rust=C:\Users\gxh\AppData\Local\Temp\heropet-selftest-6ux3w6lu\rust.jsonl
+CROSS csharp=C:\Users\gxh\AppData\Local\Temp\heropet-selftest-dgnm9j77\csharp.jsonl rust=C:\Users\gxh\AppData\Local\Temp\heropet-selftest-dgnm9j77\rust.jsonl
 HEROPET GREEN diff=0
 HEROPET bot=m3hp0 k=0 RED op csharp='summon' rust='observe'
 STATS records=2 bots=2 frames=0 texts=0 slaves=0 ok=2 fail=0
-CROSS csharp=C:\Users\gxh\AppData\Local\Temp\heropet-selftest-6ux3w6lu\csharp.jsonl rust=C:\Users\gxh\AppData\Local\Temp\heropet-selftest-6ux3w6lu\rust.jsonl
+CROSS csharp=C:\Users\gxh\AppData\Local\Temp\heropet-selftest-dgnm9j77\csharp.jsonl rust=C:\Users\gxh\AppData\Local\Temp\heropet-selftest-dgnm9j77\rust.jsonl
 HEROPET RED diff=1
-RED: PREREQ_RED 缺文件: C:\Users\gxh\AppData\Local\Temp\heropet-selftest-6ux3w6lu\nope.jsonl
+RED: PREREQ_RED 缺文件: C:\Users\gxh\AppData\Local\Temp\heropet-selftest-dgnm9j77\nope.jsonl
 ok identical-green
 ok mutate-op-red
 ok mutate-role-red
@@ -44,4 +43,3 @@ ok cli-diff-green
 ok cli-diff-red
 ok cli-diff-missing-prereq
 SELFTEST ok=36/36
-rc=0
