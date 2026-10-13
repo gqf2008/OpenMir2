@@ -18,7 +18,7 @@
                           同时验证过，先只作信息行；窗口验证后再按需开启作为强判据。
 
 退出码：`0`=GREEN / `1`=RED / `2`=PREREQ（缺文件或不可解析；**绝不静默通过**）。
-`--selftest` 不依赖外部件：造合成 capture 自证 none/visible/计数/missing/recog 等 8 条口径。
+`--selftest` 不依赖外部件：造合成 capture 自证 none/visible/计数/missing/recog/相邻配对等 11 条口径。
 """
 from __future__ import annotations
 
