@@ -1,0 +1,42 @@
+== ⑥-3 第①片 request_changes 返工（reviewer-5 b164fa4835fdf645452f50ab927108f4fedfc197）==
+
+reviewed_head = 8c158d26506df0f9f9330b9572d48fa4b434cfd8（第①片）；本返工并入本 head（stacked）。
+
+---- F-1（important / blocking）：NpcPlayer 三组任务位图未按 oracle 位语义、未复用 QuestBitmap ----
+处置：**直接复用本仓已合入的** `crates/script::engine::quest_state::QuestBitmap`
+      （逐行 oracle `PlayObject.cs:3966-4110`，真身向量 tests/parity/m3/quest-state-probe）：
+  - `NpcPlayer.quest_flag/quest_unit/quest_unit_open` 字段类型：[u8;512]/HashMap → `QuestBitmap`（各 byte[128]）；
+  - `quest_flag_status` = `quest_flag.get(flag)`（`nFlag-=1` + `128>>n`，返回 0/1）；
+  - `set_quest_flag_status` = `quest_flag.set(flag,value)`；
+  - **补覆写** `quest_unit_status` / `quest_unit_open_status` / `set_quest_unit_status` / `set_quest_unit_open_status`
+    （此前回落到 engine trait 的恒 0 默认实现 = reviewer 复现的「set 后 check 恒 0」缺口）。
+  - M-1（文档）：字段注释 `byte[512]` → `byte[128]`（`PlayObject.cs:1038-1040`）。
+症状（reviewer 两条 probe 的等价断言）现在被新用例锁死：
+  `npc::tests::quest_flag_and_unit_use_oracle_bit_semantics`
+    set(8,1) ⇒ quest_flag.as_bytes()[0]==0x01（oracle 位 `128>>7`）；get(8)==1；set(8,0)⇒0；
+    flag 0 / -1 ⇒ no-op/0；QuestUnit/QuestUnitOpen 同形（各 [0]==0x01、status==1）。
+
+改坏必红（原始读数）：
+  [F-1-RC] 把 `set_quest_unit_status` 改成 no-op（复现原缺陷）：
+    $ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test -p game-svr --offline --lib npc::tests::quest_flag_and_unit
+    ... assertion `left == right` failed  left: 0  right: 1
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 123 filtered out; finished in 0.00s
+    ⇒ 还原（npc.rs 与备份 diff 空）后复跑该用例 ok。
+
+---- F-2（important）：merchant_say_wire 冒充「oracle 线上字节」（实际只做 GBK 原字节）----
+处置：改名 `merchant_say_wire` → **`merchant_say_gbk`**，doc 明确「GBK 原文 ≠ 线上字节」；
+      线上尾 = `SendSocket(ClientMsg, EDCode.EncodeString(processMsg.Msg))`（`PlayObject.Message.cs:1724`）
+      ⇒ `crates/protocol::edcode::encode`（6-bit，`EncryptUtil.cs:108-140`），由
+      `smframe::sm_merchantsay`（第②片）与 `sm_hear` 同结构地做编码。
+牙齿：`npc::tests::merchant_say_text_and_gbk_bytes` 末尾断言
+      `edcode::encode(&gbk) != gbk`（钉「线上尾不是裸 GBK」）；
+      `smframe::tests::sm_merchantsay_header_and_tail` 钉尾 = `edcode::encode(msg)`。
+
+---- M-2 / M-3（登记，不留静默缺口）----
+M-2 已落：第①片 README §5 新增 F-1/F-2 返工说明 + 本文件索引。
+M-3 已落：第①片 README §5 登记适配器近似（give_item 不合并堆叠 / bag_count=items.len() /
+          worn/items 调用方填 / HostNpc 的 map_name 恒 "0"、curr_x/y 恒 0 的占位语义）。
+
+---- 备注 ----
+本返工只动 `bins/game-svr/src/npc.rs`（+ 第①片 README 的登记段）与第②片接线（main.rs 的
+QuestBitmap 适配）；`crates/script` 零改动（只消费已合入的 `QuestBitmap`）。

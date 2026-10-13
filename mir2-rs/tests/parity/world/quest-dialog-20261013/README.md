@@ -11,7 +11,8 @@
 - `mir2-rs/bins/game-svr/src/lib.rs`：+`pub mod npc;`。
 - `mir2-rs/bins/game-svr/src/npc.rs`（新）：`NpcHost`（装载 + `@Login`/`@StdModeFunc<N>` 入口）、
   `NpcPlayer`（`ScriptPlayer` 宿主适配，字段由第②片用 `SessionGround`/`World` 填充）、
-  `HostNpc`（`ScriptNpc` 适配）、`merchant_say_text`/`merchant_say_wire`（说词行 + GBK 原文）。
+  `HostNpc`（`ScriptNpc` 适配）、`merchant_say_text`/`merchant_say_gbk`（说词行 + GBK 原文；
+  **F-2 订正**：GBK 原文 ≠ 线上字节，线上尾 = `edcode::encode`）。
 
 ## 2. oracle 锚（详见 `01-oracle-anchors.txt`）
 
@@ -23,7 +24,7 @@
 ## 3. 判据（构造级，全离线）
 
 `03-unit-tests.txt`：`cargo test -p game-svr --lib npc::` **7 passed / 0 failed**：
-1. `merchant_say_text_and_wire` —— 行格式 `ChrName + '/' + sMsg` + 「欢迎」的 GBK 字节。
+1. `merchant_say_text_and_gbk_bytes` —— 行格式 `ChrName + '/' + sMsg` + 「欢迎」的 GBK 字节。
 2. `run_login_emits_say_with_chrname_prefix` —— `@Login` 经 `QManage` 产说词（前缀 = NPC 名，非优先）。
 3. `run_std_mode_func_uses_numeric_label` —— `@StdModeFunc7` 命中、未定义 label 无说词。
 4. `send_msg_args_are_recorded_in_order` —— `SendMsg` 五参实参保序（第②片落帧的输入）。
@@ -41,6 +42,18 @@
 
 ## 5. 未接（登记，第②片）
 
+- **F-1（reviewer-5 `b164fa48`，阻塞）已返工**：`NpcPlayer` 的三组任务位图改用本仓已合入的
+  `crates/script::engine::quest_state::QuestBitmap`（oracle `PlayObject.cs:3966-4110` 的
+  `nFlag-=1` + `128>>n` MSB-first 位语义；数组 128），并补上 `quest_unit_status`/
+  `quest_unit_open_status` 覆写；订正 `quest_flag` 由 `[u8;512]` → `[u8;128]`（M-1）。
+  新用例 `npc::tests::quest_flag_and_unit_use_oracle_bit_semantics` + 返工说明见
+  `../quest-dialog-wire-20261013/07-f1-f2-rework.txt`。
+- **F-2（reviewer-5，重要）已订正**：`merchant_say_wire` 改名 `merchant_say_gbk`，doc/用例明确
+  「GBK 原文 ≠ 线上字节」；线上尾 = `edcode::encode`（`PlayObject.Message.cs:1724`），由第②片的
+  `smframe::sm_merchantsay` 负责。
+- **M-3（适配器近似，登记不静默）**：`give_item` 只 push 不入堆叠合并、`bag_count = items.len()`、
+  `worn`/`items` 由调用方填、`map_name` 在 `HostNpc` 恒 `"0"`、`curr_x/y` 恒 0 —— 这些都是
+  「隐藏 NPC 不经地图」的占位，接真 `SessionGround`/`World`（第②片）前不得被下游当权威值用。
 - `playerActor.GetScriptLabel(sMsg)`（`ScriptEngine.cs:990`）未建模。
 - `main.rs`：进世界完成点调 `run_login` + 会话态 → `NpcPlayer` 快照/回写 + `RM_MERCHANTSAY` 经
   `MsgQueue` **出队序**落 `SM_MERCHANTSAY(643)` 帧（`SM_*` 编码层可复用 `downlink`/`smframe`）。

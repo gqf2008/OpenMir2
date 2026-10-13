@@ -51,3 +51,17 @@
 ## 窗口 / 端口
 
 - **未起栈 / 未占端口**（判据全在构造级）。收工十端口保持开工前状态（仅共享 3306）。
+
+## 第①片 request_changes 返工（reviewer-5 `b164fa48`）
+
+本 head **同时收口**第①片（`8c158d26`）的 blocking/important findings（详见 `07-f1-f2-rework.txt`）：
+
+- **F-1（blocking）**：`NpcPlayer` 三组任务位图改用本仓已合入的
+  `crates/script::engine::quest_state::QuestBitmap`（oracle `PlayObject.cs:3966-4110` 的 `nFlag-=1` +
+  `128>>n` MSB-first），补 `quest_unit_status`/`quest_unit_open_status` 覆写，数组 512→128（M-1）。
+  新用例 `npc::tests::quest_flag_and_unit_use_oracle_bit_semantics` + 改坏必红 RC-F1（`04-redchecks.txt`）。
+- **F-2（important）**：`merchant_say_wire` → `merchant_say_gbk`，doc/用例明确「GBK 原文 ≠ 线上字节」；
+  线上尾 = `edcode::encode`（由本片 `smframe::sm_merchant say` 做，`sm_merchantsay_header_and_tail` 锁）。
+- **M-2 / M-3**：登记落第①片 README §5（清单见 `07-f1-f2-rework.txt`）。
+
+⇒ 本片 `04-redchecks.txt` 共 **6 条**改坏必红（RC-A..E + RC-F1），`05-gates.txt` 为返工后的四门禁复跑。

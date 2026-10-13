@@ -1190,8 +1190,12 @@ fn npc_player_from<'r>(
         }
     }
     if let Some(qf) = quest_flag {
-        let n = qf.len().min(p.quest_flag.len());
-        p.quest_flag[..n].copy_from_slice(&qf[..n]);
+        // oracle 登录：`playObject.QuestFlag = humData.QuestFlag`（`WorldServer.cs:1160`）——
+        // 记录里的 128 字节**原位**载入（位语义在 `QuestBitmap` 内，不在载入时拆位）。
+        let mut arr = [0u8; mir2_script::engine::quest_state::QUEST_ARRAY_LEN];
+        let n = qf.len().min(arr.len());
+        arr[..n].copy_from_slice(&qf[..n]);
+        p.quest_flag = mir2_script::engine::quest_state::QuestBitmap::from_bytes(arr);
     }
     p
 }
@@ -1210,7 +1214,7 @@ fn emit_npc_says(
     let mut sent = 0usize;
     for s in game_svr::npc::dequeue_order(says) {
         let recog = if s.priority { player_actor_id } else { 0 };
-        let wire = game_svr::npc::merchant_say_wire(&s.npc_name, &s.raw_msg);
+        let wire = game_svr::npc::merchant_say_gbk(&s.npc_name, &s.raw_msg);
         let body = smframe::sm_merchantsay(recog, 0, 0, &wire);
         let _ = tx.send(SimToGate::SendFrame { socket, body });
         sent += 1;
@@ -4573,9 +4577,9 @@ fn sim_loop(
                                                                     {
                                                                         let n = qf
                                                                             .len()
-                                                                            .min(player.quest_flag.len());
+                                                                            .min(player.quest_flag.as_bytes().len());
                                                                         qf[..n].copy_from_slice(
-                                                                            &player.quest_flag[..n],
+                                                                            &player.quest_flag.as_bytes()[..n],
                                                                         );
                                                                     }
                                                                 }
@@ -5923,7 +5927,7 @@ mod tests {
         assert_eq!(p.map_name, "0");
         assert_eq!(p.level, 3);
         assert_eq!(p.gold, 100);
-        assert_eq!(&p.quest_flag[..3], &[7, 8, 9]);
+        assert_eq!(&p.quest_flag.as_bytes()[..3], &[7, 8, 9]);
         assert!(
             p.items.is_empty(),
             "空目录 ⇒ `GetStdItem == null` 分支：不入包（不造名）"

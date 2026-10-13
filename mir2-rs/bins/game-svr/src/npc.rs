@@ -42,6 +42,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use mir2_envir::mapquest::QuestNpcRecord;
+use mir2_script::engine::quest_state::QuestBitmap;
 use mir2_script::engine::{Engine, ScriptNpc, ScriptPlayer};
 use mir2_script::{LocalFs, ScriptInfo, ScriptParsers};
 
@@ -51,9 +52,15 @@ pub fn merchant_say_text(chr_name: &str, msg: &str) -> String {
     format!("{chr_name}/{msg}")
 }
 
-/// 说词行 → oracle 线上字节。协议层一律原始字节（GBK），本层**不**做 UTF-8 转换。
+/// 说词行的 **GBK 原文**（`normNpc.ChrName + '/' + sMsg` 的字节编码）。
+///
+/// **F-2 订正**（reviewer-5 `b164fa48`）：这**不是** oracle 线上字节。线上尾 =
+/// `SendSocket(ClientMsg, EDCode.EncodeString(processMsg.Msg))`（`PlayObject.Message.cs:1724`）
+/// ⇒ `edcode::encode(self)`（6-bit 变换，`EncryptUtil.cs:108-140`）；本仓权威移植 =
+/// `crates/protocol::edcode::encode`。本函数只产**未编码的 GBK 原文**，编码在
+/// [`crate::smframe::sm_merchantsay`] 里做（与 `sm_hear` 同结构）。
 #[must_use]
-pub fn merchant_say_wire(chr_name: &str, msg: &str) -> Vec<u8> {
+pub fn merchant_say_gbk(chr_name: &str, msg: &str) -> Vec<u8> {
     let text = merchant_say_text(chr_name, msg);
     encoding_rs::GBK.encode(&text).0.into_owned()
 }
@@ -327,12 +334,16 @@ pub struct NpcPlayer<'r> {
     pub script_index: Option<usize>,
     /// `playerActor.ScriptGotoCount`
     pub script_goto_count: i32,
-    /// `PlayObject.QuestFlag`（`PlayObject.cs:1040` 的 `QuestFlag = new byte[128]`）
-    pub quest_flag: [u8; 128],
-    /// `playerActor.QuestUnit`（index → 位值）
-    pub quest_unit: HashMap<i32, i32>,
-    /// `playerActor.QuestUnitOpen`
-    pub quest_unit_open: HashMap<i32, i32>,
+    /// `PlayObject.QuestFlag`（`PlayObject.cs:1040` 的 `QuestFlag = new byte[128]`）。
+    ///
+    /// **F-1 订正**：oracle 三组任务态是 `byte[128]` + **位运算**（`128 >> n`，MSB-first；`nFlag -= 1`），
+    /// 不是按字节下标直存。本仓库的权威移植 = `crates/script::engine::quest_state::QuestBitmap`
+    /// （`quest_state.rs`，含 `tests/parity/m3/quest-state-probe` 真身向量）——三类数组**直接复用它**。
+    pub quest_flag: QuestBitmap,
+    /// `playerActor.QuestUnit`（同 `QuestFlag` 位语义）。
+    pub quest_unit: QuestBitmap,
+    /// `playerActor.QuestUnitOpen`（同 `QuestFlag` 位语义）。
+    pub quest_unit_open: QuestBitmap,
     /// `playerActor.ItemList`（名 → 件数）
     pub items: Vec<(String, i32)>,
     /// `playerActor.UseItems`（位置名 → 是否佩戴）
@@ -362,9 +373,9 @@ impl NpcPlayer<'_> {
             last_npc: 0,
             script_index: None,
             script_goto_count: 0,
-            quest_flag: [0u8; 128],
-            quest_unit: HashMap::new(),
-            quest_unit_open: HashMap::new(),
+            quest_flag: QuestBitmap::new(),
+            quest_unit: QuestBitmap::new(),
+            quest_unit_open: QuestBitmap::new(),
             items: Vec::new(),
             worn: HashMap::new(),
             slaves: 0,
@@ -399,8 +410,16 @@ impl ScriptPlayer for NpcPlayer<'_> {
         self.script_goto_count = v;
     }
     fn quest_flag_status(&self, flag: i16) -> u8 {
-        let i = flag.max(0) as usize;
-        self.quest_flag.get(i).copied().unwrap_or(0)
+        // `GetQuestFalgStatus`（`PlayObject.cs:3966`）：`nFlag -= 1` + `128 >> n` 位提取。
+        u8::try_from(self.quest_flag.get(i32::from(flag))).unwrap_or(0)
+    }
+    fn quest_unit_status(&self, flag: i16) -> u8 {
+        // `GetQuestUnitStatus`（`PlayObject.cs:4060`），与 QuestFlag 同形。
+        u8::try_from(self.quest_unit.get(i32::from(flag))).unwrap_or(0)
+    }
+    fn quest_unit_open_status(&self, flag: i16) -> u8 {
+        // `GetQuestUnitOpenStatus`（`PlayObject.cs:4013`），与 QuestFlag 同形。
+        u8::try_from(self.quest_unit_open.get(i32::from(flag))).unwrap_or(0)
     }
     fn gold(&self) -> i32 {
         self.gold
@@ -459,16 +478,16 @@ impl ScriptPlayer for NpcPlayer<'_> {
         self.ms_string.get(&n).cloned().unwrap_or_default()
     }
     fn set_quest_unit_status(&mut self, index: i32, value: i32) {
-        self.quest_unit.insert(index, value);
+        // `SetQuestUnitStatus`（`PlayObject.cs:4084`）：位语义在实现侧。
+        self.quest_unit.set(index, value);
     }
     fn set_quest_flag_status(&mut self, flag: i32, value: i32) {
-        let i = flag.max(0) as usize;
-        if let Some(slot) = self.quest_flag.get_mut(i) {
-            *slot = value as u8;
-        }
+        // `SetQuestFlagStatus`（`PlayObject.cs:3990`）：`nFlag -= 1` + `128 >> n` 位写入。
+        self.quest_flag.set(flag, value);
     }
     fn set_quest_unit_open_status(&mut self, index: i32, value: i32) {
-        self.quest_unit_open.insert(index, value);
+        // `SetQuestUnitOpenStatus`（`PlayObject.cs:4037`）：位语义在实现侧。
+        self.quest_unit_open.set(index, value);
     }
     fn item_count(&self, name: &str) -> i32 {
         self.items
@@ -558,15 +577,24 @@ mod tests {
     }
 
     /// `GotoLableSendMerChantSayMsg` 的行格式：`ChrName + '/' + sMsg`（`ScriptEngine.cs:991/996`）。
+    ///
+    /// **F-2 订正**：本用例只锁**GBK 原文**；线上尾是它的 EDCode 编码
+    /// （`edcode::encode`），由 `smframe::tests::sm_merchantsay_header_and_tail` 锁。
     #[test]
-    fn merchant_say_text_and_wire() {
+    fn merchant_say_text_and_gbk_bytes() {
         assert_eq!(merchant_say_text("QManage", "欢迎"), "QManage/欢迎");
         // ASCII 段在 GBK 下逐字节不变；中文按 GBK 双字节编。
-        let wire = merchant_say_wire("QManage", "hi");
-        assert_eq!(wire, b"QManage/hi");
-        let cn = merchant_say_wire("QManage", "欢迎");
+        let gbk = merchant_say_gbk("QManage", "hi");
+        assert_eq!(gbk, b"QManage/hi");
+        let cn = merchant_say_gbk("QManage", "欢迎");
         assert_eq!(&cn[..8], b"QManage/");
         assert_eq!(&cn[8..], &[0xBB, 0xB6, 0xD3, 0xAD], "「欢迎」的 GBK 字节");
+        // 明确不是线上字节：线上尾 = edcode::encode(gbk)（6-bit 变换会改变字节）。
+        assert_ne!(
+            mir2_protocol::edcode::encode(&cn),
+            cn,
+            "线上尾不是裸 GBK（EDCode 会变换）"
+        );
     }
 
     /// `@Login` 经 `QManage` 产出说词，前缀 = NPC 名（`PlayObject.cs:1440` + `ScriptEngine.cs:991`）。
@@ -738,5 +766,38 @@ mod tests {
             host.has_function_npc(),
             "QFunction 已装载 ⇒ FunctionNPC != null"
         );
+    }
+
+    /// **F-1 返工**（reviewer-5 `b164fa48`）：`NpcPlayer` 的三组任务位图必须走 oracle **位语义**
+    /// （`nFlag -= 1` + `128 >> n`，MSB-first），并复用本仓已合入的
+    /// `crates/script::engine::quest_state::QuestBitmap`（真身向量 `tests/parity/m3/quest-state-probe`）。
+    ///
+    /// 红检：把 `set_quest_flag_status` 改回 `quest_flag[index] = value`（去掉位运算）⇒ 本用例必红。
+    #[test]
+    fn quest_flag_and_unit_use_oracle_bit_semantics() {
+        let mut rng = no_rng();
+        let mut p = NpcPlayer::empty(&mut rng);
+        // flag 8 ⇒ nFlag=7 ⇒ 字节 0、位 `128>>7 = 1`（`PlayObject.cs:3990`）。
+        p.set_quest_flag_status(8, 1);
+        assert_eq!(p.quest_flag_status(8), 1);
+        assert_eq!(
+            p.quest_flag.as_bytes()[0],
+            0x01,
+            "flag 8 落在字节 0 的最低位"
+        );
+        p.set_quest_flag_status(8, 0);
+        assert_eq!(p.quest_flag_status(8), 0);
+        // `nFlag < 0` / 越界 ⇒ no-op / 返回 0（oracle `quest_state.rs` 顶部表）。
+        p.set_quest_flag_status(0, 1);
+        p.set_quest_flag_status(-1, 1);
+        assert_eq!(p.quest_flag_status(0), 0);
+        assert_eq!(p.quest_flag_status(-1), 0);
+        // `QuestUnit` / `QuestUnitOpen` 与 `QuestFlag` 同形（reviewer 点名的 `quest_unit_status` 恒 0 缺口）。
+        p.set_quest_unit_status(8, 1);
+        p.set_quest_unit_open_status(8, 1);
+        assert_eq!(p.quest_unit_status(8), 1);
+        assert_eq!(p.quest_unit_open_status(8), 1);
+        assert_eq!(p.quest_unit.as_bytes()[0], 0x01);
+        assert_eq!(p.quest_unit_open.as_bytes()[0], 0x01);
     }
 }
