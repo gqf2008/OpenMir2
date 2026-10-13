@@ -1,0 +1,70 @@
+124-redcheck-window-plan-capture-topology.txt —— 片㉔ 改坏必红 + 烧窗机制湿测（`window_handoff.py` §2a 抓包拓扑）
+m2-svr / openmir2-worker-11 / 2026-10-14；零起栈、零游戏端口（湿测只用环回非游戏端口 57999/57997）
+====================================================================================================
+
+变异只在 `E:/tmp/m2svr-burst11/mut/` 的**复制件**上做；仓内 `window_handoff.py` 在全部变异前后
+sha256 逐字节一致（见 §D）。全部命令 `python -I -B`。
+
+## A. 绿（仓内件）
+
+```
+$ python -I -B window_handoff.py --selftest
+SELFTEST OK (53/53)
+rc=0
+```
+仓内件 sha256 = `6cfd7651720ff7a4a9a0fd23c5e52d217da89bc389fd0ec4ac5412684c6693f8`。
+
+## B. 烧窗机制湿测（代理监听端口被占 ⇒ 必失败；让出后 ⇒ 起得来）
+
+用环回**非游戏端口**（占用方 57999 / 上游 57997）复现 `mir2_proxy.py:137-145` 的 `asyncio.start_server` 语义，
+避免占任何 5000/5100/5500/5600/5700/6000/7000/7100/7200 端口：
+
+```
+$ python -I -B E:/tmp/m2svr-burst11/burnmode.py
+=== phase1: standard gate holds 57999 (proxy must fail) ===
+rc=1 ready.flag=False
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\gxh\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 1584, in create_server
+    raise OSError(err.errno, msg) from None
+OSError: [Errno 10048] error while attempting to bind on address ('127.0.0.1', 57999): [winerror 10048] 通常每个套接字地址(协议/网络地址/端口)只允许使用一次。
+=== phase2: port freed (proxy must start) ===
+rc='RUNNING' ready.flag=True
+LISTEN 127.0.0.1:57999 -> 127.0.0.1:57997
+READY
+```
+
+⇒ 标准 game-gate 仍占 7200 时，计划里的代理命令**必失败且不写 ready.flag**；先按 §2a 让出 7200 才会到 `READY`。
+（端口全回落：脚本 phase1 的 dummy socket 与 phase2 的代理子进程都在脚本内 close/kill。）
+
+## C. 牙 1（MUT-A）：删掉 §2a 的 4 行（白烧说明 / a 让出 7200 / b 起影子 7600 / 影子 conf 集）
+
+```
+$ python -I -B E:/tmp/m2svr-burst11/mut/window_handoff_mutA.py --selftest
+[FAIL] selftest plan-has-capture-topology
+[FAIL] selftest plan-topology-before-proxy topo=-1 proxy=1678
+[FAIL] selftest plan-topology-shadow-conf
+SELFTEST FAILED (50/53)
+rc=1
+```
+mutA sha256 = `52e8e4e8483bd30df59d6721091e71a2d0b05347e76db1f5fb4c10d61c4c153c`（≠ 仓内件）。
+删的是计划 `A(...)` 行（含 `#     #` 前缀），**不**动 selftest 断言字面量 ⇒ 断言真能咬计划内容。
+
+## D. 牙 2（MUT-B）：删掉 C# 段的 `见 82-two-side-window-runbook.md §4.1` 指针
+
+```
+$ python -I -B E:/tmp/m2svr-burst11/mut/window_handoff_mutB.py --selftest
+[FAIL] selftest plan-topology-csharp-pointer
+SELFTEST FAILED (52/53)
+rc=1
+```
+mutB sha256 = `62072930c5d142cb82d80342820ea23bc89911ef71cc7d8fb207a9b6556c5f0f`（≠ 仓内件）。
+
+## E. 还原复核（仓内件未被变异污染）
+
+```
+$ sha256sum -c E:/tmp/m2svr-burst11/base.sha256
+window_handoff.py: OK
+$ git diff --stat -- mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py
+ .../window_handoff.py | 27 +++++++++++++++++++++-
+ 1 file changed, 26 insertions(+), 1 deletion(-)   (仅本片 §2a Rust/C# 两块 + selftest 四条)
+```
