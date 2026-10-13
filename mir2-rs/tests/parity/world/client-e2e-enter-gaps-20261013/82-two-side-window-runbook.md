@@ -61,7 +61,8 @@ UPDATE characters SET x=291, y=666 WHERE chrname='aaa';
 powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 `
   -RustBinDir E:/tmp/openmir2-window-target/debug -Seed 42 -LogDir E:/tmp/window/cliente2e/rust/stack
 
-# 3.2 把真 game-gate(7200) 停掉，起**影子** game-gate(7600)（同 `RunGate/config.conf`，只把 GatePort* 改 7600）
+# 3.2 把真 game-gate(7200) 停掉，起**影子** game-gate(7600)（conf 造法见 §4.0：拷 `RunGate/config.conf`、
+#     用 cp936 原样只改 Count/GatePort1 两个数字（逐字节只差 2 字节）；Rust 侧镜像同一份 conf）
 #     再让代理占官方 7200：
 python tools/capture/mir2_proxy.py --out E:/tmp/window/cliente2e/rust/proxy --map 7200=127.0.0.1:7600
 
@@ -100,23 +101,47 @@ C 线（2026-10-10）把「`CM_LOGINNOTICEOK` 之后世界数据下不来」归�
 - 同症状的确定根因是 **S1 缺陷①**（槽位按 accept 序 + `CloseGate` 不释放槽位），
   修复 `607e9b773`（2026-10-10 17:01）**已进部署件**（`!deployed-from.json` = master `628d8024`）。
 
-### 4.0 前置门（起 C# 栈之前先跑；离线、零端口、fail-closed）
+### 4.0 影子 conf + 前置门（起 C# 栈之前先跑；离线、零端口、fail-closed）
+
+⚠ oracle 的 conf 路径 = `Path.Combine(AppContext.BaseDirectory, 'config.conf')`
+（`src/GameGate/Conf/ConfigManager.cs:5`；`appsettings.json` 同法，`Program.cs:31`），且 `Main`
+**不吃 conf 参数** ⇒ 影子必须是**自己的目录 + 自己目录下的 config.conf**。
 
 ```powershell
+# 1) 共用一份影子 conf：从部署件拷、cp936 原样只改 Count 与 GatePort1 两个数字
+#    （UTF-8 读写会改坏 [MagicInterval]/[Strings] 的中文 GBK 字节；直接照抄 Count=3 会再绑 7201/7202）
+$enc = [Text.Encoding]::GetEncoding(936)
+New-Item -ItemType Directory -Force 'E:/tmp/window/cliente2e/shadow' | Out-Null
+Copy-Item -LiteralPath 'E:\MirServer\RunGate\config.conf' -Destination 'E:/tmp/window/cliente2e/shadow/game-gate.conf' -Force
+$t = [IO.File]::ReadAllText('E:/tmp/window/cliente2e/shadow/game-gate.conf', $enc)
+$t = $t -replace '(?m)(?<=^Count=)\d+(?=\r?$)','1' -replace '(?m)(?<=^GatePort1=)\d+(?=\r?$)','7600'
+[IO.File]::WriteAllText('E:/tmp/window/cliente2e/shadow/game-gate.conf', $t, $enc)
+Select-String -Path 'E:/tmp/window/cliente2e/shadow/game-gate.conf' -Pattern '^Count=|^GatePort1='
+
+# 2) 影子 RunGate = 整目录拷贝（exe/dll/appsettings/nlog 全要），config.conf 换成上面那份
+Remove-Item -Recurse -Force 'E:/tmp/window/cliente2e/shadow/run-gate' -EA SilentlyContinue
+Copy-Item -Recurse -Force 'E:\MirServer\RunGate' 'E:/tmp/window/cliente2e/shadow/run-gate'
+Copy-Item -Force 'E:/tmp/window/cliente2e/shadow/game-gate.conf' 'E:/tmp/window/cliente2e/shadow/run-gate/config.conf'
+
+# 3) 前置门
 cd mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
 python -I -B check_csharp_capture_preflight.py `
   --repo E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr `
-  --mirserver E:/MirServer --shadow-config <影子 RunGate/config.conf>
+  --mirserver E:/MirServer --shadow-config E:/tmp/window/cliente2e/shadow/run-gate/config.conf
 ```
 
 退出码 `0`=GREEN / `1`=RED / `2`=PREREQ_RED。它咬五条：部署件含 `607e9b773`；真实与影子
 `ServerWorkThread=1`（S1 §2.1 多网关错配边界）；真实 `GatePort1=7200`；`!servertable.txt`
 GameGate 端口 `=7200`；上游 `127.0.0.1:5000`。**红灯先修，不要带着红灯起栈。**
+（片㉖ 实测：把 `--shadow-config` 指到真实 conf ⇒ `RED 影子 GatePort1=7200 != 影子端口 7600`。）
 
-### 4.1 影子 RunGate 配置
+### 4.1 影子 RunGate 配置（片㉖ 订正：**整目录拷贝**）
 
-拷 `E:/MirServer/RunGate/config.conf` 一份，**只改 `GatePort1=7600`**（绑定地址、上游地址、
-`ServerWorkThread` 一律不动）；**不要**引入第 2/3 个活动网关（本部署本就 `ServerWorkThread=1`）。
+挪法见 §4.0：**整目录拷贝** `RunGate/` 到影子目录，再把 `config.conf` 换成「cp936 原样、只改
+`Count=1`/`GatePort1=7600`」那份。不这么做（只拷 config.conf、仍起 `E:\MirServer\RunGate\GameGate.exe`）
+⇒ oracle 按 `AppContext.BaseDirectory` 读回原 config ⇒ 影子仍绑 7200（代理绑不上），且前置门会**误判 GREEN**
+（false-green）。绑定地址、上游地址、`ServerWorkThread=1` 一律不动；**不要**引入第 2/3 个活动网关
+（本部署本就 `ServerWorkThread=1`）。
 
 - **首选（需现场验证）**：照 §3 **只挪 game-gate**（真 LoginGate/SelGate 保持 7000/7100 不代理，
   game-gate 影子挪到 7600，代理占 7200）。Rust 侧同拓扑能拿到世界数据（§3 已证），

@@ -362,11 +362,19 @@ def plan_text(
     bin_dir_w = bin_dir.replace("/", "\\")
     cs_gate_w = (mirserver.rstrip("/\\") + "/RunGate/GameGate.exe").replace("/", "\\")
     tgt_win = target_dir.rstrip("/\\").replace("/", chr(92))
+    # 影子 gate 的 conf / 目录（片㉖）：路径必须**具体**，不能让 root 现场猜（<...> 占位 = 烧窗口）。
+    shadow_dir = f"{w}/shadow"
+    shadow_dir_w = shadow_dir.replace("/", "\\")
+    rs_gate_conf = f"{shadow_dir}/game-gate.conf"
+    cs_shadow_dir = f"{shadow_dir}/run-gate"
+    cs_shadow_dir_w = cs_shadow_dir.replace("/", "\\")
+    cs_shadow_conf = f"{cs_shadow_dir}/config.conf"
+    cs_run_gate_w = (mirserver.rstrip("/\\") + "/RunGate").replace("/", "\\")
     lines: list[str] = []
     A = lines.append
 
     A(f"# ③ 两侧同框对照窗口计划（卡 openmir2-client-e2e-enter-gaps）")
-    A(f"# 构建源 repo={repo or '<未给>'} ref={ref}")
+    A(f"# 构建源 repo={repo or '(未给 --repo)'} ref={ref}")
     A(f"# ③b 有怪点 site={site} / ③a 反向点 site_none={site_none} / view_range={view_range}")
     if site_note:
         A(f"# {site_note}")
@@ -386,9 +394,9 @@ def plan_text(
     A("# 0) 前置：端口/进程（5000/5100/5500/5600/5700/6000/7000/7100/7200 全 DOWN；仅共享 3306 可 UP）")
     A("#    起栈禁接管道（禁 | tee/tail/head/grep，会把调用挂死）；一律 > <log> 2>&1")
     A("")
-    A("# 0a) 构建 Rust 侧六件到 <target-dir>（必须先做：start_rust_stack.ps1 在 <target-dir>/debug 缺 exe/config 时会")
+    A(f"# 0a) 构建 Rust 侧六件到 {target_dir}（必须先做：start_rust_stack.ps1 在 {target_dir}/debug 缺 exe/config 时会")
     A("#     PREREQ_MISSING exit 2 / 或在窗口里空转 —— §2 的 -RustBinDir 指向这里）")
-    _build_repo = repo or "<检出>"
+    _build_repo = repo or "(未给 --repo)"
     A(f"#   git -C {_build_repo} rev-parse HEAD   # 记进证据（构建源 oid）")
     A(f"#   cd {_build_repo}/mir2-rs && CARGO_TARGET_DIR={target_dir} cargo build --offline \\")
     A("#     -p game-svr -p game-gate -p login-srv -p login-gate -p sel-gate -p db-srv")
@@ -410,9 +418,16 @@ def plan_text(
     A("#     #   a. 停本栈标准 game-gate 让出 7200/7201/7202（按绝对路径精确停，勿误伤同名进程）：")
     A(f"#     #        Get-CimInstance Win32_Process | Where-Object {{ $_.ExecutablePath -eq '{bin_dir_w}\\game-gate.exe' }} |")
     A("#     #          ForEach-Object { Stop-Process -Id $_.ProcessId -Force }")
-    A("#     #   b. 起影子 game-gate 于 7600（Rust 读法 `game-gate.exe <conf>`；conf 最小集 = 下面 5 键）：")
-    A("#     #        [GameGate] Count=1 / ServerAddr1=127.0.0.1 / ServerPort1=5000 / GateAddress1=127.0.0.1 / GatePort1=7600")
-    A(f"#     #        Start-Process -FilePath '{bin_dir_w}\\game-gate.exe' -ArgumentList '<影子 conf>' -WorkingDirectory '<conf 目录>'")
+    A("#     #   b0. 造影子 gate 的 conf（从部署件拷、**GBK 原样**改 Count=1 / GatePort1=7600；两趟共用）：")
+    A("#     #        ⚠ 直接照抄 `RunGate/config.conf`（Count=3）会再绑 7201/7202 ⇒ 代理抢不到 7200（白烧窗口）；")
+    A("#     #        ⚠ 用 UTF-8 读写会把 `[MagicInterval]`/`[Strings]` 的中文 GBK 字节改坏 ⇒ 必须用 cp936 读写。")
+    A(f"#     #        New-Item -ItemType Directory -Force '{shadow_dir}' | Out-Null")
+    A(f"#     #        Copy-Item -LiteralPath '{cs_run_gate_w}\\config.conf' -Destination '{rs_gate_conf}' -Force")
+    A(f"#     #        $enc = [Text.Encoding]::GetEncoding(936); $t = [IO.File]::ReadAllText('{rs_gate_conf}', $enc); $t = $t -replace '(?m)(?<=^Count=)\\d+(?=\\r?$)','1' -replace '(?m)(?<=^GatePort1=)\\d+(?=\\r?$)','7600'; [IO.File]::WriteAllText('{rs_gate_conf}', $t, $enc)")
+    A("#     #        # 复核两键（应打印 Count=1 / GatePort1=7600）：")
+    A(f"#     #        Select-String -Path '{rs_gate_conf}' -Pattern '^Count=|^GatePort1='")
+    A("#     #   b. 起影子 game-gate 于 7600（Rust 读法 = 第 1 个位置参数是 conf 路径，`bins/game-gate/src/main.rs:81-84`）：")
+    A(f"#     #        Start-Process -FilePath '{bin_dir_w}\\game-gate.exe' -ArgumentList '{rs_gate_conf}' -WorkingDirectory '{shadow_dir}'")
     A(f"#     #   c. 确认 7200 DOWN、7600 UP（tools/m2-acceptance/start_rust_stack.ps1 -Status / {mirserver}/port-status.ps1）后才起代理：")
     A(f"#     python tools/capture/mir2_proxy.py --out {rust}/proxy --map 7200=127.0.0.1:7600")
     A(f"#     powershell -ExecutionPolicy Bypass -File tools/client/mir_flow.ps1 ^")
@@ -433,12 +448,27 @@ def plan_text(
     A(f"#     #        powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 -Stop")
     A(f"#     #   d. 断言 7200/7600 都 DOWN 再往下：{mirserver}/port-status.ps1")
     A("#   [③b] C#（先读 85-csharp-capture-topology-rootcause.md；同一条 capture 管线）：")
-    A(f"#     python -I -B {CSHARP_PREFLIGHT} --repo {repo or '<检出>'} --mirserver {mirserver} ^")
-    A(f"#       --shadow-config <影子 RunGate/config.conf>        # 必须 GREEN 再起栈")
+    A("#     # 2a.0) 造影子 RunGate = **整目录拷贝**（不是只拷 config.conf；配方见 82-two-side-window-runbook.md §4.1）：")
+    A("#     #     拷贝即保留 ServerWorkThread=1（S1 §2.1 多网关错配边界）；oracle 的 conf 路径 =")
+    A("#     #     `Path.Combine(AppContext.BaseDirectory, 'config.conf')`（src/GameGate/Conf/ConfigManager.cs:5；")
+    A("#     #     appsettings.json 同法，Program.cs:31），且 Main 不吃 conf 参数 ⇒ 直接起")
+    A(f"#     #     {cs_gate_w} 只会读回原 config（仍绑 7200）⇒ 代理绑不上，且前置门会拿着 7600 副本")
+    A("#     #     误判 GREEN（false-green）。影子必须是**自己的目录 + 自己目录下的 config.conf**。")
+    A(f"#     #        Remove-Item -Recurse -Force '{cs_shadow_dir}' -EA SilentlyContinue   # 幂等：③a 第二趟重跑不嵌套")
+    A(f"#     #        Copy-Item -Recurse -Force '{cs_run_gate_w}' '{cs_shadow_dir}'")
+    A(f"#     #        Copy-Item -Force '{rs_gate_conf}' '{cs_shadow_conf}'   # 复用 §2a.Rust b0 那份（Count=1/GatePort1=7600，GBK 原样）")
+    A("#     #        # 复核三键（应打印 Count=1 / GatePort1=7600 / ServerWorkThread=1）：")
+    A(f"#     #        Select-String -Path '{cs_shadow_conf}' -Pattern '^Count=|^GatePort1=|^ServerWorkThread='")
+    A(f"#     python -I -B {CSHARP_PREFLIGHT} --repo {repo or '(未给 --repo)'} --mirserver {mirserver} ^")
+    A(f"#       --shadow-config {cs_shadow_conf}        # 必须 GREEN 再起栈")
     A(f"#     powershell -ExecutionPolicy Bypass -File {mirserver}/start-all.ps1")
-    A("#     # 2a) 【起代理前必做】抓包拓扑（同 Rust）：停标准 RunGate(7200) → 起影子 game-gate(7600)")
-    A(f"#     #     （拷 {mirserver}/RunGate/config.conf、只改 GatePort1=7600、保留 ServerWorkThread=1，")
-    A("#     #      见 82-two-side-window-runbook.md §4.1）→ 确认 7200 DOWN/7600 UP 后再起代理占 7200")
+    A("#     # 2a) 【起代理前必做】抓包拓扑（同 Rust）：停标准 RunGate(7200) → 起影子 RunGate(7600)")
+    A("#     #   a. 停标准 RunGate 让出 7200（按绝对路径精确停；只停真身，勿误伤影子目录里的同名进程）：")
+    A(f"#     #        Get-CimInstance Win32_Process | Where-Object {{ $_.ExecutablePath -eq '{cs_gate_w}' }} |")
+    A("#     #          ForEach-Object { Stop-Process -Id $_.ProcessId -Force }")
+    A("#     #   b. 起影子 RunGate 于 7600（读自己目录下的 config.conf，即上面那份）：")
+    A(f"#     #        Start-Process -FilePath '{cs_shadow_dir_w}\\GameGate.exe' -WorkingDirectory '{cs_shadow_dir}'")
+    A(f"#     #   c. 确认 7200 DOWN、7600 UP（{mirserver}/port-status.ps1）后才起代理占 7200")
     A(f"#     python tools/capture/mir2_proxy.py --out {csh}/proxy --map 7200=127.0.0.1:7600")
     A(f"#     powershell -ExecutionPolicy Bypass -File tools/client/mir_flow.ps1 -Account mir2test ^")
     A(f"#       -Password mir2pass -OutDir {csh}/shots -WalkClicks 0 -AutoPlaySec 12 -SkipReenter -SkipLogout -SkipTalk")
@@ -449,8 +479,8 @@ def plan_text(
     A("#     #       （Start-Stack 的 targets 含 mysqld）⇒ 与开工前『仅 3306 UP』不一致。")
     A("#     #   a. 停代理（同 §2b.a）：")
     A(f"#     #        $pp = Get-Content '{csh}/proxy/ready.flag' -EA SilentlyContinue; if ($pp) {{ Stop-Process -Id ([int]$pp) -Force -EA SilentlyContinue }}")
-    A("#     #   b. 停影子 gate（C# 侧 exe = RunGate 目录下 GameGate.exe，按绝对路径精确停）：")
-    A(f"#     #        Get-CimInstance Win32_Process | Where-Object {{ $_.ExecutablePath -eq '{cs_gate_w}' }} |")
+    A("#     #   b. 停影子 gate（C# 侧 exe = 影子目录下 GameGate.exe，按绝对路径精确停）：")
+    A(f"#     #        Get-CimInstance Win32_Process | Where-Object {{ $_.ExecutablePath -eq '{cs_shadow_dir_w}\\GameGate.exe' }} |")
     A("#     #          ForEach-Object { Stop-Process -Id $_.ProcessId -Force }")
     A("#     #   c. 停 6 个 C# 组件、**保留 MySQL 3306**（同 tools/m2-acceptance/evidence/session-lifecycle-rerun-20261012）：")
     A("#     #        Get-Process GameSvr,DBSrv,LoginSrv,LoginGate,SelGate,GameGate -EA SilentlyContinue | Stop-Process -Force")
@@ -504,6 +534,13 @@ TEARDOWN_MARKERS = (
     "保留 MySQL 3306",                                    # C# 清栈不动共享 DB
 )
 _TOOL_DIRS = ("tools/m2-acceptance", "tools/client", "tools/capture", "tools/oracle")
+# 片㉖：命令面残留占位。凡「调脚本 / 起进程 / 写文件」的行不得留 `<...>`
+# （root 现场猜路径 = 烧一次性窗口；片㉕ 只禁了 `<bin_dir>` 一个，太窄）。
+_CMDLINE_FACE_RE = re.compile(
+    r"\.(?:ps1|py|sh)\b|Start-Process|Stop-Process|Get-Process|Get-CimInstance|"
+    r"Copy-Item|Set-Content|New-Item|Select-String|\bcargo\b|mysql>"
+)
+_PLACEHOLDER_RE = re.compile(r"<[^<>\n]{1,80}>")
 
 
 def _plan_command_lines(plan: str) -> list[str]:
@@ -580,6 +617,9 @@ def plan_conformance(plan: str, repo_root: str = "", check_dir: str = HERE,
     repo_root = repo_root or DEFAULT_REPO_ROOT
     declared_cache: dict[str, set[str]] = {}
     for line in _plan_command_lines(plan):
+        if _CMDLINE_FACE_RE.search(line):
+            for ph in _PLACEHOLDER_RE.findall(line):
+                problems.append(f"计划命令面残留未替换占位 {ph}（应代入实际路径/值；勿让 root 现场猜）")
         for m in _SCRIPT_TOKEN_RE.finditer(line):
             token = m.group(0)
             base = os.path.basename(token)
@@ -820,9 +860,29 @@ def selftest() -> int:
         _proxy_i = _build_plan.find("mir2_proxy.py --out")
         chk("plan-topology-before-proxy", 0 <= _topo_i < _proxy_i, f"topo={_topo_i} proxy={_proxy_i}")
         chk("plan-topology-shadow-conf",
-            "GatePort1=7600" in _build_plan and "ServerPort1=5000" in _build_plan)
+            "GatePort1=7600" in _build_plan and "Count=1" in _build_plan
+            and "GetEncoding(936)" in _build_plan)
         chk("plan-topology-csharp-pointer",
             "82-two-side-window-runbook.md" in _build_plan and "ServerWorkThread=1" in _build_plan)
+        # 片㉖：影子 gate 的 conf 必须「造得出、路径具体、C# 走整目录拷贝」（否则 root 现场猜 = 烧窗口）
+        chk("plan-shadow-conf-concrete",
+            "<影子" not in _build_plan and "<conf 目录>" not in _build_plan
+            and "--shadow-config E:/tmp/w/shadow/run-gate/config.conf" in _build_plan
+            and "-ArgumentList 'E:/tmp/w/shadow/game-gate.conf'" in _build_plan)
+        chk("plan-shadow-conf-created",
+            "Copy-Item -LiteralPath 'M\\RunGate\\config.conf'" in _build_plan
+            and "(?<=^Count=)\\d+(?=\\r?$)" in _build_plan
+            and "[Text.Encoding]::GetEncoding(936)" in _build_plan)
+        chk("plan-shadow-conf-before-start",
+            0 <= _build_plan.find("Copy-Item -LiteralPath 'M\\RunGate\\config.conf'")
+            < _build_plan.find("-ArgumentList 'E:/tmp/w/shadow/game-gate.conf'"))
+        chk("plan-csharp-shadow-copy-dir",
+            "Remove-Item -Recurse -Force 'E:/tmp/w/shadow/run-gate'" in _build_plan
+            and "Copy-Item -Recurse -Force 'M\\RunGate' 'E:/tmp/w/shadow/run-gate'" in _build_plan
+            and "Start-Process -FilePath 'E:\\tmp\\w\\shadow\\run-gate\\GameGate.exe'" in _build_plan
+            and "AppContext.BaseDirectory" in _build_plan)
+        chk("plan-csharp-shadow-not-real-exe",
+            "Start-Process -FilePath 'M\\RunGate\\GameGate.exe'" not in _build_plan)
 
     with tempfile.TemporaryDirectory(prefix="wh-badtool-") as tmp:
         _write_fake_tools(tmp, "GREEN", bad_selftest="aoi_visibility_pair.py")
@@ -920,6 +980,11 @@ def selftest() -> int:
         _bad_flag = _conf_plan.replace("--min-vis 1", "--min-visibility 1")
         chk("plan-conf-red-unknown-flag",
             any("min-visibility" in p for p in plan_conformance(_bad_flag, _repo, _chk, _ms)))
+        # 片㉖：命令面不得留 <...> 占位（root 现场猜路径 = 烧窗口）
+        _bad_ph = _conf_plan.replace("--shadow-config E:/tmp/w/shadow/run-gate/config.conf",
+                                     "--shadow-config <影子 conf>")
+        chk("plan-conf-red-cmdline-placeholder",
+            any("占位" in p for p in plan_conformance(_bad_ph, _repo, _chk, _ms)))
 
     print(f"SELFTEST {'OK' if ok == total else 'FAILED'} ({ok}/{total})")
     return 0 if ok == total else 1

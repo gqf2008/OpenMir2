@@ -1,0 +1,22 @@
+133-gates.txt —— 卡 openmir2-client-e2e-enter-gaps 片㉖ 四门禁（cwd=mir2-rs，CARGO_TARGET_DIR=E:/tmp/m2svr-target）
+base=origin/master 083dc1d6d（片㉕ 已并入 master）
+改动仅 1 个 .py（window_handoff.py）+ 1 个手册 .md + 证据 .txt ⇒ 门禁面不受影响；仍全跑
+================================================================================
+### cargo fmt --all -- --check
+FMT_RC=0
+
+### cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.34s
+CLIPPY_RC=0
+
+### cargo test --workspace --no-fail-fast
+TEST_RC=0
+（明细见 gates-test 汇总：101 suites · 1200 passed · 0 failed · 22 ignored，TEST_RC=0）
+
+### cargo run -p msgcodegen -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+MSGCODEGEN_RC=0
+
+---- cargo test 明细汇总（gates-test.txt）----
+suites: 101
+test result 汇总: 101 suites · 1200 passed · 0 failed · 22 ignored
