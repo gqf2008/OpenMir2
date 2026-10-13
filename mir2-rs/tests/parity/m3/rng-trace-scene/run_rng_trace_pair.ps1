@@ -510,6 +510,18 @@ if ($SelfCheckNoStack) {
       ($c7.text -match 'MIN_GROUP_DRAWS') -and ($c7.text -match 'monster_ai')) `
       ("rc=$($c7.rc) ranDiff=$($c7.ranDiff)")
 
+    # ㉙ 承接卡规格锚点保鲜（2026-10-13 窗口前置审计）：`DRIVER-CONTRACT.md` 的 `path:line`
+    #    必须仍指向当前源码的符号（master 一直在动 ⇒ 行号会静默漂移：实测宿主 AI 调用点
+    #    从 `main.rs:5229` 漂到 `:5440`）。`check_anchors.py selftest` 自带 3 条改坏必红
+    #    （行号漂移 / 锚点缺失 / 锚点歧义），这里把它接进**标准无栈回归**。
+    $ancOut = ''
+    $ancRaw = & python -I (Join-Path $Here 'check_anchors.py') selftest 2>&1
+    $ancOut = ($ancRaw | Out-String)
+    $ancRc = [int]$LASTEXITCODE
+    $ancMatch = [regex]::Match($ancOut, 'SELFTEST GREEN: check_anchors selftest (\d+)/(\d+)')
+    Add-Result 'anchors-freshness-selftest' (($ancRc -eq 0) -and $ancMatch.Success -and
+      ($ancMatch.Groups[1].Value -eq $ancMatch.Groups[2].Value)) ("rc=$ancRc")
+
     # ⑯ 本脚本从未触碰端口（自检/门/比较全离线）
     Add-Result 'no-port-touched' (-not $script:RngSceneTouchedPorts) 'offline-only'
   } finally {
@@ -519,7 +531,7 @@ if ($SelfCheckNoStack) {
   $total = $script:RngPass + $script:RngFail.Count
   Write-Output ("SELFTEST ok={0}/{1} failures={2}" -f $script:RngPass, $total, ($script:RngFail -join ','))
   if ($script:RngFail.Count -gt 0) { exit 1 }
-  Write-Output 'GREEN: 无栈自检全绿（场景前置门 fail-closed + **流水头同种子**制品级门（同种子绿 / 异种子·缺 INJECT_OK 必红 / 拒绝比）+ DoD① 单一入口 -SceneGroupDiff 场景门/拒比/结论传播 + **DoD② scenario 声明组必须真的出现（缺组 / monster_ai 抽数不足必红且点名）** + scenario 声明/folded 映射与代码同口径 + folded 等价绿/计数·次序必红 + LF 写出 + 零端口）'
+  Write-Output 'GREEN: 无栈自检全绿（场景前置门 fail-closed + **流水头同种子**制品级门（同种子绿 / 异种子·缺 INJECT_OK 必红 / 拒绝比）+ DoD① 单一入口 -SceneGroupDiff 场景门/拒比/结论传播 + **DoD② scenario 声明组必须真的出现（缺组 / monster_ai 抽数不足必红且点名）** + scenario 声明/folded 映射与代码同口径 + folded 等价绿/计数·次序必红 + **承接卡规格锚点保鲜（check_anchors：文档 `path:line` 必须 == 当前源码首个匹配行）** + LF 写出 + 零端口）'
   exit 0
 }
 

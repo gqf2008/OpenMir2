@@ -1,0 +1,6 @@
+# 改后（本片 head：DRIVER-CONTRACT.md 行号订正为 :5440）
+# 复现命令（cwd=mir2-rs/tests/parity/m3/rng-trace-scene）：
+#   python -I check_anchors.py check
+
+GREEN: check_anchors 5/5 锚点保鲜（文档行号 == 当前源码首个匹配行）
+rc=0

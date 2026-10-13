@@ -56,7 +56,7 @@
 - ④ 要 `monai == 0`：`drop-exp/drop_exp_scenario.json` `purity.wallclock_policy = "pinned"`；
   `drop-exp/drop_exp_consumers.tsv` 的 rust `wallclock` 行 = `crates/world/src/monai\.rs:`，`max=0`
   （「pin 抑制必须使其为 0」）。
-- master 生产宿主**无条件**开怪 AI：`mir2-rs/bins/game-svr/src/main.rs:5229`
+- master 生产宿主**无条件**开怪 AI：`mir2-rs/bins/game-svr/src/main.rs:5440`
   → `mongen.rs:61 pub fn enable_production_monster_ai` → `world.enable_monster_ai()`
   ⇒ 只要场上有活怪，`World::tick` 就按槽位驱动 `crates/world/src/monai.rs:697 monster_ai_tick`；
   无目标且 walk 到点时 `monai.rs:171 wondering` **至少抽 1 次 `Random(20)`**
@@ -98,6 +98,12 @@ powershell -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 
   （`consumer_groups.tsv` 表末补一行）。固定场景（图 0137，MonGen 0 行）里它是**唯一**的
   `spawn` 来源；漏归类会被算成 `other` ⇒ `--strict` 的 `GROUP_SET_DIFF` + DoD② 的
   `MISSING_EXPECTED_GROUPS(spawn)` 双红（会在共用窗口里空转一轮）。机判 = `python -I rng-trace-probe/rng_consumer_groups.py selftest`（含删行必红）。
+- **本文档自身的源码锚点保鲜（2026-10-13 第二次窗口前置审计）**：§4 引用的 `path:line` 是
+  **承重锚点**（宿主 AI 调用点 / 世界层 tick / oracle Wondering）；master 一直在动 ⇒ 行号会漂
+  （实测 `main.rs` 因 ④-D 与 client-e2e 两次合并行长，`enable_production_monster_ai` 从 `:5229`
+  漂到 `:5440`）。机判 = `python -I rng-trace-scene/check_anchors.py selftest`：要求「文档写的行号
+  == 该符号在当前源码里的**首个**匹配行」，缺失/重复/漂移都 fail-closed 点名；已接入
+  `run_rng_trace_pair.ps1 -SelfCheckNoStack`（`anchors-freshness-selftest`）。
 
 ## 7. 当前状态（阻塞）
 
