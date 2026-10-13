@@ -1,0 +1,15 @@
+58-gates.txt — 片⑦ 四门禁（merge tree = origin/master ef3160df7 + 本片证据，零 .rs；cwd=mir2-rs/，CARGO_TARGET_DIR=E:/tmp/m2svr-target）
+
+--- cargo fmt --all -- --check ---
+fmt rc=0
+
+--- cargo clippy --workspace --all-targets --offline -- -D warnings ---
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.92s
+clippy rc=0
+
+--- cargo test --workspace --offline --no-fail-fast ---
+101 suites · 1185 passed · 0 failed · 22 ignored (rc=0)
+
+--- cargo run -p msgcodegen -- --check ---
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+msgcodegen rc=0

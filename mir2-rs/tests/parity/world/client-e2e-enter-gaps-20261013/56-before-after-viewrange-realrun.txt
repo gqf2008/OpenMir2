@@ -1,0 +1,106 @@
+56-before-after-viewrange-realrun.txt — 缺口②「同屏无怪」AOI 窗口（ViewRange 5↔12）**配对真机** before/after
+卡 openmir2-client-e2e-enter-gaps / reviewer-6 not_verified①（片⑥ 52 §B 的真机 before 一直是 remaining）
+====================================================================================================
+本文件收口片⑥ `52-before-after-viewrange12.txt` §B 的 remaining：真机 **before**（缺省 ViewRange=5）。
+
+口径（唯一自变量 = `main.rs::new_player_entity` 的 `e.view_range = 12;`）：
+  - AFTER：交付树 master `4d8065c50` 原样（`PlayObject.cs:904` ViewRange=12）。
+  - BEFORE：同一棵树上仅把该行注释掉 ⇒ `BaseObject.cs:383` 缺省 5。
+  两次运行其余全同（同种子、同角色、同坐标、同客户端动作、同抓包管线）：
+    `start_rust_stack.ps1 -RustBinDir <bin> -Seed 42 -LogDir <dir>`（Rust game-svr 5000 + 三网关
+      7000/7100/7200 + C# DBSrv/LoginSrv 6000/5100/5700/5500/5600 + 共享 MySQL 3306）
+    → DB `mir2_db.characters.aaa` 置 (287,620) → 停真 game-gate(7200..7202)、起影子 game-gate(7600)
+      + `mir2_proxy.py --map 7200=127.0.0.1:7600`（客户端 7200 收到的字节 = 代理 s2c 字节）
+    → `mir_flow.ps1 -Account mir2test -Password mir2pass -WalkClicks 0 -AutoPlaySec 12
+         -SkipReenter -SkipLogout -SkipTalk`（FLOW_OK，两次）
+    → `export_s2c.ps1`（segment_frames + GoldenExport）解成 capture.jsonl。
+  两次代理都真的抓到了客户端连接（`chunks.ndjson` 的 `event=open port=7200`），不是重读旧件
+  （片⑥ 52 §B 的那次失败根因 = 只起了 game-svr，C# DBSrv/LoginSrv 未起 ⇒ 客户端未真正登录）。
+
+原始件（未入库，路径 + sha256 见 §D）：
+  BEFORE `E:/tmp/m2svr-run3/`：`proxy/`（chunks.ndjson + conn-0001.*.bin）、`s2c/capture.jsonl`、
+         `stack/game-svr.out.log`、`shots/`、`flow-before.txt`、`export-before.txt`
+  AFTER  `E:/tmp/m2svr-run3/after/`：`proxy/`、`s2c/capture.jsonl`、`shots/`、`flow-after.txt`、`export-after.txt`
+         及 `E:/tmp/m2svr-run3/stack-after/game-svr.out.log`
+
+A. BEFORE（`view_range = 5`）：客户端只收到 2 只怪，**Chebyshev 6..12 = 0 只**
+====================================================================================================
+来源：`capture-client-viewrange5-seed42.jsonl`（客户端实收 s2c 解码）。字段口径：`10 SM_TURN` 的
+header = Recog(actor)/Param(x)/Tag(y)；`50 SM_LOGON` 的 header = Param(CurrX)/Tag(CurrY)。
+
+  角色位置(50 SM_LOGON) = (287,620)
+  SM_TURN(10) = 2 条；SM_FEATURECHANGED(41) = 3 条；同 recog 配对 = 2
+    recog=296  monster=(288,616)  chebyshev=4
+    recog=791  monster=(288,619)  chebyshev=1
+  距离直方图 {1:1, 4:1}；**6..12 = 0 只**；最大 Chebyshev = 4。
+
+服务端佐证（`game-svr-BEFORE.log`，`world_aoi_diag` 每 50 tick 采样；`nearest` 由同图实体实时算，
+不依赖 `visible_actors`）—— 角色身边**确有理应落在 6..12 的怪**，但客户端侧一只都没出现：
+  sim: tick #1150 ... 实体内 12522 ... [aaa(12515) map=26 vis=0 same_map=1726 nearest=1]
+  sim: tick #1200 ... 实体内 12697 ... [aaa(12515) map=26 vis=0 same_map=1726 nearest=6]
+  sim: tick #1250 ... 实体内 12867 ... [aaa(12515) map=26 vis=0 same_map=1726 nearest=12]
+  sim: tick #1300 ... 实体内 13148 ... [aaa(12515) map=26 vis=0 same_map=1726 nearest=23]
+  sim: tick #1350 ... 实体内 13657 ... [aaa(12515) map=26 vis=0 same_map=1726 nearest=17]
+  ⇒ nearest 序列 1/6/12/23/17 里，6/12/17/23 都在缺省窗口 11×11（半径 5）之外。
+
+B. AFTER（`view_range = 12`，同口径同种子）：客户端收到 13 只怪，**Chebyshev 6..12 = 10 只**
+====================================================================================================
+来源：`capture-client-viewrange12-seed42.jsonl`（同一次 burst、同命令、只换回 `e.view_range = 12;`）。
+
+  角色位置(50 SM_LOGON) = (287,620)
+  SM_TURN(10) = 13 条；SM_FEATURECHANGED(41) = 14 条；同 recog 配对 = 13
+    recog=326  (279,621)  chebyshev=8
+    recog=300  (288,610)  chebyshev=10
+    recog=296  (289,621)  chebyshev=2
+    recog=790  (275,620)  chebyshev=12
+    recog=771  (276,616)  chebyshev=11
+    recog=788  (276,619)  chebyshev=11
+    recog=802  (287,609)  chebyshev=11
+    recog=777  (291,611)  chebyshev=9
+    recog=792  (291,620)  chebyshev=4
+    recog=810  (294,611)  chebyshev=9
+    recog=783  (299,608)  chebyshev=12
+    recog=898  (292,614)  chebyshev=6
+    recog=818  (300,616)  chebyshev=13
+  距离直方图 {2:1,4:1,6:1,8:1,9:2,10:1,11:3,12:2,13:1}；**6..12 = 10 只**；最大 = 13。
+  （13：AOI 扫描在该 tick 命中 ≤12，随后怪移动，出现帧按发送时的当前位置落盘 ⇒ 观测到 13；不影响
+   6..12 的对照结论。片子⑤ 那次未种子的 after（`capture-client-default-oracle40.jsonl`）是 12 只、
+   6..12 = 10 只，与此一致。）
+
+C. 结论（判据 ① 收口）
+====================================================================================================
+  | 运行 | view_range | 出现帧(10/41 配对) | Chebyshev 6..12 | 最大 Chebyshev |
+  |------|-----------|--------------------|------------------|----------------|
+  | BEFORE | 5  | 2  | **0** | 4  |
+  | AFTER  | 12 | 13 | **10** | 13 |
+  两次运行唯一差别 = `e.view_range = 12;` 一行；客户端实收 s2c 的出现帧从 **2 → 13**、其中 6..12 从
+  **0 → 10**，与 `BaseObject.ViewRange.cs:57-74`（扫描窗口 = [Curr±ViewRange]）的窗口模型一致。
+
+D. 原始件清单与 hash（sha256，LF/盘上字节见各行命令）
+====================================================================================================
+  E:/tmp/m2svr-run3/proxy/chunks.ndjson                      015a6a2ede4136bfdbba01597966d13a97636dc33f4aaf0443f6ae52efbdc48c
+  E:/tmp/m2svr-run3/proxy/conn-0001.s2c.bin                  525b1814fe4380403a53453840af8a0012499129bd360ff8672fe9dd29236c22
+  E:/tmp/m2svr-run3/s2c/capture.jsonl                        678fe940982729f025999afc633f7dc18c0d4f02a92a4b2442354f5d335f8bed
+  E:/tmp/m2svr-run3/game-svr-BEFORE.log                      24799f9ce37ef7548754f20d9abd038c638f008e48a7bf9e5ce4d0a3b4f0a819
+  E:/tmp/m2svr-run3/after/proxy/chunks.ndjson                c782c98130d39e7f6dcf8e28a77f01de33f1dfa7dcf3d409f2cc950dda6684d4
+  E:/tmp/m2svr-run3/after/proxy/conn-0001.s2c.bin            a0d453507b916a67227c62bc6c60d067ccdfa69e9b2f5a35beb8be17993cc038
+  E:/tmp/m2svr-run3/after/s2c/capture.jsonl                  389c6283af58ea1adb120f1ace98f5d5e7290e4051fa56e1e685ede388c95baf
+  E:/tmp/m2svr-run3/game-svr-AFTER.log                       ff9dd5f63ed25fe3a09401f41310acef79ffc6956488299247a4201c23c641a4
+
+E. 改坏必红 / 牙齿（本片自身即是）
+====================================================================================================
+  * 把 AFTER 的 `e.view_range = 12;` 注释掉（= 本片 BEFORE）⇒ 客户端出现帧 13→2、6..12 从 10→0
+    （A vs B 两表）⇒ 去掉这行必红。
+  * 构造级同向牙齿仍在 `31-redcheck-viewrange.txt`（删该行 ⇒ `player_aoi_window_covers_view_range_12`
+    rc=101，还原 rc=0）。
+  * 判据脚本侧牙（片⑥）：`check_client_run_frames.py --selftest 5/5`。
+
+F. 诚实登记
+====================================================================================================
+  * 片⑧（本片）只新增证据/capture，零生产代码改动（`bins/game-svr/src/main.rs` 在交付树上与
+    master 逐字节相同；BEFORE 二进制是临时本地改动、已 `git checkout` 还原并重建）。
+  * BEFORE 的 `export_s2c.ps1` 在 replay 自检一步报 RED：`unknown ident 1050`（客户端 c2s 帧，
+    既有 replay 工具未实现该 ident）⇒ 该步非本片判据；capture.jsonl 本身 FRAMES=117 decoded=117
+    decode_error=0。AFTER 用 `-SkipReplay` 导出（同样与本片判据无关）。此工具缺口一并登记。
+  * 起过真栈（两次）做抓包，收工均已 `-Stop`：十游戏端口全 DOWN，仅共享 MySQL 3306；
+    DB `mir2_db.characters.aaa` 已还原 (291,666)。

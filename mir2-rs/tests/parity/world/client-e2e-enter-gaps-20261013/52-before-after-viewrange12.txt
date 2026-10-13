@@ -1,6 +1,10 @@
 52-before-after-viewrange12.txt — 缺口②「同屏无怪」AOI 窗口（ViewRange 5→12）真机 before/after
 卡 openmir2-client-e2e-enter-gaps / reviewer-6 not_verified①
 
+> ⚠ 更新（片⑧，`56-before-after-viewrange-realrun.txt`）：本文件 §B 的「真机 before 归 remaining」已收口——
+> 后的配对真机 run（同种子 seed=42，只差 `e.view_range = 12;` 一行）实测
+> **before(5) = 2 只出现帧 / Chebyshev 6..12 = 0；after(12) = 13 只 / 6..12 = 10**。以 56 为准。
+
 本文件有两部分：
   A. **after（真机，已达成）**：master（ViewRange=12）真客户端 capture 里，逐只怪的出现帧距离。
   B. **before（真机尝试失败，如实登记）**：改回缺省 5 后起真栈的那次采集**没抓到客户端连接**
