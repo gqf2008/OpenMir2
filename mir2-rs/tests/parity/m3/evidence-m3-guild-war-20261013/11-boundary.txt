@@ -1,0 +1,12 @@
+边界（base = origin/master ab60452d0；本片只动 crates/world 两件）
+$ git diff --name-only ab60452d0 -- mir2-rs/crates/world
+mir2-rs/crates/world/src/guild.rs
+mir2-rs/crates/world/src/lib.rs
+
+$ git diff --name-only ab60452d0 -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins
+(以上两行为空 ⇒ 冻结面零改动)
+
+$ git status --short
+ M mir2-rs/crates/world/src/guild.rs
+ M mir2-rs/crates/world/src/lib.rs
+?? mir2-rs/tests/parity/m3/evidence-m3-guild-war-20261013/

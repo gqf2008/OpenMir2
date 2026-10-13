@@ -1,0 +1,7 @@
+# python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/m3/evidence-m3-guild-war-20261013
+GREEN mir2-rs\tests\parity\m3\evidence-m3-guild-war-20261013\SHA256SUMS.txt  [repo 口径]  OK 14/14
+rc=0
+
+# python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-guild-war-20261013
+EOLCHECK GREEN 15/15 件文本证据与仓库口径（LF）在 EOL 上一致
+rc=0

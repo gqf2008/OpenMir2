@@ -1,0 +1,193 @@
+# M3⑧-实现 5 行会战 oracle 锚（本仓库 src/ 实测行号）
+
+## 1. NPC 层宣战入口 GuildOfficial.ReQuestGuildWar（src/GameSrv/Npc/GuildOfficial.cs:180-199）
+ 180|         private static void ReQuestGuildWar(IPlayerActor PlayObject, string sGuildName)
+ 181|         {
+ 182|             if (SystemShare.GuildMgr.FindGuild(sGuildName) != null)
+ 183|             {
+ 184|                 if (PlayObject.Gold >= SystemShare.Config.GuildWarPrice)
+ 185|                 {
+ 186|                     PlayObject.DecGold(SystemShare.Config.GuildWarPrice);
+ 187|                     PlayObject.GoldChanged();
+ 188|                     PlayObject.ReQuestGuildWar(sGuildName);
+ 189|                 }
+ 190|                 else
+ 191|                 {
+ 192|                     PlayObject.SysMsg("你没有足够的金币!!!", MsgColor.Red, MsgType.Hint);
+ 193|                 }
+ 194|             }
+ 195|             else
+ 196|             {
+ 197|                 PlayObject.SysMsg("行会 " + sGuildName + " 不存在!!!", MsgColor.Red, MsgType.Hint);
+ 198|             }
+ 199|         }
+
+## 2. PlayObject 层宣战 PlayObject.ReQuestGuildWar（src/M2Server/Player/PlayObject.Base.cs:3349-3385）
+3349|         public void ReQuestGuildWar(string sGuildName)
+3350|         {
+3351|             if (!IsGuildMaster())
+3352|             {
+3353|                 SysMsg("只有行会掌门人才能申请!!!", MsgColor.Red, MsgType.Hint);
+3354|                 return;
+3355|             }
+3356|             if (M2Share.ServerIndex != 0)
+3357|             {
+3358|                 SysMsg("这个命令不能在本服务器上使用!!!", MsgColor.Red, MsgType.Hint);
+3359|                 return;
+3360|             }
+3361|             IGuild guild = SystemShare.GuildMgr.FindGuild(sGuildName);
+3362|             if (guild == null)
+3363|             {
+3364|                 SysMsg("行会不存在!!!", MsgColor.Red, MsgType.Hint);
+3365|                 return;
+3366|             }
+3367|             bool boReQuestOk = false;
+3368|             WarGuild warGuild = MyGuild.AddWarGuild(guild);
+3369|             if (warGuild.WarTick > 0)
+3370|             {
+3371|                 if (guild.AddWarGuild(MyGuild).Guild != null)
+3372|                 {
+3373|                     warGuild.WarTick = 0;
+3374|                 }
+3375|                 else
+3376|                 {
+3377|                     boReQuestOk = true;
+3378|                 }
+3379|             }
+3380|             if (boReQuestOk)
+3381|             {
+3382|                 SystemShare.WorldEngine.SendServerGroupMsg(Messages.SS_207, M2Share.ServerIndex, MyGuild.GuildName);
+3383|                 SystemShare.WorldEngine.SendServerGroupMsg(Messages.SS_207, M2Share.ServerIndex, guild.GuildName);
+3384|             }
+3385|         }
+
+## 3. GuildInfo.AddWarGuild（N2 反逻辑；src/M2Server/Guild/GuildInfo.cs:1020-1056）
+1020|         public WarGuild AddWarGuild(IGuild guild)
+1021|         {
+1022|             WarGuild result = default;
+1023|             WarGuild warGuild = default;
+1024|             if (guild != null)
+1025|             {
+1026|                 if (!IsAllyGuild(guild))
+1027|                 {
+1028|                     for (int i = 0; i < GuildWarList.Count; i++)
+1029|                     {
+1030|                         if (GuildWarList[i].Guild == guild)
+1031|                         {
+1032|                             warGuild = GuildWarList[i];
+1033|                             warGuild.WarTick = HUtil32.GetTickCount();
+1034|                             warGuild.WarTime = SystemShare.Config.GuildWarTime;// 10800000
+1035|                             SendGuildMsg("***" + guild.GuildName + "行会战争将持续三个小时。");
+1036|                             break;
+1037|                         }
+1038|                     }
+1039|                     if (warGuild.WarTime > 0)
+1040|                     {
+1041|                         warGuild = new WarGuild
+1042|                         {
+1043|                             Guild = guild,
+1044|                             WarTick = HUtil32.GetTickCount(),
+1045|                             WarTime = SystemShare.Config.GuildWarTime// 10800000
+1046|                         };
+1047|                         GuildWarList.Add(warGuild);
+1048|                         SendGuildMsg("***" + guild.GuildName + "行会战争开始(三个小时)");
+1049|                     }
+1050|                     result = warGuild;
+1051|                 }
+1052|             }
+1053|             RefMemberName();
+1054|             UpdateGuildFile();
+1055|             return result;
+1056|         }
+
+## 4. GuildInfo.EndGuildWar（src/M2Server/Guild/GuildInfo.cs:1058-1061）
+1058|         public void EndGuildWar(IGuild guild)
+1059|         {
+1060|             SendGuildMsg("***" + guild.GuildName + "行会战争结束");
+1061|         }
+
+## 5. GuildManager.Run 超时（src/M2Server/Guild/GuildManager.cs:145-167）
+ 145|         public void Run()
+ 146|         {
+ 147|             for (int i = 0; i < GuildList.Count; i++)
+ 148|             {
+ 149|                 IGuild guild = GuildList[i];
+ 150|                 bool boChanged = false;
+ 151|                 for (int j = guild.GuildWarList.Count - 1; j >= 0; j--)
+ 152|                 {
+ 153|                     SystemModule.Data.WarGuild warGuild = guild.GuildWarList[j];
+ 154|                     if ((HUtil32.GetTickCount() - warGuild.WarTick) > warGuild.WarTime) //行会战时间到
+ 155|                     {
+ 156|                         guild.EndGuildWar(warGuild.Guild);
+ 157|                         guild.GuildWarList.RemoveAt(j);
+ 158|                         boChanged = true;
+ 159|                     }
+ 160|                 }
+ 161|                 if (boChanged)
+ 162|                 {
+ 163|                     guild.UpdateGuildFile();
+ 164|                 }
+ 165|                 guild.CheckSaveGuildFile();
+ 166|             }
+ 167|         }
+
+## 6. GuildInfo.SendGuildMsg（前缀 GuildMsgPreFix；src/M2Server/Guild/GuildInfo.cs:431-449）
+ 431|         public void SendGuildMsg(string sMsg)
+ 432|         {
+ 433|             try
+ 434|             {
+ 435|                 if (SystemShare.Config.ShowPreFixMsg)
+ 436|                 {
+ 437|                     sMsg = SystemShare.Config.GuildMsgPreFix + sMsg;
+ 438|                 }
+ 439|                 for (int i = 0; i < RankList.Count; i++)
+ 440|                 {
+ 441|                     GuildRank guildRank = RankList[i];
+ 442|                     for (int j = 0; j < guildRank.MemberList.Count; j++)
+ 443|                     {
+ 444|                         IPlayerActor guildMember = guildRank.MemberList[j].PlayObject;
+ 445|                         if (guildMember == null)
+ 446|                         {
+ 447|                             continue;
+ 448|                         }
+ 449|                         if (guildMember.BanGuildChat)
+
+## 7. GuildInfo.RefMemberName（src/M2Server/Guild/GuildInfo.cs:348-364）
+ 348|         /// 刷新封号名称
+ 349|         /// </summary>
+ 350|         public void RefMemberName()
+ 351|         {
+ 352|             for (int i = 0; i < RankList.Count; i++)
+ 353|             {
+ 354|                 GuildRank guildRank = RankList[i];
+ 355|                 for (int j = 0; j < guildRank.MemberList.Count; j++)
+ 356|                 {
+ 357|                     IPlayerActor baseObject = guildRank.MemberList[j].PlayObject;
+ 358|                     if (baseObject != null)
+ 359|                     {
+ 360|                         baseObject.RefShowName();
+ 361|                     }
+ 362|                 }
+ 363|             }
+ 364|         }
+
+## 8. BaseObject.RefShowName（src/M2Server/Actor/BaseObject.cs:1174-1177）
+1174|         public void RefShowName()
+1175|         {
+1176|             SendRefMsg(Messages.RM_USERNAME, 0, 0, 0, 0, GetShowName());
+1177|         }
+
+## 9. PlayObject.IsGuildMaster（src/M2Server/Player/PlayObject.cs:4402-4405）
+4402|         public bool IsGuildMaster()
+4403|         {
+4404|             return (MyGuild != null) && (GuildRankNo == 1);
+4405|         }
+
+## 10. GuildWarPrice 初值 / 读取点（src/Modules/SystemModule/Conf/Model/GameSvrConf.cs:1449, ServerConf.cs:245）
+1447|             GuildWarTime = 3 * 60 * 60 * 1000;
+1448|             BuildGuildPrice = 1000000;
+1449|             GuildWarPrice = 30000;
+1450|             MakeDurgPrice = 100;
+ 244|             SystemShare.Config.MakeDurgPrice = ReadWriteInteger("Setup", "MakeDurg", SystemShare.Config.MakeDurgPrice);
+ 245|             SystemShare.Config.GuildWarPrice = ReadWriteInteger("Setup", "GuildWarFee", SystemShare.Config.GuildWarPrice);
+ 246|             SystemShare.Config.HireGuardPrice = ReadWriteInteger("Setup", "HireGuard", SystemShare.Config.HireGuardPrice);
