@@ -36,7 +36,7 @@ DoD① 要求「两侧 trace 必须来自同场景/同起点/**同种子**，不
 | `07-gate-only-stream-seed-green.txt` | `-GateOnly` 现场 CLI（带流水）⇒ rc=0 GREEN |
 | `08-scene-groupdiff-stream-seed-refused.txt` | **DoD① 单一入口拒比**：制品级种子漂移下 `-SceneGroupDiff` ⇒ rc=1、`REFUSED`、且**无任何** `RNG_CONSUMER_GROUPDIFF` 结论行 |
 | `09-regression.txt` | 回归：`rng_ledger_diff` 32/32、`attack_rng_ledger` 32/32、`fixture_matrix check` GREEN |
-| `10-mutation-a-gate-ignores-stream-seed.txt` | **改坏必红 A**：`stream_inject_seed()` 恒返 42 ⇒ 门自检 **20/21**，`stream-seed-mismatch-red` FAIL |
+| `10-mutation-a-gate-ignores-stream-seed.txt` | **改坏必红 A**：`stream_inject_seed()` 命中分支恒返 42（**较弱**改坏，只中和 seed-mismatch）⇒ 门自检 **20/21**，`stream-seed-mismatch-red` FAIL。**改坏力度说明**见该件尾部（reviewer-5 `9dce8b2e` M-1 收口）：顶部顶置 `return (True,42,1)` 的**更强**改坏会连 `stream-inject-header-missing-red` 一并红（本次复现 20/22，reviewer 19/21） |
 | `11-mutation-b-core-not-passing-streams.txt` | **改坏必红 B**：单一入口不再把流水传给门 ⇒ 无栈自检 **26/27**，`scene-groupdiff-stream-seed-refused` FAIL（rc=1 但 `ranDiff=True`） |
 | `12-boundary-yuan-rs.txt` | 边界：冻结面（`src/ sql/ MirClient/ mir2-rs/crates/ mir2-rs/bins/`）零改动 + 零 `.rs` |
 

@@ -1,0 +1,26 @@
+本片命令（cwd=mir2-rs/tests/parity/m3；零起栈、零端口）
+base=origin/master=768b2bb6c4b81e774a80a2ad27fda0cccdb1a12c
+code_head=8c38c0fcd3c20fca59fcc0055c86404a95b18e02（内容/工具提交；merge origin/master 后内容与 9a9d93e8b 逐字节相同）
+evidence_head=本 pack 所在提交（= walgit patch 条目 head，落笔后钉全 oid）
+（base 前进重交：原 base=6afa37636、原交付 head=9a9d93e8b；2026-10-14 `git merge origin/master` 后重交，见 13-base-advance.txt；reviewer-6 F-1 收口见 14-reviewer6-f1-fix.txt）
+================================================================
+# 1) 工具 selftest（新增 §0 head/base 牙 ⇒ 10/10）
+python -I rng-trace-scene/check_evidence_counts.py selftest
+# 2) 真报告 §0 head/base 全 oid（GREEN）
+python -I rng-trace-scene/check_evidence_counts.py check   --report "M3RNG场景DoD②组清单机判组必须真出现报告-20261013.md"   --dir    evidence-m3-rng-trace-scene-groups-20261013-groups-expected   --repo   <仓库根>
+# 3) 改坏必红：副本报告 §0 head 改 7 位短 oid ⇒ rc=1 点名 declared_head
+#    （构造见 05 抬头）
+# 4) 无栈自检（新增 evidence-counts-* 三项 ⇒ 37/37）
+powershell -NoProfile -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1   -SelfCheckNoStack -SelfCheckOut 02-selfcheck-nostack.txt
+# 5) 改坏力度复现（弱 21/22 / 强 20/22 / 还原 22/22）
+python -I rng-trace-scene/rng_scene_gate.py selftest   # 见 06
+# 6) 离线全链回归
+python -I fixture_chain_gate.py check                  # FIXTURE_CHAIN GREEN runner_ok=10 red=0
+# 7) 四门禁（CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target）
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --offline -- -D warnings
+cargo test --workspace --offline
+cargo run -q -p msgcodegen --offline -- --check
+# 8) 证据 hash（仓库 LF/git-blob 口径）
+python -I <repo>/tools/evidence-hash/verify_sha256sums.py verify --check-extra <本目录>
+python -I <repo>/tools/evidence-hash/verify_sha256sums.py eolcheck <本目录>

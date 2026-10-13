@@ -1,0 +1,3 @@
+cwd=mir2-rs  CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target
+$ cargo fmt --all -- --check
+(无输出 = 格式干净)  rc=0

@@ -4,3 +4,16 @@ SELFTEST ok=20/21
 
 # MUTATION-A: rng_scene_gate.py stream_inject_seed() 恒返 42（忽略真实流水头种子）
 # 期望：stream-seed-mismatch-red FAIL（改坏必红）
+
+# 改坏力度 / 被中和的检查项（reviewer-5 `9dce8b2e` M-1 收口，2026-10-14）：
+#   - 本件当时记的是**较弱的同向改坏**：只把 `stream_inject_seed()` 命中分支的
+#     `return True, seed, lineno` 改成 `return True, 42, lineno`（种子恒 42）⇒ 只中和
+#     「b 流水种子 43 != scenario 42」这一条；「缺 INJECT_OK 头」那条仍走 found=False ⇒ 仍红。
+#     当时读数 = SELFTEST ok=20/21（总例数 21），唯一 FAIL = stream-seed-mismatch-red。
+#   - 本次作者侧复现（无栈自检总例数已由 21 增至 22）：同一较弱改坏 = **21/22**，唯一 FAIL 仍为
+#     `stream-seed-mismatch-red` ⇒ 与当时 20/21 同向，只差总例数（21→22）。
+#   - reviewer-5 独立用的**更强改坏** = 在 `stream_inject_seed()` 顶部顶置 `return (True, 42, 1)`
+#     （连「缺 INJECT_OK 头」那条一并中和）⇒ 两条同时红。本次作者侧复现 = **20/22**，
+#     FAIL = `stream-seed-mismatch-red` + `stream-inject-header-missing-red`（与 reviewer 的 19/21 同向）。
+#   ⇒ 按条数精确复读请先看「改坏力度」：20/21（当时·弱）与 19/21（reviewer·强）都成立，
+#     差别只在改坏强度（以及后来总例数 21→22），不在判据方向。

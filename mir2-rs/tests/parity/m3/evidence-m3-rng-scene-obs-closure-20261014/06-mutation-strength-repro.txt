@@ -1,0 +1,28 @@
+改坏力度复现（reviewer-5 `9dce8b2e` M-1 收口，2026-10-14；作者侧实跑，非采信）
+=========================================================================
+背景：trace-seed-gate 证据 `10-mutation-a-gate-ignores-stream-seed.txt` 记「恒返 42 ⇒ 自检 20/21」；
+reviewer-5 用更强的同向改坏得 19/21。差异只在**改坏力度**，不在判据方向。本件把两种力度各复现一次。
+
+复现①：较弱同向改坏（= 原证据件口径）
+  改法：只把 `stream_inject_seed()` 命中分支的 `return True, seed, lineno`
+        改成 `return True, 42, lineno`（种子恒 42）。
+  被中和的检查项：「b 流水种子 43 != scenario 42」这一条 ⇒ 仅 1 条 FAIL。
+  （「缺 INJECT_OK 头」那条仍走 found=False ⇒ 仍红。）
+  $ python -I rng_scene_gate.py selftest
+  SELFTEST ok=21/22
+    FAIL stream-seed-mismatch-red
+
+复现②：更强同向改坏（= reviewer-5 独立口径）
+  改法：在 `stream_inject_seed()` 顶部顶置 `return (True, 42, 1)`
+        （连「缺 INJECT_OK 头」那条一并中和）⇒ 2 条 FAIL。
+  $ python -I rng_scene_gate.py selftest
+  SELFTEST ok=20/22
+    FAIL stream-seed-mismatch-red
+    FAIL stream-inject-header-missing-red
+
+还原后基线（仓库件未被污染，`git status --porcelain rng_scene_gate.py` = 空）：
+  $ python -I rng_scene_gate.py selftest
+  SELFTEST ok=22/22
+
+结论：20/21（当时·弱）与 19/21（reviewer·强）都成立，差别只在改坏强度 + 后来总例数 21→22；
+`10-mutation-...txt` 尾部已补「改坏力度 / 被中和的检查项」说明，SHA256SUMS 重生成。
