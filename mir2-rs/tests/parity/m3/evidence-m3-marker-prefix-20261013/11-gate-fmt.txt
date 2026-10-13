@@ -1,0 +1,2 @@
+$ CARGO_TARGET_DIR=E:/tmp/m3cs-marker-target cargo fmt --all -- --check
+rc=0

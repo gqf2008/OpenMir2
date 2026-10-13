@@ -1,0 +1,3 @@
+$ python -I npc_shop_diff.py assemble evidence-m3-marker-prefix-20261013/real-artifact/shop-bare.jsonl --out evidence-m3-marker-prefix-20261013/real-artifact/shop-raw-bare.jsonl --side csharp
+RED: PREREQ_RED 无 M3SHOPSEQ 事件（驱动未生效/日志未含标记）
+rc=2

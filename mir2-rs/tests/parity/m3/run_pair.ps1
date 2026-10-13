@@ -330,6 +330,26 @@ function Git-Rev {
   try { return (git rev-parse HEAD).Trim() } finally { Pop-Location }
 }
 
+function Assert-M3MarkerPrefix {
+  # markers 文件「唯一口径」（卡 openmir2-m3-fixture-marker-prefix-bug）：每个非空行必须保留 bot.log
+  # 内的 `M3*SEQ ` 前缀——4 个比较器的 `_marker_events` 都按前缀扫描，去前缀 ⇒ assemble 恒 PREREQ_RED。
+  # 这是生产路径上的 fail-closed 牙：绝不让去前缀的 markers 静默进入跨侧比较。
+  param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Marker)
+  if (-not (Test-Path -LiteralPath $Path)) {
+    Write-Output ("RED: markers 文件不存在: {0}" -f $Path); exit 1
+  }
+  $bad = 0
+  foreach ($line in @(Get-Content -LiteralPath $Path)) {
+    $t = "$line".Trim()
+    if ($t -eq '') { continue }
+    if (-not $t.StartsWith($Marker + ' ')) { $bad++ }
+  }
+  if ($bad -gt 0) {
+    Write-Output ("RED: {0} 有 {1} 行缺前缀 '{2} '（比较器 assemble 会 PREREQ_RED）——卡 openmir2-m3-fixture-marker-prefix-bug" -f $Path, $bad, $Marker)
+    exit 1
+  }
+}
+
 # ---- 1. 预检 ----
 if (-not (Test-Path $MysqlExe)) { throw "找不到 mysql 客户端: $MysqlExe" }
 if ($SkipBots) {
@@ -683,8 +703,12 @@ if (-not $SkipBots) {
       Write-Output 'RED: -ShopSequence 开了但 bot.log 里一条 M3SHOPSEQ 标记都没有 —— 固定序列没跑（驱动未生效/假人未进世界）'
       exit 1
     }
-    $shopEvents = @($shopSeqMarkers | ForEach-Object { $_.Substring('M3SHOPSEQ '.Length).Trim() })
+    # markers 文件「唯一口径」（卡 openmir2-m3-fixture-marker-prefix-bug）：保留 bot.log 内**带前缀**
+    # 的原始 `M3SHOPSEQ {json}` 行。4 个比较器的 `_marker_events` 都按前缀扫描；历史上去前缀写入
+    # （对捕获行做 Substring 截断）曾致 assemble 恒 PREREQ_RED。
+    $shopEvents = @($shopSeqMarkers)
     Set-Content -Path $shopMarkersPath -Value $shopEvents -Encoding utf8
+    Assert-M3MarkerPrefix -Path $shopMarkersPath -Marker 'M3SHOPSEQ'
     $shopSend = @($shopEvents | Where-Object { $_ -match '"phase"\s*:\s*"send"' }).Count
     $shopEnd = @($shopEvents | Where-Object { $_ -match '"phase"\s*:\s*"end"' }).Count
     $shopDone = @($shopEvents | Where-Object { $_ -match '"phase"\s*:\s*"done"' }).Count
@@ -715,8 +739,10 @@ if (-not $SkipBots) {
       Write-Output 'RED: -QuestSequence 开了但 bot.log 里一条 M3QUESTSEQ 标记都没有 —— 固定任务序列没跑（驱动未生效/假人未进世界）'
       exit 1
     }
-    $questEvents = @($questSeqMarkers | ForEach-Object { $_.Substring('M3QUESTSEQ '.Length).Trim() })
+    # 保留带前缀原始行（同 shop_markers 口径；卡 openmir2-m3-fixture-marker-prefix-bug）。
+    $questEvents = @($questSeqMarkers)
     Set-Content -Path $questMarkersPath -Value $questEvents -Encoding utf8
+    Assert-M3MarkerPrefix -Path $questMarkersPath -Marker 'M3QUESTSEQ'
     $questSend = @($questEvents | Where-Object { $_ -match '"phase"\s*:\s*"send"' }).Count
     $questEnd = @($questEvents | Where-Object { $_ -match '"phase"\s*:\s*"end"' }).Count
     $questDone = @($questEvents | Where-Object { $_ -match '"phase"\s*:\s*"done"' }).Count
@@ -751,8 +777,10 @@ if (-not $SkipBots) {
       Write-Output 'RED: -PairTradeSequence 开了但 bot.log 里一条 M3PAIRTRADESEQ 标记都没有 —— 固定组队/交易序列没跑（驱动未生效/假人未进世界）'
       exit 1
     }
-    $pairTradeEvents = @($pairTradeSeqMarkers | ForEach-Object { $_.Substring('M3PAIRTRADESEQ '.Length).Trim() })
+    # 保留带前缀原始行（同 shop_markers 口径；卡 openmir2-m3-fixture-marker-prefix-bug）。
+    $pairTradeEvents = @($pairTradeSeqMarkers)
     Set-Content -Path $pairTradeMarkersPath -Value $pairTradeEvents -Encoding utf8
+    Assert-M3MarkerPrefix -Path $pairTradeMarkersPath -Marker 'M3PAIRTRADESEQ'
     $ptSend = @($pairTradeEvents | Where-Object { $_ -match '"phase"\s*:\s*"send"' }).Count
     $ptEnd = @($pairTradeEvents | Where-Object { $_ -match '"phase"\s*:\s*"end"' }).Count
     $ptDone = @($pairTradeEvents | Where-Object { $_ -match '"phase"\s*:\s*"done"' }).Count
@@ -791,8 +819,10 @@ if (-not $SkipBots) {
       Write-Output 'RED: -SellOffSequence 开了但 bot.log 里一条 M3SELLOFFSEQ 标记都没有 —— 固定元宝寄售序列没跑（驱动未生效/假人未进世界）'
       exit 1
     }
-    $sellOffEvents = @($sellOffSeqMarkers | ForEach-Object { $_.Substring('M3SELLOFFSEQ '.Length).Trim() })
+    # 保留带前缀原始行（同 shop_markers 口径；卡 openmir2-m3-fixture-marker-prefix-bug）。
+    $sellOffEvents = @($sellOffSeqMarkers)
     Set-Content -Path $sellOffMarkersPath -Value $sellOffEvents -Encoding utf8
+    Assert-M3MarkerPrefix -Path $sellOffMarkersPath -Marker 'M3SELLOFFSEQ'
     $soSend = @($sellOffEvents | Where-Object { $_ -match '"phase"\s*:\s*"send"' }).Count
     $soEnd = @($sellOffEvents | Where-Object { $_ -match '"phase"\s*:\s*"end"' }).Count
     $soDone = @($sellOffEvents | Where-Object { $_ -match '"phase"\s*:\s*"done"' }).Count
