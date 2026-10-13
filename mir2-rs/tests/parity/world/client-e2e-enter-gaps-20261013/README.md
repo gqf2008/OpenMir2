@@ -294,3 +294,23 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
 - **零生产代码改动**（仅 `.py` 判据工具 + 证据）；本片**未起栈、未占端口**；两侧同框真机读数仍归 owner 窗口。
 - 证据：`77-two-side-comparator.txt`（工具自证 + 真 capture 演示）、`78-m1-m2-minor-fix.txt`
   （M-1 措辞 before/after + M-2 归一）、`79-gates.txt`、`80-boundary.txt`。
+
+## ⑬ 片⑬：③「该点确实无怪」判据**工具化** + 窗口运行手册（2026-10-14）—— `81`/`82`
+
+- **背景**：片⑪/⑫ 已给服务端 `vis/af` 判据、客户端帧判据、两侧对照器，但「该点有没有生成框」的读数
+  只留在 `71-mongen-dense-points-map0.txt` 那份**一次性转录**里（不可复跑、无牙齿），而 root 的 ③ 收口
+  与窗口选点都依赖它；C# 侧的 capture 拓扑也只在 `tools/README.md` / `C线-交付说明.md` 里有历史告警。
+- **新工具 `check_mongen_dense_points.py`**：解析 `Envir/MonGen.txt`（GBK，逻辑地图名），按 oracle
+  `WorldServer.MonGen.cs:825-826` 的**正方形**生成框语义（Chebyshev）判 `inside/outside`，打印到最近框的
+  距离与 `view_range` 关系；`--selftest` 10/10、**两条改坏必红**（Chebyshev→Manhattan、丢掉 `Range`）、
+  缺件 `PREREQ_RED` rc=2。原文见 `81-mongen-dense-points-checker.txt`。
+- **③ 离线收口（复算）**：root verify1 `(291,666)` / 复进 `(291,651)` 在 map "0" **76 个生成框之外**
+  （最近框 Chebyshev=30 / 29 > `ViewRange=12`）⇒ ③「该点确实无怪」成立；`(287,620)`/`(256,572)`/`(188,439)`
+  框内 ⇒ ④ 不成立（客户端实收 13 对出现帧）。**新增**：`StartPoint.txt` 的 oracle 出生点
+  `(289,618)`/`(330,266)` 框内、`(650,631)` 距框 3 格 ⇒ **新角色默认体验本来就该同屏见怪**，
+  窗口里应把 `aaa` 置 `(289,618)`（或 `(287,620)`），别再拿夹具残留点 `(291,666)` 复测。
+- **窗口运行手册 `82-two-side-window-runbook.md`**：③a/③b 逐条判据、坐标选择（含 `check_mongen_dense_points.py`
+  现场复核）、两侧起栈/影子 game-gate+代理/客户端/解码/比较器的**照抄步骤**、收工与还原，
+  并**显式登记唯一未证环节**：C# 侧抓包拓扑（`tools/README.md` 的「进世界数据拿不到」历史 +
+  若复现时按 `C线-交付说明.md`「解除判据」#1 走 owner 裁决），以及**降级判据**（截图级两侧对照，须在卡上写明）。
+- **零生产代码改动**（仅新增一个 `.py` 判据 + 两份文档）；本片**未起栈、未占端口**；真机两侧同框读数仍归 owner 窗口。
