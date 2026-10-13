@@ -1,0 +1,80 @@
+101-window-plan-o2-bestsite.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片⑱
+③ 窗口计划：reviewer-5 O-2 收口（完整 ③a 命令）+ ③①「换怪密点」自动选点
+（m2-svr / openmir2-worker-11，2026-10-14）
+====================================================================================================
+一句话：`window_handoff.py` 的 ③a 反向判据由「同上加 --expect none」的半句改成**两条完整可粘贴命令**，
+并新增 `--best-site`（③b 站点由片⑯ `check_mongen_dense_points.py --best-point` 自动选出最密点，
+fail-soft 且**假点必红**）；`--selftest` 27/27 → **35/35**，聚合门仍 `WINDOW_READY=YES`。
+
+A. 背景与锚点
+----------------------------------------------------------------------------------------------------
+[A1] reviewer-5 对片⑰ 的 approve（entry `774c02c4`）里 **O-2（Observation）**：
+     「`--plan` 的 ③a 段以注释『同上加 --expect none』表达而非完整命令；功能等价（selftest 断言
+      `--expect none` 必含），仅可粘贴性略弱，随卡带走。」
+     被审文件（origin/master）里的原文：
+       $ git show 350cb923b:mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py | grep -n 同上加
+       287:    A(f"#   ③a 反向：同上加 --expect none（两侧都必须是 0 对）")
+[A2] root 2026-10-14 00:4x ③①：「换怪密点（例如比奇省郊外，或 MonGen 里密度高的图）复测」。
+     片⑯ 已把「窗口内期望出生怪数 E」做成排行（`93-mongen-dense-rank.txt`：最密 `(605,578)` E=12.681、
+     次密 `(211,629)`/`(256,572)` E=12.225），但片⑰ 计划的 ③b `--site` **缺省恒为 `287,620`（E=5.617）**
+     ⇒ 片⑯ 的「最密点」与片⑰ 的「计划落点」之间没有机判连接，选点仍靠人工记忆。
+[A3] 判据分级的「只聚合不复制」原则（片⑰ 已自证）：本片仍**不新增第二份几何/判据实现**，
+     O-2 只改**计划文本**；`--best-site` 只调既有片⑯ 工具的 `--best-point` 并解析 `BEST (x,y) E=`。
+
+B. `--best-site` 真读数（③b 站点自动选取，map 0 / view_range=12）
+----------------------------------------------------------------------------------------------------
+$ python -I -B window_handoff.py --plan-only --best-site \
+    --repo E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr
+  # ③ 两侧同框对照窗口计划（卡 openmir2-client-e2e-enter-gaps）
+  # 构建源 repo=E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr ref=HEAD
+  # ③b 有怪点 site=605,578 / ③a 反向点 site_none=291,666 / view_range=12
+  # ③b 最密点自动选取 BEST=605,578 E=12.681 （check_mongen_dense_points.py --best-point，root ③①「换怪密点」）
+  ⇒ 与 `93-mongen-dense-rank.txt` §B 的 `BEST (605,578) E=12.681` 逐字一致；无 `--best-site` 时**不打印**
+    该行（selftest `plan-no-note-when-empty`）。
+
+C. O-2 收口后的 ③a 反向段（完整命令，不再有「同上加」）
+----------------------------------------------------------------------------------------------------
+$ python -I -B window_handoff.py --plan-only --site 287,620 --repo R | sed -n '/③b 两侧/,/收工/p'
+  #   ③b 两侧：python -I -B aoi_visibility_pair.py --left E:/tmp/window/cliente2e/rust/s2c/capture.jsonl \
+  #     --right E:/tmp/window/cliente2e/csharp/s2c/capture.jsonl --expect visible --min-pairs 1
+  #   ③a 反向（服务端）：python -I -B check_aoi_visibility_diag.py \
+  #     --log E:/tmp/window/cliente2e/rust/stack/game-svr.out.log --expect none
+  #   ③a 反向（两侧）：python -I -B aoi_visibility_pair.py --left E:/tmp/window/cliente2e/rust/s2c/capture.jsonl \
+  #     --right E:/tmp/window/cliente2e/csharp/s2c/capture.jsonl --expect none
+  #   （③a 是第二趟：把 §1 的 aaa 改到 site_none=291,666 重跑 §2/§3，再跑上面两条 --expect none；
+  #    两侧都必须 0 对出现帧 + 服务端 vis==0 且 af==0）
+  ⇒ 「③a 是第二趟」显式点出 ③a 需要换站位重跑（旧文本只写「同上加」，没写要重跑 §2/§3，易漏）。
+
+D. 聚合门（构建源 = 本车道 worktree @ origin/master；只读、零起栈、零端口）
+----------------------------------------------------------------------------------------------------
+$ python -I -B window_handoff.py --repo E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr --ref HEAD --check-dir .
+  OK   G2 check_mongen_dense_points.py --selftest
+  OK   G2 check_aoi_visibility_diag.py --selftest
+  OK   G2 aoi_visibility_pair.py --selftest
+  OK   G2 check_client_s2c_frames.py --selftest
+  OK   G2 check_rust_window_preflight.py --selftest
+  OK   G2 check_csharp_capture_preflight.py --selftest
+  OK   G1 Rust 窗口前置门 GREEN（R1..R5）
+  WINDOW_READY=YES
+  RESULT: GREEN
+  rc=0
+  ⇒ 本片未改任何判据脚本，聚合门结论与片⑰ 相同；③ 的**唯一剩余仍是 root 独占窗口的 R 级两侧同框对照**。
+
+E. `--selftest` 27/27 → 35/35（新增 8 条）
+----------------------------------------------------------------------------------------------------
+新增断言：`parse-best-point`（含整数 E 与缺行）、`resolve-best-site-failsoft`（缺部署根 ⇒ `(None, "选点跳过…")`，
+不抛异常）、`plan-none-full-commands`（③a 两条完整命令必含、`同上加` 必不含）、
+`plan-none-second-pass-note`（「第二趟」+ `site_none=`）、`plan-site-note`（有 note 必打印）、
+`plan-no-note-when-empty`（无 note 不打印）。
+
+$ python -I -B window_handoff.py --selftest
+  ...（35 条 PASS）...
+  SELFTEST OK (35/35)
+  rc=0
+
+F. 边界与纪律
+----------------------------------------------------------------------------------------------------
+- 写集：本片 = `window_handoff.py`（1 个 `.py`）+ 证据 `101`/`102`/`103`/`104` + `README.md`/`SHA256SUMS.txt`；
+  **零 `.rs` / 零 `.toml`**；冻结面 `src/ sql/ MirClient/ crates/protocol/ crates/storage/ src/BotSrv` 空（见 `104`）。
+- 本片**零起栈、零端口**（仅共享 MySQL 3306 UP）；未动共享主检出。
+- 不 merge、未自签 review。

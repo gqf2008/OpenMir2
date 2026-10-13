@@ -1,0 +1,45 @@
+104-boundary.txt —— 片⑱ 写集边界（卡 `openmir2-client-e2e-enter-gaps`）
+（m2-svr / openmir2-worker-11，2026-10-14）
+====================================================================================================
+base（创建分支时的 origin/master） = 350cb923bbe21d39e784d169cc8f916f2855f401
+本片 commit1（代码）               = 78816574244506199bd25577d0d2e0790cac4123
+本片 commit2（证据/清单）           = 见 `git rev-parse HEAD`（本文件所在提交）
+（本片工作期间 origin/master 已前进到 768b2bb6c，属他线，不在本片差量内。）
+
+A. 本片差量（base..HEAD）
+----------------------------------------------------------------------------------------------------
+$ git diff --name-status 350cb923bbe21d39e784d169cc8f916f2855f401 HEAD
+M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py
+M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/101-window-plan-o2-bestsite.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/102-redcheck-window-plan-o2.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/103-gates.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/104-boundary.txt
+⇒ 7 路径，全部在卡证据目录 `mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/` 内。
+
+B. 冻结面（必须空）
+----------------------------------------------------------------------------------------------------
+$ git diff --name-only 350cb923b HEAD -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage src/BotSrv
+（无输出） ⇒ oracle 冻结面 / 协议层 / 存储层 / BotSrv 零改动。
+
+C. 本片零代码面（零 Rust/协议）
+----------------------------------------------------------------------------------------------------
+$ git diff --name-only 350cb923b HEAD -- '*.rs' '*.toml'
+（无输出） ⇒ 只有 1 个 `.py`（窗口计划工具）+ 4 份证据 + `README.md`/`SHA256SUMS.txt`。
+
+D. 证据 hash 口径
+----------------------------------------------------------------------------------------------------
+`SHA256SUMS.txt` 按**仓库字节（Git blob / LF 归一）**记（`tools/evidence-hash/verify_sha256sums.py` 默认口径）：
+  $ python -I -B tools/evidence-hash/verify_sha256sums.py verify <本目录>
+  ⇒ GREEN OK 103/103
+  $ python -I -B tools/evidence-hash/verify_sha256sums.py verify <本目录> --check-extra
+  ⇒ GREEN OK 103/103（无未列清单的多件）
+  $ python -I -B tools/evidence-hash/verify_sha256sums.py eolcheck <本目录>
+  ⇒ EOLCHECK GREEN 104/104
+本片改动文件的 `.py` 在盘上已是 LF（`sha256sum` 与 git-blob 口径一致，`101`/`102` 已记）。
+
+E. 纪律
+----------------------------------------------------------------------------------------------------
+本片**未起栈、未占端口**（十端口仅共享 MySQL 3306 UP）；未动共享主检出
+（`git -C E:/Users/gxh/Documents/GitHub/OpenMir2 status --porcelain` 空）；不 merge、未自签 review。
