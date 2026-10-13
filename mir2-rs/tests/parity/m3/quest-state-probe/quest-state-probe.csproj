@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>quest-state-probe</AssemblyName>
+    <RootNamespace>QuestStateProbe</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    M3⑥-2（卡 openmir2-m3-quest-state）真身探针。
+
+    引用**真身** `src/M2Server` 的 `PlayObject`（`QuestFlag`/`QuestUnit`/`QuestUnitOpen` 与
+    `GetQuestFalgStatus`/`SetQuestFlagStatus`/… 六个入口，`PlayObject.cs:3966-4110`），
+    以及真 `ConditionProcessingSys`（`ConditionCheckUnit` `:4104` / `ConditionOfCheckOpen` `:199`），
+    把位边界与两个条件的真值表产成向量：
+
+      - `quest_state_vectors.{json,tsv}`     位读写逐 op（含 0/1/8/9/31/32/33/107/1024/1025/负值，
+        跨字节、清位、越界 no-op；每步 dump 原始 128 字节）；
+      - `quest_condition_vectors.{json,tsv}` 两个条件的真值表（含 CHECKOPEN 恒假）。
+
+    产物供 Rust 用例 `crates/script/tests/quest_state_vectors.rs` 逐字段核对。
+    只读：不连 MySQL、不写任何现网文件、不发起任何 socket。
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\..\src\M2Server\M2Server.csproj" />
+  </ItemGroup>
+
+</Project>

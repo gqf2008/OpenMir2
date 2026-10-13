@@ -1,0 +1,13 @@
+== 边界（写集 = mir2-rs/tests/parity/**；零 .rs / 零 src / 零 sql / 零 bins）==
+$ git diff --stat origin/master -- src sql
+(空 = 无改动)
+
+$ git status --short
+ M mir2-rs/tests/parity/M3-report.md
+ M mir2-rs/tests/parity/whitelist.md
+?? mir2-rs/tests/parity/m3/evidence-m3-final-acceptance-tenitem-20261013/
+
+$ git diff --stat origin/master
+ mir2-rs/tests/parity/M3-report.md | 26 ++++++++++++++++----------
+ mir2-rs/tests/parity/whitelist.md |  5 +++++
+ 2 files changed, 21 insertions(+), 10 deletions(-)

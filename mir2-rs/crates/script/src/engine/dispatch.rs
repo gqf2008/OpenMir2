@@ -97,6 +97,8 @@ pub static IMPLEMENTED_EXECUTIONS: &[&str] = &[
 /// 已实现的**条件**处理器名。
 pub static IMPLEMENTED_CONDITIONS: &[&str] = &[
     "ConditionOfCheck",
+    "ConditionOfCheckOpen",
+    "ConditionCheckUnit",
     "ConditionOfCheckGold",
     "ConditionOfCheckLevel",
     "ConditionOfEqual",

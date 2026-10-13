@@ -57,6 +57,17 @@ pub trait ScriptPlayer {
     fn set_script_goto_count(&mut self, v: i32);
     /// `playerActor.GetQuestFalgStatus(flag)`
     fn quest_flag_status(&self, flag: i16) -> u8;
+    /// `playerActor.GetQuestUnitStatus(flag)`（`ConditionCheckUnit` 的取数口）。
+    ///
+    /// 位语义见 [`crate::engine::quest_state::QuestBitmap`]；默认返回 0 —— 引擎本身不持有任务态，
+    /// 真世界/夹具按需覆写。
+    fn quest_unit_status(&self, _flag: i16) -> u8 {
+        0
+    }
+    /// `playerActor.GetQuestUnitOpenStatus(flag)`（`ConditionOfCheckOpen` 的取数口）。
+    fn quest_unit_open_status(&self, _flag: i16) -> u8 {
+        0
+    }
     /// `playerActor.Gold`
     fn gold(&self) -> i32;
     /// `IPlayerActor.DecGold`（`GotoLableTakeItem` 的金币分支）。
@@ -1233,6 +1244,7 @@ impl<'n, 'p> Engine<'n, 'p> {
 pub mod actions;
 pub mod conditions;
 pub mod dispatch;
+pub mod quest_state;
 pub mod vars;
 
 pub use vars::VarLookup;

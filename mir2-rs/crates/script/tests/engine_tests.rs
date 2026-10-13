@@ -16,6 +16,7 @@ struct MockPlayer {
     msgs_full: Vec<String>,
     rng_value: i32,
     unit_status: std::collections::HashMap<i32, i32>,
+    unit_open_status: std::collections::HashMap<i32, i32>,
     items: Vec<(String, i32)>,
     effects: Vec<String>,
     // ---- B2/M4 条件批次新增的脚本可见状态 ----
@@ -137,6 +138,7 @@ impl MockPlayer {
             msgs_full: Vec::new(),
             rng_value: 0,
             unit_status: std::collections::HashMap::new(),
+            unit_open_status: std::collections::HashMap::new(),
             items: Vec::new(),
             effects: Vec::new(),
             game_gold: 0,
@@ -246,6 +248,19 @@ impl ScriptPlayer for MockPlayer {
     }
     fn quest_flag_status(&self, flag: i16) -> u8 {
         *self.flags.get(&flag).unwrap_or(&0)
+    }
+    fn quest_unit_status(&self, flag: i16) -> u8 {
+        // 对应 `GetQuestUnitStatus`：只想用 0/非 0 两个分支，值本身归一为 0/1。
+        u8::from(self.unit_status.get(&(flag as i32)).copied().unwrap_or(0) != 0)
+    }
+    fn quest_unit_open_status(&self, flag: i16) -> u8 {
+        u8::from(
+            self.unit_open_status
+                .get(&(flag as i32))
+                .copied()
+                .unwrap_or(0)
+                != 0,
+        )
     }
     fn gold(&self) -> i32 {
         self.gold
@@ -443,7 +458,9 @@ impl ScriptPlayer for MockPlayer {
         self.flags
             .insert(flag as i16, if value == 0 { 0 } else { 1 });
     }
-    fn set_quest_unit_open_status(&mut self, _index: i32, _value: i32) {}
+    fn set_quest_unit_open_status(&mut self, index: i32, value: i32) {
+        self.unit_open_status.insert(index, value);
+    }
     fn slave_count(&self) -> i32 {
         0
     }
@@ -2244,4 +2261,139 @@ fn marry_and_unmarry_reachable_branches() {
     );
     assert!(player.dear_name.is_empty());
     assert_eq!(player.marry_count, 1);
+}
+
+// ---- M3⑥-2：CHECKUNIT / CHECKOPEN（`ConditionProcessingSys.cs:4104` / `:199`）----
+
+/// `CHECKUNIT`：`#IF / CHECKUNIT [flag] [value]` 按 `GetQuestUnitStatus` 比较。
+/// oracle `ConditionCheckUnit` 起始 `success = true` ⇒ 「status 非 0」与「value 非 0」一致即真。
+#[test]
+fn checkunit_matches_quest_unit_status() {
+    // 注意：C# 解析器对 CHECK/CHECKOPEN/CHECKUNIT 的 sParam1 走 `ArrestStringEx(...,"[","]")`
+    // （`ScriptParsers.cs`）；现网语料因此写成 `check [107] 1`。这里同样带方括号。
+    let src = "[@main]\n#IF\nCHECKUNIT [5] 1\n#SAY\n开\n#ELSESAY\n关\n";
+    for (status, expect_open) in [(1, true), (0, false)] {
+        let (mut npc, mut player) = setup(src);
+        player.unit_status.insert(5, status);
+        let errors = run(&mut npc, &mut player, "@main");
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(
+            npc.says.iter().any(|(s, _)| s.contains("开")),
+            expect_open,
+            "CHECKUNIT 5 1, status={status}: {:?}",
+            npc.says
+        );
+    }
+
+    // value = 0 时语义相反（oracle 的 else 分支）
+    let src0 = "[@main]\n#IF\nCHECKUNIT [5] 0\n#SAY\n开\n#ELSESAY\n关\n";
+    for (status, expect_open) in [(1, false), (0, true)] {
+        let (mut npc, mut player) = setup(src0);
+        player.unit_status.insert(5, status);
+        let errors = run(&mut npc, &mut player, "@main");
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(
+            npc.says.iter().any(|(s, _)| s.contains("开")),
+            expect_open,
+            "CHECKUNIT 5 0, status={status}: {:?}",
+            npc.says
+        );
+    }
+}
+
+/// `CHECKOPEN`：oracle `ConditionOfCheckOpen` 起始写 `success = false` 且三个分支都不改回 `true`
+/// ⇒ **恒假**（与同族的 `ConditionCheckUnit` 不对称）。按「行为等价优先于修 bug」照搬，
+/// 登记 `mir2-rs/tests/parity/whitelist.md` **T-37**。
+#[test]
+fn checkopen_is_always_false_like_oracle() {
+    for open in [0, 1] {
+        for value in [0, 1] {
+            let src = format!("[@main]\n#IF\nCHECKOPEN [5] {value}\n#SAY\n开\n#ELSESAY\n关\n");
+            let (mut npc, mut player) = setup(&src);
+            player.unit_open_status.insert(5, open);
+            let errors = run(&mut npc, &mut player, "@main");
+            assert!(errors.is_empty(), "{errors:?}");
+            assert!(
+                npc.says.iter().any(|(s, _)| s.contains("关")),
+                "CHECKOPEN 应恒假（oracle 缺陷照搬）：open={open} value={value} says={:?}",
+                npc.says
+            );
+        }
+    }
+}
+
+/// M3⑥-2 判据③（条件真值表）：`CHECKUNIT`/`CHECKOPEN` 由 oracle 真身探针
+/// （`quest-state-probe` 直调真 `ConditionProcessingSys`）产出的真值表，逐行用**真引擎**复核。
+/// 其中 `ConditionOfCheckOpen` 全部 `success=0` —— oracle 缺陷照搬（whitelist T-37）。
+#[test]
+fn condition_truth_table_matches_oracle() {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/parity/m3/quest-state-probe/vectors/quest_condition_vectors.tsv");
+    let text =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("读不到 {}: {e}", path.display()));
+    let mut n = 0;
+    for line in text.lines() {
+        let line = line.trim_end();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let f: Vec<&str> = line.split('\t').collect();
+        assert_eq!(f.len(), 5, "条件向量列数：{line}");
+        let handler = f[0];
+        let flag: i32 = f[1].parse().unwrap();
+        let value: i32 = f[2].parse().unwrap();
+        let status: i32 = f[3].parse().unwrap();
+        let expect_success = f[4] == "1";
+        let word = match handler {
+            "ConditionCheckUnit" => "CHECKUNIT",
+            "ConditionOfCheckOpen" => "CHECKOPEN",
+            other => panic!("未知 handler {other}"),
+        };
+        let src = format!("[@main]\n#IF\n{word} [{flag}] {value}\n#SAY\n真\n#ELSESAY\n假\n");
+        let (mut npc, mut player) = setup(&src);
+        if handler == "ConditionCheckUnit" {
+            player.unit_status.insert(flag, status);
+        } else {
+            player.unit_open_status.insert(flag, status);
+        }
+        let errors = run(&mut npc, &mut player, "@main");
+        assert!(errors.is_empty(), "{handler}: {errors:?}");
+        let got = npc.says.iter().any(|(s, _)| s.contains("真"));
+        assert_eq!(
+            got, expect_success,
+            "{handler} flag={flag} value={value} status={status}: {:?}",
+            npc.says
+        );
+        n += 1;
+    }
+    assert_eq!(
+        n, 8,
+        "条件真值表应有 8 行（2 handler × 2 value × 2 status）"
+    );
+}
+
+/// 解析锚点：`CHECKOPEN`/`CHECKUNIT` 存 CmdCode 5/6（不做 code-1），且 sParam1 走
+/// `ArrestStringEx(...,"[","]")` 剥壳（现网语料写作 `checkunit [5] 1`）。
+#[test]
+fn checkunit_checkopen_parse_anchors() {
+    let (npc, _player) = setup("[@main]\n#IF\nCHECKUNIT [5] 1\n#SAY\nx\n");
+    let rec = npc.scripts[0].find_record("@main").unwrap();
+    let c = &rec.procedure_list[0].condition_list[0];
+    assert_eq!(c.cmd_code, 6);
+    assert_eq!(c.s_param1, "5");
+    assert_eq!(c.n_param2, 1);
+    assert_eq!(
+        mir2_script::engine::dispatch::condition_handler(c.cmd_code),
+        Some("ConditionCheckUnit")
+    );
+
+    let (npc2, _p2) = setup("[@main]\n#IF\nCHECKOPEN [5] 1\n#SAY\nx\n");
+    let rec2 = npc2.scripts[0].find_record("@main").unwrap();
+    let c2 = &rec2.procedure_list[0].condition_list[0];
+    assert_eq!(c2.cmd_code, 5);
+    assert_eq!(c2.s_param1, "5");
+    assert_eq!(
+        mir2_script::engine::dispatch::condition_handler(c2.cmd_code),
+        Some("ConditionOfCheckOpen")
+    );
 }

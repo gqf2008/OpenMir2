@@ -1,0 +1,155 @@
+# M3⑥-2 oracle 锚点（本仓库 src/ 实测行号）
+
+## PlayObject.cs 任务位图字段与六个入口
+PlayObject.cs:865	        public byte[] QuestUnitOpen { get; set; }
+PlayObject.cs:866	        public byte[] QuestUnit { get; set; }
+PlayObject.cs:867	        public byte[] QuestFlag { get; set; }
+PlayObject.cs:1038	            QuestUnitOpen = new byte[128];
+PlayObject.cs:1039	            QuestUnit = new byte[128];
+PlayObject.cs:1040	            QuestFlag = new byte[128];
+PlayObject.cs:3966	        public int GetQuestFalgStatus(int nFlag)
+PlayObject.cs:3967	        {
+PlayObject.cs:3968	            int result = 0;
+PlayObject.cs:3969	            nFlag -= 1;
+PlayObject.cs:3970	            if (nFlag < 0)
+PlayObject.cs:3971	            {
+PlayObject.cs:3972	                return result;
+PlayObject.cs:3973	            }
+PlayObject.cs:3974	            int n10 = nFlag / 8;
+PlayObject.cs:3975	            int n14 = nFlag % 8;
+PlayObject.cs:3976	            if ((n10 - QuestFlag.Length) < 0)
+PlayObject.cs:3977	            {
+PlayObject.cs:3978	                if (((128 >> n14) & QuestFlag[n10]) != 0)
+PlayObject.cs:3979	                {
+PlayObject.cs:3980	                    result = 1;
+PlayObject.cs:3981	                }
+PlayObject.cs:3982	                else
+PlayObject.cs:3983	                {
+PlayObject.cs:3984	                    result = 0;
+PlayObject.cs:3985	                }
+PlayObject.cs:3986	            }
+PlayObject.cs:3987	            return result;
+PlayObject.cs:3988	        }
+PlayObject.cs:3989	
+PlayObject.cs:3990	        public void SetQuestFlagStatus(int nFlag, int nValue)
+PlayObject.cs:4013	        public int GetQuestUnitOpenStatus(int nFlag)
+PlayObject.cs:4014	        {
+PlayObject.cs:4015	            int result = 0;
+PlayObject.cs:4016	            nFlag -= 1;
+PlayObject.cs:4017	            if (nFlag < 0)
+PlayObject.cs:4018	            {
+PlayObject.cs:4019	                return result;
+PlayObject.cs:4020	            }
+PlayObject.cs:4021	            int n10 = nFlag / 8;
+PlayObject.cs:4022	            int n14 = nFlag % 8;
+PlayObject.cs:4023	            if ((n10 - QuestUnitOpen.Length) < 0)
+PlayObject.cs:4024	            {
+PlayObject.cs:4025	                if (((128 >> n14) & QuestUnitOpen[n10]) != 0)
+PlayObject.cs:4026	                {
+PlayObject.cs:4027	                    result = 1;
+PlayObject.cs:4028	                }
+PlayObject.cs:4029	                else
+PlayObject.cs:4030	                {
+PlayObject.cs:4031	                    result = 0;
+PlayObject.cs:4032	                }
+PlayObject.cs:4033	            }
+PlayObject.cs:4034	            return result;
+PlayObject.cs:4035	        }
+PlayObject.cs:4036	
+PlayObject.cs:4037	        public void SetQuestUnitOpenStatus(int nFlag, int nValue)
+PlayObject.cs:4060	        public int GetQuestUnitStatus(int nFlag)
+PlayObject.cs:4061	        {
+PlayObject.cs:4062	            int result = 0;
+PlayObject.cs:4063	            nFlag -= 1;
+PlayObject.cs:4064	            if (nFlag < 0)
+PlayObject.cs:4065	            {
+PlayObject.cs:4066	                return result;
+PlayObject.cs:4067	            }
+PlayObject.cs:4068	            int n10 = nFlag / 8;
+PlayObject.cs:4069	            int n14 = nFlag % 8;
+PlayObject.cs:4070	            if ((n10 - QuestUnit.Length) < 0)
+PlayObject.cs:4071	            {
+PlayObject.cs:4072	                if (((128 >> n14) & QuestUnit[n10]) != 0)
+PlayObject.cs:4073	                {
+PlayObject.cs:4074	                    result = 1;
+PlayObject.cs:4075	                }
+PlayObject.cs:4076	                else
+PlayObject.cs:4077	                {
+PlayObject.cs:4078	                    result = 0;
+PlayObject.cs:4079	                }
+PlayObject.cs:4080	            }
+PlayObject.cs:4081	            return result;
+PlayObject.cs:4082	        }
+PlayObject.cs:4083	
+PlayObject.cs:4084	        public void SetQuestUnitStatus(int nFlag, int nValue)
+
+## ConditionCheckUnit / ConditionOfCheckOpen
+ConditionProcessingSys.cs:199	        private void ConditionOfCheckOpen(INormNpc normNpc, IPlayerActor playerActor, QuestConditionInfo questConditionInfo, ref bool success)
+ConditionProcessingSys.cs:200	        {
+ConditionProcessingSys.cs:201	            success = false;
+ConditionProcessingSys.cs:202	            int n14 = HUtil32.StrToInt(questConditionInfo.sParam1, 0);
+ConditionProcessingSys.cs:203	            int n18 = HUtil32.StrToInt(questConditionInfo.sParam2, 0);
+ConditionProcessingSys.cs:204	            int n10 = playerActor.GetQuestUnitOpenStatus(n14);
+ConditionProcessingSys.cs:205	            if (n10 == 0)
+ConditionProcessingSys.cs:206	            {
+ConditionProcessingSys.cs:207	                if (n18 != 0)
+ConditionProcessingSys.cs:208	                {
+ConditionProcessingSys.cs:209	                    success = false;
+ConditionProcessingSys.cs:210	                }
+ConditionProcessingSys.cs:211	            }
+ConditionProcessingSys.cs:212	            else
+ConditionProcessingSys.cs:213	            {
+ConditionProcessingSys.cs:214	                if (n18 == 0)
+ConditionProcessingSys.cs:215	                {
+ConditionProcessingSys.cs:216	                    success = false;
+ConditionProcessingSys.cs:217	                }
+ConditionProcessingSys.cs:218	            }
+ConditionProcessingSys.cs:219	        }
+ConditionProcessingSys.cs:4104	        private void ConditionCheckUnit(INormNpc normNpc, IPlayerActor playerActor, QuestConditionInfo questConditionInfo, ref bool success)
+ConditionProcessingSys.cs:4105	        {
+ConditionProcessingSys.cs:4106	            success = true;
+ConditionProcessingSys.cs:4107	            int n14 = HUtil32.StrToInt(questConditionInfo.sParam1, 0);
+ConditionProcessingSys.cs:4108	            int n18 = HUtil32.StrToInt(questConditionInfo.sParam2, 0);
+ConditionProcessingSys.cs:4109	            int n10 = playerActor.GetQuestUnitStatus(n14);
+ConditionProcessingSys.cs:4110	            if (n10 == 0)
+ConditionProcessingSys.cs:4111	            {
+ConditionProcessingSys.cs:4112	                if (n18 != 0)
+ConditionProcessingSys.cs:4113	                {
+ConditionProcessingSys.cs:4114	                    success = false;
+ConditionProcessingSys.cs:4115	                }
+ConditionProcessingSys.cs:4116	            }
+ConditionProcessingSys.cs:4117	            else
+ConditionProcessingSys.cs:4118	            {
+ConditionProcessingSys.cs:4119	                if (n18 == 0)
+ConditionProcessingSys.cs:4120	                {
+ConditionProcessingSys.cs:4121	                    success = false;
+ConditionProcessingSys.cs:4122	                }
+ConditionProcessingSys.cs:4123	            }
+ConditionProcessingSys.cs:4124	        }
+ConditionProcessingSys.cs:4125	
+
+## 注册表 / 引擎调用（Execute 后立即 return 第一条注册条件）
+ConditionProcessingSys.cs:52	            _conditionMap[(int)ConditionCode.CHECKOPEN] = ConditionOfCheckOpen;
+ConditionProcessingSys.cs:53	            _conditionMap[(int)ConditionCode.CHECKUNIT] = ConditionCheckUnit;
+ScriptEngine.cs:397	        private bool GotoLableQuestCheckCondition(INormNpc normNpc, IPlayerActor playerActor, IList<QuestConditionInfo> conditionList, ref GotoLabParams gotoLabParams)
+ScriptEngine.cs:398	        {
+ScriptEngine.cs:399	            bool result = true;
+ScriptEngine.cs:400	            int n1C = 0;
+ScriptEngine.cs:401	            int nMaxDura = 0;
+ScriptEngine.cs:402	            int nDura = 0;
+ScriptEngine.cs:403	            for (int i = 0; i < conditionList.Count; i++)
+ScriptEngine.cs:404	            {
+ScriptEngine.cs:405	                QuestConditionInfo questConditionInfo = conditionList[i];
+ScriptEngine.cs:406	                if (ConditionScript.IsRegister(questConditionInfo.CmdCode))
+ScriptEngine.cs:407	                {
+ScriptEngine.cs:408	                    ConditionScript.Execute(normNpc, playerActor, questConditionInfo, ref result);
+ScriptEngine.cs:409	                    return result;
+ScriptEngine.cs:410	                }
+
+## 会话载入 / 存档写回（写集边界：属世界/接线面，本卡未动）
+WorldServer.cs:1160	            playObject.QuestUnitOpen = humData.QuestUnitOpen;
+WorldServer.cs:1161	            playObject.QuestUnit = humData.QuestUnit;
+WorldServer.cs:1162	            playObject.QuestFlag = humData.QuestFlag;
+WorldServer.cs:1291	            playerInfo.QuestUnitOpen = playObject.QuestUnitOpen;
+WorldServer.cs:1292	            playerInfo.QuestUnit = playObject.QuestUnit;
+WorldServer.cs:1293	            playerInfo.QuestFlag = playObject.QuestFlag;

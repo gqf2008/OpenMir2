@@ -1,0 +1,23 @@
+== 真身探针（C# oracle，直调真 PlayObject + 真 ConditionProcessingSys）==
+$ dotnet run --project mir2-rs/tests/parity/m3/quest-state-probe -c Release -- mir2-rs/tests/parity/m3/quest-state-probe/vectors
+
+bit rows      : 96
+condition rows: 8
+mir2-rs/tests/parity/m3/quest-state-probe/vectors\quest_state_vectors.json
+
+== 产物（向量）==
+total 69
+-rw-r--r-- 1 gxh 197121   260 Oct 13 08:21 quest_condition_vectors.tsv
+-rw-r--r-- 1 gxh 197121 38580 Oct 13 08:21 quest_state_vectors.json
+-rw-r--r-- 1 gxh 197121 27031 Oct 13 08:21 quest_state_vectors.tsv
+
+== 条件真值表 ==
+# handler	flag	value	status	success
+ConditionCheckUnit	5	0	0	1
+ConditionCheckUnit	5	1	0	0
+ConditionCheckUnit	5	0	1	0
+ConditionCheckUnit	5	1	1	1
+ConditionOfCheckOpen	5	0	0	0
+ConditionOfCheckOpen	5	1	0	0
+ConditionOfCheckOpen	5	0	1	0
+ConditionOfCheckOpen	5	1	1	0
