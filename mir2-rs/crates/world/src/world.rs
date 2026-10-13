@@ -831,10 +831,12 @@ impl World {
         }
     }
 
-    /// oracle `PlayObject.GainExp(int dwExp)`（`PlayObject.Base.cs:764-818`）。
+    /// oracle `PlayObject.GainExp(int dwExp)`（`PlayObject.Base.cs:764-821`）。
     ///
     /// 在**经验获得者**（`KillTargetTrigger` 的 `this`）上调用：
     ///
+    /// - `GroupOwner != 0` 但**团长对象不在注册表**（`ActorMgr.Get` 取不到，775 行）⇒ `GroupMembers`
+    ///   空引用抛异常、被 `catch`（818-821）吞掉 ⇒ **本次零经验、零授奖**（不会退回单人满经验）；
     /// - `GroupOwner != 0` ⇒ 遍历**团长** `GroupMembers`，统计「`!Death` + 同图 +
     ///   `|CurrX - x| <= 12` + `|CurrX - x| <= 12`」的 `sumlv`/`n` —— **两处都比 `CurrX`、
     ///   都漏了 `CurrY`，是 oracle 的既有缺陷，照搬**（§1 硬约束③），并在判据里带该缺陷向量；
@@ -870,11 +872,18 @@ impl World {
         let map_rate = self.map_exp_rate.get(rmap).copied().flatten();
         let mut my_gain = 0;
         if group_owner != 0 {
-            let members = self
-                .entities
-                .get(group_owner)
-                .map(|e| e.group_members.clone())
-                .unwrap_or_default();
+            // oracle `PlayObject.Base.cs:771-776`：`GroupOwner != 0` 时先
+            // `(IPlayerActor)SystemShare.ActorMgr.Get(GroupOwner)` 取团长对象；取不到
+            // ⇒ `groupOwnerPlay.GroupMembers` 空引用抛异常，被 818-821 的 `catch` 吞掉
+            // ⇒ 本次**零经验、零授奖**（不会退回单人满经验）。可达成因由：`leave_world`
+            // 移除实体时不清同组成员的 `group_owner`（见 `leave_world`）。
+            let members = match self.entities.get(group_owner) {
+                Some(owner) => owner.group_members.clone(),
+                None => {
+                    self.need_exps = need_exps;
+                    return 0;
+                }
+            };
             // 条件 = 团长成员表 ∩「同图 + !Death + |CurrX-x|<=12 + |CurrX-x|<=12（漏 CurrY，oracle 照搬）」。
             let in_range: Vec<i32> = members
                 .iter()
