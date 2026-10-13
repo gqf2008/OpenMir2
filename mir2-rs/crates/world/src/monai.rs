@@ -546,7 +546,9 @@ pub fn monster_ai_tick(world: &mut World) {
     let ids: Vec<i32> = world
         .entities
         .iter()
-        .filter(|e| e.race > ACTOR_RACE_PLAY && !e.death && !e.ghost)
+        // `race > Play` 会把交易商人也命中（`ActorRace.Merchant == Animal == 50`）⇒
+        // 显式排除 `merchant.is_some()` 的实体（M3⑤-实现 2：商人由自己的 tick 驱动）。
+        .filter(|e| e.race > ACTOR_RACE_PLAY && e.merchant.is_none() && !e.death && !e.ghost)
         .map(|e| e.id)
         .collect();
     for id in ids {

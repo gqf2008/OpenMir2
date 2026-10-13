@@ -19,6 +19,7 @@ pub mod combat;
 pub mod entity;
 pub mod magic;
 pub mod map;
+pub mod merchant;
 pub mod monai;
 pub mod mongen;
 pub mod session;
@@ -42,6 +43,10 @@ pub use magic::{
 };
 pub use map::{
     CellAttribute, CellObject, CellType, FloorItemKind, FloorItemMeta, MapCellInfo, MapGrid,
+};
+pub use merchant::{
+    MerchantFlags, MerchantGoods, MerchantSpawn, MerchantState, ACTOR_RACE_MERCHANT,
+    MERCHANT_RUN_TIME,
 };
 pub use monai::{
     attack_target, can_move, del_target_creature, dir_delta, get_attack_dir, goto_target_xy,

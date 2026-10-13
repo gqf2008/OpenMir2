@@ -416,10 +416,11 @@ async fn main() -> Result<()> {
             }
         }
     };
+    let envir_loader = mir2_envir::MapLoader::new(&base, &cfg.map_dir, &cfg.envir_dir);
     let mon_gen_entries = {
-        let loader = mir2_envir::MapLoader::new(&base, &cfg.map_dir, &cfg.envir_dir);
+        let loader = &envir_loader;
         match registry.as_ref() {
-            Some(reg) => match game_svr::mongen::load_mon_gen_entries(&loader, reg) {
+            Some(reg) => match game_svr::mongen::load_mon_gen_entries(loader, reg) {
                 Ok(Some(entries)) => {
                     glog!(
                         "INF",
@@ -498,6 +499,7 @@ async fn main() -> Result<()> {
                         entries: mon_gen_entries,
                         config: mon_gen_config,
                     },
+                    loader: Some(envir_loader),
                 },
                 notice,
                 colors,
@@ -3357,6 +3359,9 @@ struct EnterConfig {
     /// **M3④-实现 B 第 ③ 片**：MonGen 刷怪启动输入（怪物模板表 + `Envir/MonGen.txt` 运行时条目
     /// + `Server.conf` 刷怪参数）；`entries=None` ⇒ 无 `MonGen.txt`，不建宿主。
     mon_gen: MonGenStartup,
+    /// **M3⑤-实现 2 第①片**：`Envir/Merchant.txt` 的宿主装载器（O-1 FindMap 门 + O-2 `rename_rand`
+    /// 要用**世界同一条** `world.rng`，故装载放在 `sim_loop` 起世界之后，而不是主线程侧）。
+    loader: Option<mir2_envir::MapLoader>,
 }
 
 /// MonGen 刷怪启动输入（[`game_svr::mongen`]）。
@@ -3522,6 +3527,32 @@ fn sim_loop(
         }
         None => None,
     };
+    // **M3⑤-实现 2 第①片**：`Envir/Merchant.txt` 装载 + O-1 FindMap 门 + O-2 `rename_rand`
+    // （`LocalDB.cs:412` / `WorldServer.Merchant.cs:8-25`）。装载在起世界之后 ⇒ `rename_rand`
+    // 走**同一条** `world.rng`（oracle `SystemShare.RandomNumber`）。`loader=None`（无 Envir）
+    // 或 `registry=None` 时跳过（无逻辑名→map_id 映射 ⇒ 全会被 FindMap 门丢掉，故不载）。
+    if let (Some(loader), Some(reg)) = (enter_cfg.loader.take(), registry.as_ref()) {
+        match game_svr::merchant::load_merchant_spawns(&loader, |n| reg.id_of(n), &mut world.rng) {
+            Ok((spawns, report)) => {
+                let (kept, failed) = game_svr::merchant::spawn_merchants(&mut world, spawns);
+                glog!(
+                    "INF",
+                    "Envir/Merchant.txt 已载入：{} 条（FindMap 门丢 {} 条，挂图失败 {} 条）⇒ 世界内商人 {}",
+                    report.records,
+                    report.dropped_unknown_map.len(),
+                    failed.len(),
+                    kept
+                );
+                for (name, map) in &report.dropped_unknown_map {
+                    glog!(
+                        "WRN",
+                        "商人 {name} 的 MapName={map} 不在注册表 ⇒ 按 oracle FindMap 门丢弃"
+                    );
+                }
+            }
+            Err(e) => glog!("WRN", "加载 Envir/Merchant.txt 失败（{e}）⇒ 无商人（登记）"),
+        }
+    }
     // 取角色的加载队列（`FrnEngn` 的双缓冲 + `CharacterDataProcessor` 的读档循环，见 `load.rs`）
     let mut engine = load::FrontEngine::new();
     // `openmir2-m2-session-lifecycle`：在线用户的世界侧网关坐标 + 待踢名单（重复进世界用）
