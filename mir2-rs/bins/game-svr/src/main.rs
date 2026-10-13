@@ -1018,6 +1018,36 @@ fn pose_create(
     front_target(world, actor_id, e.map_id, fx, fy)
 }
 
+/// `ClientDealTry` 的 `GetPoseCreate()` 目标判定（`PlayObject.Operate.cs:928-958`）。
+///
+/// oracle 在 `:929` 对 `GetPoseCreate()` 的结果直接取 `poseObject.Race`：
+/// - `null` ⇒ NullReferenceException，被 `WorldServer.ProcessPlayObjectData` 的
+///   `catch`（`WorldServer.cs:734`）吞掉 ⇒ **一个帧都不发**（不是 `SM_DEALTRY_FAIL`）；
+/// - 非玩家 ⇒ `:955-958` 的 `else` ⇒ `SM_DEALTRY_FAIL`；
+/// - 玩家且 `== this` ⇒ `:934` 内层 `if (targetPlayObject != this)` 无 `else` ⇒ **不发帧**；
+/// - 玩家且 `!= this` ⇒ `:933` 取对方 `GetPoseCreate()` 是否回指自己（`faces_me`）。
+fn deal_try_target_of(
+    world: &mir2_world::World,
+    displays: &downlink::DisplayTable,
+    actor_id: i32,
+    pose_id: Option<i32>,
+) -> (Option<i32>, game_svr::trade::DealTryTarget) {
+    match pose_id {
+        None => (None, game_svr::trade::DealTryTarget::Absent),
+        Some(oid) if oid == actor_id => (None, game_svr::trade::DealTryTarget::Absent),
+        Some(oid) if !is_play_actor(world, oid) => {
+            (None, game_svr::trade::DealTryTarget::NotPlayer)
+        }
+        Some(oid) => {
+            let faces_me = pose_create(world, displays, oid) == Some(actor_id);
+            (
+                Some(oid),
+                game_svr::trade::DealTryTarget::Other { faces_me },
+            )
+        }
+    }
+}
+
 /// `poseObject.Race == ActorRace.Play`（`PlayObject.Operate.cs:933`）。
 fn is_play_actor(world: &mir2_world::World, id: i32) -> bool {
     world
@@ -1071,19 +1101,7 @@ fn handle_deal_cmd(
     // 目标解析：`CM_DEALTRY` 用 `GetPoseCreate()`，其余命令用已建立的 `DealCreat`。
     let pose_id = pose_create(world, displays, actor_id);
     let (other_id, try_target) = if ident == mir2_protocol::messages::CM_DEALTRY {
-        match pose_id
-            .filter(|id| *id != actor_id)
-            .filter(|id| is_play_actor(world, *id))
-        {
-            None => (None, game_svr::trade::DealTryTarget::NotPlayer),
-            Some(oid) => {
-                let faces_me = pose_create(world, displays, oid) == Some(actor_id);
-                (
-                    Some(oid),
-                    game_svr::trade::DealTryTarget::Other { faces_me },
-                )
-            }
-        }
+        deal_try_target_of(world, displays, actor_id, pose_id)
     } else {
         (
             trade_sessions.get(chr_name).and_then(|s| s.deal_creature),
@@ -6441,6 +6459,184 @@ mod tests {
         // 幽灵（`MakeGhost`）⇒ `!Ghost` 排除
         world.entities.get_mut(vic).unwrap().ghost = true;
         assert_eq!(front_target(&world, atk, 0, 18, 20), None, "!Ghost 过滤");
+    }
+
+    /// **M3⑦-3 · M-1 收口判据**：`ClientDealTry` 的目标判定必须区分「无前排对象」与「前排不是玩家」。
+    ///
+    /// oracle `PlayObject.Operate.cs:928-929` 先取 `GetPoseCreate()` 再直接读 `poseObject.Race`：
+    /// 无前排（`null`）⇒ NullReferenceException，被 `WorldServer.ProcessPlayObjectData` 的
+    /// `catch`（`WorldServer.cs:734`）吞掉 ⇒ **一个帧都不发**（不是 `SM_DEALTRY_FAIL`）；
+    /// 前排非玩家 ⇒ `:955-958` 的 `else` ⇒ `SM_DEALTRY_FAIL`。
+    ///
+    /// 旧实现把两者都归 `DealTryTarget::NotPlayer` ⇒ 空打也回 FAIL（与 oracle 不等）。
+    ///
+    /// 红检：把 `deal_try_target_of` 的 `None` 支改回 `NotPlayer` ⇒ ① 断言必红。
+    #[test]
+    fn deal_try_target_distinguishes_absent_from_non_player() {
+        use mir2_world::{Entity, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY};
+
+        // `front = Some((race, peer_dir))`：在前方格 (11,10) 放一个该 race/朝向的实体。
+        // hero 在 (10,10) 且 dir=2（Right）⇒ 前方格 = (11,10)。
+        let probe = |front: Option<(u8, u8)>| -> (Option<i32>, game_svr::trade::DealTryTarget) {
+            let mut world = mir2_world::World::new(32, 32);
+            let hero = world.add_entity(Entity::new(1, "hero", 10, 10));
+            let mut displays = downlink::DisplayTable::new();
+            displays.set(
+                hero,
+                downlink::ActorDisplay::new(2, 0, 0, 0, 0, 255, b"hero".to_vec()),
+            );
+            if let Some((race, peer_dir)) = front {
+                let fid = world.add_entity({
+                    let mut e = Entity::new(2, "front", 11, 10);
+                    e.race = race;
+                    e
+                });
+                displays.set(
+                    fid,
+                    downlink::ActorDisplay::new(peer_dir, 0, 0, 0, 0, 255, b"front".to_vec()),
+                );
+            }
+            let pose = pose_create(&world, &displays, hero);
+            deal_try_target_of(&world, &displays, hero, pose)
+        };
+
+        // ① 前方格为空 ⇒ `GetPoseCreate() == null` ⇒ oracle NRE 吞错 ⇒ 不发任何帧。
+        assert_eq!(
+            probe(None),
+            (None, game_svr::trade::DealTryTarget::Absent),
+            "无前排对象 ⇒ Absent（oracle Operate.cs:929 NRE 被吞），不是 NotPlayer"
+        );
+
+        // ② 前方格是怪（非玩家）⇒ `:955-958` else ⇒ `SM_DEALTRY_FAIL`。
+        assert_eq!(
+            probe(Some((ACTOR_RACE_MONSTER, 6))),
+            (None, game_svr::trade::DealTryTarget::NotPlayer),
+            "前排非玩家 ⇒ NotPlayer（SM_DEALTRY_FAIL）"
+        );
+
+        // ③ 前方格是玩家且 `dir=6`（Left）⇒ 它的前方格 = (10,10) = hero ⇒ `faces_me`。
+        assert_eq!(
+            probe(Some((ACTOR_RACE_PLAY, 6))),
+            (
+                Some(2),
+                game_svr::trade::DealTryTarget::Other { faces_me: true }
+            ),
+            "前排玩家回指 hero ⇒ faces_me=true"
+        );
+
+        // ④ 前方格是玩家但 `dir=2`（Right）⇒ 它的前方格 = (12,10) ≠ hero ⇒ `!faces_me`。
+        assert_eq!(
+            probe(Some((ACTOR_RACE_PLAY, 2))),
+            (
+                Some(2),
+                game_svr::trade::DealTryTarget::Other { faces_me: false }
+            ),
+            "前排玩家未回指 ⇒ faces_me=false"
+        );
+    }
+
+    /// **M3⑦-3 · M-1 收口（进程级）**：走**生产函数** `handle_deal_cmd` 的 `CM_DEALTRY` 支
+    /// （oracle `PlayObject.Message.cs:946` ⇒ `ClientDealTry`）：无前排对象时**一个帧都不发**
+    /// （oracle `Operate.cs:929` 的 NRE 被 `WorldServer.cs:734` 吞掉），前排为怪时发
+    /// `SM_DEALTRY_FAIL`（非空转对照）。
+    ///
+    /// 红检：把 `deal_try_target_of` 的 `None` 支改回 `DealTryTarget::NotPlayer` ⇒ ① 的
+    /// `frames.is_empty()` 必红（实得 1 帧 `SM_DEALTRY_FAIL`）。
+    #[test]
+    fn deal_cm_try_no_front_object_emits_no_frame_on_production_path() {
+        use std::collections::HashMap;
+
+        let mut world = mir2_world::World::new(32, 32);
+        world.clock_ms = 100_000;
+        let hero = world.add_entity({
+            let mut e = mir2_world::Entity::new(1, "hero", 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e
+        });
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            hero,
+            downlink::ActorDisplay::new(2, 0, 0, 0, 0, 255, b"hero".to_vec()),
+        );
+
+        let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+        ground_sessions.insert("hero".into(), test_session_ground(hero));
+        let mut trade_sessions: HashMap<String, game_svr::trade::DealState> = HashMap::new();
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hero,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let cfg = game_svr::trade::DealConfig::default();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+
+        let drain_idents = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| -> Vec<u16> {
+            let mut out = Vec::new();
+            while let Ok(m) = rx.try_recv() {
+                if let SimToGate::SendFrame { body, .. } = m {
+                    out.push(u16::from_le_bytes([body[4], body[5]]));
+                }
+            }
+            out
+        };
+
+        // ① 前方格 (11,10) 空 ⇒ `GetPoseCreate() == null` ⇒ oracle NRE 吞错 ⇒ 不发任何帧。
+        handle_deal_cmd(
+            mir2_protocol::messages::CM_DEALTRY,
+            0,
+            None,
+            "hero",
+            901,
+            &online,
+            &world,
+            &displays,
+            &mut ground_sessions,
+            &mut trade_sessions,
+            &gates,
+            &cfg,
+            &catalog,
+        );
+        assert!(
+            drain_idents(&mut rx0).is_empty(),
+            "无前排对象 ⇒ oracle 静默（不得发 SM_DEALTRY_FAIL）"
+        );
+
+        // ② 非空转对照：前方格放一只怪（非玩家）⇒ `:955-958` else ⇒ `SM_DEALTRY_FAIL`。
+        world.add_entity({
+            let mut e = mir2_world::Entity::new(2, "mon", 11, 10);
+            e.race = mir2_world::ACTOR_RACE_MONSTER;
+            e
+        });
+        handle_deal_cmd(
+            mir2_protocol::messages::CM_DEALTRY,
+            0,
+            None,
+            "hero",
+            901,
+            &online,
+            &world,
+            &displays,
+            &mut ground_sessions,
+            &mut trade_sessions,
+            &gates,
+            &cfg,
+            &catalog,
+        );
+        assert_eq!(
+            drain_idents(&mut rx0),
+            vec![mir2_protocol::messages::SM_DEALTRY_FAIL],
+            "前置守卫全过 + 前排非玩家 ⇒ 只发 SM_DEALTRY_FAIL"
+        );
     }
 
     /// F2（reviewer-2）的判据：`ProcessBufferSend` `:58-90` 的四条分支，**含"刚超时清零的那一包也要压住"**。
