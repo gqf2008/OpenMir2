@@ -1,0 +1,86 @@
+{
+  "canon": "m3-party-trade-v1",
+  "status": "skeleton-window-pending",
+  "card": "openmir2-m3-party-trade-fixture-botsrv",
+  "parent_card": "openmir2-m3-party-trade-align",
+  "bots": 2,
+  "actor_role": 0,
+  "peer_role": 1,
+  "default_case": "group_lifecycle",
+  "map": "0137",
+  "home_map": 0,
+  "home_x": 289,
+  "home_y": 618,
+  "player_x": 17,
+  "player_y": 20,
+  "player_dir": 2,
+  "peer_dx": 1,
+  "pin_level": 45,
+  "cases": {
+    "group_lifecycle": {
+      "steps": [
+        {"role": "x", "op": "group_mode_on", "param": ""},
+        {"role": "a", "op": "create_group", "param": "peer"},
+        {"role": "a", "op": "add_member", "param": "peer"},
+        {"role": "a", "op": "del_member", "param": "peer"},
+        {"role": "x", "op": "group_mode_off", "param": ""}
+      ],
+      "note": "两侧同串：两人都开组队开关（CM_GROUPMODE nParam2=1 ⇒ SM_GROUPMODECHANGED(659)），actor 建队（CM_CREATEGROUP + 对方名 ⇒ SM_CREATEGROUP_OK(660) + SM_GROUPMEMBERS(667)），actor 再加 peer（peer 已在组 ⇒ 合法失败分支 SM_GROUPADDMEM_FAIL(664) recog=-3），actor 踢 peer（SM_GROUPDELMEM_OK(663)），两人关开关。oracle 链见盘点报告 §1.B/§1.C/§1.D/§1.F。"
+    },
+    "deal_lifecycle": {
+      "steps": [
+        {"role": "a", "op": "deal_try", "param": ""},
+        {"role": "a", "op": "deal_add_item", "param": ""},
+        {"role": "a", "op": "deal_chg_gold", "param": "10"},
+        {"role": "x", "op": "deal_end", "param": ""},
+        {"role": "x", "op": "deal_cancel", "param": ""}
+      ],
+      "note": "actor 发起交易（CM_DEALTRY ⇒ 双方 SM_DEALMENU(673)），放入一件背包物品（CM_DEALADDITEM ⇒ 自己 SM_DEALADDITEM_OK(675)、对方 SM_DEALREMOTEADDITEM(682)），改金币 10（CM_DEALCHGGOLD ⇒ SM_DEALCHGGOLD_OK(684)、对方 SM_DEALREMOTECHGGOLD(686)），双方 CM_DEALEND（DealOKTime 门 + 双向 DealSuccess ⇒ SM_DEALSUCCESS(687)），最后取消。oracle 链见盘点报告 §1.H/§1.I/§1.J/§1.K。注：`CanNotGetBackDeal=1` 的取回拒绝路径由 deal_del_item 覆盖（本 case 不含）。"
+    },
+    "deal_cancel_only": {
+      "steps": [
+        {"role": "a", "op": "deal_try", "param": ""},
+        {"role": "a", "op": "deal_cancel", "param": ""}
+      ],
+      "note": "最小冒烟 case：发起后立刻取消（CM_DEALCANCEL ⇒ DealCancel 递归对手 ⇒ 双方 SM_DEALCANCEL(681) + GetBackDealItems），用于两侧帧面/背包金币零变更的快速比对。"
+    }
+  },
+  "step_ms": 1000,
+  "start_delay_ms": 3000,
+  "oracle_anchors": {
+    "group_state": "PlayObject.cs:106 All/583 GroupOwner/587 GroupMembers；接口 IPlayerActor.cs:120/238/597/601",
+    "group_dispatch": "PlayObject.Message.cs:914-935（CM_GROUPMODE 1019 / CM_CREATEGROUP 1020 / CM_ADDGROUPMEMBER 1021 / CM_DELGROUPMEMBER 1022）",
+    "group_ops": "PlayObject.Operate.cs:787-909（ClientGroupClose/ClientCreateGroup/ClientAddGroupMember/ClientDelGroupMember；含「GroupMembers.Count > GroupMembersMax(=10) 严格大于」）",
+    "group_membership": "PlayObject.cs:5126-5183（DelMember/IsGroupMember/LeaveGroup）、Base.cs:1339-1369（CancelGroup 仅 Count<=1 解散 / SendGroupMembers）",
+    "group_frames": "SM_GROUPMODECHANGED(659)/SM_CREATEGROUP_OK-FAIL(660/661)/SM_GROUPADDMEM_OK-FAIL(662/664)/SM_GROUPDELMEM_OK-FAIL(663/665)/SM_GROUPCANCEL(666)/SM_GROUPMEMBERS(667)/RM_GROUPCANCEL(10140)/RM_GROUPMESSAGE(11005)",
+    "group_disconnect": "PlayObject.Message.cs:2138-2142 Disappear→DelMember；:704-719 Run() 团长死亡/掉线 ⇒ 组散",
+    "deal_state": "PlayObject.cs:114 DealCreat/118 Dealing/122 DealLastTick/126 DealGolds/130 DealSuccess/203 DealItemList/90 AllowDeal/739 IsCanDeal",
+    "deal_dispatch": "PlayObject.Message.cs:946-960（CM_DEALTRY 1025 / CM_DEALADDITEM 1026 / CM_DEALDELITEM 1027 / CM_DEALCANCEL 1028 / CM_DEALCHGGOLD 1029 / CM_DEALEND 1030）",
+    "deal_ops": "PlayObject.Operate.cs:911-1203（ClientDealTry 含 GetPoseCreate 面对面 + TryDealTime(=3000) 时间门；ClientAddDealItem/ClientDelDealItem 含 CanNotGetBackDeal；ClientChangeDealGold；ClientDealEnd 含 DealOKTime(=1000) + 双向锁定 + 容量四检）",
+    "deal_frames": "SM_DEALMENU(673)/SM_DEALTRY_FAIL(674)/SM_DEALADDITEM_OK-FAIL(675/676)/SM_DEALDELITEM_OK-FAIL(677/678)/SM_DEALCANCEL(681)/SM_DEALREMOTEADDITEM(682)/SM_DEALREMOTEDELITEM(683)/SM_DEALCHGGOLD_OK-FAIL(684/685)/SM_DEALREMOTECHGGOLD(686)/SM_DEALSUCCESS(687)",
+    "deal_cancel": "Base.cs:730-752 DealCancel/DealCancelA（DealCancelA 的 Abil.HP = WAbil.HP 恢复真 HP）、Base.cs:833-845 GetBackDealItems",
+    "deal_disconnect": "WorldServer.cs:712 断线 ⇒ DealCancelA；:701 周期 SaveHumanRcd 前先 DealCancelA",
+    "config": "GameSvrConf.cs:1402 GroupMembersMax=10、:1515 TryDealTime=3000、:1516 DealOKTime=1000、:1517 CanNotGetBackDeal=true、:1518 DisableDeal=false；ServerConf.cs:225/308-311",
+    "no_persist": "sql/mir2_db.sql:56-57 仅 `characters.AllowGroup`/`AllowGroupReCall` 两开关；GroupOwner/GroupMembers/DealItemList/DealGolds/Dealing 在 src/Storeages 与 sql/ 均 no match（oracle 不持久组队/交易态）"
+  },
+  "frame_text_sms": [101],
+  "frame_scalar_fields": {},
+  "artifact": {
+    "markers": "M3PAIRTRADESEQ（BotSrv stdout / bot.log 内嵌事件，含 bot 字段）",
+    "raw": "party_trade_raw.jsonl",
+    "comparator": "python -I party_trade_diff.py diff <csharp_raw> <rust_raw>",
+    "assembler": "python -I party_trade_diff.py assemble <markers.jsonl> --out <raw.jsonl>",
+    "runner": "run_party_trade_pair.ps1"
+  },
+  "record_required_fields": ["bot", "k", "op", "ran", "frames", "gold_before", "gold_after", "branch"],
+  "record_optional_fields": ["role", "param", "map", "bag_before", "bag_after", "exp_before", "exp_after", "level_before", "level_after", "pickup_ok"],
+  "notes": [
+    "判据 = 逐 (bot,k)：op / role / ran / param / 帧种类序列 / 声明标量帧参数 / 文本帧(SM_GROUPMESSAGE 101)逐字节 / gold_before/after / bag 多重集 / exp_before/after + level（组队分配）/ pickup_ok（拾取归属）/ branch 全部相同；两侧必须有同一组 bot、每个 bot 同一串 k。",
+    "动态 id（actor / make index / 帧 a/b/c/d）不作判据（跨运行本来不同）；只在原始件里留审计。",
+    "失败分支靠帧种类序列 + branch 字段双钉；branch=fail_reject 只表示『有失败帧』，具体失败码由完整 sm 序列 + 声明标量承载，不用 JSON 子串硬匹配（⑤-6 reviewer M-1 的教训）。",
+    "落库口径 = oracle『组队/交易态不落库』：不要判『重登后组队/交易态仍在』；DB 侧由 run_party_trade_pair.ps1 调 scoped_diff --canonical（characters_bagitem/Gold 交易副产物 + characters 无组队/交易专列）。",
+    "真机两侧同序列跑等 ⑦-2 openmir2-m3-party-group-state + ⑦-3 openmir2-m3-party-trade-state 落地 + 独占窗口；本片只交夹具骨架（比较器 selftest + 无栈自检）。",
+    "Rust 侧 game-svr 未接组队/交易派发（盘点报告 §2 #8/#9/#10/#11/#12）⇒ run_party_trade_pair -Side rust 会 fail-closed PREREQ（同 T-27 口径），不白占窗口。",
+    "两假人相邻固定起点复用 run_pair.ps1 -PinStartPose -AttackPinPair（actor (17,20) 朝向 2、peer 右邻 (18,20)）；oracle ClientDealTry 要求对手是 GetPoseCreate()，窗口期若 peer 朝向不满足 `对方 GetPoseCreate()==this` 就在 ⑦-3 的窗口片补 peer 朝向 pin（本片只登记）。"
+  ]
+}

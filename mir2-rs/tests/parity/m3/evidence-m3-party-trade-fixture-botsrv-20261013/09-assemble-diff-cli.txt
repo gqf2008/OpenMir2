@@ -1,0 +1,23 @@
+### assemble
+ASSEMBLED ok records=4 bots=2 out=E:/tmp/m3cs-pt-evidence-tmp/raw-cs.jsonl
+rc=0
+### diff identical (green)
+STATS records=4 bots=2 frames=3 texts=0 ok=3 fail=0
+CROSS csharp=E:/tmp/m3cs-pt-evidence-tmp/raw-cs.jsonl rust=E:/tmp/m3cs-pt-evidence-tmp/raw-rs.jsonl
+PAIRTRADE GREEN diff=0
+rc=0
+### diff mutated frame sm 660->662 (red)
+PAIRTRADE bot=m3p0 k=1 RED frames.sm csharp=[660] rust=[662]
+STATS records=4 bots=2 frames=3 texts=0 ok=3 fail=0
+CROSS csharp=E:/tmp/m3cs-pt-evidence-tmp/raw-cs.jsonl rust=E:/tmp/m3cs-pt-evidence-tmp/raw-rs-bad.jsonl
+PAIRTRADE RED diff=1
+rc=1
+### diff mutated frame scalar a=0->-3 with --frame-scalars (red)
+PAIRTRADE bot=m3p0 k=1 RED frames.scalar[660] csharp={'660.a': 0} rust={'660.a': -3}
+STATS records=4 bots=2 frames=3 texts=0 ok=3 fail=0
+CROSS csharp=E:/tmp/m3cs-pt-evidence-tmp/raw-cs.jsonl rust=E:/tmp/m3cs-pt-evidence-tmp/raw-rs-scal.jsonl
+PAIRTRADE RED diff=1
+rc=1
+### diff missing file (prereq)
+RED: PREREQ_RED 缺文件: E:/tmp/m3cs-pt-evidence-tmp/nope.jsonl
+rc=2

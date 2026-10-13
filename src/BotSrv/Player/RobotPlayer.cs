@@ -1313,6 +1313,240 @@ namespace BotSrv.Player
 
         #endregion
 
+        #region M3⑦ 组队/交易动作序列夹具（默认关；白名单 T-43 家族扩展）
+
+        private string[] _ptSeqSteps;
+        private int _ptSeqStep = -1;
+        private int _ptSeqNextTick;
+        private int _ptSeqPendingK = -1;
+        private readonly List<string> _ptSeqFrames = new List<string>();
+        private string _ptSeqOp = string.Empty;
+        private string _ptSeqRole = string.Empty;
+        private string _ptSeqParam = string.Empty;
+        private bool _ptSeqRan;
+
+        /// <summary>收到本假人 SM_LOGON 后武装固定组队/交易序列（`g_boPairTradeSequence` 关闭时是空操作）。</summary>
+        private void ArmPairTradeSequence()
+        {
+            if (!MShare.g_boPairTradeSequence)
+            {
+                return;
+            }
+            _ptSeqSteps = MShare.ParsePairTradeSteps(MShare.g_sPairTradeSteps);
+            _ptSeqStep = 0;
+            _ptSeqPendingK = -1;
+            _ptSeqFrames.Clear();
+            _ptSeqNextTick = MShare.GetTickCount() + MShare.g_nPairTradeStartDelayMs;
+            MainOutMessage("M3PAIRTRADESEQ {\"phase\":\"arm\",\"bot\":\"" + QuestEsc(LoginId)
+                + "\",\"role\":\"" + (MShare.IsPairTradeActor(LoginId, MShare.g_sPairTradeActorLoginId) ? "a" : "b")
+                + "\",\"steps\":" + QuestJsonArray(_ptSeqSteps)
+                + ",\"step_ms\":" + MShare.g_nPairTradeStepMs + "}");
+        }
+
+        /// <summary>M3⑦ 固定组队/交易序列（步进式）：每 `g_nPairTradeStepMs` 处理一步；上一步先收尾
+        /// （`phase=end`，聚合本步收到的帧 + 金币/背包前后态 + branch），再发下一步；全部发完发 `phase=done`。
+        /// **两个**假人都跑同一串步骤；角色不符的步只记 `ran=false` + `skip_other_role`（k 仍前进，保证两侧同 k）。</summary>
+        private void PairTradeSequenceTick()
+        {
+            if (!MShare.g_boPairTradeSequence || _ptSeqSteps == null || _ptSeqStep < 0)
+            {
+                return;
+            }
+            if (!_inWorld || ClientSocket == null || !ClientSocket.IsConnected)
+            {
+                return;
+            }
+            int now = MShare.GetTickCount();
+            if (now < _ptSeqNextTick)
+            {
+                return;
+            }
+            if (_ptSeqPendingK >= 0)
+            {
+                EmitPairTradeEnd(_ptSeqPendingK);
+                _ptSeqPendingK = -1;
+            }
+            if (_ptSeqStep >= _ptSeqSteps.Length)
+            {
+                _ptSeqStep = -1;
+                MainOutMessage("M3PAIRTRADESEQ {\"phase\":\"done\",\"bot\":\"" + QuestEsc(LoginId)
+                    + "\",\"steps\":" + _ptSeqSteps.Length + "}");
+                return;
+            }
+            int k = _ptSeqStep;
+            string step = _ptSeqSteps[k];
+            _ptSeqStep++;
+            _ptSeqFrames.Clear();
+            _ptSeqOp = MShare.PairTradeStepOp(step);
+            _ptSeqRole = MShare.PairTradeStepRole(step);
+            _ptSeqParam = MShare.PairTradeStepParam(step);
+            bool isActor = MShare.IsPairTradeActor(LoginId, MShare.g_sPairTradeActorLoginId);
+            _ptSeqRan = MShare.PairTradeRunsForRole(_ptSeqRole, isActor);
+            EmitPairTradeSend(k);
+            SendPairTradeStep();
+            _ptSeqPendingK = k;
+            _ptSeqNextTick = now + MShare.g_nPairTradeStepMs;
+        }
+
+        private void EmitPairTradeSend(int k)
+        {
+            MainOutMessage("M3PAIRTRADESEQ {\"phase\":\"send\",\"bot\":\"" + QuestEsc(LoginId)
+                + "\",\"k\":" + k
+                + ",\"role\":\"" + QuestEsc(_ptSeqRole)
+                + "\",\"op\":\"" + QuestEsc(_ptSeqOp)
+                + "\",\"ran\":" + (_ptSeqRan ? "true" : "false")
+                + ",\"param\":\"" + QuestEsc(ResolvePairTradeParam(_ptSeqParam)) + "\""
+                + ",\"map\":\"" + QuestEsc(QuestMapName()) + "\""
+                + ",\"gold_before\":" + ShopGold()
+                + ",\"bag_before\":" + ShopBagJson() + "}");
+        }
+
+        private void EmitPairTradeEnd(int k)
+        {
+            string branch = _ptSeqRan ? MShare.ClassifyPairTradeFrames(_ptSeqFrames) : "skip_other_role";
+            MainOutMessage("M3PAIRTRADESEQ {\"phase\":\"end\",\"bot\":\"" + QuestEsc(LoginId)
+                + "\",\"k\":" + k
+                + ",\"gold_after\":" + ShopGold()
+                + ",\"bag_after\":" + ShopBagJson()
+                + ",\"branch\":\"" + branch + "\"}");
+        }
+
+        /// <summary>M3⑦：把步骤参数里的 `peer` 记号换成**对手**角色名（LoginAccount+PeerRole）。
+        /// 其余参数原样返回。纯函数式（不改状态）。</summary>
+        private string ResolvePairTradeParam(string param)
+        {
+            if (string.Equals(param, "peer", StringComparison.OrdinalIgnoreCase))
+            {
+                return MShare.g_sPairTradePeerLoginId;
+            }
+            return param ?? string.Empty;
+        }
+
+        /// <summary>本假人背包里取动作物品（名字/MakeIndex）；名字为空 ⇒ 第一件。找不到 ⇒ null。</summary>
+        private ClientItem FindPairTradeItem(string name, int make)
+        {
+            if (MShare.ItemArr == null)
+            {
+                return null;
+            }
+            for (int i = 0; i < BotConst.MaxBagItemcl; i++)
+            {
+                ClientItem it = MShare.ItemArr[i];
+                if (it == null || string.IsNullOrEmpty(it.Item.Name))
+                {
+                    continue;
+                }
+                if (!string.IsNullOrEmpty(name) && !string.Equals(it.Item.Name, name, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+                if (make != 0 && it.MakeIndex != make)
+                {
+                    continue;
+                }
+                return it;
+            }
+            return null;
+        }
+
+        /// <summary>发本步的 CM_*（角色不符 ⇒ 不发；op 未知 ⇒ 只记 skip）。</summary>
+        private void SendPairTradeStep()
+        {
+            if (!_ptSeqRan)
+            {
+                return;
+            }
+            string param = ResolvePairTradeParam(_ptSeqParam);
+            switch (_ptSeqOp)
+            {
+                case "group_mode_on":
+                    SendGroupMode(true);
+                    break;
+                case "group_mode_off":
+                    SendGroupMode(false);
+                    break;
+                case "create_group":
+                    SendCreateGroup(param);
+                    break;
+                case "add_member":
+                    SendAddGroupMember(param);
+                    break;
+                case "del_member":
+                    SendDelGroupMember(param);
+                    break;
+                case "deal_try":
+                    SendDealTry();
+                    break;
+                case "deal_add_item":
+                    {
+                        ClientItem it = FindPairTradeItem(string.Empty, 0);
+                        if (it != null) { SendAddDealItem(it); }
+                        else { MainOutMessage("M3PAIRTRADESEQ skip=no_item_in_bag op=deal_add_item"); }
+                    }
+                    break;
+                case "deal_del_item":
+                    {
+                        ClientItem it = FindPairTradeItem(string.Empty, 0);
+                        if (it != null) { SendDelDealItem(it); }
+                        else { MainOutMessage("M3PAIRTRADESEQ skip=no_item_in_bag op=deal_del_item"); }
+                    }
+                    break;
+                case "deal_chg_gold":
+                    {
+                        int gold = 0;
+                        int.TryParse(param, out gold);
+                        SendChangeDealGold(gold);
+                    }
+                    break;
+                case "deal_end":
+                    SendDealEnd();
+                    break;
+                case "deal_cancel":
+                    SendCancelDeal();
+                    break;
+                case "softclose":
+                    SendClientMessage(Messages.CM_SOFTCLOSE, 0, 0, 0, 0);
+                    break;
+                default:
+                    MainOutMessage("M3PAIRTRADESEQ skip=op_not_implemented step=" + QuestEsc(_ptSeqOp));
+                    break;
+            }
+        }
+
+        /// <summary>收帧钩子（单一收包点）：组队/交易相关 SM_* 在 `g_boPairTradeSequence` 打开且本步待收尾时
+        /// 落 `phase=frame` 事件。**只读不写世界态**（同 T-29/T-43 纪律）；默认关时空转。</summary>
+        public void PairTradeOnServerMessage(int sm, int merchant, int face, int tag, int series, string body)
+        {
+            if (!MShare.g_boPairTradeSequence || _ptSeqPendingK < 0)
+            {
+                return;
+            }
+            switch (sm)
+            {
+                case 101:   // SM_GROUPMESSAGE
+                case 659:   // SM_GROUPMODECHANGED
+                case 660: case 661:
+                case 662: case 663: case 664: case 665:
+                case 666: case 667:
+                case 673: case 674:
+                case 675: case 676: case 677: case 678:
+                case 681: case 682: case 683:
+                case 684: case 685: case 686: case 687:
+                    break;
+                default:
+                    return;
+            }
+            string text = sm == 101 && !string.IsNullOrEmpty(body) ? EDCode.DeCodeString(body) : string.Empty;
+            string fr = "{\"sm\":" + sm + ",\"a\":" + merchant + ",\"b\":" + face
+                + ",\"c\":" + tag + ",\"d\":" + series
+                + ",\"text\":\"" + QuestEsc(text) + "\"}";
+            _ptSeqFrames.Add(fr);
+            MainOutMessage("M3PAIRTRADESEQ {\"phase\":\"frame\",\"bot\":\"" + QuestEsc(LoginId)
+                + "\",\"k\":" + _ptSeqPendingK + ",\"frame\":" + fr + "}");
+        }
+
+        #endregion
+
         #region M1③ 退出路径夹具：进世界后发 CM_SOFTCLOSE（小退；默认关；白名单 M1-EXIT）
 
         /// <summary>发送时刻（MShare.GetTickCount），-1=未武装。</summary>
@@ -1372,6 +1606,7 @@ namespace BotSrv.Player
             ArmAttackSequence();
             ArmShopSequence();
             ArmQuestSequence();
+            ArmPairTradeSequence();
             ArmSoftClose();
             if (LoadMetrics.ShouldSuppressInWorld(LoginId))
             {
@@ -1404,6 +1639,7 @@ namespace BotSrv.Player
                 AttackSequenceTick();
                 ShopSequenceTick();
                 QuestSequenceTick();
+                PairTradeSequenceTick();
                 SoftCloseTick();
                 if (DScreen.CurrentScene == PlayScene)
                 {

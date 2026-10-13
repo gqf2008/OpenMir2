@@ -65,6 +65,12 @@ param(
   [string]$QuestSteps = '',        # 仅 -QuestSequence 时生效：步骤串 `op|npc|label;...`（空 ⇒ 由场景 case.steps 拼）
   [int]$QuestStepMs = 1000,        # 仅 -QuestSequence 时生效：每步间隔
   [int]$QuestStartDelayMs = 3000,  # 仅 -QuestSequence 时生效：进世界到第一步的额外等待
+  [switch]$PairTradeSequence,      # M3⑦ 夹具：两个假人按固定步骤串发组队/交易动作（T-43 家族扩展）
+  [string]$PairTradeSteps = '',    # 仅 -PairTradeSequence 时生效：步骤串 `role|op|param;...`（空 ⇒ 由场景 case.steps 拼）
+  [int]$PairTradeStepMs = 1000,    # 仅 -PairTradeSequence 时生效：每步间隔
+  [int]$PairTradeStartDelayMs = 3000, # 仅 -PairTradeSequence 时生效：进世界到第一步的额外等待
+  [int]$PairTradeRole = 0,         # 仅 -PairTradeSequence 时生效：actor 账号序号
+  [int]$PairTradePeerRole = 1,     # 仅 -PairTradeSequence 时生效：peer 账号序号
   [switch]$EmitOpsArgs,            # 只打印 run_bots 命令组成（含 -DisableAutoPlay 耦合）后退出；无副作用，供无栈自检
   [switch]$PinStartPose,           # T-14 固定起点变体（owner 86478c55/d7798370）：预热建角 → SQL pin → BEFORE 快照 → 计分跑（选角；不带 -FixedNewChr/-NewAccount）
   [string]$PinMapName = '',   # 攻击变体的 pin 地图（R-1 要求整张零刷怪；空 ⇒ -AttackPinPair 取 $script:M3AttackPinMap，否则 '0'）
@@ -181,6 +187,12 @@ function Get-M3BotOpPlan {
     $runner += " -QuestSequence -QuestSteps '$QuestSteps' -QuestStepMs $QuestStepMs -QuestStartDelayMs $QuestStartDelayMs -DisableAutoPlay"
     $planArgs += @('-QuestSequence', '-QuestSteps', $QuestSteps, '-QuestStepMs', $QuestStepMs, '-QuestStartDelayMs', $QuestStartDelayMs, '-DisableAutoPlay')
   }
+  if ($PairTradeSequence -and -not $ForPrewarm) {
+    # M3⑦ 夹具（卡 openmir2-m3-party-trade-fixture-botsrv）：固定组队/交易序列**必须**一并关挂机
+    # （同 T-14/T-29/T-43 理由：挂机 = 无种子 RNG 随机走位，会改坐标/视野/面对面判定 ⇒ 两侧不可比）。
+    $runner += " -PairTradeSequence -PairTradeSteps '$PairTradeSteps' -PairTradeStepMs $PairTradeStepMs -PairTradeStartDelayMs $PairTradeStartDelayMs -PairTradeRole $PairTradeRole -PairTradePeerRole $PairTradePeerRole -DisableAutoPlay"
+    $planArgs += @('-PairTradeSequence', '-PairTradeSteps', $PairTradeSteps, '-PairTradeStepMs', $PairTradeStepMs, '-PairTradeStartDelayMs', $PairTradeStartDelayMs, '-PairTradeRole', $PairTradeRole, '-PairTradePeerRole', $PairTradePeerRole, '-DisableAutoPlay')
+  }
   return [pscustomobject]@{ runner = $runner; botArgs = $planArgs }
 }
 
@@ -257,12 +269,13 @@ if ($EmitOpsArgs) {
     attack_sequence   = Format-M3AttackScope -AttackSequence ([bool]$AttackSequence) -AttackCount $AttackCount -AttackStepMs $AttackStepMs -AttackStartDelayMs $AttackStartDelayMs -DisableAutoPlay ([bool]$AttackSequence)
     shop_sequence     = Format-M3ShopScope -ShopSequence ([bool]$ShopSequence) -ShopOps $ShopOps -ShopStepMs $ShopStepMs -ShopStartDelayMs $ShopStartDelayMs -ShopNpcName $ShopNpcName -ShopItemName $ShopItemName -ShopItemMake $ShopItemMake -ShopCount $ShopCount -DisableAutoPlay ([bool]$ShopSequence)
     quest_sequence    = Format-M3QuestScope -QuestSequence ([bool]$QuestSequence) -QuestSteps $QuestSteps -QuestStepMs $QuestStepMs -QuestStartDelayMs $QuestStartDelayMs -DisableAutoPlay ([bool]$QuestSequence)
+    pair_trade_sequence = Format-M3PairTradeScope -PairTradeSequence ([bool]$PairTradeSequence) -PairTradeSteps $PairTradeSteps -PairTradeStepMs $PairTradeStepMs -PairTradeStartDelayMs $PairTradeStartDelayMs -PairTradeRole $PairTradeRole -PairTradePeerRole $PairTradePeerRole -DisableAutoPlay ([bool]$PairTradeSequence)
     start_pose        = (Get-M3StartPoseLabel)
     attack_pose       = (Get-M3AttackPoseLabel)
   }
   # F-2 竞态修（owner 2026-10-13 04:05）：存档序列的 AFTER 快照前「等断线存档落库」仪器形态，
   # 无栈自检据此机判生产接线未被削弱（mode=save_rcd、timeout/poll>=1、quiet>=2），也据此发现「改回固定 sleep」。
-  if ($BagEquipSequence -or $AttackSequence -or $ShopSequence -or $QuestSequence) {
+  if ($BagEquipSequence -or $AttackSequence -or $ShopSequence -or $QuestSequence -or $PairTradeSequence) {
     $obj['save_settle_instrument'] = (Format-M3SaveSettleInstrument -TimeoutSeconds $SaveSettleTimeoutSeconds -PollMilliseconds $SaveSettlePollMs -QuietPolls $SaveSettleQuietPolls)
   }
   if ($PinStartPose) {
@@ -530,6 +543,9 @@ $questSeqMarkers = @()
 $questMarkersPath = Join-Path $SessionDir 'quest_markers.jsonl'
 $questRawPath = Join-Path $SessionDir 'quest_raw.jsonl'
 $questStatePath = Join-Path $SessionDir 'quest_state.jsonl'
+$pairTradeSeqMarkers = @()
+$pairTradeMarkersPath = Join-Path $SessionDir 'pair_trade_markers.jsonl'
+$pairTradeRawPath = Join-Path $SessionDir 'party_trade_raw.jsonl'
 if (-not $SkipBots) {
   $plan = Get-M3BotOpPlan
   $opsRunner = $plan.runner
@@ -710,6 +726,46 @@ if (-not $SkipBots) {
       Write-Output ("PREREQ_MISSING: 无服务端任务态 dump（{0}）—— quest_raw.jsonl 缺 quest_flag_*，diff 阶段会 PREREQ（承接卡 openmir2-m3-quest-dialog-wiring / -persist-observability）" -f $questStatePath)
     }
   }
+  # M3⑦（T-43 家族扩展）：固定组队/交易序列的执行证据（逐 step 一条 `M3PAIRTRADESEQ` 事件，落 bot.log）。
+  # 判据：开了 -PairTradeSequence 就必须看到**两个假人**各自的 `arm` + 每个 step 的 `send`/`end` + `done`；
+  # 缺任一段 ⇒ RED，绝不拿空序列去跨侧 diff（否则恒绿）。
+  $pairTradeSeqMarkers = @([regex]::Matches($botText, 'M3PAIRTRADESEQ [^\r\n]*') | ForEach-Object { $_.Value })
+  Write-Output ("OPS_PAIRTRADESEQ_MARKERS count={0}" -f $pairTradeSeqMarkers.Count)
+  if ($PairTradeSequence) {
+    if ($pairTradeSeqMarkers.Count -eq 0) {
+      Write-Output 'RED: -PairTradeSequence 开了但 bot.log 里一条 M3PAIRTRADESEQ 标记都没有 —— 固定组队/交易序列没跑（驱动未生效/假人未进世界）'
+      exit 1
+    }
+    $pairTradeEvents = @($pairTradeSeqMarkers | ForEach-Object { $_.Substring('M3PAIRTRADESEQ '.Length).Trim() })
+    Set-Content -Path $pairTradeMarkersPath -Value $pairTradeEvents -Encoding utf8
+    $ptSend = @($pairTradeEvents | Where-Object { $_ -match '"phase"\s*:\s*"send"' }).Count
+    $ptEnd = @($pairTradeEvents | Where-Object { $_ -match '"phase"\s*:\s*"end"' }).Count
+    $ptDone = @($pairTradeEvents | Where-Object { $_ -match '"phase"\s*:\s*"done"' }).Count
+    $ptBots = @($pairTradeEvents | Where-Object { $_ -match '"phase"\s*:\s*"arm"' } | ForEach-Object {
+        $m = [regex]::Match($_, '"bot"\s*:\s*"(?<bot>[^"]*)"'); $m.Groups['bot'].Value
+      } | Sort-Object -Unique).Count
+    $ptExpectedBots = if ($Bots -ge 2) { 2 } else { $Bots }
+    $ptExpectedSteps = @($PairTradeSteps.Split(';') | Where-Object { $_.Trim() -ne '' }).Count
+    $ptExpectedSend = $ptExpectedBots * $ptExpectedSteps
+    Write-Output ("OPS_PAIRTRADESEQ bots={0} send={1} end={2} done={3} expected_bots={4} expected_send={5}" -f $ptBots, $ptSend, $ptEnd, $ptDone, $ptExpectedBots, $ptExpectedSend)
+    if ($ptDone -lt $ptExpectedBots) {
+      Write-Output 'RED: -PairTradeSequence 开了但没有足够的 `M3PAIRTRADESEQ phase=done` —— 序列未收尾（驱动中途断了）'
+      exit 1
+    }
+    if ($ptBots -lt $ptExpectedBots) {
+      Write-Output ("RED: -PairTradeSequence 只有 {0}/{1} 个假人武装了序列 —— 不是『两人及以上』" -f $ptBots, $ptExpectedBots)
+      exit 1
+    }
+    if ($ptSend -lt $ptExpectedSend -or $ptEnd -lt $ptExpectedSend) {
+      Write-Output ("RED: -PairTradeSequence 只跑完 {0}/{1} step（send={0} end={2}）—— 序列不完整，不能当『同一序列』" -f $ptSend, $ptExpectedSend, $ptEnd)
+      exit 1
+    }
+    & python -I (Join-Path $Here 'party_trade_diff.py') assemble $pairTradeMarkersPath --out $pairTradeRawPath --side $Side
+    if ($LASTEXITCODE -ne 0) {
+      Write-Output 'RED: party_trade_diff.py assemble 失败（事件流缺 send/end 或 done.steps 不一致）—— 原始件不可判'
+      exit 1
+    }
+  }
   # 判据取"可靠段"：账号创建 + 登录成功 = N（实测稳定）。
   # 进世界之后的段位今日不可靠：BotSrv 会在 `TMap.CanMove` 崩溃并带走整个进程
   #（工具侧已知阻塞，见 m3/README.md「已知阻塞」），崩溃点与时序相关（有时停在"确认游戏公告"）。
@@ -733,7 +789,7 @@ if (-not $SkipBots) {
 # 修法 = **等状态变化**（轮询到本前缀角色存档落库），超时 ⇒ fail-closed（点名 RED，绝不静默继续）。
 # 仅 -BagEquipSequence/-AttackSequence（且非 -SkipBots）生效；其余路径逐字节不变（不加任何等待）。
 $saveSettleLabel = '(off)'
-if (($BagEquipSequence -or $AttackSequence -or $ShopSequence -or $QuestSequence) -and -not $SkipBots) {
+if (($BagEquipSequence -or $AttackSequence -or $ShopSequence -or $QuestSequence -or $PairTradeSequence) -and -not $SkipBots) {
   if ([string]::IsNullOrEmpty($saveSettleRef)) { throw 'SAVE_SETTLE_REF 缺失——存档序列必须在 BEFORE 快照前取 DB 参考时刻（F-2）' }
   $saveSettleProbe = {
     $n = Invoke-Mysql (Get-M3SaveSettleProbeSql -ChrNamePrefix $Prefix -ReferenceTime $saveSettleRef)
@@ -747,7 +803,7 @@ if (($BagEquipSequence -or $AttackSequence -or $ShopSequence -or $QuestSequence)
     throw ("RED: 断线存档未在 {0}s 内落库（{1}，landed={2}/{3}，ref={4}）—— AFTER 快照会漏掉本段改动（F-2 竞态）；绝不静默继续" -f `
       $SaveSettleTimeoutSeconds, $saveSettle.Reason, $saveSettle.LastLanded, $Bots, $saveSettleRef)
   }
-} elseif ($BagEquipSequence -or $AttackSequence -or $ShopSequence -or $QuestSequence) {
+} elseif ($BagEquipSequence -or $AttackSequence -or $ShopSequence -or $QuestSequence -or $PairTradeSequence) {
   $saveSettleLabel = '(off: -SkipBots)'
   Write-Output 'SETTLE_SAVE_RCD SKIPPED (-SkipBots)'
 }
@@ -796,6 +852,8 @@ $baseline = [pscustomobject]@{
   shop_markers = $shopSeqMarkers
   quest_sequence = (Format-M3QuestScope -QuestSequence ([bool]$QuestSequence) -QuestSteps $QuestSteps -QuestStepMs $QuestStepMs -QuestStartDelayMs $QuestStartDelayMs -DisableAutoPlay ([bool]$QuestSequence))
   quest_markers = $questSeqMarkers
+  pair_trade_sequence = (Format-M3PairTradeScope -PairTradeSequence ([bool]$PairTradeSequence) -PairTradeSteps $PairTradeSteps -PairTradeStepMs $PairTradeStepMs -PairTradeStartDelayMs $PairTradeStartDelayMs -PairTradeRole $PairTradeRole -PairTradePeerRole $PairTradePeerRole -DisableAutoPlay ([bool]$PairTradeSequence))
+  pair_trade_markers = $pairTradeSeqMarkers
   attack_pose = (Get-M3AttackPoseLabel)
   pin_attempts = $(if ($pinAttempts -ge 1) { Format-M3PinAttempts -Attempts $pinAttempts -Expected $pinAttemptsExpected -SettleRounds $pinSettleRounds -MaxAttempts $PinMaxAttempts } else { '(off)' })
   save_settle = $saveSettleLabel
