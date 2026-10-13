@@ -1,0 +1,133 @@
+# 27 — 改坏必红：冻结客户端 TAbility 布局复核（rc 判定）
+
+对应判据：`26-frozen-client-layout-verify.txt`（DoD③ 独立复核）。
+做法：把冻结客户端源码 `Source/Common/Grobal2.pas` **拷到临时文件后**改坏（不改冻结客户端本体），
+再跑同一脚本；期望 RED（rc=1）。还原真源码 ⇒ GREEN（rc=0）。
+
+## RC-1：HIGHHP True → False
+
+```
+$ python mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/verify_client_ability_layout.py --source E:/tmp/m2svr-layout-redcheck/rc1.pas
+# source = E:/tmp/m2svr-layout-redcheck/rc1.pas
+HIGHHP = False
+SizeOf(TAbility) = 50
+  offset  0 : Level         (Word) 
+  offset  2 : AC            (Integer) 
+  offset  6 : MAC           (Integer) 
+  offset 10 : DC            (Integer) 
+  offset 14 : MC            (Integer) 
+  offset 18 : SC            (Integer) 
+  offset 22 : HP            (Word) 
+  offset 24 : MP            (Word) 
+  offset 26 : MaxHP         (Word) 
+  offset 28 : MaxMP         (Word) 
+  offset 30 : Exp           (DWORD) DWORD@30
+  offset 34 : MaxExp        (DWORD) DWORD@34
+  offset 38 : Weight        (Word) 
+  offset 40 : MaxWeight     (Word) 
+  offset 42 : WearWeight    (Word) 
+  offset 44 : MaxWearWeight (Word) 
+  offset 46 : HandWeight    (Word) 
+  offset 48 : MaxHandWeight (Word) 
+HP = Word @ offset 22 (期望 DWORD@22)
+RED:
+  - 总长 50 != 期望 58
+  - 字段错位：实际 HP:Word@22 != 期望 HP:DWORD@22
+  - 字段错位：实际 MP:Word@24 != 期望 MP:DWORD@26
+  - 字段错位：实际 MaxHP:Word@26 != 期望 MaxHP:DWORD@30
+  - 字段错位：实际 MaxMP:Word@28 != 期望 MaxMP:DWORD@34
+  - 字段错位：实际 Exp:DWORD@30 != 期望 Exp:DWORD@38
+  - 字段错位：实际 MaxExp:DWORD@34 != 期望 MaxExp:DWORD@42
+  - 字段错位：实际 Weight:Word@38 != 期望 Weight:Word@46
+  - 字段错位：实际 MaxWeight:Word@40 != 期望 MaxWeight:Word@48
+  - 字段错位：实际 WearWeight:Word@42 != 期望 WearWeight:Word@50
+  - 字段错位：实际 MaxWearWeight:Word@44 != 期望 MaxWearWeight:Word@52
+  - 字段错位：实际 HandWeight:Word@46 != 期望 HandWeight:Word@54
+  - 字段错位：实际 MaxHandWeight:Word@48 != 期望 MaxHandWeight:Word@56
+rc=1
+```
+
+## RC-2：`HP: DWORD;` → `HP: Word;`
+
+```
+$ python mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/verify_client_ability_layout.py --source E:/tmp/m2svr-layout-redcheck/rc2.pas
+# source = E:/tmp/m2svr-layout-redcheck/rc2.pas
+HIGHHP = True
+SizeOf(TAbility) = 56
+  offset  0 : Level         (Word) 
+  offset  2 : AC            (Integer) 
+  offset  6 : MAC           (Integer) 
+  offset 10 : DC            (Integer) 
+  offset 14 : MC            (Integer) 
+  offset 18 : SC            (Integer) 
+  offset 22 : HP            (Word) 
+  offset 24 : MP            (DWORD) DWORD@24
+  offset 28 : MaxHP         (DWORD) DWORD@28
+  offset 32 : MaxMP         (DWORD) DWORD@32
+  offset 36 : Exp           (DWORD) DWORD@36
+  offset 40 : MaxExp        (DWORD) DWORD@40
+  offset 44 : Weight        (Word) 
+  offset 46 : MaxWeight     (Word) 
+  offset 48 : WearWeight    (Word) 
+  offset 50 : MaxWearWeight (Word) 
+  offset 52 : HandWeight    (Word) 
+  offset 54 : MaxHandWeight (Word) 
+HP = Word @ offset 22 (期望 DWORD@22)
+RED:
+  - 总长 56 != 期望 58
+  - 字段错位：实际 HP:Word@22 != 期望 HP:DWORD@22
+  - 字段错位：实际 MP:DWORD@24 != 期望 MP:DWORD@26
+  - 字段错位：实际 MaxHP:DWORD@28 != 期望 MaxHP:DWORD@30
+  - 字段错位：实际 MaxMP:DWORD@32 != 期望 MaxMP:DWORD@34
+  - 字段错位：实际 Exp:DWORD@36 != 期望 Exp:DWORD@38
+  - 字段错位：实际 MaxExp:DWORD@40 != 期望 MaxExp:DWORD@42
+  - 字段错位：实际 Weight:Word@44 != 期望 Weight:Word@46
+  - 字段错位：实际 MaxWeight:Word@46 != 期望 MaxWeight:Word@48
+  - 字段错位：实际 WearWeight:Word@48 != 期望 WearWeight:Word@50
+  - 字段错位：实际 MaxWearWeight:Word@50 != 期望 MaxWearWeight:Word@52
+  - 字段错位：实际 HandWeight:Word@52 != 期望 HandWeight:Word@54
+  - 字段错位：实际 MaxHandWeight:Word@54 != 期望 MaxHandWeight:Word@56
+rc=1
+```
+
+## 还原（对冻结客户端真源码，只读）
+
+```
+$ python mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/verify_client_ability_layout.py --source E:/Users/gxh/Documents/GitHub/MirClient/Source/Common/Grobal2.pas
+# source = E:/Users/gxh/Documents/GitHub/MirClient/Source/Common/Grobal2.pas
+HIGHHP = True
+SizeOf(TAbility) = 58
+  offset  0 : Level         (Word) 
+  offset  2 : AC            (Integer) 
+  offset  6 : MAC           (Integer) 
+  offset 10 : DC            (Integer) 
+  offset 14 : MC            (Integer) 
+  offset 18 : SC            (Integer) 
+  offset 22 : HP            (DWORD) DWORD@22
+  offset 26 : MP            (DWORD) DWORD@26
+  offset 30 : MaxHP         (DWORD) DWORD@30
+  offset 34 : MaxMP         (DWORD) DWORD@34
+  offset 38 : Exp           (DWORD) DWORD@38
+  offset 42 : MaxExp        (DWORD) DWORD@42
+  offset 46 : Weight        (Word) 
+  offset 48 : MaxWeight     (Word) 
+  offset 50 : WearWeight    (Word) 
+  offset 52 : MaxWearWeight (Word) 
+  offset 54 : HandWeight    (Word) 
+  offset 56 : MaxHandWeight (Word) 
+HP = DWORD @ offset 22 (期望 DWORD@22)
+GREEN: 与期望 58B 布局逐字段一致（HP/MP/MaxHP/MaxMP = DWORD@22/26/30/34）
+rc=0
+```
+
+## 自检（解析器两分支）
+
+```
+$ python mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/verify_client_ability_layout.py --selftest
+[selftest] HIGHHP=True 片段 => 58B 布局 OK
+[selftest] HIGHHP=False 片段 => 50B / HP Word@22 OK（解析器条件分支正确）
+[selftest] GREEN
+rc=0
+```
+
+注：RC 用的改坏副本在 `E:/tmp/m2svr-layout-redcheck/`（临时物，不入库）。

@@ -1,9 +1,14 @@
 # `openmir2-client-e2e-enter-gaps` 证据包（m2-svr / openmir2-worker-11，2026-10-13）
 
-卡上两条“真机缺口”在本部署上**都不能复现为 Rust↔C# 的差异**。本片用真客户端 + **C# 对照组**
+卡上两条“真机缺口”在本部署上**都不能复现为 Rust↔C# 的差异**。本目录先用真客户端 + **C# 对照组**
 （同一 `D:\MirClient-run\MirClinet.exe`、同一角色 `aaa`、同一 `mir2_db`）把两侧跑成逐像素同类，
-并用服务端日志证明“帧发了 / 世界有实体 / AOI 真可见”。按 §6.0-3 与项目硬约束，本片不做单方面行为偏离；
-仅落地一处**只读可观测性**改进 + 一条构造级用例（带改坏必红），供后续真机定位不再误读。
+并用服务端日志证明“帧发了 / 世界有实体 / AOI 真可见”。按 §6.0-3 与项目硬约束，不单方面行为偏离；
+
+> **本目录覆盖两片（同一卡）**：
+> ① 只读可观测性片（`7c8ac2fc3`，已合入 `f6869cb26`）：`log_enter_ability` + 周期世界/AOI 快照 + 1 条用例；
+> ② 能力帧布局片（`a602e8a94`，已合入 `636bdce53`）：**默认关闭**的 58B 冻结客户端布局开关
+> `MIR2_CLIENT_ABILITY_LAYOUT`（`record::encode_ability_client`），证据 `21`/`22`/`23`/`24`/`25`；
+> ③ 本片（`2026-10-13` 追补）：DoD③ 的**独立复算** `26`/`27`（从冻结客户端源码逐字节复核 58B `TAbility`）。
 
 ## 结论（先看这三条）
 
@@ -40,24 +45,36 @@ powershell -ExecutionPolicy Bypass -File tools/client/mir_flow.ps1 `
 - `12-csharp-control-flow.txt` / `13-rust-flow-flow.txt`：两侧 `mir_flow.ps1` 的阶段回执（均 `FLOW_OK`）。
 - `shots/rust-monsters-visible-256-584.png`：Rust 侧角色位于比奇省 (256,584)，屏上 3 只怪。
 - `shots/rust-city-spawn-288-654.png` / `shots/csharp-control-city-289-669.png`：两侧同城出生点，
-  HP/MP HUD 逐像素同类（`0/0` + `655360/25165829`）。
-- `04-gates.txt` / `05-boundary.txt` / `20-redcheck-world-aoi-diag.txt`。
+  HP/MP HUD 逐像素同类（`0/0` + `655360/25165829`；`MaxMP` 的精确推导见 `26` §5）。
+- `21-client-ability-layout.md`：58B `TAbility` 的偏移表 + 默认关布局开关；
+  `22-before-after-realrun.txt`（改前 40B/`0/0` → 改后 58B/`19/19`）、`23-redcheck-client-layout.txt`。
+- `26-frozen-client-layout-verify.txt`：**DoD③ 独立复算**（从冻结客户端源码解析 `{$IF HIGHHP}`/`TAbility`
+  逐字段算偏移；pin commit `c61d912d`）+ `verify_client_ability_layout.py`（可复跑）+
+  `27-redcheck-layout-verify.txt`（两条改坏必红）。
+- `04-gates.txt` / `05-boundary.txt` / `20-redcheck-world-aoi-diag.txt` / `24-gates.txt` / `25-boundary.txt`。
 
-## 本片代码改动（只读可观测性 + 1 条用例）
+## 本目录代码改动（只读可观测性 + 默认关的布局开关）
 
 - `mir2-rs/bins/game-svr/src/main.rs`
-  - `log_enter_ability`（进图时打印实际写入 52/752 的输入值与 40B 尾；只读）。
+  - `log_enter_ability`（进图时打印实际写入 52/752 的输入值、**实际布局**与**实际尾长**；只读）。
   - `WorldDiag`/`SessionAoiDiag`/`world_aoi_diag`：周期 `sim:` 行追加
     `实体内 N 展示表 M 在世界会话 K` 与每会话 `[name(id) map=… vis=… same_map=… nearest=…]`，
     从根本上消除“`处理 0 项` ⇒ 无实体”的误读。
-- 新增用例 `world_aoi_diag_reports_visible_and_nearest`（构造级）：
-  近怪必须出现在 `vis`，`same_map`/`nearest` 计数正确；改坏必红见 `20-redcheck-world-aoi-diag.txt`。
+  - `mir2_client_ability_layout()`：读 `MIR2_CLIENT_ABILITY_LAYOUT`（`1/true/TRUE/True` ⇒ 开；**未设 ⇒ 关**）。
+- `mir2-rs/bins/game-svr/src/record.rs`：`encode_ability_client`（冻结客户端 58B `TAbility` 布局；
+  oracle `encode_ability` 40B 原样保留）。`enter.rs::AbilityInputs.client_ability_layout` 决定 52 尾二选一。
+- 用例 `world_aoi_diag_reports_visible_and_nearest`（构造级；改坏必红见 `20-…`）、
+  `record::tests::encode_ability_client_matches_highhp_record` + `enter::tests::ability_frames_follow_recalc_abilitys`
+  （改坏必红见 `23-…`）。
+- **默认关**：未设 `MIR2_CLIENT_ABILITY_LAYOUT` 时，52 尾仍 = oracle `EncodeMessage(WAbil)` 40B
+  （金标准 #12 与 `enter` 默认分支不回归）。
 - **不改**任何模拟/出帧/取数语义；`src/ sql/ MirClient` 与 `crates/protocol`/`crates/storage` 边界为空。
 
 ## 验证（隔离 `CARGO_TARGET_DIR=E:/tmp/m2svr-target`，cwd=`mir2-rs/`）
 
-- 四门禁：`fmt rc=0` / `clippy --workspace --all-targets -D warnings rc=0` /
-  `test --workspace --offline` **97 suites · 988 passed · 0 failed · 21 ignored** / `msgcodegen 604`。
+- 四门禁（当前 head `a602e8a94` 合并树）：`fmt rc=0` / `clippy --workspace --all-targets -D warnings rc=0` /
+  `test --workspace --offline` **98 suites · 1040 passed · 0 failed · 21 ignored** / `msgcodegen 604`
+  （早前只读片为 97/988，见 `04-gates.txt`；布局片重跑见 `24-gates.txt`）。
 - 真机：两侧 `mir_flow` 均 `FLOW_OK`；端口实拍见栈脚本输出（停在 `RUST_STACK_OK`），收工 `-Stop` 后
   5000/7000/7100/7200 全 DOWN，仅 3306 保留。
 
