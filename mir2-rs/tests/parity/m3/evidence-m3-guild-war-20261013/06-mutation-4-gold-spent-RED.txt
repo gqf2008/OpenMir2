@@ -1,0 +1,68 @@
+改坏必红 RC4：把 gold_spent 恒置 0（NPC 层 GuildWarPrice 扣减丢失）
+命令：CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo test -p mir2-world --lib guild::tests::request_ --offline
+
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\crates\world)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.68s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m3cs-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 10 tests
+test guild::tests::request_guild_war_insufficient_gold ... ok
+test guild::tests::request_guild_war_asymmetric_duplicates_and_broadcasts_ss207 ... ok
+test guild::tests::request_guild_war_target_missing ... ok
+test guild::tests::request_guild_war_both_at_war_duplicates_without_ss207 ... ok
+test guild::tests::request_then_run_expires_war_n2 ... ok
+test guild::tests::request_guild_war_non_zero_server_still_pays_gold ... FAILED
+test guild::tests::request_guild_war_ally_is_skipped_by_add_war_guild ... FAILED
+test guild::tests::request_guild_war_non_master_still_pays_gold ... FAILED
+test guild::tests::request_guild_war_not_at_war_is_n2_noop ... FAILED
+test guild::tests::request_guild_war_no_guild_still_pays_gold ... FAILED
+
+failures:
+
+---- guild::tests::request_guild_war_non_zero_server_still_pays_gold stdout ----
+
+thread 'guild::tests::request_guild_war_non_zero_server_still_pays_gold' (7884) panicked at crates\world\src\guild.rs:1653:9:
+assertion `left == right` failed
+  left: 0
+ right: 30000
+
+---- guild::tests::request_guild_war_ally_is_skipped_by_add_war_guild stdout ----
+
+thread 'guild::tests::request_guild_war_ally_is_skipped_by_add_war_guild' (32396) panicked at crates\world\src\guild.rs:1805:9:
+assertion `left == right` failed
+  left: 0
+ right: 30000
+
+---- guild::tests::request_guild_war_non_master_still_pays_gold stdout ----
+
+thread 'guild::tests::request_guild_war_non_master_still_pays_gold' (30208) panicked at crates\world\src\guild.rs:1612:9:
+assertion `left == right` failed: 非掌门也扣 GuildWarPrice
+  left: 0
+ right: 30000
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- guild::tests::request_guild_war_not_at_war_is_n2_noop stdout ----
+
+thread 'guild::tests::request_guild_war_not_at_war_is_n2_noop' (28568) panicked at crates\world\src\guild.rs:1671:9:
+assertion `left == right` failed
+  left: 0
+ right: 30000
+
+---- guild::tests::request_guild_war_no_guild_still_pays_gold stdout ----
+
+thread 'guild::tests::request_guild_war_no_guild_still_pays_gold' (30828) panicked at crates\world\src\guild.rs:1633:9:
+assertion `left == right` failed
+  left: 0
+ right: 30000
+
+
+failures:
+    guild::tests::request_guild_war_ally_is_skipped_by_add_war_guild
+    guild::tests::request_guild_war_no_guild_still_pays_gold
+    guild::tests::request_guild_war_non_master_still_pays_gold
+    guild::tests::request_guild_war_non_zero_server_still_pays_gold
+    guild::tests::request_guild_war_not_at_war_is_n2_noop
+
+test result: FAILED. 5 passed; 5 failed; 0 ignored; 0 measured; 164 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-world --lib`

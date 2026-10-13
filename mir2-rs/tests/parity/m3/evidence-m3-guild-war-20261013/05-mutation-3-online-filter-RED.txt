@@ -1,0 +1,36 @@
+改坏必红 RC3：删掉 ref_member_name 的 online 过滤（离线成员也被 RefShowName）
+命令：CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo test -p mir2-world --lib guild::tests::ref_member_name_only_online --offline
+
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\crates\world)
+warning: unused variable: `online`
+   --> crates\world\src\guild.rs:619:35
+    |
+619 |     pub fn ref_member_name(&self, online: impl Fn(&str) -> bool) -> Vec<String> {
+    |                                   ^^^^^^ help: if this is intentional, prefix it with an underscore: `_online`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `mir2-world` (lib test) generated 1 warning (run `cargo fix --lib -p mir2-world --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.39s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m3cs-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 1 test
+test guild::tests::ref_member_name_only_online ... FAILED
+
+failures:
+
+---- guild::tests::ref_member_name_only_online stdout ----
+
+thread 'guild::tests::ref_member_name_only_online' (24572) panicked at crates\world\src\guild.rs:1856:9:
+assertion `left == right` failed
+  left: ["A1", "A2", "A3"]
+ right: ["A1", "A3"]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    guild::tests::ref_member_name_only_online
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 173 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-world --lib`
