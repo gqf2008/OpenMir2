@@ -314,3 +314,5 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
   并**显式登记唯一未证环节**：C# 侧抓包拓扑（`tools/README.md` 的「进世界数据拿不到」历史 +
   若复现时按 `C线-交付说明.md`「解除判据」#1 走 owner 裁决），以及**降级判据**（截图级两侧对照，须在卡上写明）。
 - **零生产代码改动**（仅新增一个 `.py` 判据 + 两份文档）；本片**未起栈、未占端口**；真机两侧同框读数仍归 owner 窗口。
+- 证据：`81-mongen-dense-points-checker.txt`（工具 selftest 10/10 + 真 MonGen 读数 + 两条改坏必红）、
+  `82-two-side-window-runbook.md`（两侧窗口照抄步骤 + C# 抓包拓扑风险与降级）、`83-gates.txt`、`84-boundary.txt`。

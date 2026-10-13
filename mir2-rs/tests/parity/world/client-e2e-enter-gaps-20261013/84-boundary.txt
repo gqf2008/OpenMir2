@@ -1,0 +1,25 @@
+84-boundary.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片⑬ 边界（冻结面空）
+====================================================================================================
+base = `refs/heads/master` = db7da6f2c9b4ffb07e9b65fbbad26d87856c780e
+head = 9662ff325082dcbf1b5b6e5b0d80ba08adfe6dfd
+   （片⑬ 交付 aeb0336a6 + `git merge origin/master`；merge-base(HEAD, master) = db7da6f2c ⇒ master 是祖先）
+
+```
+$ git diff --name-only db7da6f2c HEAD
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/81-mongen-dense-points-checker.txt
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/82-two-side-window-runbook.md
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_mongen_dense_points.py
+
+$ git diff --name-only db7da6f2c HEAD -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+（空 = 冻结面 GREEN）
+
+$ git diff --name-only db7da6f2c HEAD | grep -c '\.rs$'
+0
+```
+
+- 全部 5 路径都在本卡证据目录 `mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/**`；
+  `src/`（oracle）/`sql/`/`MirClient`/`mir2-rs/crates/protocol`/`mir2-rs/crates/storage` 未触碰；
+  `*.rs` = 0（本片零生产代码改动）。
+- 写集不碰 `tests/parity/m3/**`（m3bag/m3cs）、不碰他人卡。
