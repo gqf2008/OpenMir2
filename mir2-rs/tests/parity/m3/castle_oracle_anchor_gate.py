@@ -21,9 +21,12 @@ doc-comment/README 锚行号是按**另一版本**抄的，与**冻结** `src/` 
    （把 `:113` 改回 `:111` ⇒ 注册的 `UserCastle.cs:113` 消失 ⇒ RED）；
 2. **读侧**：冻结 `src/` 对应 `line` 必须命中 `token`（改表/改行号 ⇒ RED）。
 
-本门只覆盖**⑧-6 第②片新块**声明的锚；未登记的新锚由维护者在新增时补进 `ANCHORS`
-（新增锚不登记不会假绿——本门不做「未登记即红」的全量扫描，避免把 ⑧-7/⑧-8 的
-历史锚一并扫进来而漂移口径）。
+3. **覆盖面**：`COVERED_MARKERS` 括出的区间（当前 = ⑧-7 攻城状态机模块头，castle.rs 顶到
+   ⑧-8 段之前）内，**每个** `文件.cs:NNN` 锚都必须在 `ANCHORS` 表内（新增锚不登记 ⇒ RED），
+   且区间内**不得**留裸锚（必须写成 `文件.cs:NNN`，防 `:NNN` 在不同文件间被误读）。
+
+⑧-8 / ⑧-9 / ⑧-6② 的锚**尚未纳入覆盖区间**（历史锚多，逐条核另开片）；它们可以出现在表里
+（写/读侧照检），只是不参与「未登记即红」的覆盖面判定。
 
 ## 用法
 
@@ -36,6 +39,7 @@ doc-comment/README 锚行号是按**另一版本**抄的，与**冻结** `src/` 
 import argparse
 import json
 import os
+import re
 import sys
 import tempfile
 
@@ -49,6 +53,16 @@ UC = "src/M2Server/Castle/UserCastle.cs"
 CC = "src/M2Server/Castle/CastleConf.cs"
 AU = "src/Modules/SystemModule/Data/ArcherUnit.cs"
 GC = "src/Modules/SystemModule/Conf/Model/GameSvrConf.cs"
+# ⑧-7 模块头新纳入的 oracle 面（横向体检片）。
+CO = "src/GameSrv/Npc/CastleOfficial.cs"
+GO = "src/GameSrv/Npc/GuildOfficial.cs"
+CSL = "src/Modules/GameCommand/Commands/ChangeSabukLordCommand.cs"
+MS = "src/M2Server/M2Share.cs"
+MSG = "src/OpenMir2/Messages.cs"
+SC = "src/Modules/SystemModule/Conf/ServerConf.cs"
+CCONST = "src/M2Server/Castle/CastleConst.cs"
+PM = "src/M2Server/Player/PlayObject.Message.cs"
+PO = "src/M2Server/Player/PlayObject.Operate.cs"
 
 # (anchor_text_in_docs, cs_relpath, [(line, expected_substring), ...])
 #
@@ -141,7 +155,117 @@ ANCHORS = [
     ("GameSvrConf.cs:1786-1787", GC, [
         (1786, "CastleWarRangeX = 100"),
         (1787, "CastleWarRangeY = 100")]),
+    # ---- ⑧-7 攻城状态机模块头（castle.rs 1-174，纳入覆盖面）----
+    # 横向体检（2026-10-13）订正：Run/Start/Stop/CheckInPalace 范围原多算 1-3 行；
+    # CastleConst.cs:11→:10；N1 被吞调用点 Message.cs 三处 330/328/326→329/327/325。
+    ("UserCastle.cs:311-446", UC, [
+        (311, "public void Run()"),
+        (373, "MainDoorControl(true);"),
+        (446, "}")]),
+    ("UserCastle.cs:328-339", UC, [
+        (328, "int Year = DateTime.Now.Year;"),
+        (336, "TodayIncome = 0;"),
+        (339, "}")]),
+    ("UserCastle.cs:340-376", UC, [
+        (340, "if (!IsStartWar && !UnderWar)"),
+        (343, "SystemShare.Config.StartCastlewarTime"),
+        (376, "}")]),
+    ("UserCastle.cs:377-389", UC, [
+        (377, "for (int i = 0; i < Guards.Length; i++)"),
+        (384, "for (int i = 0; i < Archers.Length; i++)"),
+        (389, "}")]),
+    ("UserCastle.cs:391-440", UC, [
+        (391, "if (UnderWar)"),
+        (440, "}")]),
+    ("UserCastle.cs:564-572", UC, [
+        (564, "public void StartWallconquestWar()"),
+        (567, "GetMapRageHuman(PalaceEnvir"),
+        (570, "playObjectList[i].RefShowName();"),
+        (572, "}")]),
+    ("UserCastle.cs:577-597", UC, [
+        (577, "public void StopWallconquestWar()"),
+        (580, "UnderWar = false;"),
+        (581, "AttackGuildList.Clear();"),
+        (597, "}")]),
+    ("UserCastle.cs:890-909", UC, [
+        (890, "public void MainDoorControl(bool boClose)"),
+        (905, "((CastleDoor)MainDoor.BaseObject).Open();"),
+        (909, "}")]),
+    ("UserCastle.cs:998-1014", UC, [
+        (998, "public bool AddAttackerInfo(GuildInfo Guild)"),
+        (1011, "Messages.SS_212"),
+        (1014, "}")]),
+    ("UserCastle.cs:639-642", UC, [
+        (639, "public bool IsMasterGuild(IGuild guild)"),
+        (641, "MasterGuild != null && MasterGuild == guild")]),
+    ("UserCastle.cs:480-483", UC, [
+        (480, "public bool IsMember(PlayObject member)"),
+        (482, "IsMasterGuild(member.MyGuild)")]),
+    ("UserCastle.cs:604-607", UC, [
+        (604, "public int InPalaceGuildCount()"),
+        (606, "return AttackGuildList.Count;")]),
+    ("UserCastle.cs:680-705", UC, [
+        (680, "public bool CheckInPalace(int nX, int nY)"),
+        (704, "return result;")]),
+    # N1 抛出点 + 被吞调用点（⑧-7 模块头 N1 表）。
+    ("UserCastle.cs:601", UC, [(601, "throw new NotImplementedException();")]),
+    ("CastleOfficial.cs:157", CO, [(157, "Castle.WithDrawalGolds(PlayObject")]),
+    ("UserCastle.cs:646", UC, [(646, "throw new NotImplementedException();")]),
+    ("PlayObject.Message.cs:329", PM, [(329, "castle.GetCastle(MyGuild);")]),
+    ("ChangeSabukLordCommand.cs:39", CSL, [(39, "castle.GetCastle(guild);")]),
+    ("UserCastle.cs:672", UC, [(672, "throw new NotImplementedException();")]),
+    ("GuildOfficial.cs:219", GO, [(219, "Castle.AddAttackerInfo(PlayObject.MyGuild)")]),
+    ("UserCastle.cs:677", UC, [(677, "throw new NotImplementedException();")]),
+    ("PlayObject.Message.cs:327", PM, [(327, "castle.CanGetCastle(MyGuild)")]),
+    ("UserCastle.cs:709", UC, [(709, "throw new NotImplementedException();")]),
+    ("PlayObject.Operate.cs:371", PO, [(371, "castle.CheckInPalace(CurrX, CurrY, this)")]),
+    ("UserCastle.cs:913", UC, [(913, "throw new NotImplementedException();")]),
+    ("CastleOfficial.cs:179", CO, [(179, "Castle.ReceiptGolds(PlayObject")]),
+    ("UserCastle.cs:1042", UC, [(1042, "throw new NotImplementedException();")]),
+    ("UserCastle.cs:1047", UC, [(1047, "throw new NotImplementedException();")]),
+    ("PlayObject.Message.cs:325", PM, [(325, "castle.IsAttackGuild(MyGuild)")]),
+    ("UserCastle.cs:1052", UC, [(1052, "throw new NotImplementedException();")]),
+    ("UserCastle.cs:1057", UC, [(1057, "throw new NotImplementedException();")]),
+    ("PlayObject.Message.cs:324-334", PM, [
+        (325, "castle.IsAttackGuild(MyGuild)"),
+        (329, "castle.GetCastle(MyGuild);"),
+        (333, "castle.StopWallconquestWar();")]),
+    # 照搬的 oracle 怪行为 + 常量 + 配置（⑧-7 模块头）。
+    ("M2Share.cs:458-493", MS, [
+        (458, "public static DateTime AddDateTimeOfDay"),
+        (460, "DateTime result = DateTime.Now;")]),
+    ("UserCastle.cs:582-584", UC, [
+        (582, "IList<PlayObject> ListC = new List<PlayObject>();"),
+        (583, "GetMapOfRangeHumanCount(CastleEnvir, HomeX, HomeY, 100);"),
+        (584, "for (int i = 0; i < ListC.Count; i++)")]),
+    ("UserCastle.cs:48", UC, [(48, "Archers = new ArcherUnit[12];")]),
+    ("CastleConst.cs:10", CCONST, [(10, "public const int MaxCastleArcher = 12;")]),
+    ("UserCastle.cs:49", UC, [(49, "Guards = new ArcherUnit[12];")]),
+    ("GameSvrConf.cs:1782", GC, [(1782, 'CastleName = "沙巴克";')]),
+    ("Messages.cs:453", MSG, [(453, "public const int SS_204 = 204;")]),
+    ("Messages.cs:461", MSG, [(461, "public const int SS_212 = 212;")]),
+    # ⑧-2 配置锚（⑧-7 `CastleSiegeConfig` 的读侧输入）。
+    ("ServerConf.cs:639", SC, [(639, 'StartCastlewarTime = ReadWriteInteger("Setup", "StartCastlewarTime"')]),
+    ("ServerConf.cs:642", SC, [(642, 'CastleWarTime = ReadWriteInteger("Setup", "CastleWarTime"')]),
+    ("ServerConf.cs:640", SC, [(640, 'ShowCastleWarEndMsgTime = ReadWriteInteger("Setup", "ShowCastleWarEndMsgTime"')]),
+    ("ServerConf.cs:643", SC, [(643, 'GetCastleTime = ReadWriteInteger("Setup", "GetCastleTime"')]),
+    ("ServerConf.cs:638", SC, [(638, 'StartCastleWarDays = ReadWriteByte("Setup", "StartCastleWarDays"')]),
+    ("ServerConf.cs:253", SC, [(253, 'CastleName = ReadWriteString("Setup", "CastleName"')]),
+    ("GameSvrConf.cs:1442-1446", GC, [
+        (1442, "StartCastleWarDays = 4;"),
+        (1443, "StartCastlewarTime = 20;"),
+        (1446, "GetCastleTime = 10 * 60 * 1000;")]),
 ]
+
+# 覆盖面区间（内容标记 → 行区间）。区间内每个 `.cs:NNN` 锚都必须登记，且不得留裸 `:NNN`。
+COVERED_MARKERS = [
+    # ⑧-7 攻城状态机模块头 + 常量 + `CastleSiegeConfig`（castle.rs 顶到 ⑧-8 段之前）。
+    ("//! 攻城状态机（", "`CastleDoor.cs` / `WallStructure.cs`，⑧-8"),
+]
+
+ANCHOR_RE = re.compile(
+    r'([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*\.cs):(\d+(?:-\d+)?(?:/\d+(?:-\d+)?)*)')
+BARE_ANCHOR_RE = re.compile(r'(?<![A-Za-z0-9_.]):(\d+(?:-\d+)?(?:/\d+(?:-\d+)?)*)')
 
 
 def _read_text(path):
@@ -154,8 +278,46 @@ def _cached_src(src_root, rel):
     return _read_text(path).splitlines()
 
 
-def _evaluate(anchors=None, castle_text=None, readme_text=None, src_root=None):
-    """返回 findings 列表（空 = GREEN）。"""
+def _covered_spans(castle_lines):
+    """由 `COVERED_MARKERS` 的起/止内容标记解析出 1-based 行区间（含止）。"""
+    spans = []
+    for start_marker, end_marker in COVERED_MARKERS:
+        si = next((i for i, line in enumerate(castle_lines) if start_marker in line), None)
+        ei = next((i for i, line in enumerate(castle_lines) if end_marker in line), None)
+        if si is None or ei is None or ei < si:
+            continue
+        spans.append((si + 1, ei + 1))
+    return spans
+
+
+def _coverage_findings(anchors, castle_text, castle_lines=None):
+    """覆盖面口径：覆盖区间内每个 `.cs:NNN` 锚都已登记，且不留裸 `:NNN`。
+
+    返回 findings 列表（空 = GREEN）。与写/读侧独立：不改 `ANCHORS` 也能单独自检。
+    """
+    if castle_lines is None:
+        castle_lines = castle_text.splitlines()
+    spans = _covered_spans(castle_lines)
+    registered = set(anchor for anchor, _rel, _pts in anchors)
+    findings = []
+    if not spans:
+        findings.append("覆盖面：未解析出任何覆盖区间（COVERED_MARKERS 标记缺失/顺序错）")
+    for start, end in spans:
+        seg = "\n".join(castle_lines[start - 1:end])
+        for m in ANCHOR_RE.finditer(seg):
+            if m.group(0) not in registered:
+                findings.append("覆盖面：未登记锚 %s（覆盖区间 castle.rs:%d-%d）"
+                                % (m.group(0), start, end))
+        stripped = ANCHOR_RE.sub("", seg)
+        for m in BARE_ANCHOR_RE.finditer(stripped):
+            findings.append("覆盖面：裸锚 `:%s`（覆盖区间 castle.rs:%d-%d）须写成 `文件.cs:NNN`"
+                            % (m.group(1), start, end))
+    return findings
+
+
+def _evaluate(anchors=None, castle_text=None, readme_text=None, src_root=None,
+              coverage=False):
+    """返回 findings 列表（空 = GREEN）。`coverage=True` 时附带覆盖面判定。"""
     anchors = ANCHORS if anchors is None else anchors
     if castle_text is None:
         castle_text = _read_text(CASTLE_RS)
@@ -183,14 +345,17 @@ def _evaluate(anchors=None, castle_text=None, readme_text=None, src_root=None):
             if token not in actual:
                 findings.append("读侧不匹配 %s:%d 期望含 %r，实际 %r"
                                 % (rel, line, token, actual.strip()))
+    if coverage:
+        findings.extend(_coverage_findings(anchors, castle_text))
     return findings
 
 
 def cmd_check(args):
-    findings = _evaluate()
+    findings = _evaluate(coverage=True)
     if args.json:
         with open(args.json, "w", encoding="utf-8", newline="\n") as fh:
-            json.dump({"findings": findings, "anchors": len(ANCHORS)},
+            json.dump({"findings": findings, "anchors": len(ANCHORS),
+                       "covered_spans": _covered_spans(_read_text(CASTLE_RS).splitlines())},
                       fh, ensure_ascii=False, indent=2)
     if findings:
         sys.stdout.write("RED: castle oracle 锚门失败（%d 项 / 共 %d 锚）\n"
@@ -198,7 +363,7 @@ def cmd_check(args):
         for f in findings:
             sys.stdout.write("  - %s\n" % f)
         return 1
-    sys.stdout.write("GREEN: castle oracle 锚门通过（%d 锚全部命中冻结 src/ 且写侧在位）\n"
+    sys.stdout.write("GREEN: castle oracle 锚门通过（%d 锚命中冻结 src/ + 写侧在位 + 覆盖区间无未登记/裸锚）\n"
                      % len(ANCHORS))
     return 0
 
@@ -234,6 +399,36 @@ def cmd_selftest(args):
     t2 = (len(n) == 1 and "写侧缺锚" in n[0])
     sys.stdout.write("selftest 写侧缺锚牙齿: %s (%r)\n" % ("GREEN" if t2 else "RED", n))
     ok = ok and t2
+
+    # 4) 覆盖面牙：合成覆盖区间（用真身 COVERED_MARKERS）。
+    syn = [
+        "//! 攻城状态机（合成）",
+        "//! `A.cs:1` 与裸 `:9`",
+        "//! `B.cs:2`",
+        "/// `CastleDoor.cs` / `WallStructure.cs`，⑧-8",
+        "tail",
+    ]
+    cov = _coverage_findings([("A.cs:1", "A.cs", [(1, "a")])], "\n".join(syn), syn)
+    t3a = any("未登记锚 B.cs:2" in f for f in cov)
+    t3b = any("裸锚 `:9`" in f for f in cov)
+    t3c = not any("A.cs:1" in f for f in cov)
+    t3 = t3a and t3b and t3c
+    sys.stdout.write("selftest 覆盖面牙齿: %s (cov=%r)\n" % ("GREEN" if t3 else "RED", cov))
+    ok = ok and t3
+
+    # 5) 覆盖面牙：标记缺失 ⇒ RED（防覆盖区间惄惄失效）。
+    cov_none = _coverage_findings(ANCHORS, "no markers here")
+    t4 = any("未解析出任何覆盖区间" in f for f in cov_none)
+    sys.stdout.write("selftest 覆盖区间标记缺失牙齿: %s\n" % ("GREEN" if t4 else "RED"))
+    ok = ok and t4
+
+    # 6) 覆盖面正向：当前树覆盖面必须 GREEN。
+    cov_real = _coverage_findings(ANCHORS, castle_text)
+    t5 = cov_real == []
+    sys.stdout.write("selftest 真身覆盖面: %s (%d 项)\n" % ("GREEN" if t5 else "RED", len(cov_real)))
+    for f in cov_real:
+        sys.stdout.write("  - %s\n" % f)
+    ok = ok and t5
     sys.stdout.write("SELFTEST %s\n" % ("GREEN" if ok else "RED"))
     return 0 if ok else 1
 
@@ -268,9 +463,44 @@ def cmd_mutation(args):
     ok = ok and red2
 
     # MUT3（回归）：真实 check 必须 GREEN（变异体不影响真身）。
-    f0 = _evaluate(castle_text=castle_text, readme_text=readme_text)
+    f0 = _evaluate(castle_text=castle_text, readme_text=readme_text, coverage=True)
     sys.stdout.write("MUT3 真身 check: %s（%d 项）\n" % ("GREEN" if not f0 else "RED", len(f0)))
     ok = ok and not f0
+
+    # MUT4（覆盖面）：在覆盖区间内注入未登记锚 `Ghost.cs:1` ⇒ 未登记 ⇒ RED。
+    mut_cov = castle_text.replace("//! ## N1：", "//! `Ghost.cs:1`\n//! ## N1：", 1)
+    if mut_cov == castle_text:
+        sys.stdout.write("BUG: 变异 MUT4 找不到 N1 标题\n")
+        ok = False
+    f4 = _evaluate(castle_text=mut_cov, readme_text=readme_text, coverage=True)
+    red4 = any("未登记锚 Ghost.cs:1" in f for f in f4)
+    sys.stdout.write("MUT4 覆盖面未登记锚: %s（%d 项）\n" % ("RED" if f4 else "GREEN", len(f4)))
+    ok = ok and red4
+
+    # MUT5（⑧-7 横向体检）：把 `UserCastle.cs:311-446` 改回历史多算值 `:311-448`
+    # ⇒ 写侧缺锚 + 覆盖面未登记（两条独立牙）。
+    mut5 = castle_text.replace("UserCastle.cs:311-446", "UserCastle.cs:311-448")
+    if mut5 == castle_text:
+        sys.stdout.write("BUG: 变异 MUT5 找不到 UserCastle.cs:311-446\n")
+        ok = False
+    f5 = _evaluate(castle_text=mut5, readme_text=readme_text, coverage=True)
+    red5 = any("写侧缺锚 UserCastle.cs:311-446" in f for f in f5) and \
+        any("未登记锚 UserCastle.cs:311-448" in f for f in f5)
+    sys.stdout.write("MUT5 ⑧-7 范围漂移(:311-446→:311-448): %s（%d 项）\n"
+                     % ("RED" if f5 else "GREEN", len(f5)))
+    ok = ok and red5
+
+    # MUT6（裸锚）：把 `UserCastle.cs:480-483` 改回裸 `:480-483` ⇒ 写侧缺锚 + 覆盖面裸锚。
+    mut6 = castle_text.replace("`UserCastle.cs:480-483`", "`:480-483`")
+    if mut6 == castle_text:
+        sys.stdout.write("BUG: 变异 MUT6 找不到 UserCastle.cs:480-483\n")
+        ok = False
+    f6 = _evaluate(castle_text=mut6, readme_text=readme_text, coverage=True)
+    red6 = any("写侧缺锚 UserCastle.cs:480-483" in f for f in f6) and \
+        any("裸锚 `:480-483`" in f for f in f6)
+    sys.stdout.write("MUT6 ⑧-7 裸锚回归(:480-483): %s（%d 项）\n"
+                     % ("RED" if f6 else "GREEN", len(f6)))
+    ok = ok and red6
 
     sys.stdout.write("MUTATION %s (%s)\n" % ("GREEN" if ok else "RED", out))
     return 0 if ok else 1

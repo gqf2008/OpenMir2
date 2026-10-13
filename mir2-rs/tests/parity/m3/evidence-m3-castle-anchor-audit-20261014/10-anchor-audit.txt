@@ -1,0 +1,71 @@
+UserCastle.cs:311-446      M2Server/Castle/UserCastle.cs                        :311  public void Run()
+                                                                                :446  }
+UserCastle.cs:328-339      M2Server/Castle/UserCastle.cs                        :328  int Year = DateTime.Now.Year;
+                                                                                :339  }
+UserCastle.cs:340-376      M2Server/Castle/UserCastle.cs                        :340  if (!IsStartWar && !UnderWar)
+                                                                                :376  }
+UserCastle.cs:377-389      M2Server/Castle/UserCastle.cs                        :377  for (int i = 0; i < Guards.Length; i++)
+                                                                                :389  }
+UserCastle.cs:391-440      M2Server/Castle/UserCastle.cs                        :391  if (UnderWar)
+                                                                                :440  }
+UserCastle.cs:564-572      M2Server/Castle/UserCastle.cs                        :564  public void StartWallconquestWar()
+                                                                                :572  }
+UserCastle.cs:577-597      M2Server/Castle/UserCastle.cs                        :577  public void StopWallconquestWar()
+                                                                                :597  }
+UserCastle.cs:890-909      M2Server/Castle/UserCastle.cs                        :890  public void MainDoorControl(bool boClose)
+                                                                                :909  }
+UserCastle.cs:998-1014     M2Server/Castle/UserCastle.cs                        :998  public bool AddAttackerInfo(GuildInfo Guild)
+                                                                                :1014 }
+UserCastle.cs:639-642      M2Server/Castle/UserCastle.cs                        :639  public bool IsMasterGuild(IGuild guild)
+                                                                                :642  }
+UserCastle.cs:480-483      M2Server/Castle/UserCastle.cs                        :480  public bool IsMember(PlayObject member)
+                                                                                :483  }
+UserCastle.cs:604-607      M2Server/Castle/UserCastle.cs                        :604  public int InPalaceGuildCount()
+                                                                                :607  }
+UserCastle.cs:680-705      M2Server/Castle/UserCastle.cs                        :680  public bool CheckInPalace(int nX, int nY)
+                                                                                :705  }
+UserCastle.cs:601          M2Server/Castle/UserCastle.cs                        :601  throw new NotImplementedException();
+CastleOfficial.cs:157      GameSrv/Npc/CastleOfficial.cs                        :157  switch (Castle.WithDrawalGolds(PlayObject, HUtil32.StrToInt(sMsg, 0)))
+UserCastle.cs:646          M2Server/Castle/UserCastle.cs                        :646  throw new NotImplementedException();
+PlayObject.Message.cs:329  M2Server/Player/PlayObject.Message.cs                :329  castle.GetCastle(MyGuild);
+ChangeSabukLordCommand.cs:39 Modules/GameCommand/Commands/ChangeSabukLordCommand.cs :39   castle.GetCastle(guild);
+UserCastle.cs:672          M2Server/Castle/UserCastle.cs                        :672  throw new NotImplementedException();
+GuildOfficial.cs:219       GameSrv/Npc/GuildOfficial.cs                         :219  if (Castle.AddAttackerInfo(PlayObject.MyGuild))
+UserCastle.cs:677          M2Server/Castle/UserCastle.cs                        :677  throw new NotImplementedException();
+PlayObject.Message.cs:327  M2Server/Player/PlayObject.Message.cs                :327  if (castle.CanGetCastle(MyGuild))
+UserCastle.cs:709          M2Server/Castle/UserCastle.cs                        :709  throw new NotImplementedException();
+PlayObject.Operate.cs:371  M2Server/Player/PlayObject.Operate.cs                :371  if (castle == null || castle.DoorStatus != door.Status || Race != Acto
+UserCastle.cs:913          M2Server/Castle/UserCastle.cs                        :913  throw new NotImplementedException();
+CastleOfficial.cs:179      GameSrv/Npc/CastleOfficial.cs                        :179  switch (Castle.ReceiptGolds(PlayObject, HUtil32.StrToInt(sMsg, 0)))
+UserCastle.cs:1042         M2Server/Castle/UserCastle.cs                        :1042 throw new NotImplementedException();
+UserCastle.cs:1047         M2Server/Castle/UserCastle.cs                        :1047 throw new NotImplementedException();
+PlayObject.Message.cs:325  M2Server/Player/PlayObject.Message.cs                :325  if (castle.IsAttackGuild(MyGuild))
+UserCastle.cs:1052         M2Server/Castle/UserCastle.cs                        :1052 throw new NotImplementedException();
+UserCastle.cs:1057         M2Server/Castle/UserCastle.cs                        :1057 throw new NotImplementedException();
+PlayObject.Message.cs:324-334 M2Server/Player/PlayObject.Message.cs                :324  {
+                                                                                :334  }
+M2Share.cs:458-493         M2Server/M2Share.cs                                  :458  public static DateTime AddDateTimeOfDay(DateTime DateTime, int nDay)
+                                                                                :493  //    result = DateTime;
+UserCastle.cs:582-584      M2Server/Castle/UserCastle.cs                        :582  IList<PlayObject> ListC = new List<PlayObject>();
+                                                                                :584  for (int i = 0; i < ListC.Count; i++)
+UserCastle.cs:48           M2Server/Castle/UserCastle.cs                        :48   Archers = new ArcherUnit[12];
+CastleConst.cs:10          M2Server/Castle/CastleConst.cs                       :10   public const int MaxCastleArcher = 12;
+UserCastle.cs:49           M2Server/Castle/UserCastle.cs                        :49   Guards = new ArcherUnit[12];
+UserCastle.cs:49           M2Server/Castle/UserCastle.cs                        :49   Guards = new ArcherUnit[12];
+GameSvrConf.cs:1786-1787   Modules/SystemModule/Conf/Model/GameSvrConf.cs       :1786 CastleWarRangeX = 100;
+                                                                                :1787 CastleWarRangeY = 100;
+Messages.cs:453            OpenMir2/Messages.cs                                 :453  public const int SS_204 = 204;
+Messages.cs:461            OpenMir2/Messages.cs                                 :461  public const int SS_212 = 212;
+UserCastle.cs:328-330      M2Server/Castle/UserCastle.cs                        :328  int Year = DateTime.Now.Year;
+                                                                                :330  int Day = DateTime.Now.Day;
+ServerConf.cs:639          Modules/SystemModule/Conf/ServerConf.cs              :639  SystemShare.Config.StartCastlewarTime = ReadWriteInteger("Setup", "Sta
+ServerConf.cs:642          Modules/SystemModule/Conf/ServerConf.cs              :642  SystemShare.Config.CastleWarTime = ReadWriteInteger("Setup", "CastleWa
+ServerConf.cs:640          Modules/SystemModule/Conf/ServerConf.cs              :640  SystemShare.Config.ShowCastleWarEndMsgTime = ReadWriteInteger("Setup",
+ServerConf.cs:643          Modules/SystemModule/Conf/ServerConf.cs              :643  SystemShare.Config.GetCastleTime = ReadWriteInteger("Setup", "GetCastl
+ServerConf.cs:638          Modules/SystemModule/Conf/ServerConf.cs              :638  SystemShare.Config.StartCastleWarDays = ReadWriteByte("Setup", "StartC
+ServerConf.cs:253          Modules/SystemModule/Conf/ServerConf.cs              :253  SystemShare.Config.CastleName = ReadWriteString("Setup", "CastleName",
+GameSvrConf.cs:1442-1446   Modules/SystemModule/Conf/Model/GameSvrConf.cs       :1442 StartCastleWarDays = 4;
+                                                                                :1446 GetCastleTime = 10 * 60 * 1000;
+GameSvrConf.cs:1782        Modules/SystemModule/Conf/Model/GameSvrConf.cs       :1782 CastleName = "沙巴克";
+
+total anchors in covered region = 50; unresolved = 0; distinct = 49

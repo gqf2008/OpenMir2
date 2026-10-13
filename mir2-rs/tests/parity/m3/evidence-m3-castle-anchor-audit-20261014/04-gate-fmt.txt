@@ -1,0 +1,1 @@
+cargo fmt --all -- --check  =>  rc=0（无输出 = 全部已格式化）

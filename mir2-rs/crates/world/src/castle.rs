@@ -6,14 +6,14 @@
 //!
 //! | 本模块 | oracle |
 //! | --- | --- |
-//! | [`UserCastle::run`] | `src/M2Server/Castle/UserCastle.cs:311-448`（每 tick；跨天重置 `:328-339`、每日开战 `:340-376`、回收 Ghost `:377-389`、围墙 `StoneMode` `:391-440`） |
-//! | [`UserCastle::start_wallconquest_war`] | `UserCastle.cs:564-575`（刷皇宫 100 范围内玩家 `RefShowName`） |
-//! | [`UserCastle::stop_wallconquest_war`] | `UserCastle.cs:577-600`（`UnderWar=false` + 清 `AttackGuildList` + 广播） |
+//! | [`UserCastle::run`] | `src/M2Server/Castle/UserCastle.cs:311-446`（每 tick；跨天重置 `UserCastle.cs:328-339`、每日开战 `UserCastle.cs:340-376`、回收 Ghost `UserCastle.cs:377-389`、围墙 `StoneMode` `UserCastle.cs:391-440`） |
+//! | [`UserCastle::start_wallconquest_war`] | `UserCastle.cs:564-572`（刷皇宫 100 范围内玩家 `RefShowName`） |
+//! | [`UserCastle::stop_wallconquest_war`] | `UserCastle.cs:577-597`（`UnderWar=false` + 清 `AttackGuildList` + 广播） |
 //! | [`UserCastle::main_door_control`] | `UserCastle.cs:890-909`（幂等：只在 `IsOpened` 与入参不符时动） |
 //! | [`UserCastle::add_attacker_info`] | `UserCastle.cs:998-1014`（`InAttackerList` 查重 + `AddDateTimeOfDay` + `SaveAttackSabukWall` + `SS_212`） |
-//! | [`UserCastle::is_master_guild`] / [`UserCastle::is_member`] | `UserCastle.cs:639-642` / `:480-483` |
+//! | [`UserCastle::is_master_guild`] / [`UserCastle::is_member`] | `UserCastle.cs:639-642` / `UserCastle.cs:480-483` |
 //! | [`UserCastle::in_palace_guild_count`] | `UserCastle.cs:604-607`（**返回值 = `AttackGuildList.Count`**，语义是「攻城行会数」，不是皇宫内玩家数） |
-//! | [`UserCastle::check_in_palace`] | `UserCastle.cs:680-706`（任一城墙格死亡且坐标命中） |
+//! | [`UserCastle::check_in_palace`] | `UserCastle.cs:680-705`（任一城墙格死亡且坐标命中） |
 //!
 //! ## N1：10 个 `IUserCastle` 重载的可观测 no-op（owner 裁决 comment `a137cc900c`，白名单 **T-38**）
 //!
@@ -26,13 +26,13 @@
 //! | no-op 入口 | oracle 抛异常行 | 被吞调用点（盘点 §1.L） |
 //! | --- | --- | --- |
 //! | [`UserCastle::with_drawal_golds_n1`] | `UserCastle.cs:601` | `CastleOfficial.cs:157`（金库提取，⑧-9 面） |
-//! | [`UserCastle::get_castle_n1`] | `UserCastle.cs:646` | `PlayObject.Message.cs:330`、`ChangeSabukLordCommand.cs:39` |
+//! | [`UserCastle::get_castle_n1`] | `UserCastle.cs:646` | `PlayObject.Message.cs:329`、`ChangeSabukLordCommand.cs:39` |
 //! | [`UserCastle::add_attacker_info_n1`] | `UserCastle.cs:672` | `GuildOfficial.cs:219`（NPC 申请攻城） |
-//! | [`UserCastle::can_get_castle_n1`] | `UserCastle.cs:677` | `PlayObject.Message.cs:328` |
+//! | [`UserCastle::can_get_castle_n1`] | `UserCastle.cs:677` | `PlayObject.Message.cs:327` |
 //! | [`UserCastle::check_in_palace_player_n1`] | `UserCastle.cs:709` | `PlayObject.Operate.cs:371`（开城门前的皇宫判定） |
 //! | [`UserCastle::receipt_golds_n1`] | `UserCastle.cs:913` | `CastleOfficial.cs:179`（金库上缴，⑧-9 面） |
 //! | [`UserCastle::is_attack_ally_guild_n1`] | `UserCastle.cs:1042` | — |
-//! | [`UserCastle::is_attack_guild_n1`] | `UserCastle.cs:1047` | `PlayObject.Message.cs:326` |
+//! | [`UserCastle::is_attack_guild_n1`] | `UserCastle.cs:1047` | `PlayObject.Message.cs:325` |
 //! | [`UserCastle::is_defense_ally_guild_n1`] | `UserCastle.cs:1052` | — |
 //! | [`UserCastle::is_defense_guild_n1`] | `UserCastle.cs:1057` | — |
 //!
@@ -61,7 +61,7 @@
 use mir2_data::guild_castle::GuildCastleConfig;
 
 /// `UserCastle.Archers = new ArcherUnit[12]`（`UserCastle.cs:48`）与 `CastleConst.MaxCastleArcher`
-/// （`CastleConst.cs:11`）。`Guards` 数组长度同为 12（`UserCastle.cs:49`），
+/// （`CastleConst.cs:10`）。`Guards` 数组长度同为 12（`UserCastle.cs:49`），
 /// 与 `MaxCalsteGuard = 4`（雇佣上限）不同，别混用。
 pub const MAX_CASTLE_ARCHER: usize = 12;
 /// `Guards` 数组长度（`UserCastle.cs:49`）。
@@ -133,7 +133,7 @@ pub struct CastleSiegeConfig {
 }
 
 impl Default for CastleSiegeConfig {
-    /// `GameSvrConf` 初值（`GameSvrConf.cs:1442-1446` 与 `:1782`）。
+    /// `GameSvrConf` 初值（`GameSvrConf.cs:1442-1446` 与 `GameSvrConf.cs:1782`）。
     fn default() -> Self {
         CastleSiegeConfig {
             start_castlewar_time: 20,
@@ -1110,7 +1110,7 @@ impl UserCastle {
         events
     }
 
-    /// oracle `UserCastle.Run()`（`UserCastle.cs:311-448`）。
+    /// oracle `UserCastle.Run()`（`UserCastle.cs:311-446`）。
     ///
     /// 顺序逐行照搬：`MapName`/归属服门 → 跨天重置 → 每日钟点开战 → 回收 Ghost 守卫/弓手 →
     /// 战时围墙 `StoneMode=false` + 结束预告 + 超时停战 / 非战 `StoneMode=true`。
@@ -1230,7 +1230,7 @@ impl UserCastle {
         events
     }
 
-    /// oracle `StartWallconquestWar()`（`UserCastle.cs:564-575`）：刷皇宫 100 范围内玩家 `RefShowName`。
+    /// oracle `StartWallconquestWar()`（`UserCastle.cs:564-572`）：刷皇宫 100 范围内玩家 `RefShowName`。
     ///
     /// 玩家选择（`GetMapRageHuman(PalaceEnvir, HomeX, HomeY, 100)`）属宿主能力 ⇒ 发
     /// [`CastleEvent::RefreshShowName`] 由宿主解析目标。
@@ -1242,7 +1242,7 @@ impl UserCastle {
         }]
     }
 
-    /// oracle `StopWallconquestWar()`（`UserCastle.cs:577-600`）。
+    /// oracle `StopWallconquestWar()`（`UserCastle.cs:577-597`）。
     ///
     /// **照搬 oracle 怪行为**：`:582-584` 的 `GetMapOfRangeHumanCount` **丢弃返回值**，
     /// `ListC` 恒空 ⇒ `:584-593` 的 `ChangePkStatus(false)` / 非守方 `MapRandomMove` **从不执行**。
@@ -1394,7 +1394,7 @@ impl UserCastle {
         self.attack_guild_list.len()
     }
 
-    /// oracle `CheckInPalace(int nX, int nY)`（`UserCastle.cs:680-706`）：
+    /// oracle `CheckInPalace(int nX, int nY)`（`UserCastle.cs:680-705`）：
     /// 任一面墙（左/中/右）的 `BaseObject` 非空、`Death` 且坐标命中 ⇒ `true`。
     #[must_use]
     pub fn check_in_palace(&self, x: i16, y: i16) -> bool {
