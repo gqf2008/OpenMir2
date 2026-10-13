@@ -2,7 +2,8 @@
 
 > 卡：`openmir2-m3-drop-exp-wiring`（issue `58825bcc`，M3④-实现 D）——本片是**掉落侧分片**的
 > **oracle 锚定（DoD①）与归属裁决请求**，**不擅改**生产语义（见 §5「为何本片零 .rs 改动」）。
-> base = `refs/heads/master` **`5461c1b1`**；head = 分支 `drop-exp-host`（D① `c059c086` + D② `4139c2f0` + 本报告）。
+> base = `refs/heads/master` **`90fab5c0`**（交付前已 `git merge origin/master`）；head = 分支 `drop-exp-host` **`2f403751`**
+> （D① `c059c086` + D② `4139c2f0` + 本报告 + merge master）。
 > 工作目录 `<worktree>/mir2-rs`；无栈、无端口（判据全离线）。
 
 ## 0. 一句话
