@@ -1,0 +1,6 @@
+# command: python -I m3_whitelist_registry_audit.py audit --strict
+WHITELIST_REGISTRY scope=T-36+ entries=10 duplicates=[42] strict=True tokens=unavailable
+  NOTE fixture_matrix.py 未在本树（其卡未合入）⇒ 只查全局编号唯一性
+  FINDING DUPLICATE T-42 × 2 @ L209,L222（全局唯一编号约定被破坏）
+WHITELIST_REGISTRY_RED 1：DUPLICATE T-42 @ L209,L222
+rc=1
