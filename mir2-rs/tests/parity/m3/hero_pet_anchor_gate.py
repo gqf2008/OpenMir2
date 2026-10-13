@@ -28,8 +28,10 @@ reviewer-5 M-2 clone46 用例、reviewer-6 M-1 peer baseline-invalid 自检）�
 3. **读侧**：每条锚声明的每个 `(line, token)` 必须命中**冻结** `src/` 的对应行
    （改行号 / 改文件 / 越界 ⇒ RED）。token 取自冻结行本体，锁住锚的位置语义。
 4. **读侧 token 强度**（夹具族同形残余 Minor：结束行只有 `}` 的 token 判据较弱）：
-   每条锚**整组**至少要有一个**非纯标点** token；整组只剩 `}`/`;`/`(` 这类无信息量字符
-   ⇒ RED（防行号漂移时「只钉在一段空壳行上」假绿）。
+   每条锚**整组**至少要有一个**有辨识度** token（含字母/数字/下划线/CJK）；整组只剩纯标点/空白
+   ⇒ RED（防行号漂移时「只钉在一段空壳行上」假绿）。**O-1 收口（2026-10-14）**：旧类
+   `^[{}();,\s]*$` 漏 `[]<>+=-*/|&!~%^?.#:` 等 ⇒ 整组只剩 `]);`/`[]`/`//{` 被判「有辨识度」
+   而漏红（reviewer-6 f97370f3 构造验证：`]);` ⇒ 无 finding）；现改为「必含字母/数字/下划线/CJK」。
 
 ## 用法
 
@@ -66,7 +68,9 @@ FILE_RE = re.compile(r'([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*\.cs)')
 SPEC_RE = re.compile(r'/?\s*:(\d+(?:-\d+)?(?:/\d+(?:-\d+)?)*)')
 
 # 读侧 token 强度（判据 4）：整组只剩纯标点/空白 ⇒ 弱锚 ⇒ RED。
-_WEAK_ONLY_TOKEN_RE = re.compile(r'^[{}();,\s]*$')
+# O-1 收口（2026-10-14）：旧类 `{}();,` 漏 `[]<>+=-*/|&!~%^?.#:` ⇒ 整组只剩 `]);`/`[]` 被误判
+# 「有辨识度」（reviewer-6 f97370f3 构造验证）；改为「整串不含字母/数字/下划线/CJK」才算弱。
+_WEAK_ONLY_TOKEN_RE = re.compile(r'^[^0-9A-Za-z_\u4e00-\u9fff]*$')
 
 
 def _token_strength_findings(rows):
@@ -269,8 +273,21 @@ def cmd_selftest(args):
     stub_weak = "BaseObject.cs:1179-1209 note"
     weak_only = [("BaseObject.cs:1179-1209", PATHS["BaseObject.cs"], [(1209, "}")])]
     w = _evaluate(rows=weak_only, scenario_text=stub_weak)
-    t6 = len(w) == 1 and "token 强度" in w[0]
-    sys.stdout.write("selftest token 强度牙齿: %s (weak=%r)\n" % ("GREEN" if t6 else "RED", w))
+    t6a = len(w) == 1 and "token 强度" in w[0]
+    # 6b) O-1 收口（2026-10-14）：纯标点整组 `]);`/`[]`/`*/`/`//{` 旧类漏红 ⇒ 新谓词必须咬；
+    #     含内容 token 的整组不误报。
+    o1_rows = [
+        ("X.cs:1-2", PATHS["BaseObject.cs"], [(2, "]);")]),
+        ("Y.cs:1-2", PATHS["BaseObject.cs"], [(2, "[]")]),
+        ("Z.cs:1-2", PATHS["BaseObject.cs"], [(2, "*/")]),
+        ("W.cs:1-2", PATHS["BaseObject.cs"], [(2, "//{")]),
+        ("V.cs:1-2", PATHS["BaseObject.cs"], [(2, "//{"), (3, "foo")]),
+    ]
+    o1 = _token_strength_findings(o1_rows)
+    t6b = len(o1) == 4 and all("token 强度" in f for f in o1)
+    t6 = t6a and t6b
+    sys.stdout.write("selftest token 强度牙齿: %s (weak=%r; O-1 pure-punct=%d/4)\n"
+                     % ("GREEN" if t6 else "RED", w, len(o1)))
     ok = ok and t6
 
     sys.stdout.write("SELFTEST %s\n" % ("GREEN" if ok else "RED"))
@@ -336,6 +353,17 @@ def cmd_mutation(args):
     sys.stdout.write("MUT5 token 强度(整组只剩 `}`): %s（%d 项）\n"
                      % ("RED" if red5 else "GREEN", len(f5)))
     ok = ok and red5
+
+    # MUT6（O-1 收口，2026-10-14）：O-1 点名的纯标点整组 `]);`（旧类判「有辨识度」⇒ 漏红）与
+    # `]`/`//{` 必须被新谓词咬住。证明强度牙对 O-1 边界不再恒绿。
+    o1a = _token_strength_findings([("BaseObject.cs:1179-1209", PATHS["BaseObject.cs"],
+                                     [(1209, "]);")])])
+    o1b = _token_strength_findings([("X.cs:1-2", PATHS["BaseObject.cs"], [(2, "]")]),
+                                    ("Y.cs:1-2", PATHS["BaseObject.cs"], [(2, "//{")])])
+    red6 = len(o1a) == 1 and "token 强度" in o1a[0] and len(o1b) == 2
+    sys.stdout.write("MUT6 token 强度(O-1 纯标点 `]);`/`]`/`//{`): %s（%d+%d 项）\n"
+                     % ("RED" if red6 else "GREEN", len(o1a), len(o1b)))
+    ok = ok and red6
 
     sys.stdout.write("MUTATION %s (%s)\n" % ("GREEN" if ok else "RED", out))
     return 0 if ok else 1

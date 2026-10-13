@@ -1,0 +1,18 @@
+==== castle_oracle_anchor_gate
+  file:_WEAK_ONLY_TOKEN_RE = ^[^0-9A-Za-z_\u4e00-\u9fff]*$
+  旧字符类 OLD='^[{}();,\\s]*$': o1_weak_tokens flagged = 0/5  (V 有内容 token 'foo' 不应红)
+  新谓词  NEW='^[^0-9A-Za-z_\\u4e00-\\u9fff]*$': o1_weak_tokens flagged = 4/5  (V 有内容 token 'foo' 不应红)
+  `]);` 单条：旧=无 finding(漏红) 新=RED(咬住)
+==== guild_castle_anchor_gate
+  file:_WEAK_ONLY_TOKEN_RE = ^[^0-9A-Za-z_\u4e00-\u9fff]*$
+  旧字符类 OLD='^[{}();,\\s]*$': o1_weak_tokens flagged = 0/5  (V 有内容 token 'foo' 不应红)
+  新谓词  NEW='^[^0-9A-Za-z_\\u4e00-\\u9fff]*$': o1_weak_tokens flagged = 4/5  (V 有内容 token 'foo' 不应红)
+  `]);` 单条：旧=无 finding(漏红) 新=RED(咬住)
+==== hero_pet_anchor_gate
+  file:_WEAK_ONLY_TOKEN_RE = ^[^0-9A-Za-z_\u4e00-\u9fff]*$
+  旧字符类 OLD='^[{}();,\\s]*$': o1_weak_tokens flagged = 0/5  (V 有内容 token 'foo' 不应红)
+  新谓词  NEW='^[^0-9A-Za-z_\\u4e00-\\u9fff]*$': o1_weak_tokens flagged = 4/5  (V 有内容 token 'foo' 不应红)
+  `]);` 单条：旧=无 finding(漏红) 新=RED(咬住)
+
+结论：5 条里旧类只咬住 0 条纯标点整组（`]);`/`[]`/`*/`/`//{` 全漏，`}`/`;`/`(` 型才咬）；
+      新谓词咬住 4 条纯标点整组、对含内容 token 的第 5 条不误报。
