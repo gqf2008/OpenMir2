@@ -1,0 +1,6 @@
+# 改前（base 9c776129c 的 whitelist，无 B-112..B-115 / T-49）
+# [cmd] python -I m3_pet_slave_registry_gate.py check --whitelist <base copy>
+
+PET_SLAVE_REGISTRY_GATE whitelist=E:/tmp/m3hp-whitelist-master.md required=5 B-unique=checked
+PET_SLAVE_REGISTRY_RED 5：MISSING B-112：whitelist 里没有 `| B-112 |` 行; MISSING B-113：whitelist 里没有 `| B-113 |` 行; MISSING B-114：whitelist 里没有 `| B-114 |` 行; MISSING B-115：whitelist 里没有 `| B-115 |` 行; MISSING T-49：whitelist 里没有 `| T-49 |` 行
+rc=1

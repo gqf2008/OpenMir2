@@ -1,0 +1,15 @@
+== 20 边界（base = refs/heads/master = origin/master 95291257c） ==
+
+git diff --name-only origin/master HEAD -- src sql MirClient
+（空 = oracle/客户端/表结构零改动）
+
+git diff --name-only origin/master HEAD
+mir2-rs/bins/game-svr/src/main.rs
+mir2-rs/bins/game-svr/src/trade.rs
+mir2-rs/bins/game-svr/tests/deal_try_oracle_anchors.rs
+
+git merge-base --is-ancestor origin/master HEAD
+YES
+
+git merge-tree origin/master HEAD（rc）
+rc=0

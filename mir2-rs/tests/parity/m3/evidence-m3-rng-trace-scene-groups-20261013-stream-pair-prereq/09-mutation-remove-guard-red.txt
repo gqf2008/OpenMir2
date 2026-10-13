@@ -1,0 +1,9 @@
+# 改坏（仓外副本 E:/tmp/m3bag-mut3/parity-m3/rng-trace-scene，由仓库件复制）：删掉 run_gate 里 `stream-pair-required`
+# PREREQ 守卫 ⇒ 门自检必须点名 FAIL stream-pair-prereq-red 且 rc=1（改坏必红）。仓库内文件未被污染。
+
+$ python -I -B rng_scene_gate.py selftest
+# cwd=E:/tmp/m3bag-mut3/parity-m3/rng-trace-scene（仓外）
+SELFTEST ok=21/22
+  FAIL stream-pair-prereq-red (RNG_SCENE_GATE scenario=C:\Users\gxh\AppData\Local\Temp\rng-scene-gate-selftest-y1j8urbk\scenario.json a=C:\Users\gxh\AppData\Local\Temp\rng-scene-gate-selftest-y1j8urbk\a-ok.json b=C:\Users\gxh\AppData\Local\Temp\rng-scene-gate-selftest-y1j8urbk\b-ok.json checks=28 failed=0
+  SCENE {"a_monsters": {"稻草人|18|20|0": 1}, "a_side": "csharp", "a_stream": "C:\\Users\\gxh\\AppData\\Local\\Temp\\rng-scene-)
+(rc=1)

@@ -1,0 +1,22 @@
+# BotSrv markers 诊断前缀（defect_2）迁移后：16 处 _SKIP，0 处裸前缀 skip=
+
+$ rg -n 'M3[A-Z]*SEQ_SKIP' src/BotSrv/Player/RobotPlayer.cs
+563:                MainOutMessage("M3BAGSEQ_SKIP step=1 op=CM_TAKEONITEM skip=no_equippable_bag_item");
+581:                MainOutMessage("M3BAGSEQ_SKIP step=2 op=CM_TAKEOFFITEM skip=no_equipped_item");
+598:                MainOutMessage("M3BAGSEQ_SKIP step=3 op=CM_DROPITEM skip=no_bag_item");
+610:                MainOutMessage("M3BAGSEQ_SKIP step=4 op=CM_EAT skip=no_drug_in_bag");
+883:                MainOutMessage("M3SHOPSEQ_SKIP op=" + op + " skip=no_npc_in_view");
+1202:                MainOutMessage("M3QUESTSEQ_SKIP skip=no_npc_in_view step=" + QuestEsc(_questSeqOp + "|" + _questSeqNpcName + "|" + _questSeqLabel));
+1214:                    MainOutMessage("M3QUESTSEQ_SKIP skip=op_not_implemented step=" + QuestEsc(_questSeqOp));
+1484:                        else { MainOutMessage("M3PAIRTRADESEQ_SKIP skip=no_item_in_bag op=deal_add_item"); }
+1491:                        else { MainOutMessage("M3PAIRTRADESEQ_SKIP skip=no_item_in_bag op=deal_del_item"); }
+1511:                    MainOutMessage("M3PAIRTRADESEQ_SKIP skip=op_not_implemented step=" + QuestEsc(_ptSeqOp));
+1740:                            MainOutMessage("M3SELLOFFSEQ_SKIP skip=no_item_in_bag op=" + QuestEsc(_soSeqOp));
+1777:                    MainOutMessage("M3SELLOFFSEQ_SKIP skip=op_not_implemented step=" + QuestEsc(_soSeqOp));
+1982:                        MainOutMessage("M3GUILDCSEQ_SKIP skip=no_npc_in_view op=" + ShopEsc(_gcSeqOp));
+1996:                    MainOutMessage("M3GUILDCSEQ_SKIP skip=op_not_implemented step=" + ShopEsc(_gcSeqOp));
+2223:                            MainOutMessage("M3HEROPETSEQ_SKIP skip=bad_skill step=" + ShopEsc(_hpSeqParam));
+2245:                    MainOutMessage("M3HEROPETSEQ_SKIP skip=op_not_implemented step=" + ShopEsc(_hpSeqOp));
+
+$ rg -n 'MainOutMessage\("M3[A-Z]*SEQ [^"]*skip=' src/BotSrv/Player/RobotPlayer.cs
+(no match)

@@ -1,0 +1,68 @@
+== M3⑦-3 · M-1 收口（deal_try oracle 锚）——doc-Nit 订正 ==
+base = refs/heads/master = origin/master 95291257c（本片 head = a72b2554d）
+
+---- [A] src/M2Server/Player/PlayObject.Operate.cs:932-960（ClientDealTry 目标判定段） ----
+            IActor poseObject = GetPoseCreate();
+            if (poseObject.Race == ActorRace.Play)
+            {
+                IPlayerActor targetPlayObject = (IPlayerActor)poseObject;
+                if (targetPlayObject != this)
+                {
+                    if (targetPlayObject.GetPoseCreate() == this && !targetPlayObject.Dealing)
+                    {
+                        if (targetPlayObject.AllowDeal && targetPlayObject.IsCanDeal)
+                        {
+                            targetPlayObject.SysMsg(ChrName + MessageSettings.OpenedDealMsg, MsgColor.Green, MsgType.Hint);
+                            SysMsg(targetPlayObject.ChrName + MessageSettings.OpenedDealMsg, MsgColor.Green, MsgType.Hint);
+                            this.OpenDealDlg(targetPlayObject);
+                            targetPlayObject.OpenDealDlg(this);
+                        }
+                        else
+                        {
+                            SysMsg(MessageSettings.PoseDisableDealMsg, MsgColor.Red, MsgType.Hint);
+                        }
+                    }
+                    else
+                    {
+                        SendDefMessage(Messages.SM_DEALTRY_FAIL, 0, 0, 0, 0);
+                    }
+                }
+            }
+            else
+            {
+                SendDefMessage(Messages.SM_DEALTRY_FAIL, 0, 0, 0, 0);
+
+---- [B] grep -n 关键行（实测行号） ----
+932:            IActor poseObject = GetPoseCreate();
+933:            if (poseObject.Race == ActorRace.Play)
+936:                if (targetPlayObject != this)
+938:                    if (targetPlayObject.GetPoseCreate() == this && !targetPlayObject.Dealing)
+954:                        SendDefMessage(Messages.SM_DEALTRY_FAIL, 0, 0, 0, 0);
+960:                SendDefMessage(Messages.SM_DEALTRY_FAIL, 0, 0, 0, 0);
+1471:                IActor poseObject = GetPoseCreate();
+
+---- [C] src/GameSrv/Word/WorldServer.cs（ProcessHumans :481 调 ProcessPlayObjectData :617；:732-735 catch） ----
+473:            catch (Exception ex)
+481:        public void ProcessHumans()
+483:            const string sExceptionMsg1 = "[Exception] WorldServer::ProcessHumans -> Ready, Save, Load...";
+484:            const string sExceptionMsg3 = "[Exception] WorldServer::ProcessHumans ClosePlayer.Delete";
+617:            ProcessPlayObjectData();
+625:        private void ProcessPlayObjectData()
+732:            catch (Exception ex)
+734:                LogService.Error("[Exception] WorldServer::ProcessHumans");
+739:        private static void ProcessMissions()
+
+---- [C2] :730-737 原文（catch 属 ProcessPlayObjectData，日志串误写 ProcessHumans） ----
+                }
+            }
+            catch (Exception ex)
+            {
+                LogService.Error("[Exception] WorldServer::ProcessHumans");
+                LogService.Error(ex.StackTrace);
+            }
+        }
+
+---- [D] 结论 ----
+注释锚点：:932 取 GetPoseCreate()、:933 取 poseObject.Race、:936 内层 if 无 else、
+:938 对方 GetPoseCreate()==this、:954/960 两处 SM_DEALTRY_FAIL、:958-960 非玩家 else；
+catch 站点 = WorldServer.cs:732-735（方法体 :625-737，日志串写作 WorldServer::ProcessHumans 系 oracle 复制粘贴痕迹）。

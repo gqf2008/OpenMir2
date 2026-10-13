@@ -1117,14 +1117,15 @@ fn pose_create(
     front_target(world, actor_id, e.map_id, fx, fy)
 }
 
-/// `ClientDealTry` 的 `GetPoseCreate()` 目标判定（`PlayObject.Operate.cs:928-958`）。
+/// `ClientDealTry` 的 `GetPoseCreate()` 目标判定（`PlayObject.Operate.cs:932-960`）。
 ///
-/// oracle 在 `:929` 对 `GetPoseCreate()` 的结果直接取 `poseObject.Race`：
-/// - `null` ⇒ NullReferenceException，被 `WorldServer.ProcessPlayObjectData` 的
-///   `catch`（`WorldServer.cs:734`）吞掉 ⇒ **一个帧都不发**（不是 `SM_DEALTRY_FAIL`）；
-/// - 非玩家 ⇒ `:955-958` 的 `else` ⇒ `SM_DEALTRY_FAIL`；
-/// - 玩家且 `== this` ⇒ `:934` 内层 `if (targetPlayObject != this)` 无 `else` ⇒ **不发帧**；
-/// - 玩家且 `!= this` ⇒ `:933` 取对方 `GetPoseCreate()` 是否回指自己（`faces_me`）。
+/// oracle 在 `:932` 取 `GetPoseCreate()`、`:933` 对结果直接取 `poseObject.Race`：
+/// - `null` ⇒ NullReferenceException，被 `WorldServer.ProcessPlayObjectData`（方法体
+///   `:625-737`）的 `catch`（`WorldServer.cs:732-735`；该 catch 的日志串写作
+///   `WorldServer::ProcessHumans`，与包围方法名不符）吞掉 ⇒ **一个帧都不发**（不是 `SM_DEALTRY_FAIL`）；
+/// - 非玩家 ⇒ `:958-960` 的 `else` ⇒ `SM_DEALTRY_FAIL`；
+/// - 玩家且 `== this` ⇒ `:936` 内层 `if (targetPlayObject != this)` 无 `else` ⇒ **不发帧**；
+/// - 玩家且 `!= this` ⇒ `:938` 取对方 `GetPoseCreate()` 是否回指自己（`faces_me`）。
 fn deal_try_target_of(
     world: &mir2_world::World,
     displays: &downlink::DisplayTable,
@@ -7324,10 +7325,10 @@ mod tests {
 
     /// **M3⑦-3 · M-1 收口判据**：`ClientDealTry` 的目标判定必须区分「无前排对象」与「前排不是玩家」。
     ///
-    /// oracle `PlayObject.Operate.cs:928-929` 先取 `GetPoseCreate()` 再直接读 `poseObject.Race`：
+    /// oracle `PlayObject.Operate.cs:932-933` 先取 `GetPoseCreate()` 再直接读 `poseObject.Race`：
     /// 无前排（`null`）⇒ NullReferenceException，被 `WorldServer.ProcessPlayObjectData` 的
-    /// `catch`（`WorldServer.cs:734`）吞掉 ⇒ **一个帧都不发**（不是 `SM_DEALTRY_FAIL`）；
-    /// 前排非玩家 ⇒ `:955-958` 的 `else` ⇒ `SM_DEALTRY_FAIL`。
+    /// `catch`（`WorldServer.cs:732-735`）吞掉 ⇒ **一个帧都不发**（不是 `SM_DEALTRY_FAIL`）；
+    /// 前排非玩家 ⇒ `:958-960` 的 `else` ⇒ `SM_DEALTRY_FAIL`。
     ///
     /// 旧实现把两者都归 `DealTryTarget::NotPlayer` ⇒ 空打也回 FAIL（与 oracle 不等）。
     ///
@@ -7365,10 +7366,10 @@ mod tests {
         assert_eq!(
             probe(None),
             (None, game_svr::trade::DealTryTarget::Absent),
-            "无前排对象 ⇒ Absent（oracle Operate.cs:929 NRE 被吞），不是 NotPlayer"
+            "无前排对象 ⇒ Absent（oracle Operate.cs:932-933 NRE 被吞），不是 NotPlayer"
         );
 
-        // ② 前方格是怪（非玩家）⇒ `:955-958` else ⇒ `SM_DEALTRY_FAIL`。
+        // ② 前方格是怪（非玩家）⇒ `:958-960` else ⇒ `SM_DEALTRY_FAIL`。
         assert_eq!(
             probe(Some((ACTOR_RACE_MONSTER, 6))),
             (None, game_svr::trade::DealTryTarget::NotPlayer),
@@ -7398,7 +7399,7 @@ mod tests {
 
     /// **M3⑦-3 · M-1 收口（进程级）**：走**生产函数** `handle_deal_cmd` 的 `CM_DEALTRY` 支
     /// （oracle `PlayObject.Message.cs:946` ⇒ `ClientDealTry`）：无前排对象时**一个帧都不发**
-    /// （oracle `Operate.cs:929` 的 NRE 被 `WorldServer.cs:734` 吞掉），前排为怪时发
+    /// （oracle `Operate.cs:932-933` 的 NRE 被 `WorldServer.cs:732-735` 吞掉），前排为怪时发
     /// `SM_DEALTRY_FAIL`（非空转对照）。
     ///
     /// 红检：把 `deal_try_target_of` 的 `None` 支改回 `DealTryTarget::NotPlayer` ⇒ ① 的
@@ -7472,7 +7473,7 @@ mod tests {
             "无前排对象 ⇒ oracle 静默（不得发 SM_DEALTRY_FAIL）"
         );
 
-        // ② 非空转对照：前方格放一只怪（非玩家）⇒ `:955-958` else ⇒ `SM_DEALTRY_FAIL`。
+        // ② 非空转对照：前方格放一只怪（非玩家）⇒ `:958-960` else ⇒ `SM_DEALTRY_FAIL`。
         world.add_entity({
             let mut e = mir2_world::Entity::new(2, "mon", 11, 10);
             e.race = mir2_world::ACTOR_RACE_MONSTER;
