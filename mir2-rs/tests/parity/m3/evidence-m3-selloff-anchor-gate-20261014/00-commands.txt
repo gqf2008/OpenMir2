@@ -1,0 +1,31 @@
+# 本片命令（cwd = worktree 根；CARGO_TARGET_DIR 在检出外）
+
+# —— 场景锚门（新增；离线、零端口；01）——
+cd mir2-rs/tests/parity/m3
+python -I selloff_anchor_gate.py check
+python -I selloff_anchor_gate.py selftest
+python -I selloff_anchor_gate.py mutation
+
+# —— 修前 RED 复现（02；用 origin/master:a2d8eaf32 版本的 selloff_scenario.json 对新门）——
+python -I -c "import sys,json,subprocess; sys.path.insert(0,'.'); import selloff_anchor_gate as g; old=subprocess.run(['git','show','origin/master:mir2-rs/tests/parity/m3/selloff_scenario.json'],capture_output=True,text=True).stdout; f=g._evaluate(scenario_text='\n'.join('%s = %s'%(k,v) for k,v in json.loads(old)['oracle_anchors'].items())); print(f); sys.exit(1 if f else 0)"
+# ⇒ RED 8 项 rc=1（4 处行号漂移的「未登记」+ 4 处「表过期」）
+
+# —— ⑩ 夹具 runner 无栈自检（03；含本片加的 3 条场景锚门）——
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_selloff_pair.ps1 -SelfCheckNoStack
+# ⇒ SELFTEST ok=22/22（19→22）
+
+# —— 夹具链深检门（runner 级；04）——
+cd mir2-rs/tests/parity/m3
+python -I fixture_chain_gate.py check --require-all
+# ⇒ FIXTURE_CHAIN GREEN runner_ok=10 prereq_or_skip=0 red=0（含 selloff_anchor_selftest/check）
+
+# —— 四门禁（05–08；零 .rs，仍全跑）——
+cd mir2-rs
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo fmt --all -- --check
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo clippy --workspace --all-targets -- -D warnings
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo test --workspace --no-fail-fast
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo run -q -p msgcodegen -- --check
+
+# —— 证据 hash（仓库 LF/git-blob 口径）——
+python -I tools/evidence-hash/verify_sha256sums.py verify --check-extra mir2-rs/tests/parity/m3/evidence-m3-selloff-anchor-gate-20261014
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-selloff-anchor-gate-20261014

@@ -74,6 +74,12 @@ SHARED_CHECKS = [
     #   不看矩阵状态、独立常跑（在场却坏 ⇒ 恒 RED）。
     ("hero_pet_anchor_selftest", "mir2-rs/tests/parity/m3/hero_pet_anchor_gate.py", ["selftest"]),
     ("hero_pet_anchor_check", "mir2-rs/tests/parity/m3/hero_pet_anchor_gate.py", ["check"]),
+    # 主机门（⑩-3 残余 Minor：「场景 §B 的 oracle 锚点本轮未行级核对」，与上面两族同形 follow-up）：
+    #   元宝寄售夹具的场景锚门（`selloff_anchor_gate.py`，由本片新增）此前完全没有，
+    #   ⑩ 场景锚可以静默漂移 / 复制错行号。登记进共享管线后不看矩阵状态、独立常跑
+    #   （在场却坏 ⇒ 恒 RED）。
+    ("selloff_anchor_selftest", "mir2-rs/tests/parity/m3/selloff_anchor_gate.py", ["selftest"]),
+    ("selloff_anchor_check", "mir2-rs/tests/parity/m3/selloff_anchor_gate.py", ["check"]),
     # 共享管线门（本片新增，与上面三组主机门同形）：markers 前缀口径门。它判的正是
     #   「多张夹具卡反复扩展 `run_pair.ps1` / BotSrv 后有没有互相踩坏」：run_pair 去前缀截断 +
     #   每个新夹具族的 `Assert-M3MarkerPrefix` 牙必须登记（COMPARATORS / GUARD_ONLY_MARKERS）+
@@ -331,6 +337,11 @@ def cmd_selftest(_args):
     _hp_gate = [e for _n, rel, e in SHARED_CHECKS if rel.endswith("hero_pet_anchor_gate.py")]
     expect("英雄/宠物锚门已接入共享管线（⑨-5 残余 Minor，防回退）",
            ["selftest"] in _hp_gate and ["check"] in _hp_gate)
+    # ⑩-3 残余 Minor 的防回退牙：元宝寄售锚门必须常驻共享管线（selftest + check 两向）。
+    #   它此前完全不存在（⑩ 场景锚无人行级复核）⇒ 缺行/漂移/缺陷被“修好”都会静默。
+    _so_gate = [e for _n, rel, e in SHARED_CHECKS if rel.endswith("selloff_anchor_gate.py")]
+    expect("元宝寄售锚门已接入共享管线（⑩-3 残余 Minor，防回退）",
+           ["selftest"] in _so_gate and ["check"] in _so_gate)
     # 本片防回退牙：markers 前缀门必须常驻共享管线（selftest + check 两向）。它当前是
     #   ④/⑤/⑥/⑦/⑧/⑨/⑩ 共享 `run_pair.ps1` 扩展面的唯一机判门，不能只靠手工跑。
     _mp_gate = [e for _n, rel, e in SHARED_CHECKS if rel.endswith("marker_prefix_gate.py")]
@@ -346,8 +357,8 @@ def cmd_selftest(_args):
     #   （selftest 向）。它此前零调用方（reviewer-6 `4f5d3eeb1` O-1）⇒ 工具自身逻辑回归会静默。
     _wl_gate = [e for _n, rel, e in SHARED_CHECKS if rel.endswith("m3_whitelist_registry_audit.py")]
     expect("白名单登记号审计门 selftest 已接入共享管线（防回退）", ["selftest"] in _wl_gate)
-    expect("主机门（.py）登记项 ≥11（castle + 行会/攻城 + 英雄/宠物 + markers 前缀 + 宝宝登记 + 白名单审计 各 selftest[/check]）",
-           sum(1 for _n, rel, _e in SHARED_CHECKS if rel.endswith(".py")) >= 11)
+    expect("主机门（.py）登记项 ≥13（castle + 行会/攻城 + 英雄/宠物 + 元宝寄售 + markers 前缀 + 宝宝登记 + 白名单审计 各 selftest[/check]）",
+           sum(1 for _n, rel, _e in SHARED_CHECKS if rel.endswith(".py")) >= 13)
     expect("共享管线登记名唯一（防重复注册偷懒）",
            len({n for n, _r, _e in SHARED_CHECKS}) == len(SHARED_CHECKS))
     expect("共享管线 (file,args) 登记唯一",
