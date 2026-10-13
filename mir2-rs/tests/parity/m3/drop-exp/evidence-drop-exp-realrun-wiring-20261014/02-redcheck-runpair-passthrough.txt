@@ -1,0 +1,10 @@
+02 —— 改坏必红①：run_pair.ps1 的 DropExp 计划分支被停用（接线漏传 -DropExpSequence/-DisableAutoPlay）
+命令：python 把 `if ($DropExpSequence -and -not $ForPrewarm) {` 改成 `if ($false ...)`
+      powershell -File run_drop_exp_pair.ps1 -SelfCheckNoStack
+期望：emit-dropexp-passthrough FAIL；整体 rc=1
+REDCHECK1_RC=1
+
+SELFTEST ok=12/12
+SELFTEST FAIL emit-dropexp-passthrough (scope=on kills=100 step_ms=500 start_delay_ms=3000 dir=2 role=0 monster=稻草人 disable_autoplay=True)
+SELFTEST ok emit-dropexp-default-off (scope=(off))
+SELFTEST ok=18/19 failures=emit-dropexp-passthrough

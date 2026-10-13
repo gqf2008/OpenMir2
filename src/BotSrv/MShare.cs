@@ -676,6 +676,209 @@ namespace BotSrv
         }
 
         /// <summary>
+        /// M3④ 夹具（卡 openmir2-m3-drop-exp-fixture-botsrv；白名单 T-22/T-29 家族扩展）：
+        /// 固定图 + 固定怪 + 固定起点 + 同种子 100 杀，逐杀落 `drop_exp_raw.jsonl`（schema 见
+        /// `tests/parity/m3/drop-exp/drop_exp_scenario.json`）。默认 false = 原行为（不新增任何
+        /// 发送/日志/文件）。见 RobotPlayer.DropExpSequenceTick。
+        /// </summary>
+        public static bool g_boDropExpSequence = false;
+        public static int g_nDropExpKills = 100;
+        public static int g_nDropExpStepMs = 500;
+        public static int g_nDropExpStartDelayMs = 3000;
+        public static int g_nDropExpDir = 2;
+        public static int g_nDropExpRole = 0;
+        public static string g_sDropExpMonster = "";
+        public static string g_sDropExpOut = "";
+        /// <summary>attacker 的精确 LoginId（= LoginAccount + DropExpRole）。</summary>
+        public static string g_sDropExpRoleLoginId = string.Empty;
+
+        /// <summary>M3④ 夹具：LoginId 是否就是本批的唯一 attacker。精确相等（非 EndsWith）。
+        /// 纯函数（不依赖实例），供 `--selftest-dropseq` 与 ArmDropExpSequence 共用。</summary>
+        public static bool IsDropExpAttacker(string loginId, string attackerLoginId)
+        {
+            return !string.IsNullOrEmpty(attackerLoginId)
+                && string.Equals(loginId, attackerLoginId, StringComparison.Ordinal);
+        }
+
+        /// <summary>M3④ 夹具：从一行帧 JSON（`{"sm":N,...}`）取 `sm` 值；找不到 ⇒ null。纯函数。</summary>
+        public static int? DropExpFrameSm(string frame)
+        {
+            if (string.IsNullOrEmpty(frame))
+            {
+                return null;
+            }
+            int idx = frame.IndexOf("\"sm\":", StringComparison.Ordinal);
+            if (idx < 0)
+            {
+                return null;
+            }
+            int i = idx + 5;
+            int start = i;
+            while (i < frame.Length && frame[i] >= '0' && frame[i] <= '9')
+            {
+                i++;
+            }
+            if (i == start)
+            {
+                return null;
+            }
+            return int.Parse(frame.Substring(start, i - start));
+        }
+
+        /// <summary>M3④ 夹具：取帧 JSON 中整数字段 `"key":N`（仅十进制、可带负号）；找不到 ⇒ null。纯函数。</summary>
+        private static int? DropExpFrameField(string frame, string key)
+        {
+            if (string.IsNullOrEmpty(frame))
+            {
+                return null;
+            }
+            int idx = frame.IndexOf("\"" + key + "\":", StringComparison.Ordinal);
+            if (idx < 0)
+            {
+                return null;
+            }
+            int i = idx + key.Length + 3;
+            int start = i;
+            if (i < frame.Length && (frame[i] == '-' || frame[i] == '+'))
+            {
+                i++;
+            }
+            while (i < frame.Length && frame[i] >= '0' && frame[i] <= '9')
+            {
+                i++;
+            }
+            if (i == start)
+            {
+                return null;
+            }
+            if (!int.TryParse(frame.Substring(start, i - start), out int v))
+            {
+                return null;
+            }
+            return v;
+        }
+
+        /// <summary>M3④ 夹具：把一次击杀窗口内的帧归类。唯一口径 = 本函数（供 `--selftest-dropseq` 与
+        /// 逐杀 `branch` 字段共用）。口径：出现 `SM_WINEXP(44)`（击杀 = 经验）⇒ ok；无帧 ⇒ fail_no_frame；
+        /// 有帧但无 44 ⇒ frames_unclassified（未击杀）。纯函数。</summary>
+        public static string ClassifyDropExpFrames(IList<string> frames)
+        {
+            if (frames == null)
+            {
+                return "fail_no_frame";
+            }
+            bool sawAny = false;
+            bool sawWin = false;
+            foreach (string fr in frames)
+            {
+                int? sm = DropExpFrameSm(fr);
+                if (sm == null)
+                {
+                    continue;
+                }
+                sawAny = true;
+                if (sm.Value == 44)
+                {
+                    sawWin = true;
+                }
+            }
+            if (sawWin)
+            {
+                return "ok";
+            }
+            return sawAny ? "frames_unclassified" : "fail_no_frame";
+        }
+
+        /// <summary>M3④ 夹具：从 `SM_WINEXP(44)` 帧取**累计经验**（`a` = `msg.Recog`）；无 44 帧 ⇒ null。纯函数。</summary>
+        public static int? ExtractDropExpTotal(IList<string> frames)
+        {
+            if (frames == null)
+            {
+                return null;
+            }
+            foreach (string fr in frames)
+            {
+                if (DropExpFrameSm(fr) == 44)
+                {
+                    return DropExpFrameField(fr, "a");
+                }
+            }
+            return null;
+        }
+
+        /// <summary>M3④ 夹具：从 `SM_WINEXP(44)` 帧取**本次经验增量**（`b`/`c` 低/高 16 位 = oracle
+        /// `HUtil32.MakeLong(msg.Param, msg.Tag)`）；无 44 帧 / 缺字段 ⇒ null。纯函数（按原宽度，不截断）。</summary>
+        public static int? ExtractDropExpDelta(IList<string> frames)
+        {
+            if (frames == null)
+            {
+                return null;
+            }
+            foreach (string fr in frames)
+            {
+                if (DropExpFrameSm(fr) != 44)
+                {
+                    continue;
+                }
+                int? lo = DropExpFrameField(fr, "b");
+                int? hi = DropExpFrameField(fr, "c");
+                if (lo == null || hi == null)
+                {
+                    return null;
+                }
+                return HUtil32.MakeLong((ushort)(lo.Value & 0xffff), (ushort)(hi.Value & 0xffff));
+            }
+            return null;
+        }
+
+        /// <summary>M3④ 夹具：掉落出现帧名列表 ⇒ `drop_exp_raw.jsonl` 的 `drops` 数组（每件 `count`=1）。
+        /// 空/缺名 ⇒ `[]`。纯函数（供 `--selftest-dropseq` 与逐杀记录共用）。</summary>
+        public static string BuildDropExpDropsJson(IList<string> names)
+        {
+            var parts = new List<string>();
+            if (names != null)
+            {
+                foreach (string n in names)
+                {
+                    if (!string.IsNullOrEmpty(n))
+                    {
+                        parts.Add("{\"name\":\"" + DropExpEsc(n) + "\",\"count\":1}");
+                    }
+                }
+            }
+            return "[" + string.Join(",", parts) + "]";
+        }
+
+        /// <summary>M3④ 夹具：把一次击杀组装成 `drop_exp_raw.jsonl` 一行（必填字段
+        /// `k/gold/drops/exp_delta/exp_total/level`，另附可选 `monster/x/y`）。纯函数；金额/经验按
+        /// **原宽度**写出（不做 i32 截断）。</summary>
+        public static string BuildDropExpRecord(int k, string monster, int x, int y, int gold,
+            string dropsJson, int expDelta, int expTotal, int level)
+        {
+            return "{\"k\":" + k
+                + ",\"monster\":\"" + DropExpEsc(monster) + "\""
+                + ",\"x\":" + x + ",\"y\":" + y
+                + ",\"gold\":" + gold
+                + ",\"drops\":" + (string.IsNullOrEmpty(dropsJson) ? "[]" : dropsJson)
+                + ",\"exp_delta\":" + expDelta
+                + ",\"exp_total\":" + expTotal
+                + ",\"level\":" + level + "}";
+        }
+
+        /// <summary>M3④ 夹具 JSON 字符串转义（`M3DROPEXPSEQ`/文件行专用；同 QuestEsc 口径：
+        /// 字面 `<`/`>` → `\u003c`/`\u003e` 规避 Serilog 模板分词丢括号；另转义 `\r`/`\n`/`\t`）。</summary>
+        public static string DropExpEsc(string s)
+        {
+            if (string.IsNullOrEmpty(s))
+            {
+                return string.Empty;
+            }
+            return s.Replace("\\", "\\\\").Replace("\"", "\\\"")
+                .Replace("\r", "\\r").Replace("\n", "\\n").Replace("\t", "\\t")
+                .Replace("<", "\\u003c").Replace(">", "\\u003e");
+        }
+
+        /// <summary>
         /// M3⑦ 夹具（卡 openmir2-m3-party-trade-fixture-botsrv；白名单 T-43 家族扩展）：
         /// 两个假人按固定步骤串发组队/交易动作。
         /// 默认 false = 原行为（不新增任何发送/日志）。见 RobotPlayer.PairTradeSequenceTick。

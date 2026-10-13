@@ -1558,6 +1558,94 @@ function ConvertTo-M3AttackScope {
   return ("on count={0} step_ms={1} start_delay_ms={2} disable_autoplay={3}" -f $count, $step, $sd, $ap)
 }
 
+# M3④ 掉落/经验序列口径串（run_pair 与夹具自检共用；非空 = on）。
+function Format-M3DropExpScope {
+  param(
+    [bool]$DropExpSequence = $false,
+    [int]$DropExpKills = 100,
+    [int]$DropExpStepMs = 500,
+    [int]$DropExpStartDelayMs = 3000,
+    [int]$DropExpDir = 2,
+    [int]$DropExpRole = 0,
+    [string]$DropExpMonster = '',
+    [bool]$DisableAutoPlay = $false
+  )
+  if (-not $DropExpSequence) { return '(off)' }
+  $ap = if ($DisableAutoPlay) { 'True' } else { 'False' }
+  return ("on kills={0} step_ms={1} start_delay_ms={2} dir={3} role={4} monster={5} disable_autoplay={6}" -f `
+    $DropExpKills, $DropExpStepMs, $DropExpStartDelayMs, $DropExpDir, $DropExpRole, $DropExpMonster, $ap)
+}
+
+# baseline.json 里已存的 drop_exp_sequence 串 → canonical。缺 `disable_autoplay=` 位按 False 还原（旧产物）。
+# 返回 $null = 形态认不出（非空但不是本函数认识的标签）。
+function ConvertTo-M3DropExpScope {
+  param([AllowEmptyString()][string]$Raw)
+  if ([string]::IsNullOrWhiteSpace($Raw) -or $Raw.Trim() -eq '(off)') { return '(off)' }
+  if ($Raw -notmatch '^on\b') { return $null }
+  $kills = if ($Raw -match 'kills=(\d+)') { [int]$Matches[1] } else { 100 }
+  $step = if ($Raw -match 'step_ms=(\d+)') { [int]$Matches[1] } else { 500 }
+  $sd = if ($Raw -match 'start_delay_ms=(\d+)') { [int]$Matches[1] } else { 3000 }
+  $dir = if ($Raw -match 'dir=(\d+)') { [int]$Matches[1] } else { 2 }
+  $role = if ($Raw -match 'role=(\d+)') { [int]$Matches[1] } else { 0 }
+  $mon = if ($Raw -match 'monster=(\S*)') { $Matches[1] } else { '' }
+  $ap = if ($Raw -match 'disable_autoplay=(True|False)') { $Matches[1] } else { 'False' }
+  return ("on kills={0} step_ms={1} start_delay_ms={2} dir={3} role={4} monster={5} disable_autoplay={6}" -f `
+    $kills, $step, $sd, $dir, $role, $mon, $ap)
+}
+
+# 参照会话掉落/经验序列开关一致性（机判；含 peer baseline.json 解析失败防线，同 P-1）。
+function Get-M3PeerDropExpScopeGuard {
+  param(
+    [Parameter(Mandatory)][string]$PeerDir,
+    [Parameter(Mandatory)][AllowEmptyString()][string]$LocalScope
+  )
+  $failed = New-Object System.Collections.Generic.List[string]
+  $messages = New-Object System.Collections.Generic.List[string]
+  $peerScope = $null
+  $baselinePath = Join-Path $PeerDir 'baseline.json'
+  if (-not (Test-Path $baselinePath)) {
+    $messages.Add(("RED: 参照会话缺 baseline.json: {0}" -f $baselinePath))
+    $failed.Add('peer_baseline_missing')
+    return [pscustomobject]@{ failed = @($failed); messages = @($messages); peer_scope = $peerScope }
+  }
+  $baseline = $null
+  $parseError = $null
+  try {
+    $baseline = Get-Content -Path $baselinePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+  } catch { $parseError = $_.Exception.Message }
+  if ($null -eq $baseline) {
+    if ([string]::IsNullOrWhiteSpace($parseError)) { $parseError = '内容为空或不是 JSON 对象（半写/截断）' }
+    $messages.Add(("RED: 参照会话 baseline.json 解析失败: {0} —— {1}" -f $baselinePath, $parseError))
+    $failed.Add('peer_baseline_invalid')
+    return [pscustomobject]@{ failed = @($failed); messages = @($messages); peer_scope = $peerScope }
+  }
+  $localCanon = ConvertTo-M3DropExpScope -Raw $LocalScope
+  $peerRaw = [string]$baseline.drop_exp_sequence
+  $peerCanon = ConvertTo-M3DropExpScope -Raw $peerRaw
+  $peerScope = $peerCanon
+  if ($null -eq $peerCanon) {
+    $messages.Add(("RED: 参照会话 drop_exp_sequence 形态认不出: '{0}'（{1}）" -f $peerRaw, $baselinePath))
+    $failed.Add('peer_dropexp_scope_invalid')
+    return [pscustomobject]@{ failed = @($failed); messages = @($messages); peer_scope = $peerScope }
+  }
+  if ([string]::IsNullOrEmpty($peerRaw)) {
+    if ($localCanon -eq '(off)') { $peerCanon = '(off)'; $peerScope = '(off)' }
+    else {
+      $peerScope = '(missing)'
+      $messages.Add(("RED: 参照会话 baseline.json 缺 drop_exp_sequence（旧产物/被裁剪）: {0}" -f $baselinePath))
+      $failed.Add('peer_dropexp_scope_missing')
+      return [pscustomobject]@{ failed = @($failed); messages = @($messages); peer_scope = $peerScope }
+    }
+  }
+  if ($peerCanon -ne $localCanon) {
+    $messages.Insert(0, 'RED: 参照会话掉落/经验序列开关与本侧不一致')
+    $messages.Add(("-PeerSession drop_exp_sequence 与本侧不一致——peer='{0}' vs local='{1}'；" -f $peerCanon, $localCanon) +
+      '两侧不是同一开关口径，掉落/经验原始件无仲裁力（开关必须逐字节相同）')
+    $failed.Add('peer_dropexp_scope_mismatch')
+  }
+  return [pscustomobject]@{ failed = @($failed); messages = @($messages); peer_scope = $peerScope }
+}
+
 # 参照会话攻击序列开关一致性（机判；含 peer baseline.json 解析失败防线，同 P-1）。
 function Get-M3PeerAttackScopeGuard {
   param(

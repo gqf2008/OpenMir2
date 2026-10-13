@@ -1327,6 +1327,212 @@ namespace BotSrv.Player
 
         #endregion
 
+        #region M3④ 掉落/经验动作序列（夹具专用，默认关；白名单 T-22/T-29 家族扩展）
+
+        // 口径（卡 openmir2-m3-drop-exp-fixture-botsrv）：收到本假人 SM_LOGON 后，唯一 attacker
+        // 每 `g_nDropExpStepMs` 发一条 CM_HIT；把服务端回包 `SM_WINEXP(44)`（击杀 = 经验）/
+        // `SM_ITEMSHOW(610)`（掉落出现帧，oracle 本代码库恒不发）聚合为 `drop_exp_raw.jsonl` 一行
+        // （schema 见 drop_exp_scenario.json），并逐击落 `M3DROPEXPSEQ {json}` 标记。只写本假人自己的
+        // socket + 指定输出文件；默认关时本 region 全部空转、不新增任何发送/日志/文件。
+
+        /// <summary>已发 CM_HIT 数（-1 = 未武装）。</summary>
+        private int _dropExpSent = -1;
+        /// <summary>下次攻击到点时刻（MShare.GetTickCount）。</summary>
+        private int _dropExpNextTick;
+        /// <summary>已记录击杀数（= drop_exp_raw.jsonl 的 `k`，从 0 连续）。</summary>
+        private int _dropExpK;
+        /// <summary>本假人当前等级（SM_LEVELUP(45) 更新；初始取本假人视图里的 Abil.Level）。</summary>
+        private int _dropExpLevel;
+        /// <summary>本次击杀窗口内收到的帧 JSON 串（仅 44）。</summary>
+        private readonly List<string> _dropExpKillFrames = new List<string>();
+        /// <summary>本次击杀窗口内收到的掉落出现帧名（仅 610）。</summary>
+        private readonly List<string> _dropExpDropNames = new List<string>();
+        /// <summary>`drop_exp_raw.jsonl` 写出器（路径空 / 打不开 ⇒ null，不阻塞驱动）。</summary>
+        private System.IO.StreamWriter _dropExpWriter;
+
+        /// <summary>收到本假人 SM_LOGON 后武装固定掉落/经验序列（`g_boDropExpSequence` 关闭或本账号
+        /// 不是 attacker 时空操作）。武装后不做即时发送：第一次攻击等 `g_nDropExpStartDelayMs`。
+        /// 输出文件路径由 `g_sDropExpOut` 给出（空 ⇒ 只落标记）。</summary>
+        private void ArmDropExpSequence()
+        {
+            if (!MShare.g_boDropExpSequence)
+            {
+                return;
+            }
+            if (!MShare.IsDropExpAttacker(LoginId, MShare.g_sDropExpRoleLoginId))
+            {
+                return;
+            }
+            _dropExpSent = 0;
+            _dropExpK = 0;
+            _dropExpKillFrames.Clear();
+            _dropExpDropNames.Clear();
+            _dropExpLevel = DropExpOwnLevel();
+            _dropExpNextTick = MShare.GetTickCount() + MShare.g_nDropExpStartDelayMs;
+            if (!string.IsNullOrEmpty(MShare.g_sDropExpOut))
+            {
+                try
+                {
+                    _dropExpWriter = new System.IO.StreamWriter(MShare.g_sDropExpOut, false,
+                        new System.Text.UTF8Encoding(false));
+                    _dropExpWriter.NewLine = "\n";
+                }
+                catch (Exception)
+                {
+                    _dropExpWriter = null;
+                }
+            }
+            MainOutMessage("M3DROPEXPSEQ {\"phase\":\"arm\",\"id\":\"" + MShare.DropExpEsc(LoginId)
+                + "\",\"kills\":" + MShare.g_nDropExpKills
+                + ",\"step_ms\":" + MShare.g_nDropExpStepMs
+                + ",\"dir\":" + MShare.g_nDropExpDir
+                + ",\"monster\":\"" + MShare.DropExpEsc(MShare.g_sDropExpMonster)
+                + "\",\"out\":\"" + MShare.DropExpEsc(MShare.g_sDropExpOut) + "\"}");
+        }
+
+        /// <summary>M3④ 固定掉落/经验序列：每 `g_nDropExpStepMs` 发一条 `CM_HIT`——
+        /// `Recog = MakeLong(自己的 CurrX, CurrY)`、`Tag = g_nDropExpDir`（照攻击序列的线上形状）；
+        /// 共 `g_nDropExpKills` 步。默认关时空转。</summary>
+        private void DropExpSequenceTick()
+        {
+            if (!MShare.g_boDropExpSequence || _dropExpSent < 0)
+            {
+                return;
+            }
+            if (!_inWorld || ClientSocket == null || !ClientSocket.IsConnected)
+            {
+                return;
+            }
+            if (_dropExpSent >= MShare.g_nDropExpKills)
+            {
+                return;
+            }
+            int now = MShare.GetTickCount();
+            if (now < _dropExpNextTick)
+            {
+                return;
+            }
+            _dropExpNextTick = now + MShare.g_nDropExpStepMs;
+            int k = _dropExpSent + 1;
+            MainOutMessage("M3DROPEXPSEQ {\"phase\":\"attack\",\"k\":" + k
+                + ",\"x\":" + _probeX + ",\"y\":" + _probeY
+                + ",\"dir\":" + MShare.g_nDropExpDir + ",\"my\":" + _myActorId
+                + ",\"id\":\"" + MShare.DropExpEsc(LoginId) + "\"}");
+            CommandMessage msg = Messages.MakeMessage(Messages.CM_HIT,
+                HUtil32.MakeLong((short)_probeX, (short)_probeY), 0, MShare.g_nDropExpDir, 0);
+            SendSocket(EDCode.EncodeMessage(msg));
+            _dropExpSent = k;
+            if (_dropExpSent >= MShare.g_nDropExpKills)
+            {
+                MainOutMessage("M3DROPEXPSEQ {\"phase\":\"sent\",\"attacks\":" + MShare.g_nDropExpKills
+                    + ",\"kills\":" + _dropExpK + "}");
+            }
+        }
+
+        /// <summary>本假人视图里的自己（按 `_myActorId` 精确找；共享的 `MShare.MySelf` 不能
+        /// 标识本假人）。</summary>
+        private Actor DropExpOwnActor()
+        {
+            if (PlayScene == null || PlayScene.ActorList == null)
+            {
+                return null;
+            }
+            for (int i = 0; i < PlayScene.ActorList.Count; i++)
+            {
+                Actor a = PlayScene.ActorList[i];
+                if (a != null && a.RecogId == _myActorId)
+                {
+                    return a;
+                }
+            }
+            return null;
+        }
+
+        private int DropExpOwnLevel()
+        {
+            Actor self = DropExpOwnActor();
+            if (self != null && self.Abil != null)
+            {
+                return self.Abil.Level;
+            }
+            return MShare.MySelf != null && MShare.MySelf.Abil != null ? MShare.MySelf.Abil.Level : 0;
+        }
+
+        /// <summary>收帧钩子（单一收包点）：`SM_WINEXP(44)` / `SM_LEVELUP(45)` / `SM_ITEMSHOW(610)`
+        /// 在 `g_boDropExpSequence` 打开时聚合为一行 `drop_exp_raw.jsonl` + `M3DROPEXPSEQ {json}` 标记。
+        /// **只读本假人自己的视图**（同 T-22/T-29 纪律）；默认关时空转。</summary>
+        public void DropExpOnServerMessage(int sm, int a, int b, int c, int d, string body)
+        {
+            if (!MShare.g_boDropExpSequence || _dropExpSent < 0)
+            {
+                return;
+            }
+            if (sm == 45)   // SM_LEVELUP：Param = 新等级
+            {
+                _dropExpLevel = b;
+                return;
+            }
+            if (sm == 610)  // SM_ITEMSHOW：地面物出现（oracle 本代码库恒不发）
+            {
+                string name = string.IsNullOrEmpty(body) ? string.Empty : EDCode.DeCodeString(body);
+                if (!string.IsNullOrEmpty(name))
+                {
+                    _dropExpDropNames.Add(name);
+                }
+                return;
+            }
+            if (sm != 44)   // SM_WINEXP：一次击杀 = 经验
+            {
+                return;
+            }
+            string fr = "{\"sm\":44,\"a\":" + a + ",\"b\":" + b + ",\"c\":" + c + ",\"d\":" + d + "}";
+            _dropExpKillFrames.Add(fr);
+            int k = _dropExpK;
+            int? total = MShare.ExtractDropExpTotal(_dropExpKillFrames);
+            int? delta = MShare.ExtractDropExpDelta(_dropExpKillFrames);
+            string dropsJson = MShare.BuildDropExpDropsJson(_dropExpDropNames);
+            string branch = MShare.ClassifyDropExpFrames(_dropExpKillFrames);
+            if (total.HasValue && delta.HasValue)
+            {
+                string row = MShare.BuildDropExpRecord(k, MShare.g_sDropExpMonster, _probeX, _probeY,
+                    0, dropsJson, delta.Value, total.Value, _dropExpLevel);
+                DropExpWriteRow(row);
+                MainOutMessage("M3DROPEXPSEQ {\"phase\":\"kill\",\"k\":" + k
+                    + ",\"branch\":\"" + branch + "\",\"row\":" + row + "}");
+                _dropExpK = k + 1;
+            }
+            else
+            {
+                MainOutMessage("M3DROPEXPSEQ {\"phase\":\"kill_bad\",\"k\":" + k
+                    + ",\"branch\":\"" + branch + "\"}");
+            }
+            _dropExpKillFrames.Clear();
+            _dropExpDropNames.Clear();
+            if (_dropExpK >= MShare.g_nDropExpKills)
+            {
+                MainOutMessage("M3DROPEXPSEQ {\"phase\":\"complete\",\"kills\":" + _dropExpK + "}");
+            }
+        }
+
+        private void DropExpWriteRow(string row)
+        {
+            if (_dropExpWriter == null)
+            {
+                return;
+            }
+            try
+            {
+                _dropExpWriter.Write(row);
+                _dropExpWriter.Write('\n');
+                _dropExpWriter.Flush();
+            }
+            catch (Exception)
+            {
+            }
+        }
+
+        #endregion
+
         #region M3⑦ 组队/交易动作序列夹具（默认关；白名单 T-43 家族扩展）
 
         private string[] _ptSeqSteps;
@@ -2392,6 +2598,7 @@ namespace BotSrv.Player
             ArmAttackSequence();
             ArmShopSequence();
             ArmQuestSequence();
+            ArmDropExpSequence();
             ArmPairTradeSequence();
             ArmSellOffSequence();
             ArmGuildCastleSequence();
@@ -2428,6 +2635,7 @@ namespace BotSrv.Player
                 AttackSequenceTick();
                 ShopSequenceTick();
                 QuestSequenceTick();
+                DropExpSequenceTick();
                 PairTradeSequenceTick();
                 SellOffSequenceTick();
                 GuildCastleSequenceTick();

@@ -29,7 +29,7 @@
 | `drop_exp_diff.py` | 判据本体（`diff` / `selftest`） |
 | `drop_exp_purity_gate.py` | **纯度门**（whitelist T-35；`gate` / `selftest`） |
 | `drop_exp_consumers.tsv` | **消费者表（纯度门唯一真源）**：`side/class/pattern/max/oracle_ref/note` |
-| `run_drop_exp_pair.ps1` | 夹具入口（`-SelfCheckNoStack` / `-DiffOnly` / `-PurityOnly` / real-run fail-closed） |
+| `run_drop_exp_pair.ps1` | 夹具入口（`-SelfCheckNoStack` / `-DiffOnly` / `-PurityOnly` / real-run：`-Go` 后复用 `run_pair.ps1` 两相 pin + `-DropExpSequence`） |
 
 ## 命令
 
@@ -40,7 +40,7 @@ python -I mir2-rs/tests/parity/m3/drop-exp/drop_exp_diff.py selftest
 # 纯度门自检（fail-closed + 改坏必红 + 真表承重）：期望 SELFTEST ok=23/23 rc=0
 python -I mir2-rs/tests/parity/m3/drop-exp/drop_exp_purity_gate.py selftest
 
-# 无栈自检：比较器 + 纯度门 + LF 写出 + 零端口；期望 SELFTEST ok=13/13 rc=0
+# 无栈自检：比较器 + 纯度门 + LF 写出 + 零端口 + no-Go fail-closed + DoD② run_pair/BotSrv DropExp 透传 + BotSrv 生产函数 selftest；期望 SELFTEST ok=20/20 rc=0
 powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/drop-exp/run_drop_exp_pair.ps1 -SelfCheckNoStack
 
 # 场景纯度（离线；给该侧全场景抽数流水；认不出/未分类 ⇒ 点名 RED）
@@ -88,8 +88,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/drop
 4. **判据**：`run_drop_exp_pair.ps1 -DiffOnly -CsharpRaw <csharp drop_exp_raw.jsonl> -RustRaw <rust drop_exp_raw.jsonl>` ⇒ 期望 `DIFF 0`。
 5. **收工**：`-Stop` + 十端口实拍 + 卡上写「窗口已释放」+ 证据入库（`SHA256SUMS.txt` 按仓库 LF/git-blob 口径，含两侧纯度门的 `--json` 原始件）。
 
-> 现状：第 1/2 步的 BotSrv「掉落/经验序列」尚未实现（承接卡见报告），real-run 因此 fail-closed。
-> 纯度门（T-35）**离线已就绪**（门 selftest 23/23、无栈自检 13/13）；`drop_exp_consumers.tsv` 的
+> 现状：BotSrv「掉落/经验序列」驱动 + `--selftest-dropseq` 已实现（卡 `openmir2-m3-drop-exp-fixture-botsrv` DoD①）；
+> DoD② 接线（`run_drop_exp_pair.ps1` real-run → `run_pair.ps1 -DropExpSequence` → `tools/botload/run_bots.ps1` DropExp* 配置透传）已落地，无栈自检 20/20。
+> **仍未接线的依赖**：「0137 上运行时 pin 出单只固定怪」（C# 侧 GM/脚本 spawn + Rust 宿主 AI 模式开关），归 shared 承接卡
+> `openmir2-m3-rng-scene-driver`（规格见 [`rng-trace-scene/DRIVER-CONTRACT.md`](../rng-trace-scene/DRIVER-CONTRACT.md) §7，与 ④ 同批窗口）；
+> 单只怪未落地时 `run_pair` 的 DropExp 分支会在「0 杀 < -DropExpKills」处 RED（fail-closed，不符就是不符）。
+> 纯度门（T-35）**离线已就绪**（门 selftest 23/23、无栈自检 19/19）；`drop_exp_consumers.tsv` 的
 > **两侧实测站点行**已按 oracle 源码 + 真机实测（C# 掉落/构造/墙钟 + `rng-isolate-attack/attack_sites.tsv` 的
 > 两侧攻击路径）与 ④-D（master `4521d451`）Rust 实现文件级锚补入：Rust 侧不再判 `PREREQ`，`measured`
 > （drop/kill）/`setup`（spawn/构造）/`wallclock`（monai/merchant）各类都有站点行；`max` 未实测者留 `*`，
