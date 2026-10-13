@@ -1,0 +1,33 @@
+== 03 判据实跑（本片新增 2 条用例；在交付 head `ab793fc53` 工作树上，base=636bdce53） ==
+
+命令: CARGO_TARGET_DIR=E:/tmp/openmir2-m3pt-target cargo test --offline -p db-srv --test quest_no_persist
+
+   Compiling db-srv v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3pt\mir2-rs\bins\db-srv)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.87s
+     Running tests\quest_no_persist.rs (E:/tmp/openmir2-m3pt-target\debug\deps\quest_no_persist-21ddaa74cab9a78d.exe)
+
+running 7 tests
+test redcheck_scanner_bites_injected_quest_persistence ... ok
+test redcheck_sql_scanner_bites_injected_quest_columns ... ok
+test session_quest_state_model_is_still_present ... ok
+test captured_cross_side_baselines_show_zero_characters_quest_rows ... ok
+test db_srv_save_and_load_sql_have_no_quest_columns ... ok
+test workspace_rust_sources_never_reference_characters_quest ... ok
+test workspace_sql_literals_never_mention_quest_columns ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s
+
+
+---- 判据清单（7 条，其中 2 条为本片新增） ----
+[新] workspace_sql_literals_never_mention_quest_columns       —— 全仓 SQL 字面量不得提及任务列/表
+[新] redcheck_sql_scanner_bites_injected_quest_columns        —— SQL 扫描牙齿 + 误报防护（5 段）
+      workspace_rust_sources_never_reference_characters_quest —— 既有：全仓不得引用表名 characters_quest
+      db_srv_save_and_load_sql_have_no_quest_columns          —— 既有：playdata.rs 存档/读档面
+      session_quest_state_model_is_still_present              —— 既有：会话任务态仍在
+      captured_cross_side_baselines_show_zero_characters_quest_rows —— 既有：两侧基线 0 行
+      redcheck_scanner_bites_injected_quest_persistence —— 既有：表名扫描牙齿（原用例名见文件）
+
+工作区级全量（四门禁 ③）: suites=98  passed=1046  failed=0  ignored=21  rc=0
+（base `636bdce53` = 1044 passed；本片 +2 条 #[test] ⇒ 1046）
+
+RC-A/RC-B 的改坏/还原在**同一 sha256**（806a853d…ce71）的文件内容上实跑，rebase 不改变该证据有效性。

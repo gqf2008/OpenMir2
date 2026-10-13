@@ -1,0 +1,19 @@
+== 20 边界（交付 head 对 base refs/heads/master） ==
+base = 636bdce5346c7526e0833a133fe9ae76f044e5de
+
+git diff --name-only origin/master HEAD -- src sql MirClient
+（空 = oracle / 客户端 / 表结构零改动）
+
+git diff --name-only origin/master HEAD（本片改动面）
+mir2-rs/bins/db-srv/tests/quest_no_persist.rs
+mir2-rs/tests/parity/m3/evidence-m3-quest-nopersist-workspace-gate-20261013/**
+
+git diff --numstat origin/master HEAD -- mir2-rs/bins/db-srv/tests/quest_no_persist.rs
+210	1	mir2-rs/bins/db-srv/tests/quest_no_persist.rs
+
+git merge-base --is-ancestor origin/master HEAD ⇒ YES（base 即 origin/master 本刻 tip）
+
+git merge-tree origin/master HEAD（rc）
+rc=0（无冲突）
+
+未触碰：bins/game-svr 生产代码、crates/world、crates/script、crates/protocol、crates/storage、sql/、MirClient。
