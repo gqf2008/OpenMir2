@@ -3103,9 +3103,16 @@ fn broadcast_ref_msg(
 /// oracle `PlayObject` 构造器置 `WantRefMsg = true`（`PlayObject.cs:889`；`BaseObject` 缺省 false，
 /// `BaseObject.cs:431`）。AOI 可见过滤（`BaseObject.ViewRange.cs:112`）靠它把**非玩家**（怪物）
 /// 纳入可见集 —— 只靠 `race == ActorRace.Play` 只能看到其他玩家。
+///
+/// oracle 同一构造器还置 **`ViewRange = 12`**（`PlayObject.cs:904`；`BaseObject` 缺省 5，
+/// `BaseObject.cs:383` = [`mir2_world::Entity::new`] 的 `view_range` 缺省）。AOI 扫描是边长
+/// `2*ViewRange+1` 的正方形（`BaseObject.ViewRange.cs:71-74`）⇒ 玩家窗口应为 25×25；
+/// 缺这行只剩 11×11，Chebyshev 距离 6..12 的怪/其他 actor 不进 `visible_actors`、
+/// `drain_aoi_downlink` 也不发 ⇒ 客户端同屏少怪（卡 `openmir2-client-e2e-enter-gaps` 缺口②）。
 fn new_player_entity(chr_name: String, x: i32, y: i32) -> mir2_world::Entity {
     let mut e = mir2_world::Entity::new(0, chr_name, x, y);
     e.want_ref_msg = true;
+    e.view_range = 12;
     e
 }
 
@@ -7402,6 +7409,55 @@ mod tests {
             "oracle PlayObject 构造器置 WantRefMsg=true（PlayObject.cs:889）"
         );
         assert_eq!(e.race, mir2_world::ACTOR_RACE_PLAY);
+        // oracle `PlayObject.cs:904`：玩家 ViewRange=12（缺省 5 是 `BaseObject.cs:383`）。
+        // 红检：删掉 `e.view_range = 12;` ⇒ 缺省 5 ⇒ 本断言必红。
+        assert_eq!(
+            e.view_range, 12,
+            "oracle PlayObject 构造器置 ViewRange=12（PlayObject.cs:904）"
+        );
+    }
+
+    /// `openmir2-client-e2e-enter-gaps`（缺口② 同屏无怪）：oracle 玩家 `ViewRange = 12`
+    /// （`PlayObject.cs:904`）⇒ AOI 扫描窗口是边长 `2*12+1` 的正方形（`BaseObject.ViewRange.cs:71-74`，
+    /// 25×25）。生产宿主缺这行时只剩缺省 5（`BaseObject.cs:383`）⇒ Chebyshev 距离 6..12 的怪
+    /// 不进 `visible_actors`、`drain_aoi_downlink` 不发 ⇒ 客户端在出生点/城墙外看不到怪。
+    ///
+    /// 红检：删掉 [`new_player_entity`] 里的 `e.view_range = 12;` ⇒ `edge`（Chebyshev 12）不在
+    /// 可见集 ⇒ 本用例必红。
+    #[test]
+    fn player_aoi_window_covers_view_range_12() {
+        let mut world = mir2_world::World::new(100, 100);
+        world.open_session("p");
+        let p = world
+            .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
+            .expect("玩家进图");
+        // Chebyshev 12：oracle 的 25×25 窗口内 ⇒ 必须可见；缺省 5 的窗口 ⇒ 不可见。
+        let mut edge = mir2_world::Entity::new(0, "edge", 22, 10);
+        edge.race = mir2_world::ACTOR_RACE_MONSTER;
+        let edge_id = world.add_entity(edge);
+        // Chebyshev 13：连 oracle 的 25×25 都出界 ⇒ 必须不可见（钉住窗口上界，不是越大越好）。
+        let mut out = mir2_world::Entity::new(0, "out", 23, 10);
+        out.race = mir2_world::ACTOR_RACE_MONSTER;
+        let out_id = world.add_entity(out);
+        world.tick();
+
+        let shown: Vec<i32> = world
+            .entities
+            .get(p)
+            .unwrap()
+            .visible_actors
+            .iter()
+            .filter(|v| v.flag == mir2_world::VisibleFlag::Show)
+            .map(|v| v.target)
+            .collect();
+        assert!(
+            shown.contains(&edge_id),
+            "距离 12 的怪必须在玩家 25×25 窗口内（oracle ViewRange=12）：{shown:?}"
+        );
+        assert!(
+            !shown.contains(&out_id),
+            "距离 13 的怪必须超出窗口（窗口上界 = ViewRange）：{shown:?}"
+        );
     }
 
     /// **C 第 ③ 片判据（怪物出现帧端到端）**：怪物展示层登记后，观察者的 AOI `Show` ⇒ 收到以
