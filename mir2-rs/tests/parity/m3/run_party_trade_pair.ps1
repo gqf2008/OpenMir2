@@ -17,7 +17,7 @@
     ② `-PairTradeSequence` 步骤串参数透传 + `M3PAIRTRADESEQ` 标记判据（**两个假人各自的 send/end/done**
        没跑完 ⇒ RED，绝不当 GREEN）；
     ③ 跨侧 `party_trade_diff.py`（组队/交易记录）+ `scoped_diff.py`（DB 字段级）两道判据；
-    ④ `-SelfCheckNoStack` 无栈自检（比较器 selftest + 合成件正/负样本 + BotSrv 生产函数 selftest +
+    ④ `-SelfCheckNoStack` 无栈自检（比较器 selftest + 场景锚门 check/selftest/mutation + 合成件正/负样本 + BotSrv 生产函数 selftest +
        入口/DiffOnly/AssembleOnly/preflight fail-closed + 零端口断言）。
 
   两假人相邻固定起点：本夹具复用 `run_pair.ps1 -PinStartPose -AttackPinPair`（把 actor 钉在 (X,Y) 朝向 2、
@@ -267,6 +267,28 @@ if ($SelfCheckNoStack) {
     $stOk = ($stRc -eq 0) -and $stMatch.Success -and ($stMatch.Groups[1].Value -eq $stMatch.Groups[2].Value)
     Add-Result 'comparator-selftest' $stOk ("rc=$stRc")
     if (-not $stOk) { Write-Output $stOut }
+
+    # ②′ 场景锚门（party_trade_anchor_gate.py）：oracle_anchors 覆盖面 + 每条冻结 oracle 锚的
+    # 行点对冻结面（⑦ 场景锚此前无人行级复核；GroupMembersMax/TryDealTime/DealOKTime 三个
+    # 上限与时钟常量 token 一并锁死）。
+    $AnchorGate = Join-Path $Here 'party_trade_anchor_gate.py'
+    $ErrorActionPreference = 'Continue'
+    $agOut = (& python -I $AnchorGate check 2>&1 | Out-String)
+    $agRc = $LASTEXITCODE
+    $agOk = ($agRc -eq 0) -and ($agOut -match '(?m)^GREEN:')
+    Add-Result 'anchor-gate-check' $agOk ("rc=$agRc")
+    if (-not $agOk) { Write-Output $agOut }
+    $agsOut = (& python -I $AnchorGate selftest 2>&1 | Out-String)
+    $agsRc = $LASTEXITCODE
+    $agsOk = ($agsRc -eq 0) -and ($agsOut -match '(?m)^SELFTEST GREEN')
+    Add-Result 'anchor-gate-selftest' $agsOk ("rc=$agsRc")
+    if (-not $agsOk) { Write-Output $agsOut }
+    $agmOut = (& python -I $AnchorGate mutation 2>&1 | Out-String)
+    $agmRc = $LASTEXITCODE
+    $agmOk = ($agmRc -eq 0) -and ($agmOut -match '(?m)^MUTATION GREEN')
+    Add-Result 'anchor-gate-mutation-red' $agmOk ("rc=$agmRc")
+    if (-not $agmOk) { Write-Output $agmOut }
+    $ErrorActionPreference = $prevEap
 
     # ③ 逐项相同 ⇒ 绿（进程内集成，走生产 diff 函数）
     $csGood = Join-Path $tmpRoot 'cs-good.jsonl'

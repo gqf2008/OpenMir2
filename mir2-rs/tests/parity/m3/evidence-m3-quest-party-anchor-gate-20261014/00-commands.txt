@@ -1,0 +1,45 @@
+# 本片命令（cwd = worktree 根，除注明；CARGO_TARGET_DIR 在检出外）
+
+# —— 场景锚门（新增 ×2；离线、零端口；01）——
+cd mir2-rs/tests/parity/m3
+python -I quest_anchor_gate.py check
+python -I quest_anchor_gate.py selftest
+python -I quest_anchor_gate.py mutation
+python -I party_trade_anchor_gate.py check
+python -I party_trade_anchor_gate.py selftest
+python -I party_trade_anchor_gate.py mutation
+# ⇒ quest GREEN 14 锚 / 20 行点；party/trade GREEN 22 锚 / 47 行点；两侧 SELFTEST/MUTATION GREEN
+
+# —— 修前 RED 复现 + 外部改坏必红（02）——
+# 02-A（只读 git，不改工作树）：
+python -I -c "import sys,json,subprocess; sys.path.insert(0,'mir2-rs/tests/parity/m3'); \
+  import quest_anchor_gate as g; old=subprocess.run(['git','show','origin/master:mir2-rs/tests/parity/m3/quest_scenario.json'],capture_output=True,text=True).stdout; \
+  f=g._evaluate(scenario_text='\n'.join('%s = %s'%(k,v) for k,v in json.loads(old)['oracle_anchors'].items())); print(len(f),f)"
+# ⇒ quest 8 项 RED（含 :3966-4110 漂移 + Query.cs/Save.cs 假基名）；party_trade 12 项 RED（Base.cs 假基名 + 3 处范围漂移 + 两条散文夹注未展开）
+# 02-B（临时改盘上场景件 → check RED → 还原 → check GREEN；还原用 /tmp 备份，绝不用 git checkout 以免回退未提交改动）：
+#   quest_scenario.json:  PlayObject.cs:3966-4105 → :3966-4110   ⇒ check RED 2 项 rc=1；还原 ⇒ GREEN rc=0
+#   party_trade_scenario.json: PlayObject.Base.cs:1339-1367 → :1339-1369 ⇒ check RED 2 项 rc=1；还原 ⇒ GREEN rc=0
+
+# —— ⑥/⑦ 夹具 runner 无栈自检（03/04；含本片加的 3 条场景锚门）——
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_quest_pair.ps1 -SelfCheckNoStack
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_party_trade_pair.ps1 -SelfCheckNoStack
+# ⇒ 两侧 SELFTEST ok=22/22（19→22）
+
+# —— 夹具链深检门（runner 级；05/06）——
+cd mir2-rs/tests/parity/m3
+python -I fixture_chain_gate.py check --require-all
+python -I fixture_chain_gate.py selftest
+# ⇒ FIXTURE_CHAIN GREEN runner_ok=10 prereq_or_skip=0 red=0（含 quest_anchor_*/party_trade_anchor_* 四向）
+# ⇒ SELFTEST GREEN: fixture_chain_gate selftest 37/37
+
+# —— 四门禁（07–10；零 .rs，仍全跑）——
+cd mir2-rs
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo fmt --all -- --check
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo clippy --workspace --all-targets -- -D warnings
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo test --workspace --offline --no-fail-fast
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo run -q -p msgcodegen -- --check
+
+# —— 证据 hash（仓库 LF/git-blob 口径）——
+python -I tools/evidence-hash/verify_sha256sums.py write mir2-rs/tests/parity/m3/evidence-m3-quest-party-anchor-gate-20261014
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/m3/evidence-m3-quest-party-anchor-gate-20261014
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-quest-party-anchor-gate-20261014

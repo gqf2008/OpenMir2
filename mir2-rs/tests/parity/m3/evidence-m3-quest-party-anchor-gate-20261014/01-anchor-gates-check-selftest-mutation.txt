@@ -1,0 +1,53 @@
+##### quest_anchor_gate.py check
+GREEN: quest 场景锚门通过（14 锚 / 20 行点全部命中冻结 src/ 且覆盖面闭合）
+rc=0
+
+##### quest_anchor_gate.py selftest
+selftest 表结构: GREEN (14 锚)
+selftest 读侧 token 牙齿: GREEN (good=[] bad=1)
+selftest 覆盖面未登记牙齿: GREEN
+selftest 覆盖面表过期牙齿: GREEN (13 项)
+selftest 越界牙齿: GREEN
+selftest 真身 check: GREEN (0 项)
+selftest token 强度牙齿: GREEN (weak=["读侧 token 强度：锚 PlayObject.cs:3966-4105 整组无有辨识度 token（['}']）——至少一条 token 须含实际内容，不能只靠 `}`/`;` 等纯标点钉位置"]; pure-punct=4/4)
+selftest 工具侧名字锚牙齿: GREEN (bad=["工具侧锚 X.fake：符号 'public void ThisSymbolDoesNotExistXYZ(' 不在 src/OpenMir2/Messages.cs（只锚名字；行号漂移不算）"])
+SELFTEST GREEN
+rc=0
+
+##### quest_anchor_gate.py mutation
+MUT1 范围漂移(:3966-4105→:3966-4110): RED（2 项）
+MUT2 基名漂移(PlayDataStorage.Query.cs→Query.cs): RED（4 项）
+MUT3 读侧 token 漂移: RED（1 项）
+MUT4 真身 check: GREEN（0 项）
+MUT5 token 强度(整组只剩 `}`): RED（1 项）
+MUT6 token 强度(纯标点 `]);`/`]`/`//{`): RED（1+2 项）
+MUTATION GREEN (C:/Users/gxh/AppData/Local/Temp/m3cs-mut-quest_anchor_gate)
+rc=0
+
+##### party_trade_anchor_gate.py check
+GREEN: party/trade 场景锚门通过（22 锚 / 47 行点全部命中冻结 src/ 且覆盖面闭合）
+rc=0
+
+##### party_trade_anchor_gate.py selftest
+selftest 表结构: GREEN (22 锚)
+selftest 读侧 token 牙齿: GREEN (good=[] bad=1)
+selftest 覆盖面未登记牙齿: GREEN
+selftest 覆盖面表过期牙齿: GREEN (21 项)
+selftest 越界牙齿: GREEN
+selftest 真身 check: GREEN (0 项)
+selftest token 强度牙齿: GREEN (weak=["读侧 token 强度：锚 PlayObject.Base.cs:730-752 整组无有辨识度 token（['}']）——至少一条 token 须含实际内容，不能只靠 `}`/`;` 等纯标点钉位置"]; pure-punct=4/4)
+selftest 工具侧名字锚牙齿: GREEN (bad=["工具侧锚 X.fake：符号 'public void ThisSymbolDoesNotExistXYZ(' 不在 src/OpenMir2/Messages.cs（只锚名字；行号漂移不算）"])
+SELFTEST GREEN
+rc=0
+
+##### party_trade_anchor_gate.py mutation
+MUT1 范围漂移(:1339-1367→:1339-1369): RED（2 项）
+MUT2 基名漂移(PlayObject.Base.cs→Base.cs): RED（2 项）
+MUT3 范围漂移(:911-1202→:911-1203): RED（2 项）
+MUT4 读侧 token 漂移(数值常量): RED（1 项）
+MUT5 真身 check: GREEN（0 项）
+MUT6 token 强度(整组只剩 `}`): RED（1 项）
+MUT7 token 强度(纯标点 `]);`/`]`/`//{`): RED（1+2 项）
+MUTATION GREEN (C:/Users/gxh/AppData/Local/Temp/m3cs-mut-party_trade_anchor_gate)
+rc=0
+
