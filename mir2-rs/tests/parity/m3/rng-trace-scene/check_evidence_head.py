@@ -21,14 +21,26 @@
 这样证据包只需诚实写「本包读数在 head `<oid>` 的树上取得，其后至交付 head 仅证据侧变更」，
 就能自洽且可被机判（避免「声明 head 永远落后交付 head 一格」的自指死结）。
 
-**局限性（如实登记）**：本门咬住的是「oid 写错/不可解析、非 HEAD 祖先、声明后夹带生产代码」三类；
+**局限性（如实登记）**：`check` 子命令咬住的是「oid 写错/不可解析、非 HEAD 祖先、声明后夹带生产代码」三类；
 它**咬不住** O-1 原本那一类——「声明的是**真实祖先**、但不是读数/交付 head」（`2fcebc6cd` 就是这种）。
-那一类属「书证命名」，只能靠人写对 + 评审；本门把其余可机判的相邻失败模式钉死，与文本订正**互补**。
+
+**`check-pack` 子命令（reviewer-5 对 head `9740b7d0c` 的 observation O-1 收口）**：把「书证 head 与
+机判对象一致」补上——**机判对象 = 包内声明的 head**（从包内 `--decl-file`/缺省探测读 `head = <oid>`，
+不再由 CLI 另传一个值冒充声明 head），并用**显式 `--since` 锚**界定差量 `since..声明 head`
+（只允许证据/夹具侧）。收益：① 校验的正是书证里写的那个 oid；② **免疫「master 前进后的无关合并」
+造成的假红**（`check` 的 `head..HEAD` 口径在 master 前进后会把别人的合并算进来；
+`since..声明 head` 只看本片自己的差量）；③ 声明 head 写成**不可解析 / 非 HEAD 祖先 / 自 since 起
+夹带生产代码** 的三类仍各自点名。**残留局限（如实登记）**：把**证据侧的其它祖先**（如中间 merge
+commit `2fcebc6cd`）当 head 写——若它对同一 `since` 的差量恰好也全在证据侧——本门仍**咬不住**；
+那一类属「书证命名」，只能靠人写对 + 评审（与 `check` 的既有局限同源，只是对象换成了书证 head）。
 
 用法（cwd = `mir2-rs/tests/parity/m3`）：
     python -I rng-trace-scene/check_evidence_head.py check \
         --dir    evidence-m3-rng-scene-anchor-teeth-20261014 \
         --head   2591a7b31
+    python -I rng-trace-scene/check_evidence_head.py check-pack \
+        --dir    evidence-m3-rng-scene-anchor-teeth-20261014 \
+        --since  10f0daa93
     python -I rng-trace-scene/check_evidence_head.py selftest
 
 退出码：0 = GREEN；1 = RED（点名）；2 = PREREQ（缺件 / 坏输入 / 不是 git 工作树）。
@@ -38,6 +50,7 @@ import argparse
 import contextlib
 import io
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -123,6 +136,104 @@ def check(repo, ev_dir, head, allow_prefixes):
     return 0, []
 
 
+# ------------------- check-pack：从包内读声明 head + 显式 since 锚 -------------------
+
+DEFAULT_DECL_FILES = ("11-boundary.txt", "10-boundary.txt", "README.md")
+# 只认「head = <oid>」这种带等号的写法（散文里的 `approve head `oid`` 不算声明）。
+DEFAULT_DECL_RE = r"head\s*=\s*[`\"'<]?([0-9a-fA-F]{7,40})"
+
+
+def _read_declared_head(ev_dir, decl_file, decl_regex):
+    """从包内读「声明 head」。⇒ (oid, 来源文件, 来源说明) 或 (None, 试过的文件, None)。"""
+    try:
+        pat = re.compile(decl_regex)
+    except re.error as exc:
+        return None, "regex-error:%s" % exc, None
+    candidates = [decl_file] if decl_file else list(DEFAULT_DECL_FILES)
+    tried = []
+    for name in candidates:
+        path = os.path.join(ev_dir, name)
+        if not os.path.isfile(path):
+            tried.append(name + "(缺)")
+            continue
+        tried.append(name)
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            for lineno, line in enumerate(fh, 1):
+                m = pat.search(line)
+                if m:
+                    return m.group(1), name, "line %d" % lineno
+    return None, ",".join(tried), None
+
+
+def check_pack(repo, ev_dir, since, decl_file, decl_regex, allow_prefixes):
+    """check-pack：机判对象 = **包内声明的 head**（不是当前 HEAD），用显式 `since` 锚界定差量。
+
+    判据：① 包内能读到 `head = <oid>` 声明；② 该 oid 可解析；③ `--since` 可解析且是声明 head
+    的祖先；④ 声明 head 是当前 HEAD 的祖先；⑤ `diff --name-only since..声明 head` 只含证据/夹具侧路径。
+    """
+    problems = []
+    root = _repo_root(repo)
+    if root is None:
+        return 2, ["PREREQ_MISSING: %s 不是 git 工作树 / git 不可用" % repo]
+    if not ev_dir or not os.path.isdir(ev_dir):
+        return 2, ["PREREQ_MISSING: 找不到证据目录 %s" % (ev_dir or "(空)",)]
+    if not since:
+        return 2, ["PREREQ_MISSING: 缺 --since（显式锚）"]
+
+    declared, src, detail = _read_declared_head(ev_dir, decl_file, decl_regex)
+    if declared is None:
+        return 2, ["PREREQ_MISSING: 包内未找到 `head = <oid>` 声明（试过 %s）" % src]
+
+    ev_abs = os.path.abspath(ev_dir)
+    ev_rel = _norm(os.path.relpath(ev_abs, root))
+
+    rc, out = _git(root, "rev-parse", "--verify", "--quiet", "%s^{commit}" % declared)
+    if rc != 0 or not out.strip():
+        return 1, ["HEAD_UNRESOLVABLE: 包内声明 head %r 不是可解析的 commit（来源 %s %s）"
+                   % (declared, src, detail)]
+    decl_oid = out.strip().splitlines()[0]
+
+    rc, out = _git(root, "rev-parse", "--verify", "--quiet", "%s^{commit}" % since)
+    if rc != 0 or not out.strip():
+        return 2, ["PREREQ_MISSING: --since %r 不是可解析的 commit" % since]
+    since_oid = out.strip().splitlines()[0]
+
+    rc, _ = _git(root, "merge-base", "--is-ancestor", since_oid, decl_oid)
+    if rc != 0:
+        return 1, ["SINCE_NOT_ANCESTOR: --since %s 不是包内声明 head %s 的祖先"
+                   % (since_oid, decl_oid)]
+
+    rc, _ = _git(root, "merge-base", "--is-ancestor", decl_oid, "HEAD")
+    if rc != 0:
+        return 1, ["HEAD_NOT_ANCESTOR: 包内声明 head %s 不是当前 HEAD 的祖先" % decl_oid]
+
+    rc, out = _git(root, "diff", "--name-only", "%s..%s" % (since_oid, decl_oid))
+    if rc != 0:
+        return 2, ["PREREQ_MISSING: git diff %s..%s 失败：%s" % (since_oid, decl_oid, out.strip())]
+    changed = [ln.strip() for ln in out.splitlines() if ln.strip()]
+
+    prefixes = tuple(_norm(p) for p in (allow_prefixes or DEFAULT_ALLOW_PREFIXES))
+    ev_prefix = ev_rel + "/"
+    outside = []
+    for path in changed:
+        p = _norm(path)
+        if p == ev_rel or p.startswith(ev_prefix):
+            continue
+        if any(p.startswith(pref) for pref in prefixes):
+            continue
+        outside.append(p)
+
+    print("EVIDENCE_HEAD_PACK dir=%s decl=%s(%s) declared=%s since=%s changed=%d allow_prefixes=%s"
+          % (ev_rel, src, detail, decl_oid, since_oid, len(changed), list(prefixes)))
+    if outside:
+        for p in outside:
+            print("  RED HEAD_SCOPE_DRIFT: 声明 head 相对 since 锚改了非证据侧路径 %s" % p)
+        problems.extend("HEAD_SCOPE_DRIFT: %s" % p for p in outside)
+        return 1, problems
+    print("  OK 包内声明 head 可解析、since 锚 ≤ 声明 head ≤ HEAD，且 since..声明 head 全在证据侧")
+    return 0, []
+
+
 # ----------------------------- selftest -----------------------------
 
 def _write(path, text):
@@ -190,7 +301,7 @@ def cmd_selftest(_args):
 
         # 改坏①：B 之后又动了生产代码 ⇒ 声明 A 必红并点名
         _write(os.path.join(repo, prod, "code.rs"), "fn a() { /* x */ }\n")
-        _commit(repo, "C touch code")
+        head_c = _commit(repo, "C touch code")
 
         def _scope_red():
             rc, probs = _quiet(lambda: check(repo, ev, head_a, None))
@@ -236,6 +347,76 @@ def cmd_selftest(_args):
             rc, _ = _quiet(lambda: check(plain, plain, head_a, None))
             assert rc == 2, "expected PREREQ rc=2 got %d" % rc
         case("not-a-repo-prereq", _not_repo_prereq)
+
+        # ---------------- check-pack：从包内读 declared head + 显式 since 锚 ----------------
+        decl = os.path.join(ev, "11-boundary.txt")
+
+        # E 只动证据侧（写声明文件本身）⇒ since=C（含生产改动）到 declared=E 的差量仍是证据侧。
+        _write(decl, "### head = PLACEHOLDER\n")
+        e_oid = _commit(repo, "E decl placeholder")
+        _write(decl, "### 边界\n### head = %s（交付 head）\n" % e_oid)
+        _commit(repo, "F decl to E")
+
+        def _pack_green():
+            rc, probs = _quiet(lambda: check_pack(repo, ev, head_c, None, DEFAULT_DECL_RE, None))
+            assert rc == 0, "expected GREEN rc=0 got %d %s" % (rc, probs)
+        case("pack-declared-head-green", _pack_green)
+
+        def _pack_decl_eq_since_green():
+            rc, probs = _quiet(lambda: check_pack(repo, ev, e_oid, None, DEFAULT_DECL_RE, None))
+            assert rc == 0, "expected GREEN rc=0 got %d %s" % (rc, probs)
+        case("pack-declared-eq-since-green", _pack_decl_eq_since_green)
+
+        # 改坏：声明写成 head_c（自 since=A 起含生产改动）⇒ 越界点名
+        def _pack_scope_drift_red():
+            _write(decl, "### head = %s\n" % head_c)
+            rc, probs = _quiet(lambda: check_pack(repo, ev, head_a, None, DEFAULT_DECL_RE, None))
+            assert rc == 1 and any("code.rs" in p for p in probs), (rc, probs)
+        case("pack-scope-drift-red", _pack_scope_drift_red)
+
+        # 改坏：声明一个解析不出来的 oid ⇒ HEAD_UNRESOLVABLE
+        def _pack_unresolvable_red():
+            _write(decl, "### head = deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n")
+            rc, probs = _quiet(lambda: check_pack(repo, ev, head_a, None, DEFAULT_DECL_RE, None))
+            assert rc == 1 and any("HEAD_UNRESOLVABLE" in p for p in probs), (rc, probs)
+        case("pack-unresolvable-head-red", _pack_unresolvable_red)
+
+        # 改坏：声明一个非 HEAD 祖先 ⇒ HEAD_NOT_ANCESTOR
+        def _pack_non_ancestor_red():
+            _write(decl, "### head = %s\n" % side)
+            rc, probs = _quiet(lambda: check_pack(repo, ev, head_a, None, DEFAULT_DECL_RE, None))
+            assert rc == 1 and any("HEAD_NOT_ANCESTOR" in p for p in probs), (rc, probs)
+        case("pack-non-ancestor-head-red", _pack_non_ancestor_red)
+
+        # 改坏：--since 不是声明 head 的祖先 ⇒ SINCE_NOT_ANCESTOR
+        def _pack_since_not_ancestor_red():
+            _write(decl, "### head = %s\n" % e_oid)
+            rc, probs = _quiet(lambda: check_pack(repo, ev, side, None, DEFAULT_DECL_RE, None))
+            assert rc == 1 and any("SINCE_NOT_ANCESTOR" in p for p in probs), (rc, probs)
+        case("pack-since-not-ancestor-red", _pack_since_not_ancestor_red)
+
+        # PREREQ：包内没有可读的声明文件
+        def _pack_missing_decl_prereq():
+            ev2 = os.path.join(repo, base, "ev-no-decl")
+            _write(os.path.join(ev2, "README.md"), "no declaration here\n")
+            rc, probs = _quiet(lambda: check_pack(repo, ev2, head_a, None, DEFAULT_DECL_RE, None))
+            assert rc == 2, "expected PREREQ rc=2 got %d %s" % (rc, probs)
+        case("pack-missing-decl-prereq", _pack_missing_decl_prereq)
+
+        # PREREQ：声明文件在但没有 `head =` 行
+        def _pack_no_head_line_prereq():
+            _write(decl, "### 边界\n### 只有 base，没有 head 声明\n")
+            rc, probs = _quiet(lambda: check_pack(repo, ev, head_a, None, DEFAULT_DECL_RE, None))
+            assert rc == 2, "expected PREREQ rc=2 got %d %s" % (rc, probs)
+        case("pack-no-head-line-prereq", _pack_no_head_line_prereq)
+
+        # PREREQ：--since 不可解析
+        def _pack_since_unresolvable_prereq():
+            _write(decl, "### head = %s\n" % e_oid)
+            rc, probs = _quiet(lambda: check_pack(
+                repo, ev, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", None, DEFAULT_DECL_RE, None))
+            assert rc == 2, "expected PREREQ rc=2 got %d %s" % (rc, probs)
+        case("pack-since-unresolvable-prereq", _pack_since_unresolvable_prereq)
     finally:
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)
@@ -246,16 +427,24 @@ def cmd_selftest(_args):
     if failed:
         print("SELFTEST_RED: check_evidence_head %d/%d（失败 %d）" % (ok, total, len(failed)))
         return 1
-    print("SELFTEST GREEN: check_evidence_head %d/%d（含 4 条改坏必红 + 2 条 PREREQ）"
+    print("SELFTEST GREEN: check_evidence_head %d/%d（check 7 + check-pack 9：含改坏必红 + PREREQ）"
           % (ok, total))
     return 0
+
+
+def _print_problems(probs, skip_prefixes=()):
+    """把 check/check-pack 返回的问题逐条打出（避免与已打印的 `RED ...` 行重复）。"""
+    for p in probs or []:
+        if any(p.startswith(pre) for pre in skip_prefixes):
+            continue
+        print(p)
 
 
 def main(argv):
     ap = argparse.ArgumentParser(prog="check_evidence_head.py")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    p_check = sub.add_parser("check", help="核对证据包声明的 head")
+    p_check = sub.add_parser("check", help="核对证据包声明的 head（对当前 HEAD）")
     p_check.add_argument("--dir", required=True, help="证据目录")
     p_check.add_argument("--head", required=True, help="证据包声明的 head（commit oid/ref）")
     p_check.add_argument("--repo", default=".", help="git 工作树（缺省 .）")
@@ -263,11 +452,31 @@ def main(argv):
                          help="允许在声明 head 之后变更的仓库根相对路径前缀（可重复；缺省 %s）"
                               % list(DEFAULT_ALLOW_PREFIXES))
 
+    p_pack = sub.add_parser(
+        "check-pack",
+        help="从包内读声明 head + 显式 since 锚核对（机判对象 = 书证 head）")
+    p_pack.add_argument("--dir", required=True, help="证据目录")
+    p_pack.add_argument("--since", required=True, help="显式锚（本片 patch base 的 commit oid/ref）")
+    p_pack.add_argument("--decl-file", default=None,
+                        help="包内声明 head 的文件（缺省按 %s 探测）" % list(DEFAULT_DECL_FILES))
+    p_pack.add_argument("--decl-regex", default=DEFAULT_DECL_RE,
+                        help="从声明文件里抓 head oid 的正则（缺省 %r）" % DEFAULT_DECL_RE)
+    p_pack.add_argument("--repo", default=".", help="git 工作树（缺省 .）")
+    p_pack.add_argument("--allow-prefix", action="append", dest="allow_prefixes",
+                        help="允许在 since..声明 head 之间变更的路径前缀（可重复；缺省 %s）"
+                             % list(DEFAULT_ALLOW_PREFIXES))
+
     sub.add_parser("selftest", help="机判自检（含改坏必红）")
 
     args = ap.parse_args(argv)
     if args.cmd == "check":
-        rc, _ = check(args.repo, args.dir, args.head, args.allow_prefixes)
+        rc, probs = check(args.repo, args.dir, args.head, args.allow_prefixes)
+        _print_problems(probs, skip_prefixes=("HEAD_SCOPE_DRIFT:",))
+        return rc
+    if args.cmd == "check-pack":
+        rc, probs = check_pack(args.repo, args.dir, args.since, args.decl_file,
+                               args.decl_regex, args.allow_prefixes)
+        _print_problems(probs, skip_prefixes=("HEAD_SCOPE_DRIFT:",))
         return rc
     return cmd_selftest(args)
 

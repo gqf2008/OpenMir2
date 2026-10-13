@@ -1,0 +1,4 @@
+### check_evidence_head.py selftest（check 7 + check-pack 9 = 16）
+$ python -I rng-trace-scene/check_evidence_head.py selftest
+SELFTEST GREEN: check_evidence_head 16/16（check 7 + check-pack 9：含改坏必红 + PREREQ）
+rc=0
