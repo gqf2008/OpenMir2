@@ -2,8 +2,9 @@
 
 卡：`openmir2-m3-rng-trace-scene-groups`（worktree `m3bag`，branch `wip/m3bag-anchor-teeth`）。
 
-本 head 的 patch base = master `1cf88f6ad`；它落在**上一片 `f11129a84`（锚点覆盖面收口）之上** ⇒
-净差量与 review 面 = 上一片 18 路径 + 本片 11 路径（本片即上一片 + 3 条新牙 + 证据实路径订正）。
+本 head 的 patch base = **origin/master `10f0daa93`**（本 head 已 `git merge origin/master`，
+消除 base 落后 master 的「回退假差量」）；head = `2fcebc6cd`（merge commit）。
+净差量 vs master = **19 路径**（本片内容 = 上一片 `f11129a84` + 3 条新牙 + 证据实路径订正）。
 
 本片：**收口 reviewer-6 对 `f11129a84`（锚点覆盖面收口片）记的两条非阻塞 Minor（M-1 / M-2）**。
 
@@ -52,7 +53,7 @@ selftest` 作为一个子项被调用，其 GREEN 正则只认「分子==分母�
 | 无栈自检 | `run_rng_trace_pair.ps1 -SelfCheckNoStack` | **31/31 GREEN**（`anchors-freshness-selftest` 真接线，项数未变） | `05-selfcheck-nostack.txt` |
 | 离线全链 | 9 个 selftest | 全 rc=0 | `06-offline-regression.txt` |
 | 四门禁（`CARGO_TARGET_DIR=E:/tmp/m3bag-target`） | fmt / clippy `-D warnings` / workspace test / msgcodegen | rc=0 / rc=0 / **101 suites 1200 passed 0 failed 22 ignored** / 604 rc=0 | `07`–`10` |
-| 边界 | `git diff --name-status <base>..HEAD` | 见 `11-boundary.txt`；**零 `.rs`**、冻结面 `src/ sql/ MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins` 空 | `11-boundary.txt` |
+| 边界 | `git diff --name-only origin/master..HEAD`（base=10f0daa93） | **19 路径**，见 `11-boundary.txt`；**零 `.rs`**、冻结面 `src/ sql/ MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins` 空 | `11-boundary.txt` |
 | 证据 hash / EOL | `verify_sha256sums.py verify <本包+旧包> --check-extra` / `eolcheck` | GREEN / GREEN（仓库 LF/git-blob 口径） | `SHA256SUMS.txt` |
 
 ## 4. 纪律 / 边界
@@ -64,3 +65,15 @@ selftest` 作为一个子项被调用，其 GREEN 正则只认「分子==分母�
   计数；不存在任何判据放宽。
 - 卡级真机 DoD 仍阻塞：承接卡 `openmir2-m3-rng-scene-driver` 未开 + owner 独占窗口（与本卡两相 trace、
   ④ 真机 100 杀同批次串行）。本片**不得**据此收卡。
+
+## 5. 重交说明（supersede `0778a84e8`）
+
+本包随重交 head `2fcebc6cd` 重新生成了 05–11 的证据读数（工具/文档内容与 `0778a84e8` 逐字节相同，
+仅把 patch base 从 `1cf88f6ad` 前移到当时的 **origin/master `10f0daa93`**）。缘由：
+
+- `1cf88f6ad` 是交付时的 master；交付后协调车道把 `f11129a84`（本 head 的祖先）合入 master，
+  master 前进到 `10f0daa93`，并带进了别的车道的 hero-pet 夹具片。
+- 若不合并 master，`git diff origin/master..0778a84e8` 会把 hero-pet 的那 17 个文件显示为**假删除/
+  R100 改名**（共 36 路径）—— 即本项目反复点名的「base 落后 master ⇒ 带出回退假差量」坑。
+- 本 head 先 `git merge origin/master`（零冲突、零手工解冲突）后再交：`git diff origin/master..HEAD`
+  收敛为 **19 路径**、零回退。原始对照见 `11-boundary.txt`。
