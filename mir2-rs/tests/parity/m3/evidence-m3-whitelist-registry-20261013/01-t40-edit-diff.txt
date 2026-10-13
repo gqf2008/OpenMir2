@@ -1,0 +1,10 @@
+# command: git --no-pager diff -U1 -- mir2-rs/tests/parity/whitelist.md
+diff --git a/mir2-rs/tests/parity/whitelist.md b/mir2-rs/tests/parity/whitelist.md
+index a75f8ec3..b815f0f0 100644
+--- a/mir2-rs/tests/parity/whitelist.md
++++ b/mir2-rs/tests/parity/whitelist.md
+@@ -190,3 +190,3 @@ M0 金标准验收状态（2026-10-10）：① 逐字节回放 0 差异、② 
+ | T-39 | **N2：`AddWarGuild` 宣战反逻辑照搬**：`src/M2Server/Guild/GuildInfo.cs:1020` 的 `AddWarGuild`，其中 `:1039` 的 `if (warGuild.WarTime > 0)` 写成「**未**在战中才新建（`WarTick=0`）」。⇒ **未在战中 ⇒ 宣战不生效**（返回 default/`WarTick=0`）；**已在战中 ⇒ 追加重复条目**（向量四种情形：未战/首次宣战/重复宣战/到期）。 | **不是差异，是 oracle 缺陷 1:1 照搬**：Rust 侧照搬该反逻辑，**不许**修成「未战则建」；向量锁死四情形 + 改坏必红。落地卡 `openmir2-m3-guild-war`（⑧-5）。将来要修另开 `S-*`。 | owner 裁决 comment `a137cc900cfb`；**待独立 principal 复核本登记行** |
+-| T-40 | **N5：`CastleOfficial` 的 `Substring` 越界被吞 ⇒ 雇佣命令不可达**：`src/GameSrv/Npc/CastleOfficial.cs:229/235` 的 `sLabel.Substring(sHIREGUARDNOW.Length, sLabel.Length)`（起点越界）在 `UserSelect` 的 `catch` 里被吞 ⇒ `@hireguardnowN` / `@hirearchernowN` **不可达**。 | **不是差异，是 oracle 缺陷 1:1 照搬**：Rust 侧照搬为「雇佣命令**静默无效果**」（与 C# 一样不崩、不报错），**不许**在 Rust 里「越界检查后正常雇佣」。落地卡 `openmir2-m3-castle-door-repair` 相关的 CastleOfficial 面（⑧-8）；向量钉住不可达 + 改坏必红。将来要修另开 `S-*`。 | owner 裁决 comment `a137cc900cfb`；**待独立 principal 复核本登记行** |
++| T-40 | **N5：`CastleOfficial` 的 `Substring` 越界被吞 ⇒ 雇佣命令不可达**：`src/GameSrv/Npc/CastleOfficial.cs:229/235` 的 `sLabel.Substring(sHIREGUARDNOW.Length, sLabel.Length)`（**越界的是 length 实参**：`sHIREGUARDNOW.Length`=13 为 startIndex、`sLabel.Length` 为 length，`13 + sLabel.Length > sLabel.Length` 恒真 ⇒ 必抛；**不是** startIndex 本身越界）在 `UserSelect` 的 `catch` 里被吞 ⇒ `@hireguardnowN` / `@hirearchernowN` **不可达**。 | **不是差异，是 oracle 缺陷 1:1 照搬**：Rust 侧照搬为「雇佣命令**静默无效果**」（与 C# 一样不崩、不报错），**不许**在 Rust 里「越界检查后正常雇佣」。落地卡 `openmir2-m3-castle-door-repair` 相关的 CastleOfficial 面（⑧-8）；向量钉住不可达 + 改坏必红。将来要修另开 `S-*`。 | owner 裁决 comment `a137cc900cfb`；**待独立 principal 复核本登记行** |
+ 
