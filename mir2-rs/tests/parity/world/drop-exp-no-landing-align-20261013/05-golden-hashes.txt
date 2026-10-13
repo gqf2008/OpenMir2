@@ -1,0 +1,8 @@
+# 改前/改后 golden 行数与 sha256（LF 归一 = git blob 字节）
+
+== combat ==
+before(HEAD): lines=237 sha256=dd5bc8b33c975f8634f6b05d1916dfe2298e72031b9ac260969a22c18502cc5e
+after:        lines=189 sha256=ec5f8f1ff4d5d9d17a100df4aa01b6995e68e746e13bcb1e00f0a64a0ee3583e
+== session ==
+before(HEAD): lines=39 sha256=048eb5312e16daa83c445ec6432c1eb13020a9db69a9cc8c92db8486996437ca
+after:        lines=29 sha256=7cd5c2536ed96dad0d5da175b7b42cd82cfac362415c3727a5be48dc3a92dbff

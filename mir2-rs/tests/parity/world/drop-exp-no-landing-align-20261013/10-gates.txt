@@ -1,0 +1,8 @@
+# 四门禁（隔离 CARGO_TARGET_DIR=E:/tmp/m2svr-optionA-target，--offline）
+
+1. cargo fmt --all -- --check                      => rc=0
+2. cargo clippy --workspace --all-targets -- -D warnings => rc=0（0 warning）
+3. cargo test --workspace --offline --no-fail-fast => rc=0（92 suites · 837 passed · 0 failed · 19 ignored）
+4. cargo run -p msgcodegen -- --check              => rc=0（604 条与 C# 源一致）
+
+原始日志见 gates/（01-fmt / 02-clippy / 03-workspace-test / 04-msgcodegen，均为 .txt）

@@ -16,7 +16,8 @@
 //! ent <id> <map> <x> <y> <hp> <level> <exp> vis <目标id>:<flag> ...
 //! atk <攻击方> <目标> <攻击力> <结算后目标HP>
 //! death <id> <落地件数> <金币> <经验归属者|-1> <获得经验>
-//! floor <map> <x> <y> <obj_id>
+//! floor <map> <x> <y> <obj_id>   （oracle `AddItemToMap` 门 ⇒ 死亡掉落恒不落地，
+//!                                   落地面只得由显式注入产生）
 //! ```
 
 use std::path::{Path, PathBuf};

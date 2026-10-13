@@ -1,0 +1,3 @@
+    Checking mir2-world-bevy v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\world-bevy)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.95s
+clippy rc=0

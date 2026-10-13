@@ -1,0 +1,63 @@
+# WorldGolden 探针改动（改前 -> 改后）
+
+命令: git diff -- mir2-rs/tests/parity/csharp/WorldGolden/Program.cs
+
+diff --git a/mir2-rs/tests/parity/csharp/WorldGolden/Program.cs b/mir2-rs/tests/parity/csharp/WorldGolden/Program.cs
+index 9069bd6b..062527c0 100644
+--- a/mir2-rs/tests/parity/csharp/WorldGolden/Program.cs
++++ b/mir2-rs/tests/parity/csharp/WorldGolden/Program.cs
+@@ -6,7 +6,8 @@
+ //      → 入队本 tick 的**世界命令**（spawn/walk/kill/attack/leave，按场景顺序 FIFO）→ 处理队列
+ //      → 死亡结算（掉落落地 + `KillFunc` 发经验）→ 按插入顺序 AOI → 输出；
+ //   2. 怪物掉落在地图**生成时**预算（`WorldServer.MonGen.cs:440` 的时机）；
+-//   3. 死亡时用 `GetDropPosition` 扫描序把物品落到空格子（金币也占一格）。
++//   3. 死亡时走 oracle `DieDropItems` 的掉落结算：`GetDropPosition` 只做格子扫描，
++//      **不**把物品加进地图（`Envir.AddItemToMap` 首行 `MapItem.ItemId == 0` 门恒真 ⇒ 掉落恒不落地）。
+ //   4. `attack`：`GetBaseAttackPoewr()` → `_Attack` → 若 `target.Race > ActorRace.Play` 则
+ //      `target.SetLastHiter(攻击方)`（折叠 `RM_STRUCK` 消息，见 `StubsCombat.cs::_Attack` 注释）。
+ //
+@@ -336,7 +337,7 @@ internal static class Program
+                     a0.ExpHitter = null;
+                 }
+             }
+-            // 3) 死亡结算（掉落落地 + `KillFunc` 发经验）
++            // 3) 死亡结算（掉落**恒不落地** + `KillFunc` 发经验）
+             foreach (int id in order.ToList())
+             {
+                 if (!actors.TryGetValue(id, out ActorStub a) || a.WAbil.HP != 0 || a.DeathSettled)
+@@ -346,22 +347,27 @@ internal static class Program
+                 a.Death = true;
+                 a.DeathSettled = true;
+                 int mapId = envirOf[id];
++                // oracle 掉落结算（`DieDropItems`，`BaseObject.cs:2450-2464`）：`DropItemDown`
++                // （`:522-580`）/`DropGoldDown`（`:730-768`）先 `GetDropPosition`（`:459-524`，纯格子
++                // 扫描、不消费 RNG），再 `Envir.AddItemToMap`（`Envirnoment.cs:88-130`）——而后者
++                // 的**首行**是 `if (mapItem.ItemId == 0) return false;`，且全仓**无** `MapItem.ItemId`
++                // 赋值点（`MapItem.cs:41` 被注释；`rg 'ItemId\s*=' src` 其余 4 处全是 `== 0` 守卫）
++                // ⇒ **死亡掉落（物品 + 金币）恒不落地**，成功支的 `SendRefMsg(RM_ITEMSHOW,…)`
++                // （`:570`/`:752`）与客户端 `SM_ITEMSHOW(610)` 恒不执行（同 T-19/T-25）。
++                // 旧版探针用桩 `AddMapObject` 绕过该门 ⇒ 编码的是「探针意图」而非冻结 `src/` 行为；
++                // 现按 oracle 建模：仍走格子扫描（保持调用序/无副作用），但**不加进地图**、`placed` 恒 0。
+                 int placed = 0;
+                 if (a.ItemList != null)
+                 {
+                     foreach (ParityGolden.UserItem item in a.ItemList)
+                     {
+-                        if (ActorStub.GetDropPosition(envirs[mapId], a.CurrX, a.CurrY, 3, out int px, out int py))
+-                        {
+-                            envirs[mapId].AddMapObject(px, py, CellType.Item, item.Index, a);
+-                            placed++;
+-                        }
++                        // 逐件走扫描（`item` 只用于计数，不落地）。
++                        ActorStub.GetDropPosition(envirs[mapId], a.CurrX, a.CurrY, 3, out int _, out int _);
+                     }
+                 }
+-                if (a.Gold > 0 && ActorStub.GetDropPosition(envirs[mapId], a.CurrX, a.CurrY, 3, out int gx, out int gy))
++                if (a.Gold > 0)
+                 {
+-                    envirs[mapId].AddMapObject(gx, gy, CellType.Item, id, a);
+-                    placed++;
++                    ActorStub.GetDropPosition(envirs[mapId], a.CurrX, a.CurrY, 3, out _, out _);
+                 }
+                 // `BaseObject.cs:2429 KillFunc`：经验发给 `ExpHitter`（**第一个**命中者），不是 `LastHiter`；
+                 // 子集只做「归属者是玩家本人」这一支（宝宝击杀走 `ExpHitter.Master`，不在本骨架）。

@@ -1,0 +1,36 @@
+# oracle 锚点（冻结 src/，只读；命令原文 + 输出）
+
+$ rg 'ItemId\s*=' src
+src\M2Server\Player\PlayObject.cs:3155:                                        if (mapItem.ItemId == 0)
+src\M2Server\Maps\Envirnoment.cs:90:            if (mapItem.ItemId == 0)
+src\M2Server\Maps\Envirnoment.cs:120:                                    if (cellItem.ItemId == 0)
+src\Modules\SystemModule\Data\MapItem.cs:41:            // this.ItemId = M2Share.ActorMgr.GetNextIdentity();
+src\Modules\RobotSystem\Services\RobotPlayer.Base.cs:547:                                                if (mapItem.ItemId == 0)
+
+$ sed -n '86,96p' src/M2Server/Maps/Envirnoment.cs
+        }
+
+        public bool AddItemToMap(int nX, int nY, MapItem mapItem)
+        {
+            if (mapItem.ItemId == 0)
+            {
+                return false;
+            }
+            if (!CellMatch(nX, nY))
+            {
+                return false;
+
+$ sed -n '36,45p' src/Modules/SystemModule/Data/MapItem.cs
+        public int CanPickUpTick;
+        public UserItem UserItem;
+
+        public MapItem()
+        {
+            // this.ItemId = M2Share.ActorMgr.GetNextIdentity();
+        }
+    }
+}
+# Rust 侧同根：bins/game-svr/src/ground.rs 的 item_id==0 守卫（早已按 T-19 复刻）
+264:        if item.item_id == 0 {
+609:        item_id: 0,
+997:    /// 普通丢弃恒 `SM_DROPITEM_FAIL`、物品留在背包。改坏 `put_item` 的 `item_id == 0` 守卫，

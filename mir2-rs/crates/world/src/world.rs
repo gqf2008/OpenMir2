@@ -18,11 +18,11 @@ use mir2_world_bevy::{advance_clock_system, TickClock, TickOwnerThread, TickRunn
 
 use crate::aoi::{search_view_range, search_view_range_death};
 use crate::combat::{
-    attack_dir, award_kill_exp, drop_position, generate_drops, swing_power, AttackOutcome,
-    AttackPowerMode, CombatConfig,
+    attack_dir, award_kill_exp, generate_drops, swing_power, AttackOutcome, AttackPowerMode,
+    CombatConfig,
 };
 use crate::entity::{Entity, EntityStore};
-use crate::map::{CellType, FloorItemKind, FloorItemMeta, MapGrid};
+use crate::map::{CellType, FloorItemKind, MapGrid};
 use crate::session::SessionRegistry;
 
 /// C# `ProcessHumans` 的节拍（毫秒）。
@@ -720,54 +720,26 @@ impl World {
             let Some(e) = self.entities.get(id) else {
                 continue;
             };
-            let (x, y, map_id, gold, items, mon_exp, exp_hitter) = (
-                e.x,
-                e.y,
-                e.map_id,
-                e.gold,
-                e.drop_items.clone(),
-                e.mon_exp,
-                e.exp_hitter,
-            );
+            let (map_id, gold, mon_exp, exp_hitter) = (e.map_id, e.gold, e.mon_exp, e.exp_hitter);
             // 死亡标记（C# `Die()` 的 `Death = true`）
             if let Some(e) = self.entities.get_mut(id) {
                 e.death = true;
                 e.death_settled = true;
             }
-            // 掉落落地：逐件找空格子（`GetDropPosition` 的扫描顺序）。
-            // 归属者（`mapItem.OfBaseObject`）= oracle `RM_DIEDROPITEM` 的 `wParam`：
-            // `ExpHitter.Master?.ActorId ?? ExpHitter.ActorId`（`BaseObject.cs:2437/2442`）——
-            // 由 world 在落地时记账，不留给接线层去派生（owner §25.1）。
-            let drop_owner = exp_hitter
-                .and_then(|h| self.entities.get(h).map(|k| k.master.unwrap_or(h)))
-                .unwrap_or(0);
-            let mut placed = 0usize;
-            for item in &items {
-                let meta = FloorItemMeta {
-                    kind: FloorItemKind::Item,
-                    index: item.index,
-                    count: 1,
-                    item_id: item.make_index,
-                    of_base_object: drop_owner,
-                };
-                if self.place_floor_item(map_id, x, y, item.index as i32, meta) {
-                    placed += 1;
-                }
-            }
-            // 金币落地（`DropGoldDown`：`GetDropPosition(CurrX, CurrY, 3, ...)`）。`item_id` 取落主
-            // `ActorId`（各金币堆落不同格 ⇒ 同格删除键仍唯一；金币无 `UserItem.MakeIndex`）。
-            if gold > 0 {
-                let meta = FloorItemMeta {
-                    kind: FloorItemKind::Gold,
-                    index: 0,
-                    count: gold,
-                    item_id: id,
-                    of_base_object: drop_owner,
-                };
-                if self.place_floor_item(map_id, x, y, id, meta) {
-                    placed += 1;
-                }
-            }
+            // 掉落结算（oracle `DieDropItems`，`BaseObject.cs:2450-2464`）：
+            // `ScatterBagItems`（`BaseObject.Base.cs:501-550`，**倒序**遍历 `ItemList`）
+            // + `ScatterGolds`（`:1711`）逐件调 `DropItemDown`（`BaseObject.cs:522-580`）/
+            // `DropGoldDown`（`:730-768`）：先 `GetDropPosition`（`:459-524`，**纯格子扫描、不消费
+            // RNG**），再 `Envir.AddItemToMap`（`Envirnoment.cs:88-130`）——而后者的**首行**是
+            // `if (mapItem.ItemId == 0) return false;`。
+            // oracle 全仓**无** `MapItem.ItemId` 赋值点（`MapItem.cs:41` 被注释；`rg 'ItemId\s*=' src`
+            // 其余 4 处全是 `ItemId == 0` 守卫）⇒ **死亡掉落（物品 + 金币）恒不落地**，
+            // `DropItemDown`/`DropGoldDown` 成功支的 `SendRefMsg(RM_ITEMSHOW,…)`（`:570`/`:752`）
+            // 与客户端 `SM_ITEMSHOW(610)` **恒不执行**（与 M3① 的 T-19/T-25 同根；owner 已在
+            // T-25 裁决「无地面物」为唯一可达形态）。
+            // ⇒ Rust 照抄：**不再**把 `e.drop_items`/`Gold` 写进地图（`placed` 恒 0）。
+            //    掉落**生成**（`MonGetRandomItems` 的预算）不受影响，仍是本卡判据要对比的「掉落列表」。
+            let placed = 0usize;
             // 经验：`KillFunc`（`BaseObject.cs:2429`）认的是 `ExpHitter`，不是 `LastHiter`
             // —— `ExpHitter` 是**第一个**命中者（`SetLastHiter` 里 `if (ExpHitter == null)`）。
             // "命中者死亡/隐身后不再认领"由**每 tick 的 `expire_hitters()`** 按 oracle 的结构清理
@@ -814,33 +786,6 @@ impl World {
             }
             record.deaths.push((id, placed, gold, exp_hitter, gained));
         }
-    }
-
-    /// 把一个地面物品放到 (ox, oy) 附近第一个空格子。
-    fn place_floor_item(
-        &mut self,
-        map_id: usize,
-        ox: i32,
-        oy: i32,
-        obj_id: i32,
-        meta: FloorItemMeta,
-    ) -> bool {
-        let Some(map) = self.maps.get_mut(map_id) else {
-            return false;
-        };
-        let pos = drop_position(
-            |x, y| {
-                let (cell, ok) = map.get_cell_info(x, y);
-                ok && cell.count() == 0
-            },
-            ox,
-            oy,
-            3,
-        );
-        let Some((px, py)) = pos else {
-            return false;
-        };
-        map.add_floor_item(px, py, obj_id, meta, self.clock_ms)
     }
 
     /// 一次攻击结算（`_Attack`）。
@@ -1285,7 +1230,8 @@ mod tests {
         assert!(a.damage > 0, "护甲 0 时伤害应大于 0");
     }
 
-    /// 死亡 → 掉落落地 + 击杀者得经验；再 tick 不重复结算。
+    /// 死亡 → 掉落**生成** + 击杀者得经验；再 tick 不重复结算。
+    /// oracle 语义下掉落恒不落地（`AddItemToMap` 的 `MapItem.ItemId == 0` 门，同 T-25）。
     #[test]
     fn monster_death_drops_items_and_awards_exp() {
         let mut w = World::new(32, 32);
@@ -1323,7 +1269,7 @@ mod tests {
         let (dead_id, placed, gold, killer, gained) = rec.deaths[0];
         assert_eq!(dead_id, 2);
         assert!(gold > 0, "金币掉落应大于 0");
-        assert!(placed > 0, "掉落物应落到地上");
+        assert_eq!(placed, 0, "oracle 语义 ⇒ 掉落恒不落地（T-19/T-25 同根）");
         assert_eq!(killer, Some(p));
         assert!(gained > 0, "击杀者应获得经验");
         assert_eq!(w.entities.get(p).unwrap().exp, exp_before + gained);
@@ -1440,11 +1386,18 @@ mod tests {
         assert_eq!(level, 255, "MAXUPLEVEL 门 ⇒ 等级不变");
     }
 
-    /// 只读分片（owner §25.1 裁决 (A)）：掉落落地后 `floor_items_view_sorted` 的
-    /// `(kind, index, count, item_id, of_base_object)` 必须与 world 状态/oracle 语义一致。
-    /// **红检**：改坏任一映射（kind/index/count/归属/item_id）⇒ 本用例必红。
+    /// **oracle 忠实语义（M3④-D 掉落侧）**：死亡掉落（物品 + 金币）**恒不落地**。
+    ///
+    /// oracle `DieDropItems`（`BaseObject.cs:2450-2464`）逐件走 `DropItemDown`/`DropGoldDown`，
+    /// 而 `Envir.AddItemToMap` 的**首行**是 `if (mapItem.ItemId == 0) return false;`
+    /// （`Envirnoment.cs:88-92`）——oracle 全仓无 `MapItem.ItemId` 赋值点（`MapItem.cs:41` 被注释）
+    /// ⇒ 掉落物加不进地图、`RM_ITEMSHOW`/`SM_ITEMSHOW(610)` 恒不发（同 M3① T-19/T-25 根因）。
+    ///
+    /// 本用例同时钉住「掉落**生成**不受影响」（金币预算仍 > 0）与「只读分片机制仍可工作」
+    /// （显式落格后视图与格子状态逐项一致）。
+    /// **红检**：把 `settle_deaths` 改回「落地」（重新写 `add_floor_item`）⇒ 本用例必红。
     #[test]
-    fn monster_death_floor_item_view_matches_world_state() {
+    fn monster_death_drops_do_not_land_matches_oracle_add_item_to_map_gate() {
         let mut w = World::new(32, 32);
         // 1-based 查表：下标 0 → `index = 1`（与 `combat.json` 的 `金创药(小量)` 同口径）
         w.item_catalog = vec![StdItem {
@@ -1486,11 +1439,49 @@ mod tests {
         });
         w.tick(); // 生成（掉落预算在这里消耗 RNG）
         w.attack_cmd(p, 2);
-        let rec = w.tick(); // 攻击 → 死亡结算 + 掉落落地
+        let rec = w.tick(); // 攻击 → 死亡结算
         assert_eq!(rec.deaths.len(), 1, "应有 1 次死亡结算: {rec:?}");
-        let rec_gold = rec.deaths[0].2;
-        assert!(rec_gold > 0, "本用例需金币掉落: {rec:?}");
+        // 掉落**生成**仍在（金币预算 > 0），但 **oracle 语义下恒不落地**（`placed` 恒 0）。
+        assert!(rec.deaths[0].2 > 0, "本用例需金币掉落预算: {rec:?}");
+        assert_eq!(rec.deaths[0].1, 0, "oracle `AddItemToMap` 门 ⇒ 落地数恒 0");
+        assert!(
+            w.floor_items_sorted().is_empty(),
+            "oracle 语义 ⇒ 地面物表恒空: {:?}",
+            w.floor_items_sorted()
+        );
+        assert!(
+            w.floor_items_view_sorted().is_empty(),
+            "oracle 语义 ⇒ 地面物视图恒空"
+        );
 
+        // 只读分片机制本身仍须正确：显式落格（非 0 唯一键）后视图与格子状态逐项一致。
+        use crate::map::FloorItemMeta;
+        assert!(w.maps[0].add_floor_item(
+            12,
+            11,
+            1,
+            FloorItemMeta {
+                kind: FloorItemKind::Item,
+                index: 1,
+                count: 1,
+                item_id: 77,
+                of_base_object: 5,
+            },
+            0,
+        ));
+        assert!(w.maps[0].add_floor_item(
+            13,
+            11,
+            2,
+            FloorItemMeta {
+                kind: FloorItemKind::Gold,
+                index: 0,
+                count: 300,
+                item_id: 2,
+                of_base_object: 5,
+            },
+            0,
+        ));
         let view = w.floor_items_view_sorted();
         // 与既有对拍口径一致：`floor_items_sorted` 的 `(map,x,y,obj_id)` 必须与视图逐项相同
         let legacy: Vec<(usize, i32, i32, i32)> = view
@@ -1503,25 +1494,22 @@ mod tests {
             "视图的 obj_id 口径必须与 floor_items_sorted 相同"
         );
 
-        // 金币：index=0、count=预算金币、item_id=落主 ActorId、归属=击杀者（无 Master）
         let gold = view
             .iter()
             .find(|v| v.kind == FloorItemKind::Gold)
             .expect("应有金币地面物");
         assert_eq!(
-            (gold.index, gold.count, gold.of_base_object),
-            (0, rec_gold, p)
+            (gold.index, gold.count, gold.item_id, gold.of_base_object),
+            (0, 300, 2, 5)
         );
-        assert_eq!(gold.item_id, 2, "金币 item_id = 落主 ActorId");
-
-        // 普通物品：index=StdItem 序号、count=1、item_id=UserItem.MakeIndex(>0)、归属=击杀者
         let item = view
             .iter()
             .find(|v| v.kind == FloorItemKind::Item)
             .expect("应有普通物品地面物");
-        assert_eq!((item.index, item.count, item.of_base_object), (1, 1, p));
-        assert!(item.item_id > 0, "物品 item_id = MakeIndex 应为正");
-        assert_ne!(item.item_id, gold.item_id, "物品/金币的 item_id 不应相等");
+        assert_eq!(
+            (item.index, item.count, item.item_id, item.of_base_object),
+            (1, 1, 77, 5)
+        );
         // 可拾起时刻 = 落地时的虚拟时钟（非 None/占位 0 的构造口径）
         assert!(view.iter().all(|v| v.can_pick_up_tick >= 0));
     }

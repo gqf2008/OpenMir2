@@ -1,0 +1,61 @@
+# M3④-D 掉落侧「对齐冻结 src/ 不落地」片 —— 全部可复跑命令
+# 卡：openmir2-m3-drop-exp-wiring（issue 58825bcc）
+# worktree .claude/worktrees/m2-svr / 分支 drop-exp-host
+# 隔离编译目标：CARGO_TARGET_DIR=E:/tmp/m2svr-optionA-target
+
+# 0) 起手：merge master（base = origin/master 083dd0e3）
+git fetch origin && git merge origin/master --no-edit
+
+# 1) 套用盘点的 optionA 补丁（crates/world/src/world.rs + bins/game-svr/src/main.rs）
+git apply mir2-rs/tests/parity/world/drop-exp-drop-side-20261013/optionA-no-landing-align.patch
+
+# 2) 修 C# golden 探针（走 oracle 的 AddItemToMap 门）+ 重生成 golden
+cd mir2-rs
+dotnet build tests/parity/csharp/WorldGolden/WorldGolden.csproj -c Release --no-incremental
+for s in basic session combat combat_exp_nofix combat_exp_hitter_ghost; do
+  dotnet run --project tests/parity/csharp/WorldGolden -c Release --no-build -- "$s" "E:/tmp/m2svr-optionA/regen/$s.txt"
+done
+# 逐字节比对：仅 combat/session 变化（授权重生成 2 份）
+for s in basic session combat combat_exp_nofix combat_exp_hitter_ghost; do
+  cmp -s "E:/tmp/m2svr-optionA/regen/$s.txt" "tests/parity/world/golden/$s.txt" && echo "IDENTICAL $s" || echo "DIFFER $s"
+done
+cp E:/tmp/m2svr-optionA/regen/combat.txt  tests/parity/world/golden/combat.txt
+cp E:/tmp/m2svr-optionA/regen/session.txt tests/parity/world/golden/session.txt
+
+# 3) 定向对拍（绿）
+export CARGO_TARGET_DIR=E:/tmp/m2svr-optionA-target
+cargo test -p mir2-world --lib --offline
+cargo test -p mir2-parity-tests --test world_combat_parity --test world_session_parity --offline
+cargo test -p mir2-world-bevy --test bevy_drop_parity --offline
+
+# 4) 改坏必红 #1：把 settle_deaths 改回落地（用 d2155f9c 的 world.rs 临时替换）
+cp crates/world/src/world.rs E:/tmp/m2svr-optionA/world.rs.optionA.bak
+git show d2155f9c:mir2-rs/crates/world/src/world.rs > crates/world/src/world.rs
+cargo test -p mir2-parity-tests --test world_combat_parity --offline   # 期望 RED（death 2 1 vs 2 0）
+cargo test -p mir2-parity-tests --test world_session_parity --offline   # 期望 RED（death 2 2 vs 2 0）
+cp E:/tmp/m2svr-optionA/world.rs.optionA.bak crates/world/src/world.rs   # 还原
+
+# 5) 改坏必红 #2：探针改回桩 AddMapObject（绕过门）⇒ 重产 golden 有 floor 行 ⇒ 对拍 RED
+cp tests/parity/csharp/WorldGolden/Program.cs E:/tmp/m2svr-optionA/Program.cs.optionA.bak
+git show HEAD:mir2-rs/tests/parity/csharp/WorldGolden/Program.cs > tests/parity/csharp/WorldGolden/Program.cs
+dotnet build tests/parity/csharp/WorldGolden/WorldGolden.csproj -c Release --no-incremental
+dotnet run --project tests/parity/csharp/WorldGolden -c Release --no-build -- combat E:/tmp/m2svr-optionA/combat.stubprobe.txt
+# 用"桩"golden 覆盖仓库 golden ⇒ world_combat_parity 必红
+cp E:/tmp/m2svr-optionA/combat.stubprobe.txt tests/parity/world/golden/combat.txt
+cargo test -p mir2-parity-tests --test world_combat_parity combat_attacks_and_exp_match_csharp --offline
+# 还原
+cp E:/tmp/m2svr-optionA/Program.cs.optionA.bak tests/parity/csharp/WorldGolden/Program.cs
+cp E:/tmp/m2svr-optionA/combat.txt.optionA.golden tests/parity/world/golden/combat.txt
+dotnet build tests/parity/csharp/WorldGolden/WorldGolden.csproj -c Release --no-incremental
+
+# 6) 四门禁（隔离 target，--offline）
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --offline -- -D warnings
+cargo test --workspace --offline --no-fail-fast
+cargo run -p msgcodegen --offline -- --check
+
+# 7) 证据清单复核
+cd ..
+python -I tools/evidence-hash/verify_sha256sums.py write           mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra   mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck        mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013
