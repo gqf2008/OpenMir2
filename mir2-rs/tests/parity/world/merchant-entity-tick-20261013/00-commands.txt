@@ -1,0 +1,30 @@
+# M3⑤-实现 2 第①片（世界内商人实体 + FindMap 门挂图 + rename_rand）—— 复现命令
+# 工作目录：<worktree>/mir2-rs ；CARGO_TARGET_DIR=E:/tmp/m2svr-merchant-target（隔离）
+# base = master 171741498fadc1c0667acdbaf32241fb551e5d7c ；head = merchant-entity-host
+
+# 0) 单元用例（合成夹具：FindMap 门正例 / 挂图 / 缺文件）
+cargo test -p mir2-world --lib merchant
+cargo test -p game-svr   --lib merchant
+
+# 1) 真机部署件向量（E:/MirServer/M2GameSvr；131 条 ⇒ FindMap 门实读）
+#    （本片实测：records=131 kept=131 dropped=[]；owner 26efc51d 的“丢 4 条⇒127”前提不成立，
+#      证据见 02-real-deployment-vector.txt）
+cargo test -p game-svr --lib merchant::tests::real_deployment_find_map_gate -- --ignored --nocapture
+
+# 2) 改坏必红（去掉 FindMap 门 ⇒ 合成用例必红；原始件见 05-redcheck-findmap-gate.txt）
+#    mutate: merchant.rs 的 `None => dropped_unknown_map.push(..)` → `None => spawns.push(to_spawn(record, 0))`
+cargo test -p game-svr --lib merchant::tests::find_map_gate_drops_unknown_map
+
+# 3) 四门禁
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --offline -- -D warnings
+cargo test --workspace --no-fail-fast --offline
+cargo run -p msgcodegen --offline -- --check
+
+# 4) 边界（oracle 冻结面零改动）
+git diff --name-only master..HEAD -- src sql MirClient
+
+# 5) 证据 hash（仓库 LF/git-blob 口径）
+python -I tools/evidence-hash/verify_sha256sums.py write         mir2-rs/tests/parity/world/merchant-entity-tick-20261013
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/world/merchant-entity-tick-20261013
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck      mir2-rs/tests/parity/world/merchant-entity-tick-20261013

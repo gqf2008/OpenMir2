@@ -1,0 +1,12 @@
+== 边界：git diff --name-only master..HEAD -- src sql MirClient（应为空）==
+(end; 空 = oracle 冻结面 src/ sql/ MirClient 零改动)
+
+== 本片改动文件名（相对 master）==
+ mir2-rs/bins/game-svr/src/lib.rs      |   1 +
+ mir2-rs/bins/game-svr/src/main.rs     |  35 +++-
+ mir2-rs/bins/game-svr/src/merchant.rs | 277 ++++++++++++++++++++++++++
+ mir2-rs/crates/world/src/entity.rs    |   5 +
+ mir2-rs/crates/world/src/lib.rs       |   5 +
+ mir2-rs/crates/world/src/merchant.rs  | 365 ++++++++++++++++++++++++++++++++++
+ mir2-rs/crates/world/src/monai.rs     |   4 +-
+ 7 files changed, 689 insertions(+), 3 deletions(-)

@@ -1,0 +1,33 @@
+== 真机部署件：FindMap 门实读（E:/MirServer/M2GameSvr）==
+$ cargo test -p game-svr --lib merchant::tests::real_deployment_find_map_gate -- --ignored --nocapture
+test merchant::tests::real_deployment_find_map_gate ... MERCHANT_VECTOR records=131 kept=131 dropped=[]
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 112 filtered out; finished in 1.56s
+
+== 为什么 131 全保留：MapInfo.txt 的 3 个逻辑名段 + Map/*.map 的 3 个物理文件都存在 ==
+-- grep -a -n -i 'ZM6|jiaren' E:/MirServer/M2GameSvr/Envir/MapInfo.txt --
+1:[jiaren|0150 ����������] KILLFUNC(1) SAFE QUIZ
+21:[ZM6|D5071 �л����Ե�ͼ] Fight5 NORECONNECT(3) NORANDOMMOVE DAY
+-- grep -a -n '\[DB|' MapInfo.txt --
+10:[DB|DM011 ������ͼ] NORECONNECT(0)
+-- ls Map/{D5071,DM011,0150}.map --
+-rw-r--r-- 1 gxh 197121  7504 Oct  9 01:32 E:/MirServer/M2GameSvr/Map/0150.map
+-rw-r--r-- 1 gxh 197121 30052 Oct  9 01:32 E:/MirServer/M2GameSvr/Map/D5071.map
+-rw-r--r-- 1 gxh 197121  1456 Oct  9 01:32 E:/MirServer/M2GameSvr/Map/DM011.map
+-- oracle: MapManager.cs:146 FindMap 按逻辑名查 _mapList --
+146:        public IEnvirnoment FindMap(string sMapName)
+147-        {
+148-            return _mapList.TryGetValue(sMapName, out IEnvirnoment map) ? map : null;
+149-        }
+-- oracle: MapManager.cs:88-99 只有 LoadMapData 成功才落 _mapList[逻辑名] --
+                MapDesc = sMapDesc,
+                ServerIndex = nServerNumber,
+                Flag = mapFlag,
+            };
+            if (M2Share.MiniMapList.TryGetValue(envirnoment.MapName, out short minMap))
+            {
+                envirnoment.MinMap = minMap;
+            }
+            if (envirnoment.LoadMapData(Path.Combine(M2Share.BasePath, SystemShare.Config.MapDir, sMapFileName + ".map")))
+            {
+                if (!_mapList.ContainsKey(sMapName))
+                {

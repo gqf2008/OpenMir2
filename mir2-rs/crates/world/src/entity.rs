@@ -327,6 +327,10 @@ pub struct Entity {
     pub ctor_draws: MonsterCtorDraws,
     /// 怪物/动物 AI 状态（`AnimalObject`/`MonsterObject` 字段子集；玩家不用，保持默认）。
     pub ai: AnimalState,
+    /// 商人状态（`Merchant` 字段子集，M3⑤-实现 2 第①片）。`Some(_)` ⇒ 本实体是交易商人：
+    /// [`crate::monai::monster_ai_tick`] 显式跳过它（race 50 与 `ActorRace.Animal` 同值，
+    /// 靠 race 会误跑 `monster_run`）。
+    pub merchant: Option<crate::merchant::MerchantState>,
 }
 
 impl Entity {
@@ -389,6 +393,7 @@ impl Entity {
             death_settled: false,
             ctor_draws: MonsterCtorDraws::default(),
             ai: AnimalState::default(),
+            merchant: None,
         }
     }
 
