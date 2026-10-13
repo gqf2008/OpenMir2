@@ -1,0 +1,4 @@
+old doc + new tool (新闭世界机判 ⇒ 必红点名):
+  RED ANCHOR_DRIFT R-6 折叠映射定义（文档用 :line 指向 FOLD_RULES；本片真身：同片 +5 行使它从 :52 漂到 :57）：文档写 mir2-rs/tests/parity/m3/rng-trace-probe/rng_consumer_groups.py:52，但 /^FOLD_RULES = / 的首个匹配在 :57
+RED: check_anchors 1 项 RED
+rc=1

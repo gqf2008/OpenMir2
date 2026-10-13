@@ -512,8 +512,9 @@ if ($SelfCheckNoStack) {
 
     # ㉙ 承接卡规格锚点保鲜（2026-10-13 窗口前置审计）：`DRIVER-CONTRACT.md` 的 `path:line`
     #    必须仍指向当前源码的符号（master 一直在动 ⇒ 行号会静默漂移：实测宿主 AI 调用点
-    #    从 `main.rs:5229` 漂到 `:5440`）。`check_anchors.py selftest` 自带 3 条改坏必红
-    #    （行号漂移 / 锚点缺失 / 锚点歧义），这里把它接进**标准无栈回归**。
+    #    从 `main.rs:5229` 漂到 `:5440`）。`check_anchors.py selftest` 自带 5 条改坏必红
+    #    （行号漂移 / 锚点缺失 / 锚点歧义 / 未登记引用（闭世界 UNGUARDED_ANCHOR）/
+    #    R-6 折叠定义行号回退），这里把它接进**标准无栈回归**。
     $ancOut = ''
     $ancRaw = & python -I (Join-Path $Here 'check_anchors.py') selftest 2>&1
     $ancOut = ($ancRaw | Out-String)

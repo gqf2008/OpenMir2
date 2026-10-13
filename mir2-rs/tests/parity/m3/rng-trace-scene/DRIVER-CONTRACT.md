@@ -91,7 +91,7 @@ powershell -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 
   `FOLDED_COUNT_DIFF` / `MISSING_EXPECTED_GROUPS` / `MIN_GROUP_DRAWS` / `ROW_COVERAGE_DRIFT` 全无。
 - **改坏必红**（承接卡须自带）：描述件 monster 集合漂移 / 流水头种子不符 / 删一组 ⇒ 门或 `groupdiff` 必红。
 - R-6 折叠口径（owner 2026-10-13 裁决）：`rng_consumer_groups.FOLD_RULES = {"construct": "spawn"}`
-  （定义 = `rng-trace-probe/rng_consumer_groups.py:52`；说明/站点 = `rng-trace-probe/consumer_groups.tsv:35`（折叠理由）、`:53`（Rust `spawn` 行））；
+  （定义 = `rng-trace-probe/rng_consumer_groups.py:57`；说明/站点 = `rng-trace-probe/consumer_groups.tsv:35`（折叠理由）、`:53`（Rust `spawn` 行））；
   折叠后**计数与相对次序必须相等**。
 - **表侧补登记（2026-10-13 窗口前置审计）**：宿主 `bins/game-svr/src/mongen.rs`
   （`create_monster_oracle` / `draw_monster_construct`）也抽同一批构造期随机数 ⇒ 同归 `spawn`

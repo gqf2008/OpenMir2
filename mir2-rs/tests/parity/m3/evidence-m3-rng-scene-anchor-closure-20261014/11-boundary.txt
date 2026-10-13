@@ -1,0 +1,29 @@
+### 本片净差量：git diff --name-only origin/master..HEAD（base = d4673b16c；共 17 路径；前三片已合入 master）
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-closure-20261014/01-before-old-tool-missed.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-closure-20261014/02-before-new-tool-red.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-closure-20261014/03-after-green.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-closure-20261014/04-check-anchors-selftest.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-closure-20261014/05-selfcheck-nostack.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-closure-20261014/06-offline-regression.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-closure-20261014/07-gates-fmt.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-closure-20261014/08-gates-clippy.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-closure-20261014/09-gates-workspace-test.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-closure-20261014/10-gates-msgcodegen.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-closure-20261014/11-boundary.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-closure-20261014/README.md
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-closure-20261014/SHA256SUMS.txt
+mir2-rs/tests/parity/m3/rng-trace-scene/DRIVER-CONTRACT.md
+mir2-rs/tests/parity/m3/rng-trace-scene/README.md
+mir2-rs/tests/parity/m3/rng-trace-scene/check_anchors.py
+mir2-rs/tests/parity/m3/rng-trace-scene/run_rng_trace_pair.ps1
+
+--- 冻结面检查（应为空）
+(空 = 冻结面零改动)
+
+--- *.rs 计数（应为 0）
+0
+
+--- 工作树 status（未跟踪 sessions/csharp-20261012-23xx 为他卡遗留，未并入）
+ M mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-closure-20261014/06-offline-regression.txt
+ M mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-closure-20261014/11-boundary.txt
+ M mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-closure-20261014/README.md

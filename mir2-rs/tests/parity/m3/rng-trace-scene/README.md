@@ -276,13 +276,21 @@ python -I rng-trace-scene/check_evidence_counts.py selftest               # 7/7 
 源码**里的**首个**匹配行」钉成 fail-closed 机判：
 
 ```sh
-python -I rng-trace-scene/check_anchors.py check      # GREEN：5/5 锚点保鲜
-python -I rng-trace-scene/check_anchors.py selftest   # 4/4 GREEN（含 3 条改坏必红）
+python -I rng-trace-scene/check_anchors.py check      # GREEN：7/7 锚点保鲜
+python -I rng-trace-scene/check_anchors.py selftest   # 6/6 GREEN（含 5 条改坏必红）
 ```
 
 - 锚点缺失 / **重复**（歧义）/ 文件缺失 / 符号缺失 / 行号漂移 ⇒ rc=1 **逐个点名**（漂移还报出正确的
   实际行号，即要改成的值）；
-- 改坏必红覆盖：行号改回历史漂移值 `/` 删锚点 `/` 同 literal 写两处行号（歧义）；
+- 改坏必红覆盖：行号改回历史漂移值 `/` 删锚点 `/` 同 literal 写两处行号（歧义）/
+  **未登记的新引用**（闭世界 `UNGUARDED_ANCHOR`）`/` R-6 折叠定义行号回退（本片真身）；
+- **闭世界（本片新增的牙）**：旧锚点表只硬编码 5 条 ⇒ 文档里**其它** `path:line` 引用可静默漂移。
+  本片实测到同族真身缺陷：上一片（`06f5faf7b`）在 `rng_consumer_groups.py` 顶部插入 5 行
+  （`_HERE`/`REPO_ROOT`），使 `FOLD_RULES` 从 `:52` 漂到 `:57`，而 `DRIVER-CONTRACT.md:94` 仍写
+  `:52`、旧锚点表不含它 ⇒ 旧工具仍报 `5/5 GREEN`（**漏报**）。现在文档里**每个**
+  `<path>.<ext>:<line>` 都必须有锚点覆盖，否则 `UNGUARDED_ANCHOR` 必红；同步把
+  `rng_consumer_groups.py` 的 `FOLD_RULES` 定义（rx `^FOLD_RULES = `）与
+  `consumer_groups.tsv:35`（折叠理由行）纳入锚点表，`:52` → `:57` 已订正。
 - 已接入 `run_rng_trace_pair.ps1 -SelfCheckNoStack`（`anchors-freshness-selftest`）⇒ **自检项数
   由 29 增至 30**（本片之前的报告里的 `29/29` 是片时读数，不受影响）。
 
@@ -315,7 +323,7 @@ cd mir2-rs/tests/parity/m3
 python -I rng-trace-probe/rng_ledger_diff.py selftest          # 37/37 GREEN（含 R-6 folded + DoD② scenario 声明）
 python -I rng-trace-scene/rng_scene_gate.py selftest           # 22/22 GREEN（含 scenario 声明 vs 代码 + 半给流水 PREREQ）
 python -I rng-trace-scene/check_evidence_counts.py selftest    # 7/7 GREEN（报告证据头行计数 vs 真实包：声明/真实）
-python -I rng-trace-scene/check_anchors.py selftest             # 4/4 GREEN（承接卡规格锚点保鲜；含行号漂移/缺失/歧义 3 条改坏必红）
+python -I rng-trace-scene/check_anchors.py selftest             # 6/6 GREEN（承接卡规格锚点保鲜；含行号漂移/缺失/歧义/未登记引用/折叠定义回退 5 条改坏必红）
 python -I rng-trace-probe/rng_consumer_groups.py selftest       # 15/15 GREEN（站点表 oracle_ref 可解析性；含坏路径/越界行 2 条改坏必红）
 python -I rng-trace-scene/check_window_batch.py selftest        # 13/13 GREEN（本卡 vs ④ 场景件：同图/同种子/同起点）
 
