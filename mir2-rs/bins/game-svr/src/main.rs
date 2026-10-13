@@ -3986,13 +3986,25 @@ fn log_enter_ability(chr_name: &str, out: &game_svr::ability::RecalcOutput) {
 }
 
 /// 一个在世界内的会话的 AOI 观测读数（只读；卡 `openmir2-client-e2e-enter-gaps`）。
+///
+/// `vis`/`new` 的语义**必须分开**（root 2026-10-14 的 ③ 误判根因）：`update_visible_gay`
+/// （`BaseObject.ViewRange.cs:12-38`，Rust `aoi.rs:28-49`）只有**首次看见**才置
+/// `VisibleFlag::Show`，对「已在列表、本轮又看见」置 `VisibleFlag::Invisible`（`aoi.rs:39-43`）。
+/// ⇒ 只数 `Show` 得到的是「本轮新增」，**不是当前可见集**；`invisible` 语义是「可见」不是「不可见」。
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SessionAoiDiag {
     chr_name: String,
     actor_id: i32,
     map_id: usize,
-    /// `visible_actors` 里 `Show` 的条数（`drain_aoi_downlink` 真正会下发的那批）。
+    /// 观察者 `view_range`（`PlayObject.cs:904` = 12）；扫描窗口 = 边长 `2*vr+1` 的正方形。
+    view_range: i32,
+    /// **当前可见集大小**（**不含自身**）= `visible_actors` 里 `target != self && flag != Hidden`
+    /// （即 `Show | Invisible`）的条数。
     vis: usize,
+    /// **本轮新增可见**（**不含自身**）= `VisibleFlag::Show` 的条数（= 本 tick 触发出现帧的对数）。
+    new: usize,
+    /// 本会话**累计**收到的 AOI 出现帧数（`SM_TURN` + `SM_FEATURECHANGED`，实发计数）。
+    frames: usize,
     /// 同图（除自己）的实体数。
     same_map: usize,
     /// 同图（除自己）最近的 Chebyshev 距离；无他者 ⇒ `i32::MAX`。
@@ -4024,11 +4036,14 @@ impl WorldDiag {
         let mut out = String::new();
         for s in &self.sessions {
             out.push_str(&format!(
-                " [{}({}) map={} vis={} same_map={} nearest={}]",
+                " [{}({}) map={} vr={} vis={} new={} af={} same_map={} nearest={}]",
                 s.chr_name,
                 s.actor_id,
                 s.map_id,
+                s.view_range,
                 s.vis,
+                s.new,
+                s.frames,
                 s.same_map,
                 if s.nearest == i32::MAX { -1 } else { s.nearest }
             ));
@@ -4038,7 +4053,14 @@ impl WorldDiag {
 }
 
 /// 按会话表顺序算出世界/AOI 观测快照（确定性：会话表是 `Vec`，实体遍历按槽位）。
-fn world_aoi_diag(world: &mir2_world::World, displays: &downlink::DisplayTable) -> WorldDiag {
+///
+/// `aoi_frames` = 每会话**累计**实发的 AOI 出现帧数（由 sim 循环从 [`drain_aoi_downlink`]
+/// 的返回值累加；按 `chr_name` 键，避免实体槽位 LIFO 复用把旧会话的计数带过来）。
+fn world_aoi_diag(
+    world: &mir2_world::World,
+    displays: &downlink::DisplayTable,
+    aoi_frames: &std::collections::HashMap<String, usize>,
+) -> WorldDiag {
     let entities: Vec<&mir2_world::Entity> = world.entities.iter().collect();
     let mut sessions = Vec::new();
     for sess in world.sessions.iter() {
@@ -4051,11 +4073,22 @@ fn world_aoi_diag(world: &mir2_world::World, displays: &downlink::DisplayTable) 
         let Some(e) = world.entities.get(actor_id) else {
             continue;
         };
+        // `Show` = 本轮新增（出现帧触发批）；`Invisible` = 已在列表且本轮又看见（仍是「可见」）。
+        // 两者一起才是**当前可见集**；只数 `Show` 会让停留 >1 tick 的怪在诊断里恒为 0。
+        // **排除自身**：`search_view_range` 会把观察者自己所在格子的自己也算进 `visible_actors`
+        // （oracle `BaseObject.SearchViewRange` 也不排除），但 `PlayObject.Run()` 的 `baseObject != this`
+        // 与 [`drain_aoi_downlink`] 都跳过自身 ⇒ 诊断报的是「同屏**其它**可见对象数」。
         let vis = e
             .visible_actors
             .iter()
-            .filter(|v| v.flag == mir2_world::VisibleFlag::Show)
+            .filter(|v| v.target != actor_id && v.flag != mir2_world::VisibleFlag::Hidden)
             .count();
+        let new = e
+            .visible_actors
+            .iter()
+            .filter(|v| v.target != actor_id && v.flag == mir2_world::VisibleFlag::Show)
+            .count();
+        let frames = aoi_frames.get(&sess.chr_name).copied().unwrap_or(0);
         let mut same_map = 0usize;
         let mut nearest = i32::MAX;
         for o in &entities {
@@ -4072,7 +4105,10 @@ fn world_aoi_diag(world: &mir2_world::World, displays: &downlink::DisplayTable) 
             chr_name: sess.chr_name.clone(),
             actor_id,
             map_id: e.map_id,
+            view_range: e.view_range,
             vis,
+            new,
+            frames,
             same_map,
             nearest,
         });
@@ -4093,12 +4129,17 @@ fn world_aoi_diag(world: &mir2_world::World, displays: &downlink::DisplayTable) 
 ///
 /// 两处「不猜」：① 自身不入帧（oracle `if (baseObject != this)`，`PlayObject.cs:3238`）；
 /// ② 展示表缺项（怪物/未登记）⇒ 跳过并记 WRN，不编造 `Dir/Light/Feature`。
+///
+/// 返回**本调用每个会话实发的帧数**（`(chr_name, frames)`，只含 `>0` 的会话）——供 sim 循环
+/// 累加成诊断读数 `af=`（root 2026-10-14 要求「打印可见集大小与下发帧数」）。
+/// 这里只对 `Show`（＝首次看见）发帧，是对齐 oracle `Run()` 里 `VisibleFlag.Show` 支。
 fn drain_aoi_downlink(
     world: &mir2_world::World,
     displays: &downlink::DisplayTable,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
-) {
+) -> Vec<(String, usize)> {
+    let mut sent: Vec<(String, usize)> = Vec::new();
     for sess in world.sessions.iter() {
         if sess.stage != mir2_world::WorldStage::InWorld {
             continue;
@@ -4117,6 +4158,7 @@ fn drain_aoi_downlink(
             );
             continue;
         };
+        let mut sent_here = 0usize;
         for visible in &observer.visible_actors {
             if visible.flag != mir2_world::VisibleFlag::Show || visible.target == observer_id {
                 continue;
@@ -4150,9 +4192,14 @@ fn drain_aoi_downlink(
                     socket: entry.socket,
                     body,
                 });
+                sent_here += 1;
             }
         }
+        if sent_here > 0 {
+            sent.push((sess.chr_name.clone(), sent_here));
+        }
     }
+    sent
 }
 
 /// `MessageSettings.BODYLUCKUNIT`（`MessageSettings.cs:9`）。
@@ -4693,11 +4740,11 @@ fn drain_run_downlinks(
     range: i32,
     health_fill_time: i32,
     spell_fill_time: i32,
-) {
+) -> Vec<(String, usize)> {
     drain_kill_exp_chain(
         rec, world, displays, online, sessions, gates, catalog, range,
     );
-    drain_aoi_downlink(world, displays, online, gates);
+    let aoi_frames = drain_aoi_downlink(world, displays, online, gates);
     drain_stamina(
         sessions,
         world,
@@ -4707,6 +4754,7 @@ fn drain_run_downlinks(
         health_fill_time,
         spell_fill_time,
     );
+    aoi_frames
 }
 
 /// 每 tick 的**周期存档**（oracle `WorldServer.cs:698-703`，卡 `openmir2-m3-periodic-save`）。
@@ -5621,6 +5669,10 @@ fn sim_loop(
         u64::try_from(mir2_world::TICK_INTERVAL_MS).unwrap_or(200),
     );
     let mut ticks: u64 = 0;
+    // AOI 出现帧累计读数（按 `chr_name`）：root 2026-10-14 要求诊断行同时打印「可见集大小与下发帧数」。
+    // 只读观测：不参与任何模拟/出帧语义。
+    let mut aoi_frames_total: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     loop {
         let next = std::time::Instant::now() + tick;
         while let Ok(ev) = ev_rx.try_recv() {
@@ -6877,7 +6929,8 @@ fn sim_loop(
         );
         // **reviewer-5 O-1 收口**：oracle 一次 `PlayObject.Run()` = 消息段（击杀经验/升级链 +
         // AOI 出现帧）→ `BaseObject.Run()` 的体力/魔力点段；次序由 [`drain_run_downlinks`] 固定。
-        drain_run_downlinks(
+        // 返回值 = 本 tick 每会话实发的 AOI 出现帧数（只读诊断，累加进 `af=`）。
+        let aoi_frames_this_tick = drain_run_downlinks(
             &rec,
             &mut world,
             &displays,
@@ -6889,6 +6942,9 @@ fn sim_loop(
             enter_cfg.health_fill_time,
             enter_cfg.spell_fill_time,
         );
+        for (chr, n) in aoi_frames_this_tick {
+            *aoi_frames_total.entry(chr).or_insert(0) += n;
+        }
         // 周期存档（oracle `WorldServer.cs:698-703` / `ProcessHumans`）：oracle 在
         // `playObject.Run()` **之后**才查 `SaveRcdTick` ⇒ 本段必须在 [`drain_run_downlinks`] 之后，
         // 存档体才读到本 tick 的升级/恢复/体力点后的 `WAbil`（reviewer-5 O-1 收口）。
@@ -6903,7 +6959,7 @@ fn sim_loop(
             now_ms(),
         );
         if ticks.is_multiple_of(50) {
-            let diag = world_aoi_diag(&world, &displays);
+            let diag = world_aoi_diag(&world, &displays, &aoi_frames_total);
             glog!(
                 "DBG",
                 "sim: tick #{} clock={}ms 处理 {} 项（本地第 {ticks} 次）{}{}",
@@ -8288,7 +8344,7 @@ mod tests {
         gates.insert(0, tx0);
         gates.insert(1, tx1);
 
-        drain_aoi_downlink(&world, &displays, &online, &gates);
+        let _ = drain_aoi_downlink(&world, &displays, &online, &gates);
 
         let collect = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| -> Vec<(i32, u16)> {
             let mut out = Vec::new();
@@ -8435,7 +8491,7 @@ mod tests {
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
 
-        drain_aoi_downlink(&world, &displays, &online, &gates);
+        let _ = drain_aoi_downlink(&world, &displays, &online, &gates);
 
         let mut frames = Vec::new();
         while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
@@ -8485,7 +8541,7 @@ mod tests {
         displays.set(near_id, downlink::monster_display(0, &info));
         displays.set(far_id, downlink::monster_display(0, &info));
 
-        let diag = world_aoi_diag(&world, &displays);
+        let diag = world_aoi_diag(&world, &displays, &std::collections::HashMap::new());
         assert_eq!(diag.entities, 3, "玩家 + 两只怪");
         assert_eq!(diag.displays, 2, "展示表只登记了怪物");
         let s = diag
@@ -8496,6 +8552,114 @@ mod tests {
         assert!(s.vis >= 1, "近怪（距离 2 ≤ view_range）必须在可见集：{s:?}");
         assert_eq!(s.same_map, 2, "同图除自己外 2 只");
         assert_eq!(s.nearest, 2, "最近 Chebyshev 距离 = 2（近怪）");
+    }
+
+    /// 卡 `openmir2-client-e2e-enter-gaps` 缺口②（root 2026-10-14 判读误伤）：AOI 诊断的 `vis`
+    /// 必须是**当前可见集**（`Show | Invisible`），**不是**「本轮新增」（`Show`）。
+    ///
+    /// 缘由：`update_visible_gay`（`BaseObject.ViewRange.cs:12-38`，Rust `aoi.rs:28-49`）只对
+    /// **首次看见**置 `VisibleFlag.Show`，对「已在列表、本轮又看见」置 `VisibleFlag.Invisible`。
+    /// 旧诊断只数 `Show` ⇒ 怪物在视野里停留 >1 tick 后 `vis` 恒为 0：真机 AFTER 日志
+    /// `nearest=2..9`（远小于 `vr=12`）仍报 `vis=0`，而客户端实收 13 对出现帧
+    /// （`capture-client-viewrange12-seed42.jsonl`）——会被误读成「AOI 没算/没下发」。
+    ///
+    /// 判据三读数：tick1（首次出现）`new >= 1` 且实发 2 帧；tick2（仍在视野）`new == 0`
+    /// 但 `vis == 1`（只算怪、不含自身）、`af` 累计不回退；tick2 **不得重复发出现帧**。
+    ///
+    /// 红检：把 `vis` 改回 `.filter(|v| v.flag == Show)` ⇒ tick2 的 `vis == 1` 必红（实测读到 0）。
+    #[test]
+    fn world_aoi_diag_vis_is_current_view_not_new_appearances() {
+        use std::collections::HashMap;
+
+        let mut world = mir2_world::World::new(100, 100);
+        world.open_session("p");
+        let p = world
+            .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
+            .expect("玩家进图");
+        // 怪物以 `add_entity` 入队 `Command::Enter`（tick 时上格），Chebyshev 2 ≤ ViewRange(12)。
+        let mut mon = mir2_world::Entity::new(0, "稻草人", 12, 10);
+        mon.race = mir2_world::ACTOR_RACE_MONSTER;
+        let mon_id = world.add_entity(mon);
+
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            mon_id,
+            downlink::monster_display(0, &mir2_data::models::MonsterInfo::default()),
+        );
+
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "up".into(),
+                chr_name: "p".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: p,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        // 只读诊断的累计表（签名同 sim 循环）。
+        let mut aoi_frames_total: HashMap<String, usize> = HashMap::new();
+
+        // tick 1：怪物首次出现 ⇒ `new >= 1`，实发 2 帧（SM_TURN + SM_FEATURECHANGED），
+        // 累计 `af >= 2`；`vis` 也必须 >= 1。
+        world.tick();
+        for (chr, n) in drain_aoi_downlink(&world, &displays, &online, &gates) {
+            *aoi_frames_total.entry(chr).or_insert(0) += n;
+        }
+        let mut sent_tick1 = 0usize;
+        while rx0.try_recv().is_ok() {
+            sent_tick1 += 1;
+        }
+        assert_eq!(sent_tick1, 2, "出现帧 = SM_TURN + SM_FEATURECHANGED");
+        let d1 = world_aoi_diag(&world, &displays, &aoi_frames_total);
+        let s1 = d1
+            .sessions
+            .iter()
+            .find(|s| s.actor_id == p)
+            .expect("玩家会话");
+        assert!(s1.new >= 1, "首 tick 必须有新增可见（Show）：{s1:?}");
+        assert_eq!(
+            s1.vis, 1,
+            "当前可见集 = 只算**其它**对象（排除自身）：{s1:?}"
+        );
+        assert!(s1.frames >= 2, "首 tick 累计实发帧 >= 2：{s1:?}");
+        assert_eq!(s1.view_range, 12, "玩家 view_range = PlayObject.cs:904");
+
+        // tick 2：怪仍在视野 ⇒ `update_visible_gay` 置 `Invisible` ⇒ `new == 0`，
+        // 但当前可见集必须仍 >= 1（旧实现这里恒 0，正是 root 误判的来源）。
+        world.tick();
+        for (chr, n) in drain_aoi_downlink(&world, &displays, &online, &gates) {
+            *aoi_frames_total.entry(chr).or_insert(0) += n;
+        }
+        let mut sent_tick2 = 0usize;
+        while rx0.try_recv().is_ok() {
+            sent_tick2 += 1;
+        }
+        assert_eq!(
+            sent_tick2, 0,
+            "第二轮不得重复发出现帧（oracle 只在 Show 支发）"
+        );
+        let d2 = world_aoi_diag(&world, &displays, &aoi_frames_total);
+        let s2 = d2
+            .sessions
+            .iter()
+            .find(|s| s.actor_id == p)
+            .expect("玩家会话");
+        assert_eq!(s2.new, 0, "第二轮不是新增（置 Invisible）：{s2:?}");
+        assert_eq!(
+            s2.vis, 1,
+            "第二轮必须仍算「当前可见」（Show|Invisible，排除自身）：{s2:?}"
+        );
+        assert_eq!(
+            s2.frames, s1.frames,
+            "无新增 ⇒ 累计帧数不回退也不增：{s2:?}"
+        );
     }
 
     /// 测试用的 `WAbil`（金币分支不使用 `wabil`；字段值不影响本例断言）。
@@ -10915,7 +11079,7 @@ mod tests {
             exp_awards: vec![(killer, 500, true, 11)],
             ..Default::default()
         };
-        drain_run_downlinks(
+        let _ = drain_run_downlinks(
             &rec,
             &mut world,
             &displays,

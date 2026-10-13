@@ -1,0 +1,23 @@
+map="0" MonGen 行数 = 53（全表 2828 行）
+
+root verify1 进世界 (291,666): 框外；到最近生成框 Chebyshev = 30（gen 211,629 名=鹿 范围=50）
+片⑦ AFTER 进世界 (287,620): 框内；到最近生成框 Chebyshev = 0（gen 256,572 名=鹿 范围=50）
+README 已证密集点 (256,572): 框内；到最近生成框 Chebyshev = 0（gen 256,572 名=鹿 范围=50）
+最大生成框中心 (188,439): 框内；到最近生成框 Chebyshev = 0（gen 188,439 名=鹿 范围=120）
+(494,455): 框内；到最近生成框 Chebyshev = 0（gen 494,455 名=鹿 范围=120）
+(211,629): 框内；到最近生成框 Chebyshev = 0（gen 211,629 名=鹿 范围=50）
+回归后的 (291,651): 框外；到最近生成框 Chebyshev = 29（gen 256,572 名=鹿 范围=50）
+
+=== map 0 生成框按『到 (291,666) 的距离』升序（前 12）===
+  dist= 30  gen=(211,629) range=50 count=50 name=稻草人
+  dist= 30  gen=(211,629) range=50 count=50 name=鹿
+  dist= 44  gen=(256,572) range=50 count=50 name=稻草人
+  dist= 44  gen=(256,572) range=50 count=50 name=鹿
+  dist= 50  gen=(211,629) range=30 count=10 name=半兽人
+  dist= 50  gen=(211,629) range=30 count=10 name=多钩猫
+  dist= 50  gen=(211,629) range=30 count=10 name=钉耙猫
+  dist= 50  gen=(328,566) range=50 count=50 name=稻草人
+  dist= 50  gen=(328,566) range=50 count=50 name=鹿
+  dist= 64  gen=(256,572) range=30 count=10 name=半兽人
+  dist= 64  gen=(256,572) range=30 count=10 name=多钩猫
+  dist= 64  gen=(256,572) range=30 count=10 name=钉耙猫

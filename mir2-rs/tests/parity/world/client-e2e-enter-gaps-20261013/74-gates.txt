@@ -1,0 +1,22 @@
+74-gates.txt — 片⑪ AOI 可见性诊断收口 四门禁（cwd=mir2-rs，CARGO_TARGET_DIR=E:/tmp/m2svr-target，base=refs/heads/master @ d4673b16c）
+卡 openmir2-client-e2e-enter-gaps
+================================================================================
+
+[1] cargo fmt --all -- --check
+RC=0
+
+[2] cargo clippy --workspace --all-targets --offline -- -D warnings
+    Checking game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.08s
+RC=0
+
+[3] cargo test --workspace --offline --no-fail-fast
+  suites = 101
+  合计 passed=1200 failed=0 ignored=22
+  error: test failed 命中数 = 0（无失败）
+RC=0
+
+[4] cargo run -p msgcodegen -- --check
+     Running `E:/tmp/m2svr-target\debug\msgcodegen.exe --check`
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+RC=0
