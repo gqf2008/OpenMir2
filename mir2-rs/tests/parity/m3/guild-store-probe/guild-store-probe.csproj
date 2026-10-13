@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>guild-store-probe</AssemblyName>
+    <RootNamespace>GuildStoreProbe</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    M3⑧-3（卡 openmir2-m3-guild-file-store）真身探针。
+
+    引用**真身** `src/M2Server` 的 `GuildManager` / `GuildInfo`（`LoadGuildInfo` / `LoadGuild` /
+    `LoadGuildFile` / `SaveGuildInfoFile` / `SaveGuildFile`）与 `GuildConf`（`.ini` 五键），
+    在**临时目录**里实跑，把「GuildList.txt 加载 + 四段 `<名>.txt` 解析/落盘 + `.ini` 读侧」
+    的逐字节产物与解析结果产成向量：
+
+      - `vectors/guild_store_vectors.tsv`  逐字段（含段头默认值、解析 quirk、落盘/不落盘规则）
+      - `vectors/guild_file_bytes.tsv`     落盘文件的 sha256 + hex（GBK 字节口径）
+
+    产物供 Rust 用例 `crates/data/tests/guild_store_vectors.rs` 逐字段核对。
+    只读纪律：只在命令行第 1 个参数指定的向量目录下建临时子树（`work/`），不连 MySQL、
+    不写现网文件、不发起任何 socket。
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\..\src\M2Server\M2Server.csproj" />
+  </ItemGroup>
+
+</Project>
