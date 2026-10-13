@@ -1,0 +1,27 @@
+# 05 — mutation red: remove both DoD② flags (MISSING_EXPECTED_GROUPS / MIN_GROUP_DRAWS) in a scratch copy
+# scratch copy: E:/tmp/m3bag-mut (WIP tree copy; 'if expected_missing:' -> 'if False and expected_missing:', same for min_violations)
+
+## (a) ledger selftest on the mutated copy -> rc=1, RED naming the two teeth
+$ python -I E:/tmp/m3bag-mut/rng-trace-probe/rng_ledger_diff.py selftest
+SELFTEST RED: 2/37 未过: scenario-expected-missing-red (RNG_CONSUMER_GROUPDIFF include_attack=False fold=True a=C:\Users\gxh\AppData\Local\Temp\rng-ledger-diff-selftest-n_ib5c1f\ga.tsv(3) b=C:\Users\gxh\AppData\Local\Temp\rng-ledger-diff-selftest-n_ib5c1f\gb.tsv(3)
+
+## (b) with the tooth removed the missing-group scenario is IDENTICAL again (false green returns)
+$ python E:/tmp/_m3bag_dod2_demo.py E:/tmp/m3bag-mut --scenario
+---- GROUPDIFF (mode=--scenario) rc will follow
+rc=0
+RNG_CONSUMER_GROUPDIFF include_attack=False fold=True a=E:/tmp/m3bag-dod2-demo\a-rng-stream.tsv(5) b=E:/tmp/m3bag-dod2-demo\b-rng-stream.tsv(5)
+  FOLD_MAP {'construct': 'spawn'}（R-6：C# construct 折叠到 Rust spawn；折叠后计数+相对次序必须相等）
+  A_GROUPS {'spawn': 5}
+  B_GROUPS {'spawn': 5}
+  ONLY_IN_A(missing_in_B) {}
+  ONLY_IN_B(extra_in_B)   {}
+  SHARED_GROUPS ['spawn']
+  FOLDED_COUNT_EQUAL {'spawn': 5}
+  FIRST_SHARED_ORDER_DIVERGENCE none（共享组相对次序逐位全等，len=5）
+  RUNS a=1 b=1
+  ROW_COVERAGE a_dropped=0 b_dropped=0
+  EXPECTED_GROUPS ['monster_ai', 'spawn', 'drop']（scenario 声明；DoD② 要求两侧都出现）
+  MISSING_EXPECTED_GROUPS {'a': ['monster_ai', 'drop'], 'b': ['monster_ai', 'drop']}（声明的组未在账本出现 ⇒ fail-closed）
+  MIN_GROUP_DRAWS {'monster_ai': {'want': 1, 'a': 0, 'b': 0}}（声明的最小抽数未达 ⇒ fail-closed）
+  FIRST_RUN_DIVERGENCE none（组 run 序逐位全等）
+  VERDICT IDENTICAL

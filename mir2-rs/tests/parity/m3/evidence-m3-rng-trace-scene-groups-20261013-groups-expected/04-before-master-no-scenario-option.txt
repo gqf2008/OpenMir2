@@ -1,0 +1,26 @@
+# 04 — BEFORE fix (master 886f123b): --scenario option does not exist
+
+cmd: python E:/tmp/_m3bag_dod2_demo.py <master m3 dir> --scenario
+
+scenario: groups_expected=['monster_ai', 'spawn', 'drop'] min_monster_ai_draws=1
+both streams contain ONLY spawn sites -> monster_ai=0, drop=0 (absent everywhere)
+scenario=E:/tmp/m3bag-dod2-demo\scenario.json
+
+---- GATE rc=0
+al:a-vs-b              ok
+  CHECK mongen-parseable                   ok
+  CHECK mongen-equal:a-vs-fixture          ok
+  CHECK mongen-equal:b-vs-fixture          ok
+  CHECK mongen-equal:a-vs-b                ok
+  CHECK stream-seed-equal:a                ok
+  CHECK stream-seed-equal:b                ok
+  CHECK stream-seed-equal:a-vs-b           ok
+  VERDICT GREEN: 两侧同场景/同起点/同种子（MonGen+Monster 集合同口径）
+
+---- GROUPDIFF (mode=--scenario) rc will follow
+rc=2
+
+stderr: usage: rng_ledger_diff.py [-h]
+                          {summary,order,diff,segments,segdiff,groups,groupdiff,selftest}
+                          ...
+rng_ledger_diff.py: error: unrecognized arguments: --scenario E:/tmp/m3bag-dod2-demo\scenario.json

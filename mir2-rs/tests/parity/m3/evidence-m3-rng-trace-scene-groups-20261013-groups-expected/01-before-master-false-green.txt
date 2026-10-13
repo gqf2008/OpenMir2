@@ -1,0 +1,34 @@
+# 01 — DoD② false-green demonstration (BEFORE, merged master 886f123b)
+
+cmd: python E:/tmp/_m3bag_dod2_demo.py <master m3 dir>
+
+scenario: groups_expected=['monster_ai', 'spawn', 'drop'] min_monster_ai_draws=1
+both streams contain ONLY spawn sites -> monster_ai=0, drop=0 (absent everywhere)
+scenario=E:/tmp/m3bag-dod2-demo\scenario.json
+
+---- GATE rc=0
+al:a-vs-b              ok
+  CHECK mongen-parseable                   ok
+  CHECK mongen-equal:a-vs-fixture          ok
+  CHECK mongen-equal:b-vs-fixture          ok
+  CHECK mongen-equal:a-vs-b                ok
+  CHECK stream-seed-equal:a                ok
+  CHECK stream-seed-equal:b                ok
+  CHECK stream-seed-equal:a-vs-b           ok
+  VERDICT GREEN: 两侧同场景/同起点/同种子（MonGen+Monster 集合同口径）
+
+---- GROUPDIFF (mode=bare) rc will follow
+rc=0
+RNG_CONSUMER_GROUPDIFF include_attack=False fold=True a=E:/tmp/m3bag-dod2-demo\a-rng-stream.tsv(5) b=E:/tmp/m3bag-dod2-demo\b-rng-stream.tsv(5)
+  FOLD_MAP {'construct': 'spawn'}（R-6：C# construct 折叠到 Rust spawn；折叠后计数+相对次序必须相等）
+  A_GROUPS {'spawn': 5}
+  B_GROUPS {'spawn': 5}
+  ONLY_IN_A(missing_in_B) {}
+  ONLY_IN_B(extra_in_B)   {}
+  SHARED_GROUPS ['spawn']
+  FOLDED_COUNT_EQUAL {'spawn': 5}
+  FIRST_SHARED_ORDER_DIVERGENCE none（共享组相对次序逐位全等，len=5）
+  RUNS a=1 b=1
+  ROW_COVERAGE a_dropped=0 b_dropped=0
+  FIRST_RUN_DIVERGENCE none（组 run 序逐位全等）
+  VERDICT IDENTICAL

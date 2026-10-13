@@ -92,8 +92,12 @@ function Invoke-RngSceneScenario {
 
 function Invoke-RngGroupDiff {
   param([Parameter(Mandatory = $true)][string]$A, [Parameter(Mandatory = $true)][string]$B,
-        [Parameter(Mandatory = $true)][ref]$Out)
-  $raw = & python -I $LedgerDiff groupdiff $A $B --a-side csharp --b-side rust --fold --strict 2>&1
+        [string]$Scenario = '', [Parameter(Mandatory = $true)][ref]$Out)
+  $argv = @('-I', $LedgerDiff, 'groupdiff', $A, $B, '--a-side', 'csharp', '--b-side', 'rust', '--fold', '--strict')
+  # DoD②：给了 scenario ⇒ 它的 groups_expected / min_monster_ai_draws 必须在真实账本里成立
+  # （缺组 / 抽数不足 ⇒ groupdiff rc=1 fail-closed）。裸比较（-GroupDiffOnly）不传，行为不变。
+  if (-not [string]::IsNullOrEmpty($Scenario)) { $argv += @('--scenario', $Scenario) }
+  $raw = & python @argv 2>&1
   $Out.Value = ($raw | Out-String)
   return [int]$LASTEXITCODE
 }
@@ -110,7 +114,9 @@ function Invoke-RngLedgerSelfTest {
 #   → GREEN 才跑 `groupdiff --fold --strict`，并把它的 rc/文本原样传播（不吞任何结论）。
 function Invoke-RngSceneGroupDiffCore {
   param([Parameter(Mandatory = $true)][string]$AScene, [Parameter(Mandatory = $true)][string]$BScene,
-        [Parameter(Mandatory = $true)][string]$AStream, [Parameter(Mandatory = $true)][string]$BStream)
+        [Parameter(Mandatory = $true)][string]$AStream, [Parameter(Mandatory = $true)][string]$BStream,
+        [string]$Scenario = '')
+  if ([string]::IsNullOrEmpty($Scenario)) { $Scenario = $ScenarioFile }
   $res = [ordered]@{ rc = 2; gateRc = 2; diffRc = -1; ranDiff = $false; text = '' }
   $gateOut = ''
   $gateRc = Invoke-RngSceneGate -A $AScene -B $BScene -AStream $AStream -BStream $BStream -Out ([ref]$gateOut)
@@ -123,7 +129,8 @@ function Invoke-RngSceneGroupDiffCore {
   } else {
     $text += "`nGREEN(scene): 两侧同场景/同起点/同种子 ⇒ 允许进入组账本比较"
     $diffOut = ''
-    $diffRc = Invoke-RngGroupDiff -A $AStream -B $BStream -Out ([ref]$diffOut)
+    # DoD②：把 scenario 声明的 groups_expected / min_monster_ai_draws 交给 groupdiff 机判。
+    $diffRc = Invoke-RngGroupDiff -A $AStream -B $BStream -Scenario $Scenario -Out ([ref]$diffOut)
     $res.diffRc = $diffRc
     $res.ranDiff = $true
     $text += "`n" + $diffOut
@@ -191,6 +198,8 @@ $Script:SiteSpawnC = 'GameSrv.Word.WorldServer.CreateMonster@WorldServer.MonGen.
 $Script:SiteAiC = 'M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427'
 $Script:SiteSpawnR = 'crates\world\src\mongen.rs:624'
 $Script:SiteAiR = 'crates\world\src\monai.rs:164'
+$Script:SiteDropC = 'GameSrv.Word.WorldServer.MonGetRandomItems@WorldServer.MonGen.cs:451'
+$Script:SiteDropR = 'crates\formula\src\drop.rs:109'
 
 # 从 scenario JSON **解析成对象**、做一次字段级改写后另存 —— 构造 drift 样本时不再对原始文本做
 # 正则替换（M-1 sibling 收口：原实现用 `-replace '"construct"\s*:\s*"spawn"'` 之类匹配 JSON
@@ -426,8 +435,8 @@ if ($SelfCheckNoStack) {
     $sgBad = New-RngSceneFiles -Dir $sgDirBad -FixtureName 'mongen-map0137.tsv' -Map '0137' -Seed 42 `
              -MonsterName '稻草人' -MonX 18 -MonY 20 -MonDir 0 -MonCount 1 -ExtraMonsterName '鸡'
     $sgA = Join-Path $tmpRoot 'sgd-equiv-a.tsv'; $sgB = Join-Path $tmpRoot 'sgd-equiv-b.tsv'
-    New-RngStream -Path $sgA -Sites @($Script:SiteCtor, $Script:SiteSpawnC, $Script:SiteAiC)
-    New-RngStream -Path $sgB -Sites @($Script:SiteSpawnR, $Script:SiteSpawnR, $Script:SiteAiR)
+    New-RngStream -Path $sgA -Sites @($Script:SiteCtor, $Script:SiteSpawnC, $Script:SiteAiC, $Script:SiteDropC)
+    New-RngStream -Path $sgB -Sites @($Script:SiteSpawnR, $Script:SiteSpawnR, $Script:SiteAiR, $Script:SiteDropR)
     $c1 = Invoke-RngSceneGroupDiffCore -AScene $sgGood.A -BScene $sgGood.B -AStream $sgA -BStream $sgB
     Add-Result 'scene-groupdiff-identical-green' (($c1.rc -eq 0) -and $c1.ranDiff -and
       ($c1.text -match 'GREEN\(scene\)') -and ($c1.text -match 'VERDICT IDENTICAL')) ("rc=$($c1.rc)")
@@ -482,6 +491,25 @@ if ($SelfCheckNoStack) {
       ($c5.text -match 'REFUSED') -and ($c5.text -notmatch 'RNG_CONSUMER_GROUPDIFF')) `
       ("rc=$($c5.rc) ranDiff=$($c5.ranDiff)")
 
+    # ㉗ DoD②（本片新增）：scenario 声明的 groups_expected 必须**真的出现在账本**里。
+    #    两侧都缺 drop 时，旧口径是真空 IDENTICAL（组集合彼此相等）⇒ 假绿；现在必须 fail-closed 且点名。
+    $sgNoDropA = Join-Path $tmpRoot 'sgd-nodrop-a.tsv'; $sgNoDropB = Join-Path $tmpRoot 'sgd-nodrop-b.tsv'
+    New-RngStream -Path $sgNoDropA -Sites @($Script:SiteCtor, $Script:SiteSpawnC, $Script:SiteAiC)
+    New-RngStream -Path $sgNoDropB -Sites @($Script:SiteSpawnR, $Script:SiteSpawnR, $Script:SiteAiR)
+    $c6 = Invoke-RngSceneGroupDiffCore -AScene $sgGood.A -BScene $sgGood.B -AStream $sgNoDropA -BStream $sgNoDropB
+    Add-Result 'scene-groupdiff-expected-group-missing-red' (($c6.rc -eq 1) -and $c6.ranDiff -and
+      ($c6.text -match 'MISSING_EXPECTED_GROUPS') -and ($c6.text -match 'drop') -and
+      ($c6.text -notmatch 'VERDICT IDENTICAL')) ("rc=$($c6.rc) ranDiff=$($c6.ranDiff)")
+
+    # ㉘ 改坏必红：三组都在但 monster_ai 抽数 0 < scenario.min_monster_ai_draws=1 ⇒ MIN_GROUP_DRAWS 红。
+    $sgNoAiA = Join-Path $tmpRoot 'sgd-noai-a.tsv'; $sgNoAiB = Join-Path $tmpRoot 'sgd-noai-b.tsv'
+    New-RngStream -Path $sgNoAiA -Sites @($Script:SiteCtor, $Script:SiteSpawnC, $Script:SiteDropC)
+    New-RngStream -Path $sgNoAiB -Sites @($Script:SiteSpawnR, $Script:SiteSpawnR, $Script:SiteDropR)
+    $c7 = Invoke-RngSceneGroupDiffCore -AScene $sgGood.A -BScene $sgGood.B -AStream $sgNoAiA -BStream $sgNoAiB
+    Add-Result 'scene-groupdiff-min-monster-ai-red' (($c7.rc -eq 1) -and $c7.ranDiff -and
+      ($c7.text -match 'MIN_GROUP_DRAWS') -and ($c7.text -match 'monster_ai')) `
+      ("rc=$($c7.rc) ranDiff=$($c7.ranDiff)")
+
     # ⑯ 本脚本从未触碰端口（自检/门/比较全离线）
     Add-Result 'no-port-touched' (-not $script:RngSceneTouchedPorts) 'offline-only'
   } finally {
@@ -491,7 +519,7 @@ if ($SelfCheckNoStack) {
   $total = $script:RngPass + $script:RngFail.Count
   Write-Output ("SELFTEST ok={0}/{1} failures={2}" -f $script:RngPass, $total, ($script:RngFail -join ','))
   if ($script:RngFail.Count -gt 0) { exit 1 }
-  Write-Output 'GREEN: 无栈自检全绿（场景前置门 fail-closed + **流水头同种子**制品级门（同种子绿 / 异种子·缺 INJECT_OK 必红 / 拒绝比）+ DoD① 单一入口 -SceneGroupDiff 场景门/拒比/结论传播 + scenario 声明/folded 映射与代码同口径 + folded 等价绿/计数·次序必红 + LF 写出 + 零端口）'
+  Write-Output 'GREEN: 无栈自检全绿（场景前置门 fail-closed + **流水头同种子**制品级门（同种子绿 / 异种子·缺 INJECT_OK 必红 / 拒绝比）+ DoD① 单一入口 -SceneGroupDiff 场景门/拒比/结论传播 + **DoD② scenario 声明组必须真的出现（缺组 / monster_ai 抽数不足必红且点名）** + scenario 声明/folded 映射与代码同口径 + folded 等价绿/计数·次序必红 + LF 写出 + 零端口）'
   exit 0
 }
 
