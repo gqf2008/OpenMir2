@@ -1211,7 +1211,10 @@ fn emit_shop_frames(
 ) {
     for f in frames {
         let header = game_svr::smframe::command_header(f.recog, f.ident, f.param, f.tag, f.series);
-        let body = game_svr::smframe::gm_data_body(header, &f.tail);
+        // 尾 = EDCode.EncodeString(原文)：oracle 的 shop 帧经 `SendDefMessage`
+        // （`PlayObject.Socket.cs:26-43`）或 `SendSocket(ClientMsg, EDCode.EncodeString(Msg))` 下发，
+        // 与 `smframe::sm_merchantsay` 同口径。空尾 `encode([]) == []` ⇒ 无尾帧逐字节不变。
+        let body = game_svr::smframe::gm_data_body(header, &mir2_protocol::edcode::encode(&f.tail));
         let _ = tx.send(SimToGate::SendFrame { socket, body });
     }
 }
@@ -1229,6 +1232,22 @@ fn find_bag_item_by_make_index(
             && game_svr::shop::item_name(catalog, it.index)
                 .is_some_and(|n| game_svr::shop::eq_label(&n, wanted_name))
     })
+}
+
+/// `ClientRepairItem`（`PlayObject.Operate.cs:1585-1597`）的「找件」口径 —— **BUG-REPLICA**。
+///
+/// oracle 循环体 `userItem = ItemList[i];` **无条件**赋值，未命中时循环结束后 `userItem` 仍是
+/// **最后一件**背包物品（非 null）⇒ oracle 会继续修**最后一件**；只有 `ItemList` 为空才 `userItem
+/// == null` 而 return。同源的 `ClientQueryRepairCost`（`:1558-1583`）用 `userItemA = null` 初值、
+/// 仅在命中时赋值 ⇒ 未命中 return；**只有 repair 有这条 bug**（按 §1 硬约束③ 1:1 照搬）。
+fn repair_target_index(
+    item_list: &[game_svr::bag::BagItem],
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    make_index: i32,
+    wanted_name: &str,
+) -> Option<usize> {
+    find_bag_item_by_make_index(item_list, catalog, make_index, wanted_name)
+        .or_else(|| item_list.len().checked_sub(1))
 }
 
 /// `CM_MERCHANTDLGSELECT`/`CM_MERCHANTQUERYSELLPRICE`/`CM_USERSELLITEM`/`CM_USERBUYITEM`/
@@ -1297,7 +1316,7 @@ fn handle_shop_cmd(
         );
         return;
     };
-    let (mx, my, mmap, mflags, mprice, mcastle, mitem_type, mhide) = {
+    let (mx, my, mmap, mflags, mprice, mcastle, mitem_type, mhide, mchr_name) = {
         let st = me.merchant.as_ref().expect("已过滤 merchant.is_some()");
         (
             me.x,
@@ -1308,6 +1327,7 @@ fn handle_shop_cmd(
             st.castle_merchant,
             st.item_type_list.clone(),
             st.is_hide,
+            me.name.clone(),
         )
     };
     let same_map = mmap == pmap;
@@ -1324,6 +1344,7 @@ fn handle_shop_cmd(
         price_rate: mprice,
         castle_merchant: mcastle,
         item_type_list: mitem_type,
+        chr_name: mchr_name,
     };
     let mut out: Vec<game_svr::shop::ShopFrame> = Vec::new();
     match ident {
@@ -1426,8 +1447,13 @@ fn handle_shop_cmd(
         }
         game_svr::shop::CM_USERREPAIRITEM => {
             // `ClientRepairItem`（`Operate.cs:1585-1605`）。
+            // 按 §1 硬约束③ **BUG-REPLICA**：oracle 的循环 `userItem = ItemList[i]` **无条件**赋值，
+            // 未命中时循环结束后 `userItem` 仍是**最后一件**背包物品（非 null）⇒ oracle 会继续修
+            // 最后一件；只有 `ItemList` 为空才 return（`Operate.cs:1593-1597`）。
+            // （同源的 `ClientQueryRepairCost`（`:1558-1583`）用 `userItemA = null` 初值 ⇒ 未命中 return；
+            //  **只有 repair 有这条 bug**。）
             let Some(pos) =
-                find_bag_item_by_make_index(&sg.state.item_list, catalog, make_index, item_name)
+                repair_target_index(&sg.state.item_list, catalog, make_index, item_name)
             else {
                 return;
             };
@@ -9669,5 +9695,100 @@ mod tests {
             out.data.body_luck, 5000.0,
             "characters.BodyLuck 必须带出会话的实时 BodyLuck"
         );
+    }
+
+    /// **⑤-4 返工 F-2**：`ClientRepairItem`（`PlayObject.Operate.cs:1585-1597`）的 **BUG-REPLICA**
+    /// —— 未命中 ⇒ 修最后一件；空背包 ⇒ 无目标；命中 ⇒ 命中项（即使不是最后一件）。
+    /// 改坏（把 `or_else(...last)` 删掉、改成未命中即 return）⇒ 第一/三两个断言红。
+    #[test]
+    fn repair_target_index_replicates_oracle_last_item_bug() {
+        let mut cat = game_svr::ability::StdItemCatalog::new();
+        cat.insert(
+            1,
+            mir2_data::models::StdItem {
+                name: "金创药(小量)".to_string(),
+                ..Default::default()
+            },
+        );
+        let item = |make_index: i32, index: u16| game_svr::bag::BagItem {
+            make_index,
+            index,
+            dura: 0,
+            dura_max: 0,
+            desc: [0; 14],
+        };
+        let list = vec![item(9, 1), item(10, 1), item(11, 1)];
+        // 未命中 ⇒ 最后一件（下标 2），不是 None。
+        assert_eq!(
+            repair_target_index(&list, &cat, 999, "金创药(小量)"),
+            Some(2),
+            "oracle bug：未命中 ⇒ 修最后一件"
+        );
+        // 命中第 0 件（名字 `OrdinalIgnoreCase`）。
+        assert_eq!(repair_target_index(&list, &cat, 9, "金创药(小量)"), Some(0));
+        // 空背包 ⇒ None（oracle `userItem` 仍为 null）。
+        assert_eq!(repair_target_index(&[], &cat, 9, "金创药(小量)"), None);
+    }
+
+    /// **⑤-4 返工（自报 Important）**：shop 帧的线上尾 = `EDCode.EncodeString(GBK 原文)`
+    /// （oracle `SendDefMessage` 非空尾走 `SendSocket(ClientMsg, EDCode.EncodeString(sMsg))`，
+    /// `PlayObject.Socket.cs:26-43`）；空尾保持空（header-only 帧不变）。
+    /// 改坏（退回 `&f.tail` 裸拼）⇒ 中间两个断言红。
+    #[test]
+    fn emit_shop_frames_edcodes_tail_like_send_def_message() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let tail = game_svr::downlink::gbk("商人乙/对不起!我不能帮你修理这个物品。");
+        let frames = vec![
+            game_svr::shop::ShopFrame {
+                ident: mir2_protocol::messages::SM_MERCHANTSAY,
+                recog: 5_555,
+                param: 0,
+                tag: 0,
+                series: 1,
+                tail: tail.clone(),
+            },
+            game_svr::shop::ShopFrame {
+                ident: mir2_protocol::messages::SM_USERREPAIRITEM_FAIL,
+                recog: 0,
+                param: 0,
+                tag: 0,
+                series: 0,
+                tail: Vec::new(),
+            },
+        ];
+        emit_shop_frames(&tx, 7, &frames);
+        let (sock1, body1) = match rx.try_recv().expect("第一帧") {
+            SimToGate::SendFrame { socket, body } => (socket, body),
+            _ => panic!("非 SendFrame"),
+        };
+        let (sock2, body2) = match rx.try_recv().expect("第二帧") {
+            SimToGate::SendFrame { socket, body } => (socket, body),
+            _ => panic!("非 SendFrame"),
+        };
+        assert_eq!((sock1, sock2), (7, 7));
+        assert_eq!(
+            &body1[..12],
+            &game_svr::smframe::command_header(
+                5_555,
+                mir2_protocol::messages::SM_MERCHANTSAY,
+                0,
+                0,
+                1
+            )
+        );
+        assert_eq!(&body1[12..], &mir2_protocol::edcode::encode(&tail));
+        assert_ne!(&body1[12..], &tail[..], "线上尾不是裸 GBK（EDCode 会变换）");
+        // 空尾：仍只发 12B 头（`EncodeString("")` 不追加字节）。
+        assert_eq!(
+            &body2[..12],
+            &game_svr::smframe::command_header(
+                0,
+                mir2_protocol::messages::SM_USERREPAIRITEM_FAIL,
+                0,
+                0,
+                0
+            )
+        );
+        assert_eq!(body2.len(), 12, "空尾 ⇒ header-only 不变");
     }
 }

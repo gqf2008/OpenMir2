@@ -14,3 +14,13 @@ RC2-buy-money-gate: mutated_rc=101 red=True restored_rc=0 green=True
 RC3-sell-incgold-gate: mutated_rc=101 red=True restored_rc=0 green=True
 RC4-sendbuyprice-recog: mutated_rc=101 red=True restored_rc=0 green=True
 RED-CHECK ALL: PASS（还原后 git status --porcelain 空）
+
+# ---- 返工补 3 条（2026-10-13，reviewer-5 F-1/F-2 + 自报 EDCode）----
+
+| id | 文件 | 改法 | 目标用例 | mutated | restored |
+| --- | --- | --- | --- | --- | --- |
+| RC5 | bins/game-svr/src/shop.rs | F-1 帧回退为 `SM_SYSMESSAGE(100)`+玩家 Recog+series=0+无前缀 | shop::tests::repair_ok_and_superrepairfail_side_effects | FAILED rc=101（left 100 / right 643） | ok rc=0 |
+| RC6 | bins/game-svr/src/main.rs | `repair_target_index` 删掉 `.or_else(|| len-1)`（未命中即 None） | tests::repair_target_index_replicates_oracle_last_item_bug | FAILED rc=101（left None / right Some(2)） | ok rc=0 |
+| RC7 | bins/game-svr/src/main.rs | `emit_shop_frames` 尾 `edcode::encode(&f.tail)` → 裸拼 `&f.tail` | tests::emit_shop_frames_edcodes_tail_like_send_def_message | FAILED rc=101（left 裸 GBK / right EDCode） | ok rc=0 |
+
+RED-CHECK ALL: PASS（7 条；还原后 `sha256sum` 与 mutation 备份逐字节相同、`git status --porcelain` 只剩预期改动）

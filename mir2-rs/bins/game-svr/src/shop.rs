@@ -28,8 +28,8 @@
 //!
 //! # 三条从 ⑤-3 转入的副作用（owner comment `270a3919`）
 //! 1. `@Superrepairfail` 的 `SendMsgToUser("对不起!我不能帮你修理这个物品。\\ \\ \\<返回/@main>")`
-//!    （`Merchant.cs:1612`）：本模块产出 `SM_SYSMESSAGE` 帧（走 [`RepairResult::frames`] 的
-//!    `sent_to_user` 字段）。
+//!    （`Merchant.cs:1612`）：本模块产出 `SM_MERCHANTSAY(643)` 帧（走 [`RepairResult::sent_to_user`] 字段；
+//!    尾 = `ChrName + '/' + sMsg`，锚 `NormNpc.cs:1613-1616` + `PlayObject.Message.cs:1722-1724`）。
 //! 2. 城堡税：条件照抄（`CastleMerchant || Config.GetAllNpcTax`），效果登记（无城堡对象）。
 //! 3. `GotoLable(REPAIROK/SUPERREPAIROK)`：回 [`RepairResult::goto_label`]，宿主登记未装载脚本。
 //!
@@ -67,6 +67,9 @@ pub const LABEL_SUPER_REPAIR_OK: &str = "~@s_repair";
 pub const SUPER_REPAIR_FAIL_MSG: &str = "对不起!我不能帮你修理这个物品。\\ \\ \\<返回/@main>";
 
 /// 一条出帧（`MakeMessage` 后的 4 个数据字段 + 可选尾）；宿主用 `smframe::command_header` 落 12B 头。
+///
+/// `tail` = **未编码原文**（GBK 字节，由 `downlink::gbk` 编），线上尾的 `EDCode.EncodeString`
+/// 在 `main.rs::emit_shop_frames` 统一施加（口径锚：`PlayObject.Socket.cs:26-43` 的 `SendDefMessage`）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShopFrame {
     pub ident: u16,
@@ -95,6 +98,9 @@ pub struct MerchantView {
     pub price_rate: i32,
     pub castle_merchant: bool,
     pub item_type_list: Vec<i32>,
+    /// 商人实体 `ChrName`（`BaseObject.ChrName`）。`SendMsgToUser`（`NormNpc.cs:1613-1616`）
+    /// 的 `RM_MERCHANTSAY` 尾 = `ChrName + '/' + sMsg` ⇒ 宿主必须把商人名传进来。
+    pub chr_name: String,
 }
 
 /// 一次商店动作的静态输入（会话/世界/配置）。
@@ -528,7 +534,7 @@ pub struct RepairResult {
     /// 修理成功时 oracle `GotoLable(REPAIROK/SUPERREPAIROK)` 的标签（本宿主未装载 `Market_Def`
     /// ⇒ 只回标签，由宿主登记）。
     pub goto_label: Option<&'static str>,
-    /// `SendMsgToUser`（`@Superrepairfail` 支）的 `SM_SYSMESSAGE` 帧若产出，则在此。
+    /// `SendMsgToUser`（`@Superrepairfail` 支）的 `SM_MERCHANTSAY` 帧若产出，则在此。
     pub sent_to_user: Option<ShopFrame>,
 }
 
@@ -581,13 +587,19 @@ pub fn repair_item(
         shop::RepairOutcome::NoFrame => {}
         shop::RepairOutcome::Fail => {
             if label == shop::RepairLabel::SuperRepairFail {
+                // `Merchant.ClientRepairItem`（`Merchant.cs:1612`）的 `SendMsgToUser`
+                // （`NormNpc.cs:1613-1616`）= `SendMsg(this, RM_MERCHANTSAY, 0,0,0,0,
+                // ChrName + '/' + sMsg)`；`RM_MERCHANTSAY` 映射（`PlayObject.Message.cs:1722-1724`）
+                // = `MakeMessage(SM_MERCHANTSAY(643), ActorId, MakeWord(0,0), 0, 1)`
+                // ⇒ ident=643、Recog=**商人** ActorId、Param=Tag=0、Series=1、尾 = `ChrName + '/' + sMsg`。
+                let tail = format!("{}/{}", m.chr_name, SUPER_REPAIR_FAIL_MSG);
                 sent_to_user = Some(frame(
-                    mir2_protocol::messages::SM_SYSMESSAGE,
-                    ctx.player_actor_id,
+                    mir2_protocol::messages::SM_MERCHANTSAY,
+                    m.actor_id,
                     0,
                     0,
-                    0,
-                    downlink::gbk(SUPER_REPAIR_FAIL_MSG),
+                    1,
+                    downlink::gbk(&tail),
                 ));
             }
             frames.push(frame(
@@ -713,6 +725,7 @@ mod tests {
             price_rate: 100,
             castle_merchant: false,
             item_type_list: vec![0, 5],
+            chr_name: "商人".to_string(),
         }
     }
 
@@ -919,12 +932,20 @@ mod tests {
         assert_eq!(r.goto_label, Some(LABEL_REPAIR_OK));
         assert!(r.sent_to_user.is_none());
 
-        // `@fail_s_repair` ⇒ SendMsgToUser + FAIL（无 GotoLable）。
+        // `@fail_s_repair` ⇒ `SendMsgToUser`（`SM_MERCHANTSAY(643)`、Recog=**商人** ActorId）+ FAIL
+        // （无 `GotoLable`）。商人实体 id 与玩家 id 取不同值，钉死「Recog 是商人不是玩家」。
         c.script_lable = LABEL_SUPER_REPAIR_FAIL;
-        let m = merchant(MerchantFlags {
-            is_repair: true,
-            ..MerchantFlags::default()
-        });
+        let m = MerchantView {
+            actor_id: 5_555,
+            flags: MerchantFlags {
+                is_repair: true,
+                ..MerchantFlags::default()
+            },
+            price_rate: 100,
+            castle_merchant: false,
+            item_type_list: vec![0, 5],
+            chr_name: "商人乙".to_string(),
+        };
         let mut state2 = GroundState {
             item_list: vec![BagItem {
                 make_index: 9,
@@ -941,8 +962,14 @@ mod tests {
         let su = r
             .sent_to_user
             .expect("@Superrepairfail 必须发 SendMsgToUser");
-        assert_eq!(su.ident, mir2_protocol::messages::SM_SYSMESSAGE);
-        assert_eq!(su.recog, 4242);
+        assert_eq!(su.ident, mir2_protocol::messages::SM_MERCHANTSAY);
+        assert_eq!(su.recog, 5_555, "Recog = 商人 ActorId（不是玩家）");
+        assert_eq!((su.param, su.tag, su.series), (0, 0, 1));
+        assert_eq!(
+            su.tail,
+            downlink::gbk(&format!("商人乙/{SUPER_REPAIR_FAIL_MSG}")),
+            "尾 = ChrName + '/' + sMsg（`NormNpc.cs:1613-1616`）"
+        );
         assert!(r.goto_label.is_none());
         assert_eq!(state2.gold, 10_000, "失败不动金币");
 

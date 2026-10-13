@@ -22,7 +22,7 @@
 | `CM_USERSELLITEM(1013)` | `Operate.cs:162` + `Merchant.cs:1377`（`AddItemToGoodsList` `:1417`）| `shop::sell_item` → `648/649` + 库存回收 |
 | `CM_USERBUYITEM(1014)` | `Operate.cs:192` + `Merchant.cs:1219` | `shop::buy_item` → `SM_ADDITEM(200)` + `650/651`，失败码 2/3 |
 | `CM_MERCHANTQUERYREPAIRCOST(1024)` | `Operate.cs:1558` + `Merchant.cs:1555` | `shop::query_repair_cost` → `SM_SENDREPAIRCOST(671)` |
-| `CM_USERREPAIRITEM(1023)` | `Operate.cs:1585` + `Merchant.cs:1599` | `shop::repair_item` → `669/670` + `@Superrepairfail` 的 `SM_SYSMESSAGE` |
+| `CM_USERREPAIRITEM(1023)` | `Operate.cs:1585` + `Merchant.cs:1599` | `shop::repair_item` → `669/670` + `@Superrepairfail` 的 `SM_MERCHANTSAY(643)` |
 
 口径（照搬，不修 bug）：
 
@@ -41,8 +41,10 @@
 ## 2. 三条从 ⑤-3 转入的副作用（owner comment `270a3919`，DoD「实现」项逐条认领）
 
 1. **`@Superrepairfail` 文案**：`SendMsgToUser("对不起!我不能帮你修理这个物品。\\ \\ \\<返回/@main>")`
-   （`Merchant.cs:1612`）⇒ 产出 `SM_SYSMESSAGE(100)`（`RepairResult::sent_to_user`），
-   用例 `repair_ok_and_superrepairfail_side_effects` 钉住。
+   （`Merchant.cs:1612`）⇒ 产出 `SM_MERCHANTSAY(643)`（`RepairResult::sent_to_user`；尾 = `ChrName + '/' + sMsg`，
+   锚 `NormNpc.cs:1613-1616` + `PlayObject.Message.cs:1722-1724`），用例 `repair_ok_and_superrepairfail_side_effects` 钉住。
+   **返工订正（reviewer-5 F-1）**：原实现发的是 `SM_SYSMESSAGE(100)` + 玩家 Recog + 无 `ChrName/` 前缀
+   ⇒ 已改为 `SM_MERCHANTSAY(643)` + **商人** ActorId + Param=Tag=0 + Series=1 + `ChrName + '/' + sMsg`。
 2. **城堡税**：条件照抄 `CastleMerchant || Config.GetAllNpcTax`（`Merchant.cs:1249/1384/1638`；
    买/卖/修理三处）⇒ `shop` 里 `let _tax = m.castle_merchant || ctx.get_all_npc_tax;`；
    城堡/行会对象属 ⑧ 家族未建模 ⇒ **效果无目标对象**（登记 whitelist **T-47**）。
@@ -103,3 +105,44 @@
 - `E:/tmp/m2svr-redcheck-shop.py`（红检驱动，未入库）。
 - worktree 干净；共享主检出 `E:/Users/gxh/Documents/GitHub/OpenMir2` 未在其内写/编译/提交；
   十端口保持开工前状态（仅共享 3306）。本片未起栈、未占端口。
+
+## 8. 第①片返工（reviewer-5 `request_changes` @ `dd375e4e`，2026-10-13）
+
+> 背景：reviewer-5 对本片 head `dd375e4e` 判 `request_changes`（F-1/F-2 Important + M-1 Minor）。
+> 本返工只动 `bins/game-svr/**`（`shop.rs`/`main.rs`）+ whitelist T-47 + 本证据目录；不改 oracle、不碰 `crates/world`。
+
+### F-1（Important）`@fail_s_repair` 说词帧四处口径
+- **改前**：`ident=SM_SYSMESSAGE(100)`、`Recog=ctx.player_actor_id`（玩家）、`series=0`、尾无 `ChrName/` 前缀。
+- **改后**：`ident=SM_MERCHANTSAY(643)`、`Recog=m.actor_id`（**商人** ActorId）、`Param=Tag=0`、`Series=1`、
+  尾 = `downlink::gbk("<商人ChrName>/<sMsg>")`。`MerchantView` 新增 `chr_name`（宿主从世界实体 `me.name` 取）。
+- 锚：`Merchant.cs:1612` → `NormNpc.cs:1613-1616`（`ChrName + '/' + sMsg`）→ `PlayObject.Message.cs:1722-1724`
+  （`SM_MERCHANTSAY(643)`, `MakeWord(0,0)`, `Series=1`）。
+- 用例（重钉）：`shop::tests::repair_ok_and_superrepairfail_side_effects`（商人 id 与玩家 id 取不同值 `5555` vs `4242`；
+  断言 ident/recog/param/tag/series/尾）；改坏必红 **RC5**（回退旧帧 ⇒ FAILED，`left: 100 right: 643`）。
+
+### F-2（Important）`CM_USERREPAIRITEM`「找不到件」分支按 `BUG-REPLICA` 收口
+- oracle `ClientRepairItem`（`Operate.cs:1585-1597`）的循环体 `userItem = ItemList[i]` **无条件**赋值，
+  未命中时循环结束后 `userItem` 仍是**最后一件**（非 null）⇒ oracle 会继续修**最后一件**；只有空背包才 return。
+  （同源的 `ClientQueryRepairCost`（`:1558-1583`）用 `userItemA = null` 初值 ⇒ 未命中 return；**只有 repair 有这条 bug**。）
+- 按 §1 硬约束③ 1:1 照搬：新增 `repair_target_index`（= `find_bag_item_by_make_index(...).or_else(|| len-1)`），
+  `CM_USERREPAIRITEM` 改调它（`CM_MERCHANTQUERYREPAIRCOST` 保持「未命中 return」）。
+- 用例：`tests::repair_target_index_replicates_oracle_last_item_bug`；改坏必红 **RC6**（删回退 ⇒ FAILED，`left: None right: Some(2)`）。
+
+### 自报 Important（字节等价）shop 帧尾缺 `EDCode.EncodeString`
+- 复核 F-1 时发现：⑤-4 第①片所有 shop 帧的**线上尾**都缺 `EDCode.EncodeString`。
+  oracle：shop 帧经 `SendDefMessage`（`PlayObject.Socket.cs:26-43`，非空尾走 `SendSocket(ClientMsg, EDCode.EncodeString(sMsg))`）
+  或 `SendSocket(ClientMsg, EDCode.EncodeString(processMsg.Msg))`（`PlayObject.Message.cs:1731`）下发；
+  而 `emit_shop_frames` 原为 `gm_data_body(header, &f.tail)` **裸拼**（`f.tail` = `downlink::gbk` 原文）⇒ 与 oracle 逐字节不等。
+- **改后**：`emit_shop_frames` 统一 `edcode::encode(&f.tail)`（空尾 `encode([]) == []` ⇒ header-only 帧逐字节不变）。
+  `ShopFrame.tail` 语义明确为「未编码 GBK 原文」（文档已注）；与 ⑥-3 已合入的 `smframe::sm_merchantsay`（`edcode::encode`）同口径。
+- 用例：`tests::emit_shop_frames_edcodes_tail_like_send_def_message`（含空尾不变）；改坏必红 **RC7**（退回裸拼 ⇒ FAILED，
+  `left` = 裸 GBK 字节 / `right` = EDCode 字节）。
+
+### M-1（Minor）`ClientUserBuyItem` 的 `Dealing` 前置门
+- oracle `Operate.cs:196-199` 的 `if (Dealing) return;` 在 `FindMerchant` 之前。⑦ 未落地 ⇒ `Dealing` 恒 false ⇒ 行为暂时等价。
+- 按 reviewer 建议在 whitelist **T-47** 增一行登记（接 ⑦ 时补门或继续登记），避免日后静默漂移。
+
+### 返工读数
+- 用例：`shop` 7 条重钉 1 条；`game-svr` 二元用例 +2（`repair_target_index...` / `emit_shop_frames...`）。
+- 改坏必红：原 4 条 + 返工 3 条（RC5/RC6/RC7）= **7 条**。
+- 四门禁与边界见 `04-gates.txt` / `04b-workspace-test.txt` / `05-boundary.txt`（base = master `15510a47`）。
