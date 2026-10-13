@@ -1,0 +1,47 @@
+# M3⑤-实现 2 第②片 —— 命令清单（全部在自身 worktree，隔离 CARGO_TARGET_DIR）
+
+# 工作目录
+#   E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr/mir2-rs
+# 分支 merchant-entity-host；base = refs/heads/master（0dde01b7，已含本卡第①片 85dafe63）
+
+# 0) 单元 + 集成测试（本片模块）
+$ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test -p mir2-world --offline --lib merchant
+$ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test -p game-svr   --offline --lib merchant
+
+# 1) 真实 Rust trace（Claim B 站点自证；cargo test cwd = 包根 ⇒ 用绝对路径）
+$ M2_MERCHANT_TRACE_PATH=E:/tmp/merchant-tick-rust.tsv \
+    CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test -p game-svr --offline \
+      --test merchant_rng_trace -- --nocapture
+# 产物拷入本目录 00-rust-rng-trace.tsv
+
+# 2) Claim B 站点组归类（fail-closed；未归类 ⇒ rc=1）
+$ python tests/parity/m3/rng-trace-probe/rng_ledger_diff.py groups \
+    tests/parity/world/merchant-tick-20261013/00-rust-rng-trace.tsv --side rust --require-closed
+
+# 3) Claim B 合成件 groupdiff（同批商人次序对调 / 缺组 ⇒ --strict rc=1）
+$ python tests/parity/m3/rng-trace-probe/rng_ledger_diff.py groupdiff \
+    tests/parity/world/merchant-tick-20261013/04-swap-a.tsv \
+    tests/parity/world/merchant-tick-20261013/04-swap-b.tsv --a-side rust --b-side rust --strict
+$ python tests/parity/m3/rng-trace-probe/rng_ledger_diff.py groupdiff \
+    tests/parity/world/merchant-tick-20261013/04-set-a.tsv \
+    tests/parity/world/merchant-tick-20261013/04-set-b.tsv --a-side rust --b-side rust --strict
+
+# 4) 改坏必红（逐条：改坏 ⇒ 目标用例 FAILED；git checkout 还原 ⇒ ok；见 05-redchecks.txt）
+#    - 去掉 200ms 节奏门 / RunTime 门 / Ghost 60s -> 120s / 去掉 Run 的 RNG 取数
+#    - 去掉唯一 id（e.id = 0）/ 去掉 monster_ai_tick 的 merchant.is_none() 守卫
+#    - reviewer-5 0f220cac F-1 两条：F-1a spawn 循环整体 rev() ⇒ tick 序被反（`merchant_ids_sorted` 红）；
+#      F-1b 挂图改回正序 ⇒ obj_list 序被反（`obj_list[0]` 红）
+$ git checkout -- crates/world/src/merchant.rs crates/world/src/monai.rs bins/game-svr/src/merchant.rs
+
+# 5) 四门禁（合并树；见 06-gates.txt / 06b-workspace-test.txt）
+$ cargo fmt --all -- --check
+$ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo clippy --workspace --all-targets --offline -- -D warnings
+$ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test --workspace --offline --no-fail-fast
+$ CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo run -p msgcodegen --offline -- --check
+
+# 6) 边界（见 07-boundary.txt）
+$ git diff --name-only master..HEAD -- src sql MirClient
+
+# 7) 证据口径核对（LF/git-blob）+ EOL
+$ python -I tools/evidence-hash/verify_sha256sums.py tests/parity/world/merchant-tick-20261013 --check-extra
+$ python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/world/merchant-tick-20261013

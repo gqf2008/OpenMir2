@@ -1,0 +1,15 @@
+$ groupdiff … --strict（不传 --fold：construct vs spawn 仍如实 GROUP_SET_DIFF，折叠是显式开关）
+RNG_CONSUMER_GROUPDIFF include_attack=False fold=False a=C:\Users\gxh\AppData\Local\Temp\rngscene-evid-4syt8pm8\fold-a.tsv(1) b=C:\Users\gxh\AppData\Local\Temp\rngscene-evid-4syt8pm8\fold-b.tsv(1)
+  A_GROUPS {'construct': 1}
+  B_GROUPS {'spawn': 1}
+  ONLY_IN_A(missing_in_B) {'construct': 1}
+  ONLY_IN_B(extra_in_B)   {'spawn': 1}
+  SHARED_GROUPS []
+  FIRST_SHARED_ORDER_DIVERGENCE none（共享组相对次序逐位全等，len=0）
+  RUNS a=1 b=1
+  ROW_COVERAGE a_dropped=0 b_dropped=0
+  FIRST_RUN_DIVERGENCE run=0 a=construct b=spawn
+  VERDICT GROUP_SET_DIFF
+RED: 组结构不一致 ⇒ GROUP_SET_DIFF（--strict）
+
+[rc=1]

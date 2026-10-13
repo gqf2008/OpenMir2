@@ -1,0 +1,40 @@
+== 08 assemble/diff CLI（合成件，不碰端口） ==
+
+-- [8.1] run_quest_pair.ps1 -AssembleOnly -Markers markers.jsonl -State state.jsonl -Out quest_raw.jsonl
+ASSEMBLED ok ops=4 out=E:/tmp/m3cs-quest-evidence-tmp/quest_raw.jsonl state=yes
+rc=0
+
+-- [8.2] run_quest_pair.ps1 -DiffOnly（两侧同件 ⇒ GREEN）
+--- quest_diff.py diff（任务逐 step 字段级 + 说词 + 任务态位） ---
+STATS ops=4 frames=4 quotes=2 ok=4 fail=0
+CSHARP=E:/tmp/m3cs-quest-evidence-tmp/quest_raw.jsonl
+RUST=E:/tmp/m3cs-quest-evidence-tmp/quest_raw.jsonl
+DIFF 0
+GREEN: 任务逐项相同（ops=4 帧=4 说词=2 失败分支=0 任务态位逐字节相同）
+GREEN: 任务跨侧逐 step diff = 0
+GREEN: 任务跨侧 diff = 0
+rc=0
+
+-- [8.3] 合成改坏：把 rs 的 quest_flag_after 第 13 字节 0x20→0x10 ⇒ 必红（rc=1）
+--- quest_diff.py diff（任务逐 step 字段级 + 说词 + 任务态位） ---
+QUEST k=2 RED quest_flag_after csharp='0000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000' rust='0000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+STATS ops=4 frames=4 quotes=2 ok=4 fail=0
+CSHARP=E:/tmp/m3cs-quest-evidence-tmp/quest_raw.jsonl
+RUST=E:/tmp/m3cs-quest-evidence-tmp/quest_raw_mut.jsonl
+DIFF 1
+RED: 任务跨侧差异 1 项（定位见上）
+RED: 任务跨侧 diff != 0（差异要么修到 0，要么按 §6.0-3 登记 tests/parity/whitelist.md）
+RED: quest_diff 未通过（rc=1）
+rc=1
+
+-- [8.4] -AssembleOnly 不带 --state ⇒ 记录缺任务态（NOTE）
+ASSEMBLED ok ops=4 out=E:/tmp/m3cs-quest-evidence-tmp/quest_raw_nostate.jsonl state=no
+NOTE: 4/4 条记录缺任务态（未给 --state）—— diff 阶段会 PREREQ
+rc=0
+
+-- [8.5] 缺任务态的原始件 diff ⇒ fail-closed PREREQ（rc=2；绝不 GREEN）
+--- quest_diff.py diff（任务逐 step 字段级 + 说词 + 任务态位） ---
+RED: PREREQ_RED csharp: k=0 缺任务态字段 quest_flag_before —— 没有服务端会话 dump（assemble --state）就不能判『任务态一致』（盘点报告 §4.1 第 2 条；绝不静默 GREEN）(E:/tmp/m3cs-quest-evidence-tmp/quest_raw_nostate.jsonl)
+PREREQ: quest_diff 判缺件/坏件（含缺任务态 dump）—— 不得当 GREEN
+RED: quest_diff 未通过（rc=2）
+rc=2

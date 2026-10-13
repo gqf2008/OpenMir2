@@ -7,6 +7,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
+using System.Text;
 
 namespace BotSrv
 {
@@ -347,6 +348,478 @@ namespace BotSrv
                     case 53:    // SM_HEALTHSPELLCHANGED
                     case 656:   // SM_CHANGENAMECOLOR（宝宝名色 = SlaveColor）
                         sawOk = true;
+                        break;
+                    default:
+                        break;
+                }
+            }
+            if (sawFail) { return "fail_reject"; }
+            if (sawOk) { return "ok"; }
+            return sawAny ? "frames_unclassified" : "fail_no_frame";
+        }
+
+        /// <summary>
+        /// M3⑥ 夹具（卡 openmir2-m3-quest-fixture-botsrv；白名单 T-41 家族扩展）：
+        /// 进世界后按固定步骤串「点任务 NPC / 选标签 / 核对说词」。
+        /// 默认 false = 原行为（不新增任何发送/日志）。见 RobotPlayer.QuestSequenceTick。
+        /// </summary>
+        public static bool g_boQuestSequence = false;
+        public static int g_nQuestStepMs = 1000;
+        public static int g_nQuestStartDelayMs = 3000;
+        public static string g_sQuestSteps = "";
+
+        private static readonly string[] QuestAllowedOps =
+        {
+            "click_npc", "dialog_select", "take", "give", "set", "check"
+        };
+
+        /// <summary>M3⑥ 夹具：解析步骤串 `op|npc|label;op|npc|label;...`（保留顺序）。
+        /// 纯函数（不依赖实例），供 `--selftest-questseq` 与 ArmQuestSequence 共用；
+        /// 未知 op / 字段数 != 3 / 空 npc ⇒ 一律丢弃（fail-closed：宁可少发，也不发不认识的动作）。
+        /// label 为空 ⇒ 补 `@main`（click_npc 的隐式标签）。</summary>
+        public static string[] ParseQuestSteps(string raw)
+        {
+            var outList = new List<string>();
+            if (string.IsNullOrEmpty(raw))
+            {
+                return outList.ToArray();
+            }
+            foreach (string part in raw.Split(';'))
+            {
+                string step = part.Trim();
+                if (step.Length == 0)
+                {
+                    continue;
+                }
+                string[] f = step.Split('|');
+                if (f.Length != 3)
+                {
+                    continue;
+                }
+                string op = f[0].Trim().ToLowerInvariant();
+                string npc = f[1].Trim();
+                string label = f[2].Trim();
+                if (op.Length == 0 || npc.Length == 0)
+                {
+                    continue;
+                }
+                if (Array.IndexOf(QuestAllowedOps, op) < 0)
+                {
+                    continue;
+                }
+                if (label.Length == 0)
+                {
+                    label = "@main";
+                }
+                outList.Add(op + "|" + npc + "|" + label);
+            }
+            return outList.ToArray();
+        }
+
+        /// <summary>M3⑥ 夹具：把本步收到的帧 JSON 串（`{"sm":..,"text":..}` / `{"sm":..,"a":..}`）
+        /// 归类成 branch。纯函数（不依赖实例），唯一口径 = 本函数。
+        /// 口径：无帧 ⇒ fail_no_frame；出现 `SM_MENU_OK(767)`（脚本 MESSAGEBOX）⇒ ok_messagebox；
+        /// 出现 `SM_MERCHANTSAY(643)`（脚本说词）⇒ ok_say；其余 ⇒ frames_unclassified。
+        /// 失败分支（等级不足/名单已列/物品不齐）由 643 说词文本 + 帧种类序列逐字节区分（比较器负责），
+        /// 本字段只作粗归类，不承载强判据。</summary>
+        public static string ClassifyQuestFrames(IList<string> frames)
+        {
+            if (frames == null)
+            {
+                return "fail_no_frame";
+            }
+            bool sawSay = false;
+            foreach (string fr in frames)
+            {
+                if (fr == null)
+                {
+                    continue;
+                }
+                if (fr.IndexOf("\"sm\":643", StringComparison.Ordinal) >= 0)
+                {
+                    sawSay = true;
+                    continue;
+                }
+                if (fr.IndexOf("\"sm\":767", StringComparison.Ordinal) >= 0)
+                {
+                    return "ok_messagebox";
+                }
+            }
+            if (sawSay)
+            {
+                return "ok_say";
+            }
+            return frames.Count > 0 ? "frames_unclassified" : "fail_no_frame";
+        }
+
+        /// <summary>M3⑥ 夹具：取第一条 `sm=643` 说词帧的 `text` 值（无 ⇒ null）。纯函数（不依赖实例）。</summary>
+        public static string ExtractQuestSay(IList<string> frames)
+        {
+            if (frames == null)
+            {
+                return null;
+            }
+            foreach (string fr in frames)
+            {
+                if (fr == null)
+                {
+                    continue;
+                }
+                if (fr.IndexOf("\"sm\":643", StringComparison.Ordinal) < 0)
+                {
+                    continue;
+                }
+                int idx = fr.IndexOf("\"text\":\"", StringComparison.Ordinal);
+                if (idx < 0)
+                {
+                    continue;
+                }
+                int start = idx + 8;
+                var sb = new StringBuilder();
+                for (int i = start; i < fr.Length; i++)
+                {
+                    char c = fr[i];
+                    if (c == '\\' && i + 1 < fr.Length)
+                    {
+                        char n = fr[i + 1];
+                        if (n == '"' || n == '\\') { sb.Append(n); i++; continue; }
+                        if (n == 'n') { sb.Append('\n'); i++; continue; }
+                        if (n == 'r') { sb.Append('\r'); i++; continue; }
+                        if (n == 't') { sb.Append('\t'); i++; continue; }
+                    }
+                    if (c == '"') { break; }
+                    sb.Append(c);
+                }
+                return sb.ToString();
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// M3⑦ 夹具（卡 openmir2-m3-party-trade-fixture-botsrv；白名单 T-43 家族扩展）：
+        /// 两个假人按固定步骤串发组队/交易动作。
+        /// 默认 false = 原行为（不新增任何发送/日志）。见 RobotPlayer.PairTradeSequenceTick。
+        /// </summary>
+        public static bool g_boPairTradeSequence = false;
+        public static int g_nPairTradeStepMs = 1000;
+        public static int g_nPairTradeStartDelayMs = 3000;
+        public static string g_sPairTradeSteps = "";
+        public static int g_nPairTradeRole = 0;
+        public static int g_nPairTradePeerRole = 1;
+        /// <summary>actor 的精确 LoginId（= LoginAccount + PairTradeRole）。</summary>
+        public static string g_sPairTradeActorLoginId = string.Empty;
+        /// <summary>peer 的精确 LoginId（= LoginAccount + PairTradePeerRole），也是其角色名。</summary>
+        public static string g_sPairTradePeerLoginId = string.Empty;
+
+        private static readonly string[] PairTradeAllowedOps =
+        {
+            // 组队（PlayObject.Message.cs:914-935 / PlayObject.Operate.cs:787-909）
+            "group_mode_on", "group_mode_off", "create_group", "add_member", "del_member",
+            // 交易（PlayObject.Message.cs:946-960 / PlayObject.Operate.cs:911-1203）
+            "deal_try", "deal_add_item", "deal_del_item", "deal_chg_gold", "deal_end", "deal_cancel",
+            // 掉线中断（CM_SOFTCLOSE(1009)）
+            "softclose"
+        };
+
+        private static readonly string[] PairTradeAllowedRoles = { "a", "b", "x" };
+
+        /// <summary>M3⑦ 夹具：解析步骤串 `role|op|param;...`（保留顺序）。
+        /// 纯函数（不依赖实例），供 `--selftest-pairtrade` 与 ArmPairTradeSequence 共用；
+        /// 字段数 != 3 / 未知 role / 未知 op / 空角色 ⇒ 一律丢弃（fail-closed：宁可少发，也不发不认识的动作）。
+        /// param 可为空（空 = 无参）。规范化输出 `role|op|param`。</summary>
+        public static string[] ParsePairTradeSteps(string raw)
+        {
+            var outList = new List<string>();
+            if (string.IsNullOrEmpty(raw))
+            {
+                return outList.ToArray();
+            }
+            foreach (string part in raw.Split(';'))
+            {
+                string step = part.Trim();
+                if (step.Length == 0)
+                {
+                    continue;
+                }
+                string[] f = step.Split('|');
+                if (f.Length != 3)
+                {
+                    continue;
+                }
+                string role = f[0].Trim().ToLowerInvariant();
+                string op = f[1].Trim().ToLowerInvariant();
+                string param = f[2].Trim();
+                if (role.Length == 0 || op.Length == 0)
+                {
+                    continue;
+                }
+                if (Array.IndexOf(PairTradeAllowedRoles, role) < 0)
+                {
+                    continue;
+                }
+                if (Array.IndexOf(PairTradeAllowedOps, op) < 0)
+                {
+                    continue;
+                }
+                outList.Add(role + "|" + op + "|" + param);
+            }
+            return outList.ToArray();
+        }
+
+        /// <summary>M3⑦ 夹具：LoginId 是否就是本批的唯一 actor。精确相等（非 EndsWith）。纯函数。</summary>
+        public static bool IsPairTradeActor(string loginId, string actorLoginId)
+        {
+            return !string.IsNullOrEmpty(actorLoginId)
+                && string.Equals(loginId, actorLoginId, StringComparison.Ordinal);
+        }
+
+        /// <summary>M3⑦ 夹具：步骤 role（a/b/x；非法 ⇒ 空串）。纯函数。</summary>
+        public static string PairTradeStepRole(string step)
+        {
+            if (string.IsNullOrEmpty(step)) { return string.Empty; }
+            string[] f = step.Split('|');
+            return f.Length == 3 ? f[0] : string.Empty;
+        }
+
+        /// <summary>M3⑦ 夹具：步骤 op（非法 ⇒ 空串）。纯函数。</summary>
+        public static string PairTradeStepOp(string step)
+        {
+            if (string.IsNullOrEmpty(step)) { return string.Empty; }
+            string[] f = step.Split('|');
+            return f.Length == 3 ? f[1] : string.Empty;
+        }
+
+        /// <summary>M3⑦ 夹具：步骤 param（非法 ⇒ 空串）。纯函数。</summary>
+        public static string PairTradeStepParam(string step)
+        {
+            if (string.IsNullOrEmpty(step)) { return string.Empty; }
+            string[] f = step.Split('|');
+            return f.Length == 3 ? f[2] : string.Empty;
+        }
+
+        /// <summary>M3⑦ 夹具：本步是否由当前角色执行（x=两者 / a=仅 actor / b=仅 peer；非法 role ⇒ false）。纯函数。</summary>
+        public static bool PairTradeRunsForRole(string role, bool isActor)
+        {
+            if (role == "x") { return true; }
+            if (role == "a") { return isActor; }
+            if (role == "b") { return !isActor; }
+            return false;
+        }
+
+        private static int? PairTradeFrameSm(string fr)
+        {
+            if (fr == null) { return null; }
+            int idx = fr.IndexOf("\"sm\":", StringComparison.Ordinal);
+            if (idx < 0) { return null; }
+            int start = idx + 5;
+            int end = start;
+            while (end < fr.Length && (char.IsDigit(fr[end]) || fr[end] == '-')) { end++; }
+            if (end <= start) { return null; }
+            return int.TryParse(fr.Substring(start, end - start), out int v) ? v : (int?)null;
+        }
+
+        /// <summary>M3⑦ 夹具：把本步收到的帧 JSON 串归类成 branch。纯函数，唯一口径 = 本函数。
+        /// 口径：无帧 ⇒ fail_no_frame；出现任一失败帧 ⇒ fail_reject；出现任一成功/信息帧 ⇒ ok；
+        /// 其余 ⇒ frames_unclassified。失败码由完整帧种类序列（比较器）承载，本字段只作粗归类，不承载强判据。
+        /// （按 reviewer 在 ⑤-6 M-1 的提醒：不靠 JSON 子串定位字段，统一解析 `"sm":` 数字。）</summary>
+        public static string ClassifyPairTradeFrames(IList<string> frames)
+        {
+            if (frames == null)
+            {
+                return "fail_no_frame";
+            }
+            bool sawAny = false;
+            bool sawFail = false;
+            bool sawOk = false;
+            foreach (string fr in frames)
+            {
+                if (fr == null) { continue; }
+                int? sm = PairTradeFrameSm(fr);
+                if (sm == null) { continue; }
+                sawAny = true;
+                switch (sm.Value)
+                {
+                    case 659: // SM_GROUPMODECHANGED
+                    case 660: // SM_CREATEGROUP_OK
+                    case 662: // SM_GROUPADDMEM_OK
+                    case 663: // SM_GROUPDELMEM_OK
+                    case 666: // SM_GROUPCANCEL
+                    case 667: // SM_GROUPMEMBERS
+                    case 673: // SM_DEALMENU
+                    case 675: // SM_DEALADDITEM_OK
+                    case 677: // SM_DEALDELITEM_OK
+                    case 681: // SM_DEALCANCEL
+                    case 682: // SM_DEALREMOTEADDITEM
+                    case 683: // SM_DEALREMOTEDELITEM
+                    case 684: // SM_DEALCHGGOLD_OK
+                    case 686: // SM_DEALREMOTECHGGOLD
+                    case 687: // SM_DEALSUCCESS
+                    case 101: // SM_GROUPMESSAGE（组队广播文本）
+                        sawOk = true;
+                        break;
+                    case 661: // SM_CREATEGROUP_FAIL
+                    case 664: // SM_GROUPADDMEM_FAIL
+                    case 665: // SM_GROUPDELMEM_FAIL
+                    case 674: // SM_DEALTRY_FAIL
+                    case 676: // SM_DEALADDITEM_FAIL
+                    case 678: // SM_DEALDELITEM_FAIL
+                    case 685: // SM_DEALCHGGOLD_FAIL
+                        sawFail = true;
+                        break;
+                    default:
+                        break;
+                }
+            }
+            if (sawFail) { return "fail_reject"; }
+            if (sawOk) { return "ok"; }
+            return sawAny ? "frames_unclassified" : "fail_no_frame";
+        }
+
+        /// <summary>
+        /// M3⑩ 夹具（卡 openmir2-m3-selloff-fixture-botsrv；白名单 T-44 家族扩展）：
+        /// 两个假人（卖方 / 买方）按固定步骤串发元宝寄售动作。
+        /// 默认 false = 原行为（不新增任何发送/日志）。见 RobotPlayer.SellOffSequenceTick。
+        /// </summary>
+        public static bool g_boSellOffSequence = false;
+        public static int g_nSellOffStepMs = 1000;
+        public static int g_nSellOffStartDelayMs = 3000;
+        public static string g_sSellOffSteps = "";
+        public static int g_nSellOffSellerRole = 0;
+        public static int g_nSellOffBuyerRole = 1;
+        /// <summary>卖方精确 LoginId（= LoginAccount + SellOffSellerRole）。</summary>
+        public static string g_sSellOffSellerLoginId = string.Empty;
+        /// <summary>买方精确 LoginId（= LoginAccount + SellOffBuyerRole），也是其角色名。</summary>
+        public static string g_sSellOffBuyerLoginId = string.Empty;
+
+        private static readonly string[] SellOffAllowedOps =
+        {
+            // 卖方窗内（PlayObject.Sale.cs:60/127/431；CM 23002/23007/23012）
+            "seller_add_item", "seller_del_item", "seller_cancel",
+            // 上架（PlayObject.Sale.cs:516；CM 23015）
+            "seller_end",
+            // 取消正在寄售（出售人）（PlayObject.Sale.cs:185；CM 23024）
+            "seller_cancel_ing",
+            // 买方（PlayObject.Sale.cs:254/281；CM 23025/23026）
+            "buyer_buy_cancel", "buyer_buy",
+            // 掉线中断（CM_SOFTCLOSE(1009)）
+            "softclose"
+        };
+
+        private static readonly string[] SellOffAllowedRoles = { "a", "b", "x" };
+
+        /// <summary>M3⑩ 夹具：解析步骤串 `role|op|param;...`（保留顺序）。纯函数。
+        /// 字段数 != 3 / 未知 role / 未知 op / 空角色 ⇒ 一律丢弃（fail-closed：宁可少发，也不发不认识的动作）。</summary>
+        public static string[] ParseSellOffSteps(string raw)
+        {
+            var outList = new List<string>();
+            if (string.IsNullOrEmpty(raw))
+            {
+                return outList.ToArray();
+            }
+            foreach (string part in raw.Split(';'))
+            {
+                string step = part.Trim();
+                if (step.Length == 0)
+                {
+                    continue;
+                }
+                string[] f = step.Split('|');
+                if (f.Length != 3)
+                {
+                    continue;
+                }
+                string role = f[0].Trim().ToLowerInvariant();
+                string op = f[1].Trim().ToLowerInvariant();
+                string param = f[2].Trim();
+                if (role.Length == 0 || op.Length == 0)
+                {
+                    continue;
+                }
+                if (Array.IndexOf(SellOffAllowedRoles, role) < 0)
+                {
+                    continue;
+                }
+                if (Array.IndexOf(SellOffAllowedOps, op) < 0)
+                {
+                    continue;
+                }
+                outList.Add(role + "|" + op + "|" + param);
+            }
+            return outList.ToArray();
+        }
+
+        /// <summary>M3⑩ 夹具：LoginId 是否就是本批的唯一卖方。精确相等（非 EndsWith）。纯函数。</summary>
+        public static bool IsSellOffSeller(string loginId, string sellerLoginId)
+        {
+            return !string.IsNullOrEmpty(sellerLoginId)
+                && string.Equals(loginId, sellerLoginId, StringComparison.Ordinal);
+        }
+
+        /// <summary>M3⑩ 夹具：步骤 role（a/b/x；非法 ⇒ 空串）。纯函数。</summary>
+        public static string SellOffStepRole(string step)
+        {
+            if (string.IsNullOrEmpty(step)) { return string.Empty; }
+            string[] f = step.Split('|');
+            return f.Length == 3 ? f[0] : string.Empty;
+        }
+
+        /// <summary>M3⑩ 夹具：步骤 op（非法 ⇒ 空串）。纯函数。</summary>
+        public static string SellOffStepOp(string step)
+        {
+            if (string.IsNullOrEmpty(step)) { return string.Empty; }
+            string[] f = step.Split('|');
+            return f.Length == 3 ? f[1] : string.Empty;
+        }
+
+        /// <summary>M3⑩ 夹具：步骤 param（非法 ⇒ 空串）。纯函数。</summary>
+        public static string SellOffStepParam(string step)
+        {
+            if (string.IsNullOrEmpty(step)) { return string.Empty; }
+            string[] f = step.Split('|');
+            return f.Length == 3 ? f[2] : string.Empty;
+        }
+
+        /// <summary>M3⑩ 夹具：本步是否由当前角色执行（x=两者 / a=仅卖方 / b=仅买方；非法 role ⇒ false）。纯函数。</summary>
+        public static bool SellOffRunsForRole(string role, bool isSeller)
+        {
+            if (role == "x") { return true; }
+            if (role == "a") { return isSeller; }
+            if (role == "b") { return !isSeller; }
+            return false;
+        }
+
+        /// <summary>M3⑩ 夹具：把本步收到的帧 JSON 串归类成 branch。纯函数，唯一口径 = 本函数。
+        /// 口径：无帧 ⇒ fail_no_frame；出现任一失败帧 ⇒ fail_reject；出现任一成功/信息帧 ⇒ ok；
+        /// 其余 ⇒ frames_unclassified。失败码由完整帧种类序列（比较器）承载，本字段只作粗归类。</summary>
+        public static string ClassifySellOffFrames(IList<string> frames)
+        {
+            if (frames == null)
+            {
+                return "fail_no_frame";
+            }
+            bool sawAny = false;
+            bool sawFail = false;
+            bool sawOk = false;
+            foreach (string fr in frames)
+            {
+                if (fr == null) { continue; }
+                int? sm = PairTradeFrameSm(fr);
+                if (sm == null) { continue; }
+                sawAny = true;
+                switch (sm.Value)
+                {
+                    case 23003: // SM_SELLOFFADDITEM_OK
+                    case 23008: // SM_SELLOFFDELITEM_OK
+                    case 23014: // SM_SellOffCANCEL
+                    case 23016: // SM_SELLOFFEND_OK
+                    case 23027: // SM_SELLOFFBUY_OK
+                    case 767:   // SM_MENU_OK（[成功]/[错误] 文案）
+                        sawOk = true;
+                        break;
+                    case 23005: // SM_SellOffADDITEM_FAIL
+                    case 23010: // SM_SELLOFFDELITEM_FAIL
+                    case 23018: // SM_SELLOFFEND_FAIL
+                        sawFail = true;
                         break;
                     default:
                         break;

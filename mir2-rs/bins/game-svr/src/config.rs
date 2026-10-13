@@ -135,6 +135,11 @@ pub struct GateConfig {
     /// `ServerConf.cs:560` 的 `ReadWriteInteger("Setup", "MonsterPowerRate", …)`）——
     /// `load_monster_db` 的怪物能力缩放（`monitems::load_monsters` 的入参）。
     pub monster_power_rate: i32,
+    /// `[Setup] ScriptGotoCountLimit`（oracle `GameSvrConf.cs:542/1527`，缺省 `30`；
+    /// `ServerConf.cs:320` 的 `ReadWriteInteger("Setup", "ScriptGotoCountLimit", …)`）——
+    /// `ScriptNpc.ScriptGotoCountLimit`（`ScriptEngine.cs:629` 的 `playerActor.ScriptGotoCount >`
+    /// 守卫）——NPC 脚本 `goto` 递归上限，`NpcHost` 装载时注入。
+    pub script_goto_count_limit: i32,
 }
 
 /// 默认配置文件：可执行文件同目录的 `Server.conf`（与 C# `AppContext.BaseDirectory` 一致）。
@@ -198,6 +203,7 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut health_fill_time: Option<i32> = None;
     let mut spell_fill_time: Option<i32> = None;
     let mut monster_power_rate: Option<i32> = None;
+    let mut script_goto_count_limit: Option<i32> = None;
     let mut ids_addr: Option<String> = None;
     let mut ids_port: Option<u16> = None;
     let mut db_addr: Option<String> = None;
@@ -219,6 +225,15 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         };
         // 键字典同样 `OrdinalIgnoreCase`（`ConfigFile.cs:301`，R3-2）：键名也归一到 ASCII 大写。
         let (k, v) = (k.trim().to_ascii_uppercase(), v.trim());
+        // **M3⑥-实现 3 第②片**：`[Setup] ScriptGotoCountLimit`（`ServerConf.cs:320` 的
+        // `ReadWriteInteger`；现网 `Server.conf` 写 `=10000`）在下面的 `"SETUP"` match **之前**
+        // 单独处理——不并入那个 match（并入会让 rustfmt 因此重排整段，产生与本片无关的 diff）。
+        if section == "SETUP" && k == "SCRIPTGOTOCOUNTLIMIT" {
+            script_goto_count_limit = Some(
+                v.parse()
+                    .with_context(|| format!("ScriptGotoCountLimit 不是合法整数：{v:?}"))?,
+            );
+        }
         match section.as_str() {
             // 网关链路真正需要的键（本切片读这些）。
             "SERVER" => match k.as_str() {
@@ -478,6 +493,8 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         spell_fill_time: spell_fill_time.unwrap_or(800),
         // oracle 缺省值（`GameSvrConf.cs:1476` 的 `MonsterPowerRate = 10`）。
         monster_power_rate: monster_power_rate.unwrap_or(10),
+        // oracle 缺省值（`GameSvrConf.cs:1527` 的 `ScriptGotoCountLimit = 30`）。
+        script_goto_count_limit: script_goto_count_limit.unwrap_or(30),
         ids_addr,
         ids_port,
         db_addr,
@@ -691,6 +708,30 @@ mod tests {
         );
         let p3 = write(&dir, &format!("{base}[Setup]\nHealthFillTime=abc\n"));
         assert!(load(&p3).is_err(), "HealthFillTime 非整数 ⇒ 必须报错");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **M3⑥-实现 3 第②片**：`[Setup] ScriptGotoCountLimit`（`ServerConf.cs:320` 的
+    /// `ReadWriteInteger`；现网 `Server.conf` 写 `=10000`）——实值解析到 `GateConfig`；
+    /// 缺键 ⇒ oracle 源码缺省 `30`（`GameSvrConf.cs:1527`）；写了但非整数 ⇒ 报错（不静默）。
+    #[test]
+    fn setup_script_goto_count_limit_and_default() {
+        let dir = std::env::temp_dir().join(format!("gs-goto-cfg-{}", std::process::id()));
+        let base = "[Server]\nGateAddr=127.0.0.1\nGatePort=5000\nCheckBlock=1\nIDSAddr=127.0.0.1\nIDSPort=5600\nDBAddr=127.0.0.1\nDBPort=6000\n";
+        let p = write(
+            &dir,
+            &format!("{base}[Setup]\nScriptGotoCountLimit=10000\n"),
+        );
+        let c = load(&p).unwrap();
+        assert_eq!(c.script_goto_count_limit, 10000, "现网实值");
+        let p2 = write(&dir, base);
+        let c2 = load(&p2).unwrap();
+        assert_eq!(
+            c2.script_goto_count_limit, 30,
+            "缺键 ⇒ ScriptGotoCountLimit 缺省 30（GameSvrConf.cs:1527）"
+        );
+        let p3 = write(&dir, &format!("{base}[Setup]\nScriptGotoCountLimit=abc\n"));
+        assert!(load(&p3).is_err(), "ScriptGotoCountLimit 非整数 ⇒ 必须报错");
         std::fs::remove_dir_all(&dir).ok();
     }
 

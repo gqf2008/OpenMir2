@@ -19,6 +19,7 @@ mir2-data = { path = "../../crates/data" }   # StdItem 模板（Index → StdIte
 mir2-formula = { path = "../../crates/formula" }   # `RecalcLevelAbilitys` 的逐行移植（登录时先算等级派生 Abil，见 ability.rs §14）
 mir2-envir = { path = "../../crates/envir" }   # Envir *.map 真地图加载 + 逻辑名→map_id（集成点 ④）
 mir2-storage = { path = "../../crates/storage" } # `LegacyDsn`：`[DataBase] ConnctionString` → sqlx URL（勿再手写一份）
+mir2-script = { path = "../../crates/script" }   # NPC 脚本运行时（M3⑥-实现 3：`@Login`/`@StdModeFunc*`/说词帧接线，见 src/npc.rs）
 sqlx = { version = "0.8", features = ["runtime-tokio", "mysql"] }   # 建池读 stditems（与 mir2-data 同源）
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "macros", "time"] }
 anyhow = "1"

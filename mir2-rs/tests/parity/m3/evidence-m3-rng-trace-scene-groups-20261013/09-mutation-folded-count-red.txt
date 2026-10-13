@@ -1,0 +1,17 @@
+$ groupdiff … --fold --strict（折叠计数不等：C# spawn=2 vs Rust spawn=1）
+RNG_CONSUMER_GROUPDIFF include_attack=False fold=True a=C:\Users\gxh\AppData\Local\Temp\rngscene-evid-4syt8pm8\fold-a.tsv(2) b=C:\Users\gxh\AppData\Local\Temp\rngscene-evid-4syt8pm8\fold-b.tsv(1)
+  FOLD_MAP {'construct': 'spawn'}（R-6：C# construct 折叠到 Rust spawn；折叠后计数+相对次序必须相等）
+  A_GROUPS {'spawn': 2}
+  B_GROUPS {'spawn': 1}
+  ONLY_IN_A(missing_in_B) {}
+  ONLY_IN_B(extra_in_B)   {}
+  SHARED_GROUPS ['spawn']
+  FOLDED_COUNT_DIFF {'spawn': {'a': 2, 'b': 1}}（折叠后逐组计数必须相等；不等 ⇒ 折叠不成立）
+  FIRST_SHARED_ORDER_DIVERGENCE index=None a=(len差) b=(len差)
+  RUNS a=1 b=1
+  ROW_COVERAGE a_dropped=0 b_dropped=0
+  FIRST_RUN_DIVERGENCE none（组 run 序逐位全等）
+  VERDICT SHARED_REL_ORDER_DIFF+FOLDED_COUNT_DIFF
+RED: 组结构不一致 ⇒ SHARED_REL_ORDER_DIFF+FOLDED_COUNT_DIFF（--strict）
+
+[rc=1]

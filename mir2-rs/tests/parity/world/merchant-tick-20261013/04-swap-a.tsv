@@ -1,0 +1,5 @@
+1	INJECT_OK	42	0
+SEED_PROBE 1 2 3 4 5 6 7 8
+1	Next(max)	10	1	crates\world\src\merchant.rs:508
+2	Next(max)	10	2	bins\game-svr\src\homemap.rs:130
+3	Next(max)	10	3	crates\world\src\merchant.rs:514

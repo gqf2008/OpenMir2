@@ -1,0 +1,17 @@
+# M3⑤-实现 2 第②片 四门禁（隔离 CARGO_TARGET_DIR=E:/tmp/m2svr-target，--offline）
+# base = refs/heads/master（0dde01b7）；HEAD = 9e0aa3de（reviewer-5 0f220cac F-1/F-2 返工 head）
+
+$ cargo fmt --all -- --check
+fmt rc=0
+
+$ cargo clippy --workspace --all-targets --offline -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.55s
+clippy rc=0
+
+$ cargo run -p msgcodegen --offline -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+msgcodegen rc=0
+
+$ cargo test --workspace --offline --no-fail-fast   （完整件见 06b-workspace-test.txt）
+suites=94 passed=864 failed=0 ignored=21
+workspace test rc=0（0 条 FAILED/error）

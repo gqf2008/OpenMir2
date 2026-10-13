@@ -1,0 +1,14 @@
+# 证据包复算命令：R-6 folded Minor 收口（reviewer-6 residual Minor）
+# cwd = mir2-rs/tests/parity/m3
+# 卡 = openmir2-m3-rng-trace-scene-groups；base = master 7a654200
+
+python -I rng-trace-probe/rng_ledger_diff.py selftest          # → 32/32 GREEN（01-）
+python -I -c '<patch rcg.folded_counts:=identity; main(["selftest"])>'  # → RED rc=1（02-）
+python -I rng-trace-scene/rng_scene_gate.py selftest           # → 11/11 GREEN（03-）
+python -I attack_rng_ledger.py selftest                        # → 32/32 GREEN（04-）
+powershell -NoProfile -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 -SelfCheckNoStack  # → 12/12（05-）
+
+# 证据包复核（仓库 LF/git-blob 口径）
+python -I tools/evidence-hash/verify_sha256sums.py write mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-r6minor
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-r6minor
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-r6minor

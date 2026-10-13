@@ -1,0 +1,5 @@
+$ python -I -c "… r.FOLD_RULES['construct']='no_such_group' …"（表改坏必红）
+validate_folds() = []
+after mutation = ["fold construct->no_such_group: 目标组 'no_such_group' 不是已知组"]
+
+[rc=0]

@@ -1,0 +1,45 @@
+== M3⑥-实现 3（第①片 F-1/F-2 返工 + 第②片接线）：改坏必红（6 条） ==
+口径：每条先把生产代码改坏 -> 跑对应用例 -> 必红；随后从备份还原 -> 复跑必绿。
+备份目录 E:/tmp/m2svr-gates/backup2/（还原后 4 文件与备份 diff 为空，见文末）。
+
+---- RC-A：dequeue_order 改回入队序（去掉 priority 分组）----
+assertion `left == right` failed: High(0) 组先、组内入队序，SendMsg(1) 组后
+  left: ["a", "b", "c", "d"]
+ right: ["b", "d", "a", "c"]
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 123 filtered out; finished in 0.00s
+
+---- RC-B：emit_npc_says 的 recog 恒取玩家 ActorId ----
+test tests::emit_npc_says_priority_first_and_recog_by_path ... FAILED
+---- tests::emit_npc_says_priority_first_and_recog_by_path stdout ----
+thread 'tests::emit_npc_says_priority_first_and_recog_by_path' (33980) panicked at bins\game-svr\src\main.rs:5884:9:
+assertion `left == right` failed: SendMsg(normNpc) 路径 ⇒ recog = NPC ActorId（隐藏 NPC 恒 0）
+  left: 4242
+ right: 0
+    tests::emit_npc_says_priority_first_and_recog_by_path
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 166 filtered out; finished in 0.00s
+
+---- RC-C：has_manage_npc 去掉 loaded 守卫（未装载也算 != null）----
+QManage 未装载 ⇒ ManageNPC == null
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 123 filtered out; finished in 0.00s
+
+---- RC-D：sm_merchantsay 的 Series 由 1 改 0 ----
+assertion `left == right` failed: Series 恒 1
+  left: 0
+ right: 1
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 123 filtered out; finished in 0.00s
+
+---- RC-E：ScriptGotoCountLimit 缺省 30 改 0 ----
+assertion `left == right` failed: 缺键 ⇒ ScriptGotoCountLimit 缺省 30（GameSvrConf.cs:1527）
+  left: 0
+ right: 30
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 166 filtered out; finished in 0.02s
+
+---- RC-F1（返工项）：set_quest_unit_status 改 no-op（复现原缺陷）----
+  left: 0
+ right: 1
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 123 filtered out; finished in 0.01s
+=== 还原后逐文件核对（与备份 diff）===
+npc.rs: 与备份一致（还原成功）
+main.rs: 与备份一致（还原成功）
+smframe.rs: 与备份一致（还原成功）
+config.rs: 与备份一致（还原成功）

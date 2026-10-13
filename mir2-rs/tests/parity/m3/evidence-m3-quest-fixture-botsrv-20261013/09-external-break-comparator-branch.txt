@@ -1,0 +1,13 @@
+== 09 外部改坏必红：删掉 quest_diff.py 的 branch 比较 ==
+mutate: compare() 的 "op","npc","map","label","branch" → 去掉 "branch"
+mutated
+
+-- selftest（改坏后，期望 rc=1）
+SELFTEST FAIL mutate-branch-red expect=RED got=GREEN
+SELFTEST ok=35/36
+rc=1
+
+-- 还原后 selftest（期望 rc=0）
+SELFTEST ok=36/36
+rc=0
+还原：与改坏前逐字节相同
