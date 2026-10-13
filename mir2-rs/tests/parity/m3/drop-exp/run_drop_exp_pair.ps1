@@ -1,14 +1,18 @@
 #requires -Version 5
 <#
-  run_drop_exp_pair.ps1 —— M3④ 掉落/经验对拍夹具骨架（卡 `openmir2-m3-drop-exp-align`）。
+  run_drop_exp_pair.ps1 —— M3④ 掉落/经验对拍夹具（卡 `openmir2-m3-drop-exp-align` /
+  `openmir2-m3-drop-exp-fixture-botsrv`）。
 
   产物口径：两侧各自跑「固定图 + 固定怪 + 固定起点 + 同种子 100 杀」，各落一份
   `drop_exp_raw.jsonl`（一次击杀一行；schema 见 drop_exp_scenario.json），再由
   `drop_exp_diff.py diff` 做跨侧比较（掉落列表多重集/逐槽位 + 金币 + 经验增量）。
 
-  本片交付的是**夹具骨架**（不占窗口）：判据本体（比较器 + fail-closed + 改坏必红）已完整、
-  可离线复跑；真机 100 杀需要窗口 + BotSrv 侧「掉落/经验序列」驱动（承接卡见报告），
-  故本脚本的 real-run 分支**fail-closed 拒跑**（exit 2），绝不静默起栈。
+  real-run 接线（DoD②，卡 `openmir2-m3-drop-exp-fixture-botsrv`）：`-Go` 后复用 `run_pair.ps1` 的
+  两相 pin（预热建角 + SQL pin + 会话入库）并把 BotSrv 固定掉落/经验序列（`-DropExpSequence`）
+  透传下去；未获 owner 发放的 `-Go` ⇒ fail-closed 拒跑（exit 2），绝不静默起栈。
+  **仍缺的依赖（真实跑前必须先落地，归 shared 承接卡 `openmir2-m3-rng-scene-driver`）**：
+  「0137 上运行时 pin 出单只固定怪」（场景件注释 + `rng-trace-scene/DRIVER-CONTRACT.md` §7）；
+  单只怪未落地时 `run_pair` 的 DropExp 分支会在「0 杀 < -DropExpKills」处 RED（fail-closed）。
 
   用法：
     # 离线自检（所有路径 fail-closed；含比较器 selftest + 纯度门 selftest + 改坏必红），零 `.rs`、不占端口
@@ -39,6 +43,12 @@ param(
   [string]$CsharpRaw = '',
   [string]$RustRaw = '',
   [string]$PortsCsv = '5000,7000,7100,7200',
+  [int]$Bots = 1,                  # 掉落/经验场景 = 单个 attacker（attacker 由 DropExpRole 精确选择）
+  [string]$Address = '127.0.0.1',
+  [int]$Port = 7000,
+  [int]$TimeoutSec = 600,
+  [int]$DropExpStepMs = 500,       # 仅 real-run：每击间隔（写进 BotSrv AppSetting）
+  [int]$DropExpStartDelayMs = 3000,# 仅 real-run：进世界到第一击的额外等待
   [switch]$DiffOnly,
   [switch]$Go,                     # owner 发放窗口的显式授权；未给 ⇒ real-run fail-closed（exit 2）
   [switch]$SelfCheckNoStack,
@@ -58,6 +68,11 @@ $DropExpDiff = Join-Path $Here 'drop_exp_diff.py'
 $DropExpPurity = Join-Path $Here 'drop_exp_purity_gate.py'
 $RepoRoot = (Resolve-Path (Join-Path $Here '..\..\..\..\..')).Path
 . (Join-Path (Split-Path -Parent $Here) 'm3hashutil.ps1')
+# DoD② 接线（卡 openmir2-m3-drop-exp-fixture-botsrv）：real-run 复用 run_pair.ps1 的两相 pin + 会话入库。
+$RunPair = Join-Path (Split-Path -Parent $Here) 'run_pair.ps1'
+$RunBots = Join-Path $RepoRoot 'tools\botload\run_bots.ps1'
+$Sessions = Join-Path (Split-Path -Parent $Here) 'sessions'
+. (Join-Path (Split-Path -Parent $Here) 'gate_guards.ps1')
 
 if ([string]::IsNullOrEmpty($ScenarioFile)) { $ScenarioFile = Join-Path $Here 'drop_exp_scenario.json' }
 if ([string]::IsNullOrEmpty($PurityTable)) { $PurityTable = Join-Path $Here 'drop_exp_consumers.tsv' }
@@ -269,10 +284,27 @@ if ($SelfCheckNoStack) {
     $rcNoGo = $LASTEXITCODE
     Add-Result 'no-go-realrun-prereq' ($rcNoGo -eq 2) ("rc=$rcNoGo")
 
-    # ⑮ 给了 -Go 但 run_pair.ps1 两相接线（DoD②）未落地 ⇒ 仍 fail-closed rc=2 并点名 PLANNED（不静默起栈）。
-    $goOut = (& powershell -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath -Side csharp -Go -PortsCsv 17985,17986,17987,17988 2>&1 | Out-String)
-    $rcGo = $LASTEXITCODE
-    Add-Result 'go-driver-pending-prereq' (($rcGo -eq 2) -and ($goOut -match 'PLANNED')) ("rc=$rcGo")
+    # ⑮ DoD② 接线（离线、零栈）：run_pair 的开关耦合 —— -DropExpSequence 必须一并传 -DisableAutoPlay
+    #    与全部 DropExp* 参数；默认路径不得出现。
+    $emitOnRaw = & powershell -NoProfile -ExecutionPolicy Bypass -File $RunPair -EmitOpsArgs -DropExpSequence -DropExpKills 100 -DropExpStepMs 500 -DropExpStartDelayMs 3000 -DropExpDir 2 -DropExpRole 0 -DropExpMonster '稻草人'
+    if ($LASTEXITCODE -ne 0) { Add-Result 'emit-dropexp-passthrough' $false 'emit_on_rc!=0' }
+    else {
+      $emitOnText = ((@($emitOnRaw) | Where-Object { $_ -notmatch '^\s*(WARN:|PIN_NO_MONSTER|MAP_HAS_NO_MONSTER|MAP_HAS_NO_AI_CONSUMERS)' }) -join "`n").Trim()
+      $emitOn = ($emitOnText | ConvertFrom-Json)
+      $onArgs = @($emitOn.bot_args)
+      $onHas = ($onArgs -contains '-DropExpSequence') -and ($onArgs -contains '-DisableAutoPlay') -and ($onArgs -contains '-DropExpKills') -and ($onArgs -contains '-DropExpMonster') -and ($onArgs -contains '稻草人')
+      $wantScope = 'on kills=100 step_ms=500 start_delay_ms=3000 dir=2 role=0 monster=稻草人 disable_autoplay=True'
+      Add-Result 'emit-dropexp-passthrough' ($onHas -and ($emitOn.drop_exp_sequence -eq $wantScope)) ("scope=" + $emitOn.drop_exp_sequence)
+    }
+
+    $emitOffRaw = & powershell -NoProfile -ExecutionPolicy Bypass -File $RunPair -EmitOpsArgs
+    if ($LASTEXITCODE -ne 0) { Add-Result 'emit-dropexp-default-off' $false 'emit_off_rc!=0' }
+    else {
+      $emitOffText = ((@($emitOffRaw) | Where-Object { $_ -notmatch '^\s*(WARN:|PIN_NO_MONSTER|MAP_HAS_NO_MONSTER|MAP_HAS_NO_AI_CONSUMERS)' }) -join "`n").Trim()
+      $emitOff = ($emitOffText | ConvertFrom-Json)
+      $offArgs = @($emitOff.bot_args)
+      Add-Result 'emit-dropexp-default-off' ((-not ($offArgs -contains '-DropExpSequence')) -and (-not ($offArgs -contains '-DisableAutoPlay')) -and ($emitOff.drop_exp_sequence -eq '(off)')) ("scope=" + $emitOff.drop_exp_sequence)
+    }
 
     # ⑯ BotSrv 生产函数 selftest（attacker 精确选择 / 击杀窗口归类 / SM_WINEXP 字段抽取 / 行组装）
     #    —— 改坏必红由代码 review + 本断言钉住（片内红检另存证据）。
@@ -293,6 +325,28 @@ if ($SelfCheckNoStack) {
       Add-Result 'botsrv-dropseq-selftest' (($seqRc -eq 0) -and ($seqOut -match 'DROPEXPSEQ SELFTEST GREEN')) ("rc=$seqRc")
     }
     $ErrorActionPreference = $prevEap
+
+    # ⑰ DoD② 接线（离线、零栈）：run_bots 的 DropExp* 配置透传 —— 开 ⇒ AppSetting.json 六个字段到位；关 ⇒ 默认 off。
+    $appJson = Join-Path $RepoRoot 'src\BotSrv\bin\Release\AppSetting.json'
+    $cfgOnOut = (& powershell -NoProfile -ExecutionPolicy Bypass -File $RunBots -DropExpSequence -DropExpKills 100 -DropExpStepMs 500 -DropExpStartDelayMs 3000 -DropExpDir 2 -DropExpRole 0 -DropExpMonster '稻草人' -WriteConfigOnly -SkipBuild 2>&1 | Out-String)
+    $cfgOnRc = $LASTEXITCODE
+    if ($cfgOnRc -ne 0 -or -not (Test-Path $appJson)) {
+      Add-Result 'botsrv-dropexp-config-on' $false ("rc=$cfgOnRc")
+    }
+    else {
+      $app = Get-Content $appJson -Raw | ConvertFrom-Json
+      $ok = ($app.BotPlay.DropExpSequence -eq $true) -and ([int]$app.BotPlay.DropExpKills -eq 100) -and ([int]$app.BotPlay.DropExpStepMs -eq 500) -and ([int]$app.BotPlay.DropExpDir -eq 2) -and ([int]$app.BotPlay.DropExpRole -eq 0) -and ($app.BotPlay.DropExpMonster -eq '稻草人')
+      Add-Result 'botsrv-dropexp-config-on' $ok ("DropExpSequence=" + $app.BotPlay.DropExpSequence + " kills=" + $app.BotPlay.DropExpKills)
+    }
+    $cfgOffOut = (& powershell -NoProfile -ExecutionPolicy Bypass -File $RunBots -WriteConfigOnly -SkipBuild 2>&1 | Out-String)
+    $cfgOffRc = $LASTEXITCODE
+    if ($cfgOffRc -ne 0 -or -not (Test-Path $appJson)) {
+      Add-Result 'botsrv-dropexp-config-default-off' $false ("rc=$cfgOffRc")
+    }
+    else {
+      $app2 = Get-Content $appJson -Raw | ConvertFrom-Json
+      Add-Result 'botsrv-dropexp-config-default-off' ($app2.BotPlay.DropExpSequence -eq $false) ("DropExpSequence=" + $app2.BotPlay.DropExpSequence)
+    }
   } finally {
     Remove-Item -Recurse -Force $tmpRoot -ErrorAction SilentlyContinue
   }
@@ -300,7 +354,7 @@ if ($SelfCheckNoStack) {
   $total = $script:DexpPass + $script:DexpFail.Count
   Write-Output ("SELFTEST ok={0}/{1} failures={2}" -f $script:DexpPass, $total, ($script:DexpFail -join ','))
   if ($script:DexpFail.Count -gt 0) { exit 1 }
-  Write-Output 'GREEN: 无栈自检全绿（比较器 + 纯度门 fail-closed + 改坏必红 + LF 写出 + no-Go/-Go real-run fail-closed + BotSrv --selftest-dropseq + 零端口）'
+  Write-Output 'GREEN: 无栈自检全绿（比较器 + 纯度门 fail-closed + 改坏必红 + LF 写出 + no-Go real-run fail-closed + DoD② run_pair DropExp 透传/默认关 + BotSrv 配置透传/默认关 + BotSrv --selftest-dropseq + 零端口）'
   exit 0
 }
 
@@ -340,13 +394,107 @@ if ($DiffOnly) {
 }
 
 # =========================================================================== #
-# Mode: real run（真机 100 杀）—— 本片只交骨架 ⇒ fail-closed 拒跑
-# =========================================================================== #
+# Mode: real run（真机 100 杀）—— 未获 owner 窗口（-Go）前 fail-closed 拒跑
+# ===========================================================================
+# DoD②（卡 openmir2-m3-drop-exp-fixture-botsrv）：real-run 分支复用 `run_pair.ps1` 的两相 pin
+# （预热建角 + SQL pin + 会话入库）并把 BotSrv 的固定掉落/经验序列（`-DropExpSequence`）透传下去；
+# 每侧各落 `drop_exp_raw.jsonl`；`-Side rust -PeerSession <csharp 会话>` 时做 peer 护栏 + 跨侧 diff。
+# 仍未接线的依赖（**真实跑前必须先落地**，归 shared 承接卡 `openmir2-m3-rng-scene-driver`）：
+#   场景件注释/`rng-trace-scene/DRIVER-CONTRACT.md` §7 指出的「0137 上运行时 pin 出**单只固定怪**」
+#   （C# 侧 GM/脚本 spawn + Rust 侧宿主 AI 模式开关）。本夹具本刻只交「驱动透传 + 两相 pin」接线；
+#   单只怪未落地时，`run_pair` 的 DropExp 分支会在「0 杀 < -DropExpKills」处 RED（fail-closed，不静默绿）。
 if (-not $Go) {
-  Write-Output 'PREREQ_MISSING: 真机 100 杀需 owner 发放窗口（起栈禁接管道；本片只交夹具骨架，不占端口）'
+  Write-Output 'PREREQ_MISSING: 真机 100 杀需 owner 发放窗口（起栈禁接管道；未获 -Go 一律拒跑，不占端口）'
   Write-Output ("NEXT: 获窗口后按 README 的命令序列跑（-Side csharp 基线 → -Side rust -PeerSession <csharp 会话> → -DiffOnly）")
   exit 2
 }
-Write-Output 'PREREQ_MISSING: BotSrv 掉落/经验驱动已实现（`--selftest-dropseq` GREEN），但 run_pair.ps1 的 `-DropExpSequence` 两相接线（DoD②）在本片未落地 ⇒ 真机序列仍无法产生可判原始件'
-Write-Output ("PLANNED: -Side {0} -Kills {1} -Seed {2} -Prefix {3} -PeerSession {4}" -f $Side, $Kills, $Seed, $Prefix, $PeerSession)
-exit 2
+
+# 场景固定输入（scenario 是单一真源；命令行 -Kills 必须与之一致，否则 fail-closed）。
+$sc = $null
+try { $sc = (Get-Content -LiteralPath $ScenarioFile -Raw | ConvertFrom-Json) } catch { }
+if ($null -eq $sc) { Write-Output ("PREREQ_MISSING: 读不出场景件 {0}" -f $ScenarioFile); exit 2 }
+if ([int]$sc.kills -ne $Kills) {
+  Write-Output ("PREREQ_MISSING: -Kills {0} 与场景 kills={1} 不一致（场景是单一真源）" -f $Kills, $sc.kills)
+  exit 2
+}
+$monsterName = [string]$sc.monster
+$attackDir = [int]$sc.attacker.dir
+$attackLevel = [int]$sc.attacker.level
+Write-Output ("DROPEXP_REALRUN side={0} kills={1} seed={2} map={3} monster={4} pose=({5},{6}) dir={7} level={8}" -f `
+  $Side, $Kills, $Seed, $sc.map, $monsterName, $sc.attacker.x, $sc.attacker.y, $attackDir, $attackLevel)
+
+# 前置：MySQL（两侧都要取两相 pin 快照/落库）。
+$mysqlOk = $false
+try {
+  $c = New-Object System.Net.Sockets.TcpClient
+  $iar = $c.BeginConnect('127.0.0.1', 3306, $null, $null)
+  $mysqlOk = $iar.AsyncWaitHandle.WaitOne(1500)
+  $c.Close()
+} catch { $mysqlOk = $false }
+if (-not $mysqlOk) { Write-Output 'PREREQ_MISSING: MySQL 127.0.0.1:3306 不可达'; exit 2 }
+Write-Output 'PREFLIGHT MySQL 在听'
+
+# 复用 run_pair.ps1 的两相 pin + 固定掉落/经验序列（两侧同开关、同起点）。
+$pairArgs = @('-Side', $Side, '-Bots', $Bots, '-Prefix', $Prefix, '-Address', $Address, '-Port', $Port, '-TimeoutSec', $TimeoutSec,
+              '-FixedNewChr', '-PinStartPose', '-PinLevel', $attackLevel, '-PinDir', $attackDir,
+              '-DropExpSequence', '-DropExpKills', $Kills, '-DropExpStepMs', $DropExpStepMs, '-DropExpStartDelayMs', $DropExpStartDelayMs,
+              '-DropExpDir', $attackDir, '-DropExpRole', 0, '-DropExpMonster', $monsterName)
+& powershell -ExecutionPolicy Bypass -File $RunPair @pairArgs
+$pairExit = $LASTEXITCODE
+if ($pairExit -ne 0) {
+  Write-Output ("RED: run_pair（{0} 侧）未通过（rc={1}）——两相 pin / 固定掉落经验序列 / 原始件未成立" -f $Side, $pairExit)
+  exit 1
+}
+
+$mine = @(Get-ChildItem $Sessions -Directory -Filter ("{0}-*" -f $Side) -ErrorAction SilentlyContinue |
+          Where-Object { Test-Path (Join-Path $_.FullName 'baseline.json') } |
+          Sort-Object LastWriteTime -Descending) | Select-Object -First 1
+if ($null -eq $mine) {
+  Write-Output ("RED: 找不到 {0} 侧新会话目录（缺 baseline.json）" -f $Side)
+  exit 1
+}
+Write-Output ("SESSION_{0} {1}" -f $Side.ToUpper(), $mine.Name)
+
+$mineBaseline = Get-Content (Join-Path $mine.FullName 'baseline.json') -Raw | ConvertFrom-Json
+$scopeLocal = [string]$mineBaseline.drop_exp_sequence
+Write-Output ("DROPEXPSCOPE local='{0}'" -f $scopeLocal)
+$rawMine = Join-Path $mine.FullName 'drop_exp_raw.jsonl'
+if (-not (Test-Path -LiteralPath $rawMine)) {
+  Write-Output ("PREREQ_MISSING: 本侧会话缺 drop_exp_raw.jsonl（run_pair assemble 未产出）-> {0}" -f $rawMine)
+  exit 2
+}
+
+if ($Side -eq 'rust' -and -not [string]::IsNullOrEmpty($PeerSession)) {
+  $peer = Join-Path $Sessions $PeerSession
+  if (-not (Test-Path $peer)) { Write-Output ("PREREQ_MISSING: 找不到 C# 对照会话 {0}" -f $peer); exit 2 }
+  $poseLocal = (Get-M3SessionStartPose -Dir $mine.FullName)
+  $poseGuard = Get-M3PeerStartPoseGuard -PeerDir $peer -LocalPose $poseLocal
+  foreach ($m in $poseGuard.messages) { Write-Output $m }
+  if (@($poseGuard.failed).Count -gt 0) {
+    Write-Output ("PREREQ_MISSING: 两侧固定起点不同口径（{0}）——先按同一组 pin 重跑基线" -f (@($poseGuard.failed) -join ','))
+    exit 2
+  }
+  Write-Output ("DROPEXPPOSE_OK peer='{0}' local='{1}'" -f $poseGuard.peer_pose, $poseLocal)
+  $scopeGuard = Get-M3PeerDropExpScopeGuard -PeerDir $peer -LocalScope $scopeLocal
+  foreach ($m in $scopeGuard.messages) { Write-Output $m }
+  if (@($scopeGuard.failed).Count -gt 0) {
+    Write-Output ("PREREQ_MISSING: 两侧掉落/经验序列开关不同口径（{0}）——先按同一组开关重跑基线" -f (@($scopeGuard.failed) -join ','))
+    exit 2
+  }
+  Write-Output ("DROPEXPSCOPE_OK peer='{0}' local='{1}'" -f $scopeGuard.peer_scope, $scopeLocal)
+  $out = ''
+  $rc = Invoke-DropExpDiff -Csharp (Join-Path $peer 'drop_exp_raw.jsonl') -Rust $rawMine -Out ([ref]$out)
+  Write-Output $out
+  if ($rc -eq 0) { Write-Output 'GREEN: 跨侧掉落/经验 diff = 0'; exit 0 }
+  if ($rc -eq 2) { Write-Output 'PREREQ_MISSING: 掉落/经验原始件不可判（缺文件/字段/非法 JSON/k 不连续）'; exit 2 }
+  Write-Output 'RED: 跨侧掉落/经验 diff != 0'
+  exit 1
+}
+
+if ($Side -eq 'csharp') {
+  Write-Output ("NEXT: 换 Rust 栈后跑  run_drop_exp_pair.ps1 -Side rust -Kills {0} -Seed {1} -Prefix <前缀> -PeerSession {2} -Go" -f $Kills, $Seed, $mine.Name)
+} else {
+  Write-Output 'NOTE: 未给 -PeerSession，跳过跨侧 diff（-Side rust 的正式判据要 C# 对照会话）'
+}
+Write-Output 'GREEN: 侧运行与固定掉落/经验序列判据通过'
+exit 0

@@ -89,6 +89,13 @@ param(
   [int]$SellOffStartDelayMs = 3000, # 仅 -SellOffSequence 时生效：进世界到第一步的额外等待
   [int]$SellOffSellerRole = 0,     # 仅 -SellOffSequence 时生效：卖方账号序号
   [int]$SellOffBuyerRole = 1,      # 仅 -SellOffSequence 时生效：买方账号序号
+  [switch]$DropExpSequence,        # M3④ 夹具：BotSrv 进世界后按固定序列发 CM_HIT 并聚合掉落/经验（T-35 家族）
+  [int]$DropExpKills = 100,        # 仅 -DropExpSequence 时生效：攻击步数（= 目标击杀数）
+  [int]$DropExpStepMs = 500,       # 仅 -DropExpSequence 时生效：每步间隔
+  [int]$DropExpStartDelayMs = 3000,# 仅 -DropExpSequence 时生效：进世界到第一步的额外等待
+  [int]$DropExpDir = 2,            # 仅 -DropExpSequence 时生效：攻击朝向（CM_HIT 的 Tag）
+  [int]$DropExpRole = 0,           # 仅 -DropExpSequence 时生效：attacker 账号序号（LoginId = LoginAccount + 该序号）
+  [string]$DropExpMonster = '',    # 仅 -DropExpSequence 时生效：目标怪物名（写进每行 `monster`；仅记账用）
   [switch]$EmitOpsArgs,            # 只打印 run_bots 命令组成（含 -DisableAutoPlay 耦合）后退出；无副作用，供无栈自检
   [switch]$PinStartPose,           # T-14 固定起点变体（owner 86478c55/d7798370）：预热建角 → SQL pin → BEFORE 快照 → 计分跑（选角；不带 -FixedNewChr/-NewAccount）
   [string]$PinMapName = '',   # 攻击变体的 pin 地图（R-1 要求整张零刷怪；空 ⇒ -AttackPinPair 取 $script:M3AttackPinMap，否则 '0'）
@@ -119,6 +126,9 @@ $Dbsnap = Join-Path $RepoRoot 'tools\dbsnap\dbsnap.py'
 $Botload = Join-Path $RepoRoot 'tools\botload\run_bots.ps1'
 $MysqlExe = 'D:\mysql\mariadb-10.11.19-winx64\bin\mysql.exe'
 $Scoped = Join-Path $Here 'scoped_diff.py'
+# M3④ 掉落/经验序列的原始件路径：在 SessionDir 就绪后填入（真实跑 = <session>/drop_exp_raw.jsonl；
+# -EmitOpsArgs 路径下为空 ⇒ 不把 -DropExpOut 当作计划串的一部分，避免自检与实际漂移）。
+$script:M3DropExpRawOut = ''
 # 背包/装备序列口径（T-14 复跑：两侧同一组开关）的唯一形态在 gate_guards.ps1（与 run_m3_gate/selftest 共用）。
 . (Join-Path $Here 'gate_guards.ps1')
 # F-2 竞态修（owner 2026-10-13 04:05）：AFTER 快照前「等断线存档落库」的唯一口径在 gate_guards.ps1；
@@ -229,6 +239,17 @@ function Get-M3BotOpPlan {
     $runner += " -SellOffSequence -SellOffSteps '$SellOffSteps' -SellOffStepMs $SellOffStepMs -SellOffStartDelayMs $SellOffStartDelayMs -SellOffSellerRole $SellOffSellerRole -SellOffBuyerRole $SellOffBuyerRole -DisableAutoPlay"
     $planArgs += @('-SellOffSequence', '-SellOffSteps', $SellOffSteps, '-SellOffStepMs', $SellOffStepMs, '-SellOffStartDelayMs', $SellOffStartDelayMs, '-SellOffSellerRole', $SellOffSellerRole, '-SellOffBuyerRole', $SellOffBuyerRole, '-DisableAutoPlay')
   }
+  if ($DropExpSequence -and -not $ForPrewarm) {
+    # M3④ 夹具（卡 openmir2-m3-drop-exp-fixture-botsrv）：固定掉落/经验序列**必须**一并关挂机
+    # （同 T-14/T-29 理由：挂机 = 无种子 RNG 随机走位，会改坐标/视野 ⇒ 两侧不可比）。
+    $runner += " -DropExpSequence -DropExpKills $DropExpKills -DropExpStepMs $DropExpStepMs -DropExpStartDelayMs $DropExpStartDelayMs -DropExpDir $DropExpDir -DropExpRole $DropExpRole -DropExpMonster '$DropExpMonster' -DisableAutoPlay"
+    $planArgs += @('-DropExpSequence', '-DropExpKills', $DropExpKills, '-DropExpStepMs', $DropExpStepMs, '-DropExpStartDelayMs', $DropExpStartDelayMs, '-DropExpDir', $DropExpDir, '-DropExpRole', $DropExpRole, '-DropExpMonster', $DropExpMonster, '-DisableAutoPlay')
+    # 原始件直写会话目录（仅在 SessionDir 就绪的真实跑路径上追加；-EmitOpsArgs 不追加）。
+    if (-not [string]::IsNullOrEmpty($script:M3DropExpRawOut)) {
+      $runner += " -DropExpOut '$script:M3DropExpRawOut'"
+      $planArgs += @('-DropExpOut', $script:M3DropExpRawOut)
+    }
+  }
   return [pscustomobject]@{ runner = $runner; botArgs = $planArgs }
 }
 
@@ -309,12 +330,13 @@ if ($EmitOpsArgs) {
     quest_sequence    = Format-M3QuestScope -QuestSequence ([bool]$QuestSequence) -QuestSteps $QuestSteps -QuestStepMs $QuestStepMs -QuestStartDelayMs $QuestStartDelayMs -DisableAutoPlay ([bool]$QuestSequence)
     pair_trade_sequence = Format-M3PairTradeScope -PairTradeSequence ([bool]$PairTradeSequence) -PairTradeSteps $PairTradeSteps -PairTradeStepMs $PairTradeStepMs -PairTradeStartDelayMs $PairTradeStartDelayMs -PairTradeRole $PairTradeRole -PairTradePeerRole $PairTradePeerRole -DisableAutoPlay ([bool]$PairTradeSequence)
     selloff_sequence  = Format-M3SellOffScope -SellOffSequence ([bool]$SellOffSequence) -SellOffSteps $SellOffSteps -SellOffStepMs $SellOffStepMs -SellOffStartDelayMs $SellOffStartDelayMs -SellOffSellerRole $SellOffSellerRole -SellOffBuyerRole $SellOffBuyerRole -DisableAutoPlay ([bool]$SellOffSequence)
+    drop_exp_sequence = Format-M3DropExpScope -DropExpSequence ([bool]$DropExpSequence) -DropExpKills $DropExpKills -DropExpStepMs $DropExpStepMs -DropExpStartDelayMs $DropExpStartDelayMs -DropExpDir $DropExpDir -DropExpRole $DropExpRole -DropExpMonster $DropExpMonster -DisableAutoPlay ([bool]$DropExpSequence)
     start_pose        = (Get-M3StartPoseLabel)
     attack_pose       = (Get-M3AttackPoseLabel)
   }
   # F-2 竞态修（owner 2026-10-13 04:05）：存档序列的 AFTER 快照前「等断线存档落库」仪器形态，
   # 无栈自检据此机判生产接线未被削弱（mode=save_rcd、timeout/poll>=1、quiet>=2），也据此发现「改回固定 sleep」。
-  if ($BagEquipSequence -or $AttackSequence -or $ShopSequence -or $GuildCastleSequence -or $HeroPetSequence -or $QuestSequence -or $PairTradeSequence -or $SellOffSequence) {
+  if ($BagEquipSequence -or $AttackSequence -or $ShopSequence -or $GuildCastleSequence -or $HeroPetSequence -or $QuestSequence -or $PairTradeSequence -or $SellOffSequence -or $DropExpSequence) {
     $obj['save_settle_instrument'] = (Format-M3SaveSettleInstrument -TimeoutSeconds $SaveSettleTimeoutSeconds -PollMilliseconds $SaveSettlePollMs -QuietPolls $SaveSettleQuietPolls)
   }
   if ($PinStartPose) {
@@ -342,6 +364,7 @@ if ($EmitOpsArgs) {
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $SessionDir = Join-Path $RepoRoot ("mir2-rs\tests\parity\m3\sessions\{0}-{1}" -f $Side, $stamp)
 New-Item -ItemType Directory -Force -Path $SessionDir | Out-Null
+if ($DropExpSequence) { $script:M3DropExpRawOut = Join-Path $SessionDir 'drop_exp_raw.jsonl' }
 Write-Output ("SESSION " + $SessionDir)
 Write-Output ("SIDE={0} PREFIX={1} BOTS={2} ENTRY={3}:{4}" -f $Side, $Prefix, $Bots, $Address, $Port)
 
@@ -613,6 +636,9 @@ $pairTradeMarkersPath = Join-Path $SessionDir 'pair_trade_markers.jsonl'
 $pairTradeRawPath = Join-Path $SessionDir 'party_trade_raw.jsonl'
 $sellOffMarkersPath = Join-Path $SessionDir 'selloff_markers.jsonl'
 $sellOffRawPath = Join-Path $SessionDir 'selloff_raw.jsonl'
+$dropExpSeqMarkers = @()
+$dropExpMarkersPath = Join-Path $SessionDir 'drop_exp_markers.jsonl'
+$dropExpRawPath = Join-Path $SessionDir 'drop_exp_raw.jsonl'
 if (-not $SkipBots) {
   $plan = Get-M3BotOpPlan
   $opsRunner = $plan.runner
@@ -955,6 +981,46 @@ if (-not $SkipBots) {
       exit 1
     }
   }
+  # M3④（T-35 家族扩展）：固定掉落/经验序列的执行证据（逐击一条 `M3DROPEXPSEQ` 事件，落 bot.log；
+  # 原始件由 BotSrv 按 -DropExpOut 直写会话目录）。判据：开了 -DropExpSequence 就必须看到 attacker 的
+  # `complete`（且 kills >= DropExpKills）；缺段 ⇒ RED，绝不拿空序列去跨侧 diff（否则恒绿）。
+  $dropExpSeqMarkers = @([regex]::Matches($botText, 'M3DROPEXPSEQ [^\r\n]*') | ForEach-Object { $_.Value })
+  Write-Output ("OPS_DROPEXPSEQ_MARKERS count={0}" -f $dropExpSeqMarkers.Count)
+  if ($DropExpSequence) {
+    if ($dropExpSeqMarkers.Count -eq 0) {
+      Write-Output 'RED: -DropExpSequence 开了但 bot.log 里一条 M3DROPEXPSEQ 标记都没有 —— 固定掉落/经验序列没跑（驱动未生效/假人未进世界）'
+      exit 1
+    }
+    Set-Content -Path $dropExpMarkersPath -Value $dropExpSeqMarkers -Encoding utf8
+    Assert-M3MarkerPrefix -Path $dropExpMarkersPath -Marker 'M3DROPEXPSEQ'
+    $deComplete = @($dropExpSeqMarkers | Where-Object { $_ -match '"phase"\s*:\s*"complete"' }).Count
+    $deKills = 0
+    foreach ($ev in $dropExpSeqMarkers) {
+      if ($ev -match '"phase"\s*:\s*"complete"') {
+        $mk = [regex]::Match($ev, '"kills"\s*:\s*(?<k>\d+)')
+        if ($mk.Success) { $deKills = [Math]::Max($deKills, [int]$mk.Groups['k'].Value) }
+      }
+    }
+    Write-Output ("OPS_DROPEXPSEQ complete={0} kills={1} expected_kills={2}" -f $deComplete, $deKills, $DropExpKills)
+    if ($deComplete -lt 1) {
+      Write-Output 'RED: -DropExpSequence 开了但没有 `M3DROPEXPSEQ phase=complete` —— 序列未收尾（驱动中途断了）'
+      exit 1
+    }
+    if ($deKills -lt $DropExpKills) {
+      Write-Output ("RED: -DropExpSequence 只跑了 {0} 杀 < -DropExpKills {1} —— 序列不完整" -f $deKills, $DropExpKills)
+      exit 1
+    }
+    if (-not (Test-Path -LiteralPath $dropExpRawPath)) {
+      Write-Output ("RED: -DropExpSequence 完成但会话缺原始件 {0}（BotSrv -DropExpOut 未生效/未落盘）" -f $dropExpRawPath)
+      exit 1
+    }
+    $deRows = @(Get-Content -LiteralPath $dropExpRawPath | Where-Object { $_.Trim() -ne '' }).Count
+    Write-Output ("OPS_DROPEXPSEQ_RAW rows={0}" -f $deRows)
+    if ($deRows -lt 1) {
+      Write-Output ("RED: {0} 无有效行（掉落/经验原始件为空）" -f $dropExpRawPath)
+      exit 1
+    }
+  }
   # 判据取"可靠段"：账号创建 + 登录成功 = N（实测稳定）。
   # 进世界之后的段位今日不可靠：BotSrv 会在 `TMap.CanMove` 崩溃并带走整个进程
   #（工具侧已知阻塞，见 m3/README.md「已知阻塞」），崩溃点与时序相关（有时停在"确认游戏公告"）。
@@ -978,7 +1044,7 @@ if (-not $SkipBots) {
 # 修法 = **等状态变化**（轮询到本前缀角色存档落库），超时 ⇒ fail-closed（点名 RED，绝不静默继续）。
 # 仅 -BagEquipSequence/-AttackSequence（且非 -SkipBots）生效；其余路径逐字节不变（不加任何等待）。
 $saveSettleLabel = '(off)'
-if (($BagEquipSequence -or $AttackSequence -or $ShopSequence -or $GuildCastleSequence -or $HeroPetSequence -or $QuestSequence -or $PairTradeSequence -or $SellOffSequence) -and -not $SkipBots) {
+if (($BagEquipSequence -or $AttackSequence -or $ShopSequence -or $GuildCastleSequence -or $HeroPetSequence -or $QuestSequence -or $PairTradeSequence -or $SellOffSequence -or $DropExpSequence) -and -not $SkipBots) {
   if ([string]::IsNullOrEmpty($saveSettleRef)) { throw 'SAVE_SETTLE_REF 缺失——存档序列必须在 BEFORE 快照前取 DB 参考时刻（F-2）' }
   $saveSettleProbe = {
     $n = Invoke-Mysql (Get-M3SaveSettleProbeSql -ChrNamePrefix $Prefix -ReferenceTime $saveSettleRef)
@@ -1051,6 +1117,9 @@ $baseline = [pscustomobject]@{
   pair_trade_markers = $pairTradeSeqMarkers
   selloff_sequence = (Format-M3SellOffScope -SellOffSequence ([bool]$SellOffSequence) -SellOffSteps $SellOffSteps -SellOffStepMs $SellOffStepMs -SellOffStartDelayMs $SellOffStartDelayMs -SellOffSellerRole $SellOffSellerRole -SellOffBuyerRole $SellOffBuyerRole -DisableAutoPlay ([bool]$SellOffSequence))
   selloff_markers = $sellOffSeqMarkers
+  drop_exp_sequence = (Format-M3DropExpScope -DropExpSequence ([bool]$DropExpSequence) -DropExpKills $DropExpKills -DropExpStepMs $DropExpStepMs -DropExpStartDelayMs $DropExpStartDelayMs -DropExpDir $DropExpDir -DropExpRole $DropExpRole -DropExpMonster $DropExpMonster -DisableAutoPlay ([bool]$DropExpSequence))
+  drop_exp_markers = $dropExpSeqMarkers
+  drop_exp_raw = $(if (Test-Path $dropExpRawPath) { (Split-Path $dropExpRawPath -Leaf) } else { '' })
   attack_pose = (Get-M3AttackPoseLabel)
   pin_attempts = $(if ($pinAttempts -ge 1) { Format-M3PinAttempts -Attempts $pinAttempts -Expected $pinAttemptsExpected -SettleRounds $pinSettleRounds -MaxAttempts $PinMaxAttempts } else { '(off)' })
   save_settle = $saveSettleLabel
