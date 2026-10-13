@@ -1,0 +1,19 @@
+138-boundary.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片㉗ 边界
+base = origin/master `083dc1d6d`（片㉖ 已入库的父提交；本片 base=master）；head = 本片交付 commit（见卡上 patch body）
+命令：git diff --cached --name-status origin/master   （全在卡证据目录）
+====================================================================================================
+M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/82-two-side-window-runbook.md
+M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+M  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/135-window-plan-position-columns.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/136-redcheck-window-plan-position-columns.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/137-gates.txt
+A  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/138-boundary.txt
+
+冻结面（必须为空）：`git diff --cached --name-only origin/master -- src sql MirClient \
+  mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins`  ⇒ 0 行
+编译面（必须为空）：`git diff --cached --name-only origin/master -- '*.rs' '*.toml' '*.ps1'`  ⇒ 0 行
+m3bag 写集：本片**未动** `mir2-rs/tests/parity/m3/**`
+root 工具：本片**未动** `E:/tmp/openmir2-watch/client-e2e-window.sh`（只读核对）
+进程/端口：本片**未起栈、未占任何游戏端口**（仅共享 MySQL 3306 只读一次）；未动共享主检出。

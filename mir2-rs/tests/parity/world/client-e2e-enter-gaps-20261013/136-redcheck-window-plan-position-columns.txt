@@ -1,0 +1,58 @@
+136-window-plan-position-columns.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片㉗ 改坏必红
+（站位 SQL 列名牙）
+m2-svr / openmir2-worker-11 / 2026-10-14
+本片零起栈、零占游戏端口；变异只落在 `E:/tmp/m2svr-burst14/mut/`，仓内被测件 sha256 前后一致。
+====================================================================================================
+仓内被测件（开工前/后同一值）：
+  window_handoff.py sha256 = 7690d406d3f4175e5dbf58dbb915dbf7e8f2b72080ae6067d68e2546a33f150f
+  `sha256sum -c /e/tmp/m2svr-burst14/mut/repo-before.sha` ⇒ OK（变异未回写仓内）
+
+A. 真实机「旧 SQL 必失败」原始输出（不是构造；只读失败语句）
+====================================================================================================
+$ D:/mysql/mariadb-10.11.19-winx64/bin/mysql.exe -h 127.0.0.1 -P 3306 -u root --password= \
+    --batch --skip-column-names -e "UPDATE mir2_db.characters SET x=605, y=578 WHERE ChrName='aaa';"
+--------------
+UPDATE mir2_db.characters SET x=605, y=578 WHERE ChrName='aaa'
+--------------
+
+ERROR 1054 (42S22) at line 1: Unknown column 'x' in 'SET'
+old_rc=1
+$ ... -e "SELECT MapName,CX,CY FROM mir2_db.characters WHERE ChrName='aaa';"
+0	297	629
+⇒ 语句原子失败、角色未移动；与 135 §B 一致。
+
+B. 工具自检牙（`window_handoff.py --selftest`）
+====================================================================================================
+绿灯（仓内原版）：`SELFTEST OK (74/74)` rc=0（base 片㉖ 版 69/69 ⇒ +5）。新增牙逐条读数：
+  [PASS] selftest plan-position-sql-real-columns
+  [PASS] selftest plan-position-sql-before-probe
+  [PASS] selftest position-sql-x-y-red
+  [PASS] selftest position-sql-missing-mapname-red
+  [PASS] selftest plan-conf-red-position-columns 站位 SQL 未用真实列 CX/CY（本表无 x/y）：mir2_db.characters SET x=605, y=578; 站位 SQL 未钉 MapName（两侧可能不同图）：mir2_db.characters SET x=605, y=578
+
+C. MUT-A：把 G4 的接线删掉（`problems.extend(position_sql_findings(plan))` → 空）
+====================================================================================================
+命令（变异只写 /e/tmp 副本）：
+  python -I -B /e/tmp/m2svr-burst14/mut/mut-a.py --selftest
+  ⇒ [FAIL] selftest plan-conf-red-position-columns
+  ⇒ SELFTEST FAILED (73/74)
+即「坏计划不再被点名」会被牙抓住（73/74）。
+
+D. MUT-B：让 `position_sql_findings` 恒返回 `[]`（牙本体失效）
+====================================================================================================
+  python -I -B /e/tmp/m2svr-burst14/mut/mut-b.py --selftest
+  ⇒ [FAIL] selftest position-sql-x-y-red
+  ⇒ [FAIL] selftest position-sql-missing-mapname-red
+  ⇒ [FAIL] selftest plan-conf-red-position-columns
+  ⇒ SELFTEST FAILED (71/74)
+即三条牙同时承重：纯函数两向（x/y、缺 MapName）+ 计划级接线。
+
+E. 计划级红（G4 真计划互证）
+====================================================================================================
+把真计划里的 `SET MapName='0', CX=605, CY=578` 改回 `SET x=605, y=578`
+⇒ `plan_conformance` 返回两条点名（见 §B 末行）；仓内真计划 `PLAN_CONFORMANCE=GREEN`（见 135 §C）。
+
+F. 收口
+====================================================================================================
+  * 变异件：`E:/tmp/m2svr-burst14/mut/{mut-a.py,mut-b.py,repo-before.sha}`（保留可复算）。
+  * 仓内 `window_handoff.py` sha256 前后一致（§开头）；本片未动 `src/ sql/ MirClient`、未起栈、未占端口。
