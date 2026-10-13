@@ -1,0 +1,24 @@
+            }
+            if (DealCreat.DealSuccess)
+            {
+                bool bo11 = true;
+                if (Grobal2.MaxBagItem - ItemList.Count < DealCreat.DealItemList.Count)
+                {
+                    bo11 = false;
+                    SysMsg(MessageSettings.YourBagSizeTooSmall, MsgColor.Red, MsgType.Hint);
+                }
+                if (GoldMax - Gold < DealCreat.DealGolds)
+                {
+                    SysMsg(MessageSettings.YourGoldLargeThenLimit, MsgColor.Red, MsgType.Hint);
+                    bo11 = false;
+                }
+                if (Grobal2.MaxBagItem - DealCreat.ItemList.Count < DealItemList.Count)
+                {
+                    SysMsg(MessageSettings.DealHumanBagSizeTooSmall, MsgColor.Red, MsgType.Hint);
+                    bo11 = false;
+                }
+                if (DealCreat.GoldMax - DealCreat.Gold < DealGolds)
+                {
+                    SysMsg(MessageSettings.DealHumanGoldLargeThenLimit, MsgColor.Red, MsgType.Hint);
+                    bo11 = false;
+                }

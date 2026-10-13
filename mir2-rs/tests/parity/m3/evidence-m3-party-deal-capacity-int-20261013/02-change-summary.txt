@@ -1,0 +1,25 @@
+== 02 改动清单（净 diff 仅 mir2-rs/bins/game-svr/src/trade.rs） ==
+
+[新增] fn bag_capacity_left(max_bag_item: usize, used: usize) -> i64
+       = max_bag_item as i64 - used as i64  （oracle 的 C# int 减法，差量可负；禁止 saturating_sub）
+[改]   deal_end 的第 1 条背包容量检：
+       旧 cfg.max_bag_item.saturating_sub(me.items.len()) < other.state.deal_item_list.len()
+       新 bag_capacity_left(cfg.max_bag_item, me.items.len()) < other.state.deal_item_list.len() as i64
+[改]   deal_end 的第 3 条（对称）背包容量检：
+       旧 cfg.max_bag_item.saturating_sub(other.items.len()) < me.state.deal_item_list.len()
+       新 bag_capacity_left(cfg.max_bag_item, other.items.len()) < me.state.deal_item_list.len() as i64
+[不动] 金币两检（me.gold_max - *me.gold / other.gold_max - *other.gold）：本就是 i32 精确算术。
+[不动] 容量四检「全评估不短路」、SysMsg 红提示文案与调用序、DealCancel 链、
+       双向锁定、结算搬运序、SM_DEALSUCCESS/清态 —— 逐字节不变。
+
+[新增判据 2 条]
+- trade::tests::deal_end_over_capacity_my_bag_with_empty_opposite_deal_list
+  （甲 47 件 > 46、乙交易栏空 ⇒ 负差量 ⇒ 必出 DEAL_MY_BAG_SMALL_MSG + SM_DEALCANCEL、
+   无 SM_DEALSUCCESS、甲背包件数不变）
+- trade::tests::deal_end_over_capacity_human_bag_with_empty_my_deal_list
+  （乙 47 件 > 46、甲交易栏空 ⇒ 必出 DEAL_HUMAN_BAG_SMALL_MSG + 取消、无 SM_DEALSUCCESS）
+
+[改坏必红 RC1]
+- mutation: fn bag_capacity_left 体改回 `max_bag_item.saturating_sub(used) as i64`
+- 读数: 两条新判据 FAILED（见 redchecks/RC1-mutated.txt）
+- 还原: cp 回原文件，sha256 与改坏前一致（见 05-hashes.txt），trade:: 22/22 GREEN
