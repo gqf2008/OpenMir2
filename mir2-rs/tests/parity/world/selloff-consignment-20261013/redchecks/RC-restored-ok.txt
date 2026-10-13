@@ -1,0 +1,26 @@
+# 改坏还原后复核（RC-1/RC-2 的 'after' 态）：两处变异均 `git restore --source=HEAD` 还原 + 门禁② 的 doc 续行修复后
+# 命令①：cargo test -p game-svr --offline --lib selloff
+# 命令②：cargo test -p game-svr --offline --bin game-svr selloff
+# 期望：两命令均 rc=0（23 + 2 passed / 0 failed）
+
+== [1] 构造级 ==
+test selloff::tests::sell_off_end_rejects_self_and_returns_items ... ok
+test selloff::tests::sell_off_end_rejects_sell_gold_out_of_range ... ok
+test selloff::tests::sell_off_end_success_lists_and_charges_fee ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 153 filtered out; finished in 0.01s
+
+
+rc1=0
+
+== [2] 进程级 ==
+     Running unittests src\main.rs (E:/tmp/m2svr-target\debug\deps\game_svr-1f4431beb89ebeb6.exe)
+
+running 2 tests
+test tests::selloff_cancel_paths_dispatch_and_mutate_global_book ... ok
+test tests::selloff_cm_dispatch_emits_oracle_frames_on_both_connections ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 182 filtered out; finished in 0.00s
+
+
+rc2=0

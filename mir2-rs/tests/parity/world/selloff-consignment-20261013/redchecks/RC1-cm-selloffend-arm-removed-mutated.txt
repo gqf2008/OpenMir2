@@ -1,0 +1,29 @@
+# RC-1 改坏必红：删掉 handle_selloff_cmd 的 CM_SELLOFFEND 派发支（回 Vec::new()）
+# 命令：cargo test -p game-svr --offline --bin game-svr selloff
+# 期望：进程级用例 FAILED（上架不再入 SellOffItemList / 不回 SM_SELLOFFEND_OK）
+
+failures:
+
+---- tests::selloff_cm_dispatch_emits_oracle_frames_on_both_connections stdout ----
+
+thread 'tests::selloff_cm_dispatch_emits_oracle_frames_on_both_connections' (27200) panicked at bins\game-svr\src\main.rs:11213:9:
+assertion `left == right` failed: 上架出队序：MENU_OK(69) 先于 SELLOFFEND_OK(233)
+  left: []
+ right: [767, 23016]
+
+---- tests::selloff_cancel_paths_dispatch_and_mutate_global_book stdout ----
+
+thread 'tests::selloff_cancel_paths_dispatch_and_mutate_global_book' (10748) panicked at bins\game-svr\src\main.rs:11431:9:
+assertion `left == right` failed
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::selloff_cancel_paths_dispatch_and_mutate_global_book
+    tests::selloff_cm_dispatch_emits_oracle_frames_on_both_connections
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 182 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`

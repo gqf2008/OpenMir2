@@ -1,0 +1,57 @@
+# RC-2 改坏必红：删掉 client_buy_sell_off_item 的「首个空槽中止」（continue 取代 return em.finish()）
+# 命令①：cargo test -p game-svr --offline --lib selloff
+# 命令②：cargo test -p game-svr --offline --bin game-svr selloff
+# 期望：构造级 buy_single_item_aborts_at_first_null_slot / buy_nine_items_still_aborts_at_out_of_range
+#       与进程级 CM_SELLOFFBUY 空槽中止断言 FAILED（SM_SELLOFFBUY_OK 变为可达）
+
+== [1] 构造级 ==
+assertion failed: !queued_idents(&evs).contains(&messages::SM_SELLOFFBUY_OK)
+
+---- selloff::tests::buy_nine_items_still_aborts_at_out_of_range stdout ----
+
+thread 'selloff::tests::buy_nine_items_still_aborts_at_out_of_range' (23628) panicked at bins\game-svr\src\selloff.rs:1483:9:
+assertion failed: !queued_idents(&evs).contains(&messages::SM_SELLOFFBUY_OK)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- selloff::tests::buy_single_item_aborts_at_first_null_slot stdout ----
+
+thread 'selloff::tests::buy_single_item_aborts_at_first_null_slot' (24348) panicked at bins\game-svr\src\selloff.rs:1455:9:
+oracle j<=9 空引用 ⇒ BUY_OK 不可达，实得 [767, 622, 5008, 5008, 23027]
+
+
+failures:
+    selloff::tests::buy_nine_items_still_aborts_at_out_of_range
+    selloff::tests::buy_single_item_aborts_at_first_null_slot
+    selloff::tests::buy_with_offline_seller_sets_flag1
+
+test result: FAILED. 20 passed; 3 failed; 0 ignored; 0 measured; 153 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --lib`
+
+rc1=101
+
+== [2] 进程级 ==
+
+running 2 tests
+test tests::selloff_cancel_paths_dispatch_and_mutate_global_book ... ok
+test tests::selloff_cm_dispatch_emits_oracle_frames_on_both_connections ... FAILED
+
+failures:
+
+---- tests::selloff_cm_dispatch_emits_oracle_frames_on_both_connections stdout ----
+
+thread 'tests::selloff_cm_dispatch_emits_oracle_frames_on_both_connections' (23232) panicked at bins\game-svr\src\main.rs:11259:9:
+assertion `left == right` failed
+  left: [200, 767, 622, 5008, 23027]
+ right: [200, 622, 5008]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::selloff_cm_dispatch_emits_oracle_frames_on_both_connections
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 182 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`
+
+rc2=101

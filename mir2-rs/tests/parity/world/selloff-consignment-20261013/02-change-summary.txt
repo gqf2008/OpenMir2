@@ -1,0 +1,55 @@
+# 02 — 改前 / 改后
+
+卡：`openmir2-m3-selloff-consignment-world`。base（交付时 `refs/heads/master`）= `0f9fe9997a4ed717ee1361bfb2134329fd04472a`。
+交付 head 已 `git merge origin/master`（见末尾）。
+
+## 写集（`git diff --stat refs/heads/master HEAD`）
+
+```
+ mir2-rs/bins/game-svr/src/config.rs |  46 +++
+ mir2-rs/bins/game-svr/src/lib.rs    |   1 +
+ mir2-rs/bins/game-svr/src/main.rs   | 770 +++++++++++++++++++++++++++++++++
+ mir2-rs/bins/game-svr/src/selloff.rs | 1759 ++++++++++++++++++++++++++++（新文件）
+ mir2-rs/bins/game-svr/src/trade.rs  |   2 +-
+```
+
+- `crates/world/**` **未改动**：`SellOffItemList`/`SaleDeal`/`SellOffConfirm` 在 oracle 是进程级全局 +
+  玩家会话散字段，不属地图/场景 ECS（见 `01-oracle-anchors.txt` §3）。
+
+## 改前（base `0f9fe999`）
+
+- `rg -i 'SELLOFF|goldsales|DealOffInfo|寄售' mir2-rs/bins/game-svr/src mir2-rs/crates/world/src` = **no match**
+  （盘点片 §5 判定 6/7/8 未实现）。
+- `[Setup] BlueMsgFColor/BlueMsgBColor` 未解析（`config.rs` 无键）⇒ 无蓝色提示色来源。
+- `trade.rs::send_add_item_body` 为私有（`fn`），寄售「成交入包」需要的立即 `SM_ADDITEM` body 无法复用。
+
+## 改后（本 head）
+
+1. **`bins/game-svr/src/selloff.rs`（新增，1759 行）**——纯函数 + 事件，零 I/O / 零 `static` / 时钟注入：
+   - `SellOffBook` = `M2Share.SellOffItemList`（进程级，宿主持有一实例，跨会话共享）；
+   - `SellOffState` = `SaleDeal` / `SellOffConfirm` / `SellOffItemList`（会话态）；
+   - 12 个 `PlayObject.Sale.cs` 函数的 1:1 复刻 + `open_deal_off_form`（`RM_SENDDEALOFFFORM` 成功支）；
+   - 帧编码 `selloff_event_body`（`SellOffFrame::Def/MenuOk/SysMsg/GameGoldChanged/WeightChanged`
+     → 12B 头 + GM_DATA body，立即/排队两桶，优先级字节照 oracle）。
+2. **`bins/game-svr/src/main.rs`（+770）**：
+   - `handle_selloff_cmd`：7 个 `CM_SELLOFF*` 生产路径派发（找会话 → 解析卖方/尾 → 调纯函数 →
+     回写会话态与全局 `SellOffBook` → 逐事件 `selloff_event_body` → `route_to_gate` 回帧）；
+   - `sim_loop` 持有 `sell_off_book`（进程级）+ `sell_off_sessions`（会话态），断线移除会话态、
+     保留全局 `SellOffBook`（oracle 不断线清理）；
+   - 2 条进程级用例（见 `03-tests.txt`）。
+3. **`config.rs`（+46）**：解析 `[Setup] BlueMsgFColor/BlueMsgBColor`（`ServerConf.cs:331-332` 的
+   `ReadWriteByte`），缺键用 oracle 缺省 `0xFF`/`0xFC`（`GameSvrConf.cs:1538-1539`），并接线到
+   `SellOffConfig`（现网 `Server.conf:602-603` = 251/252）。1 条键解析用例（带/不带 BOM 无关，走既有 `load`）。
+4. **`trade.rs`（1 行）**：`fn send_add_item_body` → `pub(crate) fn`（复用同一份 `SM_ADDITEM` body 编码，
+   **不复制第二份**）。
+5. **`lib.rs`（1 行）**：`pub mod selloff;`。
+
+## 缺陷照搬（详见 `01` §5）
+
+① `ClientBuySellOffItme` 首个空槽中止（`SM_SELLOFFBUY_OK` 不可达）；② 金刚石标记 65535 写 / 32767 判；
+③ 金刚石扣款帧错位；④ 取消退回的静默丢失分支；⑤ 不实现 `goldsales` 写面。
+
+## 合并与对齐
+
+- 交付 head 已 `git merge origin/master`（`0f9fe999`）⇒ `git merge-base --is-ancestor refs/heads/master HEAD` 成立。
+- 边界（见 `20-boundary.txt`）：`src/ sql/ MirClient / crates/protocol / crates/storage` = **空**。
