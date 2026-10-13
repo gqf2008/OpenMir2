@@ -1,0 +1,35 @@
+# M3⑨-2 残余（46 分身）命令（隔离 CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target，--offline）
+
+# 0) 开工前（自己的 worktree，绝不碰共享主检出）
+git fetch origin
+git checkout -b worktree-m3-pet-slave-clone46 083dc1d6d     # base = refs/heads/master
+# 实现后提交（cwd = mir2-rs）
+git commit -m "feat(m3-pet-slave-clone46): …"                 # 8c4e0fc49
+
+# 1) 四门禁（gates/）
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo fmt --all -- --check                          # rc=0
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo clippy --workspace --all-targets --offline -- -D warnings  # rc=0
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo test --workspace --no-fail-fast --offline     # 101 suites 1205 passed 0 failed 22 ignored rc=0
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo run -p msgcodegen --offline -- --check        # 604 条 rc=0
+
+# 2) 判据（gates/14-clone-tests.txt）
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo test -p mir2-world --lib spawn_clone --offline
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo test -p game-svr --lib clone --offline
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo test -p game-svr --bin game-svr spell_cmd_clone --offline
+
+# 3) 改坏必红（redchecks/，逐条：改 → 跑 → 还原 → 重跑；还原用备份副本，勿用 git checkout -- 覆盖未提交改动）
+#    RC1: crates/world/src/magic.rs  back_dir(inp.dir) → inp.dir
+#    RC2: bins/game-svr/src/main.rs 去掉 clone 的 broadcast_ref_msg
+#    RC3: crates/world/src/slave.rs 去掉 world.entities.insert(e);
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo test -p game-svr --bin game-svr spell_cmd_clone --offline
+
+# 4) 离线窗口前置（零端口，串行跑）
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_hero_pet_pair.ps1 -SelfCheckNoStack   # ok=23/23 rc=0
+
+# 5) 边界
+git diff --name-only 083dc1d6d 8c4e0fc49 -- src sql MirClient                        # 空
+git diff --name-only 083dc1d6d 8c4e0fc49 -- mir2-rs/crates/protocol mir2-rs/crates/storage  # 空
+
+# 6) 证据清单
+python -I tools/evidence-hash/verify_sha256sums.py verify <本目录> --check-extra
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck <本目录>

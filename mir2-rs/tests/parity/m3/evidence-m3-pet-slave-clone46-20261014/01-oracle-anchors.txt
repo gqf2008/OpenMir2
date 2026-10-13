@@ -1,0 +1,53 @@
+# M3⑨-2 残余（46 分身）oracle 锚点（文件:行号）
+
+卡：`openmir2-m3-pet-slave-clone46`（M3⑨-2 残余，`openmir2-worker-20` / m3hp 车道）。
+
+## A. 入帧与守卫（沿用 attack-magic-wiring / pet-slave-summon 各片）
+- src/GameSrv/Word/WorldServer.cs:783-790        CM_SPELL → ClientSpellXY 映射
+- src/M2Server/Player/PlayObject.Attack.cs:1269  switch(MagIdx) 的 default: 支（46 非 EXPLICIT_CASE_MAG_IDX ⇒ 走 default）
+- src/M2Server/Player/PlayObject.Attack.cs:1270  default: Dir = M2Share.GetNextDirection(CurrX,CurrY,nTargetX,nTargetY)
+- src/M2Server/Player/PlayObject.Attack.cs:1272  CretInNearXy(targetObject, nTargetX, nTargetY)（1×1 邻域内 ⇒ snap 坐标）
+- src/M2Server/Player/PlayObject.Attack.cs:1276  if (!DoSpell(...)) SendRefMsg(RM_MAGICFIREFAIL, …)
+- src/M2Server/Player/PlayObject.Base.cs:984-1011 CretInNearXy 本体
+
+## B. DoSpell（分身面）
+- src/M2Server/Magic/MagicManager.cs:151        IsWarrSkill ⇒ return false
+- src/M2Server/Magic/MagicManager.cs:155        距离门：|CurrX-tx| > MagicAttackRage || |CurrY-ty| > MagicAttackRage ⇒ return false
+- src/M2Server/Magic/MagicManager.cs:159        SendRefMsg(RM_SPELL, Magic.Effect, tx, ty, Magic.MagicId, "")（46 也走这句）
+- src/M2Server/Magic/MagicManager.cs:164-166    bool boTrain=false; bool boSpellFail=false; bool boSpellFire=true;
+- src/M2Server/Magic/MagicManager.cs:589-592    case SKILL_46: if (MagMakeClone(playObject, userMagic)) { boTrain = true; }
+- src/M2Server/Magic/MagicManager.cs:1337-1341  MagMakeClone = { new PlayCloneObject(playObject); return true; }（**恒 true**）
+- src/Modules/SystemModule/Const/MagicConst.cs:175  public const byte SKILL_46 = 46;
+
+## C. PlayCloneObject 构造器（逐字段照搬）
+- src/M2Server/Player/PlayCloneObject.cs:3      public class PlayCloneObject : PlayObject（**完整 PlayObject 子类**）
+- src/M2Server/Player/PlayCloneObject.cs:7      PlayCloneObject(PlayObject PlayObject) : base()
+- src/M2Server/Player/PlayCloneObject.cs:9      this.ChrName = "Clone";
+- src/M2Server/Player/PlayCloneObject.cs:10-11  this.CurrX/CurrY = PlayObject.CurrX/CurrY;
+- src/M2Server/Player/PlayCloneObject.cs:12     this.Dir = GetBackDir(PlayObject.Dir);
+- src/M2Server/Player/PlayCloneObject.cs:13     this.Envir = PlayObject.Envir;
+- src/M2Server/Player/PlayCloneObject.cs:14     this.Gender = PlayObject.Gender;
+- src/M2Server/Player/PlayCloneObject.cs:15     this.Hair = PlayObject.Hair;
+- src/M2Server/Player/PlayCloneObject.cs:16     this.Envir.AddMapObject(CurrX, CurrY, CellType.Play, ActorId, this);
+- src/M2Server/Player/PlayCloneObject.cs:17     this.SendRefMsg(RM_TURN, Dir, CurrX, CurrY, 0, ChrName);
+- src/M2Server/Actor/BaseObject.cs:820          GetBackDir(nDir) = (dir + 4) % 8
+- src/M2Server/Maps/Envirnoment.cs:252-296     AddMapObject（cell 未越界且 Valid ⇒ 追加 CellObject + AddObject，返回 true）
+
+## D. 共享尾（`MagicManager.cs:644-669`，与召唤/诱惑面同一条）
+- src/M2Server/Magic/MagicManager.cs:644-647   if (boSpellFail) return false;   （46 从不置 boSpellFail ⇒ 不返回）
+- src/M2Server/Magic/MagicManager.cs:648-658   if (boSpellFire) SendRefMsg(RM_MAGICFIRE, 0, MakeWord(EffectType,Effect), MakeLong(tx,ty), targetObject?.ActorId ?? 0, "")
+- src/M2Server/Magic/MagicManager.cs:659-669   if (Level<3 && boTrain) { if (TrainLevel[Level] <= Abil.Level) { TrainSkill(Random(3)+1); if(!CheckMagicLevelUp) SendSelfDelayMsg(RM_MAGIC_LVEXP, 0, MagicId, Level, TranPoint, "", 1000); } }
+- src/M2Server/Player/PlayObject.cs:4393-4400  TrainSkill（FastTrain ⇒ ×3；本仓未装载 ⇒ false，登记）
+- src/M2Server/Player/PlayObject.cs:5198-5226  CheckMagicLevelUp
+
+## E. 帧（SM_* 编码）
+- src/M2Server/Player/PlayObject.Message.cs:1454-1459  RM_SPELL → SM_SPELL（尾 = MagicId 的 ASCII 原文）
+- src/M2Server/Player/PlayObject.Message.cs:1524-1560  RM_TURN → SM_TURN（12B 头 + Encode(8B CharDesc) + 若 Msg 非空再 Encode("Msg/GetChrColor")）+ SM_FEATURECHANGED
+      · 1549-1555：`if (!string.IsNullOrEmpty(processMsg.Msg)) sendActonMsg += EncodeString($"{Msg}/{nObjCount}")`，nObjCount = GetChrColor(baseObject)
+- src/M2Server/Player/PlayObject.Message.cs:1788-1793  RM_MAGICFIRE → SM_MAGICFIRE（+ EncodeBuffer(4B targetActorId)）
+- src/M2Server/M2Share.cs:1965                 MakeHumanFeature(raceImg, dress, weapon, hair) = MakeLong(MakeWord(raceImg,weapon), MakeWord(hair,dress))
+
+## F. 展示层（Rust 侧，骨架自有口径）
+- mir2-rs/bins/game-svr/src/downlink.rs      ActorDisplay.feature 位域 = MakeHumanFeature(0, dress*2+gender, gender+weapon*2, hair*2+gender)
+- mir2-rs/crates/world/src/magic.rs:1236     mag_make_clone（真身向量已对拍，8 向）
+- mir2-rs/bins/game-svr/src/magicwire.rs:85  EXPLICIT_CASE_MAG_IDX = [12,25,26,27,34,38,43,56]（46 不在内 ⇒ 走 default 的 Dir）
