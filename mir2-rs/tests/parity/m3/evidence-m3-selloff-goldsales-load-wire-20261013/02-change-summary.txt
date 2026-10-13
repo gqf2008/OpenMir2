@@ -1,0 +1,20 @@
+# M3⑩-实现 2 变更清单（base 2869a234b ⇒ working tree）
+
+## 新增
+- mir2-rs/bins/game-svr/src/goldsales.rs（加载接线 + 行→世界态条目桥接 + 顺序尾追 + 4 条构造级用例）
+- mir2-rs/bins/game-svr/tests/goldsales_load.rs（判据：TEMPORARY TABLE 遮蔽会话，表有 1 行仍加载 0 行）
+- mir2-rs/tests/parity/m3/evidence-m3-selloff-goldsales-load-wire-20261013/**（本包）
+
+## 修改
+- mir2-rs/bins/game-svr/src/main.rs：mod goldsales + 启动加载块（GameApp.cs:181-182 等价）+ EnterConfig.sell_off_seed + sim_loop 用它初始化 SellOffBook
+- mir2-rs/bins/game-svr/Cargo.toml：serde_json 由 [dev-dependencies] 提为 [dependencies]（bin 侧接线用）+ base64 = "0.22"（.NET byte[] Desc 的 base64 形态；已在 Cargo.lock，经 sqlx）
+- mir2-rs/Cargo.lock：game-svr 依赖表新增 base64/serde_json（版本均已在 lock）
+
+## 行为等价口径
+- 启动调用 load_sell_off_item_list（只读）；读错列名照搬（D-5/B-5）⇒ 恒 0 行；不实现 save
+- Add 顺序 = select 行序（MySqlDB.cs:279 的 IList.Add 尾追）；不并行、无 static
+- 失败分支 = oracle !Open()（LogService.Error + return；列表保持空）
+
+## 未做 / 登记
+- 真机两侧同序列对拍（run_selloff_pair.ps1 + goldsales 表快照 diff=0）需独占窗口 ⇒ not_verified
+- 本片不新增白名单条目：只读/坏列名/无 save 已由 D-5/B-5/S4B-* 覆盖

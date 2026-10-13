@@ -1,0 +1,25 @@
+   Compiling mir2-data v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\crates\data)
+   Compiling mir2-formula v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\crates\formula)
+   Compiling mir2-world-bevy v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\crates\world-bevy)
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\crates\world)
+   Compiling mir2-envir v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\crates\envir)
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.19s
+     Running tests\goldsales_load.rs (E:/tmp/openmir2-m3hp-target\debug\deps\goldsales_load-ec66d2446415a18f.exe)
+
+running 1 test
+遮蔽会话里 goldsales 行数 = 1
+
+thread 'table_has_data_but_loader_still_reads_zero_rows' (25948) panicked at crates\data\src\loaders.rs:108:19:
+读取列 UseItems 失败: error occurred while decoding column "UseItems": mismatched types; Rust type `core::option::Option<alloc::string::String>` (as SQL type `VARCHAR`) is not compatible with SQL type `BLOB`
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test table_has_data_but_loader_still_reads_zero_rows ... FAILED
+
+failures:
+
+failures:
+    table_has_data_but_loader_still_reads_zero_rows
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p game-svr --test goldsales_load`
