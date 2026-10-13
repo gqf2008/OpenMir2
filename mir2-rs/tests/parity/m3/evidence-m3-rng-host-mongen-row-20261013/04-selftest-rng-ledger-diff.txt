@@ -1,0 +1,2 @@
+SELFTEST GREEN: rng_ledger_diff selftest 37/37（同序绿 + 次序漂移必红且定位 + 缺消费者必红且点名 + Claim B 站点组：同组序绿 / 多抽·换序·缺组必红且定位 / 组表改坏必红 / 未归类 fail-closed / 行级覆盖 rows_dropped fail-closed（O-1）+ AUX 组改坏必红（O-3）+ R-6 folded：等价绿 / 折叠计数不等·次序不等必红且定位 / 关时仍 GROUP_SET_DIFF + DoD② scenario 声明：三组齐备绿 / 缺组·monster_ai 抽数不足必红且点名 / 缺 scenario PREREQ / 不传向后兼容）
+EXIT=0

@@ -1,0 +1,6 @@
+INJECT_OK	42	0
+1	Next(max)	3000	1	MonsterObject..ctor@MonsterObject.cs:65
+2	Next(max)	3000	2	AnimalObject..ctor@AnimalObject.cs:75
+3	Next(max)	2000	3	CreateMonster@WorldServer.MonGen.cs:498
+4	Next(max)	100	4	MonGetRandomItems@WorldServer.MonGen.cs:451
+5	Next(max)	20	5	AnimalObject.Wondering@AnimalObject.cs:427

@@ -1,0 +1,41 @@
+# 净差量清单（片 = m3bag 窗口前置审计：宿主 bins/game-svr/src/mongen.rs 构造抽数补登 Claim B 组表）
+# base = 16ae2607f836ac8d97b2e808351e1e0b2bc3ee1e（origin/master，本片开工前 git fetch && git merge）
+# head = f2f876f97280d01281315c8caaa57231d6c998a3（本提交 = evidence 片；其后的 boundary/SHA 收口提交为自指件，不入本清单）
+# 命令：git diff --name-only 16ae2607f836ac8d97b2e808351e1e0b2bc3ee1e..HEAD
+mir2-rs/tests/parity/m3/evidence-m3-rng-host-mongen-row-20261013/00-commands.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-host-mongen-row-20261013/01-drift-repro-before.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-host-mongen-row-20261013/02-drift-fixed-after.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-host-mongen-row-20261013/03-selftest-rng-consumer-groups.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-host-mongen-row-20261013/04-selftest-rng-ledger-diff.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-host-mongen-row-20261013/05-groupdiff-identical-synthetic.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-host-mongen-row-20261013/06-mutation-host-row-removed-red.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-host-mongen-row-20261013/07-static-audit-rust-rng-files.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-host-mongen-row-20261013/08-gates-fmt.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-host-mongen-row-20261013/09-gates-clippy.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-host-mongen-row-20261013/10-gates-test.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-host-mongen-row-20261013/11-gates-msgcodegen.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-host-mongen-row-20261013/README.md
+mir2-rs/tests/parity/m3/evidence-m3-rng-host-mongen-row-20261013/fixtures/consumer_groups.host-row-removed.tsv
+mir2-rs/tests/parity/m3/evidence-m3-rng-host-mongen-row-20261013/fixtures/csharp-scene-like.tsv
+mir2-rs/tests/parity/m3/evidence-m3-rng-host-mongen-row-20261013/fixtures/probe-rust-stream.tsv
+mir2-rs/tests/parity/m3/evidence-m3-rng-host-mongen-row-20261013/fixtures/rust-scene-like.tsv
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-driver-spec-20261013/00-commands.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-driver-spec-20261013/01-anchor-check.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-driver-spec-20261013/02-driver-unwired-fail-closed.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-driver-spec-20261013/03-regression.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-driver-spec-20261013/04-gates-fmt.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-driver-spec-20261013/05-gates-clippy.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-driver-spec-20261013/06-gates-test.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-driver-spec-20261013/07-gates-msgcodegen.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-driver-spec-20261013/08-boundary.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-driver-spec-20261013/README.md
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-driver-spec-20261013/SHA256SUMS.txt
+mir2-rs/tests/parity/m3/rng-trace-probe/consumer_groups.tsv
+mir2-rs/tests/parity/m3/rng-trace-probe/rng_consumer_groups.py
+mir2-rs/tests/parity/m3/rng-trace-scene/DRIVER-CONTRACT.md
+mir2-rs/tests/parity/m3/rng-trace-scene/README.md
+#
+# 冻结面（必须为空）：
+#   git diff --name-only 16ae2607f836ac8d97b2e808351e1e0b2bc3ee1e..HEAD -- src sql MirClient mir2-rs/crates mir2-rs/bins  => (空)
+#   git diff --name-only 16ae2607f836ac8d97b2e808351e1e0b2bc3ee1e..HEAD -- '*.rs'  => (空，零 .rs)
+# 全路径均在 mir2-rs/tests/parity/m3/** 内。

@@ -279,3 +279,79 @@ def first_divergence(a, b):
         if a[i] != b[i]:
             return i
     return None
+
+
+# ---------------------------------------------------------------------------
+# 离线自检（`python -I rng_consumer_groups.py [selftest]`）
+#
+# 2026-10-13 窗口前置审计（卡 openmir2-m3-rng-trace-scene-groups）：宿主侧
+# `bins/game-svr/src/mongen.rs`（`create_monster_oracle` / `draw_monster_construct`）也抽构造期
+# 随机数，而表里只有 `crates/world/src/mongen.rs` ⇒ 固定场景（图 0137 的 MonGen 0 行）里它是
+# **唯一** spawn 来源，漏归类会被算成 `other`（`groupdiff --fold --strict` 的 `GROUP_SET_DIFF`
+# + DoD② 的 `MISSING_EXPECTED_GROUPS(spawn)`）⇒ **会在共用窗口里空转一轮**。
+# 本自检把「该行存在且生效」钉成机判，并自带「删行 ⇒ 必红」样例（不再只靠散文）。
+# ---------------------------------------------------------------------------
+
+_SELFTEST_CASES = (
+    # (side, site, is_attack, expected_group)
+    ("rust", "bins/game-svr/src/mongen.rs:289", False, "spawn"),            # 宿主构造抽数（本片新增行）
+    ("rust", "bins\\game-svr\\src\\mongen.rs:434", False, "spawn"),        # 盘上是 `\` ⇒ 归一后才命中
+    ("rust", "crates/world/src/mongen.rs:321", False, "spawn"),
+    ("rust", "crates/world/src/monai.rs:171", False, "monster_ai"),
+    ("rust", "crates/formula/src/drop.rs:100", False, "drop"),
+    ("rust", "bins/game-svr/src/main.rs:2884", False, "startup"),
+    ("rust", "crates/world/src/combat.rs:758", True, "attack"),
+    ("rust", "bins/game-svr/src/not_in_table.rs:1", False, OTHER_GROUP),   # 未登记 ⇒ other（漂移信号）
+)
+
+_HOST_ROW_PATTERN = "bins/game-svr/src/mongen\\.rs:"
+
+
+def selftest():
+    """返回 rc（0 = GREEN，1 = RED）。纯离线，不写任何文件。"""
+    table = load()
+    checks = []
+
+    def check(name, ok, detail=""):
+        checks.append((name, bool(ok), detail))
+
+    problems = table.validate()
+    check("table-validate", not problems, "; ".join(problems))
+
+    for side, site, is_attack, want in _SELFTEST_CASES:
+        got = classify(site, side, table, lambda s, sd, _a=is_attack: bool(_a))
+        check("classify %s -> %s" % (site, want), got == want, "got=%s" % got)
+
+    # 改坏必红①：删掉宿主 mongen 行 ⇒ 同一站点必须落到 `other`（证明该行承重）。
+    rows = [r for r in table.rows if r[2].pattern != _HOST_ROW_PATTERN]
+    check("mutation-host-row-removed", len(rows) == len(table.rows) - 1,
+          "删掉 %d 行" % (len(table.rows) - len(rows)))
+    mutated = GroupsTable(rows, table.path + "#mut-host")
+    got = classify("bins/game-svr/src/mongen.rs:289", "rust", mutated, lambda s, sd: False)
+    check("mutation-host-site-becomes-other", got == OTHER_GROUP, "got=%s" % got)
+
+    # 改坏必红②：删掉 CORE 组（merchant/csharp）⇒ validate 必须点名。
+    rows2 = [r for r in table.rows if not (r[0] == "merchant" and r[1] == "csharp")]
+    check("mutation-core-group-validate-red",
+          any("merchant" in p for p in GroupsTable(rows2, table.path + "#mut-core").validate()),
+          "期望 validate 点名 merchant")
+
+    total = len(checks)
+    bad = [(n, d) for n, ok, d in checks if not ok]
+    for n, ok, d in checks:
+        print("  %s %s%s" % ("ok " if ok else "RED", n, ("（%s）" % d) if d else ""))
+    if bad:
+        print("SELFTEST RED: rng_consumer_groups selftest %d/%d" % (total - len(bad), total))
+        return 1
+    print("SELFTEST GREEN: rng_consumer_groups selftest %d/%d" % (total, total))
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+
+    _mode = sys.argv[1] if len(sys.argv) > 1 else "selftest"
+    if _mode != "selftest":
+        print("usage: rng_consumer_groups.py [selftest]", file=sys.stderr)
+        raise SystemExit(2)
+    raise SystemExit(selftest())

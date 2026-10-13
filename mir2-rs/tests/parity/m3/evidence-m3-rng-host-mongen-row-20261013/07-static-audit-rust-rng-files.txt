@@ -1,0 +1,40 @@
+# 静态审计：生产路径里调用 traced RNG 的 Rust 文件 vs Claim B 组表/攻击站点表的覆盖
+# 命令（cwd = mir2-rs）：
+#   grep -rEn '\.(random|random_below|random_range|get_random_number|random_byte|random_select|generate_random_number|next_double)\s*\(' --include=*.rs crates bins | grep -vE '/tests/|/test/' | grep -vE 'crates/shared/src/(rng|rng_trace|replay)\.rs'
+# 说明：这是**粗筛**（不解析 #[cfg(test)] 块），disposition 逐文件人工核过（下）。
+
+== 命中计数（文件级）==
+     75 bins/game-svr/src/mongen.rs
+     56 crates/formula/src/drop.rs
+     29 crates/world/src/magic.rs
+     23 crates/world/src/merchant.rs
+     22 crates/world/src/monai.rs
+     16 crates/world/src/mongen.rs
+     14 bins/game-svr/src/homemap.rs
+     12 crates/world/src/combat.rs
+      8 crates/world/src/slave.rs
+      6 crates/script/src/engine/actions.rs
+      5 bins/game-svr/src/main.rs
+      4 bins/game-svr/src/seed.rs
+      2 bins/game-svr/src/slave.rs
+      1 crates/world/src/world.rs
+      1 crates/script/src/engine/conditions.rs
+      1 crates/script-tool/src/parsestats.rs
+      1 crates/script-tool/src/flowrun.rs
+
+== disposition（固定场景 0137：1 只 pin 怪 + 玩家；本卡 AI 开、无攻击/无魔法/无宝宝/无脚本动作）==
+spawn        bins/game-svr/src/mongen.rs       <== 本片补登记（固定场景唯一 spawn 来源：pin 怪的构造抽数）；改前 = other ⇒ 双红
+spawn        crates/world/src/mongen.rs      已登记（表:53）；固定场景 MonGen 0 行 ⇒ 本场景不抽
+drop         crates/formula/src/drop.rs      已登记；生成期 budget_drops 即抽（表:47）
+monster_ai   crates/world/src/monai.rs       已登记（表:42）；本卡 AI 开 ⇒ 必须出现
+attack       crates/world/src/combat.rs      已由 attack_sites.tsv 覆盖（10 站）；groupdiff 缺省剔除 attack
+merchant     crates/world/src/merchant.rs    已登记（表:49）；固定场景无商人 ⇒ 不抽
+homemap      bins/game-svr/src/homemap.rs    已登记（表:65）；玩家落点
+startup      bins/game-svr/src/main.rs       已登记（表:67）；宿主启动
+--- 以下文件**未被组表覆盖**，但固定场景不触发（如实列出，不擅自归类；若未来场景命中 ⇒ 照旧 fail-closed 成 other）---
+magic        crates/world/src/magic.rs       魔法伤害；固定场景无魔法施放
+slave        crates/world/src/slave.rs       宝宝召唤/落点；固定场景无宝宝
+script       crates/script/src/engine/actions.rs / conditions.rs  脚本动作取数；固定场景无脚本动作
+test-only    bins/game-svr/src/seed.rs / bins/game-svr/src/slave.rs / crates/world/src/world.rs / crates/script-tool/src/*  #[cfg(test)] 或离线工具，不进服务端 trace
+
+结论：固定场景 trace 里会出现的生产站点只有上表前 8 类；其中唯一未登记的是 bins/game-svr/src/mongen.rs（本片已补）。
