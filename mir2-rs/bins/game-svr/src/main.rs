@@ -874,8 +874,9 @@ fn handle_ground_cmd(
     tail: Option<&str>,
     chr_name: &str,
     socket: i32,
-    dealing: bool,
-    deal_last_tick: i32,
+    // `PlayObject.Dealing` / `PlayObject.DealLastTick`（M3⑦-实现 3/4）的真值来源。
+    // 传整表而非两个散值：取值固定在 `handle_ground_cmd` 内，调用点无法各自漏接/写死。
+    trade_sessions: &std::collections::HashMap<String, game_svr::trade::DealState>,
     world: &mir2_world::World,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     online: &OnlineRegistry,
@@ -916,6 +917,13 @@ fn handle_ground_cmd(
     let mut map =
         game_svr::pickwire::build_ground_map(&view, map_id, grid.width, grid.height, catalog);
     let now_tick = world.clock_ms as i32;
+    // `PlayObject.Dealing`（M3⑦-实现 3）：交易中禁拾取/禁丢弃。
+    // `PlayObject.DealLastTick`（M3⑦-实现 4；`handle_deal_cmd` 用 `world.clock_ms` 写入）：
+    // 新会话为 0 ⇒ 过 3000ms 门；交易中才拦 drop（`Operate.cs:269`）。
+    let dealing = trade_sessions.get(chr_name).is_some_and(|s| s.dealing);
+    let deal_last_tick = trade_sessions
+        .get(chr_name)
+        .map_or(0, |s| s.deal_last_tick as i32);
     let flag = registry.and_then(|r| r.flag_of(map_id));
     // 先跑纯函数（会**原地改** `sg.state`），再按**改后**的会话态组 `WireSession`
     // ——oracle 的 `GoldChanged()`/`WeightChanged()` 都在 `Gold +=`/`AddItemToBag` **之后**发
@@ -4774,12 +4782,9 @@ fn sim_loop(
                             tail.as_deref(),
                             &chr_name,
                             socket,
-                            // `PlayObject.Dealing`（M3⑦-实现 3）：交易中禁拾取/禁丢弃。
-                            trade_sessions.get(&chr_name).is_some_and(|s| s.dealing),
-                            // `PlayObject.DealLastTick`（M3⑦-实现 4）：交易会话真值。
-                            trade_sessions
-                                .get(&chr_name)
-                                .map_or(0, |s| s.deal_last_tick as i32),
+                            // `PlayObject.Dealing`/`DealLastTick`（M3⑦-实现 3/4）：整表传入，
+                            // 取值在 `handle_ground_cmd` 内完成（被 `drop_blocked_by_fresh_deal_last_tick` 咬住）。
+                            &trade_sessions,
                             &world,
                             &mut ground_sessions,
                             &online,
@@ -8244,8 +8249,7 @@ mod tests {
             None,
             "hero",
             901,
-            false,
-            0,
+            &std::collections::HashMap::new(),
             &world,
             &mut sessions,
             &online,
@@ -8273,8 +8277,7 @@ mod tests {
             None,
             "hero",
             901,
-            false,
-            0,
+            &std::collections::HashMap::new(),
             &world,
             &mut sessions,
             &online,
@@ -11164,8 +11167,7 @@ mod tests {
             None,
             "hero",
             901,
-            false,
-            0,
+            &std::collections::HashMap::new(),
             &world,
             &mut sessions,
             &online,
@@ -11193,8 +11195,7 @@ mod tests {
             None,
             "hero",
             901,
-            false,
-            0,
+            &std::collections::HashMap::new(),
             &world,
             &mut sessions,
             &online,
@@ -11323,6 +11324,160 @@ mod tests {
         assert!(
             sessions.get("hero").unwrap().use_items[0].is_some(),
             "交易中不得真正卸下装备"
+        );
+    }
+
+    /// **M3⑦-实现 4（M-1 收口）**：`deal_last_tick` 的**生产取数**被用例咬住——
+    /// 交易会话 `DealLastTick` 未过 3000ms 门 ⇒ `CM_DROPITEM` 不得进 `ClientDropItem` 体。
+    ///
+    /// oracle：`PlayObject.Operate.cs:269`（`(HUtil32.GetTickCount() - DealLastTick) > 3000`
+    /// 才进 `ItemList` 丢弃查表）；`DealLastTick` 字段见 `PlayObject.cs:122`。本仓
+    /// `drop_item_down` 恒 false（`MapItem.ItemId == 0`，T-19），
+    /// 故「是否进体」在成功/失败帧上不可分；可分的观测点是丢弃体里 `StdMode == 40` 的
+    /// `Dura = (ushort)(Dura - 2000)` 原地扣减（`BaseObject.cs:541-548`，u16 回绕口径）。
+    ///
+    /// 改坏必红：把 `handle_ground_cmd` 里 `deal_last_tick` 的取数改回恒 `0` ⇒ 第一次调用即
+    /// 过门、`Dura` 从 5000 变 3000 ⇒ `5000` 断言必红。
+    #[test]
+    fn drop_blocked_by_fresh_deal_last_tick() {
+        use std::collections::HashMap;
+
+        let mut world = mir2_world::World::new(32, 32);
+        world.clock_ms = 10_000;
+        let hero = world.add_entity({
+            let mut e = mir2_world::Entity::new(1, "hero", 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e
+        });
+
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert(
+            "hero".into(),
+            SessionGround {
+                state: game_svr::ground::GroundState {
+                    item_list: vec![game_svr::bag::BagItem {
+                        make_index: 60001,
+                        index: 1,
+                        // `StdMode 40` 分支：`Dura 5000 - 2000 = 3000`。
+                        dura: 5000,
+                        dura_max: 5000,
+                        desc: [0u8; 14],
+                    }],
+                    gold: 0,
+                    wabil: test_ability(),
+                },
+                storage: storage::StorageState::new(),
+                actor_id: hero,
+                game_gold: 0,
+                sys_msg: None,
+                use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
+                sub: game_svr::ability::SubAbility::first_call(),
+                equip: test_equip_inputs(),
+                recovery: game_svr::recover::Recovery::new(0),
+                stamina: game_svr::stamina::Stamina::new(0),
+                show_hp: false,
+                user_unlock_durg: false,
+                hunger_status: 0,
+                query_bag_items_tick: None,
+                save_rcd_tick: 0,
+            },
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hero,
+            },
+        );
+        let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let cfg = GroundCfg {
+            human_max_gold: 10_000_000,
+            floor_item_can_pick_up_time: 120_000,
+            control_drop_item: false,
+            in_safe_disable_drop: false,
+            can_drop_price: 500,
+            drop_item_rage: 3,
+        };
+        let colors = MsgColors {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+        };
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "木剑".into(),
+                std_mode: 40,
+                ..Default::default()
+            },
+        );
+
+        // 交易会话：`DealLastTick = now_tick`（`handle_deal_cmd` 写的是 `world.clock_ms`）。
+        let mut trade_sessions: HashMap<String, game_svr::trade::DealState> = HashMap::new();
+        trade_sessions.insert(
+            "hero".into(),
+            game_svr::trade::DealState {
+                deal_last_tick: world.clock_ms,
+                ..Default::default()
+            },
+        );
+
+        // ① 新鲜 `DealLastTick` ⇒ `now - DealLastTick > 3000` 不成立 ⇒ 不进丢弃体 ⇒ Dura 不变。
+        handle_ground_cmd(
+            game_svr::ground::CM_DROPITEM,
+            60001,
+            0,
+            Some("木剑"),
+            "hero",
+            901,
+            &trade_sessions,
+            &world,
+            &mut sessions,
+            &online,
+            &gates,
+            &cfg,
+            &colors,
+            &catalog,
+            None,
+        );
+        assert_eq!(
+            sessions.get("hero").unwrap().state.item_list[0].dura,
+            5000,
+            "3000ms 门内（交易中）⇒ ClientDropItem 体不得执行（oracle Operate.cs:269）"
+        );
+
+        // ② 过门（`DealLastTick` 陈旧）⇒ 进体 ⇒ StdMode40 原地扣 2000（u16 口径 5000→3000）。
+        trade_sessions.get_mut("hero").unwrap().deal_last_tick = 1_000;
+        handle_ground_cmd(
+            game_svr::ground::CM_DROPITEM,
+            60001,
+            0,
+            Some("木剑"),
+            "hero",
+            901,
+            &trade_sessions,
+            &world,
+            &mut sessions,
+            &online,
+            &gates,
+            &cfg,
+            &colors,
+            &catalog,
+            None,
+        );
+        assert_eq!(
+            sessions.get("hero").unwrap().state.item_list[0].dura,
+            3000,
+            "过 3000ms 门 ⇒ 进体 ⇒ Dura 5000-2000（BaseObject.cs:541-548）"
         );
     }
 }

@@ -220,3 +220,62 @@ fn world_attack_excludes_group_mate() {
     assert!(!rec.attacks[0].2.hit, "同组 ⇒ 未命中");
     assert_eq!(w.entities.get(b).unwrap().hp, hp_before, "同组不得掉血");
 }
+
+/// oracle `PlayObject.Base.cs:775-776` 的缺团长态：`GroupOwner != 0` 但团长对象不在
+/// `ActorMgr` ⇒ `groupOwnerPlay.GroupMembers` 空引用抛异常、被 `catch`（818-821）吞掉
+/// ⇒ **本次零经验、零授奖**（不是退回单人满经验）。
+///
+/// 可达性：`World::leave_world`（`world.rs:585-607`）从注册表移除实体时不清同组成员的
+/// `group_owner` ⇒ 团长离场后成员仍带悬空 `group_owner`。
+///
+/// 正面控制：团长在场时同一场景按 `Round(600 * bonus[3]) / 3 = 280` 均分
+/// （`HighLevelKillMonFixExp`，`n = 3` ⇒ `bonus[3] = 1.4`）。
+///
+/// 改坏必红：缺失态改回 `unwrap_or_default()` ⇒ 第二阶段退回单人满经验 ⇒
+/// `deaths[0].4 == 0` 与「a 的经验不增长」必红。
+#[test]
+fn group_owner_missing_matches_oracle_npe() {
+    let (mut w, l, a, b) = setup_group();
+
+    // 正面控制：团长在场 ⇒ 正常组队分配，顺序 = 成员表序。
+    let mon = {
+        let mut e = Entity::new(0, "chicken", 10, 9);
+        e.race = ACTOR_RACE_MONSTER;
+        e.mon_exp = 600;
+        e.exp_hitter = Some(l);
+        w.add_entity(e)
+    };
+    w.entities.get_mut(mon).unwrap().hp = 0;
+    let rec = w.tick();
+    assert_eq!(awards(&w, &rec), vec![l, a, b], "控制：团长在场 ⇒ L/A/B");
+    assert_eq!(rec.deaths[0].4, 280, "控制：获得者本人 840/3");
+    assert_eq!(w.entities.get(a).unwrap().exp, 280);
+    assert_eq!(
+        w.entities.get(a).unwrap().group_owner,
+        l,
+        "a 的 group_owner 指向团长"
+    );
+
+    // 团长离场：从注册表移除，**不清** a 的 group_owner（悬空态）。
+    w.entities.remove(l).expect("团长实体应存在");
+    let mon = {
+        let mut e = Entity::new(0, "chicken", 10, 9);
+        e.race = ACTOR_RACE_MONSTER;
+        e.mon_exp = 600;
+        e.exp_hitter = Some(a);
+        w.add_entity(e)
+    };
+    w.entities.get_mut(mon).unwrap().hp = 0;
+    let rec = w.tick();
+    assert_eq!(rec.deaths.len(), 1, "应有 1 次死亡结算: {rec:?}");
+    assert_eq!(
+        rec.deaths[0].4, 0,
+        "oracle NPE 吞错 ⇒ 获得者本人零经验（不退回单人满经验）"
+    );
+    assert!(
+        rec.exp_awards.is_empty(),
+        "oracle NPE 吞错 ⇒ 零 SM_WINEXP 授奖，实际: {:?}",
+        rec.exp_awards
+    );
+    assert_eq!(w.entities.get(a).unwrap().exp, 280, "a 的经验不得增长");
+}

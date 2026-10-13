@@ -1,0 +1,12 @@
+M3⑧-实现 6 第①片 —— 证据 hash 复核（仓库字节 / LF 归一口径）
+================================================================================
+$ python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/m3/evidence-m3-castle-file-load-20261013
+GREEN mir2-rs\tests\parity\m3\evidence-m3-castle-file-load-20261013\SHA256SUMS.txt  [repo 口径]  OK 15/15
+exit=0
+
+$ python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-castle-file-load-20261013
+EOLCHECK GREEN 16/16 件文本证据与仓库口径（LF）在 EOL 上一致
+exit=0
+
+口径说明：mir2-rs/.gitattributes 的 `*.txt text eol=lf` ⇒ 仓库字节 = LF 归一后的 sha256；
+fixtures/SabukW-0.hex 是 ASCII hex（无 CRLF）⇒ 两种口径相同。清单条目 = 15（不含 SHA256SUMS.txt 自身）。
