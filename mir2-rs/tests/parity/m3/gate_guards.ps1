@@ -1734,3 +1734,109 @@ function Invoke-M3SaveRcdSettle {
     Start-Sleep -Milliseconds $PollMilliseconds
   }
 }
+
+# ============================================================================
+# M3⑤ NPC/商店序列口径（卡 openmir2-m3-shop-fixture-botsrv；白名单 T-29 家族扩展）
+#
+# 形态：`(off)` 或
+#   `on ops=<a|b|c> step_ms=<int> start_delay_ms=<int> npc=<名> item=<名> make=<int> n=<int> disable_autoplay=<True|False>`。
+# run_pair.ps1 / run_m3_gate.ps1 / run_npc_shop_pair.ps1 / selftest 的构造输入共用本文件，避免口径漂移。
+# 语义：两侧必须**同一组开关**（ops/step/delay/npc/item/make/n/关挂机）——否则跨侧 diff 无仲裁力。
+function Format-M3ShopScope {
+  param(
+    [bool]$ShopSequence = $false,
+    [string]$ShopOps = '',
+    [int]$ShopStepMs = 1000,
+    [int]$ShopStartDelayMs = 3000,
+    [string]$ShopNpcName = '',
+    [string]$ShopItemName = '',
+    [int]$ShopItemMake = 0,
+    [int]$ShopCount = 1,
+    [bool]$DisableAutoPlay = $false
+  )
+  if (-not $ShopSequence) { return '(off)' }
+  $ap = if ($DisableAutoPlay) { 'True' } else { 'False' }
+  $ops = if ([string]::IsNullOrEmpty($ShopOps)) { '' } else { $ShopOps }
+  return ("on ops={0} step_ms={1} start_delay_ms={2} npc={3} item={4} make={5} n={6} disable_autoplay={7}" -f `
+    $ops, $ShopStepMs, $ShopStartDelayMs, $ShopNpcName, $ShopItemName, $ShopItemMake, $ShopCount, $ap)
+}
+
+# baseline.json 里已存的 shop_sequence 串 → canonical。缺 `disable_autoplay=` 位按 False 还原（旧产物）。
+# 返回 $null = 形态认不出（非空但不是本函数认识的标签）。
+function ConvertTo-M3ShopScope {
+  param([AllowEmptyString()][string]$Raw)
+  if ([string]::IsNullOrWhiteSpace($Raw) -or $Raw.Trim() -eq '(off)') { return '(off)' }
+  if ($Raw -notmatch '^on\b') { return $null }
+  $m = [regex]::Match($Raw, '^on ops=(?<ops>\S*) step_ms=(?<step>\d+) start_delay_ms=(?<sd>\d+) npc=(?<npc>\S*) item=(?<item>\S*) make=(?<make>-?\d+) n=(?<n>-?\d+) disable_autoplay=(?<ap>True|False)$')
+  if (-not $m.Success) { return $null }
+  return ("on ops={0} step_ms={1} start_delay_ms={2} npc={3} item={4} make={5} n={6} disable_autoplay={7}" -f `
+    $m.Groups['ops'].Value, $m.Groups['step'].Value, $m.Groups['sd'].Value, $m.Groups['npc'].Value, `
+    $m.Groups['item'].Value, $m.Groups['make'].Value, $m.Groups['n'].Value, $m.Groups['ap'].Value)
+}
+
+# 参照会话商店开关一致性（机判；含 peer baseline.json 解析失败防线，同 P-1）。
+function Get-M3PeerShopScopeGuard {
+  param(
+    [Parameter(Mandatory)][string]$PeerDir,
+    [Parameter(Mandatory)][AllowEmptyString()][string]$LocalScope
+  )
+  $failed = New-Object System.Collections.Generic.List[string]
+  $messages = New-Object System.Collections.Generic.List[string]
+  $peerScope = $null
+  $baselinePath = Join-Path $PeerDir 'baseline.json'
+  if (-not (Test-Path $baselinePath)) {
+    $messages.Add(("RED: 参照会话缺 baseline.json: {0}" -f $baselinePath))
+    $failed.Add('peer_baseline_missing')
+    return [pscustomobject]@{ failed = @($failed); messages = @($messages); peer_scope = $peerScope }
+  }
+  $baseline = $null
+  $parseError = $null
+  try {
+    $baseline = Get-Content -Path $baselinePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+  } catch { $parseError = $_.Exception.Message }
+  if ($null -eq $baseline) {
+    if ([string]::IsNullOrWhiteSpace($parseError)) { $parseError = '内容为空或不是 JSON 对象（半写/截断）' }
+    $messages.Add(("RED: 参照会话 baseline.json 解析失败: {0} —— {1}" -f $baselinePath, $parseError))
+    $failed.Add('peer_baseline_invalid')
+    return [pscustomobject]@{ failed = @($failed); messages = @($messages); peer_scope = $peerScope }
+  }
+  $localCanon = ConvertTo-M3ShopScope -Raw $LocalScope
+  $peerRaw = [string]$baseline.shop_sequence
+  $peerCanon = ConvertTo-M3ShopScope -Raw $peerRaw
+  $peerScope = $peerCanon
+  if ($null -eq $peerCanon) {
+    $messages.Add(("RED: 参照会话 shop_sequence 形态认不出: '{0}'（{1}）" -f $peerRaw, $baselinePath))
+    $failed.Add('peer_shop_scope_invalid')
+    return [pscustomobject]@{ failed = @($failed); messages = @($messages); peer_scope = $peerScope }
+  }
+  if ([string]::IsNullOrEmpty($peerRaw)) {
+    if ($localCanon -eq '(off)') { $peerCanon = '(off)'; $peerScope = '(off)' }
+    else {
+      $peerScope = '(missing)'
+      $messages.Add(("RED: 参照会话 baseline.json 缺 shop_sequence（旧产物/被裁剪）: {0}" -f $baselinePath))
+      $failed.Add('peer_shop_scope_missing')
+      return [pscustomobject]@{ failed = @($failed); messages = @($messages); peer_scope = $peerScope }
+    }
+  }
+  if ($peerCanon -ne $localCanon) {
+    $messages.Add((("-PeerSession 商店序列开关与本侧不一致——peer='{0}' vs local='{1}'；" +
+        "两侧不是同一组夹具开关，跨侧 diff 无仲裁力（ops/step/delay/npc/item/make/n/关挂机 必须一致）") -f $peerCanon, $localCanon))
+    $failed.Add('peer_shop_scope_mismatch')
+    $messages.Insert(0, 'RED: 参照会话商店序列开关与本侧不一致')
+  }
+  return [pscustomobject]@{ failed = @($failed); messages = @($messages); peer_scope = $peerScope }
+}
+
+# 从会话目录的 baseline.json 读出商店序列开关标签（canonical）。
+# 缺 baseline.json / 解析失败 ⇒ $null（调用方当 PREREQ）；字段缺失 ⇒ '(off)'（旧产物默认关）。
+function Get-M3SessionShopScope {
+  param([Parameter(Mandatory)][string]$Dir)
+  $baselinePath = Join-Path $Dir 'baseline.json'
+  if (-not (Test-Path $baselinePath)) { return $null }
+  $baseline = $null
+  try {
+    $baseline = Get-Content -Path $baselinePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+  } catch { return $null }
+  if ($null -eq $baseline) { return $null }
+  return (ConvertTo-M3ShopScope -Raw ([string]$baseline.shop_sequence))
+}

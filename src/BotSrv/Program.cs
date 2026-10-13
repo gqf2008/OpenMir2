@@ -15,6 +15,11 @@ namespace BotSrv
             {
                 System.Environment.Exit(AttackRoleSelfCheck.Run());
             }
+            // M3⑤（T-29 家族扩展）：商店夹具 op/分支/价格纯函数的无栈自检（不启动服务/不连端口）。
+            if (args.Length > 0 && args[0] == "--selftest-shopseq")
+            {
+                System.Environment.Exit(ShopSeqSelfCheck.Run());
+            }
             GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
             GCSettings.LatencyMode = GCSettings.IsServerGC ? GCLatencyMode.Batch : GCLatencyMode.Interactive;
             AppServer serviceRunner = new AppServer();
