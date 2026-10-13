@@ -1,0 +1,43 @@
+# 00-commands.txt —— M3⑨-2 M-3 收口（`.rc` 证据扩展名声明 LF）复现命令
+
+code base = 8aebbcb85（origin=walgit master）
+code head = bc2118446（本片唯一代码/属性提交：mir2-rs/.gitattributes 追加 `*.rc text eol=lf`）
+证据 commit = 本目录（bc2118446 的子提交，仅新增/修改本证据目录）
+`core.autocrlf = true`（C:/Program Files/Git/etc/gitconfig），Windows。
+
+## 依赖
+- `git`；`python -I tools/evidence-hash/verify_sha256sums.py`（仓库自带）
+- 隔离编译目标：`CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target`（检出外）
+
+## ① 新鲜检出（before，无修复）
+    git -C <repo> worktree add --detach E:/tmp/m3hp-eol-repro 8aebbcb85
+    cd E:/tmp/m3hp-eol-repro
+    file mir2-rs/tests/parity/m3/pet-slave-f1-rework-20261013/redchecks/RC5-*.rc
+    python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-pet-slave-f1-rework-20261013
+
+## ② 新鲜检出（after，含修复）
+    git -C <repo> worktree add --detach E:/tmp/m3hp-eol-after bc2118446
+    cd E:/tmp/m3hp-eol-after
+    file mir2-rs/tests/parity/m3/evidence-m3-pet-slave-f1-rework-20261013/redchecks/RC5-*.rc
+    python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-pet-slave-f1-rework-20261013
+    python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs
+
+## ③ 改坏必红（在 ② 的检出内，删 `*.rc` 行后强制重落盘）
+    sed -i '/^\*\.rc /d' mir2-rs/.gitattributes
+    rm -f mir2-rs/tests/parity/m3/evidence-m3-pet-slave-f1-rework-20261013/redchecks/RC5-*.rc
+    git checkout -- mir2-rs/tests/parity/m3/evidence-m3-pet-slave-f1-rework-20261013/redchecks/RC5-*.rc
+    python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-pet-slave-f1-rework-20261013
+    # 还原：git checkout -- mir2-rs/.gitattributes && rm .rc && git checkout -- .rc  ⇒ git status 为空
+
+## ④ 四门禁（在本 worktree 检出 mir2-rs/ 下，隔离 target）
+    cd <repo>/mir2-rs
+    CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo fmt --all -- --check
+    CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo clippy --workspace --all-targets -- -D warnings
+    CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo test --workspace --no-fail-fast
+    CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target cargo run -q -p msgcodegen -- --check
+
+## ⑤ 边界
+    git diff --name-only 8aebbcb85 bc2118446 -- src sql MirClient      # 空
+    git diff --stat  8aebbcb85 bc2118446                                # 仅 mir2-rs/.gitattributes
+    python -I tools/evidence-hash/verify_sha256sums.py verify <本目录> --repo . --check-extra
+    python -I tools/evidence-hash/verify_sha256sums.py eolcheck <本目录>
