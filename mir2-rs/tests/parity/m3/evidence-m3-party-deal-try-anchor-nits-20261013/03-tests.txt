@@ -1,0 +1,62 @@
+== 03 判据实跑（本片新增 1 条 oracle 锚漂移门；在交付工作树上，head = a72b2554d） ==
+基线读法：origin/master 95291257c = 99 suites / 1159 passed / 0 failed / 22 ignored（= 本片读数 −1 suite/−1 test，本片为纯新增集成测试）；本片读数见 [1]/[4]。
+
+---- [1] 新增锚漂移门 ----
+命令: CARGO_TARGET_DIR=E:/tmp/openmir2-m3pt-target cargo test -p game-svr --test deal_try_oracle_anchors
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3pt\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.60s
+     Running tests\deal_try_oracle_anchors.rs (E:/tmp/openmir2-m3pt-target\debug\deps\deal_try_oracle_anchors-b25b1e4975fe3cbb.exe)
+
+running 1 test
+test deal_try_oracle_anchors_match_source ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+rc=0
+
+---- [2] game-svr lib trade::（回归：20 passed） ----
+命令: CARGO_TARGET_DIR=E:/tmp/openmir2-m3pt-target cargo test -p game-svr --lib trade::
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3pt\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.16s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m3pt-target\debug\deps\game_svr-e3b807fec57e6cfc.exe)
+
+running 20 tests
+test trade::tests::deal_end_first_side_waits ... ok
+test trade::tests::change_deal_gold_ok_and_fail ... ok
+test trade::tests::change_deal_gold_fail_when_insufficient ... ok
+test trade::tests::add_deal_item_fail_branches ... ok
+test trade::tests::deal_cancel_is_recursive ... ok
+test trade::tests::add_deal_item_moves_and_notifies ... ok
+test trade::tests::deal_end_capacity_check_cancels ... ok
+test trade::tests::deal_end_ok_time_gate_cancels ... ok
+test trade::tests::deal_try_absent_pose_emits_nothing ... ok
+test trade::tests::deal_end_settles_gold ... ok
+test trade::tests::deal_try_absent_pose_still_obeys_guards_first ... ok
+test trade::tests::deal_end_settles_items ... ok
+test trade::tests::deal_try_disabled ... ok
+test trade::tests::deal_try_not_player_fails ... ok
+test trade::tests::deal_try_opens_both_sides ... ok
+test trade::tests::deal_try_respects_try_deal_time_gate ... ok
+test trade::tests::del_deal_item_denied_by_can_not_get_back ... ok
+test trade::tests::del_deal_item_returns_when_allowed ... ok
+test trade::tests::first_token_matches_get_valid_str3 ... ok
+test trade::tests::event_bodies_match_oracle_shapes ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 167 filtered out; finished in 0.00s
+
+
+---- [3] game-svr bin deal_（回归：3 passed） ----
+命令: CARGO_TARGET_DIR=E:/tmp/openmir2-m3pt-target cargo test -p game-svr --bin game-svr deal_
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3pt\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.35s
+     Running unittests src\main.rs (E:/tmp/openmir2-m3pt-target\debug\deps\game_svr-d40510517c77a420.exe)
+
+running 3 tests
+test tests::deal_cm_try_no_front_object_emits_no_frame_on_production_path ... ok
+test tests::drop_blocked_by_fresh_deal_last_tick ... ok
+test tests::deal_try_target_distinguishes_absent_from_non_player ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 194 filtered out; finished in 0.00s
+
+
+---- [4] workspace 全量（见 gates/test.txt）：100 suites / 1160 passed / 0 failed / 22 ignored / rc=0 ----

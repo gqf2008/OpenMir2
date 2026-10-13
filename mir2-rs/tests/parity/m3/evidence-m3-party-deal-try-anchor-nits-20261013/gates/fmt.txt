@@ -1,0 +1,2 @@
+命令: CARGO_TARGET_DIR=E:/tmp/openmir2-m3pt-target cargo fmt --all -- --check
+rc=0（无输出）
