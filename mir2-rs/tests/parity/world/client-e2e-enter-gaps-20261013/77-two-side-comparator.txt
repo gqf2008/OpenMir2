@@ -1,0 +1,109 @@
+77-two-side-comparator.txt —— 卡 `openmir2-client-e2e-enter-gaps` 缺口②「同屏没怪」的
+**两侧（Rust vs C#）客户端可见性对照**判据工具（m2-svr / openmir2-worker-11，2026-10-14）
+回应 root brief-m2svr-next 顶部 00:4x ③「用两侧对照（同一位置、同一 viewrange）给证据并收口」的
+「判据/capture 工具你准备」半段。本片**只准备判据工具**，真机两侧对照读数仍等 owner 窗口（不起栈）。
+
+A. 交付物
+----------
+新工具 `aoi_visibility_pair.py`（本目录）：消费两侧 `capture.jsonl`（`export_s2c.ps1` 解码的
+**客户端实际收到** s2c 帧），抽出 `SM_TURN(10)+SM_FEATURECHANGED(41)` 相邻出现对 = 该侧同屏出现的
+actor 集合；判据：
+  --expect none    两侧出现对都为 0 ⇒ GREEN（该点确实无怪）
+  --expect visible 两侧都 >= --min-pairs（默认 1）⇒ GREEN（同屏有怪）
+  --expect report   只报告
+  --strict-recogs   额外要求两侧 recog 集合相等（70 §E step3 的假设；默认关，窗口验证后再开）
+退出码 0/1/2（2=PREREQ 缺件/不可解析，绝不静默通过）。
+抽取逻辑**直接 import 复用** `check_client_s2c_frames.py` 的 load_capture/s2c/appearance_pairs，
+杜绝口径漂移；`--selftest` 11 条（含 none/visible/计数/缺件/严格 recog/相邻配对）不依赖外部件。
+
+B. 自证（--selftest）
+---------------------
+$ python -I -B aoi_visibility_pair.py --selftest
+[PASS] selftest none-green: rc=0 (want 0)
+        rust: pairs=0 recogs=[] | csharp: pairs=0 recogs=[]
+        INFO recog 集合对照（仅信息，默认不判红；--strict-recogs 才判）：both=0 only_rust=0 only_csharp=0
+        OK  --expect none：两侧出现对都为 0（该点窗口内无怪）
+[PASS] selftest none-red-left-visible: rc=1 (want 1)
+        rust: pairs=2 recogs=['0x00000065', '0x000000ca'] | csharp: pairs=0 recogs=[]
+        INFO recog 集合对照（仅信息，默认不判红；--strict-recogs 才判）：both=0 only_rust=2 only_csharp=0
+        INFO 注意：两侧 recog 集合不等。若两侧「可见/不可见」结论一致而 recog 不同，说明 `70 §E step 3` 的 ActorId 相同假设在该场景不成立——以计数/截图为判据并登记。
+        RED --expect none：rust 出现对=2 != 0
+[PASS] selftest none-red-right-visible: rc=1 (want 1)
+        rust: pairs=0 recogs=[] | csharp: pairs=2 recogs=['0x00000065', '0x000000ca']
+        INFO recog 集合对照（仅信息，默认不判红；--strict-recogs 才判）：both=0 only_rust=0 only_csharp=2
+        INFO 注意：两侧 recog 集合不等。若两侧「可见/不可见」结论一致而 recog 不同，说明 `70 §E step 3` 的 ActorId 相同假设在该场景不成立——以计数/截图为判据并登记。
+        RED --expect none：csharp 出现对=2 != 0
+[PASS] selftest visible-green-both: rc=0 (want 0)
+        rust: pairs=2 recogs=['0x00000065', '0x000000ca'] | csharp: pairs=3 recogs=['0x00000065', '0x000000ca', '0x0000012f']
+        INFO recog 集合对照（仅信息，默认不判红；--strict-recogs 才判）：both=2 only_rust=0 only_csharp=1
+        INFO 注意：两侧 recog 集合不等。若两侧「可见/不可见」结论一致而 recog 不同，说明 `70 §E step 3` 的 ActorId 相同假设在该场景不成立——以计数/截图为判据并登记。
+        OK  --expect visible：两侧出现对均 >= 1（rust=2 / csharp=3）
+[PASS] selftest visible-red-right-empty: rc=1 (want 1)
+        rust: pairs=2 recogs=['0x00000065', '0x000000ca'] | csharp: pairs=0 recogs=[]
+        INFO recog 集合对照（仅信息，默认不判红；--strict-recogs 才判）：both=0 only_rust=2 only_csharp=0
+        INFO 注意：两侧 recog 集合不等。若两侧「可见/不可见」结论一致而 recog 不同，说明 `70 §E step 3` 的 ActorId 相同假设在该场景不成立——以计数/截图为判据并登记。
+        RED --expect visible：csharp 出现对=0 < --min-pairs 1
+[PASS] selftest visible-red-min-pairs: rc=1 (want 1)
+        rust: pairs=2 recogs=['0x00000065', '0x000000ca'] | csharp: pairs=3 recogs=['0x00000065', '0x000000ca', '0x0000012f']
+        INFO recog 集合对照（仅信息，默认不判红；--strict-recogs 才判）：both=2 only_rust=0 only_csharp=1
+        INFO 注意：两侧 recog 集合不等。若两侧「可见/不可见」结论一致而 recog 不同，说明 `70 §E step 3` 的 ActorId 相同假设在该场景不成立——以计数/截图为判据并登记。
+        RED --expect visible：rust 出现对=2 < --min-pairs 3
+[PASS] selftest strict-recogs-red: rc=1 (want 1)
+        rust: pairs=2 recogs=['0x00000065', '0x000000ca'] | csharp: pairs=3 recogs=['0x00000065', '0x000000ca', '0x00000194']
+        INFO recog 集合对照（仅信息，默认不判红；--strict-recogs 才判）：both=2 only_rust=0 only_csharp=1
+        INFO 注意：两侧 recog 集合不等。若两侧「可见/不可见」结论一致而 recog 不同，说明 `70 §E step 3` 的 ActorId 相同假设在该场景不成立——以计数/截图为判据并登记。
+        OK  --expect visible：两侧出现对均 >= 1（rust=2 / csharp=3）
+        RED --strict-recogs：两侧 recog 集合不等（见上 only_* 列表）
+[PASS] selftest non-strict-recogs-green: rc=0 (want 0)
+        rust: pairs=2 recogs=['0x00000065', '0x000000ca'] | csharp: pairs=3 recogs=['0x00000065', '0x000000ca', '0x00000194']
+        INFO recog 集合对照（仅信息，默认不判红；--strict-recogs 才判）：both=2 only_rust=0 only_csharp=1
+        INFO 注意：两侧 recog 集合不等。若两侧「可见/不可见」结论一致而 recog 不同，说明 `70 §E step 3` 的 ActorId 相同假设在该场景不成立——以计数/截图为判据并登记。
+        OK  --expect visible：两侧出现对均 >= 1（rust=2 / csharp=3）
+[PASS] selftest report-always-green: rc=0 (want 0)
+        rust: pairs=2 recogs=['0x00000065', '0x000000ca'] | csharp: pairs=0 recogs=[]
+        INFO recog 集合对照（仅信息，默认不判红；--strict-recogs 才判）：both=0 only_rust=2 only_csharp=0
+        INFO 注意：两侧 recog 集合不等。若两侧「可见/不可见」结论一致而 recog 不同，说明 `70 §E step 3` 的 ActorId 相同假设在该场景不成立——以计数/截图为判据并登记。
+        INFO --expect report：rust=2 / csharp=0（不判绿红）
+[PASS] selftest prereq-missing: rc=2 (want 2)
+        PREREQ_RED: csharp 侧 capture 不存在: C:\Users\gxh\AppData\Local\Temp\tmpzwwv96dv\nope.jsonl
+[PASS] selftest 10-10-41 只算一对（相邻 10→41）：pairs=1
+SELFTEST OK (11/11)
+rc=0
+
+C. 真机既有 capture 上的工具行为（不是两侧对照结论，只证工具在真原始件上绿/红都能出）
+--------------------------------------------------------------------------------------
+$ python -I -B aoi_visibility_pair.py --left capture-client-viewrange12-seed42.jsonl --right capture-client-viewrange12-seed42.jsonl --expect visible --min-pairs 1 --strict-recogs
+rust: pairs=13 recogs=['0x00000128', '0x0000012c', '0x00000146', '0x00000303', '0x00000309', '0x0000030f', '0x00000314', '0x00000316', '0x00000318', '0x00000322', '0x0000032a', '0x00000332', '0x00000382'] | csharp: pairs=13 recogs=['0x00000128', '0x0000012c', '0x00000146', '0x00000303', '0x00000309', '0x0000030f', '0x00000314', '0x00000316', '0x00000318', '0x00000322', '0x0000032a', '0x00000332', '0x00000382']
+INFO recog 集合对照（仅信息，默认不判红；--strict-recogs 才判）：both=13 only_rust=0 only_csharp=0
+OK  --expect visible：两侧出现对均 >= 1（rust=13 / csharp=13）
+OK  --strict-recogs：两侧 recog 集合相等
+RESULT: GREEN
+rc=0
+
+$ python -I -B aoi_visibility_pair.py --left capture-client-viewrange5-seed42.jsonl --right capture-client-viewrange12-seed42.jsonl --expect none
+rust: pairs=2 recogs=['0x00000128', '0x00000317'] | csharp: pairs=13 recogs=['0x00000128', '0x0000012c', '0x00000146', '0x00000303', '0x00000309', '0x0000030f', '0x00000314', '0x00000316', '0x00000318', '0x00000322', '0x0000032a', '0x00000332', '0x00000382']
+INFO recog 集合对照（仅信息，默认不判红；--strict-recogs 才判）：both=1 only_rust=1 only_csharp=12
+INFO 注意：两侧 recog 集合不等。若两侧「可见/不可见」结论一致而 recog 不同，说明 `70 §E step 3` 的 ActorId 相同假设在该场景不成立——以计数/截图为判据并登记。
+RED --expect none：rust 出现对=2 != 0
+RED --expect none：csharp 出现对=13 != 0
+RESULT: RED
+rc=1
+
+$ python -I -B aoi_visibility_pair.py --left capture-client-viewrange5-seed42.jsonl --right capture-client-viewrange12-seed42.jsonl --expect visible --strict-recogs
+rust: pairs=2 recogs=['0x00000128', '0x00000317'] | csharp: pairs=13 recogs=['0x00000128', '0x0000012c', '0x00000146', '0x00000303', '0x00000309', '0x0000030f', '0x00000314', '0x00000316', '0x00000318', '0x00000322', '0x0000032a', '0x00000332', '0x00000382']
+INFO recog 集合对照（仅信息，默认不判红；--strict-recogs 才判）：both=1 only_rust=1 only_csharp=12
+INFO 注意：两侧 recog 集合不等。若两侧「可见/不可见」结论一致而 recog 不同，说明 `70 §E step 3` 的 ActorId 相同假设在该场景不成立——以计数/截图为判据并登记。
+OK  --expect visible：两侧出现对均 >= 1（rust=2 / csharp=13）
+RED --strict-recogs：两侧 recog 集合不等（见上 only_* 列表）
+RESULT: RED
+rc=1
+
+说明：C 的两件都是**Rust 侧**真机 capture（before vr=5 / after vr=12），只用于证明工具在真原始件
+上的绿/红行为；**Rust↔C# 两侧同位置同 viewrange 的对照**（本工具的目标用法）需 owner 窗口采 C# 侧
+capture 后跑：
+  python -I -B aoi_visibility_pair.py --left <rust>/capture.jsonl --right <csharp>/capture.jsonl \
+         --expect visible --min-pairs 1            # 密集点 (287,620)/(256,572)
+  python -I -B aoi_visibility_pair.py --left <rust>/capture.jsonl --right <csharp>/capture.jsonl \
+         --expect none                             # 无怪点 (291,666)
+其中 --expect none 的「两侧都 0」= ③「该点确实无怪」的两侧证据；--expect visible 的「两侧都 >=1」
+= ④「AOI 有算有下发」的反证。若两侧计数一致但 recog 集合不等，按提示以计数/截图为判据并登记。

@@ -95,11 +95,17 @@ def check(samples: list[dict], expect: str, min_vis: int) -> tuple[int, list[str
     # ⑤ 逐采样窗口判读。
     for s in samples:
         outside = s["nearest"] == -1 or s["nearest"] > s["vr"]
-        self_consistent = (s["vis"] == 0) == outside
+        if s["vis"] == 0:
+            sync = "vis==0 与窗口外自洽" if outside else (
+                "vis==0 但 nearest<=vr（窗口内却不可见）**需查 AOI**"
+            )
+        else:
+            sync = "vis>0 与窗口内自洽" if not outside else (
+                "vis>0 但 nearest>vr（窗口外却可见）**需查 AOI**"
+            )
         msgs.append(
             "INFO 采样 {name}({aid}) map={m} vr={vr} vis={vis} new={new} af={af} "
-            "same_map={same} nearest={near} ⇒ nearest{rel}vr（窗口{inout}）；"
-            "vis==0 与窗口{sync}".format(
+            "same_map={same} nearest={near} ⇒ nearest{rel}vr（窗口{inout}）；{sync}".format(
                 name=s["name"],
                 aid=s["actor_id"],
                 m=s["map"],
@@ -111,7 +117,7 @@ def check(samples: list[dict], expect: str, min_vis: int) -> tuple[int, list[str
                 near=s["nearest"],
                 rel=">" if outside else "<=",
                 inout="外" if outside else "内",
-                sync="自洽" if self_consistent else "**不自洽（需查 AOI）**",
+                sync=sync,
             )
         )
 
