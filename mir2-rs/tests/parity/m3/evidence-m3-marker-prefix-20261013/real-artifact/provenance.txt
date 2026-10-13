@@ -1,0 +1,13 @@
+real-artifact/ 来源与构造（卡 openmir2-m3-fixture-marker-prefix-bug）
+
+shop-bare.jsonl
+  = 真机窗口车道 2026-10-13 首轮 C# 跑的原始件，逐字节取自 commit
+    b25e595dbff67febb2fc8dd5bd0bde8a4f2cd0d5 的
+    mir2-rs/tests/parity/m3/evidence-m3-npc-shop-align-window-20261013/11-shop-markers-bare.jsonl
+  = 修复前 run_pair.ps1 写出的形态（14 条裸 JSON，无 `M3SHOPSEQ ` 前缀）。
+
+shop-prefixed.jsonl
+  = 对 shop-bare.jsonl 的每个非空行补回 `M3SHOPSEQ ` 前缀（= bot.log 原始形态 /
+    修复后 run_pair.ps1 写出的形态）；内容字段逐字节未改。
+
+以上两件只用于 09/10 的 assemble 复现，不参与真机判决。
