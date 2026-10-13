@@ -1,0 +1,114 @@
+61-client-run-ability-layout-fix.txt — 真机「跑不动」根因 = 帧 52 能力布局（HP），**不是** SM_SERVERCONFIG/ClientConf
+修复 = game-svr 默认用冻结客户端 58B `TAbility` 布局 + 跑键探针改为在目标点按下
+卡 openmir2-client-e2e-enter-gaps / 回应 brief-m2svr-next 顶部 root 2026-10-13 21:5x（orchestrator comment 6c7ab2eb）
+================================================================================================================
+
+A. 结论（先看这三条）
+----------------------------------------------------------------------------------------------------------------
+1) **真机配对证明「跑」由帧 52 的能力布局决定，与 SM_SERVERCONFIG(11029) / TClientConf 无关。**
+   同一棵交付树上、同一角色 `aaa@(256,584)`（比奇省开阔地）、同一客户端动作（目标点按住 8 方向 ×2 圈），
+   只换 52 尾布局（`MIR2_CLIENT_ABILITY_LAYOUT`）：
+
+     运行    52 尾布局     11029 body_len/body_sha256        52 body_len  客户端 HUD      c2s CM_WALK  c2s CM_RUN(3013)
+     BEFORE  oracle-40     23 / bc2a1f661a5d…（17 bool 双编码）  40          0/0（血球黑）      32           0
+     AFTER   client-58     23 / bc2a1f661a5d…（**逐字节相同**）   58          19/19（血球满红）  25           3
+
+   两行的 11029 帧（`SendServerConfig` 的 `EncodeString(EncodeMessage(ClientConf))`）body 逐字节相同 ⇒
+   **ClientConf 一字未动，`CM_RUN(3013)` 却从 0 → 3**。⇒ brief 指定的「按冻结客户端布局编码 ClientConf
+   （17B → 52/58B）」**不可能**影响 `CM_RUN`；做了也无法满足 brief 自己的判据「改回 17B ⇒ CM_RUN 回归 0」。
+
+2) **机制**：客户端唯一发跑支 `Source/MirClient/ClMain.pas:2190 caRun` 先取 `crun := g_MySelf.CanRun`；
+   `Actor.pas:2162 CanRun` = `HP >= RUN_MINHEALTH`（`Actor.pas:22` = 10）。客户端 `TAbility` 在
+   `HIGHHP=True`（`Source/Common/Grobal2.pas:39`）下是 **58B**，`HP@22`(DWORD)。oracle 的 40B
+   `EncodeMessage(WAbil)` 让客户端从 offset 22 读到 `Exp`（本部署 = 0）⇒ `crun = -1` ⇒ 走 `:2244 else`
+   （发 `CM_TURN` + `goto LB_WALK` 走）——正是 BEFORE 的 32 walk / 0 run。改用 58B 后 `HP@22 = 19 ≥ 10`
+   ⇒ 发 `CM_RUN`。**「跑」的门从来不是 `boCanStartRun`，而是 `CanRun(HP)`。**
+
+3) **片⑧（`cef8726a3`，`60-client-run-blocker-finding.txt`）的复核仍是本片依据，且被本片实测坐实**：
+   冻结客户端 `SM_SERVERCONFIG = 20002`（`Grobal2.pas:1300`，自首提交 `3dbba7d2` 起未变；`git log -S` 可复跑），
+   客户端全仓无 `11029`（`grep -rn 11029 Source/` 零命中）⇒ `ClientGetServerConfig` 永不执行 ⇒
+   `g_boCanStartRun` 停在**缺省 True**（`MShare.pas:1998`）；`grep -rn g_boCanStartRun` 全仓只有该缺省与
+   `:15034` 的赋值点。片⑥「11029 体布局把 `boCanStartRun` 读成栈垃圾 ⇒ 恒假」据此推翻。
+
+B. 第二个真机必要件：跑键探针必须在**目标点**按下
+----------------------------------------------------------------------------------------------------------------
+冻结客户端 `FormMouseMove`（`ClMain.pas:4648`）只把移动喂 UI（`g_DWinMan.MouseMove`），**不**调
+`_DXDrawMouseDown`；而 `g_ChrAction := caRun` + `g_nTargetX` 只在 `_DXDrawMouseDown` 的「点 >1 格」支
+（`ClMain.pas:5446-5463`）置。⇒ 旧探针 `Send-HoldRun` 从屏幕中心按下、再靠 `WM_MOUSEMOVE` 挪到远点
+**永远设不上远目标**（片⑥ R5..R7 的 0 条 3013 有一部分是这个）⇒ 本片把探针改成在**目标点**
+`PostMessage WM_LBUTTONDOWN`（每 150ms 重按，越过 `FormMouseDown` 的 120ms 重入门）。BEFORE/AFTER 都用修好的探针。
+
+另：`g_PlayScene.CanRun`（`PlayScn.pas:3101`）要求**下一格 + 目标格**都 `CanWalkEx`；城墙走道/房区会恒假 ⇒
+真机判据必须在**开阔地**上取（本片 `aaa@(256,584)`；同角色同探针在 `(291,666)` 城墙走道上 `CM_RUN=0`，如实登记）。
+
+C. 配对真机 run（口径 / 命令 / 读数）
+----------------------------------------------------------------------------------------------------------------
+  - 起栈（两次，唯一变量 = 52 布局）：
+      BEFORE：`$env:MIR2_CLIENT_ABILITY_LAYOUT='0'`（oracle-40）
+      AFTER ：不设（= 本片新默认 client-58）
+      `start_rust_stack.ps1 -RustBinDir E:/tmp/m2svr-target/debug -Seed 42 -LogDir E:/tmp/m2svr-run4/<phase>/stack`
+      （Rust game-svr 5000 + 三网关 7000/7100/7200 + C# DBSrv/LoginSrv + 共享 MySQL 3306）
+  - `UPDATE mir2_db.characters SET CX=256,CY=584,MapName='0' WHERE ChrName='aaa'`（两侧一致，采前重置）
+  - 停真 game-gate(7200..7202)，起影子 game-gate(7600) + `mir2_proxy.py --map 7200=127.0.0.1:7600`
+    （客户端 7200 收到的字节 = 代理 s2c；c2s 也落盘）
+  - `mir_flow.ps1 -Account mir2test -Password mir2pass -WalkClicks 0 -AutoPlaySec 0 -SkipReenter -SkipLogout
+       -SkipTalk -RunHoldMs 500`（两次均 `FLOW_OK`）
+  - `export_s2c.ps1 -ProxyDir <phase>/proxy -OutDir <phase>/s2c -SkipReplay`
+  - 判据：`check_client_run_frames.py --capture <phase>/s2c/capture.jsonl`
+      BEFORE：`--expect-52-body-len 40 --min-run-count 0` ⇒ GREEN（①②③）
+      AFTER ：默认（58 / min-run 1）⇒ **① ② OK，③ `CM_RUN=3`**（脚本按「期望 0」的历史口径会 RED ⇒ 本片已把脚本
+              的 ③ 改为 `CM_RUN >= --min-run-count`，默认 1）
+
+  服务端日志（`layout=` 行，证明两条路径真的走了不同布局）：
+      BEFORE `layout=oracle-40 tail_len=40`
+      AFTER  `layout=client-58 tail_len=58`
+  客户端 HUD 截图（入库在 `shots/`）：
+      `rust-client-run-before-oracle40-hud-0-0.png`  HUD `0/0` + `655360/25165829`（血球黑）
+      `rust-client-run-after-client58-hud-19-19.png` HUD `19/19` + `15/15`（血球满红）
+      `rust-client-run-after-client58-runhold.png`   跑位探针期间的同屏帧
+
+  c2s `CM_RUN(3013)` 三条（AFTER）：`param=0 tag=4 series=0`，raw_hex 前缀
+      `23316465747b6655636a6464646b6464686b21` / `…6576…` / `…6570…`（tag=4 = 朝下）。
+
+D. 生产代码改动（`bins/game-svr` + `tools/client`）
+----------------------------------------------------------------------------------------------------------------
+  - `mir2-rs/bins/game-svr/src/main.rs::mir2_client_ability_layout()`：
+      **默认由「未设 = oracle 40B」改为「默认 client-58」**；`MIR2_CLIENT_ABILITY_LAYOUT=0|false` ⇒
+      回到 oracle 的 40B `EncodeMessage(WAbil)`（逐字节对拍/金标准夹具用）。这是 §6.0-3 意义上的
+      「与 oracle 的故意偏离」（oracle 40B 与冻结客户端 58B 不可同时满足；客户端冻结=硬约束 #1 ⇒ 默认以客户端为准）。
+      **白名单登记条目（`MIR2_CLIENT_ABILITY_LAYOUT` / 58B）待 owner 签字，本片不自加。**
+  - 同步订正三处 doc comment（`main.rs` / `enter.rs` / `record.rs`）里「默认关/默认 oracle-40」的旧文案。
+  - `tools/client/mir_flow.ps1::Send-HoldRun` 改为在目标点按下（B 节）；param 注释里已过期的 11029 假说一并订正。
+
+E. 改坏必红
+----------------------------------------------------------------------------------------------------------------
+  - 真机：`MIR2_CLIENT_ABILITY_LAYOUT=0` ⇒ 52 尾 40 ⇒ HUD `0/0`、`CM_RUN=0`（即 C 节 BEFORE 行）。
+  - 判据脚本：`check_client_run_frames.py --selftest 6/6`（含 `run-0-red`、`52-len-40-red`、`no-walk-red`）。
+  - 把 AFTER capture 用 `--min-run-count 1` 判（默认）⇒ ① ② OK、③ 通过；用在 BEFORE capture ⇒ ③ RED。
+
+F. 原始件哈希（sha256，盘上字节）
+----------------------------------------------------------------------------------------------------------------
+  8d140852647af4c72a4ca9281985d3095d897d928186da6608ab4c0d419d4e2b  E:/tmp/m2svr-run4/before/s2c/capture.jsonl
+  753a756630815e5633b486e82b8f71cf916a0b02af57ae15ced7c833b6d8f48e  E:/tmp/m2svr-run4/after/s2c/capture.jsonl
+  a2b5eb52327f86ab9eb07b75d1673ca418375069d62cf028b6ad9147cf2f41cc  E:/tmp/m2svr-run4/before/proxy/chunks.ndjson
+  d3a6ba72981af0a0d4aa3f7a6eb37769176196fad30df3b25ae9a2e48e2a0d5b  E:/tmp/m2svr-run4/after/proxy/chunks.ndjson
+  388fcc8103a2a661d44d016c8bb2db723b2ee408c981f5009bc3f2ec9acec39e  E:/tmp/m2svr-run4/before/proxy/conn-0001.c2s.bin
+  4855d2576cda13b8fb84ae5cbba6755ef33fe891baff4593d83883695f1699e2  E:/tmp/m2svr-run4/after/proxy/conn-0001.c2s.bin
+  3db84d72fb9465b02c1d93874a64ebb02ad099643fea4246557fd262d92983e7  E:/tmp/m2svr-run4/before/stack/game-svr.out.log
+  7289e5cea8f107748adc77eb227760e117e4394c9038a9d08a83f010945bc196  E:/tmp/m2svr-run4/after/stack/game-svr.out.log
+
+G. 边界 / 门禁
+----------------------------------------------------------------------------------------------------------------
+  - 边界：`git diff --name-only <base> -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage` = 空。
+  - 四门禁（隔离 `CARGO_TARGET_DIR=E:/tmp/m2svr-target`）：`fmt rc=0` / `clippy rc=0(-D warnings)` /
+    `101 suites · 1185 passed · 0 failed · 22 ignored` / `msgcodegen 604 rc=0`。
+  - 起过真栈两次（before/after），收工已停：5000/7000/7100/7200/7600 DOWN，仅共享 MySQL 3306。
+
+H. 未做 / 诚实登记
+----------------------------------------------------------------------------------------------------------------
+  - brief 指定的「按冻结客户端布局编码 ClientConf 体」**未做**：客户端不读 `11029`（片⑧ + A 节实测），
+    改了也不可能是 `CM_RUN` 的开关 ⇒ 属无效改动（且会单方面改 golden #6，无收益）。若 owner 仍要客户端
+    **完整接受**服务端配置，须另案 `id 20002 + 52B TClientConf 体`（对 golden #6 的故意偏离，需签字），
+    **与「跑」无关**。
+  - 未在客户端进程内直接读 `g_ChrAction`/`CanRun`（无符号/未接调试器）；以 c2s 帧 + HUD 截图为判据。
+  - 52B 白名单 / owner_actions ④（默认值）未自签。

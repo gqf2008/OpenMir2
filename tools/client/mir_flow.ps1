@@ -27,13 +27,15 @@ param(
   [int]$WalkX       = 902,
   [int]$WalkY       = 650,
   [string]$WalkPath = "",          # 形如 "900,300;900,300;..." 的走位序列（每步截图）
-  # ---- 跑键（CM_RUN 3013）探针：按住左键拖动 ----------------
-  # 冻结客户端 ClMain.pas:2193 的跑门 = `g_boCanStartRun or (g_nRunReadyCount>=1)`：
-  #   · `g_boCanStartRun` 来自 11029 解到 TClientConf.boCanStartRun（Grobal2.pas:2989），
-  #     其偏移 >17（oracle ClientConf 只有 17 个 bool）⇒ 落在未初始化栈里，实测恒假；
-  #   · `g_nRunReadyCount` 在 FormMouseDown（ClMain.pas:4740）每次按下被清 0。
-  # `$RunHoldMs>0` 时按住左键 + 渐变 WM_MOUSEMOVE（试图走「计数>=1」支）。
-  # **实测（片⑥）即使这样也从不发 CM_RUN**：见 50/51 证据；本段是探针，不是「能跑」的驱动。
+  # ---- 跑键（CM_RUN 3013）探针：在**目标点**按下左键并按住 ----------------
+  # 冻结客户端唯一的发跑支 `ClMain.pas:2190 caRun`：`g_boCanStartRun or (g_nRunReadyCount>=1)` 门后
+  #   · `CanRun`（Actor.pas:2162）要求 `HP >= RUN_MINHEALTH(10)` ⇒ 服务端 52 必须按客户端
+  #     58B `TAbility` 布局发（`MIR2_CLIENT_ABILITY_LAYOUT`，默认开；根因与实测见 61-*）；
+  #   · `GetDistance>=2` + `IsUnLockAction` + `g_PlayScene.CanRun`（两格路径可走，开阔地才成立）；
+  #   · `g_ChrAction:=caRun` 只在「点 >1 格」时由 `_DXDrawMouseDown`（ClMain.pas:5458）置 ⇒
+  #     必须在**目标点**上按下（`FormMouseMove` 不喂 `_DXDrawMouseDown`）。
+  # `$RunHoldMs>0` 时绕角色 8 方向各在目标点按住这么多毫秒并截图。
+  # 真机配对（61-*）：58B + 开阔地 ⇒ `CM_RUN(3013)` 出现；40B ⇒ `CM_RUN=0`。
   [int]$RunHoldMs = 0,             # >0 = 绕角色中心两圈 8 方向各按住拖动这么多毫秒并截图
   [int]$LoginSubmitClicks = 1,     # 提交按钮补点次数（偶发被吞；建角探测时可给 3）
   [int]$CharSlot = 1,              # 选角界面选第几个角色（1=左，2=右）
@@ -201,29 +203,24 @@ function Send-RealClick([int]$x, [int]$y) {
 }
 
 function Send-HoldRun([int]$x, [int]$y, [int]$ms) {
-  # 按住左键 + **渐变** MOUSEMOVE（wParam=MK_LBUTTON）：
-  # ClMain.pas:4735 的鼠标处理在按住 >300ms 时会重调 _DXDrawMouseDown ⇒ 重设
-  # g_ChrAction:=caRun；位置不变时可能不被当拖动，故从中心向目标逐步插值。
+  # 「跑」探针：必须在**目标点**上按下左键。
+  # 冻结客户端的 `caRun` 只在「点 >1 格」时置：`_DXDrawMouseDown`（ClMain.pas:5446-5463）
+  # 在 `abs(Curr-mouse)>1` 时置 `g_ChrAction:=caRun` + `g_nTargetX:=mouseX`。而
+  # `FormMouseMove`（ClMain.pas:4648）只把移动喂 UI（`g_DWinMan.MouseMove`），**不**调
+  # `_DXDrawMouseDown` ⇒ 从中心按下再靠 WM_MOUSEMOVE 挪永远设不上远目标（片⑥ R5..R7 的
+  # 0 条 3013 即此故）。这里直接在目标点 PostMessage WM_LBUTTONDOWN（与 Send-Click 同路径、
+  # 不依赖窗口是否在前台），并每 150ms 重按一次（`FormMouseDown` 的 120ms 重入门）保持
+  # `g_ChrAction:=caRun`，让 `ProcessActionMessages`（ClMain.pas:1494，5ms 节拍）把 caRun 支走完。
   [void][MirFlow]::SetForegroundWindow($script:hwnd)
   Start-Sleep -Milliseconds 200
-  $sx = 512; $sy = 384
-  [void][MirFlow]::SetCursorPos(($pt.X + $sx), ($pt.Y + $sy))
-  $lp0 = [IntPtr](($sy -shl 16) -bor ($sx -band 0xFFFF))
-  [void][MirFlow]::PostMessage($script:hwnd, 0x0200, [IntPtr]0, $lp0)
-  Start-Sleep -Milliseconds 150
-  [void][MirFlow]::PostMessage($script:hwnd, 0x0201, [IntPtr]1, $lp0)   # lbdown at centre
-  for ($s = 1; $s -le 8; $s++) {
-    $ix = [int]($sx + ($x - $sx) * $s / 8.0)
-    $iy = [int]($sy + ($y - $sy) * $s / 8.0)
-    $lp = [IntPtr](($iy -shl 16) -bor ($ix -band 0xFFFF))
-    [void][MirFlow]::PostMessage($script:hwnd, 0x0200, [IntPtr]1, $lp)
-    Start-Sleep -Milliseconds 70
-  }
+  [void][MirFlow]::SetCursorPos(($pt.X + $x), ($pt.Y + $y))
   $lp = [IntPtr](($y -shl 16) -bor ($x -band 0xFFFF))
+  [void][MirFlow]::PostMessage($script:hwnd, 0x0200, [IntPtr]0, $lp)   # mousemove at target
+  Start-Sleep -Milliseconds 120
   $end = (Get-Date).AddMilliseconds($ms)
   while ((Get-Date) -lt $end) {
-    [void][MirFlow]::PostMessage($script:hwnd, 0x0200, [IntPtr]1, $lp)
-    Start-Sleep -Milliseconds 80
+    [void][MirFlow]::PostMessage($script:hwnd, 0x0201, [IntPtr]1, $lp) # lbdown at target
+    Start-Sleep -Milliseconds 150
   }
   [void][MirFlow]::PostMessage($script:hwnd, 0x0202, [IntPtr]0, $lp)   # lbup
   Start-Sleep -Milliseconds 300
@@ -451,7 +448,7 @@ if ($WalkPath) {
   }
 }
 
-# ---- 跑键（CM_RUN 3013）：按住左键拖动（见 param 注释）----
+# ---- 跑键（CM_RUN 3013）：在目标点按住左键（见 param 注释；Send-HoldRun）----
 if ($RunHoldMs -gt 0) {
   # 绕角色中心两圈 8 方向各拖一次（PlayScn.pas:3101 CanRun 还会检**全目标格**
   # CanWalkEx(ex,ey)：远点落在墙/房时必回退走 ⇒ 用近点 2~4 格重复）

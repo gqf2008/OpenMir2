@@ -214,3 +214,26 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
   （`ClMain.pas:5446-5463`）。
 - 结论与最小方案（含「若按 orchestrator 方向修，必须 id 20002 + 52B TClientConf 体同时改，并登记
   对金标准的故意偏离」）见 `60-client-run-blocker-finding.txt`。本片**未改生产代码、未起栈**。
+
+## ⑨ 片⑨：「跑不动」真根因 = 帧 52 能力布局（HP）＋ 生产默认翻为客户端 58B —— `61`
+
+- **结论**：`CM_RUN(3013)` 的开关是**帧 52 的能力布局**，不是 `SM_SERVERCONFIG(11029)` / `TClientConf`。
+  配对真机（同树/同角色 `(256,584)` 开阔地/同探针，唯一变量 = 52 尾布局）：
+
+  | 52 布局 | 11029 body | 52 body | HUD | c2s CM_WALK | c2s **CM_RUN** |
+  |---|---|---|---|---|---|
+  | oracle-40 | 23（同 sha） | 40 | `0/0` | 32 | **0** |
+  | client-58 | 23（**逐字节相同**） | 58 | `19/19` | 25 | **3** |
+
+  11029 帧两行逐字节相同 ⇒ ClientConf 一字未动而 `CM_RUN` 0→3 ⇒ 片⑥/§⑦ 所说的「跑门 = `boCanStartRun`
+  读 11029 的栈垃圾」**已订正**：`boCanStartRun` 停在缺省 `True`（`MShare.pas:1998`）；真正的门是
+  `CanRun`（`Actor.pas:2162`，`HP >= 10`），而 `HP` 来自 58B `TAbility`。
+- **第二必要件**：跑键探针必须在**目标点**按下左键（`FormMouseMove` 不喂 `_DXDrawMouseDown`；
+  `g_ChrAction:=caRun` 只在 `ClMain.pas:5446-5463` 的「点 >1 格」支置）。旧 `Send-HoldRun` 从屏幕中心
+  按下 ⇒ 目标永远设不上 ⇒ 片⑥ R5..R7 的 0 条 3013 有一部分是探针 bug。
+- **生产改动**：`main.rs::mir2_client_ability_layout()` **默认翻为 client-58**（`MIR2_CLIENT_ABILITY_LAYOUT=0`
+  ⇒ oracle 40B 对拍）；`tools/client/mir_flow.ps1::Send-HoldRun` 目标点按下。证据 `61-client-run-ability-layout-fix.txt`
+  + `shots/rust-client-run-{before-oracle40-hud-0-0,after-client58-hud-19-19}.png`；判据脚本 `check_client_run_frames.py`
+  的 ③ 改为 `CM_RUN >= --min-run-count`（默认 1）。
+- **未做**：brief 指定的 ClientConf 体编码（客户端不读 11029，做了也不可能满足「改回 17B ⇒ CM_RUN 回归 0」）；
+  58B 白名单 / owner_actions ④ 待 owner 签字。
