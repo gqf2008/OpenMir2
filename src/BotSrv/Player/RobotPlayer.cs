@@ -1075,13 +1075,22 @@ namespace BotSrv.Player
             return "[" + string.Join(",", parts) + "]";
         }
 
-        private static string ShopEsc(string s)
+        /// <summary>JSON 字符串转义（M3*SEQ 标记专用；`internal` 供无栈自检直调）。
+        /// 字面 `<`/`>` 以 Unicode 转义写入（`\u003c`/`\u003e`）——JSON 语义等价，但规避
+        /// Serilog 消息模板分词的丢括号缺陷（真机缺陷 defect_3）：BotSrv 的日志出口
+        /// `LogService.Info(msg)` 把整条消息当 **Serilog 消息模板** 解析，当载荷含
+        /// **嵌套 `{}` 且有字面 `<`/`>`** 时模板分词会丢掉末尾一个 `}`（真机 C# k=0 任务 frame
+        /// 实测 `{`=2/`}`=1，`json.loads` = Expecting ',' delimiter ⇒ ⑥ 任务对拍 assemble PREREQ）。
+        /// 转义后消息里再无字面尖括号，模板分词退化为纯文本 ⇒ 载荷逐字节保留。
+        /// 解码侧不受影响（`json.loads("\\u003c") == "<"`），故比较器判据不变。</summary>
+        internal static string ShopEsc(string s)
         {
             if (string.IsNullOrEmpty(s))
             {
                 return string.Empty;
             }
-            return s.Replace("\\", "\\\\").Replace("\"", "\\\"");
+            return s.Replace("\\", "\\\\").Replace("\"", "\\\"")
+                .Replace("<", "\\u003c").Replace(">", "\\u003e");
         }
 
         #endregion
@@ -1301,14 +1310,19 @@ namespace BotSrv.Player
             return "[" + string.Join(",", parts) + "]";
         }
 
-        private static string QuestEsc(string s)
+        /// <summary>JSON 字符串转义（M3*SEQ 标记专用；`internal` 供无栈自检直调）。
+        /// 与 ShopEsc 同因：字面 `<`/`>` → `\u003c`/`\u003e`，规避 Serilog
+        /// 消息模板分词的丢括号缺陷（真机缺陷 defect_3，详见 ShopEsc 注释）。
+        /// 另转义 `\r`/`\n`/`\t`（QuestEsc 原有行为，保持不动）。</summary>
+        internal static string QuestEsc(string s)
         {
             if (string.IsNullOrEmpty(s))
             {
                 return string.Empty;
             }
             return s.Replace("\\", "\\\\").Replace("\"", "\\\"")
-                .Replace("\r", "\\r").Replace("\n", "\\n").Replace("\t", "\\t");
+                .Replace("\r", "\\r").Replace("\n", "\\n").Replace("\t", "\\t")
+                .Replace("<", "\\u003c").Replace(">", "\\u003e");
         }
 
         #endregion
