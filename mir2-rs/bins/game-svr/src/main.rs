@@ -939,32 +939,7 @@ fn handle_bag_cmd(
     sg.state.item_list = state.item_list;
 
     if out.recalc {
-        let bag: Vec<u16> = sg.state.item_list.iter().map(|i| i.index).collect();
-        let mut use_inst: Vec<Option<game_svr::ability::ItemInstance>> =
-            vec![None; game_svr::ability::USE_ITEMS_LEN];
-        for (i, cell) in sg.use_items.iter().enumerate() {
-            if let Some(it) = cell {
-                use_inst[i] = Some(game_svr::ability::ItemInstance {
-                    index: it.index,
-                    dura: it.dura,
-                });
-            }
-        }
-        let inputs = game_svr::ability::RecalcInputs {
-            job: sg.equip.job,
-            abil: &sg.equip.abil,
-            bonus_abil: &sg.equip.bonus_abil,
-            bonus_tick_hit: sg.equip.bonus_tick_hit,
-            bonus_tick_speed: sg.equip.bonus_tick_speed,
-            cur_hp: sg.state.wabil.hp,
-            cur_mp: sg.state.wabil.mp,
-            use_items: &use_inst,
-            bag: &bag,
-        };
-        // T-18：传**调用前的** `SubAbility`（`sg.sub`），**不是** `SubAbility::first_call()`。
-        let recalc = game_svr::ability::recalc_abilitys_with_prior(catalog, &inputs, &sg.sub);
-        sg.state.wabil = recalc.wabil;
-        sg.sub = recalc.sub;
+        recalc_session_ability(sg, catalog);
     }
 
     let Some(tx) = route_to_gate(gates, gate_idx, socket, "装备/卸下回帧") else {
@@ -1890,6 +1865,43 @@ fn apply_ability_to_entity(
     e.level = wabil.level;
 }
 
+/// `RecalcLevelAbilitys()` + `RecalcAbilitys()` 的**单一实现**（登录/升级/装备/卸下四处共用）：
+/// 从 `sg.use_items`/`sg.state.item_list`/`sg.equip` 组装 [`game_svr::ability::RecalcInputs`]，
+/// 调 [`game_svr::ability::recalc_abilitys_with_prior`]（`prior = sg.sub`，T-18 的显式状态），
+/// 写回 `sg.state.wabil` 与 `sg.sub`。
+///
+/// 调用点：① 装备/卸下成功分支；② 升级（`PlayObject.cs:5245-5246` 的 `HasLevelUp`——oracle 先
+/// `RecalcLevelAbilitys()` 再 `RecalcAbilitys()`，本函数内部 `level_ability_base` 已按该序覆盖
+/// `MaxHP/MaxMP/MaxWeight/DC/MC/SC/AC/MAC` 等等级派生字段）。
+fn recalc_session_ability(sg: &mut SessionGround, catalog: &dyn game_svr::ability::ItemCatalog) {
+    let bag: Vec<u16> = sg.state.item_list.iter().map(|i| i.index).collect();
+    let mut use_inst: Vec<Option<game_svr::ability::ItemInstance>> =
+        vec![None; game_svr::ability::USE_ITEMS_LEN];
+    for (i, cell) in sg.use_items.iter().enumerate() {
+        if let Some(it) = cell {
+            use_inst[i] = Some(game_svr::ability::ItemInstance {
+                index: it.index,
+                dura: it.dura,
+            });
+        }
+    }
+    let inputs = game_svr::ability::RecalcInputs {
+        job: sg.equip.job,
+        abil: &sg.equip.abil,
+        bonus_abil: &sg.equip.bonus_abil,
+        bonus_tick_hit: sg.equip.bonus_tick_hit,
+        bonus_tick_speed: sg.equip.bonus_tick_speed,
+        cur_hp: sg.state.wabil.hp,
+        cur_mp: sg.state.wabil.mp,
+        use_items: &use_inst,
+        bag: &bag,
+    };
+    // T-18：传**调用前的** `SubAbility`（`sg.sub`），**不是** `SubAbility::first_call()`。
+    let recalc = game_svr::ability::recalc_abilitys_with_prior(catalog, &inputs, &sg.sub);
+    sg.state.wabil = recalc.wabil;
+    sg.sub = recalc.sub;
+}
+
 /// `Envir.GetMovingObject(frontX, frontY, true)`（`Envirnoment.cs:1203-1234`）的**接线面最小等价物**：
 /// 前方格里**首个** `!Ghost && !Death` 且不是自己的对象。
 ///
@@ -2447,6 +2459,96 @@ fn drain_combat_downlink(
                 socket: entry.socket,
                 body,
             });
+        }
+    }
+}
+
+/// **D②（升级链下行）**：`TickRecord::exp_awards` 中 `leveled == true` 的获得者
+/// （= oracle `GetExp` 进了 `Abil.Exp >= Abil.MaxExp` 块）补齐升级后果，顺序照 oracle：
+///
+/// 1. `HasLevelUp`（`PlayObject.cs:5244-5251`）：`RecalcLevelAbilitys()` + `RecalcAbilitys()`
+///    （同一份 [`recalc_session_ability`]）→ `SendMsg(RM_LEVELUP)` 的处理器
+///    （`PlayObject.Message.cs:1670-1676`）出 `SM_LEVELUP(45)` + `SM_ABILITY(52)` + `SM_SUBABILITY(752)`；
+/// 2. `GetExp` 尾（`PlayObject.Base.cs:164`）：`IncHealthSpell(2000, 2000)`
+///    （`BaseObject.cs:952-975`，按**升级后**的 `WAbil.MaxHP/MaxMP` 截断）→ `HealthSpellChanged()`
+///    （`BaseObject.cs:700-710`）→ `SM_HEALTHSPELLCHANGED(53)`（自见；`ShowHp` 再广播）；
+/// 3. 世界实体是战斗的权威值 ⇒ 按 [`apply_ability_to_entity`] 同步（HP/MaxHP/DC/AC/HitPoint/SpeedPoint）。
+///
+/// **登记（未做）**：`AddBodyLuck(dwExp * 0.002)` / 升级的 `AddBodyLuck(100)`——oracle 里
+/// `BodyLuck`/`BodyLuckLevel` **无任何读取点**（全仓只有 `PlayObject.cs:520-521` 的声明与
+/// `:4304-4323` 的 `AddBodyLuck` 自身）⇒ 死字段，不建模；`WinExp` 的 `LimitExpLevel` 支同理
+/// （`GameSvrConf.cs:1838` 默认 `LimitExpLevel = 1000 > 255` ⇒ 生产不可达）。
+#[allow(clippy::too_many_arguments)]
+fn drain_levelup_downlink(
+    rec: &mir2_world::TickRecord,
+    world: &mut mir2_world::World,
+    online: &OnlineRegistry,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    range: i32,
+) {
+    for (winner, _amount, leveled, _level) in &rec.exp_awards {
+        if !*leveled {
+            continue;
+        }
+        let Some(entry) = online.iter().find(|e| e.actor_id == *winner) else {
+            continue;
+        };
+        let Some(sg) = sessions.get_mut(&entry.chr_name) else {
+            continue;
+        };
+        // ① HasLevelUp：RecalcLevelAbilitys() + RecalcAbilitys()
+        recalc_session_ability(sg, catalog);
+        // ② GetExp 尾：IncHealthSpell(2000, 2000)（`BaseObject.cs:952-975`）
+        let hp = u32::from(sg.state.wabil.hp) + 2000;
+        let mp = u32::from(sg.state.wabil.mp) + 2000;
+        sg.state.wabil.hp = if hp >= u32::from(sg.state.wabil.max_hp) {
+            sg.state.wabil.max_hp
+        } else {
+            hp as u16
+        };
+        sg.state.wabil.mp = if mp >= u32::from(sg.state.wabil.max_mp) {
+            sg.state.wabil.max_mp
+        } else {
+            mp as u16
+        };
+        // ③ 世界实体（战斗权威值）同步
+        if let Some(e) = world.entities.get_mut(*winner) {
+            apply_ability_to_entity(e, &sg.state.wabil, &sg.sub);
+        }
+        // ④ 帧：SM_LEVELUP → SM_ABILITY → SM_SUBABILITY → SM_HEALTHSPELLCHANGED
+        let send = |body: Vec<u8>| {
+            if let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "升级回帧") {
+                let _ = tx.send(SimToGate::SendFrame {
+                    socket: entry.socket,
+                    body,
+                });
+            }
+        };
+        send(game_svr::smframe::sm_levelup(
+            sg.state.wabil.exp,
+            sg.state.wabil.level,
+        ));
+        send(game_svr::smframe::sm_ability(
+            sg.state.gold,
+            sg.equip.job,
+            sg.game_gold,
+            &record::encode_ability(&sg.state.wabil),
+        ));
+        let sb = sg.sub.to_frame_bytes();
+        send(game_svr::smframe::sm_subability(
+            sb[0], sb[1], sb[2], sb[3], sb[4], sb[5], sb[6],
+        ));
+        let hb = game_svr::smframe::sm_healthspellchanged(
+            sg.actor_id,
+            sg.state.wabil.hp,
+            sg.state.wabil.mp,
+            sg.state.wabil.max_hp,
+        );
+        send(hb.clone());
+        if sg.show_hp {
+            broadcast_healthspellchanged(world, online, gates, sg.actor_id, &hb, range);
         }
     }
 }
@@ -4278,6 +4380,18 @@ fn sim_loop(
             &online,
             &mut ground_sessions,
             &gates,
+        );
+        // D②：紧接经验帧之后补升级链（`HasLevelUp` 的 45/52/752 + `IncHealthSpell(2000,2000)`
+        // 的 53），并把升级后的能力同步回世界实体。必须紧跟 `drain_combat_downlink`（后者
+        // 已把 `exp/level/max_exp` 同步进会话；且 oracle 帧序是 WINEXP → LEVELUP → …）。
+        drain_levelup_downlink(
+            &rec,
+            &mut world,
+            &online,
+            &mut ground_sessions,
+            &gates,
+            &enter_cfg.catalog,
+            enter_cfg.ref_msg_range,
         );
         // S3 后半段（第一格）：世界 tick 的 AOI 结果 → `SM_TURN` + `SM_FEATURECHANGED` 回帧。
         drain_aoi_downlink(&world, &displays, &online, &gates);
@@ -8451,5 +8565,117 @@ mod tests {
         assert_eq!(sg.equip.abil.level, 9);
         assert_eq!(sg.state.wabil.exp, 1234);
         assert_eq!(sg.state.wabil.level, 9);
+    }
+
+    /// **D②（升级链下行）**：一条 `leveled=true` 的 `exp_awards` ⇒ 帧序
+    /// `SM_WINEXP(44) → SM_LEVELUP(45) → SM_ABILITY(52) → SM_SUBABILITY(752) → SM_HEALTHSPELLCHANGED(53)`，
+    /// `SM_LEVELUP` 头 = `(total_exp, new_level, 0, 0)`；`RecalcLevelAbilitys()+RecalcAbilitys()`
+    /// 把 `MaxHP/MaxMP` 从 0 提到等级派生值，然后 `IncHealthSpell(2000,2000)` 按**新** `MaxHP/MaxMP` 截断
+    /// ⇒ 满血满蓝；世界实体（战斗权威值）同步到同一 `WAbil`。
+    ///
+    /// 红检：① 交换 `sm_levelup` 的 `recog`/`param` ⇒ `SM_LEVELUP` 头断言必红；
+    /// ② 删 `drain_levelup_downlink` 的 `IncHealthSpell(2000,2000)` ⇒ `hp == max_hp` 必红；
+    /// ③ 不调 `recalc_session_ability` ⇒ `max_hp == 0` 必红。
+    #[test]
+    fn levelup_downlink_sends_levelup_frames_heals_and_syncs_entity() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(64, 64);
+        let killer = {
+            let mut e = mir2_world::Entity::new(0, "killer".to_string(), 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        world.tick();
+        {
+            let e = world.entities.get_mut(killer).unwrap();
+            e.exp = 500;
+            e.level = 11;
+            e.max_exp = 1000;
+            e.hp = 10;
+            e.max_hp = 20;
+        }
+        let displays = downlink::DisplayTable::new();
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "uk".into(),
+                chr_name: "killer".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 903,
+                actor_id: killer,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(killer);
+        sg.equip.abil.level = 10; // drain_combat_downlink 会把它同步成 11
+        sg.state.wabil.level = 10;
+        sg.state.wabil.hp = 10; // 升级前残血
+        sg.state.wabil.mp = 5;
+        sessions.insert("killer".into(), sg);
+
+        let rec = mir2_world::TickRecord {
+            exp_awards: vec![(killer, 500, true, 11)],
+            ..Default::default()
+        };
+        // oracle 帧序：RM_WINEXP 在 GetExp 里先入队，升级链紧随其后。
+        drain_combat_downlink(&rec, &world, &displays, &online, &mut sessions, &gates);
+        drain_levelup_downlink(
+            &rec,
+            &mut world,
+            &online,
+            &mut sessions,
+            &gates,
+            &game_svr::ability::StdItemCatalog::new(),
+            12,
+        );
+        let mut bodies: Vec<Vec<u8>> = Vec::new();
+        let mut frames = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            assert_eq!(socket, 903);
+            frames.push(CommandMessage::from_bytes(&body).expect("12B"));
+            bodies.push(body);
+        }
+        let idents: Vec<u16> = frames.iter().map(|cm| cm.ident).collect();
+        assert_eq!(
+            idents,
+            vec![
+                mir2_protocol::messages::SM_WINEXP,
+                mir2_protocol::messages::SM_LEVELUP,
+                mir2_protocol::messages::SM_ABILITY,
+                mir2_protocol::messages::SM_SUBABILITY,
+                mir2_protocol::messages::SM_HEALTHSPELLCHANGED,
+            ],
+            "升级帧序 = WINEXP → LEVELUP → ABILITY → SUBABILITY → HEALTHSPELLCHANGED"
+        );
+        let lv = &frames[1];
+        assert_eq!((lv.recog, lv.param, lv.tag, lv.series), (500, 11, 0, 0));
+        let sg = &sessions["killer"];
+        assert!(
+            sg.state.wabil.max_hp > 0,
+            "RecalcLevelAbilitys+RecalcAbilitys 必须给 MaxHP 等级派生值（非 0）"
+        );
+        assert!(
+            sg.state.wabil.hp == sg.state.wabil.max_hp,
+            "IncHealthSpell(2000,2000) 应按升级后的 MaxHP 截断 ⇒ 满血: {:?}",
+            sg.state.wabil
+        );
+        assert_eq!(sg.state.wabil.mp, sg.state.wabil.max_mp, "MP 同样满额");
+        assert_eq!(sg.equip.abil.level, 11, "会话基能力等级 = 升级后");
+        // 52 的尾 = Encode(WAbil)（升级重算后的值）。
+        assert_eq!(
+            &bodies[2][12..],
+            &mir2_protocol::edcode::encode(&record::encode_ability(&sg.state.wabil)),
+            "SM_ABILITY 尾 = Encode(WAbil)"
+        );
+        // 世界实体（战斗权威值）同步。
+        let e = world.entities.get(killer).unwrap();
+        assert_eq!(e.level, 11);
+        assert!(e.max_hp > 0 && e.hp == e.max_hp, "实体 HP/MaxHP 同步");
+        assert_eq!(e.max_hp, sg.state.wabil.max_hp);
     }
 }

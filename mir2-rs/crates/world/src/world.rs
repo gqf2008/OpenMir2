@@ -76,10 +76,13 @@ pub struct TickRecord {
     /// —— 归属者取 C# `ExpHitter`（不是 `LastHiter`），见 `Entity::exp_hitter`
     pub deaths: Vec<(i32, usize, i32, Option<i32>, i32)>,
     /// 本 tick 的**经验归属**（oracle `BaseObject.cs:2429 KillFunc` → `RM_PLAYERKILLMONSTER`
-    /// → `PlayObject.cs:1632 KillTargetTrigger`）：`(获得者 id, 本次获得, 是否升级, 升级后等级)`。
+    /// → `PlayObject.cs:1632 KillTargetTrigger`）：
+    /// `(获得者 id, 本次获得, 是否进入升级块, 升级后等级)`。
     /// 与 `deaths` 的 5 元组不同，这里把 `ExpHitter.Master`（宠物/下属击杀给主人）与
     /// `ExpHitter` 本人**都**列出——oracle 对二者**各发一条** `RM_PLAYERKILLMONSTER`
-    /// （`BaseObject.cs:2434-2444`）。供宿主出 `SM_WINEXP(44)`。
+    /// （`BaseObject.cs:2434-2444`）。供宿主出 `SM_WINEXP(44)`；第 3 位 = `GetExp`
+    /// （`PlayObject.Base.cs:149-165`）是否进了 `Abil.Exp >= Abil.MaxExp` 块（满级也置位），
+    /// 宿主据此出升级链（`SM_LEVELUP(45)`/`SM_ABILITY(52)`/`SM_SUBABILITY(752)`/`SM_HEALTHSPELLCHANGED(53)`）。
     pub exp_awards: Vec<(i32, i32, bool, u8)>,
 }
 
@@ -1398,6 +1401,43 @@ mod tests {
         );
         assert_eq!(rate_amt, 800, "EXPRATE=200 ⇒ 单次经验 ×2");
         assert_eq!(rate_total, base_total * 2, "累计经验同样 ×2");
+    }
+
+    /// `GetExp`（`PlayObject.Base.cs:149-165`）的升级块触发口径：`exp_awards` 的第 3 位 = **进了**
+    /// `Abil.Exp >= Abil.MaxExp` 块（不是「等级真的 +1」）——`Abil.Level++` 才有 `< MAXUPLEVEL(255)`
+    /// 门，而块内 `HasLevelUp`/`IncHealthSpell(2000,2000)` **无条件**发生 ⇒ 满级仍要置位（宿主据此出
+    /// `SM_LEVELUP(45)`/`SM_ABILITY(52)`/`SM_SUBABILITY(752)`/`SM_HEALTHSPELLCHANGED(53)`）。
+    ///
+    /// 改坏必红：把 `leveled` 退回「仅 `level < 255` 时置位」⇒ 满级用例的 `leveled` 断言必红。
+    #[test]
+    fn kill_exp_marks_levelup_block_even_at_max_level() {
+        let build = |level: u8, exp: i32, need255: i32| {
+            let mut w = World::new(32, 32);
+            w.need_exps[1] = 1000;
+            w.need_exps[255] = need255;
+            let mut p = player(1, "hero", 10, 10, level);
+            p.exp = exp;
+            p.max_exp = if level == 255 { need255 } else { 1000 };
+            let p = w.add_entity(p);
+            let mon = {
+                let mut e = Entity::new(0, "鸡", 11, 10);
+                e.race = ACTOR_RACE_MONSTER;
+                e.mon_exp = 100;
+                e.exp_hitter = Some(p);
+                w.add_entity(e)
+            };
+            w.entities.get_mut(mon).unwrap().hp = 0;
+            let rec = w.tick();
+            (rec.exp_awards[0].2, w.entities.get(p).unwrap().level)
+        };
+        // 1 级：exp 990 + 100 ⇒ 进升级块 + 等级 +1
+        let (leveled, level) = build(1, 990, 0);
+        assert!(leveled, "exp >= max_exp ⇒ leveled");
+        assert_eq!(level, 2);
+        // 255 级：同样进块（`HasLevelUp`/回血要发生），但 `Level++` 被 MAXUPLEVEL 门挡住
+        let (leveled, level) = build(255, 1000, 1000);
+        assert!(leveled, "满级仍进升级块（oracle 的 if 而非 while）");
+        assert_eq!(level, 255, "MAXUPLEVEL 门 ⇒ 等级不变");
     }
 
     /// 只读分片（owner §25.1 裁决 (A)）：掉落落地后 `floor_items_view_sorted` 的
