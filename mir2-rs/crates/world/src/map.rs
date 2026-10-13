@@ -204,6 +204,41 @@ impl MapGrid {
         }
     }
 
+    /// 只读某格属性（**不受 `Valid` 影响**）：越界返回 `None`。
+    ///
+    /// `get_cell_info` 对「越界或非 Valid」一律返回 `CellArray[0]`，无法读到被门/墙
+    /// 掩码置为 `LowWall` 的格子 ⇒ 门/墙通行判据需要这个直读口。
+    pub fn cell_attribute(&self, x: i32, y: i32) -> Option<CellAttribute> {
+        if self.cell_match(x, y) {
+            Some(self.cells[self.index(x, y)].attribute)
+        } else {
+            None
+        }
+    }
+
+    /// 对应 `Envirnoment.SetMapXyFlag(nX, nY, boFlag)`（`Envirnoment.cs:1362-1369`）。
+    ///
+    /// **照搬 oracle 语义**：C# 的 `GetCellInfo` 对「越界**或**非 `Valid`」都返回
+    /// `success=false`，而 `SetMapXyFlag` 只在 `success` 时 `SetAttribute` ⇒ 一旦某格被
+    /// 置成 `LowWall`，后续 `boFlag=true` 的调用**不会**把它恢复成 `Walk`（门/墙掩码
+    /// 的已知 oracle 怪行为，本片照搬，见白名单 **B-15**）。
+    ///
+    /// 返回 `true` = 实际改了属性（格子当前 `Valid` 且在界内）。
+    pub fn set_map_xy_flag(&mut self, x: i32, y: i32, walk: bool) -> bool {
+        if self.cell_match(x, y) {
+            let idx = self.index(x, y);
+            if self.cells[idx].valid() {
+                self.cells[idx].set_attribute(if walk {
+                    CellAttribute::Walk
+                } else {
+                    CellAttribute::LowWall
+                });
+                return true;
+            }
+        }
+        false
+    }
+
     /// 列主序：`x * Height + y`（`Envirnoment.cs`）。
     #[inline]
     fn index(&self, x: i32, y: i32) -> usize {

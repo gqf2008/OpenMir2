@@ -1,0 +1,468 @@
+# M3⑧-实现 8 门/墙状态 —— oracle 锚（rg/sed 实测本仓库 src/，base origin/master 029d23eae）
+
+## 1. CastleDoor.cs（门状态机）
+```
+    public class CastleDoor : GuardUnit
+    {
+        public bool IsOpened;
+        public bool HoldPlace;
+
+        public CastleDoor() : base()
+        {
+            Animal = false;
+            StickMode = true;
+            IsOpened = false;
+            AntiPoison = 200;
+            CellType = CellType.Door;
+        }
+
+        private void SetMapXyFlag(int nFlag)
+        {
+            Envir.SetMapXyFlag(CurrX, CurrY - 2, true);
+            Envir.SetMapXyFlag(CurrX + 1, CurrY - 1, true);
+            Envir.SetMapXyFlag(CurrX + 1, CurrY - 2, true);
+            bool boFlag = nFlag != 1;
+            Envir.SetMapXyFlag(CurrX, CurrY, boFlag);
+            Envir.SetMapXyFlag(CurrX, CurrY - 1, boFlag);
+            Envir.SetMapXyFlag(CurrX, CurrY - 2, boFlag);
+            Envir.SetMapXyFlag(CurrX + 1, CurrY - 1, boFlag);
+            Envir.SetMapXyFlag(CurrX + 1, CurrY - 2, boFlag);
+            Envir.SetMapXyFlag(CurrX - 1, CurrY, boFlag);
+            Envir.SetMapXyFlag(CurrX - 2, CurrY, boFlag);
+            Envir.SetMapXyFlag(CurrX - 1, CurrY - 1, boFlag);
+            Envir.SetMapXyFlag(CurrX - 1, CurrY + 1, boFlag);
+            if (nFlag == 0)
+            {
+                Envir.SetMapXyFlag(CurrX, CurrY - 2, false);
+                Envir.SetMapXyFlag(CurrX + 1, CurrY - 1, false);
+                Envir.SetMapXyFlag(CurrX + 1, CurrY - 2, false);
+            }
+        }
+
+        public void Open()
+        {
+            if (Death)
+            {
+                return;
+            }
+            Dir = 7;
+            SendRefMsg(Messages.RM_DIGUP, Dir, CurrX, CurrY, 0, "");
+            IsOpened = true;
+            StoneMode = true;
+            SetMapXyFlag(0);
+            HoldPlace = false;
+        }
+
+        public void Close()
+        {
+            if (Death)
+            {
+                return;
+            }
+            Dir = (byte)(3 - HUtil32.Round(WAbil.HP / (double)WAbil.MaxHP * 3.0));
+            if (Dir - 3 >= 0)
+            {
+                Dir = 0;
+            }
+            SendRefMsg(Messages.RM_DIGDOWN, Dir, CurrX, CurrY, 0, "");
+            IsOpened = false;
+            StoneMode = false;
+            SetMapXyFlag(1);
+            HoldPlace = true;
+        }
+
+        public override void Die()
+        {
+            base.Die();
+            SetMapXyFlag(2);
+        }
+
+        public override void Run()
+        {
+            if (Death && Castle != null)
+            {
+                DeathTick = HUtil32.GetTickCount();
+            }
+            else
+            {
+                HealthTick = 0;
+            }
+            if (!IsOpened)
+            {
+                int n08 = 3 - HUtil32.Round(WAbil.HP / (double)WAbil.MaxHP * 3.0);
+                if (Dir != n08 && n08 < 3)
+                {
+                    Dir = (byte)n08;
+                    SendRefMsg(Messages.RM_TURN, Dir, CurrX, CurrY, 0, "");
+                }
+            }
+            base.Run();
+        }
+
+        public void RefStatus()
+        {
+            int n08 = 3 - HUtil32.Round(WAbil.HP / (double)WAbil.MaxHP * 3.0);
+            if (n08 - 3 >= 0)
+            {
+                n08 = 0;
+            }
+            Dir = (byte)n08;
+            SendRefMsg(Messages.RM_ALIVE, Dir, CurrX, CurrY, 0, "");
+        }
+    }
+```
+
+## 2. WallStructure.cs（城墙状态机）
+```
+    public class WallStructure : GuardUnit
+    {
+        internal bool SetMapFlaged;
+
+        public WallStructure() : base()
+        {
+            this.Animal = false;
+            this.StickMode = true;
+            SetMapFlaged = false;
+            this.AntiPoison = 200;
+        }
+
+        public override void Initialize()
+        {
+            this.Dir = 0;
+            base.Initialize();
+        }
+
+        public void RefStatus()
+        {
+            byte n08;
+            if (this.WAbil.HP > 0)
+            {
+                n08 = (byte)(3 - HUtil32.Round(this.WAbil.HP / this.WAbil.MaxHP * 3.0));
+            }
+            else
+            {
+                n08 = 4;
+            }
+            if (n08 >= 5)
+            {
+                n08 = 0;
+            }
+            this.Dir = n08;
+            this.SendRefMsg(Messages.RM_ALIVE, this.Dir, this.CurrX, this.CurrY, 0, "");
+        }
+
+        public override void Die()
+        {
+            base.Die();
+        }
+
+        public override void Run()
+        {
+            int n08;
+            if (this.Death)
+            {
+                this.DeathTick = HUtil32.GetTickCount();
+                if (SetMapFlaged)
+                {
+                    this.Envir.SetMapXyFlag(this.CurrX, this.CurrY, true);
+                    SetMapFlaged = false;
+                }
+            }
+            else
+            {
+                this.HealthTick = 0;
+                if (!SetMapFlaged)
+                {
+                    this.Envir.SetMapXyFlag(this.CurrX, this.CurrY, false);
+                    SetMapFlaged = true;
+                }
+            }
+            if (this.WAbil.HP > 0)
+            {
+                n08 = 3 - HUtil32.Round(this.WAbil.HP / this.WAbil.MaxHP * 3.0);
+            }
+            else
+            {
+                n08 = 4;
+            }
+            if (this.Dir != n08 && n08 < 5)
+            {
+                this.Dir = (byte)n08;
+                this.SendRefMsg(Messages.RM_DIGUP, this.Dir, this.CurrX, this.CurrY, 0, "");
+            }
+            base.Run();
+        }
+    }
+}
+```
+
+## 3. UserCastle.MainDoorControl / RepairDoor / RepairWall（UserCastle.cs:890-997）
+```
+        public void MainDoorControl(bool boClose)
+        {
+            if (MainDoor.BaseObject != null && !MainDoor.BaseObject.Ghost)
+            {
+                if (boClose)
+                {
+                    if (((CastleDoor)MainDoor.BaseObject).IsOpened)
+                    {
+                        ((CastleDoor)MainDoor.BaseObject).Close();
+                    }
+                }
+                else
+                {
+                    if (!((CastleDoor)MainDoor.BaseObject).IsOpened)
+                    {
+                        ((CastleDoor)MainDoor.BaseObject).Open();
+                    }
+                }
+            }
+        }
+
+        public int ReceiptGolds(IPlayerActor PlayObject, int nGold)
+        {
+            throw new NotImplementedException();
+        }
+
+        /// <summary>
+        /// 修复城门
+        /// </summary>
+        /// <returns></returns>
+        public bool RepairDoor()
+        {
+            bool result = false;
+            ArcherUnit castleDoor = MainDoor;
+            if (castleDoor.BaseObject == null || UnderWar || castleDoor.BaseObject.WAbil.HP >= castleDoor.BaseObject.WAbil.MaxHP)
+            {
+                return false;
+            }
+            if (!castleDoor.BaseObject.Death)
+            {
+                if ((HUtil32.GetTickCount() - castleDoor.BaseObject.StruckTick) > 60 * 1000)
+                {
+                    castleDoor.BaseObject.WAbil.HP = castleDoor.BaseObject.WAbil.MaxHP;
+                    ((CastleDoor)castleDoor.BaseObject).RefStatus();
+                    result = true;
+                }
+            }
+            else
+            {
+                if ((HUtil32.GetTickCount() - castleDoor.BaseObject.StruckTick) > 60 * 1000)
+                {
+                    castleDoor.BaseObject.WAbil.HP = castleDoor.BaseObject.WAbil.MaxHP;
+                    castleDoor.BaseObject.Death = false;
+                    ((CastleDoor)castleDoor.BaseObject).IsOpened = false;
+                    ((CastleDoor)castleDoor.BaseObject).RefStatus();
+                    result = true;
+                }
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// 修复城墙
+        /// </summary>
+        /// <param name="nWallIndex"></param>
+        /// <returns></returns>
+        public bool RepairWall(int nWallIndex)
+        {
+            bool result = false;
+            IActor Wall = null;
+            switch (nWallIndex)
+            {
+                case 1:
+                    Wall = LeftWall.BaseObject;
+                    break;
+                case 2:
+                    Wall = CenterWall.BaseObject;
+                    break;
+                case 3:
+                    Wall = RightWall.BaseObject;
+                    break;
+            }
+            if (Wall == null || UnderWar || Wall.WAbil.HP >= Wall.WAbil.MaxHP)
+            {
+                return false;
+            }
+            if (!Wall.Death)
+            {
+                if ((HUtil32.GetTickCount() - Wall.StruckTick) > 60 * 1000)
+                {
+                    Wall.WAbil.HP = Wall.WAbil.MaxHP;
+                    ((WallStructure)Wall).RefStatus();
+                    result = true;
+                }
+            }
+            else
+            {
+                if ((HUtil32.GetTickCount() - Wall.StruckTick) > 60 * 1000)
+                {
+                    Wall.WAbil.HP = Wall.WAbil.MaxHP;
+                    Wall.Death = false;
+                    ((WallStructure)Wall).RefStatus();
+                    result = true;
+                }
+            }
+            return result;
+        }
+
+```
+
+## 4. Envirnoment.SetMapXyFlag + GetCellInfo（通行掩码口径）
+```
+        public ref MapCellInfo GetCellInfo(int nX, int nY, out bool success)
+        {
+            if (nX >= 0 && nX < Width && nY >= 0 && nY < Height)
+            {
+                ref MapCellInfo cellInfo = ref CellArray[nX * Height + nY];
+                if (cellInfo.Valid)
+                {
+                    success = true;
+                    return ref cellInfo;
+                }
+            }
+            success = false;
+            return ref CellArray[0];
+        }
+--- SetMapXyFlag ---
+        public void SetMapXyFlag(int nX, int nY, bool boFlag)
+        {
+            ref MapCellInfo cellInfo = ref GetCellInfo(nX, nY, out bool cellSuccess);
+            if (cellSuccess)
+            {
+                cellInfo.SetAttribute(boFlag ? CellAttribute.Walk : CellAttribute.LowWall);
+            }
+        }
+```
+
+## 5. CastleOfficial：$CASTLEDOORSTATE / 标签派发 / RepairDoor / RepairWallNow
+```
+                case "$CASTLEDOORSTATE":
+                    {
+                        CastleDoor castleDoor = (CastleDoor)Castle.MainDoor.BaseObject;
+                        if (castleDoor.Death)
+                        {
+                            sText = "destroyed";
+                        }
+                        else if (castleDoor.IsOpened)
+                        {
+                            sText = "opened";
+                        }
+                        else
+                        {
+                            sText = "closed";
+                        }
+                        sMsg = ReplaceVariableText(sMsg, "<$CASTLEDOORSTATE>", sText);
+--- labels 199-238 ---
+                        else if (string.Compare(sLabel, ScriptFlagConst.sOPENMAINDOOR, StringComparison.OrdinalIgnoreCase) == 0)
+                        {
+                            Castle.MainDoorControl(false);
+                        }
+                        else if (string.Compare(sLabel, ScriptFlagConst.sCLOSEMAINDOOR, StringComparison.OrdinalIgnoreCase) == 0)
+                        {
+                            Castle.MainDoorControl(true);
+                        }
+                        else if (string.Compare(sLabel, ScriptFlagConst.sREPAIRDOORNOW, StringComparison.OrdinalIgnoreCase) == 0)
+                        {
+                            RepairDoor(PlayObject);
+                            M2Share.ScriptEngine.GotoLable(PlayObject, this.ActorId, ScriptFlagConst.sMAIN);
+                        }
+                        else if (string.Compare(sLabel, ScriptFlagConst.sREPAIRWALLNOW1, StringComparison.OrdinalIgnoreCase) == 0)
+                        {
+                            RepairWallNow(1, PlayObject);
+                            M2Share.ScriptEngine.GotoLable(PlayObject, this.ActorId, ScriptFlagConst.sMAIN);
+                        }
+                        else if (string.Compare(sLabel, ScriptFlagConst.sREPAIRWALLNOW2, StringComparison.OrdinalIgnoreCase) == 0)
+                        {
+                            RepairWallNow(2, PlayObject);
+                            M2Share.ScriptEngine.GotoLable(PlayObject, this.ActorId, ScriptFlagConst.sMAIN);
+                        }
+                        else if (string.Compare(sLabel, ScriptFlagConst.sREPAIRWALLNOW3, StringComparison.OrdinalIgnoreCase) == 0)
+                        {
+                            RepairWallNow(3, PlayObject);
+                            M2Share.ScriptEngine.GotoLable(PlayObject, this.ActorId, ScriptFlagConst.sMAIN);
+                        }
+                        else if (HUtil32.CompareLStr(sLabel, ScriptFlagConst.sHIREGUARDNOW))
+                        {
+                            s20 = sLabel.Substring(ScriptFlagConst.sHIREGUARDNOW.Length, sLabel.Length);
+                            HireGuard(s20, PlayObject);
+                            PlayObject.SendMsg(this, Messages.RM_MENU_OK, 0, ActorId, 0, 0);
+                        }
+                        else if (HUtil32.CompareLStr(sLabel, ScriptFlagConst.sHIREARCHERNOW))
+                        {
+                            s20 = sLabel.Substring(ScriptFlagConst.sHIREARCHERNOW.Length, sLabel.Length);
+                            HireArcher(s20, PlayObject);
+                            PlayObject.SendMsg(this, Messages.RM_MENU_OK, 0, ActorId, 0, 0);
+                        }
+--- RepairDoor 358-381 ---
+        private void RepairDoor(IPlayerActor PlayObject)
+        {
+            if (Castle == null)
+            {
+                PlayObject.SysMsg("NPC不属于城堡!!!", MsgColor.Red, MsgType.Hint);
+                return;
+            }
+            if (Castle.TotalGold >= SystemShare.Config.RepairDoorPrice)
+            {
+                if (Castle.RepairDoor())
+                {
+                    Castle.TotalGold -= SystemShare.Config.RepairDoorPrice;
+                    PlayObject.SysMsg("修理成功。", MsgColor.Green, MsgType.Hint);
+                }
+                else
+                {
+                    PlayObject.SysMsg("城门不需要修理!!!", MsgColor.Green, MsgType.Hint);
+                }
+            }
+            else
+            {
+                PlayObject.SysMsg("城内资金不足!!!", MsgColor.Red, MsgType.Hint);
+            }
+        }
+--- RepairWallNow 383-406 ---
+        private void RepairWallNow(int nWallIndex, IPlayerActor PlayObject)
+        {
+            if (Castle == null)
+            {
+                PlayObject.SysMsg("NPC不属于城堡!!!", MsgColor.Red, MsgType.Hint);
+                return;
+            }
+            if (Castle.TotalGold >= SystemShare.Config.RepairWallPrice)
+            {
+                if (Castle.RepairWall(nWallIndex))
+                {
+                    Castle.TotalGold -= SystemShare.Config.RepairWallPrice;
+                    PlayObject.SysMsg("修理成功。", MsgColor.Green, MsgType.Hint);
+                }
+                else
+                {
+                    PlayObject.SysMsg("城门不需要修理!!!", MsgColor.Green, MsgType.Hint);
+                }
+            }
+            else
+            {
+                PlayObject.SysMsg("城内资金不足!!!", MsgColor.Red, MsgType.Hint);
+            }
+        }
+```
+
+## 6. HUtil32.Round / CompareLStr + ScriptFlagConst + GameSvrConf 价格初值
+```
+131:        public static int Round(double r)
+550:        public static bool CompareLStr(string src, string targ)
+580:        public static bool CompareLStr(string src, string targ, int compn)
+        public static int Round(double r)
+        {
+            return (int)Math.Round(r, MidpointRounding.AwayFromZero);
+        }
+75:        public const string sOPENMAINDOOR = "@openmaindoor";
+76:        public const string sCLOSEMAINDOOR = "@closemaindoor";
+77:        public const string sREPAIRDOORNOW = "@repairdoornow";
+78:        public const string sREPAIRWALLNOW1 = "@repairwallnow1";
+79:        public const string sREPAIRWALLNOW2 = "@repairwallnow2";
+80:        public const string sREPAIRWALLNOW3 = "@repairwallnow3";
+81:        public const string sHIREARCHERNOW = "@hirearchernow";
+82:        public const string sHIREGUARDNOW = "@hireguardnow";
+1794:            RepairDoorPrice = 2000000;
+1795:            RepairWallPrice = 500000;
+```

@@ -35,6 +35,7 @@
 | B-12 | 重复 `#CALL` 路径 `callList[i]="#ACT"` 越界即抛 ArgumentOutOfRange | `ScriptParsers.cs:163` → `crates/script/src/parser.rs`（LoadPanic::CallListOutOfRange） |
 | B-13 | `scriptType == 1` 死分支（从不赋 1），quest flag 头解析不执行 | `ScriptParsers.cs:794` → `crates/script/src/parser.rs`（unreachable 标记） |
 | B-14 | 常量替换要求匹配位置 > 0（行首命中不替换），每 define 每行至多 10 次 | `ScriptParsers.cs:634-650` → `crates/script/src/parser.rs` |
+| B-15 | **门/墙通行掩码的 `LowWall` 不可恢复**：`Envir.SetMapXyFlag`（`Envirnoment.cs:1362-1369`）先走 `GetCellInfo`，而 `GetCellInfo` 对「越界**或** `Attribute != Walk`」都返 `success=false` ⇒ `SetAttribute` 不执行。于是 `CastleDoor.SetMapXyFlag(1)`（关门）把 9 格置 `LowWall` 后，`SetMapXyFlag(0)`（开门）的 `boFlag=true` 调用**无法**把它们恢复成 `Walk` ⇒ 城门「开」了但格子仍阻断。（同族：`WallStructure.Run` 用 `SetMapFlaged` 标记自己规避了这一点，只有 `CastleDoor` 的 9 格掩码命中本 bug。） | `src/M2Server/Maps/Envirnoment.cs:1362-1369` + `src/M2Server/Monster/Monsters/CastleDoor.cs:23-44` → `crates/world/src/map.rs`（`MapGrid::set_map_xy_flag`）/ `crates/world/src/castle.rs`（`door_map_xy_flag_ops`）；用例 `castle::tests::door_mask_blocks_cells_and_low_wall_cannot_be_restored_like_oracle`（BUG-REPLICA） |
 
 ## A 线待观察项（C# 侧既有口径差——非对拍差异，M1/M2 移植网关时逐条处置）
 

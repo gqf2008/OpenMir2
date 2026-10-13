@@ -1,0 +1,24 @@
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\crates\world)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.91s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m3cs-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 1 test
+test castle::tests::n5_hire_substring_is_always_out_of_range_like_oracle ... FAILED
+
+failures:
+
+---- castle::tests::n5_hire_substring_is_always_out_of_range_like_oracle stdout ----
+
+thread 'castle::tests::n5_hire_substring_is_always_out_of_range_like_oracle' (28616) panicked at crates\world\src\castle.rs:2081:9:
+assertion `left == right` failed
+  left: Ok("0")
+ right: Err(ArgumentOutOfRange)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    castle::tests::n5_hire_substring_is_always_out_of_range_like_oracle
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 140 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-world --lib`
