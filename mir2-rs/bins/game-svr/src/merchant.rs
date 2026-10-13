@@ -42,6 +42,8 @@ pub fn to_spawn(record: mir2_envir::MerchantRecord, map_id: usize) -> MerchantSp
             item_name: g.item_name,
             count: g.count,
             refill_time: g.refill_time,
+            // `Goods.RefillTick` 由脚本解析置 0（`ScriptParsers.cs:965`）。
+            refill_tick: 0,
         })
         .collect();
     let f = record.flags;
@@ -98,7 +100,10 @@ pub fn load_merchant_spawns(
     rng: &mut RandomNumber,
 ) -> Result<(Vec<MerchantSpawn>, MerchantLoadReport), String> {
     // O-2：`SystemShare.RandomNumber.GetRandomNumber(1, 200)`（`ScriptParsers.cs:857`）。
-    let mut rename_rand = |min: i32, max: i32| rng.get_random_number(min, max);
+    // 经 `crates/world::merchant::merchant_rename_rand` 转发 ⇒ `#[track_caller]` 记到的站点是
+    // `crates/world/src/merchant.rs`（`merchant` 组），**不**在宿主产生未归类站点。
+    let mut rename_rand =
+        |min: i32, max: i32| mir2_world::merchant::merchant_rename_rand(rng, min, max);
     let records = loader
         .load_merchants(&mut rename_rand)
         .map_err(|e| e.to_string())?

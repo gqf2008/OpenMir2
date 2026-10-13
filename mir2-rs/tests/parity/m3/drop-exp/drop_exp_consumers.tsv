@@ -23,3 +23,4 @@ csharp	measured	GameSrv\.Word\.WorldServer\.MonGetRandomItems@WorldServer\.MonGe
 csharp	wallclock	M2Server\.Actor\.AnimalObject\.Wondering@AnimalObject\.cs:(427|432|434)	0	src/M2Server/Actor/AnimalObject.cs:425	游走/转向/寻敌；owner 点名（②③ 实测占 C# 流水 99.98% 噪声）⇒ pin 抑制必须使其为 0
 csharp	wallclock	GameSrv\.Word\.WorldServer\.RegenMonsters@WorldServer\.MonGen\.cs:815	0	src/GameSrv/Word/WorldServer.MonGen.cs:238	刷怪 regen 抽数在 GetTickCount 门控的 tick 里 ⇒ 墙钟消费者，必须 0
 csharp	wallclock	GameSrv\.Npc\.Merchant\.Run@Merchant\.cs:(132|138)	0	src/GameSrv/Npc/Merchant.cs:132	商人 tick 抽数在 dwCurrentTick 门控里 ⇒ 墙钟消费者；本场景无商人 ⇒ 必须 0
+rust	wallclock	crates/world/src/merchant\.rs:	0	crates/world/src/merchant.rs	商人 tick 抽数在 RunTick/RunTime + 200ms sim 节奏门后 ⇒ 墙钟消费者（NpcLimit 预算已丢，见 whitelist T-42）；pin 场景无商人 ⇒ 必须 0

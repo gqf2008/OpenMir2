@@ -3498,6 +3498,15 @@ fn sim_loop(
     // 合成 golden 场景不经本函数 ⇒ 仍缺省关闭，逐字节不变。
     game_svr::mongen::enable_production_monster_ai(&mut world);
     glog!("INF", "Monster AI 已启用（生产宿主）EnableMonsterAI=true");
+    // **M3⑤-实现 2 第②片**：生产宿主启用商人 tick（oracle `MerchantProcessor` 的 200ms 线程
+    // 单线程等价物；owner `eb3bf42f` 裁决：sim 时钟 200ms 节奏 + `RunTick/RunTime` 门 +
+    // 丢墙钟预算）。`World::tick` 在怪物 AI 之后、AOI 刷新之前驱动 `merchant_tick`。
+    // 合成 golden 场景不经本函数 ⇒ 仍缺省关闭，逐字节不变。
+    world.enable_merchant_tick();
+    glog!(
+        "INF",
+        "商人 tick 已启用（生产宿主）EnableMerchantTick=true（200ms sim 节奏；whitelist T-42 登记丢 NpcLimit 墙钟预算）"
+    );
     // **M3④-实现 B 第 ③ 片**：MonGen 刷怪调度宿主（`WorldServer.MonGen.cs:30/192/811`）。
     // `entries=None` ⇒ 无 `Envir/MonGen.txt`，不建宿主；`initialize_monster` 在此消耗一次
     // `world.rng`（oracle `InitializeMonster` 同一时机；RNG 次序 = 怪名分组序 + `MonsterList.Values`）。
