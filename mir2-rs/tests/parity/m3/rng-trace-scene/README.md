@@ -266,6 +266,26 @@ python -I rng-trace-scene/check_evidence_counts.py selftest               # 7/7 
 > 本工具是证据包的**自洽牙**，不是 DoD 判据本体、不进任何判据阈值；**不改** `run_rng_trace_pair.ps1`
 > 的自检项数（故本仓历史报告里记的 `29/29` 等**片时读数**不受影响）。
 
+### 5.2 承接卡规格「源码锚点保鲜」机判（`check_anchors.py`）
+
+`DRIVER-CONTRACT.md`（承接卡 `openmir2-m3-rng-scene-driver` 的规格）用 `path:line` 引用承重源码
+锚点（宿主 AI 调用点 / 世界层 tick / oracle Wondering）。master 一直在动 ⇒ 行号会**静默漂移**：
+2026-10-13 实测 `bins/game-svr/src/main.rs` 因 ④-D 与 client-e2e 两次合并行长，
+`enable_production_monster_ai(&mut world)` 从 `:5229` 漂到 `:5440`，而文档仍写 `:5229`
+（承接卡按旧行号找代码会找错，且没人拦）。`check_anchors.py` 把「文档写的行号 == 该符号在**当前
+源码**里的**首个**匹配行」钉成 fail-closed 机判：
+
+```sh
+python -I rng-trace-scene/check_anchors.py check      # GREEN：5/5 锚点保鲜
+python -I rng-trace-scene/check_anchors.py selftest   # 4/4 GREEN（含 3 条改坏必红）
+```
+
+- 锚点缺失 / **重复**（歧义）/ 文件缺失 / 符号缺失 / 行号漂移 ⇒ rc=1 **逐个点名**（漂移还报出正确的
+  实际行号，即要改成的值）；
+- 改坏必红覆盖：行号改回历史漂移值 `/` 删锚点 `/` 同 literal 写两处行号（歧义）；
+- 已接入 `run_rng_trace_pair.ps1 -SelfCheckNoStack`（`anchors-freshness-selftest`）⇒ **自检项数
+  由 29 增至 30**（本片之前的报告里的 `29/29` 是片时读数，不受影响）。
+
 ## 6. 命令（可复算）
 
 ```sh
@@ -275,6 +295,7 @@ cd mir2-rs/tests/parity/m3
 python -I rng-trace-probe/rng_ledger_diff.py selftest          # 37/37 GREEN（含 R-6 folded + DoD② scenario 声明）
 python -I rng-trace-scene/rng_scene_gate.py selftest           # 22/22 GREEN（含 scenario 声明 vs 代码 + 半给流水 PREREQ）
 python -I rng-trace-scene/check_evidence_counts.py selftest    # 7/7 GREEN（报告证据头行计数 vs 真实包：声明/真实）
+python -I rng-trace-scene/check_anchors.py selftest             # 4/4 GREEN（承接卡规格锚点保鲜；含行号漂移/缺失/歧义 3 条改坏必红）
 python -I rng-trace-scene/check_window_batch.py selftest        # 13/13 GREEN（本卡 vs ④ 场景件：同图/同种子/同起点）
 
 # 同窗口批次前提（本卡 scenario vs ④ drop-exp scenario；非 GREEN ⇒ 批次不可比，拒跑）
