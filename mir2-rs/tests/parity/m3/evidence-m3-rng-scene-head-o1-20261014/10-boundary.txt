@@ -1,4 +1,5 @@
-### 10 边界（base = origin/master 30c52f85df2b08170537f83a2113f520e364f679）
+### 10 边界（base = origin/master 30c52f85df2b08170537f83a2113f520e364f679；= check-pack 的显式 since 锚）
+### head = 9740b7d0c6ae66752f6195a4104416a61d913e99（= 本片交付 head；机判 = check_evidence_head.py check-pack）
 ### git diff --name-only base..HEAD（共 21 路径）
 mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-teeth-20261014/05-selfcheck-nostack.txt
 mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-teeth-20261014/06-offline-regression.txt

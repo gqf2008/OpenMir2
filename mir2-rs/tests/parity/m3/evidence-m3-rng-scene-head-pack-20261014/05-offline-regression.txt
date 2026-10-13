@@ -1,0 +1,53 @@
+### 离线全链回归（8 个 selftest + check_anchors check；cwd = mir2-rs/tests/parity/m3）
+
+$ python -I rng-trace-probe/rng_ledger_diff.py selftest
+SELFTEST GREEN: rng_ledger_diff selftest 37/37（同序绿 + 次序漂移必红且定位 + 缺消费者必红且点名 + Claim B 站点组：同组序绿 / 多抽·换序·缺组必红且定位 / 组表改坏必红 / 未归类 fail-closed / 行级覆盖 rows_dropped fail-closed（O-1）+ AUX 组改坏必红（O-3）+ R-6 folded：等价绿 / 折叠计数不等·次序不等必红且定位 / 关时仍 GROUP_SET_DIFF + DoD② scenario 声明：三组齐备绿 / 缺组·monster_ai 抽数不足必红且点名 / 缺 scenario PREREQ / 不传向后兼容）
+rc=0
+
+$ python -I rng-trace-scene/rng_scene_gate.py selftest
+SELFTEST ok=22/22
+GREEN: 场景前置门 selftest 全绿（同场景绿 + seed/怪集合/起点/map/MonGen 漂移必红 + 流水头同种子制品级门（同种子绿 / 异种子·缺 INJECT_OK 必红 / 缺件 PREREQ / 只给一侧流水 PREREQ / 未给流水向后兼容） + scenario 声明 vs 代码 folded 映射/组清单漂移必红 + 缺件/坏 JSON PREREQ fail-closed）
+rc=0
+
+$ python -I rng-trace-scene/check_evidence_counts.py selftest
+  RED declared_files=5 != actual_files=6
+  RED declared_eolcheck=5/5 != actual_eolcheck=6/6 (目录文件数)
+SELFTEST GREEN: check_evidence_counts selftest 7/7（一致绿 / 件数·verify·eolcheck 漂移必红且点名 / 只写计数规则绿 / 缺件 PREREQ / 交付后证据包长大必红）
+rc=0
+
+$ python -I rng-trace-scene/check_anchors.py selftest
+  ok  mutation-bare-ref-file-missing-red（ANCHOR_FILE_MISSING 改坏：归属文件缺失：mir2-rs/crates/world/src/no_such_module.rs 不存在; BARE_REF_FILE_MISSING 改坏：归属文件缺失：mir2-rs/crates/world/src/no_such_module.rs 不存在）
+  ok  mutation-bare-ref-out-of-range-red（BARE_REF_OUT_OF_RANGE 站点表的 R-6 折叠理由行：`mir2-rs/tests/parity/m3/rng-trace-probe/consumer_groups.tsv:99999` 越界（文件共 76 行））
+SELFTEST GREEN: check_anchors selftest 13/13（含 12 条改坏必红：行号漂移 / 锚点缺失 / 锚点歧义 / 未登记引用 / 折叠定义回退 / 同名目录串台 / 裸续引用未登记 / 裸续内容漂移 / 未识别扩展名 / 裸续引用归属未登记 / 裸续引用归属文件缺失 / 裸续引用登记行越界）
+rc=0
+
+$ python -I rng-trace-scene/check_evidence_head.py selftest
+SELFTEST GREEN: check_evidence_head 16/16（check 7 + check-pack 9：含改坏必红 + PREREQ）
+rc=0
+
+$ python -I rng-trace-probe/rng_consumer_groups.py selftest
+  ok  mutation-oracle-ref-path-red（行28(startup/csharp): oracle_ref 指向不存在的源码文件 src\NoSuchModule\Conf\ServerConf.cs（ref=src/NoSuchModule/Conf/ServerConf.cs:114））
+  ok  mutation-oracle-ref-line-red（行28(startup/csharp): oracle_ref 行 999999 越界（src\Modules\SystemModule\Conf\ServerConf.cs 共 682 行））
+SELFTEST GREEN: rng_consumer_groups selftest 15/15
+rc=0
+
+$ python -I rng-trace-scene/check_window_batch.py selftest
+SELFTEST ok canon-mismatch-prereq (rc=2 want=2 needle='canon')
+SELFTEST ok map-type-prereq (rc=2 want=2 needle='应为字符串')
+SELFTEST GREEN: check_window_batch selftest 13/13（真件绿 + 换图/换种子/挪 x/y/dir 必红且点名 + 缺件/坏 JSON/缺字段/自比/传错件 PREREQ fail-closed）
+rc=0
+
+$ python -I fixture_chain_gate.py selftest
+  SELFTEST ok  _run_tool(.py) 真跑 rc=0
+  SELFTEST ok  _run_tool 缺件 ⇒ 127
+SELFTEST GREEN: fixture_chain_gate selftest 31/31
+rc=0
+
+$ python -I rng-trace-scene/check_anchors.py check
+GREEN: check_anchors 7/7 锚点保鲜（文档行号 == 当前源码首个匹配行；闭世界 + 裸续引用）
+rc=0
+
+$ python -I rng-trace-scene/check_window_batch.py check --rng-scenario rng-trace-scene/rng_trace_scenario.json --drop-scenario drop-exp/drop_exp_scenario.json
+VERDICT GREEN: 同窗口批次前提 OK（map/seed/起点 逐项相等）
+OK map='0137' seed=42 x=17 y=20 dir=2
+rc=0

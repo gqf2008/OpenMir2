@@ -1,0 +1,19 @@
+### 01 reviewer-5 的 observation O-1（对 head 9740b7d0c 的 approve 28df35... 携带；非阻塞）
+
+O-1（非阻塞，工具口径）：新门 `check_evidence_head.py` 片的 check 是以「收口 patch 的 base 30c52f85d」
+当声明 head，证明的是本收口片边界全在 mir2-rs/tests/parity/m3/**；它并不校验被审包自己声明的 head
+（2591a7b31）。在这棵树上用 `--head 2591a7b31` 跑会 RED（master 已前进，2591a7b31..HEAD 含 src/BotSrv
+等非证据侧变更）⇒ 作者的 12-head-consistency.txt 已如实写清该口径，工具 docstring 也如实登记局限。
+建议下一片给该门加一个「从包内读 declared head + 显式 since 锚」的模式，使书证 head 与机判对象一致。
+
+—— 来源：walgit review entry `2df35bdba517`（openmir2-reviewer-5 @ reviewed_head 9740b7d0c，tier=L）
+
+### 本片如何收口
+新增 `check-pack` 子命令：**机判对象 = 包内声明的 head**（从 11-boundary.txt / 10-boundary.txt /
+README.md 里按 `head = <oid>` 读，可 `--decl-file`/`--decl-regex` 覆写），并用**显式 `--since` 锚**界定
+差量 `since..声明 head`（只允许证据/夹具侧）。这样：
+① 校的正是书证里写的 oid（不再由 CLI 另传一个 base 值冒充声明 head）；
+② 免疫「master 前进后的无关合并」造成的假红（旧 `check` 的 `head..HEAD` 会把别人的合并算进来）；
+③ 声明 head 写成 不可解析 / 非 HEAD 祖先 / 自 since 起夹带生产代码 三类仍各自点名。
+残留局限（如实登记，见 README §4）：把「证据侧的其它祖先」（如中间 merge commit 2fcebc6cd）当 head 写，
+若其对同一 since 的差量恰好也全在证据侧，本门仍咬不住——那属书证命名，靠人写对 + 评审。

@@ -1,0 +1,30 @@
+### 改坏必红（真实仓库 + 临时声明件；cwd = mir2-rs/tests/parity/m3）
+
+(a) 声明 head 写成 master 合并提交 d01ee63a1（自 since=10f0daa93 起夹带生产改动）⇒ HEAD_SCOPE_DRIFT 必红
+EVIDENCE_HEAD_PACK dir=tmp/m3bag-headpack-mut decl=11-boundary.txt(line 1) declared=d01ee63a1941852b16ca92e8c9354adb5d956edc since=10f0daa93ebeaf220581a3239cce6f7e7a522b85 changed=77 allow_prefixes=['mir2-rs/tests/parity/m3']
+  RED HEAD_SCOPE_DRIFT: 声明 head 相对 since 锚改了非证据侧路径 mir2-rs/tests/parity/whitelist.md
+  RED HEAD_SCOPE_DRIFT: 声明 head 相对 since 锚改了非证据侧路径 src/BotSrv/AppService.cs
+  RED HEAD_SCOPE_DRIFT: 声明 head 相对 since 锚改了非证据侧路径 src/BotSrv/DropExpSeqSelfCheck.cs
+  RED HEAD_SCOPE_DRIFT: 声明 head 相对 since 锚改了非证据侧路径 src/BotSrv/MShare.cs
+  RED HEAD_SCOPE_DRIFT: 声明 head 相对 since 锚改了非证据侧路径 src/BotSrv/Player/RobotPlayer.Operate.cs
+  RED HEAD_SCOPE_DRIFT: 声明 head 相对 since 锚改了非证据侧路径 src/BotSrv/Player/RobotPlayer.cs
+  RED HEAD_SCOPE_DRIFT: 声明 head 相对 since 锚改了非证据侧路径 src/BotSrv/Program.cs
+  RED HEAD_SCOPE_DRIFT: 声明 head 相对 since 锚改了非证据侧路径 src/BotSrv/RobotOptions.cs
+  RED HEAD_SCOPE_DRIFT: 声明 head 相对 since 锚改了非证据侧路径 tools/botload/run_bots.ps1
+rc=1
+
+(b) 声明 head 不可解析 ⇒ HEAD_UNRESOLVABLE 必红
+HEAD_UNRESOLVABLE: 包内声明 head 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef' 不是可解析的 commit（来源 11-boundary.txt line 1）
+rc=1
+
+(c) --since 取声明 head 的后代（9740b7d0c > 2591a7b31）⇒ SINCE_NOT_ANCESTOR 必红
+SINCE_NOT_ANCESTOR: --since 9740b7d0c6ae66752f6195a4104416a61d913e99 不是包内声明 head 2591a7b316ae7e9c3a31ac38e26248178a75f182 的祖先
+rc=1
+
+(d) 声明 head 是 HEAD 的子提交（非祖先；dangling 提交 66a48222d0c59addcea9f7b1998a0eca024c2172）⇒ HEAD_NOT_ANCESTOR 必红
+HEAD_NOT_ANCESTOR: 包内声明 head 66a48222d0c59addcea9f7b1998a0eca024c2172 不是当前 HEAD 的祖先
+rc=1
+
+(e) 包内没有 head 声明 ⇒ PREREQ fail-closed（rc=2）
+PREREQ_MISSING: 包内未找到 `head = <oid>` 声明（试过 11-boundary.txt(缺),10-boundary.txt(缺),README.md）
+rc=2
