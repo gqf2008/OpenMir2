@@ -1,0 +1,10 @@
+=== cargo fmt --all -- --check ===
+=== cargo clippy --workspace --all-targets -- -D warnings ===
+    Checking mir2-parity-tests v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\tests\parity)
+    Checking game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\bins\game-svr)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.78s
+=== cargo test --workspace ===
+aggregate: passed=1185 failed=0 ignored=22
+suites-ok=101
+=== msgcodegen --check ===
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。

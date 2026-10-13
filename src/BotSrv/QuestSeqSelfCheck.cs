@@ -1,5 +1,9 @@
 using System;
 using System.Collections.Generic;
+using OpenMir2;
+using Serilog;
+using Serilog.Core;
+using Serilog.Events;
 
 namespace BotSrv
 {
@@ -79,10 +83,80 @@ namespace BotSrv
             });
             Check("say-first-643", sayFirst == "first", "got=" + sayFirst);
 
+            // ④ JSON 转义：字面 `<`/`>` → `\u003c`/`\u003e`（规避 Serilog 消息模板分词的丢括号缺陷；
+            //    真机缺陷 defect_3：C# k=0 任务 frame 载荷 `{`=2/`}`=1，json.loads 失败）。
+            const string angleText = "任务管理/<任务名称>/@rw01";
+            string escapedQuest = BotSrv.Player.RobotPlayer.QuestEsc(angleText);
+            Check("esc-angle-quest-no-raw",
+                escapedQuest.IndexOf('<') < 0 && escapedQuest.IndexOf('>') < 0
+                && escapedQuest.Contains("\\u003c") && escapedQuest.Contains("\\u003e"),
+                "got=" + escapedQuest);
+            string escapedShop = BotSrv.Player.RobotPlayer.ShopEsc(angleText);
+            Check("esc-angle-shop-no-raw",
+                escapedShop.IndexOf('<') < 0 && escapedShop.IndexOf('>') < 0
+                && escapedShop.Contains("\\u003c") && escapedShop.Contains("\\u003e"),
+                "got=" + escapedShop);
+            // 往返：用转义后的文本造 k=0 frame（嵌套 `{}` + 尖括号）⇒ 合法 JSON 且用真正的
+            //     JSON 解析器解码后说词还原（比较器侧走 json.loads，与此一致）。
+            string angleFrame = "{\"sm\":643,\"merchant\":1,\"face\":0,\"tag\":0,\"series\":1,\"text\":\""
+                + escapedQuest + "\"}";
+            string decodedText = null;
+            bool frameJsonOk = false;
+            try
+            {
+                using (var doc = System.Text.Json.JsonDocument.Parse(angleFrame))
+                {
+                    decodedText = doc.RootElement.GetProperty("text").GetString();
+                }
+                frameJsonOk = true;
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                frameJsonOk = false;
+            }
+            Check("esc-angle-frame-decode",
+                frameJsonOk && decodedText == angleText,
+                "json-ok=" + frameJsonOk + " decoded=" + (decodedText ?? "null"));
+
+            // ④b 根因回归（走真实 Serilog 通路，用内联 sink 取回 RenderMessage）：
+            //     固定载荷用**生产 escaper** 造；把转义改回去（不转义尖括号）⇒ Serilog 会丢末尾 `}`
+            //     ⇒ `fixedCaptured != fixedPayload` ⇒ 本条必 RED。老路径的丢失同时打印作证。
+            var captured = new List<string>();
+            LogService.Logger = new LoggerConfiguration().MinimumLevel.Debug()
+                .WriteTo.Sink(new CollectingSink(captured)).CreateLogger();
+            LogService.Info("{\"phase\":\"frame\",\"k\":0,\"frame\":{\"sm\":643,\"text\":\"<x>\"}}");
+            string rawCaptured = captured[captured.Count - 1];
+            string fixedPayload = "{\"phase\":\"frame\",\"k\":0,\"frame\":{\"sm\":643,\"text\":\""
+                + BotSrv.Player.RobotPlayer.QuestEsc("<x>") + "\"}}";
+            LogService.Info(fixedPayload);
+            string fixedCaptured = captured[captured.Count - 1];
+            Check("serilog-path-payload-intact",
+                fixedCaptured == fixedPayload,
+                "escaped-payload-via-serilog got=" + fixedCaptured);
+            Console.WriteLine("QUESTSEQ INFO serilog-raw-path-mangled="
+                + (rawCaptured != "{\"phase\":\"frame\",\"k\":0,\"frame\":{\"sm\":643,\"text\":\"<x>\"}}")
+                + " raw=" + rawCaptured);
+
             Console.WriteLine(failed == 0
                 ? "QUESTSEQ SELFTEST GREEN"
                 : $"QUESTSEQ SELFTEST RED ({failed} failed)");
             return failed == 0 ? 0 : 1;
+        }
+
+        /// <summary>无栈自检用的内联 Serilog sink：取回事件渲染后的 Message。</summary>
+        private sealed class CollectingSink : ILogEventSink
+        {
+            private readonly List<string> _items;
+
+            public CollectingSink(List<string> items)
+            {
+                _items = items;
+            }
+
+            public void Emit(LogEvent logEvent)
+            {
+                _items.Add(logEvent.RenderMessage());
+            }
         }
     }
 }

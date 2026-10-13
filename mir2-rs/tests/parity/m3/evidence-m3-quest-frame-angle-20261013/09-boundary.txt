@@ -1,0 +1,14 @@
+# 边界（对 origin/master ef3160df7 钉住）
+$ git diff --name-only origin/master HEAD
+src/BotSrv/Player/RobotPlayer.cs
+src/BotSrv/QuestSeqSelfCheck.cs
+
+# 冻结面（oracle / 协议 / 存储 / bins）：
+$ git diff --name-only origin/master HEAD -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins
+（空）
+  —— 其中 `src/` 只命中 `src/BotSrv/**`（白名单 **T-41/T-42** 已登记的 BotSrv 夹具工具侧例外，
+     见 mir2-rs/tests/parity/whitelist.md；本片未新增白名单条目，属该例外内的工具修 bug）。
+  —— 零 `.rs`、零表结构、零脚本语法、零数据格式、零客户端。
+
+# 证据目录（本片新增）
+mir2-rs/tests/parity/m3/evidence-m3-quest-frame-angle-20261013/**
