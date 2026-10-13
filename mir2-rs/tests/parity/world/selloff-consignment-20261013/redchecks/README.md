@@ -3,6 +3,11 @@
 口径：精确 mutation（Python 单次替换，命中数断言为 1）→ 跑命中用例（必 FAILED rc=101）→
 `git restore --source=HEAD -- <file>` 还原 → 重跑（必 ok）。每条给原始件；还原后 `git status` 干净。
 
+> 注（2026-10-13 rebase 片）：RC-1/RC-2/RC-3 与还原复核均在 **rebase 到 master `029d23eae` 后的 head** 上重跑
+> （worktree `m3hp` / `CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target`）。原始件内的 panic 行号随 rebase 位移
+> （如 RC-1 的 `main.rs:11670/11888`、RC-3 的 `selloff.rs:1492`），**语义与断言不变**；被审实现文件
+> 相对 `2869a234b` 逐字节不变（见 `README.md` §2c）。
+
 | # | 针对 | mutation | 命中用例（必红） | 原始件 |
 |---|------|----------|------------------|--------|
 | RC-1 | 派发接线 | `main.rs::handle_selloff_cmd` 的 `CM_SELLOFFEND => client_sell_off_end(...)` → `=> Vec::new()` | `game-svr::tests::selloff_cm_dispatch_emits_oracle_frames_on_both_connections` + `..._cancel_paths_dispatch_and_mutate_global_book`（**2 FAILED**） | `RC1-cm-selloffend-arm-removed-mutated.txt` |

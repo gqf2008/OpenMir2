@@ -1,3 +1,7 @@
-    Checking db-srv v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\db-srv)
-    Checking game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.46s
+# 命令（cwd = mir2-rs/，CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target）：
+#   cargo clippy --workspace --all-targets --offline -- -D warnings
+# 注：rebase 到 master `029d23eae` 后重跑。
+
+    Checking game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\bins\game-svr)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.25s
+clippy rc=0

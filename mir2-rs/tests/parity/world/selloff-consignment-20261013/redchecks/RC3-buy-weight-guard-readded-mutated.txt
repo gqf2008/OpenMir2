@@ -1,27 +1,47 @@
 # RC-3 改坏必红（F-1 返工）：把 `client_buy_sell_off_item` 的负重守卫重新加回
-#
-# reviewer-5 F-1（Important）钉的原始缺陷：oracle `ClientBuySellOffItme`
-# （`src/M2Server/Player/PlayObject.Sale.cs:333-361`）成交成功支**只判 `IsEnoughBag()`、不判负重**
-# （`IsEnoughBag()` = `ItemList.Count < Grobal2.MaxBagItem`，`PlayObject.Base.cs:183-186`；
-#  `AddItemToBag` = `BaseObject.cs:1241-1251` 也只判 `ItemList.Count >= MaxBagItem`）。
-# `IsAddWeightAvailable` 在 oracle 只出现在拾取（`Base.cs:103`）、`CancelSellOffIng`（`Sale.cs:217`）、
-# `Operate.cs:1680`，买/卖**成交路径没有**。
-#
-# mutation（精确单次替换，Python 断言命中数 = 1，跑完 `git restore` 反向替换还原，不提交）：
+# mutation（精确单次替换，命中数=1，跑完 git restore 还原，不提交）：
 #   `Some(_) => { if is_enough_bag(me.items, cfg.max_bag_item) {`
 #   → `Some(tpl) => { if is_enough_bag(me.items, cfg.max_bag_item) && weight_available(me, i32::from(tpl.weight)) {`
-# 语义等价于把 F-1 的缺陷守卫加回去（负重不足 ⇒ 走 else ⇒ DropItemDown，物品不入包、无 SM_ADDITEM）。
-#
 # 命令：cargo test -p game-svr --offline --lib selloff
-# 期望：F-1 新增向量 `buy_enters_bag_even_when_weight_insufficient` FAILED（rc=101），
-#       其余 23 条仍 ok。
+# 期望：F-1 新增向量 `buy_enters_bag_even_when_weight_insufficient` FAILED（rc=101），其余 23 条仍 ok。
+# 注（rebase 片 2026-10-13）：rebase 到 master `029d23eae` 后重跑。
 
 == mutated (rc=101) ==
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.86s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m3hp-target\debug\deps\game_svr-675e68013f315636.exe)
+
+running 24 tests
+test selloff::tests::cancel_selling_requires_empty_bag_slot ... ok
+test selloff::tests::buy_insufficient_game_gold_only_menu_ok ... ok
+test selloff::tests::buy_cancel_sets_flag3 ... ok
+test selloff::tests::buy_nine_items_still_aborts_at_out_of_range ... ok
+test selloff::tests::add_item_blocked_while_confirming ... ok
+test selloff::tests::buy_enters_bag_even_when_weight_insufficient ... FAILED
+test selloff::tests::cancel_selling_no_entry_emits_nothing ... ok
+test selloff::tests::buy_with_offline_seller_sets_flag1 ... ok
+test selloff::tests::add_item_ok_moves_to_temp_and_replies ... ok
+test selloff::tests::add_item_wrong_name_fails ... ok
+test selloff::tests::buy_single_item_aborts_at_first_null_slot ... ok
+test selloff::tests::cancel_selling_returns_items_and_removes_entry ... ok
+test selloff::tests::buy_with_absent_seller_sets_flag1 ... ok
+test selloff::tests::del_item_ok_moves_back_to_bag ... ok
+test selloff::tests::event_body_encodes_menu_ok_and_gamemoney_frames ... ok
+test selloff::tests::get_sell_off_gold_credits_without_sale_deal_but_update_is_noop ... ok
+test selloff::tests::get_sell_off_gold_credits_and_removes_prior_flag2 ... ok
+test selloff::tests::open_deal_off_form_gated_by_sale_deal_and_active_sell ... ok
+test selloff::tests::sell_off_cancel_returns_temp_in_reverse ... ok
+test selloff::tests::sell_off_end_rejects_self_and_returns_items ... ok
+test selloff::tests::sell_off_end_rejects_sell_gold_out_of_range ... ok
+test selloff::tests::update_sell_off_info_is_case_sensitive ... ok
+test selloff::tests::sell_off_in_time_variants ... ok
+test selloff::tests::sell_off_end_success_lists_and_charges_fee ... ok
+
 failures:
 
 ---- selloff::tests::buy_enters_bag_even_when_weight_insufficient stdout ----
 
-thread 'selloff::tests::buy_enters_bag_even_when_weight_insufficient' (25308) panicked at bins\game-svr\src\selloff.rs:1494:9:
+thread 'selloff::tests::buy_enters_bag_even_when_weight_insufficient' (28728) panicked at bins\game-svr\src\selloff.rs:1492:9:
 assertion `left == right` failed: 负重不足也必须入包（oracle 成功支只判 IsEnoughBag）
   left: 0
  right: 1
@@ -34,7 +54,3 @@ failures:
 test result: FAILED. 23 passed; 1 failed; 0 ignored; 0 measured; 153 filtered out; finished in 0.00s
 
 error: test failed, to rerun pass `-p game-svr --lib`
-
-rc = 101
-
-# 还原（反向替换同一 mutation；工作树回到 F-1 修复态）后：见 RC-restored-ok.txt。

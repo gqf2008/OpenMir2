@@ -2,8 +2,32 @@
 # 命令①：cargo test -p game-svr --offline --lib selloff
 # 命令②：cargo test -p game-svr --offline --bin game-svr selloff
 # 期望：两命令均 rc=0（24 + 2 passed / 0 failed；24 = F-1 新增 1 条）
+# 注（rebase 片 2026-10-13）：rebase 到 master `029d23eae` 后重跑。
 
-== [1] 构造级（lib selloff，原始输出末尾） ==
+== [1] 构造级（lib selloff，原始输出） ==
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.00s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m3hp-target\debug\deps\game_svr-675e68013f315636.exe)
+
+running 24 tests
+test selloff::tests::buy_with_absent_seller_sets_flag1 ... ok
+test selloff::tests::add_item_ok_moves_to_temp_and_replies ... ok
+test selloff::tests::add_item_blocked_while_confirming ... ok
+test selloff::tests::buy_single_item_aborts_at_first_null_slot ... ok
+test selloff::tests::add_item_wrong_name_fails ... ok
+test selloff::tests::buy_nine_items_still_aborts_at_out_of_range ... ok
+test selloff::tests::buy_insufficient_game_gold_only_menu_ok ... ok
+test selloff::tests::buy_cancel_sets_flag3 ... ok
+test selloff::tests::cancel_selling_requires_empty_bag_slot ... ok
+test selloff::tests::buy_with_offline_seller_sets_flag1 ... ok
+test selloff::tests::cancel_selling_no_entry_emits_nothing ... ok
+test selloff::tests::buy_enters_bag_even_when_weight_insufficient ... ok
+test selloff::tests::cancel_selling_returns_items_and_removes_entry ... ok
+test selloff::tests::del_item_ok_moves_back_to_bag ... ok
+test selloff::tests::get_sell_off_gold_credits_and_removes_prior_flag2 ... ok
+test selloff::tests::event_body_encodes_menu_ok_and_gamemoney_frames ... ok
+test selloff::tests::get_sell_off_gold_credits_without_sale_deal_but_update_is_noop ... ok
+test selloff::tests::open_deal_off_form_gated_by_sale_deal_and_active_sell ... ok
 test selloff::tests::sell_off_cancel_returns_temp_in_reverse ... ok
 test selloff::tests::sell_off_end_rejects_self_and_returns_items ... ok
 test selloff::tests::sell_off_end_rejects_sell_gold_out_of_range ... ok
@@ -13,20 +37,15 @@ test selloff::tests::update_sell_off_info_is_case_sensitive ... ok
 
 test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 153 filtered out; finished in 0.00s
 
-rc1=0
 
-== [2] 进程级（bin game-svr selloff，原始输出末尾） ==
-   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.00s
-     Running unittests src\main.rs (E:/tmp/m2svr-target\debug\deps\game_svr-1f4431beb89ebeb6.exe)
+== [2] 进程级（bin game-svr selloff，原始输出） ==
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.24s
+     Running unittests src\main.rs (E:/tmp/openmir2-m3hp-target\debug\deps\game_svr-1f4431beb89ebeb6.exe)
 
 running 2 tests
 test tests::selloff_cm_dispatch_emits_oracle_frames_on_both_connections ... ok
 test tests::selloff_cancel_paths_dispatch_and_mutate_global_book ... ok
 
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 182 filtered out; finished in 0.00s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 185 filtered out; finished in 0.00s
 
-rc2=0
-
-== 还原后 git status ==
-# 相对 HEAD 只剩 F-1 修复自身的 diff：selloff.rs（删负重守卫 + 新增 1 条 F-1 回归用例）；无 mutation 残留。

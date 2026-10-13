@@ -1,6 +1,10 @@
 # 03 — 判据（构造级 + 进程级，全离线）
 
-环境：`CARGO_TARGET_DIR=E:/tmp/m2svr-target`；cwd = 本 worktree 的 `mir2-rs/`。
+环境：`CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target`；cwd = 本 worktree 的 `mir2-rs/`。
+
+> 注（2026-10-13 rebase 片）：本片由 `openmir2-worker-20`（worktree `m3hp`）接管并 rebase 到 master `029d23eae`。
+> A/B/C/D 均在 rebase 后的树上重跑；D 的工作区总量随 master 前进由 96/998 升到 **98 suites / 1065 passed**。
+> `selloff` 两组读数（A=24 / B=2）与 F-1 时一致。
 
 ## 命令与读数
 
@@ -9,7 +13,7 @@
 | A | `cargo test -p game-svr --offline --lib selloff` | `24 passed; 0 failed; 0 ignored`（rc=0） |
 | B | `cargo test -p game-svr --offline --bin game-svr selloff` | `2 passed; 0 failed; 0 ignored`（rc=0） |
 | C | `cargo test -p game-svr --offline --bin game-svr config::tests::parses_setup_blue_msg_colors_with_oracle_defaults` | `1 passed; 0 failed`（rc=0） |
-| D | `cargo test --workspace --offline --no-fail-fast` | **96 suites · 998 passed · 0 failed · 21 ignored**（rc=0） |
+| D | `cargo test --workspace --offline --no-fail-fast` | **98 suites · 1065 passed · 0 failed · 21 ignored**（rc=0） |
 
 ## A. 构造级（`bins/game-svr/src/selloff.rs::tests`，24 条）
 
