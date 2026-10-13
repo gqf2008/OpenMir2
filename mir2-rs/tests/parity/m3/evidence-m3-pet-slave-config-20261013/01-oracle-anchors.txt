@@ -1,0 +1,136 @@
+# evidence-m3-pet-slave-config-20261013 / 01-oracle-anchors.txt
+# 宝宝/召唤配置项 —— C# 读取点 / 初值 / ini 语义 / 常量 / 类型。行号均在本仓库 src/ 内实测。
+
+============================================================
+[A] 读取点 ServerConf.cs（LoadConfig）
+============================================================
+104:            SystemShare.Config.Skeleton = ReadWriteString("Names", "Skeleton", SystemShare.Config.Skeleton);
+105:            SystemShare.Config.Dragon = ReadWriteString("Names", "Dragon", SystemShare.Config.Dragon);
+106:            SystemShare.Config.Dragon1 = ReadWriteString("Names", "Dragon1", SystemShare.Config.Dragon1);
+107:            SystemShare.Config.Angel = ReadWriteString("Names", "Angel", SystemShare.Config.Angel);
+119:            SystemShare.Config.MonUpLvNeedKillBase = ReadWriteInteger("Setup", "MonUpLvNeedKillBase", SystemShare.Config.MonUpLvNeedKillBase);
+120:            SystemShare.Config.MonUpLvRate = ReadWriteInteger("Setup", "MonUpLvRate", SystemShare.Config.MonUpLvRate);
+121:            for (int i = 0; i < SystemShare.Config.MonUpLvNeedKillCount.Length; i++)
+123:                SystemShare.Config.MonUpLvNeedKillCount[i] = ReadWriteInteger("Setup", "MonUpLvNeedKillCount" + i, SystemShare.Config.MonUpLvNeedKillCount[i]);
+125:            for (int i = 0; i < SystemShare.Config.SlaveColor.Length; i++)
+127:                SystemShare.Config.SlaveColor[i] = ReadWriteByte("Setup", "SlaveColor" + i, SystemShare.Config.SlaveColor[i]);
+292:            SystemShare.Config.SkeletonCount = ReadWriteInteger("Setup", "SkeletonCount", SystemShare.Config.SkeletonCount);
+293:            for (int i = 0; i < SystemShare.Config.SkeletonArray.Length; i++)
+295:                SystemShare.Config.SkeletonArray[i].nHumLevel = ReadWriteInteger("Setup", "SkeletonHumLevel" + i, SystemShare.Config.SkeletonArray[i].nHumLevel);
+296:                SystemShare.Config.SkeletonArray[i].sMonName = ReadWriteString("Names", "Skeleton" + i, SystemShare.Config.SkeletonArray[i].sMonName);
+297:                SystemShare.Config.SkeletonArray[i].nCount = ReadWriteInteger("Setup", "SkeletonCount" + i, SystemShare.Config.SkeletonArray[i].nCount);
+298:                SystemShare.Config.SkeletonArray[i].nLevel = ReadWriteInteger("Setup", "SkeletonLevel" + i, SystemShare.Config.SkeletonArray[i].nLevel);
+300:            SystemShare.Config.DragonCount = ReadWriteInteger("Setup", "DragonCount", SystemShare.Config.DragonCount);
+301:            for (int i = 0; i < SystemShare.Config.DragonArray.Length; i++)
+303:                SystemShare.Config.DragonArray[i].nHumLevel = ReadWriteInteger("Setup", "DragonHumLevel" + i, SystemShare.Config.DragonArray[i].nHumLevel);
+304:                SystemShare.Config.DragonArray[i].sMonName = ReadWriteString("Names", "Dragon" + i, SystemShare.Config.DragonArray[i].sMonName);
+305:                SystemShare.Config.DragonArray[i].nCount = ReadWriteInteger("Setup", "DragonCount" + i, SystemShare.Config.DragonArray[i].nCount);
+306:                SystemShare.Config.DragonArray[i].nLevel = ReadWriteInteger("Setup", "DragonLevel" + i, SystemShare.Config.DragonArray[i].nLevel);
+515:            SystemShare.Config.SpiritMutiny = ReadWriteBool("Setup", "SpiritMutiny", SystemShare.Config.SpiritMutiny);
+516:            SystemShare.Config.SpiritMutinyTime = ReadWriteInteger("Setup", "SpiritMutinyTime", SystemShare.Config.SpiritMutinyTime);
+518:            SystemShare.Config.MasterDieMutiny = ReadWriteBool("Setup", "MasterDieMutiny", SystemShare.Config.MasterDieMutiny);
+519:            SystemShare.Config.MasterDieMutinyRate = ReadWriteInteger("Setup", "MasterDieMutinyRate", SystemShare.Config.MasterDieMutinyRate);
+520:            SystemShare.Config.MasterDieMutinyPower = ReadWriteInteger("Setup", "MasterDieMutinyPower", SystemShare.Config.MasterDieMutinyPower);
+521:            SystemShare.Config.MasterDieMutinySpeed = ReadWriteInteger("Setup", "MasterDieMutinyPower", SystemShare.Config.MasterDieMutinySpeed);
+522:            SystemShare.Config.BBMonAutoChangeColor = ReadWriteBool("Setup", "BBMonAutoChangeColor", SystemShare.Config.BBMonAutoChangeColor);
+523:            SystemShare.Config.BBMonAutoChangeColorTime = ReadWriteInteger("Setup", "BBMonAutoChangeColorTime", SystemShare.Config.BBMonAutoChangeColorTime);
+531:            SystemShare.Config.MagTammingLevel = ReadWriteInteger("Setup", "MagTammingLevel", SystemShare.Config.MagTammingLevel);
+532:            SystemShare.Config.MagTammingTargetLevel = ReadWriteInteger("Setup", "MagTammingTargetLevel", SystemShare.Config.MagTammingTargetLevel);
+533:            SystemShare.Config.MagTammingHPRate = ReadWriteInteger("Setup", "MagTammingTargetHPRate", SystemShare.Config.MagTammingHPRate);
+534:            SystemShare.Config.MagTammingCount = ReadWriteByte("Setup", "MagTammingCount", SystemShare.Config.MagTammingCount);
+
+============================================================
+[B] 声明/初值 GameSvrConf.cs
+============================================================
+178:        public int MonUpLvNeedKillBase;
+182:        public int MonUpLvRate;
+183:        public int[] MonUpLvNeedKillCount;
+184:        public byte[] SlaveColor;
+837:        public bool SpiritMutiny;
+841:        public int SpiritMutinyTime;
+849:        public bool MasterDieMutiny;
+853:        public int MasterDieMutinyRate;
+857:        public int MasterDieMutinyPower;
+861:        public int MasterDieMutinySpeed;
+862:        public bool BBMonAutoChangeColor;
+863:        public int BBMonAutoChangeColorTime;
+879:        public string Skeleton;
+880:        public int SkeletonCount;
+881:        public RecallMigic[] SkeletonArray;
+882:        public string Dragon;
+883:        public string Dragon1;
+884:        public int DragonCount;
+885:        public RecallMigic[] DragonArray;
+886:        public string Angel;
+916:        public int MagTammingLevel;
+920:        public int MagTammingTargetLevel;
+924:        public int MagTammingHPRate;
+928:        public byte MagTammingCount;
+--- 构造函数初值（节选） ---
+            SpellFillTime = 800;
+            MonUpLvNeedKillBase = 100;
+            MonUpLvRate = 16;
+            MonUpLvNeedKillCount = new[] { 0, 0, 50, 100, 200, 300, 600, 1200, 2400, 4800, 9600, 19200, 38400, 76800, 153600 };
+            SlaveColor = new byte[] { 0xFF, 0xFE, 0x93, 0x9A, 0xE5, 0xA8, 0xB4, 0xFC, 249, 250, 250, 250, 250, 250, 250 };
+            NeedExps = new int[Grobal2.MaxChangeLevel];
+            InFreePKAreaNameColor = 0xDD;
+            SpiritMutiny = false;
+            SpiritMutinyTime = 30 * 60 * 1000;
+            SpiritPowerRate = 2;
+            MasterDieMutiny = false;
+            MasterDieMutinyRate = 5;
+            MasterDieMutinyPower = 10;
+            MasterDieMutinySpeed = 5;
+            BBMonAutoChangeColor = false;
+            BBMonAutoChangeColorTime = 3000;
+            boOldClientShowHiLevel = true;
+            DropItemRage = 3; //爆物范围
+            Skeleton = "变异骷髅";
+            SkeletonCount = 1;
+            SkeletonArray = new RecallMigic[10];
+            Dragon = "神兽";
+            Dragon1 = "神兽1";
+            DragonCount = 1;
+            DragonArray = new RecallMigic[10];
+            Angel = "精灵";
+            AmyOunsulPoint = 10;
+            MagTurnUndeadLevel = 50; //圣言怪物等级限制
+            MagTammingLevel = 50; //诱惑之光怪物等级限制
+            MagTammingTargetLevel = 10; //诱惑怪物相差等级机率，此数字越小机率越大；
+            MagTammingHPRate = 100; //成功机率=怪物最高HP 除以 此倍率，此倍率越大诱惑机率越高
+            MagTammingCount = 5;
+            MabMabeHitRandRate = 100;
+
+============================================================
+[C] ini 语义 ConfigFile.cs
+============================================================
+45:        protected byte ReadWriteByte(string section, string key, byte defValue)
+55:        public int ReadWriteInteger(string section, string key, int defValue)
+85:        public bool ReadWriteBool(string section, string key, bool defValue)
+105:        public string ReadWriteString(string section, string key, string defValue)
+111:            WriteString(section, key, defValue);
+133:                    return (T)Convert.ChangeType(defValue, typeof(T));
+135:                return (T)Convert.ChangeType(str, typeof(T));
+137:            return (T)Convert.ChangeType(defValue, typeof(T));
+263:            StreamReader rd = new StreamReader(File.Open(FileName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite), Encoding.GetEncoding("GB2312"));
+364:            StreamWriter sw = new StreamWriter(File.Open(FileName, FileMode.Truncate, FileAccess.Write, FileShare.ReadWrite), Encoding.GetEncoding("GB2312"));
+403:            WriteString(section, key, val.ToString());
+462:        protected void WriteString(string section, string key, object str)
+
+============================================================
+[D] 常量与类型
+============================================================
+23:        public const byte SlaveMaxLevel = 50;
+22:        private const int DwRoyaltySec = 10 * 24 * 60 * 60;
+1296:                if (playObject.MakeSlave(sMonName, userMagic.Level, nExpLevel, nCount, DwRoyaltySec) != null)
+1329:                if (playObject.MakeSlave(sMonName, userMagic.Level, nExpLevel, nCount, DwRoyaltySec) != null)
+1348:                if (playObject.MakeSlave(SystemShare.Config.Angel, userMagic.Level, userMagic.Level, 1, DwRoyaltySec) != null)
+3:    public struct RecallMigic
+5:        public int nHumLevel;
+7:        public int nCount;
+8:        public int nLevel;
+
+============================================================
+[E] 死代码登记（GainSlaveExp 全仓无调用点）
+============================================================
+src/M2Server/Monster/MonsterObject.cs:71:        private void GainSlaveExp(byte nLevel)

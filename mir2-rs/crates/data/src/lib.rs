@@ -13,6 +13,7 @@ pub mod guild_castle;
 pub mod loaders;
 pub mod models;
 pub mod monitems;
+pub mod pet_slave;
 
 pub use loaders::DataLoaders;
 pub use models::*;
