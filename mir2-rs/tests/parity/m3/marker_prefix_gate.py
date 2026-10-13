@@ -55,6 +55,9 @@ COMPARATORS = [
     ("M3QUESTSEQ", "quest_diff.py"),
     ("M3PAIRTRADESEQ", "party_trade_diff.py"),
     ("M3SELLOFFSEQ", "selloff_diff.py"),
+    # ⑧/⑨ 夹具已合入（guild_castle / hero_pet），按同族口径纳入本门。
+    ("M3GUILDCSEQ", "guild_castle_diff.py"),
+    ("M3HEROPETSEQ", "hero_pet_diff.py"),
 ]
 
 # 运行时牙用的事件流：取自 `npc_shop_diff.py` selftest 的合法 2-op 流（与基准记录同形）。
@@ -275,9 +278,9 @@ def cmd_check(args):
             sys.stdout.write("  - %s\n" % f)
         return 1
     sys.stdout.write(
-        "GREEN: markers 前缀口径一致（run_pair 无去前缀截断 + 4 生产牙 + 4 比较器按前缀扫描；"
+        "GREEN: markers 前缀口径一致（run_pair 无去前缀截断 + %d 生产牙 + %d 比较器按前缀扫描；"
         "teeth bare=%d prefixed=%d empty=%d）\n"
-        % (info["bare_rc"], info["prefixed_rc"], info["empty_rc"]))
+        % (len(COMPARATORS), len(COMPARATORS), info["bare_rc"], info["prefixed_rc"], info["empty_rc"]))
     return 0
 
 
