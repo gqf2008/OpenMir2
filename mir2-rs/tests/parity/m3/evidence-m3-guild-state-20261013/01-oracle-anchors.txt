@@ -1,0 +1,62 @@
+M3⑧-实现 4 第①片（openmir2-m3-guild-state，crates/world/src/guild.rs）oracle 锚
+（行号 = 本仓库 `src/` 实测；与盘点 `M3⑧公会攻城现状盘点报告-20261013.md` §1.A/§1.B/§1.C/§1.L 对齐）
+
+[GuildInfo.cs]
+  129  public bool DelAllyGuild(IGuild guild)        —— RemoveAt + SaveGuildInfoFile
+  146  public bool IsAllyGuild(IGuild guild)
+  161  public bool IsMember(string sName)            —— 逐 rank 逐 member，MemberName == sName（大小写敏感）
+  181  public bool IsWarGuild(IGuild guild)
+  350  public void RefMemberName()
+  366  public void SaveGuildInfoFile()
+  431  public void SendGuildMsg(string sMsg)
+  463  public bool SetGuildInfo(string sChief)       —— RankList.Count==0 ⇒ rank 1 掌门 + 唯一成员
+  485  public string GetRankName(IPlayerActor, ref short) —— OrdinalIgnoreCase 首个命中；回 RM_CHANGEGUILDNAME
+  511  public string GetChiefName()                  —— RankList[0].MemberList[0]
+  525  public void CheckSaveGuildFile()              —— BoChanged && (GetTickCount()-DwSaveTick) > 30*1000
+  534  public void DelHumanObj(IPlayerActor)         —— string.Compare(...)==1（附：非 !=0）
+  584  public void UpdateGuildFile()                 —— BoChanged=true; DwSaveTick=now; SaveGuildInfoFile
+  591  public void BackupGuildFile()                 —— 清 members/RankList/Notice/GuildWarList/GuildAllList
+  623  public void AddMember(IPlayerActor)           —— 找/建 RankNo==99（GuildMemberRank）
+  653  public bool DelMember(string sHumName)        —— 首个 == 命中移除
+  680  public bool CancelGuld(string sHumName)       —— 单 rank 单成员 + OrdinalIgnoreCase ⇒ BackupGuildFile
+  708  public int UpdateRank(string sRankData)       —— 返回 -1..-7；成功路径 RankList=空表（N3）
+  995  public bool IsNotWarGuild(IGuild guild)
+  1007 public void AllyGuild(IGuild guild)           —— GuildAllList.Add 被注释（联盟恒空）
+  1020 public WarGuild AddWarGuild(IGuild guild)     —— N2：if (warGuild.WarTime > 0) 条件反置
+  1058 public void EndGuildWar(IGuild guild)         —— SendGuildMsg("***X行会战争结束")
+  1063 private int GetMemberCount()                  —— RankList.Sum(MemberList.Count)
+  1068 private bool GetMemgerIsFull()                —— Count >= GuildMemberMaxLimit
+  274  LoadGuildFile 的 case 2：guildWar.WarTick = GetTickCount()（加载置本刻）
+  970  UpdateRank：//RankList = guildRankList; 被注释，实际 RankList = rankListTmp（空表）
+  1016 AllyGuild：//GuildAllList.Add(guild); 被注释
+
+[GuildManager.cs]
+  19   public bool AddGuild(string,string)            —— CheckGuildName && FindGuild==null
+  34   public bool DelGuild(string)                   —— OrdinalIgnoreCase；RankList.Count>1 ⇒ break
+  66   public IGuild FindGuild(string)                —— GuildName == sGuildName（大小写敏感）
+  74   public void LoadGuildInfo()
+  112  public IGuild MemberOfGuild(string)
+  124  private void SaveGuildList()                   —— ServerIndex!=0 ⇒ return
+  145  public void Run()                              —— 倒序扫 GuildWarList；(GetTickCount()-WarTick)>WarTime ⇒ EndGuildWar+RemoveAt
+
+[M2Share.cs]
+  529  public static bool CheckGuildName(string)      —— N4：for (i=0; i<Length-1; i++)（漏比末字符）
+
+[PlayObject.Operate.cs]（本片只取纯文本构造；派发/帧归第②片）
+  1229 ClientOpenGuildDlg()          —— 面板文本（<Notice>/<KillGuilds>/<AllyGuilds>）
+  1283 ClientGuildMemberList()       —— #RankNo/*RankName/ + 成员/ + >5000 截断
+  1307 ClientGuildAddMember           —— 仅掌门；GetPoseCreate()==this；AllowGuild；RankList.Count<400；失败码 1..5
+  1369 ClientGuildDelMember           —— 掌门；自删 ⇒ CancelGuld + GuildMgr.DelGuild + SS_206
+  1426 ClientGuildUpdateNotice        —— 仅 rank1；NoticeList 清空重填
+  1444 ClientGuildUpdateRankInfo      —— nC==0 ⇒ SS_207 + ClientGuildMemberList；nC<=-2 ⇒ SM_GUILDRANKUPDATE_FAIL
+  1465 ClientGuildAlly                —— 需双方 EnableAuthAlly + 双方掌门 + 互不为战中
+  1525 ClientGuildBreakAlly(string)
+
+[PlayObject.Message.cs]
+  975-1007  9 个 CM_GUILD* 收包派发（本片不含）
+
+[ServerConf.cs / GameSvrConf.cs]（O-1 三键）
+  335  ServerConf.cs   GuildMsgFColor = ReadWriteByte("Setup","GuildMsgFColor", …)   （初值 GameSvrConf.cs:1542 = 0xDB）
+  336  ServerConf.cs   GuildMsgBColor = ReadWriteByte("Setup","GuildMsgBColor", …)   （初值 GameSvrConf.cs:1543 = 0xFF）
+  479  ServerConf.cs   GuildRecallTime = ReadWriteInteger("Setup","GuildRecallTime",…)（初值 GameSvrConf.cs:1701 = 180）
+  498  ServerConf.cs   GuildRankNameLen = ReadWriteByte("Setup","GuildRankNameLen",…)（初值 GameSvrConf.cs:1720 = 16）

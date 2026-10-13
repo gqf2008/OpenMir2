@@ -1,0 +1,30 @@
+M3⑨-2 第③片（20 诱惑）判据（全离线；零起栈/零端口）
+================================================================================
+
+新增判据（4 条，见 gates/14-slave-tests.txt、gates/15-world-animal-tests.txt）：
+
+1. `game_svr::slave::tests::tamming_animal_gate_blocks_and_consumes_no_draw`
+   —— **`!Animal` 门**（`MagicManager.cs:395`）：目标 race 51（AnimalChicken）⇒ oracle 连
+   `MagTamming` 都不进 ⇒ `tamed=false`、`boTrain=false`（不练级）、尾仍发 `RM_MAGICFIRE`；
+   并把世界流的下一次抽取与同种子独立流比对 ⇒ **零取数**（门的位置决定 RNG 账本）。
+
+2. `game_svr::slave::tests::tamming_adopts_slave_and_clears_target_creature`
+   —— **受奴落尾**：race 80 怪 + 主人 Lv40，遍历固定种子 0..5000 取首个 `tamed=true` 样本，
+   断言 `Master = 施法者`、`SlaveList` 含目标、`SlaveMakeLevel = magicLevel`、
+   `MasterRoyaltyTick >= (20*60*1000) + now`（公式下界）、调用前无主 ⇒ HP 不变、
+   `AnimalState.target_creature == None`（`TargetCret=null`，`:709`）。
+
+3. `game_svr::slave::tests::tamming_does_not_re_adopt_existing_slave`
+   —— **不重复受奴**：调用前 `Master == 施法者` 的样本走 `RM_MAKEHOLYSEIZEMODE` 早退支
+   （`:710-715`）：`tamed=false`、HP 不 `/10`、`SlaveList` 不重复入表。
+
+4. `mir2_world::combat::tests::animal_races_match_oracle_constructors`
+   —— **`Animal` race 集合**：51/52/53/82/84/85/90 为真；80/81/83/100/101/10/50/0/54 为假
+   （54 = `ReAliveEx` 复活支，登记不计入）。
+
+既有回归（第②片 + 合并 master 带入的 ⑨-3/⑦-4）：`cargo test --workspace --no-fail-fast`
+= **98 suites · 1024 passed · 0 failed · 21 ignored**（gates/13-workspace-test.txt）。
+`magic_effect_vectors`（`mag_tamming` 逐 case 取数账本对拍）继续 GREEN —— 本片未改
+`magic.rs` 的纯函数。
+
+判据分母：slave 模块 7 passed（原 4 + 新 3）；world combat 1 passed。

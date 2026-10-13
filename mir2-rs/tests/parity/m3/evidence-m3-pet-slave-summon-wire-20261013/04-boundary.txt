@@ -1,0 +1,19 @@
+# 边界（git diff 对 base refs/heads/master = 6f0bca48ee0f759dc66d17b352188ed2410c3523）
+
+$ git diff --name-only 6f0bca48e HEAD -- src sql MirClient
+(空)
+$ git diff --name-only 6f0bca48e HEAD -- mir2-rs/crates/protocol mir2-rs/crates/storage
+(空)
+
+# 本片净改动（只在卡写集内：crates/world + bins/game-svr + tests/parity/m3 证据）
+$ git diff --name-status 6f0bca48e HEAD -- mir2-rs/crates/world/src/magic.rs mir2-rs/crates/world/tests/magic_effect_vectors.rs mir2-rs/bins/game-svr/src
+M	mir2-rs/bins/game-svr/src/config.rs
+M	mir2-rs/bins/game-svr/src/lib.rs
+A	mir2-rs/bins/game-svr/src/magics.rs
+M	mir2-rs/bins/game-svr/src/main.rs
+M	mir2-rs/bins/game-svr/src/slave.rs
+M	mir2-rs/bins/game-svr/src/smframe.rs
+M	mir2-rs/crates/world/src/magic.rs
+M	mir2-rs/crates/world/tests/magic_effect_vectors.rs
+
+结论：oracle（src/）、表结构（sql/）、客户端（MirClient）零改动；protocol/storage 空。

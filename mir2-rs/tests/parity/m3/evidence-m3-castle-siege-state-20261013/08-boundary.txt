@@ -1,0 +1,31 @@
+# M3⑧-实现 7 边界（base = origin/master d5be14f40）
+# 未提交时的工作树口径：修改/新增文件清单
+$ git status --porcelain
+ M mir2-rs/crates/world/src/lib.rs
+?? mir2-rs/crates/world/src/castle.rs
+?? mir2-rs/tests/parity/m3/evidence-m3-castle-siege-state-20261013/
+
+# 冻结面（应空）：src/ sql/ MirClient crates/protocol crates/storage bins/
+$ git status --porcelain -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins
+(空 = 零改动)
+
+# 相对 base 的 .rs 改动（含新增）
+$ git status --porcelain -- '*.rs'
+ M mir2-rs/crates/world/src/lib.rs
+?? mir2-rs/crates/world/src/castle.rs
+
+# 提交后（相对 base 的完整差量文件清单；路径集合与工作树口径一致）
+$ git diff --name-only d5be14f40 HEAD
+mir2-rs/crates/world/src/castle.rs
+mir2-rs/crates/world/src/lib.rs
+mir2-rs/tests/parity/m3/evidence-m3-castle-siege-state-20261013/00-oracle-anchor-lines.txt
+mir2-rs/tests/parity/m3/evidence-m3-castle-siege-state-20261013/01-rust-vectors.txt
+mir2-rs/tests/parity/m3/evidence-m3-castle-siege-state-20261013/02-mutation-1-n1-takes-effect-RED.txt
+mir2-rs/tests/parity/m3/evidence-m3-castle-siege-state-20261013/03-mutation-2-left-wall-stone-mode-RED.txt
+mir2-rs/tests/parity/m3/evidence-m3-castle-siege-state-20261013/04-gate-fmt.txt
+mir2-rs/tests/parity/m3/evidence-m3-castle-siege-state-20261013/05-gate-clippy.txt
+mir2-rs/tests/parity/m3/evidence-m3-castle-siege-state-20261013/06-gate-test.txt
+mir2-rs/tests/parity/m3/evidence-m3-castle-siege-state-20261013/07-gate-msgcodegen.txt
+mir2-rs/tests/parity/m3/evidence-m3-castle-siege-state-20261013/08-boundary.txt
+mir2-rs/tests/parity/m3/evidence-m3-castle-siege-state-20261013/README.md
+mir2-rs/tests/parity/m3/evidence-m3-castle-siege-state-20261013/SHA256SUMS.txt

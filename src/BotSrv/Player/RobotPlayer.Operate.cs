@@ -255,6 +255,8 @@ namespace BotSrv.Player
             }
             // M3⑧ 行会/攻城夹具单一收包钩子（T-46 家族扩展）：`g_boGuildCastleSequence` 关时是空操作。
             GuildCastleOnServerMessage(msg.Ident, msg.Recog, msg.Param, msg.Tag, msg.Series, body);
+            // M3⑨ 英雄/宠物夹具单一收包钩子（T-45 家族扩展）：`g_boHeroPetSequence` 关时是空操作。
+            HeroPetOnServerMessage(msg.Ident, msg.Recog, msg.Param, msg.Tag, msg.Series, body);
             // M3⑥ 任务夹具单一收包钩子（T-41 家族扩展）：`g_boQuestSequence` 关时是空操作；
             // 开且本步待收尾时只读地记 `SM_MERCHANTSAY(643)` / `SM_MENU_OK(767)` / `SM_DLGMSG(772)`。
             QuestOnServerMessage(msg.Ident, msg.Recog, msg.Param, msg.Tag, msg.Series, body);

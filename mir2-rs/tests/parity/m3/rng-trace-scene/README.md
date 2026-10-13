@@ -80,6 +80,11 @@
 退出码：`0` = GREEN（同场景，`groupdiff` 次序结论可采信）；`1` = RED（场景漂移**或 scenario 声明与代码真源漂移**，点名哪一项）；
 `2` = PREREQ（缺件 / 坏 JSON，fail-closed）。
 
+**DoD① 的判定入口 = `-SceneGroupDiff`（本片收口）**：它把「场景门 → 组账本比较」串成**一条命令**，
+门非 GREEN ⇒ **拒比**（不跑 `groupdiff`、绝不输出 `RNG_CONSUMER_GROUPDIFF` 结论，也不把它当绿），
+门 GREEN 才跑 `groupdiff --fold --strict` 并原样传播其 rc/文本。`-GateOnly` / `-GroupDiffOnly` 语义不变，
+其中 `-GroupDiffOnly` 是**跨场景对照用的裸比较**口径，**不构成 DoD① 判据**（不得单独用它下"实现等价"结论）。
+
 ---
 
 ## 3. R-6 folded 映射：`groupdiff --fold --strict`
@@ -142,7 +147,7 @@ groupdiff … --fold --strict     → VERDICT …+FOLDED_COUNT_DIFF（spawn 折�
 ```
 ① 起 C# 栈 → 本卡 csharp 相（含 <csharp>-scene.json + rng-stream.tsv）
 ② 起 Rust 栈 → 本卡 rust 相（-PeerSession <csharp 会话>）
-③ rng_scene_gate.py gate（同场景前置门）→ groupdiff --fold --strict（本卡判据）
+③ run_rng_trace_pair.ps1 -SceneGroupDiff（**DoD① 单一入口**：场景门非 GREEN ⇒ 拒比；GREEN 才跑 groupdiff --fold --strict）
 ④ start_rust_stack -Stop → 同一路 ④ 100 杀（drop_exp_raw.jsonl + 纯度门）
 ⑤ 收工：写「窗口已释放」+ 十端口实拍
 ```
@@ -159,11 +164,19 @@ powershell -ExecutionPolicy Bypass -File run_rng_trace_pair.ps1 -SelfCheckNoStac
 powershell -ExecutionPolicy Bypass -File run_rng_trace_pair.ps1 -SelfCheckNoStack -SelfCheckOut <path.txt>
 ```
 
-自检覆盖（17 项；全离线）：scenario 固定输入、MonGen 冻结件零行、场景门 selftest（16/16）、
+自检覆盖（23 项；全离线）：scenario 固定输入、MonGen 冻结件零行、场景门 selftest（16/16）、
 场景门进程内正/负样本（同场景绿 / 怪集合漂移红）、账本 selftest（含 R-6 folded）、
 folded 等价绿 / 折叠计数不等红 / 折叠次序不等红、缺件 PREREQ、LF 写出、
 `scenario-fold-group-consistency-green`（已入库 scenario 与代码同口径）、
-`scenario-fold-drift-red` / `scenario-groups-unknown-red`（改坏必红）、零端口。
+`scenario-fold-drift-red` / `scenario-groups-unknown-red`（改坏必红）、
+`scenario-drift-samples-json-native`（三条 drift 样本由 JSON 字段改写构造、与源不同，
+不再对原始文本做正则替换 —— M-1 sibling 收口；base 值牙内自解析，无跨块 `$sc` 依赖 —— O-1）、
+`scenario-drift-tooth-not-vacuous`（空转样本 ⇒ 同一 fold 谓词为 false，证明上一条牙非恒真）、
+**DoD① 单一入口 `-SceneGroupDiff` 四项**：
+`scene-groupdiff-identical-green`（同场景 + 等价账本 ⇒ 门绿 + `VERDICT IDENTICAL` rc=0）、
+`scene-groupdiff-scene-drift-refused`（改坏必红：怪集合漂移 ⇒ rc=1 **且拒比**，文本里无任何 `RNG_CONSUMER_GROUPDIFF` 结论行）、
+`scene-groupdiff-missing-prereq-refused`（缺场景件 ⇒ rc=2 同样拒比）、
+`scene-groupdiff-diff-red-propagates`（反向对照：门绿而账本确有不一致 ⇒ groupdiff 的 rc=1 与结论行必须**传播**，防「恒拒比」假绿）、零端口。
 real-run 分支在 `-Go` 未给时 **fail-closed exit 2**（不静默起栈）。
 
 ## 6. 命令（可复算）
@@ -182,8 +195,13 @@ python -I rng-trace-scene/rng_scene_gate.py scenario --scenario rng-trace-scene/
 powershell -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 -GateOnly \
   -AScene <csharp-scene.json> -BScene <rust-scene.json>
 
-# 组账本 diff（R-6 折叠）
+# 组账本 diff（R-6 折叠）—— **裸比较口径**，不构成 DoD① 判据
 powershell -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 -GroupDiffOnly \
+  -AStream <csharp-rng-stream.tsv> -BStream <rust-rng-stream.tsv>
+
+# DoD① 单一入口（本片收口；推荐）：**先**场景门，非 GREEN ⇒ 拒比；GREEN 才跑 groupdiff --fold --strict
+powershell -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 -SceneGroupDiff \
+  -AScene <csharp-scene.json> -BScene <rust-scene.json> \
   -AStream <csharp-rng-stream.tsv> -BStream <rust-rng-stream.tsv>
 ```
 

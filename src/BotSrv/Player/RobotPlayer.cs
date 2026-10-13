@@ -2084,6 +2084,241 @@ namespace BotSrv.Player
         #endregion
 
 
+        #region M3⑨ 英雄/宠物（宝宝/下属 slave）动作序列夹具（默认关；白名单 T-45 家族扩展）
+
+        // 口径（卡 openmir2-m3-hero-pet-fixture-botsrv）：收到本假人 SM_LOGON 后，按 `g_sHeroPetSteps` 的固定
+        // 顺序发召唤（CM_SPELL 17/20/30/41/46）/挥击（CM_HIT），逐步落 `M3HEROPETSEQ {json}` 的
+        // arm/send/frame/end/done 事件（供 `hero_pet_diff.py assemble` 合并成记录）。
+        // 只读本假人自己的视图（`MShare.MySelf.SlaveObject` / `PlayScene.ActorList` / `MShare.ItemArr`）、
+        // 只写本假人自己的 socket（同 T-22/T-29/T-44 纪律）；默认关时本 region 全部空转、不新增任何发送与日志。
+
+        private string[] _hpSeqSteps;
+        private int _hpSeqStep = -1;
+        private int _hpSeqNextTick;
+        private int _hpSeqPendingK = -1;
+        private readonly List<string> _hpSeqFrames = new List<string>();
+        private string _hpSeqOp = string.Empty;
+        private string _hpSeqRole = string.Empty;
+        private string _hpSeqParam = string.Empty;
+        private bool _hpSeqRan;
+
+        /// <summary>收到本假人 SM_LOGON 后武装固定英雄/宠物序列（`g_boHeroPetSequence` 关闭时是空操作）。</summary>
+        private void ArmHeroPetSequence()
+        {
+            if (!MShare.g_boHeroPetSequence)
+            {
+                return;
+            }
+            _hpSeqSteps = MShare.ParseHeroPetSteps(MShare.g_sHeroPetSteps);
+            _hpSeqStep = 0;
+            _hpSeqPendingK = -1;
+            _hpSeqFrames.Clear();
+            _hpSeqNextTick = MShare.GetTickCount() + MShare.g_nHeroPetStartDelayMs;
+            MainOutMessage("M3HEROPETSEQ {\"phase\":\"arm\",\"bot\":\"" + ShopEsc(LoginId)
+                + "\",\"role\":\"" + (MShare.IsHeroPetMaster(LoginId, MShare.g_sHeroPetMasterLoginId) ? "a" : "b")
+                + "\",\"steps\":" + ShopJsonArray(_hpSeqSteps)
+                + ",\"step_ms\":" + MShare.g_nHeroPetStepMs + "}");
+        }
+
+        /// <summary>M3⑨ 固定英雄/宠物序列（步进式）：每 `g_nHeroPetStepMs` 处理一步；上一步先收尾
+        /// （`phase=end`，聚合本步收到的帧 + 宝宝列表/主人经验/等级/金币/背包前后态 + branch），再发下一步；
+        /// 全部发完发 `phase=done`。**两个**假人（主人/peer）都跑同一串步骤；角色不符的步只记 `ran=false`
+        /// + `skip_other_role`（k 仍前进）。默认关时空转。</summary>
+        private void HeroPetSequenceTick()
+        {
+            if (!MShare.g_boHeroPetSequence || _hpSeqSteps == null || _hpSeqStep < 0)
+            {
+                return;
+            }
+            if (!_inWorld || ClientSocket == null || !ClientSocket.IsConnected)
+            {
+                return;
+            }
+            int now = MShare.GetTickCount();
+            if (now < _hpSeqNextTick)
+            {
+                return;
+            }
+            if (_hpSeqPendingK >= 0)
+            {
+                EmitHeroPetEnd(_hpSeqPendingK);
+                _hpSeqPendingK = -1;
+            }
+            if (_hpSeqStep >= _hpSeqSteps.Length)
+            {
+                _hpSeqStep = -1;
+                MainOutMessage("M3HEROPETSEQ {\"phase\":\"done\",\"bot\":\"" + ShopEsc(LoginId)
+                    + "\",\"steps\":" + _hpSeqSteps.Length + "}");
+                return;
+            }
+            int k = _hpSeqStep;
+            string step = _hpSeqSteps[k];
+            _hpSeqStep++;
+            _hpSeqFrames.Clear();
+            _hpSeqOp = MShare.HeroPetStepOp(step);
+            _hpSeqRole = MShare.HeroPetStepRole(step);
+            _hpSeqParam = MShare.HeroPetStepParam(step);
+            bool isMaster = MShare.IsHeroPetMaster(LoginId, MShare.g_sHeroPetMasterLoginId);
+            _hpSeqRan = MShare.HeroPetRunsForRole(_hpSeqRole, isMaster);
+            EmitHeroPetSend(k);
+            SendHeroPetStep();
+            _hpSeqPendingK = k;
+            int waitMs = MShare.g_nHeroPetStepMs;
+            if (_hpSeqOp == "wait" && int.TryParse(_hpSeqParam, out int w) && w > waitMs)
+            {
+                waitMs = w;
+            }
+            _hpSeqNextTick = now + waitMs;
+        }
+
+        private void EmitHeroPetSend(int k)
+        {
+            MainOutMessage("M3HEROPETSEQ {\"phase\":\"send\",\"bot\":\"" + ShopEsc(LoginId)
+                + "\",\"k\":" + k
+                + ",\"role\":\"" + ShopEsc(_hpSeqRole)
+                + "\",\"op\":\"" + ShopEsc(_hpSeqOp)
+                + "\",\"ran\":" + (_hpSeqRan ? "true" : "false")
+                + ",\"param\":\"" + ShopEsc(_hpSeqParam) + "\""
+                + ",\"map\":\"" + ShopEsc(MShare.MapTitle) + "\""
+                + ",\"slaves_before\":" + HeroPetSlavesJson()
+                + ",\"slave_count_before\":" + HeroPetSlaveCount()
+                + ",\"exp_before\":" + HeroPetExp()
+                + ",\"level_before\":" + HeroPetLevel()
+                + ",\"gold_before\":" + ShopGold()
+                + ",\"bag_before\":" + ShopBagJson() + "}");
+        }
+
+        private void EmitHeroPetEnd(int k)
+        {
+            string branch = _hpSeqRan ? MShare.ClassifyHeroPetFrames(_hpSeqFrames) : "skip_other_role";
+            // observe/wait 本来就不发 CM_*、也不期待帧 ⇒ 收尾固定 ok（否则空帧列表会被误判 fail_no_frame）。
+            if (_hpSeqRan && (_hpSeqOp == "observe" || _hpSeqOp == "wait"))
+            {
+                branch = "ok";
+            }
+            MainOutMessage("M3HEROPETSEQ {\"phase\":\"end\",\"bot\":\"" + ShopEsc(LoginId)
+                + "\",\"k\":" + k
+                + ",\"slaves_after\":" + HeroPetSlavesJson()
+                + ",\"slave_count_after\":" + HeroPetSlaveCount()
+                + ",\"exp_after\":" + HeroPetExp()
+                + ",\"level_after\":" + HeroPetLevel()
+                + ",\"gold_after\":" + ShopGold()
+                + ",\"bag_after\":" + ShopBagJson()
+                + ",\"branch\":\"" + branch + "\"}");
+        }
+
+        /// <summary>发本步的 CM_*（角色不符 ⇒ 不发；op 参数非法 ⇒ 只记 skip）。</summary>
+        private void SendHeroPetStep()
+        {
+            if (!_hpSeqRan)
+            {
+                return;
+            }
+            switch (_hpSeqOp)
+            {
+                case "summon":
+                    {
+                        if (!int.TryParse(_hpSeqParam, out int skill))
+                        {
+                            MainOutMessage("M3HEROPETSEQ skip=bad_skill step=" + ShopEsc(_hpSeqParam));
+                            break;
+                        }
+                        SendSpellMsg(Messages.CM_SPELL, MShare.MySelf.m_btDir, 0, skill, 0);
+                    }
+                    break;
+                case "attack":
+                    {
+                        int dir = 2;
+                        int.TryParse(_hpSeqParam, out dir);
+                        CommandMessage msg = Messages.MakeMessage(Messages.CM_HIT,
+                            HUtil32.MakeLong((short)MShare.MySelf.CurrX, (short)MShare.MySelf.CurrY), 0, dir, 0);
+                        SendSocket(EDCode.EncodeMessage(msg));
+                    }
+                    break;
+                case "observe":
+                case "wait":
+                    break;
+                case "softclose":
+                    SendClientMessage(Messages.CM_SOFTCLOSE, 0, 0, 0, 0);
+                    break;
+                default:
+                    MainOutMessage("M3HEROPETSEQ skip=op_not_implemented step=" + ShopEsc(_hpSeqOp));
+                    break;
+            }
+        }
+
+        /// <summary>本假人宝宝列表多重集（稳定键串 `名字#NameColor`；排序保证 JSON 稳定）。
+        /// 来源 = 服务端 `RM_USERNAME` 的 `(主人名)` 经 `RobotPlayer.Operate` 收进 `MShare.MySelf.SlaveObject`。</summary>
+        private string HeroPetSlavesJson()
+        {
+            var parts = new List<string>();
+            IList<Actor> slaves = MShare.MySelf != null ? MShare.MySelf.SlaveObject : null;
+            if (slaves != null)
+            {
+                foreach (Actor a in slaves)
+                {
+                    if (a == null)
+                    {
+                        continue;
+                    }
+                    parts.Add("\"" + ShopEsc(a.UserName) + "#" + a.NameColor + "\"");
+                }
+            }
+            parts.Sort(StringComparer.Ordinal);
+            return "[" + string.Join(",", parts) + "]";
+        }
+
+        /// <summary>本假人 `SlaveList.Count` 的客户端近似（= 观测到的宝宝数）。</summary>
+        private int HeroPetSlaveCount()
+        {
+            IList<Actor> slaves = MShare.MySelf != null ? MShare.MySelf.SlaveObject : null;
+            return slaves != null ? slaves.Count : 0;
+        }
+
+        /// <summary>本假人经验（`SM_WINEXP(44)` 回包写入 `Abil.Exp`）。</summary>
+        private int HeroPetExp()
+        {
+            return MShare.MySelf != null ? MShare.MySelf.Abil.Exp : 0;
+        }
+
+        /// <summary>本假人等级（`SM_LEVELUP(45)` 回包写入 `Abil.Level`）。</summary>
+        private int HeroPetLevel()
+        {
+            return MShare.MySelf != null ? MShare.MySelf.Abil.Level : 0;
+        }
+
+        /// <summary>收帧钩子（单一收包点）：召唤/经验/升级/名色/死亡/失败文案帧在 `g_boHeroPetSequence`
+        /// 打开且本步待收尾时落 `phase=frame` 事件。**只读不写世界态**（同 T-29/T-45 纪律）；默认关时空转。</summary>
+        public void HeroPetOnServerMessage(int sm, int a, int b, int c, int d, string body)
+        {
+            if (!MShare.g_boHeroPetSequence || _hpSeqPendingK < 0)
+            {
+                return;
+            }
+            switch (sm)
+            {
+                case 17:    // SM_SPELL（施法效果）
+                case 32:    // SM_DEATH（宝宝/怪阵亡）
+                case 44:    // SM_WINEXP（经验）
+                case 45:    // SM_LEVELUP（升级）
+                case 656:   // SM_CHANGENAMECOLOR（宝宝名色 = SlaveColor）
+                case 767:   // SM_MENU_OK（[成功]/[错误] 文案）
+                    break;
+                default:
+                    return;
+            }
+            string text = sm == 767 && !string.IsNullOrEmpty(body) ? EDCode.DeCodeString(body) : string.Empty;
+            string fr = "{\"sm\":" + sm + ",\"a\":" + a + ",\"b\":" + b
+                + ",\"c\":" + c + ",\"d\":" + d
+                + ",\"text\":\"" + ShopEsc(text) + "\"}";
+            _hpSeqFrames.Add(fr);
+            MainOutMessage("M3HEROPETSEQ {\"phase\":\"frame\",\"bot\":\"" + ShopEsc(LoginId)
+                + "\",\"k\":" + _hpSeqPendingK + ",\"frame\":" + fr + "}");
+        }
+
+        #endregion
+
+
         #region M1③ 退出路径夹具：进世界后发 CM_SOFTCLOSE（小退；默认关；白名单 M1-EXIT）
 
         /// <summary>发送时刻（MShare.GetTickCount），-1=未武装。</summary>
@@ -2146,6 +2381,7 @@ namespace BotSrv.Player
             ArmPairTradeSequence();
             ArmSellOffSequence();
             ArmGuildCastleSequence();
+            ArmHeroPetSequence();
             ArmSoftClose();
             if (LoadMetrics.ShouldSuppressInWorld(LoginId))
             {
@@ -2181,6 +2417,7 @@ namespace BotSrv.Player
                 PairTradeSequenceTick();
                 SellOffSequenceTick();
                 GuildCastleSequenceTick();
+                HeroPetSequenceTick();
                 SoftCloseTick();
                 if (DScreen.CurrentScene == PlayScene)
                 {

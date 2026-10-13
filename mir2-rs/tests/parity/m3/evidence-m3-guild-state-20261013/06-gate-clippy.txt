@@ -1,0 +1,4 @@
+# cargo clippy --workspace --all-targets --offline -- -D warnings
+    Checking db-srv v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\bins\db-srv)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.83s
+rc=0

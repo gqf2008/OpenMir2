@@ -1,0 +1,63 @@
+# M3⑦-实现 4 改动清单（卡 `openmir2-m3-party-attribution`）
+
+> 写集：`mir2-rs/crates/world/**` + `mir2-rs/bins/game-svr/**`（+ 本证据目录）。
+> 零 `.rs` 触碰 `src/`（oracle 冻结）、`sql/`、`MirClient`。
+
+## 1. `crates/world/src/combat.rs`
+
+- 新增 `is_attack_target_player_grouped(attacker, target, attacker_group_members)`：
+  `HAM_GROUP` 支按 oracle `PlayObject.Attack.cs:686-698` 补
+  `if target.Race == Play && attacker.GroupOwner != 0 && members.contains(target.id) { result = false; }`；
+  原 `is_attack_target_player` 变成传空表的薄包装（无组语义不变）。
+- 新增 `is_proper_target_grouped`；原 `is_proper_target` 变成薄包装；删除已无调用点的
+  `is_proper_target_play`（并入 `is_proper_target_play_grouped`）。
+- 新增 `attack_with_grouped` / `attack_dir_grouped`（透传成员表）；原 `attack_with`/`attack_dir`
+  变成传空表的薄包装 ⇒ 既有向量调用点零改动、逐字节不变。
+- 把 `award_kill_exp` 的「乘倍率 + `GetExp`」段拆成 `win_exp(killer, dw_exp, ...)`，
+  `award_kill_exp` 变成「`calc_get_exp` → `win_exp`」的薄包装（语义不变，供组队分配逐成员调用）。
+
+## 2. `crates/world/src/party.rs`
+
+- 新增 `PARTY_GROUP_MAX: usize = 11`（`Grobal2.cs:35`）与
+  `PARTY_EXP_BONUS: [f64; 12]`（`PlayObject.Base.cs:766`）。
+
+## 3. `crates/world/src/world.rs`
+
+- 新增 `World::gain_exp(recipient, mon_exp, record) -> i32`：逐行照 `PlayObject.Base.cs:764-818`
+  的 `GainExp`：
+  - `GroupOwner != 0` ⇒ 遍历团长 `GroupMembers` 统计 `sumlv`/`n`，
+    **两次距离判定都比 `CurrX`（漏 `CurrY`，oracle 缺陷照搬）** + 同图 + `!Death`；
+  - `sumlv > 0 && n > 1` ⇒ `dwExp = Round(dwExp * bonus[n])`（`n <= GroupMax` 门）后逐成员
+    `WinExp(Round(dwExp/n))` 或 `WinExp(Round(dwExp/sumlv*level))`；
+  - 否则 ⇒ 获得者本人 `WinExp(dwExp)`；
+  - 每个进 `WinExp` 的成员按**成员表序**追加 `TickRecord::exp_awards`（宿主据此逐人出
+    `SM_WINEXP(44)`），返回获得者本人的经验（`deaths` 5 元组第 5 项）。
+- `settle_deaths` 的每-winner 循环从「直接 `award_kill_exp`」改为「`self.gain_exp(...)`」；
+  `map_rate` 改按获得者（= `WinExp` 的 `this.Envir`）取（oracle 口径）。
+
+## 4. `crates/world/src/lib.rs`
+
+- 导出新公共项：`attack_dir_grouped`/`attack_with_grouped`/`is_attack_target_player_grouped`/
+  `is_proper_target_grouped`/`win_exp`/`PARTY_GROUP_MAX`/`PARTY_EXP_BONUS`。
+
+## 5. `bins/game-svr/src/main.rs`
+
+- `handle_ground_cmd`：
+  - pickup ctx 的 `group_owner: 0` / `group_member_actor_ids: &[]` ⇒ 从 `world.entities`
+    取 `actor.group_owner` 及该团长的 `group_members`（`ClientPickUpItemIsOfGroup` 真值）；
+  - drop ctx 的 `deal_last_tick: 0` ⇒ 新增形参（主循环从 `trade_sessions` 的
+    `deal_last_tick` 传入）。
+- `handle_bag_cmd`：`TakeOnContext.dealing: false` ⇒ 新增 `dealing` 形参（主循环从
+  `trade_sessions` 的 `dealing` 传入）。
+
+## 6. 测试
+
+- 新增 `crates/world/tests/party_attribution.rs`（**9 条**）：`GainExp` fix/ratio 分配、
+  oracle 漏 `CurrY` 缺陷向量、`!Death`/同图过滤、单人组无 bonus、`exp_awards` 成员序、
+  `HAM_GROUP` 纯函数 + `World::attack_once` 进程级剔除。
+- `bins/game-svr/src/main.rs` 新增 2 条进程级：`pickup_group_attribution_uses_registry`、
+  `bag_takeoff_blocked_while_dealing`。
+
+## 7. 证据
+
+`tests/parity/m3/evidence-m3-party-attribution-20261013/`（本目录）。

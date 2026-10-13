@@ -66,6 +66,15 @@ namespace BotSrv
             MShare.g_nGuildCastlePeerRole = _options.GuildCastlePeerRole;
             MShare.g_sGuildCastleMasterLoginId = string.Concat(_options.LoginAccount ?? string.Empty, _options.GuildCastleMasterRole);
             MShare.g_sGuildCastlePeerLoginId = string.Concat(_options.LoginAccount ?? string.Empty, _options.GuildCastlePeerRole);
+            // M3⑨ 夹具（白名单 T-45 家族扩展）：固定英雄/宠物动作序列；默认 false = 原行为
+            MShare.g_boHeroPetSequence = _options.HeroPetSequence;
+            MShare.g_nHeroPetStepMs = _options.HeroPetStepMs;
+            MShare.g_nHeroPetStartDelayMs = _options.HeroPetStartDelayMs;
+            MShare.g_sHeroPetSteps = _options.HeroPetSteps ?? string.Empty;
+            MShare.g_nHeroPetMasterRole = _options.HeroPetMasterRole;
+            MShare.g_nHeroPetPeerRole = _options.HeroPetPeerRole;
+            MShare.g_sHeroPetMasterLoginId = string.Concat(_options.LoginAccount ?? string.Empty, _options.HeroPetMasterRole);
+            MShare.g_sHeroPetPeerLoginId = string.Concat(_options.LoginAccount ?? string.Empty, _options.HeroPetPeerRole);
             // M3⑥ 夹具（白名单 T-41 家族扩展）：固定任务动作序列；默认 false = 原行为
             MShare.g_boQuestSequence = _options.QuestSequence;
             MShare.g_nQuestStepMs = _options.QuestStepMs;
@@ -134,6 +143,11 @@ namespace BotSrv
             {
                 LogService.Info("固定行会/攻城序列: 启用 steps={0} 起始等待={1}ms 步间隔={2}ms 会长序号={3} peer序号={4}（见 RobotPlayer.GuildCastleSequenceTick）",
                     _options.GuildCastleSteps, _options.GuildCastleStartDelayMs, _options.GuildCastleStepMs, _options.GuildCastleMasterRole, _options.GuildCastlePeerRole);
+            }
+            if (_options.HeroPetSequence)
+            {
+                LogService.Info("固定英雄/宠物序列: 启用 steps={0} 起始等待={1}ms 步间隔={2}ms 主人序号={3} peer序号={4}（见 RobotPlayer.HeroPetSequenceTick）",
+                    _options.HeroPetSteps, _options.HeroPetStartDelayMs, _options.HeroPetStepMs, _options.HeroPetMasterRole, _options.HeroPetPeerRole);
             }
             if (_options.QuestSequence)
             {

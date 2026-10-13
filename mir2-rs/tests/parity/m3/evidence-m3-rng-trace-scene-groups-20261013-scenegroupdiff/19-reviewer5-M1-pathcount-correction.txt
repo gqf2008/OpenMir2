@@ -1,0 +1,51 @@
+# 19 — reviewer-5 M-1 收口：证据包路径计数不再硬编码（2026-10-13）
+
+卡 openmir2-m3-rng-trace-scene-groups / 车道 m3bag / principal openmir2-worker-4
+来源：卡线程 coordinator 合并检查点（oid 2785da26）携带的**非阻塞 Minor** ——
+      reviewer-5 M-1「证据 README / 18-post-merge-master-regate.txt 记 24 路径，实为 25」。
+
+## 1. finding 复核（原始读数）
+
+$ git diff --name-only 636bdce53 8f30c8e68 | wc -l
+25
+# 交付头 8f30c8e68 对 base 636bdce53 的真实边界 = 25 路径：
+#   1 报告 + 21 证据件（00–18 + README.md + SHA256SUMS.txt）+ 3 源件
+#   （18- 正文末段已如实写明：「24 是尚未加入 18- 本文件时的读数；最终交付头 = 25 路径」；
+#    交付 README 的 18- 行只写了 24、未写最终 25 ⇒ 这就是被点名的 doc 不一致。）
+
+## 2. 根因：硬编码计数会随证据件增删漂移
+
+本证据包每新增/删除一个文件，`git diff --name-only <base> <head> | wc -l` 就变一位。
+把某一次读数写成「恰好 N 路径」，会在下次触碰该目录时再次变成 doc-vs-事实 —— 与本卡 DoD①
+「doc 声明 vs 代码真源」同族（scenario-fold-matches-code 那条牙的动机）。⇒ 修法 =
+**不再硬编码**，只写计数规则 + 指向逐项原始件。
+
+## 3. 处置（本订正片）
+
+- 证据 `README.md` 的 18- 行：删去「恰好本片 24 路径」，改为「= 本片真实边界
+  （本证据包全部文件 + 1 报告 + 3 源件；当时逐路径读数 25 见 18-；计数不再硬编码，见本文件）」。
+- `18-post-merge-master-regate.txt` 本身**不改**：它是当次原始转录，末段已给出正确口径
+  （「最终交付头（含本文件）= 25 路径」），与本片口径一致；按「原始件不事后编辑」不动它。
+
+## 4. 本订正片的改动面（相对 origin/master 510daba5a）
+
+本订正片 = **5 路径**（两处文档 + 两个新证据件 + 清单重写）：
+  mir2-rs/tests/parity/m3/M3RNG场景DoD①单一入口SceneGroupDiff收口报告-20261013.md
+  mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenegroupdiff/README.md
+  mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenegroupdiff/19-reviewer5-M1-pathcount-correction.txt
+  mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenegroupdiff/20-m1-correction-verify.txt
+  mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-scenegroupdiff/SHA256SUMS.txt
+# 复核：git diff --name-only 510daba5a <head>  （交付时在 patch body 里贴读数）
+# 验证读数（四门禁 + 离线判据 + 无栈自检 23/23 + 清单复核）见同目录 20-m1-correction-verify.txt。
+
+## 5. 计数规则（唯一口径）
+
+交付头对 origin/master 的 diff **恰是本片边界** = 1 报告 + 本证据包**全部**文件 + 3 源件；
+每次触碰按现场重算，**不写死数字**。历次原始读数各自锚在当时的文件里：
+- 18-：base 跟 master 那次 = 25 路径（其末段）；
+- 19-/20-（本文件与验证件）：M-1 订正片 = 5 路径（§4；验证读数见 20-）。
+
+## 结论
+
+README 不再持有会漂移的硬编码计数；`--check-extra` / `eolcheck` 在本订正片上重跑（读数见
+打包时的验证记录与 patch body）。真机两相 trace 仍等 owner 独占窗口 + 两侧驱动承接卡，本片零起栈、零端口。

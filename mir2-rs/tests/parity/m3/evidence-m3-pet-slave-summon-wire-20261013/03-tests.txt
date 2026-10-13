@@ -1,0 +1,28 @@
+# M3⑨-2 第②片 判据（构造级/进程级，全离线；零起栈/零端口）
+
+命令（隔离 CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target，--offline）：
+  cargo test -p mir2-world --lib amulet_use
+  cargo test -p game-svr --lib slave
+  cargo test -p game-svr --lib smframe
+  cargo test -p game-svr --bin game-svr spell_cmd
+
+读数（gates/14-slave-tests.txt）：
+- mir2-world：1 passed / 0 failed（magic::amulet_use_tests::use_amulet_deducts_when_enough_and_zeroes_when_not）
+- game-svr lib slave：4 passed / 0 failed
+  - cast_without_amulet_is_spell_fail：两槽空 ⇒ boSpellFail ⇒ DoSpell false、无 RM_MAGICFIRE、不消耗/不召唤
+  - cast_with_amulet_consumes_and_reaches_summon：ArmRingl 450/Shape5/StdMode25 ⇒ 过 CheckAmulet(1,1)
+    ⇒ 扣至 350 ⇒ boSpellFire 发帧 ⇒ 空怪表 ⇒ Rejected ⇒ boTrain=false
+  - pet_slave_config_reads_conf_and_ignores_bom / pet_slave_config_missing_file_errors
+- game-svr lib smframe：17 passed / 0 failed（含 spell_and_magicfire_field_layout /
+  magic_lvexp_and_durachange_field_layout）
+- game-svr bin spell_cmd：2 passed / 0 failed
+  - spell_cmd_summon_wires_amulet_and_frames：CM_SPELL(17) 端到端——观察者收 SM_SPELL(Series=Effect=3)
+    + SM_MAGICFIRE(Series=MakeWord(4,3))；自身收 SM_DURACHANGE + +GD/；UseItems[ArmRingl].Dura=350
+  - spell_cmd_dispatches_guard_ack_and_magic_key_change（既有，回归绿）
+
+向量回归：cargo test -p mir2-world --test magic_effect_vectors = 6 passed / 0 failed
+（tamming_matches_oracle_per_case 等，royalty_draw 表面积化未改 RNG 账本）。
+
+全覆盖：cargo test --workspace = 97 suites · 994 passed · 0 failed · 21 ignored（gates/13）。
+
+未验证（not_verified）：真机两侧同序列 diff=0 需独占窗口 + run_hero_pet_pair.ps1（⑨-5 夹具），本片零起栈。

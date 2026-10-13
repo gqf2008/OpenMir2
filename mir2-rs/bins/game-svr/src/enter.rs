@@ -104,6 +104,10 @@ pub struct AbilityInputs<'a> {
     pub bag_items: Option<&'a [Option<ServerUserItem>]>,
     /// `Gold`（`SM_ABILITY` 的 `Recog`）。
     pub gold: i32,
+    /// 帧 52 尾的布局：`true` ⇒ 冻结客户端的 58B `TAbility`（`HIGHHP=True`，
+    /// [`crate::record::encode_ability_client`]）；`false` ⇒ oracle 的 40B `EncodeMessage(WAbil)`。
+    /// 由 `MIR2_CLIENT_ABILITY_LAYOUT` 决定（**默认 `false`** = 与 oracle 逐字节相同）。
+    pub client_ability_layout: bool,
 }
 
 /// `PlayObject.SendLogon()`（`PlayObject.cs:1128-1147`）一次产三条帧所需的输入。
@@ -615,12 +619,14 @@ pub fn apply(base: &mut EnterWorldInputs, wx: &WorldFrameInputs<'_>) -> Vec<Stri
             let out = recalc_for_session(&a, wx.job);
             // 52：`MakeMessage(SM_ABILITY, Gold, MakeWord((byte)Job, 99), LoWord(GameGold), HiWord(GameGold))`
             // 尾 = `EncodeMessage(WAbil)`（`Message.cs:1732-1734`）。`Job` 在原头的高字节、99 在低字节。
-            base.ability = Some((
-                a.gold,
-                wx.job,
-                wx.game_gold,
-                crate::record::encode_ability(&out.wabil),
-            ));
+            // `client_ability_layout`（`MIR2_CLIENT_ABILITY_LAYOUT`）打开时改用冻结客户端的 58B 记录
+            // 布局（默认关 ⇒ oracle 逐字节）。
+            let wabil_tail = if a.client_ability_layout {
+                crate::record::encode_ability_client(&out.wabil)
+            } else {
+                crate::record::encode_ability(&out.wabil)
+            };
+            base.ability = Some((a.gold, wx.job, wx.game_gold, wabil_tail));
             // 752：7 个字段全在头（`Message.cs:1935`）。
             base.sub_ability = Some(out.sub.to_frame_bytes());
         }
@@ -1430,6 +1436,7 @@ mod tests {
             use_items: Some(&use_items),
             bag_items: Some(&bag),
             gold: 1234,
+            client_ability_layout: false,
         };
         let mut base = EnterWorldInputs {
             actor_id: 7,
@@ -1484,6 +1491,43 @@ mod tests {
             idents(&base.frames()),
             vec![658, 52, 752],
             "52 在 752 前（`PlayObject.cs:1385-1386`）"
+        );
+
+        // `MIR2_CLIENT_ABILITY_LAYOUT`：冻结客户端 58B 布局（`HIGHHP=True`）——同一 `WAbil`、
+        // `HP` 落在客户端读取的 offset 22。默认关（上一个断言）逐字节等于 oracle。
+        let client_inputs = AbilityInputs {
+            client_ability_layout: true,
+            ..inputs
+        };
+        let mut base_client = EnterWorldInputs {
+            actor_id: 7,
+            ..EnterWorldInputs::default()
+        };
+        let wx_client = WorldFrameInputs {
+            ability: Some(client_inputs),
+            ..wx
+        };
+        let _ = apply(&mut base_client, &wx_client);
+        let (_, _, _, wabil_client) = base_client.ability.clone().expect("52 必须接线");
+        assert_eq!(
+            wabil_client,
+            crate::record::encode_ability_client(&out.wabil),
+            "打开开关时 52 尾 = 客户端 58B 记录布局"
+        );
+        assert_eq!(
+            wabil_client.len(),
+            58,
+            "客户端 TAbility（HIGHHP=True）= 58B"
+        );
+        assert_eq!(
+            i32::from_le_bytes([
+                wabil_client[22],
+                wabil_client[23],
+                wabil_client[24],
+                wabil_client[25]
+            ]),
+            i32::from(out.wabil.hp),
+            "客户端从 offset 22 读到的 HP 必须等于重算后的 HP"
         );
     }
 }

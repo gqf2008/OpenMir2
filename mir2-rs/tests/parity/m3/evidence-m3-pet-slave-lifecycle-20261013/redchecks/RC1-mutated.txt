@@ -1,0 +1,66 @@
+
+running 34 tests
+test slave::tests::angel_uses_magic_level_for_both ... ok
+test slave::tests::check_server_make_slave_blocks_only_on_pending ... ok
+test slave::tests::get_chr_color_branches ... ok
+test slave::tests::make_slave_gate_is_strictly_less ... ok
+test slave::tests::process_slave_mutiny_mutinies_on_zero_roll ... ok
+test slave::tests::make_slave_adopt_writes_oracle_tail ... ok
+test slave::tests::check_royalty_spirit_window_forces_zero_deadline ... ok
+test slave::tests::check_royalty_removes_and_halves_hp ... ok
+test slave::tests::process_slave_mutiny_early_return ... ok
+test slave::tests::process_slave_ghost_marks_all ... ok
+test slave::tests::check_royalty_master_tick_12h_kills ... ok
+test slave::tests::check_royalty_respects_interval ... ok
+test slave::tests::make_slave_adopt_keeps_full_hp ... ok
+test slave::tests::check_royalty_spirit_window_gated_by_level ... FAILED
+test slave::tests::recall_slave_target_scans_from_tail ... ok
+test slave::tests::redcheck_gate_must_be_strict ... ok
+test slave::tests::sinsu_selection_breaks_on_first_match ... ok
+test slave::tests::sinsu_selection_falls_back_to_dragon_name ... ok
+test slave::tests::skeleton_selection_keeps_last_match_no_break ... ok
+test slave::tests::skeleton_selection_stops_at_zero_hum_level ... ok
+test slave::tests::space_move_returns_start_without_rng_when_walkable ... ok
+test slave::tests::process_slave_mutiny_no_rng_without_last_hiter ... ok
+test slave::tests::space_move_steps_by_n18_when_blocked ... ok
+test slave::tests::recall_slave_moves_tail_match_to_front ... ok
+test slave::tests::slave_list_cleanup_removes_dead_ghost_and_mismaster ... ok
+test slave::tests::tame_royalty_tick_formula ... ok
+test slave::tests::summon_slave_rejected_when_slave_list_full ... ok
+test slave::tests::tame_adopt_halves_hp_and_keeps_master_tick ... ok
+test slave::tests::summon_slave_ignores_other_skills ... ok
+test slave::tests::summon_slave_skeleton_end_to_end ... ok
+test slave::tests::tame_adopt_writes_oracle_tail ... ok
+test slave::tests::summon_slave_sinsu_falls_back_to_recall ... ok
+test slave::tests::tick_cleanup_drops_dead_slave ... ok
+test slave::tests::recall_slave_no_match_is_noop ... ok
+
+failures:
+
+---- slave::tests::check_royalty_spirit_window_gated_by_level stdout ----
+
+thread 'slave::tests::check_royalty_spirit_window_gated_by_level' (22840) panicked at crates\world\src\slave.rs:1384:9:
+assertion `left == right` failed
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    slave::tests::check_royalty_spirit_window_gated_by_level
+
+test result: FAILED. 33 passed; 1 failed; 0 ignored; 0 measured; 77 filtered out; finished in 0.01s
+
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\crates\world)
+warning: unused variable: `exp_level`
+   --> crates\world\src\slave.rs:718:9
+    |
+718 |     let exp_level = e.slave_exp_level;
+    |         ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_exp_level`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `mir2-world` (lib test) generated 1 warning (run `cargo fix --lib -p mir2-world --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.85s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m3hp-target\debug\deps\mir2_world-b447abe76269f045.exe)
+error: test failed, to rerun pass `-p mir2-world --lib`

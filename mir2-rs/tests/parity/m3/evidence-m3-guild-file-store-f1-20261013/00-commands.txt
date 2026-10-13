@@ -1,0 +1,32 @@
+# M3⑧-3 F-1 返工片 —— 命令四件套（命令 + 原始件 + 路径 + hash）
+# 卡：openmir2-m3-guild-file-store（reviewer-6 F-1，Important）
+# 车道：openmir2-worker-5 / worktree m3cs / branch worktree-m3-guild-file-store-f1
+# base = origin/master dcbd60f3d（原片 f2361cf2 已被合并车道并入 master）
+# head = d0f90e4012344ca63e87607355cfb8c55a657f0e
+# 硬约束：零起栈、零占端口（只读离线：C# 真身探针 + cargo 用例 + 临时目录）
+
+## 1) oracle 真身探针（C#，直调 M2Server.Guild.*；新增 ScenarioI）
+$ dotnet run --project mir2-rs/tests/parity/m3/guild-store-probe -c Release -- E:/tmp/m3cs-gfs-f1b
+guild-store-probe: wrote 96 fields / 4 byte vectors
+# 产物（已入库）：mir2-rs/tests/parity/m3/guild-store-probe/vectors/{guild_store_vectors.tsv,guild_file_bytes.tsv}
+# 原始件：02-probe-run.txt；重复实跑 cmp 无输出（向量确定性）
+
+## 2) Rust 向量用例（12 条；新增 vector_load_guild_info_uses_alive_set）
+$ cd mir2-rs && CARGO_TARGET_DIR=E:/tmp/m3cs-target cargo test -p mir2-data --offline --no-fail-fast
+# 原始件：03-rust-vectors.txt
+
+## 3) 改坏必红（F-1 原实现：known 回写前快照）
+#   crates/data/src/guild.rs::load_guild_info 闭包 names.iter().any(..) -> known.contains(n)
+#   ⇒ vector_load_guild_info_uses_alive_set FAILED（left: 2 / right: 1，F-1 断言点名）rc=101
+#   还原（cp 回 fixed 版本，diff 无输出）⇒ 12/12 绿 rc=0
+# 原始件：03-redcheck-f1-alive-set.txt
+
+## 4) 四门禁（合并树 · 隔离 CARGO_TARGET_DIR=E:/tmp/m3cs-target · --offline）
+$ cargo fmt --all -- --check                                   # 06-gate-fmt.txt (rc=0)
+$ cargo clippy --workspace --all-targets --offline -- -D warnings  # 07-gate-clippy.txt (rc=0)
+$ cargo test --workspace --offline --no-fail-fast              # 08-gate-test.txt (96 suites 961 passed 0 failed 21 ignored, rc=0)
+$ cargo run -p msgcodegen --offline -- --check                 # 09-gate-msgcodegen.txt (604, rc=0)
+
+## 5) 边界
+$ git diff --name-only dcbd60f3d d0f90e40 -- src sql MirClient   # 空
+# 原始件：10-boundary.txt

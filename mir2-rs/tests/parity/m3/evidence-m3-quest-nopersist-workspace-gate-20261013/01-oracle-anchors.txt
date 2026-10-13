@@ -1,0 +1,50 @@
+== 01 oracle 锚（`文件:行` 实测；oracle = `src/`，本片零改动） ==
+
+本片是**测试门禁**收口（⑥-4 `openmir2-m3-quest-persist-observability` 的 review Minor **M-1**，
+reviewer-5 `3dc49a830e`）。生产代码零改动；oracle 锚 = ⑥-4 卡已确立的「任务态不落库」事实，
+本卡逐条复验（命令写在每段里，可原地重放）。
+
+---- A. `characters` 存档 UPDATE 的列清单无任何任务列 ----
+文件: src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Save.cs:82-89（SaveRecord）
+命令: sed -n '82,89p' src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Save.cs
+原文（:85-88）:
+  strSql.AppendLine("UPDATE characters SET ServerIndex = @ServerIndex, LoginID = @LoginID,MapName = @MapName, CX = @CX, ... Job = Job, Gold = @Gold, ");
+  ... "Deleted = @Deleted,LASTUPDATE = now() WHERE ID = @ID;"
+判定: 列清单含 ServerIndex/LoginID/.../Deleted，**无 QuestFlag/QuestUnit/QuestUnitOpen/QuestOpenIndex/QuestFinIndex**。
+
+---- B. `SaveQuest` 只 DELETE FROM characters_quest，从不 INSERT ----
+文件: src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Save.cs:493-506
+命令: sed -n '493,506p' src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Save.cs
+原文:
+  :493  private void SaveQuest(StorageContext context, int id, CharacterDataInfo humanRcd)
+  :495      const string sSqlStr4 = "DELETE FROM characters_quest WHERE PlayerId=@PlayerId";
+  :503-505  catch { LogService.Error("[Exception] PlayDataStorage.SaveQuest"); }
+判定: 唯一 SQL 是 DELETE；没有 INSERT。
+
+---- C. `SaveQuest` 全仓无调用点 ----
+命令: grep -rn "SaveQuest" src/
+输出: :493（定义）/ :505（自身异常日志）——**无调用点**（唯一「下文」是它自己的 LogService.Error）。
+
+---- D. 读档 `SELECT * FROM characters WHERE ID=@ID`，不读任务数组 ----
+文件: src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Query.cs:192-194（GetChrRecord）
+命令: sed -n '192,194p' src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Query.cs
+原文: :194  const string sSqlString = "SELECT * FROM characters WHERE ID=@ID";
+判定: 只读 `characters`，不 JOIN/不读任务列。
+
+---- E. 任务数组只走**会话内** CharacterData（6000 面 PlayerDataInfo） ----
+文件: src/OpenMir2/Packets/ServerPackets/PlayerDataInfo.cs:101-103（字段）+ :114-116（构造）
+命令: sed -n '101,103p;114,116p' src/OpenMir2/Packets/ServerPackets/PlayerDataInfo.cs
+原文:
+  :101  public byte[] QuestUnitOpen { get; set; }
+  :102  public byte[] QuestUnit { get; set; }
+  :103  public byte[] QuestFlag { get; set; }
+  :114-116  QuestUnitOpen = new byte[128]; QuestUnit = new byte[128]; QuestFlag = new byte[128];
+判定: 任务态是**会话记录**字段（`byte[128]` ×3），下线即丢。
+
+---- F. MySQL 存档目录内无任何 quest 写点 ----
+命令: grep -rniE "quest" src/Storeages/DBSvr.Storage.MySQL/
+输出: 仅 `PlayDataStorage.Save.cs:493/495/505`（SaveQuest 自身）；INSERT 面
+      （`PlayDataStorage.Add.cs:94` characters 建号、`:162` characters_ablity、...）无任务列。
+
+结论: oracle 的「任务态不落库」是**行为**（不是缺口）。Rust 侧不得引入任何把任务列写进 SQL 的路径；
+本卡把这条从「单文件断言 + 表名全仓扫描」升级为「**全仓 SQL 字面量**扫描」（见 `02-change-summary.txt`）。

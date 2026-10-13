@@ -1,0 +1,43 @@
+# M3⑨-5 英雄/宠物夹具解冲突重交片 —— 命令四件套（命令 + 原始件 + 路径 + hash）
+# 卡：openmir2-m3-hero-pet-fixture-botsrv（T-45）
+# 车道：openmir2-worker-5 / worktree m3cs / branch worktree-m3-hero-pet-fixture-botsrv
+# base = origin/master 67e9f6c3e097da834ef5769eff1c5415e97bb458
+# head = 7b999382aeeb3145b8e06b717a87e1de360ac3fb（merge 提交）
+# 触发：合并车道 comment cb7e3c9a（merge-tree CONFLICT whitelist.md 同插入位）
+# 硬约束：零起栈、零占端口
+
+## 0) 解冲突
+$ git fetch origin
+$ git checkout worktree-m3-hero-pet-fixture-botsrv
+$ git merge origin/master        # 唯一冲突 mir2-rs/tests/parity/whitelist.md
+# 解 = 并集：T-47 段（master）在前、T-45 段（本片）在后；无手工改内容
+$ git add mir2-rs/tests/parity/whitelist.md && git commit
+# 原始件：01-merge-and-boundary.txt
+
+## 1) 比较器 selftest（36/36）
+$ python -I mir2-rs/tests/parity/m3/hero_pet_diff.py selftest
+# -> 02-heropet-diff-selftest.txt（SELFTEST ok=36/36）
+
+## 2) 入口无栈自检（19/19）
+$ powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_hero_pet_pair.ps1 -SelfCheckNoStack -SelfCheckOut <ev>/03-run-heropet-pair-selfcheck.txt
+# -> 03-run-heropet-pair-selfcheck.txt（SELFTEST ok=19/19）
+
+## 3) BotSrv 生产函数 selftest
+$ dotnet build src/BotSrv/BotSrv.csproj -c Release --nologo -v q
+$ ./src/BotSrv/bin/Release/BotSrv.exe --selftest-heropet
+# -> 04-botsrv-heropetseq-selftest.txt（HEROPETSEQ SELFTEST GREEN）
+
+## 4) run_bots 序列收尾计数离线自检
+$ powershell -NoProfile -ExecutionPolicy Bypass -File tools/botload/run_bots.ps1 -SelfCheckNoStack
+# -> 05-run-bots-selfcheck.txt（rc=0 GREEN）
+
+## 5) 四门禁（在 mir2-rs/ 下 · 隔离 CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target · --offline）
+$ cargo fmt --all -- --check                                     # 06-gate-fmt.txt (rc=0)
+$ cargo clippy --workspace --all-targets --offline -- -D warnings # 07-gate-clippy.txt (rc=0)
+$ cargo test --workspace --offline --no-fail-fast                 # 08-gate-test.txt (96 suites 971 passed 0 failed 21 ignored, rc=0)
+$ cargo run -p msgcodegen --offline -- --check                    # 09-gate-msgcodegen.txt (604, rc=0)
+
+## 6) 边界
+$ git diff --name-only origin/master HEAD -- src sql MirClient     # 仅 src/BotSrv/**（T-45 登记例外）
+$ git diff --name-only origin/master HEAD -- mir2-rs/crates mir2-rs/bins mir2-rs/protocol  # 空
+# 原始件：01-merge-and-boundary.txt

@@ -15,8 +15,11 @@
 
 pub mod aoi;
 pub mod bevy_bridge;
+pub mod castle;
+pub mod castle_tax;
 pub mod combat;
 pub mod entity;
+pub mod guild;
 pub mod magic;
 pub mod map;
 pub mod merchant;
@@ -29,16 +32,30 @@ pub mod world;
 
 pub use aoi::{search_view_range, search_view_range_death, update_visible_gay, visible_snapshot};
 pub use bevy_bridge::{collect_tick_order_system, snapshot_from_world};
+pub use castle::{
+    AttackerInfo, CastleDate, CastleEvent, CastleNow, CastleSiegeConfig, CastleUnit, GuildId,
+    UserCastle, MAX_CASTLE_ARCHER, MAX_CASTLE_GUARD, SS_204, SS_212,
+};
+pub use castle_tax::{
+    merchant_tax_amount, merchant_tax_target, CastleManager, CastleTaxConfig, IncRateGoldOutcome,
+    MerchantTaxTarget, CASTLE_GOLD_SAVE_INTERVAL_MS,
+};
 pub use combat::{
-    attack, attack_dir, attack_success_weapon_damage, attack_with, get_attack_power_hit,
-    is_attack_target, is_attack_target_base, is_attack_target_player, is_proper_target,
-    is_protect_target, recalc_hit_speed, AttackHitState, AttackOutcome, AttackPowerMode,
-    CombatConfig, HitSpeedInput, HitSpeedOutcome, ACTOR_RACE_ANIMAL, ACTOR_RACE_NPC,
-    ACTOR_RACE_PEACE_NPC, ATTACK_MODE_HAM_ALL, ATTACK_MODE_HAM_DEAR, ATTACK_MODE_HAM_GROUP,
-    ATTACK_MODE_HAM_GUILD, ATTACK_MODE_HAM_MASTER, ATTACK_MODE_HAM_PEACE, ATTACK_MODE_HAM_PKATTACK,
+    attack, attack_dir, attack_dir_grouped, attack_success_weapon_damage, attack_with,
+    attack_with_grouped, get_attack_power_hit, is_attack_target, is_attack_target_base,
+    is_attack_target_player, is_attack_target_player_grouped, is_proper_target,
+    is_proper_target_grouped, is_protect_target, recalc_hit_speed, win_exp, AttackHitState,
+    AttackOutcome, AttackPowerMode, CombatConfig, HitSpeedInput, HitSpeedOutcome,
+    ACTOR_RACE_ANIMAL, ACTOR_RACE_NPC, ACTOR_RACE_PEACE_NPC, ATTACK_MODE_HAM_ALL,
+    ATTACK_MODE_HAM_DEAR, ATTACK_MODE_HAM_GROUP, ATTACK_MODE_HAM_GUILD, ATTACK_MODE_HAM_MASTER,
+    ATTACK_MODE_HAM_PEACE, ATTACK_MODE_HAM_PKATTACK,
 };
 pub use entity::{
     Entity, EntityStore, MonsterCtorDraws, VisibleFlag, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY,
+};
+pub use guild::{
+    check_guild_name, AddWarGuildOutcome, GuildConfig, GuildManager, GuildRank, GuildState,
+    GuildWarEnded, WarGuild,
 };
 pub use magic::{
     can_read_book, get_power, get_power13, get_rpow, get_spell_point, magic_attack_interval, mpow,
@@ -62,8 +79,8 @@ pub use mongen::{
     MON_GEN_THREAD_MON_LIMIT,
 };
 pub use party::{
-    PartyConfig, PartyEvent, PARTY_CANCEL_GROUP_MSG, PARTY_EXIT_GROUP_MSG,
-    PARTY_GROUP_MEMBERS_MAX_DEFAULT, PARTY_GROUP_MSG_B_COLOR_DEFAULT,
+    PartyConfig, PartyEvent, PARTY_CANCEL_GROUP_MSG, PARTY_EXIT_GROUP_MSG, PARTY_EXP_BONUS,
+    PARTY_GROUP_MAX, PARTY_GROUP_MEMBERS_MAX_DEFAULT, PARTY_GROUP_MSG_B_COLOR_DEFAULT,
     PARTY_GROUP_MSG_F_COLOR_DEFAULT, PARTY_GROUP_MSG_PREFIX_DEFAULT, PARTY_JOIN_GROUP_MSG_DEFAULT,
     PARTY_LEADER_CLOSE_MSG,
 };

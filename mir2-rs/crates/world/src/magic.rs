@@ -383,6 +383,43 @@ pub struct AmuletSlot {
     pub dura: i32,
 }
 
+/// `MagicBase.UseAmulet`（`src/M2Server/Magic/MagicBase.cs:109-127`）的**纯**结果。
+///
+/// oracle 的副作用分两支：
+/// - `Dura > nCount*100` ⇒ `Dura -= nCount*100` 并 `SendMsg(RM_DURACHANGE, idx, Dura, DuraMax, 0)`；
+/// - 否则 ⇒ `Dura = 0` + `SendDelItems(item)` + `Index = 0`。
+///
+/// `duration` 在 oracle 侧是 `(ushort)(nCount * 100)`；`nCount <= 5` ⇒ 不溢出。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AmuletUse {
+    /// 使用后的 `UserItem.Dura`（`deleted` 时为 0）。
+    pub dura_after: i32,
+    /// 是否走「耐久不足 ⇒ 扣光并删除该护身符」支（oracle `:124-126`）。
+    pub deleted: bool,
+}
+
+/// `MagicBase.UseAmulet`（`src/M2Server/Magic/MagicBase.cs:109-127`）的纯函数形式。
+///
+/// **调用前提**：oracle 只在 `CheckAmulet` 返回 true 后调用（⇒ `UseItems[idx] != null`）
+/// ⇒ `dura` 是已确认为非空槽的 `Dura`。`deleted == false` 时调用方需发 `SM_DURACHANGE`，
+/// `deleted == true` 时调用方需 `SendDelItems` 并清槽。
+#[must_use]
+pub fn use_amulet(dura: i32, count: u8) -> AmuletUse {
+    // oracle `ushort duration = (ushort)(nCount * 100)`。
+    let duration = i32::from(count) * 100;
+    if dura > duration {
+        AmuletUse {
+            dura_after: dura - duration,
+            deleted: false,
+        }
+    } else {
+        AmuletUse {
+            dura_after: 0,
+            deleted: true,
+        }
+    }
+}
+
 /// `MagicBase.CheckAmulet`（`src/M2Server/Magic/MagicBase.cs:47-105`）：先查 `ArmRingl`(5) 再查
 /// `Bujuk`(9)；命中返回被选中的 `ItemLocation` 值，否则 `None`。
 ///
@@ -582,6 +619,10 @@ pub struct TammingOutcome {
     pub walk_speed: i32,
     pub next_hit_time: i32,
     pub crazy_mode: bool,
+    /// 受奴成功时 oracle 抽的 `Random(caster.Lv * 2)`（`MagicManager.cs:770`）——
+    /// `MasterRoyaltyTick = (draw + (magicLevel<<2)*5 + 20)*60_000 + GetTickCount()`。
+    /// 未受奴时为 0（不抽数）。调用方把它交给 `World::tame_adopt` / `tame_royalty_tick`。
+    pub royalty_draw: i32,
 }
 
 /// 见 [`TammingInput`]/[`TammingOutcome`]（`MagicManager.cs:704-825`）。
@@ -626,7 +667,8 @@ pub fn mag_tamming(rng: &mut impl RandomSource, inp: &TammingInput) -> TammingOu
                                 out.crazy_mode = false; // BreakCrazyMode()
                                                         // `MasterRoyaltyTick = (Random(caster.Lv * 2) + …) * 60_000 + GetTickCount()`：
                                                         // GetTickCount 非确定，但 Random(caster.Lv * 2) 是取数账本的一部分。
-                                rng.random_below(inp.caster_level * 2);
+                                                        // 表面积化：把抽到的值随结果返回（调用方算到期 tick）。
+                                out.royalty_draw = rng.random_below(inp.caster_level * 2);
                                 out.walk_speed = out.walk_speed.min(1500 - magic_level * 200);
                                 out.next_hit_time = out.next_hit_time.min(2000 - magic_level * 200);
                             } else if rng.random_below(14) == 0 {
@@ -1199,5 +1241,29 @@ pub fn mag_make_clone(map: &mut MapGrid, inp: &MakeCloneInput) -> MakeCloneOutco
         x: inp.x,
         y: inp.y,
         dir,
+    }
+}
+
+#[cfg(test)]
+mod amulet_use_tests {
+    use super::use_amulet;
+
+    /// `MagicBase.UseAmulet`（`MagicBase.cs:109-127`）：`Dura > nCount*100` ⇒ 扣；
+    /// 否则（含 `==`）`Dura = 0; Index = 0`（清槽）。边界逐点钉死。
+    #[test]
+    fn use_amulet_deducts_when_enough_and_zeroes_when_not() {
+        let a = use_amulet(450, 1); // 450 > 100 ⇒ 扣 100
+        assert_eq!(a.dura_after, 350);
+        assert!(!a.deleted, "耐久够 ⇒ 不删");
+        let b = use_amulet(100, 1); // 100 == 100 ⇒ 不满足 `>` ⇒ 清槽
+        assert_eq!(b.dura_after, 0);
+        assert!(b.deleted, "边界相等 ⇒ 清槽（oracle 严格大于）");
+        let c = use_amulet(499, 5); // 499 < 500 ⇒ 清槽
+        assert!(c.deleted);
+        let d = use_amulet(500, 5); // 500 == 500 ⇒ 清槽
+        assert!(d.deleted);
+        let e = use_amulet(501, 5); // 501 > 500 ⇒ 扣
+        assert_eq!(e.dura_after, 1);
+        assert!(!e.deleted);
     }
 }

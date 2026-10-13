@@ -1,0 +1,96 @@
+M3⑧-实现 6（openmir2-m3-castle-file-load）第①片 —— oracle 锚定
+（行号按本仓库 src/ 实读；2026-10-13 返工订正 9 组漂移，见文末「订正记录」）
+================================================================================
+
+[1] 城堡名单读取  CastleManager.LoadCastleList
+    src/M2Server/Castle/CastleManager.cs:154-176
+      castleFile = Path.Combine(M2Share.BasePath, SystemShare.Config.CastleFile)   (:156)
+      File.Exists == false ⇒ LogService.Error("城堡列表文件未找到!!!")、不进循环
+      否则 StringList.LoadFromFile（GB2312/BOM）⇒ 逐行 Trim()，非空 ⇒ new UserCastle(sCastleDir)
+
+[2] 城堡名单落盘  CastleManager.SaveCastleList
+    src/M2Server/Castle/CastleManager.cs:178-192
+      先确保 CastleDir 目录存在；写 StringList.Add(i.ToString())   // :188，下标，不是 ConfigDir
+      ⇒ StringList.SaveToFile(BasePath + Config.CastleFile)        // :190
+
+[3] 空列表兜底  CastleManager.Initialize
+    src/M2Server/Castle/CastleManager.cs:62-87
+      CastleList.Count <= 0 ⇒ new UserCastle(Config.CastleDir) + Initialize() + ConfigDir="0"
+                               + EnvirList={0151..0156} + Save()
+      否则逐个 CastleList[i].Initialize()
+
+[4] UserCastle 构造默认  src/M2Server/Castle/UserCastle.cs:27-56
+      HomeMap=Cfg.CastleHomeMap("3")、HomeX=644、HomeY=290、sName=Cfg.CastleName("沙巴克")
+      PalaceMap="0150"、SecretMap="D701"、WarRangeX/Y=100、Archers=new ArcherUnit[12]、Guards=new ArcherUnit[12]
+      ConfigDir=sCastleDir；目录不存在则创建；castleConf=new CastleConf(<dir>/SabukW.txt)  // :55
+
+[5] CastleConf.LoadConfig（[Setup]/[Defense] 全键 + 默认值）
+    src/M2Server/Castle/CastleConf.cs:15-94
+      [Setup] CastleName(默认 sName)、OwnGuild("")、ChangeDate/WarDate/IncomeToday(Now)
+              TotalGold(0)、TodayIncome(0)
+      [Defense] CastleMapList("" → ',' 逐段 GetValidStr3，空段 break)   // :24-38
+                CastleMap("3")(:39)、CastleHomeMap("3")(:40)、CastleHomeX(644)(:41)、CastleHomeY(290)(:42)
+                CastleWarRangeX(100)(:43)、CastleWarRangeY(100)(:44)
+                CastlePlaceMap("0150")(:45)、CastleSecretMap("D701")(:46)
+                CastlePalaceDoorX(631)(:47)、CastlePalaceDoorY(274)(:48)
+                MainDoor: X672(:50) Y330(:51) Name"MainDoor"(:52) Open(true)(:53) HP2000(:54)
+                LeftWall: X624(:57) Y278(:58) Name"LeftWall"(:59) HP2000(:60)
+                CenterWall: X627(:63) Y278(:64) Name"CenterWall"(:65) HP2000(:66)
+                RightWall: X634(:69) Y271(:70) Name"RightWall"(:71) HP2000(:72)
+                Archer_{1..12}: X0 Y0 Name"弓箭手" HP2000   // 循环 :74-83（X:77 Y:78 Name:79 HP:80）
+                Guard_{1..12}: X0 Y0 Name"守卫" HP2000       // 循环 :84-93（X:87 Y:88 Name:89 HP:90）
+                                                              // Guards.Length == 12（UserCastle.cs:49）
+      SaveConfig 起于 :96（本片只读，不落盘 SabukW.txt）
+
+[6] 攻城申请读取  UserCastle.LoadAttackSabukWall  src/M2Server/Castle/UserCastle.cs:242-288
+      路径 = BasePath + CastleDir + ConfigDir + "AttackSabukWall.txt"(:244/:251)；文件不存在 ⇒ return（表清空）
+      逐行：GetValidStr3(sData, ref guildName, {' ','\t'})；FindGuild(guildName)==null ⇒ continue
+            ArrestStringEx(s20, "\"", "\"", ref s20)；DateTime.TryParse 成功用值，否则 DateTime.Now
+            AttackWarList.Add({sGuildName=guildName, Guild, AttackDate})
+
+[7] 攻城申请落盘  UserCastle.SaveAttackSabukWall  src/M2Server/Castle/UserCastle.cs:293-309
+      StringList.Add(sGuildName + "       \"" + AttackDate + '"')   // :306，7 个空格 + 引号日期
+      ⇒ SaveToFile(BasePath + CastleDir + ConfigDir + "AttackSabukWall.txt")(:295/:301)
+
+[8] 实体挂图（第②片，不在本片）  UserCastle.Initialize  src/M2Server/Castle/UserCastle.cs:108-226
+      CastleEnvir = MapMgr.FindMap(MapName)（MapName 归属本服分支内）
+      门/左中右墙：RegenMonsterByName(MapName, X, Y, Name)；成功 ⇒ WAbil.HP = nHP(:133/:147/:157/:167)；
+                  Castle = this；MainDoor.nStatus 为真 ⇒ ((CastleDoor)BaseObject).Open()
+      弓手/守卫：nHP <= 0 ⇒ continue；否则 RegenMonsterByName；弓手成功再设 GuardDirection = 3
+                  （HP 写回 :185/:205）
+
+[9] 常量  src/M2Server/Castle/CastleConst.cs
+      MaxCastleArcher = 12（:10）、MaxCalsteGuard = 4（:14，仅雇佣上限，见 src/GameSrv/Npc/CastleOfficial.cs:274）
+      AttackSabukWallList = "AttackSabukWall.txt"（:18）、SabukWFileName = "SabukW.txt"（:22）
+
+[10] 配置读取器语义  src/OpenMir2/Common/ConfigFile.cs
+      ReadWriteString(:105-113) / ReadWriteInteger(:55-63) / ReadWriteBool(:85-93) /
+      ReadWriteInt16(:65-73) / ReadWriteUInt16(:75-83) / ReadWriteDate(:115-123) / ReadDateTime(:155-168)
+      Read<T> 的 Convert.ChangeType(:125-138)
+      ReadBool(:…) 是/YES/1/TRUE；WriteDateTime 格式 "yyyy-MM-dd HH:mm:ss"(:449-460)
+      缺键/空值 ⇒ WriteX 回写默认（内容冻结 ⇒ Rust 侧只读、不回写）
+
+[11] 落盘行尾  src/OpenMir2/Common/StringList.cs
+      SaveToFile(:260) ⇒ StreamWriter.WriteLine(:266) ⇒ Environment.NewLine（Windows = CRLF "\r\n"）
+      部署件 Castle/List.txt 实测 30 0D 0A（见 02-deployed-data.txt、11-serialize-crlf.txt）
+
+--------------------------------------------------------------------------------
+订正记录（2026-10-13 返工 F-1，reviewer-6 review 92cc1c49 @head 6967640c7）:
+  [1] 162-185 ⇒ 154-176；[2] 187-201 ⇒ 178-192；[3] 53-86 ⇒ 62-87；
+  [4] 23-59 ⇒ 27-56；[5] 15-107 ⇒ 15-94；[6] 242-286 ⇒ 242-288；
+  [7] 291-309 ⇒ 293-309；[8] 118-227 ⇒ 108-226；
+  [9] MaxCastleArcher :11 ⇒ :10；
+  [10] ReadWriteDate :105 ⇒ :115-123（:105 是 ReadWriteString）。
+  同族漂移一并 grep 全仓订正（module header + 内联 doc，零行为变更）：
+    - CastleConf 默认键行号（44/45/56/57/59/60/61/62/63/65/66/67/68/70/71/72/73/75/76/77/78/85/86/96/97）
+      ⇒ 实际读侧行（39/40/47/48/50/51/52/53/54/57/58/59/60/63/64/65/66/69/70/71/72/79/80/89/90）；
+    - CastleConf.24-107 ⇒ 24-94；CastleConf.SaveConfig :109+ ⇒ :96+；
+    - CastleConf.80-90 ⇒ 74-83（Archers 循环）；:91-101 ⇒ 84-93（Guards 循环）；:26-41 ⇒ 24-38（CastleMapList）；
+    - ConfigFile.113-127 ⇒ 125-138（Read<T>）；:105-113 / :155-168（ReadWriteDate）⇒ :115-123 / :155-168；
+    - UserCastle.135/148/161/174/198/215（WAbil.HP）⇒ 133/147/157/167/185/205；
+    - UserCastle.305（7 空格落盘）⇒ 306；:52（构造 Path.Combine）⇒ 50；:229-233（LoadConfig）⇒ 228-232；
+    - CastleManager.164（Path.Combine CastleFile）⇒ 156/190；:196（写下标）⇒ 188；
+    - CastleConst.11 ⇒ 10；
+    - GameSvrConf.338（CastleName 默认）⇒ src/Modules/SystemModule/Conf/Model/GameSvrConf.cs:1782。
+
+盘点对照：mir2-rs/tests/parity/m3/M3⑧公会攻城现状盘点报告-20261013.md §1.D/§1.F/§1.J/§2 #7/#11/#13/#14/#16。

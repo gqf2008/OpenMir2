@@ -1,0 +1,15 @@
+RNG_CONSUMER_GROUPDIFF include_attack=False fold=True a=E:/tmp/m3bag-sgd/dbg/a.tsv(3) b=E:/tmp/m3bag-sgd/dbg/b.tsv(3)
+  FOLD_MAP {'construct': 'spawn'}（R-6：C# construct 折叠到 Rust spawn；折叠后计数+相对次序必须相等）
+  A_GROUPS {'spawn': 2, 'monster_ai': 1}
+  B_GROUPS {'spawn': 2, 'monster_ai': 1}
+  ONLY_IN_A(missing_in_B) {}
+  ONLY_IN_B(extra_in_B)   {}
+  SHARED_GROUPS ['monster_ai', 'spawn']
+  FOLDED_COUNT_EQUAL {'spawn': 2, 'monster_ai': 1}
+  FIRST_SHARED_ORDER_DIVERGENCE none（共享组相对次序逐位全等，len=3）
+  RUNS a=2 b=2
+  ROW_COVERAGE a_dropped=0 b_dropped=0
+  FIRST_RUN_DIVERGENCE none（组 run 序逐位全等）
+  VERDICT IDENTICAL
+
+GREEN: 组集合 + 折叠计数 + 共享组相对次序全等

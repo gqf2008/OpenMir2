@@ -1,0 +1,45 @@
+STATS records=2 bots=2 frames=0 texts=0 slaves=0 ok=2 fail=0
+CROSS csharp=C:\Users\gxh\AppData\Local\Temp\heropet-selftest-2t38fx24\csharp.jsonl rust=C:\Users\gxh\AppData\Local\Temp\heropet-selftest-2t38fx24\rust.jsonl
+HEROPET GREEN diff=0
+HEROPET bot=m3hp0 k=0 RED op csharp='summon' rust='observe'
+STATS records=2 bots=2 frames=0 texts=0 slaves=0 ok=2 fail=0
+CROSS csharp=C:\Users\gxh\AppData\Local\Temp\heropet-selftest-2t38fx24\csharp.jsonl rust=C:\Users\gxh\AppData\Local\Temp\heropet-selftest-2t38fx24\rust.jsonl
+HEROPET RED diff=1
+RED: PREREQ_RED 缺文件: C:\Users\gxh\AppData\Local\Temp\heropet-selftest-2t38fx24\nope.jsonl
+ok identical-green
+ok mutate-op-red
+ok mutate-role-red
+ok mutate-ran-red
+ok mutate-param-red
+ok mutate-branch-red
+ok mutate-exp-red
+ok mutate-level-red
+ok mutate-slavecount-red
+ok mutate-slaves-red
+ok mutate-gold-red
+ok mutate-bag-red
+ok mutate-frame-sm-red
+ok mutate-frame-text-red
+ok mutate-records-red
+ok mutate-bots-red
+ok slaves-multiset-order-green
+ok slaves-multiset-count-red
+ok frame-scalar-red
+ok frame-scalar-green
+ok frame-order-red
+ok validate-ok
+ok validate-kgap-red
+ok validate-badop-red
+ok validate-nonint-k-red
+ok validate-missing-text-red
+ok validate-frame-sm-nonint-red
+ok assemble-ok
+ok assemble-nosend-red
+ok assemble-noend-red
+ok assemble-done-mismatch-red
+ok assemble-unknown-phase-red
+ok assemble-no-events-red
+ok cli-diff-green
+ok cli-diff-red
+ok cli-diff-missing-prereq
+SELFTEST ok=36/36

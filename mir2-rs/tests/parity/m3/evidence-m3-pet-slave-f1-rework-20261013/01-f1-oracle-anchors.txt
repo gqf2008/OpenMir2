@@ -1,0 +1,19 @@
+M3⑨-2 F-1 返工 oracle 锚点（文件:行号，在本 worktree 的 src/ 实测）
+================================================================================
+
+触发：reviewer-6 `7724b9e441` 对 head `8cd889090` 的 `request_changes`（唯一 Important = F-1），
+外加两条非阻塞 Minor（M-1 `magics.rs` 文档、M-2 证据 README head 字段）。
+
+[F-1] `RM_MAGICFIRE` 需投给施法者自己
+    src/M2Server/Player/PlayObject.Message.cs:1454-1460   case RM_SPELL: **if (processMsg.ActorId != ActorId)** { … SendSocket(SM_SPELL) }   ← 有自身守卫（排除自己）
+    src/M2Server/Player/PlayObject.Message.cs:1788-1794   case RM_MAGICFIRE: （**无** `ActorId != ActorId` 守卫）… SendSocket(SM_MAGICFIRE)
+    src/M2Server/Actor/BaseObject.Message.cs:383-445      SendRefMsg 的收件人集合（含施法者所站格 → 自己也在集合内）
+    ⇒ `RM_SPELL` 广播去自己，`RM_MAGICFIRE` 广播**含自己**；两者走同一 `SendRefMsg`，差别只在各
+       `GetMessage` 处理器的守卫。Rust 侧原用同一个 `broadcast_ref_msg`（排除自己）发两帧 ⇒ F-1。
+
+[M-1] `GetMagicInfo(int)` 是线性首匹配
+    src/M2Server/Player/PlayObject.cs:4174-4185           internal UserMagic GetMagicInfo(int nMagicId) —— 线性扫 `MagicList`，返回**首个** `Magic.Id == nMagicId`
+    ⇒ 重复 MagId 时 oracle 取**首个**；`magics.rs::MagicTable`（HashMap）是后者覆盖 ⇒ 有分歧（DDL 主键唯一 ⇒ 不可达）。原文档写成「oracle 也后者覆盖」是错的 ⇒ 订正。
+
+[M-2] 证据 README 的 `head` 字段
+    （本条无 oracle 锚；见 `evidence-m3-pet-slave-summon-wire-20261013/README.md` 已钉被审 head `8cd889090`。）

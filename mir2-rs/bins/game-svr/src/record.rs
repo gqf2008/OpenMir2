@@ -319,6 +319,57 @@ pub fn encode_ability(abil: &Ability) -> Vec<u8> {
     w.out[1..].to_vec()
 }
 
+/// 帧 52 尾的**冻结客户端布局**（备选；默认不启用，见 `MIR2_CLIENT_ABILITY_LAYOUT`）。
+///
+/// 真机实测（2026-10-13，`D:\MirClient-run\MirClinet.exe`）：`MirClient` 的 `TAbility` 在
+/// `HIGHHP = True`（`Source/Common/Grobal2.pas:39`）下是 **58B** 记录，字段为
+/// `Level: Word`、`AC/MAC/DC/MC/SC: Integer`(4B)、`HP/MP/MaxHP/MaxMP: DWORD`(4B)、
+/// `Exp/MaxExp: DWORD`(4B)、`Weight/MaxWeight/WearWeight/MaxWearWeight/HandWeight/MaxHandWeight: Word`
+/// （`:2167-2193`）；`SM_ABILITY` 处理器按 `SizeOf(TAbility)` 整块拷（`ClMain.pas:10102`），HUD 取
+/// `m_Abil.HP/MaxHP`（`FState.pas:8887`），`CanRun` 要求 `HP >= RUN_MINHEALTH(10)`（`Actor.pas:2165`）。
+///
+/// oracle 的 40B `EncodeMessage(WAbil)`（[`encode_ability`]）与该记录**布局不匹配**：客户端把
+/// offset 22 读成 `HP`(DWORD) = oracle 的 `Exp`（本部署 = 0）⇒ HUD `0/0`、`CanRun` 拒绝跑。
+/// C# 对照组同病（真机逐像素一致，见
+/// `tests/parity/world/client-e2e-enter-gaps-20261013/README.md`）。
+///
+/// **值取自同一 `WAbil`，只有布局不同**：`Level@0`(Word)、`AC@2/MAC@6/DC@10/MC@14/SC@18`(Integer)、
+/// `HP@22/MP@26/MaxHP@30/MaxMP@34`(DWORD)、`Exp@38/MaxExp@42`(DWORD)、
+/// `Weight@46/MaxWeight@48/WearWeight@50/MaxWearWeight@52/HandWeight@54/MaxHandWeight@56`(Word)。
+///
+/// **本函数不改默认行为**：生产路径只有在 `MIR2_CLIENT_ABILITY_LAYOUT` 打开时才用它；默认仍走
+/// [`encode_ability`]（与 oracle 逐字节相同）。要走它属 §6.0-3「与 oracle 的故意偏离」，
+/// 需 owner 裁决 + 白名单登记。
+#[must_use]
+#[allow(dead_code)]
+pub fn encode_ability_client(abil: &Ability) -> Vec<u8> {
+    let mut w = Writer::default();
+    // `Level: Word`（oracle 用 `level + reserved1` 两字节占同一槽；`reserved1` 恒 0）。
+    w.u16(u16::from(abil.level));
+    // `AC/MAC/DC/MC/SC: Integer`（零扩展）。
+    w.i32(i32::from(abil.ac));
+    w.i32(i32::from(abil.mac));
+    w.i32(i32::from(abil.dc));
+    w.i32(i32::from(abil.mc));
+    w.i32(i32::from(abil.sc));
+    // `HP/MP/MaxHP/MaxMP: DWORD`。
+    w.i32(i32::from(abil.hp));
+    w.i32(i32::from(abil.mp));
+    w.i32(i32::from(abil.max_hp));
+    w.i32(i32::from(abil.max_mp));
+    // `Exp/MaxExp: DWORD`。
+    w.i32(abil.exp);
+    w.i32(abil.max_exp);
+    // `Weight/MaxWeight/WearWeight/MaxWearWeight/HandWeight/MaxHandWeight: Word`。
+    w.u16(abil.weight);
+    w.u16(abil.max_weight);
+    w.u16(u16::from(abil.wear_weight));
+    w.u16(u16::from(abil.max_wear_weight));
+    w.u16(u16::from(abil.hand_weight));
+    w.u16(u16::from(abil.max_hand_weight));
+    w.out
+}
+
 fn decode_naked(r: &mut Reader) -> PResult<Option<NakedAbility>> {
     if !obj_header(r, 10)? {
         return Ok(None);
@@ -962,6 +1013,58 @@ mod tests {
             tail,
             "encode_ability 必须逐字节等于金标准 #12 的 EncodeMessage 体"
         );
+    }
+
+    /// 冻结客户端布局（`HIGHHP=True`，`Grobal2.pas:2167-2193`）：58B，`HP` 在 offset 22（DWORD）。
+    ///
+    /// 与真机读数对齐：oracle 40B 尾在本部署下被客户端读成 `HP=offset22=Exp=0`、
+    /// `MP=offset26=MaxExp 错位`（截图 `0/0` + `655360/251658290`）；本函数把同一 `WAbil` 的
+    /// `hp/mp/max_hp/max_mp` 放到客户端实际读取的偏移上。
+    #[test]
+    fn encode_ability_client_matches_highhp_record() {
+        let abil = Ability {
+            level: 1,
+            ac: 3,
+            mac: 4,
+            dc: 257,
+            mc: 5,
+            sc: 6,
+            hp: 19,
+            mp: 15,
+            max_hp: 19,
+            max_mp: 15,
+            exp: 10,
+            max_exp: 20,
+            weight: 50,
+            max_weight: 60,
+            wear_weight: 7,
+            max_wear_weight: 8,
+            hand_weight: 9,
+            max_hand_weight: 12,
+            ..Ability::default()
+        };
+        let b = encode_ability_client(&abil);
+        assert_eq!(b.len(), 58, "客户端 TAbility（HIGHHP=True）= 58B");
+        let u16a = |o: usize| u16::from_le_bytes([b[o], b[o + 1]]);
+        let i32a = |o: usize| i32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]);
+        assert_eq!(u16a(0), 1, "Level@0");
+        assert_eq!(i32a(2), 3, "AC@2");
+        assert_eq!(i32a(6), 4, "MAC@6");
+        assert_eq!(i32a(10), 257, "DC@10");
+        assert_eq!(i32a(14), 5, "MC@14");
+        assert_eq!(i32a(18), 6, "SC@18");
+        assert_eq!(i32a(22), 19, "HP@22（客户端 HUD 的第一对数）");
+        assert_eq!(i32a(26), 15, "MP@26");
+        assert_eq!(i32a(30), 19, "MaxHP@30");
+        assert_eq!(i32a(34), 15, "MaxMP@34");
+        assert_eq!(i32a(38), 10, "Exp@38");
+        assert_eq!(i32a(42), 20, "MaxExp@42");
+        assert_eq!(u16a(46), 50, "Weight@46");
+        assert_eq!(u16a(48), 60, "MaxWeight@48");
+        assert_eq!(u16a(50), 7, "WearWeight@50");
+        assert_eq!(u16a(52), 8, "MaxWearWeight@52");
+        assert_eq!(u16a(54), 9, "HandWeight@54");
+        assert_eq!(u16a(56), 12, "MaxHandWeight@56");
     }
 
     #[test]

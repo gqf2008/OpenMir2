@@ -46,11 +46,13 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use game_svr::chat;
 use game_svr::downlink;
+use game_svr::magics;
 use game_svr::movewire;
 use game_svr::party as partywire;
 use game_svr::smframe;
 use mir2_protocol::frame::ServerMessage;
 use mir2_protocol::messages::grobal2;
+use mir2_world::magic;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::{TcpListener, TcpStream};
@@ -168,6 +170,19 @@ impl CommandMessage {
             series: u16::from_le_bytes([b[10], b[11]]),
         })
     }
+}
+
+/// 帧 52 尾的布局开关（`openmir2-client-e2e-enter-gaps` 的 ③）。
+///
+/// `MIR2_CLIENT_ABILITY_LAYOUT` 为真值（`1`/`true`/`TRUE`/`True`）⇒ 用冻结客户端的 58B
+/// `TAbility`（`HIGHHP=True`，[`record::encode_ability_client`]）；未设/其它 ⇒ oracle 的 40B
+/// `EncodeMessage(WAbil)`。**默认关**：未设时生产路径与 oracle 逐字节相同（四门禁/金标准不回归）。
+/// 打开它是 §6.0-3 意义上的「与 oracle 的故意偏离」，需 owner 裁决 + 白名单登记。
+fn mir2_client_ability_layout() -> bool {
+    matches!(
+        std::env::var("MIR2_CLIENT_ABILITY_LAYOUT").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE") | Ok("True")
+    )
 }
 
 #[tokio::main]
@@ -373,6 +388,33 @@ async fn main() -> Result<()> {
     // 查表口径只有一份：装成 `game_svr::ability::StdItemCatalog`（1-based + 空名按缺），
     // 供帧 50/41 的 `StdItem.Shape` 与 52/752 的 `RecalcAbilitys` 共用。
     let item_catalog = items::catalog_from(&item_table);
+    // **M3⑨-实现 2 第②片**：魔法模板表 `magics`（oracle `MySqlDB.LoadMagicDB`，
+    // `MySqlDB.cs:105`，`GameApp.Initialize` 直连 MySQL 读）。`DoSpell` 取 `Magic.Effect`/
+    // `EffectType`（`RM_SPELL`/`RM_MAGICFIRE` 帧参）与熟练度尾的 `TrainLv`/`TrainLevel`/`MaxTrain`。
+    // 读不到 ⇒ 空表（调用方按 `GetMagicInfo == null` 降级：不接效果体，登记）。
+    let magic_table = {
+        let conn = cfg
+            .db_conn_string
+            .as_deref()
+            .unwrap_or(items::DEFAULT_CONN_STRING);
+        match magics::load_magics(conn).await {
+            Ok(list) => {
+                glog!(
+                    "INF",
+                    "魔法模板表 magics：{} 条（直连 MySQL，DoSpell 效果体/帧参输入）",
+                    list.len()
+                );
+                magics::MagicTable::new(list)
+            }
+            Err(e) => {
+                glog!(
+                    "WRN",
+                    "读 magics 失败（{e}）⇒ 空魔表（GetMagicInfo 恒 null ⇒ 效果体不接，登记）"
+                );
+                magics::MagicTable::default()
+            }
+        }
+    };
     // 经验表（`Exps.conf` 的 `NeedExps`，`BaseObject.GetLevelExp` 的数据源）：存档 `MaxExp`
     // （`PlayObject.cs:1310`）与击杀经验都用它。读不到 ⇒ 全 0（oracle `Config.NeedExps` 未载入同形；登记）。
     let need_exps = match mir2_data::exps::ExpsConfig::from_file(&base.join("Exps.conf")) {
@@ -459,6 +501,18 @@ async fn main() -> Result<()> {
             mir2_world::mongen::MonGenConfig::default()
         }
     };
+    // **M3⑨-实现 2 第②片**：`Server.conf` 的宝宝配置（`PetSlaveConfig::from_ini`，
+    // ① 已交付但未接生产路径）。`DoSpell` 召唤面用它选型。读不到 ⇒ oracle 初值（登记）。
+    let pet_cfg = match game_svr::slave::pet_slave_config_from_conf(&conf) {
+        Ok(c) => c,
+        Err(e) => {
+            glog!(
+                "WRN",
+                "读宝宝配置失败（{e}）⇒ 用 PetSlaveConfig 初值（登记）"
+            );
+            mir2_data::pet_slave::PetSlaveConfig::default()
+        }
+    };
     let _sim = std::thread::Builder::new()
         .name("m2-sim".to_string())
         // 公告文本（oracle `NoticeMgr.GetNoticeMsg("Notice")`，帧 658 `SM_SENDNOTICE`）：
@@ -473,6 +527,9 @@ async fn main() -> Result<()> {
                     string_conf,
                     show_rank_level_name,
                     catalog: item_catalog,
+                    magic_table,
+                    pet_cfg,
+                    magic_attack_rage: i32::from(cfg.magic_attack_rage),
                     ground: GroundCfg {
                         human_max_gold: cfg.human_max_gold,
                         floor_item_can_pick_up_time: cfg.floor_item_can_pick_up_time,
@@ -861,7 +918,9 @@ fn handle_ground_cmd(
     tail: Option<&str>,
     chr_name: &str,
     socket: i32,
-    dealing: bool,
+    // `PlayObject.Dealing` / `PlayObject.DealLastTick`（M3⑦-实现 3/4）的真值来源。
+    // 传整表而非两个散值：取值固定在 `handle_ground_cmd` 内，调用点无法各自漏接/写死。
+    trade_sessions: &std::collections::HashMap<String, game_svr::trade::DealState>,
     world: &mir2_world::World,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     online: &OnlineRegistry,
@@ -902,6 +961,13 @@ fn handle_ground_cmd(
     let mut map =
         game_svr::pickwire::build_ground_map(&view, map_id, grid.width, grid.height, catalog);
     let now_tick = world.clock_ms as i32;
+    // `PlayObject.Dealing`（M3⑦-实现 3）：交易中禁拾取/禁丢弃。
+    // `PlayObject.DealLastTick`（M3⑦-实现 4；`handle_deal_cmd` 用 `world.clock_ms` 写入）：
+    // 新会话为 0 ⇒ 过 3000ms 门；交易中才拦 drop（`Operate.cs:269`）。
+    let dealing = trade_sessions.get(chr_name).is_some_and(|s| s.dealing);
+    let deal_last_tick = trade_sessions
+        .get(chr_name)
+        .map_or(0, |s| s.deal_last_tick as i32);
     let flag = registry.and_then(|r| r.flag_of(map_id));
     // 先跑纯函数（会**原地改** `sg.state`），再按**改后**的会话态组 `WireSession`
     // ——oracle 的 `GoldChanged()`/`WeightChanged()` 都在 `Gold +=`/`AddItemToBag` **之后**发
@@ -915,6 +981,17 @@ fn handle_ground_cmd(
             );
             return;
         }
+        // `ClientPickUpItemIsOfGroup`（`PlayObject.Base.cs:38-54`）：M3⑦-实现 4 接上真注册表。
+        let group_owner = world.entities.get(actor_id).map_or(0, |e| e.group_owner);
+        let group_member_actor_ids: Vec<i32> = if group_owner != 0 {
+            world
+                .entities
+                .get(group_owner)
+                .map(|e| e.group_members.clone())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         let ctx = game_svr::ground::PickUpContext {
             catalog,
             actor_id,
@@ -927,9 +1004,9 @@ fn handle_ground_cmd(
             human_max_gold: cfg.human_max_gold,
             // `Race == ActorRace.Play`（`SendAddItem` 仅在玩家时发）⇒ 恒真（本宿主只收玩家）。
             race_is_play: true,
-            // 组队系统未移植（`GroupOwner=0`）⇒ 群组分支恒 false（登记）。
-            group_owner: 0,
-            group_member_actor_ids: &[],
+            // `ClientPickUpItemIsOfGroup`（`PlayObject.Base.cs:38-54`）：M3⑦-实现 4 接上真注册表。
+            group_owner,
+            group_member_actor_ids: &group_member_actor_ids,
             red_msg_f_color: u16::from(colors.red_f),
             red_msg_b_color: u16::from(colors.red_b),
         };
@@ -945,8 +1022,9 @@ fn handle_ground_cmd(
             curr_x: cx,
             curr_y: cy,
             now_tick,
-            // `DealLastTick` 未建模（无交易系统）⇒ 0（新会话即过 3000ms 门）。
-            deal_last_tick: 0,
+            // `PlayObject.DealLastTick`（M3⑦-实现 4）：交易会话真值（`handle_deal_cmd` 用
+            // `world.clock_ms` 写入）⇒ 新会话为 0（过 3000ms 门），交易中才拦 drop。
+            deal_last_tick,
             make_index: i32::from(param),
             item_name,
             in_safe_disable_drop: cfg.in_safe_disable_drop,
@@ -995,6 +1073,36 @@ fn pose_create(
         return None;
     }
     front_target(world, actor_id, e.map_id, fx, fy)
+}
+
+/// `ClientDealTry` 的 `GetPoseCreate()` 目标判定（`PlayObject.Operate.cs:928-958`）。
+///
+/// oracle 在 `:929` 对 `GetPoseCreate()` 的结果直接取 `poseObject.Race`：
+/// - `null` ⇒ NullReferenceException，被 `WorldServer.ProcessPlayObjectData` 的
+///   `catch`（`WorldServer.cs:734`）吞掉 ⇒ **一个帧都不发**（不是 `SM_DEALTRY_FAIL`）；
+/// - 非玩家 ⇒ `:955-958` 的 `else` ⇒ `SM_DEALTRY_FAIL`；
+/// - 玩家且 `== this` ⇒ `:934` 内层 `if (targetPlayObject != this)` 无 `else` ⇒ **不发帧**；
+/// - 玩家且 `!= this` ⇒ `:933` 取对方 `GetPoseCreate()` 是否回指自己（`faces_me`）。
+fn deal_try_target_of(
+    world: &mir2_world::World,
+    displays: &downlink::DisplayTable,
+    actor_id: i32,
+    pose_id: Option<i32>,
+) -> (Option<i32>, game_svr::trade::DealTryTarget) {
+    match pose_id {
+        None => (None, game_svr::trade::DealTryTarget::Absent),
+        Some(oid) if oid == actor_id => (None, game_svr::trade::DealTryTarget::Absent),
+        Some(oid) if !is_play_actor(world, oid) => {
+            (None, game_svr::trade::DealTryTarget::NotPlayer)
+        }
+        Some(oid) => {
+            let faces_me = pose_create(world, displays, oid) == Some(actor_id);
+            (
+                Some(oid),
+                game_svr::trade::DealTryTarget::Other { faces_me },
+            )
+        }
+    }
 }
 
 /// `poseObject.Race == ActorRace.Play`（`PlayObject.Operate.cs:933`）。
@@ -1050,19 +1158,7 @@ fn handle_deal_cmd(
     // 目标解析：`CM_DEALTRY` 用 `GetPoseCreate()`，其余命令用已建立的 `DealCreat`。
     let pose_id = pose_create(world, displays, actor_id);
     let (other_id, try_target) = if ident == mir2_protocol::messages::CM_DEALTRY {
-        match pose_id
-            .filter(|id| *id != actor_id)
-            .filter(|id| is_play_actor(world, *id))
-        {
-            None => (None, game_svr::trade::DealTryTarget::NotPlayer),
-            Some(oid) => {
-                let faces_me = pose_create(world, displays, oid) == Some(actor_id);
-                (
-                    Some(oid),
-                    game_svr::trade::DealTryTarget::Other { faces_me },
-                )
-            }
-        }
+        deal_try_target_of(world, displays, actor_id, pose_id)
     } else {
         (
             trade_sessions.get(chr_name).and_then(|s| s.deal_creature),
@@ -1317,6 +1413,7 @@ fn handle_bag_cmd(
     world: &mir2_world::World,
     displays: &mut downlink::DisplayTable,
     ref_msg_range: i32,
+    dealing: bool,
 ) {
     let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
         glog!(
@@ -1360,7 +1457,9 @@ fn handle_bag_cmd(
         guild_rank_no: 0,
         is_castle_member: false,
         user_unlock_durg: false,
-        dealing: false,
+        // `PlayObject.Dealing`（M3⑦-实现 4）：交易中禁穿装/卸装（`Operate.cs:501/525` 的
+        // `!Dealing` 门）。
+        dealing,
         disable_take_off_keys: &[],
         on_horse: false,
         horse_type: 0,
@@ -2908,12 +3007,17 @@ fn handle_hit_cmd(
     true
 }
 
-/// **`openmir2-m3-attack-magic-wiring`（第二片）**：`CM_SPELL(3017)` 派发
-/// （oracle `WorldServer.cs:783-790` → `PlayObject.Message.cs:1339-1400`）。
+/// **`openmir2-m3-attack-magic-wiring`（第二片）** + **`openmir2-m3-pet-slave-summon`（第②片）**：
+/// `CM_SPELL(3017)` 派发（oracle `WorldServer.cs:783-790` → `PlayObject.Message.cs:1339-1400`）。
 ///
-/// 本片实现到 `ClientSpellXY` 的**守卫**与成功后 `+GD` ack；技能效果体（限速 /`switch(MagIdx)`/
-/// `DoSpell`/`RM_SPELL`）未接，登记见 `magicwire` 模块头。拒绝支 oracle 在 `delayTime == 0`
-/// 时 `SendRefMsg(RM_MOVEFAIL, …)`（编码器未接）⇒ 只记日志、不静默。
+/// 守卫 + 成功后 `+GD` ack 沿用第二片；**第②片**接上 `DoSpell` 的**召唤面**（17/30/41）
+/// 效果体：`default` 支的 `CretInNearXy` 目标修正 → `MagicAttackRage` 距离门 →
+/// `SendRefMsg(RM_SPELL,…)` → 护身符门/消耗 → `summon_from_spell` → `boSpellFire` 的
+/// `RM_MAGICFIRE` → `boTrain` 熟练度尾 `RM_MAGIC_LVEXP`。**第③片**接 **20（诱惑）**：
+/// `SKILL_TAMMING` 支（`MagicManager.cs:394-397`）的 `IsProperTarget && !Animal` 门 →
+/// `cast_tamming_spell`（`MagTamming` 账本 + `World::tame_adopt` 落尾）。46（分身）登记见
+/// `game_svr::slave` 模块头 + `crates/world::slave::CLONE_DEFERRED`。
+/// 效果体限速 / `SpellTick -= 450` / MP 消耗仍按 `magicwire` 模块头登记未接。
 #[allow(clippy::too_many_arguments)]
 fn handle_spell_cmd(
     recog: i32,
@@ -2923,8 +3027,15 @@ fn handle_spell_cmd(
     chr_name: &str,
     socket: i32,
     online: &OnlineRegistry,
-    world: &mir2_world::World,
-    saves: &std::collections::HashMap<String, SavedHuman>,
+    world: &mut mir2_world::World,
+    saves: &mut std::collections::HashMap<String, SavedHuman>,
+    ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    magic_table: &magics::MagicTable,
+    pet_cfg: &mir2_data::pet_slave::PetSlaveConfig,
+    magic_attack_rage: i32,
+    registry: Option<&mir2_envir::MapRegistry>,
+    table: &game_svr::mongen::MonsterTable,
     displays: &mut downlink::DisplayTable,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) {
@@ -2945,15 +3056,16 @@ fn handle_spell_cmd(
     };
     let (cur_x, cur_y) = (e.x, e.y);
     let is_dead = e.death;
+    let caster_abil_level = e.level;
     let req = magicwire::parse_spell(recog, tag, param, series);
     // `GetMagicInfo(nKey)` 读角色记录的 `MagicList`（= `SavedHuman.record.data.magic`，进世界时
     // 保位存下的 `CharacterData.magic`）。
-    let matched_mag_idx = saves
+    let matched = saves
         .get(chr_name)
         .and_then(|s| s.record.data.magic.as_deref())
         .and_then(|list| magicwire::find_magic(list, req.magic_id))
-        .map(|m| i32::from(m.mag_idx));
-    let has_magic = matched_mag_idx.is_some();
+        .cloned();
+    let has_magic = matched.is_some();
     // `IsCanSpell`（`PlayObject.cs:960` 初值 true；`LockSpellAction` 状态面未移植 ⇒ 恒 true，登记）。
     if let Some(reject) = magicwire::spell_reject(true, is_dead, has_magic) {
         glog!(
@@ -2966,14 +3078,300 @@ fn handle_spell_cmd(
     // `switch (UserMagic.MagIdx)` 的 `default` 支首句
     // `Dir = M2Share.GetNextDirection(CurrX, CurrY, nTargetX, nTargetY)`
     // （`PlayObject.Attack.cs:1269-1270`；原注误写 :1256，已按 reviewer-5 `1de8fca5` 的 F-1 订正）；
-    // 效果体其余部分未接（登记）。**F-2 收口**（reviewer-5 `1de8fca5`）：该句只在 `default` 支执行，
+    // **F-2 收口**（reviewer-5 `1de8fca5`）：该句只在 `default` 支执行，
     // `switch` 的 8 条独立 `case`（12/25/26/27/34/38/43/56）**不执行** ⇒ 只有非这 8 个魔号才改展示方向。
-    if matched_mag_idx.is_some_and(magicwire::takes_default_dir) {
+    if matched
+        .as_ref()
+        .is_some_and(|m| magicwire::takes_default_dir(i32::from(m.mag_idx)))
+    {
         let dir = movewire::next_direction(cur_x, cur_y, req.target_x, req.target_y);
         set_display_dir(displays, actor_id, dir);
     }
+    // **第②片**：召唤面（17/30/41）的 `default` 支效果体（`PlayObject.Attack.cs:1271-1279` + `MagicManager.cs:145-670`）。
+    if matches!(
+        req.magic_id,
+        mir2_world::slave::SKILL_SKELLETON
+            | mir2_world::slave::SKILL_SINSU
+            | mir2_world::slave::SKILL_ANGEL
+    ) {
+        if let (Some(magic), Some(reg)) = (magic_table.get(req.magic_id), registry) {
+            // `CretInNearXy(targetObject, nTargetX, nTargetY)`（`PlayObject.Base.cs:984-1011`）：
+            // 目标在 `(nTargetX,nTargetY)` 的 1×1 邻域内 ⇒ `spellObject = targetObject` 且
+            // snap 坐标到目标实际坐标。
+            let (mut tx, mut ty) = (req.target_x, req.target_y);
+            let target_id = match world.entities.get(req.target_actor_id) {
+                Some(t) if !t.ghost && (t.x - tx).abs() <= 1 && (t.y - ty).abs() <= 1 => {
+                    tx = t.x;
+                    ty = t.y;
+                    Some(req.target_actor_id)
+                }
+                _ => None,
+            };
+            // `DoSpell` 距离门（`MagicManager.cs:155`，`SystemShare.Config.MagicAttackRage`）。
+            if magic::spell_in_range(
+                i16::try_from(cur_x).unwrap_or(0),
+                i16::try_from(cur_y).unwrap_or(0),
+                i16::try_from(tx).unwrap_or(0),
+                i16::try_from(ty).unwrap_or(0),
+                magic_attack_rage,
+            ) {
+                // `SendRefMsg(RM_SPELL, Magic.Effect, nTargetX, nTargetY, Magic.MagicId, "")`（`:159`）。
+                let rm = smframe::sm_spell(
+                    actor_id,
+                    wire_coord(tx),
+                    wire_coord(ty),
+                    magic.effect,
+                    req.magic_id,
+                );
+                broadcast_ref_msg(world, online, gates, actor_id, &[rm]);
+                // 护身符门（`CheckAmulet`）用的本会话 `UseItems[ArmRingl/Bujuk]`。
+                let armringl = amulet_slot(
+                    ground_sessions.get(chr_name),
+                    game_svr::ability::SLOT_ARMRING_L,
+                    catalog,
+                );
+                let bujuk = amulet_slot(
+                    ground_sessions.get(chr_name),
+                    game_svr::ability::SLOT_BUJUK,
+                    catalog,
+                );
+                let caster_dir = displays.get(actor_id).map_or(0, |d| d.dir);
+                // `UserMagic` 的内存态（Level/TranPoint 在尾里被 `TrainSkill`/`CheckMagicLevelUp` 改）。
+                let mut train = magic::SkillTrainState {
+                    magic_id: req.magic_id,
+                    level: matched.as_ref().map_or(0, |m| m.level),
+                    tran_point: matched.as_ref().map_or(0, |m| m.tran_point),
+                    train_lv: magic.train_lv,
+                    train_level: magic.train_level,
+                    max_train: magic.max_train,
+                };
+                let magic_level = train.level;
+                let input = game_svr::slave::SlaveCastInput {
+                    magic_id: req.magic_id,
+                    magic_level,
+                    caster_id: actor_id,
+                    caster_dir,
+                    caster_abil_level,
+                    armringl,
+                    bujuk,
+                    // `FastTrain` 由「快速修炼项链」置位（`PlayObject.cs:2168`），本仓未装载 ⇒ false（登记）。
+                    fast_train: false,
+                    cfg: pet_cfg,
+                    magic,
+                };
+                let outcome = game_svr::slave::cast_slave_spell(
+                    world, &input, &mut train, reg, table, displays,
+                );
+                // 熟练度回写存档记录（`MakeSaveRcd` 的 `MagicList` 同源）。
+                if let Some(rcd) = saves
+                    .get_mut(chr_name)
+                    .and_then(|s| s.record.data.magic.as_mut())
+                    .and_then(|list| {
+                        list.iter_mut()
+                            .flatten()
+                            .find(|m| m.mag_idx == req.magic_id)
+                    })
+                {
+                    rcd.level = train.level;
+                    rcd.tran_point = train.tran_point;
+                }
+                // 护身符消耗落 `UseItems` + `SendMsg(RM_DURACHANGE, idx, Dura, DuraMax, 0)`（`MagicBase.cs:118-121`）。
+                if let Some((slot, used)) = outcome.amulet {
+                    apply_amulet_use(ground_sessions.get_mut(chr_name), slot, used);
+                    if !used.deleted {
+                        if let Some(it) = ground_sessions
+                            .get(chr_name)
+                            .and_then(|sg| sg.use_items.get(usize::from(slot)))
+                            .and_then(Option::as_ref)
+                        {
+                            let body = smframe::sm_durachange(it.dura, slot, it.dura_max);
+                            send_self_frame(online, gates, chr_name, body);
+                        }
+                    }
+                    // `deleted` 支的 `SendDelItems` 帧面未接（登记）；清槽已由 `apply_amulet_use` 落。
+                }
+                // `boSpellFire` ⇒ `SendRefMsg(RM_MAGICFIRE, 0, MakeWord(EffectType,Effect), MakeLong(tx,ty), targetActorId, "")`（`:648-658`）。
+                // **F-1**：`RM_MAGICFIRE` 处理器无 `ActorId != ActorId` 守卫（`PlayObject.Message.cs:1788-1793`）
+                // ⇒ 广播集合**含施法者自己**（`RM_SPELL` 仍排除自己）。
+                if outcome.magic_fire {
+                    let body = smframe::sm_magicfire(
+                        actor_id,
+                        wire_coord(tx),
+                        wire_coord(ty),
+                        magic.effect_type,
+                        magic.effect,
+                        target_id.unwrap_or(0),
+                    );
+                    broadcast_ref_msg_with_self(world, online, gates, actor_id, &[body]);
+                }
+                // 熟练度尾帧（`:659-669`）：`SendSelfDelayMsg(RM_MAGIC_LVEXP, 0, MagicId, Level, TranPoint, "", 1000)`。
+                if outcome.train.levelup_msg {
+                    let body = smframe::sm_magic_lvexp(req.magic_id, train.level, train.tran_point);
+                    send_self_frame(online, gates, chr_name, body);
+                }
+                let _ = outcome.accepted; // oracle `ClientSpellXY` 恒 `result = true`（失败只多一帧 RM_MAGICFIREFAIL，未接）。
+            }
+        } else {
+            glog!(
+                "DBG",
+                "CM_SPELL：召唤魔号 {} 无 MagicInfo/无地图注册表 ⇒ 效果体不接（登记）",
+                req.magic_id
+            );
+        }
+    }
+    // **⑨-2 第③片（20 诱惑）**：`SKILL_TAMMING` 效果体
+    // （`PlayObject.Attack.cs:1268-1278` → `MagicManager.cs:394-397` → `MagTamming` `:704-825`）。
+    if req.magic_id == mir2_world::slave::SKILL_TAMMING {
+        if let Some(magic) = magic_table.get(req.magic_id) {
+            // `CretInNearXy(targetObject, nTargetX, nTargetY)`：与召唤面同口径，
+            // 目标在 1×1 邻域内 ⇒ 修正到目标实际坐标并作为 `spellObject`。
+            let (mut tx, mut ty) = (req.target_x, req.target_y);
+            let target_id = match world.entities.get(req.target_actor_id) {
+                Some(t) if !t.ghost && (t.x - tx).abs() <= 1 && (t.y - ty).abs() <= 1 => {
+                    tx = t.x;
+                    ty = t.y;
+                    Some(req.target_actor_id)
+                }
+                _ => None,
+            };
+            // `DoSpell` 的距离门（`MagicManager.cs:154`）。
+            if magic::spell_in_range(
+                i16::try_from(cur_x).unwrap_or(0),
+                i16::try_from(cur_y).unwrap_or(0),
+                i16::try_from(tx).unwrap_or(0),
+                i16::try_from(ty).unwrap_or(0),
+                magic_attack_rage,
+            ) {
+                // `DoSpell` 顶部的 `SendRefMsg(RM_SPELL, Effect, nTargetX, nTargetY, MagicId, "")`（`:159`）。
+                let rm = smframe::sm_spell(
+                    actor_id,
+                    wire_coord(tx),
+                    wire_coord(ty),
+                    magic.effect,
+                    req.magic_id,
+                );
+                broadcast_ref_msg(world, online, gates, actor_id, &[rm]);
+                // `UserMagic` 的内存态（尾里用；与召唤面同一口径）。
+                let mut train = magic::SkillTrainState {
+                    magic_id: req.magic_id,
+                    level: matched.as_ref().map_or(0, |m| m.level),
+                    tran_point: matched.as_ref().map_or(0, |m| m.tran_point),
+                    train_lv: magic.train_lv,
+                    train_level: magic.train_level,
+                    max_train: magic.max_train,
+                };
+                let input = game_svr::slave::TammingCastInput {
+                    magic_level: train.level,
+                    caster_id: actor_id,
+                    caster_abil_level,
+                    target_id,
+                    // `FastTrain` 未装载 ⇒ false（登记，同召唤面）。
+                    fast_train: false,
+                    cfg: pet_cfg,
+                    magic,
+                };
+                let outcome = game_svr::slave::cast_tamming_spell(world, &input, &mut train);
+                // 熟练度回写存档记录（`MakeSaveRcd` 的 `MagicList` 同源）。
+                if let Some(rcd) = saves
+                    .get_mut(chr_name)
+                    .and_then(|s| s.record.data.magic.as_mut())
+                    .and_then(|list| {
+                        list.iter_mut()
+                            .flatten()
+                            .find(|m| m.mag_idx == req.magic_id)
+                    })
+                {
+                    rcd.level = train.level;
+                    rcd.tran_point = train.tran_point;
+                }
+                // `boSpellFire` ⇒ `RM_MAGICFIRE`（`:648-658`）；**F-1**：含施法者自己（同召唤面）。
+                if outcome.magic_fire {
+                    let body = smframe::sm_magicfire(
+                        actor_id,
+                        wire_coord(tx),
+                        wire_coord(ty),
+                        magic.effect_type,
+                        magic.effect,
+                        target_id.unwrap_or(0),
+                    );
+                    broadcast_ref_msg_with_self(world, online, gates, actor_id, &[body]);
+                }
+                // 熟练度尾帧（`:659-669`）。
+                if outcome.train.levelup_msg {
+                    let body = smframe::sm_magic_lvexp(req.magic_id, train.level, train.tran_point);
+                    send_self_frame(online, gates, chr_name, body);
+                }
+                // 帧面未接（登记）：`RM_MAKEHOLYSEIZEMODE`（`:712/797`）无编码器；
+                // 狂暴态/时长（`OpenCrazyMode`）本骨架无字段。状态落尾已由 `cast_tamming_spell` 完成。
+                let _ = outcome.accepted;
+            }
+        } else {
+            glog!(
+                "DBG",
+                "CM_SPELL：诱惑魔号 20 无 MagicInfo ⇒ 效果体不接（登记）"
+            );
+        }
+    }
     // `ClientSpellXY` 全分支 `result = true` ⇒ 调用方 `ActionTick = GetTickCount(); SendSocket(GetGoodTick)`。
     send_good_tick(online, gates, chr_name);
+}
+
+/// `MagicBase.CheckAmulet`（`MagicBase.cs:47-105`）的**宿主侧查表**：把 `UseItems[slot]`
+/// 的 `UserItem{Index,Dura}` + `StdItem{StdMode,Shape}` 装成 `crates/world::magic::AmuletSlot`。
+/// `Index == 0` / 槽空 / 模板缺 ⇒ `None`（oracle `Index > 0` + `GetStdItem != null` 的门）。
+fn amulet_slot(
+    sg: Option<&SessionGround>,
+    slot: usize,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+) -> Option<mir2_world::magic::AmuletSlot> {
+    let it = sg?.use_items.get(slot)?.as_ref()?;
+    if it.index == 0 {
+        return None;
+    }
+    let std = game_svr::ability::ItemCatalog::get(catalog, it.index)?;
+    Some(mir2_world::magic::AmuletSlot {
+        index: i32::from(it.index),
+        std_mode: std.std_mode,
+        shape: std.shape,
+        dura: i32::from(it.dura),
+    })
+}
+
+/// `MagicBase.UseAmulet`（`MagicBase.cs:109-127`）的**宿主副作用**：按 [`mir2_world::magic::AmuletUse`]
+/// 扣耐久或清槽（oracle `Dura -= …` / `Dura = 0; Index = 0`）。
+/// 帧面（`RM_DURACHANGE` / `RM_DELITEMS`）由调用方发。
+fn apply_amulet_use(sg: Option<&mut SessionGround>, slot: u8, used: mir2_world::magic::AmuletUse) {
+    let Some(sg) = sg else { return };
+    let idx = usize::from(slot);
+    if idx >= game_svr::ability::USE_ITEMS_LEN {
+        return;
+    }
+    if used.deleted {
+        // oracle `UseItems[idx].Dura = 0; SendDelItems(item); UseItems[idx].Index = 0;`。
+        sg.use_items[idx] = None;
+    } else if let Some(it) = sg.use_items[idx].as_mut() {
+        it.dura = u16::try_from(used.dura_after).unwrap_or(0);
+    }
+}
+
+/// `SendMsg(this, …)` / `SendSelfDelayMsg(…)` 的**自身收件人**下行（oracle 入自有 `MsgQueue`，
+/// 只回发起者那条连接）：`SM_DURACHANGE` / `SM_MAGIC_LVEXP`。
+fn send_self_frame(
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    chr_name: &str,
+    body: Vec<u8>,
+) {
+    let Some(me) = online.iter().find(|e| e.chr_name == chr_name) else {
+        return;
+    };
+    let Some(tx) = route_to_gate(gates, me.gate_idx, me.socket, "魔法自身帧") else {
+        return;
+    };
+    let _ = tx.send(SimToGate::SendFrame {
+        socket: me.socket,
+        body,
+    });
 }
 
 /// **`openmir2-m3-attack-magic-wiring`（第二片）**：`CM_MAGICKEYCHANGE(1008)` 派发
@@ -3017,6 +3415,10 @@ fn handle_magic_key_cmd(
 ///
 /// 各收件人的 `GetMessage` 对 `RM_TURN`/`RM_WALK`/`RM_RUN`/`RM_HORSERUN` 都带
 /// `if (processMsg.ActorId != ActorId)` ⇒ **广播集合去掉自己**（自己那条连接只收 `+GD` ack）。
+///
+/// **F-1（reviewer-6 `7724b9e441`）**：`RM_SPELL` 保持此口径（`PlayObject.Message.cs:1454-1459`
+/// 有 `ActorId != ActorId` 守卫）；`RM_MAGICFIRE` 的处理器**没有**该守卫
+/// （`PlayObject.Message.cs:1788-1793`）⇒ 施法者自己也收帧，用 [`broadcast_ref_msg_with_self`]。
 fn broadcast_ref_msg(
     world: &mir2_world::World,
     online: &OnlineRegistry,
@@ -3024,8 +3426,32 @@ fn broadcast_ref_msg(
     actor_id: i32,
     bodies: &[Vec<u8>],
 ) {
+    broadcast_ref_msg_opt(world, online, gates, actor_id, bodies, false);
+}
+
+/// `RM_MAGICFIRE` 口径（`PlayObject.Message.cs:1788-1793` 无 `ActorId != ActorId` 守卫）：
+/// 广播集合**包含施法者自己**。
+fn broadcast_ref_msg_with_self(
+    world: &mir2_world::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    actor_id: i32,
+    bodies: &[Vec<u8>],
+) {
+    broadcast_ref_msg_opt(world, online, gates, actor_id, bodies, true);
+}
+
+/// [`broadcast_ref_msg`] / [`broadcast_ref_msg_with_self`] 的公共体。
+fn broadcast_ref_msg_opt(
+    world: &mir2_world::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    actor_id: i32,
+    bodies: &[Vec<u8>],
+    include_self: bool,
+) {
     for target_id in chat::hear_targets(world, actor_id, chat::SEND_REF_MSG_RANGE) {
-        if target_id == actor_id {
+        if !include_self && target_id == actor_id {
             continue;
         }
         let Some(t) = online.iter().find(|e| e.actor_id == target_id) else {
@@ -3048,9 +3474,16 @@ fn broadcast_ref_msg(
 /// oracle `PlayObject` 构造器置 `WantRefMsg = true`（`PlayObject.cs:889`；`BaseObject` 缺省 false，
 /// `BaseObject.cs:431`）。AOI 可见过滤（`BaseObject.ViewRange.cs:112`）靠它把**非玩家**（怪物）
 /// 纳入可见集 —— 只靠 `race == ActorRace.Play` 只能看到其他玩家。
+///
+/// oracle 同一构造器还置 **`ViewRange = 12`**（`PlayObject.cs:904`；`BaseObject` 缺省 5，
+/// `BaseObject.cs:383` = [`mir2_world::Entity::new`] 的 `view_range` 缺省）。AOI 扫描是边长
+/// `2*ViewRange+1` 的正方形（`BaseObject.ViewRange.cs:71-74`）⇒ 玩家窗口应为 25×25；
+/// 缺这行只剩 11×11，Chebyshev 距离 6..12 的怪/其他 actor 不进 `visible_actors`、
+/// `drain_aoi_downlink` 也不发 ⇒ 客户端同屏少怪（卡 `openmir2-client-e2e-enter-gaps` 缺口②）。
 fn new_player_entity(chr_name: String, x: i32, y: i32) -> mir2_world::Entity {
     let mut e = mir2_world::Entity::new(0, chr_name, x, y);
     e.want_ref_msg = true;
+    e.view_range = 12;
     e
 }
 
@@ -3083,6 +3516,162 @@ fn send_good_tick(
         socket: me.socket,
         payload: movewire::good_tick_payload(now_ms()),
     });
+}
+
+/// 进图时把本会话写入 52/752 的**输入值**与 52 的 40B 尾打进日志（只读；卡 `openmir2-client-e2e-enter-gaps`）。
+///
+/// 用途：真机上“客户端血/负重为 0”时，先看这行就能区分「服务端没发/值错」与「客户端解析」。
+/// 不参与任何模拟/出帧语义（与 oracle `RecalcAbilitys` 输出同源，不额外取数）。
+fn log_enter_ability(chr_name: &str, out: &game_svr::ability::RecalcOutput) {
+    let w = &out.wabil;
+    // 与生产路径用**同一**布局（`MIR2_CLIENT_ABILITY_LAYOUT`）：默认 oracle 40B，开关打开时
+    // 冻结客户端 58B。日志必须反映**实际写入 52/752 的字节**，否则又会造成“血条为 0”的误读。
+    let layout = if mir2_client_ability_layout() {
+        "client-58"
+    } else {
+        "oracle-40"
+    };
+    let tail_bytes = if layout == "client-58" {
+        record::encode_ability_client(w)
+    } else {
+        record::encode_ability(w)
+    };
+    let tail_len = tail_bytes.len();
+    let tail: String = tail_bytes.iter().map(|b| format!("{b:02x}")).collect();
+    let s = &out.sub;
+    glog!(
+        "DBG",
+        "52/752 入图输入 ChrName={chr_name} layout={layout} tail_len={tail_len} \
+         WAbil[level={} ac={} mac={} dc={} mc={} sc={} hp={} mp={} \
+         max_hp={} max_mp={} exp={} max_exp={} weight={} max_weight={} wear_weight={} \
+         max_wear_weight={} hand_weight={} max_hand_weight={}] SubAbility[anti_magic={} \
+         hit_point={} speed_point={} anti_poison={} poison_recover={} health_recover={} \
+         spell_recover={}] ability_tail_hex={tail}",
+        w.level,
+        w.ac,
+        w.mac,
+        w.dc,
+        w.mc,
+        w.sc,
+        w.hp,
+        w.mp,
+        w.max_hp,
+        w.max_mp,
+        w.exp,
+        w.max_exp,
+        w.weight,
+        w.max_weight,
+        w.wear_weight,
+        w.max_wear_weight,
+        w.hand_weight,
+        w.max_hand_weight,
+        s.anti_magic,
+        s.hit_point,
+        s.speed_point,
+        s.anti_poison,
+        s.poison_recover,
+        s.health_recover,
+        s.spell_recover
+    );
+}
+
+/// 一个在世界内的会话的 AOI 观测读数（只读；卡 `openmir2-client-e2e-enter-gaps`）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SessionAoiDiag {
+    chr_name: String,
+    actor_id: i32,
+    map_id: usize,
+    /// `visible_actors` 里 `Show` 的条数（`drain_aoi_downlink` 真正会下发的那批）。
+    vis: usize,
+    /// 同图（除自己）的实体数。
+    same_map: usize,
+    /// 同图（除自己）最近的 Chebyshev 距离；无他者 ⇒ `i32::MAX`。
+    nearest: i32,
+}
+
+/// 周期日志的世界/AOI 观测快照（只读；不改模拟语义）。
+///
+/// 直接回应 `openmir2-client-e2e-enter-gaps` 的误读：`sim: … 处理 N 项` 的 N 是**世界命令队列**
+/// 长度（[[TickRecord::processed]]），不是实体数；实体/怪物/展示表与 AOI 可见数必须另看本快照。
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WorldDiag {
+    entities: usize,
+    displays: usize,
+    sessions: Vec<SessionAoiDiag>,
+}
+
+impl WorldDiag {
+    fn summary(&self) -> String {
+        format!(
+            "实体内 {} 展示表 {} 在世界会话 {}",
+            self.entities,
+            self.displays,
+            self.sessions.len()
+        )
+    }
+
+    fn session_summary(&self) -> String {
+        let mut out = String::new();
+        for s in &self.sessions {
+            out.push_str(&format!(
+                " [{}({}) map={} vis={} same_map={} nearest={}]",
+                s.chr_name,
+                s.actor_id,
+                s.map_id,
+                s.vis,
+                s.same_map,
+                if s.nearest == i32::MAX { -1 } else { s.nearest }
+            ));
+        }
+        out
+    }
+}
+
+/// 按会话表顺序算出世界/AOI 观测快照（确定性：会话表是 `Vec`，实体遍历按槽位）。
+fn world_aoi_diag(world: &mir2_world::World, displays: &downlink::DisplayTable) -> WorldDiag {
+    let entities: Vec<&mir2_world::Entity> = world.entities.iter().collect();
+    let mut sessions = Vec::new();
+    for sess in world.sessions.iter() {
+        if sess.stage != mir2_world::WorldStage::InWorld {
+            continue;
+        }
+        let Some(actor_id) = sess.actor_id else {
+            continue;
+        };
+        let Some(e) = world.entities.get(actor_id) else {
+            continue;
+        };
+        let vis = e
+            .visible_actors
+            .iter()
+            .filter(|v| v.flag == mir2_world::VisibleFlag::Show)
+            .count();
+        let mut same_map = 0usize;
+        let mut nearest = i32::MAX;
+        for o in &entities {
+            if o.id == actor_id || o.map_id != e.map_id {
+                continue;
+            }
+            same_map += 1;
+            let d = (o.x - e.x).abs().max((o.y - e.y).abs());
+            if d < nearest {
+                nearest = d;
+            }
+        }
+        sessions.push(SessionAoiDiag {
+            chr_name: sess.chr_name.clone(),
+            actor_id,
+            map_id: e.map_id,
+            vis,
+            same_map,
+            nearest,
+        });
+    }
+    WorldDiag {
+        entities: entities.len(),
+        displays: displays.len(),
+        sessions,
+    }
 }
 
 /// **S3 后半段（第一格）**：把世界 tick 的 AOI 结果（观察者实体 `VisibleActors` 里
@@ -4187,6 +4776,14 @@ struct EnterConfig {
     /// `stditems` 物品目录（`game_svr::ability::StdItemCatalog`，**1-based** 查表，见 `crate::items`）；
     /// 空目录 = 未加载/无配置。帧 50/41 的 `StdItem.Shape` 与 52/752 的 `RecalcAbilitys` 共用。
     catalog: game_svr::ability::StdItemCatalog,
+    /// **M3⑨-实现 2 第②片**：`magics` 模板表（`M2Share.MagicList` 的查表面）；
+    /// `DoSpell` 效果体/帧参用。空表 = `GetMagicInfo == null`（效果体不接，登记）。
+    magic_table: magics::MagicTable,
+    /// **M3⑨-实现 2 第②片**：`Server.conf` 宝宝配置（召唤选型用）。
+    pet_cfg: mir2_data::pet_slave::PetSlaveConfig,
+    /// **M3⑨-实现 2 第②片**：`[Setup] MagicAttackRage`（`GameSvrConf.cs:873/1752` 缺省 8）——
+    /// `DoSpell` 施法距离门。
+    magic_attack_rage: i32,
     /// `CM_PICKUP`/`CM_DROPITEM` 的 `[Setup]` 输入。
     ground: GroundCfg,
     /// `CM_*` 商店动作的 `[Setup]` 输入（⑤-4 第①片）。
@@ -4589,8 +5186,9 @@ fn sim_loop(
                             tail.as_deref(),
                             &chr_name,
                             socket,
-                            // `PlayObject.Dealing`（M3⑦-实现 3）：交易中禁拾取/禁丢弃。
-                            trade_sessions.get(&chr_name).is_some_and(|s| s.dealing),
+                            // `PlayObject.Dealing`/`DealLastTick`（M3⑦-实现 3/4）：整表传入，
+                            // 取值在 `handle_ground_cmd` 内完成（被 `drop_blocked_by_fresh_deal_last_tick` 咬住）。
+                            &trade_sessions,
                             &world,
                             &mut ground_sessions,
                             &online,
@@ -4644,6 +5242,8 @@ fn sim_loop(
                             &world,
                             &mut displays,
                             enter_cfg.ref_msg_range,
+                            // `PlayObject.Dealing`（M3⑦-实现 4）：交易中禁穿装/卸装。
+                            trade_sessions.get(&chr_name).is_some_and(|s| s.dealing),
                         );
                     } else if cmd.ident == game_svr::useitem::CM_EAT {
                         // `CM_EAT(1006)`：oracle `PlayObject.Message.cs:826` 的 `ClientUseItems(nParam1, Msg)`。
@@ -4766,7 +5366,7 @@ fn sim_loop(
                         // （oracle `WorldServer.cs:857-859` → `PlayObject.Operate.cs:774`）。
                         handle_magic_key_cmd(cmd.recog, cmd.param, &chr_name, socket, &mut saves);
                     } else if magicwire::is_spell_ident(cmd.ident) {
-                        // 同片：`CM_SPELL(3017)` 派发（oracle `WorldServer.cs:783-790`）。
+                        // 同片 + ⑨-2 第②片：`CM_SPELL(3017)` 派发（oracle `WorldServer.cs:783-790`）。
                         handle_spell_cmd(
                             cmd.recog,
                             cmd.tag,
@@ -4775,8 +5375,15 @@ fn sim_loop(
                             &chr_name,
                             socket,
                             &online,
-                            &world,
-                            &saves,
+                            &mut world,
+                            &mut saves,
+                            &mut ground_sessions,
+                            &enter_cfg.catalog,
+                            &enter_cfg.magic_table,
+                            &enter_cfg.pet_cfg,
+                            enter_cfg.magic_attack_rage,
+                            registry.as_ref(),
+                            &enter_cfg.mon_gen.table,
                             &mut displays,
                             &gates,
                         );
@@ -5236,6 +5843,11 @@ fn sim_loop(
                                                             use_items: d.hum_items.as_deref(),
                                                             bag_items: d.bag_items.as_deref(),
                                                             gold: d.gold,
+                                                            // 帧 52 尾的冻结客户端 58B `TAbility` 布局；
+                                                            // 默认关（未设 = oracle 逐字节，见该字段文档与
+                                                            // `openmir2-client-e2e-enter-gaps` 的 owner 裁决）。
+                                                            client_ability_layout:
+                                                                mir2_client_ability_layout(),
                                                         })
                                                     });
                                                 let wx = enter::WorldFrameInputs {
@@ -5272,6 +5884,12 @@ fn sim_loop(
                                                 // GBK 原文（oracle `MessageSettings.CanotPickUpItem`）。
                                                 if let (Some(d), Some(a)) = (data, ability_inputs.as_ref()) {
                                                     let out = enter::recalc_for_session(a, d.job);
+                                                    // 进图可观测性（`openmir2-client-e2e-enter-gaps`）：把本会话**实际写入
+                                                    // 52/752 帧的输入值**与**实际尾字节**（两种布局之一，见
+                                                    // `MIR2_CLIENT_ABILITY_LAYOUT`）打进日志，便于
+                                                    // “客户端血条/负重为 0 是服务端没发/发错，还是客户端解析”一类的真机定位——
+                                                    // 只读日志，不改任何模拟/出帧语义。
+                                                    log_enter_ability(&head.chr_name, &out);
                                                     // M3②③ k=2 收口：同一份 `RecalcAbilitys` 输出**同时**写进世界实体
                                                     // （此前只喂 52/752 帧，实体属性仍是 `Entity::new` 的空值）。
                                                     if let Some(e) = world.entities.get_mut(id) {
@@ -5751,12 +6369,15 @@ fn sim_loop(
         // S3 后半段（第一格）：世界 tick 的 AOI 结果 → `SM_TURN` + `SM_FEATURECHANGED` 回帧。
         drain_aoi_downlink(&world, &displays, &online, &gates);
         if ticks.is_multiple_of(50) {
+            let diag = world_aoi_diag(&world, &displays);
             glog!(
                 "DBG",
-                "sim: tick #{} clock={}ms 处理 {} 项（本地第 {ticks} 次）",
+                "sim: tick #{} clock={}ms 处理 {} 项（本地第 {ticks} 次）{}{}",
                 rec.tick_seq,
                 rec.clock_ms,
-                rec.processed.len()
+                rec.processed.len(),
+                diag.summary(),
+                diag.session_summary()
             );
         }
         if let Some(d) = next.checked_duration_since(std::time::Instant::now()) {
@@ -6416,6 +7037,184 @@ mod tests {
         assert_eq!(front_target(&world, atk, 0, 18, 20), None, "!Ghost 过滤");
     }
 
+    /// **M3⑦-3 · M-1 收口判据**：`ClientDealTry` 的目标判定必须区分「无前排对象」与「前排不是玩家」。
+    ///
+    /// oracle `PlayObject.Operate.cs:928-929` 先取 `GetPoseCreate()` 再直接读 `poseObject.Race`：
+    /// 无前排（`null`）⇒ NullReferenceException，被 `WorldServer.ProcessPlayObjectData` 的
+    /// `catch`（`WorldServer.cs:734`）吞掉 ⇒ **一个帧都不发**（不是 `SM_DEALTRY_FAIL`）；
+    /// 前排非玩家 ⇒ `:955-958` 的 `else` ⇒ `SM_DEALTRY_FAIL`。
+    ///
+    /// 旧实现把两者都归 `DealTryTarget::NotPlayer` ⇒ 空打也回 FAIL（与 oracle 不等）。
+    ///
+    /// 红检：把 `deal_try_target_of` 的 `None` 支改回 `NotPlayer` ⇒ ① 断言必红。
+    #[test]
+    fn deal_try_target_distinguishes_absent_from_non_player() {
+        use mir2_world::{Entity, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY};
+
+        // `front = Some((race, peer_dir))`：在前方格 (11,10) 放一个该 race/朝向的实体。
+        // hero 在 (10,10) 且 dir=2（Right）⇒ 前方格 = (11,10)。
+        let probe = |front: Option<(u8, u8)>| -> (Option<i32>, game_svr::trade::DealTryTarget) {
+            let mut world = mir2_world::World::new(32, 32);
+            let hero = world.add_entity(Entity::new(1, "hero", 10, 10));
+            let mut displays = downlink::DisplayTable::new();
+            displays.set(
+                hero,
+                downlink::ActorDisplay::new(2, 0, 0, 0, 0, 255, b"hero".to_vec()),
+            );
+            if let Some((race, peer_dir)) = front {
+                let fid = world.add_entity({
+                    let mut e = Entity::new(2, "front", 11, 10);
+                    e.race = race;
+                    e
+                });
+                displays.set(
+                    fid,
+                    downlink::ActorDisplay::new(peer_dir, 0, 0, 0, 0, 255, b"front".to_vec()),
+                );
+            }
+            let pose = pose_create(&world, &displays, hero);
+            deal_try_target_of(&world, &displays, hero, pose)
+        };
+
+        // ① 前方格为空 ⇒ `GetPoseCreate() == null` ⇒ oracle NRE 吞错 ⇒ 不发任何帧。
+        assert_eq!(
+            probe(None),
+            (None, game_svr::trade::DealTryTarget::Absent),
+            "无前排对象 ⇒ Absent（oracle Operate.cs:929 NRE 被吞），不是 NotPlayer"
+        );
+
+        // ② 前方格是怪（非玩家）⇒ `:955-958` else ⇒ `SM_DEALTRY_FAIL`。
+        assert_eq!(
+            probe(Some((ACTOR_RACE_MONSTER, 6))),
+            (None, game_svr::trade::DealTryTarget::NotPlayer),
+            "前排非玩家 ⇒ NotPlayer（SM_DEALTRY_FAIL）"
+        );
+
+        // ③ 前方格是玩家且 `dir=6`（Left）⇒ 它的前方格 = (10,10) = hero ⇒ `faces_me`。
+        assert_eq!(
+            probe(Some((ACTOR_RACE_PLAY, 6))),
+            (
+                Some(2),
+                game_svr::trade::DealTryTarget::Other { faces_me: true }
+            ),
+            "前排玩家回指 hero ⇒ faces_me=true"
+        );
+
+        // ④ 前方格是玩家但 `dir=2`（Right）⇒ 它的前方格 = (12,10) ≠ hero ⇒ `!faces_me`。
+        assert_eq!(
+            probe(Some((ACTOR_RACE_PLAY, 2))),
+            (
+                Some(2),
+                game_svr::trade::DealTryTarget::Other { faces_me: false }
+            ),
+            "前排玩家未回指 ⇒ faces_me=false"
+        );
+    }
+
+    /// **M3⑦-3 · M-1 收口（进程级）**：走**生产函数** `handle_deal_cmd` 的 `CM_DEALTRY` 支
+    /// （oracle `PlayObject.Message.cs:946` ⇒ `ClientDealTry`）：无前排对象时**一个帧都不发**
+    /// （oracle `Operate.cs:929` 的 NRE 被 `WorldServer.cs:734` 吞掉），前排为怪时发
+    /// `SM_DEALTRY_FAIL`（非空转对照）。
+    ///
+    /// 红检：把 `deal_try_target_of` 的 `None` 支改回 `DealTryTarget::NotPlayer` ⇒ ① 的
+    /// `frames.is_empty()` 必红（实得 1 帧 `SM_DEALTRY_FAIL`）。
+    #[test]
+    fn deal_cm_try_no_front_object_emits_no_frame_on_production_path() {
+        use std::collections::HashMap;
+
+        let mut world = mir2_world::World::new(32, 32);
+        world.clock_ms = 100_000;
+        let hero = world.add_entity({
+            let mut e = mir2_world::Entity::new(1, "hero", 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e
+        });
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            hero,
+            downlink::ActorDisplay::new(2, 0, 0, 0, 0, 255, b"hero".to_vec()),
+        );
+
+        let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+        ground_sessions.insert("hero".into(), test_session_ground(hero));
+        let mut trade_sessions: HashMap<String, game_svr::trade::DealState> = HashMap::new();
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hero,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let cfg = game_svr::trade::DealConfig::default();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+
+        let drain_idents = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| -> Vec<u16> {
+            let mut out = Vec::new();
+            while let Ok(m) = rx.try_recv() {
+                if let SimToGate::SendFrame { body, .. } = m {
+                    out.push(u16::from_le_bytes([body[4], body[5]]));
+                }
+            }
+            out
+        };
+
+        // ① 前方格 (11,10) 空 ⇒ `GetPoseCreate() == null` ⇒ oracle NRE 吞错 ⇒ 不发任何帧。
+        handle_deal_cmd(
+            mir2_protocol::messages::CM_DEALTRY,
+            0,
+            None,
+            "hero",
+            901,
+            &online,
+            &world,
+            &displays,
+            &mut ground_sessions,
+            &mut trade_sessions,
+            &gates,
+            &cfg,
+            &catalog,
+        );
+        assert!(
+            drain_idents(&mut rx0).is_empty(),
+            "无前排对象 ⇒ oracle 静默（不得发 SM_DEALTRY_FAIL）"
+        );
+
+        // ② 非空转对照：前方格放一只怪（非玩家）⇒ `:955-958` else ⇒ `SM_DEALTRY_FAIL`。
+        world.add_entity({
+            let mut e = mir2_world::Entity::new(2, "mon", 11, 10);
+            e.race = mir2_world::ACTOR_RACE_MONSTER;
+            e
+        });
+        handle_deal_cmd(
+            mir2_protocol::messages::CM_DEALTRY,
+            0,
+            None,
+            "hero",
+            901,
+            &online,
+            &world,
+            &displays,
+            &mut ground_sessions,
+            &mut trade_sessions,
+            &gates,
+            &cfg,
+            &catalog,
+        );
+        assert_eq!(
+            drain_idents(&mut rx0),
+            vec![mir2_protocol::messages::SM_DEALTRY_FAIL],
+            "前置守卫全过 + 前排非玩家 ⇒ 只发 SM_DEALTRY_FAIL"
+        );
+    }
+
     /// F2（reviewer-2）的判据：`ProcessBufferSend` `:58-90` 的四条分支，**含"刚超时清零的那一包也要压住"**。
     #[test]
     fn send_decision_matches_process_buffer_send() {
@@ -6996,6 +7795,55 @@ mod tests {
             "oracle PlayObject 构造器置 WantRefMsg=true（PlayObject.cs:889）"
         );
         assert_eq!(e.race, mir2_world::ACTOR_RACE_PLAY);
+        // oracle `PlayObject.cs:904`：玩家 ViewRange=12（缺省 5 是 `BaseObject.cs:383`）。
+        // 红检：删掉 `e.view_range = 12;` ⇒ 缺省 5 ⇒ 本断言必红。
+        assert_eq!(
+            e.view_range, 12,
+            "oracle PlayObject 构造器置 ViewRange=12（PlayObject.cs:904）"
+        );
+    }
+
+    /// `openmir2-client-e2e-enter-gaps`（缺口② 同屏无怪）：oracle 玩家 `ViewRange = 12`
+    /// （`PlayObject.cs:904`）⇒ AOI 扫描窗口是边长 `2*12+1` 的正方形（`BaseObject.ViewRange.cs:71-74`，
+    /// 25×25）。生产宿主缺这行时只剩缺省 5（`BaseObject.cs:383`）⇒ Chebyshev 距离 6..12 的怪
+    /// 不进 `visible_actors`、`drain_aoi_downlink` 不发 ⇒ 客户端在出生点/城墙外看不到怪。
+    ///
+    /// 红检：删掉 [`new_player_entity`] 里的 `e.view_range = 12;` ⇒ `edge`（Chebyshev 12）不在
+    /// 可见集 ⇒ 本用例必红。
+    #[test]
+    fn player_aoi_window_covers_view_range_12() {
+        let mut world = mir2_world::World::new(100, 100);
+        world.open_session("p");
+        let p = world
+            .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
+            .expect("玩家进图");
+        // Chebyshev 12：oracle 的 25×25 窗口内 ⇒ 必须可见；缺省 5 的窗口 ⇒ 不可见。
+        let mut edge = mir2_world::Entity::new(0, "edge", 22, 10);
+        edge.race = mir2_world::ACTOR_RACE_MONSTER;
+        let edge_id = world.add_entity(edge);
+        // Chebyshev 13：连 oracle 的 25×25 都出界 ⇒ 必须不可见（钉住窗口上界，不是越大越好）。
+        let mut out = mir2_world::Entity::new(0, "out", 23, 10);
+        out.race = mir2_world::ACTOR_RACE_MONSTER;
+        let out_id = world.add_entity(out);
+        world.tick();
+
+        let shown: Vec<i32> = world
+            .entities
+            .get(p)
+            .unwrap()
+            .visible_actors
+            .iter()
+            .filter(|v| v.flag == mir2_world::VisibleFlag::Show)
+            .map(|v| v.target)
+            .collect();
+        assert!(
+            shown.contains(&edge_id),
+            "距离 12 的怪必须在玩家 25×25 窗口内（oracle ViewRange=12）：{shown:?}"
+        );
+        assert!(
+            !shown.contains(&out_id),
+            "距离 13 的怪必须超出窗口（窗口上界 = ViewRange）：{shown:?}"
+        );
     }
 
     /// **C 第 ③ 片判据（怪物出现帧端到端）**：怪物展示层登记后，观察者的 AOI `Show` ⇒ 收到以
@@ -7074,6 +7922,45 @@ mod tests {
         );
         assert_eq!(frames[1].0, mon_id, "SM_FEATURECHANGED 的 Recog 同怪物");
         assert_eq!(frames[1].1, mir2_protocol::messages::SM_FEATURECHANGED);
+    }
+
+    /// `openmir2-client-e2e-enter-gaps`：周期观测的快照必须反映「世界有实体」「AOI 真可见」——
+    /// 这正是那张卡把 `sim: … 处理 0 项` 误读成「世界 tick 无实体」的反例。
+    ///
+    /// 红检：把 `same_map`/`nearest` 的 `o.id == actor_id` 自身排除删掉、或把 `map_id` 比较写反 ⇒ 必红。
+    #[test]
+    fn world_aoi_diag_reports_visible_and_nearest() {
+        let mut world = mir2_world::World::new(100, 100);
+        world.open_session("p");
+        let p = world
+            .enter_map("p", mir2_world::Entity::new(0, "p", 10, 10), 0)
+            .expect("玩家进图");
+        // 玩家靠 `WantRefMsg=true` 才能把怪物纳入可见集（`BaseObject.ViewRange.cs:112`）。
+        world.entities.get_mut(p).unwrap().want_ref_msg = true;
+        let mut near = mir2_world::Entity::new(0, "near", 12, 10);
+        near.race = mir2_world::ACTOR_RACE_MONSTER;
+        let near_id = world.add_entity(near);
+        let mut far = mir2_world::Entity::new(0, "far", 30, 30);
+        far.race = mir2_world::ACTOR_RACE_MONSTER;
+        let far_id = world.add_entity(far);
+        world.tick();
+
+        let info = mir2_data::models::MonsterInfo::default();
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(near_id, downlink::monster_display(0, &info));
+        displays.set(far_id, downlink::monster_display(0, &info));
+
+        let diag = world_aoi_diag(&world, &displays);
+        assert_eq!(diag.entities, 3, "玩家 + 两只怪");
+        assert_eq!(diag.displays, 2, "展示表只登记了怪物");
+        let s = diag
+            .sessions
+            .iter()
+            .find(|s| s.actor_id == p)
+            .expect("玩家会话应在快照里");
+        assert!(s.vis >= 1, "近怪（距离 2 ≤ view_range）必须在可见集：{s:?}");
+        assert_eq!(s.same_map, 2, "同图除自己外 2 只");
+        assert_eq!(s.nearest, 2, "最近 Chebyshev 距离 = 2（近怪）");
     }
 
     /// 测试用的 `WAbil`（金币分支不使用 `wabil`；字段值不影响本例断言）。
@@ -8000,7 +8887,7 @@ mod tests {
             None,
             "hero",
             901,
-            false,
+            &std::collections::HashMap::new(),
             &world,
             &mut sessions,
             &online,
@@ -8028,7 +8915,7 @@ mod tests {
             None,
             "hero",
             901,
-            false,
+            &std::collections::HashMap::new(),
             &world,
             &mut sessions,
             &online,
@@ -8165,6 +9052,7 @@ mod tests {
             &world,
             &mut displays,
             12,
+            false,
         );
 
         // 出帧：SM_ADDITEM(200，换下回背包) → SM_TAKEOFF_OK(619) → SM_TAKEOFF_FAIL(620，oracle
@@ -8286,6 +9174,7 @@ mod tests {
             &world,
             &mut displays,
             12,
+            false,
         );
 
         let sg = sessions.get("hero").unwrap();
@@ -8427,6 +9316,7 @@ mod tests {
             &world,
             &mut displays,
             12,
+            false,
         );
 
         let collect = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| -> Vec<(i32, u16, u16, u16)> {
@@ -10096,6 +10986,13 @@ mod tests {
             },
         );
         const FIREBALL: u16 = 1;
+        // ⑨-2 第②片新增入参：本用例的魔号（1/99/12）都不是召唤面 ⇒ 空表即等价。
+        let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let magic_table = magics::MagicTable::default();
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let registry: Option<mir2_envir::MapRegistry> = None;
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
 
         // ① 未知魔法号（守卫 NoMagic）⇒ 不回 ack。
         handle_spell_cmd(
@@ -10106,8 +11003,15 @@ mod tests {
             "caster",
             911,
             &online,
-            &world,
-            &saves,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            registry.as_ref(),
+            &table,
             &mut displays,
             &gates,
         );
@@ -10122,8 +11026,15 @@ mod tests {
             "caster",
             911,
             &online,
-            &world,
-            &saves,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            registry.as_ref(),
+            &table,
             &mut displays,
             &gates,
         );
@@ -10154,8 +11065,15 @@ mod tests {
             "caster",
             911,
             &online,
-            &world,
-            &saves,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            registry.as_ref(),
+            &table,
             &mut displays,
             &gates,
         );
@@ -10223,8 +11141,15 @@ mod tests {
             "caster",
             911,
             &online,
-            &world,
-            &saves,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            registry.as_ref(),
+            &table,
             &mut displays,
             &gates,
         );
@@ -10242,6 +11167,193 @@ mod tests {
             displays.get(caster).unwrap().dir,
             game_svr::movewire::DIR_LEFT,
             "F-2：mag_idx=12 有独立 case ⇒ 不套用 default 的 Dir（方向保持左）"
+        );
+    }
+
+    /// **`openmir2-m3-pet-slave-summon`（第②片）**：`CM_SPELL(17 召唤骷髅)` 效果体接线——
+    /// 护身符门过 ⇒ 扣耐久 + 自身 `SM_DURACHANGE`；对观察者广播 `SM_SPELL`/`SM_MAGICFIRE`；
+    /// 自身收 `+GD`。空怪表 ⇒ 造怪失败，但仍走完帧面（oracle `ClientSpellXY` 恒 `result=true`）。
+    ///
+    /// 红检：① `cast_slave_spell` 不消耗护身符（`use_amulet` 不改耐久）⇒ 耐久仍 450 必红；
+    /// ② 把 `sm_spell` 的 `Series` 换成 `MagicId`（不取 `Magic.Effect`）⇒ 帧字段断言必红；
+    /// ③ 不广播 `RM_SPELL`（去掉 `broadcast_ref_msg`）⇒ 观察者无 `SM_SPELL` 必红。
+    #[test]
+    fn spell_cmd_summon_wires_amulet_and_frames() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(64, 64);
+        let caster = {
+            let mut e = new_player_entity("caster".to_string(), 10, 10);
+            e.level = 40;
+            world.add_entity(e)
+        };
+        let observer = world.add_entity(new_player_entity("obs".to_string(), 11, 10));
+        world.tick();
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            caster,
+            downlink::ActorDisplay::new(4, 0, 111, 0, 0, 255, b"caster".to_vec()),
+        );
+        displays.set(
+            observer,
+            downlink::ActorDisplay::new(4, 0, 112, 0, 0, 255, b"obs".to_vec()),
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "uc".into(),
+                chr_name: "caster".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 911,
+                actor_id: caster,
+            },
+        );
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "uo".into(),
+                chr_name: "obs".into(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 912,
+                actor_id: observer,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut saves: HashMap<String, SavedHuman> = HashMap::new();
+        let mut record = stage6_record();
+        record.data.magic = Some(vec![Some(record::MagicRcd {
+            mag_idx: 17,
+            level: 1,
+            magic_key: u16::from(b'm'),
+            tran_point: 0,
+        })]);
+        saves.insert(
+            "caster".into(),
+            SavedHuman {
+                account: "uc".into(),
+                record,
+                enter_map: "0".into(),
+            },
+        );
+        let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(caster);
+        sg.use_items[game_svr::ability::SLOT_ARMRING_L] = Some(game_svr::bag::BagItem {
+            make_index: 1,
+            index: 1,
+            dura: 450,
+            dura_max: 1000,
+            desc: [0; 14],
+        });
+        ground_sessions.insert("caster".into(), sg);
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "护身符".into(),
+                std_mode: 25,
+                shape: 5,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        let magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+            magic_id: 17,
+            effect: 3,
+            effect_type: 4,
+            train_lv: 3,
+            ..mir2_data::MagicInfo::default()
+        }]);
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let registry = mir2_envir::MapRegistry::from_entries(
+            mir2_envir::MapLoader::new(".", "map", "envir"),
+            Vec::new(),
+        );
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+
+        handle_spell_cmd(
+            game_svr::feature::make_long(10, 11),
+            17,
+            9999,
+            0,
+            "caster",
+            911,
+            &online,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            Some(&registry),
+            &table,
+            &mut displays,
+            &gates,
+        );
+
+        let mut frames: Vec<(i32, Vec<u8>)> = Vec::new();
+        while let Ok(m) = rx0.try_recv() {
+            match m {
+                SimToGate::SendFrame { socket, body } => frames.push((socket, body)),
+                SimToGate::SendRaw { socket, payload } => frames.push((socket, payload)),
+                other => panic!("意外的下行：{other:?}"),
+            }
+        }
+        let ident_of = |b: &[u8]| {
+            mir2_protocol::frame::CommandMessage::from_bytes(b)
+                .unwrap()
+                .ident
+        };
+        let obs: Vec<&Vec<u8>> = frames
+            .iter()
+            .filter(|(s, _)| *s == 912)
+            .map(|(_, b)| b)
+            .collect();
+        assert!(
+            obs.iter()
+                .any(|b| ident_of(b) == mir2_protocol::messages::SM_SPELL),
+            "观察者应收 SM_SPELL(RM_SPELL)；实得 {obs:?}"
+        );
+        assert!(
+            obs.iter()
+                .any(|b| ident_of(b) == mir2_protocol::messages::SM_MAGICFIRE),
+            "观察者应收 SM_MAGICFIRE；实得 {obs:?}"
+        );
+        let me: Vec<&Vec<u8>> = frames
+            .iter()
+            .filter(|(s, _)| *s == 911)
+            .map(|(_, b)| b)
+            .collect();
+        assert!(
+            me.iter()
+                .any(|b| ident_of(b) == mir2_protocol::messages::SM_DURACHANGE),
+            "施法者自身应收 SM_DURACHANGE；实得 {me:?}"
+        );
+        // **F-1（reviewer-6 `7724b9e441`）**：`RM_MAGICFIRE` 的 oracle 处理器无
+        // `ActorId != ActorId` 守卫（`PlayObject.Message.cs:1788-1793`）⇒ 施法者自己也应收
+        // `SM_MAGICFIRE`；而 `RM_SPELL`（有守卫）不给自己发（这里 `me` 不含 `SM_SPELL`）。
+        assert!(
+            me.iter()
+                .any(|b| ident_of(b) == mir2_protocol::messages::SM_MAGICFIRE),
+            "F-1：施法者自身应收 SM_MAGICFIRE（RM_MAGICFIRE 无自身守卫）；实得 {me:?}"
+        );
+        assert!(
+            !me.iter()
+                .any(|b| ident_of(b) == mir2_protocol::messages::SM_SPELL),
+            "RM_SPELL 有 `ActorId != ActorId` 守卫 ⇒ 施法者自身不应收 SM_SPELL；实得 {me:?}"
+        );
+        assert!(me.iter().any(|b| b.starts_with(b"+GD/")), "成功支仍回 +GD");
+        // 护身符扣至 350（450 - 1*100）。
+        assert_eq!(
+            ground_sessions["caster"].use_items[game_svr::ability::SLOT_ARMRING_L]
+                .as_ref()
+                .unwrap()
+                .dura,
+            350,
+            "UseAmulet 扣耐久落 UseItems"
         );
     }
 
@@ -10806,5 +11918,426 @@ mod tests {
             )
         );
         assert_eq!(body2.len(), 12, "空尾 ⇒ header-only 不变");
+    }
+
+    /// **M3⑦-实现 4**：`CM_PICKUP` 的归属组队分支接上真注册表
+    /// （oracle `PlayObject.Base.cs:38-54` `ClientPickUpItemIsOfGroup`）：非组员不可拾、
+    /// 同组成员可拾。
+    ///
+    /// 改坏必红：把 `handle_ground_cmd` 里的 `group_owner`/`group_member_actor_ids` 换回
+    /// `0`/`&[]` ⇒ 情形 B 收不到 `SM_GOLDCHANGED`、会话金币不变，两条断言必红。
+    #[test]
+    fn pickup_group_attribution_uses_registry() {
+        use std::collections::HashMap;
+
+        let mut world = mir2_world::World::new(32, 32);
+        world.item_catalog = vec![mir2_data::StdItem {
+            name: "金币".into(),
+            ..Default::default()
+        }];
+        let hero = world.add_entity({
+            let mut e = mir2_world::Entity::new(1, "hero", 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e
+        });
+        let mate = world.add_entity(mir2_world::Entity::new(2, "mate", 11, 10));
+        let (gx, gy) = (11, 10);
+        let count = 300;
+        // 地面金币归属 = mate（`MapItem.OfBaseObject`）。
+        assert!(world.maps[0].add_floor_item(
+            gx,
+            gy,
+            mate,
+            mir2_world::map::FloorItemMeta {
+                kind: mir2_world::map::FloorItemKind::Gold,
+                index: 0,
+                count,
+                item_id: mate,
+                of_base_object: mate,
+            },
+            0,
+        ));
+        {
+            let e = world.entities.get_mut(hero).expect("hero 必在实体表");
+            e.x = gx;
+            e.y = gy;
+        }
+
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert(
+            "hero".into(),
+            SessionGround {
+                state: game_svr::ground::GroundState {
+                    item_list: Vec::new(),
+                    gold: 0,
+                    wabil: test_ability(),
+                },
+                storage: storage::StorageState::new(),
+                actor_id: hero,
+                game_gold: 0,
+                sys_msg: None,
+                use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
+                sub: game_svr::ability::SubAbility::first_call(),
+                equip: test_equip_inputs(),
+                recovery: game_svr::recover::Recovery::new(0),
+                stamina: game_svr::stamina::Stamina::new(0),
+                show_hp: false,
+                user_unlock_durg: false,
+                hunger_status: 0,
+                query_bag_items_tick: None,
+                save_rcd_tick: 0,
+            },
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hero,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let cfg = GroundCfg {
+            human_max_gold: 10_000_000,
+            floor_item_can_pick_up_time: 120_000,
+            control_drop_item: false,
+            in_safe_disable_drop: false,
+            can_drop_price: 500,
+            drop_item_rage: 3,
+        };
+        let colors = MsgColors {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+        };
+        let catalog = game_svr::ability::StdItemCatalog::new();
+
+        // 情形 A：hero 与 mate **未组队** ⇒ 归属既非自己也非组员 ⇒ 拒绝（无帧、金币不变）。
+        handle_ground_cmd(
+            game_svr::ground::CM_PICKUP,
+            u16::try_from(gx).unwrap(),
+            u16::try_from(gy).unwrap(),
+            None,
+            "hero",
+            901,
+            &std::collections::HashMap::new(),
+            &world,
+            &mut sessions,
+            &online,
+            &gates,
+            &cfg,
+            &colors,
+            &catalog,
+            None,
+        );
+        assert!(
+            matches!(rx0.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
+            "未组队 ⇒ 不得拾取他人归属物（oracle Base.cs:57-63）"
+        );
+        assert_eq!(sessions.get("hero").unwrap().state.gold, 0);
+
+        // 情形 B：hero 与 mate 同组（hero 团长）⇒ `ClientPickUpItemIsOfGroup(mate)` 成立 ⇒ 可拾。
+        world.entities.get_mut(mate).unwrap().allow_group = true;
+        let _ = world.party_create_group(hero, "mate", &mir2_world::PartyConfig::default());
+        assert_eq!(world.entities.get(hero).unwrap().group_owner, hero);
+        assert_eq!(world.entities.get(mate).unwrap().group_owner, hero);
+        handle_ground_cmd(
+            game_svr::ground::CM_PICKUP,
+            u16::try_from(gx).unwrap(),
+            u16::try_from(gy).unwrap(),
+            None,
+            "hero",
+            901,
+            &std::collections::HashMap::new(),
+            &world,
+            &mut sessions,
+            &online,
+            &gates,
+            &cfg,
+            &colors,
+            &catalog,
+            None,
+        );
+        let body = match rx0.try_recv() {
+            Ok(SimToGate::SendFrame { body, socket }) => {
+                assert_eq!(socket, 901);
+                body
+            }
+            other => panic!("组员归属物应可拾并回 SM_GOLDCHANGED，实收 {other:?}"),
+        };
+        let cm = mir2_protocol::frame::CommandMessage::from_bytes(&body).expect("body >= 12B");
+        assert_eq!(cm.ident, mir2_protocol::messages::SM_GOLDCHANGED);
+        assert_eq!(cm.recog, count);
+        assert_eq!(sessions.get("hero").unwrap().state.gold, count);
+    }
+
+    /// **M3⑦-实现 4**：`CM_TAKEOFFITEM` 的 `Dealing` 守卫接上真交易态
+    /// （oracle `PlayObject.Operate.cs:501` `if (!Dealing && btWhere < 13)`）。
+    ///
+    /// 改坏必红：把 `handle_bag_cmd` 的 `dealing` 换回 `false` ⇒ 卸装成功、物品从 `UseItems`
+    /// 移除，两条断言（`recog == -1` / `use_items[0].is_some()`）必红。
+    #[test]
+    fn bag_takeoff_blocked_while_dealing() {
+        use std::collections::HashMap;
+
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "木剑".into(),
+                std_mode: 5,
+                ..Default::default()
+            },
+        );
+
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut use_items: Vec<Option<game_svr::bag::BagItem>> =
+            vec![None; game_svr::ability::USE_ITEMS_LEN];
+        use_items[0] = Some(game_svr::bag::BagItem {
+            make_index: 60001,
+            index: 1,
+            dura: 10,
+            dura_max: 10,
+            desc: [0u8; 14],
+        });
+        sessions.insert(
+            "hero".into(),
+            SessionGround {
+                state: game_svr::ground::GroundState {
+                    item_list: Vec::new(),
+                    gold: 123,
+                    wabil: test_ability(),
+                },
+                storage: storage::StorageState::new(),
+                actor_id: 42,
+                game_gold: 0,
+                sys_msg: None,
+                use_items,
+                sub: game_svr::ability::SubAbility::first_call(),
+                equip: test_equip_inputs(),
+                recovery: game_svr::recover::Recovery::new(0),
+                stamina: game_svr::stamina::Stamina::new(0),
+                show_hp: false,
+                user_unlock_durg: false,
+                hunger_status: 0,
+                query_bag_items_tick: None,
+                save_rcd_tick: 0,
+            },
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: 42,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let world = mir2_world::World::new(8, 8);
+        let mut displays = downlink::DisplayTable::new();
+
+        // `recog=60001`（MakeIndex）、`param=0`（槽位）、`dealing=true`。
+        handle_bag_cmd(
+            game_svr::bag::CM_TAKEOFFITEM,
+            60001,
+            0,
+            0,
+            Some("木剑"),
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            &world,
+            &mut displays,
+            12,
+            true,
+        );
+        let mut fail_seen = false;
+        while let Ok(m) = rx0.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = m {
+                let cm = mir2_protocol::frame::CommandMessage::from_bytes(&body).expect(">=12B");
+                if cm.ident == mir2_protocol::messages::SM_TAKEOFF_FAIL {
+                    assert_eq!(
+                        cm.recog, -1,
+                        "Dealing ⇒ n10 = -1（oracle Operate.cs:501/535）"
+                    );
+                    fail_seen = true;
+                }
+            }
+        }
+        assert!(fail_seen, "交易中卸装必须回 SM_TAKEOFF_FAIL(-1)");
+        assert!(
+            sessions.get("hero").unwrap().use_items[0].is_some(),
+            "交易中不得真正卸下装备"
+        );
+    }
+
+    /// **M3⑦-实现 4（M-1 收口）**：`deal_last_tick` 的**生产取数**被用例咬住——
+    /// 交易会话 `DealLastTick` 未过 3000ms 门 ⇒ `CM_DROPITEM` 不得进 `ClientDropItem` 体。
+    ///
+    /// oracle：`PlayObject.Operate.cs:269`（`(HUtil32.GetTickCount() - DealLastTick) > 3000`
+    /// 才进 `ItemList` 丢弃查表）；`DealLastTick` 字段见 `PlayObject.cs:122`。本仓
+    /// `drop_item_down` 恒 false（`MapItem.ItemId == 0`，T-19），
+    /// 故「是否进体」在成功/失败帧上不可分；可分的观测点是丢弃体里 `StdMode == 40` 的
+    /// `Dura = (ushort)(Dura - 2000)` 原地扣减（`BaseObject.cs:541-548`，u16 回绕口径）。
+    ///
+    /// 改坏必红：把 `handle_ground_cmd` 里 `deal_last_tick` 的取数改回恒 `0` ⇒ 第一次调用即
+    /// 过门、`Dura` 从 5000 变 3000 ⇒ `5000` 断言必红。
+    #[test]
+    fn drop_blocked_by_fresh_deal_last_tick() {
+        use std::collections::HashMap;
+
+        let mut world = mir2_world::World::new(32, 32);
+        world.clock_ms = 10_000;
+        let hero = world.add_entity({
+            let mut e = mir2_world::Entity::new(1, "hero", 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e
+        });
+
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert(
+            "hero".into(),
+            SessionGround {
+                state: game_svr::ground::GroundState {
+                    item_list: vec![game_svr::bag::BagItem {
+                        make_index: 60001,
+                        index: 1,
+                        // `StdMode 40` 分支：`Dura 5000 - 2000 = 3000`。
+                        dura: 5000,
+                        dura_max: 5000,
+                        desc: [0u8; 14],
+                    }],
+                    gold: 0,
+                    wabil: test_ability(),
+                },
+                storage: storage::StorageState::new(),
+                actor_id: hero,
+                game_gold: 0,
+                sys_msg: None,
+                use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
+                sub: game_svr::ability::SubAbility::first_call(),
+                equip: test_equip_inputs(),
+                recovery: game_svr::recover::Recovery::new(0),
+                stamina: game_svr::stamina::Stamina::new(0),
+                show_hp: false,
+                user_unlock_durg: false,
+                hunger_status: 0,
+                query_bag_items_tick: None,
+                save_rcd_tick: 0,
+            },
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hero,
+            },
+        );
+        let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let cfg = GroundCfg {
+            human_max_gold: 10_000_000,
+            floor_item_can_pick_up_time: 120_000,
+            control_drop_item: false,
+            in_safe_disable_drop: false,
+            can_drop_price: 500,
+            drop_item_rage: 3,
+        };
+        let colors = MsgColors {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+        };
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "木剑".into(),
+                std_mode: 40,
+                ..Default::default()
+            },
+        );
+
+        // 交易会话：`DealLastTick = now_tick`（`handle_deal_cmd` 写的是 `world.clock_ms`）。
+        let mut trade_sessions: HashMap<String, game_svr::trade::DealState> = HashMap::new();
+        trade_sessions.insert(
+            "hero".into(),
+            game_svr::trade::DealState {
+                deal_last_tick: world.clock_ms,
+                ..Default::default()
+            },
+        );
+
+        // ① 新鲜 `DealLastTick` ⇒ `now - DealLastTick > 3000` 不成立 ⇒ 不进丢弃体 ⇒ Dura 不变。
+        handle_ground_cmd(
+            game_svr::ground::CM_DROPITEM,
+            60001,
+            0,
+            Some("木剑"),
+            "hero",
+            901,
+            &trade_sessions,
+            &world,
+            &mut sessions,
+            &online,
+            &gates,
+            &cfg,
+            &colors,
+            &catalog,
+            None,
+        );
+        assert_eq!(
+            sessions.get("hero").unwrap().state.item_list[0].dura,
+            5000,
+            "3000ms 门内（交易中）⇒ ClientDropItem 体不得执行（oracle Operate.cs:269）"
+        );
+
+        // ② 过门（`DealLastTick` 陈旧）⇒ 进体 ⇒ StdMode40 原地扣 2000（u16 口径 5000→3000）。
+        trade_sessions.get_mut("hero").unwrap().deal_last_tick = 1_000;
+        handle_ground_cmd(
+            game_svr::ground::CM_DROPITEM,
+            60001,
+            0,
+            Some("木剑"),
+            "hero",
+            901,
+            &trade_sessions,
+            &world,
+            &mut sessions,
+            &online,
+            &gates,
+            &cfg,
+            &colors,
+            &catalog,
+            None,
+        );
+        assert_eq!(
+            sessions.get("hero").unwrap().state.item_list[0].dura,
+            3000,
+            "过 3000ms 门 ⇒ 进体 ⇒ Dura 5000-2000（BaseObject.cs:541-548）"
+        );
     }
 }

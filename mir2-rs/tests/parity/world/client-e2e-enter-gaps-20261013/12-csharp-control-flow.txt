@@ -1,0 +1,35 @@
+STAGE start @ 1791884578210
+CLIENT_PID=29828
+SHOT E:\tmp\m2svr-gaps\csharp-run\01_login.png
+STAGE login_id @ 1791884594462
+SHOT E:\tmp\m2svr-gaps\csharp-run\02_id.png
+STAGE login_pwd @ 1791884597089
+SHOT E:\tmp\m2svr-gaps\csharp-run\03_pwd.png
+STAGE login_submit @ 1791884599729
+STAGE charsel @ 1791884605600
+SHOT E:\tmp\m2svr-gaps\csharp-run\04_charsel.png
+STAGE enter_game @ 1791884605655
+STAGE notice_poll @ 1791884607390
+SHOT E:\tmp\m2svr-gaps\csharp-run\05_ingame.png
+SHOT E:\tmp\m2svr-gaps\csharp-run\05b_after_notice.png
+STAGE ingame @ 1791884628447
+SHOT E:\tmp\m2svr-gaps\csharp-run\05c_ingame_ready.png
+STAGE talk @ 1791884630513
+STAGE talk_sent @ 1791884635482
+SHOT E:\tmp\m2svr-gaps\csharp-run\m2-03-talk.png
+STAGE logout_button @ 1791884635542
+SHOT E:\tmp\m2svr-gaps\csharp-run\07a_logout_btn_hover.png
+SHOT E:\tmp\m2svr-gaps\csharp-run\07b_logout_confirm_dlg.png
+STAGE logout_alt_x @ 1791884639352
+SHOT E:\tmp\m2svr-gaps\csharp-run\07_logout_altx0.png
+SHOT E:\tmp\m2svr-gaps\csharp-run\07_logout_altx1.png
+SHOT E:\tmp\m2svr-gaps\csharp-run\07_logout_altx2.png
+STAGE logout_menu @ 1791884650302
+SHOT E:\tmp\m2svr-gaps\csharp-run\07_logout_menu_open.png
+SHOT E:\tmp\m2svr-gaps\csharp-run\07_logoutdlg.png
+STAGE logout_confirm @ 1791884655364
+STAGE back_charsel @ 1791884664242
+SHOT E:\tmp\m2svr-gaps\csharp-run\08_back_charsel.png
+STAGE done @ 1791884664289
+CLIENT_STOPPED
+FLOW_OK

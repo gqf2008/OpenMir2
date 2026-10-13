@@ -1,0 +1,53 @@
+# 证据：M3 RNG 站点组 —— 无栈自检牙 O-1 收口（base 值牙内自解析 + 非空转对照）
+# 卡：openmir2-m3-rng-trace-scene-groups（issue d9d03f47）
+# 车道 m3bag / principal openmir2-worker-4 / 分支 worktree-m3-rng-trace-scene-groups
+# base = master 6f0bca48e（本片最终 head oid 见线程 patch 条目）
+# 写集 = mir2-rs/tests/parity/m3/**；零 .rs / 零 crates / 零 bins / 零 src / 零 sql / 零 MirClient
+# 环境：Windows / Git Bash；cwd = <worktree>/mir2-rs/tests/parity/m3（四门禁 cwd = <worktree>/mir2-rs）
+# 编译隔离：CARGO_TARGET_DIR=E:/tmp/m3bag-target；全部 --offline；未起栈、未占端口（仅共享 3306 在听）
+
+## 一、无栈自检（离线，零端口）
+powershell -NoProfile -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 -SelfCheckNoStack
+powershell -NoProfile -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 -SelfCheckNoStack -SelfCheckOut <path.txt>
+                                                                 # 见 01-selftest-nostack-green.txt（19/19；改前 18/18）
+
+## 二、改坏必红（两条独立变异，各自点名）
+# MUTATION-1（模拟 O-1 回归）：把 ⑰ 牙内 base 解析改成 `$srcBack = $null`
+#   ⇒ ⑰ scenario-drift-samples-json-native + ⑱ scenario-drift-tooth-not-vacuous 必红
+powershell -NoProfile -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 -SelfCheckNoStack
+                                                                 # 见 02-red-mutation-o1-base-null.txt（17/19，2 项 FAIL，rc=1）
+# MUTATION-2（drift 构造空转）：把 New-RngDriftScenario 的 `& $Mutate $sc` 注释掉
+#   ⇒ 3 条 drift-red + ⑰ 必红（证明构造一旦失效会被咬住）
+powershell -NoProfile -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 -SelfCheckNoStack
+                                                                 # 见 03-red-mutation-drift-noop.txt（15/19，4 项 FAIL，rc=1）
+
+## 三、回归工具自检
+python -I -B rng-trace-scene/rng_scene_gate.py selftest          # 见 04-selftest-scene-gate.txt（16/16）
+python -I -B rng-trace-probe/rng_ledger_diff.py selftest         # 见 06-selftest-rng-ledger-diff.txt（32/32）
+python -I -B attack_rng_ledger.py selftest                       # 见 07-selftest-attack-rng-ledger.txt（32/32）
+
+## 四、scenario 件自身（离线；锁住已入库 rng_trace_scenario.json 与代码真源同口径）
+python -I -B rng-trace-scene/rng_scene_gate.py scenario --scenario rng-trace-scene/rng_trace_scenario.json
+                                                                 # 见 05-scenario-mode-green.txt（VERDICT GREEN）
+
+## 五、四门禁（cwd = <worktree>/mir2-rs；CARGO_TARGET_DIR=E:/tmp/m3bag-target；--offline）
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --offline -- -D warnings
+cargo test --workspace --offline --no-fail-fast
+cargo run -q --offline -p msgcodegen -- --check
+                                                                 # 读数见 08-gates-four.txt（fmt0/clippy0/97 suites 987 passed 0 failed 21 ignored/604）
+
+## 六、边界与源码差量
+git diff --cached --name-status 6f0bca48e                         # 见 09-boundary.txt
+git diff --cached 6f0bca48e -- mir2-rs/tests/parity/m3/rng-trace-scene
+                                                                 # 见 10-diff-source.txt
+
+## 七、清单口径复核（仓库 LF/git-blob 口径）
+python -I ../../../../../tools/evidence-hash/verify_sha256sums.py --check-extra <本目录>
+python -I ../../../../../tools/evidence-hash/verify_sha256sums.py eolcheck <本目录>
+
+## 八、未做 / 边界
+# 真机同场景含怪两相 trace + groupdiff --fold --strict 仍需 owner 独占窗口 + 生产者驱动承接卡
+# （real-run 对 -Go/-PinScene 一律 fail-closed exit 2）；本片纯离线、零端口、未起栈。
+# 本片只收口 reviewer-6 b53a7451 登记的**非阻塞 Minor O-1**（牙的跨块 $sc 隐式依赖），
+# 不改任何判据口径、不移动已合并的 reviewed_head、不 merge、不自签。

@@ -1,0 +1,11 @@
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.84s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m3hp-target\debug\deps\game_svr-675e68013f315636.exe)
+
+running 3 tests
+test slave::tests::tamming_animal_gate_blocks_and_consumes_no_draw ... ok
+test slave::tests::tamming_does_not_re_adopt_existing_slave ... ok
+test slave::tests::tamming_adopts_slave_and_clears_target_creature ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 158 filtered out; finished in 0.01s
+
