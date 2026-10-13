@@ -1,15 +1,14 @@
-# base = origin/master = 78cf74d4620563158a0ac9e25e1e47856cd13006
-# HEAD = cf7c95c2c921efb4b971a15c84f0fe88def3973a
-# merge-base(origin/master, HEAD) = 78cf74d4620563158a0ac9e25e1e47856cd13006
+# base = origin/master = 78cf74d4620563158a0ac9e25e1e47856cd13006（交付前已 merge master；merge-base(origin/master, HEAD) = 78cf74d4620563158a0ac9e25e1e47856cd13006 ⇒ 无「回退假差量」）
+# HEAD = 本片分支 head（源件提交 + merge origin/master + 本证据提交）；下方 diff 对这三个提交稳定（源件集合相同），不钉具体 head oid 以免自指陈旧。
 
 $ git diff --name-only origin/master HEAD -- src sql MirClient mir2-rs/crates mir2-rs/bins
-(空 = 冻结面零改动；base 已跟 master，无「回退假差量」)
+(空 = 冻结面零改动)
 
 $ git diff --name-only origin/master HEAD -- "*.rs"
 (空 = 零 .rs)
 
 $ git diff --name-only origin/master HEAD -- mir2-rs/tests/parity/world
-(空 = 未动 tests/parity/world/**)
+(空 = 未动 m2svr 的 ④ 线目录)
 
 $ git diff --name-only origin/master HEAD -- mir2-rs/tests/parity/m3/rng-trace-scene
 mir2-rs/tests/parity/m3/rng-trace-scene/README.md
@@ -17,6 +16,4 @@ mir2-rs/tests/parity/m3/rng-trace-scene/rng_scene_gate.py
 mir2-rs/tests/parity/m3/rng-trace-scene/rng_trace_scenario.json
 mir2-rs/tests/parity/m3/rng-trace-scene/run_rng_trace_pair.ps1
 
-$ git status --porcelain=v1
- M mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-trace-seed-gate/12-boundary-yuan-rs.txt
-(仅本片 3+1 源件与证据包；sessions/ 为他线历史未跟踪目录，未纳入)
+# 本片全部改动 = 上述 4 个 rng-trace-scene 源件 + 1 报告 + 本证据包（见 git diff --name-only origin/master HEAD）。
