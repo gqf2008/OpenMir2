@@ -1,5 +1,4 @@
-    Blocking waiting for file lock on package cache
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.24s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.13s
      Running `E:/tmp/openmir2-m3pt-target\debug\msgcodegen.exe --check`
 msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
 rc=0

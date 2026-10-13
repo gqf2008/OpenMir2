@@ -1,16 +1,17 @@
-# 还原后复跑（同一命令）
-$ git status --short (代码侧应只剩本片 5 个已改 + 1 个新增测试)
- M bins/game-svr/src/main.rs
- M crates/world/src/combat.rs
- M crates/world/src/lib.rs
- M crates/world/src/party.rs
- M crates/world/src/world.rs
-?? crates/world/tests/party_attribution.rs
-?? tests/parity/m3/evidence-m3-party-attribution-20261013/
+# 还原后复跑（同一命令，HEAD=de074445b 之前的工作树）
+$ git status --short
+ M tests/parity/m3/evidence-m3-party-attribution-20261013/03-tests.txt
+ M tests/parity/m3/evidence-m3-party-attribution-20261013/gates/11-clippy.txt
+ M tests/parity/m3/evidence-m3-party-attribution-20261013/gates/12-msgcodegen.txt
+ M tests/parity/m3/evidence-m3-party-attribution-20261013/gates/13-workspace-test.txt
+ M tests/parity/m3/evidence-m3-party-attribution-20261013/redchecks/RC0-restore-green.txt
+ M tests/parity/m3/evidence-m3-party-attribution-20261013/redchecks/RC1-pickup-group-red.txt
+ M tests/parity/m3/evidence-m3-party-attribution-20261013/redchecks/RC2-bag-dealing-red.txt
+ M tests/parity/m3/evidence-m3-party-attribution-20261013/redchecks/RC3-ham-group-and-RC4-gainexp-curry-red.txt
 
 $ cargo test -p game-svr pickup_group_attribution_uses_registry
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 182 filtered out; finished in 0.00s
 $ cargo test -p game-svr bag_takeoff_blocked_while_dealing
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 182 filtered out; finished in 0.00s
 $ cargo test -p mir2-world --test party_attribution
-test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

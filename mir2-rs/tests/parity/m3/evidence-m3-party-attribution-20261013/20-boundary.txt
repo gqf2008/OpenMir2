@@ -1,69 +1,28 @@
 $ pwd
 /e/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3pt
 
-$ git rev-parse origin/master   # base
+$ git rev-parse origin/master   # patch base = refs/heads/master
 0f9fe9997a4ed717ee1361bfb2134329fd04472a
 
-$ git worktree branch
-worktree-m3-party-attribution
-
-$ git diff --name-only origin/master -- src sql MirClient   (oracle/客户端/表结构)
-(空 = 零改动)
+$ git diff --name-only origin/master HEAD -- src sql MirClient
+(空 = oracle/客户端/表结构零改动)
 
 $ git status --porcelain -- src sql MirClient
 (空 = 无新增/删除)
 
-$ git diff --stat origin/master -- mir2-rs   (本片净 diff，base=origin/master)
- mir2-rs/bins/game-svr/src/lib.rs                   |    1 -
- mir2-rs/bins/game-svr/src/main.rs                  |  308 +++-
- mir2-rs/bins/game-svr/src/slave.rs                 |  160 --
- mir2-rs/crates/world/src/combat.rs                 |  107 +-
- mir2-rs/crates/world/src/entity.rs                 |   21 -
- mir2-rs/crates/world/src/lib.rs                    |   25 +-
- mir2-rs/crates/world/src/party.rs                  |    4 +
- mir2-rs/crates/world/src/slave.rs                  |  991 ------------
- mir2-rs/crates/world/src/world.rs                  |  149 +-
- ...45\210\244\346\212\245\345\221\212-20261013.md" |   92 --
- .../01-oracle-anchors.txt                          |   63 -
- .../02-change-summary.txt                          |  102 --
- .../03-tests.txt                                   |   41 -
- .../04-boundary.txt                                |   19 -
- .../README.md                                      |  107 --
- .../SHA256SUMS.txt                                 |   16 -
- .../commands.txt                                   |   30 -
- .../gates/10-fmt.txt                               |    1 -
- .../gates/11-clippy.txt                            |    2 -
- .../gates/12-msgcodegen.txt                        |    2 -
- .../gates/13-workspace-test.txt                    | 1570 --------------------
- .../gates/14-slave-tests.txt                       |   41 -
- .../redchecks/RC1-gate-strict-less-red.txt         |   55 -
- .../redchecks/RC2-skeleton-break-red.txt           |   43 -
- .../redchecks/RC3-hp-half-red.txt                  |   51 -
- .../redchecks/RC4-recall-tail-first-red.txt        |   43 -
- .../redchecks/README.md                            |   15 -
- .../00-commands.txt                                |   45 -
- .../01-selftest-nostack.txt                        |   25 -
- .../02-selftest-scene-gate.txt                     |    4 -
- .../03-scenario-mode-green.txt                     |   12 -
- .../04-mutation-fold-drift-red.txt                 |   12 -
- .../05-mutation-groups-unknown-red.txt             |   12 -
- .../06-mutation-fold-missing-red.txt               |   12 -
- .../07-selftest-rng-ledger-diff.txt                |    3 -
- .../08-selftest-attack-rng-ledger.txt              |   37 -
- .../09-gates-four.txt                              |   26 -
- .../10-boundary.txt                                |   32 -
- .../README.md                                      |   88 --
- .../SHA256SUMS.txt                                 |   12 -
- mir2-rs/tests/parity/m3/rng-trace-scene/README.md  |   22 +-
- .../parity/m3/rng-trace-scene/rng_scene_gate.py    |  155 +-
- .../m3/rng-trace-scene/run_rng_trace_pair.ps1      |   33 +-
- 43 files changed, 557 insertions(+), 4032 deletions(-)
+$ git diff --stat origin/master HEAD -- mir2-rs/crates/world mir2-rs/bins/game-svr   (代码侧净 diff)
+ mir2-rs/bins/game-svr/src/main.rs               | 308 +++++++++++++++++++++++-
+ mir2-rs/crates/world/src/combat.rs              | 107 +++++++-
+ mir2-rs/crates/world/src/lib.rs                 |  18 +-
+ mir2-rs/crates/world/src/party.rs               |   4 +
+ mir2-rs/crates/world/src/world.rs               | 149 ++++++++++--
+ mir2-rs/crates/world/tests/party_attribution.rs | 222 +++++++++++++++++
+ 6 files changed, 769 insertions(+), 39 deletions(-)
 
-$ git status --porcelain -- mir2-rs   (未跟踪 = 测试与证据)
- M mir2-rs/bins/game-svr/src/main.rs
- M mir2-rs/crates/world/src/combat.rs
- M mir2-rs/crates/world/src/lib.rs
- M mir2-rs/crates/world/src/party.rs
- M mir2-rs/crates/world/src/world.rs
-?? mir2-rs/crates/world/tests/party_attribution.rs
-?? mir2-rs/tests/parity/m3/evidence-m3-party-attribution-20261013/
+$ git diff --name-only origin/master HEAD -- mir2-rs/crates/world mir2-rs/bins/game-svr
+mir2-rs/bins/game-svr/src/main.rs
+mir2-rs/crates/world/src/combat.rs
+mir2-rs/crates/world/src/lib.rs
+mir2-rs/crates/world/src/party.rs
+mir2-rs/crates/world/src/world.rs
+mir2-rs/crates/world/tests/party_attribution.rs
