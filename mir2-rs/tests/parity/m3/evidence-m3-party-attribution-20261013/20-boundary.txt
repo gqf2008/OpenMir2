@@ -1,0 +1,28 @@
+$ pwd
+/e/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3pt
+
+$ git rev-parse origin/master   # patch base = refs/heads/master
+0f9fe9997a4ed717ee1361bfb2134329fd04472a
+
+$ git diff --name-only origin/master HEAD -- src sql MirClient
+(空 = oracle/客户端/表结构零改动)
+
+$ git status --porcelain -- src sql MirClient
+(空 = 无新增/删除)
+
+$ git diff --stat origin/master HEAD -- mir2-rs/crates/world mir2-rs/bins/game-svr   (代码侧净 diff)
+ mir2-rs/bins/game-svr/src/main.rs               | 308 +++++++++++++++++++++++-
+ mir2-rs/crates/world/src/combat.rs              | 107 +++++++-
+ mir2-rs/crates/world/src/lib.rs                 |  18 +-
+ mir2-rs/crates/world/src/party.rs               |   4 +
+ mir2-rs/crates/world/src/world.rs               | 149 ++++++++++--
+ mir2-rs/crates/world/tests/party_attribution.rs | 222 +++++++++++++++++
+ 6 files changed, 769 insertions(+), 39 deletions(-)
+
+$ git diff --name-only origin/master HEAD -- mir2-rs/crates/world mir2-rs/bins/game-svr
+mir2-rs/bins/game-svr/src/main.rs
+mir2-rs/crates/world/src/combat.rs
+mir2-rs/crates/world/src/lib.rs
+mir2-rs/crates/world/src/party.rs
+mir2-rs/crates/world/src/world.rs
+mir2-rs/crates/world/tests/party_attribution.rs

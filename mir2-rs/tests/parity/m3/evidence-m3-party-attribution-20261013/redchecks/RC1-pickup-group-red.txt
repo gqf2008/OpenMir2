@@ -1,0 +1,5 @@
+# 改坏：handle_ground_cmd 的 group_owner/group_member_actor_ids 换回 0/&[]
+$ cargo test -p game-svr pickup_group_attribution_uses_registry
+test tests::pickup_group_attribution_uses_registry ... FAILED
+thread 'tests::pickup_group_attribution_uses_registry' (24768) panicked at bins\game-svr\src\main.rs:10988:22:
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 182 filtered out; finished in 0.00s
