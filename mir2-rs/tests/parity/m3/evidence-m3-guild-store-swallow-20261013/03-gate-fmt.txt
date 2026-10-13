@@ -1,0 +1,3 @@
+$ cargo fmt --all -- --check
+(无输出)
+rc=0

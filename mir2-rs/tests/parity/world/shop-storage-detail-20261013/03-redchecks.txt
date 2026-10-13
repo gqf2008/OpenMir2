@@ -1,0 +1,9 @@
+# 改坏必红（3 条，均「改坏 ⇒ 目标用例 FAILED rc=101 / 还原 ⇒ 1 passed rc=0」）
+
+| RC | 改坏点 | 目标用例 | mutated 读数 | restored |
+| --- | --- | --- | --- | --- |
+| RC1 | shop.rs::detail_goods_list 的 if n_item_count >= 10 → >= 11 | shop::tests::detail_goods_list_encodes_last_ten_items_and_page_offset | FAILED rc=101，assertion left==right failed: 最多 10 件  left: 11  right: 10 | 1 passed rc=0 |
+| RC2 | main.rs::emit_shop_frames 的 let body = if f.tail_encoded → if false | tests::emit_shop_frames_keeps_pre_encoded_tail | FAILED rc=101，直连尾原样下发（不重新 EncodeString） left: [96,116,83,111,95,60] right: [60,64,123,47] | 1 passed rc=0 |
+| RC3 | shop.rs::take_back_storage_item 的 if is_add_weight_available(&state.wabil, std_weight) → if std_weight >= 0 | shop::tests::take_back_storage_item_adds_to_bag_and_weight_denies | FAILED rc=101，assertion failed: !r2.ok（负重不足被当成可取回） | 1 passed rc=0 |
+
+原始件：03-redcheck-RC{1,2,3}-*-{mutated,restored}.txt。还原后 git status 仅本片 2 个 .rs 改动（见 05-boundary）。

@@ -1,0 +1,16 @@
+# 四门禁（隔离 CARGO_TARGET_DIR=E:/tmp/m2svr-target；cwd = mir2-rs/；树 = 本 head，代码与证据同一 commit）
+
+## 1) cargo fmt --all -- --check
+rc=0（原始件 04a-fmt.txt 为空 = pass）
+
+## 2) cargo clippy --workspace --all-targets -- -D warnings
+rc=0（原始件 04b-clippy.txt）
+
+## 3) cargo test --workspace --no-fail-fast
+rc=0 / 101 suites · 1196 passed · 0 failed · 22 ignored（原始件 04c-workspace-test.txt）
+
+## 4) cargo run -p msgcodegen -- --check
+rc=0 / msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。（04d）
+
+# 本片新增 1 条 bin 用例（`shop_buy_and_detail_blocked_while_dealing`）。
+# 注意：本 head 的 fmt/clippy/test/msgcodegen 均在**本 head 树**上直接跑（不是转述）。

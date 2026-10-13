@@ -1,0 +1,69 @@
+# ⑤-4 第②片 oracle 锚（全部 src/ 行号，冻结 C# 参考实现）
+
+## A. 物品详情列表（CM_USERGETDETAILITEM 1015 → SM_SENDDETAILGOODSLIST 652）
+- 收包派发：src/M2Server/Player/PlayObject.Message.cs:900-901（case CM_USERGETDETAILITEM:
+  → ClientUserBuyItem(processMsg.wIdent, processMsg.nParam1, 0, processMsg.nParam2, processMsg.Msg)）
+- 与买入共用门：src/M2Server/Player/PlayObject.Operate.cs:192-213
+  （if (Dealing) return; :196-199；FindMerchant(nParam1)；!IsBuy || Envir != Envir ||
+   Math.Abs(dx)>15 || Math.Abs(dy)>15 ⇒ return；case CM_USERGETDETAILITEM: merchant.ClientGetDetailGoodsList(this, sMsg, nZz)）
+- 实现：src/GameSrv/Npc/Merchant.cs:1304-1343（ClientGetDetailGoodsList）
+  - 模板名比较：if (item != null && item.Name == sItemName)（:1320，**ordinal/大小写敏感**，非 IgnoreCase）
+  - 页顶夹取：if (list20.Count - 1 < nInt) nInt = HUtil32._MAX(0, list20.Count - 10);（:1322-1323）
+  - 取件循环：for (j = list20.Count - 1; j >= 0; j--)（:1324），最多 10 件（if (nItemCount >= 10) break; :1339）
+  - 每件：GetUpgradeStdItem(item, userItem, ref clientItem)（:1328）→ clientItem.Dura = userItem.Dura（:1330）
+    → clientItem.DuraMax = (ushort)GetUserPrice(playObject, GetUserItemPrice(userItem))（:1331）
+    → clientItem.MakeIndex = userItem.MakeIndex（:1332）
+    → sSendMsg = sSendMsg + EDCode.EncodeBuffer(clientItem) + "/"（:1333）
+  - 出帧：playObject.SendMsg(Messages.RM_SENDDETAILGOODSLIST, 0, ActorId, nItemCount, nInt, sSendMsg)（:1342）
+- RM→SM 映射：src/M2Server/Player/PlayObject.Message.cs:1830-1831
+  （SendDefMessage(SM_SENDDETAILGOODSLIST, processMsg.nParam1, processMsg.nParam2, processMsg.nParam3, 0, processMsg.Msg)）
+- 尾编码：src/M2Server/Player/PlayObject.Socket.cs:26-43 的 SendDefMessage 在非空尾时
+  SendSocket(ClientMsg, EDCode.EncodeString(sMsg)) ⇒ **双重编码**：每件先 EncodeBuffer 再整体 EncodeString。
+
+## B. 仓库面板（@storage / @getback）
+- 标签：src/Modules/SystemModule/Const/ScriptFlagConst.cs:50-51（sSTORAGE="@storage" / sGETBACK="@getback"）
+- 派发：src/GameSrv/Npc/Merchant.cs:862-874（UserSelect 的 sSTORAGE/sGETBACK 支 + IsStorage/IsGetback 门）
+- UserSelectStorage：src/GameSrv/Npc/Merchant.cs:1024-1027（SendMsg(RM_USERSTORAGEITEM, 0, ActorId, 0, 0)）
+  → src/M2Server/Player/PlayObject.Message.cs:1865-1866（SM_SENDUSERSTORAGEITEM(700)，Recog=nParam1，Param=nParam2）
+- UserSelectGetBack：src/GameSrv/Npc/Merchant.cs:1029-1032（SendMsg(RM_USERGETBACKITEM, 0, ActorId, 0, 0)）
+  → src/M2Server/Player/PlayObject.Message.cs:1867-1868（SendSaveItemList(processMsg.nParam1)）
+- SendSaveItemList：src/M2Server/Player/PlayObject.Base.cs:1590-1620
+  - 页数 short page = (short)Math.Ceiling(maxCount / 50f)（:1592）
+  - 每页 MakeMessage(SM_SAVEITEMLIST(704), merchantId, 0, p, (page-1)<0?0:page-1)（:1614），
+    尾 = 每件 EncodeBuffer(clientItem) + '/'（:1608），SendSocket(ClientMsg, sSendMsg) **直连**（无 EncodeString）
+  - 整页模板全缺 ⇒ sSendMsg 空 ⇒ SendSocket(ClientMsg, "") 直接 return（该页不发）
+
+## C. 存入（CM_USERSTORAGEITEM 1031）
+- 收包派发：src/M2Server/Player/PlayObject.Message.cs:963-965
+  （ClientStorageItem(processMsg.nParam1, HUtil32.MakeLong((ushort)nParam2, (ushort)nParam3), processMsg.Msg)）
+- 实现：src/M2Server/Player/PlayObject.Operate.cs:1607-1654（ClientStorageItem）
+  - if (sMsg.Contains(' ')) HUtil32.GetValidStr3(sMsg, ref sMsg, ' ')（:1609-1612）
+  - PayMent == 1 && !Config.TryModeUseStorage ⇒ SysMsg(TryModeCanotUseStorage, Red, Hint); return;（:1615-1619）
+  - FindMerchant(actorId)；循环背包按 MakeIndex + 名（**OrdinalIgnoreCase**）找件（:1621-1625）
+  - 商人门：merchant != null && merchant.IsStorage && (merchant.Envir == Envir && IsWithinSight(merchant) || merchant == FunctionNPC)（:1626）
+  - StorageItemList.Count < 39 ⇒ Add + ItemList.RemoveAt(i) + WeightChanged() + SM_STORAGE_OK(701)
+    否则 SM_STORAGE_FULL(702)；**两分支都置 bo19=true**（:1627-1648）
+  - 未命中/商人门不过 ⇒ if (!bo19) SM_STORAGE_FAIL(703)（:1649-1652）
+- 39 上限常量：src/M2Server/Player/PlayObject.Operate.cs:1629（StorageItemList.Count < 39）
+
+## D. 取回（CM_USERTAKEBACKSTORAGEITEM 1032）
+- 收包派发：src/M2Server/Player/PlayObject.Message.cs:966-968
+- 实现：src/M2Server/Player/PlayObject.Operate.cs:1656-1713（ClientTakeBackStorageItem）
+  - FindMerchant(actorId) == null ⇒ return（**无帧**，:1658-1662）
+  - PayMent == 1 && !TryModeUseStorage ⇒ SysMsg(...); return;（:1664-1668）
+  - !IsCanGetBackItem ⇒ return（**无帧**，:1669-1673）
+  - 循环仓库按 MakeIndex + 名（**OrdinalIgnoreCase**）找件（:1674-1678）
+  - IsAddWeightAvailable(GetStdItemWeight(userItem.Index))（:1680）：
+    - 真 ⇒ 商人门 merchant.IsGetback && (同图+IsWithinSight || FunctionNPC)（:1682）：
+      AddItemToBag（src/M2Server/Actor/BaseObject.cs:1241-1250）成功 ⇒ SendAddItem(userItem)（:1686）
+      + StorageItemList.RemoveAt(i)（:1687）+ SM_TAKEBACKSTORAGEITEM_OK(705)（Recog=nItemIdx，:1688）；
+      失败 ⇒ SM_TAKEBACKSTORAGEITEM_FULLBAG(707)（:1696）；两分支都 bo19=true
+    - 假 ⇒ SysMsg(MessageSettings.CanotGetItems, Red, Hint)（:1704）；bo19 保持 false
+  - if (!bo19) SM_TAKEBACKSTORAGEITEM_FAIL(706)（:1712）
+- SendAddItem：src/M2Server/Player/PlayObject.Base.cs:198-227（SM_ADDITEM(200)，尾 = EDCode.EncodeBuffer(clientItem)）
+  ⇒ 本片沿 T-24 只发 header-only（物品展示层登记）。
+- WeightChanged：src/M2Server/Actor/BaseObject.cs:1769-1773（WAbil.Weight = RecalcBagWeight(); RM_WEIGHTCHANGED）
+  ⇒ 本片只重算 WAbil.Weight，不发 SM_WEIGHTCHANGED（T-47 ⑤ 登记）。
+- SysMsg(CanotGetItems) 帧面：src/M2Server/Actor/BaseObject.cs:1660-1684（Red 支）
+  → src/M2Server/Player/PlayObject.Message.cs:1714-1716（SM_SYSMESSAGE(100)，Param=MakeWord(f,b)，Series=1）
+- 文案：src/Modules/SystemModule/MessageSettings.cs:216-217（TryModeCanotUseStorage / CanotGetItems）
