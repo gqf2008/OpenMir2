@@ -24,3 +24,24 @@ rc=0
 
 > 说明：与片㉒ 合并树读数逐值一致（`101 suites / 1200 passed / 0 failed / 22 ignored` / `msgcodegen 604`），
 > 本片零 Rust 改动，门读数不应变化——实测一致。
+
+## 合并树复跑（base 对齐 `origin/master cf83a2209` 后的交付 head `7b41806e9`）
+
+本片交付前按纪律 `git fetch origin && git merge origin/master`（片㉒ 已由 merge 车道合入 `cf83a2209` 之前的 master），
+产生合并提交 `7b41806e9`（父 = `cc87d6c4f` 本片 + `cf83a2209` master）。在**合并树**上复跑四门禁：
+
+```
+$ cargo fmt --all -- --check
+rc=0
+$ cargo clippy --workspace --all-targets --offline -- -D warnings
+rc=0
+$ cargo test --workspace --offline
+101 suites，test result 汇总 = passed 1200 / failed 0 / ignored 22
+rc=0
+$ cargo run -p msgcodegen --offline -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+rc=0
+```
+
+原始件：`E:/tmp/m2svr-burst10/m-{fmt,clippy,test,msgcodegen}.txt`。与切片树 `cc87d6c4f` 读数逐值一致
+（本片零 `.rs`，合并只带入他人已门禁的 m3 夹具/工具）。
