@@ -35,6 +35,7 @@
     "stream": "<side>-rng-stream.tsv",
     "gate": "python -I rng-trace-scene/rng_scene_gate.py gate --scenario rng-trace-scene/rng_trace_scenario.json --a <csharp-scene.json> --b <rust-scene.json>",
     "groupdiff": "python -I rng-trace-probe/rng_ledger_diff.py groupdiff <csharp-stream.tsv> <rust-stream.tsv> --a-side csharp --b-side rust --fold --strict",
+    "scene_groupdiff": "DoD① 单一入口（推荐）：rng-trace-scene/run_rng_trace_pair.ps1 -SceneGroupDiff -AScene <csharp-scene.json> -BScene <rust-scene.json> -AStream <csharp-rng-stream.tsv> -BStream <rust-rng-stream.tsv>（门非 GREEN ⇒ 拒比，不输出任何 groupdiff 结论）",
     "runner": "rng-trace-scene/run_rng_trace_pair.ps1"
   },
   "notes": [
@@ -42,6 +43,7 @@
     "R-6 folded 映射：C# construct（BaseObject/AnimalObject/MonsterObject/Monsters.*/PlayObject ..ctor）折叠到 Rust spawn（crates/world/src/mongen.rs 的 AnimalState::from_spawn_draws）；折叠后**计数与相对次序必须相等**（groupdiff --fold：FOLDED_COUNT_DIFF / SHARED_REL_ORDER_DIFF）。",
     "本场景与 ④「死亡掉落不落地」口径兼容：drop 组比的是**取数账本**（MonGetRandomItems 的逐次取数），④-D 之后 oracle 仍抽 RNG 只是不落地（无地面物 / 无 RM_ITEMSHOW / 无 SM_ITEMSHOW(610)）⇒ 两者同窗口同跑不互相打架（README.md §4）。",
     "真机两相 trace 需要独占窗口（起栈禁接管道）；-Go 未给 ⇒ run_rng_trace_pair.ps1 的 real-run 分支 fail-closed（exit 2），本片只交骨架。",
+    "DoD① 判定入口 = run_rng_trace_pair.ps1 -SceneGroupDiff（门 → 比一体）：场景门非 GREEN ⇒ 拒比（不跑 groupdiff、不输出 RNG_CONSUMER_GROUPDIFF 结论）；-GroupDiffOnly 只是跨场景对照的裸比较口径，不构成 DoD① 判据。",
     "M-1 收口：trace.runner 引用的每个 PowerShell 参数名（-Go/-Side/-PinScene/-PeerSession）都必须在本 runner 的 param() 里声明；无栈自检项 `scenario-runner-params-declared` 会对本文件做机判，塞一个未声明参数 ⇒ 必红点名（改坏必红）。因此不得在本字段写未声明参数。"
   ]
 }

@@ -1,0 +1,28 @@
+SELFTEST_NO_STACK: 无栈自检——场景门 + 账本 + folded 映射全路径都必须 fail-closed（缺失绝不静默 GREEN）
+SELFTEST ok scenario-fixed-input (canon/seed/map/pose/monsters/fold/mongen_fixture)
+SELFTEST ok mongen-fixture-zero-rows (path=E:\tmp\m3bag-sgd\mut\rng-trace-scene\..\fixtures\mongen-map0137.tsv)
+SELFTEST ok scene-gate-selftest (rc=0)
+SELFTEST ok=16/16
+GREEN: 场景前置门 selftest 全绿（同场景绿 + seed/怪集合/起点/map/MonGen 漂移必红 + scenario 声明 vs 代码 folded 映射/组清单漂移必红 + 缺件/坏 JSON PREREQ fail-closed）
+
+SELFTEST ok scene-gate-identical-green (rc=0)
+SELFTEST ok scene-gate-monster-drift-red (rc=1)
+SELFTEST ok ledger-selftest (rc=0)
+SELFTEST ok folded-equivalent-green (rc=0)
+SELFTEST ok folded-count-red (rc=1)
+SELFTEST ok folded-order-red (rc=1)
+SELFTEST ok scene-gate-missing-prereq (rc=2)
+SELFTEST ok lf-writer-selftest
+SELFTEST ok scenario-runner-params-declared (tokens=[Go,PeerSession,PinScene,Side] missing=[])
+SELFTEST ok scenario-runner-param-drift-red (missing=NotARealParam)
+SELFTEST ok scenario-fold-group-consistency-green (rc=0)
+SELFTEST ok scenario-fold-drift-red (rc=1)
+SELFTEST ok scenario-groups-unknown-red (rc=1)
+SELFTEST ok scenario-drift-samples-json-native (runner/fold/groups drift 样本均为 JSON 字段改写且与源不同（base 牙内自解析，无跨块依赖）)
+SELFTEST ok scenario-drift-tooth-not-vacuous (空转样本 ⇒ 同一 fold 谓词为 false（牙非恒真、不空转）)
+SELFTEST FAIL scene-groupdiff-identical-green (rc=1)
+SELFTEST ok scene-groupdiff-scene-drift-refused (rc=1 ranDiff=False)
+SELFTEST ok scene-groupdiff-missing-prereq-refused (rc=2)
+SELFTEST FAIL scene-groupdiff-diff-red-propagates (rc=1)
+SELFTEST ok no-port-touched (offline-only)
+SELFTEST ok=21/23 failures=scene-groupdiff-identical-green,scene-groupdiff-diff-red-propagates

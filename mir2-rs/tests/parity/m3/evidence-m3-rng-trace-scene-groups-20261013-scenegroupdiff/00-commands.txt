@@ -1,0 +1,50 @@
+# 证据包：M3 RNG 站点组 DoD① 单一入口（-SceneGroupDiff）收口（2026-10-13）
+# 卡 openmir2-m3-rng-trace-scene-groups；分支 worktree-m3-rng-trace-scene-groups；零 .rs；未起栈、未占端口。
+#
+# 全部命令 cwd = mir2-rs/tests/parity/m3（除注明的 cargo 门禁 cwd = mir2-rs）
+
+# ---- 夹具/工具自检（离线，零端口） ----
+powershell -NoProfile -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 -SelfCheckNoStack -SelfCheckOut E:/tmp/m3bag-sgd/01-selftest-nostack.txt
+python -I rng-trace-scene/rng_scene_gate.py selftest
+python -I rng-trace-probe/rng_ledger_diff.py selftest
+python -I attack_rng_ledger.py selftest
+python -I rng-trace-scene/rng_scene_gate.py scenario --scenario rng-trace-scene/rng_trace_scenario.json
+
+# ---- 合成两相件（03-10 用；LF 写出） ----
+python -I -c "见 05-* 的 00-commands 末段（写 a-scene.json/b-scene.json/a.tsv/b.tsv/b2.tsv 到 E:/tmp/m3bag-sgd/dbg）"
+# 说明：dbg 生成脚本（内联）：
+#   descriptors: {"canon":"m3-rng-scene-descriptor-v1","map":"0137","seed":42,
+#                 "start_pose":{"x":17,"y":20,"dir":2},"mongen_rows":[],"side":<csharp|rust>,
+#                 "monsters":[{"name":"稻草人","x":18,"y":20,"dir":0,"count":1}]}
+#   a.tsv sites = [BaseObject..ctor, CreateMonster, AnimalObject.Wondering]
+#   b.tsv sites = [mongen.rs:624, mongen.rs:624, monai.rs:164]      # 折叠后 == a
+#   b2.tsv sites = [mongen.rs:624 x3]                               # 折叠后少 monster_ai 组
+
+# ---- DoD① 单一入口正/负样本 ----
+powershell -NoProfile -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 -SceneGroupDiff -AScene E:/tmp/m3bag-sgd/dbg/a-scene.json -BScene E:/tmp/m3bag-sgd/dbg/b-scene.json -AStream E:/tmp/m3bag-sgd/dbg/a.tsv -BStream E:/tmp/m3bag-sgd/dbg/b.tsv
+# ---- 改坏必红（改坏在 **仓外副本** E:/tmp/m3bag-sgd/mut/ 做，未改仓库树） ----
+powershell -NoProfile -ExecutionPolicy Bypass -File run_mut1.ps1 -SelfCheckNoStack   # 去掉「门非 GREEN ⇒ 拒比」⇒ ⑳/㉑ FAIL
+powershell -NoProfile -ExecutionPolicy Bypass -File run_mut2.ps1 -SelfCheckNoStack   # 门绿后仍恒拒比/吞结论 ⇒ ⑲/㉒ FAIL
+# ---- 回归（原语义不变） ----
+powershell -NoProfile -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 -GroupDiffOnly -AStream E:/tmp/m3bag-sgd/dbg/a.tsv -BStream E:/tmp/m3bag-sgd/dbg/b.tsv
+powershell -NoProfile -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 -GroupDiffOnly -AStream E:/tmp/m3bag-sgd/dbg/a.tsv -BStream E:/tmp/m3bag-sgd/dbg/b2.tsv
+powershell -NoProfile -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 -GateOnly -AScene E:/tmp/m3bag-sgd/dbg/a-scene.json -BScene E:/tmp/m3bag-sgd/dbg/b-scene.json
+
+# ---- 夹具矩阵/链深检（runner 级回归） ----
+python -I fixture_matrix.py check
+python -I fixture_chain_gate.py check
+
+# ---- 边界 ----
+git -C <repo> diff --name-status HEAD
+git -C <repo> diff --name-only HEAD -- src sql MirClient mir2-rs/crates mir2-rs/bins   # 期望空
+git -C <repo> diff --name-only HEAD -- '*.rs'                                          # 期望空
+
+# ---- 四门禁（cwd = mir2-rs；CARGO_TARGET_DIR=E:/tmp/m3bag-target；--offline） ----
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --offline -- -D warnings
+cargo test --workspace --offline
+cargo run -q --offline -p msgcodegen -- --check
+
+# ---- 证据 hash 复核（仓库 LF/git-blob 口径） ----
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra <本目录>
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck <本目录>
