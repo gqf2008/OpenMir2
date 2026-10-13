@@ -1,0 +1,7 @@
+# openmir2-collab-board-blocked-column —— 四门禁（隔离 CARGO_TARGET_DIR=E:/tmp/m2svr-target）
+# 树：分支 collab-board-blocked-column @ origin/master c8a3487b1f6a117065b0105836105b7ed3c0529b（cwd = mir2-rs/）
+cargo fmt --all -- --check                                  rc=0
+cargo clippy --offline --workspace --all-targets -- -D warnings   rc=0
+cargo test --offline --workspace                            rc=0   99 suites · 1159 passed · 0 failed · 22 ignored
+cargo run --offline -p msgcodegen -- --check                rc=0   604 条常量与 C# 源一致
+# 原始件：07-gate-fmt.txt / 07-gate-clippy.txt / 07-gate-test.txt / 07-gate-msgcodegen.txt

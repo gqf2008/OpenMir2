@@ -30,7 +30,7 @@ status = "needs-human"
 
 [[column]]
 name = "受阻"
-merge = "blocked"
+status = "blocked"
 
 [[column]]
 name = "已完成"

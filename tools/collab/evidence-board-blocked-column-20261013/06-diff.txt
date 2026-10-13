@@ -1,0 +1,18 @@
+=== git diff -- .walgit/board.toml ===
+diff --git a/.walgit/board.toml b/.walgit/board.toml
+index cedb7a51d..1a7561721 100644
+--- a/.walgit/board.toml
++++ b/.walgit/board.toml
+@@ -30,7 +30,7 @@ status = "needs-human"
+ 
+ [[column]]
+ name = "受阻"
+-merge = "blocked"
++status = "blocked"
+ 
+ [[column]]
+ name = "已完成"
+
+=== git status --short (evidence + fix) ===
+ M .walgit/board.toml
+?? tools/collab/

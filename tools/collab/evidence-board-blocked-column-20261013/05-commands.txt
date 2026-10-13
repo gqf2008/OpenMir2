@@ -1,0 +1,44 @@
+# openmir2-collab-board-blocked-column —— 复现命令与原始读数（Windows Git-Bash）
+# 基线：origin/master c8a3487b1f6a117065b0105836105b7ed3c0529b；worktree 分支 collab-board-blocked-column
+# 全部离线；未起栈；未占端口。
+
+## A. 基线（认领前，HEAD board = 含 bug 的 merge="blocked"）
+$ walgit collab board --format json --repo . > 01-board-before.json
+   待认领: 3   进行中: 36   待审: 5   需要人: 0   受阻: 0   已完成: 87   SUM: 131
+
+## B. 认领本卡（签名 status，in-progress）
+$ walgit collab entry --repo . --kind status --id openmir2-collab-board-blocked-column \
+    --parent b65dc44e1b03d779587522c18ddcb85a434d5d4d \
+    --body '{"status":"in-progress","owner":"openmir2-worker-11","worktree":"m2-svr","branch":"collab-board-blocked-column","work":"..."}' --push walgit
+  refs/collab/inbox/openmir2-worker-11/851636e282c45918a84df154bc4161c9 37b0f48ef13ea0d98f63d34f657558f7c87d355e
+
+## C. 复现 DoD①（最小写法 DoD③）+ 改后 DoD②
+$ walgit collab entry --repo . --kind status --id openmir2-collab-board-blocked-column \
+    --parent 37b0f48ef13ea0d98f63d34f657558f7c87d355e \
+    --body '{"status":"blocked"}' --push walgit
+  refs/collab/inbox/openmir2-worker-11/820dbfc67bb69043c2ac5a12faf477e4 f135533fcfbf31245d124e0b5deb3a66b33ed826
+
+$ walgit collab board --format json --repo .                          > 02-board-blocked-head-board.json
+$ walgit collab board --board .walgit/board.toml --format json --repo . > 03-board-blocked-fixed-board.json
+
+  HEAD board (merge=blocked):   {待认领:2, 进行中:36, 待审:5, 需要人:0, 受阻:0, 已完成:87} SUM=130  my_card_in=[]
+  FIXED board (status=blocked): {待认领:2, 进行中:36, 待审:5, 需要人:0, 受阻:1, 已完成:87} SUM=131  my_card_in=['受阻']
+
+## D. 改坏必红（把修后 board 的 status 改回 merge）
+$ sed 's/^status = "blocked"$/merge = "blocked"/' .walgit/board.toml > _board-mutated-merge.toml
+$ walgit collab board --board _board-mutated-merge.toml --format json --repo . > 04-board-mutation-red.json
+  MUTATED (merge=blocked) board: {待认领:2, 进行中:36, 待审:5, 需要人:0, 受阻:0, 已完成:87} SUM=130  my_card_in=[]
+
+## E. 集合校验（DoD④：修后可见集合 == 基线，无卡被吞）
+$ python - <<'PY'
+  ids(01)=131  ids(02)=130  ids(03)=131  ids(04)=130
+  01==03 (fix restores exactly baseline): True
+  02==01-{mycard}: True
+  04==02: True
+  missing from 02 but in 01: ['openmir2-collab-board-blocked-column']
+PY
+
+## F. 修复本身（一行）
+$ git diff .walgit/board.toml
+-merge = "blocked"
++status = "blocked"
