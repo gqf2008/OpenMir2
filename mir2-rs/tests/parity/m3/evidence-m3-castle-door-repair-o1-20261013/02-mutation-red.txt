@@ -1,0 +1,22 @@
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\crates\world)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.90s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m3cs-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 1 test
+test castle::tests::compare_lstr_matches_oracle_prefix_semantics_without_panic ... FAILED
+
+failures:
+
+---- castle::tests::compare_lstr_matches_oracle_prefix_semantics_without_panic stdout ----
+
+thread 'castle::tests::compare_lstr_matches_oracle_prefix_semantics_without_panic' (2628) panicked at crates\world\src\castle.rs:452:8:
+end byte index 13 is not a char boundary; it is inside 'é' (bytes 12..14 of string)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    castle::tests::compare_lstr_matches_oracle_prefix_semantics_without_panic
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 207 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-world --lib`
