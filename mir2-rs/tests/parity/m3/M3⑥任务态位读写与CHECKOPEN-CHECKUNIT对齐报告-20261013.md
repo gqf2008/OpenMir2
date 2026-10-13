@@ -86,11 +86,13 @@
 
 ## 5. 四门禁（`02-gates.txt`，cwd=`mir2-rs`，`CARGO_TARGET_DIR=E:/tmp/m3cs-target`）
 
+树 = `git merge origin/master 3c5082e5 into worktree-m3-quest-state`（提交 `b61ba3f7`）。
+
 | 门 | 读数 |
 | --- | --- |
 | `cargo fmt --all -- --check` | rc=0 |
 | `cargo clippy --workspace --all-targets -- -D warnings` | rc=0 |
-| `cargo test --workspace` | rc=0（全部 `test result: ok`，0 failed） |
+| `cargo test --workspace` | rc=0；**90 suites / 806 passed / 0 failed / 18 ignored**（master 基线 89/796/0/18 ⇒ +1 suite / +10 passed：3 模块内单测 + 3 向量用例 + 4 条件/解析用例） |
 | `cargo run -p msgcodegen -- --check` | rc=0（604 条常量与 C# 源一致） |
 
 ## 6. 写集边界 / 未实现项（交 owner）
