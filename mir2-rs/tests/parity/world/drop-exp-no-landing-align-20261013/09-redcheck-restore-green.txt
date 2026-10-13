@@ -1,0 +1,34 @@
+   Compiling mir2-world-bevy v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\world-bevy)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.22s
+     Running tests\world_combat_parity.rs (E:/tmp/m2svr-optionA-target\debug\deps\world_combat_parity-2475c8e47e95985c.exe)
+
+running 7 tests
+test exp_goes_to_first_hitter_not_last ... ok
+test golden_covers_dodge_and_no_hit_roll_branch ... ok
+test kill_exp_does_not_decay_even_when_fix_off ... ok
+test ghosted_hitter_loses_exp_credit_in_same_tick ... ok
+test redcheck_speed_point_change_must_alter_attacks ... ok
+test combat_attacks_and_exp_match_csharp ... ok
+test redcheck_hit_point_zero_branch_consumes_no_rng ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\world_session_parity.rs (E:/tmp/m2svr-optionA-target\debug\deps\world_session_parity-9c564348f3b2a345.exe)
+
+running 2 tests
+test session_and_drops_match_csharp ... ok
+test redcheck_drop_change_must_alter_death_gold ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\bevy_drop_parity.rs (E:/tmp/m2svr-optionA-target\debug\deps\bevy_drop_parity-4b6f9ec41ef5ec1a.exe)
+
+running 4 tests
+test floor_placement_matches_oracle_scan_and_golden_has_no_floor ... ok
+test no_parallel_guard ... ok
+test budget_matches_existing_implementation ... ok
+test output_does_not_depend_on_query_order ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+restore-green rc=0

@@ -1,0 +1,11 @@
+# 四门禁（merge origin/master d778ac30 后的 head d6aae2e0；隔离 CARGO_TARGET_DIR=E:/tmp/m2svr-optionA-target，--offline）
+
+1. cargo fmt --all -- --check                            => rc=0
+2. cargo clippy --workspace --all-targets -- -D warnings => rc=0（0 warning）
+3. cargo test --workspace --offline --no-fail-fast       => rc=0（93 suites · 847 passed · 0 failed · 20 ignored）
+4. cargo run -p msgcodegen -- --check                    => rc=0（604 条与 C# 源一致）
+
+# merge 前（base 083dd0e3 树）读数：92 suites · 837 passed · 0 failed · 19 ignored（同一隔离 target）
+# 差量 = 本次 merge 带入的 master 新代码（quest-load/merchant-load 等）+0 失败。
+
+原始日志见 gates/（01-fmt / 02-clippy / 03-workspace-test / 04-msgcodegen，均为 .txt）

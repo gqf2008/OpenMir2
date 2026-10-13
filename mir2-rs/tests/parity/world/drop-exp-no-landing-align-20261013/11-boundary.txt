@@ -1,0 +1,43 @@
+# 边界：本片相对 origin/master 未动 src/ sql/ MirClient
+
+$ git diff --name-only origin/master..HEAD -- src sql MirClient
+(以上为空)
+
+$ git log --oneline -1 origin/master
+d778ac30 Merge 94ec0eee (worktree-m3-merchant-load): M3 (5) implementation 1 - Envir/Merchant.txt loading into crates/envir merchant module (10 columns + CastleMerchant/BoCanMove + script-header/%PRICERATE/[goods] reuse from crates/script) -> MerchantRecord; real-machine vector 131 merchants/63 with [goods]/582 entries - approve reviewer-6 @reviewed_head 94ec0eee
+$ git log --oneline -1 HEAD
+d6aae2e0 Merge remote-tracking branch 'origin/master' into drop-exp-host
+
+$ git diff --name-only origin/master..HEAD  # 本片全部改动（committed）
+mir2-rs/bins/game-svr/src/main.rs
+mir2-rs/crates/world-bevy/tests/bevy_drop_parity.rs
+mir2-rs/crates/world/src/map.rs
+mir2-rs/crates/world/src/world.rs
+mir2-rs/tests/parity/csharp/WorldGolden/Program.cs
+mir2-rs/tests/parity/tests/common/mod.rs
+mir2-rs/tests/parity/tests/world_combat_parity.rs
+mir2-rs/tests/parity/tests/world_session_parity.rs
+mir2-rs/tests/parity/whitelist.md
+"mir2-rs/tests/parity/world/D3\350\257\225\351\252\214\347\224\260\346\212\245\345\221\212.md"
+"mir2-rs/tests/parity/world/M2\351\252\250\346\236\266\346\212\245\345\221\212.md"
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/00-commands.txt
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/01-oracle-anchors.txt
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/02-golden-probe-before-after.txt
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/03-golden-regen.txt
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/04-golden-before-after-diff.txt
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/05-golden-hashes.txt
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/06-redcheck-combat-revert-landing.txt
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/07-redcheck-session-revert-landing.txt
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/08-redcheck-probe-stub-vs-oracle.txt
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/09-redcheck-restore-green.txt
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/10-gates.txt
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/11-boundary.txt
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/12-whitelist-t32-after.txt
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/README.md
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/SHA256SUMS.txt
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/gates/01-fmt.txt
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/gates/02-clippy.txt
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/gates/03-workspace-test.txt
+mir2-rs/tests/parity/world/drop-exp-no-landing-align-20261013/gates/04-msgcodegen.txt
+mir2-rs/tests/parity/world/golden/combat.txt
+mir2-rs/tests/parity/world/golden/session.txt

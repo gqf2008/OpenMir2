@@ -4,8 +4,10 @@
 //! 四条断言对应 §4.2.2 的 DoD：
 //! 1. `budget_matches_existing_implementation`：同快照下，bevy 系统的预算输出 ==
 //!    `crates/formula`（既有实现的核心）直接调用的结果（掉落列表逐项相同）；
-//! 2. `floor_placement_matches_csharp_golden`：bevy 系统的落地输出 == C# 金标准
-//!    `tests/parity/world/golden/session.txt` 里的 `floor` 行（**与 C# 逐行一致**）；
+//! 2. `floor_placement_matches_oracle_scan_and_golden_has_no_floor`：oracle `Envir.AddItemToMap`
+//!    首行 `MapItem.ItemId == 0` 门恒真 ⇒ 死亡掉落恒不落地 ⇒ 金标准 `session.txt` 里**没有**
+//!    `floor` 行；`plan_floor_placement` 仍作为 ECS 落地机制演示，与 oracle `GetDropPosition`
+//!    扫描序的期望值逐项一致；
 //! 3. `output_does_not_depend_on_query_order`：把实体按**反序** spawn、只把 [`OrderIndex`]
 //!    按 id 升序给系统，输出必须不变 —— 这条直接证明"顺序来自我们自己的索引，不来自 Query 迭代序"；
 //! 4. `no_parallel_guard`：直接依赖白名单 + 源码扫描（禁 `MultiThreadedExecutor`/`bevy_tasks`/
@@ -120,11 +122,16 @@ fn budget_matches_existing_implementation() {
     }
 }
 
-/// 断言 2：落地输出 == C# 金标准的 `floor` 行（**与 C# 逐行一致**）。
+/// 断言 2：bevy 的落地机制与 oracle `GetDropPosition` 扫描一致，且**金标准里没有 `floor` 行**。
+///
+/// oracle `Envir.AddItemToMap` 首行 `MapItem.ItemId == 0` 门恒真（全仓无 `MapItem.ItemId` 赋值点）
+/// ⇒ 死亡掉落恒不落地、`RM_ITEMSHOW`/`SM_ITEMSHOW(610)` 恒不发（同 T-19/T-25；owner `aace16e0`
+/// 裁决「对齐冻结 `src/`、不落地」）⇒ 金标准 `golden/session.txt` 里**不应再有** `floor` 行
+/// （若哪天把落地改回去 ⇒ 本断言必红）。`plan_floor_placement` 的 ECS 扫描序改用 oracle 的
+/// `GetDropPosition` 期望值钉住，不再依赖 golden。
 #[test]
-fn floor_placement_matches_csharp_golden() {
+fn floor_placement_matches_oracle_scan_and_golden_has_no_floor() {
     let golden = fs::read_to_string(parity_world_dir().join("golden/session.txt")).unwrap();
-    // 金标准里第 6 tick 起出现掉落（此后各 tick 持续存在，取首个 tick 的 floor 行）
     let first_tick_floors: Vec<(usize, i32, i32, i32)> = golden
         .lines()
         .skip_while(|l| !l.starts_with("death "))
@@ -136,8 +143,9 @@ fn floor_placement_matches_csharp_golden() {
         })
         .collect();
     assert!(
-        !first_tick_floors.is_empty(),
-        "金标准里应至少有 1 件地面物品（否则这条断言没有意义）"
+        first_tick_floors.is_empty(),
+        "oracle `AddItemToMap` 门 ⇒ 死亡掉落恒不落地（T-19/T-25）⇒ 金标准不应有 floor 行: \
+         {first_tick_floors:?}"
     );
 
     // 死亡时的输入：怪物在 (12,10)，掉落顺序 = 先物品（Index）、后金币（怪物 id）
@@ -159,11 +167,13 @@ fn floor_placement_matches_csharp_golden() {
         .map(|p| (p.map_id, p.x, p.y, p.obj_id))
         .collect();
     got.sort_unstable();
-    let mut want = first_tick_floors.clone();
+    // 期望值 = oracle `GetDropPosition` 扫描序的产物（旧 golden 的 floor 行；该路径在 oracle
+    // 里被 `ItemId == 0` 门截断，故此处只钉 ECS 机制的扫描序，不再依赖 golden）。
+    let mut want: Vec<(usize, i32, i32, i32)> = vec![(0, 13, 10, 2), (0, 13, 11, 1)];
     want.sort_unstable();
     assert_eq!(
         got, want,
-        "bevy 系统的落地结果必须与 C# 金标准的 floor 行逐项一致"
+        "bevy 系统的落地扫描序必须与 oracle `GetDropPosition` 一致"
     );
 }
 

@@ -56,7 +56,9 @@ pub enum FloorItemKind {
 
 /// 地面物品的**最小身份**（不掉落"完整 `MapItem`"：只记接线层无法可靠反推的字段）。
 ///
-/// 记账点在掉落落地时（`World::place_floor_item`），字段来源见 `owner §25.1`：
+/// 记账点在**显式落格注入**时（`MapGrid::add_floor_item`；oracle 死亡掉落因
+/// `Envir.AddItemToMap` 首行 `MapItem.ItemId == 0` 门而恒不落地，故生产路径不落格），
+/// 字段来源见 `owner §25.1`：
 /// `kind/index/count` 供 `ground::GroundItem` 装配，`item_id` 是删除格子的唯一键，
 /// `of_base_object` = oracle `RM_DIEDROPITEM` 的 `wParam`（`BaseObject.cs:2437/2442`）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

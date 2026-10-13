@@ -1,0 +1,25 @@
+   Compiling mir2-parity-tests v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\tests\parity)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.04s
+     Running tests\world_session_parity.rs (E:/tmp/m2svr-optionA-target\debug\deps\world_session_parity-9c564348f3b2a345.exe)
+
+running 2 tests
+test session_and_drops_match_csharp ... FAILED
+test redcheck_drop_change_must_alter_death_gold ... ok
+
+failures:
+
+---- session_and_drops_match_csharp stdout ----
+
+thread 'session_and_drops_match_csharp' (1572) panicked at tests\parity\tests\world_session_parity.rs:25:17:
+会话+掉落与 C# oracle 不一致，首个差异在第 18 行:
+  rust  = death 2 2 192 -1 0
+  csharp= death 2 0 192 -1 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    session_and_drops_match_csharp
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+error: test failed, to rerun pass `-p mir2-parity-tests --test world_session_parity`

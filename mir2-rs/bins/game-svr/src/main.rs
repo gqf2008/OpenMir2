@@ -6177,7 +6177,6 @@ mod tests {
     /// ⇒ 同样收不到该帧；③ `SM_GOLDCHANGED` 用改前 `gold`（=0）⇒ `recog` 断言必红。
     #[test]
     fn pickup_gold_dispatches_and_updates_session() {
-        use mir2_world::Command;
         use std::collections::HashMap;
 
         let mut world = mir2_world::World::new(32, 32);
@@ -6197,43 +6196,31 @@ mod tests {
             e.max_exp = 1000;
             e
         });
-        world.spawn_monster(Command::SpawnMonster {
-            id: 2,
-            name: "僵尸".into(),
-            x: 11,
-            y: 10,
-            map_id: 0,
-            level: 1,
-            exp: 0,
-            hp: 3,
-            dc: 1,
-            ac: 0,
-            undead: 0,
-            hit_point: 5,
-            speed_point: 15,
-            drop_list: vec![mir2_data::MonsterDropItem {
-                sel_point: 10,
-                max_point: 10,
-                item_name: "金币".into(),
-                count: 300,
-            }],
-        });
-        world.tick(); // 生成
-        world.attack_cmd(p, 2);
-        let _ = world.tick(); // 死亡结算 + 掉落落地
-        let gold = world
-            .floor_items_view_sorted()
-            .into_iter()
-            .find(|v| v.kind == mir2_world::FloorItemKind::Gold)
-            .expect("必须有金币落地（掉落预算）");
-        let expected_count = gold.count;
-        assert!(expected_count > 0, "金币数应为正：{gold:?}");
+        // oracle 死亡掉落恒不落地（`Envir.AddItemToMap` 首行 `MapItem.ItemId == 0` 门，
+        // `Envirnoment.cs:88-92`）⇒ 本接缝不再依赖击杀链，直接显式落一格金币
+        // （与 `world::World` 掉落侧同口径；读分片/拾取机制的生产输入来源）。
+        let gold_x = 11;
+        let gold_y = 10;
+        let expected_count = 300;
+        assert!(world.maps[0].add_floor_item(
+            gold_x,
+            gold_y,
+            p,
+            mir2_world::map::FloorItemMeta {
+                kind: mir2_world::FloorItemKind::Gold,
+                index: 0,
+                count: expected_count,
+                item_id: p,
+                of_base_object: p,
+            },
+            0,
+        ));
         // 把角色移到金币格（`CM_PICKUP` 的位置门 `CurrX==nParam2 && CurrY==nParam3` 与
         // `map.get_item(CurrX,CurrY)` 都要对上；世界格未参与本接缝判定）。
         {
             let e = world.entities.get_mut(p).expect("player 必在实体表");
-            e.x = gold.x;
-            e.y = gold.y;
+            e.x = gold_x;
+            e.y = gold_y;
         }
 
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
@@ -6294,8 +6281,8 @@ mod tests {
         // 位置门不成立（X 差 1）⇒ 不投递。
         handle_ground_cmd(
             game_svr::ground::CM_PICKUP,
-            u16::try_from(gold.x + 1).unwrap(),
-            u16::try_from(gold.y).unwrap(),
+            u16::try_from(gold_x + 1).unwrap(),
+            u16::try_from(gold_y).unwrap(),
             None,
             "hero",
             901,
@@ -6321,8 +6308,8 @@ mod tests {
         // 位置门成立 ⇒ 拾取成功，回 SM_GOLDCHANGED（用改后 Gold），且会话金币增加。
         handle_ground_cmd(
             game_svr::ground::CM_PICKUP,
-            u16::try_from(gold.x).unwrap(),
-            u16::try_from(gold.y).unwrap(),
+            u16::try_from(gold_x).unwrap(),
+            u16::try_from(gold_y).unwrap(),
             None,
             "hero",
             901,

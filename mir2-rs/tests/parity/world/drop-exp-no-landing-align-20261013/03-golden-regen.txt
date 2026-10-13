@@ -1,0 +1,12 @@
+# 重生成 golden：5 份重产 vs 仓库内（改后）
+# 命令:
+#   dotnet build tests/parity/csharp/WorldGolden/WorldGolden.csproj -c Release --no-incremental
+#   for s in basic session combat combat_exp_nofix combat_exp_hitter_ghost; do dotnet run --project tests/parity/csharp/WorldGolden -c Release --no-build -- $s E:/tmp/m2svr-optionA/regen/$s.txt; done
+
+IDENTICAL  basic
+IDENTICAL  session
+IDENTICAL  combat
+IDENTICAL  combat_exp_nofix
+IDENTICAL  combat_exp_hitter_ghost
+
+# 逐字节确认：只有 basic/combat_exp_nofix/combat_exp_hitter_ghost 相同，combat/session 为本次授权的 2 份重生成

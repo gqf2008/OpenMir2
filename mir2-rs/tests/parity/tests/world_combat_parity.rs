@@ -5,7 +5,7 @@
 //!   + `Random(10)` 两次取数；怪物攻方才是基版 `Random(power+1)`；DC=0x1E14 ⇒ 20..30）；
 //! - 命中判定的 RNG（`RandomByte(目标 SpeedPoint)`，幽灵(6) `speed_point=51` ⇒ 会真的闪避）；
 //! - 护甲 RNG 的两条分支（`ac=0` ⇒ 1 次取数；`ac=0x0A05` ⇒ 2 次取数）；
-//! - 击杀 → 掉落落地 + 经验结算（`KillFunc` → `KillTargetTrigger` → `GainExp`）；
+//! - 击杀 → 掉落**生成**（oracle `AddItemToMap` 门 ⇒ 不落地）+ 经验结算（`KillFunc` → `KillTargetTrigger` → `GainExp`）；
 //! - **经验归属者是"第一个命中者"**（`ExpHitter`，`BaseObject.cs:1753/2429`），
 //!   而不是最后一击者（`LastHiter`）——场景里由 mate(4) 补完最后一击，经验仍归 hero(1)；
 //! - 攻击自己（`IsProperTarget` 为假）/ 攻击已死目标（`_Attack` 不造成伤害但**仍**登记命中者）。

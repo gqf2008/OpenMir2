@@ -1,0 +1,31 @@
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\world)
+   Compiling mir2-parity-tests v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\tests\parity)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.24s
+     Running tests\world_combat_parity.rs (E:/tmp/m2svr-optionA-target\debug\deps\world_combat_parity-2475c8e47e95985c.exe)
+
+running 7 tests
+test exp_goes_to_first_hitter_not_last ... ok
+test golden_covers_dodge_and_no_hit_roll_branch ... ok
+test kill_exp_does_not_decay_even_when_fix_off ... ok
+test ghosted_hitter_loses_exp_credit_in_same_tick ... ok
+test redcheck_speed_point_change_must_alter_attacks ... ok
+test redcheck_hit_point_zero_branch_consumes_no_rng ... ok
+test combat_attacks_and_exp_match_csharp ... FAILED
+
+failures:
+
+---- combat_attacks_and_exp_match_csharp stdout ----
+
+thread 'combat_attacks_and_exp_match_csharp' (5772) panicked at tests\parity\tests\world_combat_parity.rs:32:17:
+战斗结算与 C# oracle 不一致，首个差异在第 36 行:
+  rust  = death 2 1 192 1 100
+  csharp= death 2 0 192 1 100
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    combat_attacks_and_exp_match_csharp
+
+test result: FAILED. 6 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p mir2-parity-tests --test world_combat_parity`
