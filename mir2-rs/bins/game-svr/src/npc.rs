@@ -71,6 +71,22 @@ pub struct SayMsg {
     pub priority: bool,
 }
 
+/// oracle `MsgQueue` 的**出队序**（`BaseObject.Base.cs:25-32` 的 `while (GetMessage(...))` +
+/// `BaseObject.Message.cs:334` 的 `TryDequeue`）：
+///
+/// - `SendPriorityMsg(..., MessagePriority.High)` 入队优先级 = `(byte)High = 0`（`BaseObject.Message.cs:30`）；
+/// - `SendMsg(normNpc, ...)` 入队优先级 = `(byte)RM_MERCHANTSAY = 11009 & 0xFF = 1`（`:180`）。
+///
+/// ⇒ 出队是**优先级字节升序**：`High` 组（0）先、`SendMsg` 组（1）后。oracle 用的是
+/// `PriorityQueue`（同优先级不保证稳定序），本函数只按两个**不同**优先级分组，组内取**入队序**
+/// （即引擎调用序）。这正是 `②③` F-1 那条「入队序 ≠ 出队序」的同源规则（那里三段优先级互不相同）。
+#[must_use]
+pub fn dequeue_order(says: &[SayMsg]) -> Vec<&SayMsg> {
+    let mut out: Vec<&SayMsg> = says.iter().filter(|s| s.priority).collect();
+    out.extend(says.iter().filter(|s| !s.priority));
+    out
+}
+
 /// 脚本引擎 `playerActor.SendMsg(...)` 一次调用的原始实参（供第②片按 `MsgQueue` 出队序落帧）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SendMsg {
@@ -192,6 +208,20 @@ impl NpcHost {
             .position(|d| d.chr_name.eq_ignore_ascii_case(chr_name))
     }
 
+    /// `SystemShare.ManageNPC != null`（`WorldServer` 装载 `QManage` 后置位）：
+    /// `@Login` 的守卫（`PlayObject.cs:1440` 的 `if (SystemShare.ManageNPC != null)`）。
+    #[must_use]
+    pub fn has_manage_npc(&self) -> bool {
+        self.find("QManage").is_some_and(|i| self.defs[i].loaded)
+    }
+
+    /// `SystemShare.FunctionNPC != null`（`QFunction` 装载后置位）：
+    /// `UseStdModeFunItem` 的守卫（`PlayObject.Base.cs:1072`）。
+    #[must_use]
+    pub fn has_function_npc(&self) -> bool {
+        self.find("QFunction").is_some_and(|i| self.defs[i].loaded)
+    }
+
     /// `PlayObject.NpcGotoLable` → `INormNpc.GotoLable` 的等价物（`bo_ext_jmp` 恒 `false` 的两处入口）。
     ///
     /// 返回该 NPC 本次产出的说词；`None` = 找不到该 `ChrName`（oracle `actor != null` 的守卫）。
@@ -297,8 +327,8 @@ pub struct NpcPlayer<'r> {
     pub script_index: Option<usize>,
     /// `playerActor.ScriptGotoCount`
     pub script_goto_count: i32,
-    /// `PlayObject.QuestFlag`（`byte[512]`）
-    pub quest_flag: [u8; 512],
+    /// `PlayObject.QuestFlag`（`PlayObject.cs:1040` 的 `QuestFlag = new byte[128]`）
+    pub quest_flag: [u8; 128],
     /// `playerActor.QuestUnit`（index → 位值）
     pub quest_unit: HashMap<i32, i32>,
     /// `playerActor.QuestUnitOpen`
@@ -332,7 +362,7 @@ impl NpcPlayer<'_> {
             last_npc: 0,
             script_index: None,
             script_goto_count: 0,
-            quest_flag: [0u8; 512],
+            quest_flag: [0u8; 128],
             quest_unit: HashMap::new(),
             quest_unit_open: HashMap::new(),
             items: Vec::new(),
@@ -662,5 +692,51 @@ mod tests {
         let says = host.run_login(&mut player).unwrap();
         assert!(says[0].text.starts_with("QManage/"));
         assert_ne!(says[0].text, says[0].raw_msg, "前缀不能被吞");
+    }
+
+    /// **M3⑥-实现 3 第②片**：oracle `MsgQueue` 出队序——`SendPriorityMsg(..., High)` 的入队
+    /// 优先级 = 0（`BaseObject.Message.cs:30`），`SendMsg` 的 = `(byte)RM_MERCHANTSAY = 1`
+    /// （`:180`）⇒ **High 组先出、SendMsg 组后出**；即使调用序与出队序相反也要分组。
+    ///
+    /// 红检：把 `dequeue_order` 改成直接返回入队序 ⇒ 本用例必红。
+    #[test]
+    fn dequeue_order_puts_priority_high_first() {
+        let say = |m: &str, priority| SayMsg {
+            npc_name: "QManage".to_string(),
+            raw_msg: m.to_string(),
+            text: merchant_say_text("QManage", m),
+            priority,
+        };
+        let says = vec![
+            say("a", false),
+            say("b", true),
+            say("c", false),
+            say("d", true),
+        ];
+        let order: Vec<&str> = dequeue_order(&says)
+            .iter()
+            .map(|s| s.raw_msg.as_str())
+            .collect();
+        assert_eq!(
+            order,
+            vec!["b", "d", "a", "c"],
+            "High(0) 组先、组内入队序，SendMsg(1) 组后"
+        );
+    }
+
+    /// `has_manage_npc`/`has_function_npc` = oracle `SystemShare.ManageNPC/FunctionNPC != null`
+    /// 的宿主等价物：**未装载**（`loaded=false`，脚本文件缺）不算 `!= null`。
+    ///
+    /// 红检：把 `has_manage_npc` 的 `loaded` 守卫删掉（只看 `find`）⇒ 本用例必红。
+    #[test]
+    fn manage_and_function_npc_gates_require_loaded() {
+        let mut qm = def("QManage", "@Login", "x");
+        qm.loaded = false;
+        let host = host_with(vec![qm, def("QFunction", "@StdModeFunc7", "y")]);
+        assert!(!host.has_manage_npc(), "QManage 未装载 ⇒ ManageNPC == null");
+        assert!(
+            host.has_function_npc(),
+            "QFunction 已装载 ⇒ FunctionNPC != null"
+        );
     }
 }

@@ -1,0 +1,61 @@
+M3⑥-实现 3 第②片（openmir2-m3-quest-dialog-wiring）—— oracle 锚（逐行，文件:行）
+本片 = 第①片（离线核心）的**会话接线**：进世界 @Login + 说词帧 SM_MERCHANTSAY(643) + 装载宿主。
+
+== 1. 进世界 @Login（触发点）==
+[1] PlayObject.cs:1438-1441
+      if (SystemShare.ManageNPC != null)
+      {
+          SystemShare.ManageNPC.GotoLable(this, "@Login", false);
+      }
+    ⇒ 守卫 = ManageNPC != null（本片 = NpcHost::has_manage_npc()：QManage 已装载）。
+[2] PlayObject.cs:4880  NpcGotoLable(INormNpc actor, string sLable, bool boMaster)
+      { if (actor != null && !string.IsNullOrEmpty(sLable)) { ScriptGotoCount = 0; ... } }
+    ⇒ 进入前把 ScriptGotoCount 清零（第①片 goto_count_limit 同源）。
+[3] NormNpc.cs:1889    GotoLable(IPlayerActor playObject, string sLabel, bool boExtJmp)
+      { M2Share.ScriptEngine.GotoLable(this, playObject, sLabel, boExtJmp); }
+[4] ScriptEngine.cs:38  private void GotoLable(INormNpc normNpc, IPlayerActor playerActor, string sLabel, bool boExtJmp, string sMsg)
+
+== 2. 说词 → RM_MERCHANTSAY → SM_MERCHANTSAY(643) ==
+[5] ScriptEngine.cs:987-998  GotoLableSendMerChantSayMsg(...)
+      :989  sMsg = normNpc.GetLineVariableText(playerActor, sMsg);
+      :991  if (boFlag) playerActor.SendPriorityMsg(RM_MERCHANTSAY, 0,0,0,0,
+                                        normNpc.ChrName + '/' + sMsg, MessagePriority.High);
+      :997  else        playerActor.SendMsg(normNpc, RM_MERCHANTSAY, 0,0,0,0,
+                                        normNpc.ChrName + '/' + sMsg);
+    ⇒ 说词行 = normNpc.ChrName + '/' + sMsg（本片 merchant_say_text / merchant_say_wire，GBK 原文）。
+[6] PlayObject.Message.cs:1722-1726  RM_MERCHANTSAY 支
+      :1722  ClientMsg = Messages.MakeMessage(Messages.SM_MERCHANTSAY, processMsg.ActorId,
+                                     HUtil32.MakeWord((ushort)processMsg.nParam1,(ushort)processMsg.nParam2), 0, 1);
+      :1726  SendSocket(ClientMsg, EDCode.EncodeString(processMsg.Msg));
+    ⇒ 本片 smframe::sm_merchantsay(recog, n_param1, n_param2, msg) 逐字段照此。
+[7] Messages.cs:304  SM_MERCHANTSAY = 643（bins/game-svr 用 crates/protocol::messages::SM_MERCHANTSAY）。
+
+== 3. MsgQueue 出队序（本片判据之一：入队序 != 出队序）==
+[8] BaseObject.Message.cs:15-32  SendPriorityMsg(...) ⇒ MsgQueue.Enqueue(sendMessage, (byte)Priority)
+    + Enums/MessagePriority.cs:3-27  { Lowest=255, Low=2, Normal=1, High=0 }
+    ⇒ 说词走 :993 的 High ⇒ 入队优先级 0。
+[9] BaseObject.Message.cs:130-180  SendMsg(IActor baseObject, int wIdent, ...) ⇒ MsgQueue.Enqueue(..., (byte)wIdent)
+    ⇒ RM_MERCHANTSAY=11009 ⇒ 11009 & 0xFF = 1。
+[10] BaseObject.Base.cs:25-32  Run() { while (GetMessage(ref processMessage)) Operate(processMessage); ... }
+     + BaseObject.Message.cs:334  GetMessage ⇒ MsgQueue.TryDequeue
+    ⇒ 出队 = 优先级字节升序：High(0) 组先、SendMsg(1) 组后 ⇒ 本片 npc::dequeue_order。
+    注：oracle 用 PriorityQueue（同优先级不保证稳定）；本实现按两个**不同**优先级分组、组内取入队序。
+
+== 4. Payload 的 ActorId 语义（recog 取谁）==
+[11] SendPriorityMsg（:30）⇒ ActorId = this.ActorId（调用者 = playerActor）⇒ **玩家** ActorId；
+[12] SendMsg(baseObject,...)（:154）⇒ ActorId = baseObject.ActorId（= normNpc）⇒ **NPC** ActorId；
+     隐藏任务 NPC 不经地图（LocalDB 里 AddQuestNpc/AddMerchant 的 ChrName 记录），ActorId 恒 0。
+
+== 5. 装载（第①片锚点，第②片在 sim_loop 起动时消费）==
+[13] LocalDB.cs:236/192/293  QMangeNpc()/QFunctionNpc()/RobotNpc() 隐藏 NPC 模板；
+     LocalDB.cs:403-405  LoadMapQuest 尾部调用三者；MapQuestManager.cs:10。
+[14] NormNpc.cs:1591 任务 NPC LoadScript(..., boFlag=false)；Merchant.cs:1094 QFunction LoadScriptFile(..., true)。
+[15] ScriptParsers.cs:857 重名 label 改名 RandomNumber.GetRandomNumber(1,200) ⇒ 本片 rename_rand 走 world.rng。
+
+== 6. 本片附带订正（第①片事实错误，2 处）==
+[16] PlayObject.cs:1038-1040  QuestUnitOpen/QuestUnit/QuestFlag = new byte[128]（**不是 512**）
+     ⇒ crates/world 侧第①片 NpcPlayer.quest_flag 由 [u8;512] 订正为 [u8;128]。
+[17] GameSvrConf.cs:542/1527  ScriptGotoCountLimit（缺省 30）；
+     ServerConf.cs:320  ReadWriteInteger("Setup","ScriptGotoCountLimit",...)（现网 Server.conf = 10000）；
+     ScriptEngine.cs:629  if (playerActor.ScriptGotoCount > SystemShare.Config.ScriptGotoCountLimit)
+     ⇒ bins/game-svr/src/config.rs 新增该键（缺键盘上缺省 30），NpcHost 装载时注入。

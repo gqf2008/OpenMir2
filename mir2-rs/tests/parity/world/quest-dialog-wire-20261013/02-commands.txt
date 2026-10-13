@@ -1,0 +1,36 @@
+M3⑥-实现 3 第②片 —— 复跑命令（全部在 m2-svr worktree 内；CARGO_TARGET_DIR 隔离）
+
+# 0) 工作目录（唯一；共享主检出只读）
+cd E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr
+
+# 1) 四门禁（隔离 target、--offline）
+cd mir2-rs
+CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo fmt --all -- --check
+CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo clippy --workspace --all-targets --offline -- -D warnings
+CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test --workspace --offline --no-fail-fast
+CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo run -p msgcodegen --offline -- --check
+
+# 2) 本片用例（lib + bin）
+CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test -p game-svr --offline --lib npc::tests
+CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test -p game-svr --offline --lib smframe::tests::sm_merchantsay
+CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test -p game-svr --offline --bin game-svr tests::emit_npc_says
+CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test -p game-svr --offline --bin game-svr tests::npc_player_snapshot
+CARGO_TARGET_DIR=E:/tmp/m2svr-target cargo test -p game-svr --offline --bin game-svr config::tests::setup_script_goto
+
+# 3) 边界（oracle/客户端/表结构/脚本语法/数据格式冻结）
+cd ..
+git diff --name-only master..HEAD -- src sql MirClient
+
+# 4) 证据 hash（仓库 LF/git-blob 口径）
+python tools/evidence-hash/verify_sha256sums.py verify --check-extra mir2-rs/tests/parity/world/quest-dialog-wire-20261013
+powershell -ExecutionPolicy Bypass -File tools/eolcheck.ps1 mir2-rs/tests/parity/world/quest-dialog-wire-20261013
+
+# 5) 改坏必红（5 条；生产代码改坏 -> 用例必红 -> 还原 -> 必绿）
+#    rc-A dequeue_order 去掉 priority 分组
+#    rc-B emit_npc_says 的 recog 恒取玩家 ActorId
+#    rc-C has_manage_npc 去掉 loaded 守卫
+#    rc-D sm_merchantsay 的 Series 1->0
+#    rc-E ScriptGotoCountLimit 缺省 30->0
+#    原始读数见 04-redchecks.txt
+
+# 注：本片**未起栈 / 未占端口**（判据全在构造/进程级）；真机两侧同序列对拍（⑥-5 夹具）等 owner 发窗口。
