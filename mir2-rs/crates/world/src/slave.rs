@@ -50,11 +50,18 @@
 //! - **诱惑诱饵到期抽数未表面积化**：`mag_tamming` 已按 oracle 位置消费 `Random(caster.Level*2)`
 //!   （RNG 账本不变），但该值未随 `TammingOutcome` 返回 ⇒ [`World::tame_adopt`] 需调用方传
 //!   `royalty_draw`；把它接到真实 `CM_SPELL(20)` 接线片（登记）。
+//! - **`ApplySlaveLevelAbilitys` 尾的 `WAbil.MAC = 0` 未建模**（`BaseObject.Abil.cs:166`）：
+//!   本骨架怪物无 MAC 字段、战斗不消费。`MakeSlave` 尾 `RecalcAbilitys` 的 `WAbil.DC` /
+//!   `WAbil.MaxHP` 两支与三派生类速度覆写**已落**（见 [`World::make_slave_adopt`] 第 5 步）。
 
 use mir2_data::pet_slave::{PetSlaveConfig, SLAVE_MAX_LEVEL};
 use mir2_shared::rng::RandomNumber;
 
-use crate::entity::{Entity, ACTOR_RACE_NPC, ACTOR_RACE_PLAY};
+use crate::combat::{hi_byte, lo_byte};
+use crate::entity::{
+    Entity, ACTOR_RACE_ANIMAL, ACTOR_RACE_ELF_MONSTER, ACTOR_RACE_ELF_WARRIORMON, ACTOR_RACE_NPC,
+    ACTOR_RACE_PLAY, ACTOR_RACE_WHITE_SKELETON,
+};
 use crate::magic::front_position;
 use crate::world::World;
 
@@ -413,6 +420,118 @@ where
     None
 }
 
+/// `HUtil32.MakeWord(ushort bLow, ushort bHigh)`（`src/OpenMir2/HUtil32.cs:66-69`）：
+/// `(ushort)(bLow | bHigh << 8)` —— 先按 `int` 左移再截 16 位 ⇒ `bHigh` 只有低 8 位生效。
+///
+/// 注意与 [`mir2_shared::hutil::make_word`]（`MakeWord(byte, byte)`）是**不同重载**：
+/// `ApplySlaveLevelAbilitys` 里 `(ushort)` 强转过的 `High` 走的是本重载。
+fn make_word_u16(low: u16, high: u16) -> u16 {
+    (u32::from(low) | (u32::from(high) << 8)) as u16
+}
+
+/// `BaseObject.ApplySlaveLevelAbilitys`（`src/M2Server/Actor/BaseObject.Abil.cs:133-170`）——
+/// oracle 在 `BaseObject.RecalcAbilitys()` 末尾 `if (Race >= ActorRace.Animal)`
+/// （`BaseObject.Abil.cs:85-88`）调用。
+///
+/// **为什么 `MakeSlave` 尾的 `RecalcAbilitys` 不是 no-op**：`RecalcAbilitys`（`Abil.cs:15-94`）
+/// 先 `WAbil = Abil.Clone()` 再把 `WAbil.HP/MP` 还原为调用前的值（`:19-23`），
+/// `AddAbil = new AddAbility()` 全 0 ⇒ `WAbil.MaxHP = Abil.MaxHP + 0`（`:70`）、
+/// `WAbil.DC = Abil.DC + 0`（`:75`），最后由本函数按 `SlaveExpLevel` 改写 `WAbil.DC` /
+/// `WAbil.MaxHP`。于是 `MakeSlave` 尾的 HP 补半（`WAbil.HP < WAbil.MaxHP ⇒
+/// HP += (MaxHP - HP) / 2`，`BaseObject.cs:1198-1201`）用的是**改过**的 `MaxHP`。
+/// 本骨架曾按「基类怪 = `WAbil=Abil.Clone()` ⇒ no-op」处理（⑨-2 `slave.rs` 旧注释），
+/// 与 oracle 分叉 —— 即 reviewer-5 ⑨-2 `M-1` 所指缺口（⑨-3 未真落）。
+///
+/// `Abil` 取「当前 `dc` / `max_hp`」：召唤路径上被落尾的怪是 `RegenMonsterByName` 刚造的
+/// （`WorldServer.MonGen.cs:742` `cert.WAbil = cert.Abil`，此后未被任何
+/// `RecalcAbilitys`/伤害改过），故当前态即 `Abil`，等价。
+/// **未建模**：else 支尾部的 `WAbil.MAC = 0` —— 本骨架怪物无 MAC 字段、战斗不消费（登记，
+/// 不假造）；`RecalcAbilitys` 其余字段（`AntiPoison=0`/`AntiMagic=1`/`Weight*`…）本骨架亦
+/// 无对应怪物字段。
+fn apply_slave_level_abilitys(mon: &mut Entity) {
+    // `if (Race >= ActorRace.Animal)`（`BaseObject.Abil.cs:85-88`，`Animal = 50`）。
+    if mon.race < ACTOR_RACE_ANIMAL {
+        return;
+    }
+    let exp = i32::from(mon.slave_exp_level);
+    // `Abil.MaxHP` / `Abil.DC` = 当前 `max_hp` / `dc`（见上）。
+    let abil_max_hp = i32::from(mon.max_hp);
+    let abil_dc = mon.dc;
+    if matches!(
+        mon.race,
+        ACTOR_RACE_WHITE_SKELETON | ACTOR_RACE_ELF_MONSTER | ACTOR_RACE_ELF_WARRIORMON
+    ) {
+        // `WAbil.DC = MakeWord(LoByte(WAbil.DC), HiByte(Abil.DC));` —— 此刻两者相等 ⇒ 恒等。
+        // `WAbil.DC = MakeWord(LoByte(WAbil.DC), (ushort)(int)Math.Round(HiByte(WAbil.DC)
+        //   + (3 * (0.3 + slaveExpLevel * 0.1) * slaveExpLevel)));`
+        let hi = (f64::from(hi_byte(abil_dc))
+            + 3.0 * (0.3 + f64::from(exp) * 0.1) * f64::from(exp))
+        .round_ties_even();
+        // C# `(int)` 截断再 `(ushort)`。
+        let hi = hi as i32 as u16;
+        let new_dc = make_word_u16(u16::from(lo_byte(abil_dc)), hi);
+        // `chp = (ushort)(chp + Math.Round(Abil.MaxHP * (0.3 + slaveExpLevel * 0.1)) * slaveExpLevel);`
+        // （`chp` 初值 0）
+        let chp = (f64::from(abil_max_hp) * (0.3 + f64::from(exp) * 0.1)).round_ties_even()
+            * f64::from(exp);
+        // C# `(ushort)double`（unchecked：截断 + 取模）；再 `chp = (ushort)(Abil.MaxHP + chp);`
+        let chp = chp as i64 as u16;
+        let chp = (i64::from(abil_max_hp) + i64::from(chp)) as u16;
+        mon.dc = i32::from(new_dc);
+        // `if (slaveExpLevel > 0) WAbil.MaxHP = chp; else WAbil.MaxHP = Abil.MaxHP;`
+        if exp > 0 {
+            mon.max_hp = chp;
+        }
+    } else if mon.master.is_some() {
+        // `if (Master != null) { ... }`：
+        // `WAbil.DC = MakeWord(LoByte(WAbil.DC), (ushort)Math.Abs(HiByte(WAbil.DC)
+        //   + (2 * slaveExpLevel)));`
+        let hi = i32::from(hi_byte(abil_dc)) + 2 * exp;
+        let new_dc = make_word_u16(u16::from(lo_byte(abil_dc)), i32::abs(hi) as u16);
+        // `chp = (ushort)(chp + Math.Round(Abil.MaxHP * 0.15) * slaveExpLevel);`（`chp = Abil.MaxHP`）
+        let chp = (f64::from(abil_max_hp) * 0.15).round_ties_even() * f64::from(exp);
+        let chp = (i64::from(abil_max_hp) + chp as i64) as u16;
+        // `WAbil.MaxHP = (ushort)HUtil32._MIN(Abil.MaxHP + 60 * slaveExpLevel, chp);`
+        let capped = (abil_max_hp + 60 * exp).min(i32::from(chp));
+        mon.dc = i32::from(new_dc);
+        mon.max_hp = capped as u16;
+        // `WAbil.MAC = 0;` —— 未建模（登记，见函数文档）。
+    }
+}
+
+/// 三个派生召唤物 `RecalcAbilitys` 覆写的尾巴（oracle `base.RecalcAbilitys()` 之后调
+/// `ResetElfMon()`）：
+/// - `WhiteSkeleton.RecalcAbilitys`（`Monster/Monsters/WhiteSkeleton.cs:21-27`）：
+///   `NextHitTime = 3000 - SlaveMakeLevel*600`、`WalkSpeed = 1200 - SlaveMakeLevel*250`、
+///   `WalkTick = GetTickCount() + 2000`；
+/// - `ElfMonster.RecalcAbilitys` → `ResetElfMon`（`ElfMonster.cs:31-41`）：
+///   `WalkSpeed = 500 - SlaveMakeLevel*50`、`WalkTick = GetTickCount() + 2000`；
+/// - `ElfWarriorMonster.RecalcAbilitys` → `ResetElfMon`（`ElfWarriorMonster.cs:35-39,105-110`）：
+///   `NextHitTime = 1500 - SlaveMakeLevel*100`、`WalkSpeed = 500 - SlaveMakeLevel*50`、
+///   `WalkTick = GetTickCount() + 2000`。
+///
+/// 顺序：oracle 先 `base.RecalcAbilitys()`（含 [`apply_slave_level_abilitys`]），再本覆写。
+fn apply_derived_slave_recalc(mon: &mut Entity, now: i64) {
+    let lvl = i64::from(mon.slave_make_level);
+    match mon.race {
+        ACTOR_RACE_WHITE_SKELETON => {
+            mon.ai.next_hit_time = 3000 - lvl * 600;
+            mon.ai.walk_speed = 1200 - lvl * 250;
+            mon.ai.walk_tick = now + 2000;
+        }
+        ACTOR_RACE_ELF_MONSTER => {
+            mon.ai.walk_speed = 500 - lvl * 50;
+            mon.ai.walk_tick = now + 2000;
+        }
+        ACTOR_RACE_ELF_WARRIORMON => {
+            mon.ai.next_hit_time = 1500 - lvl * 100;
+            mon.ai.walk_speed = 500 - lvl * 50;
+            mon.ai.walk_tick = now + 2000;
+        }
+        _ => {}
+    }
+}
+
 impl World {
     /// `BaseObject.SlaveList.Count`（`BaseObject.cs:141`）——懒建列表的空表 = 0。
     #[must_use]
@@ -428,10 +547,13 @@ impl World {
     /// 1. `monObj.Master = this`；2. `monObj.IsSlave = true`；
     /// 3. `monObj.MasterRoyaltyTick = GetTickCount() + dwRoyaltySec*1000`；
     /// 4. `monObj.SlaveMakeLevel = (byte)nMakeLevel`、`monObj.SlaveExpLevel = (byte)nExpLevel`；
-    /// 5. `RecalcAbilitys()`（`BaseObject.Abil.cs:15-…` 对**基类**怪只把 `WAbil = Abil.Clone()`
-    ///    并保留 HP/MP ⇒ 本骨架已存 `hp/max_hp`，此处等价 no-op；派生类
-    ///    `WhiteSkeleton`/`ElfMonster` 的速度改写归 ⑨-3）；
-    /// 6. `if (WAbil.HP < WAbil.MaxHP) HP += (MaxHP - HP) / 2`；
+    /// 5. `monObj.RecalcAbilitys()`（`BaseObject.cs:1197`）：base 的 `WAbil = Abil.Clone()`
+    ///    部分对本骨架是恒等（`dc`/`max_hp` 即 `Abil`），但末尾
+    ///    `if (Race >= ActorRace.Animal)` 的 [`apply_slave_level_abilitys`]
+    ///    （`BaseObject.Abil.cs:133-170`）会按 `SlaveExpLevel` 改 `WAbil.DC`/`WAbil.MaxHP`；
+    ///    三个派生召唤物（变异骷髅/神兽两形态）再由 [`apply_derived_slave_recalc`]
+    ///    改 `WalkSpeed`/`NextHitTime`/`WalkTick`；
+    /// 6. `if (WAbil.HP < WAbil.MaxHP) HP += (MaxHP - HP) / 2`（用第 5 步改过的 `MaxHP`）；
     /// 7. `RefNameColor()`（`BaseObject.cs:730`，发 `RM_CHANGENAMECOLOR`；色彩归 ⑨-3）；
     /// 8. `SlaveList.Add(monObj)`。
     ///
@@ -463,7 +585,11 @@ impl World {
         mon.slave_make_level = make_level;
         // C# `(byte)nExpLevel` 截断。
         mon.slave_exp_level = exp_level as u8;
-        // `if (monObj.WAbil.HP < monObj.WAbil.MaxHP) HP += (MaxHP - HP) / 2;`（`:1198-1201`）。
+        // 5. `monObj.RecalcAbilitys()`：base（`WAbil = Abil.Clone()` 的恒等部分 +
+        //    `ApplySlaveLevelAbilitys`）→ 派生覆写速度。顺序与 oracle 一致。
+        apply_slave_level_abilitys(mon);
+        apply_derived_slave_recalc(mon, now);
+        // 6. `if (monObj.WAbil.HP < monObj.WAbil.MaxHP) HP += (MaxHP - HP) / 2;`（`:1198-1201`）。
         if mon.hp < mon.max_hp {
             let delta = (i32::from(mon.max_hp) - i32::from(mon.hp)) / 2;
             mon.hp = mon.hp.saturating_add(u16::try_from(delta).unwrap_or(0));
@@ -1049,13 +1175,16 @@ mod tests {
         assert_eq!(m.slave_make_level, 3);
         assert_eq!(m.slave_exp_level, 4);
         assert_eq!(m.master_royalty_tick, 5_000 + 86_400_000);
-        // (100-30)/2 = 35 ⇒ HP 65。
-        assert_eq!(m.hp, 65);
+        // `ApplySlaveLevelAbilitys`（race=80、exp=4）：
+        // `MaxHP = _MIN(100 + 60*4, 100 + round(100*0.15)*4) = _MIN(340, 160) = 160`
+        // ⇒ HP 补半 `30 + (160-30)/2 = 95`（旧实现按 no-op 会给 65）。
+        assert_eq!(m.max_hp, 160, "宝宝级 MaxHP（非三类支）");
+        assert_eq!(m.hp, 95, "HP 补半用改过的 MaxHP");
         assert_eq!(w.entities.get(caster).unwrap().slave_list, vec![mon]);
         assert_eq!(w.slave_count(caster), 1);
     }
 
-    /// HP 已满 ⇒ 不补（oracle `if (HP < MaxHP)`）。
+    /// HP 已满且 `SlaveExpLevel == 0`（`MaxHP` 不变）⇒ 不补（oracle `if (HP < MaxHP)`）。
     #[test]
     fn make_slave_adopt_keeps_full_hp() {
         let mut w = World::new(32, 32);
@@ -1067,8 +1196,143 @@ mod tests {
             e.max_hp = 100;
             w.add_entity(e)
         };
-        assert!(w.make_slave_adopt(caster, mon, 1, 1, 1));
+        // exp=0 ⇒ `ApplySlaveLevelAbilitys` 的 `MaxHP` 不变（非三类支 `chp = 100 + 15*0`）。
+        assert!(w.make_slave_adopt(caster, mon, 1, 0, 1));
+        assert_eq!(w.entities.get(mon).unwrap().max_hp, 100);
         assert_eq!(w.entities.get(mon).unwrap().hp, 100);
+    }
+
+    /// `ApplySlaveLevelAbilitys` **非三类支**（`BaseObject.Abil.cs:151-167`，`Master != null`）：
+    /// `DC` 高字节 `+= 2*SlaveExpLevel`、`MaxHP = _MIN(Abil.MaxHP + 60*exp, Abil.MaxHP + round(Abil.MaxHP*0.15)*exp)`。
+    #[test]
+    fn make_slave_adopt_applies_slave_level_abilitys_else_branch() {
+        let mut w = World::new(32, 32);
+        let caster = w.add_entity(Entity::new(0, "主人".to_string(), 10, 10));
+        let mon = {
+            let mut e = Entity::new(0, "怪".to_string(), 11, 9);
+            e.race = crate::entity::ACTOR_RACE_MONSTER; // 80 ≥ Animal(50)
+            e.hp = 100;
+            e.max_hp = 100;
+            e.dc = i32::from(make_word_u16(5, 15)); // DC=5，MaxDC=15
+            w.add_entity(e)
+        };
+        assert!(w.make_slave_adopt(caster, mon, 3, 4, 1));
+        let m = w.entities.get(mon).unwrap();
+        // 高字节 = 15 + 2*4 = 23（低字节不变）。
+        assert_eq!(m.dc, i32::from(make_word_u16(5, 23)), "DC 高字节 +2*exp");
+        // `round(100*0.15) = 15`（精确）⇒ chp = 100 + 15*4 = 160；上界 100 + 240 = 340。
+        assert_eq!(m.max_hp, 160);
+        assert_eq!(m.hp, 100 + (160 - 100) / 2);
+    }
+
+    /// `Math.Round(double)` 是**银行家舍入**（`MidpointRounding.ToEven`）：`round(110*0.15) =
+    /// round(16.5) = 16`（不是 17）。`MaxHP = 110 + 16*1 = 126`（若按四舍五入会得 127）。
+    #[test]
+    fn make_slave_adopt_uses_bankers_rounding() {
+        let mut w = World::new(32, 32);
+        let caster = w.add_entity(Entity::new(0, "主人".to_string(), 10, 10));
+        let mon = {
+            let mut e = Entity::new(0, "怪".to_string(), 11, 9);
+            e.race = crate::entity::ACTOR_RACE_MONSTER;
+            e.hp = 110;
+            e.max_hp = 110;
+            w.add_entity(e)
+        };
+        assert!(w.make_slave_adopt(caster, mon, 1, 1, 1));
+        assert_eq!(w.entities.get(mon).unwrap().max_hp, 126);
+    }
+
+    /// `Race < ActorRace.Animal(50)` ⇒ `ApplySlaveLevelAbilitys` 不跑（oracle `:85-88` 的门）。
+    #[test]
+    fn make_slave_adopt_skips_slave_level_abilitys_below_animal() {
+        let mut w = World::new(32, 32);
+        let caster = w.add_entity(Entity::new(0, "主人".to_string(), 10, 10));
+        let mon = {
+            let mut e = Entity::new(0, "NPC".to_string(), 11, 9);
+            e.race = 49; // < Animal
+            e.hp = 100;
+            e.max_hp = 100;
+            e.dc = i32::from(make_word_u16(5, 15));
+            w.add_entity(e)
+        };
+        assert!(w.make_slave_adopt(caster, mon, 3, 4, 1));
+        let m = w.entities.get(mon).unwrap();
+        assert_eq!(m.max_hp, 100, "门不过 ⇒ MaxHP 不动");
+        assert_eq!(m.dc, i32::from(make_word_u16(5, 15)), "门不过 ⇒ DC 不动");
+        assert_eq!(m.hp, 100);
+    }
+
+    /// 变异骷髅（race=100）：`ApplySlaveLevelAbilitys` 三类支（DC/MaxHP 公式）+ `WhiteSkeleton.RecalcAbilitys`
+    /// 的 `NextHitTime/WalkSpeed/WalkTick`（`WhiteSkeleton.cs:21-27`）。
+    #[test]
+    fn make_slave_adopt_white_skeleton_branch_and_speed() {
+        let mut w = World::new(32, 32);
+        let caster = w.add_entity(Entity::new(0, "主人".to_string(), 10, 10));
+        let mon = {
+            let mut e = Entity::new(0, "变异骷髅".to_string(), 11, 9);
+            e.race = crate::entity::ACTOR_RACE_WHITE_SKELETON;
+            e.hp = 100;
+            e.max_hp = 100;
+            e.dc = i32::from(make_word_u16(5, 15));
+            w.add_entity(e)
+        };
+        w.clock_ms = 7_000;
+        assert!(w.make_slave_adopt(caster, mon, 3, 2, 1));
+        let m = w.entities.get(mon).unwrap();
+        // 高字节 = round(15 + 3*(0.3+0.2)*2) = round(18) = 18。
+        assert_eq!(m.dc, i32::from(make_word_u16(5, 18)));
+        // MaxHP = 100 + round(100*0.5)*2 = 200。
+        assert_eq!(m.max_hp, 200);
+        assert_eq!(m.hp, 100 + (200 - 100) / 2);
+        assert_eq!(m.ai.next_hit_time, 3000 - 3 * 600);
+        assert_eq!(m.ai.walk_speed, 1200 - 3 * 250);
+        assert_eq!(m.ai.walk_tick, 7_000 + 2000);
+    }
+
+    /// 神兽跟随形态（race=113）：`ElfMonster.RecalcAbilitys`→`ResetElfMon` 只改 `WalkSpeed`/`WalkTick`
+    /// （`ElfMonster.cs:31-41`）；`exp=0` ⇒ MaxHP/DC 不变。
+    #[test]
+    fn make_slave_adopt_elf_monster_speed() {
+        let mut w = World::new(32, 32);
+        let caster = w.add_entity(Entity::new(0, "主人".to_string(), 10, 10));
+        let mon = {
+            let mut e = Entity::new(0, "神兽".to_string(), 11, 9);
+            e.race = crate::entity::ACTOR_RACE_ELF_MONSTER;
+            e.hp = 100;
+            e.max_hp = 100;
+            e.dc = i32::from(make_word_u16(5, 15));
+            w.add_entity(e)
+        };
+        w.clock_ms = 9_000;
+        assert!(w.make_slave_adopt(caster, mon, 4, 0, 1));
+        let m = w.entities.get(mon).unwrap();
+        assert_eq!(m.ai.walk_speed, 500 - 4 * 50);
+        assert_eq!(m.ai.walk_tick, 9_000 + 2000);
+        // `ElfMonster` 不改 `NextHitTime`（保持 ctor 默认 2000）。
+        assert_eq!(m.ai.next_hit_time, 2000);
+        assert_eq!(m.max_hp, 100, "exp=0 ⇒ MaxHP 不变");
+        assert_eq!(m.dc, i32::from(make_word_u16(5, 15)), "exp=0 ⇒ DC 不变");
+    }
+
+    /// 神兽攻击形态（race=114）：`ElfWarriorMonster.RecalcAbilitys`→`ResetElfMon` 改
+    /// `NextHitTime`/`WalkSpeed`/`WalkTick`（`ElfWarriorMonster.cs:35-39,105-110`）。
+    #[test]
+    fn make_slave_adopt_elf_warrior_speed() {
+        let mut w = World::new(32, 32);
+        let caster = w.add_entity(Entity::new(0, "主人".to_string(), 10, 10));
+        let mon = {
+            let mut e = Entity::new(0, "强化神兽".to_string(), 11, 9);
+            e.race = crate::entity::ACTOR_RACE_ELF_WARRIORMON;
+            e.hp = 100;
+            e.max_hp = 100;
+            w.add_entity(e)
+        };
+        w.clock_ms = 11_000;
+        assert!(w.make_slave_adopt(caster, mon, 3, 0, 1));
+        let m = w.entities.get(mon).unwrap();
+        assert_eq!(m.ai.next_hit_time, 1500 - 3 * 100);
+        assert_eq!(m.ai.walk_speed, 500 - 3 * 50);
+        assert_eq!(m.ai.walk_tick, 11_000 + 2000);
     }
 
     /// 红检②（上限/入表）：`make_slave_gate` 用 `<=` ⇒ 本用例必红。
@@ -1206,7 +1470,10 @@ mod tests {
             m.master_royalty_tick,
             1_000 + i64::from(mir2_data::pet_slave::DEFAULT_ROYALTY_SEC) * 1000
         );
-        assert_eq!(m.hp, 40 + (100 - 40) / 2, "HP 补半");
+        // `ApplySlaveLevelAbilitys`（mock race=80、exp=2）：`MaxHP = _MIN(100+120, 100+15*2) = 130`
+        // ⇒ HP 补半 `40 + (130-40)/2 = 85`。
+        assert_eq!(m.max_hp, 130);
+        assert_eq!(m.hp, 85, "HP 补半用宝宝级 MaxHP");
     }
 
     /// 上限门：已有 1 只、`nCount=1` ⇒ 第二次召唤被拒（且不调 spawner）。

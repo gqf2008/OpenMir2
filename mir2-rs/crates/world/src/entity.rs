@@ -11,6 +11,15 @@
 pub const ACTOR_RACE_PLAY: u8 = 0;
 pub const ACTOR_RACE_NPC: u8 = 10;
 pub const ACTOR_RACE_MONSTER: u8 = 80;
+/// `ActorRace.Animal = 50`（`Race.cs:24`）—— `BaseObject.RecalcAbilitys` 末尾
+/// `if (Race >= ActorRace.Animal) ApplySlaveLevelAbilitys();`（`BaseObject.Abil.cs:85-88`）的门。
+pub const ACTOR_RACE_ANIMAL: u8 = 50;
+/// `ActorRace.WhiteSkeleton = 100`（`Race.cs:61`）—— 变异骷髅，`RecalcAbilitys` 覆写改速度。
+pub const ACTOR_RACE_WHITE_SKELETON: u8 = 100;
+/// `ActorRace.ElfMonster = 113`（`Race.cs:62`）—— 神兽跟随形态，`RecalcAbilitys` 覆写改速度。
+pub const ACTOR_RACE_ELF_MONSTER: u8 = 113;
+/// `ActorRace.ElfWarriormon = 114`（`Race.cs:63`）—— 神兽攻击形态，`RecalcAbilitys` 覆写改速度。
+pub const ACTOR_RACE_ELF_WARRIORMON: u8 = 114;
 
 /// `CharacterObject.UseItems` 的佩戴位数量（`CharacterObject.cs:89`：`UseItems = new UserItem[13]`）。
 pub const USE_ITEM_SLOTS: usize = 13;

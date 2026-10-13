@@ -1,0 +1,61 @@
+# 取证命令与读数（本片 = M3⑨-2/⑨-3 收口 reviewer-5 M-1）
+
+卡：`openmir2-m3-pet-slave-lifecycle`（⑨-3 收口片 #2；缺口由 ⑨-2 reviewer-5 `M-1` 标出）
+base = `refs/heads/master` `c8a3487b1f6a`（origin == walgit）
+code head = `f9db62ae2`（唯一 .rs 提交）
+工作目录 cwd = `mir2-rs`；`CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target`（检出外）、`--offline`。
+
+## 四门禁
+
+| # | 命令 | 读数 | 文件 |
+| --- | --- | --- | --- |
+| ① | `cargo fmt --all -- --check` | rc=0 | `06-gate-fmt.txt` |
+| ② | `cargo clippy --workspace --all-targets --offline -- -D warnings` | rc=0 | `07-gate-clippy.txt` |
+| ③ | `cargo test --workspace --no-fail-fast --offline` | rc=0；**99 suites / 1165 passed / 0 failed / 22 ignored** | `08-gate-test.txt` |
+| ④ | `cargo run -p msgcodegen --offline -- --check` | rc=0；604 条常量一致 | `09-gate-msgcodegen.txt` |
+
+③ 的 `1165 passed` = base `c8a3487b1` 的 `1159 passed` + 本片新增 6 条（`make_slave_adopt` 面）。
+
+## 判据（本片新增）
+
+```sh
+cargo test -p mir2-world --lib slave --offline      # 40 passed / 0 failed（原 34）
+```
+
+6 条新用例（见 `03-tests.txt`）：
+
+- `make_slave_adopt_applies_slave_level_abilitys_else_branch`（非三类支 DC/MaxHP 公式）
+- `make_slave_adopt_uses_bankers_rounding`（`Math.Round` = 银行家舍入，16.5→16）
+- `make_slave_adopt_skips_slave_level_abilitys_below_animal`（`Race < 50` 门）
+- `make_slave_adopt_white_skeleton_branch_and_speed`（三类支 + 变异骷髅速度覆写）
+- `make_slave_adopt_elf_monster_speed`（神兽跟随形态速度覆写）
+- `make_slave_adopt_elf_warrior_speed`（神兽攻击形态速度覆写）
+
+另有 3 条既有用例随语义修正更新读数（`make_slave_adopt_writes_oracle_tail`
+`make_slave_adopt_keeps_full_hp` `summon_slave_skeleton_end_to_end`）——旧读数基于
+「`RecalcAbilitys` = no-op」的错误建模（`30→65` / `40→85`），现与 oracle 一致。
+
+## 改坏必红（4 向，成对 `.rc` 在 `redchecks/`）
+
+用脚本对 `mir2-rs/crates/world/src/slave.rs` 原位改坏 → 跑 `cargo test -p mir2-world --lib slave`
+→ `git checkout --` 还原 → 复跑：
+
+| 向 | 改坏点 | mutated | restored |
+| --- | --- | --- | --- |
+| RC1 | 删 else 支 `mon.max_hp = capped as u16;` | rc=101，4 用例红 | rc=0 |
+| RC2 | `round_ties_even()` → `round()`（四舍五入） | rc=101，1 用例红 | rc=0 |
+| RC3 | 删 `apply_derived_slave_recalc(mon, now);` | rc=101，3 用例红 | rc=0 |
+| RC4 | 三类支 `if exp > 0 { mon.max_hp = chp; }` → `if false` | rc=101，1 用例红 | rc=0 |
+
+还原后 `git status --short` 仅剩本证据目录（未跟踪），代码树与 `f9db62ae2` 逐字节一致。
+
+## 边界
+
+`git diff --name-only c8a3487b1 f9db62ae2 -- src sql MirClient` = **空**；改动仅 3 个 `.rs`
+（`crates/world/src/{entity,slave}.rs` + `bins/game-svr/src/slave.rs` 模块注释）；
+`merge-tree c8a3487b1 HEAD` rc=0（见 `04-boundary.txt`）。
+
+## 证据哈希
+
+`python -I tools/evidence-hash/verify_sha256sums.py verify <本目录> --check-extra`（LF/git-blob 口径）
+与 `... eolcheck <本目录>` 均须 GREEN（读数见 README 末段）。
