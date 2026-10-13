@@ -1,0 +1,46 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.30s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m3cs-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 39 tests
+test castle::tests::compare_lstr_matches_oracle_prefix_semantics_without_panic ... ok
+test castle::tests::castle_official_labels_dispatch_and_n5_hire_is_unreachable ... ok
+test castle::tests::cross_day_resets_income_and_start_flag ... ok
+test castle::tests::add_attacker_info_dedups_and_ignores_days_like_oracle ... ok
+test castle::tests::door_and_wall_ref_status_reset_dir_and_frame ... ok
+test castle::tests::door_die_sets_death_then_mask2 ... ok
+test castle::tests::door_close_dir_tracks_hp_ratio_and_clamps_like_oracle ... ok
+test castle::tests::daily_war_starts_at_configured_hour_with_today_attackers ... ok
+test castle::tests::door_map_xy_flag_ops_match_oracle_call_sequence ... ok
+test castle::tests::door_open_close_and_die_return_early_when_dead ... ok
+test castle::tests::door_open_close_sets_state_and_frames_like_oracle ... ok
+test castle::tests::door_run_renews_death_tick_only_when_owned_by_castle ... ok
+test castle::tests::door_run_turns_dir_only_when_closed_and_n08_below_3 ... ok
+test castle::tests::door_state_text_matches_oracle_order ... ok
+test castle::tests::empty_or_foreign_map_returns_early ... ok
+test castle::tests::ghost_units_are_reclaimed_guards_before_archers ... ok
+test castle::tests::initialize_door_status_false_does_not_open ... ok
+test castle::tests::initialize_missing_castle_map_warns_and_skips_all_spawns ... ok
+test castle::tests::initialize_non_owner_map_is_noop ... ok
+test castle::tests::initialize_missing_main_door_uses_english_warning ... ok
+test castle::tests::initialize_skips_zero_hp_archers_and_guards ... ok
+test castle::tests::initialize_spawns_1_door_3_walls_12_archers_12_guards_in_oracle_order ... ok
+test castle::tests::initialize_wall_failure_warnings_use_previous_unit_name_quirk ... ok
+test castle::tests::initialize_warns_palace_and_secret_map_but_still_spawns ... ok
+test castle::tests::main_door_control_is_idempotent_and_skips_ghost ... ok
+test castle::tests::n1_entry_points_are_observable_noops ... ok
+test castle::tests::n5_hire_substring_is_always_out_of_range_like_oracle ... ok
+test castle::tests::official_repair_door_checks_gold_then_repairs ... ok
+test castle::tests::official_repair_wall_checks_gold_then_repairs ... ok
+test castle::tests::predicates_match_oracle ... ok
+test castle::tests::repair_door_dead_branch_clears_death_and_opened ... ok
+test castle::tests::repair_door_gates_on_underwar_full_hp_and_60s_tick ... ok
+test castle::tests::repair_door_rejects_missing_door ... ok
+test castle::tests::repair_wall_maps_indices_one_to_three_and_rejects_others ... ok
+test castle::tests::stop_war_does_not_touch_players_like_oracle_bug ... ok
+test castle::tests::wall_run_blocks_own_cell_and_restores_it_on_death ... ok
+test castle::tests::war_end_warning_then_stop ... ok
+test castle::tests::war_not_started_when_attacker_date_is_another_day ... ok
+test castle::tests::door_mask_blocks_cells_and_low_wall_cannot_be_restored_like_oracle ... ok
+
+test result: ok. 39 passed; 0 failed; 0 ignored; 0 measured; 169 filtered out; finished in 0.01s
+
