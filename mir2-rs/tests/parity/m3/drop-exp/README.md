@@ -40,7 +40,7 @@ python -I mir2-rs/tests/parity/m3/drop-exp/drop_exp_diff.py selftest
 # 纯度门自检（fail-closed + 改坏必红 + 真表承重）：期望 SELFTEST ok=23/23 rc=0
 python -I mir2-rs/tests/parity/m3/drop-exp/drop_exp_purity_gate.py selftest
 
-# 无栈自检：比较器 + 纯度门 + LF 写出 + 零端口；期望 SELFTEST ok=13/13 rc=0
+# 无栈自检：比较器 + 纯度门 + LF 写出 + 零端口 + no-Go/-Go fail-closed + BotSrv 生产函数 selftest；期望 SELFTEST ok=16/16 rc=0
 powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/drop-exp/run_drop_exp_pair.ps1 -SelfCheckNoStack
 
 # 场景纯度（离线；给该侧全场景抽数流水；认不出/未分类 ⇒ 点名 RED）
@@ -88,8 +88,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/drop
 4. **判据**：`run_drop_exp_pair.ps1 -DiffOnly -CsharpRaw <csharp drop_exp_raw.jsonl> -RustRaw <rust drop_exp_raw.jsonl>` ⇒ 期望 `DIFF 0`。
 5. **收工**：`-Stop` + 十端口实拍 + 卡上写「窗口已释放」+ 证据入库（`SHA256SUMS.txt` 按仓库 LF/git-blob 口径，含两侧纯度门的 `--json` 原始件）。
 
-> 现状：第 1/2 步的 BotSrv「掉落/经验序列」尚未实现（承接卡见报告），real-run 因此 fail-closed。
-> 纯度门（T-35）**离线已就绪**（门 selftest 23/23、无栈自检 13/13）；`drop_exp_consumers.tsv` 的
+> 现状：BotSrv「掉落/经验序列」驱动 + `--selftest-dropseq` 已实现（卡 `openmir2-m3-drop-exp-fixture-botsrv` DoD①）；run_pair.ps1 的 `-DropExpSequence` 两相接线（DoD②）尚未落地，real-run 因此 fail-closed（给了 `-Go` 也拒跑并点名 `PLANNED`）。
+> 纯度门（T-35）**离线已就绪**（门 selftest 23/23、无栈自检 16/16）；`drop_exp_consumers.tsv` 的
 > **两侧实测站点行**已按 oracle 源码 + 真机实测（C# 掉落/构造/墙钟 + `rng-isolate-attack/attack_sites.tsv` 的
 > 两侧攻击路径）与 ④-D（master `4521d451`）Rust 实现文件级锚补入：Rust 侧不再判 `PREREQ`，`measured`
 > （drop/kill）/`setup`（spawn/构造）/`wallclock`（monai/merchant）各类都有站点行；`max` 未实测者留 `*`，

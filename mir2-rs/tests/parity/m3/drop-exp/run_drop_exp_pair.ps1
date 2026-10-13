@@ -56,6 +56,7 @@ $ErrorActionPreference = 'Stop'
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $DropExpDiff = Join-Path $Here 'drop_exp_diff.py'
 $DropExpPurity = Join-Path $Here 'drop_exp_purity_gate.py'
+$RepoRoot = (Resolve-Path (Join-Path $Here '..\..\..\..\..')).Path
 . (Join-Path (Split-Path -Parent $Here) 'm3hashutil.ps1')
 
 if ([string]::IsNullOrEmpty($ScenarioFile)) { $ScenarioFile = Join-Path $Here 'drop_exp_scenario.json' }
@@ -262,6 +263,36 @@ if ($SelfCheckNoStack) {
     $outP5 = ''
     $rcP5 = Invoke-DexpPurityGate -Stream $pRustWall -Side rust -Table $PurityTable -Out ([ref]$outP5)
     Add-Result 'purity-rust-wallclock-red' (($rcP5 -eq 1) -and ($outP5 -match 'wallclock_consumer')) ("rc=$rcP5")
+
+    # ⑭ 未给 -Go ⇒ real-run fail-closed（exit 2），**不许**静默起栈/占端口。
+    $null = & powershell -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath -Side csharp -PortsCsv 17985,17986,17987,17988 2>&1
+    $rcNoGo = $LASTEXITCODE
+    Add-Result 'no-go-realrun-prereq' ($rcNoGo -eq 2) ("rc=$rcNoGo")
+
+    # ⑮ 给了 -Go 但 run_pair.ps1 两相接线（DoD②）未落地 ⇒ 仍 fail-closed rc=2 并点名 PLANNED（不静默起栈）。
+    $goOut = (& powershell -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath -Side csharp -Go -PortsCsv 17985,17986,17987,17988 2>&1 | Out-String)
+    $rcGo = $LASTEXITCODE
+    Add-Result 'go-driver-pending-prereq' (($rcGo -eq 2) -and ($goOut -match 'PLANNED')) ("rc=$rcGo")
+
+    # ⑯ BotSrv 生产函数 selftest（attacker 精确选择 / 击杀窗口归类 / SM_WINEXP 字段抽取 / 行组装）
+    #    —— 改坏必红由代码 review + 本断言钉住（片内红检另存证据）。
+    $botProj = Join-Path $RepoRoot 'src\BotSrv\BotSrv.csproj'
+    $botExe = Join-Path $RepoRoot 'src\BotSrv\bin\Release\BotSrv.exe'
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $botBuildOut = (& dotnet build $botProj -c Release --nologo -v q 2>&1 | Out-String)
+    $botBuildRc = $LASTEXITCODE
+    if ($botBuildRc -ne 0) {
+      Write-Output $botBuildOut
+      Add-Result 'botsrv-dropseq-selftest' $false ("build_rc=$botBuildRc")
+    }
+    else {
+      $seqOut = (& $botExe --selftest-dropseq 2>&1 | Out-String)
+      $seqRc = $LASTEXITCODE
+      if ($seqRc -ne 0) { Write-Output $seqOut }
+      Add-Result 'botsrv-dropseq-selftest' (($seqRc -eq 0) -and ($seqOut -match 'DROPEXPSEQ SELFTEST GREEN')) ("rc=$seqRc")
+    }
+    $ErrorActionPreference = $prevEap
   } finally {
     Remove-Item -Recurse -Force $tmpRoot -ErrorAction SilentlyContinue
   }
@@ -269,7 +300,7 @@ if ($SelfCheckNoStack) {
   $total = $script:DexpPass + $script:DexpFail.Count
   Write-Output ("SELFTEST ok={0}/{1} failures={2}" -f $script:DexpPass, $total, ($script:DexpFail -join ','))
   if ($script:DexpFail.Count -gt 0) { exit 1 }
-  Write-Output 'GREEN: 无栈自检全绿（比较器 + 纯度门 fail-closed + 改坏必红 + LF 写出 + 零端口）'
+  Write-Output 'GREEN: 无栈自检全绿（比较器 + 纯度门 fail-closed + 改坏必红 + LF 写出 + no-Go/-Go real-run fail-closed + BotSrv --selftest-dropseq + 零端口）'
   exit 0
 }
 
@@ -316,6 +347,6 @@ if (-not $Go) {
   Write-Output ("NEXT: 获窗口后按 README 的命令序列跑（-Side csharp 基线 → -Side rust -PeerSession <csharp 会话> → -DiffOnly）")
   exit 2
 }
-Write-Output 'PREREQ_MISSING: BotSrv 尚无「掉落/经验序列」驱动（承接卡见报告），真机序列无法产生可判原始件'
+Write-Output 'PREREQ_MISSING: BotSrv 掉落/经验驱动已实现（`--selftest-dropseq` GREEN），但 run_pair.ps1 的 `-DropExpSequence` 两相接线（DoD②）在本片未落地 ⇒ 真机序列仍无法产生可判原始件'
 Write-Output ("PLANNED: -Side {0} -Kills {1} -Seed {2} -Prefix {3} -PeerSession {4}" -f $Side, $Kills, $Seed, $Prefix, $PeerSession)
 exit 2
