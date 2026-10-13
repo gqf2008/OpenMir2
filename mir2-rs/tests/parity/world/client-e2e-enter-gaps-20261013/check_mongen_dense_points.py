@@ -24,6 +24,9 @@ oracle 锚点（生成框 = 正方形，不是圆/菱形）：
   # 窗口选点（root ③①「换怪密点」）：按生成框中心列出窗口内期望出生怪数 Top-N
   python -I -B check_mongen_dense_points.py --mongen <...> --map 0 --view-range 12 --rank 10
   python -I -B check_mongen_dense_points.py --mongen <...> --map 0 --view-range 12 --best-point
+  # 跨**所有地图**排行（root ③①「MonGen 里密度高的图」）：同口径合并各图候选点
+  python -I -B check_mongen_dense_points.py --mongen <...> --all-maps --view-range 12 --rank 20
+  python -I -B check_mongen_dense_points.py --mongen <...> --all-maps --view-range 12 --best-point
   # 机判：该点窗口内期望出生怪数 >= / <= 阈值（③b「有怪」/ ③a「确实无怪」）
   python -I -B check_mongen_dense_points.py --mongen <...> --map 0 --view-range 12 \
       --point 291,666 --max-expected 0
@@ -185,6 +188,49 @@ def rank_points(boxes: list[dict], view_range: int) -> list[tuple[float, int, in
     return ranked
 
 
+def all_map_names(text: str) -> list[str]:
+    """MonGen.txt 里出现过的地图名（`|` 前的原样字段），**字典序**去重。
+
+    与 `parse_mongen` 同口径：跳过注释/空行/字段不足/范围解析失败的行；
+    这样 `--all-maps` 的图集合与逐图 `parse_mongen` 的可行集一致。
+    """
+    names: set[str] = set()
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith(";"):
+            continue
+        parts = line.split()
+        if len(parts) < MONGEN_FIELDS:
+            continue
+        try:
+            rng = int(parts[4])
+            int(parts[5])
+        except ValueError:
+            continue
+        if rng < 0:
+            continue
+        names.add(parts[0])
+    return sorted(names)
+
+
+def rank_all_maps(text: str, view_range: int) -> list[tuple[float, str, int, int, dict]]:
+    """跨**所有地图**的窗口内期望出生怪数排行（root ③①「MonGen 里密度高的图」）。
+
+    每图取 `rank_points`（按生成框中心），合并后按 `(-E, map, x, y)` 降序 ——
+    **确定性**：不依赖 set/dict 迭代序、也不依赖 MonGen 行序（图名先字典序、再坐标）。
+    返回 `[(expected, map_name, x, y, box), …]`。
+    """
+    ranked: list[tuple[float, str, int, int, dict]] = []
+    for mp in all_map_names(text):
+        boxes = parse_mongen(text, mp)
+        if not boxes:
+            continue
+        for e, x, y, b in rank_points(boxes, view_range):
+            ranked.append((e, mp, x, y, b))
+    ranked.sort(key=lambda t: (-t[0], t[1], t[2], t[3]))
+    return ranked
+
+
 def run(
     boxes: list[dict],
     points: list[tuple[int, int]],
@@ -242,6 +288,8 @@ def selftest() -> int:
         "0\t100\t100\t鹿\t20\t50\t1\n"
         "0\t200\t200\t稻草人\t5\t10\t1\n"
         "4\t1\t1\t别图\t9\t1\t1\n"
+        "7\t300\t300\t骷髅\t0\t200\t1\n"
+        "1\t100\t100\t鹿\t20\t50\t1\n"
     )
     startpoint = ";安全区\n0\t110\t110\n1\t999\t999\n"
     boxes = parse_mongen(mongen, "0")
@@ -282,6 +330,34 @@ def selftest() -> int:
     bad += 0 if ok else 1
     print(f"[{'PASS' if ok else 'FAIL'}] selftest no-points-prereq: rc={rc} (want 2)")
 
+    # 跨图排行（root ③①「MonGen 里密度高的图」）：map 7 count=200 比 map 0 更密 ⇒ 全局 Top 属 map 7；
+    # map 0/map 1 在 (100,100) 期望值并列 50 ⇒ 按图名字典序 map 0 先于 map 1（确定性并列口径）。
+    am_bad = 0
+    names = all_map_names(mongen)
+    ok = names == ["0", "1", "4", "7"]
+    am_bad += 0 if ok else 1
+    print(f"[{'PASS' if ok else 'FAIL'}] selftest all-map-names={names} (want 0,1,4,7)")
+    all_rk = rank_all_maps(mongen, 25)
+    order_ok = (
+        len(all_rk) >= 4
+        and all_rk[0][1] == "7"
+        and (all_rk[0][2], all_rk[0][3]) == (300, 300)
+        and abs(all_rk[0][0] - 200.0) < 1e-9
+        and all_rk[1][1] == "0"
+        and all_rk[2][1] == "1"
+    )
+    am_bad += 0 if order_ok else 1
+    print(
+        "[{}] selftest all-maps-rank-order top={} (want map 7>(200), then map 0, then map 1)".format(
+            "PASS" if order_ok else "FAIL",
+            [(round(e, 3), mp, x, y) for e, mp, x, y, _ in all_rk[:4]],
+        )
+    )
+    # 全局序必须非增（确定性降序）。
+    mono_ok = all(all_rk[i][0] >= all_rk[i + 1][0] for i in range(len(all_rk) - 1))
+    am_bad += 0 if mono_ok else 1
+    print(f"[{'PASS' if mono_ok else 'FAIL'}] selftest all-maps-monotonic")
+
     # 最近框选择：距离相同时取 range 最小的框（避免把大框当代表）。
     d, b = nearest_box(boxes, 120, 120)
     assert d == 0 and b["range"] == 20, (d, b)
@@ -321,8 +397,8 @@ def selftest() -> int:
         exp_bad += 0 if ok else 1
         print(f"[{'PASS' if ok else 'FAIL'}] selftest {name}: rc={rc} (want {want_rc})")
 
-    total = len(cases) + 2 + len(exp_cases) + 1 + len(exp_judge)
-    failed = bad + exp_bad
+    total = len(cases) + 2 + 3 + len(exp_cases) + 1 + len(exp_judge)
+    failed = bad + am_bad + exp_bad
     print(f"SELFTEST {'OK' if failed == 0 else 'FAILED'} ({total - failed}/{total})")
     return 0 if failed == 0 else 1
 
@@ -354,6 +430,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="按生成框中心列出窗口内期望出生怪数 Top-N（回 root ③①「换怪密点」选点）")
     ap.add_argument("--best-point", action="store_true",
                     help="只打印期望出生怪数最高的候选点 `x,y`（需 --view-range）")
+    ap.add_argument("--all-maps", action="store_true",
+                    help="跨 MonGen 所有地图排行（root ③①「MonGen 里密度高的图」）；"
+                         "与 --rank/--best-point 同用，忽略 --map")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)
 
@@ -376,6 +455,28 @@ def main(argv: list[str] | None = None) -> int:
     if (args.rank or args.best_point) and args.view_range is None:
         print("PREREQ_RED: --rank/--best-point 需要 --view-range")
         return 2
+    if args.all_maps:
+        if args.view_range is None:
+            print("PREREQ_RED: --all-maps 需要 --view-range")
+            return 2
+        rk = rank_all_maps(text, args.view_range)
+        if not rk:
+            print("PREREQ_RED: MonGen 里解析不到任何生成框")
+            return 2
+        if args.best_point:
+            e, mp, x, y, b = rk[0]
+            print(f"BEST ({mp}) ({x},{y}) E={e:.3f} view_range={args.view_range} "
+                  f"box=({b['x']},{b['y']}) range={b['range']} count={b['count']} name={b['name']}")
+            return 0
+        n = max(1, min(args.rank or 10, len(rk)))
+        print(f"INFO all-maps 有生成框的图 {len(all_map_names(text))} 个；窗口半径 {args.view_range}；"
+              f"候选中心 {len(rk)} 个（按期望出生怪数降序）")
+        for e, mp, x, y, b in rk[:n]:
+            print(f"RANK ({mp}) ({x},{y}) E={e:.3f} box=({b['x']},{b['y']}) "
+                  f"range={b['range']} count={b['count']} name={b['name']}")
+        print(f"RESULT: GREEN (Top-{n})")
+        return 0
+
     if args.rank or args.best_point:
         if not boxes:
             print(f"PREREQ_RED: map={args.map} 在 MonGen 里解析不到任何生成框")

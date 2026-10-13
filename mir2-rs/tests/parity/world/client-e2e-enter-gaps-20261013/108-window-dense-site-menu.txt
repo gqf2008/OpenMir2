@@ -1,0 +1,100 @@
+108-window-dense-site-menu.txt —— 卡 `openmir2-client-e2e-enter-gaps` ③①「换怪密点」候选菜单
+m2-svr / openmir2-worker-11 / 2026-10-14（回应 brief-m2svr-next 顶部 root 2026-10-14 00:4x ①③）
+本片零起栈、零占端口（仅共享 MySQL 3306）、零生产代码改动；只在自身 worktree 写。
+====================================================================================================
+一句话：把片⑯ 的「换怪密点」从**只看 map 0** 扩到**跨 MonGen 全部地图**（root 原话：
+「例如比奇省郊外，或 **MonGen 里密度高的图**」）。**map 0 仍是窗口推荐点**（可进入性已证），
+全局更密的图列成**候选菜单**并显式标注「可进入性未证，需窗口实拍」。
+
+A. 口径（与片⑯ 同一函数，不改语义）
+====================================================================================================
+* 生成框 = oracle `WorldServer.MonGen.cs:825-826` 的正方形 `[X-R,X+R] x [Y-R,Y+R]`（Chebyshev）。
+* 期望出生怪数 `E = Σ_box  Count * |窗口 ∩ 框| / |框|`（`--view-range 12` ⇒ 窗口 = 25x25）。
+  **只算出生**（不含游走）：`E==0` ⇒ 窗口内不会有**新出生**的怪，不排除游走怪。
+* 候选点 = 每个生成框**中心**（去重）；排行确定性 = `(-E, 图名, x, y)`。
+* 数据源（只读）：`E:/MirServer/M2GameSvr/Envir/MonGen.txt`
+  `sha256 = e5c39fb7eda66b70f82a61a5c2cea25df9cf0b6892b916fb6d579f88ff43748f`
+  `size = 126292 B`；解析到 **207** 个有生成框的图。
+
+B. 推荐（窗口 ③b 用这个）：**map 0 最密点**
+====================================================================================================
+```
+python -I -B check_mongen_dense_points.py \
+  --mongen E:/MirServer/M2GameSvr/Envir/MonGen.txt --map 0 --view-range 12 --best-point
+```
+输出（本片重跑）：
+```
+BEST (605,578) E=12.681 view_range=12 box=(605,578) range=30 count=10 name=半兽人
+```
+map 0 Top-10（`--rank 10`，一次窗口拿最多同屏出生怪；并列次序确定性）：
+```
+INFO map=0 生成框 76 个；窗口半径 12；候选中心 35 个（按期望出生怪数降序）
+RANK (605,578) E=12.681 box=(605,578) range=30 count=10 name=半兽人
+RANK (211,629) E=12.225 box=(211,629) range=30 count=10 name=半兽人
+RANK (256,572) E=12.225 box=(256,572) range=30 count=10 name=半兽人
+RANK (513,585) E=11.682 box=(513,585) range=30 count=10 name=半兽人
+RANK (164,141) E=11.166 box=(164,141) range=30 count=10 name=半兽人
+RANK (328,566) E=11.166 box=(328,566) range=30 count=10 name=半兽人
+RANK (585,138) E=10.078 box=(585,138) range=30 count=30 name=半兽人
+RANK (260,339) E=9.343 box=(260,339) range=30 count=15 name=鹿
+RANK (260,190) E=5.039 box=(260,190) range=30 count=15 name=鹿
+RANK (333,268) E=4.718 box=(333,268) range=20 count=10 name=鸡
+RESULT: GREEN (Top-10)
+```
+* 为何**推荐 map 0**：`aaa` 当前就在 map 0（比奇省），`MapInfo`/Envir 已加载；`(287,620)` 同图同
+  `view_range` 已被片⑦ 真机证「客户端实收 13 对出现帧」⇒ 这条路的**可进入性 + 可观测性都有先例**。
+* ③a 反向（无怪）点不变：`(291,666)`，机判 `--point 291,666 --view-range 12 --max-expected 0` GREEN
+  （片⑯/片⑲ 已证在 map 0 全部 76 个生成框之外，最近框 Chebyshev=30 > 12）。
+
+C. 全局更密的图（候选菜单，**可进入性未证**，根 item ①「MonGen 里密度高的图」）
+====================================================================================================
+```
+python -I -B check_mongen_dense_points.py \
+  --mongen E:/MirServer/M2GameSvr/Envir/MonGen.txt --all-maps --view-range 12 --rank 20
+```
+输出（本片重跑）：
+```
+INFO all-maps 有生成框的图 207 个；窗口半径 12；候选中心 547 个（按期望出生怪数降序）
+RANK (D10071) (17,21) E=59.533 box=(17,21) range=0 count=1 name=赤月恶魔
+RANK (D10071) (20,20) E=59.533 box=(20,20) range=15 count=10 name=天狼蜘蛛
+RANK (D10061) (15,19) E=57.610 box=(15,19) range=10 count=1 name=双头金刚
+RANK (D10062) (17,19) E=57.304 box=(17,19) range=12 count=10 name=血巨人
+RANK (D2002) (21,23) E=49.992 box=(21,23) range=10 count=5 name=僵尸1
+RANK (D10062) (23,18) E=49.424 box=(23,18) range=0 count=1 name=赤月恶魔
+RANK (D504) (225,175) E=46.094 box=(225,175) range=8 count=2 name=祖玛卫士00
+RANK (D505) (154,172) E=42.471 box=(154,172) range=8 count=2 name=祖玛卫士00
+RANK (D024) (50,50) E=42.349 box=(40,40) range=20 count=6 name=沃玛勇士
+RANK (D601) (158,58) E=41.310 box=(158,58) range=10 count=10 name=蜈蚣
+RANK (D024) (42,49) E=40.414 box=(40,40) range=20 count=6 name=沃玛勇士
+RANK (D024) (50,40) E=37.828 box=(40,40) range=20 count=6 name=沃玛勇士
+RANK (D024) (40,50) E=37.828 box=(40,40) range=20 count=6 name=沃玛勇士
+RANK (D024) (50,60) E=36.350 box=(40,40) range=20 count=6 name=沃玛勇士
+RANK (D024) (60,50) E=36.350 box=(40,40) range=20 count=6 name=沃玛勇士
+RANK (D5074) (73,22) E=35.416 box=(73,22) range=7 count=5 name=祖玛雕像
+RANK (D024) (40,40) E=34.525 box=(40,40) range=20 count=6 name=沃玛勇士
+RANK (D024) (60,60) E=32.084 box=(40,40) range=20 count=6 name=沃玛勇士
+RANK (D1004) (145,121) E=27.621 box=(145,121) range=10 count=10 name=月魔蜘蛛
+RANK (D1004) (197,138) E=27.621 box=(197,138) range=10 count=10 name=月魔蜘蛛
+RESULT: GREEN (Top-20)
+```
+全局 best：
+```
+BEST (D10071) (17,21) E=59.533 view_range=12 box=(17,21) range=0 count=1 name=赤月恶魔
+```
+
+### C.1 为什么**不**默认把这些当 ③b
+1. **可进入性未证**：`aaa` 现在在 map 0。换成 `D10071` 等图需要同时改 `characters.map`，
+   且该图必须在部署 `MapInfo`/Envir 里加载成功；副本/地牢可能有进入条件（或本部署未加载该图）。
+   **窗口一次只有一趟**，不能拿「地图进不去」换掉一个已证可行的 map 0 点。
+2. **`E` 只算出生**：小框（`range=0 count=1`）重叠处 `E` 是「多框叠加」的期望和，
+   与实机「哪些怪真被留下/游走」仍有差；map 0 的 12.68 已经远超 ③b 的 `--min-pairs 1` 判据。
+3. 若 owner/root 想在窗口里**顺手试**更密的图：优先 `D024 (50,50)`（`E=42.349`，一张图内多点可选、
+   非单点孤例）或 `D2002 (21,23)`（`E=49.992`）；**必须**在窗口证据里如实写「换了图 + 图能否进」。
+
+D. 本片对片⑯/片⑱ 的兼容
+====================================================================================================
+* `--map`/`--rank`/`--best-point` 的既有输出**逐字节不变**（`--map 0 --best-point` 仍 = `BEST (605,578) E=12.681`），
+  新增 `--all-maps` 是**可选**分支；`window_handoff.py --best-site` 的解析串（`BEST (x,y) E=`）不受影响
+  （`--all-maps` 的 BEST 串多了图名 `(D10071)`，但 `--best-site` 默认走 `--map 0`，见片⑱）。
+* 本片**零生产代码改动**；未起栈、未占端口、未动共享主检出。
+* 红检见 `109-redcheck-dense-all-maps.txt`（两颗牙，selftest 22/22 -> 21/22 / 20/22）。

@@ -1,0 +1,85 @@
+110-gates.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片⑳ 门禁与复跑证据
+m2-svr / openmir2-worker-11 / 2026-10-14（root 00:4x ①③）
+本片零起栈、零占端口（仅共享 MySQL 3306）、零生产代码改动。
+工作目录 = 本车道 worktree；隔离 `CARGO_TARGET_DIR=E:/tmp/m2svr-target`；cwd(根) = 本 worktree。
+====================================================================================================
+
+A. 四门禁（cwd = mir2-rs）
+----------------------------------------------------------------------------------------------------
+```
+$ cargo fmt --all -- --check
+  rc=0                                   # 空输出
+$ cargo clippy --workspace --all-targets -- -D warnings
+  Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.64s
+  rc=0
+$ cargo test --workspace --no-fail-fast
+  test result: ok. … （101 个 suite）
+  101 suites / 1200 passed / 0 failed / 22 ignored     rc=0
+$ cargo run -p msgcodegen -- --check
+  msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+  rc=0
+```
+
+B. 判据工具复跑（离线；不改口径）
+----------------------------------------------------------------------------------------------------
+被测件 = `check_mongen_dense_points.py`
+sha256 = fd54d15b24b6f8c671c6a026edf439133cdc128b4ae553b0675d9142af79d420
+
+```
+$ python -I -B check_mongen_dense_points.py --selftest
+  SELFTEST OK (22/22)          rc=0      # 片⑯ 为 19/19，本片新增 3 例（跨图序/并列图名序/单调性）
+$ python -I -B check_mongen_dense_points.py --mongen E:/MirServer/M2GameSvr/Envir/MonGen.txt \
+    --map 0 --view-range 12 --best-point
+  BEST (605,578) E=12.681 view_range=12 box=(605,578) range=30 count=10 name=半兽人   # 与片⑯/⑱ 逐字节一致
+$ python -I -B check_mongen_dense_points.py --mongen …/MonGen.txt --all-maps --view-range 12 --rank 5
+  RANK (D10071) (17,21) E=59.533 …
+  RANK (D10071) (20,20) E=59.533 …
+  RANK (D10061) (15,19) E=57.610 …
+  RANK (D10062) (17,19) E=57.304 …
+  RANK (D2002) (21,23) E=49.992 …
+  RESULT: GREEN (Top-5)        rc=0      # 全量 Top-20 见 `108-window-dense-site-menu.txt`
+```
+⇒ 既有 `--map 0 --best-point` **逐字节不变**；新增 `--all-maps` 是可选分支。`window_handoff.py --best-site`
+的解析串（`BEST (x,y) E=`）不受影响（片⑱ 的 `--best-site` 默认走 `--map 0`）。
+
+C. 窗口就绪聚合门（构建源 = 本 worktree @ HEAD）
+----------------------------------------------------------------------------------------------------
+```
+$ python -I -B window_handoff.py --repo <本 worktree> --ref HEAD --check-dir <本目录>
+  OK   G2 check_mongen_dense_points.py --selftest
+  OK   G2 check_aoi_visibility_diag.py --selftest
+  OK   G2 aoi_visibility_pair.py --selftest
+  OK   G2 check_client_s2c_frames.py --selftest
+  OK   G2 check_rust_window_preflight.py --selftest
+  OK   G2 check_csharp_capture_preflight.py --selftest
+  OK   G1 Rust 窗口前置门 GREEN（R1..R5）
+  WINDOW_READY=YES
+  RESULT: GREEN               rc=0
+```
+⇒ 本片只动证据目录内的判据工具，**不降低**窗口就绪门（仍 GREEN）。
+
+D. 证据清单自洽（终值）
+----------------------------------------------------------------------------------------------------
+```
+$ python -I tools/evidence-hash/verify_sha256sums.py write <本目录>
+  GREEN: write 完成（… mode=repo）
+$ python -I tools/evidence-hash/verify_sha256sums.py verify <本目录> --check-extra
+  GREEN … OK 113/113           rc=0
+$ python -I tools/evidence-hash/verify_sha256sums.py eolcheck <本目录>
+  EOLCHECK GREEN 114/114 件文本证据与仓库口径（LF）在 EOL 上一致   rc=0
+```
+> 为何与 `106-gates.txt` 里记的 `107/107`/`108/108` 不同：那是片⑲ **写 106/107 之前**的快照；
+> `SHA256SUMS.txt` 随后把 `106`/`107` 自身、本片 `108`/`109`/`110`/`111` 计入 ⇒ 终值 113/113 + 114/114。
+> 这正是片⑲ reviewer-5 的 O-2（见 `106` 的快照时点注）。
+
+E. 改坏必红（2 颗牙，变异只在 `E:/tmp` 复制件、仓内 sha256 前后一致）
+----------------------------------------------------------------------------------------------------
+详见 `109-redcheck-dense-all-maps.txt`：
+* 牙 A `rank_all_maps` 只看首图 ⇒ `SELFTEST FAILED (21/22)` rc=1；
+* 牙 B 全局排序降序翻升序 ⇒ `SELFTEST FAILED (20/22)` rc=1。
+未变异件 rc=0 / 22-of-22。
+
+F. 边界
+----------------------------------------------------------------------------------------------------
+见 `111-boundary.txt`；冻结面（`src/ sql/ MirClient/ crates/protocol/ crates/storage/ bins/`）空、`*.rs`/`*.toml` = 0。
+本片**未起栈、未占端口**（十端口仅共享 MySQL 3306 UP）、未动共享主检出、不 merge、未自签 review。

@@ -1,0 +1,71 @@
+109-redcheck-dense-all-maps.txt —— 卡 `openmir2-client-e2e-enter-gaps` 片⑳「改坏必红」（2 颗牙）
+m2-svr / openmir2-worker-11 / 2026-10-14（root 00:4x ①「MonGen 里密度高的图」）
+本片零起栈、零占端口、零生产代码改动；变异只在 `E:/tmp` 复制件上做，**仓内零改动**。
+====================================================================================================
+被测件（fork 口径，与片⑯ 同一文件）：
+  `mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_mongen_dense_points.py`
+  sha256（变异前） = fd54d15b24b6f8c671c6a026edf439133cdc128b4ae553b0675d9142af79d420
+  sha256（变异后重测）= fd54d15b24b6f8c671c6a026edf439133cdc128b4ae553b0675d9142af79d420（一致 ⇒ 仓内零改动）
+
+基线（未变异）
+----------------------------------------------------------------------------------------------------
+```
+python -I -B check_mongen_dense_points.py --selftest
+...
+SELFTEST OK (22/22)          rc=0
+```
+
+牙 A —— 跨图排行只看**首个图**（`all_map_names(text)[:1]`）
+----------------------------------------------------------------------------------------------------
+变异：`rank_all_maps` 里 `for mp in all_map_names(text):` → `for mp in all_map_names(text)[:1]:`
+（= 只排 `map 0`，丢掉其余 206 个图 ⇒ 全局 Top 不再是更密的 `map 7`）。
+```
+cp check_mongen_dense_points.py E:/tmp/m2svr-red108/tool_mut.py
+python -I - <<'PY'
+p=r'E:/tmp/m2svr-red108/tool_mut.py'
+s=open(p,encoding='utf-8').read()
+old='    for mp in all_map_names(text):'
+new='    for mp in all_map_names(text)[:1]:'
+assert s.count(old)==1
+open(p,'w',encoding='utf-8').write(s.replace(old,new))
+PY
+python -I -B E:/tmp/m2svr-red108/tool_mut.py --selftest
+```
+输出（关键行）：
+```
+[PASS] selftest all-map-names=['0', '1', '4', '7'] (want 0,1,4,7)
+[FAIL] selftest all-maps-rank-order top=[(50.0, '0', 100, 100), (10.0, '0', 200, 200)] (want map 7>(200), then map 0, then map 1)
+[PASS] selftest all-maps-monotonic
+SELFTEST FAILED (21/22)      rc=1
+```
+变异件 sha256 = f689a177c77953d0ab27062e2bf60b7f0a639f4db389a7ee0a8cc9646d3b6504
+
+牙 B —— 全局排序从**降序**翻成升序
+----------------------------------------------------------------------------------------------------
+变异：`rank_all_maps` 的 `ranked.sort(key=lambda t: (-t[0], t[1], t[2], t[3]))`
+→ `ranked.sort(key=lambda t: (t[0], t[1], t[2], t[3]))`（最密点跑到末尾）。
+```
+cp check_mongen_dense_points.py E:/tmp/m2svr-red108/tool_mutB.py
+python -I - <<'PY'
+p=r'E:/tmp/m2svr-red108/tool_mutB.py'
+s=open(p,encoding='utf-8').read()
+old='    ranked.sort(key=lambda t: (-t[0], t[1], t[2], t[3]))'
+new='    ranked.sort(key=lambda t: (t[0], t[1], t[2], t[3]))'
+assert s.count(old)==1
+open(p,'w',encoding='utf-8').write(s.replace(old,new))
+PY
+python -I -B E:/tmp/m2svr-red108/tool_mutB.py --selftest
+```
+输出（关键行）：
+```
+[PASS] selftest all-map-names=['0', '1', '4', '7'] (want 0,1,4,7)
+[FAIL] selftest all-maps-rank-order top=[(1.0, '4', 1, 1), (10.0, '0', 200, 200), (50.0, '0', 100, 100), (50.0, '1', 100, 100)] (want map 7>(200), then map 0, then map 1)
+[FAIL] selftest all-maps-monotonic
+SELFTEST FAILED (20/22)      rc=1
+```
+变异件 sha256 = aa4fe820020be8fea25a489d0a1e0b6628d0fe74f926416a311ec968636ea328
+
+结论
+----------------------------------------------------------------------------------------------------
+两颗牙都把新分支咬红（`--selftest` rc=1）；未变异件 rc=0 / 22-of-22。变异只在 `E:/tmp/m2svr-red108/`
+的复制件上进行，仓内被测件 sha256 前后一致 ⇒ **改坏必红**，且**不污染仓库**。
