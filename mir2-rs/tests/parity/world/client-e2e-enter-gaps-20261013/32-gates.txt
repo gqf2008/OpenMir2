@@ -1,0 +1,26 @@
+openmir2-client-e2e-enter-gaps · 玩家 ViewRange 对齐片 · 四门禁（合并树，2026-10-13）
+==============================================================================
+cwd = mir2-rs；CARGO_TARGET_DIR=E:/tmp/m2svr-target；--offline
+树 = merge commit 74e3d3f65（03257744d ∪ origin/master=walgit master ab60452d0）
+
+① cargo fmt --all -- --check
+fmt rc=0
+
+② cargo clippy --workspace --all-targets -- -D warnings
+clippy rc=0
+
+③ cargo test --workspace --offline
+   98 suites · passed=1097 · failed=0 · ignored=21
+test rc=0
+   本片新增 1 条用例：tests::player_aoi_window_covers_view_range_12
+   （另在既有 tests::new_player_entity_sets_want_ref_msg 内增 ViewRange==12 断言）
+
+④ cargo run -p msgcodegen -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+msgcodegen rc=0
+
+原始件 sha256（本机 E:/tmp/m2svr-vr-gates-merge/）：
+7cdcde7c960b1a508c537d6e4bb7258a33c15583c419192aba9b19ae77d80521 */e/tmp/m2svr-vr-gates-merge/01-fmt.txt
+4434748a65cb76aa350754fa5d55b162372ce1b59964c824c4d52773eed53712 */e/tmp/m2svr-vr-gates-merge/02-clippy.txt
+93f59df6d4c9fcb058c4604b6b65b58bef15f8fd12e912a02fc0e07a3c6b1a8e */e/tmp/m2svr-vr-gates-merge/03-test.txt
+b886958e2255bd4776e94c906c3316a56a20334ce0552c66d2293d765f4c3848 */e/tmp/m2svr-vr-gates-merge/04-msgcodegen.txt

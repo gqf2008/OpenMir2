@@ -4,11 +4,13 @@
 （同一 `D:\MirClient-run\MirClinet.exe`、同一角色 `aaa`、同一 `mir2_db`）把两侧跑成逐像素同类，
 并用服务端日志证明“帧发了 / 世界有实体 / AOI 真可见”。按 §6.0-3 与项目硬约束，不单方面行为偏离；
 
-> **本目录覆盖两片（同一卡）**：
+> **本目录覆盖四片（同一卡）**：
 > ① 只读可观测性片（`7c8ac2fc3`，已合入 `f6869cb26`）：`log_enter_ability` + 周期世界/AOI 快照 + 1 条用例；
 > ② 能力帧布局片（`a602e8a94`，已合入 `636bdce53`）：**默认关闭**的 58B 冻结客户端布局开关
 > `MIR2_CLIENT_ABILITY_LAYOUT`（`record::encode_ability_client`），证据 `21`/`22`/`23`/`24`/`25`；
-> ③ 本片（`2026-10-13` 追补）：DoD③ 的**独立复算** `26`/`27`（从冻结客户端源码逐字节复核 58B `TAbility`）。
+> ③（`2026-10-13` 追补）：DoD③ 的**独立复算** `26`/`27`（从冻结客户端源码逐字节复核 58B `TAbility`）；
+> ④（`2026-10-13` 追补）：缺口②「同屏无怪」的 AOI 窗口对齐 —— 玩家 `ViewRange=12`（`PlayObject.cs:904`），
+> 证据 `30`/`31`/`32`/`33`（改前窗口 11×11 → 改后 25×25）。
 
 ## 结论（先看这三条）
 
@@ -61,6 +63,12 @@ powershell -ExecutionPolicy Bypass -File tools/client/mir_flow.ps1 `
     `实体内 N 展示表 M 在世界会话 K` 与每会话 `[name(id) map=… vis=… same_map=… nearest=…]`，
     从根本上消除“`处理 0 项` ⇒ 无实体”的误读。
   - `mir2_client_ability_layout()`：读 `MIR2_CLIENT_ABILITY_LAYOUT`（`1/true/TRUE/True` ⇒ 开；**未设 ⇒ 关**）。
+  - [`new_player_entity`]（片④）：生产宿主唯一的玩家构造点，对齐 `PlayObject` 构造器 —— `WantRefMsg=true`
+    （`PlayObject.cs:889`，片①）+ **`ViewRange=12`**（`PlayObject.cs:904`）。后者决定 AOI 扫描窗口
+    （边长 `2*ViewRange+1`，`BaseObject.ViewRange.cs:71-74`）：缺它只有缺省 5（`entity.rs:402` = `BaseObject.cs:383`）
+    的 11×11 ⇒ 距离 6..12 的怪不进 `visible_actors`、`drain_aoi_downlink` 不发 ⇒ 客户端同屏少怪。
+    用例 `tests::player_aoi_window_covers_view_range_12` + `tests::new_player_entity_sets_want_ref_msg` 的
+    `ViewRange==12` 断言；改坏必红见 `31`。
 - `mir2-rs/bins/game-svr/src/record.rs`：`encode_ability_client`（冻结客户端 58B `TAbility` 布局；
   oracle `encode_ability` 40B 原样保留）。`enter.rs::AbilityInputs.client_ability_layout` 决定 52 尾二选一。
 - 用例 `world_aoi_diag_reports_visible_and_nearest`（构造级；改坏必红见 `20-…`）、
@@ -69,6 +77,26 @@ powershell -ExecutionPolicy Bypass -File tools/client/mir_flow.ps1 `
 - **默认关**：未设 `MIR2_CLIENT_ABILITY_LAYOUT` 时，52 尾仍 = oracle `EncodeMessage(WAbil)` 40B
   （金标准 #12 与 `enter` 默认分支不回归）。
 - **不改**任何模拟/出帧/取数语义；`src/ sql/ MirClient` 与 `crates/protocol`/`crates/storage` 边界为空。
+
+## ④ 玩家 `ViewRange=12` 对齐（缺口②「同屏无怪」）——`30`/`31`/`32`/`33`
+
+oracle `PlayObject` 构造器置 `ViewRange = 12`（`PlayObject.cs:904`），而 Rust 生产宿主 `new_player_entity`
+只对齐了 `WantRefMsg`、**从未置 `ViewRange`** ⇒ 玩家 AOI 窗口停在 `BaseObject` 缺省 5（`BaseObject.cs:383`）
+的 **11×11**，不是 oracle 的 **25×25**。`drain_aoi_downlink` 只对 `visible_actors` 里 `Show` 的对象发
+`SM_TURN(10)`+`SM_FEATURECHANGED(41)` ⇒ 距离 6..12 的怪**从不出现**（出生点/城墙外尤其明显）。
+
+本片只改**一行**（+ 两条用例/断言），不动模拟/取数/RNG 语义：
+
+- `30-oracle-anchors-viewrange.txt`：oracle 锚点（`PlayObject.cs:904` / `BaseObject.cs:383` /
+  `BaseObject.ViewRange.cs:57-74` / `:112`）与 Rust 现状（`entity.rs:402` / `main.rs:3106` / 调用点 `:5311`）。
+- `31-redcheck-viewrange.txt`：**改坏必红** —— 删 `e.view_range = 12;` ⇒ 两条用例各 rc=101
+  （`距离 12 的怪必须在玩家 25×25 窗口内…：[1]`、`left: 5 / right: 12`）；还原 rc=0。
+- `32-gates.txt`：合并树四门禁 `fmt 0` / `clippy 0` / `98 suites · 1097 passed · 0 failed · 21 ignored` /
+  `msgcodegen 604`。
+- `33-boundary.txt`：边界 `src sql MirClient protocol storage` 空。
+
+> 未做（如实登记）：真机两侧同序列对拍（窗口归 `window` 车道/owner）；怪物侧 `ViewRange` 的各子类覆盖
+> 仍是**未登记差异**（`30` §D），交 owner 裁决归属，本片不擅自扩写集。
 
 ## 验证（隔离 `CARGO_TARGET_DIR=E:/tmp/m2svr-target`，cwd=`mir2-rs/`）
 

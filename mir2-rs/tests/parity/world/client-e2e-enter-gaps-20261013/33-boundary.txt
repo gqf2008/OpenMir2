@@ -1,0 +1,20 @@
+openmir2-client-e2e-enter-gaps · 玩家 ViewRange 对齐片 · 写集/boundary（2026-10-13）
+==============================================================================
+worktree = .claude/worktrees/m2-svr；cwd = 仓库根
+
+$ git fetch origin master && git merge origin/master   # 交付前合 master（无冲突，rc=0）
+$ git diff --name-only origin/master -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+（输出为空）
+boundary lines: 0
+
+本片相对 origin/master 的改动（base ab60452d0 → head）：
+mir2-rs/bins/game-svr/src/main.rs
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/26-frozen-client-layout-verify.txt
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/27-redcheck-layout-verify.txt
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/28-gates.txt
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/29-boundary.txt
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/verify_client_ability_layout.py
+
+白名单：本片不新增/不修改任何 T-*/D-*/B-*（唯一未登记差异 = 怪物侧 ViewRange，见 30 §D，交 owner 裁决）。

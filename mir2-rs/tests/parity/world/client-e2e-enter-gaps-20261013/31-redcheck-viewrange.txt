@@ -1,0 +1,76 @@
+openmir2-client-e2e-enter-gaps · 改坏必红（玩家 ViewRange 对齐片，2026-10-13）
+================================================================================
+
+判据：把 new_player_entity 里的 `e.view_range = 12;` 删掉（退回缺省 5）⇒ 两条用例必红；
+      还原后必绿。改坏/还原都只动这一行，其余字节不变。
+
+命令（cwd=mir2-rs，CARGO_TARGET_DIR=E:/tmp/m2svr-target，--offline）：
+  cargo test -p game-svr --bin game-svr --offline player_aoi_window_covers_view_range_12
+  cargo test -p game-svr --bin game-svr --offline new_player_entity_sets_want_ref_msg
+
+================================================================================
+① 改坏后（删 `e.view_range = 12;`）——原始输出
+================================================================================
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.31s
+     Running unittests src\main.rs (E:/tmp/m2svr-target\debug\deps\game_svr-1f4431beb89ebeb6.exe)
+
+running 1 test
+test tests::player_aoi_window_covers_view_range_12 ... FAILED
+
+failures:
+
+---- tests::player_aoi_window_covers_view_range_12 stdout ----
+
+thread 'tests::player_aoi_window_covers_view_range_12' (33384) panicked at bins\game-svr\src\main.rs:7452:9:
+距离 12 的怪必须在玩家 25×25 窗口内（oracle ViewRange=12）：[1]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::player_aoi_window_covers_view_range_12
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 188 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`
+rc=101
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
+     Running unittests src\main.rs (E:/tmp/m2svr-target\debug\deps\game_svr-1f4431beb89ebeb6.exe)
+
+running 1 test
+test tests::new_player_entity_sets_want_ref_msg ... FAILED
+
+failures:
+
+---- tests::new_player_entity_sets_want_ref_msg stdout ----
+
+thread 'tests::new_player_entity_sets_want_ref_msg' (33516) panicked at bins\game-svr\src\main.rs:7413:9:
+assertion `left == right` failed: oracle PlayObject 构造器置 ViewRange=12（PlayObject.cs:904）
+  left: 5
+ right: 12
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::new_player_entity_sets_want_ref_msg
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 188 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`
+rc=101
+
+================================================================================
+② 还原后（保留 `e.view_range = 12;`）——原始输出
+================================================================================
+923075 cargo test -p game-svr --bin game-svr --offline player_aoi_window_covers_view_range_12
+test tests::player_aoi_window_covers_view_range_12 ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 188 filtered out; finished in 0.00s
+rc=0
+
+923075 cargo test -p game-svr --bin game-svr --offline new_player_entity_sets_want_ref_msg
+test tests::new_player_entity_sets_want_ref_msg ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 188 filtered out; finished in 0.00s
+rc=0
+
+改动文件 sha256（还原态）：
+bea2dff5eb3ae5a461baa0b1727a4e5ddf5ba76fe67bc6fd879e21e1321077ae *mir2-rs/bins/game-svr/src/main.rs
