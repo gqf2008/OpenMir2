@@ -252,3 +252,23 @@ owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752�
 - **零生产代码改动**；边界/门禁见 `63-gates.txt` / `64-boundary.txt`；本片未起栈、未占端口。
 - **仍归 owner/窗口**（不因本片收卡）：58B 默认值的 §6.0-3 签字；`SM_SERVERCONFIG id 20002 + 52B TClientConf`
   属另案故意偏离且已证与 `CM_RUN` 无关；默认翻 58B 后跨侧 s2c 逐字节对拍需 Rust 显式 `MIR2_CLIENT_ABILITY_LAYOUT=0`。
+
+## ⑪ 片⑪：缺口②「同屏没怪」root 判读误伤的根因 = **诊断 `vis` 语义错**（2026-10-14）—— `70`
+
+- **root 2026-10-14 00:4x 实测**（`E:/tmp/client-e2e/verify1/` + `stack/game-svr.out.log`）：①血 ✓（HUD 19/19、15/15）、
+  ②跑 ✓（`Ident=3013` 17 次）、③怪未闭环（`实体内 27030`、`same_map=1726`、`nearest=23..34`，但 `vis=0` 11/11）。
+- **判定**：③「该点确实无怪」**成立**（真机位置 `map 0 (291,666)` 在 `MonGen.txt` 的 map 0 **全部生成框之外**，
+  最近框 Chebyshev = 30 > `ViewRange` 12；见 `71-mongen-dense-points-map0.txt`）；④「AOI 未算/未下发」**不成立**。
+- **根因（诊断口径，不是 AOI）**：`visible_actors` 的 `VisibleFlag` 有两种「看见」——
+  `Show`=**本轮新增**、`Invisible`=**已存在且本轮又看见**（`BaseObject.ViewRange.cs:25/36`，Rust `aoi.rs:39-48`）。
+  旧 `world_aoi_diag` 只数 `Show` ⇒ 怪停留 >1 tick 后 `vis` 恒 0。真机反例：`game-svr-AFTER.log`（vr=12、
+  `nearest=2..9`）`vis=0`，而客户端实收 **13 对** `10 SM_TURN + 41 SM_FEATURECHANGED`
+  （`check_client_s2c_frames.py --capture capture-client-viewrange12-seed42.jsonl` = GREEN, appearance_pairs=13）。
+- **本片改动**（`bins/game-svr/src/main.rs`，只读诊断）：`vis` 改为「当前可见集」（`Show|Invisible`，**不含自身**）；
+  新增 `vr=`（view_range）、`new=`（本轮新增）、`af=`（**累计实发**出现帧数，`drain_aoi_downlink` 返回值累加）；
+  周期行变成 `[aaa(22017) map=26 vr=12 vis=13 new=0 af=26 same_map=1726 nearest=2]`。
+  新用例 `world_aoi_diag_vis_is_current_view_not_new_appearances`（红检：改回只数 `Show` ⇒ `vis:0` 必红）。
+- **判据脚本**：`check_aoi_visibility_diag.py`（`--expect none|visible --min-vis N`，老版式 fail-closed ⇒ `PREREQ_RED`），
+  自检 9/9。原文见 `70-aoi-visibility-verdict.txt`；红检 `72-redcheck-vis-metric.txt`；老日志 fail-closed `73-prereq-old-log.txt`。
+- **仍归 owner/窗口（R 级，不因本片收卡）**：两侧**同位置同 `viewrange`** 对照（Rust 侧 `--expect visible`
+  + C# 侧同一 `check_client_s2c_frames.py` 配对数；反向「无怪」用 `--expect none`）。recipe 见 `70-…` §E。
