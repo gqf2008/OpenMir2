@@ -1,0 +1,36 @@
+RC1：把 main.rs deal_try_target_of 的 None 支改回 DealTryTarget::NotPlayer（= 旧实现口径）。
+命令: CARGO_TARGET_DIR=E:/tmp/openmir2-m3pt-target cargo test --offline -p game-svr --bin game-svr deal_
+
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3pt\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.37s
+     Running unittests src\main.rs (E:/tmp/openmir2-m3pt-target\debug\deps\game_svr-1f4431beb89ebeb6.exe)
+
+running 3 tests
+test tests::deal_try_target_distinguishes_absent_from_non_player ... FAILED
+test tests::deal_cm_try_no_front_object_emits_no_frame_on_production_path ... FAILED
+test tests::drop_blocked_by_fresh_deal_last_tick ... ok
+
+failures:
+
+---- tests::deal_try_target_distinguishes_absent_from_non_player stdout ----
+
+thread 'tests::deal_try_target_distinguishes_absent_from_non_player' (4876) panicked at bins\game-svr\src\main.rs:6504:9:
+assertion `left == right` failed: 无前排对象 ⇒ Absent（oracle Operate.cs:929 NRE 被吞），不是 NotPlayer
+  left: (None, NotPlayer)
+ right: (None, Absent)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- tests::deal_cm_try_no_front_object_emits_no_frame_on_production_path stdout ----
+
+thread 'tests::deal_cm_try_no_front_object_emits_no_frame_on_production_path' (34120) panicked at bins\game-svr\src\main.rs:6609:9:
+无前排对象 ⇒ oracle 静默（不得发 SM_DEALTRY_FAIL）
+
+
+failures:
+    tests::deal_cm_try_no_front_object_emits_no_frame_on_production_path
+    tests::deal_try_target_distinguishes_absent_from_non_player
+
+test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 183 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`
+rc=101
