@@ -1,0 +1,162 @@
+== 02 改动摘要（交付 head 对 base ddaca961c5d5c0738f5fbdf9c9ff943cd65f7c2b） ==
+
+base = ddaca961c5d5c0738f5fbdf9c9ff943cd65f7c2b（= origin/master = walgit refs/heads/master 本刻 tip）
+改动面: 仅 mir2-rs/bins/db-srv/tests/quest_no_persist.rs（测试门禁文件），+87/-21；**生产代码零改动**。
+（第二次交付同族 Minor 收口；第一次为 `openmir2-m3-quest-nopersist-workspace-gate`，合入 f4d7173fb。）
+交付 head 的 quest_no_persist.rs sha256 = 8d999cb902f7ec4982bd0b44092546ae44d6f78de97673c023049c9361f60150。
+
+要点（顺序与 oracle/既有门禁一致、零并行）:
+  1. 新增纯函数 quest_delta_violation(&Value) -> Result<(), String>，把第 4 层「已捕获两侧观测」
+     的**写集差分**半边抽成可独立执行的判据：
+       * 顶层 `delta` 缺失 或 非对象 ⇒ Err（**fail-closed**，堵「字段改名/丢失后恒绿」）；
+       * `delta["mir2_db.characters_quest"]` 不存在 ⇒ Ok（M1 基线真实形态：该表 0 行、未进写集）；
+       * 存在但缺 `added`/`removed` 或非整数 ⇒ Err（fail-closed）；
+       * 存在且 (added,removed) != (0,0) ⇒ Err（咬住「任务交互改动该表」）。
+  2. `captured_cross_side_baselines_show_zero_characters_quest_rows` 里原来的惰性
+     `if let Some(delta)=...`（在当前基线上从不执行）替换为调用上面的函数 + panic 携带 side。
+     该用例的 `rows==0` 断言**原样保留**（它是原实现的真牙，不降级）。
+  3. 新增用例 redcheck_quest_delta_subassertion_bites：用合成 JSON 强制该子判据走完五态
+     （净改动 ⇒ 红 / 显式 0/0 ⇒ 绿 / 未进写集 ⇒ 绿 / `delta` 缺失 ⇒ 红 / 条目缺字段 ⇒ 红），
+     使「分支被执行」本身成为可机判事实，杜绝再次退回惰性写法。
+  4. 模块 doc-comment 第 4 条同步改写：明确 `delta` fail-closed 口径，并注明是 reviewer-6
+     `0a4fee67` M-1 的收口。
+
+改动 diff:
+
+diff --git a/mir2-rs/bins/db-srv/tests/quest_no_persist.rs b/mir2-rs/bins/db-srv/tests/quest_no_persist.rs
+index f76769100..c4170113a 100644
+--- a/mir2-rs/bins/db-srv/tests/quest_no_persist.rs
++++ b/mir2-rs/bins/db-srv/tests/quest_no_persist.rs
+@@ -31,8 +31,16 @@
+ //!    读档路径。
+ //! 3. **会话态仍在**：「不落库」≠「删掉会话任务态」——`crates/script` 的 `QuestBitmap`（3×byte[128]）
+ //!    与 `crates/storage::playerdata` 的 `quest_flag/quest_unit/quest_unit_open` 必须还在。
+-//! 4. **已捕获的两侧观测**：M1 跨读基线的 C#/Rust 两侧 `mir2_db.characters_quest.rows` 必须都为 **0**
+-//!    （真机两相快照，见 `mir2-rs/tests/parity/evidence/M1/s4b-slice4-crossread/`）。
++//! 4. **已捕获的两侧观测**：M1 跨读基线的 C#/Rust 两侧 `mir2_db.characters_quest.rows` 必须都为 **0**，
++//!    且该表**不得进入基线写集差分 `delta`**（若出现则 `added`/`removed` 必须 0/0）；顶层 `delta`
++//!    缺失即红（**fail-closed**，不得退化成恒绿的 `if let Some`）。（真机两相快照，见
++//!    `mir2-rs/tests/parity/evidence/M1/s4b-slice4-crossread/`。）
++//!
++//! > 4 的写集差分半边是 reviewer-6 `0a4fee67` **M-1** 的收口：原实现写成
++//! > `if let Some(delta) = v.get("delta").and_then(|d| d.get("mir2_db.characters_quest"))`，
++//! > 而 M1 基线的 `delta` 只列 `added != 0 || removed != 0` 的表（`characters_quest` 0 行、未被
++//! > 触碰），故该分支**从不执行**——断言名不副实。现改为 `quest_delta_violation`：缺 `delta`/
++//! > 缺字段一律红，并对该子判据落 `redcheck_quest_delta_subassertion_bites` 强制其五态执行。
+ //!
+ //! 真机复现（本卡 `DoD` 的进程级判据）需要独占窗口：任务交互后两侧 `characters_quest = 0 行` +
+ //! `characters` 无任务列变更（`run_pair.ps1` + `scoped_diff.py --canonical`，`characters_quest`
+@@ -379,7 +387,40 @@ fn session_quest_state_model_is_still_present() {
+     );
+ }
+ 
+-/// ④ 已捕获的两侧观测：C# / Rust 两侧 `mir2_db.characters_quest` 均为 0 行。
++/// ④ 的写集差分子判据：M1 基线 `delta`（本次运行 `dbsnap_after - dbsnap` 的逐表差分）中
++/// `mir2_db.characters_quest` 必须**不存在**（该表 0 行、未被触碰，故不进入写集）；若存在，
++/// `added`/`removed` 必须都是 0。
++///
++/// **fail-closed**：`delta` 缺失、非对象、或写集条目字段缺失/非整数一律返 `Err`，绝不放行——
++/// 否则就退回成 reviewer-6 `0a4fee67` M-1 指出的恒绿 `if let Some`（断言名不副实）。
++fn quest_delta_violation(v: &serde_json::Value) -> Result<(), String> {
++    const TABLE: &str = "mir2_db.characters_quest";
++    let delta = v
++        .get("delta")
++        .ok_or_else(|| "基线缺顶层 `delta`（写集差分）字段".to_string())?;
++    let delta = delta
++        .as_object()
++        .ok_or_else(|| "基线 `delta` 不是对象".to_string())?;
++    let Some(entry) = delta.get(TABLE) else {
++        return Ok(()); // 未进入写集 ⇒ 本次运行没有改动该表（M1 基线真实形态）
++    };
++    let added = entry
++        .get("added")
++        .and_then(serde_json::Value::as_i64)
++        .ok_or_else(|| format!("`delta[\"{TABLE}\"].added` 缺失或非整数"))?;
++    let removed = entry
++        .get("removed")
++        .and_then(serde_json::Value::as_i64)
++        .ok_or_else(|| format!("`delta[\"{TABLE}\"].removed` 缺失或非整数"))?;
++    if (added, removed) != (0, 0) {
++        return Err(format!(
++            "任务交互改动了 `{TABLE}` 行（added={added} removed={removed}）"
++        ));
++    }
++    Ok(())
++}
++
++/// ④ 已捕获的两侧观测：C# / Rust 两侧 `mir2_db.characters_quest` 均为 0 行、且未进入写集差分。
+ #[test]
+ fn captured_cross_side_baselines_show_zero_characters_quest_rows() {
+     let root = workspace_root();
+@@ -412,27 +453,52 @@ fn captured_cross_side_baselines_show_zero_characters_quest_rows() {
+             rows, 0,
+             "{side} 侧 `mir2_db.characters_quest` 必须为 0 行（oracle MySQL 不持久任务态）"
+         );
+-        if let Some(delta) = v
+-            .get("delta")
+-            .and_then(|d| d.get("mir2_db.characters_quest"))
+-        {
+-            let added = delta
+-                .get("added")
+-                .and_then(serde_json::Value::as_i64)
+-                .unwrap_or(0);
+-            let removed = delta
+-                .get("removed")
+-                .and_then(serde_json::Value::as_i64)
+-                .unwrap_or(0);
+-            assert_eq!(
+-                (added, removed),
+-                (0, 0),
+-                "{side} 侧任务交互不得改动 `characters_quest` 行"
+-            );
+-        }
++        quest_delta_violation(&v).unwrap_or_else(|e| {
++            panic!("{side} 侧 M1 基线写集差分子判据失败（fail-closed，不得恒绿）: {e}")
++        });
+     }
+ }
+ 
++/// 自动红检：④ 的写集差分子判据必须**真的执行**且 fail-closed——用合成基线覆盖
++/// 「净改动 ⇒ 红 / 显式 0/0 ⇒ 绿 / 未进写集 ⇒ 绿 / `delta` 缺失 ⇒ 红 / 条目缺字段 ⇒ 红」
++/// 五态，防止再退回惰性分支（reviewer-6 `0a4fee67` M-1）。
++#[test]
++fn redcheck_quest_delta_subassertion_bites() {
++    use serde_json::json;
++
++    let dirty = json!({"delta": {"mir2_db.characters_quest": {"added": 1, "removed": 0}}});
++    assert!(
++        quest_delta_violation(&dirty).is_err(),
++        "改坏必红失效：非零 added 的任务表写集差分被放行"
++    );
++
++    let clean = json!({"delta": {"mir2_db.characters_quest": {"added": 0, "removed": 0}}});
++    assert!(
++        quest_delta_violation(&clean).is_ok(),
++        "净零差分被误判为改动：{:?}",
++        quest_delta_violation(&clean)
++    );
++
++    let absent = json!({"delta": {"mir2_db.characters": {"added": 1, "removed": 0}}});
++    assert!(
++        quest_delta_violation(&absent).is_ok(),
++        "未进入写集的表被误判为改动：{:?}",
++        quest_delta_violation(&absent)
++    );
++
++    let no_delta = json!({"dbsnap": {}});
++    assert!(
++        quest_delta_violation(&no_delta).is_err(),
++        "fail-closed 失效：缺顶层 `delta` 的基线被放行（恒绿漏洞未堵）"
++    );
++
++    let malformed = json!({"delta": {"mir2_db.characters_quest": {"added": 0}}});
++    assert!(
++        quest_delta_violation(&malformed).is_err(),
++        "fail-closed 失效：写集条目缺 `removed` 被放行"
++    );
++}
++
+ /// 自动红检：扫描器必须能咬住注入的任务落库，且注释里的字样不得误报。
+ #[test]
+ fn redcheck_scanner_bites_injected_quest_persistence() {
+

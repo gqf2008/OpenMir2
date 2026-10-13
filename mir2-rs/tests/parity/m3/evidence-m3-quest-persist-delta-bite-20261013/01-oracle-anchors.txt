@@ -1,0 +1,39 @@
+== 01 oracle / 基线锚（`文件:行` + 实测命令；oracle = `src/`，本片零改动） ==
+
+本片是 M3⑥-4 `openmir2-m3-quest-persist-observability` 的 review Minor **M-1** 收口
+（reviewer-6 独立复核条目 `0a4fee678d9c`，severity=Minor，kind=inert-sub-assertion）。
+生产代码零改动；oracle 锚 = ⑥-4 卡已确立的「任务态不落库」事实 + M1 跨读基线本身。
+
+---- A. M1 跨读基线：`delta` 只列「净改动非零」的表，`characters_quest` 不在其中 ----
+文件: mir2-rs/tests/parity/evidence/M1/s4b-slice4-crossread/{03-csharp,04-rust}-dbsrv-baseline.json
+命令: python -c "import json;[print(f, list(json.load(open(f,encoding='utf-8-sig'))['delta'].keys())) for f in (...)]"
+实测:
+  03-csharp-dbsrv-baseline.json  delta keys = mir2_account.account / mir2_account.account_protection /
+      mir2_db.characters / mir2_db.characters_ablity / mir2_db.characters_bagitem /
+      mir2_db.characters_indexes / mir2_db.characters_item / mir2_db.characters_status /
+      mir2_db.characters_storageitem
+  04-rust-dbsrv-baseline.json    delta keys = 同上（九张表）
+  ⇒ **两侧 `delta` 均不含 `mir2_db.characters_quest`**（该表 rows=0、未被触碰，故不进写集）。
+  dbsnap["mir2_db.characters_quest"] = {"rows": 0, "sha256": "e3b0c442...b855"}（空表 sha256）。
+判定: 原实现的 `if let Some(delta)=v.get("delta").and_then(|d| d.get("mir2_db.characters_quest"))`
+      分支**从不执行** ⇒ 断言名不副实（恒绿）。这正是 reviewer-6 M-1 的缺陷口径。
+
+---- B. `characters` 存档 UPDATE 的列清单无任何任务列 ----
+文件: src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Save.cs:82-89（SaveRecord）
+原文（:85-88）: "UPDATE characters SET ServerIndex = @ServerIndex, LoginID = @LoginID, MapName = @MapName,
+  CX = @CX, ... Job = Job, Gold = @Gold, " ... "Deleted = @Deleted,LASTUPDATE = now() WHERE ID = @ID;"
+判定: 无 QuestFlag/QuestUnit/QuestUnitOpen/QuestOpenIndex/QuestFinIndex。
+
+---- C. `SaveQuest` 只 DELETE FROM characters_quest，从不 INSERT，且全仓无调用点 ----
+文件: src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Save.cs:493-506
+原文: :495 const string sSqlStr4 = "DELETE FROM characters_quest WHERE PlayerId=@PlayerId";
+命令: grep -rn "SaveQuest" src/  ⇒ :493（定义）/ :505（自身异常日志）——**无调用点**。
+
+---- D. 读档 = SELECT * FROM characters WHERE ID=@ID，不读任务数组 ----
+文件: src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Query.cs:194
+
+---- E. 任务数组只走会话记录（6000 面 PlayerDataInfo） ----
+文件: src/OpenMir2/Packets/ServerPackets/PlayerDataInfo.cs:101-103（字段）+ :114-116（构造 byte[128]×3）
+
+结论: 「任务态不落库」是 oracle **行为**。本片不改 oracle、不改门禁的既有四层断言结构，
+只把第 4 层里那条**恒绿**的写集差分子断言改成真会执行、且 fail-closed 的实现。
