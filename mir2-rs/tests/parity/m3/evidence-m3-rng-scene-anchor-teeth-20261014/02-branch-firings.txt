@@ -1,0 +1,8 @@
+### 02 三条分支的独立构造（不经 selftest，直接喂 check_doc_text）—— 每条都真会红并点名
+
+# 脚本随证据包入库（自包含）：evidence-m3-rng-scene-anchor-teeth-20261014/02-branch-firings.py
+$ cd mir2-rs/tests/parity/m3 && python -I evidence-m3-rng-scene-anchor-teeth-20261014/02-branch-firings.py
+① BARE_REF_UNGUARDED -> ['BARE_REF_UNGUARDED 同行裸续引用 `:12` 归属 `crates/world/src/merchant.rs`（未登记锚点）']
+② BARE_REF_FILE_MISSING -> ['BARE_REF_FILE_MISSING 改坏：归属文件缺失：mir2-rs/crates/world/src/no_such_module.rs 不存在']
+③ BARE_REF_OUT_OF_RANGE -> ['BARE_REF_OUT_OF_RANGE 站点表的 R-6 折叠理由行：`mir2-rs/tests/parity/m3/rng-trace-probe/consumer_groups.tsv:99999` 越界（文件共 76 行）']
+# rc=0

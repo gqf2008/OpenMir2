@@ -1,0 +1,36 @@
+### 本片净差量（重交：已 `git merge origin/master`，消除 base 落后 master 的「回退假差量」）
+### patch base = origin/master = 10f0daa93ebeaf220581a3239cce6f7e7a522b85
+### head = 2fcebc6cd9f00ece73b262bf76e432e48d8ce0de（= "Merge remote-tracking branch 'origin/master' into wip/m3bag-anchor-teeth"）
+### git diff --name-only origin/master..HEAD（共 19 路径；含本文件与 SHA256SUMS.txt 自身）
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-coverage-20261014/01-before-old-tool-silent.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-coverage-20261014/02-before-new-tool-red.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-coverage-20261014/README.md
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-coverage-20261014/SHA256SUMS.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-teeth-20261014/01-selftest-13.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-teeth-20261014/02-branch-firings.py
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-teeth-20261014/02-branch-firings.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-teeth-20261014/05-selfcheck-nostack.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-teeth-20261014/06-offline-regression.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-teeth-20261014/07-gates-fmt.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-teeth-20261014/08-gates-clippy.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-teeth-20261014/09-gates-workspace-test.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-teeth-20261014/10-gates-msgcodegen.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-teeth-20261014/11-boundary.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-teeth-20261014/README.md
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-teeth-20261014/SHA256SUMS.txt
+mir2-rs/tests/parity/m3/rng-trace-scene/DRIVER-CONTRACT.md
+mir2-rs/tests/parity/m3/rng-trace-scene/README.md
+mir2-rs/tests/parity/m3/rng-trace-scene/check_anchors.py
+
+### 对照（为什么重交）：未合并 master 的旧 head 0778a84e8 与 origin/master 的 diff 是 36 路径 ——
+### 其中含 hero-pet 证据的假删除（D）与 R100 改名（06-gate-fmt.txt → 07-gates-fmt.txt），
+### 那是「base 落后 master ⇒ 带出回退假差量」的已知坑；本 head 合并 master 后净差量收敛为上述路径，零回退。
+
+--- 冻结面检查（src/ sql/ MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins；应为空）
+(空 = 冻结面零改动)
+
+--- *.rs 计数（应为 0）
+0
+
+> 注：本文件只声明「净差量路径 / 冻结面 / 零 .rs」；工作树 `git status` 不属边界主张，
+> 按 reviewer-6 M-3 的口径**不再记入**。

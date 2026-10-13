@@ -381,6 +381,39 @@ def selftest():
                any("UNKNOWN_REF_EXT" in p and "spec.xyz" in p for p in bad9),
                "; ".join(bad9))
 
+    # ⑪ 改坏必红⑩（reviewer-6 M-1 收口）：同行裸续引用归属的**完整引用本身未登记锚点** ⇒
+    #    `BARE_REF_UNGUARDED` 必红（此前该分支无活用例）。
+    unguarded_bare = text + "\n（另见 `crates/world/src/merchant.rs:999`、`:12`）\n"
+    bad10 = check_doc_text(unguarded_bare)
+    check_case("mutation-bare-ref-unguarded-red",
+               any("BARE_REF_UNGUARDED" in p for p in bad10),
+               "; ".join(bad10))
+
+    # ⑫ 改坏必红⑪（reviewer-6 M-1 收口）：裸续引用已登记、行号在范围内，但归属文件**不存在**
+    #    ⇒ `BARE_REF_FILE_MISSING` 必红（此前该分支无活用例）。
+    fake_missing = dict(literal="crates/world/src/no_such_module.rs",
+                        path="mir2-rs/crates/world/src/no_such_module.rs",
+                        rx=r"pub fn nothing",
+                        why="改坏：归属文件缺失",
+                        also=(dict(line=7, rx=r".", why="改坏：归属文件缺失"),))
+    bad11 = check_doc_text(text + "\n（另见 `crates/world/src/no_such_module.rs:3`、`:7`）\n",
+                           anchors=tuple(list(ANCHORS) + [fake_missing]))
+    check_case("mutation-bare-ref-file-missing-red",
+               any("BARE_REF_FILE_MISSING" in p for p in bad11),
+               "; ".join(bad11))
+
+    # ⑬ 改坏必红⑫（reviewer-6 M-1 收口）：裸续引用已登记，但登记行号**越界**（超出文件行数）
+    #    ⇒ `BARE_REF_OUT_OF_RANGE` 必红（此前该分支无活用例）。
+    oor_anchors = []
+    for a in ANCHORS:
+        if a["literal"].endswith("consumer_groups.tsv"):
+            a = dict(a, also=(dict(line=99999, rx=r".", why="改坏：登记行号越界"),))
+        oor_anchors.append(a)
+    bad12 = check_doc_text(text.replace("`:53`", "`:99999`"), anchors=tuple(oor_anchors))
+    check_case("mutation-bare-ref-out-of-range-red",
+               any("BARE_REF_OUT_OF_RANGE" in p for p in bad12),
+               "; ".join(bad12))
+
     total = len(checks)
     badn = [(n, d) for n, ok, d in checks if not ok]
     for n, ok, d in checks:
@@ -388,9 +421,10 @@ def selftest():
     if badn:
         print("SELFTEST RED: check_anchors selftest %d/%d" % (total - len(badn), total))
         return 1
-    print("SELFTEST GREEN: check_anchors selftest %d/%d（含 9 条改坏必红：行号漂移 / 锚点缺失 / "
+    print("SELFTEST GREEN: check_anchors selftest %d/%d（含 12 条改坏必红：行号漂移 / 锚点缺失 / "
           "锚点歧义 / 未登记引用 / 折叠定义回退 / 同名目录串台 / 裸续引用未登记 / 裸续内容漂移 / "
-          "未识别扩展名）" % (total, total))
+          "未识别扩展名 / 裸续引用归属未登记 / 裸续引用归属文件缺失 / 裸续引用登记行越界）"
+          % (total, total))
     return 0
 
 
