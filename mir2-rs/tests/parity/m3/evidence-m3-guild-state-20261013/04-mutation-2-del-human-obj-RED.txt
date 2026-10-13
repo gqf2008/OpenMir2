@@ -1,0 +1,27 @@
+### before sha256 = ee996f699e5928902aa41df73f110327c8d688ca0242e382a18453ced7f11d76
+### RC2 mutation: del_human_obj Compare==Greater -> !=Equal (fix oracle quirk)
+### mutated sha256 = 110f3cba4e1f14878edd87251367c26e483c24cbecbcbfd74b388713b8fb2468
+### cmd: cargo test -p mir2-world --lib guild::tests::del_human_obj_compare_equals_one_quirk --offline
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\crates\world)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.70s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m3cs-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 1 test
+test guild::tests::del_human_obj_compare_equals_one_quirk ... FAILED
+
+failures:
+
+---- guild::tests::del_human_obj_compare_equals_one_quirk stdout ----
+
+thread 'guild::tests::del_human_obj_compare_equals_one_quirk' (9500) panicked at crates\world\src\guild.rs:1050:9:
+assertion failed: !g.del_human_obj("c", 0)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    guild::tests::del_human_obj_compare_equals_one_quirk
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 143 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-world --lib`
+### restored sha256 = ee996f699e5928902aa41df73f110327c8d688ca0242e382a18453ced7f11d76

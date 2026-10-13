@@ -1,0 +1,55 @@
+M3⑧-4 第①片 F-1 返工 oracle 锚：BoChanged / DwSaveTick 语义
+（行号 = 本仓库 `src/M2Server/Guild/**` 实测；reviewer-5 review `41d42c32` F-1 的锚 + 补锚）
+
+核心口径：`BoChanged=true` **只**由两处置位——
+  ① `.ini` 五键的 5 个 property setter（`GuildInfo.cs:21-48` → `:1090-1117`）；
+  ② `UpdateGuildFile()`（`GuildInfo.cs:584-589`）。
+`DwSaveTick` **只**由 `UpdateGuildFile()` 推（构造值 0）。
+`SaveGuildInfoFile()`（`:366-370`）只写文件（`SaveGuildFile` + `SaveGuildConfig`），**不碰**两者。
+
+[GuildInfo.cs]
+   21  public int BuildPoint { set => SetBuildPoint(value); }
+   27  public int Aurae     { set => SetAuraePoint(value); }
+   33  public int Stability { set => SetStabilityPoint(value); }
+   39  public int Flourishing { set => SetFlourishPoint(value); }
+   45  public int ChiefItemCount { set => SetChiefItemCount(value); }
+  129  public bool DelAllyGuild(IGuild)     —— RemoveAt + `SaveGuildInfoFile()`（不碰 BoChanged/DwSaveTick）✓
+  195  public bool LoadGuild()              —— LoadGuildConfig() → `_guildConf.LoadConfig(this)`
+  199  private void LoadGuildConfig()       —— `_guildConf.LoadConfig(this)`
+  463  public bool SetGuildInfo(string)     —— RankList==0 ⇒ rank1 掌门 + 唯一成员 + `SaveGuildInfoFile()`（不碰两者）✓
+  525  public void CheckSaveGuildFile()     —— `if (BoChanged && (GetTickCount()-DwSaveTick) > 30*1000) { BoChanged=false; SaveGuildInfoFile(); }` ✓
+  584  public void UpdateGuildFile()        —— `BoChanged=true; DwSaveTick=GetTickCount(); SaveGuildInfoFile();` ✓
+  591  public void BackupGuildFile()        —— 清 members/RankList/Notice/GuildWarList/GuildAllList + `SaveGuildInfoFile()`（**不**调 UpdateGuildFile）✓
+  623  public void AddMember(IPlayerActor)  —— 追加成员 + `UpdateGuildFile()`（置脏）
+  653  public bool DelMember(string)       —— 命中移除 + `UpdateGuildFile()`
+ 1007  public void AllyGuild(IGuild)       —— `//GuildAllList.Add(guild)` 被注释 + `SaveGuildInfoFile()`（不碰两者）✓
+ 1020  public WarGuild AddWarGuild(IGuild) —— 末尾 `RefMemberName(); UpdateGuildFile();`（置脏）
+ 1090  private void SetAuraePoint(int)      —— `aurae = nPoint; BoChanged = true;`
+ 1096  private void SetBuildPoint(int)      —— `buildPoint = nPoint; BoChanged = true;`
+ 1102  private void SetFlourishPoint(int)   —— `flourishing = nPoint; BoChanged = true;`
+ 1108  private void SetStabilityPoint(int)  —— `stability = nPoint; BoChanged = true;`
+ 1114  private void SetChiefItemCount(int)  —— `chiefItemCount = nPoint; BoChanged = true;`
+
+[GuildConf.cs]
+   16  public void LoadConfig(GuildInfo guild)   —— `guild.BuildPoint = ReadWriteInteger(...)` 等 5 行，**全走 public setter** ⇒ 加载后 BoChanged=true
+   26  public void SaveGuildConfig(GuildInfo)    —— WriteString/WriteInteger 5+1 行（只写，不改状态）
+
+[GuildManager.cs]
+   19  public bool AddGuild(string,string)       —— CheckGuildName && FindGuild==null ⇒ new GuildInfo + `SetGuildInfo(sChief)` + Add + `SaveGuildList()`（**不**调 UpdateGuildFile）✓
+  145  public void Run()                          —— 倒序扫 GuildWarList；到期 EndGuildWar+RemoveAt ⇒ boChanged=true ⇒ `UpdateGuildFile()`；末尾 `CheckSaveGuildFile()`
+
+[PlayObject.Operate.cs]
+ 1283  ClientGuildMemberList()                    —— `sSendMsg.Length > 5000` 截断（`Length` = UTF-16 码元）
+
+## 返工映射（改动 → oracle）
+
+| Rust 改动 | oracle 依据 |
+| --- | --- |
+| `GuildState::set_conf` 置 `bo_changed = true` | LoadConfig 经 5 setter（`:21-48`/`:1090-1117`）⇒ 加载后 BoChanged=true |
+| `set_guild_info` 去掉 `bo_changed = true` | `:463-484` 只 `SaveGuildInfoFile()` |
+| `GuildManager::add_guild` 去掉 `update_guild_file` | `GuildManager.cs:19-32` 只 `SetGuildInfo` |
+| `del_ally_guild`/`ally_guild` 去掉 `bo_changed = true` | `:129-142` / `:1007-1019` 只 `SaveGuildInfoFile()` |
+| `backup_guild_file` 去掉 `update_guild_file(0)` | `:591-621` 末尾只 `SaveGuildInfoFile()`（同族一并订正） |
+| `member_list_text` 用 `encode_utf16().count()` | `PlayObject.Operate.cs:1283` 的 `sSendMsg.Length` |
+
+（`check_save_guild_file`/`update_guild_file`/`add_member`/`del_member`/`add_war_guild`/`update_rank` 的置脏语义经 F-1 复核后**保持原实现**，与上表一致。）
