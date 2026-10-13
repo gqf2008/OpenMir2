@@ -1,0 +1,10 @@
+M3④-D② 改坏必红（3 条，原始件 40/41/42；还原 sha256 见 43）
+
+| 编号 | 变异（文件） | 必红用例 | rc |
+| --- | --- | --- | --- |
+| RC-D2-A | `sm_levelup` 头 recog/param 交换：`command_header(exp, SM_LEVELUP, u16::from(level), …)` → `command_header(i32::from(level), SM_LEVELUP, exp as u16, …)`（smframe.rs） | `levelup_downlink_sends_levelup_frames_heals_and_syncs_entity` | 101（FAILED） |
+| RC-D2-B | 删掉 `drain_levelup_downlink` 的 `IncHealthSpell(2000,2000)` 段（main.rs） | 同上（`hp == max_hp` 断言） | 101（FAILED） |
+| RC-D2-C | 删掉 `drain_levelup_downlink` 的 `recalc_session_ability(sg, catalog)`（main.rs） | 同上（`max_hp > 0` 断言） | 101（FAILED） |
+
+每次：备份 → 变异 → 跑命中用例（输出原样落 40/41/42）→ 还原 → sha256 核对。
+还原后 `bins/game-svr/src/smframe.rs` / `bins/game-svr/src/main.rs` 与变异前**逐字节一致**（43）。

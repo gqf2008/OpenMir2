@@ -1,0 +1,17 @@
+# RC-D2-A/B/C 变异目标 = bins/game-svr/src/smframe.rs（仅 A）、bins/game-svr/src/main.rs（B、C）。
+# 变异前（orig）与还原后（restore）逐字节一致（diff 为空）。
+
+# --- 变异前 orig ---
+2c69f7d86d1ec6ab2bb9c27e4fb7221ae48143aa8f53970654763604a09df544 *bins/game-svr/src/smframe.rs
+e95319b81212be9504e8811c7096c1810f9b8b410e1b82be01b54024c151ba14 *bins/game-svr/src/main.rs
+
+# --- 三次还原后 restore（与 orig diff 为空）---
+2c69f7d86d1ec6ab2bb9c27e4fb7221ae48143aa8f53970654763604a09df544 *bins/game-svr/src/smframe.rs
+e95319b81212be9504e8811c7096c1810f9b8b410e1b82be01b54024c151ba14 *bins/game-svr/src/main.rs
+
+# 附注：RC-D2-A/B/C 在 merge master 5461c1b1 后的交付树上重跑过（40/41/42 为本次输出），
+#       两个变异目标文件的 sha256 合并前后逐字节相同 ⇒ 结论不变（均 rc=101）。
+
+# --- 非变异目标（红检只改上面两个文件）的最终 sha256 ---
+bafa4aa2f19769aa76866d1a3f80d9f25655ae6db0ce92b15058b3f5e7f6dd87 *crates/world/src/combat.rs
+b35f3397b1d2ff3937f91b1ef12d0cc061d1b6d739faa6e2c2a83c367890b6fe *crates/world/src/world.rs

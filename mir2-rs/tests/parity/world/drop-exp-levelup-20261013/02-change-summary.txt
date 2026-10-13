@@ -1,0 +1,29 @@
+M3④-实现 D 分片 D②「升级链」—— 改动清单
+写集：crates/world/** + bins/game-svr/**（本卡写集）；零 src/ sql/ MirClient。
+
+1) crates/world/src/combat.rs —— award_kill_exp（GetExp 的升级块）
+   - `leveled` 语义订正为「**进了** `Abil.Exp >= Abil.MaxExp` 块」（不再要求"等级真的 +1"）：
+     * orig: `let mut leveled = false; if killer.exp >= killer.max_exp { ...; if killer.level < 255 { killer.level += 1; leveled = true; } ... }`
+     * now : `let leveled = killer.exp >= killer.max_exp; if leveled { killer.exp -= killer.max_exp; killer.level = killer.level.saturating_add(1); killer.max_exp = get_level_exp(...); }`
+     * 依据：oracle 的 `Abil.Level++` 有 `< MAXUPLEVEL(255)` 门，但块内 HasLevelUp / IncHealthSpell **无条件**；
+       `saturating_add` 与 `if <255 { +1 }` 在 u8 上逐值等价（`MAXUPLEVEL = byte.MaxValue`）。
+   - 返回值口径文档同步为 `(获得经验, 是否进入升级块, 升级后等级)`。
+
+2) crates/world/src/world.rs —— TickRecord::exp_awards 文档同步（第 3 位 = 是否进升级块；满级也置位）。
+
+3) bins/game-svr/src/smframe.rs —— 新增 sm_levelup(exp, level)
+   - `command_header(exp, SM_LEVELUP, u16::from(level), 0, 0)` + 无尾。
+     锚 PlayObject.Message.cs:1671 `MakeMessage(SM_LEVELUP, Abil.Exp, Abil.Level, 0, 0)` + SendSocket。
+
+4) bins/game-svr/src/main.rs
+   - 抽出单一实现 `recalc_session_ability(sg, catalog)`（原装备/卸下成功分支的内联块原样搬入），
+     供 ① 装备/卸下 ② 升级 两处共用（避免第二份 RecalcAbilitys）。
+   - 新增 `drain_levelup_downlink(...)`：对 `rec.exp_awards` 中 `leveled==true` 的获得者按 oracle 顺序补齐：
+     ① `recalc_session_ability`（= RecalcLevelAbilitys + RecalcAbilitys）
+     ② `IncHealthSpell(2000, 2000)`（按升级后 MaxHP/MaxMP 截断）—— **然后**出帧
+     ③ 同步世界实体（apply_ability_to_entity：HP/MaxHP/DC/AC/HitPoint/SpeedPoint）
+     ④ 帧：SM_LEVELUP(45) → SM_ABILITY(52, 尾=Encode(WAbil)) → SM_SUBABILITY(752) → SM_HEALTHSPELLCHANGED(53)
+   - 运行循环里在 `drain_combat_downlink`（发 SM_WINEXP）之后、`drain_aoi_downlink` 之前调用它
+     ⇒ 线上顺序 WINEXP → LEVELUP → ABILITY → SUBABILITY → HEALTHSPELLCHANGED（锚 [1]/[3]/[5]）。
+   - 登记（不建）：AddBodyLuck（死字段）、WinExp LimitExpLevel 支（默认 1000 > 255，不可达）、
+     ShowHp 的 53 广播（生产恒 false）。见 01-oracle-anchors.txt [7]。

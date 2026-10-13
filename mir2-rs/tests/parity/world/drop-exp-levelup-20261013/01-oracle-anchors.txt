@@ -1,0 +1,103 @@
+M3④-实现 D 分片 D②「升级链」—— oracle 锚点原文
+卡：openmir2-m3-drop-exp-wiring
+base = master 5461c1b1（D① 已并入）；branch = drop-exp-host；交付树 = merge master + D②
+
+================================================================================
+[1] GetExp（升级块 = 触发点）  src/M2Server/Player/PlayObject.Base.cs:149-166
+================================================================================
+        private void GetExp(int dwExp)
+        {
+            Abil.Exp += dwExp;                                    // :151
+            AddBodyLuck(dwExp * 0.002);                           // :152  ← 死字段（见 [7]）
+            SendMsg(Messages.RM_WINEXP, 0, dwExp, 0, 0);          // :153  （D① 已接）
+            if (Abil.Exp >= Abil.MaxExp)                          // :154  ← 升级块（`if` 而非 `while`）
+            {
+                Abil.Exp -= Abil.MaxExp;                          // :156
+                if (Abil.Level < MessageSettings.MAXUPLEVEL)      // :157  MAXUPLEVEL = byte.MaxValue = 255
+                {
+                    Abil.Level++;                                 // :159
+                }
+                HasLevelUp(Abil.Level - 1);                       // :161
+                AddBodyLuck(100);                                 // :162  ← 死字段
+                IncHealthSpell(2000, 2000);                       // :164  ← HP/MP 回满 2000（按升级后 Max 截断）
+            }
+        }
+
+关键口径：只要 `Abil.Exp >= Abil.MaxExp` 就进块；`Abil.Level++` 才有 `< MAXUPLEVEL` 门，
+但块内 HasLevelUp / IncHealthSpell **无条件**执行 ⇒ 255 级仍要回血/重算/出帧。
+（`MessageSettings.cs:7` `public const byte MAXUPLEVEL = byte.MaxValue;`）
+
+================================================================================
+[2] HasLevelUp（升级后果）  src/M2Server/Player/PlayObject.cs:5242-5248
+================================================================================
+        public void HasLevelUp(int nLevel)
+        {
+            Abil.MaxExp = GetLevelExp(Abil.Level);   // :5244
+            RecalcLevelAbilitys();                   // :5245
+            RecalcAbilitys();                        // :5246
+            SendMsg(Messages.RM_LEVELUP, 0, Abil.Exp, 0, 0);   // :5247
+        }
+
+RecalcLevelAbilitys 本体：src/M2Server/Player/PlayObject.cs:5254-5317
+（Rust 侧由已合入的 mir2_formula::level_ability::recalc_level_abilitys 承载，
+ 经 game_svr::ability::recalc_abilitys 的 level_ability_base 调用——本片**不新增第二份实现**。）
+
+================================================================================
+[3] RM_LEVELUP 处理器（帧编码）  src/M2Server/Player/PlayObject.Message.cs:1670-1676
+================================================================================
+                case Messages.RM_LEVELUP:
+                    ClientMsg = Messages.MakeMessage(Messages.SM_LEVELUP, Abil.Exp, Abil.Level, 0, 0);
+                    SendSocket(ClientMsg);
+                    ClientMsg = Messages.MakeMessage(Messages.SM_ABILITY, Gold, HUtil32.MakeWord((byte)Job, 99), HUtil32.LoWord(GameGold), HUtil32.HiWord(GameGold));
+                    SendSocket(ClientMsg, EDCode.EncodeMessage(WAbil));
+                    SendDefMessage(Messages.SM_SUBABILITY, HUtil32.MakeLong(HUtil32.MakeWord(AntiMagic, 0), 0), HUtil32.MakeWord(HitPoint, SpeedPoint), HUtil32.MakeWord(AntiPoison, PoisonRecover), HUtil32.MakeWord(HealthRecover, SpellRecover));
+                    break;
+
+⇒ 线上顺序（同一 RM_LEVELUP 处理器内）：SM_LEVELUP(45) → SM_ABILITY(52, 尾=Encode(WAbil)) → SM_SUBABILITY(752)。
+   注意：处理器读的是**处理时**的 WAbil ⇒ 含紧随其后的 IncHealthSpell 回血后的 HP/MP。
+
+================================================================================
+[4] IncHealthSpell（升级回血）  src/M2Server/Actor/BaseObject.cs:952-975
+================================================================================
+        protected void IncHealthSpell(int nHp, int nMp)
+        {
+            if ((nHp < 0) || (nMp < 0)) { return; }
+            if ((WAbil.HP + nHp) >= WAbil.MaxHP) { WAbil.HP = WAbil.MaxHP; }
+            else { WAbil.HP += (ushort)nHp; }
+            if ((WAbil.MP + nMp) >= WAbil.MaxMP) { WAbil.MP = WAbil.MaxMP; }
+            else { WAbil.MP += (ushort)nMp; }
+            HealthSpellChanged();
+        }
+
+[5] HealthSpellChanged  src/M2Server/Actor/BaseObject.cs:700-710
+        public void HealthSpellChanged()
+        {
+            if (Race == ActorRace.Play)
+            {
+                SendUpdateMsg(Messages.RM_HEALTHSPELLCHANGED, 0, 0, 0, 0, "");   // :704
+            }
+            if (ShowHp) { SendRefMsg(Messages.RM_HEALTHSPELLCHANGED, 0, 0, 0, 0, ""); }  // :708
+        }
+
+    RM_HEALTHSPELLCHANGED 处理器  src/M2Server/Player/PlayObject.Message.cs:1736-1739
+                case Messages.RM_HEALTHSPELLCHANGED:
+                    ClientMsg = Messages.MakeMessage(Messages.SM_HEALTHSPELLCHANGED, processMsg.ActorId, baseObject.WAbil.HP, baseObject.WAbil.MP, baseObject.WAbil.MaxHP);
+                    SendSocket(ClientMsg);
+
+================================================================================
+[6] 消息号常量  src/OpenMir2/Messages.cs
+================================================================================
+        SM_LEVELUP = 45                 (:206)
+        SM_HEALTHSPELLCHANGED = 53      (:211)
+        RM_HEALTHSPELLCHANGED = 10052   (:576)
+        RM_LEVELUP = 8086               (:689)
+
+================================================================================
+[7] 登记：本片**不建模**的死/不可达分支
+================================================================================
+(a) AddBodyLuck（PlayObject.cs:4304-4323）：`BodyLuck`/`BodyLuckLevel` 全仓只有声明（:520-521）
+    与 AddBodyLuck 自身的写入，**无任何读取点** ⇒ 死字段，不做（回血/帧/落库都不受影响）。
+(b) WinExp 的 LimitExpLevel 支（PlayObject.Base.cs:131-134）：默认 `LimitExpLevel = 1000`
+    （GameSvrConf.cs:1838）> 255 ⇒ 生产不可达（本骨架 max level 255）。
+(c) `ShowHp` 的 SendRefMsg 广播（HealthSpellChanged 第二支）：`ShowHp` 由技能「心灵启示」置位，
+    技能层未移植 ⇒ 生产路径恒 false（与既有 drain_recovery/drain_stamina 同一登记口径）。

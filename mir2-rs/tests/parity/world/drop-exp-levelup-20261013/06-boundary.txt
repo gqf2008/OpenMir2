@@ -1,0 +1,19 @@
+# 边界：oracle（src/ sql/ MirClient）冻结 —— 本片零改动
+
+$ git diff origin/master..HEAD --stat -- src sql MirClient
+(空 = 冻结)
+
+# 交付树相对 master 5461c1b1 的全部差异（仅本片 D② 代码 + 证据）
+$ git diff origin/master..HEAD --name-only
+mir2-rs/bins/game-svr/src/main.rs
+mir2-rs/bins/game-svr/src/smframe.rs
+mir2-rs/crates/world/src/combat.rs
+mir2-rs/crates/world/src/world.rs
+
+$ git show --stat --oneline HEAD~1
+adca62f1 feat(m3-drop-exp): D② 升级链——GetExp 升级块语义(leveled) + RecalcLevelAbilitys/Abilitys + SM_LEVELUP(45)/SM_ABILITY(52)/SM_SUBABILITY(752)/SM_HEALTHSPELLCHANGED(53) + 世界实体同步
+ mir2-rs/bins/game-svr/src/main.rs    | 278 +++++++++++++++++++++++++++++++----
+ mir2-rs/bins/game-svr/src/smframe.rs |  11 ++
+ mir2-rs/crates/world/src/combat.rs   |  22 ++-
+ mir2-rs/crates/world/src/world.rs    |  44 +++++-
+ 4 files changed, 319 insertions(+), 36 deletions(-)

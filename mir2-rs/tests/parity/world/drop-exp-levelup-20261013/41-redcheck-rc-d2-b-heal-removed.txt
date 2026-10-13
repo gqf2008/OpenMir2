@@ -1,0 +1,22 @@
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.17s
+     Running unittests src\main.rs (E:/tmp/m2svr-d2-target\debug\deps\game_svr-eb39968088e3f1ec.exe)
+
+running 1 test
+test tests::levelup_downlink_sends_levelup_frames_heals_and_syncs_entity ... FAILED
+
+failures:
+
+---- tests::levelup_downlink_sends_levelup_frames_heals_and_syncs_entity stdout ----
+
+thread 'tests::levelup_downlink_sends_levelup_frames_heals_and_syncs_entity' (27024) panicked at bins\game-svr\src\main.rs:8651:9:
+IncHealthSpell(2000,2000) 应按升级后的 MaxHP 截断 ⇒ 满血: Ability { level: 11, reserved1: 0, ac: 256, mac: 0, dc: 513, mc: 0, sc: 0, hp: 10, mp: 5, max_hp: 100, max_mp: 50, reserved2: 0, exp_count: 0, exp_max_count: 0, exp: 500, max_exp: 1000, weight: 0, max_weight: 90, wear_weight: 0, max_wear_weight: 21, hand_weight: 0, max_hand_weight: 21 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::levelup_downlink_sends_levelup_frames_heals_and_syncs_entity
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 160 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`
