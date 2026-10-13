@@ -1,0 +1,85 @@
+$ cargo test -p mir2-data --offline --no-fail-fast   # base=7febf884a, CARGO_TARGET_DIR=E:/tmp/m3cs-target
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.33s
+     Running unittests src\lib.rs (E:/tmp/m3cs-target\debug\deps\mir2_data-aab6798f5c2fe3d9.exe)
+
+running 30 tests
+test guild::tests::get_valid_str3_keeps_trailing_separators_in_rest ... ok
+test exps::tests::ini_inline_comment ... ok
+test exps::tests::ini_basic ... ok
+test exps::tests::ini_bool_parse ... ok
+test guild::tests::readline_split_matches_dotnet ... ok
+test exps::tests::from_bytes_detects_bom ... ok
+test guild::tests::allies_section_is_discarded ... ok
+test guild_castle::tests::castle_file_default_uses_read_castle_dir ... ok
+test guild_castle::tests::castle_name_len_is_never_read ... ok
+test guild::tests::war_time_is_always_zero_on_load ... ok
+test guild_castle::tests::get_all_npc_tax_bool_forms ... ok
+test guild_castle::tests::missing_keys_fall_back_to_game_svr_conf_defaults ... ok
+test guild_castle::tests::utf8_bom_server_conf_parses_deployed_values ... ok
+test exps::tests::need_exps_missing_is_zero ... ok
+test monitems::tests::parses_typical_lines ... ok
+test monitems::tests::quoted_item_name ... ok
+test monitems::tests::skips_invalid_rows ... ok
+test party::tests::defaults_match_game_svr_conf ... ok
+test party::tests::from_ini_reads_oracle_keys ... ok
+test party::tests::lock_deal_action_uses_password_lock_key_only ... ok
+test party::tests::missing_keys_fall_back_to_defaults ... ok
+test pet_slave::tests::byte_reads ... ok
+test pet_slave::tests::arrays_read_per_index ... ok
+test pet_slave::tests::mag_tamming_hp_rate_reads_target_hp_rate_key ... ok
+test pet_slave::tests::master_die_mutiny_speed_reads_power_key ... ok
+test pet_slave::tests::missing_keys_fall_back_to_game_svr_conf_defaults ... ok
+test pet_slave::tests::utf8_bom_deployed_values_are_parsed ... ok
+test monitems::tests::attach_fails_closed_on_unreadable_file ... ok
+test monitems::tests::attach_reads_from_monitems_subdir ... ok
+test monitems::tests::attach_resets_then_matches_file_existence ... ok
+
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\guild_castle_config.rs (E:/tmp/m3cs-target\debug\deps\guild_castle_config-3a8289a7e5fe188c.exe)
+
+running 1 test
+test defaults_match_oracle_vector ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\guild_store_vectors.rs (E:/tmp/m3cs-target\debug\deps\guild_store_vectors-0352d403c94f6da9.exe)
+
+running 11 tests
+test vector_config_sections_and_limits ... ok
+test vector_get_valid_str3_tokenizer ... ok
+test vector_parse_save_round_trip_drops_allies ... ok
+test vector_save_bytes_exact ... ok
+test vector_missing_list_file_fails_closed ... ok
+test vector_save_refuses_to_create_target ... ok
+test vector_rank_name_truncates_only_over_30 ... ok
+test vector_load_quattro_sections_and_quirks ... ok
+test vector_ini_is_only_ever_created_empty ... ok
+test vector_save_guild_list_noop_on_nonzero_server_index ... ok
+test vector_load_guild_info_rewrites_list ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\party_config.rs (E:/tmp/m3cs-target\debug\deps\party_config-49b8faa2c8373127.exe)
+
+running 1 test
+test defaults_match_oracle_vector ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\pet_slave_config.rs (E:/tmp/m3cs-target\debug\deps\pet_slave_config-5fd5543afb415bf6.exe)
+
+running 3 tests
+test constants_match_oracle ... ok
+test array_lengths_match_oracle ... ok
+test defaults_match_oracle_vector ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests mir2_data
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+rc=0

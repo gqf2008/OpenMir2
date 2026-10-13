@@ -1,0 +1,46 @@
+# M3⑧-3 重开 f1 片 —— 命令四件套（命令 + 原始件 + 路径 + hash）
+# 卡：openmir2-m3-guild-file-store（M3⑧-实现 3 行会文件加载/落盘）
+# 车道：openmir2-worker-5 / worktree m3cs / branch worktree-m3-guild-file-store-f2
+# base = origin/master 0f9fe9997a4ed717ee1361bfb2134329fd04472a
+# head = 144ee7b4e06f5f617f960fda19100b3291f80669
+# 触发：合并车道 comment fd66c1c6（f1 head 78dd46d19 与 revert 后的 master modify/delete ×6）
+# 硬约束：零起栈、零占端口（只读离线：cargo + git；无 C# 栈、无客户端）
+
+## 0) 重开（非破坏性：新分支，不改写已推的 f1 历史）
+$ git fetch origin
+$ git checkout -b worktree-m3-guild-file-store-f2 origin/master
+# 原片内容 + F-1 修：直接取 F-1 head 的最终文件（与 f2361cf2 + F-1 等价）
+$ git checkout 78dd46d19 -- mir2-rs/crates/data/src/guild.rs \
+    mir2-rs/crates/data/tests/guild_store_vectors.rs \
+    "mir2-rs/tests/parity/m3/M3⑧行会文件加载落盘报告-20261013.md" \
+    mir2-rs/tests/parity/m3/guild-store-probe \
+    mir2-rs/tests/parity/m3/evidence-m3-guild-file-store-20261013 \
+    mir2-rs/tests/parity/m3/evidence-m3-guild-file-store-f1-20261013
+# lib.rs：手工并集（保留 master 侧 pet_slave 等新模块 + 加 `pub mod guild;` 与本卡 doc 例外段）
+$ git add -A && git commit -m "fix(m3-guild-file-store): 基于当前 master 0f9fe9997 重开 f1 分支"
+
+## 1) 内容同一性 + merge-tree（合并车道 fd66c1c6 的 required）
+$ git diff 78dd46d19 -- <本卡文件/目录>        # 空 = 与 F-1 head 逐字节一致
+$ git merge-tree --write-tree origin/master HEAD  # rc=0，无 CONFLICT 段
+# 原始件：01-reopen-identity.txt
+
+## 2) 边界
+$ git diff --name-only origin/master HEAD -- src sql MirClient   # 空（oracle 冻结）
+$ git diff --name-only origin/master HEAD -- mir2-rs/bins        # 空（未动 bins/game-svr）
+# 原始件：02-boundary.txt
+
+## 3) Rust 向量用例（12 条，含 F-1 的 vector_load_guild_info_uses_alive_set）
+$ cd mir2-rs && CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo test -p mir2-data --offline --no-fail-fast
+# 原始件：08-gate-test.txt（12/12 guild_store_vectors）
+
+## 4) 改坏必红（F-1 原实现：初始名单快照 known）
+#   guild.rs::load_guild_info 闭包 names.iter().any(..) -> known.contains(n)
+#   ⇒ vector_load_guild_info_uses_alive_set FAILED（left: 2 / right: 1，F-1 断言点名）rc=101
+#   还原（git checkout -- guild.rs，diff 无输出）⇒ 12/12 绿 rc=0
+# 原始件：03-redcheck-f1-alive-set.txt
+
+## 5) 四门禁（合并树 · 隔离 CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target · --offline）
+$ cargo fmt --all -- --check                                       # 06-gate-fmt.txt (rc=0)
+$ cargo clippy --workspace --all-targets --offline -- -D warnings   # 07-gate-clippy.txt (rc=0)
+$ cargo test --workspace --offline --no-fail-fast                   # 08-gate-test.txt (96 suites 982 passed 0 failed 21 ignored, rc=0)
+$ cargo run -p msgcodegen --offline -- --check                      # 09-gate-msgcodegen.txt (604, rc=0)

@@ -151,6 +151,20 @@ $Script:SiteAiC = 'M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427'
 $Script:SiteSpawnR = 'crates\world\src\mongen.rs:624'
 $Script:SiteAiR = 'crates\world\src\monai.rs:164'
 
+# 从 scenario JSON **解析成对象**、做一次字段级改写后另存 —— 构造 drift 样本时不再对原始文本做
+# 正则替换（M-1 sibling 收口：原实现用 `-replace '"construct"\s*:\s*"spawn"'` 之类匹配 JSON
+# 字面拼写，scenario 一旦重排格式 / 换引号风格，替换会空转 ⇒ drift-red 用例自曝 RED（fail-loud），
+# 掩盖「drift 构造本身失效」）。用 ConvertFrom-Json 定位字段 ⇒ 与文本格式无关。
+function New-RngDriftScenario {
+  param([Parameter(Mandatory = $true)][string]$Source, [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][scriptblock]$Mutate)
+  $sc = (Get-Content -LiteralPath $Source -Raw | ConvertFrom-Json)
+  & $Mutate $sc
+  $json = $sc | ConvertTo-Json -Depth 20
+  Write-M3LfText -Path $Path -Text $json
+  return $Path
+}
+
 # 场景件里 `trace.runner` / `artifact.runner` 引用的 PowerShell 参数名，必须都是**本脚本已声明**的参数
 # （M-1：`-PinScene` 曾只写在 scenario JSON、脚本未声明 ⇒ 照文档字面执行会在参数绑定阶段就报错，
 #  永远到不了 -Go 的 fail-closed 分支）。返回 @{ ok; tokens; missing; detail }，不抛异常、不写 stdout。
@@ -309,9 +323,9 @@ if ($SelfCheckNoStack) {
     $rp = Test-RngScenarioRunnerParams -Path $ScenarioFile
     Add-Result 'scenario-runner-params-declared' ($rp.ok) ($rp.detail)
     # 改坏必红：把 scenario 的 runner 文本塞一个未声明参数 ⇒ 必须点名该参数。
-    $badScen = Join-Path $tmpRoot 'scenario-runner-drift.json'
-    $rawScen = Get-Content -LiteralPath $ScenarioFile -Raw
-    Write-M3LfText -Path $badScen -Text ($rawScen -replace '-PinScene', '-PinScene -NotARealParam')
+    # 构造走 New-RngDriftScenario（JSON 字段改写），不再对原始文本做正则替换（M-1 sibling 收口）。
+    $badScen = New-RngDriftScenario -Source $ScenarioFile -Path (Join-Path $tmpRoot 'scenario-runner-drift.json') `
+      -Mutate { param($s) $s.trace.runner = ($s.trace.runner + ' -NotARealParam') }
     $rpBad = Test-RngScenarioRunnerParams -Path $badScen
     Add-Result 'scenario-runner-param-drift-red' ((-not $rpBad.ok) -and ($rpBad.missing -contains 'NotARealParam')) `
       ("missing=" + ($rpBad.missing -join ','))
@@ -322,18 +336,29 @@ if ($SelfCheckNoStack) {
     $scRc = Invoke-RngSceneScenario -Scenario $ScenarioFile -Out ([ref]$scOut)
     Add-Result 'scenario-fold-group-consistency-green' (($scRc -eq 0) -and ($scOut -match 'VERDICT GREEN')) ("rc=$scRc")
     # 改坏必红 A：scenario 声明的 folded 映射与 FOLD_RULES 漂移 ⇒ 必红且点名 scenario-fold-matches-code。
-    $driftScen = Join-Path $tmpRoot 'scenario-fold-drift.json'
-    $rawScen2 = Get-Content -LiteralPath $ScenarioFile -Raw
-    Write-M3LfText -Path $driftScen -Text ($rawScen2 -replace '"construct"\s*:\s*"spawn"', '"construct": "monster_ai"')
+    # 构造走 New-RngDriftScenario（JSON 字段改写），不再对原始文本做正则替换（M-1 sibling 收口）。
+    $driftScen = New-RngDriftScenario -Source $ScenarioFile -Path (Join-Path $tmpRoot 'scenario-fold-drift.json') `
+      -Mutate { param($s) $s.trace.fold.construct = 'monster_ai' }
     $scOut2 = ''
     $scRc2 = Invoke-RngSceneScenario -Scenario $driftScen -Out ([ref]$scOut2)
     Add-Result 'scenario-fold-drift-red' (($scRc2 -eq 1) -and ($scOut2 -match 'scenario-fold-matches-code')) ("rc=$scRc2")
     # 改坏必红 B：groups_expected 塞入账本未知组 ⇒ 必红且点名 scenario-groups-known。
-    $grpScen = Join-Path $tmpRoot 'scenario-groups-unknown.json'
-    Write-M3LfText -Path $grpScen -Text ($rawScen2 -replace '("groups_expected"\s*:\s*\[)', '$1"no_such_group", ')
+    $grpScen = New-RngDriftScenario -Source $ScenarioFile -Path (Join-Path $tmpRoot 'scenario-groups-unknown.json') `
+      -Mutate { param($s) $s.trace.groups_expected = @($s.trace.groups_expected) + 'no_such_group' }
     $scOut3 = ''
     $scRc3 = Invoke-RngSceneScenario -Scenario $grpScen -Out ([ref]$scOut3)
     Add-Result 'scenario-groups-unknown-red' (($scRc3 -eq 1) -and ($scOut3 -match 'scenario-groups-known')) ("rc=$scRc3")
+
+    # ⑰ M-1 sibling 收口：三条 drift 样本均由 New-RngDriftScenario 以 **JSON 字段改写**构造
+    #    （不再对原始文本做正则替换）⇒ 样本必须是合法 JSON 且与源 scenario 结构不同；
+    #    构造一旦空转（样本 == 源、drift 用例其实没漂移）⇒ 必红。
+    $badBack = (Get-Content -LiteralPath $badScen -Raw | ConvertFrom-Json)
+    $driftBack = (Get-Content -LiteralPath $driftScen -Raw | ConvertFrom-Json)
+    $grpBack = (Get-Content -LiteralPath $grpScen -Raw | ConvertFrom-Json)
+    $driftNativeOk = ($badBack.trace.runner -match '-NotARealParam') -and
+                     ($driftBack.trace.fold.construct -ne $sc.trace.fold.construct) -and
+                     (@($grpBack.trace.groups_expected) -contains 'no_such_group')
+    Add-Result 'scenario-drift-samples-json-native' $driftNativeOk 'runner/fold/groups drift 样本均为 JSON 字段改写且与源不同'
 
     # ⑯ 本脚本从未触碰端口（自检/门/比较全离线）
     Add-Result 'no-port-touched' (-not $script:RngSceneTouchedPorts) 'offline-only'

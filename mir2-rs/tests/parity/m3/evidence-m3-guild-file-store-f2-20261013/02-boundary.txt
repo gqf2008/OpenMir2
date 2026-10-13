@@ -1,0 +1,5 @@
+# 边界（base = 0f9fe9997a4ed717ee1361bfb2134329fd04472a，head = 144ee7b4e06f5f617f960fda19100b3291f80669）
+$ git diff --name-only 0f9fe9997a4ed717ee1361bfb2134329fd04472a 144ee7b4e06f5f617f960fda19100b3291f80669 -- src sql MirClient
+(空 = oracle 冻结面零改动)
+$ git diff --name-only 0f9fe9997a4ed717ee1361bfb2134329fd04472a 144ee7b4e06f5f617f960fda19100b3291f80669 -- mir2-rs/bins
+(空 = 未动 bins/game-svr)

@@ -1,0 +1,40 @@
+# 证据：M3 RNG 站点组 —— 无栈自检 scenario drift 构造改走 JSON 字段改写（M-1 sibling 登记 Minor 收口）
+# 卡：openmir2-m3-rng-trace-scene-groups（issue d9d03f47）
+# 车道 m3bag / principal openmir2-worker-4 / 分支 worktree-m3-rng-trace-scene-groups
+# base = master 0f9fe9997（本片最终 head oid 见线程 patch 条目）
+# 写集 = mir2-rs/tests/parity/m3/**；零 .rs / 零 crates / 零 bins / 零 src / 零 sql / 零 MirClient
+# 环境：Windows / Git Bash；cwd = <worktree>/mir2-rs/tests/parity/m3（四门禁 cwd = <worktree>/mir2-rs）
+# 编译隔离：CARGO_TARGET_DIR=E:/tmp/m3bag-target；全部 --offline；未起栈、未占端口（仅共享 3306 在听）
+
+## 一、无栈自检（离线，零端口）
+powershell -NoProfile -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 -SelfCheckNoStack
+                                                                 # 见 01-selftest-nostack-green.txt（18/18，改前 17/17）
+
+## 二、改坏必红（把 New-RngDriftScenario 的字段改写调用注释掉 ⇒ 样本不再漂移）
+# 复现：在 run_rng_trace_pair.ps1 的 New-RngDriftScenario 里把 `& $Mutate $sc` 注释成
+#       `# MUTATION-RC: & $Mutate $sc`，再跑 -SelfCheckNoStack ⇒ 4 项 RED（3 条 drift-red + 新增牙）
+python -I -B rng-trace-scene/rng_scene_gate.py selftest          # 见 03-selftest-scene-gate.txt（16/16）
+python -I -B rng-trace-probe/rng_ledger_diff.py selftest         # 见 05-selftest-rng-ledger-diff.txt（32/32）
+python -I -B attack_rng_ledger.py selftest                       # 见 06-selftest-attack-rng-ledger.txt（32/32）
+
+## 三、scenario 件自身（离线；锁住已入库 rng_trace_scenario.json 与代码真源同口径）
+python -I -B rng-trace-scene/rng_scene_gate.py scenario --scenario rng-trace-scene/rng_trace_scenario.json
+                                                                 # 见 04-scenario-mode-green.txt（VERDICT GREEN）
+
+## 四、四门禁（cwd = <worktree>/mir2-rs；CARGO_TARGET_DIR=E:/tmp/m3bag-target；--offline）
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --offline -- -D warnings
+cargo test --workspace --offline --no-fail-fast
+cargo run -q --offline -p msgcodegen -- --check
+                                                                 # 读数见 07-gates-four.txt
+
+## 五、边界
+git diff --cached --name-status 0f9fe9997
+git diff --cached --name-only 0f9fe9997 -- src sql MirClient mir2-rs/crates mir2-rs/bins
+git diff --cached 0f9fe9997 -- mir2-rs/tests/parity/m3/rng-trace-scene
+                                                                 # 见 08-boundary.txt / 09-diff-source.txt
+
+## 六、未做 / 边界
+# 真机同场景含怪两相 trace + groupdiff --fold --strict 仍需 owner 独占窗口 + 生产者驱动承接卡
+# （real-run 对 -Go/-PinScene 一律 fail-closed exit 2）；本片纯离线、零端口、未起栈。本片只收口
+# 评审登记的**非阻塞 Minor**（drift 构造的正则文本替换 → JSON 字段改写），不改判据口径。
