@@ -7,7 +7,7 @@
 > `Messages.cs:62` 而通过覆盖面。与既有 ⑧/⑨/⑩ 四锚门同口径，本片未引入；读侧 token 仍钉冻结行，风险低。
 
 采集环境：worktree `.claude/worktrees/m3cs`，branch `worktree-m3-anchor-prefix-gate`，
-base `origin/master` = `7df340fe7`（⑧/⑨/⑩ 全部夹具族已合入）。**零起栈、零占端口。**
+base `origin/master` = `083dc1d6d`（⑧/⑨/⑩ 全部夹具族已合入，且已合并 client-e2e 片㉕）。**零起栈、零占端口。**
 
 ## 改了什么（全部在 `mir2-rs/tests/parity/**`，零 `.rs`）
 

@@ -1,3 +1,3 @@
 $ cargo clippy --workspace --all-targets --offline -- -D warnings
 rc=0
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.35s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.54s

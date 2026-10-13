@@ -1,4 +1,4 @@
-$ git diff mir2-rs/tests/parity/whitelist.md
+$ git diff origin/master -- mir2-rs/tests/parity/whitelist.md
 diff --git a/mir2-rs/tests/parity/whitelist.md b/mir2-rs/tests/parity/whitelist.md
 index 888fb9941..896ba85b7 100644
 --- a/mir2-rs/tests/parity/whitelist.md
