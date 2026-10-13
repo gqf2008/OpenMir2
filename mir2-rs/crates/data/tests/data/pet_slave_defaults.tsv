@@ -1,0 +1,34 @@
+# 宝宝/召唤配置项默认值向量（oracle = GameSvrConf 构造函数初值）
+# 字段	默认值	oracle 锚（默认值 / 读取点；均在 src/ 内实测）
+# 采集方式：逐行读 src/Modules/SystemModule/Conf/Model/GameSvrConf.cs 的初值，
+#          读取点逐行核 src/Modules/SystemModule/Conf/ServerConf.cs。
+# 数组口径：RecallMigic 记为 nHumLevel:sMonName:nCount:nLevel（C# 初值 sMonName=null ⇒ 空串），
+#          多项以 ; 连接；标量数组以 , 连接。
+# 说明①：master_die_mutiny_speed 初值 5（GameSvrConf.cs:1743），但 ServerConf.cs:521 错读
+#          MasterDieMutinyPower 键 ⇒ 现网被读成 0（oracle 缺陷照搬）。
+# 说明②：mag_tamming_hp_rate 初值 100（GameSvrConf.cs:1776），读取键是 MagTammingTargetHPRate
+#          （ServerConf.cs:533，现网 Server.conf:784）。
+skeleton	变异骷髅	GameSvrConf.cs:1755 / ServerConf.cs:104 [Names] Skeleton
+skeleton_count	1	GameSvrConf.cs:1756 / ServerConf.cs:292 [Setup] SkeletonCount
+skeleton_array	0::0:0;0::0:0;0::0:0;0::0:0;0::0:0;0::0:0;0::0:0;0::0:0;0::0:0;0::0:0	GameSvrConf.cs:1757 new RecallMigic[10] / ServerConf.cs:293-298
+dragon	神兽	GameSvrConf.cs:1758 / ServerConf.cs:105 [Names] Dragon
+dragon1	神兽1	GameSvrConf.cs:1759 / ServerConf.cs:106 [Names] Dragon1
+dragon_count	1	GameSvrConf.cs:1760 / ServerConf.cs:300 [Setup] DragonCount
+dragon_array	0::0:0;0::0:0;0::0:0;0::0:0;0::0:0;0::0:0;0::0:0;0::0:0;0::0:0;0::0:0	GameSvrConf.cs:1761 new RecallMigic[10] / ServerConf.cs:301-306
+angel	精灵	GameSvrConf.cs:1762 / ServerConf.cs:107 [Names] Angel
+mon_up_lv_need_kill_base	100	GameSvrConf.cs:1325 / ServerConf.cs:119 [Setup] MonUpLvNeedKillBase
+mon_up_lv_rate	16	GameSvrConf.cs:1326 / ServerConf.cs:120 [Setup] MonUpLvRate
+mon_up_lv_need_kill_count	0,0,50,100,200,300,600,1200,2400,4800,9600,19200,38400,76800,153600	GameSvrConf.cs:1327 / ServerConf.cs:121-123
+slave_color	255,254,147,154,229,168,180,252,249,250,250,250,250,250,250	GameSvrConf.cs:1328 / ServerConf.cs:125-127
+spirit_mutiny	false	GameSvrConf.cs:1737 / ServerConf.cs:515 [Setup] SpiritMutiny
+spirit_mutiny_time	1800000	GameSvrConf.cs:1738 / ServerConf.cs:516 [Setup] SpiritMutinyTime
+master_die_mutiny	false	GameSvrConf.cs:1740 / ServerConf.cs:518 [Setup] MasterDieMutiny
+master_die_mutiny_rate	5	GameSvrConf.cs:1741 / ServerConf.cs:519 [Setup] MasterDieMutinyRate
+master_die_mutiny_power	10	GameSvrConf.cs:1742 / ServerConf.cs:520 [Setup] MasterDieMutinyPower
+master_die_mutiny_speed	5	GameSvrConf.cs:1743 / ServerConf.cs:521 [Setup] (BUG: reads MasterDieMutinyPower)
+bb_mon_auto_change_color	false	GameSvrConf.cs:1744 / ServerConf.cs:522 [Setup] BBMonAutoChangeColor
+bb_mon_auto_change_color_time	3000	GameSvrConf.cs:1745 / ServerConf.cs:523 [Setup] BBMonAutoChangeColorTime
+mag_tamming_level	50	GameSvrConf.cs:1774 / ServerConf.cs:531 [Setup] MagTammingLevel
+mag_tamming_target_level	10	GameSvrConf.cs:1775 / ServerConf.cs:532 [Setup] MagTammingTargetLevel
+mag_tamming_hp_rate	100	GameSvrConf.cs:1776 / ServerConf.cs:533 [Setup] (reads MagTammingTargetHPRate)
+mag_tamming_count	5	GameSvrConf.cs:1777 / ServerConf.cs:534 [Setup] MagTammingCount

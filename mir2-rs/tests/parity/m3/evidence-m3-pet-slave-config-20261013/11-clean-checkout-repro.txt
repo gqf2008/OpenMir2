@@ -1,0 +1,33 @@
+# evidence-m3-pet-slave-config-20261013 / 11-clean-checkout-repro.txt
+# 干净检出（git worktree add --detach E:/tmp/pet-verify origin/master = 5461c1b1），
+# 只复制本片 crates/data/** 变更（不改任何其它文件），跑 mir2-data 测试。
+# 目的：证明本片不依赖作者 worktree 的既有状态（无隐藏依赖 / 无缓存假绿）。
+$ git worktree add --detach E:/tmp/pet-verify origin/master
+$ cp <本片 5 个文件> E:/tmp/pet-verify/...
+$ git -C E:/tmp/pet-verify status --porcelain
+ M mir2-rs/crates/data/src/lib.rs
+?? mir2-rs/crates/data/examples/dump_pet_slave.rs
+?? mir2-rs/crates/data/src/pet_slave.rs
+?? mir2-rs/crates/data/tests/data/pet_slave_defaults.tsv
+?? mir2-rs/crates/data/tests/pet_slave_config.rs
+
+$ CARGO_TARGET_DIR=E:/tmp/m3bag-pet-verify-target cargo test --offline -p mir2-data
+     Running unittests src\lib.rs (E:/tmp/m3bag-pet-verify-target\debug\deps\mir2_data-aab6798f5c2fe3d9.exe)
+test guild_castle::tests::castle_file_default_uses_read_castle_dir ... ok
+test guild_castle::tests::castle_name_len_is_never_read ... ok
+test guild_castle::tests::missing_keys_fall_back_to_game_svr_conf_defaults ... ok
+test guild_castle::tests::utf8_bom_server_conf_parses_deployed_values ... ok
+test guild_castle::tests::get_all_npc_tax_bool_forms ... ok
+test pet_slave::tests::byte_reads ... ok
+test pet_slave::tests::mag_tamming_hp_rate_reads_target_hp_rate_key ... ok
+test pet_slave::tests::arrays_read_per_index ... ok
+test pet_slave::tests::master_die_mutiny_speed_reads_power_key ... ok
+test pet_slave::tests::missing_keys_fall_back_to_game_svr_conf_defaults ... ok
+test pet_slave::tests::utf8_bom_deployed_values_are_parsed ... ok
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests\guild_castle_config.rs (E:/tmp/m3bag-pet-verify-target\debug\deps\guild_castle_config-3a8289a7e5fe188c.exe)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests\pet_slave_config.rs (E:/tmp/m3bag-pet-verify-target\debug\deps\pet_slave_config-5fd5543afb415bf6.exe)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+TEST_RC=0

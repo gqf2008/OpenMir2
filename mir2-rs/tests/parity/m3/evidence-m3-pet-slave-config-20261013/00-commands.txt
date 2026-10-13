@@ -1,0 +1,46 @@
+# evidence-m3-pet-slave-config-20261013 / 00-commands.txt
+# 本包所有命令（在 worktree .claude/worktrees/m3bag 内执行；隔离 target）
+# 环境：export CARGO_TARGET_DIR=E:/tmp/m3bag-pet-target ; cd mir2-rs
+
+# --- oracle 锚 ---
+grep -nE "Skeleton|Dragon|Angel|MonUpLv|SlaveColor|SpiritMutiny|MasterDieMutiny|BBMonAutoChangeColor|MagTamming" src/Modules/SystemModule/Conf/ServerConf.cs
+grep -nE "public .*(Skeleton|Dragon|Angel|MagTamming|SpiritMutiny|MasterDieMutiny|BBMonAutoChangeColor|MonUpLv|SlaveColor)" src/Modules/SystemModule/Conf/Model/GameSvrConf.cs
+grep -nE "ReadWriteByte|ReadWriteInteger|ReadWriteBool|ReadWriteString|Convert.ChangeType|WriteString|StreamReader|GetEncoding" src/OpenMir2/Common/ConfigFile.cs
+grep -n "SlaveMaxLevel" src/OpenMir2/Grobal2.cs
+grep -n "DwRoyaltySec" src/M2Server/Magic/MagicManager.cs
+grep -nE "public (int|string) n|struct RecallMigic" src/OpenMir2/Data/RecallMigic.cs
+
+# --- 单元/集成测试 ---
+cd mir2-rs
+cargo test --offline -p mir2-data
+cargo test --offline -p mir2-data --test pet_slave_config
+
+# --- 真读现网 Server.conf ---
+cargo run --offline -q -p mir2-data --example dump_pet_slave -- "E:/MirServer/M2GameSvr/Server.conf"
+
+# --- 改坏必红（三处）---
+cp crates/data/src/pet_slave.rs /tmp/pet_slave.rs.bak
+sed -i 's/skeleton: "变异骷髅".to_string(),/skeleton: "变异骷髅X".to_string(),/' crates/data/src/pet_slave.rs
+cargo test --offline -p mir2-data --test pet_slave_config                 # 期望 RED
+cp /tmp/pet_slave.rs.bak crates/data/src/pet_slave.rs
+# 变异 2：master_die_mutiny_speed 改读 MasterDieMutinySpeed 键（去 oracle 缺陷）
+# 变异 3：mag_tamming_hp_rate 改读 MagTammingHPRate 键（去 oracle 缺陷）
+cargo test --offline -p mir2-data --lib pet_slave                          # 期望 RED；还原后 GREEN
+
+# --- 干净检出复现 ---
+git worktree add --detach E:/tmp/pet-verify origin/master
+# 复制本片 5 个 crates/data 文件到 E:/tmp/pet-verify，然后：
+cd E:/tmp/pet-verify/mir2-rs && CARGO_TARGET_DIR=E:/tmp/m3bag-pet-verify-target cargo test --offline -p mir2-data
+git worktree remove E:/tmp/pet-verify --force
+
+# --- 四门禁（隔离 target，本 worktree）---
+cargo fmt --all -- --check
+cargo clippy --offline --workspace --all-targets -- -D warnings
+cargo test --offline --workspace --no-fail-fast
+cargo run --offline -q -p msgcodegen -- --check
+
+# --- 证据包 EOL / 清单 ---
+cd <repo root>
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-pet-slave-config-20261013
+python -I tools/evidence-hash/verify_sha256sums.py write mir2-rs/tests/parity/m3/evidence-m3-pet-slave-config-20261013
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/m3/evidence-m3-pet-slave-config-20261013

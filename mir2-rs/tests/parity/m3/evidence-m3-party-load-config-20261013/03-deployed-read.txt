@@ -1,0 +1,11 @@
+# dump_party 真读现网 E:/MirServer/M2GameSvr/Server.conf（UTF-8+BOM）
+
+$ cd mir2-rs && cargo run --offline -q -p mir2-data --example dump_party -- "E:/MirServer/M2GameSvr/Server.conf"
+PartyConfig {
+    group_members_max: 10,
+    try_deal_time: 3000,
+    deal_ok_time: 1000,
+    can_not_get_back_deal: true,
+    disable_deal: false,
+    lock_deal_action: false,
+}
