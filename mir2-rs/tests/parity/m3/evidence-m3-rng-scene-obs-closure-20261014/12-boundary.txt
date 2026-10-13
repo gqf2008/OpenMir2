@@ -1,6 +1,6 @@
-边界（base=origin/master=768b2bb6c4b81e774a80a2ad27fda0cccdb1a12c，head=8c38c0fcd3c20fca59fcc0055c86404a95b18e02）
+边界（base=768b2bb6c4b81e774a80a2ad27fda0cccdb1a12c = merge-base(origin/master, patch head)；code_head=8c38c0fcd3c20fca59fcc0055c86404a95b18e02；patch head = 本 pack 所在提交）
 ================================================================
-净差量路径数 = 23（全部应在 mir2-rs/tests/parity/m3/**）：
+净差量路径数 = 25（全部应在 mir2-rs/tests/parity/m3/**）：
   mir2-rs/tests/parity/m3/M3RNG场景DoD②组清单机判组必须真出现报告-20261013.md
   mir2-rs/tests/parity/m3/evidence-m3-rng-scene-obs-closure-20261014/00-commands.txt
   mir2-rs/tests/parity/m3/evidence-m3-rng-scene-obs-closure-20261014/01-observation-closures.md
@@ -16,7 +16,9 @@
   mir2-rs/tests/parity/m3/evidence-m3-rng-scene-obs-closure-20261014/11-gates-msgcodegen.txt
   mir2-rs/tests/parity/m3/evidence-m3-rng-scene-obs-closure-20261014/12-boundary.txt
   mir2-rs/tests/parity/m3/evidence-m3-rng-scene-obs-closure-20261014/13-base-advance.txt
+  mir2-rs/tests/parity/m3/evidence-m3-rng-scene-obs-closure-20261014/14-reviewer6-f1-fix.txt
   mir2-rs/tests/parity/m3/evidence-m3-rng-scene-obs-closure-20261014/README.md
+  mir2-rs/tests/parity/m3/evidence-m3-rng-scene-obs-closure-20261014/SHA256SUMS.txt
   mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-trace-seed-gate/10-mutation-a-gate-ignores-stream-seed.txt
   mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-trace-seed-gate/README.md
   mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-trace-seed-gate/SHA256SUMS.txt
@@ -28,5 +30,10 @@
 -- 冻结面（src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins）= ''
 -- *.rs 计数 = 0
 -- base 是 head 祖先？YES
+-- base == merge-base(origin/master, patch head)？YES（⇒ 相对声明 base 无「回退假差量」：
+   master 在本片 base 768b2bb6c 之后新增的 tests/parity/world/client-e2e-* 等不计入本片差量）
+-- 相对 origin/master **tip** 直接 diff 会含 master 侧新增件（那是 base 之后的 master 提交，不是本片删改）；
+   本卡/merge 车道按声明 base（= merge-base）核差量。
 -- head 是 origin/master 祖先（已合）？NO（新内容未合）
--- 回退假差量（旧 base 6afa37636 口径下 master 新增的 tests/parity/world/client-e2e-* 等）= 0（base 前进重交后已清除，见 13-base-advance.txt）
+-- 计数口径：原交付片（head 9a9d93e8b, base 6afa37636）= 23 路径；本 burst 追加 13-base-advance.txt /
+   14-reviewer6-f1-fix.txt ⇒ 25 路径。（上一版 12-boundary 误写 23 且漏列 SHA256SUMS.txt / 14，本次订正。）

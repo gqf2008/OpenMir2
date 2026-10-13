@@ -18,11 +18,11 @@ $ git rev-list --count 6afa376363d3378933d95c26c45cd8eb7c9738f3..768b2bb6c4b81e7
 $ git merge --no-edit origin/master
 Merge commit `8c38c0fcd3c20fca59fcc0055c86404a95b18e02`
   parents = `9a9d93e8b0b16c2858b92f00c8d553f4ed1ea650`（原交付头） + `768b2bb6c4b81e774a80a2ad27fda0cccdb1a12c`（master）
-  冲突：0（本片 23 个路径与 master 新增的 m3 文件**无交集**；`git merge-tree` 干净）
+  冲突：0（本片路径与 master 新增的 m3 文件**无交集**；`git merge-tree` 干净）
   ⇒ 本片内容（8 条代码/文档路径 + 15 条证据路径）逐字节不变；只是 base 前进。
 
 $ git diff --name-only origin/master HEAD
-净差量 = 23 路径，**全部在 `mir2-rs/tests/parity/m3/**`**；`*.rs` = 0；
+净差量 = 25 路径（原交付片 23 + 本 burst 新增 `13-base-advance.txt` / `14-reviewer6-f1-fix.txt`），**全部在 `mir2-rs/tests/parity/m3/**`**；`*.rs` = 0；
 冻结面（`src/ sql/ MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins`）= 空；
 无任何 master 侧「回退假差量」。逐路径清单见 `12-boundary.txt`。
 
@@ -49,6 +49,6 @@ $ python -I fixture_chain_gate.py check
 
 结论
 ----------------------------------------------------------------
-- 旧 base `6afa37636` 的 7 条回退假差量已清除；重交后 net 差量仍为 23 路径、全在 `mir2-rs/tests/parity/m3/**`。
+- 旧 base `6afa37636` 的 7 条回退假差量已清除（声明 base = merge-base = `768b2bb6c`）；重交后 net 差量 = 25 路径（原片 23 + 新增 2 证据件）、全在 `mir2-rs/tests/parity/m3/**`。
 - 内容未变，四条门禁与 37/37 无栈自检在新 base 上重跑全绿。
 - 卡级 R 真机 DoD 不变（承接卡 `openmir2-m3-rng-scene-driver` 未开 + owner 独占窗口）⇒ 卡保持 in-progress。

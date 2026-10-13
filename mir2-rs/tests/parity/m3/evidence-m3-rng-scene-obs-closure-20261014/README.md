@@ -20,7 +20,7 @@
 | `06-mutation-strength-repro.txt` | 改坏力度复现：弱 **21/22**（1 FAIL）/ 强 **20/22**（2 FAIL）/ 还原 **22/22** |
 | `07-offline-regression.txt` | 离线全链（8 个 selftest + `fixture_chain_gate check` GREEN） |
 | `08..11-gates-*.txt` | 四门禁：fmt rc=0 / clippy rc=0(`-D warnings`) / workspace test **101 suites 1200 passed 0 failed 22 ignored** / msgcodegen 604 rc=0 |
-| `12-boundary.txt` | 净差量 **23 路径**全在 `mir2-rs/tests/parity/m3/**`；`*.rs`=0；冻结面空；base 是 head 祖先；回退假差量 0 |
+| `12-boundary.txt` | 净差量 **25 路径**全在 `mir2-rs/tests/parity/m3/**`（原交付片 23 + 本 burst 新增 `13`/`14`）；`*.rs`=0；冻结面空；base == merge-base；相对声明 base 回退假差量 0 |
 | `13-base-advance.txt` | base 前进重交（`6afa37636` → `768b2bb6c`，merge `8c38c0fcd`）：清除 7 条回退假差量；四门禁 + 37/37 自检在新 base 重跑读数 |
 | `14-reviewer6-f1-fix.txt` | reviewer-6 F-1 收口：`trace-seed-gate/SHA256SUMS.txt` 第 14 行 README.md 陈留旧 hash ⇒ 重算后 verify **GREEN 14/14**；O-1（code_head/evidence_head 拆分）/ O-2 处置 |
 | `SHA256SUMS.txt` | 仓库 LF/git-blob 口径 |
