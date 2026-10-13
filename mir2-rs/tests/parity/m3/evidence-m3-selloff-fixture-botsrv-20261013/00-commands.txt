@@ -1,0 +1,20 @@
+# M3⑩ 元宝寄售动作序列夹具骨架 —— 命令（全部在本 worktree，未起栈/未占端口）
+# worktree: .claude/worktrees/m3cs   branch: worktree-m3-selloff-fixture-botsrv   base: d29d017b(⑦-5 head)
+python -I mir2-rs/tests/parity/m3/selloff_diff.py selftest
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_selloff_pair.ps1 -SelfCheckNoStack
+./src/BotSrv/bin/Release/BotSrv.exe --selftest-selloff
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/botload/run_bots.ps1 -SelfCheckNoStack
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/selftest_gate.ps1
+# 回归（共享件）
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_bag_equip_pair.ps1 -SelfCheckNoStack
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_npc_shop_pair.ps1 -SelfCheckNoStack
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_quest_pair.ps1 -SelfCheckNoStack
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_party_trade_pair.ps1 -SelfCheckNoStack
+# 外部改坏（比较器）
+cp mir2-rs/tests/parity/m3/selloff_diff.py E:/tmp/m3cs-so/selloff_diff_broken.py  # 去掉 compare() 里的 "branch"
+python -I E:/tmp/m3cs-so/selloff_diff_broken.py selftest   # 期望 rc=1（mutate-branch-red FAIL）
+# 四门禁（cwd=mir2-rs，CARGO_TARGET_DIR=E:/tmp/m3cs-so-target，--offline）
+cargo fmt --all -- --check
+cargo clippy --offline --workspace --all-targets -- -D warnings
+cargo test --offline --workspace
+cargo run --offline -q -p msgcodegen -- --check

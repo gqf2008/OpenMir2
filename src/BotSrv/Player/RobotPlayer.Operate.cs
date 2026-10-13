@@ -258,6 +258,8 @@ namespace BotSrv.Player
             QuestOnServerMessage(msg.Ident, msg.Recog, msg.Param, msg.Tag, msg.Series, body);
             // M3⑦ 组队/交易夹具单一收包钩子（T-43 家族扩展）：`g_boPairTradeSequence` 关时是空操作。
             PairTradeOnServerMessage(msg.Ident, msg.Recog, msg.Param, msg.Tag, msg.Series, body);
+            // M3⑩ 元宝寄售夹具单一收包钩子（T-44 家族扩展）：`g_boSellOffSequence` 关时是空操作。
+            SellOffOnServerMessage(msg.Ident, msg.Recog, msg.Param, msg.Tag, msg.Series, body);
             string body2;
             switch (msg.Ident)
             {
