@@ -509,6 +509,18 @@ async fn main() -> Result<()> {
                     },
                     loader: Some(envir_loader),
                     script_goto_count_limit: cfg.script_goto_count_limit,
+                    trade: game_svr::trade::DealConfig {
+                        try_deal_time: cfg.try_deal_time,
+                        deal_ok_time: cfg.deal_ok_time,
+                        can_not_get_back_deal: cfg.can_not_get_back_deal,
+                        disable_deal: cfg.disable_deal,
+                        human_max_gold: cfg.human_max_gold,
+                        green_f_color: cfg.green_msg_f_color,
+                        green_b_color: cfg.green_msg_b_color,
+                        red_f_color: cfg.red_msg_f_color,
+                        red_b_color: cfg.red_msg_b_color,
+                        ..game_svr::trade::DealConfig::default()
+                    },
                 },
                 notice,
                 colors,
@@ -737,6 +749,7 @@ fn handle_ground_cmd(
     tail: Option<&str>,
     chr_name: &str,
     socket: i32,
+    dealing: bool,
     world: &mir2_world::World,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     online: &OnlineRegistry,
@@ -796,8 +809,8 @@ fn handle_ground_cmd(
             curr_x: cx,
             curr_y: cy,
             now_tick,
-            // `Dealing` 本接缝未建模（无交易系统）⇒ false（登记）。
-            dealing: false,
+            // `Dealing`（M3⑦-实现 3）：交易中禁拾取（`PlayObject.Base.cs:57`）。
+            dealing,
             floor_item_can_pick_up_time: cfg.floor_item_can_pick_up_time,
             human_max_gold: cfg.human_max_gold,
             // `Race == ActorRace.Play`（`SendAddItem` 仅在玩家时发）⇒ 恒真（本宿主只收玩家）。
@@ -847,6 +860,308 @@ fn handle_ground_cmd(
     if let Some(tx) = route_to_gate(gates, gate_idx, socket, "拾取/丢弃回帧") {
         for body in bodies {
             let _ = tx.send(SimToGate::SendFrame { socket, body });
+        }
+    }
+}
+
+/// `BaseObject.GetPoseCreate()`（`src/M2Server/Actor/BaseObject.cs:1253-1263`）：
+/// `GetFrontPosition()` 命中 ⇒ `Envir.GetMovingObject(nX, nY, true)`，即**前方格**首个
+/// `!Ghost && !Death` 的对象。朝向取展示表（`crates/world` 的 `Entity` 无 `dir`），缺省 `0`。
+fn pose_create(
+    world: &mir2_world::World,
+    displays: &downlink::DisplayTable,
+    actor_id: i32,
+) -> Option<i32> {
+    let e = world.entities.get(actor_id)?;
+    let dir = displays.get(actor_id).map_or(0, |d| d.dir);
+    let (width, height) = world
+        .maps
+        .get(e.map_id)
+        .map_or((0, 0), |m| (m.width, m.height));
+    let (fx, fy) = game_svr::attackwire::front_position(dir, e.x, e.y, width, height);
+    if (fx, fy) == (e.x, e.y) {
+        return None;
+    }
+    front_target(world, actor_id, e.map_id, fx, fy)
+}
+
+/// `poseObject.Race == ActorRace.Play`（`PlayObject.Operate.cs:933`）。
+fn is_play_actor(world: &mir2_world::World, id: i32) -> bool {
+    world
+        .entities
+        .get(id)
+        .is_some_and(|e| e.race == mir2_world::ACTOR_RACE_PLAY)
+}
+
+/// `CM_DEALTRY/ADDITEM/DELITEM/CANCEL/CHGGOLD/END` 的派发（M3⑦-实现 3）。
+///
+/// 口径：纯状态机在 [`game_svr::trade`]；本函数只负责「找会话 → 解析 `GetPoseCreate()` →
+/// 取出双方会话态 → 调用 → 回写 → 逐帧按 `[GateIdx, Socket]` 路由」。
+///
+/// **入帧映射**（`WorldServer.ProcessUserMessage` 的 `default`/显式支，`WorldServer.cs:820`）：
+/// `nParam1 = defMsg.Recog` ⇒ `CM_DEALADDITEM/DELITEM` 的 `nItemIdx`、`CM_DEALCHGGOLD` 的 `nGold`
+/// 都取 **`recog`**（32 位）；`Msg` = 尾。`CM_DEALTRY` 的名字参数 oracle **不用**
+/// （`ClientDealTry` 内部走 `GetPoseCreate()`），本函数同理只传目标判定。
+#[allow(clippy::too_many_arguments)]
+fn handle_deal_cmd(
+    ident: u16,
+    recog: i32,
+    tail: Option<&str>,
+    chr_name: &str,
+    socket: i32,
+    online: &OnlineRegistry,
+    world: &mir2_world::World,
+    displays: &downlink::DisplayTable,
+    ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+    trade_sessions: &mut std::collections::HashMap<String, game_svr::trade::DealState>,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    cfg: &game_svr::trade::DealConfig,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+) {
+    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
+        glog!(
+            "WRN",
+            "交易命令：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃 ident={ident}"
+        );
+        return;
+    };
+    let actor_id = entry.actor_id;
+    if ground_sessions.get(chr_name).is_none() {
+        glog!(
+            "WRN",
+            "交易命令：ChrName={chr_name} 无会话态（未进世界/已断线）⇒ 丢弃 ident={ident}"
+        );
+        return;
+    }
+    let now = world.clock_ms;
+
+    // 目标解析：`CM_DEALTRY` 用 `GetPoseCreate()`，其余命令用已建立的 `DealCreat`。
+    let pose_id = pose_create(world, displays, actor_id);
+    let (other_id, try_target) = if ident == mir2_protocol::messages::CM_DEALTRY {
+        match pose_id
+            .filter(|id| *id != actor_id)
+            .filter(|id| is_play_actor(world, *id))
+        {
+            None => (None, game_svr::trade::DealTryTarget::NotPlayer),
+            Some(oid) => {
+                let faces_me = pose_create(world, displays, oid) == Some(actor_id);
+                (
+                    Some(oid),
+                    game_svr::trade::DealTryTarget::Other { faces_me },
+                )
+            }
+        }
+    } else {
+        (
+            trade_sessions.get(chr_name).and_then(|s| s.deal_creature),
+            game_svr::trade::DealTryTarget::Other { faces_me: false },
+        )
+    };
+    let other_chr = other_id.and_then(|oid| {
+        online
+            .iter()
+            .find(|e| e.actor_id == oid)
+            .map(|e| e.chr_name.clone())
+    });
+    let other_is_pose = other_id.is_some() && pose_id == other_id;
+
+    // 双方会话态取出（对手缺席 ⇒ 用哑元；`trade` 的每个操作都先查本侧 `DealCreat` 门）。
+    let mut me_sg = ground_sessions.remove(chr_name).expect("上面已确认存在");
+    let mut me_tr = trade_sessions.remove(chr_name).unwrap_or_default();
+    let mut other_sg = other_chr.as_ref().and_then(|c| ground_sessions.remove(c));
+    let mut other_tr = other_chr.as_ref().and_then(|c| trade_sessions.remove(c));
+    let mut dummy_ground = game_svr::ground::GroundState {
+        item_list: Vec::new(),
+        gold: 0,
+        wabil: game_svr::ability::Ability::default(),
+    };
+    let mut dummy_tr = game_svr::trade::DealState::default();
+    let other_name = other_chr.clone().unwrap_or_default();
+
+    let events = {
+        let (other_items, other_gold) = match other_sg.as_mut() {
+            Some(sg) => (&mut sg.state.item_list, &mut sg.state.gold),
+            None => (&mut dummy_ground.item_list, &mut dummy_ground.gold),
+        };
+        let other_tr_ref = other_tr.as_mut().unwrap_or(&mut dummy_tr);
+        let mut me = game_svr::trade::DealSide {
+            id: actor_id,
+            name: chr_name.to_string(),
+            items: &mut me_sg.state.item_list,
+            gold: &mut me_sg.state.gold,
+            gold_max: cfg.human_max_gold,
+            state: &mut me_tr,
+        };
+        let mut ot = game_svr::trade::DealSide {
+            id: other_id.unwrap_or(0),
+            name: other_name.clone(),
+            items: other_items,
+            gold: other_gold,
+            gold_max: cfg.human_max_gold,
+            state: other_tr_ref,
+        };
+        match ident {
+            mir2_protocol::messages::CM_DEALTRY => {
+                game_svr::trade::deal_try(&mut me, &mut ot, cfg, now, try_target)
+            }
+            mir2_protocol::messages::CM_DEALADDITEM => game_svr::trade::deal_add_item(
+                &mut me,
+                &mut ot,
+                cfg,
+                catalog,
+                recog,
+                tail.unwrap_or(""),
+                now,
+            ),
+            mir2_protocol::messages::CM_DEALDELITEM => game_svr::trade::deal_del_item(
+                &mut me,
+                &mut ot,
+                cfg,
+                catalog,
+                recog,
+                tail.unwrap_or(""),
+                now,
+            ),
+            mir2_protocol::messages::CM_DEALCANCEL => {
+                game_svr::trade::deal_cancel(&mut me, &mut ot, cfg, now)
+            }
+            mir2_protocol::messages::CM_DEALCHGGOLD => {
+                game_svr::trade::deal_change_gold(&mut me, &mut ot, cfg, recog, now, other_is_pose)
+            }
+            mir2_protocol::messages::CM_DEALEND => {
+                game_svr::trade::deal_end(&mut me, &mut ot, cfg, now)
+            }
+            _ => Vec::new(),
+        }
+    };
+
+    // 回写（对手缺席时 `other_sg`/`other_tr` 为 `None` ⇒ 不写）。
+    ground_sessions.insert(chr_name.to_string(), me_sg);
+    trade_sessions.insert(chr_name.to_string(), me_tr);
+    if let (Some(c), Some(sg)) = (other_chr.clone(), other_sg) {
+        ground_sessions.insert(c, sg);
+    }
+    if let (Some(c), Some(tr)) = (other_chr.clone(), other_tr) {
+        trade_sessions.insert(c, tr);
+    }
+
+    // 编码 + 逐帧按目标自己的 `[GateIdx, Socket]` 路由。
+    let wire_of = |tid: i32| -> game_svr::trade::DealWire {
+        let sg = online
+            .iter()
+            .find(|e| e.actor_id == tid)
+            .and_then(|e| ground_sessions.get(&e.chr_name));
+        match sg {
+            Some(sg) => game_svr::trade::DealWire {
+                actor_id: tid,
+                gold: sg.state.gold,
+                game_gold: sg.game_gold,
+                wabil: sg.state.wabil.clone(),
+            },
+            None => game_svr::trade::DealWire {
+                actor_id: tid,
+                gold: 0,
+                game_gold: 0,
+                wabil: game_svr::ability::Ability::default(),
+            },
+        }
+    };
+    for ev in &events {
+        let Some((target, body)) = game_svr::trade::deal_event_body(ev, catalog, &wire_of) else {
+            continue;
+        };
+        let Some(t) = online.iter().find(|e| e.actor_id == target) else {
+            glog!(
+                "DBG",
+                "交易回帧：目标 ActorId={target} 不在在线登记表 ⇒ 丢弃"
+            );
+            continue;
+        };
+        if let Some(tx) = route_to_gate(gates, t.gate_idx, t.socket, "交易回帧") {
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: t.socket,
+                body,
+            });
+        }
+    }
+}
+
+/// 交易中断取消（掉线 `DealCancelA` / `Run()` 每 tick 的 `DealCancel`）：
+/// 走 [`handle_deal_cmd`] 的 `CM_DEALCANCEL` 支（`deal_cancel` 递归取消双方）。
+#[allow(clippy::too_many_arguments)]
+fn deal_cancel_between(
+    chr_name: &str,
+    online: &OnlineRegistry,
+    world: &mir2_world::World,
+    displays: &downlink::DisplayTable,
+    ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+    trade_sessions: &mut std::collections::HashMap<String, game_svr::trade::DealState>,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    cfg: &game_svr::trade::DealConfig,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+) {
+    handle_deal_cmd(
+        mir2_protocol::messages::CM_DEALCANCEL,
+        0,
+        None,
+        chr_name,
+        0,
+        online,
+        world,
+        displays,
+        ground_sessions,
+        trade_sessions,
+        gates,
+        cfg,
+        catalog,
+    );
+}
+
+/// `PlayObject.Run()` 每 tick 的交易自动取消（`PlayObject.Message.cs:30-36`）：
+/// `Dealing` 且（`GetPoseCreate() != DealCreat` 或 `DealCreat == this` 或 `DealCreat == null`）
+/// ⇒ `DealCancel()`。遍历前先按 `ChrName` 排序（确定性；`HashMap` 迭代序不是契约）。
+#[allow(clippy::too_many_arguments)]
+fn drain_deal_tick(
+    world: &mir2_world::World,
+    displays: &downlink::DisplayTable,
+    online: &OnlineRegistry,
+    ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+    trade_sessions: &mut std::collections::HashMap<String, game_svr::trade::DealState>,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    cfg: &game_svr::trade::DealConfig,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+) {
+    let mut names: Vec<String> = trade_sessions
+        .iter()
+        .filter(|(_, s)| s.dealing)
+        .map(|(c, _)| c.clone())
+        .collect();
+    names.sort();
+    for chr in names {
+        if !trade_sessions.get(&chr).is_some_and(|s| s.dealing) {
+            continue;
+        }
+        let Some(entry) = online.iter().find(|e| e.chr_name == chr) else {
+            // 不在世界（已掉线）⇒ 由掉线路径的 `DealCancelA` 收口。
+            continue;
+        };
+        let me_id = entry.actor_id;
+        let pose = pose_create(world, displays, me_id);
+        let deal_creature = trade_sessions.get(&chr).and_then(|s| s.deal_creature);
+        let doomed =
+            deal_creature.is_none() || deal_creature == Some(me_id) || pose != deal_creature;
+        if doomed {
+            deal_cancel_between(
+                &chr,
+                online,
+                world,
+                displays,
+                ground_sessions,
+                trade_sessions,
+                gates,
+                cfg,
+                catalog,
+            );
         }
     }
 }
@@ -3795,6 +4110,9 @@ struct EnterConfig {
     /// **M3⑥-实现 3 第②片**：`[Setup] ScriptGotoCountLimit`（缺省 30；见 [`config::GateConfig`]）——
     /// `NpcHost` 装载时注入 `ScriptNpc::script_goto_count_limit`（`ScriptEngine.cs:629`）。
     script_goto_count_limit: i32,
+    /// **M3⑦-实现 3**：交易状态机的 `[Setup]` 配置（`TryDealTime`/`DealOKTime`/
+    /// `CanNotGetBackDeal`/`DisableDeal` + `HumanMaxGold` + 颜色）。
+    trade: game_svr::trade::DealConfig,
 }
 
 /// MonGen 刷怪启动输入（[`game_svr::mongen`]）。
@@ -4085,6 +4403,10 @@ fn sim_loop(
     // 商店会话态（`PlayObject.ScriptLable`）：`CM_MERCHANTDLGSELECT` 写入、断线/小退移除。
     let mut shop_sessions: std::collections::HashMap<String, ShopSession> =
         std::collections::HashMap::new();
+    // `M3⑦-实现 3`：交易会话态（按 `ChrName` 键；与 `ground_sessions` 同生命周期，
+    // 交易栏 `DealItemList`/`DealGolds` 从这里读写；掉线/每 tick 取消见 [`deal_cancel_between`]。
+    let mut trade_sessions: std::collections::HashMap<String, game_svr::trade::DealState> =
+        std::collections::HashMap::new();
     // 存档用：登入时留下的原始记录 + 进图逻辑名（断线/`MakeGhost` 时合成存档请求）。
     let mut saves: std::collections::HashMap<String, SavedHuman> = std::collections::HashMap::new();
     glog!(
@@ -4150,6 +4472,8 @@ fn sim_loop(
                             tail.as_deref(),
                             &chr_name,
                             socket,
+                            // `PlayObject.Dealing`（M3⑦-实现 3）：交易中禁拾取/禁丢弃。
+                            trade_sessions.get(&chr_name).is_some_and(|s| s.dealing),
                             &world,
                             &mut ground_sessions,
                             &online,
@@ -4158,6 +4482,32 @@ fn sim_loop(
                             &colors,
                             &enter_cfg.catalog,
                             registry.as_ref(),
+                        );
+                    } else if matches!(
+                        cmd.ident,
+                        mir2_protocol::messages::CM_DEALTRY
+                            | mir2_protocol::messages::CM_DEALADDITEM
+                            | mir2_protocol::messages::CM_DEALDELITEM
+                            | mir2_protocol::messages::CM_DEALCANCEL
+                            | mir2_protocol::messages::CM_DEALCHGGOLD
+                            | mir2_protocol::messages::CM_DEALEND
+                    ) {
+                        // `openmir2-m3-party-trade-state`：`CM_DEAL*` 派发
+                        // （oracle `PlayObject.Message.cs:946-960`）。
+                        handle_deal_cmd(
+                            cmd.ident,
+                            cmd.recog,
+                            tail.as_deref(),
+                            &chr_name,
+                            socket,
+                            &online,
+                            &world,
+                            &displays,
+                            &mut ground_sessions,
+                            &mut trade_sessions,
+                            &gates,
+                            &enter_cfg.trade,
+                            &enter_cfg.catalog,
                         );
                     } else if cmd.ident == game_svr::bag::CM_TAKEONITEM
                         || cmd.ident == game_svr::bag::CM_TAKEOFFITEM
@@ -4318,6 +4668,19 @@ fn sim_loop(
                         );
                     } else {
                         kick_pending.retain(|n| n != &chr_name);
+                        // M3⑦-实现 3：断线中断交易（oracle `DealCancelA`，`WorldServer.cs:712`）——
+                        // 须在 `online_take`/存档之前，交易栏物品退回本侧背包后再存档。
+                        deal_cancel_between(
+                            &chr_name,
+                            &online,
+                            &world,
+                            &displays,
+                            &mut ground_sessions,
+                            &mut trade_sessions,
+                            &gates,
+                            &enter_cfg.trade,
+                            &enter_cfg.catalog,
+                        );
                         online_take(&mut online, &chr_name);
                         // 存档：oracle `CloseUser` 后的 `MakeGhost()` 里调 `SaveHumanRcd`
                         //（`WorldServer.cs:1077`）——必须在摘世界/移除会话态前拿实时态。
@@ -5081,6 +5444,35 @@ fn sim_loop(
         }
         // 踢旧落地（oracle `RunNotice` 的 `BoKickFlag` 支）：oracle 是"置标志 → 下一 tick 的
         // RunNotice 落地"（≥1 tick）；本骨架在事件 drain 之后的**同一 tick 后段**落地，帧序不变。
+        //
+        // M3⑦-实现 3：掉线/顶号中断交易（oracle `DealCancelA`，`WorldServer.cs:712`）——
+        // 必须在 `drain_*` 移除会话/存档之前跑，否则交易栏物品会随会话丢弃。
+        for chr in kick_pending.clone() {
+            deal_cancel_between(
+                &chr,
+                &online,
+                &world,
+                &displays,
+                &mut ground_sessions,
+                &mut trade_sessions,
+                &gates,
+                &enter_cfg.trade,
+                &enter_cfg.catalog,
+            );
+        }
+        for chr in soft_close_pending.clone() {
+            deal_cancel_between(
+                &chr,
+                &online,
+                &world,
+                &displays,
+                &mut ground_sessions,
+                &mut trade_sessions,
+                &gates,
+                &enter_cfg.trade,
+                &enter_cfg.catalog,
+            );
+        }
         drain_kicks(
             &mut world,
             &gates,
@@ -5122,6 +5514,18 @@ fn sim_loop(
         }
         let rec = world.tick();
         ticks += 1;
+        // `PlayObject.Run()` 每 tick 的交易自动取消（`PlayObject.Message.cs:30-36`）——
+        // `Dealing` 但 `GetPoseCreate() != DealCreat` / `DealCreat == this` / `DealCreat == null`。
+        drain_deal_tick(
+            &world,
+            &displays,
+            &online,
+            &mut ground_sessions,
+            &mut trade_sessions,
+            &gates,
+            &enter_cfg.trade,
+            &enter_cfg.catalog,
+        );
         // T-28：周期恢复 tick（oracle `PlayObject.Run` 的 `:70-141`）——同一 world tick 后处理，
         // 把 `IncHealth/IncSpell/IncHealing` 按 oracle 节奏消费回 `WAbil.HP/MP` 并回帧。
         // F-1：本 tick 进升级块的获得者集合 ⇒ 其恢复段的 53 被升级段的 53 取代（`SendUpdateMsg` 去重）。
@@ -7112,6 +7516,7 @@ mod tests {
             None,
             "hero",
             901,
+            false,
             &world,
             &mut sessions,
             &online,
@@ -7139,6 +7544,7 @@ mod tests {
             None,
             "hero",
             901,
+            false,
             &world,
             &mut sessions,
             &online,

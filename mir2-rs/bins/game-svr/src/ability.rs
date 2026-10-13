@@ -90,7 +90,7 @@ use crate::feature;
 /// 定义在 **lib** 侧（不是 `record.rs`）：`ability.rs` 要产出它，而 `record.rs` 是 bin 模块。
 /// `record.rs` 用 `pub use game_svr::ability::Ability;` 复用同一类型（线缆编解码仍留在 bin，
 /// 因为它依赖那里的 `Reader`/`Writer`）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Ability {
     pub level: u8,
     pub reserved1: u8,
