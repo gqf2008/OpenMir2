@@ -1,0 +1,7 @@
+== 04 EOL 门（交付侧，对刚写出的件；含 04 自身与 SHA256SUMS.txt） ==
+命令: python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-quest-persist-delta-bite-20261013
+EOLCHECK GREEN 15/15 件文本证据与仓库口径（LF）在 EOL 上一致
+rc=0
+
+（口径：mir2-rs/.gitattributes `*.txt/*.md/*.json text eol=lf`；清单 SHA256SUMS.txt 按仓库字节
+（Git blob，LF 归一）记，见 tools/evidence-hash/README.md。）
