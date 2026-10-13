@@ -51,7 +51,7 @@ e1e2250c446a547e05961b4abfb9431e7d471b03fcdc578738676120c293a620 *56-before-afte
 389c6283af58ea1adb120f1ace98f5d5e7290e4051fa56e1e685ede388c95baf *capture-client-viewrange12-seed42.jsonl
 678fe940982729f025999afc633f7dc18c0d4f02a92a4b2442354f5d335f8bed *capture-client-viewrange5-seed42.jsonl
 f5d84977ec9b2b6bc313560e82c23a59fece5a1dd4522750e51470d82dfa326e *60-client-run-blocker-finding.txt
-63fb215538d0cc80c233332ee93abafbf483eaeffc79036a234d45039ce5c6d3 *61-client-run-ability-layout-fix.txt
+f8fb044211fd25546df2db97211017b375eebd7023f5da749ebaebdd4125eb42 *61-client-run-ability-layout-fix.txt
 56a1f588a9524e6de65f2072b96a6ed26178a1b545df3ff62f72b4a5a695c63a *shots/rust-client-run-after-client58-hud-19-19.png
 1094f815bacfac30532459351a73d7a2833978f6706b559d7e337e8448dd8964 *shots/rust-client-run-after-client58-runhold.png
 ce62cf39a2b2e761f542618f8d6150a518fb5c0f335ff85a77b2a6a30a97fdb3 *shots/rust-client-run-before-oracle40-hud-0-0.png

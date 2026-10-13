@@ -100,8 +100,9 @@ F. 原始件哈希（sha256，盘上字节）
 G. 边界 / 门禁
 ----------------------------------------------------------------------------------------------------------------
   - 边界：`git diff --name-only <base> -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage` = 空。
-  - 四门禁（隔离 `CARGO_TARGET_DIR=E:/tmp/m2svr-target`）：`fmt rc=0` / `clippy rc=0(-D warnings)` /
-    `101 suites · 1185 passed · 0 failed · 22 ignored` / `msgcodegen 604 rc=0`。
+  - 四门禁（隔离 `CARGO_TARGET_DIR=E:/tmp/m2svr-target`，合并 `origin/master 56c8b4789` 后的合并树）：
+    `fmt rc=0` / `clippy rc=0(-D warnings)` / `101 suites · 1189 passed · 0 failed · 22 ignored` /
+    `msgcodegen 604 rc=0`。
   - 起过真栈两次（before/after），收工已停：5000/7000/7100/7200/7600 DOWN，仅共享 MySQL 3306。
 
 H. 未做 / 诚实登记
