@@ -42,6 +42,27 @@
 是玩家会话散字段，oracle 不在地图/场景 ECS 内；本仓与 ⑦-2/⑦-3（party/trade）同口径落在 `bins/game-svr`
 会话态（`SellOffBook` 由宿主持有一个实例，所有会话共享；零 `static`，确定性硬约束 §4.2.2）。
 
+## 3.1 F-1 返工（reviewer-5 `request_changes`，Important）：成交成功支**不得**有负重守卫
+
+oracle `ClientBuySellOffItme`（`src/M2Server/Player/PlayObject.Sale.cs:333-361`）的成功支形状：
+
+```
+if (IsEnoughBag()) {
+    if (this.AddItemToBag(userItem)) { this.SendAddItem(userItem); ... }
+} else {
+    DropItemDown(userItem, false);
+}
+```
+
+- `IsEnoughBag()`（`src/M2Server/Player/PlayObject.Base.cs:183-186`）= `ItemList.Count < Grobal2.MaxBagItem`（**只判背包格数**）；
+- `AddItemToBag()`（`src/M2Server/Actor/BaseObject.cs:1241-1251`）只判 `ItemList.Count >= MaxBagItem`（**同样不判负重**）；
+- `IsAddWeightAvailable` 在 oracle 只出现在：拾取（`PlayObject.Base.cs:103`）、`ClientCancelSellOffIng`（`PlayObject.Sale.cs:217`）、
+  `PlayObject.Operate.cs:1680`；**买/卖成交路径没有**。
+
+⇒ Rust `client_buy_sell_off_item`（本仓 `selloff.rs:800` 区域）的 `Some(_)` 支**不得**有负重守卫；
+旧 head `438fbd163` 多出的 `if weight_available(me, i32::from(tpl.weight))` 已按 F-1 删除。
+**`client_cancel_sell_off_ing`（`selloff.rs:685`）的 `weight_available` 是正确的**（对应 `Sale.cs:217`），不动。
+
 ## 4. 队列/出队口径（帧序判据的依据）
 
 `SendAddItem`（`PlayObject.Base.cs:198`）是**立即**帧（`SendSocket(SM_ADDITEM)`，`Series=1`）；
@@ -82,6 +103,11 @@
 7. 触发点「脚本 label `@dealybme`/`sDealYBme` → 开窗」（`Merchant.cs:930-934`）：脚本层在
    `crates/script`（不在本卡写集）⇒ `open_deal_off_form` 只落纯逻辑 + 帧，待 ⑩-2/脚本层接线。
 
+> **F-1（reviewer-5）已收敛**：旧 head `438fbd163` 在买成交支多加了一条 oracle 没有的负重守卫 ⇒
+> 「元宝已扣、背包未满但负重不足」时物品被静默丢包（少 `SM_ADDITEM` + `RM_WEIGHTCHANGED`）——
+> 违反硬约束③「行为等价优先于修 bug」。本片已删除该守卫，并补「负重不足仍入包」向量（`03-tests.txt` §A）
+> + RC-3 改坏必红（`redchecks/README.md`）。
+>
 > 白名单条目：本卡**未新增**（残差全部登记在证据与本文件；按纪律白名单条目需 owner 签字）。
 > `goldsales` 写面「oracle 调用点全注释 ⇒ Rust 不实现」建议由 owner 决定是否补 `whitelist.md` 一条
 > （盘点 §N3 已给建议）。

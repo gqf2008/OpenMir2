@@ -6,12 +6,12 @@
 
 | # | 命令 | 读数 |
 | --- | --- | --- |
-| A | `cargo test -p game-svr --offline --lib selloff` | `23 passed; 0 failed; 0 ignored`（rc=0） |
+| A | `cargo test -p game-svr --offline --lib selloff` | `24 passed; 0 failed; 0 ignored`（rc=0） |
 | B | `cargo test -p game-svr --offline --bin game-svr selloff` | `2 passed; 0 failed; 0 ignored`（rc=0） |
 | C | `cargo test -p game-svr --offline --bin game-svr config::tests::parses_setup_blue_msg_colors_with_oracle_defaults` | `1 passed; 0 failed`（rc=0） |
-| D | `cargo test --workspace --offline --no-fail-fast` | **95 suites · 992 passed · 0 failed · 21 ignored**（rc=0） |
+| D | `cargo test --workspace --offline --no-fail-fast` | **96 suites · 998 passed · 0 failed · 21 ignored**（rc=0） |
 
-## A. 构造级（`bins/game-svr/src/selloff.rs::tests`，23 条）
+## A. 构造级（`bins/game-svr/src/selloff.rs::tests`，24 条）
 
 `--list`（原始，`cargo test -p game-svr --offline --lib selloff -- --list`）：
 
@@ -20,6 +20,7 @@ selloff::tests::add_item_blocked_while_confirming
 selloff::tests::add_item_ok_moves_to_temp_and_replies
 selloff::tests::add_item_wrong_name_fails
 selloff::tests::buy_cancel_sets_flag3
+selloff::tests::buy_enters_bag_even_when_weight_insufficient
 selloff::tests::buy_insufficient_game_gold_only_menu_ok
 selloff::tests::buy_nine_items_still_aborts_at_out_of_range
 selloff::tests::buy_single_item_aborts_at_first_null_slot
@@ -51,6 +52,9 @@ selloff::tests::update_sell_off_info_is_case_sensitive
   `buy_nine_items_still_aborts_at_out_of_range`（空槽中止 ⇒ `SM_SELLOFFBUY_OK` 不可达）；
 - 门与分支：`nSellGold` 范围 / 不能自己买自己 / `SellOffInTime` / `SellOffConfirm` 期间禁加删 /
   背包与负重门 / 金刚石标记 65535·32767；
+- **F-1 回归**（reviewer-5，成交成功支不得有负重守卫）：`buy_enters_bag_even_when_weight_insufficient` ——
+  背包未满（0/46）+ 负重不足（`weight=0/max_weight=1`，木剑 `weight=3`）+ 元宝够 ⇒ 照扣 `500+10000`、
+  卖方 `+500`、**物品仍入包**、产立即 `SM_ADDITEM`（oracle `PlayObject.Sale.cs:333-361`，锚见 `01` §3.1）。
 - 帧编码形状（`event_body_encodes_menu_ok_and_gamemoney_frames`）。
 
 ## B. 进程级（`bins/game-svr/src/main.rs`，2 条，走**生产路径** `handle_selloff_cmd`）
@@ -69,8 +73,8 @@ selloff::tests::update_sell_off_info_is_case_sensitive
 
 ## D. 改坏必红
 
-见 `redchecks/README.md`（RC-1 / RC-2 逐条 rc=101 红 + 还原后 rc=0）。原始件：
-`redchecks/RC1-...txt`、`redchecks/RC2-...txt`、`redchecks/RC-restored-ok.txt`。
+见 `redchecks/README.md`（RC-1 / RC-2 / RC-3 逐条 rc=101 红 + 还原后 rc=0）。原始件：
+`redchecks/RC1-...txt`、`redchecks/RC2-...txt`、`redchecks/RC3-...txt`、`redchecks/RC-restored-ok.txt`。
 
 ## 未做（如实登记）
 

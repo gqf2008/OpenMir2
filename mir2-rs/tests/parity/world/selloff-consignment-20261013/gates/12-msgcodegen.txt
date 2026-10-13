@@ -1,8 +1,1 @@
-# 门禁④：cargo run -p msgcodegen -- --check（消息号表与 C# 源漂移门禁）
-# 命令：cargo run --offline -p msgcodegen -- --check
-# 期望：rc=0，604 条一致
-
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.16s
-     Running `E:/tmp/m2svr-target\debug\msgcodegen.exe --check`
 msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
-rc=0
