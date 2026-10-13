@@ -1,0 +1,28 @@
+# 交付 head = 本片最终提交（见 patch --head；此文件随该提交入库）
+# merge-base(origin/master, patch head) = 6f0bca48ee0f759dc66d17b352188ed2410c3523
+
+=== git diff --name-only BLOCK -- src sql MirClient
+(空 = 0 件)
+
+=== git diff --name-only BLOCK -- mir2-rs/crates/protocol mir2-rs/crates/storage
+(空 = 0 件)
+
+=== 全量 diff --stat BLOCK（工作树=最终内容）
+ mir2-rs/crates/envir/examples/dump_castle_files.rs |   57 +
+ mir2-rs/crates/envir/src/castle.rs                 |  845 ++++++++++
+ mir2-rs/crates/envir/src/lib.rs                    |    8 +
+ .../00-commands.txt                                |   39 +
+ .../01-oracle-anchors.txt                          |   68 +
+ .../02-deployed-data.txt                           |   16 +
+ .../03-rust-vectors.txt                            |   48 +
+ .../04-redcheck.txt                                |   61 +
+ .../05-gate-fmt.txt                                |    2 +
+ .../06-gate-clippy.txt                             |    5 +
+ .../07-gate-test.txt                               | 1614 ++++++++++++++++++++
+ .../08-gate-msgcodegen.txt                         |    5 +
+ .../09-boundary.txt                                |   10 +
+ .../10-vectors-inventory.txt                       |   28 +
+ .../README.md                                      |   55 +
+ .../SHA256SUMS.txt                                 |   13 +
+ .../fixtures/SabukW-0.hex                          |    1 +
+ 17 files changed, 2875 insertions(+)

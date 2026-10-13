@@ -1,0 +1,16 @@
+# 部署件攻城文件（仓外输入，按盘上原始字节记）
+# 来源目录: E:/MirServer/M2GameSvr/Castle/
+# 生成: sha256sum + ls -l（Windows 工作机，2026-10-13）
+
+sha256  6021523b8bc4ada412588109c4417a9876dc30f62a6b086b18ec9cc230eb78ed  size=1748  bytes  path=0/SabukW.txt        encoding=GBK  eol=CRLF
+sha256  13bf7b3039c63bf5a50491fa3cfd8eb4e699d1ba1436315aef9cbe5711530354  size=3     bytes  path=List.txt          encoding=ASCII eol=CRLF  content="0\r\n"
+sha256  e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  size=0     bytes  path=0/AttackSabukWall.txt encoding=-  content=（空文件）
+
+其他目录: Castle/1/SabukW.txt（0 字节，空文件）、Castle/Castle/SabukW.txt（CastleManager.Initialize 兜底
+在 ConfigDir=sCastleDir 时读到的路径，见 01-oracle-anchors.txt [3] 的口径说明）。
+
+复核命令（在仓库根）:
+  sha256sum "E:/MirServer/M2GameSvr/Castle/List.txt" "E:/MirServer/M2GameSvr/Castle/0/SabukW.txt" "E:/MirServer/M2GameSvr/Castle/0/AttackSabukWall.txt"
+
+入库夹具: fixtures/SabukW-0.hex = 0/SabukW.txt 的逐字节 hex（避免 .txt 被 git EOL/编码归一改字节）；
+         crates/envir/src/castle.rs::tests::real_deployed_sabuk_w 在测试时还原这些字节再解析。

@@ -1,0 +1,48 @@
+# 命令: cargo run -p mir2-envir --example dump_castle_files -- E:/MirServer/M2GameSvr/Castle/0/SabukW.txt E:/MirServer/M2GameSvr/Castle/0/AttackSabukWall.txt
+# 时间: 2026-10-13T09:03:45Z
+sabuk_w=E:/MirServer/M2GameSvr/Castle/0/SabukW.txt
+castle_name=沙巴克
+own_guild=
+change_date=Some("1998-01-01")
+war_date=Some("1998-01-01")
+income_today=Some("2021-08-23 15:31:29")
+total_gold=0
+today_income=0
+envir_list=["0151", "0152", "0153", "0154", "0155", "0156"]
+map_name=3
+home_map=3
+home=(644,290)
+war_range=(100,100)
+palace_map=0150
+secret_map=D701
+palace_door=(631,274)
+main_door_open=false
+MainDoor	沙巴克城门	x=672	y=330	hp=9999
+LeftWall	沙巴克左城墙	x=624	y=278	hp=4999
+CenterWall	沙巴克右城墙	x=627	y=278	hp=4999
+RightWall	沙巴克中城墙	x=634	y=271	hp=4999
+Archer	弓箭手	x=662	y=333	hp=2000
+Archer	弓箭手	x=664	y=331	hp=2000
+Archer	弓箭手	x=666	y=329	hp=2000
+Archer	弓箭手	x=676	y=319	hp=2000
+Archer	弓箭手	x=678	y=317	hp=2000
+Archer	弓箭手	x=681	y=314	hp=2000
+Archer	弓箭手	x=628	y=271	hp=2000
+Archer	弓箭手	x=632	y=267	hp=2000
+Archer	弓箭手	x=670	y=335	hp=2000
+Archer	弓箭手	x=671	y=334	hp=2000
+Archer	弓箭手	x=675	y=330	hp=2000
+Archer	弓箭手	x=676	y=329	hp=2000
+Guard	守卫	x=0	y=0	hp=0
+Guard	守卫	x=0	y=0	hp=0
+Guard	守卫	x=0	y=0	hp=0
+Guard	守卫	x=0	y=0	hp=0
+Guard	守卫	x=0	y=0	hp=2000
+Guard	守卫	x=0	y=0	hp=2000
+Guard	守卫	x=0	y=0	hp=2000
+Guard	守卫	x=0	y=0	hp=2000
+Guard	守卫	x=0	y=0	hp=2000
+Guard	守卫	x=0	y=0	hp=2000
+Guard	守卫	x=0	y=0	hp=2000
+Guard	守卫	x=0	y=0	hp=2000
+attack_sabuk_wall=E:/MirServer/M2GameSvr/Castle/0/AttackSabukWall.txt

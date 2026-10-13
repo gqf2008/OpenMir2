@@ -1,0 +1,68 @@
+M3⑧-实现 6（openmir2-m3-castle-file-load）第①片 —— oracle 锚定（行号按本仓库 src/ 实读）
+================================================================================
+
+[1] 城堡名单读取  CastleManager.LoadCastleList
+    src/M2Server/Castle/CastleManager.cs:162-185
+      castleFile = Path.Combine(M2Share.BasePath, SystemShare.Config.CastleFile)
+      File.Exists == false ⇒ LogService.Error("城堡列表文件未找到!!!")、不进循环
+      否则 StringList.LoadFromFile（GB2312/BOM）⇒ 逐行 Trim()，非空 ⇒ new UserCastle(sCastleDir)
+
+[2] 城堡名单落盘  CastleManager.SaveCastleList
+    src/M2Server/Castle/CastleManager.cs:187-201
+      先确保 CastleDir 目录存在；写 StringList.Add(i.ToString())  // 下标，不是 ConfigDir
+      ⇒ StringList.SaveToFile(BasePath + Config.CastleFile)
+
+[3] 空列表兜底  CastleManager.Initialize
+    src/M2Server/Castle/CastleManager.cs:53-86
+      CastleList.Count <= 0 ⇒ new UserCastle(Config.CastleDir) + Initialize() + ConfigDir="0"
+                               + EnvirList={0151..0156} + Save()
+      否则逐个 CastleList[i].Initialize()
+
+[4] UserCastle 构造默认  src/M2Server/Castle/UserCastle.cs:23-59
+      HomeMap=Cfg.CastleHomeMap("3")、HomeX=644、HomeY=290、sName=Cfg.CastleName("沙巴克")
+      PalaceMap="0150"、SecretMap="D701"、WarRangeX/Y=100、Archers=new ArcherUnit[12]、Guards=new ArcherUnit[12]
+      ConfigDir=sCastleDir；目录不存在则创建；castleConf=new CastleConf(<dir>/SabukW.txt)
+
+[5] CastleConf.LoadConfig（[Setup]/[Defense] 全键 + 默认值）
+    src/M2Server/Castle/CastleConf.cs:15-107
+      [Setup] CastleName(默认 sName)、OwnGuild("")、ChangeDate/WarDate/IncomeToday(Now)
+              TotalGold(0)、TodayIncome(0)
+      [Defense] CastleMapList("" → ',' 逐段 GetValidStr3，空段 break)、CastleMap("3")
+                CastleHomeMap("3")、CastleHomeX(644)、CastleHomeY(290)
+                CastleWarRangeX(100)、CastleWarRangeY(100)
+                CastlePlaceMap("0150")、CastleSecretMap("D701")
+                CastlePalaceDoorX(631)、CastlePalaceDoorY(274)
+                MainDoor: X672 Y330 Name"MainDoor" Open(true) HP2000
+                LeftWall: X624 Y278 Name"LeftWall" HP2000
+                CenterWall: X627 Y278 Name"CenterWall" HP2000
+                RightWall: X634 Y271 Name"RightWall" HP2000
+                Archer_{1..12}: X0 Y0 Name"弓箭手" HP2000
+                Guard_{1..12}: X0 Y0 Name"守卫" HP2000      // Guards.Length == 12（UserCastle.cs:49）
+
+[6] 攻城申请读取  UserCastle.LoadAttackSabukWall  src/M2Server/Castle/UserCastle.cs:242-286
+      路径 = BasePath + CastleDir + ConfigDir + "AttackSabukWall.txt"；文件不存在 ⇒ return（表清空）
+      逐行：GetValidStr3(sData, ref guildName, {' ','\t'})；FindGuild(guildName)==null ⇒ continue
+            ArrestStringEx(s20, "\"", "\"", ref s20)；DateTime.TryParse 成功用值，否则 DateTime.Now
+            AttackWarList.Add({sGuildName=guildName, Guild, AttackDate})
+
+[7] 攻城申请落盘  UserCastle.SaveAttackSabukWall  src/M2Server/Castle/UserCastle.cs:291-309
+      StringList.Add(sGuildName + "       \"" + AttackDate + '"')   // 7 个空格 + 引号日期
+      ⇒ SaveToFile(BasePath + CastleDir + ConfigDir + "AttackSabukWall.txt")
+
+[8] 实体挂图（第②片，不在本片）  UserCastle.Initialize  src/M2Server/Castle/UserCastle.cs:118-227
+      CastleEnvir = MapMgr.FindMap(MapName)（MapName 归属本服分支内）
+      门/左中右墙：RegenMonsterByName(MapName, X, Y, Name)；成功 ⇒ WAbil.HP = nHP；Castle = this
+                  MainDoor.nStatus 为真 ⇒ ((CastleDoor)BaseObject).Open()
+      弓手/守卫：nHP <= 0 ⇒ continue；否则 RegenMonsterByName；弓手成功再设 GuardDirection = 3
+
+[9] 常量  src/M2Server/Castle/CastleConst.cs
+      MaxCastleArcher = 12（:11）、MaxCalsteGuard = 4（:14，仅 CastleOfficial 雇佣上限，见 CastleOfficial.cs:274）
+      AttackSabukWallList = "AttackSabukWall.txt"（:18）、SabukWFileName = "SabukW.txt"（:22）
+
+[10] 配置读取器语义  src/OpenMir2/Common/ConfigFile.cs
+      ReadWriteString(:105-113) / ReadWriteInteger(:55-63) / ReadWriteBool(:85-93) /
+      ReadWriteInt16(:65-73) / ReadWriteUInt16(:75-83) / ReadWriteDate(:105)/ReadDateTime(:155-168)
+      ReadBool(:…) 是/YES/1/TRUE；WriteDateTime 格式 "yyyy-MM-dd HH:mm:ss"(:449-460)
+      缺键/空值 ⇒ WriteX 回写默认（内容冻结 ⇒ Rust 侧只读、不回写）
+
+盘点对照：mir2-rs/tests/parity/m3/M3⑧公会攻城现状盘点报告-20261013.md §1.D/§1.F/§1.J/§2 #7/#11/#13/#14/#16。
