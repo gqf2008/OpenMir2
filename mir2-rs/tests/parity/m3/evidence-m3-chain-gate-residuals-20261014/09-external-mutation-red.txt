@@ -1,0 +1,49 @@
+### 外部改坏必红（真身文件旁路复制/还原，真身 sha256 前后一致）
+
+--- 真身 sha256（改前）---
+9229b2058733762acf0db2f559691674f8ca10bbd27e08caa044dbc0fa783d77 *marker_prefix_gate.py
+28b126a53f1efcb02a88a05fa8804d225e4149c8f17c542a8e073f153c08d454 *fixture_chain_gate.py
+
+=== MUT-A：把 marker_prefix_gate.guards_wired 的等值判据改成 fail-open 子集（== -> <=）===
+mutated: == -> <=
+SELFTEST ok scan-good-clean
+SELFTEST ok scan-catches-strip
+SELFTEST ok scan-ignores-comment
+SELFTEST ok real-run-pair-no-strip
+SELFTEST ok real-guards-wired
+SELFTEST ok guards-extra-unregistered-red
+SELFTEST FAIL guards-missing-real-guard-red
+SELFTEST ok comparator-requires-prefix-M3SHOPSEQ
+SELFTEST ok comparator-requires-prefix-M3QUESTSEQ
+SELFTEST ok comparator-requires-prefix-M3PAIRTRADESEQ
+SELFTEST ok comparator-requires-prefix-M3SELLOFFSEQ
+SELFTEST ok comparator-requires-prefix-M3GUILDCSEQ
+SELFTEST ok comparator-requires-prefix-M3HEROPETSEQ
+SELFTEST ok teeth-bare-prereq
+SELFTEST ok teeth-prefixed-ok
+SELFTEST ok teeth-empty-prereq
+SELFTEST ok teeth-skip-prefixed-ok
+SELFTEST ok teeth-skip-bare-prereq
+SELFTEST ok scan-botsrv-catches-bare-skip
+SELFTEST ok scan-botsrv-ignores-skip-prefix
+SELFTEST ok scan-botsrv-ignores-done-marker
+SELFTEST ok real-botsrv-no-bare-skip
+SELFTEST ok check-green
+SELFTEST ok mutation-strip-red
+SELFTEST ok mutation-guard-red
+SELFTEST ok mutation-bareskip-red
+SELFTEST ok=25/26
+MUT-A rc=1
+（判读：旧牙 guards-extra-unregistered-red 仍 ok；新牙 guards-missing-real-guard-red FAIL ⇒ 旧断言抓不到该方向）
+
+=== MUT-B：把宝宝登记门从 SHARED_CHECKS 反注册（删两条登记行）===
+mutated: 反注册 2 条
+  SELFTEST ok  主机门（.py）登记项 ≥1
+  SELFTEST FAIL 宝宝登记门已接入共享管线（防回退）
+  SELFTEST FAIL 主机门（.py）登记项 ≥10（castle + 行会/攻城 + 英雄/宠物 + markers 前缀 + 宝宝登记 各 selftest/check）
+SELFTEST RED: fixture_chain_gate selftest 31/33
+MUT-B rc=1
+
+--- 真身 sha256（还原后）---
+9229b2058733762acf0db2f559691674f8ca10bbd27e08caa044dbc0fa783d77 *marker_prefix_gate.py
+28b126a53f1efcb02a88a05fa8804d225e4149c8f17c542a8e073f153c08d454 *fixture_chain_gate.py

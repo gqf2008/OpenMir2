@@ -417,8 +417,12 @@ def cmd_selftest(args):
     check("real-guards-wired", guards_wired(guard_markers))
     check("guards-extra-unregistered-red",
           not guards_wired(guard_markers + ["M3NEWSEQ"]))
-    check("guards-guard-only-ok",
-          guards_wired([m for m, _ in COMPARATORS] + list(GUARD_ONLY_MARKERS)))
+    # O-2 收口（reviewer-6 `49993d1f`）：旧 `guards-guard-only-ok` 是**恒真项** —— 它喂给
+    #   `guards_wired` 的集合恰等于该函数内部算出的 expected，永远 True、无法失败（冗余断言）。
+    #   改成**可失败向**：把真实扫描到的牙集合去掉一个 ⇒ 必须判「未接线」，证 `guards_wired`
+    #   的等值判据是双向的（`guards-extra-unregistered-red` 从「多」向咬合，本牙从「少」向咬合）。
+    check("guards-missing-real-guard-red",
+          bool(guard_markers) and not guards_wired(guard_markers[1:]))
     for marker, cmp in COMPARATORS:
         check("comparator-requires-prefix-%s" % marker,
               comparator_requires_prefix(os.path.join(HERE, cmp), marker))

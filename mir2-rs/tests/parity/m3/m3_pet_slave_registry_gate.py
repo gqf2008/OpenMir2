@@ -20,6 +20,13 @@
 
 口径：**只读**（只读 whitelist.md）、**零端口**、不写仓库。`selftest` 用合成文本 + 改坏必红。
 
+## 接入（2026-10-14，卡 `openmir2-m3-fixture-chain-gate`）
+
+本门合入后**无任何调用方**（只在证据 README 里手工跑）⇒ 与 markers 前缀门同类的
+「在场却坏无声」隐患。现已接入 `fixture_chain_gate.py` 的 `SHARED_CHECKS`
+（`pet_slave_registry_selftest` + `pet_slave_registry_check`），不看矩阵状态、独立常跑；
+`fixture_chain_gate.selftest` 内含**防回退牙**（本门被反注册 ⇒ 链门 selftest RED）。
+
 ## 边界（如实登记，不假绿）
 
 **不检查** `T-42` 撞号（whitelist 现存两行 `| T-42 |`：⑤-2 商人 tick vs ⑥-5 任务夹具）。

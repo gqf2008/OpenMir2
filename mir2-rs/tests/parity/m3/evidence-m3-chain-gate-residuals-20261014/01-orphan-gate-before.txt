@@ -1,0 +1,13 @@
+### 登记前固定面（origin/master 768b2bb6c）：搜 m3_pet_slave_registry_gate.py 的调用方
+cmd: git grep -n 'm3_pet_slave_registry_gate' origin/master -- '*.ps1' '*.py'
+--- 命中（排除自身文件与证据目录）---
+(无命中)
+
+--- 结论 ---
+origin/master 上该门（⑨-2/⑨-3 reviewer-5 M-1 收口片，GREEN 5/5）**无任何 .ps1/.py 调用方**；
+只有证据 README（*.md，手工读数）提到它 ⇒ 存在与 markers 前缀门同类的「在场却坏无声」隐患。
+
+--- 对照：markers 前缀门（同卡已合入的同类修复）在 fixture_chain_gate 里的登记 ---
+84:    ("marker_prefix_selftest", "mir2-rs/tests/parity/m3/marker_prefix_gate.py", ["selftest"]),
+85:    ("marker_prefix_check", "mir2-rs/tests/parity/m3/marker_prefix_gate.py", ["check"]),
+322:    _mp_gate = [e for _n, rel, e in SHARED_CHECKS if rel.endswith("marker_prefix_gate.py")]

@@ -1,0 +1,28 @@
+SELFTEST ok scan-good-clean
+SELFTEST ok scan-catches-strip
+SELFTEST ok scan-ignores-comment
+SELFTEST ok real-run-pair-no-strip
+SELFTEST ok real-guards-wired
+SELFTEST ok guards-extra-unregistered-red
+SELFTEST ok guards-missing-real-guard-red
+SELFTEST ok comparator-requires-prefix-M3SHOPSEQ
+SELFTEST ok comparator-requires-prefix-M3QUESTSEQ
+SELFTEST ok comparator-requires-prefix-M3PAIRTRADESEQ
+SELFTEST ok comparator-requires-prefix-M3SELLOFFSEQ
+SELFTEST ok comparator-requires-prefix-M3GUILDCSEQ
+SELFTEST ok comparator-requires-prefix-M3HEROPETSEQ
+SELFTEST ok teeth-bare-prereq
+SELFTEST ok teeth-prefixed-ok
+SELFTEST ok teeth-empty-prereq
+SELFTEST ok teeth-skip-prefixed-ok
+SELFTEST ok teeth-skip-bare-prereq
+SELFTEST ok scan-botsrv-catches-bare-skip
+SELFTEST ok scan-botsrv-ignores-skip-prefix
+SELFTEST ok scan-botsrv-ignores-done-marker
+SELFTEST ok real-botsrv-no-bare-skip
+SELFTEST ok check-green
+SELFTEST ok mutation-strip-red
+SELFTEST ok mutation-guard-red
+SELFTEST ok mutation-bareskip-red
+SELFTEST ok=26/26
+rc=0
