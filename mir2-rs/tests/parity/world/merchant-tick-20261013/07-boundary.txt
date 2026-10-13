@@ -13,6 +13,7 @@ $ git diff --name-only master..HEAD -- src sql MirClient
   mir2-rs/tests/parity/whitelist.md
   mir2-rs/tests/parity/world/merchant-tick-20261013/00-rust-rng-trace.tsv
   mir2-rs/tests/parity/world/merchant-tick-20261013/01-oracle-anchors.txt
+  mir2-rs/tests/parity/world/merchant-tick-20261013/02-commands.txt
   mir2-rs/tests/parity/world/merchant-tick-20261013/03-merchant-rng-trace.txt
   mir2-rs/tests/parity/world/merchant-tick-20261013/04-claimb-groupdiff.txt
   mir2-rs/tests/parity/world/merchant-tick-20261013/04-set-a.tsv
@@ -23,6 +24,8 @@ $ git diff --name-only master..HEAD -- src sql MirClient
   mir2-rs/tests/parity/world/merchant-tick-20261013/06-gates.txt
   mir2-rs/tests/parity/world/merchant-tick-20261013/06b-workspace-test.txt
   mir2-rs/tests/parity/world/merchant-tick-20261013/07-boundary.txt
+  mir2-rs/tests/parity/world/merchant-tick-20261013/README.md
+  mir2-rs/tests/parity/world/merchant-tick-20261013/SHA256SUMS.txt
 
-# HEAD = ce24fd1be40c17a4bf11057b9ed12a59c8f8ab71
+# HEAD = fc29ffef59c2be651ecb1617c3473f6d4787a6e6
 # master = 0dde01b7b7691c00a5c61ec4b14b87eaae8dac10
