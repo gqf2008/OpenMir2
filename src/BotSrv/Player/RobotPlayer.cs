@@ -7278,9 +7278,20 @@ namespace BotSrv.Player
             return MShare.MagicArr[magid] != null ? MShare.MagicArr[magid].Level : 0;
         }
 
+        /// <summary>夹具日志出口的**模板字面量化**（reviewer-5 M-1：根因修法应落在日志出口）。
+        /// `LogService.Info(msg)` 把整条消息当 Serilog 消息模板解析；M3*SEQ 事件 JSON 含**嵌套 `{}`
+        /// 且有字面 `<`/`>`** 时，模板分词会丢掉末尾一个 `}`（真机 defect_3，见 QuestSeqSelfCheck）。
+        /// 在出口把 `{`/`}` 双写即按字面渲染（`{{`→`{`、`}}`→`}`），整条消息逐字节不变 ⇒ 各字段
+        /// 无需再自行转义（reviewer-5 M-2「新增 M3*SEQ 字段须同步过 escaper」随之消解）。
+        /// `QuestEsc`/`ShopEsc` 的尖括号转义保留作 defense-in-depth；解码侧 `json.loads` 不受影响。</summary>
+        internal static string SerilogTemplateLiteral(string message)
+        {
+            return message == null ? null : message.Replace("{", "{{").Replace("}", "}}");
+        }
+
         private void MainOutMessage(string msg)
         {
-            LogService.Info($"机器人:[{ChrName}] {msg}");
+            LogService.Info(SerilogTemplateLiteral($"机器人:[{ChrName}] {msg}"));
         }
 
         private void MainOutErrorMessage(string msg)

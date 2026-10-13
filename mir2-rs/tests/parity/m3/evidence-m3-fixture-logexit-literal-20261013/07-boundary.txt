@@ -1,0 +1,28 @@
+# boundary — base = master aacb4315f（origin==walgit）
+
+## git status --short (before commit)
+ M src/BotSrv/Player/RobotPlayer.cs
+ M src/BotSrv/QuestSeqSelfCheck.cs
+?? mir2-rs/tests/parity/m3/evidence-m3-fixture-logexit-literal-20261013/
+
+## git diff --stat (tracked)
+ src/BotSrv/Player/RobotPlayer.cs | 13 ++++++++++++-
+ src/BotSrv/QuestSeqSelfCheck.cs  | 29 +++++++++++++++++++++++++++++
+ 2 files changed, 41 insertions(+), 1 deletion(-)
+
+## 改动路径清单（tracked 改动）
+src/BotSrv/Player/RobotPlayer.cs
+src/BotSrv/QuestSeqSelfCheck.cs
+
+## 证据目录内新增文件
+mir2-rs/tests/parity/m3/evidence-m3-fixture-logexit-literal-20261013/
+
+## 冻结/越界面自检（必须全部为空）
+-- git diff --name-only -- crates : []
+-- git diff --name-only -- bins : []
+-- git diff --name-only -- sql : []
+-- git diff --name-only -- MirClient : []
+-- git diff --name-only -- mir2-rs/crates/protocol : []
+-- git diff --name-only -- mir2-rs/crates/storage : []
+
+## 说明：允许面 = src/BotSrv/**（whitelist T-41/T-42 夹具工具侧例外） + mir2-rs/tests/parity/m3/**（本证据目录）
