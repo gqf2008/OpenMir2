@@ -1,0 +1,73 @@
+{
+  "canon": "m3-npc-shop-v1",
+  "status": "skeleton-window-pending",
+  "card": "openmir2-m3-shop-fixture-botsrv",
+  "parent_card": "openmir2-m3-npc-shop-align",
+  "bots": 1,
+  "default_case": "buy_sell_repair",
+  "cases": {
+    "buy_sell_repair": {
+      "npc": "卫家店",
+      "map": "0103",
+      "home_map": 103,
+      "npc_x": 19,
+      "npc_y": 18,
+      "player_x": 19,
+      "player_y": 17,
+      "player_dir": 4,
+      "ops": ["sell", "buy", "query_sell_price", "query_repair_cost", "repair"],
+      "item": "木剑",
+      "note": "真实数据 MerChant.txt:26 = `比奇城/卫家店 0103 19 18 卫家店`；玩家 pin 到 NPC 南邻格 (19,17)，朝向 4=DOWN。"
+    },
+    "storage": {
+      "npc": "仓库保管员",
+      "map": "0145",
+      "home_map": 145,
+      "npc_x": 9,
+      "npc_y": 12,
+      "player_x": 9,
+      "player_y": 11,
+      "player_dir": 4,
+      "ops": ["storage", "takeback"],
+      "item": "木剑",
+      "note": "真实数据 MerChant.txt:60 = `盟重土城/仓库 0145 9 12 仓库保管员 0 9 0`（脚本头 @storage @getback）；玩家 pin 到南邻格 (9,11)。"
+    }
+  },
+  "step_ms": 1000,
+  "start_delay_ms": 3000,
+  "distance_quirk": {
+    "buy_uses_15_inclusive": "PlayObject.Operate.cs:200 `|dx|>15 || |dy|>15` 拒 ⇒ <=15 放行",
+    "sight_uses_15_exclusive": "PlayObject.Operate.cs:1715 `IsWithinSight` = <15",
+    "note": "真实 quirk，必须连 bug 一起搬：本场景 pin 距离 1，两侧都稳定通过；dx=15 边界另列边界用例。"
+  },
+  "shelf_strategy": {
+    "mode": "sell_then_buyback",
+    "note": "盘点报告 §4.4：oracle `GoodsList` 初始为空、只在 `Merchant.Run()` 的 5 分钟门后补货且商品不落盘 ⇒ 夹具用「先卖一件 Dura>0 物品（进 GoodsList）再买回」自造货架，确定且不依赖墙钟。若改用脚本 [goods] 商品，须起栈后 settle >= 5min（备选，成本高）。"
+  },
+  "frame_scalar_fields": {
+    "647": ["a"],
+    "649": ["a"],
+    "651": ["a"],
+    "669": ["a", "b", "c"],
+    "670": ["a"],
+    "671": ["a"]
+  },
+  "artifact": {
+    "markers": "M3SHOPSEQ（BotSrv stdout / bot.log 内嵌事件）",
+    "raw": "npc_shop_raw.jsonl",
+    "comparator": "python -I npc_shop_diff.py diff <csharp_raw> <rust_raw>",
+    "assembler": "python -I npc_shop_diff.py assemble <markers.jsonl> --out <raw.jsonl>",
+    "runner": "run_npc_shop_pair.ps1"
+  },
+  "record_required_fields": ["k", "op", "npc", "req", "frames", "gold_before", "gold_after", "branch"],
+  "record_optional_fields": ["npc_actor", "price", "bag_before", "bag_after", "storage_before", "storage_after", "goods_before", "goods_after"],
+  "req_compare_keys": ["item", "n", "label"],
+  "notes": [
+    "判据 = 逐 k：op / npc / req(声明键) / 帧种类序列 / 帧标量参数(声明表) / gold_before/after / price / branch / bag-仓库-货架多重集 全部相同。",
+    "动态 id（merchant actor / make index / npc_actor）不作判据（跨运行本来不同）；只在原始件里留审计。",
+    "失败分支靠帧种类序列 + branch 字段双钉：钱不够(651.a=3)/负重或背包满(651.a=2)/仓库满(702)/取回背包满(707)/无帧(fail_no_frame) 不可互相顶替。",
+    "货架（GoodsList）不落库且跨运行不可比 ⇒ 由 BotSrv 自己的视图导出多重集；无导出时两侧都缺 ⇒ 不比（不静默造假）。",
+    "真机两侧同序列跑等 ⑤-4（shop-dialog-wiring）/⑤-5（storage-persist）落地 + owner 发窗口；本片只交夹具骨架（比较器 selftest + 无栈自检）。",
+    "Rust 侧 NPC/商店派发未实现 ⇒ run_npc_shop_pair -Side rust 会 fail-closed PREREQ（同 T-27 口径），不白占窗口。"
+  ]
+}

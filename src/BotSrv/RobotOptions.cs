@@ -109,6 +109,33 @@ namespace BotSrv
         public int AttackRole { get; set; } = 0;
 
         /// <summary>
+        /// M3⑤ 真机对拍夹具（卡 openmir2-m3-shop-fixture-botsrv；白名单 T-29 家族扩展）。
+        /// 默认 false = 原行为（不新增任何发送）。置 true 时，本假人在收到自己的 SM_LOGON 后按
+        /// `ShopOps` 给出的固定顺序对**同一个 NPC/商人**各发一条动作（开面板/买/卖/修理/存取），
+        /// 逐 op 落 `M3SHOPSEQ {json}` 标记（send/frame/end），供 `npc_shop_diff.py` 对齐。
+        /// 只作夹具驱动、只写本假人自己的 socket；默认关时 BotSrv 行为逐字节不变。
+        /// </summary>
+        public bool ShopSequence { get; set; }
+        /// <summary>仅 ShopSequence=true 时生效：每步间隔（ms）。默认 1000。</summary>
+        public int ShopStepMs { get; set; } = 1000;
+        /// <summary>仅 ShopSequence=true 时生效：进世界到第一步的额外等待（ms）。默认 3000。</summary>
+        public int ShopStartDelayMs { get; set; } = 3000;
+        /// <summary>
+        /// 仅 ShopSequence=true 时生效：逗号分隔的 op 序列。
+        /// 允许值：sell / buy / query_sell_price / query_repair_cost / repair / storage / takeback。
+        /// 顺序即发信顺序（每条 op = 一次交互）。
+        /// </summary>
+        public string ShopOps { get; set; } = "sell,buy,query_sell_price,query_repair_cost,repair,storage,takeback";
+        /// <summary>仅 ShopSequence=true 时生效：目标 NPC 名（UserName；空 = 视图里第一个 NPC）。</summary>
+        public string ShopNpcName { get; set; } = "";
+        /// <summary>仅 ShopSequence=true 时生效：动作物品名（空 = 本假人背包第一件物品）。</summary>
+        public string ShopItemName { get; set; } = "";
+        /// <summary>仅 ShopSequence=true 时生效：动作物品 MakeIndex（0 = 只按名字取）。</summary>
+        public int ShopItemMake { get; set; } = 0;
+        /// <summary>仅 ShopSequence=true 时生效：卖/买/存取的数量（默认 1）。</summary>
+        public int ShopCount { get; set; } = 1;
+
+        /// <summary>
         /// M1③ 退出路径夹具（卡 openmir2-m1-dbsrv-6000-face；白名单 M1-EXIT）：默认 0 = 关
         /// （不新增任何发送）。&gt;0 时，本假人收到自己的 SM_LOGON（真进世界）后等这么久，
         /// 按 C# 客户端 AppLogout 的线上形状发一条 CM_SOFTCLOSE(1009)（= “小退”，服务端据此

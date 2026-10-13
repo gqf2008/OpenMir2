@@ -48,6 +48,15 @@ namespace BotSrv
             // M-2（reviewer-5 76e433f0）：attacker 判定改为与 LoginId 精确相等。
             // LoginId = LoginAccount + 序号（AppService.Run），故 attacker 的精确 LoginId = LoginAccount + AttackRole。
             MShare.g_sAttackRoleLoginId = string.Concat(_options.LoginAccount ?? string.Empty, _options.AttackRole);
+            // M3⑤ 夹具（白名单 T-29 家族扩展）：固定 NPC/商店动作序列；默认 false = 原行为
+            MShare.g_boShopSequence = _options.ShopSequence;
+            MShare.g_nShopStepMs = _options.ShopStepMs;
+            MShare.g_nShopStartDelayMs = _options.ShopStartDelayMs;
+            MShare.g_sShopOps = _options.ShopOps ?? string.Empty;
+            MShare.g_sShopNpcName = _options.ShopNpcName ?? string.Empty;
+            MShare.g_sShopItemName = _options.ShopItemName ?? string.Empty;
+            MShare.g_nShopItemMake = _options.ShopItemMake;
+            MShare.g_nShopCount = _options.ShopCount;
             // M1③ 退出路径夹具（白名单 M1-EXIT）：进世界后发 CM_SOFTCLOSE；默认 0 = 原行为
             MShare.g_nSoftCloseAfterWorldMs = _options.SoftCloseAfterWorldMs;
             MShare.g_boDisableAutoPlay = _options.DisableAutoPlay;
@@ -82,6 +91,11 @@ namespace BotSrv
             if (_options.StopAfterCharCreated)
             {
                 LogService.Info("预建角夹具: 建角后停在选角界面、不进世界（StopAfterCharCreated；见 SelectChrScene.ClientGetReceiveChrs）");
+            }
+            if (_options.ShopSequence)
+            {
+                LogService.Info("固定 NPC/商店序列: 启用 ops={0} 起始等待={1}ms 步间隔={2}ms npc={3} item={4}（开面板/买/卖/修理/存取；见 RobotPlayer.ShopSequenceTick）",
+                    _options.ShopOps, _options.ShopStartDelayMs, _options.ShopStepMs, _options.ShopNpcName, _options.ShopItemName);
             }
         }
 

@@ -54,6 +54,125 @@ namespace BotSrv
             return !string.IsNullOrEmpty(attackerLoginId)
                 && string.Equals(loginId, attackerLoginId, StringComparison.Ordinal);
         }
+
+        /// <summary>
+        /// M3⑤ 夹具（卡 openmir2-m3-shop-fixture-botsrv；白名单 T-29 家族扩展）：
+        /// 进世界后按固定顺序对同一 NPC/商人发开面板/买/卖/修理/存取动作。
+        /// 默认 false = 原行为（不新增任何发送）。见 RobotPlayer.ShopSequenceTick。
+        /// </summary>
+        public static bool g_boShopSequence = false;
+        public static int g_nShopStepMs = 1000;
+        public static int g_nShopStartDelayMs = 3000;
+        public static string g_sShopOps = "";
+        public static string g_sShopNpcName = "";
+        public static string g_sShopItemName = "";
+        public static int g_nShopItemMake = 0;
+        public static int g_nShopCount = 1;
+
+        /// <summary>M3⑤ 夹具：解析逗号分隔的 op 串（去空白/小写/仅保留已知 op）。
+        /// 纯函数（不依赖实例），供 `--selftest-shopseq` 与 ArmShopSequence 共用；
+        /// 未知 op 一律丢弃（fail-closed：宁可少发，也不发不认识的动作）。</summary>
+        public static string[] ParseShopOps(string raw)
+        {
+            var allowed = new List<string>
+            {
+                "sell", "buy", "query_sell_price", "query_repair_cost", "repair", "storage", "takeback"
+            };
+            var outList = new List<string>();
+            if (string.IsNullOrEmpty(raw))
+            {
+                return outList.ToArray();
+            }
+            foreach (string part in raw.Split(','))
+            {
+                string op = part.Trim().ToLowerInvariant();
+                if (op.Length == 0)
+                {
+                    continue;
+                }
+                if (allowed.Contains(op))
+                {
+                    outList.Add(op);
+                }
+            }
+            return outList.ToArray();
+        }
+
+        /// <summary>M3⑤ 夹具：把本步收到的帧 JSON 串（`{"sm":..,"a":..,..}`）归类成失败分支。
+        /// 纯函数（不依赖实例），供 `--selftest-shopseq` 与 RobotPlayer 共用。
+        /// 口径：同一步取**第一个决定性帧**；钱不够/负重满/背包满/仓库满/取回满/无帧不可互相顶替。</summary>
+        public static string ClassifyShopFrames(IList<string> frames)
+        {
+            if (frames == null)
+            {
+                return "fail_no_frame";
+            }
+            foreach (string fr in frames)
+            {
+                if (fr == null)
+                {
+                    continue;
+                }
+                if (fr.IndexOf("\"sm\":651", StringComparison.Ordinal) >= 0)
+                {
+                    if (fr.IndexOf("\"a\":3", StringComparison.Ordinal) >= 0) { return "fail_nomoney"; }
+                    if (fr.IndexOf("\"a\":2", StringComparison.Ordinal) >= 0) { return "fail_overweight"; }
+                    return "fail_buy_reject";
+                }
+                if (fr.IndexOf("\"sm\":649", StringComparison.Ordinal) >= 0) { return "fail_sell_reject"; }
+                if (fr.IndexOf("\"sm\":670", StringComparison.Ordinal) >= 0) { return "fail_repair_reject"; }
+                if (fr.IndexOf("\"sm\":702", StringComparison.Ordinal) >= 0) { return "fail_storage_full"; }
+                if (fr.IndexOf("\"sm\":703", StringComparison.Ordinal) >= 0) { return "fail_storage_reject"; }
+                if (fr.IndexOf("\"sm\":707", StringComparison.Ordinal) >= 0) { return "fail_bagfull"; }
+                if (fr.IndexOf("\"sm\":706", StringComparison.Ordinal) >= 0) { return "fail_takeback_reject"; }
+                if (fr.IndexOf("\"sm\":648", StringComparison.Ordinal) >= 0
+                    || fr.IndexOf("\"sm\":650", StringComparison.Ordinal) >= 0
+                    || fr.IndexOf("\"sm\":669", StringComparison.Ordinal) >= 0
+                    || fr.IndexOf("\"sm\":701", StringComparison.Ordinal) >= 0
+                    || fr.IndexOf("\"sm\":705", StringComparison.Ordinal) >= 0)
+                {
+                    return "ok";
+                }
+            }
+            return frames.Count > 0 ? "frames_unclassified" : "fail_no_frame";
+        }
+
+        /// <summary>M3⑤ 夹具：从帧 647（卖价）/ 671（修理价）取价格。纯函数（不依赖实例）。</summary>
+        public static int? ExtractShopPrice(IList<string> frames)
+        {
+            if (frames == null)
+            {
+                return null;
+            }
+            foreach (string fr in frames)
+            {
+                if (fr == null)
+                {
+                    continue;
+                }
+                if (fr.IndexOf("\"sm\":647", StringComparison.Ordinal) < 0
+                    && fr.IndexOf("\"sm\":671", StringComparison.Ordinal) < 0)
+                {
+                    continue;
+                }
+                int idx = fr.IndexOf("\"a\":", StringComparison.Ordinal);
+                if (idx < 0)
+                {
+                    continue;
+                }
+                int start = idx + 4;
+                int end = start;
+                while (end < fr.Length && (char.IsDigit(fr[end]) || fr[end] == '-'))
+                {
+                    end++;
+                }
+                if (end > start && int.TryParse(fr.Substring(start, end - start), out int val))
+                {
+                    return val;
+                }
+            }
+            return null;
+        }
         /// <summary>
         /// M1③ 退出路径夹具（卡 openmir2-m1-dbsrv-6000-face；白名单 M1-EXIT）：
         /// 收到本假人 SM_LOGON 后等这么久，按客户端 AppLogout 的线上形状发一条

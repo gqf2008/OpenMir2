@@ -53,6 +53,14 @@ param(
   [int]$AttackCount = 120,         # 仅 -AttackSequence 时生效：攻击步数
   [int]$AttackStepMs = 500,        # 仅 -AttackSequence 时生效：每步间隔
   [int]$AttackStartDelayMs = 3000, # 仅 -AttackSequence 时生效：进世界到第一步的额外等待
+  [switch]$ShopSequence,           # M3⑤ 夹具：BotSrv 进世界后按固定顺序发 NPC/商店动作（开面板/买/卖/修理/存取；白名单 T-29 家族）
+  [string]$ShopOps = 'sell,buy,query_sell_price,query_repair_cost,repair,storage,takeback',  # 仅 -ShopSequence 时生效
+  [int]$ShopStepMs = 1000,         # 仅 -ShopSequence 时生效：每步间隔
+  [int]$ShopStartDelayMs = 3000,   # 仅 -ShopSequence 时生效：进世界到第一步的额外等待
+  [string]$ShopNpcName = '',       # 仅 -ShopSequence 时生效：目标 NPC 名（空 = 视图里第一个）
+  [string]$ShopItemName = '',      # 仅 -ShopSequence 时生效：动作物品名（空 = 背包第一件）
+  [int]$ShopItemMake = 0,          # 仅 -ShopSequence 时生效：物品 MakeIndex（0 = 只按名字取）
+  [int]$ShopCount = 1,             # 仅 -ShopSequence 时生效：卖/买/存取数量
   [switch]$EmitOpsArgs,            # 只打印 run_bots 命令组成（含 -DisableAutoPlay 耦合）后退出；无副作用，供无栈自检
   [switch]$PinStartPose,           # T-14 固定起点变体（owner 86478c55/d7798370）：预热建角 → SQL pin → BEFORE 快照 → 计分跑（选角；不带 -FixedNewChr/-NewAccount）
   [string]$PinMapName = '',   # 攻击变体的 pin 地图（R-1 要求整张零刷怪；空 ⇒ -AttackPinPair 取 $script:M3AttackPinMap，否则 '0'）
@@ -157,6 +165,12 @@ function Get-M3BotOpPlan {
     $runner += " -AttackSequence -AttackCount $AttackCount -AttackStepMs $AttackStepMs -AttackStartDelayMs $AttackStartDelayMs -DisableAutoPlay"
     $planArgs += @('-AttackSequence', '-AttackCount', $AttackCount, '-AttackStepMs', $AttackStepMs, '-AttackStartDelayMs', $AttackStartDelayMs, '-DisableAutoPlay')
   }
+  if ($ShopSequence -and -not $ForPrewarm) {
+    # M3⑤ 夹具（卡 openmir2-m3-shop-fixture-botsrv）：固定 NPC/商店序列**必须**一并关挂机
+    # （同 T-14/T-29 理由：挂机 = 无种子 RNG 随机走位，会改坐标/视野 ⇒ 两侧不可比）。
+    $runner += " -ShopSequence -ShopOps '$ShopOps' -ShopStepMs $ShopStepMs -ShopStartDelayMs $ShopStartDelayMs -ShopNpcName '$ShopNpcName' -ShopItemName '$ShopItemName' -ShopItemMake $ShopItemMake -ShopCount $ShopCount -DisableAutoPlay"
+    $planArgs += @('-ShopSequence', '-ShopOps', $ShopOps, '-ShopStepMs', $ShopStepMs, '-ShopStartDelayMs', $ShopStartDelayMs, '-ShopNpcName', $ShopNpcName, '-ShopItemName', $ShopItemName, '-ShopItemMake', $ShopItemMake, '-ShopCount', $ShopCount, '-DisableAutoPlay')
+  }
   return [pscustomobject]@{ runner = $runner; botArgs = $planArgs }
 }
 
@@ -231,12 +245,13 @@ if ($EmitOpsArgs) {
     bot_args          = $plan.botArgs
     bag_equip_scope   = Format-M3BagEquipScope -BagEquipSequence ([bool]$BagEquipSequence) -BagEquipStepMs $BagEquipStepMs -BagEquipStartDelayMs $BagEquipStartDelayMs -DisableAutoPlay ([bool]$BagEquipSequence)
     attack_sequence   = Format-M3AttackScope -AttackSequence ([bool]$AttackSequence) -AttackCount $AttackCount -AttackStepMs $AttackStepMs -AttackStartDelayMs $AttackStartDelayMs -DisableAutoPlay ([bool]$AttackSequence)
+    shop_sequence     = Format-M3ShopScope -ShopSequence ([bool]$ShopSequence) -ShopOps $ShopOps -ShopStepMs $ShopStepMs -ShopStartDelayMs $ShopStartDelayMs -ShopNpcName $ShopNpcName -ShopItemName $ShopItemName -ShopItemMake $ShopItemMake -ShopCount $ShopCount -DisableAutoPlay ([bool]$ShopSequence)
     start_pose        = (Get-M3StartPoseLabel)
     attack_pose       = (Get-M3AttackPoseLabel)
   }
   # F-2 竞态修（owner 2026-10-13 04:05）：存档序列的 AFTER 快照前「等断线存档落库」仪器形态，
   # 无栈自检据此机判生产接线未被削弱（mode=save_rcd、timeout/poll>=1、quiet>=2），也据此发现「改回固定 sleep」。
-  if ($BagEquipSequence -or $AttackSequence) {
+  if ($BagEquipSequence -or $AttackSequence -or $ShopSequence) {
     $obj['save_settle_instrument'] = (Format-M3SaveSettleInstrument -TimeoutSeconds $SaveSettleTimeoutSeconds -PollMilliseconds $SaveSettlePollMs -QuietPolls $SaveSettleQuietPolls)
   }
   if ($PinStartPose) {
@@ -460,7 +475,7 @@ if ($PinStartPose) {
 # `characters_ablity.ModifyTime` 由存档 `SaveAblity` 置 `now()`；只有**晚于**该参考才说明本段存档已落库。
 # 仅存档序列（-BagEquipSequence/-AttackSequence）需要；其余路径不取参考、不额外等待（行为逐字节不变）。
 $saveSettleRef = ''
-if (($BagEquipSequence -or $AttackSequence) -and -not $SkipBots) {
+if (($BagEquipSequence -or $AttackSequence -or $ShopSequence) -and -not $SkipBots) {
   $saveSettleRef = ([string](Invoke-Mysql "SELECT DATE_FORMAT(NOW(),'%Y-%m-%d %H:%i:%s')")).Trim()
   Write-Output ("SAVE_SETTLE_REF {0}" -f $saveSettleRef)
 }
@@ -496,7 +511,10 @@ $opsRunner = 'none'
 $opsExit = 0
 $bagSeqMarkers = @()
 $attackMarkers = @()
+$shopSeqMarkers = @()
 $attackRawPath = Join-Path $SessionDir 'attack_raw.jsonl'
+$shopMarkersPath = Join-Path $SessionDir 'shop_markers.jsonl'
+$shopRawPath = Join-Path $SessionDir 'npc_shop_raw.jsonl'
 if (-not $SkipBots) {
   $plan = Get-M3BotOpPlan
   $opsRunner = $plan.runner
@@ -608,6 +626,38 @@ if (-not $SkipBots) {
       exit 1
     }
   }
+  # M3⑤（T-29 家族扩展）：固定 NPC/商店序列的执行证据（逐 op 一条 `M3SHOPSEQ` 事件，落 bot.log）。
+  # 判据：开了 -ShopSequence 就必须看到 `arm` + 每个 op 的 `send`/`end` + `done`（驱动跑完整序列）；
+  # 缺任一段 ⇒ RED，绝不拿空序列去跨侧 diff（否则恒绿）。原始件落 `shop_markers.jsonl`，
+  # 再用 `npc_shop_diff.py assemble` 合并成记录 `npc_shop_raw.jsonl`（供跨侧比较）。
+  $shopSeqMarkers = @([regex]::Matches($botText, 'M3SHOPSEQ [^\r\n]*') | ForEach-Object { $_.Value })
+  Write-Output ("OPS_SHOPSEQ_MARKERS count={0}" -f $shopSeqMarkers.Count)
+  if ($ShopSequence) {
+    if ($shopSeqMarkers.Count -eq 0) {
+      Write-Output 'RED: -ShopSequence 开了但 bot.log 里一条 M3SHOPSEQ 标记都没有 —— 固定序列没跑（驱动未生效/假人未进世界）'
+      exit 1
+    }
+    $shopEvents = @($shopSeqMarkers | ForEach-Object { $_.Substring('M3SHOPSEQ '.Length).Trim() })
+    Set-Content -Path $shopMarkersPath -Value $shopEvents -Encoding utf8
+    $shopSend = @($shopEvents | Where-Object { $_ -match '"phase"\s*:\s*"send"' }).Count
+    $shopEnd = @($shopEvents | Where-Object { $_ -match '"phase"\s*:\s*"end"' }).Count
+    $shopDone = @($shopEvents | Where-Object { $_ -match '"phase"\s*:\s*"done"' }).Count
+    $shopExpectedOps = @($ShopOps.Split(',') | Where-Object { $_.Trim() -ne '' }).Count
+    Write-Output ("OPS_SHOPSEQ send={0} end={1} done={2} expected_ops={3}" -f $shopSend, $shopEnd, $shopDone, $shopExpectedOps)
+    if ($shopDone -lt 1) {
+      Write-Output 'RED: -ShopSequence 开了但没有 `M3SHOPSEQ phase=done` —— 序列未收尾（驱动中途断了）'
+      exit 1
+    }
+    if ($shopSend -lt $shopExpectedOps -or $shopEnd -lt $shopExpectedOps) {
+      Write-Output ("RED: -ShopSequence 只跑完 {0}/{1} op（send={0} end={1}）—— 序列不完整，不能当『同一序列』" -f $shopSend, $shopExpectedOps, $shopEnd)
+      exit 1
+    }
+    & python -I (Join-Path $Here 'npc_shop_diff.py') assemble $shopMarkersPath --out $shopRawPath --side $Side
+    if ($LASTEXITCODE -ne 0) {
+      Write-Output 'RED: npc_shop_diff.py assemble 失败（事件流缺 send/end 或 done.ops 不一致）—— 原始件不可判'
+      exit 1
+    }
+  }
   # 判据取"可靠段"：账号创建 + 登录成功 = N（实测稳定）。
   # 进世界之后的段位今日不可靠：BotSrv 会在 `TMap.CanMove` 崩溃并带走整个进程
   #（工具侧已知阻塞，见 m3/README.md「已知阻塞」），崩溃点与时序相关（有时停在"确认游戏公告"）。
@@ -631,7 +681,7 @@ if (-not $SkipBots) {
 # 修法 = **等状态变化**（轮询到本前缀角色存档落库），超时 ⇒ fail-closed（点名 RED，绝不静默继续）。
 # 仅 -BagEquipSequence/-AttackSequence（且非 -SkipBots）生效；其余路径逐字节不变（不加任何等待）。
 $saveSettleLabel = '(off)'
-if (($BagEquipSequence -or $AttackSequence) -and -not $SkipBots) {
+if (($BagEquipSequence -or $AttackSequence -or $ShopSequence) -and -not $SkipBots) {
   if ([string]::IsNullOrEmpty($saveSettleRef)) { throw 'SAVE_SETTLE_REF 缺失——存档序列必须在 BEFORE 快照前取 DB 参考时刻（F-2）' }
   $saveSettleProbe = {
     $n = Invoke-Mysql (Get-M3SaveSettleProbeSql -ChrNamePrefix $Prefix -ReferenceTime $saveSettleRef)
@@ -645,7 +695,7 @@ if (($BagEquipSequence -or $AttackSequence) -and -not $SkipBots) {
     throw ("RED: 断线存档未在 {0}s 内落库（{1}，landed={2}/{3}，ref={4}）—— AFTER 快照会漏掉本段改动（F-2 竞态）；绝不静默继续" -f `
       $SaveSettleTimeoutSeconds, $saveSettle.Reason, $saveSettle.LastLanded, $Bots, $saveSettleRef)
   }
-} elseif ($BagEquipSequence -or $AttackSequence) {
+} elseif ($BagEquipSequence -or $AttackSequence -or $ShopSequence) {
   $saveSettleLabel = '(off: -SkipBots)'
   Write-Output 'SETTLE_SAVE_RCD SKIPPED (-SkipBots)'
 }
@@ -690,6 +740,8 @@ $baseline = [pscustomobject]@{
   bag_equip_sequence = (Format-M3BagEquipScope -BagEquipSequence ([bool]$BagEquipSequence) -BagEquipStepMs $BagEquipStepMs -BagEquipStartDelayMs $BagEquipStartDelayMs -DisableAutoPlay ([bool]$BagEquipSequence))
   bag_equip_markers = $bagSeqMarkers
   attack_sequence = (Format-M3AttackScope -AttackSequence ([bool]$AttackSequence) -AttackCount $AttackCount -AttackStepMs $AttackStepMs -AttackStartDelayMs $AttackStartDelayMs -DisableAutoPlay ([bool]$AttackSequence))
+  shop_sequence = (Format-M3ShopScope -ShopSequence ([bool]$ShopSequence) -ShopOps $ShopOps -ShopStepMs $ShopStepMs -ShopStartDelayMs $ShopStartDelayMs -ShopNpcName $ShopNpcName -ShopItemName $ShopItemName -ShopItemMake $ShopItemMake -ShopCount $ShopCount -DisableAutoPlay ([bool]$ShopSequence))
+  shop_markers = $shopSeqMarkers
   attack_pose = (Get-M3AttackPoseLabel)
   pin_attempts = $(if ($pinAttempts -ge 1) { Format-M3PinAttempts -Attempts $pinAttempts -Expected $pinAttemptsExpected -SettleRounds $pinSettleRounds -MaxAttempts $PinMaxAttempts } else { '(off)' })
   save_settle = $saveSettleLabel
