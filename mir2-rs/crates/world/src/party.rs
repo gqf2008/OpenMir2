@@ -56,6 +56,10 @@ use crate::world::World;
 
 /// `GameSvrConf.cs:1402` 的 `GroupMembersMax` 初值（部署 `Server.conf:292` 同为 `10`）。
 pub const PARTY_GROUP_MEMBERS_MAX_DEFAULT: u8 = 10;
+/// `src/OpenMir2/Grobal2.cs:35` 的 `GroupMax`（组队经验 bonus 表的下标上界；`GainExp` 用它做下标门）。
+pub const PARTY_GROUP_MAX: usize = 11;
+/// `PlayObject.GainExp` 的 `bonus[12]`（`PlayObject.Base.cs:766`）。
+pub const PARTY_EXP_BONUS: [f64; 12] = [1.0, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.1, 2.2];
 /// `GameSvrConf.cs:1844` 的 `GroupMsgPreFix` 初值（`[String]` 缺键 ⇒ 默认）。
 pub const PARTY_GROUP_MSG_PREFIX_DEFAULT: &str = "〖组队〗";
 /// `GameSvrConf.cs:1544` 的 `GroupMsgFColor` 初值（部署 `Server.conf:608` 同为 `196`）。

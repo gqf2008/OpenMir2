@@ -1,0 +1,46 @@
+$ cargo test -p game-svr pickup_group_attribution_uses_registry
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 151 filtered out; finished in 0.00s
+running 1 test
+test tests::pickup_group_attribution_uses_registry ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 182 filtered out; finished in 0.00s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.00s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+$ cargo test -p game-svr bag_takeoff_blocked_while_dealing
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 151 filtered out; finished in 0.00s
+running 1 test
+test tests::bag_takeoff_blocked_while_dealing ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 182 filtered out; finished in 0.00s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.00s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+$ cargo test -p mir2-world --test party_attribution
+running 9 tests
+test group_exp_replicates_oracle_curry_missing_bug ... ok
+test group_exp_awards_list_members_in_order ... ok
+test ham_group_filter_matches_oracle ... ok
+test group_exp_excludes_dead_member ... ok
+test group_exp_by_level_ratio ... ok
+test single_member_group_gets_plain_exp ... ok
+test world_attack_excludes_group_mate ... ok
+test group_exp_excludes_other_map_member ... ok
+test group_exp_fix_splits_evenly_with_bonus ... ok
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+$ cargo test -p mir2-world --test party_vectors
+running 15 tests
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s

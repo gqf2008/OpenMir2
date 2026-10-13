@@ -1,0 +1,18 @@
+# 改坏①：combat.rs HAM_GROUP 的 IsGroupMember 剔除注释掉
+# 改坏②：world.rs GainExp 第二次距离判定改用 CurrY（"修掉" oracle 缺陷）
+$ cargo test -p mir2-world --test party_attribution
+test group_exp_fix_splits_evenly_with_bonus ... ok
+test group_exp_replicates_oracle_curry_missing_bug ... FAILED
+test group_exp_excludes_other_map_member ... ok
+test world_attack_excludes_group_mate ... FAILED
+test group_exp_excludes_dead_member ... ok
+test ham_group_filter_matches_oracle ... FAILED
+test group_exp_by_level_ratio ... ok
+test single_member_group_gets_plain_exp ... ok
+test group_exp_awards_list_members_in_order ... ok
+thread 'group_exp_replicates_oracle_curry_missing_bug' (10156) panicked at crates\world\tests\party_attribution.rs:94:5:
+assertion `left == right` failed: B 仍计入 n=3
+thread 'world_attack_excludes_group_mate' (10400) panicked at crates\world\tests\party_attribution.rs:219:5:
+assertion `left == right` failed: 同组 ⇒ damage=0
+thread 'ham_group_filter_matches_oracle' (7096) panicked at crates\world\tests\party_attribution.rs:174:5:
+test result: FAILED. 6 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s

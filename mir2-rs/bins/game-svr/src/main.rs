@@ -862,6 +862,7 @@ fn handle_ground_cmd(
     chr_name: &str,
     socket: i32,
     dealing: bool,
+    deal_last_tick: i32,
     world: &mir2_world::World,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     online: &OnlineRegistry,
@@ -915,6 +916,17 @@ fn handle_ground_cmd(
             );
             return;
         }
+        // `ClientPickUpItemIsOfGroup`（`PlayObject.Base.cs:38-54`）：M3⑦-实现 4 接上真注册表。
+        let group_owner = world.entities.get(actor_id).map_or(0, |e| e.group_owner);
+        let group_member_actor_ids: Vec<i32> = if group_owner != 0 {
+            world
+                .entities
+                .get(group_owner)
+                .map(|e| e.group_members.clone())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         let ctx = game_svr::ground::PickUpContext {
             catalog,
             actor_id,
@@ -927,9 +939,9 @@ fn handle_ground_cmd(
             human_max_gold: cfg.human_max_gold,
             // `Race == ActorRace.Play`（`SendAddItem` 仅在玩家时发）⇒ 恒真（本宿主只收玩家）。
             race_is_play: true,
-            // 组队系统未移植（`GroupOwner=0`）⇒ 群组分支恒 false（登记）。
-            group_owner: 0,
-            group_member_actor_ids: &[],
+            // `ClientPickUpItemIsOfGroup`（`PlayObject.Base.cs:38-54`）：M3⑦-实现 4 接上真注册表。
+            group_owner,
+            group_member_actor_ids: &group_member_actor_ids,
             red_msg_f_color: u16::from(colors.red_f),
             red_msg_b_color: u16::from(colors.red_b),
         };
@@ -945,8 +957,9 @@ fn handle_ground_cmd(
             curr_x: cx,
             curr_y: cy,
             now_tick,
-            // `DealLastTick` 未建模（无交易系统）⇒ 0（新会话即过 3000ms 门）。
-            deal_last_tick: 0,
+            // `PlayObject.DealLastTick`（M3⑦-实现 4）：交易会话真值（`handle_deal_cmd` 用
+            // `world.clock_ms` 写入）⇒ 新会话为 0（过 3000ms 门），交易中才拦 drop。
+            deal_last_tick,
             make_index: i32::from(param),
             item_name,
             in_safe_disable_drop: cfg.in_safe_disable_drop,
@@ -1317,6 +1330,7 @@ fn handle_bag_cmd(
     world: &mir2_world::World,
     displays: &mut downlink::DisplayTable,
     ref_msg_range: i32,
+    dealing: bool,
 ) {
     let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
         glog!(
@@ -1360,7 +1374,9 @@ fn handle_bag_cmd(
         guild_rank_no: 0,
         is_castle_member: false,
         user_unlock_durg: false,
-        dealing: false,
+        // `PlayObject.Dealing`（M3⑦-实现 4）：交易中禁穿装/卸装（`Operate.cs:501/525` 的
+        // `!Dealing` 门）。
+        dealing,
         disable_take_off_keys: &[],
         on_horse: false,
         horse_type: 0,
@@ -4591,6 +4607,10 @@ fn sim_loop(
                             socket,
                             // `PlayObject.Dealing`（M3⑦-实现 3）：交易中禁拾取/禁丢弃。
                             trade_sessions.get(&chr_name).is_some_and(|s| s.dealing),
+                            // `PlayObject.DealLastTick`（M3⑦-实现 4）：交易会话真值。
+                            trade_sessions
+                                .get(&chr_name)
+                                .map_or(0, |s| s.deal_last_tick as i32),
                             &world,
                             &mut ground_sessions,
                             &online,
@@ -4644,6 +4664,8 @@ fn sim_loop(
                             &world,
                             &mut displays,
                             enter_cfg.ref_msg_range,
+                            // `PlayObject.Dealing`（M3⑦-实现 4）：交易中禁穿装/卸装。
+                            trade_sessions.get(&chr_name).is_some_and(|s| s.dealing),
                         );
                     } else if cmd.ident == game_svr::useitem::CM_EAT {
                         // `CM_EAT(1006)`：oracle `PlayObject.Message.cs:826` 的 `ClientUseItems(nParam1, Msg)`。
@@ -8001,6 +8023,7 @@ mod tests {
             "hero",
             901,
             false,
+            0,
             &world,
             &mut sessions,
             &online,
@@ -8029,6 +8052,7 @@ mod tests {
             "hero",
             901,
             false,
+            0,
             &world,
             &mut sessions,
             &online,
@@ -8165,6 +8189,7 @@ mod tests {
             &world,
             &mut displays,
             12,
+            false,
         );
 
         // 出帧：SM_ADDITEM(200，换下回背包) → SM_TAKEOFF_OK(619) → SM_TAKEOFF_FAIL(620，oracle
@@ -8286,6 +8311,7 @@ mod tests {
             &world,
             &mut displays,
             12,
+            false,
         );
 
         let sg = sessions.get("hero").unwrap();
@@ -8427,6 +8453,7 @@ mod tests {
             &world,
             &mut displays,
             12,
+            false,
         );
 
         let collect = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| -> Vec<(i32, u16, u16, u16)> {
@@ -10806,5 +10833,274 @@ mod tests {
             )
         );
         assert_eq!(body2.len(), 12, "空尾 ⇒ header-only 不变");
+    }
+
+    /// **M3⑦-实现 4**：`CM_PICKUP` 的归属组队分支接上真注册表
+    /// （oracle `PlayObject.Base.cs:38-54` `ClientPickUpItemIsOfGroup`）：非组员不可拾、
+    /// 同组成员可拾。
+    ///
+    /// 改坏必红：把 `handle_ground_cmd` 里的 `group_owner`/`group_member_actor_ids` 换回
+    /// `0`/`&[]` ⇒ 情形 B 收不到 `SM_GOLDCHANGED`、会话金币不变，两条断言必红。
+    #[test]
+    fn pickup_group_attribution_uses_registry() {
+        use std::collections::HashMap;
+
+        let mut world = mir2_world::World::new(32, 32);
+        world.item_catalog = vec![mir2_data::StdItem {
+            name: "金币".into(),
+            ..Default::default()
+        }];
+        let hero = world.add_entity({
+            let mut e = mir2_world::Entity::new(1, "hero", 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e
+        });
+        let mate = world.add_entity(mir2_world::Entity::new(2, "mate", 11, 10));
+        let (gx, gy) = (11, 10);
+        let count = 300;
+        // 地面金币归属 = mate（`MapItem.OfBaseObject`）。
+        assert!(world.maps[0].add_floor_item(
+            gx,
+            gy,
+            mate,
+            mir2_world::map::FloorItemMeta {
+                kind: mir2_world::map::FloorItemKind::Gold,
+                index: 0,
+                count,
+                item_id: mate,
+                of_base_object: mate,
+            },
+            0,
+        ));
+        {
+            let e = world.entities.get_mut(hero).expect("hero 必在实体表");
+            e.x = gx;
+            e.y = gy;
+        }
+
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert(
+            "hero".into(),
+            SessionGround {
+                state: game_svr::ground::GroundState {
+                    item_list: Vec::new(),
+                    gold: 0,
+                    wabil: test_ability(),
+                },
+                storage: storage::StorageState::new(),
+                actor_id: hero,
+                game_gold: 0,
+                sys_msg: None,
+                use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
+                sub: game_svr::ability::SubAbility::first_call(),
+                equip: test_equip_inputs(),
+                recovery: game_svr::recover::Recovery::new(0),
+                stamina: game_svr::stamina::Stamina::new(0),
+                show_hp: false,
+                user_unlock_durg: false,
+                hunger_status: 0,
+                query_bag_items_tick: None,
+                save_rcd_tick: 0,
+            },
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hero,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let cfg = GroundCfg {
+            human_max_gold: 10_000_000,
+            floor_item_can_pick_up_time: 120_000,
+            control_drop_item: false,
+            in_safe_disable_drop: false,
+            can_drop_price: 500,
+            drop_item_rage: 3,
+        };
+        let colors = MsgColors {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+        };
+        let catalog = game_svr::ability::StdItemCatalog::new();
+
+        // 情形 A：hero 与 mate **未组队** ⇒ 归属既非自己也非组员 ⇒ 拒绝（无帧、金币不变）。
+        handle_ground_cmd(
+            game_svr::ground::CM_PICKUP,
+            u16::try_from(gx).unwrap(),
+            u16::try_from(gy).unwrap(),
+            None,
+            "hero",
+            901,
+            false,
+            0,
+            &world,
+            &mut sessions,
+            &online,
+            &gates,
+            &cfg,
+            &colors,
+            &catalog,
+            None,
+        );
+        assert!(
+            matches!(rx0.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
+            "未组队 ⇒ 不得拾取他人归属物（oracle Base.cs:57-63）"
+        );
+        assert_eq!(sessions.get("hero").unwrap().state.gold, 0);
+
+        // 情形 B：hero 与 mate 同组（hero 团长）⇒ `ClientPickUpItemIsOfGroup(mate)` 成立 ⇒ 可拾。
+        world.entities.get_mut(mate).unwrap().allow_group = true;
+        let _ = world.party_create_group(hero, "mate", &mir2_world::PartyConfig::default());
+        assert_eq!(world.entities.get(hero).unwrap().group_owner, hero);
+        assert_eq!(world.entities.get(mate).unwrap().group_owner, hero);
+        handle_ground_cmd(
+            game_svr::ground::CM_PICKUP,
+            u16::try_from(gx).unwrap(),
+            u16::try_from(gy).unwrap(),
+            None,
+            "hero",
+            901,
+            false,
+            0,
+            &world,
+            &mut sessions,
+            &online,
+            &gates,
+            &cfg,
+            &colors,
+            &catalog,
+            None,
+        );
+        let body = match rx0.try_recv() {
+            Ok(SimToGate::SendFrame { body, socket }) => {
+                assert_eq!(socket, 901);
+                body
+            }
+            other => panic!("组员归属物应可拾并回 SM_GOLDCHANGED，实收 {other:?}"),
+        };
+        let cm = mir2_protocol::frame::CommandMessage::from_bytes(&body).expect("body >= 12B");
+        assert_eq!(cm.ident, mir2_protocol::messages::SM_GOLDCHANGED);
+        assert_eq!(cm.recog, count);
+        assert_eq!(sessions.get("hero").unwrap().state.gold, count);
+    }
+
+    /// **M3⑦-实现 4**：`CM_TAKEOFFITEM` 的 `Dealing` 守卫接上真交易态
+    /// （oracle `PlayObject.Operate.cs:501` `if (!Dealing && btWhere < 13)`）。
+    ///
+    /// 改坏必红：把 `handle_bag_cmd` 的 `dealing` 换回 `false` ⇒ 卸装成功、物品从 `UseItems`
+    /// 移除，两条断言（`recog == -1` / `use_items[0].is_some()`）必红。
+    #[test]
+    fn bag_takeoff_blocked_while_dealing() {
+        use std::collections::HashMap;
+
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "木剑".into(),
+                std_mode: 5,
+                ..Default::default()
+            },
+        );
+
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut use_items: Vec<Option<game_svr::bag::BagItem>> =
+            vec![None; game_svr::ability::USE_ITEMS_LEN];
+        use_items[0] = Some(game_svr::bag::BagItem {
+            make_index: 60001,
+            index: 1,
+            dura: 10,
+            dura_max: 10,
+            desc: [0u8; 14],
+        });
+        sessions.insert(
+            "hero".into(),
+            SessionGround {
+                state: game_svr::ground::GroundState {
+                    item_list: Vec::new(),
+                    gold: 123,
+                    wabil: test_ability(),
+                },
+                storage: storage::StorageState::new(),
+                actor_id: 42,
+                game_gold: 0,
+                sys_msg: None,
+                use_items,
+                sub: game_svr::ability::SubAbility::first_call(),
+                equip: test_equip_inputs(),
+                recovery: game_svr::recover::Recovery::new(0),
+                stamina: game_svr::stamina::Stamina::new(0),
+                show_hp: false,
+                user_unlock_durg: false,
+                hunger_status: 0,
+                query_bag_items_tick: None,
+                save_rcd_tick: 0,
+            },
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: 42,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let world = mir2_world::World::new(8, 8);
+        let mut displays = downlink::DisplayTable::new();
+
+        // `recog=60001`（MakeIndex）、`param=0`（槽位）、`dealing=true`。
+        handle_bag_cmd(
+            game_svr::bag::CM_TAKEOFFITEM,
+            60001,
+            0,
+            0,
+            Some("木剑"),
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            &world,
+            &mut displays,
+            12,
+            true,
+        );
+        let mut fail_seen = false;
+        while let Ok(m) = rx0.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = m {
+                let cm = mir2_protocol::frame::CommandMessage::from_bytes(&body).expect(">=12B");
+                if cm.ident == mir2_protocol::messages::SM_TAKEOFF_FAIL {
+                    assert_eq!(
+                        cm.recog, -1,
+                        "Dealing ⇒ n10 = -1（oracle Operate.cs:501/535）"
+                    );
+                    fail_seen = true;
+                }
+            }
+        }
+        assert!(fail_seen, "交易中卸装必须回 SM_TAKEOFF_FAIL(-1)");
+        assert!(
+            sessions.get("hero").unwrap().use_items[0].is_some(),
+            "交易中不得真正卸下装备"
+        );
     }
 }
