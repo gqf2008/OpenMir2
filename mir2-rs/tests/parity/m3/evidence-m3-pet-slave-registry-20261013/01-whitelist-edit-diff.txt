@@ -1,0 +1,36 @@
+# 本片对 whitelist.md 的唯一改动（base = 9c776129c = origin/master）
+# [cmd] git --no-pager diff -U2 9c776129c -- mir2-rs/tests/parity/whitelist.md
+
+diff --git a/mir2-rs/tests/parity/whitelist.md b/mir2-rs/tests/parity/whitelist.md
+index ae169e67c..fbb2e121d 100644
+--- a/mir2-rs/tests/parity/whitelist.md
++++ b/mir2-rs/tests/parity/whitelist.md
+@@ -37,4 +37,8 @@
+ | B-14 | 常量替换要求匹配位置 > 0（行首命中不替换），每 define 每行至多 10 次 | `ScriptParsers.cs:634-650` → `crates/script/src/parser.rs` |
+ | B-15 | **门/墙通行掩码的 `LowWall` 不可恢复**：`Envir.SetMapXyFlag`（`Envirnoment.cs:1362-1369`）先走 `GetCellInfo`，而 `GetCellInfo` 对「越界**或** `Attribute != Walk`」都返 `success=false` ⇒ `SetAttribute` 不执行。于是 `CastleDoor.SetMapXyFlag(1)`（关门）把 9 格置 `LowWall` 后，`SetMapXyFlag(0)`（开门）的 `boFlag=true` 调用**无法**把它们恢复成 `Walk` ⇒ 城门「开」了但格子仍阻断。（同族：`WallStructure.Run` 用 `SetMapFlaged` 标记自己规避了这一点，只有 `CastleDoor` 的 9 格掩码命中本 bug。） | `src/M2Server/Maps/Envirnoment.cs:1362-1369` + `src/M2Server/Monster/Monsters/CastleDoor.cs:23-44` → `crates/world/src/map.rs`（`MapGrid::set_map_xy_flag`）/ `crates/world/src/castle.rs`（`door_map_xy_flag_ops`）；用例 `castle::tests::door_mask_blocks_cells_and_low_wall_cannot_be_restored_like_oracle`（BUG-REPLICA） |
++| B-112 | **`ProcessSlaveMutiny` 的 `DC` 高字节截断**：`SlaveList[i].WAbil.DC = (ushort)HUtil32.MakeLong((short)(HUtil32.LoByte(...DC) * SystemShare.Config.MasterDieMutinyPower), (short)(HUtil32.HiByte(...DC) * SystemShare.Config.MasterDieMutinyPower))` —— 外层 `(ushort)` 把 `MakeLong` 的高 16 位（= 高字节缩放值）**截掉** ⇒ `DC` 实际只等于 `(ushort)(short)(LoByte(DC) * Power)`，高字节恒归零。`rg 'ProcessSlaveMutiny' src/` = `PlayObject.Base.cs`/`PlayObject.Message.cs` 两处（定义 + 自投递）。 | `src/M2Server/Player/PlayObject.Base.cs:349` → `crates/world/src/slave.rs::process_slave_mutiny`（逐位保留该截断；红检钉住） |
++| B-113 | **`MasterDieMutinySpeed` 除零**：`SlaveList[i].WalkSpeed = SlaveList[i].WalkSpeed / SystemShare.Config.MasterDieMutinySpeed`（`PlayObject.Base.cs:350`）；且该配置的读取本身是 oracle 缺陷——`ServerConf.cs:521` 用 **`MasterDieMutinyPower`** 键给 `MasterDieMutinySpeed` 赋值（见 M3⑨-1 卡）⇒ `Server.conf` 的 `MasterDieMutinyPower=0` 时该行**除零**。 | `src/M2Server/Player/PlayObject.Base.cs:350` + `src/Modules/SystemModule/Conf/ServerConf.cs:521` → `crates/world/src/slave.rs::process_slave_mutiny`（`speed != 0` 才除；错键照搬，除零分支不可达，登记不冒充已实现） |
++| B-114 | **`GainSlaveExp` 是死代码**：`private void GainSlaveExp(byte nLevel)`（`MonsterObject.cs:71-84`）**全仓无调用点**（`rg 'GainSlaveExp' src/` 仅定义处 1 命中）⇒ oracle 里「宝宝击杀**不**涨 `SlaveExpLevel`」。 | `src/M2Server/Monster/MonsterObject.cs:71-84` → `crates/world/src/slave.rs`（**不实现**宝宝击杀涨级；`slave_exp_level` 只由召唤/叛变写，红检钉住） |
++| B-115 | **色表 latent 越界**：`GetChrColor` 的门是 `slaveExpLevel <= Grobal2.SlaveMaxLevel`（`Grobal2.cs:23` = 50），却索引 **15 项**色表 `SystemShare.Config.SlaveColor[slaveExpLevel]`（`BaseObject.Base.cs:878-880`）⇒ `slaveExpLevel ∈ 15..=50` 会 `IndexOutOfRangeException`（latent）。正常数据不可达：召唤的 `SlaveExpLevel` 来自 `SkeletonArray/DragonArray.nLevel`，叛变置 `SlaveColor.Length` 的同时把 `Master=null` ⇒ 走不到色表支。 | `src/M2Server/Actor/BaseObject.Base.cs:877-881` + `src/OpenMir2/Grobal2.cs:23` → `crates/world/src/slave.rs::get_chr_color`（`slice::get` 落到 `GetNameColor` 兜底） |
+ 
+ ## A 线待观察项（C# 侧既有口径差——非对拍差异，M1/M2 移植网关时逐条处置）
+@@ -272,4 +276,19 @@ M0 金标准验收状态（2026-10-10）：① 逐字节回放 0 差异、② 
+ > **编号连号**：T-45（M3⑨ 英雄/宠物夹具；T-22/T-29/T-41 的同族扩展）。
+ 
++### M3⑨ 实现登记（宝宝召唤 / 生命周期；卡片 `openmir2-m3-pet-slave-summon`(⑨-2) + `-pet-slave-lifecycle`(⑨-3)，2026-10-13）
++
++> 收口 reviewer-5 对 ⑨-3 的两条非阻塞 Minor（M-1「4 条 BUG-REPLICA 未落 whitelist 行」/ M-2「`slave_list_cleanup_all` 调用点
++> 跨对象相对顺序」）。4 条「复刻的 oracle 缺陷」按本表 B 段体例（= 「复刻的 C# 已知 bug」，见文件头）登记为 **B-112..B-115**；
++> M-2 的调度位置 / 未建模分支差异登记为 **T-49**。
++> **编号说明**：T-48 按已闭合卡 `openmir2-m3-whitelist-registry-integrity` 的建议，留给「T-42 撞号去重」这条待 owner 路由的改动
++> ⇒ 本行取 T-49。B-112..B-115 为 B 段当前空号（早前 reviewer 曾建议 B-112 用于 811 Job 面，作者判定为 1:1、**未落行** ⇒
++> 该号空出，本片取用）。本块全部行**待独立 principal 复核**。
++
++| 编号 | 差异/豁免点 | 为什么无害 / 处置 | 谁审的 |
++| --- | --- | --- | --- |
++| T-49 | **M3⑨-2/⑨-3 的调度位置与未建模分支（本片登记）**：① `slave_list_cleanup_all`（oracle `BaseObject.Base.cs:208-217` 的「倒序清表三条件」`Death \|\| Ghost \|\| Master != this`）在 oracle 里跑在**各主人自己的 `Run()` 尾**；Rust 骨架玩家无 `Run` ⇒ 集中到 `World::tick`（`crates/world/src/world.rs`）的 `settle_deaths` 之后、怪物 AI 之前，按实体槽位顺序跑一次。② `MonsterObject.Run` 的 `Master.SlaveRelax` 提前返回支**未建模**（`MonsterObject.cs:251-360`）⇒ oracle 该支会**跳过 `CheckRoyalty`**；Rust 的 `check_royalty` 只在 `monai::monster_run` 复刻的两个提前返回口之后调用，`SlaveRelax` 本身未接。 | **不是行为差异，是调度位置 / 未建模分支**：清表三条件与 oracle 逐字一致，只是调用点从「各主人 `Run` 尾」集中到 tick（空表零动作、无 RNG、既有 golden 逐字节不变）；`SlaveRelax` 属未接面（归宿主 `RM_MASTERDIEMUTINY`/`RM_MASTERDIEGHOST`/`RM_SPIRITSUITE` 自投递与 `CM_SPELL` 接线片），当前生产无产者 ⇒ 不可达。判据按 **per-owner-run 粒度**比（跨 owner 交错显式不在判据内，与 T-42 的墙钟预算同族）；真机对拍（`run_hero_pet_pair.ps1`）按此口径解释。将来要改调度另开批次。 | 作者登记（`openmir2-worker-20`，⑨-3）；**待独立 principal 复核** |
++
++> ⑨-2/⑨-3 的 4 条复刻缺陷（`DC` 高字节截断 / `MasterDieMutinySpeed` 除零 / `GainSlaveExp` 死代码 / 色表 latent 越界）见 B 段 **B-112..B-115**。
++
+ ## M1 S4b 登记（DBSrv 6000 `DataService` 面 + 5700 `MarketService` 面 + `TimedService` 缓存回写，2026-10-12）
+ 
