@@ -21,10 +21,20 @@ oracle 锚点（生成框 = 正方形，不是圆/菱形）：
       --points "291,666;287,620;289,618" --view-range 12
   # oracle 出生点是否在生成框内（新角色默认体验）
   python -I -B check_mongen_dense_points.py --mongen <...> --start-point <Envir/StartPoint.txt> --map 0
+  # 窗口选点（root ③①「换怪密点」）：按生成框中心列出窗口内期望出生怪数 Top-N
+  python -I -B check_mongen_dense_points.py --mongen <...> --map 0 --view-range 12 --rank 10
+  python -I -B check_mongen_dense_points.py --mongen <...> --map 0 --view-range 12 --best-point
+  # 机判：该点窗口内期望出生怪数 >= / <= 阈值（③b「有怪」/ ③a「确实无怪」）
+  python -I -B check_mongen_dense_points.py --mongen <...> --map 0 --view-range 12 \
+      --point 291,666 --max-expected 0
+  python -I -B check_mongen_dense_points.py --mongen <...> --map 0 --view-range 12 \
+      --points "289,618;287,620" --min-expected 1
   python -I -B check_mongen_dense_points.py --selftest
 
-退出码：`0` = GREEN / `1` = RED（--expect 不符）/ `2` = PREREQ_RED（缺输入/解析不到）。
-`--selftest` 不依赖外部件（合成 MonGen/StartPoint 文本；覆盖 inside/outside/边界与缺件）。
+退出码：`0` = GREEN / `1` = RED（--expect 或 --min/max-expected 不符）/ `2` = PREREQ_RED（缺输入/解析不到）。
+`--rank`/`--best-point` 是**报告**模式（只打印候选与期望值，`0`/`2`）；期望值口径见
+`expected_in_window()`（只算**出生**，不含游走）。`--selftest` 不依赖外部件（合成 MonGen/StartPoint
+文本；覆盖 inside/outside/边界、缺件、期望值、排行与 min/max 判据）。
 """
 
 from __future__ import annotations
@@ -130,14 +140,66 @@ def report_point(boxes: list[dict], x: int, y: int, view_range: int | None) -> t
     return inside, line
 
 
+def expected_in_window(boxes: list[dict], x: int, y: int, view_range: int) -> float:
+    """**出生视角**的窗口内期望怪数（非实机读数）：
+
+    每个生成框按 oracle `WorldServer.MonGen.cs:825-826` 在 `[X-R, X+R] x [Y-R, Y+R]`
+    的正方形上**均匀**出生、维持 `Count` 只；观察者窗口 = 以 `(x,y)` 为中心、半径 `view_range`
+    的**方格**（同一 Chebyshev 口径）。⇒
+
+        E = Σ_box  Count * |窗口 ∩ 框| / |框|
+
+    纯几何、确定性、可复算（无 RNG）。**只算出生**：游走怪可能把实机 `nearest` 压得更小，
+    故 `E == 0` 只表示「窗口内不会有**新出生**的怪」，不排除游走怪（见 `70-…txt` §C）。
+    """
+    total = 0.0
+    for b in boxes:
+        r = b["range"]
+        side = 2 * r + 1
+        ox = min(x + view_range, b["x"] + r) - max(x - view_range, b["x"] - r) + 1
+        oy = min(y + view_range, b["y"] + r) - max(y - view_range, b["y"] - r) + 1
+        if ox <= 0 or oy <= 0:
+            continue
+        total += b["count"] * (ox * oy) / (side * side)
+    return total
+
+
+def rank_points(boxes: list[dict], view_range: int) -> list[tuple[float, int, int, dict]]:
+    """候选点 = 每个**去重后的生成框中心**；按窗口内期望怪数降序（并列按 x,y 升序）。
+
+    返回 `[(expected, x, y, box), …]`，确定性（不依赖 dict/set 迭代序）。
+    """
+    centers: list[tuple[int, int]] = []
+    seen: set[tuple[int, int]] = set()
+    for b in sorted(boxes, key=lambda b: (b["x"], b["y"], b["range"], b["count"])):
+        c = (b["x"], b["y"])
+        if c not in seen:
+            seen.add(c)
+            centers.append(c)
+    ranked = []
+    for (x, y) in centers:
+        e = expected_in_window(boxes, x, y, view_range)
+        d, b = nearest_box(boxes, x, y)
+        ranked.append((e, x, y, b))
+    ranked.sort(key=lambda t: (-t[0], t[1], t[2]))
+    return ranked
+
+
 def run(
-    boxes: list[dict], points: list[tuple[int, int]], expect: str, view_range: int | None
+    boxes: list[dict],
+    points: list[tuple[int, int]],
+    expect: str,
+    view_range: int | None,
+    min_expected: float | None = None,
+    max_expected: float | None = None,
 ) -> tuple[int, list[str]]:
     msgs: list[str] = []
     if not points:
         return 2, ["PREREQ_RED: 没有待判定的坐标（--point/--points/--start-point 至少一个）"]
     if not boxes:
         return 2, ["PREREQ_RED: 该地图在 MonGen 里解析不到任何生成框（地图名写错？）"]
+    if (min_expected is not None or max_expected is not None) and view_range is None:
+        return 2, ["PREREQ_RED: --min-expected/--max-expected 需要 --view-range"]
 
     bad = 0
     for (x, y) in points:
@@ -149,12 +211,27 @@ def run(
         elif expect == "outside" and inside:
             bad += 1
             msgs.append(f"RED --expect outside 但 ({x},{y}) 在框内")
+        if view_range is not None and (min_expected is not None or max_expected is not None):
+            e = expected_in_window(boxes, x, y, view_range)
+            msgs.append(
+                f"INFO ({x},{y}) 窗口内期望出生怪数 E={e:.3f}（view_range={view_range}；只算出生）"
+            )
+            if min_expected is not None and e < min_expected:
+                bad += 1
+                msgs.append(f"RED ({x},{y}) E={e:.3f} < --min-expected {min_expected}")
+            if max_expected is not None and e > max_expected:
+                bad += 1
+                msgs.append(f"RED ({x},{y}) E={e:.3f} > --max-expected {max_expected}")
 
     if bad:
-        msgs.append(f"RED {bad} 个坐标与 --expect {expect} 不符")
+        msgs.append(f"RED {bad} 个坐标与判据不符")
         return 1, msgs
     if expect != "report":
         msgs.append(f"OK {len(points)} 个坐标全部与 --expect {expect} 一致")
+    elif min_expected is None and max_expected is None:
+        pass
+    else:
+        msgs.append("OK 期望出生怪数判据全部通过")
     return 0, msgs
 
 
@@ -211,9 +288,43 @@ def selftest() -> int:
     d, b = nearest_box(boxes, 300, 300)
     assert d == 95 and b["range"] == 5, (d, b)  # (200,200,r5): cheb=100-5=95；(100,100,r20): 200-20=180
 
-    total = len(cases) + 2
-    print(f"SELFTEST {'OK' if bad == 0 else 'FAILED'} ({total - bad}/{total})")
-    return 0 if bad == 0 else 1
+    # 期望出生怪数：合成框 0(100,100,r20,count50) + 0(200,200,r5,count10)。
+    exp_cases = [
+        ("expected-full-cover", (100, 100, 25), 50.0),      # 窗口覆盖整框 ⇒ E=count
+        ("expected-no-overlap", (291, 666, 12), 0.0),       # 窗口不碰任何框 ⇒ E=0
+        ("expected-partial", (200, 200, 5), 10.0),          # 半径 5 覆盖 (200,200,r5) 整格
+        ("expected-single-tile", (200, 200, 0), 10.0 / 121.0),  # 单格中心
+    ]
+    exp_bad = 0
+    for name, (x, y, vr), want in exp_cases:
+        got = expected_in_window(boxes, x, y, vr)
+        ok = abs(got - want) < 1e-9
+        exp_bad += 0 if ok else 1
+        print(f"[{'PASS' if ok else 'FAIL'}] selftest {name}: E={got:.6f} (want {want:.6f})")
+    rk = rank_points(boxes, 12)
+    ok = bool(rk) and rk[0][1:3] == (100, 100) and all(
+        rk[i][0] >= rk[i + 1][0] for i in range(len(rk) - 1)
+    )
+    exp_bad += 0 if ok else 1
+    print(f"[{'PASS' if ok else 'FAIL'}] selftest rank-order top={rk[0][1:3] if rk else None}")
+
+    # 期望判据：min/max 的绿/红。
+    exp_judge = [
+        ("minmax-max0-pass", [(291, 666)], "report", 12, None, 0.0, 0),
+        ("minmax-min-fail", [(291, 666)], "report", 12, 0.5, None, 1),
+        ("minmax-min-pass", [(100, 100)], "report", 25, 50.0, None, 0),
+        ("minmax-no-vr-prereq", [(100, 100)], "report", None, 1.0, None, 2),
+    ]
+    for name, pts, expect, vr, mn, mx, want_rc in exp_judge:
+        rc, _ = run(boxes, pts, expect, vr, min_expected=mn, max_expected=mx)
+        ok = rc == want_rc
+        exp_bad += 0 if ok else 1
+        print(f"[{'PASS' if ok else 'FAIL'}] selftest {name}: rc={rc} (want {want_rc})")
+
+    total = len(cases) + 2 + len(exp_cases) + 1 + len(exp_judge)
+    failed = bad + exp_bad
+    print(f"SELFTEST {'OK' if failed == 0 else 'FAILED'} ({total - failed}/{total})")
+    return 0 if failed == 0 else 1
 
 
 def _read(path: str) -> str | None:
@@ -235,6 +346,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--points", default="", help="多点 `x,y;x,y;...`")
     ap.add_argument("--expect", choices=["report", "inside", "outside"], default="report")
     ap.add_argument("--view-range", type=int, default=None, help="观察者视野半径（打印窗口关系）")
+    ap.add_argument("--min-expected", type=float, default=None,
+                    help="机判：每个 --point 的窗口内期望出生怪数须 >= 该值（需 --view-range）")
+    ap.add_argument("--max-expected", type=float, default=None,
+                    help="机判：每个 --point 的窗口内期望出生怪数须 <= 该值（需 --view-range）")
+    ap.add_argument("--rank", type=int, default=0, metavar="N",
+                    help="按生成框中心列出窗口内期望出生怪数 Top-N（回 root ③①「换怪密点」选点）")
+    ap.add_argument("--best-point", action="store_true",
+                    help="只打印期望出生怪数最高的候选点 `x,y`（需 --view-range）")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)
 
@@ -250,6 +369,32 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     boxes = parse_mongen(text, args.map)
+
+    if args.rank and args.best_point:
+        print("PREREQ_RED: --rank 与 --best-point 互斥")
+        return 2
+    if (args.rank or args.best_point) and args.view_range is None:
+        print("PREREQ_RED: --rank/--best-point 需要 --view-range")
+        return 2
+    if args.rank or args.best_point:
+        if not boxes:
+            print(f"PREREQ_RED: map={args.map} 在 MonGen 里解析不到任何生成框")
+            return 2
+        rk = rank_points(boxes, args.view_range)
+        if args.best_point:
+            e, x, y, b = rk[0]
+            print(f"BEST ({x},{y}) E={e:.3f} view_range={args.view_range} "
+                  f"box=({b['x']},{b['y']}) range={b['range']} count={b['count']} name={b['name']}")
+            return 0
+        n = max(1, min(args.rank, len(rk)))
+        print(f"INFO map={args.map} 生成框 {len(boxes)} 个；窗口半径 {args.view_range}；"
+              f"候选中心 {len(rk)} 个（按期望出生怪数降序）")
+        for e, x, y, b in rk[:n]:
+            print(f"RANK ({x},{y}) E={e:.3f} box=({b['x']},{b['y']}) "
+                  f"range={b['range']} count={b['count']} name={b['name']}")
+        print(f"RESULT: GREEN (Top-{n})")
+        return 0
+
     points: list[tuple[int, int]] = []
     for chunk in (args.point, args.points):
         for item in chunk.split(";"):
@@ -271,7 +416,14 @@ def main(argv: list[str] | None = None) -> int:
         for (x, y) in parse_start_points(sp_text, args.map):
             points.append((x, y))
 
-    rc, msgs = run(boxes, points, args.expect, args.view_range)
+    rc, msgs = run(
+        boxes,
+        points,
+        args.expect,
+        args.view_range,
+        min_expected=args.min_expected,
+        max_expected=args.max_expected,
+    )
     print(f"INFO map={args.map} 生成框 {len(boxes)} 个；待判定坐标 {len(points)} 个")
     for m in msgs:
         print(m)

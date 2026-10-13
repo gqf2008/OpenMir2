@@ -1,0 +1,120 @@
+93-mongen-dense-rank.txt —— 卡 `openmir2-client-e2e-enter-gaps` ③①「换怪密点」选点判据
+（m2-svr / openmir2-worker-11，2026-10-14；回应 brief-m2svr-next 顶部 root 00:4x 的「① 换怪密点复测」）
+====================================================================================================
+一句话：给既有 `check_mongen_dense_points.py` 增补「**窗口内期望出生怪数** E」的确定性几何读数
+（`--rank`/`--best-point`/`--min-expected`/`--max-expected`），把 root ③① 的「换怪密点」从
+「凭记忆挑一个框内点」变成**可复跑、可机判、可排行**的选点；并把 ③a「该点确实无怪」升级为
+`E == 0` 的定量判据（而非只判「框内/框外」）。
+
+口径（oracle 锚点，逐行）：
+  * 出生框 = 正方形：`src/GameSrv/Word/WorldServer.MonGen.cs:825-826`
+      nX = monGen.X - monGen.Range + Random(monGen.Range*2+1);
+      nY = monGen.Y - monGen.Range + Random(monGen.Range*2+1);
+    ⇒ 出生点在 `[X-R, X+R] x [Y-R, Y+R]` 上**均匀**；框维持 `Count` 只。
+  * 观察窗口 = 以玩家为中心、半径 `view_range` 的方格（Chebyshev；`PlayObject.cs:904` = 12）。
+  * E = Σ_box `Count * |窗口 ∩ 框| / |框|`（整数格点；纯几何、无 RNG、确定性）。
+    **只算出生**：游走怪可能把实机 `nearest` 压得更小 ⇒ `E==0` 只断言「窗口内不会有**新出生**的怪」，
+    不排除游走怪（`70-…txt` §C 已登记）。
+  * 退出码 0 GREEN / 1 RED / 2 PREREQ_RED（缺 `--view-range`、缺框、格式错均 fail-closed）。
+
+结论（本次测算）：
+  * root verify1 点 `(291,666)`：E = **0.000**（窗口半径 12 不碰任何生成框）⇒ ③「该点确实无怪」**定量成立**；
+    同点若改判「期望有怪」(`--min-expected 1`) ⇒ **RED**（不存在假绿放行）。
+  * 框内点 `(289,618)`（oracle `StartPoint.txt` 出生点）= **6.754**；`(287,620)` = **5.617**（片⑦ 已证客户端实收 13 对）。
+  * **最密点 = `(605,578)`：E = 12.681**（5 个重叠框中心：`鹿/稻草人` r=50 count=50 ×2 + `半兽人/多钩猫/钉耙猫` r=30 count=10 ×3）。
+    次密 `(211,629)` / `(256,572)` = 12.225。⇒ 窗口若想一次拿到最多同屏怪，用 `(605,578)`；
+    若想复用「新角色默认体验」的既有证据，用 `(289,618)`。两者 E 都 ≥ 1，满足 ③b `--min-expected 1`。
+
+**未动**：本片零 .rs、零生产语义改动；只改判据工具 + 文档/证据。真机两侧同框读数仍归 root 窗口。
+====================================================================================================
+
+### A. --selftest
+[PASS] selftest inside-center: rc=0 (want 0)
+[PASS] selftest inside-corner: rc=0 (want 0)
+[PASS] selftest outside-corner+1: rc=0 (want 0)
+[PASS] selftest outside-far: rc=0 (want 0)
+[PASS] selftest outside-but-expect-inside: rc=1 (want 1)
+[PASS] selftest inside-but-expect-outside: rc=1 (want 1)
+[PASS] selftest edge-viewrange-equal: rc=0 (want 0)
+[PASS] selftest report-no-judge: rc=0 (want 0)
+[PASS] selftest empty-boxes-prereq: rc=2 (want 2)
+[PASS] selftest no-points-prereq: rc=2 (want 2)
+[PASS] selftest expected-full-cover: E=50.000000 (want 50.000000)
+[PASS] selftest expected-no-overlap: E=0.000000 (want 0.000000)
+[PASS] selftest expected-partial: E=10.000000 (want 10.000000)
+[PASS] selftest expected-single-tile: E=0.082645 (want 0.082645)
+[PASS] selftest rank-order top=(100, 100)
+[PASS] selftest minmax-max0-pass: rc=0 (want 0)
+[PASS] selftest minmax-min-fail: rc=1 (want 1)
+[PASS] selftest minmax-min-pass: rc=0 (want 0)
+[PASS] selftest minmax-no-vr-prereq: rc=2 (want 2)
+SELFTEST OK (19/19)
+rc=0
+
+### B. real MonGen map 0, view_range=12
+MONGEN=/e/MirServer/M2GameSvr/Envir/MonGen.txt
+$ python -I -B check_mongen_dense_points.py --mongen $M --map 0 --view-range 12 --rank 15
+INFO map=0 生成框 76 个；窗口半径 12；候选中心 35 个（按期望出生怪数降序）
+RANK (605,578) E=12.681 box=(605,578) range=30 count=10 name=半兽人
+RANK (211,629) E=12.225 box=(211,629) range=30 count=10 name=半兽人
+RANK (256,572) E=12.225 box=(256,572) range=30 count=10 name=半兽人
+RANK (513,585) E=11.682 box=(513,585) range=30 count=10 name=半兽人
+RANK (164,141) E=11.166 box=(164,141) range=30 count=10 name=半兽人
+RANK (328,566) E=11.166 box=(328,566) range=30 count=10 name=半兽人
+RANK (585,138) E=10.078 box=(585,138) range=30 count=30 name=半兽人
+RANK (260,339) E=9.343 box=(260,339) range=30 count=15 name=鹿
+RANK (260,190) E=5.039 box=(260,190) range=30 count=15 name=鹿
+RANK (333,268) E=4.718 box=(333,268) range=20 count=10 name=鸡
+RANK (341,514) E=4.696 box=(341,514) range=0 count=1 name=弓箭护卫
+RANK (340,513) E=4.451 box=(340,513) range=0 count=1 name=弓箭护卫
+RANK (188,439) E=4.304 box=(188,439) range=120 count=50 name=鹿
+RANK (494,455) E=4.304 box=(494,455) range=120 count=50 name=鹿
+RANK (665,87) E=4.000 box=(665,87) range=0 count=1 name=弓箭护卫
+RESULT: GREEN (Top-15)
+rc=0
+
+$ python -I -B check_mongen_dense_points.py --mongen $M --map 0 --view-range 12 --best-point
+BEST (605,578) E=12.681 view_range=12 box=(605,578) range=30 count=10 name=半兽人
+rc=0
+
+### C. root verify1 点 (291,666) = 0 出生怪（③a 机判 GREEN）
+$ ... --point 291,666 --max-expected 0
+INFO map=0 生成框 76 个；待判定坐标 1 个
+INFO (291,666) 框外；到最近生成框 Chebyshev=30 （gen=(211,629) range=50 count=50 name=鹿）；view_range=12 < d ⇒ 新出生的怪必在窗口外 （游走怪另算；真机 `nearest` 可能更小）
+INFO (291,666) 窗口内期望出生怪数 E=0.000（view_range=12；只算出生）
+OK 期望出生怪数判据全部通过
+RESULT: GREEN
+rc=0
+
+### C'. 同点改判 --min-expected 1 ⇒ RED（假绿封口：不存在「期望有怪」的误放行）
+INFO map=0 生成框 76 个；待判定坐标 1 个
+INFO (291,666) 框外；到最近生成框 Chebyshev=30 （gen=(211,629) range=50 count=50 name=鹿）；view_range=12 < d ⇒ 新出生的怪必在窗口外 （游走怪另算；真机 `nearest` 可能更小）
+INFO (291,666) 窗口内期望出生怪数 E=0.000（view_range=12；只算出生）
+RED (291,666) E=0.000 < --min-expected 1.0
+RED 1 个坐标与判据不符
+RESULT: RED
+rc=1
+
+### D. 框内点 (289,618)/(287,620) E>=1（③b 选点机判 GREEN）
+INFO map=0 生成框 76 个；待判定坐标 2 个
+INFO (289,618) 框内；到最近生成框 Chebyshev=0 （gen=(256,572) range=50 count=50 name=鹿）；view_range=12 覆盖最近框 ⇒ 可能有出生怪在窗口内
+INFO (289,618) 窗口内期望出生怪数 E=6.754（view_range=12；只算出生）
+INFO (287,620) 框内；到最近生成框 Chebyshev=0 （gen=(256,572) range=50 count=50 name=鹿）；view_range=12 覆盖最近框 ⇒ 可能有出生怪在窗口内
+INFO (287,620) 窗口内期望出生怪数 E=5.617（view_range=12；只算出生）
+OK 期望出生怪数判据全部通过
+RESULT: GREEN
+rc=0
+
+### E. 旧 --expect 口径回归（片⑮ preflight R4 逐点同款 args）
+$ ... --point 291,666 --expect outside
+OK 1 个坐标全部与 --expect outside 一致
+RESULT: GREEN
+$ ... --point 291,651 --expect outside
+OK 1 个坐标全部与 --expect outside 一致
+RESULT: GREEN
+$ ... --point 289,618 --expect inside
+OK 1 个坐标全部与 --expect inside 一致
+RESULT: GREEN
+$ ... --point 287,620 --expect inside
+OK 1 个坐标全部与 --expect inside 一致
+RESULT: GREEN

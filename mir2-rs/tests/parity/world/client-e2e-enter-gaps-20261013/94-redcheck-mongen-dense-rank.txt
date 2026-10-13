@@ -1,0 +1,46 @@
+94-redcheck-mongen-dense-rank.txt —— ③① 选点判据的**改坏必红**（5 条）
+（m2-svr / openmir2-worker-11，2026-10-14；卡 `openmir2-client-e2e-enter-gaps`）
+====================================================================================================
+被改文件：`check_mongen_dense_points.py`（本片 head 上 sha256 = 42d3b35d31ff9f5d8d1bdccffa63275c44f7b4fac1fc47535e63559a3010ebca）。
+驱动：逐条把源码里的**单一**目标串替换成变异版（每条替换命中次数逐条断言 == 1）→ 跑 `--selftest`
+→ 断言 rc == 1（RED）→ 还原 → 断言 sha256 逐字节回到 42d3b35d31ff9f5d8d1bdccffa63275c44f7b4fac1fc47535e63559a3010ebca 后再下一条。
+
+五条变异与观察：
+  M1 去掉格点 `+1`（窗口/框重叠算成半开区间）      ⇒ expected-full-cover/partial/single-tile + minmax-min-pass FAIL
+  M2 忽略 `Count`（每框当 1 只）                   ⇒ expected-* 与 rank-order FAIL
+  M3 忽略重叠比（框内即全额）                       ⇒ expected-single-tile FAIL（no-overlap 仍 0 ⇒ 需要 overlapping 用例）
+  M4 `min_expected` 比较写成 `<=`（含等号）         ⇒ minmax-min-pass（E==50,min=50）FAIL
+  M5 `max_expected` 比较写成 `>=`（含等号）         ⇒ minmax-max0-pass（E==0,max=0）FAIL
+全部 rc=1 + 还原逐字节一致 ⇒ 判据不是恒绿。
+====================================================================================================
+pristine sha256 = eebe52c9a7a2cd0b3a46e0de4eddba059376b99cf2d243510436bab2e1f181d9
+
+== M1-drop-lattice-plus1 == rc=1
+    [FAIL] selftest expected-full-cover: E=47.590720 (want 50.000000)
+    [FAIL] selftest expected-partial: E=8.264463 (want 10.000000)
+    [FAIL] selftest expected-single-tile: E=0.000000 (want 0.082645)
+    [FAIL] selftest minmax-min-pass: rc=1 (want 0)
+    SELFTEST FAILED (15/19)
+
+== M2-ignore-count == rc=1
+    [FAIL] selftest expected-full-cover: E=1.000000 (want 50.000000)
+    [FAIL] selftest expected-partial: E=1.000000 (want 10.000000)
+    [FAIL] selftest expected-single-tile: E=0.008264 (want 0.082645)
+    [FAIL] selftest rank-order top=(200, 200)
+    [FAIL] selftest minmax-min-pass: rc=1 (want 0)
+    SELFTEST FAILED (14/19)
+
+== M3-ignore-overlap == rc=1
+    [FAIL] selftest expected-single-tile: E=10.000000 (want 0.082645)
+    SELFTEST FAILED (18/19)
+
+== M4-min-expected-inclusive == rc=1
+    [FAIL] selftest minmax-min-pass: rc=1 (want 0)
+    SELFTEST FAILED (18/19)
+
+== M5-max-expected-inclusive == rc=1
+    [FAIL] selftest minmax-max0-pass: rc=1 (want 0)
+    SELFTEST FAILED (18/19)
+
+RESTORED sha256 = eebe52c9a7a2cd0b3a46e0de4eddba059376b99cf2d243510436bab2e1f181d9
+all 5 mutations RED, restored byte-identical: eebe52c9a7a2cd0b3a46e0de4eddba059376b99cf2d243510436bab2e1f181d9
