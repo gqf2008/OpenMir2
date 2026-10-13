@@ -1,0 +1,14 @@
+### 改坏必红：把 O-1 歧义门短路（if len(groups) > 1 -> if False）
+### 原文件 sha256 = 3182ca480a256bd094674e9cc1c404a80bba2b9fea36cfd885c2a755ffe04646
+
+$ python -I -B check_evidence_head.py selftest   # 期望 RED
+  FAIL pack-ambiguous-decl-prereq: expected PREREQ rc=2 got 1 ['HEAD_SCOPE_DRIFT: mir2-rs/bins/game-svr/src/code.rs']
+SELFTEST_RED: check_evidence_head 18/19（失败 1）
+rc=1
+
+### 还原
+还原后 sha256 = 3182ca480a256bd094674e9cc1c404a80bba2b9fea36cfd885c2a755ffe04646
+RESTORE_OK sha256 一致
+$ python -I -B check_evidence_head.py selftest   # 还原后回绿
+SELFTEST GREEN: check_evidence_head 19/19（check 7 + check-pack 12：含改坏必红 + PREREQ + O-1 多处声明 fail-closed）
+rc=0

@@ -1,0 +1,2 @@
+### 对本片自己的证据包跑 check-pack（declared head = 本片读数 head；since = base b00987707）
+### 收口提交后由脚本写入真实读数。

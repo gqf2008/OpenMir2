@@ -1,0 +1,24 @@
+### 00 命令（可复算；cwd = mir2-rs/tests/parity/m3，除注明）
+### 卡 openmir2-m3-rng-trace-scene-groups；片 = reviewer-6 O-1 收口（check-pack 多处声明不得静默取首个）
+### patch base = origin/master b00987707（本卡上一片 fe0a85aee 已合入 master b00987707）
+
+$ python -I -B rng-trace-scene/check_evidence_head.py selftest
+$ python -I -B rng-trace-scene/check_evidence_head.py check-pack --dir evidence-m3-rng-scene-anchor-teeth-20261014 --since 10f0daa93
+$ python -I -B rng-trace-scene/check_evidence_head.py check-pack --dir evidence-m3-rng-scene-head-o1-20261014 --since 30c52f85
+$ python -I -B rng-trace-scene/check_evidence_head.py check-pack --dir evidence-m3-rng-scene-head-pack-20261014 --since 61f613702
+# 改坏必红：把歧义门短路（if len(groups) > 1 -> if False），见 04
+$ python -I -B rng-trace-probe/rng_ledger_diff.py selftest
+$ python -I -B rng-trace-probe/rng_consumer_groups.py selftest
+$ python -I -B rng-trace-scene/rng_scene_gate.py selftest
+$ python -I -B rng-trace-scene/check_evidence_counts.py selftest
+$ python -I -B rng-trace-scene/check_anchors.py selftest
+$ python -I -B rng-trace-scene/check_anchors.py check
+$ python -I -B rng-trace-scene/check_window_batch.py selftest
+$ python -I -B rng-trace-scene/check_window_batch.py check --rng-scenario rng-trace-scene/rng_trace_scenario.json --drop-scenario drop-exp/drop_exp_scenario.json
+$ python -I -B fixture_chain_gate.py selftest
+$ cd <repo>/mir2-rs && CARGO_TARGET_DIR=E:/tmp/m3bag-target cargo fmt --all -- --check
+$ cd <repo>/mir2-rs && CARGO_TARGET_DIR=E:/tmp/m3bag-target cargo clippy --offline --workspace --all-targets -- -D warnings
+$ cd <repo>/mir2-rs && CARGO_TARGET_DIR=E:/tmp/m3bag-target cargo test --offline --workspace --no-fail-fast
+$ cd <repo>/mir2-rs && CARGO_TARGET_DIR=E:/tmp/m3bag-target cargo run --offline -p msgcodegen -- --check
+$ python -I tools/evidence-hash/verify_sha256sums.py verify <pack> --check-extra
+$ python -I tools/evidence-hash/verify_sha256sums.py eolcheck <pack>

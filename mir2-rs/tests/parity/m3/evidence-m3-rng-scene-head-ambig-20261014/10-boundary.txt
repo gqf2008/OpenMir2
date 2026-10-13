@@ -1,0 +1,9 @@
+### 10 边界（base = origin/master b00987707 = check-pack 的显式 since 锚）
+### head = PLACEHOLDER（= 本片「读数所在」head；其后提交只追加本证据包的 boundary / 自检 / SHA256SUMS，仍全在证据侧）
+### git diff --name-only base..HEAD（路径清单在收口提交后由脚本写入；含本文件与 SHA256SUMS.txt 自身）
+
+--- 冻结面（src/ sql/ MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins；应为空）
+(空 = 冻结面零改动)
+
+--- *.rs 计数（应为 0）
+0

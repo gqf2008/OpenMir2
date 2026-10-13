@@ -371,8 +371,16 @@ python -I rng-trace-scene/check_evidence_head.py check-pack \
   --dir evidence-m3-rng-scene-anchor-teeth-20261014 --since 10f0daa93
 python -I rng-trace-scene/check_evidence_head.py check-pack \
   --dir evidence-m3-rng-scene-head-o1-20261014 --since 30c52f85
-python -I rng-trace-scene/check_evidence_head.py selftest        # 16/16 GREEN（check 7 + check-pack 9）
+python -I rng-trace-scene/check_evidence_head.py selftest        # 19/19 GREEN（check 7 + check-pack 12）
 ```
+
+- **reviewer-6 O-1 收口（多处声明不得静默取首个，2026-10-14）**：旧 `check-pack` 在缺省探测里
+  **只取首个 `head = <oid>`**；若同一包同时含「读数 head」与「交付 head」两处声明，会**静默**采信
+  先出现者（探测顺序 `11-boundary.txt → 10-boundary.txt → README.md`）。现改为**收集全部声明**，
+  先用 `git rev-parse` **归一到完整 oid** 再判：多处声明指向**同一 commit**（哪怕写成不同长度前缀，
+  真件 `teeth` 包即 `2591a7b31` vs `2591a7b316ae`）⇒ 采信首个继续；出现多处**不同 commit** ⇒
+  `PREREQ_AMBIGUOUS_HEAD_DECL`（rc=2）逐处点名（`oid[:12]@file:line`），要求用 `--decl-file` 钉住。
+  selftest `16/16 → 19/19`（+ 歧义必红 / 同 commit 异前缀绿 / `--decl-file` 钉住绿）。
 
 - **`check-pack`（reviewer-5 对本卡 head `9740b7d0c` 的 observation O-1 收口）**：把「书证 head 与机判
   对象一致」补上——机判对象 = **包内声明的 head**（从 `11-boundary.txt` / `10-boundary.txt` / `README.md`
@@ -402,7 +410,7 @@ python -I rng-trace-probe/rng_ledger_diff.py selftest          # 37/37 GREEN（�
 python -I rng-trace-scene/rng_scene_gate.py selftest           # 22/22 GREEN（含 scenario 声明 vs 代码 + 半给流水 PREREQ）
 python -I rng-trace-scene/check_evidence_counts.py selftest    # 7/7 GREEN（报告证据头行计数 vs 真实包：声明/真实）
 python -I rng-trace-scene/check_anchors.py selftest             # 13/13 GREEN（承接卡规格锚点保鲜；含 12 条改坏必红：行号漂移/缺失/歧义/未登记引用/折叠定义回退/同名目录串台/裸续引用未登记/裸续内容漂移/未识别扩展名/裸续引用归属未登记/裸续引用归属文件缺失/裸续引用登记行越界）
-python -I rng-trace-scene/check_evidence_head.py selftest       # 16/16 GREEN（证据包声明 head：check 对 HEAD + check-pack 对书证 head；含改坏必红 + PREREQ）
+python -I rng-trace-scene/check_evidence_head.py selftest       # 19/19 GREEN（证据包声明 head：check 对 HEAD + check-pack 对书证 head；含改坏必红 + PREREQ + 多处声明 fail-closed）
 python -I rng-trace-probe/rng_consumer_groups.py selftest       # 15/15 GREEN（站点表 oracle_ref 可解析性；含坏路径/越界行 2 条改坏必红）
 python -I rng-trace-scene/check_window_batch.py selftest        # 13/13 GREEN（本卡 vs ④ 场景件：同图/同种子/同起点）
 
