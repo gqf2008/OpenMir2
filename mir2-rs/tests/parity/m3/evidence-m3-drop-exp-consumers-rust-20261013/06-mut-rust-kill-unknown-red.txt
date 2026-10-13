@@ -1,0 +1,13 @@
+=== M-B：删 rust combat.rs measured 行 ⇒ kill site 变 unknown ⇒ RED rc=1 ===
+=== 场景纯度（drop_exp_purity_gate）===
+  side=rust stream=evidence-m3-drop-exp-consumers-rust-20261013/rust-measured-synthetic.tsv
+  draws=4 measured=1 setup=2 wallclock=0 other=0 unknown=1 missing_site=0 ambiguous=0
+  NOTE: 2 条 setup 行 max=* ⇒ 未设上限（窗口期按实测收紧；不影响 measured/wallclock/other 判据）
+  --- 逐消费者清单（site 计数，降序）---
+         1  crates/formula/src/drop.rs:109
+         1  bins/game-svr/src/mongen.rs:289
+         1  crates/world/src/mongen.rs:624
+         1  crates/world/src/combat.rs:831
+  RED: unknown_consumer: 1 处 site 不在 `drop_exp_consumers.tsv` 里（首个 line=6 site=crates/world/src/combat.rs:831）；认不出 ⇒ 拒比，必须在表里显式分类（measured/setup/wallclock/other）
+  结论：场景不纯 / 认不出 ⇒ **拒比**（fail-closed，不放宽判据）
+rc=1

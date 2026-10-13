@@ -1,0 +1,18 @@
+# 边界（base c8a3487b1 → head f9db62ae2）
+
+$ git diff --name-only c8a3487b1f6a f9db62ae2 -- src sql MirClient
+(空 ⇒ 冻结面零改动)
+
+$ git diff --name-only c8a3487b1f6a f9db62ae2
+mir2-rs/bins/game-svr/src/slave.rs
+mir2-rs/crates/world/src/entity.rs
+mir2-rs/crates/world/src/slave.rs
+
+$ git diff --name-only c8a3487b1f6a f9db62ae2 -- mir2-rs/crates mir2-rs/bins
+mir2-rs/bins/game-svr/src/slave.rs
+mir2-rs/crates/world/src/entity.rs
+mir2-rs/crates/world/src/slave.rs
+
+$ git merge-tree --write-tree c8a3487b1f6a HEAD ; echo rc=$?
+3acb9711ec19991ebe3dc0f103f1c974860fb983
+rc=0

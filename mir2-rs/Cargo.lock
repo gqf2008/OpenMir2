@@ -354,6 +354,7 @@ dependencies = [
  "anyhow",
  "mir2-protocol",
  "mir2-storage",
+ "serde_json",
  "sqlx",
  "tokio",
 ]
@@ -627,6 +628,7 @@ name = "game-svr"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64",
  "chrono",
  "encoding_rs",
  "mir2-data",

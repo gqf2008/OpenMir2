@@ -1,0 +1,26 @@
+命令: CARGO_TARGET_DIR=E:/tmp/openmir2-m3pt-target cargo test -p game-svr --test deal_try_oracle_anchors
+改坏 RC1：main.rs 的 deal_try 注释 4 处 `:958-960` 改回旧漂移号码 `:955-958`
+== 原始输出 ==
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3pt\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.11s
+     Running tests\deal_try_oracle_anchors.rs (E:/tmp/openmir2-m3pt-target\debug\deps\deal_try_oracle_anchors-b25b1e4975fe3cbb.exe)
+
+running 1 test
+test deal_try_oracle_anchors_match_source ... FAILED
+
+failures:
+
+---- deal_try_oracle_anchors_match_source stdout ----
+
+thread 'deal_try_oracle_anchors_match_source' (14356) panicked at bins\game-svr\tests\deal_try_oracle_anchors.rs:61:13:
+main.rs 的 deal_try 注释缺 oracle 锚 `:958-960`（reviewer-5 M-1 doc 漂移回归）
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    deal_try_oracle_anchors_match_source
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --test deal_try_oracle_anchors`
+rc=101

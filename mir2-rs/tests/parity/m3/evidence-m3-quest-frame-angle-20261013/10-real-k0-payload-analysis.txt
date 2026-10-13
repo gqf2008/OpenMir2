@@ -1,0 +1,22 @@
+# 真机原始件分析（window r2，2026-10-13）—— defect_3 的输入与修复验证
+#
+# 输入来源（另一条车道，只读引用）：
+#   E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/window/mir2-rs/tests/parity/m3/evidence-m3-quest-align-window-r2-20261013
+#   sessions/csharp-20261013-143911/bot.log
+
+## 原始终机行（C# 侧 k=0 frame，未修）
+14:39:50.685 [INF] 机器人:[m3q1439080] M3QUESTSEQ {"phase":"frame","k":0,"frame":{"sm":643,"merchant":1985311007,"face":0,"tag":0,"series":1,"text":"任务管理/<任务名称>          <任务要求等级>          <任务可接次数>\\ \\<[神秘商店]/@rw01>            35级                  一次\\<[黑铁手套]/@rw02>            37级                每天一次\\<[神秘商店]/@rw03>            40级                  不限\\<[祈福项链]/@rw04>            42级                  不限\\<[命运之刃]/@rw05>            43级                每天一次\\<[神秘洞口]/@rw06>            45级                每天一次"}
+
+payload len=457  `{`=2  `}`=1  （缺最外层 `}`）
+json.loads(payload) = Expecting ',' delimiter: line 1 column 458 (char 457)
+
+## 修复后（等价于 QuestEsc 转义 `<`/`>`）
+correct len=458；fixed len=548；`{`=2/`}`=2；json.loads = OK
+decoded text 与原文本逐字符相同 = True（len=349）
+
+## 修复后载荷经真实 Serilog 通路（`Log.Information(payload)`，BotSrv 输出模板同形）
+见 `05-botsrv-all-selftests.txt` 里 --selftest-questseq 的 `serilog-path-payload-intact` 一条：
+  内联 sink 取回 RenderMessage()，断言 == 入参；把转义改回去则断言 RED（见 03/04）。
+（独立复现：一个只引用 Serilog 3.1.1 的临时 net9 控制台程序，输出模板 =
+ `{Timestamp:HH:mm:ss.fff} [{Level:u3}] {Message:lj}{NewLine}{Exception}`；
+ 以 fixed 载荷调用 Log.Information(payload) ⇒ 输出行 `{`=2/`}`=2、json.loads OK、text 还原。）

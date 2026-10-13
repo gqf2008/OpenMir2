@@ -1,0 +1,10 @@
+# 门自检（合成文本 + 注入式 check_text；含改坏必红）
+# [cmd] python -I m3_pet_slave_registry_gate.py selftest
+
+  SELFTEST ok  登记齐 + 锚点齐 -> GREEN（T-42 撞号不判红）
+  SELFTEST ok  删 B-113 行 -> RED
+  SELFTEST ok  锚点改错 -> RED
+  SELFTEST ok  B-112 撞号 -> RED
+  SELFTEST ok  空表 -> 5 行全 MISSING
+SELFTEST GREEN 5/5
+rc=0

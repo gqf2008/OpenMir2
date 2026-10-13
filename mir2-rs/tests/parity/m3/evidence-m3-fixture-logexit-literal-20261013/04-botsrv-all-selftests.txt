@@ -1,0 +1,35 @@
+===== --selftest-questseq =====
+QUESTSEQ PASS logexit-payload-intact literal-ok=True raw-mangled=True
+QUESTSEQ INFO logexit raw-bytes=76 literal-bytes=77 payload-bytes=77
+QUESTSEQ SELFTEST GREEN
+rc=0
+===== --selftest-shopseq =====
+SHOPSEQ PASS price-negative got=-1
+SHOPSEQ PASS price-none-null got=null
+SHOPSEQ SELFTEST GREEN
+rc=0
+===== --selftest-guildcastle =====
+GUILDCSEQ PASS branch-fail-priority ok-then-fail
+GUILDCSEQ PASS branch-no-prefix-collision 7530
+GUILDCSEQ SELFTEST GREEN
+rc=0
+===== --selftest-heropet =====
+HEROPETSEQ PASS branch-fail-priority ok-then-fail
+HEROPETSEQ PASS branch-no-prefix-collision 170
+HEROPETSEQ SELFTEST GREEN
+rc=0
+===== --selftest-pairtrade =====
+PAIRTRADESEQ PASS branch-fail-priority 660-then-661
+PAIRTRADESEQ PASS branch-no-prefix-collision 6610
+PAIRTRADESEQ SELFTEST GREEN
+rc=0
+===== --selftest-selloff =====
+SELLOFFSEQ PASS branch-fail-priority 23016-then-23018
+SELLOFFSEQ PASS branch-no-prefix-collision 230050
+SELLOFFSEQ SELFTEST GREEN
+rc=0
+===== --selftest-attackrole =====
+ATTACKROLE PASS login='winplay0' attacker='' got=False want=False
+ATTACKROLE PASS login='' attacker='winplay0' got=False want=False
+ATTACKROLE SELFTEST GREEN
+rc=0

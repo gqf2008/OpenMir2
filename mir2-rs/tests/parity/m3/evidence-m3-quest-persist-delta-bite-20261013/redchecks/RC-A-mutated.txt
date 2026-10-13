@@ -1,0 +1,26 @@
+== RC-A（改坏必红）· 把「净改动 ⇒ 红」的牙拔掉 ==
+变异: quest_delta_violation 内 `if (added, removed) != (0, 0) {` 改为 `if false && (added, removed) != (0, 0) {`
+（门禁形同虚设 ⇒ 非零 added 的写集差分被放行）
+期望/实测: redcheck_quest_delta_subassertion_bites **FAILED**
+
+test captured_cross_side_baselines_show_zero_characters_quest_rows ... ok
+test db_srv_save_and_load_sql_have_no_quest_columns ... ok
+test workspace_rust_sources_never_reference_characters_quest ... ok
+test workspace_sql_literals_never_mention_quest_columns ... ok
+
+failures:
+
+---- redcheck_quest_delta_subassertion_bites stdout ----
+
+thread 'redcheck_quest_delta_subassertion_bites' (1876) panicked at bins\db-srv\tests\quest_no_persist.rs:470:5:
+改坏必红失效：非零 added 的任务表写集差分被放行
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    redcheck_quest_delta_subassertion_bites
+
+test result: FAILED. 7 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.56s
+
+error: test failed, to rerun pass `-p db-srv --test quest_no_persist`
+

@@ -1,0 +1,74 @@
+# M3⑧-10 夹具 merge（解 10 处冲突）—— merge 说明 + 边界
+# base(master@delivery) = 8aebbcb850d5b084af56e6cb8dd5e03ecc3c1625
+# head = a7ebe57caa11f58c38537e19fd7cd8ac44b85393
+
+## merge 提交链
+a7ebe57ca Merge origin/master (8aebbcb85) into worktree-m3-guild-castle-fixture-botsrv (4th)
+8aebbcb85 Merge 5387dfb2 (worktree-m3-castle-door-repair): M3⑧-实现 8 第①片：门/墙状态（Open/Close/Die/Run/RefStatus + 通行掩码 + 修理 60s 门 + CastleOfficial 标签） - approve openmir2-reviewer-5 @reviewed_head 5387dfb2
+88ba2ea92 Merge origin/master (4b4011923) into worktree-m3-guild-castle-fixture-botsrv (3rd, quest-persist delta-bite)
+135bd878b fix(m3-guild-castle-fixture): ⑧/⑨ markers 对齐保前缀口径 + marker_prefix_gate 纳入两个比较器
+
+## 解冲突口径
+两侧 = 同一插入位的平行新增（⑧ GuildCastle 夹具 vs ⑨ HeroPet 夹具）⇒ 全并集、零内容删除。
+另把 run_pair.ps1 的 ⑧/⑨ markers 写侧对齐「保前缀」口径（reviewer-6 O-2）。
+
+## 冲突文件（10）
+  mir2-rs/tests/parity/m3/gate_guards.ps1
+  mir2-rs/tests/parity/m3/run_pair.ps1
+  mir2-rs/tests/parity/whitelist.md
+  src/BotSrv/AppService.cs
+  src/BotSrv/MShare.cs
+  src/BotSrv/Player/RobotPlayer.Operate.cs
+  src/BotSrv/Player/RobotPlayer.cs
+  src/BotSrv/Program.cs
+  src/BotSrv/RobotOptions.cs
+  tools/botload/run_bots.ps1
+
+## 边界：git diff --name-only master HEAD -- src/sql src/MirClient
+(空)
+
+## 边界：git diff --name-only master HEAD -- mir2-rs/crates mir2-rs/bins mir2-rs/protocol
+(空)
+
+## 全量 boundary
+"mir2-rs/tests/parity/m3/M3\342\221\247\345\205\254\344\274\232\346\224\273\345\237\216\345\212\250\344\275\234\345\272\217\345\210\227\345\244\271\345\205\267\351\252\250\346\236\266\346\212\245\345\221\212-20261013.md"
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/00-commands.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/01-guildcastle-diff-selftest.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/02-run-guildcastle-pair-selfcheck.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/03-botsrv-guildcastleseq-selftest.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/04-run-bots-selfcheck.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/05-gate-fmt.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/06-gate-clippy.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/07-gate-test.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/08-gate-msgcodegen.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/09-boundary.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/10-external-break-comparator.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/README.md
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/SHA256SUMS.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-merge2-20261013/00-commands.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-merge2-20261013/01-merge-and-boundary.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-merge2-20261013/02-guildcastle-diff-selftest.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-merge2-20261013/03-run-guildcastle-pair-selfcheck.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-merge2-20261013/04-botsrv-guildcastleseq-selftest.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-merge2-20261013/05-run-bots-selfcheck.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-merge2-20261013/06-gate-fmt.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-merge2-20261013/07-gate-clippy.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-merge2-20261013/08-gate-test.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-merge2-20261013/09-gate-msgcodegen.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-merge2-20261013/README.md
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-merge2-20261013/SHA256SUMS.txt
+mir2-rs/tests/parity/m3/gate_guards.ps1
+mir2-rs/tests/parity/m3/guild_castle_diff.py
+mir2-rs/tests/parity/m3/guild_castle_scenario.json
+mir2-rs/tests/parity/m3/marker_prefix_gate.py
+mir2-rs/tests/parity/m3/run_guild_castle_pair.ps1
+mir2-rs/tests/parity/m3/run_pair.ps1
+mir2-rs/tests/parity/whitelist.md
+src/BotSrv/AppService.cs
+src/BotSrv/GuildCastleSeqSelfCheck.cs
+src/BotSrv/MShare.cs
+src/BotSrv/Player/RobotPlayer.Operate.cs
+src/BotSrv/Player/RobotPlayer.cs
+src/BotSrv/Program.cs
+src/BotSrv/RobotOptions.cs
+tools/botload/run_bots.ps1

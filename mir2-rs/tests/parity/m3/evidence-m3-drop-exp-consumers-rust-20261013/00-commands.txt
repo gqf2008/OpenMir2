@@ -1,0 +1,45 @@
+# 证据 00-commands —— M3④ 纯度门两侧实测站点表补齐（2026-10-13）
+
+> 卡：`openmir2-m3-rng-trace-scene-groups`（站点表本体属 ④ 家族）。写集 `mir2-rs/tests/parity/m3/**`，零 `.rs`。
+> 全部命令在**自己的 worktree** 里跑（base = `origin/master ad0bba301`）；`CARGO_TARGET_DIR=E:/tmp/m3bag-drop-exp-target`；
+> 零端口、不起栈。相对路径相对 `mir2-rs/`。
+
+```sh
+# 合成输入（LF）
+python -I - <<'PY'   # rust-measured-synthetic.tsv / csharp-measured-synthetic.tsv / rust-pin-failed-synthetic.tsv
+PY
+
+# ① 改前：旧表（origin/master）side=rust ⇒ PREREQ rc=2
+git show origin/master:mir2-rs/tests/parity/m3/drop-exp/drop_exp_consumers.tsv > table-before.tsv
+python -I drop-exp/drop_exp_purity_gate.py gate --side rust --stream rust-measured-synthetic.tsv --table table-before.tsv   # 01
+
+# ② 改后：新表 side=rust ⇒ GREEN rc=0
+python -I drop-exp/drop_exp_purity_gate.py gate --side rust --stream rust-measured-synthetic.tsv                            # 02
+
+# ③ 门自检 23/23；④ 无栈自检 13/13
+python -I drop-exp/drop_exp_purity_gate.py selftest
+powershell -NoProfile -ExecutionPolicy Bypass -File drop-exp/run_drop_exp_pair.ps1 -SelfCheckNoStack
+
+# ⑤⑥⑦ 改坏必红（删表行 ⇒ unknown RED）
+python -I drop-exp/drop_exp_purity_gate.py gate --side rust   --stream rust-measured-synthetic.tsv   --table table-mut-drop-removed.tsv
+python -I drop-exp/drop_exp_purity_gate.py gate --side rust   --stream rust-measured-synthetic.tsv   --table table-mut-combat-removed.tsv
+python -I drop-exp/drop_exp_purity_gate.py gate --side csharp --stream csharp-measured-synthetic.tsv --table table-mut-csharp-drop-removed.tsv
+
+# ⑧ csharp GREEN；⑨ Rust pin 失效 wallclock RED
+python -I drop-exp/drop_exp_purity_gate.py gate --side csharp --stream csharp-measured-synthetic.tsv
+python -I drop-exp/drop_exp_purity_gate.py gate --side rust   --stream rust-pin-failed-synthetic.tsv
+
+# 四门禁
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --offline -- -D warnings
+cargo test --workspace --offline --no-fail-fast
+cargo run -q -p msgcodegen -- --check
+
+# 边界
+git diff --name-only <base> <head>
+
+# 证据口径
+python -I tools/evidence-hash/verify_sha256sums.py write  mir2-rs/tests/parity/m3/evidence-m3-drop-exp-consumers-rust-20261013
+python -I tools/evidence-hash/verify_sha256sums.py verify --check-extra mir2-rs/tests/parity/m3/evidence-m3-drop-exp-consumers-rust-20261013
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3
+```

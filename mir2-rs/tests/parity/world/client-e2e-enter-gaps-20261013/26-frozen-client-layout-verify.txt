@@ -1,0 +1,232 @@
+# 26 — DoD③ 独立复核：冻结客户端 `TAbility` 58B 布局（逐字节对位）
+
+卡：`openmir2-client-e2e-enter-gaps`（tier R）／本片：m2-svr / `openmir2-worker-11`
+上一片（head `a602e8a94`，patch `d9175cc5`）已合入 master `636bdce53`。
+reviewer-5（`6ea81f358`）的 `not_verified` ③ 原话：
+> 「58B TAbility 与冻结 MirClient Delphi 记录布局的逐字节对位（**本机无 Grobal2.pas 源**，作者证据 21 给出偏移表与 HIGHHP=True 行号，未独立复算）」
+
+本文件就是那条 not_verified 的**独立复算证据**：不采信 `21-client-ability-layout.md` 的偏移表，
+直接从**冻结客户端源码**解析 `{$IF HIGHHP}` 与 `TAbility = packed record`，按 Delphi packed 规则
+逐字段累加偏移，并与期望 58B 布局逐字段比对。原始命令与输出在文件末尾。
+
+## 0. 结论
+
+**GREEN**：冻结客户端 `TAbility` 在 `HIGHHP = True` 下确为 **58B packed record**，
+`HP/MP/MaxHP/MaxMP = DWORD @ 22/26/30/34`；这一布局由源码解析独立复算得出，
+并与 Rust `record::encode_ability_client`（`bins/game-svr/src/record.rs:345`）的 18 字段次序**逐偏移一致**。
+⇒ 上一片 ③ 的偏移表成立，reviewer 的 not_verified ③ 关闭。
+
+## 1. 冻结客户端 pin（源码 = 判据基准）
+
+| 项 | 值 |
+| --- | --- |
+| 仓库（本机检出） | `E:\Users\gxh\Documents\GitHub\MirClient`（`origin` = `https://github.com/gqf2008/MirClient.git`；`upstream` = `https://github.com/mirbeta/MirClient.git`） |
+| commit | `c61d912d35efbe44b10f3abde32e40cbd93fc166`（2026-10-10 01:00:13 +0800，「修复底部主面板错位 + 攻击模式标签卡英文」） |
+| `Source/Common/Grobal2.pas` | `sha256 b91816afe405b55c95c1f525ec3a67e019344c12d8771c91d72df270c30cb40b` |
+| `Source/MirClient/ClMain.pas` | `sha256 ac6ca85722ab9d67ca66a27bc443532ff311f37674737b5c5a152642724b8bd4` |
+| `Source/MirClient/Actor.pas` | `sha256 54b9b1037529d54a4f1c6c5ba6464a4431b96c2f5ac28763d69ef175e1efe17d` |
+| `Source/MirClient/FState.pas` | `sha256 abcb6dd67caa245e05d9d54db8ad84f22b099b64839954c39cd9a47f652727d7` |
+| `Source/Common/EDcode.pas` | `sha256 f324594d8170f3b99654d4cfa01f0dc78d70912d12916e1caf6a3e3aead0cc02` |
+
+- 部署件 `D:\MirClient-run\MirClinet.exe` 构建时间 = **2026-10-10 00:55**（早于上面 HEAD 的 01:00）。
+  `git diff HEAD^ HEAD -- Source/Common/Grobal2.pas` 只改了两条**消息号常量**
+  （`SM_HERODELMAGIC 213→546`、`SM_ATTACKMODE 545→213`），**未触碰 `HIGHHP` / `TAbility`**；
+  本复核脚本对 `HEAD^` 的同一文件也判 GREEN（见 §4 命令 3）⇒ 部署件与 HEAD 的布局一致，无歧义。
+
+## 2. 源码逐行锚点（`26` 的目标）
+
+`Source/Common/Grobal2.pas:39`：
+
+```pascal
+  VIEWFOG = True; //1020
+  HIGHHP = True;
+  NEWUI = False;
+```
+
+`Source/Common/Grobal2.pas:2167-2193`（原文，含行号）：
+
+```pascal
+2167:  TAbility = packed record
+2168:    Level: Word;
+2169:    AC: Integer;
+2170:    MAC: Integer;
+2171:    DC: Integer;
+2172:    MC: Integer;
+2173:    SC: Integer;
+2174: {$IF HIGHHP}
+2175:    HP: DWORD;
+2176:    MP: DWORD;
+2177:    MaxHP: DWORD;
+2178:    MaxMP: DWORD;
+2179: {$ELSE}
+2180:    HP: Word;
+2181:    MP: Word;
+2182:    MaxHP: Word;
+2183:    MaxMP: Word;
+2184: {$IFEND}
+2185:    Exp: DWORD;
+2186:    MaxExp: DWORD;
+2187:    Weight: Word;
+2188:    MaxWeight: Word;
+2189:    WearWeight: Word;
+2190:    MaxWearWeight: Word;
+2191:    HandWeight: Word;
+2192:    MaxHandWeight: Word;
+2193:  end;
+```
+
+`Source/MirClient/ClMain.pas:10096-10103`（`SM_ABILITY` 处理器，`SizeOf(TAbility)` 整块拷）：
+
+```pascal
+10096:    SM_ABILITY:
+10097:      begin
+10098:        g_MySelf.m_nGold := msg.Recog;
+10099:        g_MySelf.m_btJob := LoByte(msg.param);
+10100:        g_MySelf.m_nIPowerLvl := HiByte(msg.param);
+10101:        g_MySelf.m_nGameGold := Makelong(msg.tag, msg.series);
+10102:        DecodeBuffer(body, @g_MySelf.m_Abil, SizeOf(TAbility));
+10103:      end;
+```
+
+`Source/Common/EDcode.pas:894-904`（`DecodeBuffer` 无条件 `Move` `bufsize` 字节）：
+
+```pascal
+894: procedure DecodeBuffer(src: AnsiString; buf: PAnsiChar; bufsize: Integer);
+     ...
+902:    DeCodeBuf(NativeInt(PAnsiChar(AnsiString(src))), Length(AnsiString(src)), Integer(@EncBuf));
+903:    Move(EncBuf, buf^, bufsize);
+904:  end;
+```
+
+`Source/MirClient/Actor.pas:22` 与 `:2162-2168`（`CanRun`）：
+
+```pascal
+22:    RUN_MINHEALTH             = 10;
+...
+2162: function TActor.CanRun: Integer;
+2163: begin
+2164:   Result := 1;
+2165:   if m_Abil.HP < RUN_MINHEALTH then begin
+2166:     Result := -1;
+2167:   end
+```
+
+`Source/MirClient/FState.pas:8887-8888`（底部 HUD 左起两对数 = HP/MaxHP、MP/MaxMP）：
+
+```pascal
+8887:      BoldText(28, SCREENHEIGHT - 37, IntToStr(_MIN(g_Myself.m_Abil.MaxHP, g_Myself.m_Abil.HP)) + '/' + IntToStr(g_Myself.m_Abil.MaxHP), clWhite, clBlack);
+8888:      BoldText(88, SCREENHEIGHT - 37, IntToStr(_MIN(g_Myself.m_Abil.MaxMP, g_Myself.m_Abil.MP)) + '/' + IntToStr(g_Myself.m_Abil.MaxMP), clWhite, clBlack);
+```
+
+## 3. 独立复算结果（脚本 `verify_client_ability_layout.py`）
+
+```
+HIGHHP = True
+SizeOf(TAbility) = 58
+  offset  0 : Level         (Word)
+  offset  2 : AC            (Integer)
+  offset  6 : MAC           (Integer)
+  offset 10 : DC            (Integer)
+  offset 14 : MC            (Integer)
+  offset 18 : SC            (Integer)
+  offset 22 : HP            (DWORD) DWORD@22
+  offset 26 : MP            (DWORD) DWORD@26
+  offset 30 : MaxHP         (DWORD) DWORD@30
+  offset 34 : MaxMP         (DWORD) DWORD@34
+  offset 38 : Exp           (DWORD) DWORD@38
+  offset 42 : MaxExp        (DWORD) DWORD@42
+  offset 46 : Weight        (Word)
+  offset 48 : MaxWeight     (Word)
+  offset 50 : WearWeight    (Word)
+  offset 52 : MaxWearWeight (Word)
+  offset 54 : HandWeight    (Word)
+  offset 56 : MaxHandWeight (Word)
+GREEN: 与期望 58B 布局逐字段一致（HP/MP/MaxHP/MaxMP = DWORD@22/26/30/34）
+```
+
+与 Rust 侧逐字段对照（`mir2-rs/bins/game-svr/src/record.rs:345-372` `encode_ability_client`）：
+`u16(level)`、`i32(ac/mac/dc/mc/sc)`、`i32(hp/mp/max_hp/max_mp)`、`i32(exp/max_exp)`、
+`u16(weight/max_weight/wear_weight/max_wear_weight/hand_weight/max_hand_weight)` ⇒ 18 字段、
+偏移 0/2/6/10/14/18/22/26/30/34/38/42/46/48/50/52/54/56，**与上表一致**。
+
+## 4. 原始命令与输出（可复跑）
+
+命令 1（解析器自检，不需要外部源码；验证 `{$IF HIGHHP}` 两分支都被正确解析）：
+
+```
+$ python mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/verify_client_ability_layout.py --selftest
+[selftest] HIGHHP=True 片段 => 58B 布局 OK
+[selftest] HIGHHP=False 片段 => 50B / HP Word@22 OK（解析器条件分支正确）
+[selftest] GREEN
+rc=0
+```
+
+命令 2（对冻结客户端真源码复算）：
+
+```
+$ python mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/verify_client_ability_layout.py
+# source = E:/Users/gxh/Documents/GitHub/MirClient/Source/Common/Grobal2.pas
+HIGHHP = True
+SizeOf(TAbility) = 58
+... （见 §3） ...
+GREEN: 与期望 58B 布局逐字段一致（HP/MP/MaxHP/MaxMP = DWORD@22/26/30/34）
+rc=0
+```
+
+命令 3（部署件对应 revision `HEAD^` 的同一文件，布局不变）：
+
+```
+$ git -C E:/Users/gxh/Documents/GitHub/MirClient show HEAD^:Source/Common/Grobal2.pas > E:/tmp/m2svr-layout-redcheck/grobal2_prev.pas
+$ python mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/verify_client_ability_layout.py --source E:/tmp/m2svr-layout-redcheck/grobal2_prev.pas
+... GREEN: 与期望 58B 布局逐字段一致 ...
+rc=0
+```
+
+改坏必红（两条，原始输出见 `27-redcheck-layout-verify.txt`）：
+- RC-1：把源码副本的 `HIGHHP = True;` 改成 `False` ⇒ 脚本 RED（`总长 50 != 58`、`HP:Word@22`），rc=1；
+- RC-2：把 `HP: DWORD;` 改成 `HP: Word;` ⇒ 脚本 RED（`总长 56 != 58`、`HP:Word@22` + 后续全体错位），rc=1；
+- 还原（对真源码）⇒ rc=0。
+
+## 5. 40B oracle 尾 × 58B 客户端记录的错位（为什么 HP=0）
+
+oracle 尾 = `record::encode_ability`（`AbilityFormatter`，`src/OpenMir2/Packets/ClientPackets/Ability.cs:108-141`
+（`[StructLayout(Size = 40)]`@`:9`，`WriteObjectHeader(22)`@`:117`）经 `EDcode.EncodeMessage` 丢掉成员数首字节，
+见 `src/OpenMir2/EDcode.cs:211-229`）：
+`Level@0(1B) reserved1@1(1B) AC@2(2B) MAC@4 DC@6 MC@8 SC@10 HP@12(2B) MP@14 MaxHP@16 MaxMP@18
+reserved2@20(2B) ExpCount@22(1B) ExpMaxCount@23(1B) Exp@24(4B) MaxExp@28(4B) Weight@32(2B)
+MaxWeight@34(2B) WearWeight@36(1B) MaxWearWeight@37(1B) HandWeight@38(1B) MaxHandWeight@39(1B)` ⇒ **40B**。
+
+客户端按 58B 记录读同一段字节（offset 都在解码后的 40B 载荷内 ⇒ 映射精确）：
+
+| 客户端字段 | 读 offset | oracle 该 offset 的内容 | 本部署实测 oracle 尾字节 | 客户端读到的值 |
+| --- | --- | --- | --- | --- |
+| `HP: DWORD` | 22 | `ExpCount(1)+ExpMaxCount(1)+Exp[0..1]` | `00 00 00 00` | **0** |
+| `MP: DWORD` | 26 | `Exp[2..3]+MaxExp[0..1]` | `00 00 0a 00` | 655360 |
+| `MaxHP: DWORD` | 30 | `MaxExp[2..3]+Weight[0..1]` | `00 00 00 00` | **0** |
+| `MaxMP: DWORD` | 34 | `MaxWeight[0..1]+WearWeight(1)+MaxWearWeight(1)` | `32 00 00 0f` | 251658290 |
+
+oracle 尾原文（真机，`22-before-after-realrun.txt` §改前）：
+`01000000000001010000000013000f0013000f0000000000000000000a00000000003200000f000c`（40B）
+——`HP@22` 四字节 = `00 00 00 00` ⇒ 客户端 HUD `HP/MaxHP = 0/0`、`CanRun`（`HP < 10`）拒绝跑。
+真机截图 `shots/rust-oracle-40-hud-0-0.png` 显示的 `0/0` + `655360/…` 与该映射吻合
+（`MP=655360` 精确相等；`MaxMP` 的末位在截图上被右侧图标压住，README 旧文记作 `25165829`，
+本文件按 `32 00 00 0f` 订正为 **251658290**）。
+
+⇒ C# 对照组同病（同 HUD，`12-csharp-control-flow.txt`）证明这**不是 Rust 回退**；
+修它只能改服务端布局（客户端冻结）⇒ 属 §6.0-3 的故意偏离，**等 owner 裁决**（本片默认关，
+`MIR2_CLIENT_ABILITY_LAYOUT=1` 才启用 58B，见 `21-client-ability-layout.md`）。
+
+## 6. 复跑方式
+
+```
+# 主判据（需冻结客户端源码；找不到 ⇒ PREREQ_MISSING rc=2，不静默通过）
+python mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/verify_client_ability_layout.py
+
+# 解析器自检（不需要外部源码）
+python mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/verify_client_ability_layout.py --selftest
+
+# 源码路径可用 --source 或环境变量 MIR2_CLIENT_GROBAL2 覆盖
+```
+
+边界：本文件与脚本**只读**冻结客户端（`git -C .../MirClient status` 未因本片而变），
+未改 `MirClient/**`、`src/**`、`sql/**`、表结构、脚本语法、数据格式。

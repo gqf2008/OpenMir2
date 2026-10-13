@@ -13,6 +13,7 @@
 //! - 角色记录 `CurMap` ⇒ `registry.require_id(cur_map)?`（找不到即报错，禁止静默 0 号占位图）。
 #![allow(clippy::doc_markdown)]
 
+pub mod castle;
 pub mod conf;
 pub mod error;
 pub mod mapfile;
@@ -25,6 +26,13 @@ pub mod points;
 pub mod registry;
 pub mod text;
 
+pub use castle::{
+    attack_sabuk_wall_path, castle_config_dir, castle_list_path, parse_attack_sabuk_wall_line,
+    parse_castle_list, parse_castle_map_list, parse_sabuk_w_bytes, sabuk_w_path,
+    serialize_attack_sabuk_wall, serialize_castle_list, AttackSabukWallEntry, DefenseUnit,
+    SabukWConfig, ATTACK_SABUK_WALL_FILE_NAME, CASTLE_TEXT_SPLIT, GUARD_ARRAY_LEN,
+    MAX_CASTLE_ARCHER, MAX_CASTLE_GUARD, SABUK_W_FILE_NAME,
+};
 pub use conf::{ClientConf, GameSvrConf, NakedAbility};
 pub use error::EnvirError;
 pub use mapfile::{

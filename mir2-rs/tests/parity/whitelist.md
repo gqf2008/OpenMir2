@@ -35,6 +35,11 @@
 | B-12 | 重复 `#CALL` 路径 `callList[i]="#ACT"` 越界即抛 ArgumentOutOfRange | `ScriptParsers.cs:163` → `crates/script/src/parser.rs`（LoadPanic::CallListOutOfRange） |
 | B-13 | `scriptType == 1` 死分支（从不赋 1），quest flag 头解析不执行 | `ScriptParsers.cs:794` → `crates/script/src/parser.rs`（unreachable 标记） |
 | B-14 | 常量替换要求匹配位置 > 0（行首命中不替换），每 define 每行至多 10 次 | `ScriptParsers.cs:634-650` → `crates/script/src/parser.rs` |
+| B-15 | **门/墙通行掩码的 `LowWall` 不可恢复**：`Envir.SetMapXyFlag`（`Envirnoment.cs:1362-1369`）先走 `GetCellInfo`，而 `GetCellInfo` 对「越界**或** `Attribute != Walk`」都返 `success=false` ⇒ `SetAttribute` 不执行。于是 `CastleDoor.SetMapXyFlag(1)`（关门）把 9 格置 `LowWall` 后，`SetMapXyFlag(0)`（开门）的 `boFlag=true` 调用**无法**把它们恢复成 `Walk` ⇒ 城门「开」了但格子仍阻断。（同族：`WallStructure.Run` 用 `SetMapFlaged` 标记自己规避了这一点，只有 `CastleDoor` 的 9 格掩码命中本 bug。） | `src/M2Server/Maps/Envirnoment.cs:1362-1369` + `src/M2Server/Monster/Monsters/CastleDoor.cs:23-44` → `crates/world/src/map.rs`（`MapGrid::set_map_xy_flag`）/ `crates/world/src/castle.rs`（`door_map_xy_flag_ops`）；用例 `castle::tests::door_mask_blocks_cells_and_low_wall_cannot_be_restored_like_oracle`（BUG-REPLICA） |
+| B-112 | **`ProcessSlaveMutiny` 的 `DC` 高字节截断**：`SlaveList[i].WAbil.DC = (ushort)HUtil32.MakeLong((short)(HUtil32.LoByte(...DC) * SystemShare.Config.MasterDieMutinyPower), (short)(HUtil32.HiByte(...DC) * SystemShare.Config.MasterDieMutinyPower))` —— 外层 `(ushort)` 把 `MakeLong` 的高 16 位（= 高字节缩放值）**截掉** ⇒ `DC` 实际只等于 `(ushort)(short)(LoByte(DC) * Power)`，高字节恒归零。`rg 'ProcessSlaveMutiny' src/` = `PlayObject.Base.cs`/`PlayObject.Message.cs` 两处（定义 + 自投递）。 | `src/M2Server/Player/PlayObject.Base.cs:349` → `crates/world/src/slave.rs::process_slave_mutiny`（逐位保留该截断；红检钉住） |
+| B-113 | **`MasterDieMutinySpeed` 除零**：`SlaveList[i].WalkSpeed = SlaveList[i].WalkSpeed / SystemShare.Config.MasterDieMutinySpeed`（`PlayObject.Base.cs:350`）；且该配置的读取本身是 oracle 缺陷——`ServerConf.cs:521` 用 **`MasterDieMutinyPower`** 键给 `MasterDieMutinySpeed` 赋值（见 M3⑨-1 卡）⇒ `Server.conf` 的 `MasterDieMutinyPower=0` 时该行**除零**。 | `src/M2Server/Player/PlayObject.Base.cs:350` + `src/Modules/SystemModule/Conf/ServerConf.cs:521` → `crates/world/src/slave.rs::process_slave_mutiny`（`speed != 0` 才除；错键照搬，除零分支不可达，登记不冒充已实现） |
+| B-114 | **`GainSlaveExp` 是死代码**：`private void GainSlaveExp(byte nLevel)`（`MonsterObject.cs:71-84`）**全仓无调用点**（`rg 'GainSlaveExp' src/` 仅定义处 1 命中）⇒ oracle 里「宝宝击杀**不**涨 `SlaveExpLevel`」。 | `src/M2Server/Monster/MonsterObject.cs:71-84` → `crates/world/src/slave.rs`（**不实现**宝宝击杀涨级；`slave_exp_level` 只由召唤/叛变写，红检钉住） |
+| B-115 | **色表 latent 越界**：`GetChrColor` 的门是 `slaveExpLevel <= Grobal2.SlaveMaxLevel`（`Grobal2.cs:23` = 50），却索引 **15 项**色表 `SystemShare.Config.SlaveColor[slaveExpLevel]`（`BaseObject.Base.cs:878-880`）⇒ `slaveExpLevel ∈ 15..=50` 会 `IndexOutOfRangeException`（latent）。正常数据不可达：召唤的 `SlaveExpLevel` 来自 `SkeletonArray/DragonArray.nLevel`，叛变置 `SlaveColor.Length` 的同时把 `Master=null` ⇒ 走不到色表支。 | `src/M2Server/Actor/BaseObject.Base.cs:877-881` + `src/OpenMir2/Grobal2.cs:23` → `crates/world/src/slave.rs::get_chr_color`（`slice::get` 落到 `GetNameColor` 兜底） |
 
 ## A 线待观察项（C# 侧既有口径差——非对拍差异，M1/M2 移植网关时逐条处置）
 
@@ -190,6 +195,8 @@ M0 金标准验收状态（2026-10-10）：① 逐字节回放 0 差异、② �
 | T-39 | **N2：`AddWarGuild` 宣战反逻辑照搬**：`src/M2Server/Guild/GuildInfo.cs:1020` 的 `AddWarGuild`，其中 `:1039` 的 `if (warGuild.WarTime > 0)` 写成「**未**在战中才新建（`WarTick=0`）」。⇒ **未在战中 ⇒ 宣战不生效**（返回 default/`WarTick=0`）；**已在战中 ⇒ 追加重复条目**（向量四种情形：未战/首次宣战/重复宣战/到期）。 | **不是差异，是 oracle 缺陷 1:1 照搬**：Rust 侧照搬该反逻辑，**不许**修成「未战则建」；向量锁死四情形 + 改坏必红。落地卡 `openmir2-m3-guild-war`（⑧-5）。将来要修另开 `S-*`。 | owner 裁决 comment `a137cc900cfb`；**待独立 principal 复核本登记行** |
 | T-40 | **N5：`CastleOfficial` 的 `Substring` 越界被吞 ⇒ 雇佣命令不可达**：`src/GameSrv/Npc/CastleOfficial.cs:229/235` 的 `sLabel.Substring(sHIREGUARDNOW.Length, sLabel.Length)`（**越界的是 length 实参**：`sHIREGUARDNOW.Length`=13 为 startIndex、`sLabel.Length` 为 length，`13 + sLabel.Length > sLabel.Length` 恒真 ⇒ 必抛；**不是** startIndex 本身越界）在 `UserSelect` 的 `catch` 里被吞 ⇒ `@hireguardnowN` / `@hirearchernowN` **不可达**。 | **不是差异，是 oracle 缺陷 1:1 照搬**：Rust 侧照搬为「雇佣命令**静默无效果**」（与 C# 一样不崩、不报错），**不许**在 Rust 里「越界检查后正常雇佣」。落地卡 `openmir2-m3-castle-door-repair` 相关的 CastleOfficial 面（⑧-8）；向量钉住不可达 + 改坏必红。将来要修另开 `S-*`。 | owner 裁决 comment `a137cc900cfb`；**待独立 principal 复核本登记行** |
 
+| B-16 | **沙巴克商人税 `CastleMgr` 分支恒用 `UpgradeWeaponPrice`（oracle 怪行为 1:1 照搬）**：`src/GameSrv/Npc/Merchant.cs:1250-1259/1385-1393/1637-1645` 的 `else if (SystemShare.Config.GetAllNpcTax)` 分支传给 `SystemShare.CastleMgr.IncRateGold(...)` 的税基是 **`SystemShare.Config.UpgradeWeaponPrice`（默认 10000，`GameSvrConf.cs:275/1420`）**，而不是本次交易的 `nPrice`/`nRepairPrice`（`:544-553` 的升级武器调用点本来就传 `UpgradeWeaponPrice`，两分支同值）。 | **不是差异，是 oracle 怪行为照搬**：Rust `crates/world/src/castle_tax.rs::merchant_tax_amount` 对 `MerchantTaxTarget::CastleManager` 恒返 `upgrade_weapon_price`，`Castle` 分支才用调用点价格；向量 `merchant_tax_amount_uses_upgrade_weapon_price_for_manager_branch` 钉住。⑤-4 的 T-47 只登记了「条件照抄」这一层，本行钉死更具体的「税基常量」。将来要修另开 `S-*`。 | 作者登记（`openmir2-worker-5`，⑧-9）；**待独立 principal 复核** |
+
 > **编号连号**：T-36（邮件 `oracle_absent`）→ T-37（`CHECKOPEN` 恒假，⑥-2 落表）→ T-38..T-40（⑧ 的 N1/N2/N5，M3 总验收片落表）。
 
 > 拍卖（元宝寄售 SellOff）本批**不登记 T-***：它是有 oracle 实现的活路径（世界侧派发/世界态/帧在 Rust 未实现，属**未实现**而非行为差异），
@@ -239,6 +246,49 @@ M0 金标准验收状态（2026-10-10）：① 逐字节回放 0 差异、② �
 | 编号 | 差异/豁免点 | 为什么无害 / 处置 | 谁审的 |
 | --- | --- | --- | --- |
 | T-47 | **M3⑤-4 第①片未做的商店面（openmir2-worker-11）**：① `CM_USERGETDETAILITEM(1015)` + `SM_SENDDETAILGOODSLIST(652)`（`Merchant.ClientGetDetailGoodsList`，`Merchant.cs:1304`，含 `GetUpgradeStdItem` 的升级差量编码）；② `CM_USERSTORAGEITEM(1031)` / `CM_USERTAKEBACKSTORAGEITEM(1032)` 与仓库会话态（`StorageItemList` + 39 上限 + `IsCanGetBackItem` 锁 + `SendSaveItemList` 分页 50）；③ `Market_Def` 商人脚本装载（`Merchant.LoadScriptFile`，`Merchant.cs:1089`）与修理成功后的 `GotoLable(REPAIROK/SUPERREPAIROK)`（`Merchant.cs:1652/1659`，本宿主只回标签不执行）；④ 城堡税 `Castle.IncRateGold`/`CastleMgr.IncRateGold`（`Merchant.cs:1249/1384/1638`）的**条件照抄**、但城堡/行会对象属 ⑧ 家族未建模 ⇒ 无可观测效果；⑤ 商店路径上的 `SM_WEIGHTCHANGED`（`BaseObject.cs:1771` 的 `WeightChanged`）帧未发（只更新 `WAbil.Weight`）；⑥ `CustomItemSystem.GetItemName` 的自定义名（`Desc[13]`）未建模（用模板名）；⑦ `ClientUserBuyItem` 的 `Dealing` 前置门（`Operate.cs:196-199`：`if (Dealing) return;` 在 `FindMerchant` 之前）未建模也未登记——⑦（组队/交易）未落地 ⇒ `Dealing` 恒 false ⇒ **行为暂时等价**，接 ⑦ 时补门（或在本行续登）。 | **未实现（不是差异）**：①–③归本卡第②片（仓库存档面与 ⑤-5 `openmir2-m3-storage-persist` 相接）；④与 T-38 同族（oracle 空桩/未建模对象，本片只把条件写对，效果无目标对象）；⑤⑥是物品展示层，与已登记的 T-24（`SendAddItem` 的 `StdModeMap`/形状）同族。本片已落地：`game_svr::shop` 的六条纯函数 + `World::merchant_goods_*`（在售库存，含 `RefillGoods` 按实际库存量补/删）+ 收包字段口径（`Recode`=商人 ActorId、`MakeIndex=param|(tag<<16)`）+ 距离 quirk（买 `<=15` / 其余 `<15`）。 | 作者登记（`openmir2-worker-11`）；**待独立 principal 复核** |
+
+## M3⑧ 登记（公会 / 攻城（guild / castle）动作序列夹具；卡片 `openmir2-m3-guild-castle-fixture-botsrv`，2026-10-13）
+
+> 盘点报告：[`m3/M3⑧公会攻城现状盘点报告-20261013.md`](m3/M3⑧公会攻城现状盘点报告-20261013.md)；本卡父卡 `openmir2-m3-guild-castle-align`。
+> 本片交付 = **夹具骨架**（比较器 + 入口 + 无栈自检 + BotSrv 最小驱动）；真机两侧同序列跑等承接卡
+> `openmir2-m3-guild-file-store` / `-guild-state` / `-guild-war` / `-castle-file-load` / `-castle-siege-state` /
+> `-castle-door-repair` / `-castle-gold-tax` 落地 + `openmir2-m3-clock-injection`（时间门）+ owner 发窗口。
+> 落库口径 = oracle「行会/攻城不落库」：三库无 `guild`/`guildmember`/`castle` 表或列（盘点 §1.J）⇒ 两侧都不写，
+> DB 侧由 `scoped_diff --canonical` 承担（增量=0）。
+
+| 编号 | 差异/豁免点 | 为什么无害 / 处置 | 谁审的 |
+| --- | --- | --- | --- |
+| T-46 | **夹具口径 + BotSrv 工具侧例外（本片交付）**：改动 `src/BotSrv/**`（`RobotOptions`/`MShare`/`AppService`/`Player/RobotPlayer.cs`/`Player/RobotPlayer.Operate.cs`/`Program.cs` + 新 `GuildCastleSeqSelfCheck.cs`）+ `tools/botload/run_bots.ps1` + `mir2-rs/tests/parity/m3/{run_pair.ps1,gate_guards.ps1}` + 新 `mir2-rs/tests/parity/m3/{run_guild_castle_pair.ps1,guild_castle_diff.py,guild_castle_scenario.json}`：① BotSrv 增 `GuildCastleSequence`（默认 false）/`GuildCastleSteps`/`GuildCastleStepMs`/`GuildCastleStartDelayMs`/`GuildCastleMasterRole`/`GuildCastlePeerRole`，收到本假人 `SM_LOGON` 后按固定步骤串（`role|op|param;...`：`open_dlg`/`home`/`memberlist`/`add_member`/`del_member`/`update_notice`/`update_rank`/`ally`/`break_ally` = 现成 `CM_GUILD*` 面板原语；`build_guild`/`guild_war`/`castle_apply`/`open_door`/`close_door`/`repair_door`/`repair_wall` = `CM_MERCHANTDLGSELECT(1011)` 行会 NPC 标签；`observe`/`wait`/`softclose`）动作，逐 step 落 `M3GUILDCSEQ {json}` 的 send/frame/end/done 事件；行会面板/成员/封号/建会/联盟/换名/菜单帧（750/753/754/756/757/758/759/760/761/762/763/767/768/769/770/771/10303/10304）在开关打开时增 `GuildCastleOnServerMessage` 落事件（**只读不写世界态**）。新增两个最小发送 `SendGuildAlly`/`SendGuildBreakAlly`（`CM_GUILDALLY(1044)`/`CM_GUILDBREAKALLY(1045)`，同 T-29 纪律）。② `guild_castle_diff.py`（`assemble` 事件流→记录 / `diff` 逐 (bot,k) 帧序列+文本+Recog 标量+guild_name/guild_rank_name+members 多重集+金币/背包多重集+fail-closed / `selftest` **36/36**）。③ `run_guild_castle_pair.ps1`（复用 `run_pair.ps1` 两相 pin + `-StopAfterCharCreated` 预热 + 收尾 save-settle 仪器；入口护栏 + `M3GUILDCSEQ` 完整性（两假人各自 done）+ 跨侧 `guild_castle_diff` + `scoped_diff`；`-SelfCheckNoStack` **19/19**；未给 `-Go` ⇒ real-run fail-closed）。 | BotSrv **不在 oracle 七进程内**（T-1）。默认（`GuildCastleSequence=false`）⇒ **不新增任何发送、不新增任何日志、原路径逐字节不变**（`run_bots.ps1 -SelfCheckNoStack` 两向 + `run_pair -EmitOpsArgs` 两向自检钉住：默认 `(off)`、开启时必传 `-DisableAutoPlay`）。打开时只写**本假人自己的 socket**、只读本假人自己的视图（`MShare.MySelf`/`PlayScene.ActorList`/`MShare.ItemArr`/`MShare.g_sGuildName`/`g_sGuildRankName`），不读不写跨假人共享世界态（同 T-22/T-29/T-41 纪律）；不改 oracle/协议/上线字节语义。oracle 的 N1/N2/N3/N4/N5 断点/缺陷（盘点 §1.L，见 T-38..T-40）按硬约束 3 **照搬并向量锁死**，本片只登记不修。**判据本体（比较器 + 夹具骨架）已完整、离线可复跑**；真机两侧同序列跑要窗口（且要 ⑧ 实现卡 + 时钟注入）。证据 `m3/evidence-m3-guild-castle-fixture-botsrv-20261013/**`。 | 作者登记（`openmir2-worker-5`）；**待独立 principal 复核** |
+
+> **编号连号**：T-46（M3⑧ 公会/攻城夹具；T-22/T-29/T-41 的同族扩展）。
+
+## M3⑨ 登记（英雄 / 宠物（宝宝/下属 slave）动作序列夹具；卡片 `openmir2-m3-hero-pet-fixture-botsrv`，2026-10-13）
+
+> 盘点报告：[`m3/M3⑨英雄宠物现状盘点报告-20261013.md`](m3/M3⑨英雄宠物现状盘点报告-20261013.md)；本卡父卡 `openmir2-m3-hero-pet-align`。
+> 本片交付 = **夹具骨架**（比较器 + 入口 + 无栈自检 + BotSrv 最小驱动）；真机两侧同序列跑等承接卡
+> `openmir2-m3-pet-slave-summon`（⑨-2）/ `-pet-slave-lifecycle`（⑨-3）落地 + `openmir2-m3-clock-injection`（时间门）+ owner 发窗口。
+> 注：oracle **没有玩家英雄实体**（盘点 §0/§1.I），本系统在本 oracle 里只能落到**宝宝/下属 slave**；「英雄经验」= `ExpHitter.Master`（T-33）。
+
+| 编号 | 差异/豁免点 | 为什么无害 / 处置 | 谁审的 |
+| --- | --- | --- | --- |
+| T-45 | **夹具口径 + BotSrv 工具侧例外（本片交付）**：改动 `src/BotSrv/**`（`RobotOptions`/`MShare`/`AppService`/`Player/RobotPlayer.cs`/`Player/RobotPlayer.Operate.cs`/`Program.cs` + 新 `HeroPetSeqSelfCheck.cs`）+ `tools/botload/run_bots.ps1` + `mir2-rs/tests/parity/m3/{run_pair.ps1,gate_guards.ps1}` + 新 `mir2-rs/tests/parity/m3/{run_hero_pet_pair.ps1,hero_pet_diff.py,hero_pet_scenario.json}`：① BotSrv 增 `HeroPetSequence`（默认 false）/`HeroPetSteps`/`HeroPetStepMs`/`HeroPetStartDelayMs`/`HeroPetMasterRole`/`HeroPetPeerRole`，收到本假人 `SM_LOGON` 后按固定步骤串（`role|op|param;...`：`summon`=发 `CM_SPELL(3017)` 技能 17/20/30/41/46 / `attack`=发 `CM_HIT(3014)` / `observe`/`wait`/`softclose`）动作，逐 step 落 `M3HEROPETSEQ {json}` 的 send/frame/end/done 事件；召唤/经验/升级/名色/死亡/失败文案帧（`SM_SPELL 17`/`SM_DEATH 32`/`SM_WINEXP 44`/`SM_LEVELUP 45`/`SM_CHANGENAMECOLOR 656`/`SM_MENU_OK 767`）在开关打开时增 `HeroPetOnServerMessage` 落事件（**只读不写世界态**）。② `hero_pet_diff.py`（`assemble` 事件流→记录 / `diff` 逐 (bot,k) 帧序列+文本+主人 exp/level+宝宝多重集+金币/背包多重集+fail-closed / `selftest` **36/36**）。③ `run_hero_pet_pair.ps1`（复用 `run_pair.ps1` 两相 pin + `-StopAfterCharCreated` 预热 + 收尾 save-settle 仪器；入口护栏 + `M3HEROPETSEQ` 完整性（两假人各自 done）+ 跨侧 `hero_pet_diff` + `scoped_diff`；`-SelfCheckNoStack` **19/19**；未给 `-Go` ⇒ real-run fail-closed）。 | BotSrv **不在 oracle 七进程内**（T-1）。默认（`HeroPetSequence=false`）⇒ **不新增任何发送、不新增任何日志、原路径逐字节不变**（`run_bots.ps1 -SelfCheckNoStack` 两向 + `run_pair -EmitOpsArgs` 两向自检钉住：默认 `(off)`、开启时必传 `-DisableAutoPlay`）。打开时只写**本假人自己的 socket**、只读本假人自己的视图（`MShare.MySelf.SlaveObject`/`PlayScene.ActorList`/`MShare.ItemArr`），不读不写跨假人共享世界态（同 T-22/T-29/T-41 纪律）；不改 oracle/协议/上线字节语义。这是 T-14/T-29/T-41 的同族扩展。**判据本体（比较器 + 夹具骨架）已完整、离线可复跑**；真机两侧同序列跑要窗口（且要 ⑨-2/⑨-3 + 时钟注入）。证据 `m3/evidence-m3-hero-pet-fixture-botsrv-20261013/**`。 | 作者登记（`openmir2-worker-5`）；**待独立 principal 复核** |
+
+> **编号连号**：T-45（M3⑨ 英雄/宠物夹具；T-22/T-29/T-41 的同族扩展）。
+
+### M3⑨ 实现登记（宝宝召唤 / 生命周期；卡片 `openmir2-m3-pet-slave-summon`(⑨-2) + `-pet-slave-lifecycle`(⑨-3)，2026-10-13）
+
+> 收口 reviewer-5 对 ⑨-3 的两条非阻塞 Minor（M-1「4 条 BUG-REPLICA 未落 whitelist 行」/ M-2「`slave_list_cleanup_all` 调用点
+> 跨对象相对顺序」）。4 条「复刻的 oracle 缺陷」按本表 B 段体例（= 「复刻的 C# 已知 bug」，见文件头）登记为 **B-112..B-115**；
+> M-2 的调度位置 / 未建模分支差异登记为 **T-49**。
+> **编号说明**：T-48 按已闭合卡 `openmir2-m3-whitelist-registry-integrity` 的建议，留给「T-42 撞号去重」这条待 owner 路由的改动
+> ⇒ 本行取 T-49。B-112..B-115 为 B 段当前空号（早前 reviewer 曾建议 B-112 用于 811 Job 面，作者判定为 1:1、**未落行** ⇒
+> 该号空出，本片取用）。本块全部行**待独立 principal 复核**。
+
+| 编号 | 差异/豁免点 | 为什么无害 / 处置 | 谁审的 |
+| --- | --- | --- | --- |
+| T-49 | **M3⑨-2/⑨-3 的调度位置与未建模分支（本片登记）**：① `slave_list_cleanup_all`（oracle `BaseObject.Base.cs:208-217` 的「倒序清表三条件」`Death \|\| Ghost \|\| Master != this`）在 oracle 里跑在**各主人自己的 `Run()` 尾**；Rust 骨架玩家无 `Run` ⇒ 集中到 `World::tick`（`crates/world/src/world.rs`）的 `settle_deaths` 之后、怪物 AI 之前，按实体槽位顺序跑一次。② `MonsterObject.Run` 的 `Master.SlaveRelax` 提前返回支**未建模**（`MonsterObject.cs:251-360`）⇒ oracle 该支会**跳过 `CheckRoyalty`**；Rust 的 `check_royalty` 只在 `monai::monster_run` 复刻的两个提前返回口之后调用，`SlaveRelax` 本身未接。 | **不是行为差异，是调度位置 / 未建模分支**：清表三条件与 oracle 逐字一致，只是调用点从「各主人 `Run` 尾」集中到 tick（空表零动作、无 RNG、既有 golden 逐字节不变）；`SlaveRelax` 属未接面（归宿主 `RM_MASTERDIEMUTINY`/`RM_MASTERDIEGHOST`/`RM_SPIRITSUITE` 自投递与 `CM_SPELL` 接线片），当前生产无产者 ⇒ 不可达。判据按 **per-owner-run 粒度**比（跨 owner 交错显式不在判据内，与 T-42 的墙钟预算同族）；真机对拍（`run_hero_pet_pair.ps1`）按此口径解释。将来要改调度另开批次。 | 作者登记（`openmir2-worker-20`，⑨-3）；**待独立 principal 复核** |
+
+> ⑨-2/⑨-3 的 4 条复刻缺陷（`DC` 高字节截断 / `MasterDieMutinySpeed` 除零 / `GainSlaveExp` 死代码 / 色表 latent 越界）见 B 段 **B-112..B-115**。
 
 ## M1 S4b 登记（DBSrv 6000 `DataService` 面 + 5700 `MarketService` 面 + `TimedService` 缓存回写，2026-10-12）
 

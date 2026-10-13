@@ -382,10 +382,54 @@ def cmd_groups(args):
     return 0
 
 
+def _scenario_group_expectations(path):
+    """从 scenario JSON 读 DoD② 的机判输入（`trace.groups_expected` / `min_monster_ai_draws`）。
+
+    返回 `(expected: list[str], min_counts: dict[str, int])`；字段缺省 ⇒ 空。
+    这两项是**声明**，必须由本工具在**真实账本**上机判「真的出现 / 抽数达标」，否则它们只是注释。
+    """
+    with open(path, "r", encoding="utf-8-sig") as fh:
+        obj = json.load(fh)
+    trace = obj.get("trace") if isinstance(obj, dict) else None
+    if not isinstance(trace, dict):
+        return [], {}
+    raw = trace.get("groups_expected")
+    expected = [str(g) for g in raw] if isinstance(raw, list) else []
+    min_counts = {}
+    mgd = trace.get("min_group_draws")
+    if isinstance(mgd, dict):
+        for g, n in mgd.items():
+            try:
+                min_counts[str(g)] = int(n)
+            except (TypeError, ValueError):
+                raise ValueError("trace.min_group_draws[%r] 不是整数: %r" % (g, n))
+    n = trace.get("min_monster_ai_draws")
+    if n is not None:
+        try:
+            min_counts["monster_ai"] = int(n)
+        except (TypeError, ValueError):
+            raise ValueError("trace.min_monster_ai_draws 不是整数: %r" % (n,))
+    return expected, min_counts
+
+
 def cmd_groupdiff(args):
     for p in (args.a, args.b):
         if not os.path.exists(p):
             return _die("PREREQ_MISSING: 找不到 %s" % p)
+    # DoD② 的声明源：scenario JSON（可选）。给了就必须能读、组名必须在册、账本里必须真的出现。
+    scenario = getattr(args, "scenario", "") or ""
+    expected, min_counts = [], {}
+    if scenario:
+        if not os.path.exists(scenario):
+            return _die("PREREQ_MISSING: 找不到 scenario %s" % scenario)
+        try:
+            expected, min_counts = _scenario_group_expectations(scenario)
+        except (OSError, ValueError) as exc:
+            return _die("PREREQ_MISSING: scenario 读取失败 %s: %s" % (scenario, exc))
+        unknown = sorted({g for g in list(expected) + list(min_counts) if g not in rcg.KNOWN_GROUPS})
+        if unknown:
+            return _die("PREREQ_MISSING: scenario 声明了账本不认识的组 %s（已知：%s）"
+                        % (unknown, "、".join(rcg.KNOWN_GROUPS)))
     table = _load_groups(args.groups_table)
     if table is None:
         return 2
@@ -431,6 +475,21 @@ def cmd_groupdiff(args):
                 folded_count_diff[g] = (na, nb)
     set_ok = not only_a and not only_b
     order_ok = (len(fa) == len(fb)) and first_shared is None
+    # DoD②：scenario 声明的 `groups_expected` / `min_monster_ai_draws` 必须在**真实账本**里成立。
+    # 「两侧都没有 monster_ai/drop」在旧口径下是真空 IDENTICAL（组集合彼此相等）⇒ 假绿。
+    expected_missing = {}
+    if expected:
+        for label, cnt in (("a", ca), ("b", cb)):
+            miss = [g for g in expected if cnt.get(g, 0) <= 0]
+            if miss:
+                expected_missing[label] = miss
+    min_violations = {}
+    if min_counts:
+        for g in sorted(min_counts):
+            want = min_counts[g]
+            na, nb = ca.get(g, 0), cb.get(g, 0)
+            if na < want or nb < want:
+                min_violations[g] = {"want": want, "a": na, "b": nb}
     flags = []
     if not set_ok:
         flags.append("GROUP_SET_DIFF")
@@ -438,6 +497,10 @@ def cmd_groupdiff(args):
         flags.append("SHARED_REL_ORDER_DIFF")
     if folded_count_diff:
         flags.append("FOLDED_COUNT_DIFF")
+    if expected_missing:
+        flags.append("MISSING_EXPECTED_GROUPS")
+    if min_violations:
+        flags.append("MIN_GROUP_DRAWS")
     # reviewer-5 O-1：行级覆盖也是结构判据的一部分（解析不了的行 = 被吞掉的消费者）。
     if dropped_a or dropped_b:
         flags.append("ROW_COVERAGE_DRIFT")
@@ -466,6 +529,19 @@ def cmd_groupdiff(args):
                  fb[first_shared] if first_shared is not None else "(len差)"))
     print("  RUNS a=%d b=%d" % (len(ra), len(rb)))
     print("  ROW_COVERAGE a_dropped=%d b_dropped=%d" % (dropped_a, dropped_b))
+    if expected:
+        print("  EXPECTED_GROUPS %s（scenario 声明；DoD② 要求两侧都出现）" % list(expected))
+        if expected_missing:
+            print("  MISSING_EXPECTED_GROUPS %s（声明的组未在账本出现 ⇒ fail-closed）" % expected_missing)
+        else:
+            print("  EXPECTED_GROUPS_PRESENT both %s" % list(expected))
+    if min_counts:
+        if min_violations:
+            print("  MIN_GROUP_DRAWS %s（声明的最小抽数未达 ⇒ fail-closed）" % min_violations)
+        else:
+            print("  MIN_GROUP_DRAWS_OK %s"
+                  % {g: {"want": min_counts[g], "a": ca.get(g, 0), "b": cb.get(g, 0)}
+                     for g in sorted(min_counts)})
     if first_run is None and len(runs_a) == len(runs_b):
         print("  FIRST_RUN_DIVERGENCE none（组 run 序逐位全等）")
     else:
@@ -488,6 +564,11 @@ def cmd_groupdiff(args):
                        "first_shared_order_divergence": first_shared,
                        "a_runs": len(ra), "b_runs": len(rb),
                        "first_run_divergence": first_run,
+                       "scenario": scenario,
+                       "expected_groups": list(expected),
+                       "expected_groups_missing": expected_missing,
+                       "min_group_draws": {g: {"want": min_counts[g], "a": ca.get(g, 0),
+                                                "b": cb.get(g, 0)} for g in sorted(min_counts)},
                        "verdict": verdict, "table": table.path},
                       fh, ensure_ascii=False, indent=2)
             fh.write("\n")
@@ -715,6 +796,47 @@ def cmd_selftest(args):
         groups_table="", json="", fold=False)))
     check("fold-off-still-red", out[0] == 1 and "GROUP_SET_DIFF" in out[1], out[1][:400])
 
+    # ---- DoD②（本片新增）：scenario 声明的 groups_expected / min_monster_ai_draws 必须**真的出现**。
+    # 旧口径下「两侧都缺 monster_ai/drop」= 组集合彼此相等 ⇒ 真空 IDENTICAL 假绿；传 --scenario 后
+    # 必须 fail-closed。
+    def write_scenario(path, groups, min_ai=None):
+        obj = {"trace": {"groups_expected": list(groups)}}
+        if min_ai is not None:
+            obj["trace"]["min_monster_ai_draws"] = min_ai
+        with open(path, "w", encoding="utf-8", newline="\n") as fh:
+            json.dump(obj, fh)
+        return path
+
+    def scen_gdiff(a_sites, b_sites, scenario):
+        _write_trace(ga, a_sites)
+        _write_trace(gb, b_sites)
+        return cap(lambda: cmd_groupdiff(argparse.Namespace(
+            a=ga, b=gb, a_side="csharp", b_side="rust", include_attack=False, strict=True,
+            groups_table="", json="", fold=True, scenario=scenario)))
+
+    scen_all = write_scenario(os.path.join(tmp, "scen-all.json"),
+                              ["monster_ai", "spawn", "drop"], min_ai=1)
+    # 正样本：三组两侧都出现且 monster_ai=1 ⇒ 绿。
+    out = scen_gdiff([CT, SP, W, D], [RSP, RSP, RW, RDR], scen_all)
+    check("scenario-expected-green",
+          out[0] == 0 and "VERDICT IDENTICAL" in out[1]
+          and "EXPECTED_GROUPS_PRESENT" in out[1] and "MIN_GROUP_DRAWS_OK" in out[1], out[1][:700])
+    # 改坏必红①：两侧都缺 drop（账本彼此全等 ⇒ 旧口径假绿）⇒ MISSING_EXPECTED_GROUPS 且点名 drop。
+    out = scen_gdiff([CT, SP, W], [RSP, RSP, RW], scen_all)
+    check("scenario-expected-missing-red",
+          out[0] == 1 and "MISSING_EXPECTED_GROUPS" in out[1] and "drop" in out[1], out[1][:700])
+    # 改坏必红②：组都在但 monster_ai 抽数 0 < min=1 ⇒ MIN_GROUP_DRAWS 且点名 monster_ai。
+    scen_min = write_scenario(os.path.join(tmp, "scen-min.json"), ["spawn", "drop"], min_ai=1)
+    out = scen_gdiff([CT, SP, D], [RSP, RSP, RDR], scen_min)
+    check("scenario-min-monster-ai-red",
+          out[0] == 1 and "MIN_GROUP_DRAWS" in out[1] and "monster_ai" in out[1], out[1][:700])
+    # 缺 scenario 件 ⇒ PREREQ fail-closed（rc=2，不许静默降级成不校验）。
+    out = scen_gdiff([CT, SP, W, D], [RSP, RSP, RW, RDR], os.path.join(tmp, "no-such-scenario.json"))
+    check("scenario-missing-prereq", out[0] == 2 and "PREREQ_MISSING" in out[1], out[1][:400])
+    # 不传 --scenario ⇒ 行为不变（向后兼容；上面的纯 groupdiff 用例即证）。
+    out = scen_gdiff([CT, SP], [RSP], "")
+    check("scenario-absent-backward-compatible", "MISSING_EXPECTED_GROUPS" not in out[1], out[1][:400])
+
     for name in os.listdir(tmp):
         try:
             os.remove(os.path.join(tmp, name))
@@ -724,7 +846,7 @@ def cmd_selftest(args):
     if failures:
         print("SELFTEST RED: %d/%d 未过: %s" % (len(failures), len(checks), ", ".join(failures)))
         return 1
-    print("SELFTEST GREEN: rng_ledger_diff selftest %d/%d（同序绿 + 次序漂移必红且定位 + 缺消费者必红且点名 + Claim B 站点组：同组序绿 / 多抽·换序·缺组必红且定位 / 组表改坏必红 / 未归类 fail-closed / 行级覆盖 rows_dropped fail-closed（O-1）+ AUX 组改坏必红（O-3）+ R-6 folded：等价绿 / 折叠计数不等·次序不等必红且定位 / 关时仍 GROUP_SET_DIFF）"
+    print("SELFTEST GREEN: rng_ledger_diff selftest %d/%d（同序绿 + 次序漂移必红且定位 + 缺消费者必红且点名 + Claim B 站点组：同组序绿 / 多抽·换序·缺组必红且定位 / 组表改坏必红 / 未归类 fail-closed / 行级覆盖 rows_dropped fail-closed（O-1）+ AUX 组改坏必红（O-3）+ R-6 folded：等价绿 / 折叠计数不等·次序不等必红且定位 / 关时仍 GROUP_SET_DIFF + DoD② scenario 声明：三组齐备绿 / 缺组·monster_ai 抽数不足必红且点名 / 缺 scenario PREREQ / 不传向后兼容）"
           % (len(checks), len(checks)))
     return 0
 
@@ -796,6 +918,9 @@ def main(argv=None):
     p.add_argument("--strict", action="store_true", help="组集/相对次序不一致 ⇒ 判红")
     p.add_argument("--fold", action="store_true",
                    help="R-6 folded 映射：construct->spawn 后比组集合/计数/相对次序（缺省关，行为不变）")
+    p.add_argument("--scenario", default="",
+                   help="DoD②：scenario JSON 的 trace.groups_expected/min_monster_ai_draws 必须在"
+                        "真实账本里成立（缺组 / 抽数不足 ⇒ fail-closed RED；缺省不校验，行为不变）")
     p.add_argument("--json", default="")
     p.set_defaults(func=cmd_groupdiff)
 

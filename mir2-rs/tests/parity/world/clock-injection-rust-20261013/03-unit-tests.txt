@@ -1,0 +1,12 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.27s
+     Running unittests src\main.rs (E:/tmp/m2svr-target\debug\deps\game_svr-d40510517c77a420.exe)
+
+running 5 tests
+test clock::tests::injected_clock_starts_at_origin_and_is_monotonic ... ok
+test clock::tests::parse_clock_accepts_decimal_with_sign_and_whitespace ... ok
+test clock::tests::parse_clock_unset_or_empty_is_disabled ... ok
+test clock::tests::parse_clock_rejects_non_integer ... ok
+test clock::tests::probe_line_shape ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 197 filtered out; finished in 0.00s
+

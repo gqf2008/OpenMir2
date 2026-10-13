@@ -1,0 +1,18 @@
+59-boundary.txt — 片⑦ 边界（base origin/master ef3160df7；交付 head = branch client-e2e-enter-gaps 的 tip，见 patch --head）
+
+命令: git diff --name-only origin/master -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+结果: [空]（冻结面 0 路径）
+
+净差量（git diff --stat origin/master；全部在证据目录，零 .rs）:
+ .../52-before-after-viewrange12.txt                |   4 +
+ .../56-before-after-viewrange-realrun.txt          | 106 +++++++++++++++++++
+ .../57-redcheck-viewrange-realrun.txt              |  29 +++++
+ .../client-e2e-enter-gaps-20261013/58-gates.txt    |  12 +++
+ .../client-e2e-enter-gaps-20261013/59-boundary.txt |   6 ++
+ .../world/client-e2e-enter-gaps-20261013/README.md |  19 ++++
+ .../client-e2e-enter-gaps-20261013/SHA256SUMS.txt  |  10 +-
+ .../capture-client-viewrange12-seed42.jsonl        |  68 ++++++++++++
+ .../capture-client-viewrange5-seed42.jsonl         | 117 +++++++++++++++++++++
+ 9 files changed, 369 insertions(+), 2 deletions(-)
+
+生产代码（.rs）改动数: 0

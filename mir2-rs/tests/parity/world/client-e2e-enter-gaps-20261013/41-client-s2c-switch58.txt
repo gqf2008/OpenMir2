@@ -1,0 +1,40 @@
+openmir2-client-e2e-enter-gaps —— 缺口①/②「客户端侧帧可见性」真机抓包证据
+==========================================================================
+口径（owner acceptance_add 2026-10-13）：卡上 ①（进图是否真的下发 52/752）与 ②（同屏是否有怪）
+此前只有**服务端日志**；本片补**客户端侧**证据——用 tools/capture/mir2_proxy.py 在 7200
+（game-gate）前面透明代理，`--map 7200=127.0.0.1:7600`（影子 game-gate），客户端经代理连
+7200 ⇒ 代理 s2c 方向的字节就是**客户端收到的字节**；再用既有流水线
+`export_s2c.ps1`（segment_frames + GoldenExport + replay）解码为 capture.jsonl。
+
+栈：`tools/m2-acceptance/start_rust_stack.ps1 -RustBinDir E:/tmp/m2svr-target/debug`
+（MySQL 3306 + C# DBSrv/LoginSrv + Rust game-svr 5000 + Rust login/sel-gate 7000/7100
+ + 影子 game-gate 7600 + proxy 7200→7600）；客户端 D:\MirClient-run\MirClinet.exe；
+账号/角色 mir2test/aaa（比奇省）。命令：
+  powershell -File tools/client/mir_flow.ps1 -Account mir2test -Password mir2pass `
+      -OutDir <shots> -WalkClicks 0 -AutoPlaySec 12 -SkipReenter -SkipLogout -SkipTalk
+
+判据：两个 run 的 s2c 客户端字节里 52/752 必须出现（改坏/去掉下发 ⇒ 抓包里没有 ⇒ 见 42 的红检）；
+Run A 还必须在无线到怪的情况下出现 `10+41` 对（同屏出现帧）。
+
+=== Run B —— MIR2_CLIENT_ABILITY_LAYOUT=1（冻结客户端 58B TAbility 布局） ===
+proxy dump   : E:/tmp/m2svr-capture/proxy58b
+  chunks.ndjson      sha256=85d23f7803fcdc4c84bf76cf59896f6e42925364e1bbff4c08f6ce3cbe38c1fd
+  conn-0001.s2c.bin  sha256=880cf57fd570de28c20163a9264a830eb984a2bc6a36f5e9db12ae472496b891  bytes=1216
+decoded capture : E:/tmp/m2svr-capture/s2c58b/capture.jsonl  sha256=31f4127c3e5527b6fb861a4a1490c137889f204a52c837e3ec288eb79f4bd426  s2c_frames=28
+client HUD shot : shots/rust-client-wire-client58-299-640.png
+
+入图自帧序列（客户端收到的字节，经 mir2_proxy 在 7200 抓包后 GoldenExport 解码）：
+  658,51,50,41,213,11029,42,766,54,5008,1106,52,752,811,46
+  52  SM_ABILITY     present=True  body_len=58 (expect 58)
+  752 SM_SUBABILITY  present=True  body_len=0
+  52 raw frame:
+  seq=13 ident=52 recog=0x00000000 tag=0 series=0 frame_len=96 body_len=58 body_segments=[{"len": 58, "sha256": "39622730ef2737c00a99ef11983b13ea67cb801939a33325e8a9e08341b47e19"}] body_sha256=39622730ef2737c00a99ef11983b13ea67cb801939a33325e8a9e08341b47e19 raw_hex=236464686b6460686a646f686b6464686b6564686b6464686b6464686b6465696b6464686b6464686b6464686b646b686b64645f6b6464686b6b64686b646768686464686b6464686b666468636464686b6264686b6467686864645c6b643f21
+  752 raw frame:
+  seq=14 ident=752 recog=0x00000001 tag=0 series=0 frame_len=18 body_len=0 body_segments=[{"len": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}] body_sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 raw_hex=236564686b64506a6b656768646464686b21
+
+10 SM_TURN + 41 SM_FEATURECHANGED 同屏出现对（客户端收到的怪物外观帧）：count=1
+  SM_TURN recog=0x00000317  =>  SM_FEATURECHANGED recog=0x00000317  (turn_raw=236b676867646668695d653c7b6667686a6a64736b6464686b64644b41425a445954634d5f62555f613e21)
+
+Run B 客户端 HUD 读数（截图 shots/rust-client-wire-client58-299-640.png）：HP 19/19、MP 15/15、血球满红，
+且屏幕上方可见怪（红/绿名显示）—— 即同一份 WAbil、只把 52 尾换成客户端 58B 布局后，客户端**真的解析成功**。
+MIR2_CLIENT_ABILITY_LAYOUT 默认关（未设 = oracle 40B，Run A 即默认态），开关的默认值裁决归 owner。

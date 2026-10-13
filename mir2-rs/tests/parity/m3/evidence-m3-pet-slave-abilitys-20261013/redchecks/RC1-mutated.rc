@@ -1,0 +1,1 @@
+mutated rc=101 failed=slave::tests::make_slave_adopt_applies_slave_level_abilitys_else_branch,slave::tests::make_slave_adopt_uses_bankers_rounding,slave::tests::make_slave_adopt_writes_oracle_tail,slave::tests::summon_slave_skeleton_end_to_end

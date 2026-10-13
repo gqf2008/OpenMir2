@@ -45,11 +45,40 @@ pub struct GateConfig {
     pub red_msg_f_color: u8,
     /// `[Setup] RedMsgBColor`（oracle `GameSvrConf.cs:1541` 缺省 `0x38`）——同上，高字节。
     pub red_msg_b_color: u8,
+    /// `[Setup] GreenMsgFColor`（oracle `GameSvrConf.cs:1536` 缺省 `0xDB`）——交易 `SysMsg(..., Green, ...)`
+    /// 的前景色（`PlayObject.Operate.cs:943/1199` 等）。现网 `=219`。
+    pub green_msg_f_color: u8,
+    /// `[Setup] GreenMsgBColor`（oracle `GameSvrConf.cs:1537` 缺省 `0xFF`）——同上，背景色。现网 `=255`。
+    pub green_msg_b_color: u8,
+    /// `[Setup] TryDealTime`（oracle `GameSvrConf.cs:1515` 缺省 `3000`）——
+    /// `CM_DEALTRY` 的「稍后再试」时间门（`PlayObject.Operate.cs:922`）。
+    pub try_deal_time: i32,
+    /// `[Setup] DealOKTime`（oracle `GameSvrConf.cs:1516` 缺省 `1000`）——
+    /// `CM_DEALEND` 的时间门（`PlayObject.Operate.cs:1092`）。
+    pub deal_ok_time: i32,
+    /// `[Setup] CanNotGetBackDeal`（oracle `GameSvrConf.cs:1517` 缺省 `true`）——
+    /// 交易栏物品/金币不许取回（`PlayObject.Operate.cs:1003/1051`）。现网 `=1`。
+    pub can_not_get_back_deal: bool,
+    /// `[Setup] DisableDeal`（oracle `GameSvrConf.cs:1518` 缺省 `false`）——
+    /// 关闭交易功能（`PlayObject.Operate.cs:913`）。现网 `=0`。
+    pub disable_deal: bool,
     /// `[Setup] HearMsgFColor`（oracle `GameSvrConf.cs:1528` 缺省 `0x00`）——`CM_SAY` 普通说话
     /// 下行 `SM_HEAR` 的前景色（`BaseObject.Base.cs:478` 的 `btHearMsgFColor`）。现网 `=0`。
     pub hear_msg_f_color: u8,
     /// `[Setup] HearMsgBColor`（oracle `GameSvrConf.cs:1529` 缺省 `0xFF`）——同上，背景色。现网 `=255`。
     pub hear_msg_b_color: u8,
+    /// `[Setup] BlueMsgFColor`（oracle `GameSvrConf.cs:1538` 缺省 `0xFF`；现网 `=251`）——`SysMsg(...,
+    /// Blue, ...)` 的前景色（`PlayObject.Sale.cs` 寄售提示）。落在 `SM_SYSMESSAGE` 的 `Param` 低字节。
+    pub blue_msg_f_color: u8,
+    /// `[Setup] BlueMsgBColor`（oracle `GameSvrConf.cs:1539` 缺省 `0xFC`；现网 `=252`）——同上，背景色。
+    pub blue_msg_b_color: u8,
+    /// `[Setup] GroupMembersMax`（`ServerConf.cs:225` 的 `ReadWriteByte`，`GameSvrConf.cs:1402` 缺省 `10`）。
+    /// M3⑦-实现 2：组队状态机的成员上限门（`PlayObject.Operate.cs:855` 的严格大于）。
+    pub group_members_max: u8,
+    /// `[Setup] GroupMsgFColor`（`ServerConf.cs:337`，`GameSvrConf.cs:1544` 缺省 `0xC4`）。
+    pub group_msg_f_color: u8,
+    /// `[Setup] GroupMsgBColor`（`ServerConf.cs:338`，`GameSvrConf.cs:1545` 缺省 `0xFF`）。
+    pub group_msg_b_color: u8,
     /// `[Server] IDSAddr`：登录服务器地址（oracle 是 TcpClient 主动连它，`AuthenticationService.cs:22-34`）。
     pub ids_addr: String,
     /// `[Server] IDSPort`（现网 5600）。
@@ -96,6 +125,10 @@ pub struct GateConfig {
     /// `openmir2-m2-gamesvr-host` 的装备/卸下 `FeatureChanged()`（`SM_FEATURECHANGED`）用它。
     /// 缺键用 oracle 缺省 `12`（`GameSvrConf.cs:1503`）。
     pub send_ref_msg_range: u8,
+    /// `[Setup] MagicAttackRage`（oracle `GameSvrConf.cs:873/1752` 缺省 `8`，`byte`；
+    /// `ServerConf.cs:539` 的 `ReadWriteByte("Setup", "MagicAttackRage", …)`）——
+    /// `DoSpell` 施法距离门（`MagicManager.cs:155`）：`|CurrX-nTargetX| > rage` 或 y 同理 ⇒ 直接失败。
+    pub magic_attack_rage: u8,
     /// `[Setup] SuperRepairPriceRate`（`ServerConf.cs:487`，缺省 `3`）——特殊修理价格倍数
     /// （`Merchant.cs:1573/1619`）。
     pub super_repair_price_rate: i32,
@@ -191,8 +224,19 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut notice_dir: Option<String> = None;
     let mut red_msg_f_color: Option<u8> = None;
     let mut red_msg_b_color: Option<u8> = None;
+    let mut green_msg_f_color: Option<u8> = None;
+    let mut green_msg_b_color: Option<u8> = None;
+    let mut try_deal_time: Option<i32> = None;
+    let mut deal_ok_time: Option<i32> = None;
+    let mut can_not_get_back_deal: Option<bool> = None;
+    let mut disable_deal: Option<bool> = None;
     let mut hear_msg_f_color: Option<u8> = None;
     let mut hear_msg_b_color: Option<u8> = None;
+    let mut blue_msg_f_color: Option<u8> = None;
+    let mut blue_msg_b_color: Option<u8> = None;
+    let mut group_members_max: Option<u8> = None;
+    let mut group_msg_f_color: Option<u8> = None;
+    let mut group_msg_b_color: Option<u8> = None;
     let mut show_rank_level_name: Option<bool> = None;
     let mut human_max_gold: Option<i32> = None;
     let mut floor_item_can_pick_up_time: Option<i32> = None;
@@ -201,6 +245,7 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut can_drop_price: Option<i32> = None;
     let mut drop_item_rage: Option<u8> = None;
     let mut send_ref_msg_range: Option<u8> = None;
+    let mut magic_attack_rage: Option<u8> = None;
     let mut super_repair_price_rate: Option<i32> = None;
     let mut repair_item_dec_dura: Option<i32> = None;
     let mut castle_member_price_rate: Option<i32> = None;
@@ -312,6 +357,50 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                             .with_context(|| format!("RedMsgBColor 不是合法字节：{v:?}"))?,
                     );
                 }
+                "GREENMSGFCOLOR" => {
+                    green_msg_f_color = Some(
+                        v.parse()
+                            .with_context(|| format!("GreenMsgFColor 不是合法字节：{v:?}"))?,
+                    );
+                }
+                "GREENMSGBCOLOR" => {
+                    green_msg_b_color = Some(
+                        v.parse()
+                            .with_context(|| format!("GreenMsgBColor 不是合法字节：{v:?}"))?,
+                    );
+                }
+                // 元宝寄售 `SysMsg(..., Blue, ...)` 的颜色（`ServerConf.cs:331-332` 的 `ReadWriteByte`）。
+                "BLUEMSGFCOLOR" => {
+                    blue_msg_f_color = Some(
+                        v.parse()
+                            .with_context(|| format!("BlueMsgFColor 不是合法字节：{v:?}"))?,
+                    );
+                }
+                "BLUEMSGBCOLOR" => {
+                    blue_msg_b_color = Some(
+                        v.parse()
+                            .with_context(|| format!("BlueMsgBColor 不是合法字节：{v:?}"))?,
+                    );
+                }
+                // `ServerConf.cs:308-311` 的四条交易配置（M3⑦-实现 3）。
+                "TRYDEALTIME" => {
+                    try_deal_time = Some(
+                        v.parse()
+                            .with_context(|| format!("TryDealTime 不是合法整数：{v:?}"))?,
+                    );
+                }
+                "DEALOKTIME" => {
+                    deal_ok_time = Some(
+                        v.parse()
+                            .with_context(|| format!("DealOKTime 不是合法整数：{v:?}"))?,
+                    );
+                }
+                "CANNOTGETBACKDEAL" => {
+                    can_not_get_back_deal = Some(parse_bool(v, "CanNotGetBackDeal")?);
+                }
+                "DISABLEDEAL" => {
+                    disable_deal = Some(parse_bool(v, "DisableDeal")?);
+                }
                 "HEARMSGFCOLOR" => {
                     hear_msg_f_color = Some(
                         v.parse()
@@ -322,6 +411,25 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                     hear_msg_b_color = Some(
                         v.parse()
                             .with_context(|| format!("HearMsgBColor 不是合法字节：{v:?}"))?,
+                    );
+                }
+                // `ServerConf.cs:225/337/338` 的组队配置（M3⑦-实现 2）。
+                "GROUPMEMBERSMAX" => {
+                    group_members_max = Some(
+                        v.parse()
+                            .with_context(|| format!("GroupMembersMax 不是合法字节：{v:?}"))?,
+                    );
+                }
+                "GROUPMSGFCOLOR" => {
+                    group_msg_f_color = Some(
+                        v.parse()
+                            .with_context(|| format!("GroupMsgFColor 不是合法字节：{v:?}"))?,
+                    );
+                }
+                "GROUPMSGBCOLOR" => {
+                    group_msg_b_color = Some(
+                        v.parse()
+                            .with_context(|| format!("GroupMsgBColor 不是合法字节：{v:?}"))?,
                     );
                 }
                 // `ServerConf.cs:271` 的 `ReadWriteBool("Setup", ...)`：现网 `0/1`。
@@ -367,6 +475,13 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                     send_ref_msg_range = Some(
                         v.parse()
                             .with_context(|| format!("SendRefMsgRange 不是合法字节：{v:?}"))?,
+                    );
+                }
+                // `GameSvrConf.MagicAttackRage` 是 `byte`（`GameSvrConf.cs:873`）缺省 8。
+                "MAGICATTACKRAGE" => {
+                    magic_attack_rage = Some(
+                        v.parse()
+                            .with_context(|| format!("MagicAttackRage 不是合法字节：{v:?}"))?,
                     );
                 }
                 // 出生点回落（`WorldServer.cs:250-260` 的 `GetHomeInfo`）：现网 `Server.conf`
@@ -501,9 +616,23 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         // oracle 缺省值（`GameSvrConf.cs:1540-1541`）：`[Setup]` 里没写也照常起。
         red_msg_f_color: red_msg_f_color.unwrap_or(0xFF),
         red_msg_b_color: red_msg_b_color.unwrap_or(0x38),
+        // oracle 缺省值（`GameSvrConf.cs:1536-1537/1515-1518`）：`[Setup]` 里没写不算错。
+        green_msg_f_color: green_msg_f_color.unwrap_or(0xDB),
+        green_msg_b_color: green_msg_b_color.unwrap_or(0xFF),
+        // oracle 缺省值（`GameSvrConf.cs:1538-1539`）：`[Setup]` 里没写不算错。
+        blue_msg_f_color: blue_msg_f_color.unwrap_or(0xFF),
+        blue_msg_b_color: blue_msg_b_color.unwrap_or(0xFC),
+        try_deal_time: try_deal_time.unwrap_or(3_000),
+        deal_ok_time: deal_ok_time.unwrap_or(1_000),
+        can_not_get_back_deal: can_not_get_back_deal.unwrap_or(true),
+        disable_deal: disable_deal.unwrap_or(false),
         // oracle 缺省值（`GameSvrConf.cs:1528-1529`）：`HearMsgFColor=0x00` / `HearMsgBColor=0xFF`。
         hear_msg_f_color: hear_msg_f_color.unwrap_or(0x00),
         hear_msg_b_color: hear_msg_b_color.unwrap_or(0xFF),
+        // oracle 缺省值（`GameSvrConf.cs:1402/1544/1545`）：`[Setup]` 里没写不算错。
+        group_members_max: group_members_max.unwrap_or(10),
+        group_msg_f_color: group_msg_f_color.unwrap_or(0xC4),
+        group_msg_b_color: group_msg_b_color.unwrap_or(0xFF),
         // oracle 缺省值（`GameSvrConf.cs:1464`）：`[Setup]` 里没写不算错。
         show_rank_level_name: show_rank_level_name.unwrap_or(false),
         // oracle 缺省值（`GameSvrConf.cs:1451/1488/1703/1704/1706/1754`）：`[Setup]` 里没写不算错。
@@ -515,6 +644,8 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         drop_item_rage: drop_item_rage.unwrap_or(3),
         // oracle 缺省值（`GameSvrConf.cs:1503`）：`[Setup]` 里没写不算错。
         send_ref_msg_range: send_ref_msg_range.unwrap_or(12),
+        // oracle 缺省值（`GameSvrConf.cs:1752`）：`[Setup]` 里没写不算错。
+        magic_attack_rage: magic_attack_rage.unwrap_or(8),
         super_repair_price_rate: super_repair_price_rate.unwrap_or(3),
         repair_item_dec_dura: repair_item_dec_dura.unwrap_or(30),
         castle_member_price_rate: castle_member_price_rate.unwrap_or(80),
@@ -906,6 +1037,29 @@ mod tests {
         // 写了但越界（300 > u8::MAX）⇒ 错误（不是静默取默认）。
         let p3 = write(&dir, &format!("{base}[Setup]\nRedMsgBColor=300\n"));
         assert!(load(&p3).is_err(), "RedMsgBColor=300 超出 u8 ⇒ 必须报错");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **`openmir2-m3-selloff-consignment-world`**：`[Setup] BlueMsgFColor/BlueMsgBColor` 照
+    /// `ServerConf.cs:331-332` 的 `ReadWriteByte` 读；**缺键用 oracle 缺省**（0xFF/0xFC）不自造。
+    #[test]
+    fn parses_setup_blue_msg_colors_with_oracle_defaults() {
+        let dir = std::env::temp_dir().join(format!("gs-setup-blue-{}", std::process::id()));
+        let base = "[Server]\nGateAddr=127.0.0.1\nGatePort=5000\nCheckBlock=1\n\
+                    IDSAddr=127.0.0.1\nIDSPort=5600\nDBAddr=127.0.0.1\nDBPort=6000\n";
+        // 不写 `[Setup]` ⇒ oracle 缺省（`GameSvrConf.cs:1538-1539`）。
+        let p = write(&dir, base);
+        let c = load(&p).unwrap();
+        assert_eq!(c.blue_msg_f_color, 0xFF, "GameSvrConf.cs:1538 缺省");
+        assert_eq!(c.blue_msg_b_color, 0xFC, "GameSvrConf.cs:1539 缺省");
+        // 现网 `Server.conf:602-603` 的值（251/252）——带前导空格也要 trim。
+        let p2 = write(
+            &dir,
+            &format!("{base}[Setup]\nBlueMsgFColor= 251\nBlueMsgBColor=252\n"),
+        );
+        let c2 = load(&p2).unwrap();
+        assert_eq!(c2.blue_msg_f_color, 251);
+        assert_eq!(c2.blue_msg_b_color, 252);
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -1,0 +1,24 @@
+09:56:28.663 [DBG] sim: tick #50 clock=10000ms 处理 0 项（本地第 50 次）实体内 153 展示表 22 在世界会话 0
+09:56:38.681 [DBG] sim: tick #100 clock=20000ms 处理 0 项（本地第 100 次）实体内 253 展示表 122 在世界会话 0
+09:56:48.699 [DBG] sim: tick #150 clock=30000ms 处理 0 项（本地第 150 次）实体内 253 展示表 122 在世界会话 0
+09:56:54.511 [INF] 进世界 ChrName:aaa CurMap:0 (256,583) Dir:4 entity=254
+09:56:54.512 [DBG] 52/752 入图输入 ChrName=aaa WAbil[level=1 ac=0 mac=0 dc=257 mc=0 sc=0 hp=19 mp=15 max_hp=19 max_mp=15 exp=0 max_exp=10 weight=0 max_weight=50 wear_weight=0 max_wear_weight=15 hand_weight=0 max_hand_weight=12] SubAbility[anti_magic=1 hit_point=5 speed_point=15 anti_poison=0 poison_recover=0 health_recover=0 spell_recover=0] ability_tail_hex=01000000000001010000000013000f0013000f0000000000000000000a00000000003200000f000c
+09:56:54.512 [INF] 进世界帧下发：socket=332 共 15 条（输入齐备的）
+09:56:58.723 [DBG] sim: tick #200 clock=40000ms 处理 0 项（本地第 200 次）实体内 264 展示表 133 在世界会话 1 [aaa(254) map=26 vis=0 same_map=16 nearest=32]
+09:57:08.754 [DBG] sim: tick #250 clock=50000ms 处理 0 项（本地第 250 次）实体内 768 展示表 637 在世界会话 1 [aaa(254) map=26 vis=0 same_map=456 nearest=5]
+09:57:18.785 [DBG] sim: tick #300 clock=60000ms 处理 0 项（本地第 300 次）实体内 1870 展示表 1739 在世界会话 1 [aaa(254) map=26 vis=0 same_map=1056 nearest=2]
+09:57:28.812 [DBG] sim: tick #350 clock=70000ms 处理 0 项（本地第 350 次）实体内 2780 展示表 2649 在世界会话 1 [aaa(254) map=26 vis=0 same_map=1466 nearest=2]
+09:57:38.840 [DBG] sim: tick #400 clock=80000ms 处理 0 项（本地第 400 次）实体内 4231 展示表 4100 在世界会话 1 [aaa(254) map=26 vis=0 same_map=1726 nearest=2]
+09:57:48.886 [DBG] sim: tick #450 clock=90000ms 处理 0 项（本地第 450 次）实体内 5089 展示表 4958 在世界会话 1 [aaa(254) map=26 vis=0 same_map=1726 nearest=3]
+09:57:58.903 [DBG] sim: tick #500 clock=100000ms 处理 0 项（本地第 500 次）实体内 5887 展示表 5756 在世界会话 1 [aaa(254) map=26 vis=0 same_map=1726 nearest=3]
+09:58:08.933 [DBG] sim: tick #550 clock=110000ms 处理 0 项（本地第 550 次）实体内 7422 展示表 7291 在世界会话 1 [aaa(254) map=26 vis=0 same_map=1726 nearest=3]
+09:58:18.968 [DBG] sim: tick #600 clock=120000ms 处理 0 项（本地第 600 次）实体内 7759 展示表 7628 在世界会话 1 [aaa(254) map=26 vis=0 same_map=1726 nearest=3]
+09:58:29.000 [DBG] sim: tick #650 clock=130000ms 处理 0 项（本地第 650 次）实体内 8279 展示表 8148 在世界会话 1 [aaa(254) map=26 vis=0 same_map=1726 nearest=3]
+09:58:39.018 [DBG] sim: tick #700 clock=140000ms 处理 0 项（本地第 700 次）实体内 9001 展示表 8870 在世界会话 1 [aaa(254) map=26 vis=0 same_map=1726 nearest=3]
+09:58:49.049 [DBG] sim: tick #750 clock=150000ms 处理 0 项（本地第 750 次）实体内 9525 展示表 9394 在世界会话 1 [aaa(254) map=26 vis=0 same_map=1726 nearest=3]
+09:58:59.085 [DBG] sim: tick #800 clock=160000ms 处理 0 项（本地第 800 次）实体内 9881 展示表 9750 在世界会话 0
+09:59:05.416 [INF] 进世界 ChrName:aaa CurMap:0 (256,594) Dir:4 entity=10368
+09:59:05.417 [DBG] 52/752 入图输入 ChrName=aaa WAbil[level=1 ac=0 mac=0 dc=257 mc=0 sc=0 hp=19 mp=15 max_hp=19 max_mp=15 exp=0 max_exp=10 weight=0 max_weight=50 wear_weight=0 max_wear_weight=15 hand_weight=0 max_hand_weight=12] SubAbility[anti_magic=1 hit_point=5 speed_point=15 anti_poison=0 poison_recover=0 health_recover=0 spell_recover=0] ability_tail_hex=01000000000001010000000013000f0013000f0000000000000000000a00000000003200000f000c
+09:59:05.417 [INF] 进世界帧下发：socket=336 共 15 条（输入齐备的）
+09:59:09.109 [DBG] sim: tick #850 clock=170000ms 处理 0 项（本地第 850 次）实体内 10555 展示表 10424 在世界会话 1 [aaa(10368) map=26 vis=0 same_map=1726 nearest=3]
+09:59:19.132 [DBG] sim: tick #900 clock=180000ms 处理 0 项（本地第 900 次）实体内 10947 展示表 10816 在世界会话 1 [aaa(10368) map=26 vis=0 same_map=1726 nearest=3]

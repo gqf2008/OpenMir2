@@ -1,0 +1,53 @@
+# 00 — 复算命令（card openmir2-m3-rng-trace-scene-groups / DoD② 组清单机判）
+
+工作树 cwd = `mir2-rs/tests/parity/m3`（WIP 分支 `wip/m3bag-groups-expected`）。
+全部离线、零端口、零栈。证据 hash 按仓库字节（LF 归一 / git blob）记。
+
+## A. 假绿复现（BEFORE：已合入 master 886f123b 的工具）
+
+```sh
+python E:/tmp/_m3bag_dod2_demo.py <master m3 dir>              # 01：gate GREEN + groupdiff IDENTICAL
+python E:/tmp/_m3bag_dod2_demo.py <master m3 dir> --scenario   # 04：argparse 报 unrecognized arguments（选项不存在）
+```
+
+场景：两侧流水只含 `spawn` 站点（`monster_ai=0`、`drop=0`），而 scenario 声明
+`groups_expected=[monster_ai,spawn,drop]`、`min_monster_ai_draws=1` ⇒ 旧口径下**两侧组集合彼此相等**
+⇒ `VERDICT IDENTICAL`、gate GREEN（DoD② 的「三组两侧都出现」无人校验）。
+
+## B. 修复后（AFTER：WIP）
+
+```sh
+python E:/tmp/_m3bag_dod2_demo.py <wip m3 dir> --scenario      # 02：rc=1 VERDICT MISSING_EXPECTED_GROUPS+MIN_GROUP_DRAWS
+python E:/tmp/_m3bag_dod2_demo.py <wip m3 dir>                 # 03：不带 --scenario ⇒ 仍 IDENTICAL（向后兼容）
+```
+
+## C. 工具自检（全绿）
+
+```sh
+python -I rng-trace-probe/rng_ledger_diff.py selftest           # 06：37/37 GREEN（+5：DoD② scenario 声明）
+python -I rng-trace-scene/rng_scene_gate.py selftest            # 07：22/22 GREEN
+python -I attack_rng_ledger.py selftest                         # 09：32/32 GREEN（回归）
+python -I rng-trace-scene/rng_scene_gate.py scenario \
+  --scenario rng-trace-scene/rng_trace_scenario.json            # 10：VERDICT GREEN
+powershell -NoProfile -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 \
+  -SelfCheckNoStack -SelfCheckOut <此目录>/08-runner-nostack.txt # 08：SELFTEST ok=29/29（+2：DoD② 两项）
+```
+
+## D. 改坏必红（mutation）
+
+```sh
+# 在 WIP 树的 scratch 副本（E:/tmp/m3bag-mut）把两个 flag 去掉：
+#   if expected_missing:  ->  if False and expected_missing:
+#   if min_violations:    ->  if False and min_violations:
+python -I E:/tmp/m3bag-mut/rng-trace-probe/rng_ledger_diff.py selftest   # 05(a)：rc=1 RED，点名两条牙
+python E:/tmp/_m3bag_dod2_demo.py E:/tmp/m3bag-mut --scenario            # 05(b)：假绿回归 ⇒ VERDICT IDENTICAL
+```
+
+## E. 边界 / 口径
+
+```sh
+git diff --name-only <base> HEAD -- src sql MirClient mir2-rs/crates mir2-rs/bins   # 空
+git diff --name-only <base> HEAD -- '*.rs'                                          # 空
+python -I tools/evidence-hash/verify_sha256sums.py verify <此目录> --check-extra
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck <此目录>
+```

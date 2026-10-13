@@ -1,0 +1,5 @@
+# 门自检：原 21 + 新 1 stream-pair-prereq-red = 22
+$ python -I -B rng-trace-scene/rng_scene_gate.py selftest
+SELFTEST ok=22/22
+GREEN: 场景前置门 selftest 全绿（同场景绿 + seed/怪集合/起点/map/MonGen 漂移必红 + 流水头同种子制品级门（同种子绿 / 异种子·缺 INJECT_OK 必红 / 缺件 PREREQ / 只给一侧流水 PREREQ / 未给流水向后兼容） + scenario 声明 vs 代码 folded 映射/组清单漂移必红 + 缺件/坏 JSON PREREQ fail-closed）
+(rc=0)

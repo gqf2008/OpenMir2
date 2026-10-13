@@ -1,0 +1,46 @@
+改坏必红 RC2：把 request_ok 条件 second.result.guild_name.is_empty() 反成 !...is_empty()（SS_207 走向反）
+命令：CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo test -p mir2-world --lib guild::tests::request_ --offline
+
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\crates\world)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.34s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m3cs-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 10 tests
+test guild::tests::request_guild_war_ally_is_skipped_by_add_war_guild ... ok
+test guild::tests::request_guild_war_insufficient_gold ... ok
+test guild::tests::request_guild_war_non_master_still_pays_gold ... ok
+test guild::tests::request_guild_war_no_guild_still_pays_gold ... ok
+test guild::tests::request_guild_war_non_zero_server_still_pays_gold ... ok
+test guild::tests::request_guild_war_not_at_war_is_n2_noop ... ok
+test guild::tests::request_guild_war_target_missing ... ok
+test guild::tests::request_guild_war_both_at_war_duplicates_without_ss207 ... FAILED
+test guild::tests::request_guild_war_asymmetric_duplicates_and_broadcasts_ss207 ... FAILED
+test guild::tests::request_then_run_expires_war_n2 ... FAILED
+
+failures:
+
+---- guild::tests::request_guild_war_both_at_war_duplicates_without_ss207 stdout ----
+
+thread 'guild::tests::request_guild_war_both_at_war_duplicates_without_ss207' (22504) panicked at crates\world\src\guild.rs:1774:9:
+反向命中 ⇒ boReQuestOk 保持 false
+
+---- guild::tests::request_guild_war_asymmetric_duplicates_and_broadcasts_ss207 stdout ----
+
+thread 'guild::tests::request_guild_war_asymmetric_duplicates_and_broadcasts_ss207' (28996) panicked at crates\world\src\guild.rs:1715:9:
+assertion failed: out.request_ok
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- guild::tests::request_then_run_expires_war_n2 stdout ----
+
+thread 'guild::tests::request_then_run_expires_war_n2' (28084) panicked at crates\world\src\guild.rs:1838:9:
+assertion failed: out.request_ok
+
+
+failures:
+    guild::tests::request_guild_war_asymmetric_duplicates_and_broadcasts_ss207
+    guild::tests::request_guild_war_both_at_war_duplicates_without_ss207
+    guild::tests::request_then_run_expires_war_n2
+
+test result: FAILED. 7 passed; 3 failed; 0 ignored; 0 measured; 164 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-world --lib`

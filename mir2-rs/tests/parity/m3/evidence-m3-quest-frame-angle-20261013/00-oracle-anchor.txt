@@ -1,0 +1,29 @@
+# oracle 锚（defect_3：C# 侧任务 k=0 `phase=frame` 事件 JSON 被吞掉末尾 `}`）
+#
+# 本片零 oracle 语义改动；下列行号用于说明「为什么 BotSrv 的 JSON 会缺括号」与修复落点。
+
+## 1) 根因在日志出口的 Serilog 消息模板语义（oracle 冻结，不动）
+src/OpenMir2/LogService.cs:10-13
+    public static void Info(string message) { Logger.Information(message); }
+  —— `Logger.Information(string)` 把整条消息当 **Serilog 消息模板** 解析。
+
+## 2) BotSrv 日志出口（夹具工具侧，T-41/T-42 例外；本片只改这里的转义）
+src/BotSrv/Player/RobotPlayer.cs:7281-7284
+    private void MainOutMessage(string msg)
+    {
+        LogService.Info($"机器人:[{ChrName}] {msg}");
+    }
+
+## 3) 载荷构造（k=0 frame，嵌套 `{}`；`text` 由生产 escaper 构造）
+src/BotSrv/Player/RobotPlayer.cs:1282  QuestOnServerMessage
+src/BotSrv/Player/RobotPlayer.cs:1293-1297
+    string fr = "{\"sm\":" + sm + ",\"merchant\":" + merchant + ... + ",\"text\":\"" + QuestEsc(text) + "\"}";
+    MainOutMessage("M3QUESTSEQ {\"phase\":\"frame\",\"k\":" + _questSeqPendingK + ",\"frame\":" + fr + "}");
+
+## 4) 生产 escaper（本片落点：字面 `<`/`>` → `<`/`>`）
+src/BotSrv/Player/RobotPlayer.cs:1086-1094  ShopEsc（shop / guildcastle / heropet 族）
+src/BotSrv/Player/RobotPlayer.cs:1317-1326 QuestEsc（quest / pairtrade / selloff 族）
+
+## 5) 真机原始件（defect_3 的输入；另一条车道 window r2）
+E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/window/mir2-rs/tests/parity/m3/evidence-m3-quest-align-window-r2-20261013/sessions/csharp-20261013-143911/bot.log
+  ⇒ 见本目录 10-real-k0-payload-analysis.txt

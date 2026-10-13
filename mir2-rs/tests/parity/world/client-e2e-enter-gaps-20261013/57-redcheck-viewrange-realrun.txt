@@ -1,0 +1,29 @@
+57-redcheck-viewrange-realrun.txt — 缺口② AOI 窗口 before/after 的「改坏必红」原始件（真机配对）
+卡 openmir2-client-e2e-enter-gaps / reviewer-6 not_verified①
+
+一、真机配对牙齿（本片自身即含正反两面）
+--------------------------------------------------------------------------------
+同一交付树、同一条生产路径，唯一变量 = `mir2-rs/bins/game-svr/src/main.rs::new_player_entity`
+的 `e.view_range = 12;`（`PlayObject.cs:904`）：
+
+  * AFTER（该行在）：客户端 SM_TURN(10)+SM_FEATURECHANGED(41) 配对 = **13**，
+    Chebyshev 6..12 = **10**（见 56 §B）。
+  * BEFORE（注释掉该行 ⇒ `BaseObject.cs:383` 缺省 5）：配对 = **2**，Chebyshev 6..12 = **0**，
+    最大距离 = 4（见 56 §A）。
+
+⇒ 「去掉 `e.view_range = 12;`」这一步在本片被真机实跑复现：**13→2、6..12 由 10→0**。
+   还原该行并重建（`git checkout -- mir2-rs/bins/game-svr/src/main.rs` + `cargo build -p game-svr`）
+   ⇒ 交付树与 master 逐字节相同（`git status` 干净），AFTER 侧读数复现。
+
+二、构造级牙齿（既有，随本片回归复跑）
+--------------------------------------------------------------------------------
+`mir2-rs/bins/game-svr/src/main.rs` 内 `tests::player_aoi_window_covers_view_range_12`：
+删 `e.view_range = 12;` ⇒ 用例 FAILED rc=101（`31-redcheck-viewrange.txt`），还原 rc=0。
+
+三、真机 before 二进制与交付树的关系（诚实登记）
+--------------------------------------------------------------------------------
+* BEFORE 二进制 = 交付树 + **临时**注释那一行后 `cargo build --output` 到隔离 target；
+  该临时改动**未提交**，交付前已 `git checkout` 还原并重建（`bins/game-svr/src/main.rs`
+  sha256 与 master 一致）。⇒ 本片净差量 = 证据/capture，零生产代码改动。
+* 判据脚本侧牙（片⑥）：`check_client_run_frames.py --selftest` 5/5（含 extra-3013 / 52-len-40 /
+  no-walk / expect-run-1 四条红向）。

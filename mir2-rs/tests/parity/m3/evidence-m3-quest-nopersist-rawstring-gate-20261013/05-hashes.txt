@@ -1,0 +1,15 @@
+== 05 改坏/还原哈希 + git 状态（HEAD=bfa9be9cf97fe5ec014ee571c2385ad177f5fe78） ==
+
+clean（改坏前，LF） : d69529665ccdef5f3028dde404d31e903c3c3eeae3ed2d53d03fb8114e464e31 *mir2-rs/bins/db-srv/tests/quest_no_persist.rs
+mutated（改坏后）   : 3e5dd81b55002df6242911c86e34688b8b5ea0fc12cf6dc93f08dc5502aaf052 *mir2-rs/bins/db-srv/tests/quest_no_persist.rs
+restored（还原后）  : d69529665ccdef5f3028dde404d31e903c3c3eeae3ed2d53d03fb8114e464e31 *mir2-rs/bins/db-srv/tests/quest_no_persist.rs
+
+变异：strip_comments_keep_strings 的原始串分支 c == 'r' && starts_raw_string(&chars, i)
+      ⇒ false && c == 'r' && starts_raw_string(&chars, i)（等价于旧实现不识别原始串）
+读数：redchecks/RC1-mutated.txt = FAILED rc=101（0 passed; 1 failed；panicked at 红检失效：原始串内引号后的 // 把 SQL 任务列吞掉了）
+      redchecks/RC1-restored.txt = ok 9 passed; 0 failed（还原后复绿）
+
+$ git status --porcelain（还原后，仅本证据目录未跟踪）
+?? mir2-rs/tests/parity/m3/evidence-m3-quest-nopersist-rawstring-gate-20261013/
+
+restored sha == clean sha ? YES

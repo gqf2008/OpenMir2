@@ -1,0 +1,27 @@
+# M3⑨-2 F-1 返工命令（隔离 CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target，--offline）
+
+# 0) 返工起点
+git checkout worktree-m3-pet-slave-summon        # 20 片 head 43cf89554
+# 改 main.rs（broadcast_ref_msg_with_self + 两处 magic_fire 调用 + 自身帧断言）、magics.rs（M-1 文档）
+git add mir2-rs/bins/game-svr/src/main.rs mir2-rs/bins/game-svr/src/magics.rs
+git commit -m "M3⑨-2 F-1 返工 …"                  # 11c98bf84
+
+# 1) 四门禁（gates/）
+cargo fmt --all -- --check                                    # rc=0
+cargo clippy --workspace --all-targets -- -D warnings         # rc=0
+cargo test --workspace --no-fail-fast                         # 98 suites 1024 passed 0 failed 21 ignored
+cargo run -p msgcodegen -- --check                            # 604 条
+
+# 2) F-1 判据
+cargo test -p game-svr --offline spell_cmd_summon_wires_amulet_and_frames   # ok（自身收 SM_MAGICFIRE / 不收 SM_SPELL）
+
+# 3) 改坏必红（redchecks/）：include_self true→false ⇒ FAILED；git checkout -- 还原 ⇒ rc=0
+cargo test -p game-svr --offline spell_cmd_summon_wires_amulet_and_frames
+
+# 4) 边界
+git diff --name-only d5be14f40 11c98bf84 -- src sql MirClient                        # 空
+git diff --name-only d5be14f40 11c98bf84 -- mir2-rs/crates/protocol mir2-rs/crates/storage  # 空
+
+# 5) 证据清单（三个目录）
+python -I tools/evidence-hash/verify_sha256sums.py verify <目录> --check-extra
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck <目录>

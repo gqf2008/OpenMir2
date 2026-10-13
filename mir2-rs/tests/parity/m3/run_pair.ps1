@@ -61,6 +61,18 @@ param(
   [string]$ShopItemName = '',      # 仅 -ShopSequence 时生效：动作物品名（空 = 背包第一件）
   [int]$ShopItemMake = 0,          # 仅 -ShopSequence 时生效：物品 MakeIndex（0 = 只按名字取）
   [int]$ShopCount = 1,             # 仅 -ShopSequence 时生效：卖/买/存取数量
+  [switch]$GuildCastleSequence,    # M3⑧ 夹具：BotSrv 进世界后按固定顺序发行会/攻城动作（白名单 T-46 家族）
+  [string]$GuildCastleSteps = '',  # 仅 -GuildCastleSequence 时生效：`role|op|param;...`
+  [int]$GuildCastleStepMs = 1000,  # 仅 -GuildCastleSequence 时生效：每步间隔
+  [int]$GuildCastleStartDelayMs = 3000, # 仅 -GuildCastleSequence 时生效：进世界到第一步的额外等待
+  [int]$GuildCastleMasterRole = 0, # 仅 -GuildCastleSequence 时生效：会长账号序号
+  [int]$GuildCastlePeerRole = 1,   # 仅 -GuildCastleSequence 时生效：peer 账号序号
+  [switch]$HeroPetSequence,        # M3⑨ 夹具：BotSrv 进世界后按固定顺序发召唤/挥击（宝宝/下属；白名单 T-45 家族）
+  [string]$HeroPetSteps = '',      # 仅 -HeroPetSequence 时生效：`role|op|param;...`
+  [int]$HeroPetStepMs = 1000,      # 仅 -HeroPetSequence 时生效：每步间隔
+  [int]$HeroPetStartDelayMs = 3000,# 仅 -HeroPetSequence 时生效：进世界到第一步的额外等待
+  [int]$HeroPetMasterRole = 0,     # 仅 -HeroPetSequence 时生效：主人账号序号
+  [int]$HeroPetPeerRole = 1,       # 仅 -HeroPetSequence 时生效：peer 账号序号
   [switch]$QuestSequence,          # M3⑥ 夹具：BotSrv 进世界后按固定步骤串点任务 NPC/选标签（T-41 家族扩展）
   [string]$QuestSteps = '',        # 仅 -QuestSequence 时生效：步骤串 `op|npc|label;...`（空 ⇒ 由场景 case.steps 拼）
   [int]$QuestStepMs = 1000,        # 仅 -QuestSequence 时生效：每步间隔
@@ -187,6 +199,18 @@ function Get-M3BotOpPlan {
     $runner += " -ShopSequence -ShopOps '$ShopOps' -ShopStepMs $ShopStepMs -ShopStartDelayMs $ShopStartDelayMs -ShopNpcName '$ShopNpcName' -ShopItemName '$ShopItemName' -ShopItemMake $ShopItemMake -ShopCount $ShopCount -DisableAutoPlay"
     $planArgs += @('-ShopSequence', '-ShopOps', $ShopOps, '-ShopStepMs', $ShopStepMs, '-ShopStartDelayMs', $ShopStartDelayMs, '-ShopNpcName', $ShopNpcName, '-ShopItemName', $ShopItemName, '-ShopItemMake', $ShopItemMake, '-ShopCount', $ShopCount, '-DisableAutoPlay')
   }
+  if ($GuildCastleSequence -and -not $ForPrewarm) {
+    # M3⑧ 夹具（卡 openmir2-m3-guild-castle-fixture-botsrv）：固定行会/攻城序列**必须**一并关挂机
+    # （同 T-14/T-29 理由：挂机 = 无种子 RNG 随机走位，会改坐标/视野/进宫殿判定 ⇒ 两侧不可比）。
+    $runner += " -GuildCastleSequence -GuildCastleSteps '$GuildCastleSteps' -GuildCastleStepMs $GuildCastleStepMs -GuildCastleStartDelayMs $GuildCastleStartDelayMs -GuildCastleMasterRole $GuildCastleMasterRole -GuildCastlePeerRole $GuildCastlePeerRole -DisableAutoPlay"
+    $planArgs += @('-GuildCastleSequence', '-GuildCastleSteps', $GuildCastleSteps, '-GuildCastleStepMs', $GuildCastleStepMs, '-GuildCastleStartDelayMs', $GuildCastleStartDelayMs, '-GuildCastleMasterRole', $GuildCastleMasterRole, '-GuildCastlePeerRole', $GuildCastlePeerRole, '-DisableAutoPlay')
+  }
+  if ($HeroPetSequence -and -not $ForPrewarm) {
+    # M3⑨ 夹具（卡 openmir2-m3-hero-pet-fixture-botsrv）：固定英雄/宠物序列**必须**一并关挂机
+    # （同 T-14/T-29 理由：挂机 = 无种子 RNG 随机走位，会改坐标/视野/宝宝位置 ⇒ 两侧不可比）。
+    $runner += " -HeroPetSequence -HeroPetSteps '$HeroPetSteps' -HeroPetStepMs $HeroPetStepMs -HeroPetStartDelayMs $HeroPetStartDelayMs -HeroPetMasterRole $HeroPetMasterRole -HeroPetPeerRole $HeroPetPeerRole -DisableAutoPlay"
+    $planArgs += @('-HeroPetSequence', '-HeroPetSteps', $HeroPetSteps, '-HeroPetStepMs', $HeroPetStepMs, '-HeroPetStartDelayMs', $HeroPetStartDelayMs, '-HeroPetMasterRole', $HeroPetMasterRole, '-HeroPetPeerRole', $HeroPetPeerRole, '-DisableAutoPlay')
+  }
   if ($QuestSequence -and -not $ForPrewarm) {
     # M3⑥ 夹具（卡 openmir2-m3-quest-fixture-botsrv）：固定任务序列**必须**一并关挂机
     # （同 T-14/T-29 理由：挂机 = 无种子 RNG 随机走位，会改坐标/视野 ⇒ 两侧不可比）。
@@ -280,6 +304,8 @@ if ($EmitOpsArgs) {
     bag_equip_scope   = Format-M3BagEquipScope -BagEquipSequence ([bool]$BagEquipSequence) -BagEquipStepMs $BagEquipStepMs -BagEquipStartDelayMs $BagEquipStartDelayMs -DisableAutoPlay ([bool]$BagEquipSequence)
     attack_sequence   = Format-M3AttackScope -AttackSequence ([bool]$AttackSequence) -AttackCount $AttackCount -AttackStepMs $AttackStepMs -AttackStartDelayMs $AttackStartDelayMs -DisableAutoPlay ([bool]$AttackSequence)
     shop_sequence     = Format-M3ShopScope -ShopSequence ([bool]$ShopSequence) -ShopOps $ShopOps -ShopStepMs $ShopStepMs -ShopStartDelayMs $ShopStartDelayMs -ShopNpcName $ShopNpcName -ShopItemName $ShopItemName -ShopItemMake $ShopItemMake -ShopCount $ShopCount -DisableAutoPlay ([bool]$ShopSequence)
+    guild_castle_sequence = Format-M3GuildCastleScope -GuildCastleSequence ([bool]$GuildCastleSequence) -GuildCastleSteps $GuildCastleSteps -GuildCastleStepMs $GuildCastleStepMs -GuildCastleStartDelayMs $GuildCastleStartDelayMs -GuildCastleMasterRole $GuildCastleMasterRole -GuildCastlePeerRole $GuildCastlePeerRole -DisableAutoPlay ([bool]$GuildCastleSequence)
+    hero_pet_sequence = Format-M3HeroPetScope -HeroPetSequence ([bool]$HeroPetSequence) -HeroPetSteps $HeroPetSteps -HeroPetStepMs $HeroPetStepMs -HeroPetStartDelayMs $HeroPetStartDelayMs -HeroPetMasterRole $HeroPetMasterRole -HeroPetPeerRole $HeroPetPeerRole -DisableAutoPlay ([bool]$HeroPetSequence)
     quest_sequence    = Format-M3QuestScope -QuestSequence ([bool]$QuestSequence) -QuestSteps $QuestSteps -QuestStepMs $QuestStepMs -QuestStartDelayMs $QuestStartDelayMs -DisableAutoPlay ([bool]$QuestSequence)
     pair_trade_sequence = Format-M3PairTradeScope -PairTradeSequence ([bool]$PairTradeSequence) -PairTradeSteps $PairTradeSteps -PairTradeStepMs $PairTradeStepMs -PairTradeStartDelayMs $PairTradeStartDelayMs -PairTradeRole $PairTradeRole -PairTradePeerRole $PairTradePeerRole -DisableAutoPlay ([bool]$PairTradeSequence)
     selloff_sequence  = Format-M3SellOffScope -SellOffSequence ([bool]$SellOffSequence) -SellOffSteps $SellOffSteps -SellOffStepMs $SellOffStepMs -SellOffStartDelayMs $SellOffStartDelayMs -SellOffSellerRole $SellOffSellerRole -SellOffBuyerRole $SellOffBuyerRole -DisableAutoPlay ([bool]$SellOffSequence)
@@ -288,7 +314,7 @@ if ($EmitOpsArgs) {
   }
   # F-2 竞态修（owner 2026-10-13 04:05）：存档序列的 AFTER 快照前「等断线存档落库」仪器形态，
   # 无栈自检据此机判生产接线未被削弱（mode=save_rcd、timeout/poll>=1、quiet>=2），也据此发现「改回固定 sleep」。
-  if ($BagEquipSequence -or $AttackSequence -or $ShopSequence -or $QuestSequence -or $PairTradeSequence -or $SellOffSequence) {
+  if ($BagEquipSequence -or $AttackSequence -or $ShopSequence -or $GuildCastleSequence -or $HeroPetSequence -or $QuestSequence -or $PairTradeSequence -or $SellOffSequence) {
     $obj['save_settle_instrument'] = (Format-M3SaveSettleInstrument -TimeoutSeconds $SaveSettleTimeoutSeconds -PollMilliseconds $SaveSettlePollMs -QuietPolls $SaveSettleQuietPolls)
   }
   if ($PinStartPose) {
@@ -328,6 +354,26 @@ function Invoke-Mysql([string]$Sql) {
 function Git-Rev {
   Push-Location $RepoRoot
   try { return (git rev-parse HEAD).Trim() } finally { Pop-Location }
+}
+
+function Assert-M3MarkerPrefix {
+  # markers 文件「唯一口径」（卡 openmir2-m3-fixture-marker-prefix-bug）：每个非空行必须保留 bot.log
+  # 内的 `M3*SEQ ` 前缀——4 个比较器的 `_marker_events` 都按前缀扫描，去前缀 ⇒ assemble 恒 PREREQ_RED。
+  # 这是生产路径上的 fail-closed 牙：绝不让去前缀的 markers 静默进入跨侧比较。
+  param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Marker)
+  if (-not (Test-Path -LiteralPath $Path)) {
+    Write-Output ("RED: markers 文件不存在: {0}" -f $Path); exit 1
+  }
+  $bad = 0
+  foreach ($line in @(Get-Content -LiteralPath $Path)) {
+    $t = "$line".Trim()
+    if ($t -eq '') { continue }
+    if (-not $t.StartsWith($Marker + ' ')) { $bad++ }
+  }
+  if ($bad -gt 0) {
+    Write-Output ("RED: {0} 有 {1} 行缺前缀 '{2} '（比较器 assemble 会 PREREQ_RED）——卡 openmir2-m3-fixture-marker-prefix-bug" -f $Path, $bad, $Marker)
+    exit 1
+  }
 }
 
 # ---- 1. 预检 ----
@@ -512,7 +558,7 @@ if ($PinStartPose) {
 # `characters_ablity.ModifyTime` 由存档 `SaveAblity` 置 `now()`；只有**晚于**该参考才说明本段存档已落库。
 # 仅存档序列（-BagEquipSequence/-AttackSequence）需要；其余路径不取参考、不额外等待（行为逐字节不变）。
 $saveSettleRef = ''
-if (($BagEquipSequence -or $AttackSequence -or $ShopSequence -or $QuestSequence) -and -not $SkipBots) {
+if (($BagEquipSequence -or $AttackSequence -or $ShopSequence -or $GuildCastleSequence -or $HeroPetSequence -or $QuestSequence) -and -not $SkipBots) {
   $saveSettleRef = ([string](Invoke-Mysql "SELECT DATE_FORMAT(NOW(),'%Y-%m-%d %H:%i:%s')")).Trim()
   Write-Output ("SAVE_SETTLE_REF {0}" -f $saveSettleRef)
 }
@@ -552,6 +598,12 @@ $shopSeqMarkers = @()
 $attackRawPath = Join-Path $SessionDir 'attack_raw.jsonl'
 $shopMarkersPath = Join-Path $SessionDir 'shop_markers.jsonl'
 $shopRawPath = Join-Path $SessionDir 'npc_shop_raw.jsonl'
+$guildCastleSeqMarkers = @()
+$guildCastleMarkersPath = Join-Path $SessionDir 'guild_castle_markers.jsonl'
+$guildCastleRawPath = Join-Path $SessionDir 'guild_castle_raw.jsonl'
+$heroPetSeqMarkers = @()
+$heroPetMarkersPath = Join-Path $SessionDir 'hero_pet_markers.jsonl'
+$heroPetRawPath = Join-Path $SessionDir 'hero_pet_raw.jsonl'
 $questSeqMarkers = @()
 $questMarkersPath = Join-Path $SessionDir 'quest_markers.jsonl'
 $questRawPath = Join-Path $SessionDir 'quest_raw.jsonl'
@@ -683,8 +735,12 @@ if (-not $SkipBots) {
       Write-Output 'RED: -ShopSequence 开了但 bot.log 里一条 M3SHOPSEQ 标记都没有 —— 固定序列没跑（驱动未生效/假人未进世界）'
       exit 1
     }
-    $shopEvents = @($shopSeqMarkers | ForEach-Object { $_.Substring('M3SHOPSEQ '.Length).Trim() })
+    # markers 文件「唯一口径」（卡 openmir2-m3-fixture-marker-prefix-bug）：保留 bot.log 内**带前缀**
+    # 的原始 `M3SHOPSEQ {json}` 行。4 个比较器的 `_marker_events` 都按前缀扫描；历史上去前缀写入
+    # （对捕获行做 Substring 截断）曾致 assemble 恒 PREREQ_RED。
+    $shopEvents = @($shopSeqMarkers)
     Set-Content -Path $shopMarkersPath -Value $shopEvents -Encoding utf8
+    Assert-M3MarkerPrefix -Path $shopMarkersPath -Marker 'M3SHOPSEQ'
     $shopSend = @($shopEvents | Where-Object { $_ -match '"phase"\s*:\s*"send"' }).Count
     $shopEnd = @($shopEvents | Where-Object { $_ -match '"phase"\s*:\s*"end"' }).Count
     $shopDone = @($shopEvents | Where-Object { $_ -match '"phase"\s*:\s*"done"' }).Count
@@ -704,6 +760,78 @@ if (-not $SkipBots) {
       exit 1
     }
   }
+  # M3⑧（T-46 家族扩展）：固定行会/攻城序列的执行证据（逐 step 一条 `M3GUILDCSEQ` 事件，落 bot.log）。
+  # 判据：开了 -GuildCastleSequence 就必须看到 `arm` + 每个 step 的 `send`/`end` + **每个假人各自的** `done`；
+  # 缺任一段 ⇒ RED，绝不拿空序列去跨侧 diff（否则恒绿）。原始件落 `guild_castle_markers.jsonl`，
+  # 再用 `guild_castle_diff.py assemble` 合并成记录 `guild_castle_raw.jsonl`（供跨侧比较）。
+  $guildCastleSeqMarkers = @([regex]::Matches($botText, 'M3GUILDCSEQ [^\r\n]*') | ForEach-Object { $_.Value })
+  Write-Output ("OPS_GUILDCSEQ_MARKERS count={0}" -f $guildCastleSeqMarkers.Count)
+  if ($GuildCastleSequence) {
+    if ($guildCastleSeqMarkers.Count -eq 0) {
+      Write-Output 'RED: -GuildCastleSequence 开了但 bot.log 里一条 M3GUILDCSEQ 标记都没有 —— 固定序列没跑（驱动未生效/假人未进世界）'
+      exit 1
+    }
+    # markers 文件「唯一口径」（卡 openmir2-m3-fixture-marker-prefix-bug；⑧ 家族对齐，reviewer-6 O-2）：
+    # 保留 bot.log 内**带前缀**的原始 `M3GUILDCSEQ {json}` 行；guild_castle_diff.py 的 _marker_events 按
+    # `line.find('M3GUILDCSEQ ')` 扫描，去前缀写入曾致 assemble 恒 PREREQ_RED。
+    $guildCastleEvents = @($guildCastleSeqMarkers)
+    Set-Content -Path $guildCastleMarkersPath -Value $guildCastleEvents -Encoding utf8
+    Assert-M3MarkerPrefix -Path $guildCastleMarkersPath -Marker 'M3GUILDCSEQ'
+    $gcSend = @($guildCastleEvents | Where-Object { $_ -match '"phase"\s*:\s*"send"' }).Count
+    $gcEnd = @($guildCastleEvents | Where-Object { $_ -match '"phase"\s*:\s*"end"' }).Count
+    $gcDone = @($guildCastleEvents | Where-Object { $_ -match '"phase"\s*:\s*"done"' }).Count
+    $gcExpectedSteps = @($GuildCastleSteps.Split(';') | Where-Object { $_.Trim() -ne '' }).Count
+    Write-Output ("OPS_GUILDCSEQ send={0} end={1} done={2} expected_steps={3} bots={4}" -f $gcSend, $gcEnd, $gcDone, $gcExpectedSteps, $Bots)
+    if ($gcDone -lt $Bots) {
+      Write-Output ("RED: -GuildCastleSequence 开了但 `M3GUILDCSEQ phase=done` 只有 {0} 条 < 假人数 {1} —— 两个假人没各自跑完整串" -f $gcDone, $Bots)
+      exit 1
+    }
+    if ($gcSend -lt ($gcExpectedSteps * $Bots) -or $gcEnd -lt ($gcExpectedSteps * $Bots)) {
+      Write-Output ("RED: -GuildCastleSequence send={0} end={1} < 期望 {2}（steps={3} × bots={4}）—— 序列不完整，不能当『同一序列』" -f $gcSend, $gcEnd, ($gcExpectedSteps * $Bots), $gcExpectedSteps, $Bots)
+      exit 1
+    }
+    & python -I (Join-Path $Here 'guild_castle_diff.py') assemble $guildCastleMarkersPath --out $guildCastleRawPath --side $Side
+    if ($LASTEXITCODE -ne 0) {
+      Write-Output 'RED: guild_castle_diff.py assemble 失败（事件流缺 send/end 或 done.steps 不一致）—— 原始件不可判'
+      exit 1
+    }
+  }
+  # M3⑨（T-45 家族扩展）：固定英雄/宠物序列的执行证据（逐 step 一条 `M3HEROPETSEQ` 事件，落 bot.log）。
+  # 判据：开了 -HeroPetSequence 就必须看到 `arm` + 每个 step 的 `send`/`end` + **每个假人各自的** `done`；
+  # 缺任一段 ⇒ RED，绝不拿空序列去跨侧 diff（否则恒绿）。原始件落 `hero_pet_markers.jsonl`，
+  # 再用 `hero_pet_diff.py assemble` 合并成记录 `hero_pet_raw.jsonl`（供跨侧比较）。
+  $heroPetSeqMarkers = @([regex]::Matches($botText, 'M3HEROPETSEQ [^\r\n]*') | ForEach-Object { $_.Value })
+  Write-Output ("OPS_HEROPETSEQ_MARKERS count={0}" -f $heroPetSeqMarkers.Count)
+  if ($HeroPetSequence) {
+    if ($heroPetSeqMarkers.Count -eq 0) {
+      Write-Output 'RED: -HeroPetSequence 开了但 bot.log 里一条 M3HEROPETSEQ 标记都没有 —— 固定序列没跑（驱动未生效/假人未进世界）'
+      exit 1
+    }
+    # markers 文件「唯一口径」（卡 openmir2-m3-fixture-marker-prefix-bug；⑨ 家族对齐，同 ⑧ O-2）：
+    # 保留 bot.log 内**带前缀**的原始 `M3HEROPETSEQ {json}` 行；hero_pet_diff.py 的 _marker_events 按
+    # `line.find('M3HEROPETSEQ ')` 扫描，去前缀写入曾致 assemble 恒 PREREQ_RED。
+    $heroPetEvents = @($heroPetSeqMarkers)
+    Set-Content -Path $heroPetMarkersPath -Value $heroPetEvents -Encoding utf8
+    Assert-M3MarkerPrefix -Path $heroPetMarkersPath -Marker 'M3HEROPETSEQ'
+    $heroPetSend = @($heroPetEvents | Where-Object { $_ -match '"phase"\s*:\s*"send"' }).Count
+    $heroPetEnd = @($heroPetEvents | Where-Object { $_ -match '"phase"\s*:\s*"end"' }).Count
+    $heroPetDone = @($heroPetEvents | Where-Object { $_ -match '"phase"\s*:\s*"done"' }).Count
+    $heroPetExpectedSteps = @($HeroPetSteps.Split(';') | Where-Object { $_.Trim() -ne '' }).Count
+    Write-Output ("OPS_HEROPETSEQ send={0} end={1} done={2} expected_steps={3} bots={4}" -f $heroPetSend, $heroPetEnd, $heroPetDone, $heroPetExpectedSteps, $Bots)
+    if ($heroPetDone -lt $Bots) {
+      Write-Output ("RED: -HeroPetSequence 开了但 `M3HEROPETSEQ phase=done` 只有 {0} 条 < 假人数 {1} —— 两个假人没各自跑完整串" -f $heroPetDone, $Bots)
+      exit 1
+    }
+    if ($heroPetSend -lt ($heroPetExpectedSteps * $Bots) -or $heroPetEnd -lt ($heroPetExpectedSteps * $Bots)) {
+      Write-Output ("RED: -HeroPetSequence send={0} end={1} < 期望 {2}（steps={3} × bots={4}）—— 序列不完整，不能当『同一序列』" -f $heroPetSend, $heroPetEnd, ($heroPetExpectedSteps * $Bots), $heroPetExpectedSteps, $Bots)
+      exit 1
+    }
+    & python -I (Join-Path $Here 'hero_pet_diff.py') assemble $heroPetMarkersPath --out $heroPetRawPath --side $Side
+    if ($LASTEXITCODE -ne 0) {
+      Write-Output 'RED: hero_pet_diff.py assemble 失败（事件流缺 send/end 或 done.steps 不一致）—— 原始件不可判'
+      exit 1
+    }
+  }
   # M3⑥（T-41 家族扩展）：固定任务序列的执行证据（逐 step 一条 `M3QUESTSEQ` 事件，落 bot.log）。
   # 判据：开了 -QuestSequence 就必须看到 `arm` + 每个 step 的 `send`/`end` + `done`；缺任一段 ⇒ RED，
   # 绝不拿空序列去跨侧 diff（否则恒绿）。任务态位由**服务端会话 dump**（quest_state.jsonl）补入，
@@ -715,8 +843,10 @@ if (-not $SkipBots) {
       Write-Output 'RED: -QuestSequence 开了但 bot.log 里一条 M3QUESTSEQ 标记都没有 —— 固定任务序列没跑（驱动未生效/假人未进世界）'
       exit 1
     }
-    $questEvents = @($questSeqMarkers | ForEach-Object { $_.Substring('M3QUESTSEQ '.Length).Trim() })
+    # 保留带前缀原始行（同 shop_markers 口径；卡 openmir2-m3-fixture-marker-prefix-bug）。
+    $questEvents = @($questSeqMarkers)
     Set-Content -Path $questMarkersPath -Value $questEvents -Encoding utf8
+    Assert-M3MarkerPrefix -Path $questMarkersPath -Marker 'M3QUESTSEQ'
     $questSend = @($questEvents | Where-Object { $_ -match '"phase"\s*:\s*"send"' }).Count
     $questEnd = @($questEvents | Where-Object { $_ -match '"phase"\s*:\s*"end"' }).Count
     $questDone = @($questEvents | Where-Object { $_ -match '"phase"\s*:\s*"done"' }).Count
@@ -751,8 +881,10 @@ if (-not $SkipBots) {
       Write-Output 'RED: -PairTradeSequence 开了但 bot.log 里一条 M3PAIRTRADESEQ 标记都没有 —— 固定组队/交易序列没跑（驱动未生效/假人未进世界）'
       exit 1
     }
-    $pairTradeEvents = @($pairTradeSeqMarkers | ForEach-Object { $_.Substring('M3PAIRTRADESEQ '.Length).Trim() })
+    # 保留带前缀原始行（同 shop_markers 口径；卡 openmir2-m3-fixture-marker-prefix-bug）。
+    $pairTradeEvents = @($pairTradeSeqMarkers)
     Set-Content -Path $pairTradeMarkersPath -Value $pairTradeEvents -Encoding utf8
+    Assert-M3MarkerPrefix -Path $pairTradeMarkersPath -Marker 'M3PAIRTRADESEQ'
     $ptSend = @($pairTradeEvents | Where-Object { $_ -match '"phase"\s*:\s*"send"' }).Count
     $ptEnd = @($pairTradeEvents | Where-Object { $_ -match '"phase"\s*:\s*"end"' }).Count
     $ptDone = @($pairTradeEvents | Where-Object { $_ -match '"phase"\s*:\s*"done"' }).Count
@@ -791,8 +923,10 @@ if (-not $SkipBots) {
       Write-Output 'RED: -SellOffSequence 开了但 bot.log 里一条 M3SELLOFFSEQ 标记都没有 —— 固定元宝寄售序列没跑（驱动未生效/假人未进世界）'
       exit 1
     }
-    $sellOffEvents = @($sellOffSeqMarkers | ForEach-Object { $_.Substring('M3SELLOFFSEQ '.Length).Trim() })
+    # 保留带前缀原始行（同 shop_markers 口径；卡 openmir2-m3-fixture-marker-prefix-bug）。
+    $sellOffEvents = @($sellOffSeqMarkers)
     Set-Content -Path $sellOffMarkersPath -Value $sellOffEvents -Encoding utf8
+    Assert-M3MarkerPrefix -Path $sellOffMarkersPath -Marker 'M3SELLOFFSEQ'
     $soSend = @($sellOffEvents | Where-Object { $_ -match '"phase"\s*:\s*"send"' }).Count
     $soEnd = @($sellOffEvents | Where-Object { $_ -match '"phase"\s*:\s*"end"' }).Count
     $soDone = @($sellOffEvents | Where-Object { $_ -match '"phase"\s*:\s*"done"' }).Count
@@ -844,7 +978,7 @@ if (-not $SkipBots) {
 # 修法 = **等状态变化**（轮询到本前缀角色存档落库），超时 ⇒ fail-closed（点名 RED，绝不静默继续）。
 # 仅 -BagEquipSequence/-AttackSequence（且非 -SkipBots）生效；其余路径逐字节不变（不加任何等待）。
 $saveSettleLabel = '(off)'
-if (($BagEquipSequence -or $AttackSequence -or $ShopSequence -or $QuestSequence -or $PairTradeSequence -or $SellOffSequence) -and -not $SkipBots) {
+if (($BagEquipSequence -or $AttackSequence -or $ShopSequence -or $GuildCastleSequence -or $HeroPetSequence -or $QuestSequence -or $PairTradeSequence -or $SellOffSequence) -and -not $SkipBots) {
   if ([string]::IsNullOrEmpty($saveSettleRef)) { throw 'SAVE_SETTLE_REF 缺失——存档序列必须在 BEFORE 快照前取 DB 参考时刻（F-2）' }
   $saveSettleProbe = {
     $n = Invoke-Mysql (Get-M3SaveSettleProbeSql -ChrNamePrefix $Prefix -ReferenceTime $saveSettleRef)
@@ -858,7 +992,7 @@ if (($BagEquipSequence -or $AttackSequence -or $ShopSequence -or $QuestSequence 
     throw ("RED: 断线存档未在 {0}s 内落库（{1}，landed={2}/{3}，ref={4}）—— AFTER 快照会漏掉本段改动（F-2 竞态）；绝不静默继续" -f `
       $SaveSettleTimeoutSeconds, $saveSettle.Reason, $saveSettle.LastLanded, $Bots, $saveSettleRef)
   }
-} elseif ($BagEquipSequence -or $AttackSequence -or $ShopSequence -or $QuestSequence -or $PairTradeSequence -or $SellOffSequence) {
+} elseif ($BagEquipSequence -or $AttackSequence -or $ShopSequence -or $GuildCastleSequence -or $HeroPetSequence -or $QuestSequence -or $PairTradeSequence -or $SellOffSequence) {
   $saveSettleLabel = '(off: -SkipBots)'
   Write-Output 'SETTLE_SAVE_RCD SKIPPED (-SkipBots)'
 }
@@ -905,6 +1039,12 @@ $baseline = [pscustomobject]@{
   attack_sequence = (Format-M3AttackScope -AttackSequence ([bool]$AttackSequence) -AttackCount $AttackCount -AttackStepMs $AttackStepMs -AttackStartDelayMs $AttackStartDelayMs -DisableAutoPlay ([bool]$AttackSequence))
   shop_sequence = (Format-M3ShopScope -ShopSequence ([bool]$ShopSequence) -ShopOps $ShopOps -ShopStepMs $ShopStepMs -ShopStartDelayMs $ShopStartDelayMs -ShopNpcName $ShopNpcName -ShopItemName $ShopItemName -ShopItemMake $ShopItemMake -ShopCount $ShopCount -DisableAutoPlay ([bool]$ShopSequence))
   shop_markers = $shopSeqMarkers
+  guild_castle_sequence = (Format-M3GuildCastleScope -GuildCastleSequence ([bool]$GuildCastleSequence) -GuildCastleSteps $GuildCastleSteps -GuildCastleStepMs $GuildCastleStepMs -GuildCastleStartDelayMs $GuildCastleStartDelayMs -GuildCastleMasterRole $GuildCastleMasterRole -GuildCastlePeerRole $GuildCastlePeerRole -DisableAutoPlay ([bool]$GuildCastleSequence))
+  guild_castle_markers = $guildCastleSeqMarkers
+  guild_castle_raw = $(if (Test-Path $guildCastleRawPath) { (Split-Path $guildCastleRawPath -Leaf) } else { '' })
+  hero_pet_sequence = (Format-M3HeroPetScope -HeroPetSequence ([bool]$HeroPetSequence) -HeroPetSteps $HeroPetSteps -HeroPetStepMs $HeroPetStepMs -HeroPetStartDelayMs $HeroPetStartDelayMs -HeroPetMasterRole $HeroPetMasterRole -HeroPetPeerRole $HeroPetPeerRole -DisableAutoPlay ([bool]$HeroPetSequence))
+  hero_pet_markers = $heroPetSeqMarkers
+  hero_pet_raw = $(if (Test-Path $heroPetRawPath) { (Split-Path $heroPetRawPath -Leaf) } else { '' })
   quest_sequence = (Format-M3QuestScope -QuestSequence ([bool]$QuestSequence) -QuestSteps $QuestSteps -QuestStepMs $QuestStepMs -QuestStartDelayMs $QuestStartDelayMs -DisableAutoPlay ([bool]$QuestSequence))
   quest_markers = $questSeqMarkers
   pair_trade_sequence = (Format-M3PairTradeScope -PairTradeSequence ([bool]$PairTradeSequence) -PairTradeSteps $PairTradeSteps -PairTradeStepMs $PairTradeStepMs -PairTradeStartDelayMs $PairTradeStartDelayMs -PairTradeRole $PairTradeRole -PairTradePeerRole $PairTradePeerRole -DisableAutoPlay ([bool]$PairTradeSequence))

@@ -1,0 +1,55 @@
+diff --git a/mir2-rs/tests/parity/m3/rng-trace-scene/README.md b/mir2-rs/tests/parity/m3/rng-trace-scene/README.md
+index 9dbbd4cb9..c0d043fc8 100644
+--- a/mir2-rs/tests/parity/m3/rng-trace-scene/README.md
++++ b/mir2-rs/tests/parity/m3/rng-trace-scene/README.md
+@@ -159,13 +159,14 @@ powershell -ExecutionPolicy Bypass -File run_rng_trace_pair.ps1 -SelfCheckNoStac
+ powershell -ExecutionPolicy Bypass -File run_rng_trace_pair.ps1 -SelfCheckNoStack -SelfCheckOut <path.txt>
+ ```
+ 
+-自检覆盖（18 项；全离线）：scenario 固定输入、MonGen 冻结件零行、场景门 selftest（16/16）、
++自检覆盖（19 项；全离线）：scenario 固定输入、MonGen 冻结件零行、场景门 selftest（16/16）、
+ 场景门进程内正/负样本（同场景绿 / 怪集合漂移红）、账本 selftest（含 R-6 folded）、
+ folded 等价绿 / 折叠计数不等红 / 折叠次序不等红、缺件 PREREQ、LF 写出、
+ `scenario-fold-group-consistency-green`（已入库 scenario 与代码同口径）、
+ `scenario-fold-drift-red` / `scenario-groups-unknown-red`（改坏必红）、
+ `scenario-drift-samples-json-native`（三条 drift 样本由 JSON 字段改写构造、与源不同，
+-不再对原始文本做正则替换 —— M-1 sibling 收口）、零端口。
++不再对原始文本做正则替换 —— M-1 sibling 收口；base 值牙内自解析，无跨块 `$sc` 依赖 —— O-1）、
++`scenario-drift-tooth-not-vacuous`（空转样本 ⇒ 同一 fold 谓词为 false，证明上一条牙非恒真）、零端口。
+ real-run 分支在 `-Go` 未给时 **fail-closed exit 2**（不静默起栈）。
+ 
+ ## 6. 命令（可复算）
+diff --git a/mir2-rs/tests/parity/m3/rng-trace-scene/run_rng_trace_pair.ps1 b/mir2-rs/tests/parity/m3/rng-trace-scene/run_rng_trace_pair.ps1
+index 58165fe79..b8d6d93d3 100644
+--- a/mir2-rs/tests/parity/m3/rng-trace-scene/run_rng_trace_pair.ps1
++++ b/mir2-rs/tests/parity/m3/rng-trace-scene/run_rng_trace_pair.ps1
+@@ -352,13 +352,26 @@ if ($SelfCheckNoStack) {
+     # ⑰ M-1 sibling 收口：三条 drift 样本均由 New-RngDriftScenario 以 **JSON 字段改写**构造
+     #    （不再对原始文本做正则替换）⇒ 样本必须是合法 JSON 且与源 scenario 结构不同；
+     #    构造一旦空转（样本 == 源、drift 用例其实没漂移）⇒ 必红。
++    # O-1（reviewer-6 b53a7451，Minor）：base 值**在牙内部**自行解析，去掉对外层 ⑪ 块 `$sc` 的
++    #    跨块隐式依赖（那个块一旦重构/改名，`$sc` 退化为 $null ⇒ `-ne` 恒真、fold 半断言空转）。
++    $srcBack = $null
++    try { $srcBack = (Get-Content -LiteralPath $ScenarioFile -Raw | ConvertFrom-Json) } catch { }
+     $badBack = (Get-Content -LiteralPath $badScen -Raw | ConvertFrom-Json)
+     $driftBack = (Get-Content -LiteralPath $driftScen -Raw | ConvertFrom-Json)
+     $grpBack = (Get-Content -LiteralPath $grpScen -Raw | ConvertFrom-Json)
+-    $driftNativeOk = ($badBack.trace.runner -match '-NotARealParam') -and
+-                     ($driftBack.trace.fold.construct -ne $sc.trace.fold.construct) -and
++    $driftNativeOk = ($null -ne $srcBack) -and
++                     ($badBack.trace.runner -match '-NotARealParam') -and
++                     ($driftBack.trace.fold.construct -ne $srcBack.trace.fold.construct) -and
+                      (@($grpBack.trace.groups_expected) -contains 'no_such_group')
+-    Add-Result 'scenario-drift-samples-json-native' $driftNativeOk 'runner/fold/groups drift 样本均为 JSON 字段改写且与源不同'
++    Add-Result 'scenario-drift-samples-json-native' $driftNativeOk 'runner/fold/groups drift 样本均为 JSON 字段改写且与源不同（base 牙内自解析，无跨块依赖）'
++
++    # ⑱ O-1 的 tooth-robustness 对照：同一 fold 谓词对「空转样本」（mutation 什么都不改）必须为
++    #    **false** ⇒ 证明 ⑰ 不是恒真、drift 构造一旦失效会被咬住（这条正是 O-1 要防的「空转」）。
++    $noopScen = New-RngDriftScenario -Source $ScenarioFile -Path (Join-Path $tmpRoot 'scenario-noop.json') `
++      -Mutate { param($s) $null = $s }
++    $noopBack = (Get-Content -LiteralPath $noopScen -Raw | ConvertFrom-Json)
++    $toothBites = ($null -ne $srcBack) -and (-not ($noopBack.trace.fold.construct -ne $srcBack.trace.fold.construct))
++    Add-Result 'scenario-drift-tooth-not-vacuous' $toothBites '空转样本 ⇒ 同一 fold 谓词为 false（牙非恒真、不空转）'
+ 
+     # ⑯ 本脚本从未触碰端口（自检/门/比较全离线）
+     Add-Result 'no-port-touched' (-not $script:RngSceneTouchedPorts) 'offline-only'

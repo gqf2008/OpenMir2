@@ -1,0 +1,45 @@
+# oracle 真身探针实跑（C#，直调 M2Server.Guild.*；零起栈、零端口）
+
+$ dotnet run --project mir2-rs/tests/parity/m3/guild-store-probe -c Release -- E:/tmp/m3cs-gfs-f1
+
+E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\src\OpenMir2\Otp\TotpOptions.cs(45,22): warning CS8632: 只能在 "#nullable" 注释上下文内的代码中使用可为 null 的引用类型的注释。 [E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\src\OpenMir2\OpenMir2.csproj]
+E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\src\OpenMir2\Otp\TotpOptions.cs(55,24): warning CS8632: 只能在 "#nullable" 注释上下文内的代码中使用可为 null 的引用类型的注释。 [E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\src\OpenMir2\OpenMir2.csproj]
+E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\src\OpenMir2\Otp\TotpOptions.cs(39,23): warning CS8632: 只能在 "#nullable" 注释上下文内的代码中使用可为 null 的引用类型的注释。 [E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\src\OpenMir2\OpenMir2.csproj]
+E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\src\OpenMir2\Packets\ClientPackets\Ability.cs(110,89): warning CS8632: 只能在 "#nullable" 注释上下文内的代码中使用可为 null 的引用类型的注释。 [E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\src\OpenMir2\OpenMir2.csproj]
+E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\src\OpenMir2\Packets\ClientPackets\Ability.cs(115,117): warning CS8632: 只能在 "#nullable" 注释上下文内的代码中使用可为 null 的引用类型的注释。 [E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\src\OpenMir2\OpenMir2.csproj]
+E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\src\OpenMir2\Base\SystemEnvironment.cs(179,29): warning CA1416: 可在所有平台上访问此调用站点。"UnicastIPAddressInformation.DuplicateAddressDetectionState" 在 'windows' 上受支持。 (https://learn.microsoft.com/dotnet/fundamentals/code-analysis/quality-rules/ca1416) [E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\src\OpenMir2\OpenMir2.csproj]
+E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\src\M2Server\ActorBuffSystem.cs(291,41): warning CS0675: 在经符号扩展的操作数上使用了按位“或”运算符；请考虑首先强制转换为较小的无符号类型 [E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\src\M2Server\M2Server.csproj]
+E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\src\M2Server\Castle\UserCastle.cs(442,30): warning CS0168: 声明了变量“ex”，但从未使用过 [E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\src\M2Server\M2Server.csproj]
+E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\src\M2Server\Actor\BaseObject.Base.cs(170,40): warning CS0675: 在经符号扩展的操作数上使用了按位“或”运算符；请考虑首先强制转换为较小的无符号类型 [E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\src\M2Server\M2Server.csproj]
+E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\src\M2Server\Actor\BaseObject.Base.cs(203,40): warning CS0675: 在经符号扩展的操作数上使用了按位“或”运算符；请考虑首先强制转换为较小的无符号类型 [E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\src\M2Server\M2Server.csproj]
+guild-store-probe: wrote 96 fields / 4 byte vectors -> E:\tmp\m3cs-gfs-f1b\vectors
+
+## 新增向量（I_alive_set）
+I_alive_set	find_存活会	True
+I_alive_set	find_同盟会	True
+I_alive_set	find_已亡会	False
+I_alive_set	war_count	1
+I_alive_set	war_0_name	同盟会
+I_alive_set	war_has_removed	False
+I_alive_set	member_已亡会	False
+
+## 新增逐字节向量
+I_alive_set_list_rewritten	828aed89fe0564ed19301e02ee5b75082305f74fb653b16c907905d6132f86e2	b4e6bbeebbe10d0acdacc3cbbbe10d0a
+
+## 探针临时树（不入库）
+drwxr-xr-x 1 gxh 197121   0 Oct 13 16:14 .
+drwxr-xr-x 1 gxh 197121   0 Oct 13 16:14 ..
+-rw-r--r-- 1 gxh 197121   0 Oct 13 16:14 乙会.ini
+-rw-r--r-- 1 gxh 197121  90 Oct 13 16:14 加载会.ini
+-rw-r--r-- 1 gxh 197121 121 Oct 13 16:14 加载会.txt
+-rw-r--r-- 1 gxh 197121   0 Oct 13 16:14 同盟会.ini
+-rw-r--r-- 1 gxh 197121  17 Oct 13 16:14 同盟会.txt
+-rw-r--r-- 1 gxh 197121   0 Oct 13 16:14 存活会.ini
+-rw-r--r-- 1 gxh 197121  33 Oct 13 16:14 存活会.txt
+-rw-r--r-- 1 gxh 197121   0 Oct 13 16:14 已亡会.ini
+-rw-r--r-- 1 gxh 197121   0 Oct 13 16:14 幽灵会.ini
+-rw-r--r-- 1 gxh 197121   0 Oct 13 16:14 截断会.ini
+-rw-r--r-- 1 gxh 197121 151 Oct 13 16:14 截断会.txt
+-rw-r--r-- 1 gxh 197121   0 Oct 13 16:14 无文件会.ini
+-rw-r--r-- 1 gxh 197121   0 Oct 13 16:14 甲会.ini
+-rw-r--r-- 1 gxh 197121  83 Oct 13 16:14 甲会.txt

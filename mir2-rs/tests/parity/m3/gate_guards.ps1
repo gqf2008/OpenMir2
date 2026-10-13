@@ -2143,3 +2143,211 @@ function Get-M3SessionSellOffScope {
   if ($null -eq $baseline) { return $null }
   return (ConvertTo-M3SellOffScope -Raw ([string]$baseline.selloff_sequence))
 }
+
+# ============================================================================
+# M3⑧ 公会/攻城（guild / castle）序列口径（卡 openmir2-m3-guild-castle-fixture-botsrv；白名单 T-46 家族扩展）
+#
+# 形态：`(off)` 或
+#   `on steps=<role|op|param;...> step_ms=<int> start_delay_ms=<int> master=<int> peer=<int> disable_autoplay=<True|False>`。
+# run_pair.ps1 / run_guild_castle_pair.ps1 / selftest 的构造输入共用本文件，避免口径漂移。
+# 语义：两侧必须**同一组开关**（steps/step/delay/master/peer/关挂机）——否则跨侧 diff 无仲裁力。
+function Format-M3GuildCastleScope {
+  param(
+    [bool]$GuildCastleSequence = $false,
+    [string]$GuildCastleSteps = '',
+    [int]$GuildCastleStepMs = 1000,
+    [int]$GuildCastleStartDelayMs = 3000,
+    [int]$GuildCastleMasterRole = 0,
+    [int]$GuildCastlePeerRole = 1,
+    [bool]$DisableAutoPlay = $false
+  )
+  if (-not $GuildCastleSequence) { return '(off)' }
+  $ap = if ($DisableAutoPlay) { 'True' } else { 'False' }
+  $steps = if ([string]::IsNullOrEmpty($GuildCastleSteps)) { '' } else { $GuildCastleSteps }
+  return ("on steps={0} step_ms={1} start_delay_ms={2} master={3} peer={4} disable_autoplay={5}" -f `
+    $steps, $GuildCastleStepMs, $GuildCastleStartDelayMs, $GuildCastleMasterRole, $GuildCastlePeerRole, $ap)
+}
+
+# baseline.json 里已存的 guild_castle_sequence 串 → canonical。缺 `disable_autoplay=` 位按 False 还原（旧产物）。
+# 返回 $null = 形态认不出（非空但不是本函数认识的标签）。
+function ConvertTo-M3GuildCastleScope {
+  param([AllowEmptyString()][string]$Raw)
+  if ([string]::IsNullOrWhiteSpace($Raw) -or $Raw.Trim() -eq '(off)') { return '(off)' }
+  if ($Raw -notmatch '^on\b') { return $null }
+  $m = [regex]::Match($Raw, '^on steps=(?<steps>\S*) step_ms=(?<step>\d+) start_delay_ms=(?<sd>\d+) master=(?<m>-?\d+) peer=(?<p>-?\d+) disable_autoplay=(?<ap>True|False)$')
+  if (-not $m.Success) { return $null }
+  return ("on steps={0} step_ms={1} start_delay_ms={2} master={3} peer={4} disable_autoplay={5}" -f `
+    $m.Groups['steps'].Value, $m.Groups['step'].Value, $m.Groups['sd'].Value, `
+    $m.Groups['m'].Value, $m.Groups['p'].Value, $m.Groups['ap'].Value)
+}
+
+# 参照会话行会/攻城开关一致性（机判；含 peer baseline.json 解析失败防线，同 P-1）。
+function Get-M3PeerGuildCastleScopeGuard {
+  param(
+    [Parameter(Mandatory)][string]$PeerDir,
+    [Parameter(Mandatory)][AllowEmptyString()][string]$LocalScope
+  )
+  $failed = New-Object System.Collections.Generic.List[string]
+  $messages = New-Object System.Collections.Generic.List[string]
+  $peerScope = $null
+  $baselinePath = Join-Path $PeerDir 'baseline.json'
+  if (-not (Test-Path $baselinePath)) {
+    $messages.Add(("RED: 参照会话缺 baseline.json: {0}" -f $baselinePath))
+    $failed.Add('peer_baseline_missing')
+    return [pscustomobject]@{ failed = @($failed); messages = @($messages); peer_scope = $peerScope }
+  }
+  $baseline = $null
+  $parseError = $null
+  try {
+    $baseline = Get-Content -Path $baselinePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+  } catch { $parseError = $_.Exception.Message }
+  if ($null -eq $baseline) {
+    if ([string]::IsNullOrWhiteSpace($parseError)) { $parseError = '内容为空或不是 JSON 对象（半写/截断）' }
+    $messages.Add(("RED: 参照会话 baseline.json 解析失败: {0} —— {1}" -f $baselinePath, $parseError))
+    $failed.Add('peer_baseline_invalid')
+    return [pscustomobject]@{ failed = @($failed); messages = @($messages); peer_scope = $peerScope }
+  }
+  $localCanon = ConvertTo-M3GuildCastleScope -Raw $LocalScope
+  $peerRaw = [string]$baseline.guild_castle_sequence
+  $peerCanon = ConvertTo-M3GuildCastleScope -Raw $peerRaw
+  $peerScope = $peerCanon
+  if ($null -eq $peerCanon) {
+    $messages.Add(("RED: 参照会话 guild_castle_sequence 形态认不出: '{0}'（{1}）" -f $peerRaw, $baselinePath))
+    $failed.Add('peer_guild_castle_scope_invalid')
+    return [pscustomobject]@{ failed = @($failed); messages = @($messages); peer_scope = $peerScope }
+  }
+  if ([string]::IsNullOrEmpty($peerRaw)) {
+    if ($localCanon -eq '(off)') { $peerCanon = '(off)'; $peerScope = '(off)' }
+    else {
+      $peerScope = '(missing)'
+      $messages.Add(("RED: 参照会话 baseline.json 缺 guild_castle_sequence（旧产物/被裁剪）: {0}" -f $baselinePath))
+      $failed.Add('peer_guild_castle_scope_missing')
+      return [pscustomobject]@{ failed = @($failed); messages = @($messages); peer_scope = $peerScope }
+    }
+  }
+  if ($peerCanon -ne $localCanon) {
+    $messages.Add((("-PeerSession 行会/攻城序列开关与本侧不一致——peer='{0}' vs local='{1}'；" +
+        "两侧不是同一组夹具开关，跨侧 diff 无仲裁力（steps/step/delay/master/peer/关挂机 必须一致）") -f $peerCanon, $localCanon))
+    $failed.Add('peer_guild_castle_scope_mismatch')
+    $messages.Insert(0, 'RED: 参照会话行会/攻城序列开关与本侧不一致')
+  }
+  return [pscustomobject]@{ failed = @($failed); messages = @($messages); peer_scope = $peerScope }
+}
+
+# 从会话目录的 baseline.json 读出行会/攻城序列开关标签（canonical）。
+# 缺 baseline.json / 解析失败 ⇒ $null（调用方当 PREREQ）；字段缺失 ⇒ '(off)'（旧产物默认关）。
+function Get-M3SessionGuildCastleScope {
+  param([Parameter(Mandatory)][string]$Dir)
+  $baselinePath = Join-Path $Dir 'baseline.json'
+  if (-not (Test-Path $baselinePath)) { return $null }
+  $baseline = $null
+  try {
+    $baseline = Get-Content -Path $baselinePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+  } catch { return $null }
+  if ($null -eq $baseline) { return $null }
+  return (ConvertTo-M3GuildCastleScope -Raw ([string]$baseline.guild_castle_sequence))
+}
+
+# ============================================================================
+# M3⑨ 英雄/宠物（宝宝/下属 slave）序列口径（卡 openmir2-m3-hero-pet-fixture-botsrv；白名单 T-45 家族扩展）
+#
+# 形态：`(off)` 或
+#   `on steps=<role|op|param;...> step_ms=<int> start_delay_ms=<int> master=<int> peer=<int> disable_autoplay=<True|False>`。
+# run_pair.ps1 / run_hero_pet_pair.ps1 / selftest 的构造输入共用本文件，避免口径漂移。
+# 语义：两侧必须**同一组开关**（steps/step/delay/master/peer/关挂机）——否则跨侧 diff 无仲裁力。
+function Format-M3HeroPetScope {
+  param(
+    [bool]$HeroPetSequence = $false,
+    [string]$HeroPetSteps = '',
+    [int]$HeroPetStepMs = 1000,
+    [int]$HeroPetStartDelayMs = 3000,
+    [int]$HeroPetMasterRole = 0,
+    [int]$HeroPetPeerRole = 1,
+    [bool]$DisableAutoPlay = $false
+  )
+  if (-not $HeroPetSequence) { return '(off)' }
+  $ap = if ($DisableAutoPlay) { 'True' } else { 'False' }
+  $steps = if ([string]::IsNullOrEmpty($HeroPetSteps)) { '' } else { $HeroPetSteps }
+  return ("on steps={0} step_ms={1} start_delay_ms={2} master={3} peer={4} disable_autoplay={5}" -f `
+    $steps, $HeroPetStepMs, $HeroPetStartDelayMs, $HeroPetMasterRole, $HeroPetPeerRole, $ap)
+}
+
+# baseline.json 里已存的 hero_pet_sequence 串 → canonical。缺 `disable_autoplay=` 位按 False 还原（旧产物）。
+# 返回 $null = 形态认不出（非空但不是本函数认识的标签）。
+function ConvertTo-M3HeroPetScope {
+  param([AllowEmptyString()][string]$Raw)
+  if ([string]::IsNullOrWhiteSpace($Raw) -or $Raw.Trim() -eq '(off)') { return '(off)' }
+  if ($Raw -notmatch '^on\b') { return $null }
+  $m = [regex]::Match($Raw, '^on steps=(?<steps>\S*) step_ms=(?<step>\d+) start_delay_ms=(?<sd>\d+) master=(?<m>-?\d+) peer=(?<p>-?\d+) disable_autoplay=(?<ap>True|False)$')
+  if (-not $m.Success) { return $null }
+  return ("on steps={0} step_ms={1} start_delay_ms={2} master={3} peer={4} disable_autoplay={5}" -f `
+    $m.Groups['steps'].Value, $m.Groups['step'].Value, $m.Groups['sd'].Value, `
+    $m.Groups['m'].Value, $m.Groups['p'].Value, $m.Groups['ap'].Value)
+}
+
+# 参照会话英雄/宠物开关一致性（机判；含 peer baseline.json 解析失败防线，同 P-1）。
+function Get-M3PeerHeroPetScopeGuard {
+  param(
+    [Parameter(Mandatory)][string]$PeerDir,
+    [Parameter(Mandatory)][AllowEmptyString()][string]$LocalScope
+  )
+  $failed = New-Object System.Collections.Generic.List[string]
+  $messages = New-Object System.Collections.Generic.List[string]
+  $peerScope = $null
+  $baselinePath = Join-Path $PeerDir 'baseline.json'
+  if (-not (Test-Path $baselinePath)) {
+    $messages.Add(("RED: 参照会话缺 baseline.json: {0}" -f $baselinePath))
+    $failed.Add('peer_baseline_missing')
+    return [pscustomobject]@{ failed = @($failed); messages = @($messages); peer_scope = $peerScope }
+  }
+  $baseline = $null
+  $parseError = $null
+  try {
+    $baseline = Get-Content -Path $baselinePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+  } catch { $parseError = $_.Exception.Message }
+  if ($null -eq $baseline) {
+    if ([string]::IsNullOrWhiteSpace($parseError)) { $parseError = '内容为空或不是 JSON 对象（半写/截断）' }
+    $messages.Add(("RED: 参照会话 baseline.json 解析失败: {0} —— {1}" -f $baselinePath, $parseError))
+    $failed.Add('peer_baseline_invalid')
+    return [pscustomobject]@{ failed = @($failed); messages = @($messages); peer_scope = $peerScope }
+  }
+  $localCanon = ConvertTo-M3HeroPetScope -Raw $LocalScope
+  $peerRaw = [string]$baseline.hero_pet_sequence
+  $peerCanon = ConvertTo-M3HeroPetScope -Raw $peerRaw
+  $peerScope = $peerCanon
+  if ($null -eq $peerCanon) {
+    $messages.Add(("RED: 参照会话 hero_pet_sequence 形态认不出: '{0}'（{1}）" -f $peerRaw, $baselinePath))
+    $failed.Add('peer_hero_pet_scope_invalid')
+    return [pscustomobject]@{ failed = @($failed); messages = @($messages); peer_scope = $peerScope }
+  }
+  if ([string]::IsNullOrEmpty($peerRaw)) {
+    if ($localCanon -eq '(off)') { $peerCanon = '(off)'; $peerScope = '(off)' }
+    else {
+      $peerScope = '(missing)'
+      $messages.Add(("RED: 参照会话 baseline.json 缺 hero_pet_sequence（旧产物/被裁剪）: {0}" -f $baselinePath))
+      $failed.Add('peer_hero_pet_scope_missing')
+      return [pscustomobject]@{ failed = @($failed); messages = @($messages); peer_scope = $peerScope }
+    }
+  }
+  if ($peerCanon -ne $localCanon) {
+    $messages.Add((("-PeerSession 英雄/宠物序列开关与本侧不一致——peer='{0}' vs local='{1}'；" +
+        "两侧不是同一组夹具开关，跨侧 diff 无仲裁力（steps/step/delay/master/peer/关挂机 必须一致）") -f $peerCanon, $localCanon))
+    $failed.Add('peer_hero_pet_scope_mismatch')
+    $messages.Insert(0, 'RED: 参照会话英雄/宠物序列开关与本侧不一致')
+  }
+  return [pscustomobject]@{ failed = @($failed); messages = @($messages); peer_scope = $peerScope }
+}
+
+# 从会话目录的 baseline.json 读出英雄/宠物序列开关标签（canonical）。
+# 缺 baseline.json / 解析失败 ⇒ $null（调用方当 PREREQ）；字段缺失 ⇒ '(off)'（旧产物默认关）。
+function Get-M3SessionHeroPetScope {
+  param([Parameter(Mandatory)][string]$Dir)
+  $baselinePath = Join-Path $Dir 'baseline.json'
+  if (-not (Test-Path $baselinePath)) { return $null }
+  $baseline = $null
+  try {
+    $baseline = Get-Content -Path $baselinePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+  } catch { return $null }
+  if ($null -eq $baseline) { return $null }
+  return (ConvertTo-M3HeroPetScope -Raw ([string]$baseline.hero_pet_sequence))
+}

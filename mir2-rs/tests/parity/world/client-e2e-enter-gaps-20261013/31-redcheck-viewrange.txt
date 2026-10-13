@@ -1,0 +1,58 @@
+openmir2-client-e2e-enter-gaps · 改坏必红（玩家 ViewRange 对齐片，2026-10-13）
+================================================================================
+【2026-10-13 订正 · 收口 reviewer-6 M-A】本文件原先页脚的 main.rs sha256 / 行号取自交付前的
+提交 `03257744`（bea2dff5… / panic 7413/7452），与合入 master 后的交付树不一致。本片（客户端帧
+可见性片⑤）触碰了本证据目录，按 reviewer 的要求在**当前交付树**重跑并重记 — 见末尾「订正后」。
+
+判据：把 new_player_entity 里的 `e.view_range = 12;` 删掉（退回缺省 5）⇒ 两条用例必红；
+      还原后必绿。改坏/还原都只动这一行，其余字节不变。
+
+命令（cwd=mir2-rs，CARGO_TARGET_DIR=E:/tmp/m2svr-target，--offline）：
+  cargo test -p game-svr --bin game-svr --offline player_aoi_window_covers_view_range_12
+  cargo test -p game-svr --bin game-svr --offline new_player_entity_sets_want_ref_msg
+
+================================================================================
+① 改坏后（删 `e.view_range = 12;`）——原始输出
+================================================================================
+=== mutated run ===
+test tests::player_aoi_window_covers_view_range_12 ... FAILED
+thread 'tests::player_aoi_window_covers_view_range_12' (32156) panicked at bins\game-svr\src\main.rs:7838:9:
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 189 filtered out; finished in 0.00s
+error: test failed, to rerun pass `-p game-svr --bin game-svr`
+rc1=101
+test tests::new_player_entity_sets_want_ref_msg ... FAILED
+thread 'tests::new_player_entity_sets_want_ref_msg' (1452) panicked at bins\game-svr\src\main.rs:7799:9:
+  left: 5
+ right: 12
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 189 filtered out; finished in 0.00s
+error: test failed, to rerun pass `-p game-svr --bin game-svr`
+rc2=101
+
+================================================================================
+② 还原后（保留 `e.view_range = 12;`）——原始输出
+================================================================================
+=== restored run ===
+test tests::player_aoi_window_covers_view_range_12 ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 189 filtered out; finished in 0.00s
+rc1=0
+test tests::new_player_entity_sets_want_ref_msg ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 189 filtered out; finished in 0.00s
+rc2=0
+9769c819d2e594f07c8c22313d0ed868dd951a4e
+
+================================================================================
+订正后（当前交付树，2026-10-13 片⑤触碰时重跑）——收口 reviewer-6 M-A
+================================================================================
+交付树 main.rs（还原态）git blob sha256 = 9769c819d2e594f07c8c22313d0ed868dd951a4e
+改坏态   main.rs            git blob sha256 = 89bf3091003b647cde6821766db4709f080dc910
+（`git hash-object mir2-rs/bins/game-svr/src/main.rs`；改坏 = 删 `main.rs:3486` 的
+ `    e.view_range = 12;`，git checkout 还原后 hash 回到 9769c819…）
+
+当前树上两条断言的 panic 位置与读数：
+  tests::player_aoi_window_covers_view_range_12  ⇒ panic bins/game-svr/src/main.rs:7838:9
+      「距离 12 的怪必须在玩家 25×25 窗口内（oracle ViewRange=12）：[1]」 rc=101
+  tests::new_player_entity_sets_want_ref_msg     ⇒ panic bins/game-svr/src/main.rs:7799:9
+      「assertion `left == right` failed: oracle PlayObject 构造器置 ViewRange=12（PlayObject.cs:904）」
+      left: 5 / right: 12  rc=101
+还原后两条均 ok / rc=0（原始输出见上「② 还原后」）。
+================================================================================

@@ -1,5 +1,9 @@
 using System;
 using System.Collections.Generic;
+using OpenMir2;
+using Serilog;
+using Serilog.Core;
+using Serilog.Events;
 
 namespace BotSrv
 {
@@ -79,10 +83,109 @@ namespace BotSrv
             });
             Check("say-first-643", sayFirst == "first", "got=" + sayFirst);
 
+            // ④ JSON 转义：字面 `<`/`>` → `\u003c`/`\u003e`（规避 Serilog 消息模板分词的丢括号缺陷；
+            //    真机缺陷 defect_3：C# k=0 任务 frame 载荷 `{`=2/`}`=1，json.loads 失败）。
+            const string angleText = "任务管理/<任务名称>/@rw01";
+            string escapedQuest = BotSrv.Player.RobotPlayer.QuestEsc(angleText);
+            Check("esc-angle-quest-no-raw",
+                escapedQuest.IndexOf('<') < 0 && escapedQuest.IndexOf('>') < 0
+                && escapedQuest.Contains("\\u003c") && escapedQuest.Contains("\\u003e"),
+                "got=" + escapedQuest);
+            string escapedShop = BotSrv.Player.RobotPlayer.ShopEsc(angleText);
+            Check("esc-angle-shop-no-raw",
+                escapedShop.IndexOf('<') < 0 && escapedShop.IndexOf('>') < 0
+                && escapedShop.Contains("\\u003c") && escapedShop.Contains("\\u003e"),
+                "got=" + escapedShop);
+            // 往返：用转义后的文本造 k=0 frame（嵌套 `{}` + 尖括号）⇒ 合法 JSON 且用真正的
+            //     JSON 解析器解码后说词还原（比较器侧走 json.loads，与此一致）。
+            string angleFrame = "{\"sm\":643,\"merchant\":1,\"face\":0,\"tag\":0,\"series\":1,\"text\":\""
+                + escapedQuest + "\"}";
+            string decodedText = null;
+            bool frameJsonOk = false;
+            try
+            {
+                using (var doc = System.Text.Json.JsonDocument.Parse(angleFrame))
+                {
+                    decodedText = doc.RootElement.GetProperty("text").GetString();
+                }
+                frameJsonOk = true;
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                frameJsonOk = false;
+            }
+            Check("esc-angle-frame-decode",
+                frameJsonOk && decodedText == angleText,
+                "json-ok=" + frameJsonOk + " decoded=" + (decodedText ?? "null"));
+
+            // ④b 根因回归（走真实 Serilog 通路，用内联 sink 取回 RenderMessage）：
+            //     固定载荷用**生产 escaper** 造；把转义改回去（不转义尖括号）⇒ Serilog 会丢末尾 `}`
+            //     ⇒ `fixedCaptured != fixedPayload` ⇒ 本条必 RED。老路径的丢失同时打印作证。
+            var captured = new List<string>();
+            LogService.Logger = new LoggerConfiguration().MinimumLevel.Debug()
+                .WriteTo.Sink(new CollectingSink(captured)).CreateLogger();
+            LogService.Info("{\"phase\":\"frame\",\"k\":0,\"frame\":{\"sm\":643,\"text\":\"<x>\"}}");
+            string rawCaptured = captured[captured.Count - 1];
+            string fixedPayload = "{\"phase\":\"frame\",\"k\":0,\"frame\":{\"sm\":643,\"text\":\""
+                + BotSrv.Player.RobotPlayer.QuestEsc("<x>") + "\"}}";
+            LogService.Info(fixedPayload);
+            string fixedCaptured = captured[captured.Count - 1];
+            Check("serilog-path-payload-intact",
+                fixedCaptured == fixedPayload,
+                "escaped-payload-via-serilog got=" + fixedCaptured);
+            Console.WriteLine("QUESTSEQ INFO serilog-raw-path-mangled="
+                + (rawCaptured != "{\"phase\":\"frame\",\"k\":0,\"frame\":{\"sm\":643,\"text\":\"<x>\"}}")
+                + " raw=" + rawCaptured);
+
+            // ④c reviewer-5 M-1（根因修法落在**日志出口**，不再只靠逐字段转义）：
+            //     `RobotPlayer.SerilogTemplateLiteral` 把整条消息当字面渲染，`MainOutMessage` 已改走它。
+            //     这样含嵌套 `{}` + 字面 `<`/`>` 的 M3*SEQ 载荷逐字节不变，且**新增字段自动安全**
+            //     （reviewer-5 M-2 随之消解）。改坏必红：把出口的 `SerilogTemplateLiteral` 去掉
+            //     ⇒ 下面的 raw-vs-literal 对照必挂（triggerRaw != triggerPayload）。
+            Check("logexit-brace-escape",
+                BotSrv.Player.RobotPlayer.SerilogTemplateLiteral("a{b}c{}") == "a{{b}}c{{}}",
+                "got=" + BotSrv.Player.RobotPlayer.SerilogTemplateLiteral("a{b}c{}"));
+            // 行为保持：正常标记（无 `<`/`>` 触发词）出口修前/修后渲染逐字节相同（不是顺手指改渲染）。
+            const string normalPayload = "机器人:[bot1] M3QUESTSEQ {\"phase\":\"frame\",\"k\":0,\"frame\":{\"sm\":643,\"text\":\"任务管理/确定开始[神秘洞口]任务吗？\"}}";
+            LogService.Info(normalPayload);
+            string normalRaw = captured[captured.Count - 1];
+            LogService.Info(BotSrv.Player.RobotPlayer.SerilogTemplateLiteral(normalPayload));
+            string normalLiteral = captured[captured.Count - 1];
+            Check("logexit-normal-marker-unchanged",
+                normalLiteral == normalPayload && normalRaw == normalPayload,
+                "literal-ok=" + (normalLiteral == normalPayload) + " raw-ok=" + (normalRaw == normalPayload));
+            // 缺陷触发载荷（嵌套 `{}` + 字面 `<>`）：raw 出口被 Serilog 吞末尾 `}`，出口修法逐字节保留。
+            const string triggerPayload = "机器人:[bot1] M3QUESTSEQ {\"phase\":\"frame\",\"k\":0,\"frame\":{\"sm\":643,\"text\":\"<x>\"}}";
+            LogService.Info(triggerPayload);
+            string triggerRaw = captured[captured.Count - 1];
+            LogService.Info(BotSrv.Player.RobotPlayer.SerilogTemplateLiteral(triggerPayload));
+            string triggerLiteral = captured[captured.Count - 1];
+            Check("logexit-payload-intact",
+                triggerLiteral == triggerPayload && triggerRaw != triggerPayload,
+                "literal-ok=" + (triggerLiteral == triggerPayload) + " raw-mangled=" + (triggerRaw != triggerPayload));
+            Console.WriteLine("QUESTSEQ INFO logexit raw-bytes=" + triggerRaw.Length
+                + " literal-bytes=" + triggerLiteral.Length + " payload-bytes=" + triggerPayload.Length);
+
             Console.WriteLine(failed == 0
                 ? "QUESTSEQ SELFTEST GREEN"
                 : $"QUESTSEQ SELFTEST RED ({failed} failed)");
             return failed == 0 ? 0 : 1;
+        }
+
+        /// <summary>无栈自检用的内联 Serilog sink：取回事件渲染后的 Message。</summary>
+        private sealed class CollectingSink : ILogEventSink
+        {
+            private readonly List<string> _items;
+
+            public CollectingSink(List<string> items)
+            {
+                _items = items;
+            }
+
+            public void Emit(LogEvent logEvent)
+            {
+                _items.Add(logEvent.RenderMessage());
+            }
         }
     }
 }

@@ -1,0 +1,51 @@
+openmir2-client-e2e-enter-gaps —— 缺口①/②「客户端侧帧可见性」真机抓包证据
+==========================================================================
+口径（owner acceptance_add 2026-10-13）：卡上 ①（进图是否真的下发 52/752）与 ②（同屏是否有怪）
+此前只有**服务端日志**；本片补**客户端侧**证据——用 tools/capture/mir2_proxy.py 在 7200
+（game-gate）前面透明代理，`--map 7200=127.0.0.1:7600`（影子 game-gate），客户端经代理连
+7200 ⇒ 代理 s2c 方向的字节就是**客户端收到的字节**；再用既有流水线
+`export_s2c.ps1`（segment_frames + GoldenExport + replay）解码为 capture.jsonl。
+
+栈：`tools/m2-acceptance/start_rust_stack.ps1 -RustBinDir E:/tmp/m2svr-target/debug`
+（MySQL 3306 + C# DBSrv/LoginSrv + Rust game-svr 5000 + Rust login/sel-gate 7000/7100
+ + 影子 game-gate 7600 + proxy 7200→7600）；客户端 D:\MirClient-run\MirClinet.exe；
+账号/角色 mir2test/aaa（比奇省）。命令：
+  powershell -File tools/client/mir_flow.ps1 -Account mir2test -Password mir2pass `
+      -OutDir <shots> -WalkClicks 0 -AutoPlaySec 12 -SkipReenter -SkipLogout -SkipTalk
+
+判据：两个 run 的 s2c 客户端字节里 52/752 必须出现（改坏/去掉下发 ⇒ 抓包里没有 ⇒ 见 42 的红检）；
+Run A 还必须在无线到怪的情况下出现 `10+41` 对（同屏出现帧）。
+
+=== Run A —— 默认（未设 MIR2_CLIENT_ABILITY_LAYOUT = oracle 40B 布局） ===
+proxy dump   : E:/tmp/m2svr-capture/runA-default/proxy
+  chunks.ndjson      sha256=e6a7918f573f59115326b8585a0578b38b99868e23ccf849a52e5590916f230a
+  conn-0001.s2c.bin  sha256=cb304d262020a7693d26af0634dc9699813d4f7cb8370111983f9c56a8e8250c  bytes=1820
+decoded capture : E:/tmp/m2svr-capture/runA-default/s2c/capture.jsonl  sha256=2ada5f74da2fae4bdf7512de073c1e96f395974ec1215dc76e0f5191ace8371b  s2c_frames=49
+client HUD shot : shots/rust-client-wire-oracle40-292-600.png
+
+入图自帧序列（客户端收到的字节，经 mir2_proxy 在 7200 抓包后 GoldenExport 解码）：
+  658,51,50,41,213,11029,42,766,54,5008,1106,52,752,811,46
+  52  SM_ABILITY     present=True  body_len=40 (expect 40)
+  752 SM_SUBABILITY  present=True  body_len=0
+  52 raw frame:
+  seq=13 ident=52 recog=0x00000000 tag=0 series=0 frame_len=72 body_len=40 body_segments=[{"len": 40, "sha256": "80ac78a12caa6d1b5cf321939413997e9639ff80d5ed5193be882ec6121471c7"}] body_sha256=80ac78a12caa6d1b5cf321939413997e9639ff80d5ed5193be882ec6121471c7 raw_hex=236464686b6460686a646f686b6464686b6564686b6464686b6565686b6464686b6b645f6b646b686b6764685f6464686b6464686b646668696464686b6462686b64676868643c21
+  752 raw frame:
+  seq=14 ident=752 recog=0x00000001 tag=0 series=0 frame_len=18 body_len=0 body_segments=[{"len": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}] body_sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 raw_hex=236564686b64506a6b656768646464686b21
+
+10 SM_TURN + 41 SM_FEATURECHANGED 同屏出现对（客户端收到的怪物外观帧）：count=12
+  SM_TURN recog=0x00000315  =>  SM_FEATURECHANGED recog=0x00000315  (turn_raw=2369676867646668696b65427b6664686b6a64736b6464686b64644b41425a445954634d5f62555f613e21)
+  SM_TURN recog=0x00000146  =>  SM_FEATURECHANGED recog=0x00000146  (turn_raw=2376656867646668696b653c7b6666686a676449436464686b64644b56413f696261556a21)
+  SM_TURN recog=0x00000198  =>  SM_FEATURECHANGED recog=0x00000198  (turn_raw=234865686364666869686544736665686a676449436464686b64644b56413f696261556a21)
+  SM_TURN recog=0x00000321  =>  SM_FEATURECHANGED recog=0x00000321  (turn_raw=235d67686b646668696b65466f6664686a6a64736b6464686b64644b41425a445954634d5f62555f613e21)
+  SM_TURN recog=0x0000012c  =>  SM_FEATURECHANGED recog=0x0000012c  (turn_raw=235c65685f646668695c65487b6665686b676449436464686b64644b56413f696261556a21)
+  SM_TURN recog=0x00000128  =>  SM_FEATURECHANGED recog=0x00000128  (turn_raw=235c656863646668695c65477b6664686a676449436464686b64644b56413f696261556a21)
+  SM_TURN recog=0x00000317  =>  SM_FEATURECHANGED recog=0x00000317  (turn_raw=236b676867646668695c65437b6667686a6a64736b6464686b64644b41425a445954634d5f62555f613e21)
+  SM_TURN recog=0x00000381  =>  SM_FEATURECHANGED recog=0x00000381  (turn_raw=234567686b646668695e65467b6665686b6a64736b6464686b64644b41425a445954634d5f62555f613e21)
+  SM_TURN recog=0x00000308  =>  SM_FEATURECHANGED recog=0x00000308  (turn_raw=2364676863646668695c654b776666686b6a64736b6464686b64644b41425a445954634d5f62555f613e21)
+  SM_TURN recog=0x00000329  =>  SM_FEATURECHANGED recog=0x00000329  (turn_raw=235d676863646668695d654a736666686b6a64736b6464686b64644b41425a445954634d5f62555f613e21)
+  SM_TURN recog=0x0000030e  =>  SM_FEATURECHANGED recog=0x0000030e  (turn_raw=236667685f646668695e6549736665686a6a64736b6464686b64644b41425a445954634d5f62555f613e21)
+  SM_TURN recog=0x00000331  =>  SM_FEATURECHANGED recog=0x00000331  (turn_raw=236167686b646668695e6542736665686a6a64736b6464686b64644b41425a445954634d5f62555f613e21)
+
+Run A 客户端 HUD 读数（截图 shots/rust-client-wire-oracle40-292-600.png）：HP 0/0、MP 655360/25165829、
+血球黑 —— 即**帧到了客户端但客户端按 58B TAbility 的 offset 22 读 HP（读到 oracle 40B 的 Exp 段 = 0）**，
+与 C# 对照组同病（21/22 已记）。这不是“没下发”，而是布局不匹配。

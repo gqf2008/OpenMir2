@@ -37,10 +37,10 @@
 # 判据本体自检（fail-closed + 改坏必红）：期望 SELFTEST ok=12/12 rc=0
 python -I mir2-rs/tests/parity/m3/drop-exp/drop_exp_diff.py selftest
 
-# 纯度门自检（fail-closed + 改坏必红）：期望 SELFTEST ok=16/16 rc=0
+# 纯度门自检（fail-closed + 改坏必红 + 真表承重）：期望 SELFTEST ok=23/23 rc=0
 python -I mir2-rs/tests/parity/m3/drop-exp/drop_exp_purity_gate.py selftest
 
-# 无栈自检：比较器 + 纯度门 + LF 写出 + 零端口；期望 SELFTEST ok=12/12 rc=0
+# 无栈自检：比较器 + 纯度门 + LF 写出 + 零端口；期望 SELFTEST ok=13/13 rc=0
 powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/drop-exp/run_drop_exp_pair.ps1 -SelfCheckNoStack
 
 # 场景纯度（离线；给该侧全场景抽数流水；认不出/未分类 ⇒ 点名 RED）
@@ -89,5 +89,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/drop
 5. **收工**：`-Stop` + 十端口实拍 + 卡上写「窗口已释放」+ 证据入库（`SHA256SUMS.txt` 按仓库 LF/git-blob 口径，含两侧纯度门的 `--json` 原始件）。
 
 > 现状：第 1/2 步的 BotSrv「掉落/经验序列」尚未实现（承接卡见报告），real-run 因此 fail-closed。
-> 纯度门（T-35）**离线已就绪**（门 selftest 16/16、无栈自检 12/12）；表里 Rust 侧 `measured` 行与场景 spawn/构造
-> 抽数要等 ④-D / 窗口实测后按实测清单补入——在此之前门对 Rust 判 `PREREQ`、对未分类站点判 `RED`（**拒绝假绿**）。
+> 纯度门（T-35）**离线已就绪**（门 selftest 23/23、无栈自检 13/13）；`drop_exp_consumers.tsv` 的
+> **两侧实测站点行**已按 oracle 源码 + 真机实测（C# 掉落/构造/墙钟 + `rng-isolate-attack/attack_sites.tsv` 的
+> 两侧攻击路径）与 ④-D（master `4521d451`）Rust 实现文件级锚补入：Rust 侧不再判 `PREREQ`，`measured`
+> （drop/kill）/`setup`（spawn/构造）/`wallclock`（monai/merchant）各类都有站点行；`max` 未实测者留 `*`，
+> 窗口期按真实计数收紧。未分类站点仍判 `RED`、墙钟站点仍判 `RED`（**拒绝假绿**）。

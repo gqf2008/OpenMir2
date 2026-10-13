@@ -1,0 +1,58 @@
+openmir2-client-e2e-enter-gaps 缺口②「同屏无怪」· oracle 锚点与 Rust 现状（2026-10-13，m2-svr / openmir2-worker-11）
+====================================================================================================
+
+一句话：oracle 玩家实体（`PlayObject`）构造器把 `ViewRange` 置 **12**，而 Rust 生产宿主
+`new_player_entity` 从未置它 ⇒ 玩家 AOI 扫描窗口只有 **11×11**（缺省 5），不是 oracle 的 **25×25**；
+Chebyshev 距离 **6..12** 的怪/其他 actor 不进 `visible_actors`，`drain_aoi_downlink` 也就不会发
+出现帧（`SM_TURN(10)`+`SM_FEATURECHANGED(41)`）⇒ 客户端在出生点/城墙外**同屏少怪**。
+
+本片只动 `bins/game-svr/src/main.rs`（单行 + 两条用例）；不动任何模拟/取数/RNG 语义。
+
+A. oracle 侧（`src/` = 冻结参照实现）
+--------------------------------------------------------------------------------
+[1] src/M2Server/Player/PlayObject.cs:904
+        ViewRange = 12;                       ← 玩家（PlayObject 构造器）
+[2] src/M2Server/Actor/BaseObject.cs:383
+        ViewRange = 5;                        ← BaseObject 缺省（Rust 的 `entity.rs` 缺省即照此）
+[3] src/M2Server/Actor/BaseObject.ViewRange.cs:57-74（SearchViewRange）
+        short nStartX = (short)(CurrX - ViewRange);
+        short nEndX   = (short)(CurrX + ViewRange);
+        short nStartY = (short)(CurrY - ViewRange);
+        short nEndY   = (short)(CurrY + ViewRange);
+      ⇒ 扫描是**边长 2*ViewRange+1 的正方形**：玩家 = 25×25（本片对齐后）。
+[4] src/M2Server/Actor/BaseObject.ViewRange.cs:112（可见过滤；Rust `crates/world/src/aoi.rs` 同构）
+        (Master != null) || NastyMode || WantRefMsg
+          || (baseObject.Master != null && |dx|<=3 && |dy|<=3)
+          || baseObject.Race == ActorRace.Play
+      ⇒ 玩家靠 `WantRefMsg=true`（`PlayObject.cs:889`）把**怪物**纳入可见集（非目标格内也靠窗口）。
+
+B. Rust 侧（现状 / 本片改前）
+--------------------------------------------------------------------------------
+[5] mir2-rs/crates/world/src/entity.rs:402
+        view_range: 5,   // BaseObject.cs:383        ← 缺省（本片不动）
+[6] mir2-rs/bins/game-svr/src/main.rs:3106  `fn new_player_entity(...)`
+        改前：`e.want_ref_msg = true;`  ← 仅此一行（对齐 PlayObject.cs:889）
+        改后：`e.want_ref_msg = true; e.view_range = 12;`  ← 再对齐 PlayObject.cs:904
+[7] 唯一生产调用点：mir2-rs/bins/game-svr/src/main.rs:5311（进世界）
+        let ent = new_player_entity(head.chr_name.clone(), enter_x, enter_y);
+        world.enter_map(&head.chr_name, ent, map_id)
+    全仓 `rg 'view_range'`（生产代码）无其它赋值点 ⇒ 改前玩家 AOI 窗口恒为 **11×11**。
+
+C. 影响面 / 归因（为什么这属于卡上「同屏无怪」）
+--------------------------------------------------------------------------------
+- `drain_aoi_downlink`（mir2-rs/bins/game-svr/src/main.rs:3308）只对 `visible_actors` 里
+  `flag == Show` 的对象发 `SM_TURN(10)` + `SM_FEATURECHANGED(41)`；不在窗口内的对象**从不出现**。
+- 因此窗口 11×11 vs 25×25 直接改变客户端**能看到哪些怪**（差值环带 = 距离 6..12）。
+- 这与「世界 tick 无实体」是两回事：同一份真机日志里 `实体内 9525`、`same_map=1726`（见 `10-…`）；
+  这里是**窗口太小** ⇒ 客户端同屏少怪，正是 owner 实测「出生点周围无怪」的可判原因之一。
+
+D. 本片未做（如实登记，不擅自扩写集）
+--------------------------------------------------------------------------------
+- 真机两侧同序列对拍：本窗口归 `window` 车道 / owner；本片只交**构造级**判据 + 改坏必红（见 31/32）。
+- **怪物侧 `ViewRange`**：oracle 各子类另有覆盖 —— `MonsterObject.cs:63` = 5（基类）；
+  `ArcherGuard.cs:14`=12、`BeeQueen.cs:15`=9、`BigHeartMonster.cs:11`=16、`CentipedeKing.cs:13`=6、
+  `DigOutZombi.cs:12`=7、`GasMothMonster.cs:11`=7、`GasDungMonster.cs:7`=7、`MagicMonster.cs:11`=8、
+  `ScultureMonster.cs:12`=7、`SpiderHouseMonster.cs:15`=9、`WhiteSkeleton.cs:17`=6、`ZilKinZombi.cs:14`=6 …
+  而 Rust `crates/world/src/combat.rs:1102 monster_from_row` 恒用缺省 5（= 基类值）。
+  ⇒ 对**基类**怪物等价；对**覆盖子类**是**未登记差异**（影响怪物 `SearchTarget`/AI 感知范围）。
+  归属属 M3④-C/怪物 AI 面（该卡已 closed），本片在卡上 comment 登记，交 owner 裁决；不擅自改。

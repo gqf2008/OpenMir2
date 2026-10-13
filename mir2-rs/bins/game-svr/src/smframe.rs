@@ -546,6 +546,92 @@ pub fn sm_action_hit(ident: u16, actor_id: i32, x: u16, y: u16, dir: u8) -> Vec<
     gm_data_body(header, &[])
 }
 
+/// **`openmir2-m3-pet-slave-summon`（第②片）**：`RM_SPELL` → `SM_SPELL(17)`
+/// （`PlayObject.Message.cs:1454-1459`）。
+///
+/// oracle `DoSpell` 第 159 行 `SendRefMsg(RM_SPELL, Magic.Effect, nTargetX, nTargetY, Magic.MagicId, "")`
+/// 广播给 ±`SendRefMsgRange` 内、非自己的玩家（`BaseObject.Message.cs:383-445`）；每个收件人：
+///
+/// ```text
+/// ClientMsg = MakeMessage(SM_SPELL, processMsg.ActorId, nParam1 /*=x*/, nParam2 /*=y*/, wParam /*=Effect*/)
+/// SendSocket(ClientMsg, processMsg.nParam3.ToString())   // 尾 = MagicId 的 ASCII 原文（不再 Encode）
+/// ```
+#[must_use]
+pub fn sm_spell(actor_id: i32, x: u16, y: u16, effect: u8, magic_id: u16) -> Vec<u8> {
+    let header = command_header(actor_id, messages::SM_SPELL, x, y, u16::from(effect));
+    gm_data_body(header, magic_id.to_string().as_bytes())
+}
+
+/// **`openmir2-m3-pet-slave-summon`（第②片）**：`RM_MAGICFIRE` → `SM_MAGICFIRE(638)`
+/// （`PlayObject.Message.cs:1788-1793`）。
+///
+/// oracle `DoSpell` 共享尾 `SendRefMsg(RM_MAGICFIRE, 0, MakeWord(EffectType, Effect), MakeLong(x,y), targetActorId, "")`
+/// （`MagicManager.cs:648-658`）。收件人：
+///
+/// ```text
+/// ClientMsg = MakeMessage(SM_MAGICFIRE, ActorId, LoWord(nParam2) /*=x*/, HiWord(nParam2) /*=y*/, nParam1 /*=MakeWord(EffectType,Effect)*/)
+/// sSendStr = EDCode.EncodeBuffer(BitConverter.GetBytes(nParam3 /*= targetActorId */), 4)
+/// SendSocket(ClientMsg, sSendStr)
+/// ```
+#[must_use]
+pub fn sm_magicfire(
+    actor_id: i32,
+    x: u16,
+    y: u16,
+    effect_type: u8,
+    effect: u8,
+    target_actor_id: i32,
+) -> Vec<u8> {
+    let header = command_header(
+        actor_id,
+        messages::SM_MAGICFIRE,
+        x,
+        y,
+        make_word(effect_type, effect),
+    );
+    gm_data_body(header, &edcode::encode(&target_actor_id.to_le_bytes()))
+}
+
+/// **`openmir2-m3-pet-slave-summon`（第②片）**：`RM_MAGIC_LVEXP` → `SM_MAGIC_LVEXP(640)`
+/// （`PlayObject.Message.cs:1800-1802`）。
+///
+/// oracle `DoSpell` 尾 `SendSelfDelayMsg(RM_MAGIC_LVEXP, 0, Magic.MagicId, Level, TranPoint, "", 1000)`
+/// （`MagicManager.cs:659-669`）→ 自有队列 → 收件人：
+/// `SendDefMessage(SM_MAGIC_LVEXP, nParam1 /*=MagicId*/, nParam2 /*=Level*/, LoWord(nParam3), HiWord(nParam3))`
+/// （`nParam3 = TranPoint`）。客户端（BotSrv `RobotPlayer.Operate.cs:1039`）回读
+/// `ClientGetMagicLvExp(Recog, Param, MakeLong(Tag, Series))` ⇒ `(MagicId, Level, TranPoint)`。
+#[must_use]
+pub fn sm_magic_lvexp(magic_id: u16, level: u8, tran_point: i32) -> Vec<u8> {
+    let header = command_header(
+        i32::from(magic_id),
+        messages::SM_MAGIC_LVEXP,
+        u16::from(level),
+        crate::feature::lo_word(tran_point),
+        crate::feature::hi_word(tran_point),
+    );
+    gm_data_body(header, &[])
+}
+
+/// **`openmir2-m3-pet-slave-summon`（第②片）**：`RM_DURACHANGE` → `SM_DURACHANGE(642)`
+/// （`PlayObject.Message.cs:1803-1805`）。
+///
+/// oracle `MagicBase.UseAmulet`（`MagicBase.cs:118-121`）
+/// `SendMsg(this, RM_DURACHANGE, idx, Dura, DuraMax, 0)` → 自有队列 → 收件人：
+/// `SendDefMessage(SM_DURACHANGE, nParam1 /*=Dura*/, wParam /*=idx*/, LoWord(nParam2), HiWord(nParam2))`
+/// （`nParam2 = DuraMax`）。BotSrv（`RobotPlayer.Operate.cs:1042`）回读
+/// `ClientGetDuraChange(Param /*=idx*/, Recog /*=Dura*/, MakeLong(Tag, Series) /*=DuraMax*/)`。
+#[must_use]
+pub fn sm_durachange(dura: u16, slot: u8, dura_max: u16) -> Vec<u8> {
+    let header = command_header(
+        i32::from(dura),
+        messages::SM_DURACHANGE,
+        u16::from(slot),
+        dura_max,
+        0,
+    );
+    gm_data_body(header, &[])
+}
+
 /// `SM_STRUCK`(31)/`SM_STRUCK_MAG`：受击者**自己**收到的受击帧
 /// （`PlayObject.Message.cs:1562-1628` 的 `RM_STRUCK` 支）。
 ///
@@ -748,6 +834,88 @@ impl EnterWorldInputs {
         }
         out
     }
+}
+
+/// 组队帧编码 —— M3⑦-实现 2（卡 `openmir2-m3-party-group-state`）。
+///
+/// 全部走 oracle `PlayObject.Socket.cs:17-25` 的 `SendDefMessage(ident, recog, param, tag, series)`：
+/// 12B 命令头 +（带 `sMsg` 时）尾 = `EDCode.EncodeString(sMsg)`。
+/// 组队帧的 `tag`/`series` 恒 0（唯一例外 `SM_SYSMESSAGE` 的 `series=1`，见 [`sm_sysmessage`]）。
+///
+/// `SM_GROUPMODECHANGED(659)`（`PlayObject.Message.cs:926/929`）：`SendDefMessage(659, 0, param, 0, 0)`，
+/// `param` = 1（开组）/0（关组），无尾。
+#[must_use]
+pub fn sm_groupmodechanged(param: u16) -> Vec<u8> {
+    gm_data_body(
+        command_header(0, messages::SM_GROUPMODECHANGED, param, 0, 0),
+        &[],
+    )
+}
+
+/// `SM_CREATEGROUP_OK(660)`（`PlayObject.Operate.cs:840`），无尾。
+#[must_use]
+pub fn sm_creategroup_ok() -> Vec<u8> {
+    gm_data_body(command_header(0, messages::SM_CREATEGROUP_OK, 0, 0, 0), &[])
+}
+
+/// `SM_CREATEGROUP_FAIL(661)`（`PlayObject.Operate.cs:816/820/825/830`；`recog ∈ {-1,-2,-3,-4}`），无尾。
+#[must_use]
+pub fn sm_creategroup_fail(recog: i32) -> Vec<u8> {
+    gm_data_body(
+        command_header(recog, messages::SM_CREATEGROUP_FAIL, 0, 0, 0),
+        &[],
+    )
+}
+
+/// `SM_GROUPADDMEM_OK(662)`（`PlayObject.Operate.cs:878`），无尾。
+#[must_use]
+pub fn sm_groupaddmem_ok() -> Vec<u8> {
+    gm_data_body(command_header(0, messages::SM_GROUPADDMEM_OK, 0, 0, 0), &[])
+}
+
+/// `SM_GROUPADDMEM_FAIL(664)`（`PlayObject.Operate.cs:852/857/861/866/871`；`recog ∈ {-1,-5,-2,-3,-4}`），无尾。
+#[must_use]
+pub fn sm_groupaddmem_fail(recog: i32) -> Vec<u8> {
+    gm_data_body(
+        command_header(recog, messages::SM_GROUPADDMEM_FAIL, 0, 0, 0),
+        &[],
+    )
+}
+
+/// `SM_GROUPDELMEM_OK(663)`（`PlayObject.Operate.cs:904`）：`SendDefMessage(663, 0,0,0,0, name)`
+/// ⇒ 尾 = `EncodeString(name)`。
+#[must_use]
+pub fn sm_groupdelmem_ok(name: &[u8]) -> Vec<u8> {
+    gm_data_body(
+        command_header(0, messages::SM_GROUPDELMEM_OK, 0, 0, 0),
+        &edcode::encode(name),
+    )
+}
+
+/// `SM_GROUPDELMEM_FAIL(665)`（`PlayObject.Operate.cs:890/894/900`；`recog ∈ {-1,-2,-3}`），无尾。
+#[must_use]
+pub fn sm_groupdelmem_fail(recog: i32) -> Vec<u8> {
+    gm_data_body(
+        command_header(recog, messages::SM_GROUPDELMEM_FAIL, 0, 0, 0),
+        &[],
+    )
+}
+
+/// `SM_GROUPCANCEL(666)`（`PlayObject.cs:5150` 的立即路径 / `PlayObject.Message.cs:1848-1850` 的
+/// `RM_GROUPCANCEL` 出队路径），无尾。
+#[must_use]
+pub fn sm_groupcancel() -> Vec<u8> {
+    gm_data_body(command_header(0, messages::SM_GROUPCANCEL, 0, 0, 0), &[])
+}
+
+/// `SM_GROUPMEMBERS(667)`（`PlayObject.Base.cs:1361-1366`）：`SendDefMessage(667, 0,0,0,0, sSendMsg)`
+/// ⇒ 尾 = `EncodeString("a/b/c/")`（逐成员 `ChrName + '/'` 拼接）。
+#[must_use]
+pub fn sm_groupmembers(members_text: &[u8]) -> Vec<u8> {
+    gm_data_body(
+        command_header(0, messages::SM_GROUPMEMBERS, 0, 0, 0),
+        &edcode::encode(members_text),
+    )
 }
 
 /// `HUtil32.LoWord`（低 16 位）。
@@ -1232,5 +1400,64 @@ mod tests {
         assert_eq!(cm.param, 0x7788, "LoWord(ClientFile2_CRC)");
         assert_eq!(cm.tag, 0x5566, "HiWord(ClientFile2_CRC)");
         assert_eq!(cm.series, 0);
+    }
+
+    /// **⑨-2 第②片**：`SM_SPELL`（`PlayObject.Message.cs:1454-1459`）与 `SM_MAGICFIRE`
+    /// （`:1788-1793`）的字段位与尾，照 oracle `MakeMessage`/`SendSocket` 的实参序。
+    #[test]
+    fn spell_and_magicfire_field_layout() {
+        use mir2_protocol::frame::CommandMessage;
+        let body = sm_spell(0x1122_3344, 0x0102, 0x0304, 7, 30);
+        let cm = CommandMessage::from_bytes(&body).unwrap();
+        assert_eq!(cm.recog, 0x1122_3344, "ActorId 在 Recog");
+        assert_eq!(cm.ident, messages::SM_SPELL);
+        assert_eq!(cm.param, 0x0102, "nTargetX 在 Param");
+        assert_eq!(cm.tag, 0x0304, "nTargetY 在 Tag");
+        assert_eq!(cm.series, 7, "Effect 在 Series");
+        assert_eq!(
+            &body[12..],
+            b"30",
+            "尾 = MagicId 的 ASCII 原文（`SendSocket(ClientMsg, nParam3.ToString())` 不再 Encode）"
+        );
+
+        let body = sm_magicfire(9, 0x1112, 0x1314, 5, 6, 0x0000_0021);
+        let cm = CommandMessage::from_bytes(&body).unwrap();
+        assert_eq!(cm.recog, 9, "ActorId 在 Recog");
+        assert_eq!(cm.ident, messages::SM_MAGICFIRE);
+        assert_eq!(cm.param, 0x1112, "nTargetX=LoWord(nParam2) 在 Param");
+        assert_eq!(cm.tag, 0x1314, "nTargetY=HiWord(nParam2) 在 Tag");
+        assert_eq!(
+            cm.series, 0x0605,
+            "MakeWord(EffectType=5, Effect=6) 在 Series"
+        );
+        assert_eq!(
+            &body[12..],
+            edcode::encode(&0x21_i32.to_le_bytes()),
+            "尾 = Encode(4B LE targetActorId)"
+        );
+    }
+
+    /// **⑨-2 第②片**：`SM_MAGIC_LVEXP` 与 `SM_DURACHANGE`（`PlayObject.Message.cs:1800-1805`）
+    /// 的字段位（无尾）。
+    #[test]
+    fn magic_lvexp_and_durachange_field_layout() {
+        use mir2_protocol::frame::CommandMessage;
+        let body = sm_magic_lvexp(30, 2, 0x0001_0002);
+        let cm = CommandMessage::from_bytes(&body).unwrap();
+        assert_eq!(cm.recog, 30, "MagicId=nParam1 在 Recog");
+        assert_eq!(cm.ident, messages::SM_MAGIC_LVEXP);
+        assert_eq!(cm.param, 2, "Level=nParam2 在 Param");
+        assert_eq!(cm.tag, 0x0002, "LoWord(TranPoint)");
+        assert_eq!(cm.series, 0x0001, "HiWord(TranPoint)");
+        assert!(body[12..].is_empty(), "无尾");
+
+        let body = sm_durachange(0x00C8, 5, 0x2710);
+        let cm = CommandMessage::from_bytes(&body).unwrap();
+        assert_eq!(cm.recog, 0x00C8, "Dura=nParam1 在 Recog");
+        assert_eq!(cm.ident, messages::SM_DURACHANGE);
+        assert_eq!(cm.param, 5, "ItemLocation=wParam 在 Param");
+        assert_eq!(cm.tag, 0x2710, "LoWord(DuraMax)");
+        assert_eq!(cm.series, 0, "HiWord(DuraMax)");
+        assert!(body[12..].is_empty(), "无尾");
     }
 }

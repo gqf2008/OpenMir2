@@ -1,0 +1,15 @@
+=== git status --short --untracked-files=no ===
+ M mir2-rs/tests/parity/m3/rng-trace-scene/README.md
+ M mir2-rs/tests/parity/m3/rng-trace-scene/rng_trace_scenario.json
+ M mir2-rs/tests/parity/m3/rng-trace-scene/run_rng_trace_pair.ps1
+
+=== git diff --name-status HEAD (tracked changes) ===
+M	mir2-rs/tests/parity/m3/rng-trace-scene/README.md
+M	mir2-rs/tests/parity/m3/rng-trace-scene/rng_trace_scenario.json
+M	mir2-rs/tests/parity/m3/rng-trace-scene/run_rng_trace_pair.ps1
+
+=== boundary: -- src sql MirClient mir2-rs/crates mir2-rs/bins (must be empty) ===
+(empty above = OK)
+
+=== .rs changed (must be none) ===
+(empty above = OK)

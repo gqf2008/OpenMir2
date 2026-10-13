@@ -1,0 +1,2 @@
+key=B system=全服 RNG 消费者账本（Claim B） runner_status=RUN-OK rc=0
+GREEN: 无栈自检全绿（场景前置门 fail-closed + folded 映射等价绿/计数·次序必红 + LF 写出 + 零端口）

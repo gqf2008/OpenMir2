@@ -1,0 +1,8 @@
+# 13 — four gates on the merged tree (base c127ae9a4 + this patch), CARGO_TARGET_DIR=E:/tmp/m3bag-wip-target
+
+$ cargo fmt --all -- --check            -> rc=0
+$ cargo clippy --workspace --all-targets --offline -- -D warnings -> rc=0
+$ cargo test --workspace --offline --no-fail-fast -> rc=0
+   suites=100 passed=1160 failed=0 ignored=22
+$ cargo run -p msgcodegen --offline -- --check -> rc=0
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。

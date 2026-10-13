@@ -1,0 +1,34 @@
+# 变更边界（相对 origin/master 9c776129c）
+
+$ git diff --cached --name-only origin/master
+mir2-rs/tests/parity/m3/evidence-m3-marker-skip-prefix-20261013/00-commands.txt
+mir2-rs/tests/parity/m3/evidence-m3-marker-skip-prefix-20261013/01-before-pristine-master.txt
+mir2-rs/tests/parity/m3/evidence-m3-marker-skip-prefix-20261013/01-master-red-before.txt
+mir2-rs/tests/parity/m3/evidence-m3-marker-skip-prefix-20261013/02-gate-check-green.txt
+mir2-rs/tests/parity/m3/evidence-m3-marker-skip-prefix-20261013/03-gate-selftest.txt
+mir2-rs/tests/parity/m3/evidence-m3-marker-skip-prefix-20261013/04-gate-mutation-red.txt
+mir2-rs/tests/parity/m3/evidence-m3-marker-skip-prefix-20261013/05-comparator-selftest-guild_castle_diff.txt
+mir2-rs/tests/parity/m3/evidence-m3-marker-skip-prefix-20261013/05-comparator-selftest-hero_pet_diff.txt
+mir2-rs/tests/parity/m3/evidence-m3-marker-skip-prefix-20261013/05-comparator-selftest-npc_shop_diff.txt
+mir2-rs/tests/parity/m3/evidence-m3-marker-skip-prefix-20261013/05-comparator-selftest-party_trade_diff.txt
+mir2-rs/tests/parity/m3/evidence-m3-marker-skip-prefix-20261013/05-comparator-selftest-quest_diff.txt
+mir2-rs/tests/parity/m3/evidence-m3-marker-skip-prefix-20261013/05-comparator-selftest-selloff_diff.txt
+mir2-rs/tests/parity/m3/evidence-m3-marker-skip-prefix-20261013/10-runner-selfchecks.txt
+mir2-rs/tests/parity/m3/evidence-m3-marker-skip-prefix-20261013/11-botsrv-skip-sites.txt
+mir2-rs/tests/parity/m3/evidence-m3-marker-skip-prefix-20261013/13-gate-fmt.txt
+mir2-rs/tests/parity/m3/evidence-m3-marker-skip-prefix-20261013/14-gate-clippy.txt
+mir2-rs/tests/parity/m3/evidence-m3-marker-skip-prefix-20261013/15-gate-test.txt
+mir2-rs/tests/parity/m3/evidence-m3-marker-skip-prefix-20261013/16-gate-msgcodegen.txt
+mir2-rs/tests/parity/m3/evidence-m3-marker-skip-prefix-20261013/README.md
+mir2-rs/tests/parity/m3/marker_prefix_gate.py
+src/BotSrv/Player/RobotPlayer.cs
+
+$ git diff --cached --name-only origin/master -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage  # 冻结面（期望仅 src/BotSrv，属 T-* 例外）
+src/BotSrv/Player/RobotPlayer.cs
+
+$ git diff --cached --stat origin/master
+ .../16-gate-msgcodegen.txt                         |    3 +
+ .../README.md                                      |   87 +
+ mir2-rs/tests/parity/m3/marker_prefix_gate.py      |  120 +-
+ src/BotSrv/Player/RobotPlayer.cs                   |   32 +-
+ 21 files changed, 2817 insertions(+), 29 deletions(-)

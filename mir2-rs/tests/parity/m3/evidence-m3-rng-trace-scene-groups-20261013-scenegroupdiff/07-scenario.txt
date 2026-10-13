@@ -1,0 +1,10 @@
+RNG_SCENE_SCENARIO scenario=rng-trace-scene/rng_trace_scenario.json checks=8 failed=0
+  CHECK scenario-canon                     ok
+  CHECK scenario-fields                    ok
+  CHECK scenario-trace-present             ok
+  CHECK scenario-fold-code-valid           ok
+  CHECK scenario-fold-declared             ok
+  CHECK scenario-fold-matches-code         ok
+  CHECK scenario-groups-declared           ok
+  CHECK scenario-groups-known              ok
+  VERDICT GREEN: scenario 自洽且 folded 映射/组清单与代码同口径

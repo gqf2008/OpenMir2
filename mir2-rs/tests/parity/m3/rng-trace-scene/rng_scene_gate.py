@@ -33,24 +33,43 @@ Claim B 基线报告（`M3全服RNG消费者结构一致性基线报告-20261013
 两侧互比且等于 scenario 声明（= 「Monster 集合同口径」），并核对 `map` / `seed` / `start_pose`。
 任一项不等或缺失 ⇒ **fail-closed 点名 RED**，`groupdiff` 的次序结论不得采信。
 
+**制品级同种子（`--a-stream` / `--b-stream`）**：描述件里的 `seed` 是**自报**，不是证据。
+DoD① 要求「两侧 trace 必须来自同场景/同起点/**同种子**」⇒ 门在两份 trace 流水在场时，还要核对
+**流水头**的 `INJECT_OK <seed>`（两侧生产者都写：C# `rng-hook` 与 Rust `crates/shared/src/rng_trace.rs`）：
+缺该行 ⇒ 无法证明种子（fail-closed RED）；`INJECT_OK <seed>` ≠ scenario.seed ⇒ RED。
+**只给一侧流水** ⇒ 无法证明两侧的种子 ⇒ **PREREQ fail-closed**（半份证据不算证据，`stream-pair-required`）；
+两侧都不给 ⇒ 该组检查不参与（保持既有描述件级门行为，向后兼容）。
+
 ## 用法
 
     python -I rng_scene_gate.py gate --scenario rng_trace_scenario.json \
-        --a <csharp-scene.json> --b <rust-scene.json> [--json out.json]
+        --a <csharp-scene.json> --b <rust-scene.json> \
+        [--a-stream <csharp-rng-stream.tsv> --b-stream <rust-rng-stream.tsv>] [--json out.json]
+    python -I rng_scene_gate.py scenario --scenario rng_trace_scenario.json [--json out.json]
     python -I rng_scene_gate.py selftest
 
-退出码：0 = GREEN（同场景）；1 = RED（场景不一致，点名哪一项）；2 = PREREQ（缺件 / 坏 JSON）。
+退出码：0 = GREEN（同场景 / scenario 与代码同口径）；1 = RED（场景不一致 或 声明漂移，点名哪一项）；
+2 = PREREQ（缺件 / 坏 JSON）。
 """
 
 import argparse
 import collections
 import json
 import os
+import re
 import sys
 
 SCENARIO_CANON = "m3-rng-trace-scene-v1"
 DESCRIPTOR_CANON = "m3-rng-scene-descriptor-v1"
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+# 账本实现（`rng_consumer_groups.FOLD_RULES` / `KNOWN_GROUPS`）是 scenario 所声明
+# 「folded 映射 / 组名清单」的**真源**。门要机判 scenario 声明与代码同口径（M-1 的 sibling：
+# 同一族 doc-vs-code 漂移），故直接 import 同一份实现，而不是在手抄一份又会漂。
+_PROBE_DIR = os.path.normpath(os.path.join(HERE, os.pardir, "rng-trace-probe"))
+if _PROBE_DIR not in sys.path:
+    sys.path.insert(0, _PROBE_DIR)
+import rng_consumer_groups as rcg  # noqa: E402  (路径修正后再导入)
 
 
 def _read_json(path):
@@ -114,6 +133,26 @@ def fixture_rows(path):
     return rows
 
 
+def stream_inject_seed(path):
+    """从 RNG 流水**头部**读 `INJECT_OK <seed>`（制品级种子证据）。
+
+    两侧生产者都在流水头写 `1\tINJECT_OK\t<seed>\t0`（C# `rng-hook` 与 Rust
+    `crates/shared/src/rng_trace.rs`）。返回 `(found, seed, lineno)`：`found=False` 表示
+    扫描窗口内没有该行 ⇒ 无法证明该侧 trace 的种子（调用方必须 fail-closed，不许静默绿）。
+    文件不可读 ⇒ 抛 `OSError`（由调用方转 PREREQ）。
+    """
+    with open(path, "r", encoding="utf-8-sig", errors="replace") as fh:
+        for lineno, line in enumerate(fh, 1):
+            if lineno > 100:
+                break
+            parts = line.rstrip("\r\n").split("\t")
+            if len(parts) >= 3 and parts[1].strip() == "INJECT_OK":
+                seed = _as_int(parts[2])
+                if seed is not None:
+                    return True, seed, lineno
+    return False, None, None
+
+
 def _mongen_counter(obj):
     if not isinstance(obj, list):
         return None
@@ -143,7 +182,43 @@ class GateResult(object):
         return [(n, d) for n, ok, d in self.checks if not ok]
 
 
-def run_gate(scenario_path, a_path, b_path):
+def scenario_trace_checks(scenario, res):
+    """scenario 级「声明 vs 代码」一致性（M-1 sibling）。
+
+    scenario 是人对夹具的**声明**，账本实现（`rcg.FOLD_RULES` / `rcg.KNOWN_GROUPS`）是**真源**。
+    两者漂移 ⇒ `groupdiff --fold` 用的映射与 scenario 写的不是一回事、`groups_expected` 里
+    写着账本根本不认识的组，而无人察觉。因此把这两项也做成机判（缺声明 ⇒ fail-closed RED，
+    不许静默绿）。判据锚在代码真源上，不手抄常量。
+    """
+    trace = scenario.get("trace")
+    res.check("scenario-trace-present", isinstance(trace, dict),
+              "scenario.trace=%r（必须是对象）" % (trace,))
+    if not isinstance(trace, dict):
+        trace = {}
+
+    # 代码侧折叠规则自身必须自洽（已知组→已知组、源≠目标）。
+    fold_problems = rcg.validate_folds()
+    res.check("scenario-fold-code-valid", not fold_problems, "; ".join(fold_problems))
+
+    # scenario 声明的 folded 映射必须与代码 FOLD_RULES 逐项相等。
+    declared = trace.get("fold")
+    res.check("scenario-fold-declared", isinstance(declared, dict) and len(declared) >= 1,
+              "scenario.trace.fold=%r（必须显式声明折叠映射）" % (declared,))
+    res.check("scenario-fold-matches-code",
+              isinstance(declared, dict)
+              and {str(k): str(v) for k, v in declared.items()} == dict(rcg.FOLD_RULES),
+              "scenario.trace.fold=%r code.FOLD_RULES=%r" % (declared, dict(rcg.FOLD_RULES)))
+
+    # groups_expected 里每个组名都必须是账本已知组。
+    groups = trace.get("groups_expected")
+    res.check("scenario-groups-declared", isinstance(groups, list) and len(groups) >= 1,
+              "scenario.trace.groups_expected=%r（必须显式声明组清单）" % (groups,))
+    unknown = [g for g in groups if g not in rcg.KNOWN_GROUPS] if isinstance(groups, list) else []
+    res.check("scenario-groups-known", isinstance(groups, list) and not unknown,
+              "未知组 %s（已知：%s）" % (unknown, "、".join(rcg.KNOWN_GROUPS)))
+
+
+def run_gate(scenario_path, a_path, b_path, a_stream=None, b_stream=None):
     res = GateResult()
     for label, path in (("scenario", scenario_path), ("a", a_path), ("b", b_path)):
         if not path or not os.path.exists(path):
@@ -176,6 +251,8 @@ def run_gate(scenario_path, a_path, b_path):
     res.check("scenario-fields", bool(sc_map) and sc_seed is not None
               and sc_pose is not None and sc_monsters is not None,
               "map/seed/start_pose/monsters 必须齐备且可解析")
+    # scenario 声明的 folded 映射 / 组名清单必须与账本实现同口径（M-1 sibling）。
+    scenario_trace_checks(scenario, res)
 
     # 两侧描述件自身可解析。
     for label, d in (("a", a), ("b", b)):
@@ -248,6 +325,49 @@ def run_gate(scenario_path, a_path, b_path):
             except ValueError:
                 # 跨盘（冻结件在 scenario 同目录、脚本在另一盘）⇒ 直接记 scenario 声明的相对路径。
                 res.scene["mongen_fixture"] = fixture_rel
+
+    # 制品级同种子：描述件自报不算数，核两份 trace 流水头的 `INJECT_OK <seed>`。
+    # 任一侧给了流水但缺该行 / 与 scenario.seed 不等 ⇒ fail-closed 点名（DoD① fail-closed 拒比）。
+    if a_stream or b_stream:
+        # 只给一侧流水 ⇒ 无法证明**两侧**的制品级种子 ⇒ fail-closed PREREQ（不许把「半份证据」
+        # 当绿）。DoD① 入口 `-SceneGroupDiff` 恒传两侧；本牙只咬住直接 CLI 的半给用法。
+        if bool(a_stream) != bool(b_stream):
+            missing = "b" if a_stream else "a"
+            res.fail_prereq(
+                "stream-pair-required",
+                "制品级同种子门要求两侧流水齐备或都不给；只给了 a=%r b=%r（缺 %s 侧）"
+                % (a_stream, b_stream, missing))
+            # reviewer-6 O-1（Minor）：PREREQ 已成立 ⇒ 早退，不再对已给的那一侧跑 seed 检查
+            # （否则输出里会多一条无意义的 `stream-seed-equal:*`，`failed=1 checks=29`）。
+            # rc/终局 VERDICT 本就是 fail-closed，这里只去掉冗余。
+            return res
+        seeds = {}
+        for label, stream in (("a", a_stream), ("b", b_stream)):
+            if not stream:
+                continue
+            if not os.path.exists(stream):
+                res.fail_prereq("stream-exists:" + label, "找不到流水 %s" % stream)
+                continue
+            try:
+                found, seed, lineno = stream_inject_seed(stream)
+            except OSError as exc:
+                res.fail_prereq("stream-read:" + label, str(exc))
+                continue
+            res.scene[label + "_stream"] = stream
+            res.scene[label + "_stream_seed"] = seed
+            if not found:
+                res.check("stream-inject-ok:" + label, False,
+                          "%s 流水头 100 行内无 `INJECT_OK <seed>` ⇒ 无法证明该侧 trace 的种子（fail-closed）"
+                          % stream)
+            elif sc_seed is not None and seed != sc_seed:
+                res.check("stream-seed-equal:" + label, False,
+                          "%s 流水头 INJECT_OK seed=%r scenario.seed=%r" % (stream, seed, sc_seed))
+            else:
+                res.check("stream-seed-equal:" + label, True)
+                seeds[label] = seed
+        if "a" in seeds and "b" in seeds:
+            res.check("stream-seed-equal:a-vs-b", seeds["a"] == seeds["b"],
+                      "a=%r b=%r" % (seeds["a"], seeds["b"]))
     return res
 
 
@@ -274,8 +394,58 @@ def print_gate(res, scenario_path, a_path, b_path):
         print("  VERDICT GREEN: 两侧同场景/同起点/同种子（MonGen+Monster 集合同口径）")
 
 
+def cmd_scenario(args):
+    """只校验 scenario 件自身（不需要两侧描述件）：canon/字段 + 声明 vs 代码一致。
+
+    供无栈自检在**离线**上锁住已入库的 `rng_trace_scenario.json`（不让它随代码漂移）；
+    与 `gate` 的差别仅在于不检两侧描述件。退出码：0 GREEN / 1 RED / 2 PREREQ。
+    """
+    res = GateResult()
+    if not args.scenario or not os.path.exists(args.scenario):
+        res.fail_prereq("file-exists:scenario", "找不到 %s" % (args.scenario or "(空)"))
+    else:
+        try:
+            scenario = _read_json(args.scenario)
+        except (OSError, ValueError) as exc:
+            res.fail_prereq("scenario-parse", str(exc))
+        else:
+            res.check("scenario-canon", scenario.get("canon") == SCENARIO_CANON,
+                      "scenario.canon=%r" % scenario.get("canon"))
+            res.check("scenario-fields",
+                      bool(scenario.get("map")) and _as_int(scenario.get("seed")) is not None
+                      and parse_pose(scenario.get("start_pose")) is not None
+                      and parse_monsters(scenario.get("monsters")) is not None,
+                      "map/seed/start_pose/monsters 必须齐备且可解析")
+            scenario_trace_checks(scenario, res)
+    total, failed = len(res.checks), res.failed
+    print("RNG_SCENE_SCENARIO scenario=%s checks=%d failed=%d" % (args.scenario, total, len(failed)))
+    for name, ok, detail in res.checks:
+        print("  CHECK %-34s %s%s" % (name, "ok" if ok else "FAIL",
+                                        (" (%s)" % detail) if detail and not ok else ""))
+    for name, detail in res.prereq:
+        print("  PREREQ_MISSING %s: %s" % (name, detail))
+    if args.json:
+        with open(args.json, "w", encoding="utf-8", newline="\n") as fh:
+            json.dump({"scenario": args.scenario,
+                       "checks": [{"name": n, "ok": ok, "detail": d} for n, ok, d in res.checks],
+                       "prereq": [{"name": n, "detail": d} for n, d in res.prereq],
+                       "verdict": "PREREQ" if res.prereq else ("RED" if res.failed else "GREEN")},
+                      fh, ensure_ascii=False, indent=2)
+            fh.write("\n")
+    if res.prereq:
+        print("  VERDICT PREREQ: scenario 件缺失/不可解析（fail-closed）")
+        return 2
+    if res.failed:
+        print("  VERDICT RED: scenario 声明与代码真源不一致（fail-closed）：%s"
+              % ", ".join(n for n, _ in failed))
+        return 1
+    print("  VERDICT GREEN: scenario 自洽且 folded 映射/组清单与代码同口径")
+    return 0
+
+
 def cmd_gate(args):
-    res = run_gate(args.scenario, args.a, args.b)
+    res = run_gate(args.scenario, args.a, args.b,
+                   a_stream=getattr(args, "a_stream", ""), b_stream=getattr(args, "b_stream", ""))
     print_gate(res, args.scenario, args.a, args.b)
     if args.json:
         with open(args.json, "w", encoding="utf-8", newline="\n") as fh:
@@ -310,6 +480,9 @@ def _mk_scenario(path, mongen_rel):
         "start_pose": {"x": 17, "y": 20, "dir": 2},
         "monsters": [{"name": "稻草人", "x": 18, "y": 20, "dir": 0, "count": 1}],
         "mongen_fixture": mongen_rel,
+        # scenario 声明的 folded 映射/组清单必须与代码真源同口径（机判）；合成件直接用真源值。
+        "trace": {"fold": dict(rcg.FOLD_RULES),
+                  "groups_expected": ["monster_ai", "spawn", "drop"]},
     })
 
 
@@ -358,10 +531,17 @@ def cmd_selftest(_args):
         _mk_descriptor(a1, "csharp")
         _mk_descriptor(b1, "rust")
 
-        def run(scen_p, a_p, b_p):
+        def run(scen_p, a_p, b_p, a_stream="", b_stream=""):
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
-                rc = cmd_gate(argparse.Namespace(scenario=scen_p, a=a_p, b=b_p, json=""))
+                rc = cmd_gate(argparse.Namespace(scenario=scen_p, a=a_p, b=b_p,
+                                                 a_stream=a_stream, b_stream=b_stream, json=""))
+            return rc, buf.getvalue()
+
+        def run_scen(scen_p):
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+                rc = cmd_scenario(argparse.Namespace(scenario=scen_p, json=""))
             return rc, buf.getvalue()
 
         rc, out = run(scen, a1, b1)
@@ -403,7 +583,9 @@ def cmd_selftest(_args):
         _write_json(scen_r, {"canon": SCENARIO_CANON, "seed": 42, "map": "R",
                              "start_pose": {"x": 7, "y": 9, "dir": 0},
                              "monsters": [{"name": "僵尸1", "x": 7, "y": 9, "dir": 0, "count": 1}],
-                             "mongen_fixture": "mongen-mapR.tsv"})
+                             "mongen_fixture": "mongen-mapR.tsv",
+                             "trace": {"fold": dict(rcg.FOLD_RULES),
+                                       "groups_expected": ["monster_ai", "spawn", "drop"]}})
         ar = os.path.join(tmp, "a-r.json")
         br = os.path.join(tmp, "b-r.json")
         _mk_descriptor(ar, "csharp", map_name="R", pose=(7, 9, 0),
@@ -439,6 +621,87 @@ def cmd_selftest(_args):
         _mk_descriptor(b_same, "csharp")
         rc, out = run(scen, a1, b_same)
         check("same-side-red", rc == 1 and "sides-distinct" in out, out[:300])
+
+        # 制品级同种子（DoD①「两侧 trace 同种子」的**流水头**证据，而非描述件自报）。
+        def mk_stream(path, seed, inject=True):
+            lines = []
+            if inject:
+                lines.append("1\tINJECT_OK\t%d\t0" % seed)
+                lines.append("SEED_PROBE 1 2 3 4 5 6 7 8")
+            lines.append("1\tNext(max)\t10\t7\tMeasured.Drop@Measured.cs:10")
+            with open(path, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write("\n".join(lines) + "\n")
+
+        sa = os.path.join(tmp, "a-stream.tsv")
+        sb = os.path.join(tmp, "b-stream.tsv")
+        mk_stream(sa, 42)
+        mk_stream(sb, 42)
+        rc, out = run(scen, a1, b1, sa, sb)
+        check("stream-seed-green",
+              rc == 0 and "CHECK stream-seed-equal:a" in out and "CHECK stream-seed-equal:b" in out
+              and "VERDICT GREEN" in out, out[:500])
+
+        sb_wrong = os.path.join(tmp, "b-stream-wrong.tsv")
+        mk_stream(sb_wrong, 43)
+        rc, out = run(scen, a1, b1, sa, sb_wrong)
+        check("stream-seed-mismatch-red",
+              rc == 1 and "stream-seed-equal:b" in out and "VERDICT RED" in out, out[:500])
+
+        sb_noheader = os.path.join(tmp, "b-stream-noheader.tsv")
+        mk_stream(sb_noheader, 42, inject=False)
+        rc, out = run(scen, a1, b1, sa, sb_noheader)
+        check("stream-inject-header-missing-red",
+              rc == 1 and "stream-inject-ok:b" in out and "VERDICT RED" in out, out[:500])
+
+        rc, out = run(scen, a1, b1, sa, os.path.join(tmp, "no-such-stream.tsv"))
+        check("stream-missing-prereq", rc == 2 and "PREREQ_MISSING" in out, out[:300])
+
+        # 未给流水 ⇒ 保持既有描述件级门行为（stream 检查不参与；向后兼容）。
+        rc, out = run(scen, a1, b1)
+        check("stream-absent-backward-compatible",
+              rc == 0 and "stream-seed-equal" not in out and "stream-inject-ok" not in out, out[:300])
+
+        # 只给一侧流水 ⇒ PREREQ fail-closed（半份证据不算证据；改坏必红：去掉 stream-pair-required
+        # 守卫 ⇒ 本用例 rc 变 0，selftest 立即点名 FAIL）。
+        rc, out = run(scen, a1, b1, sa)
+        check("stream-pair-prereq-red",
+              rc == 2 and "stream-pair-required" in out and "PREREQ_MISSING" in out
+              and "stream-seed-equal:a" not in out, out[:400])
+
+        # `scenario` 模式（离线锁住已入库 scenario）：正样本绿 / 缺件 PREREQ。
+        rc, out = run_scen(scen)
+        check("scenario-mode-green", rc == 0 and "VERDICT GREEN" in out, out[:300])
+        rc, out = run_scen(os.path.join(tmp, "scenario-does-not-exist.json"))
+        check("scenario-mode-prereq", rc == 2 and "PREREQ_MISSING" in out, out[:200])
+
+        # 改坏⑥：scenario 声明的 folded 映射与代码 FOLD_RULES 漂移 ⇒ 必红且点名。
+        scen_fold_drift = os.path.join(tmp, "scenario-fold-drift.json")
+        scen_obj = _read_json(scen)
+        scen_obj["trace"] = {"fold": {"construct": "monster_ai"},   # 已知组但 ≠ 代码映射
+                             "groups_expected": ["monster_ai", "spawn", "drop"]}
+        _write_json(scen_fold_drift, scen_obj)
+        rc, out = run(scen_fold_drift, a1, b1)
+        check("scenario-fold-drift-red",
+              rc == 1 and "scenario-fold-matches-code" in out and "VERDICT RED" in out, out[:500])
+
+        # 改坏⑦：scenario 缺 trace.fold 声明 ⇒ fail-closed 红（不许静默绿）。
+        scen_fold_missing = os.path.join(tmp, "scenario-fold-missing.json")
+        scen_obj = _read_json(scen)
+        scen_obj["trace"] = {"groups_expected": ["monster_ai"]}
+        _write_json(scen_fold_missing, scen_obj)
+        rc, out = run(scen_fold_missing, a1, b1)
+        check("scenario-fold-missing-red",
+              rc == 1 and "scenario-fold-declared" in out, out[:400])
+
+        # 改坏⑧：groups_expected 里出现账本不认识的组 ⇒ 必红且点名。
+        scen_grp_bad = os.path.join(tmp, "scenario-groups-unknown.json")
+        scen_obj = _read_json(scen)
+        scen_obj["trace"] = {"fold": dict(rcg.FOLD_RULES),
+                             "groups_expected": ["monster_ai", "no_such_group"]}
+        _write_json(scen_grp_bad, scen_obj)
+        rc, out = run(scen_grp_bad, a1, b1)
+        check("scenario-groups-unknown-red",
+              rc == 1 and "scenario-groups-known" in out, out[:400])
     finally:
         for name in os.listdir(tmp):
             try:
@@ -454,7 +717,10 @@ def cmd_selftest(_args):
             sys.stdout.write("  FAIL %s (%s)\n" % (n, d))
     if failed:
         return 1
-    sys.stdout.write("GREEN: 场景前置门 selftest 全绿（同场景绿 + seed/怪集合/起点/map/MonGen 漂移必红 + 缺件/坏 JSON PREREQ fail-closed）\n")
+    sys.stdout.write("GREEN: 场景前置门 selftest 全绿（同场景绿 + seed/怪集合/起点/map/MonGen 漂移必红 "
+                     "+ 流水头同种子制品级门（同种子绿 / 异种子·缺 INJECT_OK 必红 / 缺件 PREREQ / "
+                     "只给一侧流水 PREREQ / 未给流水向后兼容） "
+                     "+ scenario 声明 vs 代码 folded 映射/组清单漂移必红 + 缺件/坏 JSON PREREQ fail-closed）\n")
     return 0
 
 
@@ -462,10 +728,17 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="M3 RNG trace scene consistency pre-gate")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
+    p = sub.add_parser("scenario", help="只校验 scenario 件自身（声明 vs 代码真源）")
+    p.add_argument("--scenario", required=True)
+    p.add_argument("--json", default="")
+    p.set_defaults(func=cmd_scenario)
+
     p = sub.add_parser("gate")
     p.add_argument("--scenario", required=True)
     p.add_argument("--a", required=True, help="csharp 侧场景描述件 (-scene.json)")
     p.add_argument("--b", required=True, help="rust 侧场景描述件 (-scene.json)")
+    p.add_argument("--a-stream", default="", help="csharp 侧 RNG 流水（核流水头 INJECT_OK 种子）")
+    p.add_argument("--b-stream", default="", help="rust 侧 RNG 流水（核流水头 INJECT_OK 种子）")
     p.add_argument("--json", default="")
     p.set_defaults(func=cmd_gate)
 

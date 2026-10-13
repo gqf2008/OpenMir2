@@ -1,0 +1,88 @@
+# M3⑦-实现 4 归属/分配 oracle 锚点（2026-10-13，行号为在本仓 `src/` 实测）
+
+## A. 拾取归属：`is_of_group` 接真注册表
+
+| 项 | oracle |
+| --- | --- |
+| `ClientPickUpItemIsOfGroup(actorId)` | `src/M2Server/Player/PlayObject.Base.cs:38-54` |
+| `Dealing` 守卫（交易中禁拾取） | `src/M2Server/Player/PlayObject.Base.cs:55-58` |
+| 归属门调用点 | `src/M2Server/Player/PlayObject.Base.cs:71` |
+
+```csharp
+// PlayObject.Base.cs:38-54
+private bool ClientPickUpItemIsOfGroup(int actorId)
+{
+    if (GroupOwner == 0) { return false; }
+    IPlayerActor groupOwnerPlay = (IPlayerActor)SystemShare.ActorMgr.Get(GroupOwner);
+    for (int i = 0; i < groupOwnerPlay.GroupMembers.Count; i++)
+        if (groupOwnerPlay.GroupMembers[i].ActorId == actorId) { return true; }
+    return false;
+}
+```
+
+## B. 交易态：`Dealing` / `DealLastTick` 接真会话
+
+| 项 | oracle |
+| --- | --- |
+| `ClientTakeOffItems` 的 `!Dealing && btWhere < 13` 门 | `src/M2Server/Player/PlayObject.Operate.cs:499-502`（失败码 `n10 = -1` 见 `:535`） |
+| `ClientDropItem` 的 `(GetTickCount() - DealLastTick) > 3000` 门 | `src/M2Server/Player/PlayObject.Operate.cs:251-269` |
+
+## C. `HAM_GROUP` 的 `IsGroupMember` 过滤
+
+| 项 | oracle |
+| --- | --- |
+| `PlayObject.IsAttackTarget` 的 `HAM_GROUP` 支 | `src/M2Server/Player/PlayObject.Attack.cs:686-698` |
+| `IsGroupMember(target)` | `src/M2Server/Player/PlayObject.cs:5158-5175` |
+| `IsProperIsFriend` 的 `HAM_GROUP` 支（旁证） | `src/M2Server/Player/PlayObject.cs:4249-4256` |
+
+```csharp
+// PlayObject.Attack.cs:686-698
+case AttackMode.HAM_GROUP:
+    if ((targetObject.Race < ActorRace.NPC) || (targetObject.Race > ActorRace.PeaceNpc))
+    { result = true; }
+    if (targetObject.Race == ActorRace.Play)
+    {
+        if (IsGroupMember(targetObject)) { result = false; }
+    }
+    if (SystemShare.Config.PveServer) { return true; }
+    break;
+```
+
+## D. `GainExp` 组队分配（含 oracle 缺陷照搬）
+
+| 项 | oracle |
+| --- | --- |
+| `bonus[12]` 表 | `src/M2Server/Player/PlayObject.Base.cs:766` |
+| 统计 `sumlv`/`n` 的距离门（**两次都比 `CurrX`、漏 `CurrY`**） | `src/M2Server/Player/PlayObject.Base.cs:779`（第 1 次循环）/`:788`（第 2 次循环） |
+| `bonus` 下标门 `n <= Grobal2.GroupMax` | `src/M2Server/Player/PlayObject.Base.cs:790-793` |
+| `HighLevelKillMonFixExp` 均分 vs 按等级比分配 | `src/M2Server/Player/PlayObject.Base.cs:795-804` |
+| `GroupMax = 11` | `src/OpenMir2/Grobal2.cs:35` |
+| `WinExp`（倍率 + `LimitExpLevel`） | `src/M2Server/Player/PlayObject.Base.cs:129-147` |
+| `GetExp`（加经验 + 单步升级 + `RM_WINEXP`） | `src/M2Server/Player/PlayObject.Base.cs:149-165` |
+| `KillTargetTrigger`（`CalcGetExp` → `GainExp`） | `src/M2Server/Player/PlayObject.cs:1649-1653` |
+
+```csharp
+// PlayObject.Base.cs:776-818（节选；两次距离判定都漏 CurrY）
+if (!playObject.Death && Envir == playObject.Envir
+    && Math.Abs(CurrX - playObject.CurrX) <= 12
+    && Math.Abs(CurrX - playObject.CurrX) <= 12)   // ← 第二次本应是 CurrY，oracle 缺陷照搬
+{ sumlv = sumlv + playObject.Abil.Level; n++; }
+if (sumlv > 0 && n > 1)
+{
+    if (n >= 0 && n <= Grobal2.GroupMax) { dwExp = HUtil32.Round(dwExp * bonus[n]); }
+    for (...)
+        if (<同一条件>)
+            if (Config.HighLevelKillMonFixExp) playObject.WinExp(HUtil32.Round(dwExp / (double)n));
+            else playObject.WinExp(HUtil32.Round(dwExp / (double)sumlv * playObject.Abil.Level));
+}
+else { WinExp(dwExp); }
+```
+
+## E. Rust 落点
+
+| oracle | Rust |
+| --- | --- |
+| A | `bins/game-svr/src/main.rs::handle_ground_cmd`（pickup ctx 的 `group_owner`/`group_member_actor_ids`） |
+| B | `bins/game-svr/src/main.rs::handle_ground_cmd`（`deal_last_tick`）+ `::handle_bag_cmd`（`dealing`） |
+| C | `crates/world/src/combat.rs::is_attack_target_player_grouped`（`HAM_GROUP` 支）+ `::is_proper_target_grouped` + `crates/world/src/world.rs::attack_once` |
+| D | `crates/world/src/combat.rs::win_exp`（新拆分）+ `crates/world/src/world.rs::World::gain_exp` + `crates/world/src/party.rs`（`PARTY_GROUP_MAX`/`PARTY_EXP_BONUS`） |

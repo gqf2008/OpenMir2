@@ -1,0 +1,10 @@
+== 05 哈希（改坏必红 + 还原） ==
+mutation 定义: fn bag_capacity_left 体 max_bag_item as i64 - used as i64  =>  max_bag_item.saturating_sub(used) as i64
+
+mutated  sha256(trade.rs) = f99b3217381c9eefa31b75e7a4eff34dfd1d4a0844de5d8cbe2509b142fa0039
+restored sha256(trade.rs) = 1b47b3ca91ad20a74184177adb9dddb41f02655c52c650f20aef64b648667613   <= 与改坏前一致
+HEAD(abb053b91) git-blob sha256(trade.rs) = 1b47b3ca91ad20a74184177adb9dddb41f02655c52c650f20aef64b648667613
+
+== git status --porcelain（还原后，代码提交已落地）==
+?? mir2-rs/tests/parity/m3/evidence-m3-party-deal-capacity-int-20261013/
+(仅未跟踪证据目录 = 预期)

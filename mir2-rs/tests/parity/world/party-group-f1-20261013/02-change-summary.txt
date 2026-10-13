@@ -1,0 +1,37 @@
+# M3⑦-2 F-1/M-1 返工：改前 → 改后（逐文件）
+
+返工 commit = 4b6c843be（语义改动仅 4 个 .rs）；其后 05a6bfeee 为 `git merge origin/master`（f28e3d893），
+只带入别的卡已合入 master 的改动，不碰本片语义。
+
+## 改前（旧被审 head 28c9a8d5）
+- `world.rs::settle_deaths`：置 `death=true` 后**不做**任何组队处理（死亡退组静默缺口：
+  死亡者 `group_owner` 不清、团长侧不发任何组队帧）。
+- `party.rs::party_play_object_by_name`：`self.entities.iter().find(|e| e.name == name)`（扫全部实体）。
+- `main.rs`：无死亡退组回帧路径；`Disappear` 路径只覆盖断线。
+
+## 改后（返工 head 4b6c843be）
+### crates/world/src/world.rs
+- `TickRecord` 增 `pub party_events: Vec<PartyEvent>`（死亡退组事件，序已按 oracle 出队序排好）。
+- `World` 增 `pub party_cfg: PartyConfig`（缺省 = 常量默认，与 Server.conf 缺键一致）。
+- `settle_deaths`：`group_owner != 0` ⇒ `party_del_member(group_owner, id, &party_cfg)`，事件 extend 进 `record.party_events`。
+### crates/world/src/party.rs
+- `party_play_object_by_name`：加 `e.race == ACTOR_RACE_PLAY` 过滤（M-1）。
+- 模块头注释增「已接线：Die() 的死亡退组（F-1 收口）」段。
+### crates/world/tests/party_vectors.rs（+3 用例）
+- `die_member_triggers_oracle_del_member_and_group_survives`（3 人组、走真实死亡写入点 `hp==0`+`tick()`）。
+- `die_leader_disbands_group`（团长死亡 ⇒ 全组清 owner + 逐成员 SM_GROUPCANCEL）。
+- `play_object_by_name_ignores_non_player_entities`（M-1：同名怪物不误命中；只有怪物 ⇒ -2）。
+### bins/game-svr/src/main.rs
+- `sim_loop`：`world.party_cfg = party_cfg.clone()`。
+- 新增 `drain_party_death_events`，在 `world.tick()` 之后、`party_run_tick()` 之前调用（死亡者在线 ⇒ 自身帧照发）。
+- 新增进程级用例 `die_triggers_del_member_frames_on_production_path`（走生产路径 handle_party_cmd 建组 → hp=0 → tick）。
+
+## 原始 stat（git show --stat 4b6c843be）
+commit 4b6c843be11d90124723d44ad97d8a98b9dabcf0
+
+
+ mir2-rs/bins/game-svr/src/main.rs           | 198 ++++++++++++++++++++++++++++
+ mir2-rs/crates/world/src/party.rs           |  18 ++-
+ mir2-rs/crates/world/src/world.rs           |  26 +++-
+ mir2-rs/crates/world/tests/party_vectors.rs | 142 ++++++++++++++++++++
+ 4 files changed, 381 insertions(+), 3 deletions(-)

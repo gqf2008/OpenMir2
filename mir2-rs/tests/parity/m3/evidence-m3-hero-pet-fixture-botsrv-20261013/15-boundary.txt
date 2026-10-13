@@ -1,0 +1,43 @@
+## base = origin/master 15510a47  head = 2ffc350f
+
+## git diff --name-status origin/master HEAD -- src sql MirClient mir2-rs/crates mir2-rs/bins
+M	src/BotSrv/AppService.cs
+A	src/BotSrv/HeroPetSeqSelfCheck.cs
+M	src/BotSrv/MShare.cs
+M	src/BotSrv/Player/RobotPlayer.Operate.cs
+M	src/BotSrv/Player/RobotPlayer.cs
+M	src/BotSrv/Program.cs
+M	src/BotSrv/RobotOptions.cs
+
+## git diff --name-only origin/master（全量）
+"mir2-rs/tests/parity/m3/M3\342\221\250\350\213\261\351\233\204\345\256\240\347\211\251\345\212\250\344\275\234\345\272\217\345\210\227\345\244\271\345\205\267\351\252\250\346\236\266\346\212\245\345\221\212-20261013.md"
+mir2-rs/tests/parity/m3/evidence-m3-hero-pet-fixture-botsrv-20261013/00-commands.txt
+mir2-rs/tests/parity/m3/evidence-m3-hero-pet-fixture-botsrv-20261013/01-heropet-diff-selftest.txt
+mir2-rs/tests/parity/m3/evidence-m3-hero-pet-fixture-botsrv-20261013/02-run-heropet-pair-selfcheck.txt
+mir2-rs/tests/parity/m3/evidence-m3-hero-pet-fixture-botsrv-20261013/03-botsrv-heropetseq-selftest.txt
+mir2-rs/tests/parity/m3/evidence-m3-hero-pet-fixture-botsrv-20261013/04-run-bots-selfcheck.txt
+mir2-rs/tests/parity/m3/evidence-m3-hero-pet-fixture-botsrv-20261013/05-selftest-gate.txt
+mir2-rs/tests/parity/m3/evidence-m3-hero-pet-fixture-botsrv-20261013/06-reg-run-npc-shop-selfcheck.txt
+mir2-rs/tests/parity/m3/evidence-m3-hero-pet-fixture-botsrv-20261013/07-reg-run-bag-equip-selfcheck.txt
+mir2-rs/tests/parity/m3/evidence-m3-hero-pet-fixture-botsrv-20261013/10-external-break-comparator.txt
+mir2-rs/tests/parity/m3/evidence-m3-hero-pet-fixture-botsrv-20261013/11-gate-fmt.txt
+mir2-rs/tests/parity/m3/evidence-m3-hero-pet-fixture-botsrv-20261013/12-gate-clippy.txt
+mir2-rs/tests/parity/m3/evidence-m3-hero-pet-fixture-botsrv-20261013/13-gate-test.txt
+mir2-rs/tests/parity/m3/evidence-m3-hero-pet-fixture-botsrv-20261013/14-gate-msgcodegen.txt
+mir2-rs/tests/parity/m3/evidence-m3-hero-pet-fixture-botsrv-20261013/15-boundary.txt
+mir2-rs/tests/parity/m3/evidence-m3-hero-pet-fixture-botsrv-20261013/README.md
+mir2-rs/tests/parity/m3/evidence-m3-hero-pet-fixture-botsrv-20261013/SHA256SUMS.txt
+mir2-rs/tests/parity/m3/gate_guards.ps1
+mir2-rs/tests/parity/m3/hero_pet_diff.py
+mir2-rs/tests/parity/m3/hero_pet_scenario.json
+mir2-rs/tests/parity/m3/run_hero_pet_pair.ps1
+mir2-rs/tests/parity/m3/run_pair.ps1
+mir2-rs/tests/parity/whitelist.md
+src/BotSrv/AppService.cs
+src/BotSrv/HeroPetSeqSelfCheck.cs
+src/BotSrv/MShare.cs
+src/BotSrv/Player/RobotPlayer.Operate.cs
+src/BotSrv/Player/RobotPlayer.cs
+src/BotSrv/Program.cs
+src/BotSrv/RobotOptions.cs
+tools/botload/run_bots.ps1

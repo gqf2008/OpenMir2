@@ -1,0 +1,51 @@
+# 改坏必红：三条独立变异，逐条跑门禁 → 必须 FAILED；还原后 sha256 与改前一致。
+
+改前 sha256:
+  playdata.rs = 572183ff10941b7907c764326af4be6a002b6565215c59c4fbb33f811c873ddd
+  csharp-baseline.json = 1a082f16a2953ebc13dcce7e4176e80af18cd52e3d9a048e4c924e3cb2c471de
+
+============================================================
+## RC1: SAVE_CHARACTERS_SQL 注入任务列 QuestFlag
+============================================================
+test redcheck_scanner_bites_injected_quest_persistence ... ok
+test session_quest_state_model_is_still_present ... ok
+test captured_cross_side_baselines_show_zero_characters_quest_rows ... ok
+test db_srv_save_and_load_sql_have_no_quest_columns ... FAILED
+test workspace_rust_sources_never_reference_characters_quest ... ok
+test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+RC1 改坏 sha256 = eef135316603acb5a87813c74c82a1c20e865ba776b8bb423b658c21e048b41e
+RC1 还原 sha256 = 572183ff10941b7907c764326af4be6a002b6565215c59c4fbb33f811c873ddd
+
+============================================================
+## RC2: playdata.rs 注入 characters_quest 写路径
+============================================================
+test redcheck_scanner_bites_injected_quest_persistence ... ok
+test session_quest_state_model_is_still_present ... ok
+test captured_cross_side_baselines_show_zero_characters_quest_rows ... ok
+test db_srv_save_and_load_sql_have_no_quest_columns ... FAILED
+test workspace_rust_sources_never_reference_characters_quest ... FAILED
+test result: FAILED. 3 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+RC2 改坏 sha256 = c362dba5d9d15f97230793c4508a343c50c28462f889aa0d7101a8b311383c31
+RC2 还原 sha256 = 572183ff10941b7907c764326af4be6a002b6565215c59c4fbb33f811c873ddd
+
+============================================================
+## RC3: csharp 基线 characters_quest.rows 0 -> 1（精确定位到该表块）
+============================================================
+test redcheck_scanner_bites_injected_quest_persistence ... ok
+test session_quest_state_model_is_still_present ... ok
+test captured_cross_side_baselines_show_zero_characters_quest_rows ... FAILED
+test db_srv_save_and_load_sql_have_no_quest_columns ... ok
+test workspace_rust_sources_never_reference_characters_quest ... ok
+test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+RC3 改坏 sha256 = 8287305becf671313d70c40d6a658e67d490c593f7b600c38cfe810aae0a7c0d
+RC3 还原 sha256 = 1a082f16a2953ebc13dcce7e4176e80af18cd52e3d9a048e4c924e3cb2c471de
+
+============================================================
+## 还原后复跑（必须重新全绿）
+============================================================
+test redcheck_scanner_bites_injected_quest_persistence ... ok
+test session_quest_state_model_is_still_present ... ok
+test captured_cross_side_baselines_show_zero_characters_quest_rows ... ok
+test db_srv_save_and_load_sql_have_no_quest_columns ... ok
+test workspace_rust_sources_never_reference_characters_quest ... ok
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s

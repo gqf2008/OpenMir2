@@ -1,0 +1,47 @@
+53-redcheck-runframes.txt — check_client_run_frames.py 改坏必红（卡 openmir2-client-e2e-enter-gaps）
+
+### 1) --selftest（合成 fixture，5 条口径）
+$ python check_client_run_frames.py --selftest
+[PASS] selftest all-green: rc=0 (want 0)
+        OK  ① c2s CM_WALK(3011)=1
+        OK  ② 52 尾长=58（客户端 58B TAbility ⇒ HP>0，跑不动与 52 布局无关）
+        OK  ③ CM_RUN(3013)=0（与实测行为一致）
+[PASS] selftest extra-3013: rc=1 (want 1)
+        OK  ① c2s CM_WALK(3011)=1
+        OK  ② 52 尾长=58（客户端 58B TAbility ⇒ HP>0，跑不动与 52 布局无关）
+        RED ③ CM_RUN(3013)=1，期望 0
+[PASS] selftest 52-len-40: rc=1 (want 1)
+        OK  ① c2s CM_WALK(3011)=1
+        RED ② 52 尾长=[40]，期望 [58]
+        OK  ③ CM_RUN(3013)=0（与实测行为一致）
+[PASS] selftest no-walk: rc=1 (want 1)
+        RED ① 没有 CM_WALK(3011)：移动路径不通（c2s=[]）
+        OK  ② 52 尾长=58（客户端 58B TAbility ⇒ HP>0，跑不动与 52 布局无关）
+        OK  ③ CM_RUN(3013)=0（与实测行为一致）
+[PASS] selftest expect-run-1-mismatch: rc=1 (want 1)
+        OK  ① c2s CM_WALK(3011)=1
+        OK  ② 52 尾长=58（客户端 58B TAbility ⇒ HP>0，跑不动与 52 布局无关）
+        RED ③ CM_RUN(3013)=0，期望 1
+SELFTEST OK (5/5)
+rc=0
+
+### 2) 真机 capture（R7, 头条）= GREEN
+$ python check_client_run_frames.py --capture capture-client-run5.jsonl
+OK  ① c2s CM_WALK(3011)=24
+OK  ② 52 尾长=58（客户端 58B TAbility ⇒ HP>0，跑不动与 52 布局无关）
+OK  ③ CM_RUN(3013)=0（与实测行为一致）
+RESULT: GREEN
+rc=0
+
+### 3) 改坏必红：把「期望的 CM_RUN 条数」改成 1（真实=0）⇒ RED
+$ python check_client_run_frames.py --capture capture-client-run5.jsonl --expect-run-count 1
+OK  ① c2s CM_WALK(3011)=24
+OK  ② 52 尾长=58（客户端 58B TAbility ⇒ HP>0，跑不动与 52 布局无关）
+RED ③ CM_RUN(3013)=0，期望 1
+RESULT: RED
+rc=1
+
+### 4) 缺件 fail-closed
+$ python check_client_run_frames.py --capture /nonexistent.jsonl
+PREREQ_MISSING: capture 不存在: C:/Program Files/Git/nonexistent.jsonl
+rc=2

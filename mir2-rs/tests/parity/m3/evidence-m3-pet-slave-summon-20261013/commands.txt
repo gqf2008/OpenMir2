@@ -1,0 +1,30 @@
+复现命令（M3⑨-实现 2 宝宝召唤）
+================================
+
+# 0) 隔离目标目录（检出外）
+export CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target
+
+# 1) 本片判据（world 侧 19 条）
+cargo test -p mir2-world --offline --lib slave
+
+# 2) 本片判据（game-svr 配置读侧 2 条）
+cargo test -p game-svr --offline --lib slave
+
+# 3) 四门禁
+cargo fmt --all -- --check
+cargo clippy --offline --workspace --all-targets -- -D warnings
+cargo test --offline --workspace --no-fail-fast
+cargo run --offline -p msgcodegen -- --check
+
+# 4) 边界
+git diff --name-only master HEAD -- src sql MirClient   # 必须为空
+
+# 5) 证据口径自检（在检出根 E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3hp）
+python -I tools/evidence-hash/verify_sha256sums.py verify \
+  mir2-rs/tests/parity/m3/evidence-m3-pet-slave-summon-20261013 --check-extra
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck \
+  mir2-rs/tests/parity/m3/evidence-m3-pet-slave-summon-20261013
+
+# 6) 红检（示例：RC1）
+#    把 slave.rs 的 gap 比较改成 <= 后：
+cargo test -p mir2-world --offline --lib slave   # 期望 3 failed

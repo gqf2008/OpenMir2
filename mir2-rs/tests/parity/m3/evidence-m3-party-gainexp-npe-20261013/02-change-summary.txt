@@ -1,0 +1,57 @@
+# M3⑦ Minor M-2 收口 —— 改动清单（2026-10-13）
+
+> 卡：`openmir2-m3-party-gainexp-npe`。commit：见 walgit `patch` 条目（本地 `9c99f4a0c`，base = `refs/heads/master` @ `d5be14f40`）。
+> 写集：`mir2-rs/crates/world/**`。净 diff **2 文件 / +74 / -6**（全部在本写集内）。
+
+## 1. `mir2-rs/crates/world/src/world.rs`（+15 / -6）
+
+`World::gain_exp` 的 `GroupOwner != 0` 支由
+
+```rust
+let members = self
+    .entities
+    .get(group_owner)
+    .map(|e| e.group_members.clone())
+    .unwrap_or_default();
+```
+
+改为 fail-closed：
+
+```rust
+// oracle `PlayObject.Base.cs:771-776`：`GroupOwner != 0` 时先
+// `(IPlayerActor)SystemShare.ActorMgr.Get(GroupOwner)` 取团长对象；取不到
+// ⇒ `groupOwnerPlay.GroupMembers` 空引用抛异常，被 818-821 的 `catch` 吞掉
+// ⇒ 本次**零经验、零授奖**（不会退回单人满经验）。可达成因由：`leave_world`
+// 移除实体时不清同组成员的 `group_owner`（见 `leave_world`）。
+let members = match self.entities.get(group_owner) {
+    Some(owner) => owner.group_members.clone(),
+    None => {
+        self.need_exps = need_exps;
+        return 0;
+    }
+};
+```
+
+要点：
+- 团长不在注册表 ⇒ **不授奖**（`record.exp_awards` 不追加）、返回 0（**不退回单人满经验**），
+  并把函数开头的 `std::mem::take(&mut self.need_exps)` 归还（`self.need_exps = need_exps`）；
+- 团长在场分支与 `group_owner == 0` 分支**逐字节不变**（含 `|CurrX-x|` 两处都漏 `CurrY`
+  的 oracle 既有缺陷照搬，§1 硬约束③）；
+- 遍历/取数顺序不变（成员表序），零并行、零 RNG 消费，tick 顺序确定；
+- 函数文档补一条缺团长态语义并修正 oracle 行号 `764-818` → `764-821`（`catch` 到 `:821`）。
+
+## 2. `mir2-rs/crates/world/tests/party_attribution.rs`（+59 / -0）
+
+新增 `group_owner_missing_matches_oracle_npe`：
+- **正面控制**：3 人组 L/A/B、团长 L 在场时击杀 ⇒ `awards == [L, A, B]`、获得者本人 280
+  （`Round(600 * bonus[3]) / 3`）、`A.exp == 280`、`A.group_owner == L`；
+- **缺团长态**：`world.entities.remove(L)`（模拟 `leave_world` 不清成员 `group_owner`）后击杀
+  （`ExpHitter = A`）⇒ `deaths[0].4 == 0`、`exp_awards` 为空、`A.exp` 仍 280（**不增长**）。
+
+## 未改动 / 明确不做
+
+- 不触碰 `mir2-rs/bins/game-svr/**`（⑦-4 携带的 Minor M-1 `deal_last_tick` 进程级用例属
+  ⑦-5 夹具面 `tests/parity/m3/**`，不在本卡写集）。
+- 不动 `src/ sql/ MirClient`（oracle/表结构/客户端冻结），不改脚本语法与数据文件格式。
+- 未建模项与既有口径一致：`LimitExpLevel=1000` 支、`ExpHitter.Master`（宝宝击杀给主人）
+  与组队分配的交互 —— 均在本卡范围外，见 `openmir2-m3-party-attribution` 证据包的登记段。

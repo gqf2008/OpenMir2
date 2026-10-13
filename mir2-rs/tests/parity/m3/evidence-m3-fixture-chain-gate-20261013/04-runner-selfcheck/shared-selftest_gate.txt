@@ -1,0 +1,2 @@
+name=selftest_gate file=mir2-rs/tests/parity/m3/selftest_gate.ps1 present=True rc=0
+GREEN: 十条机判护栏的判红/判绿口径都经构造输入验证

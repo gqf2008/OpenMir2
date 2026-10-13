@@ -1,0 +1,19 @@
+$ CARGO_TARGET_DIR=E:/tmp/openmir2-m3pt-target cargo test -p mir2-world --test party_attribution
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.31s
+     Running tests\party_attribution.rs (E:/tmp/openmir2-m3pt-target\debug\deps\party_attribution-ad10bfbb8b4ad98c.exe)
+
+running 10 tests
+test ham_group_filter_matches_oracle ... ok
+test group_exp_excludes_other_map_member ... ok
+test group_exp_replicates_oracle_curry_missing_bug ... ok
+test single_member_group_gets_plain_exp ... ok
+test group_exp_fix_splits_evenly_with_bonus ... ok
+test world_attack_excludes_group_mate ... ok
+test group_exp_awards_list_members_in_order ... ok
+test group_exp_excludes_dead_member ... ok
+test group_owner_missing_matches_oracle_npe ... ok
+test group_exp_by_level_ratio ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+rc=0

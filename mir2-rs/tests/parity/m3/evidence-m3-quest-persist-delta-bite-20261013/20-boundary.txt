@@ -1,0 +1,35 @@
+== 20 边界（交付 head 对 base refs/heads/master） ==
+base = ddaca961c5d5c0738f5fbdf9c9ff943cd65f7c2b
+
+git diff --name-only origin/master HEAD -- src sql MirClient
+(空 = oracle / 客户端 / 表结构零改动)
+
+git diff --name-only origin/master HEAD（本片改动面）
+mir2-rs/bins/db-srv/tests/quest_no_persist.rs
+mir2-rs/tests/parity/m3/evidence-m3-quest-persist-delta-bite-20261013/01-oracle-anchors.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-persist-delta-bite-20261013/02-change-summary.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-persist-delta-bite-20261013/03-tests.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-persist-delta-bite-20261013/04-eolcheck.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-persist-delta-bite-20261013/20-boundary.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-persist-delta-bite-20261013/README.md
+mir2-rs/tests/parity/m3/evidence-m3-quest-persist-delta-bite-20261013/SHA256SUMS.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-persist-delta-bite-20261013/gates/clippy.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-persist-delta-bite-20261013/gates/fmt.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-persist-delta-bite-20261013/gates/msgcodegen.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-persist-delta-bite-20261013/gates/test.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-persist-delta-bite-20261013/redchecks/RC-A-mutated.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-persist-delta-bite-20261013/redchecks/RC-A-restored.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-persist-delta-bite-20261013/redchecks/RC-B-mutated.txt
+mir2-rs/tests/parity/m3/evidence-m3-quest-persist-delta-bite-20261013/redchecks/RC-B-restored.txt
+
+git diff --numstat origin/master HEAD -- mir2-rs/bins/db-srv/tests/quest_no_persist.rs
+87	21	mir2-rs/bins/db-srv/tests/quest_no_persist.rs
+
+git merge-base --is-ancestor origin/master HEAD ⇒ YES（base 即 origin/master 本刻 tip）
+
+git merge-tree origin/master HEAD（rc）
+rc=0（无冲突）
+
+worktree 干净：红检用 cp 还原（见 redchecks/RC-*-restored.txt），交付提交后无在途残留（20-boundary.txt / SHA256SUMS.txt 为本轮最后写入项）。
+
+未触碰：bins/game-svr 生产代码、crates/world、crates/script、crates/protocol、crates/storage、sql/、MirClient、共享主检出。

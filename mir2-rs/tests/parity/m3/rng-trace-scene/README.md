@@ -61,16 +61,37 @@
 
 **门比什么**（任一不等 / 缺失 ⇒ fail-closed）：
 
+> 下表带 `scenario-*` 前缀的六项是 **M-1 的 sibling**：scenario 是人对夹具的**声明**，
+> `rng_consumer_groups`（`FOLD_RULES`/`KNOWN_GROUPS`）是**真源**；门直接 import 同一份实现来比，
+> 防止 `groupdiff --fold` 用的映射与 scenario 写的不是一回事（doc-vs-code 漂移）。这条对
+> `-GateOnly` 与离线 `scenario` 模式（锁住已入库 `rng_trace_scenario.json`）都生效。
+
 | 检查 | 口径 |
 |---|---|
 | `scenario-canon` / `scenario-fields` | scenario 自洽（map/seed/start_pose/monsters 齐备） |
+| `scenario-trace-present` / `scenario-fold-code-valid` | scenario 有 `trace` 对象；代码侧 `FOLD_RULES` 自检自洽（已知组→已知组、源≠目标） |
+| `scenario-fold-declared` / `scenario-fold-matches-code` | scenario 声明的 `trace.fold` 必须**显式**且**逐项等于**代码真源 `rng_consumer_groups.FOLD_RULES`（缺声明/漂移 ⇒ 红，不静默绿） |
+| `scenario-groups-declared` / `scenario-groups-known` | scenario 声明的 `trace.groups_expected` 必须**显式**且每个组名都是账本 `KNOWN_GROUPS`（未知组 ⇒ 红） |
 | `sides-distinct` | 两侧 side = 一 `csharp` 一 `rust` |
 | `map-equal` / `seed-equal` / `pose-equal` | 两侧都等于 scenario |
 | `monsters-equal:scenario-vs-{a,b}` / `a-vs-b` | **Monster 集合同口径**（`(name,x,y,dir)` 多重集 + 计数） |
 | `mongen-equal:{a,b}-vs-fixture` / `a-vs-b` | **MonGen 集合同口径**：两侧 `mongen_rows` 逐行多重集都等于冻结件 `../fixtures/mongen-map<map>.tsv` |
+| `stream-inject-ok:{a,b}` / `stream-seed-equal:{a,b}` / `stream-seed-equal:a-vs-b` | **制品级同种子**（给了 `--a-stream` / `--b-stream` 时）：两份 trace **流水头**的 `INJECT_OK <seed>`（C# `rng-hook` 与 Rust `crates/shared/src/rng_trace.rs` 都写）必须存在且 `== scenario.seed`。描述件里的 `seed` 只是**自报**，不算证据；缺该行 ⇒ 无法证明种子（fail-closed RED） |
+| `stream-pair-required` | **只给一侧流水**（`--a-stream`/`--b-stream` 二缺一）⇒ PREREQ fail-closed：半份证据不能证明**两侧**同种子（两侧都不给才走描述件级向后兼容） |
 
-退出码：`0` = GREEN（同场景，`groupdiff` 次序结论可采信）；`1` = RED（场景漂移，点名哪一项）；
+退出码：`0` = GREEN（同场景，`groupdiff` 次序结论可采信）；`1` = RED（场景漂移**或 scenario 声明与代码真源漂移**，点名哪一项）；
 `2` = PREREQ（缺件 / 坏 JSON，fail-closed）。
+
+> **制品级同种子（新增）**：DoD① 要求「两侧 trace 必须来自同场景/同起点/**同种子**」。描述件由各侧自报，
+> 所以门在两份流水在场时（`-SceneGroupDiff` 恒传；`-GateOnly` 给了 `-AStream`/`-BStream` 才核）还要核对
+> **流水头**的 `INJECT_OK <seed>`。这样「描述件写 42、实际流水是别的种子」这种伪造会被拦在**拒比**而非
+> 被误判成实现差异。**只给一侧**流水 ⇒ `stream-pair-required` PREREQ（`exit 2`，半份证据不算证据）；
+> 两侧都不给时才保持既有描述件级行为（向后兼容）。
+
+**DoD① 的判定入口 = `-SceneGroupDiff`（本片收口）**：它把「场景门 → 组账本比较」串成**一条命令**，
+门非 GREEN ⇒ **拒比**（不跑 `groupdiff`、绝不输出 `RNG_CONSUMER_GROUPDIFF` 结论，也不把它当绿），
+门 GREEN 才跑 `groupdiff --fold --strict` 并原样传播其 rc/文本。`-GateOnly` / `-GroupDiffOnly` 语义不变，
+其中 `-GroupDiffOnly` 是**跨场景对照用的裸比较**口径，**不构成 DoD① 判据**（不得单独用它下"实现等价"结论）。
 
 ---
 
@@ -86,6 +107,7 @@
 实现（`rng-trace-probe/rng_consumer_groups.py` + `rng_ledger_diff.py`）：
 
 - `FOLD_RULES = {"construct": "spawn"}`（`validate()` 里做表自检：源/目标必须是已知组、源≠目标）；
+  **且** scenario 声明的 `trace.fold` 必须与它逐项相等（门 `scenario-fold-matches-code` + 离线 `scenario` 模式机判）；
 - `groupdiff --fold` 先把两侧组序列逐元素折叠，再在**折叠后的序列**上重算：
   - 组集合（`GROUP_SET_DIFF`）；
   - **折叠计数**（`FOLDED_COUNT_DIFF`：逐组 `a` / `b` 计数不等即红）；
@@ -106,6 +128,27 @@ groupdiff … --fold --strict     → VERDICT …+FOLDED_COUNT_DIFF（spawn 折�
 
 > 同场景下若两侧折叠计数与相对次序全等 ⇒ `groupdiff --fold --strict` 输出 `VERDICT IDENTICAL`
 > （`FOLDED_COUNT_EQUAL`），这才算 R-6 达成。
+
+### 3.1 DoD②：scenario 声明的组清单必须在**真实账本**里成立（本片新增）
+
+`rng_trace_scenario.json` 的 `trace.groups_expected` / `trace.min_monster_ai_draws` 是**声明**。
+**只声明不校验 = 注解**：若两侧都只出现 `spawn`（`monster_ai`/`drop` 都不出现），旧口径的
+`GROUP_SET_DIFF` 只比两侧彼此相等 ⇒ 真空 `IDENTICAL` 假绿，而卡 DoD② 要的是
+「`monster_ai`/`spawn`/`drop` 三组**两侧都出现**」。
+
+因此 `groupdiff --scenario <path>` 会把声明与真实账本对账，任一不成立 ⇒ **fail-closed RED**：
+
+| 字段 | 不满足时的 flag | 行为 |
+|---|---|---|
+| `trace.groups_expected` | `MISSING_EXPECTED_GROUPS`（点名缺的组 + side） | rc=1 |
+| `trace.min_monster_ai_draws`（或通用 `trace.min_group_draws`） | `MIN_GROUP_DRAWS`（`want`/`a`/`b`） | rc=1 |
+| scenario 件不存在 / 不可解析 / 声明账本未知组 | — | PREREQ rc=2 |
+
+- `run_rng_trace_pair.ps1 -SceneGroupDiff` 会**自动**把同一 scenario 传给 `groupdiff`（单一入口
+  同时覆盖 DoD① 场景门与 DoD② 组清单）；`-GroupDiffOnly`（裸比较口径）**不传** ⇒ 旧行为逐字节不变。
+- 牙：ledger selftest `scenario-expected-green` / `scenario-expected-missing-red`（两侧都缺 `drop`
+  ⇒ 旧口径 IDENTICAL，新口径必红）/ `scenario-min-monster-ai-red` / `scenario-missing-prereq`；
+  无栈自检 `scene-groupdiff-expected-group-missing-red` / `scene-groupdiff-min-monster-ai-red`。
 
 ---
 
@@ -133,12 +176,41 @@ groupdiff … --fold --strict     → VERDICT …+FOLDED_COUNT_DIFF（spawn 折�
 ```
 ① 起 C# 栈 → 本卡 csharp 相（含 <csharp>-scene.json + rng-stream.tsv）
 ② 起 Rust 栈 → 本卡 rust 相（-PeerSession <csharp 会话>）
-③ rng_scene_gate.py gate（同场景前置门）→ groupdiff --fold --strict（本卡判据）
+③ run_rng_trace_pair.ps1 -SceneGroupDiff（**DoD① 单一入口**：场景门非 GREEN ⇒ 拒比；GREEN 才跑 groupdiff --fold --strict）
 ④ start_rust_stack -Stop → 同一路 ④ 100 杀（drop_exp_raw.jsonl + 纯度门）
 ⑤ 收工：写「窗口已释放」+ 十端口实拍
 ```
 
 一轮窗口只跑一次起栈；①–⑤ 串行，**不并行起栈**（互相污染）。
+
+---
+
+## 4.1 「同窗口同跑」前提 = 同图 / 同种子 / 同起点（`check_window_batch.py`，本片新增）
+
+§4 把两套夹具编排在同一窗口批次，**前提**是两个场景件真的同图同种子同起点。这条此前
+**只有散文**：`rng_scene_gate.py` 只比**同一张卡**的两侧 trace、`drop_exp_purity_gate.py`
+只看 ④ 的纯度 ⇒ 任一 scenario 漂移（换图 / 换种子 / 挪起点）时批次不可比，而两个门
+各自 GREEN（各自内部自洽）。`check_window_batch.py` 把它收成 **fail-closed 机判**：
+
+```sh
+cd mir2-rs/tests/parity/m3
+python -I rng-trace-scene/check_window_batch.py check \
+  --rng-scenario  rng-trace-scene/rng_trace_scenario.json \
+  --drop-scenario drop-exp/drop_exp_scenario.json        # VERDICT GREEN rc=0
+python -I rng-trace-scene/check_window_batch.py selftest # 13/13 GREEN
+```
+
+- 逐项比 `map` / `seed` / `x` / `y` / `dir`（本卡 `map`/`seed`/`start_pose.{x,y,dir}`
+  vs ④ `map`/`seed`/`attacker.{x,y,dir}`）；任一项不等 ⇒ rc=1 **逐项点名**（带两侧值）；
+- 缺件 / 坏 JSON / 缺字段 / 自比（两个 `--*-scenario` 指同一文件）/ 传错件（canon 不符）
+  ⇒ rc=2 **PREREQ fail-closed**（绝不静默 GREEN）；`map` 必须是字符串（`"0137"` 与 `137`
+  不得被当同一个图）；
+- 改坏必红（`selftest` 真咬）：换图 / 换种子 / 挪 `x` / `y` / `dir` 各一例必红且点名，
+  外加缺件、坏 JSON、缺起点字段、自比、传错件、map 类型漂移六条 PREREQ。
+
+> 本工具是**窗口批次前提**的牙，不改任何门/账本的判据阈值，也不改
+> `run_rng_trace_pair.ps1` 的自检项数（历史 `29/29` 片时读数不受影响）。窗口编排建议在
+> §4 的 ① 之前先跑它：非 GREEN ⇒ 本批次的 ①②④ 结论不得采信（两个门都不会替你发现）。
 
 ---
 
@@ -150,10 +222,49 @@ powershell -ExecutionPolicy Bypass -File run_rng_trace_pair.ps1 -SelfCheckNoStac
 powershell -ExecutionPolicy Bypass -File run_rng_trace_pair.ps1 -SelfCheckNoStack -SelfCheckOut <path.txt>
 ```
 
-自检覆盖（12 项；全离线）：scenario 固定输入、MonGen 冻结件零行、场景门 selftest（11/11）、
-场景门进程内正/负样本（同场景绿 / 怪集合漂移红）、账本 selftest（含 R-6 folded）、
-folded 等价绿 / 折叠计数不等红 / 折叠次序不等红、缺件 PREREQ、LF 写出、零端口。
+自检覆盖（29 项；全离线）：scenario 固定输入、MonGen 冻结件零行、场景门 selftest（22/22）、
+场景门进程内正/负样本（同场景绿 / 怪集合漂移红）、账本 selftest（37/37，含 R-6 folded 与 DoD② scenario 声明）、
+folded 等价绿 / 折叠计数不等红 / 折叠次序不等红、缺件 PREREQ、LF 写出、
+`scenario-fold-group-consistency-green`（已入库 scenario 与代码同口径）、
+`scenario-fold-drift-red` / `scenario-groups-unknown-red`（改坏必红）、
+`scenario-drift-samples-json-native`（三条 drift 样本由 JSON 字段改写构造、与源不同，
+不再对原始文本做正则替换 —— M-1 sibling 收口；base 值牙内自解析，无跨块 `$sc` 依赖 —— O-1）、
+`scenario-drift-tooth-not-vacuous`（空转样本 ⇒ 同一 fold 谓词为 false，证明上一条牙非恒真）、
+**DoD① 单一入口 `-SceneGroupDiff` 四项**：
+`scene-groupdiff-identical-green`（同场景 + 等价账本 ⇒ 门绿 + `VERDICT IDENTICAL` rc=0）、
+`scene-groupdiff-scene-drift-refused`（改坏必红：怪集合漂移 ⇒ rc=1 **且拒比**，文本里无任何 `RNG_CONSUMER_GROUPDIFF` 结论行）、
+`scene-groupdiff-missing-prereq-refused`（缺场景件 ⇒ rc=2 同样拒比）、
+`scene-groupdiff-diff-red-propagates`（反向对照：门绿而账本确有不一致 ⇒ groupdiff 的 rc=1 与结论行必须**传播**，防「恒拒比」假绿）、
+**制品级同种子四项（新增）**：`scene-gate-stream-seed-green`（两侧流水头 `INJECT_OK 42` ⇒ 门绿）、`scene-gate-stream-seed-mismatch-red`（改坏必红：B 侧流水头 43、描述件仍自报 42 ⇒ rc=1 点名 `stream-seed-equal:b`）、
+`scene-gate-stream-inject-missing-red`（改坏必红：B 侧流水头无 `INJECT_OK` ⇒ rc=1 点名 `stream-inject-ok:b`）、
+`scene-groupdiff-stream-seed-refused`（改坏必红：制品级种子漂移下 `-SceneGroupDiff` 整链拒比：rc=1、`ranDiff=False`、无 `RNG_CONSUMER_GROUPDIFF`）、
+**DoD② scenario 声明两项（新增）**：`scene-groupdiff-expected-group-missing-red`（两侧都缺 `drop`
+⇒ rc=1 点名 `MISSING_EXPECTED_GROUPS`，不再是真空 `IDENTICAL`）、
+`scene-groupdiff-min-monster-ai-red`（三组都在但 `monster_ai` 抽数 0 < scenario 声明 1 ⇒ rc=1 点名 `MIN_GROUP_DRAWS`），零端口。
 real-run 分支在 `-Go` 未给时 **fail-closed exit 2**（不静默起栈）。
+
+### 5.1 证据报告「声明计数 vs 真实包」机判（`check_evidence_counts.py`）
+
+报告常在「证据：<dir>（`N` 件 + SHA256SUMS；`verify --check-extra` GREEN `N/N`，`eolcheck` GREEN `M/M`）」
+一行**硬编码**计数；证据包在同一片里继续增删文件时（如本卡 `groups-expected` 片：交付头追加
+`11-`/`12-`/`13-` 三件后头行仍写 `12/12`）就会 doc-vs-事实（先例：reviewer-5 F-1 `82/82`→实际 `81/82`、
+reviewer-6 在本卡携带的 M-1）。`check_evidence_counts.py` 把这条收成**机判**：
+
+```sh
+python -I rng-trace-scene/check_evidence_counts.py check \
+  --report "M3RNG场景DoD②组清单机判组必须真出现报告-20261013.md" \
+  --dir    evidence-m3-rng-trace-scene-groups-20261013-groups-expected   # GREEN rc=0
+python -I rng-trace-scene/check_evidence_counts.py selftest               # 7/7 GREEN
+```
+
+- 口径（唯一真源 = 证据包）：`N 件` 与 `eolcheck` 对**目录文件总数**（含 `SHA256SUMS.txt`/`README.md`）；
+  `verify N/N` 对 `SHA256SUMS.txt` **条目数**；
+- 不一致 ⇒ rc=1 **逐个点名**；报告**未硬编码计数**（只写计数规则、以 `SHA256SUMS.txt` 为真源）⇒ rc=0；
+  缺报告/目录/坏读取 ⇒ rc=2；
+- 改坏必红：`selftest` 覆盖件数漂移 / verify 漂移 / eolcheck 漂移 / **交付后证据包长大**，真咬。
+
+> 本工具是证据包的**自洽牙**，不是 DoD 判据本体、不进任何判据阈值；**不改** `run_rng_trace_pair.ps1`
+> 的自检项数（故本仓历史报告里记的 `29/29` 等**片时读数**不受影响）。
 
 ## 6. 命令（可复算）
 
@@ -161,15 +272,35 @@ real-run 分支在 `-Go` 未给时 **fail-closed exit 2**（不静默起栈）�
 cd mir2-rs/tests/parity/m3
 
 # 工具自检
-python -I rng-trace-probe/rng_ledger_diff.py selftest          # 32/32 GREEN（含 R-6 folded）
-python -I rng-trace-scene/rng_scene_gate.py selftest           # 11/11 GREEN
+python -I rng-trace-probe/rng_ledger_diff.py selftest          # 37/37 GREEN（含 R-6 folded + DoD② scenario 声明）
+python -I rng-trace-scene/rng_scene_gate.py selftest           # 22/22 GREEN（含 scenario 声明 vs 代码 + 半给流水 PREREQ）
+python -I rng-trace-scene/check_evidence_counts.py selftest    # 7/7 GREEN（报告证据头行计数 vs 真实包：声明/真实）
+python -I rng-trace-scene/check_window_batch.py selftest        # 13/13 GREEN（本卡 vs ④ 场景件：同图/同种子/同起点）
 
-# 场景一致性前置门（离线）
+# 同窗口批次前提（本卡 scenario vs ④ drop-exp scenario；非 GREEN ⇒ 批次不可比，拒跑）
+python -I rng-trace-scene/check_window_batch.py check \
+  --rng-scenario rng-trace-scene/rng_trace_scenario.json \
+  --drop-scenario drop-exp/drop_exp_scenario.json
+
+# scenario 件自身（离线；锁住声明与代码真源同口径）
+python -I rng-trace-scene/rng_scene_gate.py scenario --scenario rng-trace-scene/rng_trace_scenario.json
+
+# 场景一致性前置门（离线；制品级同种子：给 -AStream/-BStream 时还核流水头 INJECT_OK）
 powershell -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 -GateOnly \
-  -AScene <csharp-scene.json> -BScene <rust-scene.json>
+  -AScene <csharp-scene.json> -BScene <rust-scene.json> \
+  -AStream <csharp-rng-stream.tsv> -BStream <rust-rng-stream.tsv>
 
-# 组账本 diff（R-6 折叠）
+# 组账本 diff（R-6 折叠）—— **裸比较口径**，不构成 DoD① 判据（不传 --scenario ⇒ 不校 DoD② 声明组）
 powershell -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 -GroupDiffOnly \
+  -AStream <csharp-rng-stream.tsv> -BStream <rust-rng-stream.tsv>
+
+# 直接调账本（DoD②：--scenario 把 groups_expected/min_monster_ai_draws 与真实账本对账）
+python -I rng-trace-probe/rng_ledger_diff.py groupdiff <csharp.tsv> <rust.tsv> \
+  --a-side csharp --b-side rust --fold --strict --scenario rng-trace-scene/rng_trace_scenario.json
+
+# DoD① 单一入口（本片收口；推荐）：**先**场景门，非 GREEN ⇒ 拒比；GREEN 才跑 groupdiff --fold --strict
+powershell -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 -SceneGroupDiff \
+  -AScene <csharp-scene.json> -BScene <rust-scene.json> \
   -AStream <csharp-rng-stream.tsv> -BStream <rust-rng-stream.tsv>
 ```
 

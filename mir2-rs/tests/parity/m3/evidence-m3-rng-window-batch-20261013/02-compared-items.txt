@@ -1,0 +1,4 @@
+# cmd: python -I -c 'extract map/seed/pose from both scenarios'
+rng  map='0137' seed=42 pose=(17,20,2)
+drop map='0137' seed=42 pose=(17,20,2)
+rc=0

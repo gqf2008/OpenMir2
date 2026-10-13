@@ -1,0 +1,38 @@
+### M3⑧-4 第①片 F-1 返工后 rust 向量（source sha256 = 94ff62f9ae19f911250ead9bfe72a7cb81b0dcff761fe3f73c89b331b80ed92f，仓库 LF 口径）
+### 命令：cargo test -p mir2-world --lib guild:: --offline（CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target）
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\crates\world)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.39s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m3cs-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 28 tests
+test guild::tests::add_member_creates_rank_99 ... ok
+test guild::tests::add_war_guild_n2_already_at_war_duplicates ... ok
+test guild::tests::check_guild_name_rejects_forbidden_chars_except_last ... ok
+test guild::tests::add_war_guild_n2_not_in_war_is_noop ... ok
+test guild::tests::check_guild_name_rejects_over_length ... ok
+test guild::tests::ally_guild_is_not_registered ... ok
+test guild::tests::del_human_obj_compare_equals_one_quirk ... ok
+test guild::tests::cancel_guld_requires_single_rank_single_member ... ok
+test guild::tests::del_member_first_exact_match_only ... ok
+test guild::tests::f1_backup_does_not_mark_dirty ... ok
+test guild::tests::f1_ally_ops_do_not_mark_dirty ... ok
+test guild::tests::chief_name_and_count ... ok
+test guild::tests::f1_check_save_guild_file_throttle ... ok
+test guild::tests::f1_create_guild_is_clean ... ok
+test guild::tests::f1_load_marks_ini_dirty ... ok
+test guild::tests::is_member_is_case_sensitive_but_rank_name_is_not ... ok
+test guild::tests::manager_run_ends_expired_wars ... ok
+test guild::tests::set_guild_info_only_when_empty ... ok
+test guild::tests::manager_add_del_find_and_case_sensitivity ... ok
+test guild::tests::f1_set_guild_info_does_not_mark_dirty ... ok
+test guild::tests::from_record_to_body_roundtrip ... ok
+test guild::tests::update_rank_duplicate_rank_no_returns_minus_seven ... ok
+test guild::tests::update_rank_chief_member_count_gate ... ok
+test guild::tests::update_rank_missing_old_member_returns_minus_six ... ok
+test guild::tests::update_rank_no_chief_returns_minus_two_or_three ... ok
+test guild::tests::update_rank_unchanged_returns_minus_one ... ok
+test guild::tests::update_rank_parses_rank_name_with_angle_and_space ... ok
+test guild::tests::update_rank_success_clears_ranks_n3 ... ok
+
+test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 122 filtered out; finished in 0.00s
+

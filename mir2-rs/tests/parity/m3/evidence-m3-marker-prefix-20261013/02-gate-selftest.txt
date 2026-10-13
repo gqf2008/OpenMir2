@@ -1,0 +1,18 @@
+$ python -I marker_prefix_gate.py selftest
+SELFTEST ok scan-good-clean
+SELFTEST ok scan-catches-strip
+SELFTEST ok scan-ignores-comment
+SELFTEST ok real-run-pair-no-strip
+SELFTEST ok real-guards-wired
+SELFTEST ok comparator-requires-prefix-M3SHOPSEQ
+SELFTEST ok comparator-requires-prefix-M3QUESTSEQ
+SELFTEST ok comparator-requires-prefix-M3PAIRTRADESEQ
+SELFTEST ok comparator-requires-prefix-M3SELLOFFSEQ
+SELFTEST ok teeth-bare-prereq
+SELFTEST ok teeth-prefixed-ok
+SELFTEST ok teeth-empty-prereq
+SELFTEST ok check-green
+SELFTEST ok mutation-strip-red
+SELFTEST ok mutation-guard-red
+SELFTEST ok=15/15
+rc=0

@@ -1,0 +1,6 @@
+# M3⑧-实现 9 门禁 ③msgcodegen --check
+$ (cd mir2-rs && CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo run -p msgcodegen --offline -- --check)
+
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.21s
+     Running `E:/tmp/openmir2-m3cs-target\debug\msgcodegen.exe --check`
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。

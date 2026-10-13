@@ -7,9 +7,19 @@
 //! 遍历顺序 = 槽位顺序（= 插入顺序 + 回收槽复用），**全库唯一**：
 //! tick 的确定性（判据①）依赖"同一组操作产生同一槽位排布"。
 
-/// `src/OpenMir2/Enums/Race.cs`：`ActorRace.Play = 0`、`ActorRace.Monster = 80`。
+/// `src/OpenMir2/Enums/Race.cs`：`ActorRace.Play = 0`、`ActorRace.NPC = 10`、`ActorRace.Monster = 80`。
 pub const ACTOR_RACE_PLAY: u8 = 0;
+pub const ACTOR_RACE_NPC: u8 = 10;
 pub const ACTOR_RACE_MONSTER: u8 = 80;
+/// `ActorRace.Animal = 50`（`Race.cs:24`）—— `BaseObject.RecalcAbilitys` 末尾
+/// `if (Race >= ActorRace.Animal) ApplySlaveLevelAbilitys();`（`BaseObject.Abil.cs:85-88`）的门。
+pub const ACTOR_RACE_ANIMAL: u8 = 50;
+/// `ActorRace.WhiteSkeleton = 100`（`Race.cs:61`）—— 变异骷髅，`RecalcAbilitys` 覆写改速度。
+pub const ACTOR_RACE_WHITE_SKELETON: u8 = 100;
+/// `ActorRace.ElfMonster = 113`（`Race.cs:62`）—— 神兽跟随形态，`RecalcAbilitys` 覆写改速度。
+pub const ACTOR_RACE_ELF_MONSTER: u8 = 113;
+/// `ActorRace.ElfWarriormon = 114`（`Race.cs:63`）—— 神兽攻击形态，`RecalcAbilitys` 覆写改速度。
+pub const ACTOR_RACE_ELF_WARRIORMON: u8 = 114;
 
 /// `CharacterObject.UseItems` 的佩戴位数量（`CharacterObject.cs:89`：`UseItems = new UserItem[13]`）。
 pub const USE_ITEM_SLOTS: usize = 13;
@@ -142,6 +152,10 @@ pub struct AnimalState {
     pub run_away_mode: bool,
     pub run_away_start: i64,
     pub run_away_time: i64,
+    /// `MonsterObject.CheckRoyaltyTick`（`MonsterObject.cs:45`，ctor `:67` = `GetTickCount()`）
+    /// —— `CheckRoyalty`（`MonsterObject.cs:363-397`）的 10s 检查门。
+    /// 归 `openmir2-m3-pet-slave-lifecycle`（⑨-3）；由 [`AnimalState::seed_from_spawn`] 置为生成时刻。
+    pub check_royalty_tick: i64,
 }
 
 impl AnimalState {
@@ -173,6 +187,8 @@ impl AnimalState {
         self.think_tick = now;
         self.walk_wait_tick = now;
         self.run_away_start = now;
+        // `MonsterObject` ctor `CheckRoyaltyTick = GetTickCount()`（`MonsterObject.cs:67`）。
+        self.check_royalty_tick = now;
     }
 }
 
@@ -208,6 +224,7 @@ impl Default for AnimalState {
             run_away_mode: false,
             run_away_start: 0,
             run_away_time: 0,
+            check_royalty_tick: 0,
         }
     }
 }
@@ -229,6 +246,21 @@ pub struct Entity {
     pub race: u8,
     /// C# `Master`（宝宝的主人）
     pub master: Option<i32>,
+    /// C# `BaseObject.SlaveList`（`BaseObject.cs:141`，懒建于 `:1183`）——主人的宝宝列表（actor id，保序）。
+    ///
+    /// 归 `openmir2-m3-pet-slave-summon`（⑨-2）建立、`openmir2-m3-pet-slave-lifecycle`（⑨-3）清理。
+    pub slave_list: Vec<i32>,
+    /// C# `AnimalObject.IsSlave`（`AnimalObject.cs:54`）。
+    pub is_slave: bool,
+    /// C# `AnimalObject.SlaveExpLevel`（`AnimalObject.cs:27`）——宝宝等级（召唤时/跨服时设定；
+    /// `MonsterObject.GainSlaveExp` 是死代码，击杀不涨，见盘点报告 §1.C）。
+    pub slave_exp_level: u8,
+    /// C# `MonsterObject.SlaveMakeLevel`（`MonsterObject.cs:21`）——召唤时的技能等级。
+    pub slave_make_level: u8,
+    /// C# `MonsterObject.MasterRoyaltyTick`（`MonsterObject.cs:37`）——叛变时刻。
+    pub master_royalty_tick: i64,
+    /// C# `MonsterObject.MasterTick`（`MonsterObject.cs:41`）——诱惑到期的起算时刻。
+    pub master_tick: i64,
     pub death: bool,
     pub invisible: bool,
     pub ghost: bool,
@@ -267,6 +299,12 @@ pub struct Entity {
     /// C# `PlayObject.Luck`（`PlayObject.cs:62`，`RecalcAbilitys` 里 `Luck = 0 + AddAbil.Luck - AddAbil.UnLuck`）。
     /// 玩家攻方的 [`crate::combat::get_attack_power_player`] override 用它决定取数次数。
     pub luck: i32,
+    /// C# `BaseObject.NameColor`（`BaseObject.cs:28/385`，ctor 初值 `255`）。
+    ///
+    /// `GetNameColor()`（`BaseObject.Base.cs:904-907`）返回它；`GetChrColor`
+    /// （`BaseObject.Base.cs:869-883`）的兜底分支与 `MonsterObject`/`PlayObject` 的 override 都读它。
+    /// 归 `openmir2-m3-pet-slave-lifecycle`（⑨-3）。
+    pub name_color: u8,
     /// C# `PlayObject.PowerRate`（`PlayObject.cs:724`；新角色 `PlayObject.cs:943` 置 `100`）。
     pub power_rate: i32,
     /// C# `PlayObject.BoPowerItem`（`PlayObject.cs:223`）。
@@ -350,6 +388,17 @@ pub struct Entity {
     /// [`crate::monai::monster_ai_tick`] 显式跳过它（race 50 与 `ActorRace.Animal` 同值，
     /// 靠 race 会误跑 `monster_run`）。
     pub merchant: Option<crate::merchant::MerchantState>,
+    /// C# `PlayObject.AllowGroup`（`PlayObject.cs:106` 声明、`:902` 构造初值 `false`）——
+    /// 是否允许被拉进小组（`ClientCreateGroup`/`ClientAddGroupMember` 的门）。
+    pub allow_group: bool,
+    /// C# `PlayObject.AllowGroupReCall`（`PlayObject.cs:224`）——是否允许被组队传送（`@GroupRecall`）。
+    /// 构造未显式赋值 ⇒ `bool` 缺省 `false`。[`crate::party`] 不消费它；扩展面（⑦-可选）接线用。
+    pub allow_group_re_call: bool,
+    /// C# `PlayObject.GroupOwner`（`PlayObject.cs:583`，构造默认 `0` = 无组）——**团长** `ActorId`。
+    pub group_owner: i32,
+    /// C# `PlayObject.GroupMembers`（`PlayObject.cs:587`，构造 `:1042` `new List`）——
+    /// 组内成员 `ActorId` 列表（**含团长自己**，与 oracle 一致）。顺序 = 加入序（oracle 的 `IList`）。
+    pub group_members: Vec<i32>,
 }
 
 impl Entity {
@@ -362,6 +411,12 @@ impl Entity {
             view_range: 5, // BaseObject.cs:383
             race: ACTOR_RACE_PLAY,
             master: None,
+            slave_list: Vec::new(),
+            is_slave: false,
+            slave_exp_level: 0,
+            slave_make_level: 0,
+            master_royalty_tick: 0,
+            master_tick: 0,
             death: false,
             invisible: false,
             hide_mode: false,
@@ -376,6 +431,8 @@ impl Entity {
             stone_mode: false,
             dear_human: None,
             pk_point: 0,
+            // `BaseObject.cs:385`：ctor 初值 `NameColor = 255`。
+            name_color: 255,
             // `PlayObject.cs:62/943`：新角色 `Luck` 由 `RecalcAbilitys` 置 0（无 `AddAbil`），
             // `PowerRate = 100`；`BoPowerItem=false` / `PowerItem=0`。
             luck: 0,
@@ -420,6 +477,12 @@ impl Entity {
             ctor_draws: MonsterCtorDraws::default(),
             ai: AnimalState::default(),
             merchant: None,
+            // 组队态构造初值：`PlayObject.cs:902` `AllowGroup=false`、`:583` `GroupOwner=0`、
+            // `:1042` `GroupMembers=new List()`、`AllowGroupReCall`（`:224`）bool 缺省 `false`。
+            allow_group: false,
+            allow_group_re_call: false,
+            group_owner: 0,
+            group_members: Vec::new(),
         }
     }
 

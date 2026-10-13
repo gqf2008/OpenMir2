@@ -1,0 +1,59 @@
+M3⑨-实现 3（宝宝生命周期）oracle 锚点
+=====================================
+
+行号复核于 2026-10-13（本 worktree 的 src/ 只读快照）。
+
+[清表] 死亡/幽灵/换主清表
+- src/M2Server/Actor/BaseObject.Base.cs:208-217
+  `if (SlaveList != null && SlaveList.Any()) { for (i = Count-1; i >= 0; i--)
+     if (SlaveList[i].Death || SlaveList[i].Ghost || (SlaveList[i].Master != this)) RemoveAt(i); }`
+  位置：`BaseObject.Run()` 尾（在 `Master != null` 变色段之后、`ShowHp` 之前）。
+- 字段：`src/M2Server/Actor/BaseObject.cs:141` `SlaveList`（懒建 `:1183`）。
+
+[叛变] CheckRoyalty
+- src/M2Server/Monster/MonsterObject.cs:363-397（调用点 `:352`，在 `MonsterObject.Run` 尾、`base.Run()` `:359` 之前）
+  - `:365` `(GetTickCount() - CheckRoyaltyTick) > 10000` → `:367` 刷新 `CheckRoyaltyTick`
+  - `:370-372` `M2Share.SpiritMutinyTick > now && this.SlaveExpLevel < 5` ⇒ `MasterRoyaltyTick = 0`
+  - `:374-384` `now > MasterRoyaltyTick` ⇒ 从 `Master.SlaveList` 移除（首个匹配）+ `Master = null` + `WAbil.HP /= 10` + `RefShowName()`
+  - `:387-393` `MasterTick > 0 && (now - MasterTick) > 12*60*60*1000` ⇒ `WAbil.HP = 0`
+- 字段：`MonsterObject.cs:37` `MasterRoyaltyTick`、`:41` `MasterTick`、`:45` `CheckRoyaltyTick`（ctor `:67` = now）
+- 提前返回口（跳过 CheckRoyalty）：`MonsterObject.cs:255-258`（Think）、`:277-283`（AttackTarget）、`:333-338`（Master.SlaveRelax）
+
+[主人死] ProcessSlaveMutiny
+- src/M2Server/Player/PlayObject.Base.cs:331-357
+  - `:333-336` `!Death` ⇒ return；`:338-341` `!Config.MasterDieMutiny` ⇒ return（均不抽数）
+  - `:342-356` `for (i = Count-1; i >= 0; i--)`：`SlaveList[i].Master.LastHiter != null && Random(MasterDieMutinyRate)==0`
+    ⇒ `Master=null` / `SlaveExpLevel = SlaveColor.Length` / `RecalcAbilitys()` / `WAbil.DC = (ushort)MakeLong((short)(LoByte*Power),(short)(HiByte*Power))` /
+    `WalkSpeed /= MasterDieMutinySpeed` / `RefNameColor()` / `RefShowName()`；否则 `WAbil.HP = 0`
+- 触发：`PlayObject.cs:1996/2005` 发 `RM_MASTERDIEMUTINY`（Die/KickException）⇒ `PlayObject.Message.cs:2116`
+
+[主人幽灵] ProcessSlaveGhost
+- src/M2Server/Player/PlayObject.Base.cs:360-370：`!Ghost` ⇒ return；`for (i = Count-1; i>=0; i--) SlaveList[i].MakeGhost()`
+- `MakeGhost`：`BaseObject.Base.cs:484-497`（`CanReAlive ⇒ Invisible=true` 否则 `Ghost=true` + `GhostTick` + `DisappearA()`）
+- 触发：`PlayObject.cs:3527` 发 `RM_MASTERDIEGHOST` ⇒ `PlayObject.Message.cs:2119`
+
+[神之祈祷] SpiritMutinyTick
+- src/M2Server/Player/PlayObject.Base.cs:322-330（`ProcessSpiritSuite`）：`:326` `M2Share.SpiritMutinyTick = now + Config.SpiritMutinyTime`
+- 触发：`PlayObject.cs:2888` 发 `RM_SPIRITSUITE` ⇒ `PlayObject.Message.cs:2113`
+- 全局：`src/M2Server/M2Share.cs:185` `public static int SpiritMutinyTick = 0;`
+
+[诱惑受奴尾] MagTamming
+- src/M2Server/Magic/MagicManager.cs:704-825；受奴支 `:751-777`
+  - `:751` `targetObject.Master = playObject`
+  - `:759` `MasterRoyaltyTick = (Random(playObject.Abil.Level*2) + (magicLevel<<2)*5 + 20) * 60*1000 + GetTickCount()`
+  - `:760` `SlaveMakeLevel = magicLevel`
+  - `:762-764` `if (MasterTick == 0) MasterTick = now`
+  - `:765-772` `WalkSpeed/NextHitTime` 封顶（`1500/2000 - magicLevel*200`）
+  - `:776` `playObject.SlaveList.Add(targetObject)`
+  - 注意：诱惑**不写** `IsSlave`（与 `MakeSlave` 不同）
+
+[色彩] GetChrColor
+- src/M2Server/Actor/BaseObject.Base.cs:869-883
+  - `:871` `Race == NPC` ⇒ `Config.NpcNameColor`
+  - `:874-881` `Master != null` ⇒ `slaveExpLevel = ((MonsterObject)baseObject).SlaveExpLevel`；`if (slaveExpLevel <= Grobal2.SlaveMaxLevel) return Config.SlaveColor[slaveExpLevel]`
+  - `:883` 兜底 `baseObject.GetNameColor()`（`BaseObject.Base.cs:904-907` = `NameColor`，ctor 初值 `BaseObject.cs:385` = 255）
+- `MonsterObject.GetChrColor` override（`MonsterObject.cs:482-492`）的 `CrazyMode ⇒ 0xF9` / `HolySeize ⇒ 0x7D` 前置支未建模（登记）
+- 色表：`GameSvrConf.cs:184` `byte[] SlaveColor`（ctor `:1328` 15 项）；`Grobal2.cs:23` `SlaveMaxLevel = 50`
+
+[死代码] GainSlaveExp
+- src/M2Server/Monster/MonsterObject.cs:71-84（`KillMonCount` 阈值 ⇒ `SlaveExpLevel++`）；全仓无调用点 ⇒ 照搬「击杀不涨级」，本片不实现。

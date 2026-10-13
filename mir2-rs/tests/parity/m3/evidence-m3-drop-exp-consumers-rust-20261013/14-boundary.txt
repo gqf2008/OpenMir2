@@ -1,0 +1,35 @@
+=== 边界（base=ad0bba3016daffd8c37927fe050f5618dd108b19 / head=813044174c1ce1e6d2674e993a2c136a806eb68e）===
+--- git diff --name-only base head ---
+"mir2-rs/tests/parity/m3/M3\342\221\243\347\272\257\345\272\246\351\227\250\344\270\244\344\276\247\345\256\236\346\265\213\347\253\231\347\202\271\350\241\250\350\241\245\351\275\220\346\212\245\345\221\212-20261013.md"
+mir2-rs/tests/parity/m3/drop-exp/README.md
+mir2-rs/tests/parity/m3/drop-exp/drop_exp_consumers.tsv
+mir2-rs/tests/parity/m3/drop-exp/drop_exp_purity_gate.py
+mir2-rs/tests/parity/m3/drop-exp/drop_exp_scenario.json
+mir2-rs/tests/parity/m3/drop-exp/run_drop_exp_pair.ps1
+mir2-rs/tests/parity/m3/evidence-m3-drop-exp-consumers-rust-20261013/00-commands.txt
+mir2-rs/tests/parity/m3/evidence-m3-drop-exp-consumers-rust-20261013/01-before-rust-prereq.txt
+mir2-rs/tests/parity/m3/evidence-m3-drop-exp-consumers-rust-20261013/02-after-rust-green.txt
+mir2-rs/tests/parity/m3/evidence-m3-drop-exp-consumers-rust-20261013/03-purity-gate-selftest.txt
+mir2-rs/tests/parity/m3/evidence-m3-drop-exp-consumers-rust-20261013/04-runner-selfcheck-nostack.txt
+mir2-rs/tests/parity/m3/evidence-m3-drop-exp-consumers-rust-20261013/05-mut-rust-drop-unknown-red.txt
+mir2-rs/tests/parity/m3/evidence-m3-drop-exp-consumers-rust-20261013/06-mut-rust-kill-unknown-red.txt
+mir2-rs/tests/parity/m3/evidence-m3-drop-exp-consumers-rust-20261013/07-mut-csharp-drop-unknown-red.txt
+mir2-rs/tests/parity/m3/evidence-m3-drop-exp-consumers-rust-20261013/08-after-csharp-green.txt
+mir2-rs/tests/parity/m3/evidence-m3-drop-exp-consumers-rust-20261013/09-rust-pin-failed-wallclock-red.txt
+mir2-rs/tests/parity/m3/evidence-m3-drop-exp-consumers-rust-20261013/10-gates-fmt.txt
+mir2-rs/tests/parity/m3/evidence-m3-drop-exp-consumers-rust-20261013/11-gates-clippy.txt
+mir2-rs/tests/parity/m3/evidence-m3-drop-exp-consumers-rust-20261013/12-gates-test.txt
+mir2-rs/tests/parity/m3/evidence-m3-drop-exp-consumers-rust-20261013/13-gates-msgcodegen.txt
+mir2-rs/tests/parity/m3/evidence-m3-drop-exp-consumers-rust-20261013/README.md
+mir2-rs/tests/parity/m3/evidence-m3-drop-exp-consumers-rust-20261013/csharp-measured-synthetic.tsv
+mir2-rs/tests/parity/m3/evidence-m3-drop-exp-consumers-rust-20261013/rust-measured-synthetic.tsv
+mir2-rs/tests/parity/m3/evidence-m3-drop-exp-consumers-rust-20261013/rust-pin-failed-synthetic.tsv
+mir2-rs/tests/parity/m3/evidence-m3-drop-exp-consumers-rust-20261013/table-before.tsv
+mir2-rs/tests/parity/m3/evidence-m3-drop-exp-consumers-rust-20261013/table-mut-combat-removed.tsv
+mir2-rs/tests/parity/m3/evidence-m3-drop-exp-consumers-rust-20261013/table-mut-csharp-drop-removed.tsv
+mir2-rs/tests/parity/m3/evidence-m3-drop-exp-consumers-rust-20261013/table-mut-drop-removed.tsv
+--- 冻结面（应为空）---
+src/sql/MirClient/crates/bins: []
+--- *.rs（应为 0）---
+rs_count=0
+--- 本件与 SHA256SUMS.txt 为证据自身（上列未含）---

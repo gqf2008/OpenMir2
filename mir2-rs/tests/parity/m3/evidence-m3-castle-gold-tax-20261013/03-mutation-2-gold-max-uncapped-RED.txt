@@ -1,0 +1,38 @@
+# M2（改坏必红）：删掉 TotalGold 的 CastleGoldMax 封顶
+$ python -c "... 删掉 if total_gold + n_in_gold < castle_gold_max 分支 ..."
+$ (cd mir2-rs && CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo test -p mir2-world --lib castle_tax --offline)
+
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\crates\world)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.46s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m3cs-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 11 tests
+test castle_tax::tests::castle_tax_config_maps_guild_castle_config_keys ... ok
+test castle_tax::tests::inc_rate_gold_rounds_away_from_zero_like_hutil ... ok
+test castle_tax::tests::inc_rate_gold_save_tick_is_strictly_greater_than_ten_minutes ... ok
+test castle_tax::tests::inc_rate_gold_caps_today_income_and_rolls_remainder ... ok
+test castle_tax::tests::cross_day_run_resets_today_income_but_keeps_total_gold ... ok
+test castle_tax::tests::castle_manager_inc_rate_gold_visits_every_castle_in_order ... ok
+test castle_tax::tests::inc_rate_gold_zero_price_keeps_totals_but_still_advances_save_tick ... ok
+test castle_tax::tests::merchant_tax_amount_uses_upgrade_weapon_price_for_manager_branch ... ok
+test castle_tax::tests::merchant_tax_target_matches_oracle_branches ... ok
+test castle_tax::tests::inc_rate_gold_caps_total_gold_at_castle_gold_max ... FAILED
+test castle_tax::tests::vault_withdrawal_and_receipt_stay_n1_noop_while_tax_changes_state ... ok
+
+failures:
+
+---- castle_tax::tests::inc_rate_gold_caps_total_gold_at_castle_gold_max stdout ----
+
+thread 'castle_tax::tests::inc_rate_gold_caps_total_gold_at_castle_gold_max' (30660) panicked at crates\world\src\castle_tax.rs:334:9:
+assertion `left == right` failed
+  left: 5000004
+ right: 5000000
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    castle_tax::tests::inc_rate_gold_caps_total_gold_at_castle_gold_max
+
+test result: FAILED. 10 passed; 1 failed; 0 ignored; 0 measured; 122 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-world --lib`

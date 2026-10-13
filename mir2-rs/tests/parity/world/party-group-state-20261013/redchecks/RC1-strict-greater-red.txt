@@ -1,0 +1,15 @@
+# RC-1: party_add_group_member 的严格大于 '>' 改成 '>='（crates/world/src/party.rs）
+# 期望：add_member_uses_strict_greater_than_max 必红（rc=101）
+thread 'add_member_uses_strict_greater_than_max' (18108) panicked at crates\world\tests\party_vectors.rs:146:5:
+assertion failed: matches!(evs.first(), Some(PartyEvent::AddMemberOk { target }) if *target ==
+    l)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    add_member_uses_strict_greater_than_max
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-world --test party_vectors`
+rc=101

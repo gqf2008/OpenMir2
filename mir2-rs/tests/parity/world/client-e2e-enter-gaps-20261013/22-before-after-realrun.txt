@@ -1,0 +1,41 @@
+# 帧 52 尾布局：真机改前/改后（同一客户端 D:\MirClient-run\MirClinet.exe、同一角色 aaa、同一 mir2_db）
+
+## 改前（默认 oracle 布局，MIR2_CLIENT_ABILITY_LAYOUT 未设）
+
+命令（cwd = 本 worktree）：
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "Remove-Item Env:MIR2_CLIENT_ABILITY_LAYOUT -ErrorAction SilentlyContinue; & tools/m2-acceptance/start_rust_stack.ps1 -RustBinDir E:/tmp/m2svr-target/debug"
+    -> RUST_STACK_OK
+  powershell -NoProfile -ExecutionPolicy Bypass -File tools/client/mir_flow.ps1 -Account mir2test -Password mir2pass -OutDir E:/tmp/m2svr-gaps2/base0 -WalkClicks 0
+    -> FLOW_OK / CLIENT_STOPPED
+  powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 -Stop
+    -> 5000/7000/7100/7200 DOWN
+
+game-svr.out.log：
+10:32:23.917 [DBG] 52/752 入图输入 ChrName=aaa layout=oracle-40 tail_len=40 WAbil[level=1 ac=0 mac=0 dc=257 mc=0 sc=0 hp=19 mp=15 max_hp=19 max_mp=15 exp=0 max_exp=10 weight=0 max_weight=50 wear_weight=0 max_wear_weight=15 hand_weight=0 max_hand_weight=12] SubAbility[anti_magic=1 hit_point=5 speed_point=15 anti_poison=0 poison_recover=0 health_recover=0 spell_recover=0] ability_tail_hex=01000000000001010000000013000f0013000f0000000000000000000a00000000003200000f000c
+
+客户端 HUD：HP `0/0`、MP `655360/25165829`，血球暗（shots/rust-oracle-40-hud-0-0.png）
+
+## 改后（客户端 58B 布局，MIR2_CLIENT_ABILITY_LAYOUT=1）
+
+命令：
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:MIR2_CLIENT_ABILITY_LAYOUT='1'; & tools/m2-acceptance/start_rust_stack.ps1 -RustBinDir E:/tmp/m2svr-target/debug"
+    -> RUST_STACK_OK
+  powershell -NoProfile -ExecutionPolicy Bypass -File tools/client/mir_flow.ps1 -Account mir2test -Password mir2pass -OutDir E:/tmp/m2svr-gaps2/layout1b -WalkClicks 3 -AutoPlaySec 15
+    -> FLOW_OK / CLIENT_STOPPED
+  powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 -Stop
+    -> 5000/7000/7100/7200 DOWN
+
+game-svr.out.log：
+10:34:53.847 [DBG] 52/752 入图输入 ChrName=aaa layout=client-58 tail_len=58 WAbil[level=1 ac=0 mac=0 dc=257 mc=0 sc=0 hp=19 mp=15 max_hp=19 max_mp=15 exp=0 max_exp=10 weight=0 max_weight=50 wear_weight=0 max_wear_weight=15 hand_weight=0 max_hand_weight=12] SubAbility[anti_magic=1 hit_point=5 speed_point=15 anti_poison=0 poison_recover=0 health_recover=0 spell_recover=0] ability_tail_hex=01000000000000000000010100000000000000000000130000000f000000130000000f000000000000000a0000000000320000000f0000000c00
+
+客户端 HUD：HP `19/19`、MP `15/15`，血球满红（shots/rust-client-58-hud-19-19.png）
+
+## 58B 尾逐偏移解码（对上表 21-client-ability-layout.md §1）
+
+python -c "import struct; b=bytes.fromhex('01000000000000000000010100000000000000000000130000000f000000130000000f000000000000000a0000000000320000000f0000000c00'); print(len(b)); print('level@0',struct.unpack_from('<H',b,0)[0]); print('hp@22',struct.unpack_from('<I',b,22)[0]); print('mp@26',struct.unpack_from('<I',b,26)[0]); print('maxhp@30',struct.unpack_from('<I',b,30)[0]); print('maxmp@34',struct.unpack_from('<I',b,34)[0])"
+58
+level@0 1
+hp@22 19
+mp@26 15
+maxhp@30 19
+maxmp@34 15

@@ -1,0 +1,59 @@
+52-before-after-viewrange12.txt — 缺口②「同屏无怪」AOI 窗口（ViewRange 5→12）真机 before/after
+卡 openmir2-client-e2e-enter-gaps / reviewer-6 not_verified①
+
+> ⚠ 更新（片⑧，`56-before-after-viewrange-realrun.txt`）：本文件 §B 的「真机 before 归 remaining」已收口——
+> 后的配对真机 run（同种子 seed=42，只差 `e.view_range = 12;` 一行）实测
+> **before(5) = 2 只出现帧 / Chebyshev 6..12 = 0；after(12) = 13 只 / 6..12 = 10**。以 56 为准。
+
+本文件有两部分：
+  A. **after（真机，已达成）**：master（ViewRange=12）真客户端 capture 里，逐只怪的出现帧距离。
+  B. **before（真机尝试失败，如实登记）**：改回缺省 5 后起真栈的那次采集**没抓到客户端连接**
+     （代理 dump 为空），⇒ before 侧改用「同一份真机 capture 的位置 + 两个窗口半径」计算，
+     并把这次尝试与失败原因如实写在这里；真机 before 列为 remaining。
+
+A. after：真机 capture 中「Chebyshev 6..12 的怪」直接可见
+================================================================================
+来源：`capture-client-default-oracle40.jsonl`（片⑤ RunA，master 78cf74d46 之后的树，ViewRange=12）。
+解码字段：`10 SM_TURN` 的 header = `Recog(actor_id) / Param(x) / Tag(y)`（`smframe.rs::sm_turn`）；
+`50 SM_LOGON` 的 header = `Param(CurrX) / Tag(CurrY)`（`smframe.rs::sm_logon`）。
+
+  角色位置(50) = (287,620)
+  recog=789  monster=(275,618)  chebyshev=12
+  recog=326  monster=(275,620)  chebyshev=12
+  recog=408  monster=(280,612)  chebyshev=8
+  recog=801  monster=(287,614)  chebyshev=6
+  recog=300  monster=(288,608)  chebyshev=12
+  recog=296  monster=(288,615)  chebyshev=5
+  recog=791  monster=(288,619)  chebyshev=1
+  recog=897  monster=(290,614)  chebyshev=6
+  recog=776  monster=(292,611)  chebyshev=9
+  recog=809  monster=(297,610)  chebyshev=10
+  recog=782  monster=(298,609)  chebyshev=11
+  recog=817  monster=(298,618)  chebyshev=11
+
+  共 12 只；**距离 6..12 的 = 10 只**；距离 ≤5 的 = 2 只。
+
+B. before：为什么「窗口 5」这 10 只必须为 0（模型 + 真机尝试失败登记）
+================================================================================
+oracle：`src/M2Server/Player/PlayObject.cs:904` 玩家 `ViewRange=12`；`src/M2Server/Actor/BaseObject.cs:383`
+缺省 5；扫描窗口 = `[CurrX±ViewRange] × [CurrY±ViewRange]`（`BaseObject.ViewRange.cs:57-74`）⇒ 边长
+`2*ViewRange+1`（12 ⇒ 25×25；5 ⇒ 11×11，即 Chebyshev 半径 5）。⇒ 在缺省 5 下，
+上表 10 只 Chebyshev 6..12 的怪**不在扫描窗口内**，`visible_actors` 收不到、`drain_aoi_downlink`
+也就不发 `10 SM_TURN`/`41 SM_FEATURECHANGED` ⇒ before 侧该类出现帧 = 0。
+
+真机 before 尝试（失败，如实登记）
+--------------------------------------------------------------------------------
+- 动作：`mir2-rs/bins/game-svr/src/main.rs:3680` 的 `e.view_range = 12;` 注释掉（回缺省 5）→
+  重建 game-svr（隔离 target `E:/tmp/m2svr-target`）→ 起整栈 + 影子 game-gate(7600) +
+  `mir2_proxy.py` 7200→7600 → 真客户端同账号同角色（DB 先置 (287,620)，即 RunA 的进图点）→
+  `mir_flow.ps1 -AutoPlaySec 20 -SkipLogout -SkipReenter -SkipTalk` ⇒ `FLOW_OK`。
+- 结果：**代理 dump 空**（`proxy/chunks.ndjson` 0 字节，mtime = 起代理那一刻；`conn-0001.*.bin`
+  仍是 RunA/Run5 的旧件）。`export_s2c.ps1` 因此**重读了旧件**（`s2c-before/manifest.json` 的
+  stream sha256 与 `s2c-run5` 逐字节相同 ⇒ 确认不是新采集）。⇒ 本次「真机 before」不成立，
+  不作为证据；`e.view_range = 12;` 已 `git checkout` 还原（main.rs sha256 `ce3e9a71…`，与交付 head 相同），
+  二进制已重建回 12。
+- 现象留档：起代理后 1s 内客户端即进图（flow 的 `ingame` 在代理 `start_wall_ms` 之后 1s），
+  但代理未记到连接；根因未查（疑客户端本次连的是 7201/7202 或与「起栈-客户端」竞态有关）。
+  **真机 before 归 remaining（window）**；before 侧结论以 §B 的窗口模型 + 已审的构造级用例
+  （`player_aoi_window_covers_view_range_12`，`31-redcheck-viewrange.txt` 边界：Chebyshev 12 可见、
+  13 不可见，删 `e.view_range = 12;` ⇒ 用例 rc=101）为准。

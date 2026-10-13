@@ -1,0 +1,64 @@
+# RC-1 改坏必红：删掉 handle_selloff_cmd 的 CM_SELLOFFEND 派发支（回 Vec::new()）
+# mutation（精确单次替换，命中数=1，跑完 git restore 还原，不提交）：
+#   `messages::CM_SELLOFFEND => game_svr::selloff::client_sell_off_end(...),`
+#   → `messages::CM_SELLOFFEND => Vec::new(),`
+# 命令：cargo test -p game-svr --offline --bin game-svr selloff
+# 期望/实测：进程级 2 条 FAILED（上架不再入 SellOffBook / 不回 SM_SELLOFFEND_OK），rc=101。
+# 注（rebase 片 r2 2026-10-13，worktree m3hp / principal openmir2-worker-20）：本片与 ⑩-2 同栈
+#   重放到 master `ddaca961c`（交付时 origin/master=`78cf74d46`；`git merge-tree` HEAD x master = rc=0），
+#   按同一命令重跑；隔离目标目录 = `E:/tmp/openmir2-m3hp-target`（检出外）。
+
+
+running 2 tests
+test tests::selloff_cancel_paths_dispatch_and_mutate_global_book ... FAILED
+test tests::selloff_cm_dispatch_emits_oracle_frames_on_both_connections ... FAILED
+
+failures:
+
+---- tests::selloff_cancel_paths_dispatch_and_mutate_global_book stdout ----
+
+thread 'tests::selloff_cancel_paths_dispatch_and_mutate_global_book' (26088) panicked at bins\game-svr\src\main.rs:12914:9:
+assertion `left == right` failed
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- tests::selloff_cm_dispatch_emits_oracle_frames_on_both_connections stdout ----
+
+thread 'tests::selloff_cm_dispatch_emits_oracle_frames_on_both_connections' (25856) panicked at bins\game-svr\src\main.rs:12696:9:
+assertion `left == right` failed: 上架出队序：MENU_OK(69) 先于 SELLOFFEND_OK(233)
+  left: []
+ right: [767, 23016]
+
+
+failures:
+    tests::selloff_cancel_paths_dispatch_and_mutate_global_book
+    tests::selloff_cm_dispatch_emits_oracle_frames_on_both_connections
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 190 filtered out; finished in 0.00s
+
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\bins\game-svr)
+warning: unused variable: `param`
+    --> bins\game-svr\src\main.rs:1807:5
+     |
+1807 |     param: u16,
+     |     ^^^^^ help: if this is intentional, prefix it with an underscore: `_param`
+     |
+     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `tag`
+    --> bins\game-svr\src\main.rs:1808:5
+     |
+1808 |     tag: u16,
+     |     ^^^ help: if this is intentional, prefix it with an underscore: `_tag`
+
+warning: unused variable: `now`
+    --> bins\game-svr\src\main.rs:1837:9
+     |
+1837 |     let now = world.clock_ms;
+     |         ^^^ help: if this is intentional, prefix it with an underscore: `_now`
+
+warning: `game-svr` (bin "game-svr" test) generated 3 warnings (run `cargo fix --bin "game-svr" -p game-svr --tests` to apply 3 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.10s
+     Running unittests src\main.rs (E:/tmp/openmir2-m3hp-target\debug\deps\game_svr-1f4431beb89ebeb6.exe)
+error: test failed, to rerun pass `-p game-svr --bin game-svr`

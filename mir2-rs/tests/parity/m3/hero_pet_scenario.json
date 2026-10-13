@@ -1,0 +1,117 @@
+{
+  "canon": "m3-hero-pet-v1",
+  "status": "skeleton-window-pending",
+  "card": "openmir2-m3-hero-pet-fixture-botsrv",
+  "parent_card": "openmir2-m3-hero-pet-align",
+  "bots": 2,
+  "master_role": 0,
+  "peer_role": 1,
+  "default_case": "summon_skeleton",
+  "map": "0137",
+  "home_map": 0,
+  "home_x": 289,
+  "home_y": 618,
+  "player_x": 17,
+  "player_y": 20,
+  "player_dir": 2,
+  "peer_dx": 1,
+  "pin_level": 45,
+  "step_ms": 1000,
+  "start_delay_ms": 3000,
+  "cases": {
+    "summon_skeleton": {
+      "steps": [
+        {"role": "a", "op": "observe", "param": ""},
+        {"role": "a", "op": "summon", "param": "17"},
+        {"role": "a", "op": "observe", "param": ""}
+      ],
+      "note": "主人（role=a）先观测基线，施放 17 召唤骷髅（CM_SPELL(3017) ⇒ MagicManager.cs:373 MagMakeSlave ⇒ BaseObject.cs:1179-1209 MakeSlave），再观测宝宝列表/名色。判据承载：slaves 多重集（名#NameColor）、slave_count、帧序列（SM_SPELL(17) / SM_DEATH(32) / SM_CHANGENAMECOLOR(656)）。"
+    },
+    "summon_dragon": {
+      "steps": [
+        {"role": "a", "op": "summon", "param": "30"},
+        {"role": "a", "op": "observe", "param": ""}
+      ],
+      "note": "30 召唤神兽（MagicManager.cs:1269 MagMakeSinSuSlave：CheckServerMakeSlave → DragonArray[i].nHumLevel 选 Dragon/DragonN → MakeSlave）。"
+    },
+    "summon_angel": {
+      "steps": [
+        {"role": "a", "op": "summon", "param": "41"},
+        {"role": "a", "op": "observe", "param": ""}
+      ],
+      "note": "41 召唤精灵（MagicManager.cs:1343 MagMakeAngelSlave：MakeSlave(Angel, level, level, 1, DwRoyaltySec)）。"
+    },
+    "tame_beast": {
+      "steps": [
+        {"role": "a", "op": "summon", "param": "20"},
+        {"role": "a", "op": "observe", "param": ""}
+      ],
+      "note": "20 诱惑之光（MagicManager.cs:704-825 MagTamming；Rust 已在 magic.rs:548-819 实现）。判据：SlaveList.Count < MagTammingCount(5) 门 + 多层 Random 取数次序（Claim B 账本输入，不许为『好测』改次序）。"
+    },
+    "cap_one": {
+      "steps": [
+        {"role": "a", "op": "summon", "param": "17"},
+        {"role": "a", "op": "summon", "param": "17"},
+        {"role": "a", "op": "observe", "param": ""}
+      ],
+      "note": "上限判定：MakeSlave 的 `SlaveList.Count < nMaxMob` 门（BaseObject.cs:1185；nMaxMob = SkeletonCount 现网默认 1）⇒ 第二次召唤失败、slave_count 仍为 1。判据 = slave_count_after + 帧序列两侧相同。"
+    },
+    "mutiny_time_gate": {
+      "steps": [
+        {"role": "a", "op": "summon", "param": "30"},
+        {"role": "a", "op": "wait", "param": "12000"},
+        {"role": "a", "op": "observe", "param": ""}
+      ],
+      "note": "阵亡/叛变（时间门）：MonsterObject.cs:363-397 CheckRoyalty 每 ≥10s 检查；MasterTick>12h 死亡；SpiritMutinyTick 立即叛变。wait 的 param = 虚拟毫秒推进量。**依赖 openmir2-m3-clock-injection**（两侧可注入时钟），本片只登记、不实现；`-Side rust` preflight 在 ⑨-3 落地前 fail-closed。"
+    },
+    "master_vs_slave_exp": {
+      "steps": [
+        {"role": "a", "op": "summon", "param": "41"},
+        {"role": "a", "op": "attack", "param": "2"},
+        {"role": "a", "op": "observe", "param": ""}
+      ],
+      "note": "经验分配（ExpHitter.Master，T-33 / BaseObject.cs:2429-2443）：宝宝击杀 ⇒ 经验发**主人**。判据 = exp_before/after + level 逐整数相同。**要窗口**：0137 自身不刷怪 ⇒ 需 ④-B/⑨-2 的 MonGen 驱动 + pin 一只固定怪（承接卡 ⑨-3）；本片只定契约。"
+    }
+  },
+  "oracle_anchors": {
+    "dispatch": "MagicManager.cs:373/397/455/467/590（DoSpell → MagMakeSlave/MagTamming/MagMakeSinSuSlave/MagMakeAngelSlave/MagMakeClone）",
+    "make_slave": "BaseObject.cs:1179-1209 MakeSlave（SlaveList 懒建:1183；Count < nMaxMob 门:1185；GetFrontPosition → WorldEngine.RegenMonsterByName:1190；设 Master/IsSlave/MasterRoyaltyTick/SlaveMakeLevel/SlaveExpLevel；RecalcAbilitys；HP<MaxHP 补一半；RefNameColor；SlaveList.Add）",
+    "check_server_make_slave": "BaseObject.cs:1979-1994（MsgQueue 有 RM_10401 ⇒ 不许本服召唤）",
+    "recall_slave": "BaseObject.cs:1850-1876（神兽按 Dragon/Dragon1 特判 SpaceMove）",
+    "mag_tamming": "MagicManager.cs:704-825（SlaveList.Count < MagTammingCount:725）",
+    "skeleton_array": "MagicManager.cs:1308-1335 MagMakeSlave（SkeletonArray[i].nHumLevel → Skeleton + nLevel/nCount）",
+    "dragon_array": "MagicManager.cs:1269-1306 MagMakeSinSuSlave",
+    "angel": "MagicManager.cs:1343-1352 MagMakeAngelSlave；DwRoyaltySec = 10*24*60*60（MagicManager.cs:22）",
+    "clone": "MagicManager.cs:1337-1341 MagMakeClone（PlayCloneObject，不入 SlaveList）",
+    "slave_level": "MonsterObject.cs:71-84 GainSlaveExp（**死代码**，全仓无调用点 ⇒ 击杀不涨级的语义要点）；:86-97 GainSlaveUpKillCount",
+    "slave_color": "BaseObject.Base.cs:869-881 GetChrColor（Master != null ⇒ SlaveColor[SlaveExpLevel]）",
+    "death_mutiny": "MonsterObject.cs:363-397 CheckRoyalty（Run 调用:352）；PlayObject.Base.cs:333-357 ProcessSlaveMutiny；:360-370 ProcessSlaveGhost；BaseObject.Base.cs:208-217 死亡/幽灵/换主清表",
+    "exp_owner": "BaseObject.cs:1753-1768 SetLastHiter（ExpHitter 只在 null 时认领）；BaseObject.Base.cs:119-132 ExpHitter 6s 过期；BaseObject.cs:2429-2443 KillFunc（:2434-2437 ExpHitter.Master != null ⇒ 发主人 RM_PLAYERKILLMONSTER）",
+    "frames": "Messages.cs:17/31/32/44/45/53/656（SM_SPELL / SM_STRUCK / SM_DEATH / SM_WINEXP / SM_LEVELUP / SM_HEALTHSPELLCHANGED / SM_CHANGENAMECOLOR）+ SM_MENU_OK(767)",
+    "send_spell": "src/BotSrv/Player/RobotPlayer.cs:3968 SendSpellMsg（发 CM_SPELL(3017)）",
+    "slave_observe": "src/BotSrv/Player/RobotPlayer.Operate.cs:360-380（RM_USERNAME 的 `(主人名)` 收进 MShare.MySelf.SlaveObject）；src/BotSrv/Scenes/Scene/PlayScene.cs:1189 IsMySlaveObject",
+    "db": "sql/ 无 slave/pet/hero/tamming 表或列（盘点 §1.H，`rg -ni 'slave|hero|pet|tamming' sql/` no match）⇒ 两侧都不落库",
+    "clock_injection": "openmir2-m3-clock-injection（C# 影子 hook MIR2_CLOCK_* + Rust world.clock_ms/now_ms()）；时间门 = CheckRoyalty 10s / MasterTick 12h / ExpHitter 6s / SpiritMutinyTime"
+  },
+  "frame_text_sms": [767],
+  "frame_scalar_fields": {},
+  "artifact": {
+    "markers": "M3HEROPETSEQ（BotSrv stdout / bot.log 内嵌事件，含 bot 字段）",
+    "raw": "hero_pet_raw.jsonl",
+    "comparator": "python -I hero_pet_diff.py diff <csharp_raw> <rust_raw>",
+    "assembler": "python -I hero_pet_diff.py assemble <markers.jsonl> --out <raw.jsonl>",
+    "runner": "run_hero_pet_pair.ps1"
+  },
+  "record_required_fields": ["bot", "k", "op", "ran", "frames", "slave_count_before", "slave_count_after", "exp_before", "exp_after", "level_before", "level_after", "gold_before", "gold_after", "branch"],
+  "record_optional_fields": ["role", "param", "map", "slaves_before", "slaves_after", "bag_before", "bag_after"],
+  "notes": [
+    "判据 = 逐 (bot,k)：op / role / ran / param / 帧种类序列 / 声明标量帧参数 / 文本帧(SM_MENU_OK 767)逐字节 / exp_before/after / level_before/after / slave_count_before/after / slaves 多重集 / gold_before/after / bag 多重集 / branch 全部相同；两侧必须有同一组 bot、每个 bot 同一串 k。",
+    "动态 id（actor / make index / 帧 a/b/c/d）不作判据（跨运行本来不同）；只在原始件里留审计。",
+    "宝宝列表按多重集比（`名字#NameColor`）——宝宝名可能带随机后缀/序号，窗口期若确认存在不可比动态位，改在 BotSrv 侧归一为『名字去掉后缀 + NameColor』，不在比较器里放水。",
+    "落库口径 = oracle『宝宝态不落库』：三库无 slave/pet/hero 表或列 ⇒ 两侧都不写；DB 侧由 run_hero_pet_pair.ps1 调 scoped_diff --canonical 承担（增量=0）。",
+    "oracle『升级』= 召唤时/跨服时设定 SlaveExpLevel/SlaveColor；GainSlaveExp 是死代码（击杀不涨级）⇒ 判据 2 只要求两侧同形，不要求击杀成长。",
+    "真机两侧同序列跑等 ⑨-2/⑨-3/⑨-4 世界侧落地 + openmir2-m3-clock-injection + owner 发窗口；本片只交夹具骨架（比较器 selftest + 无栈自检）。",
+    "Rust 侧 game-svr 未接宝宝召唤（盘点 §2 第 4/5 项）⇒ run_hero_pet_pair -Side rust 会 fail-closed PREREQ（同 T-27 口径），不白占窗口。",
+    "两假人相邻固定起点复用 run_pair.ps1 -PinStartPose -AttackPinPair（主人 (17,20) 朝向 2、peer 右邻 (18,20)）；0137 自身不刷怪 ⇒『宝宝击杀』档要窗口配合 MonGen 驱动 + pin 一只固定怪（承接卡 ⑨-3）。"
+  ]
+}

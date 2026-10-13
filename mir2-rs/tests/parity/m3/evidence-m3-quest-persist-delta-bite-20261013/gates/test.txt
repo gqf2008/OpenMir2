@@ -1,0 +1,6 @@
+== 四门禁 · ③ test --workspace ==
+命令: CARGO_TARGET_DIR=E:/tmp/openmir2-m3pt-target cargo test --workspace --offline
+suites=98  passed=1097  failed=0  ignored=21
+rc=0
+
+（逐 suite 原始转录: E:/tmp/m3pt-rc/gate-test-raw.txt，本片另存交付侧副本不随仓；见 README §5。）
