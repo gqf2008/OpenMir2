@@ -1,0 +1,48 @@
+STAGE start @ 1791885385792
+CLIENT_PID=2140
+SHOT E:\tmp\m2svr-gaps\run5\01_login.png
+STAGE login_id @ 1791885402043
+SHOT E:\tmp\m2svr-gaps\run5\02_id.png
+STAGE login_pwd @ 1791885404594
+SHOT E:\tmp\m2svr-gaps\run5\03_pwd.png
+STAGE login_submit @ 1791885407112
+STAGE charsel @ 1791885412995
+SHOT E:\tmp\m2svr-gaps\run5\04_charsel.png
+STAGE enter_game @ 1791885413043
+STAGE notice_poll @ 1791885414766
+SHOT E:\tmp\m2svr-gaps\run5\05_ingame.png
+SHOT E:\tmp\m2svr-gaps\run5\05b_after_notice.png
+STAGE ingame @ 1791885435760
+SHOT E:\tmp\m2svr-gaps\run5\05c_ingame_ready.png
+STAGE talk @ 1791885437816
+STAGE talk_sent @ 1791885442766
+SHOT E:\tmp\m2svr-gaps\run5\m2-03-talk.png
+STAGE autoplay_on @ 1791885442825
+SHOT E:\tmp\m2svr-gaps\run5\05c_autoplay_0s.png
+SHOT E:\tmp\m2svr-gaps\run5\05c_autoplay_10s.png
+SHOT E:\tmp\m2svr-gaps\run5\05c_autoplay_20s.png
+SHOT E:\tmp\m2svr-gaps\run5\05c_autoplay_30s.png
+SHOT E:\tmp\m2svr-gaps\run5\05c_autoplay_40s.png
+SHOT E:\tmp\m2svr-gaps\run5\05c_autoplay_50s.png
+SHOT E:\tmp\m2svr-gaps\run5\05c_autoplay_60s.png
+STAGE autoplay_off @ 1791885513900
+SHOT E:\tmp\m2svr-gaps\run5\05d_autoplay_off.png
+STAGE logout_button @ 1791885515331
+SHOT E:\tmp\m2svr-gaps\run5\07a_logout_btn_hover.png
+SHOT E:\tmp\m2svr-gaps\run5\07b_logout_confirm_dlg.png
+STAGE logout_alt_x @ 1791885519105
+SHOT E:\tmp\m2svr-gaps\run5\07_logout_altx0.png
+SHOT E:\tmp\m2svr-gaps\run5\07_logout_altx1.png
+SHOT E:\tmp\m2svr-gaps\run5\07_logout_altx2.png
+STAGE logout_menu @ 1791885529977
+SHOT E:\tmp\m2svr-gaps\run5\07_logout_menu_open.png
+SHOT E:\tmp\m2svr-gaps\run5\07_logoutdlg.png
+STAGE logout_confirm @ 1791885535056
+STAGE back_charsel @ 1791885543930
+SHOT E:\tmp\m2svr-gaps\run5\08_back_charsel.png
+STAGE reenter @ 1791885543977
+STAGE reentered @ 1791885559699
+SHOT E:\tmp\m2svr-gaps\run5\09_reenter.png
+STAGE done @ 1791885559750
+CLIENT_STOPPED
+FLOW_OK

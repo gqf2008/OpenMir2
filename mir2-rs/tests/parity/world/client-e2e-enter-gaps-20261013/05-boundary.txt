@@ -1,0 +1,19 @@
+# boundary（base=master cf3f81c35，合并后）
+
+$ git diff --name-only cf3f81c35 HEAD -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+  <空>
+
+本片改树（vs master cf3f81c35）：
+  mir2-rs/bins/game-svr/src/main.rs
+  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/01-oracle-anchors.txt
+  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/04-gates.txt
+  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/05-boundary.txt
+  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/10-rust-real-run-52-752-and-tick.txt
+  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/12-csharp-control-flow.txt
+  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/13-rust-flow-flow.txt
+  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/20-redcheck-world-aoi-diag.txt
+  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/shots/csharp-control-city-289-669.png
+  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/shots/rust-city-spawn-288-654.png
+  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/shots/rust-monsters-visible-256-584.png

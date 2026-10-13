@@ -1,0 +1,15 @@
+RC1 还原：cp 回改坏前快照（sha256 见下），复跑同一命令。
+sha256(main.rs) = 00c808a70e994f236877f198d8d1e8b164b8a663ea56d9687861269f99f1a9af
+
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3pt\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.68s
+     Running unittests src\main.rs (E:/tmp/openmir2-m3pt-target\debug\deps\game_svr-1f4431beb89ebeb6.exe)
+
+running 3 tests
+test tests::deal_cm_try_no_front_object_emits_no_frame_on_production_path ... ok
+test tests::drop_blocked_by_fresh_deal_last_tick ... ok
+test tests::deal_try_target_distinguishes_absent_from_non_player ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 183 filtered out; finished in 0.00s
+
+rc=0

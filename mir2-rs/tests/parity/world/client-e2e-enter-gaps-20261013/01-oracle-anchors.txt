@@ -1,0 +1,61 @@
+# 01-oracle-anchors — `openmir2-client-e2e-enter-gaps` 的逐行锚点
+
+卡：`openmir2-client-e2e-enter-gaps`（issue 7f4232eb，owner 2026-10-13 17:1x 建）
+本片：m2-svr / openmir2-worker-11；base `6f0bca48e`。
+
+结论先行：卡上两条缺口（① 进图未下发 52/752；② 世界 tick 无实体/无怪）在本部署上
+**均不可复现为 Rust↔C# 的差异**；用真客户端 + **C# 对照组**（同一客户端、同一角色、同一 DB）
+实测两侧逐像素同类。证据见 README §结论与 `shots/`。
+
+## A. 冻结客户端（`mirbeta/MirClient`，`E:\Users\gxh\Documents\GitHub\MirClient`）
+
+- `Source/Common/Grobal2.pas:39`：`HIGHHP = True`。
+- `Source/Common/Grobal2.pas:2167-2193`：`TAbility = packed record`——`AC/MAC/DC/MC/SC: Integer`（4B）、
+  `HP/MP/MaxHP/MaxMP: DWORD`（4B）⇒ **`SizeOf(TAbility) = 58B`**（比线上 52 的 40B 尾多 18B）。
+- `Source/MirClient/ClMain.pas:10096-10103`：`SM_ABILITY` 的处理 =
+  `DecodeBuffer(body, @g_MySelf.m_Abil, SizeOf(TAbility))`——**按 58B 记录整块拷**。
+- `Source/Common/EDcode.pas:894-904`：`DecodeBuffer(src, buf, bufsize)` = 解码 `src` 到栈缓冲后
+  `Move(EncBuf, buf^, bufsize)` ⇒ 拷 `bufsize` = `SizeOf(TAbility)` 字节。
+- `Source/MirClient/FState.pas:8886-8887`：底部 HUD 左起第 1 个数对 = HP（x=28），
+  第 2 个数对 = MP（x=88）——截图里的 `0/0` 就是 HP/MaxHP。
+- `Source/MirClient/Actor.pas:22`：`RUN_MINHEALTH = 10`；`:2162-2168`：`CanRun` 在
+  `m_Abil.HP < RUN_MINHEALTH` 时返回 -1 ⇒ **客户端 HP=0 时不允许跑**（与“跑不动”一致）。
+- `Source/MirClient/ClMain.pas:2193-2226`：跑只在 `CanRun > 0` 时发 `CM_RUN(3013)`。
+
+## B. C# oracle（`src/`）
+
+- `src/OpenMir2/Packets/ClientPackets/Ability.cs:13-14,44-46`：`[StructLayout(Size=40)]`，
+  16 位字段 + `WriteObjectHeader(22)` ⇒ **序列化 40B**（比客户端的 58B 记录短 18B）。
+- `src/OpenMir2/EDcode.cs:211-229`：`EncodeMessage<T>` = 序列化后编码。
+- `src/M2Server/Player/PlayObject.Message.cs:1733-1735`（`RM_ABILITY`）与 `:1673`（`RM_LEVELUP`）：
+  `SM_ABILITY` 的发帧点，尾 = `EncodeMessage(WAbil)`。
+
+⇒ 冻结客户端（58B 记录）与 oracle（40B 尾）本就**对不上**：客户端 `HP` 读的是尾部 offset 22
+的字（本部署里是 `Exp` 段）= 0 ⇒ HUD 显示 `0/0`、`CanRun` 返回 -1。**这不是 Rust 引入的**，
+C# 对照组逐像素同样（见 `shots/csharp-control-city-289-669.png`）。按项目硬约束
+（客户端冻结 + 行为等价优先于修 bug），要不要改这条**属 owner 决策**，不在本片单方面改。
+
+## C. Rust（本片写集）
+
+- `mir2-rs/bins/game-svr/src/enter.rs`：`AbilityInputs`(:90)、`recalc_for_session`(:146)、
+  52/752 出帧点 `base.ability/sub_ability`(:618/:625)——**已接线**，非“未接上”。
+- `mir2-rs/bins/game-svr/src/record.rs:274-320`：`encode_ability_into`/`encode_ability`
+  （丢成员数首字节后 40B，与 §B 的 40B 逐字节一致；金标准锚 #12 见该函数文档）。
+- `mir2-rs/bins/game-svr/src/main.rs`：进图路径已把 `AbilityInputs` 喂给
+  `enter::apply`（`WorldFrameInputs.ability`），真机日志 `进世界帧下发 … 共 15 条（输入齐备的）`
+  = 658,51,50,41,213,11029,42,766,54,5008,1106,**52,752**,811,46。
+
+## D. 世界实体 / MonGen / AOI
+
+- `mir2-rs/bins/game-svr/src/main.rs`：`step_mon_gen`（MonGen regen 门 + 刷怪）在 sim tick 内调用；
+  `drain_aoi_downlink` 把观察者 `visible_actors` 里 `Show` 的对象翻成 `SM_TURN(10)`+`SM_FEATURECHANGED(41)`。
+- 玩家可见门：`new_player_entity` 置 `want_ref_msg=true`（oracle `PlayObject.cs:889`）⇒ AOI 过滤
+  `BaseObject.ViewRange.cs:112` 才把怪物放进观察者可见集。
+- `sim: tick … 处理 N 项` 里的 N = `TickRecord::processed.len()`（**世界命令队列长度**），
+  **不是实体数**——卡上把它当成“世界无实体”是误读（见 `10-rust-real-run-52-752-and-tick.txt`）。
+
+## E. 104（`CM_SELECTSERVER`）
+
+- `src/GameSrv/Services/AuthenticationService.cs:167`：`SS_KEEPALIVE(104)` → `SetTotalHumanCount`。
+  这是 **IDS 链路**（LoginSrv→GameSvr，`ids.rs` 模块头）上的在线数心跳，不是客户端命令；
+  忽略它对客户端选服/心跳无可见影响（`ids.rs:17` 已登记）。

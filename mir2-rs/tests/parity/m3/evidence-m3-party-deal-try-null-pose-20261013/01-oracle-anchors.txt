@@ -1,0 +1,229 @@
+== M3⑦-3 · M-1 收口（deal_try 无前排对象口径）oracle 锚 ==
+命令: git rev-parse HEAD=待填 ; base=refs/heads/master(029d23eae)
+
+---- [A] src/M2Server/Player/PlayObject.Operate.cs:911-962  ClientDealTry() ----
+       1	        private void ClientDealTry(string sHumName)
+       2	        {
+       3	            if (SystemShare.Config.DisableDeal)
+       4	            {
+       5	                SendMsg(SystemShare.ManageNPC, Messages.RM_MENU_OK, 0, ActorId, 0, 0, MessageSettings.DisableDealItemsMsg);
+       6	                return;
+       7	            }
+       8	            if (Dealing)
+       9	            {
+      10	                return;
+      11	            }
+      12	            if ((HUtil32.GetTickCount() - DealLastTick) < SystemShare.Config.TryDealTime)
+      13	            {
+      14	                SendMsg(SystemShare.ManageNPC, Messages.RM_MENU_OK, 0, ActorId, 0, 0, MessageSettings.PleaseTryDealLaterMsg);
+      15	                return;
+      16	            }
+      17	            if (!IsCanDeal)
+      18	            {
+      19	                SendMsg(SystemShare.ManageNPC, Messages.RM_MENU_OK, 0, ActorId, 0, 0, MessageSettings.CanotTryDealMsg);
+      20	                return;
+      21	            }
+      22	            IActor poseObject = GetPoseCreate();
+      23	            if (poseObject.Race == ActorRace.Play)
+      24	            {
+      25	                IPlayerActor targetPlayObject = (IPlayerActor)poseObject;
+      26	                if (targetPlayObject != this)
+      27	                {
+      28	                    if (targetPlayObject.GetPoseCreate() == this && !targetPlayObject.Dealing)
+      29	                    {
+      30	                        if (targetPlayObject.AllowDeal && targetPlayObject.IsCanDeal)
+      31	                        {
+      32	                            targetPlayObject.SysMsg(ChrName + MessageSettings.OpenedDealMsg, MsgColor.Green, MsgType.Hint);
+      33	                            SysMsg(targetPlayObject.ChrName + MessageSettings.OpenedDealMsg, MsgColor.Green, MsgType.Hint);
+      34	                            this.OpenDealDlg(targetPlayObject);
+      35	                            targetPlayObject.OpenDealDlg(this);
+      36	                        }
+      37	                        else
+      38	                        {
+      39	                            SysMsg(MessageSettings.PoseDisableDealMsg, MsgColor.Red, MsgType.Hint);
+      40	                        }
+      41	                    }
+      42	                    else
+      43	                    {
+      44	                        SendDefMessage(Messages.SM_DEALTRY_FAIL, 0, 0, 0, 0);
+      45	                    }
+      46	                }
+      47	            }
+      48	            else
+      49	            {
+      50	                SendDefMessage(Messages.SM_DEALTRY_FAIL, 0, 0, 0, 0);
+      51	            }
+      52	        }
+
+---- [B] 关键行号（grep -n） ----
+911:        private void ClientDealTry(string sHumName)
+932:            IActor poseObject = GetPoseCreate();
+933:            if (poseObject.Race == ActorRace.Play)
+936:                if (targetPlayObject != this)
+954:                        SendDefMessage(Messages.SM_DEALTRY_FAIL, 0, 0, 0, 0);
+960:                SendDefMessage(Messages.SM_DEALTRY_FAIL, 0, 0, 0, 0);
+1471:                IActor poseObject = GetPoseCreate();
+
+---- [C] src/M2Server/Actor/BaseObject.cs:1253-1261  GetPoseCreate()（可返回 null） ----
+        public IActor GetPoseCreate()
+        {
+            short nX = 0;
+            short nY = 0;
+            if (GetFrontPosition(ref nX, ref nY))
+            {
+                return Envir.GetMovingObject(nX, nY, true);
+            }
+            return null;
+
+---- [D] src/M2Server/Actor/BaseObject.cs:977-1012  GetFrontPosition()（前方格与自身格可同、越界即不变） ----
+        public bool GetFrontPosition(ref short nX, ref short nY)
+        {
+            IEnvirnoment envir = Envir;
+            nX = CurrX;
+            nY = CurrY;
+            switch (Dir)
+            {
+                case Direction.Up:
+                    if (nY > 0)
+                    {
+                        nY -= 1;
+                    }
+                    break;
+                case Direction.UpRight:
+                    if ((nX < (envir.Width - 1)) && (nY > 0))
+                    {
+                        nX++;
+                        nY -= 1;
+                    }
+                    break;
+                case Direction.Right:
+                    if (nX < (envir.Width - 1))
+                    {
+                        nX++;
+                    }
+                    break;
+                case Direction.DownRight:
+                    if ((nX < (envir.Width - 1)) && (nY < (envir.Height - 1)))
+                    {
+                        nX++;
+                        nY++;
+                    }
+                    break;
+                case Direction.Down:
+                    if (nY < (envir.Height - 1))
+                    {
+
+---- [E] src/M2Server/Maps/Envirnoment.cs:1203-1234  GetMovingObject()（无物 ⇒ result 保持 null） ----
+        public IActor GetMovingObject(short nX, short nY, bool boFlag)
+        {
+            IActor result = null;
+            ref MapCellInfo cellInfo = ref GetCellInfo(nX, nY, out bool cellSuccess);
+            if (cellSuccess && cellInfo.IsAvailable)
+            {
+                for (int i = 0; i < cellInfo.ObjList.Count; i++)
+                {
+                    CellObject cellObject = cellInfo.ObjList[i];
+                    if (cellObject.CellObjId > 0 && cellObject.ActorObject)
+                    {
+                        IActor baseObject = SystemShare.ActorMgr.Get(cellObject.CellObjId);
+                        if (baseObject != null && !baseObject.Ghost)
+                        {
+                            if (baseObject.CellType == CellType.CastleDoor)
+                            {
+                                if (((CastleDoor)baseObject).HoldPlace && (!boFlag || !baseObject.Death))
+                                {
+                                    result = baseObject;
+                                    break;
+                                }
+                            }
+                            else
+                            {
+                                if ((!boFlag || !baseObject.Death))
+                                {
+                                    result = baseObject;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+---- [F] src/M2Server/Player/PlayObject.Message.cs:945-947  CM_DEALTRY 派发 ----
+                    ClientQueryRepairCost(processMsg.nParam1, HUtil32.MakeLong((ushort)processMsg.nParam2, (ushort)processMsg.nParam3), processMsg.Msg);
+                    break;
+                case Messages.CM_DEALTRY:
+                    ClientDealTry(processMsg.Msg.Trim());
+                    break;
+                case Messages.CM_DEALADDITEM:
+
+---- [G] src/GameSrv/Word/WorldServer.cs:625-736  ProcessPlayObjectData()（:732-735 catch 吞 NRE） ----
+        private void ProcessPlayObjectData()
+        {
+            try
+            {
+                int dwCurTick = HUtil32.GetTickCount();
+                int nIdx = ProcHumIdx;
+                bool boCheckTimeLimit = false;
+                int dwCheckTime = HUtil32.GetTickCount();
+                while (true)
+                {
+                    if (PlayObjectList.Count <= nIdx)
+                    {
+                        break;
+                    }
+
+                    IPlayerActor playObject = PlayObjectList[nIdx];
+    ...
+                                        }
+                                        playObject.ShowLineNoticeIdx++;
+                                        if (M2Share.LineNoticeList.Count <= playObject.ShowLineNoticeIdx)
+                                        {
+                                            playObject.ShowLineNoticeIdx = 0;
+                                        }
+                                    }
+                                    playObject.Run();
+                                    if (!M2Share.FrontEngine.IsFull() && (HUtil32.GetTickCount() - playObject.SaveRcdTick) > SystemShare.Config.SaveHumanRcdTime)
+                                    {
+                                        playObject.SaveRcdTick = HUtil32.GetTickCount();
+                                        playObject.DealCancelA();
+                                        SaveHumanRcd(playObject);
+                                    }
+                                }
+                            }
+                        }
+                        else
+                        {
+                            PlayObjectList.Remove(playObject);
+                            playObject.Disappear();
+                            AddToHumanFreeList(playObject);
+                            playObject.DealCancelA();
+                            SaveHumanRcd(playObject);
+                            M2Share.NetChannel.CloseUser(playObject.GateIdx, playObject.SocketId);
+                            SendServerGroupMsg(Messages.ISM_USERLOGOUT, M2Share.ServerIndex, playObject.ChrName);
+                            continue;
+                        }
+                    }
+                    nIdx++;
+                    if ((HUtil32.GetTickCount() - dwCheckTime) > M2Share.HumLimit)
+                    {
+                        boCheckTimeLimit = true;
+                        ProcHumIdx = nIdx;
+                        break;
+                    }
+                }
+                if (!boCheckTimeLimit)
+                {
+                    ProcHumIdx = 0;
+                }
+            }
+            catch (Exception ex)
+            {
+                LogService.Error("[Exception] WorldServer::ProcessHumans");
+                LogService.Error(ex.StackTrace);
+            }
+
+---- [H] src/M2Server/Actor/BaseObject.Base.cs:27-31  Run() 逐条 Operate（无本地 try/catch） ----
+            ProcessMessage processMessage = default;
+            while (GetMessage(ref processMessage))
+            {
+                Operate(processMessage);
+            }
