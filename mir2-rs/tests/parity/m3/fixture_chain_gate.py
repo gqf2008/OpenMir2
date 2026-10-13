@@ -83,6 +83,12 @@ SHARED_CHECKS = [
     #   （在场却坏 ⇒ 恒 RED，不再静默）。
     ("marker_prefix_selftest", "mir2-rs/tests/parity/m3/marker_prefix_gate.py", ["selftest"]),
     ("marker_prefix_check", "mir2-rs/tests/parity/m3/marker_prefix_gate.py", ["check"]),
+    # 宝宝/下属登记门（`m3_pet_slave_registry_gate.py`，⑨-2/⑨-3 reviewer-5 M-1 收口片）此前
+    #   **无任何调用方** —— 只在它自己的证据 README 里手工跑。⇒ 与 markers 前缀门同类的
+    #   「在场却坏无声」隐患：缺登记行 / 撞号 / 锚点不符会静默通过整条链。接入共享管线后
+    #   不看矩阵状态、独立常跑（在场却坏 ⇒ 恒 RED，绝不判绿）。
+    ("pet_slave_registry_selftest", "mir2-rs/tests/parity/m3/m3_pet_slave_registry_gate.py", ["selftest"]),
+    ("pet_slave_registry_check", "mir2-rs/tests/parity/m3/m3_pet_slave_registry_gate.py", ["check"]),
 ]
 
 RUNNER_PREREQ_RC = 2  # 各驱动约定的「前置未到，fail-closed」退出码
@@ -322,8 +328,14 @@ def cmd_selftest(_args):
     _mp_gate = [e for _n, rel, e in SHARED_CHECKS if rel.endswith("marker_prefix_gate.py")]
     expect("markers 前缀门已接入共享管线（防回退）",
            ["selftest"] in _mp_gate and ["check"] in _mp_gate)
-    expect("主机门（.py）登记项 ≥8（castle + 行会/攻城 + 英雄/宠物 + markers 前缀 各 selftest/check）",
-           sum(1 for _n, rel, _e in SHARED_CHECKS if rel.endswith(".py")) >= 8)
+    # 本片防回退牙：⑨-2/⑨-3 的宝宝登记门（`m3_pet_slave_registry_gate.py`）必须常驻共享管线
+    #   （selftest + check 两向）。它此前**零调用方**（只靠手工跑证据 README 的读数）⇒
+    #   缺行/撞号/锚点不符会静默通过整条链，与本卡修掉的 markers 前缀门同根因。
+    _pet_gate = [e for _n, rel, e in SHARED_CHECKS if rel.endswith("m3_pet_slave_registry_gate.py")]
+    expect("宝宝登记门已接入共享管线（防回退）",
+           ["selftest"] in _pet_gate and ["check"] in _pet_gate)
+    expect("主机门（.py）登记项 ≥10（castle + 行会/攻城 + 英雄/宠物 + markers 前缀 + 宝宝登记 各 selftest/check）",
+           sum(1 for _n, rel, _e in SHARED_CHECKS if rel.endswith(".py")) >= 10)
     expect("共享管线登记名唯一（防重复注册偷懒）",
            len({n for n, _r, _e in SHARED_CHECKS}) == len(SHARED_CHECKS))
     expect("共享管线 (file,args) 登记唯一",

@@ -1,0 +1,25 @@
+### O-2（reviewer-6 49993d1f，openmir2-m3-fixture-marker-prefix-bug）：恒真断言
+原文：『selftest 的 guards-guard-only-ok 是恒真项 —— 它调 guards_wired([m for m,_ in COMPARATORS] + list(GUARD_ONLY_MARKERS))，
+而该 helper 的 expected 恰为 set(COMPARATORS)|set(GUARD_ONLY_MARKERS)，故该断言永远 True、无法失败。』
+
+--- 旧代码（origin/master 768b2bb6c）---
+    check("real-guards-wired", guards_wired(guard_markers))
+    check("guards-extra-unregistered-red",
+          not guards_wired(guard_markers + ["M3NEWSEQ"]))
+    check("guards-guard-only-ok",
+          guards_wired([m for m, _ in COMPARATORS] + list(GUARD_ONLY_MARKERS)))
+
+--- 新代码（本片）---
+    # O-2 收口（reviewer-6 `49993d1f`）：旧 `guards-guard-only-ok` 是**恒真项** —— 它喂给
+    #   `guards_wired` 的集合恰等于该函数内部算出的 expected，永远 True、无法失败（冗余断言）。
+    #   改成**可失败向**：把真实扫描到的牙集合去掉一个 ⇒ 必须判「未接线」，证 `guards_wired`
+    #   的等值判据是双向的（`guards-extra-unregistered-red` 从「多」向咬合，本牙从「少」向咬合）。
+    check("guards-missing-real-guard-red",
+          bool(guard_markers) and not guards_wired(guard_markers[1:]))
+
+--- 恒真性直接复算（导入真实现）---
+COMPARATORS      = ['M3GUILDCSEQ', 'M3HEROPETSEQ', 'M3PAIRTRADESEQ', 'M3QUESTSEQ', 'M3SELLOFFSEQ', 'M3SHOPSEQ']
+GUARD_ONLY_MARKERS = ['M3DROPEXPSEQ']
+guards_wired(COMPARATORS ∪ GUARD_ONLY_MARKERS) = True   <-- 恒 True（expected 同一构造）
+guards_wired(COMPARATORS)                     = False
+=> 旧断言不可能失败（冗余）；新牙 guards-missing-real-guard-red 从『少一个真实牙』向咬合。

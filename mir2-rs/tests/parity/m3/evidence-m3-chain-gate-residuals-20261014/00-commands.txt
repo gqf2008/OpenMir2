@@ -1,0 +1,40 @@
+# 本片命令（cwd = worktree 根；CARGO_TARGET_DIR 在检出外）
+# 卡：openmir2-m3-fixture-chain-gate（链深检门残余收口片 #2）
+# tier=L：纯夹具/工具（3 个 .py），零 .rs、零 RNG/时序/落库/战斗数值；等价 + 抽样冒烟。
+
+# —— ① 登记前固定面：宝宝登记门无调用方（01）——
+git grep -n "m3_pet_slave_registry_gate" origin/master -- '*.ps1' '*.py'
+
+# —— ② O-2 恒真断言复算 + before/after（02）——
+python -I -   # 见 02 的内联脚本（导入真实现，直接复算旧断言恒 True）
+
+# —— ③ 三件门自检（03/04/05/06；离线、零端口）——
+cd mir2-rs/tests/parity/m3
+python -I marker_prefix_gate.py selftest
+python -I marker_prefix_gate.py check
+python -I m3_pet_slave_registry_gate.py check
+python -I m3_pet_slave_registry_gate.py selftest
+
+# —— ④ 夹具链深检门（runner 级；07/08）——
+python -I fixture_chain_gate.py selftest
+python -I fixture_chain_gate.py check --require-all
+
+# —— ⑤ 外部改坏必红（09；旁路复制、真身 sha256 前后一致）——
+#   MUT-A：marker_prefix_gate.guards_wired 的 `==` → `<=`（fail-open）⇒ 旧牙仍绿、新牙 FAIL
+#   MUT-B：从 SHARED_CHECKS 反注册宝宝登记门两条登记行 ⇒ 链门 selftest RED 31/33
+cp marker_prefix_gate.py .__mut_marker.py
+cp fixture_chain_gate.py .__mut_chain.py
+# python 就地改坏（见 09 原始件）后各跑 selftest，再 rm 旁路件
+
+# —— ⑥ 四门禁（10–13；零 .rs，仍全跑）——
+cd mir2-rs
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo fmt --all -- --check
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo clippy --workspace --all-targets -- -D warnings
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo test --workspace --no-fail-fast
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo run -q -p msgcodegen -- --check
+
+# —— ⑦ 证据 hash（仓库 LF/git-blob 口径）——
+cd <worktree 根>
+python -I tools/evidence-hash/verify_sha256sums.py write mir2-rs/tests/parity/m3/evidence-m3-chain-gate-residuals-20261014
+python -I tools/evidence-hash/verify_sha256sums.py verify --check-extra mir2-rs/tests/parity/m3/evidence-m3-chain-gate-residuals-20261014
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-chain-gate-residuals-20261014

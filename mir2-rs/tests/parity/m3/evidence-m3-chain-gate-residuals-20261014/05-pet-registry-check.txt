@@ -1,0 +1,9 @@
+PET_SLAVE_REGISTRY_GATE whitelist=E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\tests\parity\whitelist.md required=5 B-unique=checked
+  FINDING OK B-112 @L39：锚点 3/3 齐
+  FINDING OK B-113 @L40：锚点 3/3 齐
+  FINDING OK B-114 @L41：锚点 2/2 齐
+  FINDING OK B-115 @L42：锚点 3/3 齐
+  FINDING OK T-49 @L300：锚点 3/3 齐
+  FINDING NOTE B-112 存在（早前 reviewer 建议用于 811 Job 面，作者判定 1:1 ⇒ 未落行；本片取用）
+PET_SLAVE_REGISTRY GREEN（5 行登记齐 + 锚点齐 + B 段编号唯一）
+rc=0
