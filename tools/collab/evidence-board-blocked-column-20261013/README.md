@@ -25,8 +25,12 @@ ids(02)==ids(01)-{openmir2-collab-board-blocked-column}   # 未修：正好吞�
 ids(04)==ids(02)                         # 改坏复现同一现象
 ```
 
-> 说明：`refs/collab/inbox/**` 里的 distinct thread id 总数（315）包含无 `issue`/无投影状态的旁支条目，
-> 因此"各列计数之和"以**看板基线集合**为真源（`01` 与 `03` 相等即证明无卡被死列吞掉），而不是与 315 比。
+> **DoD④ 精确核对（顶层线程数对账）**：`refs/collab/inbox/**` 顶层 distinct thread id = **133**；修后看板六列之和 = **131**。
+> 差额 **2** = `openmir2-m2-rust-server-state-dump`、`openmir2-m2-rust-state-log-plumb` —— 它们的
+> 最新 `merge_result {"merged":true}` 之后**没有** `status: closed` ⇒ 投影状态为 `merged`，而 `board.toml`
+> **没有承载 `merged` 的列** ⇒ 同样不显示。**这与本卡【受阻】谓词无关**（是另一独立现象：无列承载 `merged`）。
+> ⇒ 本卡 DoD④ 以「修正后可见集合 == 修正前基线集合」（`ids(01)==ids(03)`，131==131，无卡因受阻谓词被吞）为真源；
+> `merged` 无列一条**如实登记、不夹带**，建议 owner 另开一行/一卡处置。
 
 ## 文件
 

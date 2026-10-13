@@ -42,3 +42,14 @@ PY
 $ git diff .walgit/board.toml
 -merge = "blocked"
 +status = "blocked"
+
+## G. DoD④ 精确核对（顶层线程数 vs 看板列和）
+$ python <parse all refs/collab/inbox/** entry JSON, take top-level "id"> 
+  entries parsed= 2986  json_bad= 0  distinct top-level ids= 133
+  kinds= {comment:883, status:911, merge_result:268, issue:132, patch:430, review:362}
+$ python <diff thread ids vs fixed-board card ids>
+  threads= 133  board= 131  missing= 2
+    openmir2-m2-rust-server-state-dump  -> projected_status= merged
+    openmir2-m2-rust-state-log-plumb    -> projected_status= merged
+# 结论：2 张卡最新 merge_result {"merged":true} 后无 status:closed ⇒ 投影 merged，board.toml 无该列 ⇒ 不显示。
+# 与本卡【受阻】谓词无关（独立现象：无列承载 merged）。本卡 DoD④ 以 ids(01)==ids(03)（131==131）为真源。
