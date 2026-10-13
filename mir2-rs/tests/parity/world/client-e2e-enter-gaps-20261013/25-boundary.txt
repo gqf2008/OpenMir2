@@ -1,10 +1,12 @@
 # 边界（本片只动 bins/game-svr + 证据目录）
 
-git -C <worktree> diff --name-only <base:refs/heads/master> -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+base = refs/heads/master = 029d23eae94538615e2dd533f902d162dbc05cd3（交付时的 origin/master）
+
+git diff --name-only 029d23eae -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
 （空）
 
 本片改动（相对 base）：
-  mir2-rs/bins/game-svr/src/record.rs   +  encode_ability_client + 用例
-  mir2-rs/bins/game-svr/src/enter.rs    +  AbilityInputs.client_ability_layout + apply 选择 + 用例
+  mir2-rs/bins/game-svr/src/enter.rs    +  AbilityInputs.client_ability_layout + apply 选择 + 用例（+50/-6）
   mir2-rs/bins/game-svr/src/main.rs     +  mir2_client_ability_layout() + log_enter_ability 实际布局
+  mir2-rs/bins/game-svr/src/record.rs   +  encode_ability_client + 用例
   mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/**（证据）

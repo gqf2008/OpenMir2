@@ -1,10 +1,13 @@
 # 四门禁（隔离 CARGO_TARGET_DIR=E:/tmp/m2svr-target，cwd = mir2-rs/）
 
-cargo fmt --all -- --check                                    rc=0
-cargo clippy --workspace --all-targets --offline -- -D warnings  rc=0
-cargo test --workspace --offline                              rc=0
-  => 1026 passed / 0 failed / 21 ignored（全 suites 汇总）
-cargo run -p msgcodegen --offline -- --check                  rc=0（604 条）
+## A) 交付树 = 合并 origin/master 029d23eae 后的合并树（no conflict）
+cargo fmt --all -- --check                                       rc=0
+cargo clippy --workspace --all-targets --offline -- -D warnings   rc=0
+cargo test --workspace --offline                                 rc=0  => 98 suites / 1040 passed / 0 failed / 21 ignored
+cargo run -p msgcodegen --offline -- --check                     rc=0（604 条）
 
-证据文件：01-gates-fmt.txt / 02-gates-clippy.txt / 04-gates-test.txt / 03-gates-msgcodegen.txt
-（本轮原始件在 E:/tmp/m2svr-gaps2/；本目录只保留摘要与判据件）
+## B) 本片自身分支（未合并 master 时）——作为对照
+同四门禁全绿 => 1026 passed / 0 failed / 21 ignored（差值来自 master 新合入的用例）
+
+原始件：E:/tmp/m2svr-gaps2/{01-gates-fmt,02-gates-clippy,03-gates-msgcodegen,04-gates-test}.txt
+        E:/tmp/m2svr-gaps2/{merge-gates-fmt,merge-gates-clippy,merge-gates-msgcodegen,merge-gates-test}.txt
