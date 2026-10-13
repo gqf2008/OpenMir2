@@ -21,3 +21,20 @@ cargo test --offline -p mir2-world --lib castle               # 08-castle-lib-te
 
 ## oracle 锚
 见 05-oracle-anchors.txt（src/M2Server/Castle/UserCastle.cs:108-226 与 CastleConf.cs:15-94 逐行 grep）。
+
+## reviewer-6 M-1/M-2/O-1 收口（2026-10-13，tier=L；同上隔离 worktree / target，零起栈/零端口）
+
+# ① 四门禁（在 origin/master 16ae2607f 的合并树上重跑）
+cd mir2-rs
+cargo fmt --all -- --check                                     # 01-gate-fmt.txt
+cargo clippy --offline --workspace --all-targets -- -D warnings # 02-gate-clippy.txt
+cargo test  --offline --workspace --no-fail-fast               # 03-gate-test.txt
+cargo run   --offline -p msgcodegen -- --check                 # 04-gate-msgcodegen.txt
+
+# ② castle 构造级复跑（master 上 50 passed = 本片 49 + ⑧-8 compare_lstr 1）
+cargo test --offline -p mir2-world --lib castle                # 08-castle-lib-test.txt
+
+# ③ M-1 锚门：check / selftest / 改坏必红
+python -I ../tests/parity/m3/castle_oracle_anchor_gate.py check    # 10-anchor-gate.txt
+python -I ../tests/parity/m3/castle_oracle_anchor_gate.py selftest
+python -I ../tests/parity/m3/castle_oracle_anchor_gate.py mutation

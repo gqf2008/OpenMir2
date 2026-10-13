@@ -1,0 +1,27 @@
+# ⑧-6 第②片 reviewer-6 M-1 收口：oracle 锚一致性门（GREEN 读数 + selftest + 改坏必红）
+# 门：mir2-rs/tests/parity/m3/castle_oracle_anchor_gate.py（卡 openmir2-m3-castle-file-load）
+# 命令一律 python -I；零起栈/零端口，纯离线。
+
+$ python -I mir2-rs/tests/parity/m3/castle_oracle_anchor_gate.py check
+GREEN: castle oracle 锚门通过（35 锚全部命中冻结 src/ 且写侧在位）
+rc=0
+
+$ python -I mir2-rs/tests/parity/m3/castle_oracle_anchor_gate.py selftest
+selftest 表结构: GREEN (35 锚)
+selftest 读侧 token 牙齿: GREEN (good=[] bad=1)
+selftest 写侧缺锚牙齿: GREEN (['写侧缺锚 UserCastle.cs:9999（不在 castle.rs / README.md）'])
+SELFTEST GREEN
+rc=0
+
+$ python -I mir2-rs/tests/parity/m3/castle_oracle_anchor_gate.py mutation
+MUT1 写侧漂移(:113→:111): RED（1 项；C:\Users\gxh\AppData\Local\Temp\castle-anchor-mut-fxtqrvbh）
+MUT2 读侧漂移(表 39→36): RED（1 项）
+  - 读侧不匹配 src/M2Server/Castle/CastleConf.cs:36 期望含 '"CastleMap"'，实际 'userCastle.EnvirList.Add(sMap);'
+MUT3 真身 check: GREEN（0 项）
+MUTATION GREEN (C:\Users\gxh\AppData\Local\Temp\castle-anchor-mut-fxtqrvbh)
+rc=0
+
+# 改坏必红两条（真实变异体）：
+#   MUT1 写侧：castle.rs 与 README.md 的 UserCastle.cs:113 都改回历史错值 :111 ⇒ 注册锚消失 ⇒ RED
+#   MUT2 读侧：门表把 CastleConf.cs:39 的期望改到历史错值 :36 ⇒ 冻结行 token 不匹配 ⇒ RED
+#   MUT3 真身 check ⇒ GREEN（变异体不回写工作区）
