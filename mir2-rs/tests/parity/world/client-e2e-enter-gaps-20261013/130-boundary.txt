@@ -1,0 +1,33 @@
+130-boundary.txt —— 片㉕ 边界（卡 openmir2-client-e2e-enter-gaps）
+cwd = E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr（本车道 worktree；共享主检出未触碰）
+base = e222a9385e8ef6f9b5bfcf8b3788532a32cba535（origin/master）
+====================================================================================================
+改动文件（本片全部在卡证据目录内）：
+  改：mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py
+  改：mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md（§㉕）
+  新增：mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/127-window-plan-teardown.txt
+  新增：mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/128-redcheck-window-plan-teardown.txt
+  新增：mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/129-gates.txt
+  新增：mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/130-boundary.txt（本文件）
+  改：mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt（重生成）
+
+$ git diff --stat
+    .../world/client-e2e-enter-gaps-20261013/README.md |  35 +++
+    .../window_handoff.py                              | 300 +++++++++++++++++++--
+    2 files changed, 316 insertions(+), 19 deletions(-)
+
+$ git status --short
+    M mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+    M mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py
+   ?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/127-window-plan-teardown.txt
+   ?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/128-redcheck-window-plan-teardown.txt
+   ?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/129-gates.txt
+   ?? mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/130-boundary.txt
+
+冻结面（src/ sql/ MirClient + crates/protocol + crates/storage + bins）差异必须为空：
+   （以上无输出 = 空）
+
+代码/配置/脚本面（*.rs / *.toml / *.ps1）改动必须为 0：
+   （无）
+
+生产代码改动 = 0；本片未起栈、未占任何游戏端口（仅共享 MySQL 3306 未动）。
