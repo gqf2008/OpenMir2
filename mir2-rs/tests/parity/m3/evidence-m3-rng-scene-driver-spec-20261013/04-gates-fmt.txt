@@ -1,0 +1,3 @@
+# cmd: CARGO_TARGET_DIR=E:/tmp/m3bag-wip-target cargo fmt --all -- --check
+# cwd = mir2-rs
+rc=0
