@@ -1,0 +1,25 @@
+== M3 夹具链深检（runner 级）==
+#     系统                     矩阵状态         runner     卡
+1     背包 / 装备                READY        RUN-OK     openmir2-m3-bag-equip-alignment
+       runner -SelfCheckNoStack rc=0 :: SELFTEST_RED GREEN: 无栈自检全过（配置透传有/无两向 + run_pair 关挂机耦合两向 + 固定起点两相 + pin settle+hold 可判红自检（跳过 sett
+2/3   战斗 / 技能                READY        RUN-OK     openmir2-m3-attack-pair-fixture
+       runner -SelfCheckNoStack rc=0 :: SELFTEST_RED GREEN: 无栈自检全过（攻击配置透传/默认关 + run_pair -DisableAutoPlay 耦合两向 + 攻击两相 pin pose/SQL（-PinM
+4     掉落 / 经验                READY        RUN-OK     openmir2-m3-drop-exp-align
+       runner -SelfCheckNoStack rc=0 :: GREEN: 无栈自检全绿（比较器 + 纯度门 fail-closed + 改坏必红 + LF 写出 + 零端口）
+5     NPC / 商店               READY        RUN-OK     openmir2-m3-shop-fixture-botsrv
+       runner -SelfCheckNoStack rc=0 :: GREEN: 无栈自检全绿（比较器 fail-closed + 改坏必红 + 开关耦合两向 + peer 护栏两向 + BotSrv 生产函数 selftest + 入口/DiffOnly/A
+6     任务                     READY        RUN-OK     openmir2-m3-quest-fixture-botsrv
+       runner -SelfCheckNoStack rc=0 :: GREEN: 无栈自检全绿（比较器 fail-closed + 改坏必红 + 开关耦合两向 + peer 护栏两向 + BotSrv 生产函数 selftest + 入口/DiffOnly/A
+7     组队 / 交易                READY        RUN-OK     openmir2-m3-party-trade-fixture-botsrv
+       runner -SelfCheckNoStack rc=0 :: GREEN: 无栈自检全绿（比较器 fail-closed + 改坏必红 + bot 集合 + 开关耦合两向 + peer 护栏两向 + BotSrv 生产函数 selftest + run_
+8     公会 / 攻城                PENDING      SKIP       openmir2-m3-guild-castle-fixture-botsrv
+9     英雄 / 宠物                READY        RUN-OK     openmir2-m3-hero-pet-fixture-botsrv
+       runner -SelfCheckNoStack rc=0 :: GREEN: 无栈自检全绿（比较器 fail-closed + 改坏必红 + bot 集合 + 开关耦合两向 + peer 护栏两向 + BotSrv 生产函数 selftest + run_
+10    拍卖（元宝寄售 SellOff）       READY        RUN-OK     openmir2-m3-selloff-fixture-botsrv
+       runner -SelfCheckNoStack rc=0 :: GREEN: 无栈自检全绿（比较器 fail-closed + 改坏必红 + bot 集合 + 开关耦合两向 + peer 护栏两向 + BotSrv 生产函数 selftest + run_
+B     全服 RNG 消费者账本（Claim B）  READY        RUN-OK     openmir2-m3-rng-trace-scene-groups
+       runner -SelfCheckNoStack rc=0 :: GREEN: 无栈自检全绿（场景前置门 fail-closed + DoD① 单一入口 -SceneGroupDiff 场景门/拒比/结论传播 + scenario 声明/folded 映射与
+-- 共享管线 --
+run_bots         present    rc=0 :: SELFTEST_RED GREEN: M3 序列收尾计数离线自检全过（attack done 2/1/0 + bag done 2/0 + 预期 attack
+selftest_gate    present    rc=0 :: GREEN: 十条机判护栏的判红/判绿口径都经构造输入验证
+FIXTURE_CHAIN GREEN: runner_ok=9 prereq_or_skip=1 red=0

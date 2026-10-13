@@ -23,8 +23,11 @@
     powershell -ExecutionPolicy Bypass -File run_rng_trace_pair.ps1 -SelfCheckNoStack -SelfCheckOut <path.txt>
     # 只跑场景一致性前置门（离线；两份场景描述件）
     powershell -ExecutionPolicy Bypass -File run_rng_trace_pair.ps1 -GateOnly -AScene <csharp-scene.json> -BScene <rust-scene.json>
-    # 只跑两侧组账本 diff（离线；两份抽数流水）
+    # 只跑两侧组账本 diff（离线；两份抽数流水；**裸比较口径**：不构成 DoD① 判据）
     powershell -ExecutionPolicy Bypass -File run_rng_trace_pair.ps1 -GroupDiffOnly -AStream <csharp.tsv> -BStream <rust.tsv>
+    # DoD① 单一入口（推荐）：**先**场景门，非 GREEN ⇒ 拒比；GREEN 才跑 groupdiff --fold --strict
+    powershell -ExecutionPolicy Bypass -File run_rng_trace_pair.ps1 -SceneGroupDiff \
+      -AScene <csharp-scene.json> -BScene <rust-scene.json> -AStream <csharp.tsv> -BStream <rust.tsv>
 #>
 param(
   [ValidateSet('csharp', 'rust')][string]$Side = 'csharp',
@@ -39,6 +42,9 @@ param(
   [string]$PortsCsv = '5000,7000,7100,7200',
   [switch]$GateOnly,
   [switch]$GroupDiffOnly,
+  # DoD① 的**单一入口**：先跑场景一致性前置门，非 GREEN ⇒ **拒比**（不跑 groupdiff）。
+  # 与 `-GroupDiffOnly`（跨场景对照用的裸比较口径）区分：后者不构成 DoD① 判据。
+  [switch]$SceneGroupDiff,
   [switch]$Go,                     # owner 发放窗口的显式授权；未给 ⇒ real-run fail-closed（exit 2）
   # 真机两相 trace 必须**显式**请求「按 scenario 钉住含怪场景」（承接卡接线后生效）。
   # 只给 -Go 不给 -PinScene ⇒ 仍 fail-closed（防止误跑未钉场景）。
@@ -94,6 +100,35 @@ function Invoke-RngLedgerSelfTest {
   $raw = & python -I $LedgerDiff selftest 2>&1
   $Out.Value = ($raw | Out-String)
   return [int]$LASTEXITCODE
+}
+
+# DoD① 单一入口的核心逻辑（**无 stdout 副作用**，返回对象供 mode 块与无栈自检共用）：
+#   顺序固定 = 场景一致性前置门 → 非 GREEN 则 **拒比**（`ranDiff=$false`，绝不输出 groupdiff 结论）
+#   → GREEN 才跑 `groupdiff --fold --strict`，并把它的 rc/文本原样传播（不吞任何结论）。
+function Invoke-RngSceneGroupDiffCore {
+  param([Parameter(Mandatory = $true)][string]$AScene, [Parameter(Mandatory = $true)][string]$BScene,
+        [Parameter(Mandatory = $true)][string]$AStream, [Parameter(Mandatory = $true)][string]$BStream)
+  $res = [ordered]@{ rc = 2; gateRc = 2; diffRc = -1; ranDiff = $false; text = '' }
+  $gateOut = ''
+  $gateRc = Invoke-RngSceneGate -A $AScene -B $BScene -Out ([ref]$gateOut)
+  $res.gateRc = $gateRc
+  $text = $gateOut
+  if ($gateRc -ne 0) {
+    # DoD①：场景不一致 / 缺件 ⇒ groupdiff **拒比**。这里既不放行比较，也不把它当绿。
+    $text += ("`nREFUSED: 场景一致性前置门非 GREEN（rc={0}）⇒ 不跑 groupdiff（DoD① fail-closed 拒比）" -f $gateRc)
+    $res.rc = $gateRc
+  } else {
+    $text += "`nGREEN(scene): 两侧同场景/同起点/同种子 ⇒ 允许进入组账本比较"
+    $diffOut = ''
+    $diffRc = Invoke-RngGroupDiff -A $AStream -B $BStream -Out ([ref]$diffOut)
+    $res.diffRc = $diffRc
+    $res.ranDiff = $true
+    $text += "`n" + $diffOut
+    if ($diffRc -eq 0) { $text += "`nGREEN: 组集合 + 折叠计数 + 共享组相对次序全等" }
+    $res.rc = $diffRc
+  }
+  $res.text = $text
+  return [pscustomobject]$res
 }
 
 function New-RngStream([string]$Path, [string[]]$Sites) {
@@ -373,6 +408,45 @@ if ($SelfCheckNoStack) {
     $toothBites = ($null -ne $srcBack) -and (-not ($noopBack.trace.fold.construct -ne $srcBack.trace.fold.construct))
     Add-Result 'scenario-drift-tooth-not-vacuous' $toothBites '空转样本 ⇒ 同一 fold 谓词为 false（牙非恒真、不空转）'
 
+    # ⑲ DoD① 单一入口（本片新增）：-SceneGroupDiff 先跑场景门；同场景 + 等价组账本 ⇒ 门绿且 groupdiff
+    #    也绿（两段结论都在文本里，证明该入口确实串起了「门 → 比」）。
+    #    注意：上面 New-RngSceneFiles 用固定文件名，$sfBad 会覆盖 $sf 的 a/b/scenario —— 这里另建
+    #    独立子目录的「好/坏」两对场景件，避免测试间互相踩。
+    $sgDirGood = Join-Path $tmpRoot 'sgd-good'
+    $sgDirBad = Join-Path $tmpRoot 'sgd-bad'
+    New-Item -ItemType Directory -Force -Path $sgDirGood, $sgDirBad | Out-Null
+    $sgGood = New-RngSceneFiles -Dir $sgDirGood -FixtureName 'mongen-map0137.tsv' -Map '0137' -Seed 42 `
+              -MonsterName '稻草人' -MonX 18 -MonY 20 -MonDir 0 -MonCount 1
+    $sgBad = New-RngSceneFiles -Dir $sgDirBad -FixtureName 'mongen-map0137.tsv' -Map '0137' -Seed 42 `
+             -MonsterName '稻草人' -MonX 18 -MonY 20 -MonDir 0 -MonCount 1 -ExtraMonsterName '鸡'
+    $sgA = Join-Path $tmpRoot 'sgd-equiv-a.tsv'; $sgB = Join-Path $tmpRoot 'sgd-equiv-b.tsv'
+    New-RngStream -Path $sgA -Sites @($Script:SiteCtor, $Script:SiteSpawnC, $Script:SiteAiC)
+    New-RngStream -Path $sgB -Sites @($Script:SiteSpawnR, $Script:SiteSpawnR, $Script:SiteAiR)
+    $c1 = Invoke-RngSceneGroupDiffCore -AScene $sgGood.A -BScene $sgGood.B -AStream $sgA -BStream $sgB
+    Add-Result 'scene-groupdiff-identical-green' (($c1.rc -eq 0) -and $c1.ranDiff -and
+      ($c1.text -match 'GREEN\(scene\)') -and ($c1.text -match 'VERDICT IDENTICAL')) ("rc=$($c1.rc)")
+
+    # ⑳ **改坏必红**：场景漂移（Rust 多一只怪）⇒ rc=1 且**拒比**——文本里不得出现 groupdiff 的任何
+    #    结论行（`RNG_CONSUMER_GROUPDIFF`），否则等于把场景差异当实现差异。
+    $c2 = Invoke-RngSceneGroupDiffCore -AScene $sgBad.A -BScene $sgBad.B -AStream $sgA -BStream $sgB
+    Add-Result 'scene-groupdiff-scene-drift-refused' (($c2.rc -eq 1) -and (-not $c2.ranDiff) -and
+      ($c2.text -match 'REFUSED') -and ($c2.text -notmatch 'RNG_CONSUMER_GROUPDIFF')) `
+      ("rc=$($c2.rc) ranDiff=$($c2.ranDiff)")
+
+    # ㉑ 缺场景描述件 ⇒ rc=2 且同样拒比（fail-closed；不许降级成「不过门直接比」）。
+    $c3 = Invoke-RngSceneGroupDiffCore -AScene $sgGood.A -BScene (Join-Path $tmpRoot 'nope-sgd.json') `
+          -AStream $sgA -BStream $sgB
+    Add-Result 'scene-groupdiff-missing-prereq-refused' (($c3.rc -eq 2) -and (-not $c3.ranDiff) -and
+      ($c3.text -notmatch 'RNG_CONSUMER_GROUPDIFF')) ("rc=$($c3.rc)")
+
+    # ㉒ **反向对照**（防「恒拒比」假绿）：同场景（门必须 GREEN）+ 组账本确有不一致（Rust 少一组）
+    #    ⇒ groupdiff 的 rc=1 与结论行必须**传播**出来，证明该入口不是无条件拒比/吞结论。
+    $sgD = Join-Path $tmpRoot 'sgd-diff-b.tsv'
+    New-RngStream -Path $sgD -Sites @($Script:SiteSpawnR, $Script:SiteSpawnR, $Script:SiteSpawnR)
+    $c4 = Invoke-RngSceneGroupDiffCore -AScene $sgGood.A -BScene $sgGood.B -AStream $sgA -BStream $sgD
+    Add-Result 'scene-groupdiff-diff-red-propagates' (($c4.rc -eq 1) -and $c4.ranDiff -and
+      ($c4.text -match 'GREEN\(scene\)') -and ($c4.text -match 'RNG_CONSUMER_GROUPDIFF')) ("rc=$($c4.rc)")
+
     # ⑯ 本脚本从未触碰端口（自检/门/比较全离线）
     Add-Result 'no-port-touched' (-not $script:RngSceneTouchedPorts) 'offline-only'
   } finally {
@@ -382,7 +456,7 @@ if ($SelfCheckNoStack) {
   $total = $script:RngPass + $script:RngFail.Count
   Write-Output ("SELFTEST ok={0}/{1} failures={2}" -f $script:RngPass, $total, ($script:RngFail -join ','))
   if ($script:RngFail.Count -gt 0) { exit 1 }
-  Write-Output 'GREEN: 无栈自检全绿（场景前置门 fail-closed + scenario 声明/folded 映射与代码同口径 + folded 等价绿/计数·次序必红 + LF 写出 + 零端口）'
+  Write-Output 'GREEN: 无栈自检全绿（场景前置门 fail-closed + DoD① 单一入口 -SceneGroupDiff 场景门/拒比/结论传播 + scenario 声明/folded 映射与代码同口径 + folded 等价绿/计数·次序必红 + LF 写出 + 零端口）'
   exit 0
 }
 
@@ -417,11 +491,31 @@ if ($GroupDiffOnly) {
 }
 
 # =========================================================================== #
+# Mode: SceneGroupDiff —— DoD① 的**单一入口**：先跑场景一致性前置门，非 GREEN ⇒ fail-closed
+# **拒比**（不跑 groupdiff、绝不输出判据结论；场景差异不得被当成实现差异）。
+# `-GateOnly` / `-GroupDiffOnly` 语义不变；后者是跨场景对照用的**裸比较**口径，不构成 DoD① 判据。
+# =========================================================================== #
+if ($SceneGroupDiff) {
+  $sgMissing = @()
+  if ([string]::IsNullOrEmpty($AScene)) { $sgMissing += '-AScene' }
+  if ([string]::IsNullOrEmpty($BScene)) { $sgMissing += '-BScene' }
+  if ([string]::IsNullOrEmpty($AStream)) { $sgMissing += '-AStream' }
+  if ([string]::IsNullOrEmpty($BStream)) { $sgMissing += '-BStream' }
+  if ($sgMissing.Count -gt 0) {
+    Write-Output ('PREREQ_MISSING: -SceneGroupDiff 需要 -AScene/-BScene/-AStream/-BStream（缺 ' + ($sgMissing -join ',') + '）')
+    exit 2
+  }
+  $sg = Invoke-RngSceneGroupDiffCore -AScene $AScene -BScene $BScene -AStream $AStream -BStream $BStream
+  Write-Output $sg.text
+  exit $sg.rc
+}
+
+# =========================================================================== #
 # Mode: real run（真机两相 trace）—— 本片只交骨架 ⇒ fail-closed 拒跑
 # =========================================================================== #
 if (-not $Go) {
   Write-Output 'PREREQ_MISSING: 真机两相 trace 需 owner 发放窗口（起栈禁接管道；本片只交夹具骨架，不占端口）'
-  Write-Output ("NEXT: 获窗口后跑 -Side csharp 基线 → -Side rust -PeerSession <csharp 会话> → -GateOnly → -GroupDiffOnly")
+  Write-Output "NEXT: 获窗口后跑 -Side csharp 基线 → -Side rust -PeerSession <csharp 会话> → -SceneGroupDiff（单一入口：场景门非 GREEN 即拒比，GREEN 才跑 groupdiff --fold --strict）"
   exit 2
 }
 $rpRun = Test-RngScenarioRunnerParams -Path $ScenarioFile
