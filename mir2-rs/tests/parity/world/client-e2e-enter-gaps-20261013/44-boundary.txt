@@ -1,0 +1,26 @@
+openmir2-client-e2e-enter-gaps —— 片⑤边界（冻结面必须为空）
+==============================================================================
+worktree = .claude/worktrees/m2-svr；cwd = 仓库根
+树 = merge commit e5fc0964b0bef6996f5aa99d182d98b03491ddd1（origin/master 4b4011923d5ccd34775d6614e97259171667520d）+ 片⑤新增证据
+
+$ git diff --name-only origin/master e5fc0964b0bef6996f5aa99d182d98b03491ddd1
+  -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+（输出为空）
+boundary lines: 0
+
+片⑤相对合并树的改动（纯新增，全部在证据目录）：
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/40-client-s2c-default-oracle40.txt
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/41-client-s2c-switch58.txt
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/42-client-s2c-redcheck.txt
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/43-gates.txt
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/44-boundary.txt
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/capture-client-default-oracle40.jsonl
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/capture-client-switch58.jsonl
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_client_s2c_frames.py
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/shots/rust-client-wire-client58-299-640.png
+mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/shots/rust-client-wire-oracle40-292-600.png
+
+结论：冻结面 src/ sql/ MirClient/ crates/protocol/ crates/storage = 空；
+      片⑤零生产代码改动（判据脚本 + 真机抓包 + 证据），不新增/修改任何 T-*/D-*/B-* 白名单条目。

@@ -4,13 +4,20 @@
 （同一 `D:\MirClient-run\MirClinet.exe`、同一角色 `aaa`、同一 `mir2_db`）把两侧跑成逐像素同类，
 并用服务端日志证明“帧发了 / 世界有实体 / AOI 真可见”。按 §6.0-3 与项目硬约束，不单方面行为偏离；
 
-> **本目录覆盖四片（同一卡）**：
+> **本目录覆盖五片（同一卡）**：
 > ① 只读可观测性片（`7c8ac2fc3`，已合入 `f6869cb26`）：`log_enter_ability` + 周期世界/AOI 快照 + 1 条用例；
 > ② 能力帧布局片（`a602e8a94`，已合入 `636bdce53`）：**默认关闭**的 58B 冻结客户端布局开关
 > `MIR2_CLIENT_ABILITY_LAYOUT`（`record::encode_ability_client`），证据 `21`/`22`/`23`/`24`/`25`；
 > ③（`2026-10-13` 追补）：DoD③ 的**独立复算** `26`/`27`（从冻结客户端源码逐字节复核 58B `TAbility`）；
 > ④（`2026-10-13` 追补）：缺口②「同屏无怪」的 AOI 窗口对齐 —— 玩家 `ViewRange=12`（`PlayObject.cs:904`），
 > 证据 `30`/`31`/`32`/`33`（改前窗口 11×11 → 改后 25×25）。
+> ⑤（`2026-10-13` 追补，回应 owner `acceptance_add`）：**客户端侧帧可见性**真机抓包 ——
+> `mir2_proxy.py` 在 7200 透明代理 + 影子 game-gate(7600)，客户端收到的字节 ⇒ `export_s2c.ps1` 解码，
+> 或 `40`/`41`（两次 run）+ `capture-client-*.jsonl` + 判据 `check_client_s2c_frames.py` + 红检 `42`
+> + 截图 `shots/rust-client-wire-*.png`。
+>
+> ⚠ `40`/`41` 与 `capture-client-*.jsonl`、`shots/rust-client-wire-*.png` 是**真机采集件**
+> （2026-10-13 19:5x，栈 = merge c59a5e754 的 Rust 二进制），不是回填的固定件。
 
 ## 结论（先看这三条）
 
@@ -29,6 +36,12 @@
    因此 `CanRun`（`HP < RUN_MINHEALTH(10)`）两边都拒绝跑。要不要修需 owner 决策
    （客户端冻结 ⇒ 只能改服务端布局，属与 oracle 的**故意偏离**）。锚点见 `01-oracle-anchors.txt` §A/§B。
 4. **104（`CM_SELECTSERVER`）= `SS_KEEPALIVE`（IDS 链路在线数心跳）**，忽略对客户端选服/心跳无可见影响。
+5. **客户端侧帧可见性（片⑤，2026-10-13 追补）**：`40`/`41` 是 `mir2_proxy` 在 7200 抓到的
+   **客户端实际收到的 s2c 字节** —— 入图序列 `658…46` 里 **52/752 都在**（Run A `52 body_len=40` = oracle 布局；
+   Run B 开 `MIR2_CLIENT_ABILITY_LAYOUT=1` 后 `52 body_len=58` = 冻结客户端布局，客户端 HUD `19/19` + 血球满红）；
+   Run A 还在客户端侧抓到 **12 对 `10 SM_TURN`+`41 SM_FEATURECHANGED`**（12 个怪 actor 的同屏出现帧）。
+   判据 = `check_client_s2c_frames.py`（`--selftest` 自证门是活的；`42` 红检：删掉 52 ⇒ RED）。
+   ⇒ 缺口①「未下发」与缺口②「同屏无怪」在**客户端侧**被直接否证。
 
 ## 命令与原始件
 
@@ -97,6 +110,37 @@ oracle `PlayObject` 构造器置 `ViewRange = 12`（`PlayObject.cs:904`），而
 
 > 未做（如实登记）：真机两侧同序列对拍（窗口归 `window` 车道/owner）；怪物侧 `ViewRange` 的各子类覆盖
 > 仍是**未登记差异**（`30` §D），交 owner 裁决归属，本片不擅自扩写集。
+
+## ⑤ 客户端侧帧可见性（缺口①/② 的直接证据）——`40`/`41`/`42` + `check_client_s2c_frames.py`
+
+owner `acceptance_add`（2026-10-13）：①「进图是否真的下发 52/752」与②「同屏是否有怪」此前只有
+**服务端日志**，要求补**客户端收发帧**。本片采法：
+
+```
+客户端 -> (proxy 7200) -> [影子 game-gate 7600] -> game-svr 5000
+           mir2_proxy.py --map 7200=127.0.0.1:7600
+```
+
+代理 s2c 方向的字节 = **客户端收到的字节**；`export_s2c.ps1`（`segment_frames` + `GoldenExport` +
+`replay` 自洽 GREEN）解码为 `capture.jsonl`。
+
+| run | 开关 | 入图自帧序列（客户端侧） | 52 body_len | 10+41 同屏对 | 客户端 HUD |
+| --- | --- | --- | --- | --- | --- |
+| A | 默认（oracle 40B） | `658,51,50,41,213,11029,42,766,54,5008,1106,52,752,811,46` | **40** | **12** | `0/0`（黑血球，58B offset 误读） |
+| B | `MIR2_CLIENT_ABILITY_LAYOUT=1`（58B） | 同上 | **58** | 1 | **`19/19` + `15/15`（血球满红）** |
+
+- `40-client-s2c-default-oracle40.txt` / `41-client-s2c-switch58.txt`：两次 run 的原始帧（含 52/752
+  `raw_hex`、`body_segments`、`body_sha256` 与 12 个怪 actor 的 recog）+ proxy dump / decode 的 sha256。
+- `capture-client-default-oracle40.jsonl` / `capture-client-switch58.jsonl`：解码后的客户端 s2c 帧（同 `capture.jsonl` schema）。
+- `shots/rust-client-wire-oracle40-292-600.png`：Run A 客户端 HUD `0/0`；
+  `shots/rust-client-wire-client58-299-640.png`：Run B 客户端 HUD `19/19` 且屏幕上可见怪。
+- `check_client_s2c_frames.py`：可复跑判据（`--capture <jsonl> --expect-52-body-len N --min-appearance-pairs M`；
+  缺文件 ⇒ `PREREQ_MISSING` rc=2；`--selftest` 不依赖外部帧）。
+- `42-client-s2c-redcheck.txt`：**改坏必红** —— 从 capture 删掉 52 ⇒ `RC=1/RED`（同时报「序列前缀不符」与「没有 52」）；
+  还原 ⇒ `RC=0/GREEN`；另有 `--selftest` 5 条口径全 OK。
+
+> 这两份 capture 是**真机原始件**（不是合成）：采集命令、栈、账号/角色与 sha256 都写在 `40`/`41` 头部；
+> 采完已停栈（见报告残留物清单）。片⑤**零生产代码改动**（纯证据 + 判据脚本）。
 
 ## 验证（隔离 `CARGO_TARGET_DIR=E:/tmp/m2svr-target`，cwd=`mir2-rs/`）
 
