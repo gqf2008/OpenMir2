@@ -778,6 +778,314 @@ namespace BotSrv.Player
 
         #endregion
 
+        #region M3⑤ 固定 NPC/商店动作序列（夹具专用，默认关；白名单 T-29 家族扩展）
+
+        // 口径（卡 openmir2-m3-shop-fixture-botsrv）：收到本假人 SM_LOGON 后，按 `g_sShopOps` 的固定顺序
+        // 对**本假人视图中**的同一个 NPC/商人各发一次动作（开面板 + 买/卖/修理/查询/存取），逐 op 落
+        // `M3SHOPSEQ {json}` 的 send/frame/end/done 事件（供 `npc_shop_diff.py assemble` 合并成记录）。
+        // 只读本假人自己的视图（`PlayScene.ActorList` / `MShare.ItemArr`）、只写本假人自己的 socket
+        // （同 T-22/T-29 纪律）；默认关时本 region 全部空转、不新增任何发送与日志。
+
+        private string[] _shopSeqOps;
+        private int _shopSeqStep = -1;
+        private int _shopSeqNextTick;
+        private int _shopSeqPendingK = -1;
+        private readonly List<string> _shopSeqFrames = new List<string>();
+        private int _shopSeqNpcActor;
+        private string _shopSeqItemName = string.Empty;
+        private int _shopSeqItemMake;
+
+        /// <summary>收到本假人 SM_LOGON 后武装固定商店序列（`g_boShopSequence` 关闭时是空操作）。</summary>
+        private void ArmShopSequence()
+        {
+            if (!MShare.g_boShopSequence)
+            {
+                return;
+            }
+            _shopSeqOps = MShare.ParseShopOps(MShare.g_sShopOps);
+            _shopSeqStep = 0;
+            _shopSeqPendingK = -1;
+            _shopSeqFrames.Clear();
+            _shopSeqNextTick = MShare.GetTickCount() + MShare.g_nShopStartDelayMs;
+            MainOutMessage("M3SHOPSEQ {\"phase\":\"arm\",\"ops\":" + ShopJsonArray(_shopSeqOps)
+                + ",\"step_ms\":" + MShare.g_nShopStepMs
+                + ",\"npc\":\"" + ShopEsc(MShare.g_sShopNpcName) + "\"}");
+        }
+
+        /// <summary>M3⑤ 固定商店序列（步进式）：每 `g_nShopStepMs` 处理一个 op；
+        /// 上一步先收尾（`phase=end`，聚合本步收到的帧 + 金币/背包前后态 + branch），再发下一步；
+        /// 全部发完发 `phase=done`。默认关时空转。</summary>
+        private void ShopSequenceTick()
+        {
+            if (!MShare.g_boShopSequence || _shopSeqOps == null || _shopSeqStep < 0)
+            {
+                return;
+            }
+            if (!_inWorld || ClientSocket == null || !ClientSocket.IsConnected)
+            {
+                return;
+            }
+            int now = MShare.GetTickCount();
+            if (now < _shopSeqNextTick)
+            {
+                return;
+            }
+            if (_shopSeqPendingK >= 0)
+            {
+                EmitShopEnd(_shopSeqPendingK);
+                _shopSeqPendingK = -1;
+            }
+            if (_shopSeqStep >= _shopSeqOps.Length)
+            {
+                _shopSeqStep = -1;
+                MainOutMessage("M3SHOPSEQ {\"phase\":\"done\",\"ops\":" + _shopSeqOps.Length + "}");
+                return;
+            }
+            int k = _shopSeqStep;
+            string op = _shopSeqOps[k];
+            _shopSeqStep++;
+            _shopSeqFrames.Clear();
+            ResolveShopItem();
+            EmitShopSend(k, op);
+            SendShopOp(op);
+            _shopSeqPendingK = k;
+            _shopSeqNextTick = now + MShare.g_nShopStepMs;
+        }
+
+        private void EmitShopSend(int k, string op)
+        {
+            Actor npc = FindShopNpc();
+            _shopSeqNpcActor = npc != null ? npc.RecogId : 0;
+            string npcName = npc != null ? npc.UserName : string.Empty;
+            int gold = ShopGold();
+            MainOutMessage("M3SHOPSEQ {\"phase\":\"send\",\"k\":" + k
+                + ",\"op\":\"" + op + "\",\"npc\":\"" + ShopEsc(npcName)
+                + "\",\"npc_actor\":" + _shopSeqNpcActor
+                + ",\"req\":" + ShopReqJson(op)
+                + ",\"gold_before\":" + gold
+                + ",\"bag_before\":" + ShopBagJson() + "}");
+        }
+
+        private void EmitShopEnd(int k)
+        {
+            MainOutMessage("M3SHOPSEQ {\"phase\":\"end\",\"k\":" + k
+                + ",\"gold_after\":" + ShopGold()
+                + ",\"bag_after\":" + ShopBagJson()
+                + ShopPriceFromFrames()
+                + ",\"branch\":\"" + ShopBranchFromFrames() + "\"}");
+        }
+
+        /// <summary>发本 op 的 CM_*（先开对应面板，再发动作）。npc 不在视图里 ⇒ 只记 skip，不发。</summary>
+        private void SendShopOp(string op)
+        {
+            if (_shopSeqNpcActor == 0)
+            {
+                MainOutMessage("M3SHOPSEQ op=" + op + " skip=no_npc_in_view");
+                return;
+            }
+            short count = (short)MShare.g_nShopCount;
+            switch (op)
+            {
+                case "sell":
+                    SendMerchantDlgSelect(_shopSeqNpcActor, "@sell");
+                    SendSellItem(_shopSeqNpcActor, _shopSeqItemMake, _shopSeqItemName, count);
+                    break;
+                case "buy":
+                    SendMerchantDlgSelect(_shopSeqNpcActor, "@buy");
+                    SendBuyItem(_shopSeqNpcActor, _shopSeqItemMake, _shopSeqItemName, count);
+                    break;
+                case "query_sell_price":
+                    SendMerchantDlgSelect(_shopSeqNpcActor, "@sell");
+                    SendQueryPrice(_shopSeqNpcActor, _shopSeqItemMake, _shopSeqItemName);
+                    break;
+                case "query_repair_cost":
+                    SendMerchantDlgSelect(_shopSeqNpcActor, "@repair");
+                    SendQueryRepairCost(_shopSeqNpcActor, _shopSeqItemMake, _shopSeqItemName);
+                    break;
+                case "repair":
+                    SendMerchantDlgSelect(_shopSeqNpcActor, "@repair");
+                    SendRepairItem(_shopSeqNpcActor, _shopSeqItemMake, _shopSeqItemName);
+                    break;
+                case "storage":
+                    SendMerchantDlgSelect(_shopSeqNpcActor, "@storage");
+                    SendStorageItem(_shopSeqNpcActor, _shopSeqItemMake, _shopSeqItemName, count);
+                    break;
+                case "takeback":
+                    SendMerchantDlgSelect(_shopSeqNpcActor, "@getback");
+                    SendTakeBackStorageItem(_shopSeqNpcActor, _shopSeqItemMake, _shopSeqItemName, count);
+                    break;
+            }
+        }
+
+        /// <summary>从本假人自己的背包视图取动作物品（名字/MakeIndex）。
+        /// 名字为空 ⇒ 取第一件；找不到（如刚卖掉/在货架上）⇒ 保留配置值（供买回用）。</summary>
+        private void ResolveShopItem()
+        {
+            string name = MShare.g_sShopItemName;
+            int make = MShare.g_nShopItemMake;
+            if (MShare.ItemArr != null)
+            {
+                for (int i = 0; i < BotConst.MaxBagItemcl; i++)
+                {
+                    ClientItem it = MShare.ItemArr[i];
+                    if (it == null || string.IsNullOrEmpty(it.Item.Name))
+                    {
+                        continue;
+                    }
+                    if (!string.IsNullOrEmpty(name) && !string.Equals(it.Item.Name, name, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+                    if (make != 0 && it.MakeIndex != make)
+                    {
+                        continue;
+                    }
+                    _shopSeqItemName = it.Item.Name;
+                    _shopSeqItemMake = it.MakeIndex;
+                    return;
+                }
+            }
+            _shopSeqItemName = name;
+            _shopSeqItemMake = make;
+        }
+
+        /// <summary>本假人视图里按名（或第一个）找 NPC/商人。只用本假人自己的 `PlayScene.ActorList`。</summary>
+        private Actor FindShopNpc()
+        {
+            if (PlayScene == null || PlayScene.ActorList == null)
+            {
+                return null;
+            }
+            string want = MShare.g_sShopNpcName;
+            Actor fallback = null;
+            for (int i = 0; i < PlayScene.ActorList.Count; i++)
+            {
+                Actor a = PlayScene.ActorList[i];
+                if (a == null || a.RecogId == _myActorId)
+                {
+                    continue;
+                }
+                bool isNpc = a.Race == ActorRace.NPC || a.Race == ActorRace.Guard
+                    || a.Race == ActorRace.PeaceNpc || a.Race == ActorRace.Merchant
+                    || a.Race == ActorRace.Exercise;
+                if (!isNpc)
+                {
+                    continue;
+                }
+                if (!string.IsNullOrEmpty(want))
+                {
+                    if (string.Equals(a.UserName, want, StringComparison.Ordinal))
+                    {
+                        return a;
+                    }
+                    continue;
+                }
+                if (fallback == null)
+                {
+                    fallback = a;
+                }
+            }
+            return fallback;
+        }
+
+        /// <summary>本假人金币（自己的 actor；拿不到就回落 `MShare.MySelf`）。</summary>
+        private int ShopGold()
+        {
+            if (PlayScene != null && PlayScene.ActorList != null)
+            {
+                for (int i = 0; i < PlayScene.ActorList.Count; i++)
+                {
+                    Actor a = PlayScene.ActorList[i];
+                    if (a != null && a.RecogId == _myActorId)
+                    {
+                        return a.m_nGold;
+                    }
+                }
+            }
+            return MShare.MySelf != null ? MShare.MySelf.m_nGold : 0;
+        }
+
+        /// <summary>本假人背包多重集（稳定键串 `名字#MakeIndex`；空槽跳过）。</summary>
+        private string ShopBagJson()
+        {
+            var parts = new List<string>();
+            if (MShare.ItemArr != null)
+            {
+                for (int i = 0; i < BotConst.MaxBagItemcl; i++)
+                {
+                    ClientItem it = MShare.ItemArr[i];
+                    if (it == null || string.IsNullOrEmpty(it.Item.Name))
+                    {
+                        continue;
+                    }
+                    parts.Add("\"" + ShopEsc(it.Item.Name) + "#" + it.MakeIndex + "\"");
+                }
+            }
+            return "[" + string.Join(",", parts) + "]";
+        }
+
+        private string ShopReqJson(string op)
+        {
+            string s = "{\"item\":\"" + ShopEsc(_shopSeqItemName) + "\",\"n\":" + MShare.g_nShopCount
+                + ",\"label\":\"" + op + "\"";
+            if (_shopSeqItemMake != 0)
+            {
+                s += ",\"make\":" + _shopSeqItemMake;
+            }
+            return s + "}";
+        }
+
+        /// <summary>失败分支归因（唯一口径 = `MShare.ClassifyShopFrames`，与 `--selftest-shopseq` 共用）。</summary>
+        private string ShopBranchFromFrames()
+        {
+            return MShare.ClassifyShopFrames(_shopSeqFrames);
+        }
+
+        /// <summary>从帧 647（卖价）/ 671（修理价）取价格，输出 `,"price":N` 或空串。
+        /// 唯一口径 = `MShare.ExtractShopPrice`。</summary>
+        private string ShopPriceFromFrames()
+        {
+            int? p = MShare.ExtractShopPrice(_shopSeqFrames);
+            return p.HasValue ? ",\"price\":" + p.Value : string.Empty;
+        }
+
+        /// <summary>收帧钩子：SM_* 的商店帧在 `g_boShopSequence` 打开时落 `phase=frame` 事件。
+        /// **只读不写世界态**（同 T-29 纪律）；默认关时空转。</summary>
+        public void ShopOnFrame(int sm, int a, int b, int c, int d)
+        {
+            if (!MShare.g_boShopSequence || _shopSeqPendingK < 0)
+            {
+                return;
+            }
+            string fr = "{\"sm\":" + sm + ",\"a\":" + a + ",\"b\":" + b + ",\"c\":" + c + ",\"d\":" + d + "}";
+            _shopSeqFrames.Add(fr);
+            MainOutMessage("M3SHOPSEQ {\"phase\":\"frame\",\"k\":" + _shopSeqPendingK + ",\"frame\":" + fr + "}");
+        }
+
+        private static string ShopJsonArray(string[] ops)
+        {
+            var parts = new List<string>();
+            if (ops != null)
+            {
+                foreach (string op in ops)
+                {
+                    parts.Add("\"" + ShopEsc(op) + "\"");
+                }
+            }
+            return "[" + string.Join(",", parts) + "]";
+        }
+
+        private static string ShopEsc(string s)
+        {
+            if (string.IsNullOrEmpty(s))
+            {
+                return string.Empty;
+            }
+            return s.Replace("\\", "\\\\").Replace("\"", "\\\"");
+        }
+
+        #endregion
+
         #region M1③ 退出路径夹具：进世界后发 CM_SOFTCLOSE（小退；默认关；白名单 M1-EXIT）
 
         /// <summary>发送时刻（MShare.GetTickCount），-1=未武装。</summary>
@@ -835,6 +1143,7 @@ namespace BotSrv.Player
             _inWorld = true;
             ArmBagEquipSequence();
             ArmAttackSequence();
+            ArmShopSequence();
             ArmSoftClose();
             if (LoadMetrics.ShouldSuppressInWorld(LoginId))
             {
@@ -865,6 +1174,7 @@ namespace BotSrv.Player
                 ProbeActionTick();
                 BagEquipSequenceTick();
                 AttackSequenceTick();
+                ShopSequenceTick();
                 SoftCloseTick();
                 if (DScreen.CurrentScene == PlayScene)
                 {

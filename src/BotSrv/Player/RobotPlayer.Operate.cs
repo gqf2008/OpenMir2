@@ -1039,18 +1039,22 @@ namespace BotSrv.Player
                     ClientGetMerchantSay(msg.Recog, msg.Param, EDCode.DeCodeString(body));
                     break;
                 case Messages.SM_SENDGOODSLIST:
+                    ShopOnFrame(msg.Ident, msg.Recog, msg.Param, msg.Tag, msg.Series);
                     ClientGetSendGoodsList(msg.Recog, msg.Param, body);
                     break;
                 case Messages.SM_SENDUSERMAKEDRUGITEMLIST:
                     ClientGetSendMakeDrugList(msg.Recog, body);
                     break;
                 case Messages.SM_SENDUSERSELL:
+                    ShopOnFrame(msg.Ident, msg.Recog, msg.Param, msg.Tag, msg.Series);
                     ClientGetSendUserSell(msg.Recog);
                     break;
                 case Messages.SM_SENDUSERREPAIR:
+                    ShopOnFrame(msg.Ident, msg.Recog, msg.Param, msg.Tag, msg.Series);
                     ClientGetSendUserRepair(msg.Recog);
                     break;
                 case Messages.SM_SENDBUYPRICE:
+                    ShopOnFrame(msg.Ident, msg.Recog, msg.Param, msg.Tag, msg.Series);
                     if (MShare.g_SellDlgItem.Item.Name != "")
                     {
                         if (msg.Recog > 0)
@@ -1064,17 +1068,20 @@ namespace BotSrv.Player
                     }
                     break;
                 case Messages.SM_USERSELLITEM_OK:
+                    ShopOnFrame(msg.Ident, msg.Recog, msg.Param, msg.Tag, msg.Series);
                     LastestClickTime = MShare.GetTickCount();
                     MShare.MySelf.m_nGold = msg.Recog;
                     MShare.g_SellDlgItemSellWait.Item.Item.Name = "";
                     break;
                 case Messages.SM_USERSELLITEM_FAIL:
+                    ShopOnFrame(msg.Ident, msg.Recog, msg.Param, msg.Tag, msg.Series);
                     LastestClickTime = MShare.GetTickCount();
                     BotHelper.AddItemBag(MShare.g_SellDlgItemSellWait.Item);
                     MShare.g_SellDlgItemSellWait.Item.Item.Name = "";
                     MainOutMessage("此物品不能出售");
                     break;
                 case Messages.SM_SENDREPAIRCOST:
+                    ShopOnFrame(msg.Ident, msg.Recog, msg.Param, msg.Tag, msg.Series);
                     if (MShare.g_SellDlgItem.Item.Name != "")
                     {
                         if (msg.Recog >= 0)
@@ -1090,6 +1097,7 @@ namespace BotSrv.Player
                     }
                     break;
                 case Messages.SM_USERREPAIRITEM_OK:
+                    ShopOnFrame(msg.Ident, msg.Recog, msg.Param, msg.Tag, msg.Series);
                     if (MShare.g_SellDlgItemSellWait.Item.Item.Name != "")
                     {
                         LastestClickTime = MShare.GetTickCount();
@@ -1101,6 +1109,7 @@ namespace BotSrv.Player
                     }
                     break;
                 case Messages.SM_USERREPAIRITEM_FAIL:
+                    ShopOnFrame(msg.Ident, msg.Recog, msg.Param, msg.Tag, msg.Series);
                     LastestClickTime = MShare.GetTickCount();
                     BotHelper.AddItemBag(MShare.g_SellDlgItemSellWait.Item);
                     MShare.g_SellDlgItemSellWait.Item.Item.Name = "";
@@ -1109,6 +1118,7 @@ namespace BotSrv.Player
                 case Messages.SM_STORAGE_OK:
                 case Messages.SM_STORAGE_FULL:
                 case Messages.SM_STORAGE_FAIL:
+                    ShopOnFrame(msg.Ident, msg.Recog, msg.Param, msg.Tag, msg.Series);
                     //LastestClickTime = MShare.GetTickCount();
                     //if (msg.Ident != Messages.SM_STORAGE_OK)
                     //{
@@ -1137,11 +1147,13 @@ namespace BotSrv.Player
                     MShare.g_SellDlgItemSellWait.Item.Item.Name = "";
                     break;
                 case Messages.SM_SAVEITEMLIST:
+                    ShopOnFrame(msg.Ident, msg.Recog, msg.Param, msg.Tag, msg.Series);
                     ClientGetSaveItemList(msg.Recog, body);
                     break;
                 case Messages.SM_TAKEBACKSTORAGEITEM_OK:
                 case Messages.SM_TAKEBACKSTORAGEITEM_FAIL:
                 case Messages.SM_TAKEBACKSTORAGEITEM_FULLBAG:
+                    ShopOnFrame(msg.Ident, msg.Recog, msg.Param, msg.Tag, msg.Series);
                     LastestClickTime = MShare.GetTickCount();
                     if (msg.Ident != Messages.SM_TAKEBACKSTORAGEITEM_OK)
                     {
@@ -1156,10 +1168,12 @@ namespace BotSrv.Player
                     }
                     break;
                 case Messages.SM_BUYITEM_SUCCESS:
+                    ShopOnFrame(msg.Ident, msg.Recog, msg.Param, msg.Tag, msg.Series);
                     LastestClickTime = MShare.GetTickCount();
                     MShare.MySelf.m_nGold = msg.Recog;
                     break;
                 case Messages.SM_BUYITEM_FAIL:
+                    ShopOnFrame(msg.Ident, msg.Recog, msg.Param, msg.Tag, msg.Series);
                     LastestClickTime = MShare.GetTickCount();
                     switch (msg.Recog)
                     {
@@ -1198,6 +1212,7 @@ namespace BotSrv.Player
                     }
                     break;
                 case Messages.SM_SENDDETAILGOODSLIST:
+                    ShopOnFrame(msg.Ident, msg.Recog, msg.Param, msg.Tag, msg.Series);
                     ClientGetSendDetailGoodsList(msg.Recog, msg.Param, msg.Tag, body);
                     break;
                 case Messages.SM_TEST:
