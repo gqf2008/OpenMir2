@@ -1,0 +1,2 @@
+EVIDENCE_COUNTS dir=evidence-m3-rng-trace-scene-groups-20261013-groups-expected declared={'files': 16, 'verify': (15, 15), 'eolcheck': (16, 16)} status_oids={'head': 'c4dd70086ea6801cd9c6b538671bffc6a657f98f', 'base': 'c127ae9a43ce53697f430b99fcba989acd288211'} actual_files=16 actual_verify=15
+  OK 声明计数与真实证据包一致（§0 head/base 全 oid 校验通过）

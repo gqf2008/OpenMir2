@@ -1,0 +1,2 @@
+EVIDENCE_COUNTS dir=evidence-m3-rng-trace-scene-groups-20261013-groups-expected declared={'files': 16, 'verify': (15, 15), 'eolcheck': (16, 16)} status_oids={'head': '15e774e91', 'base': 'c127ae9a43ce53697f430b99fcba989acd288211'} actual_files=16 actual_verify=15
+  RED declared_head=15e774e91 不是 40 位全 oid（§0 书证 head/base 必须钉全 oid，不许写「xxx 之上的交付头」这类模糊指针）

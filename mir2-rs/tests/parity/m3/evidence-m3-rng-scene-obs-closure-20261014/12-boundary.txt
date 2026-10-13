@@ -1,0 +1,16 @@
+边界（base=origin/master=6afa376363d3378933d95c26c45cd8eb7c9738f3，head=d4274cdaf0fa51f2d5fc946e77f371b260b8837a）
+================================================================
+净差量路径数 = 8（全部应在 mir2-rs/tests/parity/m3/**）：
+  mir2-rs/tests/parity/m3/M3RNG场景DoD②组清单机判组必须真出现报告-20261013.md
+  mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-trace-seed-gate/10-mutation-a-gate-ignores-stream-seed.txt
+  mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-trace-seed-gate/README.md
+  mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-trace-seed-gate/SHA256SUMS.txt
+  mir2-rs/tests/parity/m3/rng-trace-probe/rng_consumer_groups.py
+  mir2-rs/tests/parity/m3/rng-trace-scene/README.md
+  mir2-rs/tests/parity/m3/rng-trace-scene/check_evidence_counts.py
+  mir2-rs/tests/parity/m3/rng-trace-scene/run_rng_trace_pair.ps1
+
+-- 冻结面（src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins）= ''
+-- *.rs 计数 = 0
+-- base 是 head 祖先？YES
+-- head 非 origin/master 祖先（新内容未合）：NO
