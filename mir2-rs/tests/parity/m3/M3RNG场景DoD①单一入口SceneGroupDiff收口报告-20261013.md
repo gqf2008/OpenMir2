@@ -4,7 +4,7 @@
 - 车道：`m3bag`／principal `openmir2-worker-4`／worktree `m3bag`／分支 `worktree-m3-rng-trace-scene-groups`
 - base = `refs/heads/master` `029d23eae`（开工即头部；零 `.rs`、未起栈、未占端口）；**最终交付前已跟 master 至 `636bdce53`（见 §6）**
 - 写集：`mir2-rs/tests/parity/m3/**`。**零** `crates/**`、`bins/**`、`src/**`、`tests/parity/world/**`。
-- 证据包：`evidence-m3-rng-trace-scene-groups-20261013-scenegroupdiff/**`（21 件）
+- 证据包：`evidence-m3-rng-trace-scene-groups-20261013-scenegroupdiff/**`（23 件；含 M-1 订正件 `19-`/`20-`）
 
 > 一句话：把卡 DoD① 从「靠操作者记得先跑门」补成**机判的单一入口**——`-SceneGroupDiff` 先跑场景一致性
 > 前置门，**非 GREEN ⇒ 拒比**（不跑 `groupdiff`、绝不输出判据结论），GREEN 才比并原样传播 groupdiff 的
@@ -105,3 +105,23 @@ warnings` rc=0 · `test` **98 suites 1038 passed 0 failed 21 ignored** rc=0 · `
 
 > 注：合并 `origin/master` 只推进 base，**不**改变本片任何判据或内容；`-SceneGroupDiff` 的行为与
 > 改坏必红牙齿不变。真机两相 trace 仍等 owner 独占窗口。
+
+## 7. 追加：reviewer-5 M-1 收口（2026-10-13，非阻塞 Minor）
+
+coordinator 合并检查点（oid `2785da26`）携带 reviewer-5 的非阻塞 Minor M-1：证据 README / `18-post-merge-
+master-regate.txt` 记「24 路径」而交付头实测 **25**。复核与处置：
+
+- 复核 `git diff --name-only 636bdce53 8f30c8e68` = **25 路径**（1 报告 + 21 证据件 + 3 源件）；`18-` 末段
+  已给出正确口径（「24 是尚未加入 `18-` 本文件时的读数；最终交付头 = 25」），缺的是 README 不再硬编码。
+- **根因**：证据包每增删一件，路径计数就变一位 ⇒ 硬编码计数下次触碰必再变 doc-vs-事实（与本卡
+  `scenario-fold-matches-code` 同族）。
+- **处置**：证据 README 的 18- 行删去硬编码数字，改为只写**计数规则**（报告 + 本证据包全部文件 + 源件），
+  新增原始件 `19-reviewer5-M1-pathcount-correction.txt`（含复核读数与本订正片改动面）。`18-` **不改**
+  （原始转录，不事后编辑）。
+- `SHA256SUMS.txt` 已按仓库字节（LF 归一 / git blob）重写以覆盖新增件；`--check-extra` 与 `eolcheck` 重跑绿。
+- 订正片验证读数入库 `20-m1-correction-verify.txt`：四门禁 fmt rc=0 · clippy rc=0 · test **98 suites 1057 passed
+  0 failed 21 ignored** rc=0 · msgcodegen 604 rc=0；离线判据 ledger 32/32 · scene gate 16/16 · scenario GREEN ·
+  attack ledger 32/32 · `FIXTURE_MATRIX GREEN ready=9 pending=1 red=0` · `FIXTURE_CHAIN runner_ok=9`；无栈自检
+  **23/23**；`--check-extra` 全绿。
+
+真机两相 trace（DoD 剩余半边）仍等 owner 独占窗口 + 两侧驱动承接卡；本订正片零 `.rs`、零起栈、零端口。
