@@ -1,0 +1,6 @@
+SELFTEST ok=20/21
+  FAIL stream-seed-mismatch-red (RNG_SCENE_GATE scenario=C:\Users\gxh\AppData\Local\Temp\rng-scene-gate-selftest-yduqcjcs\scenario.json a=C:\Users\gxh\AppData\Local\Temp\rng-scene-gate-selftest-yduqcjcs\a-ok.json b=C:\Users\gxh\AppData\Local\Temp\rng-scene-gate-selftest-yduqcjcs\b-ok.json checks=30 failed=0
+  SCENE {"a_monsters": {"稻草人|18|20|0": 1}, "a_side": "csharp", "a_stream": "C:\\Users\\gxh\\AppData\\Local\\Temp\\rng-scene-gate-selftest-yduqcjcs\\a-stream.tsv", "a_stream_seed": 42, "b_monsters": {"稻草人|18|20|0": 1}, "b_sid)
+
+# MUTATION-A: rng_scene_gate.py stream_inject_seed() 恒返 42（忽略真实流水头种子）
+# 期望：stream-seed-mismatch-red FAIL（改坏必红）
