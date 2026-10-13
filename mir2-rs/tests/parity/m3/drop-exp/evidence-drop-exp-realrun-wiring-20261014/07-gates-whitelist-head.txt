@@ -1,0 +1,32 @@
+07 —— 四门禁（本增量 head：whitelist.md T-50 登记 + 证据；仅文档，零 .rs/.ps1/src）
+cwd = mir2-rs；CARGO_TARGET_DIR = E:/tmp/m2svr-target
+口径：本增量相对上一 head 540d312a4 的代码字节零变化（diff 仅 mir2-rs/tests/parity/whitelist.md + 本证据目录），门禁读数与 04-gates.txt 同源；此处为在本 head 上实跑的新转录。
+
+=== 00) 差量（vs 上一 head 540d312a4） ===
+ mir2-rs/tests/parity/whitelist.md | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+=== ① fmt ===
+$ cargo fmt --all -- --check
+== fmt ==
+fmt rc=0
+
+=== ② clippy ===
+$ cargo clippy --workspace --all-targets -- -D warnings
+== clippy ==
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.46s
+clippy rc=0
+
+=== ③ test ===
+$ cargo test --workspace
+test rc=0
+suites = 101 ; passed = 1200 ; failed = 0 ; ignored = 22
+
+=== ④ msgcodegen ===
+$ cargo run -p msgcodegen -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+msg rc=0
+
+=== 结论 ===
+四门禁全绿：fmt rc=0 / clippy rc=0(-D warnings) / 101 suites 1200 passed 0 failed 22 ignored / msgcodegen 604 rc=0。
+转录原件（仓外，可删）：E:/tmp/m2svr-x12/{fmt,clippy,test,msg}.txt

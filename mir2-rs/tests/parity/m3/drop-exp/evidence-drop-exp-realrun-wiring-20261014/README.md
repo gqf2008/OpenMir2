@@ -26,9 +26,15 @@
 | `03-redcheck-botsrv-config-passthrough.txt` | **改坏必红②**：写错 `run_bots` 的 DropExp 配置键 ⇒ `botsrv-dropexp-config-on`/`-default-off` 双 FAIL、ok=17/19 | 1 |
 | `04-gates.txt` | 四门禁（`cwd=mir2-rs`，`CARGO_TARGET_DIR=E:/tmp/m2svr-target`）：fmt 0 / clippy 0（-D warnings）/ test **101 suites 1200 passed 0 failed 22 ignored** / msgcodegen **604** | 0 |
 | `05-boundary.txt` | 冻结面（`src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage`，排除已登记 `src/BotSrv/**` 例外）为空；净差量 = 5 件（4 `.ps1`/`.md` + 本证据目录） | — |
+| `06-whitelist-t50-registration.txt` | **merge lane 准入③ 收口**：`whitelist.md` 新增 T-50 行（登记本卡 `src/BotSrv/**` 7 件 + 默认关口径 + 证据指针），附「编号唯一审计（T-50×1，duplicates 仍 `[42]` 预存在）+ 冻结面排除 BotSrv 后为空」机判原件 | — |
+| `07-gates-whitelist-head.txt` | 四门禁在本 head 上的新转录（本增量仅文档，代码字节 vs 上一 head 无变化）：fmt rc=0 / clippy rc=0(-D warnings) / 101 suites 1200 passed 0 failed 22 ignored / msgcodegen 604 rc=0 | 0 |
 
 - 两次改坏均**按字节还原**（sha256 前后一致，见 `05-boundary.txt` §恢复证明）。
 - 新增/修改的 `.ps1` 均为 UTF-8/LF；证据 `.txt` 用 `Write-M3LfText` / `WriteAllText(UTF8 no BOM)` 以 LF 落盘。
+
+## 准入③ 收口（whitelist T-50 登记）
+
+merge lane（comment `2b7a2d877c`）以准入③不过跳过上一 head `540d312a4`：差量含 `src/BotSrv/**` 7 件，而 `whitelist.md` 无本卡 T-* 登记。本增量按该 comment 的**选项①**在 `mir2-rs/tests/parity/whitelist.md` 的 M3④ 段新增 **T-50**（同 T-41..T-46 惯例），登记本卡 `src/BotSrv/**` 7 件 + 默认关口径 + 证据指针；机判见 `06-whitelist-t50-registration.txt`（T-50 仅 1 行；冻结面排除 BotSrv 后为空）。此增量**零 `.rs`、零 `.ps1`、零 `src/**`**（纯文档登记）。
 
 ## 未接线 / 不静默
 
