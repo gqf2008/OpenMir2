@@ -1,0 +1,23 @@
+# 净差量清单（片 = m3bag 承接卡规格源码锚点保鲜：DRIVER-CONTRACT 行号订正 + check_anchors 机判）
+# base = 1b0dad4012105a497afde80f961bda8d3e85434f（origin/master = walgit/master，本片开工前 git fetch && git merge 的 head）
+# head = e12223a2bf48ca9af7ccbcc09aa427cc4a52be76（本提交 = 源+证据片；其后的 boundary/SHA256SUMS 收口提交为自指件，不入本清单）
+# 命令：git diff --name-only 1b0dad4012105a497afde80f961bda8d3e85434f..HEAD
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-freshness-20261013/01-audit-before-red.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-freshness-20261013/02-audit-after-green.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-freshness-20261013/03-selftest-check-anchors.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-freshness-20261013/04-offline-regression.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-freshness-20261013/05-selfcheck-nostack.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-freshness-20261013/06-gates-fmt.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-freshness-20261013/07-gates-clippy.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-freshness-20261013/08-gates-workspace-test.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-freshness-20261013/09-gates-msgcodegen.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-anchor-freshness-20261013/README.md
+mir2-rs/tests/parity/m3/rng-trace-scene/DRIVER-CONTRACT.md
+mir2-rs/tests/parity/m3/rng-trace-scene/README.md
+mir2-rs/tests/parity/m3/rng-trace-scene/check_anchors.py
+mir2-rs/tests/parity/m3/rng-trace-scene/run_rng_trace_pair.ps1
+#
+# 冻结面（必须为空）：
+#   git diff --name-only 1b0dad4012105a497afde80f961bda8d3e85434f..HEAD -- src sql MirClient mir2-rs/crates mir2-rs/bins  =>
+#   git diff --name-only 1b0dad4012105a497afde80f961bda8d3e85434f..HEAD -- '*.rs'  =>
+# 全路径均在 mir2-rs/tests/parity/m3/** 内。
