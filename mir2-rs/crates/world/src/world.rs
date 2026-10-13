@@ -155,7 +155,7 @@ pub struct World {
     /// S1 tick 骨架：时钟推进 + 线程断言（单线程 `Schedule`）。
     clock_runner: TickRunner,
     /// 掉落物品的 `MakeIndex` 计数器（`M2Share.GetItemNumber`）
-    item_number: ItemNumberCounter,
+    pub(crate) item_number: ItemNumberCounter,
     /// 最近一次 tick 的记录
     pub last_tick: TickRecord,
     /// AOI 分组的复用缓冲（避免每 tick 分配；P99 回归即由那次分配量出）
