@@ -481,6 +481,13 @@ async fn main() -> Result<()> {
                         can_drop_price: cfg.can_drop_price,
                         drop_item_rage: cfg.drop_item_rage,
                     },
+                    shop: ShopCfg {
+                        castle_member_price_rate: cfg.castle_member_price_rate,
+                        super_repair_price_rate: cfg.super_repair_price_rate,
+                        repair_item_dec_dura: cfg.repair_item_dec_dura,
+                        get_all_npc_tax: cfg.castle_get_all_npc_tax,
+                        human_max_gold: cfg.human_max_gold,
+                    },
                     ref_msg_range: i32::from(cfg.send_ref_msg_range),
                     save_human_rcd_time: i64::from(cfg.save_human_rcd_time),
                     health_fill_time: cfg.health_fill_time,
@@ -1232,6 +1239,328 @@ fn handle_query_bag_cmd(
     } else {
         glog!("WRN", "SM_BAGITEMS：找不到网关线号 {gate_idx}，丢弃");
     }
+}
+
+/// 商店会话态读助手：取 `PlayObject.ScriptLable`（未写过 ⇒ 空串）。
+fn shop_script_lable(
+    sessions: &std::collections::HashMap<String, ShopSession>,
+    chr_name: &str,
+) -> String {
+    sessions
+        .get(chr_name)
+        .map(|s| s.script_lable.clone())
+        .unwrap_or_default()
+}
+
+/// 构造 `game_svr::shop::ShopContext`（`price_rate` 随商人；其余随 `[Setup]`）。
+fn shop_context<'a>(
+    catalog: &'a dyn game_svr::ability::ItemCatalog,
+    mprice: i32,
+    mcastle: bool,
+    cfg: &ShopCfg,
+    script_lable: &'a str,
+    player_actor_id: i32,
+) -> game_svr::shop::ShopContext<'a> {
+    game_svr::shop::ShopContext {
+        catalog,
+        cfg: mir2_formula::shop::ShopConfig {
+            price_rate: mprice,
+            castle_merchant: mcastle,
+            // 城堡/行会未建模 ⇒ 非成员（`Merchant.cs:770` 的 `Castle.IsMasterGuild` 分支恒假；登记）。
+            castle_member: false,
+            castle_member_price_rate: cfg.castle_member_price_rate,
+            super_repair_price_rate: cfg.super_repair_price_rate,
+            repair_item_dec_dura: cfg.repair_item_dec_dura,
+        },
+        get_all_npc_tax: cfg.get_all_npc_tax,
+        script_lable,
+        human_max_gold: cfg.human_max_gold,
+        player_actor_id,
+    }
+}
+
+/// 按 `[GateIdx,Socket]` 下发商店帧（12B 头 + 尾）。
+fn emit_shop_frames(
+    tx: &mpsc::UnboundedSender<SimToGate>,
+    socket: i32,
+    frames: &[game_svr::shop::ShopFrame],
+) {
+    for f in frames {
+        let header = game_svr::smframe::command_header(f.recog, f.ident, f.param, f.tag, f.series);
+        // 尾 = EDCode.EncodeString(原文)：oracle 的 shop 帧经 `SendDefMessage`
+        // （`PlayObject.Socket.cs:26-43`）或 `SendSocket(ClientMsg, EDCode.EncodeString(Msg))` 下发，
+        // 与 `smframe::sm_merchantsay` 同口径。空尾 `encode([]) == []` ⇒ 无尾帧逐字节不变。
+        let body = game_svr::smframe::gm_data_body(header, &mir2_protocol::edcode::encode(&f.tail));
+        let _ = tx.send(SimToGate::SendFrame { socket, body });
+    }
+}
+
+/// 商店“找件”的门：`MakeIndex == nMakeIndex && 名 OrdinalIgnoreCase 相等`
+/// （`PlayObject.Operate.cs:131/162/1558/1585` 四处同形）。
+fn find_bag_item_by_make_index(
+    item_list: &[game_svr::bag::BagItem],
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    make_index: i32,
+    wanted_name: &str,
+) -> Option<usize> {
+    item_list.iter().position(|it| {
+        it.make_index == make_index
+            && game_svr::shop::item_name(catalog, it.index)
+                .is_some_and(|n| game_svr::shop::eq_label(&n, wanted_name))
+    })
+}
+
+/// `ClientRepairItem`（`PlayObject.Operate.cs:1585-1597`）的「找件」口径 —— **BUG-REPLICA**。
+///
+/// oracle 循环体 `userItem = ItemList[i];` **无条件**赋值，未命中时循环结束后 `userItem` 仍是
+/// **最后一件**背包物品（非 null）⇒ oracle 会继续修**最后一件**；只有 `ItemList` 为空才 `userItem
+/// == null` 而 return。同源的 `ClientQueryRepairCost`（`:1558-1583`）用 `userItemA = null` 初值、
+/// 仅在命中时赋值 ⇒ 未命中 return；**只有 repair 有这条 bug**（按 §1 硬约束③ 1:1 照搬）。
+fn repair_target_index(
+    item_list: &[game_svr::bag::BagItem],
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    make_index: i32,
+    wanted_name: &str,
+) -> Option<usize> {
+    find_bag_item_by_make_index(item_list, catalog, make_index, wanted_name)
+        .or_else(|| item_list.len().checked_sub(1))
+}
+
+/// `CM_MERCHANTDLGSELECT`/`CM_MERCHANTQUERYSELLPRICE`/`CM_USERSELLITEM`/`CM_USERBUYITEM`/
+/// `CM_USERREPAIRITEM`/`CM_MERCHANTQUERYREPAIRCOST` 的派发（⑤-4 第①片）。
+///
+/// oracle 收包 → 回帧映射在 `PlayObject.Message.cs:888-942`，判定/状态迁移在
+/// `PlayObject.Operate.cs:114/131/162/192/1558/1585` + `Merchant.cs`（纯函数在
+/// `game_svr::shop`）。本函数只做：找会话 → `FindMerchant(Recog)` + 同图/视距门 → 调纯函数
+/// → 按 `[GateIdx,Socket]` 回帧。
+///
+/// **字段口径**（`HUtil32.MakeLong((ushort)nParam2, (ushort)nParam3)`）：
+/// `Recog` = `nParam1`（商人 `ActorId`）、`MakeIndex = param | (tag << 16)`、`Msg` = tail。
+/// **距离 quirk 照搬**：`ClientUserBuyItem` 用 `|dx|>15 || |dy|>15` 拒（=`<=15` 放行），
+/// 其余四条用 `IsWithinSight`（`<15`）—— `Operate.cs:200` vs `:1715`。
+#[allow(clippy::too_many_arguments)]
+fn handle_shop_cmd(
+    ident: u16,
+    recog: i32,
+    param: u16,
+    tag: u16,
+    tail: Option<&str>,
+    chr_name: &str,
+    socket: i32,
+    online: &OnlineRegistry,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    shop_sessions: &mut std::collections::HashMap<String, ShopSession>,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    world: &mut mir2_world::World,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    shop_cfg: &ShopCfg,
+) {
+    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
+        glog!(
+            "WRN",
+            "商店命令：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃 ident={ident}"
+        );
+        return;
+    };
+    let gate_idx = entry.gate_idx;
+    let Some(sg) = sessions.get_mut(chr_name) else {
+        glog!(
+            "WRN",
+            "商店命令：ChrName={chr_name} 无会话态（未进世界/已断线）⇒ 丢弃 ident={ident}"
+        );
+        return;
+    };
+    let actor_id = sg.actor_id;
+    // 玩家当前位置/生死（`FindMerchant` 门与 `IsWithinSight` 用）。
+    let Some(pe) = world.entities.get(actor_id) else {
+        glog!(
+            "WRN",
+            "商店命令：actor_id={actor_id} 不在世界 ⇒ 丢弃 ident={ident}"
+        );
+        return;
+    };
+    let (px, py, pmap, dead, ghost) = (pe.x, pe.y, pe.map_id, pe.death, pe.ghost);
+    let merchant_id = recog;
+    let Some(me) = world
+        .entities
+        .get(merchant_id)
+        .filter(|e| e.merchant.is_some())
+    else {
+        glog!(
+            "WRN",
+            "商店命令：FindMerchant({merchant_id}) == null ⇒ 丢弃 ident={ident} ChrName={chr_name}"
+        );
+        return;
+    };
+    let (mx, my, mmap, mflags, mprice, mcastle, mitem_type, mhide, mchr_name) = {
+        let st = me.merchant.as_ref().expect("已过滤 merchant.is_some()");
+        (
+            me.x,
+            me.y,
+            me.map_id,
+            st.flags,
+            st.price_rate,
+            st.castle_merchant,
+            st.item_type_list.clone(),
+            st.is_hide,
+            me.name.clone(),
+        )
+    };
+    let same_map = mmap == pmap;
+    let within_sight = (mx - px).abs() < 15 && (my - py).abs() < 15;
+    let within_15 = (mx - px).abs() <= 15 && (my - py).abs() <= 15;
+    let label_full = tail.unwrap_or("").trim();
+    // `HUtil32.GetValidStr3(sData, ref sLabel, '\r')`：`dest` = 首段（`Merchant.cs:797`）。
+    let label = label_full.split('\r').next().unwrap_or("");
+    let make_index = i32::from(param) | (i32::from(tag) << 16);
+    let item_name = tail.unwrap_or("");
+    let view = game_svr::shop::MerchantView {
+        actor_id: merchant_id,
+        flags: mflags,
+        price_rate: mprice,
+        castle_merchant: mcastle,
+        item_type_list: mitem_type,
+        chr_name: mchr_name,
+    };
+    let mut out: Vec<game_svr::shop::ShopFrame> = Vec::new();
+    match ident {
+        game_svr::shop::CM_MERCHANTDLGSELECT => {
+            // `ClientMerchantDlgSelect`（`Operate.cs:114-128`）。
+            if dead || ghost {
+                glog!(
+                    "DBG",
+                    "CM_MERCHANTDLGSELECT：Death|Ghost ⇒ return ChrName={chr_name}"
+                );
+                return;
+            }
+            if !((same_map && within_sight) || mhide) {
+                glog!(
+                    "DBG",
+                    "CM_MERCHANTDLGSELECT：异图/超视距且非 IsHide ⇒ 不开面板 ChrName={chr_name}"
+                );
+                return;
+            }
+            if !label_full.starts_with('@') {
+                return;
+            }
+            // `Merchant.UserSelect`（`Merchant.cs:799`）：`ScriptLable = sData`。
+            let session = shop_sessions.entry(chr_name.to_string()).or_default();
+            session.script_lable = label_full.to_string();
+            let ctx = shop_context(
+                catalog,
+                mprice,
+                mcastle,
+                shop_cfg,
+                &session.script_lable,
+                actor_id,
+            );
+            let goods = world.merchant_goods_groups(merchant_id).unwrap_or(&[]);
+            out = game_svr::shop::user_select(label, &view, goods, &ctx);
+        }
+        game_svr::shop::CM_MERCHANTQUERYSELLPRICE => {
+            // `ClientMerchantQuerySellPrice`（`Operate.cs:131-153`）。
+            let Some(pos) =
+                find_bag_item_by_make_index(&sg.state.item_list, catalog, make_index, item_name)
+            else {
+                return;
+            };
+            if !(mflags.is_sell && same_map && within_sight) {
+                return;
+            }
+            let sl = shop_script_lable(shop_sessions, chr_name);
+            let ctx = shop_context(catalog, mprice, mcastle, shop_cfg, &sl, actor_id);
+            out.push(game_svr::shop::query_sell_price(
+                &view,
+                &mut sg.state.item_list[pos],
+                &ctx,
+            ));
+        }
+        game_svr::shop::CM_USERSELLITEM => {
+            // `ClientUserSellItem`（`Operate.cs:162-190`）。
+            if !(mflags.is_sell && same_map && within_sight) {
+                return;
+            }
+            let sl = shop_script_lable(shop_sessions, chr_name);
+            let ctx = shop_context(catalog, mprice, mcastle, shop_cfg, &sl, actor_id);
+            let Some(goods) = world.merchant_goods_groups_mut(merchant_id) else {
+                return;
+            };
+            let r =
+                game_svr::shop::sell_item(&view, &mut sg.state, goods, make_index, item_name, &ctx);
+            out = r.frames;
+        }
+        game_svr::shop::CM_USERBUYITEM => {
+            // `ClientUserBuyItem`（`Operate.cs:192-220`）+ `Merchant.ClientBuyItem`（`Merchant.cs:1219`）。
+            if !(mflags.is_buy && same_map && within_15) {
+                return;
+            }
+            let sl = shop_script_lable(shop_sessions, chr_name);
+            let ctx = shop_context(catalog, mprice, mcastle, shop_cfg, &sl, actor_id);
+            let Some(goods) = world.merchant_goods_groups_mut(merchant_id) else {
+                return;
+            };
+            let r =
+                game_svr::shop::buy_item(&view, &mut sg.state, goods, item_name, make_index, &ctx);
+            out = r.frames;
+        }
+        game_svr::shop::CM_MERCHANTQUERYREPAIRCOST => {
+            // `ClientQueryRepairCost`（`Operate.cs:1558-1583`）。
+            let Some(pos) =
+                find_bag_item_by_make_index(&sg.state.item_list, catalog, make_index, item_name)
+            else {
+                return;
+            };
+            if !(same_map && within_sight) {
+                return;
+            }
+            let sl = shop_script_lable(shop_sessions, chr_name);
+            let ctx = shop_context(catalog, mprice, mcastle, shop_cfg, &sl, actor_id);
+            out.push(game_svr::shop::query_repair_cost(
+                &view,
+                &mut sg.state.item_list[pos],
+                &ctx,
+            ));
+        }
+        game_svr::shop::CM_USERREPAIRITEM => {
+            // `ClientRepairItem`（`Operate.cs:1585-1605`）。
+            // 按 §1 硬约束③ **BUG-REPLICA**：oracle 的循环 `userItem = ItemList[i]` **无条件**赋值，
+            // 未命中时循环结束后 `userItem` 仍是**最后一件**背包物品（非 null）⇒ oracle 会继续修
+            // 最后一件；只有 `ItemList` 为空才 return（`Operate.cs:1593-1597`）。
+            // （同源的 `ClientQueryRepairCost`（`:1558-1583`）用 `userItemA = null` 初值 ⇒ 未命中 return；
+            //  **只有 repair 有这条 bug**。）
+            let Some(pos) =
+                repair_target_index(&sg.state.item_list, catalog, make_index, item_name)
+            else {
+                return;
+            };
+            if !(same_map && within_sight) {
+                return;
+            }
+            let sl = shop_script_lable(shop_sessions, chr_name);
+            let ctx = shop_context(catalog, mprice, mcastle, shop_cfg, &sl, actor_id);
+            let r = game_svr::shop::repair_item(&view, &mut sg.state, pos, &ctx);
+            if let Some(f) = r.sent_to_user {
+                out.push(f);
+            }
+            out.extend(r.frames);
+            if let Some(g) = r.goto_label {
+                // `Merchant.cs:1652/1659` 的 `GotoLable`：本宿主尚未装载 `Market_Def`
+                // 商人脚本（`Merchant.LoadScriptFile`，`Merchant.cs:1089`）⇒ 只登记、不执行。
+                glog!(
+                    "WRN",
+                    "CM_USERREPAIRITEM：GotoLable({g}) 未执行（Market_Def 商人脚本未装载，登记；ChrName={chr_name}）"
+                );
+            }
+        }
+        _ => {}
+    }
+    if out.is_empty() {
+        return;
+    }
+    let Some(tx) = route_to_gate(gates, gate_idx, socket, "商店回帧") else {
+        return;
+    };
+    emit_shop_frames(tx, socket, &out);
 }
 
 /// **M3⑥-实现 3 第②片**：`CharacterData` → [`game_svr::npc::NpcPlayer`] 快照。
@@ -3383,6 +3712,33 @@ struct GroundCfg {
     drop_item_rage: u8,
 }
 
+/// 商店定价/修理/税的配置层输入（`Server.conf [Setup]`；oracle 读取点见 `config.rs`）。
+///
+/// 价目/修理数值口径在 `mir2_formula::shop`（已合入的 ⑤-3）；本结构只带**配置层**字段，
+/// `price_rate`/`castle_merchant`/`item_type_list` 随商人实体（[`mir2_world::merchant::MerchantState`]）。
+#[derive(Debug, Clone, Copy)]
+struct ShopCfg {
+    /// `Config.CastleMemberPriceRate`（`Merchant.cs:772`）。
+    castle_member_price_rate: i32,
+    /// `Config.SuperRepairPriceRate`（`Merchant.cs:1573/1619`）。
+    super_repair_price_rate: i32,
+    /// `Config.RepairItemDecDura`（`Merchant.cs:1656`）。
+    repair_item_dec_dura: i32,
+    /// `Config.GetAllNpcTax`（`Merchant.cs:544/1250/1385/1637`；`[Setup] CastleGetAllNpcTax`）。
+    get_all_npc_tax: bool,
+    /// `Config.HumanMaxGold`（`IncGold` 上限，`PlayObject.Base.cs:168`）。
+    human_max_gold: i32,
+}
+
+/// 一个在线角色的**商店会话态**（`CM_MERCHANTDLGSELECT` 写入 `PlayObject.ScriptLable`；
+/// ⑤-4 第①片只需要它；仓库态（105-2）第②片再扩）。
+#[derive(Debug, Clone, Default)]
+struct ShopSession {
+    /// `PlayObject.ScriptLable`（`Merchant.cs:799`：`playObject.ScriptLable = sData`）——
+    /// `CM_USERREPAIRITEM` 的 `@s_repair`/`@fail_s_repair` 分支靠它。
+    script_lable: String,
+}
+
 /// 一个在线角色的**地面交互会话态**（`CM_PICKUP`/`CM_DROPITEM` 用）。
 ///
 /// 进世界时从 `CharacterData` 建立、断线/小退时移除（`CharacterData` 在其他路径上用完即弃，
@@ -3481,6 +3837,8 @@ struct EnterConfig {
     catalog: game_svr::ability::StdItemCatalog,
     /// `CM_PICKUP`/`CM_DROPITEM` 的 `[Setup]` 输入。
     ground: GroundCfg,
+    /// `CM_*` 商店动作的 `[Setup]` 输入（⑤-4 第①片）。
+    shop: ShopCfg,
     /// `[Setup] SendRefMsgRange`（oracle `GameSvrConf.cs:499`，缺省 12）：
     /// 装备/卸下成功后的 `FeatureChanged()` 广播半径（`BaseObject.SendRefMsg` 的单元格扫描）。
     ref_msg_range: i32,
@@ -3801,6 +4159,9 @@ fn sim_loop(
     // 进世界前解析出的 `CharacterData` 在其他路径上用完即弃，这里把 `ground::*` 要的字段留下来。
     let mut ground_sessions: std::collections::HashMap<String, SessionGround> =
         std::collections::HashMap::new();
+    // 商店会话态（`PlayObject.ScriptLable`）：`CM_MERCHANTDLGSELECT` 写入、断线/小退移除。
+    let mut shop_sessions: std::collections::HashMap<String, ShopSession> =
+        std::collections::HashMap::new();
     // 存档用：登入时留下的原始记录 + 进图逻辑名（断线/`MakeGhost` 时合成存档请求）。
     let mut saves: std::collections::HashMap<String, SavedHuman> = std::collections::HashMap::new();
     glog!(
@@ -3921,6 +4282,33 @@ fn sim_loop(
                             &gates,
                             &enter_cfg.catalog,
                             &world,
+                        );
+                    } else if matches!(
+                        cmd.ident,
+                        game_svr::shop::CM_MERCHANTDLGSELECT
+                            | game_svr::shop::CM_MERCHANTQUERYSELLPRICE
+                            | game_svr::shop::CM_USERSELLITEM
+                            | game_svr::shop::CM_USERBUYITEM
+                            | game_svr::shop::CM_USERREPAIRITEM
+                            | game_svr::shop::CM_MERCHANTQUERYREPAIRCOST
+                    ) {
+                        // M3⑤-实现 4 第①片：8 条商店 `CM_*` 中的六条（对话/售价/卖出/买入/
+                        // 查修理价/修理）。oracle `PlayObject.Message.cs:888-942`。
+                        handle_shop_cmd(
+                            cmd.ident,
+                            cmd.recog,
+                            cmd.param,
+                            cmd.tag,
+                            tail.as_deref(),
+                            &chr_name,
+                            socket,
+                            &online,
+                            &mut ground_sessions,
+                            &mut shop_sessions,
+                            &gates,
+                            &mut world,
+                            &enter_cfg.catalog,
+                            &enter_cfg.shop,
                         );
                     } else if matches!(
                         cmd.ident,
@@ -4046,6 +4434,8 @@ fn sim_loop(
                         saves.remove(&chr_name);
                         // 地面交互会话态随断线一并移除（否则重进后还带着旧 `ItemList`/`Gold`）。
                         ground_sessions.remove(&chr_name);
+                        // 商店会话态（`ScriptLable`）随之移除。
+                        shop_sessions.remove(&chr_name);
                         // 同屏展示表随实体一并摘除（ActorId 槽位会被内核回收复用，避免旧展示值残留）。
                         if let Some(aid) = world.session(&chr_name).and_then(|s| s.actor_id) {
                             displays.remove(aid);
@@ -9717,5 +10107,100 @@ mod tests {
             out.data.body_luck, 5000.0,
             "characters.BodyLuck 必须带出会话的实时 BodyLuck"
         );
+    }
+
+    /// **⑤-4 返工 F-2**：`ClientRepairItem`（`PlayObject.Operate.cs:1585-1597`）的 **BUG-REPLICA**
+    /// —— 未命中 ⇒ 修最后一件；空背包 ⇒ 无目标；命中 ⇒ 命中项（即使不是最后一件）。
+    /// 改坏（把 `or_else(...last)` 删掉、改成未命中即 return）⇒ 第一/三两个断言红。
+    #[test]
+    fn repair_target_index_replicates_oracle_last_item_bug() {
+        let mut cat = game_svr::ability::StdItemCatalog::new();
+        cat.insert(
+            1,
+            mir2_data::models::StdItem {
+                name: "金创药(小量)".to_string(),
+                ..Default::default()
+            },
+        );
+        let item = |make_index: i32, index: u16| game_svr::bag::BagItem {
+            make_index,
+            index,
+            dura: 0,
+            dura_max: 0,
+            desc: [0; 14],
+        };
+        let list = vec![item(9, 1), item(10, 1), item(11, 1)];
+        // 未命中 ⇒ 最后一件（下标 2），不是 None。
+        assert_eq!(
+            repair_target_index(&list, &cat, 999, "金创药(小量)"),
+            Some(2),
+            "oracle bug：未命中 ⇒ 修最后一件"
+        );
+        // 命中第 0 件（名字 `OrdinalIgnoreCase`）。
+        assert_eq!(repair_target_index(&list, &cat, 9, "金创药(小量)"), Some(0));
+        // 空背包 ⇒ None（oracle `userItem` 仍为 null）。
+        assert_eq!(repair_target_index(&[], &cat, 9, "金创药(小量)"), None);
+    }
+
+    /// **⑤-4 返工（自报 Important）**：shop 帧的线上尾 = `EDCode.EncodeString(GBK 原文)`
+    /// （oracle `SendDefMessage` 非空尾走 `SendSocket(ClientMsg, EDCode.EncodeString(sMsg))`，
+    /// `PlayObject.Socket.cs:26-43`）；空尾保持空（header-only 帧不变）。
+    /// 改坏（退回 `&f.tail` 裸拼）⇒ 中间两个断言红。
+    #[test]
+    fn emit_shop_frames_edcodes_tail_like_send_def_message() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let tail = game_svr::downlink::gbk("商人乙/对不起!我不能帮你修理这个物品。");
+        let frames = vec![
+            game_svr::shop::ShopFrame {
+                ident: mir2_protocol::messages::SM_MERCHANTSAY,
+                recog: 5_555,
+                param: 0,
+                tag: 0,
+                series: 1,
+                tail: tail.clone(),
+            },
+            game_svr::shop::ShopFrame {
+                ident: mir2_protocol::messages::SM_USERREPAIRITEM_FAIL,
+                recog: 0,
+                param: 0,
+                tag: 0,
+                series: 0,
+                tail: Vec::new(),
+            },
+        ];
+        emit_shop_frames(&tx, 7, &frames);
+        let (sock1, body1) = match rx.try_recv().expect("第一帧") {
+            SimToGate::SendFrame { socket, body } => (socket, body),
+            _ => panic!("非 SendFrame"),
+        };
+        let (sock2, body2) = match rx.try_recv().expect("第二帧") {
+            SimToGate::SendFrame { socket, body } => (socket, body),
+            _ => panic!("非 SendFrame"),
+        };
+        assert_eq!((sock1, sock2), (7, 7));
+        assert_eq!(
+            &body1[..12],
+            &game_svr::smframe::command_header(
+                5_555,
+                mir2_protocol::messages::SM_MERCHANTSAY,
+                0,
+                0,
+                1
+            )
+        );
+        assert_eq!(&body1[12..], &mir2_protocol::edcode::encode(&tail));
+        assert_ne!(&body1[12..], &tail[..], "线上尾不是裸 GBK（EDCode 会变换）");
+        // 空尾：仍只发 12B 头（`EncodeString("")` 不追加字节）。
+        assert_eq!(
+            &body2[..12],
+            &game_svr::smframe::command_header(
+                0,
+                mir2_protocol::messages::SM_USERREPAIRITEM_FAIL,
+                0,
+                0,
+                0
+            )
+        );
+        assert_eq!(body2.len(), 12, "空尾 ⇒ header-only 不变");
     }
 }
