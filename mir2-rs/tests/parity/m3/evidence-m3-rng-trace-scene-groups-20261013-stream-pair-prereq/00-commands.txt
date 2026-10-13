@@ -1,0 +1,29 @@
+# 证据生成命令（全部离线；零端口；cwd = mir2-rs/tests/parity/m3，除注明外）
+
+python -I -B rng-trace-scene/rng_scene_gate.py selftest
+python -I -B rng-trace-scene/rng_scene_gate.py scenario --scenario rng-trace-scene/rng_trace_scenario.json
+python -I -B rng-trace-scene/rng_scene_gate.py gate --scenario rng-trace-scene/rng_trace_scenario.json --a E:/tmp/m3bag-trace-seed-evidence/csharp-scene.json --b E:/tmp/m3bag-trace-seed-evidence/rust-scene.json --a-stream E:/tmp/m3bag-trace-seed-evidence/a-rng-stream.tsv
+python -I -B rng-trace-scene/rng_scene_gate.py gate --scenario rng-trace-scene/rng_trace_scenario.json --a E:/tmp/m3bag-trace-seed-evidence/csharp-scene.json --b E:/tmp/m3bag-trace-seed-evidence/rust-scene.json --b-stream E:/tmp/m3bag-trace-seed-evidence/b-rng-stream.tsv
+python -I -B rng-trace-scene/rng_scene_gate.py gate --scenario rng-trace-scene/rng_trace_scenario.json --a E:/tmp/m3bag-trace-seed-evidence/csharp-scene.json --b E:/tmp/m3bag-trace-seed-evidence/rust-scene.json --a-stream E:/tmp/m3bag-trace-seed-evidence/a-rng-stream.tsv --b-stream E:/tmp/m3bag-trace-seed-evidence/b-rng-stream.tsv
+python -I -B rng-trace-scene/rng_scene_gate.py gate --scenario rng-trace-scene/rng_trace_scenario.json --a E:/tmp/m3bag-trace-seed-evidence/csharp-scene.json --b E:/tmp/m3bag-trace-seed-evidence/rust-scene.json
+powershell -NoProfile -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 -SelfCheckNoStack
+python -I -B rng-trace-probe/rng_ledger_diff.py selftest
+python -I -B attack_rng_ledger.py selftest
+cp -r mir2-rs/tests/parity/m3/{rng-trace-scene,rng-trace-probe,attack_rng_ledger.py} E:/tmp/m3bag-mut3/parity-m3/ && <delete stream-pair-required guard> && (cd E:/tmp/m3bag-mut3/parity-m3/rng-trace-scene && python -I -B rng_scene_gate.py selftest)
+git show $(git merge-base origin/master HEAD):mir2-rs/tests/parity/m3/rng-trace-scene/README.md | grep -n '16/16\|21/21\|22/22'
+git show HEAD:mir2-rs/tests/parity/m3/rng-trace-scene/README.md | grep -n '16/16\|21/21\|22/22'
+git diff --name-only $(git merge-base origin/master HEAD) HEAD   # 冻结面 / *.rs / tests/parity/world 均空
+cd mir2-rs && CARGO_TARGET_DIR=E:/tmp/m3bag-target cargo fmt --all -- --check
+cd mir2-rs && CARGO_TARGET_DIR=E:/tmp/m3bag-target cargo clippy --workspace --all-targets --offline -- -D warnings
+cd mir2-rs && CARGO_TARGET_DIR=E:/tmp/m3bag-target cargo test --workspace --offline --no-fail-fast
+cd mir2-rs && CARGO_TARGET_DIR=E:/tmp/m3bag-target cargo run -p msgcodegen --offline -- --check
+python -I -B tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3
+python -I -B tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-stream-pair-prereq
+
+# 现场合成场景件/流水（非仓库跟踪件，放置于 E:/tmp/m3bag-trace-seed-evidence）：
+#   csharp-scene.json / rust-scene.json —— 同 map 0137 / seed 42 / start_pose (17,20,2) / 1 只稻草人 (18,20,0)
+#   a-rng-stream.tsv / b-rng-stream.tsv —— 流水头 INJECT_OK 42；b-rng-stream-43.tsv 为异种子对照
+
+# 证据 hash / EOL（cwd = 仓库根）：
+#   python -I -B tools/evidence-hash/verify_sha256sums.py verify mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-stream-pair-prereq/SHA256SUMS.txt --check-extra
+#   python -I -B tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3

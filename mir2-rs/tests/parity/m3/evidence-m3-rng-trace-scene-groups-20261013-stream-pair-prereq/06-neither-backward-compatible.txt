@@ -1,0 +1,34 @@
+# 回归：两侧都不给 ⇒ 保持既有描述件级向后兼容（输出无任何 stream-* 检查）
+$ python -I -B rng-trace-scene/rng_scene_gate.py gate --scenario rng-trace-scene/rng_trace_scenario.json --a E:/tmp/m3bag-trace-seed-evidence/csharp-scene.json --b E:/tmp/m3bag-trace-seed-evidence/rust-scene.json
+RNG_SCENE_GATE scenario=rng-trace-scene/rng_trace_scenario.json a=E:/tmp/m3bag-trace-seed-evidence/csharp-scene.json b=E:/tmp/m3bag-trace-seed-evidence/rust-scene.json checks=27 failed=0
+  SCENE {"a_monsters": {"稻草人|18|20|0": 1}, "a_side": "csharp", "b_monsters": {"稻草人|18|20|0": 1}, "b_side": "rust", "map": "0137", "mongen_fixture": "..\\fixtures\\mongen-map0137.tsv", "mongen_rows": 0, "monsters": {"稻草人|18|20|0": 1}, "seed": 42, "start_pose": [17, 20, 2]}
+  CHECK scenario-canon                     ok
+  CHECK scenario-fields                    ok
+  CHECK scenario-trace-present             ok
+  CHECK scenario-fold-code-valid           ok
+  CHECK scenario-fold-declared             ok
+  CHECK scenario-fold-matches-code         ok
+  CHECK scenario-groups-declared           ok
+  CHECK scenario-groups-known              ok
+  CHECK descriptor-canon:a                 ok
+  CHECK descriptor-side:a                  ok
+  CHECK descriptor-canon:b                 ok
+  CHECK descriptor-side:b                  ok
+  CHECK sides-distinct                     ok
+  CHECK map-equal:a                        ok
+  CHECK seed-equal:a                       ok
+  CHECK pose-equal:a                       ok
+  CHECK map-equal:b                        ok
+  CHECK seed-equal:b                       ok
+  CHECK pose-equal:b                       ok
+  CHECK monsters-parseable                 ok
+  CHECK monsters-equal:scenario-vs-a       ok
+  CHECK monsters-equal:scenario-vs-b       ok
+  CHECK monsters-equal:a-vs-b              ok
+  CHECK mongen-parseable                   ok
+  CHECK mongen-equal:a-vs-fixture          ok
+  CHECK mongen-equal:b-vs-fixture          ok
+  CHECK mongen-equal:a-vs-b                ok
+  VERDICT GREEN: 两侧同场景/同起点/同种子（MonGen+Monster 集合同口径）
+(rc=0)
+SCENE fixtures (synthesized, out-of-repo): E:/tmp/m3bag-trace-seed-evidence
