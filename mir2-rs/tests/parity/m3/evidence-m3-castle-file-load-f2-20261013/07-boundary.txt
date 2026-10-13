@@ -1,4 +1,4 @@
-# 边界：base=c8a3487b1f6a117065b0105836105b7ed3c0529b → 本片 head（本文件随该提交入库；含证据 11 件）
+# 边界：base=16ae2607f836ac8d97b2e808351e1e0b2bc3ee1e → 本片 head（本 M-1/M-2/O-1 收口片；含新增门 + 证据件）
 
 === git diff --name-only base HEAD -- src sql MirClient ===
 (空 = 0 件)
@@ -8,16 +8,15 @@
 
 === git diff --name-only base HEAD（全量）===
 mir2-rs/crates/world/src/castle.rs
-mir2-rs/crates/world/src/lib.rs
+mir2-rs/tests/parity/m3/castle_oracle_anchor_gate.py
 mir2-rs/tests/parity/m3/evidence-m3-castle-file-load-f2-20261013/00-commands.txt
-mir2-rs/tests/parity/m3/evidence-m3-castle-file-load-f2-20261013/01-gate-fmt.txt
 mir2-rs/tests/parity/m3/evidence-m3-castle-file-load-f2-20261013/02-gate-clippy.txt
 mir2-rs/tests/parity/m3/evidence-m3-castle-file-load-f2-20261013/03-gate-test.txt
 mir2-rs/tests/parity/m3/evidence-m3-castle-file-load-f2-20261013/04-gate-msgcodegen.txt
-mir2-rs/tests/parity/m3/evidence-m3-castle-file-load-f2-20261013/05-oracle-anchors.txt
 mir2-rs/tests/parity/m3/evidence-m3-castle-file-load-f2-20261013/06-redcheck.txt
 mir2-rs/tests/parity/m3/evidence-m3-castle-file-load-f2-20261013/07-boundary.txt
 mir2-rs/tests/parity/m3/evidence-m3-castle-file-load-f2-20261013/08-castle-lib-test.txt
 mir2-rs/tests/parity/m3/evidence-m3-castle-file-load-f2-20261013/09-hash-check.txt
+mir2-rs/tests/parity/m3/evidence-m3-castle-file-load-f2-20261013/10-anchor-gate.txt
 mir2-rs/tests/parity/m3/evidence-m3-castle-file-load-f2-20261013/README.md
 mir2-rs/tests/parity/m3/evidence-m3-castle-file-load-f2-20261013/SHA256SUMS.txt
