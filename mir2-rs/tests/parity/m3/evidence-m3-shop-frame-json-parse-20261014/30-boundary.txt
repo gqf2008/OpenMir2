@@ -1,0 +1,28 @@
+# git diff --name-status origin/master -- .  (evidence dir untracked; added separately)
+M	mir2-rs/tests/parity/whitelist.md
+M	src/BotSrv/MShare.cs
+M	src/BotSrv/ShopSeqSelfCheck.cs
+
+# frozen faces must be empty:
+src (except src/BotSrv): 0
+sql: 0
+MirClient: 0
+crates/protocol: 0
+crates/storage: 0
+bins: 0
+*.rs: 0
+
+# untracked (to be added):
+?? mir2-rs/tests/parity/m3/evidence-m3-shop-frame-json-parse-20261014/01-shopseq-selftest-mutation-red.txt
+?? mir2-rs/tests/parity/m3/evidence-m3-shop-frame-json-parse-20261014/02-shopseq-selftest-restored-green.txt
+?? mir2-rs/tests/parity/m3/evidence-m3-shop-frame-json-parse-20261014/10-runner-selfcheck.txt
+?? mir2-rs/tests/parity/m3/evidence-m3-shop-frame-json-parse-20261014/11-npc-shop-diff-selftest.txt
+?? mir2-rs/tests/parity/m3/evidence-m3-shop-frame-json-parse-20261014/12-selftest-gate.txt
+?? mir2-rs/tests/parity/m3/evidence-m3-shop-frame-json-parse-20261014/13-fixture-chain.txt
+?? mir2-rs/tests/parity/m3/evidence-m3-shop-frame-json-parse-20261014/20-gate-fmt.txt
+?? mir2-rs/tests/parity/m3/evidence-m3-shop-frame-json-parse-20261014/21-gate-clippy.txt
+?? mir2-rs/tests/parity/m3/evidence-m3-shop-frame-json-parse-20261014/22-gate-msgcodegen.txt
+?? mir2-rs/tests/parity/m3/evidence-m3-shop-frame-json-parse-20261014/23-gate-test.txt
+?? mir2-rs/tests/parity/m3/evidence-m3-shop-frame-json-parse-20261014/30-boundary.txt
+?? mir2-rs/tests/parity/m3/evidence-m3-shop-frame-json-parse-20261014/31-code-diff.txt
+?? mir2-rs/tests/parity/m3/evidence-m3-shop-frame-json-parse-20261014/README.md

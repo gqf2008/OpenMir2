@@ -1,0 +1,173 @@
+diff --git a/mir2-rs/tests/parity/whitelist.md b/mir2-rs/tests/parity/whitelist.md
+index d70219724..888fb9941 100644
+--- a/mir2-rs/tests/parity/whitelist.md
++++ b/mir2-rs/tests/parity/whitelist.md
+@@ -222,7 +222,7 @@ M0 金标准验收状态（2026-10-10）：① 逐字节回放 0 差异、② 
+ 
+ | 编号 | 差异/豁免点 | 为什么无害 / 处置 | 谁审的 |
+ | --- | --- | --- | --- |
+-| T-41 | **夹具口径 + BotSrv 工具侧例外（本片交付）**：改动 `src/BotSrv/**`（`RobotOptions`/`MShare`/`AppService`/`Player/RobotPlayer.cs`/`Player/RobotPlayer.Operate.cs`/`Program.cs` + 新 `ShopSeqSelfCheck.cs`）+ `tools/botload/run_bots.ps1` + `mir2-rs/tests/parity/m3/{run_pair.ps1,gate_guards.ps1}` + 新 `mir2-rs/tests/parity/m3/{run_npc_shop_pair.ps1,npc_shop_diff.py,npc_shop_scenario.json}`：① BotSrv 增 `ShopSequence`（默认 false）/`ShopOps`/`ShopStepMs`/`ShopStartDelayMs`/`ShopNpcName`/`ShopItemName`/`ShopItemMake`/`ShopCount`，收到本假人 `SM_LOGON` 后按固定顺序对**本假人视图里的同一个 NPC/商人**发开面板+`CM_USERSELLITEM`/`CM_USERBUYITEM`/`CM_MERCHANTQUERYSELLPRICE`/`CM_MERCHANTQUERYREPAIRCOST`/`CM_USERREPAIRITEM`/`CM_USERSTORAGEITEM`/`CM_USERTAKEBACKSTORAGEITEM`，逐 op 落 `M3SHOPSEQ {json}` 的 send/frame/end/done 事件；`SM_*` 商店帧处理器（645/646/647/648/649/650/651/652/668/669/670/671/700/701/702/703/704/705/706/707）在开关打开时增 `ShopOnFrame` 落事件（**只读不写世界态**）。② `npc_shop_diff.py`（`assemble` 事件流→记录 / `diff` 逐 op 字段级+多重集+fail-closed / `selftest` **27/27**）；③ `run_npc_shop_pair.ps1`（复用 `run_pair.ps1` 两相 pin + `-StopAfterCharCreated` 预热 + 收尾 save-settle 仪器；入口护栏 + `M3SHOPSEQ` 完整性 + 跨侧 `npc_shop_diff` + `scoped_diff`；`-SelfCheckNoStack` **17/17**；未给 `-Go` ⇒ real-run fail-closed）。 | BotSrv **不在 oracle 七进程内**（T-1）。默认（`ShopSequence=false`）⇒ **不新增任何发送、不新增任何日志、原路径逐字节不变**（`run_bots.ps1 -WriteConfigOnly` 两向自检 + `run_pair -EmitOpsArgs` 两向自检钉住：默认 `(off)`、开启时必传 `-DisableAutoPlay`）。打开时只写**本假人自己的 socket**、只读本假人自己的视图（`PlayScene.ActorList`/`MShare.ItemArr`），不读不写跨假人共享世界态（同 T-22/T-29 纪律）；不改 oracle/协议/上线字节语义。这是 T-14「登记 BotSrv 工具侧例外，照 T-5/T-6 之例」/ T-29 的同族扩展。**判据本体（比较器 + 夹具骨架）已完整、离线可复跑**；真机两侧同序列跑要窗口。证据 `m3/evidence-m3-shop-fixture-botsrv-20261013/**`。 | 作者登记（`openmir2-worker-5`）；**待独立 principal 复核** |
++| T-41 | **夹具口径 + BotSrv 工具侧例外（本片交付）**：改动 `src/BotSrv/**`（`RobotOptions`/`MShare`/`AppService`/`Player/RobotPlayer.cs`/`Player/RobotPlayer.Operate.cs`/`Program.cs` + 新 `ShopSeqSelfCheck.cs`）+ `tools/botload/run_bots.ps1` + `mir2-rs/tests/parity/m3/{run_pair.ps1,gate_guards.ps1}` + 新 `mir2-rs/tests/parity/m3/{run_npc_shop_pair.ps1,npc_shop_diff.py,npc_shop_scenario.json}`：① BotSrv 增 `ShopSequence`（默认 false）/`ShopOps`/`ShopStepMs`/`ShopStartDelayMs`/`ShopNpcName`/`ShopItemName`/`ShopItemMake`/`ShopCount`，收到本假人 `SM_LOGON` 后按固定顺序对**本假人视图里的同一个 NPC/商人**发开面板+`CM_USERSELLITEM`/`CM_USERBUYITEM`/`CM_MERCHANTQUERYSELLPRICE`/`CM_MERCHANTQUERYREPAIRCOST`/`CM_USERREPAIRITEM`/`CM_USERSTORAGEITEM`/`CM_USERTAKEBACKSTORAGEITEM`，逐 op 落 `M3SHOPSEQ {json}` 的 send/frame/end/done 事件；`SM_*` 商店帧处理器（645/646/647/648/649/650/651/652/668/669/670/671/700/701/702/703/704/705/706/707）在开关打开时增 `ShopOnFrame` 落事件（**只读不写世界态**）。② `npc_shop_diff.py`（`assemble` 事件流→记录 / `diff` 逐 op 字段级+多重集+fail-closed / `selftest` **27/27**）；③ `run_npc_shop_pair.ps1`（复用 `run_pair.ps1` 两相 pin + `-StopAfterCharCreated` 预热 + 收尾 save-settle 仪器；入口护栏 + `M3SHOPSEQ` 完整性 + 跨侧 `npc_shop_diff` + `scoped_diff`；`-SelfCheckNoStack` **20/20**；未给 `-Go` ⇒ real-run fail-closed）。 | BotSrv **不在 oracle 七进程内**（T-1）。默认（`ShopSequence=false`）⇒ **不新增任何发送、不新增任何日志、原路径逐字节不变**（`run_bots.ps1 -WriteConfigOnly` 两向自检 + `run_pair -EmitOpsArgs` 两向自检钉住：默认 `(off)`、开启时必传 `-DisableAutoPlay`）。打开时只写**本假人自己的 socket**、只读本假人自己的视图（`PlayScene.ActorList`/`MShare.ItemArr`），不读不写跨假人共享世界态（同 T-22/T-29 纪律）；不改 oracle/协议/上线字节语义。这是 T-14「登记 BotSrv 工具侧例外，照 T-5/T-6 之例」/ T-29 的同族扩展。**判据本体（比较器 + 夹具骨架）已完整、离线可复跑**；真机两侧同序列跑要窗口。证据 `m3/evidence-m3-shop-fixture-botsrv-20261013/**` + `m3/evidence-m3-shop-frame-json-parse-20261014/**`（2026-10-14 reviewer-6 M-1 收口：`MShare.ClassifyShopFrames`/`ExtractShopPrice` 由 `"sm":651`/`"a":` **子串定位**改为 `System.Text.Json` **顶层键解析**，去掉重排/嵌套/前缀（`"a":30` 命中 `"a":3`、`"sm":6510` 命中 `"sm":651`）/空白误判；`ShopSeqSelfCheck` 19→26 条牙，其中 5 条在旧子串实现下必 RED；生产所发帧逐字节等价）。 | 作者登记（`openmir2-worker-5`）；**待独立 principal 复核** |
+ 
+ | T-42 | **M3⑤ 商人 tick 丢 `NpcLimit` 墙钟预算（本片交付，openmir2-worker-11）**：oracle `ProcessMerchants`（`src/GameSrv/Word/WorldServer.Merchant.cs:65-100`）每 pass 用墙钟预算 `(HUtil32.GetTickCount() - dwRunTick) > M2Share.NpcLimit`（=5，`M2Share.cs:178`）到点即把 `MerchantPosition` 存为断点、下一 pass 续跑；Rust 单线程确定性 tick 不建模墙钟 ⇒ **丢掉预算分支**，改成「一趟扫到底、扫完 `MerchantPosition = 0`」（owner `eb3bf42f` 裁决）。 | **不是行为差异，是墙钟消费者未建模**（与 T-28 / `SaveRcd` 同族口径）：预算只改变「某个该跑的商人落在哪一 pass」（抖动量 ≤ 一个 200ms pass 的 sim 时间），**不改变** `Run()` 是否执行，也**不改变同一 pass 内**的相对次序（两侧都是 `MerchantList` 顺序）。判据按 **per-merchant-run 粒度**比（同 pass 内次序 = 列表序），**跨 pass 交错显式不在判据内**；Claim B `groupdiff` 的 `merchant` 组只比每批内相对序列。纯度门 `m3/drop-exp/drop_exp_consumers.tsv` 增 `merchant` 组 `class=wallclock` 行。 | 作者登记（`openmir2-worker-11`）；owner `eb3bf42f` 裁决；**待独立 principal 复核** |
+ 
+diff --git a/src/BotSrv/MShare.cs b/src/BotSrv/MShare.cs
+index 10128b30f..aa7482e77 100644
+--- a/src/BotSrv/MShare.cs
++++ b/src/BotSrv/MShare.cs
+@@ -99,6 +99,35 @@ namespace BotSrv
+             return outList.ToArray();
+         }
+ 
++        /// <summary>M3⑤ 夹具：从一个帧 JSON 串的**顶层对象**取整数键值。纯函数（不依赖实例）。
++        /// reviewer-6 M-1 收口：旧实现以 `"sm":651` / `"a":` **子串**定位，对字段重排、嵌套
++        /// （嵌套对象里同名键）、前缀（`"sm":6510` 命中 `"sm":651`）与空白（`"sm": 651`）都脆，
++        /// 且 `"a":30` 会被 `"a":3` 误命中。改为 `System.Text.Json` 解析**顶层**键（与
++        /// `DropExpSeqSelfCheck` / `QuestSeqSelfCheck` 同库口径）。非 JSON / 非对象 / 缺键 /
++        /// 键值非整数 ⇒ false；生产路径所发帧恒为扁平整数对象 `{"sm":N,"a":N,...}` ⇒ 逐字节等价。</summary>
++        private static bool TryGetFrameInt(string frame, string key, out int value)
++        {
++            value = 0;
++            if (string.IsNullOrEmpty(frame) || string.IsNullOrEmpty(key))
++            {
++                return false;
++            }
++            try
++            {
++                using (System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(frame))
++                {
++                    return doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object
++                        && doc.RootElement.TryGetProperty(key, out System.Text.Json.JsonElement el)
++                        && el.ValueKind == System.Text.Json.JsonValueKind.Number
++                        && el.TryGetInt32(out value);
++                }
++            }
++            catch (System.Text.Json.JsonException)
++            {
++                return false;
++            }
++        }
++
+         /// <summary>M3⑤ 夹具：把本步收到的帧 JSON 串（`{"sm":..,"a":..,..}`）归类成失败分支。
+         /// 纯函数（不依赖实例），供 `--selftest-shopseq` 与 RobotPlayer 共用。
+         /// 口径：同一步取**第一个决定性帧**；钱不够/负重满/背包满/仓库满/取回满/无帧不可互相顶替。</summary>
+@@ -110,27 +139,26 @@ namespace BotSrv
+             }
+             foreach (string fr in frames)
+             {
+-                if (fr == null)
++                if (!TryGetFrameInt(fr, "sm", out int sm))
+                 {
+                     continue;
+                 }
+-                if (fr.IndexOf("\"sm\":651", StringComparison.Ordinal) >= 0)
++                if (sm == 651)
+                 {
+-                    if (fr.IndexOf("\"a\":3", StringComparison.Ordinal) >= 0) { return "fail_nomoney"; }
+-                    if (fr.IndexOf("\"a\":2", StringComparison.Ordinal) >= 0) { return "fail_overweight"; }
++                    if (TryGetFrameInt(fr, "a", out int a))
++                    {
++                        if (a == 3) { return "fail_nomoney"; }
++                        if (a == 2) { return "fail_overweight"; }
++                    }
+                     return "fail_buy_reject";
+                 }
+-                if (fr.IndexOf("\"sm\":649", StringComparison.Ordinal) >= 0) { return "fail_sell_reject"; }
+-                if (fr.IndexOf("\"sm\":670", StringComparison.Ordinal) >= 0) { return "fail_repair_reject"; }
+-                if (fr.IndexOf("\"sm\":702", StringComparison.Ordinal) >= 0) { return "fail_storage_full"; }
+-                if (fr.IndexOf("\"sm\":703", StringComparison.Ordinal) >= 0) { return "fail_storage_reject"; }
+-                if (fr.IndexOf("\"sm\":707", StringComparison.Ordinal) >= 0) { return "fail_bagfull"; }
+-                if (fr.IndexOf("\"sm\":706", StringComparison.Ordinal) >= 0) { return "fail_takeback_reject"; }
+-                if (fr.IndexOf("\"sm\":648", StringComparison.Ordinal) >= 0
+-                    || fr.IndexOf("\"sm\":650", StringComparison.Ordinal) >= 0
+-                    || fr.IndexOf("\"sm\":669", StringComparison.Ordinal) >= 0
+-                    || fr.IndexOf("\"sm\":701", StringComparison.Ordinal) >= 0
+-                    || fr.IndexOf("\"sm\":705", StringComparison.Ordinal) >= 0)
++                if (sm == 649) { return "fail_sell_reject"; }
++                if (sm == 670) { return "fail_repair_reject"; }
++                if (sm == 702) { return "fail_storage_full"; }
++                if (sm == 703) { return "fail_storage_reject"; }
++                if (sm == 707) { return "fail_bagfull"; }
++                if (sm == 706) { return "fail_takeback_reject"; }
++                if (sm == 648 || sm == 650 || sm == 669 || sm == 701 || sm == 705)
+                 {
+                     return "ok";
+                 }
+@@ -138,7 +166,8 @@ namespace BotSrv
+             return frames.Count > 0 ? "frames_unclassified" : "fail_no_frame";
+         }
+ 
+-        /// <summary>M3⑤ 夹具：从帧 647（卖价）/ 671（修理价）取价格。纯函数（不依赖实例）。</summary>
++        /// <summary>M3⑤ 夹具：从帧 647（卖价）/ 671（修理价）取价格。纯函数（不依赖实例）。
++        /// reviewer-6 M-1 收口：改为顶层 JSON 键解析（同 `TryGetFrameInt`），不再用 `"sm":647` / `"a":` 子串。</summary>
+         public static int? ExtractShopPrice(IList<string> frames)
+         {
+             if (frames == null)
+@@ -147,27 +176,15 @@ namespace BotSrv
+             }
+             foreach (string fr in frames)
+             {
+-                if (fr == null)
+-                {
+-                    continue;
+-                }
+-                if (fr.IndexOf("\"sm\":647", StringComparison.Ordinal) < 0
+-                    && fr.IndexOf("\"sm\":671", StringComparison.Ordinal) < 0)
++                if (!TryGetFrameInt(fr, "sm", out int sm))
+                 {
+                     continue;
+                 }
+-                int idx = fr.IndexOf("\"a\":", StringComparison.Ordinal);
+-                if (idx < 0)
++                if (sm != 647 && sm != 671)
+                 {
+                     continue;
+                 }
+-                int start = idx + 4;
+-                int end = start;
+-                while (end < fr.Length && (char.IsDigit(fr[end]) || fr[end] == '-'))
+-                {
+-                    end++;
+-                }
+-                if (end > start && int.TryParse(fr.Substring(start, end - start), out int val))
++                if (TryGetFrameInt(fr, "a", out int val))
+                 {
+                     return val;
+                 }
+diff --git a/src/BotSrv/ShopSeqSelfCheck.cs b/src/BotSrv/ShopSeqSelfCheck.cs
+index a06415316..1bf3c8eb5 100644
+--- a/src/BotSrv/ShopSeqSelfCheck.cs
++++ b/src/BotSrv/ShopSeqSelfCheck.cs
+@@ -83,6 +83,32 @@ namespace BotSrv
+             int? pNone = MShare.ExtractShopPrice(new List<string> { "{\"sm\":648,\"a\":9,\"b\":0,\"c\":0,\"d\":0}" });
+             Check("price-none-null", !pNone.HasValue, "got=" + (pNone.HasValue ? pNone.Value.ToString() : "null"));
+ 
++            // ④ reviewer-6 M-1 收口：`sm`/`a` 改**顶层 JSON 键解析**（旧子串口径的误判面）。
++            // 以下 5 条在旧子串实现下必 RED：`a` 前缀（30 命中 3）、`sm` 前缀（6510 命中 651）、
++            // 嵌套同名键（内层 651/3 误命中外层 648）、空白（`"sm": 651` 不含 `"sm":651`）、
++            // 卖价帧空白（`"sm": 647` 不含 `"sm":647`）。
++            Check("branch-field-reordered",
++                MShare.ClassifyShopFrames(new List<string> { "{\"a\":3,\"d\":0,\"c\":0,\"b\":0,\"sm\":651}" }) == "fail_nomoney",
++                "reordered");
++            Check("branch-a-not-prefix",
++                MShare.ClassifyShopFrames(new List<string> { "{\"sm\":651,\"a\":30,\"b\":0,\"c\":0,\"d\":0}" }) == "fail_buy_reject",
++                "a=30-not-nomoney");
++            Check("branch-nested-key-ignored",
++                MShare.ClassifyShopFrames(new List<string> { "{\"sm\":648,\"a\":1,\"x\":{\"a\":3,\"sm\":651}}" }) == "ok",
++                "nested-ignored");
++            Check("branch-sm-prefix-not-match",
++                MShare.ClassifyShopFrames(new List<string> { "{\"sm\":6510,\"a\":3,\"b\":0,\"c\":0,\"d\":0}" }) == "frames_unclassified",
++                "6510-not-651");
++            Check("branch-whitespace",
++                MShare.ClassifyShopFrames(new List<string> { "{ \"sm\" : 651 , \"a\" : 3 }" }) == "fail_nomoney",
++                "whitespace");
++            Check("price-field-reordered",
++                MShare.ExtractShopPrice(new List<string> { "{\"a\":77,\"sm\":671}" }) == 77,
++                "reordered");
++            Check("price-whitespace",
++                MShare.ExtractShopPrice(new List<string> { "{ \"sm\" : 647 , \"a\" : 99 }" }) == 99,
++                "whitespace");
++
+             Console.WriteLine(failed == 0
+                 ? "SHOPSEQ SELFTEST GREEN"
+                 : $"SHOPSEQ SELFTEST RED ({failed} failed)");

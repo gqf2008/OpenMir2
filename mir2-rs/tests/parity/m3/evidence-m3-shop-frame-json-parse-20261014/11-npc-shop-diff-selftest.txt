@@ -1,0 +1,153 @@
+STATS ops=2 frames=2 ok=1 fail=1
+CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\rs0.jsonl
+DIFF 0
+GREEN: NPC/商店逐项相同（ops=2 帧=2 失败分支=1）
+SHOP k=1 RED op csharp='buy' rust='storage'
+STATS ops=2 frames=2 ok=1 fail=1
+CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\rs_op.jsonl
+DIFF 1
+RED: NPC/商店跨侧差异 1 项（定位见上）
+SHOP k=0 RED npc csharp='卫家店' rust='仓库保管员'
+STATS ops=2 frames=2 ok=1 fail=1
+CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\rs_npc.jsonl
+DIFF 1
+RED: NPC/商店跨侧差异 1 项（定位见上）
+SHOP k=0 RED req csharp={'item': '金创药(小量)', 'n': 1} rust={'item': '木剑', 'n': 1}
+STATS ops=2 frames=2 ok=1 fail=1
+CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\rs_req.jsonl
+DIFF 1
+RED: NPC/商店跨侧差异 1 项（定位见上）
+STATS ops=2 frames=2 ok=1 fail=1
+CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\rs_req_dyn.jsonl
+DIFF 0
+GREEN: NPC/商店逐项相同（ops=2 帧=2 失败分支=1）
+SHOP k=1 RED frames.sm csharp=[651] rust=[650]
+SHOP k=1 RED frames.scalar[651] csharp={'651.a': 3} rust={}
+STATS ops=2 frames=2 ok=1 fail=1
+CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\rs_sm.jsonl
+DIFF 2
+RED: NPC/商店跨侧差异 2 项（定位见上）
+SHOP k=1 RED frames.scalar[651] csharp={'651.a': 3} rust={'651.a': 2}
+STATS ops=2 frames=2 ok=1 fail=1
+CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\rs_scalar.jsonl
+DIFF 1
+RED: NPC/商店跨侧差异 1 项（定位见上）
+SHOP k=0 RED price csharp=10 rust=11
+STATS ops=2 frames=2 ok=1 fail=1
+CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\rs_price.jsonl
+DIFF 1
+RED: NPC/商店跨侧差异 1 项（定位见上）
+SHOP k=0 RED gold_after csharp=1010 rust=1011
+STATS ops=2 frames=2 ok=1 fail=1
+CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\rs_gold.jsonl
+DIFF 1
+RED: NPC/商店跨侧差异 1 项（定位见上）
+SHOP k=0 RED bag_after.multiset csharp={} rust={'木剑#43': 1}
+STATS ops=2 frames=2 ok=1 fail=1
+CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\rs_bag.jsonl
+DIFF 1
+RED: NPC/商店跨侧差异 1 项（定位见上）
+SHOP k=0 RED storage_after.multiset csharp={} rust={'木剑#43': 1}
+STATS ops=2 frames=2 ok=1 fail=1
+CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\rs_storage.jsonl
+DIFF 1
+RED: NPC/商店跨侧差异 1 项（定位见上）
+SHOP k=0 RED goods_after.multiset csharp={'金创药(小量)#42': 1} rust={}
+STATS ops=2 frames=2 ok=1 fail=1
+CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\rs_goods.jsonl
+DIFF 1
+RED: NPC/商店跨侧差异 1 项（定位见上）
+SHOP k=1 RED branch csharp='fail_nomoney' rust='ok'
+STATS ops=2 frames=2 ok=1 fail=1
+CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\rs_branch.jsonl
+DIFF 1
+RED: NPC/商店跨侧差异 1 项（定位见上）
+SHOP k=- RED 记录条数 csharp='csharp=2' rust='rust=1'
+STATS ops=2 frames=0 ok=0 fail=0
+CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\rs_len.jsonl
+DIFF 1
+RED: NPC/商店跨侧差异 1 项（定位见上）
+SHOP k=0 RED gold_after csharp=3000000000 rust=7294967296
+STATS ops=2 frames=2 ok=1 fail=1
+CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\cs_big.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\rs_big.jsonl
+DIFF 1
+RED: NPC/商店跨侧差异 1 项（定位见上）
+SHOP k=1 RED frames.scalar[651] csharp={'651.a': 3} rust={'651.a': 2}
+STATS ops=2 frames=2 ok=1 fail=1
+CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\rs_scalar2.jsonl
+DIFF 1
+RED: NPC/商店跨侧差异 1 项（定位见上）
+STATS ops=2 frames=2 ok=1 fail=1
+CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\rs_scalar2.jsonl
+DIFF 0
+GREEN: NPC/商店逐项相同（ops=2 帧=2 失败分支=1）
+RED: PREREQ_RED 场景缺 `frame_scalar_fields`（判据真源必须显式声明）: C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\scen_nokey.json
+RED: PREREQ_RED 场景非法 JSON C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\scen_bad.json: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+RED: PREREQ_RED --scenario 与 --frame-scalars 互斥（判据真源只能一个）
+RED: PREREQ_RED 缺文件: C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\nope.jsonl
+RED: PREREQ_RED rust: k=0 缺字段 branch (C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\rs_missing.jsonl)
+RED: PREREQ_RED 非法 JSON C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\rs_bad.jsonl:1: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+RED: PREREQ_RED rust: k 不连续/非 0 起（第 1 条 k=5）(C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\rs_gap.jsonl)
+RED: PREREQ_RED rust: k=0 op 非法 'teleport'（允许 buy/sell/repair/query_sell_price/query_repair_cost/storage/takeback）(C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\rs_badop.jsonl)
+RED: PREREQ_RED rust: k=0 frames 非数组 (C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\rs_badframes.jsonl)
+RED: PREREQ_RED 无记录: C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\rs_empty.jsonl
+ASSEMBLED ok ops=2 out=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\assembled.jsonl
+ASSEMBLED ok ops=2 out=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\assembled.jsonl
+STATS ops=2 frames=2 ok=1 fail=1
+CSHARP=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\cs0.jsonl
+RUST=C:\Users\gxh\AppData\Local\Temp\npc-shop-selftest-txwhe870\assembled.jsonl
+DIFF 0
+GREEN: NPC/商店逐项相同（ops=2 帧=2 失败分支=1）
+RED: PREREQ_RED csharp: k=1 有 send 无 end（交互未收尾）—— fail-closed
+RED: PREREQ_RED 无 M3SHOPSEQ 事件（驱动未生效/日志未含标记）
+RED: PREREQ_RED csharp: done.ops=5 与 send 事件数 2 不一致
+SELFTEST ok identical-green expect=GREEN got=GREEN
+SELFTEST ok mutate-op-red expect=RED got=RED
+SELFTEST ok mutate-npc-red expect=RED got=RED
+SELFTEST ok mutate-req-item-red expect=RED got=RED
+SELFTEST ok dynamic-id-ignored-green expect=GREEN got=GREEN
+SELFTEST ok mutate-frame-kind-red expect=RED got=RED
+SELFTEST ok mutate-frame-scalar-red expect=RED got=RED
+SELFTEST ok mutate-price-red expect=RED got=RED
+SELFTEST ok mutate-gold-red expect=RED got=RED
+SELFTEST ok mutate-bag-multiset-red expect=RED got=RED
+SELFTEST ok mutate-storage-multiset-red expect=RED got=RED
+SELFTEST ok mutate-goods-multiset-red expect=RED got=RED
+SELFTEST ok mutate-branch-red expect=RED got=RED
+SELFTEST ok mutate-op-count-red expect=RED got=RED
+SELFTEST ok i32-truncation-red expect=RED got=RED
+SELFTEST ok scenario-declared-scalar-red expect=RED got=RED
+SELFTEST ok scenario-authority-green expect=GREEN got=GREEN
+SELFTEST ok scenario-missing-key-prereq expect=PREREQ got=PREREQ
+SELFTEST ok scenario-bad-json-prereq expect=PREREQ got=PREREQ
+SELFTEST ok scenario-mutex-prereq expect=PREREQ got=PREREQ
+SELFTEST ok missing-file-prereq expect=PREREQ got=PREREQ
+SELFTEST ok missing-field-prereq expect=PREREQ got=PREREQ
+SELFTEST ok invalid-json-prereq expect=PREREQ got=PREREQ
+SELFTEST ok k-gap-prereq expect=PREREQ got=PREREQ
+SELFTEST ok invalid-op-prereq expect=PREREQ got=PREREQ
+SELFTEST ok invalid-frames-prereq expect=PREREQ got=PREREQ
+SELFTEST ok empty-file-prereq expect=PREREQ got=PREREQ
+SELFTEST ok assemble-ok expect=GREEN got=GREEN
+SELFTEST ok assemble-then-diff-green expect=GREEN got=GREEN
+SELFTEST ok assemble-missing-end-prereq expect=PREREQ got=PREREQ
+SELFTEST ok assemble-no-events-prereq expect=PREREQ got=PREREQ
+SELFTEST ok assemble-done-count-prereq expect=PREREQ got=PREREQ
+SELFTEST ok=32/32
