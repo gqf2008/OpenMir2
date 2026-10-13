@@ -1,0 +1,35 @@
+# 边界（净差量 / 冻结面 / 零 .rs）
+# base = origin/master 10f0daa93（已并入 ⑨-5 收口片 f0b333c96）
+# head = 本分支 tip = 67e77e496（⑧-10 残余 Minor：guild_castle 锚门登记）
+#        + 本片叠加提交（⑨-5 残余 Minor：hero_pet 锚门登记）
+# 注：净差量相对 base 含 67e77e496 的 13 件旧证据（本片未改写该提交，只在其上叠加）。
+
+## git diff --name-status origin/master（已跟踪改动；含 67e77e496 新增的旧证据件）
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-chain-guild-anchor-20261014/00-commands.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-chain-guild-anchor-20261014/01-guild-castle-anchor-gate.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-chain-guild-anchor-20261014/02-fixture-chain-gate-selftest.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-chain-guild-anchor-20261014/03-fixture-chain-gate-check.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-chain-guild-anchor-20261014/04-redcheck.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-chain-guild-anchor-20261014/05-gate-fmt.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-chain-guild-anchor-20261014/06-gate-clippy.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-chain-guild-anchor-20261014/07-gate-test.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-chain-guild-anchor-20261014/08-gate-msgcodegen.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-chain-guild-anchor-20261014/09-boundary.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-chain-guild-anchor-20261014/10-hash-check.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-chain-guild-anchor-20261014/README.md
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-chain-guild-anchor-20261014/SHA256SUMS.txt
+M	mir2-rs/tests/parity/m3/fixture_chain_gate.py
+
+## git status --short（本片新增、提交前为未跟踪的证据目录）
+?? mir2-rs/tests/parity/m3/evidence-m3-fixture-chain-hero-anchor-20261014/
+
+## 冻结面（必须为空）：git diff --name-only origin/master -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins
+（空 = 冻结面未动）
+
+## *.rs 差量：git diff --name-only origin/master -- '*.rs'
+（空 = 零 .rs）
+
+## 差量面汇总
+  生产/工具码：1 文件 —— mir2-rs/tests/parity/m3/fixture_chain_gate.py（唯一 .py；零 .rs）
+  证据：13 件（旧 67e77e496 的 evidence-m3-fixture-chain-guild-anchor-20261014/）
+        + 13 件（本片 evidence-m3-fixture-chain-hero-anchor-20261014/）

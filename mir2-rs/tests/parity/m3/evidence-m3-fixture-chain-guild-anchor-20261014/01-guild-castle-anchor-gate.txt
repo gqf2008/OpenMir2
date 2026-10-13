@@ -1,0 +1,13 @@
+$ python -I guild_castle_anchor_gate.py check
+GREEN: guild/castle 场景锚门通过（34 锚 / 97 行点全部命中冻结 src/ 且覆盖面闭合）
+rc=0
+
+$ python -I guild_castle_anchor_gate.py selftest
+selftest 表结构: GREEN (34 锚)
+selftest 读侧 token 牙齿: GREEN (good=[] bad=1)
+selftest 覆盖面未登记牙齿: GREEN
+selftest 覆盖面表过期牙齿: GREEN (33 项)
+selftest 越界牙齿: GREEN
+selftest 真身 check: GREEN (0 项)
+SELFTEST GREEN
+rc=0
