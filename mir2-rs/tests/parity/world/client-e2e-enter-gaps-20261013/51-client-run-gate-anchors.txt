@@ -1,0 +1,88 @@
+51-client-run-gate-anchors.txt — 冻结客户端「跑键」门（CM_RUN 3013）的文件锚
+卡 openmir2-client-e2e-enter-gaps / DoD②「能跑」
+
+结论（一句话）
+================================================================================
+冻结客户端（D:\MirClient-run，源码 E:/Users/gxh/Documents/GitHub/MirClient @ c61d912d）的
+「跑」门 `g_boCanStartRun or (g_nRunReadyCount >= 1)`（ClMain.pas:2193）在**本 oracle 形态的
+11029 下行**下**恒不成立**：
+  · `g_boCanStartRun` ← `ClientConf.boCanStartRun`（ClMain.pas:15034），而该字段在客户端
+    `TClientConf` 里的字节偏移 **> 17**，oracle 的 11029 只给 17 字节 ⇒ 落在
+    `DecodeBuffer` 拷贝的**未初始化栈垃圾**里（实测恒为假）；
+  · `g_nRunReadyCount` 在 `TfrmMain.FormMouseDown` 开头被清 0（ClMain.pas:4740）⇒ 每次
+    「点地」的第一帧门必不过、只发 CM_WALK；按住拖动也一样（实测 16 连拖仍 0 条 3013）。
+⇒ 客户端从不发 `CM_RUN(3013)` ⇒ 「跑不动」**不是** 52 布局造成的（R2..R7 已置 58B、HP=19）。
+
+客户端侧锚（MirClient @ c61d912d）
+================================================================================
+
+[1] 跑门（唯一发 CM_RUN 的支）
+    ClMain.pas:2191  caRun:
+    ClMain.pas:2193    if g_boCanStartRun or (g_nRunReadyCount >= 1) then
+    ClMain.pas:2223      if (GetDistance(mx, my, dx, dy) >= 2) and (crun > 0) then
+    ClMain.pas:2226        g_MySelf.UpdateMsg(CM_RUN, mx, my, ndir, 0, 0, '', 0);
+    ClMain.pas:2262    else begin Inc(g_nRunReadyCount); goto LB_WALK; end;   // 门不过 ⇒ 走
+
+[2] 计数被每次鼠标按下清 0
+    ClMain.pas:4739  procedure TfrmMain.FormMouseDown(...)
+    ClMain.pas:4740  begin
+    ClMain.pas:4741    g_nRunReadyCount := 0;
+    （无论单击还是按住拖动，第一次 WM_LBUTTONDOWN 都会清 0。）
+
+[3] `g_boCanStartRun` 的来源（11029 解 ClientConf）
+    ClMain.pas:15005  ClientConf: TClientConf;
+    ClMain.pas:15021  sBody := DecodeString(sBody);
+    ClMain.pas:15022  DecodeBuffer(sBody, @ClientConf, SizeOf(ClientConf));
+    ClMain.pas:15034  g_boCanStartRun := ClientConf.boCanStartRun;
+
+[4] 客户端 `TClientConf` 布局（30 字段，含 5 个 Integer ⇒ boCanStartRun 偏移 > 17）
+    Grobal2.pas:2978  TClientConf = record
+    Grobal2.pas:2979    boClientCanSet: Boolean;
+    Grobal2.pas:2980    boRUNHUMAN: Boolean;
+    Grobal2.pas:2981    boRUNMON: Boolean;
+    Grobal2.pas:2982    boRunNpc: Boolean;
+    Grobal2.pas:2983    boWarRunAll: Boolean;
+    Grobal2.pas:2984    btDieColor: Integer;
+    Grobal2.pas:2985    wSpellTime: Integer;
+    Grobal2.pas:2986    wHitIime: Integer;
+    Grobal2.pas:2987    wItemFlashTime: Integer;
+    Grobal2.pas:2988    btItemSpeed: Integer;     // 小退：5×1B + 5×4B = 25B 起
+    Grobal2.pas:2989    boCanStartRun: Boolean;   // ← 偏移 ≥ 25（packed）/≥ 28（默认 4B 对齐）
+    ...
+    Grobal2.pas:3013  end;                         // 共 30 字段（不是 17）
+
+[5] `DecodeBuffer` 对超出解码长度的部分用**未初始化栈**补齐
+    EDcode.pas:894  procedure DecodeBuffer(src: AnsiString; buf: PAnsiChar; bufsize: Integer);
+    EDcode.pas:896  var EncBuf: array[0..BUFFERSIZE-1] of AnsiChar;
+    EDcode.pas:901    DeCodeBuf(..., Integer(@EncBuf));   // 只写解码出来的那 17B
+    EDcode.pas:902    Move(EncBuf, buf^, bufsize);        // bufsize=SizeOf(TClientConf) ⇒ 17..N 是垃圾
+    ⇒ `ClientConf.boCanStartRun` = 栈垃圾 ⇒ 实测恒假。
+
+[6] crun 一侧（说明不是 HP 挡的）
+    Actor.pas:22     RUN_MINHEALTH = 10;
+    Actor.pas:2162   function TActor.CanRun: Integer;
+                     begin Result := 1; if m_Abil.HP < RUN_MINHEALTH then Result := -1; end;
+    （58B 布局下 52 尾 HP DWORD@22 = 19 ⇒ crun=1；R2..R7 实测 52 尾长=58，仍不发 3013。）
+
+oracle 侧锚（说明「17 字节」是照搬 oracle，不是 Rust 少发）
+================================================================================
+
+[7] oracle 的 ClientConf 只有 **17 个 bool**（无 boCanStartRun）
+    src/OpenMir2/Packets/ClientPackets/ClientConf.cs:6-24
+      boGameAssist, boWhisperRecord, boMaketSystem, boNoFog, boStallSystem,
+      boShowHpBar, boShowHpNumber, boNoStruck, boFastMove, boNoWeight,
+      boShowFriend, boShowRelationship, boShowMail, boShowRecharging,
+      boShowHelp, boShowGameShop, boGamepath          // 17 个
+    src/Modules/SystemModule/Conf/Model/GameSvrConf.cs:1104  public ClientConf ClientConf;
+    src/Modules/SystemModule/Conf/Model/GameSvrConf.cs:1866-1878  初值（boFastMove=false …）
+    ⇒ 11029 的 `EncodeMessage(SystemShare.Config.ClientConf)` 恒 17B。
+
+[8] Rust 侧逐字节照搬（不是少发）
+    mir2-rs/crates/envir/src/conf.rs:67-121  ClientConf（17 bool）+ `to_bytes()`（17B）
+    mir2-rs/bins/game-svr/src/smframe.rs:341-344  11029 尾 = EncodeString(EncodeMessage(cfg))（双编码）
+      金标准 #6：线缆 31B ⇒ 单解 23B ⇒ 双解 17B。
+
+⇒ 这是**客户端构件与 oracle 的既有不兼容**（客户端 TClientConf=30 字段含 Integer；oracle=17 bool），
+   不是 Rust 侧可以「多发几个字节」修好的（客户端冻结 + 行为等价 ⇒ 只能照 oracle 发 17B）。
+   「跑不动」若要修，须由 owner 按 §6.0-3 裁决（例如：客户端构件更换 / 登记为 oracle 等价行为 /
+   另找一条 oracle 真会置 `boCanStartRun` 的下行——本仓 `src/` 里 grep 不到该字段的任何写点）。

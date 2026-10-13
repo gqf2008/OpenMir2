@@ -1,0 +1,22 @@
+55-boundary.txt — 边界（冻结面）与净差量
+卡 openmir2-client-e2e-enter-gaps 片⑥；交付树 = merge tree 5b2f4e7b09212ebc9c126fbe4045d6cad3b63bf6
+
+$ git diff --name-only origin/master 5b2f4e7b -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+[空 = 冻结面零改动]
+
+$ git diff --name-only origin/master 5b2f4e7b -- tools/client/mir_flow.ps1 mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013
+
+片⑥ 净新增（本片相对 master 的全部改动）：
+  tools/client/mir_flow.ps1                              （驱动：-RunHoldMs 按住拖动跑键段）
+  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/50-runkey-five-runs-summary.txt
+  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/51-client-run-gate-anchors.txt
+  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/52-before-after-viewrange12.txt
+  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/53-redcheck-runframes.txt
+  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/54-gates.txt
+  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/55-boundary.txt
+  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/check_client_run_frames.py
+  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/capture-client-run5.jsonl
+  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md（追加 §⑥ 段）
+  mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt（重算）
+
+零 .rs 生产改动；零 crates/** 改动；零 src/sql/MirClient 改动；未改表结构/脚本/数据格式。
