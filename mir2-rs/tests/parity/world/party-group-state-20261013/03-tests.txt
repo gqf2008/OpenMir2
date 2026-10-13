@@ -1,0 +1,24 @@
+# -p mir2-world --test party_vectors
+test group_mode_sets_allow_group_and_reports_param ... ok
+test add_member_uses_strict_greater_than_max ... ok
+test del_group_member_fail_codes_are_oracle_exact ... ok
+test is_group_member_matches_leader_membership ... ok
+test group_close_non_leader_calls_del_member_and_clears_allow_group ... ok
+test del_member_regular_keeps_leader_with_cancel_and_delmem_ok ... ok
+test add_member_fail_codes_are_oracle_exact ... ok
+test create_group_matches_oracle_call_order_and_dequeue_order ... ok
+test group_close_leader_emits_red_sysmsg_only ... ok
+test run_tick_clears_owner_when_leader_dead_and_removes_dead_member ... ok
+test del_member_leader_dissolves_whole_group ... ok
+test create_group_fail_codes_are_oracle_exact ... ok
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+# -p game-svr <party 过滤>
+test party::tests::maps_each_event_to_oracle_frame_shape ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 125 filtered out; finished in 0.00s
+test tests::party_cm_dispatch_emits_oracle_frames_on_both_connections ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 177 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s

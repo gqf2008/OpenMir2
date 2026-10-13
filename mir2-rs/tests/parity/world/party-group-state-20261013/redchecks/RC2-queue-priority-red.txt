@@ -1,0 +1,17 @@
+# RC-2: Emitter::finish 去掉队列优先级排序（crates/world/src/party.rs）
+# 期望：del_member_regular_keeps_leader_with_cancel_and_delmem_ok 必红（rc=101）
+
+thread 'del_member_regular_keeps_leader_with_cancel_and_delmem_ok' (28764) panicked at crates\world\tests\party_vectors.rs:177:5:
+assertion `left == right` failed
+  left: [GroupCancel { target: 1 }, DelMemberOk { target: 1, name: "T" }, SysMessage { target: 1, recog: 2, f_color: 196, b_color: 255, text: "〖组队〗T 已经退出了本组." }, SysMessage { target: 2, recog: 2, f_color: 196, b_color: 255, text: "〖组队〗T 已经退出了本组." }, GroupCancel { target: 2 }, SysMessage { target: 1, recog: 1, f_color: 196, b_color: 255, text: "〖组队〗你的小组被解散了." }]
+ right: [GroupCancel { target: 1 }, DelMemberOk { target: 1, name: "T" }, GroupCancel { target: 2 }, SysMessage { target: 1, recog: 2, f_color: 196, b_color: 255, text: "〖组队〗T 已经退出了本组." }, SysMessage { target: 2, recog: 2, f_color: 196, b_color: 255, text: "〖组队〗T 已经退出了本组." }, SysMessage { target: 1, recog: 1, f_color: 196, b_color: 255, text: "〖组队〗你的小组被解散了." }]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    del_member_regular_keeps_leader_with_cancel_and_delmem_ok
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-world --test party_vectors`
+rc=101
