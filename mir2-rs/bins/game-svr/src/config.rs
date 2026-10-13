@@ -96,6 +96,18 @@ pub struct GateConfig {
     /// `openmir2-m2-gamesvr-host` 的装备/卸下 `FeatureChanged()`（`SM_FEATURECHANGED`）用它。
     /// 缺键用 oracle 缺省 `12`（`GameSvrConf.cs:1503`）。
     pub send_ref_msg_range: u8,
+    /// `[Setup] SuperRepairPriceRate`（`ServerConf.cs:487`，缺省 `3`）——特殊修理价格倍数
+    /// （`Merchant.cs:1573/1619`）。
+    pub super_repair_price_rate: i32,
+    /// `[Setup] RepairItemDecDura`（`ServerConf.cs:488`，缺省 `30`；现网 `90`）——普通修理掉持久除数
+    /// （`Merchant.cs:1656`）。
+    pub repair_item_dec_dura: i32,
+    /// `[Setup] CastleMemberPriceRate`（`ServerConf.cs:250`，缺省 `80`）——城堡成员价百分比
+    /// （`Merchant.cs:772`）。
+    pub castle_member_price_rate: i32,
+    /// `[Setup] CastleGetAllNpcTax`（`ServerConf.cs:260`，缺省 `false`）——所有商人交税
+    /// （`Merchant.cs:544/1250/1385/1637` 的 `Config.GetAllNpcTax`）。
+    pub castle_get_all_npc_tax: bool,
     /// `[Setup] StartPointSize`（oracle `GameSvrConf.cs:236/1400`，缺省 `2`，`byte`）——
     /// `GetHomeInfo` 的 `Random(StartPointSize)` 上限（`WorldServer.cs:1388-1392`）。本宿主取
     /// `I=0`（见 `homemap` 模块头），该键只用于日志/复核。
@@ -189,6 +201,10 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut can_drop_price: Option<i32> = None;
     let mut drop_item_rage: Option<u8> = None;
     let mut send_ref_msg_range: Option<u8> = None;
+    let mut super_repair_price_rate: Option<i32> = None;
+    let mut repair_item_dec_dura: Option<i32> = None;
+    let mut castle_member_price_rate: Option<i32> = None;
+    let mut castle_get_all_npc_tax: Option<bool> = None;
     let mut start_point_size: Option<u8> = None;
     let mut home_map: Option<String> = None;
     let mut home_x: Option<i16> = None;
@@ -415,7 +431,32 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                             .with_context(|| format!("MonsterPowerRate 不是合法整数：{v:?}"))?,
                     );
                 }
-                _ => {}
+                _ => {
+                    // 商店定价/修理/税（`ServerConf.cs:250/260/487/488`）。单独一层，避免改动
+                    // 上面共享 `[Setup]` 大 match 的既有臂（rustfmt 会因臂数增长把整臂折成块 ⇒
+                    // 在共享文件里制造无谓 diff）。
+                    match k.as_str() {
+                        "SUPERREPAIRPRICERATE" => {
+                            super_repair_price_rate = Some(v.parse().with_context(|| {
+                                format!("SuperRepairPriceRate 不是合法整数：{v:?}")
+                            })?);
+                        }
+                        "REPAIRITEMDECDURE" => {
+                            repair_item_dec_dura = Some(v.parse().with_context(|| {
+                                format!("RepairItemDecDura 不是合法整数：{v:?}")
+                            })?);
+                        }
+                        "CASTLEMEMBERPRICERATE" => {
+                            castle_member_price_rate = Some(v.parse().with_context(|| {
+                                format!("CastleMemberPriceRate 不是合法整数：{v:?}")
+                            })?);
+                        }
+                        "CASTLEGETALLNPCTAX" => {
+                            castle_get_all_npc_tax = Some(parse_bool(v, "CastleGetAllNpcTax")?);
+                        }
+                        _ => {}
+                    }
+                }
             },
             _ => {}
         }
@@ -474,6 +515,10 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         drop_item_rage: drop_item_rage.unwrap_or(3),
         // oracle 缺省值（`GameSvrConf.cs:1503`）：`[Setup]` 里没写不算错。
         send_ref_msg_range: send_ref_msg_range.unwrap_or(12),
+        super_repair_price_rate: super_repair_price_rate.unwrap_or(3),
+        repair_item_dec_dura: repair_item_dec_dura.unwrap_or(30),
+        castle_member_price_rate: castle_member_price_rate.unwrap_or(80),
+        castle_get_all_npc_tax: castle_get_all_npc_tax.unwrap_or(false),
         // oracle 缺省值（`GameSvrConf.cs:1400/1374/1375/1376`）：`[Setup]` 里没写不算错。
         start_point_size: start_point_size.unwrap_or(2),
         home_map: home_map.unwrap_or_else(|| "0".to_string()),

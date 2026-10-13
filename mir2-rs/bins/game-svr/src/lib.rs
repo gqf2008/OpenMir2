@@ -24,6 +24,7 @@ pub mod movewire;
 pub mod npc;
 pub mod pickwire;
 pub mod recover;
+pub mod shop;
 pub mod smframe;
 pub mod stamina;
 pub mod useitem;

@@ -1,0 +1,12 @@
+$ cd mir2-rs && cargo test -p mir2-world --lib --offline merchant_add_item_to_goods_list
+# --- restored
+
+
+running 1 test
+test merchant::tests::merchant_add_item_to_goods_list_inserts_front ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 68 filtered out; finished in 0.00s
+
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\world)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.31s
+     Running unittests src\lib.rs (E:/tmp/m2svr-target\debug\deps\mir2_world-b447abe76269f045.exe)
