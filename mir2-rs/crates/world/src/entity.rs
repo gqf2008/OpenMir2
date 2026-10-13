@@ -7,8 +7,9 @@
 //! 遍历顺序 = 槽位顺序（= 插入顺序 + 回收槽复用），**全库唯一**：
 //! tick 的确定性（判据①）依赖"同一组操作产生同一槽位排布"。
 
-/// `src/OpenMir2/Enums/Race.cs`：`ActorRace.Play = 0`、`ActorRace.Monster = 80`。
+/// `src/OpenMir2/Enums/Race.cs`：`ActorRace.Play = 0`、`ActorRace.NPC = 10`、`ActorRace.Monster = 80`。
 pub const ACTOR_RACE_PLAY: u8 = 0;
+pub const ACTOR_RACE_NPC: u8 = 10;
 pub const ACTOR_RACE_MONSTER: u8 = 80;
 
 /// `CharacterObject.UseItems` 的佩戴位数量（`CharacterObject.cs:89`：`UseItems = new UserItem[13]`）。
@@ -142,6 +143,10 @@ pub struct AnimalState {
     pub run_away_mode: bool,
     pub run_away_start: i64,
     pub run_away_time: i64,
+    /// `MonsterObject.CheckRoyaltyTick`（`MonsterObject.cs:45`，ctor `:67` = `GetTickCount()`）
+    /// —— `CheckRoyalty`（`MonsterObject.cs:363-397`）的 10s 检查门。
+    /// 归 `openmir2-m3-pet-slave-lifecycle`（⑨-3）；由 [`AnimalState::seed_from_spawn`] 置为生成时刻。
+    pub check_royalty_tick: i64,
 }
 
 impl AnimalState {
@@ -173,6 +178,8 @@ impl AnimalState {
         self.think_tick = now;
         self.walk_wait_tick = now;
         self.run_away_start = now;
+        // `MonsterObject` ctor `CheckRoyaltyTick = GetTickCount()`（`MonsterObject.cs:67`）。
+        self.check_royalty_tick = now;
     }
 }
 
@@ -208,6 +215,7 @@ impl Default for AnimalState {
             run_away_mode: false,
             run_away_start: 0,
             run_away_time: 0,
+            check_royalty_tick: 0,
         }
     }
 }
@@ -282,6 +290,12 @@ pub struct Entity {
     /// C# `PlayObject.Luck`（`PlayObject.cs:62`，`RecalcAbilitys` 里 `Luck = 0 + AddAbil.Luck - AddAbil.UnLuck`）。
     /// 玩家攻方的 [`crate::combat::get_attack_power_player`] override 用它决定取数次数。
     pub luck: i32,
+    /// C# `BaseObject.NameColor`（`BaseObject.cs:28/385`，ctor 初值 `255`）。
+    ///
+    /// `GetNameColor()`（`BaseObject.Base.cs:904-907`）返回它；`GetChrColor`
+    /// （`BaseObject.Base.cs:869-883`）的兜底分支与 `MonsterObject`/`PlayObject` 的 override 都读它。
+    /// 归 `openmir2-m3-pet-slave-lifecycle`（⑨-3）。
+    pub name_color: u8,
     /// C# `PlayObject.PowerRate`（`PlayObject.cs:724`；新角色 `PlayObject.cs:943` 置 `100`）。
     pub power_rate: i32,
     /// C# `PlayObject.BoPowerItem`（`PlayObject.cs:223`）。
@@ -408,6 +422,8 @@ impl Entity {
             stone_mode: false,
             dear_human: None,
             pk_point: 0,
+            // `BaseObject.cs:385`：ctor 初值 `NameColor = 255`。
+            name_color: 255,
             // `PlayObject.cs:62/943`：新角色 `Luck` 由 `RecalcAbilitys` 置 0（无 `AddAbil`），
             // `PowerRate = 100`；`BoPowerItem=false` / `PowerItem=0`。
             luck: 0,

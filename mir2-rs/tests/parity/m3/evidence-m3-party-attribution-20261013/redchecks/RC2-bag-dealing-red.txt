@@ -1,0 +1,6 @@
+# 改坏：handle_bag_cmd 的 dealing 换回 false
+$ cargo test -p game-svr bag_takeoff_blocked_while_dealing
+test tests::bag_takeoff_blocked_while_dealing ... FAILED
+thread 'tests::bag_takeoff_blocked_while_dealing' (11104) panicked at bins\game-svr\src\main.rs:11090:21:
+assertion `left == right` failed: Dealing ⇒ n10 = -1（oracle Operate.cs:501/535）
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 182 filtered out; finished in 0.00s

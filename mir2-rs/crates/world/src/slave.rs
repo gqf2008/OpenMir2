@@ -1,8 +1,9 @@
-//! 宝宝 / 下属（slave）召唤与召回 —— 1:1 复刻 C# `BaseObject.MakeSlave` 一族 +
-//! `MagicManager.MagMakeSlave` / `MagMakeSinSuSlave` / `MagMakeAngelSlave` 的**选型与门**。
+//! 宝宝 / 下属（slave）**召唤、召回与生命周期** —— 1:1 复刻 C# `BaseObject.MakeSlave` 一族 +
+//! `MagicManager.MagMakeSlave` / `MagMakeSinSuSlave` / `MagMakeAngelSlave` 的**选型与门** +
+//! `CheckRoyalty` / 死亡清表 / 主人死幽灵 / 诱惑受奴尾 / `GetChrColor`。
 //!
-//! 交付卡：`openmir2-m3-pet-slave-summon`（M3⑨-实现 2）。
-//! 盘点依据：`mir2-rs/tests/parity/m3/M3⑨英雄宠物现状盘点报告-20261013.md` §1.B/§1.F。
+//! 交付卡：`openmir2-m3-pet-slave-summon`（M3⑨-实现 2）+ `openmir2-m3-pet-slave-lifecycle`（⑨-3）。
+//! 盘点依据：`mir2-rs/tests/parity/m3/M3⑨英雄宠物现状盘点报告-20261013.md` §1.B/§1.D/§1.F。
 //!
 //! ## 本模块负责 / 不负责
 //!
@@ -14,9 +15,10 @@
 //!   → `CreateMonster` 的 RNG 次序由宿主侧 `create_monster_oracle`（`bins/game-svr::mongen`）
 //!   驱动；本模块通过 [`World::make_slave_adopt`] 接收**已生成**的怪 id 并落尾。
 //!   ——这与 ④-B 的 MonGen 接线同形（刷怪取数在宿主、状态落 `crates/world`）。
-//! - **不负责**：等级色彩 `GetChrColor`/`SlaveColor`、叛变 `CheckRoyalty`、死亡清表
-//!   （归 `openmir2-m3-pet-slave-lifecycle`，⑨-3）；本模块只把 `SlaveExpLevel`/`MasterRoyaltyTick`
-//!   等**写在实体上**供 ⑨-3 消费。
+//! - **本模块同时实现 ⑨-3 的生命周期**（卡 `openmir2-m3-pet-slave-lifecycle`）：`SlaveList` 清表
+//!   （`BaseObject.Base.cs:208-217`）、`CheckRoyalty` 叛变/到期（`MonsterObject.cs:363-397`）、
+//!   主人死/幽灵的 `ProcessSlaveMutiny`/`ProcessSlaveGhost`（`PlayObject.Base.cs:331-370`）、
+//!   诱惑受奴落尾（`MagicManager.cs:753-770`）与 `GetChrColor` 色彩（`BaseObject.Base.cs:869-883`）。
 //! - **46 分身**（`MagMakeClone`，`MagicManager.cs:1337-1341`）：`new PlayCloneObject(PlayObject)`
 //!   造的是一个**玩家型克隆体**（不入 `SlaveList`、不走 `MakeSlave`），与宝宝系统不同轴；
 //!   本片**登记未实现**（见 [`CLONE_DEFERRED`]）。
@@ -37,11 +39,22 @@
 //!   `pending_rm10401` 为输入，宿主今天恒传 `false`（登记：无产者，门恒放行）。
 //! - `SpaceMove` 的**出帧**（`RM_CLEAROBJECTS`/`RM_CHANGEMAP`/`RM_SPACEMOVE_SHOW2`）不在此层；
 //!   本模块只做**格子移动 + `SpaceMoveGetRandXY` 取数**（帧面归宿主接线片）。
+//! - **⑨-3 的帧面不在本层**：`RefNameColor`（`RM_CHANGENAMECOLOR`）/`RefShowName`（`RM_USERNAME`）/
+//!   `MakeGhost` 的 `DisappearA`/`RM_MASTERDIEMUTINY`/`RM_MASTERDIEGHOST`/`RM_SPIRITSUITE` 的自投递
+//!   队列都是**帧面**，归 `CM_SPELL`/宿主接线片；本层只改实体状态。
+//! - **`MakeGhost` 的 `CanReAlive` 分支未建模**（`BaseObject.Base.cs:484-497`）：召唤物常态
+//!   `Ghost=true`；`CanReAlive ⇒ Invisible=true` 变体（需 `MonGen` 字段）登记未实现。
+//! - **`CrazyMode` 字段不在骨架**：`MagTamming` 的 `OpenCrazyMode`/`BreakCrazyMode` 与
+//!   `MonsterObject.GetChrColor` 的 `CrazyMode/HolySeize` 前置色支登记未实现（`mag_tamming`
+//!   已把 `crazy_mode` 作为纯输出给出，见 `crate::magic`）。
+//! - **诱惑诱饵到期抽数未表面积化**：`mag_tamming` 已按 oracle 位置消费 `Random(caster.Level*2)`
+//!   （RNG 账本不变），但该值未随 `TammingOutcome` 返回 ⇒ [`World::tame_adopt`] 需调用方传
+//!   `royalty_draw`；把它接到真实 `CM_SPELL(20)` 接线片（登记）。
 
 use mir2_data::pet_slave::{PetSlaveConfig, SLAVE_MAX_LEVEL};
 use mir2_shared::rng::RandomNumber;
 
-use crate::entity::{Entity, ACTOR_RACE_PLAY};
+use crate::entity::{Entity, ACTOR_RACE_NPC, ACTOR_RACE_PLAY};
 use crate::magic::front_position;
 use crate::world::World;
 
@@ -545,6 +558,312 @@ pub fn slave_color_level_index(exp_level: u8) -> Option<usize> {
     }
 }
 
+// =====================================================================================
+// 生命周期（卡 `openmir2-m3-pet-slave-lifecycle`，⑨-3）
+//
+// 覆盖 oracle：
+// - 死亡/幽灵/换主清表：`BaseObject.Base.cs:208-217`（`BaseObject.Run` 尾）；
+// - 叛变到期：`MonsterObject.CheckRoyalty`（`MonsterObject.cs:363-397`，`Run` 尾 `:352` 调）；
+// - 主人死 ⇒ `ProcessSlaveMutiny`（`PlayObject.Base.cs:331-357`）；
+// - 主人幽灵 ⇒ `ProcessSlaveGhost`（`PlayObject.Base.cs:360-370`）；
+// - 诱惑受奴落尾：`MagicManager.MagTamming`（`MagicManager.cs:704-825` 受奴支 `:753-770`）；
+// - 名字颜色：`GetChrColor`（`BaseObject.Base.cs:869-883`）。
+//
+// ## oracle 缺陷照搬（`BUG-REPLICA`）
+//
+// 1. **色表越界门**：`GetChrColor`（`BaseObject.Base.cs:877-881`）用门 `slaveExpLevel <= SlaveMaxLevel(50)`
+//    去索引 15 项色表 `SlaveColor[slaveExpLevel]` ⇒ `15..=50` 会 `IndexOutOfRangeException`（latent）。
+//    Rust `get_chr_color` 用 `slice::get` 落到 `GetNameColor` 兜底（见函数注释）；正常数据不可达
+//    （召唤 `SlaveExpLevel` 来自 `SkeletonArray/DragonArray.nLevel`；`ProcessSlaveMutiny` 置 15 但
+//    同时把 `Master=null` ⇒ `GetChrColor` 走不到色表支）。
+// 2. **`MasterDieMutinySpeed == 0` 除零**：`ProcessSlaveMutiny`（`PlayObject.Base.cs:350`）
+//    `WalkSpeed = WalkSpeed / Config.MasterDieMutinySpeed`。C# 配置缺陷（`ServerConf.cs:521` 读的是
+//    `MasterDieMutinyPower` 键）下若 `MasterDieMutinyPower=0` ⇒ 除零异常；Rust 侧 `speed != 0` 才除
+//    （不可达分支，登记不冒充已实现）。
+// 3. **`GainSlaveExp` 是死代码**（`MonsterObject.cs:71-84`，全仓无调用点）⇒ 本片**不实现**宝宝击杀涨级，
+//    照搬「击杀不涨 `SlaveExpLevel`」。
+
+/// `MonsterObject.CheckRoyalty` 的检查间隔（`MonsterObject.cs:365` `> 10000`）。
+pub const CHECK_ROYALTY_INTERVAL: i64 = 10_000;
+
+/// `CheckRoyalty` 的诱饵到期（`MonsterObject.cs:390` `12 * 60 * 60 * 1000`）。
+pub const MASTER_MUTINY_DEATH_MS: i64 = 12 * 60 * 60 * 1000;
+
+/// `BaseObject.Run` 的宝宝列表清理（`BaseObject.Base.cs:208-217`）：从列表**末尾往前**删掉
+/// `Death || Ghost || Master != this` 的项。
+///
+/// 本骨架 `SlaveList` 存的是 actor id（`Entity::slave_list`）；`entities` 里已不存在的 id
+/// 等价于 oracle 的「对象已不是本主人的宝宝」⇒ 一并移除（登记：C# 持有强引用，实体离图仍在表里；
+/// 本骨架 `EntityStore::remove` 后 id 可能被代际复用于**另一实体**，故缺失即视为换主）。
+impl World {
+    /// 对单个主人跑一次清表（空表立即返回）。
+    pub fn slave_list_cleanup(&mut self, master_id: i32) {
+        let Some(master) = self.entities.get(master_id) else {
+            return;
+        };
+        if master.slave_list.is_empty() {
+            return;
+        }
+        let mut list = master.slave_list.clone();
+        for i in (0..list.len()).rev() {
+            let sid = list[i];
+            let remove = match self.entities.get(sid) {
+                Some(s) => s.death || s.ghost || s.master != Some(master_id),
+                None => true,
+            };
+            if remove {
+                list.remove(i);
+            }
+        }
+        if let Some(m) = self.entities.get_mut(master_id) {
+            m.slave_list = list;
+        }
+    }
+
+    /// `MagTamming` 受奴落尾（`MagicManager.cs:753-770`）。
+    ///
+    /// `royalty_draw` = oracle `Random(playObject.Abil.Level * 2)` 的抽数结果（诱饵到期时刻的随机分量）。
+    /// 该抽数的**位置**已在 [`crate::magic::mag_tamming`] 里逐字保留（RNG 账本不变）；把它的值
+    /// 表面积化并接到本函数归 `CM_SPELL` 接线片（本卡只做状态落尾，见证据 README「未接」）。
+    ///
+    /// 逐条对应 oracle：`Master = playObject` → `MasterRoyaltyTick` → `SlaveMakeLevel = magicLevel` →
+    /// `if (MasterTick == 0) MasterTick = now` → `BreakHolySeizeMode()` → `WalkSpeed/NextHitTime` 封顶
+    /// → `RefShowName()`（帧，不在此层）→ `playObject.SlaveList.Add(targetObject)`。
+    /// `CanReAlive`/`MonGen.ActiveCount`/`BreakCrazyMode` 未建模（登记）。
+    pub fn tame_adopt(
+        &mut self,
+        caster_id: i32,
+        target_id: i32,
+        magic_level: u8,
+        royalty_draw: i32,
+    ) -> bool {
+        let now = self.clock_ms;
+        let Some(caster) = self.entities.get(caster_id) else {
+            return false;
+        };
+        if caster.race != ACTOR_RACE_PLAY {
+            return false;
+        }
+        let caster_level = i32::from(caster.level);
+        let Some(t) = self.entities.get(target_id) else {
+            return false;
+        };
+        // `if (targetObject.Master != null) HP = HP / 10;`（`:756-759`）。
+        let mut hp = t.hp;
+        if t.master.is_some() {
+            hp /= 10;
+        }
+        // `if (1500 - magicLevel * 200 < WalkSpeed) WalkSpeed = ...`（`:765-772`）。
+        let walk_speed = t.ai.walk_speed.min(1500 - i64::from(magic_level) * 200);
+        let next_hit_time = t.ai.next_hit_time.min(2000 - i64::from(magic_level) * 200);
+        let master_tick = if t.master_tick == 0 {
+            now
+        } else {
+            t.master_tick
+        };
+        let royalty_tick = tame_royalty_tick(caster_level, magic_level, royalty_draw, now);
+        if let Some(t) = self.entities.get_mut(target_id) {
+            t.master = Some(caster_id);
+            t.hp = hp;
+            t.master_royalty_tick = royalty_tick;
+            // oracle 只写 `SlaveMakeLevel`（**不写 `IsSlave`**，与 `MakeSlave` 不同）。
+            t.slave_make_level = magic_level;
+            t.master_tick = master_tick;
+            t.ai.walk_speed = walk_speed;
+            t.ai.next_hit_time = next_hit_time;
+            t.ai.holy_seize = false; // `BreakHolySeizeMode()`
+        }
+        self.entities
+            .get_mut(caster_id)
+            .expect("caster 已确认存在")
+            .slave_list
+            .push(target_id);
+        true
+    }
+}
+
+/// 对每个**持有非空 `SlaveList`** 的实体跑一次 [`World::slave_list_cleanup`]（槽位顺序）。
+///
+/// oracle 里清表在各自主人的 `Run()` 里跑；本骨架玩家无 `Run` ⇒ 在 [`World`] 的 tick 里集中跑。
+/// 空表零动作（既有 golden 逐字节不变；无随机数）。
+pub fn slave_list_cleanup_all(world: &mut World) {
+    let ids: Vec<i32> = world
+        .entities
+        .iter()
+        .filter(|e| !e.slave_list.is_empty())
+        .map(|e| e.id)
+        .collect();
+    for id in ids {
+        world.slave_list_cleanup(id);
+    }
+}
+
+/// `MonsterObject.CheckRoyalty`（`MonsterObject.cs:363-397`）。
+///
+/// 每 ≥10s（`CheckRoyaltyTick`）检查一次；`Master != null` 时：
+/// ① `M2Share.SpiritMutinyTick > now && SlaveExpLevel < 5` ⇒ `MasterRoyaltyTick = 0`；
+/// ② `now > MasterRoyaltyTick` ⇒ 从 `Master.SlaveList` 移除（首个匹配）+ `Master = null` + `HP /= 10` + `RefShowName`；
+/// ③ `MasterTick > 0 && now - MasterTick > 12h` ⇒ `HP = 0`。
+///
+/// **不消费随机数**。`RefShowName`（重发 `RM_USERNAME`）是帧面，不在此层。
+/// 调用点（`MonsterObject.cs:352`）由 [`crate::monai::monster_run`] 在 oracle 的两个提前返回口之外复刻。
+pub fn check_royalty(world: &mut World, mon_id: i32) {
+    let now = world.clock_ms;
+    let Some(e) = world.entities.get(mon_id) else {
+        return;
+    };
+    if (now - e.ai.check_royalty_tick) <= CHECK_ROYALTY_INTERVAL {
+        return;
+    }
+    let exp_level = e.slave_exp_level;
+    let master = e.master;
+    let master_tick = e.master_tick;
+    // oracle 先刷新 `CheckRoyaltyTick`，再判 `Master`。
+    if let Some(m) = world.entities.get_mut(mon_id) {
+        m.ai.check_royalty_tick = now;
+    }
+    let Some(master_id) = master else {
+        return;
+    };
+    if world.spirit_mutiny_tick > now && exp_level < 5 {
+        if let Some(m) = world.entities.get_mut(mon_id) {
+            m.master_royalty_tick = 0;
+        }
+    }
+    let royalty_deadline = world
+        .entities
+        .get(mon_id)
+        .map_or(0, |m| m.master_royalty_tick);
+    if now > royalty_deadline {
+        if let Some(master) = world.entities.get_mut(master_id) {
+            if let Some(i) = master.slave_list.iter().position(|id| *id == mon_id) {
+                master.slave_list.remove(i);
+            }
+        }
+        if let Some(m) = world.entities.get_mut(mon_id) {
+            m.master = None;
+            m.hp /= 10;
+        }
+    }
+    // 注意：`Master` 已可能置 null，但 `MasterTick` 是自身字段 ⇒ 仍判。
+    if master_tick > 0 && (now - master_tick) > MASTER_MUTINY_DEATH_MS {
+        if let Some(m) = world.entities.get_mut(mon_id) {
+            m.hp = 0;
+        }
+    }
+}
+
+/// `MagTamming` 的 `MasterRoyaltyTick` 公式（`MagicManager.cs:759`）：
+/// `(Random(caster.Level * 2) + (magicLevel << 2) * 5 + 20) * 60 * 1000 + now`。
+#[must_use]
+pub fn tame_royalty_tick(caster_level: i32, magic_level: u8, draw: i32, now: i64) -> i64 {
+    let _ = caster_level; // 抽取范围由调用方在 `mag_tamming` 里消费；此处只用 draw 值。
+    (i64::from(draw) + (i64::from(magic_level) << 2) * 5 + 20) * 60 * 1000 + now
+}
+
+/// `PlayObject.ProcessSlaveMutiny`（`PlayObject.Base.cs:331-357`）：主人死亡后逐个宝宝掷骰。
+///
+/// `!Death || !Config.MasterDieMutiny` ⇒ 直接返回（且**不抽数**）。否则从列表**末尾往前**：
+/// `Master.LastHiter != null && Random(MasterDieMutinyRate) == 0` ⇒ 叛变（`Master=null`、
+/// `SlaveExpLevel = SlaveColor.Length`、`DC × MasterDieMutinyPower`、`WalkSpeed /= MasterDieMutinySpeed`）；
+/// 否则 `HP = 0`。
+///
+/// **取数次序**：`LastHiter == null` 时 C# 短路 ⇒ 不抽；否则每宝宝恰抽 1 次
+/// `Random(MasterDieMutinyRate)`（Claim B 账本输入，不许改序）。不返回 `RefNameColor`/`RefShowName` 帧。
+///
+/// **照搬的 oracle 怪行为（BUG-REPLICA ④）**：`WAbil.DC = (ushort)MakeLong((short)(LoByte*Power),
+/// (short)(HiByte*Power))`（`PlayObject.Base.cs:349`）——外层 `(ushort)` 把 `MakeLong` 的高 16 位（= 高字节
+/// 缩放值）**截掉** ⇒ `DC` 实际只等于 `(ushort)(short)(LoByte(DC) * Power)`，高字节归零。本实现逐位保留这
+/// 个截断（含红检钉住）。
+pub fn process_slave_mutiny(world: &mut World, master_id: i32, cfg: &PetSlaveConfig) -> Vec<i32> {
+    let Some(master) = world.entities.get(master_id) else {
+        return Vec::new();
+    };
+    if !master.death || !cfg.master_die_mutiny {
+        return Vec::new();
+    }
+    let last_hiter = master.last_hiter;
+    let slave_ids: Vec<i32> = master.slave_list.clone();
+    let rate = cfg.master_die_mutiny_rate;
+    let power = cfg.master_die_mutiny_power;
+    let speed = cfg.master_die_mutiny_speed;
+    let color_len = cfg.slave_color.len() as u8; // C# `SlaveColor.Length`（现网 15）
+    let mut mutinied = Vec::new();
+    for sid in slave_ids.iter().rev() {
+        let roll = if last_hiter.is_some() {
+            world.rng.random_below(rate)
+        } else {
+            1 // `&&` 短路：不抽数、必不走叛变支
+        };
+        if last_hiter.is_some() && roll == 0 {
+            if let Some(s) = world.entities.get_mut(*sid) {
+                s.master = None;
+                s.slave_exp_level = color_len;
+                // `RecalcAbilitys()` 对基类怪 = `WAbil = Abil.Clone()`（本骨架无额外字段）⇒ no-op。
+                let low = (crate::combat::lo_byte(s.dc) as i32 * power) as i16;
+                let high = (crate::combat::hi_byte(s.dc) as i32 * power) as i16;
+                let dc = mir2_shared::hutil::make_long_signed(low, high);
+                // C# `(ushort)MakeLong(...)` 截断低 16 位 ⇒ 高字节缩放值被丢掉（BUG-REPLICA ④）。
+                s.dc = (dc as u32 & 0xFFFF) as i32;
+                // BUG-REPLICA ②：速度 0 时 C# 除零；Rust 跳过除法（不可达分支）。
+                if speed != 0 {
+                    s.ai.walk_speed /= i64::from(speed);
+                }
+            }
+            mutinied.push(*sid);
+        } else if let Some(s) = world.entities.get_mut(*sid) {
+            s.hp = 0;
+        }
+    }
+    mutinied
+}
+
+/// `PlayObject.ProcessSlaveGhost`（`PlayObject.Base.cs:360-370`）：`Ghost` 主人逐个宝宝 `MakeGhost()`。
+///
+/// `!Ghost` ⇒ 直接返回。返回被处理的宝宝 id（末尾往前序）。`MakeGhost` 的 `CanReAlive` 变体未建模（登记）。
+pub fn process_slave_ghost(world: &mut World, master_id: i32) -> Vec<i32> {
+    let Some(master) = world.entities.get(master_id) else {
+        return Vec::new();
+    };
+    if !master.ghost {
+        return Vec::new();
+    }
+    let slave_ids: Vec<i32> = master.slave_list.clone();
+    let mut out = Vec::new();
+    for sid in slave_ids.iter().rev() {
+        if let Some(s) = world.entities.get_mut(*sid) {
+            // `MakeGhost`（`BaseObject.Base.cs:484-497`）：`CanReAlive => Invisible=true` 否则 `Ghost=true`。
+            // 本骨架未建模 `CanReAlive`/`DisappearA` ⇒ 按召唤物常态置 `ghost`（登记）。
+            s.ghost = true;
+        }
+        out.push(*sid);
+    }
+    out
+}
+
+/// `BaseObject.GetChrColor`（`BaseObject.Base.cs:869-883`）的**宝宝色支** + 兜底：
+/// ① `Race == NPC` ⇒ `npn_name_color`；② `Master != null` 且 `SlaveExpLevel <= SlaveMaxLevel`
+/// ⇒ `slave_color[SlaveExpLevel]`；③ 否则 `GetNameColor()`（= `Entity::name_color`）。
+///
+/// `MonsterObject.GetChrColor`（`MonsterObject.cs:482-492`）的 `CrazyMode`/`HolySeize` 前置支
+/// 未建模（`CrazyMode` 字段不在骨架里，登记）；调用方可先判这两支再落本函数。
+#[must_use]
+pub fn get_chr_color(e: &Entity, slave_color: &[u8], npc_name_color: u8) -> u8 {
+    if e.race == ACTOR_RACE_NPC {
+        return npc_name_color;
+    }
+    if e.master.is_some() {
+        let lvl = e.slave_exp_level;
+        if lvl <= SLAVE_MAX_LEVEL {
+            if let Some(c) = slave_color.get(usize::from(lvl)) {
+                return *c;
+            }
+            // BUG-REPLICA ①：oracle 15 项表 + 门 `<= 50` ⇒ 越界异常；Rust 落到兜底。
+        }
+    }
+    e.name_color
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -987,5 +1306,298 @@ mod tests {
             SummonOutcome::NotSummonSkill
         );
         assert!(sp.last.is_none());
+    }
+
+    // ---- ⑨-3 生命周期：清表 / CheckRoyalty / 主人死幽灵 / 诱惑受奴 / 色彩 -----------------------
+
+    /// 主人 + 一只宝宝的合成世界（返回 (world, master_id, slave_id)）。
+    fn slave_world(hp: u16) -> (World, i32, i32) {
+        let mut w = World::new(32, 32);
+        let master = {
+            let mut e = Entity::new(0, "主人".to_string(), 10, 10);
+            e.race = crate::entity::ACTOR_RACE_PLAY;
+            w.add_entity(e)
+        };
+        let slave = {
+            let mut e = Entity::new(0, "变异骷髅".to_string(), 11, 10);
+            e.race = crate::entity::ACTOR_RACE_MONSTER;
+            e.master = Some(master);
+            e.is_slave = true;
+            e.hp = hp;
+            e.max_hp = 100;
+            w.add_entity(e)
+        };
+        w.entities.get_mut(master).unwrap().slave_list.push(slave);
+        (w, master, slave)
+    }
+
+    /// `CheckRoyalty` 到期：从主人表移除 + `Master=null` + `HP/=10`（`MonsterObject.cs:374-383`）。
+    #[test]
+    fn check_royalty_removes_and_halves_hp() {
+        let (mut w, master, slave) = slave_world(90);
+        w.clock_ms = 20_000; // > 10s 门；> MasterRoyaltyTick=0（未设）
+        check_royalty(&mut w, slave);
+        assert!(w.entities.get(master).unwrap().slave_list.is_empty());
+        let s = w.entities.get(slave).unwrap();
+        assert_eq!(s.master, None);
+        assert_eq!(s.hp, 9, "HP/10");
+    }
+
+    /// `CheckRoyalty` 10s 门未到 ⇒ 不做任何事（也不刷新 `CheckRoyaltyTick`）。
+    #[test]
+    fn check_royalty_respects_interval() {
+        let (mut w, master, slave) = slave_world(90);
+        w.clock_ms = 5_000;
+        w.entities.get_mut(slave).unwrap().ai.check_royalty_tick = 0;
+        check_royalty(&mut w, slave); // now - 0 = 5000 ≤ 10000 ⇒ 早退
+        assert_eq!(w.entities.get(master).unwrap().slave_list.len(), 1);
+        assert_eq!(w.entities.get(slave).unwrap().master, Some(master));
+    }
+
+    /// 神之祈祷窗口内且 `SlaveExpLevel < 5` ⇒ `MasterRoyaltyTick=0` ⇒ 立即叛变
+    /// （`MonsterObject.cs:370-372`）。
+    #[test]
+    fn check_royalty_spirit_window_forces_zero_deadline() {
+        let (mut w, master, slave) = slave_world(50);
+        w.clock_ms = 20_000;
+        let s = w.entities.get_mut(slave).unwrap();
+        s.slave_exp_level = 3;
+        s.master_royalty_tick = w.clock_ms + 1_000_000; // 未到期
+        s.ai.check_royalty_tick = 0;
+        w.spirit_mutiny_tick = w.clock_ms + 60_000; // 窗口未过期
+        check_royalty(&mut w, slave);
+        assert!(w.entities.get(master).unwrap().slave_list.is_empty());
+        assert_eq!(w.entities.get(slave).unwrap().master, None);
+    }
+
+    /// 神之祈祷窗口内但 `SlaveExpLevel >= 5` ⇒ 不置零、未到期 ⇒ 不动（`< 5` 门）。
+    #[test]
+    fn check_royalty_spirit_window_gated_by_level() {
+        let (mut w, master, slave) = slave_world(50);
+        w.clock_ms = 20_000;
+        let s = w.entities.get_mut(slave).unwrap();
+        s.slave_exp_level = 5;
+        s.master_royalty_tick = w.clock_ms + 1_000_000;
+        s.ai.check_royalty_tick = 0;
+        w.spirit_mutiny_tick = w.clock_ms + 60_000;
+        check_royalty(&mut w, slave);
+        assert_eq!(w.entities.get(master).unwrap().slave_list.len(), 1);
+    }
+
+    /// `MasterTick > 0` 且超 12h ⇒ `HP=0`（`MonsterObject.cs:387-393`，诱饵到期）。
+    #[test]
+    fn check_royalty_master_tick_12h_kills() {
+        let (mut w, master, slave) = slave_world(80);
+        w.clock_ms = 100_000_000;
+        let s = w.entities.get_mut(slave).unwrap();
+        s.master_royalty_tick = w.clock_ms + 1_000_000; // 未到期
+        s.master_tick = w.clock_ms - (MASTER_MUTINY_DEATH_MS + 1);
+        s.ai.check_royalty_tick = 0;
+        check_royalty(&mut w, slave);
+        let s = w.entities.get(slave).unwrap();
+        assert_eq!(s.hp, 0, "12h 诱饵到期 ⇒ HP=0");
+        assert_eq!(s.master, Some(master), "未到期 ⇒ 主人不变");
+    }
+
+    /// 清表（`BaseObject.Base.cs:208-217`）：删死亡/幽灵/换主，保序保留合法宝宝。
+    #[test]
+    fn slave_list_cleanup_removes_dead_ghost_and_mismaster() {
+        let mut w = World::new(32, 32);
+        let master = w.add_entity(Entity::new(0, "主人".to_string(), 10, 10));
+        let other = w.add_entity(Entity::new(0, "别人".to_string(), 12, 12));
+        let mut add = |dead: bool, ghost: bool, owner: i32| {
+            let mut e = Entity::new(0, "宝宝".to_string(), 11, 10);
+            e.race = crate::entity::ACTOR_RACE_MONSTER;
+            e.death = dead;
+            e.ghost = ghost;
+            e.master = Some(owner);
+            w.add_entity(e)
+        };
+        let dead = add(true, false, master);
+        let ghost = add(false, true, master);
+        let stray = add(false, false, other);
+        let alive = add(false, false, master);
+        w.entities.get_mut(master).unwrap().slave_list = vec![dead, ghost, stray, alive];
+        w.slave_list_cleanup(master);
+        assert_eq!(w.entities.get(master).unwrap().slave_list, vec![alive]);
+    }
+
+    /// tick 集成：死亡结算后清表把死亡宝宝从主人表里移除。
+    #[test]
+    fn tick_cleanup_drops_dead_slave() {
+        let (mut w, master, slave) = slave_world(10);
+        w.kill(slave);
+        w.tick();
+        assert!(
+            !w.entities.get(master).unwrap().slave_list.contains(&slave),
+            "死亡宝宝应在同 tick 清表后消失"
+        );
+    }
+
+    /// `ProcessSlaveMutiny`：`Random(rate)==0` ⇒ 叛变（Master=null / exp=色表长 / DC×power / 速度/speed）。
+    #[test]
+    fn process_slave_mutiny_mutinies_on_zero_roll() {
+        let (mut w, master, slave) = slave_world(100);
+        {
+            let s = w.entities.get_mut(slave).unwrap();
+            // dc 低字节=10、高字节=20。
+            s.dc = 10 | (20 << 8);
+            s.ai.walk_speed = 400;
+        }
+        w.entities.get_mut(master).unwrap().death = true;
+        w.entities.get_mut(master).unwrap().last_hiter = Some(slave);
+        let cfg = pet_cfg(|c| {
+            c.master_die_mutiny = true;
+            c.master_die_mutiny_rate = 1; // Random(1) 恒 0 ⇒ 必叛变
+            c.master_die_mutiny_power = 2;
+            c.master_die_mutiny_speed = 2;
+        });
+        let out = process_slave_mutiny(&mut w, master, &cfg);
+        assert_eq!(out, vec![slave]);
+        let s = w.entities.get(slave).unwrap();
+        assert_eq!(s.master, None);
+        assert_eq!(s.slave_exp_level, 15, "SlaveColor.Length");
+        assert_eq!(
+            s.dc, 20,
+            "oracle (ushort) 截断丢掉高字节 ⇒ 只剩 LoByte(10)*power"
+        );
+        assert_eq!(s.ai.walk_speed, 200, "WalkSpeed / speed");
+    }
+
+    /// `ProcessSlaveMutiny` 无 `LastHiter`：`&&` 短路 ⇒ 不抽数、全 `HP=0`。
+    #[test]
+    fn process_slave_mutiny_no_rng_without_last_hiter() {
+        let (mut a, master_a, _) = slave_world(100);
+        a.entities.get_mut(master_a).unwrap().death = true;
+        let cfg = pet_cfg(|c| {
+            c.master_die_mutiny = true;
+            c.master_die_mutiny_rate = 7;
+        });
+        let out_a = process_slave_mutiny(&mut a, master_a, &cfg);
+        assert!(out_a.is_empty(), "无 LastHiter ⇒ 无叛变");
+        // 未抽数：与同种子对照世界的下一抽相同。
+        let mut b = World::new(32, 32);
+        assert_eq!(a.rng.random_below(1000), b.rng.random_below(1000));
+    }
+
+    /// `ProcessSlaveMutiny` 提前返回（非死亡 / 开关关）⇒ 不抽数、不置 HP。
+    #[test]
+    fn process_slave_mutiny_early_return() {
+        let (mut w, master, slave) = slave_world(100);
+        let cfg = pet_cfg(|c| {
+            c.master_die_mutiny = true;
+            c.master_die_mutiny_rate = 1;
+        });
+        assert!(process_slave_mutiny(&mut w, master, &cfg).is_empty()); // Death = false
+        w.entities.get_mut(master).unwrap().death = true;
+        let off = pet_cfg(|c| c.master_die_mutiny = false);
+        assert!(process_slave_mutiny(&mut w, master, &off).is_empty());
+        assert_eq!(w.entities.get(slave).unwrap().hp, 100);
+    }
+
+    /// `ProcessSlaveGhost`：`Ghost` 主人 ⇒ 逐宝宝 `MakeGhost`（末尾往前序）。
+    #[test]
+    fn process_slave_ghost_marks_all() {
+        let mut w = World::new(32, 32);
+        let master = w.add_entity(Entity::new(0, "主人".to_string(), 10, 10));
+        let mut mk = || {
+            let mut e = Entity::new(0, "宝宝".to_string(), 11, 10);
+            e.race = crate::entity::ACTOR_RACE_MONSTER;
+            e.master = Some(master);
+            w.add_entity(e)
+        };
+        let s1 = mk();
+        let s2 = mk();
+        w.entities.get_mut(master).unwrap().slave_list = vec![s1, s2];
+        // 主人未幽灵 ⇒ 无动作。
+        assert!(process_slave_ghost(&mut w, master).is_empty());
+        w.entities.get_mut(master).unwrap().ghost = true;
+        assert_eq!(process_slave_ghost(&mut w, master), vec![s2, s1]);
+        assert!(w.entities.get(s1).unwrap().ghost);
+        assert!(w.entities.get(s2).unwrap().ghost);
+    }
+
+    /// 诱惑受奴落尾（`MagicManager.cs:753-770`）。
+    #[test]
+    fn tame_adopt_writes_oracle_tail() {
+        let mut w = World::new(32, 32);
+        let caster = {
+            let mut e = Entity::new(0, "道士".to_string(), 10, 10);
+            e.race = crate::entity::ACTOR_RACE_PLAY;
+            e.level = 10;
+            w.add_entity(e)
+        };
+        let target = {
+            let mut e = Entity::new(0, "鸡".to_string(), 11, 10);
+            e.race = crate::entity::ACTOR_RACE_MONSTER;
+            e.hp = 100;
+            e.ai.walk_speed = 2000;
+            e.ai.next_hit_time = 3000;
+            e.ai.holy_seize = true;
+            w.add_entity(e)
+        };
+        w.clock_ms = 1_000;
+        assert!(w.tame_adopt(caster, target, 2, 5));
+        let t = w.entities.get(target).unwrap();
+        assert_eq!(t.master, Some(caster));
+        assert_eq!(t.hp, 100, "原本无主 ⇒ 不 /10");
+        assert_eq!(t.slave_make_level, 2);
+        assert!(!t.is_slave, "诱惑不置 IsSlave（与 MakeSlave 不同）");
+        assert_eq!(t.master_tick, 1_000, "MasterTick==0 ⇒ 记 now");
+        assert_eq!(t.master_royalty_tick, tame_royalty_tick(10, 2, 5, 1_000));
+        assert_eq!(t.ai.walk_speed, 1100, "min(2000, 1500-400)");
+        assert_eq!(t.ai.next_hit_time, 1600, "min(3000, 2000-400)");
+        assert!(!t.ai.holy_seize, "BreakHolySeizeMode");
+        assert_eq!(w.entities.get(caster).unwrap().slave_list, vec![target]);
+    }
+
+    /// 诱惑受奴：目标已有别的 `Master` ⇒ 先 `HP/10`；`MasterTick` 已非 0 ⇒ 不覆盖。
+    #[test]
+    fn tame_adopt_halves_hp_and_keeps_master_tick() {
+        let mut w = World::new(32, 32);
+        let caster = w.add_entity(Entity::new(0, "道士".to_string(), 10, 10));
+        let other = w.add_entity(Entity::new(0, "旧主".to_string(), 12, 12));
+        let target = {
+            let mut e = Entity::new(0, "半兽人".to_string(), 11, 10);
+            e.race = crate::entity::ACTOR_RACE_MONSTER;
+            e.master = Some(other);
+            e.hp = 100;
+            e.master_tick = 555;
+            w.add_entity(e)
+        };
+        assert!(w.tame_adopt(caster, target, 3, 0));
+        let t = w.entities.get(target).unwrap();
+        assert_eq!(t.hp, 10);
+        assert_eq!(t.master_tick, 555);
+    }
+
+    /// `MasterRoyaltyTick` 公式（`MagicManager.cs:759`）。
+    #[test]
+    fn tame_royalty_tick_formula() {
+        // (5 + (2<<2)*5 + 20) * 60000 + 1000 = 65 * 60000 + 1000
+        assert_eq!(tame_royalty_tick(10, 2, 5, 1_000), 3_901_000);
+    }
+
+    /// `GetChrColor`：NPC/宝宝色表/兜底（含 oracle latent 越界回落到兜底）。
+    #[test]
+    fn get_chr_color_branches() {
+        let slave_color = [0xFF, 0xFE, 0x93, 0x9A];
+        let mut s = Entity::new(0, "宝宝".to_string(), 0, 0);
+        s.race = crate::entity::ACTOR_RACE_MONSTER;
+        s.master = Some(1);
+        s.slave_exp_level = 2;
+        s.name_color = 200;
+        assert_eq!(get_chr_color(&s, &slave_color, 77), 0x93);
+        // 非宝宝 ⇒ 兜底 NameColor。
+        s.master = None;
+        assert_eq!(get_chr_color(&s, &slave_color, 77), 200);
+        // NPC ⇒ NpcNameColor。
+        s.race = ACTOR_RACE_NPC;
+        assert_eq!(get_chr_color(&s, &slave_color, 77), 77);
+        // 宝宝但等级越色表界（oracle latent OOB）⇒ 兜底，不 panic。
+        s.race = crate::entity::ACTOR_RACE_MONSTER;
+        s.master = Some(1);
+        s.slave_exp_level = 20;
+        assert_eq!(get_chr_color(&s, &slave_color, 77), 200);
     }
 }

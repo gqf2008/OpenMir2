@@ -1,0 +1,22 @@
+M3⑨-实现 3（宝宝生命周期）边界核对
+====================================
+
+卡：openmir2-m3-pet-slave-lifecycle（M3⑨-实现 3；依赖 ⑨-2，已合入 master）。
+base = refs/heads/master 0f9fe9997a4ed717ee1361bfb2134329fd04472a
+head = worktree-m3-pet-slave-lifecycle 分支 tip（单提交；见 patch entry）
+分支基点 = ⑨-2 合入后的 master（本片与 ⑨-2 同写集，串行叠加）
+
+[1] git diff --name-only master HEAD -- src sql MirClient
+    （空 = oracle/表结构/客户端零改动）
+
+[2] 本片净改动路径（相对 master）
+mir2-rs/crates/world/src/slave.rs
+mir2-rs/crates/world/src/entity.rs
+mir2-rs/crates/world/src/world.rs
+mir2-rs/crates/world/src/monai.rs
+mir2-rs/tests/parity/m3/evidence-m3-pet-slave-lifecycle-20261013/**
+
+[3] 客户端/表结构/脚本/数据格式：本片未触碰（[1] 为空）
+
+[4] 写集核对：crates/world::slave/entity/world/monai + tests/parity/m3 证据；
+    未碰 bins/game-svr（帧面/接线归后续片）、未碰 ⑤⑥⑦⑧⑩ 写集。
