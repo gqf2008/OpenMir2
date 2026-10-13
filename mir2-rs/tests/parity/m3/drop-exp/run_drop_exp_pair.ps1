@@ -11,15 +11,23 @@
   故本脚本的 real-run 分支**fail-closed 拒跑**（exit 2），绝不静默起栈。
 
   用法：
-    # 离线自检（所有路径 fail-closed；含比较器 selftest + 改坏必红），零 `.rs`、不占端口
+    # 离线自检（所有路径 fail-closed；含比较器 selftest + 纯度门 selftest + 改坏必红），零 `.rs`、不占端口
     powershell -ExecutionPolicy Bypass -File run_drop_exp_pair.ps1 -SelfCheckNoStack
     # 自检转录由脚本自己以 LF 落盘（避免 `> file` 的 CRLF 重定向）
     powershell -ExecutionPolicy Bypass -File run_drop_exp_pair.ps1 -SelfCheckNoStack -SelfCheckOut <path.txt>
     # 只比较两份既有原始件（离线；不需要栈）
     powershell -ExecutionPolicy Bypass -File run_drop_exp_pair.ps1 -DiffOnly -CsharpRaw <f> -RustRaw <f>
+    # 只跑场景纯度门（whitelist T-35；离线，给该侧全场景抽数流水 + 消费者表）
+    powershell -ExecutionPolicy Bypass -File run_drop_exp_pair.ps1 -PurityOnly -PuritySide csharp \
+        -PurityStream <rng-stream.tsv> -PurityRaw <drop_exp_raw.jsonl> -ExpectedKills 100
 
   窗口纪律（owner 2026-10-13 03:35）：真机跑要 5000/7000/7100/7200；未获 owner 发放的
   `-Go` 之前**不许起栈/占端口**。起栈命令禁接管道（重定向到文件）。
+
+  纯度门（whitelist T-35，owner comment c78bd13f 有条件批准）：口径 = 「除被测量路径
+  （1 只 pin 怪 + 击杀→掉落/经验取数）外 RNG 消费者数 = 0」，墙钟策略取 (a) pin 抑制
+  （`AnimalObject.Wondering` 必须为 0）。消费者表 `drop_exp_consumers.tsv` 是唯一真源；
+  **认不出的站点 ⇒ 点名 RED**（fail-closed），窗口期按实测清单补表。
 #>
 param(
   [ValidateSet('csharp', 'rust')][string]$Side = 'csharp',
@@ -34,15 +42,24 @@ param(
   [switch]$DiffOnly,
   [switch]$Go,                     # owner 发放窗口的显式授权；未给 ⇒ real-run fail-closed（exit 2）
   [switch]$SelfCheckNoStack,
-  [string]$SelfCheckOut = ''
+  [string]$SelfCheckOut = '',
+  # ---- 场景纯度门（whitelist T-35，owner comment c78bd13f）----
+  [switch]$PurityOnly,
+  [ValidateSet('csharp', 'rust')][string]$PuritySide = 'csharp',
+  [string]$PurityStream = '',      # 该侧全场景抽数流水（MIR2_RNG_LOG / Rust rng-stream.tsv）
+  [string]$PurityRaw = '',         # 可选：该侧 drop_exp_raw.jsonl（校验击杀条数）
+  [string]$PurityTable = '',       # 缺省 = 本目录 drop_exp_consumers.tsv
+  [string]$PurityJson = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $DropExpDiff = Join-Path $Here 'drop_exp_diff.py'
+$DropExpPurity = Join-Path $Here 'drop_exp_purity_gate.py'
 . (Join-Path (Split-Path -Parent $Here) 'm3hashutil.ps1')
 
 if ([string]::IsNullOrEmpty($ScenarioFile)) { $ScenarioFile = Join-Path $Here 'drop_exp_scenario.json' }
+if ([string]::IsNullOrEmpty($PurityTable)) { $PurityTable = Join-Path $Here 'drop_exp_consumers.tsv' }
 
 $Ports = @($PortsCsv.Split(',') | ForEach-Object { [int]$_.Trim() })
 $script:DexpTouchedPorts = $false   # 本脚本（含自检）**从不**绑定/连接任何端口；real-run 由外部驱动。
@@ -63,6 +80,27 @@ function Invoke-DropExpDiff {
 function Invoke-DropExpSelfTest {
   param([Parameter(Mandatory = $true)][ref]$Out)
   $raw = & python -I $DropExpDiff selftest 2>&1
+  $Out.Value = ($raw | Out-String)
+  return [int]$LASTEXITCODE
+}
+
+# 返回 [int]$LASTEXITCODE；子进程 stdout 走 -Out 引用，**不混进返回值**（同 Invoke-DropExpDiff）。
+function Invoke-DexpPurityGate {
+  param(
+    [Parameter(Mandatory = $true)][string]$Stream,
+    [string]$Side = 'csharp',
+    [string]$Table = '',
+    [string]$Raw = '',
+    [int]$ExpectedKills = -1,
+    [string]$Json = '',
+    [Parameter(Mandatory = $true)][ref]$Out
+  )
+  $argv = @('-I', $DropExpPurity, 'gate', '--side', $Side, '--stream', $Stream)
+  if (-not [string]::IsNullOrEmpty($Table)) { $argv += @('--table', $Table) }
+  if (-not [string]::IsNullOrEmpty($Raw)) { $argv += @('--raw', $Raw) }
+  if ($ExpectedKills -ge 0) { $argv += @('--expected-kills', [string]$ExpectedKills) }
+  if (-not [string]::IsNullOrEmpty($Json)) { $argv += @('--json', $Json) }
+  $raw = & python @argv 2>&1
   $Out.Value = ($raw | Out-String)
   return [int]$LASTEXITCODE
 }
@@ -161,6 +199,56 @@ if ($SelfCheckNoStack) {
 
     # ⑦ 本脚本从未触碰端口（自检/比较全离线）
     Add-Result 'no-port-touched' (-not $script:DexpTouchedPorts) 'offline-only'
+
+    # ---- 场景纯度门（whitelist T-35，owner comment c78bd13f）---- #
+    # 数据源口径：全场景抽数流水 5 列 TSV（seq/kind/max/result/site）。
+    $pMeasuredSite = 'GameSrv.Word.WorldServer.MonGetRandomItems@WorldServer.MonGen.cs:451'
+    $pWallSite = 'M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427'
+    $pUnknownSite = 'Mystery.Thing@Mystery.cs:1'
+    function New-DexpStream([string]$Path, [string[]]$Sites) {
+      $lines = @('1' + "`t" + 'INJECT_OK' + "`t" + '42' + "`t" + '0', 'SEED_PROBE 42')
+      $seq = 2
+      foreach ($s in $Sites) {
+        $lines += (@($seq, 'Next(max)', '100', '7', $s) -join "`t")
+        $seq++
+      }
+      Write-M3LfLines -Path $Path -Lines $lines
+    }
+    $pClean = Join-Path $tmpRoot 'purity-clean.tsv'
+    $pWall = Join-Path $tmpRoot 'purity-wall.tsv'
+    $pUnknown = Join-Path $tmpRoot 'purity-unknown.tsv'
+    New-DexpStream -Path $pClean -Sites @($pMeasuredSite, $pMeasuredSite)
+    New-DexpStream -Path $pWall -Sites @($pMeasuredSite, $pWallSite)
+    New-DexpStream -Path $pUnknown -Sites @($pMeasuredSite, $pUnknownSite)
+
+    # ⑧ 纯度门 selftest（fail-closed + 改坏必红）必须 GREEN。
+    $pgOut = ''
+    $pgRaw = & python -I $DropExpPurity selftest 2>&1
+    $pgOut = ($pgRaw | Out-String)
+    $pgRc = [int]$LASTEXITCODE
+    $pgMatch = [regex]::Match($pgOut, 'SELFTEST ok=(\d+)/(\d+)')
+    $pgOk = ($pgRc -eq 0) -and $pgMatch.Success -and ($pgMatch.Groups[1].Value -eq $pgMatch.Groups[2].Value)
+    Add-Result 'purity-gate-selftest' $pgOk ("rc=$pgRc")
+
+    # ⑨ 只有被测量路径 ⇒ 绿（证明门不是恒红）。
+    $outP1 = ''
+    $rcP1 = Invoke-DexpPurityGate -Stream $pClean -Side csharp -Table $PurityTable -Out ([ref]$outP1)
+    Add-Result 'purity-clean-green' (($rcP1 -eq 0) -and ($outP1 -match 'GREEN: 除被测量路径外')) ("rc=$rcP1")
+
+    # ⑩ 墙钟消费者（AnimalObject.Wondering）⇒ 必红且点名 wallclock；改坏（删表的 wallclock 行）亦红。
+    $outP2 = ''
+    $rcP2 = Invoke-DexpPurityGate -Stream $pWall -Side csharp -Table $PurityTable -Out ([ref]$outP2)
+    Add-Result 'purity-wallclock-red' (($rcP2 -eq 1) -and ($outP2 -match 'wallclock_consumer')) ("rc=$rcP2")
+
+    # ⑪ 认不出的站点 ⇒ 必红且点名 unknown（fail-closed，不静默放行）。
+    $outP3 = ''
+    $rcP3 = Invoke-DexpPurityGate -Stream $pUnknown -Side csharp -Table $PurityTable -Out ([ref]$outP3)
+    Add-Result 'purity-unknown-red' (($rcP3 -eq 1) -and ($outP3 -match 'unknown_consumer')) ("rc=$rcP3")
+
+    # ⑫ Rust 侧表里尚无 measured 行（④-D 未落地）⇒ PREREQ 拒跑（fail-closed，**不许**假绿）。
+    $outP4 = ''
+    $rcP4 = Invoke-DexpPurityGate -Stream $pClean -Side rust -Table $PurityTable -Out ([ref]$outP4)
+    Add-Result 'purity-pending-side-prereq' (($rcP4 -eq 2) -and ($outP4 -match '没有 \`measured\` 行')) ("rc=$rcP4")
   } finally {
     Remove-Item -Recurse -Force $tmpRoot -ErrorAction SilentlyContinue
   }
@@ -168,8 +256,28 @@ if ($SelfCheckNoStack) {
   $total = $script:DexpPass + $script:DexpFail.Count
   Write-Output ("SELFTEST ok={0}/{1} failures={2}" -f $script:DexpPass, $total, ($script:DexpFail -join ','))
   if ($script:DexpFail.Count -gt 0) { exit 1 }
-  Write-Output 'GREEN: 无栈自检全绿（比较器 fail-closed + 改坏必红 + LF 写出 + 零端口）'
+  Write-Output 'GREEN: 无栈自检全绿（比较器 + 纯度门 fail-closed + 改坏必红 + LF 写出 + 零端口）'
   exit 0
+}
+
+# =========================================================================== #
+# Mode: PurityOnly —— 只跑场景纯度门（whitelist T-35；离线，不需要栈）
+# ===========================================================================
+if ($PurityOnly) {
+  if ([string]::IsNullOrEmpty($PurityStream)) {
+    Write-Output 'PREREQ_MISSING: -PurityOnly 需要 -PurityStream（该侧全场景抽数流水）'
+    exit 2
+  }
+  if (-not (Test-Path -LiteralPath $PurityStream)) {
+    Write-Output ("PREREQ_MISSING: 找不到抽数流水 {0}" -f $PurityStream)
+    exit 2
+  }
+  $out = ''
+  $ek = [int]$Kills
+  $rc = Invoke-DexpPurityGate -Stream $PurityStream -Side $PuritySide -Table $PurityTable `
+        -Raw $PurityRaw -ExpectedKills $ek -Json $PurityJson -Out ([ref]$out)
+  Write-Output $out
+  exit $rc
 }
 
 # =========================================================================== #
