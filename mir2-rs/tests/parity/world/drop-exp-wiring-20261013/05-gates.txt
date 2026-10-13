@@ -1,0 +1,9 @@
+# 四门禁 + 独立基线（隔离 CARGO_TARGET_DIR=E:/tmp/m2svr-d1-target，--offline）
+
+树 = master a547619a（含 ④-C 分片③ 与 tools-eol 卡；已 merge 进 drop-exp-host）+ 本片 D① 改动。
+
+fmt:      rc=0（gates/10-fmt.txt）
+clippy:   rc=0 -D warnings（gates/11-clippy.txt）
+msgcodegen: rc=0（gates/12-msgcodegen.txt）
+workspace: rc=0  86 suites / 781 passed / 0 failed / 18 ignored（gates/13-workspace-test.txt）
+基线 master a547619a（独立 worktree E:/tmp/m2svr-d1-base）：86 suites / 778 passed / 0 failed / 18 ignored ⇒ 本片 +3（gates/14-baseline-master-a547619a.txt）

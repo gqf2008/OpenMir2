@@ -1,0 +1,25 @@
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\world)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.63s
+     Running unittests src\lib.rs (E:/tmp/m2svr-d1-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 1 test
+test world::tests::map_exp_rate_multiplies_kill_exp ... FAILED
+
+failures:
+
+---- world::tests::map_exp_rate_multiplies_kill_exp stdout ----
+
+thread 'world::tests::map_exp_rate_multiplies_kill_exp' (664) panicked at crates\world\src\world.rs:1399:9:
+assertion `left == right` failed: EXPRATE=200 ⇒ 单次经验 ×2
+  left: 0
+ right: 800
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    world::tests::map_exp_rate_multiplies_kill_exp
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 51 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-world --lib`
+cargo_test_rc=101

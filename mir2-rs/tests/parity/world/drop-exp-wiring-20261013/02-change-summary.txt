@@ -1,0 +1,35 @@
+# 本片改动清单（drop-exp-wiring 分片 D①：击杀经验链）
+
+## base = origin/master a547619a ; head = drop-exp-host（本片 = a6d3cb5f + 证据更新 + 2 次 merge master）
+
+ mir2-rs/bins/game-svr/src/main.rs                  |  110 ++
+ mir2-rs/bins/game-svr/src/smframe.rs               |   18 +
+ mir2-rs/crates/world/src/combat.rs                 |    6 +
+ mir2-rs/crates/world/src/world.rs                  |  127 +-
+ .../drop-exp-wiring-20261013/01-oracle-anchors.txt |  415 ++++++
+ .../drop-exp-wiring-20261013/02-change-summary.txt |   68 +
+ .../world/drop-exp-wiring-20261013/03-tests.txt    |   12 +
+ .../drop-exp-wiring-20261013/04-redchecks.txt      |   28 +
+ .../world/drop-exp-wiring-20261013/05-gates.txt    |    9 +
+ .../world/drop-exp-wiring-20261013/06-boundary.txt |    2 +
+ .../40-redcheck-rc-d1-a-master-branch-dropped.txt  |   25 +
+ .../41-redcheck-rc-d1-b-exprate-dropped.txt        |   25 +
+ .../42-redcheck-rc-d1-c-param-tag-swapped.txt      |   27 +
+ .../43-redcheck-restore-sha256.txt                 |    3 +
+ .../world/drop-exp-wiring-20261013/README.md       |  110 ++
+ .../world/drop-exp-wiring-20261013/SHA256SUMS.txt  |   17 +
+ .../world/drop-exp-wiring-20261013/commands.txt    |   30 +
+ .../drop-exp-wiring-20261013/gates/10-fmt.txt      |    0
+ .../drop-exp-wiring-20261013/gates/11-clippy.txt   |    1 +
+ .../gates/12-msgcodegen.txt                        |    1 +
+ .../gates/13-workspace-test.txt                    | 1317 ++++++++++++++++++++
+ .../gates/14-baseline-master-f2aadf25.txt          | 1314 +++++++++++++++++++
+ 22 files changed, 3658 insertions(+), 7 deletions(-)
+
+## 新增文件（证据目录）
+ M mir2-rs/tests/parity/world/drop-exp-wiring-20261013/02-change-summary.txt
+ M mir2-rs/tests/parity/world/drop-exp-wiring-20261013/05-gates.txt
+ M mir2-rs/tests/parity/world/drop-exp-wiring-20261013/gates/11-clippy.txt
+ M mir2-rs/tests/parity/world/drop-exp-wiring-20261013/gates/13-workspace-test.txt
+D  mir2-rs/tests/parity/world/drop-exp-wiring-20261013/gates/14-baseline-master-f2aadf25.txt
+?? mir2-rs/tests/parity/world/drop-exp-wiring-20261013/gates/14-baseline-master-a547619a.txt

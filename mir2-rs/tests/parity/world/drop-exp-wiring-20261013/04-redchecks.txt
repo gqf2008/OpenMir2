@@ -1,0 +1,28 @@
+# 改坏必红（RC-D1-A/B/C；每条 = 变异 -> 跑命中用例 -> 还原）
+
+## RC-D1-A：删掉 KillFunc 的 ExpHitter.Master 支（settle_deaths）
+命令: CARGO_TARGET_DIR=... cargo test -p mir2-world --lib --offline pet_kill_awards_exp_to_master
+assertion `left == right` failed: 只有 master 一支: TickRecord { tick_seq: 1, clock_ms: 200, processed: [(1, true), (2, true), (3, true)], aoi_order: [1, 2, 3], attacks: [], deaths: [(3, 0, 0, Some(2), 0)], exp_awards: [] }
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 51 filtered out; finished in 0.00s
+cargo_test_rc=101
+
+## RC-D1-B：把地图 EXPRATE 倍率改成 ×0（award_kill_exp）
+命令: CARGO_TARGET_DIR=... cargo test -p mir2-world --lib --offline map_exp_rate_multiplies_kill_exp
+assertion `left == right` failed: EXPRATE=200 ⇒ 单次经验 ×2
+  left: 0
+ right: 800
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 51 filtered out; finished in 0.00s
+cargo_test_rc=101
+
+## RC-D1-C：交换 SM_WINEXP 的 Param/Tag（smframe::sm_winexp）
+命令: CARGO_TARGET_DIR=... cargo test -p game-svr --bin game-svr --offline exp_downlink
+assertion `left == right` failed: Param = LoWord(增量)
+  left: 1
+ right: 515
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 159 filtered out; finished in 0.00s
+cargo_test_rc=101
+
+## 还原核对（三文件 sha256 与变异前逐字节一致）
+50ff042dfdd540dfc2d760a43b00b4285cf760e7ff0df1b7111e5c2991187a08 *crates/world/src/world.rs
+baea81bb3704e1f3279844a775155eb240badf3dd80424a963216845038a094d *crates/world/src/combat.rs
+4c9bcb6eb56dc9c810f6c11b11f05be8afa822b9d05aa32358113157a1ef0c44 *bins/game-svr/src/smframe.rs

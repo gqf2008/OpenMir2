@@ -2325,6 +2325,11 @@ fn drain_aoi_downlink(
 /// - **死亡**（`BaseObject.Base.cs:351`）：`Die()` 的 `SendRefMsg(RM_DEATH, Dir, CurrX, CurrY, 1, "")`
 ///   ⇒ 观察者（**含自己**，该 `case` 不像 `RM_HIT` 那样过滤 `ActorId`）收 `SM_NOWDEATH`。
 ///   怪物 death 帧的 `CharDesc`（`GetFeature`/`CharStatus`）未建模 ⇒ 跳过并登记。
+/// - **经验**（`BaseObject.cs:2429 KillFunc` → `PlayObject.cs:1632 KillTargetTrigger` →
+///   `PlayObject.Base.cs:149 GetExp`）：按 `TickRecord::exp_awards`（= `KillFunc` 的
+///   `ExpHitter.Master`/`ExpHitter` 两支）给**获得者**发 `SM_WINEXP(44)`（`Recog=总量`、
+///   `Param/Tag=本次增量的 Lo/Hi`），并把世界实体的经验/等级同步回会话（存档 `build_save_record`
+///   读 `sg.equip.abil`）。
 fn drain_combat_downlink(
     rec: &mir2_world::TickRecord,
     world: &mir2_world::World,
@@ -2412,6 +2417,35 @@ fn drain_combat_downlink(
             let _ = tx.send(SimToGate::SendFrame {
                 socket: t.socket,
                 body: body.clone(),
+            });
+        }
+    }
+    // ③ 经验帧（`GetExp` → `SendMsg(RM_WINEXP,0,dwExp,0,0)` → `SM_WINEXP`）。
+    // 归属已由 world 按 `KillFunc` 算好（`ExpHitter.Master` 优先）；这里只做「找到在线会话 ⇒
+    // 同步世界权威值 + 回帧」。未在线（怪物/NPC 获得者）跳过。
+    for (winner, amount, _leveled, level) in &rec.exp_awards {
+        let Some(entry) = online.iter().find(|e| e.actor_id == *winner) else {
+            continue;
+        };
+        let Some(entity) = world.entities.get(*winner) else {
+            continue;
+        };
+        let (total_exp, max_exp) = (entity.exp, entity.max_exp);
+        // 世界实体是经验/等级的权威值：同步回会话，否则存档（`build_save_record` 读
+        // `sg.equip.abil`）会把本 tick 获得的经验丢掉（`GetExp` 的 `Abil.Exp += dwExp`）。
+        if let Some(sg) = sessions.get_mut(&entry.chr_name) {
+            sg.equip.abil.exp = total_exp;
+            sg.equip.abil.level = *level;
+            sg.equip.abil.max_exp = max_exp;
+            sg.state.wabil.exp = total_exp;
+            sg.state.wabil.level = *level;
+            sg.state.wabil.max_exp = max_exp;
+        }
+        let body = game_svr::smframe::sm_winexp(total_exp, *amount);
+        if let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "经验帧") {
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: entry.socket,
+                body,
             });
         }
     }
@@ -3203,6 +3237,15 @@ fn sim_loop(
     }
     // `Exps.conf` 的 NeedExps（`BaseObject.GetLevelExp` 的数据源；存档 `MaxExp` 也用它）。
     world.need_exps = enter_cfg.need_exps.clone();
+    // `Envir.Flag.boEXPRATE`/`ExpRate`（`PlayObject.Base.cs:143-146`）——地图级杀怪经验倍率。
+    // `map_id` = 注册表下标（与 `resolve_map_id` 同源）⇒ 逐图灌进 world；无注册表 ⇒ 全 `None`（行为不变）。
+    if let Some(reg) = registry.as_ref() {
+        for map_id in 0..world.maps.len() {
+            if let Some(f) = reg.flag_of(map_id) {
+                world.set_map_exp_rate(map_id, f.bo_exprate.then_some(f.exp_rate));
+            }
+        }
+    }
     // **M3④-实现 C 第 ② 片**：生产宿主启用怪物 AI（oracle `ProcessMonsters` 线程的单线程等价物）。
     // 生成路径已按 oracle 把 `cert.Dir`/`CoolEye`/构造链抽数写进 `Entity.ai`
     // （`World::spawn_monster_precomputed` → `AnimalState::seed_from_spawn`），这里只开闸；
@@ -8341,5 +8384,72 @@ mod tests {
             &mir2_protocol::edcode::encode(&downlink::char_desc(111, 0)),
             "死亡尾 = Encode(8B CharDesc)"
         );
+    }
+
+    /// **D①（击杀经验下行）**：`TickRecord::exp_awards` 一条 ⇒ `drain_combat_downlink` 给获得者发
+    /// `SM_WINEXP(44)`（`Recog=总量`、`Param=LoWord(增量)`、`Tag=HiWord(增量)`、无尾），并把世界实体的
+    /// 经验/等级同步回会话（存档 `build_save_record` 读 `sg.equip.abil`）。
+    /// 红检：把 `sm_winexp` 的 `param`/`tag` 互换 ⇒ 头断言必红；不同步会话 ⇒ 会话 exp 断言必红。
+    #[test]
+    fn exp_downlink_sends_sm_winexp_and_syncs_session() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(64, 64);
+        let killer = {
+            let mut e = mir2_world::Entity::new(0, "killer".to_string(), 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        world.tick();
+        world.entities.get_mut(killer).unwrap().exp = 1234;
+        world.entities.get_mut(killer).unwrap().level = 9;
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            killer,
+            downlink::ActorDisplay::new(4, 0, 111, 0, 0, 255, b"killer".to_vec()),
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "uk".into(),
+                chr_name: "killer".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 902,
+                actor_id: killer,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("killer".into(), test_session_ground(killer));
+
+        // 增量 0x0001_0203（Param=0x0203、Tag=0x0001），总量 1234。
+        let rec = mir2_world::TickRecord {
+            exp_awards: vec![(killer, 0x0001_0203, true, 9)],
+            ..Default::default()
+        };
+        drain_combat_downlink(&rec, &world, &displays, &online, &mut sessions, &gates);
+        let mut bodies = Vec::new();
+        while let Ok(m) = rx0.try_recv() {
+            if let SimToGate::SendFrame { socket, body } = m {
+                assert_eq!(socket, 902);
+                bodies.push(body);
+            }
+        }
+        assert_eq!(bodies.len(), 1, "只有经验一帧");
+        let cm = CommandMessage::from_bytes(&bodies[0]).expect("12B");
+        assert_eq!(cm.ident, mir2_protocol::messages::SM_WINEXP);
+        assert_eq!(cm.recog, 1234, "Recog = 加完后的 Abil.Exp（总量）");
+        assert_eq!(cm.param, 0x0203, "Param = LoWord(增量)");
+        assert_eq!(cm.tag, 0x0001, "Tag = HiWord(增量)");
+        assert_eq!(cm.series, 0);
+        assert_eq!(bodies[0].len(), 12, "SM_WINEXP 无尾");
+        let sg = &sessions["killer"];
+        assert_eq!(sg.equip.abil.exp, 1234, "会话基能力 exp 同步（存档口径）");
+        assert_eq!(sg.equip.abil.level, 9);
+        assert_eq!(sg.state.wabil.exp, 1234);
+        assert_eq!(sg.state.wabil.level, 9);
     }
 }

@@ -1,0 +1,415 @@
+--- anchors ---
+===== src/M2Server/Actor/BaseObject.cs:2429-2446 =====
+          private void KillFunc()
+          {
+              if (ExpHitter != null)
+              {
+                  int fightExp = ((AnimalObject)this).FightExp; //后续移动到AnimalObject实现,减少一次转换
+                  if (ExpHitter.Master != null) //如果是角色下属杀死对象
+                  {
+                      ExpHitter.Master.SendMsg(Messages.RM_PLAYERKILLMONSTER, this.ActorId, fightExp, 0, 0);
+                      SendMsg(Messages.RM_DIEDROPITEM, ExpHitter.Master.ActorId, 0, 0, 0);
+                  }
+                  if (ExpHitter.Race == ActorRace.Play)
+                  {
+                      ExpHitter.SendMsg(Messages.RM_PLAYERKILLMONSTER, this.ActorId, fightExp, 0, 0);
+                      SendMsg(Messages.RM_DIEDROPITEM, ExpHitter.ActorId, 0, 0, 0);
+                  }
+              }
+          }
+  
+
+===== src/M2Server/Actor/BaseObject.cs:705-732 =====
+              }
+              if (ShowHp)
+              {
+                  SendRefMsg(Messages.RM_HEALTHSPELLCHANGED, 0, 0, 0, 0, "");
+              }
+          }
+  
+          internal int CalcGetExp(int nLevel, int nExp)
+          {
+              int result;
+              if (SystemShare.Config.HighLevelKillMonFixExp || (Abil.Level < (nLevel + 10)))
+              {
+                  result = nExp;
+              }
+              else
+              {
+                  result = nExp - HUtil32.Round(nExp / 15.0 * (Abil.Level - (nLevel + 10.0)));
+              }
+              if (result <= 0)
+              {
+                  result = 1;
+              }
+              return result;
+          }
+  
+          public void RefNameColor()
+          {
+              SendRefMsg(Messages.RM_CHANGENAMECOLOR, 0, 0, 0, 0, "");
+
+===== src/M2Server/Actor/BaseObject.cs:529-572 =====
+          public bool DropItemDown(UserItem userItem, int nScatterRange, bool boDieDrop, int itemOfCreat, int dropCreat)
+          {
+              if (userItem == null)
+              {
+                  return false;
+              }
+              bool result = false;
+              short dx = 0;
+              short dy = 0;
+              StdItem stdItem = SystemShare.ItemSystem.GetStdItem(userItem.Index);
+              if (stdItem != null)
+              {
+                  if (stdItem.StdMode == 40)
+                  {
+                      ushort idura = userItem.Dura;
+                      idura = (ushort)(idura - 2000);
+                      if (idura <= 0)
+                      {
+                          idura = 0;
+                      }
+                      userItem.Dura = idura;
+                  }
+                  MapItem mapItem = new MapItem
+                  {
+                      UserItem = new UserItem(userItem),
+                      Name = CustomItemSystem.GetItemName(userItem),// 取自定义物品名称
+                      Looks = stdItem.Looks
+                  };
+                  if (stdItem.StdMode == 45)
+                  {
+                      mapItem.Looks = (ushort)M2Share.GetRandomLook(mapItem.Looks, stdItem.Shape);
+                  }
+                  mapItem.AniCount = stdItem.AniCount;
+                  mapItem.Reserved = 0;
+                  mapItem.Count = 1;
+                  mapItem.OfBaseObject = itemOfCreat;
+                  mapItem.CanPickUpTick = HUtil32.GetTickCount();
+                  mapItem.DropBaseObject = dropCreat;
+                  GetDropPosition(CurrX, CurrY, nScatterRange, ref dx, ref dy);
+                  if (Envir.AddItemToMap(dx, dy, mapItem))
+                  {
+                      SendRefMsg(Messages.RM_ITEMSHOW, mapItem.Looks, mapItem.ItemId, dx, dy, mapItem.Name);
+                      int logcap = boDieDrop ? 15 : 7;
+                      if (!M2Share.IsCheapStuff(stdItem.StdMode))
+
+===== src/M2Server/Actor/BaseObject.cs:1711-1760 =====
+          public void ScatterGolds(int goldOfCreat)
+          {
+              int I;
+              int nGold;
+              if (Gold > 0)
+              {
+                  I = 0;
+                  while (true)
+                  {
+                      if (Gold > SystemShare.Config.MonOneDropGoldCount)
+                      {
+                          nGold = SystemShare.Config.MonOneDropGoldCount;
+                          Gold = Gold - SystemShare.Config.MonOneDropGoldCount;
+                      }
+                      else
+                      {
+                          nGold = Gold;
+                          Gold = 0;
+                      }
+                      if (nGold > 0)
+                      {
+                          if (!DropGoldDown(nGold, true, goldOfCreat, this.ActorId))
+                          {
+                              Gold = Gold + nGold;
+                              break;
+                          }
+                      }
+                      else
+                      {
+                          break;
+                      }
+  
+                      I++;
+                      if (I >= 17)
+                      {
+                          break;
+                      }
+                  }
+                  GoldChanged();
+              }
+          }
+  
+          public void SetLastHiter(IActor baseObject)
+          {
+              LastHiter = baseObject;
+              LastHiterTick = HUtil32.GetTickCount();
+              if (ExpHitter == null)
+              {
+                  ExpHitter = baseObject;
+                  ExpHitterTick = HUtil32.GetTickCount();
+
+===== src/M2Server/Player/PlayObject.Base.cs:129-170 =====
+          public void WinExp(int dwExp)
+          {
+              if (Abil.Level > SystemShare.Config.LimitExpLevel)
+              {
+                  dwExp = SystemShare.Config.LimitExpValue;
+                  GetExp(dwExp);
+              }
+              else if (dwExp > 0)
+              {
+                  dwExp = SystemShare.Config.KillMonExpMultiple * dwExp; // 系统指定杀怪经验倍数
+                  dwExp = MNKillMonExpMultiple * dwExp; // 人物指定的杀怪经验倍数
+                  dwExp = HUtil32.Round(KillMonExpRate / 100.0 * dwExp);// 人物指定的杀怪经验倍数
+                  if (Envir.Flag.boEXPRATE)
+                  {
+                      dwExp = HUtil32.Round(Envir.Flag.ExpRate / 100.0 * dwExp);// 地图上指定杀怪经验倍数
+                  }
+                  GetExp(dwExp);
+              }
+          }
+  
+          private void GetExp(int dwExp)
+          {
+              Abil.Exp += dwExp;
+              AddBodyLuck(dwExp * 0.002);
+              SendMsg(Messages.RM_WINEXP, 0, dwExp, 0, 0);
+              if (Abil.Exp >= Abil.MaxExp)
+              {
+                  Abil.Exp -= Abil.MaxExp;
+                  if (Abil.Level < MessageSettings.MAXUPLEVEL)
+                  {
+                      Abil.Level++;
+                  }
+                  HasLevelUp(Abil.Level - 1);
+                  AddBodyLuck(100);
+                  //M2Share.EventSource.AddEventLog(12, MapName + "\t" + Abil.Level + "\t" + Abil.Exp + "\t" + ChrName + "\t" + '0' + "\t" + '0' + "\t" + '1' + "\t" + '0');
+                  IncHealthSpell(2000, 2000);
+              }
+          }
+  
+          public bool IncGold(int tGold)
+          {
+              bool result = false;
+
+===== src/M2Server/Player/PlayObject.Base.cs:764-822 =====
+          public void GainExp(int dwExp)
+          {
+              IPlayerActor playObject;
+              const string sExceptionMsg = "[Exception] PlayObject::GainExp";
+              double[] bonus = { 1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2, 2.1, 2.2 };
+              try
+              {
+                  if (GroupOwner != 0)
+                  {
+                      int sumlv = 0;
+                      int n = 0;
+                      IPlayerActor groupOwnerPlay = (IPlayerActor)SystemShare.ActorMgr.Get(GroupOwner);
+                      for (int i = 0; i < groupOwnerPlay.GroupMembers.Count; i++)
+                      {
+                          playObject = groupOwnerPlay.GroupMembers[i];
+                          if (!playObject.Death && Envir == playObject.Envir && Math.Abs(CurrX - playObject.CurrX) <= 12 && Math.Abs(CurrX - playObject.CurrX) <= 12)
+                          {
+                              sumlv = sumlv + playObject.Abil.Level;
+                              n++;
+                          }
+                      }
+  
+                      if (sumlv > 0 && n > 1)
+                      {
+                          if (n >= 0 && n <= Grobal2.GroupMax)
+                          {
+                              dwExp = HUtil32.Round(dwExp * bonus[n]);
+                          }
+                          for (int i = 0; i < groupOwnerPlay.GroupMembers.Count; i++)
+                          {
+                              playObject = groupOwnerPlay.GroupMembers[i];
+                              if (!playObject.Death && Envir == playObject.Envir && Math.Abs(CurrX - playObject.CurrX) <= 12 && Math.Abs(CurrX - playObject.CurrX) <= 12)
+                              {
+                                  if (SystemShare.Config.HighLevelKillMonFixExp)
+                                  {
+                                      playObject.WinExp(HUtil32.Round(dwExp / (double)n)); // 在高等级经验不变时，把组队的经验平均分配
+                                  }
+                                  else
+                                  {
+                                      playObject.WinExp(HUtil32.Round(dwExp / (double)sumlv * playObject.Abil.Level));
+                                  }
+                              }
+                          }
+                      }
+                      else
+                      {
+                          WinExp(dwExp);
+                      }
+                  }
+                  else
+                  {
+                      WinExp(dwExp);
+                  }
+              }
+              catch
+              {
+                  LogService.Error(sExceptionMsg);
+              }
+          }
+
+===== src/M2Server/Player/PlayObject.cs:1627-1656 =====
+          }
+  
+          /// <summary>
+          /// 角色杀死目标触发
+          /// </summary>
+          private void KillTargetTrigger(int actorId, int fightExp)
+          {
+              IActor killObject = SystemShare.ActorMgr.Get(actorId);
+              if (killObject == null)
+              {
+                  return;
+              }
+              if (SystemShare.FunctionNPC != null)
+              {
+                  SystemShare.FunctionNPC.GotoLable(this, "@PlayKillMob", false);
+              }
+              int monsterExp = CalcGetExp(WAbil.Level, fightExp);
+              if (!SystemShare.Config.VentureServer)
+              {
+                  if (IsRobot && ExpHitter != null && ExpHitter.Race == ActorRace.Play)
+                  {
+                      // ((IRobotPlayer)ExpHitter).GainExp(monsterExp);
+                  }
+                  else
+                  {
+                      GainExp(monsterExp);
+                  }
+              }
+              // 是否执行任务脚本
+              if (Envir.IsCheapStuff())// 地图是否有任务脚本
+
+===== src/M2Server/Player/PlayObject.Message.cs:1664-1770 =====
+                      SendSocket(ClientMsg, EDCode.EncodeString(processMsg.Msg));
+                      break;
+                  case Messages.RM_WINEXP:
+                      ClientMsg = Messages.MakeMessage(Messages.SM_WINEXP, Abil.Exp, HUtil32.LoWord(processMsg.nParam1), HUtil32.HiWord(processMsg.nParam1), 0);
+                      SendSocket(ClientMsg);
+                      break;
+                  case Messages.RM_LEVELUP:
+                      ClientMsg = Messages.MakeMessage(Messages.SM_LEVELUP, Abil.Exp, Abil.Level, 0, 0);
+                      SendSocket(ClientMsg);
+                      ClientMsg = Messages.MakeMessage(Messages.SM_ABILITY, Gold, HUtil32.MakeWord((byte)Job, 99), HUtil32.LoWord(GameGold), HUtil32.HiWord(GameGold));
+                      SendSocket(ClientMsg, EDCode.EncodeMessage(WAbil));
+                      SendDefMessage(Messages.SM_SUBABILITY, HUtil32.MakeLong(HUtil32.MakeWord(AntiMagic, 0), 0), HUtil32.MakeWord(HitPoint, SpeedPoint), HUtil32.MakeWord(AntiPoison, PoisonRecover), HUtil32.MakeWord(HealthRecover, SpellRecover));
+                      break;
+                  case Messages.RM_CHANGENAMECOLOR:
+                      SendDefMessage(Messages.SM_CHANGENAMECOLOR, processMsg.ActorId, GetChrColor(baseObject), 0, 0);
+                      break;
+                  case Messages.RM_LOGON:
+                      ClientMsg = Messages.MakeMessage(Messages.SM_NEWMAP, ActorId, CurrX, CurrY, DayBright());
+                      SendSocket(ClientMsg, EDCode.EncodeString(MapFileName));
+                      SendMsg(Messages.RM_CHANGELIGHT, 0, 0, 0, 0);
+                      SendLogon();
+                      SendServerConfig();
+                      ClientQueryUserName(ActorId, CurrX, CurrY);
+                      RefUserState();
+                      SendMapDescription();
+                      SendGoldInfo(true);
+                      ClientMsg = Messages.MakeMessage(Messages.SM_VERSION_FAIL, SystemShare.Config.ClientFile1_CRC, HUtil32.LoWord(SystemShare.Config.ClientFile2_CRC), HUtil32.HiWord(SystemShare.Config.ClientFile2_CRC), 0);
+                      SendSocket(ClientMsg, "<<<<<<");
+                      break;
+                  case Messages.RM_HEAR:
+                  case Messages.RM_WHISPER:
+                  case Messages.RM_CRY:
+                  case Messages.RM_SYSMESSAGE:
+                  case Messages.RM_GROUPMESSAGE:
+                  case Messages.RM_SYSMESSAGE2:
+                  case Messages.RM_GUILDMESSAGE:
+                  case Messages.RM_SYSMESSAGE3:
+                  case Messages.RM_MOVEMESSAGE:
+                  case Messages.RM_MERCHANTSAY:
+                      switch (processMsg.wIdent)
+                      {
+                          case Messages.RM_HEAR:
+                              ClientMsg = Messages.MakeMessage(Messages.SM_HEAR, processMsg.ActorId, HUtil32.MakeWord((ushort)processMsg.nParam1, (ushort)processMsg.nParam2), 0, 1);
+                              break;
+                          case Messages.RM_WHISPER:
+                              ClientMsg = Messages.MakeMessage(Messages.SM_WHISPER, processMsg.ActorId, HUtil32.MakeWord((ushort)processMsg.nParam1, (ushort)processMsg.nParam2), 0, 1);
+                              break;
+                          case Messages.RM_CRY:
+                              ClientMsg = Messages.MakeMessage(Messages.SM_HEAR, processMsg.ActorId, HUtil32.MakeWord((ushort)processMsg.nParam1, (ushort)processMsg.nParam2), 0, 1);
+                              break;
+                          case Messages.RM_SYSMESSAGE:
+                              ClientMsg = Messages.MakeMessage(Messages.SM_SYSMESSAGE, processMsg.ActorId, HUtil32.MakeWord((ushort)processMsg.nParam1, (ushort)processMsg.nParam2), 0, 1);
+                              break;
+                          case Messages.RM_GROUPMESSAGE:
+                              ClientMsg = Messages.MakeMessage(Messages.SM_SYSMESSAGE, processMsg.ActorId, HUtil32.MakeWord((ushort)processMsg.nParam1, (ushort)processMsg.nParam2), 0, 1);
+                              break;
+                          case Messages.RM_GUILDMESSAGE:
+                              ClientMsg = Messages.MakeMessage(Messages.SM_GUILDMESSAGE, processMsg.ActorId, HUtil32.MakeWord((ushort)processMsg.nParam1, (ushort)processMsg.nParam2), 0, 1);
+                              break;
+                          case Messages.RM_MERCHANTSAY:
+                              ClientMsg = Messages.MakeMessage(Messages.SM_MERCHANTSAY, processMsg.ActorId, HUtil32.MakeWord((ushort)processMsg.nParam1, (ushort)processMsg.nParam2), 0, 1);
+                              break;
+                          case Messages.RM_MOVEMESSAGE:
+                              ClientMsg = Messages.MakeMessage(Messages.SM_MOVEMESSAGE, processMsg.ActorId, HUtil32.MakeWord((ushort)processMsg.nParam1, (ushort)processMsg.nParam2), processMsg.nParam3, processMsg.wParam);
+                              break;
+                      }
+                      SendSocket(ClientMsg, EDCode.EncodeString(processMsg.Msg));
+                      break;
+                  case Messages.RM_ABILITY:
+                      ClientMsg = Messages.MakeMessage(Messages.SM_ABILITY, Gold, HUtil32.MakeWord((byte)Job, 99), HUtil32.LoWord(GameGold), HUtil32.HiWord(GameGold));
+                      SendSocket(ClientMsg, EDCode.EncodeMessage(WAbil));
+                      break;
+                  case Messages.RM_HEALTHSPELLCHANGED:
+                      ClientMsg = Messages.MakeMessage(Messages.SM_HEALTHSPELLCHANGED, processMsg.ActorId, baseObject.WAbil.HP, baseObject.WAbil.MP, baseObject.WAbil.MaxHP);
+                      SendSocket(ClientMsg);
+                      break;
+                  case Messages.RM_DAYCHANGING:
+                      ClientMsg = Messages.MakeMessage(Messages.SM_DAYCHANGING, 0, Bright, DayBright(), 0);
+                      SendSocket(ClientMsg);
+                      break;
+                  case Messages.RM_ITEMSHOW:
+                      SendDefMessage(Messages.SM_ITEMSHOW, processMsg.nParam1, processMsg.nParam2, processMsg.nParam3, processMsg.wParam, processMsg.Msg);
+                      break;
+                  case Messages.RM_ITEMHIDE:
+                      SendDefMessage(Messages.SM_ITEMHIDE, processMsg.nParam1, processMsg.nParam2, processMsg.nParam3, 0);
+                      break;
+                  case Messages.RM_DOOROPEN:
+                      SendDefMessage(Messages.SM_OPENDOOR_OK, 0, processMsg.nParam1, processMsg.nParam2, 0);
+                      break;
+                  case Messages.RM_DOORCLOSE:
+                      SendDefMessage(Messages.SM_CLOSEDOOR, 0, processMsg.nParam1, processMsg.nParam2, 0);
+                      break;
+                  case Messages.RM_SENDUSEITEMS:
+                      SendUseItems();
+                      break;
+                  case Messages.RM_WEIGHTCHANGED:
+                      SendDefMessage(Messages.SM_WEIGHTCHANGED, WAbil.Weight, WAbil.WearWeight, WAbil.HandWeight, (((WAbil.Weight + WAbil.WearWeight + WAbil.HandWeight) ^ 0x3A5F) ^ 0x1F35) ^ 0xaa21);
+                      break;
+                  case Messages.RM_FEATURECHANGED:
+                      SendDefMessage(Messages.SM_FEATURECHANGED, processMsg.ActorId, HUtil32.LoWord(processMsg.nParam1), HUtil32.HiWord(processMsg.nParam1), processMsg.wParam);
+                      break;
+                  case Messages.RM_CLEAROBJECTS:
+                      VisibleEvents.Clear();
+                      for (int i = 0; i < VisibleItems.Count; i++)
+                      {
+                          VisibleItems[i] = null;
+                      }
+
+===== src/M2Server/Maps/Envirnoment.cs:88-95 =====
+          public bool AddItemToMap(int nX, int nY, MapItem mapItem)
+          {
+              if (mapItem.ItemId == 0)
+              {
+                  return false;
+              }
+              if (!CellMatch(nX, nY))
+              {
+
+===== src/Modules/SystemModule/Data/MapItem.cs:36-45 =====
+          public int CanPickUpTick;
+          public UserItem UserItem;
+  
+          public MapItem()
+          {
+              // this.ItemId = M2Share.ActorMgr.GetNextIdentity();
+          }
+      }
+  }

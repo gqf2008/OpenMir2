@@ -1,0 +1,27 @@
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\world)
+   Compiling mir2-envir v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\envir)
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.47s
+     Running unittests src\main.rs (E:/tmp/m2svr-d1-target\debug\deps\game_svr-eb39968088e3f1ec.exe)
+
+running 1 test
+test tests::exp_downlink_sends_sm_winexp_and_syncs_session ... FAILED
+
+failures:
+
+---- tests::exp_downlink_sends_sm_winexp_and_syncs_session stdout ----
+
+thread 'tests::exp_downlink_sends_sm_winexp_and_syncs_session' (26804) panicked at bins\game-svr\src\main.rs:8445:9:
+assertion `left == right` failed: Param = LoWord(增量)
+  left: 1
+ right: 515
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::exp_downlink_sends_sm_winexp_and_syncs_session
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 159 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --bin game-svr`
+cargo_test_rc=101
