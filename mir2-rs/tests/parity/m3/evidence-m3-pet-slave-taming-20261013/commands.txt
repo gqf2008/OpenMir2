@@ -1,0 +1,32 @@
+# M3⑨-2 第③片（20 诱惑）命令（隔离 CARGO_TARGET_DIR=E:/tmp/openmir2-m3hp-target，--offline）
+
+# 0) 开工前：⑨-3 合入后从新 master 起
+git fetch walgit refs/heads/master:refs/remotes/walgit/master   # d5be14f40
+git checkout -b worktree-m3-pet-slave-taming 8cd889090           # 第②片 head
+git merge --no-edit d5be14f40                                    # 合并点 c4bbfad0a，无冲突
+
+# 1) 四门禁（gates/）
+cargo fmt --all -- --check                                    # rc=0
+cargo clippy --workspace --all-targets -- -D warnings         # rc=0
+cargo test --workspace --no-fail-fast                         # 98 suites 1024 passed 0 failed 21 ignored
+cargo run -p msgcodegen -- --check                            # 604 条
+
+# 2) 判据（gates/14-slave-tests.txt、gates/15-world-animal-tests.txt）
+cargo test -p game-svr --lib slave
+cargo test -p mir2-world --lib combat::tests::animal
+
+# 3) 改坏必红（redchecks/，逐条：改 → 跑 → git checkout -- 还原 → 重跑）
+cargo test -p game-svr --lib tamming   # RC1..RC4 共同命令
+#   RC1 删 `world.tame_adopt(...)` 调用           -> tamming_adopts_slave_and_clears_target_creature FAILED (rc=101)
+#   RC2 删 `!race_is_animal` 门                    -> tamming_animal_gate_blocks_and_consumes_no_draw FAILED (rc=101)
+#   RC3 `tamed = out.target_master_is_caster;`     -> tamming_does_not_re_adopt_existing_slave FAILED (rc=101)
+#   RC4 删 `t.ai.target_creature = None;`          -> tamming_adopts_slave_and_clears_target_creature + tamming_does_not_re_adopt_existing_slave FAILED (rc=101)
+#   每条还原后重跑 rc=0、`git status --porcelain` 空。
+
+# 4) 边界
+git diff --name-only d5be14f40 HEAD -- src sql MirClient                        # 空
+git diff --name-only d5be14f40 HEAD -- mir2-rs/crates/protocol mir2-rs/crates/storage  # 空
+
+# 5) 证据清单
+python -I tools/evidence-hash/verify_sha256sums.py verify <本目录> --check-extra
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck <本目录>

@@ -393,6 +393,21 @@ pub const ACTOR_RACE_NPC: u8 = 10;
 pub const ACTOR_RACE_PEACE_NPC: u8 = 15;
 pub const ACTOR_RACE_ANIMAL: u8 = 50;
 
+/// `BaseObject.Animal`（`src/M2Server/Actor/BaseObject.cs:178`，构造初值 `false`）的**构造期**等价物。
+///
+/// oracle 只在少数怪物构造路径上把它置 `true`（按 race 分支；其余 ctor 显式写 `false` 与初值同）：
+/// - 对象初始化器 `WorldServer.MonGen.cs:518-553`：`AnimalChicken(51)` / `AnimalDeer(52)` / `AnimalWolf(53)`；
+/// - 派生类构造器：`SpitSpider(82)`（`Monster/Monsters/SpitSpider.cs:15`）、`Scorpion(84)`（`Scorpion.cs:7`）、
+///   `StickMonster(85)`（`StickMonster.cs:23`）、`GasAttackMonster(90)`（`GasAttackMonster.cs:12`）。
+///
+/// `BaseObject.ReAliveEx` 的 `case 54: Animal = true`（`BaseObject.cs:2601-2603`）只在**复活**路径生效；
+/// 本骨架未建模 `CanReAlive`/复活（⑨-3 登记）⇒ race 54 **不**计入（登记在案，勿按常识补）。
+/// `MonsterObject.Animal` 只被 `DoSpell` 的 `SKILL_TAMMING` 支读（`MagicManager.cs:395`）。
+#[must_use]
+pub fn race_is_animal(race: u8) -> bool {
+    matches!(race, 51 | 52 | 53 | 82 | 84 | 85 | 90)
+}
+
 /// `src/OpenMir2/Enums/AttackMode.cs`。
 pub const ATTACK_MODE_HAM_ALL: u8 = 0;
 pub const ATTACK_MODE_HAM_PEACE: u8 = 1;
@@ -1145,4 +1160,21 @@ pub use mir2_formula::drop::VecItemCatalog as ItemCatalogImpl;
 /// 便捷：把 `Vec<StdItem>` 包成目录。
 pub fn catalog(items: &[StdItem]) -> ItemCatalogImpl<'_> {
     ItemCatalogImpl { items }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::race_is_animal;
+
+    /// `Animal` 构造期置真的 race 集合（`MonsterInfo`/各 ctor 的 oracle 事实）。
+    #[test]
+    fn animal_races_match_oracle_constructors() {
+        for r in [51_u8, 52, 53, 82, 84, 85, 90] {
+            assert!(race_is_animal(r), "race {r} 应为 Animal");
+        }
+        // 常见非动物怪：骷髅/神兽/钉耙猫/多钩猫/毒蜘蛛/半兽人等。
+        for r in [80_u8, 81, 83, 101, 100, 10, 50, 0, 54] {
+            assert!(!race_is_animal(r), "race {r} 不应为 Animal");
+        }
+    }
 }

@@ -1,0 +1,46 @@
+# M3⑨-2 第②片 改前/改后（base=6f0bca48e → head=06c383b20）
+
+## 1. crates/world/src/magic.rs
+- 新增 `AmuletUse` + `use_amulet(dura, count)`：`MagicBase.UseAmulet`（MagicBase.cs:109-127）的纯函数化
+  （`dura > count*100` ⇒ 扣；否则 `dura=0; deleted=true`）。
+- `TammingOutcome` 增 `royalty_draw`：把 oracle :770 的 `Random(caster.Lv*2)` 表面积化
+  （原实现已按原位消费，抛出该值供 `tame_adopt`；RNG 账本不变）。
+- 新增 `#[cfg(test)] mod amulet_use_tests`。
+
+## 2. crates/world/tests/magic_effect_vectors.rs
+- `tamming_matches_oracle_per_case` 的期望结构补 `royalty_draw`（TSV 无该列；该值由 rng 逐次对拍钉死，
+  见注释）。
+
+## 3. bins/game-svr/src/magics.rs（新）
+- `load_magics(conn)`（`MySqlDB.LoadMagicDB`，MySqlDB.cs:105，直连 MySQL）+ `MagicTable`
+  （MagicId → MagicInfo 查表面，等价 `M2Share.MagicList` / `GetMagicInfo`）。
+
+## 4. bins/game-svr/src/lib.rs
+- `pub mod magics;`。
+
+## 5. bins/game-svr/src/config.rs
+- 新增 `[Setup] MagicAttackRage`（ServerConf.cs:539，缺省 8）读取 + 字段 `magic_attack_rage`。
+
+## 6. bins/game-svr/src/smframe.rs
+- 新增 `sm_spell` / `sm_magicfire` / `sm_magic_lvexp` / `sm_durachange` 四个 SM_* 编码器
+  （oracle PlayObject.Message.cs:1454-1459/1788-1793/1800-1805），字段位与尾逐条锚。
+- 新增 2 条字段布局用例。
+
+## 7. bins/game-svr/src/slave.rs
+- 新增 `SlaveCastInput` / `SlaveCastOutcome` / `cast_slave_spell`：召唤面（17/30/41）的
+  `CheckAmulet`/`UseAmulet` + `summon_from_spell` + `do_spell_tail`；`boTrain` 只在
+  `SummonOutcome::Spawned` 置真（神兽回召不置，oracle :1300-1306）。
+- 新增 2 条 host 用例（门不过 ⇒ spell_fail；门过 ⇒ 扣耐久 450→350 + Rejected）。
+- 模块头登记：20（需 ⑨-3 `tame_adopt`）、46（CLONE_DEFERRED）、护身符扣光支的 SM_DELITEMS 帧。
+
+## 8. bins/game-svr/src/main.rs
+- 启动：读 magics → `EnterConfig.magic_table`；读 Server.conf → `EnterConfig.pet_cfg`；
+  透传 `magic_attack_rage`。
+- `handle_spell_cmd`：签名扩到 `&mut World`/`&mut saves`/`&mut ground_sessions` + 模板/配置/注册表/怪表；
+  default 支加 `CretInNearXy` 目标修正 → MagicAttackRage 距离门 → RM_SPELL 广播 →
+  `cast_slave_spell` → 护身符落 UseItems + SM_DURACHANGE → SM_MAGICFIRE 广播 →
+  SM_MAGIC_LVEXP 自身帧；熟练度回写存档记录。非召唤魔号维持既有形态（守卫 + +GD）。
+- 新增 `amulet_slot` / `apply_amulet_use` / `send_self_frame` 三个宿主辅助。
+- 新增 1 条端到端 host 用例（观察者收 SM_SPELL/SM_MAGICFIRE；自身收 SM_DURACHANGE/+GD；耐久 350）。
+
+净 diff：8 文件 +1067/-30。

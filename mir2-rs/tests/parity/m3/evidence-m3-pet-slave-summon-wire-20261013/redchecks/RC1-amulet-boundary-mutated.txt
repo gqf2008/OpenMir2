@@ -1,0 +1,25 @@
+   Compiling mir2-data v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\crates\data)
+   Compiling mir2-formula v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\crates\formula)
+   Compiling mir2-world-bevy v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\crates\world-bevy)
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\crates\world)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.03s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m3hp-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 1 test
+test magic::amulet_use_tests::use_amulet_deducts_when_enough_and_zeroes_when_not ... FAILED
+
+failures:
+
+---- magic::amulet_use_tests::use_amulet_deducts_when_enough_and_zeroes_when_not stdout ----
+
+thread 'magic::amulet_use_tests::use_amulet_deducts_when_enough_and_zeroes_when_not' (7656) panicked at crates\world\src\magic.rs:1260:9:
+边界相等 ⇒ 清槽（oracle 严格大于）
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    magic::amulet_use_tests::use_amulet_deducts_when_enough_and_zeroes_when_not
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 96 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-world --lib`

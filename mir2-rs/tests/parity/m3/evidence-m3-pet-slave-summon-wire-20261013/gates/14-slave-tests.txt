@@ -1,0 +1,52 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.65s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m3hp-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 1 test
+test magic::amulet_use_tests::use_amulet_deducts_when_enough_and_zeroes_when_not ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 96 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.67s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m3hp-target\debug\deps\game_svr-675e68013f315636.exe)
+
+running 4 tests
+test slave::tests::pet_slave_config_missing_file_errors ... ok
+test slave::tests::cast_without_amulet_is_spell_fail ... ok
+test slave::tests::pet_slave_config_reads_conf_and_ignores_bom ... ok
+test slave::tests::cast_with_amulet_consumes_and_reaches_summon ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 154 filtered out; finished in 0.03s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.66s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m3hp-target\debug\deps\game_svr-675e68013f315636.exe)
+
+running 17 tests
+test smframe::tests::attack_mode_goes_in_recog_not_param ... ok
+test smframe::tests::command_header_layout_is_little_endian ... ok
+test smframe::tests::sm_attackmode_matches_golden_frame_5 ... ok
+test smframe::tests::remaining_eleven_encoders_match_golden_frames ... ok
+test smframe::tests::magic_lvexp_and_durachange_field_layout ... ok
+test smframe::tests::sm_newmap_matches_golden_frame_2 ... ok
+test smframe::tests::sm_merchantsay_header_and_tail ... ok
+test smframe::tests::sm_outofconnection_is_header_only_with_recog_zero ... ok
+test smframe::tests::sm_logon_matches_golden_frame_3 ... ok
+test smframe::tests::enter_world_sequence_matches_golden_order_and_bytes ... ok
+test smframe::tests::empty_notice_still_sends_header_only_658 ... ok
+test smframe::tests::sm_featurechanged_matches_golden_frame_4 ... ok
+test smframe::tests::sm_sysmessage_rebuilds_golden_frame_byte_for_byte ... ok
+test smframe::tests::sm_version_fail_matches_golden_frame_11 ... ok
+test smframe::tests::spell_and_magicfire_field_layout ... ok
+test smframe::tests::golden_constants_are_present_in_capture ... ok
+test smframe::tests::version_fail_field_layout ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 141 filtered out; finished in 0.03s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.62s
+     Running unittests src\main.rs (E:/tmp/openmir2-m3hp-target\debug\deps\game_svr-1f4431beb89ebeb6.exe)
+
+running 2 tests
+test tests::spell_cmd_summon_wires_amulet_and_frames ... ok
+test tests::spell_cmd_dispatches_guard_ack_and_magic_key_change ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 180 filtered out; finished in 0.01s
+
