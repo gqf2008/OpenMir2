@@ -1,0 +1,41 @@
+== M3⑥-实现 3 第②片：边界（oracle/客户端/表结构/脚本语法/数据格式冻结）==
+
+本片 base = 第①片 head 8c158d26（stacked：第①片仍在【待审】）。
+
+---- A) git diff --name-only master..HEAD -- src sql MirClient（必须为空；第①片+第②片合计）----
+（以上为空 ⇒ 零改动）
+
+---- B) 本片差量 git diff --stat 8c158d26..HEAD（= 第②片内容；证据文件在本文件生成时尚未提交）----
+ mir2-rs/bins/game-svr/src/config.rs                |  41 ++++
+ mir2-rs/bins/game-svr/src/main.rs                  | 272 +++++++++++++++++++++
+ mir2-rs/bins/game-svr/src/npc.rs                   |  82 ++++++-
+ mir2-rs/bins/game-svr/src/smframe.rs               |  50 ++++
+ .../01-oracle-anchors.txt                          |  61 +++++
+ .../quest-dialog-wire-20261013/02-commands.txt     |  36 +++
+ .../quest-dialog-wire-20261013/03-unit-tests.txt   |  19 ++
+ .../quest-dialog-wire-20261013/04-redchecks.txt    |  44 ++++
+ .../world/quest-dialog-wire-20261013/README.md     |  53 ++++
+ 9 files changed, 655 insertions(+), 3 deletions(-)
+
+---- C) 第①片+第②片合计 git diff --stat master..HEAD ----
+ mir2-rs/Cargo.lock                                 |   1 +
+ mir2-rs/bins/game-svr/Cargo.toml                   |   1 +
+ mir2-rs/bins/game-svr/src/config.rs                |  41 ++
+ mir2-rs/bins/game-svr/src/lib.rs                   |   1 +
+ mir2-rs/bins/game-svr/src/main.rs                  | 272 ++++++++
+ mir2-rs/bins/game-svr/src/npc.rs                   | 742 +++++++++++++++++++++
+ mir2-rs/bins/game-svr/src/smframe.rs               |  50 ++
+ .../quest-dialog-20261013/01-oracle-anchors.txt    |  44 ++
+ .../world/quest-dialog-20261013/02-commands.txt    |  25 +
+ .../world/quest-dialog-20261013/03-unit-tests.txt  |  15 +
+ .../world/quest-dialog-20261013/04-redchecks.txt   |  79 +++
+ .../world/quest-dialog-20261013/05-gates.txt       |  15 +
+ .../world/quest-dialog-20261013/06-boundary.txt    |  18 +
+ .../parity/world/quest-dialog-20261013/README.md   |  61 ++
+ .../world/quest-dialog-20261013/SHA256SUMS.txt     |   7 +
+ .../01-oracle-anchors.txt                          |  61 ++
+ .../quest-dialog-wire-20261013/02-commands.txt     |  36 +
+ .../quest-dialog-wire-20261013/03-unit-tests.txt   |  19 +
+ .../quest-dialog-wire-20261013/04-redchecks.txt    |  44 ++
+ .../world/quest-dialog-wire-20261013/README.md     |  53 ++
+ 20 files changed, 1585 insertions(+)

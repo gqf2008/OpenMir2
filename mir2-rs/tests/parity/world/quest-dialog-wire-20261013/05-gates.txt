@@ -1,0 +1,18 @@
+== M3⑥-实现 3 第②片：四门禁（隔离 CARGO_TARGET_DIR=E:/tmp/m2svr-target，--offline）==
+时间：2026-10-13T03:20:56Z  head=1a71a607be0b74c9da91524b847e43c85be6e492
+
+---- ① cargo fmt --all -- --check ----
+rc=0
+
+---- ② cargo clippy --workspace --all-targets --offline -- -D warnings ----
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.42s
+rc=0
+
+---- ③ cargo test --workspace --offline --no-fail-fast ----
+rc=0
+合计 suites=93 passed=866 failed=0 ignored=21
+
+---- ④ cargo run -p msgcodegen --offline -- --check ----
+     Running `E:/tmp/m2svr-target\debug\msgcodegen.exe --check`
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+rc=0
