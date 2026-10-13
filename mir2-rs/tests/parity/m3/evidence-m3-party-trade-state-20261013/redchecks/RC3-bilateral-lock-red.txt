@@ -1,0 +1,24 @@
+# RC3：ClientDealEnd 双向锁定门 if (DealCreat.DealSuccess) ⇒ if true（Operate.cs:1096）
+# 命令：CARGO_TARGET_DIR=E:/tmp/openmir2-m3pt-target cargo test -p game-svr --lib trade::tests::deal_end_first_side_waits
+# 改前读数：test result: ok. 1 passed; 0 failed
+# 改后读数：
+running 1 test
+test trade::tests::deal_end_first_side_waits ... FAILED
+
+failures:
+
+---- trade::tests::deal_end_first_side_waits stdout ----
+
+thread 'trade::tests::deal_end_first_side_waits' (31316) panicked at bins\game-svr\src\trade.rs:1408:9:
+assertion `left == right` failed
+  left: [(2, 687), (1, 687), (2, 65535), (1, 65535)]
+ right: [(1, 65535), (2, 65535)]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    trade::tests::deal_end_first_side_waits
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 142 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p game-svr --lib`

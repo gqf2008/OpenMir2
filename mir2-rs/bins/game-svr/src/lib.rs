@@ -27,4 +27,5 @@ pub mod recover;
 pub mod shop;
 pub mod smframe;
 pub mod stamina;
+pub mod trade;
 pub mod useitem;
