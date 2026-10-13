@@ -1,12 +1,11 @@
 # M3⑤-实现 2 第②片 四门禁（隔离 CARGO_TARGET_DIR=E:/tmp/m2svr-target，--offline）
-# base = refs/heads/master（合并树）；HEAD = 分支 merchant-entity-host
+# base = refs/heads/master（0dde01b7）；HEAD = 9e0aa3de（reviewer-5 0f220cac F-1/F-2 返工 head）
 
 $ cargo fmt --all -- --check
 fmt rc=0
 
 $ cargo clippy --workspace --all-targets --offline -- -D warnings
-    Checking game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.60s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.55s
 clippy rc=0
 
 $ cargo run -p msgcodegen --offline -- --check
