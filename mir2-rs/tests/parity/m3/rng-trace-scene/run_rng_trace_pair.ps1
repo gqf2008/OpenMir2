@@ -71,9 +71,12 @@ $script:RngSceneTouchedPorts = $false   # 本脚本（含自检）**从不**绑�
 # （历史 bug：`$rc = & python …` 会拿到 @(<stdout>, $LASTEXITCODE) ⇒ `-ne 0` 恒真）。
 function Invoke-RngSceneGate {
   param([Parameter(Mandatory = $true)][string]$A, [Parameter(Mandatory = $true)][string]$B,
-        [string]$Scenario = '', [string]$Json = '', [Parameter(Mandatory = $true)][ref]$Out)
+        [string]$Scenario = '', [string]$AStream = '', [string]$BStream = '', [string]$Json = '',
+        [Parameter(Mandatory = $true)][ref]$Out)
   if ([string]::IsNullOrEmpty($Scenario)) { $Scenario = $ScenarioFile }
   $argv = @('-I', $SceneGate, 'gate', '--scenario', $Scenario, '--a', $A, '--b', $B)
+  if (-not [string]::IsNullOrEmpty($AStream)) { $argv += @('--a-stream', $AStream) }
+  if (-not [string]::IsNullOrEmpty($BStream)) { $argv += @('--b-stream', $BStream) }
   if (-not [string]::IsNullOrEmpty($Json)) { $argv += @('--json', $Json) }
   $raw = & python @argv 2>&1
   $Out.Value = ($raw | Out-String)
@@ -110,7 +113,7 @@ function Invoke-RngSceneGroupDiffCore {
         [Parameter(Mandatory = $true)][string]$AStream, [Parameter(Mandatory = $true)][string]$BStream)
   $res = [ordered]@{ rc = 2; gateRc = 2; diffRc = -1; ranDiff = $false; text = '' }
   $gateOut = ''
-  $gateRc = Invoke-RngSceneGate -A $AScene -B $BScene -Out ([ref]$gateOut)
+  $gateRc = Invoke-RngSceneGate -A $AScene -B $BScene -AStream $AStream -BStream $BStream -Out ([ref]$gateOut)
   $res.gateRc = $gateRc
   $text = $gateOut
   if ($gateRc -ne 0) {
@@ -131,8 +134,11 @@ function Invoke-RngSceneGroupDiffCore {
   return [pscustomobject]$res
 }
 
-function New-RngStream([string]$Path, [string[]]$Sites) {
-  $lines = @('1' + "`t" + 'INJECT_OK' + "`t" + '42' + "`t" + '0', 'SEED_PROBE 42')
+function New-RngStream([string]$Path, [string[]]$Sites, [int]$InjectSeed = 42, [switch]$NoInject) {
+  $lines = @()
+  if (-not $NoInject) {
+    $lines += @('1' + "`t" + 'INJECT_OK' + "`t" + $InjectSeed + "`t" + '0', ('SEED_PROBE ' + $InjectSeed))
+  }
   $seq = 2
   foreach ($s in $Sites) {
     $lines += (@($seq, 'Next(max)', '100', '7', $s) -join "`t")
@@ -447,6 +453,35 @@ if ($SelfCheckNoStack) {
     Add-Result 'scene-groupdiff-diff-red-propagates' (($c4.rc -eq 1) -and $c4.ranDiff -and
       ($c4.text -match 'GREEN\(scene\)') -and ($c4.text -match 'RNG_CONSUMER_GROUPDIFF')) ("rc=$($c4.rc)")
 
+    # ㉓ 制品级同种子：DoD① 要求「两侧 trace 同种子」。描述件里的 seed 是**自报**，不是证据 ⇒
+    #    核两份 trace **流水头**的 `INJECT_OK <seed>`（两侧生产者都写）。同种子 ⇒ 门绿。
+    $sgSeed42b = Join-Path $tmpRoot 'sgd-seed42-b.tsv'
+    New-RngStream -Path $sgSeed42b -Sites @($Script:SiteSpawnR, $Script:SiteSpawnR, $Script:SiteAiR)
+    $out23 = ''
+    $rc23 = Invoke-RngSceneGate -A $sgGood.A -B $sgGood.B -AStream $sgA -BStream $sgSeed42b -Out ([ref]$out23)
+    Add-Result 'scene-gate-stream-seed-green' (($rc23 -eq 0) -and ($out23 -match 'stream-seed-equal:a') -and
+      ($out23 -match 'stream-seed-equal:b')) ("rc=$rc23")
+
+    # ㉔ **改坏必红**：B 侧描述件仍自报 seed=42，但其流水头写成 `INJECT_OK 43` ⇒ 门必须红且点名。
+    $sgSeed43b = Join-Path $tmpRoot 'sgd-seed43-b.tsv'
+    New-RngStream -Path $sgSeed43b -Sites @($Script:SiteSpawnR) -InjectSeed 43
+    $out24 = ''
+    $rc24 = Invoke-RngSceneGate -A $sgGood.A -B $sgGood.B -AStream $sgA -BStream $sgSeed43b -Out ([ref]$out24)
+    Add-Result 'scene-gate-stream-seed-mismatch-red' (($rc24 -eq 1) -and ($out24 -match 'stream-seed-equal:b')) ("rc=$rc24")
+
+    # ㉕ **改坏必红**：B 侧流水头删掉 INJECT_OK（无法证明种子）⇒ 门必须红且点名 stream-inject-ok:b。
+    $sgNoHeader = Join-Path $tmpRoot 'sgd-noheader-b.tsv'
+    New-RngStream -Path $sgNoHeader -Sites @($Script:SiteSpawnR) -NoInject
+    $out25 = ''
+    $rc25 = Invoke-RngSceneGate -A $sgGood.A -B $sgGood.B -AStream $sgA -BStream $sgNoHeader -Out ([ref]$out25)
+    Add-Result 'scene-gate-stream-inject-missing-red' (($rc25 -eq 1) -and ($out25 -match 'stream-inject-ok:b')) ("rc=$rc25")
+
+    # ㉖ DoD① 单一入口在**制品级种子漂移**下必须整链拒比：不得跑 groupdiff、不得输出任何结论行。
+    $c5 = Invoke-RngSceneGroupDiffCore -AScene $sgGood.A -BScene $sgGood.B -AStream $sgA -BStream $sgSeed43b
+    Add-Result 'scene-groupdiff-stream-seed-refused' (($c5.rc -eq 1) -and (-not $c5.ranDiff) -and
+      ($c5.text -match 'REFUSED') -and ($c5.text -notmatch 'RNG_CONSUMER_GROUPDIFF')) `
+      ("rc=$($c5.rc) ranDiff=$($c5.ranDiff)")
+
     # ⑯ 本脚本从未触碰端口（自检/门/比较全离线）
     Add-Result 'no-port-touched' (-not $script:RngSceneTouchedPorts) 'offline-only'
   } finally {
@@ -456,7 +491,7 @@ if ($SelfCheckNoStack) {
   $total = $script:RngPass + $script:RngFail.Count
   Write-Output ("SELFTEST ok={0}/{1} failures={2}" -f $script:RngPass, $total, ($script:RngFail -join ','))
   if ($script:RngFail.Count -gt 0) { exit 1 }
-  Write-Output 'GREEN: 无栈自检全绿（场景前置门 fail-closed + DoD① 单一入口 -SceneGroupDiff 场景门/拒比/结论传播 + scenario 声明/folded 映射与代码同口径 + folded 等价绿/计数·次序必红 + LF 写出 + 零端口）'
+  Write-Output 'GREEN: 无栈自检全绿（场景前置门 fail-closed + **流水头同种子**制品级门（同种子绿 / 异种子·缺 INJECT_OK 必红 / 拒绝比）+ DoD① 单一入口 -SceneGroupDiff 场景门/拒比/结论传播 + scenario 声明/folded 映射与代码同口径 + folded 等价绿/计数·次序必红 + LF 写出 + 零端口）'
   exit 0
 }
 
@@ -469,9 +504,9 @@ if ($GateOnly) {
     exit 2
   }
   $out = ''
-  $rc = Invoke-RngSceneGate -A $AScene -B $BScene -Out ([ref]$out)
+  $rc = Invoke-RngSceneGate -A $AScene -B $BScene -AStream $AStream -BStream $BStream -Out ([ref]$out)
   Write-Output $out
-  if ($rc -eq 0) { Write-Output 'GREEN: 两侧同场景/同起点/同种子（MonGen+Monster 集合同口径）' }
+  if ($rc -eq 0) { Write-Output 'GREEN: 两侧同场景/同起点/同种子（MonGen+Monster 集合同口径；给了流水则含流水头 INJECT_OK 同种子）' }
   exit $rc
 }
 
