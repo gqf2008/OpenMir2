@@ -5,7 +5,7 @@
 //!
 //! | 事实 | oracle 锚 |
 //! | --- | --- |
-//! | MySQL 存档 `UPDATE characters SET …` 的**列清单无任务列** | `src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Save.cs:81-86` |
+//! | MySQL 存档 `UPDATE characters SET …` 的**列清单无任务列** | `src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Save.cs:85-88`（`SaveRecord` `:82`，四条 `AppendLine` 自 `:85` 起，`WHERE ID` 在 `:88`） |
 //! | `SaveQuest` **只 `DELETE FROM characters_quest`，从不 INSERT** | `src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Save.cs:493`（DELETE `:495`） |
 //! | `SaveQuest` **全仓无调用点**（唯一下文是自身的异常日志 `:505`） | 同上 |
 //! | MySQL 读档 `GetChrRecord` = `SELECT * FROM characters WHERE ID=@ID`，**不读任务数组** | `src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Query.cs:192`（SQL `:194`） |
@@ -26,6 +26,10 @@
 //!   表名已由 1 的全仓扫描覆盖，五个任务列在这里工作区级钉死（原实现只在
 //!   `bins/db-srv/src/playdata.rs` 单文件断言，换到别的 crate/别的表就会漏）。判定只作用于
 //!   字符串字面量，故展示串（如 `expect("QuestFlag")`）与注释不误报。
+//! - **原始串定界（⑥-4 O-2 收口，reviewer-5 `4b283fad18`）**：注释剥离器按 Rust 字面量
+//!   规则识别 `r"…"`/`r#"…"#`/`r##"…"##`、字符字面量 `'"'` 与嵌套块注释——原始串内
+//!   含引号/`//`/`/*` 不再导致提前收尾而漏检（旧实现只认 `"` 串，§断言 1 的 §字符串面
+//!   可能出现假绿）。
 //! 2. **正面控制**：`SAVE_CHARACTERS_SQL` 必须真的 `UPDATE characters SET … WHERE ID = ?`
 //!    （防止「删掉常量」让扫描恒绿），且 `playdata.rs` 必须真有 `SELECT * FROM characters WHERE ID=?`
 //!    读档路径。
@@ -74,49 +78,163 @@ const SQL_KEYWORDS: [&str; 4] = ["insert", "update", "delete", "select"];
 
 /// **只去注释、保留字符串**：SQL 是字符串字面量，必须留在扫描面里；
 /// 但注释里写 `characters_quest` 只删不写不得误报（这是 `no_parallel` 踩过的坑）。
+///
+/// 字面量边界按 Rust 规则识别：普通串 `"…"`（含 `\` 转义）、原始串
+/// `r"…"`/`r#"…"#`/`r##"…"##`（转义不生效，内部的引号与 `//`/`/*` 都是内容）、
+/// 字符字面量 `'"'`，以及嵌套块注释。
+///
+/// **reviewer-5 `4b283fad18` O-2 收口**：旧实现只认 `"` 串，原始串内含引号时
+/// 会在内层 `"` 处提前收尾，其后的 `//`/`/*` 被当注释剥掉 ⇒ 原始串里写的 SQL
+/// 任务列被漏检（假绿）。现按原始串定界符（`#` 个数）吃到配平收尾。
 fn strip_comments_keep_strings(src: &str) -> String {
+    let chars: Vec<char> = src.chars().collect();
     let mut out = String::with_capacity(src.len());
-    let mut chars = src.chars().peekable();
-    let mut in_string = false;
-    while let Some(c) = chars.next() {
-        if in_string {
-            out.push(c);
-            if c == '\\' {
-                if let Some(n) = chars.next() {
-                    out.push(n);
-                }
-            } else if c == '"' {
-                in_string = false;
-            }
-            continue;
-        }
-        if c == '"' {
-            in_string = true;
-            out.push(c);
-        } else if c == '/' && chars.peek() == Some(&'/') {
-            for sc in chars.by_ref() {
-                if sc == '\n' {
-                    out.push('\n');
-                    break;
-                }
-            }
-        } else if c == '/' && chars.peek() == Some(&'*') {
-            chars.next();
-            let mut prev = '\0';
-            for sc in chars.by_ref() {
-                if sc == '\n' {
-                    out.push('\n');
-                }
-                if prev == '*' && sc == '/' {
-                    break;
-                }
-                prev = sc;
-            }
+    let mut i = 0usize;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '/' && chars.get(i + 1) == Some(&'/') {
+            i = skip_line_comment(&chars, i);
+        } else if c == '/' && chars.get(i + 1) == Some(&'*') {
+            i = skip_block_comment(&chars, i, &mut out);
+        } else if c == 'r' && starts_raw_string(&chars, i) {
+            i = copy_raw_string(&chars, i, &mut out);
+        } else if c == '\'' && is_char_literal(&chars, i) {
+            i = copy_char_literal(&chars, i, &mut out);
+        } else if c == '"' {
+            i = copy_normal_string(&chars, i, &mut out);
         } else {
             out.push(c);
+            i += 1;
         }
     }
     out
+}
+
+/// 行注释：丢弃到行尾（不消费换行，由调用方按普通字符保留）。
+fn skip_line_comment(chars: &[char], i: usize) -> usize {
+    let mut j = i + 2;
+    while j < chars.len() && chars[j] != '\n' {
+        j += 1;
+    }
+    j
+}
+
+/// 块注释：Rust 允许嵌套（`/* /* */ */`），按深度吃到配平的 `*/`；内部换行保留。
+fn skip_block_comment(chars: &[char], i: usize, out: &mut String) -> usize {
+    let mut depth = 1usize;
+    let mut j = i + 2;
+    while j < chars.len() && depth > 0 {
+        if chars[j] == '\n' {
+            out.push('\n');
+        }
+        if chars[j] == '/' && chars.get(j + 1) == Some(&'*') {
+            depth += 1;
+            j += 2;
+        } else if chars[j] == '*' && chars.get(j + 1) == Some(&'/') {
+            depth -= 1;
+            j += 2;
+        } else {
+            j += 1;
+        }
+    }
+    j
+}
+
+/// `i` 指向 `r` 时判定其是否为原始串起点（`r"…"` / `r#"…"#` / …）。
+fn starts_raw_string(chars: &[char], i: usize) -> bool {
+    let mut j = i + 1;
+    while chars.get(j) == Some(&'#') {
+        j += 1;
+    }
+    chars.get(j) == Some(&'"')
+}
+
+/// 复制一段原始串（含定界符）到 `out`，返回其后的下标；转义/注释符都是内容。
+fn copy_raw_string(chars: &[char], i: usize, out: &mut String) -> usize {
+    let mut hashes = 0usize;
+    let mut j = i + 1;
+    while chars.get(j) == Some(&'#') {
+        hashes += 1;
+        j += 1;
+    }
+    out.push('r');
+    for _ in 0..hashes {
+        out.push('#');
+    }
+    out.push('"');
+    j += 1;
+    loop {
+        if j >= chars.len() {
+            break;
+        }
+        if chars[j] == '"' {
+            let mut matched = 0usize;
+            while matched < hashes && chars.get(j + 1 + matched) == Some(&'#') {
+                matched += 1;
+            }
+            if matched == hashes {
+                out.push('"');
+                for _ in 0..hashes {
+                    out.push('#');
+                }
+                j += 1 + hashes;
+                break;
+            }
+        }
+        out.push(chars[j]);
+        j += 1;
+    }
+    j
+}
+
+/// 字符字面量 `'"'` / `'\''`：整段原样保留，避免其中的引号被当作串起点。
+fn copy_char_literal(chars: &[char], i: usize, out: &mut String) -> usize {
+    let mut j = i + 1;
+    out.push('\'');
+    while j < chars.len() {
+        out.push(chars[j]);
+        if chars[j] == '\\' {
+            if let Some(n) = chars.get(j + 1) {
+                out.push(*n);
+                j += 2;
+                continue;
+            }
+        }
+        if chars[j] == '\'' {
+            j += 1;
+            break;
+        }
+        j += 1;
+    }
+    j
+}
+
+/// 普通字符串 `"…"`：整段原样保留（`\` 转义，含 `\"`）。
+fn copy_normal_string(chars: &[char], i: usize, out: &mut String) -> usize {
+    out.push('"');
+    let mut j = i + 1;
+    while j < chars.len() {
+        out.push(chars[j]);
+        if chars[j] == '\\' {
+            if let Some(n) = chars.get(j + 1) {
+                out.push(*n);
+                j += 2;
+                continue;
+            }
+        }
+        if chars[j] == '"' {
+            j += 1;
+            break;
+        }
+        j += 1;
+    }
+    j
+}
+
+/// 判定 `'` 处是否为字符字面量（`'x'` / `'\n'`），而非生命周期（`'a`/`'static`）。
+/// 与 `string_literals` 的口径一致。
+fn is_char_literal(chars: &[char], idx: usize) -> bool {
+    chars.get(idx + 1) == Some(&'\\') || chars.get(idx + 2) == Some(&'\'')
 }
 
 /// 命中的任务列/表名（对去注释后的代码做小写子串匹配）。
@@ -579,5 +697,43 @@ fn redcheck_sql_scanner_bites_injected_quest_columns() {
             .iter()
             .any(|(_, t)| *t == "questunit"),
         "红检失效：原始串里的任务列未被 SQL 扫描咬住"
+    );
+}
+
+/// 自动红检（reviewer-5 `4b283fad18` O-2）：注释剥离器必须识别 Rust **原始串**的全部
+/// 定界形态。旧实现只把 `"` 当串边界，原始串内含引号时会在内层 `"` 提前收尾，其后的
+/// `//`/`/*` 被当注释剥掉 ⇒ 原始串里写的 SQL 任务列被漏检（假绿）。
+#[test]
+fn redcheck_comment_stripper_handles_raw_strings_with_comment_markers() {
+    // [1] 行注释符 `//` 在原始串内（且在**奇数个**内层引号之后）不得吞掉串尾 SQL：
+    // 内层引号数为偶时旧实现也会因重新开串而碰巧保住内容，必须用奇数引号才构成区分度。
+    let line = "const S: &str = r#\"say \" // UPDATE characters SET QuestFlag = ?\"#;";
+    let hits = sql_quest_hits(&strip_comments_keep_strings(line));
+    assert!(
+        hits.iter().any(|(_, t)| *t == "questflag"),
+        "红检失效：原始串内引号后的 `//` 把 SQL 任务列吞掉了（O-2 漏检面）: {hits:?}"
+    );
+
+    // [2] 块注释符 `/* */` 同理（同样是奇数内层引号）。
+    let block = "const S: &str = r#\"say \" /* UPDATE characters SET QuestUnit = ? */\"#;";
+    let hits = sql_quest_hits(&strip_comments_keep_strings(block));
+    assert!(
+        hits.iter().any(|(_, t)| *t == "questunit"),
+        "红检失效：原始串内引号后的 `/* */` 把 SQL 任务列吞掉了: {hits:?}"
+    );
+
+    // [3] 多 `#` 定界的原始串（`#` 个数即收尾定界）整段保留；同样用奇数内层引号。
+    let multi = "const S: &str = r##\"a \" // DELETE FROM characters_quest\"##;";
+    let stripped = strip_comments_keep_strings(multi).to_lowercase();
+    assert!(
+        stripped.contains(TABLE_TOKEN),
+        "红检失效：r##\"…\"## 里的表名被剥掉"
+    );
+
+    // [4] 对照：真正的行注释仍被剥掉（收紧不能以放松注释剥离为代价）。
+    let commented = "// r#\"UPDATE characters SET QuestFlag = ?\"# 只是注释\nlet x = 1;";
+    assert!(
+        sql_quest_hits(&strip_comments_keep_strings(commented)).is_empty(),
+        "对照失效：注释里的任务列被误报"
     );
 }
