@@ -1,12 +1,41 @@
-M3④-实现 D 分片 D②「升级链」—— 改动清单
+M3④-实现 D 分片 D②「升级链」+ F-1/F-2 返工 —— 改动清单
 写集：crates/world/** + bins/game-svr/**（本卡写集）；零 src/ sql/ MirClient。
+
+本轮（F-1/F-2 返工，reviewer-6 `c5a90bf4` / owner 裁决 `b2851a44`）相对上一 head `14b26f0b` 的增量：
+
+5) bins/game-svr/src/main.rs —— **F-1：升级链两条帧按 oracle MsgQueue 出队序拆成两段**
+   - `drain_levelup_downlink` 拆分：
+       * 新 `drain_levelup_healthspell(...)`：对 `leveled` 获得者同步 `exp/level/max_exp` →
+         `recalc_session_ability` → `IncHealthSpell(2000,2000)` → 同步世界实体 → 发 `SM_HEALTHSPELLCHANGED(53)`；
+       * `drain_levelup_downlink(rec, online, sessions, gates)`：只发 `SM_LEVELUP(45)` / `SM_ABILITY(52)` /
+         `SM_SUBABILITY(752)`（= `RM_LEVELUP` 处理器内即时 `SendSocket`）。
+   - 新 `drain_kill_exp_chain(...)`：把顺序固定在一处 ——
+     `drain_levelup_healthspell`（53）→ `drain_combat_downlink`（44）→ `drain_levelup_downlink`（45/52/752）；
+     `sim_loop` 只调这一个入口（顺序本身成为可直接被用例钉住的判据）。
+   - 依据：oracle `GetExp` 的 `RM_WINEXP(139)` / `RM_LEVELUP(150)` / `RM_HEALTHSPELLCHANGED(68)` 入同一
+     `MsgQueue`、按优先级字节升序出队 ⇒ 线上序 **53 → 44 → 45 → 52 → 752**（见 01-oracle-anchors.txt [8]）。
+     上一 head 的 `44→45→52→752→53` 及其「与 oracle 一致」表述**作废并订正**。
+
+6) bins/game-svr/src/main.rs —— **F-2：AddBodyLuck 建模（撤销「死字段」结论）**
+   - `const BODYLUCK_UNIT = 5000`（`MessageSettings.cs:9`）；
+   - `add_body_luck(&mut f64, &mut i32, f64)`（`PlayObject.AddBodyLuck` 逐行；`Convert.ToInt32` 的
+     **银行家舍入**用 `f64::round_ties_even()`，等级 clamp `[-10,5]`）；
+   - `body_luck_level_of(f64)`（`Initialize()` 的 `AddBodyLuck(0)`）；
+   - `EquipInputs` 新增 `body_luck: f64` + `body_luck_level: i32`；进世界时 `body_luck: d.body_luck`、
+     `body_luck_level: body_luck_level_of(d.body_luck)`；
+   - `drain_combat_downlink` 的经验循环按 oracle 次序落账：先 `AddBodyLuck(dwExp*0.002)`，
+     再（若 `leveled`）`AddBodyLuck(100)`；
+   - `build_save_record` 写 `rec.data.body_luck = sg.equip.body_luck`（`WorldServer.cs:1290` 口径）。
+   - 依据与读取点/落库行号见 01-oracle-anchors.txt [7](a)/[9]。
+
+7) 证据措辞订正：`01-oracle-anchors.txt` [1]/[3]/[7] 与 `README.md`（入队序 ≠ 线上序；BodyLuck 不是死字段）。
+
+— 以下为上一 head `14b26f0b` 已有的 D② 内容（未变）—
 
 1) crates/world/src/combat.rs —— award_kill_exp（GetExp 的升级块）
    - `leveled` 语义订正为「**进了** `Abil.Exp >= Abil.MaxExp` 块」（不再要求"等级真的 +1"）：
-     * orig: `let mut leveled = false; if killer.exp >= killer.max_exp { ...; if killer.level < 255 { killer.level += 1; leveled = true; } ... }`
-     * now : `let leveled = killer.exp >= killer.max_exp; if leveled { killer.exp -= killer.max_exp; killer.level = killer.level.saturating_add(1); killer.max_exp = get_level_exp(...); }`
-     * 依据：oracle 的 `Abil.Level++` 有 `< MAXUPLEVEL(255)` 门，但块内 HasLevelUp / IncHealthSpell **无条件**；
-       `saturating_add` 与 `if <255 { +1 }` 在 u8 上逐值等价（`MAXUPLEVEL = byte.MaxValue`）。
+     依据：oracle 的 `Abil.Level++` 有 `< MAXUPLEVEL(255)` 门，但块内 HasLevelUp / IncHealthSpell
+     **无条件**；`saturating_add` 与 `if <255 { +1 }` 在 u8 上逐值等价。
    - 返回值口径文档同步为 `(获得经验, 是否进入升级块, 升级后等级)`。
 
 2) crates/world/src/world.rs —— TickRecord::exp_awards 文档同步（第 3 位 = 是否进升级块；满级也置位）。
@@ -16,14 +45,5 @@ M3④-实现 D 分片 D②「升级链」—— 改动清单
      锚 PlayObject.Message.cs:1671 `MakeMessage(SM_LEVELUP, Abil.Exp, Abil.Level, 0, 0)` + SendSocket。
 
 4) bins/game-svr/src/main.rs
-   - 抽出单一实现 `recalc_session_ability(sg, catalog)`（原装备/卸下成功分支的内联块原样搬入），
-     供 ① 装备/卸下 ② 升级 两处共用（避免第二份 RecalcAbilitys）。
-   - 新增 `drain_levelup_downlink(...)`：对 `rec.exp_awards` 中 `leveled==true` 的获得者按 oracle 顺序补齐：
-     ① `recalc_session_ability`（= RecalcLevelAbilitys + RecalcAbilitys）
-     ② `IncHealthSpell(2000, 2000)`（按升级后 MaxHP/MaxMP 截断）—— **然后**出帧
-     ③ 同步世界实体（apply_ability_to_entity：HP/MaxHP/DC/AC/HitPoint/SpeedPoint）
-     ④ 帧：SM_LEVELUP(45) → SM_ABILITY(52, 尾=Encode(WAbil)) → SM_SUBABILITY(752) → SM_HEALTHSPELLCHANGED(53)
-   - 运行循环里在 `drain_combat_downlink`（发 SM_WINEXP）之后、`drain_aoi_downlink` 之前调用它
-     ⇒ 线上顺序 WINEXP → LEVELUP → ABILITY → SUBABILITY → HEALTHSPELLCHANGED（锚 [1]/[3]/[5]）。
-   - 登记（不建）：AddBodyLuck（死字段）、WinExp LimitExpLevel 支（默认 1000 > 255，不可达）、
-     ShowHp 的 53 广播（生产恒 false）。见 01-oracle-anchors.txt [7]。
+   - 抽出单一实现 `recalc_session_ability(sg, catalog)`（装备/卸下与升级两处共用）。
+   - 登记（不建）：WinExp `LimitExpLevel` 支（默认 1000 > 255，不可达）、`ShowHp` 的 53 广播（生产恒 false）。

@@ -1,11 +1,27 @@
+# RC-D2-A（D② 红检）：sm_levelup 头 recog/param 交换
+# 命令：cargo test -p game-svr --offline --bin game-svr -- levelup_downlink_sends_levelup_frames_heals_and_syncs_entity
+
+   Compiling windows-sys v0.61.2
+   Compiling mio v1.2.4
+   Compiling socket2 v0.6.5
+   Compiling bevy_platform v0.19.1
+   Compiling bevy_tasks v0.19.1
+   Compiling bevy_utils v0.19.1
+   Compiling tokio v1.53.2
+   Compiling bevy_ecs v0.19.1
+   Compiling tokio-stream v0.1.19
+   Compiling sqlx-core v0.8.6
+   Compiling sqlx-mysql v0.8.6
+   Compiling sqlx v0.8.6
    Compiling mir2-data v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\data)
+   Compiling mir2-storage v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\storage)
    Compiling mir2-formula v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\formula)
    Compiling mir2-world-bevy v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\world-bevy)
    Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\world)
    Compiling mir2-envir v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\crates\envir)
    Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.91s
-     Running unittests src\main.rs (E:/tmp/m2svr-d2-target\debug\deps\game_svr-eb39968088e3f1ec.exe)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 24.81s
+     Running unittests src\main.rs (E:/tmp/m2svr-f2-target\debug\deps\game_svr-eb39968088e3f1ec.exe)
 
 running 1 test
 test tests::levelup_downlink_sends_levelup_frames_heals_and_syncs_entity ... FAILED
@@ -14,7 +30,7 @@ failures:
 
 ---- tests::levelup_downlink_sends_levelup_frames_heals_and_syncs_entity stdout ----
 
-thread 'tests::levelup_downlink_sends_levelup_frames_heals_and_syncs_entity' (32036) panicked at bins\game-svr\src\main.rs:8656:9:
+thread 'tests::levelup_downlink_sends_levelup_frames_heals_and_syncs_entity' (18580) panicked at bins\game-svr\src\main.rs:8784:9:
 assertion `left == right` failed
   left: (11, 500, 0, 0)
  right: (500, 11, 0, 0)
@@ -24,6 +40,6 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 failures:
     tests::levelup_downlink_sends_levelup_frames_heals_and_syncs_entity
 
-test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 160 filtered out; finished in 0.00s
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 162 filtered out; finished in 0.00s
 
 error: test failed, to rerun pass `-p game-svr --bin game-svr`

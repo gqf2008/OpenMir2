@@ -1,15 +1,18 @@
+# RC-D2-C（D② 红检）：删掉 drain_levelup_healthspell 的 recalc_session_ability(sg, catalog)
+# 命令：cargo test -p game-svr --offline --bin game-svr -- levelup_downlink_sends_levelup_frames_heals_and_syncs_entity
+
    Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
 warning: unused variable: `catalog`
-    --> bins\game-svr\src\main.rs:2488:5
+    --> bins\game-svr\src\main.rs:2544:5
      |
-2488 |     catalog: &dyn game_svr::ability::ItemCatalog,
+2544 |     catalog: &dyn game_svr::ability::ItemCatalog,
      |     ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_catalog`
      |
      = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
 
 warning: `game-svr` (bin "game-svr" test) generated 1 warning (run `cargo fix --bin "game-svr" -p game-svr --tests` to apply 1 suggestion)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.96s
-     Running unittests src\main.rs (E:/tmp/m2svr-d2-target\debug\deps\game_svr-eb39968088e3f1ec.exe)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.03s
+     Running unittests src\main.rs (E:/tmp/m2svr-f2-target\debug\deps\game_svr-eb39968088e3f1ec.exe)
 
 running 1 test
 test tests::levelup_downlink_sends_levelup_frames_heals_and_syncs_entity ... FAILED
@@ -18,7 +21,7 @@ failures:
 
 ---- tests::levelup_downlink_sends_levelup_frames_heals_and_syncs_entity stdout ----
 
-thread 'tests::levelup_downlink_sends_levelup_frames_heals_and_syncs_entity' (3100) panicked at bins\game-svr\src\main.rs:8658:9:
+thread 'tests::levelup_downlink_sends_levelup_frames_heals_and_syncs_entity' (2600) panicked at bins\game-svr\src\main.rs:8784:9:
 RecalcLevelAbilitys+RecalcAbilitys 必须给 MaxHP 等级派生值（非 0）
 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 
@@ -26,6 +29,6 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 failures:
     tests::levelup_downlink_sends_levelup_frames_heals_and_syncs_entity
 
-test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 160 filtered out; finished in 0.00s
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 162 filtered out; finished in 0.00s
 
 error: test failed, to rerun pass `-p game-svr --bin game-svr`
