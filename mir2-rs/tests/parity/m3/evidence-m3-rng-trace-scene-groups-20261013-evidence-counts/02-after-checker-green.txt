@@ -1,0 +1,4 @@
+== 订正后（工作树报告）==
+EVIDENCE_COUNTS dir=evidence-m3-rng-trace-scene-groups-20261013-groups-expected declared={'files': 16, 'verify': (15, 15), 'eolcheck': (16, 16)} actual_files=16 actual_verify=15
+  OK 声明计数与真实证据包一致
+rc=0

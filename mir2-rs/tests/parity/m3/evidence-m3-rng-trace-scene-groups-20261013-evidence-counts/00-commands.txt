@@ -1,0 +1,36 @@
+# 2026-10-13 证据计数牙（check_evidence_counts.py）——原始命令（cwd = mir2-rs/tests/parity/m3）
+
+## 0. 订正前真实件（master ef3160df 的旧报告）
+git show origin/master:./mir2-rs/tests/parity/m3/M3RNG场景DoD②组清单机判组必须真出现报告-20261013.md > E:/tmp/m3bag-evcount/pre-fix.md
+python -I rng-trace-scene/check_evidence_counts.py check \
+  --report E:/tmp/m3bag-evcount/pre-fix.md \
+  --dir    evidence-m3-rng-trace-scene-groups-20261013-groups-expected
+# => rc=1（declared_files=12 != actual_files=16 …）
+
+## 1. 订正后（工作树报告）
+python -I rng-trace-scene/check_evidence_counts.py check \
+  --report "M3RNG场景DoD②组清单机判组必须真出现报告-20261013.md" \
+  --dir    evidence-m3-rng-trace-scene-groups-20261013-groups-expected
+# => rc=0
+
+## 2. 工具自检
+python -I rng-trace-scene/check_evidence_counts.py selftest
+# => 7/7 GREEN
+
+## 3. 改坏必红（订正后报告副本：16 件 -> 15 件）
+sed 's/（16 件含/（15 件含/' "M3RNG场景DoD②组清单机判组必须真出现报告-20261013.md" > E:/tmp/m3bag-evcount/mutated.md
+python -I rng-trace-scene/check_evidence_counts.py check --report E:/tmp/m3bag-evcount/mutated.md \
+  --dir evidence-m3-rng-trace-scene-groups-20261013-groups-expected
+# => rc=1（declared_files=15 != actual_files=16）
+
+## 4. 四门禁（隔离 CARGO_TARGET_DIR=E:/tmp/m3bag-target，cwd = mir2-rs）
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --offline -- -D warnings
+cargo test --workspace --offline --no-fail-fast
+cargo run --offline -p msgcodegen -- --check
+
+## 5. 证据包 hash 口径复核（仓库字节 / LF；见 README §口径）
+python -I tools/evidence-hash/verify_sha256sums.py verify \
+  mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-evidence-counts --check-extra
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck \
+  mir2-rs/tests/parity/m3/evidence-m3-rng-trace-scene-groups-20261013-evidence-counts

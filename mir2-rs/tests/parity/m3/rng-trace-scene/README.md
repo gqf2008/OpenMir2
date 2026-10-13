@@ -214,6 +214,29 @@ folded 等价绿 / 折叠计数不等红 / 折叠次序不等红、缺件 PREREQ
 `scene-groupdiff-min-monster-ai-red`（三组都在但 `monster_ai` 抽数 0 < scenario 声明 1 ⇒ rc=1 点名 `MIN_GROUP_DRAWS`），零端口。
 real-run 分支在 `-Go` 未给时 **fail-closed exit 2**（不静默起栈）。
 
+### 5.1 证据报告「声明计数 vs 真实包」机判（`check_evidence_counts.py`）
+
+报告常在「证据：<dir>（`N` 件 + SHA256SUMS；`verify --check-extra` GREEN `N/N`，`eolcheck` GREEN `M/M`）」
+一行**硬编码**计数；证据包在同一片里继续增删文件时（如本卡 `groups-expected` 片：交付头追加
+`11-`/`12-`/`13-` 三件后头行仍写 `12/12`）就会 doc-vs-事实（先例：reviewer-5 F-1 `82/82`→实际 `81/82`、
+reviewer-6 在本卡携带的 M-1）。`check_evidence_counts.py` 把这条收成**机判**：
+
+```sh
+python -I rng-trace-scene/check_evidence_counts.py check \
+  --report "M3RNG场景DoD②组清单机判组必须真出现报告-20261013.md" \
+  --dir    evidence-m3-rng-trace-scene-groups-20261013-groups-expected   # GREEN rc=0
+python -I rng-trace-scene/check_evidence_counts.py selftest               # 7/7 GREEN
+```
+
+- 口径（唯一真源 = 证据包）：`N 件` 与 `eolcheck` 对**目录文件总数**（含 `SHA256SUMS.txt`/`README.md`）；
+  `verify N/N` 对 `SHA256SUMS.txt` **条目数**；
+- 不一致 ⇒ rc=1 **逐个点名**；报告**未硬编码计数**（只写计数规则、以 `SHA256SUMS.txt` 为真源）⇒ rc=0；
+  缺报告/目录/坏读取 ⇒ rc=2；
+- 改坏必红：`selftest` 覆盖件数漂移 / verify 漂移 / eolcheck 漂移 / **交付后证据包长大**，真咬。
+
+> 本工具是证据包的**自洽牙**，不是 DoD 判据本体、不进任何判据阈值；**不改** `run_rng_trace_pair.ps1`
+> 的自检项数（故本仓历史报告里记的 `29/29` 等**片时读数**不受影响）。
+
 ## 6. 命令（可复算）
 
 ```sh
@@ -222,6 +245,7 @@ cd mir2-rs/tests/parity/m3
 # 工具自检
 python -I rng-trace-probe/rng_ledger_diff.py selftest          # 37/37 GREEN（含 R-6 folded + DoD② scenario 声明）
 python -I rng-trace-scene/rng_scene_gate.py selftest           # 22/22 GREEN（含 scenario 声明 vs 代码 + 半给流水 PREREQ）
+python -I rng-trace-scene/check_evidence_counts.py selftest    # 7/7 GREEN（报告证据头行计数 vs 真实包：声明/真实）
 
 # scenario 件自身（离线；锁住声明与代码真源同口径）
 python -I rng-trace-scene/rng_scene_gate.py scenario --scenario rng-trace-scene/rng_trace_scenario.json

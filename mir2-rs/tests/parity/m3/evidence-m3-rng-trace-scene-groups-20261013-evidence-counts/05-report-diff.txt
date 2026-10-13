@@ -1,0 +1,52 @@
+== 报告 diff（origin/master ef3160df7 → 工作树）==
+diff --git "a/mir2-rs/tests/parity/m3/M3RNG\345\234\272\346\231\257DoD\342\221\241\347\273\204\346\270\205\345\215\225\346\234\272\345\210\244\347\273\204\345\277\205\351\241\273\347\234\237\345\207\272\347\216\260\346\212\245\345\221\212-20261013.md" "b/mir2-rs/tests/parity/m3/M3RNG\345\234\272\346\231\257DoD\342\221\241\347\273\204\346\270\205\345\215\225\346\234\272\345\210\244\347\273\204\345\277\205\351\241\273\347\234\237\345\207\272\347\216\260\346\212\245\345\221\212-20261013.md"
+index 300231438..d3ad28c80 100644
+--- "a/mir2-rs/tests/parity/m3/M3RNG\345\234\272\346\231\257DoD\342\221\241\347\273\204\346\270\205\345\215\225\346\234\272\345\210\244\347\273\204\345\277\205\351\241\273\347\234\237\345\207\272\347\216\260\346\212\245\345\221\212-20261013.md"
++++ "b/mir2-rs/tests/parity/m3/M3RNG\345\234\272\346\231\257DoD\342\221\241\347\273\204\346\270\205\345\215\225\346\234\272\345\210\244\347\273\204\345\277\205\351\241\273\347\234\237\345\207\272\347\216\260\346\212\245\345\221\212-20261013.md"
+@@ -6,8 +6,11 @@
+ - 同片附带收掉 reviewer-6 在上一片携带的 **O-1（Minor，非阻塞）**：`rng_scene_gate.py` 半给流水
+   `fail_prereq` 后早退，不再对已给的那一侧多跑一次 `stream-seed-equal:*`（rc/VERDICT 不变，仍 rc=2）。
+ - 写集：`mir2-rs/tests/parity/m3/**`，零 `.rs`；未起栈、未占端口。
+-- 证据：`evidence-m3-rng-trace-scene-groups-20261013-groups-expected/`（12 件 + SHA256SUMS；
+-  `verify --check-extra` GREEN 12/12，`eolcheck` GREEN 13/13）。
++- 证据：`evidence-m3-rng-trace-scene-groups-20261013-groups-expected/`（16 件含 `SHA256SUMS.txt`；
++  `verify --check-extra` GREEN 15/15，`eolcheck` GREEN 16/16）。
++  （本行为 **reviewer-6 M-1 订正**：原记 `12 件 + SHA256SUMS；verify 12/12，eolcheck 13/13` 是本片交付头
++  追加 `11-`/`12-`/`13-` 三件**之前**的旧读数；订正后由 `rng-trace-scene/check_evidence_counts.py check`
++  机判「声明 vs 真实包」。见 §5。）
+ 
+ ## 1. 缺口：DoD② 的「三组两侧都出现」无人校验（可复现假绿）
+ 
+@@ -62,3 +65,32 @@
+   + 本报告 + 证据目录。
+ - 残留（仓外，可删）：`E:/tmp/m3bag-wip`（WIP 检出）、`E:/tmp/m3bag-mut`（mutation 副本）、
+   `E:/tmp/m3bag-dod2-demo`（合成场景/流水）、`E:/tmp/_m3bag_dod2_demo.py`。
++
++## 5. 追加：reviewer-6 M-1 订正——证据头行计数 + 机判「声明 vs 真实包」（2026-10-13）
++
++reviewer-6 对 head `72c9258dc` 的 approve（entry `1fe13505`）携带一条**非阻塞 Minor M-1**：
++本报告 §0 的证据头行写 `12 件 + SHA256SUMS；verify 12/12，eolcheck 13/13`，而真实证据包是
++**16 文件**（`00`–`13` + `README.md` + `SHA256SUMS.txt`）⇒ 实测 `verify --check-extra` **15/15**、
++`eolcheck` **16/16**。根因与本卡已登记的「硬编码路径/计数下次触碰必再变 doc-vs-事实」同族
++（先例：reviewer-5 F-1 `82/82` 实际 `81/82`、reviewer-4 O-2、本卡 scenegroupdiff 报 §7）。
++
++**本片处置**：
++
++1. **订正** head 行计数为真实读数（`16 件含 SHA256SUMS.txt；verify GREEN 15/15，eolcheck GREEN 16/16`）；
++2. **把这一类漂移变成机判**：新增 `rng-trace-scene/check_evidence_counts.py`：
++   - `check --report <md> --dir <证据包>`：解报告的**证据头行**声明的 `N 件` / `verify N/N` /
++     `eolcheck M/M`，与**真实包**对账——`N 件` 与 `eolcheck` 对**目录文件总数**、`verify` 对
++     `SHA256SUMS.txt` **条目数**；不一致 ⇒ rc=1 逐个点名（fail-closed）；报告**未硬编码计数**（只写
++     计数规则、以 `SHA256SUMS.txt` 为真源）⇒ rc=0（向后兼容，也是推荐写法）；缺报告/目录/坏读取 ⇒ rc=2；
++   - `selftest` 7/7：一致绿 / 件数漂移红 / verify 漂移红 / eolcheck 漂移红 / 只写规则绿 /
++     缺件 PREREQ / **交付后证据包长大必红**（真实包增件而报告未回改 = M-1 的等价再现）。
++3. 读数：订正**前** `check` = **rc=1**（点名 `declared_files=12 != actual_files=16`、
++   `declared_verify=12/12 != 15/15`、`declared_eolcheck=13/13 != 16/16`）；订正**后** = **rc=0**；
++   改坏必红 = `selftest` 内 `package-grew-after-declaration-red` 真咬。
++
++> 口径说明：`N 件` 与 `eolcheck` 均对**目录文件总数**（含 `SHA256SUMS.txt`/`README.md`），`verify` 对
++> `SHA256SUMS.txt` 条目数（= 文件总数 − 1，SHA256SUMS 自身不在清单里）。`check_evidence_counts.py`
++> 是本卡证据包的**自洽牙**；它不是 DoD 判据本体，不进任何判据阈值，零 `.rs`。
++>
++> 本片证据包：`evidence-m3-rng-trace-scene-groups-20261013-evidence-counts/`（件数 / verify / eolcheck
++> 以该包 `SHA256SUMS.txt` 与 `README.md` 为准，不在此硬编码）。
