@@ -142,6 +142,14 @@ pub struct World {
     /// 经验表（`Exps.conf` 的 `NeedExps`）
     pub need_exps: Vec<i32>,
     pub combat_config: CombatConfig,
+    /// `SystemShare.Config.HealthFillTime` / `SpellFillTime`（`GameSvrConf.cs:1323-1324` 缺省
+    /// `300` / `800`；`ServerConf.cs:152-153` 可覆盖）。
+    ///
+    /// `BaseObject.Run` 恢复段（`BaseObject.Base.cs:47/57`）的到点门；由接线层
+    /// （`bins/game-svr` 的 sim 循环）用同一份配置灌入。合成 golden 场景不跑 [`World`] 的
+    /// 怪物 AI（`ai_enabled=false`）⇒ 这两个值在既有对拍里不被消费。
+    pub health_fill_time: i32,
+    pub spell_fill_time: i32,
     /// C# `Config.ClearDropOnFloorItemTime`
     pub clear_drop_on_floor_item_time: i64,
     /// 每张地图的 `Envir.Flag.boEXPRATE`/`ExpRate`（`PlayObject.Base.cs:143-146`）：
@@ -199,6 +207,8 @@ impl World {
             mon_random_add_value: 40,
             need_exps: vec![0; 1000],
             combat_config: CombatConfig::default(),
+            health_fill_time: 300,
+            spell_fill_time: 800,
             clear_drop_on_floor_item_time: 5 * 60 * 1000,
             map_exp_rate: vec![None; maps_len],
             pending: VecDeque::new(),
@@ -243,6 +253,15 @@ impl World {
     #[must_use]
     pub fn monster_ai_enabled(&self) -> bool {
         self.ai_enabled
+    }
+
+    /// 设置 `BaseObject.Run` 恢复段的到点门（`SystemShare.Config.HealthFillTime`/`SpellFillTime`）。
+    ///
+    /// 生产宿主在起世界时用 `[Setup] HealthFillTime/SpellFillTime`（缺省 300/800）灌入；
+    /// 合成 golden/单测不调 ⇒ 保持缺省，行为与改动前逐字节相同。
+    pub fn set_recovery_fill_times(&mut self, health_fill_time: i32, spell_fill_time: i32) {
+        self.health_fill_time = health_fill_time;
+        self.spell_fill_time = spell_fill_time;
     }
 
     /// 开启商人 tick 驱动（缺省关闭；见 `merchant_enabled` 字段说明）。
@@ -732,6 +751,9 @@ impl World {
         e.ctor_draws = ctor;
         // 生成期取数已全部完成（本函数不再抽随机数）；把结果写进 AI 初始态。
         e.ai.seed_from_spawn(dir, cool_eye, &ctor, self.clock_ms);
+        // `BaseObject` ctor `AutoRecoveryTick = GetTickCount()`（`BaseObject.cs:445`）：
+        // 恢复段从实体落库那一刻起算。
+        e.auto_recovery_tick = self.clock_ms;
         let id = self.entities.insert(e);
         if !self.enter_world(id) {
             self.entities.remove(id);
@@ -742,26 +764,32 @@ impl World {
 
     /// 死亡结算：把预算好的掉落散到地上 + 给击杀者发经验。
     ///
-    /// 命中者过期（`LastHiter`/`ExpHitter` 在命中者死亡或隐身后失效）**不在这里**判，
-    /// 由 `expire_hitters()` 在每 tick 的命令之后、死亡结算之前统一清理——照 oracle 的结构
-    /// （`BaseObject.Base.cs:119-132` 是在**命中者自己的** `Run()` 里清的），这样"归属者已死/已隐身"
-    /// 与 oracle 同样表现为"根本没人认领"，而不是"认领了但不发"。
+    /// 命中者过期（`BaseObject.Base.cs:119-132`）：`LastHiter` 30s 或命中者死亡/隐身，
+    /// `ExpHitter` 6s 或命中者死亡/隐身 —— 两条件**逐字照搬**（`||` 短路，先判时间再判存殓）。
+    ///
+    /// ⚠ oracle 是在**命中者自己的** `Run()` 里清，本骨架在每 tick 的命令之后统一清（结构等价，
+    /// 见 `settle_deaths` 的说明）。本函数使用 **sim 时钟**（`clock_ms`），不消费 RNG。
+    ///
+    /// 先前版本只做「命中者已死/已隐身」的结构清理（30s/6s 墙钟两项标为未建模，whitelist T-32）；
+    /// 本片补上两只墙钟门并收窄 T-32。
     fn expire_hitters(&mut self) {
+        let now = self.clock_ms;
         let gone: Vec<i32> = self
             .entities
             .iter()
             .filter(|e| e.death || e.ghost)
             .map(|e| e.id)
             .collect();
-        if gone.is_empty() {
-            return;
-        }
         for e in self.entities.iter_mut() {
-            if e.last_hiter.is_some_and(|h| gone.contains(&h)) {
-                e.last_hiter = None;
+            if let Some(h) = e.last_hiter {
+                if (now - e.last_hiter_tick) > 30_000 || gone.contains(&h) {
+                    e.last_hiter = None;
+                }
             }
-            if e.exp_hitter.is_some_and(|h| gone.contains(&h)) {
-                e.exp_hitter = None;
+            if let Some(h) = e.exp_hitter {
+                if (now - e.exp_hitter_tick) > 6_000 || gone.contains(&h) {
+                    e.exp_hitter = None;
+                }
             }
         }
     }
@@ -881,6 +909,7 @@ impl World {
             last_hitter,
             &cfg,
         );
+        let now = self.clock_ms;
         if let Some(e) = self.entities.get_mut(target_id) {
             e.hp = target.hp;
             // 命中者登记的**折叠**：C# 在 `_Attack` 里对 `Race > ActorRace.Play` 的目标
@@ -888,7 +917,7 @@ impl World {
             // `SetLastHiter(攻击方)`（`AnimalObject.cs:118-124`）。这里在结算之后立刻登记：
             // 本次 `_Attack` 期间的 `StruckDamage` 仍看到旧的 `LastHiter`，与 C# 同序。
             if target.race > crate::entity::ACTOR_RACE_PLAY {
-                e.set_last_hiter(actor_id);
+                e.set_last_hiter(actor_id, now);
             }
         }
         Some(outcome)
@@ -1841,5 +1870,62 @@ mod tests {
         let e = b.entities.get(2).expect("spawned");
         assert_eq!(e.gold, gold, "预算金币必须与既有生成路径一致");
         assert_eq!(e.drop_items, items, "预算物品必须一致");
+    }
+
+    /// `BaseObject.Run` 的过期段（`BaseObject.Base.cs:119-132`）：`LastHiter` 30s、`ExpHitter` 6s。
+    ///
+    /// `SetLastHiter`（`BaseObject.cs:1753-1770`）每次命中刷新 `LastHiterTick`；`ExpHitter` 只在为空时
+    /// 认领、同一命中者再次命中才续 `ExpHitterTick`。
+    /// 改坏必红：把 `expire_hitters` 的 30s/6s 门拆回「只看命中者死/隐身」（旧版）⇒ 本用例前两段红。
+    #[test]
+    fn expire_hitters_uses_wall_clock_last_hiter_30s_exp_hitter_6s() {
+        let mut w = World::new(32, 32);
+        let p = w.add_entity(player(1, "hero", 9, 9, 1));
+        let mon = {
+            let mut e = Entity::new(0, "鸡", 10, 10);
+            e.race = ACTOR_RACE_MONSTER;
+            e.hp = 100;
+            e.max_hp = 100;
+            w.add_entity(e)
+        };
+        // 命中登记：两者都置。
+        w.entities.get_mut(mon).unwrap().set_last_hiter(p, 0);
+        // 5s：两个都没过期。
+        w.clock_ms = 5_000;
+        w.tick();
+        let e = w.entities.get(mon).unwrap();
+        assert_eq!(e.last_hiter, Some(p), "5s < 30s ⇒ LastHiter 未过期");
+        assert_eq!(e.exp_hitter, Some(p), "5s < 6s ⇒ ExpHitter 未过期");
+        // 7s：`ExpHitter` 过期（6s），`LastHiter` 仍在（7s < 30s）。
+        w.clock_ms = 7_000;
+        w.tick();
+        let e = w.entities.get(mon).unwrap();
+        assert_eq!(e.exp_hitter, None, "7s > 6s ⇒ ExpHitter 过期");
+        assert_eq!(e.last_hiter, Some(p), "7s < 30s ⇒ LastHiter 未过期");
+        // 31s：`LastHiter` 过期。
+        w.clock_ms = 31_000;
+        w.tick();
+        assert_eq!(
+            w.entities.get(mon).unwrap().last_hiter,
+            None,
+            "31s > 30s ⇒ 过期"
+        );
+        // 同一命中者再次命中 ⇒ `ExpHitter` 重新认领并刷新 tick（清空后重新登记）。
+        w.entities.get_mut(mon).unwrap().set_last_hiter(p, 31_000);
+        w.clock_ms = 36_000; // 距上次登记 5s ⇒ 未过期
+        w.tick();
+        assert_eq!(
+            w.entities.get(mon).unwrap().exp_hitter,
+            Some(p),
+            "重新登记后 5s 内未过期"
+        );
+        // 命中者死亡 ⇒ 无论时间都清（oracle 的 `||` 右支）。
+        w.entities.get_mut(p).unwrap().death = true;
+        w.entities.get_mut(mon).unwrap().set_last_hiter(p, 36_000);
+        w.clock_ms = 36_100;
+        w.tick();
+        let e = w.entities.get(mon).unwrap();
+        assert_eq!(e.last_hiter, None, "命中者死亡 ⇒ LastHiter 清");
+        assert_eq!(e.exp_hitter, None, "命中者死亡 ⇒ ExpHitter 清");
     }
 }

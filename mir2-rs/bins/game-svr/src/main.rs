@@ -3566,6 +3566,15 @@ fn sim_loop(
     // 合成 golden 场景不经本函数 ⇒ 仍缺省关闭，逐字节不变。
     game_svr::mongen::enable_production_monster_ai(&mut world);
     glog!("INF", "Monster AI 已启用（生产宿主）EnableMonsterAI=true");
+    // `BaseObject.Run` 恢复段的到点门（`SystemShare.Config.HealthFillTime/SpellFillTime`，
+    // `GameSvrConf.cs:1323-1324` 缺省 300/800；与玩家周期的同名配置同源）。
+    world.set_recovery_fill_times(enter_cfg.health_fill_time, enter_cfg.spell_fill_time);
+    glog!(
+        "INF",
+        "怪物恢复节拍已灌入 HealthFillTime={} SpellFillTime={}",
+        enter_cfg.health_fill_time,
+        enter_cfg.spell_fill_time
+    );
     // **M3⑤-实现 2 第②片**：生产宿主启用商人 tick（oracle `MerchantProcessor` 的 200ms 线程
     // 单线程等价物；owner `eb3bf42f` 裁决：sim 时钟 200ms 节奏 + `RunTick/RunTime` 门 +
     // 丢墙钟预算）。`World::tick` 在怪物 AI 之后、AOI 刷新之前驱动 `merchant_tick`。

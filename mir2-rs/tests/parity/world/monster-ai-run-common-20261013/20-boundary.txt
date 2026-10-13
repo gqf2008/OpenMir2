@@ -1,0 +1,60 @@
+# 边界（oracle 冻结）：base = refs/heads/master（含 git merge master 后）
+base_full=15510a47d21c5da6b907d475097d9dadf6a7dbe3
+code_and_evidence_commit=cae3504339f4e389fe5be2e5dfd6e11876ddddc4
+reviewed_head_before_rework=ae8be20d3396bb78f47ee1ea3ac5cfd5a4e84fdb（reviewer-6 request_changes）
+
+git diff --name-only master HEAD -- src sql MirClient
+
+# => 空（oracle / 客户端 / 表结构 / 脚本语法 / 数据格式零改动）
+
+# 全量差量（master..HEAD）
+M	mir2-rs/bins/game-svr/src/main.rs
+M	mir2-rs/bins/game-svr/src/mongen.rs
+M	mir2-rs/crates/world/src/entity.rs
+M	mir2-rs/crates/world/src/monai.rs
+M	mir2-rs/crates/world/src/world.rs
+M	mir2-rs/tests/parity/whitelist.md
+A	mir2-rs/tests/parity/world/monster-ai-run-common-20261013/01-oracle-anchors.txt
+A	mir2-rs/tests/parity/world/monster-ai-run-common-20261013/02-change-summary.txt
+A	mir2-rs/tests/parity/world/monster-ai-run-common-20261013/03-tests-run-common.txt
+A	mir2-rs/tests/parity/world/monster-ai-run-common-20261013/20-boundary.txt
+A	mir2-rs/tests/parity/world/monster-ai-run-common-20261013/README.md
+A	mir2-rs/tests/parity/world/monster-ai-run-common-20261013/SHA256SUMS.txt
+A	mir2-rs/tests/parity/world/monster-ai-run-common-20261013/commands.txt
+A	mir2-rs/tests/parity/world/monster-ai-run-common-20261013/gates/10-fmt.txt
+A	mir2-rs/tests/parity/world/monster-ai-run-common-20261013/gates/11-clippy.txt
+A	mir2-rs/tests/parity/world/monster-ai-run-common-20261013/gates/12-msgcodegen.txt
+A	mir2-rs/tests/parity/world/monster-ai-run-common-20261013/gates/13-workspace-test.txt
+A	mir2-rs/tests/parity/world/monster-ai-run-common-20261013/redchecks/README.md
+A	mir2-rs/tests/parity/world/monster-ai-run-common-20261013/redchecks/rc-I1-u16-overflow-in-recovery.txt
+A	mir2-rs/tests/parity/world/monster-ai-run-common-20261013/redchecks/rc-M1-recovery-gate-removed.txt
+A	mir2-rs/tests/parity/world/monster-ai-run-common-20261013/redchecks/rc-M1b-clear-target-visible-actor.txt
+A	mir2-rs/tests/parity/world/monster-ai-run-common-20261013/redchecks/rc-M2-hp1-gate-removed.txt
+A	mir2-rs/tests/parity/world/monster-ai-run-common-20261013/redchecks/rc-M3-expire-hitters-structural-only.txt
+A	mir2-rs/tests/parity/world/monster-ai-run-common-20261013/redchecks/rc-M4-target-cleanup-removed.txt
+
+# 写集校验：只动 crates/world + bins/game-svr + whitelist + 本证据目录（本返工只动 crates/world + 证据）
+mir2-rs/bins/game-svr/src/main.rs
+mir2-rs/bins/game-svr/src/mongen.rs
+mir2-rs/crates/world/src/entity.rs
+mir2-rs/crates/world/src/monai.rs
+mir2-rs/crates/world/src/world.rs
+mir2-rs/tests/parity/whitelist.md
+mir2-rs/tests/parity/world/monster-ai-run-common-20261013/01-oracle-anchors.txt
+mir2-rs/tests/parity/world/monster-ai-run-common-20261013/02-change-summary.txt
+mir2-rs/tests/parity/world/monster-ai-run-common-20261013/03-tests-run-common.txt
+mir2-rs/tests/parity/world/monster-ai-run-common-20261013/20-boundary.txt
+mir2-rs/tests/parity/world/monster-ai-run-common-20261013/README.md
+mir2-rs/tests/parity/world/monster-ai-run-common-20261013/SHA256SUMS.txt
+mir2-rs/tests/parity/world/monster-ai-run-common-20261013/commands.txt
+mir2-rs/tests/parity/world/monster-ai-run-common-20261013/gates/10-fmt.txt
+mir2-rs/tests/parity/world/monster-ai-run-common-20261013/gates/11-clippy.txt
+mir2-rs/tests/parity/world/monster-ai-run-common-20261013/gates/12-msgcodegen.txt
+mir2-rs/tests/parity/world/monster-ai-run-common-20261013/gates/13-workspace-test.txt
+mir2-rs/tests/parity/world/monster-ai-run-common-20261013/redchecks/README.md
+mir2-rs/tests/parity/world/monster-ai-run-common-20261013/redchecks/rc-I1-u16-overflow-in-recovery.txt
+mir2-rs/tests/parity/world/monster-ai-run-common-20261013/redchecks/rc-M1-recovery-gate-removed.txt
+mir2-rs/tests/parity/world/monster-ai-run-common-20261013/redchecks/rc-M1b-clear-target-visible-actor.txt
+mir2-rs/tests/parity/world/monster-ai-run-common-20261013/redchecks/rc-M2-hp1-gate-removed.txt
+mir2-rs/tests/parity/world/monster-ai-run-common-20261013/redchecks/rc-M3-expire-hitters-structural-only.txt
+mir2-rs/tests/parity/world/monster-ai-run-common-20261013/redchecks/rc-M4-target-cleanup-removed.txt

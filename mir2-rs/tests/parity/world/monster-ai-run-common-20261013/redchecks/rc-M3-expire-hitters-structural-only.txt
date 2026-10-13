@@ -1,0 +1,6 @@
+=== RC-M3: mutation -> expire_hitters_uses_wall_clock_last_hiter_30s_exp_hitter_6s ===
+mutation: if (now - e.last_hiter_tick) > 30_000 || gone.contains(&h) {  ==>  if gone.contains(&h) {
+exit=101 verdict=RED (FAILED as expected)
+  thread 'world::tests::expire_hitters_uses_wall_clock_last_hiter_30s_exp_hitter_6s' (14672) panicked at crates\world\src\world.rs:1851:9:
+  assertion `left == right` failed: 31s > 30s ⇒ 过期
+  test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 61 filtered out; finished in 0.02s

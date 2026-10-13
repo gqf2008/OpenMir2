@@ -291,6 +291,13 @@ pub struct Entity {
     /// `WAbil.HP` / `WAbil.MaxHP`
     pub hp: u16,
     pub max_hp: u16,
+    /// `WAbil.MP` / `WAbil.MaxMP`。
+    ///
+    /// 怪物生成时照 `WorldServer.MonGen.cs:896-897` 的 `ApplyMonsterAbility`：`MP = 0`、
+    /// `MaxMP = MonsterInfo.MP`（注意 `MP` 在怪物表里被复用作 `MonsterWeapon` 的形参，见
+    /// `:903`；`BaseObject.Run` 的恢复段仍按 `WAbil.MaxMP` 回蓝）。
+    pub mp: u16,
+    pub max_mp: u16,
     /// `WAbil.DC`（低字节=下限、高字节=上限，与 C# 一致）
     pub dc: i32,
     /// `WAbil.AC`
@@ -317,6 +324,18 @@ pub struct Entity {
     /// **第一个**命中者粘住不放（`BaseObject.cs:1753` 的 `if (ExpHitter == null)`），
     /// 死亡时 `KillFunc()`（`BaseObject.cs:2429`）把经验发给它，而不是 `LastHiter`。
     pub exp_hitter: Option<i32>,
+    /// `BaseObject.LastHiterTick` / `ExpHitterTick`（`BaseObject.cs:295-297`）。
+    /// 由 [`Entity::set_last_hiter`]（`BaseObject.cs:1753-1770`）刷新；`BaseObject.Run`
+    /// 的过期段（`BaseObject.Base.cs:119-132`）用它们判 30s / 6s 墙钟过期。
+    pub last_hiter_tick: i64,
+    pub exp_hitter_tick: i64,
+    /// `BaseObject.HealthTick` / `SpellTick` / `AutoRecoveryTick`（`BaseObject.cs:287-306`）。
+    ///
+    /// 恢复段（`BaseObject.Base.cs:39-66`）按 `(now - AutoRecoveryTick) / 20` 把时间折成
+    /// `HealthTick/SpellTick`，到 `HealthFillTime`/`SpellFillTime` 才回 HP/MP。
+    pub health_tick: i32,
+    pub spell_tick: i32,
+    pub auto_recovery_tick: i64,
     /// 掉落预算里的金币（`mon.Gold`）
     pub gold: i32,
     /// 掉落预算里的物品（`mon.ItemList`，生成时算好、死亡时落地）
@@ -375,6 +394,8 @@ impl Entity {
             // 会让死亡结算把刚进图的玩家当成死者——实测踩过）
             hp: 100,
             max_hp: 100,
+            mp: 0,
+            max_mp: 0,
             dc: 0,
             ac: 0,
             hit_point: 0,
@@ -388,6 +409,11 @@ impl Entity {
             undead_power: 0,
             last_hiter: None,
             exp_hitter: None,
+            last_hiter_tick: 0,
+            exp_hitter_tick: 0,
+            health_tick: 0,
+            spell_tick: 0,
+            auto_recovery_tick: 0,
             gold: 0,
             drop_items: Vec::new(),
             death_settled: false,
@@ -405,12 +431,17 @@ impl Entity {
 
     /// C# `BaseObject.SetLastHiter`（`BaseObject.cs:1753`）。
     ///
-    /// `LastHiter` 每次都刷新；`ExpHitter` **只在为空时**才认领（第一个命中者粘住），
-    /// 之后只有同一个命中者再次命中才会续期（本骨架不做 6 秒过期，见 `world.rs` 说明）。
-    pub fn set_last_hiter(&mut self, hitter: i32) {
+    /// `LastHiter` 每次都刷新并续 `LastHiterTick`；`ExpHitter` **只在为空时**才认领
+    /// （第一个命中者粘住），之后只有同一个命中者再次命中才会续 `ExpHitterTick`
+    /// （`BaseObject.cs:1753-1770` 逐支照抄；30s/6s 过期在 `World::expire_hitters`）。
+    pub fn set_last_hiter(&mut self, hitter: i32, now: i64) {
         self.last_hiter = Some(hitter);
+        self.last_hiter_tick = now;
         if self.exp_hitter.is_none() {
             self.exp_hitter = Some(hitter);
+            self.exp_hitter_tick = now;
+        } else if self.exp_hitter == Some(hitter) {
+            self.exp_hitter_tick = now;
         }
     }
 }
