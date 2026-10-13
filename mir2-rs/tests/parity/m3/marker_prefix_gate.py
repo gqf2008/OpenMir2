@@ -20,6 +20,7 @@ r"""marker_prefix_gate.py — M3 夹具 markers 前缀口径 fail-closed 门。
    `.Substring('<M3*SEQ> '.Length)`（注释行跳过；同族新块如 ⑧/⑨ 也会被咬住）；
 2. `run_pair.ps1` 必须为 `COMPARATORS` 里每个序列都接上生产 fail-closed 牙
    `Assert-M3MarkerPrefix -Path ... -Marker '<M3*SEQ>'`（缺一个 ⇒ RED）；
+   **牙只按代码行计**：被注释掉的牙（整行以 `#` 开头）= 缺牙 ⇒ RED（O-1 收口，2026-10-14）；
    且 `run_pair.ps1` 里出现的**每个**牙 Marker 都必须登记在 `COMPARATORS`
    **或** `GUARD_ONLY_MARKERS`（新夹具族漏登记 ⇒ `check`/`selftest` 双 RED，而不是只靠自检）；
    `GUARD_ONLY_MARKERS` 是「有 markers 流牙、但比较器消费 BotSrv 直写原始件」的显式例外清单；
@@ -126,10 +127,20 @@ def scan_strips(path):
 
 
 def scan_guards(path):
-    """scan 生产 fail-closed 牙；返回 [(marker, 变量名)]。"""
+    """scan 生产 fail-closed 牙；返回 [(marker, 变量名)]（按代码行顺序，逐行匹配）。
+
+    O-1 收口（reviewer-6 `49993d1f` 的非阻塞 Observation）：旧写法对**整份文件文本**
+    `GUARD_RE.finditer(text)`，于是**注释行**里的 `Assert-M3MarkerPrefix ... -Marker 'M3*SEQ'`
+    也被当成真实牙 ⇒ 把某族的牙整行注释掉，门仍 GREEN（fail-open，假阴性）。
+    改为逐 `_code_lines(text)`（跳过 `#` 注释行）匹配：注释掉的牙 = 缺牙 ⇒ RED。
+    """
     with open(path, "r", encoding="utf-8") as fh:
         text = fh.read()
-    return [(m.group(2), m.group(1)) for m in GUARD_RE.finditer(text)]
+    out = []
+    for _i, line in _code_lines(text):
+        for m in GUARD_RE.finditer(line):
+            out.append((m.group(2), m.group(1)))
+    return out
 
 
 def _scan_botsrv_text(text):
@@ -287,6 +298,8 @@ def _mutations(dest_dir):
 
     - `run_pair_strip.ps1`：把 shop 块改回历史「去前缀截断」写法；
     - `run_pair_noguard.ps1`：删掉 shop 块的 fail-closed 牙（模拟未来新块漏接）；
+    - `run_pair_guard_commented.ps1`：把 shop 块的 fail-closed 牙**整行注释掉**（O-1 根因复现：
+      注释掉的牙必须等价于缺牙 ⇒ RED，而旧 `scan_guards` 扫全文会把它当真牙、保持 GREEN）；
     - `RobotPlayer_bareskip.cs`：把一条已迁诊断改回裸事件前缀（模拟 defect_2 回归）。
     """
     with open(RUN_PAIR, "rb") as fh:
@@ -307,6 +320,7 @@ def _mutations(dest_dir):
     variants = {
         "run_pair_strip.ps1": (src.replace(ok, strip), "ps"),
         "run_pair_noguard.ps1": (src.replace(guard, b""), "ps"),
+        "run_pair_guard_commented.ps1": (src.replace(guard, b"#" + guard), "ps"),
         "RobotPlayer_bareskip.cs": (botsrc.replace(BOTSRV_SKIP_OK, BOTSRV_SKIP_BARE), "cs"),
     }
     out = []
@@ -409,6 +423,15 @@ def _scan_synthetic(source):
     return [ln for _, ln in _code_lines(source) if STRIP_RE.search(ln)]
 
 
+def _scan_guards_synthetic(source):
+    """与 `scan_guards` 同口径的纯函数（逐代码行匹配，跳过 `#` 注释行）。"""
+    out = []
+    for _i, line in _code_lines(source):
+        for m in GUARD_RE.finditer(line):
+            out.append((m.group(2), m.group(1)))
+    return out
+
+
 def cmd_selftest(args):
     results = []
 
@@ -422,6 +445,14 @@ def cmd_selftest(args):
     check("scan-good-clean", not _scan_synthetic(good))
     check("scan-catches-strip", len(_scan_synthetic(bad)) == 1)
     check("scan-ignores-comment", not _scan_synthetic(comment))
+
+    # O-1 收口（reviewer-6 `49993d1f` 的非阻塞 Observation）：牙也必须按代码行扫。
+    # 旧写法扫全文 ⇒ 注释掉的 `Assert-M3MarkerPrefix` 仍被当成真牙（fail-open）。
+    g_real = "    Assert-M3MarkerPrefix -Path $shopMarkersPath -Marker 'M3SHOPSEQ'\n"
+    g_cmt = "#    Assert-M3MarkerPrefix -Path $shopMarkersPath -Marker 'M3SHOPSEQ'\n"
+    check("scan-guards-catches-real",
+          _scan_guards_synthetic(g_real) == [("M3SHOPSEQ", "shopMarkersPath")])
+    check("scan-guards-ignores-comment", not _scan_guards_synthetic(g_cmt))
 
     findings, info = _evaluate()
     check("real-run-pair-no-strip", not info["strips"])
@@ -464,6 +495,8 @@ def cmd_selftest(args):
     check("mutation-strip-red", any("去前缀截断" in f for f in by_name.get("run_pair_strip.ps1", [])))
     check("mutation-guard-red", any("缺生产 fail-closed 牙" in f and "M3SHOPSEQ" in f
                                      for f in by_name.get("run_pair_noguard.ps1", [])))
+    check("mutation-guard-commented-red", any("缺生产 fail-closed 牙" in f and "M3SHOPSEQ" in f
+                                               for f in by_name.get("run_pair_guard_commented.ps1", [])))
     check("mutation-bareskip-red", any("裸前缀 skip=" in f
                                         for f in by_name.get("RobotPlayer_bareskip.cs", [])))
 
