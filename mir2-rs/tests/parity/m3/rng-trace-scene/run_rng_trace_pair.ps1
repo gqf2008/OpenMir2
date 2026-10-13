@@ -534,16 +534,72 @@ if ($SelfCheckNoStack) {
     Add-Result 'station-table-refs-selftest' (($stcRc -eq 0) -and $stcMatch.Success -and
       ($stcMatch.Groups[1].Value -eq $stcMatch.Groups[2].Value)) ("rc=$stcRc")
 
+    # ㉛ 证据包书证 head 机判**接线**（reviewer-5 对 head `fe0a85ae` 的 observation O-1 收口，2026-10-14）：
+    #    `check_evidence_head.py check-pack` 此前是独立子命令（全仓仅 README 引用）⇒ 只能人工调用；
+    #    现接入标准无栈回归，使「书证 head == 机判对象」成为**门禁**而非文档约定：
+    #      ① 工具 selftest 必须 GREEN；
+    #      ② 四份已入库真件按各自 `--since` 锚 `check-pack` 必须 rc=0（缺包 ⇒ rc=2 ⇒ 同判红，不静默跳过）；
+    #      ③ 改坏必红：把临时副本包内声明 head 改成不可解析 oid（并用 --decl-file 钉住）⇒
+    #         必红且点名 `HEAD_UNRESOLVABLE`（不得静默 GREEN）。
+    $eh = Join-Path $Here 'check_evidence_head.py'
+    $ehRaw = & python -I $eh selftest 2>&1
+    $ehOut = ($ehRaw | Out-String)
+    $ehRc = [int]$LASTEXITCODE
+    $ehMatch = [regex]::Match($ehOut, 'SELFTEST GREEN: check_evidence_head (\d+)/(\d+)')
+    Add-Result 'evidence-head-selftest' (($ehRc -eq 0) -and $ehMatch.Success -and
+      ($ehMatch.Groups[1].Value -eq $ehMatch.Groups[2].Value)) ("rc=$ehRc")
+
+    $m3Root = Split-Path -Parent $Here
+    $ehPacks = @(
+      @{ dir = 'evidence-m3-rng-scene-anchor-teeth-20261014'; since = '10f0daa93' },
+      @{ dir = 'evidence-m3-rng-scene-head-o1-20261014';      since = '30c52f85' },
+      @{ dir = 'evidence-m3-rng-scene-head-pack-20261014';    since = '61f613702' },
+      @{ dir = 'evidence-m3-rng-scene-head-ambig-20261014';   since = 'b00987707' }
+    )
+    $ehRealOk = $true
+    $ehRealDetail = @()
+    foreach ($p in $ehPacks) {
+      $packDir = Join-Path $m3Root $p.dir
+      $pkRaw = & python -I $eh check-pack --dir $packDir --since $p.since 2>&1
+      $pkOut = ($pkRaw | Out-String)
+      $pkRc = [int]$LASTEXITCODE
+      # 真件必须 fail-closed：目录缺失/声明读不到/锚不合法 ⇒ rc≠0 ⇒ 判红（不许静默跳过）。
+      $pkOk = ($pkRc -eq 0) -and ($pkOut -match 'EVIDENCE_HEAD_PACK') -and
+              ($pkOut -match 'OK 包内声明 head')
+      if (-not $pkOk) { $ehRealOk = $false }
+      $ehRealDetail += ("{0}:rc={1}" -f $p.dir, $pkRc)
+      Write-Output $pkOut
+    }
+    Add-Result 'evidence-head-pack-real-green' $ehRealOk ($ehRealDetail -join ',')
+
+    # 改坏必红：复制 head-pack 到**仓内**临时目录（与 repo 同盘的 C: 外 TEMP 会让 check-pack 的
+    # `os.path.relpath` 跨盘报错——本临时目录自检后删除，不进任何提交），把 10-boundary.txt 的
+    # 声明 head 改成不可解析 oid，用 --decl-file 钉住该文件 ⇒ 必红点名 HEAD_UNRESOLVABLE
+    # （证明上面那条真件门不是恒真）。
+    $ehMut = Join-Path $Here '.selftest-headpack-mut'
+    Remove-Item -Recurse -Force $ehMut -ErrorAction SilentlyContinue
+    Copy-Item -Recurse -Force (Join-Path $m3Root 'evidence-m3-rng-scene-head-pack-20261014') $ehMut
+    $ehMutBoundary = Join-Path $ehMut '10-boundary.txt'
+    $mutText = (Get-Content -LiteralPath $ehMutBoundary -Raw) -replace 'head\s*=\s*[`"'']?[0-9a-fA-F]{7,40}', 'head = ffffffffffffffffffffffffffffffffffffffff'
+    [IO.File]::WriteAllText($ehMutBoundary, $mutText)
+    $mutRaw = & python -I $eh check-pack --dir $ehMut --since '61f613702' --decl-file '10-boundary.txt' 2>&1
+    $mutOut = ($mutRaw | Out-String)
+    $mutRc = [int]$LASTEXITCODE
+    Remove-Item -Recurse -Force $ehMut -ErrorAction SilentlyContinue
+    Add-Result 'evidence-head-pack-mutation-red' (($mutRc -eq 1) -and ($mutOut -match 'HEAD_UNRESOLVABLE')) ("rc=$mutRc")
+
     # ⑯ 本脚本从未触碰端口（自检/门/比较全离线）
     Add-Result 'no-port-touched' (-not $script:RngSceneTouchedPorts) 'offline-only'
   } finally {
     Remove-Item -Recurse -Force $tmpRoot -ErrorAction SilentlyContinue
+    # 仓内临时变异目录兜底清理（正常路径已在 ㉛ 块内删除）
+    Remove-Item -Recurse -Force (Join-Path $Here '.selftest-headpack-mut') -ErrorAction SilentlyContinue
   }
 
   $total = $script:RngPass + $script:RngFail.Count
   Write-Output ("SELFTEST ok={0}/{1} failures={2}" -f $script:RngPass, $total, ($script:RngFail -join ','))
   if ($script:RngFail.Count -gt 0) { exit 1 }
-  Write-Output 'GREEN: 无栈自检全绿（场景前置门 fail-closed + **流水头同种子**制品级门（同种子绿 / 异种子·缺 INJECT_OK 必红 / 拒绝比）+ DoD① 单一入口 -SceneGroupDiff 场景门/拒比/结论传播 + **DoD② scenario 声明组必须真的出现（缺组 / monster_ai 抽数不足必红且点名）** + scenario 声明/folded 映射与代码同口径 + folded 等价绿/计数·次序必红 + **承接卡规格锚点保鲜（check_anchors：文档 `path:line` 必须 == 当前源码首个匹配行）** + **站点表 `oracle_ref` 可解析性（文件存在 + 行号在范围内）+ LF 写出 + 零端口）'
+  Write-Output 'GREEN: 无栈自检全绿（场景前置门 fail-closed + **流水头同种子**制品级门（同种子绿 / 异种子·缺 INJECT_OK 必红 / 拒绝比）+ DoD① 单一入口 -SceneGroupDiff 场景门/拒比/结论传播 + **DoD② scenario 声明组必须真的出现（缺组 / monster_ai 抽数不足必红且点名）** + scenario 声明/folded 映射与代码同口径 + folded 等价绿/计数·次序必红 + **承接卡规格锚点保鲜（check_anchors：文档 `path:line` 必须 == 当前源码首个匹配行）** + **站点表 `oracle_ref` 可解析性（文件存在 + 行号在范围内）** + **证据包书证 head 机判接线（check_evidence_head check-pack：真件四包 rc=0 + 改坏必红 HEAD_UNRESOLVABLE）** + LF 写出 + 零端口）'
   exit 0
 }
 

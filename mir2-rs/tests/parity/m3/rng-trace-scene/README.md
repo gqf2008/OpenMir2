@@ -222,7 +222,7 @@ powershell -ExecutionPolicy Bypass -File run_rng_trace_pair.ps1 -SelfCheckNoStac
 powershell -ExecutionPolicy Bypass -File run_rng_trace_pair.ps1 -SelfCheckNoStack -SelfCheckOut <path.txt>
 ```
 
-自检覆盖（29 项；全离线）：scenario 固定输入、MonGen 冻结件零行、场景门 selftest（22/22）、
+自检覆盖（34 项；全离线）：scenario 固定输入、MonGen 冻结件零行、场景门 selftest（22/22）、
 场景门进程内正/负样本（同场景绿 / 怪集合漂移红）、账本 selftest（37/37，含 R-6 folded 与 DoD② scenario 声明）、
 folded 等价绿 / 折叠计数不等红 / 折叠次序不等红、缺件 PREREQ、LF 写出、
 `scenario-fold-group-consistency-green`（已入库 scenario 与代码同口径）、
@@ -240,7 +240,10 @@ folded 等价绿 / 折叠计数不等红 / 折叠次序不等红、缺件 PREREQ
 `scene-groupdiff-stream-seed-refused`（改坏必红：制品级种子漂移下 `-SceneGroupDiff` 整链拒比：rc=1、`ranDiff=False`、无 `RNG_CONSUMER_GROUPDIFF`）、
 **DoD② scenario 声明两项（新增）**：`scene-groupdiff-expected-group-missing-red`（两侧都缺 `drop`
 ⇒ rc=1 点名 `MISSING_EXPECTED_GROUPS`，不再是真空 `IDENTICAL`）、
-`scene-groupdiff-min-monster-ai-red`（三组都在但 `monster_ai` 抽数 0 < scenario 声明 1 ⇒ rc=1 点名 `MIN_GROUP_DRAWS`），零端口。
+`scene-groupdiff-min-monster-ai-red`（三组都在但 `monster_ai` 抽数 0 < scenario 声明 1 ⇒ rc=1 点名 `MIN_GROUP_DRAWS`）、
+**证据包书证 head 机判接线三项（本片新增，reviewer-5 O-1 收口）**：`evidence-head-selftest`（`check_evidence_head.py selftest` 19/19 GREEN）、
+`evidence-head-pack-real-green`（四份已入库真件按各自 `--since` 锚 `check-pack` rc=0；缺包/声明读不到 ⇒ rc≠0 同判红，不静默跳过）、
+`evidence-head-pack-mutation-red`（改坏必红：副本包声明 head 改不可解析 oid ⇒ rc=1 点名 `HEAD_UNRESOLVABLE`），零端口。
 real-run 分支在 `-Go` 未给时 **fail-closed exit 2**（不静默起栈）。
 
 ### 5.1 证据报告「声明计数 vs 真实包」机判（`check_evidence_counts.py`）
@@ -398,7 +401,10 @@ python -I rng-trace-scene/check_evidence_head.py selftest        # 19/19 GREEN�
   它**咬不住** O-1 原本那一类（声明的是**真实祖先**但不是读数/交付 head，如 `2fcebc6cd`；实测
   `diff 10f0daa93..2fcebc6cd` 全在证据侧 ⇒ `check-pack` 亦绿）——那一类属书证命名，靠人写对 + 评审；
   `check-pack` 把机判对象换成了书证 head，**该残留子类不变**（只是对象不再错位），其余相邻失败模式仍钉死；
-- **不改** `run_rng_trace_pair.ps1` 的自检项数（仍 31；本工具是证据包的**自洽牙**，非 DoD 判据本体）。
+- **已接入** `run_rng_trace_pair.ps1 -SelfCheckNoStack`（`evidence-head-selftest` + `evidence-head-pack-real-green` +
+  `evidence-head-pack-mutation-red`）⇒ **自检项数由 31 增至 34**（reviewer-5 对 head `fe0a85ae` 的
+  observation O-1 收口：把 `check-pack` 从「文档约定 / 人工调用」升为**门禁**；本工具仍是证据包的
+  **自洽牙**，非 DoD 判据本体、不改任何判据阈值）。
 
 ## 6. 命令（可复算）
 
