@@ -1,0 +1,43 @@
+# oracle 锚（逐条 `文件:行`，均在本仓库 src/ 实测；盘点 = M3⑧公会攻城现状盘点报告-20261013.md §1.A 行 65-67）
+
+## 落盘/加载主体
+src/M2Server/Guild/GuildManager.cs:78-110   LoadGuildInfo：GuildList.Clear → 文件缺失记错误 →
+                                            逐行 Trim/跳空 → new GuildInfo(名) → **逆序** LoadGuild
+                                            失败者 RemoveAt + SaveGuildList
+src/M2Server/Guild/GuildManager.cs:124-143  SaveGuildList：ServerIndex != 0 直接 return；
+                                            StringList.SaveToFile(GuildFile)
+src/M2Server/Guild/GuildInfo.cs:195-199     LoadGuild = LoadGuildConfig() + LoadGuildFile("<名>.txt")
+src/M2Server/Guild/GuildInfo.cs:125         GuildInfo ctor：GuildConf 路径 = GuildDir + "<名>.ini"
+src/M2Server/Guild/GuildInfo.cs:209-346     LoadGuildFile：文件不存在 ⇒ false（不清表）；
+                                            段头比对（非 '+' 行）；'#' ⇒ 分词 + StrToInt16 + RankName；
+                                            case1 公告 / case2 行会战 / case3 联盟 / case4 成员
+src/M2Server/Guild/GuildInfo.cs:366-379     SaveGuildInfoFile：0 区写 "<名>.txt" + SaveGuildConfig；
+                                            非 0 区写 GuildDir/<名>/.<ServerIndex>
+src/M2Server/Guild/GuildInfo.cs:384-431     SaveGuildFile：公告/敌对/联盟/成员四段 + " " 分隔行；
+                                            行会战 n14 = WarTime-(GetTickCount()-WarTick)，<=0 跳过
+src/M2Server/Guild/GuildConf.cs:8-17        ctor：.ini 不存在 ⇒ WriteString("Guild","GuildName") 后 Load()
+src/M2Server/Guild/GuildConf.cs:19-25       LoadConfig：ReadWriteInteger×5（BuildPoint/Aurae/Stability/
+                                            Flourishing/ChiefItemCount，默认 = 当前值）
+src/M2Server/Guild/GuildConf.cs:27-33       SaveGuildConfig：只写 ini 缓存；**全仓无 `Save()` 调用**
+                                            ⇒ 五键永不落盘（照搬）
+
+## 读写的字节口径
+src/OpenMir2/Common/StringList.cs:260-274   SaveToFile：先 GetEncoding(fileName) →
+                                            `new FileStream(fileName, FileMode.Open)` ⇒ **目标不存在即抛**
+                                            （被 SaveGuildFile/SaveGuildList 的 try/catch 吞掉）
+src/OpenMir2/Common/StringList.cs:276-291   LoadFromFile：GB2312 + StreamReader.ReadLine
+src/OpenMir2/Common/StringList.cs:293-301   GetEncoding(fileName)：FileMode.Open + BOM 探测
+src/OpenMir2/Common/ConfigFile.cs:263       ConfigFile.Load：StreamReader(GB2312, 默认探 BOM)
+src/OpenMir2/Common/ConfigFile.cs:348-378   ConfigFile.Save 的写出形态（GuildConf 不调用；仅登记）
+src/OpenMir2/HUtil32.cs:391-402             GetValidStr3(…, char[])：Split(div, 2, RemoveEmptyEntries)
+src/OpenMir2/HUtil32.cs:359-362/369-372     StrToInt / StrToInt16 = TryParse（失败取默认）
+src/OpenMir2/HUtil32.cs:35-38               GetTickCount = Environment.TickCount（注入点见 ⑧-1）
+
+## 段头 / 默认值（⑧-2 已落 crates/data）
+src/Modules/SystemModule/Conf/Model/GameSvrConf.cs:1850-1853  公告 / 敌对行会 / 联盟行会 / 行会成员
+src/Modules/SystemModule/Conf/Model/GameSvrConf.cs:1855        掌门人
+src/Modules/SystemModule/Conf/Model/GameSvrConf.cs:1720        GuildRankNameLen = 16
+src/Modules/SystemModule/Conf/Model/GameSvrConf.cs:1289/1290   GuildDir / GuildFile
+src/Modules/SystemModule/Conf/ServerConf.cs:69-70              [Share] GuildDir / GuildFile（有读取点）
+src/Modules/SystemModule/Conf/ServerConf.cs:498-500            GuildRankNameLen / MemberMaxLimit / …
+# 注：段头四键在 ServerConf.LoadConfig 里**无读取点** ⇒ 恒为 GameSvrConf 初值（探针实测同值）。

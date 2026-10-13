@@ -1,0 +1,36 @@
+# M3⑧-3 行会文件加载/落盘 —— 命令四件套（命令 + 原始件 + 路径 + hash）
+# 车道：openmir2-worker-5 / worktree m3cs / branch worktree-m3-guild-file-store
+# base = origin/master 7febf884a（本片开工后 master 前移两次：9ff7ff064 → 65602bf86 → 7febf884a，
+#        每次都 `git merge origin/master` 后在本合并树上重跑四门禁，见 06..09）
+# 硬约束：零起栈、零占端口（只读离线：C# 探针 + cargo 用例 + 临时目录）
+
+## 0) 卡与写集
+$ walgit collab thread openmir2-m3-guild-file-store      # issue 68015a01：write_set = crates/data/** + bins/game-svr/**
+$ walgit collab entry --kind status --id openmir2-m3-guild-file-store --parent 68015a01... --push walgit
+# 本片**未改** bins/game-svr（文件层落在 crates/data；启动接线归 ⑧-4 行会状态机卡），
+# 边界见 10-boundary.txt。
+
+## 1) oracle 真身探针（C#，直调 M2Server.Guild.*，在临时目录实跑；零起栈、零端口）
+$ dotnet run --project mir2-rs/tests/parity/m3/guild-store-probe -c Release -- E:/tmp/m3cs-guildstore
+guild-store-probe: wrote 89 fields / 3 byte vectors -> E:/tmp/m3cs-guildstore/vectors
+# 产物（已入库）：mir2-rs/tests/parity/m3/guild-store-probe/vectors/guild_store_vectors.tsv
+#                 mir2-rs/tests/parity/m3/guild-store-probe/vectors/guild_file_bytes.tsv
+# 探针临时树（不入库）：E:/tmp/m3cs-guildstore/work/GuildBase/**（列出见 02-probe-run.txt）
+
+## 2) Rust 向量用例（逐字段 + 逐字节；11 条）
+$ cd mir2-rs && CARGO_TARGET_DIR=E:/tmp/m3cs-target cargo test -p mir2-data --offline --no-fail-fast
+# 原始输出：03-rust-vectors.txt
+
+## 3) 改坏必红（两次；均在本合并树上实跑 → 红 → 还原 → 绿，还原后与备份逐字节相同）
+# 3a：把保存时的分隔行 " " 改成 ""（`lines.push(" ".to_string())` → `String::new()`）
+#     ⇒ vector_save_bytes_exact FAILED（1 failed / rc=101）——04-redcheck-a-separator.txt
+# 3b："顺手修好" oracle quirk：行会战剩余时长改读 `s18` 而非残留 `s20`
+#     ⇒ guild::tests::war_time_is_always_zero_on_load + vector_load_quattro_sections_and_quirks 双红
+#        （1 failed + 1 failed / rc=101）——05-redcheck-b-wartime-quirk.txt
+# 还原：cp 备份回去后 `diff` 无输出（RESTORED-IDENTICAL），重跑 11/11 + 30/30 绿。
+
+## 4) 四门禁（合并树 · 隔离 CARGO_TARGET_DIR=E:/tmp/m3cs-target · --offline）
+$ cargo fmt --all -- --check                                                   # 06-gate-fmt.txt
+$ cargo clippy --workspace --all-targets --offline -- -D warnings               # 07-gate-clippy.txt
+$ cargo test --workspace --offline --no-fail-fast                               # 08-gate-test.txt
+$ cargo run -p msgcodegen --offline -- --check                                  # 09-gate-msgcodegen.txt

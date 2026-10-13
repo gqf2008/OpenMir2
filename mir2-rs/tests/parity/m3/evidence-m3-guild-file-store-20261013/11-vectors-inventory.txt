@@ -1,0 +1,15 @@
+# 向量件清单（LF 归一 = git blob 口径；`.gitattributes` 里 *.tsv/*.cs/*.csproj 都是 text eol=lf）
+
+8e91bc13b1b5e45cadc164d8993917ad0e3f2494b46fb814d4a4af03b39c2f7f  mir2-rs/tests/parity/m3/guild-store-probe/guild-store-probe.csproj  (1375 B on disk)
+24f06fffd47b77195d2640ac3d1727e6a748b0329e595d7ae8ef5e724504ba10  mir2-rs/tests/parity/m3/guild-store-probe/Program.cs  (22115 B on disk)
+4b7b646ae99b04f4f3fb1d2a5235864acf24fa6296696443392692229c649299  mir2-rs/tests/parity/m3/guild-store-probe/vectors/guild_store_vectors.tsv  (2883 B on disk)
+1632f1b71ad746d088c4527212b5e98979939525da8384b3d2bb3988c89de26b  mir2-rs/tests/parity/m3/guild-store-probe/vectors/guild_file_bytes.tsv  (531 B on disk)
+
+## 向量行数
+  guild_store_vectors.tsv: 89 行
+  guild_file_bytes.tsv: 3 行
+
+## scenario 一览（guild_file_bytes.tsv 的 sha256 列由探针当场算出，可在 oracle 侧复算）
+  B_save_precreated_txt  sha256=39dfd1f34180e31d08d0691cf53a9e2748352d34d575289bad4e4483d6959cdc  len=83 B
+  D_load_guild_info_list_rewritten  sha256=74e8ee830fd27717b6d0e0bee65abfae672c2be51ec99951c3b3844fef204682  len=14 B
+  E_server_index_nonzero_list_unchanged  sha256=137e68f32af2a468220846f14fb8d9d2b785806a151c1ef4a44e68e6d2874edc  len=12 B

@@ -1,0 +1,50 @@
+# 改坏必红（a）：保存时的段间分隔行 " " 改成空串
+# 变异（`crates/data/src/guild.rs` `serialize_guild_file`，3 处）：
+#   -    lines.push(" ".to_string());
+#   +    lines.push(String::new());
+# 为什么这是一条真牙齿：oracle `GuildInfo.SaveGuildFile` 在四段之间写的是 `saveList.Add(" ")`
+# （一个空格的行），不是空行；空行会被 `LoadGuildFile` 的 `string.IsNullOrEmpty(s18)` 跳过而
+# 不改变段解析，但**文件字节不同** ⇒ 逐字节判据必须出红。
+# 还原：`cp E:/tmp/m3cs-guild.rs.bak crates/data/src/guild.rs` 后 diff 无输出。
+
+$ cd mir2-rs && CARGO_TARGET_DIR=E:/tmp/m3cs-target cargo test -p mir2-data --test guild_store_vectors --offline
+   Compiling mir2-data v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\crates\data)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.78s
+     Running tests\guild_store_vectors.rs (E:/tmp/m3cs-target\debug\deps\guild_store_vectors-0352d403c94f6da9.exe)
+
+running 11 tests
+test vector_parse_save_round_trip_drops_allies ... ok
+test vector_config_sections_and_limits ... ok
+test vector_get_valid_str3_tokenizer ... ok
+test vector_save_bytes_exact ... FAILED
+test vector_missing_list_file_fails_closed ... ok
+test vector_save_refuses_to_create_target ... ok
+test vector_rank_name_truncates_only_over_30 ... ok
+test vector_load_quattro_sections_and_quirks ... ok
+test vector_ini_is_only_ever_created_empty ... ok
+test vector_save_guild_list_noop_on_nonzero_server_index ... ok
+test vector_load_guild_info_rewrites_list ... ok
+
+failures:
+
+---- vector_save_bytes_exact stdout ----
+
+thread 'vector_save_bytes_exact' (32832) panicked at crates\data\tests\guild_store_vectors.rs:230:5:
+assertion `left == right` failed
+  left: "b9abb8e60d0a2bb9abb8e6d2bb0d0a2bb9abb8e6b6fe0d0a0d0ab5d0b6d4d0d0bbe10d0a0d0ac1aac3cbd0d0bbe10d0a0d0ad0d0bbe1b3c9d4b10d0a23393920b3c9d4b10d0a2bd2d20d0a2bb1fb0d0a"
+ right: "b9abb8e60d0a2bb9abb8e6d2bb0d0a2bb9abb8e6b6fe0d0a200d0ab5d0b6d4d0d0bbe10d0a200d0ac1aac3cbd0d0bbe10d0a200d0ad0d0bbe1b3c9d4b10d0a23393920b3c9d4b10d0a2bd2d20d0a2bb1fb0d0a"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    vector_save_bytes_exact
+
+test result: FAILED. 10 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+error: test failed, to rerun pass `-p mir2-data --test guild_store_vectors`
+
+## 还原后复跑（绿）
+$ cp E:/tmp/m3cs-guild.rs.bak mir2-rs/crates/data/src/guild.rs && diff 备份 当前   # 无输出
+$ cargo test -p mir2-data --offline --no-fail-fast
+  test result: ok. 30 passed; 0 failed; 0 ignored
+  test result: ok. 11 passed; 0 failed; 0 ignored   # guild_store_vectors
