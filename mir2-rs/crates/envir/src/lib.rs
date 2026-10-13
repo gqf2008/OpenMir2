@@ -17,6 +17,7 @@ pub mod conf;
 pub mod error;
 pub mod mapfile;
 pub mod mapinfo;
+pub mod mapquest;
 pub mod mongen;
 pub mod paths;
 pub mod points;
@@ -32,6 +33,10 @@ pub use mapfile::{
 pub use mapinfo::{
     parse_flag_commands, parse_map_info_lines, parse_section_line, parse_section_line_with_state,
     MapInfoEntry, MapInfoFlag, MapInfoParseState,
+};
+pub use mapquest::{
+    create_quest, parse_map_quest_line, HiddenFileCreation, HiddenNpcTarget, MapQuestInfo,
+    MapQuestLine, MapQuestLoad, QuestNpcRecord, TEXT_SPLIT_CONST as MAP_QUEST_TEXT_SPLIT_CONST,
 };
 pub use mongen::{
     mon_gen_count, parse_mon_gen_line, MonGenInfo, MON_GEN_THREAD_MON_LIMIT, TEXT_SPLIT_CONST,
