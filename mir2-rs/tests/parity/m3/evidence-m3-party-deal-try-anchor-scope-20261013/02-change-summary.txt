@@ -1,0 +1,127 @@
+commit caa8e9642c30ea54074d5177d742e31fe184aa5b
+test(m3-party-deal-try): O-1 收口——锚门收窄到 deal_try 注释块
+
+== diff vs base f4e8a29f077d2ddb33af9da9028be4191522b9d8 ==
+ .../bins/game-svr/tests/deal_try_oracle_anchors.rs | 92 +++++++++++++++++++++-
+ 1 file changed, 90 insertions(+), 2 deletions(-)
+diff --git a/mir2-rs/bins/game-svr/tests/deal_try_oracle_anchors.rs b/mir2-rs/bins/game-svr/tests/deal_try_oracle_anchors.rs
+index 717ba5b98..b0a6d8ec5 100644
+--- a/mir2-rs/bins/game-svr/tests/deal_try_oracle_anchors.rs
++++ b/mir2-rs/bins/game-svr/tests/deal_try_oracle_anchors.rs
+@@ -8,6 +8,10 @@
+ //! `WorldServer.cs` 的 `ProcessPlayObjectData` 方法体为 `:625-737`、其 `catch` 在
+ //! `:732-735`；`:734` 的日志串写作 `WorldServer::ProcessHumans` 是 oracle 自身的复制粘贴
+ //! 痕迹，不改变包围方法名。本门同时锁死这两点。
++//!
++//! O-1 收口（reviewer-5 `494ba02e5`）：Rust 侧断言面不再对**整份文件**做 `contains`，而是
++//! 收窄到 **deal_try 相关注释块**（块内须含 deal_try 语义标记）——别处注释/字符串出现同串时
++//! 既不假绿也不假红；标记漂移时正锚断言 fail-closed 必红。
+ 
+ use std::fs;
+ use std::path::PathBuf;
+@@ -25,6 +29,46 @@ fn read(rel: &str) -> String {
+     fs::read_to_string(&p).unwrap_or_else(|e| panic!("读 {} 失败: {e}", p.display()))
+ }
+ 
++/// deal_try 注释块的语义标记（小写子串；任一命中即视该注释块为 deal_try 相关）。
++const DEAL_TRY_COMMENT_MARKERS: [&str; 6] = [
++    "clientdealtry",
++    "deal_try",
++    "getposecreate",
++    "poseobject",
++    "processplayobjectdata",
++    "dealtry",
++];
++
++/// 抽出源码中 **deal_try 相关注释块** 的文本（reviewer-5 `494ba02e5` O-1 收口）。
++///
++/// 规则：只取**整行注释**（`trim_start` 后以 `//` 起头的连续行成块），块内（小写）含
++/// [`DEAL_TRY_COMMENT_MARKERS`] 任一标记才计入。这样注释锚断言既不会命中代码/字符串里的
++/// 同串，也不会被别处无关注释的 `:929` 之类误判。
++///
++/// fail-closed：标记若被改名/删走，返回文本将缺锚 ⇒ 调用方正锚断言必红（不会静默恒绿）。
++fn deal_try_comment_bytes(src: &str) -> String {
++    let lines: Vec<&str> = src.lines().collect();
++    let mut out = String::new();
++    let mut i = 0usize;
++    while i < lines.len() {
++        if lines[i].trim_start().starts_with("//") {
++            let start = i;
++            while i < lines.len() && lines[i].trim_start().starts_with("//") {
++                i += 1;
++            }
++            let block = lines[start..i].join("\n");
++            let lower = block.to_lowercase();
++            if DEAL_TRY_COMMENT_MARKERS.iter().any(|m| lower.contains(m)) {
++                out.push_str(&block);
++                out.push('\n');
++            }
++        } else {
++            i += 1;
++        }
++    }
++    out
++}
++
+ #[test]
+ fn deal_try_oracle_anchors_match_source() {
+     // ① oracle 侧：注释声称的每个行号都指向声称的语句（oracle 冻结，行号即契约）。
+@@ -54,8 +98,15 @@ fn deal_try_oracle_anchors_match_source() {
+     }
+ 
+     // ② Rust 侧：deal_try 注释必须引用 ① 的行号，且不得回退到旧漂移号码。
+-    let trade = read("mir2-rs/bins/game-svr/src/trade.rs");
+-    let main = read("mir2-rs/bins/game-svr/src/main.rs");
++    //    O-1：断言面收窄到 deal_try 相关注释块（见 `deal_try_comment_bytes`）。
++    let trade = deal_try_comment_bytes(&read("mir2-rs/bins/game-svr/src/trade.rs"));
++    let main = deal_try_comment_bytes(&read("mir2-rs/bins/game-svr/src/main.rs"));
++    assert!(
++        trade.len() > 200 && main.len() > 200,
++        "deal_try 注释块提取过短（trade.rs={} B, main.rs={} B）——标记漂移会让门禁退化，fail-closed",
++        trade.len(),
++        main.len()
++    );
+     for (name, src) in [("trade.rs", &trade), ("main.rs", &main)] {
+         for good in [":932", ":933", ":936", ":938", ":958-960"] {
+             assert!(
+@@ -80,3 +131,40 @@ fn deal_try_oracle_anchors_match_source() {
+         );
+     }
+ }
++
++/// 自动红检（O-1）：注释锚断言必须**只在 deal_try 注释块内**生效。
++#[test]
++fn redcheck_anchor_scope_is_deal_try_only() {
++    // [1] 无关注释里的旧锚 `:929` 不得被当成 deal_try 的锚（不假红/不假绿）。
++    let unrelated = "// 别的特性：Operate.cs:929 是另一条路径\nfn f() {}\n";
++    assert!(
++        !deal_try_comment_bytes(unrelated).contains(":929"),
++        "无关注释被误计入 deal_try 断言面: {:?}",
++        deal_try_comment_bytes(unrelated)
++    );
++
++    // [2] 代码/字符串里的同串不得被计入（原实现整文件 `contains` 会命中）。
++    let in_code = "fn deal_try_target_of() { let _s = \":929\"; }\n";
++    assert!(
++        !deal_try_comment_bytes(in_code).contains(":929"),
++        "代码/字符串里的 `:929` 被误计入: {:?}",
++        deal_try_comment_bytes(in_code)
++    );
++
++    // [3] deal_try 注释块内的回退锚必须被咬住（正锚与反锚都要看得到）。
++    let scoped_regression =
++        "// oracle `GetPoseCreate()`；旧锚回退 `:929` 与 `:955-958`\nfn deal_try_target_of() {}\n";
++    let scoped = deal_try_comment_bytes(scoped_regression);
++    assert!(
++        scoped.contains(":929") && scoped.contains(":955-958"),
++        "deal_try 注释块内的回退锚未被提取，反锚断言将形同虚设: {scoped:?}"
++    );
++
++    // [4] 无标记的注释块整体不计入（fail-closed 边界：标记漂移 ⇒ 正锚断言自然红）。
++    let unmarked = "// Operate.cs:932-960 但没有任何组队语义标记\n";
++    assert!(
++        deal_try_comment_bytes(unmarked).is_empty(),
++        "无 deal_try 标记的注释块不应计入: {:?}",
++        deal_try_comment_bytes(unmarked)
++    );
++}

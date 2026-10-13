@@ -1,0 +1,25 @@
+== RC1 mutated: main.rs deal_try 注释块内 :958-960 -> :955-958（应为红）==
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3pt\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.82s
+     Running tests\deal_try_oracle_anchors.rs (E:/tmp/openmir2-m3pt-target\debug\deps\deal_try_oracle_anchors-b25b1e4975fe3cbb.exe)
+
+running 2 tests
+test redcheck_anchor_scope_is_deal_try_only ... ok
+test deal_try_oracle_anchors_match_source ... FAILED
+
+failures:
+
+---- deal_try_oracle_anchors_match_source stdout ----
+
+thread 'deal_try_oracle_anchors_match_source' (13888) panicked at bins\game-svr\tests\deal_try_oracle_anchors.rs:118:13:
+main.rs 仍残留旧漂移锚 `:955-958`（应为 :932/:933/:936/:938/:958-960）
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    deal_try_oracle_anchors_match_source
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p game-svr --test deal_try_oracle_anchors`
+rc=101

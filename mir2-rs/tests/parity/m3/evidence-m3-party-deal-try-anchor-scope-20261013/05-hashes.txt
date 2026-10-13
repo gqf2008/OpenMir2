@@ -1,0 +1,11 @@
+== 改前 sha256（交付树 HEAD=caa8e9642c30ea54074d5177d742e31fe184aa5b）==
+fd296d710f0a2c3e2a8ca305b59fe97fd33de04086ff9657f64d027f4379316d *bins/game-svr/src/main.rs
+3f7ef3785d324cd8ce470a3baec43ce8add7a4cee0321f7f116cd3b599464538 *bins/game-svr/src/trade.rs
+7b5a3a5bf3d94feecd0e4505ca003afcd296ec541b823bf15992807c7bfddc0f *bins/game-svr/tests/deal_try_oracle_anchors.rs
+== 改后 sha256（还原后，git status 应干净）==
+fd296d710f0a2c3e2a8ca305b59fe97fd33de04086ff9657f64d027f4379316d *bins/game-svr/src/main.rs
+3f7ef3785d324cd8ce470a3baec43ce8add7a4cee0321f7f116cd3b599464538 *bins/game-svr/src/trade.rs
+7b5a3a5bf3d94feecd0e4505ca003afcd296ec541b823bf15992807c7bfddc0f *bins/game-svr/tests/deal_try_oracle_anchors.rs
+
+?? mir2-rs/tests/parity/m3/evidence-m3-party-deal-try-anchor-scope-20261013/
+[git status 到此结束，仅未跟踪证据目录]

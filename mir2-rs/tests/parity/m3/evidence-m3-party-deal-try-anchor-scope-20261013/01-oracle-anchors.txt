@@ -1,0 +1,102 @@
+== M3⑦-3 O-1 锚门收窄：oracle 锚与 Rust 注释块 ==
+
+-- oracle: src/M2Server/Player/PlayObject.Operate.cs 930-961（实测）--
+   930	                return;
+   931	            }
+   932	            IActor poseObject = GetPoseCreate();
+   933	            if (poseObject.Race == ActorRace.Play)
+   934	            {
+   935	                IPlayerActor targetPlayObject = (IPlayerActor)poseObject;
+   936	                if (targetPlayObject != this)
+   937	                {
+   938	                    if (targetPlayObject.GetPoseCreate() == this && !targetPlayObject.Dealing)
+   939	                    {
+   940	                        if (targetPlayObject.AllowDeal && targetPlayObject.IsCanDeal)
+   941	                        {
+   942	                            targetPlayObject.SysMsg(ChrName + MessageSettings.OpenedDealMsg, MsgColor.Green, MsgType.Hint);
+   943	                            SysMsg(targetPlayObject.ChrName + MessageSettings.OpenedDealMsg, MsgColor.Green, MsgType.Hint);
+   944	                            this.OpenDealDlg(targetPlayObject);
+   945	                            targetPlayObject.OpenDealDlg(this);
+   946	                        }
+   947	                        else
+   948	                        {
+   949	                            SysMsg(MessageSettings.PoseDisableDealMsg, MsgColor.Red, MsgType.Hint);
+   950	                        }
+   951	                    }
+   952	                    else
+   953	                    {
+   954	                        SendDefMessage(Messages.SM_DEALTRY_FAIL, 0, 0, 0, 0);
+   955	                    }
+   956	                }
+   957	            }
+   958	            else
+   959	            {
+   960	                SendDefMessage(Messages.SM_DEALTRY_FAIL, 0, 0, 0, 0);
+   961	            }
+
+-- oracle: src/GameSrv/Word/WorldServer.cs 730-736（ProcessPlayObjectData 的 catch，吞 NRE）--
+   730	                }
+   731	            }
+   732	            catch (Exception ex)
+   733	            {
+   734	                LogService.Error("[Exception] WorldServer::ProcessHumans");
+   735	                LogService.Error(ex.StackTrace);
+   736	            }
+
+-- Rust 注释锚所在文件与行（grep）--
+mir2-rs/bins/game-svr/src/trade.rs:46://! - `ClientChangeDealGold` 的 `DealCreat==null || GetPoseCreate()!=DealCreat` 时不发
+mir2-rs/bins/game-svr/src/trade.rs:435:/// `target` = 宿主解析出的 `GetPoseCreate()` 结果（`Absent` = 无前排/前排为自身；`NotPlayer` = 前排不是玩家）；
+mir2-rs/bins/game-svr/src/trade.rs:437:/// （`Operate.cs:913-926` 四条守卫在 `:932` 的 `GetPoseCreate()` 之前）。
+mir2-rs/bins/game-svr/src/trade.rs:483:        // oracle `Operate.cs:933` 的 `poseObject.Race`（`:932` 取 `GetPoseCreate()`）：
+mir2-rs/bins/game-svr/src/trade.rs:484:        // ① `GetPoseCreate() == null` ⇒ 对 null 解引用 ⇒ NRE，被
+mir2-rs/bins/game-svr/src/trade.rs:485:        //    `WorldServer.ProcessPlayObjectData` 的 `catch`（`WorldServer.cs:732-735`）吞掉 ⇒ 一个帧都不发；
+mir2-rs/bins/game-svr/src/trade.rs:486:        // ② `poseObject == this` ⇒ `:936` 的内层 `if (targetPlayObject != this)` 无 `else` ⇒ 也不发帧。
+mir2-rs/bins/game-svr/src/trade.rs:487:        // 两态在 oracle 里都「静默」，Rust 不得发 `SM_DEALTRY_FAIL`（那不是 oracle 行为）。
+mir2-rs/bins/game-svr/src/trade.rs:512:/// `ClientDealTry` 的 `GetPoseCreate()` 分辨率（宿主用世界/展示表算出后传入 [`deal_try`]）。
+mir2-rs/bins/game-svr/src/trade.rs:515:    /// 无前排对象（`GetPoseCreate() == null`）或前排为自身（`poseObject == this`）。
+mir2-rs/bins/game-svr/src/trade.rs:517:    /// oracle 两态都**不发任何帧**：前者在 `Operate.cs:933` 的 `poseObject.Race` 处 NRE
+mir2-rs/bins/game-svr/src/trade.rs:518:    /// （`:932` 取 `GetPoseCreate()`；被 `WorldServer.cs:732-735` 的 `catch` 吞），后者走
+mir2-rs/bins/game-svr/src/trade.rs:521:    /// 前排不是玩家（`Operate.cs:958-960` 的 `else` ⇒ `SM_DEALTRY_FAIL`）。
+mir2-rs/bins/game-svr/src/trade.rs:523:    /// 前排是另一个玩家（`Operate.cs:938`）；`faces_me` = 对方 `GetPoseCreate() == this`。
+mir2-rs/bins/game-svr/src/trade.rs:657:/// `other_is_pose` = `GetPoseCreate() == DealCreat`。`CanNotGetBackDeal` 且已放金币时回
+mir2-rs/bins/game-svr/src/trade.rs:1571:    /// `DealTryTarget::NotPlayer`：前置守卫全过但前排不是玩家 ⇒ `SM_DEALTRY_FAIL`，不开交易。
+mir2-rs/bins/game-svr/src/trade.rs:1584:    /// `DealTryTarget::Absent`：无前排对象（oracle `GetPoseCreate() == null` ⇒ `Operate.cs:932-933`
+mir2-rs/bins/game-svr/src/trade.rs:1585:    /// 对 null 解引用 ⇒ NRE 被 `WorldServer.cs:732-735` 吞）或前排为自身（`:936` 内层 `if` 无 `else`）
+mir2-rs/bins/game-svr/src/trade.rs:1586:    /// ⇒ oracle **一个帧都不发**；Rust 不得发 `SM_DEALTRY_FAIL`。
+mir2-rs/bins/game-svr/src/trade.rs:1608:    /// `GetPoseCreate()` 之前）：`Absent` 也要先吃 `DisableDeal`/`Dealing`/`TryDealTime`/`IsCanDeal`。
+mir2-rs/bins/game-svr/src/main.rs:1099:/// `BaseObject.GetPoseCreate()`（`src/M2Server/Actor/BaseObject.cs:1253-1263`）：
+mir2-rs/bins/game-svr/src/main.rs:1120:/// `ClientDealTry` 的 `GetPoseCreate()` 目标判定（`PlayObject.Operate.cs:932-960`）。
+mir2-rs/bins/game-svr/src/main.rs:1122:/// oracle 在 `:932` 取 `GetPoseCreate()`、`:933` 对结果直接取 `poseObject.Race`：
+mir2-rs/bins/game-svr/src/main.rs:1123:/// - `null` ⇒ NullReferenceException，被 `WorldServer.ProcessPlayObjectData`（方法体
+mir2-rs/bins/game-svr/src/main.rs:1124:///   `:625-737`）的 `catch`（`WorldServer.cs:732-735`；该 catch 的日志串写作
+mir2-rs/bins/game-svr/src/main.rs:1125:///   `WorldServer::ProcessHumans`，与包围方法名不符）吞掉 ⇒ **一个帧都不发**（不是 `SM_DEALTRY_FAIL`）；
+mir2-rs/bins/game-svr/src/main.rs:1126:/// - 非玩家 ⇒ `:958-960` 的 `else` ⇒ `SM_DEALTRY_FAIL`；
+mir2-rs/bins/game-svr/src/main.rs:1128:/// - 玩家且 `!= this` ⇒ `:938` 取对方 `GetPoseCreate()` 是否回指自己（`faces_me`）。
+mir2-rs/bins/game-svr/src/main.rs:1151:/// `poseObject.Race == ActorRace.Play`（`PlayObject.Operate.cs:933`）。
+mir2-rs/bins/game-svr/src/main.rs:1161:/// 口径：纯状态机在 [`game_svr::trade`]；本函数只负责「找会话 → 解析 `GetPoseCreate()` →
+mir2-rs/bins/game-svr/src/main.rs:1167:/// （`ClientDealTry` 内部走 `GetPoseCreate()`），本函数同理只传目标判定。
+mir2-rs/bins/game-svr/src/main.rs:1201:    // 目标解析：`CM_DEALTRY` 用 `GetPoseCreate()`，其余命令用已建立的 `DealCreat`。
+mir2-rs/bins/game-svr/src/main.rs:1372:/// `Dealing` 且（`GetPoseCreate() != DealCreat` 或 `DealCreat == this` 或 `DealCreat == null`）
+mir2-rs/bins/game-svr/src/main.rs:3096:/// - 成功 ⇒ `Dir = nDir` + 取目标（`GetPoseCreate` = 前方格首个 `!Ghost && !Death` 对象）⇒
+mir2-rs/bins/game-svr/src/main.rs:3100:///   **取目标之后、`_Attack` 之前**求值（`PlayObject.Attack.cs:73`），所以 `GetPoseCreate()==null`
+mir2-rs/bins/game-svr/src/main.rs:3164:    // `PlayObject.Attack.cs:26` 的 `attackTarget = targetObject ?? GetPoseCreate()` 发生在
+mir2-rs/bins/game-svr/src/main.rs:3171:    // 取目标：`GetPoseCreate()` = 前方格首个 `!Ghost && !Death` 的对象。
+mir2-rs/bins/game-svr/src/main.rs:3188:        //   `attackTarget = targetObject ?? GetPoseCreate()`（`:26`，前方格无目标 ⇒ null）；
+mir2-rs/bins/game-svr/src/main.rs:4470:/// oracle `WorldServer.ProcessPlayObjectData`（`WorldServer.cs:698`）的周期存档判定：
+mir2-rs/bins/game-svr/src/main.rs:6590:        // `Dealing` 但 `GetPoseCreate() != DealCreat` / `DealCreat == this` / `DealCreat == null`。
+mir2-rs/bins/game-svr/src/main.rs:7328:    /// oracle `PlayObject.Operate.cs:932-933` 先取 `GetPoseCreate()` 再直接读 `poseObject.Race`：
+mir2-rs/bins/game-svr/src/main.rs:7329:    /// 无前排（`null`）⇒ NullReferenceException，被 `WorldServer.ProcessPlayObjectData` 的
+mir2-rs/bins/game-svr/src/main.rs:7330:    /// `catch`（`WorldServer.cs:732-735`）吞掉 ⇒ **一个帧都不发**（不是 `SM_DEALTRY_FAIL`）；
+mir2-rs/bins/game-svr/src/main.rs:7331:    /// 前排非玩家 ⇒ `:958-960` 的 `else` ⇒ `SM_DEALTRY_FAIL`。
+mir2-rs/bins/game-svr/src/main.rs:7365:        // ① 前方格为空 ⇒ `GetPoseCreate() == null` ⇒ oracle NRE 吞错 ⇒ 不发任何帧。
+mir2-rs/bins/game-svr/src/main.rs:7372:        // ② 前方格是怪（非玩家）⇒ `:958-960` else ⇒ `SM_DEALTRY_FAIL`。
+mir2-rs/bins/game-svr/src/main.rs:7402:    /// （oracle `Operate.cs:932-933` 的 NRE 被 `WorldServer.cs:732-735` 吞掉），前排为怪时发
+mir2-rs/bins/game-svr/src/main.rs:7403:    /// `SM_DEALTRY_FAIL`（非空转对照）。
+mir2-rs/bins/game-svr/src/main.rs:7406:    /// `frames.is_empty()` 必红（实得 1 帧 `SM_DEALTRY_FAIL`）。
+mir2-rs/bins/game-svr/src/main.rs:7455:        // ① 前方格 (11,10) 空 ⇒ `GetPoseCreate() == null` ⇒ oracle NRE 吞错 ⇒ 不发任何帧。
+mir2-rs/bins/game-svr/src/main.rs:7476:        // ② 非空转对照：前方格放一只怪（非玩家）⇒ `:958-960` else ⇒ `SM_DEALTRY_FAIL`。
+mir2-rs/bins/game-svr/src/main.rs:11125:    ///   `attackTarget = targetObject ?? GetPoseCreate()`（`:26`）⇒ 前方格无目标 = null；
+
+-- O-1 收窄规则：只有「整行注释块」且块内含下列任一标记才计入 deal_try 断言面 --
+   markers = [clientdealtry, deal_try, getposecreate, poseobject, processplayobjectdata, dealtry]
+   ⇒ 代码/字符串里的同串、以及无关注释里的 :929/:934 不再被计入（RC2 正控）
