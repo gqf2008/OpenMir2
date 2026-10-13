@@ -1,0 +1,13 @@
+# 环境
+# worktree : E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m2-svr
+# 分支     : drop-exp-host（base = origin/master 5964479f3）
+# 隔离 target: CARGO_TARGET_DIR=E:/tmp/m2svr-target（检出外）
+# cwd      : mir2-rs
+
+cargo fmt --all -- --check
+cargo clippy --offline --workspace --all-targets -- -D warnings
+cargo test --offline --workspace
+cargo run --offline -p msgcodegen -- --check
+
+# 本片唯一构造级判据（+ 红检）
+cargo test --offline -p game-svr --bin game-svr tick_frame_order_puts_stamina_after_kill_exp_chain

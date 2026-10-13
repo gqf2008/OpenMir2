@@ -1,0 +1,31 @@
+# reviewer-5 O-1（卡 openmir2-m3-drop-exp-wiring）oracle 锚点
+# 结论：同一 tick 的出帧次序必须是「消息段（击杀经验/升级链 + AOI 出现帧）→ BaseObject.Run 体力/魔力点段」。
+
+[1] PlayObject.Run() 顶层次序（src/M2Server/Player/PlayObject.Message.cs）
+  19     public override void Run()
+  30-36  交易自动取消（Dealing）——与本片无关
+  70-141 T-28 周期恢复段（IncHealth/IncSpell/IncHealing 消费）——Rust `drain_recovery`
+  744-762 自动经验 / 复活
+  765    base.Run();   <== 消息段 + BaseObject 的填充/体力段都在这里，晚于上面的恢复段
+
+[2] BaseObject.Run()（src/M2Server/Actor/BaseObject.Base.cs）——base.Run() 的内部次序
+  25     public virtual void Run()
+  28-31  while (GetMessage(ref processMessage)) { Operate(processMessage); }   <== 消息段：
+          Rust 的击杀经验/升级链（drain_kill_exp_chain）与 AOI 出现帧（drain_aoi_downlink）对应这一段
+  37     if (!Death) { 体力/魔力填充段 }
+  40     AutoRecoveryTick = HUtil32.GetTickCount();
+  44-56  HP 支（HP<MaxHP && HealthTick>=HealthFillTime ⇒ +MaxHP/75+1，夹 MaxHP）+ HealthSpellChanged()
+  57-69  MP 支 + HealthSpellChanged()
+  74-81  HealthTick/SpellTick 到量清零
+  105    if ((HealthTick < -SystemShare.Config.HealthFillTime) && (WAbil.HP > 1)) { HP--; HealthTick += HealthFillTime; HealthSpellChanged(); }
+         <== Rust `drain_stamina`（填充 + 负值扣血）
+
+  ⇒ oracle 出帧序： kill-exp 链（53→44→45→52→752） → AOI（10/41） → 体力点段 53
+    （Rust 修复前把 drain_stamina 放在 drain_kill_exp_chain 之前 ⇒ 体力点 53 落到了 44/45/52/752 之前）
+
+[3] 周期存档在 Run() 之后（src/GameSrv/Word/WorldServer.cs）
+  697    playObject.Run();
+  698-703 if (!FrontEngine.IsFull() && (GetTickCount() - playObject.SaveRcdTick) > SaveHumanRcdTime) {
+              playObject.SaveRcdTick = GetTickCount(); playObject.DealCancelA(); SaveHumanRcd(playObject); }
+  ⇒ Rust 的 drain_periodic_save 必须排在 drain_run_downlinks（Run 等价位）之后，
+    存档体才读到本 tick 升级/恢复/体力点后的 WAbil（修复前它排在 kill-exp 链之前）。

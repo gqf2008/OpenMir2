@@ -1,0 +1,29 @@
+# 边界（净差量 = merge-base(origin/master, HEAD) .. HEAD）
+# base = origin/master 5964479f3ee09386a1885858cabc3a8d48cd3b9e
+# merge-base(origin/master, HEAD) = 5964479f3ee09386a1885858cabc3a8d48cd3b9e
+
+$ git diff --name-only origin/master HEAD
+mir2-rs/bins/game-svr/src/main.rs
+mir2-rs/tests/parity/world/drop-exp-recovery-order-20261013/01-oracle-anchors.txt
+mir2-rs/tests/parity/world/drop-exp-recovery-order-20261013/02-commands.txt
+mir2-rs/tests/parity/world/drop-exp-recovery-order-20261013/03-change.txt
+mir2-rs/tests/parity/world/drop-exp-recovery-order-20261013/04-gates-fmt.txt
+mir2-rs/tests/parity/world/drop-exp-recovery-order-20261013/05-gates-clippy.txt
+mir2-rs/tests/parity/world/drop-exp-recovery-order-20261013/06-gates-workspace-test.txt
+mir2-rs/tests/parity/world/drop-exp-recovery-order-20261013/07-gates-msgcodegen.txt
+mir2-rs/tests/parity/world/drop-exp-recovery-order-20261013/08-redcheck-frame-order.txt
+mir2-rs/tests/parity/world/drop-exp-recovery-order-20261013/README.md
+mir2-rs/tests/parity/world/drop-exp-recovery-order-20261013/09-boundary.txt   （本文件，证据补提交）
+mir2-rs/tests/parity/world/drop-exp-recovery-order-20261013/SHA256SUMS.txt    （证据补提交）
+
+$ git diff --name-only origin/master HEAD -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage
+（空；rc=0）
+⇒ 冻结面（C# oracle `src/`、`sql/`、`MirClient`、`crates/protocol`、`crates/storage`）零改动。
+
+$ git diff --stat origin/master HEAD
+ mir2-rs/bins/game-svr/src/main.rs                  |  173 +-
+ .../drop-exp-recovery-order-20261013/README.md     |   57 +
+ （其余均为本证据目录 .txt/.md）
+
+唯一生产代码文件 = `mir2-rs/bins/game-svr/src/main.rs`（本 lane 写集），其余全在本片证据目录。
+未动 `crates/world/**`、`tests/parity/m3/**`（m3bag/m3cs 写集）、`tools/**`。

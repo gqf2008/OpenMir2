@@ -1,0 +1,38 @@
+# reviewer-5 O-1 收口：sim_loop「消息段 → 体力/魔力点段」帧序对齐 oracle
+
+reviewer-5 在卡 `openmir2-m3-drop-exp-wiring` 的 review（`1791904017`）给出 O-1（Minor，非阻塞）：
+> oracle 的体力/魔力点段（`BaseObject.Run :26-109`）在**消息循环之后**跑，而 Rust `sim_loop`
+> 把 `drain_stamina` 放在 `drain_kill_exp_chain` **之前**。若同一 tick 内 `drain_stamina` 对某玩家
+> 发出 `SM_HEALTHSPELLCHANGED(53)`，且该玩家同 tick 又拿到击杀经验帧，则 53 落在 44/45/52/752
+> **之前**（oracle 应为最后一条）。
+
+## 改前（origin/master 5964479f3，`bins/game-svr/src/main.rs` sim_loop）
+```
+drain_recovery(...)            // T-28，PlayObject.Run :70-141 —— 位置正确（在消息段之前）
+drain_stamina(...)             // 体力/魔力点段 —— 错：应在消息段之后
+drain_periodic_save(...)       // 周期存档
+drain_kill_exp_chain(...)      // 消息段：53 → 44 → 45 → 52 → 752
+drain_aoi_downlink(...)        // 消息段：AOI 出现帧 10 / 41
+```
+同 tick 既升级又掉体力点时，线上序 = `53(体力) → 53(升级) → 44 → 45 → 52 → 752`。
+
+## 改后
+```
+drain_recovery(...)            // 不变
+drain_run_downlinks(...)       // = drain_kill_exp_chain → drain_aoi_downlink → drain_stamina
+drain_periodic_save(...)       // 移到 Run() 等价位之后（WorldServer.cs:697-703）
+```
+其中新增的 `drain_run_downlinks` 把「消息段 → 体力/魔力点段」固定在一处（可被用例钉住），
+线上序 = `53(升级) → 44 → 45 → 52 → 752 → 53(体力)`。
+
+## 为什么 `drain_periodic_save` 一起后移
+oracle `WorldServer.ProcessHumans()`（`WorldServer.cs:697-703`）是 `playObject.Run();` **之后**才查
+`SaveRcdTick` 并 `SaveHumanRcd`。体力点段现在晚于 kill-exp 链，若存档仍留在原位，存档体就会漏掉
+本 tick 的体力点 HP−1（正是 `scoped_diff` 的 `characters_ablity.Hp` 敏感面）⇒ 必须一起后移，
+存档才读到本 tick 升级/恢复/体力点后的 `WAbil`。
+
+## 判据 / 牙齿
+- 新用例 `tests::tick_frame_order_puts_stamina_after_kill_exp_chain`：同 tick 既 `leveled` 又
+  `HealthTick < -HealthFillTime` ⇒ 断言 `idents == [53,44,45,52,752,53]` 且末条 53 的 `param = MaxHP-1`。
+- 改坏必红：把 `drain_stamina` 挪回 `drain_kill_exp_chain` 之前 ⇒ 用例 `FAILED rc=101`、
+  `left: [53, 53, 44, 45, 52, 752]`（见 `08-redcheck-frame-order.txt`）。

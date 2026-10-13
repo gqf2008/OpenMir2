@@ -4562,7 +4562,10 @@ fn drain_recovery(
 
 /// 每 tick 的**体力/魔力点段**（oracle `BaseObject.Run()` 的 `:26-109`，见 [`game_svr::stamina`]）。
 ///
-/// 与 [`drain_recovery`] 同一位置（`PlayObject.Run()` 的恢复段之后）：逐会话（**按键排序**）调
+/// 位置（reviewer-5 O-1 收口）：oracle 一次 `PlayObject.Run()` 的 `base.Run()`（`PlayObject.Message.cs:765`）
+/// 先把**消息段**跑完（`BaseObject.Base.cs:28-34`；攻击/击杀经验链与 AOI 出现帧都在这一段出帧），
+/// 再跑本段（`:36-68` 的填充 + `:110-115` 的负值扣血）⇒ 本段必须晚于 `drain_kill_exp_chain` /
+/// `drain_aoi_downlink`（次序由 [`drain_run_downlinks`] 固定）。逐会话（**按键排序**）调
 /// [`game_svr::stamina::stamina_tick`]，命中（`HealthSpellChanged()` 被调用）⇒ 照
 /// `BaseObject.HealthSpellChanged()` 给自己发 `SM_HEALTHSPELLCHANGED`（`ShowHp` 再广播）。
 /// **一次 `Run()` 可命中两次**（HP 支 `:55` + MP 支 `:68`）⇒ 逐次各发一条帧，帧内容取自当次
@@ -4658,6 +4661,44 @@ fn periodic_save_due(save_rcd_tick: &mut i64, save_time: i64, now: i64) -> bool 
     } else {
         false
     }
+}
+
+/// **每 tick `world.tick()` 之后的帧面下行段（oracle 次序）**：一次 `PlayObject.Run()` 里
+/// `base.Run()`（`PlayObject.Message.cs:765`）先跑**消息段**（`BaseObject.Base.cs:28-34` 的
+/// `while (GetMessage(ref msg)) Operate(msg);`）——本宿主的击杀经验/升级链（`drain_kill_exp_chain`）
+/// 与 AOI 出现帧（`drain_aoi_downlink`）都对应这一段——再跑**体力/魔力填充段**
+/// （`BaseObject.Base.cs:36-68`）与**体力点扣血段**（`:110-115`，`drain_stamina`）。
+/// ⇒ 出帧次序固定在 `drain_kill_exp_chain`（53→44→45→52→752）→ `drain_aoi_downlink` → `drain_stamina`。
+/// 与 [`drain_stamina`] 文档「登记（阶段顺序）」一致（reviewer-5 O-1 收口）。
+///
+/// **改坏必红**：把 [`drain_stamina`] 挪到 [`drain_kill_exp_chain`] 之前 ⇒ 同 tick 既升级又掉点时
+/// 帧序变成 `53(体力) → 53(升级) → 44/45/52/752`，`tick_frame_order_puts_stamina_after_kill_exp_chain` 必红。
+#[allow(clippy::too_many_arguments)]
+fn drain_run_downlinks(
+    rec: &mir2_world::TickRecord,
+    world: &mut mir2_world::World,
+    displays: &downlink::DisplayTable,
+    online: &OnlineRegistry,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    range: i32,
+    health_fill_time: i32,
+    spell_fill_time: i32,
+) {
+    drain_kill_exp_chain(
+        rec, world, displays, online, sessions, gates, catalog, range,
+    );
+    drain_aoi_downlink(world, displays, online, gates);
+    drain_stamina(
+        sessions,
+        world,
+        online,
+        gates,
+        range,
+        health_fill_time,
+        spell_fill_time,
+    );
 }
 
 /// 每 tick 的**周期存档**（oracle `WorldServer.cs:698-703`，卡 `openmir2-m3-periodic-save`）。
@@ -6826,19 +6867,23 @@ fn sim_loop(
             enter_cfg.ref_msg_range,
             &leveled_this_tick,
         );
-        // 体力/魔力点段（oracle `BaseObject.Run()` `:26-109`）：同一 `Run()` 里紧接
-        // `PlayObject` 的恢复段之后；命中会回写 `Entity.hp` ⇒ 必须在周期存档之前。
-        drain_stamina(
-            &mut ground_sessions,
+        // **reviewer-5 O-1 收口**：oracle 一次 `PlayObject.Run()` = 消息段（击杀经验/升级链 +
+        // AOI 出现帧）→ `BaseObject.Run()` 的体力/魔力点段；次序由 [`drain_run_downlinks`] 固定。
+        drain_run_downlinks(
+            &rec,
             &mut world,
+            &displays,
             &online,
+            &mut ground_sessions,
             &gates,
+            &enter_cfg.catalog,
             enter_cfg.ref_msg_range,
             enter_cfg.health_fill_time,
             enter_cfg.spell_fill_time,
         );
-        // 周期存档（oracle `WorldServer.cs:698-703`）：oracle 在同一 `Run()` 之后查，
-        // 这里紧跟 [`drain_recovery`]（保证存档体读到的是本 tick 恢复后的 `WAbil`）。
+        // 周期存档（oracle `WorldServer.cs:698-703` / `ProcessHumans`）：oracle 在
+        // `playObject.Run()` **之后**才查 `SaveRcdTick` ⇒ 本段必须在 [`drain_run_downlinks`] 之后，
+        // 存档体才读到本 tick 的升级/恢复/体力点后的 `WAbil`（reviewer-5 O-1 收口）。
         let _ = drain_periodic_save(
             &mut ground_sessions,
             &saves,
@@ -6849,22 +6894,6 @@ fn sim_loop(
             enter_cfg.save_human_rcd_time,
             now_ms(),
         );
-        // `openmir2-m3-attack-magic-wiring`（第一片）：本 tick 的攻击结算 → `SM_STRUCK`（受击者自见）
-        // + `SM_NOWDEATH`（死亡广播）；D①/D② 的经验/升级链也在此发出。
-        // 顺序（升级链 53 → 经验 44 → 升级链 45/52/752）由 `drain_kill_exp_chain` 集中固定
-        // （reviewer-6 `c5a90bf4` F-1 的 oracle `MsgQueue` 出队序，见该函数文档）。
-        drain_kill_exp_chain(
-            &rec,
-            &mut world,
-            &displays,
-            &online,
-            &mut ground_sessions,
-            &gates,
-            &enter_cfg.catalog,
-            enter_cfg.ref_msg_range,
-        );
-        // S3 后半段（第一格）：世界 tick 的 AOI 结果 → `SM_TURN` + `SM_FEATURECHANGED` 回帧。
-        drain_aoi_downlink(&world, &displays, &online, &gates);
         if ticks.is_multiple_of(50) {
             let diag = world_aoi_diag(&world, &displays);
             glog!(
@@ -10818,6 +10847,104 @@ mod tests {
         sessions.get_mut("hero").unwrap().stamina.replay_cursor = now_ms();
         drain_stamina(&mut sessions, &mut world, &online, &gates, 12, 300, 800);
         assert!(rx0.try_recv().is_err(), "无变更 ⇒ 不得回帧");
+    }
+
+    /// **reviewer-5 O-1 收口（同 tick 帧序）**：同 tick 内既走**击杀经验/升级链**又走
+    /// **体力点扣血段**时，出帧次序 = `drain_kill_exp_chain`（53→44→45→52→752）→ `drain_stamina`（53），
+    /// 对齐 oracle 一次 `PlayObject.Run()` 的「消息段 → `BaseObject.Run()` 体力点段」
+    /// （`PlayObject.Message.cs:765` + `BaseObject.Base.cs:28-34/36-68/110-115`）。
+    ///
+    /// 红检：把 [`drain_run_downlinks`] 里的 `drain_stamina` 挪到 `drain_kill_exp_chain` 之前
+    /// ⇒ `idents` 变成 `[53(体力), 53(升级), 44, 45, 52, 752]` ⇒ 本用例必红。
+    #[test]
+    fn tick_frame_order_puts_stamina_after_kill_exp_chain() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(64, 64);
+        let killer = {
+            let mut e = mir2_world::Entity::new(0, "killer".to_string(), 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        world.tick();
+        {
+            let e = world.entities.get_mut(killer).unwrap();
+            e.exp = 500;
+            e.level = 11;
+            e.max_exp = 1000;
+            e.hp = 10;
+            e.max_hp = 20;
+        }
+        let displays = downlink::DisplayTable::new();
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "uk".into(),
+                chr_name: "killer".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 903,
+                actor_id: killer,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(killer);
+        sg.equip.abil.level = 10;
+        sg.state.wabil.level = 10;
+        sg.state.wabil.hp = 10;
+        sg.state.wabil.mp = 5;
+        // 体力点已被攻击/移动推到阈值以下（`BaseObject.Base.cs:105`），本轮恰好重放一次 `Run()`。
+        sg.stamina.health_tick = -400;
+        sg.stamina.replay_cursor = now_ms() - 60;
+        sg.stamina.auto_recovery_tick = sg.stamina.replay_cursor;
+        sessions.insert("killer".into(), sg);
+
+        let rec = mir2_world::TickRecord {
+            exp_awards: vec![(killer, 500, true, 11)],
+            ..Default::default()
+        };
+        drain_run_downlinks(
+            &rec,
+            &mut world,
+            &displays,
+            &online,
+            &mut sessions,
+            &gates,
+            &game_svr::ability::StdItemCatalog::new(),
+            12,
+            300,
+            800,
+        );
+        let mut frames = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            assert_eq!(socket, 903);
+            frames.push(CommandMessage::from_bytes(&body).expect("12B"));
+        }
+        let idents: Vec<u16> = frames.iter().map(|cm| cm.ident).collect();
+        assert_eq!(
+            idents,
+            vec![
+                mir2_protocol::messages::SM_HEALTHSPELLCHANGED,
+                mir2_protocol::messages::SM_WINEXP,
+                mir2_protocol::messages::SM_LEVELUP,
+                mir2_protocol::messages::SM_ABILITY,
+                mir2_protocol::messages::SM_SUBABILITY,
+                mir2_protocol::messages::SM_HEALTHSPELLCHANGED,
+            ],
+            "升级链（53→44→45→52→752）之后才是体力点段（53）"
+        );
+        // 首条 53 = 升级 `IncHealthSpell(2000,2000)` 后的满血快照；末条 53 = 体力点扣 1 点后的快照。
+        let max_hp = sessions["killer"].state.wabil.max_hp;
+        assert!(max_hp > 1, "升级链已把 MaxHP 提到等级派生值");
+        assert_eq!(frames[0].param, max_hp, "升级段 53 是满血快照");
+        let last = frames.last().unwrap();
+        assert_eq!(last.recog, killer, "体力点 53 的 recog = ActorId");
+        assert_eq!(last.param, max_hp - 1, "体力点段 HP -= 1");
+        assert_eq!(sessions["killer"].state.wabil.hp, max_hp - 1);
     }
 
     /// **本片构造级判据（移动消耗点）**：`handle_move_cmd` 成功支按 oracle 扣体力/魔力点——
