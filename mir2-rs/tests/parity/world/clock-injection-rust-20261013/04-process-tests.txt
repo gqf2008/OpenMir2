@@ -1,0 +1,16 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+     Running tests\clock_inject.rs (E:/tmp/m2svr-target\debug\deps\clock_inject-3eeaee9757c7e973.exe)
+
+running 6 tests
+test clock_env_injection_logs_probe ... ok
+test invalid_clock_env_exits_nonzero ... [clock-injection 诊断] invalid MIR2_CLOCK_MS ⇒ exit=Some(1) elapsed=6.8735ms
+Error: MIR2_CLOCK_MS 不是合法 i64 毫秒: not-an-int
+
+ok
+test support::teeth::legacy_probe_release_port_is_left_unprotected ... ok
+test support::teeth::ports_are_unique_across_parallel_callers ... ok
+test support::teeth::ports_live_outside_the_os_dynamic_range ... ok
+test unset_clock_env_is_inert ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.78s
+

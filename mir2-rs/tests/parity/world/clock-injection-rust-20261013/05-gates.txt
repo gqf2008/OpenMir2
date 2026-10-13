@@ -1,0 +1,17 @@
+# 05 · 四门禁（合并树 origin/master ad0bba301）
+
+$ cargo fmt --all -- --check
+fmt rc=0
+
+$ cargo clippy --workspace --all-targets --offline -- -D warnings
+    Checking mir2-parity-tests v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\tests\parity)
+    Checking game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.13s
+clippy rc=0（0 warning/error）
+
+$ cargo test --workspace --offline    # 合并树 ad0bba301 + 本片改动
+汇总：101 suites · 1185 passed · 0 failed · 22 ignored
+
+$ cargo run -p msgcodegen --offline -- --check
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+msgcodegen rc=0

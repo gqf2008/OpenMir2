@@ -23,6 +23,7 @@
 
 mod auth;
 mod cert;
+mod clock;
 mod config;
 mod dbclient;
 mod enter;
@@ -196,6 +197,16 @@ async fn main() -> Result<()> {
     // 未设/空 ⇒ `None`（生产路径保持既有随机源，行为一字不改）；非法值 ⇒ 显式非零退出
     // （fail-closed，不许「以为注入了种子、其实没有」）。
     let rng_seed = seed::env_seed()?;
+    // **M3 `openmir2-m3-clock-injection`（Rust 半）**：`MIR2_CLOCK_MS` 可注入时钟。未设/空 ⇒
+    // 不启用（`now_ms()` 取墙钟、`world.clock_ms` 从 0 起，行为一字不改）；非法值 ⇒ 显式非零
+    // 退出（fail-closed，与 `MIR2_RNG_SEED` 同款纪律：不许「以为注入了时钟、其实没有」）。
+    if let Some(origin) = clock::env_clock()? {
+        glog!(
+            "INF",
+            "时钟注入：{}（now_ms=origin+单调经过；world.clock_ms 起点=origin）",
+            clock::probe_line(origin)
+        );
+    }
     glog!(
         "INF",
         "游戏服务启动：监听 {}:{}（CheckBlock={}，{ } 张地图占位，config={}）",
@@ -5171,6 +5182,18 @@ fn sim_loop(
     // 尺寸表已由调用方按「注册表优先，无注册表则 WorldMaps 占位（且非空，已 fail-closed）」算好；
     // `map_id` = 注册表下标，与 `resolve_map_id` 同源。
     let mut world = mir2_world::World::with_maps(map_sizes);
+    // **M3 `openmir2-m3-clock-injection`（Rust 半）**：注入启用时把 `world.clock_ms` 的起点设成
+    // 与 `now_ms()` **同一个** origin（此后仍按 oracle 的 +200ms/tick 推进）⇒ 两侧同起点。
+    // 未注入 ⇒ 保持 `World::with_maps` 的 `clock_ms: 0`（行为一字不改）。
+    if let Some(origin) = clock::injected_origin() {
+        world.clock_ms = origin;
+        glog!(
+            "INF",
+            "{} world_clock_ms={}",
+            clock::probe_line(origin),
+            world.clock_ms
+        );
+    }
     // **M3 T-30**：种子注入只在设了 `MIR2_RNG_SEED` 时覆盖随机源（未设 ⇒ 保持 `World::with_maps`
     // 的既有随机源，`crates/world` 行为一字不改）。发一条与 C# 钩子同形的 `SEED_PROBE` 自证行：
     // 参考序列走**独立实例**（[`seed_probe_text`]）——与 C# 钩子 / `rng_trace` 头部同口径，
@@ -6904,10 +6927,11 @@ struct KeepAlive {
 const SOC_CHECK_TIMEOUT_MS: i64 = 50;
 
 /// 当前毫秒（C# 用 `HUtil32.GetTickCount`；这里只有"差值/超时"参与判定）。
+///
+/// **M3 `openmir2-m3-clock-injection`**：设了 `MIR2_CLOCK_MS` ⇒ 走 `clock::now_ms()` 的注入时钟
+/// （origin + 单调经过）；未设 ⇒ 与改动前逐字节相同（墙钟）。
 fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+    clock::now_ms()
 }
 
 /// 发送口的判定结果（`ProcessBufferSend` `:58-90` 的纯函数版，便于单测）。
