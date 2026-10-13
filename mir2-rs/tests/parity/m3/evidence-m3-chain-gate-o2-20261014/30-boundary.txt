@@ -14,7 +14,10 @@ A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o2-20261014/20-gate-fmt.txt
 A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o2-20261014/21-gate-clippy.txt
 A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o2-20261014/22-gate-msgcodegen.txt
 A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o2-20261014/23-gate-test.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o2-20261014/30-boundary.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o2-20261014/31-code-diff.txt
 A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o2-20261014/README.md
+A	mir2-rs/tests/parity/m3/evidence-m3-chain-gate-o2-20261014/SHA256SUMS.txt
 M	mir2-rs/tests/parity/m3/fixture_chain_gate.py
 M	mir2-rs/tests/parity/m3/m3_whitelist_registry_audit.py
 M	mir2-rs/tests/parity/m3/marker_prefix_gate.py
