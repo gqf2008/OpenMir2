@@ -1,2 +1,4 @@
+# 四门禁（⑧-4 第①片 F-1 返工 + 合并 origin/master f4d7173fb1b4599ab9eb6b4b19dc9afc59c48051 后，合并树；CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target，全部 --offline）
+
 # cargo fmt --all -- --check
 rc=0

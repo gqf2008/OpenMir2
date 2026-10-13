@@ -1,6 +1,7 @@
 本证据包的原始命令（cwd = worktree 根 `E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3cs`；
 编译隔离 `CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target`，全部 `--offline`）。
-base = origin/master `cf3f81c35`（见 09-boundary.txt）。
+base = origin/master `f4d7173fb`（F-1 返工片先 `git merge origin/master` 再重跑；见 09-boundary.txt）。
+首审 base = `cf3f81c35`（下方 §1–§5 的读数即该版本；§6 = F-1 返工）。
 
 1. 构造级向量（第①片 22 条）：
    cd mir2-rs && CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target \
@@ -37,3 +38,20 @@ base = origin/master `cf3f81c35`（见 09-boundary.txt）。
    python -I tools/evidence-hash/verify_sha256sums.py write mir2-rs/tests/parity/m3/evidence-m3-guild-state-20261013
    python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/m3/evidence-m3-guild-state-20261013
    python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-guild-state-20261013
+
+6. F-1 返工（本片；reviewer-5 `41d42c32`）：
+   git fetch origin && git merge origin/master        # base 跟上 master
+   # 改动：set_conf 置脏；set_guild_info/add_guild/del_ally_guild/ally_guild/backup_guild_file 去脏；
+   #       member_list_text 改 encode_utf16().count()；新增 6 条 f1_* 向量
+   CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo test -p mir2-world --lib guild:: --offline
+        ⇒ 12-f1-rust-vectors.txt（28 passed）
+   RC3：set_conf 去掉 `self.bo_changed = true;`
+        CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target \
+          cargo test -p mir2-world --lib guild::tests::f1_load_marks_ini_dirty --offline
+        ⇒ 13-mutation-3-f1-set-conf-RED.txt（rc≠0；还原则绿）
+   RC4：add_guild 重新加入 `guild.update_guild_file(0);`
+        CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target \
+          cargo test -p mir2-world --lib guild::tests::f1_create_guild_is_clean --offline
+        ⇒ 14-mutation-4-f1-add-guild-RED.txt（rc≠0；还原则绿）
+   oracle 锚 ⇒ 11-f1-oracle-anchors.txt；返工后源 sha256 = 94ff62f9…（仓库 LF 口径）
+   合并树四门禁重跑 ⇒ 05/06/07/08（test = 98 suites / 1074 passed / 0 failed / 21 ignored）

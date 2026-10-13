@@ -1,0 +1,26 @@
+### RC4 mutation: add_guild 重新加入 guild.update_guild_file(0)（F-1：AddGuild 不得推进 BoChanged/DwSaveTick）
+### mutated-file sha256 = 8d6698f93d580af76cf1222712045ee7e4308795e95397d339df0da5596f40e3
+### cmd: cargo test -p mir2-world --lib guild::tests::f1_create_guild_is_clean --offline
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\crates\world)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.34s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m3cs-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 1 test
+test guild::tests::f1_create_guild_is_clean ... FAILED
+
+failures:
+
+---- guild::tests::f1_create_guild_is_clean stdout ----
+
+thread 'guild::tests::f1_create_guild_is_clean' (30600) panicked at crates\world\src\guild.rs:1241:9:
+AddGuild 只 SetGuildInfo ⇒ BoChanged=false
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    guild::tests::f1_create_guild_is_clean
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 149 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-world --lib`
+### restored sha256 = 94ff62f9ae19f911250ead9bfe72a7cb81b0dcff761fe3f73c89b331b80ed92f
