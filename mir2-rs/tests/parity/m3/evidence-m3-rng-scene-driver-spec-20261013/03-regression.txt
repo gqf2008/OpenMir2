@@ -1,0 +1,43 @@
+# 离线回归（cwd = mir2-rs/tests/parity/m3；本片零 .rs，只读复跑）
+
+== python -I rng-trace-probe/rng_ledger_diff.py selftest ==
+SELFTEST GREEN: rng_ledger_diff selftest 37/37（同序绿 + 次序漂移必红且定位 + 缺消费者必红且点名 + Claim B 站点组：同组序绿 / 多抽·换序·缺组必红且定位 / 组表改坏必红 / 未归类 fail-closed / 行级覆盖 rows_dropped fail-closed（O-1）+ AUX 组改坏必红（O-3）+ R-6 folded：等价绿 / 折叠计数不等·次序不等必红且定位 / 关时仍 GROUP_SET_DIFF + DoD② scenario 声明：三组齐备绿 / 缺组·monster_ai 抽数不足必红且点名 / 缺 scenario PREREQ / 不传向后兼容）
+rc=0
+
+== python -I rng-trace-probe/rng_consumer_groups.py selftest ==
+rc=0
+
+== python -I rng-trace-scene/rng_scene_gate.py selftest ==
+SELFTEST ok=22/22
+GREEN: 场景前置门 selftest 全绿（同场景绿 + seed/怪集合/起点/map/MonGen 漂移必红 + 流水头同种子制品级门（同种子绿 / 异种子·缺 INJECT_OK 必红 / 缺件 PREREQ / 只给一侧流水 PREREQ / 未给流水向后兼容） + scenario 声明 vs 代码 folded 映射/组清单漂移必红 + 缺件/坏 JSON PREREQ fail-closed）
+rc=0
+
+== python -I rng-trace-scene/rng_scene_gate.py scenario --scenario rng-trace-scene/rng_trace_scenario.json ==
+  CHECK scenario-groups-known              ok
+  VERDICT GREEN: scenario 自洽且 folded 映射/组清单与代码同口径
+rc=0
+
+== python -I rng-trace-scene/check_window_batch.py check ==
+VERDICT GREEN: 同窗口批次前提 OK（map/seed/起点 逐项相等）
+OK map='0137' seed=42 x=17 y=20 dir=2
+rc=0
+
+== python -I rng-trace-scene/check_window_batch.py selftest ==
+SELFTEST ok map-type-prereq (rc=2 want=2 needle='应为字符串')
+SELFTEST GREEN: check_window_batch selftest 13/13（真件绿 + 换图/换种子/挪 x/y/dir 必红且点名 + 缺件/坏 JSON/缺字段/自比/传错件 PREREQ fail-closed）
+rc=0
+
+== python -I drop-exp/drop_exp_purity_gate.py selftest ==
+SELFTEST ok real-table-rust-unknown-red expect='RED' got='RED'
+SELFTEST ok=23/23
+rc=0
+
+== powershell run_rng_trace_pair.ps1 -SelfCheckNoStack ==
+SELFTEST ok=29/29 failures=
+GREEN: 无栈自检全绿（场景前置门 fail-closed + **流水头同种子**制品级门（同种子绿 / 异种子·缺 INJECT_OK 必红 / 拒绝比）+ DoD① 单一入口 -SceneGroupDiff 场景门/拒比/结论传播 + **DoD② scenario 声明组必须真的出现（缺组 / monster_ai 抽数不足必红且点名）** + scenario 声明/folded 映射与代码同口径 + folded 等价绿/计数·次序必红 + LF 写出 + 零端口）
+rc=0
+
+== powershell run_drop_exp_pair.ps1 -SelfCheckNoStack ==
+SELFTEST ok=13/13 failures=
+GREEN: 无栈自检全绿（比较器 + 纯度门 fail-closed + 改坏必红 + LF 写出 + 零端口）
+rc=0

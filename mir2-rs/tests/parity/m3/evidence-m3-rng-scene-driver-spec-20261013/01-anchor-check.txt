@@ -1,0 +1,40 @@
+# 承接卡规格 —— 每个被引用 anchor 的实测（cwd = 仓库根，worktree 内）
+# cmd: grep -n -H '<pattern>' <files>
+
+## 宿主 AI（本卡要 AI 开；④ 要 monai==0）
+5229:    game_svr::mongen::enable_production_monster_ai(&mut world);
+56:/// 单独成函数（而不是在 `sim_loop` 里直接 `world.enable_monster_ai()`）是为了给「宿主真的开了
+61:pub fn enable_production_monster_ai(world: &mut mir2_world::World) {
+62:    world.enable_monster_ai();
+697:pub fn monster_ai_tick(world: &mut World) {
+171:pub fn wondering(world: &mut World, actor_id: i32) {
+172:    if world.rng.random_below(20) != 0 {
+747:            let first = r.random_below(20);
+769:        let first = probe.random_below(20);
+
+## oracle 锚
+425:        protected virtual void Wondering()
+439:        private void MonGetRandomItems(IMonsterActor mon)
+
+## ④ 纯度门：rust wallclock monai max=0
+54:rust	wallclock	crates/world/src/monai\.rs:	0	crates/world/src/monai.rs	怪 AI tick（Wondering/SearchTarget 等）；pin 抑制必须使其为 0
+
+## R-6 折叠映射（C# construct -> Rust spawn）
+33:#   `AnimalState::from_spawn_draws`），因此 Rust 的 `construct` 组暂无独立站点；
+35:#   登记为建模差异，但要求**机判等价** —— `rng_consumer_groups.FOLD_RULES = {construct: spawn}`，
+41:# R-6 folded 映射（owner 2026-10-13 裁决）
+47:# 「C# `construct` 折叠到 Rust `spawn` 后，**折叠计数与相对次序必须相等**；**只写白名单不校验不算达成**」。
+49:# 因此：`construct` 归一到 `spawn`（两侧同一条规则），`groupdiff --fold` 在**折叠后的序列**上
+52:FOLD_RULES = {"construct": "spawn"}
+55:def fold_group(group):
+60:def folded(seq):
+
+## 场景件声明
+rng   seed=42 map=0137 start_pose={'x': 17, 'y': 20, 'dir': 2}
+rng   trace.groups_expected=['monster_ai', 'spawn', 'drop'] min_monster_ai_draws=1
+rng   isolation.wallclock_ai_expected='monster_ai（AnimalObject.Wondering）出现且两侧集合/次序一致；本卡不要求把它压到 0（那是 ④ 的纯度门口径）'
+drop  purity.wallclock_policy='pinned'
+drop  map=0137 seed=42 attacker={'x': 17, 'y': 20, 'dir': 2, 'level': 255, 'job': 0, 'hp': 20669}
+
+## MonGen 冻结件（0137 零数据行）
+data_rows=0

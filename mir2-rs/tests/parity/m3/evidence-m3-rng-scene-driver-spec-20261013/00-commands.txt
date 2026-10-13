@@ -1,0 +1,75 @@
+# 本片实际执行的命令与 cwd（可复算）
+
+base = origin/master = 5964479f3（开工前 `git fetch origin && git merge origin/master`，FF）
+分支 = wip/m3bag-window-batch-premise（车道 m3bag / principal openmir2-worker-4 / 卡 openmir2-m3-rng-trace-scene-groups）
+
+## 1. 源改动（本片唯一 tracked 改动；零 .rs）
+
+    cd mir2-rs/tests/parity/m3/rng-trace-scene
+    # 新增 DRIVER-CONTRACT.md（承接卡规格落库）
+    # README.md §8 追加指向 DRIVER-CONTRACT.md 的一行
+
+## 2. anchor 复核（每个被引用锚点实测）
+
+    cd <repo-root>
+    grep -n "enable_production_monster_ai" mir2-rs/bins/game-svr/src/main.rs            # :5229
+    grep -n "pub fn enable_production_monster_ai\|world.enable_monster_ai()" mir2-rs/bins/game-svr/src/mongen.rs   # :61/:62
+    grep -n "pub fn monster_ai_tick" mir2-rs/crates/world/src/monai.rs                 # :697
+    grep -n "pub fn wondering\|random_below(20)" mir2-rs/crates/world/src/monai.rs     # :171/:172
+    grep -n "protected virtual void Wondering()" src/M2Server/Actor/AnimalObject.cs    # :425
+    grep -n "private void MonGetRandomItems" src/GameSrv/Word/WorldServer.MonGen.cs    # :439
+    grep -n "monai" mir2-rs/tests/parity/m3/drop-exp/drop_exp_consumers.tsv            # rust wallclock max=0
+    grep -n "FOLD_RULES\|AnimalState::from_spawn_draws" mir2-rs/tests/parity/m3/rng-trace-probe/consumer_groups.tsv
+    # scenario 字段抽取（python json）
+    # fixtures/mongen-map0137.tsv 数据行数 = 0
+
+    → 原始输出见 01-anchor-check.txt
+
+## 3. 真机 real-run 仍 fail-closed（承接卡未落地）
+
+    cd <repo-root>
+    powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/rng-trace-scene/run_rng_trace_pair.ps1 -Go -PinScene
+    # 期望 rc=2 + PREREQ_MISSING「驱动尚未接线」（正确行为，不静默起栈）
+
+    → 见 02-driver-unwired-fail-closed.txt
+
+## 4. 离线回归（只读复跑，确认本卡既有判据不回归）
+
+    cd mir2-rs/tests/parity/m3
+    python -I rng-trace-probe/rng_ledger_diff.py selftest
+    python -I rng-trace-probe/rng_consumer_groups.py selftest
+    python -I rng-trace-scene/rng_scene_gate.py selftest
+    python -I rng-trace-scene/rng_scene_gate.py scenario --scenario rng-trace-scene/rng_trace_scenario.json
+    python -I rng-trace-scene/check_window_batch.py check --rng-scenario rng-trace-scene/rng_trace_scenario.json --drop-scenario drop-exp/drop_exp_scenario.json
+    python -I rng-trace-scene/check_window_batch.py selftest
+    python -I drop-exp/drop_exp_purity_gate.py selftest
+    powershell -NoProfile -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 -SelfCheckNoStack
+    powershell -NoProfile -ExecutionPolicy Bypass -File drop-exp/run_drop_exp_pair.ps1 -SelfCheckNoStack
+
+    → 见 03-regression.txt
+
+## 5. 四门禁（隔离 target；cwd = mir2-rs）
+
+    export CARGO_TARGET_DIR=E:/tmp/m3bag-target
+    cargo fmt --all -- --check                                                          # rc=0
+    cargo clippy --workspace --all-targets --offline -- -D warnings                     # rc=0
+    cargo test --workspace --offline --no-fail-fast                                     # 101 suites / 1190 passed / 0 failed / 22 ignored / rc=0
+    cargo run -q -p msgcodegen --offline -- --check                                     # 604 条 rc=0
+
+    → 见 04..07-gates-*.txt
+
+## 6. 边界
+
+    git diff --name-only 5964479f3 HEAD
+    git diff --name-only 5964479f3 HEAD -- src sql MirClient mir2-rs/crates mir2-rs/bins   # 空
+    git diff --name-only 5964479f3 HEAD -- '*.rs'                                          # 空
+
+    → 见 08-boundary.txt
+
+## 7. 证据自洽 / EOL
+
+    cd <repo-root>
+    python -I tools/evidence-hash/verify_sha256sums.py verify --check-extra mir2-rs/tests/parity/m3/evidence-m3-rng-scene-driver-spec-20261013
+    python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-rng-scene-driver-spec-20261013
+
+    → 读数见 README.md §4
