@@ -1,0 +1,8 @@
+### 改前 RED — 用本片新增机判检查**改前**的表（git show HEAD:.../consumer_groups.tsv）
+命令：python -I -c "sys.path.insert(0,'rng-trace-probe'); import rng_consumer_groups as m; m.validate_oracle_refs(m.parse_rows(<改前表>))"
+改前问题数 = 1
+  RED 行28(startup/csharp): oracle_ref 指向不存在的源码文件 src\SystemModule\Conf\ServerConf.cs（ref=src/SystemModule/Conf/ServerConf.cs:114）
+改前表该行原文：
+    startup	csharp	ServerConf\.LoadConfig@ServerConf\.cs:	src/SystemModule/Conf/ServerConf.cs:114	配置加载期抽数
+
+实际源码：src/Modules/SystemModule/Conf/ServerConf.cs:114 =             SystemShare.Config.ItemNumber += SystemShare.RandomNumber.Random(10000);

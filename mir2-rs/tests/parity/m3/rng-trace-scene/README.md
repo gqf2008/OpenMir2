@@ -286,6 +286,26 @@ python -I rng-trace-scene/check_anchors.py selftest   # 4/4 GREEN（含 3 条改
 - 已接入 `run_rng_trace_pair.ps1 -SelfCheckNoStack`（`anchors-freshness-selftest`）⇒ **自检项数
   由 29 增至 30**（本片之前的报告里的 `29/29` 是片时读数，不受影响）。
 
+### 5.3 站点表 `oracle_ref` 可解析性机判（`rng_consumer_groups.py`）
+
+`consumer_groups.tsv` 是 Claim B 的**唯一真源**，其 `oracle_ref` 列是站点归因的唯一溯源
+（`pattern` 判组，`oracle_ref` 供人复查）。该列此前只校验「非空」⇒ 指向不存在源码路径的 ref
+会静默通过。2026-10-13 窗口前置审计实测到一条真身缺陷：
+
+- `startup/csharp` 行写 `src/SystemModule/Conf/ServerConf.cs:114`，实际文件在
+  `src/Modules/SystemModule/Conf/ServerConf.cs`（缺 `Modules/` 段）⇒ 承接卡/评审按它找会找空。
+
+`rng_consumer_groups.py` 现把「能解析成源码文件的 `oracle_ref` 必须**文件存在**且**行号在范围内**」
+钉成 fail-closed 机判（不可解析的 ref——glob、目录、Rust 模块入口无行号——按口径跳过）：
+
+```sh
+python -I rng-trace-probe/rng_consumer_groups.py selftest   # 15/15 GREEN（含坏路径 / 越界行 2 条改坏必红）
+```
+
+- 路径口径：`src/...` 相对仓库根（C#）；`crates/...`/`bins/...` 相对 `mir2-rs/`（Rust）；`mir2-rs/...` 相对仓库根；
+- 已接入 `run_rng_trace_pair.ps1 -SelfCheckNoStack`（`station-table-refs-selftest`）⇒ **自检项数
+  由 30 增至 31**（本片之前报告里的 `29/29`、`30/30` 是片时读数，不受影响）。
+
 ## 6. 命令（可复算）
 
 ```sh
@@ -296,6 +316,7 @@ python -I rng-trace-probe/rng_ledger_diff.py selftest          # 37/37 GREEN（�
 python -I rng-trace-scene/rng_scene_gate.py selftest           # 22/22 GREEN（含 scenario 声明 vs 代码 + 半给流水 PREREQ）
 python -I rng-trace-scene/check_evidence_counts.py selftest    # 7/7 GREEN（报告证据头行计数 vs 真实包：声明/真实）
 python -I rng-trace-scene/check_anchors.py selftest             # 4/4 GREEN（承接卡规格锚点保鲜；含行号漂移/缺失/歧义 3 条改坏必红）
+python -I rng-trace-probe/rng_consumer_groups.py selftest       # 15/15 GREEN（站点表 oracle_ref 可解析性；含坏路径/越界行 2 条改坏必红）
 python -I rng-trace-scene/check_window_batch.py selftest        # 13/13 GREEN（本卡 vs ④ 场景件：同图/同种子/同起点）
 
 # 同窗口批次前提（本卡 scenario vs ④ drop-exp scenario；非 GREEN ⇒ 批次不可比，拒跑）
