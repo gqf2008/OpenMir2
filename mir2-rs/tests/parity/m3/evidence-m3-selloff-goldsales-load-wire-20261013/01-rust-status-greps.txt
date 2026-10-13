@@ -1,0 +1,39 @@
+# M3⑩-实现 2 Rust 现状（改动前/后 grep）
+# base 2869a234b 上 goldsales 加载器已由 D 线落地、生产启动路径未接线（承接 ⑩-2）
+
+## [1] 加载器本体（crates/data/src/loaders.rs:305-358，D-5/B-5 bug-replica）
+307:    /// BUG-REPLICA（不改）：C# 读 `DealChrName` / `BuyChrName`，而 DDL 列名是
+311:    pub async fn load_sell_off_item_list(&self) -> Result<Vec<DealOffInfo>, DataError> {
+312:        let rows = sqlx::query("select * from goldsales")
+318:            let deal_chr_name = get_string(row, "DealChrName");
+319:            let buy_chr_name = get_string(row, "BuyChrName");
+
+## [2] 改动前：生产启动路径调用点 no-match（base 2869a234b）
+$ git grep -n "load_sell_off_item_list" 2869a234b -- mir2-rs/bins mir2-rs/crates | grep -v loaders.rs
+(no match：仅 tests/parity/tests/table_counts.rs 的 ignored 用例调用)
+
+## [3] 唯一既有消费者：tests/parity/tests/table_counts.rs（#[ignore] 需 MySQL）
+29:    ("goldsales", 0),
+48:    let goldsales = loaders
+49:        .load_sell_off_item_list()
+51:        .expect("goldsales 加载失败");
+57:        ("goldsales", goldsales.len()),
+
+## [4] 改动后：本片接线（goldsales.rs + main.rs）
+mir2-rs/bins/game-svr/src/main.rs:29:mod goldsales;
+mir2-rs/bins/game-svr/src/main.rs:463:    // **M3⑩-实现 2**：`goldsales` **只读**加载接线（oracle `src/GameSvr/GameApp.cs:30` 建空列表，
+mir2-rs/bins/game-svr/src/main.rs:471:    let sell_off_seed = {
+mir2-rs/bins/game-svr/src/main.rs:477:        match goldsales::load_goldsales(conn).await {
+mir2-rs/bins/game-svr/src/main.rs:481:                goldsales::seed_book(&mut book, &rows);
+mir2-rs/bins/game-svr/src/main.rs:564:                    // `M3⑩-实现 2`：`goldsales` 只读加载的启动种子（oracle `M2Share.SellOffItemList`
+mir2-rs/bins/game-svr/src/main.rs:566:                    sell_off_seed,
+mir2-rs/bins/game-svr/src/main.rs:4464:    /// **M3⑩-实现 2**：`goldsales` 只读加载的启动种子（`MySqlDB.LoadSellOffItemList`，
+mir2-rs/bins/game-svr/src/main.rs:4468:    sell_off_seed: Vec<game_svr::selloff::DealOffInfo>,
+mir2-rs/bins/game-svr/src/main.rs:4771:        entries: std::mem::take(&mut enter_cfg.sell_off_seed),
+mir2-rs/bins/game-svr/src/selloff.rs:1://! 元宝寄售（`goldsales` / `SellOff`）世界态 + 7 个 `CM_SELLOFF*` 派发
+
+## [5] 白名单既有登记（D-5 / B-5）
+15:| D-5 | `goldsales`：C# 读错列名（`DealChrName`，DDL 实为 `DealCharName`）导致有数据时也会全部静默跳过——Rust **复刻同一错列名**而非修正 | 行为等价优先于修 bug（§8.1）。当前表 0 行，两侧均加载 0 行；表有数据时两侧同样都加载 0 行。修复应单开批次，并保留改前/改后行为记录 | D 线（待 owner 复核） |
+28:| B-5 | `goldsales` 列名 `DealChrName`/`BuyChrName` 与 DDL 不符（见 D-5） | `MySqlDB.cs:264-265` → `crates/data/src/loaders.rs` |
+197:> 不产生可对拍差异；已 1:1 复刻的只读且坏的 `goldsales` 加载（读错列名、无 save）另见 D-5 / B-5。
+255:| S4B-5 | **5700 `MarketService` 已实现**（`bins/db-srv/src/{market,marketdata}.rs`）：监听 5700、四个 ident、`IMarketStorage` MySQL 实现。`config.rs` 按现网键名解析 `MarketAddr`/`MarketPort`（默认 `127.0.0.1`/`5700`）。 | GameSvr 连 5700（拍卖行） | **实现完成**；C# 侧的不可达/空桩/怪行为逐条登记为 S4B-6…S4B-10。进程级证据 `tests/parity/evidence/M1/s4b-slice3-market.txt`。作者登记（worker-17），**待独立 principal 复核** |

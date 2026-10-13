@@ -1,0 +1,48 @@
+# RC-B 改坏必红：删掉 seed_book 的顺序尾追 push（MySqlDB.cs:279 IList.Add 等价）
+# mutation（精确单次替换，命中数=1，跑完 git restore 还原，不提交）：
+#   `book.entries.push(entry_from_loaded(row));` → `let _ = row;`
+# 命令：cargo test -p game-svr --offline --bin game-svr goldsales
+# 期望/实测：构造级 seed_book_appends_in_row_order FAILED（left:0 / right:2）rc=101。
+# 注（rebase 片 r2 2026-10-13，worktree m3hp / principal openmir2-worker-20）：本片与 ⑩-1 同栈重放到
+#   master `ddaca961c`（⑩-1 前缀 oid `515540139`；交付时 origin/master = `78cf74d46`；
+#   `git merge-tree --write-tree origin/master HEAD` = rc=0），按同一命令重跑；目标目录在检出外。
+
+
+running 4 tests
+test goldsales::tests::seed_book_with_no_rows_keeps_book_empty ... ok
+test goldsales::tests::malformed_item_json_degrades_to_zero_fields ... ok
+test goldsales::tests::entry_from_loaded_maps_fields_and_keeps_null_slots ... ok
+test goldsales::tests::seed_book_appends_in_row_order ... FAILED
+
+failures:
+
+---- goldsales::tests::seed_book_appends_in_row_order stdout ----
+
+thread 'goldsales::tests::seed_book_appends_in_row_order' (28600) panicked at bins\game-svr\src\goldsales.rs:251:9:
+assertion `left == right` failed
+  left: 0
+ right: 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    goldsales::tests::seed_book_appends_in_row_order
+
+test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 192 filtered out; finished in 0.00s
+
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\bins\game-svr)
+warning: unused variable: `book`
+   --> bins\game-svr\src\goldsales.rs:173:18
+    |
+173 | pub fn seed_book(book: &mut SellOffBook, rows: &[LoadedEntry]) {
+    |                  ^^^^ help: if this is intentional, prefix it with an underscore: `_book`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `game-svr` (bin "game-svr" test) generated 1 warning (run `cargo fix --bin "game-svr" -p game-svr --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.29s
+     Running unittests src\main.rs (E:/tmp/openmir2-m3hp-target\debug\deps\game_svr-d40510517c77a420.exe)
+error: test failed, to rerun pass `-p game-svr --bin game-svr`

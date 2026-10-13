@@ -27,7 +27,11 @@ encoding_rs = "0.8"
 # 帧 46 `SM_DAYCHANGING` 的 `Bright = M2Share.GameTime`：oracle `SystemProcessor.GetGameTime()` 按
 # `DateTime.Now.Hour` 刷新（`SystemProcessor.cs:98-134`）⇒ 读真实本地时钟（`chrono::Local`，走系统时区）。
 chrono = "0.4"
+# `goldsales.UseItems` 的 `.NET UserItem` JSON 形态桥接（⑩-2 只读加载接线；原为 dev-dep，bin 侧接线后提为 dep）。
+serde_json = "1"
+# `.NET` 的 `byte[] Desc` 默认序列化成 base64 字符串（`ClientUserItem.cs:19-27`）；已在 Cargo.lock（经 sqlx）。
+base64 = "0.22"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "time", "process"] }
-serde_json = "1"   # feature.rs 用例回读 oracle 实测向量（tests/parity/m3/fixtures/feature_vectors.json）
+serde_json = "1"   # feature.rs 用例回读 oracle 实测向量（tests/parity/m3/fixtures/feature_vectors.json）；bin 侧亦用

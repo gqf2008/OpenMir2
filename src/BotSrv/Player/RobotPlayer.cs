@@ -1812,6 +1812,278 @@ namespace BotSrv.Player
 
         #endregion
 
+        #region M3⑧ 公会/攻城（guild / castle）动作序列夹具（默认关；白名单 T-46 家族扩展）
+
+        // 口径（卡 openmir2-m3-guild-castle-fixture-botsrv）：收到本假人 SM_LOGON 后，按 `g_sGuildCastleSteps`
+        // 的固定顺序发 行会面板/成员/封号/公告/联盟（现成 CM_GUILD* 原语）+ 行会 NPC 标签选择（CM_MERCHANTDLGSELECT），
+        // 逐步落 `M3GUILDCSEQ {json}` 的 arm/send/frame/end/done 事件（供 `guild_castle_diff.py assemble`）。
+        // 只读本假人自己的视图（`MShare.MySelf` / `PlayScene.ActorList` / `MShare.ItemArr` / `MShare.g_sGuildName`）、
+        // 只写本假人自己的 socket（同 T-22/T-29/T-41/T-45 纪律）；默认关时本 region 全部空转、不新增任何发送与日志。
+
+        private string[] _gcSeqSteps;
+        private int _gcSeqStep = -1;
+        private int _gcSeqNextTick;
+        private int _gcSeqPendingK = -1;
+        private readonly List<string> _gcSeqFrames = new List<string>();
+        private string _gcSeqOp = string.Empty;
+        private string _gcSeqRole = string.Empty;
+        private string _gcSeqParam = string.Empty;
+        private bool _gcSeqRan;
+        private int _gcSeqNpcActor;
+
+        /// <summary>收到本假人 SM_LOGON 后武装固定行会/攻城序列（`g_boGuildCastleSequence` 关闭时是空操作）。</summary>
+        private void ArmGuildCastleSequence()
+        {
+            if (!MShare.g_boGuildCastleSequence)
+            {
+                return;
+            }
+            _gcSeqSteps = MShare.ParseGuildCastleSteps(MShare.g_sGuildCastleSteps);
+            _gcSeqStep = 0;
+            _gcSeqPendingK = -1;
+            _gcSeqFrames.Clear();
+            _gcSeqNextTick = MShare.GetTickCount() + MShare.g_nGuildCastleStartDelayMs;
+            MainOutMessage("M3GUILDCSEQ {\"phase\":\"arm\",\"bot\":\"" + ShopEsc(LoginId)
+                + "\",\"role\":\"" + (MShare.IsGuildCastleMaster(LoginId, MShare.g_sGuildCastleMasterLoginId) ? "a" : "b")
+                + "\",\"steps\":" + ShopJsonArray(_gcSeqSteps)
+                + ",\"step_ms\":" + MShare.g_nGuildCastleStepMs + "}");
+        }
+
+        /// <summary>M3⑧ 固定行会/攻城序列（步进式）：每 `g_nGuildCastleStepMs` 处理一步；上一步先收尾
+        /// （`phase=end`，聚合本步收到的帧 + 行会名/封号/金币/背包前后态 + branch），再发下一步；
+        /// 全部发完发 `phase=done`。**两个**假人（会长/peer）都跑同一串步骤；角色不符的步只记 `ran=false`
+        /// + `skip_other_role`（k 仍前进）。默认关时空转。</summary>
+        private void GuildCastleSequenceTick()
+        {
+            if (!MShare.g_boGuildCastleSequence || _gcSeqSteps == null || _gcSeqStep < 0)
+            {
+                return;
+            }
+            if (!_inWorld || ClientSocket == null || !ClientSocket.IsConnected)
+            {
+                return;
+            }
+            int now = MShare.GetTickCount();
+            if (now < _gcSeqNextTick)
+            {
+                return;
+            }
+            if (_gcSeqPendingK >= 0)
+            {
+                EmitGuildCastleEnd(_gcSeqPendingK);
+                _gcSeqPendingK = -1;
+            }
+            if (_gcSeqStep >= _gcSeqSteps.Length)
+            {
+                _gcSeqStep = -1;
+                MainOutMessage("M3GUILDCSEQ {\"phase\":\"done\",\"bot\":\"" + ShopEsc(LoginId)
+                    + "\",\"steps\":" + _gcSeqSteps.Length + "}");
+                return;
+            }
+            int k = _gcSeqStep;
+            string step = _gcSeqSteps[k];
+            _gcSeqStep++;
+            _gcSeqFrames.Clear();
+            _gcSeqOp = MShare.GuildCastleStepOp(step);
+            _gcSeqRole = MShare.GuildCastleStepRole(step);
+            _gcSeqParam = MShare.GuildCastleStepParam(step);
+            bool isMaster = MShare.IsGuildCastleMaster(LoginId, MShare.g_sGuildCastleMasterLoginId);
+            _gcSeqRan = MShare.GuildCastleRunsForRole(_gcSeqRole, isMaster);
+            Actor npc = FindShopNpc();
+            _gcSeqNpcActor = npc != null ? npc.RecogId : 0;
+            EmitGuildCastleSend(k);
+            SendGuildCastleStep();
+            _gcSeqPendingK = k;
+            int waitMs = MShare.g_nGuildCastleStepMs;
+            if (_gcSeqOp == "wait" && int.TryParse(_gcSeqParam, out int w) && w > waitMs)
+            {
+                waitMs = w;
+            }
+            _gcSeqNextTick = now + waitMs;
+        }
+
+        private void EmitGuildCastleSend(int k)
+        {
+            MainOutMessage("M3GUILDCSEQ {\"phase\":\"send\",\"bot\":\"" + ShopEsc(LoginId)
+                + "\",\"k\":" + k
+                + ",\"role\":\"" + ShopEsc(_gcSeqRole)
+                + "\",\"op\":\"" + ShopEsc(_gcSeqOp)
+                + "\",\"ran\":" + (_gcSeqRan ? "true" : "false")
+                + ",\"param\":\"" + ShopEsc(_gcSeqParam) + "\""
+                + ",\"map\":\"" + ShopEsc(MShare.MapTitle) + "\""
+                + ",\"guild_name\":\"" + ShopEsc(GuildCastleName()) + "\""
+                + ",\"guild_rank_name\":\"" + ShopEsc(GuildCastleRankName()) + "\""
+                + ",\"gold_before\":" + ShopGold()
+                + ",\"bag_before\":" + ShopBagJson() + "}");
+        }
+
+        private void EmitGuildCastleEnd(int k)
+        {
+            string branch = _gcSeqRan ? MShare.ClassifyGuildCastleFrames(_gcSeqFrames) : "skip_other_role";
+            // observe/wait 本来就不发 CM_*、也不期待帧 ⇒ 收尾固定 ok（否则空帧列表会被误判 fail_no_frame）。
+            if (_gcSeqRan && (_gcSeqOp == "observe" || _gcSeqOp == "wait"))
+            {
+                branch = "ok";
+            }
+            MainOutMessage("M3GUILDCSEQ {\"phase\":\"end\",\"bot\":\"" + ShopEsc(LoginId)
+                + "\",\"k\":" + k
+                + ",\"guild_name\":\"" + ShopEsc(GuildCastleName()) + "\""
+                + ",\"guild_rank_name\":\"" + ShopEsc(GuildCastleRankName()) + "\""
+                + ",\"gold_after\":" + ShopGold()
+                + ",\"bag_after\":" + ShopBagJson()
+                + ",\"branch\":\"" + branch + "\"}");
+        }
+
+        /// <summary>发本步的 CM_*（角色不符 ⇒ 不发；NPC 不在视图 ⇒ 只记 skip）。</summary>
+        private void SendGuildCastleStep()
+        {
+            if (!_gcSeqRan)
+            {
+                return;
+            }
+            switch (_gcSeqOp)
+            {
+                case "open_dlg":
+                    SendGuildDlg();
+                    break;
+                case "home":
+                    SendGuildHome();
+                    break;
+                case "memberlist":
+                    SendGuildMemberList();
+                    break;
+                case "add_member":
+                    SendGuildAddMem(ResolveGuildCastleWho(_gcSeqParam));
+                    break;
+                case "del_member":
+                    SendGuildDelMem(ResolveGuildCastleWho(_gcSeqParam));
+                    break;
+                case "update_notice":
+                    SendGuildUpdateNotice(_gcSeqParam);
+                    break;
+                case "update_rank":
+                    SendGuildUpdateGrade(_gcSeqParam);
+                    break;
+                case "ally":
+                    SendGuildAlly(_gcSeqParam);
+                    break;
+                case "break_ally":
+                    SendGuildBreakAlly(_gcSeqParam);
+                    break;
+                case "build_guild":
+                case "guild_war":
+                case "castle_apply":
+                case "open_door":
+                case "close_door":
+                case "repair_door":
+                case "repair_wall":
+                    if (_gcSeqNpcActor == 0 || string.IsNullOrEmpty(_gcSeqParam))
+                    {
+                        MainOutMessage("M3GUILDCSEQ skip=no_npc_in_view op=" + ShopEsc(_gcSeqOp));
+                        break;
+                    }
+                    // 行会 NPC 脚本标签：`@@buildguildnow` / `@@guildwar` / `@requestcastlewarnowN` /
+                    // `@openmaindoor` / `@closemaindoor` / `@repairdoor` / `@repairwall`（GuildOfficial/CastleOfficial）。
+                    SendMerchantDlgSelect(_gcSeqNpcActor, _gcSeqParam);
+                    break;
+                case "observe":
+                case "wait":
+                    break;
+                case "softclose":
+                    SendClientMessage(Messages.CM_SOFTCLOSE, 0, 0, 0, 0);
+                    break;
+                default:
+                    MainOutMessage("M3GUILDCSEQ skip=op_not_implemented step=" + ShopEsc(_gcSeqOp));
+                    break;
+            }
+        }
+
+        /// <summary>param 里的夹具占位符：`@peer` / `@master` 用两侧一致的 LoginId 展开（仅夹具配置，不读跨假人世界态）。</summary>
+        private string ResolveGuildCastleWho(string param)
+        {
+            if (param == "@peer") { return MShare.g_sGuildCastlePeerLoginId; }
+            if (param == "@master") { return MShare.g_sGuildCastleMasterLoginId; }
+            return param;
+        }
+
+        /// <summary>M3⑧ 夹具最小驱动新增：CM_GUILDALLY(1044) + EncodeString(行会名)（PlayObject.Operate.cs:1465 读 body 为名）。</summary>
+        public void SendGuildAlly(string guildName)
+        {
+            if (!string.IsNullOrEmpty(guildName))
+            {
+                CommandMessage msg = Messages.MakeMessage(Messages.CM_GUILDALLY, 0, 0, 0, 0);
+                SendSocket(EDCode.EncodeMessage(msg) + EDCode.EncodeString(guildName));
+            }
+        }
+
+        /// <summary>M3⑧ 夹具最小驱动新增：CM_GUILDBREAKALLY(1045) + EncodeString(行会名)（PlayObject.Operate.cs:1525 读 body 为名）。</summary>
+        public void SendGuildBreakAlly(string guildName)
+        {
+            if (!string.IsNullOrEmpty(guildName))
+            {
+                CommandMessage msg = Messages.MakeMessage(Messages.CM_GUILDBREAKALLY, 0, 0, 0, 0);
+                SendSocket(EDCode.EncodeMessage(msg) + EDCode.EncodeString(guildName));
+            }
+        }
+
+        /// <summary>本假人行会名（`SM_CHANGEGUILDNAME(750)` 回包写入 `MShare.g_sGuildName`）。</summary>
+        private string GuildCastleName()
+        {
+            return MShare.g_sGuildName ?? string.Empty;
+        }
+
+        /// <summary>本假人行会封号名（`SM_CHANGEGUILDNAME(750)` 回包写入 `MShare.g_sGuildRankName`）。</summary>
+        private string GuildCastleRankName()
+        {
+            return MShare.g_sGuildRankName ?? string.Empty;
+        }
+
+        /// <summary>收帧钩子（单一收包点）：行会面板/成员/封号/建会/联盟/换名/菜单文案帧在
+        /// `g_boGuildCastleSequence` 打开且本步待收尾时落 `phase=frame` 事件。**只读不写世界态**
+        /// （同 T-29/T-41/T-45 纪律）；默认关时空转。</summary>
+        public void GuildCastleOnServerMessage(int sm, int a, int b, int c, int d, string body)
+        {
+            if (!MShare.g_boGuildCastleSequence || _gcSeqPendingK < 0)
+            {
+                return;
+            }
+            switch (sm)
+            {
+                case 750:   // SM_CHANGEGUILDNAME
+                case 753:   // SM_OPENGUILDDLG
+                case 754:   // SM_OPENGUILDDLG_FAIL
+                case 756:   // SM_SENDGUILDMEMBERLIST
+                case 757:   // SM_GUILDADDMEMBER_OK
+                case 758:   // SM_GUILDADDMEMBER_FAIL
+                case 759:   // SM_GUILDDELMEMBER_OK
+                case 760:   // SM_GUILDDELMEMBER_FAIL
+                case 761:   // SM_GUILDRANKUPDATE_FAIL
+                case 762:   // SM_BUILDGUILD_OK
+                case 763:   // SM_BUILDGUILD_FAIL
+                case 767:   // SM_MENU_OK
+                case 768:   // SM_GUILDMAKEALLY_OK
+                case 769:   // SM_GUILDMAKEALLY_FAIL
+                case 770:   // SM_GUILDBREAKALLY_OK
+                case 771:   // SM_GUILDBREAKALLY_FAIL
+                case 10303: // RM_BUILDGUILD_OK
+                case 10304: // RM_BUILDGUILD_FAIL
+                    break;
+                default:
+                    return;
+            }
+            bool isText = sm == 750 || sm == 753 || sm == 756 || sm == 767;
+            string text = isText && !string.IsNullOrEmpty(body) ? EDCode.DeCodeString(body) : string.Empty;
+            string fr = "{\"sm\":" + sm + ",\"a\":" + a + ",\"b\":" + b
+                + ",\"c\":" + c + ",\"d\":" + d
+                + ",\"text\":\"" + ShopEsc(text) + "\"}";
+            _gcSeqFrames.Add(fr);
+            MainOutMessage("M3GUILDCSEQ {\"phase\":\"frame\",\"bot\":\"" + ShopEsc(LoginId)
+                + "\",\"k\":" + _gcSeqPendingK + ",\"frame\":" + fr + "}");
+        }
+
+        #endregion
+
+
         #region M3⑨ 英雄/宠物（宝宝/下属 slave）动作序列夹具（默认关；白名单 T-45 家族扩展）
 
         // 口径（卡 openmir2-m3-hero-pet-fixture-botsrv）：收到本假人 SM_LOGON 后，按 `g_sHeroPetSteps` 的固定
@@ -2108,6 +2380,7 @@ namespace BotSrv.Player
             ArmQuestSequence();
             ArmPairTradeSequence();
             ArmSellOffSequence();
+            ArmGuildCastleSequence();
             ArmHeroPetSequence();
             ArmSoftClose();
             if (LoadMetrics.ShouldSuppressInWorld(LoginId))
@@ -2143,6 +2416,7 @@ namespace BotSrv.Player
                 QuestSequenceTick();
                 PairTradeSequenceTick();
                 SellOffSequenceTick();
+                GuildCastleSequenceTick();
                 HeroPetSequenceTick();
                 SoftCloseTick();
                 if (DScreen.CurrentScene == PlayScene)

@@ -1,0 +1,40 @@
+## base = origin/master 15510a47  head = e095734d
+
+## git diff --name-only origin/master -- src sql MirClient
+src/BotSrv/AppService.cs
+src/BotSrv/GuildCastleSeqSelfCheck.cs
+src/BotSrv/MShare.cs
+src/BotSrv/Player/RobotPlayer.Operate.cs
+src/BotSrv/Player/RobotPlayer.cs
+src/BotSrv/Program.cs
+src/BotSrv/RobotOptions.cs
+
+## git diff --name-only origin/master（全量，28 件：实现 11 + 证据 14 + 报告/whitelist/管线）
+"mir2-rs/tests/parity/m3/M3\342\221\247\345\205\254\344\274\232\346\224\273\345\237\216\345\212\250\344\275\234\345\272\217\345\210\227\345\244\271\345\205\267\351\252\250\346\236\266\346\212\245\345\221\212-20261013.md"
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/00-commands.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/01-guildcastle-diff-selftest.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/02-run-guildcastle-pair-selfcheck.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/03-botsrv-guildcastleseq-selftest.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/04-run-bots-selfcheck.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/05-gate-fmt.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/06-gate-clippy.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/07-gate-test.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/08-gate-msgcodegen.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/09-boundary.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/10-external-break-comparator.txt
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/README.md
+mir2-rs/tests/parity/m3/evidence-m3-guild-castle-fixture-botsrv-20261013/SHA256SUMS.txt
+mir2-rs/tests/parity/m3/gate_guards.ps1
+mir2-rs/tests/parity/m3/guild_castle_diff.py
+mir2-rs/tests/parity/m3/guild_castle_scenario.json
+mir2-rs/tests/parity/m3/run_guild_castle_pair.ps1
+mir2-rs/tests/parity/m3/run_pair.ps1
+mir2-rs/tests/parity/whitelist.md
+src/BotSrv/AppService.cs
+src/BotSrv/GuildCastleSeqSelfCheck.cs
+src/BotSrv/MShare.cs
+src/BotSrv/Player/RobotPlayer.Operate.cs
+src/BotSrv/Player/RobotPlayer.cs
+src/BotSrv/Program.cs
+src/BotSrv/RobotOptions.cs
+tools/botload/run_bots.ps1
