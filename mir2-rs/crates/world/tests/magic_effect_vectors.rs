@@ -257,7 +257,7 @@ fn tamming_mismatches(cases: &[TammingCase]) -> Vec<String> {
         let inp = c.inp; // 调用前初值已记录在向量里（HP = MaxHP、WalkSpeed/NextHitTime 初值）
         let mut rng = replay(&c.draws);
         let got = mag_tamming(&mut rng, &inp);
-        let want = TammingOutcome {
+        let mut want = TammingOutcome {
             result: c.result,
             target_creature_cleared: c.cleared,
             target_master_is_caster: c.master_is_caster,
@@ -265,7 +265,12 @@ fn tamming_mismatches(cases: &[TammingCase]) -> Vec<String> {
             walk_speed: c.walk_speed,
             next_hit_time: c.next_hit_time,
             crazy_mode: c.crazy_mode,
+            royalty_draw: 0,
         };
+        // `royalty_draw`（`MagicManager.cs:770` 的 `Random(caster.Lv*2)`）不在这批探针 TSV 的
+        // 记录列里；它是**取数账本的一部分**，已由下面 `rng.divergences()`/`rng.remaining()` 的
+        // 逐次对拍钉死（值 = 该次抽数），故此处只对齐其余字段。
+        want.royalty_draw = got.royalty_draw;
         for d in rng.divergences() {
             out.push(format!("tamming[{n}] 取数分歧: {d}"));
         }

@@ -1,0 +1,47 @@
+# M3⑨-2 第②片 oracle 锚点（文件:行号）
+
+## A. 入帧与守卫（沿用 attack-magic-wiring 第二片）
+- src/GameSrv/Word/WorldServer.cs:783-790  CM_SPELL → SendUpdateMsg/SendMsg 映射
+- src/M2Server/Player/PlayObject.Message.cs:1339-1340  ClientSpellXY(wParam, nParam1, nParam2, ActorMgr.Get(nParam3), …)
+- src/M2Server/Player/PlayObject.Attack.cs:1057-1068  守卫 !IsCanSpell / Death|STONE / GetMagicInfo==null
+- src/M2Server/Player/PlayObject.Attack.cs:1269-1270  default: Dir = GetNextDirection(CurrX,CurrY,tx,ty)
+- src/M2Server/Player/PlayObject.Attack.cs:1271-1279  CretInNearXy 目标修正 + DoSpell + (!DoSpell ⇒ RM_MAGICFIREFAIL)
+- src/M2Server/Player/PlayObject.Base.cs:984-1011     CretInNearXy（(x,y) 1×1 邻域内且 !Ghost）
+
+## B. DoSpell（召唤面）
+- src/M2Server/Magic/MagicManager.cs:151   IsWarrSkill ⇒ return false
+- src/M2Server/Magic/MagicManager.cs:155   距离门：|CurrX-tx| > MagicAttackRage || |CurrY-ty| > MagicAttackRage ⇒ return false
+- src/M2Server/Magic/MagicManager.cs:159   SendRefMsg(RM_SPELL, Magic.Effect, tx, ty, Magic.MagicId, "")
+- src/M2Server/Magic/MagicManager.cs:167   版本门：(SoftVersionDateEx==0 && ClientTick==0) || MagicId>80 ⇒ return false（登记未接，见 §6）
+- src/M2Server/Magic/MagicManager.cs:319-393 分组 case（含 SKILL_SKELLETON=17）：
+    boSpellFail=true → CheckAmulet(1,1) → UseAmulet(1,1) → switch: MagMakeSlave → boTrain=结果 → boSpellFail=false
+- src/M2Server/Magic/MagicManager.cs:450-461 case SKILL_SINSU=30：CheckAmulet(5,1) → UseAmulet(5,1) → MagMakeSinSuSlave
+- src/M2Server/Magic/MagicManager.cs:462-473 case SKILL_ANGEL=41：CheckAmulet(2,1) → UseAmulet(2,1) → MagMakeAngelSlave
+- src/M2Server/Magic/MagicManager.cs:644-647 if (boSpellFail) return false;
+- src/M2Server/Magic/MagicManager.cs:648-658 if (boSpellFire) SendRefMsg(RM_MAGICFIRE, 0, MakeWord(EffectType,Effect), MakeLong(tx,ty), targetObject?.ActorId ?? 0, "")
+- src/M2Server/Magic/MagicManager.cs:659-669 if (Level<3 && boTrain) { if (TrainLevel[Level]<=Abil.Level) { TrainSkill(Random(3)+1); if(!CheckMagicLevelUp) SendSelfDelayMsg(RM_MAGIC_LVEXP,0,MagicId,Level,TranPoint,"",1000); } }
+
+## C. 护身符
+- src/M2Server/Magic/MagicBase.cs:47-105  CheckAmulet（ArmRingl=5 再 Bujuk=9；Index>0、StdMode==25、Round(Dura/100)>=count、type1⇒Shape==5 / type2⇒Shape<=2）
+- src/M2Server/Magic/MagicBase.cs:109-127 UseAmulet（Dura>nCount*100 ⇒ 扣 + RM_DURACHANGE；否则 Dura=0 + SendDelItems + Index=0）
+- src/OpenMir2/Enums/ItemLocation.cs:28,44 ArmRingl=5 / Bujuk=9
+
+## D. 选型/落尾（① 已实现，本片接线调用）
+- src/M2Server/Magic/MagicManager.cs:1269-1306 MagMakeSinSuSlave（回召支 result 仍 false）
+- src/M2Server/Magic/MagicManager.cs:1308-1335 MagMakeSlave（骷髅选型无 break）
+- src/M2Server/Magic/MagicManager.cs:1343-1352 MagMakeAngelSlave
+- src/M2Server/Actor/BaseObject.cs:1179-1209 MakeSlave（门/落尾）
+
+## E. 帧（SM_* 编码）
+- src/M2Server/Player/PlayObject.Message.cs:1454-1459 RM_SPELL → SM_SPELL（+ 尾 nParam3.ToString() 原样）
+- src/M2Server/Player/PlayObject.Message.cs:1788-1793 RM_MAGICFIRE → SM_MAGICFIRE（+ EncodeBuffer(4B targetActorId)）
+- src/M2Server/Player/PlayObject.Message.cs:1800-1802 RM_MAGIC_LVEXP → SM_MAGIC_LVEXP
+- src/M2Server/Player/PlayObject.Message.cs:1803-1805 RM_DURACHANGE → SM_DURACHANGE
+- src/BotSrv/Player/RobotPlayer.Operate.cs:1039/1042 客户端回读 SM_MAGIC_LVEXP/SM_DURACHANGE（字段位反证）
+
+## F. 配置/模板
+- src/Modules/SystemModule/Conf/ServerConf.cs:539  [Setup] MagicAttackRage（byte，缺省 GameSvrConf.cs:1752 = 8）
+- src/GameSrv/DB/MySqlDB.cs:105  LoadMagicDB（magics 表 → M2Share.MagicList）
+- src/M2Server/Player/PlayObject.cs:4174-4185 GetMagicInfo（按 Magic.MagicId 线性查）
+- src/M2Server/Player/PlayObject.cs:4393-4400 TrainSkill（FastTrain ⇒ ×3）
+- src/M2Server/Player/PlayObject.cs:5198-5226 CheckMagicLevelUp

@@ -1,0 +1,41 @@
+M3⑨-2 第③片（20 诱惑）变更摘要
+================================================================================
+
+本片在**已交付的第②片（head 8cd889090，召唤面 17/30/41）**之上，补 ⑨-2 卡内最后一个
+未接技能 **20（`SKILL_TAMMING` 诱惑）**。第②片当时因 `World::tame_adopt` 尚未合入而把 20
+登记为「待 ⑨-3 合入后的小补片」；⑨-3 已由 reviewer-5 approve 并合入 master `d5be14f40`
+⇒ 本片在其上接线。
+
+本片对 master（`d5be14f40`）的**独立**净改动（不含第②片遗留）：
+
+  mir2-rs/bins/game-svr/src/main.rs              |  99 ++++++  （`handle_spell_cmd` 增 20 支）
+  mir2-rs/bins/game-svr/src/slave.rs             | 345 ++++++++ （`TammingCastInput/Outcome` + `cast_tamming_spell` + `tamming_input` + 3 判据）
+  mir2-rs/crates/world/src/combat.rs             |  32 ++++   （`race_is_animal` + 1 判据）
+  3 files changed, 470 insertions(+), 6 deletions(-)
+
+（`git diff --stat c4bbfad0a c6c9f0928`；`c4bbfad0a` = 本支 merge master 的合并点。）
+
+逐项：
+
+1. `crates/world::combat::race_is_animal(race)`：`BaseObject.Animal` 的**构造期**等价物
+   （oracle 只按 race 在构造路径置真：51/52/53 对象初始化器 + 82/84/85/90 派生 ctor）。
+   `ReAliveEx` 的 race 54 支属复活路径（本骨架未建模）⇒ 不计入并登记。
+2. `bins/game-svr::slave::tamming_input`：装配 `magic::TammingInput`；两道门
+   `is_proper_target_grouped`（含 ⑦-4 组剔除）与 `!race_is_animal`；`target_no_tame` 恒
+   false（oracle `MonsterInfo.boTame` 无装载点，登记）。
+3. `bins/game-svr::slave::cast_tamming_spell`：`mag_tamming` 走 `world.rng`（账本不变）→
+   `TargetCret` 清（`:709`）→ 受奴判 `out.target_master_is_caster && !tin.target_master_is_caster`
+   → [`World::tame_adopt`] 落尾（Master / MasterRoyaltyTick / SlaveMakeLevel / MasterTick /
+   WalkSpeed / NextHitTime / BreakHolySeizeMode / SlaveList.Add）→ 非受奴支的 `HP=0` 就地写 →
+   共享尾 `do_spell_tail(false, true, bo_train, …)`。
+4. `bins/game-svr::main::handle_spell_cmd` 增 20 支：`CretInNearXy` 修正 → `MagicAttackRage`
+   距离门 → `sm_spell` 广播 → `cast_tamming_spell` → 熟练度回写存档 → `sm_magicfire` →
+   `sm_magic_lvexp`。
+
+未接（登记）：`RM_MAKEHOLYSEIZEMODE` 帧无编码器（`:712/812`）；`OpenCrazyMode` 狂暴态/时长
+本骨架无字段（抽数已在 `mag_tamming` 消费，账本不变）；`CanReAlive`/`MonGen.ActiveCount`
+同 ⑨-3 登记。
+
+第②片遗留（仍在本支 head 内，见其独立证据包 `evidence-m3-pet-slave-summon-wire-20261013/`）：
+`crates/world/src/magic.rs`（`royalty_draw` 表面积化）、`bins/game-svr/src/{config,lib,magics,smframe}.rs`、
+`tests/magic_effect_vectors.rs` + 该证据目录。

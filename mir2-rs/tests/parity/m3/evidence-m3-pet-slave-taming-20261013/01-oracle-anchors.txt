@@ -1,0 +1,71 @@
+M3⑨-2 第③片（20 诱惑 / SKILL_TAMMING）oracle 锚点（文件:行号，在本 worktree 的 src/ 实测）
+================================================================================
+
+来源卡：openmir2-m3-pet-slave-summon（M3⑨-实现 2，第③片）。
+盘点输入：tests/parity/m3/M3⑨英雄宠物现状盘点报告-20261013.md §2「召唤/诱惑」链路。
+
+[A] DoSpell 顶层（每个魔号都走）
+    src/M2Server/Magic/MagicManager.cs:145       public static bool DoSpell(PlayObject, UserMagic, nTargetX, nTargetY, IActor targetObject)
+    src/M2Server/Magic/MagicManager.cs:149       if (IsWarrSkill(userMagic.MagIdx)) return false;
+    src/M2Server/Magic/MagicManager.cs:153-156   距离门 |CurrX-nTargetX|>MagicAttackRage || |CurrY-nTargetY|>… ⇒ false
+    src/M2Server/Magic/MagicManager.cs:159       SendRefMsg(RM_SPELL, userMagic.Magic.Effect, nTargetX, nTargetY, MagicId, "")
+    src/M2Server/Magic/MagicManager.cs:165       if (targetObject != null && targetObject.Death) targetObject = null;
+    src/M2Server/Magic/MagicManager.cs:167       版本门 SoftVersionDateEx==0 && ClientTick==0 || MagicId>80 ⇒ false
+    src/M2Server/Player/PlayObject.Base.cs:1505   private bool DoSpell(...) try/catch（异常被吞 ⇒ result=false、尾不跑）
+    src/M2Server/Player/PlayObject.Base.cs:1509   IsWarrSkill ⇒ 不施法；1513-1517 MP 支
+
+[B] 目标获取 + 分支选择（宿主侧）
+    src/M2Server/Player/PlayObject.Attack.cs:1268-1274  default: Dir = GetNextDirection(...); CretInNearXy(targetObject, nTargetX, nTargetY) ⇒ 1×1 邻域命中则修正坐标
+    src/M2Server/Player/PlayObject.Attack.cs:1278       DoSpell(UserMagic, nTargetX, nTargetY, spellObject)
+    （`switch (UserMagic.MagIdx)` 的 8 个独立 case 见 crates/.../magicwire.rs::EXPLICIT_CASE_MAG_IDX；20 不在其中 ⇒ 走 default，故 `Dir` 会被改）
+
+[C] SKILL_TAMMING 支
+    src/Modules/SystemModule/Const/MagicConst.cs:84   public const byte SKILL_TAMMING = 20;
+    src/M2Server/Magic/MagicManager.cs:394-397        case MagicConst.SKILL_TAMMING:
+                                                      if (playObject.IsProperTarget(targetObject) && !targetObject.Animal)
+                                                          if (MagTamming(playObject, (MonsterObject)targetObject, nTargetX, nTargetY, userMagic.Level))
+                                                              boTrain = true;
+
+[D] MagTamming 本体（取数账本由 crates/world::magic::mag_tamming 逐字保留）
+    src/M2Server/Magic/MagicManager.cs:704-825   private static bool MagTamming(PlayObject, MonsterObject, int nTargetX, int nTargetY, byte magicLevel)
+    src/M2Server/Magic/MagicManager.cs:707       if (targetObject.Race > ActorRace.Play && Random(4 - magicLevel) == 0)
+    src/M2Server/Magic/MagicManager.cs:709       targetObject.TargetCret = null;      ← 进入外层支即无条件清
+    src/M2Server/Magic/MagicManager.cs:710-715   if (Master == playObject) { SendMsg(RM_MAKEHOLYSEIZEMODE, (magicLevel*5+10)*1000, …); result = true; }  （RM_MAKEHOLYSEIZEMODE 在 :712）
+    src/M2Server/Magic/MagicManager.cs:717       if (Random(2) == 0)
+    src/M2Server/Magic/MagicManager.cs:720       Abil.Level <= playObject.Abil.Level + 2
+    src/M2Server/Magic/MagicManager.cs:721       if (Random(3) == 0)
+    src/M2Server/Magic/MagicManager.cs:723       Random(playObject.Abil.Level + 20 + magicLevel*5) > Abil.Level + Config.MagTammingTargetLevel
+    src/M2Server/Magic/MagicManager.cs:725       !NoTame && LifeAttrib != LA_UNDEAD && Abil.Level < MagTammingLevel && SlaveList.Count < MagTammingCount
+    src/M2Server/Magic/MagicManager.cs:727-735   n14 = MaxHP / MagTammingHPRate; n14<=2 ⇒ 2 else n14+=n14; Random(n14)==0
+    src/M2Server/Magic/MagicManager.cs:738       BreakCrazyMode()
+    src/M2Server/Magic/MagicManager.cs:741       if (targetObject.Master != null) WAbil.HP = HP/10
+    src/M2Server/Magic/MagicManager.cs:743-756   CanReAlive/MonGen.ActiveCount（本骨架未建模，⑨-3 登记）
+    src/M2Server/Magic/MagicManager.cs:758-760   Master = playObject; MasterRoyaltyTick = (Random(caster.Lv*2)+(magicLevel<<2)*5+20)*60*1000+GetTickCount()（:759）; SlaveMakeLevel = magicLevel（:760）
+    src/M2Server/Magic/MagicManager.cs:761-775   MasterTick（:761-764）; BreakHolySeizeMode()（:765）; WalkSpeed/NextHitTime 封顶（:766-773）; RefShowName()（:774）; SlaveList.Add（:775）
+    src/M2Server/Magic/MagicManager.cs:779-781   else if (Random(14) == 0) targetObject.WAbil.HP = 0;
+    src/M2Server/Magic/MagicManager.cs:787-790   LA_UNDEAD ⇒ Random(20)==0 ⇒ HP = 0
+    src/M2Server/Magic/MagicManager.cs:795-798   Random(20)==0 ⇒ OpenCrazyMode(Random(20) + 10)
+    src/M2Server/Magic/MagicManager.cs:803-806   内层 else：非 undead ⇒ OpenCrazyMode(Random(20) + 10)
+    src/M2Server/Magic/MagicManager.cs:812       Random(2)!=0 支：SendMsg(RM_MAKEHOLYSEIZEMODE, …)
+    src/M2Server/Magic/MagicManager.cs:819-822   外层 else：Random(2)==0 ⇒ result = true
+
+[E] 目标判定（IsProperTarget / Animal / NoTame）
+    src/M2Server/Player/PlayObject.cs:1924-1958   override IsProperTarget（攻击模式 → IsAttackTarget → 保护/组剔除）
+    src/M2Server/Actor/BaseObject.cs:178          public bool Animal { get; set; }
+    src/M2Server/Actor/BaseObject.cs:399/404      ctor 初值 Animal=false; NoTame=false
+    src/M2Server/Actor/BaseObject.cs:2601-2603    ReAliveEx case 54: Animal = true（复活路径；本骨架未建模 ⇒ 登记不计入）
+    src/GameSrv/Word/WorldServer.MonGen.cs:518-553 CreateMonster 对象初始化器：AnimalChicken(51)/AnimalDeer(52)/AnimalWolf(53) Animal=true
+    src/M2Server/Monster/Monsters/SpitSpider.cs:15 SpitSpider ctor Animal = true（race 82）
+    src/M2Server/Monster/Monsters/Scorpion.cs:7    Scorpion ctor Animal = true（race 84）
+    src/M2Server/Monster/Monsters/StickMonster.cs:23 StickMonster ctor Animal = true（race 85）
+    src/M2Server/Monster/Monsters/GasAttackMonster.cs:12 GasAttackMonster ctor Animal = true（race 90）
+    src/GameSrv/Word/WorldServer.MonGen.cs:911     monsterActor.NoTame = monster.boTame（`MonsterInfo.boTame` 全仓无赋值点、DB `monsters` 无该列 ⇒ 恒 false）
+    src/OpenMir2/Data/MonsterInfo.cs:70            public bool boTame;（无装载点）
+
+[F] 共享尾（20 没有置 boSpellFail 的分支 ⇒ boSpellFail=false、boSpellFire=true）
+    src/M2Server/Magic/MagicManager.cs:644-647   if (boSpellFail) return false
+    src/M2Server/Magic/MagicManager.cs:648-658   if (boSpellFire) SendRefMsg(RM_MAGICFIRE, 0, MakeWord(EffectType,Effect), MakeLong(tx,ty), targetActorId, "")
+    src/M2Server/Magic/MagicManager.cs:659-669   if (Level<3 && boTrain) { TrainLevel[Level]<=Abil.Level ⇒ TrainSkill(Random(3)+1) … }
+
+[G] 帧
+    src/OpenMir2/Messages.cs:844                  public const int RM_MAKEHOLYSEIZEMODE = 60005;（crates/protocol::messages:581 已登记常量；无编码器 ⇒ 登记未接）

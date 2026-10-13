@@ -1,0 +1,9 @@
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3hp\mir2-rs\crates\world)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.01s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m3hp-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 1 test
+test magic::amulet_use_tests::use_amulet_deducts_when_enough_and_zeroes_when_not ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 96 filtered out; finished in 0.00s
+

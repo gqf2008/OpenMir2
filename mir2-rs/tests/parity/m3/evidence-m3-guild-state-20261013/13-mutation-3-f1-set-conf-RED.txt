@@ -1,0 +1,26 @@
+### RC3 mutation: set_conf 去掉 bo_changed = true（F-1：LoadConfig 5 个 setter 应置 BoChanged）
+### mutated-file sha256 = 7f3fb313ecd8e6ea1df3c4eb0e43daf308924e3ae9b12a628db71adde00f2d9c
+### cmd: cargo test -p mir2-world --lib guild::tests::f1_load_marks_ini_dirty --offline
+   Compiling mir2-world v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3cs\mir2-rs\crates\world)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.58s
+     Running unittests src\lib.rs (E:/tmp/openmir2-m3cs-target\debug\deps\mir2_world-b447abe76269f045.exe)
+
+running 1 test
+test guild::tests::f1_load_marks_ini_dirty ... FAILED
+
+failures:
+
+---- guild::tests::f1_load_marks_ini_dirty stdout ----
+
+thread 'guild::tests::f1_load_marks_ini_dirty' (11780) panicked at crates\world\src\guild.rs:1227:9:
+LoadGuild → GuildConf.LoadConfig 经 5 个 setter ⇒ BoChanged=true
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    guild::tests::f1_load_marks_ini_dirty
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 149 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-world --lib`
+### restored sha256 = 94ff62f9ae19f911250ead9bfe72a7cb81b0dcff761fe3f73c89b331b80ed92f

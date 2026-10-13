@@ -46,11 +46,13 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use game_svr::chat;
 use game_svr::downlink;
+use game_svr::magics;
 use game_svr::movewire;
 use game_svr::party as partywire;
 use game_svr::smframe;
 use mir2_protocol::frame::ServerMessage;
 use mir2_protocol::messages::grobal2;
+use mir2_world::magic;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::{TcpListener, TcpStream};
@@ -386,6 +388,33 @@ async fn main() -> Result<()> {
     // 查表口径只有一份：装成 `game_svr::ability::StdItemCatalog`（1-based + 空名按缺），
     // 供帧 50/41 的 `StdItem.Shape` 与 52/752 的 `RecalcAbilitys` 共用。
     let item_catalog = items::catalog_from(&item_table);
+    // **M3⑨-实现 2 第②片**：魔法模板表 `magics`（oracle `MySqlDB.LoadMagicDB`，
+    // `MySqlDB.cs:105`，`GameApp.Initialize` 直连 MySQL 读）。`DoSpell` 取 `Magic.Effect`/
+    // `EffectType`（`RM_SPELL`/`RM_MAGICFIRE` 帧参）与熟练度尾的 `TrainLv`/`TrainLevel`/`MaxTrain`。
+    // 读不到 ⇒ 空表（调用方按 `GetMagicInfo == null` 降级：不接效果体，登记）。
+    let magic_table = {
+        let conn = cfg
+            .db_conn_string
+            .as_deref()
+            .unwrap_or(items::DEFAULT_CONN_STRING);
+        match magics::load_magics(conn).await {
+            Ok(list) => {
+                glog!(
+                    "INF",
+                    "魔法模板表 magics：{} 条（直连 MySQL，DoSpell 效果体/帧参输入）",
+                    list.len()
+                );
+                magics::MagicTable::new(list)
+            }
+            Err(e) => {
+                glog!(
+                    "WRN",
+                    "读 magics 失败（{e}）⇒ 空魔表（GetMagicInfo 恒 null ⇒ 效果体不接，登记）"
+                );
+                magics::MagicTable::default()
+            }
+        }
+    };
     // 经验表（`Exps.conf` 的 `NeedExps`，`BaseObject.GetLevelExp` 的数据源）：存档 `MaxExp`
     // （`PlayObject.cs:1310`）与击杀经验都用它。读不到 ⇒ 全 0（oracle `Config.NeedExps` 未载入同形；登记）。
     let need_exps = match mir2_data::exps::ExpsConfig::from_file(&base.join("Exps.conf")) {
@@ -472,6 +501,18 @@ async fn main() -> Result<()> {
             mir2_world::mongen::MonGenConfig::default()
         }
     };
+    // **M3⑨-实现 2 第②片**：`Server.conf` 的宝宝配置（`PetSlaveConfig::from_ini`，
+    // ① 已交付但未接生产路径）。`DoSpell` 召唤面用它选型。读不到 ⇒ oracle 初值（登记）。
+    let pet_cfg = match game_svr::slave::pet_slave_config_from_conf(&conf) {
+        Ok(c) => c,
+        Err(e) => {
+            glog!(
+                "WRN",
+                "读宝宝配置失败（{e}）⇒ 用 PetSlaveConfig 初值（登记）"
+            );
+            mir2_data::pet_slave::PetSlaveConfig::default()
+        }
+    };
     let _sim = std::thread::Builder::new()
         .name("m2-sim".to_string())
         // 公告文本（oracle `NoticeMgr.GetNoticeMsg("Notice")`，帧 658 `SM_SENDNOTICE`）：
@@ -486,6 +527,9 @@ async fn main() -> Result<()> {
                     string_conf,
                     show_rank_level_name,
                     catalog: item_catalog,
+                    magic_table,
+                    pet_cfg,
+                    magic_attack_rage: i32::from(cfg.magic_attack_rage),
                     ground: GroundCfg {
                         human_max_gold: cfg.human_max_gold,
                         floor_item_can_pick_up_time: cfg.floor_item_can_pick_up_time,
@@ -2963,12 +3007,17 @@ fn handle_hit_cmd(
     true
 }
 
-/// **`openmir2-m3-attack-magic-wiring`（第二片）**：`CM_SPELL(3017)` 派发
-/// （oracle `WorldServer.cs:783-790` → `PlayObject.Message.cs:1339-1400`）。
+/// **`openmir2-m3-attack-magic-wiring`（第二片）** + **`openmir2-m3-pet-slave-summon`（第②片）**：
+/// `CM_SPELL(3017)` 派发（oracle `WorldServer.cs:783-790` → `PlayObject.Message.cs:1339-1400`）。
 ///
-/// 本片实现到 `ClientSpellXY` 的**守卫**与成功后 `+GD` ack；技能效果体（限速 /`switch(MagIdx)`/
-/// `DoSpell`/`RM_SPELL`）未接，登记见 `magicwire` 模块头。拒绝支 oracle 在 `delayTime == 0`
-/// 时 `SendRefMsg(RM_MOVEFAIL, …)`（编码器未接）⇒ 只记日志、不静默。
+/// 守卫 + 成功后 `+GD` ack 沿用第二片；**第②片**接上 `DoSpell` 的**召唤面**（17/30/41）
+/// 效果体：`default` 支的 `CretInNearXy` 目标修正 → `MagicAttackRage` 距离门 →
+/// `SendRefMsg(RM_SPELL,…)` → 护身符门/消耗 → `summon_from_spell` → `boSpellFire` 的
+/// `RM_MAGICFIRE` → `boTrain` 熟练度尾 `RM_MAGIC_LVEXP`。**第③片**接 **20（诱惑）**：
+/// `SKILL_TAMMING` 支（`MagicManager.cs:394-397`）的 `IsProperTarget && !Animal` 门 →
+/// `cast_tamming_spell`（`MagTamming` 账本 + `World::tame_adopt` 落尾）。46（分身）登记见
+/// `game_svr::slave` 模块头 + `crates/world::slave::CLONE_DEFERRED`。
+/// 效果体限速 / `SpellTick -= 450` / MP 消耗仍按 `magicwire` 模块头登记未接。
 #[allow(clippy::too_many_arguments)]
 fn handle_spell_cmd(
     recog: i32,
@@ -2978,8 +3027,15 @@ fn handle_spell_cmd(
     chr_name: &str,
     socket: i32,
     online: &OnlineRegistry,
-    world: &mir2_world::World,
-    saves: &std::collections::HashMap<String, SavedHuman>,
+    world: &mut mir2_world::World,
+    saves: &mut std::collections::HashMap<String, SavedHuman>,
+    ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    magic_table: &magics::MagicTable,
+    pet_cfg: &mir2_data::pet_slave::PetSlaveConfig,
+    magic_attack_rage: i32,
+    registry: Option<&mir2_envir::MapRegistry>,
+    table: &game_svr::mongen::MonsterTable,
     displays: &mut downlink::DisplayTable,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) {
@@ -3000,15 +3056,16 @@ fn handle_spell_cmd(
     };
     let (cur_x, cur_y) = (e.x, e.y);
     let is_dead = e.death;
+    let caster_abil_level = e.level;
     let req = magicwire::parse_spell(recog, tag, param, series);
     // `GetMagicInfo(nKey)` 读角色记录的 `MagicList`（= `SavedHuman.record.data.magic`，进世界时
     // 保位存下的 `CharacterData.magic`）。
-    let matched_mag_idx = saves
+    let matched = saves
         .get(chr_name)
         .and_then(|s| s.record.data.magic.as_deref())
         .and_then(|list| magicwire::find_magic(list, req.magic_id))
-        .map(|m| i32::from(m.mag_idx));
-    let has_magic = matched_mag_idx.is_some();
+        .cloned();
+    let has_magic = matched.is_some();
     // `IsCanSpell`（`PlayObject.cs:960` 初值 true；`LockSpellAction` 状态面未移植 ⇒ 恒 true，登记）。
     if let Some(reject) = magicwire::spell_reject(true, is_dead, has_magic) {
         glog!(
@@ -3021,14 +3078,300 @@ fn handle_spell_cmd(
     // `switch (UserMagic.MagIdx)` 的 `default` 支首句
     // `Dir = M2Share.GetNextDirection(CurrX, CurrY, nTargetX, nTargetY)`
     // （`PlayObject.Attack.cs:1269-1270`；原注误写 :1256，已按 reviewer-5 `1de8fca5` 的 F-1 订正）；
-    // 效果体其余部分未接（登记）。**F-2 收口**（reviewer-5 `1de8fca5`）：该句只在 `default` 支执行，
+    // **F-2 收口**（reviewer-5 `1de8fca5`）：该句只在 `default` 支执行，
     // `switch` 的 8 条独立 `case`（12/25/26/27/34/38/43/56）**不执行** ⇒ 只有非这 8 个魔号才改展示方向。
-    if matched_mag_idx.is_some_and(magicwire::takes_default_dir) {
+    if matched
+        .as_ref()
+        .is_some_and(|m| magicwire::takes_default_dir(i32::from(m.mag_idx)))
+    {
         let dir = movewire::next_direction(cur_x, cur_y, req.target_x, req.target_y);
         set_display_dir(displays, actor_id, dir);
     }
+    // **第②片**：召唤面（17/30/41）的 `default` 支效果体（`PlayObject.Attack.cs:1271-1279` + `MagicManager.cs:145-670`）。
+    if matches!(
+        req.magic_id,
+        mir2_world::slave::SKILL_SKELLETON
+            | mir2_world::slave::SKILL_SINSU
+            | mir2_world::slave::SKILL_ANGEL
+    ) {
+        if let (Some(magic), Some(reg)) = (magic_table.get(req.magic_id), registry) {
+            // `CretInNearXy(targetObject, nTargetX, nTargetY)`（`PlayObject.Base.cs:984-1011`）：
+            // 目标在 `(nTargetX,nTargetY)` 的 1×1 邻域内 ⇒ `spellObject = targetObject` 且
+            // snap 坐标到目标实际坐标。
+            let (mut tx, mut ty) = (req.target_x, req.target_y);
+            let target_id = match world.entities.get(req.target_actor_id) {
+                Some(t) if !t.ghost && (t.x - tx).abs() <= 1 && (t.y - ty).abs() <= 1 => {
+                    tx = t.x;
+                    ty = t.y;
+                    Some(req.target_actor_id)
+                }
+                _ => None,
+            };
+            // `DoSpell` 距离门（`MagicManager.cs:155`，`SystemShare.Config.MagicAttackRage`）。
+            if magic::spell_in_range(
+                i16::try_from(cur_x).unwrap_or(0),
+                i16::try_from(cur_y).unwrap_or(0),
+                i16::try_from(tx).unwrap_or(0),
+                i16::try_from(ty).unwrap_or(0),
+                magic_attack_rage,
+            ) {
+                // `SendRefMsg(RM_SPELL, Magic.Effect, nTargetX, nTargetY, Magic.MagicId, "")`（`:159`）。
+                let rm = smframe::sm_spell(
+                    actor_id,
+                    wire_coord(tx),
+                    wire_coord(ty),
+                    magic.effect,
+                    req.magic_id,
+                );
+                broadcast_ref_msg(world, online, gates, actor_id, &[rm]);
+                // 护身符门（`CheckAmulet`）用的本会话 `UseItems[ArmRingl/Bujuk]`。
+                let armringl = amulet_slot(
+                    ground_sessions.get(chr_name),
+                    game_svr::ability::SLOT_ARMRING_L,
+                    catalog,
+                );
+                let bujuk = amulet_slot(
+                    ground_sessions.get(chr_name),
+                    game_svr::ability::SLOT_BUJUK,
+                    catalog,
+                );
+                let caster_dir = displays.get(actor_id).map_or(0, |d| d.dir);
+                // `UserMagic` 的内存态（Level/TranPoint 在尾里被 `TrainSkill`/`CheckMagicLevelUp` 改）。
+                let mut train = magic::SkillTrainState {
+                    magic_id: req.magic_id,
+                    level: matched.as_ref().map_or(0, |m| m.level),
+                    tran_point: matched.as_ref().map_or(0, |m| m.tran_point),
+                    train_lv: magic.train_lv,
+                    train_level: magic.train_level,
+                    max_train: magic.max_train,
+                };
+                let magic_level = train.level;
+                let input = game_svr::slave::SlaveCastInput {
+                    magic_id: req.magic_id,
+                    magic_level,
+                    caster_id: actor_id,
+                    caster_dir,
+                    caster_abil_level,
+                    armringl,
+                    bujuk,
+                    // `FastTrain` 由「快速修炼项链」置位（`PlayObject.cs:2168`），本仓未装载 ⇒ false（登记）。
+                    fast_train: false,
+                    cfg: pet_cfg,
+                    magic,
+                };
+                let outcome = game_svr::slave::cast_slave_spell(
+                    world, &input, &mut train, reg, table, displays,
+                );
+                // 熟练度回写存档记录（`MakeSaveRcd` 的 `MagicList` 同源）。
+                if let Some(rcd) = saves
+                    .get_mut(chr_name)
+                    .and_then(|s| s.record.data.magic.as_mut())
+                    .and_then(|list| {
+                        list.iter_mut()
+                            .flatten()
+                            .find(|m| m.mag_idx == req.magic_id)
+                    })
+                {
+                    rcd.level = train.level;
+                    rcd.tran_point = train.tran_point;
+                }
+                // 护身符消耗落 `UseItems` + `SendMsg(RM_DURACHANGE, idx, Dura, DuraMax, 0)`（`MagicBase.cs:118-121`）。
+                if let Some((slot, used)) = outcome.amulet {
+                    apply_amulet_use(ground_sessions.get_mut(chr_name), slot, used);
+                    if !used.deleted {
+                        if let Some(it) = ground_sessions
+                            .get(chr_name)
+                            .and_then(|sg| sg.use_items.get(usize::from(slot)))
+                            .and_then(Option::as_ref)
+                        {
+                            let body = smframe::sm_durachange(it.dura, slot, it.dura_max);
+                            send_self_frame(online, gates, chr_name, body);
+                        }
+                    }
+                    // `deleted` 支的 `SendDelItems` 帧面未接（登记）；清槽已由 `apply_amulet_use` 落。
+                }
+                // `boSpellFire` ⇒ `SendRefMsg(RM_MAGICFIRE, 0, MakeWord(EffectType,Effect), MakeLong(tx,ty), targetActorId, "")`（`:648-658`）。
+                // **F-1**：`RM_MAGICFIRE` 处理器无 `ActorId != ActorId` 守卫（`PlayObject.Message.cs:1788-1793`）
+                // ⇒ 广播集合**含施法者自己**（`RM_SPELL` 仍排除自己）。
+                if outcome.magic_fire {
+                    let body = smframe::sm_magicfire(
+                        actor_id,
+                        wire_coord(tx),
+                        wire_coord(ty),
+                        magic.effect_type,
+                        magic.effect,
+                        target_id.unwrap_or(0),
+                    );
+                    broadcast_ref_msg_with_self(world, online, gates, actor_id, &[body]);
+                }
+                // 熟练度尾帧（`:659-669`）：`SendSelfDelayMsg(RM_MAGIC_LVEXP, 0, MagicId, Level, TranPoint, "", 1000)`。
+                if outcome.train.levelup_msg {
+                    let body = smframe::sm_magic_lvexp(req.magic_id, train.level, train.tran_point);
+                    send_self_frame(online, gates, chr_name, body);
+                }
+                let _ = outcome.accepted; // oracle `ClientSpellXY` 恒 `result = true`（失败只多一帧 RM_MAGICFIREFAIL，未接）。
+            }
+        } else {
+            glog!(
+                "DBG",
+                "CM_SPELL：召唤魔号 {} 无 MagicInfo/无地图注册表 ⇒ 效果体不接（登记）",
+                req.magic_id
+            );
+        }
+    }
+    // **⑨-2 第③片（20 诱惑）**：`SKILL_TAMMING` 效果体
+    // （`PlayObject.Attack.cs:1268-1278` → `MagicManager.cs:394-397` → `MagTamming` `:704-825`）。
+    if req.magic_id == mir2_world::slave::SKILL_TAMMING {
+        if let Some(magic) = magic_table.get(req.magic_id) {
+            // `CretInNearXy(targetObject, nTargetX, nTargetY)`：与召唤面同口径，
+            // 目标在 1×1 邻域内 ⇒ 修正到目标实际坐标并作为 `spellObject`。
+            let (mut tx, mut ty) = (req.target_x, req.target_y);
+            let target_id = match world.entities.get(req.target_actor_id) {
+                Some(t) if !t.ghost && (t.x - tx).abs() <= 1 && (t.y - ty).abs() <= 1 => {
+                    tx = t.x;
+                    ty = t.y;
+                    Some(req.target_actor_id)
+                }
+                _ => None,
+            };
+            // `DoSpell` 的距离门（`MagicManager.cs:154`）。
+            if magic::spell_in_range(
+                i16::try_from(cur_x).unwrap_or(0),
+                i16::try_from(cur_y).unwrap_or(0),
+                i16::try_from(tx).unwrap_or(0),
+                i16::try_from(ty).unwrap_or(0),
+                magic_attack_rage,
+            ) {
+                // `DoSpell` 顶部的 `SendRefMsg(RM_SPELL, Effect, nTargetX, nTargetY, MagicId, "")`（`:159`）。
+                let rm = smframe::sm_spell(
+                    actor_id,
+                    wire_coord(tx),
+                    wire_coord(ty),
+                    magic.effect,
+                    req.magic_id,
+                );
+                broadcast_ref_msg(world, online, gates, actor_id, &[rm]);
+                // `UserMagic` 的内存态（尾里用；与召唤面同一口径）。
+                let mut train = magic::SkillTrainState {
+                    magic_id: req.magic_id,
+                    level: matched.as_ref().map_or(0, |m| m.level),
+                    tran_point: matched.as_ref().map_or(0, |m| m.tran_point),
+                    train_lv: magic.train_lv,
+                    train_level: magic.train_level,
+                    max_train: magic.max_train,
+                };
+                let input = game_svr::slave::TammingCastInput {
+                    magic_level: train.level,
+                    caster_id: actor_id,
+                    caster_abil_level,
+                    target_id,
+                    // `FastTrain` 未装载 ⇒ false（登记，同召唤面）。
+                    fast_train: false,
+                    cfg: pet_cfg,
+                    magic,
+                };
+                let outcome = game_svr::slave::cast_tamming_spell(world, &input, &mut train);
+                // 熟练度回写存档记录（`MakeSaveRcd` 的 `MagicList` 同源）。
+                if let Some(rcd) = saves
+                    .get_mut(chr_name)
+                    .and_then(|s| s.record.data.magic.as_mut())
+                    .and_then(|list| {
+                        list.iter_mut()
+                            .flatten()
+                            .find(|m| m.mag_idx == req.magic_id)
+                    })
+                {
+                    rcd.level = train.level;
+                    rcd.tran_point = train.tran_point;
+                }
+                // `boSpellFire` ⇒ `RM_MAGICFIRE`（`:648-658`）；**F-1**：含施法者自己（同召唤面）。
+                if outcome.magic_fire {
+                    let body = smframe::sm_magicfire(
+                        actor_id,
+                        wire_coord(tx),
+                        wire_coord(ty),
+                        magic.effect_type,
+                        magic.effect,
+                        target_id.unwrap_or(0),
+                    );
+                    broadcast_ref_msg_with_self(world, online, gates, actor_id, &[body]);
+                }
+                // 熟练度尾帧（`:659-669`）。
+                if outcome.train.levelup_msg {
+                    let body = smframe::sm_magic_lvexp(req.magic_id, train.level, train.tran_point);
+                    send_self_frame(online, gates, chr_name, body);
+                }
+                // 帧面未接（登记）：`RM_MAKEHOLYSEIZEMODE`（`:712/797`）无编码器；
+                // 狂暴态/时长（`OpenCrazyMode`）本骨架无字段。状态落尾已由 `cast_tamming_spell` 完成。
+                let _ = outcome.accepted;
+            }
+        } else {
+            glog!(
+                "DBG",
+                "CM_SPELL：诱惑魔号 20 无 MagicInfo ⇒ 效果体不接（登记）"
+            );
+        }
+    }
     // `ClientSpellXY` 全分支 `result = true` ⇒ 调用方 `ActionTick = GetTickCount(); SendSocket(GetGoodTick)`。
     send_good_tick(online, gates, chr_name);
+}
+
+/// `MagicBase.CheckAmulet`（`MagicBase.cs:47-105`）的**宿主侧查表**：把 `UseItems[slot]`
+/// 的 `UserItem{Index,Dura}` + `StdItem{StdMode,Shape}` 装成 `crates/world::magic::AmuletSlot`。
+/// `Index == 0` / 槽空 / 模板缺 ⇒ `None`（oracle `Index > 0` + `GetStdItem != null` 的门）。
+fn amulet_slot(
+    sg: Option<&SessionGround>,
+    slot: usize,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+) -> Option<mir2_world::magic::AmuletSlot> {
+    let it = sg?.use_items.get(slot)?.as_ref()?;
+    if it.index == 0 {
+        return None;
+    }
+    let std = game_svr::ability::ItemCatalog::get(catalog, it.index)?;
+    Some(mir2_world::magic::AmuletSlot {
+        index: i32::from(it.index),
+        std_mode: std.std_mode,
+        shape: std.shape,
+        dura: i32::from(it.dura),
+    })
+}
+
+/// `MagicBase.UseAmulet`（`MagicBase.cs:109-127`）的**宿主副作用**：按 [`mir2_world::magic::AmuletUse`]
+/// 扣耐久或清槽（oracle `Dura -= …` / `Dura = 0; Index = 0`）。
+/// 帧面（`RM_DURACHANGE` / `RM_DELITEMS`）由调用方发。
+fn apply_amulet_use(sg: Option<&mut SessionGround>, slot: u8, used: mir2_world::magic::AmuletUse) {
+    let Some(sg) = sg else { return };
+    let idx = usize::from(slot);
+    if idx >= game_svr::ability::USE_ITEMS_LEN {
+        return;
+    }
+    if used.deleted {
+        // oracle `UseItems[idx].Dura = 0; SendDelItems(item); UseItems[idx].Index = 0;`。
+        sg.use_items[idx] = None;
+    } else if let Some(it) = sg.use_items[idx].as_mut() {
+        it.dura = u16::try_from(used.dura_after).unwrap_or(0);
+    }
+}
+
+/// `SendMsg(this, …)` / `SendSelfDelayMsg(…)` 的**自身收件人**下行（oracle 入自有 `MsgQueue`，
+/// 只回发起者那条连接）：`SM_DURACHANGE` / `SM_MAGIC_LVEXP`。
+fn send_self_frame(
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    chr_name: &str,
+    body: Vec<u8>,
+) {
+    let Some(me) = online.iter().find(|e| e.chr_name == chr_name) else {
+        return;
+    };
+    let Some(tx) = route_to_gate(gates, me.gate_idx, me.socket, "魔法自身帧") else {
+        return;
+    };
+    let _ = tx.send(SimToGate::SendFrame {
+        socket: me.socket,
+        body,
+    });
 }
 
 /// **`openmir2-m3-attack-magic-wiring`（第二片）**：`CM_MAGICKEYCHANGE(1008)` 派发
@@ -3072,6 +3415,10 @@ fn handle_magic_key_cmd(
 ///
 /// 各收件人的 `GetMessage` 对 `RM_TURN`/`RM_WALK`/`RM_RUN`/`RM_HORSERUN` 都带
 /// `if (processMsg.ActorId != ActorId)` ⇒ **广播集合去掉自己**（自己那条连接只收 `+GD` ack）。
+///
+/// **F-1（reviewer-6 `7724b9e441`）**：`RM_SPELL` 保持此口径（`PlayObject.Message.cs:1454-1459`
+/// 有 `ActorId != ActorId` 守卫）；`RM_MAGICFIRE` 的处理器**没有**该守卫
+/// （`PlayObject.Message.cs:1788-1793`）⇒ 施法者自己也收帧，用 [`broadcast_ref_msg_with_self`]。
 fn broadcast_ref_msg(
     world: &mir2_world::World,
     online: &OnlineRegistry,
@@ -3079,8 +3426,32 @@ fn broadcast_ref_msg(
     actor_id: i32,
     bodies: &[Vec<u8>],
 ) {
+    broadcast_ref_msg_opt(world, online, gates, actor_id, bodies, false);
+}
+
+/// `RM_MAGICFIRE` 口径（`PlayObject.Message.cs:1788-1793` 无 `ActorId != ActorId` 守卫）：
+/// 广播集合**包含施法者自己**。
+fn broadcast_ref_msg_with_self(
+    world: &mir2_world::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    actor_id: i32,
+    bodies: &[Vec<u8>],
+) {
+    broadcast_ref_msg_opt(world, online, gates, actor_id, bodies, true);
+}
+
+/// [`broadcast_ref_msg`] / [`broadcast_ref_msg_with_self`] 的公共体。
+fn broadcast_ref_msg_opt(
+    world: &mir2_world::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    actor_id: i32,
+    bodies: &[Vec<u8>],
+    include_self: bool,
+) {
     for target_id in chat::hear_targets(world, actor_id, chat::SEND_REF_MSG_RANGE) {
-        if target_id == actor_id {
+        if !include_self && target_id == actor_id {
             continue;
         }
         let Some(t) = online.iter().find(|e| e.actor_id == target_id) else {
@@ -4405,6 +4776,14 @@ struct EnterConfig {
     /// `stditems` 物品目录（`game_svr::ability::StdItemCatalog`，**1-based** 查表，见 `crate::items`）；
     /// 空目录 = 未加载/无配置。帧 50/41 的 `StdItem.Shape` 与 52/752 的 `RecalcAbilitys` 共用。
     catalog: game_svr::ability::StdItemCatalog,
+    /// **M3⑨-实现 2 第②片**：`magics` 模板表（`M2Share.MagicList` 的查表面）；
+    /// `DoSpell` 效果体/帧参用。空表 = `GetMagicInfo == null`（效果体不接，登记）。
+    magic_table: magics::MagicTable,
+    /// **M3⑨-实现 2 第②片**：`Server.conf` 宝宝配置（召唤选型用）。
+    pet_cfg: mir2_data::pet_slave::PetSlaveConfig,
+    /// **M3⑨-实现 2 第②片**：`[Setup] MagicAttackRage`（`GameSvrConf.cs:873/1752` 缺省 8）——
+    /// `DoSpell` 施法距离门。
+    magic_attack_rage: i32,
     /// `CM_PICKUP`/`CM_DROPITEM` 的 `[Setup]` 输入。
     ground: GroundCfg,
     /// `CM_*` 商店动作的 `[Setup]` 输入（⑤-4 第①片）。
@@ -4987,7 +5366,7 @@ fn sim_loop(
                         // （oracle `WorldServer.cs:857-859` → `PlayObject.Operate.cs:774`）。
                         handle_magic_key_cmd(cmd.recog, cmd.param, &chr_name, socket, &mut saves);
                     } else if magicwire::is_spell_ident(cmd.ident) {
-                        // 同片：`CM_SPELL(3017)` 派发（oracle `WorldServer.cs:783-790`）。
+                        // 同片 + ⑨-2 第②片：`CM_SPELL(3017)` 派发（oracle `WorldServer.cs:783-790`）。
                         handle_spell_cmd(
                             cmd.recog,
                             cmd.tag,
@@ -4996,8 +5375,15 @@ fn sim_loop(
                             &chr_name,
                             socket,
                             &online,
-                            &world,
-                            &saves,
+                            &mut world,
+                            &mut saves,
+                            &mut ground_sessions,
+                            &enter_cfg.catalog,
+                            &enter_cfg.magic_table,
+                            &enter_cfg.pet_cfg,
+                            enter_cfg.magic_attack_rage,
+                            registry.as_ref(),
+                            &enter_cfg.mon_gen.table,
                             &mut displays,
                             &gates,
                         );
@@ -10600,6 +10986,13 @@ mod tests {
             },
         );
         const FIREBALL: u16 = 1;
+        // ⑨-2 第②片新增入参：本用例的魔号（1/99/12）都不是召唤面 ⇒ 空表即等价。
+        let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let magic_table = magics::MagicTable::default();
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let registry: Option<mir2_envir::MapRegistry> = None;
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
 
         // ① 未知魔法号（守卫 NoMagic）⇒ 不回 ack。
         handle_spell_cmd(
@@ -10610,8 +11003,15 @@ mod tests {
             "caster",
             911,
             &online,
-            &world,
-            &saves,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            registry.as_ref(),
+            &table,
             &mut displays,
             &gates,
         );
@@ -10626,8 +11026,15 @@ mod tests {
             "caster",
             911,
             &online,
-            &world,
-            &saves,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            registry.as_ref(),
+            &table,
             &mut displays,
             &gates,
         );
@@ -10658,8 +11065,15 @@ mod tests {
             "caster",
             911,
             &online,
-            &world,
-            &saves,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            registry.as_ref(),
+            &table,
             &mut displays,
             &gates,
         );
@@ -10727,8 +11141,15 @@ mod tests {
             "caster",
             911,
             &online,
-            &world,
-            &saves,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            registry.as_ref(),
+            &table,
             &mut displays,
             &gates,
         );
@@ -10746,6 +11167,193 @@ mod tests {
             displays.get(caster).unwrap().dir,
             game_svr::movewire::DIR_LEFT,
             "F-2：mag_idx=12 有独立 case ⇒ 不套用 default 的 Dir（方向保持左）"
+        );
+    }
+
+    /// **`openmir2-m3-pet-slave-summon`（第②片）**：`CM_SPELL(17 召唤骷髅)` 效果体接线——
+    /// 护身符门过 ⇒ 扣耐久 + 自身 `SM_DURACHANGE`；对观察者广播 `SM_SPELL`/`SM_MAGICFIRE`；
+    /// 自身收 `+GD`。空怪表 ⇒ 造怪失败，但仍走完帧面（oracle `ClientSpellXY` 恒 `result=true`）。
+    ///
+    /// 红检：① `cast_slave_spell` 不消耗护身符（`use_amulet` 不改耐久）⇒ 耐久仍 450 必红；
+    /// ② 把 `sm_spell` 的 `Series` 换成 `MagicId`（不取 `Magic.Effect`）⇒ 帧字段断言必红；
+    /// ③ 不广播 `RM_SPELL`（去掉 `broadcast_ref_msg`）⇒ 观察者无 `SM_SPELL` 必红。
+    #[test]
+    fn spell_cmd_summon_wires_amulet_and_frames() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(64, 64);
+        let caster = {
+            let mut e = new_player_entity("caster".to_string(), 10, 10);
+            e.level = 40;
+            world.add_entity(e)
+        };
+        let observer = world.add_entity(new_player_entity("obs".to_string(), 11, 10));
+        world.tick();
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            caster,
+            downlink::ActorDisplay::new(4, 0, 111, 0, 0, 255, b"caster".to_vec()),
+        );
+        displays.set(
+            observer,
+            downlink::ActorDisplay::new(4, 0, 112, 0, 0, 255, b"obs".to_vec()),
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "uc".into(),
+                chr_name: "caster".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 911,
+                actor_id: caster,
+            },
+        );
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "uo".into(),
+                chr_name: "obs".into(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 912,
+                actor_id: observer,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut saves: HashMap<String, SavedHuman> = HashMap::new();
+        let mut record = stage6_record();
+        record.data.magic = Some(vec![Some(record::MagicRcd {
+            mag_idx: 17,
+            level: 1,
+            magic_key: u16::from(b'm'),
+            tran_point: 0,
+        })]);
+        saves.insert(
+            "caster".into(),
+            SavedHuman {
+                account: "uc".into(),
+                record,
+                enter_map: "0".into(),
+            },
+        );
+        let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(caster);
+        sg.use_items[game_svr::ability::SLOT_ARMRING_L] = Some(game_svr::bag::BagItem {
+            make_index: 1,
+            index: 1,
+            dura: 450,
+            dura_max: 1000,
+            desc: [0; 14],
+        });
+        ground_sessions.insert("caster".into(), sg);
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "护身符".into(),
+                std_mode: 25,
+                shape: 5,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        let magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+            magic_id: 17,
+            effect: 3,
+            effect_type: 4,
+            train_lv: 3,
+            ..mir2_data::MagicInfo::default()
+        }]);
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let registry = mir2_envir::MapRegistry::from_entries(
+            mir2_envir::MapLoader::new(".", "map", "envir"),
+            Vec::new(),
+        );
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+
+        handle_spell_cmd(
+            game_svr::feature::make_long(10, 11),
+            17,
+            9999,
+            0,
+            "caster",
+            911,
+            &online,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            &catalog,
+            &magic_table,
+            &pet_cfg,
+            8,
+            Some(&registry),
+            &table,
+            &mut displays,
+            &gates,
+        );
+
+        let mut frames: Vec<(i32, Vec<u8>)> = Vec::new();
+        while let Ok(m) = rx0.try_recv() {
+            match m {
+                SimToGate::SendFrame { socket, body } => frames.push((socket, body)),
+                SimToGate::SendRaw { socket, payload } => frames.push((socket, payload)),
+                other => panic!("意外的下行：{other:?}"),
+            }
+        }
+        let ident_of = |b: &[u8]| {
+            mir2_protocol::frame::CommandMessage::from_bytes(b)
+                .unwrap()
+                .ident
+        };
+        let obs: Vec<&Vec<u8>> = frames
+            .iter()
+            .filter(|(s, _)| *s == 912)
+            .map(|(_, b)| b)
+            .collect();
+        assert!(
+            obs.iter()
+                .any(|b| ident_of(b) == mir2_protocol::messages::SM_SPELL),
+            "观察者应收 SM_SPELL(RM_SPELL)；实得 {obs:?}"
+        );
+        assert!(
+            obs.iter()
+                .any(|b| ident_of(b) == mir2_protocol::messages::SM_MAGICFIRE),
+            "观察者应收 SM_MAGICFIRE；实得 {obs:?}"
+        );
+        let me: Vec<&Vec<u8>> = frames
+            .iter()
+            .filter(|(s, _)| *s == 911)
+            .map(|(_, b)| b)
+            .collect();
+        assert!(
+            me.iter()
+                .any(|b| ident_of(b) == mir2_protocol::messages::SM_DURACHANGE),
+            "施法者自身应收 SM_DURACHANGE；实得 {me:?}"
+        );
+        // **F-1（reviewer-6 `7724b9e441`）**：`RM_MAGICFIRE` 的 oracle 处理器无
+        // `ActorId != ActorId` 守卫（`PlayObject.Message.cs:1788-1793`）⇒ 施法者自己也应收
+        // `SM_MAGICFIRE`；而 `RM_SPELL`（有守卫）不给自己发（这里 `me` 不含 `SM_SPELL`）。
+        assert!(
+            me.iter()
+                .any(|b| ident_of(b) == mir2_protocol::messages::SM_MAGICFIRE),
+            "F-1：施法者自身应收 SM_MAGICFIRE（RM_MAGICFIRE 无自身守卫）；实得 {me:?}"
+        );
+        assert!(
+            !me.iter()
+                .any(|b| ident_of(b) == mir2_protocol::messages::SM_SPELL),
+            "RM_SPELL 有 `ActorId != ActorId` 守卫 ⇒ 施法者自身不应收 SM_SPELL；实得 {me:?}"
+        );
+        assert!(me.iter().any(|b| b.starts_with(b"+GD/")), "成功支仍回 +GD");
+        // 护身符扣至 350（450 - 1*100）。
+        assert_eq!(
+            ground_sessions["caster"].use_items[game_svr::ability::SLOT_ARMRING_L]
+                .as_ref()
+                .unwrap()
+                .dura,
+            350,
+            "UseAmulet 扣耐久落 UseItems"
         );
     }
 
