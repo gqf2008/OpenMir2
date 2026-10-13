@@ -34,6 +34,13 @@
 commit `2fcebc6cd`）当 head 写——若它对同一 `since` 的差量恰好也全在证据侧——本门仍**咬不住**；
 那一类属「书证命名」，只能靠人写对 + 评审（与 `check` 的既有局限同源，只是对象换成了书证 head）。
 
+**reviewer-6 O-1 收口（2026-10-14）**：旧口径在缺省探测里**只取首个 `head = <oid>`**——若同一包
+同时含「读数 head」与「交付 head」两处声明，会**静默**采信先出现者（缺省顺序
+`11-boundary.txt → 10-boundary.txt → README.md`）。现改为**收集全部声明**，先 `rev-parse` **归一到完整 oid**
+再判：多处声明指向**同一 commit**（哪怕前缀长短不同，真件 `teeth` 包即 `2591a7b31` vs `2591a7b316ae`）
+⇒ 采信首个并继续；出现多处**不同 commit** ⇒ `PREREQ_AMBIGUOUS_HEAD_DECL`（rc=2）逐处点名，
+要求用 `--decl-file` 钉住应采信的那一处。其余四类判据（可解析 / since 祖先 / HEAD 祖先 / 仅证据侧）不变。
+
 用法（cwd = `mir2-rs/tests/parity/m3`）：
     python -I rng-trace-scene/check_evidence_head.py check \
         --dir    evidence-m3-rng-scene-anchor-teeth-20261014 \
@@ -144,13 +151,22 @@ DEFAULT_DECL_RE = r"head\s*=\s*[`\"'<]?([0-9a-fA-F]{7,40})"
 
 
 def _read_declared_head(ev_dir, decl_file, decl_regex):
-    """从包内读「声明 head」。⇒ (oid, 来源文件, 来源说明) 或 (None, 试过的文件, None)。"""
+    """从包内读「声明 head」。
+
+    ⇒ `(首个声明原文, 来源, 说明, 全部声明)`：
+      - 找到声明：`(raw, src, detail, [(raw, file, line)…])`；
+      - 找不到：`(None, tried, None, [])`。
+    **歧义判定不在本函数做**：同一 commit 可能被写成不同长度的前缀（reviewer-6 O-1
+    实测 `teeth` 包就是 `2591a7b31` vs `2591a7b316ae`），必须由 `check_pack` 先 `rev-parse`
+    归一成完整 oid 再判「多处**不同 commit**」，不得按字符串比。
+    """
     try:
         pat = re.compile(decl_regex)
     except re.error as exc:
-        return None, "regex-error:%s" % exc, None
+        return None, "regex-error:%s" % exc, None, []
     candidates = [decl_file] if decl_file else list(DEFAULT_DECL_FILES)
     tried = []
+    matches = []  # [(raw, name, lineno)]，按探测顺序
     for name in candidates:
         path = os.path.join(ev_dir, name)
         if not os.path.isfile(path):
@@ -161,8 +177,14 @@ def _read_declared_head(ev_dir, decl_file, decl_regex):
             for lineno, line in enumerate(fh, 1):
                 m = pat.search(line)
                 if m:
-                    return m.group(1), name, "line %d" % lineno
-    return None, ",".join(tried), None
+                    matches.append((m.group(1), name, lineno))
+    if not matches:
+        return None, ",".join(tried), None, []
+    raw, name, lineno = matches[0]
+    detail = "line %d" % lineno
+    if len(matches) > 1:
+        detail += "（共 %d 处声明）" % len(matches)
+    return raw, name, detail, matches
 
 
 def check_pack(repo, ev_dir, since, decl_file, decl_regex, allow_prefixes):
@@ -180,9 +202,25 @@ def check_pack(repo, ev_dir, since, decl_file, decl_regex, allow_prefixes):
     if not since:
         return 2, ["PREREQ_MISSING: 缺 --since（显式锚）"]
 
-    declared, src, detail = _read_declared_head(ev_dir, decl_file, decl_regex)
+    declared, src, detail, matches = _read_declared_head(ev_dir, decl_file, decl_regex)
     if declared is None:
         return 2, ["PREREQ_MISSING: 包内未找到 `head = <oid>` 声明（试过 %s）" % src]
+
+    # O-1 收口：收集全部声明，按 **resolved 完整 oid** 归组；出现多处**不同 commit** ⇒ fail-closed。
+    # （不得按字符串比：同一 commit 可写成不同长度前缀，真件 `teeth` 包即此。）
+    groups = {}
+    for raw, name, lineno in matches:
+        rcx, outx = _git(root, "rev-parse", "--verify", "--quiet", "%s^{commit}" % raw)
+        key = outx.strip().splitlines()[0] if (rcx == 0 and outx.strip()) else "UNRESOLVED:" + raw.lower()
+        groups.setdefault(key, []).append((raw, name, lineno))
+    if len(groups) > 1:
+        parts = []
+        for key in sorted(groups):
+            locs = "; ".join("%s@%s:%d" % (raw, name, lineno) for (raw, name, lineno) in groups[key])
+            parts.append("[%s] %s" % (key[:12], locs))
+        return 2, ["PREREQ_AMBIGUOUS_HEAD_DECL: 包内有多处**不一致**的 `head = <oid>` 声明"
+                   "（旧口径静默取首个 = reviewer-6 O-1 漏洞）：%s；请用 --decl-file 钉住应采信的那一处"
+                   % " | ".join(parts)]
 
     ev_abs = os.path.abspath(ev_dir)
     ev_rel = _norm(os.path.relpath(ev_abs, root))
@@ -285,12 +323,14 @@ def cmd_selftest(_args):
         base = "mir2-rs/tests/parity/m3"
         prod = "mir2-rs/bins/game-svr/src"          # 生产代码侧（在缺省 allow-prefix 之外）
         ev = os.path.join(repo, base, "ev-synthetic")
-        _write(os.path.join(ev, "README.md"), "head = A\n")
+        # README 不写 `head = <oid>`（否则缺省探测会与 11-boundary.txt 撞成「多处声明」；
+        # 见下方 pack-ambiguous-decl-prereq 的正向用例）。
+        _write(os.path.join(ev, "README.md"), "# 合成证据包（声明见 11-boundary.txt）\n")
         _write(os.path.join(repo, prod, "code.rs"), "fn a() {}\n")
         head_a = _commit(repo, "A")
 
         # B：只动证据/夹具侧（ev 目录 + m3 下一个工具文件）⇒ 声明的 A 合法
-        _write(os.path.join(ev, "README.md"), "head = A\n（B 仅证据侧）\n")
+        _write(os.path.join(ev, "README.md"), "# 合成证据包（B 仅证据侧；声明见 11-boundary.txt）\n")
         _write(os.path.join(repo, base, "tool.py"), "# 夹具侧工具\n")
         _commit(repo, "B")
 
@@ -417,6 +457,36 @@ def cmd_selftest(_args):
                 repo, ev, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", None, DEFAULT_DECL_RE, None))
             assert rc == 2, "expected PREREQ rc=2 got %d %s" % (rc, probs)
         case("pack-since-unresolvable-prereq", _pack_since_unresolvable_prereq)
+
+        # ---------------- reviewer-6 O-1：多处声明不得静默取首个 ----------------
+        readme = os.path.join(ev, "README.md")
+
+        # 改坏：11-boundary.txt 声明 e_oid、README.md 声明 head_c（**不一致**）⇒ fail-closed 点名两处
+        def _pack_ambiguous_decl_prereq():
+            _write(decl, "### head = %s（交付 head）\n" % e_oid)
+            _write(readme, "旧读数 head = %s\n" % head_c)
+            rc, probs = _quiet(lambda: check_pack(repo, ev, head_a, None, DEFAULT_DECL_RE, None))
+            assert rc == 2, "expected PREREQ rc=2 got %d %s" % (rc, probs)
+            assert any("PREREQ_AMBIGUOUS_HEAD_DECL" in p for p in probs), probs
+            assert any(e_oid[:12] in p and head_c[:12] in p for p in probs), probs
+        case("pack-ambiguous-decl-prereq", _pack_ambiguous_decl_prereq)
+
+        # 绿向：两处声明指向**同一 commit**但写成不同长度前缀（真件 teeth 包的形状）⇒ 归一后不歧义
+        def _pack_same_commit_prefix_multi_decl_green():
+            _write(decl, "### head = %s\n" % e_oid)
+            _write(readme, "交付 head = %s（同 commit 短前缀）\n" % e_oid[:8])
+            rc, probs = _quiet(lambda: check_pack(repo, ev, head_c, None, DEFAULT_DECL_RE, None))
+            assert rc == 0, "expected GREEN rc=0 got %d %s" % (rc, probs)
+        case("pack-same-commit-prefix-multi-decl-green", _pack_same_commit_prefix_multi_decl_green)
+
+        # 绿向：--decl-file 钉住边界件 ⇒ 即使 README 另有不一致声明也只看被钉件
+        def _pack_decl_file_pins_green():
+            _write(decl, "### head = %s\n" % e_oid)
+            _write(readme, "旧读数 head = %s\n" % head_c)
+            rc, probs = _quiet(lambda: check_pack(
+                repo, ev, head_c, "11-boundary.txt", DEFAULT_DECL_RE, None))
+            assert rc == 0, "expected GREEN rc=0 got %d %s" % (rc, probs)
+        case("pack-decl-file-pins-green", _pack_decl_file_pins_green)
     finally:
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)
@@ -427,7 +497,8 @@ def cmd_selftest(_args):
     if failed:
         print("SELFTEST_RED: check_evidence_head %d/%d（失败 %d）" % (ok, total, len(failed)))
         return 1
-    print("SELFTEST GREEN: check_evidence_head %d/%d（check 7 + check-pack 9：含改坏必红 + PREREQ）"
+    print("SELFTEST GREEN: check_evidence_head %d/%d（check 7 + check-pack 12：含改坏必红 + PREREQ"
+          " + O-1 多处声明 fail-closed）"
           % (ok, total))
     return 0
 

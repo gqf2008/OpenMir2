@@ -1,0 +1,4 @@
+### 门禁 ② clippy --workspace --all-targets --offline -D warnings
+$ cargo clippy --offline --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.27s
+rc=0

@@ -1,0 +1,13 @@
+### 来源：reviewer-6 对本卡 head fe0a85aee 的 comment（decision=skip，covered_by reviewer-5 approve 67fa431eb）
+### entry oid dc5fe38a74090b51a89358ff4bb2910ac48e35db（verified）
+
+O-1（非阻塞）：check-pack 默认声明探测顺序 11-boundary.txt -> 10-boundary.txt -> README.md 且只取
+首个 `head = <oid>`；若同包同时含「读数 head」与「交付 head」两处声明，会静默取先出现者。本片三包
+各仅一处声明、无歧义；建议后续片用 --decl-file 显式钉住。
+
+O-2（非阻塞）：作者自述「两包 verify 13/13 & 12/12」与我实测 teeth 12/12 / o1 12/12 / head-pack 13/13
+在件数上略有出入（疑为清单行数 vs 目录件数口径），三包在 --check-extra 下均 GREEN，不影响判据。
+另：coordinator comment e601ac81 记边界为 20 路径，我实测 61f613702..fe0a85aee = 19 路径，属计数口径小差，
+不影响结论。
+
+### 本片只收 O-1 的**可机判**部分（多处声明不得静默取首个）；O-2 的件数口径属人写书证小差，见 README §4。

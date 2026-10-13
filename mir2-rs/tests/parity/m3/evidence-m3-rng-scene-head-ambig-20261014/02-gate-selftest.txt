@@ -1,0 +1,4 @@
+### check_evidence_head selftest (reviewer-6 O-1 收口后)
+$ python -I -B rng-trace-scene/check_evidence_head.py selftest
+SELFTEST GREEN: check_evidence_head 19/19（check 7 + check-pack 12：含改坏必红 + PREREQ + O-1 多处声明 fail-closed）
+rc=0
