@@ -1,0 +1,18 @@
+$ git diff --name-status origin/master
+M	mir2-rs/tests/parity/m3/guild_castle_anchor_gate.py
+M	mir2-rs/tests/parity/m3/hero_pet_anchor_gate.py
+M	mir2-rs/tests/parity/m3/party_trade_anchor_gate.py
+M	mir2-rs/tests/parity/m3/quest_anchor_gate.py
+M	mir2-rs/tests/parity/m3/selloff_anchor_gate.py
+M	mir2-rs/tests/parity/whitelist.md
+D	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/127-window-plan-teardown.txt
+D	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/128-redcheck-window-plan-teardown.txt
+D	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/129-gates.txt
+D	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/130-boundary.txt
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/README.md
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/SHA256SUMS.txt
+M	mir2-rs/tests/parity/world/client-e2e-enter-gaps-20261013/window_handoff.py
+$ git diff --name-only origin/master -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins src/BotSrv
+[]
+$ git diff --name-only origin/master -- '*.rs' '*.toml' '*.ps1'
+[]
