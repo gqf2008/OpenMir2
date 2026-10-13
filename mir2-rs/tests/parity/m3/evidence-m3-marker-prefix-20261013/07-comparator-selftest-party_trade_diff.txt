@@ -1,0 +1,7 @@
+$ python -I party_trade_diff.py selftest
+ASSEMBLED ok records=2 bots=1 out=C:\Users\gxh\AppData\Local\Temp\pairtrade-selftest-bvkaqkif\events-ok-raw.jsonl
+RED: PREREQ_RED csharp: bot=m3p0 done.steps=9 与 send 事件数 1 不一致
+RED: PREREQ_RED csharp: bot=m3p0 k=0 有 send 无 end（交互未收尾）—— fail-closed
+RED: PREREQ_RED 无 M3PAIRTRADESEQ 事件（驱动未生效/日志未含标记）
+SELFTEST ok=27/27
+rc=0

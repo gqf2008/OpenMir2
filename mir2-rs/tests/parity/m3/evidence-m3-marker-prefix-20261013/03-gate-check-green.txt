@@ -1,0 +1,3 @@
+$ python -I marker_prefix_gate.py check
+GREEN: markers 前缀口径一致（run_pair 无去前缀截断 + 4 生产牙 + 4 比较器按前缀扫描；teeth bare=2 prefixed=0 empty=2）
+rc=0

@@ -1,0 +1,3 @@
+$ python -I npc_shop_diff.py assemble evidence-m3-marker-prefix-20261013/real-artifact/shop-prefixed.jsonl --out evidence-m3-marker-prefix-20261013/real-artifact/shop-raw-prefixed.jsonl --side csharp
+ASSEMBLED ok ops=5 out=evidence-m3-marker-prefix-20261013/real-artifact/shop-raw-prefixed.jsonl
+rc=0

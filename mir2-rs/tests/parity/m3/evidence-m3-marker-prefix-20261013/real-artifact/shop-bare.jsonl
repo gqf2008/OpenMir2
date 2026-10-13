@@ -1,0 +1,14 @@
+{"phase":"arm","ops":["sell","buy","query_sell_price","query_repair_cost","repair"],"step_ms":1000,"npc":"卫家店"}
+{"phase":"send","k":0,"op":"sell","npc":"卫家店","npc_actor":1562466673,"req":{"item":"木剑","n":1,"label":"sell"},"gold_before":0,"bag_before":[]}
+{"phase":"end","k":0,"gold_after":0,"bag_after":[],"branch":"fail_no_frame"}
+{"phase":"send","k":1,"op":"buy","npc":"卫家店","npc_actor":1562466673,"req":{"item":"木剑","n":1,"label":"buy"},"gold_before":0,"bag_before":[]}
+{"phase":"frame","k":1,"frame":{"sm":651,"a":1,"b":0,"c":0,"d":0}}
+{"phase":"end","k":1,"gold_after":0,"bag_after":[],"branch":"fail_buy_reject"}
+{"phase":"send","k":2,"op":"query_sell_price","npc":"卫家店","npc_actor":1562466673,"req":{"item":"木剑","n":1,"label":"query_sell_price"},"gold_before":0,"bag_before":[]}
+{"phase":"end","k":2,"gold_after":0,"bag_after":[],"branch":"fail_no_frame"}
+{"phase":"send","k":3,"op":"query_repair_cost","npc":"卫家店","npc_actor":1562466673,"req":{"item":"木剑","n":1,"label":"query_repair_cost"},"gold_before":0,"bag_before":[]}
+{"phase":"end","k":3,"gold_after":0,"bag_after":[],"branch":"fail_no_frame"}
+{"phase":"send","k":4,"op":"repair","npc":"卫家店","npc_actor":1562466673,"req":{"item":"木剑","n":1,"label":"repair"},"gold_before":0,"bag_before":[]}
+{"phase":"frame","k":4,"frame":{"sm":670,"a":0,"b":0,"c":0,"d":0}}
+{"phase":"end","k":4,"gold_after":0,"bag_after":[],"branch":"fail_repair_reject"}
+{"phase":"done","ops":5}
