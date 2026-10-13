@@ -1,0 +1,12 @@
+$ python rng-trace-probe/rng_ledger_diff.py groups evidence-m3-rng-consumer-groups-20261013/fixtures/syn-csharp-clean.tsv --side csharp --groups-table evidence-m3-rng-consumer-groups-20261013/fixtures/consumer_groups.drop-removed.tsv --require-closed
+RNG_CONSUMER_GROUPS evidence-m3-rng-consumer-groups-20261013/fixtures/syn-csharp-clean.tsv side=csharp rows_total=7 kept=7 include_attack=True groups=6
+  GROUP         2  monster_ai
+  GROUP         1  construct
+  GROUP         1  spawn
+  GROUP         1  other
+  GROUP         1  merchant
+  GROUP         1  homemap
+  GROUP_COVERAGE DRIFT unclassified=1
+  UNCLASSIFIED       1  GameSrv.Word.WorldServer.MonGetRandomItems@WorldServer.MonGen.cs:451
+RED: 有 1 个未归类站点 ⇒ 组表漂移（--require-closed 拒给假绿）
+rc=1

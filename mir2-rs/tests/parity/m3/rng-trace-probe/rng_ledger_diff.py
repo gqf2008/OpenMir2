@@ -31,6 +31,9 @@ import os
 import re
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import rng_consumer_groups as rcg  # noqa: E402
+
 # C# 站点（含 `@类名.cs:行号` 全名）。
 CSHARP_ATTACK_RE = re.compile(
     r"(PlayObject\.GetAttackPower@|BaseObject\._Attack@|PlayObject\.StruckDamage@|"
@@ -316,6 +319,119 @@ def cmd_diff(args):
     return 0
 
 
+def _load_groups(path):
+    try:
+        return rcg.load(path or None)
+    except (OSError, ValueError) as exc:
+        print("PREREQ_MISSING: 消费者组表加载失败: %s" % exc, file=sys.stderr)
+        return None
+
+
+def cmd_groups(args):
+    if not os.path.exists(args.trace):
+        return _die("PREREQ_MISSING: 找不到 %s" % args.trace)
+    table = _load_groups(args.groups_table)
+    if table is None:
+        return 2
+    counts, unclassified, rows_total = rcg.summarize(
+        args.trace, args.side, table, is_attack, include_attack=not args.no_attack)
+    kept = sum(counts.values())
+    print("RNG_CONSUMER_GROUPS %s side=%s rows_total=%d kept=%d include_attack=%s groups=%d"
+          % (args.trace, args.side, rows_total, kept, not args.no_attack, len(counts)))
+    for g, n in counts.most_common():
+        print("  GROUP %9d  %s" % (n, g))
+    if unclassified:
+        print("  GROUP_COVERAGE DRIFT unclassified=%d" % sum(unclassified.values()))
+        for site, n in unclassified.most_common(args.top):
+            print("  UNCLASSIFIED %7d  %s" % (n, site))
+    else:
+        print("  GROUP_COVERAGE closed")
+    if args.json:
+        with open(args.json, "w", encoding="utf-8", newline="\n") as fh:
+            json.dump({"trace": args.trace, "side": args.side, "rows_total": rows_total,
+                       "kept": kept, "include_attack": not args.no_attack,
+                       "groups": dict(counts), "unclassified": dict(unclassified),
+                       "table": table.path}, fh, ensure_ascii=False, indent=2)
+            fh.write("\n")
+    if args.require_closed and unclassified:
+        print("RED: 有 %d 个未归类站点 ⇒ 组表漂移（--require-closed 拒给假绿）" % sum(unclassified.values()))
+        return 1
+    return 0
+
+
+def cmd_groupdiff(args):
+    for p in (args.a, args.b):
+        if not os.path.exists(p):
+            return _die("PREREQ_MISSING: 找不到 %s" % p)
+    table = _load_groups(args.groups_table)
+    if table is None:
+        return 2
+    include_attack = bool(args.include_attack)
+    a = rcg.sequence(args.a, args.a_side, table, is_attack, include_attack=include_attack)
+    b = rcg.sequence(args.b, args.b_side, table, is_attack, include_attack=include_attack)
+    if not a or not b:
+        print("RED: 空组账本（a=%d b=%d）" % (len(a), len(b)))
+        return 1
+    ca, cb = collections.Counter(a), collections.Counter(b)
+    only_a = {k: v for k, v in ca.items() if k not in cb}
+    only_b = {k: v for k, v in cb.items() if k not in ca}
+    shared = set(ca) & set(cb)
+    # 相对次序：只在**两侧都出现的组**上比（缺组由 GROUP_SET 报）。
+    fa = [g for g in a if g in shared]
+    fb = [g for g in b if g in shared]
+    first_shared = rcg.first_divergence(fa, fb)
+    ra, rb = rcg.rle(a), rcg.rle(b)
+    runs_a = [g for g, _n in ra]
+    runs_b = [g for g, _n in rb]
+    first_run = rcg.first_divergence(runs_a, runs_b)
+    set_ok = not only_a and not only_b
+    order_ok = (len(fa) == len(fb)) and first_shared is None
+    flags = []
+    if not set_ok:
+        flags.append("GROUP_SET_DIFF")
+    if not order_ok:
+        flags.append("SHARED_REL_ORDER_DIFF")
+    verdict = "IDENTICAL" if not flags else "+".join(flags)
+    print("RNG_CONSUMER_GROUPDIFF include_attack=%s a=%s(%d) b=%s(%d)"
+          % (include_attack, args.a, len(a), args.b, len(b)))
+    print("  A_GROUPS %s" % dict(sorted(ca.items(), key=lambda kv: -kv[1])))
+    print("  B_GROUPS %s" % dict(sorted(cb.items(), key=lambda kv: -kv[1])))
+    print("  ONLY_IN_A(missing_in_B) %s" % dict(sorted(only_a.items(), key=lambda kv: -kv[1])))
+    print("  ONLY_IN_B(extra_in_B)   %s" % dict(sorted(only_b.items(), key=lambda kv: -kv[1])))
+    print("  SHARED_GROUPS %s" % sorted(shared))
+    if first_shared is None and len(fa) == len(fb):
+        print("  FIRST_SHARED_ORDER_DIVERGENCE none（共享组相对次序逐位全等，len=%d）" % len(fa))
+    else:
+        print("  FIRST_SHARED_ORDER_DIVERGENCE index=%s a=%s b=%s"
+              % (first_shared, fa[first_shared] if first_shared is not None else "(len差)",
+                 fb[first_shared] if first_shared is not None else "(len差)"))
+    print("  RUNS a=%d b=%d" % (len(ra), len(rb)))
+    if first_run is None and len(runs_a) == len(runs_b):
+        print("  FIRST_RUN_DIVERGENCE none（组 run 序逐位全等）")
+    else:
+        print("  FIRST_RUN_DIVERGENCE run=%s a=%s b=%s"
+              % (first_run, runs_a[first_run] if first_run is not None else "(len差)",
+                 runs_b[first_run] if first_run is not None else "(len差)"))
+    print("  VERDICT %s" % verdict)
+    if args.json:
+        with open(args.json, "w", encoding="utf-8", newline="\n") as fh:
+            json.dump({"include_attack": include_attack, "a": args.a, "b": args.b,
+                       "a_len": len(a), "b_len": len(b),
+                       "a_groups": dict(ca), "b_groups": dict(cb),
+                       "only_in_a": only_a, "only_in_b": only_b,
+                       "shared_groups": sorted(shared),
+                       "first_shared_order_divergence": first_shared,
+                       "a_runs": len(ra), "b_runs": len(rb),
+                       "first_run_divergence": first_run,
+                       "verdict": verdict, "table": table.path},
+                      fh, ensure_ascii=False, indent=2)
+            fh.write("\n")
+    if args.strict and flags:
+        print("RED: 组结构不一致 ⇒ %s（--strict）" % verdict)
+        return 1
+    return 0
+
+
 def _write_trace(path, sites):
     with open(path, "w", encoding="utf-8", newline="\n") as fh:
         fh.write("1\tINJECT_OK\t42\t0\n")
@@ -385,6 +501,74 @@ def cmd_selftest(args):
           canonical(r"crates\world\src\combat.rs:831") == "attack_success"
           and is_attack(r"crates\world\src\combat.rs:831", "rust"))
 
+    # ---- Claim B（owner 2026-10-13 09:35）：非攻击站点组口径（groups / groupdiff）----
+    W = "M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427"
+    D = "GameSrv.Word.WorldServer.MonGetRandomItems@WorldServer.MonGen.cs:451"
+    MR = "GameSrv.Npc.Merchant.Run@Merchant.cs:132"
+    SP = "GameSrv.Word.WorldServer.CreateMonster@WorldServer.MonGen.cs:740"
+    CT = "M2Server.Actor.BaseObject..ctor@BaseObject.cs:438"
+    HM = "GameSrv.Word.WorldServer.GetHomeInfo@WorldServer.cs:1392"
+    # Rust 侧真实站点（`\` 在 trace 里，归一时要能命中）
+    RW = "crates\\world\\src\\monai.rs:164"
+    RSP = "crates\\world\\src\\mongen.rs:624"
+    RDR = "crates\\formula\\src\\drop.rs:109"
+    RST = "bins\\game-svr\\src\\main.rs:2856"
+    RHM = "bins\\game-svr\\src\\homemap.rs:130"
+    RMR = "crates\\world\\src\\merchant.rs:1"
+
+    tbl = rcg.load()
+    check("groups-table-valid", tbl.validate() == [], str(tbl.validate()[:2]))
+    check("group-classify-csharp", tbl.group_of(W, "csharp") == "monster_ai",
+          "W -> %s" % tbl.group_of(W, "csharp"))
+    check("group-classify-rust", tbl.group_of(RW, "rust") == "monster_ai",
+          "RW -> %s" % tbl.group_of(RW, "rust"))
+    check("group-classify-merchant-rust", tbl.group_of(RMR, "rust") == "merchant")
+    # 表改坏必红：删掉 drop 的 csharp 行 ⇒ validate 必须点名 CORE 缺员
+    bad = [r for r in tbl.rows if not (r[0] == "drop" and r[1] == "csharp")]
+    check("groups-table-mutation-red", bool(rcg.GroupsTable(bad, "mem").validate()),
+          "drop/csharp removal must be flagged")
+
+    # groups：合成 C# trace ⇒ 分组正确 + 全集 closed
+    tg = os.path.join(tmp, "cg.tsv")
+    _write_trace(tg, [CT, SP, W, W, D, MR, HM, SP, W])
+    out = cap(lambda: cmd_groups(argparse.Namespace(
+        trace=tg, side="csharp", groups_table="", no_attack=False, require_closed=True,
+        top=5, json="")))
+    check("groups-rc", out[0] == 0, out[1][:300])
+    check("groups-closed", "GROUP_COVERAGE closed" in out[1], out[1][:400])
+    check("groups-monster_ai-3", "3  monster_ai" in out[1], out[1][:400])
+    check("groups-merchant-1", "1  merchant" in out[1], out[1][:400])
+    # 改坏必红：插入未归类站点 ⇒ UNCLASSIFIED + require-closed rc=1
+    _write_trace(tg, [CT, "crates/foo.rs:1", W])
+    out = cap(lambda: cmd_groups(argparse.Namespace(
+        trace=tg, side="csharp", groups_table="", no_attack=False, require_closed=True,
+        top=5, json="")))
+    check("groups-drift-red", out[0] == 1 and "UNCLASSIFIED" in out[1] and "DRIFT" in out[1],
+          out[1][:400])
+
+    # groupdiff：同组序 ⇒ 绿；改坏（多抽/换序/缺组）⇒ 必红且定位
+    ga = os.path.join(tmp, "ga.tsv")
+    gb = os.path.join(tmp, "gb.tsv")
+    _write_trace(ga, [RST, RHM, RSP, RW, RW, RDR])
+    _write_trace(gb, [RST, RHM, RSP, RW, RW, RDR])
+    gdiff = lambda strict=True: cap(lambda: cmd_groupdiff(argparse.Namespace(
+        a=ga, b=gb, a_side="rust", b_side="rust", include_attack=False, strict=strict,
+        groups_table="", json="")))
+    out = gdiff()
+    check("groupdiff-identical-green", out[0] == 0 and "VERDICT IDENTICAL" in out[1], out[1][:400])
+    # 多抽一次（同组）⇒ 共享组序列长度不等 ⇒ 必红（多抽/少抽口径）
+    _write_trace(gb, [RST, RHM, RSP, RW, RW, RW, RDR])
+    out = gdiff()
+    check("groupdiff-extra-draw-red", out[0] == 1 and "SHARED_REL_ORDER_DIFF" in out[1], out[1][:400])
+    # 换序（homemap/spawn）⇒ 必红且定位 index=1
+    _write_trace(gb, [RST, RSP, RHM, RW, RW, RDR])
+    out = gdiff()
+    check("groupdiff-order-red", out[0] == 1 and "FIRST_SHARED_ORDER_DIVERGENCE index=1" in out[1], out[1][:400])
+    # 只在 B 出现的组（merchant）⇒ GROUP_SET_DIFF 必红
+    _write_trace(gb, [RST, RHM, RSP, RW, RW, RDR, RMR])
+    out = gdiff()
+    check("groupdiff-set-red", out[0] == 1 and "GROUP_SET_DIFF" in out[1] and "merchant" in out[1], out[1][:400])
+
     for name in os.listdir(tmp):
         try:
             os.remove(os.path.join(tmp, name))
@@ -394,7 +578,7 @@ def cmd_selftest(args):
     if failures:
         print("SELFTEST RED: %d/%d 未过: %s" % (len(failures), len(checks), ", ".join(failures)))
         return 1
-    print("SELFTEST GREEN: rng_ledger_diff selftest %d/%d（同序绿 + 次序漂移必红且定位 + 缺消费者必红且点名）"
+    print("SELFTEST GREEN: rng_ledger_diff selftest %d/%d（同序绿 + 次序漂移必红且定位 + 缺消费者必红且点名 + Claim B 站点组：同组序绿 / 多抽·换序·缺组必红且定位 / 组表改坏必红 / 未归类 fail-closed）"
           % (len(checks), len(checks)))
     return 0
 
@@ -445,6 +629,27 @@ def main(argv=None):
     p.add_argument("--b-side", choices=["csharp", "rust"], default="rust")
     p.add_argument("--json", default="")
     p.set_defaults(func=cmd_segdiff)
+
+    p = sub.add_parser("groups")
+    p.add_argument("trace")
+    p.add_argument("--side", choices=["csharp", "rust"], default="csharp")
+    p.add_argument("--groups-table", default="", help="消费者组表（缺省 = 同目录 consumer_groups.tsv）")
+    p.add_argument("--no-attack", action="store_true", help="剔除攻击组（Claim B 只看非攻击消费者）")
+    p.add_argument("--require-closed", action="store_true", help="有未归类站点 ⇒ 判红（表漂移 fail-closed）")
+    p.add_argument("--top", type=int, default=10)
+    p.add_argument("--json", default="")
+    p.set_defaults(func=cmd_groups)
+
+    p = sub.add_parser("groupdiff")
+    p.add_argument("a")
+    p.add_argument("b")
+    p.add_argument("--a-side", choices=["csharp", "rust"], default="csharp")
+    p.add_argument("--b-side", choices=["csharp", "rust"], default="rust")
+    p.add_argument("--include-attack", action="store_true", help="把攻击组也纳入组序（缺省只看非攻击消费者）")
+    p.add_argument("--groups-table", default="")
+    p.add_argument("--strict", action="store_true", help="组集/相对次序不一致 ⇒ 判红")
+    p.add_argument("--json", default="")
+    p.set_defaults(func=cmd_groupdiff)
 
     p = sub.add_parser("selftest")
     p.set_defaults(func=cmd_selftest)

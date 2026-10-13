@@ -1,0 +1,21 @@
+{
+  "trace": "E:/tmp/m3cs-f1/csharp-rng-stream-f1-20261012.tsv",
+  "side": "csharp",
+  "rows_total": 5090894,
+  "kept": 5090894,
+  "include_attack": true,
+  "groups": {
+    "construct": 82840,
+    "startup": 1,
+    "spawn": 63705,
+    "merchant": 500838,
+    "npc_ai": 3770,
+    "drop": 410383,
+    "monster_ai": 4028939,
+    "attack": 352,
+    "revive": 60,
+    "homemap": 6
+  },
+  "unclassified": {},
+  "table": "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\.claude\\worktrees\\m3bag\\mir2-rs\\tests\\parity\\m3\\rng-trace-probe\\consumer_groups.tsv"
+}

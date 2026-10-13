@@ -1,0 +1,13 @@
+$ python rng-trace-probe/rng_ledger_diff.py groupdiff evidence-m3-rng-consumer-groups-20261013/fixtures/syn-order-a.tsv evidence-m3-rng-consumer-groups-20261013/fixtures/syn-extra-b.tsv --a-side rust --b-side rust --strict
+RNG_CONSUMER_GROUPDIFF include_attack=False a=evidence-m3-rng-consumer-groups-20261013/fixtures/syn-order-a.tsv(6) b=evidence-m3-rng-consumer-groups-20261013/fixtures/syn-extra-b.tsv(7)
+  A_GROUPS {'monster_ai': 2, 'startup': 1, 'homemap': 1, 'spawn': 1, 'drop': 1}
+  B_GROUPS {'monster_ai': 3, 'startup': 1, 'homemap': 1, 'spawn': 1, 'drop': 1}
+  ONLY_IN_A(missing_in_B) {}
+  ONLY_IN_B(extra_in_B)   {}
+  SHARED_GROUPS ['drop', 'homemap', 'monster_ai', 'spawn', 'startup']
+  FIRST_SHARED_ORDER_DIVERGENCE index=5 a=drop b=monster_ai
+  RUNS a=5 b=5
+  FIRST_RUN_DIVERGENCE none（组 run 序逐位全等）
+  VERDICT SHARED_REL_ORDER_DIFF
+RED: 组结构不一致 ⇒ SHARED_REL_ORDER_DIFF（--strict）
+rc=1

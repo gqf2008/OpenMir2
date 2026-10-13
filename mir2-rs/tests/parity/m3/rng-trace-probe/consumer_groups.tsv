@@ -1,0 +1,65 @@
+# M3 Claim B —— 全服 RNG **消费者站点组**唯一真源（owner 2026-10-13 09:35 派单）
+#
+# 卡：openmir2-rng-consumer-structure-parity
+#   「让 Rust 真机世界在**非攻击**路径上的全局随机源消费与 C# oracle **结构一致**
+#    （同样的站点集合 + 同样的相对次序）」——本表把两侧的 trace 站点归到同一组 vocabulary。
+#
+# 工具（都读本表，不许手抄）：
+#   * rng-trace-probe/rng_ledger_diff.py  groups / groupdiff
+#   * m3/attack_rng_ledger.py             groups
+#   * rng-trace-probe/rng_consumer_groups.py（加载/分类/校验的共享模块）
+#
+# 列（TAB 分隔）：
+#   group        站点组名（两侧共用的 vocabulary；见下方 CORE）
+#   side         csharp | rust
+#   pattern      正则（匹配前把 site 的 `\` 归一成 `/`）；同一 side 内**先命中先算**
+#   oracle_ref   oracle 源码引用（C# 侧为 `类@文件.cs:行` 的归因值；Rust 侧为模块入口）
+#   note         备注（归因 / 未实现 / 折叠说明）
+#
+# 组定义（CORE = owner 点名的四组；其余为「同族构造期/宿主」组）：
+#   monster_ai  怪物/动物 AI tick（Wondering / Think / SearchTarget / GotoTargetXY）
+#   drop        掉落预算 + 装备升级随机（MonGetRandomItems / GameItemSystem.*）
+#   merchant    商人/商店 tick（Merchant.Run / ProcessMerchants）
+#   spawn       刷怪与生成（RegenMonsters / CreateMonster / InitializeMonster）
+#   construct   实体构造期抽数（BaseObject/AnimalObject/MonsterObject/*..ctor/PlayObject..ctor）
+#   npc_ai      非商人 NPC AI（GuildOfficial.Run）
+#   revive      复活/重生（BaseObject.ReAliveEx）
+#   homemap     落点/回城点（GetHomeInfo/GetRandHomeX/GetRandHomeY）
+#   startup     宿主启动期配置/种子（ServerConf.LoadConfig / game-svr main）
+#   attack      攻击路径（由两侧攻击正则判定，组内不再细分；不写进本表）
+#   other       未归类（**表漂移信号**：`--require-closed` 下判红，拒给假绿）
+#
+# 注意：Rust 侧 ④-D 把构造期抽数折叠在刷怪路径内（`crates/world/src/mongen.rs` 的
+#   `AnimalState::from_spawn_draws`），因此 Rust 的 `construct` 组暂无独立站点；
+#   oracle 侧 `BaseObject..ctor` 等是独立站点。这条差异由 groupdiff 的 GROUP_SET 如实报出。
+#
+# group	side	pattern	oracle_ref	note
+monster_ai	csharp	AnimalObject\.Wondering@AnimalObject\.cs:	src/M2Server/Actor/AnimalObject.cs:427	Wondering 的 Random(20)/Random(4)/RandomByte(8)
+monster_ai	csharp	AnimalObject\.GotoTargetXY@AnimalObject\.cs:	src/M2Server/Actor/AnimalObject.cs:222	游走目标格
+monster_ai	csharp	MonsterObject\.Think@MonsterObject\.cs:	src/M2Server/Monster/MonsterObject.cs:208	MonsterObject.Run/Think
+monster_ai	rust	crates/world/src/monai\.rs:	crates/world/src/monai.rs	Wondering/SearchTarget 世界层调用点（#[track_caller]）
+drop	csharp	MonGetRandomItems@WorldServer\.MonGen\.cs:	src/GameSrv/Word/WorldServer.MonGen.cs:440	掉落在地图生成怪物时预算
+drop	csharp	GameItemSystem\.GetUpgrade@GameItemSystem\.cs:	src/M2Server/Items/GameItemSystem.cs:142	升级随机（GetUpgrade）
+drop	csharp	GameItemSystem\.UpgradeRandom\w+@GameItemSystem\.cs:	src/M2Server/Items/GameItemSystem.cs:182	UpgradeRandomWeapon/Dress/Necklace/Barcelet/Rings
+drop	csharp	GameItemSystem\.RandomSetUnknownBracelet@GameItemSystem\.cs:	src/M2Server/Items/GameItemSystem.cs:645	RandomSetUnknownBracelet
+drop	rust	crates/formula/src/drop\.rs:	crates/formula/src/drop.rs	mon_get_random_items + upgrade_random_*
+merchant	csharp	Merchant\.Run@Merchant\.cs:	src/GameSrv/Npc/Merchant.cs:132	Merchant.Run / RefillGoods
+merchant	rust	crates/world/src/merchant\.rs:	crates/world/src/merchant.rs	未实现（M3⑤ merchant-entity-tick 承接）
+spawn	csharp	RegenMonsters@WorldServer\.MonGen\.cs:	src/GameSrv/Word/WorldServer.MonGen.cs:815	RegenMonsters 定时刷怪
+spawn	csharp	CreateMonster@WorldServer\.MonGen\.cs:	src/GameSrv/Word/WorldServer.MonGen.cs:498	CreateMonster 生成期抽数
+spawn	csharp	InitializeMonster@WorldServer\.MonGen\.cs:	src/GameSrv/Word/WorldServer.MonGen.cs:66	InitializeMonster 属性初始化
+spawn	rust	crates/world/src/mongen\.rs:	crates/world/src/mongen.rs	刷怪 + 生成期构造抽数（含 ④-D 构造折叠）
+construct	csharp	BaseObject\.\.ctor@BaseObject\.cs:	src/M2Server/Actor/BaseObject.cs:438	BaseObject ctor 的 Random(3000) 等
+construct	csharp	AnimalObject\.\.ctor@AnimalObject\.cs:	src/M2Server/Actor/AnimalObject.cs:75	AnimalObject ctor（AttackTick/WalkTick）
+construct	csharp	MonsterObject\.\.ctor@MonsterObject\.cs:	src/M2Server/Monster/MonsterObject.cs:65	MonsterObject ctor
+construct	csharp	Monsters\.\w+\.\.ctor@	src/M2Server/Monster/Monsters/*.cs	各具体怪 ctor（MeatQuality 等）
+construct	csharp	PlayObject\.\.ctor@PlayObject\.cs:	src/M2Server/Player/PlayObject.cs:1046	PlayObject ctor
+construct	rust	crates/world/src/entity\.rs:	crates/world/src/entity.rs	保留：若构造抽数移出 mongen 再启用
+npc_ai	csharp	GuildOfficial\.Run@GuildOfficial\.cs:	src/GameSrv/Npc/GuildOfficial.cs:41	行会 NPC AI（非商人）
+revive	csharp	BaseObject\.ReAliveEx@BaseObject\.cs:	src/M2Server/Actor/BaseObject.cs:2744	复活点随机
+homemap	csharp	GetHomeInfo@WorldServer\.cs:	src/GameSrv/Word/WorldServer.cs:1392	回城点
+homemap	csharp	GetRandHomeX@WorldServer\.cs:	src/GameSrv/Word/WorldServer.cs:1412	回城点随机 x
+homemap	csharp	GetRandHomeY@WorldServer\.cs:	src/GameSrv/Word/WorldServer.cs:1417	回城点随机 y
+homemap	rust	bins/game-svr/src/homemap\.rs:	bins/game-svr/src/homemap.rs	落点/Home 计算
+startup	csharp	ServerConf\.LoadConfig@ServerConf\.cs:	src/SystemModule/Conf/ServerConf.cs:114	配置加载期抽数
+startup	rust	bins/game-svr/src/main\.rs:	bins/game-svr/src/main.rs	宿主启动期（seed/main 抽数）

@@ -1,0 +1,31 @@
+# 证据：M3 Claim B 全服 RNG 消费者结构一致性（2026-10-13，卡 openmir2-rng-consumer-structure-parity）
+#
+# 全部在本 worktree 内离线跑（零 crates/bins/src、零起栈、零端口）。
+# cwd = mir2-rs/tests/parity/m3
+#
+# 数据源（仓外原始件，未入库；sha256 见报告 §2）：
+#   C#  : E:/tmp/m3cs-f1/csharp-rng-stream-f1-20261012.tsv   (416,513,542 B, a7df7116…)
+#   Rust: E:/tmp/m3cs-r2/rust-rng-stream-r1.tsv              (8,078 B, 4963e9f6…)
+#
+# 1) 工具自检（含 Claim B 组口径；改坏必红在 selftest 内部）
+python rng-trace-probe/rng_ledger_diff.py selftest
+python attack_rng_ledger.py selftest
+
+# 2) 组表自检
+python -c "import sys; sys.path.insert(0,'rng-trace-probe'); import rng_consumer_groups as r; print('validate:', r.load().validate())"
+
+# 3) 合成 fixture 的绿/红对照
+python rng-trace-probe/rng_ledger_diff.py groups evidence-m3-rng-consumer-groups-20261013/fixtures/syn-csharp-clean.tsv --side csharp --require-closed
+python rng-trace-probe/rng_ledger_diff.py groups evidence-m3-rng-consumer-groups-20261013/fixtures/syn-csharp-clean.tsv --side csharp --groups-table evidence-m3-rng-consumer-groups-20261013/fixtures/consumer_groups.drop-removed.tsv --require-closed
+python rng-trace-probe/rng_ledger_diff.py groupdiff evidence-m3-rng-consumer-groups-20261013/fixtures/syn-order-a.tsv evidence-m3-rng-consumer-groups-20261013/fixtures/syn-order-b.tsv          --a-side rust --b-side rust --strict
+python rng-trace-probe/rng_ledger_diff.py groupdiff evidence-m3-rng-consumer-groups-20261013/fixtures/syn-order-a.tsv evidence-m3-rng-consumer-groups-20261013/fixtures/syn-extra-b.tsv        --a-side rust --b-side rust --strict
+python rng-trace-probe/rng_ledger_diff.py groupdiff evidence-m3-rng-consumer-groups-20261013/fixtures/syn-order-a.tsv evidence-m3-rng-consumer-groups-20261013/fixtures/syn-missinggroup-b.tsv --a-side rust --b-side rust --strict
+
+# 4) 基线（现存唯一一对同种子两侧活栈 trace）
+python rng-trace-probe/rng_ledger_diff.py groups E:/tmp/m3cs-f1/csharp-rng-stream-f1-20261012.tsv --side csharp --json 10-baseline-csharp-groups.json
+python rng-trace-probe/rng_ledger_diff.py groups E:/tmp/m3cs-r2/rust-rng-stream-r1.tsv            --side rust   --json 11-baseline-rust-groups.json
+python rng-trace-probe/rng_ledger_diff.py groupdiff E:/tmp/m3cs-f1/csharp-rng-stream-f1-20261012.tsv E:/tmp/m3cs-r2/rust-rng-stream-r1.tsv --a-side csharp --b-side rust --json 12-baseline-groupdiff.json
+
+# 5) 证据复核（仓库字节/LF 口径）
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/m3/evidence-m3-rng-consumer-groups-20261013
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-rng-consumer-groups-20261013
