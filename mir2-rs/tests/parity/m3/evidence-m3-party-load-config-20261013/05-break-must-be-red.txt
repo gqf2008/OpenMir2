@@ -1,0 +1,42 @@
+== 改坏前 sha256 ==
+b84ee296b3cb34949168637f3139adbf0c12ddfec608b3d712f8c8ae11e9cdff *crates/data/src/party.rs
+
+== 改坏：try_deal_time 默认 3000 -> 2999 ==
+65:            try_deal_time: 2999,
+
+== 改坏后跑向量门（期望 RED）==
+running 1 test
+test defaults_match_oracle_vector ... FAILED
+
+failures:
+
+---- defaults_match_oracle_vector stdout ----
+
+thread 'defaults_match_oracle_vector' (26472) panicked at crates\data\tests\party_config.rs:47:9:
+assertion `left == right` failed: 向量第 8 行 `try_deal_time`（GameSvrConf.cs:1515 / ServerConf.cs:308 [Setup] TryDealTime）与 oracle 初值不一致
+  left: "2999"
+ right: "3000"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    defaults_match_oracle_vector
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mir2-data --test party_config`
+
+== 还原 ==
+65:            try_deal_time: 3000,
+还原后 sha256:
+b84ee296b3cb34949168637f3139adbf0c12ddfec608b3d712f8c8ae11e9cdff *crates/data/src/party.rs
+
+== 还原后跑向量门（期望 GREEN）==
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.92s
+     Running tests\party_config.rs (E:/tmp/m3cs-party-target\debug\deps\party_config-49b8faa2c8373127.exe)
+
+running 1 test
+test defaults_match_oracle_vector ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

@@ -1,0 +1,45 @@
+# oracle 锚（本仓库 src/ 内实测；卡 openmir2-m3-party-load-config）
+
+## 读取点 src/Modules/SystemModule/Conf/ServerConf.cs
+$ sed -n '225p;308p;309p;310p;311p;571p' src/Modules/SystemModule/Conf/ServerConf.cs
+            SystemShare.Config.GroupMembersMax = ReadWriteByte("Setup", "GroupMembersMax", SystemShare.Config.GroupMembersMax);
+            SystemShare.Config.TryDealTime = ReadWriteInteger("Setup", "TryDealTime", SystemShare.Config.TryDealTime);
+            SystemShare.Config.DealOKTime = ReadWriteInteger("Setup", "DealOKTime", SystemShare.Config.DealOKTime);
+            SystemShare.Config.CanNotGetBackDeal = ReadWriteBool("Setup", "CanNotGetBackDeal", SystemShare.Config.CanNotGetBackDeal);
+            SystemShare.Config.DisableDeal = ReadWriteBool("Setup", "DisableDeal", SystemShare.Config.DisableDeal);
+            SystemShare.Config.LockDealAction = ReadWriteBool("Setup", "PasswordLockDealAction", SystemShare.Config.LockDealAction);
+
+## 声明 src/Modules/SystemModule/Conf/Model/GameSvrConf.cs
+$ rg -n "public (byte|int|bool) (GroupMembersMax|TryDealTime|DealOKTime|CanNotGetBackDeal|DisableDeal|LockDealAction);" src/Modules/SystemModule/Conf/Model/GameSvrConf.cs
+238:        public byte GroupMembersMax;
+447:        public bool LockDealAction;
+521:        public int TryDealTime;
+525:        public int DealOKTime;
+529:        public bool CanNotGetBackDeal;
+533:        public bool DisableDeal;
+
+## 初值（构造函数）src/Modules/SystemModule/Conf/Model/GameSvrConf.cs
+$ sed -n '1400,1404p;1488,1492p;1513,1520p' src/Modules/SystemModule/Conf/Model/GameSvrConf.cs
+            StartPointSize = 2;
+            HumanGetMsgTime = 200;
+            GroupMembersMax = 10;
+            WarrMon = 10;
+            WizardMon = 10;
+            FloorItemCanPickUpTime = 2 * 60 * 1000;
+            PasswordLockSystem = false;  //是否启用密码保护系统
+            LockDealAction = false;  //是否锁定交易操作
+            LockDropAction = false;  //是否锁定扔物品操作
+            LockGetBackItemAction = false;  //是否锁定取仓库操作
+            boWarDisHumRun = false;
+            boGMRunAll = true;
+            TryDealTime = 3000;
+            DealOKTime = 1000;
+            CanNotGetBackDeal = true;
+            DisableDeal = false;
+            MasterOKLevel = 500;
+            MasterOKCreditPoint = 0;
+
+## ini 语义 src/OpenMir2/Common/ConfigFile.cs
+$ rg -n "StreamReader|GB2312|detectEncodingFromByteOrderMarks" src/OpenMir2/Common/ConfigFile.cs
+263:            StreamReader rd = new StreamReader(File.Open(FileName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite), Encoding.GetEncoding("GB2312"));
+364:            StreamWriter sw = new StreamWriter(File.Open(FileName, FileMode.Truncate, FileAccess.Write, FileShare.ReadWrite), Encoding.GetEncoding("GB2312"));

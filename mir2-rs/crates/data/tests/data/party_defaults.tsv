@@ -1,0 +1,12 @@
+# 组队/交易配置项默认值向量（oracle = GameSvrConf 构造函数初值）
+# 字段	默认值	oracle 锚（默认值 / 读取点；均在 src/ 内实测）
+# 采集方式：逐行读 src/Modules/SystemModule/Conf/Model/GameSvrConf.cs 的声明与初值，
+#          读取点逐行核 src/Modules/SystemModule/Conf/ServerConf.cs。
+# 说明：lock_deal_action 的声明在 GameSvrConf.cs:447、初值在 :1490，
+#      读取点是 ServerConf.cs:571 的 `PasswordLockDealAction`（键名非字段名）。
+group_members_max	10	GameSvrConf.cs:1402 / ServerConf.cs:225 [Setup] GroupMembersMax
+try_deal_time	3000	GameSvrConf.cs:1515 / ServerConf.cs:308 [Setup] TryDealTime
+deal_ok_time	1000	GameSvrConf.cs:1516 / ServerConf.cs:309 [Setup] DealOKTime
+can_not_get_back_deal	true	GameSvrConf.cs:1517 / ServerConf.cs:310 [Setup] CanNotGetBackDeal
+disable_deal	false	GameSvrConf.cs:1518 / ServerConf.cs:311 [Setup] DisableDeal
+lock_deal_action	false	GameSvrConf.cs:1490 / ServerConf.cs:571 [Setup] PasswordLockDealAction
