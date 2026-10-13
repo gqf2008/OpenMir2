@@ -1,0 +1,21 @@
+# 04-reproduction.txt — 只读复现命令与读数
+
+## 1) oracle 侧无 ItemId 赋值点
+$ grep -rn "ItemId" src --include=*.cs
+  src/Modules/SystemModule/Data/MapItem.cs:41:    // this.ItemId = M2Share.ActorMgr.GetNextIdentity();
+  （其余 4 处全是 "== 0" 守卫）
+
+## 2) golden 由探针桩产生（落地），不是 src/ 真实行为
+$ sed -n "344,366p" mir2-rs/tests/parity/csharp/WorldGolden/Program.cs
+$ grep -n "^death" mir2-rs/tests/parity/world/golden/combat.txt
+
+## 3) 方案 A 判据（在 4139c2f0 + optionA patch 上实测）
+$ cd mir2-rs && CARGO_TARGET_DIR=E:/tmp/m2svr-dropside-target cargo test -p mir2-world --lib --offline
+  test result: ok. 53 passed; 0 failed
+$ CARGO_TARGET_DIR=... cargo test -p mir2-parity-tests --test world_combat_parity --offline
+  FAILED: rust = death 2 0 192 1 100 / csharp = death 2 1 192 1 100 （golden 未同步）
+$ CARGO_TARGET_DIR=... cargo test -p game-svr --offline
+  test result: ok. 161 passed（含 pickup_gold_dispatches_and_updates_session）
+
+## 4) 回退（本片交付时的树 = 零 .rs 改动）
+$ git status --short   # 空

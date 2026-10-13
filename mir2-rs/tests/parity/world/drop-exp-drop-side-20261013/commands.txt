@@ -1,0 +1,16 @@
+# commands.txt — 本片命令（可复跑）
+
+## 证据 hash（仓库 LF/git-blob 口径）
+python -I tools/evidence-hash/verify_sha256sums.py --check-extra mir2-rs/tests/parity/world/drop-exp-drop-side-20261013
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/world/drop-exp-drop-side-20261013
+
+## 四门禁
+cd mir2-rs
+CARGO_TARGET_DIR=E:/tmp/m2svr-d2-target cargo fmt --all -- --check
+CARGO_TARGET_DIR=E:/tmp/m2svr-d2-target cargo clippy --workspace --all-targets --offline -- -D warnings
+CARGO_TARGET_DIR=E:/tmp/m2svr-d2-target cargo run -q -p msgcodegen --offline -- --check
+CARGO_TARGET_DIR=E:/tmp/m2svr-d2-target cargo test --workspace --offline --no-fail-fast
+
+## 方案 A 试跑（可选）
+git apply mir2-rs/tests/parity/world/drop-exp-drop-side-20261013/optionA-no-landing-align.patch
+CARGO_TARGET_DIR=E:/tmp/m2svr-d2-target cargo test -p mir2-parity-tests --test world_combat_parity --offline  # 预期 RED（golden 未同步）

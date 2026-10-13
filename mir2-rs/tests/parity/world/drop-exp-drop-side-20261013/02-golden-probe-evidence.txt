@@ -1,0 +1,89 @@
+# 02-golden-probe-evidence.txt — golden 由「探针桩」产生，绕过 Envir.AddItemToMap
+
+## A. 探针死亡结算（不构造 MapItem、不过门）
+$ sed -n "344,366p" mir2-rs/tests/parity/csharp/WorldGolden/Program.cs
+                    continue;
+                }
+                a.Death = true;
+                a.DeathSettled = true;
+                int mapId = envirOf[id];
+                int placed = 0;
+                if (a.ItemList != null)
+                {
+                    foreach (ParityGolden.UserItem item in a.ItemList)
+                    {
+                        if (ActorStub.GetDropPosition(envirs[mapId], a.CurrX, a.CurrY, 3, out int px, out int py))
+                        {
+                            envirs[mapId].AddMapObject(px, py, CellType.Item, item.Index, a);
+                            placed++;
+                        }
+                    }
+                }
+                if (a.Gold > 0 && ActorStub.GetDropPosition(envirs[mapId], a.CurrX, a.CurrY, 3, out int gx, out int gy))
+                {
+                    envirs[mapId].AddMapObject(gx, gy, CellType.Item, id, a);
+                    placed++;
+                }
+                // `BaseObject.cs:2429 KillFunc`：经验发给 `ExpHitter`（**第一个**命中者），不是 `LastHiter`；
+
+## B. AddMapObject 是桩（不是 Envir.AddItemToMap）
+$ sed -n "370,392p" mir2-rs/tests/parity/csharp/WorldGolden/Stubs.cs
+            }
+            success = false;
+            return CellArray[0];
+        }
+
+        // Envirnoment.cs:252 逐字拷贝（去掉 AddObject/M2Share 簿记，仅保留格子追加）
+        public bool AddMapObject(int nX, int nY, CellType cellType, int cellId, ActorStub mapObject)
+        {
+            if (mapObject == null)
+            {
+                return false;
+            }
+            if (!CellMatch(nX, nY))
+            {
+                return false;
+            }
+            bool result = false;
+            MapCellInfo cellInfo = GetCellInfo(nX, nY, out bool cellSuccess);
+            if (cellSuccess && cellInfo.Valid)
+            {
+                CellObject cellObject = new CellObject
+                {
+                    CellType = cellType,
+
+## C. golden 里的落地结果（combat）
+$ grep -n "^death\|^floor" mir2-rs/tests/parity/world/golden/combat.txt | head -8
+36:death 2 1 192 1 100
+37:floor 0 13 11 2
+46:floor 0 13 11 2
+55:floor 0 13 11 2
+64:floor 0 13 11 2
+73:floor 0 13 11 2
+82:floor 0 13 11 2
+91:death 3 2 306 1 500
+
+## D. golden 里的落地结果（session）
+$ grep -n "^death\|^floor" mir2-rs/tests/parity/world/golden/session.txt | head -8
+18:death 2 2 192 -1 0
+19:floor 0 13 10 2
+20:floor 0 13 11 1
+24:floor 0 13 10 2
+25:floor 0 13 11 1
+28:floor 0 13 10 2
+29:floor 0 13 11 1
+33:floor 0 13 10 2
+
+## E. 判据出处
+$ grep -n "fn combat_attacks_and_exp_match_csharp\|fn session_and_drops_match_csharp" mir2-rs/tests/parity/tests/*.rs
+mir2-rs/tests/parity/tests/world_combat_parity.rs:26:fn combat_attacks_and_exp_match_csharp() {
+mir2-rs/tests/parity/tests/world_session_parity.rs:18:fn session_and_drops_match_csharp() {
+
+## F. 方案 A 实测：两条判据必红（rust 不落地 vs golden 落地）
+  rust  = death 2 0 192 1 100
+  csharp= death 2 1 192 1 100   (world_combat_parity.rs:32, 第 36 行)
+
+## G. 白名单政策（同根）：T-19 / T-25
+$ sed -n "148p;154p" mir2-rs/tests/parity/whitelist.md | cut -c1-260
+| T-19 | **oracle 缺陷复刻：正常 `CM_DROPITEM` 恒失败**。全仓没有任何 `MapItem.ItemId = …` 赋值点（`src/Modules/SystemModule/Data/MapItem.cs:41` 的 `// this.ItemId = M2Share.ActorMgr.GetNextIdentity();` 是注释），而 `Envirnoment.A
+| T-25 | **oracle 侧「地面物不可达」⇒ `m2-06-pickup` 不可达（② 第 7 格不可满足）**。全仓无任何 `MapItem.ItemId = …` 赋值点（`src/Modules/SystemModule/Data/MapItem.cs:41` 是注释），而 `Envirnoment.AddItemToMap`（`:88-9
