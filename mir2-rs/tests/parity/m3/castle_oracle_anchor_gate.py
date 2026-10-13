@@ -25,8 +25,12 @@ doc-comment/README 锚行号是按**另一版本**抄的，与**冻结** `src/` 
    文件首行 → EOF）内，**每个**`文件.cs:NNN` 锚都必须在 `ANCHORS` 表内（新增锚不登记 ⇒ RED），
    且区间内**不得**留裸锚（必须写成 `文件.cs:NNN`，防 `:NNN` 在不同文件间被误读）。
 4. **读侧 token 强度**（⑧-6 reviewer-6 O-1 / ⑧-10 reviewer-6 残余 Minor「结束行只有 `}` 的
-   token 判据较弱」）：每条锚**整组**至少要有一个**非纯标点** token；整组只剩 `}`/`;`/`(`
-   这类无信息量字符 ⇒ RED（防行号漂移时「只钉在一段空壳行上」假绿）。
+   token 判据较弱」）：每条锚**整组**至少要有一个**有辨识度** token（含字母/数字/下划线/CJK）；
+   整组只剩纯标点/空白 ⇒ RED（防行号漂移时「只钉在一段空壳行上」假绿）。
+   **O-1 收口（2026-10-14）**：旧字符类 `^[{}();,\s]*$` 不含 `[]<>+=-*/|&!~%^?.#:` 等 ⇒
+   整组只剩 `]);`/`[]`/`//{`/`*/` 时被误判「有辨识度」而漏红（reviewer-6 `f97370f3` 构造验证：
+   `]);` ⇒ 无 finding）；现改为「必含字母/数字/下划线/CJK」，对任何纯标点/空白组合都判弱
+   （三门真身锚表在新谓词下仍全绿：castle 159 / guild 31 / hero_pet 27，逐锚核对）。
 
 `audit` 子命令与覆盖面同源，用于复算/清点（`check` 是判据面，`audit` 是清单面）。
 
@@ -356,8 +360,11 @@ ANCHOR_RE = re.compile(
 BARE_ANCHOR_RE = re.compile(r'(?<![A-Za-z0-9_.]):(\d+(?:-\d+)?(?:/\d+(?:-\d+)?)*)')
 
 # 读侧 token 强度（判据 4）：整组只剩纯标点/空白 ⇒ 弱锚 ⇒ RED。
+# O-1 收口（2026-10-14）：此前字符类枚举 `{}();,`，漏 `[]<>+=-*/|&!~%^?.#:` 等 ⇒ 整组只剩
+# `]);`/`[]` 会被误判「有辨识度」（reviewer-6 f97370f3 O-1 构造验证：`]);` ⇒ 无 finding）。
+# 改为「整串不含字母/数字/下划线/CJK」才算弱——对任何纯标点/空白组合都判弱。
 # 逐条语义级核对（行内容与散文「声称构造」一一对应）仍是抽样人核，见证据 README 残留①。
-_WEAK_ONLY_TOKEN_RE = re.compile(r'^[{}();,\s]*$')
+_WEAK_ONLY_TOKEN_RE = re.compile(r'^[^0-9A-Za-z_\u4e00-\u9fff]*$')
 
 
 def _token_strength_findings(anchors):
@@ -617,9 +624,22 @@ def cmd_selftest(args):
     #    含一条有辨识度 token 的整组不因该项红。
     weak_only = [("UserCastle.cs:311-446", UC, [(446, "}")])]
     w = _evaluate(anchors=weak_only, castle_text=castle_text, readme_text=readme_text)
-    t8 = (not any("token 强度" in f for f in g)) and len(w) == 1 and "token 强度" in w[0]
-    sys.stdout.write("selftest token 强度牙齿: %s (good=%d weak=%r)\n"
-                     % ("GREEN" if t8 else "RED", len(g), w))
+    t8a = (not any("token 强度" in f for f in g)) and len(w) == 1 and "token 强度" in w[0]
+    # 9b) O-1 收口（2026-10-14）：reviewer-6 f97370f3 点名的纯标点整组（`]);`/`[]`/`*/`/`//{`）
+    #     旧类 ^[{}();,\s]*$ 判为「有辨识度」而漏红 ⇒ 新谓词必须逐条咬住；
+    #     含内容 token 的整组（第 5 条）不误报。
+    o1_rows = [
+        ("X.cs:1-2", UC, [(2, "]);")]),
+        ("Y.cs:1-2", UC, [(2, "[]")]),
+        ("Z.cs:1-2", UC, [(2, "*/")]),
+        ("W.cs:1-2", UC, [(2, "//{")]),
+        ("V.cs:1-2", UC, [(2, "//{"), (3, "foo")]),
+    ]
+    o1 = _token_strength_findings(o1_rows)
+    t8b = len(o1) == 4 and all("token 强度" in f for f in o1)
+    t8 = t8a and t8b
+    sys.stdout.write("selftest token 强度牙齿: %s (good=%d weak=%r; O-1 pure-punct=%d/4)\n"
+                     % ("GREEN" if t8 else "RED", len(g), w, len(o1)))
     ok = ok and t8
 
     sys.stdout.write("SELFTEST %s\n" % ("GREEN" if ok else "RED"))
@@ -725,6 +745,16 @@ def cmd_mutation(args):
     sys.stdout.write("MUT9 token 强度(整组只剩 `}`): %s（%d 项）\n"
                      % ("RED" if red9 else "GREEN", len(f9)))
     ok = ok and red9
+
+    # MUT10（O-1 收口，2026-10-14）：reviewer-6 f97370f3 O-1 点名的纯标点整组 `]);`（旧字符类
+    # 判为「有辨识度」⇒ 漏红）与 `]`/`//{` 必须被新谓词咬住 ⇒ 证明该牙对 O-1 边界不再恒绿。
+    o1a = _token_strength_findings([("UserCastle.cs:311-446", UC, [(446, "]);")])])
+    o1b = _token_strength_findings([("X.cs:1-2", UC, [(2, "]")]),
+                                    ("Y.cs:1-2", UC, [(2, "//{")])])
+    red10 = len(o1a) == 1 and "token 强度" in o1a[0] and len(o1b) == 2
+    sys.stdout.write("MUT10 token 强度(O-1 纯标点 `]);`/`]`/`//{`): %s（%d+%d 项）\n"
+                     % ("RED" if red10 else "GREEN", len(o1a), len(o1b)))
+    ok = ok and red10
 
     sys.stdout.write("MUTATION %s (%s)\n" % ("GREEN" if ok else "RED", out))
     return 0 if ok else 1

@@ -1,0 +1,42 @@
+# 本片命令（cwd = worktree 根；CARGO_TARGET_DIR 在检出外）
+# 卡：openmir2-m3-fixture-chain-gate（O-1 收口）；涉及 ⑧-6 / ⑧-10 / ⑨-5 三锚门工具。
+# tier=L：纯夹具/工具（3 个 .py），零 .rs、零 RNG/时序/落库/战斗数值；等价 + 抽样冒烟。
+
+# —— ① O-1 差分：旧字符类盲区 vs 新谓词咬住（01）——
+cd mir2-rs/tests/parity/m3
+python -I -   # 见 01-o1-blind-spot-vs-fixed.txt 的内联脚本（对同一批 `]);`/`[]`/`*/`/`//{` 整组复算旧/新判定）
+
+# —— ② 三锚门 check/selftest/mutation（02/03/04；离线、零端口）——
+python -I castle_oracle_anchor_gate.py check
+python -I castle_oracle_anchor_gate.py selftest
+python -I castle_oracle_anchor_gate.py mutation
+python -I guild_castle_anchor_gate.py check
+python -I guild_castle_anchor_gate.py selftest
+python -I guild_castle_anchor_gate.py mutation
+python -I hero_pet_anchor_gate.py check
+python -I hero_pet_anchor_gate.py selftest
+python -I hero_pet_anchor_gate.py mutation
+
+# —— ③ 夹具链深检门（runner 级；05/06）——
+python -I fixture_chain_gate.py check
+python -I fixture_chain_gate.py selftest
+
+# —— ④ 外部改坏必红：把 castle 门谓词退回旧类 ⇒ selftest/mutation RED（07）——
+cp castle_oracle_anchor_gate.py .__mut_castle_gate.py
+# python 把 `_WEAK_ONLY_TOKEN_RE = ...` 整行替换为旧类 ^[{}();,\s]*$（见 07 原始件）
+python -I .__mut_castle_gate.py selftest   # ⇒ SELFTEST RED（O-1 pure-punct=0/4）
+python -I .__mut_castle_gate.py mutation   # ⇒ MUTATION RED（MUT10 0+0 未咬住）
+python -I .__mut_castle_gate.py check      # ⇒ 仍 GREEN（真身无弱锚 ⇒ 只能靠牙咬）
+rm -f .__mut_castle_gate.py                # 真身 sha256 前后一致（见 07 末行）
+
+# —— ⑤ 四门禁（08–11；零 .rs，仍全跑）——
+cd mir2-rs
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo fmt --all -- --check
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo clippy --workspace --all-targets -- -D warnings
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo test --workspace --no-fail-fast
+CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target cargo run -q -p msgcodegen -- --check
+
+# —— ⑥ 证据 hash（仓库 LF/git-blob 口径）——
+cd <worktree 根>
+python -I tools/evidence-hash/verify_sha256sums.py verify --check-extra mir2-rs/tests/parity/m3/evidence-m3-anchor-token-class-20261014
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-anchor-token-class-20261014

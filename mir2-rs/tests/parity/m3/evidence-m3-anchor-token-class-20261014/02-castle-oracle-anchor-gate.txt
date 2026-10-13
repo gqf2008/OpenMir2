@@ -1,0 +1,31 @@
+$ python -I castle_oracle_anchor_gate.py check
+GREEN: castle oracle 锚门通过（159 锚命中冻结 src/ + 写侧在位 + 覆盖区间无未登记/裸锚）
+rc=0
+
+$ python -I castle_oracle_anchor_gate.py selftest
+selftest 表结构: GREEN (159 锚)
+selftest 读侧 token 牙齿: GREEN (good=[] bad=1)
+selftest 写侧缺锚牙齿: GREEN (['写侧缺锚 UserCastle.cs:9999（不在 castle.rs / README.md）'])
+selftest 覆盖面牙齿: GREEN (cov=['覆盖面：未登记锚 B.cs:2（覆盖区间 castle.rs:1-5）', '覆盖面：裸锚 `:9`（覆盖区间 castle.rs:1-5）须写成 `文件.cs:NNN`'])
+selftest 覆盖区间标记缺失牙齿: GREEN
+selftest 真身覆盖面: GREEN (0 项)
+selftest 全文件覆盖面: GREEN ([(1, 2807)]，castle.rs 2807 行)
+selftest audit 清点器: GREEN (syn uncovered=['B.cs:2'] bare=['9']; real uncovered=0 bare=0)
+selftest token 强度牙齿: GREEN (good=0 weak=["读侧 token 强度：锚 UserCastle.cs:311-446 整组无有辨识度 token（['}']）——至少一条 token 须含实际内容，不能只靠 `}`/`;` 等纯标点钉位置"]; O-1 pure-punct=4/4)
+SELFTEST GREEN
+rc=0
+
+$ python -I castle_oracle_anchor_gate.py mutation
+MUT1 写侧漂移(:113→:111): RED（1 项；C:\Users\gxh\AppData\Local\Temp\castle-anchor-mut-7ggzul7x）
+MUT2 读侧漂移(表 39→36): RED（1 项）
+  - 读侧不匹配 src/M2Server/Castle/CastleConf.cs:36 期望含 '"CastleMap"'，实际 'userCastle.EnvirList.Add(sMap);'
+MUT3 真身 check: GREEN（0 项）
+MUT4 覆盖面未登记锚: RED（1 项）
+MUT5 ⑧-7 范围漂移(:311-446→:311-448): RED（3 项）
+MUT6 ⑧-7 裸锚回归(:480-483): RED（3 项）
+MUT7 全文覆盖面(尾部未登记锚): RED（1 项）
+MUT8 audit 清点器(删表项 UserCastle.cs:930): RED（uncovered=1）
+MUT9 token 强度(整组只剩 `}`): RED（1 项）
+MUT10 token 强度(O-1 纯标点 `]);`/`]`/`//{`): RED（1+2 项）
+MUTATION GREEN (C:\Users\gxh\AppData\Local\Temp\castle-anchor-mut-7ggzul7x)
+rc=0
