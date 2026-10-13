@@ -26,6 +26,9 @@ reviewer-6 在 approve head `2591a7b31`（entry `2f19ee0b`）时记了一条 **O
    HEAD 的祖先、且自其至 HEAD **只动证据/夹具侧**（缺省 `mir2-rs/tests/parity/m3/`）」收成
    fail-closed；`selftest` 7/7（4 条改坏必红：生产代码漂移 / oid 不可解析 / 非祖先 / 显式放行绿，
    + 2 条 PREREQ）。读数见 `02-gate-selftest-check.txt`。
+   > 后续片（`check-pack`，见 `evidence-m3-rng-scene-head-pack-20261014/`）把该工具扩到 **selftest 16/16**，
+   > 并新增「机判对象 = 包内声明 head + 显式 `--since` 锚」模式；本包 `10-boundary.txt` 已补
+   > `### head = <oid>` 声明行（`check-pack --since 30c52f85` GREEN，changed_since=21）。
    - 在 `rng-trace-scene/README.md` 增 §5.4 说明（含**局限**：本门不咬「声明的是真实祖先但不是读数
      head」那一类 O-1 原形——那属书证命名，靠人写对 + 评审）。
 3. **同片记录四门禁 + 边界 + 无栈自检**（`04`–`10`）。
@@ -34,7 +37,7 @@ reviewer-6 在 approve head `2591a7b31`（entry `2f19ee0b`）时记了一条 **O
 
 | 项 | 命令（cwd = `mir2-rs/tests/parity/m3`） | 读数 | 原始件 |
 | --- | --- | --- | --- |
-| 声明 head 机判 | `python -I rng-trace-scene/check_evidence_head.py selftest` / `check --dir evidence-m3-rng-scene-anchor-teeth-20261014 --head <base>` | **selftest 7/7**；check GREEN（其后变更全证据侧） | `02-gate-selftest-check.txt` |
+| 声明 head 机判 | `python -I rng-trace-scene/check_evidence_head.py selftest` / `check --dir evidence-m3-rng-scene-anchor-teeth-20261014 --head <base>` | **selftest 7/7**（工具现为 16/16，见 head-pack 包）；check GREEN（其后变更全证据侧） | `02-gate-selftest-check.txt` |
 | 承接卡锚点保鲜 | `python -I rng-trace-scene/check_anchors.py check` | **GREEN 7/7**（未削弱） | `03-checks-ancillary.txt` |
 | 无栈自检 | `run_rng_trace_pair.ps1 -SelfCheckNoStack` | **31/31 GREEN**（项数未变） | `04-selfcheck-nostack.txt` |
 | 离线全链 | 8 个 selftest | 全 rc=0 | `05-offline-regression.txt` |

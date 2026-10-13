@@ -1,0 +1,108 @@
+81-mongen-dense-points-checker.txt —— 卡 `openmir2-client-e2e-enter-gaps` 缺口②「同屏没怪」
+**离线判据工具化**（m2-svr / openmir2-worker-11，2026-10-14；root 00:4x ③ 的判据说清 + 可复跑）
+====================================================================================================
+本文件替代 `71-mongen-dense-points-map0.txt` 那份**一次性转录**：同样的读数现在由一个带
+`--selftest`（10 条）与**两条改坏必红**的机判工具给出，可在窗口里选点时随时复跑、可被 reviewer 独立复算。
+
+工具：`check_mongen_dense_points.py`
+  sha256  76797f079a3706590abbd71fd01c82a67a4073438a01134ca96cc9cece1b543a
+  lines   283
+oracle 锚点（生成框 = **正方形**，Chebyshev 语义）：
+  `src/GameSrv/Word/WorldServer.MonGen.cs:825-826`
+      nX = (short)(monGen.X - monGen.Range + M2Share.RandomNumber.Random(monGen.Range * 2 + 1));
+      nY = (short)(monGen.Y - monGen.Range + M2Share.RandomNumber.Random(monGen.Range * 2 + 1));
+  （另 `:849-850` 同式）⇒ 出生点均匀落在 `[X-R, X+R] x [Y-R, Y+R]` ⇒ 框内判定用 Chebyshev 距离；
+  「框外且 Chebyshev=d」⇒ **新出生**的怪至少离该点 d 格（游走怪另算，真机 `nearest` 可能更小）。
+
+输入（现网部署件，只读）：
+  `E:/MirServer/M2GameSvr/Envir/MonGen.txt`（GBK）  map "0" 生成框 **76** 个
+  `E:/MirServer/M2GameSvr/Envir/StartPoint.txt`（GBK） map "0" 出生点 3 个：(289,618) / (650,631) / (330,266)
+
+A. `--selftest`（不依赖外部件；10/10）
+====================================================================================================
+```
+[PASS] selftest inside-center: rc=0 (want 0)
+[PASS] selftest inside-corner: rc=0 (want 0)
+[PASS] selftest outside-corner+1: rc=0 (want 0)
+[PASS] selftest outside-far: rc=0 (want 0)
+[PASS] selftest outside-but-expect-inside: rc=1 (want 1)
+[PASS] selftest inside-but-expect-outside: rc=1 (want 1)
+[PASS] selftest edge-viewrange-equal: rc=0 (want 0)
+[PASS] selftest report-no-judge: rc=0 (want 0)
+[PASS] selftest empty-boxes-prereq: rc=2 (want 2)
+[PASS] selftest no-points-prereq: rc=2 (want 2)
+SELFTEST OK (10/10)
+rc=0
+```
+
+B. root 实测点与已证密集点（真机原始读数在 `10-*` / `56-*` / root `E:/tmp/client-e2e/stack/game-svr.out.log`）
+====================================================================================================
+```
+$ python -I -B check_mongen_dense_points.py --mongen <Envir/MonGen.txt> --map 0 --view-range 12 \
+      --points "291,666;291,651;287,620;256,572;188,439"
+INFO map=0 生成框 76 个；待判定坐标 5 个
+INFO (291,666) 框外；到最近生成框 Chebyshev=30 （gen=(211,629) range=50 count=50 name=鹿）；view_range=12 < d ⇒ 新出生的怪必在窗口外 （游走怪另算；真机 `nearest` 可能更小）
+INFO (291,651) 框外；到最近生成框 Chebyshev=29 （gen=(256,572) range=50 count=50 name=鹿）；view_range=12 < d ⇒ 新出生的怪必在窗口外 （游走怪另算；真机 `nearest` 可能更小）
+INFO (287,620) 框内；到最近生成框 Chebyshev=0 （gen=(256,572) range=50 count=50 name=鹿）；view_range=12 覆盖最近框 ⇒ 可能有出生怪在窗口内
+INFO (256,572) 框内；到最近生成框 Chebyshev=0 （gen=(256,572) range=30 count=10 name=半兽人）；view_range=12 覆盖最近框 ⇒ 可能有出生怪在窗口内
+INFO (188,439) 框内；到最近生成框 Chebyshev=0 （gen=(188,439) range=120 count=50 name=鹿）；view_range=12 覆盖最近框 ⇒ 可能有出生怪在窗口内
+RESULT: GREEN
+rc=0
+```
+⇒ **③「该点确实无怪」成立**：root verify1 的 `(291,666)`（复进的 `(291,651)` 同）在 map "0" **所有 76 个
+生成框之外**，最近框 Chebyshev=30 > `ViewRange=12`；真机 `nearest=23..34`（游走怪）与「窗口内无出生怪」自洽。
+⇒ `(287,620)`（片⑦ AFTER，客户端实收 13 对出现帧）/ `(256,572)`（README 已证）/ `(188,439)` 均在框内 ⇒ **④「AOI 未算/未下发」不成立**。
+
+C. oracle 出生点（新角色 / 召回）落在生成框内 ⇒ 「默认体验就该看得见怪」
+====================================================================================================
+```
+$ python -I -B check_mongen_dense_points.py --mongen <Envir/MonGen.txt> --start-point <Envir/StartPoint.txt> --map 0 --view-range 12
+INFO map=0 生成框 76 个；待判定坐标 3 个
+INFO (289,618) 框内；到最近生成框 Chebyshev=0 （gen=(256,572) range=50 count=50 name=鹿）；view_range=12 覆盖最近框 ⇒ 可能有出生怪在窗口内
+INFO (650,631) 框外；到最近生成框 Chebyshev=3 （gen=(605,578) range=50 count=50 name=鹿）；view_range=12 >= d ⇒ **框边缘**，出生怪可能落在窗口内（需窗口实拍）
+INFO (330,266) 框内；到最近生成框 Chebyshev=0 （gen=(333,268) range=20 count=10 name=鸡）；view_range=12 覆盖最近框 ⇒ 可能有出生怪在窗口内
+```
+- oracle 新角色出生点由 `StartPointList[Random(Config.StartPointSize)]` 定索引（`Config.StartPointSize` 缺省 2
+  ⇒ 现实取 `(289,618)` 或 `(650,631)`；见 `mir2-rs/bins/game-svr/src/homemap.rs` 的 1:1 解析）。
+- **两个可能的出生点都距生成框 ≤3 格**（(289,618) 框内；(650,631) d=3），`view_range=12` 覆盖 ⇒ 新角色进世界
+  即应同屏见怪。这解释并收口 root 的 ①：**不该用坐标 `(291,666)` 复测**（那是本测试夹具的历史残留位置，
+  不在任何生成框内，也不是 oracle 出生点）；窗口里把 `aaa` 置 `(289,618)`（或 `(287,620)`) 即可。
+
+D. 改坏必红（每条先改坏 ⇒ RED，再按原文件复跑 ⇒ GREEN）
+====================================================================================================
+```
+$ sed 's/return max(abs(ax - bx), abs(ay - by))/return abs(ax - bx) + abs(ay - by)/' \
+      check_mongen_dense_points.py > /tmp/manhattan.py
+$ python -I -B /tmp/manhattan.py --mongen <...> --map 0 --point 287,620 --expect inside
+INFO (287,620) 框外；到最近生成框 Chebyshev=29 （gen=(256,572) range=50 count=50 name=鹿）
+RED --expect inside 但 (287,620) 在框外
+RESULT: RED
+rc=1   # 改坏：Chebyshev → Manhattan（等距语义错）⇒ 框内点判成框外
+
+$ sed 's/d = cheb(x, y, b\["x"\], b\["y"\]) - b\["range"\]/d = cheb(x, y, b["x"], b["y"])/' \
+      check_mongen_dense_points.py > /tmp/norange.py
+$ python -I -B /tmp/norange.py --mongen <...> --map 0 --point 287,620 --expect inside
+INFO (287,620) 框外；到最近生成框 Chebyshev=48 （gen=(256,572) range=30 count=10 name=半兽人）
+RED --expect inside 但 (287,620) 在框外
+RESULT: RED
+rc=1   # 改坏：丢掉 Range（把生成框当点）⇒ 框内非中心点判成框外
+
+$ python -I -B check_mongen_dense_points.py --mongen <...> --map 0 --point 287,620 --expect inside
+INFO (287,620) 框内；到最近生成框 Chebyshev=0 （gen=(256,572) range=50 count=50 name=鹿）
+OK 1 个坐标全部与 --expect inside 一致
+RESULT: GREEN
+rc=0   # 原文件还原后 GREEN
+```
+⇒ 工具对「等距语义」与「Range 语义」两类改坏都会红（不是恒绿断言）。
+
+E. 边界 / 退出码
+====================================================================================================
+- 缺 `--mongen` / 文件不存在 ⇒ `PREREQ_RED` rc=2（不静默通过）；解析不到生成框（地图名写错）⇒ rc=2。
+- `--expect report` ⇒ 只打印不判据 rc=0；`--expect inside|outside` 与坐标不符 ⇒ rc=1。
+- 最近框平局时取 `range` 最小的框作代表（避免用大框掩盖小框语义）。
+
+F. 未做 / 登记
+====================================================================================================
+- 本工具只做**出生框**几何判定；「游走怪是否落在窗口内」必须在窗口里由真机/客户端读数给（`nearest`/`vis`）。
+- 真机两侧同位置同 viewrange 的对照（root ③ 的 R 级判据）仍需 root 独占窗口；recipe 见 `82-two-side-window-runbook.md`。
+- 本片**零生产代码改动、零起栈、零端口**。

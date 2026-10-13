@@ -363,20 +363,33 @@ reviewer-6 在 approve head `2591a7b31` 时记了一条 observation（O-1）：`
 （缺省 `mir2-rs/tests/parity/m3/`，可用 `--allow-prefix` 显式放行）」收成 **fail-closed 机判**：
 
 ```sh
-# 声明 head 合法性 + 其后零生产代码（cwd = mir2-rs/tests/parity/m3）
+# (a) check：声明 head 合法性 + 其后（到当前 HEAD）零生产代码（cwd = mir2-rs/tests/parity/m3）
 python -I rng-trace-scene/check_evidence_head.py check \
   --dir evidence-m3-rng-scene-anchor-teeth-20261014 --head 2591a7b31
-python -I rng-trace-scene/check_evidence_head.py selftest        # 7/7 GREEN（4 条改坏必红 + 2 条 PREREQ）
+# (b) check-pack：机判对象 = 包内声明的 head（从包内读）+ 显式 since 锚（本片 patch base）
+python -I rng-trace-scene/check_evidence_head.py check-pack \
+  --dir evidence-m3-rng-scene-anchor-teeth-20261014 --since 10f0daa93
+python -I rng-trace-scene/check_evidence_head.py check-pack \
+  --dir evidence-m3-rng-scene-head-o1-20261014 --since 30c52f85
+python -I rng-trace-scene/check_evidence_head.py selftest        # 16/16 GREEN（check 7 + check-pack 9）
 ```
 
+- **`check-pack`（reviewer-5 对本卡 head `9740b7d0c` 的 observation O-1 收口）**：把「书证 head 与机判
+  对象一致」补上——机判对象 = **包内声明的 head**（从 `11-boundary.txt` / `10-boundary.txt` / `README.md`
+  里按 `head = <oid>` 读；`--decl-file` / `--decl-regex` 可覆写），并用**显式 `--since` 锚**界定差量
+  `since..声明 head`（只允许证据/夹具侧）。判据：`SINCE_NOT_ANCESTOR` / `HEAD_UNRESOLVABLE` /
+  `HEAD_NOT_ANCESTOR` / `HEAD_SCOPE_DRIFT` 各自 rc=1 点名；读不到声明 / `--since` 解析不出 ⇒ rc=2。
+  收益：① 校的正是书证里写的 oid；② 免疫「master 前进后的无关合并」造成的假红（`since..声明 head`
+  只看本片自己的差量，不像 `check` 的 `head..HEAD` 会把别人的合并算进来）。
 - `HEAD_UNRESOLVABLE`（oid 解析不出）/ `HEAD_NOT_ANCESTOR`（非 HEAD 祖先）/ `HEAD_SCOPE_DRIFT`
   （其后改了非证据侧路径，逐条点名）⇒ rc=1；缺目录/坏输入/非 git 工作树 ⇒ rc=2；
 - **为什么不是「声明 head == 交付 head」**：证据包在交付后还会被下一片追加（如本 O-1 收口），
   「声明 head 永远落后交付 head 一格」是自指死结。本口径改为「声明**读数所在** head + 机判其后只有
   证据侧变更」，既诚实又可达（O-1 书证订正后，本包两处 head 字段写 `2591a7b31`）；
 - **局限（如实登记）**：本门咬三类——oid 写错/不可解析、非 HEAD 祖先、声明后夹带生产代码；
-  它**咬不住** O-1 原本那一类（声明的是**真实祖先**但不是读数/交付 head，如 `2fcebc6cd`）——
-  那一类属书证命名，靠人写对 + 评审；本门把其余可机判的相邻失败模式钉死，与文本订正互补；
+  它**咬不住** O-1 原本那一类（声明的是**真实祖先**但不是读数/交付 head，如 `2fcebc6cd`；实测
+  `diff 10f0daa93..2fcebc6cd` 全在证据侧 ⇒ `check-pack` 亦绿）——那一类属书证命名，靠人写对 + 评审；
+  `check-pack` 把机判对象换成了书证 head，**该残留子类不变**（只是对象不再错位），其余相邻失败模式仍钉死；
 - **不改** `run_rng_trace_pair.ps1` 的自检项数（仍 31；本工具是证据包的**自洽牙**，非 DoD 判据本体）。
 
 ## 6. 命令（可复算）
@@ -389,7 +402,7 @@ python -I rng-trace-probe/rng_ledger_diff.py selftest          # 37/37 GREEN（�
 python -I rng-trace-scene/rng_scene_gate.py selftest           # 22/22 GREEN（含 scenario 声明 vs 代码 + 半给流水 PREREQ）
 python -I rng-trace-scene/check_evidence_counts.py selftest    # 7/7 GREEN（报告证据头行计数 vs 真实包：声明/真实）
 python -I rng-trace-scene/check_anchors.py selftest             # 13/13 GREEN（承接卡规格锚点保鲜；含 12 条改坏必红：行号漂移/缺失/歧义/未登记引用/折叠定义回退/同名目录串台/裸续引用未登记/裸续内容漂移/未识别扩展名/裸续引用归属未登记/裸续引用归属文件缺失/裸续引用登记行越界）
-python -I rng-trace-scene/check_evidence_head.py selftest       # 7/7 GREEN（证据包声明 head：可解析/祖先/其后仅证据侧；含 4 条改坏必红）
+python -I rng-trace-scene/check_evidence_head.py selftest       # 16/16 GREEN（证据包声明 head：check 对 HEAD + check-pack 对书证 head；含改坏必红 + PREREQ）
 python -I rng-trace-probe/rng_consumer_groups.py selftest       # 15/15 GREEN（站点表 oracle_ref 可解析性；含坏路径/越界行 2 条改坏必红）
 python -I rng-trace-scene/check_window_batch.py selftest        # 13/13 GREEN（本卡 vs ④ 场景件：同图/同种子/同起点）
 
