@@ -1,0 +1,4 @@
+1	INJECT_OK	42	0
+SEED_PROBE 42
+1	Next(max)	100	7	crates/formula/src/drop.rs:109
+2	Next(max)	100	7	crates/world/src/monai.rs:172

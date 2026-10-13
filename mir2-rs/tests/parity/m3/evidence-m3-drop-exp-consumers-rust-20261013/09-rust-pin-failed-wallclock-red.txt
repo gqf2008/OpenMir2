@@ -1,0 +1,10 @@
+=== 改坏必红：Rust pin 抑制失效（monai.rs Wondering 出现）⇒ RED rc=1 ===
+=== 场景纯度（drop_exp_purity_gate）===
+  side=rust stream=evidence-m3-drop-exp-consumers-rust-20261013/rust-pin-failed-synthetic.tsv
+  draws=2 measured=1 setup=0 wallclock=1 other=0 unknown=0 missing_site=0 ambiguous=0
+  --- 逐消费者清单（site 计数，降序）---
+         1  crates/formula/src/drop.rs:109
+         1  crates/world/src/monai.rs:172
+  RED: wallclock_consumer: 1 处墙钟驱动抽数（首个 line=4 site=crates/world/src/monai.rs:172）⇒ pin 抑制未生效；需 (a) 把怪钉住（不游走/不搜索目标）或 (b) 接专用流（实现卡）
+  结论：场景不纯 / 认不出 ⇒ **拒比**（fail-closed，不放宽判据）
+rc=1

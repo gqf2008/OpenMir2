@@ -1,0 +1,55 @@
+# drop_exp_consumers.tsv —— M3④ 掉落/经验场景的 RNG 消费者表（`drop_exp_purity_gate.py` 唯一真源）
+#
+# 卡：openmir2-m3-drop-exp-align / openmir2-m3-drop-exp-wiring（④ 真机 100 杀要独占窗口）。
+# owner 对 whitelist T-35 的有条件批准（comment c78bd13f）：
+# 要求：口径必须写成「场景内除被测量路径（1 只 pin 怪 + 击杀→掉落/经验取数）外 RNG 消费者数 = 0」，
+# 并给逐消费者清单 + 计数；不许拿「离刷怪圈远 / 图里 MonGen 零行 / 只 spawn 一只」单独当充分条件。
+# owner/worker-11 在 ④ 卡上写明（comment 868440f3）：**窗口期先补两侧实测站点行，再跑门**。
+#
+# cols: side<TAB>class<TAB>pattern<TAB>max<TAB>oracle_ref<TAB>note
+#   class = measured | setup | wallclock | other
+#     measured  = 被测量路径（击杀 → 掉落取数；击杀的攻方抽数同属该路径），要求 > 0
+#     setup     = 被测量路径的场景构建（owner「1 只 pin 怪」：spawn/生成期构造），按 max 设上限（* = 窗口期再收紧）
+#     wallclock = 墙钟驱动消费者，要求 == 0（pin 抑制生效证据）
+#     other     = 其余任何消费者，要求 == 0
+#   pattern 为正则；在**归一化后**的 site（`\` → `/`）上 search；未命中任何行 ⇒ 点名 RED（认不出，fail-closed）
+#
+# 本表分两层：
+#   ① **oracle 源码 + 真机实测确认**的行（C# 掉落/构造/墙钟、两侧攻击路径） —— 见下方证据锚；
+#   ② Rust 侧按 ④-D（master 4521d451）实现逐条补的**文件级**站点行（`#[track_caller]` 记到世界层
+#      调用点）：drop = `crates/formula/src/drop.rs`，kill = `crates/world/src/combat.rs`，
+#      setup = `bins/game-svr/src/mongen.rs`（生成期构造抽数）+ `crates/world/src/mongen.rs`（刷怪/复活）。
+#      `max` 未实测者留 `*`（窗口期按真实计数收紧）；**不许**为了拿绿把类别放宽。
+#
+# 真机实测证据（C# 活栈 1,670,754 次抽数的消费者清单）见：
+#   mir2-rs/tests/parity/m3/evidence-attack-my-field-20261012/06-rng-ledger-summary-csharp.txt
+# 两侧攻击路径站点的一一对应（oracle 锚 + F-1 真机实测次数）见：
+#   mir2-rs/tests/parity/m3/rng-isolate-attack/attack_sites.tsv
+# Rust 侧实现锚（④-D 折叠后）：crates/world/src/world.rs:670/720 → crates/world/src/combat.rs
+#   generate_drops → crates/formula/src/drop.rs mon_get_random_items / random_upgrade_item /
+#   random_set_unknown_item；生成期构造抽数 = bins/game-svr/src/mongen.rs。
+
+# ---- C#（oracle）------------------------------------------------------------
+csharp	measured	GameSrv\.Word\.WorldServer\.MonGetRandomItems@WorldServer\.MonGen\.cs:(451|455|467|474)	*	src/GameSrv/Word/WorldServer.MonGen.cs:439	击杀→掉落取数（掉落门/金币/耐久/极品升级）= 被测量路径
+csharp	measured	M2Server\.Actor\.BaseObject\.GetAttackPower@BaseObject\.Base\.cs:892$	*	src/M2Server/Actor/BaseObject.Base.cs:886	击杀路径：非玩家攻方 GetAttackPower（F-1 实测 34）
+csharp	measured	M2Server\.Player\.PlayObject\.GetAttackPower@PlayObject\.cs:(2929|2934)$	*	src/M2Server/Player/PlayObject.cs:2929	击杀路径：玩家攻方 GetAttackPower（Luck<=0 两抽；F-1 实测 120/120）
+csharp	measured	M2Server\.Actor\.BaseObject\._Attack@BaseObject\.Attack\.cs:41$	*	src/M2Server/Actor/BaseObject.Attack.cs:41	击杀路径：命中门 RandomByte(SpeedPoint)（F-1 实测 36）
+csharp	measured	M2Server\.Actor\.BaseObject\.GetHitStruckDamage@BaseObject\.Base\.cs:(792|793)$	*	src/M2Server/Actor/BaseObject.Base.cs:792	击杀路径：护甲减免两抽（F-1 实测 35/2）
+csharp	measured	M2Server\.Player\.PlayObject\.StruckDamage@PlayObject\.cs:(2957|3000)$	*	src/M2Server/Player/PlayObject.cs:2957	击杀路径：受击耐久两抽（目标为玩家；F-1 实测 3）
+csharp	measured	M2Server\.Player\.PlayObject\.AttackSuccess@PlayObject\.Attack\.cs:223$	*	src/M2Server/Player/PlayObject.Attack.cs:225	击杀路径：AttackSuccess Random(5)（玩家有目标恰 1 抽；F-1 实测 2）
+csharp	setup	GameSrv\.Word\.WorldServer\.CreateMonster@WorldServer\.MonGen\.cs:(740|744)$	*	src/GameSrv/Word/WorldServer.MonGen.cs:498	场景构建：生成期 CreateMonster 抽数
+csharp	setup	GameSrv\.Word\.WorldServer\.InitializeMonster@WorldServer\.MonGen\.cs:(66|94)$	*	src/GameSrv/Word/WorldServer.MonGen.cs:66	场景构建：怪属性初始化
+csharp	setup	M2Server\.Actor\.BaseObject\.\.ctor@BaseObject\.cs:(438|441)$	*	src/M2Server/Actor/BaseObject.cs:438	场景构建：BaseObject ctor（Random(3000) 等）
+csharp	setup	M2Server\.Actor\.AnimalObject\.\.ctor@AnimalObject\.cs:75$	*	src/M2Server/Actor/AnimalObject.cs:75	场景构建：AnimalObject ctor（AttackTick/WalkTick）
+csharp	setup	M2Server\.Player\.PlayObject\.\.ctor@PlayObject\.cs:1046$	*	src/M2Server/Player/PlayObject.cs:1046	场景构建：玩家进世界构造
+csharp	wallclock	M2Server\.Actor\.AnimalObject\.Wondering@AnimalObject\.cs:(427|432|434)	0	src/M2Server/Actor/AnimalObject.cs:425	游走/转向/寻敌；owner 点名（②③ 实测占 C# 流水 99.98% 噪声）⇒ pin 抑制必须使其为 0
+csharp	wallclock	GameSrv\.Word\.WorldServer\.RegenMonsters@WorldServer\.MonGen\.cs:815	0	src/GameSrv/Word/WorldServer.MonGen.cs:238	刷怪 regen 抽数在 GetTickCount 门控的 tick 里 ⇒ 墙钟消费者，必须 0
+csharp	wallclock	GameSrv\.Npc\.Merchant\.Run@Merchant\.cs:(132|138)	0	src/GameSrv/Npc/Merchant.cs:132	商人 tick 抽数在 dwCurrentTick 门控里 ⇒ 墙钟消费者；本场景无商人 ⇒ 必须 0
+
+# ---- Rust（④-D 实现；文件级 = #[track_caller] 世界层调用点）------------------
+rust	measured	crates/world/src/combat\.rs:	*	crates/world/src/combat.rs	击杀路径：GetAttackPower/hit_gate/GetHitStruckDamage/StruckDamage/AttackSuccess/耐久（attack_sites.tsv 的 rust 侧一一对应）
+rust	setup	bins/game-svr/src/mongen\.rs:	*	bins/game-svr/src/mongen.rs	场景构建：生成期构造抽数（R-6 折叠后 C# construct → Rust spawn）
+rust	setup	crates/world/src/mongen\.rs:	*	crates/world/src/mongen.rs	场景构建：刷怪/复活位置与分片抽数
+rust	wallclock	crates/world/src/monai\.rs:	0	crates/world/src/monai.rs	怪 AI tick（Wondering/SearchTarget 等）；pin 抑制必须使其为 0
+rust	wallclock	crates/world/src/merchant\.rs:	0	crates/world/src/merchant.rs	商人 tick 抽数在 RunTick/RunTime + 200ms sim 节奏门后 ⇒ 墙钟消费者；pin 场景无商人 ⇒ 必须 0
+rust	other	bins/game-svr/src/homemap\.rs:	0	bins/game-svr/src/homemap.rs	落点/Home 计算抽数；pin 场景不走（须 fail-closed 报红）

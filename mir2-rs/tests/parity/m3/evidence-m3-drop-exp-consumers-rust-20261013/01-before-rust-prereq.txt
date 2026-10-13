@@ -1,0 +1,3 @@
+=== BEFORE：旧表（origin/master）side=rust ⇒ PREREQ rc=2 ===
+PREREQ_MISSING: consumers 表里 side=rust 没有 `measured` 行 ⇒ 认不出被测量路径，拒跑（不许假绿；实现卡落地后按实测站点补表）
+rc=2

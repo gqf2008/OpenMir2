@@ -38,7 +38,7 @@
       "csharp": "MIR2_RNG_LOG（m3/rng-hook + MIR2_RNG_SITE=1 的全场景 5 列 TSV）",
       "rust": "<rust stack log dir>/rng-stream.tsv"
     },
-    "status": "offline-gate-ready-window-pending"
+    "status": "offline-gate-ready-both-sides-window-pending"
   },
   "artifact": {
     "raw": "drop_exp_raw.jsonl",
@@ -53,6 +53,6 @@
     "掉落列表按多重集/计数式比较（multiset），逐槽位定位到「第 k 次击杀 / 第几个掉落槽」；不许 set 差集。",
     "金额/经验保持原宽度比较，比较器不得做 i32 截断（selftest 有 i32-truncation-red 用例钉住）。",
     "oracle 侧本代码库没有独立的英雄经验表；「英雄」路径 = 下属/宠物击杀走 ExpHitter.Master（BaseObject.cs:2434），本场景单 attacker 不覆盖，登记为承接项。",
-    "纯度：除被测量路径（MonGetRandomItems 掉落取数）外的 RNG 消费者必须为 0；墙钟消费者（AnimalObject.Wondering/RegenMonsters/Merchant.Run）按 (a) pin 抑制压到 0，逐消费者计数见 drop_exp_purity_gate.py --json。"
+    "纯度：除被测量路径（MonGetRandomItems 掉落取数）外的 RNG 消费者必须为 0；墙钟消费者（AnimalObject.Wondering/RegenMonsters/Merchant.Run）按 (a) pin 抑制压到 0，逐消费者计数见 drop_exp_purity_gate.py --json。两侧实测站点表已就位：`drop_exp_consumers.tsv` 按 oracle 源码 + 真机实测（C# 侧）与 ④-D Rust 实现文件级锚（drop=formula/drop.rs、kill=world/combat.rs、setup=bins/game-svr/mongen.rs + world/mongen.rs、wallclock=monai.rs/merchant.rs）补齐 —— Rust 侧不再 PREREQ；`max` 未实测者留 `*`，窗口期收紧。"
   ]
 }
