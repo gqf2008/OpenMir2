@@ -261,7 +261,7 @@ if ($SelfCheckNoStack) {
               ($null -ne $sc.cases.summon_dragon) -and ($null -ne $sc.cases.cap_one) -and
               ($null -ne $sc.cases.make_clone)
     } catch { $scOk = $false }
-    Add-Result 'scenario-fixed-input' $scOk 'canon/cases/summon_skeleton/summon_dragon/cap_one'
+    Add-Result 'scenario-fixed-input' $scOk 'canon/cases/summon_skeleton/summon_dragon/cap_one/make_clone'
 
     # ② 比较器 selftest（fail-closed + 改坏必红）必须 GREEN
     $stOut = ''

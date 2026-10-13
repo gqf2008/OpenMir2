@@ -1,0 +1,36 @@
+# 本片命令（cwd = worktree 根；CARGO_TARGET_DIR 在检出外）
+
+# —— 三锚门自检（离线、零端口；01/02/03）——
+cd mir2-rs/tests/parity/m3
+python -I castle_oracle_anchor_gate.py check
+python -I castle_oracle_anchor_gate.py selftest
+python -I castle_oracle_anchor_gate.py mutation
+python -I guild_castle_anchor_gate.py check
+python -I guild_castle_anchor_gate.py selftest
+python -I guild_castle_anchor_gate.py mutation
+python -I hero_pet_anchor_gate.py check
+python -I hero_pet_anchor_gate.py selftest
+python -I hero_pet_anchor_gate.py mutation
+
+# —— 夹具链深检门（runner 级；04）——
+python -I fixture_chain_gate.py check --json <tmp>/chain.json
+
+# —— 修前 RED 复现（05；用 origin/master 版本的锚门+场景对当前 src/）——
+git checkout origin/master -- mir2-rs/tests/parity/m3/guild_castle_anchor_gate.py mir2-rs/tests/parity/m3/guild_castle_scenario.json
+(cd mir2-rs/tests/parity/m3 && python -I guild_castle_anchor_gate.py check)   # ⇒ RED 4 项，rc=1
+git checkout HEAD -- mir2-rs/tests/parity/m3/guild_castle_anchor_gate.py mir2-rs/tests/parity/m3/guild_castle_scenario.json
+
+# —— 两侧夹具 runner 无栈自检（06/07）——
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_guild_castle_pair.ps1 -SelfCheckNoStack
+powershell -NoProfile -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_hero_pet_pair.ps1 -SelfCheckNoStack
+
+# —— 四门禁（08–11；零 .rs，仍全跑）——
+cd mir2-rs
+CARGO_TARGET_DIR=E:/tmp/m3cs-family-target cargo fmt --all -- --check
+CARGO_TARGET_DIR=E:/tmp/m3cs-family-target cargo clippy --workspace --all-targets -- -D warnings
+CARGO_TARGET_DIR=E:/tmp/m3cs-family-target cargo test --workspace --no-fail-fast
+CARGO_TARGET_DIR=E:/tmp/m3cs-family-target cargo run -q -p msgcodegen -- --check
+
+# —— 证据 hash（仓库 LF/git-blob 口径）——
+python -I tools/evidence-hash/verify_sha256sums.py verify --check-extra mir2-rs/tests/parity/m3/evidence-m3-fixture-family-minors-20261014
+python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-fixture-family-minors-20261014

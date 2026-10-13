@@ -1,0 +1,36 @@
+base = origin/master = 382eef5dec9d639965b0c0835b3500ba412734f2
+branch = worktree-m3-fixture-family-minors tip（本片交付提交；确切 oid 见 walgit patch body，不在此处固化以免 amend 后自指失效）
+
+=== 净差量（工作树 vs origin/master，仅 tracked）===
+M	mir2-rs/tests/parity/m3/castle_oracle_anchor_gate.py
+M	mir2-rs/tests/parity/m3/evidence-m3-castle-anchor-fullcov-20261014/README.md
+M	mir2-rs/tests/parity/m3/evidence-m3-castle-anchor-fullcov-20261014/SHA256SUMS.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-family-minors-20261014/01-castle-oracle-anchor-gate-check-selftest-mutation.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-family-minors-20261014/02-guild-castle-anchor-gate-check-selftest-mutation.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-family-minors-20261014/03-hero-pet-anchor-gate-check-selftest-mutation.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-family-minors-20261014/04-chain-gate-check.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-family-minors-20261014/05-redcheck-master-red.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-family-minors-20261014/06-run-guild-castle-selfcheck.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-family-minors-20261014/07-run-hero-pet-selfcheck.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-family-minors-20261014/08-gate-fmt.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-family-minors-20261014/09-gate-clippy.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-family-minors-20261014/10-gate-test.txt
+A	mir2-rs/tests/parity/m3/evidence-m3-fixture-family-minors-20261014/11-gate-msgcodegen.txt
+M	mir2-rs/tests/parity/m3/evidence-m3-hero-pet-anchor-20261014/00-commands.txt
+M	mir2-rs/tests/parity/m3/evidence-m3-hero-pet-anchor-20261014/README.md
+M	mir2-rs/tests/parity/m3/evidence-m3-hero-pet-anchor-20261014/SHA256SUMS.txt
+M	mir2-rs/tests/parity/m3/guild_castle_anchor_gate.py
+M	mir2-rs/tests/parity/m3/guild_castle_scenario.json
+M	mir2-rs/tests/parity/m3/hero_pet_anchor_gate.py
+M	mir2-rs/tests/parity/m3/run_hero_pet_pair.ps1
+
+=== 冻结面（排除已登记例外 src/BotSrv/**，必须空）===
+cmd: git diff --name-only origin/master -- src sql MirClient mir2-rs/crates/protocol mir2-rs/crates/storage ':(exclude)src/BotSrv'
+(空)
+
+=== '*.rs' 计数（本片零 .rs）===
+0
+
+=== 未跟踪 ===
+?? mir2-rs/tests/parity/m3/evidence-m3-fixture-family-minors-20261014/00-commands.txt
+?? mir2-rs/tests/parity/m3/evidence-m3-fixture-family-minors-20261014/12-boundary.txt

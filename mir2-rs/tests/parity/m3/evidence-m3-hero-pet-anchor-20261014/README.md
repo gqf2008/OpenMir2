@@ -24,7 +24,7 @@ M3⑨-5 `openmir2-m3-hero-pet-fixture-botsrv` 的**残余 Minor 收口片**证�
 | 锚门 selftest | SELFTEST GREEN，rc=0 | `03-anchor-gate-selftest.txt` |
 | 锚门 mutation | MUTATION GREEN（MUT1/2/3 RED、MUT4 GREEN），rc=0 | `04-anchor-gate-mutation.txt` |
 | 夹具无栈自检 | `SELFTEST ok=23/23 failures=`，GREEN | `05-run-heropet-selfcheck.txt` |
-| 四门禁 | fmt0 / clippy0(-D warnings) / 101 suites 1199 passed 0 failed 22 ignored / msgcodegen 604 | `06`–`09` |
+| 四门禁 | fmt0 / clippy0(-D warnings) / 101 suites 1200 passed 0 failed 22 ignored（合并树读数；本目录 `08` 为分支上原始转录）/ msgcodegen 604 | `06`–`09` |
 | 外部改坏必红 | `frames` 改回旧稿 ⇒ 锚门 RED 2 项；还原复绿 | `12-external-break-red.txt` |
 | whitelist 计数复核 | ⑧-10 合并片把 T-42/T-43/T-44 误写成 22/22；实测三 runner 均 19/19，本片订正 | `13-whitelist-count-recheck.txt` |
 

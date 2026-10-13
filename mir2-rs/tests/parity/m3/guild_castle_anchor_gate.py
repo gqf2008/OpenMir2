@@ -12,6 +12,13 @@ r"""guild_castle_anchor_gate.py — M3⑧-10 行会/攻城夹具 `guild_castle_s
 `castle_door` 写 `UserCastle.cs:890-910`（实为 :890-909）；其余 ~40 条**未逐条核**。
 本片按冻结 `src/` 逐条机判复核，并把每条锚的**起点/终点行**钉进 `REGISTERED` 表。
 
+口径：
+* **冻结 oracle**（`src/M2Server/**`、`src/OpenMir2/**`）⇒ 锚**行号**入 `REGISTERED` 表机判
+  （可复现、不会漂）。
+* **夹具工具侧**（`src/BotSrv/**`）⇒ 只锚**函数/字段名**（`TOOL_ANCHORS`）、**不给行号**
+  （BotSrv 是 T-41..T-50 的在途工具面，行号随夹具演进合法漂移；行号入 fail-closed 门会让
+  别人合法的 BotSrv 改动把门打红 —— ⑧-10 残余 Minor；口径同 `hero_pet_anchor_gate.py`）。
+
 ## 判据（任一不满足 ⇒ rc=1）
 
 1. **覆盖面**：`oracle_anchors` 里解析出的每个 `File.cs:SPEC` 引用都必须在 `REGISTERED` 表内
@@ -19,6 +26,11 @@ r"""guild_castle_anchor_gate.py — M3⑧-10 行会/攻城夹具 `guild_castle_s
 2. **写侧**：`REGISTERED` 的 `file:spec` 必须能在场景锚文本里按同形解析出来（覆盖面已覆盖该点）。
 3. **读侧**：每条锚声明的每个 `(line, token)` 必须命中**冻结** `src/` 的对应行
    （改行号 / 改文件 / 越界 ⇒ RED）。token 取自冻结行本体，锁住锚的位置语义。
+4. **读侧 token 强度**（⑧-10 reviewer-6 残余 Minor「结束行只有 `}` 的 token 判据较弱」）：
+   每条锚**整组**至少要有一个**非纯标点** token；整组只剩 `}`/`;`/`(` 这类无信息量字符
+   ⇒ RED（防行号漂移时「只钉在一段空壳行上」假绿）。
+5. **工具侧名字锚**（`TOOL_ANCHORS`）：每条 `(符号, 文件)` 的符号必须**逐字**出现在该 BotSrv
+   文件里（只名字、无行号）⇒ 符号被改名/删除 ⇒ RED。
 
 ## 用法
 
@@ -55,13 +67,26 @@ PATHS = {
     "UserCastle.cs": "src/M2Server/Castle/UserCastle.cs",
     "CastleDoor.cs": "src/M2Server/Monster/Monsters/CastleDoor.cs",
     "Messages.cs": "src/OpenMir2/Messages.cs",
-    "RobotPlayer.cs": "src/BotSrv/Player/RobotPlayer.cs",
-    "RobotPlayer.Operate.cs": "src/BotSrv/Player/RobotPlayer.Operate.cs",
+    # 注：夹具工具侧（src/BotSrv/**）不入本表 —— 见文件头「口径」+ `TOOL_ANCHORS`。
 }
 
 # `File.cs:A[-B][/C[-D]...]`；与 castle_oracle_anchor_gate.py 同形（含裸 `/ :NNN` 续写）。
 FILE_RE = re.compile(r'([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*\.cs)')
 SPEC_RE = re.compile(r'/?\s*:(\d+(?:-\d+)?(?:/\d+(?:-\d+)?)*)')
+
+# 读侧 token 强度（判据 4）：整组只剩纯标点/空白 ⇒ 弱锚 ⇒ RED。
+_WEAK_ONLY_TOKEN_RE = re.compile(r'^[{}();,\s]*$')
+
+
+def _token_strength_findings(rows):
+    findings = []
+    for anchor, _rel, points in rows:
+        toks = [t.strip() for _l, t in points]
+        if not any(not _WEAK_ONLY_TOKEN_RE.match(t) for t in toks):
+            findings.append(
+                "读侧 token 强度：锚 %s 整组无有辨识度 token（%r）——"
+                "至少一条 token 须含实际内容，不能只靠 `}`/`;` 等纯标点钉位置" % (anchor, toks))
+    return findings
 
 
 # (anchor_text, src_relpath, [(line, expected_token), ...])
@@ -221,18 +246,47 @@ REGISTERED = [
         (382, 'public const int SM_GUILDBREAKALLY_OK = 770;'),
         (383, 'public const int SM_GUILDBREAKALLY_FAIL = 771;'),
     ]),
-    ('RobotPlayer.cs:4708-4809', 'src/BotSrv/Player/RobotPlayer.cs', [
-        (4708, 'public void SendGuildDlg()'),
-        (4809, '}'),
-    ]),
-    ('RobotPlayer.Operate.cs:1319-1540', 'src/BotSrv/Player/RobotPlayer.Operate.cs', [
-        (1319, 'case Messages.SM_OPENGUILDDLG:'),
-        (1540, 'break;'),
-    ]),
-    ('RobotPlayer.cs:4553', 'src/BotSrv/Player/RobotPlayer.cs', [
-        (4553, 'private void SendMerchantDlgSelect(int merchant, string rstr)'),
-    ]),
 ]
+
+# 夹具工具侧（`src/BotSrv/**`）名字锚：只机判**符号存在于文件**，不钉行号。
+# 背景（⑧-10 残余 Minor / 本片实测）：BotSrv 行号随 T-41..T-50 各夹具片合法漂移
+# （④ 掉落/经验片的 T-50 改动把 `SendGuildDlg` 从 4708 推到 4916），钉行号会让
+# `fixture_chain_gate.py` 常跑的 `guild_castle_anchor_check` 在 master 上无端 RED。
+TOOL_ANCHORS = [
+    ("RobotPlayer.SendGuildDlg", "src/BotSrv/Player/RobotPlayer.cs", "public void SendGuildDlg()"),
+    ("RobotPlayer.SendGuildHome", "src/BotSrv/Player/RobotPlayer.cs", "public void SendGuildHome()"),
+    ("RobotPlayer.SendGuildMemberList", "src/BotSrv/Player/RobotPlayer.cs", "private void SendGuildMemberList()"),
+    ("RobotPlayer.SendGuildAddMem", "src/BotSrv/Player/RobotPlayer.cs", "public void SendGuildAddMem(string who)"),
+    ("RobotPlayer.SendGuildDelMem", "src/BotSrv/Player/RobotPlayer.cs", "public void SendGuildDelMem(string who)"),
+    ("RobotPlayer.SendGuildUpdateNotice", "src/BotSrv/Player/RobotPlayer.cs", "public void SendGuildUpdateNotice(string notices)"),
+    ("RobotPlayer.SendGuildUpdateGrade", "src/BotSrv/Player/RobotPlayer.cs", "public void SendGuildUpdateGrade(string rankinfo)"),
+    ("RobotPlayer.SendMerchantDlgSelect", "src/BotSrv/Player/RobotPlayer.cs", "private void SendMerchantDlgSelect("),
+    ("Operate.SM_OPENGUILDDLG", "src/BotSrv/Player/RobotPlayer.Operate.cs", "case Messages.SM_OPENGUILDDLG:"),
+    ("Operate.SM_BUILDGUILD_OK", "src/BotSrv/Player/RobotPlayer.Operate.cs", "case Messages.SM_BUILDGUILD_OK:"),
+    ("Operate.SM_GUILDDELMEMBER_OK", "src/BotSrv/Player/RobotPlayer.Operate.cs", "case Messages.SM_GUILDDELMEMBER_OK:"),
+]
+
+
+def _tool_symbol_findings(tools=None, src_root=None):
+    """工具侧名字锚（判据 5）：符号必须逐字出现在文件里（无行号）。"""
+    findings = []
+    if tools is None:
+        tools = TOOL_ANCHORS
+    if src_root is None:
+        src_root = REPO_ROOT
+    cache = {}
+    for name, rel, sym in tools:
+        lines = cache.get(rel)
+        if lines is None:
+            try:
+                cache[rel] = lines = _cached_src(src_root, rel)
+            except OSError as exc:
+                findings.append("工具侧缺件 %s（%s）: %s" % (name, rel, exc))
+                continue
+        if not any(sym in ln for ln in lines):
+            findings.append("工具侧锚 %s：符号 %r 不在 %s（只锚名字；行号漂移不算）"
+                            % (name, sym, rel))
+    return findings
 
 
 def _read_text(path):
@@ -313,6 +367,8 @@ def _evaluate(rows=None, scenario_text=None, src_root=None):
             if token not in lines[line - 1]:
                 findings.append("读侧不匹配 %s:%d 期望含 %r，实际 %r"
                                 % (anchor, line, token, lines[line - 1].strip()))
+    findings.extend(_token_strength_findings(rows))
+    findings.extend(_tool_symbol_findings(src_root=src_root))
     return findings
 
 
@@ -387,6 +443,20 @@ def cmd_selftest(args):
         sys.stdout.write("  - %s\n" % f)
     ok = ok and t5
 
+    # 6) token 强度牙（⑧-10 残余 Minor）：整组只剩结束行 `}` ⇒ RED。
+    weak_only = [("UserCastle.cs:311-446", PATHS["UserCastle.cs"], [(446, "}")])]
+    w = _evaluate(rows=weak_only, scenario_text=stub_scen)
+    t6 = len(w) == 1 and "token 强度" in w[0]
+    sys.stdout.write("selftest token 强度牙齿: %s (weak=%r)\n" % ("GREEN" if t6 else "RED", w))
+    ok = ok and t6
+
+    # 7) 工具侧名字锚牙（⑧-10 残余 Minor）：符号不存在 ⇒ RED；真身 TOOL_ANCHORS 全绿。
+    tool_bad = [("X.fake", "src/BotSrv/Player/RobotPlayer.cs", "public void ThisSymbolDoesNotExistXYZ(")]
+    tb = _tool_symbol_findings(tools=tool_bad)
+    t7 = len(tb) == 1 and "工具侧锚" in tb[0]
+    sys.stdout.write("selftest 工具侧名字锚牙齿: %s (bad=%r)\n" % ("GREEN" if t7 else "RED", tb))
+    ok = ok and t7
+
     sys.stdout.write("SELFTEST %s\n" % ("GREEN" if ok else "RED"))
     return 0 if ok else 1
 
@@ -439,6 +509,31 @@ def cmd_mutation(args):
     f0 = _evaluate(scenario_text=real)
     sys.stdout.write("MUT4 真身 check: %s（%d 项）\n" % ("GREEN" if not f0 else "RED", len(f0)))
     ok = ok and not f0
+
+    # MUT5（token 强度，⑧-10 残余 Minor）：把 `UserCastle.cs:311-446` 整组退化成只看结束行 `}`
+    # （写侧/读侧仍成立）⇒ 强度牙 RED。
+    weak5 = [("UserCastle.cs:311-446", PATHS["UserCastle.cs"], [(446, "}")])
+             if a[0] == "UserCastle.cs:311-446" else a for a in REGISTERED]
+    f5 = _evaluate(rows=weak5, scenario_text=real)
+    red5 = any("token 强度" in f for f in f5)
+    sys.stdout.write("MUT5 token 强度(整组只剩 `}`): %s（%d 项）\n"
+                     % ("RED" if red5 else "GREEN", len(f5)))
+    ok = ok and red5
+
+    # MUT6（工具侧名字锚，⑧-10 残余 Minor）：把一条工具侧符号改成不存在的名字 ⇒ RED；
+    # 证明名字锚不是恒绿，且不再拿行号钉 BotSrv（行号漂移不会让它红）。
+    tb6 = _tool_symbol_findings(tools=[("RobotPlayer.SendGuildDlg", "src/BotSrv/Player/RobotPlayer.cs",
+                                        "public void SendGuildDlgXYZNope(")])
+    red6 = len(tb6) == 1 and "工具侧锚" in tb6[0]
+    sys.stdout.write("MUT6 工具侧名字锚(改坏符号): %s（%d 项）\n"
+                     % ("RED" if red6 else "GREEN", len(tb6)))
+    ok = ok and red6
+
+    # MUT7（回归）：真身 TOOL_ANCHORS 符号全在 ⇒ GREEN。
+    tb7 = _tool_symbol_findings()
+    sys.stdout.write("MUT7 工具侧真身名字锚: %s（%d 项）\n"
+                     % ("GREEN" if not tb7 else "RED", len(tb7)))
+    ok = ok and not tb7
 
     sys.stdout.write("MUTATION %s (%s)\n" % ("GREEN" if ok else "RED", out))
     return 0 if ok else 1
