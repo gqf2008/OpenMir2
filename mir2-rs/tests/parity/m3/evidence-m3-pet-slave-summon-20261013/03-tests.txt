@@ -1,0 +1,41 @@
+M3⑨-实现 2（宝宝召唤）判据（构造级/离线，零起栈零端口）
+============================================================
+
+[A] crates/world 侧：cargo test -p mir2-world --offline --lib slave（正常态读数见 gates/14-slave-tests.txt）
+test slave::tests::angel_uses_magic_level_for_both ... ok
+test slave::tests::check_server_make_slave_blocks_only_on_pending ... ok
+test slave::tests::make_slave_adopt_keeps_full_hp ... ok
+test slave::tests::make_slave_adopt_writes_oracle_tail ... ok
+test slave::tests::make_slave_gate_is_strictly_less ... ok
+test slave::tests::recall_slave_moves_tail_match_to_front ... ok
+test slave::tests::recall_slave_no_match_is_noop ... ok
+test slave::tests::recall_slave_target_scans_from_tail ... ok
+test slave::tests::redcheck_gate_must_be_strict ... ok
+test slave::tests::sinsu_selection_breaks_on_first_match ... ok
+test slave::tests::sinsu_selection_falls_back_to_dragon_name ... ok
+test slave::tests::skeleton_selection_keeps_last_match_no_break ... ok
+test slave::tests::skeleton_selection_stops_at_zero_hum_level ... ok
+test slave::tests::space_move_returns_start_without_rng_when_walkable ... ok
+test slave::tests::space_move_steps_by_n18_when_blocked ... ok
+test slave::tests::summon_slave_ignores_other_skills ... ok
+test slave::tests::summon_slave_rejected_when_slave_list_full ... ok
+test slave::tests::summon_slave_sinsu_falls_back_to_recall ... ok
+test slave::tests::summon_slave_skeleton_end_to_end ... ok
+
+[B] bins/game-svr 侧：cargo test -p game-svr --offline --lib slave
+  pet_slave_config_missing_file_errors ... ok
+  pet_slave_config_reads_conf_and_ignores_bom ... ok
+
+[C] 判据口径
+  1. 选型：SkeletonArray 无 break（取最后一个命中项）/ DragonArray 有 break（取第一个）/ 0 级早停 /
+     nExpLevel>4 的 Dragon 名拼接 / Angel 的 nMaxMob=1 + make=exp=技能等级。
+  2. 门：make_slave_gate 严格小于；CheckServerMakeSlave 只在 RM_10401 pending 时为真。
+  3. 落尾：master/IsSlave/MasterRoyaltyTick(=now+sec*1000)/SlaveMakeLevel/SlaveExpLevel/HP 补半/入 SlaveList。
+  4. 回召：recall_slave_target 末尾往前找（普通名区分大小写；Dragon 模式匹配 Dragon/Dragon1）+
+     SpaceMoveGetRandXY 的分段步进与「起点可走 ⇒ 零取数」。
+  5. 编排：summon_slave 的 CheckServerMakeSlave 门 / nMaxMob 门 / GetFrontPosition / spawner 调用 /
+     神兽 MakeSlave==null ⇒ RecallSlave 回召分支（骷髅无此分支）。
+
+[D] 全 workspace（见 gates/13-workspace-test.txt）
+  suites=94 passed=917 failed=0 ignored=21
+  基线（master d4d5b89c）= 94 suites / 896 passed / 0 failed / 21 ignored；本片 +21 用例（19 world + 2 game-svr）。

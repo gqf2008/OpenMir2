@@ -61,15 +61,23 @@
 
 **门比什么**（任一不等 / 缺失 ⇒ fail-closed）：
 
+> 下表带 `scenario-*` 前缀的六项是 **M-1 的 sibling**：scenario 是人对夹具的**声明**，
+> `rng_consumer_groups`（`FOLD_RULES`/`KNOWN_GROUPS`）是**真源**；门直接 import 同一份实现来比，
+> 防止 `groupdiff --fold` 用的映射与 scenario 写的不是一回事（doc-vs-code 漂移）。这条对
+> `-GateOnly` 与离线 `scenario` 模式（锁住已入库 `rng_trace_scenario.json`）都生效。
+
 | 检查 | 口径 |
 |---|---|
 | `scenario-canon` / `scenario-fields` | scenario 自洽（map/seed/start_pose/monsters 齐备） |
+| `scenario-trace-present` / `scenario-fold-code-valid` | scenario 有 `trace` 对象；代码侧 `FOLD_RULES` 自检自洽（已知组→已知组、源≠目标） |
+| `scenario-fold-declared` / `scenario-fold-matches-code` | scenario 声明的 `trace.fold` 必须**显式**且**逐项等于**代码真源 `rng_consumer_groups.FOLD_RULES`（缺声明/漂移 ⇒ 红，不静默绿） |
+| `scenario-groups-declared` / `scenario-groups-known` | scenario 声明的 `trace.groups_expected` 必须**显式**且每个组名都是账本 `KNOWN_GROUPS`（未知组 ⇒ 红） |
 | `sides-distinct` | 两侧 side = 一 `csharp` 一 `rust` |
 | `map-equal` / `seed-equal` / `pose-equal` | 两侧都等于 scenario |
 | `monsters-equal:scenario-vs-{a,b}` / `a-vs-b` | **Monster 集合同口径**（`(name,x,y,dir)` 多重集 + 计数） |
 | `mongen-equal:{a,b}-vs-fixture` / `a-vs-b` | **MonGen 集合同口径**：两侧 `mongen_rows` 逐行多重集都等于冻结件 `../fixtures/mongen-map<map>.tsv` |
 
-退出码：`0` = GREEN（同场景，`groupdiff` 次序结论可采信）；`1` = RED（场景漂移，点名哪一项）；
+退出码：`0` = GREEN（同场景，`groupdiff` 次序结论可采信）；`1` = RED（场景漂移**或 scenario 声明与代码真源漂移**，点名哪一项）；
 `2` = PREREQ（缺件 / 坏 JSON，fail-closed）。
 
 ---
@@ -86,6 +94,7 @@
 实现（`rng-trace-probe/rng_consumer_groups.py` + `rng_ledger_diff.py`）：
 
 - `FOLD_RULES = {"construct": "spawn"}`（`validate()` 里做表自检：源/目标必须是已知组、源≠目标）；
+  **且** scenario 声明的 `trace.fold` 必须与它逐项相等（门 `scenario-fold-matches-code` + 离线 `scenario` 模式机判）；
 - `groupdiff --fold` 先把两侧组序列逐元素折叠，再在**折叠后的序列**上重算：
   - 组集合（`GROUP_SET_DIFF`）；
   - **折叠计数**（`FOLDED_COUNT_DIFF`：逐组 `a` / `b` 计数不等即红）；
@@ -150,9 +159,11 @@ powershell -ExecutionPolicy Bypass -File run_rng_trace_pair.ps1 -SelfCheckNoStac
 powershell -ExecutionPolicy Bypass -File run_rng_trace_pair.ps1 -SelfCheckNoStack -SelfCheckOut <path.txt>
 ```
 
-自检覆盖（12 项；全离线）：scenario 固定输入、MonGen 冻结件零行、场景门 selftest（11/11）、
+自检覆盖（17 项；全离线）：scenario 固定输入、MonGen 冻结件零行、场景门 selftest（16/16）、
 场景门进程内正/负样本（同场景绿 / 怪集合漂移红）、账本 selftest（含 R-6 folded）、
-folded 等价绿 / 折叠计数不等红 / 折叠次序不等红、缺件 PREREQ、LF 写出、零端口。
+folded 等价绿 / 折叠计数不等红 / 折叠次序不等红、缺件 PREREQ、LF 写出、
+`scenario-fold-group-consistency-green`（已入库 scenario 与代码同口径）、
+`scenario-fold-drift-red` / `scenario-groups-unknown-red`（改坏必红）、零端口。
 real-run 分支在 `-Go` 未给时 **fail-closed exit 2**（不静默起栈）。
 
 ## 6. 命令（可复算）
@@ -162,7 +173,10 @@ cd mir2-rs/tests/parity/m3
 
 # 工具自检
 python -I rng-trace-probe/rng_ledger_diff.py selftest          # 32/32 GREEN（含 R-6 folded）
-python -I rng-trace-scene/rng_scene_gate.py selftest           # 11/11 GREEN
+python -I rng-trace-scene/rng_scene_gate.py selftest           # 16/16 GREEN（含 scenario 声明 vs 代码）
+
+# scenario 件自身（离线；锁住声明与代码真源同口径）
+python -I rng-trace-scene/rng_scene_gate.py scenario --scenario rng-trace-scene/rng_trace_scenario.json
 
 # 场景一致性前置门（离线）
 powershell -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 -GateOnly \
