@@ -1,0 +1,12 @@
+$ python -I -B rng-trace-scene/rng_scene_gate.py scenario --scenario /e/tmp/m3bag-scenariofold/groups-unknown.json
+RNG_SCENE_SCENARIO scenario=E:/tmp/m3bag-scenariofold/groups-unknown.json checks=8 failed=1
+  CHECK scenario-canon                     ok
+  CHECK scenario-fields                    ok
+  CHECK scenario-trace-present             ok
+  CHECK scenario-fold-code-valid           ok
+  CHECK scenario-fold-declared             ok
+  CHECK scenario-fold-matches-code         ok
+  CHECK scenario-groups-declared           ok
+  CHECK scenario-groups-known              FAIL (未知组 ['no_such_group']（已知：monster_ai、drop、merchant、spawn、construct、npc_ai、revive、homemap、startup）)
+  VERDICT RED: scenario 声明与代码真源不一致（fail-closed）：scenario-groups-known
+rc=1

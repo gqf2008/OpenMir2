@@ -1,0 +1,63 @@
+M3⑨-实现 2（宝宝召唤）oracle 锚点（行号均在 E:/Users/gxh/Documents/GitHub/OpenMir2/src 实读）
+================================================================================
+
+[常量 / 字段]
+src/Modules/SystemModule/Const/MagicConst.cs:72   SKILL_SKELLETON = 17
+src/Modules/SystemModule/Const/MagicConst.cs:84   SKILL_TAMMING   = 20
+src/Modules/SystemModule/Const/MagicConst.cs:124  SKILL_SINSU     = 30
+src/Modules/SystemModule/Const/MagicConst.cs:161  SKILL_ANGEL     = 41
+src/Modules/SystemModule/Const/MagicConst.cs:175  SKILL_46        = 46
+src/M2Server/Magic/MagicManager.cs:22             DwRoyaltySec = 10*24*60*60（召唤物 10 天）
+src/M2Server/Actor/BaseObject.cs:133              Master
+src/M2Server/Actor/BaseObject.cs:141              SlaveList（IList<IMonsterActor>）
+src/M2Server/Actor/AnimalObject.cs:27             SlaveExpLevel（byte）
+src/M2Server/Actor/AnimalObject.cs:54             IsSlave（bool）
+src/M2Server/Monster/MonsterObject.cs:21          SlaveMakeLevel（byte）
+src/M2Server/Monster/MonsterObject.cs:37          MasterRoyaltyTick（int）
+src/M2Server/Monster/MonsterObject.cs:41          MasterTick（int）
+
+[召唤核心]
+src/M2Server/Actor/BaseObject.cs:1179-1209   MakeSlave(sMonName, nMakeLevel, nExpLevel, nMaxMob, dwRoyaltySec)
+                                              :1181-1183 懒建 SlaveList
+                                              :1185      if (SlaveList.Count < nMaxMob)
+                                              :1187      GetFrontPosition(ref nX, ref nY)
+                                              :1190      WorldEngine.RegenMonsterByName(Envir.MapName, nX, nY, sMonName)
+                                              :1192-1196 Master/IsSlave/MasterRoyaltyTick/SlaveMakeLevel/SlaveExpLevel
+                                              :1197      RecalcAbilitys()
+                                              :1198-1201 if (HP < MaxHP) HP += (MaxHP-HP)/2
+                                              :1202      RefNameColor()
+                                              :1203-1204 SlaveList.Add(monObj)
+src/M2Server/Actor/BaseObject.cs:1979-1994   CheckServerMakeSlave：MsgQueue 里是否有 RM_10401
+src/M2Server/Actor/BaseObject.cs:1850-1876   RecallSlave(sSlaveName)：末尾往前找 + SpaceMove(Envir.MapName,nX,nY,1)
+src/M2Server/Actor/BaseObject.cs:977-1040    GetFrontPosition（已由 magic.rs::front_position 移植）
+src/M2Server/Actor/BaseObject.cs:1040-1096   SpaceMoveGetRandXY（n18=3/10、n1C=2/15/50、上限 201 次）
+src/M2Server/Actor/BaseObject.cs:1103-1166   SpaceMove（DeleteFromMap → SpaceMoveGetRandXY → AddMapObject → 出帧）
+src/M2Server/Actor/BaseObject.cs:730-733      RefNameColor（RM_CHANGENAMECOLOR）
+src/M2Server/Actor/BaseObject.Abil.cs:15-…    RecalcAbilitys（基类：WAbil = Abil.Clone() 且保留 HP/MP）
+
+[技能效果入口（MagicManager）]
+src/M2Server/Magic/MagicManager.cs:313-322   外层 case 组（FIRECHARM/HANGMAJINBUB/DEJIWONHO/HOLYSHIELD/SKELLETON/CLOAK/BIGCLOAK）
+                                                :323  CheckAmulet(playObject, 1, 1)（17 的护身符前置）
+src/M2Server/Magic/MagicManager.cs:372-376   内层 case SKILL_SKELLETON → MagMakeSlave
+src/M2Server/Magic/MagicManager.cs:450-460   case SKILL_SINSU：CheckAmulet(playObject,5,1) → MagMakeSinSuSlave
+src/M2Server/Magic/MagicManager.cs:462-470   case SKILL_ANGEL：CheckAmulet(playObject,2,1) → MagMakeAngelSlave
+src/M2Server/Magic/MagicManager.cs:589-593   case SKILL_46 → MagMakeClone
+src/M2Server/Magic/MagicManager.cs:1269-1306 MagMakeSinSuSlave（Dragon 选型：有 break；nMakeLevel 算了不用；
+                                              MakeSlave 失败 ⇒ RecallSlave(sMonName)）
+src/M2Server/Magic/MagicManager.cs:1308-1335 MagMakeSlave（Skeleton 选型：**无 break** ⇒ 最后一个命中项胜出）
+src/M2Server/Magic/MagicManager.cs:1337-1341 MagMakeClone（new PlayCloneObject；不入 SlaveList）
+src/M2Server/Magic/MagicManager.cs:1343-1352 MagMakeAngelSlave（nMaxMob 恒 1）
+
+[刷怪宿主（RegenMonsterByName 的落点）]
+src/GameSrv/Word/WorldServer.MonGen.cs:382-432 RegenMonsterByName = GetMonRace + CreateMonster + MonGenInfoThreadMap
+src/GameSrv/Word/WorldServer.MonGen.cs:498-810 CreateMonster（与 ④-B 的 create_monster_oracle 同源）
+
+[Rust 侧已实现、本卡复用的接口]
+mir2-rs/crates/world/src/magic.rs::front_position          ← BaseObject.cs:977-1040
+mir2-rs/crates/world/src/magic.rs::check_amulet            ← MagicBase.cs:47-105（本片未接线，登记）
+mir2-rs/bins/game-svr/src/mongen.rs::create_monster_oracle ← WorldServer.MonGen.cs:498-810
+mir2-rs/bins/game-svr/src/mongen.rs::WorldMonsterSink       ← RegenMonsters 的落库 sink
+
+[照搬的 oracle 缺陷（BUG-REPLICA）]
+B-1 MagicManager.cs:1316-1327  MagMakeSlave 选型循环命中后**无 break** ⇒ 取最后一个命中项
+B-2 MagicManager.cs:1274       MagMakeSinSuSlave 的 nMakeLevel 算了不传（实际传 userMagic.Level）

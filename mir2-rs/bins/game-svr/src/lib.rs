@@ -27,6 +27,7 @@ pub mod pickwire;
 pub mod recover;
 pub mod selloff;
 pub mod shop;
+pub mod slave;
 pub mod smframe;
 pub mod stamina;
 pub mod trade;
