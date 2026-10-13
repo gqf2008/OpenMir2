@@ -1,11 +1,12 @@
 79-gates.txt —— 片⑫ 四门禁（cwd=mir2-rs, CARGO_TARGET_DIR=E:/tmp/m2svr-target, --offline）
-（m2-svr / openmir2-worker-11，2026-10-14）
+（m2-svr / openmir2-worker-11，2026-10-14；跑在**合并 origin/master 30c52f85d 后的合并树**上；
+10f0daa93..30c52f85d 对 mir2-rs/crates、mir2-rs/bins、Cargo.lock 零改动 ⇒ Rust 门禁与合并前等价）
 
 $ cargo fmt --all -- --check
 rc=0
 
 $ cargo clippy --workspace --all-targets --offline -- -D warnings
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.60s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.45s
 rc=0
 
 $ cargo test --workspace --offline --no-fail-fast
