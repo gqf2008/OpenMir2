@@ -9,6 +9,14 @@
     { "name": "稻草人", "x": 18, "y": 20, "dir": 0, "count": 1 }
   ],
   "mongen_fixture": "../fixtures/mongen-map0137.tsv",
+  "window_batch": {
+    "comment": "本卡与 ④ openmir2-m3-drop-exp-align 的两套判据（RNG 站点组账本 / 死亡掉落不落地）编排在同一独占窗口批次里串行跑；前提是两侧场景件同图/同种子/同起点。此声明是散文，机判见 check_window_batch.py。",
+    "peer_scenario": "../drop-exp/drop_exp_scenario.json",
+    "peer_canon": "m3-drop-exp-v1",
+    "compared_items": ["map", "seed", "x", "y", "dir"],
+    "check": "python -I rng-trace-scene/check_window_batch.py check --rng-scenario rng-trace-scene/rng_trace_scenario.json --drop-scenario drop-exp/drop_exp_scenario.json",
+    "criterion": "两 scenario 的 map（字符串逐字节）/ seed / 起点 (x,y,dir) 必须逐项相等：不等 ⇒ rc=1 逐项点名（WINDOW_BATCH_MISMATCH）；缺件/坏 JSON/缺字段/自比/传错件 ⇒ rc=2 PREREQ fail-closed。"
+  },
   "trace": {
     "canon": "m3-rng-trace-v1",
     "stream_artifact": {

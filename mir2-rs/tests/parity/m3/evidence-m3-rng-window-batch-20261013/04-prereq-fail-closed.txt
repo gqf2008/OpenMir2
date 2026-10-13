@@ -1,0 +1,25 @@
+### 04 PREREQ fail-closed：缺件/坏 JSON/缺字段/自比/传错件/map 类型漂移 ⇒ rc=2，不静默 GREEN
+
+# cmd: 缺 drop 件
+PREREQ_MISSING: --drop-scenario 不存在：E:/tmp/m3bag-wb-scratch/does-not-exist.json
+rc=2
+
+# cmd: 坏 JSON
+PREREQ_MISSING: --drop-scenario JSON 不可解析（E:/tmp/m3bag-wb-scratch/drop-bad.json）：Expecting property name enclosed in double quotes: line 1 column 3 (char 2)
+rc=2
+
+# cmd: drop 缺 attacker.dir
+PREREQ_MISSING: drop scenario 缺字段 attacker.dir
+rc=2
+
+# cmd: 自比（--rng-scenario == --drop-scenario）
+PREREQ_MISSING: --rng-scenario 与 --drop-scenario 指向同一文件（自比恒真，拒跑）：E:/Users/gxh/Documents/GitHub/OpenMir2/.claude/worktrees/m3bag/mir2-rs/tests/parity/m3/rng-trace-scene/rng_trace_scenario.json
+rc=2
+
+# cmd: 传错件（drop canon 被改）
+PREREQ_MISSING: --drop-scenario canon 应为 m3-drop-exp-v1，实为 'someone-else'
+rc=2
+
+# cmd: map 类型漂移（'0137' 字符串 -> 137 整数）
+PREREQ_MISSING: drop.map 应为字符串（实为 int）
+rc=2

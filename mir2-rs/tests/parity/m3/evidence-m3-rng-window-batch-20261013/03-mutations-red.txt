@@ -1,0 +1,26 @@
+### 03 改坏必红：每个变异都必须 rc=1 且 MISMATCH 点名该项（改回真件 ⇒ 01 绿）
+
+# cmd: python -I rng-trace-scene/check_window_batch.py check --rng-scenario rng-trace-scene/rng_trace_scenario.json --drop-scenario E:/tmp/m3bag-wb-scratch/drop-map.json
+VERDICT RED: WINDOW_BATCH_MISMATCH（两个场景件不是同图/同种子/同起点 ⇒ 批次不可比，拒跑）
+MISMATCH map: rng='0137' drop='0100'
+rc=1
+
+# cmd: python -I rng-trace-scene/check_window_batch.py check --rng-scenario rng-trace-scene/rng_trace_scenario.json --drop-scenario E:/tmp/m3bag-wb-scratch/drop-seed.json
+VERDICT RED: WINDOW_BATCH_MISMATCH（两个场景件不是同图/同种子/同起点 ⇒ 批次不可比，拒跑）
+MISMATCH seed: rng=42 drop=43
+rc=1
+
+# cmd: python -I rng-trace-scene/check_window_batch.py check --rng-scenario rng-trace-scene/rng_trace_scenario.json --drop-scenario E:/tmp/m3bag-wb-scratch/drop-x.json
+VERDICT RED: WINDOW_BATCH_MISMATCH（两个场景件不是同图/同种子/同起点 ⇒ 批次不可比，拒跑）
+MISMATCH x: rng=17 drop=18
+rc=1
+
+# cmd: python -I rng-trace-scene/check_window_batch.py check --rng-scenario rng-trace-scene/rng_trace_scenario.json --drop-scenario E:/tmp/m3bag-wb-scratch/drop-y.json
+VERDICT RED: WINDOW_BATCH_MISMATCH（两个场景件不是同图/同种子/同起点 ⇒ 批次不可比，拒跑）
+MISMATCH y: rng=20 drop=21
+rc=1
+
+# cmd: python -I rng-trace-scene/check_window_batch.py check --rng-scenario rng-trace-scene/rng_trace_scenario.json --drop-scenario E:/tmp/m3bag-wb-scratch/drop-dir.json
+VERDICT RED: WINDOW_BATCH_MISMATCH（两个场景件不是同图/同种子/同起点 ⇒ 批次不可比，拒跑）
+MISMATCH dir: rng=2 drop=0
+rc=1

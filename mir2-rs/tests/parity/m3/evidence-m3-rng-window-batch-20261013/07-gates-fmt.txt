@@ -1,0 +1,2 @@
+# cmd: cd mir2-rs && CARGO_TARGET_DIR=E:/tmp/m3bag-target cargo fmt --all -- --check
+rc=0

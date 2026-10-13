@@ -1,0 +1,4 @@
+# cmd: python -I rng-trace-scene/check_window_batch.py check --rng-scenario rng-trace-scene/rng_trace_scenario.json --drop-scenario drop-exp/drop_exp_scenario.json
+VERDICT GREEN: 同窗口批次前提 OK（map/seed/起点 逐项相等）
+OK map='0137' seed=42 x=17 y=20 dir=2
+rc=0
