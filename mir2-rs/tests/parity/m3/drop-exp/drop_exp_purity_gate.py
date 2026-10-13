@@ -415,6 +415,13 @@ def _judge_file(table, stream, side="csharp", expected_kills=None, raw=None):
     return verdict, problems, counts
 
 
+def _both_sides_have_measured(table=DEFAULT_TABLE):
+    """真表承重：两侧都必须有 `measured` 行（缺一侧 ⇒ 该侧 gate PREREQ，认不出被测量路径）。"""
+    t = load_table(table)
+    return {s: any(r["class"] == "measured" for r in t["by_side"].get(s, []))
+            for s in ("csharp", "rust")}
+
+
 def cmd_selftest(_args):
     import shutil
     import tempfile
@@ -507,6 +514,46 @@ def cmd_selftest(_args):
 
         # ⑬ 改坏必红（门是承重的）：把 clean 流水换成注入墙钟的 ⇒ rc=1。
         case("cli-wallclock-rc1", 1, lambda: _gate_rc(table, wall))
+
+        # ⑭ 真表（drop_exp_consumers.tsv）承重：两侧各有 measured 行（owner：两侧实测站点表）。
+        case("real-table-both-sides-measured", {"csharp": True, "rust": True}, _both_sides_have_measured)
+        # ⑮ 真表分类正确：Rust 掉落（formula/drop.rs）+ 生成期构造（bins/game-svr/mongen.rs）⇒ GREEN。
+        rmeas = os.path.join(tmp, "real-rust-ok.tsv")
+        _write_text(rmeas, _stream_text([
+            "crates/formula/src/drop.rs:109",
+            "crates/world/src/mongen.rs:624",
+            "bins/game-svr/src/mongen.rs:289",
+        ]))
+        case("real-table-rust-green", "GREEN",
+             lambda: _judge_file(DEFAULT_TABLE, rmeas, side="rust")[0])
+        # ⑯ 击杀路径（combat.rs）归 measured（不是 unknown）。
+        rkill = os.path.join(tmp, "real-rust-kill.tsv")
+        _write_text(rkill, _stream_text(["crates/world/src/combat.rs:831"]))
+        case("real-table-kill-measured", "GREEN",
+             lambda: _judge_file(DEFAULT_TABLE, rkill, side="rust")[0])
+        # ⑰ 真表分类正确：C# 掉落（MonGetRandomItems）+ 构造（BaseObject..ctor）⇒ GREEN。
+        cmeas = os.path.join(tmp, "real-csharp-ok.tsv")
+        _write_text(cmeas, _stream_text([
+            "GameSrv.Word.WorldServer.MonGetRandomItems@WorldServer.MonGen.cs:451",
+            "M2Server.Actor.BaseObject..ctor@BaseObject.cs:438",
+        ]))
+        case("real-table-csharp-green", "GREEN",
+             lambda: _judge_file(DEFAULT_TABLE, cmeas, side="csharp")[0])
+        # ⑱ 改坏必红：Rust 侧 pin 抑制失效（monai.rs Wondering 出现）⇒ RED 且点名 wallclock。
+        rwall = os.path.join(tmp, "real-rust-wall.tsv")
+        _write_text(rwall, _stream_text(["crates/formula/src/drop.rs:109",
+                                         "crates/world/src/monai.rs:172"]))
+        case("real-table-rust-wallclock-red", "RED",
+             lambda: _judge_file(DEFAULT_TABLE, rwall, side="rust")[0])
+        case("real-table-rust-wallclock-names", True,
+             lambda: any("wallclock_consumer" in p
+                         for p in _judge_file(DEFAULT_TABLE, rwall, side="rust")[1]))
+        # ⑲ 改坏必红：未登记站点（castle.rs）⇒ RED（fail-closed）。
+        runk = os.path.join(tmp, "real-rust-unknown.tsv")
+        _write_text(runk, _stream_text(["crates/formula/src/drop.rs:109",
+                                        "crates/world/src/castle.rs:1"]))
+        case("real-table-rust-unknown-red", "RED",
+             lambda: _judge_file(DEFAULT_TABLE, runk, side="rust")[0])
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

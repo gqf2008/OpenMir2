@@ -1,0 +1,12 @@
+=== M-C：删 csharp MonGetRandomItems measured 行 ⇒ drop site 变 unknown ⇒ RED rc=1 ===
+=== 场景纯度（drop_exp_purity_gate）===
+  side=csharp stream=evidence-m3-drop-exp-consumers-rust-20261013/csharp-measured-synthetic.tsv
+  draws=2 measured=0 setup=1 wallclock=0 other=0 unknown=1 missing_site=0 ambiguous=0
+  NOTE: 1 条 setup 行 max=* ⇒ 未设上限（窗口期按实测收紧；不影响 measured/wallclock/other 判据）
+  --- 逐消费者清单（site 计数，降序）---
+         1  GameSrv.Word.WorldServer.MonGetRandomItems@WorldServer.MonGen.cs:451
+         1  M2Server.Actor.BaseObject..ctor@BaseObject.cs:438
+  RED: unknown_consumer: 1 处 site 不在 `drop_exp_consumers.tsv` 里（首个 line=3 site=GameSrv.Word.WorldServer.MonGetRandomItems@WorldServer.MonGen.cs:451）；认不出 ⇒ 拒比，必须在表里显式分类（measured/setup/wallclock/other）
+  RED: no_measured_draws: 流水里没有被测量路径（掉落取数）的抽数 ⇒ 取数未发生
+  结论：场景不纯 / 认不出 ⇒ **拒比**（fail-closed，不放宽判据）
+rc=1

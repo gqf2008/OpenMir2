@@ -1,0 +1,14 @@
+EVIDENCE_COUNTS dir=C:\Users\gxh\AppData\Local\Temp\evcount-r9uimoj8\ev-good declared={'files': 5, 'verify': (4, 4), 'eolcheck': (5, 5)} actual_files=5 actual_verify=4
+  OK 声明计数与真实证据包一致
+EVIDENCE_COUNTS dir=C:\Users\gxh\AppData\Local\Temp\evcount-r9uimoj8\ev-good declared={'files': 4, 'verify': (4, 4), 'eolcheck': (5, 5)} actual_files=5 actual_verify=4
+  RED declared_files=4 != actual_files=5
+EVIDENCE_COUNTS dir=C:\Users\gxh\AppData\Local\Temp\evcount-r9uimoj8\ev-good declared={'files': 5, 'verify': (5, 5), 'eolcheck': (5, 5)} actual_files=5 actual_verify=4
+  RED declared_verify=5/5 != actual_verify=4/4 (SHA256SUMS 条目数)
+EVIDENCE_COUNTS dir=C:\Users\gxh\AppData\Local\Temp\evcount-r9uimoj8\ev-good declared={'files': 5, 'verify': (4, 4), 'eolcheck': (6, 6)} actual_files=5 actual_verify=4
+  RED declared_eolcheck=6/6 != actual_eolcheck=5/5 (目录文件数)
+EVIDENCE_COUNTS dir=C:\Users\gxh\AppData\Local\Temp\evcount-r9uimoj8\ev-good declared=(none) actual_files=5 actual_verify=4
+  OK 报告未硬编码证据计数（只写计数规则 ⇒ 允许；真源 = SHA256SUMS/目录）
+EVIDENCE_COUNTS dir=C:\Users\gxh\AppData\Local\Temp\evcount-r9uimoj8\ev-good declared={'files': 5, 'verify': (4, 4), 'eolcheck': (5, 5)} actual_files=6 actual_verify=4
+  RED declared_files=5 != actual_files=6
+  RED declared_eolcheck=5/5 != actual_eolcheck=6/6 (目录文件数)
+SELFTEST GREEN: check_evidence_counts selftest 7/7（一致绿 / 件数·verify·eolcheck 漂移必红且点名 / 只写计数规则绿 / 缺件 PREREQ / 交付后证据包长大必红）

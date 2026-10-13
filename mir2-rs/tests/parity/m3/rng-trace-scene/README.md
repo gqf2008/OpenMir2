@@ -185,6 +185,35 @@ groupdiff … --fold --strict     → VERDICT …+FOLDED_COUNT_DIFF（spawn 折�
 
 ---
 
+## 4.1 「同窗口同跑」前提 = 同图 / 同种子 / 同起点（`check_window_batch.py`，本片新增）
+
+§4 把两套夹具编排在同一窗口批次，**前提**是两个场景件真的同图同种子同起点。这条此前
+**只有散文**：`rng_scene_gate.py` 只比**同一张卡**的两侧 trace、`drop_exp_purity_gate.py`
+只看 ④ 的纯度 ⇒ 任一 scenario 漂移（换图 / 换种子 / 挪起点）时批次不可比，而两个门
+各自 GREEN（各自内部自洽）。`check_window_batch.py` 把它收成 **fail-closed 机判**：
+
+```sh
+cd mir2-rs/tests/parity/m3
+python -I rng-trace-scene/check_window_batch.py check \
+  --rng-scenario  rng-trace-scene/rng_trace_scenario.json \
+  --drop-scenario drop-exp/drop_exp_scenario.json        # VERDICT GREEN rc=0
+python -I rng-trace-scene/check_window_batch.py selftest # 13/13 GREEN
+```
+
+- 逐项比 `map` / `seed` / `x` / `y` / `dir`（本卡 `map`/`seed`/`start_pose.{x,y,dir}`
+  vs ④ `map`/`seed`/`attacker.{x,y,dir}`）；任一项不等 ⇒ rc=1 **逐项点名**（带两侧值）；
+- 缺件 / 坏 JSON / 缺字段 / 自比（两个 `--*-scenario` 指同一文件）/ 传错件（canon 不符）
+  ⇒ rc=2 **PREREQ fail-closed**（绝不静默 GREEN）；`map` 必须是字符串（`"0137"` 与 `137`
+  不得被当同一个图）；
+- 改坏必红（`selftest` 真咬）：换图 / 换种子 / 挪 `x` / `y` / `dir` 各一例必红且点名，
+  外加缺件、坏 JSON、缺起点字段、自比、传错件、map 类型漂移六条 PREREQ。
+
+> 本工具是**窗口批次前提**的牙，不改任何门/账本的判据阈值，也不改
+> `run_rng_trace_pair.ps1` 的自检项数（历史 `29/29` 片时读数不受影响）。窗口编排建议在
+> §4 的 ① 之前先跑它：非 GREEN ⇒ 本批次的 ①②④ 结论不得采信（两个门都不会替你发现）。
+
+---
+
 ## 5. 无栈自检（`-SelfCheckNoStack`，零端口）
 
 ```powershell
@@ -214,6 +243,29 @@ folded 等价绿 / 折叠计数不等红 / 折叠次序不等红、缺件 PREREQ
 `scene-groupdiff-min-monster-ai-red`（三组都在但 `monster_ai` 抽数 0 < scenario 声明 1 ⇒ rc=1 点名 `MIN_GROUP_DRAWS`），零端口。
 real-run 分支在 `-Go` 未给时 **fail-closed exit 2**（不静默起栈）。
 
+### 5.1 证据报告「声明计数 vs 真实包」机判（`check_evidence_counts.py`）
+
+报告常在「证据：<dir>（`N` 件 + SHA256SUMS；`verify --check-extra` GREEN `N/N`，`eolcheck` GREEN `M/M`）」
+一行**硬编码**计数；证据包在同一片里继续增删文件时（如本卡 `groups-expected` 片：交付头追加
+`11-`/`12-`/`13-` 三件后头行仍写 `12/12`）就会 doc-vs-事实（先例：reviewer-5 F-1 `82/82`→实际 `81/82`、
+reviewer-6 在本卡携带的 M-1）。`check_evidence_counts.py` 把这条收成**机判**：
+
+```sh
+python -I rng-trace-scene/check_evidence_counts.py check \
+  --report "M3RNG场景DoD②组清单机判组必须真出现报告-20261013.md" \
+  --dir    evidence-m3-rng-trace-scene-groups-20261013-groups-expected   # GREEN rc=0
+python -I rng-trace-scene/check_evidence_counts.py selftest               # 7/7 GREEN
+```
+
+- 口径（唯一真源 = 证据包）：`N 件` 与 `eolcheck` 对**目录文件总数**（含 `SHA256SUMS.txt`/`README.md`）；
+  `verify N/N` 对 `SHA256SUMS.txt` **条目数**；
+- 不一致 ⇒ rc=1 **逐个点名**；报告**未硬编码计数**（只写计数规则、以 `SHA256SUMS.txt` 为真源）⇒ rc=0；
+  缺报告/目录/坏读取 ⇒ rc=2；
+- 改坏必红：`selftest` 覆盖件数漂移 / verify 漂移 / eolcheck 漂移 / **交付后证据包长大**，真咬。
+
+> 本工具是证据包的**自洽牙**，不是 DoD 判据本体、不进任何判据阈值；**不改** `run_rng_trace_pair.ps1`
+> 的自检项数（故本仓历史报告里记的 `29/29` 等**片时读数**不受影响）。
+
 ## 6. 命令（可复算）
 
 ```sh
@@ -222,6 +274,13 @@ cd mir2-rs/tests/parity/m3
 # 工具自检
 python -I rng-trace-probe/rng_ledger_diff.py selftest          # 37/37 GREEN（含 R-6 folded + DoD② scenario 声明）
 python -I rng-trace-scene/rng_scene_gate.py selftest           # 22/22 GREEN（含 scenario 声明 vs 代码 + 半给流水 PREREQ）
+python -I rng-trace-scene/check_evidence_counts.py selftest    # 7/7 GREEN（报告证据头行计数 vs 真实包：声明/真实）
+python -I rng-trace-scene/check_window_batch.py selftest        # 13/13 GREEN（本卡 vs ④ 场景件：同图/同种子/同起点）
+
+# 同窗口批次前提（本卡 scenario vs ④ drop-exp scenario；非 GREEN ⇒ 批次不可比，拒跑）
+python -I rng-trace-scene/check_window_batch.py check \
+  --rng-scenario rng-trace-scene/rng_trace_scenario.json \
+  --drop-scenario drop-exp/drop_exp_scenario.json
 
 # scenario 件自身（离线；锁住声明与代码真源同口径）
 python -I rng-trace-scene/rng_scene_gate.py scenario --scenario rng-trace-scene/rng_trace_scenario.json

@@ -1,0 +1,10 @@
+=== AFTER：新表 side=csharp ⇒ GREEN rc=0 ===
+=== 场景纯度（drop_exp_purity_gate）===
+  side=csharp stream=evidence-m3-drop-exp-consumers-rust-20261013/csharp-measured-synthetic.tsv
+  draws=2 measured=1 setup=1 wallclock=0 other=0 unknown=0 missing_site=0 ambiguous=0
+  NOTE: 1 条 setup 行 max=* ⇒ 未设上限（窗口期按实测收紧；不影响 measured/wallclock/other 判据）
+  --- 逐消费者清单（site 计数，降序）---
+         1  GameSrv.Word.WorldServer.MonGetRandomItems@WorldServer.MonGen.cs:451
+         1  M2Server.Actor.BaseObject..ctor@BaseObject.cs:438
+  GREEN: 除被测量路径外 RNG 消费者 = 0（wallclock=0 / other=0 / unknown=0）
+rc=0

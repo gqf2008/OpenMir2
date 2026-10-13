@@ -1,0 +1,28 @@
+== 01 oracle 锚（文件:行号，实测 grep -n；src/ 冻结面只读，零改动） ==
+
+-- 交易结算 ClientDealEnd（容量四检所在） --
+src/M2Server/Player/PlayObject.Operate.cs:1085  private void ClientDealEnd()
+src/M2Server/Player/PlayObject.Operate.cs:1101  if (Grobal2.MaxBagItem - ItemList.Count < DealCreat.DealItemList.Count)
+src/M2Server/Player/PlayObject.Operate.cs:1106  if (GoldMax - Gold < DealCreat.DealGolds)
+src/M2Server/Player/PlayObject.Operate.cs:1111  if (Grobal2.MaxBagItem - DealCreat.ItemList.Count < DealItemList.Count)
+src/M2Server/Player/PlayObject.Operate.cs:1116  if (DealCreat.GoldMax - DealCreat.Gold < DealGolds)
+
+-- 关键语义：C# 是 **int 减法，差量可负** --
+- :1101 与 :1111 的被减数 = Grobal2.MaxBagItem（clamp 常量；本仓 = 46），减数 = ItemList.Count（背包件数）。
+- 正常流程容量门保证 ItemList.Count <= MaxBagItem；但**该表达式的类型是 int，不钳位**：
+  一旦 ItemList.Count > MaxBagItem（异常/被构造的状态），差量为负，`-1 < DealItemList.Count`
+  对任意 Count >= 0 恒为真 ⇒ oracle **拒结算**（YourBagSizeTooSmall / DealHumanBagSizeTooSmall）。
+- Rust 侧旧实现用 `usize::saturating_sub`（`0` 下限）⇒ `0 < 0` 为假 ⇒ 在「超容量 + 对方交易栏为空」
+  时把 oracle 的拒绝改成了**放行结算**（reviewer-6 fbb382aa056a M-3）。
+
+-- 金币两检（本片不动，Rust 侧本就 i32 精确算术） --
+:1106  GoldMax - Gold           （i32）
+:1116  DealCreat.GoldMax - DealCreat.Gold （i32）
+
+-- Rust 侧对应位置（改前） --
+mir2-rs/bins/game-svr/src/trade.rs:801（旧）  cfg.max_bag_item.saturating_sub(me.items.len()) < other.state.deal_item_list.len()
+mir2-rs/bins/game-svr/src/trade.rs:809（旧）  cfg.max_bag_item.saturating_sub(other.items.len()) < me.state.deal_item_list.len()
+
+-- 常量锚（Grobal2.MaxBagItem = 46） --
+mir2-rs/bins/game-svr/src/bag.rs:137  pub const MAX_BAG_ITEM: usize = 46;
+mir2-rs/bins/game-svr/src/trade.rs:66 pub const DEAL_MAX_BAG_ITEM: usize = MAX_BAG_ITEM;

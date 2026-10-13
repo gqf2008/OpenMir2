@@ -1,0 +1,22 @@
+   Compiling db-srv v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m3pt\mir2-rs\bins\db-srv)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.51s
+     Running tests\quest_no_persist.rs (E:/tmp/openmir2-m3pt-target\debug\deps\quest_no_persist-21ddaa74cab9a78d.exe)
+
+running 1 test
+test redcheck_comment_stripper_handles_raw_strings_with_comment_markers ... FAILED
+
+failures:
+
+---- redcheck_comment_stripper_handles_raw_strings_with_comment_markers stdout ----
+
+thread 'redcheck_comment_stripper_handles_raw_strings_with_comment_markers' (21176) panicked at bins\db-srv\tests\quest_no_persist.rs:712:5:
+红检失效：原始串内引号后的 `//` 把 SQL 任务列吞掉了（O-2 漏检面）: []
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    redcheck_comment_stripper_handles_raw_strings_with_comment_markers
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p db-srv --test quest_no_persist`

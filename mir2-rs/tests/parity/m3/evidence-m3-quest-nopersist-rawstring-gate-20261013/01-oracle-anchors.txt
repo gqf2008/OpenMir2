@@ -1,0 +1,33 @@
+== 01 oracle 锚（文件:行号，实测；src/ 冻结面只读，零改动） ==
+
+-- MySQL 存档 UPDATE characters 列清单（无任务列）--
+82:        private void SaveRecord(StorageContext context, int playerId, CharacterData hd)
+85:            strSql.AppendLine("UPDATE characters SET ServerIndex = @ServerIndex, LoginID = @LoginID,MapName = @MapName, CX = @CX, CY = @CY, Level = @Level, Dir = @Dir, Hair = @Hair, Sex = @Sex, Job = Job, Gold = @Gold, ");
+
+-- SaveQuest 只 DELETE、全仓无调用点（唯一下文是自身异常日志）--
+493:        private void SaveQuest(StorageContext context, int id, CharacterDataInfo humanRcd)
+495:            const string sSqlStr4 = "DELETE FROM characters_quest WHERE PlayerId=@PlayerId";
+505:                LogService.Error("[Exception] PlayDataStorage.SaveQuest");
+
+-- 读档只 SELECT * FROM characters，不读任务数组 --
+192:        private CharacterData GetChrRecord(int playerId, StorageContext context)
+194:            const string sSqlString = "SELECT * FROM characters WHERE ID=@ID";
+
+-- 任务态只走 6000 面会话记录（QuestFlag/QuestUnit/QuestUnitOpen = new byte[128]）--
+101:        public byte[] QuestUnitOpen { get; set; }
+102:        public byte[] QuestUnit { get; set; }
+103:        public byte[] QuestFlag { get; set; }
+112:            QuestUnitOpen = new byte[128];
+113:            QuestUnit = new byte[128];
+114:            QuestFlag = new byte[128];
+
+-- 语义结论 --
+oracle 下任务标志只存在于会话内 CharacterData，下线即丢；MySQL 侧 characters_quest 只删不写且 SaveQuest 无调用点。
+本门禁把『两侧都不写 characters_quest、characters 无任务列』钉死。
+
+-- 本片触及的 Rust 判据文件（非 oracle）--
+mir2-rs/bins/db-srv/tests/quest_no_persist.rs:89  fn strip_comments_keep_strings（本片重写）
+mir2-rs/bins/db-srv/tests/quest_no_persist.rs:711 fn redcheck_comment_stripper_handles_raw_strings_with_comment_markers（本片新增）
+
+-- O-1 行号订正（reviewer-5 4b283fad18）--
+旧 doc-comment 写 Save.cs:81-86（近似/漂移）；实测 SaveRecord 在 :82，四条 AppendLine 自 :85 起，WHERE ID 在 :88 ⇒ 订正为 :85-88。

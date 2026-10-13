@@ -245,10 +245,23 @@ if ($SelfCheckNoStack) {
     $rcP3 = Invoke-DexpPurityGate -Stream $pUnknown -Side csharp -Table $PurityTable -Out ([ref]$outP3)
     Add-Result 'purity-unknown-red' (($rcP3 -eq 1) -and ($outP3 -match 'unknown_consumer')) ("rc=$rcP3")
 
-    # ⑫ Rust 侧表里尚无 measured 行（④-D 未落地）⇒ PREREQ 拒跑（fail-closed，**不许**假绿）。
+    # ⑫ 两侧实测站点表就位后：Rust 侧也有 `measured` 行 ⇒ 只含被测量路径（drop）+ 生成期构造（setup）
+    #    的 Rust 流水绿灯（不再 PREREQ；本项与 ⑩/⑪ 同口径地证明门不是「Rust 恒 PREREQ」）。
+    $pRustMeasuredSite = 'crates/formula/src/drop.rs:109'
+    $pRustSetupSite = 'bins/game-svr/src/mongen.rs:289'
+    $pRustWallSite = 'crates/world/src/monai.rs:172'
+    $pRustClean = Join-Path $tmpRoot 'purity-rust-clean.tsv'
+    $pRustWall = Join-Path $tmpRoot 'purity-rust-wall.tsv'
+    New-DexpStream -Path $pRustClean -Sites @($pRustMeasuredSite, $pRustSetupSite)
+    New-DexpStream -Path $pRustWall -Sites @($pRustMeasuredSite, $pRustWallSite)
     $outP4 = ''
-    $rcP4 = Invoke-DexpPurityGate -Stream $pClean -Side rust -Table $PurityTable -Out ([ref]$outP4)
-    Add-Result 'purity-pending-side-prereq' (($rcP4 -eq 2) -and ($outP4 -match '没有 \`measured\` 行')) ("rc=$rcP4")
+    $rcP4 = Invoke-DexpPurityGate -Stream $pRustClean -Side rust -Table $PurityTable -Out ([ref]$outP4)
+    Add-Result 'purity-rust-side-green' (($rcP4 -eq 0) -and ($outP4 -match 'GREEN: 除被测量路径外')) ("rc=$rcP4")
+
+    # ⑬ Rust 侧 pin 抑制失效（monai.rs Wondering 出现）⇒ 必红且点名 wallclock（改坏必红）。
+    $outP5 = ''
+    $rcP5 = Invoke-DexpPurityGate -Stream $pRustWall -Side rust -Table $PurityTable -Out ([ref]$outP5)
+    Add-Result 'purity-rust-wallclock-red' (($rcP5 -eq 1) -and ($outP5 -match 'wallclock_consumer')) ("rc=$rcP5")
   } finally {
     Remove-Item -Recurse -Force $tmpRoot -ErrorAction SilentlyContinue
   }

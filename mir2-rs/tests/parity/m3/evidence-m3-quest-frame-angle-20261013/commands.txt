@@ -1,0 +1,30 @@
+# ===== 构建 / 自检（cwd = 本 worktree 根；不启动任何服务/不连端口）=====
+dotnet build src/BotSrv/BotSrv.csproj -c Release --nologo -v q
+dotnet src/BotSrv/bin/Release/BotSrv.dll --selftest-questseq
+dotnet src/BotSrv/bin/Release/BotSrv.dll --selftest-shopseq
+dotnet src/BotSrv/bin/Release/BotSrv.dll --selftest-guildcastle
+dotnet src/BotSrv/bin/Release/BotSrv.dll --selftest-heropet
+dotnet src/BotSrv/bin/Release/BotSrv.dll --selftest-pairtrade
+dotnet src/BotSrv/bin/Release/BotSrv.dll --selftest-selloff
+dotnet src/BotSrv/bin/Release/BotSrv.dll --selftest-attackrole
+
+# ===== 夹具无栈自检（不占端口）=====
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_quest_pair.ps1 -SelfCheckNoStack
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_npc_shop_pair.ps1 -SelfCheckNoStack
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_guild_castle_pair.ps1 -SelfCheckNoStack
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_hero_pet_pair.ps1 -SelfCheckNoStack
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_party_trade_pair.ps1 -SelfCheckNoStack
+powershell -ExecutionPolicy Bypass -File mir2-rs/tests/parity/m3/run_selloff_pair.ps1 -SelfCheckNoStack
+
+# ===== 改坏必红（临时变异 → 跑 → 还原）=====
+# 变异 1：删掉 QuestEsc 的 `.Replace("<", "\u003c").Replace(">", "\u003e")`
+#         ⇒ questseq selftest RED: esc-angle-quest-no-raw + serilog-path-payload-intact（exit 1）
+# 变异 2：删掉 ShopEsc 的同一行
+#         ⇒ questseq selftest RED: esc-angle-shop-no-raw（exit 1）
+#         （两次变异均 `git checkout -- src/BotSrv/Player/RobotPlayer.cs` 还原，见 01-fix-diff.txt）
+
+# ===== 四门禁（cwd = mir2-rs/；CARGO_TARGET_DIR=E:/tmp/openmir2-m3cs-target；--offline）=====
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo run -p msgcodegen -- --check

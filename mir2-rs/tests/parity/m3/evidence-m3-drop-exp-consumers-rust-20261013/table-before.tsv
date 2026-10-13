@@ -1,0 +1,26 @@
+# drop_exp_consumers.tsv —— M3④ 掉落/经验场景的 RNG 消费者表（`drop_exp_purity_gate.py` 唯一真源）
+#
+# 卡：openmir2-m3-drop-exp-align。owner 对 whitelist T-35 的有条件批准（comment c78bd13f）
+# 要求：口径必须写成「场景内除被测量路径（1 只 pin 怪 + 击杀→掉落/经验取数）外 RNG 消费者数 = 0」，
+# 并给逐消费者清单 + 计数；不许拿「离刷怪圈远 / 图里 MonGen 零行 / 只 spawn 一只」单独当充分条件。
+#
+# cols: side<TAB>class<TAB>pattern<TAB>max<TAB>oracle_ref<TAB>note
+#   class = measured | setup | wallclock | other
+#     measured  = 被测量路径（击杀→掉落取数），要求 > 0
+#     setup     = 被测量路径的场景构建（owner「1 只 pin 怪」：spawn/构造），按 max 设上限（* = 窗口期再收紧）
+#     wallclock = 墙钟驱动消费者，要求 == 0（pin 抑制生效证据）
+#     other     = 其余任何消费者，要求 == 0
+#   pattern 为正则；在**归一化后**的 site（`\` → `/`）上 search；未命中任何行 ⇒ 点名 RED（认不出，fail-closed）
+#
+# 本表只填**已由 oracle 源码 + 真机实测确认**的行。其余站点（如场景 spawn/构造抽数
+# `CreateMonster@WorldServer.MonGen.cs:740`、`BaseObject..ctor@BaseObject.cs:438` 等）留到窗口期
+# 按**实测清单**分类后补入：补之前它们就是 unknown ⇒ 门 fail-closed 判红、拒比——**不许**为了拿绿而
+# 放宽分类。Rust 侧站点（`crates/formula`/`crates/world`）同样待 ④-D 落地后按实测填，本表暂不猜。
+#
+# 真机实测证据（C# 活栈 1,670,754 次抽数的消费者清单）见：
+#   mir2-rs/tests/parity/m3/evidence-attack-my-field-20261012/06-rng-ledger-summary-csharp.txt
+csharp	measured	GameSrv\.Word\.WorldServer\.MonGetRandomItems@WorldServer\.MonGen\.cs:(451|455|467|474)	*	src/GameSrv/Word/WorldServer.MonGen.cs:439	击杀→掉落取数（掉落门/金币/耐久/极品升级）= 被测量路径
+csharp	wallclock	M2Server\.Actor\.AnimalObject\.Wondering@AnimalObject\.cs:(427|432|434)	0	src/M2Server/Actor/AnimalObject.cs:425	游走/转向/寻敌；owner 点名（②③ 实测占 C# 流水 99.98% 噪声）⇒ pin 抑制必须使其为 0
+csharp	wallclock	GameSrv\.Word\.WorldServer\.RegenMonsters@WorldServer\.MonGen\.cs:815	0	src/GameSrv/Word/WorldServer.MonGen.cs:238	刷怪 regen 抽数在 GetTickCount 门控的 tick 里 ⇒ 墙钟消费者，必须 0
+csharp	wallclock	GameSrv\.Npc\.Merchant\.Run@Merchant\.cs:(132|138)	0	src/GameSrv/Npc/Merchant.cs:132	商人 tick 抽数在 dwCurrentTick 门控里 ⇒ 墙钟消费者；本场景无商人 ⇒ 必须 0
+rust	wallclock	crates/world/src/merchant\.rs:	0	crates/world/src/merchant.rs	商人 tick 抽数在 RunTick/RunTime + 200ms sim 节奏门后 ⇒ 墙钟消费者（NpcLimit 预算已丢，见 whitelist T-42）；pin 场景无商人 ⇒ 必须 0

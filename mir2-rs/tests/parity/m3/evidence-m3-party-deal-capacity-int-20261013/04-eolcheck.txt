@@ -1,0 +1,4 @@
+== 04 EOL 门（交付侧，对刚写出的件；含 04 自身） ==
+命令: python -I tools/evidence-hash/verify_sha256sums.py eolcheck mir2-rs/tests/parity/m3/evidence-m3-party-deal-capacity-int-20261013
+EOLCHECK GREEN 15/15 件文本证据与仓库口径（LF）在 EOL 上一致
+rc=0
