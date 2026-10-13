@@ -1,0 +1,5 @@
+### 改后 GREEN — 本片修正后的表（工作树 consumer_groups.tsv）
+命令：python -I -c "sys.path.insert(0,'rng-trace-probe'); import rng_consumer_groups as m; m.validate_oracle_refs(m.load().rows)"
+改后可解析 ref 数 = 29 / 数据行 = 30
+改后问题数 = 0 （空 = GREEN）
+改后表该行原文： startup	csharp	ServerConf\.LoadConfig@ServerConf\.cs:	src/Modules/SystemModule/Conf/ServerConf.cs:114	配置加载期抽数

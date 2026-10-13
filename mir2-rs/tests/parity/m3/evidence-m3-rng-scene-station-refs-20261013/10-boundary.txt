@@ -1,0 +1,40 @@
+### boundary: git diff --name-only origin/master..HEAD（base = ad0592b19）
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-station-refs-20261013/01-audit-before-red.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-station-refs-20261013/02-audit-after-green.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-station-refs-20261013/03-selftest-consumer-groups.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-station-refs-20261013/04-selfcheck-nostack.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-station-refs-20261013/05-offline-regression.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-station-refs-20261013/06-gates-fmt.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-station-refs-20261013/07-gates-clippy.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-station-refs-20261013/08-gates-workspace-test.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-station-refs-20261013/09-gates-msgcodegen.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-station-refs-20261013/10-boundary.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-station-refs-20261013/README.md
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-station-refs-20261013/SHA256SUMS.txt
+mir2-rs/tests/parity/m3/rng-trace-probe/consumer_groups.tsv
+mir2-rs/tests/parity/m3/rng-trace-probe/rng_consumer_groups.py
+mir2-rs/tests/parity/m3/rng-trace-scene/README.md
+mir2-rs/tests/parity/m3/rng-trace-scene/run_rng_trace_pair.ps1
+
+--- 冻结面检查（应为空）
+(空 = 冻结面零改动)
+
+--- *.rs 计数（应为 0）
+0
+
+--- 工作树 status（未跟踪 sessions/csharp-20261012-23xx 为他卡遗留，未并入）
+ M mir2-rs/tests/parity/m3/evidence-m3-rng-scene-station-refs-20261013/03-selftest-consumer-groups.txt
+ M mir2-rs/tests/parity/m3/evidence-m3-rng-scene-station-refs-20261013/04-selfcheck-nostack.txt
+ M mir2-rs/tests/parity/m3/evidence-m3-rng-scene-station-refs-20261013/05-offline-regression.txt
+ M mir2-rs/tests/parity/m3/evidence-m3-rng-scene-station-refs-20261013/07-gates-clippy.txt
+ M mir2-rs/tests/parity/m3/evidence-m3-rng-scene-station-refs-20261013/08-gates-workspace-test.txt
+ M mir2-rs/tests/parity/m3/evidence-m3-rng-scene-station-refs-20261013/09-gates-msgcodegen.txt
+ M mir2-rs/tests/parity/m3/evidence-m3-rng-scene-station-refs-20261013/10-boundary.txt
+?? mir2-rs/tests/parity/m3/sessions/csharp-20261012-232321/
+?? mir2-rs/tests/parity/m3/sessions/csharp-20261012-232521/
+?? mir2-rs/tests/parity/m3/sessions/csharp-20261012-232825/
+?? mir2-rs/tests/parity/m3/sessions/csharp-20261012-233056/
+?? mir2-rs/tests/parity/m3/sessions/csharp-20261012-233325/
+?? mir2-rs/tests/parity/m3/sessions/csharp-20261012-233735/
+?? mir2-rs/tests/parity/m3/sessions/csharp-20261012-234457/
+?? mir2-rs/tests/parity/m3/sessions/csharp-20261012-234651/

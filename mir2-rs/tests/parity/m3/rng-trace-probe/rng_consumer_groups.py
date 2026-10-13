@@ -27,6 +27,11 @@ from collections import Counter
 
 TABLE_NAME = "consumer_groups.tsv"
 
+# 本文件：<repo>/mir2-rs/tests/parity/m3/rng-trace-probe/rng_consumer_groups.py
+# 上溯 5 级 = 仓库根（用于把 `oracle_ref` 解析成真实源码路径）。
+_HERE = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "..", ".."))
+
 # owner 点名的四组：怪物 AI / 掉落 / 商人 / 刷怪（全服非攻击消费者的绝对主体）。
 CORE_GROUPS = ("monster_ai", "drop", "merchant", "spawn")
 # 同族构造期/宿主组（C# 侧有独立站点的）。
@@ -84,6 +89,68 @@ def validate_folds():
             problems.append("%s: 目标组 %r 不是已知组" % (tag, dst))
         if src == dst:
             problems.append("%s: 源与目标相同（无意义折叠）" % tag)
+    return problems
+
+
+# ---------------------------------------------------------------------------
+# oracle_ref 可解析性自检（2026-10-13 窗口前置审计 #2）
+#
+# `oracle_ref` 是站点归因的**唯一溯源**（`pattern` 判组，`oracle_ref` 供人复查）。但该列此前
+# 只校验「非空」⇒ 一条指向不存在源码路径的 ref 能静默通过（真身缺陷：`ServerConf.LoadConfig`
+# 的 ref 曾写 `src/SystemModule/Conf/ServerConf.cs`，实际在 `src/Modules/SystemModule/Conf/ServerConf.cs`），
+# 承接卡/评审按它去找会找空。这里把它钉成 fail-closed：**能解析成源码文件的 ref，文件必须存在且
+# 行号在范围内**；不可解析的 ref（glob、目录、Rust 模块入口无行号）按口径跳过——不是缺陷。
+#
+# 路径口径（与仓库布局一致，避免把相对 `mir2-rs/` 的 Rust 路径误报成缺件）：
+#   * `src/...`          → 相对**仓库根**（C# oracle）
+#   * `crates/...`/`bins/...` → 相对 **`mir2-rs/`**（Rust 站点）
+#   * `mir2-rs/...`      → 相对**仓库根**
+# ---------------------------------------------------------------------------
+
+_SOURCE_EXTS = (".cs", ".rs")
+
+
+def resolve_oracle_ref_path(ref, repo_root=REPO_ROOT):
+    """`oracle_ref` → 绝对源码路径；不可解析（glob / 目录 / 非源码 / 未知前缀）⇒ None。"""
+    base = (ref or "").split(":")[0].strip()
+    if not base or base.endswith("/") or "*" in base or not base.endswith(_SOURCE_EXTS):
+        return None
+    if base.startswith("mir2-rs/"):
+        rel = base
+    elif base.startswith(("crates/", "bins/")):
+        rel = "mir2-rs/" + base
+    elif base.startswith("src/"):
+        rel = base
+    else:
+        return None
+    return os.path.join(repo_root, rel)
+
+
+def oracle_ref_line(ref):
+    """`path:line` → line；无行号 ⇒ None。"""
+    m = re.search(r":(\d+)\s*$", (ref or "").strip())
+    return int(m.group(1)) if m else None
+
+
+def validate_oracle_refs(rows, repo_root=REPO_ROOT):
+    """返回问题清单（空 = 所有**可解析**的 oracle_ref 都指向存在的文件且行号在范围内）。"""
+    problems = []
+    for i, (group, side, _rx, ref, _note) in enumerate(rows, 1):
+        path = resolve_oracle_ref_path(ref, repo_root)
+        if path is None:
+            continue
+        if not os.path.isfile(path):
+            problems.append("行%d(%s/%s): oracle_ref 指向不存在的源码文件 %s（ref=%s）"
+                            % (i, group, side, os.path.relpath(path, repo_root), ref))
+            continue
+        line = oracle_ref_line(ref)
+        if line is None:
+            continue
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            n = len(fh.read().splitlines())
+        if line < 1 or line > n:
+            problems.append("行%d(%s/%s): oracle_ref 行 %d 越界（%s 共 %d 行）"
+                            % (i, group, side, line, os.path.relpath(path, repo_root), n))
     return problems
 
 
@@ -335,6 +402,22 @@ def selftest():
     check("mutation-core-group-validate-red",
           any("merchant" in p for p in GroupsTable(rows2, table.path + "#mut-core").validate()),
           "期望 validate 点名 merchant")
+
+    # oracle_ref 可解析性（本片真身缺陷：`startup/csharp` 的 ref 缺了 `Modules/` 段）。
+    refs = validate_oracle_refs(table.rows)
+    check("oracle-refs-fresh", not refs, "; ".join(refs))
+
+    def _swap_startup_ref(new_ref):
+        return [(g, s, rx, (new_ref if (g == "startup" and s == "csharp") else ref), note)
+                for (g, s, rx, ref, note) in table.rows]
+
+    bad_path = validate_oracle_refs(_swap_startup_ref("src/NoSuchModule/Conf/ServerConf.cs:114"))
+    check("mutation-oracle-ref-path-red",
+          any("不存在" in p for p in bad_path), "; ".join(bad_path))
+
+    bad_line = validate_oracle_refs(_swap_startup_ref("src/Modules/SystemModule/Conf/ServerConf.cs:999999"))
+    check("mutation-oracle-ref-line-red",
+          any("越界" in p for p in bad_line), "; ".join(bad_line))
 
     total = len(checks)
     bad = [(n, d) for n, ok, d in checks if not ok]

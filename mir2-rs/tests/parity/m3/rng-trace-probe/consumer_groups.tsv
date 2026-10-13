@@ -63,7 +63,7 @@ homemap	csharp	GetHomeInfo@WorldServer\.cs:	src/GameSrv/Word/WorldServer.cs:1392
 homemap	csharp	GetRandHomeX@WorldServer\.cs:	src/GameSrv/Word/WorldServer.cs:1412	回城点随机 x
 homemap	csharp	GetRandHomeY@WorldServer\.cs:	src/GameSrv/Word/WorldServer.cs:1417	回城点随机 y
 homemap	rust	bins/game-svr/src/homemap\.rs:	bins/game-svr/src/homemap.rs	落点/Home 计算
-startup	csharp	ServerConf\.LoadConfig@ServerConf\.cs:	src/SystemModule/Conf/ServerConf.cs:114	配置加载期抽数
+startup	csharp	ServerConf\.LoadConfig@ServerConf\.cs:	src/Modules/SystemModule/Conf/ServerConf.cs:114	配置加载期抽数
 startup	rust	bins/game-svr/src/main\.rs:	bins/game-svr/src/main.rs	宿主启动期（seed/main 抽数）
 
 # ---- 窗口前置审计补登记（2026-10-13，本行追加在表末以免移动上方锚行行号）----------------
