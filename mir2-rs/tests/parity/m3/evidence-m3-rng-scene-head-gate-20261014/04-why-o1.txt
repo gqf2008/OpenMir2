@@ -1,0 +1,28 @@
+# 为什么是这一片：reviewer-5 对本卡 head `fe0a85ae` 的 observation O-1（原文）
+
+> O-1（非阻塞，口径）：check-pack 是独立子命令，未接入任何 .ps1 runner / -SelfCheckNoStack
+> （全仓 grep 仅 README.md 与工具自身引用）⇒ 目前需人工显式调用；与上一片 check 子命令同样未接线。
+> 建议后续片把 check-pack 并入 run_rng_trace_pair.ps1 -SelfCheckNoStack，使机判成为门禁而非文档约定。
+
+## 现行缺口（本片修复前，实拍）
+
+在修复前的 master `266bdbd17` 上：
+
+    $ grep -n "check-pack\|check_evidence_head" rng-trace-scene/run_rng_trace_pair.ps1
+    （无输出）
+
+⇒ `check-pack`（把「书证 head == 机判对象」钉成 fail-closed 的那个子命令）**只在 README 里被提及**，
+从未被任何自动化门禁调用；一条被削弱/写错的 check-pack 逻辑不会被无栈自检咬住。
+
+## 本片口径
+
+把 `check-pack` 接进 `run_rng_trace_pair.ps1 -SelfCheckNoStack`（新增 ㉛ 块，3 项）：
+
+1. `evidence-head-selftest` —— `check_evidence_head.py selftest` 必须 GREEN；
+2. `evidence-head-pack-real-green` —— 四份已入库真件按各自 `--since` 锚 `check-pack` 必须 rc=0
+   （缺包 / 声明读不到 / 锚不合法 ⇒ rc≠0 ⇒ 同判红，**不静默跳过**）；
+3. `evidence-head-pack-mutation-red` —— 改坏必红：副本包声明 head 改成不可解析 oid ⇒
+   rc=1 且点名 `HEAD_UNRESOLVABLE`（证明第 2 条不是恒真）。
+
+⇒ 自检项数 **31 -> 34**；`check-pack` 由「文档约定」升为**门禁**（本工具仍是证据包的自洽牙，
+不改任何 DoD 阈值）。

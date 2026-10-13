@@ -1,0 +1,25 @@
+### 10 边界（base = origin/master 266bdbd17；本包「读数所在」head 见下一行声明）
+### head = da32346a2df26a32bd9fbd2ef8fed8121d76d095（= 本片「读数所在」head；其后提交只追加本证据包的 boundary / self-check / SHA256SUMS，仍全在证据侧）
+### git diff --name-only base..读数 head（共 13 路径）
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-head-gate-20261014/00-commands.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-head-gate-20261014/01-selfcheck-nostack.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-head-gate-20261014/02-mutation-red.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-head-gate-20261014/03-check-pack-real-packs.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-head-gate-20261014/04-why-o1.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-head-gate-20261014/05-offline-regression.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-head-gate-20261014/06-gates-fmt.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-head-gate-20261014/07-gates-clippy.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-head-gate-20261014/08-gates-workspace-test.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-head-gate-20261014/09-gates-msgcodegen.txt
+mir2-rs/tests/parity/m3/evidence-m3-rng-scene-head-gate-20261014/README.md
+mir2-rs/tests/parity/m3/rng-trace-scene/README.md
+mir2-rs/tests/parity/m3/rng-trace-scene/run_rng_trace_pair.ps1
+
+--- 冻结面（src/ sql/ MirClient mir2-rs/crates/protocol mir2-rs/crates/storage mir2-rs/bins；应为空）
+(空 = 冻结面零改动)
+
+--- *.rs 计数（应为 0）
+0
+
+--- 说明：本包自身的 10-boundary.txt / 11-self-check.txt / SHA256SUMS.txt 由读数 head 之后的
+--- 证据侧提交追加，不影响上面 base..读数 head 的路径集（全部在该路径集内或其后追加）。

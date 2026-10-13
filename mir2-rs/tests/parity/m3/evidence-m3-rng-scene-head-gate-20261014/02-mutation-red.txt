@@ -1,0 +1,10 @@
+# 改坏必红：把副本包声明的 head 改成不可解析 oid（ffffffff...），并用 --decl-file 钉住该文件
+# 期望：rc=1 且点名 HEAD_UNRESOLVABLE（证明 evidence-head-pack-real-green 不是恒真）
+$ cp -r ../evidence-m3-rng-scene-head-pack-20261014 .selftest-headpack-mut
+$ sed 把 10-boundary.txt 的 'head = <oid>' 改成 'head = ffffffffffffffffffffffffffffffffffffffff'
+$ python -I check_evidence_head.py check-pack --dir .selftest-headpack-mut --since 61f613702 --decl-file 10-boundary.txt
+HEAD_UNRESOLVABLE: 包内声明 head 'ffffffffffffffffffffffffffffffffffffffff' 不是可解析的 commit（来源 10-boundary.txt line 2）
+rc=1
+
+# 还原（删除副本）后，真件仍 GREEN：
+(无残留)

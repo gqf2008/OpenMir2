@@ -1,0 +1,38 @@
+# 复算命令（cwd = mir2-rs/tests/parity/m3，除非另注）
+
+## 1. 无栈自检（本片把第 ㉛ 块接进 runner；项数 31 -> 34）
+cd rng-trace-scene
+powershell -ExecutionPolicy Bypass -File run_rng_trace_pair.ps1 -SelfCheckNoStack -SelfCheckOut ../../evidence-m3-rng-scene-head-gate-20261014/01-selfcheck-nostack.txt
+
+## 2. 真件四包 check-pack（各自 --since 锚；全 rc=0）
+python -I rng-trace-scene/check_evidence_head.py check-pack --dir evidence-m3-rng-scene-anchor-teeth-20261014 --since 10f0daa93
+python -I rng-trace-scene/check_evidence_head.py check-pack --dir evidence-m3-rng-scene-head-o1-20261014      --since 30c52f85
+python -I rng-trace-scene/check_evidence_head.py check-pack --dir evidence-m3-rng-scene-head-pack-20261014    --since 61f613702
+python -I rng-trace-scene/check_evidence_head.py check-pack --dir evidence-m3-rng-scene-head-ambig-20261014   --since b00987707
+
+## 3. 改坏必红（副本包声明 head -> ffff...，--decl-file 钉住）=> rc=1 HEAD_UNRESOLVABLE
+cp -r evidence-m3-rng-scene-head-pack-20261014 rng-trace-scene/.selftest-headpack-mut
+# 把 .selftest-headpack-mut/10-boundary.txt 的 `head = <oid>` 改成 `head = ffffffffffffffffffffffffffffffffffffffff`
+python -I rng-trace-scene/check_evidence_head.py check-pack --dir rng-trace-scene/.selftest-headpack-mut --since 61f613702 --decl-file 10-boundary.txt
+rm -rf rng-trace-scene/.selftest-headpack-mut
+
+## 4. 离线回归
+python -I rng-trace-scene/check_anchors.py check && python -I rng-trace-scene/check_anchors.py selftest
+python -I rng-trace-probe/rng_ledger_diff.py selftest
+python -I rng-trace-scene/rng_scene_gate.py selftest
+python -I rng-trace-scene/check_evidence_counts.py selftest
+python -I rng-trace-scene/check_evidence_head.py selftest
+python -I rng-trace-probe/rng_consumer_groups.py selftest
+python -I rng-trace-scene/check_window_batch.py check && python -I rng-trace-scene/check_window_batch.py selftest
+python -I fixture_chain_gate.py check
+
+## 5. 四门禁（cwd = mir2-rs，CARGO_TARGET_DIR=E:/tmp/openmir2-m3bag-target）
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --offline -- -D warnings
+cargo test --workspace --offline
+cargo run -p msgcodegen -- --check
+
+## 6. 本包自检 / 证据 hash（cwd = mir2-rs/tests/parity/m3）
+python -I rng-trace-scene/check_evidence_head.py check-pack --dir evidence-m3-rng-scene-head-gate-20261014 --since 266bdbd17
+python -I ../../../../tools/evidence-hash/verify_sha256sums.py verify --check-extra evidence-m3-rng-scene-head-gate-20261014
+python -I ../../../../tools/evidence-hash/verify_sha256sums.py eolcheck evidence-m3-rng-scene-head-gate-20261014
