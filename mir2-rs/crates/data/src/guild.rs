@@ -32,7 +32,6 @@
 //! 6. 文本一律 **GBK 字节** + `WriteLine` 的 **CRLF**；`.ini` 读取走 `ConfigFile.Load`
 //!    （`StreamReader(..., Encoding.GetEncoding("GB2312"))`，构造参数默认 `detectEncodingFromByteOrderMarks: true`）。
 
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::exps::IniFile;
@@ -324,6 +323,10 @@ impl GuildStore {
     /// `GuildManager.LoadGuildInfo`（`:78-110`）：读名单 → 逐个 `new GuildInfo`（建 `.ini`）→
     /// **逆序**加载，失败者移除并回写名单（非 0 区不回写）。
     ///
+    /// 逆序加载期间 `guild_exists` 必须查**当前存活集**（不是初始名单快照）：索引 > i 的失败者
+    /// 已 `RemoveAt`，故引用了它们的行会战段**不入表**（`GuildManager.cs:67-77` 的 `FindGuild`
+    /// 遍历当前 `GuildList`）。
+    ///
     /// # Errors
     /// 名单文件缺失，或名单外 IO 错误。
     pub fn load_guild_info(
@@ -338,14 +341,18 @@ impl GuildStore {
         for name in &names {
             self.load_guild_conf(name)?;
         }
-        let known: BTreeSet<String> = names.iter().cloned().collect();
         let mut guilds: Vec<GuildRecord> = Vec::new();
         let mut removed: Vec<String> = Vec::new();
         for i in (0..names.len()).rev() {
             let name = names[i].clone();
-            match self.load_guild(&name, sections, rank_name_len, now_tick, |n| {
-                known.contains(n)
-            }) {
+            // `FindGuild` 遍历**当前** `GuildList`：逆序加载时索引 > i 的失败者已被移除，
+            // 索引 <= i 的会尚未处理、也都在表里 ⇒ 存活集恰好是本刻的 `names`
+            // （失败者已在上面各轮从 `names` 移除）。用初始快照会让「引用已移除会」的行会战
+            // 条目误入表，与 oracle 分叉（reviewer-6 F-1）。
+            let load_result = self.load_guild(&name, sections, rank_name_len, now_tick, |n| {
+                names.iter().any(|x| x == n)
+            });
+            match load_result {
                 Ok(record) => guilds.push(record),
                 Err(GuildStoreError::MissingGuildFile(_)) => {
                     removed.push(name);
@@ -466,8 +473,8 @@ pub fn parse_guild_conf(bytes: &[u8]) -> GuildConfValues {
 /// 与联盟段丢弃（模块头 ④）。
 ///
 /// `now_tick` = oracle 在本刻的 `HUtil32.GetTickCount()`（加载出的 `WarTick`）；
-/// `guild_exists` = oracle 的 `SystemShare.GuildMgr.FindGuild(name) != null`（**会名在名单里即为真**，
-/// 无论该会后续是否加载失败）。
+/// `guild_exists` = oracle 的 `SystemShare.GuildMgr.FindGuild(name) != null`（查**当前存活集**：
+/// 逆序加载中已失败的会已从 `GuildList` 移除，故引用它们的行会战条目**不入表**；见 `load_guild_info`）。
 #[must_use]
 pub fn parse_guild_file(
     bytes: &[u8],

@@ -88,3 +88,10 @@ H_get_valid_str3	case_8_rest	乙<SP>丙
 H_get_valid_str3	case_9_in	x<SP><SP>y,,z
 H_get_valid_str3	case_9_dest	x
 H_get_valid_str3	case_9_rest	y,,z
+I_alive_set	find_存活会	True
+I_alive_set	find_同盟会	True
+I_alive_set	find_已亡会	False
+I_alive_set	war_count	1
+I_alive_set	war_0_name	同盟会
+I_alive_set	war_has_removed	False
+I_alive_set	member_已亡会	False

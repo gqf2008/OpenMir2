@@ -132,6 +132,7 @@ internal static class Program
         ScenarioF();
         ScenarioG();
         ScenarioH();
+        ScenarioI();
 
         File.WriteAllText(Path.Combine(vecDir, "guild_store_vectors.tsv"),
             "# group\tkey\tvalue（oracle 真身实测，GBK/逐字节口径）\n" + string.Join("\n", Rows) + "\n", new UTF8Encoding(false));
@@ -387,6 +388,54 @@ internal static class Program
             Rec("H_get_valid_str3", $"case_{i}_in", inputs[i].Replace(" ", "<SP>"));
             Rec("H_get_valid_str3", $"case_{i}_dest", s1c.Replace(" ", "<SP>"));
             Rec("H_get_valid_str3", $"case_{i}_rest", rest.Replace(" ", "<SP>"));
+        }
+    }
+
+    /// I（reviewer-6 F-1 回归）：`LoadGuildInfo` **逆序**加载时 `FindGuild` 查的是**当前存活集** ——
+    /// 引用「本轮更早被移除的会」的行会战条目**不入表**，引用仍存活会的条目正常入表。
+    /// oracle 锚：`GuildManager.cs:67-77`（`FindGuild` 遍历当前 `GuildList`）+ `:85-96`（逆序 `RemoveAt`）。
+    private static void ScenarioI()
+    {
+        try
+        {
+            M2Share.ServerIndex = 0;
+            SystemShare.GuildMgr = new GuildManager();
+            WriteGbk(_listFile, "存活会\n同盟会\n已亡会\n");
+            WriteGbk(GPath("同盟会.txt"), SystemShare.Config.GuildNotice + "\n+同盟会公告\n");
+            WriteGbk(GPath("存活会.txt"),
+                SystemShare.Config.GuildWar + "\n+同盟会 100\n+已亡会 200\n");
+            // 已亡会：不建 `<名>.txt` ⇒ 逆序加载时索引 2 先失败、被 RemoveAt 并回写名单；
+            // 随后处理 存活会（索引 0）时，FindGuild("已亡会") 应为 null。
+
+            SystemShare.GuildMgr.LoadGuildInfo();
+            IGuild alive = SystemShare.GuildMgr.FindGuild("存活会");
+            Rec("I_alive_set", "find_存活会", alive != null);
+            Rec("I_alive_set", "find_同盟会", SystemShare.GuildMgr.FindGuild("同盟会") != null);
+            Rec("I_alive_set", "find_已亡会", SystemShare.GuildMgr.FindGuild("已亡会") != null);
+            Rec("I_alive_set", "war_count", alive == null ? -1 : alive.GuildWarList.Count);
+            Rec("I_alive_set", "war_0_name",
+                alive == null || alive.GuildWarList.Count == 0
+                    ? "<none>"
+                    : alive.GuildWarList[0].Guild.GuildName);
+            bool warHasRemoved = false;
+            if (alive != null)
+            {
+                for (int i = 0; i < alive.GuildWarList.Count; i++)
+                {
+                    IGuild w = alive.GuildWarList[i].Guild;
+                    if (w != null && w.GuildName == "已亡会")
+                    {
+                        warHasRemoved = true;
+                    }
+                }
+            }
+            Rec("I_alive_set", "war_has_removed", warHasRemoved);
+            Rec("I_alive_set", "member_已亡会", SystemShare.GuildMgr.MemberOfGuild("已亡会") != null);
+            RecBytes("I_alive_set_list_rewritten", File.ReadAllBytes(_listFile));
+        }
+        catch (Exception e)
+        {
+            Rec("I_alive_set", "error", e.GetType().Name + ":" + e.Message);
         }
     }
 

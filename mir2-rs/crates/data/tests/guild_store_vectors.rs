@@ -12,7 +12,8 @@
 //! ② `<名>.txt` 四段解析（`+` / `#` / `;` / 空行 / `,`+空格分词）与**逐字节**序列化；
 //! ③ 保存目标不存在 ⇒ 报错且**不新建文件**（oracle `StringList.SaveToFile` 行为）；
 //! ④ `<名>.ini` 只建空文件、五键读侧、**从不落盘**；
-//! ⑤ 行会战 `WarTime` 加载恒 0、联盟段丢弃、职名 `>30` 才截断、缺 `<名>.txt` ⇒ 移除并回写名单。
+//! ⑤ 行会战 `WarTime` 加载恒 0、联盟段丢弃、职名 `>30` 才截断、缺 `<名>.txt` ⇒ 移除并回写名单；
+//! ⑥ `LoadGuildInfo` 的 `FindGuild` 查**当前存活集**（引用已移除会的行会战条目不入表）。
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -412,6 +413,57 @@ fn vector_load_guild_info_rewrites_list() {
     assert_eq!(
         fs::metadata(store.guild_conf_path("幽灵会")).unwrap().len(),
         0
+    );
+}
+
+/// I（reviewer-6 F-1 回归）：`LoadGuildInfo` 逆序加载时 `FindGuild` 查**当前存活集** ——
+/// 引用「本轮更早被移除的会」的行会战条目**不入表**，引用仍存活会的条目正常入表。
+/// oracle 锚：`GuildManager.cs:67-77`（`FindGuild` 遍历当前 `GuildList`）+ `:85-96`（逆序 `RemoveAt`）。
+#[test]
+fn vector_load_guild_info_uses_alive_set() {
+    let v = read_vectors();
+    let w = read_bytes_vectors();
+    let root = tmp_root("aliveset");
+    let store = store_for(&root);
+    let sections = GuildFileSections::oracle_defaults();
+    fs::write(store.guild_file(), gbk("存活会\n同盟会\n已亡会\n")).unwrap();
+    fs::write(
+        store.guild_txt_path("同盟会"),
+        gbk(&format!("{}\n+同盟会公告\n", sections.notice)),
+    )
+    .unwrap();
+    fs::write(
+        store.guild_txt_path("存活会"),
+        gbk(&format!("{}\n+同盟会 100\n+已亡会 200\n", sections.war)),
+    )
+    .unwrap();
+
+    let load = store.load_guild_info(&sections, 16, 0, 0).unwrap();
+    assert_eq!(load.names, vec!["存活会", "同盟会"]);
+    assert_eq!(load.removed, vec!["已亡会"]);
+    let alive = load
+        .guilds
+        .iter()
+        .find(|g| g.name == "存活会")
+        .expect("存活会应加载成功");
+    assert_eq!(
+        alive.body.wars.len(),
+        1,
+        "引用已移除会的行会战条目不应入表（F-1）"
+    );
+    assert_eq!(alive.body.wars[0].guild_name, "同盟会");
+
+    assert_eq!(v[&("I_alive_set".into(), "find_存活会".into())], "True");
+    assert_eq!(v[&("I_alive_set".into(), "find_已亡会".into())], "False");
+    assert_eq!(v[&("I_alive_set".into(), "war_count".into())], "1");
+    assert_eq!(v[&("I_alive_set".into(), "war_0_name".into())], "同盟会");
+    assert_eq!(
+        v[&("I_alive_set".into(), "war_has_removed".into())],
+        "False"
+    );
+    assert_eq!(
+        hex(&fs::read(store.guild_file()).unwrap()),
+        w["I_alive_set_list_rewritten"]
     );
 }
 
