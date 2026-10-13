@@ -776,6 +776,17 @@ pub fn deal_cancel_a(
     deal_cancel(me, other, cfg, now)
 }
 
+/// oracle 容量四检里的 `Grobal2.MaxBagItem - ItemList.Count`（`PlayObject.Operate.cs:1101`/`:1111`）。
+///
+/// C# 是 **int 减法**，差量**可为负**（背包件数已超上限时），`< DealItemList.Count` 在该状态下
+/// 恒为真 ⇒ 拒结算。**不得**用 `usize::saturating_sub`：它把 `-1` 钳成 `0`，在
+/// 「已超容量 + 对方交易栏为空（Count==0）」时把 oracle 的拒绝改成了放行
+/// （reviewer-6 `fbb382aa056a` M-3）。
+#[must_use]
+fn bag_capacity_left(max_bag_item: usize, used: usize) -> i64 {
+    max_bag_item as i64 - used as i64
+}
+
 /// `ClientDealEnd()`（`PlayObject.Operate.cs:1085-1203`）。
 pub fn deal_end(
     me: &mut DealSide<'_>,
@@ -798,7 +809,9 @@ pub fn deal_end(
     if other.state.deal_success {
         // 容量四检：**全部评估**（不短路），各自回 SysMsg(Red)，任一不满足 ⇒ `bo11=false`。
         let mut ok = true;
-        if cfg.max_bag_item.saturating_sub(me.items.len()) < other.state.deal_item_list.len() {
+        if bag_capacity_left(cfg.max_bag_item, me.items.len())
+            < other.state.deal_item_list.len() as i64
+        {
             red_msg(&mut em, me.id, cfg, DEAL_MY_BAG_SMALL_MSG);
             ok = false;
         }
@@ -806,7 +819,9 @@ pub fn deal_end(
             red_msg(&mut em, me.id, cfg, DEAL_MY_GOLD_LIMIT_MSG);
             ok = false;
         }
-        if cfg.max_bag_item.saturating_sub(other.items.len()) < me.state.deal_item_list.len() {
+        if bag_capacity_left(cfg.max_bag_item, other.items.len())
+            < me.state.deal_item_list.len() as i64
+        {
             red_msg(&mut em, me.id, cfg, DEAL_HUMAN_BAG_SMALL_MSG);
             ok = false;
         }
@@ -1512,6 +1527,86 @@ mod tests {
             a.items.iter().any(|it| it.make_index == 11),
             "甲的木剑退回背包"
         );
+    }
+
+    /// M-3（reviewer-6 `fbb382aa056a`）：oracle 容量检是 **C# int 减法、差量可负**
+    /// （`PlayObject.Operate.cs:1101`）。甲背包 47 件（> max 46）且乙交易栏为空 ⇒
+    /// oracle `46-47 = -1 < 0` 真 ⇒ 拒结算 + `YourBagSizeTooSmall` 红提示 + `DealCancel`；
+    /// `usize::saturating_sub` 得 `0 < 0` 假 ⇒ 错误放行（本用例把该回归钉死）。
+    #[test]
+    fn deal_end_over_capacity_my_bag_with_empty_opposite_deal_list() {
+        let cfg = DealConfig::default();
+        let (mut a, mut b) = open_pair(&cfg);
+        while a.items.len() < cfg.max_bag_item + 1 {
+            a.items.push(bag(2, 700 + a.items.len() as i32));
+        }
+        assert!(a.items.len() > cfg.max_bag_item, "已超容量");
+        assert!(b.state.deal_item_list.is_empty(), "对方交易栏空");
+        assert!(a.state.deal_item_list.is_empty(), "我的交易栏空");
+        a.state.deal_last_tick = 9_000;
+        b.state.deal_last_tick = 9_000;
+        b.state.deal_success = true;
+        let n_before = a.items.len();
+        let mut sa = side(&mut a);
+        let mut sb = side(&mut b);
+        let evs = deal_end(&mut sa, &mut sb, &cfg, 11_000);
+        assert!(
+            evs.iter().any(|e| matches!(
+                e,
+                DealEvent::SysMsg { text, .. } if text == DEAL_MY_BAG_SMALL_MSG
+            )),
+            "负差量（46-47=-1 < 0）⇒ oracle 判拒、必提示背包不足"
+        );
+        assert!(evs.iter().any(
+            |e| matches!(e, DealEvent::Def { ident, .. } if *ident == messages::SM_DEALCANCEL)
+        ));
+        assert!(
+            !evs.iter().any(
+                |e| matches!(e, DealEvent::Def { ident, .. } if *ident == messages::SM_DEALSUCCESS)
+            ),
+            "拒结算 ⇒ 不得出 SM_DEALSUCCESS"
+        );
+        assert_eq!(a.items.len(), n_before, "拒结算 ⇒ 我的背包件数不变");
+        assert!(!a.state.dealing && !b.state.dealing);
+    }
+
+    /// 对称侧（`PlayObject.Operate.cs:1111`）：乙背包 47 件（> max 46）且**我的**交易栏为空 ⇒
+    /// oracle `46-47 = -1 < 0` 真 ⇒ `DealHumanBagSizeTooSmall` 红提示 + 取消。
+    #[test]
+    fn deal_end_over_capacity_human_bag_with_empty_my_deal_list() {
+        let cfg = DealConfig::default();
+        let (mut a, mut b) = open_pair(&cfg);
+        while b.items.len() < cfg.max_bag_item + 1 {
+            b.items.push(bag(2, 800 + b.items.len() as i32));
+        }
+        assert!(b.items.len() > cfg.max_bag_item, "对方已超容量");
+        assert!(a.state.deal_item_list.is_empty(), "我的交易栏空");
+        assert!(b.state.deal_item_list.is_empty(), "对方交易栏空");
+        a.state.deal_last_tick = 9_000;
+        b.state.deal_last_tick = 9_000;
+        b.state.deal_success = true;
+        let n_before = b.items.len();
+        let mut sa = side(&mut a);
+        let mut sb = side(&mut b);
+        let evs = deal_end(&mut sa, &mut sb, &cfg, 11_000);
+        assert!(
+            evs.iter().any(|e| matches!(
+                e,
+                DealEvent::SysMsg { text, .. } if text == DEAL_HUMAN_BAG_SMALL_MSG
+            )),
+            "负差量（46-47=-1 < 0）⇒ oracle 判对方背包不足"
+        );
+        assert!(evs.iter().any(
+            |e| matches!(e, DealEvent::Def { ident, .. } if *ident == messages::SM_DEALCANCEL)
+        ));
+        assert!(
+            !evs.iter().any(
+                |e| matches!(e, DealEvent::Def { ident, .. } if *ident == messages::SM_DEALSUCCESS)
+            ),
+            "拒结算 ⇒ 不得出 SM_DEALSUCCESS"
+        );
+        assert_eq!(b.items.len(), n_before, "拒结算 ⇒ 对方背包件数不变");
+        assert!(!a.state.dealing && !b.state.dealing);
     }
 
     /// 金币结算：甲给 300，乙给 100 ⇒ 双方 `Gold` 净变；`SM_GOLDCHANGED` 排到队列。

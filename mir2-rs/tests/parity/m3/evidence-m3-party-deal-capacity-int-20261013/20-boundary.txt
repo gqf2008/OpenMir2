@@ -1,0 +1,35 @@
+== 20 边界（base = refs/heads/master = origin/master = walgit master = ad0bba3016daffd8c37927fe050f5618dd108b19） ==
+== 代码提交 = abb053b91b2d2cb24d1e503ddd1613d70e200474（证据目录另随本片证据提交） ==
+
+$ git diff --name-only origin/master abb053b91b2d2cb24d1e503ddd1613d70e200474 -- src sql MirClient
+（空 = oracle/客户端/表结构零改动）
+
+$ git diff --name-only origin/master abb053b91b2d2cb24d1e503ddd1613d70e200474 -- mir2-rs/crates/protocol mir2-rs/crates/storage
+（空 = 接口冻结面零改动）
+
+$ git diff --name-only origin/master abb053b91b2d2cb24d1e503ddd1613d70e200474（代码面改动）
+mir2-rs/bins/game-svr/src/trade.rs
+
+$ git diff --stat origin/master abb053b91b2d2cb24d1e503ddd1613d70e200474
+ mir2-rs/bins/game-svr/src/trade.rs | 99 +++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 97 insertions(+), 2 deletions(-)
+
+$ git merge-base --is-ancestor origin/master abb053b91b2d2cb24d1e503ddd1613d70e200474 ; echo rc=$?
+  YES（head 含 base 全部历史）
+
+$ git merge-tree --write-tree origin/master abb053b91b2d2cb24d1e503ddd1613d70e200474 ; echo rc=$?
+  rc=0
+
+本片证据目录（新增，随证据提交）:
+  mir2-rs/tests/parity/m3/evidence-m3-party-deal-capacity-int-20261013/01-oracle-anchors.txt
+  mir2-rs/tests/parity/m3/evidence-m3-party-deal-capacity-int-20261013/01b-oracle-source-excerpt.txt
+  mir2-rs/tests/parity/m3/evidence-m3-party-deal-capacity-int-20261013/02-change-summary.txt
+  mir2-rs/tests/parity/m3/evidence-m3-party-deal-capacity-int-20261013/03-tests.txt
+  mir2-rs/tests/parity/m3/evidence-m3-party-deal-capacity-int-20261013/05-hashes.txt
+  mir2-rs/tests/parity/m3/evidence-m3-party-deal-capacity-int-20261013/20-boundary.txt
+  mir2-rs/tests/parity/m3/evidence-m3-party-deal-capacity-int-20261013/gates/clippy.txt
+  mir2-rs/tests/parity/m3/evidence-m3-party-deal-capacity-int-20261013/gates/fmt.txt
+  mir2-rs/tests/parity/m3/evidence-m3-party-deal-capacity-int-20261013/gates/msgcodegen.txt
+  mir2-rs/tests/parity/m3/evidence-m3-party-deal-capacity-int-20261013/gates/test.txt
+  mir2-rs/tests/parity/m3/evidence-m3-party-deal-capacity-int-20261013/redchecks/RC1-mutated.txt
+  mir2-rs/tests/parity/m3/evidence-m3-party-deal-capacity-int-20261013/redchecks/RC1-restored.txt
