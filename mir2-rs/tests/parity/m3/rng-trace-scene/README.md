@@ -76,9 +76,15 @@
 | `map-equal` / `seed-equal` / `pose-equal` | 两侧都等于 scenario |
 | `monsters-equal:scenario-vs-{a,b}` / `a-vs-b` | **Monster 集合同口径**（`(name,x,y,dir)` 多重集 + 计数） |
 | `mongen-equal:{a,b}-vs-fixture` / `a-vs-b` | **MonGen 集合同口径**：两侧 `mongen_rows` 逐行多重集都等于冻结件 `../fixtures/mongen-map<map>.tsv` |
+| `stream-inject-ok:{a,b}` / `stream-seed-equal:{a,b}` / `stream-seed-equal:a-vs-b` | **制品级同种子**（给了 `--a-stream` / `--b-stream` 时）：两份 trace **流水头**的 `INJECT_OK <seed>`（C# `rng-hook` 与 Rust `crates/shared/src/rng_trace.rs` 都写）必须存在且 `== scenario.seed`。描述件里的 `seed` 只是**自报**，不算证据；缺该行 ⇒ 无法证明种子（fail-closed RED） |
 
 退出码：`0` = GREEN（同场景，`groupdiff` 次序结论可采信）；`1` = RED（场景漂移**或 scenario 声明与代码真源漂移**，点名哪一项）；
 `2` = PREREQ（缺件 / 坏 JSON，fail-closed）。
+
+> **制品级同种子（新增）**：DoD① 要求「两侧 trace 必须来自同场景/同起点/**同种子**」。描述件由各侧自报，
+> 所以门在两份流水在场时（`-SceneGroupDiff` 恒传；`-GateOnly` 给了 `-AStream`/`-BStream` 才核）还要核对
+> **流水头**的 `INJECT_OK <seed>`。这样「描述件写 42、实际流水是别的种子」这种伪造会被拦在**拒比**而非
+> 被误判成实现差异。未给流水时保持既有描述件级行为（向后兼容）。
 
 **DoD① 的判定入口 = `-SceneGroupDiff`（本片收口）**：它把「场景门 → 组账本比较」串成**一条命令**，
 门非 GREEN ⇒ **拒比**（不跑 `groupdiff`、绝不输出 `RNG_CONSUMER_GROUPDIFF` 结论，也不把它当绿），
@@ -164,7 +170,7 @@ powershell -ExecutionPolicy Bypass -File run_rng_trace_pair.ps1 -SelfCheckNoStac
 powershell -ExecutionPolicy Bypass -File run_rng_trace_pair.ps1 -SelfCheckNoStack -SelfCheckOut <path.txt>
 ```
 
-自检覆盖（23 项；全离线）：scenario 固定输入、MonGen 冻结件零行、场景门 selftest（16/16）、
+自检覆盖（27 项；全离线）：scenario 固定输入、MonGen 冻结件零行、场景门 selftest（21/21）、
 场景门进程内正/负样本（同场景绿 / 怪集合漂移红）、账本 selftest（含 R-6 folded）、
 folded 等价绿 / 折叠计数不等红 / 折叠次序不等红、缺件 PREREQ、LF 写出、
 `scenario-fold-group-consistency-green`（已入库 scenario 与代码同口径）、
@@ -176,7 +182,11 @@ folded 等价绿 / 折叠计数不等红 / 折叠次序不等红、缺件 PREREQ
 `scene-groupdiff-identical-green`（同场景 + 等价账本 ⇒ 门绿 + `VERDICT IDENTICAL` rc=0）、
 `scene-groupdiff-scene-drift-refused`（改坏必红：怪集合漂移 ⇒ rc=1 **且拒比**，文本里无任何 `RNG_CONSUMER_GROUPDIFF` 结论行）、
 `scene-groupdiff-missing-prereq-refused`（缺场景件 ⇒ rc=2 同样拒比）、
-`scene-groupdiff-diff-red-propagates`（反向对照：门绿而账本确有不一致 ⇒ groupdiff 的 rc=1 与结论行必须**传播**，防「恒拒比」假绿）、零端口。
+`scene-groupdiff-diff-red-propagates`（反向对照：门绿而账本确有不一致 ⇒ groupdiff 的 rc=1 与结论行必须**传播**，防「恒拒比」假绿）、
+**制品级同种子四项（新增）**：`scene-gate-stream-seed-green`（两侧流水头 `INJECT_OK 42` ⇒ 门绿）、
+`scene-gate-stream-seed-mismatch-red`（改坏必红：B 侧流水头 43、描述件仍自报 42 ⇒ rc=1 点名 `stream-seed-equal:b`）、
+`scene-gate-stream-inject-missing-red`（改坏必红：B 侧流水头无 `INJECT_OK` ⇒ rc=1 点名 `stream-inject-ok:b`）、
+`scene-groupdiff-stream-seed-refused`（改坏必红：制品级种子漂移下 `-SceneGroupDiff` 整链拒比：rc=1、`ranDiff=False`、无 `RNG_CONSUMER_GROUPDIFF`）、零端口。
 real-run 分支在 `-Go` 未给时 **fail-closed exit 2**（不静默起栈）。
 
 ## 6. 命令（可复算）
@@ -191,9 +201,10 @@ python -I rng-trace-scene/rng_scene_gate.py selftest           # 16/16 GREEN（�
 # scenario 件自身（离线；锁住声明与代码真源同口径）
 python -I rng-trace-scene/rng_scene_gate.py scenario --scenario rng-trace-scene/rng_trace_scenario.json
 
-# 场景一致性前置门（离线）
+# 场景一致性前置门（离线；制品级同种子：给 -AStream/-BStream 时还核流水头 INJECT_OK）
 powershell -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 -GateOnly \
-  -AScene <csharp-scene.json> -BScene <rust-scene.json>
+  -AScene <csharp-scene.json> -BScene <rust-scene.json> \
+  -AStream <csharp-rng-stream.tsv> -BStream <rust-rng-stream.tsv>
 
 # 组账本 diff（R-6 折叠）—— **裸比较口径**，不构成 DoD① 判据
 powershell -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 -GroupDiffOnly \

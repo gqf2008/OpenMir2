@@ -1,0 +1,15 @@
+# 证据生成命令（全部离线；零端口；cwd = mir2-rs/tests/parity/m3）
+
+## 工具 selftest
+python -I -B rng-trace-scene/rng_scene_gate.py selftest
+python -I -B rng-trace-probe/rng_ledger_diff.py selftest
+python -I -B attack_rng_ledger.py selftest
+python -I -B rng-trace-scene/rng_scene_gate.py scenario --scenario rng-trace-scene/rng_trace_scenario.json
+
+## DoD① 单一入口 / 场景门（现场合成件：同场景 seed=42；见 E:/tmp/m3bag-trace-seed-evidence）
+powershell -NoProfile -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 -SelfCheckNoStack -SelfCheckOut <out.txt>
+powershell -NoProfile -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 -GateOnly -AScene <csharp-scene.json> -BScene <rust-scene.json> -AStream <a-rng-stream.tsv> -BStream <b-rng-stream.tsv>
+python -I -B rng-trace-scene/rng_scene_gate.py gate --scenario rng-trace-scene/rng_trace_scenario.json --a <csharp-scene.json> --b <rust-scene.json> --a-stream <a-rng-stream.tsv> --b-stream <b-rng-stream.tsv>
+# 改坏：B 侧流水头 INJECT_OK 43（描述件仍自报 42）
+python -I -B rng-trace-scene/rng_scene_gate.py gate --scenario rng-trace-scene/rng_trace_scenario.json --a <csharp-scene.json> --b <rust-scene.json> --a-stream <a-rng-stream.tsv> --b-stream <b-rng-stream-43.tsv>
+powershell -NoProfile -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 -SceneGroupDiff -AScene <csharp-scene.json> -BScene <rust-scene.json> -AStream <a-rng-stream.tsv> -BStream <b-rng-stream-43.tsv>
