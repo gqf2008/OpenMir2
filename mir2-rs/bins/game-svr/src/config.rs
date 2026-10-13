@@ -45,6 +45,23 @@ pub struct GateConfig {
     pub red_msg_f_color: u8,
     /// `[Setup] RedMsgBColor`（oracle `GameSvrConf.cs:1541` 缺省 `0x38`）——同上，高字节。
     pub red_msg_b_color: u8,
+    /// `[Setup] GreenMsgFColor`（oracle `GameSvrConf.cs:1536` 缺省 `0xDB`）——交易 `SysMsg(..., Green, ...)`
+    /// 的前景色（`PlayObject.Operate.cs:943/1199` 等）。现网 `=219`。
+    pub green_msg_f_color: u8,
+    /// `[Setup] GreenMsgBColor`（oracle `GameSvrConf.cs:1537` 缺省 `0xFF`）——同上，背景色。现网 `=255`。
+    pub green_msg_b_color: u8,
+    /// `[Setup] TryDealTime`（oracle `GameSvrConf.cs:1515` 缺省 `3000`）——
+    /// `CM_DEALTRY` 的「稍后再试」时间门（`PlayObject.Operate.cs:922`）。
+    pub try_deal_time: i32,
+    /// `[Setup] DealOKTime`（oracle `GameSvrConf.cs:1516` 缺省 `1000`）——
+    /// `CM_DEALEND` 的时间门（`PlayObject.Operate.cs:1092`）。
+    pub deal_ok_time: i32,
+    /// `[Setup] CanNotGetBackDeal`（oracle `GameSvrConf.cs:1517` 缺省 `true`）——
+    /// 交易栏物品/金币不许取回（`PlayObject.Operate.cs:1003/1051`）。现网 `=1`。
+    pub can_not_get_back_deal: bool,
+    /// `[Setup] DisableDeal`（oracle `GameSvrConf.cs:1518` 缺省 `false`）——
+    /// 关闭交易功能（`PlayObject.Operate.cs:913`）。现网 `=0`。
+    pub disable_deal: bool,
     /// `[Setup] HearMsgFColor`（oracle `GameSvrConf.cs:1528` 缺省 `0x00`）——`CM_SAY` 普通说话
     /// 下行 `SM_HEAR` 的前景色（`BaseObject.Base.cs:478` 的 `btHearMsgFColor`）。现网 `=0`。
     pub hear_msg_f_color: u8,
@@ -191,6 +208,12 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut notice_dir: Option<String> = None;
     let mut red_msg_f_color: Option<u8> = None;
     let mut red_msg_b_color: Option<u8> = None;
+    let mut green_msg_f_color: Option<u8> = None;
+    let mut green_msg_b_color: Option<u8> = None;
+    let mut try_deal_time: Option<i32> = None;
+    let mut deal_ok_time: Option<i32> = None;
+    let mut can_not_get_back_deal: Option<bool> = None;
+    let mut disable_deal: Option<bool> = None;
     let mut hear_msg_f_color: Option<u8> = None;
     let mut hear_msg_b_color: Option<u8> = None;
     let mut show_rank_level_name: Option<bool> = None;
@@ -311,6 +334,37 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                         v.parse()
                             .with_context(|| format!("RedMsgBColor 不是合法字节：{v:?}"))?,
                     );
+                }
+                "GREENMSGFCOLOR" => {
+                    green_msg_f_color = Some(
+                        v.parse()
+                            .with_context(|| format!("GreenMsgFColor 不是合法字节：{v:?}"))?,
+                    );
+                }
+                "GREENMSGBCOLOR" => {
+                    green_msg_b_color = Some(
+                        v.parse()
+                            .with_context(|| format!("GreenMsgBColor 不是合法字节：{v:?}"))?,
+                    );
+                }
+                // `ServerConf.cs:308-311` 的四条交易配置（M3⑦-实现 3）。
+                "TRYDEALTIME" => {
+                    try_deal_time = Some(
+                        v.parse()
+                            .with_context(|| format!("TryDealTime 不是合法整数：{v:?}"))?,
+                    );
+                }
+                "DEALOKTIME" => {
+                    deal_ok_time = Some(
+                        v.parse()
+                            .with_context(|| format!("DealOKTime 不是合法整数：{v:?}"))?,
+                    );
+                }
+                "CANNOTGETBACKDEAL" => {
+                    can_not_get_back_deal = Some(parse_bool(v, "CanNotGetBackDeal")?);
+                }
+                "DISABLEDEAL" => {
+                    disable_deal = Some(parse_bool(v, "DisableDeal")?);
                 }
                 "HEARMSGFCOLOR" => {
                     hear_msg_f_color = Some(
@@ -501,6 +555,13 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         // oracle 缺省值（`GameSvrConf.cs:1540-1541`）：`[Setup]` 里没写也照常起。
         red_msg_f_color: red_msg_f_color.unwrap_or(0xFF),
         red_msg_b_color: red_msg_b_color.unwrap_or(0x38),
+        // oracle 缺省值（`GameSvrConf.cs:1536-1537/1515-1518`）：`[Setup]` 里没写不算错。
+        green_msg_f_color: green_msg_f_color.unwrap_or(0xDB),
+        green_msg_b_color: green_msg_b_color.unwrap_or(0xFF),
+        try_deal_time: try_deal_time.unwrap_or(3_000),
+        deal_ok_time: deal_ok_time.unwrap_or(1_000),
+        can_not_get_back_deal: can_not_get_back_deal.unwrap_or(true),
+        disable_deal: disable_deal.unwrap_or(false),
         // oracle 缺省值（`GameSvrConf.cs:1528-1529`）：`HearMsgFColor=0x00` / `HearMsgBColor=0xFF`。
         hear_msg_f_color: hear_msg_f_color.unwrap_or(0x00),
         hear_msg_b_color: hear_msg_b_color.unwrap_or(0xFF),
