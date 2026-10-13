@@ -1,0 +1,36 @@
+openmir2-client-e2e-enter-gaps —— 缺口①/② 客户端帧判据的**改坏必红**（check_client_s2c_frames.py）
+
+复核器：check_client_s2c_frames.py（自带 --selftest，不依赖外部帧文件）
+
+--- 1) selftest（合成 capture 自证门是活的） ---
+合成 capture 含 52/752 ⇒ GREEN                    OK (rc=0, want 0)
+合成 capture 去掉 52 ⇒ RED                         OK (rc=1, want 1)
+合成 capture 序列乱序 ⇒ RED                          OK (rc=1, want 1)
+52 body_len 门：40 期望 58 ⇒ RED                   OK (rc=1, want 1)
+同屏对门：0 对 期望 1 ⇒ RED                            OK (rc=1, want 1)
+SELFTEST GREEN
+rc=0
+
+--- 改坏：从 capture 中删掉 52 帧（删除 1 条）→ E:/tmp/m2svr-capture/capture-no52.jsonl ---
+capture=E:/tmp/m2svr-capture/capture-no52.jsonl
+  s2c_frames=48
+  enter_seq=658,51,50,41,213,11029,42,766,54,5008,1106,752,811,46
+  52_present=False body_len=None
+  752_present=True
+  appearance_pairs=12 recogs=['0x00000315', '0x00000146', '0x00000198', '0x00000321', '0x0000012c', '0x00000128', '0x00000317', '0x00000381', '0x00000308', '0x00000329', '0x0000030e', '0x00000331']
+  RED: 入图自帧序列前缀不符：got=[658, 51, 50, 41, 213, 11029, 42, 766, 54, 5008, 1106, 752, 811, 46] expect=[658, 51, 50, 41, 213, 11029, 42, 766, 54, 5008, 1106, 52, 752, 811, 46]
+  RED: 入图帧里没有 52 SM_ABILITY
+RESULT: RED
+rc=1
+
+--- 还原：对原始 capture 重跑 → 必须 GREEN ---
+capture=capture-client-default-oracle40.jsonl
+  s2c_frames=49
+  enter_seq=658,51,50,41,213,11029,42,766,54,5008,1106,52,752,811,46
+  52_present=True body_len=40
+  752_present=True
+  appearance_pairs=12 recogs=['0x00000315', '0x00000146', '0x00000198', '0x00000321', '0x0000012c', '0x00000128', '0x00000317', '0x00000381', '0x00000308', '0x00000329', '0x0000030e', '0x00000331']
+RESULT: GREEN
+rc=0
+
+REDCHECK GREEN：删掉 52 ⇒ rc=1（RED）；还原 ⇒ rc=0（GREEN）

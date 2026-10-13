@@ -1,0 +1,53 @@
+openmir2-client-e2e-enter-gaps —— 片⑤（客户端侧帧可见性：40/41/42 + check_client_s2c_frames.py）门禁
+==============================================================================
+cwd = mir2-rs；CARGO_TARGET_DIR=E:/tmp/m2svr-target；--offline
+树 = merge commit 1fdb1227265ac6a2e56231f1eb1145cc30ca1aca（origin/master 8aebbcb850d5b084af56e6cb8dd5e03ecc3c1625）—— 片⑤只**新增**证据/判据文件，
+     不改任何 .rs / 生产语义，故门禁结论对该合并树与交付树一致。
+
+--- cargo fmt --all -- --check ---
+fmt rc=0
+
+--- cargo clippy --workspace --all-targets -- -D warnings ---
+    Checking game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2-svr\mir2-rs\bins\game-svr)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 9.19s
+clippy rc=0
+
+--- cargo run -p msgcodegen -- --check ---
+     Running `E:/tmp/m2svr-target\debug\msgcodegen.exe --check`
+msgcodegen --check OK: 604 条常量（Messages.cs 594 条 + Grobal2 白名单 10 条）与 C# 源一致。
+msgcodegen rc=0
+
+--- cargo test --workspace --offline --no-fail-fast ---
+   98 suites · passed=1128 · failed=0 · ignored=21
+test rc=0
+   （原始件 E:/tmp/m2svr-capture/gates-test-1fdb.txt）
+
+--- 片⑤新增判据自检（不依赖外部帧） ---
+合成 capture 含 52/752 ⇒ GREEN                    OK (rc=0, want 0)
+合成 capture 去掉 52 ⇒ RED                         OK (rc=1, want 1)
+合成 capture 序列乱序 ⇒ RED                          OK (rc=1, want 1)
+52 body_len 门：40 期望 58 ⇒ RED                   OK (rc=1, want 1)
+同屏对门：0 对 期望 1 ⇒ RED                            OK (rc=1, want 1)
+SELFTEST GREEN
+selftest rc=0
+
+--- 片⑤新增判据 × 真机 capture（客户端侧） ---
+capture=capture-client-default-oracle40.jsonl
+  s2c_frames=49
+  enter_seq=658,51,50,41,213,11029,42,766,54,5008,1106,52,752,811,46
+  52_present=True body_len=40
+  752_present=True
+  appearance_pairs=12 recogs=['0x00000315', '0x00000146', '0x00000198', '0x00000321', '0x0000012c', '0x00000128', '0x00000317', '0x00000381', '0x00000308', '0x00000329', '0x0000030e', '0x00000331']
+RESULT: GREEN
+runA rc=0
+
+capture=capture-client-switch58.jsonl
+  s2c_frames=28
+  enter_seq=658,51,50,41,213,11029,42,766,54,5008,1106,52,752,811,46
+  52_present=True body_len=58
+  752_present=True
+  appearance_pairs=1 recogs=['0x00000317']
+RESULT: GREEN
+runB rc=0
+
+check_client_s2c_frames.py 的 sha256 计入本目录清单；改坏必红见 42-client-s2c-redcheck.txt。
